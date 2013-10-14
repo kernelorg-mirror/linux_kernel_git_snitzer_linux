@@ -140,8 +140,8 @@ struct dm_cache_policy {
 	/*
 	 * oblock must be a mapped block.  Must not block.
 	 */
-	void (*set_dirty)(struct dm_cache_policy *p, dm_oblock_t oblock);
-	void (*clear_dirty)(struct dm_cache_policy *p, dm_oblock_t oblock);
+	int (*set_dirty)(struct dm_cache_policy *p, dm_oblock_t oblock);
+	int (*clear_dirty)(struct dm_cache_policy *p, dm_oblock_t oblock);
 
 	/*
 	 * Called when a cache target is first created.  Used to load a
@@ -161,8 +161,21 @@ struct dm_cache_policy {
 	void (*force_mapping)(struct dm_cache_policy *p, dm_oblock_t current_oblock,
 			      dm_oblock_t new_oblock);
 
-	int (*writeback_work)(struct dm_cache_policy *p, dm_oblock_t *oblock, dm_cblock_t *cblock);
+	/*
+	 * Invalidate mapping for an origin block.
+	 *
+	 * Return:
+	 *	-EINVAL: if not supported or no further invalidation request allowed
+	 *	-EINODATA: no further invalidation request allowed
+	 *	0 and @cblock: if mapped
+	 *	-ENOENT:: if not.
+	 *
+	 * May return a _different_ oblock than the requested one
+	 * to allow the policy to rule which block to invalidate.
+	 */
+	int (*invalidate_mapping)(struct dm_cache_policy *p, dm_oblock_t *oblock, dm_cblock_t *cblock);
 
+	int (*writeback_work)(struct dm_cache_policy *p, dm_oblock_t *oblock, dm_cblock_t *cblock);
 
 	/*
 	 * How full is the cache?
