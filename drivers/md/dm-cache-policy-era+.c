@@ -41,7 +41,6 @@ struct era_policy {
 
 	era_t *cb_to_era;
 
-	spinlock_t era_counter_lock;
 	era_t era_counter;
 };
 
@@ -55,7 +54,6 @@ static struct era_policy *to_era_policy(struct dm_cache_policy *p)
 static int incr_era_counter(struct era_policy *era, const char *curr_era_str)
 {
 	era_t curr_era_counter;
-	unsigned long flags;
 	int r;
 
 	/*
@@ -72,18 +70,16 @@ static int incr_era_counter(struct era_policy *era, const char *curr_era_str)
 	if (kstrtou32(curr_era_str, 10, &curr_era_counter))
 		return -EINVAL;
 
-	spin_lock_irqsave(&era->era_counter_lock, flags);
-
+	smp_rmb();
 	if (era->era_counter != curr_era_counter) {
 		r = -ECANCELED;
 	} else if (era->era_counter >= ERA_MAX_ERA) {
 		r = -EOVERFLOW;
 	} else {
 		era->era_counter++;
+		smp_wmb();
 		r = 0;
 	}
-
-	spin_unlock_irqrestore(&era->era_counter_lock, flags);
 
 	return r;
 }
@@ -357,7 +353,6 @@ static struct dm_cache_policy *era_create(dm_cblock_t cache_size,
 	init_policy_functions(era);
 	era->cache_size = cache_size;
 	mutex_init(&era->lock);
-	spin_lock_init(&era->era_counter_lock);
 
 	era->cb_to_era = kzalloc(from_cblock(era->cache_size) *
 				 sizeof(*(era->cb_to_era)), GFP_KERNEL);
