@@ -23,7 +23,7 @@
 
 #include <linux/module.h>
 
-#define DM_MSG_PREFIX "cache-policy-trc+"
+#define DM_MSG_PREFIX "cache-policy-trc"
 #define DM_TRC_OUT(lev, p, f, arg...) \
 	do { \
 		if (to_trc_policy(p)->trace_level >= lev) \
@@ -223,11 +223,12 @@ static struct dm_cache_policy *trc_create(dm_cblock_t cache_size,
 /*----------------------------------------------------------------*/
 
 static struct dm_cache_policy_type trc_policy_type = {
-	.name = "trc+",
+	.name = "trc",
 	.version = {1, 0, 0},
 	.hint_size = 0,
 	.owner = THIS_MODULE,
-	.create = trc_create
+	.create = trc_create,
+	.features = DM_CACHE_POLICY_SHIM
 };
 
 static int __init trc_init(void)
@@ -259,4 +260,4 @@ module_exit(trc_exit);
 
 MODULE_AUTHOR("Morgan Mears <dm-devel@redhat.com>");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("trc+ cache policy shim");
+MODULE_DESCRIPTION("trc cache policy shim");

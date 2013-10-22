@@ -15,8 +15,8 @@ dm-cache-y	+= dm-cache-target.o dm-cache-metadata.o dm-cache-policy.o \
 		   dm-cache-shim-utils.o dm-cache-stack-utils.o
 dm-cache-mq-y   += dm-cache-policy-mq.o
 dm-cache-cleaner-y += dm-cache-policy-cleaner.o
-dm-cache-era-y	+= dm-cache-policy-era+.o
-dm-cache-trc-y	+= dm-cache-policy-trc+.o
+dm-cache-era-y	+= dm-cache-policy-era.o
+dm-cache-trc-y	+= dm-cache-policy-trc.o
 dm-cache-hints-y += dm-cache-policy-hints.o
 md-mod-y	+= md.o bitmap.o
 raid456-y	+= raid5.o

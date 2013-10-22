@@ -1625,7 +1625,7 @@ start = jiffies; /* FIXME: REMOVEME */
 		r = policy_invalidate_mapping(cache->policy, &given_oblock, &cblock);
 		/*
 		 * Policy either doesn't suport invalidation (yet) or
-		 * doesn't offer any more blocks to invalidate (e.g. era+).
+		 * doesn't offer any more blocks to invalidate (e.g. era).
 		  */
 		if (r == -EINVAL) {
 			DMWARN("policy doesn't support invalidation (yet).");

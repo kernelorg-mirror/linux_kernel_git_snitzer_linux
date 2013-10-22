@@ -214,4 +214,12 @@ int dm_cache_policy_set_hint_size(struct dm_cache_policy *p, unsigned hint_size)
 }
 EXPORT_SYMBOL_GPL(dm_cache_policy_set_hint_size);
 
+bool dm_cache_policy_is_shim(struct dm_cache_policy *p)
+{
+	struct dm_cache_policy_type *t = p->private;
+
+	return (t->features & DM_CACHE_POLICY_SHIM) ? true : false;
+}
+EXPORT_SYMBOL_GPL(dm_cache_policy_is_shim);
+
 /*----------------------------------------------------------------*/
