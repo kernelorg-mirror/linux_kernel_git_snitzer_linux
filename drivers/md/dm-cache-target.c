@@ -1340,7 +1340,7 @@ static int need_commit_due_to_time(struct cache *cache)
 
 static int commit_if_needed(struct cache *cache)
 {
-	int r;
+	int r = 0;
 
 	if ((cache->commit_requested || need_commit_due_to_time(cache)) &&
 	    dm_cache_changed_this_transaction(cache->cmd)) {
@@ -1348,9 +1348,7 @@ static int commit_if_needed(struct cache *cache)
 		cache->commit_requested = false;
 		r = dm_cache_commit(cache->cmd, false);
 		cache->last_commit_jiffies = jiffies;
-
-	} else
-		r = 0;
+	}
 
 	return r;
 }
@@ -1521,14 +1519,11 @@ static void invalidate_mappings(struct cache *cache)
 {
 	dm_oblock_t oblock, end;
 	unsigned long long count = 0;
-unsigned long long start; /* FIXME: REMOVEME */
 
 	smp_rmb();
 
 	if (!cache->invalidate)
 		return;
-
-start = jiffies; /* FIXME: REMOVEME */
 
 	oblock = cache->begin_invalidate;
 	end    = to_oblock(from_oblock(cache->end_invalidate) + 1);
@@ -1572,7 +1567,6 @@ start = jiffies; /* FIXME: REMOVEME */
 	}
 
 	cache->invalidate = false;
-DMINFO("%llu mappings invalidated in %llu jiffies", count, jiffies -  start); /* FIXME: REMOVEME */
 }
 
 static int more_work(struct cache *cache)
@@ -2184,6 +2178,7 @@ static int cache_create(struct cache_args *ca, struct cache **result)
 			*error = "dm_cache_metadata_all_clean() failed";
 			goto bad;
 		}
+
 		if (!all_clean) {
 			*error = "Cannot enter passthrough mode unless all blocks are clean";
 			r = -EINVAL;
@@ -2830,9 +2825,9 @@ static int set_invalidate_mappings(struct cache *cache, char **argv)
 		return -EINVAL;
 	}
 
-DMINFO("%s -- begin=%llu end=%llu", __func__, begin, end); /* FIXME: REMOVEME */
-
-	/* Pass begin and end origin blocks to the worker and wake it. */
+	/*
+	 * Pass begin and end origin blocks to the worker and wake it.
+	 */
 	cache->begin_invalidate = to_oblock(begin);
 	cache->end_invalidate = to_oblock(end);
 	cache->invalidate = true;

@@ -153,6 +153,7 @@ static void queue_init(struct queue *q)
 
 /*
  * Checks to see if the queue is empty.
+ * FIXME: reduce cpu usage.
  */
 static bool queue_empty(struct queue *q)
 {
@@ -709,18 +710,18 @@ static int demote_cblock(struct mq_policy *mq, dm_oblock_t *oblock, dm_cblock_t 
 static unsigned adjusted_promote_threshold(struct mq_policy *mq,
 					   bool discarded_oblock, int data_dir)
 {
-	if (data_dir == WRITE) {
-		if (discarded_oblock && (any_free_cblocks(mq) || any_clean_cblocks(mq))) {
-			/*
-			 * We don't need to do any copying at all, so give this a
-			 * very low threshold.
-			 */
-			return DISCARDED_PROMOTE_THRESHOLD;
-		} else
-			return mq->promote_threshold + WRITE_PROMOTE_THRESHOLD;
+	if (data_dir == READ)
+		return mq->promote_threshold + READ_PROMOTE_THRESHOLD;
+
+	if (discarded_oblock && (any_free_cblocks(mq) || any_clean_cblocks(mq))) {
+		/*
+		 * We don't need to do any copying at all, so give this a
+		 * very low threshold.
+		 */
+		return DISCARDED_PROMOTE_THRESHOLD;
 	}
 
-	return mq->promote_threshold + READ_PROMOTE_THRESHOLD;
+	return mq->promote_threshold + WRITE_PROMOTE_THRESHOLD;
 }
 
 static bool should_promote(struct mq_policy *mq, struct entry *e,
