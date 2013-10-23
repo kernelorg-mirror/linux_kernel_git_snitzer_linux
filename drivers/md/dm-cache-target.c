@@ -61,34 +61,6 @@ static void free_bitset(unsigned long *bits)
 
 /*----------------------------------------------------------------*/
 
-/*
- * There are a couple of places where we let a bio run, but want to do some
- * work before calling its endio function.  We do this by temporarily
- * changing the endio fn.
- */
-struct hook_info {
-	bio_end_io_t *bi_end_io;
-	void *bi_private;
-};
-
-static void hook_bio(struct hook_info *h, struct bio *bio,
-		     bio_end_io_t *bi_end_io, void *bi_private)
-{
-	h->bi_end_io = bio->bi_end_io;
-	h->bi_private = bio->bi_private;
-
-	bio->bi_end_io = bi_end_io;
-	bio->bi_private = bi_private;
-}
-
-static void unhook_bio(struct hook_info *h, struct bio *bio)
-{
-	bio->bi_end_io = h->bi_end_io;
-	bio->bi_private = h->bi_private;
-}
-
-/*----------------------------------------------------------------*/
-
 #define PRISON_CELLS 1024
 #define MIGRATION_POOL_SIZE 128
 #define COMMIT_PERIOD HZ
@@ -269,7 +241,7 @@ struct per_bio_data {
 	 */
 	struct cache *cache;
 	dm_cblock_t cblock;
-	struct hook_info hook_info;
+	bio_end_io_t *saved_bi_end_io;
 	struct dm_bio_details bio_details;
 };
 
@@ -286,7 +258,6 @@ struct dm_cache_migration {
 	bool writeback:1;
 	bool demote:1;
 	bool promote:1;
-	bool requeue_holder:1;
 	bool invalidate:1;
 
 	struct dm_bio_prison_cell *old_ocell;
@@ -742,7 +713,7 @@ static void defer_writethrough_bio(struct cache *cache, struct bio *bio)
 static void writethrough_endio(struct bio *bio, int err)
 {
 	struct per_bio_data *pb = get_per_bio_data(bio, PB_DATA_SIZE_WT);
-	unhook_bio(&pb->hook_info, bio);
+	bio->bi_end_io = pb->saved_bi_end_io;
 
 	if (err) {
 		bio_endio(bio, err);
@@ -773,8 +744,9 @@ static void remap_to_origin_then_cache(struct cache *cache, struct bio *bio,
 
 	pb->cache = cache;
 	pb->cblock = cblock;
-	hook_bio(&pb->hook_info, bio, writethrough_endio, NULL);
+	pb->saved_bi_end_io = bio->bi_end_io;
 	dm_bio_record(&pb->bio_details, bio);
+	bio->bi_end_io = writethrough_endio;
 
 	remap_to_origin_clear_discard(pb->cache, bio, oblock);
 }
@@ -921,12 +893,7 @@ static void migration_success_post_commit(struct dm_cache_migration *mg)
 		}
 
 	} else {
-		if (mg->requeue_holder)
-			cell_defer(cache, mg->new_ocell, true);
-		else {
-			bio_endio(mg->new_ocell->holder, 0);
-			cell_defer(cache, mg->new_ocell, false);
-		}
+		cell_defer(cache, mg->new_ocell, true);
 		clear_dirty(cache, mg->new_oblock, mg->cblock);
 		cleanup_migration(mg);
 	}
@@ -977,42 +944,6 @@ static void issue_copy_real(struct dm_cache_migration *mg)
 	}
 }
 
-static void overwrite_endio(struct bio *bio, int err)
-{
-	struct dm_cache_migration *mg = bio->bi_private;
-	struct cache *cache = mg->cache;
-	size_t pb_data_size = get_per_bio_data_size(cache);
-	struct per_bio_data *pb = get_per_bio_data(bio, pb_data_size);
-	unsigned long flags;
-
-	if (err)
-		mg->err = true;
-
-	spin_lock_irqsave(&cache->lock, flags);
-	list_add_tail(&mg->list, &cache->completed_migrations);
-	unhook_bio(&pb->hook_info, bio);
-	mg->requeue_holder = false;
-	spin_unlock_irqrestore(&cache->lock, flags);
-
-	wake_worker(cache);
-}
-
-static void issue_overwrite(struct dm_cache_migration *mg, struct bio *bio)
-{
-	size_t pb_data_size = get_per_bio_data_size(mg->cache);
-	struct per_bio_data *pb = get_per_bio_data(bio, pb_data_size);
-
-	hook_bio(&pb->hook_info, bio, overwrite_endio, mg);
-	remap_to_cache_dirty(mg->cache, bio, mg->new_oblock, mg->cblock);
-	generic_make_request(bio);
-}
-
-static bool bio_writes_complete_block(struct cache *cache, struct bio *bio)
-{
-	return is_write_io(bio) &&
-	       (bio->bi_size == (cache->sectors_per_block << SECTOR_SHIFT));
-}
-
 static void avoid_copy(struct dm_cache_migration *mg)
 {
 	atomic_inc(&mg->cache->stats.copies_avoided);
@@ -1027,17 +958,8 @@ static void issue_copy(struct dm_cache_migration *mg)
 	if (mg->writeback || mg->demote)
 		avoid = !is_dirty(cache, mg->cblock) ||
 			is_discarded_oblock(cache, mg->old_oblock);
-	else {
-		struct bio *bio = mg->new_ocell->holder;
-
+	else
 		avoid = is_discarded_oblock(cache, mg->new_oblock);
-#if 0
-		if (!avoid && bio_writes_complete_block(cache, bio)) {
-			issue_overwrite(mg, bio);
-			return;
-		}
-#endif
-	}
 
 	avoid ? avoid_copy(mg) : issue_copy_real(mg);
 }
@@ -1128,7 +1050,6 @@ static void promote(struct cache *cache, struct prealloc *structs,
 	mg->writeback = false;
 	mg->demote = false;
 	mg->promote = true;
-	mg->requeue_holder = true;
 	mg->invalidate = false;
 	mg->cache = cache;
 	mg->new_oblock = oblock;
@@ -1151,7 +1072,6 @@ static void writeback(struct cache *cache, struct prealloc *structs,
 	mg->writeback = true;
 	mg->demote = false;
 	mg->promote = false;
-	mg->requeue_holder = true;
 	mg->invalidate = false;
 	mg->cache = cache;
 	mg->old_oblock = oblock;
@@ -1176,7 +1096,6 @@ static void demote_then_promote(struct cache *cache, struct prealloc *structs,
 	mg->writeback = false;
 	mg->demote = true;
 	mg->promote = true;
-	mg->requeue_holder = true;
 	mg->invalidate = false;
 	mg->cache = cache;
 	mg->old_oblock = old_oblock;
@@ -1204,7 +1123,6 @@ static void invalidate(struct cache *cache, struct prealloc *structs,
 	mg->writeback = false;
 	mg->demote = true;
 	mg->promote = false;
-	mg->requeue_holder = true;
 	mg->invalidate = true;
 	mg->cache = cache;
 	mg->old_oblock = oblock;
@@ -2711,71 +2629,26 @@ static int load_discard(void *context, sector_t discard_block_size,
 	return 0;
 }
 
-static dm_cblock_t get_cache_dev_size(struct cache *cache)
-{
-	sector_t size = get_dev_size(cache->cache_dev);
-	(void) sector_div(size, cache->sectors_per_block);
-	return to_cblock(size);
-}
-
-static bool can_resize(struct cache *cache, dm_cblock_t new_size)
-{
-	if (from_cblock(new_size) > from_cblock(cache->cache_size))
-		return true;
-
-	/*
-	 * We can't drop a dirty block.
-	 */
-	for (; from_cblock(new_size) > from_cblock(cache->cache_size);
-	     new_size = to_cblock(from_cblock(new_size) + 1)) {
-		if (is_dirty(cache, new_size)) {
-			DMERR("unable to shrink cache; cache block %llu is dirty",
-			      (unsigned long long) from_cblock(new_size));
-			return false;
-		}
-	}
-
-	return true;
-}
-
-static int resize_cache_dev(struct cache *cache, dm_cblock_t new_size)
-{
-	int r;
-
-	r = dm_cache_resize(cache->cmd, cache->cache_size);
-	if (r) {
-		DMERR("could not resize cache metadata");
-		return r;
-	}
-
-	cache->cache_size = new_size;
-
-	return 0;
-}
-
 static int cache_preresume(struct dm_target *ti)
 {
 	int r = 0;
 	struct cache *cache = ti->private;
-	dm_cblock_t csize = get_cache_dev_size(cache);
+	sector_t actual_cache_size = get_dev_size(cache->cache_dev);
+	(void) sector_div(actual_cache_size, cache->sectors_per_block);
 
 	/*
 	 * Check to see if the cache has resized.
 	 */
-	if (!cache->sized) {
-		r = resize_cache_dev(cache, csize);
-		if (r)
+	if (from_cblock(cache->cache_size) != actual_cache_size || !cache->sized) {
+		cache->cache_size = to_cblock(actual_cache_size);
+
+		r = dm_cache_resize(cache->cmd, cache->cache_size);
+		if (r) {
+			DMERR("could not resize cache metadata");
 			return r;
+		}
 
 		cache->sized = true;
-
-	} else if (csize != cache->cache_size) {
-		if (!can_resize(cache, csize))
-			return -EINVAL;
-
-		r = resize_cache_dev(cache, csize);
-		if (r)
-			return r;
 	}
 
 	if (!cache->loaded_mappings) {

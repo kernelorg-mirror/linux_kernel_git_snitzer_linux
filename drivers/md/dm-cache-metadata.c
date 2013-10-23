@@ -800,32 +800,16 @@ static int blocks_are_unmapped_or_clean(struct dm_cache_metadata *cmd,
 int dm_cache_resize(struct dm_cache_metadata *cmd, dm_cblock_t new_cache_size)
 {
 	int r;
-	bool clean;
 	__le64 null_mapping = pack_value(0, 0);
 
 	down_write(&cmd->root_lock);
 	__dm_bless_for_disk(&null_mapping);
-
-	if (from_cblock(new_cache_size) < from_cblock(cmd->cache_blocks)) {
-		r = blocks_are_unmapped_or_clean(cmd, new_cache_size, cmd->cache_blocks, &clean);
-		if (r)
-			goto out;
-
-		if (!clean) {
-			DMERR("unable to shrink cache due to dirty blocks");
-			r = -EINVAL;
-			goto out;
-		}
-	}
-
 	r = dm_array_resize(&cmd->info, cmd->root, from_cblock(cmd->cache_blocks),
 			    from_cblock(new_cache_size),
 			    &null_mapping, &cmd->root);
 	if (!r)
 		cmd->cache_blocks = new_cache_size;
 	cmd->changed = true;
-
-out:
 	up_write(&cmd->root_lock);
 
 	return r;
