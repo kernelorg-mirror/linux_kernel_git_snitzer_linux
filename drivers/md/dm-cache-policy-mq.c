@@ -254,11 +254,11 @@ struct mq_policy {
 	struct io_tracker tracker;
 
 	/*
-	 * We maintain three queues of entries.  The cache proper
-	 * consisting of a clean and a dirty queue contains
-	 * the currently active mappings.  Whereas the pre_cache tracks
-	 * blocks that are being hit frequently and potential candidates
-	 * for promotion to the cache.
+	 * We maintain three queues of entries.  The cache proper,
+	 * consisting of a clean and dirty queue, contains the currently
+	 * active mappings.  Whereas the pre_cache tracks blocks that
+	 * are being hit frequently and potential candidates for promotion
+	 * to the cache.
 	 */
 	struct queue pre_cache;
 	struct queue cache_clean;
@@ -1126,29 +1126,15 @@ static int __mq_writeback_work(struct mq_policy *mq, dm_oblock_t *oblock,
 {
 	struct entry *e = pop(mq, &mq->cache_dirty);
 
-	if (e) {
-#if 0
-		/*
-		 * mq->tick - 1 because we don't want a flurry of
-		 * writebacks every time the tick rolls over.
-		 * FIXME: This code prevents complete writeback
-		 */
-		if (e->tick >= (mq->tick - 1))
-			push(mq, e);
+	if (!e)
+		return -ENODATA;
 
-		else {
-#endif
-			*oblock = e->oblock;
-			*cblock = e->cblock;
-			e->dirty = false;
-			push(mq, e);
-			return 0;
-#if 0
-		}
-#endif
-	}
+	*oblock = e->oblock;
+	*cblock = e->cblock;
+	e->dirty = false;
+	push(mq, e);
 
-	return -ENODATA;
+	return 0;
 }
 
 static int mq_writeback_work(struct dm_cache_policy *p, dm_oblock_t *oblock,
