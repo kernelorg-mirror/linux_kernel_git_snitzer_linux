@@ -279,10 +279,8 @@ static int __setup_mapping_info(struct dm_cache_metadata *cmd)
 
 static void __destroy_mapping_info(struct dm_cache_metadata *cmd)
 {
-	if (cmd->policy_hint_value_buffer)
-		kfree(cmd->policy_hint_value_buffer);
+	kfree(cmd->policy_hint_value_buffer);
 }
-
 
 static int __write_initial_superblock(struct dm_cache_metadata *cmd)
 {
@@ -1301,8 +1299,10 @@ int dm_cache_save_hint(struct dm_cache_metadata *cmd, dm_cblock_t cblock, void *
 {
 	int r;
 
-	if (!hints_array_initialized(cmd))
+	if (!hints_array_initialized(cmd)) {
+		__dm_unbless_for_disk(hint);
 		return 0;
+	}
 
 	down_write(&cmd->root_lock);
 	r = save_hint(cmd, cblock, hint);

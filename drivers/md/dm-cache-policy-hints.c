@@ -552,6 +552,7 @@ static int hints_walk_mappings(struct dm_cache_policy *pe, policy_walk_fn fn, vo
 	mutex_lock(&p->lock);
 
 	list_for_each_entry(e, &p->queues.used, list) {
+		__dm_bless_for_disk(p->hints_buffer);
 		r = fn(context, e->cblock, e->oblock, (void *) p->hints_buffer);
 		if (r)
 			break;

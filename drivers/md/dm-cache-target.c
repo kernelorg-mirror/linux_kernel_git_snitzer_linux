@@ -2522,6 +2522,8 @@ static int save_hint(void *context, dm_cblock_t cblock, dm_oblock_t oblock,
 		     void *hint)
 {
 	struct cache *cache = context;
+
+	__dm_bless_for_disk(hint);
 	return dm_cache_save_hint(cache->cmd, cblock, hint);
 }
 
