@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2013 Red Hat. All rights reserved.
+ * Copyright (C) 2013 Red Hat.
  *
- * This file is released under the GPL.
+ * This file is released under the GPLv2.
  *
  * TESTING! NOT FOR PRODUCTION USE!
  *

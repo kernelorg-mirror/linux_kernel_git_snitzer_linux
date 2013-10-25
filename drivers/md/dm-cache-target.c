@@ -639,17 +639,12 @@ static void check_if_tick_bio_needed(struct cache *cache, struct bio *bio)
 	spin_unlock_irqrestore(&cache->lock, flags);
 }
 
-static bool is_write_io(struct bio *bio)
-{
-	return bio_data_dir(bio) == WRITE;
-}
-
 static void remap_to_origin_clear_discard(struct cache *cache, struct bio *bio,
 				  dm_oblock_t oblock)
 {
 	check_if_tick_bio_needed(cache, bio);
 	remap_to_origin(cache, bio);
-	if (is_write_io(bio))
+	if (bio_data_dir(bio) == WRITE)
 		clear_discard(cache, oblock_to_dblock(cache, oblock));
 }
 
@@ -657,7 +652,7 @@ static void remap_to_cache_dirty(struct cache *cache, struct bio *bio,
 				 dm_oblock_t oblock, dm_cblock_t cblock)
 {
 	remap_to_cache(cache, bio, cblock);
-	if (is_write_io(bio)) {
+	if (bio_data_dir(bio) == WRITE) {
 		set_dirty(cache, oblock, cblock);
 		clear_discard(cache, oblock_to_dblock(cache, oblock));
 	}
@@ -1197,14 +1192,14 @@ static bool spare_migration_bandwidth(struct cache *cache)
 
 static void inc_hit_counter(struct cache *cache, struct bio *bio)
 {
-	atomic_inc(is_write_io(bio) ?
-		   &cache->stats.write_hit : &cache->stats.read_hit);
+	atomic_inc(bio_data_dir(bio) == READ ?
+		   &cache->stats.read_hit : &cache->stats.write_hit);
 }
 
 static void inc_miss_counter(struct cache *cache, struct bio *bio)
 {
-	atomic_inc(is_write_io(bio) ?
-		   &cache->stats.write_miss : &cache->stats.read_miss);
+	atomic_inc(bio_data_dir(bio) == READ ?
+		   &cache->stats.read_miss : &cache->stats.write_miss);
 }
 
 static void issue_cache_bio(struct cache *cache, struct bio *bio,
@@ -1258,7 +1253,7 @@ static void process_bio(struct cache *cache, struct prealloc *structs,
 			 * to.
 			 */
 
-			if (is_write_io(bio)) {
+			if (bio_data_dir(bio) == WRITE) {
 				atomic_inc(&cache->stats.demotion);
 				invalidate(cache, structs, block, lookup_result.cblock, new_ocell);
 				release_cell = false;
@@ -1272,7 +1267,7 @@ static void process_bio(struct cache *cache, struct prealloc *structs,
 		} else {
 			inc_hit_counter(cache, bio);
 
-			if (is_write_io(bio) &&
+			if (bio_data_dir(bio) == WRITE &&
 			    writethrough_mode(&cache->features) &&
 			    !is_dirty(cache, lookup_result.cblock)) {
 				pb->all_io_entry = dm_deferred_entry_inc(cache->all_io_ds);
@@ -2403,7 +2398,7 @@ static int cache_map(struct dm_target *ti, struct bio *bio)
 	switch (lookup_result.op) {
 	case POLICY_HIT:
 		if (passthrough_mode(&cache->features)) {
-			if (is_write_io(bio)) {
+			if (bio_data_dir(bio) == WRITE) {
 				/*
 				 * We need to invalidate this block, so
 				 * defer for the worker thread.
@@ -2422,7 +2417,7 @@ static int cache_map(struct dm_target *ti, struct bio *bio)
 		} else {
 			inc_hit_counter(cache, bio);
 
-			if (is_write_io(bio) &&
+			if (bio_data_dir(bio) == WRITE &&
 			    writethrough_mode(&cache->features) &&
 			    !is_dirty(cache, lookup_result.cblock))
 				remap_to_origin_then_cache(cache, bio, block, lookup_result.cblock);

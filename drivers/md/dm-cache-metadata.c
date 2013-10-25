@@ -145,8 +145,8 @@ static int check_metadata_version(struct cache_disk_superblock *disk_super)
 {
 	uint32_t metadata_version = le32_to_cpu(disk_super->version);
 	if (metadata_version < MIN_CACHE_VERSION || metadata_version > MAX_CACHE_VERSION) {
-		DMERR("kernel does not support this version of cache metadata (%u)",
-		      metadata_version);
+		DMERR("Cache metadata version %u found, but only versions between %u and %u supported.",
+		      metadata_version, MIN_CACHE_VERSION, MAX_CACHE_VERSION);
 		return -EINVAL;
 	}
 

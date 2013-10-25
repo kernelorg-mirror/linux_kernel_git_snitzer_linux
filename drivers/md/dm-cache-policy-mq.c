@@ -586,7 +586,8 @@ static bool updated_this_tick(struct mq_policy *mq, struct entry *e)
  * of the entries.
  *
  * At the moment the threshold is taken by averaging the hit counts of some
- * of the entries in the cache (the first 20 entries of the first level).
+ * of the entries in the cache (the first 20 entries across all levels in
+ * ascending order, giving preference to the clean entries at each level).
  *
  * We can be much cleverer than this though.  For example, each promotion
  * could bump up the threshold helping to prevent churn.  Much more to do

@@ -432,16 +432,16 @@ config DM_TEST_TARGETS
        bool "DM test targets"
        depends on BLK_DEV_DM
        ---help---
-         Targets that are only useful for testing.
+         Targets that are primarily useful for testing.
 
 config DM_FLAKEY
-       tristate "Flakey target (EXPERIMENTAL)"
+       tristate "Flakey target"
        depends on DM_TEST_TARGETS
        ---help---
          A target that intermittently fails I/O for debugging purposes.
 
 config DM_DELAY
-	tristate "I/O delaying target (EXPERIMENTAL)"
+	tristate "I/O delaying target"
 	depends on DM_TEST_TARGETS
 	---help---
 	A target that delays reads and/or writes and can send
@@ -456,7 +456,7 @@ config DM_CACHE_HINTS
        ---help---
          A dumb cache policy just to test variable hint size
 
-config DM_CACHE_TRC
+config DM_CACHE_TRACE
        tristate "Tracing Cache Policy shim (EXPERIMENTAL)"
        depends on DM_CACHE
        depends on DM_TEST_TARGETS
