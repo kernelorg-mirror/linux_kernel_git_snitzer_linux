@@ -178,7 +178,7 @@ dm_cache_stack_utils_policy_stack_create(const char *policy_stack_str,
 	char policy_name_buf[CACHE_POLICY_NAME_SIZE];
 	struct dm_cache_policy *p, *head_p, *next_p;
 	char *policy_name, *delim, uninitialized_var(saved_char);
-	int n;
+	int n, r = -EINVAL;
 
 	n = strlcpy(policy_name_buf, policy_stack_str, sizeof(policy_name_buf));
 	if (n >= sizeof(policy_name_buf)) {
@@ -196,8 +196,10 @@ dm_cache_stack_utils_policy_stack_create(const char *policy_stack_str,
 
 		next_p = dm_cache_policy_create(policy_name, cache_size,
 						origin_size, cache_block_size);
-		if (!next_p)
+		if (IS_ERR(next_p)) {
+			r = PTR_ERR(next_p);
 			goto cleanup;
+		}
 
 		next_p->child = NULL;
 		if (p)
@@ -208,7 +210,7 @@ dm_cache_stack_utils_policy_stack_create(const char *policy_stack_str,
 
 		if (delim) {
 			if (!dm_cache_policy_is_shim(next_p)) {
-				DMERR("%s is no shim policy", policy_name);
+				DMERR("%s is not a shim policy", policy_name);
 				goto cleanup;
 			}
 
@@ -229,7 +231,7 @@ dm_cache_stack_utils_policy_stack_create(const char *policy_stack_str,
 
 cleanup:
 	__policy_destroy_stack(head_p);
-	return NULL;
+	return ERR_PTR(r);
 }
 
 void dm_cache_stack_utils_policy_stack_destroy(struct dm_cache_policy *p)
