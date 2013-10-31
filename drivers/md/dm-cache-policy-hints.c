@@ -449,10 +449,12 @@ static void calc_hint_value_counters(struct policy *p)
 }
 
 /* Macro to set hint ptr for width on LHS based on RHS width<<1 */
-#define PTR_INC(lhs, rhs, c) \
+#define DM_PTR_INC(lhs, rhs, c) \
+do { \
 	inc = 2 * p->hint_counter[c]; \
 	ptrs->le ## lhs ## _hints = (__le ## lhs  *) ptrs->le ## rhs ## _hints + inc; \
-	ptrs->u ## lhs ## _hints  = (uint ## lhs ## _t *) ptrs->u ## rhs ## _hints  + inc;
+	ptrs->u ## lhs ## _hints  = (uint ## lhs ## _t *) ptrs->u ## rhs ## _hints  + inc; \
+} while (0)
 
 static void set_hints_ptrs(struct policy *p, struct hints_ptrs *ptrs)
 {
@@ -461,9 +463,9 @@ static void set_hints_ptrs(struct policy *p, struct hints_ptrs *ptrs)
 	ptrs->le64_hints = p->hints_buffer;
 	ptrs->u64_hints  = p->hints_buffer;
 
-	PTR_INC(32, 64, 3)
-	PTR_INC(16, 32, 2)
-	PTR_INC(8,  16, 1)
+	DM_PTR_INC(32, 64, 3);
+	DM_PTR_INC(16, 32, 2);
+	DM_PTR_INC(8,  16, 1);
 }
 
 static void __hints_xfer_disk(struct policy *p, bool to_disk)

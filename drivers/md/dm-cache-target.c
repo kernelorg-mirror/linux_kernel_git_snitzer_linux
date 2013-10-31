@@ -177,6 +177,10 @@ struct cache {
 	wait_queue_head_t migration_wait;
 	atomic_t nr_migrations;
 
+	wait_queue_head_t quiescing_wait;
+	atomic_t quiescing;
+	atomic_t quiescing_ack;
+
 	/*
 	 * cache_size entries, dirty if set
 	 */
@@ -215,7 +219,6 @@ struct cache {
 
 	bool need_tick_bio:1;
 	bool sized:1;
-	bool quiescing:1;
 	bool invalidate:1;
 	bool commit_requested:1;
 	bool loaded_mappings:1;
@@ -651,6 +654,7 @@ static void remap_to_origin_clear_discard(struct cache *cache, struct bio *bio,
 static void remap_to_cache_dirty(struct cache *cache, struct bio *bio,
 				 dm_oblock_t oblock, dm_cblock_t cblock)
 {
+	check_if_tick_bio_needed(cache, bio);
 	remap_to_cache(cache, bio, cblock);
 	if (bio_data_dir(bio) == WRITE) {
 		set_dirty(cache, oblock, cblock);
@@ -794,8 +798,9 @@ static void cell_defer(struct cache *cache, struct dm_bio_prison_cell *cell,
 
 static void cleanup_migration(struct dm_cache_migration *mg)
 {
-	dec_nr_migrations(mg->cache);
+	struct cache *cache = mg->cache;
 	free_migration(mg);
+	dec_nr_migrations(cache);
 }
 
 static void migration_failure(struct dm_cache_migration *mg)
@@ -1456,34 +1461,34 @@ static void writeback_some_dirty_blocks(struct cache *cache)
 /*----------------------------------------------------------------
  * Main worker loop
  *--------------------------------------------------------------*/
+static bool is_quiescing(struct cache *cache)
+{
+	return atomic_read(&cache->quiescing);
+}
+
+static void ack_quiescing(struct cache *cache)
+{
+	if (is_quiescing(cache)) {
+		atomic_inc(&cache->quiescing_ack);
+		wake_up(&cache->quiescing_wait);
+	}
+}
+
+static void wait_for_quiescing_ack(struct cache *cache)
+{
+	wait_event(cache->quiescing_wait, atomic_read(&cache->quiescing_ack));
+}
+
 static void start_quiescing(struct cache *cache)
 {
-	unsigned long flags;
-
-	spin_lock_irqsave(&cache->lock, flags);
-	cache->quiescing = true;
-	spin_unlock_irqrestore(&cache->lock, flags);
+	atomic_inc(&cache->quiescing);
+	wait_for_quiescing_ack(cache);
 }
 
 static void stop_quiescing(struct cache *cache)
 {
-	unsigned long flags;
-
-	spin_lock_irqsave(&cache->lock, flags);
-	cache->quiescing = false;
-	spin_unlock_irqrestore(&cache->lock, flags);
-}
-
-static bool is_quiescing(struct cache *cache)
-{
-	int r;
-	unsigned long flags;
-
-	spin_lock_irqsave(&cache->lock, flags);
-	r = cache->quiescing;
-	spin_unlock_irqrestore(&cache->lock, flags);
-
-	return r;
+	atomic_set(&cache->quiescing, 0);
+	atomic_set(&cache->quiescing_ack, 0);
 }
 
 static void wait_for_migrations(struct cache *cache)
@@ -1585,15 +1590,14 @@ static void do_worker(struct work_struct *ws)
 	struct cache *cache = container_of(ws, struct cache, worker);
 
 	do {
-		if (!is_quiescing(cache))
+		if (!is_quiescing(cache)) {
+			writeback_some_dirty_blocks(cache);
+			process_deferred_writethrough_bios(cache);
 			process_deferred_bios(cache);
+		}
 
 		process_migrations(cache, &cache->quiesced_migrations, issue_copy);
 		process_migrations(cache, &cache->completed_migrations, complete_migration);
-
-		writeback_some_dirty_blocks(cache);
-
-		process_deferred_writethrough_bios(cache);
 
 		invalidate_mappings(cache);
 
@@ -1609,6 +1613,9 @@ static void do_worker(struct work_struct *ws)
 			process_migrations(cache, &cache->need_commit_migrations,
 					   migration_success_post_commit);
 		}
+
+		ack_quiescing(cache);
+
 	} while (more_work(cache));
 }
 
@@ -2042,14 +2049,15 @@ static int set_config_values(struct cache *cache, int argc, const char **argv)
 static int create_cache_policy(struct cache *cache, struct cache_args *ca,
 			       char **error)
 {
-	cache->policy =	dm_cache_policy_create(ca->policy_name,
-					       cache->cache_size,
-					       cache->origin_sectors,
-					       cache->sectors_per_block);
-	if (!cache->policy) {
+	struct dm_cache_policy *p = dm_cache_policy_create(ca->policy_name,
+							   cache->cache_size,
+							   cache->origin_sectors,
+							   cache->sectors_per_block);
+	if (IS_ERR(p)) {
 		*error = "Error creating cache's policy";
-		return -ENOMEM;
+		return PTR_ERR(p);
 	}
+	cache->policy = p;
 
 	return 0;
 }
@@ -2191,6 +2199,10 @@ static int cache_create(struct cache_args *ca, struct cache **result)
 	atomic_set(&cache->nr_migrations, 0);
 	init_waitqueue_head(&cache->migration_wait);
 
+	init_waitqueue_head(&cache->quiescing_wait);
+	atomic_set(&cache->quiescing, 0);
+	atomic_set(&cache->quiescing_ack, 0);
+
 	r = -ENOMEM;
 	cache->nr_dirty = 0;
 	cache->dirty_bitset = alloc_bitset(from_cblock(cache->cache_size));
@@ -2250,7 +2262,6 @@ static int cache_create(struct cache_args *ca, struct cache **result)
 
 	cache->need_tick_bio = true;
 	cache->sized = false;
-	cache->quiescing = false;
 	cache->invalidate = false;
 	cache->commit_requested = false;
 	cache->loaded_mappings = false;
@@ -2426,7 +2437,6 @@ static int cache_map(struct dm_target *ti, struct bio *bio)
 				remap_to_cache_dirty(cache, bio, block, lookup_result.cblock);
 
 			cell_defer(cache, cell, false);
-
 		}
 		break;
 
@@ -2618,26 +2628,71 @@ static int load_discard(void *context, sector_t discard_block_size,
 	return 0;
 }
 
+static dm_cblock_t get_cache_dev_size(struct cache *cache)
+{
+	sector_t size = get_dev_size(cache->cache_dev);
+	(void) sector_div(size, cache->sectors_per_block);
+	return to_cblock(size);
+}
+
+static bool can_resize(struct cache *cache, dm_cblock_t new_size)
+{
+	if (from_cblock(new_size) > from_cblock(cache->cache_size))
+		return true;
+
+	/*
+	 * We can't drop a dirty block when shrinking the cache.
+	 */
+	while (from_cblock(new_size) < from_cblock(cache->cache_size)) {
+		new_size = to_cblock(from_cblock(new_size) + 1);
+		if (is_dirty(cache, new_size)) {
+			DMERR("unable to shrink cache; cache block %llu is dirty",
+			      (unsigned long long) from_cblock(new_size));
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static int resize_cache_dev(struct cache *cache, dm_cblock_t new_size)
+{
+	int r;
+
+	r = dm_cache_resize(cache->cmd, cache->cache_size);
+	if (r) {
+		DMERR("could not resize cache metadata");
+		return r;
+	}
+
+	cache->cache_size = new_size;
+
+	return 0;
+}
+
 static int cache_preresume(struct dm_target *ti)
 {
 	int r = 0;
 	struct cache *cache = ti->private;
-	sector_t actual_cache_size = get_dev_size(cache->cache_dev);
-	(void) sector_div(actual_cache_size, cache->sectors_per_block);
+	dm_cblock_t csize = get_cache_dev_size(cache);
 
 	/*
 	 * Check to see if the cache has resized.
 	 */
-	if (from_cblock(cache->cache_size) != actual_cache_size || !cache->sized) {
-		cache->cache_size = to_cblock(actual_cache_size);
-
-		r = dm_cache_resize(cache->cmd, cache->cache_size);
-		if (r) {
-			DMERR("could not resize cache metadata");
+	if (!cache->sized) {
+		r = resize_cache_dev(cache, csize);
+		if (r)
 			return r;
-		}
 
 		cache->sized = true;
+
+	} else if (csize != cache->cache_size) {
+		if (!can_resize(cache, csize))
+			return -EINVAL;
+
+		r = resize_cache_dev(cache, csize);
+		if (r)
+			return r;
 	}
 
 	if (!cache->loaded_mappings) {

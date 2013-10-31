@@ -1040,7 +1040,7 @@ static int mq_load_mapping(struct dm_cache_policy *p,
 	e->cblock = cblock;
 	e->oblock = oblock;
 	e->in_cache = true;
-	e->dirty = true;	/* this gets corrected in a minute */
+	e->dirty = false;	/* this gets corrected in a minute */
 	e->hit_count = hint_valid ? le32_to_cpu(*((__le32 *) hint)) : 1;
 	e->generation = mq->generation;
 	push(mq, e);
@@ -1188,10 +1188,16 @@ static int mq_invalidate_mapping(struct dm_cache_policy *p,
 
 static dm_cblock_t mq_residency(struct dm_cache_policy *p)
 {
+	dm_cblock_t r;
 	struct mq_policy *mq = to_mq_policy(p);
 
-	/* FIXME: lock mutex, not sure we can block here */
-	return to_cblock(mq->nr_cblocks_allocated);
+	might_sleep();
+
+	mutex_lock(&mq->lock);
+	r = to_cblock(mq->nr_cblocks_allocated);
+	mutex_unlock(&mq->lock);
+
+	return r;
 }
 
 static void mq_tick(struct dm_cache_policy *p)

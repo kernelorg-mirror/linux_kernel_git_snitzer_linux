@@ -144,10 +144,10 @@ struct dm_cache_policy {
 	 *
 	 * Returns:
 	 *
-	 * 0       if block is in cache _and_ set/clear respectively succeded
+	 * 0	   if block is in cache _and_ set/clear respectively succeded
 	 *
 	 * -EINVAL if block is in cache _but_ block was already set to dirty
-	 *  	   on a set call / clean on a clean call
+	 *	   on a set call / clean on a clean call
 	 *
 	 * -ENOENT if block is not in cache
 	 */
