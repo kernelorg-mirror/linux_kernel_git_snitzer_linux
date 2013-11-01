@@ -992,7 +992,11 @@ static int mq_lookup(struct dm_cache_policy *p, dm_oblock_t oblock, dm_cblock_t 
 	return r;
 }
 
-// FIXME: can __mq_set_clear_dirty block?
+/*
+ * FIXME: __mq_set_clear_dirty can block due to mutex.
+ * Ideally a policy should not block in functions called
+ * from the map() function.  Explore using RCU.
+ */
 static int __mq_set_clear_dirty(struct dm_cache_policy *p, dm_oblock_t oblock, bool set)
 {
 	int r = 0;
