@@ -98,13 +98,15 @@ static struct dm_cache_policy *stack_root_create(const char *policy_stack_str,
 	canonical_name_len = 0;
 	for (child = head; child; child = child->child) {
 		hint_size = dm_cache_policy_get_hint_size(child);
-
 #if 0
-		/* FIXME: avoids policy name in t->name, thus leaving an non-destroyable stack. */
-		if (!hint_size && child->child)
+		/*
+		 * FIXME: cannot skip shim policies without hints because the
+		 * overall policy stack may not be destroyable (if t->name doesn't
+		 * contain DM_CACHE_POLICY_STACK_DELIM, see dm_cache_policy_destroy)
+		 */
+		if (!hint_size && dm_cache_policy_is_shim(child))
 			continue;
 #endif
-
 		t->hint_size += hint_size;
 
 		seg_name = dm_cache_policy_get_name(child);
@@ -220,11 +222,11 @@ dm_cache_stack_utils_policy_stack_create(const char *policy_stack_str,
 	} while (delim);
 
 	if (head_p->child) {
-		next_p = stack_root_create(policy_stack_str, head_p);
-		if (!next_p)
+		p = stack_root_create(policy_stack_str, head_p);
+		if (!p)
 			goto cleanup;
 
-		head_p = next_p;
+		head_p = p;
 	}
 
 	return head_p;

@@ -55,9 +55,6 @@ static struct dm_cache_policy_type *get_policy_once(const char *name)
 static struct dm_cache_policy_type *get_policy(const char *name)
 {
 	struct dm_cache_policy_type *t;
-	char name_wo_delim[CACHE_POLICY_NAME_SIZE];
-	char *p_delim;
-	int n;
 
 	t = get_policy_once(name);
 	if (IS_ERR(t))
@@ -67,28 +64,6 @@ static struct dm_cache_policy_type *get_policy(const char *name)
 		return t;
 
 	request_module("dm-cache-%s", name);
-
-	t = get_policy_once(name);
-	if (IS_ERR(t))
-		return NULL;
-
-	if (t)
-		return t;
-
-	/*
-	 * We also need to check for dm-cache-<@name> with no trailing
-	 * DM_CACHE_POLICY_STACK_DELIM if @name has one, in order to
-	 * support loadable policy shims.
-	 */
-	n = strlcpy(name_wo_delim, name, sizeof(name_wo_delim));
-	if (n >= sizeof(name_wo_delim))
-		return NULL;
-	p_delim = strchr(name_wo_delim, DM_CACHE_POLICY_STACK_DELIM);
-	if (!p_delim || (p_delim[1] != '\0'))
-		return NULL;
-	p_delim[0] = '\0';
-
-	request_module("dm-cache-%s", name_wo_delim);
 
 	t = get_policy_once(name);
 	if (IS_ERR(t))

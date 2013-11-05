@@ -2964,6 +2964,7 @@ static int set_invalidate_mappings(struct cache *cache, char **argv)
 	 */
 	cache->begin_invalidate = to_oblock(begin);
 	cache->end_invalidate = to_oblock(end);
+	smp_wmb();
 	cache->invalidate = true;
 	smp_wmb();
 
