@@ -237,6 +237,8 @@ i) Constructor
 
       error_if_no_space: Error IOs, instead of queueing, if no space.
 
+      blocks_per_allocation <blocks>: Provision multiple blocks at once.
+
     Data block size must be between 64KB (128 sectors) and 1GB
     (2097152 sectors) inclusive.
 
@@ -282,6 +284,15 @@ ii) Status
 	If the pool runs out of data or metadata space, the pool will
 	either queue or error the IO destined to the data device.  The
 	default is to queue the IO until more space is added.
+
+    blocks_per_allocation <blocks>
+	When a block is provisioned from the pool, rather than allocate
+	a single block, allocate <#blocks>.  This feature effectively
+	gives users the ability to configure the pool to have two block
+	sizes: 1) allocation block size 2) snapshot block size.  The
+	snapshot block size being the "data block size" specified when
+	constructing the pool.  The allocation block size is <blocks>
+	times larger than the "data block size".
 
 iii) Messages
 
