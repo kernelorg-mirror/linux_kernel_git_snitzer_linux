@@ -1,0 +1,50 @@
+This is a simple DM target supporting compression for SSD only. Under layer SSD
+must support 512B sector size, the target only supports 4k sector size.
+
+Disk layout:
+|super|...meta...|..data...|
+
+Store unit is 4k (a block). Super is 1 block, which stores meta and data size
+and compression algorithm. Meta is a bitmap. For each data block, there are 5
+bits meta.
+
+Data:
+Data of a block is compressed. Compressed data is round up to 512B, which is
+the payload. In disk, payload is stored at the begining of logical sector of
+the block. Let's look at an example. Say we store data to block A, which is in
+sector B(A*8), its orginal size is 4k, compressed size is 1500. Compressed data
+(CD) will use 3 sectors (512B). The 3 sectors are the payload. Payload will be
+stored at sector B.
+
+---------------------------------------------------
+... | CD1 | CD2 | CD3 |   |   |   |   |    | ...
+---------------------------------------------------
+    ^B    ^B+1  ^B+2                  ^B+7 ^B+8
+
+For this block, we will not use sector B+3 to B+7 (a hole). We use 4 meta bits
+to present payload size. The compressed size (1500) isn't stored in meta
+directly. Instead, we store it at the last 32bits of payload. In this example,
+we store it at the end of sector B+2. If compressed size + sizeof(32bits)
+crosses a sector, payload size will increase one sector. If payload uses 8
+sectors, we store uncompressed data directly.
+
+If IO size is bigger than one block, we can store the data as an extent. Data
+of the whole extent will compressed and stored in the similar way like above.
+The first block of the extent is the head, all others are the tail. If extent
+is 1 block, the block is head. We have 1 bit of meta to present if a block is
+head or tail. If 4 meta bits of head block can't store extent payload size, we
+will borrow tail block meta bits to store payload size. Max allowd extent size
+is 128k, so we don't compress/decompress too big size data.
+
+Meta:
+Modifying data will modify meta too. Meta will be written(flush) to disk
+depending on meta write policy. We support writeback and writethrough mode. In
+writeback mode, meta will be written to disk in an interval or a FLUSH request.
+In writethrough mode, data and meta data will be written to disk together.
+
+=========================
+Parameters: <dev> [<writethrough>|<writeback> <meta_commit_delay>]
+   <dev>: underlying device
+   <writethrough>: metadata flush to disk with writetrough mode
+   <writeback>: metadata flush to disk with writeback mode
+   <meta_commit_delay>: metadata flush to disk interval in writeback mode

@@ -296,6 +296,12 @@ config DM_ERA
          over time.  Useful for maintaining cache coherency when using
          vendor snapshots.
 
+config DM_INSITU_COMPRESSION
+       tristate "Insitu compression target"
+       depends on BLK_DEV_DM
+       ---help---
+         Allow volume managers to insitu compress data for SSD.
+
 config DM_MIRROR
        tristate "Mirror target"
        depends on BLK_DEV_DM
