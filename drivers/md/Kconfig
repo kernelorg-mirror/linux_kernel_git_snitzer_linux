@@ -297,10 +297,13 @@ config DM_ERA
          vendor snapshots.
 
 config DM_INSITU_COMPRESSION
-       tristate "Insitu compression target"
+       tristate "Insitu compression target (EXPERIMENTAL)"
        depends on BLK_DEV_DM
+       select CRYPTO
+       select CRYPTO_LZO
+       select CRYPTO_DEFLATE
        ---help---
-         Allow volume managers to insitu compress data for SSD.
+         Allow volume managers to leverage SSD for insitu data compression.
 
 config DM_MIRROR
        tristate "Mirror target"

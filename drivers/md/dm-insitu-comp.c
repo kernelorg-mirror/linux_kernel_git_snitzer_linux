@@ -1,3 +1,7 @@
+/*
+ * This file is released under the GPL.
+ */
+
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/blkdev.h>
@@ -12,14 +16,19 @@
 #include <linux/completion.h>
 #include "dm-insitu-comp.h"
 
-#define DM_MSG_PREFIX "dm_insitu_comp"
+#define DM_MSG_PREFIX "insitu-comp"
+
+static inline int lzo_comp_len(int comp_len)
+{
+	return lzo1x_worst_compress(comp_len);
+}
 
 static struct insitu_comp_compressor_data compressors[] = {
 	[INSITU_COMP_ALG_LZO] = {
 		.name = "lzo",
 		.comp_len = lzo_comp_len,
 	},
-	[INSITU_COMP_ALG_ZLIB] = {
+	[INSITU_COMP_ALG_DEFLATE] = {
 		.name = "deflate",
 	},
 };
@@ -31,13 +40,14 @@ static struct kmem_cache *insitu_comp_meta_io_cachep;
 static struct insitu_comp_io_worker insitu_comp_io_workers[NR_CPUS];
 static struct workqueue_struct *insitu_comp_wq;
 
-/* each block has 5 bits metadata */
+/* each block has 5 bits of metadata */
 static u8 insitu_comp_get_meta(struct insitu_comp_info *info, u64 block_index)
 {
 	u64 first_bit = block_index * INSITU_COMP_META_BITS;
 	int bits, offset;
 	u8 data, ret = 0;
 
+	// FIXME: "magic" numbers in this function (7, 3)
 	offset = first_bit & 7;
 	bits = min_t(u8, INSITU_COMP_META_BITS, 8 - offset);
 
@@ -53,14 +63,15 @@ static u8 insitu_comp_get_meta(struct insitu_comp_info *info, u64 block_index)
 	return ret;
 }
 
-static void insitu_comp_set_meta(struct insitu_comp_info *info,
-	u64 block_index, u8 meta, bool dirty_meta)
+static void insitu_comp_set_meta(struct insitu_comp_info *info, u64 block_index,
+				 u8 meta, bool dirty_meta)
 {
 	u64 first_bit = block_index * INSITU_COMP_META_BITS;
 	int bits, offset;
 	u8 data;
 	struct page *page;
 
+	// FIXME: "magic" numbers in this function (7, 3)
 	offset = first_bit & 7;
 	bits = min_t(u8, INSITU_COMP_META_BITS, 8 - offset);
 
@@ -70,9 +81,9 @@ static void insitu_comp_set_meta(struct insitu_comp_info *info,
 	info->meta_bitmap[first_bit >> 3] = data;
 
 	/*
-	 * For writethrough, we write metadata directly. For writeback, if
+	 * For writethrough, we write metadata directly.  For writeback, if
 	 * request is FUA, we do this too; otherwise we just dirty the page,
-	 * which will be flush out in an interval
+	 * which will be flushed out in an interval.
 	 */
 	if (info->write_mode == INSITU_COMP_WRITE_BACK) {
 		page = vmalloc_to_page(&info->meta_bitmap[first_bit >> 3]);
@@ -91,8 +102,7 @@ static void insitu_comp_set_meta(struct insitu_comp_info *info,
 		info->meta_bitmap[(first_bit >> 3) + 1] = data;
 
 		if (info->write_mode == INSITU_COMP_WRITE_BACK) {
-			page = vmalloc_to_page(&info->meta_bitmap[
-						(first_bit >> 3) + 1]);
+			page = vmalloc_to_page(&info->meta_bitmap[(first_bit >> 3) + 1]);
 			if (dirty_meta)
 				SetPageDirty(page);
 			else
@@ -105,8 +115,8 @@ static void insitu_comp_set_meta(struct insitu_comp_info *info,
  * set metadata for an extent since block @block_index, length is
  * @logical_blocks.  The extent uses @data_sectors sectors
  */
-static void insitu_comp_set_extent(struct insitu_comp_req *req,
-	u64 block_index, u16 logical_blocks, sector_t data_sectors)
+static void insitu_comp_set_extent(struct insitu_comp_req *req, u64 block_index,
+				   u16 logical_blocks, sector_t data_sectors)
 {
 	int i;
 	u8 data;
@@ -118,7 +128,7 @@ static void insitu_comp_set_extent(struct insitu_comp_req *req,
 			data |= INSITU_COMP_TAIL_MASK;
 		/* For FUA, we write out meta data directly */
 		insitu_comp_set_meta(req->info, block_index + i, data,
-					!(insitu_req_rw(req) & REQ_FUA));
+				     !(insitu_req_rw(req) & REQ_FUA));
 	}
 }
 
@@ -127,9 +137,9 @@ static void insitu_comp_set_extent(struct insitu_comp_req *req,
  * returns the first block of the extent. @logical_sectors returns the extent
  * length. @data_sectors returns the sectors the extent uses
  */
-static void insitu_comp_get_extent(struct insitu_comp_info *info,
-	u64 block_index, u64 *first_block_index, u16 *logical_sectors,
-	u16 *data_sectors)
+static void insitu_comp_get_extent(struct insitu_comp_info *info, u64 block_index,
+				   u64 *first_block_index, u16 *logical_sectors,
+				   u16 *data_sectors)
 {
 	u8 data;
 
@@ -139,21 +149,21 @@ static void insitu_comp_get_extent(struct insitu_comp_info *info,
 		data = insitu_comp_get_meta(info, block_index);
 	}
 	*first_block_index = block_index;
-	*logical_sectors = INSITU_COMP_BLOCK_SIZE >> 9;
+	*logical_sectors = INSITU_COMP_BLOCK_SIZE >> SECTOR_SHIFT;
 	*data_sectors = data & INSITU_COMP_LENGTH_MASK;
 	block_index++;
 	while (block_index < info->data_blocks) {
 		data = insitu_comp_get_meta(info, block_index);
 		if (!(data & INSITU_COMP_TAIL_MASK))
 			break;
-		*logical_sectors += INSITU_COMP_BLOCK_SIZE >> 9;
+		*logical_sectors += INSITU_COMP_BLOCK_SIZE >> SECTOR_SHIFT;
 		*data_sectors += data & INSITU_COMP_LENGTH_MASK;
 		block_index++;
 	}
 }
 
 static int insitu_comp_access_super(struct insitu_comp_info *info,
-	void *addr, int rw)
+				    void *addr, int rw)
 {
 	struct dm_io_region region;
 	struct dm_io_request req;
@@ -162,7 +172,7 @@ static int insitu_comp_access_super(struct insitu_comp_info *info,
 
 	region.bdev = info->dev->bdev;
 	region.sector = 0;
-	region.count = INSITU_COMP_BLOCK_SIZE >> 9;
+	region.count = INSITU_COMP_BLOCK_SIZE >> SECTOR_SHIFT;
 
 	req.bi_rw = rw;
 	req.mem.type = DM_IO_KMEM;
@@ -186,8 +196,8 @@ static void insitu_comp_meta_io_done(unsigned long error, void *context)
 }
 
 static int insitu_comp_write_meta(struct insitu_comp_info *info,
-	u64 start_page, u64 end_page, void *data,
-	void (*fn)(void *data, unsigned long error), int rw)
+				  u64 start_page, u64 end_page, void *data,
+				  void (*fn)(void *data, unsigned long error), int rw)
 {
 	struct insitu_comp_meta_io *meta_io;
 
@@ -202,17 +212,16 @@ static int insitu_comp_write_meta(struct insitu_comp_info *info,
 	meta_io->fn = fn;
 
 	meta_io->io_region.bdev = info->dev->bdev;
-	meta_io->io_region.sector = INSITU_COMP_META_START_SECTOR +
-					(start_page << (PAGE_SHIFT - 9));
-	meta_io->io_region.count = (end_page - start_page) << (PAGE_SHIFT - 9);
+	meta_io->io_region.sector = (INSITU_COMP_META_START_SECTOR +
+				     (start_page << (PAGE_SHIFT - SECTOR_SHIFT)));
+	meta_io->io_region.count = (end_page - start_page) << (PAGE_SHIFT - SECTOR_SHIFT);
 
-	atomic64_add(meta_io->io_region.count << 9, &info->meta_write_size);
+	atomic64_add(meta_io->io_region.count << SECTOR_SHIFT, &info->meta_write_size);
 
 	meta_io->io_req.bi_rw = rw;
 	meta_io->io_req.mem.type = DM_IO_VMA;
 	meta_io->io_req.mem.offset = 0;
-	meta_io->io_req.mem.ptr.addr = info->meta_bitmap +
-						(start_page << PAGE_SHIFT);
+	meta_io->io_req.mem.ptr.addr = info->meta_bitmap + (start_page << PAGE_SHIFT);
 	meta_io->io_req.notify.fn = insitu_comp_meta_io_done;
 	meta_io->io_req.notify.context = meta_io;
 	meta_io->io_req.client = info->io_client;
@@ -236,7 +245,7 @@ static void writeback_flush_io_done(void *data, unsigned long error)
 }
 
 static void insitu_comp_flush_dirty_meta(struct insitu_comp_info *info,
-			struct writeback_flush_data *data)
+					 struct writeback_flush_data *data)
 {
 	struct page *page;
 	u64 start = 0, index;
@@ -282,7 +291,7 @@ static void insitu_comp_flush_dirty_meta(struct insitu_comp_info *info,
 	blk_finish_plug(&plug);
 }
 
-/* writeback thread flushs all dirty metadata to disk in an interval */
+/* writeback thread flushes all dirty metadata to disk in an interval */
 static int insitu_comp_meta_writeback_thread(void *data)
 {
 	struct insitu_comp_info *info = data;
@@ -292,8 +301,8 @@ static int insitu_comp_meta_writeback_thread(void *data)
 	init_completion(&wb.complete);
 
 	while (!kthread_should_stop()) {
-		schedule_timeout_interruptible(
-			msecs_to_jiffies(info->writeback_delay * 1000));
+		// FIXME: writeback_delay should be in secs
+		schedule_timeout_interruptible(msecs_to_jiffies(info->writeback_delay * 1000));
 		insitu_comp_flush_dirty_meta(info, &wb);
 	}
 
@@ -317,7 +326,7 @@ static int insitu_comp_init_meta(struct insitu_comp_info *info, bool new)
 
 	region.bdev = info->dev->bdev;
 	region.sector = INSITU_COMP_META_START_SECTOR;
-	region.count = (len + 511) >> 9;
+	region.count = (len + 511) >> SECTOR_SHIFT;
 
 	req.mem.type = DM_IO_VMA;
 	req.mem.offset = 0;
@@ -342,9 +351,8 @@ static int insitu_comp_init_meta(struct insitu_comp_info *info, bool new)
 	}
 
 	if (info->write_mode == INSITU_COMP_WRITE_BACK) {
-		info->writeback_tsk = kthread_run(
-			insitu_comp_meta_writeback_thread,
-			info, "insitu_comp_writeback");
+		info->writeback_tsk = kthread_run(insitu_comp_meta_writeback_thread,
+						  info, "insitu_comp_writeback");
 		if (!info->writeback_tsk) {
 			info->ti->error = "Create writeback thread error";
 			return -EINVAL;
@@ -359,8 +367,8 @@ static int insitu_comp_alloc_compressor(struct insitu_comp_info *info)
 	int i;
 
 	for_each_possible_cpu(i) {
-		info->tfm[i] = crypto_alloc_comp(
-			compressors[info->comp_alg].name, 0, 0);
+		info->tfm[i] =
+			crypto_alloc_comp(compressors[info->comp_alg].name, 0, 0);
 		if (IS_ERR(info->tfm[i])) {
 			info->tfm[i] = NULL;
 			goto err;
@@ -400,18 +408,16 @@ static int insitu_comp_read_or_create_super(struct insitu_comp_info *info)
 	int ret;
 	ssize_t len;
 
-	total_blocks = i_size_read(info->dev->bdev->bd_inode) >>
-					INSITU_COMP_BLOCK_SHIFT;
+	total_blocks = i_size_read(info->dev->bdev->bd_inode) >> INSITU_COMP_BLOCK_SHIFT;
 	data_blocks = total_blocks - 1;
-	rem = do_div(data_blocks, INSITU_COMP_BLOCK_SIZE * 8 +
-			INSITU_COMP_META_BITS);
+	// FIXME: 64bit divide on 32bit?  must compile/work on 32bit
+	rem = do_div(data_blocks, INSITU_COMP_BLOCK_SIZE * 8 + INSITU_COMP_META_BITS);
 	meta_blocks = data_blocks * INSITU_COMP_META_BITS;
 	data_blocks *= INSITU_COMP_BLOCK_SIZE * 8;
 
 	cnt = rem;
 	rem /= (INSITU_COMP_BLOCK_SIZE * 8 / INSITU_COMP_META_BITS + 1);
-	data_blocks += rem * (INSITU_COMP_BLOCK_SIZE * 8 /
-				INSITU_COMP_META_BITS);
+	data_blocks += rem * (INSITU_COMP_BLOCK_SIZE * 8 / INSITU_COMP_META_BITS);
 	meta_blocks += rem;
 
 	cnt %= (INSITU_COMP_BLOCK_SIZE * 8 / INSITU_COMP_META_BITS + 1);
@@ -423,7 +429,7 @@ static int insitu_comp_read_or_create_super(struct insitu_comp_info *info)
 
 	addr = kzalloc(INSITU_COMP_BLOCK_SIZE, GFP_KERNEL);
 	if (!addr) {
-		info->ti->error = "Cannot allocate super";
+		info->ti->error = "Cannot allocate superblock";
 		return -ENOMEM;
 	}
 
@@ -436,13 +442,12 @@ static int insitu_comp_read_or_create_super(struct insitu_comp_info *info)
 		if (le64_to_cpu(super->version) != INSITU_COMP_VERSION ||
 		    le64_to_cpu(super->meta_blocks) != meta_blocks ||
 		    le64_to_cpu(super->data_blocks) != data_blocks) {
-			info->ti->error = "Super is invalid";
+			info->ti->error = "Superblock is invalid";
 			ret = -EINVAL;
 			goto out;
 		}
 		if (!crypto_has_comp(compressors[super->comp_alg].name, 0, 0)) {
-			info->ti->error =
-					"Compressor algorithm doesn't support";
+			info->ti->error = "Compression algorithm not supported";
 			ret = -EINVAL;
 			goto out;
 		}
@@ -454,7 +459,7 @@ static int insitu_comp_read_or_create_super(struct insitu_comp_info *info)
 		super->comp_alg = default_compressor;
 		ret = insitu_comp_access_super(info, addr, WRITE_FUA);
 		if (ret) {
-			info->ti->error = "Access super fails";
+			info->ti->error = "Accessing the superblock failed";
 			goto out;
 		}
 		new_super = true;
@@ -481,6 +486,7 @@ static int insitu_comp_read_or_create_super(struct insitu_comp_info *info)
 		goto meta_err;
 
 	return 0;
+
 meta_err:
 	vfree(info->meta_bitmap);
 bitmap_err:
@@ -491,10 +497,18 @@ out:
 }
 
 /*
- * <dev> <writethough>/<writeback> <meta_commit_delay>
+ * <ssd dev> [<#feature args> [<feature arg>]*]
+ *
+ * Optional feature arguments are:
+ *	   writethrough: flush metadata to disk using writethrough mode.
+ *
+ *	   writeback <commit_interval>: flush metadata to disk with writeback
+ *					mode after <commit_interval> seconds.
  */
 static int insitu_comp_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
+	// FIXME: add proper feature arg processing.
+	// FIXME: pick default metadata write mode.
 	struct insitu_comp_info *info;
 	char write_mode[15];
 	int ret, i;
@@ -552,7 +566,7 @@ static int insitu_comp_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	if (bdev_logical_block_size(info->dev->bdev) != 512) {
-		ti->error = "Can't logical block size too big";
+		ti->error = "Device's logical block size is not 512B";
 		ret = -EINVAL;
 		goto err_blocksize;
 	}
@@ -575,6 +589,7 @@ static int insitu_comp_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ti->per_bio_data_size = sizeof(struct insitu_comp_req);
 	ti->private = info;
 	return 0;
+
 err_blocksize:
 	dm_io_client_destroy(info->io_client);
 err_ioclient:
@@ -605,13 +620,12 @@ static u64 insitu_comp_sector_to_block(sector_t sect)
 static struct insitu_comp_hash_lock *
 insitu_comp_block_hash_lock(struct insitu_comp_info *info, u64 block_index)
 {
-	return &info->bitmap_locks[(block_index >> HASH_LOCK_SHIFT) &
-			BITMAP_HASH_MASK];
+	return &info->bitmap_locks[(block_index >> HASH_LOCK_SHIFT) & BITMAP_HASH_MASK];
 }
 
 static struct insitu_comp_hash_lock *
 insitu_comp_trylock_block(struct insitu_comp_info *info,
-	struct insitu_comp_req *req, u64 block_index)
+			  struct insitu_comp_req *req, u64 block_index)
 {
 	struct insitu_comp_hash_lock *hash_lock;
 
@@ -629,9 +643,11 @@ insitu_comp_trylock_block(struct insitu_comp_info *info,
 }
 
 static void insitu_comp_queue_req_list(struct insitu_comp_info *info,
-	struct list_head *list);
+				       struct list_head *list);
+
 static void insitu_comp_unlock_block(struct insitu_comp_info *info,
-	struct insitu_comp_req *req, struct insitu_comp_hash_lock *hash_lock)
+				     struct insitu_comp_req *req,
+				     struct insitu_comp_hash_lock *hash_lock)
 {
 	LIST_HEAD(pending_list);
 	unsigned long flags;
@@ -650,7 +666,7 @@ static void insitu_comp_unlock_req_range(struct insitu_comp_req *req)
 	insitu_comp_unlock_block(req->info, req, req->lock);
 }
 
-/* Check comments of HASH_LOCK_SHIFT. each request only need take one lock */
+/* Check comments of HASH_LOCK_SHIFT. each request only needs to take one lock */
 static int insitu_comp_lock_req_range(struct insitu_comp_req *req)
 {
 	u64 block_index, tmp;
@@ -658,7 +674,7 @@ static int insitu_comp_lock_req_range(struct insitu_comp_req *req)
 	block_index = insitu_comp_sector_to_block(insitu_req_start_sector(req));
 	tmp = insitu_comp_sector_to_block(insitu_req_end_sector(req) - 1);
 	BUG_ON(insitu_comp_block_hash_lock(req->info, block_index) !=
-			insitu_comp_block_hash_lock(req->info, tmp));
+	       insitu_comp_block_hash_lock(req->info, tmp));
 
 	req->lock = insitu_comp_trylock_block(req->info, req, block_index);
 	if (!req->lock)
@@ -668,7 +684,7 @@ static int insitu_comp_lock_req_range(struct insitu_comp_req *req)
 }
 
 static void insitu_comp_queue_req(struct insitu_comp_info *info,
-	struct insitu_comp_req *req)
+				  struct insitu_comp_req *req)
 {
 	unsigned long flags;
 	struct insitu_comp_io_worker *worker =
@@ -682,9 +698,10 @@ static void insitu_comp_queue_req(struct insitu_comp_info *info,
 }
 
 static void insitu_comp_queue_req_list(struct insitu_comp_info *info,
-	struct list_head *list)
+				       struct list_head *list)
 {
 	struct insitu_comp_req *req;
+
 	while (!list_empty(list)) {
 		req = list_first_entry(list, struct insitu_comp_req, sibling);
 		list_del_init(&req->sibling);
@@ -746,7 +763,7 @@ static void insitu_comp_io_range_done(unsigned long error, void *context)
 }
 
 static inline int insitu_comp_compressor_len(struct insitu_comp_info *info,
-	int len)
+					     int len)
 {
 	if (compressors[info->comp_alg].comp_len)
 		return compressors[info->comp_alg].comp_len(len);
@@ -759,7 +776,7 @@ static inline int insitu_comp_compressor_len(struct insitu_comp_info *info,
  */
 static struct insitu_comp_io_range *
 insitu_comp_create_io_range(struct insitu_comp_req *req, int comp_len,
-	int decomp_len)
+			    int decomp_len)
 {
 	struct insitu_comp_io_range *io;
 
@@ -768,7 +785,7 @@ insitu_comp_create_io_range(struct insitu_comp_req *req, int comp_len,
 		return NULL;
 
 	io->comp_data = kmalloc(insitu_comp_compressor_len(req->info, comp_len),
-								GFP_NOIO);
+				GFP_NOIO);
 	io->decomp_data = kmalloc(decomp_len, GFP_NOIO);
 	if (!io->decomp_data || !io->comp_data) {
 		kfree(io->decomp_data);
@@ -792,8 +809,8 @@ insitu_comp_create_io_range(struct insitu_comp_req *req, int comp_len,
 	return io;
 }
 
-static void insitu_comp_req_copy(struct insitu_comp_req *req, off_t req_off, void *buf,
-		ssize_t len, bool to_buf)
+static void insitu_comp_req_copy(struct insitu_comp_req *req, off_t req_off,
+				 void *buf, ssize_t len, bool to_buf)
 {
 	struct bio *bio = req->bio;
 	struct bvec_iter iter;
@@ -808,11 +825,9 @@ static void insitu_comp_req_copy(struct insitu_comp_req *req, off_t req_off, voi
 		addr = kmap_atomic(bio_iter_page(bio, iter));
 		size = min_t(ssize_t, len, bio_iter_len(bio, iter));
 		if (to_buf)
-			memcpy(buf + buf_off, addr + bio_iter_offset(bio, iter),
-				size);
+			memcpy(buf + buf_off, addr + bio_iter_offset(bio, iter), size);
 		else
-			memcpy(addr + bio_iter_offset(bio, iter), buf + buf_off,
-				size);
+			memcpy(addr + bio_iter_offset(bio, iter), buf + buf_off, size);
 		kunmap_atomic(addr);
 
 		buf_off += size;
@@ -827,13 +842,14 @@ static void insitu_comp_req_copy(struct insitu_comp_req *req, off_t req_off, voi
  * < 0 : error
  * == 0 : ok
  * == 1 : ok, but comp/decomp is skipped
- * Compressed data size is roundup of 512, which makes the payload.
+ * Compressed data size is rounded up to next 512, which makes the payload.
  * We store the actual compressed length in the last u32 of the payload.
  * If there is no free space, we add 512 to the payload size.
  */
 static int insitu_comp_io_range_comp(struct insitu_comp_info *info,
-	void *comp_data, unsigned int *comp_len, void *decomp_data,
-	unsigned int decomp_len, bool do_comp)
+				     void *comp_data, unsigned int *comp_len,
+				     void *decomp_data, unsigned int decomp_len,
+				     bool do_comp)
 {
 	struct crypto_comp *tfm;
 	u32 *addr;
@@ -900,45 +916,40 @@ static void insitu_comp_handle_read_decomp(struct insitu_comp_req *req)
 		io->io_region.sector -= req->info->data_start;
 
 		/* Do decomp here */
-		ret = insitu_comp_io_range_comp(req->info, io->comp_data,
-			&io->comp_len, io->decomp_data, io->decomp_len, false);
+		ret = insitu_comp_io_range_comp(req->info, io->comp_data, &io->comp_len,
+						io->decomp_data, io->decomp_len, false);
 		if (ret < 0) {
 			req->result = -EIO;
 			return;
 		}
 
 		if (io->io_region.sector >= insitu_req_start_sector(req))
-			dst_off = (io->io_region.sector - insitu_req_start_sector(req))
-				<< 9;
+			dst_off = (io->io_region.sector - insitu_req_start_sector(req)) << SECTOR_SHIFT;
 		else
-			src_off = (insitu_req_start_sector(req) - io->io_region.sector)
-				<< 9;
+			src_off = (insitu_req_start_sector(req) - io->io_region.sector) << SECTOR_SHIFT;
 		len = min_t(ssize_t, io->decomp_len - src_off,
-			(insitu_req_sectors(req) << 9) - dst_off);
+			    (insitu_req_sectors(req) << SECTOR_SHIFT) - dst_off);
 
 		/* io range in all_io list is ordered for read IO */
 		while (req_off != dst_off) {
-			ssize_t size = min_t(ssize_t, PAGE_SIZE,
-					dst_off - req_off);
-			insitu_comp_req_copy(req, req_off,
-				empty_zero_page, size, false);
+			ssize_t size = min_t(ssize_t, PAGE_SIZE, dst_off - req_off);
+			insitu_comp_req_copy(req, req_off, empty_zero_page, size, false);
 			req_off += size;
 		}
 
 		if (ret == 1) /* uncompressed, valid data is in .comp_data */
 			insitu_comp_req_copy(req, dst_off,
-					io->comp_data + src_off, len, false);
+					     io->comp_data + src_off, len, false);
 		else
 			insitu_comp_req_copy(req, dst_off,
-					io->decomp_data + src_off, len, false);
+					     io->decomp_data + src_off, len, false);
 		req_off = dst_off + len;
 	}
 
-	while (req_off != (insitu_req_sectors(req) << 9)) {
+	while (req_off != (insitu_req_sectors(req) << SECTOR_SHIFT)) {
 		ssize_t size = min_t(ssize_t, PAGE_SIZE,
-			(insitu_req_sectors(req) << 9) - req_off);
-		insitu_comp_req_copy(req, req_off, empty_zero_page,
-			size, false);
+				     (insitu_req_sectors(req) << SECTOR_SHIFT) - req_off);
+		insitu_comp_req_copy(req, req_off, empty_zero_page, size, false);
 		req_off += size;
 	}
 }
@@ -948,12 +959,12 @@ static void insitu_comp_handle_read_decomp(struct insitu_comp_req *req)
  * @data_sectors data
  */
 static void insitu_comp_read_one_extent(struct insitu_comp_req *req, u64 block,
-	u16 logical_sectors, u16 data_sectors)
+					u16 logical_sectors, u16 data_sectors)
 {
 	struct insitu_comp_io_range *io;
 
-	io = insitu_comp_create_io_range(req, data_sectors << 9,
-		logical_sectors << 9);
+	io = insitu_comp_create_io_range(req, data_sectors << SECTOR_SHIFT,
+					 logical_sectors << SECTOR_SHIFT);
 	if (!io) {
 		req->result = -EIO;
 		return;
@@ -962,8 +973,8 @@ static void insitu_comp_read_one_extent(struct insitu_comp_req *req, u64 block,
 	insitu_comp_get_req(req);
 	list_add_tail(&io->next, &req->all_io);
 
-	io->io_region.sector = (block << INSITU_COMP_BLOCK_SECTOR_SHIFT) +
-				req->info->data_start;
+	io->io_region.sector = ((block << INSITU_COMP_BLOCK_SECTOR_SHIFT) +
+				req->info->data_start);
 	io->io_region.count = data_sectors;
 
 	io->io_req.bi_rw = READ;
@@ -989,7 +1000,7 @@ again:
 		return;
 
 	block_index = first_block_index + (logical_sectors >>
-				INSITU_COMP_BLOCK_SECTOR_SHIFT);
+					   INSITU_COMP_BLOCK_SECTOR_SHIFT);
 	/* the request might cover several extents */
 	if ((block_index << INSITU_COMP_BLOCK_SECTOR_SHIFT) <
 			insitu_req_end_sector(req))
@@ -1035,7 +1046,7 @@ static u64 insitu_comp_block_meta_page_index(u64 block, bool end)
  * compress remaining valid data, and finally write them out
  */
 static int insitu_comp_handle_write_modify(struct insitu_comp_io_range *io,
-	u64 *meta_start, u64 *meta_end, bool *handle_req)
+					   u64 *meta_start, u64 *meta_end, bool *handle_req)
 {
 	struct insitu_comp_req *req = io->req;
 	sector_t start, count;
@@ -1048,30 +1059,31 @@ static int insitu_comp_handle_write_modify(struct insitu_comp_io_range *io,
 
 	/* decompress original data */
 	ret = insitu_comp_io_range_comp(req->info, io->comp_data, &io->comp_len,
-			io->decomp_data, io->decomp_len, false);
+					io->decomp_data, io->decomp_len, false);
 	if (ret < 0) {
 		req->result = -EINVAL;
 		return -EIO;
 	}
 
 	start = io->io_region.sector;
-	count = io->decomp_len >> 9;
+	count = io->decomp_len >> SECTOR_SHIFT;
 	if (start < insitu_req_start_sector(req) && start + count >
 					insitu_req_end_sector(req)) {
 		/* we don't split an extent */
 		if (ret == 1) {
 			memcpy(io->decomp_data, io->comp_data, io->decomp_len);
-			insitu_comp_req_copy(req, 0,
-			   io->decomp_data + ((insitu_req_start_sector(req) - start) <<
-			   9), insitu_req_sectors(req) << 9, true);
+			insitu_comp_req_copy(req, 0, io->decomp_data +
+					     ((insitu_req_start_sector(req) - start) << SECTOR_SHIFT),
+					     insitu_req_sectors(req) << SECTOR_SHIFT, true);
 		} else {
-			insitu_comp_req_copy(req, 0,
-			   io->decomp_data + ((insitu_req_start_sector(req) - start) <<
-			   9), insitu_req_sectors(req) << 9, true);
+			insitu_comp_req_copy(req, 0, io->decomp_data +
+					     ((insitu_req_start_sector(req) - start) << SECTOR_SHIFT),
+					     insitu_req_sectors(req) << SECTOR_SHIFT, true);
 			kfree(io->comp_data);
 			/* New compressed len might be bigger */
-			io->comp_data = kmalloc(insitu_comp_compressor_len(
-				req->info, io->decomp_len), GFP_NOIO);
+			io->comp_data =
+				kmalloc(insitu_comp_compressor_len(req->info, io->decomp_len),
+					GFP_NOIO);
 			io->comp_len = io->decomp_len;
 			if (!io->comp_data) {
 				req->result = -ENOMEM;
@@ -1094,14 +1106,15 @@ static int insitu_comp_handle_write_modify(struct insitu_comp_io_range *io,
 
 	/* Original data is uncompressed, we don't need writeback */
 	if (ret == 1) {
-		comp_len = count << 9;
+		comp_len = count << SECTOR_SHIFT;
 		goto handle_meta;
 	}
 
-	/* assume compress less data uses less space (at least 4k lsess data) */
+	/* assume compress less data uses less space (at least 4k less data) */
 	comp_len = io->comp_len;
 	ret = insitu_comp_io_range_comp(req->info, io->comp_data, &comp_len,
-		io->decomp_data + (offset << 9), count << 9, true);
+					io->decomp_data + (offset << SECTOR_SHIFT),
+					count << SECTOR_SHIFT, true);
 	if (ret < 0) {
 		req->result = -EIO;
 		return -EIO;
@@ -1109,18 +1122,17 @@ static int insitu_comp_handle_write_modify(struct insitu_comp_io_range *io,
 
 	insitu_comp_get_req(req);
 	if (ret == 1)
-		io->io_req.mem.ptr.addr = io->decomp_data + (offset << 9);
-	io->io_region.count = comp_len >> 9;
+		io->io_req.mem.ptr.addr = io->decomp_data + (offset << SECTOR_SHIFT);
+	io->io_region.count = comp_len >> SECTOR_SHIFT;
 	io->io_region.sector = start + req->info->data_start;
 
 	io->io_req.bi_rw = insitu_req_rw(req);
 	dm_io(&io->io_req, 1, &io->io_region, NULL);
 handle_meta:
 	insitu_comp_set_extent(req, start >> INSITU_COMP_BLOCK_SECTOR_SHIFT,
-		count >> INSITU_COMP_BLOCK_SECTOR_SHIFT, comp_len >> 9);
-
-	page_index = insitu_comp_block_meta_page_index(start >>
-					INSITU_COMP_BLOCK_SECTOR_SHIFT, false);
+			       count >> INSITU_COMP_BLOCK_SECTOR_SHIFT, comp_len >> SECTOR_SHIFT);
+	page_index =
+		insitu_comp_block_meta_page_index(start >> INSITU_COMP_BLOCK_SECTOR_SHIFT, false);
 	if (*meta_start > page_index)
 		*meta_start = page_index;
 	page_index = insitu_comp_block_meta_page_index(
@@ -1146,8 +1158,7 @@ static void insitu_comp_handle_write_comp(struct insitu_comp_req *req)
 		return;
 
 	list_for_each_entry(io, &req->all_io, next) {
-		if (insitu_comp_handle_write_modify(io, &meta_start, &meta_end,
-						&handle_req))
+		if (insitu_comp_handle_write_modify(io, &meta_start, &meta_end, &handle_req))
 			return;
 	}
 
@@ -1155,17 +1166,17 @@ static void insitu_comp_handle_write_comp(struct insitu_comp_req *req)
 		goto update_meta;
 
 	count = insitu_req_sectors(req);
-	io = insitu_comp_create_io_range(req, count << 9, count << 9);
+	io = insitu_comp_create_io_range(req, count << SECTOR_SHIFT, count << SECTOR_SHIFT);
 	if (!io) {
 		req->result = -EIO;
 		return;
 	}
-	insitu_comp_req_copy(req, 0, io->decomp_data, count << 9, true);
+	insitu_comp_req_copy(req, 0, io->decomp_data, count << SECTOR_SHIFT, true);
 
 	/* compress data */
 	comp_len = io->comp_len;
 	ret = insitu_comp_io_range_comp(req->info, io->comp_data, &comp_len,
-		io->decomp_data, count << 9, true);
+					io->decomp_data, count << SECTOR_SHIFT, true);
 	if (ret < 0) {
 		insitu_comp_free_io_range(io);
 		req->result = -EIO;
@@ -1177,28 +1188,29 @@ static void insitu_comp_handle_write_comp(struct insitu_comp_req *req)
 	io->io_region.sector = insitu_req_start_sector(req) + req->info->data_start;
 	if (ret == 1)
 		io->io_req.mem.ptr.addr = io->decomp_data;
-	io->io_region.count = comp_len >> 9;
+	io->io_region.count = comp_len >> SECTOR_SHIFT;
 	io->io_req.bi_rw = insitu_req_rw(req);
 	dm_io(&io->io_req, 1, &io->io_region, NULL);
 	insitu_comp_set_extent(req,
-		insitu_req_start_sector(req) >> INSITU_COMP_BLOCK_SECTOR_SHIFT,
-		count >> INSITU_COMP_BLOCK_SECTOR_SHIFT, comp_len >> 9);
+			       insitu_req_start_sector(req) >> INSITU_COMP_BLOCK_SECTOR_SHIFT,
+			       count >> INSITU_COMP_BLOCK_SECTOR_SHIFT, comp_len >> SECTOR_SHIFT);
 
-	page_index = insitu_comp_block_meta_page_index(
-		insitu_req_start_sector(req) >> INSITU_COMP_BLOCK_SECTOR_SHIFT, false);
+	page_index =
+		insitu_comp_block_meta_page_index((insitu_req_start_sector(req) >>
+						   INSITU_COMP_BLOCK_SECTOR_SHIFT), false);
 	if (meta_start > page_index)
 		meta_start = page_index;
-	page_index = insitu_comp_block_meta_page_index(
-		(insitu_req_start_sector(req) + count) >> INSITU_COMP_BLOCK_SECTOR_SHIFT,
-		true);
+	page_index =
+		insitu_comp_block_meta_page_index(((insitu_req_start_sector(req) + count) >>
+						   INSITU_COMP_BLOCK_SECTOR_SHIFT), true);
 	if (meta_end < page_index)
 		meta_end = page_index;
 update_meta:
 	if (req->info->write_mode == INSITU_COMP_WRITE_THROUGH ||
-						(insitu_req_rw(req) & REQ_FUA)) {
+	    (insitu_req_rw(req) & REQ_FUA)) {
 		insitu_comp_get_req(req);
 		insitu_comp_write_meta(req->info, meta_start, meta_end + 1, req,
-			insitu_comp_write_meta_done, insitu_req_rw(req));
+				       insitu_comp_write_meta_done, insitu_req_rw(req));
 	}
 }
 
@@ -1212,13 +1224,13 @@ static void insitu_comp_handle_write_read_existing(struct insitu_comp_req *req)
 
 	block_index = insitu_comp_sector_to_block(insitu_req_start_sector(req));
 	insitu_comp_get_extent(req->info, block_index, &first_block_index,
-		&logical_sectors, &data_sectors);
-	if (data_sectors > 0 && (first_block_index < block_index ||
-	    first_block_index + insitu_comp_sector_to_block(logical_sectors) >
-	    insitu_comp_sector_to_block(insitu_req_end_sector(req))))
+			       &logical_sectors, &data_sectors);
+	if (data_sectors > 0 &&
+	    (first_block_index < block_index ||
+	     first_block_index + insitu_comp_sector_to_block(logical_sectors) >
+	     insitu_comp_sector_to_block(insitu_req_end_sector(req))))
 		insitu_comp_read_one_extent(req, first_block_index,
-			logical_sectors, data_sectors);
-
+					    logical_sectors, data_sectors);
 	if (req->result)
 		return;
 
@@ -1228,13 +1240,12 @@ static void insitu_comp_handle_write_read_existing(struct insitu_comp_req *req)
 
 	block_index = insitu_comp_sector_to_block(insitu_req_end_sector(req)) - 1;
 	insitu_comp_get_extent(req->info, block_index, &first_block_index,
-		&logical_sectors, &data_sectors);
+			       &logical_sectors, &data_sectors);
 	if (data_sectors > 0 &&
 	    first_block_index + insitu_comp_sector_to_block(logical_sectors) >
 	    block_index + 1)
 		insitu_comp_read_one_extent(req, first_block_index,
-			logical_sectors, data_sectors);
-
+					    logical_sectors, data_sectors);
 	if (req->result)
 		return;
 out:
@@ -1251,7 +1262,6 @@ static void insitu_comp_handle_write_request(struct insitu_comp_req *req)
 			insitu_comp_put_req(req);
 			return;
 		}
-
 		insitu_comp_handle_write_read_existing(req);
 	} else if (req->stage == STAGE_READ_EXISTING)
 		insitu_comp_handle_write_comp(req);
@@ -1320,7 +1330,7 @@ static int insitu_comp_map(struct dm_target *ti, struct bio *bio)
 	req = dm_per_bio_data(bio, sizeof(struct insitu_comp_req));
 
 	if ((bio->bi_rw & REQ_FLUSH) &&
-			info->write_mode == INSITU_COMP_WRITE_THROUGH) {
+	    info->write_mode == INSITU_COMP_WRITE_THROUGH) {
 		bio->bi_bdev = info->dev->bdev;
 		return DM_MAPIO_REMAPPED;
 	}
@@ -1343,7 +1353,7 @@ static int insitu_comp_map(struct dm_target *ti, struct bio *bio)
  * TABLE: writethrough/writeback commit_delay
  */
 static void insitu_comp_status(struct dm_target *ti, status_type_t type,
-			  unsigned status_flags, char *result, unsigned maxlen)
+			       unsigned status_flags, char *result, unsigned maxlen)
 {
 	struct insitu_comp_info *info = ti->private;
 	unsigned int sz = 0;
@@ -1351,9 +1361,9 @@ static void insitu_comp_status(struct dm_target *ti, status_type_t type,
 	switch (type) {
 	case STATUSTYPE_INFO:
 		DMEMIT("%lu %lu %lu",
-			atomic64_read(&info->uncompressed_write_size),
-			atomic64_read(&info->compressed_write_size),
-			atomic64_read(&info->meta_write_size));
+		       atomic64_read(&info->uncompressed_write_size),
+		       atomic64_read(&info->compressed_write_size),
+		       atomic64_read(&info->meta_write_size));
 		break;
 	case STATUSTYPE_TABLE:
 		if (info->write_mode == INSITU_COMP_WRITE_BACK)
@@ -1366,21 +1376,20 @@ static void insitu_comp_status(struct dm_target *ti, status_type_t type,
 }
 
 static int insitu_comp_iterate_devices(struct dm_target *ti,
-				  iterate_devices_callout_fn fn, void *data)
+				       iterate_devices_callout_fn fn, void *data)
 {
 	struct insitu_comp_info *info = ti->private;
 
 	return fn(ti, info->dev, info->data_start,
-		info->data_blocks << INSITU_COMP_BLOCK_SECTOR_SHIFT, data);
+		  info->data_blocks << INSITU_COMP_BLOCK_SECTOR_SHIFT, data);
 }
 
-static void insitu_comp_io_hints(struct dm_target *ti,
-			    struct queue_limits *limits)
+static void insitu_comp_io_hints(struct dm_target *ti, struct queue_limits *limits)
 {
 	/* No blk_limits_logical_block_size */
 	limits->logical_block_size = limits->physical_block_size =
 		limits->io_min = INSITU_COMP_BLOCK_SIZE;
-	blk_limits_max_hw_sectors(limits, INSITU_COMP_MAX_SIZE >> 9);
+	blk_limits_max_hw_sectors(limits, INSITU_COMP_MAX_SIZE >> SECTOR_SHIFT);
 }
 
 static int insitu_comp_merge(struct dm_target *ti, struct bvec_merge_data *bvm,
@@ -1388,16 +1397,18 @@ static int insitu_comp_merge(struct dm_target *ti, struct bvec_merge_data *bvm,
 {
 	/* Guarantee request can only cover one aligned 128k range */
 	return min_t(int, max_size, INSITU_COMP_MAX_SIZE - bvm->bi_size -
-			((bvm->bi_sector << 9) % INSITU_COMP_MAX_SIZE));
+		     ((bvm->bi_sector << SECTOR_SHIFT) % INSITU_COMP_MAX_SIZE));
 }
 
 static struct target_type insitu_comp_target = {
-	.name   = "insitu_comp",
+	.name   = "insitu-comp",
 	.version = {1, 0, 0},
 	.module = THIS_MODULE,
 	.ctr    = insitu_comp_ctr,
 	.dtr    = insitu_comp_dtr,
 	.map    = insitu_comp_map,
+	// FIXME: no .postsuspend or .preresume or .resume!?
+	// need to flush workqueue at a minimum.  what about commit?  see pool_target or cache_target
 	.status = insitu_comp_status,
 	.iterate_devices = insitu_comp_iterate_devices,
 	.io_hints = insitu_comp_io_hints,
@@ -1419,22 +1430,22 @@ static int __init insitu_comp_init(void)
 	default_compressor = r;
 
 	r = -ENOMEM;
-	insitu_comp_io_range_cachep = kmem_cache_create("insitu_comp_io_range",
-		sizeof(struct insitu_comp_io_range), 0, 0, NULL);
+	// FIXME: add dm_ prefix to at least these 2 structs so slabs are attributed to dm
+	insitu_comp_io_range_cachep = KMEM_CACHE(insitu_comp_io_range, 0);
 	if (!insitu_comp_io_range_cachep) {
 		DMWARN("Can't create io_range cache");
 		goto err;
 	}
 
-	insitu_comp_meta_io_cachep = kmem_cache_create("insitu_comp_meta_io",
-		sizeof(struct insitu_comp_meta_io), 0, 0, NULL);
+	insitu_comp_meta_io_cachep = KMEM_CACHE(insitu_comp_meta_io, 0);
 	if (!insitu_comp_meta_io_cachep) {
 		DMWARN("Can't create meta_io cache");
 		goto err;
 	}
 
-	insitu_comp_wq = alloc_workqueue("insitu_comp_io",
-		WQ_UNBOUND|WQ_MEM_RECLAIM|WQ_CPU_INTENSIVE, 0);
+	insitu_comp_wq =
+		alloc_workqueue("dm_insitu_comp_io",
+				WQ_UNBOUND|WQ_MEM_RECLAIM|WQ_CPU_INTENSIVE, 0);
 	if (!insitu_comp_wq) {
 		DMWARN("Can't create io workqueue");
 		goto err;
@@ -1450,9 +1461,10 @@ static int __init insitu_comp_init(void)
 		INIT_LIST_HEAD(&insitu_comp_io_workers[r].pending);
 		spin_lock_init(&insitu_comp_io_workers[r].lock);
 		INIT_WORK(&insitu_comp_io_workers[r].work,
-			insitu_comp_do_request_work);
+			  insitu_comp_do_request_work);
 	}
 	return 0;
+
 err:
 	if (insitu_comp_io_range_cachep)
 		kmem_cache_destroy(insitu_comp_io_range_cachep);
@@ -1476,5 +1488,5 @@ module_init(insitu_comp_init);
 module_exit(insitu_comp_exit);
 
 MODULE_AUTHOR("Shaohua Li <shli@kernel.org>");
-MODULE_DESCRIPTION(DM_NAME " target with insitu data compression for SSD");
+MODULE_DESCRIPTION(DM_NAME " insitu compression target");
 MODULE_LICENSE("GPL");

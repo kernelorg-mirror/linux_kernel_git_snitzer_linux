@@ -63,3 +63,8 @@ Constructor
 
    writeback <meta_commit_delay>: flush metadata to disk with writeback
 				  mode after <meta_commit_delay> seconds.
+
+
+Status
+======
+FIXME

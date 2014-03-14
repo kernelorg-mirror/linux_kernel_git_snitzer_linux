@@ -1,5 +1,10 @@
-#ifndef __DM_INSITU_COMPRESSION_H__
-#define __DM_INSITU_COMPRESSION_H__
+/*
+ * This file is released under the GPL.
+ */
+
+#ifndef DM_INSITU_COMPRESSION_H
+#define DM_INSITU_COMPRESSION_H
+
 #include <linux/types.h>
 
 struct insitu_comp_super_block {
@@ -13,7 +18,7 @@ struct insitu_comp_super_block {
 #define INSITU_COMP_SUPER_MAGIC 0x106526c206506c09
 #define INSITU_COMP_VERSION 1
 #define INSITU_COMP_ALG_LZO 0
-#define INSITU_COMP_ALG_ZLIB 1
+#define INSITU_COMP_ALG_DEFLATE 1
 
 #ifdef __KERNEL__
 struct insitu_comp_compressor_data {
@@ -21,28 +26,25 @@ struct insitu_comp_compressor_data {
 	int (*comp_len)(int comp_len);
 };
 
-static inline int lzo_comp_len(int comp_len)
-{
-	return lzo1x_worst_compress(comp_len);
-}
-
 /*
- * Minium logical sector size of this target is 4096 byte, which is a block.
- * Data of a block is compressed. Compressed data is round up to 512B, which is
- * the payload. For each block, we have 5 bits meta data. bit 0 - 3 stands
- * payload length. 0 - 8 sectors. If compressed payload length is 8 sectors, we
- * just store uncompressed data. Actual compressed data length is stored at the
- * last 32 bits of payload if data is compressed. In disk, payload is stored at
- * the begining of logical sector of the block. If IO size is bigger than one
- * block, we store the whole data as an extent. Bit 4 stands tail for an
- * extent. Max allowed extent size is 128k.
+ * The fixed logical sector size of this target is 4K, which is the block size.
+ * Data of a block is compressed. Compressed data is rounded up to 512B, which
+ * is the payload.  For each block, we have 5 bits meta data. bit 0 - 3 stands
+ * payload length. 0 - 7 sectors.  If compressed payload length is 8 sectors, we
+ * just store uncompressed data.  Actual compressed data length is stored at the
+ * last 32 bits of payload if data is compressed.  On disk, payload is stored at
+ * the first sector of the block. If IO size is bigger than one block, we store
+ * the whole data as an extent.  Bit 4 denotes whether this is head or tail block
+ * for an extent.  Max allowed extent size is 128k.
  */
 #define INSITU_COMP_BLOCK_SIZE 4096
 #define INSITU_COMP_BLOCK_SHIFT 12
 #define INSITU_COMP_BLOCK_SECTOR_SHIFT (INSITU_COMP_BLOCK_SHIFT - 9)
 
 #define INSITU_COMP_MIN_SIZE 4096
-/* Change this should change HASH_LOCK_SHIFT too */
+/*
+ * If changing INSITU_COMP_MAX_SIZE change HASH_LOCK_SHIFT too
+ */
 #define INSITU_COMP_MAX_SIZE (128 * 1024)
 
 #define INSITU_COMP_LENGTH_MASK ((1 << 4) - 1)
@@ -57,8 +59,8 @@ enum INSITU_COMP_WRITE_MODE {
 };
 
 /*
- * request can cover one aligned 128k (4k * (1 << 5)) range. Since maxium
- * request size is 128k, we only need take one lock for each request
+ * request can cover one aligned 128K (4K * (1 << 5)) range. Since maximum
+ * request size is 128K, we only need to take one lock for each request.
  */
 #define HASH_LOCK_SHIFT 5
 
@@ -153,6 +155,6 @@ struct insitu_comp_io_worker {
 	spinlock_t lock;
 	struct work_struct work;
 };
-#endif
+#endif /* __KERNEL__ */
 
-#endif
+#endif /* DM_INSITU_COMPRESSION_H */
