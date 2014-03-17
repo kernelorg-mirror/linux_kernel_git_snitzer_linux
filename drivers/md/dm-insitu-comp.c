@@ -263,8 +263,7 @@ static void insitu_comp_flush_dirty_meta(struct insitu_comp_info *info,
 			cond_resched();
 		}
 
-		page = vmalloc_to_page(info->meta_bitmap +
-					(index << PAGE_SHIFT));
+		page = vmalloc_to_page(info->meta_bitmap + (index << PAGE_SHIFT));
 		dirty = TestClearPageDirty(page);
 
 		if (pending == 0 && dirty) {
@@ -281,14 +280,14 @@ static void insitu_comp_flush_dirty_meta(struct insitu_comp_info *info,
 		/* pending > 0 && !dirty */
 		atomic_inc(&data->cnt);
 		insitu_comp_write_meta(info, start, start + pending, data,
-			writeback_flush_io_done, WRITE);
+				       writeback_flush_io_done, WRITE);
 		pending = 0;
 	}
 
 	if (pending > 0) {
 		atomic_inc(&data->cnt);
 		insitu_comp_write_meta(info, start, start + pending, data,
-			writeback_flush_io_done, WRITE);
+				       writeback_flush_io_done, WRITE);
 	}
 	blkdev_issue_flush(info->dev->bdev, GFP_NOIO, NULL);
 	blk_finish_plug(&plug);
@@ -299,29 +298,33 @@ static int insitu_comp_meta_writeback_thread(void *data)
 {
 	struct insitu_comp_info *info = data;
 	struct writeback_flush_data wb;
+	signed long timeout = msecs_to_jiffies(info->writeback_delay * MSEC_PER_SEC);
 
 	atomic_set(&wb.cnt, 1);
 	init_completion(&wb.complete);
 
 	while (!kthread_should_stop()) {
-		schedule_timeout_interruptible(
-		    msecs_to_jiffies(info->writeback_delay * MSEC_PER_SEC));
+		schedule_timeout_interruptible(timeout);
 		insitu_comp_flush_dirty_meta(info, &wb);
 
-		if (info->wb_thread_suspend_status != WB_THREAD_RESUMED) {
-			writeback_flush_io_done(&wb, 0);
-			wait_for_completion(&wb.complete);
+		if (info->wb_thread_suspend_status == WB_THREAD_RESUMED)
+			continue;
 
-			info->wb_thread_suspend_status = WB_THREAD_SUSPENDED;
-			wake_up_interruptible(&info->wb_thread_suspend_wq);
+		/*
+		 * Target is suspending.
+		 */
+		writeback_flush_io_done(&wb, 0);
+		wait_for_completion(&wb.complete);
 
-			wait_event_interruptible(info->wb_thread_suspend_wq,
-			  info->wb_thread_suspend_status == WB_THREAD_RESUMED ||
-			  kthread_should_stop());
+		info->wb_thread_suspend_status = WB_THREAD_SUSPENDED;
+		wake_up_interruptible(&info->wb_thread_suspend_wq);
 
-			atomic_set(&wb.cnt, 1);
-			init_completion(&wb.complete);
-		}
+		wait_event_interruptible(info->wb_thread_suspend_wq,
+					 info->wb_thread_suspend_status == WB_THREAD_RESUMED ||
+					 kthread_should_stop());
+
+		atomic_set(&wb.cnt, 1);
+		init_completion(&wb.complete);
 	}
 
 	insitu_comp_flush_dirty_meta(info, &wb);
@@ -1314,8 +1317,8 @@ static void insitu_comp_handle_request(struct insitu_comp_req *req)
 
 static void insitu_comp_do_request_work(struct work_struct *work)
 {
-	struct insitu_comp_io_worker *worker = container_of(work,
-			struct insitu_comp_io_worker, work);
+	struct insitu_comp_io_worker *worker =
+		container_of(work, struct insitu_comp_io_worker, work);
 	LIST_HEAD(list);
 	struct insitu_comp_req *req;
 	struct blk_plug plug;
@@ -1369,13 +1372,15 @@ static void insitu_comp_postsuspend(struct dm_target *ti)
 {
 	struct insitu_comp_info *info = ti->private;
 	/* all requests are finished already */
+	// FIXME: postsuspend/resume is only dealing with insitu_comp_meta_writeback_thread(),
+	// must flush + stop all per-cpu workqueues used by insitu_comp_queue_req()
 	if (info->write_mode != INSITU_COMP_WRITE_BACK)
 		return;
 	info->wb_thread_suspend_status = WB_THREAD_SUSPENDING;
 	wake_up_process(info->writeback_tsk);
 
 	wait_event_interruptible(info->wb_thread_suspend_wq,
-		info->wb_thread_suspend_status == WB_THREAD_SUSPENDED);
+				 info->wb_thread_suspend_status == WB_THREAD_SUSPENDED);
 }
 
 static void insitu_comp_resume(struct dm_target *ti)
@@ -1489,6 +1494,8 @@ static int __init insitu_comp_init(void)
 		goto err;
 	}
 
+	// FIXME: shouldn't this be a a per-target allocation?  Each insitu-comp
+	// must flush its workqueues when tearing down or suspending.
 	insitu_comp_wq =
 		alloc_workqueue("dm_insitu_comp_io",
 				WQ_UNBOUND|WQ_MEM_RECLAIM|WQ_CPU_INTENSIVE, 0);
