@@ -92,11 +92,19 @@ struct insitu_comp_info {
 	enum INSITU_COMP_WRITE_MODE write_mode;
 	unsigned int writeback_delay; /* second unit */
 	struct task_struct *writeback_tsk;
+	int wb_thread_suspend_status;
+	wait_queue_head_t wb_thread_suspend_wq;
 	struct dm_io_client *io_client;
 
 	atomic64_t compressed_write_size;
 	atomic64_t uncompressed_write_size;
 	atomic64_t meta_write_size;
+};
+
+enum {
+	WB_THREAD_RESUMED = 0,
+	WB_THREAD_SUSPENDING = 1,
+	WB_THREAD_SUSPENDED = 2,
 };
 
 struct insitu_comp_meta_io {
