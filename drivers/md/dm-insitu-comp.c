@@ -550,6 +550,7 @@ static int insitu_comp_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	if (argc == 1)
 		goto skip_optargs;
 
+	// FIXME: use dm_read_arg_group() to properly process "feature" args.
 	if (sscanf(argv[1], "%s", write_mode) != 1) {
 		ti->error = "Invalid argument";
 		ret = -EINVAL;
@@ -762,8 +763,7 @@ static void insitu_comp_put_req(struct insitu_comp_req *req)
 	}
 
 	while (!list_empty(&req->all_io)) {
-		io = list_entry(req->all_io.next, struct insitu_comp_io_range,
-			next);
+		io = list_entry(req->all_io.next, struct insitu_comp_io_range, next);
 		list_del(&io->next);
 		insitu_comp_free_io_range(io);
 	}
@@ -782,8 +782,7 @@ static void insitu_comp_io_range_done(unsigned long error, void *context)
 	insitu_comp_put_req(io->req);
 }
 
-static inline int insitu_comp_compressor_len(struct insitu_comp_info *info,
-					     int len)
+static inline int insitu_comp_compressor_len(struct insitu_comp_info *info, int len)
 {
 	if (compressors[info->comp_alg].comp_len)
 		return compressors[info->comp_alg].comp_len(len);
@@ -795,8 +794,7 @@ static inline int insitu_comp_compressor_len(struct insitu_comp_info *info,
  * comp_data
  */
 static struct insitu_comp_io_range *
-insitu_comp_create_io_range(struct insitu_comp_req *req, int comp_len,
-			    int decomp_len)
+insitu_comp_create_io_range(struct insitu_comp_req *req, int comp_len, int decomp_len)
 {
 	struct insitu_comp_io_range *io;
 
@@ -804,8 +802,8 @@ insitu_comp_create_io_range(struct insitu_comp_req *req, int comp_len,
 	if (!io)
 		return NULL;
 
-	io->comp_data = kmalloc(insitu_comp_compressor_len(req->info, comp_len),
-				GFP_NOIO);
+	io->comp_data =
+		kmalloc(insitu_comp_compressor_len(req->info, comp_len), GFP_NOIO);
 	io->decomp_data = kmalloc(decomp_len, GFP_NOIO);
 	if (!io->decomp_data || !io->comp_data) {
 		kfree(io->decomp_data);
@@ -881,7 +879,7 @@ static int insitu_comp_io_range_comp(struct insitu_comp_info *info,
 
 		tfm = info->tfm[get_cpu()];
 		ret = crypto_comp_compress(tfm, decomp_data, decomp_len,
-			comp_data, &actual_comp_len);
+					   comp_data, &actual_comp_len);
 		put_cpu();
 
 		atomic64_add(decomp_len, &info->uncompressed_write_size);
@@ -1011,16 +1009,16 @@ static void insitu_comp_handle_read_read_existing(struct insitu_comp_req *req)
 	block_index = insitu_comp_sector_to_block(insitu_req_start_sector(req));
 again:
 	insitu_comp_get_extent(req->info, block_index, &first_block_index,
-		&logical_sectors, &data_sectors);
+			       &logical_sectors, &data_sectors);
 	if (data_sectors > 0)
 		insitu_comp_read_one_extent(req, first_block_index,
-			logical_sectors, data_sectors);
+					    logical_sectors, data_sectors);
 
 	if (req->result)
 		return;
 
-	block_index = first_block_index + (logical_sectors >>
-					   INSITU_COMP_BLOCK_SECTOR_SHIFT);
+	block_index = first_block_index +
+		(logical_sectors >> INSITU_COMP_BLOCK_SECTOR_SHIFT);
 	/* the request might cover several extents */
 	if ((block_index << INSITU_COMP_BLOCK_SECTOR_SHIFT) <
 			insitu_req_end_sector(req))
@@ -1215,14 +1213,12 @@ static void insitu_comp_handle_write_comp(struct insitu_comp_req *req)
 			       insitu_req_start_sector(req) >> INSITU_COMP_BLOCK_SECTOR_SHIFT,
 			       count >> INSITU_COMP_BLOCK_SECTOR_SHIFT, comp_len >> SECTOR_SHIFT);
 
-	page_index =
-		insitu_comp_block_meta_page_index((insitu_req_start_sector(req) >>
-						   INSITU_COMP_BLOCK_SECTOR_SHIFT), false);
+	page_index = insitu_comp_block_meta_page_index((insitu_req_start_sector(req) >>
+							INSITU_COMP_BLOCK_SECTOR_SHIFT), false);
 	if (meta_start > page_index)
 		meta_start = page_index;
-	page_index =
-		insitu_comp_block_meta_page_index(((insitu_req_start_sector(req) + count) >>
-						   INSITU_COMP_BLOCK_SECTOR_SHIFT), true);
+	page_index = insitu_comp_block_meta_page_index(((insitu_req_start_sector(req) + count) >>
+							INSITU_COMP_BLOCK_SECTOR_SHIFT), true);
 	if (meta_end < page_index)
 		meta_end = page_index;
 update_meta:
