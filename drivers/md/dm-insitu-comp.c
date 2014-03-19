@@ -708,14 +708,19 @@ static void insitu_comp_queue_req(struct insitu_comp_info *info,
 				  struct insitu_comp_req *req)
 {
 	unsigned long flags;
-	struct insitu_comp_io_worker *worker =
-		&insitu_comp_io_workers[req->cpu];
+	struct insitu_comp_io_worker *worker;
+
+	preempt_disable();
+	if (!cpu_online(req->cpu))
+		req->cpu = cpumask_any(cpu_online_mask);
+	worker = &insitu_comp_io_workers[req->cpu];
 
 	spin_lock_irqsave(&worker->lock, flags);
 	list_add_tail(&req->sibling, &worker->pending);
 	spin_unlock_irqrestore(&worker->lock, flags);
 
 	queue_work_on(req->cpu, insitu_comp_wq, &worker->work);
+	preempt_enable();
 }
 
 static void insitu_comp_queue_req_list(struct insitu_comp_info *info,
