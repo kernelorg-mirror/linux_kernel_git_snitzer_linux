@@ -3343,11 +3343,10 @@ static inline void sched_submit_work(struct task_struct *tsk)
 	if (!tsk->state || tsk_is_pi_blocked(tsk))
 		return;
 	/*
-	 * If we are going to sleep and we have plugged IO queued,
+	 * If we are going to sleep and we have queued IO,
 	 * make sure to submit it to avoid deadlocks.
 	 */
-	if (blk_needs_flush_plug(tsk))
-		blk_schedule_flush_plug(tsk);
+	blk_flush_queued_io(tsk);
 }
 
 asmlinkage __visible void __sched schedule(void)
@@ -4961,7 +4960,7 @@ long __sched io_schedule_timeout(long timeout)
 	long ret;
 
 	current->in_iowait = 1;
-	blk_schedule_flush_plug(current);
+	blk_flush_queued_io(current);
 
 	delayacct_blkio_start();
 	rq = raw_rq();

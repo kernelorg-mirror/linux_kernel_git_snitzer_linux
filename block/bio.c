@@ -349,6 +349,37 @@ static void bio_alloc_rescue(struct work_struct *work)
 	}
 }
 
+/**
+ * blk_flush_bio_list
+ * @tsk: task_struct whose bio_list must be flushed
+ *
+ * Pop bios queued on @tsk->bio_list and submit each of them to
+ * their rescue workqueue.
+ *
+ * If the bio doesn't have a bio_set, we leave it on @tsk->bio_list.
+ * However, stacking drivers should use bio_set, so this shouldn't be
+ * an issue.
+ */
+void blk_flush_bio_list(struct task_struct *tsk)
+{
+	struct bio *bio;
+	struct bio_list list = *tsk->bio_list;
+	bio_list_init(tsk->bio_list);
+
+	while ((bio = bio_list_pop(&list))) {
+		struct bio_set *bs = bio->bi_pool;
+		if (unlikely(!bs)) {
+			bio_list_add(tsk->bio_list, bio);
+			continue;
+		}
+
+		spin_lock(&bs->rescue_lock);
+		bio_list_add(&bs->rescue_list, bio);
+		queue_work(bs->rescue_workqueue, &bs->rescue_work);
+		spin_unlock(&bs->rescue_lock);
+	}
+}
+
 static void punt_bios_to_rescuer(struct bio_set *bs)
 {
 	struct bio_list punt, nopunt;
