@@ -1962,9 +1962,12 @@ int md_integrity_register(struct mddev *mddev)
 	 * All component devices are integrity capable and have matching
 	 * profiles, register the common profile for the md device.
 	 */
-	blk_integrity_register(mddev->gendisk,
-			       bdev_get_integrity(reference->bdev));
-
+	if (blk_integrity_register(mddev->gendisk,
+			bdev_get_integrity(reference->bdev)) != 0) {
+		printk(KERN_ERR "md: failed to register integrity for %s\n",
+			mdname(mddev));
+		return -EINVAL;
+	}
 	printk(KERN_NOTICE "md: data integrity enabled on %s\n", mdname(mddev));
 	if (bioset_integrity_create(mddev->bio_set, BIO_POOL_SIZE)) {
 		printk(KERN_ERR "md: failed to create integrity pool for %s\n",

@@ -630,7 +630,6 @@ void add_disk(struct gendisk *disk)
 	WARN_ON(retval);
 
 	disk_add_events(disk);
-	blk_integrity_add(disk);
 }
 EXPORT_SYMBOL(add_disk);
 
@@ -639,7 +638,6 @@ void del_gendisk(struct gendisk *disk)
 	struct disk_part_iter piter;
 	struct hd_struct *part;
 
-	blk_integrity_del(disk);
 	disk_del_events(disk);
 
 	/* invalidate stuff */
