@@ -1014,6 +1014,11 @@ static int dm_table_build_index(struct dm_table *t)
 	return r;
 }
 
+static bool integrity_profile_exists(struct gendisk *disk)
+{
+	return !!blk_get_integrity(disk);
+}
+
 /*
  * Get a disk whose integrity profile reflects the table's profile.
  * Returns NULL if integrity support was inconsistent or unavailable.
@@ -1026,10 +1031,10 @@ static struct gendisk * dm_table_get_integrity_disk(struct dm_table *t)
 
 	list_for_each_entry(dd, devices, list) {
 		template_disk = dd->dm_dev->bdev->bd_disk;
-		if (!blk_get_integrity(template_disk))
+		if (!integrity_profile_exists(template_disk))
 			goto no_integrity;
-		if (prev_disk &&
-		    blk_integrity_compare(prev_disk, template_disk) < 0)
+		else if (prev_disk &&
+			 blk_integrity_compare(prev_disk, template_disk) < 0)
 			goto no_integrity;
 		prev_disk = template_disk;
 	}
@@ -1055,23 +1060,40 @@ no_integrity:
  * profile validation: First pass during table load, final pass during
  * resume.
  */
-static int dm_table_set_integrity(struct dm_table *t)
+static int dm_table_register_integrity(struct dm_table *t)
 {
+	struct mapped_device *md = t->md;
 	struct gendisk *template_disk = NULL;
-	bool existing_profile = blk_get_integrity(dm_disk(t->md));
 
 	template_disk = dm_table_get_integrity_disk(t);
-	if (template_disk) {
-		blk_integrity_register(dm_disk(t->md),
-				       blk_get_integrity(template_disk));
+	if (!template_disk)
+		return 0;
+
+	if (!integrity_profile_exists(dm_disk(md))) {
 		t->integrity_supported = 1;
-	} else if (existing_profile) {
-		blk_integrity_unregister(dm_disk(t->md));
-		DMWARN("%s: device no longer has a valid integrity profile",
-		       dm_device_name(t->md));
+		/*
+		 * Register integrity profile during table load; we can do
+		 * this because the final profile must match during resume.
+		 */
+		blk_integrity_register(dm_disk(md),
+				       blk_get_integrity(template_disk));
+		return 0;
+	}
+
+	/*
+	 * If DM device already has an initialized integrity
+	 * profile the new profile should not conflict.
+	 */
+	if (blk_integrity_compare(dm_disk(md), template_disk) < 0) {
+		DMWARN("%s: conflict with existing integrity profile: "
+		       "%s profile mismatch",
+		       dm_device_name(t->md),
+		       template_disk->disk_name);
 		return 1;
 	}
 
+	/* Preserve existing integrity profile */
+	t->integrity_supported = 1;
 	return 0;
 }
 
@@ -1095,7 +1117,7 @@ int dm_table_complete(struct dm_table *t)
 		return r;
 	}
 
-	r = dm_table_set_integrity(t);
+	r = dm_table_register_integrity(t);
 	if (r) {
 		DMERR("could not register integrity profile.");
 		return r;
@@ -1258,6 +1280,33 @@ combine_limits:
 	}
 
 	return validate_hardware_logical_block_alignment(table, limits);
+}
+
+/*
+ * Verify that all devices have an integrity profile that matches the
+ * DM device's registered integrity profile.  If the profiles don't
+ * match then unregister the DM device's integrity profile.
+ */
+static void dm_table_verify_integrity(struct dm_table *t)
+{
+	struct gendisk *template_disk = NULL;
+
+	if (t->integrity_supported) {
+		/*
+		 * Verify that the original integrity profile
+		 * matches all the devices in this table.
+		 */
+		template_disk = dm_table_get_integrity_disk(t);
+		if (template_disk &&
+		    blk_integrity_compare(dm_disk(t->md), template_disk) >= 0)
+			return;
+	}
+
+	if (integrity_profile_exists(dm_disk(t->md))) {
+		DMWARN("%s: unable to establish an integrity profile",
+		       dm_device_name(t->md));
+		blk_integrity_unregister(dm_disk(t->md));
+	}
 }
 
 static int device_flush_capable(struct dm_target *ti, struct dm_dev *dev,
@@ -1457,7 +1506,7 @@ void dm_table_set_restrictions(struct dm_table *t, struct request_queue *q,
 	else
 		queue_flag_set_unlocked(QUEUE_FLAG_NO_SG_MERGE, q);
 
-	dm_table_set_integrity(t);
+	dm_table_verify_integrity(t);
 
 	/*
 	 * Determine whether or not this queue's I/O timings contribute
