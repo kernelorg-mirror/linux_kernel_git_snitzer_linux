@@ -375,9 +375,8 @@ static void punt_bios_to_rescuer(struct bio_set *bs)
 
 	spin_lock(&bs->rescue_lock);
 	bio_list_merge(&bs->rescue_list, &punt);
-	spin_unlock(&bs->rescue_lock);
-
 	queue_work(bs->rescue_workqueue, &bs->rescue_work);
+	spin_unlock(&bs->rescue_lock);
 }
 
 /**
