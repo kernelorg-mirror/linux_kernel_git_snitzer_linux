@@ -1632,6 +1632,8 @@ struct block_device_operations {
 	int (*getgeo)(struct block_device *, struct hd_geometry *);
 	/* this callback is with swap_lock and sometimes page table lock held */
 	void (*swap_slot_free_notify) (struct block_device *, unsigned long);
+	int (*reserve_space) (struct block_device *, sector_t);
+	int (*get_reserved_space) (struct block_device *, sector_t *);
 	struct module *owner;
 };
 
@@ -1642,6 +1644,9 @@ extern int bdev_write_page(struct block_device *, sector_t, struct page *,
 						struct writeback_control *);
 extern long bdev_direct_access(struct block_device *, sector_t,
 		void __pmem **addr, unsigned long *pfn, long size);
+
+extern int blk_reserve_space(struct block_device *, sector_t);
+extern int blk_get_reserved_space(struct block_device *, sector_t *);
 #else /* CONFIG_BLOCK */
 
 struct block_device;

@@ -470,6 +470,26 @@ long bdev_direct_access(struct block_device *bdev, sector_t sector,
 }
 EXPORT_SYMBOL_GPL(bdev_direct_access);
 
+int blk_reserve_space(struct block_device *bdev, sector_t nr_sects)
+{
+	const struct block_device_operations *ops = bdev->bd_disk->fops;
+
+	if (!ops->reserve_space)
+		return -EOPNOTSUPP;
+	return ops->reserve_space(bdev, nr_sects);
+}
+EXPORT_SYMBOL_GPL(blk_reserve_space);
+
+int blk_get_reserved_space(struct block_device *bdev, sector_t *nr_sects)
+{
+	const struct block_device_operations *ops = bdev->bd_disk->fops;
+
+	if (!ops->get_reserved_space)
+		return -EOPNOTSUPP;
+	return ops->get_reserved_space(bdev, nr_sects);
+}
+EXPORT_SYMBOL_GPL(blk_get_reserved_space);
+
 /*
  * pseudo-fs
  */
