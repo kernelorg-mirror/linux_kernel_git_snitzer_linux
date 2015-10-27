@@ -2185,6 +2185,12 @@ static const struct block_device_operations dm_blk_dops;
 
 static void dm_wq_work(struct work_struct *work);
 
+static void dm_init_md_queue_data(struct mapped_device *md, void *data)
+{
+	md->queue->queuedata = data;
+	md->queue->backing_dev_info.congested_data = data;
+}
+
 static void dm_init_md_queue(struct mapped_device *md)
 {
 	/*
@@ -2197,6 +2203,12 @@ static void dm_init_md_queue(struct mapped_device *md)
 	 * This queue is new, so no concurrency on the queue_flags.
 	 */
 	queue_flag_clear_unlocked(QUEUE_FLAG_STACKABLE, md->queue);
+
+	/*
+	 * Initialize data that will only be used by a non-blk-mq DM queue
+	 * - must do so here (in alloc_dev callchain) before queue is used
+	 */
+	dm_init_md_queue_data(md, md);
 }
 
 static void dm_init_old_md_queue(struct mapped_device *md)
@@ -2207,10 +2219,7 @@ static void dm_init_old_md_queue(struct mapped_device *md)
 	/*
 	 * Initialize aspects of queue that aren't relevant for blk-mq
 	 */
-	md->queue->queuedata = md;
 	md->queue->backing_dev_info.congested_fn = dm_any_congested;
-	md->queue->backing_dev_info.congested_data = md;
-
 	blk_queue_bounce_limit(md->queue, BLK_BOUNCE_ANY);
 }
 
@@ -2712,6 +2721,7 @@ static int dm_init_request_based_blk_mq_queue(struct mapped_device *md)
 	}
 	md->queue = q;
 	dm_init_md_queue(md);
+	dm_init_md_queue_data(md, NULL);
 
 	/* backfill 'mq' sysfs registration normally done in blk_register_queue */
 	blk_mq_register_disk(md->disk);
