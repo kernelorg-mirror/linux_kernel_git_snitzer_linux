@@ -500,4 +500,10 @@ config DM_LOG_WRITES
 
 	  If unsure, say N.
 
+config DM_WRITECACHE
+	tristate "Writecache target"
+	depends on BLK_DEV_DM
+	---help---
+	   This is the writecache target.
+
 endif # MD
