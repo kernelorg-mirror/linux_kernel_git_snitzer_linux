@@ -658,61 +658,70 @@ erase_this:
 	mutex_unlock(&wc->lock);
 }
 
+static int process_flush_mesg(unsigned argc, char **argv, struct dm_writecache *wc)
+{
+	uint64_t seq;
+	struct wc_entry *e;
+
+	if (argc != 1)
+		return -EINVAL;
+
+	mutex_lock(&wc->lock);
+	if (unlikely(dm_suspended(wc->ti))) {
+		mutex_unlock(&wc->lock);
+		return -EBUSY;
+	}
+	if (unlikely(wc->error)) {
+		mutex_unlock(&wc->lock);
+		return -EIO;
+	}
+
+	writecache_flush(wc);
+	seq = ACCESS_ONCE(sb(wc)->seq_count);
+	wc->writeback_all++;
+	mutex_unlock(&wc->lock);
+
+	queue_work(wc->writeback_wq, &wc->writeback_work);
+	flush_workqueue(wc->writeback_wq);
+
+	mutex_lock(&wc->lock);
+	wc->writeback_all--;
+ waited:
+	if (unlikely(dm_suspended(wc->ti))) {
+		mutex_unlock(&wc->lock);
+		return -EBUSY;
+	}
+	if (unlikely(wc->error)) {
+		mutex_unlock(&wc->lock);
+		return -EIO;
+	}
+	e = NULL;
+	if (!list_empty(&wc->writeback))
+		e = container_of(wc->writeback.prev, struct wc_entry, lru);
+	else if (!list_empty(&wc->writeback_start))
+		e = container_of(wc->writeback_start.prev, struct wc_entry, lru);
+	else if (!list_empty(&wc->lru))
+		e = container_of(wc->lru.prev, struct wc_entry, lru);
+	if (e && memory_entry(wc, e)->seq_count < seq) {
+		writecache_wait_on_freelist(wc);
+		goto waited;
+	}
+	mutex_unlock(&wc->lock);
+
+	return 0;
+}
+
 static int writecache_message(struct dm_target *ti, unsigned argc, char **argv)
 {
+	int r = -EINVAL;
 	struct dm_writecache *wc = ti->private;
 
-	if (argc == 1 && !strcasecmp(argv[0], "flush")) {
-		uint64_t seq;
-		struct wc_entry *e;
+	if (!strcasecmp(argv[0], "flush"))
+		r = process_flush_mesg(argc, argv, wc);
+	else
+		DMWARN("unrecognised message received: %s", argv[0]);
 
-		mutex_lock(&wc->lock);
-		if (unlikely(dm_suspended(wc->ti))) {
-			mutex_unlock(&wc->lock);
-			return -EBUSY;
-		}
-		if (unlikely(wc->error)) {
-			mutex_unlock(&wc->lock);
-			return -EIO;
-		}
-
-		writecache_flush(wc);
-		seq = ACCESS_ONCE(sb(wc)->seq_count);
-		wc->writeback_all++;
-		mutex_unlock(&wc->lock);
-
-		queue_work(wc->writeback_wq, &wc->writeback_work);
-		flush_workqueue(wc->writeback_wq);
-
-		mutex_lock(&wc->lock);
-		wc->writeback_all--;
-waited:
-		if (unlikely(dm_suspended(wc->ti))) {
-			mutex_unlock(&wc->lock);
-			return -EBUSY;
-		}
-		if (unlikely(wc->error)) {
-			mutex_unlock(&wc->lock);
-			return -EIO;
-		}
-		e = NULL;
-		if (!list_empty(&wc->writeback))
-			e = container_of(wc->writeback.prev, struct wc_entry, lru);
-		else if (!list_empty(&wc->writeback_start))
-			e = container_of(wc->writeback_start.prev, struct wc_entry, lru);
-		else if (!list_empty(&wc->lru))
-			e = container_of(wc->lru.prev, struct wc_entry, lru);
-		if (e && memory_entry(wc, e)->seq_count < seq) {
-			writecache_wait_on_freelist(wc);
-			goto waited;
-		}
-		mutex_unlock(&wc->lock);
-
-		return 0;
-	} else {
-		DMWARN("unrecognised message received.");
-		return -EINVAL;
-	}
+	return r;
 }
 
 static void bio_copy_block(struct dm_writecache *wc, struct bio *bio, void *data, bool write)
