@@ -933,6 +933,64 @@ static void writecache_copy_endio(int read_err, unsigned long write_err, void *p
 	spin_unlock_irqrestore(&wc->endio_thread_wait.lock, flags);
 }
 
+static void __writecache_endio_pmem(struct dm_writecache *wc, struct list_head *list)
+{
+	unsigned i;
+	struct writeback_struct *wb;
+	struct wc_entry *e;
+
+	do {
+		wb = list_entry(list->next, struct writeback_struct, endio_entry);
+		list_del(&wb->endio_entry);
+
+#ifdef COPY_TO_PAGES_BEFORE_WRITING
+		{
+			struct bio_vec *bv;
+			bio_for_each_segment_all(bv, &wb->bio, i)
+				mempool_free(bv->bv_page, wc->page_pool);
+		}
+#endif
+		if (unlikely(wb->bio.bi_error))
+			writecache_error(wc, "write error %d", wb->bio.bi_error);
+		i = 0;
+		do {
+			e = wb->wc_list[i];
+			BUG_ON(!e->write_in_progress);
+			e->write_in_progress = false;
+			if (likely(!wc->error))
+				writecache_free_entry(wc, e);
+			wc->writeback_size--;
+		} while (++i < wb->wc_list_n);
+
+		if (wb->wc_list != wb->wc_list_inline)
+			kfree(wb->wc_list);
+		bio_put(&wb->bio);
+	} while (!list_empty(list));
+}
+
+static void __writecache_endio_ssd(struct dm_writecache *wc, struct list_head *list)
+{
+	struct copy_struct *c;
+	struct wc_entry *e;
+
+	do {
+		c = list_entry(list->next, struct copy_struct, endio_entry);
+		list_del(&c->endio_entry);
+
+		if (unlikely(c->error))
+			writecache_error(wc, "copy error");
+
+		e = c->e;
+		BUG_ON(!e->write_in_progress);
+		e->write_in_progress = false;
+		if (likely(!wc->error))
+			writecache_free_entry(wc, e);
+
+		wc->writeback_size--;
+		mempool_free(c, wc->copy_pool);
+	} while (!list_empty(list));
+}
+
 static int writecache_endio_thread(void *data)
 {
 	struct dm_writecache *wc = data;
@@ -968,54 +1026,11 @@ pop_from_list:
 		writecache_disk_flush(wc, wc->dev);
 
 		mutex_lock(&wc->lock);
-		// FIXME: this control structure needs serious help
-		if (wc->pmem_mode) do {
-			unsigned i;
-			struct writeback_struct *wb =
-				list_entry(list.next, struct writeback_struct, endio_entry);
 
-			list_del(&wb->endio_entry);
-
-#ifdef COPY_TO_PAGES_BEFORE_WRITING
-			{
-				struct bio_vec *bv;
-				bio_for_each_segment_all(bv, &wb->bio, i)
-					mempool_free(bv->bv_page, wc->page_pool);
-			}
-#endif
-			if (unlikely(wb->bio.bi_error))
-				writecache_error(wc, "write error %d", wb->bio.bi_error);
-			i = 0;
-			do {
-				struct wc_entry *e = wb->wc_list[i];
-				BUG_ON(!e->write_in_progress);
-				e->write_in_progress = false;
-				if (likely(!wc->error))
-					writecache_free_entry(wc, e);
-				wc->writeback_size--;
-			} while (++i < wb->wc_list_n);
-			if (wb->wc_list != wb->wc_list_inline)
-				kfree(wb->wc_list);
-			bio_put(&wb->bio);
-		} while (!list_empty(&list)); else do {
-			struct copy_struct *c = list_entry(list.next, struct copy_struct, endio_entry);
-			struct wc_entry *e;
-
-			list_del(&c->endio_entry);
-
-			if (unlikely(c->error))
-				writecache_error(wc, "copy error");
-
-			e = c->e;
-			BUG_ON(!e->write_in_progress);
-			e->write_in_progress = false;
-
-			if (likely(!wc->error))
-				writecache_free_entry(wc, e);
-
-			wc->writeback_size--;
-			mempool_free(c, wc->copy_pool);
-		} while (!list_empty(&list));
+		if (wc->pmem_mode)
+			__writecache_endio_pmem(wc, &list);
+		else
+			__writecache_endio_ssd(wc, &list);
 
 		writecache_wait_for_ios(wc, READ);
 		writecache_commit_flushed(wc);
