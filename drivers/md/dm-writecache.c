@@ -123,7 +123,7 @@ struct wc_entry {
 };
 
 struct dm_writecache {
-	bool mode_ssd;
+	bool pmem_mode;
 	struct mutex lock;
 	struct rb_root tree;
 	struct list_head lru;
@@ -230,7 +230,7 @@ static sector_t cache_sector(struct dm_writecache *wc, struct wc_entry *e)
 
 static void writecache_flush_all(struct dm_writecache *wc)
 {
-	if (!wc->mode_ssd)
+	if (wc->pmem_mode)
 		persistent_memory_flush_all();
 	else
 		memset(wc->dirty_bitmap, -1, wc->dirty_bitmap_size);
@@ -238,7 +238,7 @@ static void writecache_flush_all(struct dm_writecache *wc)
 
 static void writecache_flush_region(struct dm_writecache *wc, void *ptr, size_t size)
 {
-	if (!wc->mode_ssd)
+	if (wc->pmem_mode)
 		persistent_memory_flush(ptr, size);
 	else
 		__set_bit(((char *)ptr - (char *)wc->memory_map) / BITMAP_GRANULARITY,
@@ -318,7 +318,7 @@ static void ssd_commit_flushed(struct dm_writecache *wc)
 
 static void writecache_commit_flushed(struct dm_writecache *wc)
 {
-	if (!wc->mode_ssd)
+	if (wc->pmem_mode)
 		persistent_memory_commit_flushed();
 	else
 		ssd_commit_flushed(wc);
@@ -481,7 +481,7 @@ static void writecache_poison_lists(struct dm_writecache *wc)
 static void writecache_flush_entry(struct dm_writecache *wc, struct wc_entry *e)
 {
 	writecache_flush_region(wc, memory_entry(wc, e), sizeof(struct wc_memory_entry));
-	if (!wc->mode_ssd)
+	if (wc->pmem_mode)
 		writecache_flush_region(wc, memory_data(wc, e), wc->block_size);
 }
 
@@ -782,7 +782,7 @@ static int writecache_map(struct dm_target *ti, struct bio *bio)
 next_block:
 		e = writecache_find_entry(wc, bio->bi_iter.bi_sector, WFE_RETURN_FOLLOWING);
 		if (e && memory_entry(wc, e)->original_sector == bio->bi_iter.bi_sector) {
-			if (!wc->mode_ssd) {
+			if (wc->pmem_mode) {
 				bio_copy_block(wc, bio, memory_data(wc, e), false);
 				if (bio->bi_iter.bi_size)
 					goto next_block;
@@ -813,7 +813,7 @@ next_block:
 			if (e) {
 				if (!writecache_entry_is_committed(wc, e))
 					goto bio_copy;
-				if (wc->mode_ssd && !e->write_in_progress) {
+				if (!wc->pmem_mode && !e->write_in_progress) {
 					wc->overwrote_committed = true;
 					goto bio_copy;
 				}
@@ -828,7 +828,7 @@ next_block:
 			ACCESS_ONCE(memory_entry(wc, e)->seq_count) = sb(wc)->seq_count;
 			writecache_insert_entry(wc, e);
 bio_copy:
-			if (!wc->mode_ssd) {
+			if (wc->pmem_mode) {
 				bio_copy_block(wc, bio, memory_data(wc, e), true);
 			} else {
 				dm_accept_partial_bio(bio, wc->block_size >> SECTOR_SHIFT);
@@ -960,7 +960,7 @@ pop_from_list:
 
 		mutex_lock(&wc->lock);
 		// FIXME: this control structure needs serious help
-		if (!wc->mode_ssd) do {
+		if (wc->pmem_mode) do {
 			unsigned i;
 			struct writeback_struct *wb =
 				list_entry(list.next, struct writeback_struct, endio_entry);
@@ -1096,9 +1096,9 @@ restart:
 		e->wc_list_contiguous = 1;
 
 		f = e;
-		/* don't coalesce if we are on SSD */
+		/* Only coalesce if we are on pmem */
 		// FIXME: again, kill this non-standard control structure
-		if (!wc->mode_ssd) while (1) {
+		if (wc->pmem_mode) while (1) {
 			struct rb_node *next;
 			struct wc_entry *g;
 			next = rb_next(&f->rb_node);
@@ -1139,7 +1139,7 @@ restart:
 	mutex_lock(&wc->lock);
 
 	// FIXME: non-standard control structure must go
-	if (!wc->mode_ssd) while (!list_empty(&wc->writeback_start)) {
+	if (wc->pmem_mode) while (!list_empty(&wc->writeback_start)) {
 		struct bio *bio;
 		struct writeback_struct *wb;
 		unsigned max_pages;
@@ -1323,7 +1323,7 @@ static void writecache_dtr(struct dm_target *ti)
 		vfree(wc->entries);
 
 	if (wc->memory_map) {
-		if (!wc->mode_ssd)
+		if (wc->pmem_mode)
 			persistent_memory_release(ti, &wc->pmem_holder,
 						  wc->memory_map, wc->memory_map_size);
 		else
@@ -1415,13 +1415,13 @@ static int writecache_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		goto bad_arguments;
 
 	if (!strcasecmp(string, "p"))
-		wc->mode_ssd = false;
+		wc->pmem_mode = true;
 	else if (!strcasecmp(string, "s"))
-		wc->mode_ssd = true;
+		wc->pmem_mode = false;
 	else
 		goto bad_arguments;
 
-	if (!wc->mode_ssd) {
+	if (wc->pmem_mode) {
 		wc->bio_set = bioset_create(BIO_POOL_SIZE,
 					    offsetof(struct writeback_struct, bio));
 		if (!wc->bio_set) {
@@ -1438,7 +1438,7 @@ static int writecache_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		}
 	}
 #ifdef COPY_TO_PAGES_BEFORE_WRITING
-	if (!wc->mode_ssd) {
+	if (wc->pmem_mode) {
 		wc->page_pool = mempool_create_page_pool(BIO_POOL_SIZE, 0);
 		if (!wc->page_pool) {
 			r = -ENOMEM;
@@ -1459,7 +1459,7 @@ static int writecache_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	string = dm_shift_arg(&as);
 	if (!string)
 		goto bad_arguments;
-	if (!wc->mode_ssd) {
+	if (wc->pmem_mode) {
 		wc->memory_name = kstrdup(string, GFP_KERNEL);
 		if (!wc->memory_name) {
 			r = -ENOMEM;
@@ -1528,7 +1528,7 @@ invalid_optional:
 		}
 	}
 
-	if (wc->mode_ssd) {
+	if (!wc->pmem_mode) {
 		struct dm_io_region region;
 		struct dm_io_request req;
 		uint64_t n_blocks, n_metadata_blocks, n_bitmap_bits;
@@ -1676,7 +1676,7 @@ static void writecache_status(struct dm_target *ti, status_type_t type,
 		       (unsigned long long)wc->freelist_size, (unsigned long long)wc->writeback_size);
 		break;
 	case STATUSTYPE_TABLE:
-		if (!wc->mode_ssd)
+		if (wc->pmem_mode)
 			DMEMIT("p %s %s %u ", wc->dev->name, wc->memory_name, wc->block_size);
 		else
 			DMEMIT("s %s %s %u ", wc->dev->name, wc->ssd_dev->name, wc->block_size);
