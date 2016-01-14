@@ -266,60 +266,64 @@ void writecache_notify_io(unsigned long error, void *context)
 		complete(&endio->c);
 }
 
+static void ssd_commit_flushed(struct dm_writecache *wc)
+{
+	int r;
+	struct dm_io_region region;
+	struct dm_io_request req;
+	struct io_notify endio = {
+		wc,
+		COMPLETION_INITIALIZER_ONSTACK(endio.c),
+		ATOMIC_INIT(1),
+	};
+	unsigned bitmap_bits = wc->dirty_bitmap_size * BITS_PER_LONG;
+	unsigned i = 0;
+
+	while (1) {
+		unsigned j;
+		i = find_next_bit(wc->dirty_bitmap, bitmap_bits, i);
+		if (unlikely(i == bitmap_bits))
+			break;
+		j = find_next_zero_bit(wc->dirty_bitmap, bitmap_bits, i);
+
+		region.bdev = wc->ssd_dev->bdev;
+		region.sector = (sector_t)i * (BITMAP_GRANULARITY >> SECTOR_SHIFT);
+		region.count = (sector_t)(j - i) * (BITMAP_GRANULARITY >> SECTOR_SHIFT);
+
+		if (unlikely(region.sector >= wc->metadata_sectors))
+			break;
+		if (unlikely(region.sector + region.count > wc->metadata_sectors))
+			region.count = wc->metadata_sectors - region.sector;
+
+		atomic_inc(&endio.count);
+		req.bi_rw = WRITE;
+		req.mem.type = DM_IO_VMA;
+		req.mem.ptr.vma = (char *)wc->memory_map + (size_t)i * BITMAP_GRANULARITY;
+		req.client = wc->dm_io;
+		req.notify.fn = writecache_notify_io;
+		req.notify.context = &endio;
+
+		r = dm_io(&req, 1, &region, NULL);
+		if (unlikely(r))
+			/* FIXME: need more graceful failure! */
+			panic(DM_NAME ": " DM_MSG_PREFIX ": dm io error %d", r);
+		i = j;
+	}
+
+	writecache_notify_io(0, &endio);
+	wait_for_completion_io(&endio.c);
+
+	writecache_disk_flush(wc, wc->ssd_dev);
+
+	memset(wc->dirty_bitmap, 0, wc->dirty_bitmap_size);
+}
+
 static void writecache_commit_flushed(struct dm_writecache *wc)
 {
 	if (!WC_MODE_SSD(wc))
 		persistent_memory_commit_flushed();
-	else {
-		int r;
-		struct dm_io_region region;
-		struct dm_io_request req;
-		struct io_notify endio = {
-			wc,
-			COMPLETION_INITIALIZER_ONSTACK(endio.c),
-			ATOMIC_INIT(1),
-		};
-		unsigned bitmap_bits = wc->dirty_bitmap_size * BITS_PER_LONG;
-		unsigned i = 0;
-
-		while (1) {
-			unsigned j;
-			i = find_next_bit(wc->dirty_bitmap, bitmap_bits, i);
-			if (unlikely(i == bitmap_bits))
-				break;
-			j = find_next_zero_bit(wc->dirty_bitmap, bitmap_bits, i);
-
-			region.bdev = wc->ssd_dev->bdev;
-			region.sector = (sector_t)i * (BITMAP_GRANULARITY >> SECTOR_SHIFT);
-			region.count = (sector_t)(j - i) * (BITMAP_GRANULARITY >> SECTOR_SHIFT);
-
-			if (unlikely(region.sector >= wc->metadata_sectors))
-				break;
-			if (unlikely(region.sector + region.count > wc->metadata_sectors))
-				region.count = wc->metadata_sectors - region.sector;
-
-			atomic_inc(&endio.count);
-			req.bi_rw = WRITE;
-			req.mem.type = DM_IO_VMA;
-			req.mem.ptr.vma = (char *)wc->memory_map + (size_t)i * BITMAP_GRANULARITY;
-			req.client = wc->dm_io;
-			req.notify.fn = writecache_notify_io;
-			req.notify.context = &endio;
-
-			r = dm_io(&req, 1, &region, NULL);
-			if (unlikely(r))
-				/* FIXME: need more graceful failure! */
-				panic(DM_NAME ": " DM_MSG_PREFIX ": dm io error %d", r);
-			i = j;
-		}
-
-		writecache_notify_io(0, &endio);
-		wait_for_completion_io(&endio.c);
-
-		writecache_disk_flush(wc, wc->ssd_dev);
-
-		memset(wc->dirty_bitmap, 0, wc->dirty_bitmap_size);
-	}
+	else
+		ssd_commit_flushed(wc);
 }
 
 static void writecache_disk_flush(struct dm_writecache *wc, struct dm_dev *dev)
