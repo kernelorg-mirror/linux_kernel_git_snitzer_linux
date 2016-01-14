@@ -1075,8 +1075,8 @@ static void writecache_writeback(struct work_struct *work)
 {
 	struct dm_writecache *wc = container_of(work, struct dm_writecache, writeback_work);
 	struct blk_plug plug;
-	struct wc_entry *e, *f;
-	struct rb_node *node;
+	struct wc_entry *e, *f, *g;
+	struct rb_node *node, *next_node;
 	struct list_head skipped;
 
 	mutex_lock(&wc->lock);
@@ -1120,15 +1120,18 @@ restart:
 		e->wc_list_contiguous = 1;
 
 		f = e;
+
+		if (!wc->pmem_mode) {
+			cond_resched();
+			continue;
+		}
+
 		/* Only coalesce if we are on pmem */
-		// FIXME: again, kill this non-standard control structure
-		if (wc->pmem_mode) while (1) {
-			struct rb_node *next;
-			struct wc_entry *g;
-			next = rb_next(&f->rb_node);
-			if (unlikely(!next))
+		while (1) {
+			next_node = rb_next(&f->rb_node);
+			if (unlikely(!next_node))
 				break;
-			g = container_of(next, struct wc_entry, rb_node);
+			g = container_of(next_node, struct wc_entry, rb_node);
 			if (memory_entry(wc, g)->original_sector ==
 			    memory_entry(wc, f)->original_sector) {
 				f = g;
