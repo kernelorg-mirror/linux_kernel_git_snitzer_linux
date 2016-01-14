@@ -1275,7 +1275,7 @@ static int calculate_memory_size(uint64_t device_size, unsigned block_size,
 	while (1) {
 		if (!n_blocks)
 			return -ENOSPC;
-		// FIXME: this (size_t)-sizeof()/sizeof() looks flawed...
+		/* Verify the following entries[n_blocks] won't overflow */
 		if (n_blocks >= (size_t)-sizeof(struct wc_memory_superblock) / sizeof(struct wc_memory_entry))
 			return -EFBIG;
 		offset = offsetof(struct wc_memory_superblock, entries[n_blocks]);
