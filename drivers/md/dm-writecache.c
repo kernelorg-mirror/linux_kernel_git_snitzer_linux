@@ -1448,6 +1448,9 @@ static int writecache_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	}
 	wake_up_process(wc->endio_thread);
 
+	/*
+	 * Parse the mode (pmem or ssd)
+	 */
 	string = dm_shift_arg(&as);
 	if (!string)
 		goto bad_arguments;
@@ -1485,15 +1488,21 @@ static int writecache_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		}
 	}
 #endif
+	/*
+	 * Parse the origin data device
+	 */
 	string = dm_shift_arg(&as);
 	if (!string)
 		goto bad_arguments;
 	r = dm_get_device(ti, string, dm_table_get_mode(ti->table), &wc->dev);
 	if (r) {
-		ti->error = "Data device lookup failed";
+		ti->error = "Origin data device lookup failed";
 		goto bad;
 	}
 
+	/*
+	 * Parse cache data device (be it pmem or ssd)
+	 */
 	string = dm_shift_arg(&as);
 	if (!string)
 		goto bad_arguments;
@@ -1508,18 +1517,21 @@ static int writecache_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		r = persistent_memory_claim(ti, wc->memory_name, &wc->pmem_holder,
 					    &wc->memory_map, &wc->memory_map_size);
 		if (r) {
-			ti->error = "Unable to map persistent memory";
+			ti->error = "Unable to map persistent memory for cache";
 			goto bad;
 		}
 	} else {
 		r = dm_get_device(ti, string, dm_table_get_mode(ti->table), &wc->ssd_dev);
 		if (r) {
-			ti->error = "Data device lookup failed";
+			ti->error = "Cache data device lookup failed";
 			goto bad;
 		}
 		wc->memory_map_size = i_size_read(wc->ssd_dev->bdev->bd_inode);
 	}
 
+	/*
+	 * Parse the cache block size
+	 */
 	string = dm_shift_arg(&as);
 	if (!string)
 		goto bad_arguments;
@@ -1532,6 +1544,9 @@ static int writecache_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	}
 	wc->block_size_bits = __ffs(wc->block_size);
 
+	/*
+	 * Parse optional arguments
+	 */
 	r = dm_read_arg_group(_args, &as, &opt_params, &ti->error);
 	if (r)
 		goto bad;
@@ -1639,14 +1654,13 @@ invalid_optional:
 	}
 
 	if (sb(wc)->block_size != wc->block_size) {
-		ti->error = "Block size does not match";
+		ti->error = "Block size does not match superblock";
 		r = -EINVAL;
 		goto bad;
 	}
 
 	offset = sb(wc)->n_blocks * sizeof(struct wc_memory_entry);
 	if (offset / sizeof(struct wc_memory_entry) != sb(wc)->n_blocks) {
-// FIXME: eliminate these gotos somehow
 overflow:
 		ti->error = "Overflow in size calculation";
 		r = -EINVAL;
@@ -1656,12 +1670,9 @@ overflow:
 	if (offset < sizeof(struct wc_memory_superblock))
 		goto overflow;
 	offset = (offset + wc->block_size - 1) & ~(size_t)(wc->block_size - 1);
-	if (!offset)
-		goto overflow;
 	data_size = sb(wc)->n_blocks * sb(wc)->block_size;
-	if (data_size / sb(wc)->block_size != sb(wc)->n_blocks)
-		goto overflow;
-	if (offset + data_size < offset)
+	if (!offset || (data_size / sb(wc)->block_size != sb(wc)->n_blocks) ||
+	    (offset + data_size < offset))
 		goto overflow;
 	if (offset + data_size > wc->memory_map_size) {
 		ti->error = "Memory area is too small";
