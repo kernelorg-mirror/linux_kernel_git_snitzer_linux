@@ -519,14 +519,16 @@ static inline void bvec_kunmap_irq(char *buffer, unsigned long *flags)
 #endif
 
 static inline char *__bio_kmap_irq(struct bio *bio, struct bvec_iter iter,
-				   unsigned long *flags)
+				   unsigned long *flags, unsigned *size)
 {
-	return bvec_kmap_irq(&bio_iter_iovec(bio, iter), flags);
+	struct bio_vec bv = bio_iter_iovec(bio, iter);
+	*size = bv.bv_len;
+	return bvec_kmap_irq(&bv, flags);
 }
 #define __bio_kunmap_irq(buf, flags)	bvec_kunmap_irq(buf, flags)
 
-#define bio_kmap_irq(bio, flags) \
-	__bio_kmap_irq((bio), (bio)->bi_iter, (flags))
+#define bio_kmap_irq(bio, flags, size) \
+	__bio_kmap_irq((bio), (bio)->bi_iter, (flags), (size))
 #define bio_kunmap_irq(buf,flags)	__bio_kunmap_irq(buf, flags)
 
 /*
