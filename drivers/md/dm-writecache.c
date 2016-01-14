@@ -1071,6 +1071,95 @@ static bool wc_add_block(struct writeback_struct *wb, struct wc_entry *e, gfp_t 
 #endif
 }
 
+static void __writecache_writeback_pmem(struct dm_writecache *wc)
+{
+	struct wc_entry *e, *f;
+	struct bio *bio;
+	struct writeback_struct *wb;
+	unsigned max_pages;
+
+	while (!list_empty(&wc->writeback_start)) {
+		e = container_of(wc->writeback_start.prev, struct wc_entry, lru);
+		list_del(&e->lru);
+		list_add(&e->lru, &wc->writeback);
+
+		mutex_unlock(&wc->lock);
+
+		max_pages = e->wc_list_contiguous;
+
+		bio = bio_alloc_bioset(GFP_NOIO, max_pages, wc->bio_set);
+		wb = container_of(bio, struct writeback_struct, bio);
+		wb->wc = wc;
+		wb->bio.bi_end_io = writecache_writeback_endio;
+		wb->bio.bi_bdev = wc->dev->bdev;
+		wb->bio.bi_iter.bi_sector = memory_entry(wc, e)->original_sector;
+#ifdef COPY_TO_PAGES_BEFORE_WRITING
+		wb->page_offset = PAGE_SIZE;
+#endif
+		if (max_pages > WB_LIST_INLINE) {
+			wb->wc_list = kmalloc(max_pages * sizeof(struct wc_entry *),
+					      GFP_NOIO | __GFP_NORETRY | __GFP_NOMEMALLOC | __GFP_NOWARN);
+			if (unlikely(!wb->wc_list))
+				goto use_inline_list;
+		} else {
+use_inline_list:
+			wb->wc_list = wb->wc_list_inline;
+			max_pages = WB_LIST_INLINE;
+		}
+
+		BUG_ON(!wc_add_block(wb, e, GFP_NOIO));
+
+		wb->wc_list[0] = e;
+		wb->wc_list_n = 1;
+
+		while (!list_empty(&wc->writeback_start) && wb->wc_list_n < max_pages) {
+			f = container_of(wc->writeback_start.prev, struct wc_entry, lru);
+			if (memory_entry(wc, f)->original_sector !=
+			    memory_entry(wc, e)->original_sector + (wc->block_size >> SECTOR_SHIFT))
+				break;
+			if (!wc_add_block(wb, f, GFP_NOWAIT | __GFP_NOWARN))
+				break;
+			list_del(&f->lru);
+			list_add(&f->lru, &wc->writeback);
+			wb->wc_list[wb->wc_list_n++] = f;
+			e = f;
+		}
+		submit_bio(WRITE, &wb->bio);
+		cond_resched();
+
+		mutex_lock(&wc->lock);
+	}
+}
+
+static void __writecache_writeback_ssd(struct dm_writecache *wc)
+{
+	struct wc_entry *e;
+	struct dm_io_region from, to;
+	struct copy_struct *c;
+
+	while (!list_empty(&wc->writeback_start)) {
+		e = container_of(wc->writeback_start.prev, struct wc_entry, lru);
+		list_del(&e->lru);
+		list_add(&e->lru, &wc->writeback);
+		mutex_unlock(&wc->lock);
+
+		from.bdev = wc->ssd_dev->bdev;
+		from.sector = cache_sector(wc, e);
+		from.count = wc->block_size >> SECTOR_SHIFT;
+		to.bdev = wc->dev->bdev;
+		to.sector = memory_entry(wc, e)->original_sector;
+		to.count = wc->block_size >> SECTOR_SHIFT;
+
+		c = mempool_alloc(wc->copy_pool, GFP_NOIO);
+		c->wc = wc;
+		c->e = e;
+
+		dm_kcopyd_copy(wc->dm_kcopyd, &from, 1, &to, 0, writecache_copy_endio, c);
+
+		mutex_lock(&wc->lock);
+	}
+}
+
 static void writecache_writeback(struct work_struct *work)
 {
 	struct dm_writecache *wc = container_of(work, struct dm_writecache, writeback_work);
@@ -1165,85 +1254,10 @@ restart:
 	blk_start_plug(&plug);
 	mutex_lock(&wc->lock);
 
-	// FIXME: non-standard control structure must go
-	if (wc->pmem_mode) while (!list_empty(&wc->writeback_start)) {
-		struct bio *bio;
-		struct writeback_struct *wb;
-		unsigned max_pages;
-
-		e = container_of(wc->writeback_start.prev, struct wc_entry, lru);
-		list_del(&e->lru);
-		list_add(&e->lru, &wc->writeback);
-
-		mutex_unlock(&wc->lock);
-
-		max_pages = e->wc_list_contiguous;
-
-		bio = bio_alloc_bioset(GFP_NOIO, max_pages, wc->bio_set);
-		wb = container_of(bio, struct writeback_struct, bio);
-		wb->wc = wc;
-		wb->bio.bi_end_io = writecache_writeback_endio;
-		wb->bio.bi_bdev = wc->dev->bdev;
-		wb->bio.bi_iter.bi_sector = memory_entry(wc, e)->original_sector;
-#ifdef COPY_TO_PAGES_BEFORE_WRITING
-		wb->page_offset = PAGE_SIZE;
-#endif
-		if (max_pages > WB_LIST_INLINE) {
-			wb->wc_list = kmalloc(max_pages * sizeof(struct wc_entry *),
-					      GFP_NOIO | __GFP_NORETRY | __GFP_NOMEMALLOC | __GFP_NOWARN);
-			if (unlikely(!wb->wc_list))
-				goto use_inline_list;
-		} else {
-use_inline_list:
-			wb->wc_list = wb->wc_list_inline;
-			max_pages = WB_LIST_INLINE;
-		}
-
-		BUG_ON(!wc_add_block(wb, e, GFP_NOIO));
-
-		wb->wc_list[0] = e;
-		wb->wc_list_n = 1;
-
-		while (!list_empty(&wc->writeback_start) && wb->wc_list_n < max_pages) {
-			f = container_of(wc->writeback_start.prev, struct wc_entry, lru);
-			if (memory_entry(wc, f)->original_sector !=
-			    memory_entry(wc, e)->original_sector + (wc->block_size >> SECTOR_SHIFT))
-				break;
-			if (!wc_add_block(wb, f, GFP_NOWAIT | __GFP_NOWARN))
-				break;
-			list_del(&f->lru);
-			list_add(&f->lru, &wc->writeback);
-			wb->wc_list[wb->wc_list_n++] = f;
-			e = f;
-		}
-		submit_bio(WRITE, &wb->bio);
-		cond_resched();
-
-		mutex_lock(&wc->lock);
-	} else while (!list_empty(&wc->writeback_start)) {
-		struct dm_io_region from, to;
-		struct copy_struct *c;
-
-		e = container_of(wc->writeback_start.prev, struct wc_entry, lru);
-		list_del(&e->lru);
-		list_add(&e->lru, &wc->writeback);
-		mutex_unlock(&wc->lock);
-
-		from.bdev = wc->ssd_dev->bdev;
-		from.sector = cache_sector(wc, e);
-		from.count = wc->block_size >> SECTOR_SHIFT;
-		to.bdev = wc->dev->bdev;
-		to.sector = memory_entry(wc, e)->original_sector;
-		to.count = wc->block_size >> SECTOR_SHIFT;
-
-		c = mempool_alloc(wc->copy_pool, GFP_NOIO);
-		c->wc = wc;
-		c->e = e;
-
-		dm_kcopyd_copy(wc->dm_kcopyd, &from, 1, &to, 0, writecache_copy_endio, c);
-
-		mutex_lock(&wc->lock);
-	}
+	if (wc->pmem_mode)
+		__writecache_writeback_pmem(wc);
+	else
+		__writecache_writeback_ssd(wc);
 
 	mutex_unlock(&wc->lock);
 	blk_finish_plug(&plug);
