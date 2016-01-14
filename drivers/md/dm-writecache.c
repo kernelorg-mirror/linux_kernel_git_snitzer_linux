@@ -1281,7 +1281,66 @@ static int init_memory(struct dm_writecache *wc)
 	return 0;
 }
 
-static void writecache_dtr(struct dm_target *ti);
+static void writecache_dtr(struct dm_target *ti)
+{
+	struct dm_writecache *wc = ti->private;
+
+	if (!wc)
+		return;
+
+	if (wc->endio_thread) {
+		spin_lock_irq(&wc->endio_thread_wait.lock);
+		wc->endio_thread_terminate = true;
+		wake_up_locked(&wc->endio_thread_wait);
+		spin_unlock_irq(&wc->endio_thread_wait.lock);
+		kthread_stop(wc->endio_thread);
+	}
+
+#ifdef COPY_TO_PAGES_BEFORE_WRITING
+	if (wc->page_pool)
+		mempool_destroy(wc->page_pool);
+#endif
+
+	if (wc->bio_set)
+		bioset_free(wc->bio_set);
+
+	if (wc->copy_pool)
+		mempool_destroy(wc->copy_pool);
+
+	if (wc->writeback_wq)
+		destroy_workqueue(wc->writeback_wq);
+
+	if (wc->dev)
+		dm_put_device(ti, wc->dev);
+
+	if (wc->ssd_dev)
+		dm_put_device(ti, wc->ssd_dev);
+
+	if (wc->entries)
+		vfree(wc->entries);
+
+	if (wc->memory_map) {
+		if (!WC_MODE_SSD(wc))
+			persistent_memory_release(ti, &wc->pm_holder,
+						  wc->memory_map, wc->memory_map_size);
+		else
+			vfree(wc->memory_map);
+	}
+
+	if (wc->memory_name)
+		kfree(wc->memory_name);
+
+	if (wc->dm_kcopyd)
+		dm_kcopyd_client_destroy(wc->dm_kcopyd);
+
+	if (wc->dm_io)
+		dm_io_client_destroy(wc->dm_io);
+
+	if (wc->dirty_bitmap)
+		vfree(wc->dirty_bitmap);
+
+	kfree(wc);
+}
 
 static int writecache_ctr(struct dm_target *ti, unsigned argc, char **argv)
 {
@@ -1598,67 +1657,6 @@ bad_arguments:
 bad:
 	writecache_dtr(ti);
 	return r;
-}
-
-static void writecache_dtr(struct dm_target *ti)
-{
-	struct dm_writecache *wc = ti->private;
-
-	if (!wc)
-		return;
-
-	if (wc->endio_thread) {
-		spin_lock_irq(&wc->endio_thread_wait.lock);
-		wc->endio_thread_terminate = true;
-		wake_up_locked(&wc->endio_thread_wait);
-		spin_unlock_irq(&wc->endio_thread_wait.lock);
-		kthread_stop(wc->endio_thread);
-	}
-
-#ifdef COPY_TO_PAGES_BEFORE_WRITING
-	if (wc->page_pool)
-		mempool_destroy(wc->page_pool);
-#endif
-
-	if (wc->bio_set)
-		bioset_free(wc->bio_set);
-
-	if (wc->copy_pool)
-		mempool_destroy(wc->copy_pool);
-
-	if (wc->writeback_wq)
-		destroy_workqueue(wc->writeback_wq);
-
-	if (wc->dev)
-		dm_put_device(ti, wc->dev);
-
-	if (wc->ssd_dev)
-		dm_put_device(ti, wc->ssd_dev);
-
-	if (wc->entries)
-		vfree(wc->entries);
-
-	if (wc->memory_map) {
-		if (!WC_MODE_SSD(wc))
-			persistent_memory_release(ti, &wc->pm_holder,
-						  wc->memory_map, wc->memory_map_size);
-		else
-			vfree(wc->memory_map);
-	}
-
-	if (wc->memory_name)
-		kfree(wc->memory_name);
-
-	if (wc->dm_kcopyd)
-		dm_kcopyd_client_destroy(wc->dm_kcopyd);
-
-	if (wc->dm_io)
-		dm_io_client_destroy(wc->dm_io);
-
-	if (wc->dirty_bitmap)
-		vfree(wc->dirty_bitmap);
-
-	kfree(wc);
 }
 
 static void writecache_status(struct dm_target *ti, status_type_t type,
