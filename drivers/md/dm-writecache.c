@@ -10,15 +10,6 @@
 #define DM_MSG_PREFIX	"writecache"
 
 /*
- * When PERSISTENT_MEMORY_MOCK is defined, we use mock-up instead of real
- * persistent memory.
- *
- * When PERSISTENT_MEMORY_MOCK is not defined, one of /dev/pmem* devices is
- * being used.
- */
-/*#define PERSISTENT_MEMORY_MOCK*/
-
-/*
  * Persistent memory is not covered with page structures. Thus, when we need to
  * write data that is in the persistent memory, we need to copy them to a
  * temporary location that has struct page. When the macro
@@ -35,89 +26,6 @@
 #undef BITMAP_GRANULARITY
 #define BITMAP_GRANULARITY	PAGE_SIZE
 #endif
-
-#ifdef PERSISTENT_MEMORY_MOCK
-
-static unsigned long persistent_memory_size = 512 * 1024 * 1024;
-
-module_param_named(persistent_memory_size, persistent_memory_size, ulong, S_IRUGO);
-MODULE_PARM_DESC(persistent_memory_size, "Size of persistent memory mock-up");
-
-static void *module_pmem;
-static size_t module_pmem_size;
-static int module_pmem_claimed;
-
-static int persistent_memory_mock_init(void)
-{
-	unsigned long latch = ACCESS_ONCE(persistent_memory_size);
-	module_pmem = vmalloc(latch);
-	if (!module_pmem) {
-		DMERR("can't allocate persistent memory");
-		return -ENOMEM;
-	}
-	module_pmem_size = latch;
-	module_pmem_claimed = 0;
-	*(uint32_t *)module_pmem = 0;
-	return 0;
-}
-
-static void persistent_memory_mock_free(void)
-{
-	vfree(module_pmem);
-}
-
-struct wc_pm_holder {
-};
-
-static int persistent_memory_claim(struct dm_target *ti, const char *name,
-				   struct wc_pm_holder *holder, void **addr, uint64_t *size)
-{
-	if (xchg(&module_pmem_claimed, 1)) {
-		return -EBUSY;
-	}
-	*addr = module_pmem;
-	*size = module_pmem_size;
-	return 0;
-}
-
-static void persistent_memory_release(struct dm_target *ti, struct wc_pm_holder *holder,
-				      void *addr, size_t size)
-{
-	BUG_ON(!xchg(&module_pmem_claimed, 0));
-}
-
-#ifndef COPY_TO_PAGES_BEFORE_WRITING
-
-static struct page *persistent_memory_page(void *addr)
-{
-	return vmalloc_to_page(addr);
-}
-
-static unsigned persistent_memory_page_offset(void *addr)
-{
-	return (unsigned long)addr & (PAGE_SIZE - 1);
-}
-
-static void persistent_memory_flush_cache(void *ptr, size_t size)
-{
-	flush_kernel_vmap_range(ptr, size);
-}
-
-#endif
-
-static void persistent_memory_flush_all(void)
-{
-}
-
-static void persistent_memory_flush(void *ptr, size_t size)
-{
-}
-
-static void persistent_memory_commit_flushed(void)
-{
-}
-
-#else // PERSISTENT_MEMORY_MOCK
 
 struct wc_pm_holder {
 	struct dm_dev *dev;
@@ -180,8 +88,6 @@ static void persistent_memory_commit_flushed(void)
 	pcommit_sfence();
 #endif
 }
-
-#endif // PERSISTENT_MEMORY_MOCK
 
 #define MEMORY_SUPERBLOCK_MAGIC	0x23489321
 
@@ -1813,33 +1719,18 @@ static int __init dm_writecache_init(void)
 {
 	int r;
 
-#ifdef PERSISTENT_MEMORY_MOCK
-	r = persistent_memory_mock_init();
-	if (r)
-		goto ret;
-#endif
 	r = dm_register_target(&writecache_target);
 	if (r < 0) {
 		DMERR("register failed %d", r);
-		goto ret_free_pmem;
+		return r;
 	}
 
 	return 0;
-
-ret_free_pmem:
-#ifdef PERSISTENT_MEMORY_MOCK
-	persistent_memory_mock_free();
-ret:
-#endif
-	return r;
 }
 
 static void __exit dm_writecache_exit(void)
 {
 	dm_unregister_target(&writecache_target);
-#ifdef PERSISTENT_MEMORY_MOCK
-	persistent_memory_mock_free();
-#endif
 }
 
 module_init(dm_writecache_init);
