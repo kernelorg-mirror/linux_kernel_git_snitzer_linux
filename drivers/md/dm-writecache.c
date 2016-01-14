@@ -1309,15 +1309,13 @@ static void writecache_dtr(struct dm_target *ti)
 	}
 
 #ifdef COPY_TO_PAGES_BEFORE_WRITING
-	if (wc->page_pool)
-		mempool_destroy(wc->page_pool);
+	mempool_destroy(wc->page_pool);
 #endif
 
 	if (wc->bio_set)
 		bioset_free(wc->bio_set);
 
-	if (wc->copy_pool)
-		mempool_destroy(wc->copy_pool);
+	mempool_destroy(wc->copy_pool);
 
 	if (wc->writeback_wq)
 		destroy_workqueue(wc->writeback_wq);
@@ -1339,8 +1337,7 @@ static void writecache_dtr(struct dm_target *ti)
 			vfree(wc->memory_map);
 	}
 
-	if (wc->memory_name)
-		kfree(wc->memory_name);
+	kfree(wc->memory_name);
 
 	if (wc->dm_kcopyd)
 		dm_kcopyd_client_destroy(wc->dm_kcopyd);
