@@ -27,38 +27,39 @@
 #define BITMAP_GRANULARITY	PAGE_SIZE
 #endif
 
-struct wc_pm_holder {
+struct wc_pmem_holder {
 	struct dm_dev *dev;
 };
 
 static int persistent_memory_claim(struct dm_target *ti, const char *name,
-				   struct wc_pm_holder *pm_holder, void **addr, uint64_t *size)
+				   struct wc_pmem_holder *pmem_holder, void **addr, uint64_t *size)
 {
 	int r;
 	loff_t s;
 	long da;
 	unsigned long pfn;
-	r = dm_get_device(ti, name, FMODE_READ | FMODE_WRITE, &pm_holder->dev);
+
+	r = dm_get_device(ti, name, FMODE_READ | FMODE_WRITE, &pmem_holder->dev);
 	if (unlikely(r))
 		return r;
-	s = i_size_read(pm_holder->dev->bdev->bd_inode);
-	da = bdev_direct_access(pm_holder->dev->bdev, 0, addr, &pfn, s);
+	s = i_size_read(pmem_holder->dev->bdev->bd_inode);
+	da = bdev_direct_access(pmem_holder->dev->bdev, 0, addr, &pfn, s);
 	if (da < 0) {
-		dm_put_device(ti, pm_holder->dev);
+		dm_put_device(ti, pmem_holder->dev);
 		return da;
 	}
 	if (da != s) {
-		dm_put_device(ti, pm_holder->dev);
+		dm_put_device(ti, pmem_holder->dev);
 		return -EINVAL;
 	}
 	*size = da;
 	return 0;
 }
 
-static void persistent_memory_release(struct dm_target *ti, struct wc_pm_holder *pm_holder,
+static void persistent_memory_release(struct dm_target *ti, struct wc_pmem_holder *pmem_holder,
 				      void *addr, size_t size)
 {
-	dm_put_device(ti, pm_holder->dev);
+	dm_put_device(ti, pmem_holder->dev);
 }
 
 static void persistent_memory_flush_all(void)
@@ -172,7 +173,7 @@ struct dm_writecache {
 #ifdef COPY_TO_PAGES_BEFORE_WRITING
 	mempool_t *page_pool;
 #endif
-	struct wc_pm_holder pm_holder;
+	struct wc_pmem_holder pmem_holder;
 	const char *memory_name;
 
 	struct dm_kcopyd_client *dm_kcopyd;
@@ -1321,7 +1322,7 @@ static void writecache_dtr(struct dm_target *ti)
 
 	if (wc->memory_map) {
 		if (!WC_MODE_SSD(wc))
-			persistent_memory_release(ti, &wc->pm_holder,
+			persistent_memory_release(ti, &wc->pmem_holder,
 						  wc->memory_map, wc->memory_map_size);
 		else
 			vfree(wc->memory_map);
@@ -1464,7 +1465,7 @@ static int writecache_ctr(struct dm_target *ti, unsigned argc, char **argv)
 			goto bad;
 		}
 
-		r = persistent_memory_claim(ti, wc->memory_name, &wc->pm_holder,
+		r = persistent_memory_claim(ti, wc->memory_name, &wc->pmem_holder,
 					    &wc->memory_map, &wc->memory_map_size);
 		if (r) {
 			ti->error = "Unable to map persistent memory";
