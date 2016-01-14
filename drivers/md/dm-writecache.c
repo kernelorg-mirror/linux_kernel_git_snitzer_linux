@@ -302,9 +302,13 @@ static void ssd_commit_flushed(struct dm_writecache *wc)
 		req.notify.context = &endio;
 
 		r = dm_io(&req, 1, &region, NULL);
-		if (unlikely(r))
-			/* FIXME: need more graceful failure! */
+		if (unlikely(r)) {
+			/*
+			 * Async dm-io (implied by notify.fn above) won't return an error, but
+			 * if that changes in the future we must catch it: so panic in defense.
+			 */
 			panic(DM_NAME ": " DM_MSG_PREFIX ": dm io error %d", r);
+		}
 		i = j;
 	}
 
