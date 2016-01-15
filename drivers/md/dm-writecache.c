@@ -6,6 +6,7 @@
 #include <linux/kthread.h>
 #include <linux/dm-io.h>
 #include <linux/dm-kcopyd.h>
+//FIXME: #include <linux/pmem.h>
 
 #define DM_MSG_PREFIX	"writecache"
 
@@ -18,6 +19,7 @@
  * If the persistent memory were covered with page structures, this macro can be
  * undefined.
  */
+// FIXME: looks like pmem.c:pmem_make_request() effectively does this
 #define COPY_TO_PAGES_BEFORE_WRITING
 
 
@@ -61,6 +63,8 @@ static void persistent_memory_release(struct dm_target *ti, struct wc_pmem_holde
 {
 	dm_put_device(ti, pmem_holder->dev);
 }
+
+// FIXME: really should be using the native pmem.h interfaces (e.g. memcpy_to_pmem + wmb_pmem) no?
 
 static void persistent_memory_flush_all(void)
 {
@@ -728,11 +732,12 @@ static int writecache_message(struct dm_target *ti, unsigned argc, char **argv)
 	return r;
 }
 
-static void bio_copy_block(struct dm_writecache *wc, struct bio *bio, void *data, bool write)
+static void bio_copy_block(struct dm_writecache *wc, struct bio *bio, void *data)
 {
 	void *buf;
 	unsigned long flags;
 	unsigned size;
+	int rw = bio_data_dir(bio);
 	unsigned remaining_size = wc->block_size;
 
 	do {
@@ -740,13 +745,14 @@ static void bio_copy_block(struct dm_writecache *wc, struct bio *bio, void *data
 		if (unlikely(size > remaining_size))
 			size = remaining_size;
 
-		if (write) {
-			flush_dcache_page(bio_page(bio));
-			memcpy(data, buf, size);
-			flush_dcache_page(bio_page(bio));
-		} else {
+		// FIXME: same is done in pmem.c:pmem_do_bvec(),
+		// if pmem supports this why is it open-coded here!?
+		if (rw == READ) {
 			memcpy(buf, data, size);
 			flush_dcache_page(bio_page(bio));
+		} else {
+			flush_dcache_page(bio_page(bio));
+			memcpy(data, buf, size);
 		}
 
 		bio_kunmap_irq(buf, &flags);
@@ -796,7 +802,7 @@ next_block:
 		e = writecache_find_entry(wc, bio->bi_iter.bi_sector, WFE_RETURN_FOLLOWING);
 		if (e && memory_entry(wc, e)->original_sector == bio->bi_iter.bi_sector) {
 			if (wc->pmem_mode) {
-				bio_copy_block(wc, bio, memory_data(wc, e), false);
+				bio_copy_block(wc, bio, memory_data(wc, e));
 				if (bio->bi_iter.bi_size)
 					goto next_block;
 				goto unlock_ok;
@@ -842,7 +848,7 @@ next_block:
 			writecache_insert_entry(wc, e);
 bio_copy:
 			if (wc->pmem_mode) {
-				bio_copy_block(wc, bio, memory_data(wc, e), true);
+				bio_copy_block(wc, bio, memory_data(wc, e));
 			} else {
 				dm_accept_partial_bio(bio, wc->block_size >> SECTOR_SHIFT);
 				bio->bi_bdev = wc->ssd_dev->bdev;
@@ -1052,6 +1058,8 @@ static bool wc_add_block(struct writeback_struct *wb, struct wc_entry *e, gfp_t 
 #ifndef COPY_TO_PAGES_BEFORE_WRITING
 	void *address = memory_data(wb->wc, e);
 	persistent_memory_flush_cache(address, block_size);
+	// FIXME: what happened to persistent_memory_{page(),page_offset()}?
+	// this just stubbed out as wishful thinking on the interface?
 	return bio_add_page(&wb->bio, persistent_memory_page(address),
 			    block_size, persistent_memory_page_offset(address)) != 0;
 #else
