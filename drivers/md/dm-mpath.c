@@ -69,9 +69,9 @@ struct multipath_paths {
 	struct list_head priority_groups;
 
 	unsigned nr_valid_paths;	/* Total number of usable paths */
-	struct pgpath *current_pgpath;
-	struct priority_group *current_pg;
-	struct priority_group *next_pg;	/* Switch to this PG if set */
+	struct pgpath __rcu *current_pgpath;
+	struct priority_group __rcu *current_pg;
+	struct priority_group __rcu *next_pg;	/* Switch to this PG if set */
 
 	bool queue_io:1;		/* Must we queue all I/O? */
 	bool queue_if_no_path:1;	/* Queue I/O if last path fails? */
@@ -96,7 +96,7 @@ struct multipath {
 	unsigned pg_init_count;		/* Number of times pg_init called */
 	unsigned pg_init_delay_msecs;	/* Number of msecs before pg_init retry */
 
-	struct multipath_paths *paths;
+	struct multipath_paths __rcu *paths;
 
 	wait_queue_head_t pg_init_wait;	/* Wait for pg_init completion */
 
@@ -192,6 +192,7 @@ static void free_priority_group(struct priority_group *pg,
 static struct multipath *alloc_multipath(struct dm_target *ti, bool use_blk_mq)
 {
 	struct multipath *m;
+	struct multipath_paths *paths;
 
 	m = kzalloc(sizeof(*m), GFP_KERNEL);
 	if (m) {
@@ -201,11 +202,12 @@ static struct multipath *alloc_multipath(struct dm_target *ti, bool use_blk_mq)
 		init_waitqueue_head(&m->pg_init_wait);
 		mutex_init(&m->work_mutex);
 
-		m->paths = kzalloc(sizeof(struct multipath_paths), GFP_KERNEL);
-		if (!m->paths)
+		paths = kzalloc(sizeof(struct multipath_paths), GFP_KERNEL);
+		if (!paths)
 			goto out_paths;
-		m->paths->queue_io = true;
-		INIT_LIST_HEAD(&m->paths->priority_groups);
+		paths->queue_io = true;
+		INIT_LIST_HEAD(&paths->priority_groups);
+		rcu_assign_pointer(m->paths, paths);
 
 		if (percpu_counter_init(&m->repeat_count, 0, GFP_KERNEL))
 			goto out_percpu_cnt;
@@ -228,7 +230,7 @@ static struct multipath *alloc_multipath(struct dm_target *ti, bool use_blk_mq)
 out_mpio_pool:
 	percpu_counter_destroy(&m->repeat_count);
 out_percpu_cnt:
-	kfree(m->paths);
+	kfree(paths);
 out_paths:
 	kfree(m);
 	return NULL;
@@ -237,8 +239,9 @@ out_paths:
 static void free_multipath(struct multipath *m)
 {
 	struct priority_group *pg, *tmp;
+	struct multipath_paths *paths = rcu_dereference(m->paths);
 
-	list_for_each_entry_safe(pg, tmp, &m->paths->priority_groups, list) {
+	list_for_each_entry_safe(pg, tmp, &paths->priority_groups, list) {
 		list_del(&pg->list);
 		free_priority_group(pg, m->ti);
 	}
@@ -247,7 +250,7 @@ static void free_multipath(struct multipath *m)
 	kfree(m->hw_handler_params);
 	mempool_destroy(m->mpio_pool);
 	percpu_counter_destroy(&m->repeat_count);
-	kfree(m->paths);
+	kfree(paths);
 	kfree(m);
 }
 
@@ -659,6 +662,7 @@ static struct pgpath *parse_path(struct dm_arg_set *as, struct path_selector *ps
 	int r;
 	struct pgpath *p;
 	struct multipath *m = ti->private;
+	struct multipath_paths *paths;
 	struct request_queue *q = NULL;
 	const char *attached_handler_name;
 
@@ -679,10 +683,11 @@ static struct pgpath *parse_path(struct dm_arg_set *as, struct path_selector *ps
 		goto bad;
 	}
 
-	if (m->paths->retain_attached_hw_handler || m->hw_handler_name)
+	paths = rcu_dereference(m->paths);
+	if (paths->retain_attached_hw_handler || m->hw_handler_name)
 		q = bdev_get_queue(p->path.dev->bdev);
 
-	if (m->paths->retain_attached_hw_handler) {
+	if (paths->retain_attached_hw_handler) {
 retain:
 		attached_handler_name = scsi_dh_attached_handler_name(q, GFP_KERNEL);
 		if (attached_handler_name) {
@@ -887,7 +892,9 @@ static int parse_features(struct dm_arg_set *as, struct multipath *m)
 		}
 
 		if (!strcasecmp(arg_name, "retain_attached_hw_handler")) {
-			m->paths->retain_attached_hw_handler = true;
+			struct multipath_paths *paths = rcu_dereference(m->paths);
+
+			paths->retain_attached_hw_handler = true;
 			continue;
 		}
 
@@ -923,6 +930,7 @@ static int multipath_ctr(struct dm_target *ti, unsigned int argc,
 
 	int r;
 	struct multipath *m;
+	struct multipath_paths *paths;
 	struct dm_arg_set as;
 	unsigned pg_count = 0;
 	unsigned next_pg_num;
@@ -945,7 +953,8 @@ static int multipath_ctr(struct dm_target *ti, unsigned int argc,
 	if (r)
 		goto bad;
 
-	r = dm_read_arg(_args, &as, &m->paths->nr_priority_groups, &ti->error);
+	paths = rcu_dereference(m->paths);
+	r = dm_read_arg(_args, &as, &paths->nr_priority_groups, &ti->error);
 	if (r)
 		goto bad;
 
@@ -953,8 +962,8 @@ static int multipath_ctr(struct dm_target *ti, unsigned int argc,
 	if (r)
 		goto bad;
 
-	if ((!m->paths->nr_priority_groups && next_pg_num) ||
-	    (m->paths->nr_priority_groups && !next_pg_num)) {
+	if ((!paths->nr_priority_groups && next_pg_num) ||
+	    (paths->nr_priority_groups && !next_pg_num)) {
 		ti->error = "invalid initial priority group";
 		r = -EINVAL;
 		goto bad;
@@ -970,15 +979,15 @@ static int multipath_ctr(struct dm_target *ti, unsigned int argc,
 			goto bad;
 		}
 
-		m->paths->nr_valid_paths += pg->nr_pgpaths;
-		list_add_tail(&pg->list, &m->paths->priority_groups);
+		paths->nr_valid_paths += pg->nr_pgpaths;
+		list_add_tail(&pg->list, &paths->priority_groups);
 		pg_count++;
 		pg->pg_num = pg_count;
 		if (!--next_pg_num)
-			m->paths->next_pg = pg;
+			rcu_assign_pointer(paths->next_pg, pg);
 	}
 
-	if (pg_count != m->paths->nr_priority_groups) {
+	if (pg_count != paths->nr_priority_groups) {
 		ti->error = "priority group count mismatch";
 		r = -EINVAL;
 		goto bad;
@@ -1235,6 +1244,7 @@ static int bypass_pg_num(struct multipath *m, const char *pgstr, bool bypassed)
 
 	if (!pgstr || (sscanf(pgstr, "%u%c", &pgnum, &dummy) != 1) || !pgnum ||
 	    (pgnum > paths->nr_priority_groups)) {
+		rcu_read_unlock();
 		DMWARN("invalid PG number supplied to bypass_pg");
 		return -EINVAL;
 	}
@@ -1527,14 +1537,14 @@ static void multipath_status(struct dm_target *ti, status_type_t type,
 		DMEMIT("%u ", (paths->queue_if_no_path ? 1 : 0) +
 			      (m->pg_init_retries > 0) * 2 +
 			      (m->pg_init_delay_msecs != DM_PG_INIT_DELAY_DEFAULT) * 2 +
-			      (m->paths->retain_attached_hw_handler ? 1 : 0));
+			      (paths->retain_attached_hw_handler ? 1 : 0));
 		if (paths->queue_if_no_path)
 			DMEMIT("queue_if_no_path ");
 		if (m->pg_init_retries)
 			DMEMIT("pg_init_retries %u ", m->pg_init_retries);
 		if (m->pg_init_delay_msecs != DM_PG_INIT_DELAY_DEFAULT)
 			DMEMIT("pg_init_delay_msecs %u ", m->pg_init_delay_msecs);
-		if (m->paths->retain_attached_hw_handler)
+		if (paths->retain_attached_hw_handler)
 			DMEMIT("retain_attached_hw_handler ");
 	}
 
