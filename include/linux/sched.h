@@ -128,7 +128,7 @@ struct sched_attr {
 
 struct futex_pi_state;
 struct robust_list_head;
-struct bio_list;
+struct recursion_to_iteration_bio_lists;
 struct fs_struct;
 struct perf_event_context;
 struct blk_plug;
@@ -1727,7 +1727,7 @@ struct task_struct {
 	void *journal_info;
 
 /* stacked block device info */
-	struct bio_list *bio_list;
+	struct recursion_to_iteration_bio_lists *bio_lists;
 
 #ifdef CONFIG_BLOCK
 /* stack plugging */

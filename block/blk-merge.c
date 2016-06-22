@@ -172,6 +172,7 @@ void blk_queue_split(struct request_queue *q, struct bio **bio,
 	struct bio *split, *res;
 	unsigned nsegs;
 
+	BUG_ON(!current->bio_lists);
 	if (bio_op(*bio) == REQ_OP_DISCARD)
 		split = blk_bio_discard_split(q, *bio, bs, &nsegs);
 	else if (bio_op(*bio) == REQ_OP_WRITE_SAME)
@@ -190,7 +191,7 @@ void blk_queue_split(struct request_queue *q, struct bio **bio,
 
 		bio_chain(split, *bio);
 		trace_block_split(q, split, (*bio)->bi_iter.bi_sector);
-		generic_make_request(*bio);
+		bio_list_add_head(&current->bio_lists->remainder, *bio);
 		*bio = split;
 	}
 }

@@ -450,7 +450,7 @@ void __bch_btree_node_write(struct btree *b, struct closure *parent)
 
 	trace_bcache_btree_write(b);
 
-	BUG_ON(current->bio_list);
+	BUG_ON(current->bio_lists);
 	BUG_ON(b->written >= btree_blocks(b));
 	BUG_ON(b->written && !i->keys);
 	BUG_ON(btree_bset_first(b)->seq != i->seq);
@@ -544,7 +544,7 @@ static void bch_btree_leaf_dirty(struct btree *b, atomic_t *journal_ref)
 
 	/* Force write if set is too big */
 	if (set_bytes(i) > PAGE_SIZE - 48 &&
-	    !current->bio_list)
+	    !current->bio_lists)
 		bch_btree_node_write(b, NULL);
 }
 
@@ -889,7 +889,7 @@ static struct btree *mca_alloc(struct cache_set *c, struct btree_op *op,
 {
 	struct btree *b;
 
-	BUG_ON(current->bio_list);
+	BUG_ON(current->bio_lists);
 
 	lockdep_assert_held(&c->bucket_lock);
 
@@ -976,7 +976,7 @@ retry:
 	b = mca_find(c, k);
 
 	if (!b) {
-		if (current->bio_list)
+		if (current->bio_lists)
 			return ERR_PTR(-EAGAIN);
 
 		mutex_lock(&c->bucket_lock);
@@ -2127,7 +2127,7 @@ static int bch_btree_insert_node(struct btree *b, struct btree_op *op,
 
 	return 0;
 split:
-	if (current->bio_list) {
+	if (current->bio_lists) {
 		op->lock = b->c->root->level + 1;
 		return -EAGAIN;
 	} else if (op->lock <= b->c->root->level) {
@@ -2209,7 +2209,7 @@ int bch_btree_insert(struct cache_set *c, struct keylist *keys,
 	struct btree_insert_op op;
 	int ret = 0;
 
-	BUG_ON(current->bio_list);
+	BUG_ON(current->bio_lists);
 	BUG_ON(bch_keylist_empty(keys));
 
 	bch_btree_op_init(&op.op, 0);

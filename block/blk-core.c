@@ -2040,7 +2040,7 @@ end_io:
  */
 blk_qc_t generic_make_request(struct bio *bio)
 {
-	struct bio_list bio_list_on_stack;
+	struct recursion_to_iteration_bio_lists bio_lists_on_stack;
 	blk_qc_t ret = BLK_QC_T_NONE;
 
 	if (!generic_make_request_checks(bio))
@@ -2049,15 +2049,18 @@ blk_qc_t generic_make_request(struct bio *bio)
 	/*
 	 * We only want one ->make_request_fn to be active at a time, else
 	 * stack usage with stacked devices could be a problem.  So use
-	 * current->bio_list to keep a list of requests submited by a
-	 * make_request_fn function.  current->bio_list is also used as a
+	 * current->bio_lists to keep a list of requests submited by a
+	 * make_request_fn function.  current->bio_lists is also used as a
 	 * flag to say if generic_make_request is currently active in this
 	 * task or not.  If it is NULL, then no make_request is active.  If
 	 * it is non-NULL, then a make_request is active, and new requests
-	 * should be added at the tail
+	 * should be added at the tail of current->bio_lists->recursion;
+	 * remainder bios resulting from a call to bio_queue_split() from
+	 * within ->make_request_fn() should be added to the head of
+	 * current->bio_lists->remainder.
 	 */
-	if (current->bio_list) {
-		bio_list_add(current->bio_list, bio);
+	if (current->bio_lists) {
+		bio_list_add(&current->bio_lists->recursion, bio);
 		goto out;
 	}
 
@@ -2066,7 +2069,7 @@ blk_qc_t generic_make_request(struct bio *bio)
 	 * Before entering the loop, bio->bi_next is NULL (as all callers
 	 * ensure that) so we have a list with a single bio.
 	 * We pretend that we have just taken it off a longer list, so
-	 * we assign bio_list to a pointer to the bio_list_on_stack,
+	 * we assign bio_list to a pointer to the bio_lists_on_stack,
 	 * thus initialising the bio_list of new bios to be
 	 * added.  ->make_request() may indeed add some more bios
 	 * through a recursive call to generic_make_request.  If it
@@ -2076,8 +2079,9 @@ blk_qc_t generic_make_request(struct bio *bio)
 	 * bio_list, and call into ->make_request() again.
 	 */
 	BUG_ON(bio->bi_next);
-	bio_list_init(&bio_list_on_stack);
-	current->bio_list = &bio_list_on_stack;
+	bio_list_init(&bio_lists_on_stack.recursion);
+	bio_list_init(&bio_lists_on_stack.remainder);
+	current->bio_lists = &bio_lists_on_stack;
 	do {
 		struct request_queue *q = bdev_get_queue(bio->bi_bdev);
 
@@ -2085,16 +2089,14 @@ blk_qc_t generic_make_request(struct bio *bio)
 			ret = q->make_request_fn(q, bio);
 
 			blk_queue_exit(q);
-
-			bio = bio_list_pop(current->bio_list);
 		} else {
-			struct bio *bio_next = bio_list_pop(current->bio_list);
-
 			bio_io_error(bio);
-			bio = bio_next;
 		}
+		bio = bio_list_pop(&current->bio_lists->recursion);
+		if (!bio)
+			bio = bio_list_pop(&current->bio_lists->remainder);
 	} while (bio);
-	current->bio_list = NULL; /* deactivate */
+	current->bio_lists = NULL; /* deactivate */
 
 out:
 	return ret;

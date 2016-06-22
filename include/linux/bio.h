@@ -541,6 +541,17 @@ struct bio_list {
 	struct bio *tail;
 };
 
+/* for generic_make_request() */
+struct recursion_to_iteration_bio_lists {
+	/* For stacking drivers submitting to their respective backend.
+	 * Added to tail, processed in FIFO order. */
+	struct bio_list recursion;
+	/* For pushing back the "remainder" part resulting from calling
+	 * blk_queue_split(). Added to head, processed in LIFO order,
+	 * once the "recursion" list has been drained. */
+	struct bio_list remainder;
+};
+
 static inline int bio_list_empty(const struct bio_list *bl)
 {
 	return bl->head == NULL;

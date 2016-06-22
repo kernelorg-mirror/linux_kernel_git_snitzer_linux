@@ -664,6 +664,13 @@ static inline void rdev_dec_pending(struct md_rdev *rdev, struct mddev *mddev)
 	}
 }
 
+static inline bool current_has_pending_bios(void)
+{
+	return current->bio_lists && (
+	      !bio_list_empty(&current->bio_lists->recursion) ||
+	      !bio_list_empty(&current->bio_lists->remainder));
+}
+
 extern struct md_cluster_operations *md_cluster_ops;
 static inline int mddev_is_clustered(struct mddev *mddev)
 {
