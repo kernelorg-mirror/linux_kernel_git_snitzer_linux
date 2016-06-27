@@ -34,26 +34,29 @@ struct wc_pmem_holder {
 };
 
 static int persistent_memory_claim(struct dm_target *ti, const char *name,
-				   struct wc_pmem_holder *pmem_holder, void **addr, uint64_t *size)
+				   struct wc_pmem_holder *pmem_holder, void __pmem **addr, uint64_t *size)
 {
 	int r;
-	loff_t s;
 	long da;
-	unsigned long pfn;
+	struct blk_dax_ctl dax;
 
 	r = dm_get_device(ti, name, FMODE_READ | FMODE_WRITE, &pmem_holder->dev);
 	if (unlikely(r))
 		return r;
-	s = i_size_read(pmem_holder->dev->bdev->bd_inode);
-	da = bdev_direct_access(pmem_holder->dev->bdev, 0, addr, &pfn, s);
+
+	dax.sector = 0;
+	dax.size = i_size_read(pmem_holder->dev->bdev->bd_inode);
+
+	da = bdev_direct_access(pmem_holder->dev->bdev, &dax);
 	if (da < 0) {
 		dm_put_device(ti, pmem_holder->dev);
 		return da;
 	}
-	if (da != s) {
+	if (da != dax.size) {
 		dm_put_device(ti, pmem_holder->dev);
 		return -EINVAL;
 	}
+	*addr = dax.addr;
 	*size = da;
 	return 0;
 }
@@ -257,7 +260,7 @@ struct io_notify {
 	atomic_t count;
 };
 
-void writecache_notify_io(unsigned long error, void *context)
+static void writecache_notify_io(unsigned long error, void *context)
 {
 	struct io_notify *endio = context;
 
@@ -298,7 +301,7 @@ static void ssd_commit_flushed(struct dm_writecache *wc)
 			region.count = wc->metadata_sectors - region.sector;
 
 		atomic_inc(&endio.count);
-		req.bi_rw = WRITE;
+		req.bi_op = WRITE;
 		req.mem.type = DM_IO_VMA;
 		req.mem.ptr.vma = (char *)wc->memory_map + (size_t)i * BITMAP_GRANULARITY;
 		req.client = wc->dm_io;
@@ -341,7 +344,7 @@ static void writecache_disk_flush(struct dm_writecache *wc, struct dm_dev *dev)
 	region.bdev = dev->bdev;
 	region.sector = 0;
 	region.count = 0;
-	req.bi_rw = WRITE_FLUSH;
+	req.bi_op = WRITE_FLUSH;
 	req.mem.type = DM_IO_KMEM;
 	req.mem.ptr.addr = NULL;
 	req.client = wc->dm_io;
@@ -433,7 +436,7 @@ static void writecache_add_to_freelist(struct dm_writecache *wc, struct wc_entry
 	wc->freelist_size++;
 }
 
-struct wc_entry *writecache_pop_from_freelist(struct dm_writecache *wc)
+static struct wc_entry *writecache_pop_from_freelist(struct dm_writecache *wc)
 {
 	struct wc_entry *e;
 
@@ -565,6 +568,7 @@ static void writecache_discard(struct dm_writecache *wc, sector_t start, sector_
 
 		if (likely(!e->write_in_progress)) {
 			if (!discarded_something) {
+				// FIXME: OP?
 				writecache_wait_for_ios(wc, READ);
 				writecache_wait_for_ios(wc, WRITE);
 				discarded_something = true;
@@ -772,7 +776,7 @@ static int writecache_map(struct dm_target *ti, struct bio *bio)
 
 	mutex_lock(&wc->lock);
 
-	if (unlikely(bio->bi_rw & REQ_FLUSH)) {
+	if (unlikely(bio->bi_rw & REQ_PREFLUSH)) {
 		if (unlikely(wc->error))
 			goto unlock_error;
 		writecache_flush(wc);
@@ -789,7 +793,7 @@ static int writecache_map(struct dm_target *ti, struct bio *bio)
 		goto unlock_error;
 	}
 
-	if (unlikely(bio->bi_rw & REQ_DISCARD)) {
+	if (unlikely(bio_op(bio) == REQ_OP_DISCARD)) {
 		if (unlikely(wc->error))
 			goto unlock_error;
 		writecache_discard(wc, bio->bi_iter.bi_sector,
@@ -1136,7 +1140,8 @@ use_inline_list:
 			wb->wc_list[wb->wc_list_n++] = f;
 			e = f;
 		}
-		submit_bio(WRITE, &wb->bio);
+		bio_set_op_attrs(&wb->bio, REQ_OP_WRITE, 0);
+		submit_bio(&wb->bio);
 		cond_resched();
 
 		mutex_lock(&wc->lock);
@@ -1526,8 +1531,9 @@ static int writecache_ctr(struct dm_target *ti, unsigned argc, char **argv)
 			goto bad;
 		}
 
+		// FIXME: (void __pmem **) hack silences compiler warning but needs to be fixed properly
 		r = persistent_memory_claim(ti, wc->memory_name, &wc->pmem_holder,
-					    &wc->memory_map, &wc->memory_map_size);
+					    (void __pmem **)&wc->memory_map, &wc->memory_map_size);
 		if (r) {
 			ti->error = "Unable to map persistent memory for cache";
 			goto bad;
@@ -1638,7 +1644,7 @@ invalid_optional:
 		region.bdev = wc->ssd_dev->bdev;
 		region.sector = 0;
 		region.count = wc->metadata_sectors;
-		req.bi_rw = READ;
+		req.bi_op = REQ_OP_READ;
 		req.mem.type = DM_IO_VMA;
 		req.mem.ptr.vma = (char *)wc->memory_map;
 		req.client = wc->dm_io;
