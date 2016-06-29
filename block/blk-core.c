@@ -2041,6 +2041,7 @@ end_io:
 blk_qc_t generic_make_request(struct bio *bio)
 {
 	struct queued_bios queued_bios_on_stack;
+	struct queued_bios *queued_bios;
 	blk_qc_t ret = BLK_QC_T_NONE;
 
 	if (!generic_make_request_checks(bio))
@@ -2056,8 +2057,17 @@ blk_qc_t generic_make_request(struct bio *bio)
 	 * it is non-NULL, then a make_request is active, and new requests
 	 * should be added at the tail
 	 */
-	if (current->queued_bios) {
-		bio_list_add(&current->queued_bios->bio_list, bio);
+	queued_bios = current->queued_bios;
+	if (queued_bios) {
+		/*
+		 * The timer may modify queued_bios->bio_list.  So we must
+		 * stop the timer before modifying the list.
+		 */
+		if (queued_bios->timer.function != NULL) {
+			del_timer_sync(&queued_bios->timer);
+			queued_bios->timer.function = NULL;
+		}
+		bio_list_add(&queued_bios->bio_list, bio);
 		goto out;
 	}
 
@@ -2077,6 +2087,7 @@ blk_qc_t generic_make_request(struct bio *bio)
 	 */
 	BUG_ON(bio->bi_next);
 	bio_list_init(&queued_bios_on_stack.bio_list);
+	queued_bios_on_stack.timer.function = NULL;
 	current->queued_bios = &queued_bios_on_stack;
 	do {
 		struct request_queue *q = bdev_get_queue(bio->bi_bdev);
@@ -2092,6 +2103,10 @@ blk_qc_t generic_make_request(struct bio *bio)
 
 			bio_io_error(bio);
 			bio = bio_next;
+		}
+		if (unlikely(queued_bios_on_stack.timer.function != NULL)) {
+			del_timer_sync(&queued_bios_on_stack.timer);
+			queued_bios_on_stack.timer.function = NULL;
 		}
 	} while (bio);
 	current->queued_bios = NULL; /* deactivate */

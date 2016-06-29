@@ -336,11 +336,12 @@ static void bio_alloc_rescue(struct work_struct *work)
 {
 	struct bio_set *bs = container_of(work, struct bio_set, rescue_work);
 	struct bio *bio;
+	unsigned long flags;
 
 	while (1) {
-		spin_lock(&bs->rescue_lock);
+		spin_lock_irqsave(&bs->rescue_lock, flags);
 		bio = bio_list_pop(&bs->rescue_list);
-		spin_unlock(&bs->rescue_lock);
+		spin_unlock_irqrestore(&bs->rescue_lock, flags);
 
 		if (!bio)
 			break;
@@ -350,33 +351,54 @@ static void bio_alloc_rescue(struct work_struct *work)
 }
 
 /**
- * blk_flush_bio_list
- * @tsk: task_struct whose bio_list must be flushed
+ * blk_timer_flush_bio_list
  *
- * Pop bios queued on @tsk->bio_list and submit each of them to
- * their rescue workqueue.
+ * Pop bios queued on tsk->queued_bios->bio_list and submit each of them
+ * to their rescue workqueue.
  *
- * If the bio doesn't have a bio_set, we leave it on @tsk->bio_list.
+ * If the bio doesn't have a bio_set, we leave it on queued_bios->bio_list.
  * However, stacking drivers should use bio_set, so this shouldn't be
  * an issue.
  */
-void blk_flush_bio_list(struct task_struct *tsk)
+static void blk_timer_flush_bio_list(unsigned long data)
 {
+	struct queued_bios *queued_bios = (struct queued_bios *)data;
 	struct bio *bio;
-	struct bio_list list = tsk->queued_bios->bio_list;
-	bio_list_init(&tsk->queued_bios->bio_list);
+
+	struct bio_list list = queued_bios->bio_list;
+	bio_list_init(&queued_bios->bio_list);
 
 	while ((bio = bio_list_pop(&list))) {
+		unsigned long flags;
 		struct bio_set *bs = bio->bi_pool;
 		if (unlikely(!bs)) {
-			bio_list_add(&tsk->queued_bios->bio_list, bio);
+			bio_list_add(&queued_bios->bio_list, bio);
 			continue;
 		}
 
-		spin_lock(&bs->rescue_lock);
+		spin_lock_irqsave(&bs->rescue_lock, flags);
 		bio_list_add(&bs->rescue_list, bio);
 		queue_work(bs->rescue_workqueue, &bs->rescue_work);
-		spin_unlock(&bs->rescue_lock);
+		spin_unlock_irqrestore(&bs->rescue_lock, flags);
+	}
+}
+
+#define BIO_RESCUE_TIMEOUT	HZ
+
+/**
+ * blk_flush_bio_list
+ * @tsk: task_struct whose bio_list must be flushed
+ *
+ * This function sets up a timer that flushes the queued bios.
+ */
+void blk_flush_bio_list(struct task_struct *tsk)
+{
+	struct queued_bios *queued_bios = tsk->queued_bios;
+
+	if (queued_bios->timer.function == NULL) {
+		setup_timer(&queued_bios->timer, blk_timer_flush_bio_list,
+			    (unsigned long)queued_bios);
+		mod_timer(&queued_bios->timer, jiffies + BIO_RESCUE_TIMEOUT);
 	}
 }
 
