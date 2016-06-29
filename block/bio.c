@@ -363,13 +363,13 @@ static void bio_alloc_rescue(struct work_struct *work)
 void blk_flush_bio_list(struct task_struct *tsk)
 {
 	struct bio *bio;
-	struct bio_list list = *tsk->bio_list;
-	bio_list_init(tsk->bio_list);
+	struct bio_list list = tsk->queued_bios->bio_list;
+	bio_list_init(&tsk->queued_bios->bio_list);
 
 	while ((bio = bio_list_pop(&list))) {
 		struct bio_set *bs = bio->bi_pool;
 		if (unlikely(!bs)) {
-			bio_list_add(tsk->bio_list, bio);
+			bio_list_add(&tsk->queued_bios->bio_list, bio);
 			continue;
 		}
 

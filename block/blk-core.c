@@ -2040,7 +2040,7 @@ end_io:
  */
 blk_qc_t generic_make_request(struct bio *bio)
 {
-	struct bio_list bio_list_on_stack;
+	struct queued_bios queued_bios_on_stack;
 	blk_qc_t ret = BLK_QC_T_NONE;
 
 	if (!generic_make_request_checks(bio))
@@ -2056,8 +2056,8 @@ blk_qc_t generic_make_request(struct bio *bio)
 	 * it is non-NULL, then a make_request is active, and new requests
 	 * should be added at the tail
 	 */
-	if (current->bio_list) {
-		bio_list_add(current->bio_list, bio);
+	if (current->queued_bios) {
+		bio_list_add(&current->queued_bios->bio_list, bio);
 		goto out;
 	}
 
@@ -2076,8 +2076,8 @@ blk_qc_t generic_make_request(struct bio *bio)
 	 * bio_list, and call into ->make_request() again.
 	 */
 	BUG_ON(bio->bi_next);
-	bio_list_init(&bio_list_on_stack);
-	current->bio_list = &bio_list_on_stack;
+	bio_list_init(&queued_bios_on_stack.bio_list);
+	current->queued_bios = &queued_bios_on_stack;
 	do {
 		struct request_queue *q = bdev_get_queue(bio->bi_bdev);
 
@@ -2086,15 +2086,15 @@ blk_qc_t generic_make_request(struct bio *bio)
 
 			blk_queue_exit(q);
 
-			bio = bio_list_pop(current->bio_list);
+			bio = bio_list_pop(&current->queued_bios->bio_list);
 		} else {
-			struct bio *bio_next = bio_list_pop(current->bio_list);
+			struct bio *bio_next = bio_list_pop(&current->queued_bios->bio_list);
 
 			bio_io_error(bio);
 			bio = bio_next;
 		}
 	} while (bio);
-	current->bio_list = NULL; /* deactivate */
+	current->queued_bios = NULL; /* deactivate */
 
 out:
 	return ret;

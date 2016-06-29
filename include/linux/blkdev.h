@@ -1132,6 +1132,11 @@ static inline bool blk_needs_flush_plug(struct task_struct *tsk)
 		 !list_empty(&plug->cb_list));
 }
 
+struct queued_bios {
+	struct bio_list bio_list;
+	struct timer_list timer;
+};
+
 extern void blk_flush_bio_list(struct task_struct *tsk);
 
 static inline void blk_flush_queued_io(struct task_struct *tsk)
@@ -1139,7 +1144,7 @@ static inline void blk_flush_queued_io(struct task_struct *tsk)
 	/*
 	 * Flush any queued bios to corresponding rescue threads.
 	 */
-	if (tsk->bio_list && !bio_list_empty(tsk->bio_list))
+	if (tsk->queued_bios && !bio_list_empty(&tsk->queued_bios->bio_list))
 		blk_flush_bio_list(tsk);
 	/*
 	 * Flush any plugged IO that is queued.

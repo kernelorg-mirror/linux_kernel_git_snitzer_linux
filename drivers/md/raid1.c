@@ -876,8 +876,8 @@ static sector_t wait_barrier(struct r1conf *conf, struct bio *bio)
 				    (!conf->barrier ||
 				     ((conf->start_next_window <
 				       conf->next_resync + RESYNC_SECTORS) &&
-				      current->bio_list &&
-				      !bio_list_empty(current->bio_list))),
+				      current->queued_bios &&
+				      !bio_list_empty(&current->queued_bios->bio_list))),
 				    conf->resync_lock);
 		conf->nr_waiting--;
 	}
@@ -1014,7 +1014,7 @@ static void raid1_unplug(struct blk_plug_cb *cb, bool from_schedule)
 	struct r1conf *conf = mddev->private;
 	struct bio *bio;
 
-	if (from_schedule || current->bio_list) {
+	if (from_schedule || current->queued_bios) {
 		spin_lock_irq(&conf->device_lock);
 		bio_list_merge(&conf->pending_bio_list, &plug->pending);
 		conf->pending_count += plug->pending_cnt;
