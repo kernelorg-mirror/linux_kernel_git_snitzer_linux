@@ -366,18 +366,29 @@ static void punt_bios_to_rescuer(struct bio_set *bs)
 	 */
 
 	bio_list_init(&punt);
-	bio_list_init(&nopunt);
 
+	bio_list_init(&nopunt);
 	while ((bio = bio_list_pop(&current->bio_lists->recursion)))
 		bio_list_add(bio->bi_pool == bs ? &punt : &nopunt, bio);
-
 	current->bio_lists->recursion = nopunt;
+
+	bio_list_init(&nopunt);
+	while ((bio = bio_list_pop(&current->bio_lists->remainder)))
+		bio_list_add(bio->bi_pool == bs ? &punt : &nopunt, bio);
+	current->bio_lists->remainder = nopunt;
 
 	spin_lock(&bs->rescue_lock);
 	bio_list_merge(&bs->rescue_list, &punt);
 	spin_unlock(&bs->rescue_lock);
 
 	queue_work(bs->rescue_workqueue, &bs->rescue_work);
+}
+
+static bool current_has_pending_bios(void)
+{
+	return current->bio_lists &&
+		(!bio_list_empty(&current->bio_lists->recursion) ||
+		 !bio_list_empty(&current->bio_lists->remainder));
 }
 
 /**
@@ -459,7 +470,7 @@ struct bio *bio_alloc_bioset(gfp_t gfp_mask, int nr_iovecs, struct bio_set *bs)
 		 * workqueue before we retry with the original gfp_flags.
 		 */
 
-		if (current->bio_lists && !bio_list_empty(&current->bio_lists->recursion))
+		if (current_has_pending_bios())
 			gfp_mask &= ~__GFP_DIRECT_RECLAIM;
 
 		p = mempool_alloc(bs->bio_pool, gfp_mask);

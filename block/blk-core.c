@@ -2079,22 +2079,22 @@ blk_qc_t generic_make_request(struct bio *bio)
 	 * bio_list, and call into ->make_request() again.
 	 */
 	BUG_ON(bio->bi_next);
-	bio_list_init(&bio_lists_on_stack.recursion);
 	bio_list_init(&bio_lists_on_stack.remainder);
 	current->bio_lists = &bio_lists_on_stack;
 	do {
 		struct request_queue *q = bdev_get_queue(bio->bi_bdev);
 
 		if (likely(blk_queue_enter(q, false) == 0)) {
+			bio_list_init(&bio_lists_on_stack.recursion);
 			ret = q->make_request_fn(q, bio);
-
 			blk_queue_exit(q);
+			bio_list_merge_head(&bio_lists_on_stack.remainder,
+					&bio_lists_on_stack.recursion);
+			/* XXX bio_list_init(&bio_lists_on_stack.recursion); */
 		} else {
 			bio_io_error(bio);
 		}
-		bio = bio_list_pop(&current->bio_lists->recursion);
-		if (!bio)
-			bio = bio_list_pop(&current->bio_lists->remainder);
+		bio = bio_list_pop(&current->bio_lists->remainder);
 	} while (bio);
 	current->bio_lists = NULL; /* deactivate */
 
