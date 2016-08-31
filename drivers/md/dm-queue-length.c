@@ -199,11 +199,12 @@ static struct dm_path *ql_select_path(struct path_selector *ps, size_t nr_bytes)
 	list_move_tail(s->valid_paths.next, &s->valid_paths);
 
 	list_for_each_entry(pi, &s->valid_paths, list) {
-		if (!best ||
-		    (atomic_read(&pi->qlen) < atomic_read(&best->qlen)))
+		if ((!best ||
+		     atomic_read(&pi->qlen) < atomic_read(&best->qlen)) &&
+		    !blk_queue_dying(pi->path->dev->bdev->bd_queue))
 			best = pi;
 
-		if (!atomic_read(&best->qlen))
+		if (best && atomic_read(&best->qlen) == 0)
 			break;
 	}
 
