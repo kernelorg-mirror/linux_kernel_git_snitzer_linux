@@ -78,7 +78,6 @@ void dm_start_queue(struct request_queue *q)
 	if (!q->mq_ops)
 		dm_old_start_queue(q);
 	else {
-		queue_flag_clear_unlocked(QUEUE_FLAG_STOPPED, q);
 		blk_mq_start_stopped_hw_queues(q, true);
 		blk_mq_kick_requeue_list(q);
 	}
@@ -98,13 +97,13 @@ void dm_stop_queue(struct request_queue *q)
 {
 	if (!q->mq_ops)
 		dm_old_stop_queue(q);
-	else {
-		spin_lock_irq(q->queue_lock);
-		queue_flag_set(QUEUE_FLAG_STOPPED, q);
-		spin_unlock_irq(q->queue_lock);
-
+	else if (!blk_mq_queue_stopped(q)) {
+		/* Wait until dm_mq_queue_rq() has finished. */
+		blk_mq_freeze_queue(q);
+		/* Avoid that requeuing could restart the queue. */
 		blk_mq_cancel_requeue_work(q);
 		blk_mq_stop_hw_queues(q);
+		blk_mq_unfreeze_queue(q);
 	}
 }
 
@@ -318,13 +317,10 @@ static void dm_old_requeue_request(struct request *rq)
 static void dm_mq_requeue_request(struct request *rq)
 {
 	struct request_queue *q = rq->q;
-	unsigned long flags;
 
 	blk_mq_requeue_request(rq);
-	spin_lock_irqsave(q->queue_lock, flags);
-	if (!blk_queue_stopped(q))
-		blk_mq_kick_requeue_list(q);
-	spin_unlock_irqrestore(q->queue_lock, flags);
+	WARN_ON_ONCE(blk_mq_queue_stopped(q));
+	blk_mq_kick_requeue_list(q);
 }
 
 static void dm_requeue_original_request(struct mapped_device *md,
@@ -866,17 +862,6 @@ static int dm_mq_queue_rq(struct blk_mq_hw_ctx *hctx,
 		ti = dm_table_find_target(map, 0);
 		dm_put_live_table(md, srcu_idx);
 	}
-
-	/*
-	 * On suspend dm_stop_queue() handles stopping the blk-mq
-	 * request_queue BUT: even though the hw_queues are marked
-	 * BLK_MQ_S_STOPPED at that point there is still a race that
-	 * is allowing block/blk-mq.c to call ->queue_rq against a
-	 * hctx that it really shouldn't.  The following check guards
-	 * against this rarity (albeit _not_ race-free).
-	 */
-	if (unlikely(test_bit(BLK_MQ_S_STOPPED, &hctx->state)))
-		return BLK_MQ_RQ_QUEUE_BUSY;
 
 	if (ti->type->busy && ti->type->busy(ti))
 		return BLK_MQ_RQ_QUEUE_BUSY;
