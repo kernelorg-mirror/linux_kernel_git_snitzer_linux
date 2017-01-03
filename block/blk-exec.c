@@ -101,15 +101,8 @@ int blk_execute_rq(struct request_queue *q, struct gendisk *bd_disk,
 		   struct request *rq, int at_head)
 {
 	DECLARE_COMPLETION_ONSTACK(wait);
-	char sense[SCSI_SENSE_BUFFERSIZE];
 	int err = 0;
 	unsigned long hang_check;
-
-	if (!rq->sense) {
-		memset(sense, 0, sizeof(sense));
-		rq->sense = sense;
-		rq->sense_len = 0;
-	}
 
 	rq->end_io_data = &wait;
 	blk_execute_rq_nowait(q, bd_disk, rq, at_head, blk_end_sync_rq);
@@ -123,11 +116,6 @@ int blk_execute_rq(struct request_queue *q, struct gendisk *bd_disk,
 
 	if (rq->errors)
 		err = -EIO;
-
-	if (rq->sense == sense)	{
-		rq->sense = NULL;
-		rq->sense_len = 0;
-	}
 
 	return err;
 }

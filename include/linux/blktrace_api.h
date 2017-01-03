@@ -112,9 +112,10 @@ struct compat_blk_user_trace_setup {
 
 #if defined(CONFIG_EVENT_TRACING) && defined(CONFIG_BLOCK)
 
+int scsi_cmd_buf_len(struct request *rq);
 static inline int blk_cmd_buf_len(struct request *rq)
 {
-	return (rq->cmd_type == REQ_TYPE_BLOCK_PC) ? rq->cmd_len * 3 : 1;
+	return (rq->cmd_type == REQ_TYPE_BLOCK_PC) ? scsi_cmd_buf_len(rq) : 1;
 }
 
 extern void blk_dump_cmd(char *buf, struct request *rq);

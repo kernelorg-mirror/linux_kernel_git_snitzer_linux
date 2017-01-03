@@ -27,6 +27,7 @@
 #include <linux/time.h>
 #include <linux/uaccess.h>
 #include <linux/list.h>
+#include <scsi/scsi_request.h>
 
 #include <trace/events/block.h>
 
@@ -715,7 +716,8 @@ static void blk_add_trace_rq(struct request_queue *q, struct request *rq,
 	if (rq->cmd_type == REQ_TYPE_BLOCK_PC) {
 		what |= BLK_TC_ACT(BLK_TC_PC);
 		__blk_add_trace(bt, 0, nr_bytes, req_op(rq), rq->cmd_flags,
-				what, rq->errors, rq->cmd_len, rq->cmd);
+				what, rq->errors,
+				scsi_req(rq)->cmd_len, scsi_req(rq)->cmd);
 	} else  {
 		what |= BLK_TC_ACT(BLK_TC_FS);
 		__blk_add_trace(bt, blk_rq_pos(rq), nr_bytes, req_op(rq),
@@ -1751,30 +1753,30 @@ void blk_trace_remove_sysfs(struct device *dev)
 #endif /* CONFIG_BLK_DEV_IO_TRACE */
 
 #ifdef CONFIG_EVENT_TRACING
-
-void blk_dump_cmd(char *buf, struct request *rq)
+static void blk_dump_scsi_cmd(char *buf, struct scsi_request *req)
 {
 	int i, end;
-	int len = rq->cmd_len;
-	unsigned char *cmd = rq->cmd;
 
-	if (rq->cmd_type != REQ_TYPE_BLOCK_PC) {
-		buf[0] = '\0';
-		return;
-	}
-
-	for (end = len - 1; end >= 0; end--)
-		if (cmd[end])
+	for (end = req->cmd_len - 1; end >= 0; end--)
+		if (req->cmd[end])
 			break;
 	end++;
 
-	for (i = 0; i < len; i++) {
-		buf += sprintf(buf, "%s%02x", i == 0 ? "" : " ", cmd[i]);
-		if (i == end && end != len - 1) {
+	for (i = 0; i < req->cmd_len; i++) {
+		buf += sprintf(buf, "%s%02x", i == 0 ? "" : " ", req->cmd[i]);
+		if (i == end && end != req->cmd_len - 1) {
 			sprintf(buf, " ..");
 			break;
 		}
 	}
+}
+
+void blk_dump_cmd(char *buf, struct request *rq)
+{
+	if (rq->cmd_type == REQ_TYPE_BLOCK_PC)
+		blk_dump_scsi_cmd(buf, scsi_req(rq));
+	else
+		buf[0] = '\0';
 }
 
 void blk_fill_rwbs(char *rwbs, unsigned int op, int bytes)
