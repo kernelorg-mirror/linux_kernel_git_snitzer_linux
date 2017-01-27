@@ -2500,7 +2500,6 @@ struct dm_md_mempools *dm_alloc_md_mempools(struct mapped_device *md, unsigned t
 	case DM_TYPE_DAX_BIO_BASED:
 		pool_size = dm_get_reserved_bio_based_ios();
 		front_pad = roundup(per_io_data_size, __alignof__(struct dm_target_io)) + offsetof(struct dm_target_io, clone);
-	
 		pools->io_pool = mempool_create_slab_pool(pool_size, _io_cache);
 		if (!pools->io_pool)
 			goto out;

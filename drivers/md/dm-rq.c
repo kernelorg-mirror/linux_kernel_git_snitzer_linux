@@ -163,6 +163,7 @@ static void end_clone_bio(struct bio *clone)
 
 static struct dm_rq_target_io *tio_from_request(struct request *rq)
 {
+	// FIXME: verify that blk_mq pdu access works for old request_fn stuff
 	return blk_mq_rq_to_pdu(rq);
 }
 
@@ -446,6 +447,7 @@ static void init_tio(struct dm_rq_target_io *tio, struct request *rq,
 	tio->orig = rq;
 	tio->error = 0;
 	/*
+	 * FIXME: fix comment -- old request has this now too
 	 * Avoid initializing info for blk-mq; it passes
 	 * target-specific data through info.ptr
 	 * (see: dm_mq_init_request)

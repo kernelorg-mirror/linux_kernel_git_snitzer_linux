@@ -116,7 +116,7 @@ struct request *blk_mq_sched_get_request(struct request_queue *q,
 	ctx = blk_mq_get_ctx(q);
 	hctx = blk_mq_map_queue(q, ctx->cpu);
 
-	blk_mq_set_alloc_data(data, q, 0, ctx, hctx);
+	blk_mq_set_alloc_data(data, q, data->flags, ctx, hctx);
 
 	if (e) {
 		data->flags |= BLK_MQ_REQ_INTERNAL;
@@ -133,7 +133,8 @@ struct request *blk_mq_sched_get_request(struct request_queue *q,
 			rq = __blk_mq_alloc_request(data, op);
 	} else {
 		rq = __blk_mq_alloc_request(data, op);
-		data->hctx->tags->rqs[rq->tag] = rq;
+		if (rq)
+			data->hctx->tags->rqs[rq->tag] = rq;
 	}
 
 	if (rq) {
@@ -199,15 +200,22 @@ void blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 	 * leave them there for as long as we can. Mark the hw queue as
 	 * needing a restart in that case.
 	 */
-	if (list_empty(&rq_list)) {
-		if (e && e->type->ops.mq.dispatch_requests)
-			e->type->ops.mq.dispatch_requests(hctx, &rq_list);
-		else
-			blk_mq_flush_busy_ctxs(hctx, &rq_list);
-	} else
+	if (!list_empty(&rq_list)) {
 		blk_mq_sched_mark_restart(hctx);
+		blk_mq_dispatch_rq_list(hctx, &rq_list);
+	} else if (!e || !e->type->ops.mq.dispatch_request) {
+		blk_mq_flush_busy_ctxs(hctx, &rq_list);
+		blk_mq_dispatch_rq_list(hctx, &rq_list);
+	} else {
+		do {
+			struct request *rq;
 
-	blk_mq_dispatch_rq_list(hctx, &rq_list);
+			rq = e->type->ops.mq.dispatch_request(hctx);
+			if (!rq)
+				break;
+			list_add(&rq->queuelist, &rq_list);
+		} while (blk_mq_dispatch_rq_list(hctx, &rq_list));
+	}
 }
 
 void blk_mq_sched_move_to_dispatch(struct blk_mq_hw_ctx *hctx,
@@ -298,6 +306,92 @@ bool blk_mq_sched_bypass_insert(struct blk_mq_hw_ctx *hctx, struct request *rq)
 	return true;
 }
 EXPORT_SYMBOL_GPL(blk_mq_sched_bypass_insert);
+
+static void blk_mq_sched_restart_hctx(struct blk_mq_hw_ctx *hctx)
+{
+	if (test_bit(BLK_MQ_S_SCHED_RESTART, &hctx->state)) {
+		clear_bit(BLK_MQ_S_SCHED_RESTART, &hctx->state);
+		if (blk_mq_hctx_has_pending(hctx))
+			blk_mq_run_hw_queue(hctx, true);
+	}
+}
+
+void blk_mq_sched_restart_queues(struct blk_mq_hw_ctx *hctx)
+{
+	unsigned int i;
+
+	if (!(hctx->flags & BLK_MQ_F_TAG_SHARED))
+		blk_mq_sched_restart_hctx(hctx);
+	else {
+		struct request_queue *q = hctx->queue;
+
+		if (!test_bit(QUEUE_FLAG_RESTART, &q->queue_flags))
+			return;
+
+		clear_bit(QUEUE_FLAG_RESTART, &q->queue_flags);
+
+		queue_for_each_hw_ctx(q, hctx, i)
+			blk_mq_sched_restart_hctx(hctx);
+	}
+}
+
+/*
+ * Add flush/fua to the queue. If we fail getting a driver tag, then
+ * punt to the requeue list. Requeue will re-invoke us from a context
+ * that's safe to block from.
+ */
+static void blk_mq_sched_insert_flush(struct blk_mq_hw_ctx *hctx,
+				      struct request *rq, bool can_block)
+{
+	if (blk_mq_get_driver_tag(rq, &hctx, can_block)) {
+		blk_insert_flush(rq);
+		blk_mq_run_hw_queue(hctx, true);
+	} else
+		blk_mq_add_to_requeue_list(rq, true, true);
+}
+
+void blk_mq_sched_insert_request(struct request *rq, bool at_head,
+				 bool run_queue, bool async, bool can_block)
+{
+	struct request_queue *q = rq->q;
+	struct elevator_queue *e = q->elevator;
+	struct blk_mq_ctx *ctx = rq->mq_ctx;
+	struct blk_mq_hw_ctx *hctx = blk_mq_map_queue(q, ctx->cpu);
+
+	if (rq->tag == -1 && (rq->cmd_flags & (REQ_PREFLUSH | REQ_FUA))) {
+		blk_mq_sched_insert_flush(hctx, rq, can_block);
+		return;
+	}
+
+	if (e && e->type->ops.mq.insert_requests) {
+		LIST_HEAD(list);
+
+		list_add(&rq->queuelist, &list);
+		e->type->ops.mq.insert_requests(hctx, &list, at_head);
+	} else {
+		spin_lock(&ctx->lock);
+		__blk_mq_insert_request(hctx, rq, at_head);
+		spin_unlock(&ctx->lock);
+	}
+
+	if (run_queue)
+		blk_mq_run_hw_queue(hctx, async);
+}
+
+void blk_mq_sched_insert_requests(struct request_queue *q,
+				  struct blk_mq_ctx *ctx,
+				  struct list_head *list, bool run_queue_async)
+{
+	struct blk_mq_hw_ctx *hctx = blk_mq_map_queue(q, ctx->cpu);
+	struct elevator_queue *e = hctx->queue->elevator;
+
+	if (e && e->type->ops.mq.insert_requests)
+		e->type->ops.mq.insert_requests(hctx, list, false);
+	else
+		blk_mq_insert_requests(hctx, ctx, list);
+
+	blk_mq_run_hw_queue(hctx, run_queue_async);
+}
 
 static void blk_mq_sched_free_tags(struct blk_mq_tag_set *set,
 				   struct blk_mq_hw_ctx *hctx,

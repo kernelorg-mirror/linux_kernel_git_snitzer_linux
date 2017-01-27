@@ -90,9 +90,11 @@ static inline bool hctx_may_queue(struct blk_mq_hw_ctx *hctx,
 	return atomic_read(&hctx->nr_active) < depth;
 }
 
-static int __blk_mq_get_tag(struct blk_mq_hw_ctx *hctx, struct sbitmap_queue *bt)
+static int __blk_mq_get_tag(struct blk_mq_alloc_data *data,
+			    struct sbitmap_queue *bt)
 {
-	if (!hctx_may_queue(hctx, bt))
+	if (!(data->flags & BLK_MQ_REQ_INTERNAL) &&
+	    !hctx_may_queue(data->hctx, bt))
 		return -1;
 	return __sbitmap_queue_get(bt);
 }
@@ -104,6 +106,7 @@ unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
 	struct sbq_wait_state *ws;
 	DEFINE_WAIT(wait);
 	unsigned int tag_offset;
+	bool drop_ctx;
 	int tag;
 
 	if (data->flags & BLK_MQ_REQ_RESERVED) {
@@ -118,7 +121,7 @@ unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
 		tag_offset = tags->nr_reserved_tags;
 	}
 
-	tag = __blk_mq_get_tag(data->hctx, bt);
+	tag = __blk_mq_get_tag(data, bt);
 	if (tag != -1)
 		goto found_tag;
 
@@ -126,10 +129,11 @@ unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
 		return BLK_MQ_TAG_FAIL;
 
 	ws = bt_wait_ptr(bt, data->hctx);
+	drop_ctx = data->ctx == NULL;
 	do {
 		prepare_to_wait(&ws->wait, &wait, TASK_UNINTERRUPTIBLE);
 
-		tag = __blk_mq_get_tag(data->hctx, bt);
+		tag = __blk_mq_get_tag(data, bt);
 		if (tag != -1)
 			break;
 
@@ -144,11 +148,12 @@ unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
 		 * Retry tag allocation after running the hardware queue,
 		 * as running the queue may also have found completions.
 		 */
-		tag = __blk_mq_get_tag(data->hctx, bt);
+		tag = __blk_mq_get_tag(data, bt);
 		if (tag != -1)
 			break;
 
-		blk_mq_put_ctx(data->ctx);
+		if (data->ctx)
+			blk_mq_put_ctx(data->ctx);
 
 		io_schedule();
 
@@ -163,6 +168,9 @@ unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
 		finish_wait(&ws->wait, &wait);
 		ws = bt_wait_ptr(bt, data->hctx);
 	} while (1);
+
+	if (drop_ctx && data->ctx)
+		blk_mq_put_ctx(data->ctx);
 
 	finish_wait(&ws->wait, &wait);
 
