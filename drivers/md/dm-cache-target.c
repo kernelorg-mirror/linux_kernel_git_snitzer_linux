@@ -1170,22 +1170,34 @@ static void calc_discard_block_range(struct cache *cache, struct bio *bio,
 
 static void prevent_background_work(struct cache *cache)
 {
+	lockdep_off();
 	down_write(&cache->background_work_lock);
+	lockdep_on();
 }
 
 static void allow_background_work(struct cache *cache)
 {
+	lockdep_off();
 	up_write(&cache->background_work_lock);
+	lockdep_on();
 }
 
 static bool background_work_begin(struct cache *cache)
 {
-	return down_read_trylock(&cache->background_work_lock);
+	bool r;
+
+	lockdep_off();
+	r = down_read_trylock(&cache->background_work_lock);
+	lockdep_on();
+
+	return r;
 }
 
 static void background_work_end(struct cache *cache)
 {
+	lockdep_off();
 	up_read(&cache->background_work_lock);
+	lockdep_on();
 }
 
 /*----------------------------------------------------------------*/
@@ -2711,7 +2723,6 @@ static int cache_create(struct cache_args *ca, struct cache **result)
 	iot_init(&cache->origin_tracker);
 
 	init_rwsem(&cache->background_work_lock);
-	/* FIXME: train lockdep to not complain about returning to userspace holding lock? */
 	prevent_background_work(cache);
 
 	*result = cache;
