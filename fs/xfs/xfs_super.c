@@ -1756,7 +1756,7 @@ MODULE_ALIAS_FS("xfs");
 STATIC int __init
 xfs_init_zones(void)
 {
-	xfs_ioend_bioset = bioset_create(4 * MAX_BUF_PER_PAGE,
+	xfs_ioend_bioset = bioset_create_rescued(4 * MAX_BUF_PER_PAGE,
 			offsetof(struct xfs_ioend, io_inline_bio));
 	if (!xfs_ioend_bioset)
 		goto out;

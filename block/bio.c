@@ -362,6 +362,8 @@ static void punt_bios_to_rescuer(struct bio_set *bs)
 	struct bio_list punt, nopunt;
 	struct bio *bio;
 
+	if (!WARN_ON_ONCE(!bs->rescue_workqueue))
+		return;
 	/*
 	 * In order to guarantee forward progress we must punt only bios that
 	 * were allocated from this bio_set; otherwise, if there was a bio on
@@ -472,7 +474,8 @@ struct bio *bio_alloc_bioset(gfp_t gfp_mask, int nr_iovecs, struct bio_set *bs)
 
 		if (current->bio_list &&
 		    (!bio_list_empty(&current->bio_list[0]) ||
-		     !bio_list_empty(&current->bio_list[1])))
+		     !bio_list_empty(&current->bio_list[1])) &&
+		    bs->rescue_workqueue)
 			gfp_mask &= ~__GFP_DIRECT_RECLAIM;
 
 		p = mempool_alloc(bs->bio_pool, gfp_mask);
@@ -1941,7 +1944,8 @@ EXPORT_SYMBOL(bioset_free);
 
 static struct bio_set *__bioset_create(unsigned int pool_size,
 				       unsigned int front_pad,
-				       bool create_bvec_pool)
+				       bool create_bvec_pool,
+				       bool create_rescue_workqueue)
 {
 	unsigned int back_pad = BIO_INLINE_VECS * sizeof(struct bio_vec);
 	struct bio_set *bs;
@@ -1972,6 +1976,9 @@ static struct bio_set *__bioset_create(unsigned int pool_size,
 			goto bad;
 	}
 
+	if (!create_rescue_workqueue)
+		return bs;
+
 	bs->rescue_workqueue = alloc_workqueue("bioset", WQ_MEM_RECLAIM, 0);
 	if (!bs->rescue_workqueue)
 		goto bad;
@@ -1997,9 +2004,15 @@ bad:
  */
 struct bio_set *bioset_create(unsigned int pool_size, unsigned int front_pad)
 {
-	return __bioset_create(pool_size, front_pad, true);
+	return __bioset_create(pool_size, front_pad, true, false);
 }
 EXPORT_SYMBOL(bioset_create);
+
+struct bio_set *bioset_create_rescued(unsigned int pool_size, unsigned int front_pad)
+{
+	return __bioset_create(pool_size, front_pad, true, true);
+}
+EXPORT_SYMBOL(bioset_create_rescued);
 
 /**
  * bioset_create_nobvec  - Create a bio_set without bio_vec mempool
@@ -2012,9 +2025,16 @@ EXPORT_SYMBOL(bioset_create);
  */
 struct bio_set *bioset_create_nobvec(unsigned int pool_size, unsigned int front_pad)
 {
-	return __bioset_create(pool_size, front_pad, false);
+	return __bioset_create(pool_size, front_pad, false, false);
 }
 EXPORT_SYMBOL(bioset_create_nobvec);
+
+struct bio_set *bioset_create_nobvec_rescued(unsigned int pool_size,
+					     unsigned int front_pad)
+{
+	return __bioset_create(pool_size, front_pad, false, true);
+}
+EXPORT_SYMBOL(bioset_create_nobvec_rescued);
 
 #ifdef CONFIG_BLK_CGROUP
 
@@ -2130,7 +2150,7 @@ static int __init init_bio(void)
 	bio_integrity_init();
 	biovec_init_slabs();
 
-	fs_bio_set = bioset_create(BIO_POOL_SIZE, 0);
+	fs_bio_set = bioset_create_rescued(BIO_POOL_SIZE, 0);
 	if (!fs_bio_set)
 		panic("bio: can't allocate bios\n");
 

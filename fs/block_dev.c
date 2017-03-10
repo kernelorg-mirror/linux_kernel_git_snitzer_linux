@@ -436,7 +436,7 @@ blkdev_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 
 static __init int blkdev_init(void)
 {
-	blkdev_dio_pool = bioset_create(4, offsetof(struct blkdev_dio, bio));
+	blkdev_dio_pool = bioset_create_rescued(4, offsetof(struct blkdev_dio, bio));
 	if (!blkdev_dio_pool)
 		return -ENOMEM;
 	return 0;

@@ -5220,7 +5220,7 @@ int md_run(struct mddev *mddev)
 	}
 
 	if (mddev->bio_set == NULL) {
-		mddev->bio_set = bioset_create(BIO_POOL_SIZE, 0);
+		mddev->bio_set = bioset_create_rescued(BIO_POOL_SIZE, 0);
 		if (!mddev->bio_set)
 			return -ENOMEM;
 	}

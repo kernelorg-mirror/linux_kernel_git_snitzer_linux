@@ -2166,7 +2166,7 @@ static int drbd_create_mempools(void)
 		goto Enomem;
 
 	/* mempools */
-	drbd_md_io_bio_set = bioset_create(DRBD_MIN_POOL_PAGES, 0);
+	drbd_md_io_bio_set = bioset_create_rescued(DRBD_MIN_POOL_PAGES, 0);
 	if (drbd_md_io_bio_set == NULL)
 		goto Enomem;
 
