@@ -361,6 +361,14 @@ static int issue_deprovisioning(struct deprovisioning_op *op, dm_block_t data_b,
 	sector_t s = block_to_sectors(tc->pool, data_b);
 	sector_t len = block_to_sectors(tc->pool, data_e - data_b);
 
+	if (bio_op(op->parent_bio) == REQ_OP_WRITE_ZEROES) {
+		DMERR("issuing zeroout for start=%llu len=%llu",
+		      (unsigned long long)s, (unsigned long long)len);
+		return __blkdev_issue_zeroout(tc->pool_dev->bdev, s, len, GFP_NOWAIT,
+					      &op->bio, BLKDEV_ZERO_NOFALLBACK);
+	}
+
+	BUG_ON(bio_op(op->parent_bio) != REQ_OP_DISCARD);
 	return __blkdev_issue_discard(tc->pool_dev->bdev, s, len,
 				      GFP_NOWAIT, 0, &op->bio);
 }
@@ -636,10 +644,10 @@ static void error_retry_list(struct pool *pool)
  * target.
  */
 
-static dm_block_t get_bio_block(struct thin_c *tc, struct bio *bio)
+static dm_block_t __get_sector_block(struct thin_c *tc, sector_t sector)
 {
 	struct pool *pool = tc->pool;
-	sector_t block_nr = bio->bi_iter.bi_sector;
+	sector_t block_nr = sector;
 
 	if (block_size_is_power_of_two(pool))
 		block_nr >>= pool->sectors_per_block_shift;
@@ -647,6 +655,21 @@ static dm_block_t get_bio_block(struct thin_c *tc, struct bio *bio)
 		(void) sector_div(block_nr, pool->sectors_per_block);
 
 	return block_nr;
+}
+
+static dm_block_t get_bio_block(struct thin_c *tc, struct bio *bio)
+{
+	return __get_sector_block(tc, bio->bi_iter.bi_sector);
+}
+
+static dm_block_t get_bio_block_end(struct thin_c *tc, struct bio *bio)
+{
+	sector_t e = bio_end_sector(bio);
+
+	/* round up to get one past the end of a partial block */
+	e += tc->pool->sectors_per_block - 1ull;
+
+	return __get_sector_block(tc, e);
 }
 
 /*
@@ -657,7 +680,7 @@ static void get_bio_block_range(struct thin_c *tc, struct bio *bio,
 {
 	struct pool *pool = tc->pool;
 	sector_t b = bio->bi_iter.bi_sector;
-	sector_t e = b + (bio->bi_iter.bi_size >> SECTOR_SHIFT);
+	sector_t e = bio_end_sector(bio);
 
 	b += pool->sectors_per_block - 1ull; /* so we round up */
 
@@ -697,15 +720,49 @@ static void remap_to_origin(struct thin_c *tc, struct bio *bio)
 	bio->bi_bdev = tc->origin_dev->bdev;
 }
 
+static bool remap_possible_misaligned_write_zeroes_bio(struct thin_c *tc, struct bio *bio)
+{
+	struct pool *pool = tc->pool;
+	dm_block_t begin, end;
+	dm_block_t aligned_begin, aligned_end;
+
+	get_bio_block_range(tc, bio, &aligned_begin, &aligned_end);
+	begin = get_bio_block(tc, bio);
+	end = get_bio_block_end(tc, bio);
+
+	/*
+	 * Alter bio to address the respective misaligned head or tail (if appplicable).
+	 */
+	if (dm_bio_get_target_bio_nr(bio) == 0 && begin < aligned_begin) {
+		sector_t e = aligned_begin * pool->sectors_per_block;
+		if (bio_end_sector(bio) > e)
+			bio->bi_iter.bi_size = (e - bio->bi_iter.bi_sector) << SECTOR_SHIFT;
+		return true;
+
+	} else if (dm_bio_get_target_bio_nr(bio) == 2 && end > aligned_end) {
+		sector_t e = bio_end_sector(bio);
+		bio->bi_iter.bi_sector = aligned_end * pool->sectors_per_block;
+		bio->bi_iter.bi_size = (sector_div(e, pool->sectors_per_block)) << SECTOR_SHIFT;
+		return true;
+	}
+
+	return false;
+}
+
 static bool bio_triggers_commit(struct thin_c *tc, struct bio *bio)
 {
 	return op_is_flush(bio->bi_opf) &&
 		dm_thin_changed_this_transaction(tc->td);
 }
 
+static bool is_aligned_write_zeroes_bio(struct bio *bio)
+{
+	return bio_op(bio) == REQ_OP_WRITE_ZEROES && dm_bio_get_target_bio_nr(bio) == 1;
+}
+
 static bool is_deprovisioning_bio(struct bio *bio)
 {
-	return bio_op(bio) == REQ_OP_DISCARD;
+	return bio_op(bio) == REQ_OP_DISCARD || is_aligned_write_zeroes_bio(bio);
 }
 
 static bool is_deferrable_bio(struct bio *bio)
@@ -1077,6 +1134,7 @@ static void passdown_endio(struct bio *bio)
 	/*
 	 * It doesn't matter if the passdown discard failed, we still want
 	 * to unmap (we ignore err).
+	 * - FIXME: need to adjust this for WRITE_ZEROES (cannot ignore err)
 	 */
 	queue_passdown_pt2(bio->bi_private);
 }
@@ -1818,6 +1876,20 @@ static void provision_block(struct thin_c *tc, struct bio *bio, dm_block_t block
 		bio_endio(bio);
 		return;
 	}
+
+#if 0
+	// FIXME: for now, better to allow misaligned head/tail to unmapped block
+	/*
+	 * Drop misaligned WRITE_ZEROES to unmapped block.
+	 * - depends on block_zeroing feature, in future we'd do well to
+	 *   mark the block as needing zeroing on allocation?
+	 */
+	if (bio_op(bio) == REQ_OP_WRITE_ZEROES) {
+		cell_defer_no_holder(tc, cell);
+		bio_endio(bio);
+		return;
+	}
+#endif
 
 	r = alloc_data_block(tc, &data_block);
 	switch (r) {
@@ -2645,6 +2717,14 @@ static int thin_bio_map(struct dm_target *ti, struct bio *bio)
 	if (is_deferrable_bio(bio)) {
 		thin_defer_bio_with_throttle(tc, bio);
 		return DM_MAPIO_SUBMITTED;
+	}
+
+	if (bio_op(bio) == REQ_OP_WRITE_ZEROES) {
+		if (!remap_possible_misaligned_write_zeroes_bio(tc, bio)) {
+			/* The bio doesn't contain a misaligned head or tail */
+			bio_endio(bio);
+			return DM_MAPIO_SUBMITTED;
+		}
 	}
 
 	/*
@@ -3974,7 +4054,7 @@ static struct target_type pool_target = {
 	.name = "thin-pool",
 	.features = DM_TARGET_SINGLETON | DM_TARGET_ALWAYS_WRITEABLE |
 		    DM_TARGET_IMMUTABLE,
-	.version = {1, 19, 0},
+	.version = {1, 20, 0},
 	.module = THIS_MODULE,
 	.ctr = pool_ctr,
 	.dtr = pool_dtr,
@@ -4133,6 +4213,16 @@ static int thin_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		ti->num_discard_bios = 1;
 		ti->split_discard_bios = false;
 	}
+	/*
+	 * Write zeroes support requires 3 bios be sent by DM core:
+	 * 1 for the possible misaligned head, 1 for the _complete_ range of
+	 * blocks that will be discarded, and 1 for the possible misaligned tail.
+	 *
+	 * NOTE: Block zeroing is required for write zeroes support
+	 * (at least until passdown of write zeroes is implemented)
+	 */
+	if (tc->pool->pf.zero_new_blocks && tc->pool->pf.discard_enabled)
+		ti->num_write_zeroes_bios = 3;
 
 	mutex_unlock(&dm_thin_pool_table.mutex);
 
@@ -4210,6 +4300,7 @@ static int thin_endio(struct dm_target *ti, struct bio *bio, int err)
 		INIT_LIST_HEAD(&work);
 		dm_deferred_entry_dec(h->all_io_entry, &work);
 		if (!list_empty(&work)) {
+			// FIXME: why are these implicitly discard mappings!?
 			spin_lock_irqsave(&pool->lock, flags);
 			list_for_each_entry_safe(m, tmp, &work, list)
 				list_add_tail(&m->list, &pool->prepared_discards);
@@ -4337,17 +4428,23 @@ static void thin_io_hints(struct dm_target *ti, struct queue_limits *limits)
 {
 	struct thin_c *tc = ti->private;
 	struct pool *pool = tc->pool;
+	unsigned int max_deprovisioning_sectors = 2048 * 1024 * 16; /* 16G */
 
 	if (!pool->pf.discard_enabled)
 		return;
 
 	limits->discard_granularity = pool->sectors_per_block << SECTOR_SHIFT;
-	limits->max_discard_sectors = 2048 * 1024 * 16; /* 16G */
+	limits->max_discard_sectors = max_deprovisioning_sectors;
+
+	/*
+	 * Write zeroes support is implemented in terms of discard.
+	 */
+	limits->max_write_zeroes_sectors = max_deprovisioning_sectors;
 }
 
 static struct target_type thin_target = {
 	.name = "thin",
-	.version = {1, 19, 0},
+	.version = {1, 20, 0},
 	.module	= THIS_MODULE,
 	.ctr = thin_ctr,
 	.dtr = thin_dtr,
