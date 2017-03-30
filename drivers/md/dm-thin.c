@@ -703,11 +703,21 @@ static bool bio_triggers_commit(struct thin_c *tc, struct bio *bio)
 		dm_thin_changed_this_transaction(tc->td);
 }
 
+static bool is_deprovisioning_bio(struct bio *bio)
+{
+	return bio_op(bio) == REQ_OP_DISCARD;
+}
+
+static bool is_deferrable_bio(struct bio *bio)
+{
+	return op_is_flush(bio->bi_opf) || is_deprovisioning_bio(bio);
+}
+
 static void inc_all_io_entry(struct pool *pool, struct bio *bio)
 {
 	struct dm_thin_endio_hook *h;
 
-	if (bio_op(bio) == REQ_OP_DISCARD)
+	if (is_deprovisioning_bio(bio))
 		return;
 
 	h = dm_per_bio_data(bio, sizeof(struct dm_thin_endio_hook));
@@ -870,7 +880,7 @@ static void __inc_remap_and_issue_cell(void *context,
 	struct bio *bio;
 
 	while ((bio = bio_list_pop(&cell->bios))) {
-		if (op_is_flush(bio->bi_opf) || bio_op(bio) == REQ_OP_DISCARD)
+		if (is_deferrable_bio(bio))
 			bio_list_add(&info->defer_bios, bio);
 		else {
 			inc_all_io_entry(info->tc->pool, bio);
@@ -1711,8 +1721,7 @@ static void __remap_and_issue_shared_cell(void *context,
 	struct bio *bio;
 
 	while ((bio = bio_list_pop(&cell->bios))) {
-		if (bio_data_dir(bio) == WRITE || op_is_flush(bio->bi_opf) ||
-		    bio_op(bio) == REQ_OP_DISCARD)
+		if (bio_data_dir(bio) == WRITE || is_deferrable_bio(bio))
 			bio_list_add(&info->defer_bios, bio);
 		else {
 			struct dm_thin_endio_hook *h = dm_per_bio_data(bio, sizeof(struct dm_thin_endio_hook));;
@@ -2102,7 +2111,7 @@ static void process_thin_deferred_bios(struct thin_c *tc)
 			break;
 		}
 
-		if (bio_op(bio) == REQ_OP_DISCARD)
+		if (is_deprovisioning_bio(bio))
 			pool->process_discard(tc, bio);
 		else
 			pool->process_bio(tc, bio);
@@ -2189,7 +2198,7 @@ static void process_thin_deferred_cells(struct thin_c *tc)
 				return;
 			}
 
-			if (bio_op(cell->holder) == REQ_OP_DISCARD)
+			if (is_deprovisioning_bio(cell->holder))
 				pool->process_discard_cell(tc, cell);
 			else
 				pool->process_cell(tc, cell);
@@ -2630,7 +2639,7 @@ static int thin_bio_map(struct dm_target *ti, struct bio *bio)
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	if (op_is_flush(bio->bi_opf) || bio_op(bio) == REQ_OP_DISCARD) {
+	if (is_deferrable_bio(bio)) {
 		thin_defer_bio_with_throttle(tc, bio);
 		return DM_MAPIO_SUBMITTED;
 	}
