@@ -697,7 +697,7 @@ static void remap_to_origin(struct thin_c *tc, struct bio *bio)
 	bio->bi_bdev = tc->origin_dev->bdev;
 }
 
-static int bio_triggers_commit(struct thin_c *tc, struct bio *bio)
+static bool bio_triggers_commit(struct thin_c *tc, struct bio *bio)
 {
 	return op_is_flush(bio->bi_opf) &&
 		dm_thin_changed_this_transaction(tc->td);
@@ -1169,16 +1169,12 @@ static void process_prepared(struct pool *pool, struct list_head *head,
 /*
  * Deferred bio jobs.
  */
-static int io_overlaps_block(struct pool *pool, struct bio *bio)
-{
-	return bio->bi_iter.bi_size ==
-		(pool->sectors_per_block << SECTOR_SHIFT);
-}
 
-static int io_overwrites_block(struct pool *pool, struct bio *bio)
+static bool io_overwrites_block(struct pool *pool, struct bio *bio)
 {
-	return (bio_data_dir(bio) == WRITE) &&
-		io_overlaps_block(pool, bio);
+	/* Assumes splitting on block granularity (via dm_set_target_max_io_len) */
+	return (bio_data_dir(bio) == WRITE &&
+		bio->bi_iter.bi_size == (pool->sectors_per_block << SECTOR_SHIFT));
 }
 
 static void save_and_set_endio(struct bio *bio, bio_end_io_t **save,
@@ -1990,7 +1986,7 @@ static void process_cell_fail(struct thin_c *tc, struct dm_bio_prison_cell *cell
  * FIXME: should we also commit due to size of transaction, measured in
  * metadata blocks?
  */
-static int need_commit_due_to_time(struct pool *pool)
+static bool need_commit_due_to_time(struct pool *pool)
 {
 	return !time_in_range(jiffies, pool->last_commit_jiffies,
 			      pool->last_commit_jiffies + COMMIT_PERIOD);
