@@ -1833,7 +1833,7 @@ static void process_cell(struct thin_c *tc, struct dm_bio_prison_cell *cell)
 	int r;
 	struct pool *pool = tc->pool;
 	struct bio *bio = cell->holder;
-	dm_block_t block = get_bio_block(tc, bio);
+	dm_block_t block;
 	struct dm_thin_lookup_result lookup_result;
 
 	if (tc->requeue_mode) {
@@ -1841,6 +1841,7 @@ static void process_cell(struct thin_c *tc, struct dm_bio_prison_cell *cell)
 		return;
 	}
 
+	block = get_bio_block(tc, bio);
 	r = dm_thin_find_block(tc->td, block, 1, &lookup_result);
 	switch (r) {
 	case 0:
@@ -2610,7 +2611,7 @@ static int thin_bio_map(struct dm_target *ti, struct bio *bio)
 {
 	int r;
 	struct thin_c *tc = ti->private;
-	dm_block_t block = get_bio_block(tc, bio);
+	dm_block_t block;
 	struct dm_thin_device *td = tc->td;
 	struct dm_thin_lookup_result result;
 	struct dm_bio_prison_cell *virt_cell, *data_cell;
@@ -2638,6 +2639,7 @@ static int thin_bio_map(struct dm_target *ti, struct bio *bio)
 	 * We must hold the virtual cell before doing the lookup, otherwise
 	 * there's a race with discard.
 	 */
+	block = get_bio_block(tc, bio);
 	build_virtual_key(tc->td, block, &key);
 	if (bio_detain(tc->pool, &key, bio, &virt_cell))
 		return DM_MAPIO_SUBMITTED;
