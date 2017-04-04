@@ -2471,11 +2471,11 @@ static void set_pool_mode(struct pool *pool, enum pool_mode new_mode)
 			notify_of_pool_mode_change(pool, "read-only");
 		dm_pool_metadata_read_only(pool->pmd);
 		pool->process_bio = process_bio_read_only;
-		pool->process_discard = process_bio_success;
+		pool->process_discard = process_bio_fail;
 		pool->process_cell = process_cell_read_only;
-		pool->process_discard_cell = process_cell_success;
+		pool->process_discard_cell = process_cell_fail;
 		pool->process_prepared_mapping = process_prepared_mapping_fail;
-		pool->process_prepared_discard = process_prepared_discard_success;
+		pool->process_prepared_discard = process_prepared_discard_fail;
 
 		error_retry_list(pool);
 		break;
