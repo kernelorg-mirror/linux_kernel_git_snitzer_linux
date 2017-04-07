@@ -762,6 +762,9 @@ static bool is_aligned_write_zeroes_bio(struct bio *bio)
 
 static bool is_deprovisioning_bio(struct bio *bio)
 {
+	if (bio_op(bio) == REQ_OP_DISCARD)
+		bio_set_op_attrs(bio, REQ_OP_WRITE_ZEROES, 0);
+
 	return bio_op(bio) == REQ_OP_DISCARD || is_aligned_write_zeroes_bio(bio);
 }
 
@@ -4222,7 +4225,8 @@ static int thin_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	 * (at least until passdown of write zeroes is implemented)
 	 */
 	if (tc->pool->pf.zero_new_blocks && tc->pool->pf.discard_enabled)
-		ti->num_write_zeroes_bios = 3;
+		//ti->num_write_zeroes_bios = 3;
+		ti->num_discard_bios = 3;
 
 	mutex_unlock(&dm_thin_pool_table.mutex);
 
