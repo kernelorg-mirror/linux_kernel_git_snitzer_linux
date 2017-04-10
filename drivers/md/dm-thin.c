@@ -790,6 +790,10 @@ static void issue(struct thin_c *tc, struct bio *bio)
 	unsigned long flags;
 
 	if (!bio_triggers_commit(tc, bio)) {
+		if (bio_op(bio) == REQ_OP_WRITE_ZEROES)
+			DMERR("issuing misaligned WRITE ZEROES bio bi_sector=%llu len=%llu via generic_make_request",
+			      (unsigned long long)bio->bi_iter.bi_sector, (unsigned long long)bio->bi_iter.bi_size >> SECTOR_SHIFT);
+		// FIXME: hmm, not seeing how generic_make_request() will handle a WRITE_ZEROES bio...
 		generic_make_request(bio);
 		return;
 	}
@@ -1649,6 +1653,8 @@ static void break_up_discard_bio(struct thin_c *tc, dm_block_t begin, dm_block_t
 	struct dm_thin_new_mapping *m;
 	dm_block_t virt_begin, virt_end, data_begin;
 
+	DMERR("%s: got here", __func__);
+
 	while (begin != end) {
 		r = ensure_next_mapping(pool);
 		if (r)
@@ -1664,12 +1670,17 @@ static void break_up_discard_bio(struct thin_c *tc, dm_block_t begin, dm_block_t
 			 */
 			break;
 
+		DMERR("%s: got here2", __func__);
+
 		build_key(tc->td, PHYSICAL, data_begin, data_begin + (virt_end - virt_begin), &data_key);
 		if (bio_detain(tc->pool, &data_key, NULL, &data_cell)) {
 			/* contention, we'll give up with this range */
 			begin = virt_end;
 			continue;
 		}
+
+		DMERR("%s: created mapping for begin=%llu end=%llu", __func__,
+		      (unsigned long long)virt_begin, (unsigned long long)virt_end);
 
 		/*
 		 * IO may still be going to the destination block.  We must
@@ -1729,6 +1740,8 @@ static void process_discard_bio(struct thin_c *tc, struct bio *bio)
 
 	get_bio_block_range(tc, bio, &begin, &end);
 	if (begin == end) {
+		DMERR("aligned WRITE_ZEROES bio target_nr=%d doesn't contain a range",
+		      dm_bio_get_target_bio_nr(bio));
 		/*
 		 * The discard covers less than a block.
 		 */
@@ -1737,7 +1750,7 @@ static void process_discard_bio(struct thin_c *tc, struct bio *bio)
 	}
 
 	build_key(tc->td, VIRTUAL, begin, end, &virt_key);
-	if (bio_detain(tc->pool, &virt_key, bio, &virt_cell))
+	if (bio_detain(tc->pool, &virt_key, bio, &virt_cell)) {
 		/*
 		 * Potential starvation issue: We're relying on the
 		 * fs/application being well behaved, and not trying to
@@ -1745,7 +1758,9 @@ static void process_discard_bio(struct thin_c *tc, struct bio *bio)
 		 * If they do this persistently then it's possible this
 		 * cell will never be granted.
 		 */
+		DMERR("%s: got here3 -- wtf!?", __func__);
 		return;
+	}
 
 	tc->pool->process_discard_cell(tc, virt_cell);
 }
@@ -1928,13 +1943,21 @@ static void process_cell(struct thin_c *tc, struct dm_bio_prison_cell *cell)
 		return;
 	}
 
+	if (bio_op(bio) == REQ_OP_WRITE_ZEROES)
+		DMERR("%s: got here", __func__);
+
 	block = get_bio_block(tc, bio);
 	r = dm_thin_find_block(tc->td, block, 1, &lookup_result);
 	switch (r) {
 	case 0:
-		if (lookup_result.shared)
+		if (lookup_result.shared) {
+			if (bio_op(bio) == REQ_OP_WRITE_ZEROES)
+				DMERR("calling process_shared_bio() for misaligned WRITE_SAME");
 			process_shared_bio(tc, bio, block, &lookup_result, cell);
+		}
 		else {
+			if (bio_op(bio) == REQ_OP_WRITE_ZEROES)
+				DMERR("calling remap_and_issue for misaligned WRITE_SAME");
 			inc_all_io_entry(pool, bio);
 			remap_and_issue(tc, bio, lookup_result.block);
 			inc_remap_and_issue_cell(tc, cell, lookup_result.block);
@@ -1942,6 +1965,8 @@ static void process_cell(struct thin_c *tc, struct dm_bio_prison_cell *cell)
 		break;
 
 	case -ENODATA:
+		if (bio_op(bio) == REQ_OP_WRITE_ZEROES)
+			DMERR("%s: got here -ENODATA for REQ_OP_WRITE_ZEROES", __func__);
 		if (bio_data_dir(bio) == READ && tc->origin_dev) {
 			inc_all_io_entry(pool, bio);
 			cell_defer_no_holder(tc, cell);
@@ -2189,8 +2214,10 @@ static void process_thin_deferred_bios(struct thin_c *tc)
 			break;
 		}
 
-		if (is_deprovisioning_bio(bio))
+		if (is_deprovisioning_bio(bio)) {
+			DMERR("%s: got here, is_deprovisioning_bio", __func__);
 			pool->process_discard(tc, bio);
+		}
 		else
 			pool->process_bio(tc, bio);
 
@@ -2276,10 +2303,18 @@ static void process_thin_deferred_cells(struct thin_c *tc)
 				return;
 			}
 
-			if (is_deprovisioning_bio(cell->holder))
+			if (is_deprovisioning_bio(cell->holder)) {
+				if (bio_op(cell->holder) == REQ_OP_WRITE_ZEROES)
+					DMERR("sending aligned WRITE ZEROES bio target_nr=%d to process_discard_cell",
+					      dm_bio_get_target_bio_nr(cell->holder));
 				pool->process_discard_cell(tc, cell);
-			else
+			}
+			else {
+				if (bio_op(cell->holder) == REQ_OP_WRITE_ZEROES)
+					DMERR("sending misaligned WRITE ZEROES bio target_nr=%d to process_cell",
+					      dm_bio_get_target_bio_nr(cell->holder));
 				pool->process_cell(tc, cell);
+			}
 		}
 	} while (!list_empty(&cells));
 }
@@ -2718,16 +2753,23 @@ static int thin_bio_map(struct dm_target *ti, struct bio *bio)
 	}
 
 	if (is_deferrable_bio(bio)) {
+		DMERR("aligned WRITE_ZEROES bio target_nr=%d", dm_bio_get_target_bio_nr(bio));
 		thin_defer_bio_with_throttle(tc, bio);
 		return DM_MAPIO_SUBMITTED;
 	}
 
 	if (bio_op(bio) == REQ_OP_WRITE_ZEROES) {
+		DMERR("misaligned WRITE_ZEROES bio target_nr=%d", dm_bio_get_target_bio_nr(bio));
 		if (!remap_possible_misaligned_write_zeroes_bio(tc, bio)) {
 			/* The bio doesn't contain a misaligned head or tail */
+			DMERR("misaligned WRITE_ZEROES bio doesn't contain a misaligned head or tail");
 			bio_endio(bio);
 			return DM_MAPIO_SUBMITTED;
 		}
+		DMERR("misaligned WRITE_ZEROES bio target_nr=%d start=%llu end=%llu len=%llu",
+		      dm_bio_get_target_bio_nr(bio), (unsigned long long)bio->bi_iter.bi_sector,
+		      (unsigned long long)bio_end_sector(bio),
+		      (unsigned long long)bio->bi_iter.bi_size >> 9);
 	}
 
 	/*
@@ -2774,6 +2816,9 @@ static int thin_bio_map(struct dm_target *ti, struct bio *bio)
 		inc_all_io_entry(tc->pool, bio);
 		cell_defer_no_holder(tc, data_cell);
 		cell_defer_no_holder(tc, virt_cell);
+
+		if (bio_op(bio) == REQ_OP_WRITE_ZEROES)
+			DMERR("%s: calling remap() for WRITE_ZEROES", __func__);
 
 		remap(tc, bio, result.block);
 		return DM_MAPIO_REMAPPED;
