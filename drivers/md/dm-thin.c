@@ -338,14 +338,14 @@ static sector_t block_to_sectors(struct pool *pool, dm_block_t b)
 
 /*----------------------------------------------------------------*/
 
-struct discard_op {
+struct deprovisioning_op {
 	struct thin_c *tc;
 	struct blk_plug plug;
 	struct bio *parent_bio;
 	struct bio *bio;
 };
 
-static void begin_discard(struct discard_op *op, struct thin_c *tc, struct bio *parent)
+static void begin_deprovisioning(struct deprovisioning_op *op, struct thin_c *tc, struct bio *parent)
 {
 	BUG_ON(!parent);
 
@@ -355,7 +355,7 @@ static void begin_discard(struct discard_op *op, struct thin_c *tc, struct bio *
 	op->bio = NULL;
 }
 
-static int issue_discard(struct discard_op *op, dm_block_t data_b, dm_block_t data_e)
+static int issue_deprovisioning(struct deprovisioning_op *op, dm_block_t data_b, dm_block_t data_e)
 {
 	struct thin_c *tc = op->tc;
 	sector_t s = block_to_sectors(tc->pool, data_b);
@@ -365,7 +365,7 @@ static int issue_discard(struct discard_op *op, dm_block_t data_b, dm_block_t da
 				      GFP_NOWAIT, 0, &op->bio);
 }
 
-static void end_discard(struct discard_op *op, int r)
+static void end_deprovisioning(struct deprovisioning_op *op, int r)
 {
 	if (op->bio) {
 		/*
@@ -373,14 +373,14 @@ static void end_discard(struct discard_op *op, int r)
 		 * need to wait for the chain to complete.
 		 */
 		bio_chain(op->bio, op->parent_bio);
-		bio_set_op_attrs(op->bio, REQ_OP_DISCARD, 0);
+		bio_set_op_attrs(op->bio, bio_op(op->parent_bio), 0);
 		submit_bio(op->bio);
 	}
 
 	blk_finish_plug(&op->plug);
 
 	/*
-	 * Even if r is set, there could be sub discards in flight that we
+	 * Even if r is set, there could be sub operations in flight that we
 	 * need to wait for.
 	 */
 	if (r && !op->parent_bio->bi_error)
@@ -1013,7 +1013,7 @@ static void process_prepared_discard_no_passdown(struct dm_thin_new_mapping *m)
 /*----------------------------------------------------------------*/
 
 static void passdown_double_checking_shared_status(struct dm_thin_new_mapping *m,
-						   struct bio *discard_parent)
+						   struct bio *parent_bio)
 {
 	/*
 	 * We've already unmapped this range of blocks, but before we
@@ -1024,9 +1024,9 @@ static void passdown_double_checking_shared_status(struct dm_thin_new_mapping *m
 	struct thin_c *tc = m->tc;
 	struct pool *pool = tc->pool;
 	dm_block_t b = m->data_block, e, end = m->data_block + m->virt_end - m->virt_begin;
-	struct discard_op op;
+	struct deprovisioning_op op;
 
-	begin_discard(&op, tc, discard_parent);
+	begin_deprovisioning(&op, tc, parent_bio);
 	while (b != end) {
 		/* find start of unmapped run */
 		for (; b < end; b++) {
@@ -1051,14 +1051,14 @@ static void passdown_double_checking_shared_status(struct dm_thin_new_mapping *m
 				break;
 		}
 
-		r = issue_discard(&op, b, e);
+		r = issue_deprovisioning(&op, b, e);
 		if (r)
 			goto out;
 
 		b = e;
 	}
 out:
-	end_discard(&op, r);
+	end_deprovisioning(&op, r);
 }
 
 static void queue_passdown_pt2(struct dm_thin_new_mapping *m)
@@ -1086,7 +1086,7 @@ static void process_prepared_discard_passdown_pt1(struct dm_thin_new_mapping *m)
 	int r;
 	struct thin_c *tc = m->tc;
 	struct pool *pool = tc->pool;
-	struct bio *discard_parent;
+	struct bio *parent_bio;
 	dm_block_t data_end = m->data_block + (m->virt_end - m->virt_begin);
 
 	/*
@@ -1103,24 +1103,27 @@ static void process_prepared_discard_passdown_pt1(struct dm_thin_new_mapping *m)
 		return;
 	}
 
-	discard_parent = bio_alloc(GFP_NOIO, 1);
-	if (!discard_parent) {
-		DMWARN("%s: unable to allocate top level discard bio for passdown. Skipping passdown.",
+	parent_bio = bio_alloc(GFP_NOIO, 1);
+	if (!parent_bio) {
+		DMWARN("%s: unable to allocate top level %s bio for passdown. Skipping passdown.",
+		       bio_op(m->bio) == REQ_OP_DISCARD ? "discard" : "write zeroes",
 		       dm_device_name(tc->pool->pool_md));
+		// FIXME: with missing dm_pool_inc_data_range() how is this valid? seems like bug!
 		queue_passdown_pt2(m);
 
 	} else {
-		discard_parent->bi_end_io = passdown_endio;
-		discard_parent->bi_private = m;
+		parent_bio->bi_end_io = passdown_endio;
+		parent_bio->bi_private = m;
+		bio_set_op_attrs(parent_bio, bio_op(m->bio), 0);
 
 		if (m->maybe_shared)
-			passdown_double_checking_shared_status(m, discard_parent);
+			passdown_double_checking_shared_status(m, parent_bio);
 		else {
-			struct discard_op op;
+			struct deprovisioning_op op;
 
-			begin_discard(&op, tc, discard_parent);
-			r = issue_discard(&op, m->data_block, data_end);
-			end_discard(&op, r);
+			begin_deprovisioning(&op, tc, parent_bio);
+			r = issue_deprovisioning(&op, m->data_block, data_end);
+			end_deprovisioning(&op, r);
 		}
 	}
 
