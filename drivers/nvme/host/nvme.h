@@ -400,8 +400,7 @@ extern const struct attribute_group nvme_ns_id_attr_group;
 extern const struct block_device_operations nvme_ns_head_ops;
 
 #ifdef CONFIG_NVME_MULTIPATH
-void nvme_failover_req(struct request *req);
-bool nvme_req_needs_failover(struct request *req);
+bool nvme_failover_req(struct request *req, blk_status_t status);
 void nvme_kick_requeue_lists(struct nvme_ctrl *ctrl);
 int nvme_mpath_alloc_disk(struct nvme_ctrl *ctrl,struct nvme_ns_head *head);
 void nvme_mpath_add_disk(struct nvme_ns_head *head);
@@ -418,10 +417,7 @@ static inline void nvme_mpath_clear_current_path(struct nvme_ns *ns)
 }
 struct nvme_ns *nvme_find_path(struct nvme_ns_head *head);
 #else
-static inline void nvme_failover_req(struct request *req)
-{
-}
-static inline bool nvme_req_needs_failover(struct request *req)
+static inline bool nvme_failover_req(struct request *req, blk_status_t status)
 {
 	return false;
 }
