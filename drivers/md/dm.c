@@ -1626,20 +1626,9 @@ static const struct dax_operations dm_dax_ops;
 
 static void dm_wq_work(struct work_struct *work);
 
-void dm_init_md_queue(struct mapped_device *md)
-{
-	/*
-	 * Initialize data that will only be used by a non-blk-mq DM queue
-	 * - must do so here (in alloc_dev callchain) before queue is used
-	 */
-	md->queue->queuedata = md;
-	md->queue->backing_dev_info->congested_data = md;
-}
-
-void dm_init_normal_md_queue(struct mapped_device *md)
+static void dm_init_normal_md_queue(struct mapped_device *md)
 {
 	md->use_blk_mq = false;
-	dm_init_md_queue(md);
 
 	/*
 	 * Initialize aspects of queue that aren't relevant for blk-mq
@@ -1731,13 +1720,7 @@ static struct mapped_device *alloc_dev(int minor)
 	INIT_LIST_HEAD(&md->table_devices);
 	spin_lock_init(&md->uevent_lock);
 
-	md->queue = blk_alloc_queue_node(GFP_KERNEL, numa_node_id);
-	if (!md->queue)
-		goto bad;
-
-	dm_init_md_queue(md);
-
-	md->disk = alloc_disk_node(1, numa_node_id);
+	md->disk = alloc_disk_node(1, md->numa_node_id);
 	if (!md->disk)
 		goto bad;
 
@@ -1752,7 +1735,7 @@ static struct mapped_device *alloc_dev(int minor)
 	md->disk->major = _major;
 	md->disk->first_minor = minor;
 	md->disk->fops = &dm_blk_dops;
-	md->disk->queue = md->queue;
+	md->disk->queue = NULL;
 	md->disk->private_data = md;
 	sprintf(md->disk->disk_name, "dm-%d", minor);
 
@@ -1962,13 +1945,18 @@ static struct dm_table *__unbind(struct mapped_device *md)
  */
 int dm_create(int minor, struct mapped_device **result)
 {
+	int r;
 	struct mapped_device *md;
 
 	md = alloc_dev(minor);
 	if (!md)
 		return -ENXIO;
 
-	dm_sysfs_init(md);
+	r = dm_sysfs_init(md);
+	if (r) {
+		free_dev(md);
+		return r;
+	}
 
 	*result = md;
 	return 0;
@@ -2021,21 +2009,31 @@ EXPORT_SYMBOL_GPL(dm_get_queue_limits);
 int dm_setup_md_queue(struct mapped_device *md, struct dm_table *t)
 {
 	int r;
-	enum dm_queue_mode type = dm_get_md_type(md);
+	struct queue_limits limits;
+	enum dm_queue_mode type = dm_table_get_type(t);
+
+	md->queue = blk_alloc_queue_node(GFP_KERNEL, md->numa_node_id);
+	if (!md->queue) {
+		DMERR("Cannot allocate queue for mapped device");
+		return -ENOMEM;
+	}
+	md->queue->queuedata = md;
+	md->queue->backing_dev_info->congested_data = md;
 
 	switch (type) {
 	case DM_TYPE_REQUEST_BASED:
+		dm_init_normal_md_queue(md);
 		r = dm_old_init_request_queue(md, t);
 		if (r) {
 			DMERR("Cannot initialize queue for request-based mapped device");
-			return r;
+			goto bad;
 		}
 		break;
 	case DM_TYPE_MQ_REQUEST_BASED:
 		r = dm_mq_init_request_queue(md, t);
 		if (r) {
 			DMERR("Cannot initialize queue for request-based dm-mq mapped device");
-			return r;
+			goto bad;
 		}
 		break;
 	case DM_TYPE_BIO_BASED:
@@ -2057,7 +2055,23 @@ int dm_setup_md_queue(struct mapped_device *md, struct dm_table *t)
 		break;
 	}
 
+	r = dm_calculate_queue_limits(t, &limits);
+	if (r) {
+		DMERR("Cannot calculate initial queue limits");
+		goto bad;
+	}
+	dm_table_set_restrictions(t, md->queue, &limits);
+
+	md->disk->queue = md->queue;
+	WARN_ON(bdi_register_owner(md->queue->backing_dev_info,
+				   disk_to_dev(md->disk)));
+	blk_register_queue(md->disk);
+
+	dm_set_md_type(md, type);
 	return 0;
+bad:
+	blk_cleanup_queue(md->queue);
+	return r;
 }
 
 struct mapped_device *dm_get_md(dev_t dev)
@@ -2121,7 +2135,6 @@ EXPORT_SYMBOL_GPL(dm_device_name);
 
 static void __dm_destroy(struct mapped_device *md, bool wait)
 {
-	struct request_queue *q = dm_get_md_queue(md);
 	struct dm_table *map;
 	int srcu_idx;
 
@@ -2132,7 +2145,8 @@ static void __dm_destroy(struct mapped_device *md, bool wait)
 	set_bit(DMF_FREEING, &md->flags);
 	spin_unlock(&_minor_lock);
 
-	blk_set_queue_dying(q);
+	if (md->queue)
+		blk_set_queue_dying(md->queue);
 
 	if (dm_request_based(md) && md->kworker_task)
 		kthread_flush_worker(&md->kworker);

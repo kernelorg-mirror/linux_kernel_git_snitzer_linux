@@ -1161,7 +1161,7 @@ static int dm_table_build_index(struct dm_table *t)
 
 static bool integrity_profile_exists(struct gendisk *disk)
 {
-	return !!blk_get_integrity(disk);
+	return disk->queue && !!blk_get_integrity(disk);
 }
 
 /*
