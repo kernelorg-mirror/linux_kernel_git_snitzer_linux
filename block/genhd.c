@@ -621,11 +621,6 @@ exit:
 	while ((part = disk_part_iter_next(&piter)))
 		kobject_uevent(&part_to_dev(part)->kobj, KOBJ_ADD);
 	disk_part_iter_exit(&piter);
-
-	err = sysfs_create_link(&ddev->kobj,
-				&disk->queue->backing_dev_info->dev->kobj,
-				"bdi");
-	WARN_ON(err);
 }
 
 /**
@@ -671,24 +666,19 @@ void device_add_disk(struct device *parent, struct gendisk *disk)
 		disk->flags |= GENHD_FL_SUPPRESS_PARTITION_INFO;
 		disk->flags |= GENHD_FL_NO_PART_SCAN;
 	} else {
-		int ret;
-
-		/* Register BDI before referencing it from bdev */
 		disk_to_dev(disk)->devt = devt;
-		ret = bdi_register_owner(disk->queue->backing_dev_info,
-						disk_to_dev(disk));
-		WARN_ON(ret);
+		/* Register BDI before referencing it from bdev */
+		if (disk->queue) {
+			retval = bdi_register_owner(disk->queue->backing_dev_info,
+						    disk_to_dev(disk));
+			WARN_ON(retval);
+		}
 		blk_register_region(disk_devt(disk), disk->minors, NULL,
 				    exact_match, exact_lock, disk);
 	}
 	register_disk(parent, disk);
-	blk_register_queue(disk);
-
-	/*
-	 * Take an extra ref on queue which will be put on disk_release()
-	 * so that it sticks around as long as @disk is there.
-	 */
-	WARN_ON_ONCE(!blk_get_queue(disk->queue));
+	if (disk->queue)
+		blk_register_queue(disk);
 
 	disk_add_events(disk);
 	blk_integrity_add(disk);
@@ -718,19 +708,8 @@ void del_gendisk(struct gendisk *disk)
 	set_capacity(disk, 0);
 	disk->flags &= ~GENHD_FL_UP;
 
-	if (!(disk->flags & GENHD_FL_HIDDEN))
-		sysfs_remove_link(&disk_to_dev(disk)->kobj, "bdi");
-	if (disk->queue) {
-		/*
-		 * Unregister bdi before releasing device numbers (as they can
-		 * get reused and we'd get clashes in sysfs).
-		 */
-		if (!(disk->flags & GENHD_FL_HIDDEN))
-			bdi_unregister(disk->queue->backing_dev_info);
+	if (disk->queue)
 		blk_unregister_queue(disk);
-	} else {
-		WARN_ON(1);
-	}
 
 	if (!(disk->flags & GENHD_FL_HIDDEN))
 		blk_unregister_region(disk_devt(disk), disk->minors);
