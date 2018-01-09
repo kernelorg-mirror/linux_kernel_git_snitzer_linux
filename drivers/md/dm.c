@@ -2063,6 +2063,11 @@ int dm_setup_md_queue(struct mapped_device *md, struct dm_table *t)
 	dm_table_set_restrictions(t, md->queue, &limits);
 
 	md->disk->queue = md->queue;
+	r = dm_table_register_integrity(t);
+	if (r) {
+		DMERR("Cannot register integrity profile");
+		goto bad;
+	}
 	WARN_ON(bdi_register_owner(md->queue->backing_dev_info,
 				   disk_to_dev(md->disk)));
 	blk_register_queue(md->disk);

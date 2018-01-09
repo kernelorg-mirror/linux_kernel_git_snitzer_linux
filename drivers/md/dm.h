@@ -59,6 +59,7 @@ int dm_calculate_queue_limits(struct dm_table *table,
 			      struct queue_limits *limits);
 void dm_table_set_restrictions(struct dm_table *t, struct request_queue *q,
 			       struct queue_limits *limits);
+int dm_table_register_integrity(struct dm_table *t);
 struct list_head *dm_table_get_devices(struct dm_table *t);
 void dm_table_presuspend_targets(struct dm_table *t);
 void dm_table_presuspend_undo_targets(struct dm_table *t);

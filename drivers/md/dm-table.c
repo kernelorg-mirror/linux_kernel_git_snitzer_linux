@@ -1204,15 +1204,9 @@ no_integrity:
 
 /*
  * Register the mapped device for blk_integrity support if the
- * underlying devices have an integrity profile.  But all devices may
- * not have matching profiles (checking all devices isn't reliable
- * during table load because this table may use other DM device(s) which
- * must be resumed before they will have an initialized integity
- * profile).  Consequently, stacked DM devices force a 2 stage integrity
- * profile validation: First pass during table load, final pass during
- * resume.
+ * underlying devices have an integrity profile.
  */
-static int dm_table_register_integrity(struct dm_table *t)
+int dm_table_register_integrity(struct dm_table *t)
 {
 	struct mapped_device *md = t->md;
 	struct gendisk *template_disk = NULL;
@@ -1227,10 +1221,6 @@ static int dm_table_register_integrity(struct dm_table *t)
 
 	if (!integrity_profile_exists(dm_disk(md))) {
 		t->integrity_supported = true;
-		/*
-		 * Register integrity profile during table load; we can do
-		 * this because the final profile must match during resume.
-		 */
 		blk_integrity_register(dm_disk(md),
 				       blk_get_integrity(template_disk));
 		return 0;
@@ -1270,12 +1260,6 @@ int dm_table_complete(struct dm_table *t)
 	r = dm_table_build_index(t);
 	if (r) {
 		DMERR("unable to build btrees");
-		return r;
-	}
-
-	r = dm_table_register_integrity(t);
-	if (r) {
-		DMERR("could not register integrity profile.");
 		return r;
 	}
 
