@@ -41,8 +41,10 @@ ssize_t part_timeout_show(struct device *dev, struct device_attribute *attr,
 			  char *buf)
 {
 	struct gendisk *disk = dev_to_disk(dev);
-	int set = test_bit(QUEUE_FLAG_FAIL_IO, &disk->queue->queue_flags);
+	int set = 0;
 
+	if (disk->queue)
+		set = test_bit(QUEUE_FLAG_FAIL_IO, &disk->queue->queue_flags);
 	return sprintf(buf, "%d\n", set != 0);
 }
 
@@ -55,6 +57,9 @@ ssize_t part_timeout_store(struct device *dev, struct device_attribute *attr,
 	if (count) {
 		struct request_queue *q = disk->queue;
 		char *p = (char *) buf;
+
+		if (!q)
+			return -ENXIO;
 
 		val = simple_strtoul(p, &p, 10);
 		spin_lock_irq(q->queue_lock);

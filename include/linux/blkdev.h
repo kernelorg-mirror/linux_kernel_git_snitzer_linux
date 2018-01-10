@@ -1538,6 +1538,8 @@ static inline int bdev_io_opt(struct block_device *bdev)
 
 static inline int queue_alignment_offset(struct request_queue *q)
 {
+	if (!q)
+		return 0;
 	if (q->limits.misaligned)
 		return -1;
 
@@ -1567,6 +1569,8 @@ static inline int bdev_alignment_offset(struct block_device *bdev)
 
 static inline int queue_discard_alignment(struct request_queue *q)
 {
+	if (!q)
+		return 0;
 	if (q->limits.discard_misaligned)
 		return -1;
 
