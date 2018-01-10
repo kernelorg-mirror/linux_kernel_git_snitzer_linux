@@ -687,6 +687,9 @@ int bdev_stack_limits(struct queue_limits *t, struct block_device *bdev,
 {
 	struct request_queue *bq = bdev_get_queue(bdev);
 
+	if (!bq)
+		return 0;
+
 	start += get_start_sect(bdev);
 
 	return blk_stack_limits(t, &bq->limits, start);
@@ -706,7 +709,10 @@ EXPORT_SYMBOL(bdev_stack_limits);
 void disk_stack_limits(struct gendisk *disk, struct block_device *bdev,
 		       sector_t offset)
 {
-	struct request_queue *t = disk->queue;
+	struct request_queue *t = disk_get_queue(disk);
+
+	if (!t)
+		return;
 
 	if (bdev_stack_limits(&t->limits, bdev, offset >> 9) < 0) {
 		char top[BDEVNAME_SIZE], bottom[BDEVNAME_SIZE];

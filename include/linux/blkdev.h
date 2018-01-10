@@ -1055,7 +1055,7 @@ bool blk_poll(struct request_queue *q, blk_qc_t cookie);
 
 static inline struct request_queue *bdev_get_queue(struct block_device *bdev)
 {
-	return bdev->bd_disk->queue;	/* this is never NULL */
+	return disk_get_queue(bdev->bd_disk);
 }
 
 /*
@@ -1890,8 +1890,13 @@ extern bool blk_integrity_merge_bio(struct request_queue *, struct request *,
 
 static inline struct blk_integrity *blk_get_integrity(struct gendisk *disk)
 {
-	struct blk_integrity *bi = &disk->queue->integrity;
+	struct blk_integrity *bi = NULL;
+	struct request_queue *q = disk_get_queue(disk);
 
+	if (!q)
+		return NULL;
+
+	bi = &q->integrity;
 	if (!bi->profile)
 		return NULL;
 

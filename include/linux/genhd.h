@@ -211,6 +211,24 @@ struct gendisk {
 	struct lockdep_map lockdep_map;
 };
 
+static inline struct request_queue *disk_get_queue(struct gendisk *disk)
+{
+	struct request_queue *q = disk->queue;
+
+	/*
+	 * disk->queue should _never_ be NULL at this call site.
+	 *
+	 * While queue may _rarely_ be NULL for a brief time after
+	 * add_disk() it must be initialized soon after and
+	 * it is the responsibility of the driver to guard against
+	 * premature access to the q (before it is initialized).
+	 * - such as how DM and DASD rely on CHANGE uevents before
+	 *   a device is ready for IO.
+	 */
+	WARN_ON(!q);
+	return q;
+}
+
 static inline struct gendisk *part_to_disk(struct hd_struct *part)
 {
 	if (likely(part)) {
