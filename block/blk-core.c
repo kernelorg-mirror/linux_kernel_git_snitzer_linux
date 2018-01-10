@@ -1571,8 +1571,7 @@ static void add_acct_request(struct request_queue *q, struct request *rq,
 	__elv_add_request(q, rq, where);
 }
 
-static void part_round_stats_single(struct request_queue *q, int cpu,
-				    struct hd_struct *part, unsigned long now,
+static void part_round_stats_single(int cpu, struct hd_struct *part, unsigned long now,
 				    unsigned int inflight)
 {
 	if (inflight) {
@@ -1607,6 +1606,9 @@ void part_round_stats(struct request_queue *q, int cpu, struct hd_struct *part)
 	unsigned int inflight[2];
 	int stats = 0;
 
+	if (unlikely(!q))
+		return;
+
 	if (part->stamp != now)
 		stats |= 1;
 
@@ -1622,9 +1624,9 @@ void part_round_stats(struct request_queue *q, int cpu, struct hd_struct *part)
 	part_in_flight(q, part, inflight);
 
 	if (stats & 2)
-		part_round_stats_single(q, cpu, part2, now, inflight[1]);
+		part_round_stats_single(cpu, part2, now, inflight[1]);
 	if (stats & 1)
-		part_round_stats_single(q, cpu, part, now, inflight[0]);
+		part_round_stats_single(cpu, part, now, inflight[0]);
 }
 EXPORT_SYMBOL_GPL(part_round_stats);
 
