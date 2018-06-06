@@ -172,8 +172,7 @@ struct dm_writecache {
 	struct task_struct *endio_thread;
 
 	struct task_struct *flush_thread;
-	struct completion flush_completion;
-	struct bio *flush_bio;
+	struct bio_list flush_list;
 
 	struct dm_kcopyd_client *dm_kcopyd;
 	unsigned long *dirty_bitmap;
@@ -1066,35 +1065,47 @@ static int writecache_flush_thread(void *data)
 {
 	struct dm_writecache *wc = data;
 
-	while (!kthread_should_stop()) {
-		struct bio *bio = wc->flush_bio;
+	while (1) {
+		struct bio *bio;
 
-		if (likely(bio)) {
-			if (bio_op(bio) == REQ_OP_DISCARD)
-				writecache_discard(wc, bio->bi_iter.bi_sector, bio_end_sector(bio));
-			else
-				writecache_flush(wc);
+		wc_lock(wc);
+		bio = bio_list_pop(&wc->flush_list);
+		if (!bio) {
+			set_current_state(TASK_INTERRUPTIBLE);
+			wc_unlock(wc);
+
+			if (unlikely(kthread_should_stop())) {
+				set_current_state(TASK_RUNNING);
+				break;
+			}
+
+			schedule();
+			continue;
 		}
 
-		set_current_state(TASK_INTERRUPTIBLE);
-		/* for debugging - catch uninitialized use */
-		wc->flush_bio = (void *)0x600 + POISON_POINTER_DELTA;
-		complete(&wc->flush_completion);
-
-		schedule();
+		if (bio_op(bio) == REQ_OP_DISCARD) {
+			writecache_discard(wc, bio->bi_iter.bi_sector,
+					   bio_end_sector(bio));
+			wc_unlock(wc);
+			bio_set_dev(bio, wc->dev->bdev);
+			generic_make_request(bio);
+		} else {
+			writecache_flush(wc);
+			wc_unlock(wc);
+			if (writecache_has_error(wc))
+				bio->bi_status = BLK_STS_IOERR;
+			bio_endio(bio);
+		}
 	}
-
-	set_current_state(TASK_RUNNING);
 
 	return 0;
 }
 
 static void writecache_offload_bio(struct dm_writecache *wc, struct bio *bio)
 {
-	wc->flush_bio = bio;
-	reinit_completion(&wc->flush_completion);
-	wake_up_process(wc->flush_thread);
-	wait_for_completion_io(&wc->flush_completion);
+	if (bio_list_empty(&wc->flush_list))
+		wake_up_process(wc->flush_thread);
+	bio_list_add(&wc->flush_list, bio);
 }
 
 static int writecache_map(struct dm_target *ti, struct bio *bio)
@@ -1109,11 +1120,15 @@ static int writecache_map(struct dm_target *ti, struct bio *bio)
 	if (unlikely(bio->bi_opf & REQ_PREFLUSH)) {
 		if (writecache_has_error(wc))
 			goto unlock_error;
-		if (WC_MODE_PMEM(wc))
+		if (WC_MODE_PMEM(wc)) {
 			writecache_flush(wc);
-		else
+			if (writecache_has_error(wc))
+				goto unlock_error;
+			goto unlock_submit;
+		} else {
 			writecache_offload_bio(wc, bio);
-		goto unlock_submit;
+			goto unlock_return;
+		}
 	}
 
 	bio->bi_iter.bi_sector = dm_target_offset(ti, bio->bi_iter.bi_sector);
@@ -1129,11 +1144,13 @@ static int writecache_map(struct dm_target *ti, struct bio *bio)
 	if (unlikely(bio_op(bio) == REQ_OP_DISCARD)) {
 		if (writecache_has_error(wc))
 			goto unlock_error;
-		if (WC_MODE_PMEM(wc))
+		if (WC_MODE_PMEM(wc)) {
 			writecache_discard(wc, bio->bi_iter.bi_sector, bio_end_sector(bio));
-		else
+			goto unlock_remap_origin;
+		} else {
 			writecache_offload_bio(wc, bio);
-		goto unlock_remap_origin;
+			goto unlock_return;
+		}
 	}
 
 	if (bio_data_dir(bio) == READ) {
@@ -1223,6 +1240,10 @@ unlock_remap:
 unlock_submit:
 	wc_unlock(wc);
 	bio_endio(bio);
+	return DM_MAPIO_SUBMITTED;
+
+unlock_return:
+	wc_unlock(wc);
 	return DM_MAPIO_SUBMITTED;
 
 unlock_error:
@@ -2024,7 +2045,7 @@ invalid_optional:
 		size_t n_blocks, n_metadata_blocks;
 		uint64_t n_bitmap_bits;
 
-		init_completion(&wc->flush_completion);
+		bio_list_init(&wc->flush_list);
 		wc->flush_thread = kthread_create(writecache_flush_thread, wc, "dm_writecache_flush");
 		if (IS_ERR(wc->flush_thread)) {
 			r = PTR_ERR(wc->flush_thread);
@@ -2032,7 +2053,7 @@ invalid_optional:
 			ti->error = "Couldn't spawn endio thread";
 			goto bad;
 		}
-		writecache_offload_bio(wc, NULL);
+		wake_up_process(wc->flush_thread);
 
 		r = calculate_memory_size(wc->memory_map_size, wc->block_size,
 					  &n_blocks, &n_metadata_blocks);
