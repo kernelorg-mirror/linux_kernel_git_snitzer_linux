@@ -10,7 +10,6 @@
 #include <linux/init.h>
 #include <linux/vmalloc.h>
 #include <linux/kthread.h>
-#include <linux/swait.h>
 #include <linux/dm-io.h>
 #include <linux/dm-kcopyd.h>
 #include <linux/dax.h>
@@ -168,7 +167,7 @@ struct dm_writecache {
 
 	struct dm_io_client *dm_io;
 
-	struct swait_queue_head endio_thread_wait;
+	raw_spinlock_t endio_list_lock;
 	struct list_head endio_list;
 	struct task_struct *endio_thread;
 
@@ -1274,10 +1273,11 @@ static void writecache_writeback_endio(struct bio *bio)
 	struct dm_writecache *wc = wb->wc;
 	unsigned long flags;
 
-	raw_spin_lock_irqsave(&wc->endio_thread_wait.lock, flags);
+	raw_spin_lock_irqsave(&wc->endio_list_lock, flags);
+	if (unlikely(list_empty(&wc->endio_list)))
+		wake_up_process(wc->endio_thread);
 	list_add_tail(&wb->endio_entry, &wc->endio_list);
-	swake_up_locked(&wc->endio_thread_wait);
-	raw_spin_unlock_irqrestore(&wc->endio_thread_wait.lock, flags);
+	raw_spin_unlock_irqrestore(&wc->endio_list_lock, flags);
 }
 
 static void writecache_copy_endio(int read_err, unsigned long write_err, void *ptr)
@@ -1287,10 +1287,11 @@ static void writecache_copy_endio(int read_err, unsigned long write_err, void *p
 
 	c->error = likely(!(read_err | write_err)) ? 0 : -EIO;
 
-	raw_spin_lock_irq(&wc->endio_thread_wait.lock);
+	raw_spin_lock_irq(&wc->endio_list_lock);
+	if (unlikely(list_empty(&wc->endio_list)))
+		wake_up_process(wc->endio_thread);
 	list_add_tail(&c->endio_entry, &wc->endio_list);
-	swake_up_locked(&wc->endio_thread_wait);
-	raw_spin_unlock_irq(&wc->endio_thread_wait.lock);
+	raw_spin_unlock_irq(&wc->endio_list_lock);
 }
 
 static void __writecache_endio_pmem(struct dm_writecache *wc, struct list_head *list)
@@ -1365,33 +1366,28 @@ static int writecache_endio_thread(void *data)
 	struct dm_writecache *wc = data;
 
 	while (1) {
-		DECLARE_SWAITQUEUE(wait);
 		struct list_head list;
 
-		raw_spin_lock_irq(&wc->endio_thread_wait.lock);
-continue_locked:
+		raw_spin_lock_irq(&wc->endio_list_lock);
 		if (!list_empty(&wc->endio_list))
 			goto pop_from_list;
 		set_current_state(TASK_INTERRUPTIBLE);
-		__prepare_to_swait(&wc->endio_thread_wait, &wait);
-		raw_spin_unlock_irq(&wc->endio_thread_wait.lock);
+		raw_spin_unlock_irq(&wc->endio_list_lock);
 
 		if (unlikely(kthread_should_stop())) {
-			finish_swait(&wc->endio_thread_wait, &wait);
+			set_current_state(TASK_RUNNING);
 			break;
 		}
 
 		schedule();
 
-		raw_spin_lock_irq(&wc->endio_thread_wait.lock);
-		__finish_swait(&wc->endio_thread_wait, &wait);
-		goto continue_locked;
+		continue;
 
 pop_from_list:
 		list = wc->endio_list;
 		list.next->prev = list.prev->next = &list;
 		INIT_LIST_HEAD(&wc->endio_list);
-		raw_spin_unlock_irq(&wc->endio_thread_wait.lock);
+		raw_spin_unlock_irq(&wc->endio_list_lock);
 
 		if (!WC_MODE_FUA(wc))
 			writecache_disk_flush(wc, wc->dev);
@@ -1849,7 +1845,7 @@ static int writecache_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	INIT_WORK(&wc->writeback_work, writecache_writeback);
 	INIT_WORK(&wc->flush_work, writecache_flush_work);
 
-	init_swait_queue_head(&wc->endio_thread_wait);
+	raw_spin_lock_init(&wc->endio_list_lock);
 	INIT_LIST_HEAD(&wc->endio_list);
 	wc->endio_thread = kthread_create(writecache_endio_thread, wc, "writecache_endio");
 	if (IS_ERR(wc->endio_thread)) {
