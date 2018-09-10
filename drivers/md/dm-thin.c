@@ -201,12 +201,12 @@ enum pool_mode {
 	PM_WRITE,		/* metadata may be changed */
 	PM_OUT_OF_DATA_SPACE,	/* metadata may be changed, though data may not be allocated */
 
-        /*
-         * Like READ_ONLY, except may switch back to WRITE on metadata resize. Reported as READ_ONLY.
-         */
+	/*
+	 * Like READ_ONLY, except may switch back to WRITE on metadata resize. Reported as READ_ONLY.
+	 */
 	PM_OUT_OF_METADATA_SPACE,
-
 	PM_READ_ONLY,		/* metadata may not be changed */
+
 	PM_FAIL,		/* all I/O fails */
 };
 
@@ -1377,28 +1377,32 @@ static void set_pool_mode(struct pool *pool, enum pool_mode new_mode);
 
 static void requeue_bios(struct pool *pool);
 
+static bool is_read_only_pool_mode(enum pool_mode mode)
+{
+	return (mode == PM_OUT_OF_METADATA_SPACE || mode == PM_READ_ONLY);
+}
+
 static bool is_read_only(struct pool *pool)
 {
-	return get_pool_mode(pool) >= PM_OUT_OF_METADATA_SPACE;
+	return is_read_only_pool_mode(get_pool_mode(pool));
 }
 
 static void check_for_metadata_space(struct pool *pool)
 {
 	int r;
-	bool ooms = false;
+	const char *ooms_reason = NULL;
 	dm_block_t nr_free;
 
 	r = dm_pool_get_free_metadata_block_count(pool->pmd, &nr_free);
-	if (r) {
-		DMERR("could not get free metadata blocks, setting read-only mode");
-		ooms = true;
-	} else if (!nr_free) {
-		DMERR("No free metadata, setting read-only mode");
-		ooms = true;
-	}
+	if (r)
+		ooms_reason = "Could not get free metadata blocks.";
+	else if (!nr_free)
+		ooms_reason = "No free metadata blocks.";
 
-	if (ooms && !is_read_only(pool))
+	if (ooms_reason && !is_read_only(pool)) {
+		DMERR("%s", ooms_reason);
 		set_pool_mode(pool, PM_OUT_OF_METADATA_SPACE);
+	}
 }
 
 static void check_for_data_space(struct pool *pool)
@@ -1427,7 +1431,7 @@ static int commit(struct pool *pool)
 {
 	int r;
 
-	if (is_read_only(pool))
+	if (get_pool_mode(pool) >= PM_OUT_OF_METADATA_SPACE)
 		return -EINVAL;
 
 	r = dm_pool_commit_metadata(pool->pmd);
@@ -1504,12 +1508,12 @@ static int alloc_data_block(struct thin_c *tc, dm_block_t *result)
 
 	r = dm_pool_get_free_metadata_block_count(pool->pmd, &free_blocks);
 	if (r) {
-		metadata_operation_failed(pool, "dm_pool_get_free_metadata_block-count", r);
+		metadata_operation_failed(pool, "dm_pool_get_free_metadata_block_count", r);
 		return r;
 	}
 
 	if (!free_blocks) {
-		// Let's commit before we use up the metadata reserve.
+		/* Let's commit before we use up the metadata reserve. */
 		r = commit(pool);
 		if (r)
 			return r;
@@ -2512,7 +2516,7 @@ static void set_pool_mode(struct pool *pool, enum pool_mode new_mode)
 
 	case PM_OUT_OF_METADATA_SPACE:
 	case PM_READ_ONLY:
-		if (old_mode != new_mode)
+		if (!is_read_only_pool_mode(old_mode))
 			notify_of_pool_mode_change(pool, "read-only");
 		dm_pool_metadata_read_only(pool->pmd);
 		pool->process_bio = process_bio_read_only;
@@ -3451,8 +3455,6 @@ static int maybe_resize_metadata_dev(struct dm_target *ti, bool *need_commit)
 		       dm_device_name(pool->pool_md),
 		       sb_metadata_dev_size, metadata_dev_size);
 
-		pr_alert("resizing metadata to %llu\n", (unsigned long long) metadata_dev_size);
-
 		if (get_pool_mode(pool) == PM_OUT_OF_METADATA_SPACE)
 			set_pool_mode(pool, PM_WRITE);
 
@@ -3760,7 +3762,7 @@ static int pool_message(struct dm_target *ti, unsigned argc, char **argv,
 	struct pool_c *pt = ti->private;
 	struct pool *pool = pt->pool;
 
-	if (is_read_only(pool)) {
+	if (get_pool_mode(pool) >= PM_OUT_OF_METADATA_SPACE) {
 		DMERR("%s: unable to service pool target messages in READ_ONLY or FAIL mode",
 		      dm_device_name(pool->pool_md));
 		return -EOPNOTSUPP;
@@ -3834,6 +3836,7 @@ static void pool_status(struct dm_target *ti, status_type_t type,
 	dm_block_t nr_blocks_data;
 	dm_block_t nr_blocks_metadata;
 	dm_block_t held_root;
+	enum pool_mode mode;
 	char buf[BDEVNAME_SIZE];
 	char buf2[BDEVNAME_SIZE];
 	struct pool_c *pt = ti->private;
@@ -3904,9 +3907,10 @@ static void pool_status(struct dm_target *ti, status_type_t type,
 		else
 			DMEMIT("- ");
 
-		if (pool->pf.mode == PM_OUT_OF_DATA_SPACE)
+		mode = get_pool_mode(pool);
+		if (mode == PM_OUT_OF_DATA_SPACE)
 			DMEMIT("out_of_data_space ");
-		else if (pool->pf.mode == PM_OUT_OF_METADATA_SPACE || pool->pf.mode == PM_READ_ONLY)
+		else if (is_read_only_pool_mode(mode))
 			DMEMIT("ro ");
 		else
 			DMEMIT("rw ");

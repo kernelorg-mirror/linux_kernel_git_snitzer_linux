@@ -189,10 +189,10 @@ struct dm_pool_metadata {
 	sector_t data_block_size;
 
 	/*
-         * We reserve a section of the metadata for commit overhead.
-         * All reported space does *not* include this.
-         */
-        dm_block_t metadata_reserve;
+	 * We reserve a section of the metadata for commit overhead.
+	 * All reported space does *not* include this.
+	 */
+	dm_block_t metadata_reserve;
 
 	/*
 	 * Set if a transaction has to be aborted but the attempt to roll back
@@ -822,11 +822,11 @@ static int __commit_transaction(struct dm_pool_metadata *pmd)
 	return dm_tm_commit(pmd->tm, sblock);
 }
 
-static void _set_metadata_reserve(struct dm_pool_metadata *pmd)
+static void __set_metadata_reserve(struct dm_pool_metadata *pmd)
 {
 	int r;
 	dm_block_t total;
-	dm_block_t max_blocks = 4096;   /* 16M */
+	dm_block_t max_blocks = 4096;	/* 16M */
 
 	r = dm_sm_get_nr_blocks(pmd->metadata_sm, &total);
 	if (r) {
@@ -869,7 +869,7 @@ struct dm_pool_metadata *dm_pool_metadata_open(struct block_device *bdev,
 		return ERR_PTR(r);
 	}
 
-	_set_metadata_reserve(pmd);
+	__set_metadata_reserve(pmd);
 
 	return pmd;
 }
@@ -1964,7 +1964,7 @@ int dm_pool_resize_metadata_dev(struct dm_pool_metadata *pmd, dm_block_t new_cou
 	if (!pmd->fail_io) {
 		r = __resize_space_map(pmd->metadata_sm, new_count);
 		if (!r)
-			_set_metadata_reserve(pmd);
+			__set_metadata_reserve(pmd);
 	}
 	up_write(&pmd->root_lock);
 
