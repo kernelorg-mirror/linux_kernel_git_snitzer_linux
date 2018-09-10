@@ -200,6 +200,12 @@ struct dm_thin_new_mapping;
 enum pool_mode {
 	PM_WRITE,		/* metadata may be changed */
 	PM_OUT_OF_DATA_SPACE,	/* metadata may be changed, though data may not be allocated */
+
+        /*
+         * Like READ_ONLY, except may switch back to WRITE on metadata resize. Reported as READ_ONLY.
+         */
+	PM_OUT_OF_METADATA_SPACE,
+
 	PM_READ_ONLY,		/* metadata may not be changed */
 	PM_FAIL,		/* all I/O fails */
 };
@@ -1371,7 +1377,31 @@ static void set_pool_mode(struct pool *pool, enum pool_mode new_mode);
 
 static void requeue_bios(struct pool *pool);
 
-static void check_for_space(struct pool *pool)
+static bool is_read_only(struct pool *pool)
+{
+	return get_pool_mode(pool) >= PM_OUT_OF_METADATA_SPACE;
+}
+
+static void check_for_metadata_space(struct pool *pool)
+{
+	int r;
+	bool ooms = false;
+	dm_block_t nr_free;
+
+	r = dm_pool_get_free_metadata_block_count(pool->pmd, &nr_free);
+	if (r) {
+		DMERR("could not get free metadata blocks, setting read-only mode");
+		ooms = true;
+	} else if (!nr_free) {
+		DMERR("No free metadata, setting read-only mode");
+		ooms = true;
+	}
+
+	if (ooms && !is_read_only(pool))
+		set_pool_mode(pool, PM_OUT_OF_METADATA_SPACE);
+}
+
+static void check_for_data_space(struct pool *pool)
 {
 	int r;
 	dm_block_t nr_free;
@@ -1397,14 +1427,16 @@ static int commit(struct pool *pool)
 {
 	int r;
 
-	if (get_pool_mode(pool) >= PM_READ_ONLY)
+	if (is_read_only(pool))
 		return -EINVAL;
 
 	r = dm_pool_commit_metadata(pool->pmd);
 	if (r)
 		metadata_operation_failed(pool, "dm_pool_commit_metadata", r);
-	else
-		check_for_space(pool);
+	else {
+		check_for_metadata_space(pool);
+		check_for_data_space(pool);
+	}
 
 	return r;
 }
@@ -1470,6 +1502,19 @@ static int alloc_data_block(struct thin_c *tc, dm_block_t *result)
 		return r;
 	}
 
+	r = dm_pool_get_free_metadata_block_count(pool->pmd, &free_blocks);
+	if (r) {
+		metadata_operation_failed(pool, "dm_pool_get_free_metadata_block-count", r);
+		return r;
+	}
+
+	if (!free_blocks) {
+		// Let's commit before we use up the metadata reserve.
+		r = commit(pool);
+		if (r)
+			return r;
+	}
+
 	return 0;
 }
 
@@ -1501,6 +1546,7 @@ static blk_status_t should_error_unserviceable_bio(struct pool *pool)
 	case PM_OUT_OF_DATA_SPACE:
 		return pool->pf.error_if_no_space ? BLK_STS_NOSPC : 0;
 
+	case PM_OUT_OF_METADATA_SPACE:
 	case PM_READ_ONLY:
 	case PM_FAIL:
 		return BLK_STS_IOERR;
@@ -2464,6 +2510,7 @@ static void set_pool_mode(struct pool *pool, enum pool_mode new_mode)
 		error_retry_list(pool);
 		break;
 
+	case PM_OUT_OF_METADATA_SPACE:
 	case PM_READ_ONLY:
 		if (old_mode != new_mode)
 			notify_of_pool_mode_change(pool, "read-only");
@@ -3403,6 +3450,12 @@ static int maybe_resize_metadata_dev(struct dm_target *ti, bool *need_commit)
 		DMINFO("%s: growing the metadata device from %llu to %llu blocks",
 		       dm_device_name(pool->pool_md),
 		       sb_metadata_dev_size, metadata_dev_size);
+
+		pr_alert("resizing metadata to %llu\n", (unsigned long long) metadata_dev_size);
+
+		if (get_pool_mode(pool) == PM_OUT_OF_METADATA_SPACE)
+			set_pool_mode(pool, PM_WRITE);
+
 		r = dm_pool_resize_metadata_dev(pool->pmd, metadata_dev_size);
 		if (r) {
 			metadata_operation_failed(pool, "dm_pool_resize_metadata_dev", r);
@@ -3707,7 +3760,7 @@ static int pool_message(struct dm_target *ti, unsigned argc, char **argv,
 	struct pool_c *pt = ti->private;
 	struct pool *pool = pt->pool;
 
-	if (get_pool_mode(pool) >= PM_READ_ONLY) {
+	if (is_read_only(pool)) {
 		DMERR("%s: unable to service pool target messages in READ_ONLY or FAIL mode",
 		      dm_device_name(pool->pool_md));
 		return -EOPNOTSUPP;
@@ -3853,7 +3906,7 @@ static void pool_status(struct dm_target *ti, status_type_t type,
 
 		if (pool->pf.mode == PM_OUT_OF_DATA_SPACE)
 			DMEMIT("out_of_data_space ");
-		else if (pool->pf.mode == PM_READ_ONLY)
+		else if (pool->pf.mode == PM_OUT_OF_METADATA_SPACE || pool->pf.mode == PM_READ_ONLY)
 			DMEMIT("ro ");
 		else
 			DMEMIT("rw ");
