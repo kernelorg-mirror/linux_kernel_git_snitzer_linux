@@ -12,7 +12,5 @@ mflash.txt
 	- info on mGine m(g)flash driver for linux.
 nbd.txt
 	- info on a TCP implementation of a network block device.
-paride.txt
-	- information about the parallel port IDE subsystem.
 ramdisk.txt
 	- short guide on how to set up and use the RAM disk.
