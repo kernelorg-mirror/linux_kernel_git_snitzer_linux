@@ -187,6 +187,9 @@ static ide_startstop_t ide_do_rw_disk(ide_drive_t *drive, struct request *rq,
 	BUG_ON(drive->dev_flags & IDE_DFLAG_BLOCKED);
 	BUG_ON(blk_rq_is_passthrough(rq));
 
+	if (drive->queue->prep_rq_fn && drive->queue->prep_rq_fn(drive->queue, rq))
+		return ide_stopped;
+
 	ledtrig_disk_activity(rq_data_dir(rq) == WRITE);
 
 	pr_debug("%s: %sing: block=%llu, sectors=%u\n",
@@ -427,9 +430,8 @@ static void ide_disk_unlock_native_capacity(ide_drive_t *drive)
 		drive->dev_flags |= IDE_DFLAG_NOHPA; /* disable HPA on resume */
 }
 
-static int idedisk_prep_fn(struct request_queue *q, struct request *rq)
+static int idedisk_prep_fn(ide_drive_t *drive, struct request *rq)
 {
-	ide_drive_t *drive = q->queuedata;
 	struct ide_cmd *cmd;
 
 	if (req_op(rq) != REQ_OP_FLUSH)
@@ -548,7 +550,7 @@ static void update_flush(ide_drive_t *drive)
 
 		if (barrier) {
 			wc = true;
-			blk_queue_prep_rq(drive->queue, idedisk_prep_fn);
+			drive->prep_rq = idedisk_prep_fn;
 		}
 	}
 
