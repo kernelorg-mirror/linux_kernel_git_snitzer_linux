@@ -395,6 +395,7 @@ run:
 	if (run_queue)
 		blk_mq_run_hw_queue(hctx, async);
 }
+EXPORT_SYMBOL_GPL(blk_mq_sched_insert_request);
 
 void blk_mq_sched_insert_requests(struct request_queue *q,
 				  struct blk_mq_ctx *ctx,
