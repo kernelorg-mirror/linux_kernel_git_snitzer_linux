@@ -648,7 +648,6 @@ struct Scsi_Host {
 	/* The controller does not support WRITE SAME */
 	unsigned no_write_same:1;
 
-	unsigned use_blk_mq:1;
 	unsigned use_cmd_list:1;
 
 	/* Host responded with short (<36 bytes) INQUIRY result */
@@ -740,11 +739,6 @@ static inline int scsi_host_in_recovery(struct Scsi_Host *shost)
 		shost->shost_state == SHOST_CANCEL_RECOVERY ||
 		shost->shost_state == SHOST_DEL_RECOVERY ||
 		shost->tmf_in_progress;
-}
-
-static inline bool shost_use_blk_mq(struct Scsi_Host *shost)
-{
-	return shost->use_blk_mq;
 }
 
 extern int scsi_queue_work(struct Scsi_Host *, struct work_struct *);
