@@ -114,7 +114,7 @@ module_param(doc_config_location, ulong, 0);
 MODULE_PARM_DESC(doc_config_location, "Physical memory address at which to probe for DiskOnChip");
 
 /* Sector size for HW ECC */
-#define SECTOR_SIZE 512
+#define NB_SECTOR_SIZE 512
 /* The sector bytes are packed into NB_DATA 10 bit words */
 #define NB_DATA (((SECTOR_SIZE + 1) * 8 + 6) / 10)
 /* Number of roots */
@@ -193,20 +193,20 @@ static int doc_ecc_decode(struct rs_control *rs, uint8_t *data, uint8_t *ecc)
 			   can be modified since pos is even */
 			index = (pos >> 3) ^ 1;
 			bitpos = pos & 7;
-			if ((index >= 0 && index < SECTOR_SIZE) || index == (SECTOR_SIZE + 1)) {
+			if ((index >= 0 && index < NB_SECTOR_SIZE) || index == (NB_SECTOR_SIZE + 1)) {
 				val = (uint8_t) (errval[i] >> (2 + bitpos));
 				parity ^= val;
-				if (index < SECTOR_SIZE)
+				if (index < NB_SECTOR_SIZE)
 					data[index] ^= val;
 			}
 			index = ((pos >> 3) + 1) ^ 1;
 			bitpos = (bitpos + 10) & 7;
 			if (bitpos == 0)
 				bitpos = 8;
-			if ((index >= 0 && index < SECTOR_SIZE) || index == (SECTOR_SIZE + 1)) {
+			if ((index >= 0 && index < NB_SECTOR_SIZE) || index == (NB_SECTOR_SIZE + 1)) {
 				val = (uint8_t) (errval[i] << (8 - bitpos));
 				parity ^= val;
-				if (index < SECTOR_SIZE)
+				if (index < NB_SECTOR_SIZE)
 					data[index] ^= val;
 			}
 		}
