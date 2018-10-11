@@ -46,28 +46,18 @@ int dm_request_based(struct mapped_device *md)
 	return queue_is_rq_based(md->queue);
 }
 
-static void dm_mq_start_queue(struct request_queue *q)
+void dm_start_queue(struct request_queue *q)
 {
 	blk_mq_unquiesce_queue(q);
 	blk_mq_kick_requeue_list(q);
 }
 
-void dm_start_queue(struct request_queue *q)
-{
-	dm_mq_start_queue(q);
-}
-
-static void dm_mq_stop_queue(struct request_queue *q)
+void dm_stop_queue(struct request_queue *q)
 {
 	if (blk_mq_queue_stopped(q))
 		return;
 
 	blk_mq_quiesce_queue(q);
-}
-
-void dm_stop_queue(struct request_queue *q)
-{
-	dm_mq_stop_queue(q);
 }
 
 /*
@@ -292,7 +282,7 @@ static void dm_complete_request(struct request *rq, blk_status_t error)
  * Complete the not-mapped clone and the original request with the error status
  * through softirq context.
  * Target's rq_end_io() function isn't called.
- * This may be used when the target's map_rq() or clone_and_map_rq() functions fail.
+ * This may be used when the target's clone_and_map_rq() function fails.
  */
 static void dm_kill_unmapped_request(struct request *rq, blk_status_t error)
 {
@@ -300,21 +290,10 @@ static void dm_kill_unmapped_request(struct request *rq, blk_status_t error)
 	dm_complete_request(rq, error);
 }
 
-/*
- * Called with the clone's queue lock held (in the case of .request_fn)
- */
 static void end_clone_request(struct request *clone, blk_status_t error)
 {
 	struct dm_rq_target_io *tio = clone->end_io_data;
 
-	/*
-	 * Actual request completion is done in a softirq context which doesn't
-	 * hold the clone's queue lock.  Otherwise, deadlock could occur because:
-	 *     - another request may be submitted by the upper level driver
-	 *       of the stacking during the completion
-	 *     - the submission which requires queue lock may be done
-	 *       against this clone's queue
-	 */
 	dm_complete_request(tio->orig, error);
 }
 
