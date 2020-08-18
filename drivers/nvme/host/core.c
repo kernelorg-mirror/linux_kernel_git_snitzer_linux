@@ -312,6 +312,8 @@ static inline void nvme_end_req_with_failover(struct request *req)
 	if (unlikely(nvme_status & NVME_SC_DNR))
 		goto out;
 
+	nvme_update_ana(req);
+
 	if (!blk_path_error(status)) {
 		pr_debug("Request meant for failover but blk_status_t (errno=%d) was not retryable.\n",
 			 blk_status_to_errno(status));

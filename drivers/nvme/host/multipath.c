@@ -65,10 +65,25 @@ void nvme_set_disk_name(char *disk_name, struct nvme_ns *ns,
 	}
 }
 
+static inline void __nvme_update_ana(struct nvme_ns *ns)
+{
+	if (!ns->ctrl->ana_log_buf)
+		return;
+
+	set_bit(NVME_NS_ANA_PENDING, &ns->flags);
+	queue_work(nvme_wq, &ns->ctrl->ana_work);
+}
+
+
+void nvme_update_ana(struct request *req)
+{
+	if (nvme_is_ana_error(nvme_req(req)->status))
+		__nvme_update_ana(req->q->queuedata);
+}
+
 void nvme_failover_req(struct request *req)
 {
 	struct nvme_ns *ns = req->q->queuedata;
-	u16 status = nvme_req(req)->status & 0x7ff;
 	unsigned long flags;
 
 	nvme_mpath_clear_current_path(ns);
@@ -78,10 +93,8 @@ void nvme_failover_req(struct request *req)
 	 * ready to serve this namespace.  Kick of a re-read of the ANA
 	 * information page, and just try any other available path for now.
 	 */
-	if (nvme_is_ana_error(status) && ns->ctrl->ana_log_buf) {
-		set_bit(NVME_NS_ANA_PENDING, &ns->flags);
-		queue_work(nvme_wq, &ns->ctrl->ana_work);
-	}
+	if (nvme_is_ana_error(nvme_req(req)->status))
+		__nvme_update_ana(ns);
 
 	spin_lock_irqsave(&ns->head->requeue_lock, flags);
 	blk_steal_bios(&ns->head->requeue_list, req);
