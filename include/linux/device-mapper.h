@@ -248,8 +248,13 @@ struct target_type {
 /*
  * Indicates that a target supports host-managed zoned block devices.
  */
+#ifdef CONFIG_BLK_DEV_ZONED
 #define DM_TARGET_ZONED_HM		0x00000040
 #define dm_target_supports_zoned_hm(type) ((type)->features & DM_TARGET_ZONED_HM)
+#else
+#define DM_TARGET_ZONED_HM		0x00000000
+#define dm_target_supports_zoned_hm(type) (false)
+#endif
 
 /*
  * A target handles REQ_NOWAIT
