@@ -1501,15 +1501,6 @@ static int era_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	}
 	era->md = md;
 
-	era->nr_blocks = calc_nr_blocks(era);
-
-	r = metadata_resize(era->md, &era->nr_blocks);
-	if (r) {
-		ti->error = "couldn't resize metadata";
-		era_destroy(era);
-		return -ENOMEM;
-	}
-
 	era->wq = alloc_ordered_workqueue("dm-" DM_MSG_PREFIX, WQ_MEM_RECLAIM);
 	if (!era->wq) {
 		ti->error = "could not create workqueue for metadata object";
@@ -1583,6 +1574,8 @@ static int era_preresume(struct dm_target *ti)
 	struct era *era = ti->private;
 	dm_block_t new_size = calc_nr_blocks(era);
 
+	start_worker(era);
+
 	if (era->nr_blocks != new_size) {
 		r = in_worker1(era, metadata_resize, &new_size);
 		if (r)
@@ -1590,8 +1583,6 @@ static int era_preresume(struct dm_target *ti)
 
 		era->nr_blocks = new_size;
 	}
-
-	start_worker(era);
 
 	r = in_worker0(era, metadata_era_rollover);
 	if (r) {
