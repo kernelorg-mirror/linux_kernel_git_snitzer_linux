@@ -321,6 +321,15 @@ config DM_WRITECACHE
 	   The writecache target doesn't cache reads because reads are supposed
 	   to be cached in standard RAM.
 
+config DM_BUFFERED
+       tristate "Buffered target (EXPERIMENTAL)"
+       depends on BLK_DEV_DM
+       select DM_BUFIO
+       default n
+       help
+         dm-buffered is a test target similar to linear, which
+         redirects all I/O through dm-bufio.
+
 config DM_EBS
 	tristate "Emulated block size target (EXPERIMENTAL)"
 	depends on BLK_DEV_DM && !HIGHMEM
