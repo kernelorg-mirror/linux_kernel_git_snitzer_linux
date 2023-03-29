@@ -229,13 +229,26 @@ void dm_free_md_mempools(struct dm_md_mempools *pools);
  */
 unsigned int dm_get_reserved_bio_based_ios(void);
 
-#define DM_MAX_SHARDED_LOCKS 64
+#define DM_SHARDED_LOCKS_MAX 64
 
 static inline unsigned int dm_num_sharded_locks(void)
 {
-	unsigned int num_locks = roundup_pow_of_two(num_online_cpus());
+	unsigned int num_locks = roundup_pow_of_two(num_online_cpus()) << 1;
 
-	return min_t(unsigned int, num_locks, DM_MAX_SHARDED_LOCKS);
+	return min_t(unsigned int, num_locks, DM_SHARDED_LOCKS_MAX);
+}
+
+#define DM_SHARDED_LOCKS_HASH_MULT  4294967291ULL
+#define DM_SHARDED_LOCKS_HASH_SHIFT 6
+
+static inline unsigned int dm_sharded_locks_index(sector_t block,
+						  unsigned int num_locks)
+{
+	sector_t h1 = ((block * DM_SHARDED_LOCKS_HASH_MULT) >>
+		       DM_SHARDED_LOCKS_HASH_SHIFT);
+	sector_t h2 = h1 >> DM_SHARDED_LOCKS_HASH_SHIFT;
+
+	return (h1 ^ h2) & (num_locks - 1);
 }
 
 #endif
