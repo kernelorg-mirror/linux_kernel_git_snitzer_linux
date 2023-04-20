@@ -1893,8 +1893,10 @@ static void process_shared_bio(struct thin_c *tc, struct bio *bio,
 
 	if (bio_data_dir(bio) == WRITE && bio->bi_iter.bi_size) {
 		break_sharing(tc, bio, block, &key, lookup_result, data_cell);
-		if (bio_op(bio) != REQ_OP_PROVISION)
+		if (bio_op(bio) != REQ_OP_PROVISION) {
+			// FIXME: review closer.. add comment
 			cell_defer_no_holder(tc, virt_cell);
+		}
 	} else {
 		struct dm_thin_endio_hook *h = dm_per_bio_data(bio, sizeof(struct dm_thin_endio_hook));
 
@@ -1965,6 +1967,7 @@ static void process_provision_bio(struct thin_c *tc, struct bio *bio)
 	struct dm_cell_key key;
 	struct dm_thin_lookup_result lookup_result;
 
+	// NOTE: combo of process_bio and processs_cell
 	/*
 	 * If cell is already occupied, then the block is already
 	 * being provisioned so we have nothing further to do here.
@@ -1984,10 +1987,12 @@ static void process_provision_bio(struct thin_c *tc, struct bio *bio)
 		if (lookup_result.shared) {
 			process_shared_bio(tc, bio, block, &lookup_result, cell);
 		} else {
+			/* Nothing to do */
 			bio_endio(bio);
 			cell_defer_no_holder(tc, cell);
 		}
 		break;
+
 	case -ENODATA:
 		provision_block(tc, bio, block, cell);
 		break;
