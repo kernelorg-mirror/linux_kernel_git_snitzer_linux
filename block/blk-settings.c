@@ -59,6 +59,7 @@ void blk_set_default_limits(struct queue_limits *lim)
 	lim->zoned = BLK_ZONED_NONE;
 	lim->zone_write_granularity = 0;
 	lim->dma_alignment = 511;
+	lim->max_provision_sectors = 0;
 }
 
 /**
@@ -82,6 +83,7 @@ void blk_set_stacking_limits(struct queue_limits *lim)
 	lim->max_dev_sectors = UINT_MAX;
 	lim->max_write_zeroes_sectors = UINT_MAX;
 	lim->max_zone_append_sectors = UINT_MAX;
+	lim->max_provision_sectors = UINT_MAX;
 }
 EXPORT_SYMBOL(blk_set_stacking_limits);
 
@@ -207,6 +209,20 @@ void blk_queue_max_write_zeroes_sectors(struct request_queue *q,
 	q->limits.max_write_zeroes_sectors = max_write_zeroes_sectors;
 }
 EXPORT_SYMBOL(blk_queue_max_write_zeroes_sectors);
+
+/**
+ * blk_queue_max_provision_sectors - set max sectors for a single provision
+ *
+ * @q:  the request queue for the device
+ * @max_provision_sectors: maximum number of sectors to provision per command
+ **/
+
+void blk_queue_max_provision_sectors(struct request_queue *q,
+		unsigned int max_provision_sectors)
+{
+	q->limits.max_provision_sectors = max_provision_sectors;
+}
+EXPORT_SYMBOL(blk_queue_max_provision_sectors);
 
 /**
  * blk_queue_max_zone_append_sectors - set max sectors for a single zone append
@@ -577,6 +593,9 @@ int blk_stack_limits(struct queue_limits *t, struct queue_limits *b,
 
 	t->max_segment_size = min_not_zero(t->max_segment_size,
 					   b->max_segment_size);
+
+	t->max_provision_sectors = min_not_zero(t->max_provision_sectors,
+						b->max_provision_sectors);
 
 	t->misaligned |= b->misaligned;
 
