@@ -610,7 +610,8 @@ reexpand:
 
 #define	BLKDEV_FALLOC_FL_SUPPORTED					\
 		(FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE |		\
-		 FALLOC_FL_ZERO_RANGE | FALLOC_FL_NO_HIDE_STALE)
+		 FALLOC_FL_ZERO_RANGE | FALLOC_FL_NO_HIDE_STALE |	\
+		 FALLOC_FL_UNSHARE_RANGE)
 
 static long blkdev_fallocate(struct file *file, int mode, loff_t start,
 			     loff_t len)
@@ -650,6 +651,13 @@ static long blkdev_fallocate(struct file *file, int mode, loff_t start,
 	 * de-allocate mode calls to fallocate().
 	 */
 	switch (mode) {
+	case 0:
+	case FALLOC_FL_UNSHARE_RANGE:
+	case FALLOC_FL_KEEP_SIZE:
+	case FALLOC_FL_UNSHARE_RANGE | FALLOC_FL_KEEP_SIZE:
+		error = blkdev_issue_provision(bdev, start >> SECTOR_SHIFT,
+					       len >> SECTOR_SHIFT, GFP_KERNEL);
+		break;
 	case FALLOC_FL_ZERO_RANGE:
 	case FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE:
 		error = truncate_bdev_range(bdev, file->f_mode, start, end);

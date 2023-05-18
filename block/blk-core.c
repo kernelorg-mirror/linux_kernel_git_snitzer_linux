@@ -123,6 +123,7 @@ static const char *const blk_op_name[] = {
 	REQ_OP_NAME(WRITE_ZEROES),
 	REQ_OP_NAME(DRV_IN),
 	REQ_OP_NAME(DRV_OUT),
+	REQ_OP_NAME(PROVISION)
 };
 #undef REQ_OP_NAME
 
@@ -791,6 +792,10 @@ void submit_bio_noacct(struct bio *bio)
 		break;
 	case REQ_OP_WRITE_ZEROES:
 		if (!q->limits.max_write_zeroes_sectors)
+			goto not_supported;
+		break;
+	case REQ_OP_PROVISION:
+		if (!q->limits.max_provision_sectors)
 			goto not_supported;
 		break;
 	default:
