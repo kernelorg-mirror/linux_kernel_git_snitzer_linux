@@ -333,6 +333,12 @@ struct dm_target {
 	unsigned int num_write_zeroes_bios;
 
 	/*
+	 * The number of PROVISION bios that will be submitted to the target.
+	 * The bio number can be accessed with dm_bio_get_target_bio_nr.
+	 */
+	unsigned int num_provision_bios;
+
+	/*
 	 * The minimum number of extra bytes allocated in each io for the
 	 * target to use.
 	 */
@@ -356,6 +362,11 @@ struct dm_target {
 	 */
 	bool discards_supported:1;
 
+	/* Set if this target needs to receive provision requests regardless of
+	 * whether or not its underlying devices have support.
+	 */
+	bool provision_supported:1;
+
 	/*
 	 * Set if this target requires that discards be split on
 	 * 'max_discard_sectors' boundaries.
@@ -373,6 +384,12 @@ struct dm_target {
 	 * 'max_write_zeroes_sectors' boundaries.
 	 */
 	bool max_write_zeroes_granularity:1;
+
+	/*
+	 * Set if this target requires that provisions be split on
+	 * 'max_provision_sectors' boundaries.
+	 */
+	bool max_provision_granularity:1;
 
 	/*
 	 * Set if we need to limit the number of in-flight bios when swapping.
