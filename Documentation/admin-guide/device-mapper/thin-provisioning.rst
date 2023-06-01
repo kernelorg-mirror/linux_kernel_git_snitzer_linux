@@ -281,6 +281,13 @@ i) Constructor
 	Don't pass discards down to the underlying
 	data device, but just remove the mapping.
 
+      ignore_provision:
+	Disable provision support.
+
+      no_provision_passdown:
+	Don't pass provisions down to the underlying
+	data device, but just add the mapping.
+
       read_only:
 		 Don't allow any changes to be made to the pool
 		 metadata.  This mode is only available after the
@@ -301,8 +308,8 @@ ii) Status
 
       <transaction id> <used metadata blocks>/<total metadata blocks>
       <used data blocks>/<total data blocks> <held metadata root>
-      ro|rw|out_of_data_space [no_]discard_passdown [error|queue]_if_no_space
-      needs_check|- metadata_low_watermark
+      ro|rw|out_of_data_space [no_]discard_passdown [no_]provision_passdown
+      [error|queue]_if_no_space needs_check|- metadata_low_watermark
 
     transaction id:
 	A 64-bit number used by userspace to help synchronise with metadata
@@ -321,6 +328,11 @@ ii) Status
 
     discard_passdown|no_discard_passdown
 	Whether or not discards are actually being passed down to the
+	underlying device.  When this is enabled when loading the table,
+	it can get disabled if the underlying device doesn't support it.
+
+    provision_passdown|no_provision_passdown
+	Whether or not provisions are actually being passed down to the
 	underlying device.  When this is enabled when loading the table,
 	it can get disabled if the underlying device doesn't support it.
 
