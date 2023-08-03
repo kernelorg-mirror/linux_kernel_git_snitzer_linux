@@ -58,7 +58,7 @@
 #include "statistics.h"
 #include "status-codes.h"
 #include "vio.h"
-#include "work-queue.h"
+#include "funnel-workqueue.h"
 
 
 enum { PARANOID_THREAD_CONSISTENCY_CHECKS = 0 };

@@ -11,7 +11,7 @@
 #include "index-layout.h"
 #include "logger.h"
 #include "memory-alloc.h"
-#include "request-queue.h"
+#include "funnel-requestqueue.h"
 #include "time-utils.h"
 
 /*
