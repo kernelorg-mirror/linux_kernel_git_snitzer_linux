@@ -9,7 +9,7 @@
 #include "types.h"
 #include "vio.h"
 #include "wait-queue.h"
-#include "work-queue.h"
+#include "funnel-workqueue.h"
 
 /* A marker for tracking which journal entries are affected by a flush request. */
 struct vdo_flush {

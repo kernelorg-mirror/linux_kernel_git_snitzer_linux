@@ -22,7 +22,7 @@
 #include "thread-registry.h"
 #include "types.h"
 #include "uds.h"
-#include "work-queue.h"
+#include "funnel-workqueue.h"
 
 enum notifier_state {
 	/** Notifications are allowed but not in progress */

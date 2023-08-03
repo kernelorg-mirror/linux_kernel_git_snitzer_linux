@@ -3,7 +3,7 @@
  * Copyright Red Hat
  */
 
-#include "work-queue.h"
+#include "funnel-workqueue.h"
 
 #include <linux/atomic.h>
 #include <linux/cache.h>

@@ -17,7 +17,7 @@
 #include "logger.h"
 #include "types.h"
 #include "vdo.h"
-#include "work-queue.h"
+#include "funnel-workqueue.h"
 
 enum dump_options {
 	/* Work queues */
