@@ -1,3 +1,5 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+
 ================
 Design of dm-vdo
 ================
@@ -70,21 +72,20 @@ trade-off between the storage saved and the resources expended to achieve
 those savings, vdo does not attempt to find every last duplicate block. It
 is sufficient to find and eliminate most of the redundancy.
 
-Each block of data is hashed to produce a 16-byte block name which serves
-as an identifier for the block. An index record consists of this block name
-paired with the presumed location of that data on the underlying storage.
-However, it is not possible to guarantee that the index is accurate. Most
-often, this occurs because it is too costly to update the index when a
-block is over-written or discarded. Doing so would require either storing
-the block name along with the blocks, which is difficult to do efficiently
-in block-based storage, or reading and rehashing each block before
-overwriting it. Inaccuracy can also result from a hash collision where two
-different blocks have the same name. In practice, this is extremely
-unlikely, but because vdo does not use a cryptographic hash, a malicious
-workload can be constructed. Because of these inaccuracies, vdo treats the
-locations in the index as hints, and reads each indicated block to verify
-that it is indeed a duplicate before sharing the existing block with a new
-one.
+Each block of data is hashed to produce a 16-byte block name. An index
+record consists of this block name paired with the presumed location of
+that data on the underlying storage. However, it is not possible to
+guarantee that the index is accurate. Most often, this occurs because it is
+too costly to update the index when a block is over-written or discarded.
+Doing so would require either storing the block name along with the blocks,
+which is difficult to do efficiently in block-based storage, or reading and
+rehashing each block before overwriting it. Inaccuracy can also result from
+a hash collision where two different blocks have the same name. In
+practice, this is extremely unlikely, but because vdo does not use a
+cryptographic hash, a malicious workload can be constructed. Because of
+these inaccuracies, vdo treats the locations in the index as hints, and
+reads each indicated block to verify that it is indeed a duplicate before
+sharing the existing block with a new one.
 
 Records are collected into groups called chapters. New records are added to
 the newest chapter, called the open chapter. This chapter is stored in a
@@ -284,61 +285,82 @@ been, and should continue to be, revisited over time.
 
 Once a data_vio is assigned, the following steps are performed:
 
-1. The bio's data is checked to see if it is all zeros, and copied if not.
-2. A lock is obtained on the logical address of the bio. Because
-   deduplication involves sharing blocks, it is vital to prevent
-   simultaneous modifications of the same block.
-3. The block map tree is traversed, loading any non-leaf pages which cover
-   the logical address and are not already in memory. If any of these
-   pages, or the leaf page which covers the logical address have not been
-   allocated, and the block is not all zeros, they are allocated at this
-   time.
-4. If the block is a zero block, skip to step 9. Otherwise, an attempt is
-   made to allocate a free data block.
-5. If an allocation was obtained, the bio is acknowledged.
-6. The bio's data is hashed.
-7. The data_vio obtains or joins a "hash lock," which represents all of the
-   bios currently writing the same data.
-8. If the hash lock does not already have a data_vio acting as its agent,
-   the current one assumes that role. As the agent:
-	a) The index is queried.
-	b) If an entry is found, the indicated block is read and compared
+1.  The bio's data is checked to see if it is all zeros, and copied if not.
+
+2.  A lock is obtained on the logical address of the bio. Because
+    deduplication involves sharing blocks, it is vital to prevent
+    simultaneous modifications of the same block.
+
+3.  The block map tree is traversed, loading any non-leaf pages which cover
+    the logical address and are not already in memory. If any of these
+    pages, or the leaf page which covers the logical address have not been
+    allocated, and the block is not all zeros, they are allocated at this
+    time.
+
+4.  If the block is a zero block, skip to step 9. Otherwise, an attempt is
+    made to allocate a free data block.
+
+5.  If an allocation was obtained, the bio is acknowledged.
+
+6.  The bio's data is hashed.
+
+7.  The data_vio obtains or joins a "hash lock," which represents all of
+    the bios currently writing the same data.
+
+8.  If the hash lock does not already have a data_vio acting as its agent,
+    the current one assumes that role. As the agent:
+
+        a) The index is queried.
+
+        b) If an entry is found, the indicated block is read and compared
            to the data being written.
-	c) If the data matches, we have identified duplicate data. As many
+
+        c) If the data matches, we have identified duplicate data. As many
            of the data_vios as there are references available for that
            block (including the agent) are shared. If there are more
            data_vios in the hash lock than there are references available,
            one of them becomes the new agent and continues as if there was
            no duplicate found.
-	d) If no duplicate was found, the data being written will be
+
+        d) If no duplicate was found, and the agent in the hash lock does
+           not have an allocation (fron step 3), another data_vio in the
+           hash lock will become the agent and write the data. If no
+           data_vio in the hash lock has an allocation, the data_vios will
+           be marked out of space and go to step 13 for cleanup.
+
+           If there is an allocation, the data being written will be
            compressed. If the compressed size is sufficiently small, the
            data_vio will go to the packer where it may be placed in a bin
            along with other data_vios.
-	e) Once a bin is full, either because it is out of space, or
+
+        e) Once a bin is full, either because it is out of space, or
            because all 14 of its slots are in use, it is written out.
-	f) Each data_vio from the bin just written is the agent of some
+
+        f) Each data_vio from the bin just written is the agent of some
            hash lock, it will now proceed to treat the just written
            compressed block as if it were a duplicate and share it with as
            many other data_vios in its hash lock as possible.
-	g) If the agent is not a duplicate, and it got an allocation in
-           step 3, it will write its data to the block it was allocated. If
-           the agent does not have an allocation, but another data_vio in
-           the hash lock does, that data_vio will become the agent and
-           write the data.
-	h) If the data was written, this new block is treated as a
+
+        g) If the agent's data is not compressed, it will attempt to write
+           its data to the block it has allocated.
+
+        h) If the data was written, this new block is treated as a
            duplicate and shared as much as possible with any other
            data_vios in the hash lock.
-	i) If the agent did write new data (whether compressed or not), the
+
+        i) If the agent wrote new data (whether compressed or not), the
            index is updated to reflect the new entry.
-9. If a non-zero data_vio was not shared and not able to write its data,
-   the bio is acknowledged with an out-of-space error. Otherwise, the block
-   map is queried to determine the previous mapping of the logical address.
+
+9.  The block map is queried to determine the previous mapping of the
+    logical address.
+
 10. An entry is made in the recovery journal. The data_vio will block in
     the journal until a flush has completed to ensure the data it may have
     written is stable. It must also wait until its journal entry is stable
     on disk. (Journal writes are all issued with the FUA bit set.)
-11. Once the recovery journal entry is stable, the data_vio makes slab
-    journal entries, an increment entry for the new mapping, and a
+
+11. Once the recovery journal entry is stable, the data_vio makes two slab
+    journal entries: an increment entry for the new mapping, and a
     decrement entry for the old mapping, if that mapping was non-zero. For
     correctness during recovery, the slab journal entries in any given slab
     journal must be in the same order as the corresponding recovery journal
@@ -352,10 +374,13 @@ Once a data_vio is assigned, the following steps are performed:
     allow the recovery journal to free up space; reference count blocks are
     written out whenever the associated slab journal requests they do so in
     order to free up slab journal space.)
+
 12. Once all the reference count updates are done, the block map is updated
     and the write is complete.
+
 13. If the data_vio did not use its allocation, it releases the allocated
-    block. The data_vio then returns to the pool.
+    block, the hash lock (if it has one), and its logical lock. The
+    data_vio then returns to the pool.
 
 *Read Path*
 
