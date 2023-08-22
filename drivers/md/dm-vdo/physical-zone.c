@@ -632,7 +632,7 @@ void vdo_release_physical_zone_pbn_lock(struct physical_zone *zone,
 		/* The lock was shared and is still referenced, so don't release it yet. */
 		return;
 
-	holder = vdo_int_map_remove(zone->pbn_operations, locked_pbn);
+	holder = vdo_hash_map_remove(zone->pbn_operations, &locked_pbn);
 	ASSERT_LOG_ONLY((lock == holder),
 			"physical block lock mismatch for block %llu",
 			(unsigned long long) locked_pbn);
