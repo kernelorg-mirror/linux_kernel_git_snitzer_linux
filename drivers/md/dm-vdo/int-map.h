@@ -23,16 +23,6 @@
  * shrink as entries are removed.
  */
 
-static inline size_t vdo_int_map_size(const struct vdo_hash_map *map)
-{
-	return vdo_hash_map_size(map);
-}
-
-static inline void *vdo_int_map_get(struct vdo_hash_map *map, u64 key)
-{
-	return vdo_hash_map_get(map, &key);
-}
-
 static inline int __must_check
 vdo_int_map_put(struct vdo_hash_map *map, u64 key, void *new_value,
 		bool update, void **old_value_ptr)

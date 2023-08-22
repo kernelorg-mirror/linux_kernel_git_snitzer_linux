@@ -424,7 +424,7 @@ void vdo_free_physical_zones(struct physical_zones *zones)
 struct pbn_lock *
 vdo_get_physical_zone_pbn_lock(struct physical_zone *zone, physical_block_number_t pbn)
 {
-	return ((zone == NULL) ? NULL : vdo_int_map_get(zone->pbn_operations, pbn));
+	return ((zone == NULL) ? NULL : vdo_hash_map_get(zone->pbn_operations, &pbn));
 }
 
 /**

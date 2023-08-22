@@ -1161,7 +1161,7 @@ static void release_lock(struct data_vio *data_vio, struct lbn_lock *lock)
 
 	if (!lock->locked) {
 		/*  The lock is not locked, so it had better not be registered in the lock map. */
-		lock_holder = vdo_int_map_get(lock_map, lock->lbn);
+		lock_holder = vdo_hash_map_get(lock_map, &lock->lbn);
 		ASSERT_LOG_ONLY((data_vio != lock_holder),
 				"no logical block lock held for block %llu",
 				(unsigned long long) lock->lbn);

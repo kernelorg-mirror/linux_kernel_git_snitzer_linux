@@ -437,7 +437,7 @@ find_page(struct vdo_page_cache *cache, physical_block_number_t pbn)
 {
 	if ((cache->last_found != NULL) && (cache->last_found->pbn == pbn))
 		return cache->last_found;
-	cache->last_found = vdo_int_map_get(cache->page_map, pbn);
+	cache->last_found = vdo_hash_map_get(cache->page_map, &pbn);
 	return cache->last_found;
 }
 
