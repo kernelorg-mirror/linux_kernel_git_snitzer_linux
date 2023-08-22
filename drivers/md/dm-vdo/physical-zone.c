@@ -460,7 +460,7 @@ int vdo_attempt_physical_zone_pbn_lock(struct physical_zone *zone,
 		return result;
 	}
 
-	result = vdo_int_map_put(zone->pbn_operations, pbn, new_lock, false, (void **) &lock);
+	result = vdo_hash_map_put(zone->pbn_operations, &pbn, new_lock, false, (void **) &lock);
 	if (result != VDO_SUCCESS) {
 		return_pbn_lock_to_pool(zone->lock_pool, new_lock);
 		return result;

@@ -23,13 +23,6 @@
  * shrink as entries are removed.
  */
 
-static inline int __must_check
-vdo_int_map_put(struct vdo_hash_map *map, u64 key, void *new_value,
-		bool update, void **old_value_ptr)
-{
-	return vdo_hash_map_put(map, &key, new_value, update, old_value_ptr);
-}
-
 static inline void *vdo_int_map_remove(struct vdo_hash_map *map, u64 key)
 {
 	return vdo_hash_map_remove(map, &key);

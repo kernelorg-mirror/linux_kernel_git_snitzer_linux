@@ -385,7 +385,7 @@ static int __must_check set_info_pbn(struct page_info *info, physical_block_numb
 	info->pbn = pbn;
 
 	if (pbn != NO_PAGE) {
-		result = vdo_int_map_put(cache->page_map, pbn, info, true, NULL);
+		result = vdo_hash_map_put(cache->page_map, &pbn, info, true, NULL);
 		if (result != UDS_SUCCESS)
 			return result;
 	}
@@ -1904,11 +1904,8 @@ static int attempt_page_lock(struct block_map_zone *zone, struct data_vio *data_
 	};
 	lock->key = key.key;
 
-	result = vdo_int_map_put(zone->loading_pages,
-				 lock->key,
-				 lock,
-				 false,
-				 (void **) &lock_holder);
+	result = vdo_hash_map_put(zone->loading_pages, &lock->key,
+				  lock, false, (void **) &lock_holder);
 	if (result != VDO_SUCCESS)
 		return result;
 

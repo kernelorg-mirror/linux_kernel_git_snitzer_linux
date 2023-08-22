@@ -224,12 +224,15 @@ static struct vio *get_mergeable_locked(struct vdo_hash_map *map, struct vio *vi
 static int map_merged_vio(struct vdo_hash_map *bio_map, struct vio *vio)
 {
 	int result;
+	sector_t bio_sector;
 
-	result = vdo_int_map_put(bio_map, get_bio_sector(vio->bios_merged.head), vio, true, NULL);
+	bio_sector = get_bio_sector(vio->bios_merged.head);
+	result = vdo_hash_map_put(bio_map, &bio_sector, vio, true, NULL);
 	if (result != VDO_SUCCESS)
 		return result;
 
-	return vdo_int_map_put(bio_map, get_bio_sector(vio->bios_merged.tail), vio, true, NULL);
+	bio_sector = get_bio_sector(vio->bios_merged.tail);
+	return vdo_hash_map_put(bio_map, &bio_sector, vio, true, NULL);
 }
 
 static int merge_to_prev_tail(struct vdo_hash_map *bio_map, struct vio *vio, struct vio *prev_vio)
@@ -281,11 +284,9 @@ static bool try_bio_map_merge(struct vio *vio)
 	if ((prev_vio == NULL) && (next_vio == NULL)) {
 		/* no merge. just add to bio_queue */
 		merged = false;
-		result = vdo_int_map_put(bio_queue_data->map,
-					 get_bio_sector(bio),
-					 vio,
-					 true,
-					 NULL);
+		result = vdo_hash_map_put(bio_queue_data->map,
+					  &bio->bi_iter.bi_sector,
+					  vio, true, NULL);
 	} else if (next_vio == NULL) {
 		/* Only prev. merge to prev's tail */
 		result = merge_to_prev_tail(bio_queue_data->map, vio, prev_vio);
