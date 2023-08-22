@@ -47,6 +47,7 @@
  */
 
 #include "hash-map.h"
+#include "uds.h" /* for 'struct uds_record_name', to avoid indirect function calls */
 
 #include <linux/minmax.h>
 
@@ -97,6 +98,8 @@ struct __packed bucket {
  * capacity and bucket_count are different.
  */
 struct vdo_hash_map {
+	/** @type: use int or ptr hash key methods? */
+	enum vdo_hash_map_type type;
 	/** @size: The number of entries stored in the map. */
 	size_t size;
 	/** @capacity: The number of neighborhoods in the map. */
@@ -105,10 +108,6 @@ struct vdo_hash_map {
 	size_t bucket_count;
 	/** @buckets: The array of hash buckets. */
 	struct bucket *buckets;
-	/** @comparator: The function for comparing keys for equality. */
-	pointer_key_compare_fn comparator;
-	/** @hasher: The function for getting a hash code from a key. */
-	pointer_key_hash_fn hasher;
 };
 
 /**
@@ -133,17 +132,15 @@ static u64 mix(u64 input1, u64 input2)
 }
 
 /**
- * hash_key() - Calculate a 64-bit non-cryptographic hash value for the provided 64-bit integer
- *              key.
+ * hash_int_key() - Calculate 64-bit non-cryptographic hash value for 64-bit integer key.
  * @key: The mapping key.
  *
- * The implementation is based on Google's CityHash, only handling the specific case of an 8-byte
- * input.
+ * The implementation is based on Google's CityHash, only handling the specific case of an
+ * 8-byte input.
  *
  * Return: The hash of the mapping key.
  */
-// FIXME: doesn't Linux have basic hash? e.g.: siphash_2u64()
-static u64 hash_key(u64 key)
+static u64 hash_int_key(u64 key)
 {
 	/*
 	 * Aliasing restrictions forbid us from casting pointer types, so use a union to convert a
@@ -155,6 +152,41 @@ static u64 hash_key(u64 key)
 	} pun = {.u64 = key};
 
 	return mix(sizeof(key) + (((u64) pun.u32[0]) << 3), pun.u32[1]);
+}
+
+/**
+ * hash_ptr_key() - Calculate a hash code associated with the referent of pointer key.
+ * @key: The pointer key to hash.
+ *
+ * The hash code must be uniformly distributed over all u32 values. The hash code associated
+ * with a given key must not change while the key is in the map. If the comparator function says
+ * two keys are equal, then this function must return the same hash code for both keys. This
+ * function may be called many times for a key while an entry is stored for it in the map.
+ *
+ * Return: The hash code for the key.
+ */
+static u32 hash_ptr_key(const void *key)
+{
+	const struct uds_record_name *name = key;
+
+	/* Use a fragment of the record name as a hash code. */
+	return get_unaligned_le32(&name->name[4]);
+}
+
+/**
+ * compare_ptr_keys() - Compare the referents of two pointer keys for equality.
+ * @this_key: The first element to compare.
+ * @that_key: The second element to compare.
+ *
+ * If two keys are equal, then both keys must have the same hash code calculated by hash_ptr_key().
+ *
+ * Return: true if and only if the referents of the two key pointers are to be treated as the same
+ *         key by the map.
+ */
+static bool compare_ptr_keys(const void *this_key, const void *that_key)
+{
+	/* Null keys are not supported. */
+	return (memcmp(this_key, that_key, sizeof(struct uds_record_name)) == 0);
 }
 
 /**
@@ -180,19 +212,17 @@ static int allocate_buckets(struct vdo_hash_map *map, size_t capacity)
 
 /**
  * vdo_hash_map_create() - Allocate and initialize an vdo_hash_map.
+ * @hash_map_type: enum vdo_hash_map_type, hash methods used are based on specified type.
  * @initial_capacity: The number of entries the map should initially be capable of holding (zero
  *                    tells the map to use its own small default).
  * @initial_load: The load factor of the map, expressed as an integer percentage (typically in the
  *                range 50 to 90, with zero telling the map to use its own default).
- * @comparator: The function to use to compare the referents of two pointer keys for equality.
- * @hasher: The function to use obtain the hash code associated with each pointer key
  * @map_ptr: A pointer to hold the new vdo_hash_map.
  *
  * Return: UDS_SUCCESS or an error code.
  */
-int vdo_hash_map_create(size_t initial_capacity, unsigned int initial_load,
-			pointer_key_compare_fn comparator, pointer_key_hash_fn hasher,
-			struct vdo_hash_map **map_ptr)
+int vdo_hash_map_create(enum vdo_hash_map_type type, size_t initial_capacity,
+			unsigned int initial_load, struct vdo_hash_map **map_ptr)
 {
 	int result;
 	struct vdo_hash_map *map;
@@ -208,8 +238,7 @@ int vdo_hash_map_create(size_t initial_capacity, unsigned int initial_load,
 	if (result != UDS_SUCCESS)
 		return result;
 
-	map->hasher = hasher;
-	map->comparator = comparator;
+	map->type = type;
 
 	/* Use the default capacity if the caller did not specify one. */
 	capacity = (initial_capacity > 0) ? initial_capacity : DEFAULT_CAPACITY;
@@ -320,7 +349,7 @@ static struct bucket *select_bucket(const struct vdo_hash_map *map, const void *
 	 * Calculate a good hash value for the provided key. We want exactly 32 bits, so mask the
 	 * result.
 	 */
-	u64 hash = map->hasher ? map->hasher(key) : (hash_key(*(u64*)key) & 0xFFFFFFFF);
+	u64 hash = map->type ? hash_ptr_key(key) : (hash_int_key(*(u64*)key) & 0xFFFFFFFF);
 
 	/*
 	 * Scale the 32-bit hash to a bucket index by treating it as a binary fraction and
@@ -350,6 +379,7 @@ static struct bucket *search_hop_list(struct vdo_hash_map *map,
 				      const void *key,
 				      struct bucket **previous_ptr)
 {
+	bool use_ptr_key = (map->type == HASH_MAP_TYPE_PTR);
 	struct bucket *previous = NULL;
 	unsigned int next_hop = bucket->first_hop;
 
@@ -357,8 +387,8 @@ static struct bucket *search_hop_list(struct vdo_hash_map *map,
 		/* Check the neighboring bucket indexed by the offset for the desired key. */
 		struct bucket *entry = dereference_hop(bucket, next_hop);
 
-		if ((entry->value != NULL) && (map->comparator ?
-					       map->comparator(key, entry->ptr_key) :
+		if ((entry->value != NULL) && (use_ptr_key ?
+					       compare_ptr_keys(key, entry->ptr_key) :
 					       ((*(u64 *)key) == entry->int_key))) {
 			if (previous_ptr != NULL)
 				*previous_ptr = previous;
@@ -393,7 +423,7 @@ static int resize_buckets(struct vdo_hash_map *map)
 {
 	int result;
 	size_t i;
-	bool use_ptr_key = !!map->hasher;
+	bool use_ptr_key = (map->type == HASH_MAP_TYPE_PTR);
 
 	/* Copy the top-level map data to the stack. */
 	struct vdo_hash_map old_map = *map;
@@ -483,7 +513,7 @@ static struct bucket *move_empty_bucket(struct vdo_hash_map *map, struct bucket 
 	 * deeper into the array than a valid bucket.
 	 */
 	struct bucket *bucket;
-	bool use_ptr_key = !!map->hasher;
+	bool use_ptr_key = (map->type == HASH_MAP_TYPE_PTR);
 
 	for (bucket = &hole[1 - NEIGHBORHOOD]; bucket < hole; bucket++) {
 		/*
@@ -513,7 +543,7 @@ static struct bucket *move_empty_bucket(struct vdo_hash_map *map, struct bucket 
 
 		/*
 		 * The entry that will be the new hole is the first bucket in the list, so setting
-		 * first_hop is all that's needed remove it from the list.
+		 * first_hop is all that's needed to remove it from the list.
 		 */
 		bucket->first_hop = new_hole->next_hop;
 		new_hole->next_hop = NULL_HOP_OFFSET;
@@ -572,7 +602,7 @@ static bool update_mapping(struct vdo_hash_map *map,
 		 * We're dropping the old key pointer on the floor here, assuming it's a property
 		 * of the value or that it's otherwise safe to just forget.
 		 */
-		if (map->hasher)
+		if (map->type)
 			bucket->ptr_key = key;
 		else
 			bucket->int_key = (*(u64 *)key);
@@ -691,7 +721,7 @@ int vdo_hash_map_put(struct vdo_hash_map *map, const void *key, void *new_value,
 	}
 
 	/* Put the new entry in the empty bucket, adding it to the neighborhood. */
-	if (map->hasher)
+	if (map->type)
 		bucket->ptr_key = key;
 	else
 		bucket->int_key = (*(u64 *)key);
@@ -735,7 +765,7 @@ void *vdo_hash_map_remove(struct vdo_hash_map *map, const void *key)
 	map->size -= 1;
 	value = victim->value;
 	victim->value = NULL;
-	if (map->hasher)
+	if (map->type)
 		victim->ptr_key = 0;
 	else
 		victim->int_key = 0;
