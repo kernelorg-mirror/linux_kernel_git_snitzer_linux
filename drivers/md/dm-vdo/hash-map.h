@@ -3,14 +3,16 @@
  * Copyright 2023 Red Hat
  */
 
-#ifndef VDO_POINTER_MAP_H
-#define VDO_POINTER_MAP_H
+#ifndef VDO_HASH_MAP_H
+#define VDO_HASH_MAP_H
 
 #include <linux/compiler.h>
 #include <linux/types.h>
 
 /*
- * A pointer_map associates pointer values (<code>void *</code>) with the data referenced by
+ * FIXME: extend to include int_map docs.
+ *
+ * A vdo_hash_map associates pointer values (<code>void *</code>) with the data referenced by
  * pointer keys (<code>void *</code>). <code>NULL</code> pointer values are not supported. A
  * <code>NULL</code> key value is supported when the instance's key comparator and hasher functions
  * support it.
@@ -28,10 +30,12 @@
  * is re-mapped.
  */
 
-struct pointer_map;
+struct vdo_hash_map;
+
+// FIXME: check if existing clients use different methods
 
 /**
- * typedef pointer_key_comparator - The prototype of functions that compare the referents of two
+ * typedef pointer_key_compare_fn - The prototype of functions that compare the referents of two
  *                                  pointer keys for equality.
  * @this_key: The first element to compare.
  * @that_key: The second element to compare.
@@ -42,11 +46,11 @@ struct pointer_map;
  * Return: true if and only if the referents of the two key pointers are to be treated as the same
  *         key by the map.
  */
-typedef bool pointer_key_comparator(const void *this_key, const void *that_key);
+typedef bool (*pointer_key_compare_fn)(const void *this_key, const void *that_key);
 
 /**
- * typedef pointer_key_hasher - The prototype of functions that get or calculate a hash code
- *                              associated with the referent of pointer key.
+ * typedef pointer_key_hash_fn - The prototype of functions that get or calculate a hash code
+ *				 associated with the referent of pointer key.
  * @key: The pointer key to hash.
  *
  * The hash code must be uniformly distributed over all u32 values. The hash code associated
@@ -56,26 +60,24 @@ typedef bool pointer_key_comparator(const void *this_key, const void *that_key);
  *
  * Return: The hash code for the key.
  */
-typedef u32 pointer_key_hasher(const void *key);
+typedef u32 (*pointer_key_hash_fn)(const void *key);
 
-int __must_check vdo_make_pointer_map(size_t initial_capacity,
-				      unsigned int initial_load,
-				      pointer_key_comparator comparator,
-				      pointer_key_hasher hasher,
-				      struct pointer_map **map_ptr);
+int __must_check vdo_hash_map_create(size_t initial_capacity,
+				     unsigned int initial_load,
+				     pointer_key_compare_fn comparator,
+				     pointer_key_hash_fn hasher,
+				     struct vdo_hash_map **map_ptr);
 
-void vdo_free_pointer_map(struct pointer_map *map);
+void vdo_hash_map_free(struct vdo_hash_map *map);
 
-size_t vdo_pointer_map_size(const struct pointer_map *map);
+size_t vdo_hash_map_size(const struct vdo_hash_map *map);
 
-void *vdo_pointer_map_get(struct pointer_map *map, const void *key);
+void *vdo_hash_map_get(struct vdo_hash_map *map, const void *key);
 
-int __must_check vdo_pointer_map_put(struct pointer_map *map,
-				     const void *key,
-				     void *new_value,
-				     bool update,
-				     void **old_value_ptr);
+int __must_check vdo_hash_map_put(struct vdo_hash_map *map,
+				  const void *key, void *new_value,
+				  bool update, void **old_value_ptr);
 
-void *vdo_pointer_map_remove(struct pointer_map *map, const void *key);
+void *vdo_hash_map_remove(struct vdo_hash_map *map, const void *key);
 
-#endif /* VDO_POINTER_MAP_H */
+#endif /* VDO_HAS_MAP_H */

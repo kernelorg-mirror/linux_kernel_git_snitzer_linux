@@ -46,7 +46,7 @@
  * need to develop an approach to incrementally resize the table.
  */
 
-#include "pointer-map.h"
+#include "hash-map.h"
 
 #include <linux/minmax.h>
 
@@ -58,10 +58,10 @@
 
 enum {
 	DEFAULT_CAPACITY = 16, /* the number of neighborhoods in a new table */
-	NEIGHBORHOOD = 255, /* the number of buckets in each neighborhood */
-	MAX_PROBES = 1024, /* limit on the number of probes for a free bucket */
-	NULL_HOP_OFFSET = 0, /* the hop offset value terminating the hop list */
-	DEFAULT_LOAD = 75 /* a compromise between memory use and performance */
+	NEIGHBORHOOD = 255,    /* the number of buckets in each neighborhood */
+	MAX_PROBES = 1024,     /* limit on the number of probes for a free bucket */
+	NULL_HOP_OFFSET = 0,   /* the hop offset value terminating the hop list */
+	DEFAULT_LOAD = 75      /* a compromise between memory use and performance */
 };
 
 /**
@@ -69,31 +69,34 @@ enum {
  *
  * Buckets are packed together to reduce memory usage and improve cache efficiency. It would be
  * tempting to encode the hop offsets separately and maintain alignment of key/value pairs, but
- * it's crucial to keep the hop fields near the buckets that they use them so they'll tend to share
+ * it's crucial to keep the hop fields near the buckets that use them so they'll tend to share
  * cache lines.
  */
 struct __packed bucket {
 	/**
 	 * @first_hop: The biased offset of the first entry in the hop list of the neighborhood
-	 * that hashes to this bucket.
+	 *             that hashes to this bucket.
 	 */
 	u8 first_hop;
-	/** @next_hop: the biased offset of the next bucket in the hop list. */
+	/** @next_hop: The biased offset of the next bucket in the hop list. */
 	u8 next_hop;
-	/** @key: The key stored in this bucket. */
-	const void *key;
 	/** @value: The value stored in this bucket (NULL if empty). */
 	void *value;
+	/** @key: The key stored in this bucket. */
+	union {
+		const void *ptr_key;
+		u64 int_key;
+	};
 };
 
 /**
- * struct pointer_map - The concrete definition of the opaque pointer_map type.
+ * struct vdo_hash_map - The concrete definition of the opaque vdo_hash_map type.
  *
  * To avoid having to wrap the neighborhoods of the last entries back around to the start of the
  * bucket array, we allocate a few more buckets at the end of the array instead, which is why
  * capacity and bucket_count are different.
  */
-struct pointer_map {
+struct vdo_hash_map {
 	/** @size: The number of entries stored in the map. */
 	size_t size;
 	/** @capacity: The number of neighborhoods in the map. */
@@ -103,54 +106,96 @@ struct pointer_map {
 	/** @buckets: The array of hash buckets. */
 	struct bucket *buckets;
 	/** @comparator: The function for comparing keys for equality. */
-	pointer_key_comparator *comparator;
+	pointer_key_compare_fn comparator;
 	/** @hasher: The function for getting a hash code from a key. */
-	pointer_key_hasher *hasher;
+	pointer_key_hash_fn hasher;
 };
 
 /**
- * allocate_buckets() - Initialize a pointer_map.
+ * mix() - The Google CityHash 16-byte hash mixing function.
+ * @input1: The first input value.
+ * @input2: The second input value.
+ *
+ * Return: A hash of the two inputs.
+ */
+static u64 mix(u64 input1, u64 input2)
+{
+	static const u64 CITY_MULTIPLIER = 0x9ddfea08eb382d69ULL;
+	u64 hash = (input1 ^ input2);
+
+	hash *= CITY_MULTIPLIER;
+	hash ^= (hash >> 47);
+	hash ^= input2;
+	hash *= CITY_MULTIPLIER;
+	hash ^= (hash >> 47);
+	hash *= CITY_MULTIPLIER;
+	return hash;
+}
+
+/**
+ * hash_key() - Calculate a 64-bit non-cryptographic hash value for the provided 64-bit integer
+ *              key.
+ * @key: The mapping key.
+ *
+ * The implementation is based on Google's CityHash, only handling the specific case of an 8-byte
+ * input.
+ *
+ * Return: The hash of the mapping key.
+ */
+// FIXME: doesn't Linux have basic hash? e.g.: siphash_2u64()
+static u64 hash_key(u64 key)
+{
+	/*
+	 * Aliasing restrictions forbid us from casting pointer types, so use a union to convert a
+	 * single u64 to two u32 values.
+	 */
+	union {
+		u64 u64;
+		u32 u32[2];
+	} pun = {.u64 = key};
+
+	return mix(sizeof(key) + (((u64) pun.u32[0]) << 3), pun.u32[1]);
+}
+
+/**
+ * allocate_buckets() - Initialize a vdo_hash_map.
  * @map: The map to initialize.
  * @capacity: The initial capacity of the map.
  *
  * Return: UDS_SUCCESS or an error code.
  */
-static int allocate_buckets(struct pointer_map *map, size_t capacity)
+static int allocate_buckets(struct vdo_hash_map *map, size_t capacity)
 {
 	map->size = 0;
 	map->capacity = capacity;
 
 	/*
 	 * Allocate NEIGHBORHOOD - 1 extra buckets so the last bucket can have a full neighborhood
-	 * without have to wrap back around to element zero.
+	 * without having to wrap back around to element zero.
 	 */
 	map->bucket_count = capacity + (NEIGHBORHOOD - 1);
-	return UDS_ALLOCATE(map->bucket_count,
-			    struct bucket,
-			    "pointer_map buckets",
-			    &map->buckets);
+	return UDS_ALLOCATE(map->bucket_count, struct bucket,
+			    "struct vdo_hash_map buckets", &map->buckets);
 }
 
 /**
- * vdo_make_pointer_map() - Allocate and initialize a pointer_map.
+ * vdo_hash_map_create() - Allocate and initialize an vdo_hash_map.
  * @initial_capacity: The number of entries the map should initially be capable of holding (zero
  *                    tells the map to use its own small default).
  * @initial_load: The load factor of the map, expressed as an integer percentage (typically in the
- * range 50 to 90, with zero telling the map to use its own default).
+ *                range 50 to 90, with zero telling the map to use its own default).
  * @comparator: The function to use to compare the referents of two pointer keys for equality.
  * @hasher: The function to use obtain the hash code associated with each pointer key
- * @map_ptr: A pointer to hold the new pointer_map.
+ * @map_ptr: A pointer to hold the new vdo_hash_map.
  *
  * Return: UDS_SUCCESS or an error code.
  */
-int vdo_make_pointer_map(size_t initial_capacity,
-			 unsigned int initial_load,
-			 pointer_key_comparator comparator,
-			 pointer_key_hasher hasher,
-			 struct pointer_map **map_ptr)
+int vdo_hash_map_create(size_t initial_capacity, unsigned int initial_load,
+			pointer_key_compare_fn comparator, pointer_key_hash_fn hasher,
+			struct vdo_hash_map **map_ptr)
 {
 	int result;
-	struct pointer_map *map;
+	struct vdo_hash_map *map;
 	size_t capacity;
 
 	/* Use the default initial load if the caller did not specify one. */
@@ -159,7 +204,7 @@ int vdo_make_pointer_map(size_t initial_capacity,
 	if (initial_load > 100)
 		return UDS_INVALID_ARGUMENT;
 
-	result = UDS_ALLOCATE(1, struct pointer_map, "pointer_map", &map);
+	result = UDS_ALLOCATE(1, struct vdo_hash_map, "vdo_hash_map", &map);
 	if (result != UDS_SUCCESS)
 		return result;
 
@@ -177,7 +222,7 @@ int vdo_make_pointer_map(size_t initial_capacity,
 
 	result = allocate_buckets(map, capacity);
 	if (result != UDS_SUCCESS) {
-		vdo_free_pointer_map(UDS_FORGET(map));
+		vdo_hash_map_free(UDS_FORGET(map));
 		return result;
 	}
 
@@ -186,13 +231,13 @@ int vdo_make_pointer_map(size_t initial_capacity,
 }
 
 /**
- * vdo_free_pointer_map() - Free a pointer_map.
- * @map: The pointer_map to free.
+ * vdo_hash_map_free() - Free a vdo_hash_map.
+ * @map: The vdo_hash_map to free.
  *
  * The map does not own the pointer keys and values stored in the map and they are not freed by
  * this call.
  */
-void vdo_free_pointer_map(struct pointer_map *map)
+void vdo_hash_map_free(struct vdo_hash_map *map)
 {
 	if (map == NULL)
 		return;
@@ -202,12 +247,12 @@ void vdo_free_pointer_map(struct pointer_map *map)
 }
 
 /**
- * vdo_pointer_map_size() - Get the number of entries stored in a pointer_map.
- * @map: The pointer_map to query.
+ * vdo_hash_map_size() - Get the number of entries stored in a vdo_hash_map.
+ * @map: The vdo_hash_map to query.
  *
  * Return: The number of entries in the map.
  */
-size_t vdo_pointer_map_size(const struct pointer_map *map)
+size_t vdo_hash_map_size(const struct vdo_hash_map *map)
 {
 	return map->size;
 }
@@ -269,33 +314,38 @@ static void insert_in_hop_list(struct bucket *neighborhood, struct bucket *new_b
  * @map: The map to search.
  * @key: The mapping key.
  */
-static struct bucket *select_bucket(const struct pointer_map *map, const void *key)
+static struct bucket *select_bucket(const struct vdo_hash_map *map, const void *key)
 {
+	/*
+	 * Calculate a good hash value for the provided key. We want exactly 32 bits, so mask the
+	 * result.
+	 */
+	u64 hash = map->hasher ? map->hasher(key) : (hash_key(*(u64*)key) & 0xFFFFFFFF);
+
 	/*
 	 * Scale the 32-bit hash to a bucket index by treating it as a binary fraction and
 	 * multiplying that by the capacity. If the hash is uniformly distributed over [0 ..
 	 * 2^32-1], then (hash * capacity / 2^32) should be uniformly distributed over [0 ..
 	 * capacity-1]. The multiply and shift is much faster than a divide (modulus) on X86 CPUs.
 	 */
-	u64 hash = map->hasher(key);
-
 	return &map->buckets[(hash * map->capacity) >> 32];
 }
 
 /**
- * search_hop_list() - Search the hop list.
+ * search_hop_list() - Search the hop list associated with given hash bucket for a given search
+ *                     key.
  * @map: The map being searched.
  * @bucket: The map bucket to search for the key.
  * @key: The mapping key.
- * @previous_ptr: if not NULL, a pointer in which to store the bucket in the list preceding the one
- *                that had the matching key.
+ * @previous_ptr: Output. if not NULL, a pointer in which to store the bucket in the list preceding
+ *                the one that had the matching key
  *
- * Searches the hop list associated with given hash bucket for a given search key. If the key is
- * found, returns a pointer to the entry (bucket or collision), otherwise returns NULL.
+ * If the key is found, returns a pointer to the entry (bucket or collision), otherwise returns
+ * NULL.
  *
- * Return: an entry that matches the key, or NULL if not found.
+ * Return: An entry that matches the key, or NULL if not found.
  */
-static struct bucket *search_hop_list(struct pointer_map *map,
+static struct bucket *search_hop_list(struct vdo_hash_map *map,
 				      struct bucket *bucket,
 				      const void *key,
 				      struct bucket **previous_ptr)
@@ -307,7 +357,9 @@ static struct bucket *search_hop_list(struct pointer_map *map,
 		/* Check the neighboring bucket indexed by the offset for the desired key. */
 		struct bucket *entry = dereference_hop(bucket, next_hop);
 
-		if ((entry->value != NULL) && map->comparator(key, entry->key)) {
+		if ((entry->value != NULL) && (map->comparator ?
+					       map->comparator(key, entry->ptr_key) :
+					       ((*(u64 *)key) == entry->int_key))) {
 			if (previous_ptr != NULL)
 				*previous_ptr = previous;
 			return entry;
@@ -319,13 +371,13 @@ static struct bucket *search_hop_list(struct pointer_map *map,
 }
 
 /**
- * vdo_pointer_map_get() - Retrieve the value associated with a given key from the pointer_map.
- * @map: The pointer_map to query.
+ * vdo_hash_map_get() - Retrieve the value associated with a given key from the vdo_hash_map.
+ * @map: The vdo_hash_map to query.
  * @key: The key to look up (may be NULL if the comparator and hasher functions support it).
  *
  * Return: the value associated with the given key, or NULL if the key is not mapped to any value.
  */
-void *vdo_pointer_map_get(struct pointer_map *map, const void *key)
+void *vdo_hash_map_get(struct vdo_hash_map *map, const void *key)
 {
 	struct bucket *match = search_hop_list(map, select_bucket(map, key), key, NULL);
 
@@ -337,22 +389,20 @@ void *vdo_pointer_map_get(struct pointer_map *map, const void *key)
  *                    storing them in the new buckets.
  * @map: The map to resize.
  */
-static int resize_buckets(struct pointer_map *map)
+static int resize_buckets(struct vdo_hash_map *map)
 {
 	int result;
 	size_t i;
+	bool use_ptr_key = !!map->hasher;
 
 	/* Copy the top-level map data to the stack. */
-	struct pointer_map old_map = *map;
+	struct vdo_hash_map old_map = *map;
 
 	/* Re-initialize the map to be empty and 50% larger. */
 	size_t new_capacity = map->capacity / 2 * 3;
 
 	uds_log_info("%s: attempting resize from %zu to %zu, current size=%zu",
-		     __func__,
-		     map->capacity,
-		     new_capacity,
-		     map->size);
+		     __func__, map->capacity, new_capacity, map->size);
 	result = allocate_buckets(map, new_capacity);
 	if (result != UDS_SUCCESS) {
 		*map = old_map;
@@ -366,7 +416,8 @@ static int resize_buckets(struct pointer_map *map)
 		if (entry->value == NULL)
 			continue;
 
-		result = vdo_pointer_map_put(map, entry->key, entry->value, true, NULL);
+		result = vdo_hash_map_put(map, (use_ptr_key ? entry->ptr_key : &entry->int_key),
+					  entry->value, true, NULL);
 		if (result != UDS_SUCCESS) {
 			/* Destroy the new partial map and restore the map from the stack. */
 			UDS_FREE(UDS_FORGET(map->buckets));
@@ -393,7 +444,7 @@ static int resize_buckets(struct pointer_map *map)
  * Return: The next empty bucket, or NULL if the search failed.
  */
 static struct bucket *
-find_empty_bucket(struct pointer_map *map, struct bucket *bucket, unsigned int max_probes)
+find_empty_bucket(struct vdo_hash_map *map, struct bucket *bucket, unsigned int max_probes)
 {
 	/*
 	 * Limit the search to either the nearer of the end of the bucket array or a fixed distance
@@ -423,8 +474,7 @@ find_empty_bucket(struct pointer_map *map, struct bucket *bucket, unsigned int m
  * Return: The bucket that was vacated by moving its entry to the provided hole, or NULL if no
  *         entry could be moved.
  */
-static struct bucket *
-move_empty_bucket(struct pointer_map *map __always_unused, struct bucket *hole)
+static struct bucket *move_empty_bucket(struct vdo_hash_map *map, struct bucket *hole)
 {
 	/*
 	 * Examine every neighborhood that the empty bucket is part of, starting with the one in
@@ -433,6 +483,7 @@ move_empty_bucket(struct pointer_map *map __always_unused, struct bucket *hole)
 	 * deeper into the array than a valid bucket.
 	 */
 	struct bucket *bucket;
+	bool use_ptr_key = !!map->hasher;
 
 	for (bucket = &hole[1 - NEIGHBORHOOD]; bucket < hole; bucket++) {
 		/*
@@ -468,7 +519,10 @@ move_empty_bucket(struct pointer_map *map __always_unused, struct bucket *hole)
 		new_hole->next_hop = NULL_HOP_OFFSET;
 
 		/* Move the entry into the original hole. */
-		hole->key = new_hole->key;
+		if (use_ptr_key)
+			hole->ptr_key = new_hole->ptr_key;
+		else
+			hole->int_key = new_hole->int_key;
 		hole->value = new_hole->value;
 		new_hole->value = NULL;
 
@@ -484,7 +538,7 @@ move_empty_bucket(struct pointer_map *map __always_unused, struct bucket *hole)
 /**
  * update_mapping() - Find and update any existing mapping for a given key, returning the value
  *                    associated with the key in the provided pointer.
- * @map: The pointer_map to attempt to modify.
+ * @map: The vdo_hash_map to attempt to modify.
  * @neighborhood: The first bucket in the neighborhood that would contain the search key.
  * @key: The key with which to associate the new value.
  * @new_value: The value to be associated with the key.
@@ -493,7 +547,7 @@ move_empty_bucket(struct pointer_map *map __always_unused, struct bucket *hole)
  *
  * Return: true if the map contains a mapping for the key, false if it does not.
  */
-static bool update_mapping(struct pointer_map *map,
+static bool update_mapping(struct vdo_hash_map *map,
 			   struct bucket *neighborhood,
 			   const void *key,
 			   void *new_value,
@@ -502,9 +556,10 @@ static bool update_mapping(struct pointer_map *map,
 {
 	struct bucket *bucket = search_hop_list(map, neighborhood, key, NULL);
 
-	if (bucket == NULL)
+	if (bucket == NULL) {
 		/* There is no bucket containing the key in the neighborhood. */
 		return false;
+	}
 
 	/*
 	 * Return the value of the current mapping (if desired) and update the mapping with the new
@@ -517,7 +572,10 @@ static bool update_mapping(struct pointer_map *map,
 		 * We're dropping the old key pointer on the floor here, assuming it's a property
 		 * of the value or that it's otherwise safe to just forget.
 		 */
-		bucket->key = key;
+		if (map->hasher)
+			bucket->ptr_key = key;
+		else
+			bucket->int_key = (*(u64 *)key);
 		bucket->value = new_value;
 	}
 	return true;
@@ -526,7 +584,7 @@ static bool update_mapping(struct pointer_map *map,
 /**
  * find_or_make_vacancy() - Find an empty bucket in a specified neighborhood for a new mapping or
  *                          attempt to re-arrange mappings so there is such a bucket.
- * @map: The pointer_map to search or modify.
+ * @map: The vdo_hash_map to search or modify.
  * @neighborhood: The first bucket in the neighborhood in which an empty bucket is needed for a new
  *                mapping.
  *
@@ -536,7 +594,7 @@ static bool update_mapping(struct pointer_map *map,
  * Return: A pointer to an empty bucket in the desired neighborhood, or NULL if a vacancy could not
  *         be found or arranged.
  */
-static struct bucket *find_or_make_vacancy(struct pointer_map *map, struct bucket *neighborhood)
+static struct bucket *find_or_make_vacancy(struct vdo_hash_map *map, struct bucket *neighborhood)
 {
 	/* Probe within and beyond the neighborhood for the first empty bucket. */
 	struct bucket *hole = find_empty_bucket(map, neighborhood, MAX_PROBES);
@@ -566,8 +624,8 @@ static struct bucket *find_or_make_vacancy(struct pointer_map *map, struct bucke
 }
 
 /**
- * vdo_pointer_map_put() - Try to associate a value (a pointer) with an integer in a pointer_map.
- * @map: The pointer_map to attempt to modify.
+ * vdo_hash_map_put() - Try to associate a value (a pointer) with an integer in a vdo_hash_map.
+ * @map: The vdo_hash_map to attempt to modify.
  * @key: The key with which to associate the new value (may be NULL if the comparator and hasher
  *       functions support it).
  * @new_value: The value to be associated with the key.
@@ -587,11 +645,8 @@ static struct bucket *find_or_make_vacancy(struct pointer_map *map, struct bucke
  *
  * Return: UDS_SUCCESS or an error code.
  */
-int vdo_pointer_map_put(struct pointer_map *map,
-			const void *key,
-			void *new_value,
-			bool update,
-			void **old_value_ptr)
+int vdo_hash_map_put(struct vdo_hash_map *map, const void *key, void *new_value,
+		     bool update, void **old_value_ptr)
 {
 	struct bucket *neighborhood, *bucket;
 
@@ -636,7 +691,10 @@ int vdo_pointer_map_put(struct pointer_map *map,
 	}
 
 	/* Put the new entry in the empty bucket, adding it to the neighborhood. */
-	bucket->key = key;
+	if (map->hasher)
+		bucket->ptr_key = key;
+	else
+		bucket->int_key = (*(u64 *)key);
 	bucket->value = new_value;
 	insert_in_hop_list(neighborhood, bucket);
 	map->size += 1;
@@ -651,14 +709,14 @@ int vdo_pointer_map_put(struct pointer_map *map,
 }
 
 /**
- * vdo_pointer_map_remove() - Remove the mapping for a given key from the pointer_map.
- * @map: The pointer_map from which to remove the mapping.
+ * vdo_hash_map_remove() - Remove the mapping for a given key from the vdo_hash_map.
+ * @map: The vdo_hash_map from which to remove the mapping.
  * @key: The key whose mapping is to be removed (may be NULL if the comparator and hasher functions
  *       support it).
  *
  * Return: the value that was associated with the key, or NULL if it was not mapped.
  */
-void *vdo_pointer_map_remove(struct pointer_map *map, const void *key)
+void *vdo_hash_map_remove(struct vdo_hash_map *map, const void *key)
 {
 	void *value;
 
@@ -677,7 +735,10 @@ void *vdo_pointer_map_remove(struct pointer_map *map, const void *key)
 	map->size -= 1;
 	value = victim->value;
 	victim->value = NULL;
-	victim->key = 0;
+	if (map->hasher)
+		victim->ptr_key = 0;
+	else
+		victim->int_key = 0;
 
 	/* The victim bucket is now empty, but it still needs to be spliced out of the hop list. */
 	if (previous == NULL)
