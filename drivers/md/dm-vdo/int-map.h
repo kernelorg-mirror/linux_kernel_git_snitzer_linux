@@ -23,11 +23,6 @@
  * shrink as entries are removed.
  */
 
-static inline void vdo_free_int_map(struct vdo_hash_map *map)
-{
-	vdo_hash_map_free(map);
-}
-
 static inline size_t vdo_int_map_size(const struct vdo_hash_map *map)
 {
 	return vdo_hash_map_size(map);
