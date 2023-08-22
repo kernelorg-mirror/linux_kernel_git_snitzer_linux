@@ -429,8 +429,8 @@ static void attempt_logical_block_lock(struct vdo_completion *completion)
 		return;
 	}
 
-	result = vdo_int_map_put(lock->zone->lbn_operations, lock->lbn,
-				 data_vio, false, (void **) &lock_holder);
+	result = vdo_hash_map_put(lock->zone->lbn_operations, &lock->lbn,
+				  data_vio, false, (void **) &lock_holder);
 	if (result != VDO_SUCCESS) {
 		continue_data_vio_with_error(data_vio, result);
 		return;
@@ -1190,11 +1190,8 @@ static void transfer_lock(struct data_vio *data_vio, struct lbn_lock *lock)
 	/* Transfer the remaining lock waiters to the next lock holder. */
 	vdo_transfer_all_waiters(&lock->waiters, &next_lock_holder->logical.waiters);
 
-	result = vdo_int_map_put(lock->zone->lbn_operations,
-				 lock->lbn,
-				 next_lock_holder,
-				 true,
-				 (void **) &lock_holder);
+	result = vdo_hash_map_put(lock->zone->lbn_operations, &lock->lbn,
+				  next_lock_holder, true, (void **) &lock_holder);
 	if (result != VDO_SUCCESS) {
 		continue_data_vio_with_error(next_lock_holder, result);
 		return;
