@@ -26,7 +26,7 @@
 static inline int __must_check
 vdo_make_int_map(size_t initial_capacity, unsigned int initial_load, struct vdo_hash_map **map_ptr)
 {
-	return vdo_hash_map_create(initial_capacity, initial_load, NULL, NULL, map_ptr);
+	return vdo_hash_map_create(HASH_MAP_TYPE_INT, initial_capacity, initial_load, map_ptr);
 }
 
 static inline void vdo_free_int_map(struct vdo_hash_map *map)

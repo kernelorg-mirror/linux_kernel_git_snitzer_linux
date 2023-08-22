@@ -1994,22 +1994,6 @@ void vdo_share_compressed_write_lock(struct data_vio *data_vio, struct pbn_lock 
 	ASSERT_LOG_ONLY(claimed, "impossible to fail to claim an initial increment");
 }
 
-/** compare_keys() - Implements pointer_key_comparator. */
-static bool compare_keys(const void *this_key, const void *that_key)
-{
-	/* Null keys are not supported. */
-	return (memcmp(this_key, that_key, sizeof(struct uds_record_name)) == 0);
-}
-
-/** hash_key() - Implements pointer_key_comparator. */
-static u32 hash_key(const void *key)
-{
-	const struct uds_record_name *name = key;
-
-	/* Use a fragment of the record name as a hash code. */
-	return get_unaligned_le32(&name->name[4]);
-}
-
 static void dedupe_kobj_release(struct kobject *directory)
 {
 	UDS_FREE(container_of(directory, struct hash_zones, dedupe_directory));
@@ -2387,8 +2371,8 @@ initialize_zone(struct vdo *vdo, struct hash_zones *zones, zone_count_t zone_num
 	data_vio_count_t i;
 	struct hash_zone *zone = &zones->zones[zone_number];
 
-	result = vdo_hash_map_create(VDO_LOCK_MAP_CAPACITY, 0, compare_keys,
-				     hash_key, &zone->hash_lock_map);
+	result = vdo_hash_map_create(HASH_MAP_TYPE_PTR, VDO_LOCK_MAP_CAPACITY,
+				     0, &zone->hash_lock_map);
 	if (result != VDO_SUCCESS)
 		return result;
 

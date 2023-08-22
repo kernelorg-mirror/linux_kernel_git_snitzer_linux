@@ -10,12 +10,13 @@
 #include <linux/types.h>
 
 /*
- * FIXME: extend to include int_map docs.
+ * A vdo_hash_map with HASH_MAP_TYPE_INT associates pointers (void *) with integer keys (u64).
+ * NULL pointer values are not supported.
  *
- * A vdo_hash_map associates pointer values (<code>void *</code>) with the data referenced by
- * pointer keys (<code>void *</code>). <code>NULL</code> pointer values are not supported. A
- * <code>NULL</code> key value is supported when the instance's key comparator and hasher functions
- * support it.
+ * A vdo_hash_map with HASH_MAP_TYPE_PTR associates pointer values (<code>void *</code>) with the
+ * data referenced by pointer keys (<code>void *</code>). <code>NULL</code> pointer values are not
+ * supported. A <code>NULL</code> key value is supported when the instance's key comparator and
+ * hasher functions support it.
  *
  * The map is implemented as hash table, which should provide constant-time insert, query, and
  * remove operations, although the insert may occasionally grow the table, which is linear in the
@@ -32,40 +33,14 @@
 
 struct vdo_hash_map;
 
-// FIXME: check if existing clients use different methods
+enum vdo_hash_map_type {
+	HASH_MAP_TYPE_INT		 = 0,
+	HASH_MAP_TYPE_PTR	         = 1,
+};
 
-/**
- * typedef pointer_key_compare_fn - The prototype of functions that compare the referents of two
- *                                  pointer keys for equality.
- * @this_key: The first element to compare.
- * @that_key: The second element to compare.
- *
- * If two keys are equal, then both keys must have the same the hash code associated with them by
- * the hasher function defined below.
- *
- * Return: true if and only if the referents of the two key pointers are to be treated as the same
- *         key by the map.
- */
-typedef bool (*pointer_key_compare_fn)(const void *this_key, const void *that_key);
-
-/**
- * typedef pointer_key_hash_fn - The prototype of functions that get or calculate a hash code
- *				 associated with the referent of pointer key.
- * @key: The pointer key to hash.
- *
- * The hash code must be uniformly distributed over all u32 values. The hash code associated
- * with a given key must not change while the key is in the map. If the comparator function says
- * two keys are equal, then this function must return the same hash code for both keys. This
- * function may be called many times for a key while an entry is stored for it in the map.
- *
- * Return: The hash code for the key.
- */
-typedef u32 (*pointer_key_hash_fn)(const void *key);
-
-int __must_check vdo_hash_map_create(size_t initial_capacity,
+int __must_check vdo_hash_map_create(enum vdo_hash_map_type,
+				     size_t initial_capacity,
 				     unsigned int initial_load,
-				     pointer_key_compare_fn comparator,
-				     pointer_key_hash_fn hasher,
 				     struct vdo_hash_map **map_ptr);
 
 void vdo_hash_map_free(struct vdo_hash_map *map);
