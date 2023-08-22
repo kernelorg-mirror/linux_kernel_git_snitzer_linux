@@ -200,8 +200,7 @@ static struct vio *get_mergeable_locked(struct vdo_hash_map *map, struct vio *vi
 	else
 		merge_sector += VDO_SECTORS_PER_BLOCK;
 
-	vio_merge = vdo_int_map_get(map, merge_sector);
-
+	vio_merge = vdo_hash_map_get(map, &merge_sector);
 	if (vio_merge == NULL)
 		return NULL;
 
