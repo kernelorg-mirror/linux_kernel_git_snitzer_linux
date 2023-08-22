@@ -16,7 +16,7 @@
 #include "completion.h"
 #include "constants.h"
 #include "encodings.h"
-#include "int-map.h"
+#include "hash-map.h"
 #include "io-submitter.h"
 #include "recovery-journal.h"
 #include "slab-depot.h"

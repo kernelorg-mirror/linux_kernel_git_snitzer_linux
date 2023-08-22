@@ -17,7 +17,7 @@
 #include "constants.h"
 #include "data-vio.h"
 #include "flush.h"
-#include "int-map.h"
+#include "hash-map.h"
 #include "physical-zone.h"
 #include "vdo.h"
 

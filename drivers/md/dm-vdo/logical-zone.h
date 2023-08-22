@@ -9,7 +9,7 @@
 #include <linux/list.h>
 
 #include "admin-state.h"
-#include "int-map.h"
+#include "hash-map.h"
 #include "types.h"
 
 struct physical_zone;
