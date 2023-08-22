@@ -18,7 +18,7 @@
 #include "dedupe.h"
 #include "encodings.h"
 #include "flush.h"
-#include "int-map.h"
+#include "hash-map.h"
 #include "slab-depot.h"
 #include "status-codes.h"
 #include "vdo.h"

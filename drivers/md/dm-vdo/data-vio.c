@@ -27,7 +27,7 @@
 #include "block-map.h"
 #include "dump.h"
 #include "encodings.h"
-#include "int-map.h"
+#include "hash-map.h"
 #include "io-submitter.h"
 #include "logical-zone.h"
 #include "packer.h"
