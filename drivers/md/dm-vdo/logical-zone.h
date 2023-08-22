@@ -24,7 +24,7 @@ struct logical_zone {
 	/* The thread id for this zone */
 	thread_id_t thread_id;
 	/* In progress operations keyed by LBN */
-	struct int_map *lbn_operations;
+	struct vdo_hash_map *lbn_operations;
 	/* The logical to physical map */
 	struct block_map_zone *block_map_zone;
 	/* The current flush generation */

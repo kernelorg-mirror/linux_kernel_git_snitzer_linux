@@ -59,7 +59,7 @@ struct physical_zone {
 	/* The thread ID for this zone */
 	thread_id_t thread_id;
 	/* In progress operations keyed by PBN */
-	struct int_map *pbn_operations;
+	struct vdo_hash_map *pbn_operations;
 	/* Pool of unused pbn_lock instances */
 	struct pbn_lock_pool *lock_pool;
 	/* The block allocator for this zone */

@@ -9,6 +9,8 @@
 #include <linux/compiler.h>
 #include <linux/types.h>
 
+#include "hash-map.h"
+
 /**
  * DOC: int_map
  *
@@ -21,20 +23,37 @@
  * shrink as entries are removed.
  */
 
-struct int_map;
+static inline int __must_check
+vdo_make_int_map(size_t initial_capacity, unsigned int initial_load, struct vdo_hash_map **map_ptr)
+{
+	return vdo_hash_map_create(initial_capacity, initial_load, NULL, NULL, map_ptr);
+}
 
-int __must_check
-vdo_make_int_map(size_t initial_capacity, unsigned int initial_load, struct int_map **map_ptr);
+static inline void vdo_free_int_map(struct vdo_hash_map *map)
+{
+	vdo_hash_map_free(map);
+}
 
-void vdo_free_int_map(struct int_map *map);
+static inline size_t vdo_int_map_size(const struct vdo_hash_map *map)
+{
+	return vdo_hash_map_size(map);
+}
 
-size_t vdo_int_map_size(const struct int_map *map);
+static inline void *vdo_int_map_get(struct vdo_hash_map *map, u64 key)
+{
+	return vdo_hash_map_get(map, &key);
+}
 
-void *vdo_int_map_get(struct int_map *map, u64 key);
+static inline int __must_check
+vdo_int_map_put(struct vdo_hash_map *map, u64 key, void *new_value,
+		bool update, void **old_value_ptr)
+{
+	return vdo_hash_map_put(map, &key, new_value, update, old_value_ptr);
+}
 
-int __must_check
-vdo_int_map_put(struct int_map *map, u64 key, void *new_value, bool update, void **old_value_ptr);
-
-void *vdo_int_map_remove(struct int_map *map, u64 key);
+static inline void *vdo_int_map_remove(struct vdo_hash_map *map, u64 key)
+{
+	return vdo_hash_map_remove(map, &key);
+}
 
 #endif /* VDO_INT_MAP_H */

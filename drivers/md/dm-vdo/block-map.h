@@ -51,7 +51,7 @@ struct vdo_page_cache {
 	/* cache last found page info */
 	struct page_info *last_found;
 	/* map of page number to info */
-	struct int_map *page_map;
+	struct vdo_hash_map *page_map;
 	/* main LRU list (all infos) */
 	struct list_head lru_list;
 	/* free page list (oldest first) */
@@ -227,7 +227,7 @@ struct block_map_zone {
 	struct dirty_lists *dirty_lists;
 	struct vdo_page_cache page_cache;
 	data_vio_count_t active_lookups;
-	struct int_map *loading_pages;
+	struct vdo_hash_map *loading_pages;
 	struct vio_pool *vio_pool;
 	/* The tree page which has issued or will be issuing a flush */
 	struct tree_page *flusher;
