@@ -215,24 +215,16 @@ static int allocate_buckets(struct vdo_hash_map *map, size_t capacity)
  * @hash_map_type: enum vdo_hash_map_type, hash methods used are based on specified type.
  * @initial_capacity: The number of entries the map should initially be capable of holding (zero
  *                    tells the map to use its own small default).
- * @initial_load: The load factor of the map, expressed as an integer percentage (typically in the
- *                range 50 to 90, with zero telling the map to use its own default).
  * @map_ptr: A pointer to hold the new vdo_hash_map.
  *
  * Return: UDS_SUCCESS or an error code.
  */
 int vdo_hash_map_create(enum vdo_hash_map_type type, size_t initial_capacity,
-			unsigned int initial_load, struct vdo_hash_map **map_ptr)
+			struct vdo_hash_map **map_ptr)
 {
 	int result;
 	struct vdo_hash_map *map;
 	size_t capacity;
-
-	/* Use the default initial load if the caller did not specify one. */
-	if (initial_load == 0)
-		initial_load = DEFAULT_LOAD;
-	if (initial_load > 100)
-		return UDS_INVALID_ARGUMENT;
 
 	result = UDS_ALLOCATE(1, struct vdo_hash_map, "vdo_hash_map", &map);
 	if (result != UDS_SUCCESS)
@@ -247,7 +239,7 @@ int vdo_hash_map_create(enum vdo_hash_map_type type, size_t initial_capacity,
 	 * Scale up the capacity by the specified initial load factor. (i.e to hold 1000 entries at
 	 * 80% load we need a capacity of 1250)
 	 */
-	capacity = capacity * 100 / initial_load;
+	capacity = capacity * 100 / DEFAULT_LOAD;
 
 	result = allocate_buckets(map, capacity);
 	if (result != UDS_SUCCESS) {

@@ -40,7 +40,6 @@ enum vdo_hash_map_type {
 
 int __must_check vdo_hash_map_create(enum vdo_hash_map_type,
 				     size_t initial_capacity,
-				     unsigned int initial_load,
 				     struct vdo_hash_map **map_ptr);
 
 void vdo_hash_map_free(struct vdo_hash_map *map);

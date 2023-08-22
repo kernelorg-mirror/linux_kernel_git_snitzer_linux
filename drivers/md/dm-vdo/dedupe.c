@@ -2372,7 +2372,7 @@ initialize_zone(struct vdo *vdo, struct hash_zones *zones, zone_count_t zone_num
 	struct hash_zone *zone = &zones->zones[zone_number];
 
 	result = vdo_hash_map_create(HASH_MAP_TYPE_PTR, VDO_LOCK_MAP_CAPACITY,
-				     0, &zone->hash_lock_map);
+				     &zone->hash_lock_map);
 	if (result != VDO_SUCCESS)
 		return result;
 

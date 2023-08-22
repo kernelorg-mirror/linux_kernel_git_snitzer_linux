@@ -405,7 +405,7 @@ int vdo_make_io_submitter(unsigned int thread_count,
 		 * uneven. So for now, we'll assume that all requests *may* wind up on one thread,
 		 * and thus all in the same map.
 		 */
-		result = vdo_make_int_map(max_requests_active * 2, 0, &bio_queue_data->map);
+		result = vdo_make_int_map(max_requests_active * 2, &bio_queue_data->map);
 		if (result != 0) {
 			/*
 			 * Clean up the partially initialized bio-queue entirely and indicate that
