@@ -23,12 +23,6 @@
  * shrink as entries are removed.
  */
 
-static inline int __must_check
-vdo_make_int_map(size_t initial_capacity, struct vdo_hash_map **map_ptr)
-{
-	return vdo_hash_map_create(HASH_MAP_TYPE_INT, initial_capacity, map_ptr);
-}
-
 static inline void vdo_free_int_map(struct vdo_hash_map *map)
 {
 	vdo_hash_map_free(map);
