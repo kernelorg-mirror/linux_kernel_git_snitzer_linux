@@ -63,12 +63,13 @@ static void uds_get_io_factory(struct io_factory *factory)
 
 static int get_block_device_from_name(const char *name, struct block_device **bdev)
 {
-	dev_t device = name_to_dev_t(name);
+	dev_t device;
 
-	if (device != 0)
-		*bdev = blkdev_get_by_dev(device, BLK_FMODE, NULL);
+	if (lookup_bdev(name, &device))
+		*bdev = blkdev_get_by_path(name, BLK_FMODE, NULL, NULL);
 	else
-		*bdev = blkdev_get_by_path(name, BLK_FMODE, NULL);
+		*bdev = blkdev_get_by_dev(device, BLK_FMODE, NULL, NULL);
+
 	if (IS_ERR(*bdev)) {
 		uds_log_error_strerror(-PTR_ERR(*bdev), "%s is not a block device", name);
 		return UDS_INVALID_ARGUMENT;
@@ -89,7 +90,7 @@ int uds_make_io_factory(const char *path, struct io_factory **factory_ptr)
 
 	result = UDS_ALLOCATE(1, struct io_factory, __func__, &factory);
 	if (result != UDS_SUCCESS) {
-		blkdev_put(bdev, BLK_FMODE);
+		blkdev_put(bdev, NULL);
 		return result;
 	}
 
@@ -109,7 +110,7 @@ int uds_replace_storage(struct io_factory *factory, const char *path)
 	if (result != UDS_SUCCESS)
 		return result;
 
-	blkdev_put(factory->bdev, BLK_FMODE);
+	blkdev_put(factory->bdev, NULL);
 	factory->bdev = bdev;
 	return UDS_SUCCESS;
 }
@@ -118,7 +119,7 @@ int uds_replace_storage(struct io_factory *factory, const char *path)
 void uds_put_io_factory(struct io_factory *factory)
 {
 	if (atomic_add_return(-1, &factory->ref_count) <= 0) {
-		blkdev_put(factory->bdev, BLK_FMODE);
+		blkdev_put(factory->bdev, NULL);
 		UDS_FREE(factory);
 	}
 }
