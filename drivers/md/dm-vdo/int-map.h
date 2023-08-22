@@ -23,9 +23,4 @@
  * shrink as entries are removed.
  */
 
-static inline void *vdo_int_map_remove(struct vdo_hash_map *map, u64 key)
-{
-	return vdo_hash_map_remove(map, &key);
-}
-
 #endif /* VDO_INT_MAP_H */

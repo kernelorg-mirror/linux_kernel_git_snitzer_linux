@@ -1169,7 +1169,7 @@ static void release_lock(struct data_vio *data_vio, struct lbn_lock *lock)
 	}
 
 	/* Release the lock by removing the lock from the map. */
-	lock_holder = vdo_int_map_remove(lock_map, lock->lbn);
+	lock_holder = vdo_hash_map_remove(lock_map, &lock->lbn);
 	ASSERT_LOG_ONLY((data_vio == lock_holder),
 			"logical block lock mismatch for block %llu",
 			(unsigned long long) lock->lbn);

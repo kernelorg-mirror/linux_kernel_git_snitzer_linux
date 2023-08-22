@@ -380,7 +380,7 @@ static int __must_check set_info_pbn(struct page_info *info, physical_block_numb
 		return result;
 
 	if (info->pbn != NO_PAGE)
-		vdo_int_map_remove(cache->page_map, info->pbn);
+		vdo_hash_map_remove(cache->page_map, &info->pbn);
 
 	info->pbn = pbn;
 
@@ -1704,7 +1704,7 @@ static void release_page_lock(struct data_vio *data_vio, char *what)
 			lock->root_index);
 
 	zone = data_vio->logical.zone->block_map_zone;
-	lock_holder = vdo_int_map_remove(zone->loading_pages, lock->key);
+	lock_holder = vdo_hash_map_remove(zone->loading_pages, &lock->key);
 	ASSERT_LOG_ONLY((lock_holder == lock),
 			"block map page %s mismatch for key %llu in tree %u",
 			what,
