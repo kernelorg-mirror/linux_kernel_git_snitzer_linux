@@ -225,7 +225,7 @@ static int __must_check allocate_cache_components(struct vdo_page_cache *cache)
 	if (result != UDS_SUCCESS)
 		return result;
 
-	result = vdo_make_int_map(cache->page_count, 0, &cache->page_map);
+	result = vdo_make_int_map(cache->page_count, &cache->page_map);
 	if (result != UDS_SUCCESS)
 		return result;
 
@@ -1334,7 +1334,7 @@ int vdo_invalidate_page_cache(struct vdo_page_cache *cache)
 
 	/* Reset the page map by re-allocating it. */
 	vdo_free_int_map(UDS_FORGET(cache->page_map));
-	return vdo_make_int_map(cache->page_count, 0, &cache->page_map);
+	return vdo_make_int_map(cache->page_count, &cache->page_map);
 }
 
 /**
@@ -2769,7 +2769,7 @@ static int __must_check initialize_block_map_zone(struct block_map *map,
 		INIT_LIST_HEAD(&zone->dirty_lists->eras[i][VDO_CACHE_PAGE]);
 	}
 
-	result = vdo_make_int_map(VDO_LOCK_MAP_CAPACITY, 0, &zone->loading_pages);
+	result = vdo_make_int_map(VDO_LOCK_MAP_CAPACITY, &zone->loading_pages);
 	if (result != VDO_SUCCESS)
 		return result;
 
