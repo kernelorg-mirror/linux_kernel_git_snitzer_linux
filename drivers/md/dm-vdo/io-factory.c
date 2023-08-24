@@ -101,7 +101,7 @@ int uds_make_io_factory(const char *path, struct io_factory **factory_ptr)
 	if (result != UDS_SUCCESS)
 		return result;
 
-	result = UDS_ALLOCATE(1, struct io_factory, __func__, &factory);
+	result = uds_allocate(1, struct io_factory, __func__, &factory);
 	if (result != UDS_SUCCESS) {
 		blkdev_put(bdev, NULL);
 		return result;
@@ -203,7 +203,7 @@ int uds_make_buffered_reader(struct io_factory *factory,
 	if (result != UDS_SUCCESS)
 		return result;
 
-	result = UDS_ALLOCATE(1, struct buffered_reader, "buffered reader", &reader);
+	result = uds_allocate(1, struct buffered_reader, "buffered reader", &reader);
 	if (result != UDS_SUCCESS) {
 		dm_bufio_client_destroy(client);
 		return result;
@@ -340,7 +340,7 @@ int uds_make_buffered_writer(struct io_factory *factory,
 	if (result != UDS_SUCCESS)
 		return result;
 
-	result = UDS_ALLOCATE(1, struct buffered_writer, "buffered writer", &writer);
+	result = uds_allocate(1, struct buffered_writer, "buffered writer", &writer);
 	if (result != UDS_SUCCESS) {
 		dm_bufio_client_destroy(client);
 		return result;
