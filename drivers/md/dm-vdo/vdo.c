@@ -216,7 +216,7 @@ initialize_thread_config(struct thread_count_config counts, struct thread_config
 		config->hash_zone_count = counts.hash_zones;
 	}
 
-	result = UDS_ALLOCATE(config->logical_zone_count,
+	result = uds_allocate(config->logical_zone_count,
 			      thread_id_t,
 			      "logical thread array",
 			      &config->logical_threads);
@@ -225,7 +225,7 @@ initialize_thread_config(struct thread_count_config counts, struct thread_config
 		return result;
 	}
 
-	result = UDS_ALLOCATE(config->physical_zone_count,
+	result = uds_allocate(config->physical_zone_count,
 			      thread_id_t,
 			      "physical thread array",
 			      &config->physical_threads);
@@ -234,7 +234,7 @@ initialize_thread_config(struct thread_count_config counts, struct thread_config
 		return result;
 	}
 
-	result = UDS_ALLOCATE(config->hash_zone_count,
+	result = uds_allocate(config->hash_zone_count,
 			      thread_id_t,
 			      "hash thread array",
 			      &config->hash_zone_threads);
@@ -243,7 +243,7 @@ initialize_thread_config(struct thread_count_config counts, struct thread_config
 		return result;
 	}
 
-	result = UDS_ALLOCATE(config->bio_thread_count,
+	result = uds_allocate(config->bio_thread_count,
 			      thread_id_t,
 			      "bio thread array",
 			      &config->bio_threads);
@@ -286,7 +286,7 @@ static int __must_check read_geometry_block(struct vdo *vdo)
 	char *block;
 	int result;
 
-	result = UDS_ALLOCATE(VDO_BLOCK_SIZE, u8, __func__, &block);
+	result = uds_allocate(VDO_BLOCK_SIZE, u8, __func__, &block);
 	if (result != VDO_SUCCESS)
 		return result;
 
@@ -532,7 +532,7 @@ initialize_vdo(struct vdo *vdo, struct device_config *config, unsigned int insta
 		     vdo->thread_config.thread_count);
 
 	/* Compression context storage */
-	result = UDS_ALLOCATE(config->thread_counts.cpu_threads,
+	result = uds_allocate(config->thread_counts.cpu_threads,
 			      char *,
 			      "LZ4 context",
 			      &vdo->compression_context);
@@ -542,7 +542,7 @@ initialize_vdo(struct vdo *vdo, struct device_config *config, unsigned int insta
 	}
 
 	for (i = 0; i < config->thread_counts.cpu_threads; i++) {
-		result = UDS_ALLOCATE(LZ4_MEM_COMPRESS,
+		result = uds_allocate(LZ4_MEM_COMPRESS,
 				      char,
 				      "LZ4 context",
 				      &vdo->compression_context[i]);
@@ -582,7 +582,7 @@ int vdo_make(unsigned int instance,
 	/* VDO-3769 - Set a generic reason so we don't ever return garbage. */
 	*reason = "Unspecified error";
 
-	result = UDS_ALLOCATE(1, struct vdo, __func__, &vdo);
+	result = uds_allocate(1, struct vdo, __func__, &vdo);
 	if (result != UDS_SUCCESS) {
 		*reason = "Cannot allocate VDO";
 		return result;
@@ -603,7 +603,7 @@ int vdo_make(unsigned int instance,
 		 MODULE_NAME,
 		 instance);
 	BUG_ON(vdo->thread_name_prefix[0] == '\0');
-	result = UDS_ALLOCATE(vdo->thread_config.thread_count,
+	result = uds_allocate(vdo->thread_config.thread_count,
 			      struct vdo_thread,
 			      __func__,
 			      &vdo->threads);
@@ -799,7 +799,7 @@ static int initialize_super_block(struct vdo *vdo, struct vdo_super_block *super
 {
 	int result;
 
-	result = UDS_ALLOCATE(VDO_BLOCK_SIZE,
+	result = uds_allocate(VDO_BLOCK_SIZE,
 			      char,
 			      "encoded super block",
 			      (char **) &vdo->super_block.buffer);
@@ -1111,7 +1111,7 @@ int vdo_register_read_only_listener(struct vdo *vdo,
 	if (result != VDO_SUCCESS)
 		return result;
 
-	result = UDS_ALLOCATE(1, struct read_only_listener, __func__, &read_only_listener);
+	result = uds_allocate(1, struct read_only_listener, __func__, &read_only_listener);
 	if (result != VDO_SUCCESS)
 		return result;
 

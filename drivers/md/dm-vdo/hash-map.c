@@ -206,7 +206,7 @@ static int allocate_buckets(struct vdo_hash_map *map, size_t capacity)
 	 * without having to wrap back around to element zero.
 	 */
 	map->bucket_count = capacity + (NEIGHBORHOOD - 1);
-	return UDS_ALLOCATE(map->bucket_count, struct bucket,
+	return uds_allocate(map->bucket_count, struct bucket,
 			    "struct vdo_hash_map buckets", &map->buckets);
 }
 
@@ -226,7 +226,7 @@ int vdo_hash_map_create(enum vdo_hash_map_type type, size_t initial_capacity,
 	struct vdo_hash_map *map;
 	size_t capacity;
 
-	result = UDS_ALLOCATE(1, struct vdo_hash_map, "vdo_hash_map", &map);
+	result = uds_allocate(1, struct vdo_hash_map, "vdo_hash_map", &map);
 	if (result != UDS_SUCCESS)
 		return result;
 
