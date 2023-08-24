@@ -749,7 +749,7 @@ int uds_get_index_parameters(struct uds_index_session *index_session,
 		size_t name_length = strlen(name) + 1;
 		struct uds_parameters *copy;
 
-		result = UDS_ALLOCATE_EXTENDED(struct uds_parameters,
+		result = uds_allocate_extended(struct uds_parameters,
 					       name_length,
 					       char,
 					       __func__,
