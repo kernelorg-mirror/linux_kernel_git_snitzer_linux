@@ -767,11 +767,8 @@ static int __must_check launch_page_load(struct page_info *info, physical_block_
 	cache->outstanding_reads++;
 	ADD_ONCE(cache->stats.pages_loaded, 1);
 	callback = (cache->rebuilding ? handle_rebuild_read_error : handle_load_error);
-	submit_metadata_vio(info->vio,
-			    pbn,
-			    load_cache_page_endio,
-			    callback,
-			    REQ_OP_READ | REQ_PRIO);
+	vdo_submit_metadata_vio(info->vio, pbn, load_cache_page_endio,
+				callback, REQ_OP_READ | REQ_PRIO);
 	return VDO_SUCCESS;
 }
 
@@ -1039,11 +1036,10 @@ static void page_is_written_out(struct vdo_completion *completion)
 
 	if (!page->header.initialized) {
 		page->header.initialized = true;
-		submit_metadata_vio(info->vio,
-				    info->pbn,
-				    write_cache_page_endio,
-				    handle_page_write_error,
-				    (REQ_OP_WRITE | REQ_PRIO | REQ_PREFLUSH));
+		vdo_submit_metadata_vio(info->vio, info->pbn,
+					write_cache_page_endio,
+					handle_page_write_error,
+					REQ_OP_WRITE | REQ_PRIO | REQ_PREFLUSH);
 		return;
 	}
 
@@ -1107,11 +1103,8 @@ static void write_pages(struct vdo_completion *flush_completion)
 			continue;
 		}
 		ADD_ONCE(info->cache->stats.pages_saved, 1);
-		submit_metadata_vio(info->vio,
-				    info->pbn,
-				    write_cache_page_endio,
-				    handle_page_write_error,
-				    REQ_OP_WRITE | REQ_PRIO);
+		vdo_submit_metadata_vio(info->vio, info->pbn, write_cache_page_endio,
+					handle_page_write_error, REQ_OP_WRITE | REQ_PRIO);
 	}
 
 	if (has_unflushed_pages)
@@ -1568,7 +1561,8 @@ static void finish_page_write(struct vdo_completion *completion)
 			.generation = page->writing_generation,
 		};
 
-		vdo_notify_all_waiters(&zone->flush_waiters, write_page_if_not_dirtied, &context);
+		vdo_notify_all_waiters(&zone->flush_waiters,
+				       write_page_if_not_dirtied, &context);
 		if (dirty && attempt_increment(zone)) {
 			write_page(page, pooled);
 			return;
@@ -1579,12 +1573,11 @@ static void finish_page_write(struct vdo_completion *completion)
 
 	if (dirty) {
 		enqueue_page(page, zone);
-	} else if ((zone->flusher == NULL) &&
-		   vdo_has_waiters(&zone->flush_waiters) &&
+	} else if ((zone->flusher == NULL) && vdo_has_waiters(&zone->flush_waiters) &&
 		   attempt_increment(zone)) {
-		zone->flusher = container_of(vdo_dequeue_next_waiter(&zone->flush_waiters),
-					     struct tree_page,
-					     waiter);
+		zone->flusher =
+			container_of(vdo_dequeue_next_waiter(&zone->flush_waiters),
+				     struct tree_page, waiter);
 		write_page(zone->flusher, pooled);
 		return;
 	}
@@ -1624,11 +1617,9 @@ static void write_initialized_page(struct vdo_completion *completion)
 	if (zone->flusher == tree_page)
 		operation |= REQ_PREFLUSH;
 
-	submit_metadata_vio(vio,
-			    vdo_get_block_map_page_pbn(page),
-			    write_page_endio,
-			    handle_write_error,
-			    operation);
+	vdo_submit_metadata_vio(vio, vdo_get_block_map_page_pbn(page),
+				write_page_endio, handle_write_error,
+				operation);
 }
 
 static void write_page_endio(struct bio *bio)
@@ -1639,8 +1630,7 @@ static void write_page_endio(struct bio *bio)
 
 	continue_vio_after_io(&vio->vio,
 			      (page->header.initialized ?
-			       finish_page_write :
-			       write_initialized_page),
+			       finish_page_write : write_initialized_page),
 			      zone->thread_id);
 }
 
@@ -1684,11 +1674,9 @@ static void write_page(struct tree_page *tree_page, struct pooled_vio *vio)
 	}
 
 	page->header.initialized = true;
-	submit_metadata_vio(&vio->vio,
-			    vdo_get_block_map_page_pbn(page),
-			    write_page_endio,
-			    handle_write_error,
-			    REQ_OP_WRITE | REQ_PRIO);
+	vdo_submit_metadata_vio(&vio->vio, vdo_get_block_map_page_pbn(page),
+				write_page_endio, handle_write_error,
+				REQ_OP_WRITE | REQ_PRIO);
 }
 
 /* Release a lock on a page which was being loaded or allocated. */
@@ -1876,11 +1864,8 @@ static void load_page(struct waiter *waiter, void *context)
 	physical_block_number_t pbn = lock->tree_slots[lock->height - 1].block_map_slot.pbn;
 
 	pooled->vio.completion.parent = data_vio;
-	submit_metadata_vio(&pooled->vio,
-			    pbn,
-			    load_page_endio,
-			    handle_io_error,
-			    REQ_OP_READ | REQ_PRIO);
+	vdo_submit_metadata_vio(&pooled->vio, pbn, load_page_endio,
+				handle_io_error, REQ_OP_READ | REQ_PRIO);
 }
 
 /*
@@ -2623,11 +2608,9 @@ static void traverse(struct cursor *cursor)
 			next_level->page_index = entry_index;
 			next_level->slot = 0;
 			level->slot++;
-			submit_metadata_vio(&cursor->vio->vio,
-					    location.pbn,
-					    traversal_endio,
-					    continue_traversal,
-					    REQ_OP_READ | REQ_PRIO);
+			vdo_submit_metadata_vio(&cursor->vio->vio, location.pbn,
+						traversal_endio, continue_traversal,
+						REQ_OP_READ | REQ_PRIO);
 			return;
 		}
 	}

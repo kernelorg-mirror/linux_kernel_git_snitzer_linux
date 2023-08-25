@@ -1722,10 +1722,8 @@ void vdo_repair(struct vdo_completion *parent)
 		uds_log_warning("Device was dirty, rebuilding reference counts");
 	}
 
-	result = uds_allocate_extended(struct repair_completion,
-				       page_count,
-				       struct vdo_page_completion,
-				       __func__,
+	result = uds_allocate_extended(struct repair_completion, page_count,
+				       struct vdo_page_completion, __func__,
 				       &repair);
 	if (result != VDO_SUCCESS) {
 		vdo_fail_completion(parent, result);
@@ -1750,13 +1748,9 @@ void vdo_repair(struct vdo_completion *parent)
 	for (repair->vio_count = 0; repair->vio_count < vio_count; repair->vio_count++) {
 		block_count_t blocks = min_t(block_count_t, remaining, MAX_BLOCKS_PER_VIO);
 
-		result = allocate_vio_components(vdo,
-						 VIO_TYPE_RECOVERY_JOURNAL,
-						 VIO_PRIORITY_METADATA,
-						 repair,
-						 blocks,
-						 ptr,
-						 &repair->vios[repair->vio_count]);
+		result = allocate_vio_components(vdo, VIO_TYPE_RECOVERY_JOURNAL,
+						 VIO_PRIORITY_METADATA, repair,
+						 blocks, ptr, &repair->vios[repair->vio_count]);
 		if (abort_on_error(result, repair))
 			return;
 
@@ -1764,12 +1758,8 @@ void vdo_repair(struct vdo_completion *parent)
 		remaining -= blocks;
 	}
 
-	for (vio_count = 0;
-	     vio_count < repair->vio_count;
+	for (vio_count = 0; vio_count < repair->vio_count;
 	     vio_count++, pbn += MAX_BLOCKS_PER_VIO)
-		submit_metadata_vio(&repair->vios[vio_count],
-				    pbn,
-				    read_journal_endio,
-				    handle_journal_load_error,
-				    REQ_OP_READ);
+		vdo_submit_metadata_vio(&repair->vios[vio_count], pbn, read_journal_endio,
+					handle_journal_load_error, REQ_OP_READ);
 }

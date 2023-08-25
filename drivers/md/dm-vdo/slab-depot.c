@@ -338,11 +338,8 @@ static void launch_write(struct slab_summary_block *block)
 	pbn = (depot->summary_origin +
 	       (VDO_SLAB_SUMMARY_BLOCKS_PER_ZONE * allocator->zone_number) +
 	       block->index);
-	submit_metadata_vio(&block->vio,
-			    pbn,
-			    write_slab_summary_endio,
-			    handle_write_error,
-			    REQ_OP_WRITE | REQ_PREFLUSH);
+	vdo_submit_metadata_vio(&block->vio, pbn, write_slab_summary_endio,
+				handle_write_error, REQ_OP_WRITE | REQ_PREFLUSH);
 }
 
 /**
@@ -745,7 +742,8 @@ static void write_slab_journal_block(struct waiter *waiter, void *context)
 {
 	struct pooled_vio *pooled = context;
 	struct vio *vio = &pooled->vio;
-	struct slab_journal *journal = container_of(waiter, struct slab_journal, resource_waiter);
+	struct slab_journal *journal =
+		container_of(waiter, struct slab_journal, resource_waiter);
 	struct slab_journal_block_header *header = &journal->tail_header;
 	int unused_entries = journal->entries_per_block - header->entry_count;
 	physical_block_number_t block_number;
@@ -777,11 +775,8 @@ static void write_slab_journal_block(struct waiter *waiter, void *context)
 	 * This block won't be read in recovery until the slab summary is updated to refer to it.
 	 * The slab summary update does a flush which is sufficient to protect us from VDO-2331.
 	 */
-	submit_metadata_vio(uds_forget(vio),
-			    block_number,
-			    write_slab_journal_endio,
-			    complete_write,
-			    REQ_OP_WRITE);
+	vdo_submit_metadata_vio(uds_forget(vio), block_number, write_slab_journal_endio,
+				complete_write, REQ_OP_WRITE);
 
 	/* Since the write is submitted, the tail block structure can be reused. */
 	journal->tail++;
@@ -792,8 +787,7 @@ static void write_slab_journal_block(struct waiter *waiter, void *context)
 	if (operation == VDO_ADMIN_STATE_WAITING_FOR_RECOVERY) {
 		vdo_finish_operation(&journal->slab->state,
 				     (vdo_is_read_only(journal->slab->allocator->depot->vdo) ?
-				      VDO_READ_ONLY :
-				      VDO_SUCCESS));
+				      VDO_READ_ONLY : VDO_SUCCESS));
 		return;
 	}
 
@@ -1224,12 +1218,9 @@ static void write_reference_block(struct waiter *waiter, void *context)
 	WRITE_ONCE(block->slab->allocator->ref_counts_statistics.blocks_written,
 		   block->slab->allocator->ref_counts_statistics.blocks_written + 1);
 
-	completion->callback_thread_id = ((struct block_allocator *) pooled->context)->thread_id;
-	submit_metadata_vio(&pooled->vio,
-			    pbn,
-			    write_reference_block_endio,
-			    handle_io_error,
-			    REQ_OP_WRITE | REQ_PREFLUSH);
+	completion->callback_thread_id = ((struct block_allocator *)pooled->context)->thread_id;
+	vdo_submit_metadata_vio(&pooled->vio, pbn, write_reference_block_endio,
+				handle_io_error, REQ_OP_WRITE | REQ_PREFLUSH);
 }
 
 static void reclaim_journal_space(struct slab_journal *journal)
@@ -2327,15 +2318,14 @@ static void load_reference_block(struct waiter *waiter, void *context)
 {
 	struct pooled_vio *pooled = context;
 	struct vio *vio = &pooled->vio;
-	struct reference_block *block = container_of(waiter, struct reference_block, waiter);
+	struct reference_block *block =
+		container_of(waiter, struct reference_block, waiter);
 	size_t block_offset = (block - block->slab->reference_blocks);
 
 	vio->completion.parent = block;
-	submit_metadata_vio(vio,
-			    block->slab->ref_counts_origin + block_offset,
-			    load_reference_block_endio,
-			    handle_io_error,
-			    REQ_OP_READ);
+	vdo_submit_metadata_vio(vio, block->slab->ref_counts_origin + block_offset,
+				load_reference_block_endio, handle_io_error,
+				REQ_OP_READ);
 }
 
 /**
@@ -2523,7 +2513,8 @@ static void handle_load_error(struct vdo_completion *completion)
  */
 static void read_slab_journal_tail(struct waiter *waiter, void *context)
 {
-	struct slab_journal *journal = container_of(waiter, struct slab_journal, resource_waiter);
+	struct slab_journal *journal =
+		container_of(waiter, struct slab_journal, resource_waiter);
 	struct vdo_slab *slab = journal->slab;
 	struct pooled_vio *pooled = context;
 	struct vio *vio = &pooled->vio;
@@ -2540,11 +2531,9 @@ static void read_slab_journal_tail(struct waiter *waiter, void *context)
 
 	vio->completion.parent = journal;
 	vio->completion.callback_thread_id = slab->allocator->thread_id;
-	submit_metadata_vio(vio,
-			    slab->journal_origin + tail_block,
-			    read_slab_journal_tail_endio,
-			    handle_load_error,
-			    REQ_OP_READ);
+	vdo_submit_metadata_vio(vio, slab->journal_origin + tail_block,
+				read_slab_journal_tail_endio, handle_load_error,
+				REQ_OP_READ);
 }
 
 /**
@@ -2982,11 +2971,9 @@ static void start_scrubbing(struct vdo_completion *completion)
 		return;
 	}
 
-	submit_metadata_vio(&scrubber->vio,
-			    slab->journal_origin,
-			    read_slab_journal_endio,
-			    handle_scrubber_error,
-			    REQ_OP_READ);
+	vdo_submit_metadata_vio(&scrubber->vio, slab->journal_origin,
+				read_slab_journal_endio, handle_scrubber_error,
+				REQ_OP_READ);
 }
 
 /**
@@ -4606,11 +4593,9 @@ static void finish_loading_summary(struct vdo_completion *completion)
 	combine_summaries(depot);
 
 	/* Write the combined summary back out. */
-	submit_metadata_vio(as_vio(completion),
-			    depot->summary_origin,
-			    write_summary_endio,
-			    handle_combining_error,
-			    REQ_OP_WRITE);
+	vdo_submit_metadata_vio(as_vio(completion), depot->summary_origin,
+				write_summary_endio, handle_combining_error,
+				REQ_OP_WRITE);
 }
 
 static void load_summary_endio(struct bio *bio)
@@ -4618,7 +4603,8 @@ static void load_summary_endio(struct bio *bio)
 	struct vio *vio = bio->bi_private;
 	struct vdo *vdo = vio->completion.vdo;
 
-	continue_vio_after_io(vio, finish_loading_summary, vdo->thread_config.admin_thread);
+	continue_vio_after_io(vio, finish_loading_summary,
+			      vdo->thread_config.admin_thread);
 }
 
 /**
@@ -4634,13 +4620,10 @@ static void load_slab_summary(void *context, struct vdo_completion *parent)
 	const struct admin_state_code *operation =
 		vdo_get_current_manager_operation(depot->action_manager);
 
-	result = create_multi_block_metadata_vio(depot->vdo,
-						 VIO_TYPE_SLAB_SUMMARY,
-						 VIO_PRIORITY_METADATA,
-						 parent,
+	result = create_multi_block_metadata_vio(depot->vdo, VIO_TYPE_SLAB_SUMMARY,
+						 VIO_PRIORITY_METADATA, parent,
 						 VDO_SLAB_SUMMARY_BLOCKS,
-						 (char *) depot->summary_entries,
-						 &vio);
+						 (char *) depot->summary_entries, &vio);
 	if (result != VDO_SUCCESS) {
 		vdo_fail_completion(parent, result);
 		return;
@@ -4652,22 +4635,19 @@ static void load_slab_summary(void *context, struct vdo_completion *parent)
 		return;
 	}
 
-	submit_metadata_vio(vio,
-			    depot->summary_origin,
-			    load_summary_endio,
-			    handle_combining_error,
-			    REQ_OP_READ);
+	vdo_submit_metadata_vio(vio, depot->summary_origin, load_summary_endio,
+				handle_combining_error, REQ_OP_READ);
 }
 
 /* Implements vdo_zone_action. */
-static void load_allocator(void *context, zone_count_t zone_number, struct vdo_completion *parent)
+static void load_allocator(void *context, zone_count_t zone_number,
+			   struct vdo_completion *parent)
 {
 	struct slab_depot *depot = context;
 
 	vdo_start_loading(&depot->allocators[zone_number].state,
 			  vdo_get_current_manager_operation(depot->action_manager),
-			  parent,
-			  initiate_load);
+			  parent, initiate_load);
 }
 
 /**
