@@ -291,13 +291,9 @@ static inline struct vdo_page_completion *as_vdo_page_completion(struct vdo_comp
 void vdo_release_page_completion(struct vdo_completion *completion);
 
 void vdo_get_page(struct vdo_page_completion *page_completion,
-		  struct block_map_zone *zone,
-		  physical_block_number_t pbn,
-		  bool writable,
-		  void *parent,
-		  vdo_action *callback,
-		  vdo_action *error_handler,
-		  bool requeue);
+		  struct block_map_zone *zone, physical_block_number_t pbn,
+		  bool writable, void *parent, vdo_action *callback,
+		  vdo_action *error_handler, bool requeue);
 
 void vdo_request_page_write(struct vdo_completion *completion);
 
@@ -312,8 +308,7 @@ vdo_as_block_map_page(struct tree_page *tree_page)
 	return (struct block_map_page *) tree_page->page_buffer;
 }
 
-bool vdo_copy_valid_page(char *buffer,
-			 nonce_t nonce,
+bool vdo_copy_valid_page(char *buffer, nonce_t nonce,
 			 physical_block_number_t pbn,
 			 struct block_map_page *page);
 

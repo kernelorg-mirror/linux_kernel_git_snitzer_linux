@@ -183,11 +183,9 @@ static int initialize_info(struct vdo_page_cache *cache)
 		info->state = PS_FREE;
 		info->pbn = NO_PAGE;
 
-		result = create_metadata_vio(cache->vdo,
-					     VIO_TYPE_BLOCK_MAP,
+		result = create_metadata_vio(cache->vdo, VIO_TYPE_BLOCK_MAP,
 					     VIO_PRIORITY_METADATA, info,
-					     get_page_buffer(info),
-					     &info->vio);
+					     get_page_buffer(info), &info->vio);
 		if (result != VDO_SUCCESS)
 			return result;
 
@@ -242,9 +240,7 @@ static inline void assert_on_cache_thread(struct vdo_page_cache *cache, const ch
 
 	ASSERT_LOG_ONLY((thread_id == cache->zone->thread_id),
 			"%s() must only be called on cache thread %d, not thread %d",
-			function_name,
-			cache->zone->thread_id,
-			thread_id);
+			function_name, cache->zone->thread_id, thread_id);
 }
 
 /** assert_io_allowed() - Assert that a page cache may issue I/O. */
@@ -478,8 +474,7 @@ static void complete_with_page(struct page_info *info, struct vdo_page_completio
 				       "Requested cache page %llu in state %s is not %s",
 				       (unsigned long long) info->pbn,
 				       get_page_state_name(info->state),
-				       vdo_page_comp->writable ? "present" :
-				       "valid");
+				       vdo_page_comp->writable ? "present" : "valid");
 		vdo_fail_completion(&vdo_page_comp->completion, VDO_BAD_PAGE);
 		return;
 	}
@@ -512,7 +507,7 @@ static void complete_waiter_with_error(struct waiter *waiter, void *result_ptr)
  */
 static void complete_waiter_with_page(struct waiter *waiter, void *page_info)
 {
-	complete_with_page((struct page_info *) page_info, page_completion_from_waiter(waiter));
+	complete_with_page(page_info, page_completion_from_waiter(waiter));
 }
 
 /**
@@ -896,10 +891,8 @@ static void allocate_free_page(struct page_info *info)
 	 * Remove all entries which match the page number in question and push them onto the page
 	 * info's wait queue.
 	 */
-	vdo_dequeue_matching_waiters(&cache->free_waiters,
-				     completion_needs_page,
-				     &pbn,
-				     &info->waiting);
+	vdo_dequeue_matching_waiters(&cache->free_waiters, completion_needs_page,
+				     &pbn, &info->waiting);
 	cache->waiter_count -= vdo_count_waiters(&info->waiting);
 
 	result = launch_page_load(info, pbn);
@@ -1107,12 +1100,13 @@ static void write_pages(struct vdo_completion *flush_completion)
 					handle_page_write_error, REQ_OP_WRITE | REQ_PRIO);
 	}
 
-	if (has_unflushed_pages)
+	if (has_unflushed_pages) {
 		/*
 		 * If there are unflushed pages, the cache can't have been freed, so this call is
 		 * safe.
 		 */
 		save_pages(cache);
+	}
 }
 
 /**
@@ -1188,13 +1182,9 @@ load_page_for_completion(struct page_info *info, struct vdo_page_completion *vdo
  * when they are done with the page to clear the busy mark.
  */
 void vdo_get_page(struct vdo_page_completion *page_completion,
-		  struct block_map_zone *zone,
-		  physical_block_number_t pbn,
-		  bool writable,
-		  void *parent,
-		  vdo_action *callback,
-		  vdo_action *error_handler,
-		  bool requeue)
+		  struct block_map_zone *zone, physical_block_number_t pbn,
+		  bool writable, void *parent, vdo_action *callback,
+		  vdo_action *error_handler, bool requeue)
 {
 	struct vdo_page_cache *cache = &zone->page_cache;
 	struct vdo_completion *completion = &page_completion->completion;
@@ -1211,11 +1201,8 @@ void vdo_get_page(struct vdo_page_completion *page_completion,
 	};
 
 	vdo_initialize_completion(completion, cache->vdo, VDO_PAGE_COMPLETION);
-	vdo_prepare_completion(completion,
-			       callback,
-			       error_handler,
-			       cache->zone->thread_id,
-			       parent);
+	vdo_prepare_completion(completion, callback, error_handler,
+			       cache->zone->thread_id, parent);
 	completion->requeue = requeue;
 
 	if (page_completion->writable && vdo_is_read_only(cache->zone->block_map->vdo)) {
@@ -1362,15 +1349,13 @@ get_tree_page_by_index(struct forest *forest,
 static inline struct tree_page *
 get_tree_page(const struct block_map_zone *zone, const struct tree_lock *lock)
 {
-	return get_tree_page_by_index(zone->block_map->forest,
-				      lock->root_index,
+	return get_tree_page_by_index(zone->block_map->forest, lock->root_index,
 				      lock->height,
 				      lock->tree_slots[lock->height].page_index);
 }
 
 /** vdo_copy_valid_page() - Validate and copy a buffer to a page. */
-bool vdo_copy_valid_page(char *buffer,
-			 nonce_t nonce,
+bool vdo_copy_valid_page(char *buffer, nonce_t nonce,
 			 physical_block_number_t pbn,
 			 struct block_map_page *page)
 {
@@ -1485,7 +1470,7 @@ static void write_page(struct tree_page *tree_page, struct pooled_vio *vio);
 /* Implements waiter_callback */
 static void write_page_callback(struct waiter *waiter, void *context)
 {
-	write_page(container_of(waiter, struct tree_page, waiter), (struct pooled_vio *) context);
+	write_page(container_of(waiter, struct tree_page, waiter), context);
 }
 
 static void acquire_vio(struct waiter *waiter, struct block_map_zone *zone)
@@ -2021,12 +2006,11 @@ static void write_expired_elements(struct block_map_zone *zone)
  * @new_period: The period in which the element has now been dirtied, or 0 if it does not hold a
  *              lock.
  */
-static void
-add_to_dirty_lists(struct block_map_zone *zone,
-		   struct list_head *entry,
-		   enum block_map_page_type type,
-		   sequence_number_t old_period,
-		   sequence_number_t new_period)
+static void add_to_dirty_lists(struct block_map_zone *zone,
+			       struct list_head *entry,
+			       enum block_map_page_type type,
+			       sequence_number_t old_period,
+			       sequence_number_t new_period)
 {
 	struct dirty_lists *dirty_lists = zone->dirty_lists;
 
@@ -2067,29 +2051,25 @@ static void finish_block_map_allocation(struct vdo_completion *completion)
 	/* Record the allocation. */
 	page = (struct block_map_page *) tree_page->page_buffer;
 	old_lock = tree_page->recovery_lock;
-	vdo_update_block_map_page(page,
-				  data_vio,
-				  pbn,
+	vdo_update_block_map_page(page, data_vio, pbn,
 				  VDO_MAPPING_STATE_UNCOMPRESSED,
 				  &tree_page->recovery_lock);
 
 	if (vdo_is_waiting(&tree_page->waiter)) {
 		/* This page is waiting to be written out. */
-		if (zone->flusher != tree_page)
+		if (zone->flusher != tree_page) {
 			/*
-			 * The outstanding flush won't cover the update we just made, so mark the
-			 * page as needing another flush.
+			 * The outstanding flush won't cover the update we just made,
+			 * so mark the page as needing another flush.
 			 */
 			set_generation(zone, tree_page, zone->generation);
+		}
 	} else {
 		/* Put the page on a dirty list */
 		if (old_lock == 0)
 			INIT_LIST_HEAD(&tree_page->entry);
-		add_to_dirty_lists(zone,
-				   &tree_page->entry,
-				   VDO_TREE_PAGE,
-				   old_lock,
-				   tree_page->recovery_lock);
+		add_to_dirty_lists(zone, &tree_page->entry, VDO_TREE_PAGE,
+				   old_lock, tree_page->recovery_lock);
 	}
 
 	tree_lock->height--;
@@ -2098,8 +2078,7 @@ static void finish_block_map_allocation(struct vdo_completion *completion)
 		tree_page = get_tree_page(zone, tree_lock);
 		vdo_format_block_map_page(tree_page->page_buffer,
 					  zone->block_map->nonce,
-					  pbn,
-					  false);
+					  pbn, false);
 	}
 
 	/* Release our claim to the allocation and wake any waiters */
@@ -2193,10 +2172,8 @@ static void allocate_block_map_page(struct block_map_zone *zone, struct data_vio
 	if (!data_vio->tree_lock.locked)
 		return;
 
-	data_vio_allocate_data_block(data_vio,
-				     VIO_BLOCK_MAP_WRITE_LOCK,
-				     allocate_block,
-				     allocation_failure);
+	data_vio_allocate_data_block(data_vio, VIO_BLOCK_MAP_WRITE_LOCK,
+				     allocate_block, allocation_failure);
 }
 
 /**
@@ -2323,10 +2300,8 @@ void vdo_write_tree_page(struct tree_page *page, struct block_map_zone *zone)
 	enqueue_page(page, zone);
 }
 
-static int make_segment(struct forest *old_forest,
-			block_count_t new_pages,
-			struct boundary *new_boundary,
-			struct forest *forest)
+static int make_segment(struct forest *old_forest, block_count_t new_pages,
+			struct boundary *new_boundary, struct forest *forest)
 {
 	size_t index = (old_forest == NULL) ? 0 : old_forest->segments;
 	struct tree_page *page_ptr;
@@ -2342,23 +2317,18 @@ static int make_segment(struct forest *old_forest,
 	if (result != VDO_SUCCESS)
 		return result;
 
-	result = uds_allocate(forest->segments,
-			      struct tree_page *,
-			      "forest page pointers",
-			      &forest->pages);
+	result = uds_allocate(forest->segments, struct tree_page *,
+			      "forest page pointers", &forest->pages);
 	if (result != VDO_SUCCESS)
 		return result;
 
-	result = uds_allocate(new_pages,
-			      struct tree_page,
-			      "new forest pages",
-			      &forest->pages[index]);
+	result = uds_allocate(new_pages, struct tree_page,
+			      "new forest pages", &forest->pages[index]);
 	if (result != VDO_SUCCESS)
 		return result;
 
 	if (index > 0) {
-		memcpy(forest->boundaries,
-		       old_forest->boundaries,
+		memcpy(forest->boundaries, old_forest->boundaries,
 		       index * sizeof(struct boundary));
 		memcpy(forest->pages, old_forest->pages, index * sizeof(struct tree_page *));
 	}
@@ -2384,10 +2354,10 @@ static int make_segment(struct forest *old_forest,
 		if (result != VDO_SUCCESS)
 			return result;
 
-		if (index > 0)
-			memcpy(tree->segments,
-			       old_forest->trees[root].segments,
+		if (index > 0) {
+			memcpy(tree->segments, old_forest->trees[root].segments,
 			       index * sizeof(struct block_map_tree_segment));
+		}
 
 		segment = &(tree->segments[index]);
 		for (height = 0; height < VDO_BLOCK_MAP_TREE_HEIGHT; height++) {
@@ -2400,8 +2370,7 @@ static int make_segment(struct forest *old_forest,
 				struct block_map_page *page =
 					vdo_format_block_map_page(page_ptr->page_buffer,
 								  forest->map->nonce,
-								  VDO_INVALID_PBN,
-								  true);
+								  VDO_INVALID_PBN, true);
 				page->entries[0] =
 					vdo_pack_block_map_entry(forest->map->root_origin + root,
 								 VDO_MAPPING_STATE_UNCOMPRESSED);
@@ -2534,8 +2503,7 @@ static void finish_traversal_load(struct vdo_completion *completion)
 
 	vdo_copy_valid_page(cursor->vio->vio.data,
 			    cursor->parent->zone->block_map->nonce,
-			    pbn_from_vio_bio(cursor->vio->vio.bio),
-			    page);
+			    pbn_from_vio_bio(cursor->vio->vio.bio), page);
 	traverse(cursor);
 }
 
@@ -2589,10 +2557,8 @@ static void traverse(struct cursor *cursor)
 			}
 
 			if (cursor->height < VDO_BLOCK_MAP_TREE_HEIGHT - 1) {
-				int result =
-					cursor->parent->entry_callback(location.pbn,
-								       cursor->parent->parent);
-
+				int result = cursor->parent->entry_callback(location.pbn,
+									    cursor->parent->parent);
 				if (result != VDO_SUCCESS) {
 					page->entries[level->slot] = UNMAPPED_BLOCK_MAP_ENTRY;
 					vdo_write_tree_page(tree_page, cursor->parent->zone);
@@ -2673,19 +2639,15 @@ static struct boundary compute_boundary(struct block_map *map, root_count_t root
  * @callback: A function to call with the pbn of each allocated node in the forest.
  * @parent: The completion to notify on each traversed PBN, and when the traversal is complete.
  */
-void vdo_traverse_forest(struct block_map *map,
-			 vdo_entry_callback *callback,
+void vdo_traverse_forest(struct block_map *map, vdo_entry_callback *callback,
 			 struct vdo_completion *parent)
 {
 	root_count_t root;
 	struct cursors *cursors;
 	int result;
 
-	result = uds_allocate_extended(struct cursors,
-				       map->root_count,
-				       struct cursor,
-				       __func__,
-				       &cursors);
+	result = uds_allocate_extended(struct cursors, map->root_count,
+				       struct cursor, __func__, &cursors);
 	if (result != VDO_SUCCESS) {
 		vdo_fail_completion(parent, result);
 		return;
@@ -2732,10 +2694,8 @@ static int __must_check initialize_block_map_zone(struct block_map *map,
 	zone->thread_id = vdo->thread_config.logical_threads[zone_number];
 	zone->block_map = map;
 
-	result = uds_allocate_extended(struct dirty_lists,
-				       maximum_age,
-				       dirty_era_t,
-				       __func__,
+	result = uds_allocate_extended(struct dirty_lists, maximum_age,
+				       dirty_era_t, __func__,
 				       &zone->dirty_lists);
 	if (result != VDO_SUCCESS)
 		return result;
@@ -2754,13 +2714,9 @@ static int __must_check initialize_block_map_zone(struct block_map *map,
 	if (result != VDO_SUCCESS)
 		return result;
 
-	result = make_vio_pool(vdo,
-			       BLOCK_MAP_VIO_POOL_SIZE,
-			       zone->thread_id,
-			       VIO_TYPE_BLOCK_MAP_INTERIOR,
-			       VIO_PRIORITY_METADATA,
-			       zone,
-			       &zone->vio_pool);
+	result = make_vio_pool(vdo, BLOCK_MAP_VIO_POOL_SIZE,
+			       zone->thread_id, VIO_TYPE_BLOCK_MAP_INTERIOR,
+			       VIO_PRIORITY_METADATA, zone, &zone->vio_pool);
 	if (result != VDO_SUCCESS)
 		return result;
 
@@ -2825,11 +2781,8 @@ static bool schedule_era_advance(void *context)
 	if (map->current_era_point == map->pending_era_point)
 		return false;
 
-	return vdo_schedule_action(map->action_manager,
-				   prepare_for_era_advance,
-				   advance_block_map_zone_era,
-				   NULL,
-				   NULL);
+	return vdo_schedule_action(map->action_manager, prepare_for_era_advance,
+				   advance_block_map_zone_era, NULL, NULL);
 }
 
 static void uninitialize_block_map_zone(struct block_map_zone *zone)
@@ -2841,7 +2794,6 @@ static void uninitialize_block_map_zone(struct block_map_zone *zone)
 	vdo_hash_map_free(uds_forget(zone->loading_pages));
 	if (cache->infos != NULL) {
 		struct page_info *info;
-
 		for (info = cache->infos; info < cache->infos + cache->page_count; ++info)
 			free_vio(uds_forget(info->vio));
 	}
@@ -2869,13 +2821,9 @@ void vdo_free_block_map(struct block_map *map)
 }
 
 /* @journal may be NULL. */
-int vdo_decode_block_map(struct block_map_state_2_0 state,
-			 block_count_t logical_blocks,
-			 struct vdo *vdo,
-			 struct recovery_journal *journal,
-			 nonce_t nonce,
-			 page_count_t cache_size,
-			 block_count_t maximum_age,
+int vdo_decode_block_map(struct block_map_state_2_0 state, block_count_t logical_blocks,
+			 struct vdo *vdo, struct recovery_journal *journal,
+			 nonce_t nonce, page_count_t cache_size, block_count_t maximum_age,
 			 struct block_map **map_ptr)
 {
 	struct block_map *map;
@@ -2891,9 +2839,7 @@ int vdo_decode_block_map(struct block_map_state_2_0 state,
 
 	result = uds_allocate_extended(struct block_map,
 				       vdo->thread_config.logical_zone_count,
-				       struct block_map_zone,
-				       __func__,
-				       &map);
+				       struct block_map_zone, __func__, &map);
 	if (result != UDS_SUCCESS)
 		return result;
 
@@ -2921,12 +2867,9 @@ int vdo_decode_block_map(struct block_map_state_2_0 state,
 		}
 	}
 
-	result = vdo_make_action_manager(map->zone_count,
-					 get_block_map_zone_thread_id,
+	result = vdo_make_action_manager(map->zone_count, get_block_map_zone_thread_id,
 					 vdo_get_recovery_journal_thread_id(journal),
-					 map,
-					 schedule_era_advance,
-					 vdo,
+					 map, schedule_era_advance, vdo,
 					 &map->action_manager);
 	if (result != VDO_SUCCESS) {
 		vdo_free_block_map(map);
@@ -3013,12 +2956,10 @@ static void drain_zone(void *context, zone_count_t zone_number, struct vdo_compl
 
 	vdo_start_draining(&zone->state,
 			   vdo_get_current_manager_operation(map->action_manager),
-			   parent,
-			   initiate_drain);
+			   parent, initiate_drain);
 }
 
-void vdo_drain_block_map(struct block_map *map,
-			 const struct admin_state_code *operation,
+void vdo_drain_block_map(struct block_map *map, const struct admin_state_code *operation,
 			 struct vdo_completion *parent)
 {
 	vdo_schedule_operation(map->action_manager, operation, NULL, drain_zone, NULL, parent);
@@ -3036,12 +2977,8 @@ resume_block_map_zone(void *context, zone_count_t zone_number, struct vdo_comple
 
 void vdo_resume_block_map(struct block_map *map, struct vdo_completion *parent)
 {
-	vdo_schedule_operation(map->action_manager,
-			       VDO_ADMIN_STATE_RESUMING,
-			       NULL,
-			       resume_block_map_zone,
-			       NULL,
-			       parent);
+	vdo_schedule_operation(map->action_manager, VDO_ADMIN_STATE_RESUMING,
+			       NULL, resume_block_map_zone, NULL, parent);
 }
 
 /* Allocate an expanded collection of trees, for a future growth. */
@@ -3073,10 +3010,7 @@ void vdo_grow_block_map(struct block_map *map, struct vdo_completion *parent)
 {
 	vdo_schedule_operation(map->action_manager,
 			       VDO_ADMIN_STATE_SUSPENDED_OPERATION,
-			       grow_forest,
-			       NULL,
-			       NULL,
-			       parent);
+			       grow_forest, NULL, NULL, parent);
 }
 
 void vdo_abandon_block_map_growth(struct block_map *map)
@@ -3113,14 +3047,10 @@ static void fetch_mapping_page(struct data_vio *data_vio, bool modifiable, vdo_a
 		return;
 	}
 
-	vdo_get_page(&data_vio->page_completion,
-		     zone,
+	vdo_get_page(&data_vio->page_completion, zone,
 		     data_vio->tree_lock.tree_slots[0].block_map_slot.pbn,
-		     modifiable,
-		     &data_vio->vio.completion,
-		     action,
-		     handle_page_error,
-		     false);
+		     modifiable, &data_vio->vio.completion,
+		     action, handle_page_error, false);
 }
 
 /**
@@ -3152,8 +3082,7 @@ set_mapped_location(struct data_vio *data_vio, const struct block_map_entry *ent
 		int result;
 
 		result = vdo_get_physical_zone(vdo_from_data_vio(data_vio),
-					       mapped.pbn,
-					       &data_vio->mapped.zone);
+					       mapped.pbn, &data_vio->mapped.zone);
 		if (result == VDO_SUCCESS) {
 			data_vio->mapped.pbn = mapped.pbn;
 			data_vio->mapped.state = mapped.state;
@@ -3174,9 +3103,7 @@ set_mapped_location(struct data_vio *data_vio, const struct block_map_entry *ent
 	 */
 	uds_log_error_strerror(VDO_BAD_MAPPING,
 			       "PBN %llu with state %u read from the block map was invalid",
-			       (unsigned long long) mapped.pbn,
-			       mapped.state);
-
+			       (unsigned long long) mapped.pbn, mapped.state);
 	/*
 	 * A read VIO has no option but to report the bad mapping--reading zeros would be hiding
 	 * known data loss.
@@ -3242,17 +3169,13 @@ void vdo_update_block_map_page(struct block_map_page *page,
 	new_locked = data_vio->recovery_sequence_number;
 
 	if ((old_locked == 0) || (old_locked > new_locked)) {
-		vdo_acquire_recovery_journal_block_reference(journal,
-							     new_locked,
+		vdo_acquire_recovery_journal_block_reference(journal, new_locked,
 							     VDO_ZONE_TYPE_LOGICAL,
 							     zone->zone_number);
-
 		if (old_locked > 0)
-			vdo_release_recovery_journal_block_reference(journal,
-								     old_locked,
+			vdo_release_recovery_journal_block_reference(journal, old_locked,
 								     VDO_ZONE_TYPE_LOGICAL,
 								     zone->zone_number);
-
 		*recovery_lock = new_locked;
 	}
 
@@ -3287,16 +3210,11 @@ static void put_mapping_in_fetched_page(struct vdo_completion *completion)
 	info = vpc->info;
 	old_lock = info->recovery_lock;
 	vdo_update_block_map_page((struct block_map_page *) get_page_buffer(info),
-				  data_vio,
-				  data_vio->new_mapped.pbn,
-				  data_vio->new_mapped.state,
-				  &info->recovery_lock);
+				  data_vio, data_vio->new_mapped.pbn,
+				  data_vio->new_mapped.state, &info->recovery_lock);
 	set_info_state(info, PS_DIRTY);
-	add_to_dirty_lists(info->cache->zone,
-			   &info->state_entry,
-			   VDO_CACHE_PAGE,
-			   old_lock,
-			   info->recovery_lock);
+	add_to_dirty_lists(info->cache->zone, &info->state_entry,
+			   VDO_CACHE_PAGE, old_lock, info->recovery_lock);
 	finish_processing_page(completion, VDO_SUCCESS);
 }
 
@@ -3329,7 +3247,8 @@ struct block_map_statistics vdo_get_block_map_statistics(struct block_map *map)
 
 	memset(&totals, 0, sizeof(struct block_map_statistics));
 	for (zone = 0; zone < map->zone_count; zone++) {
-		const struct block_map_statistics *stats = &(map->zones[zone].page_cache.stats);
+		const struct block_map_statistics *stats =
+			&(map->zones[zone].page_cache.stats);
 
 		totals.dirty_pages += READ_ONCE(stats->dirty_pages);
 		totals.clean_pages += READ_ONCE(stats->clean_pages);
