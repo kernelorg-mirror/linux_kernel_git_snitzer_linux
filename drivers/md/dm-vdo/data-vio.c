@@ -1600,7 +1600,7 @@ static void read_block(struct vdo_completion *completion)
 		return;
 	}
 
-	submit_data_vio_io(data_vio);
+	vdo_submit_data_vio(data_vio);
 }
 
 static inline struct data_vio *
@@ -1909,10 +1909,8 @@ void write_data_vio(struct data_vio *data_vio)
 		 !set_data_vio_compression_status(data_vio, status, new_status));
 
 	/* Write the data from the data block buffer. */
-	result = vio_reset_bio(&data_vio->vio,
-			       data_vio->vio.data,
-			       write_bio_finished,
-			       REQ_OP_WRITE,
+	result = vio_reset_bio(&data_vio->vio, data_vio->vio.data,
+			       write_bio_finished, REQ_OP_WRITE,
 			       data_vio->allocation.pbn);
 	if (result != VDO_SUCCESS) {
 		continue_data_vio_with_error(data_vio, result);
@@ -1920,7 +1918,7 @@ void write_data_vio(struct data_vio *data_vio)
 	}
 
 	data_vio->last_async_operation = VIO_ASYNC_OP_WRITE_DATA_VIO;
-	submit_data_vio_io(data_vio);
+	vdo_submit_data_vio(data_vio);
 }
 
 /**
