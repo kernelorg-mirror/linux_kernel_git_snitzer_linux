@@ -463,11 +463,11 @@ static void write_bin(struct packer *packer, struct packer_bin *bin)
 		return;
 	}
 
-	if (slot < VDO_MAX_COMPRESSION_SLOTS)
+	if (slot < VDO_MAX_COMPRESSION_SLOTS) {
 		/* Clear out the sizes of the unused slots */
-		memset(&block->header.sizes[slot],
-		       0,
+		memset(&block->header.sizes[slot], 0,
 		       (VDO_MAX_COMPRESSION_SLOTS - slot) * sizeof(__le16));
+	}
 
 	agent->vio.completion.error_handler = handle_compressed_write_error;
 	if (vdo_is_read_only(vdo_from_data_vio(agent))) {
@@ -475,11 +475,8 @@ static void write_bin(struct packer *packer, struct packer_bin *bin)
 		return;
 	}
 
-	result = vio_reset_bio(&agent->vio,
-			       (char *) block,
-			       compressed_write_end_io,
-			       REQ_OP_WRITE,
-			       agent->allocation.pbn);
+	result = vio_reset_bio(&agent->vio, (char *) block, compressed_write_end_io,
+			       REQ_OP_WRITE, agent->allocation.pbn);
 	if (result != VDO_SUCCESS) {
 		continue_data_vio_with_error(agent, result);
 		return;
@@ -496,7 +493,7 @@ static void write_bin(struct packer *packer, struct packer_bin *bin)
 		   (stats->compressed_fragments_written + slot));
 	WRITE_ONCE(stats->compressed_blocks_written, stats->compressed_blocks_written + 1);
 
-	submit_data_vio_io(agent);
+	vdo_submit_data_vio(agent);
 }
 
 /**
