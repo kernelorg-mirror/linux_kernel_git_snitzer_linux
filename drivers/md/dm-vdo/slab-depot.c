@@ -434,8 +434,7 @@ static void flush_endio(struct bio *bio)
 	struct vio *vio = bio->bi_private;
 	struct slab_journal *journal = vio->completion.parent;
 
-	continue_vio_after_io(vio,
-			      complete_reaping,
+	continue_vio_after_io(vio, complete_reaping,
 			      journal->slab->allocator->thread_id);
 }
 
@@ -447,12 +446,13 @@ static void flush_endio(struct bio *bio)
  */
 static void flush_for_reaping(struct waiter *waiter, void *context)
 {
-	struct slab_journal *journal = container_of(waiter, struct slab_journal, flush_waiter);
+	struct slab_journal *journal =
+		container_of(waiter, struct slab_journal, flush_waiter);
 	struct pooled_vio *pooled = context;
 	struct vio *vio = &pooled->vio;
 
 	vio->completion.parent = journal;
-	submit_flush_vio(vio, flush_endio, handle_flush_error);
+	vdo_submit_flush_vio(vio, flush_endio, handle_flush_error);
 }
 
 /**
@@ -699,8 +699,7 @@ static void complete_write(struct vdo_completion *completion)
 
 	if (result != VDO_SUCCESS) {
 		vio_record_metadata_io_error(as_vio(completion));
-		uds_log_error_strerror(result,
-				       "cannot write slab journal block %llu",
+		uds_log_error_strerror(result, "cannot write slab journal block %llu",
 				       (unsigned long long) committed);
 		vdo_enter_read_only_mode(journal->slab->allocator->depot->vdo, result);
 		check_if_slab_drained(journal->slab);
@@ -715,8 +714,7 @@ static void complete_write(struct vdo_completion *completion)
 	} else {
 		/* The commit point is always the beginning of the oldest incomplete block. */
 		pooled = container_of(journal->uncommitted_blocks.next,
-				      struct pooled_vio,
-				      list_entry);
+				      struct pooled_vio, list_entry);
 		journal->next_commit = get_committing_sequence_number(pooled);
 	}
 
@@ -849,8 +847,7 @@ encode_slab_journal_entry(struct slab_journal_block_header *tail_header,
 
 	if (operation == VDO_JOURNAL_BLOCK_MAP_REMAPPING) {
 		if (!tail_header->has_block_map_increments) {
-			memset(payload->full_entries.entry_types,
-			       0,
+			memset(payload->full_entries.entry_types, 0,
 			       VDO_SLAB_JOURNAL_ENTRY_TYPES_SIZE);
 			tail_header->has_block_map_increments = true;
 		}
@@ -4666,13 +4663,9 @@ void vdo_load_slab_depot(struct slab_depot *depot,
 			 void *context)
 {
 	if (vdo_assert_load_operation(operation, parent))
-		vdo_schedule_operation_with_context(depot->action_manager,
-						    operation,
-						    load_slab_summary,
-						    load_allocator,
-						    NULL,
-						    context,
-						    parent);
+		vdo_schedule_operation_with_context(depot->action_manager, operation,
+						    load_slab_summary, load_allocator,
+						    NULL, context, parent);
 }
 
 /* Implements vdo_zone_action. */
