@@ -115,11 +115,6 @@ static void send_bio_to_device(struct vio *vio, struct bio *bio)
 	submit_bio_noacct(bio);
 }
 
-static sector_t get_bio_sector(struct bio *bio)
-{
-	return bio->bi_iter.bi_sector;
-}
-
 /**
  * process_vio_io() - Submits a vio's bio to the underlying block device. May block if the device
  *                    is busy. This callback should be used by vios which did not attempt to merge.
@@ -143,17 +138,16 @@ void process_vio_io(struct vdo_completion *completion)
 static struct bio *get_bio_list(struct vio *vio)
 {
 	struct bio *bio;
-	sector_t bio_sector;
 	struct io_submitter *submitter = vio->completion.vdo->io_submitter;
 	struct bio_queue_data *bio_queue_data = &(submitter->bio_queue_data[vio->bio_zone]);
 
 	assert_in_bio_zone(vio);
 
 	mutex_lock(&bio_queue_data->lock);
-	bio_sector = get_bio_sector(vio->bios_merged.head);
-	vdo_hash_map_remove(bio_queue_data->map, &bio_sector);
-	bio_sector = get_bio_sector(vio->bios_merged.tail);
-	vdo_hash_map_remove(bio_queue_data->map, &bio_sector);
+	vdo_hash_map_remove(bio_queue_data->map,
+			    &vio->bios_merged.head->bi_iter.bi_sector);
+	vdo_hash_map_remove(bio_queue_data->map,
+			    &vio->bios_merged.tail->bi_iter.bi_sector);
 	bio = vio->bios_merged.head;
 	bio_list_init(&vio->bios_merged);
 	mutex_unlock(&bio_queue_data->lock);
@@ -195,7 +189,7 @@ static void process_data_vio_io(struct vdo_completion *completion)
 static struct vio *get_mergeable_locked(struct vdo_hash_map *map, struct vio *vio, bool back_merge)
 {
 	struct bio *bio = vio->bio;
-	sector_t merge_sector = get_bio_sector(bio);
+	sector_t merge_sector = bio->bi_iter.bi_sector;
 	struct vio *vio_merge;
 
 	if (back_merge)
@@ -216,12 +210,13 @@ static struct vio *get_mergeable_locked(struct vdo_hash_map *map, struct vio *vi
 	if (bio_list_empty(&vio_merge->bios_merged))
 		return NULL;
 
-	if (back_merge)
-		return ((get_bio_sector(vio_merge->bios_merged.tail) == merge_sector) ?
-			vio_merge :
-			NULL);
+	if (back_merge) {
+		return (vio_merge->bios_merged.tail->bi_iter.bi_sector == merge_sector ?
+			vio_merge : NULL);
+	}
 
-	return ((get_bio_sector(vio_merge->bios_merged.head) == merge_sector) ? vio_merge : NULL);
+	return (vio_merge->bios_merged.head->bi_iter.bi_sector == merge_sector ?
+		vio_merge : NULL);
 }
 
 static int map_merged_vio(struct vdo_hash_map *bio_map, struct vio *vio)
@@ -229,20 +224,18 @@ static int map_merged_vio(struct vdo_hash_map *bio_map, struct vio *vio)
 	int result;
 	sector_t bio_sector;
 
-	bio_sector = get_bio_sector(vio->bios_merged.head);
+	bio_sector = vio->bios_merged.head->bi_iter.bi_sector;
 	result = vdo_hash_map_put(bio_map, &bio_sector, vio, true, NULL);
 	if (result != VDO_SUCCESS)
 		return result;
 
-	bio_sector = get_bio_sector(vio->bios_merged.tail);
+	bio_sector = vio->bios_merged.tail->bi_iter.bi_sector;
 	return vdo_hash_map_put(bio_map, &bio_sector, vio, true, NULL);
 }
 
 static int merge_to_prev_tail(struct vdo_hash_map *bio_map, struct vio *vio, struct vio *prev_vio)
 {
-	sector_t bio_sector = get_bio_sector(prev_vio->bios_merged.tail);
-
-	vdo_hash_map_remove(bio_map, &bio_sector);
+	vdo_hash_map_remove(bio_map, &prev_vio->bios_merged.tail->bi_iter.bi_sector);
 	bio_list_merge(&prev_vio->bios_merged, &vio->bios_merged);
 	return map_merged_vio(bio_map, prev_vio);
 }
@@ -254,9 +247,7 @@ static int merge_to_next_head(struct vdo_hash_map *bio_map, struct vio *vio, str
 	 * that's compatible with using funnel queues in work queues. This avoids removing an
 	 * existing completion.
 	 */
-	sector_t bio_sector = get_bio_sector(next_vio->bios_merged.head);
-
-	vdo_hash_map_remove(bio_map, &bio_sector);
+	vdo_hash_map_remove(bio_map, &next_vio->bios_merged.head->bi_iter.bi_sector);
 	bio_list_merge_head(&next_vio->bios_merged, &vio->bios_merged);
 	return map_merged_vio(bio_map, next_vio);
 }
