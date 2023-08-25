@@ -12,17 +12,15 @@
 
 struct io_submitter;
 
-int vdo_make_io_submitter(unsigned int thread_count,
-			  unsigned int rotation_interval,
-			  unsigned int max_requests_active,
-			  struct vdo *vdo,
+int vdo_make_io_submitter(unsigned int thread_count, unsigned int rotation_interval,
+			  unsigned int max_requests_active, struct vdo *vdo,
 			  struct io_submitter **io_submitter);
 
 void vdo_cleanup_io_submitter(struct io_submitter *io_submitter);
 
 void vdo_free_io_submitter(struct io_submitter *io_submitter);
 
-void process_vio_io(struct vdo_completion *completion);
+void submit_vio(struct vdo_completion *completion);
 
 void vdo_submit_data_vio(struct data_vio *data_vio);
 
