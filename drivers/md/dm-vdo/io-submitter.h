@@ -37,8 +37,8 @@ static inline void vdo_submit_metadata_vio(struct vio *vio, physical_block_numbe
 	__submit_metadata_vio(vio, physical, callback, error_handler, operation, vio->data);
 }
 
-static inline void submit_flush_vio(struct vio *vio, bio_end_io_t callback,
-				    vdo_action *error_handler)
+static inline void vdo_submit_flush_vio(struct vio *vio, bio_end_io_t callback,
+					vdo_action *error_handler)
 {
 	/* FIXME: Can we just use REQ_OP_FLUSH? */
 	__submit_metadata_vio(vio, 0, callback, error_handler, REQ_OP_WRITE | REQ_PREFLUSH, NULL);
