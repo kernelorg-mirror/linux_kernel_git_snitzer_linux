@@ -47,14 +47,14 @@ struct io_submitter {
 
 static void start_bio_queue(void *ptr)
 {
-	struct bio_queue_data *bio_queue_data = (struct bio_queue_data *) ptr;
+	struct bio_queue_data *bio_queue_data = ptr;
 
 	blk_start_plug(&bio_queue_data->plug);
 }
 
 static void finish_bio_queue(void *ptr)
 {
-	struct bio_queue_data *bio_queue_data = (struct bio_queue_data *) ptr;
+	struct bio_queue_data *bio_queue_data = ptr;
 
 	blk_finish_plug(&bio_queue_data->plug);
 }
@@ -267,7 +267,8 @@ static bool try_bio_map_merge(struct vio *vio)
 	struct bio *bio = vio->bio;
 	struct vio *prev_vio, *next_vio;
 	struct vdo *vdo = vio->completion.vdo;
-	struct bio_queue_data *bio_queue_data = &vdo->io_submitter->bio_queue_data[vio->bio_zone];
+	struct bio_queue_data *bio_queue_data =
+		&vdo->io_submitter->bio_queue_data[vio->bio_zone];
 
 	bio->bi_next = NULL;
 	bio_list_init(&vio->bios_merged);
@@ -292,7 +293,6 @@ static bool try_bio_map_merge(struct vio *vio)
 		/* Only next. merge to next's head */
 		result = merge_to_next_head(bio_queue_data->map, vio, next_vio);
 	}
-
 	mutex_unlock(&bio_queue_data->lock);
 
 	/* We don't care about failure of int_map_put in this case. */
@@ -332,12 +332,9 @@ void submit_data_vio_io(struct data_vio *data_vio)
  * no error can occur on the bio queue. Currently this is true for all callers, but additional care
  * will be needed if this ever changes.
  */
-void vdo_submit_metadata_io(struct vio *vio,
-			    physical_block_number_t physical,
-			    bio_end_io_t callback,
-			    vdo_action *error_handler,
-			    unsigned int operation,
-			    char *data)
+void vdo_submit_metadata_io(struct vio *vio, physical_block_number_t physical,
+			    bio_end_io_t callback, vdo_action *error_handler,
+			    unsigned int operation, char *data)
 {
 	struct vdo_completion *completion = &vio->completion;
 	int result;
@@ -370,20 +367,16 @@ void vdo_submit_metadata_io(struct vio *vio,
  *
  * Return: VDO_SUCCESS or an error.
  */
-int vdo_make_io_submitter(unsigned int thread_count,
-			  unsigned int rotation_interval,
-			  unsigned int max_requests_active,
-			  struct vdo *vdo,
+int vdo_make_io_submitter(unsigned int thread_count, unsigned int rotation_interval,
+			  unsigned int max_requests_active, struct vdo *vdo,
 			  struct io_submitter **io_submitter_ptr)
 {
 	unsigned int i;
 	struct io_submitter *io_submitter;
 	int result;
 
-	result = uds_allocate_extended(struct io_submitter,
-				       thread_count,
-				       struct bio_queue_data,
-				       "bio submission data",
+	result = uds_allocate_extended(struct io_submitter, thread_count,
+				       struct bio_queue_data, "bio submission data",
 				       &io_submitter);
 	if (result != UDS_SUCCESS)
 		return result;
@@ -417,11 +410,8 @@ int vdo_make_io_submitter(unsigned int thread_count,
 		}
 
 		bio_queue_data->queue_number = i;
-		result = vdo_make_thread(vdo,
-					 vdo->thread_config.bio_threads[i],
-					 &bio_queue_type,
-					 1,
-					 (void **) &bio_queue_data);
+		result = vdo_make_thread(vdo, vdo->thread_config.bio_threads[i],
+					 &bio_queue_type, 1, (void **) &bio_queue_data);
 		if (result != VDO_SUCCESS) {
 			/*
 			 * Clean up the partially initialized bio-queue entirely and indicate that
