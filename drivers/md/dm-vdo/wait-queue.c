@@ -137,7 +137,7 @@ void vdo_waitq_dequeue_matching_waiters(struct vdo_wait_queue *waitq,
 	vdo_waitq_transfer_all_waiters(waitq, &iteration_waitq);
 
 	while (vdo_waitq_has_waiters(&iteration_waitq)) {
-		struct vdo_waiter *waiter = vdo_waitq_dequeue_next_waiter(&iteration_waitq);
+		struct vdo_waiter *waiter = vdo_waitq_dequeue_waiter(&iteration_waitq);
 
 		vdo_waitq_enqueue_waiter((waiter_match(waiter, match_context) ?
 					  matched_waitq : waitq), waiter);
@@ -145,15 +145,16 @@ void vdo_waitq_dequeue_matching_waiters(struct vdo_wait_queue *waitq,
 }
 
 /**
- * vdo_waitq_dequeue_next_waiter() - Remove the first waiter from the head end of a waitq.
+ * vdo_waitq_dequeue_waiter() - Remove the first (oldest) waiter from a waitq.
  * @waitq: The waitq from which to remove the first entry.
  *
- * The caller will be responsible for waking the waiter by invoking the correct callback function
- * to resume its execution.
+ * The caller will be responsible for waking the waiter by invoking the correct
+ * callback function to resume its execution.
+ * FIXME: do all callers simply execute a callback!? just use vdo_waitq_notify_next_waiter?
  *
  * Return: The first (oldest) waiter in the waitq, or NULL if the waitq is empty.
  */
-struct vdo_waiter *vdo_waitq_dequeue_next_waiter(struct vdo_wait_queue *waitq)
+struct vdo_waiter *vdo_waitq_dequeue_waiter(struct vdo_wait_queue *waitq)
 {
 	struct vdo_waiter *first_waiter = vdo_waitq_get_first_waiter(waitq);
 	struct vdo_waiter *last_waiter = waitq->last_waiter;
@@ -162,12 +163,12 @@ struct vdo_waiter *vdo_waitq_dequeue_next_waiter(struct vdo_wait_queue *waitq)
 		return NULL;
 
 	if (first_waiter == last_waiter) {
-		/* The waitq has a single entry, so just empty it out by nulling the tail. */
+		/* The waitq has a single entry, so empty it by nulling the tail. */
 		waitq->last_waiter = NULL;
 	} else {
 		/*
-		 * The waitq has more than one entry, so splice the first waiter out of the
-		 * circular waitq.
+		 * The waitq has multiple waiters, so splice the first waiter out
+		 * of the circular waitq.
 		 */
 		last_waiter->next_waiter = first_waiter->next_waiter;
 	}
@@ -194,7 +195,7 @@ struct vdo_waiter *vdo_waitq_dequeue_next_waiter(struct vdo_wait_queue *waitq)
 bool vdo_waitq_notify_next_waiter(struct vdo_wait_queue *waitq,
 				  vdo_waiter_callback_fn callback, void *context)
 {
-	struct vdo_waiter *waiter = vdo_waitq_dequeue_next_waiter(waitq);
+	struct vdo_waiter *waiter = vdo_waitq_dequeue_waiter(waitq);
 
 	if (waiter == NULL)
 		return false;
