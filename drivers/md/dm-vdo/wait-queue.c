@@ -131,7 +131,6 @@ void vdo_waitq_dequeue_matching_waiters(struct vdo_wait_queue *waitq,
 					void *match_context,
 					struct vdo_wait_queue *matched_waitq)
 {
-	// FIXME: copying a waitq just to iterate it, with matching, is unfortunate
 	struct vdo_wait_queue matched_waiters, iteration_waitq;
 
 	vdo_waitq_init(&matched_waiters);
@@ -208,22 +207,4 @@ bool vdo_waitq_notify_next_waiter(struct vdo_wait_queue *waitq,
 	callback(waiter, context);
 
 	return true;
-}
-
-/**
- * vdo_waitq_get_next_waiter() - Get the waiter after this one, for debug iteration.
- * @waitq: The vdo_wait_queue.
- * @waiter: A waiter.
- *
- * Return: The next waiter, or NULL.
- */
-const struct vdo_waiter *
-vdo_waitq_get_next_waiter(const struct vdo_wait_queue *waitq, const struct vdo_waiter *waiter)
-{
-	struct vdo_waiter *first_waiter = vdo_waitq_get_first_waiter(waitq);
-
-	if (waiter == NULL)
-		return first_waiter;
-
-	return ((waiter->next_waiter != first_waiter) ? waiter->next_waiter : NULL);
 }
