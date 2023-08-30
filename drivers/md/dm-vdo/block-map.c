@@ -887,10 +887,10 @@ static void allocate_free_page(struct page_info *info)
 
 	/*
 	 * Remove all entries which match the page number in question and push them onto the page
-	 * info's wait queue.
+	 * info's waitq.
 	 */
 	vdo_waitq_dequeue_matching_waiters(&cache->free_waiters, completion_needs_page,
-				     &pbn, &info->waiting);
+					   &pbn, &info->waiting);
 	cache->waiter_count -= vdo_waitq_num_waiters(&info->waiting);
 
 	result = launch_page_load(info, pbn);
@@ -1558,9 +1558,8 @@ static void finish_page_write(struct vdo_completion *completion)
 		enqueue_page(page, zone);
 	} else if ((zone->flusher == NULL) && vdo_waitq_has_waiters(&zone->flush_waiters) &&
 		   attempt_increment(zone)) {
-		zone->flusher =
-			container_of(vdo_waitq_dequeue_next_waiter(&zone->flush_waiters),
-				     struct tree_page, waiter);
+		zone->flusher = container_of(vdo_waitq_dequeue_waiter(&zone->flush_waiters),
+					     struct tree_page, waiter);
 		write_page(zone->flusher, pooled);
 		return;
 	}
