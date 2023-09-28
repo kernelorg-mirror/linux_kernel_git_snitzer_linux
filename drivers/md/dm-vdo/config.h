@@ -25,8 +25,8 @@ enum {
 
 /* A set of configuration parameters for the indexer. */
 struct configuration {
-	/* String describing the storage device */
-	const char *name;
+	/* block_device of the index */
+	struct block_device *bdev;
 
 	/* The maximum allowable size of the index */
 	size_t size;

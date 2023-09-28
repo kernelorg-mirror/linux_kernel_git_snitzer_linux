@@ -61,51 +61,14 @@ static void uds_get_io_factory(struct io_factory *factory)
 	atomic_inc(&factory->ref_count);
 }
 
-static int get_block_device_from_name(const char *name, struct block_device **bdev)
-{
-	dev_t device;
-	unsigned int major, minor;
-	char dummy;
-	const struct blk_holder_ops hops = { NULL };
-
-	/* Extract the major/minor numbers */
-	if (sscanf(name, "%u:%u%c", &major, &minor, &dummy) == 2) {
-		device = MKDEV(major, minor);
-		if (MAJOR(device) != major || MINOR(device) != minor) {
-			*bdev = NULL;
-			return uds_log_error_strerror(UDS_INVALID_ARGUMENT,
-						      "%s is not a valid block device",
-						      name);
-		}
-		*bdev = blkdev_get_by_dev(device, BLK_FMODE, NULL, &hops);
-	} else {
-		*bdev = blkdev_get_by_path(name, BLK_FMODE, NULL, &hops);
-	}
-
-	if (IS_ERR(*bdev)) {
-		uds_log_error_strerror(-PTR_ERR(*bdev), "%s is not a block device", name);
-		*bdev = NULL;
-		return UDS_INVALID_ARGUMENT;
-	}
-
-	return UDS_SUCCESS;
-}
-
-int uds_make_io_factory(const char *path, struct io_factory **factory_ptr)
+int uds_make_io_factory(struct block_device *bdev, struct io_factory **factory_ptr)
 {
 	int result;
-	struct block_device *bdev;
 	struct io_factory *factory;
 
-	result = get_block_device_from_name(path, &bdev);
+	result = UDS_ALLOCATE(1, struct io_factory, __func__, &factory);
 	if (result != UDS_SUCCESS)
 		return result;
-
-	result = UDS_ALLOCATE(1, struct io_factory, __func__, &factory);
-	if (result != UDS_SUCCESS) {
-		blkdev_put(bdev, NULL);
-		return result;
-	}
 
 	factory->bdev = bdev;
 	atomic_set_release(&factory->ref_count, 1);
@@ -114,16 +77,8 @@ int uds_make_io_factory(const char *path, struct io_factory **factory_ptr)
 	return UDS_SUCCESS;
 }
 
-int uds_replace_storage(struct io_factory *factory, const char *path)
+int uds_replace_storage(struct io_factory *factory, struct block_device *bdev)
 {
-	int result;
-	struct block_device *bdev;
-
-	result = get_block_device_from_name(path, &bdev);
-	if (result != UDS_SUCCESS)
-		return result;
-
-	blkdev_put(factory->bdev, NULL);
 	factory->bdev = bdev;
 	return UDS_SUCCESS;
 }
@@ -131,10 +86,8 @@ int uds_replace_storage(struct io_factory *factory, const char *path)
 /* Free an I/O factory once all references have been released. */
 void uds_put_io_factory(struct io_factory *factory)
 {
-	if (atomic_add_return(-1, &factory->ref_count) <= 0) {
-		blkdev_put(factory->bdev, NULL);
+	if (atomic_add_return(-1, &factory->ref_count) <= 0)
 		UDS_FREE(factory);
-	}
 }
 
 size_t uds_get_writable_size(struct io_factory *factory)
