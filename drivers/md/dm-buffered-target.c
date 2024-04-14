@@ -233,7 +233,7 @@ static void _io(struct buffered_c *bc, struct bio *bio, struct bio_vec *bvec)
 			buffer_page = unlikely(is_vmalloc_addr(buffer)) ?
 				vmalloc_to_page(buffer) : virt_to_page(buffer);
 			_memcpy(bio, bc, bp, buffer_page, bvec->bv_page,
-				buffer_offset & ~PAGE_SIZE, bvec_offset, len,
+				offset_in_page(buffer), bvec_offset, len,
 				_init_async_memcpy(bio, bc, bp, buffer_offset, len));
 		} else {
 			/* (Superfluous) function consistency check example */
@@ -242,7 +242,7 @@ static void _io(struct buffered_c *bc, struct bio *bio, struct bio_vec *bvec)
 			buffer_page = unlikely(is_vmalloc_addr(buffer)) ?
 				vmalloc_to_page(buffer) : virt_to_page(buffer);
 			_memcpy(bio, bc, bp, bvec->bv_page, buffer_page,
-				bvec_offset, buffer_offset & ~PAGE_SIZE, len,
+				bvec_offset, offset_in_page(buffer), len,
 				_init_async_memcpy(bio, bc, bp, 0, 0));
 		}
 
