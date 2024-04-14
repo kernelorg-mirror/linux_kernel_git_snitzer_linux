@@ -371,8 +371,11 @@ static void __process_bio(struct buffered_c *bc, struct bio *bio)
 
 		if (bio->bi_opf & REQ_PREFLUSH) {
 			atomic_inc(&bc->stats[S_PREFLUSHS]);
-			if (unlikely(_buffered_flush(bc)))
+			r = _buffered_flush(bc);
+			if (unlikely(r)) {
+				bio->bi_status = r;
 				goto err;
+			}
 		}
 
 		bio_for_each_segment(bvec, bio, bio->bi_iter) {
