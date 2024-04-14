@@ -632,7 +632,7 @@ static int buffered_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	/* Processs sector offset. */
 	arg = dm_shift_arg(&as);
-	r = (kstrtoull(arg, 10, (u64 *)&bc->start) || bc->start >= (ti->len >> 1)) ? -EINVAL : 0;
+	r = kstrtoull(arg, 10, (u64 *)&bc->start) ? -EINVAL : 0;
 	if (r) {
 		ti->error = "Invalid sector offset";
 		goto bad;
