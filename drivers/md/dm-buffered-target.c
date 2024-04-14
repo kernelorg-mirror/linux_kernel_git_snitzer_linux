@@ -33,6 +33,8 @@ struct buffered_c {
 	struct work_struct buffered_ws;
 	struct workqueue_struct *buffered_flush_wq;
 	struct delayed_work buffered_flush_ws;
+	mempool_t async_request_pool;
+	struct workqueue_struct *buffered_async_wq;
 	sector_t start;
 	sector_t block_mask;
 	unsigned int block_shift;
@@ -47,6 +49,16 @@ struct buffered_c {
 	/* REMOVEME: stats */
 	atomic_t stats[S_END];
 };
+
+struct async_request {
+	struct work_struct work;
+	struct buffered_c *bc;
+	struct dm_buffer *bp;
+	struct bio *bio;
+	struct async_submit_ctl submit;
+};
+
+static struct kmem_cache *async_request_cache;
 
 /* buffer async_memcpy context */
 struct bio_c {
@@ -573,6 +585,9 @@ static void buffered_dtr(struct dm_target *ti)
 		destroy_workqueue(bc->buffered_wq);
 	if (bc->buffered_flush_wq)
 		destroy_workqueue(bc->buffered_flush_wq);
+	if (bc->buffered_async_wq)
+		destroy_workqueue(bc->buffered_async_wq);
+	mempool_exit(&bc->async_request_pool);
 	if (bc->bufio && !IS_ERR(bc->bufio))
 		dm_bufio_client_destroy(bc->bufio);
 	if (bc->dev)
@@ -674,6 +689,19 @@ static int buffered_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	if (!bc->buffered_flush_wq) {
 		ti->error = "Couldn't start dm-" DM_MSG_PREFIX "-flush";
 		r = -ENOMEM;
+		goto bad;
+	}
+
+	bc->buffered_async_wq = create_singlethread_workqueue("dm-" DM_MSG_PREFIX "-async");
+	if (!bc->buffered_async_wq) {
+		ti->error = "Couldn't start dm-" DM_MSG_PREFIX "-async";
+		r = -ENOMEM;
+		goto bad;
+	}
+
+	r = mempool_init_slab_pool(&bc->async_request_pool, 1, async_request_cache);
+	if (r) {
+		ti->error = "Couldn't allocate async request pool";
 		goto bad;
 	}
 
@@ -879,11 +907,21 @@ static struct target_type buffered_target = {
 
 static int __init dm_buffered_init(void)
 {
-	return dm_register_target(&buffered_target);
+	int r;
+	async_request_cache = kmem_cache_create("dm-buffered", sizeof(struct async_request), 0, 0, NULL);
+	if (!async_request_cache)
+		return -ENOMEM;
+	r = dm_register_target(&buffered_target);
+	if (r) {
+		kmem_cache_destroy(async_request_cache);
+		return r;
+	}
+	return 0;
 }
 
 static void __exit dm_buffered_exit(void)
 {
+	kmem_cache_destroy(async_request_cache);
 	dm_unregister_target(&buffered_target);
 }
 
