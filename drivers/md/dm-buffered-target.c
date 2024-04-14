@@ -19,7 +19,6 @@
 #define DM_MSG_PREFIX "buffered"
 
 #define DEFAULT_BUFFERED_BLOCK_SIZE	(SECTOR_SIZE <<  3) /* 4KiB */
-#define MAX_BUFFERED_BLOCK_SIZE		(SECTOR_SIZE << 13) /* 4MiB */
 
 /* REMOVEME: development statistics. */
 enum { S_BUFFER_SPLITS, S_PREFLUSHS, S_FUA, S_SYNC_WRITES, S_PREFETCHED_READS, S_READS,
@@ -552,10 +551,9 @@ static int _process_block_size_arg(struct buffered_c *bc, const char *arg)
 		return 0;
 	}
 
-	return (kstrtouint(arg, 10, &bc->buffer_size) ||
+	return kstrtouint(arg, 10, &bc->buffer_size) ||
 		!is_power_of_2(bc->buffer_size) ||
-		bc->buffer_size < SECTOR_SIZE ||
-		bc->buffer_size > MAX_BUFFERED_BLOCK_SIZE) ? -EINVAL : 0;
+		bc->buffer_size < SECTOR_SIZE ? -EINVAL : 0;
 }
 
 static void buffered_dtr(struct dm_target *ti)
@@ -852,7 +850,7 @@ static void buffered_io_hints(struct dm_target *ti, struct queue_limits *limits)
 	blk_limits_io_min(limits, limits->logical_block_size);
 	blk_limits_io_opt(limits, bc->buffer_size);
 	if (ti->num_write_zeroes_bios)
-		limits->max_write_zeroes_sectors = min(ti->len, to_sector(MAX_BUFFERED_BLOCK_SIZE));
+		limits->max_write_zeroes_sectors = UINT_MAX;
 }
 
 static struct target_type buffered_target = {
