@@ -181,12 +181,14 @@ static void _io(struct buffered_c *bc, struct bio *bio, struct bio_vec *bvec)
 	sector_t block, sector = bio->bi_iter.bi_sector;
 	void *buffer;
 	struct dm_buffer *bp;
+	struct page *buffer_page;
 	struct bio_c *bio_c = dm_per_bio_data(bio, sizeof(*bio_c));
 
 	while (total_len) {
 		block = _to_block(bc, sector);
 		buffer_offset = to_bytes(_sector_mod(bc, sector));
 		len = min(block_size - buffer_offset, total_len);
+		len = min((unsigned int)(PAGE_SIZE - (buffer_offset & ~PAGE_MASK)), len);
 		/*
 		 * Take an additional reference out for the 2nd buffer I/O
 		 * in case the segment is split across 2 buffers.
@@ -198,7 +200,7 @@ static void _io(struct buffered_c *bc, struct bio *bio, struct bio_vec *bvec)
 
 		buffer = dm_bufio_get(bc->bufio, block, &bp);
 		if (!buffer) {
-			if (write && !buffer_offset && total_len == block_size) {
+			if (write && !buffer_offset && len == block_size) {
 				buffer = dm_bufio_new(bc->bufio, block, &bp);
 			} else {
 				buffer = dm_bufio_read(bc->bufio, block, &bp);
@@ -227,14 +229,20 @@ static void _io(struct buffered_c *bc, struct bio *bio, struct bio_vec *bvec)
 			/* Superfluous call to cover the API example */
 			buffer = dm_bufio_get_block_data(bp);
 			WARN_ON_ONCE(IS_ERR(buffer));
-			_memcpy(bio, bc, bp, virt_to_page(buffer), bvec->bv_page,
-				buffer_offset, bvec_offset, len,
+			buffer += buffer_offset;
+			buffer_page = unlikely(is_vmalloc_addr(buffer)) ?
+				vmalloc_to_page(buffer) : virt_to_page(buffer);
+			_memcpy(bio, bc, bp, buffer_page, bvec->bv_page,
+				buffer_offset & ~PAGE_SIZE, bvec_offset, len,
 				_init_async_memcpy(bio, bc, bp, buffer_offset, len));
 		} else {
 			/* (Superfluous) function consistency check example */
 			WARN_ON(block != dm_bufio_get_block_number(bp));
-			_memcpy(bio, bc, bp, bvec->bv_page, virt_to_page(buffer),
-				bvec_offset, buffer_offset, len,
+			buffer += buffer_offset;
+			buffer_page = unlikely(is_vmalloc_addr(buffer)) ?
+				vmalloc_to_page(buffer) : virt_to_page(buffer);
+			_memcpy(bio, bc, bp, bvec->bv_page, buffer_page,
+				bvec_offset, buffer_offset & ~PAGE_SIZE, len,
 				_init_async_memcpy(bio, bc, bp, 0, 0));
 		}
 
