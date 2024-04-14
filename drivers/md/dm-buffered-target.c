@@ -256,19 +256,25 @@ static void _io(struct buffered_c *bc, struct bio *bio, struct bio_vec *bvec)
 static blk_status_t __process_any_flush(struct buffered_c *bc, struct bio *bio)
 {
 	bool flush = false;
+	blk_status_t r = BLK_STS_OK;
 
-	if (bio->bi_opf & REQ_FUA) {
-		atomic_inc(&bc->stats[S_FUA]);
-		flush = true;
-	} else if (bc->sync_writes && (bio->bi_opf & REQ_SYNC)) {
-		atomic_inc(&bc->stats[S_SYNC_WRITES]);
-		flush = true;
+	if (bio_op(bio) == REQ_OP_WRITE) {
+		if (bio->bi_opf & REQ_FUA) {
+			atomic_inc(&bc->stats[S_FUA]);
+			flush = true;
+		} else if (bc->sync_writes) {
+			atomic_inc(&bc->stats[S_SYNC_WRITES]);
+			flush = true;
+		}
 	}
 
-	if (flush)
-		bio->bi_status = _buffered_flush(bc);
+	if (flush) {
+		r = _buffered_flush(bc);
+		if (r && !bio->bi_status)
+			bio->bi_status = r;
+	}
 
-	return bio->bi_status;
+	return r;
 }
 
 /*
