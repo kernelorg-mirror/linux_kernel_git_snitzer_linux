@@ -288,16 +288,10 @@ static void _discard_blocks(struct buffered_c *bc, struct bio *bio)
 	if (_sector_mod(bc, bio->bi_iter.bi_sector))
 		start++;
 
-	if (_sector_mod(bc, bio_end_sector(bio))) {
-		if (!end)
-			/* Partial first block. */
-			return;
-		end--;
-	}
-
-	n_blocks = end - start + 1;
-	if (unlikely(!n_blocks))
+	if (unlikely(start >= end))
 		return;
+
+	n_blocks = end - start;
 
 	/* ADDRESSME: dirty buffers won't be forgotten! */
 	dm_bufio_forget_buffers(bc->bufio, start, n_blocks);
