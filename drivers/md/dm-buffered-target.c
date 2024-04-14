@@ -55,6 +55,8 @@ struct async_request {
 	struct buffered_c *bc;
 	struct dm_buffer *bp;
 	struct bio *bio;
+	unsigned buffer_offset;
+	unsigned len;
 	struct async_submit_ctl submit;
 };
 
@@ -89,10 +91,11 @@ static blk_status_t _buffered_flush(struct buffered_c *bc)
 	return errno_to_blk_status(dm_bufio_write_dirty_buffers(bc->bufio));
 }
 
-static void _complete_buffer(struct buffered_c *bc, struct bio *bio, struct dm_buffer *bp)
+static void _complete_buffer(struct buffered_c *bc, struct bio *bio, struct dm_buffer *bp,
+			     unsigned buffer_offset, unsigned len)
 {
 	if (bio_op(bio) == REQ_OP_WRITE) {
-		dm_bufio_mark_buffer_dirty(bp);
+		dm_bufio_mark_partial_buffer_dirty(bp, buffer_offset, buffer_offset + len);
 		atomic_inc(&bc->stats[S_BUFFERS_DIRTIED]);
 	}
 	dm_bufio_release(bp);
@@ -105,7 +108,7 @@ static void _complete_memcpy_work(struct work_struct *ws)
 	struct bio_c *bio_c = dm_per_bio_data(bio, sizeof(*bio_c));
 	struct buffered_c *bc = as->bc;
 
-	_complete_buffer(bc, bio, as->bp);
+	_complete_buffer(bc, bio, as->bp, as->buffer_offset, as->len);
 
 	mempool_free(as, &bc->async_request_pool);
 
@@ -131,7 +134,8 @@ static sector_t _buffered_size(struct dm_target *ti)
 
 static void _memcpy(struct bio *bio, struct buffered_c *bc, struct dm_buffer *bp,
 		    struct page *dst, struct page *src,
-		    loff_t dst_offset, loff_t src_offset, unsigned len)
+		    loff_t dst_offset, loff_t src_offset,
+		    unsigned buffer_offset, unsigned len)
 {
 	if (bc->async_memcpy) {
 		struct bio_c *bio_c = dm_per_bio_data(bio, sizeof(*bio_c));
@@ -139,6 +143,8 @@ static void _memcpy(struct bio *bio, struct buffered_c *bc, struct dm_buffer *bp
 		as->bc = bc;
 		as->bp = bp;
 		as->bio = bio;
+		as->buffer_offset = buffer_offset;
+		as->len = len;
 		init_async_submit(&as->submit, 0, NULL, _complete_memcpy, as, NULL);
 		atomic_inc(&bio_c->memcpy_in_progress);
 		async_memcpy(dst, src, dst_offset, src_offset, len, &as->submit);
@@ -148,7 +154,7 @@ static void _memcpy(struct bio *bio, struct buffered_c *bc, struct dm_buffer *bp
 		memcpy(d + dst_offset, s + src_offset, len);
 		kunmap_local(d);
 		kunmap_local(s);
-		_complete_buffer(bc, bio, bp);
+		_complete_buffer(bc, bio, bp, buffer_offset, len);
 	}
 }
 
@@ -212,7 +218,8 @@ static void _io(struct buffered_c *bc, struct bio *bio, struct bio_vec *bvec)
 			buffer_page = unlikely(is_vmalloc_addr(buffer)) ?
 				vmalloc_to_page(buffer) : virt_to_page(buffer);
 			_memcpy(bio, bc, bp, buffer_page, bvec->bv_page,
-				offset_in_page(buffer), bvec_offset, len);
+				offset_in_page(buffer), bvec_offset,
+				buffer_offset, len);
 		} else {
 			/* (Superfluous) function consistency check example */
 			WARN_ON(block != dm_bufio_get_block_number(bp));
@@ -220,7 +227,8 @@ static void _io(struct buffered_c *bc, struct bio *bio, struct bio_vec *bvec)
 			buffer_page = unlikely(is_vmalloc_addr(buffer)) ?
 				vmalloc_to_page(buffer) : virt_to_page(buffer);
 			_memcpy(bio, bc, bp, bvec->bv_page, buffer_page,
-				bvec_offset, offset_in_page(buffer), len);
+				bvec_offset, offset_in_page(buffer),
+				buffer_offset, len);
 		}
 
 		/* Process any additional buffer even in case of I/O error */
