@@ -8,6 +8,7 @@
 #include <linux/wait.h>
 #include <linux/nfs_xdr.h>
 #include <linux/sunrpc/xprt.h>
+#include <linux/nfslocalio.h>
 
 #include <linux/atomic.h>
 #include <linux/refcount.h>
@@ -125,6 +126,14 @@ struct nfs_client {
 	struct net		*cl_net;
 	struct list_head	pending_cb_stateids;
 	struct rcu_head		rcu;
+
+#if IS_ENABLED(CONFIG_NFS_LOCALIO)
+	struct timespec64	cl_nfssvc_boot;
+	seqlock_t		cl_boot_lock;
+	struct rpc_clnt *	cl_rpcclient_localio;
+	struct net *	        cl_nfssvc_net;
+	nfs_to_nfsd_open_t	nfsd_open_local_fh;
+#endif /* CONFIG_NFS_LOCALIO */
 };
 
 /*
