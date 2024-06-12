@@ -99,15 +99,10 @@ nfsd_local_fakerqst_destroy(struct svc_rqst *rqstp)
 
 static struct svc_rqst *
 nfsd_local_fakerqst_create(struct net *net, struct rpc_clnt *rpc_clnt,
-			const struct cred *cred)
+			const struct cred *cred, struct svc_serv *serv)
 {
-	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 	struct svc_rqst *rqstp;
 	int status;
-
-	/* FIXME: not running in nfsd context, must get reference on nfsd_serv */
-	if (unlikely(!READ_ONCE(nn->nfsd_serv)))
-		return ERR_PTR(-ENXIO);
 
 	rqstp = kzalloc(sizeof(*rqstp), GFP_KERNEL);
 	if (!rqstp)
@@ -118,10 +113,10 @@ nfsd_local_fakerqst_create(struct net *net, struct rpc_clnt *rpc_clnt,
 		status = -ENOMEM;
 		goto out_err;
 	}
-
 	rqstp->rq_xprt->xpt_net = net;
+
 	__set_bit(RQ_SECURE, &rqstp->rq_flags);
-	rqstp->rq_server = nn->nfsd_serv;
+	rqstp->rq_server = serv;
 	/*
 	 * These constants aren't actively used in this fake svc_rqst,
 	 * which bypasses SUNRPC, but they must pass negative checks.
@@ -195,26 +190,39 @@ int nfsd_open_local_fh(struct net *cl_nfssvc_net,
 {
 	int mayflags = NFSD_MAY_LOCALIO;
 	int status = 0;
+	struct nfsd_net *nn;
 	const struct cred *save_cred;
 	struct svc_rqst *rqstp;
 	struct svc_fh fh;
 	struct nfsd_file *nf;
+	struct svc_serv *serv;
 	__be32 beres;
+
+	if (nfs_fh->size > NFS4_FHSIZE)
+		return -EINVAL;
+
+	/* Not running in nfsd context, must safely get reference on nfsd_serv */
+	cl_nfssvc_net = maybe_get_net(cl_nfssvc_net);
+	if (!cl_nfssvc_net)
+		return -ENXIO;
+	nn = net_generic(cl_nfssvc_net, nfsd_net_id);
+
+	serv = READ_ONCE(nn->nfsd_serv);
+	if (unlikely(!serv)) {
+		status = -ENXIO;
+		goto out_net;
+	}
 
 	/* Save creds before calling into nfsd */
 	save_cred = get_current_cred();
 
-	rqstp = nfsd_local_fakerqst_create(cl_nfssvc_net, rpc_clnt, cred);
+	rqstp = nfsd_local_fakerqst_create(cl_nfssvc_net, rpc_clnt, cred, serv);
 	if (IS_ERR(rqstp)) {
 		status = PTR_ERR(rqstp);
 		goto out_revertcred;
 	}
 
 	/* nfs_fh -> svc_fh */
-	if (nfs_fh->size > NFS4_FHSIZE) {
-		status = -EINVAL;
-		goto out;
-	}
 	fh_init(&fh, NFS4_FHSIZE);
 	fh.fh_handle.fh_size = nfs_fh->size;
 	memcpy(fh.fh_handle.fh_raw, nfs_fh->data, nfs_fh->size);
@@ -229,17 +237,15 @@ int nfsd_open_local_fh(struct net *cl_nfssvc_net,
 		status = nfs_stat_to_errno(be32_to_cpu(beres));
 		goto out_fh_put;
 	}
-
 	*pfilp = get_file(nf->nf_file);
-
 	nfsd_file_put(nf);
 out_fh_put:
 	fh_put(&fh);
-
-out:
 	nfsd_local_fakerqst_destroy(rqstp);
 out_revertcred:
 	revert_creds(save_cred);
+out_net:
+	put_net(cl_nfssvc_net);
 	return status;
 }
 EXPORT_SYMBOL_GPL(nfsd_open_local_fh);
