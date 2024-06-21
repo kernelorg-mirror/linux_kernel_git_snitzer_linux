@@ -2239,7 +2239,7 @@ static __net_init int nfsd_net_init(struct net *net)
 	if (retval)
 		goto out_repcache_error;
 	memset(&nn->nfsd_svcstats, 0, sizeof(nn->nfsd_svcstats));
-	nn->nfsd_svcstats.program = &nfsd_program;
+	nn->nfsd_svcstats.program = &nfsd_programs[0];
 	nn->nfsd_versions = NULL;
 	nn->nfsd4_minorversions = NULL;
 	nn->nfsd_info.mutex = &nfsd_mutex;
