@@ -380,6 +380,9 @@ nfs_local_iocb_alloc(struct nfs_pgio_header *hdr, struct file *filp,
 	init_sync_kiocb(&iocb->kiocb, filp);
 	iocb->kiocb.ki_pos = hdr->args.offset;
 	iocb->hdr = hdr;
+	/* Was NFS_IOHDR_ODIRECT set in nfs_direct_pgio_init? */
+	if (test_bit(NFS_IOHDR_ODIRECT, &hdr->flags))
+		iocb->kiocb.ki_flags |= IOCB_DIRECT|IOCB_DSYNC;
 	iocb->kiocb.ki_flags &= ~IOCB_APPEND;
 	return iocb;
 }
@@ -435,6 +438,17 @@ nfs_local_pgio_release(struct nfs_local_kiocb *iocb)
 	nfs_local_hdr_release(hdr, hdr->task.tk_ops);
 }
 
+/*
+ * Complete the I/O from iocb->kiocb.ki_complete()
+ *
+ * Note that this function can be called from a bottom half context,
+ * hence we need to queue the rpc_call_done() etc to a workqueue
+ */
+static inline void nfs_local_pgio_complete(struct nfs_local_kiocb *iocb)
+{
+	queue_work(nfsiod_workqueue, &iocb->work);
+}
+
 static void
 nfs_local_read_done(struct nfs_local_kiocb *iocb, long status)
 {
@@ -449,6 +463,23 @@ nfs_local_read_done(struct nfs_local_kiocb *iocb, long status)
 
 	dprintk("%s: read %ld bytes eof %d.\n", __func__,
 			status > 0 ? status : 0, hdr->res.eof);
+}
+
+static void nfs_local_read_aio_complete_work(struct work_struct *work)
+{
+	struct nfs_local_kiocb *iocb =
+		container_of(work, struct nfs_local_kiocb, work);
+
+	nfs_local_pgio_release(iocb);
+}
+
+static void nfs_local_read_aio_complete(struct kiocb *kiocb, long ret)
+{
+	struct nfs_local_kiocb *iocb =
+		container_of(kiocb, struct nfs_local_kiocb, kiocb);
+
+	nfs_local_read_done(iocb, ret);
+	nfs_local_pgio_complete(iocb); /* Calls nfs_local_read_aio_complete_work */
 }
 
 static void nfs_local_call_read(struct work_struct *work)
@@ -467,10 +498,10 @@ static void nfs_local_call_read(struct work_struct *work)
 	nfs_local_iter_init(&iter, iocb, READ);
 
 	status = filp->f_op->read_iter(&iocb->kiocb, &iter);
-	WARN_ON_ONCE(status == -EIOCBQUEUED);
-
-	nfs_local_read_done(iocb, status);
-	nfs_local_pgio_release(iocb);
+	if (status != -EIOCBQUEUED) {
+		nfs_local_read_done(iocb, status);
+		nfs_local_pgio_release(iocb);
+	}
 
 	revert_creds(save_cred);
 	complete(args->done);
@@ -492,6 +523,11 @@ static int nfs_do_local_read(struct nfs_pgio_header *hdr, struct file *filp,
 
 	nfs_local_pgio_init(hdr, call_ops);
 	hdr->res.eof = false;
+
+	if (iocb->kiocb.ki_flags & IOCB_DIRECT) {
+		INIT_WORK(&iocb->work, nfs_local_read_aio_complete_work);
+		iocb->kiocb.ki_complete = nfs_local_read_aio_complete;
+	}
 
 	args.iocb = iocb;
 	args.done = &done;
@@ -631,6 +667,24 @@ nfs_local_write_done(struct nfs_local_kiocb *iocb, long status)
 	nfs_local_pgio_done(hdr, status);
 }
 
+static void nfs_local_write_aio_complete_work(struct work_struct *work)
+{
+	struct nfs_local_kiocb *iocb =
+		container_of(work, struct nfs_local_kiocb, work);
+
+	nfs_local_vfs_getattr(iocb);
+	nfs_local_pgio_release(iocb);
+}
+
+static void nfs_local_write_aio_complete(struct kiocb *kiocb, long ret)
+{
+	struct nfs_local_kiocb *iocb =
+		container_of(kiocb, struct nfs_local_kiocb, kiocb);
+
+	nfs_local_write_done(iocb, ret);
+	nfs_local_pgio_complete(iocb); /* Calls nfs_local_write_aio_complete_work */
+}
+
 static void nfs_local_call_write(struct work_struct *work)
 {
 	struct nfs_local_io_args *args =
@@ -649,11 +703,11 @@ static void nfs_local_call_write(struct work_struct *work)
 	file_start_write(filp);
 	status = filp->f_op->write_iter(&iocb->kiocb, &iter);
 	file_end_write(filp);
-	WARN_ON_ONCE(status == -EIOCBQUEUED);
-
-	nfs_local_write_done(iocb, status);
-	nfs_local_vfs_getattr(iocb);
-	nfs_local_pgio_release(iocb);
+	if (status != -EIOCBQUEUED) {
+		nfs_local_write_done(iocb, status);
+		nfs_local_vfs_getattr(iocb);
+		nfs_local_pgio_release(iocb);
+	}
 
 	revert_creds(save_cred);
 	complete(args->done);
@@ -684,6 +738,11 @@ static int nfs_do_local_write(struct nfs_pgio_header *hdr, struct file *filp,
 		iocb->kiocb.ki_flags |= IOCB_DSYNC|IOCB_SYNC;
 	}
 	nfs_local_pgio_init(hdr, call_ops);
+
+	if (iocb->kiocb.ki_flags & IOCB_DIRECT) {
+		INIT_WORK(&iocb->work, nfs_local_write_aio_complete_work);
+		iocb->kiocb.ki_complete = nfs_local_write_aio_complete;
+	}
 
 	nfs_set_local_verifier(hdr->inode, hdr->res.verf, hdr->args.stable);
 
