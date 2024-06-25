@@ -195,7 +195,6 @@ int nfsd_open_local_fh(struct net *cl_nfssvc_net,
 	struct svc_rqst *rqstp;
 	struct svc_fh fh;
 	struct nfsd_file *nf;
-	struct svc_serv *serv;
 	__be32 beres;
 
 	if (nfs_fh->size > NFS4_FHSIZE)
@@ -207,8 +206,8 @@ int nfsd_open_local_fh(struct net *cl_nfssvc_net,
 		return -ENXIO;
 	nn = net_generic(cl_nfssvc_net, nfsd_net_id);
 
-	serv = READ_ONCE(nn->nfsd_serv);
-	if (unlikely(!serv)) {
+	/* The server may already be shutting down, disallow new localio */
+	if (unlikely(!nfsd_serv_try_get(nn))) {
 		status = -ENXIO;
 		goto out_net;
 	}
@@ -216,7 +215,8 @@ int nfsd_open_local_fh(struct net *cl_nfssvc_net,
 	/* Save creds before calling into nfsd */
 	save_cred = get_current_cred();
 
-	rqstp = nfsd_local_fakerqst_create(cl_nfssvc_net, rpc_clnt, cred, serv);
+	rqstp = nfsd_local_fakerqst_create(cl_nfssvc_net, rpc_clnt,
+					   cred, nn->nfsd_serv);
 	if (IS_ERR(rqstp)) {
 		status = PTR_ERR(rqstp);
 		goto out_revertcred;
@@ -244,6 +244,7 @@ out_fh_put:
 	nfsd_local_fakerqst_destroy(rqstp);
 out_revertcred:
 	revert_creds(save_cred);
+	nfsd_serv_put(nn);
 out_net:
 	put_net(cl_nfssvc_net);
 	return status;
