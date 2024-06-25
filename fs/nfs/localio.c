@@ -364,21 +364,47 @@ nfs_set_local_verifier(struct inode *inode,
 	verf->committed = how;
 }
 
+/* Factored out from fs/nfsd/vfs.h:fh_getattr() */
+static int __vfs_getattr(struct path *p, struct kstat *stat, int version)
+{
+	u32 request_mask = STATX_BASIC_STATS;
+
+	if (version == 4)
+		request_mask |= (STATX_BTIME | STATX_CHANGE_COOKIE);
+	return vfs_getattr(p, stat, request_mask, AT_STATX_SYNC_AS_STAT);
+}
+
+/*
+ * Copied from fs/nfsd/nfsfh.c:nfsd4_change_attribute(),
+ * FIXME: factor out to common code.
+ */
+static u64 __nfsd4_change_attribute(const struct kstat *stat,
+				    const struct inode *inode)
+{
+	u64 chattr;
+
+	if (stat->result_mask & STATX_CHANGE_COOKIE) {
+		chattr = stat->change_cookie;
+		if (S_ISREG(inode->i_mode) &&
+		    !(stat->attributes & STATX_ATTR_CHANGE_MONOTONIC)) {
+			chattr += (u64)stat->ctime.tv_sec << 30;
+			chattr += stat->ctime.tv_nsec;
+		}
+	} else {
+		chattr = time_to_chattr(&stat->ctime);
+	}
+	return chattr;
+}
+
 static void nfs_local_vfs_getattr(struct nfs_local_kiocb *iocb)
 {
 	struct kstat stat;
 	struct file *filp = iocb->kiocb.ki_filp;
 	struct nfs_pgio_header *hdr = iocb->hdr;
 	struct nfs_fattr *fattr = hdr->res.fattr;
+	int version = NFS_PROTO(hdr->inode)->version;
 
-	if (unlikely(!fattr) || vfs_getattr(&filp->f_path, &stat,
-					    STATX_INO |
-					    STATX_ATIME |
-					    STATX_MTIME |
-					    STATX_CTIME |
-					    STATX_SIZE |
-					    STATX_BLOCKS,
-					    AT_STATX_SYNC_AS_STAT))
+	if (unlikely(!fattr) || __vfs_getattr(&filp->f_path, &stat, version))
 		return;
 
 	fattr->valid = (NFS_ATTR_FATTR_FILEID |
@@ -394,7 +420,11 @@ static void nfs_local_vfs_getattr(struct nfs_local_kiocb *iocb)
 	fattr->atime = stat.atime;
 	fattr->mtime = stat.mtime;
 	fattr->ctime = stat.ctime;
-	fattr->change_attr = nfs_timespec_to_change_attr(&fattr->ctime);
+	if (version == 4) {
+		fattr->change_attr =
+			__nfsd4_change_attribute(&stat, file_inode(filp));
+	} else
+		fattr->change_attr = nfs_timespec_to_change_attr(&fattr->ctime);
 	fattr->du.nfs3.used = stat.blocks << 9;
 }
 
