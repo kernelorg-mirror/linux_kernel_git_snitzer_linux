@@ -106,7 +106,8 @@ __nlm4svc_proc_test(struct svc_rqst *rqstp, struct nlm_res *resp)
 		return resp->status == nlm_drop_reply ? rpc_drop_reply :rpc_success;
 
 	/* Now check for conflicting locks */
-	resp->status = nlmsvc_testlock(rqstp, file, host, &argp->lock, &resp->lock, &resp->cookie);
+	resp->status = nlmsvc_testlock(rqstp, file, host, &argp->lock,
+				       &resp->lock);
 	if (resp->status == nlm_drop_reply)
 		rc = rpc_drop_reply;
 	else
