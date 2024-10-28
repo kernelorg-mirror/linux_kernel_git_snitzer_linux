@@ -2019,8 +2019,6 @@ static struct nfsd4_session *alloc_session(struct nfsd4_channel_attrs *fattrs,
 	}
 
 	memcpy(&new->se_fchannel, fattrs, sizeof(struct nfsd4_channel_attrs));
-	memcpy(&new->se_bchannel, battrs, sizeof(struct nfsd4_channel_attrs));
-
 	return new;
 out_free:
 	while (i--)
