@@ -728,6 +728,7 @@ struct nfsd4_copy {
 #define NFSD4_COPY_F_SYNCHRONOUS	(2)
 #define NFSD4_COPY_F_COMMITTED		(3)
 #define NFSD4_COPY_F_COMPLETED		(4)
+#define NFSD4_COPY_F_OFFLOAD_DONE	(5)
 
 	/* response */
 	__be32			nfserr;
