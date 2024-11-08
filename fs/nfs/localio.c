@@ -65,6 +65,17 @@ bool nfs_server_is_local(const struct nfs_client *clp)
 }
 EXPORT_SYMBOL_GPL(nfs_server_is_local);
 
+static inline bool nfs_client_was_local(const struct nfs_client *clp)
+{
+	return !!test_bit(NFS_CS_LOCAL_IO, &clp->cl_flags);
+}
+
+bool nfs_server_was_local(const struct nfs_client *clp)
+{
+	return nfs_client_was_local(clp) && localio_enabled;
+}
+EXPORT_SYMBOL_GPL(nfs_server_was_local);
+
 /*
  * UUID_IS_LOCAL XDR functions
  */
@@ -187,8 +198,13 @@ void nfs_local_probe(struct nfs_client *clp)
 
 	if (!nfs_uuid_begin(&clp->cl_uuid))
 		return;
-	if (nfs_server_uuid_is_local(clp))
+	if (nfs_server_uuid_is_local(clp)) {
 		nfs_localio_enable_client(clp);
+		/* Set hint that client and server are LOCALIO capable */
+		spin_lock(&clp->cl_uuid.lock);
+		set_bit(NFS_CS_LOCAL_IO, &clp->cl_flags);
+		spin_unlock(&clp->cl_uuid.lock);
+	}
 	nfs_uuid_end(&clp->cl_uuid);
 }
 EXPORT_SYMBOL_GPL(nfs_local_probe);

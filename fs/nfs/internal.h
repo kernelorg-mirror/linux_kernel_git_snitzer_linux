@@ -470,6 +470,7 @@ extern int nfs_local_commit(struct nfsd_file *,
 			    struct nfs_commit_data *,
 			    const struct rpc_call_ops *, int);
 extern bool nfs_server_is_local(const struct nfs_client *clp);
+extern bool nfs_server_was_local(const struct nfs_client *clp);
 
 #else /* CONFIG_NFS_LOCALIO */
 static inline void nfs_local_probe(struct nfs_client *clp) {}
@@ -495,6 +496,10 @@ static inline int nfs_local_commit(struct nfsd_file *localio,
 	return -EINVAL;
 }
 static inline bool nfs_server_is_local(const struct nfs_client *clp)
+{
+	return false;
+}
+static inline bool nfs_server_was_local(const struct nfs_client *clp)
 {
 	return false;
 }
