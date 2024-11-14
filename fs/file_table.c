@@ -305,6 +305,8 @@ static void file_init_path(struct file *file, const struct path *path,
 	     likely(fop->write || fop->write_iter))
 		file->f_mode |= FMODE_CAN_WRITE;
 	file->f_iocb_flags = iocb_flags(file);
+	if (fop->fop_flags & FOP_UNCACHED)
+		file->f_iocb_flags |= RWF_UNCACHED;
 	file->f_mode |= FMODE_OPENED;
 	file->f_op = fop;
 	if ((file->f_mode & (FMODE_READ | FMODE_WRITE)) == FMODE_READ)

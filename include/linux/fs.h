@@ -2348,6 +2348,8 @@ static inline void init_sync_kiocb(struct kiocb *kiocb, struct file *filp)
 		.ki_flags = filp->f_iocb_flags,
 		.ki_ioprio = get_current_ioprio(),
 	};
+	if (filp->f_op->fop_flags & FOP_UNCACHED)
+		kiocb->ki_flags |= RWF_UNCACHED;
 }
 
 static inline void kiocb_clone(struct kiocb *kiocb, struct kiocb *kiocb_src,
@@ -3554,6 +3556,8 @@ static inline int kiocb_set_rw_flags(struct kiocb *ki, rwf_t flags,
 	kiocb_flags |= (__force int) (flags & RWF_SUPPORTED);
 	if (flags & RWF_SYNC)
 		kiocb_flags |= IOCB_DSYNC;
+	if (ki->ki_filp->f_op->fop_flags & FOP_UNCACHED)
+		kiocb_flags |= RWF_UNCACHED;
 
 	if ((flags & RWF_NOAPPEND) && (ki->ki_flags & IOCB_APPEND)) {
 		if (IS_APPEND(file_inode(ki->ki_filp)))
