@@ -348,6 +348,8 @@ static int nfs_write_begin(struct file *file, struct address_space *mapping,
 		file, mapping->host->i_ino, len, (long long) pos);
 
 	fgp |= fgf_set_order(len);
+	if (foliop_is_uncached(foliop))
+		fgp |= FGP_UNCACHED;
 start:
 	folio = __filemap_get_folio(mapping, pos >> PAGE_SHIFT, fgp,
 				    mapping_gfp_mask(mapping));
@@ -901,5 +903,6 @@ const struct file_operations nfs_file_operations = {
 	.splice_write	= iter_file_splice_write,
 	.check_flags	= nfs_check_flags,
 	.setlease	= simple_nosetlease,
+	.fop_flags	= FOP_UNCACHED,
 };
 EXPORT_SYMBOL_GPL(nfs_file_operations);
