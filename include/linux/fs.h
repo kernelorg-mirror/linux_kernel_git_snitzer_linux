@@ -2120,6 +2120,9 @@ struct file_operations {
 #define FOP_UNSIGNED_OFFSET	((__force fop_flags_t)(1 << 5))
 /* File system supports uncached read/write buffered IO */
 #define FOP_DONTCACHE		((__force fop_flags_t)(1 << 7))
+/* File system supports dontcache frontend IO being issued to backend with O_DIRECT */
+// FOP_DIRECT is also a hack so all NFS files use FOP_DONTCACHE
+#define FOP_DIRECT		((__force fop_flags_t)(1 << 8))
 
 /* Wrap a directory iterator that needs exclusive inode access */
 int wrap_directory_iterator(struct file *, struct dir_context *,

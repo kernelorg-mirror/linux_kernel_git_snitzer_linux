@@ -467,5 +467,5 @@ const struct file_operations nfs4_file_operations = {
 #else
 	.llseek		= nfs_file_llseek,
 #endif
-	.fop_flags	= FOP_DONTCACHE,
+	.fop_flags	= FOP_DONTCACHE | FOP_DIRECT,
 };
