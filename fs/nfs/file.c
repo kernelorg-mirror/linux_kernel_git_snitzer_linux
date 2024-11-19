@@ -903,6 +903,6 @@ const struct file_operations nfs_file_operations = {
 	.splice_write	= iter_file_splice_write,
 	.check_flags	= nfs_check_flags,
 	.setlease	= simple_nosetlease,
-	.fop_flags	= FOP_UNCACHED,
+	.fop_flags	= FOP_UNCACHED | FOP_DIRECT,
 };
 EXPORT_SYMBOL_GPL(nfs_file_operations);
