@@ -118,6 +118,7 @@ struct nfs_pageio_descriptor {
 	u32			pg_mirror_idx;	/* current mirror */
 	unsigned short		pg_maxretrans;
 	unsigned char		pg_moreio : 1;
+	unsigned char		pg_dontcache : 1;
 };
 
 /* arbitrarily selected limit to number of mirrors */
