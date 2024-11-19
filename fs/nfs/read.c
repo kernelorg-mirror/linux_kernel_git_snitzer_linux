@@ -316,6 +316,8 @@ int nfs_read_add_folio(struct nfs_pageio_descriptor *pgio,
 		nfs_readpage_release(new, error);
 		goto out;
 	}
+	if (folio_test_uncached(folio))
+		pgio->pg_uncached = 1;
 	return 0;
 out:
 	return error;

@@ -824,6 +824,7 @@ void nfs_pageio_init(struct nfs_pageio_descriptor *desc,
 		     int io_flags)
 {
 	desc->pg_moreio = 0;
+	desc->pg_uncached = 0;
 	desc->pg_inode = inode;
 	desc->pg_ops = pg_ops;
 	desc->pg_completion_ops = compl_ops;
@@ -931,6 +932,11 @@ full:
 		desc->pg_error = -EINVAL;
 		return desc->pg_error;
 	}
+
+	/* FIXME: hack to (ab)use O_DIRECT for LOCALIO's benefit */
+	// could set NFS_IOHDR_UNCACHED to avoid conflating...
+	if (desc->pg_uncached)
+		set_bit(NFS_IOHDR_ODIRECT, &hdr->flags);
 
 	if ((desc->pg_ioflags & FLUSH_COND_STABLE) &&
 	    (desc->pg_moreio || nfs_reqs_to_commit(&cinfo)))

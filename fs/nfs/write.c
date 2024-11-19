@@ -678,6 +678,8 @@ out_launder:
 static int nfs_do_writepage(struct folio *folio, struct writeback_control *wbc,
 			    struct nfs_pageio_descriptor *pgio)
 {
+	if (folio_test_uncached(folio))
+		pgio->pg_uncached = 1;
 	nfs_pageio_cond_complete(pgio, folio->index);
 	return nfs_page_async_flush(folio, wbc, pgio);
 }
