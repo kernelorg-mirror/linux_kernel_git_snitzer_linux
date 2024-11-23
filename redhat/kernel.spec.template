@@ -345,6 +345,13 @@ Summary: The Linux kernel
 %define with_efiuki 0
 %endif
 
+%if "%{?dist}" == ".el8"
+# required systemd deps aren't available in el8 (e.g. systemd-ukify)
+%define with_efiuki 0
+# turbostat doesn't build
+%define with_tools 0
+%endif
+
 %ifarch aarch64
 # dtbloader sub-package requires stubble which is only in Fedora for now
 %if 0%{?fedora}
@@ -729,6 +736,13 @@ Summary: The Linux kernel
 %define with_debug 0
 %endif
 
+# Hammerspace doesn't need these, but also on RHEL8 both debug and rt cause
+# error: line 4201: %files rt
+#: package kernel-rt does not exist
+%define with_debug 0
+%define with_realtime 0
+%define with_automotive 0
+
 # short-hand for "are we building base/non-debug variants of ...?"
 %if %{with_stock} && %{with_base}
 %define with_stock_base 1
@@ -766,7 +780,7 @@ Summary: The Linux kernel
 # Packages that need to be installed before the kernel is, because the %%post
 # scripts use them.
 #
-%define kernel_prereq  coreutils, systemd >= 203-2, /usr/bin/kernel-install
+%define kernel_prereq  coreutils, systemd >= 203-2, /usr/bin/kernel-install, kmod >= 25-20
 %define initrd_prereq  dracut >= 027
 
 
@@ -810,6 +824,12 @@ BuildRequires: dwarves
 BuildRequires: python3
 BuildRequires: python3-devel
 BuildRequires: python3-pyyaml
+%if "%{?dist}" == ".el8"
+# On EL8 must configure python3.11 as systemwide python3 with: alternatives --config python3
+BuildRequires: python3.11
+BuildRequires: python3.11-devel
+BuildRequires: python3.11-pyyaml
+%endif
 BuildRequires: kernel-rpm-macros
 # glibc-static is required for a consistent build environment (specifically
 # CONFIG_CC_CAN_LINK_STATIC=y).
@@ -829,6 +849,8 @@ BuildRequires: audit-libs-devel python3-setuptools
 BuildRequires: capstone-devel
 BuildRequires: elfutils-debuginfod-client-devel
 BuildRequires: java-devel
+# More recent libbpf-devel required (1.3.0-2 is from el9, 1.5.0-3 is in el10 and builds on el8):
+BuildRequires: libbpf-devel >= 1.3.0-2
 BuildRequires: libbabeltrace-devel
 BuildRequires: libpfm-devel
 BuildRequires: libtraceevent-devel
@@ -845,11 +867,12 @@ BuildRequires: gettext ncurses-devel
 BuildRequires: libcap-devel libcap-ng-devel
 # The following are rtla requirements
 BuildRequires: python3-docutils
-BuildRequires: libtraceevent-devel
-BuildRequires: libtracefs-devel
 BuildRequires: libbpf-devel
 BuildRequires: bpftool
 BuildRequires: clang
+# Very recent versions needed (luckily el10's build on el9 and el8):
+BuildRequires: libtraceevent-devel >= 1.8.4-3
+BuildRequires: libtracefs-devel >= 1.8.0-6
 
 %ifarch %{cpupowerarchs}
 # For libcpupower bindings
@@ -885,6 +908,11 @@ BuildRequires: xxd
 %endif
 BuildConflicts: rhbuildsys(DiskFree) < 500Mb
 %if %{with_debuginfo}
+%if "%{?dist}" == ".el8"
+BuildRequires: debugedit
+# also must use debugedit provided /usr/bin/find-debuginfo.sh
+%define __find_debuginfo /usr/bin/find-debuginfo.sh
+%endif
 BuildRequires: rpm-build, elfutils
 BuildConflicts: rpm < 4.13.0.1-19
 BuildConflicts: dwarves < 1.13
@@ -1762,6 +1790,13 @@ This package provides essential kernel modules for the %{?2:%{2}-}core kernel pa
 # this macro creates a kernel-<subpackage> meta package.
 #	%%kernel_meta_package <subpackage>
 #
+%if "%{?dist}" == ".el8"
+# Otherwise .el8 errors with:
+# error: Too many levels of recursion in macro expansion. It is likely caused by recursive macro declaration.
+# error: lua script failed: [string "<lua>"]:2: error expanding macro
+# error: line 1848: %kernel_variant_package
+%define kernel_meta_package() %{nil}
+%else
 %define kernel_meta_package() \
 %package %{1}\
 summary: kernel meta-package for the %{1} kernel\
@@ -1778,6 +1813,7 @@ Provides: installonlypkg(kernel)\
 %description %{1}\
 The meta-package for the %{1} kernel\
 %{nil}
+%endif
 
 #
 # This macro creates a kernel-<subpackage> and its -devel and -debuginfo too.
@@ -3091,12 +3127,12 @@ BuildKernel() {
         mkdir -p "$RPM_BUILD_ROOT/lib/modules/$KernelVer/$subdir_name"
 
         set +x
-        while read -r kmod; do
+        for kmod in $(cat "$module_list" | sed -e 's|^kernel/||'); do
             local target_file="$RPM_BUILD_ROOT/lib/modules/$KernelVer/$subdir_name/$kmod"
             local target_dir="${target_file%/*}"
             mkdir -p "$target_dir"
             mv "$RPM_BUILD_ROOT/lib/modules/$KernelVer/kernel/$kmod" "$target_dir"
-        done < <(sed -e 's|^kernel/||' "$module_list")
+        done
         set -x
     }
 
