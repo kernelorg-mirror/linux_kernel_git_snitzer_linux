@@ -64,8 +64,8 @@ HEAD ?= HEAD
 # to '0'.
 INCLUDE_FEDORA_FILES:=1
 INCLUDE_RHEL_FILES:=1
-INCLUDE_RT_FILES:=1
-INCLUDE_AUTOMOTIVE_FILES:=1
+INCLUDE_RT_FILES:=0
+INCLUDE_AUTOMOTIVE_FILES:=0
 
 # This variable is the location of the KABI cross compilers
 KABI_CROSS_COMPILE_PREFIX ?= /usr/bin/
@@ -93,7 +93,7 @@ PATCHLIST_URL ?= https://gitlab.com/cki-project/kernel-ark/-/commit
 #  kernel release. (This includes prepatch or "rc" releases.)
 # Set RELEASED_KERNEL to 0 when the upstream source tarball contains an
 #  unreleased kernel development snapshot.
-RELEASED_KERNEL:=0
+RELEASED_KERNEL:=1
 
 # This variable is used by the redhat/self-tests.  It should not be
 # considered stable and my be changed or removed without warning.
