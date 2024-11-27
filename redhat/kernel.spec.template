@@ -348,8 +348,6 @@ Summary: The Linux kernel
 %if "%{?dist}" == ".el8"
 # required systemd deps aren't available in el8 (e.g. systemd-ukify)
 %define with_efiuki 0
-# turbostat doesn't build
-%define with_tools 0
 %endif
 
 %ifarch aarch64
