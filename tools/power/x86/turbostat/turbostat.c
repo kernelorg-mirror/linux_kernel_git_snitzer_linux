@@ -2799,10 +2799,12 @@ int format_counters(struct thread_data *t, struct core_data *c, struct pkg_data 
 			break;
 
 		case PMT_TYPE_XTAL_TIME:
-			const unsigned long value_raw = t->pmt_counter[i];
-			const double value_converted = 100.0 * value_raw / crystal_hz / interval_float;
+			{
+				const unsigned long value_raw = t->pmt_counter[i];
+				const double value_converted = 100.0 * value_raw / crystal_hz / interval_float;
 
-			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), value_converted);
+				outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), value_converted);
+			}
 			break;
 		}
 	}
@@ -2880,10 +2882,12 @@ int format_counters(struct thread_data *t, struct core_data *c, struct pkg_data 
 			break;
 
 		case PMT_TYPE_XTAL_TIME:
-			const unsigned long value_raw = c->pmt_counter[i];
-			const double value_converted = 100.0 * value_raw / crystal_hz / interval_float;
+			{
+				const unsigned long value_raw = c->pmt_counter[i];
+				const double value_converted = 100.0 * value_raw / crystal_hz / interval_float;
 
-			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), value_converted);
+				outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), value_converted);
+			}
 			break;
 		}
 	}
@@ -3079,10 +3083,12 @@ int format_counters(struct thread_data *t, struct core_data *c, struct pkg_data 
 			break;
 
 		case PMT_TYPE_XTAL_TIME:
-			const unsigned long value_raw = p->pmt_counter[i];
-			const double value_converted = 100.0 * value_raw / crystal_hz / interval_float;
+			{
+				const unsigned long value_raw = p->pmt_counter[i];
+				const double value_converted = 100.0 * value_raw / crystal_hz / interval_float;
 
-			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), value_converted);
+				outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), value_converted);
+			}
 			break;
 		}
 	}
