@@ -13,11 +13,19 @@
 #include <string.h>
 #include <tracefs.h>
 #include <pthread.h>
+#include <syscall.h> /* for gettid() */
 #include <sys/wait.h>
 #include <sys/prctl.h>
 
 #include "utils.h"
 #include "timerlat_u.h"
+
+#ifndef HAVE_GETTID
+static inline pid_t gettid(void)
+{
+	return (pid_t)syscall(__NR_gettid);
+}
+#endif
 
 /*
  * This is the user-space main for the tool timerlatu/ threads.
