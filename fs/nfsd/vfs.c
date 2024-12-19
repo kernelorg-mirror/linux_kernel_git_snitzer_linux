@@ -955,6 +955,11 @@ nfsd_open_verified(struct svc_fh *fhp, int may_flags, struct file **filp)
 	return __nfsd_open(fhp, S_IFREG, may_flags, filp);
 }
 
+static bool nfsd_dontcache __read_mostly = false;
+module_param(nfsd_dontcache, bool, 0644);
+MODULE_PARM_DESC(nfsd_dontcache,
+		 "Any data read or written by nfsd will be removed from the page cache upon completion.");
+
 /*
  * Grab and keep cached pages associated with a file in the svc_rqst
  * so that they can be passed to the network sendmsg routines
@@ -1084,6 +1089,7 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	loff_t ppos = offset;
 	struct page *page;
 	ssize_t host_err;
+	rwf_t flags = 0;
 
 	v = 0;
 	total = *count;
@@ -1097,9 +1103,12 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	}
 	WARN_ON_ONCE(v > ARRAY_SIZE(rqstp->rq_vec));
 
+	if (nfsd_dontcache)
+		flags |= RWF_DONTCACHE;
+
 	trace_nfsd_read_vector(rqstp, fhp, offset, *count);
 	iov_iter_kvec(&iter, ITER_DEST, rqstp->rq_vec, v, *count);
-	host_err = vfs_iter_read(file, &iter, &ppos, 0);
+	host_err = vfs_iter_read(file, &iter, &ppos, flags);
 	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err);
 }
 
@@ -1186,6 +1195,9 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp, struct nfsd_file *nf,
 	if (stable && !fhp->fh_use_wgather)
 		flags |= RWF_SYNC;
 
+	if (nfsd_dontcache)
+		flags |= RWF_DONTCACHE;
+
 	iov_iter_kvec(&iter, ITER_SOURCE, vec, vlen, *cnt);
 	since = READ_ONCE(file->f_wb_err);
 	if (verf)
@@ -1237,6 +1249,9 @@ out_nfserr:
  */
 bool nfsd_read_splice_ok(struct svc_rqst *rqstp)
 {
+	if (nfsd_dontcache) /* force the use of vfs_iter_read for reads */
+		return false;
+
 	switch (svc_auth_flavor(rqstp)) {
 	case RPC_AUTH_GSS_KRB5I:
 	case RPC_AUTH_GSS_KRB5P:
