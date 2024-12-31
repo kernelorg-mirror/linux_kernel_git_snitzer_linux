@@ -1258,6 +1258,7 @@ Source4002: gating.yaml
 %if !%{nopatches}
 
 Patch1: patch-%{patchversion}-redhat.patch
+Patch2: tools-tracing-rtla-fix-el8-compiler-errors.patch
 %endif
 
 # empty final patch to facilitate testing of kernel patches
@@ -2221,6 +2222,11 @@ cp -a %{SOURCE1} .
 %if !%{nopatches}
 
 ApplyOptionalPatch patch-%{patchversion}-redhat.patch
+
+%if "%{?dist}" == ".el8"
+ApplyPatch tools-tracing-rtla-fix-el8-compiler-errors.patch
+%endif
+
 %endif
 
 ApplyOptionalPatch linux-kernel-test.patch
@@ -3430,7 +3436,11 @@ chmod +x tools/perf/check-headers.sh
 
 %ifarch %{cpupowerarchs}
     # link against in-tree libcpupower for idle state support
+%if "%{?dist}" == ".el8"
+    %global rtla_make %{tools_make} LDFLAGS="%{__global_ldflags} -lpthread -L../../power/cpupower" INCLUDES="-I../../power/cpupower/lib"
+%else
     %global rtla_make %{tools_make} LDFLAGS="%{__global_ldflags} -L../../power/cpupower" INCLUDES="-I../../power/cpupower/lib"
+%endif
     # Build libcpupower Python bindings
     %global libcpupower_python_bindings_make %{tools_make} LDFLAGS="-L%{buildroot}%{_libdir} -lcpupower"
 %else
