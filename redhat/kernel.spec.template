@@ -1208,6 +1208,7 @@ Source4002: gating.yaml
 %if !%{nopatches}
 
 Patch1: patch-%{patchversion}-redhat.patch
+Patch2: tools-tracing-rtla-fix-el8-compiler-errors.patch
 %endif
 
 # empty final patch to facilitate testing of kernel patches
@@ -2065,6 +2066,11 @@ cp -a %{SOURCE1} .
 %if !%{nopatches}
 
 ApplyOptionalPatch patch-%{patchversion}-redhat.patch
+
+%if "%{?dist}" == ".el8"
+ApplyPatch tools-tracing-rtla-fix-el8-compiler-errors.patch
+%endif
+
 %endif
 
 ApplyOptionalPatch linux-kernel-test.patch
