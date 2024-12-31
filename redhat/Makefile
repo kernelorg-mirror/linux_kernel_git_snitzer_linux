@@ -774,6 +774,7 @@ sources-rh: $(TARBALL) $(KABI_TARBALL) $(KABIDW_TARBALL) generate-testpatch-tmp 
 		echo "WARNING: There are uncommitted changes in your tree or the changes are not in sync with linux-kernel-test.patch.  Either commit the changes or run 'make dist-test-patch'"
 	@rm $(TESTPATCH).tmp
 	@cp $(TESTPATCH) $(SOURCES)/linux-kernel-test.patch
+	@cp *.patch $(SOURCES)/
 	@cat configs/flavors | while read flavor; do echo "Copying sources for $${flavor}"; [ -e $${flavor}_files ] && cp $${flavor}_files/* $(SOURCES); done
 	@sed -e "s/%%SPECKVERSION%%/$(SPECKVERSION)/" \
 		-e "s/%%SPECKPATCHLEVEL%%/$(SPECKPATCHLEVEL)/" \
