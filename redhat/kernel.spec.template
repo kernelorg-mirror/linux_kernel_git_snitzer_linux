@@ -982,9 +982,6 @@ Source25: %{name}-aarch64-debug-rhel.config
 
 Source27: %{name}-ppc64le-rhel.config
 Source28: %{name}-ppc64le-debug-rhel.config
-Source29: %{name}-s390x-rhel.config
-Source30: %{name}-s390x-debug-rhel.config
-Source31: %{name}-s390x-zfcpdump-rhel.config
 Source32: %{name}-x86_64-rhel.config
 Source33: %{name}-x86_64-debug-rhel.config
 
@@ -1006,8 +1003,6 @@ Source54: %{name}-aarch64-16k-fedora.config
 Source55: %{name}-aarch64-16k-debug-fedora.config
 Source56: %{name}-ppc64le-fedora.config
 Source57: %{name}-ppc64le-debug-fedora.config
-Source58: %{name}-s390x-fedora.config
-Source59: %{name}-s390x-debug-fedora.config
 Source60: %{name}-x86_64-fedora.config
 Source61: %{name}-x86_64-debug-fedora.config
 Source700: %{name}-riscv64-fedora.config
@@ -1063,13 +1058,11 @@ Source200: check-kabi
 
 Source201: Module.kabi_aarch64
 Source202: Module.kabi_ppc64le
-Source203: Module.kabi_s390x
 Source204: Module.kabi_x86_64
 Source205: Module.kabi_riscv64
 
 Source210: Module.kabi_dup_aarch64
 Source211: Module.kabi_dup_ppc64le
-Source212: Module.kabi_dup_s390x
 Source213: Module.kabi_dup_x86_64
 Source214: Module.kabi_dup_riscv64
 
@@ -3406,7 +3399,7 @@ find $RPM_BUILD_ROOT/usr/include \
 %endif
 
 %if %{with_cross_headers}
-HDR_ARCH_LIST='arm64 powerpc s390 x86 riscv'
+HDR_ARCH_LIST='arm64 powerpc x86 riscv'
 mkdir -p $RPM_BUILD_ROOT/usr/tmp-headers
 
 for arch in $HDR_ARCH_LIST; do
