@@ -333,7 +333,7 @@ Summary: The Linux kernel
 %else
 %define symvers_compression %compression
 %define symvers_compression_flags %compression_flags
-%define symvers_compext compext
+%define symvers_compext %compext
 %endif
 
 %if 0%{?fedora}
