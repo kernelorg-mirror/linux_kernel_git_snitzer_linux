@@ -1,3 +1,7 @@
++* Fri Jan 17 2025 Mike Snitzer <snitzer@kernel.org> [6.12.10-baseline]
++- Linux v6.12.10
++Resolves:
+
 +* Thu Jan 09 2025 Mike Snitzer <snitzer@kernel.org> [6.12.9-baseline]
 +- Linux v6.12.9
 +Resolves:
