@@ -359,8 +359,12 @@ static void nfs_folio_end_writeback(struct folio *folio)
 static void nfs_page_end_writeback(struct nfs_page *req)
 {
 	if (nfs_page_group_sync_on_bit(req, PG_WB_END)) {
+		struct folio *folio = nfs_page_to_folio(req);
+
+		if (folio_test_clear_dropbehind(folio))
+			set_bit(PG_DROPBEHIND, &req->wb_flags);
 		nfs_unlock_request(req);
-		nfs_folio_end_writeback(nfs_page_to_folio(req));
+		nfs_folio_end_writeback(folio);
 	} else
 		nfs_unlock_request(req);
 }

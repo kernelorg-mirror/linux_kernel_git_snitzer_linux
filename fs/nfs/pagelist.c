@@ -22,6 +22,7 @@
 #include <linux/nfs_mount.h>
 #include <linux/export.h>
 #include <linux/filelock.h>
+#include <linux/pagemap.h>
 
 #include "internal.h"
 #include "pnfs.h"
@@ -551,6 +552,20 @@ static void nfs_clear_request(struct nfs_page *req)
 	struct nfs_open_context *ctx;
 
 	if (folio != NULL) {
+		if (test_bit(PG_DROPBEHIND, &req->wb_flags)) {
+			if (in_task() && folio_trylock(folio)) {
+				/*
+				 * Like folio_end_dropbehind_write() but
+				 * avoid race with other request having
+				 * gotten folio while lock was dropped.
+				 */
+				if (!folio_test_writeback(folio) &&
+				    folio->mapping)
+					folio_unmap_invalidate(folio->mapping,
+							       folio, 0);
+				folio_unlock(folio);
+			}
+		}
 		folio_put(folio);
 		req->wb_folio = NULL;
 		clear_bit(PG_FOLIO, &req->wb_flags);
