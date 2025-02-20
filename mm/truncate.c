@@ -595,6 +595,7 @@ failed:
 	spin_unlock(&mapping->host->i_lock);
 	return -EBUSY;
 }
+EXPORT_SYMBOL_GPL(folio_unmap_invalidate);
 
 /**
  * invalidate_inode_pages2_range - remove range of pages from an address_space
