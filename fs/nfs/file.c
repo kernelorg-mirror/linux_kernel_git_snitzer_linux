@@ -457,10 +457,21 @@ static bool nfs_release_folio(struct folio *folio, gfp_t gfp)
 
 	/* If the private flag is set, then the folio is not freeable */
 	if (folio_test_private(folio)) {
-		if ((current_gfp_context(gfp) & GFP_KERNEL) != GFP_KERNEL ||
-		    current_is_kswapd() || current_is_kcompactd())
+		if ((current_gfp_context(gfp) & GFP_KERNEL) != GFP_KERNEL)
 			return false;
-		if (nfs_wb_folio(folio->mapping->host, folio) < 0)
+		if (current_is_kswapd() || current_is_kcompactd()) {
+			struct inode *inode = folio->mapping->host;
+
+			/*
+			 * Try to free up memory without requiring
+			 * allocation of new folios.
+			 */
+			if (folio_test_dirty(folio))
+				return false;
+			if ((nfs_commit_inode(inode, FLUSH_SYNC) < 0) ||
+			    !folio_test_private(folio))
+				return false;
+		} else if (nfs_wb_folio(folio->mapping->host, folio) < 0)
 			return false;
 	}
 	return nfs_fscache_release_folio(folio, gfp);
