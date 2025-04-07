@@ -1383,7 +1383,7 @@ static int ff_layout_read_done_cb(struct rpc_task *task,
 					    hdr->args.offset, hdr->args.count,
 					    &hdr->res.op_status, OP_READ,
 					    task->tk_status);
-		trace_ff_layout_read_error(hdr);
+		trace_ff_layout_read_error(hdr, task->tk_status);
 	}
 
 	err = ff_layout_async_handle_error(task, hdr->res.op_status,
@@ -1557,7 +1557,7 @@ static int ff_layout_write_done_cb(struct rpc_task *task,
 					    hdr->args.offset, hdr->args.count,
 					    &hdr->res.op_status, OP_WRITE,
 					    task->tk_status);
-		trace_ff_layout_write_error(hdr);
+		trace_ff_layout_write_error(hdr, task->tk_status);
 	}
 
 	err = ff_layout_async_handle_error(task, hdr->res.op_status,
@@ -1607,7 +1607,7 @@ static int ff_layout_commit_done_cb(struct rpc_task *task,
 					    data->args.offset, data->args.count,
 					    &data->res.op_status, OP_COMMIT,
 					    task->tk_status);
-		trace_ff_layout_commit_error(data);
+		trace_ff_layout_commit_error(data, task->tk_status);
 	}
 
 	err = ff_layout_async_handle_error(task, data->res.op_status,
