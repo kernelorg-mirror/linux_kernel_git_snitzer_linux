@@ -1272,7 +1272,7 @@ static int svc_tcp_sendmsg(struct svc_sock *svsk, struct svc_rqst *rqstp,
 	memcpy(buf, &marker, sizeof(marker));
 	bvec_set_virt(svsk->sk_bvec, buf, sizeof(marker));
 
-	count = xdr_buf_to_bvec(svsk->sk_bvec + 1, RPCSVC_MAXPAGES,
+	count = xdr_buf_to_bvec(svsk->sk_bvec + 1, rqstp->rq_maxpages,
 				&rqstp->rq_res);
 	if (count < 0) {
 		ret = count;
@@ -1447,7 +1447,7 @@ static struct svc_sock *svc_setup_socket(struct svc_serv *serv,
 		return ERR_PTR(-ENOMEM);
 	svsk->sk_maxpages = pages;
 
-	svsk->sk_bvec = kcalloc(RPCSVC_MAXPAGES + 1, sizeof(*svsk->sk_bvec),
+	svsk->sk_bvec = kcalloc(pages + 1, sizeof(*svsk->sk_bvec),
 				GFP_KERNEL);
 	if (!svsk->sk_bvec) {
 		kfree(svsk);
