@@ -1,3 +1,8 @@
++* Wed Apr 30 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-1]
++- nfs: free leftover lsegs before freeing a layout in pnfs_put_layout_hdr
++- nfs: pr_warn if plh_segs or plh_return_segs are non-empty when freeing
++Resolves:
+
 +* Tue Apr 22 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-baseline]
 +- Linux v6.12.24
 +Resolves:
