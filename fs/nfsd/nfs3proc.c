@@ -14,6 +14,7 @@
 #include "xdr3.h"
 #include "vfs.h"
 #include "filecache.h"
+#include "trace.h"
 
 #define NFSDDBG_FACILITY		NFSDDBG_PROC
 
@@ -289,6 +290,8 @@ nfsd3_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	struct inode *inode;
 	__be32 status;
 	int host_err;
+
+	trace_nfsd_vfs_create(rqstp, fhp, S_IFREG, argp->name, argp->len);
 
 	if (!nfsd3_time_in_range(iap))
 		return nfserr_inval;
