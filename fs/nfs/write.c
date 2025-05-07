@@ -652,8 +652,6 @@ static int nfs_do_writepage(struct folio *folio, struct writeback_control *wbc,
 		 */
 		if (nfs_error_is_fatal_on_server(ret))
 			goto out_launder;
-		if (wbc->sync_mode == WB_SYNC_NONE)
-			ret = AOP_WRITEPAGE_ACTIVATE;
 		folio_redirty_for_writepage(wbc, folio);
 		nfs_redirty_request(req);
 		pgio->pg_error = 0;
@@ -692,8 +690,7 @@ static int nfs_writepages_callback(struct folio *folio,
 	int ret;
 
 	ret = nfs_do_writepage(folio, wbc, data);
-	if (ret != AOP_WRITEPAGE_ACTIVATE)
-		folio_unlock(folio);
+	folio_unlock(folio);
 	return ret;
 }
 
