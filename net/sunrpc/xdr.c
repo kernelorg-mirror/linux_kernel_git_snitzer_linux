@@ -218,6 +218,7 @@ bvec_overflow:
 	pr_warn_once("%s: bio_vec array overflow\n", __func__);
 	return -ESERVERFAULT;
 }
+EXPORT_SYMBOL_GPL(xdr_buf_to_bvec);
 
 /**
  * xdr_buf_to_sg - Populate a scatterlist from an xdr_buf range
