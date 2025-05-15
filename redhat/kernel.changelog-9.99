@@ -1,3 +1,17 @@
++* Thu May 15 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-3]
++- Reverted 2 commits from 6.12.24-1 in favor of new commits:
++- NFSv4/pnfs: Reset the layout state after a layoutreturn
++- NFS/pnfs: Fix the error path in pnfs_layoutreturn_retry_later_locked()
++- Various other fixes and changes:
++- net/tls: remove msg_ready optimization to workaround unreliable TLS connect
++- pnfs/flexfiles: connect to NFSv3 DS using TLS if MDS connection uses TLS
++- NFS: add localio to sysfs
++- NFS: always probe for LOCALIO support asynchronously
++- NFS: add RWF_DONTCACHE support to LOCALIO
++- NFSD: allow dontcache to be enabled on a per-export basis
++- NFSD: add the ability to enable use of RWF_DONTCACHE for all nfsd IO
++Resolves:
+
 +* Fri May 09 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-2]
 +- pnfs/flexfiles: connect to NFSv3 DS using TLS if MDS connection uses TLS
 +Resolves:
