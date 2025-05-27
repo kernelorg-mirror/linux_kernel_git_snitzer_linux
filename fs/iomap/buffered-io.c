@@ -1780,6 +1780,8 @@ new_ioend:
 		error = iomap_submit_ioend(wpc, 0);
 		if (error)
 			return error;
+		if (folio_test_dropbehind(folio))
+			wpc->iomap.flags |= IOMAP_F_DONTCACHE;
 		wpc->ioend = iomap_alloc_ioend(wpc, wbc, inode, pos);
 	}
 
