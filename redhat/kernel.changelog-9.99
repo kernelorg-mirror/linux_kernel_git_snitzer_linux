@@ -1,8 +1,12 @@
++* Sat Jun 07 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-5]
++- Switch from nfsd.nfsd_dontcache=Y to echo 1 > /sys/kernel/debug/nfsd/enable-dontcache
++- NFSD: issue reads using O_DIRECT even if IO is misaligned
+
 +* Fri May 30 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-4]
 +- Update kernel-6.12.24/nfs branch to include upstream changes from both 'nfs-for-6.15-2' and 'nfsd-6.16' tags.
 +- Include upstream's nfs-for-6.16 changes; which includes NeilBrown's LOCALIO RCU refactor patchset.
 +- Add all DONTCACHE fixes that landed in the vfs.fixes branch since v6.15 was released.
-+- nfsd: leverage DIO alignment to selectively issue O_DIRECT reads and writes.
++- NFSD: leverage DIO alignment to selectively issue O_DIRECT reads and writes
 +Resolves:
 
 +* Thu May 15 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-3]
