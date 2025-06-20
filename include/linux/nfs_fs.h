@@ -107,8 +107,9 @@ struct nfs_open_context {
 	int error;
 	unsigned long flags;
 #define NFS_CONTEXT_BAD			(2)
-#define NFS_CONTEXT_UNLOCK	(3)
+#define NFS_CONTEXT_UNLOCK		(3)
 #define NFS_CONTEXT_FILE_OPEN		(4)
+#define NFS_CONTEXT_O_DIRECT		(5)
 
 	struct nfs4_threshold	*mdsthreshold;
 	struct list_head list;
