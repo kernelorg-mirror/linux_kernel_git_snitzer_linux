@@ -37,6 +37,10 @@ struct nfs_local_kiocb {
 	struct work_struct	work;
 	void (*aio_complete_work)(struct work_struct *);
 	struct nfsd_file	*localio;
+	/* local copy of nfsd_file's dio alignment attrs */
+	u32			nf_dio_mem_align;
+	u32			nf_dio_offset_align;
+	u32			nf_dio_read_offset_align;
 };
 
 struct nfs_local_fsync_ctx {
@@ -322,12 +326,10 @@ nfs_local_iocb_alloc(struct nfs_pgio_header *hdr,
 		return NULL;
 	}
 
+	init_sync_kiocb(&iocb->kiocb, file);
 	if (localio_O_DIRECT_semantics &&
-	    test_bit(NFS_IOHDR_ODIRECT, &hdr->flags)) {
-		iocb->kiocb.ki_filp = file;
+	    test_bit(NFS_IOHDR_ODIRECT, &hdr->flags))
 		iocb->kiocb.ki_flags = IOCB_DIRECT;
-	} else
-		init_sync_kiocb(&iocb->kiocb, file);
 
 	iocb->kiocb.ki_pos = hdr->args.offset;
 	iocb->hdr = hdr;
@@ -346,6 +348,26 @@ nfs_local_iter_init(struct iov_iter *i, struct nfs_local_kiocb *iocb, int dir)
 		      hdr->args.count + hdr->args.pgbase);
 	if (hdr->args.pgbase != 0)
 		iov_iter_advance(i, hdr->args.pgbase);
+
+	if (iocb->kiocb.ki_flags & IOCB_DIRECT) {
+		u32 nf_dio_mem_align, nf_dio_offset_align, nf_dio_read_offset_align;
+		/* Verify the IO is DIO-aligned as required */
+		nfs_to->nfsd_file_dio_alignment(iocb->localio, &nf_dio_mem_align,
+						&nf_dio_offset_align,
+						&nf_dio_read_offset_align);
+		if (dir == READ)
+			nf_dio_offset_align = nf_dio_read_offset_align;
+		/* direct I/O must be aligned to device logical sector size */
+		if (nf_dio_mem_align && nf_dio_offset_align &&
+		    (((hdr->args.offset | hdr->args.count) & (nf_dio_offset_align-1)) == 0) &&
+		    iov_iter_is_aligned(i, nf_dio_mem_align - 1,
+					nf_dio_offset_align - 1))
+			return 0;
+
+		/* Fallback to using buffered for this misaligned IO */
+		iocb->kiocb.ki_flags &= ~IOCB_DIRECT;
+		iocb->kiocb.ki_filp->f_flags &= ~O_DIRECT;
+	}
 }
 
 static void
@@ -480,6 +502,9 @@ nfs_do_local_read(struct nfs_pgio_header *hdr,
 	if (iocb == NULL)
 		return -ENOMEM;
 	iocb->localio = localio;
+	nfs_to->nfsd_file_dio_alignment(localio, &iocb->nf_dio_mem_align,
+					&iocb->nf_dio_offset_align,
+					&iocb->nf_dio_read_offset_align);
 
 	nfs_local_pgio_init(hdr, call_ops);
 	hdr->res.eof = false;
@@ -679,6 +704,9 @@ nfs_do_local_write(struct nfs_pgio_header *hdr,
 	if (iocb == NULL)
 		return -ENOMEM;
 	iocb->localio = localio;
+	nfs_to->nfsd_file_dio_alignment(localio, &iocb->nf_dio_mem_align,
+					&iocb->nf_dio_offset_align,
+					&iocb->nf_dio_read_offset_align);
 
 	switch (hdr->args.stable) {
 	default:
