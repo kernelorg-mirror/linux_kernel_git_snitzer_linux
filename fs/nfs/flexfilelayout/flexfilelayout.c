@@ -1911,6 +1911,7 @@ ff_layout_read_pagelist(struct nfs_pgio_header *hdr)
 	localio = ff_local_open_fh(lseg, idx, ds->ds_clp, ds_cred, fh, FMODE_READ);
 	if (localio) {
 		hdr->task.tk_start = ktime_get();
+		// FIXME: if fallback occurs is this stats start bogus?
 		ff_layout_read_record_layoutstats_start(&hdr->task, hdr);
 	}
 
