@@ -705,7 +705,7 @@ nfs_set_local_verifier(struct inode *inode,
 }
 
 /* Factored out from fs/nfsd/vfs.h:fh_getattr() */
-static int __vfs_getattr(struct path *p, struct kstat *stat, int version)
+static int __vfs_getattr(const struct path *p, struct kstat *stat, int version)
 {
 	u32 request_mask = STATX_BASIC_STATS;
 
