@@ -1,10 +1,13 @@
++* Mon Jul 08 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-7]
++- One important fix to NFSD's O_DIRECT READ support so that natively DIO-aligned uses O_DIRECT.
++- Rebased v6.12.24-6 changes ontop of Chuck Lever's v6.16-rc5 rebase for nfsd-next and nfsd-testing.
+
 +* Mon Jul 07 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-6]
 +- Reworked NFSD debugfs to expose io_cache_read and io_cache_write (instead of enable-dontcache)
 +- Include post-v6.16-rc1 NFSD and NFS fixes (through nfsd-6.16-1 and nfs-for-6.16-2)
 +- lib/iov_iter: remove piecewise bvec length checking in iov_iter_aligned_bvec
 +- Also include NFSD testing changes; fix NFSD READ support for aligning misaligned DIO.
 +- Update NFS client's LOCALIO to support issuing misaligned READ DIO using remote call to NFSD.
-
 
 +* Sat Jun 07 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-5]
 +- Switch from nfsd.nfsd_dontcache=Y to echo 1 > /sys/kernel/debug/nfsd/enable-dontcache
