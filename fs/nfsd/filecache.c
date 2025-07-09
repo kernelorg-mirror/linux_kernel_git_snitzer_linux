@@ -1311,8 +1311,9 @@ nfsd_file_acquire(struct svc_rqst *rqstp, struct svc_fh *fhp,
  * considered before use.
  *
  * The nfsd_file_object returned by this API is reference-counted
- * but not garbage-collected. The object is unhashed after the
- * final nfsd_file_put().
+ * and garbage-collected. The object is retained for a few
+ * seconds after the final nfsd_file_put() in case the caller
+ * wants to re-use it.
  *
  * Return values:
  *   %nfs_ok - @pnf points to an nfsd_file with its reference
@@ -1334,7 +1335,7 @@ nfsd_file_acquire_local(struct net *net, struct svc_cred *cred,
 	__be32 beres;
 
 	beres = nfsd_file_do_acquire(NULL, net, cred, client,
-				     fhp, may_flags, NULL, pnf, false);
+				     fhp, may_flags, NULL, pnf, true);
 	revert_creds(save_cred);
 	return beres;
 }
