@@ -1,3 +1,11 @@
++* Sat Jul 12 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-8]
++- Revert all of 6.16's NFS LOCALIO changes by NeilBrown; has systemic nfsd_file refcount issues
++- Also revert all of NeilBrown's sched and softirq wake_up_bit related deps for LOCALIO changes
++- Fix various offset/len and dma_alignment checking issues in NFSD's expanded READ to DIO-aligned support
++- Only expand misaligned READ to DIO-aligned (for both NFSD and LOCALIO) if IO is 32K or larger.
++- Add 'localio_O_DIRECT_align_misaligned_READ' boolean modparam to nfs.ko (defaults to Y).
++- This kernel serves as baseline for Hammerspace kernel used for MLperf 2025 July 11 submission.
+
 +* Mon Jul 08 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-7]
 +- One important fix to NFSD's O_DIRECT READ support so that natively DIO-aligned uses O_DIRECT.
 +- Rebased v6.12.24-6 changes ontop of Chuck Lever's v6.16-rc5 rebase for nfsd-next and nfsd-testing.
