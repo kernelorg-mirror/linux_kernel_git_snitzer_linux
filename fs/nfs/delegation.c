@@ -307,7 +307,8 @@ nfs_start_delegation_return_locked(struct nfs_inode *nfsi)
 	if (delegation == NULL)
 		goto out;
 	spin_lock(&delegation->lock);
-	if (!test_and_set_bit(NFS_DELEGATION_RETURNING, &delegation->flags)) {
+	if (delegation->inode &&
+	    !test_and_set_bit(NFS_DELEGATION_RETURNING, &delegation->flags)) {
 		clear_bit(NFS_DELEGATION_RETURN_DELAYED, &delegation->flags);
 		/* Refcount matched in nfs_end_delegation_return() */
 		ret = nfs_get_delegation(delegation);
@@ -1020,13 +1021,6 @@ out:
 		nfs_inode_find_state_and_recover(inode, stateid);
 }
 
-void nfs_remove_bad_delegation(struct inode *inode,
-		const nfs4_stateid *stateid)
-{
-	nfs_revoke_delegation(inode, stateid);
-}
-EXPORT_SYMBOL_GPL(nfs_remove_bad_delegation);
-
 void nfs_delegation_mark_returned(struct inode *inode,
 		const nfs4_stateid *stateid)
 {
@@ -1067,6 +1061,24 @@ out_rcu_unlock:
 
 	nfs_inode_find_state_and_recover(inode, stateid);
 }
+
+/**
+ * nfs_remove_bad_delegation - handle delegations that are unusable
+ * @inode: inode to process
+ * @stateid: the delegation's stateid
+ *
+ * If the server ACK-ed our FREE_STATEID then clean
+ * up the delegation, else mark and keep the revoked state.
+ */
+void nfs_remove_bad_delegation(struct inode *inode,
+		const nfs4_stateid *stateid)
+{
+	if (stateid && stateid->type == NFS4_FREED_STATEID_TYPE)
+		nfs_delegation_mark_returned(inode, stateid);
+	else
+		nfs_revoke_delegation(inode, stateid);
+}
+EXPORT_SYMBOL_GPL(nfs_remove_bad_delegation);
 
 /**
  * nfs_expire_unused_delegation_types
