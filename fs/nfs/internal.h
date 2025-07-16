@@ -463,7 +463,7 @@ extern struct nfsd_file *nfs_local_open_fh(struct nfs_client *,
 					   struct nfs_file_localio *,
 					   const fmode_t);
 extern int nfs_local_doio(struct nfs_client *,
-			  struct nfsd_file *,
+			  struct nfsd_file **,
 			  struct nfs_pgio_header *,
 			  const struct rpc_call_ops *);
 extern int nfs_local_commit(struct nfsd_file *,
@@ -482,7 +482,7 @@ nfs_local_open_fh(struct nfs_client *clp, const struct cred *cred,
 	return NULL;
 }
 static inline int nfs_local_doio(struct nfs_client *clp,
-				 struct nfsd_file *localio,
+				 struct nfsd_file **localio,
 				 struct nfs_pgio_header *hdr,
 				 const struct rpc_call_ops *call_ops)
 {

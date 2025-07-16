@@ -762,9 +762,17 @@ int nfs_initiate_pgio(struct rpc_clnt *clnt, struct nfs_pgio_header *hdr,
 		hdr->args.count,
 		(unsigned long long)hdr->args.offset);
 
-	if (localio)
-		return nfs_local_doio(NFS_SERVER(hdr->inode)->nfs_client,
-				      localio, hdr, call_ops);
+	if (localio) {
+		int status = nfs_local_doio(NFS_SERVER(hdr->inode)->nfs_client,
+					    &localio, hdr, call_ops);
+		/* nfs_local_doio() will clear localio and return -ENOSYS if
+		 * it is prudent to immediately service this IO remotely.
+		 */
+		if (status != -ENOSYS)
+			return status;
+		WARN_ON_ONCE(localio != NULL);
+		/* fallthrough */
+	}
 
 	task = rpc_run_task(&task_setup_data);
 	if (IS_ERR(task))
@@ -959,7 +967,6 @@ static int nfs_generic_pg_pgios(struct nfs_pageio_descriptor *desc)
 	ret = nfs_generic_pgio(desc, hdr);
 	if (ret == 0) {
 		struct nfs_client *clp = NFS_SERVER(hdr->inode)->nfs_client;
-
 		struct nfsd_file *localio =
 			nfs_local_open_fh(clp, hdr->cred, hdr->args.fh,
 					  &hdr->args.context->nfl,

@@ -375,44 +375,18 @@ nfsd_file_put(struct nfsd_file *nf)
 
 /**
  * nfsd_file_put_local - put nfsd_file reference and arm nfsd_net_put in caller
- * @pnf: nfsd_file of which to put the reference
+ * @nf: nfsd_file of which to put the reference
  *
  * First save the associated net to return to caller, then put
  * the reference of the nfsd_file.
  */
 struct net *
-nfsd_file_put_local(struct nfsd_file __rcu **pnf)
-{
-	struct nfsd_file *nf;
-	struct net *net = NULL;
-
-	nf = unrcu_pointer(xchg(pnf, NULL));
-	if (nf) {
-		net = nf->nf_net;
-		nfsd_file_put(nf);
-	}
-	return net;
-}
-
-/**
- * nfsd_file_get_local - get nfsd_file reference and reference to net
- * @nf: nfsd_file of which to put the reference
- *
- * Get reference to both the nfsd_file and nf->nf_net.
- */
-struct nfsd_file *
-nfsd_file_get_local(struct nfsd_file *nf)
+nfsd_file_put_local(struct nfsd_file *nf)
 {
 	struct net *net = nf->nf_net;
 
-	if (nfsd_net_try_get(net)) {
-		nf = nfsd_file_get(nf);
-		if (!nf)
-			nfsd_net_put(net);
-	} else {
-		nf = NULL;
-	}
-	return nf;
+	nfsd_file_put(nf);
+	return net;
 }
 
 /**
@@ -1311,8 +1285,9 @@ nfsd_file_acquire(struct svc_rqst *rqstp, struct svc_fh *fhp,
  * considered before use.
  *
  * The nfsd_file_object returned by this API is reference-counted
- * but not garbage-collected. The object is unhashed after the
- * final nfsd_file_put().
+ * and garbage-collected. The object is retained for a few
+ * seconds after the final nfsd_file_put() in case the caller
+ * wants to re-use it.
  *
  * Return values:
  *   %nfs_ok - @pnf points to an nfsd_file with its reference
@@ -1334,7 +1309,7 @@ nfsd_file_acquire_local(struct net *net, struct svc_cred *cred,
 	__be32 beres;
 
 	beres = nfsd_file_do_acquire(NULL, net, cred, client,
-				     fhp, may_flags, NULL, pnf, false);
+				     fhp, may_flags, NULL, pnf, true);
 	revert_creds(save_cred);
 	return beres;
 }
