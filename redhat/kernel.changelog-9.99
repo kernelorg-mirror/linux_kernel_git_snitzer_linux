@@ -1,3 +1,9 @@
++* Mon Jul 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-9]
++- Rebase to include v3 of the "NFSD DIRECT" patchset that was sent to linux-nfs on July 14.
++- Rebase also includes Chuck Lever's nfsd-next and nfsd-testing changes from just after v6.16.rc7.
++- Restore all of v6.16-rc's NFS LOCALIO changes by NeilBrown, now with 4 LOCALIO fixes for v6.16.
++- Add misaligned READ and WRITE handling to NFS client's O_DIRECT code for LOCALIO's benefit.
+
 +* Sat Jul 12 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-8]
 +- Revert all of 6.16's NFS LOCALIO changes by NeilBrown; has systemic nfsd_file refcount issues
 +- Also revert all of NeilBrown's sched and softirq wake_up_bit related deps for LOCALIO changes
