@@ -1,3 +1,7 @@
++* Wed Jul 23 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-10]
++- Fix a copy-n-paste bug in nfsd_vfs_write: s/nf_dio_read_offset_align/nf_dio_offset_align/
++- Rename struct nfsd_dio_io to nfsd_read_dio.
+
 +* Mon Jul 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-9]
 +- Rebase to include v3 of the "NFSD DIRECT" patchset that was sent to linux-nfs on July 14.
 +- Rebase also includes Chuck Lever's nfsd-next and nfsd-testing changes from just after v6.16.rc7.
