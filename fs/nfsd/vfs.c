@@ -19,6 +19,7 @@
 #include <linux/splice.h>
 #include <linux/falloc.h>
 #include <linux/fcntl.h>
+#include <linux/math.h>
 #include <linux/namei.h>
 #include <linux/delay.h>
 #include <linux/fsnotify.h>
@@ -1073,6 +1074,153 @@ __be32 nfsd_splice_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err);
 }
 
+struct nfsd_read_dio {
+	loff_t start;
+	loff_t end;
+	unsigned long start_extra;
+	unsigned long end_extra;
+	struct page *start_extra_page;
+};
+
+static void init_nfsd_read_dio(struct nfsd_read_dio *read_dio)
+{
+	memset(read_dio, 0, sizeof(*read_dio));
+	read_dio->start_extra_page = NULL;
+}
+
+#define NFSD_READ_DIO_MIN_KB (32 << 10)
+
+static bool nfsd_analyze_read_dio(struct svc_rqst *rqstp, struct svc_fh *fhp,
+				  struct nfsd_file *nf, loff_t offset,
+				  unsigned long len, unsigned int base,
+				  struct nfsd_read_dio *read_dio)
+{
+	const u32 dio_blocksize = nf->nf_dio_read_offset_align;
+	loff_t middle_end, orig_end = offset + len;
+
+	if (WARN_ONCE(!nf->nf_dio_mem_align || !nf->nf_dio_read_offset_align,
+		      "%s: underlying filesystem has not provided DIO alignment info\n",
+		      __func__))
+		return false;
+	if (WARN_ONCE(dio_blocksize > PAGE_SIZE,
+		      "%s: underlying storage's dio_blocksize=%u > PAGE_SIZE=%lu\n",
+		      __func__, dio_blocksize, PAGE_SIZE))
+		return false;
+
+	/* Return early if IO is irreparably misaligned (len < PAGE_SIZE,
+	 * or base not aligned).
+	 * Ondisk alignment is implied by the following code that expands
+	 * misaligned IO to have a DIO-aligned offset and len.
+	 */
+	if (unlikely(len < dio_blocksize) || ((base & (nf->nf_dio_mem_align-1)) != 0))
+		return false;
+
+	init_nfsd_read_dio(read_dio);
+
+	read_dio->start = round_down(offset, dio_blocksize);
+	read_dio->end = round_up(orig_end, dio_blocksize);
+	read_dio->start_extra = offset - read_dio->start;
+	read_dio->end_extra = read_dio->end - orig_end;
+
+	/*
+	 * Any misaligned READ less than NFSD_READ_DIO_MIN_KB won't be expanded
+	 * to be DIO-aligned (this heuristic avoids excess work, like allocating
+	 * start_extra_page, for smaller IO that can generally already perform
+	 * well using buffered IO).
+	 */
+	if ((read_dio->start_extra || read_dio->end_extra) &&
+	    (len < NFSD_READ_DIO_MIN_KB)) {
+		init_nfsd_read_dio(read_dio);
+		return false;
+	}
+
+	if (read_dio->start_extra) {
+		read_dio->start_extra_page = alloc_page(GFP_KERNEL);
+		if (WARN_ONCE(read_dio->start_extra_page == NULL,
+			      "%s: Unable to allocate start_extra_page\n", __func__)) {
+			init_nfsd_read_dio(read_dio);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static ssize_t nfsd_complete_misaligned_read_dio(struct svc_rqst *rqstp,
+						 struct nfsd_read_dio *read_dio,
+						 ssize_t bytes_read,
+						 unsigned long bytes_expected,
+						 loff_t *offset,
+						 unsigned long *rq_bvec_numpages)
+{
+	ssize_t host_err = bytes_read;
+	loff_t v;
+
+	if (!read_dio->start_extra && !read_dio->end_extra)
+		return host_err;
+
+	/* If nfsd_analyze_read_dio() allocated a start_extra_page it must
+	 * be removed from rqstp->rq_bvec[] to avoid returning unwanted data.
+	 */
+	if (read_dio->start_extra_page) {
+		__free_page(read_dio->start_extra_page);
+		*rq_bvec_numpages -= 1;
+		v = *rq_bvec_numpages;
+		memmove(rqstp->rq_bvec, rqstp->rq_bvec + 1,
+			v * sizeof(struct bio_vec));
+	}
+	/* Eliminate any end_extra bytes from the last page */
+	v = *rq_bvec_numpages;
+	rqstp->rq_bvec[v].bv_len -= read_dio->end_extra;
+
+	if (host_err < 0) {
+		/* Underlying FS will return -EINVAL if misaligned
+		 * DIO is attempted because it shouldn't be.
+		 */
+		WARN_ON_ONCE(host_err == -EINVAL);
+		return host_err;
+	}
+
+	/* nfsd_analyze_read_dio() may have expanded the start and end,
+	 * if so adjust returned read size to reflect original extent.
+	 */
+	*offset += read_dio->start_extra;
+	if (likely(host_err >= read_dio->start_extra)) {
+		host_err -= read_dio->start_extra;
+		if (host_err > bytes_expected)
+			host_err = bytes_expected;
+	} else {
+		/* Short read that didn't read any of requested data */
+		host_err = 0;
+	}
+
+	return host_err;
+}
+
+static bool nfsd_iov_iter_aligned_bvec(const struct iov_iter *i,
+		unsigned addr_mask, unsigned len_mask)
+{
+	const struct bio_vec *bvec = i->bvec;
+	unsigned skip = i->iov_offset;
+	size_t size = i->count;
+
+	if (size & len_mask)
+		return false;
+	do {
+		size_t len = bvec->bv_len;
+
+		if (len > size)
+			len = size;
+		if ((unsigned long)(bvec->bv_offset + skip) & addr_mask)
+			return false;
+		bvec++;
+		size -= len;
+		skip = 0;
+	} while (size);
+
+	return true;
+}
+
 /**
  * nfsd_iter_read - Perform a VFS read using an iterator
  * @rqstp: RPC transaction context
@@ -1094,7 +1242,8 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		      unsigned int base, u32 *eof)
 {
 	struct file *file = nf->nf_file;
-	unsigned long v, total;
+	unsigned long v, total, in_count = *count;
+	struct nfsd_read_dio read_dio;
 	struct iov_iter iter;
 	struct kiocb kiocb;
 	ssize_t host_err;
@@ -1102,13 +1251,34 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	init_sync_kiocb(&kiocb, file);
 
+	v = 0;
+	total = in_count;
+
 	switch (nfsd_io_cache_read) {
 	case NFSD_IO_DIRECT:
-		/* Verify ondisk and memory DIO alignment */
-		if (nf->nf_dio_mem_align && nf->nf_dio_read_offset_align &&
-		    (((offset | *count) & (nf->nf_dio_read_offset_align - 1)) == 0) &&
-		    (base & (nf->nf_dio_mem_align - 1)) == 0)
-			kiocb.ki_flags = IOCB_DIRECT;
+		/*
+		 * If NFSD_IO_DIRECT enabled, expand any misaligned READ to
+		 * the next DIO-aligned block (on either end of the READ).
+		 */
+		if (nfsd_analyze_read_dio(rqstp, fhp, nf, offset,
+					  in_count, base, &read_dio)) {
+			/* trace_nfsd_read_vector() will reflect larger
+			 * DIO-aligned READ.
+			 */
+			offset = read_dio.start;
+			in_count = read_dio.end - offset;
+			total = in_count;
+
+			kiocb.ki_flags |= IOCB_DIRECT;
+			if (read_dio.start_extra) {
+				len = read_dio.start_extra;
+				bvec_set_page(&rqstp->rq_bvec[v],
+					      read_dio.start_extra_page,
+					      len, PAGE_SIZE - len);
+				total -= len;
+				++v;
+			}
+		}
 		break;
 	case NFSD_IO_DONTCACHE:
 		kiocb.ki_flags = IOCB_DONTCACHE;
@@ -1120,8 +1290,6 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	kiocb.ki_pos = offset;
 
-	v = 0;
-	total = *count;
 	while (total) {
 		len = min_t(size_t, total, PAGE_SIZE - base);
 		bvec_set_page(&rqstp->rq_bvec[v], *(rqstp->rq_next_page++),
@@ -1132,9 +1300,21 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	}
 	WARN_ON_ONCE(v > rqstp->rq_maxpages);
 
-	trace_nfsd_read_vector(rqstp, fhp, offset, *count);
-	iov_iter_bvec(&iter, ITER_DEST, rqstp->rq_bvec, v, *count);
+	trace_nfsd_read_vector(rqstp, fhp, offset, in_count);
+	iov_iter_bvec(&iter, ITER_DEST, rqstp->rq_bvec, v, in_count);
+
+	if ((kiocb.ki_flags & IOCB_DIRECT) &&
+	    !nfsd_iov_iter_aligned_bvec(&iter, nf->nf_dio_mem_align-1,
+					nf->nf_dio_read_offset_align-1))
+		kiocb.ki_flags &= ~IOCB_DIRECT;
+
 	host_err = vfs_iocb_iter_read(file, &kiocb, &iter);
+
+	if (in_count != *count) {
+		/* misaligned DIO expanded read to be DIO-aligned */
+		host_err = nfsd_complete_misaligned_read_dio(rqstp, &read_dio,
+					host_err, *count, &offset, &v);
+	}
 	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err);
 }
 
