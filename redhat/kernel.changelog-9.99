@@ -1,3 +1,8 @@
++* Wed Jul 30 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-12]
++- Rebase to include cel/nfsd-testing "sunrpc: fix handling of server side tls alerts"
++- Rebase to include cel/nfsd-testing "NFSD: issue READs using O_DIRECT even if IO is misaligned"
++- NFSD: issue WRITEs using O_DIRECT even if IO is misaligned
+
 +* Thu Jul 24 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-11]
 +- Optimize NFS DIRECT's misaligned READ and WRITE support to return early if IO obviously misaligned or DIO-aligned.
 +- NFSD: filecache: only get DIO alignment attrs if NFSD_IO_DIRECT enabled
