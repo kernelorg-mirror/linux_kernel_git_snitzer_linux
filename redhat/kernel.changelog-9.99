@@ -1,3 +1,9 @@
++* Fri Aug 01 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-13]
++- Refine NFSD DIRECT's WRITE support further based on upstream review.
++- Improve {nfs,nfsd}_analyze_dio trace events for both NFSD and NFS to use common EVENT_CLASS for READ and WRITE.
++- Rebase to include all of NFS changes staged in Trond's linux-next branch for the v6.17 merge window.
++- Include "sunrpc: fix client side handling of tls alerts"
+
 +* Wed Jul 30 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-12]
 +- Rebase to include cel/nfsd-testing "sunrpc: fix handling of server side tls alerts"
 +- Rebase to include cel/nfsd-testing "NFSD: issue READs using O_DIRECT even if IO is misaligned"
