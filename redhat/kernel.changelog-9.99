@@ -1,3 +1,9 @@
++* Tue Aug 05 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-14]
++- Update all NFS and NFSD DIRECT code to not use iov_iter_is_aligned().
++- Add upstream changes to update block layer to remove bdev_iter_is_aligned and iov_iter_is_aligned.
++- Add "NFS: add basic STATX_DIOALIGN and STATX_DIO_READ_ALIGN support"
++- Drop "NFSD: handle unaligned DIO for NFS reexport"
+
 +* Fri Aug 01 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-13]
 +- Refine NFSD DIRECT's WRITE support further based on upstream review.
 +- Improve {nfs,nfsd}_analyze_dio trace events for both NFSD and NFS to use common EVENT_CLASS for READ and WRITE.
