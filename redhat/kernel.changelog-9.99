@@ -1,3 +1,6 @@
++* Thu Aug 07 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-15]
++- Improve "NFSD: issue WRITEs using O_DIRECT even if IO is misaligned" so default buffered IO unimpacted by DIO.
+
 +* Tue Aug 05 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-14]
 +- Update all NFS and NFSD DIRECT code to not use iov_iter_is_aligned().
 +- Add upstream changes to update block layer to remove bdev_iter_is_aligned and iov_iter_is_aligned.
