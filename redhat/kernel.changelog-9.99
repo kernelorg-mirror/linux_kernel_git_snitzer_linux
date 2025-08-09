@@ -1,3 +1,7 @@
++* Sat Aug 09 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-16]
++- Refine NFSD DIRECT's READ support further based on upstream review.
++- Fix other nits from upstream review of NFSD DIRECT.
+
 +* Thu Aug 07 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-15]
 +- Improve "NFSD: issue WRITEs using O_DIRECT even if IO is misaligned" so default buffered IO unimpacted by DIO.
 
