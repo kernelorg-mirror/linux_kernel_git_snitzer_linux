@@ -1,3 +1,9 @@
++* Fri Aug 15 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-17]
++- Reinstate use of iov_iter_aligned_bvec in terms of local helpers {nfsd,nfs}_iov_iter_aligned_bvec.
++- Add WARN_ON_ONCE if NFS DIRECT or NFSD DIRECT and underlying filesystem returns -EINVAL for misaligned IO.
++- Simplify NFS DIRECT's READ support to not expand the READ with DIO-aligned front-pad for a misaligned IO.
++- Eliminate NFS LOCALIO's support for falling back to NFSD to handle misaligned DIO READs.
+
 +* Sat Aug 09 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-16]
 +- Refine NFSD DIRECT's READ support further based on upstream review.
 +- Fix other nits from upstream review of NFSD DIRECT.
