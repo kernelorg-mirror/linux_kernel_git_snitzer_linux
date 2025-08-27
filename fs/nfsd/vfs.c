@@ -1375,13 +1375,9 @@ nfsd_analyze_write_dio(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	loff_t orig_end, middle_end, start_end, start_offset = offset;
 	ssize_t start_len = len;
 
-	if (WARN_ONCE(!nf->nf_dio_mem_align || !dio_blocksize,
-		      "%s: underlying filesystem has not provided DIO alignment info\n",
-		      __func__))
+	if (unlikely(!nf->nf_dio_mem_align || !dio_blocksize))
 		return false;
-	if (WARN_ONCE(dio_blocksize > PAGE_SIZE,
-		      "%s: underlying storage's dio_blocksize=%u > PAGE_SIZE=%lu\n",
-		      __func__, dio_blocksize, PAGE_SIZE))
+	if (unlikely(dio_blocksize > PAGE_SIZE))
 		return false;
 	if (unlikely(len < dio_blocksize))
 		return false;
