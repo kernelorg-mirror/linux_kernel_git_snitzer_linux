@@ -1204,7 +1204,7 @@ static bool nfsd_iov_iter_aligned_bvec(const struct iov_iter *i,
 		unsigned addr_mask, unsigned len_mask)
 {
 	const struct bio_vec *bvec = i->bvec;
-	unsigned skip = i->iov_offset;
+	size_t skip = i->iov_offset;
 	size_t size = i->count;
 
 	if (size & len_mask)
