@@ -1079,13 +1079,11 @@ struct nfsd_read_dio {
 	loff_t end;
 	unsigned long start_extra;
 	unsigned long end_extra;
-	struct page *start_extra_page;
 };
 
 static void init_nfsd_read_dio(struct nfsd_read_dio *read_dio)
 {
 	memset(read_dio, 0, sizeof(*read_dio));
-	read_dio->start_extra_page = NULL;
 }
 
 #define NFSD_READ_DIO_MIN_KB (32 << 10)
@@ -1121,23 +1119,13 @@ static bool nfsd_analyze_read_dio(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	/*
 	 * Any misaligned READ less than NFSD_READ_DIO_MIN_KB won't be expanded
-	 * to be DIO-aligned (this heuristic avoids excess work, like allocating
-	 * start_extra_page, for smaller IO that can generally already perform
-	 * well using buffered IO).
+	 * to be DIO-aligned (this heuristic avoids excess work, for smaller IO
+	 * that can generally already perform well using buffered IO).
 	 */
 	if ((read_dio->start_extra || read_dio->end_extra) &&
 	    (len < NFSD_READ_DIO_MIN_KB)) {
 		init_nfsd_read_dio(read_dio);
 		return false;
-	}
-
-	if (read_dio->start_extra) {
-		read_dio->start_extra_page = alloc_page(GFP_KERNEL);
-		if (WARN_ONCE(read_dio->start_extra_page == NULL,
-			      "%s: Unable to allocate start_extra_page\n", __func__)) {
-			init_nfsd_read_dio(read_dio);
-			return false;
-		}
 	}
 
 	/* Show original offset and count, and how it was expanded for DIO */
@@ -1162,11 +1150,10 @@ static ssize_t nfsd_complete_misaligned_read_dio(struct svc_rqst *rqstp,
 	if (!read_dio->start_extra && !read_dio->end_extra)
 		return host_err;
 
-	/* If nfsd_analyze_read_dio() allocated a start_extra_page it must
-	 * be removed from rqstp->rq_bvec[] to avoid returning unwanted data.
+	/* If nfsd_analyze_read_dio() found start_extra (front-pad) page needed it
+	 * must be removed from rqstp->rq_bvec[] to avoid returning unwanted data.
 	 */
-	if (read_dio->start_extra_page) {
-		__free_page(read_dio->start_extra_page);
+	if (read_dio->start_extra) {
 		*rq_bvec_numpages -= 1;
 		v = *rq_bvec_numpages;
 		memmove(rqstp->rq_bvec, rqstp->rq_bvec + 1,
@@ -1276,7 +1263,7 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			if (read_dio.start_extra) {
 				len = read_dio.start_extra;
 				bvec_set_page(&rqstp->rq_bvec[v],
-					      read_dio.start_extra_page,
+					      *(rqstp->rq_next_page++),
 					      len, PAGE_SIZE - len);
 				total -= len;
 				++v;
