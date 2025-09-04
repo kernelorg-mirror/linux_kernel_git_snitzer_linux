@@ -1,3 +1,19 @@
++* Wed Sep 03 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-18]
++- NFSD: Remove a few WARN_ON_ONCE from the misaligned DIO READ and WRITE paths
++- NFSD: pr_warn_ratelimited if EINVAL on misaligned READ and WRITE paths
++- NFSD: handle DIO WRITE -ENOTBLK return by falling back to using buffered IO.
++- NFSD: fix misaligned DIO READ to not use a start_extra_page
++- NFSD: use /end/ of rq_pages for front_pad page, simpler workaround for rpcrdma bug
++- NFSD: fix debugfs interfaces to no longer use UNSPECIFIED state, explicitly default to NFSD_IO_BUFFERED
++- NFSD: add Documentation/filesystems/nfs/nfsd-io-modes.rst
++- NFSD: various other cel/nfsd-next and cel/nfsd-testing commits
++- NFSv4: Don't clear capabilities that won't be reset
++- NFSv4: Clear the NFS_CAP_FS_LOCATIONS flag if it is not set
++- NFSv4: Clear NFS_CAP_OPEN_XOR and NFS_CAP_DELEGTIME if not supported
++- NFSv4: Clear the NFS_CAP_XATTR flag if not supported by the server
++- Revert "nfs/direct: add misaligned WRITE handling" due to write corruption with MLperf unet3d
++- sunrpc: call xs_sock_process_cmsg for all cmsg
+
 +* Fri Aug 15 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-17]
 +- Reinstate use of iov_iter_aligned_bvec in terms of local helpers {nfsd,nfs}_iov_iter_aligned_bvec.
 +- Add WARN_ON_ONCE if NFS DIRECT or NFSD DIRECT and underlying filesystem returns -EINVAL for misaligned IO.
