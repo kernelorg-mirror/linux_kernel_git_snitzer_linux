@@ -1,3 +1,10 @@
++* Mon Sep 08 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-19]
++- rebase from v3 to v4 of Keith Busch's DIO alignment refactoring that removes bdev_iter_is_aligned
++- rebase NFSD DIRECT ontop of Chuck Lever's "NFSD: Implement NFSD_IO_DIRECT for NFS READ"
++- refactor "NFSD: Implement NFSD_IO_DIRECT for NFS WRITE" to hopefully appease Chuck Lever
++- include NFS fixes for 6.17 (what will likely be tag: nfs-for-6.17-3)
++- NFSv4/flexfiles: Fix layout merge mirror check.
+
 +* Wed Sep 03 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-18]
 +- NFSD: Remove a few WARN_ON_ONCE from the misaligned DIO READ and WRITE paths
 +- NFSD: pr_warn_ratelimited if EINVAL on misaligned READ and WRITE paths
