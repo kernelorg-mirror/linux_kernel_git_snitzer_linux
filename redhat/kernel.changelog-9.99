@@ -1,3 +1,7 @@
++* Fri Sep 19 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-21]
++- Rebase to latest NFSD Direct READ code from cel/direct-io branch, which will hopefully land in v6.18
++- Fix a few issues in NFS Direct by rebasing to v11, which will hopefully land in v6.18
+
 +* Sat Sep 13 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-20]
 +- Remove nfs kernel module parameter 'localio_O_DIRECT_semantics'
 +- Push NFS client's misaligned DIO READ and WRITE handling down to NFS LOCALIO
