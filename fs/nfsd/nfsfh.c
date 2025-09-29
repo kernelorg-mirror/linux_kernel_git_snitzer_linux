@@ -700,6 +700,9 @@ __be32 fh_getattr(const struct svc_fh *fhp, struct kstat *stat)
 	};
 	u32 request_mask = STATX_BASIC_STATS;
 
+	if (d_is_reg(p.dentry))
+		request_mask |= (STATX_DIOALIGN | STATX_DIO_READ_ALIGN);
+
 	if (fhp->fh_maxsize == NFS4_FHSIZE)
 		request_mask |= (STATX_BTIME | STATX_CHANGE_COOKIE);
 
