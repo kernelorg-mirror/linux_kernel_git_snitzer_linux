@@ -1,3 +1,8 @@
++* Sat Oct 04 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-23]
++- Sync NFS thru tag nfs-for-6.18-1, but held off on taking the changes needed for NFS's DONTCACHE support.
++- Sync NFSD thru nfsd-next for 6.18, nfsd-testing and rebase NFSD Direct WRITE support.
++- Add "nvme-multipath: Skip nr_active increments in RETRY disposition" to fix imbalanced IO with queue-depth I/O policy.
+
 +* Wed Sep 24 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-22]
 +- Fix NFSD Direct READ support (test needs to be !page_len), Chuck keeps pushing completely untested broken code.
 
