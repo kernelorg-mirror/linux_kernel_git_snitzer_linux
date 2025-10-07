@@ -1,3 +1,11 @@
+++* Tue Oct 07 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-25]
++- Fix merge-gone-wrong in fs/nfsd/nfsfh.c:fh_getattr() by removing redundant/buggy check.
++- Improve NFSD Direct's EINVAL logging for misaligned DIO WRITE.
++- Restore 6.18's "NFSv4/flexfiles: Add support for striped layouts" et al now that flexfiles LOCALIO support is fixed.
++- SUNRPC: Improve "fragment too large" warning
++- sunrpc: account for TCP record marker in rq_bvec array when sending
++- sunrpc: add a slot to rqstp->rq_bvec for TCP record marker
+
 ++* Mon Oct 06 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-24]
 +- Revert 6.18's "NFSv4/flexfiles: Add support for striped layouts" and all deps in series, causes refcount issues with LOCALIO.
 
