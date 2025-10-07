@@ -1,3 +1,6 @@
+++* Mon Oct 06 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-24]
++- Revert 6.18's "NFSv4/flexfiles: Add support for striped layouts" and all deps in series, causes refcount issues with LOCALIO.
+
 +* Sat Oct 04 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-23]
 +- Sync NFS thru tag nfs-for-6.18-1, but held off on taking the changes needed for NFS's DONTCACHE support.
 +- Sync NFSD thru nfsd-next for 6.18, nfsd-testing and rebase NFSD Direct WRITE support.
