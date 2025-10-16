@@ -686,13 +686,13 @@ Summary: The Linux kernel
 %define with_debug_meta 0
 %define with_realtime 0
 %define with_automotive 0
-# The perf and bpftool bundled with the 6.12-stable kernel don't work
-# despite them building fine (at least on x86_64); so simply avoid
-# building them given it reduces buildroot deps required to build
-# packages that will go unused.
+
+%ifarch aarch64
+# FIXME: need to resolve buildroot deps to build on ARM
 %define with_perf 0
 %define with_libperf 0
 %define with_bpftool 0
+%endif
 
 # short-hand for "are we building base/non-debug variants of ...?"
 %if %{with_up} && %{with_base}
