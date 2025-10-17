@@ -1,6 +1,9 @@
++* Thu Oct 16 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-1]
++- Rebase all branches ontop of v6.12.53
+
 +* Thu Oct 16 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-0]
-++- Linux v6.12.53
-++- Cherry-pick all kernel-6.12.24/main kernel.changelog-9.99 commits to wipe slate clean.
++- Linux v6.12.53
++- Cherry-pick all kernel-6.12.24/main kernel.changelog-9.99 commits to wipe slate clean.
 
 ++* Wed Oct 15 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-26]
 +- Revert 6.18's "NFSv4/flexfiles: Add support for striped layouts" and all deps in series, causes regression with flexfiles TLS.
