@@ -1,3 +1,9 @@
++* Tue Oct 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-2]
++- Include NFS fixes from tag nfs-for-6.18-2
++- Include Trond's NFS fixes to not use RDMA if TLS
++- Include 6.18's "NFSv4/flexfiles: Add support for striped layouts" et al now that its clearly not why mtls wasn't working.
++- Refine NFSD Direct again by taking the latest code staged in cel/nfsd-testing
+
 +* Thu Oct 16 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-1]
 +- Rebase all branches ontop of v6.12.53
 
