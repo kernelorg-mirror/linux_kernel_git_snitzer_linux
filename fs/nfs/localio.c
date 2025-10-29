@@ -40,7 +40,6 @@ struct nfs_local_kiocb {
 	void (*aio_complete_work)(struct work_struct *);
 	struct nfsd_file	*localio;
 	/* Begin mostly DIO-specific members */
-	size_t                  end_len;
 	short int		end_iter_index;
 	atomic_t		n_iters;
 	bool			iter_is_dio_aligned[NFSLOCAL_MAX_IOS];
@@ -411,27 +410,8 @@ nfs_local_iters_setup_dio(struct nfs_local_kiocb *iocb, int rw,
 		++n_iters;
 	}
 
-	/* Setup misaligned end?
-	 * If so, the end is purposely setup to be issued using buffered IO
-	 * before the middle (which will use DIO, if DIO-aligned, with AIO).
-	 * This creates problems if/when the end results in short read or write.
-	 * So must save index and length of end to handle this corner case.
-	 */
-	if (local_dio->end_len) {
-		iov_iter_bvec(&iters[n_iters], rw, iocb->bvec, nvecs, len);
-		iocb->offset[n_iters] = local_dio->end_offset;
-		iov_iter_advance(&iters[n_iters],
-			local_dio->start_len + local_dio->middle_len);
-		iocb->iter_is_dio_aligned[n_iters] = false;
-		/* Save index and length of end */
-		iocb->end_iter_index = n_iters;
-		iocb->end_len = local_dio->end_len;
-		atomic_inc(&iocb->n_iters);
-		++n_iters;
-	}
-
-	/* Setup DIO-aligned middle to be issued last, to allow for
-	 * DIO with AIO completion (see nfs_local_call_{read,write}).
+	/* Setup DIO-aligned middle, if there is no misaligned end (below)
+	 * then AIO completion is used, see nfs_local_call_{read,write}
 	 */
 	iov_iter_bvec(&iters[n_iters], rw, iocb->bvec, nvecs, len);
 	if (local_dio->start_len)
@@ -448,7 +428,20 @@ nfs_local_iters_setup_dio(struct nfs_local_kiocb *iocb, int rw,
 			iocb->hdr->args.offset, len, local_dio);
 		return 0; /* no DIO-aligned IO possible */
 	}
+	iocb->end_iter_index = n_iters;
 	++n_iters;
+
+	/* Setup misaligned end? */
+	if (local_dio->end_len) {
+		iov_iter_bvec(&iters[n_iters], rw, iocb->bvec, nvecs, len);
+		iocb->offset[n_iters] = local_dio->end_offset;
+		iov_iter_advance(&iters[n_iters],
+			local_dio->start_len + local_dio->middle_len);
+		iocb->iter_is_dio_aligned[n_iters] = false;
+		atomic_inc(&iocb->n_iters);
+		iocb->end_iter_index = n_iters;
+		++n_iters;
+	}
 
 	return n_iters;
 }
@@ -636,27 +629,18 @@ static void nfs_local_call_read(struct work_struct *work)
 		/* DIO-aligned middle is always issued last with AIO completion */
 		if (iocb->iter_is_dio_aligned[i]) {
 			iocb->kiocb.ki_flags |= IOCB_DIRECT;
-			iocb->kiocb.ki_complete = nfs_local_read_aio_complete;
-			iocb->aio_complete_work = nfs_local_read_aio_complete_work;
+			/* Only use AIO completion if DIO-aligned segment is last */
+			if (i == iocb->end_iter_index) {
+				iocb->kiocb.ki_complete = nfs_local_read_aio_complete;
+				iocb->aio_complete_work = nfs_local_read_aio_complete_work;
+			}
 		}
 
 		iocb->kiocb.ki_pos = iocb->offset[i];
 		status = filp->f_op->read_iter(&iocb->kiocb, &iocb->iters[i]);
 		if (status != -EIOCBQUEUED) {
-			if (unlikely(status >= 0 && status < iocb->iters[i].count)) {
-				/* partial read */
-				if (i == iocb->end_iter_index) {
-					/* Must not account DIO partial end, otherwise (due
-					 * to end being issued before middle): the partial
-					 * read accounting in nfs_local_read_done()
-					 * would incorrectly advance hdr->args.offset
-					 */
-					status = 0;
-				} else {
-					/* Partial read at start or middle, force done */
-					force_done = true;
-				}
-			}
+			if (unlikely(status >= 0 && status < iocb->iters[i].count))
+				force_done = true; /* Partial read */
 			if (nfs_local_pgio_done(iocb, status, force_done)) {
 				nfs_local_read_iocb_done(iocb);
 				break;
@@ -854,27 +838,18 @@ static void nfs_local_call_write(struct work_struct *work)
 		/* DIO-aligned middle is always issued last with AIO completion */
 		if (iocb->iter_is_dio_aligned[i]) {
 			iocb->kiocb.ki_flags |= IOCB_DIRECT;
-			iocb->kiocb.ki_complete = nfs_local_write_aio_complete;
-			iocb->aio_complete_work = nfs_local_write_aio_complete_work;
+			/* Only use AIO completion if DIO-aligned segment is last */
+			if (i == iocb->end_iter_index) {
+				iocb->kiocb.ki_complete = nfs_local_write_aio_complete;
+				iocb->aio_complete_work = nfs_local_write_aio_complete_work;
+			}
 		}
 
 		iocb->kiocb.ki_pos = iocb->offset[i];
 		status = filp->f_op->write_iter(&iocb->kiocb, &iocb->iters[i]);
 		if (status != -EIOCBQUEUED) {
-			if (unlikely(status >= 0 && status < iocb->iters[i].count)) {
-				/* partial write */
-				if (i == iocb->end_iter_index) {
-					/* Must not account DIO partial end, otherwise (due
-					 * to end being issued before middle): the partial
-					 * write accounting in nfs_local_write_done()
-					 * would incorrectly advance hdr->args.offset
-					 */
-					status = 0;
-				} else {
-					/* Partial write at start or middle, force done */
-					force_done = true;
-				}
-			}
+			if (unlikely(status >= 0 && status < iocb->iters[i].count))
+				force_done = true; /* Partial write */
 			if (nfs_local_pgio_done(iocb, status, force_done)) {
 				nfs_local_write_iocb_done(iocb);
 				break;
