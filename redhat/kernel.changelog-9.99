@@ -1,3 +1,11 @@
++* Thu Oct 30 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-3]
++- Include NFSD fixes from tag nfsd-6.18-2
++- Include NFSD changes from nfsd-testing, including updated NFSD Direct v8
++- nfsd: avoid using DONTCACHE for misaligned DIO's buffered IO fallback
++- NFSD: add new NFSD_IO_DIRECT variants that may override stable_how
++- Include NFS Direct fixes for commit c817248fc831 ("nfs/localio: add proper O_DIRECT support for READ and WRITE").
++- xfs: eliminate lockdep false positives in xfs_attr_shortform_list
+
 +* Tue Oct 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-2]
 +- Include NFS fixes from tag nfs-for-6.18-2
 +- Include Trond's NFS fixes to not use RDMA if TLS
