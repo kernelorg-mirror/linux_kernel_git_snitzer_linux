@@ -1395,15 +1395,46 @@ no_dio:
 	return 1;
 }
 
+static void
+nfsd_init_write_kiocb_from_stable(u32 stable_floor,
+				  struct kiocb *kiocb,
+				  u32 *stable_how)
+{
+	if (stable_floor < *stable_how)
+		return; /* stable_how already set higher */
+
+	*stable_how = stable_floor;
+
+	switch (stable_floor) {
+	case NFS_FILE_SYNC:
+		/* persist data and timestamps */
+		kiocb->ki_flags |= IOCB_DSYNC | IOCB_SYNC;
+		break;
+	case NFS_DATA_SYNC:
+		/* persist data only */
+		kiocb->ki_flags |= IOCB_DSYNC;
+		break;
+	}
+}
+
 static noinline_for_stack int
 nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
-		  struct nfsd_file *nf, unsigned int nvecs,
+		  struct nfsd_file *nf, u32 *stable_how, unsigned int nvecs,
 		  unsigned long *cnt, struct kiocb *kiocb)
 {
 	struct nfsd_write_dio_seg segments[3];
+	u32 stable_floor = NFS_UNSTABLE;
 	struct file *file = nf->nf_file;
 	unsigned int nsegs, i;
 	ssize_t host_err;
+
+	if (nfsd_io_cache_write == NFSD_IO_DIRECT_WRITE_FILE_SYNC)
+		stable_floor = NFS_FILE_SYNC;
+	else if (nfsd_io_cache_write == NFSD_IO_DIRECT_WRITE_DATA_SYNC)
+		stable_floor = NFS_DATA_SYNC;
+	if (stable_floor != NFS_UNSTABLE)
+		nfsd_init_write_kiocb_from_stable(stable_floor, kiocb,
+						  stable_how);
 
 	nsegs = nfsd_write_dio_iters_init(nf, rqstp->rq_bvec, nvecs,
 					  kiocb, *cnt, segments);
@@ -1490,18 +1521,8 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		stable = NFS_UNSTABLE;
 	init_sync_kiocb(&kiocb, file);
 	kiocb.ki_pos = offset;
-	if (likely(!fhp->fh_use_wgather)) {
-		switch (stable) {
-		case NFS_FILE_SYNC:
-			/* persist data and timestamps */
-			kiocb.ki_flags |= IOCB_DSYNC | IOCB_SYNC;
-			break;
-		case NFS_DATA_SYNC:
-			/* persist data only */
-			kiocb.ki_flags |= IOCB_DSYNC;
-			break;
-		}
-	}
+	if (likely(!fhp->fh_use_wgather))
+		nfsd_init_write_kiocb_from_stable(stable, &kiocb, stable_how);
 
 	nvecs = xdr_buf_to_bvec(rqstp->rq_bvec, rqstp->rq_maxpages, payload);
 
@@ -1511,8 +1532,11 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	switch (nfsd_io_cache_write) {
 	case NFSD_IO_DIRECT:
-		host_err = nfsd_direct_write(rqstp, fhp, nf, nvecs,
-					     cnt, &kiocb);
+	case NFSD_IO_DIRECT_WRITE_DATA_SYNC:
+	case NFSD_IO_DIRECT_WRITE_FILE_SYNC:
+		host_err = nfsd_direct_write(rqstp, fhp, nf, stable_how,
+					     nvecs, cnt, &kiocb);
+		stable = *stable_how;
 		break;
 	case NFSD_IO_DONTCACHE:
 		if (file->f_op->fop_flags & FOP_DONTCACHE)
