@@ -25,18 +25,33 @@ Based on the configured settings, NFSD's IO will either be:
 - cached using page cache (NFSD_IO_BUFFERED=0)
 - cached but removed from page cache on completion (NFSD_IO_DONTCACHE=1)
 - not cached stable_how=NFS_UNSTABLE (NFSD_IO_DIRECT=2)
+- not cached, persisted to NFS_DATA_SYNC (NFSD_IO_DIRECT_WRITE_DATA_SYNC=3)
+- not cached, persisted to NFS_FILE_SYNC (NFSD_IO_DIRECT_WRITE_FILE_SYNC=4)
 
-To set an NFSD IO mode, write a supported value (0 - 2) to the
-corresponding IO operation's debugfs interface, e.g.::
+To set an NFSD IO mode, write a supported value (0 - 2 for
+io_cache_read, 0 - 4 for io_cache_write) to the corresponding IO
+operation's debugfs interface, e.g.::
 
   echo 2 > /sys/kernel/debug/nfsd/io_cache_read
-  echo 2 > /sys/kernel/debug/nfsd/io_cache_write
+  echo 4 > /sys/kernel/debug/nfsd/io_cache_write
 
 To check which IO mode NFSD is using for READ or WRITE, simply read the
 corresponding IO operation's debugfs interface, e.g.::
 
   cat /sys/kernel/debug/nfsd/io_cache_read
   cat /sys/kernel/debug/nfsd/io_cache_write
+
+NFSD_IO_DIRECT leaves an UNSTABLE WRITE for the client's COMMIT to
+persist. The two NFSD_IO_DIRECT_WRITE_*_SYNC modes instead persist every
+WRITE before replying, to at least NFS_DATA_SYNC or NFS_FILE_SYNC, and
+report that stable_how to the client; a client that asked for more is
+left alone. With NFSD_IO_DIRECT_WRITE_FILE_SYNC the client sends no
+COMMIT. This costs a flush on every WRITE: more than NFSD_IO_DIRECT
+when one COMMIT covers many WRITEs, about the same, without the COMMIT
+RPCs, when each COMMIT covers about one. On an export with the async
+option these two modes behave as NFSD_IO_DIRECT: nothing is persisted
+before replying, and the reply carries the stable_how the client
+requested.
 
 If you experiment with NFSD's IO modes on a recent kernel and have
 interesting results, please report them to linux-nfs@vger.kernel.org
