@@ -71,7 +71,7 @@ static int nfsd_io_cache_read_set(void *data, u64 val)
 	case NFSD_IO_DIRECT:
 		/*
 		 * Must disable splice_read when enabling
-		 * NFSD_IO_DONTCACHE.
+		 * NFSD_IO_DONTCACHE and NFSD_IO_DIRECT.
 		 */
 		nfsd_disable_splice_read = true;
 		nfsd_io_cache_read = val;
@@ -100,6 +100,9 @@ DEFINE_DEBUGFS_ATTRIBUTE(nfsd_io_cache_read_fops, nfsd_io_cache_read_get,
  * Contents:
  *   %0: NFS WRITE will use buffered IO
  *   %1: NFS WRITE will use dontcache (buffered IO w/ dropbehind)
+ *   %2: NFS WRITE will use direct IO with stable_how=NFS_UNSTABLE
+ *   %3: NFS WRITE will use direct IO with stable_how=NFS_DATA_SYNC
+ *   %4: NFS WRITE will use direct IO with stable_how=NFS_FILE_SYNC
  *
  * This setting takes immediate effect for all NFS versions,
  * all exports, and in all NFSD net namespaces.
@@ -119,6 +122,8 @@ static int nfsd_io_cache_write_set(void *data, u64 val)
 	case NFSD_IO_BUFFERED:
 	case NFSD_IO_DONTCACHE:
 	case NFSD_IO_DIRECT:
+	case NFSD_IO_DIRECT_WRITE_DATA_SYNC:
+	case NFSD_IO_DIRECT_WRITE_FILE_SYNC:
 		nfsd_io_cache_write = val;
 		/*
 		 * Adjust nfsd_io_cache_{read,write} to avoid
