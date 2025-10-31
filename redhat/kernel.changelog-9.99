@@ -1,3 +1,10 @@
++* Fri Oct 31 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-4]
++- Drop 3 of Chuck's NFSD Direct patches, overly complex and doesn't actually provide a benefit of dynamic alignment using lcm.
++- Drop "NFSD: Handle both offset and memory alignment for direct I/O"
++- Drop "NFSD: Combine direct I/O feasibility check with iterator setup"
++- Drop "NFSD: Refactor nfsd_vfs_write"
++- Rebase "NFSD: Handle kiocb->ki_flags correctly"
+
 +* Thu Oct 30 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-3]
 +- Include NFSD fixes from tag nfsd-6.18-2
 +- Include NFSD changes from nfsd-testing, including updated NFSD Direct v8
