@@ -1,3 +1,9 @@
+* Wed Nov 05 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-6]
+- Include NFSD changes from nfsd-testing, including updated NFSD Direct v10 with further cleanup From Christoph Hellwig.
+- Rebased "NFSD: add new NFSD_IO_DIRECT variants that may override stable_how" because Chuck didn't pick it up.
+- NFSD: add Documentation/filesystems/nfs/nfsd-io-modes.rst
+- Fix accounting bug in "nfs/localio: do not issue misaligned DIO out-of-order"
+
 +* Mon Nov 03 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-5]
 +- Include NFSD changes from nfsd-testing, including updated NFSD Direct v9
 +- nfs/localio: do not issue misaligned DIO out-of-order
