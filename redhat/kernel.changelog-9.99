@@ -1,3 +1,9 @@
+* Wed Nov 05 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-29]
+- Include NFSD changes from nfsd-testing, including updated NFSD Direct v10 with further cleanup From Christoph Hellwig.
+- Rebased "NFSD: add new NFSD_IO_DIRECT variants that may override stable_how" because Chuck didn't pick it up.
+- NFSD: add Documentation/filesystems/nfs/nfsd-io-modes.rst
+- nfs/localio: do not issue misaligned DIO out-of-order
+
 +* Fri Oct 31 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-28]
 +- Drop 3 of Chuck's NFSD Direct patches, overly complex and doesn't actually provide a benefit of dynamic alignment using lcm.
 +- Drop "NFSD: Handle both offset and memory alignment for direct I/O"
