@@ -1311,12 +1311,23 @@ nfsd_write_dio_iters_init(struct nfsd_file *nf, struct bio_vec *bvec,
 	unsigned int nsegs = 0;
 
 	/*
-	 * Check if direct I/O is feasible for this write request.
-	 * If alignments are not available, the write is too small,
-	 * or no alignment can be found, fall back to buffered I/O.
+	 * If the file system doesn't advertise any alignment requirements,
+	 * don't try to issue direct I/O.  Fall back to uncached buffered
+	 * I/O if possible because we'll assume it is not block based and
+	 * doesn't need read-modify-write cycles.
 	 */
-	if (unlikely(!mem_align || !offset_align) ||
-	    unlikely(total < max(offset_align, mem_align)))
+	if (unlikely(!mem_align || !offset_align)) {
+		if (nf->nf_file->f_op->fop_flags & FOP_DONTCACHE)
+			segments[0].flags |= IOCB_DONTCACHE;
+		goto no_dio;
+	}
+
+	/*
+	 * If the I/O is smaller than the larger of the memory and logical
+	 * offset alignment, it is like to require read-modify-write cycles.
+	 * Issue cached buffered I/O.
+	 */
+	if (unlikely(total < max(offset_align, mem_align)))
 		goto no_dio;
 
 	prefix_end = round_up(offset, offset_align);
@@ -1327,7 +1338,17 @@ nfsd_write_dio_iters_init(struct nfsd_file *nf, struct bio_vec *bvec,
 	middle = middle_end - prefix_end;
 	suffix = orig_end - middle_end;
 
-	if (!middle)
+	/*
+	 * If there is no aligned middle section, or aligned part is tiny,
+	 * issue a single buffered I/O write instead of splitting up the
+	 * write.
+	 *
+	 * Note: the middle section size here is random constant.  I suspect
+	 * when benchmarking it we'd actually end up with a significant larger
+	 * number, with the details depending on hardware.
+	 */
+	if (!middle ||
+	    ((prefix || suffix) && middle < PAGE_SIZE * 2))
 		goto no_dio;
 
 	if (prefix)
@@ -1343,16 +1364,24 @@ nfsd_write_dio_iters_init(struct nfsd_file *nf, struct bio_vec *bvec,
 	 * bvecs generated from RPC receive buffers are contiguous: After
 	 * the first bvec, all subsequent bvecs start at bv_offset zero
 	 * (page-aligned). Therefore, only the first bvec is checked.
+	 *
+	 * If the memory is not aligned at all, but we have a large enough
+	 * logical offset-aligned middle section, try to use uncached buffered
+	 * I/O for that to avoid cache pollution.  If not fall back to a single
+	 * cached buffered I/O for the entire write.
 	 */
-	if (iov_iter_bvec_offset(&segments[nsegs].iter) & (mem_align - 1))
-		goto no_dio;
-	segments[nsegs].flags |= IOCB_DIRECT;
+	if (iov_iter_bvec_offset(&segments[nsegs].iter) & (mem_align - 1)) {
+		if (!(nf->nf_file->f_op->fop_flags & FOP_DONTCACHE))
+			goto no_dio;
+		segments[nsegs].flags |= IOCB_DONTCACHE;
+	} else {
+		segments[nsegs].flags |= IOCB_DIRECT;
+	}
 	nsegs++;
 
 	if (suffix)
 		nfsd_write_dio_seg_init(&segments[nsegs++], bvec, nvecs, total,
 					prefix + middle, suffix, iocb);
-
 	return nsegs;
 
 no_dio:
@@ -1381,16 +1410,9 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		if (kiocb->ki_flags & IOCB_DIRECT)
 			trace_nfsd_write_direct(rqstp, fhp, kiocb->ki_pos,
 						segments[i].iter.count);
-		else {
+		else
 			trace_nfsd_write_vector(rqstp, fhp, kiocb->ki_pos,
 						segments[i].iter.count);
-			/*
-			 * Mark the I/O buffer as evict-able to reduce
-			 * memory contention.
-			 */
-			if (nf->nf_file->f_op->fop_flags & FOP_DONTCACHE)
-				kiocb->ki_flags |= IOCB_DONTCACHE;
-		}
 
 		host_err = vfs_iocb_iter_write(file, kiocb, &segments[i].iter);
 		if (host_err < 0)
