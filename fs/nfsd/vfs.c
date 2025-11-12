@@ -1297,6 +1297,9 @@ nfsd_write_dio_seg_init(struct nfsd_write_dio_seg *segment,
 	segment->flags = iocb->ki_flags;
 }
 
+static unsigned int nfsd_direct_misaligned_num_pages = 2;
+module_param(nfsd_direct_misaligned_num_pages, uint, 0644);
+
 static unsigned int
 nfsd_write_dio_iters_init(struct nfsd_file *nf, struct bio_vec *bvec,
 			  unsigned int nvecs, struct kiocb *iocb,
@@ -1348,7 +1351,8 @@ nfsd_write_dio_iters_init(struct nfsd_file *nf, struct bio_vec *bvec,
 	 * number, with the details depending on hardware.
 	 */
 	if (!middle ||
-	    ((prefix || suffix) && middle < PAGE_SIZE * 2))
+	    ((prefix || suffix) &&
+	     middle < PAGE_SIZE * nfsd_direct_misaligned_num_pages))
 		goto no_dio;
 
 	if (prefix)
