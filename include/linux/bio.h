@@ -325,8 +325,8 @@ static inline void bio_next_folio(struct folio_iter *fi, struct bio *bio)
 void bio_trim(struct bio *bio, sector_t offset, sector_t size);
 extern struct bio *bio_split(struct bio *bio, int sectors,
 			     gfp_t gfp, struct bio_set *bs);
-int bio_split_rw_at(struct bio *bio, const struct queue_limits *lim,
-		unsigned *segs, unsigned max_bytes);
+int bio_split_io_at(struct bio *bio, const struct queue_limits *lim,
+		unsigned *segs, unsigned max_bytes, unsigned len_align);
 
 /**
  * bio_next_split - get next @sectors from a bio, splitting if necessary
@@ -425,7 +425,15 @@ void __bio_add_page(struct bio *bio, struct page *page,
 		unsigned int len, unsigned int off);
 void bio_add_folio_nofail(struct bio *bio, struct folio *folio, size_t len,
 			  size_t off);
-int bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter);
+
+int bio_iov_iter_get_pages_aligned(struct bio *bio, struct iov_iter *iter,
+		unsigned len_align_mask);
+
+static inline int bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter)
+{
+	return bio_iov_iter_get_pages_aligned(bio, iter, 0);
+}
+
 void bio_iov_bvec_set(struct bio *bio, struct iov_iter *iter);
 void __bio_release_pages(struct bio *bio, bool mark_dirty);
 extern void bio_set_pages_dirty(struct bio *bio);
