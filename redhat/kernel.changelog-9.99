@@ -1,3 +1,6 @@
+* Tue Nov 18 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-8]
+- Include "VFS/knfsd: Use atomic_open" and prereqs from Ben Coddington.
+
 * Mon Nov 17 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-7]
 - Include NFS fixes from tag nfs-for-6.18-3
 - Include NFSD fixes from tag nfsd-6.18-3
