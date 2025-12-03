@@ -4,6 +4,7 @@
 
 #include <asm/fcntl.h>
 #include <linux/openat2.h>
+#include <linux/types.h>
 
 #define F_SETLEASE	(F_LINUX_SPECIFIC_BASE + 0)
 #define F_GETLEASE	(F_LINUX_SPECIFIC_BASE + 1)
@@ -85,9 +86,9 @@
 
 /* Argument structure for F_GETDELEG and F_SETDELEG */
 struct delegation {
-	uint32_t	d_flags;	/* Must be 0 */
-	uint16_t	d_type;		/* F_RDLCK, F_WRLCK, F_UNLCK */
-	uint16_t	__pad;		/* Must be 0 */
+	__u32	d_flags;	/* Must be 0 */
+	__u16	d_type;		/* F_RDLCK, F_WRLCK, F_UNLCK */
+	__u16	__pad;		/* Must be 0 */
 };
 
 /*
