@@ -1,3 +1,9 @@
+* Thu Dec 04 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-11]
+- Include NFS changes from what will be in tag nfs-for-6.19-1
+- Include NFSD changes from what will be in tag nfsd-6.19
+- Update Ben's VFS/NFSD atomic_open patchset to v4
+- Include "NFSD: interlock the use of NFSD_IO_DIRECT for NFS READ and WRITE"
+
 * Wed Nov 26 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-10]
 - nfs/localio: fix regression due to out-of-order __put_cred
 - nfs/localio: remove 61 byte hole from needless ____cacheline_aligned
