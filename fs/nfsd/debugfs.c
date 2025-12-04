@@ -63,6 +63,9 @@ static int nfsd_io_cache_read_set(void *data, u64 val)
 	switch (val) {
 	case NFSD_IO_BUFFERED:
 		nfsd_io_cache_read = NFSD_IO_BUFFERED;
+		/* Avoid needless buffered vs direct contention. */
+		if (nfsd_io_cache_write >= NFSD_IO_DIRECT)
+			nfsd_io_cache_write = NFSD_IO_DONTCACHE;
 		break;
 	case NFSD_IO_DONTCACHE:
 	case NFSD_IO_DIRECT:
@@ -72,6 +75,13 @@ static int nfsd_io_cache_read_set(void *data, u64 val)
 		 */
 		nfsd_disable_splice_read = true;
 		nfsd_io_cache_read = val;
+		/*
+		 * Elevate nfsd_io_cache_write if not already
+		 * configured to use NFSD_IO_DIRECT.
+		 */
+		if (nfsd_io_cache_read == NFSD_IO_DIRECT &&
+		    nfsd_io_cache_write < NFSD_IO_DIRECT)
+			nfsd_io_cache_write = NFSD_IO_DIRECT;
 		break;
 	default:
 		ret = -EINVAL;
@@ -110,6 +120,16 @@ static int nfsd_io_cache_write_set(void *data, u64 val)
 	case NFSD_IO_DONTCACHE:
 	case NFSD_IO_DIRECT:
 		nfsd_io_cache_write = val;
+		/*
+		 * Adjust nfsd_io_cache_{read,write} to avoid
+		 * needless buffered vs direct contention.
+		 */
+		if (nfsd_io_cache_write >= NFSD_IO_DIRECT &&
+		    nfsd_io_cache_read < NFSD_IO_DIRECT)
+			nfsd_io_cache_read = NFSD_IO_DIRECT;
+		else if (nfsd_io_cache_write < NFSD_IO_DIRECT &&
+			 nfsd_io_cache_read == NFSD_IO_DIRECT)
+			nfsd_io_cache_read = nfsd_io_cache_write;
 		break;
 	default:
 		ret = -EINVAL;
