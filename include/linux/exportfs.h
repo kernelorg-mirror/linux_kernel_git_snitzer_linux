@@ -10,6 +10,7 @@ struct inode;
 struct iomap;
 struct super_block;
 struct vfsmount;
+struct nfs4_acl;
 
 /* limit the handle size to NFSv4 handle size now */
 #define MAX_HANDLE_SZ 128
@@ -215,6 +216,12 @@ struct fid {
  * commit_metadata:
  *    @commit_metadata should commit metadata changes to stable storage.
  *
+ * setacl:
+ *    @setacl will use the nfs4_acl @acl to establish the acl using SETATTR.
+ *
+ * getacl:
+ *    @getacl will use the nfs4_acl @acl to retrieve the acl using GETATTR.
+ *
  * Locking rules:
  *    get_parent is called with child->d_inode->i_mutex down
  *    get_name is not (which is possibly inconsistent)
@@ -238,6 +245,8 @@ struct export_operations {
 			  bool write, u32 *device_generation);
 	int (*commit_blocks)(struct inode *inode, struct iomap *iomaps,
 			     int nr_iomaps, struct iattr *iattr);
+	int (*setacl)(struct inode *inode, struct nfs4_acl *acl);
+	int (*getacl)(struct inode *inode, struct nfs4_acl *acl);
 #define	EXPORT_OP_NOWCC			(0x1) /* don't collect v3 wcc data */
 #define	EXPORT_OP_NOSUBTREECHK		(0x2) /* no subtree checking */
 #define	EXPORT_OP_CLOSE_BEFORE_UNLINK	(0x4) /* close files before unlink */
