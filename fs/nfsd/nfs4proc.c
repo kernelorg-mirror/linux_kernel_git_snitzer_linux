@@ -206,6 +206,9 @@ nfsd4_vfs_create(struct svc_fh *fhp, struct dentry *child,
 	int oflags;
 
 	oflags = O_CREAT | O_LARGEFILE;
+	if (nfsd4_create_is_exclusive(open->op_createmode))
+		oflags |= O_EXCL;
+
 	switch (open->op_share_access & NFS4_SHARE_ACCESS_BOTH) {
 	case NFS4_SHARE_ACCESS_WRITE:
 		oflags |= O_WRONLY;
@@ -1285,7 +1288,7 @@ nfsd4_write(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	write->wr_how_written = write->wr_stable_how;
 	status = nfsd_vfs_write(rqstp, &cstate->current_fh, nf,
 				write->wr_offset, &write->wr_payload,
-				&cnt, write->wr_how_written,
+				&cnt, &write->wr_how_written,
 				(__be32 *)write->wr_verifier.data);
 	nfsd_file_put(nf);
 
