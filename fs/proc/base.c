@@ -2057,7 +2057,8 @@ void pid_update_inode(struct task_struct *task, struct inode *inode)
  * performed a setuid(), etc.
  *
  */
-static int pid_revalidate(struct dentry *dentry, unsigned int flags)
+static int pid_revalidate(struct inode *dir, const struct qstr *name,
+			  struct dentry *dentry, unsigned int flags)
 {
 	struct inode *inode;
 	struct task_struct *task;
@@ -2190,7 +2191,8 @@ static int dname_to_vma_addr(struct dentry *dentry,
 	return 0;
 }
 
-static int map_files_d_revalidate(struct dentry *dentry, unsigned int flags)
+static int map_files_d_revalidate(struct inode *dir, const struct qstr *name,
+				  struct dentry *dentry, unsigned int flags)
 {
 	unsigned long vm_start, vm_end;
 	bool exact_vma_exists = false;
