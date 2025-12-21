@@ -1,3 +1,7 @@
+* Sat Dec 20 2025 Mike Snitzer <snitzer@kernel.org> [6.12.63-0]
+- Linux v6.12.63
+- Cherry-pick all kernel-6.12.53/main kernel.changelog-9.99 commits to wipe slate clean.
+
 * Thu Dec 18 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-12]
 - Drop NFS support for directory delegations that was part of nfs-for-6.19-1 tag that was merged for 6.19.
 
