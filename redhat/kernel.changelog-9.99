@@ -1,3 +1,7 @@
+* Sun Dec 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.63-1]
+- Rebase all branches ontop of v6.12.63
+- Add a handful of mm/filemap fixes to kernel-6.12.63/mm branch
+
 * Sat Dec 20 2025 Mike Snitzer <snitzer@kernel.org> [6.12.63-0]
 - Linux v6.12.63
 - Cherry-pick all kernel-6.12.53/main kernel.changelog-9.99 commits to wipe slate clean.
