@@ -105,7 +105,7 @@ static struct rpc_task *_nfs41_proc_sequence(struct nfs_client *clp,
 		bool is_privileged);
 static int nfs41_test_stateid(struct nfs_server *, const nfs4_stateid *,
 			      const struct cred *);
-static int nfs41_free_stateid(struct nfs_server *, const nfs4_stateid *,
+static int nfs41_free_stateid(struct nfs_server *, nfs4_stateid *,
 			      const struct cred *, bool);
 #endif
 
@@ -186,6 +186,9 @@ static int nfs4_map_errors(int err)
 		return -EBUSY;
 	case -NFS4ERR_NOT_SAME:
 		return -ENOTSYNC;
+	case -ENETDOWN:
+	case -ENETUNREACH:
+		break;
 	default:
 		dprintk("%s could not handle NFSv4 error %d\n",
 				__func__, -err);
@@ -660,6 +663,15 @@ nfs4_async_handle_exception(struct rpc_task *task, struct nfs_server *server,
 {
 	struct nfs_client *clp = server->nfs_client;
 	int ret;
+
+	if ((task->tk_rpc_status == -ENETDOWN ||
+	     task->tk_rpc_status == -ENETUNREACH) &&
+	    task->tk_flags & RPC_TASK_NETUNREACH_FATAL) {
+		exception->delay = 0;
+		exception->recovering = 0;
+		exception->retry = 0;
+		return -EIO;
+	}
 
 	ret = nfs4_do_handle_exception(server, errorcode, exception);
 	if (exception->delay) {
@@ -2884,16 +2896,14 @@ static int nfs40_open_expired(struct nfs4_state_owner *sp, struct nfs4_state *st
 }
 
 static int nfs40_test_and_free_expired_stateid(struct nfs_server *server,
-					       const nfs4_stateid *stateid,
-					       const struct cred *cred)
+					       nfs4_stateid *stateid, const struct cred *cred)
 {
 	return -NFS4ERR_BAD_STATEID;
 }
 
 #if defined(CONFIG_NFS_V4_1)
 static int nfs41_test_and_free_expired_stateid(struct nfs_server *server,
-					       const nfs4_stateid *stateid,
-					       const struct cred *cred)
+					       nfs4_stateid *stateid, const struct cred *cred)
 {
 	int status;
 
@@ -2902,6 +2912,7 @@ static int nfs41_test_and_free_expired_stateid(struct nfs_server *server,
 		break;
 	case NFS4_INVALID_STATEID_TYPE:
 	case NFS4_SPECIAL_STATEID_TYPE:
+	case NFS4_FREED_STATEID_TYPE:
 		return -NFS4ERR_BAD_STATEID;
 	case NFS4_REVOKED_STATEID_TYPE:
 		goto out_free;
@@ -9604,7 +9615,7 @@ static void nfs41_sequence_call_done(struct rpc_task *task, void *data)
 		return;
 
 	trace_nfs4_sequence(clp, task->tk_status);
-	if (task->tk_status < 0 && !task->tk_client->cl_shutdown) {
+	if (task->tk_status < 0 && clp->cl_cons_state >= 0) {
 		dprintk("%s ERROR %d\n", __func__, task->tk_status);
 		if (refcount_read(&clp->cl_count) == 1)
 			return;
@@ -10597,7 +10608,7 @@ static const struct rpc_call_ops nfs41_free_stateid_ops = {
  * Note: this function is always asynchronous.
  */
 static int nfs41_free_stateid(struct nfs_server *server,
-		const nfs4_stateid *stateid,
+		nfs4_stateid *stateid,
 		const struct cred *cred,
 		bool privileged)
 {
@@ -10637,6 +10648,7 @@ static int nfs41_free_stateid(struct nfs_server *server,
 	if (IS_ERR(task))
 		return PTR_ERR(task);
 	rpc_put_task(task);
+	stateid->type = NFS4_FREED_STATEID_TYPE;
 	return 0;
 }
 
@@ -10803,12 +10815,14 @@ static const struct nfs4_minor_version_ops nfs_v4_2_minor_ops = {
 		| NFS_CAP_OFFLOAD_CANCEL
 		| NFS_CAP_COPY_NOTIFY
 		| NFS_CAP_DEALLOCATE
+		| NFS_CAP_ZERO_RANGE
 		| NFS_CAP_SEEK
 		| NFS_CAP_LAYOUTSTATS
 		| NFS_CAP_CLONE
 		| NFS_CAP_LAYOUTERROR
 		| NFS_CAP_READ_PLUS
-		| NFS_CAP_MOVEABLE,
+		| NFS_CAP_MOVEABLE
+		| NFS_CAP_OFFLOAD_STATUS,
 	.init_client = nfs41_init_client,
 	.shutdown_client = nfs41_shutdown_client,
 	.match_stateid = nfs41_match_stateid,
