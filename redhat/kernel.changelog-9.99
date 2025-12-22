@@ -1,3 +1,6 @@
+* Sun Dec 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.63-2]
+- Port mm changes through v6.15 with focus on filemap.c page-writeback.c huge_memory.c truncate.c shmem.c
+
 * Sun Dec 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.63-1]
 - Rebase all branches ontop of v6.12.63
 - Add a handful of mm/filemap fixes to kernel-6.12.63/mm branch
