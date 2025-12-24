@@ -7,16 +7,12 @@ Fixes gettid() being unavailable.  And also fix link failure due to
 missing -lpthread.
 
 Signed-off-by: Mike Snitzer <snitzer@kernel.org>
----
- tools/tracing/rtla/Makefile.config  | 6 +++++-
- tools/tracing/rtla/src/timerlat_u.c | 8 ++++++++
- 2 files changed, 13 insertions(+), 1 deletion(-)
 
 diff --git a/tools/tracing/rtla/Makefile.config b/tools/tracing/rtla/Makefile.config
-index 5f8c286712d4..8fae27d5b981 100644
+index 07ff5e8f3006..3a70afe37502 100644
 --- a/tools/tracing/rtla/Makefile.config
 +++ b/tools/tracing/rtla/Makefile.config
-@@ -7,7 +7,7 @@ LIBTRACEFS_MIN_VERSION = 1.6
+@@ -15,7 +15,7 @@ endif
  
  define lib_setup
    $(eval LIB_INCLUDES += $(shell sh -c "$(PKG_CONFIG) --cflags lib$(1)"))
@@ -25,8 +21,8 @@ index 5f8c286712d4..8fae27d5b981 100644
    $(eval EXTLIBS += $(shell sh -c "$(PKG_CONFIG) --libs-only-l lib$(1)"))
  endef
  
-@@ -43,6 +43,10 @@ else
-   $(info libtracefs is missing. Please install libtracefs-dev/libtracefs-devel)
+@@ -103,6 +103,10 @@ ifeq ($(BUILD_BPF_SKEL),1)
+   EXTLIBS += -lbpf
  endif
  
 +ifeq ($(feature-gettid), 1)
@@ -61,6 +57,3 @@ index 01dbf9a6b5a5..0e01e199bc57 100644
  /*
   * This is the user-space main for the tool timerlatu/ threads.
   *
--- 
-2.44.0
-
