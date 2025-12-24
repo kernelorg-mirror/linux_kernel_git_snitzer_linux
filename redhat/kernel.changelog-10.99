@@ -1,3 +1,7 @@
+Tue Dec 23 2025 Mike Snitzer <snitzer@kernel.org> [6.18.2-1]
+- Rebase all branches ontop of v6.18.2
+- Revert some recent redhat/kernel.spec.template advances relative to linking in-tree cpupower, must revisit
+
 * Thu Dec 18 2025 Justin M. Forbes <jforbes@fedoraproject.org> [6.18.2-0]
 - Add new configs for 6.18.2 (Justin M. Forbes)
 - Linux v6.18.2
