@@ -750,6 +750,7 @@ Summary: The Linux kernel
 %define with_debug 0
 %define with_realtime 0
 %define with_automotive 0
+%define with_ynl 0
 
 # short-hand for "are we building base/non-debug variants of ...?"
 %if %{with_stock} && %{with_base}
@@ -909,12 +910,12 @@ BuildRequires: clang llvm-devel fuse-devel zlib-devel binutils-devel python3-doc
 %ifarch x86_64 riscv64
 BuildRequires: lld
 %endif
-BuildRequires: libasan-static
+#BuildRequires: libasan-static
 BuildRequires: libcap-devel libcap-ng-devel rsync libmnl-devel libxml2-devel
 BuildRequires: liburing-devel
 BuildRequires: libubsan
 BuildRequires: numactl-devel
-BuildRequires: xxd
+#BuildRequires: xxd
 %endif
 BuildConflicts: rhbuildsys(DiskFree) < 500Mb
 %if %{with_debuginfo}
