@@ -530,8 +530,7 @@ nfs_local_pgio_init(struct nfs_pgio_header *hdr,
 		hdr->task.tk_start = ktime_get();
 }
 
-static bool
-nfs_local_pgio_done(struct nfs_local_kiocb *iocb, long status, bool force)
+static bool nfs_local_pgio_done(struct nfs_local_kiocb *iocb, long status)
 {
 	struct nfs_pgio_header *hdr = iocb->hdr;
 
@@ -545,9 +544,6 @@ nfs_local_pgio_done(struct nfs_local_kiocb *iocb, long status, bool force)
 		hdr->res.op_status = nfs_localio_errno_to_nfs4_stat(status);
 		hdr->task.tk_status = status;
 	}
-
-	if (force)
-		return true;
 
 	BUG_ON(atomic_read(&iocb->n_iters) <= 0);
 	return atomic_dec_and_test(&iocb->n_iters);
@@ -664,7 +660,7 @@ static void nfs_local_read_aio_complete(struct kiocb *kiocb, long ret)
 		container_of(kiocb, struct nfs_local_kiocb, kiocb);
 
 	/* AIO completion of DIO read should always be last to complete */
-	if (unlikely(!nfs_local_pgio_done(iocb, ret, false)))
+	if (unlikely(!nfs_local_pgio_done(iocb, ret)))
 		return;
 
 	nfs_local_pgio_aio_complete(iocb); /* Calls nfs_local_read_aio_complete_work */
@@ -698,7 +694,7 @@ static void nfs_local_call_read(struct work_struct *work)
 		if (status == -EIOCBQUEUED)
 			continue;
 		/* Break on completion, errors, or short reads */
-		if (nfs_local_pgio_done(iocb, status, false) || status < 0 ||
+		if (nfs_local_pgio_done(iocb, status) || status < 0 ||
 		    (size_t)status < iov_iter_count(&iocb->iters[i])) {
 			nfs_local_read_iocb_done(iocb);
 			break;
@@ -855,7 +851,7 @@ static void nfs_local_write_aio_complete(struct kiocb *kiocb, long ret)
 		container_of(kiocb, struct nfs_local_kiocb, kiocb);
 
 	/* AIO completion of DIO write should always be last to complete */
-	if (unlikely(!nfs_local_pgio_done(iocb, ret, false)))
+	if (unlikely(!nfs_local_pgio_done(iocb, ret)))
 		return;
 
 	nfs_local_pgio_aio_complete(iocb); /* Calls nfs_local_write_aio_complete_work */
@@ -893,7 +889,7 @@ static void nfs_local_call_write(struct work_struct *work)
 		if (status == -EIOCBQUEUED)
 			continue;
 		/* Break on completion, errors, or short writes */
-		if (nfs_local_pgio_done(iocb, status, false) || status < 0 ||
+		if (nfs_local_pgio_done(iocb, status) || status < 0 ||
 		    (size_t)status < iov_iter_count(&iocb->iters[i])) {
 			nfs_local_write_iocb_done(iocb);
 			break;
