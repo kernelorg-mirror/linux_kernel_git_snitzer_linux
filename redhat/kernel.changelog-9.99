@@ -1,3 +1,8 @@
+* Mon Jan 05 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-3]
+- Revert v6.15-ish mm backport, too risky, was helpful exercise and identified a missing DONTCACHE fix
+- Include "mm/filemap: fix miscalculated file range for filemap_fdatawrite_range_kick()"
+- Include various NFS/localio fixes.
+
 * Sun Dec 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.63-2]
 - Port mm changes through v6.15 with focus on filemap.c page-writeback.c huge_memory.c truncate.c shmem.c
 
