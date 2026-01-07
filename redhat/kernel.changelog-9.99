@@ -1,3 +1,6 @@
+* Tue Jan 06 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-4]
+- Include "NFS: Fix a deadlock involving nfs_release_folio()"
+
 * Mon Jan 05 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-3]
 - Revert v6.15-ish mm backport, too risky, was helpful exercise and identified a missing DONTCACHE fix
 - Include "mm/filemap: fix miscalculated file range for filemap_fdatawrite_range_kick()"
