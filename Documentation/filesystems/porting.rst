@@ -1322,3 +1322,12 @@ When vfs_mkdir() returns an error, and so both dputs() the original
 dentry and doesn't provide a replacement, it also unlocks the parent.
 Consequently the return value from vfs_mkdir() can be passed to
 end_creating() and the parent will be unlocked precisely when necessary.
+
+---
+
+**mandatory**
+
+The ->setlease() file_operation must now be explicitly set in order to provide
+support for leases. When set to NULL, the kernel will now return -EINVAL to
+attempts to set a lease. Filesystems that wish to use the kernel-internal lease
+implementation should set it to generic_setlease().
