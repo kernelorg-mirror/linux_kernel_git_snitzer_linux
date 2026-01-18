@@ -4101,7 +4101,7 @@ EXPORT_SYMBOL(user_path_create);
 /**
  * dentry_create - Create and open a file
  * @path: path to create
- * @flags: O_ flags
+ * @flags: O\_ flags
  * @mode: mode bits for new file
  * @cred: credentials to use
  *
@@ -4112,7 +4112,7 @@ EXPORT_SYMBOL(user_path_create);
  * the new file is to be created. The parent directory and the
  * negative dentry must reside on the same filesystem instance.
  *
- * On success, returns a "struct file *". Otherwise a ERR_PTR
+ * On success, returns a ``struct file *``. Otherwise an ERR_PTR
  * is returned.
  */
 struct file *dentry_create(struct path *path, int flags, umode_t mode,
