@@ -563,9 +563,6 @@ static int nfs_end_delegation_return(struct inode *inode,
 	unsigned int mode = O_WRONLY | O_RDWR;
 	int err = 0;
 
-	if (delegation == NULL)
-		return 0;
-
 	if (!issync)
 		mode |= O_NONBLOCK;
 	/* Recall of any remaining application leases */
