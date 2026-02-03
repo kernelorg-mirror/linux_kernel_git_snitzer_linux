@@ -4924,7 +4924,7 @@ static void nfs4_proc_rename_setup(struct rpc_message *msg,
 	if (new_inode)
 		nfs4_inode_return_delegation(new_inode);
 	msg->rpc_proc = &nfs4_procedures[NFSPROC4_CLNT_RENAME];
-	res->server = server,
+	res->server = server;
 	nfs4_init_sequence(server->nfs_client, &arg->seq_args,
 			   &res->seq_res, 1, 0);
 }
