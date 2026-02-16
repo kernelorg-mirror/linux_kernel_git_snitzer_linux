@@ -1,3 +1,11 @@
+* Mon Feb 16 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-6]
+- Include most NFS changes from nfs-for-6.19-2 and nfs-for-7.0-1
+- nfs-for-7.0-1 provides the ability to disable NFS v4.0, use it.
+- Include most NFSD changes from nfsd-6.19-2, nfsd-6.19-3 and nfsd-7.0
+- nfsd-7.0 includes NFS POSIX ACL changes that are best to rebase NFSv4 ACL reexport passthru changes on.
+- did not include Jeff's NFSD dynamic thread control changes that went into nfsd-7.0
+- Include Ben's latest atomic_open changes from vfs-7.0-rc1.atomic_open
+
 * Sat Jan 31 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-5]
 - turn off CONFIG_PSI_DEFAULT_DISABLED
 - enable CONFIG_LATENCYTOP
