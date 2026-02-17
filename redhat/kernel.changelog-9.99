@@ -1,3 +1,6 @@
+* Mon Feb 16 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-7]
+- Include nfs4_acl passthru support for NFS reexport
+
 * Mon Feb 16 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-6]
 - Include most NFS changes from nfs-for-6.19-2 and nfs-for-7.0-1
 - nfs-for-7.0-1 provides the ability to disable NFS v4.0, use it.
