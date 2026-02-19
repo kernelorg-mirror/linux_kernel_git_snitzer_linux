@@ -538,8 +538,9 @@ nfsd4_decode_fattr4(struct nfsd4_compoundargs *argp, u32 *bmval, u32 bmlen,
 		iattr->ia_mtime.tv_sec = modify.seconds;
 		iattr->ia_mtime.tv_nsec = modify.nseconds;
 		iattr->ia_ctime.tv_sec = modify.seconds;
-		iattr->ia_ctime.tv_nsec = modify.seconds;
-		iattr->ia_valid |= ATTR_CTIME | ATTR_MTIME | ATTR_MTIME_SET | ATTR_DELEG;
+		iattr->ia_ctime.tv_nsec = modify.nseconds;
+		iattr->ia_valid |= ATTR_CTIME | ATTR_CTIME_SET |
+				   ATTR_MTIME | ATTR_MTIME_SET | ATTR_DELEG;
 	}
 
 	/* request sanity: did attrlist4 contain the expected number of words? */
@@ -1801,7 +1802,7 @@ nfsd4_decode_layoutcommit(struct nfsd4_compoundargs *argp,
 	status = nfsd4_decode_stateid4(argp, &lcp->lc_sid);
 	if (status)
 		return status;
-	if (xdr_stream_decode_u32(argp->xdr, &lcp->lc_newoffset) < 0)
+	if (xdr_stream_decode_bool(argp->xdr, &lcp->lc_newoffset) < 0)
 		return nfserr_bad_xdr;
 	if (lcp->lc_newoffset) {
 		if (xdr_stream_decode_u64(argp->xdr, &lcp->lc_last_wr) < 0)
@@ -2487,8 +2488,10 @@ nfsd4_decode_compound(struct nfsd4_compoundargs *argp)
 
 	if (xdr_stream_decode_u32(argp->xdr, &argp->minorversion) < 0)
 		return false;
-	if (xdr_stream_decode_u32(argp->xdr, &argp->opcnt) < 0)
+	if (xdr_stream_decode_u32(argp->xdr, &argp->client_opcnt) < 0)
 		return false;
+	argp->opcnt = min_t(u32, argp->client_opcnt,
+			    NFSD_MAX_OPS_PER_COMPOUND);
 
 	if (argp->opcnt > ARRAY_SIZE(argp->iops)) {
 		argp->ops = vcalloc(argp->opcnt, sizeof(*argp->ops));
@@ -2627,10 +2630,8 @@ static __be32 nfsd4_encode_components_esc(struct xdr_stream *xdr, char sep,
 	__be32 *p;
 	__be32 pathlen;
 	int pathlen_offset;
-	int strlen, count=0;
 	char *str, *end, *next;
-
-	dprintk("nfsd4_encode_components(%s)\n", components);
+	int count = 0;
 
 	pathlen_offset = xdr->buf->len;
 	p = xdr_reserve_space(xdr, 4);
@@ -2657,9 +2658,8 @@ static __be32 nfsd4_encode_components_esc(struct xdr_stream *xdr, char sep,
 			for (; *end && (*end != sep); end++)
 				/* find sep or end of string */;
 
-		strlen = end - str;
-		if (strlen) {
-			if (xdr_stream_encode_opaque(xdr, str, strlen) < 0)
+		if (end > str) {
+			if (xdr_stream_encode_opaque(xdr, str, end - str) < 0)
 				return nfserr_resource;
 			count++;
 		} else
@@ -2938,6 +2938,12 @@ struct nfsd4_fattr_args {
 
 typedef __be32(*nfsd4_enc_attr)(struct xdr_stream *xdr,
 				const struct nfsd4_fattr_args *args);
+
+static __be32 nfsd4_encode_fattr4__inval(struct xdr_stream *xdr,
+					 const struct nfsd4_fattr_args *args)
+{
+	return nfserr_inval;
+}
 
 static __be32 nfsd4_encode_fattr4__noop(struct xdr_stream *xdr,
 					const struct nfsd4_fattr_args *args)
@@ -3561,6 +3567,8 @@ static const nfsd4_enc_attr nfsd4_enc_fattr4_encode_ops[] = {
 
 	[FATTR4_MODE_UMASK]		= nfsd4_encode_fattr4__noop,
 	[FATTR4_XATTR_SUPPORT]		= nfsd4_encode_fattr4_xattr_support,
+	[FATTR4_TIME_DELEG_ACCESS]	= nfsd4_encode_fattr4__inval,
+	[FATTR4_TIME_DELEG_MODIFY]	= nfsd4_encode_fattr4__inval,
 	[FATTR4_OPEN_ARGUMENTS]		= nfsd4_encode_fattr4_open_arguments,
 };
 
@@ -5065,7 +5073,7 @@ nfsd4_encode_sequence(struct nfsd4_compoundres *resp, __be32 nfserr,
 		return nfserr;
 	/* Note slotid's are numbered from zero: */
 	/* sr_highest_slotid */
-	nfserr = nfsd4_encode_slotid4(xdr, seq->maxslots - 1);
+	nfserr = nfsd4_encode_slotid4(xdr, seq->maxslots_response - 1);
 	if (nfserr != nfs_ok)
 		return nfserr;
 	/* sr_target_highest_slotid */
