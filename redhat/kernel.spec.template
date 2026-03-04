@@ -1997,7 +1997,15 @@ cp -a %{SOURCE1} .
 ApplyOptionalPatch patch-%{patchversion}-redhat.patch
 
 %if "%{?dist}" == ".el8"
+# Check if gettid is MISSING from unistd_ext.h
+%define gettid_missing %( \
+    if [ ! -f /usr/include/bits/unistd_ext.h ] || \
+	 ! grep -q "gettid" /usr/include/bits/unistd_ext.h 2>/dev/null; \
+    then echo 1; else echo 0; fi )
+
+%if %{gettid_missing}
 ApplyPatch tools-tracing-rtla-fix-el8-compiler-errors.patch
+%endif
 %endif
 
 %endif
