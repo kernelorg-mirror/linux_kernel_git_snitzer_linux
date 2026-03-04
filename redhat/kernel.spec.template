@@ -1621,6 +1621,18 @@ This package provides essential kernel modules for the %{?2:%{2}-}core kernel pa
 # this macro creates a kernel-<subpackage> meta package.
 #	%%kernel_meta_package <subpackage>
 #
+%define do_kernel_meta_package() \
+%package %{1}\
+summary: kernel meta-package for the %{1} kernel\
+Requires: kernel-%{1}-core-uname-r = %{KVERREL}%{uname_suffix %{1}}\
+Requires: kernel-%{1}-modules-uname-r = %{KVERREL}%{uname_suffix %{1}}\
+Requires: kernel-%{1}-modules-core-uname-r = %{KVERREL}%{uname_suffix %{1}}\
+%( [ "%{1}" = "rt" ] || [ "%{1}" = "rt-debug" ] && echo "Requires: realtime-setup" )\
+Provides: installonlypkg(kernel)\
+%description %{1}\
+The meta-package for the %{1} kernel\
+%{nil}
+
 %if "%{?dist}" == ".el8"
 # Otherwise .el8 errors with:
 # error: Too many levels of recursion in macro expansion. It is likely caused by recursive macro declaration.
@@ -1628,19 +1640,7 @@ This package provides essential kernel modules for the %{?2:%{2}-}core kernel pa
 # error: line 1848: %kernel_variant_package
 %define kernel_meta_package() %{nil}
 %else
-%define kernel_meta_package() \
-%package %{1}\
-summary: kernel meta-package for the %{1} kernel\
-Requires: kernel-%{1}-core-uname-r = %{KVERREL}%{uname_suffix %{1}}\
-Requires: kernel-%{1}-modules-uname-r = %{KVERREL}%{uname_suffix %{1}}\
-Requires: kernel-%{1}-modules-core-uname-r = %{KVERREL}%{uname_suffix %{1}}\
-%if "%{1}" == "rt" || "%{1}" == "rt-debug"\
-Requires: realtime-setup\
-%endif\
-Provides: installonlypkg(kernel)\
-%description %{1}\
-The meta-package for the %{1} kernel\
-%{nil}
+%define kernel_meta_package() %{do_kernel_meta_package %{1}}
 %endif
 
 %if %{with_realtime}
