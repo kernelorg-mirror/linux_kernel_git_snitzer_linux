@@ -1,3 +1,6 @@
+* Tue Mar 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-2]
+- Include "sunrpc: fix TLS connect_worker rpc_clnt lifetime UAF" to address TLS-induced cred crashes.
+
 * Thu Mar 05 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-1]
 - Rebase all branches ontop of v6.12.76
 
