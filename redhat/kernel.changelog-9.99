@@ -1,3 +1,6 @@
+* Wed Mar 11 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-3]
+- Replace 6.12.76-2's fix with Ben's "sunrpc: refactor TLS transport to remove rpc_clnt dependency".
+
 * Tue Mar 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-2]
 - Include "sunrpc: fix TLS connect_worker rpc_clnt lifetime UAF" to address TLS-induced cred crashes.
 
