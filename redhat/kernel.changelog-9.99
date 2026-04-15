@@ -1,3 +1,7 @@
+* Wed Apr 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-7]
+- Include NFS and NFSD changes that are destined for 7.1.
+- Include latest fixes from nfsd-testing.
+
 * Wed Apr 08 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-6]
 - Switch THP Kconfig default from always to madvise.
 - Disable CONFIG_NFS_FSCACHE.
