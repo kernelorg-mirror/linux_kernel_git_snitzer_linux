@@ -1,11 +1,15 @@
-Thu Apr 16 2026 Mike Snitzer <snitzer@kernel.org> [6.18.22-0]
+* Thu Apr 16 2026 Mike Snitzer <snitzer@kernel.org> [6.18.22-1]
+- Rebase all topic branches ontop of Linux v6.18.22
+- Sync NFS and NFSD changes through 7.1 merge window
+
+* Thu Apr 16 2026 Mike Snitzer <snitzer@kernel.org> [6.18.22-0]
 - Linux v6.18.22
 - Cherry-pick all kernel-6.18.2/main kernel.changelog-10.99 commits to wipe slate clean.
 
-Mon Jan 05 2026 Mike Snitzer <snitzer@kernel.org> [6.18.2-2]
+* Mon Jan 05 2026 Mike Snitzer <snitzer@kernel.org> [6.18.2-2]
 - Include numerous NFS/localio fixes
 
-Tue Dec 23 2025 Mike Snitzer <snitzer@kernel.org> [6.18.2-1]
+* Tue Dec 23 2025 Mike Snitzer <snitzer@kernel.org> [6.18.2-1]
 - Rebase all branches ontop of v6.18.2
 - Revert some recent redhat/kernel.spec.template advances relative to linking in-tree cpupower, must revisit
 
