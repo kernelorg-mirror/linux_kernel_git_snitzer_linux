@@ -1,3 +1,7 @@
+Thu Apr 16 2026 Mike Snitzer <snitzer@kernel.org> [6.18.22-0]
+- Linux v6.18.22
+- Cherry-pick all kernel-6.18.2/main kernel.changelog-10.99 commits to wipe slate clean.
+
 Mon Jan 05 2026 Mike Snitzer <snitzer@kernel.org> [6.18.2-2]
 - Include numerous NFS/localio fixes
 
