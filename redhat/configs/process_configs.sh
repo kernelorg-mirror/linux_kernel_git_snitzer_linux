@@ -111,13 +111,6 @@ determine_config_path()
 		riscv)
 			config_path="$config_path/riscv/riscv64"
 			;;
-		s390)
-			if [[ "$variant" == *"zfcpdump"* ]]; then
-				config_path="$config_path/s390x/zfcpdump"
-			else
-				config_path="$config_path/s390x"
-			fi
-			;;
 		x86_64)
 			config_path="$config_path/x86"
 			;;
