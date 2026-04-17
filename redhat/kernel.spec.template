@@ -112,7 +112,7 @@ Summary: The Linux kernel
 %if 0%{?fedora}
 %define secure_boot_arch x86_64 aarch64
 %else
-%define secure_boot_arch x86_64 aarch64 s390x ppc64le
+%define secure_boot_arch x86_64 aarch64 ppc64le
 %endif
 
 # Signing for secure boot authentication
@@ -237,8 +237,6 @@ Summary: The Linux kernel
 %define with_base      %{?_without_base:      0} %{?!_without_base:      1}
 # build also debug variants
 %define with_debug     %{?_without_debug:     0} %{?!_without_debug:     1}
-# kernel-zfcpdump (s390 specific kernel for zfcpdump)
-%define with_zfcpdump  %{?_without_zfcpdump:  0} %{?!_without_zfcpdump:  1}
 # kernel-16k (aarch64 kernel with 16K page_size)
 %define with_arm64_16k %{?_with_arm64_16k:    1} %{?!_with_arm64_16k:    0}
 # kernel-64k (aarch64 kernel with 64K page_size)
@@ -261,7 +259,6 @@ Summary: The Linux kernel
 # Supported variants
 #            with_base with_debug    with_gcov
 # stock      X         X             X
-# zfcpdump   X                       X
 # arm64_16k  X         X             X
 # arm64_64k  X         X             X
 # realtime   X         X             X
@@ -388,7 +385,7 @@ Summary: The Linux kernel
 %endif
 
 %if %{with toolchain_clang}
-%ifarch s390x ppc64le
+%ifarch ppc64le
 %global llvm_ias 0
 %else
 %global llvm_ias 1
@@ -470,7 +467,7 @@ Summary: The Linux kernel
 %define with_automotive 0
 %define with_stock 0
 %define with_debug 0
-%ifarch s390x ppc64le riscv64
+%ifarch ppc64le riscv64
 %define with_debuginfo 0
 %endif
 %define with_vdso_install 0
@@ -482,7 +479,6 @@ Summary: The Linux kernel
 %define with_headers 0
 %define with_efiuki 0
 %define with_dtbloader 0
-%define with_zfcpdump 0
 %define with_arm64_16k 0
 %define with_arm64_64k 0
 %endif
@@ -521,7 +517,6 @@ Summary: The Linux kernel
 %define with_headers 0
 %define with_efiuki 0
 %define with_dtbloader 0
-%define with_zfcpdump 0
 %define with_vdso_install 0
 %define with_kabichk 0
 %define with_kabidwchk 0
@@ -622,21 +617,11 @@ Summary: The Linux kernel
 %define with_sparse 0
 %endif
 
-# zfcpdump mechanism is s390 only
-%ifnarch s390x
-%define with_zfcpdump 0
-%endif
-
 # 16k and 64k variants only for aarch64
 %ifnarch aarch64
 %define with_arm64_16k 0
 %define with_arm64_64k 0
 %define with_realtime_arm64_64k 0
-%endif
-
-%if 0%{?fedora}
-# This is not for Fedora
-%define with_zfcpdump 0
 %endif
 
 # Per-arch tweaks
@@ -659,13 +644,6 @@ Summary: The Linux kernel
 %define kernel_image vmlinux
 %define kernel_image_elf 1
 %define use_vdso 0
-%endif
-
-%ifarch s390x
-%define asmarch s390
-%define hdrarch s390
-%define kernel_image arch/s390/boot/bzImage
-%define vmlinux_decompressor arch/s390/boot/vmlinux
 %endif
 
 %ifarch aarch64
@@ -705,7 +683,6 @@ Summary: The Linux kernel
 # disable BuildKernel commands
 %define with_stock 0
 %define with_debug 0
-%define with_zfcpdump 0
 %define with_arm64_16k 0
 %define with_arm64_64k 0
 %define with_realtime 0
@@ -801,9 +778,9 @@ Release: %{pkg_release}
 # DO NOT CHANGE THE 'ExclusiveArch' LINE TO TEMPORARILY EXCLUDE AN ARCHITECTURE BUILD.
 # SET %%nobuildarches (ABOVE) INSTEAD
 %if 0%{?fedora}
-ExclusiveArch: noarch x86_64 s390x aarch64 ppc64le riscv64
+ExclusiveArch: noarch x86_64 aarch64 ppc64le riscv64
 %else
-ExclusiveArch: noarch i386 i686 x86_64 s390x aarch64 ppc64le riscv64
+ExclusiveArch: noarch i386 i686 x86_64 aarch64 ppc64le riscv64
 %endif
 ExclusiveOS: Linux
 %ifnarch %{nobuildarches}
@@ -858,9 +835,7 @@ BuildRequires: libbpf-devel >= 1.3.0-2
 BuildRequires: libbabeltrace-devel
 BuildRequires: libpfm-devel
 BuildRequires: libtraceevent-devel
-%ifnarch s390x
 BuildRequires: numactl-devel
-%endif
 %ifarch aarch64
 BuildRequires: opencsd-devel >= 1.0.0
 %endif
@@ -883,9 +858,7 @@ BuildRequires: libtracefs-devel >= 1.8.0-6
 BuildRequires: swig
 %endif
 
-%ifnarch s390x
 BuildRequires: pciutils-devel
-%endif
 %ifarch i686 x86_64
 BuildRequires: libnl3-devel
 %endif
@@ -1038,9 +1011,6 @@ Source13: redhatsecureboot501.cer
 %ifarch ppc64le
 %define signing_key_filename kernel-signing-ppc.cer
 %endif
-%ifarch s390x
-%define signing_key_filename kernel-signing-s390.cer
-%endif
 
 # Fedora/ELN pesign macro expects to see these cert file names, see:
 # https://github.com/rhboot/pesign/blob/main/src/pesign-rpmbuild-helper.in#L216
@@ -1066,9 +1036,6 @@ Source13: redhatsecureboot501.cer
 %define pesign_name_0 redhatsecureboot501
 %define pesign_name_uki_0 redhatsecureboot504
 %endif
-%ifarch s390x
-%define pesign_name_0 redhatsecureboot302
-%endif
 %ifarch ppc64le
 %define pesign_name_0 redhatsecureboot701
 %endif
@@ -1090,9 +1057,6 @@ Source24: %{name}-aarch64-rhel.config
 Source25: %{name}-aarch64-debug-rhel.config
 Source27: %{name}-ppc64le-rhel.config
 Source28: %{name}-ppc64le-debug-rhel.config
-Source29: %{name}-s390x-rhel.config
-Source30: %{name}-s390x-debug-rhel.config
-Source31: %{name}-s390x-zfcpdump-rhel.config
 Source32: %{name}-x86_64-rhel.config
 Source33: %{name}-x86_64-debug-rhel.config
 # ARM64 64K page-size kernel config
@@ -1118,8 +1082,6 @@ Source54: %{name}-aarch64-16k-fedora.config
 Source55: %{name}-aarch64-16k-debug-fedora.config
 Source56: %{name}-ppc64le-fedora.config
 Source57: %{name}-ppc64le-debug-fedora.config
-Source58: %{name}-s390x-fedora.config
-Source59: %{name}-s390x-debug-fedora.config
 Source60: %{name}-x86_64-fedora.config
 Source61: %{name}-x86_64-debug-fedora.config
 Source700: %{name}-riscv64-fedora.config
@@ -1182,13 +1144,11 @@ Source200: check-kabi
 
 Source201: Module.kabi_aarch64
 Source202: Module.kabi_ppc64le
-Source203: Module.kabi_s390x
 Source204: Module.kabi_x86_64
 Source205: Module.kabi_riscv64
 
 Source210: Module.kabi_dup_aarch64
 Source211: Module.kabi_dup_ppc64le
-Source212: Module.kabi_dup_s390x
 Source213: Module.kabi_dup_x86_64
 Source214: Module.kabi_dup_riscv64
 
@@ -1915,15 +1875,6 @@ This package provides kernel modules for the %{?2:%{2} }kernel package for Red H
 %{nil}
 
 # Now, each variant package.
-%if %{with_zfcpdump}
-%define variant_summary The Linux kernel compiled for zfcpdump usage
-%kernel_variant_package -o zfcpdump
-%description zfcpdump-core
-The kernel package contains the Linux kernel (vmlinuz) for use by the
-zfcpdump infrastructure.
-# with_zfcpdump
-%endif
-
 %if %{with_arm64_16k_base}
 %define variant_summary The Linux kernel compiled for 16k pagesize usage
 %kernel_variant_package 16k
@@ -2319,7 +2270,6 @@ GetArch()
   case "$1" in
   *aarch64*) echo "aarch64" ;;
   *ppc64le*) echo "ppc64le" ;;
-  *s390x*) echo "s390x" ;;
   *x86_64*) echo "x86_64" ;;
   *riscv64*) echo "riscv64" ;;
   # no arch, apply everywhere
@@ -2367,7 +2317,7 @@ cat rheldup3.pem rhelkpatch1.pem nvidiagpuoot001.pem nvidiajetsonsoc.pem nvidiab
 # rhelkeys
 %endif
 %if %{signkernel}
-%ifarch s390x ppc64le
+%ifarch ppc64le
 openssl x509 -inform der -in %{secureboot_ca_0} -out secureboot.pem
 cat secureboot.pem >> ../certs/rhel.pem
 %endif
@@ -2547,9 +2497,6 @@ BuildKernel() {
 
     %{log_msg "Setup variables"}
     DoModules=1
-    if [ "$Variant" = "zfcpdump" ]; then
-	    DoModules=0
-    fi
 
     # When the bootable image is just the ELF kernel, strip it.
     # We already copy the unstripped file into the debuginfo package.
@@ -2658,7 +2605,7 @@ BuildKernel() {
     %{log_msg "Sign kernel image"}
     %pesign -s -i $SignImage -o vmlinuz.signed -a %{secureboot_ca_0} -c %{secureboot_key_0} -n %{pesign_name_0}
     %endif
-    %ifarch s390x ppc64le
+    %ifarch ppc64le
     if [ -x /usr/bin/rpm-sign ]; then
 	rpm-sign --key "%{pesign_name_0}" --lkmsign $SignImage --output vmlinuz.signed
     elif [ "$DoModules" == "1" -a "%{signmodules}" == "1" ]; then
@@ -2786,7 +2733,7 @@ BuildKernel() {
 
 %if %{with_kabidw_base}
     # Don't build kabi base for debug kernels
-    if [ "$Variant" != "zfcpdump" -a "$Variant" != "debug" ]; then
+    if [ "$Variant" != "debug" ]; then
         mkdir -p $RPM_BUILD_ROOT/kabi-dwarf
         tar -xvf %{SOURCE301} -C $RPM_BUILD_ROOT/kabi-dwarf
 
@@ -2840,15 +2787,6 @@ BuildKernel() {
     cp -a scripts $RPM_BUILD_ROOT/lib/modules/$KernelVer/build
     rm -rf $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/scripts/tracing
     rm -f $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/scripts/spdxcheck.py
-
-%ifarch s390x
-    # CONFIG_EXPOLINE_EXTERN=y produces arch/s390/lib/expoline/expoline.o
-    # which is needed during external module build.
-    %{log_msg "Copy expoline.o"}
-    if [ -f arch/s390/lib/expoline/expoline.o ]; then
-      cp -a --parents arch/s390/lib/expoline/expoline.o $RPM_BUILD_ROOT/lib/modules/$KernelVer/build
-    fi
-%endif
 
     %{log_msg "Copy additional files for make targets"}
     # Files for 'make scripts' to succeed with kernel-devel.
@@ -3302,7 +3240,7 @@ BuildKernel() {
     mkdir -p $RPM_BUILD_ROOT%{_datadir}/doc/kernel-keys/$KernelVer
 %if %{signkernel}
     install -m 0644 %{secureboot_ca_0} $RPM_BUILD_ROOT%{_datadir}/doc/kernel-keys/$KernelVer/kernel-signing-ca.cer
-    %ifarch s390x ppc64le
+    %ifarch ppc64le
     if [ -x /usr/bin/rpm-sign ]; then
         install -m 0644 %{secureboot_key_0} $RPM_BUILD_ROOT%{_datadir}/doc/kernel-keys/$KernelVer/%{signing_key_filename}
     fi
@@ -3319,7 +3257,7 @@ BuildKernel() {
         # Save the signing keys so we can sign the modules in __modsign_install_post
         cp certs/signing_key.pem certs/signing_key.pem.sign${Variant:++${Variant}}
         cp certs/signing_key.x509 certs/signing_key.x509.sign${Variant:++${Variant}}
-        %ifarch s390x ppc64le
+        %ifarch ppc64le
         if [ ! -x /usr/bin/rpm-sign ]; then
             install -m 0644 certs/signing_key.x509.sign${Variant:++${Variant}} $RPM_BUILD_ROOT%{_datadir}/doc/kernel-keys/$KernelVer/kernel-signing-ca.cer
             openssl x509 -in certs/signing_key.pem.sign${Variant:++${Variant}} -outform der -out $RPM_BUILD_ROOT%{_datadir}/doc/kernel-keys/$KernelVer/%{signing_key_filename}
@@ -3371,10 +3309,6 @@ BuildKernel %make_target %kernel_image %{_use_vdso} debug
 %endif
 %endif
 
-%if %{with_zfcpdump}
-BuildKernel %make_target %kernel_image %{_use_vdso} zfcpdump
-%endif
-
 %if %{with_arm64_16k_base}
 BuildKernel %make_target %kernel_image %{_use_vdso} 16k
 %endif
@@ -3400,7 +3334,7 @@ BuildKernel %make_target %kernel_image %{_use_vdso}
 %endif
 
 %ifnarch noarch i686 %{nobuildarches}
-%if !%{with_debug} && !%{with_zfcpdump} && !%{with_stock} && !%{with_arm64_16k} && !%{with_arm64_64k} && !%{with_realtime} && !%{with_realtime_arm64_64k} && !%{with_automotive}
+%if !%{with_debug} && !%{with_stock} && !%{with_arm64_16k} && !%{with_arm64_64k} && !%{with_realtime} && !%{with_realtime_arm64_64k} && !%{with_automotive}
 # If only building the user space tools, then initialize the build environment
 # and some variables so that the various userspace tools can be built.
 %{log_msg "Initialize userspace tools build environment"}
@@ -3415,9 +3349,6 @@ fi
 
 %ifarch aarch64
 %global perf_build_extra_opts CORESIGHT=1
-%endif
-%ifarch s390x
-%global perf_build_extra_ldflags -Wl,-z,notext
 %endif
 %global perf_make \
   %{__make} %{?make_opts} EXTRA_CFLAGS="${RPM_OPT_FLAGS}" EXTRA_CXXFLAGS="${RPM_OPT_FLAGS}" LDFLAGS="%{__global_ldflags} -Wl,-E %{?perf_build_extra_ldflags}" %{?cross_opts} -C tools/perf V=1 NO_PERF_READ_VDSO32=1 NO_PERF_READ_VDSOX32=1 WERROR=0 NO_LIBUNWIND=1 HAVE_CPLUS_DEMANGLE=1 NO_GTK2=1 NO_STRLCPY=1 NO_BIONIC=1 LIBTRACEEVENT_DYNAMIC=1 %{?perf_build_extra_opts} prefix=%{_prefix} PYTHON=%{__python3}
@@ -3664,7 +3595,6 @@ find Documentation -type d | xargs chmod u+w
     modules_dirs="$(shopt -s nullglob; echo $RPM_BUILD_ROOT/lib/modules/%{KVERREL}*)" \
     for modules_dir in $modules_dirs; do \
         variant_suffix="${modules_dir#$RPM_BUILD_ROOT/lib/modules/%{KVERREL}}" \
-        [ "$variant_suffix" == "+zfcpdump" ] && continue \
 	%{log_msg "Signing modules for %{KVERREL}${variant_suffix}"} \
         %{modsign_cmd} certs/signing_key.pem.sign${variant_suffix} certs/signing_key.x509.sign${variant_suffix} $modules_dir/ \
     done \
@@ -3766,7 +3696,7 @@ find $RPM_BUILD_ROOT/usr/include \
 %endif
 
 %if %{with_cross_headers}
-HDR_ARCH_LIST='arm64 powerpc s390 x86 riscv'
+HDR_ARCH_LIST='arm64 powerpc x86 riscv'
 mkdir -p $RPM_BUILD_ROOT/usr/tmp-headers
 
 for arch in $HDR_ARCH_LIST; do
@@ -4408,11 +4338,6 @@ fi\
 %kernel_variant_post
 %endif
 
-%if %{with_zfcpdump}
-%kernel_variant_preun -v zfcpdump
-%kernel_variant_post -v zfcpdump
-%endif
-
 %if %{with_stock} && %{with_debug} && %{with_efiuki}
 %kernel_variant_posttrans -v debug -u virt
 %kernel_variant_preun -v debug -u virt -e
@@ -4524,7 +4449,7 @@ fi\
 %endif
 
 %if %{with_kabidw_base}
-%ifarch x86_64 s390x ppc64 ppc64le aarch64 riscv64
+%ifarch x86_64 ppc64 ppc64le aarch64 riscv64
 %files kernel-kabidw-base-internal
 %defattr(-,root,root)
 /kabidw-base/%{_target_cpu}/*
@@ -4909,7 +4834,6 @@ fi\
 %files 64k-debug-modules-extra
 %endif
 %endif
-%kernel_variant_files %{_use_vdso} %{with_zfcpdump} zfcpdump
 %kernel_variant_files %{_use_vdso} %{with_arm64_16k_base} 16k
 %kernel_variant_files %{_use_vdso} %{with_arm64_64k_base} 64k
 %kernel_variant_files %{_use_vdso} %{with_realtime_arm64_64k_base} rt-64k
