@@ -17,7 +17,6 @@
 # the first arg is arch and variant, the second is a hierarchy of
 # config options, lowest priority to highest
 ORDER=common fedora pending-fedora custom-overrides
-EMPTY=s390x-zfcpdump
 
 # x86_64
 x86_64=generic:generic-x86
@@ -28,10 +27,6 @@ x86_64-rt-debug=generic:generic-x86:debug:debug-x86:rt-generic:rt-generic-x86:rt
 # ppc64le
 ppc64le=generic:generic-powerpc
 ppc64le-debug=generic:generic-powerpc:debug:debug-powerpc
-
-# s390x
-s390x=generic:generic-s390x
-s390x-debug=generic:generic-s390x:debug:debug-s390x
 
 # aarch64
 aarch64=generic:generic-arm:generic-arm-aarch64
