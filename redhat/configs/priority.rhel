@@ -30,11 +30,6 @@ x86_64-automotive-debug=generic:generic-x86:debug:debug-x86:rt-generic:rt-generi
 ppc64le=generic:generic-powerpc
 ppc64le-debug=generic:generic-powerpc:debug:debug-powerpc
 
-# s390x
-s390x=generic:generic-s390x
-s390x-debug=generic:generic-s390x:debug:debug-s390x
-s390x-zfcpdump=generic:generic-s390x:generic-s390x-zfcpdump
-
 # aarch64
 aarch64=generic:generic-arm:generic-arm-aarch64
 aarch64-debug=generic:generic-arm:generic-arm-aarch64:debug:debug-arm:debug-arm-aarch64
