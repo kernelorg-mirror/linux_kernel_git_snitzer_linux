@@ -1,245 +1,336 @@
-* Wed Apr 02 2025 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.15.0-0.rc0.acc4d5ff0b61.8]
-- Switch ZSWAP_ZPOOL_DEFAULT to ZSMALLOC as ZBUD has been removed (Justin M. Forbes)
-- Linux v6.15.0-0.rc0.acc4d5ff0b61
-Resolves: 
+* Wed Apr 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-7]
+- Include NFS and NFSD changes that are destined for 7.1.
+- Include latest fixes from nfsd-testing.
 
-* Tue Apr 01 2025 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.15.0-0.rc0.08733088b566.7]
-- redhat/kernel.spec: list python3-wheel explicitly for Fedora<42 (Jan Stancek)
-- handle man-page for rv-mon-sched in redhat/kernel.spec.template (Thorsten Leemhuis)
-- redhat: find-debuginfo workaround is no longer needed on F42 (Jan Stancek)
-- redhat/kernel.spec: use target versions of tools for debugedit and gdb-add-index (Jan Stancek)
-- Linux v6.15.0-0.rc0.08733088b566
-Resolves: 
+* Wed Apr 08 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-6]
+- Switch THP Kconfig default from always to madvise.
+- Disable CONFIG_NFS_FSCACHE.
 
-* Mon Mar 31 2025 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.15.0-0.rc0.4e82c87058f4.6]
-- redhat: make ENABLE_WERROR enable also KVM_WERROR (Jan Stancek)
-- Linux v6.15.0-0.rc0.4e82c87058f4
-Resolves: 
+* Mon Mar 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-5]
+- Rebase nfsd-7.0-2 branch to include NFSD's dynamic threading.
+- Include nfsd-next and nfsd-testing changes (except some svcrdma and most lockd changes).
+- Include Trond's "NFSv4/pnfs: If the server is down, retry the layout returns on reboot".
+- Include Olga's "NFS: fix writeback in presence of errors".
 
-* Fri Mar 28 2025 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.15.0-0.rc0.acb4f33713b9.5]
-- kernel.spec.template: cpupower: adjust lib versioning (Thorsten Leemhuis)
-- redhat/configs: automotive: builtin virtio-mmio (Eric Chanudet)
-- Linux v6.15.0-0.rc0.acb4f33713b9
-Resolves: 
+* Mon Mar 23 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-4]
+- Include fixes from upstream tags nfs-for-7.0-2 and nfsd-7.0-2
+- Include "NFSD: Sign filehandles"
 
-* Thu Mar 27 2025 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.15.0-0.rc0.1a9239bb4253.4]
-- Linux v6.15.0-0.rc0.1a9239bb4253
-Resolves: 
+* Wed Mar 11 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-3]
+- Replace 6.12.76-2's fix with Ben's "sunrpc: refactor TLS transport to remove rpc_clnt dependency".
 
-* Wed Mar 26 2025 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.15.0-0.rc0.f6e0150b2003.3]
-- Fix up mismatches in the 6.15 merge window (Scott Weaver)
-- Reset log for 6.15 cycle (Justin M. Forbes)
-- Linux v6.15.0-0.rc0.f6e0150b2003
-Resolves: 
+* Tue Mar 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-2]
+- Include "sunrpc: fix TLS connect_worker rpc_clnt lifetime UAF" to address TLS-induced cred crashes.
 
-* Tue Mar 25 2025 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.15.0-0.rc0.2df0c02dab82.2]
-- Reset RHEL_RELEASE for 6.15 cycle (Justin M. Forbes)
-- arm64: cleanup and de-dupe erratum (Peter Robinson)
-- arm64: cleanup and de-dupe configs (Peter Robinson)
-- cleanup: x86: cleanup some x86_32 leftovers (Peter Robinson)
-- all: cleanup CAN_ROCKCHIP_CANFD (Peter Robinson)
-- aarch64: Options required for UEFI HTTP boot on SystemReady-DT (Peter Robinson)
-- common: Move ZONE_DEVICE to generic (Peter Robinson)
-- common: Cleanup BTT (Peter Robinson)
-- cleanup: move DEV_DAX_PMEM to common/generic (Peter Robinson)
-- generic: cleanup the NVDIMM options (Peter Robinson)
-- cleanup: move OF_PMEM to common/generic (Peter Robinson)
-- cleanup: Remove DEV_DAX_PMEM_COMPAT option (Peter Robinson)
-- mei: vsc: Fix fortify-panic caused by invalid counted_by() use (Hans de Goede)
-- Consolidate configs into common for 6.14 (Justin M. Forbes)
-- Turn VIRTIO_BLK and VIRTIO_CONSOLE inline for Fedora (Justin M. Forbes)
-- redhat: configs: fedora: enable CONFIG_I2C_HID_OF=m on x86 (Hans de Goede)
-- redhat: move dist-relase-check behind new variable (Jan Stancek)
-- Set last minute config item for 6.14 for Fedora (Justin M. Forbes)
-- redhat/configs: automotive: Disable CONFIG_USERFAULTFD config (Dorinda Bassey)
-- Revert "be2iscsi: remove unsupported device IDs" (Scott Weaver)
-- Revert "megaraid_sas: remove deprecated pci-ids" (Scott Weaver)
-- Revert "[scsi] megaraid_sas: re-add certain pci-ids" (Scott Weaver)
-- media: ov08x40: Extend sleep after reset to 5 ms (Hans de Goede)
-- media: ov08x40: Log chip ID when identifying the chip (Hans de Goede)
-- media: ov08x40: Fix value of reset GPIO when requesting it (Hans de Goede)
-- redhat/configs: automotive: Disable VLAN_8021Q_GVRP config (Dorinda Bassey)
-- redhat/configs: automotive: Disable DCB and MPLS configs (Dorinda Bassey)
-- redhat/configs: automotive: Disable IEEE 802.15.4 config (Dorinda Bassey)
-- redhat/configs: automotive: Disable various network classification features (Dorinda Bassey)
-- redhat/configs: automotive: Disable the SMBFS file system (Dorinda Bassey)
-- redhat/configs: automotive: Disable Myricom network adapters (Dorinda Bassey)
-- redhat/configs: automotive: Disable USB4 Ethernet config (Dorinda Bassey)
-- redhat/configs: automotive: Disable the Mellanox SwitchX core driver (Dorinda Bassey)
-- redhat/configs: automotive: Disable network storage related protocols (Dorinda Bassey)
-- redhat/configs: automotive: Disable lightweight tunneling with BPF (Dorinda Bassey)
-- redhat/configs: automotive: Disable RADOS block device configs (Dorinda Bassey)
-- redhat/configs: automotive: Disable switchdev driver framework (Dorinda Bassey)
-- redhat/configs: automotive: Disable network packet generator (Dorinda Bassey)
-- redhat/configs: automotive: Disable NET_CLS_ACT and PSAMPLE configs (Dorinda Bassey)
-- redhat/configs: automotive: Disable BPF STREAM_PARSER (Dorinda Bassey)
-- redhat/configs: automotive: Disable Open vSwitch and NET_NSH configs (Dorinda Bassey)
-- redhat/configs: automotive: Disable IP Virtual Server configs (Dorinda Bassey)
-- redhat/configs: automotive: Disable IP set support (Dorinda Bassey)
-- redhat/configs: automotive: Disable NetLabel subsystem support (Dorinda Bassey)
-- redhat/configs: automotive: Disable TLS Protocol (Dorinda Bassey)
-- redhat/configs: automotive: Disable Advanced TCP Congestion Control (Dorinda Bassey)
-- redhat/configs: automotive: Disable XDP Socket Protocol (Dorinda Bassey)
-- redhat/configs: delete CONFIG_USB_ONBOARD_HUB and use CONFIG_USB_ONBOARD_DEV instead (Desnes Nunes)
-- redhat: check release commit is present for dist-{release-tag,git} (Jan Stancek)
-- Revert "qla4xxx: Remove deprecated PCI IDs from RHEL 8" (Scott Weaver)
-- Re-enable vxcan (CONFIG_CAN_VXCAN) for automotive (Radu Rendec)
-- Revert "mpt*: remove certain deprecated pci-ids" (Scott Weaver)
-- Turn on CONFIG_PACKING for RHEL (Justin M. Forbes)
-- main.c: fix initcall blacklisted (Tomas Henzl)
-- redhat/configs: automotive: Disable IPsec Protocols and XFRM (Dorinda Bassey)
-- redhat: Update CONFIG_STRICT_DEVMEM settings (enable it on s390x) (Thomas Huth)
-- redhat: Consolidate CONFIG_VIRTIO_MEM and enable it also for s390x (Thomas Huth)
-- Remove no longer necessary pending entry (Justin M. Forbes)
-- Fedora configs for 6.14 (Justin M. Forbes)
-- redhat/configs: Disable rest of the CONFIG_PKEY_ options on s390 (Mete Durlu) [RHEL-78341]
-- Fix up some debug module loading issues due to BTF mismatch (Justin M. Forbes)
-- Revert "redhat/configs: automotive: disable CONFIG_AIO" (Davide Caratti)
-- redhat/configs: automotive disable ARCH_TEGRA_241_SOC (Eric Chanudet)
-- rhel_files: ensure all qdiscs are in modules-core (Davide Caratti) [RHEL-79818]
-- redhat/configs: automotive: Disable MRP/8021Q_MVRP Protocol (Dorinda Bassey)
-- redhat/configs: enable CONFIG_ARM_SMMU_MMU_500_CPRE_ERRATA (Jerry Snitselaar)
-- redhat/configs: enable CONFIG_ARM_SMMU_V3_IOMMUFD (Jerry Snitselaar)
-- redhat: configs: remove CONFIG_DMA_API_DEBUG_SG (Kate Hsuan)
-- kernel.spec: add missing tools-libs on s390x (Jan Stancek)
-- arch/x86/kernel/setup.c: fix rh_check_supported (Tomas Henzl)
-- kernel.spec: add minimum version of setuptools for ynl (Jan Stancek)
-- Revert "Merge: redhat/configs: automotive: Disable POSIX_MQUEUE config (Dorinda Bassey)
-- redhat/configs: enable in kernel compression/decompression of compressed modules (Herton R. Krzesinski)
-- redhat: change compression flags for xz (Herton R. Krzesinski)
-- redhat/configs: automotive: Turn off ACPI Processor package for aarch64 (Enric Balletbo i Serra)
-- redhat/configs: automotive: Disable L2TP Protocol (Dorinda Bassey)
-- redhat/configs: automotive: Disable TIPC Protocol (Dorinda Bassey)
-- redhat/configs: Enable Mediatek Bluetooth USB drivers (Bastien Nocera)
-- redhat/configs: Disable CONFIG_PKEY for zfcpdump configs (Mete Durlu) [RHEL-78341]
-- redhat/configs: automotive: disable VFIO_PLATFORM (Eric Chanudet)
-- Revert "Merge: redhat/configs: automotive: Disable SYSIPC config" (Dorinda Bassey)
-- redhat/configs: Enable CONFIG_KASAN_INLINE for RT debug kernel (Waiman Long)
-- redhat/configs: Move CONFIG_PROVE_RAW_LOCK_NESTING to common/debug (Waiman Long)
-- redhat/configs: Move all the lock debugging Kconfig's to common (Waiman Long)
-- redhat/configs: Enable CONFIG_BLK_CGROUP_PUNT_BIO for RHEL (Neal Gompa) [RHEL-79711]
-- fedora: pending: drop USB_ONBOARD_DEV_USB5744 (Peter Robinson)
-- efi,lockdown: fix kernel lockdown on Secure Boot (Ondrej Mosnacek) {CVE-2025-1272}
-- fedora: Update vbox drivers (Peter Robinson)
-- Drop the s390x CONFIG_REGMAP from RHEL pending as upstream removed the dep (Justin M. Forbes)
-- fedora: arm64: enable RT5616 codec (Marcin Juszkiewicz)
-- Revert "nvme: Return BLK_STS_TARGET if the DNR bit is set" (Benjamin Marzinski)
-- Revert "nvme: allow local retry and proper failover for REQ_FAILFAST_TRANSPORT" (Benjamin Marzinski)
-- Revert "nvme: decouple basic ANA log page re-read support from native multipathing" (Benjamin Marzinski)
-- Revert "nvme: nvme_mpath_init remove multipath check" (Benjamin Marzinski)
-- redhat/configs: automotive: Disable CONFIG_FS_DAX config (Dorinda Bassey)
-- config: update CONFIG_LSM to match upstream (Ryan Sullivan)
-- redhat: configs: enable CONFIG_INTEL_ISH_FIRMWARE_DOWNLOADER for RHEL (David Arcari)
-- redhat/Makefile: Add help text for target dist-dump-variables (Eder Zulian)
-- media: ov08x40: Don't log ov08x40_check_hwcfg() errors twice (Hans de Goede)
-- media: ov08x40: Add missing '\n' to ov08x40_check_hwcfg() error messages (Hans de Goede)
-- media: ov08x40: Add missing ov08x40_identify_module() call on stream-start (Hans de Goede)
-- media: ov08x40: Improve ov08x40_[read|write]_reg() error returns (Hans de Goede)
-- media: ov08x40: Improve ov08x40_identify_module() error logging (Hans de Goede)
-- media: ov08x40: Move ov08x40_identify_module() function up (Hans de Goede)
-- media: ov08x40: Get clock on ACPI platforms too (Hans de Goede)
-- media: ov08x40: Get reset GPIO and regulators on ACPI platforms too (Hans de Goede)
-- media: ov08x40: Move fwnode_graph_get_next_endpoint() call up (Hans de Goede)
-- media: ov08x40: Properly turn sensor on/off when runtime-suspended (Hans de Goede)
-- redhat: update self-test-data for new default RHJOBS value (Patrick Talbert)
-- set a more reasonable default for number of jobs (Thorsten Leemhuis)
-- redhat: automotive: define CONFIG_RH_AUTOMOTIVE (Scott Weaver)
-- redhat/configs: disable CONFIG_TCP_AO on RHEL (Sabrina Dubroca)
-- redhat/configs: amend USB_ONBOARD_DEV_USB5744 (Eric Chanudet)
-- redhat/configs: automotive: Disable SYSIPC and MQUEUE configs (Dorinda Bassey)
-- redhat: kernel.spec: add ynl to kernel-tools (Jan Stancek)
-- fedora: enable USB device USB5744 (Peter Robinson)
-- rhel: enable FW_CACHE on RHEL (Dave Airlie)
-- redhat/configs: automotive: Disable the SCTP Protocol (Dorinda Bassey)
-- redhat: generalize rule for kunit and test kmod placement (Jan Stancek)
-- Move CONFIG_PCI_REALLOC_ENABLE_AUTO out of common as they have diverged (Justin M. Forbes)
-- fedora: arm64: enable Silicon Mitus SM5502 Extcon driver (Sam Day)
-- fedora: arm64: enable Richtek RT5033 MFD+charger+regulator modules (Sam Day)
-- configs/fedora: Enable CONFIG_PCI_REALLOC_ENABLE_AUTO (Yanko Kaneti)
-- Enable CONFIG_INTEL_MEI_PXP and CONFIG_DRM_I915_PXP on rhel (Jocelyn Falempe)
-- Enable Intel Xe Graphics (Mika Penttilä)
-- Turn on CONFIG_DRM_ACCEL_AMDXDNA for Fedora (Justin M. Forbes)
-- redhat/configs: disable CONFIG_AF_UNIX_OOB on RHEL (Marcelo Ricardo Leitner)
-- redhat/configs: automotive: Disable wireless network and it's dependencies (Dorinda Bassey)
-- redhat/kernel.spec: work around find-debuginfo aborting cross builds (Jan Stancek)
-- redhat/configs: Default to batched invalidation on s390 (Jerry Snitselaar)
-- redhat/configs: automotive: set CONFIG_TIMEOUT_PANIC (Enric Balletbo i Serra)
-- drop %%{_datadir}/perf-core/* from kernel.spec (Thorsten Leemhuis)
-- put new misc_minor_kunit in modules-internal (Thorsten Leemhuis)
-- put new cirrus kunit tests in modules-internal (Thorsten Leemhuis)
-- redhat/configs: enable iBFT parsing on aarch64 (Chris Leech)
-- redhat: kernel.spec: fix build with merged-sbin (Zbigniew Jędrzejewski-Szmek)
-- Fix up CONFIG_REGMAP mismatch (Scott Weaver)
-- redhat: fix modules.order target (Scott Weaver)
-- Fix up CONFIG_CRC_T10DIF_IMPL_GENERIC mismatch (Justin M. Forbes)
-- Fix mismatches for 6.13 merge window (Justin M. Forbes)
-- Reset rhelver and trim changelog for 6.14 (Justin M. Forbes)
-- Turn off CONFIG_ARM_TIMER_SP804 for automotive (Justin M. Forbes)
-- Set ARM_TIMER_SP804 (Justin M. Forbes)
-- redhat/configs: enable addtional sa8775 related Kconfigs (Brian Masney)
-- redhat: Add rustfmt to deps (Peter Robinson)
-- redhat/configs: Disable deprecated CONFIG_LCS option on s390 (Mete Durlu) [RHEL-68296]
-- redhat/configs: make modular/disable NFS support (Dorinda Bassey)
-- redhat/configs: Disable unsafe queuing disciplines (Dorinda Bassey)
-- configs: move pending RT configs into rhel/rt/generic (Clark Williams)
-- Turn on PROVE_RAW_LOCK_NESTING for RHEL debug builds (Justin M. Forbes)
-- redhat/Makefile: Fix long dist-full-help execution time (Prarit Bhargava)
-- redhat/self-test: Update data to add HELP_TYPES variable (Prarit Bhargava)
-- redhat/Makefile: Add new dist-help functionality (Prarit Bhargava)
-- Makefile: Do not output LOCALVERSION message for help commands (Prarit Bhargava)
-- Fedora 6.13 configs part 2 (Justin M. Forbes)
-- Fedora 6.13 configs part 1 (Justin M. Forbes)
-- redhat/configs: enable CONFIG_VFAT_FS as a module (Dorinda Bassey)
-- redhat: create 'debug' addon for UKI (Li Tian)
-- kernel.spec: Build cpupower on riscv64 (Yanko Kaneti)
-- RHEL: Set correct config option for CRYPTO_HMAC_S390 (Mete Durlu) [RHEL-24137]
-- redhat/kernel.spec: add iputils to the requires list for selftests-internal (Brian Masney)
-- redhat/kernel.spec.template: Require kernel-tools-libs in rtla (Tomas Glozar)
-- redhat: make kernel-debug-uki-virt installable without kernel-debug-core (Vitaly Kuznetsov)
-- redhat/configs: enable CONFIG_USB_XHCI_PCI_RENESAS on RHEL (Desnes Nunes) [RHEL-72093]
-- redhat/configs: Re-enable ZRAM backends and unify configuration (Neal Gompa)
-- redhat/configs: automotive: disable CONFIG_AIO (Davide Caratti)
-- redhat/configs: Re-enable CONFIG_INFINIBAND_VMWARE_PVRDMA (Vitaly Kuznetsov)
-- redhat/configs: PREEMPT_NOTIFIERS does not need to be explicitly listed (Michal Schmidt)
-- redhat/configs: delete all CONFIG_PREEMPT_*BEHAVIOUR (Michal Schmidt)
-- redhat/configs: automotive: disable CONFIG_NET_DROP_MONITOR (Davide Caratti)
-- redhat/configs: Enable the CS42L84 driver on Fedora (Neal Gompa)
-- generic: Remove and cleanups from staging 6.13 (Peter Robinson)
-- redhat: configs: Clean up DVB settings in RHEL (Kate Hsuan)
-- Move CONFIG_ARCH_TEGRA_241_SOC config/common so that it is enabled for RHEL as well as Fedora. Get rid of uneeded CONFIG_TEGRA241_CMDQV in configs/fedora while we're at it. (Mark Salter)
-- fedora: arm64: Enable the rockchip HDMI QP support (Peter Robinson)
-- crypto: rng - Fix extrng EFAULT handling (Herbert Xu)
-- redhat: configs: rhel: aarch64: Support NV Jetson MIPI camera (Kate Hsuan)
-- gitlab-ci: disable clang CI pipelines (Scott Weaver)
-- redhat/configs: Remove obsolete arch64/64k/CONFIG_FORCE_MAX_ZONEORDER (Waiman Long)
-- Fix up QCOM_EMAC config for Fedora (Justin M. Forbes)
-- redhat/configs: automotive: disable CONFIG_IO_URING (Ian Mullins)
-- redhat/kernel.spec.template: Link rtla against in-tree libcpupower (Tomas Glozar)
-- redhat: configs: enable INTEL_PLR_TPMI for RHEL (David Arcari)
-- configs: Enable CONFIG_NETKIT for RHEL (Toke Høiland-Jørgensen)
-- redhat: fix build/install targets in netfilter kselftest (Davide Caratti)
-- RHEL: disable the btt driver (Jeff Moyer)
-- redhat/configs: default to PREEMPT_LAZY on x86, riscv (Michal Schmidt)
-- redhat/configs: New config CONFIG_PREEMPT_LAZY (Michal Schmidt)
-- crypto: sig - Disable signing (Herbert Xu)
-- redhat/configs: enable SERIAL_AMBA_PL011 for automotive (Radu Rendec)
-- c10s: disable tests in CKI pipelines (Michael Hofmann)
-- redhat: Drop bpftool from kernel spec (Viktor Malik)
-- Better fixes for the fedora mismatch (Justin M. Forbes)
-- Mismatch fix ups for Fedora (Justin M. Forbes)
-- redhat/configs: Enable Intel Bluetooth PCIE drivers (Bastien Nocera)
-- One more pending to fix a mismatch (Justin M. Forbes)
-- redhat: fix RT PREEMPT configs for Fedora and RHEL (Clark Williams)
-- Pending fixes to avoid mismatch for 6.13 (Justin M. Forbes)
-- Reset changelog for 6.13 (Justin M. Forbes)
-- Reset RHEL_RELEASE for 6.13 (Justin M. Forbes)
-- redhat: Move perf_dlfilter.h from libperf-devel to perf (Akihiko Odaki)
-- Consolidate configs to common for 6.12 (Justin M. Forbes)
+* Thu Mar 05 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-1]
+- Rebase all branches ontop of v6.12.76
+
+* Thu Mar 05 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-0]
+- Linux v6.12.76
+- Cherry-pick all kernel-6.12.63/main kernel.changelog-9.99 commits to wipe slate clean.
+
+* Thu Feb 19 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-8]
+- Add NFS 4.1 DACL and SACL support to nfs4_acl passthru support
+
+* Mon Feb 16 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-7]
+- Include nfs4_acl passthru support for NFS reexport
+
+* Mon Feb 16 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-6]
+- Include most NFS changes from nfs-for-6.19-2 and nfs-for-7.0-1
+- nfs-for-7.0-1 provides the ability to disable NFS v4.0, use it.
+- Include most NFSD changes from nfsd-6.19-2, nfsd-6.19-3 and nfsd-7.0
+- nfsd-7.0 includes NFS POSIX ACL changes that are best to rebase NFSv4 ACL reexport passthru changes on.
+- did not include Jeff's NFSD dynamic thread control changes that went into nfsd-7.0
+- Include Ben's latest atomic_open changes from vfs-7.0-rc1.atomic_open
+
+* Sat Jan 31 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-5]
+- turn off CONFIG_PSI_DEFAULT_DISABLED
+- enable CONFIG_LATENCYTOP
+
+* Tue Jan 06 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-4]
+- Include "NFS: Fix a deadlock involving nfs_release_folio()"
+
+* Mon Jan 05 2026 Mike Snitzer <snitzer@kernel.org> [6.12.63-3]
+- Revert v6.15-ish mm backport, too risky, was helpful exercise and identified a missing DONTCACHE fix
+- Include "mm/filemap: fix miscalculated file range for filemap_fdatawrite_range_kick()"
+- Include various NFS/localio fixes.
+
+* Sun Dec 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.63-2]
+- Port mm changes through v6.15 with focus on filemap.c page-writeback.c huge_memory.c truncate.c shmem.c
+
+* Sun Dec 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.63-1]
+- Rebase all branches ontop of v6.12.63
+- Add a handful of mm/filemap fixes to kernel-6.12.63/mm branch
+
+* Sat Dec 20 2025 Mike Snitzer <snitzer@kernel.org> [6.12.63-0]
+- Linux v6.12.63
+- Cherry-pick all kernel-6.12.53/main kernel.changelog-9.99 commits to wipe slate clean.
+
+* Thu Dec 18 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-12]
+- Drop NFS support for directory delegations that was part of nfs-for-6.19-1 tag that was merged for 6.19.
+
+* Thu Dec 04 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-11]
+- Include NFS changes from what will be in tag nfs-for-6.19-1
+- Include NFSD changes from what will be in tag nfsd-6.19
+- Update Ben's VFS/NFSD atomic_open patchset to v4
+- Include "NFSD: interlock the use of NFSD_IO_DIRECT for NFS READ and WRITE"
+
+* Wed Nov 26 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-10]
+- nfs/localio: fix regression due to out-of-order __put_cred
+- nfs/localio: remove 61 byte hole from needless ____cacheline_aligned
+
+* Sat Nov 22 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-9]
+- redhat/configs: enable CONFIG_MLX4 for x86_64 only
+
+* Tue Nov 18 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-8]
+- Include "VFS/knfsd: Use atomic_open" and prereqs from Ben Coddington.
+
+* Mon Nov 17 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-7]
+- Include NFS fixes from tag nfs-for-6.18-3
+- Include NFSD fixes from tag nfsd-6.18-3
+- Rebase to include latest cel/nfsd-next and cel/nfsd-testing
+- Include "NFSD: add NFSD_IO_DIRECT heuristic for small IO" from Christoph Hellwig
+- Include "NFSD: add nfsd_direct_misaligned_num_pages modparam" for testing only
+
+* Wed Nov 05 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-6]
+- Include NFSD changes from nfsd-testing, including updated NFSD Direct v10 with further cleanup From Christoph Hellwig.
+- Rebased "NFSD: add new NFSD_IO_DIRECT variants that may override stable_how" because Chuck didn't pick it up.
+- NFSD: add Documentation/filesystems/nfs/nfsd-io-modes.rst
+- Fix accounting bug in "nfs/localio: do not issue misaligned DIO out-of-order"
+
++* Mon Nov 03 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-5]
++- Include NFSD changes from nfsd-testing, including updated NFSD Direct v9
++- nfs/localio: do not issue misaligned DIO out-of-order
+
++* Fri Oct 31 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-4]
++- Drop 3 of Chuck's NFSD Direct patches, overly complex and doesn't actually provide a benefit of dynamic alignment using lcm.
++- Drop "NFSD: Handle both offset and memory alignment for direct I/O"
++- Drop "NFSD: Combine direct I/O feasibility check with iterator setup"
++- Drop "NFSD: Refactor nfsd_vfs_write"
++- Rebase "NFSD: Handle kiocb->ki_flags correctly"
+
++* Thu Oct 30 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-3]
++- Include NFSD fixes from tag nfsd-6.18-2
++- Include NFSD changes from nfsd-testing, including updated NFSD Direct v8
++- nfsd: avoid using DONTCACHE for misaligned DIO's buffered IO fallback
++- NFSD: add new NFSD_IO_DIRECT variants that may override stable_how
++- Include NFS Direct fixes for commit c817248fc831 ("nfs/localio: add proper O_DIRECT support for READ and WRITE").
++- xfs: eliminate lockdep false positives in xfs_attr_shortform_list
+
++* Tue Oct 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-2]
++- Include NFS fixes from tag nfs-for-6.18-2
++- Include Trond's NFS fixes to not use RDMA if TLS
++- Include 6.18's "NFSv4/flexfiles: Add support for striped layouts" et al now that its clearly not why mtls wasn't working.
++- Refine NFSD Direct again by taking the latest code staged in cel/nfsd-testing
+
++* Thu Oct 16 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-1]
++- Rebase all branches ontop of v6.12.53
+
++* Thu Oct 16 2025 Mike Snitzer <snitzer@kernel.org> [6.12.53-0]
++- Linux v6.12.53
++- Cherry-pick all kernel-6.12.24/main kernel.changelog-9.99 commits to wipe slate clean.
+
+++* Wed Oct 15 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-26]
++- Revert 6.18's "NFSv4/flexfiles: Add support for striped layouts" and all deps in series, causes regression with flexfiles TLS.
++- Update the nfsd-testing changes and in doing so include updated fix "sunrpc: allocate a separate bvec array for socket sends"
++- Rebase NFSD Direct WRITE support to be ontop of "NFSD: Enable return of an updated stable_how to NFS clients"
++- Backport "xfs: rework datasync tracking and execution" to improve performance of fdatasync (which could help NFSD Direct).
+
+++* Tue Oct 07 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-25]
++- Fix merge-gone-wrong in fs/nfsd/nfsfh.c:fh_getattr() by removing redundant/buggy check.
++- Improve NFSD Direct's EINVAL logging for misaligned DIO WRITE.
++- Restore 6.18's "NFSv4/flexfiles: Add support for striped layouts" et al now that flexfiles LOCALIO support is fixed.
++- SUNRPC: Improve "fragment too large" warning
++- sunrpc: account for TCP record marker in rq_bvec array when sending
++- sunrpc: add a slot to rqstp->rq_bvec for TCP record marker
+
+++* Mon Oct 06 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-24]
++- Revert 6.18's "NFSv4/flexfiles: Add support for striped layouts" and all deps in series, causes refcount issues with LOCALIO.
+
++* Sat Oct 04 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-23]
++- Sync NFS thru tag nfs-for-6.18-1, but held off on taking the changes needed for NFS's DONTCACHE support.
++- Sync NFSD thru nfsd-next for 6.18, nfsd-testing and rebase NFSD Direct WRITE support.
++- Add "nvme-multipath: Skip nr_active increments in RETRY disposition" to fix imbalanced IO with queue-depth I/O policy.
+
++* Wed Sep 24 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-22]
++- Fix NFSD Direct READ support (test needs to be !page_len), Chuck keeps pushing completely untested broken code.
+
++* Fri Sep 19 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-21]
++- Rebase to latest NFSD Direct READ code from cel/direct-io branch, which will hopefully land in v6.18
++- Fix a few issues in NFS Direct by rebasing to v11, which will hopefully land in v6.18
+
++* Sat Sep 13 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-20]
++- Remove nfs kernel module parameter 'localio_O_DIRECT_semantics'
++- Push NFS client's misaligned DIO READ and WRITE handling down to NFS LOCALIO
++- nvme-tcp: sanitize request list handling
++- Update "nvme-tcp: fix I/O stalls on congested sockets" to reflect what went upstream.
+
++* Mon Sep 08 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-19]
++- rebase from v3 to v4 of Keith Busch's DIO alignment refactoring that removes bdev_iter_is_aligned
++- rebase NFSD DIRECT ontop of Chuck Lever's "NFSD: Implement NFSD_IO_DIRECT for NFS READ"
++- refactor "NFSD: Implement NFSD_IO_DIRECT for NFS WRITE" to hopefully appease Chuck Lever
++- include NFS fixes for 6.17 (what will likely be tag: nfs-for-6.17-3)
++- NFSv4/flexfiles: Fix layout merge mirror check.
+
++* Wed Sep 03 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-18]
++- NFSD: Remove a few WARN_ON_ONCE from the misaligned DIO READ and WRITE paths
++- NFSD: pr_warn_ratelimited if EINVAL on misaligned READ and WRITE paths
++- NFSD: handle DIO WRITE -ENOTBLK return by falling back to using buffered IO.
++- NFSD: fix misaligned DIO READ to not use a start_extra_page
++- NFSD: use /end/ of rq_pages for front_pad page, simpler workaround for rpcrdma bug
++- NFSD: fix debugfs interfaces to no longer use UNSPECIFIED state, explicitly default to NFSD_IO_BUFFERED
++- NFSD: add Documentation/filesystems/nfs/nfsd-io-modes.rst
++- NFSD: various other cel/nfsd-next and cel/nfsd-testing commits
++- NFSv4: Don't clear capabilities that won't be reset
++- NFSv4: Clear the NFS_CAP_FS_LOCATIONS flag if it is not set
++- NFSv4: Clear NFS_CAP_OPEN_XOR and NFS_CAP_DELEGTIME if not supported
++- NFSv4: Clear the NFS_CAP_XATTR flag if not supported by the server
++- Revert "nfs/direct: add misaligned WRITE handling" due to write corruption with MLperf unet3d
++- sunrpc: call xs_sock_process_cmsg for all cmsg
+
++* Fri Aug 15 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-17]
++- Reinstate use of iov_iter_aligned_bvec in terms of local helpers {nfsd,nfs}_iov_iter_aligned_bvec.
++- Add WARN_ON_ONCE if NFS DIRECT or NFSD DIRECT and underlying filesystem returns -EINVAL for misaligned IO.
++- Simplify NFS DIRECT's READ support to not expand the READ with DIO-aligned front-pad for a misaligned IO.
++- Eliminate NFS LOCALIO's support for falling back to NFSD to handle misaligned DIO READs.
+
++* Sat Aug 09 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-16]
++- Refine NFSD DIRECT's READ support further based on upstream review.
++- Fix other nits from upstream review of NFSD DIRECT.
+
++* Thu Aug 07 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-15]
++- Improve "NFSD: issue WRITEs using O_DIRECT even if IO is misaligned" so default buffered IO unimpacted by DIO.
+
++* Tue Aug 05 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-14]
++- Update all NFS and NFSD DIRECT code to not use iov_iter_is_aligned().
++- Add upstream changes to update block layer to remove bdev_iter_is_aligned and iov_iter_is_aligned.
++- Add "NFS: add basic STATX_DIOALIGN and STATX_DIO_READ_ALIGN support"
++- Drop "NFSD: handle unaligned DIO for NFS reexport"
+
++* Fri Aug 01 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-13]
++- Refine NFSD DIRECT's WRITE support further based on upstream review.
++- Improve {nfs,nfsd}_analyze_dio trace events for both NFSD and NFS to use common EVENT_CLASS for READ and WRITE.
++- Rebase to include all of NFS changes staged in Trond's linux-next branch for the v6.17 merge window.
++- Include "sunrpc: fix client side handling of tls alerts"
+
++* Wed Jul 30 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-12]
++- Rebase to include cel/nfsd-testing "sunrpc: fix handling of server side tls alerts"
++- Rebase to include cel/nfsd-testing "NFSD: issue READs using O_DIRECT even if IO is misaligned"
++- NFSD: issue WRITEs using O_DIRECT even if IO is misaligned
+
++* Thu Jul 24 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-11]
++- Optimize NFS DIRECT's misaligned READ and WRITE support to return early if IO obviously misaligned or DIO-aligned.
++- NFSD: filecache: only get DIO alignment attrs if NFSD_IO_DIRECT enabled
+
++* Wed Jul 23 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-10]
++- Fix a copy-n-paste bug in nfsd_vfs_write: s/nf_dio_read_offset_align/nf_dio_offset_align/
++- Rename struct nfsd_dio_io to nfsd_read_dio.
+
++* Mon Jul 21 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-9]
++- Rebase to include v3 of the "NFSD DIRECT" patchset that was sent to linux-nfs on July 14.
++- Rebase also includes Chuck Lever's nfsd-next and nfsd-testing changes from just after v6.16.rc7.
++- Restore all of v6.16-rc's NFS LOCALIO changes by NeilBrown, now with 4 LOCALIO fixes for v6.16.
++- Add misaligned READ and WRITE handling to NFS client's O_DIRECT code for LOCALIO's benefit.
+
++* Sat Jul 12 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-8]
++- Revert all of 6.16's NFS LOCALIO changes by NeilBrown; has systemic nfsd_file refcount issues
++- Also revert all of NeilBrown's sched and softirq wake_up_bit related deps for LOCALIO changes
++- Fix various offset/len and dma_alignment checking issues in NFSD's expanded READ to DIO-aligned support
++- Only expand misaligned READ to DIO-aligned (for both NFSD and LOCALIO) if IO is 32K or larger.
++- Add 'localio_O_DIRECT_align_misaligned_READ' boolean modparam to nfs.ko (defaults to Y).
++- This kernel serves as baseline for Hammerspace kernel used for MLperf 2025 July 11 submission.
+
++* Mon Jul 08 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-7]
++- One important fix to NFSD's O_DIRECT READ support so that natively DIO-aligned uses O_DIRECT.
++- Rebased v6.12.24-6 changes ontop of Chuck Lever's v6.16-rc5 rebase for nfsd-next and nfsd-testing.
+
++* Mon Jul 07 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-6]
++- Reworked NFSD debugfs to expose io_cache_read and io_cache_write (instead of enable-dontcache)
++- Include post-v6.16-rc1 NFSD and NFS fixes (through nfsd-6.16-1 and nfs-for-6.16-2)
++- lib/iov_iter: remove piecewise bvec length checking in iov_iter_aligned_bvec
++- Also include NFSD testing changes; fix NFSD READ support for aligning misaligned DIO.
++- Update NFS client's LOCALIO to support issuing misaligned READ DIO using remote call to NFSD.
+
++* Sat Jun 07 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-5]
++- Switch from nfsd.nfsd_dontcache=Y to echo 1 > /sys/kernel/debug/nfsd/enable-dontcache
++- NFSD: issue reads using O_DIRECT even if IO is misaligned
+
++* Fri May 30 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-4]
++- Update kernel-6.12.24/nfs branch to include upstream changes from both 'nfs-for-6.15-2' and 'nfsd-6.16' tags.
++- Include upstream's nfs-for-6.16 changes; which includes NeilBrown's LOCALIO RCU refactor patchset.
++- Add all DONTCACHE fixes that landed in the vfs.fixes branch since v6.15 was released.
++- NFSD: leverage DIO alignment to selectively issue O_DIRECT reads and writes
++Resolves:
+
++* Thu May 15 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-3]
++- Reverted 2 commits from 6.12.24-1 in favor of new commits:
++- NFSv4/pnfs: Reset the layout state after a layoutreturn
++- NFS/pnfs: Fix the error path in pnfs_layoutreturn_retry_later_locked()
++- Various other fixes and changes:
++- net/tls: remove msg_ready optimization to workaround unreliable TLS connect
++- pnfs/flexfiles: connect to NFSv3 DS using TLS if MDS connection uses TLS
++- NFS: add localio to sysfs
++- NFS: always probe for LOCALIO support asynchronously
++- NFS: add RWF_DONTCACHE support to LOCALIO
++- NFSD: allow dontcache to be enabled on a per-export basis
++- NFSD: add the ability to enable use of RWF_DONTCACHE for all nfsd IO
++Resolves:
+
++* Fri May 09 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-2]
++- pnfs/flexfiles: connect to NFSv3 DS using TLS if MDS connection uses TLS
++Resolves:
+
++* Wed Apr 30 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-1]
++- nfs: free leftover lsegs before freeing a layout in pnfs_put_layout_hdr
++- nfs: pr_warn if plh_segs or plh_return_segs are non-empty when freeing
++Resolves:
+
++* Tue Apr 22 2025 Mike Snitzer <snitzer@kernel.org> [6.12.24-baseline]
++- Linux v6.12.24
++Resolves:
+
++* Mon Feb 24 2025 Mike Snitzer <snitzer@kernel.org> [6.12.16-baseline]
++- Linux v6.12.16
++Resolves:
+
++* Tue Feb 18 2025 Mike Snitzer <snitzer@kernel.org> [6.12.15-baseline]
++- Linux v6.12.15
++Resolves:
+
++* Sun Feb 16 2025 Mike Snitzer <snitzer@kernel.org> [6.12.13-baseline]
++- Linux v6.12.13
++Resolves:
+
++* Fri Jan 17 2025 Mike Snitzer <snitzer@kernel.org> [6.12.10-baseline]
++- Linux v6.12.10
++Resolves:
+
++* Thu Jan 09 2025 Mike Snitzer <snitzer@kernel.org> [6.12.9-baseline]
++- Linux v6.12.9
++Resolves:
+
++* Mon Dec 30 2024 Mike Snitzer <snitzer@kernel.org> [6.12.7-baseline]
++- Linux v6.12.7
++Resolves:
+
++* Sat Dec 21 2024 Mike Snitzer <snitzer@kernel.org> [6.12.6-baseline]
++- Linux v6.12.6
++Resolves:
+
+* Mon Nov 18 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-64]
 - redhat/configs: cleanup CONFIG_DEV_DAX (David Hildenbrand)
 - redhat/configs: cleanup CONFIG_TRANSPARENT_HUGEPAGE_MADVISE for Fedora (David Hildenbrand)
 - redhat/configs: cleanup CONFIG_TRANSPARENT_HUGEPAGE (David Hildenbrand)
 - redhat/configs: enable CONFIG_TRANSPARENT_HUGEPAGE on s390x in Fedora (David Hildenbrand)
 - redhat/configs: automotive: Enable j784s4evm am3359 tscadc configs (Joel Slebodnick)
+- Linux v6.12.0
+Resolves: 
+
+* Sun Nov 17 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc7.4a5df3796467.63]
+- Linux v6.12.0-0.rc7.4a5df3796467
+Resolves: 
+
+* Sat Nov 16 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc7.e8bdb3c8be08.62]
 - redhat/configs: delete renamed CONFIG_MLX5_EN_MACSEC (Michal Schmidt)
 - rhel: disable DELL_RBU and cleanup related deps (Peter Robinson)
 - crypto: rng - Ensure stdrng is tested before user-space starts (Herbert Xu)
@@ -270,46 +361,191 @@ Resolves:
 - redhat: Disable WERROR for automotive temporarily (Julio Faracco)
 - redhat: Update spec file with automotive macros (Julio Faracco)
 - redhat: Add automotive CONFIGs (Julio Faracco)
+- Linux v6.12.0-0.rc7.e8bdb3c8be08
+Resolves: RHEL-1242, RHEL-29245, RHEL-35995, RHEL-44306
+
+* Fri Nov 15 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc7.cfaaa7d010d1.61]
+- Linux v6.12.0-0.rc7.cfaaa7d010d1
+Resolves: 
+
+* Thu Nov 14 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc7.0a9b9d17f3a7.60]
 - Fedora configs for 6.12 (Justin M. Forbes)
 - redhat/configs: Add CONFIG_CRYPTO_HMAC_S390 config (Mete Durlu) [RHEL-50799]
+- Linux v6.12.0-0.rc7.0a9b9d17f3a7
+Resolves: RHEL-50799
+
+* Wed Nov 13 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc7.f1b785f4c787.59]
 - redhat: configs: common: generic: Clean up EM28XX that are masked behind CONFIG_VIDEO_EM28XX (Kate Hsuan)
+- Linux v6.12.0-0.rc7.f1b785f4c787
+Resolves: 
+
+* Tue Nov 12 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc7.58]
 - redhat/configs: Update powerpc NR_CPUS config (Mamatha Inamdar)
 - redhat: use stricter rule for kunit.ko (Jan Stancek)
 - filtermod: fix clk kunit test and kunit location (Nico Pache)
+Resolves: 
+
+* Mon Nov 11 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc7.57]
 - redhat/configs: enable xr_serial on rhel (Desnes Nunes)
 - redhat/configs: enable ATH12K for rhel (Jose Ignacio Tornos Martinez)
 - redhat: configs: rhel: generic: x86: Enable IPU6 based MIPI cameras (Kate Hsuan)
 - os-build: enable CONFIG_SCHED_CLASS_EXT for RHEL (Phil Auld)
+- Linux v6.12.0-0.rc7
+Resolves: 
+
+* Sun Nov 10 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc6.de2f378f2b77.56]
+- Linux v6.12.0-0.rc6.de2f378f2b77
+Resolves: 
+
+* Sat Nov 09 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc6.da4373fbcf00.55]
 - Fedora 6.12 configs part 1 (Justin M. Forbes)
+- Linux v6.12.0-0.rc6.da4373fbcf00
+Resolves: 
+
+* Fri Nov 08 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc6.906bd684e4b1.54]
+- Linux v6.12.0-0.rc6.906bd684e4b1
+Resolves: 
+
+* Thu Nov 07 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc6.ff7afaeca1a1.53]
 - redhat: set new gcov configs (Jan Stancek)
 - Don't ignore gitkeep files for ark-infra (Don Zickus)
+- Linux v6.12.0-0.rc6.ff7afaeca1a1
+Resolves: 
+
+* Wed Nov 06 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc6.2e1b3cc9d7f7.52]
 - redhat/kernel.spec: don't clear entire libdir when building tools (Jan Stancek)
 - redhat/configs: enable usbip for rhel (Jose Ignacio Tornos Martinez)
 - redhat: create 'crashkernel=' addons for UKI (Vitaly Kuznetsov)
 - redhat: avoid superfluous quotes in UKI cmdline addones (Vitaly Kuznetsov)
 - fedora: arm: updates for 6.12 (Peter Robinson)
+Resolves: 
+
+* Tue Nov 05 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc6.2e1b3cc9d7f7.51]
+- Linux v6.12.0-0.rc6.2e1b3cc9d7f7
+Resolves: 
+
+* Mon Nov 04 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc6.50]
 - redhat/configs: add bootconfig to kernel-tools package (Brian Masney)
 - Enable CONFIG_SECURITY_LANDLOCK for RHEL (Zbigniew Jędrzejewski-Szmek) [RHEL-8810]
+- Linux v6.12.0-0.rc6
+Resolves: RHEL-8810
+
+* Sun Nov 03 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc5.3e5e6c9900c3.49]
+- Linux v6.12.0-0.rc5.3e5e6c9900c3
+Resolves: 
+
+* Sat Nov 02 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc5.11066801dd4b.48]
+- Linux v6.12.0-0.rc5.11066801dd4b
+Resolves: 
+
+* Fri Nov 01 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc5.6c52d4da1c74.47]
 - redhat: configs: Drop CONFIG_MEMSTICK_REALTEK_PCI config option (Desnes Nunes)
+- Linux v6.12.0-0.rc5.6c52d4da1c74
+Resolves: 
+
+* Thu Oct 31 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc5.0fc810ae3ae1.46]
 - Update the RHEL_DIFFERENCES help string (Don Zickus)
 - Put build framework for RT kernel in place for Fedora (Clark Williams)
+- Linux v6.12.0-0.rc5.0fc810ae3ae1
+Resolves: 
+
+* Wed Oct 30 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc5.c1e939a21eb1.45]
+- Linux v6.12.0-0.rc5.c1e939a21eb1
+Resolves: 
+
+* Tue Oct 29 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc5.e42b1a9a2557.44]
+- Linux v6.12.0-0.rc5.e42b1a9a2557
+Resolves: 
+
+* Mon Oct 28 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc5.43]
 - generic: enable RPMB for all configs that enable MMC (Peter Robinson)
 - fedora: riscv: Don't override MMC platform defaults (Peter Robinson)
 - common: only enable on MMC_DW_BLUEFIELD (Peter Robinson)
 - fedora: aarch64: Stop overriding CONFIG_MMC defaults (Peter Robinson)
 - commong: The KS7010 driver has been removed (Peter Robinson)
+- Linux v6.12.0-0.rc5
+Resolves: 
+
+* Sat Oct 26 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc4.850925a8133c.42]
+- Linux v6.12.0-0.rc4.850925a8133c
+Resolves: 
+
+* Fri Oct 25 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc4.ae90f6a6170d.41]
 - Trim Changelog for 6.12 (Justin M. Forbes)
+- Linux v6.12.0-0.rc4.ae90f6a6170d
+Resolves: 
+
+* Wed Oct 23 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc4.c2ee9f594da8.40]
 - Enable CONFIG_SECURITY_IPE for Fedora (Zbigniew Jędrzejewski-Szmek)
 - redhat: allow to override VERSION_ON_UPSTREAM from command line (Jan Stancek)
 - redhat: configs: Enable CONFIG_SECURITY_TOMOYO in Fedora kernels (Tetsuo Handa)
+Resolves: 
+
+* Tue Oct 22 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc4.c2ee9f594da8.39]
 - Revert "Merge branch 'enablement/gpio-expander' into 'os-build'" (Justin M. Forbes)
+- Linux v6.12.0-0.rc4.c2ee9f594da8
+Resolves: 
+
+* Mon Oct 21 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc4.38]
+- Linux v6.12.0-0.rc4
+Resolves: 
+
+* Sun Oct 20 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc3.715ca9dd687f.37]
+- Linux v6.12.0-0.rc3.715ca9dd687f
+Resolves: 
+
+* Sat Oct 19 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc3.3d5ad2d4eca3.36]
+- Linux v6.12.0-0.rc3.3d5ad2d4eca3
+Resolves: 
+
+* Fri Oct 18 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc3.4d939780b705.35]
+- Linux v6.12.0-0.rc3.4d939780b705
+Resolves: 
+
+* Thu Oct 17 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc3.c964ced77262.34]
+- Linux v6.12.0-0.rc3.c964ced77262
+Resolves: 
+
+* Wed Oct 16 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc3.2f87d0916ce0.33]
+- Linux v6.12.0-0.rc3.2f87d0916ce0
+Resolves: 
+
+* Tue Oct 15 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc3.eca631b8fe80.32]
 - redhat: configs: decrease CONFIG_PCP_BATCH_SCALE_MAX (Rafael Aquini)
 - redhat/configs: Enable CONFIG_RCU_TRACE in Fedora/REHL kernels (Waiman Long)
+- Linux v6.12.0-0.rc3.eca631b8fe80
+Resolves: 
+
+* Mon Oct 14 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc3.6485cf5ea253.31]
+- Linux v6.12.0-0.rc3.6485cf5ea253
+Resolves: 
+
+* Sun Oct 13 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc2.36c254515dc6.30]
+- Linux v6.12.0-0.rc2.36c254515dc6
+Resolves: 
+
+* Sat Oct 12 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc2.09f6b0c8904b.29]
 - fedora: distable RTL8192E wifi driver (Peter Robinson)
 - common: arm64: Fixup and cleanup some SCMI options (Peter Robinson)
 - common: Cleanup ARM_SCMI_TRANSPORT options (Peter Robinson)
+- Linux v6.12.0-0.rc2.09f6b0c8904b
+Resolves: 
+
+* Fri Oct 11 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc2.1d227fcc7222.28]
 - configs: fedora/x86: Set CONFIG_CRYPTO_DEV_CCP_DD=y (Hans de Goede)
+- Linux v6.12.0-0.rc2.1d227fcc7222
+Resolves: 
+
+* Thu Oct 10 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc2.d3d1556696c1.27]
+- Linux v6.12.0-0.rc2.d3d1556696c1
+Resolves: 
+
+* Wed Oct 09 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc2.75b607fab38d.26]
 - Turn on ZRAM_WRITEBACK for Fedora (Justin M. Forbes)
+- Linux v6.12.0-0.rc2.75b607fab38d
+Resolves: 
+
+* Tue Oct 08 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc2.87d6aab2389e.25]
 - configs: rhel: Fix designware I2C controllers related config settings (Hans de Goede)
 - Enable CONFIG_DMA_NUMA_CMA for x86_64 and aarch64 (Chris von Recklinghausen)
 - new config in drivers/phy (Izabela Bakollari)
@@ -317,15 +553,74 @@ Resolves:
 - configs: fedora: Drop duplicate CONFIG_I2C_DESIGNWARE_CORE for x86_64 and aarch64 (Hans de Goede)
 - Enable DESIGNWARE_CORE for ppc as well (Justin M. Forbes)
 - Fix up I2C_DESIGNWARE_CORE config for Fedora (Justin M. Forbes)
+- Linux v6.12.0-0.rc2.87d6aab2389e
+Resolves: 
+
+* Mon Oct 07 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc2.24]
+- Linux v6.12.0-0.rc2
+Resolves: 
+
+* Sun Oct 06 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc1.8f602276d390.23]
+- Linux v6.12.0-0.rc1.8f602276d390
+Resolves: 
+
+* Sat Oct 05 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc1.27cc6fdf7201.22]
+- Linux v6.12.0-0.rc1.27cc6fdf7201
+Resolves: 
+
+* Fri Oct 04 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc1.0c559323bbaa.21]
 - configs for RT deps (Clark Williams)
+- Linux v6.12.0-0.rc1.0c559323bbaa
+Resolves: 
+
+* Thu Oct 03 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc1.e32cde8d2bd7.20]
 - CONFIG_OF_OVERLAY: enable for aarch64 and powerpc (Scott Weaver)
 - redhat: enable changes to build rt variants (Clark Williams)
 - redhat: clean up pending-rhel (Patrick Talbert)
 - Enable CONFIG_SCHED_CLASS_EXT for Fedora (Jose Fernandez)
+Resolves: 
+
+* Wed Oct 02 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc1.e32cde8d2bd7.19]
 - redhat/configs: new config in arch/s390 (Izabela Bakollari)
+Resolves: 
+
+* Tue Oct 01 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc1.e32cde8d2bd7.18]
 - redhat: ignore rpminspect runpath report on selftests/bpf/cpuv4/urandom_read (Viktor Malik)
+- Linux v6.12.0-0.rc1.e32cde8d2bd7
+Resolves: 
+
+* Mon Sep 30 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc1.17]
+- Linux v6.12.0-0.rc1
+Resolves: 
+
+* Sun Sep 29 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.3efc57369a0c.16]
+- Linux v6.12.0-0.rc0.3efc57369a0c
+Resolves: 
+
+* Sat Sep 28 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.ad46e8f95e93.15]
+- Linux v6.12.0-0.rc0.ad46e8f95e93
+Resolves: 
+
+* Fri Sep 27 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.075dbe9f6e3c.14]
+- Linux v6.12.0-0.rc0.075dbe9f6e3c
+Resolves: 
+
+* Thu Sep 26 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.11a299a7933e.13]
 - [fedora] configs: add end of file newline to CONFIG_DMADEVICES_VDEBUG (Patrick Talbert)
 - unset CONFIG_DMADEVICES_VDEBUG (cmurf)
+- Linux v6.12.0-0.rc0.11a299a7933e
+Resolves: 
+
+* Wed Sep 25 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.684a64bf32b6.12]
+- Revert "Merge branch 'drop_engine_api' into 'os-build'" (Justin M. Forbes)
+- Linux v6.12.0-0.rc0.684a64bf32b6
+Resolves: 
+
+* Tue Sep 24 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.abf2050f51fd.11]
+- Linux v6.12.0-0.rc0.abf2050f51fd
+Resolves: 
+
+* Tue Sep 24 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.de5cb0dcb74c.10]
 - stop installing tools/build/Build, gone with ea974028a049f (Thorsten Leemhuis)
 - redhat/configs: Update LOCKDEP configs (Waiman Long)
 - uki-virt: Add i18n module (Vitaly Kuznetsov)
@@ -333,10 +628,41 @@ Resolves:
 - uki-virt: Drop redundant modules from dracut-virt.conf (Vitaly Kuznetsov)
 - uki-virt: Drop usrmount dracut module (Vitaly Kuznetsov)
 - redhat: new AMCC_QT2025_PHY config in drivers/net/phy (Patrick Talbert)
+Resolves: 
+
+* Mon Sep 23 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.de5cb0dcb74c.9]
+- Linux v6.12.0-0.rc0.de5cb0dcb74c
+Resolves: 
+
+* Sat Sep 21 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.1868f9d0260e.8]
+- Linux v6.12.0-0.rc0.1868f9d0260e
+Resolves: 
+
+* Fri Sep 20 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.baeb9a7d8b60.7]
 - redhat: change schedule jobs image from cki-tools to builder-rawhide (Patrick Talbert)
+- Linux v6.12.0-0.rc0.baeb9a7d8b60
+Resolves: 
+
+* Thu Sep 19 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.839c4f596f89.6]
+- Linux v6.12.0-0.rc0.839c4f596f89
+Resolves: 
+
+* Wed Sep 18 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.4a39ac5b7d62.5]
 - Add CONFIG_SND_SOC_RT1320_SDW to pending-rhel for mismatch (Justin M. Forbes)
 - Turn on CONFIG_SND_SOC_RT1320_SDW in pending rhel (Justin M. Forbes)
+- Linux v6.12.0-0.rc0.4a39ac5b7d62
+Resolves: 
+
+* Tue Sep 17 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.a940d9a43e62.4]
+- redhat: fix bad merge (Patrick Talbert)
+- Linux v6.12.0-0.rc0.a940d9a43e62
+Resolves: 
+
+* Tue Sep 17 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.adfc3ded5c33.3]
 - configs: disable CONFIG_AMCC_QT2025_PHY in pending (Patrick Talbert)
+Resolves: 
+
+* Mon Sep 16 2024 Fedora Kernel Team <kernel-team@fedoraproject.org> [6.12.0-0.rc0.adfc3ded5c33.2]
 - fedora: turn on CONFIG_FDMA for powerpc (Patrick Talbert)
 - Turn on CONFIG_FDMA in pending for Fedora arm and riscv to avoid a mismatch (Justin M. Forbes)
 - Reset RHEL_RELEASE for 6.12 (Justin M. Forbes)
@@ -435,6 +761,7 @@ Resolves:
 - fedora: enabled XE GPU drivers on all arches (Peter Robinson)
 - Flip SND_SOC_CS35L56_SPI from off to module for RHEL (Justin M. Forbes)
 - Flip DIMLIB from built-in to module for RHEL (Justin M. Forbes)
+- not upstream: drop openssl ENGINE API usage (Jan Stancek)
 - Also remove the zfcpdump BASE_SMALL config (Justin M. Forbes)
 - redhat: Add cgroup kselftests to kernel-selftests-internal (Waiman Long) [RHEL-43556]
 - Revert "redhat/configs: Disable CONFIG_INFINIBAND_HFI1 and CONFIG_INFINIBAND_RDMAVT" (Kamal Heib)
@@ -2508,9 +2835,11 @@ Resolves:
 - redhat: rh_kabi: Add macros to size and extend structs (Prarit Bhargava)
 - Removing Obsolete hba pci-ids from rhel8 (Dick Kennedy) [1572321]
 - mptsas: pci-id table changes (Laura Abbott)
+- mptsas: Taint kernel if mptsas is loaded (Laura Abbott)
 - mptspi: pci-id table changes (Laura Abbott)
 - qla2xxx: Remove PCI IDs of deprecated adapter (Jeremy Cline)
 - be2iscsi: remove unsupported device IDs (Chris Leech) [1574502 1598366]
+- mptspi: Taint kernel if mptspi is loaded (Laura Abbott)
 - hpsa: remove old cciss-based smartarray pci ids (Joseph Szczypek) [1471185]
 - qla4xxx: Remove deprecated PCI IDs from RHEL 8 (Chad Dupuis) [1518874]
 - aacraid: Remove depreciated device and vendor PCI id's (Raghava Aditya Renukunta) [1495307]
@@ -2862,5 +3191,5 @@ Resolves:
 - [initial commit] Add scripts (Laura Abbott)
 - [initial commit] Add configs (Laura Abbott)
 - [initial commit] Add Makefiles (Laura Abbott)
-- Linux v6.15.0-0.rc0.2df0c02dab82
-Resolves: RHEL-1242, RHEL-23931, RHEL-24137, RHEL-26170, RHEL-29245, RHEL-32110, RHEL-32895, RHEL-32987, RHEL-35995, RHEL-36646, RHEL-36647, RHEL-40251, RHEL-40411, RHEL-40937, RHEL-41231, RHEL-43425, RHEL-43556, RHEL-44306, RHEL-49398, RHEL-50799, RHEL-51896, RHEL-52629, RHEL-54183, RHEL-56069, RHEL-68296, RHEL-72093, RHEL-78341, RHEL-79711, RHEL-79818, RHEL-8810, rhbz#1471185, rhbz#1495307, rhbz#1509329, rhbz#1518076, rhbz#1518874, rhbz#1519554, rhbz#1546831, rhbz#1559877, rhbz#1561171, rhbz#1563590, rhbz#1565704, rhbz#1565717, rhbz#1572321, rhbz#1574502, rhbz#1590829, rhbz#1595918, rhbz#1598366, rhbz#1602033, rhbz#1609604, rhbz#1610493, rhbz#1613522, rhbz#1638087, rhbz#1652256, rhbz#1652266, rhbz#1663728, rhbz#1670017, rhbz#1722136, rhbz#1730649, rhbz#1802694, rhbz#1810301, rhbz#1821565, rhbz#1831065, rhbz#1855161, rhbz#1856174, rhbz#1856176, rhbz#1858592, rhbz#1858594, rhbz#1858596, rhbz#1858599, rhbz#1869674, rhbz#1871130, rhbz#1876435, rhbz#1876436, rhbz#1876977, rhbz#1877192, rhbz#1880486, rhbz#1890304, rhbz#1903201, rhbz#1915073, rhbz#1915290, rhbz#1930649, rhbz#1939095, rhbz#1940075, rhbz#1940794, rhbz#1943423, rhbz#1945002, rhbz#1945179, rhbz#1945477, rhbz#1947240, rhbz#1948340, rhbz#1952426, rhbz#1952863, rhbz#1953486, rhbz#1956988, rhbz#1957210, rhbz#1957219, rhbz#1957305, rhbz#1957636, rhbz#1957819, rhbz#1961178, rhbz#1962936, rhbz#1964537, rhbz#1967640, rhbz#1972795, rhbz#1976270, rhbz#1976835, rhbz#1976877, rhbz#1976884, rhbz#1977056, rhbz#1977529, rhbz#1978539, rhbz#1979379, rhbz#1981406, rhbz#1983298, rhbz#1986223, rhbz#1988254, rhbz#1988384, rhbz#1990040, rhbz#1993393, rhbz#1994858, rhbz#1998953, rhbz#2000835, rhbz#2002344, rhbz#2004233, rhbz#2004821, rhbz#2006813, rhbz#2007430, rhbz#2012226, rhbz#2014492, rhbz#2019377, rhbz#2020132, rhbz#2022578, rhbz#2023782, rhbz#2024595, rhbz#2025985, rhbz#2026319, rhbz#2027506, rhbz#2031547, rhbz#2032758, rhbz#2034670, rhbz#2038999, rhbz#2040643, rhbz#2041184, rhbz#2041186, rhbz#2041365, rhbz#2041990, rhbz#2042240, rhbz#2042241, rhbz#2043141, rhbz#2044155, rhbz#2053836, rhbz#2054579, rhbz#2062054, rhbz#2062909, rhbz#2071969, rhbz#2089765, rhbz#2115876, rhbz#2120968, rhbz#2122595, rhbz#2140017, rhbz#2142658, rhbz#2149273, rhbz#2153073, rhbz#2166911, rhbz#2188441, rhbz#2208834, rhbz#2216678, rhbz#2227793, rhbz#2231407, rhbz#2233269
+- Linux v6.12.0-0.rc0.adfc3ded5c33
+Resolves: RHEL-23931, RHEL-26170, RHEL-32110, RHEL-32895, RHEL-32987, RHEL-36646, RHEL-36647, RHEL-40251, RHEL-40411, RHEL-40937, RHEL-41231, RHEL-43425, RHEL-43556, RHEL-49398, RHEL-51896, RHEL-52629, RHEL-54183, RHEL-56069, rhbz#1471185, rhbz#1495307, rhbz#1509329, rhbz#1518076, rhbz#1518874, rhbz#1519554, rhbz#1546831, rhbz#1559877, rhbz#1561171, rhbz#1563590, rhbz#1565704, rhbz#1565717, rhbz#1572321, rhbz#1574502, rhbz#1590829, rhbz#1595918, rhbz#1598366, rhbz#1602033, rhbz#1609604, rhbz#1610493, rhbz#1613522, rhbz#1638087, rhbz#1652256, rhbz#1652266, rhbz#1663728, rhbz#1670017, rhbz#1722136, rhbz#1730649, rhbz#1802694, rhbz#1810301, rhbz#1821565, rhbz#1831065, rhbz#1855161, rhbz#1856174, rhbz#1856176, rhbz#1858592, rhbz#1858594, rhbz#1858596, rhbz#1858599, rhbz#1869674, rhbz#1871130, rhbz#1876435, rhbz#1876436, rhbz#1876977, rhbz#1877192, rhbz#1880486, rhbz#1890304, rhbz#1903201, rhbz#1915073, rhbz#1915290, rhbz#1930649, rhbz#1939095, rhbz#1940075, rhbz#1940794, rhbz#1943423, rhbz#1945002, rhbz#1945179, rhbz#1945477, rhbz#1947240, rhbz#1948340, rhbz#1952426, rhbz#1952863, rhbz#1953486, rhbz#1956988, rhbz#1957210, rhbz#1957219, rhbz#1957305, rhbz#1957636, rhbz#1957819, rhbz#1961178, rhbz#1962936, rhbz#1964537, rhbz#1967640, rhbz#1972795, rhbz#1976270, rhbz#1976835, rhbz#1976877, rhbz#1976884, rhbz#1977056, rhbz#1977529, rhbz#1978539, rhbz#1979379, rhbz#1981406, rhbz#1983298, rhbz#1986223, rhbz#1988254, rhbz#1988384, rhbz#1990040, rhbz#1993393, rhbz#1994858, rhbz#1998953, rhbz#2000835, rhbz#2002344, rhbz#2004233, rhbz#2004821, rhbz#2006813, rhbz#2007430, rhbz#2012226, rhbz#2014492, rhbz#2019377, rhbz#2020132, rhbz#2022578, rhbz#2023782, rhbz#2024595, rhbz#2025985, rhbz#2026319, rhbz#2027506, rhbz#2031547, rhbz#2032758, rhbz#2034670, rhbz#2038999, rhbz#2040643, rhbz#2041184, rhbz#2041186, rhbz#2041365, rhbz#2041990, rhbz#2042240, rhbz#2042241, rhbz#2043141, rhbz#2044155, rhbz#2053836, rhbz#2054579, rhbz#2062054, rhbz#2062909, rhbz#2071969, rhbz#2089765, rhbz#2115876, rhbz#2120968, rhbz#2122595, rhbz#2140017, rhbz#2142658, rhbz#2149273, rhbz#2153073, rhbz#2166911, rhbz#2188441, rhbz#2208834, rhbz#2216678, rhbz#2227793, rhbz#2231407, rhbz#2233269
