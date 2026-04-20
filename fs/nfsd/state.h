@@ -123,7 +123,7 @@ struct nfs4_stid {
 #define SC_TYPE_LAYOUT		BIT(3)
 	unsigned short		sc_type;
 
-/* state_lock protects sc_status for delegation stateids.
+/* nn->deleg_lock protects sc_status for delegation stateids.
  * ->cl_lock protects sc_status for open and lock stateids.
  * ->st_mutex also protect sc_status for open stateids.
  * ->ls_lock protects sc_status for layout stateids.
@@ -527,6 +527,9 @@ struct nfs4_client {
 
 	struct nfsd4_cb_recall_any	*cl_ra;
 	time64_t		cl_ra_time;
+#ifdef CONFIG_NFSD_SCSILAYOUT
+	struct xarray		cl_dev_fences;
+#endif
 };
 
 /* struct nfs4_client_reset
@@ -549,10 +552,10 @@ struct nfs4_client_reclaim {
  *   ~32(deleg. ace) = 112 bytes
  *
  * Some responses can exceed this. A LOCK denial includes the conflicting
- * lock owner, which can be up to 1024 bytes (NFS4_OPAQUE_LIMIT). Responses
- * larger than REPLAY_ISIZE are not cached in rp_ibuf; only rp_status is
- * saved. Enlarging this constant increases the size of every
- * nfs4_stateowner.
+ * lock owner, which can be up to 1024 bytes (NFS4_OPAQUE_LIMIT). When a
+ * response exceeds REPLAY_ISIZE, a buffer is dynamically allocated. If
+ * that allocation fails, only rp_status is saved. Enlarging this constant
+ * increases the size of every nfs4_stateowner.
  */
 
 #define NFSD4_REPLAY_ISIZE       112 
@@ -564,11 +567,13 @@ struct nfs4_client_reclaim {
 struct nfs4_replay {
 	__be32			rp_status;
 	unsigned int		rp_buflen;
-	char			*rp_buf;
+	char			*rp_buf; /* rp_ibuf or kmalloc'd */
 	struct knfsd_fh		rp_openfh;
 	int			rp_locked;
 	char			rp_ibuf[NFSD4_REPLAY_ISIZE];
 };
+
+extern void nfs4_replay_free_cache(struct nfs4_replay *rp);
 
 struct nfs4_stateowner;
 
@@ -851,11 +856,20 @@ struct nfsd_file *find_any_file(struct nfs4_file *f);
 #ifdef CONFIG_NFSD_V4
 void nfsd4_revoke_states(struct nfsd_net *nn, struct super_block *sb);
 void nfsd4_cancel_copy_by_sb(struct net *net, struct super_block *sb);
+int nfsd_net_cb_init(struct nfsd_net *nn);
+void nfsd_net_cb_shutdown(struct nfsd_net *nn);
 #else
 static inline void nfsd4_revoke_states(struct nfsd_net *nn, struct super_block *sb)
 {
 }
 static inline void nfsd4_cancel_copy_by_sb(struct net *net, struct super_block *sb)
+{
+}
+static inline int nfsd_net_cb_init(struct nfsd_net *nn)
+{
+	return 0;
+}
+static inline void nfsd_net_cb_shutdown(struct nfsd_net *nn)
 {
 }
 #endif
