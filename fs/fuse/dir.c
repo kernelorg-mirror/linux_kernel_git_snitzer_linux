@@ -1390,34 +1390,40 @@ int fuse_reverse_inval_entry(struct fuse_conn *fc, u64 parent_nodeid,
 {
 	int err = -ENOTDIR;
 	struct inode *parent;
-	struct dentry *dir;
-	struct dentry *entry;
+	struct dentry *dir = NULL;
+	struct dentry *entry = NULL;
 
 	parent = fuse_ilookup(fc, parent_nodeid, NULL);
 	if (!parent)
 		return -ENOENT;
 
-	inode_lock_nested(parent, I_MUTEX_PARENT);
 	if (!S_ISDIR(parent->i_mode))
-		goto unlock;
+		goto put_parent;
 
 	err = -ENOENT;
 	dir = d_find_alias(parent);
 	if (!dir)
-		goto unlock;
-
-	name->hash = full_name_hash(dir, name->name, name->len);
-	entry = d_lookup(dir, name);
-	dput(dir);
-	if (!entry)
-		goto unlock;
+		goto put_parent;
+	while (!entry) {
+		struct dentry *child = try_lookup_noperm(name, dir);
+		if (!child || IS_ERR(child))
+			goto put_parent;
+		entry = start_removing_dentry(dir, child);
+		dput(child);
+		if (IS_ERR(entry))
+			goto put_parent;
+		if (!d_same_name(entry, dir, name)) {
+			end_removing(entry);
+			entry = NULL;
+		}
+	}
 
 	fuse_dir_changed(parent);
 	if (!(flags & FUSE_EXPIRE_ONLY))
 		d_invalidate(entry);
 	fuse_invalidate_entry_cache(entry);
 
-	if (child_nodeid != 0 && d_really_is_positive(entry)) {
+	if (child_nodeid != 0) {
 		inode_lock(d_inode(entry));
 		if (get_node_id(d_inode(entry)) != child_nodeid) {
 			err = -ENOENT;
@@ -1445,10 +1451,10 @@ int fuse_reverse_inval_entry(struct fuse_conn *fc, u64 parent_nodeid,
 	} else {
 		err = 0;
 	}
-	dput(entry);
 
- unlock:
-	inode_unlock(parent);
+	end_removing(entry);
+ put_parent:
+	dput(dir);
 	iput(parent);
 	return err;
 }
