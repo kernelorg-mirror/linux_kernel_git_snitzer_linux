@@ -899,7 +899,7 @@ BuildRequires: libnl3-devel
 %endif
 
 %if %{with_tools} && %{with_ynl}
-BuildRequires: python3-pyyaml python3-jsonschema python3-pip python3-setuptools >= 61
+BuildRequires: python3-devel python3-pyyaml python3-jsonschema python3-pip python3-setuptools >= 61
 BuildRequires: (python3-wheel if python3-setuptools < 70)
 %endif
 
