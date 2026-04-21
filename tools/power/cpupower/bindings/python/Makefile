@@ -8,9 +8,9 @@ CC ?= gcc
 # CFLAGS ?=
 LDFLAGS ?= -lcpupower
 HAVE_SWIG := $(shell if which swig >/dev/null 2>&1; then echo 1; else echo 0; fi)
-HAVE_PYCONFIG := $(shell if which python-config >/dev/null 2>&1; then echo 1; else echo 0; fi)
+HAVE_PYCONFIG := $(shell if which python3-config >/dev/null 2>&1; then echo 1; else echo 0; fi)
 
-PY_INCLUDE ?= $(firstword $(shell python-config --includes))
+PY_INCLUDE ?= $(firstword $(shell python3-config --includes))
 INSTALL_DIR ?= $(shell python3 -c "import site; print(site.getsitepackages()[0])")
 
 all: _raw_pylibcpupower.so
