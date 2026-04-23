@@ -287,32 +287,83 @@ nfsd4_decode_bitmap4(struct nfsd4_compoundargs *argp, u32 *bmval, u32 bmlen)
 	return status == -EBADMSG ? nfserr_bad_xdr : nfs_ok;
 }
 
+static DEFINE_STATIC_KEY_FALSE(nfs4_acl_passthru);
+
+__be32 nfsd4_decode_nfs4_acl_passthru(struct nfsd4_compoundargs *argp,
+				      u32 *bmval, struct nfs4_acl **acl)
+{
+	u32 acl_len = (*acl)->payload.len;
+	unsigned int pgbase, num_pages;
+	struct xdr_stream xdr;
+	__be32 status = nfs_ok;
+	void *p;
+
+	if (WARN_ON_ONCE(!static_key_enabled(&nfs4_acl_passthru.key)))
+		return nfserr_resource;
+
+	xdr_init_decode(&xdr, &(*acl)->payload,
+			(*acl)->payload.head[0].iov_base, NULL);
+
+	p = xdr_inline_decode(&xdr, acl_len);
+	if (p == NULL) {
+		status = nfserr_bad_xdr;
+		goto out;
+	}
+
+	pgbase = (unsigned long)p & ~PAGE_MASK;
+	num_pages = DIV_ROUND_UP(pgbase + acl_len, PAGE_SIZE);
+
+	*acl = svcxdr_tmpalloc(argp, (sizeof(struct nfs4_acl) +
+				      num_pages * sizeof(struct page *)));
+	if (*acl == NULL) {
+		status = nfserr_jukebox;
+		goto out;
+	}
+
+	if (bmval[0] & FATTR4_WORD0_ACL)
+		(*acl)->type = NFS4ACL_ACL;
+	else if (bmval[1] & FATTR4_WORD1_DACL)
+		(*acl)->type = NFS4ACL_DACL;
+	else if (bmval[1] & FATTR4_WORD1_SACL)
+		(*acl)->type = NFS4ACL_SACL;
+
+	(*acl)->len = acl_len;
+	(*acl)->pgbase = pgbase;
+
+	for (int i = 0; i < num_pages; i++)
+		(*acl)->pages[i] = virt_to_page(p + (i << PAGE_SHIFT));
+out:
+	xdr_finish_decode(&xdr);
+	return status;
+}
+
 static __be32
-nfsd4_decode_nfsace4(struct nfsd4_compoundargs *argp, struct nfs4_ace *ace)
+nfsd4_decode_nfsace4(struct xdr_stream *xdr, struct svc_rqst *rqstp,
+		     struct nfs4_ace *ace)
 {
 	__be32 *p, status;
 	u32 length;
 
-	if (xdr_stream_decode_u32(argp->xdr, &ace->type) < 0)
+	if (xdr_stream_decode_u32(xdr, &ace->type) < 0)
 		return nfserr_bad_xdr;
-	if (xdr_stream_decode_u32(argp->xdr, &ace->flag) < 0)
+	if (xdr_stream_decode_u32(xdr, &ace->flag) < 0)
 		return nfserr_bad_xdr;
-	if (xdr_stream_decode_u32(argp->xdr, &ace->access_mask) < 0)
+	if (xdr_stream_decode_u32(xdr, &ace->access_mask) < 0)
 		return nfserr_bad_xdr;
 
-	if (xdr_stream_decode_u32(argp->xdr, &length) < 0)
+	if (xdr_stream_decode_u32(xdr, &length) < 0)
 		return nfserr_bad_xdr;
-	p = xdr_inline_decode(argp->xdr, length);
+	p = xdr_inline_decode(xdr, length);
 	if (!p)
 		return nfserr_bad_xdr;
 	ace->whotype = nfs4_acl_get_whotype((char *)p, length);
 	if (ace->whotype != NFS4_ACL_WHO_NAMED)
 		status = nfs_ok;
 	else if (ace->flag & NFS4_ACE_IDENTIFIER_GROUP)
-		status = nfsd_map_name_to_gid(argp->rqstp,
+		status = nfsd_map_name_to_gid(rqstp,
 				(char *)p, length, &ace->who_gid);
 	else
-		status = nfsd_map_name_to_uid(argp->rqstp,
+		status = nfsd_map_name_to_uid(rqstp,
 				(char *)p, length, &ace->who_uid);
 
 	return status;
@@ -320,35 +371,55 @@ nfsd4_decode_nfsace4(struct nfsd4_compoundargs *argp, struct nfs4_ace *ace)
 
 /* A counted array of nfsace4's */
 static noinline __be32
-nfsd4_decode_acl(struct nfsd4_compoundargs *argp, struct nfs4_acl **acl)
+nfsd4_decode_acl(struct nfsd4_compoundargs *argp, struct nfs4_acl **acl,
+		 u32 acl_len)
 {
+
+	struct xdr_buf payload, saved_payload;
+	struct xdr_stream xdr;
 	struct nfs4_ace *ace;
-	__be32 status;
+	__be32 status = nfs_ok;
 	u32 count;
 
-	if (xdr_stream_decode_u32(argp->xdr, &count) < 0)
+	if (!xdr_stream_subsegment(argp->xdr, &payload, acl_len))
 		return nfserr_bad_xdr;
+	if (static_key_enabled(&nfs4_acl_passthru.key))
+		memcpy(&saved_payload, &payload, sizeof(struct xdr_buf));
+	xdr_init_decode(&xdr, &payload, payload.head[0].iov_base, NULL);
 
-	if (count > xdr_stream_remaining(argp->xdr) / 20)
+	if (xdr_stream_decode_u32(&xdr, &count) < 0) {
+		status = nfserr_bad_xdr;
+		goto out;
+	}
+
+	if (count > xdr_stream_remaining(&xdr) / 20) {
 		/*
 		 * Even with 4-byte names there wouldn't be
 		 * space for that many aces; something fishy is
 		 * going on:
 		 */
-		return nfserr_fbig;
+		status = nfserr_fbig;
+		goto out;
+	}
 
 	*acl = svcxdr_tmpalloc(argp, nfs4_acl_bytes(count));
-	if (*acl == NULL)
-		return nfserr_jukebox;
+	if (*acl == NULL) {
+		status = nfserr_jukebox;
+		goto out;
+	}
+	if (static_key_enabled(&nfs4_acl_passthru.key))
+		memcpy(&(*acl)->payload, &saved_payload,
+		       sizeof(struct xdr_buf));
 
 	(*acl)->naces = count;
 	for (ace = (*acl)->aces; ace < (*acl)->aces + count; ace++) {
-		status = nfsd4_decode_nfsace4(argp, ace);
+		status = nfsd4_decode_nfsace4(&xdr, argp->rqstp, ace);
 		if (status)
-			return status;
+			goto out;
 	}
-
-	return nfs_ok;
+out:
+	xdr_finish_decode(&xdr);
+	return status;
 }
 
 static noinline __be32
@@ -513,8 +584,9 @@ nfsd4_decode_fattr4(struct nfsd4_compoundargs *argp, u32 *bmval, u32 bmlen,
 		iattr->ia_size = size;
 		iattr->ia_valid |= ATTR_SIZE;
 	}
-	if (bmval[0] & FATTR4_WORD0_ACL) {
-		status = nfsd4_decode_acl(argp, acl);
+	if (bmval[0] & FATTR4_WORD0_ACL ||
+	    (bmval[1] & (FATTR4_WORD1_DACL | FATTR4_WORD1_SACL))) {
+		status = nfsd4_decode_acl(argp, acl, attrlist4_count);
 		if (status)
 			return status;
 	} else
@@ -3195,8 +3267,12 @@ static __be32 nfsd4_encode_fattr4_supported_attrs(struct xdr_stream *xdr,
 	u32 supp[3];
 
 	memcpy(supp, nfsd_suppattrs[minorversion], sizeof(supp));
-	if (!IS_POSIXACL(d_inode(args->dentry)))
-		supp[0] &= ~FATTR4_WORD0_ACL;
+	if (!nfsd_supports_nfs4_acl(args->dentry)) {
+		if (supp[0] & FATTR4_WORD0_ACL)
+			supp[0] &= ~FATTR4_WORD0_ACL;
+		else if ((supp[1] & (FATTR4_WORD1_DACL | FATTR4_WORD1_SACL)))
+			supp[1] &= ~(FATTR4_WORD1_DACL | FATTR4_WORD1_SACL);
+	}
 	if (!args->contextsupport)
 		supp[2] &= ~FATTR4_WORD2_SECURITY_LABEL;
 
@@ -3328,9 +3404,43 @@ static __be32 nfsd4_encode_fattr4_aclsupport(struct xdr_stream *xdr,
 	u32 mask;
 
 	mask = 0;
-	if (IS_POSIXACL(d_inode(args->dentry)))
+	if (nfsd_supports_nfs4_acl(args->dentry))
 		mask = ACL4_SUPPORT_ALLOW_ACL | ACL4_SUPPORT_DENY_ACL;
 	return nfsd4_encode_uint32_t(xdr, mask);
+}
+
+static __be32 nfsd4_encode_nfs4_acl_passthru(struct xdr_stream *xdr,
+					     struct nfs4_acl *acl)
+{
+	uint32_t pgbase = acl->pgbase;
+	uint32_t remaining = acl->len;
+	unsigned int npages = DIV_ROUND_UP(remaining, PAGE_SIZE);
+
+	/*
+	 * GETACL will precede SETACL, if passthru is used for
+	 * GETACL then enable SETACL's extra work required
+	 * to support passthru.
+	 */
+	static_key_enable(&nfs4_acl_passthru.key);
+
+	for (int i = 0; i < npages; i++) {
+		void *vaddr = page_address(acl->pages[i]);
+		size_t len = (remaining < PAGE_SIZE) ? remaining : PAGE_SIZE;
+
+		if (pgbase) {
+			vaddr += pgbase;
+			pgbase = 0;
+		}
+		WARN_ON_ONCE(xdr_stream_encode_opaque_fixed(xdr, vaddr, len) < 0);
+		remaining -= len;
+		/*
+		 * Free each page that was allocated using alloc_page()
+		 * in nfsd4_get_nfs4_acl_passthru().
+		 */
+		__free_page(acl->pages[i]);
+	}
+
+	return nfs_ok;
 }
 
 static __be32 nfsd4_encode_fattr4_acl(struct xdr_stream *xdr,
@@ -3345,6 +3455,10 @@ static __be32 nfsd4_encode_fattr4_acl(struct xdr_stream *xdr,
 		if (xdr_stream_encode_u32(xdr, 0) != XDR_UNIT)
 			return nfserr_resource;
 	} else {
+		if (!IS_POSIXACL(d_inode(args->dentry)) &&
+		    exportfs_may_passthru_nfs4acl(args->dentry->d_sb->s_export_op))
+			return nfsd4_encode_nfs4_acl_passthru(xdr, acl);
+
 		if (xdr_stream_encode_u32(xdr, acl->naces) != XDR_UNIT)
 			return nfserr_resource;
 		for (ace = acl->aces; ace < acl->aces + acl->naces; ace++) {
@@ -3600,8 +3714,12 @@ static __be32 nfsd4_encode_fattr4_suppattr_exclcreat(struct xdr_stream *xdr,
 	u32 supp[3];
 
 	memcpy(supp, nfsd_suppattrs[resp->cstate.minorversion], sizeof(supp));
-	if (!IS_POSIXACL(d_inode(args->dentry)))
-		supp[0] &= ~FATTR4_WORD0_ACL;
+	if (!nfsd_supports_nfs4_acl(args->dentry)) {
+		if (supp[0] & FATTR4_WORD0_ACL)
+			supp[0] &= ~FATTR4_WORD0_ACL;
+		else if ((supp[1] & (FATTR4_WORD1_DACL | FATTR4_WORD1_SACL)))
+			supp[1] &= ~(FATTR4_WORD1_DACL | FATTR4_WORD1_SACL);
+	}
 	if (!args->contextsupport)
 		supp[2] &= ~FATTR4_WORD2_SECURITY_LABEL;
 
@@ -3790,8 +3908,8 @@ static const nfsd4_enc_attr nfsd4_enc_fattr4_encode_ops[] = {
 	[FATTR4_MOUNTED_ON_FILEID]	= nfsd4_encode_fattr4_mounted_on_fileid,
 	[FATTR4_DIR_NOTIF_DELAY]	= nfsd4_encode_fattr4__noop,
 	[FATTR4_DIRENT_NOTIF_DELAY]	= nfsd4_encode_fattr4__noop,
-	[FATTR4_DACL]			= nfsd4_encode_fattr4__noop,
-	[FATTR4_SACL]			= nfsd4_encode_fattr4__noop,
+	[FATTR4_DACL]			= nfsd4_encode_fattr4_acl,
+	[FATTR4_SACL]			= nfsd4_encode_fattr4_acl,
 	[FATTR4_CHANGE_POLICY]		= nfsd4_encode_fattr4__noop,
 	[FATTR4_FS_STATUS]		= nfsd4_encode_fattr4__noop,
 
@@ -3970,9 +4088,27 @@ nfsd4_encode_fattr4(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 		args.fhp = fhp;
 
 	if (attrmask[0] & FATTR4_WORD0_ACL) {
-		err = nfsd4_get_nfs4_acl(rqstp, dentry, &args.acl);
+		err = nfsd4_get_nfs4_acl(rqstp, dentry, NFS4ACL_ACL, &args.acl);
 		if (err == -EOPNOTSUPP)
 			attrmask[0] &= ~FATTR4_WORD0_ACL;
+		else if (err == -EINVAL) {
+			status = nfserr_attrnotsupp;
+			goto out;
+		} else if (err != 0)
+			goto out_nfserr;
+	} else if (attrmask[1] & FATTR4_WORD1_DACL) {
+		err = nfsd4_get_nfs4_acl(rqstp, dentry, NFS4ACL_DACL, &args.acl);
+		if (err == -EOPNOTSUPP)
+			attrmask[1] &= ~FATTR4_WORD1_DACL;
+		else if (err == -EINVAL) {
+			status = nfserr_attrnotsupp;
+			goto out;
+		} else if (err != 0)
+			goto out_nfserr;
+	} else if (attrmask[1] & FATTR4_WORD1_SACL) {
+		err = nfsd4_get_nfs4_acl(rqstp, dentry, NFS4ACL_SACL, &args.acl);
+		if (err == -EOPNOTSUPP)
+			attrmask[1] &= ~FATTR4_WORD1_SACL;
 		else if (err == -EINVAL) {
 			status = nfserr_attrnotsupp;
 			goto out;
