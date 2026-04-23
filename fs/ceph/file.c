@@ -3184,7 +3184,6 @@ const struct file_operations ceph_file_fops = {
 	.mmap_prepare = ceph_mmap_prepare,
 	.fsync = ceph_fsync,
 	.lock = ceph_lock,
-	.setlease = simple_nosetlease,
 	.flock = ceph_flock,
 	.splice_read = ceph_splice_read,
 	.splice_write = iter_file_splice_write,
