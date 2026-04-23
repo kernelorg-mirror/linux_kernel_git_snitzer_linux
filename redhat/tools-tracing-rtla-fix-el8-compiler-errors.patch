@@ -1,0 +1,49 @@
+From 5ab5b19dfd6ec347aa470bf821e3e510b7cfacef Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@hammerspace.com>
+Date: Thu, 28 Nov 2024 16:14:30 +0000
+Subject: [PATCH] tools/tracing/rtla: fix el8 compiler errors due to old glibc
+
+Fixes gettid() being unavailable.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+
+diff --git a/tools/tracing/rtla/Makefile.config b/tools/tracing/rtla/Makefile.config
+index 07ff5e8f3006..3a70afe37502 100644
+--- a/tools/tracing/rtla/Makefile.config
++++ b/tools/tracing/rtla/Makefile.config
+@@ -103,6 +103,10 @@ ifeq ($(BUILD_BPF_SKEL),1)
+   EXTLIBS += -lbpf
+ endif
+ 
++ifeq ($(feature-gettid), 1)
++  CFLAGS += -DHAVE_GETTID
++endif
++
+ ifeq ($(STOP_ERROR),1)
+   $(error Please, check the errors above.)
+ endif
+diff --git a/tools/tracing/rtla/src/timerlat_u.c b/tools/tracing/rtla/src/timerlat_u.c
+index 01dbf9a6b5a5..0e01e199bc57 100644
+--- a/tools/tracing/rtla/src/timerlat_u.c
++++ b/tools/tracing/rtla/src/timerlat_u.c
+@@ -13,12 +13,20 @@
+ #include <string.h>
+ #include <tracefs.h>
+ #include <pthread.h>
++#include <syscall.h> /* for gettid() */
+ #include <sys/wait.h>
+ #include <sys/prctl.h>
+ 
+ #include "utils.h"
+ #include "timerlat_u.h"
+ 
++#ifndef HAVE_GETTID
++static inline pid_t gettid(void)
++{
++	return (pid_t)syscall(__NR_gettid);
++}
++#endif
++
+ /*
+  * This is the user-space main for the tool timerlatu/ threads.
+  *

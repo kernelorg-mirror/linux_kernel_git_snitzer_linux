@@ -109,7 +109,7 @@ Summary: The Linux kernel
 %if 0%{?fedora}
 %define secure_boot_arch x86_64 aarch64
 %else
-%define secure_boot_arch x86_64 aarch64 s390x ppc64le
+%define secure_boot_arch x86_64 aarch64 ppc64le
 %endif
 
 # Signing for secure boot authentication
@@ -234,8 +234,6 @@ Summary: The Linux kernel
 %define with_base      %{?_without_base:      0} %{?!_without_base:      1}
 # build also debug variants
 %define with_debug     %{?_without_debug:     0} %{?!_without_debug:     1}
-# kernel-zfcpdump (s390 specific kernel for zfcpdump)
-%define with_zfcpdump  %{?_without_zfcpdump:  0} %{?!_without_zfcpdump:  1}
 # kernel-16k (aarch64 kernel with 16K page_size)
 %define with_arm64_16k %{?_with_arm64_16k:    1} %{?!_with_arm64_16k:    0}
 # kernel-64k (aarch64 kernel with 64K page_size)
@@ -258,7 +256,6 @@ Summary: The Linux kernel
 # Supported variants
 #            with_base with_debug    with_gcov
 # stock      X         X             X
-# zfcpdump   X                       X
 # arm64_16k  X         X             X
 # arm64_64k  X         X             X
 # realtime   X         X             X
@@ -342,6 +339,21 @@ Summary: The Linux kernel
 %define with_efiuki 0
 %endif
 
+%if "%{?dist}" == ".el8"
+# required systemd deps aren't available in el8 (e.g. systemd-ukify)
+%define with_efiuki 0
+
+# The generation and use of symvers.xz is incompatible with .el8's
+# /usr/lib/rpm/fileattrs/kabi.attr (which looks for symvers.gz)
+%define symvers_compression gzip
+%define symvers_compression_flags -c9
+%define symvers_compext gz
+%else
+%define symvers_compression %compression
+%define symvers_compression_flags %compression_flags
+%define symvers_compext %compext
+%endif
+
 %ifarch aarch64
 # dtbloader sub-package requires stubble which is only in Fedora for now
 %if 0%{?fedora}
@@ -370,7 +382,7 @@ Summary: The Linux kernel
 %endif
 
 %if %{with toolchain_clang}
-%ifarch s390x ppc64le
+%ifarch ppc64le
 %global llvm_ias 0
 %else
 %global llvm_ias 1
@@ -462,7 +474,6 @@ Summary: The Linux kernel
 %define with_headers 0
 %define with_efiuki 0
 %define with_dtbloader 0
-%define with_zfcpdump 0
 %define with_arm64_16k 0
 %define with_arm64_64k 0
 %endif
@@ -501,7 +512,6 @@ Summary: The Linux kernel
 %define with_headers 0
 %define with_efiuki 0
 %define with_dtbloader 0
-%define with_zfcpdump 0
 %define with_vdso_install 0
 %define with_kabichk 0
 %define with_kabidwchk 0
@@ -601,21 +611,11 @@ Summary: The Linux kernel
 %define with_sparse 0
 %endif
 
-# zfcpdump mechanism is s390 only
-%ifnarch s390x
-%define with_zfcpdump 0
-%endif
-
 # 16k and 64k variants only for aarch64
 %ifnarch aarch64
 %define with_arm64_16k 0
 %define with_arm64_64k 0
 %define with_realtime_arm64_64k 0
-%endif
-
-%if 0%{?fedora}
-# This is not for Fedora
-%define with_zfcpdump 0
 %endif
 
 # Per-arch tweaks
@@ -638,13 +638,6 @@ Summary: The Linux kernel
 %define kernel_image vmlinux
 %define kernel_image_elf 1
 %define use_vdso 0
-%endif
-
-%ifarch s390x
-%define asmarch s390
-%define hdrarch s390
-%define kernel_image arch/s390/boot/bzImage
-%define vmlinux_decompressor arch/s390/boot/vmlinux
 %endif
 
 %ifarch aarch64
@@ -684,7 +677,6 @@ Summary: The Linux kernel
 # disable BuildKernel commands
 %define with_stock 0
 %define with_debug 0
-%define with_zfcpdump 0
 %define with_arm64_16k 0
 %define with_arm64_64k 0
 %define with_realtime 0
@@ -723,6 +715,14 @@ Summary: The Linux kernel
 %define with_debug 0
 %endif
 
+# Hammerspace doesn't need these, but also on RHEL8 rt causes:
+# error: line 4201: %files rt
+# : package kernel-rt does not exist
+%define with_realtime 0
+%define with_realtime_arm64_64k 0
+%define with_automotive 0
+%define with_ynl 0
+
 # short-hand for "are we building base/non-debug variants of ...?"
 %if %{with_stock} && %{with_base}
 %define with_stock_base 1
@@ -759,7 +759,7 @@ Summary: The Linux kernel
 # Packages that need to be installed before the kernel is, because the %%post
 # scripts use them.
 #
-%define kernel_prereq  coreutils, systemd >= 203-2, /usr/bin/kernel-install
+%define kernel_prereq  coreutils, systemd >= 203-2, /usr/bin/kernel-install, kmod >= 25-20
 %define initrd_prereq  dracut >= 027
 
 
@@ -771,9 +771,9 @@ Release: %{pkg_release}
 # DO NOT CHANGE THE 'ExclusiveArch' LINE TO TEMPORARILY EXCLUDE AN ARCHITECTURE BUILD.
 # SET %%nobuildarches (ABOVE) INSTEAD
 %if 0%{?fedora}
-ExclusiveArch: noarch x86_64 s390x aarch64 ppc64le riscv64
+ExclusiveArch: noarch x86_64 aarch64 ppc64le riscv64
 %else
-ExclusiveArch: noarch i386 i686 x86_64 s390x aarch64 ppc64le riscv64
+ExclusiveArch: noarch i386 i686 x86_64 aarch64 ppc64le riscv64
 %endif
 ExclusiveOS: Linux
 %ifnarch %{nobuildarches}
@@ -791,18 +791,26 @@ Provides: installonlypkg(kernel)
 # List the packages used during the kernel build
 #
 BuildRequires: kmod, bash, coreutils, tar, git-core, which
-BuildRequires: bzip2, xz, findutils, m4, perl-interpreter, perl-Carp, perl-devel, perl-generators, make, diffutils, gawk, %compression
+BuildRequires: bzip2, xz, findutils, m4, perl-interpreter, perl-Carp, perl-devel, perl-generators, make, diffutils, gawk, %compression, %symvers_compression
+BuildRequires: gcc, binutils, redhat-rpm-config, hmaccalc, bison, flex, gcc-c++
+%if "%{?dist}" == ".el11"
 # Kernel EFI/Compression set by CONFIG_KERNEL_ZSTD
 %ifarch x86_64 aarch64 riscv64
 BuildRequires: zstd
 %endif
-BuildRequires: gcc, binutils, redhat-rpm-config, hmaccalc, bison, flex, gcc-c++
 BuildRequires: rust, rust-src, bindgen, rustfmt, clippy
+%endif
 BuildRequires: net-tools, hostname, bc, elfutils-devel
 BuildRequires: dwarves
 BuildRequires: python3
 BuildRequires: python3-devel
 BuildRequires: python3-pyyaml
+%if "%{?dist}" == ".el8"
+# On EL8 must configure python3.11 as systemwide python3 with: alternatives --config python3
+BuildRequires: python3.11
+BuildRequires: python3.11-devel
+BuildRequires: python3.11-pyyaml
+%endif
 BuildRequires: kernel-rpm-macros
 # glibc-static is required for a consistent build environment (specifically
 # CONFIG_CC_CAN_LINK_STATIC=y).
@@ -822,12 +830,12 @@ BuildRequires: audit-libs-devel python3-setuptools
 BuildRequires: capstone-devel
 BuildRequires: elfutils-debuginfod-client-devel
 BuildRequires: java-devel
+# More recent libbpf-devel required (1.3.0-2 is from el9, 1.5.0-3 is in el10 and builds on el8):
+BuildRequires: libbpf-devel >= 1.3.0-2
 BuildRequires: libbabeltrace-devel
 BuildRequires: libpfm-devel
 BuildRequires: libtraceevent-devel
-%ifnarch s390x
 BuildRequires: numactl-devel
-%endif
 %ifarch aarch64
 BuildRequires: opencsd-devel >= 1.0.0
 %endif
@@ -838,27 +846,26 @@ BuildRequires: gettext ncurses-devel
 BuildRequires: libcap-devel libcap-ng-devel
 # The following are rtla requirements
 BuildRequires: python3-docutils
-BuildRequires: libtraceevent-devel
-BuildRequires: libtracefs-devel
 BuildRequires: libbpf-devel
 BuildRequires: bpftool
 BuildRequires: clang
+# Very recent versions needed (luckily el10's build on el9 and el8):
+BuildRequires: libtraceevent-devel >= 1.8.4-3
+BuildRequires: libtracefs-devel >= 1.8.0-6
 
 %ifarch %{cpupowerarchs}
 # For libcpupower bindings
 BuildRequires: swig
 %endif
 
-%ifnarch s390x
 BuildRequires: pciutils-devel
-%endif
 %ifarch i686 x86_64
 BuildRequires: libnl3-devel
 %endif
 %endif
 
 %if %{with_tools} && %{with_ynl}
-BuildRequires: python3-pyyaml python3-jsonschema python3-pip python3-setuptools >= 61
+BuildRequires: python3-devel python3-pyyaml python3-jsonschema python3-pip python3-setuptools >= 61
 BuildRequires: (python3-wheel if python3-setuptools < 70)
 %endif
 
@@ -869,15 +876,20 @@ BuildRequires: clang llvm-devel fuse-devel zlib-devel binutils-devel python3-doc
 %ifarch x86_64 riscv64
 BuildRequires: lld
 %endif
-BuildRequires: libasan-static
+#BuildRequires: libasan-static
 BuildRequires: libcap-devel libcap-ng-devel rsync libmnl-devel libxml2-devel
 BuildRequires: liburing-devel
 BuildRequires: libubsan
 BuildRequires: numactl-devel
-BuildRequires: xxd
+#BuildRequires: xxd
 %endif
 BuildConflicts: rhbuildsys(DiskFree) < 500Mb
 %if %{with_debuginfo}
+%if "%{?dist}" == ".el8"
+BuildRequires: debugedit
+# also must use debugedit provided /usr/bin/find-debuginfo.sh
+%define __find_debuginfo /usr/bin/find-debuginfo.sh
+%endif
 BuildRequires: rpm-build, elfutils
 BuildConflicts: rpm < 4.13.0.1-19
 BuildConflicts: dwarves < 1.13
@@ -1009,9 +1021,6 @@ Source13: redhatsecureboot501.cer
 %ifarch ppc64le
 %define signing_key_filename kernel-signing-ppc.cer
 %endif
-%ifarch s390x
-%define signing_key_filename kernel-signing-s390.cer
-%endif
 
 # Fedora/ELN pesign macro expects to see these cert file names, see:
 # https://github.com/rhboot/pesign/blob/main/src/pesign-rpmbuild-helper.in#L216
@@ -1037,9 +1046,6 @@ Source13: redhatsecureboot501.cer
 %define pesign_name_0 redhatsecureboot501
 %define pesign_name_uki_0 redhatsecureboot504
 %endif
-%ifarch s390x
-%define pesign_name_0 redhatsecureboot302
-%endif
 %ifarch ppc64le
 %define pesign_name_0 redhatsecureboot701
 %endif
@@ -1061,9 +1067,6 @@ Source24: %{name}-aarch64-rhel.config
 Source25: %{name}-aarch64-debug-rhel.config
 Source27: %{name}-ppc64le-rhel.config
 Source28: %{name}-ppc64le-debug-rhel.config
-Source29: %{name}-s390x-rhel.config
-Source30: %{name}-s390x-debug-rhel.config
-Source31: %{name}-s390x-zfcpdump-rhel.config
 Source32: %{name}-x86_64-rhel.config
 Source33: %{name}-x86_64-debug-rhel.config
 # ARM64 64K page-size kernel config
@@ -1089,8 +1092,6 @@ Source54: %{name}-aarch64-16k-fedora.config
 Source55: %{name}-aarch64-16k-debug-fedora.config
 Source56: %{name}-ppc64le-fedora.config
 Source57: %{name}-ppc64le-debug-fedora.config
-Source58: %{name}-s390x-fedora.config
-Source59: %{name}-s390x-debug-fedora.config
 Source60: %{name}-x86_64-fedora.config
 Source61: %{name}-x86_64-debug-fedora.config
 Source700: %{name}-riscv64-fedora.config
@@ -1151,13 +1152,11 @@ Source200: check-kabi
 
 Source201: Module.kabi_aarch64
 Source202: Module.kabi_ppc64le
-Source203: Module.kabi_s390x
 Source204: Module.kabi_x86_64
 Source205: Module.kabi_riscv64
 
 Source210: Module.kabi_dup_aarch64
 Source211: Module.kabi_dup_ppc64le
-Source212: Module.kabi_dup_s390x
 Source213: Module.kabi_dup_x86_64
 Source214: Module.kabi_dup_riscv64
 
@@ -1221,6 +1220,7 @@ Source4002: gating.yaml
 %if !%{nopatches}
 
 Patch1: patch-%{patchversion}-redhat.patch
+Patch2: tools-tracing-rtla-fix-el8-compiler-errors.patch
 %endif
 
 # empty final patch to facilitate testing of kernel patches
@@ -1755,7 +1755,7 @@ This package provides essential kernel modules for the %{?2:%{2}-}core kernel pa
 # this macro creates a kernel-<subpackage> meta package.
 #	%%kernel_meta_package <subpackage>
 #
-%define kernel_meta_package() \
+%define do_kernel_meta_package() \
 %package %{1}\
 summary: kernel meta-package for the %{1} kernel\
 Requires: %{name}-%{1}-core-uname-r = %{KVERREL}%{uname_suffix %{1}}\
@@ -1764,13 +1764,21 @@ Requires: %{name}-%{1}-modules-core-uname-r = %{KVERREL}%{uname_suffix %{1}}\
 Requires: ((%{name}-%{1}-modules-extra-uname-r = %{KVERREL}%{uname_suffix %{1}}) if %{name}-modules-extra-matched)\
 # Prefer the plain kernel-<subpackage>-core pkg as core-uname-r provider\
 Suggests: %{name}-%{1}-core = %{specversion}-%{release}\
-%if "%{1}" == "rt" || "%{1}" == "rt-debug" || "%{1}" == "rt-64k" || "%{1}" == "rt-64k-debug"\
-Requires: realtime-setup\
-%endif\
+%( [ "%{1}" = "rt" ] || [ "%{1}" = "rt-debug" ] && echo "Requires: realtime-setup" )\
 Provides: installonlypkg(kernel)\
 %description %{1}\
 The meta-package for the %{1} kernel\
 %{nil}
+
+%if "%{?dist}" == ".el8"
+# Otherwise .el8 errors with:
+# error: Too many levels of recursion in macro expansion. It is likely caused by recursive macro declaration.
+# error: lua script failed: [string "<lua>"]:2: error expanding macro
+# error: line 2006: %kernel_variant_package
+%define kernel_meta_package() %{nil}
+%else
+%define kernel_meta_package() %{do_kernel_meta_package %{1}}
+%endif
 
 #
 # This macro creates a kernel-<subpackage> and its -devel and -debuginfo too.
@@ -1867,15 +1875,6 @@ This package provides kernel modules for the %{?2:%{2} }kernel package for Red H
 %{nil}
 
 # Now, each variant package.
-%if %{with_zfcpdump}
-%define variant_summary The Linux kernel compiled for zfcpdump usage
-%kernel_variant_package -o zfcpdump
-%description zfcpdump-core
-The kernel package contains the Linux kernel (vmlinuz) for use by the
-zfcpdump infrastructure.
-# with_zfcpdump
-%endif
-
 %if %{with_arm64_16k_base}
 %define variant_summary The Linux kernel compiled for 16k pagesize usage
 %kernel_variant_package 16k
@@ -1995,6 +1994,17 @@ PREEMPT_RT real-time preemption support, targeted for Automotive platforms
 %else
 %kernel_variant_package debug
 %endif
+
+%if "%{?dist}" == ".el8"
+%package debug
+Summary: The Linux kernel compiled with extra debugging enabled
+Group: System Environment/Kernel
+%description debug
+This variant of the kernel has numerous debugging options enabled.
+It should only be installed when trying to gather additional information
+on kernel bugs, as some of these options impact performance noticably.
+%endif
+
 %description debug-core
 The kernel package contains the Linux kernel (vmlinuz), the core of any
 Linux operating system.  The kernel handles the basic functions
@@ -2168,6 +2178,19 @@ cp -a %{SOURCE1} .
 %if !%{nopatches}
 
 ApplyOptionalPatch patch-%{patchversion}-redhat.patch
+
+%if "%{?dist}" == ".el8"
+# Check if gettid is MISSING from unistd_ext.h
+%define gettid_missing %( \
+    if [ ! -f /usr/include/bits/unistd_ext.h ] || \
+	 ! grep -q "gettid" /usr/include/bits/unistd_ext.h 2>/dev/null; \
+    then echo 1; else echo 0; fi )
+
+%if %{gettid_missing}
+ApplyPatch tools-tracing-rtla-fix-el8-compiler-errors.patch
+%endif
+%endif
+
 %endif
 
 ApplyOptionalPatch linux-kernel-test.patch
@@ -2247,7 +2270,6 @@ GetArch()
   case "$1" in
   *aarch64*) echo "aarch64" ;;
   *ppc64le*) echo "ppc64le" ;;
-  *s390x*) echo "s390x" ;;
   *x86_64*) echo "x86_64" ;;
   *riscv64*) echo "riscv64" ;;
   # no arch, apply everywhere
@@ -2293,7 +2315,7 @@ cat rheldup3.pem rhelkpatch1.pem nvidiagpuoot001.pem >> ../certs/rhel.pem
 # rhelkeys
 %endif
 %if %{signkernel}
-%ifarch s390x ppc64le
+%ifarch ppc64le
 openssl x509 -inform der -in %{secureboot_ca_0} -out secureboot.pem
 cat secureboot.pem >> ../certs/rhel.pem
 %endif
@@ -2465,9 +2487,6 @@ BuildKernel() {
 
     %{log_msg "Setup variables"}
     DoModules=1
-    if [ "$Variant" = "zfcpdump" ]; then
-	    DoModules=0
-    fi
 
     # When the bootable image is just the ELF kernel, strip it.
     # We already copy the unstripped file into the debuginfo package.
@@ -2576,7 +2595,7 @@ BuildKernel() {
     %{log_msg "Sign kernel image"}
     %pesign -s -i $SignImage -o vmlinuz.signed -a %{secureboot_ca_0} -c %{secureboot_key_0} -n %{pesign_name_0}
     %endif
-    %ifarch s390x ppc64le
+    %ifarch ppc64le
     if [ -x /usr/bin/rpm-sign ]; then
 	rpm-sign --key "%{pesign_name_0}" --lkmsign $SignImage --output vmlinuz.signed
     elif [ "$DoModules" == "1" -a "%{signmodules}" == "1" ]; then
@@ -2674,8 +2693,8 @@ BuildKernel() {
     # NOTENOTE: checksums to the rpm metadata provides list.
     # NOTENOTE: if you change the symvers name, update the backend too
     %{log_msg "GENERATING kernel ABI metadata"}
-    %compression --stdout %compression_flags < Module.symvers > $RPM_BUILD_ROOT/boot/symvers-$KernelVer.%compext
-    cp $RPM_BUILD_ROOT/boot/symvers-$KernelVer.%compext $RPM_BUILD_ROOT/lib/modules/$KernelVer/symvers.%compext
+    %symvers_compression --stdout %symvers_compression_flags < Module.symvers > $RPM_BUILD_ROOT/boot/symvers-$KernelVer.%symvers_compext
+    cp $RPM_BUILD_ROOT/boot/symvers-$KernelVer.%symvers_compext $RPM_BUILD_ROOT/lib/modules/$KernelVer/symvers.%symvers_compext
 
 %if %{with_kabichk}
     %{log_msg "kABI checking is enabled in kernel SPEC file."}
@@ -2704,7 +2723,7 @@ BuildKernel() {
 
 %if %{with_kabidw_base}
     # Don't build kabi base for debug kernels
-    if [ "$Variant" != "zfcpdump" -a "$Variant" != "debug" ]; then
+    if [ "$Variant" != "debug" ]; then
         mkdir -p $RPM_BUILD_ROOT/kabi-dwarf
         tar -xvf %{SOURCE301} -C $RPM_BUILD_ROOT/kabi-dwarf
 
@@ -2758,15 +2777,6 @@ BuildKernel() {
     cp -a scripts $RPM_BUILD_ROOT/lib/modules/$KernelVer/build
     rm -rf $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/scripts/tracing
     rm -f $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/scripts/spdxcheck.py
-
-%ifarch s390x
-    # CONFIG_EXPOLINE_EXTERN=y produces arch/s390/lib/expoline/expoline.o
-    # which is needed during external module build.
-    %{log_msg "Copy expoline.o"}
-    if [ -f arch/s390/lib/expoline/expoline.o ]; then
-      cp -a --parents arch/s390/lib/expoline/expoline.o $RPM_BUILD_ROOT/lib/modules/$KernelVer/build
-    fi
-%endif
 
     %{log_msg "Copy additional files for make targets"}
     # Files for 'make scripts' to succeed with kernel-devel.
@@ -3074,12 +3084,12 @@ BuildKernel() {
         mkdir -p "$RPM_BUILD_ROOT/lib/modules/$KernelVer/$subdir_name"
 
         set +x
-        while read -r kmod; do
+        for kmod in $(cat "$module_list" | sed -e 's|^kernel/||'); do
             local target_file="$RPM_BUILD_ROOT/lib/modules/$KernelVer/$subdir_name/$kmod"
             local target_dir="${target_file%/*}"
             mkdir -p "$target_dir"
             mv "$RPM_BUILD_ROOT/lib/modules/$KernelVer/kernel/$kmod" "$target_dir"
-        done < <(sed -e 's|^kernel/||' "$module_list")
+        done
         set -x
     }
 
@@ -3220,7 +3230,7 @@ BuildKernel() {
     mkdir -p $RPM_BUILD_ROOT%{_datadir}/doc/kernel-keys/$KernelVer
 %if %{signkernel}
     install -m 0644 %{secureboot_ca_0} $RPM_BUILD_ROOT%{_datadir}/doc/kernel-keys/$KernelVer/kernel-signing-ca.cer
-    %ifarch s390x ppc64le
+    %ifarch ppc64le
     if [ -x /usr/bin/rpm-sign ]; then
         install -m 0644 %{secureboot_key_0} $RPM_BUILD_ROOT%{_datadir}/doc/kernel-keys/$KernelVer/%{signing_key_filename}
     fi
@@ -3237,7 +3247,7 @@ BuildKernel() {
         # Save the signing keys so we can sign the modules in __modsign_install_post
         cp certs/signing_key.pem certs/signing_key.pem.sign${Variant:++${Variant}}
         cp certs/signing_key.x509 certs/signing_key.x509.sign${Variant:++${Variant}}
-        %ifarch s390x ppc64le
+        %ifarch ppc64le
         if [ ! -x /usr/bin/rpm-sign ]; then
             install -m 0644 certs/signing_key.x509.sign${Variant:++${Variant}} $RPM_BUILD_ROOT%{_datadir}/doc/kernel-keys/$KernelVer/kernel-signing-ca.cer
             openssl x509 -in certs/signing_key.pem.sign${Variant:++${Variant}} -outform der -out $RPM_BUILD_ROOT%{_datadir}/doc/kernel-keys/$KernelVer/%{signing_key_filename}
@@ -3289,10 +3299,6 @@ BuildKernel %make_target %kernel_image %{_use_vdso} debug
 %endif
 %endif
 
-%if %{with_zfcpdump}
-BuildKernel %make_target %kernel_image %{_use_vdso} zfcpdump
-%endif
-
 %if %{with_arm64_16k_base}
 BuildKernel %make_target %kernel_image %{_use_vdso} 16k
 %endif
@@ -3318,7 +3324,7 @@ BuildKernel %make_target %kernel_image %{_use_vdso}
 %endif
 
 %ifnarch noarch i686 %{nobuildarches}
-%if !%{with_debug} && !%{with_zfcpdump} && !%{with_stock} && !%{with_arm64_16k} && !%{with_arm64_64k} && !%{with_realtime} && !%{with_realtime_arm64_64k} && !%{with_automotive}
+%if !%{with_debug} && !%{with_stock} && !%{with_arm64_16k} && !%{with_arm64_64k} && !%{with_realtime} && !%{with_realtime_arm64_64k} && !%{with_automotive}
 # If only building the user space tools, then initialize the build environment
 # and some variables so that the various userspace tools can be built.
 %{log_msg "Initialize userspace tools build environment"}
@@ -3333,9 +3339,6 @@ fi
 
 %ifarch aarch64
 %global perf_build_extra_opts CORESIGHT=1
-%endif
-%ifarch s390x
-%global perf_build_extra_ldflags -Wl,-z,notext
 %endif
 %global perf_make \
   %{__make} %{?make_opts} EXTRA_CFLAGS="${RPM_OPT_FLAGS}" EXTRA_CXXFLAGS="${RPM_OPT_FLAGS}" LDFLAGS="%{__global_ldflags} -Wl,-E %{?perf_build_extra_ldflags}" %{?cross_opts} -C tools/perf V=1 NO_PERF_READ_VDSO32=1 NO_PERF_READ_VDSOX32=1 WERROR=0 NO_LIBUNWIND=1 HAVE_CPLUS_DEMANGLE=1 NO_GTK2=1 NO_STRLCPY=1 NO_BIONIC=1 LIBTRACEEVENT_DYNAMIC=1 %{?perf_build_extra_opts} prefix=%{_prefix} PYTHON=%{__python3}
@@ -3359,7 +3362,11 @@ chmod +x tools/perf/check-headers.sh
 
 %ifarch %{cpupowerarchs}
     # link against in-tree libcpupower for idle state support
+%if "%{?dist}" == ".el8"
+    %global rtla_make %{tools_make} LDFLAGS="%{__global_ldflags} -lpthread -L../../power/cpupower" INCLUDES="-I../../power/cpupower/lib"
+%else
     %global rtla_make %{tools_make} LDFLAGS="%{__global_ldflags} -L../../power/cpupower" INCLUDES="-I../../power/cpupower/lib"
+%endif
     # Build libcpupower Python bindings
     %global libcpupower_python_bindings_make %{tools_make} LDFLAGS="-L%{buildroot}%{_libdir} -lcpupower"
 %else
@@ -3563,7 +3570,6 @@ find Documentation -type d | xargs chmod u+w
     modules_dirs="$(shopt -s nullglob; echo $RPM_BUILD_ROOT/lib/modules/%{KVERREL}*)" \
     for modules_dir in $modules_dirs; do \
         variant_suffix="${modules_dir#$RPM_BUILD_ROOT/lib/modules/%{KVERREL}}" \
-        [ "$variant_suffix" == "+zfcpdump" ] && continue \
 	%{log_msg "Signing modules for %{KVERREL}${variant_suffix}"} \
         %{modsign_cmd} certs/signing_key.pem.sign${variant_suffix} certs/signing_key.x509.sign${variant_suffix} $modules_dir/ \
     done \
@@ -3665,7 +3671,7 @@ find $RPM_BUILD_ROOT/usr/include \
 %endif
 
 %if %{with_cross_headers}
-HDR_ARCH_LIST='arm64 powerpc s390 x86 riscv'
+HDR_ARCH_LIST='arm64 powerpc x86 riscv'
 mkdir -p $RPM_BUILD_ROOT/usr/tmp-headers
 
 for arch in $HDR_ARCH_LIST; do
@@ -4209,10 +4215,10 @@ fi\
 %endif\
 rm -f %{_localstatedir}/lib/rpm-state/%{name}/installing_core_%{KVERREL}%{?-v:+%{-v*}}\
 /bin/kernel-install add %{KVERREL}%{?-v:+%{-v*}} /lib/modules/%{KVERREL}%{?-v:+%{-v*}}/vmlinuz%{?-u:-%{-u*}.efi} || exit $?\
-if [[ ! -e "/boot/symvers-%{KVERREL}%{?-v:+%{-v*}}.%compext" ]]; then\
-    cp "/lib/modules/%{KVERREL}%{?-v:+%{-v*}}/symvers.%compext" "/boot/symvers-%{KVERREL}%{?-v:+%{-v*}}.%compext"\
+if [[ ! -e "/boot/symvers-%{KVERREL}%{?-v:+%{-v*}}.%symvers_compext" ]]; then\
+    cp "/lib/modules/%{KVERREL}%{?-v:+%{-v*}}/symvers.%symvers_compext" "/boot/symvers-%{KVERREL}%{?-v:+%{-v*}}.%symvers_compext"\
     if command -v restorecon &>/dev/null; then\
-        restorecon "/boot/symvers-%{KVERREL}%{?-v:+%{-v*}}.%compext"\
+        restorecon "/boot/symvers-%{KVERREL}%{?-v:+%{-v*}}.%symvers_compext"\
     fi\
 fi\
 %{nil}
@@ -4296,11 +4302,6 @@ fi\
 %if %{with_stock_base}
 %kernel_variant_preun -e
 %kernel_variant_post
-%endif
-
-%if %{with_zfcpdump}
-%kernel_variant_preun -v zfcpdump
-%kernel_variant_post -v zfcpdump
 %endif
 
 %if %{with_stock} && %{with_debug} && %{with_efiuki}
@@ -4414,7 +4415,7 @@ fi\
 %endif
 
 %if %{with_kabidw_base}
-%ifarch x86_64 s390x ppc64 ppc64le aarch64 riscv64
+%ifarch x86_64 ppc64 ppc64le aarch64 riscv64
 %files kernel-kabidw-base-internal
 %defattr(-,root,root)
 /kabidw-base/%{_target_cpu}/*
@@ -4655,10 +4656,10 @@ fi\
 %ghost /boot/System.map-%{KVERREL}%{?3:+%{3}}\
 %dir /lib/modules\
 %dir /lib/modules/%{KVERREL}%{?3:+%{3}}\
-/lib/modules/%{KVERREL}%{?3:+%{3}}/symvers.%compext\
+/lib/modules/%{KVERREL}%{?3:+%{3}}/symvers.%symvers_compext\
 /lib/modules/%{KVERREL}%{?3:+%{3}}/config\
 /lib/modules/%{KVERREL}%{?3:+%{3}}/modules.builtin*\
-%ghost %attr(0644, root, root) /boot/symvers-%{KVERREL}%{?3:+%{3}}.%compext\
+%ghost %attr(0644, root, root) /boot/symvers-%{KVERREL}%{?3:+%{3}}.%symvers_compext\
 %ghost %attr(0600, root, root) /boot/initramfs-%{KVERREL}%{?3:+%{3}}.img\
 %ghost %attr(0644, root, root) /boot/config-%{KVERREL}%{?3:+%{3}}\
 %{expand:%%files -f kernel-%{?3:%{3}-}modules-core.list %{?3:%{3}-}modules-core}\
@@ -4710,7 +4711,7 @@ fi\
 %dir /lib/modules\
 %dir /lib/modules/%{KVERREL}%{?3:+%{3}}\
 /lib/modules/%{KVERREL}%{?3:+%{3}}/System.map\
-/lib/modules/%{KVERREL}%{?3:+%{3}}/symvers.%compext\
+/lib/modules/%{KVERREL}%{?3:+%{3}}/symvers.%symvers_compext\
 /lib/modules/%{KVERREL}%{?3:+%{3}}/config\
 /lib/modules/%{KVERREL}%{?3:+%{3}}/modules.builtin*\
 %attr(0644, root, root) /lib/modules/%{KVERREL}%{?3:+%{3}}/%{?-k:%{-k*}}%{!?-k:vmlinuz}-virt.efi\
@@ -4797,7 +4798,6 @@ fi\
 %files 64k-debug-modules-extra
 %endif
 %endif
-%kernel_variant_files %{_use_vdso} %{with_zfcpdump} zfcpdump
 %kernel_variant_files %{_use_vdso} %{with_arm64_16k_base} 16k
 %kernel_variant_files %{_use_vdso} %{with_arm64_64k_base} 64k
 %kernel_variant_files %{_use_vdso} %{with_realtime_arm64_64k_base} rt-64k

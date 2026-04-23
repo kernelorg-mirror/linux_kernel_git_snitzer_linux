@@ -103,8 +103,6 @@ function merge_configs()
 		echo "# arm64" > "$name";;
 	"ppc64le")
 		echo "# powerpc" > "$name";;
-	"s390x")
-		echo "# s390" > "$name";;
 	"riscv64")
 		echo "# riscv" > "$name";;
 	*)
