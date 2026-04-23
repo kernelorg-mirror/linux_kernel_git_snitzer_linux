@@ -715,11 +715,11 @@ Summary: The Linux kernel
 %define with_debug 0
 %endif
 
-# Hammerspace doesn't need these, but also on RHEL8 both debug and rt cause
+# Hammerspace doesn't need these, but also on RHEL8 rt causes:
 # error: line 4201: %files rt
-#: package kernel-rt does not exist
-%define with_debug 0
+# : package kernel-rt does not exist
 %define with_realtime 0
+%define with_realtime_arm64_64k 0
 %define with_automotive 0
 %define with_ynl 0
 
@@ -1994,6 +1994,17 @@ PREEMPT_RT real-time preemption support, targeted for Automotive platforms
 %else
 %kernel_variant_package debug
 %endif
+
+%if "%{?dist}" == ".el8"
+%package debug
+Summary: The Linux kernel compiled with extra debugging enabled
+Group: System Environment/Kernel
+%description debug
+This variant of the kernel has numerous debugging options enabled.
+It should only be installed when trying to gather additional information
+on kernel bugs, as some of these options impact performance noticably.
+%endif
+
 %description debug-core
 The kernel package contains the Linux kernel (vmlinuz), the core of any
 Linux operating system.  The kernel handles the basic functions
