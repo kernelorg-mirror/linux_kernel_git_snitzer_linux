@@ -1,3 +1,6 @@
+* Thu Apr 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.85-0]
+- Linux v6.12.85
+
 * Thu Mar 05 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-0]
 - Linux v6.12.76
 - Cherry-pick all kernel-6.12.63/main kernel.changelog-9.99 commits to wipe slate clean.
