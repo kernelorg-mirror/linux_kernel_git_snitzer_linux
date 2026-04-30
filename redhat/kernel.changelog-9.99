@@ -1,3 +1,6 @@
+* Thu Apr 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.85-1]
+- Merge v6.12.85 into existing v6.12.76 based topic branches.
+
 * Thu Apr 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.85-0]
 - Linux v6.12.85
 
