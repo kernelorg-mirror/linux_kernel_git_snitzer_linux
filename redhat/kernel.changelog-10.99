@@ -1,3 +1,6 @@
+* Thu Apr 30 2026 Mike Snitzer <snitzer@kernel.org> [6.19.14-1]
+- Merge all topic branches with Linux v6.19.14
+
 * Thu Apr 23 2026 Augusto Caringi <acaringi@redhat.com> [6.19.14-0]
 - Linux v6.19.14
 Resolves: 
