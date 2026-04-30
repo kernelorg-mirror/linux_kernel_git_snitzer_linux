@@ -1,6 +1,33 @@
 * Thu Apr 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.85-0]
 - Linux v6.12.85
 
+* Wed Apr 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-7]
+- Include NFS and NFSD changes that are destined for 7.1.
+- Include latest fixes from nfsd-testing.
+
+* Wed Apr 08 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-6]
+- Switch THP Kconfig default from always to madvise.
+- Disable CONFIG_NFS_FSCACHE.
+
+* Mon Mar 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-5]
+- Rebase nfsd-7.0-2 branch to include NFSD's dynamic threading.
+- Include nfsd-next and nfsd-testing changes (except some svcrdma and most lockd changes).
+- Include Trond's "NFSv4/pnfs: If the server is down, retry the layout returns on reboot".
+- Include Olga's "NFS: fix writeback in presence of errors".
+
+* Mon Mar 23 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-4]
+- Include fixes from upstream tags nfs-for-7.0-2 and nfsd-7.0-2
+- Include "NFSD: Sign filehandles"
+
+* Wed Mar 11 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-3]
+- Replace 6.12.76-2's fix with Ben's "sunrpc: refactor TLS transport to remove rpc_clnt dependency".
+
+* Tue Mar 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-2]
+- Include "sunrpc: fix TLS connect_worker rpc_clnt lifetime UAF" to address TLS-induced cred crashes.
+
+* Thu Mar 05 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-1]
+- Rebase all branches ontop of v6.12.76
+
 * Thu Mar 05 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-0]
 - Linux v6.12.76
 - Cherry-pick all kernel-6.12.63/main kernel.changelog-9.99 commits to wipe slate clean.
