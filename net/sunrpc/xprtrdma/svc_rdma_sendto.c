@@ -158,6 +158,7 @@ svc_rdma_send_ctxt_alloc(struct svcxprt_rdma *rdma)
 
 	for (i = 0; i < rdma->sc_max_send_sges; i++)
 		ctxt->sc_sges[i].lkey = rdma->sc_pd->local_dma_lkey;
+	atomic_inc(&rdma->sc_send_ctxts_depth);
 	return ctxt;
 
 fail3:
@@ -181,6 +182,7 @@ static void svc_rdma_send_ctxt_destroy(struct svcxprt_rdma *rdma,
 	kfree(ctxt->sc_xprt_buf);
 	kfree(ctxt->sc_pages);
 	kfree(ctxt);
+	atomic_dec(&rdma->sc_send_ctxts_depth);
 }
 
 /**
@@ -216,7 +218,6 @@ struct svc_rdma_send_ctxt *svc_rdma_send_ctxt_get(struct svcxprt_rdma *rdma)
 	spin_unlock(&rdma->sc_send_lock);
 	if (!node)
 		goto out_empty;
-	atomic_dec(&rdma->sc_send_ctxts_depth);
 
 	ctxt = llist_entry(node, struct svc_rdma_send_ctxt, sc_node);
 
@@ -235,6 +236,14 @@ out:
 	return ctxt;
 
 out_empty:
+	/* Backpressure: refuse to mint a new ctxt once the per-xprt total
+	 * (in-flight + queued for release + on-llist) has reached the
+	 * configured slot count. The caller drops the connection; the
+	 * client reconnects with a fresh xprt. Better than the unbounded
+	 * allocation that lets workqueue lag inflate the cache to OOM.
+	 */
+	if (atomic_read(&rdma->sc_send_ctxts_depth) >= rdma->sc_max_requests)
+		return NULL;
 	ctxt = svc_rdma_send_ctxt_alloc(rdma);
 	if (!ctxt)
 		return NULL;
@@ -266,15 +275,13 @@ static void svc_rdma_send_ctxt_release(struct svcxprt_rdma *rdma,
 				  DMA_TO_DEVICE);
 	}
 
-	/* Cap the per-xprt cache at sc_max_requests. Workqueue lag in the
-	 * _put_async path lets _get see an empty llist and allocate fresh
-	 * even when ctxts are merely "in transit"; without a cap the cache
-	 * settles at the all-time peak of (in-flight + workqueue-pending)
-	 * and never shrinks.
+	/* Depth is now tracked at alloc/destroy, so it reflects total
+	 * live ctxts (in-flight + queued + on-llist), not just on-llist.
+	 * If we've blown past the cap -- via a race in the _get
+	 * backpressure check, or a transient burst -- destroy this ctxt
+	 * instead of returning it to the llist so the depth converges.
 	 */
-	if (atomic_inc_return(&rdma->sc_send_ctxts_depth) >
-	    rdma->sc_max_requests) {
-		atomic_dec(&rdma->sc_send_ctxts_depth);
+	if (atomic_read(&rdma->sc_send_ctxts_depth) > rdma->sc_max_requests) {
 		trace_svcrdma_send_ctxt_capped(&ctxt->sc_cid);
 		svc_rdma_send_ctxt_destroy(rdma, ctxt);
 		return;
