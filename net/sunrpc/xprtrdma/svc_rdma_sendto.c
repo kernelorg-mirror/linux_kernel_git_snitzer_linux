@@ -237,12 +237,24 @@ out:
 
 out_empty:
 	/* Backpressure: refuse to mint a new ctxt once the per-xprt total
-	 * (in-flight + queued for release + on-llist) has reached the
-	 * configured slot count. The caller drops the connection; the
-	 * client reconnects with a fresh xprt. Better than the unbounded
-	 * allocation that lets workqueue lag inflate the cache to OOM.
+	 * (in-flight + queued for release + on-llist) has reached a
+	 * multiple of the configured slot count. The caller drops the
+	 * connection; the client reconnects with a fresh xprt. Better
+	 * than the unbounded allocation that lets workqueue lag inflate
+	 * the cache to OOM.
+	 *
+	 * The 4x multiplier is the "workqueue lag tolerance" budget.
+	 * sc_max_requests bounds in-flight ctxts by design, but
+	 * svcrdma_wq dispatch is CPU-contended with NFSd and the HCA
+	 * completion ISR -- under sustained load, ~20% of completions
+	 * sit queued on svcrdma_wq waiting for _release. Capping at
+	 * sc_max_requests would cause routine connection drops; capping
+	 * at 4*sc_max_requests gives the workqueue room to drain during
+	 * normal contention while still bounding the worst case at a
+	 * small multiple of the legitimate working set.
 	 */
-	if (atomic_read(&rdma->sc_send_ctxts_depth) >= rdma->sc_max_requests)
+	if (atomic_read(&rdma->sc_send_ctxts_depth) >=
+	    4 * rdma->sc_max_requests)
 		return NULL;
 	ctxt = svc_rdma_send_ctxt_alloc(rdma);
 	if (!ctxt)
@@ -280,8 +292,11 @@ static void svc_rdma_send_ctxt_release(struct svcxprt_rdma *rdma,
 	 * If we've blown past the cap -- via a race in the _get
 	 * backpressure check, or a transient burst -- destroy this ctxt
 	 * instead of returning it to the llist so the depth converges.
+	 *
+	 * Same 4*sc_max_requests budget as the _get backpressure path.
 	 */
-	if (atomic_read(&rdma->sc_send_ctxts_depth) > rdma->sc_max_requests) {
+	if (atomic_read(&rdma->sc_send_ctxts_depth) >
+	    4 * rdma->sc_max_requests) {
 		trace_svcrdma_send_ctxt_capped(&ctxt->sc_cid);
 		svc_rdma_send_ctxt_destroy(rdma, ctxt);
 		return;
