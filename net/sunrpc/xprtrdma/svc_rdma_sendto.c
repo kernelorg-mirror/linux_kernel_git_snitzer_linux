@@ -170,6 +170,19 @@ fail0:
 	return NULL;
 }
 
+/* Tear down a single send_ctxt: reverse of svc_rdma_send_ctxt_alloc. */
+static void svc_rdma_send_ctxt_destroy(struct svcxprt_rdma *rdma,
+				       struct svc_rdma_send_ctxt *ctxt)
+{
+	ib_dma_unmap_single(rdma->sc_pd->device,
+			    ctxt->sc_sges[0].addr,
+			    rdma->sc_max_req_size,
+			    DMA_TO_DEVICE);
+	kfree(ctxt->sc_xprt_buf);
+	kfree(ctxt->sc_pages);
+	kfree(ctxt);
+}
+
 /**
  * svc_rdma_send_ctxts_destroy - Release all send_ctxt's for an xprt
  * @rdma: svcxprt_rdma being torn down
@@ -177,17 +190,12 @@ fail0:
  */
 void svc_rdma_send_ctxts_destroy(struct svcxprt_rdma *rdma)
 {
-	struct ib_device *device = rdma->sc_cm_id->device;
 	struct svc_rdma_send_ctxt *ctxt;
 	struct llist_node *node;
 
 	while ((node = llist_del_first(&rdma->sc_send_ctxts)) != NULL) {
 		ctxt = llist_entry(node, struct svc_rdma_send_ctxt, sc_node);
-		ib_dma_unmap_single(device, ctxt->sc_sges[0].addr,
-				    rdma->sc_max_req_size, DMA_TO_DEVICE);
-		kfree(ctxt->sc_xprt_buf);
-		kfree(ctxt->sc_pages);
-		kfree(ctxt);
+		svc_rdma_send_ctxt_destroy(rdma, ctxt);
 	}
 }
 
@@ -208,6 +216,7 @@ struct svc_rdma_send_ctxt *svc_rdma_send_ctxt_get(struct svcxprt_rdma *rdma)
 	spin_unlock(&rdma->sc_send_lock);
 	if (!node)
 		goto out_empty;
+	atomic_dec(&rdma->sc_send_ctxts_depth);
 
 	ctxt = llist_entry(node, struct svc_rdma_send_ctxt, sc_node);
 
@@ -257,6 +266,19 @@ static void svc_rdma_send_ctxt_release(struct svcxprt_rdma *rdma,
 				  DMA_TO_DEVICE);
 	}
 
+	/* Cap the per-xprt cache at sc_max_requests. Workqueue lag in the
+	 * _put_async path lets _get see an empty llist and allocate fresh
+	 * even when ctxts are merely "in transit"; without a cap the cache
+	 * settles at the all-time peak of (in-flight + workqueue-pending)
+	 * and never shrinks.
+	 */
+	if (atomic_inc_return(&rdma->sc_send_ctxts_depth) >
+	    rdma->sc_max_requests) {
+		atomic_dec(&rdma->sc_send_ctxts_depth);
+		trace_svcrdma_send_ctxt_capped(&ctxt->sc_cid);
+		svc_rdma_send_ctxt_destroy(rdma, ctxt);
+		return;
+	}
 	llist_add(&ctxt->sc_node, &rdma->sc_send_ctxts);
 }
 
