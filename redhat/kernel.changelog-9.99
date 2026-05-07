@@ -1,3 +1,7 @@
+* Thu May 07 2026 Mike Snitzer <snitzer@kernel.org> [6.12.85-2]
+- svcrdma: Release write chunk resources without re-queuing
+- Disable esp4, esp6 and rxrpc (and AFS due to rxrpc dep)
+
 * Thu Apr 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.85-1]
 - Merge v6.12.85 into existing v6.12.76 based topic branches.
 
