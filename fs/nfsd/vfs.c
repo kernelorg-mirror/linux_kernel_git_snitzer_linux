@@ -35,7 +35,6 @@
 #include "xdr3.h"
 
 #ifdef CONFIG_NFSD_V4
-#include "../internal.h"
 #include "acl.h"
 #include "idmap.h"
 #include "xdr4.h"
@@ -861,8 +860,7 @@ int nfsd_open_break_lease(struct inode *inode, int access)
  * N.B. After this call fhp needs an fh_put
  */
 static int
-__nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
-			int may_flags, struct file **filp)
+__nfsd_open(struct svc_fh *fhp, umode_t type, int may_flags, struct file **filp)
 {
 	struct path	path;
 	struct inode	*inode;
@@ -932,7 +930,7 @@ nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
 retry:
 	err = fh_verify(rqstp, fhp, type, may_flags);
 	if (!err) {
-		host_err = __nfsd_open(rqstp, fhp, type, may_flags, filp);
+		host_err = __nfsd_open(fhp, type, may_flags, filp);
 		if (host_err == -EOPENSTALE && !retried) {
 			retried = true;
 			fh_put(fhp);
@@ -945,7 +943,6 @@ retry:
 
 /**
  * nfsd_open_verified - Open a regular file for the filecache
- * @rqstp: RPC request
  * @fhp: NFS filehandle of the file to open
  * @may_flags: internal permission flags
  * @filp: OUT: open "struct file *"
@@ -953,10 +950,9 @@ retry:
  * Returns zero on success, or a negative errno value.
  */
 int
-nfsd_open_verified(struct svc_rqst *rqstp, struct svc_fh *fhp, int may_flags,
-		   struct file **filp)
+nfsd_open_verified(struct svc_fh *fhp, int may_flags, struct file **filp)
 {
-	return __nfsd_open(rqstp, fhp, S_IFREG, may_flags, filp);
+	return __nfsd_open(fhp, S_IFREG, may_flags, filp);
 }
 
 /*
