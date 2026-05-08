@@ -1,3 +1,8 @@
+* Fri May 08 2026 Mike Snitzer <snitzer@kernel.org> [6.12.87-1]
+- Merge v6.12.87 for the benefit of more root exploit fixes
+- Drop "redhat/configs: disable esp4 and esp6 modules" since now fixed, restores full IPsec.
+- Keep "redhat/configs: disable rxrpc and AFS which depends on it" since fixes lagging and no use for either.
+
 * Fri May 08 2026 Mike Snitzer <snitzer@kernel.org> [6.12.87-0]
 - Linux v6.12.87
 
