@@ -1,3 +1,7 @@
+* Tue May 12 2026 Mike Snitzer <snitzer@kernel.org> [6.19.14-3]
+- "redhat/configs: disable rxrpc and AFS which depends on it" since fixes lagging and no use for either.
+- NFSv4: clear exception state on successful mkdir retry
+
 * Thu May 07 2026 Mike Snitzer <snitzer@kernel.org> [6.19.14-2]
 - svcrdma: Release write chunk resources without re-queuing
 - workqueue: Add system_dfl_long_wq for long unbound works
