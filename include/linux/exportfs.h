@@ -11,6 +11,7 @@ struct inode;
 struct iomap;
 struct super_block;
 struct vfsmount;
+struct nfs4_acl;
 
 /* limit the handle size to NFSv4 handle size now */
 #define MAX_HANDLE_SZ 128
@@ -252,6 +253,12 @@ struct handle_to_path_ctx {
  * commit_metadata:
  *    @commit_metadata should commit metadata changes to stable storage.
  *
+ * setacl:
+ *    @setacl will use the nfs4_acl @acl to establish the acl using SETATTR.
+ *
+ * getacl:
+ *    @getacl will use the nfs4_acl @acl to retrieve the acl using GETATTR.
+ *
  * Locking rules:
  *    get_parent is called with child->d_inode->i_rwsem down
  *    get_name is not (which is possibly inconsistent)
@@ -277,6 +284,8 @@ struct export_operations {
 			     int nr_iomaps, struct iattr *iattr);
 	int (*permission)(struct handle_to_path_ctx *ctx, unsigned int oflags);
 	struct file * (*open)(const struct path *path, unsigned int oflags);
+	int (*setacl)(struct inode *inode, struct nfs4_acl *acl);
+	int (*getacl)(struct inode *inode, struct nfs4_acl *acl);
 #define	EXPORT_OP_NOWCC			(0x1) /* don't collect v3 wcc data */
 #define	EXPORT_OP_NOSUBTREECHK		(0x2) /* no subtree checking */
 #define	EXPORT_OP_CLOSE_BEFORE_UNLINK	(0x4) /* close files before unlink */
@@ -286,6 +295,7 @@ struct export_operations {
 						*/
 #define EXPORT_OP_FLUSH_ON_CLOSE	(0x20) /* fs flushes file data on close */
 #define EXPORT_OP_NOLOCKS		(0x40) /* no file locking support */
+#define EXPORT_OP_NFSV4_ACL_PASSTHRU	(0x80) /* fs MAY handle NFSv4 ACL passthru */
 	unsigned long	flags;
 };
 
@@ -299,6 +309,18 @@ static inline bool
 exportfs_cannot_lock(const struct export_operations *export_ops)
 {
 	return export_ops->flags & EXPORT_OP_NOLOCKS;
+}
+
+/**
+ * exportfs_may_passthru_nfs4acl() - check if export MAY passthru NFSv4 ACLs
+ * @export_ops:	the nfs export operations to check
+ *
+ * Returns true if the export MAY support NFSv4 ACL passthru.
+ */
+static inline bool
+exportfs_may_passthru_nfs4acl(const struct export_operations *export_ops)
+{
+	return export_ops->flags & EXPORT_OP_NFSV4_ACL_PASSTHRU;
 }
 
 extern int exportfs_encode_inode_fh(struct inode *inode, struct fid *fid,
