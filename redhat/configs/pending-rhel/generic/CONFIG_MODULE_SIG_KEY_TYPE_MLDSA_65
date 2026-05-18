@@ -1,0 +1,18 @@
+# ~~~
+# Symbol: MODULE_SIG_KEY_TYPE_MLDSA_65 [=n]
+# Type  : bool
+# Defined at certs/Kconfig:53
+#   Prompt: ML-DSA-65
+#   Depends on: CRYPTO [=y] && (MODULE_SIG [=y] || IMA_APPRAISE_MODSIG [=y] && MODULES [=y]) && OPENSSL_SUPPORTS_ML_DSA [=y]
+#   Location:
+#     -> Cryptographic API (CRYPTO [=y])
+#       -> Certificates for signature checking
+#         -> Type of module signing key to be generated (<choice> [=n])
+#           -> ML-DSA-65 (MODULE_SIG_KEY_TYPE_MLDSA_65 [=n])
+# Selects: CRYPTO_MLDSA [=n]
+# 
+# 
+# 
+# ~~~
+# Commit: 0ad9a71933e7 (modsign: Enable ML-DSA module signing)
+# CONFIG_MODULE_SIG_KEY_TYPE_MLDSA_65 is not set
