@@ -1,3 +1,6 @@
+* Fri May 29 2026 Mike Snitzer [7.0.10-2]
+- revert "configs: Compress UEFI/PE kernels with zstd" to avoid breaking EL9 by going back to CONFIG_KERNEL_GZIP=y
+
 * Thu May 28 2026 Mike Snitzer [7.0.10-1]
 - Rebase all topic branches ontop of Linux v7.0.10
 - Sync NFS and NFSD changes through 7.1 tags nfs-for-7.1-1 and nfsd-7.1-2 respectively
