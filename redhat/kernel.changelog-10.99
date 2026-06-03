@@ -1,3 +1,12 @@
+* Wed Jun 3 2026 Mike Snitzer [7.0.10-3]
+- svcrdma: Defer send context release to xpo_release_ctxt
+- nfsd: fallback to DONTCACHE if read IO less than nf_dio_read_offset_align
+- mm: preserve PG_dropbehind flag during folio split
+- mm: track DONTCACHE dirty pages per bdi_writeback
+- mm: kick writeback flusher for IOCB_DONTCACHE with targeted dirty tracking
+- NFSv4/flexfiles: honor FF_FLAGS_NO_IO_THRU_MDS on fatal DS connect errors
+- NFSv4/flexfiles: honor FF_FLAGS_NO_IO_THRU_MDS in pg_get_mirror_count_write
+
 * Fri May 29 2026 Mike Snitzer [7.0.10-2]
 - revert "configs: Compress UEFI/PE kernels with zstd" to avoid breaking EL9 by going back to CONFIG_KERNEL_GZIP=y
 
