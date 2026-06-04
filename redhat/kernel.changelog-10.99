@@ -1,3 +1,7 @@
+* Thu Jun 4 2026 Mike Snitzer [7.0.10-4]
+- Revert "svcrdma: Use contiguous pages for RDMA Read sink buffers" due to excessive CPU burn on fast RDMA networks.
+- NFS: write_completion: dereference loop-local req, not hdr->req
+
 * Wed Jun 3 2026 Mike Snitzer [7.0.10-3]
 - svcrdma: Defer send context release to xpo_release_ctxt
 - nfsd: fallback to DONTCACHE if read IO less than nf_dio_read_offset_align
