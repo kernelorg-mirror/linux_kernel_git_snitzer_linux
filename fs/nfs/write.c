@@ -772,7 +772,8 @@ static void nfs_inode_add_request(struct nfs_page *req)
 	nfs_lock_request(req);
 	spin_lock(&mapping->i_private_lock);
 	set_bit(PG_MAPPED, &req->wb_flags);
-	folio_attach_private(folio, req);
+	folio_set_private(folio);
+	folio->private = req;
 	spin_unlock(&mapping->i_private_lock);
 	atomic_long_inc(&nfsi->nrequests);
 	/* this a head request for a page group - mark it as having an
@@ -797,7 +798,8 @@ static void nfs_inode_remove_request(struct nfs_page *req)
 
 		spin_lock(&mapping->i_private_lock);
 		if (likely(folio)) {
-			folio_detach_private(folio);
+			folio->private = NULL;
+			folio_clear_private(folio);
 			clear_bit(PG_MAPPED, &req->wb_head->wb_flags);
 		}
 		spin_unlock(&mapping->i_private_lock);
@@ -1818,7 +1820,8 @@ nfs_commit_list(struct inode *inode, struct list_head *head, int how,
 		task_flags = RPC_TASK_MOVEABLE;
 
 	localio = nfs_local_open_fh(NFS_SERVER(inode)->nfs_client, data->cred,
-				    data->args.fh, data->context->mode);
+				    data->args.fh, &data->context->nfl,
+				    data->context->mode);
 	return nfs_initiate_commit(NFS_CLIENT(inode), data, NFS_PROTO(inode),
 				   data->mds_ops, how,
 				   RPC_TASK_CRED_NOREF | task_flags, localio);
