@@ -1,3 +1,6 @@
+* Mon Jun 08 2026 Mike Snitzer <snitzer@kernel.org> [6.12.87-3]
+- NFS: write_completion: dereference loop-local req, not hdr->req
+
 * Wed Jun 03 2026 Mike Snitzer <snitzer@kernel.org> [6.12.87-2]
 - Fix NFSD DIRECT debugfs interface to properly disable spliced_read when setting io_cache_write.
 - nfsd: fix partial-write detection in nfsd_direct_write
