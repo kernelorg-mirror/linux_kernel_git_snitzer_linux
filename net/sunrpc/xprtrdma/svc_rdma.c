@@ -285,7 +285,7 @@ int svc_rdma_init(void)
 	struct workqueue_struct *wq;
 	int rc;
 
-	wq = alloc_workqueue("svcrdma", WQ_UNBOUND, 0);
+	wq = alloc_workqueue("svcrdma", WQ_UNBOUND | WQ_HIGHPRI, 0);
 	if (!wq)
 		return -ENOMEM;
 
