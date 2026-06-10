@@ -1,3 +1,6 @@
+* Wed Jun 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-1]
+- Merge v6.12.93 for the benefit of more root exploit fixes
+
 * Wed Jun 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-0]
 - Linux v6.12.93
 
