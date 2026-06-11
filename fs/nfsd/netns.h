@@ -69,6 +69,7 @@ struct nfsd_net {
 	bool grace_ended;
 	bool grace_end_forced;
 	time64_t boot_time;
+	time64_t boot_time_bt;	/* same instant in CLOCK_BOOTTIME */
 
 	struct dentry *nfsd_client_dir;
 
