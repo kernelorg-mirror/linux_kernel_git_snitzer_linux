@@ -1,3 +1,13 @@
+* Fri Jun 19 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-2]
+- svcrdma: cap per-xprt sc_send_ctxts free list at sc_max_requests
+- svcrdma: track sc_send_ctxts_depth at alloc/destroy and gate _get on it
+- svcrdma: loosen sc_send_ctxts_depth cap to 4*sc_max_requests
+- nfsd: guard nfsd_serv deref in nfsd_file_net_dispose
+- nfsd: fix refcount leak in nfsd_file_lru_add on insertion failure
+- nfsd: fix fcache_disposal UAF by inlining dispose state into nfsd_net
+- nfsd: close shrinker/GC/fsnotify vs per-net shutdown race in filecache
+- NFSD: remove flawed WARN_ON_ONCE from nfsd_mode_check
+
 * Wed Jun 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-1]
 - Merge v6.12.93 for the benefit of more root exploit fixes
 
