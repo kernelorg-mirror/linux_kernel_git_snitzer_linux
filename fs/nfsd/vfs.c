@@ -254,7 +254,7 @@ nfsd_lookup_dentry(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	exp = exp_get(fhp->fh_export);
 
 	/* Lookup the name, but don't follow links */
-	if (isdotent(name, len)) {
+	if (name_is_dot_dotdot(name, len)) {
 		if (len==1)
 			dentry = dget(dparent);
 		else if (dparent != exp->ex_path.dentry)
@@ -1883,7 +1883,7 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	trace_nfsd_vfs_create(rqstp, fhp, type, fname, flen);
 
-	if (isdotent(fname, flen))
+	if (name_is_dot_dotdot(fname, flen))
 		return nfserr_exist;
 
 	err = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_NOP);
@@ -1985,7 +1985,7 @@ nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (!flen || path[0] == '\0')
 		goto out;
 	err = nfserr_exist;
-	if (isdotent(fname, flen))
+	if (name_is_dot_dotdot(fname, flen))
 		goto out;
 
 	err = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_CREATE);
@@ -2062,7 +2062,7 @@ nfsd_link(struct svc_rqst *rqstp, struct svc_fh *ffhp,
 	if (!len)
 		goto out;
 	err = nfserr_exist;
-	if (isdotent(name, len))
+	if (name_is_dot_dotdot(name, len))
 		goto out;
 
 	err = nfs_ok;
@@ -2173,7 +2173,8 @@ nfsd_rename(struct svc_rqst *rqstp, struct svc_fh *ffhp, char *fname, int flen,
 	tdentry = tfhp->fh_dentry;
 
 	err = nfserr_perm;
-	if (!flen || isdotent(fname, flen) || !tlen || isdotent(tname, tlen))
+	if (!flen || name_is_dot_dotdot(fname, flen) ||
+	    !tlen || name_is_dot_dotdot(tname, tlen))
 		goto out;
 
 	err = nfserr_xdev;
@@ -2295,7 +2296,7 @@ nfsd_unlink(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
 	trace_nfsd_vfs_unlink(rqstp, fhp, fname, flen);
 
 	err = nfserr_acces;
-	if (!flen || isdotent(fname, flen))
+	if (!flen || name_is_dot_dotdot(fname, flen))
 		goto out;
 	err = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_REMOVE);
 	if (err)
