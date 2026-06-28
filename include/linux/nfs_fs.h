@@ -169,6 +169,7 @@ struct nfs_inode {
 	struct timespec64	btime;
 
 	bool			uncacheable_file_data : 1;
+	bool			uncacheable_dirent_metadata : 1;
 
 	/*
 	 * read_cache_jiffies is when we started read-caching this inode.
