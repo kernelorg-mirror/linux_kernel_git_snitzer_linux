@@ -544,6 +544,14 @@ enum {
 };
 
 /*
+ * Symbol name and value are from draft-ietf-nfsv4-uncacheable-directories
+ * Section 8.  "XDR for Uncacheable Dirents Attribute"
+ */
+enum {
+	FATTR4_UNCACHEABLE_DIRENT_METADATA	= 88,
+};
+
+/*
  * The following internal definitions enable processing the above
  * attribute bits within 32-bit word boundaries.
  */
@@ -630,6 +638,7 @@ enum {
 #define FATTR4_WORD2_POSIX_DEFAULT_ACL	BIT(FATTR4_POSIX_DEFAULT_ACL - 64)
 #define FATTR4_WORD2_POSIX_ACCESS_ACL	BIT(FATTR4_POSIX_ACCESS_ACL - 64)
 #define FATTR4_WORD2_UNCACHEABLE_FILE_DATA	BIT(FATTR4_UNCACHEABLE_FILE_DATA - 64)
+#define FATTR4_WORD2_UNCACHEABLE_DIRENT_METADATA	BIT(FATTR4_UNCACHEABLE_DIRENT_METADATA - 64)
 
 /* MDS threshold bitmap bits */
 #define THRESHOLD_RD                    (1UL << 0)
