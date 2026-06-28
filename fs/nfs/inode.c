@@ -507,6 +507,7 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 		nfsi->write_io = 0;
 		nfsi->read_io = 0;
 		nfsi->uncacheable_file_data = false;
+		nfsi->uncacheable_dirent_metadata = false;
 
 		nfsi->read_cache_jiffies = fattr->time_start;
 		nfsi->attr_gencount = fattr->gencount;
@@ -567,6 +568,16 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 		else if (S_ISREG(inode->i_mode) &&
 			 (fattr_supported & NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA))
 			nfs_set_cache_invalid(inode, NFS_INO_INVALID_UNCACHEABLE_FILE_DATA);
+		/*
+		 * No invalidation bit for uncacheable_dirent_metadata: unlike
+		 * uncacheable_file_data, attr 88 is requested unconditionally
+		 * for directories via the nfs4_bitmap_copy_adjust() type gate,
+		 * so it is refetched on every directory getattr and cannot go
+		 * stale.
+		 */
+		if (fattr->valid & NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA)
+			nfsi->uncacheable_dirent_metadata =
+				fattr->aux_flags & NFS_AUX_UNCACHEABLE_DIRENT_METADATA;
 
 		nfs_setsecurity(inode, fattr);
 
@@ -2461,6 +2472,10 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 		 (fattr_supported & NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA))
 		nfsi->cache_validity |=
 			save_cache_validity & NFS_INO_INVALID_UNCACHEABLE_FILE_DATA;
+
+	if (fattr->valid & NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA)
+		nfsi->uncacheable_dirent_metadata =
+				fattr->aux_flags & NFS_AUX_UNCACHEABLE_DIRENT_METADATA;
 
 	/* Update attrtimeo value if we're out of the unstable period */
 	if (attr_changed) {
