@@ -1,3 +1,10 @@
+* Wed Jul 08 2026 Mike Snitzer [7.0.10-6]
+- various block layer DIO alignment fixes
+- NFS/localio: issue IO inline when not in a memory-reclaim context
+- NFS/localio: remove dead FLUSH_SYNC handling from nfs_local_commit
+- NFS/localio: issue commit inline when not in a memory-reclaim context
+- NFS/localio: fix nfs_local_dio_misaligned tracepoint
+
 * Fri Jun 19 2026 Mike Snitzer [7.0.10-5]
 - nfsd: guard nfsd_serv deref in nfsd_file_net_dispose
 - nfsd: fix refcount leak in nfsd_file_lru_add on insertion failure
