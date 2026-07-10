@@ -1,3 +1,7 @@
+* Fri Jul 10 2026 Mike Snitzer [7.0.10-7]
+- NFS through nfs-for-7.2-1 and anna/linux-next (27934d02cbe)
+- NFSD through nfsd-7.2 and cel/nfsd-next (26ddc8a26f00b)
+
 * Wed Jul 08 2026 Mike Snitzer [7.0.10-6]
 - various block layer DIO alignment fixes
 - NFS/localio: issue IO inline when not in a memory-reclaim context
