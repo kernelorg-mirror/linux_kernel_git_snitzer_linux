@@ -64,6 +64,7 @@ struct vm_fault;
 #define IOMAP_F_BUFFER_HEAD	0
 #endif /* CONFIG_BUFFER_HEAD */
 #define IOMAP_F_XATTR		(1U << 5)
+#define IOMAP_F_DONTCACHE	(1U << 6)
 
 /*
  * Flags set by the core iomap code during operations:
@@ -178,6 +179,7 @@ struct iomap_folio_ops {
 #else
 #define IOMAP_DAX		0
 #endif /* CONFIG_FS_DAX */
+#define IOMAP_DONTCACHE		(1 << 10)
 
 struct iomap_ops {
 	/*
