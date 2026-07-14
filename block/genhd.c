@@ -58,6 +58,13 @@ static DEFINE_IDA(ext_devt_ida);
 
 void set_capacity(struct gendisk *disk, sector_t sectors)
 {
+	if (sectors > BLK_DEV_MAX_SECTORS) {
+		pr_warn_once("%s: truncate capacity from %lld to %lld\n",
+				disk->disk_name, sectors,
+				BLK_DEV_MAX_SECTORS);
+		sectors = BLK_DEV_MAX_SECTORS;
+	}
+
 	bdev_set_nr_sectors(disk->part0, sectors);
 }
 EXPORT_SYMBOL(set_capacity);
@@ -398,21 +405,26 @@ int __must_check device_add_disk(struct device *parent, struct gendisk *disk,
 	struct device *ddev = disk_to_dev(disk);
 	int ret;
 
-	/* Only makes sense for bio-based to set ->poll_bio */
-	if (queue_is_mq(disk->queue) && disk->fops->poll_bio)
+	if (WARN_ON_ONCE(bdev_nr_sectors(disk->part0) > BLK_DEV_MAX_SECTORS))
 		return -EINVAL;
 
-	/*
-	 * The disk queue should now be all set with enough information about
-	 * the device for the elevator code to pick an adequate default
-	 * elevator if one is needed, that is, for devices requesting queue
-	 * registration.
-	 */
-	elevator_init_mq(disk->queue);
+	if (queue_is_mq(disk->queue)) {
+		/*
+		 * ->submit_bio and ->poll_bio are bypassed for blk-mq drivers.
+		 */
+		if (disk->fops->submit_bio || disk->fops->poll_bio)
+			return -EINVAL;
 
-	/* Mark bdev as having a submit_bio, if needed */
-	if (disk->fops->submit_bio)
+		/*
+		 * Initialize the I/O scheduler code and pick a default one if
+		 * needed.
+		 */
+		elevator_init_mq(disk->queue);
+	} else {
+		if (!disk->fops->submit_bio)
+			return -EINVAL;
 		bdev_set_flag(disk->part0, BD_HAS_SUBMIT_BIO);
+	}
 
 	/*
 	 * If the driver provides an explicit major number it also must provide
