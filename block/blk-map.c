@@ -577,7 +577,7 @@ static int blk_rq_map_user_bvec(struct request *rq, const struct iov_iter *iter)
 	bio_iov_bvec_set(bio, (struct iov_iter *)iter);
 
 	/* check that the data layout matches the hardware restrictions */
-	ret = bio_split_rw_at(bio, lim, &nsegs, max_bytes);
+	ret = bio_split_io_at(bio, lim, &nsegs, max_bytes, 0);
 	if (ret) {
 		/* if we would have to split the bio, copy instead */
 		if (ret > 0)
