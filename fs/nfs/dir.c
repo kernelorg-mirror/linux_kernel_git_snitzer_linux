@@ -2256,7 +2256,7 @@ full_reval:
 	return nfs_do_lookup_revalidate(dir, name, dentry, flags);
 }
 
-#endif /* CONFIG_NFSV4 */
+#endif /* CONFIG_NFS_V4 */
 
 int nfs_atomic_open_v23(struct inode *dir, struct dentry *dentry,
 			struct file *file, unsigned int open_flags,
@@ -3305,6 +3305,8 @@ static int nfs_open_permission_mask(int openflags)
 		if ((openflags & O_ACCMODE) != O_WRONLY)
 			mask |= MAY_READ;
 		if ((openflags & O_ACCMODE) != O_RDONLY)
+			mask |= MAY_WRITE;
+		if (openflags & O_TRUNC)
 			mask |= MAY_WRITE;
 	}
 
