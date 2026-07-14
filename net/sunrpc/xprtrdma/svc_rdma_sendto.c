@@ -158,6 +158,7 @@ svc_rdma_send_ctxt_alloc(struct svcxprt_rdma *rdma)
 
 	for (i = 0; i < rdma->sc_max_send_sges; i++)
 		ctxt->sc_sges[i].lkey = rdma->sc_pd->local_dma_lkey;
+	atomic_inc(&rdma->sc_send_ctxts_depth);
 	return ctxt;
 
 fail3:
@@ -170,6 +171,20 @@ fail0:
 	return NULL;
 }
 
+/* Tear down a single send_ctxt: reverse of svc_rdma_send_ctxt_alloc. */
+static void svc_rdma_send_ctxt_destroy(struct svcxprt_rdma *rdma,
+				       struct svc_rdma_send_ctxt *ctxt)
+{
+	ib_dma_unmap_single(rdma->sc_pd->device,
+			    ctxt->sc_sges[0].addr,
+			    rdma->sc_max_req_size,
+			    DMA_TO_DEVICE);
+	kfree(ctxt->sc_xprt_buf);
+	kfree(ctxt->sc_pages);
+	kfree(ctxt);
+	atomic_dec(&rdma->sc_send_ctxts_depth);
+}
+
 /**
  * svc_rdma_send_ctxts_destroy - Release all send_ctxt's for an xprt
  * @rdma: svcxprt_rdma being torn down
@@ -177,17 +192,12 @@ fail0:
  */
 void svc_rdma_send_ctxts_destroy(struct svcxprt_rdma *rdma)
 {
-	struct ib_device *device = rdma->sc_cm_id->device;
 	struct svc_rdma_send_ctxt *ctxt;
 	struct llist_node *node;
 
 	while ((node = llist_del_first(&rdma->sc_send_ctxts)) != NULL) {
 		ctxt = llist_entry(node, struct svc_rdma_send_ctxt, sc_node);
-		ib_dma_unmap_single(device, ctxt->sc_sges[0].addr,
-				    rdma->sc_max_req_size, DMA_TO_DEVICE);
-		kfree(ctxt->sc_xprt_buf);
-		kfree(ctxt->sc_pages);
-		kfree(ctxt);
+		svc_rdma_send_ctxt_destroy(rdma, ctxt);
 	}
 }
 
@@ -226,6 +236,26 @@ out:
 	return ctxt;
 
 out_empty:
+	/* Backpressure: refuse to mint a new ctxt once the per-xprt total
+	 * (in-flight + queued for release + on-llist) has reached a
+	 * multiple of the configured slot count. The caller drops the
+	 * connection; the client reconnects with a fresh xprt. Better
+	 * than the unbounded allocation that lets workqueue lag inflate
+	 * the cache to OOM.
+	 *
+	 * The 4x multiplier is the "workqueue lag tolerance" budget.
+	 * sc_max_requests bounds in-flight ctxts by design, but
+	 * svcrdma_wq dispatch is CPU-contended with NFSd and the HCA
+	 * completion ISR -- under sustained load, ~20% of completions
+	 * sit queued on svcrdma_wq waiting for _release. Capping at
+	 * sc_max_requests would cause routine connection drops; capping
+	 * at 4*sc_max_requests gives the workqueue room to drain during
+	 * normal contention while still bounding the worst case at a
+	 * small multiple of the legitimate working set.
+	 */
+	if (atomic_read(&rdma->sc_send_ctxts_depth) >=
+	    4 * rdma->sc_max_requests)
+		return NULL;
 	ctxt = svc_rdma_send_ctxt_alloc(rdma);
 	if (!ctxt)
 		return NULL;
@@ -257,6 +287,20 @@ static void svc_rdma_send_ctxt_release(struct svcxprt_rdma *rdma,
 				  DMA_TO_DEVICE);
 	}
 
+	/* Depth is now tracked at alloc/destroy, so it reflects total
+	 * live ctxts (in-flight + queued + on-llist), not just on-llist.
+	 * If we've blown past the cap -- via a race in the _get
+	 * backpressure check, or a transient burst -- destroy this ctxt
+	 * instead of returning it to the llist so the depth converges.
+	 *
+	 * Same 4*sc_max_requests budget as the _get backpressure path.
+	 */
+	if (atomic_read(&rdma->sc_send_ctxts_depth) >
+	    4 * rdma->sc_max_requests) {
+		trace_svcrdma_send_ctxt_capped(&ctxt->sc_cid);
+		svc_rdma_send_ctxt_destroy(rdma, ctxt);
+		return;
+	}
 	llist_add(&ctxt->sc_node, &rdma->sc_send_ctxts);
 }
 
