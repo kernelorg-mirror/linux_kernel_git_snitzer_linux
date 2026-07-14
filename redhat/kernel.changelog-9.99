@@ -1,3 +1,8 @@
+* Tue Jul 14 2026 Mike Snitzer [6.12.93-4]
+- NFS fixes through nfs-for-7.2-2
+- NFSD fixes through nfsd-7.2 and only select cel/nfsd-next fixes
+- backports are getting more painful, really trying to only take in fixes!
+
 * Wed Jul 08 2026 Mike Snitzer [6.12.93-3]
 - various block layer DIO alignment fixes
 - NFS/localio: issue IO inline when not in a memory-reclaim context
