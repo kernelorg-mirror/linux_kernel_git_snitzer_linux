@@ -837,7 +837,7 @@ nfsd4_create(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		goto out_aftermask;
 
 	if (create->cr_acl) {
-		if (create->cr_dpacl || create->cr_pacl) {
+		if (attrs.na_dpacl || attrs.na_pacl) {
 			status = nfserr_inval;
 			goto out_aftermask;
 		}
@@ -1470,7 +1470,7 @@ void nfsd4_async_copy_reaper(struct nfsd_net *nn)
 		list_for_each_safe(pos, next, &clp->async_copies) {
 			copy = list_entry(pos, struct nfsd4_copy, copies);
 			if (test_bit(NFSD4_COPY_F_OFFLOAD_DONE, &copy->cp_flags)) {
-				if (--copy->cp_ttl) {
+				if (!--copy->cp_ttl) {
 					list_del_init(&copy->copies);
 					list_add(&copy->copies, &reaplist);
 				}
