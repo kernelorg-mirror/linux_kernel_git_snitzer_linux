@@ -1621,6 +1621,18 @@ This package provides essential kernel modules for the %{?2:%{2}-}core kernel pa
 # this macro creates a kernel-<subpackage> meta package.
 #	%%kernel_meta_package <subpackage>
 #
+%define do_kernel_meta_package() \
+%package %{1}\
+summary: kernel meta-package for the %{1} kernel\
+Requires: kernel-%{1}-core-uname-r = %{KVERREL}%{uname_suffix %{1}}\
+Requires: kernel-%{1}-modules-uname-r = %{KVERREL}%{uname_suffix %{1}}\
+Requires: kernel-%{1}-modules-core-uname-r = %{KVERREL}%{uname_suffix %{1}}\
+%( [ "%{1}" = "rt" ] || [ "%{1}" = "rt-debug" ] && echo "Requires: realtime-setup" )\
+Provides: installonlypkg(kernel)\
+%description %{1}\
+The meta-package for the %{1} kernel\
+%{nil}
+
 %if "%{?dist}" == ".el8"
 # Otherwise .el8 errors with:
 # error: Too many levels of recursion in macro expansion. It is likely caused by recursive macro declaration.
@@ -1628,19 +1640,7 @@ This package provides essential kernel modules for the %{?2:%{2}-}core kernel pa
 # error: line 1848: %kernel_variant_package
 %define kernel_meta_package() %{nil}
 %else
-%define kernel_meta_package() \
-%package %{1}\
-summary: kernel meta-package for the %{1} kernel\
-Requires: kernel-%{1}-core-uname-r = %{KVERREL}%{uname_suffix %{1}}\
-Requires: kernel-%{1}-modules-uname-r = %{KVERREL}%{uname_suffix %{1}}\
-Requires: kernel-%{1}-modules-core-uname-r = %{KVERREL}%{uname_suffix %{1}}\
-%if "%{1}" == "rt" || "%{1}" == "rt-debug"\
-Requires: realtime-setup\
-%endif\
-Provides: installonlypkg(kernel)\
-%description %{1}\
-The meta-package for the %{1} kernel\
-%{nil}
+%define kernel_meta_package() %{do_kernel_meta_package %{1}}
 %endif
 
 %if %{with_realtime}
@@ -1843,6 +1843,17 @@ PREEMPT_RT real-time preemption support, targeted for Automotive platforms
 %else
 %kernel_variant_package debug
 %endif
+
+%if "%{?dist}" == ".el8"
+%package debug
+Summary: The Linux kernel compiled with extra debugging enabled
+Group: System Environment/Kernel
+%description debug
+This variant of the kernel has numerous debugging options enabled.
+It should only be installed when trying to gather additional information
+on kernel bugs, as some of these options impact performance noticably.
+%endif
+
 %description debug-core
 The kernel package contains the Linux kernel (vmlinuz), the core of any
 Linux operating system.  The kernel handles the basic functions
@@ -1997,7 +2008,15 @@ cp -a %{SOURCE1} .
 ApplyOptionalPatch patch-%{patchversion}-redhat.patch
 
 %if "%{?dist}" == ".el8"
+# Check if gettid is MISSING from unistd_ext.h
+%define gettid_missing %( \
+    if [ ! -f /usr/include/bits/unistd_ext.h ] || \
+	 ! grep -q "gettid" /usr/include/bits/unistd_ext.h 2>/dev/null; \
+    then echo 1; else echo 0; fi )
+
+%if %{gettid_missing}
 ApplyPatch tools-tracing-rtla-fix-el8-compiler-errors.patch
+%endif
 %endif
 
 %endif
