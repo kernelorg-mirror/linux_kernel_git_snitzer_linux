@@ -1,3 +1,13 @@
+* Wed Jul 22 2026 Mike Snitzer [7.0.10-8]
+- NFS: Pin the 'struct nfs_server' during a FREE_STATEID call
+- NFS: Decrement refcounts if allocating nfs_free_stateid_data fails
+- nfs4.2: add UNCACHEABLE_FILE_DATA attribute support
+- nfs4.2: request UNCACHEABLE_FILE_DATA only for regular files
+- nfs4.2: open UNCACHEABLE_FILE_DATA files with O_DIRECT
+- nfs4.2: add UNCACHEABLE_DIRENT_METADATA attribute support
+- nfs4.2: request UNCACHEABLE_DIRENT_METADATA only for directories
+- nfs4.2: honor UNCACHEABLE_DIRENT_METADATA by refetching readdir
+
 * Fri Jul 10 2026 Mike Snitzer [7.0.10-7]
 - NFS through nfs-for-7.2-1 and anna/linux-next (27934d02cbe)
 - NFSD through nfsd-7.2 and cel/nfsd-next (26ddc8a26f00b)
