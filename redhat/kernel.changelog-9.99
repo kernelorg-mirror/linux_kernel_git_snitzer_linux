@@ -1,3 +1,52 @@
+* Wed Jul 22 2026 Mike Snitzer [7.0.10-8]
+- NFS: Pin the 'struct nfs_server' during a FREE_STATEID call
+- NFS: Decrement refcounts if allocating nfs_free_stateid_data fails
+- nfs4.2: add UNCACHEABLE_FILE_DATA attribute support
+- nfs4.2: request UNCACHEABLE_FILE_DATA only for regular files
+- nfs4.2: open UNCACHEABLE_FILE_DATA files with O_DIRECT
+- nfs4.2: add UNCACHEABLE_DIRENT_METADATA attribute support
+- nfs4.2: request UNCACHEABLE_DIRENT_METADATA only for directories
+- nfs4.2: honor UNCACHEABLE_DIRENT_METADATA by refetching readdir
+
+* Fri Jul 10 2026 Mike Snitzer [7.0.10-7]
+- NFS through nfs-for-7.2-1 and anna/linux-next (27934d02cbe)
+- NFSD through nfsd-7.2 and cel/nfsd-next (26ddc8a26f00b)
+
+* Wed Jul 08 2026 Mike Snitzer [7.0.10-6]
+- various block layer DIO alignment fixes
+- NFS/localio: issue IO inline when not in a memory-reclaim context
+- NFS/localio: remove dead FLUSH_SYNC handling from nfs_local_commit
+- NFS/localio: issue commit inline when not in a memory-reclaim context
+- NFS/localio: fix nfs_local_dio_misaligned tracepoint
+
+* Fri Jun 19 2026 Mike Snitzer [7.0.10-5]
+- nfsd: guard nfsd_serv deref in nfsd_file_net_dispose
+- nfsd: fix refcount leak in nfsd_file_lru_add on insertion failure
+- nfsd: fix fcache_disposal UAF by inlining dispose state into nfsd_net
+- nfsd: close shrinker/GC/fsnotify vs per-net shutdown race in filecache
+- NFSD: remove flawed WARN_ON_ONCE from nfsd_mode_check
+
+* Thu Jun 4 2026 Mike Snitzer [7.0.10-4]
+- Revert "svcrdma: Use contiguous pages for RDMA Read sink buffers" due to excessive CPU burn on fast RDMA networks.
+- NFS: write_completion: dereference loop-local req, not hdr->req
+
+* Wed Jun 3 2026 Mike Snitzer [7.0.10-3]
+- svcrdma: Defer send context release to xpo_release_ctxt
+- nfsd: fallback to DONTCACHE if read IO less than nf_dio_read_offset_align
+- mm: preserve PG_dropbehind flag during folio split
+- mm: track DONTCACHE dirty pages per bdi_writeback
+- mm: kick writeback flusher for IOCB_DONTCACHE with targeted dirty tracking
+- NFSv4/flexfiles: honor FF_FLAGS_NO_IO_THRU_MDS on fatal DS connect errors
+- NFSv4/flexfiles: honor FF_FLAGS_NO_IO_THRU_MDS in pg_get_mirror_count_write
+
+* Fri May 29 2026 Mike Snitzer [7.0.10-2]
+- revert "configs: Compress UEFI/PE kernels with zstd" to avoid breaking EL9 by going back to CONFIG_KERNEL_GZIP=y
+
+* Thu May 28 2026 Mike Snitzer [7.0.10-1]
+- Rebase all topic branches ontop of Linux v7.0.10
+- Sync NFS and NFSD changes through 7.1 tags nfs-for-7.1-1 and nfsd-7.1-2 respectively
+- Include Anna's nfs-testing changes built on nfs-for-7.1-1, except Jeff's changes that depend on 64bit inode->i_ino
+
 * Wed Apr 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-7]
 - Include NFS and NFSD changes that are destined for 7.1.
 - Include latest fixes from nfsd-testing.
