@@ -182,5 +182,6 @@ int iomap_bio_read_folio_range_sync(const struct iomap_iter *iter,
 			error = fs_bio_integrity_verify(&bio, sector, len);
 		fs_bio_integrity_free(&bio);
 	}
+	bio_uninit(&bio);
 	return error;
 }
