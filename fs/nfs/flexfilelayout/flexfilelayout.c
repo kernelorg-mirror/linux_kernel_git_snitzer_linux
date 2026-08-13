@@ -1282,7 +1282,7 @@ static void ff_layout_resend_pnfs_read(struct nfs_pgio_header *hdr)
 	ds = ff_layout_choose_any_ds_for_read(hdr->lseg, idx, &new_idx,
 					      hdr->args.offset, &dss_id);
 	if (IS_ERR(ds))
-		pnfs_error_mark_layout_for_return(hdr->inode, hdr->lseg);
+		pnfs_error_mark_layout_for_return(hdr->inode, hdr->lseg, NULL);
 	else
 		ff_layout_send_layouterror(hdr->lseg);
 	pnfs_read_resend_pnfs(hdr, new_idx);
@@ -1293,7 +1293,7 @@ static void ff_layout_reset_read(struct nfs_pgio_header *hdr)
 	struct rpc_task *task = &hdr->task;
 
 	pnfs_layoutcommit_inode(hdr->inode, false);
-	pnfs_error_mark_layout_for_return(hdr->inode, hdr->lseg);
+	pnfs_error_mark_layout_for_return(hdr->inode, hdr->lseg, NULL);
 
 	if (!test_and_set_bit(NFS_IOHDR_REDO, &hdr->flags)) {
 		dprintk("%s Reset task %5u for i/o through MDS "
@@ -1590,7 +1590,7 @@ static void ff_layout_io_track_ds_error(struct pnfs_layout_segment *lseg,
 		fallthrough;
 	default:
 		pnfs_error_mark_layout_for_return(lseg->pls_layout->plh_inode,
-						  lseg);
+						  lseg, NULL);
 	}
 
 out:
@@ -2244,7 +2244,7 @@ out_failed:
 		 * FF_FLAGS_NO_IO_THRU_MDS: force fresh LAYOUTGET,
 		 * never fall through to MDS I/O.
 		 */
-		pnfs_error_mark_layout_for_return(hdr->inode, lseg);
+		pnfs_error_mark_layout_for_return(hdr->inode, lseg, NULL);
 		return PNFS_TRY_AGAIN;
 	}
 	trace_pnfs_mds_fallback_read_pagelist(hdr->inode,
@@ -2337,7 +2337,7 @@ out_failed:
 		 * FF_FLAGS_NO_IO_THRU_MDS: force fresh LAYOUTGET,
 		 * never fall through to MDS I/O.
 		 */
-		pnfs_error_mark_layout_for_return(hdr->inode, lseg);
+		pnfs_error_mark_layout_for_return(hdr->inode, lseg, NULL);
 		return PNFS_TRY_AGAIN;
 	}
 	trace_pnfs_mds_fallback_write_pagelist(hdr->inode,
@@ -2459,7 +2459,8 @@ static bool ff_layout_match_io(const struct rpc_task *task, const void *data)
 	return false;
 }
 
-static void ff_layout_cancel_io(struct pnfs_layout_segment *lseg)
+static void ff_layout_cancel_io(struct pnfs_layout_segment *lseg,
+				const struct nfs4_deviceid *devid)
 {
 	struct nfs4_ff_layout_segment *flseg = FF_LAYOUT_LSEG(lseg);
 	struct nfs4_ff_layout_mirror *mirror;
@@ -2472,6 +2473,9 @@ static void ff_layout_cancel_io(struct pnfs_layout_segment *lseg)
 	for (idx = 0; idx < flseg->mirror_array_cnt; idx++) {
 		mirror = flseg->mirror_array[idx];
 		for (dss_id = 0; dss_id < mirror->dss_count; dss_id++) {
+			if (devid && memcmp(&mirror->dss[dss_id].devid, devid,
+					    sizeof(*devid)) != 0)
+				continue;
 			mirror_ds = mirror->dss[dss_id].mirror_ds;
 			if (IS_ERR_OR_NULL(mirror_ds))
 				continue;
