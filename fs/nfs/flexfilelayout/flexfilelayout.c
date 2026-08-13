@@ -1590,7 +1590,8 @@ static void ff_layout_io_track_ds_error(struct pnfs_layout_segment *lseg,
 		fallthrough;
 	default:
 		pnfs_error_mark_layout_for_return(lseg->pls_layout->plh_inode,
-						  lseg, NULL);
+						  lseg,
+						  &mirror->dss[dss_id].devid);
 	}
 
 out:
@@ -2244,7 +2245,8 @@ out_failed:
 		 * FF_FLAGS_NO_IO_THRU_MDS: force fresh LAYOUTGET,
 		 * never fall through to MDS I/O.
 		 */
-		pnfs_error_mark_layout_for_return(hdr->inode, lseg, NULL);
+		pnfs_error_mark_layout_for_return(hdr->inode, lseg,
+						  &mirror->dss[dss_id].devid);
 		return PNFS_TRY_AGAIN;
 	}
 	trace_pnfs_mds_fallback_read_pagelist(hdr->inode,
@@ -2337,7 +2339,8 @@ out_failed:
 		 * FF_FLAGS_NO_IO_THRU_MDS: force fresh LAYOUTGET,
 		 * never fall through to MDS I/O.
 		 */
-		pnfs_error_mark_layout_for_return(hdr->inode, lseg, NULL);
+		pnfs_error_mark_layout_for_return(hdr->inode, lseg,
+						  &mirror->dss[dss_id].devid);
 		return PNFS_TRY_AGAIN;
 	}
 	trace_pnfs_mds_fallback_write_pagelist(hdr->inode,
