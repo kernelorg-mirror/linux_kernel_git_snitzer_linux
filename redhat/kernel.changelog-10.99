@@ -1,3 +1,7 @@
+* Thu Aug 13 2026 Mike Snitzer <snitzer@kernel.org> [7.1.5-3]
+- Include NFS client changes that will be in nfs-for-7.3-1
+- Rebase nfs-testing-canary ontop of nfs-for-7.3-1
+
 * Tue Jul 28 2026 Mike Snitzer <snitzer@kernel.org> [7.1.5-2]
 - nfs: store the full NFS fileid in inode->i_ino
 - nfs: remove nfs_compat_user_ino64() and deprecate enable_ino64
