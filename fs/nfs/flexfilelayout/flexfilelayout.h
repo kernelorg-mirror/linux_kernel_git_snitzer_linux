@@ -252,7 +252,7 @@ struct nfs4_pnfs_ds *
 nfs4_ff_layout_prepare_ds(struct pnfs_layout_segment *lseg,
 			  struct nfs4_ff_layout_mirror *mirror,
 			  u32 dss_id,
-			  bool fail_return);
+			  enum nfs_opnum4 opnum);
 
 struct rpc_clnt *
 nfs4_ff_find_or_create_ds_client(struct nfs4_ff_layout_mirror *mirror,
