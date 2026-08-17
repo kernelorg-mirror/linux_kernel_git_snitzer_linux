@@ -493,6 +493,7 @@ void rpcrdma_sendctx_unmap(struct rpcrdma_sendctx *sc)
 
 	rpcrdma_sendctx_dma_unmap(sc);
 	sc->sc_req = NULL;
+	req->rl_sendctx = NULL;
 	rpcrdma_req_put(req);
 }
 
@@ -501,8 +502,11 @@ void rpcrdma_sendctx_unmap(struct rpcrdma_sendctx *sc)
  */
 static void rpcrdma_sendctx_cancel(struct rpcrdma_sendctx *sc)
 {
+	struct rpcrdma_req *req = sc->sc_req;
+
 	rpcrdma_sendctx_dma_unmap(sc);
 	sc->sc_req = NULL;
+	req->rl_sendctx = NULL;
 }
 
 /* Prepare an SGE for the RPC-over-RDMA transport header.
@@ -1337,8 +1341,8 @@ void rpcrdma_complete_rqst(struct rpcrdma_rep *rep)
 	struct rpc_rqst *rqst = rep->rr_rqst;
 	int status;
 
-	/* I3: every registered MR has been invalidated and
-	 * ib_dma_unmap_sg()'d before complete_rqst runs.
+	/* I3: rl_registered has been drained by frwr_unmap before
+	 * complete_rqst runs.
 	 */
 	WARN_ON_ONCE(!list_empty(&rpcr_to_rdmar(rqst)->rl_registered));
 
