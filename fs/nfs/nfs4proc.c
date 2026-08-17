@@ -310,13 +310,26 @@ static void nfs4_bitmap_copy_adjust(__u32 *dst, const __u32 *src,
 	memcpy(dst, src, NFS4_BITMASK_SZ*sizeof(*dst));
 	/*
 	 * The uncacheable_file_data attribute applies only to regular files
-	 * (NF4REG); a server must reject a query of it on any other object
-	 * type with NFS4ERR_INVAL.  Never request it unless the target is
-	 * known to be a regular file (callers with an unknown object type,
-	 * e.g. LOOKUP, pass a NULL inode).
+	 * (NF4REG) and the uncacheable_dirent_metadata attribute only to
+	 * directories (NF4DIR); a server must reject a query of either on any
+	 * other object type with NFS4ERR_INVAL.  Never request either unless
+	 * the target is known to be of the matching type (callers with an
+	 * unknown object type, e.g. LOOKUP, pass a NULL inode).
+	 *
+	 * uncacheable_file_data rides the shared request bitmaps (it is legal
+	 * on the OPEN of a regular file, where it is wanted); strip it here for
+	 * any non-regular target.  uncacheable_dirent_metadata must NOT ride
+	 * those bitmaps -- they are used verbatim by OPEN on regular files,
+	 * where a directory-only attribute would draw NFS4ERR_INVAL -- so it is
+	 * added here for directories only, gated on server support.
 	 */
 	if (!inode || !S_ISREG(inode->i_mode))
 		dst[2] &= ~FATTR4_WORD2_UNCACHEABLE_FILE_DATA;
+	if (inode && S_ISDIR(inode->i_mode))
+		dst[2] |= NFS_SERVER(inode)->attr_bitmask[2] &
+			  FATTR4_WORD2_UNCACHEABLE_DIRENT_METADATA;
+	else
+		dst[2] &= ~FATTR4_WORD2_UNCACHEABLE_DIRENT_METADATA;
 	if (!inode || !nfs_have_read_or_write_delegation(inode))
 		return;
 
@@ -3881,7 +3894,7 @@ static void nfs4_close_context(struct nfs_open_context *ctx, int is_sync)
 
 #define FATTR4_WORD1_NFS40_MASK (2*FATTR4_WORD1_MOUNTED_ON_FILEID - 1UL)
 #define FATTR4_WORD2_NFS41_MASK (2*FATTR4_WORD2_SUPPATTR_EXCLCREAT - 1UL)
-#define FATTR4_WORD2_NFS42_MASK (2*FATTR4_WORD2_UNCACHEABLE_FILE_DATA - 1UL)
+#define FATTR4_WORD2_NFS42_MASK (2*FATTR4_WORD2_UNCACHEABLE_DIRENT_METADATA - 1UL)
 
 #define FATTR4_WORD2_NFS42_TIME_DELEG_MASK \
 	(FATTR4_WORD2_TIME_DELEG_MODIFY|FATTR4_WORD2_TIME_DELEG_ACCESS)
@@ -4005,6 +4018,8 @@ static int _nfs4_server_capabilities(struct nfs_server *server, struct nfs_fh *f
 		server->attr_bitmask_nl[2] &= ~FATTR4_WORD2_SECURITY_LABEL;
 		if (!(res.attr_bitmask[2] & FATTR4_WORD2_UNCACHEABLE_FILE_DATA))
 			server->fattr_valid &= ~NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA;
+		if (!(res.attr_bitmask[2] & FATTR4_WORD2_UNCACHEABLE_DIRENT_METADATA))
+			server->fattr_valid &= ~NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA;
 
 		if (res.open_caps.oa_share_access_want[0] &
 		    NFS4_SHARE_WANT_OPEN_XOR_DELEGATION)
