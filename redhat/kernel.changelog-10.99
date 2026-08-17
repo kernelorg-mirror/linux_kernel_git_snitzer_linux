@@ -1,3 +1,6 @@
+* Mon Aug 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.5-4]
+- Include NFS server changes from nfsd-7.3
+
 * Thu Aug 13 2026 Mike Snitzer <snitzer@kernel.org> [7.1.5-3]
 - Include NFS client changes that will be in nfs-for-7.3-1
 - Rebase nfs-testing-canary ontop of nfs-for-7.3-1
