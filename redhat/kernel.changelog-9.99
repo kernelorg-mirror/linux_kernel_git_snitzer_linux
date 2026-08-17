@@ -1,3 +1,17 @@
+* Thu Aug 13 2026 Mike Snitzer <snitzer@kernel.org> [7.1.5-3]
+- Include NFS client changes that will be in nfs-for-7.3-1
+- Rebase nfs-testing-canary ontop of nfs-for-7.3-1
+
+* Tue Jul 28 2026 Mike Snitzer <snitzer@kernel.org> [7.1.5-2]
+- nfs: store the full NFS fileid in inode->i_ino
+- nfs: remove nfs_compat_user_ino64() and deprecate enable_ino64
+- nfs: replace NFS_FILEID() and nfsi->fileid with inode->i_ino
+- nfs: remove fileid field from struct nfs_inode
+
+* Mon Jul 27 2026 Mike Snitzer <snitzer@kernel.org> [7.1.5-1]
+- Rebase all branches on kernel-ark tag "kernel-7.1.5-0"
+- All NFS, NFSD and SUNRPC code is extremely comparable to outgoing v7.0.10-8
+
 * Wed Jul 22 2026 Mike Snitzer [7.0.10-8]
 - NFS: Pin the 'struct nfs_server' during a FREE_STATEID call
 - NFS: Decrement refcounts if allocating nfs_free_stateid_data fails
