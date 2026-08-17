@@ -1,3 +1,9 @@
+* Mon Aug 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-1]
+- Rebase all branches on kernel-7.1.8-0
+- Backfill VFS changes that were merged into 7.2 as deps for nfsd-7.2
+- Include NFS server changes from nfsd-7.3
+- Include NFS client changes that will be in nfs-for-7.3-1
+
 * Sun Aug 09 2026 Justin M. Forbes <jforbes@fedoraproject.org> [7.1.8-0]
 - Config updates for 7.1.8 (Justin M. Forbes)
 - Add to BugsFixed (Justin M. Forbes)
