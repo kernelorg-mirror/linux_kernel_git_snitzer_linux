@@ -1,3 +1,9 @@
+* Wed Aug 19 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-2]
+- NFSv4/flexfiles: report the intended opnum when DS connection setup fails
+- pNFS: allow layout drivers to cancel I/O to a single device
+- NFSv4/flexfiles: only cancel I/O to a failed mirror instance
+- iomap and NVMe performance improvements via vfs-7.3-rc1.iomap changes
+
 * Mon Aug 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-1]
 - Rebase all branches on kernel-7.1.8-0
 - Backfill VFS changes that were merged into 7.2 as deps for nfsd-7.2
