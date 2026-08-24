@@ -1,3 +1,8 @@
+* Mon Aug 24 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-3]
+- backfill upstream 7.3 commit ID and header updates for block/iomap DIO alignment fixes
+- NFSv4.1: zero referring call lists before decoding
+- pNFS: Fix EBUSY check in pnfs_layout_need_return
+
 * Wed Aug 19 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-2]
 - NFSv4/flexfiles: report the intended opnum when DS connection setup fails
 - pNFS: allow layout drivers to cancel I/O to a single device
