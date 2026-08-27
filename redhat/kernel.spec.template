@@ -849,8 +849,8 @@ BuildRequires: python3-docutils
 BuildRequires: libbpf-devel
 BuildRequires: bpftool
 BuildRequires: clang
-# Very recent versions needed (luckily el10's build on el9 and el8):
-BuildRequires: libtraceevent-devel >= 1.8.4-3
+# Very recent versions needed (luckily el10's build on el8):
+BuildRequires: libtraceevent-devel >= 1.8.4-2
 BuildRequires: libtracefs-devel >= 1.8.0-6
 
 %ifarch %{cpupowerarchs}
