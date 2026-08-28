@@ -19,6 +19,11 @@
 struct bio_vec;
 struct rpc_rqst;
 
+enum xdr_buf_page_mode {
+	XDRBUF_PAGE_ARRAY,
+	XDRBUF_PAGE_BVECS,
+};
+
 /*
  * Size of an XDR encoding unit in bytes, i.e. 32 bits,
  * as defined in Section 3 of RFC 4506. All encoded
@@ -57,6 +62,11 @@ struct xdr_buf {
 	struct kvec	head[1],	/* RPC header + non-page data */
 			tail[1];	/* Appended after page data */
 
+	/*
+	 * In XDRBUF_PAGE_ARRAY mode, @bvec is an optional allocation-owned
+	 * shadow of @pages. In XDRBUF_PAGE_BVECS mode, it is an immutable,
+	 * borrowed array that must outlive every user of this xdr_buf.
+	 */
 	struct bio_vec	*bvec;
 	struct page **	pages;		/* Array of pages */
 	unsigned int	page_base,	/* Start of page data */
@@ -65,6 +75,14 @@ struct xdr_buf {
 #define XDRBUF_READ		0x01		/* target of file read */
 #define XDRBUF_WRITE		0x02		/* source of file write */
 #define XDRBUF_SPARSE_PAGES	0x04		/* Page array is sparse */
+	/*
+	 * @bvec_offset is a logical offset into the first authoritative
+	 * bvec. @bvec_count covers exactly @page_len visible bytes, with the
+	 * final entry clipped by @page_len when necessary.
+	 */
+	enum xdr_buf_page_mode page_mode;
+	unsigned int	bvec_count,
+			bvec_offset;
 
 	unsigned int	buflen,		/* Total length of storage buffer */
 			len;		/* Length of XDR encoded message */
@@ -79,6 +97,9 @@ xdr_buf_init(struct xdr_buf *buf, void *start, size_t len)
 	buf->pages = NULL;
 	buf->page_len = 0;
 	buf->flags = 0;
+	buf->page_mode = XDRBUF_PAGE_ARRAY;
+	buf->bvec_count = 0;
+	buf->bvec_offset = 0;
 	buf->len = 0;
 	buf->buflen = len;
 }
