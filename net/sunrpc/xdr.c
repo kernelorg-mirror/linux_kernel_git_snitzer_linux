@@ -107,6 +107,8 @@ EXPORT_SYMBOL_GPL(xdr_terminate_string);
 
 size_t xdr_buf_pagecount(const struct xdr_buf *buf)
 {
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return 0;
 	if (!buf->page_len)
 		return 0;
 	return (buf->page_base + buf->page_len + PAGE_SIZE - 1) >> PAGE_SHIFT;
@@ -115,7 +117,11 @@ size_t xdr_buf_pagecount(const struct xdr_buf *buf)
 int
 xdr_alloc_bvec(struct xdr_buf *buf, gfp_t gfp)
 {
-	size_t i, n = xdr_buf_pagecount(buf);
+	size_t i, n;
+
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return -EOPNOTSUPP;
+	n = xdr_buf_pagecount(buf);
 
 	if (n != 0 && buf->bvec == NULL) {
 		buf->bvec = kmalloc_objs(buf->bvec[0], n, gfp);
@@ -132,6 +138,8 @@ xdr_alloc_bvec(struct xdr_buf *buf, gfp_t gfp)
 void
 xdr_free_bvec(struct xdr_buf *buf)
 {
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return;
 	kfree(buf->bvec);
 	buf->bvec = NULL;
 }
