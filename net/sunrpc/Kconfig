@@ -61,6 +61,17 @@ config SUNRPC_DEBUG_TRACE
           logged at boot time, so say N unless you are debugging a problem
           with sunrpc-based clients or services.
 
+config SUNRPC_XDR_KUNIT_TEST
+	tristate "KUnit tests for SUNRPC XDR" if !KUNIT_ALL_TESTS
+	depends on KUNIT && SUNRPC
+	default KUNIT_ALL_TESTS
+	help
+	  Build focused tests for SUNRPC XDR buffer representations and read
+	  traversal. These tests are intended for kernel developers and are not
+	  useful in a production kernel.
+
+	  For more information, see Documentation/dev-tools/kunit/.
+
 config SUNRPC_XPRT_RDMA
 	tristate "RPC-over-RDMA transport"
 	depends on SUNRPC && INFINIBAND && INFINIBAND_ADDR_TRANS
