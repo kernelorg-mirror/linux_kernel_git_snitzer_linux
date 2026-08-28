@@ -14,12 +14,62 @@
 #include <linux/kernel.h>
 #include <linux/pagemap.h>
 #include <linux/errno.h>
+#include <linux/overflow.h>
 #include <linux/sunrpc/xdr.h>
 #include <linux/sunrpc/msg_prot.h>
 #include <linux/bvec.h>
 #include <trace/events/sunrpc.h>
 
 static void _copy_to_pages(struct page **, size_t, const char *, size_t);
+
+static bool xdr_buf_has_authoritative_bvecs(const struct xdr_buf *buf)
+{
+	return buf->page_mode == XDRBUF_PAGE_BVECS;
+}
+
+static int xdr_buf_validate_page_mode(const struct xdr_buf *buf)
+{
+	size_t storage;
+	unsigned int remaining;
+	unsigned int i;
+
+	if (buf->page_mode == XDRBUF_PAGE_ARRAY)
+		return 0;
+	if (!xdr_buf_has_authoritative_bvecs(buf))
+		return -EINVAL;
+	if (buf->page_base)
+		return -EINVAL;
+
+	if (check_add_overflow(buf->head[0].iov_len, (size_t)buf->page_len,
+			       &storage) ||
+	    check_add_overflow(storage, buf->tail[0].iov_len, &storage) ||
+	    buf->len > storage)
+		return -EINVAL;
+
+	if (!buf->page_len)
+		return (buf->bvec_count || buf->bvec_offset) ? -EINVAL : 0;
+	if (!buf->bvec || !buf->bvec_count)
+		return -EINVAL;
+
+	remaining = buf->page_len;
+	for (i = 0; i < buf->bvec_count; i++) {
+		const struct bio_vec *bvec = &buf->bvec[i];
+		unsigned int offset = i ? 0 : buf->bvec_offset;
+		unsigned int len;
+
+		if (!bvec->bv_page || !bvec->bv_len ||
+		    bvec->bv_offset > PAGE_SIZE ||
+		    bvec->bv_len > PAGE_SIZE - bvec->bv_offset ||
+		    offset >= bvec->bv_len)
+			return -EINVAL;
+		len = min(bvec->bv_len - offset, remaining);
+		remaining -= len;
+		if (!remaining && i + 1 != buf->bvec_count)
+			return -EINVAL;
+	}
+
+	return remaining ? -EINVAL : 0;
+}
 
 
 /*
@@ -99,6 +149,9 @@ void xdr_terminate_string(const struct xdr_buf *buf, const u32 len)
 {
 	char *kaddr;
 
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return;
+
 	kaddr = kmap_atomic(buf->pages[0]);
 	kaddr[buf->page_base + len] = '\0';
 	kunmap_atomic(kaddr);
@@ -159,6 +212,11 @@ int xdr_buf_to_bvec(struct bio_vec *bvec, unsigned int bvec_size,
 	const struct kvec *head = xdr->head;
 	const struct kvec *tail = xdr->tail;
 	unsigned int count = 0;
+	int ret;
+
+	ret = xdr_buf_validate_page_mode(xdr);
+	if (ret)
+		return ret;
 
 	if (head->iov_len) {
 		if (unlikely(count >= bvec_size))
@@ -167,7 +225,20 @@ int xdr_buf_to_bvec(struct bio_vec *bvec, unsigned int bvec_size,
 		++count;
 	}
 
-	if (xdr->page_len) {
+	if (xdr_buf_has_authoritative_bvecs(xdr)) {
+		struct bvec_iter iter, start = {
+			.bi_size = xdr->page_len,
+			.bi_bvec_done = xdr->bvec_offset,
+		};
+		struct bio_vec bv;
+
+		for_each_bvec(bv, xdr->bvec, iter, start) {
+			if (unlikely(count >= bvec_size))
+				goto bvec_overflow;
+			*bvec++ = bv;
+			++count;
+		}
+	} else if (xdr->page_len) {
 		unsigned int offset, len, remaining;
 		struct page **pages = xdr->pages;
 
@@ -222,6 +293,9 @@ int xdr_buf_to_sg(const struct xdr_buf *buf, unsigned int offset,
 	struct scatterlist *cur = sg, *prev = NULL;
 	int nents = 0;
 	int i;
+
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return -EOPNOTSUPP;
 
 	if (len == 0)
 		return 0;
@@ -365,6 +439,8 @@ int xdr_buf_to_sg_alloc(const struct xdr_buf *buf, unsigned int offset,
 	int ret;
 
 	*sg_overflow = NULL;
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return -EOPNOTSUPP;
 	if (len == 0)
 		return 0;
 
@@ -416,6 +492,9 @@ xdr_inline_pages(struct xdr_buf *xdr, unsigned int offset,
 	struct kvec *tail = xdr->tail;
 	char *buf = (char *)head->iov_base;
 	unsigned int buflen = head->iov_len;
+
+	if (xdr->page_mode != XDRBUF_PAGE_ARRAY)
+		return;
 
 	head->iov_len  = offset;
 
@@ -1153,6 +1232,17 @@ void xdr_init_encode(struct xdr_stream *xdr, struct xdr_buf *buf, __be32 *p,
 	int scratch_len = buf->buflen - buf->page_len - buf->tail[0].iov_len;
 
 	xdr_reset_scratch_buffer(xdr);
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY) {
+		xdr->buf = buf;
+		xdr->p = NULL;
+		xdr->end = NULL;
+		xdr->iov = NULL;
+		xdr->page_ptr = NULL;
+		xdr->page_kaddr = NULL;
+		xdr->nwords = 0;
+		xdr->rqst = rqst;
+		return;
+	}
 	BUG_ON(scratch_len < 0);
 	xdr->buf = buf;
 	xdr->iov = iov;
@@ -1182,6 +1272,17 @@ EXPORT_SYMBOL_GPL(xdr_init_encode);
 void xdr_init_encode_pages(struct xdr_stream *xdr, struct xdr_buf *buf)
 {
 	xdr_reset_scratch_buffer(xdr);
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY) {
+		xdr->buf = buf;
+		xdr->p = NULL;
+		xdr->end = NULL;
+		xdr->iov = NULL;
+		xdr->page_ptr = NULL;
+		xdr->page_kaddr = NULL;
+		xdr->nwords = 0;
+		xdr->rqst = NULL;
+		return;
+	}
 
 	xdr->buf = buf;
 	xdr->page_ptr = buf->pages;
@@ -1209,6 +1310,9 @@ void __xdr_commit_encode(struct xdr_stream *xdr)
 {
 	size_t shift = xdr->scratch.iov_len;
 	void *page;
+
+	if (xdr->buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return;
 
 	page = page_address(*xdr->page_ptr);
 	memcpy(xdr->scratch.iov_base, page, shift);
@@ -1291,6 +1395,9 @@ __be32 * xdr_reserve_space(struct xdr_stream *xdr, size_t nbytes)
 	__be32 *p = xdr->p;
 	__be32 *q;
 
+	if (xdr->buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return NULL;
+
 	xdr_commit_encode(xdr);
 	/* align nbytes on the next 32-bit boundary */
 	nbytes += 3;
@@ -1325,6 +1432,9 @@ int xdr_reserve_space_vec(struct xdr_stream *xdr, size_t nbytes)
 {
 	size_t thislen;
 	__be32 *p;
+
+	if (xdr->buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return -EOPNOTSUPP;
 
 	/*
 	 * svcrdma requires every READ payload to start somewhere
@@ -1378,6 +1488,9 @@ void xdr_truncate_encode(struct xdr_stream *xdr, size_t len)
 	int fraglen;
 	int new;
 
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return;
+
 	if (len > buf->len) {
 		WARN_ON_ONCE(1);
 		return;
@@ -1430,6 +1543,9 @@ void xdr_truncate_decode(struct xdr_stream *xdr, size_t len)
 {
 	unsigned int nbytes = xdr_align_size(len);
 
+	if (xdr->buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return;
+
 	xdr->buf->len -= nbytes;
 	xdr->nwords -= XDR_QUADLEN(nbytes);
 }
@@ -1450,8 +1566,13 @@ EXPORT_SYMBOL_GPL(xdr_truncate_decode);
 int xdr_restrict_buflen(struct xdr_stream *xdr, int newbuflen)
 {
 	struct xdr_buf *buf = xdr->buf;
-	int left_in_this_buf = (void *)xdr->end - (void *)xdr->p;
-	int end_offset = buf->len + left_in_this_buf;
+	int left_in_this_buf;
+	int end_offset;
+
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return -EOPNOTSUPP;
+	left_in_this_buf = (void *)xdr->end - (void *)xdr->p;
+	end_offset = buf->len + left_in_this_buf;
 
 	if (newbuflen < 0 || newbuflen < buf->len)
 		return -1;
@@ -1480,6 +1601,9 @@ void xdr_write_pages(struct xdr_stream *xdr, struct page **pages, unsigned int b
 {
 	struct xdr_buf *buf = xdr->buf;
 	struct kvec *tail = buf->tail;
+
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return;
 
 	buf->pages = pages;
 	buf->page_base = base;
@@ -1534,6 +1658,53 @@ static void xdr_stream_unmap_current_page(struct xdr_stream *xdr)
 	}
 }
 
+static unsigned int xdr_set_bvec(struct xdr_stream *xdr,
+				 struct bio_vec *bvec, unsigned int offset,
+				 unsigned int base, unsigned int len,
+				 bool set_pos)
+{
+	unsigned int maxlen = xdr->buf->page_len - base;
+	unsigned int pgoff = bvec->bv_offset + offset;
+	unsigned int fraglen;
+	void *kaddr;
+
+	if (len > maxlen)
+		len = maxlen;
+	fraglen = min(len, bvec->bv_len - offset);
+
+	xdr_stream_unmap_current_page(xdr);
+	if (set_pos)
+		xdr_stream_page_set_pos(xdr, base);
+	xdr->page_ptr = &bvec->bv_page;
+	if (PageHighMem(bvec->bv_page)) {
+		xdr->page_kaddr = kmap_local_page(bvec->bv_page);
+		kaddr = xdr->page_kaddr;
+	} else {
+		kaddr = page_address(bvec->bv_page);
+	}
+	xdr->p = (__be32 *)(kaddr + pgoff);
+	xdr->end = (__be32 *)(kaddr + pgoff + fraglen);
+	xdr->iov = NULL;
+	return len;
+}
+
+static unsigned int xdr_set_bvec_base(struct xdr_stream *xdr,
+				      unsigned int base, unsigned int len,
+				      bool set_pos)
+{
+	struct bvec_iter iter = {
+		.bi_size = xdr->buf->page_len,
+		.bi_bvec_done = xdr->buf->bvec_offset,
+	};
+
+	if (base >= xdr->buf->page_len)
+		return 0;
+	if (!bvec_iter_advance(xdr->buf->bvec, &iter, base))
+		return 0;
+	return xdr_set_bvec(xdr, &xdr->buf->bvec[iter.bi_idx],
+			    iter.bi_bvec_done, base, len, set_pos);
+}
+
 static unsigned int xdr_set_page_base(struct xdr_stream *xdr,
 				      unsigned int base, unsigned int len)
 {
@@ -1542,6 +1713,9 @@ static unsigned int xdr_set_page_base(struct xdr_stream *xdr,
 	unsigned int pgoff;
 	unsigned int pgend;
 	void *kaddr;
+
+	if (xdr_buf_has_authoritative_bvecs(xdr->buf))
+		return xdr_set_bvec_base(xdr, base, len, true);
 
 	maxlen = xdr->buf->page_len;
 	if (base >= maxlen)
@@ -1584,9 +1758,28 @@ static void xdr_set_page(struct xdr_stream *xdr, unsigned int base,
 	}
 }
 
-static void xdr_set_next_page(struct xdr_stream *xdr)
+static bool xdr_set_next_page(struct xdr_stream *xdr)
 {
 	unsigned int newbase;
+
+	if (xdr_buf_has_authoritative_bvecs(xdr->buf)) {
+		struct bio_vec *bvec;
+		unsigned int index;
+
+		newbase = xdr_page_pos(xdr);
+		if (newbase >= xdr->buf->page_len) {
+			xdr_set_tail_base(xdr, 0, xdr_stream_remaining(xdr));
+			return xdr->p != xdr->end;
+		}
+
+		bvec = container_of(xdr->page_ptr, struct bio_vec, bv_page);
+		index = bvec - xdr->buf->bvec;
+		if (WARN_ON_ONCE(index + 1 >= xdr->buf->bvec_count))
+			return false;
+		xdr_set_bvec(xdr, bvec + 1, 0, newbase,
+			     xdr_stream_remaining(xdr), true);
+		return xdr->p != xdr->end;
+	}
 
 	newbase = (1 + xdr->page_ptr - xdr->buf->pages) << PAGE_SHIFT;
 	newbase -= xdr->buf->page_base;
@@ -1594,12 +1787,13 @@ static void xdr_set_next_page(struct xdr_stream *xdr)
 		xdr_set_page_base(xdr, newbase, xdr_stream_remaining(xdr));
 	else
 		xdr_set_tail_base(xdr, 0, xdr_stream_remaining(xdr));
+	return xdr->p != xdr->end;
 }
 
 static bool xdr_set_next_buffer(struct xdr_stream *xdr)
 {
 	if (xdr->page_ptr != NULL)
-		xdr_set_next_page(xdr);
+		return xdr_set_next_page(xdr);
 	else if (xdr->iov == xdr->buf->head)
 		xdr_set_page(xdr, 0, xdr_stream_remaining(xdr));
 	return xdr->p != xdr->end;
@@ -1618,6 +1812,12 @@ void xdr_init_decode(struct xdr_stream *xdr, struct xdr_buf *buf, __be32 *p,
 	xdr->buf = buf;
 	xdr->page_kaddr = NULL;
 	xdr_reset_scratch_buffer(xdr);
+	if (xdr_buf_validate_page_mode(buf)) {
+		xdr->nwords = 0;
+		xdr_set_iov(xdr, buf->head, 0, 0);
+		xdr->rqst = rqst;
+		return;
+	}
 	xdr->nwords = XDR_QUADLEN(buf->len);
 	if (xdr_set_iov(xdr, buf->head, 0, buf->len) == 0 &&
 	    xdr_set_page_base(xdr, 0, buf->len) == 0)
@@ -1698,6 +1898,142 @@ out_overflow:
 	return NULL;
 }
 
+static bool xdr_set_next_authoritative_buffer(struct xdr_stream *xdr,
+					      unsigned int pos)
+{
+	struct xdr_buf *buf = xdr->buf;
+	unsigned int page_pos;
+
+	if (xdr->iov == buf->tail)
+		return false;
+	if (xdr->iov == buf->head) {
+		page_pos = pos - buf->head[0].iov_len;
+		if (page_pos < buf->page_len)
+			return xdr_set_bvec_base(xdr, page_pos,
+						  buf->page_len - page_pos,
+						  false) != 0;
+	} else {
+		struct bio_vec *bvec;
+		unsigned int index;
+
+		page_pos = pos - buf->head[0].iov_len;
+		if (page_pos < buf->page_len) {
+			bvec = container_of(xdr->page_ptr, struct bio_vec,
+					    bv_page);
+			index = bvec - buf->bvec;
+			if (index + 1 >= buf->bvec_count)
+				return false;
+			return xdr_set_bvec(xdr, bvec + 1, 0, page_pos,
+					     buf->page_len - page_pos,
+					     false) != 0;
+		}
+		xdr_stream_unmap_current_page(xdr);
+	}
+
+	page_pos -= buf->page_len;
+	if (page_pos >= buf->tail[0].iov_len)
+		return false;
+	xdr_set_iov(xdr, buf->tail, page_pos, buf->tail[0].iov_len);
+	return xdr->p != xdr->end;
+}
+
+static __be32 *xdr_copy_authoritative_to_scratch(struct xdr_stream *xdr,
+						 size_t nbytes)
+{
+	unsigned int pos = xdr_stream_pos(xdr);
+	size_t remaining = xdr_align_size(nbytes);
+	size_t copy = nbytes;
+	char *dst = xdr->scratch.iov_base;
+
+	if (!dst || nbytes > xdr->scratch.iov_len ||
+	    !IS_ALIGNED((unsigned long)dst, __alignof__(__be32)) ||
+	    remaining > xdr_stream_remaining(xdr) || pos > xdr->buf->len ||
+	    remaining > xdr->buf->len - pos)
+		goto out_overflow;
+
+	while (remaining) {
+		size_t avail;
+		size_t len;
+		size_t copy_len;
+
+		if (xdr->p == xdr->end &&
+		    !xdr_set_next_authoritative_buffer(xdr, pos))
+			goto out_overflow;
+		avail = (char *)xdr->end - (char *)xdr->p;
+		len = min(remaining, avail);
+		copy_len = min(copy, len);
+		memcpy(dst, xdr->p, copy_len);
+		dst += copy_len;
+		copy -= copy_len;
+		xdr->p = (__be32 *)((char *)xdr->p + len);
+		pos += len;
+		remaining -= len;
+	}
+	xdr->nwords -= XDR_QUADLEN(nbytes);
+	return xdr->scratch.iov_base;
+
+out_overflow:
+	trace_rpc_xdr_overflow(xdr, nbytes);
+	return NULL;
+}
+
+static __be32 *xdr_inline_decode_authoritative(struct xdr_stream *xdr,
+					       size_t nbytes)
+{
+	size_t aligned;
+	size_t avail;
+	__be32 *p;
+
+	if (unlikely(nbytes == 0))
+		return xdr->p;
+	if (unlikely(nbytes > UINT_MAX - (XDR_UNIT - 1)))
+		goto out_overflow;
+	aligned = xdr_align_size(nbytes);
+	if (aligned > xdr_stream_remaining(xdr))
+		goto out_overflow;
+	if (xdr->p == xdr->end && !xdr_set_next_buffer(xdr))
+		goto out_overflow;
+	avail = (char *)xdr->end - (char *)xdr->p;
+	if (!IS_ALIGNED((unsigned long)xdr->p, __alignof__(__be32)) ||
+	    aligned > avail)
+		return xdr_copy_authoritative_to_scratch(xdr, nbytes);
+
+	p = xdr->p;
+	xdr->p = (__be32 *)((char *)xdr->p + aligned);
+	xdr->nwords -= aligned >> 2;
+	return p;
+
+out_overflow:
+	trace_rpc_xdr_overflow(xdr, nbytes);
+	return NULL;
+}
+
+static bool xdr_advance_authoritative(struct xdr_stream *xdr,
+				      unsigned int nbytes)
+{
+	unsigned int pos = xdr_stream_pos(xdr);
+	size_t remaining = xdr_align_size(nbytes);
+
+	if (remaining > xdr_stream_remaining(xdr) || pos > xdr->buf->len ||
+	    remaining > xdr->buf->len - pos)
+		return false;
+
+	while (remaining) {
+		size_t len;
+
+		if (xdr->p == xdr->end &&
+		    !xdr_set_next_authoritative_buffer(xdr, pos))
+			return false;
+		len = min_t(size_t, remaining,
+			    (char *)xdr->end - (char *)xdr->p);
+		xdr->p = (__be32 *)((char *)xdr->p + len);
+		pos += len;
+		remaining -= len;
+	}
+	xdr->nwords -= XDR_QUADLEN(nbytes);
+	return true;
+}
+
 /**
  * xdr_inline_decode - Retrieve XDR data to decode
  * @xdr: pointer to xdr_stream struct
@@ -1711,6 +2047,9 @@ out_overflow:
 __be32 * xdr_inline_decode(struct xdr_stream *xdr, size_t nbytes)
 {
 	__be32 *p;
+
+	if (xdr_buf_has_authoritative_bvecs(xdr->buf))
+		return xdr_inline_decode_authoritative(xdr, nbytes);
 
 	if (unlikely(nbytes == 0))
 		return xdr->p;
@@ -1782,6 +2121,9 @@ unsigned int xdr_read_pages(struct xdr_stream *xdr, unsigned int len)
 	unsigned int nwords = XDR_QUADLEN(len);
 	unsigned int base, end, pglen;
 
+	if (xdr->buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return 0;
+
 	pglen = xdr_align_pages(xdr, nwords << 2);
 	if (pglen == 0)
 		return 0;
@@ -1811,6 +2153,9 @@ void xdr_set_pagelen(struct xdr_stream *xdr, unsigned int len)
 	size_t remaining = xdr_stream_remaining(xdr);
 	size_t base = 0;
 
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return;
+
 	if (len < buf->page_len) {
 		base = buf->page_len - len;
 		xdr_shrink_pagelen(buf, len);
@@ -1836,6 +2181,8 @@ EXPORT_SYMBOL_GPL(xdr_set_pagelen);
  */
 void xdr_enter_page(struct xdr_stream *xdr, unsigned int len)
 {
+	if (xdr->buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return;
 	len = xdr_align_pages(xdr, len);
 	/*
 	 * Position current pointer at beginning of tail, and
@@ -1853,9 +2200,50 @@ void xdr_buf_from_iov(const struct kvec *iov, struct xdr_buf *buf)
 	buf->head[0] = *iov;
 	buf->tail[0] = empty_iov;
 	buf->page_len = 0;
+	buf->page_mode = XDRBUF_PAGE_ARRAY;
+	buf->bvec_count = 0;
+	buf->bvec_offset = 0;
 	buf->buflen = buf->len = iov->iov_len;
 }
 EXPORT_SYMBOL_GPL(xdr_buf_from_iov);
+
+static int xdr_buf_bvec_subsegment(struct bio_vec *bvec,
+				   unsigned int bvec_count,
+				   unsigned int bvec_offset,
+				   struct xdr_buf *subbuf,
+				   unsigned int base, unsigned int len)
+{
+	struct bvec_iter iter = {
+		.bi_size = base + len,
+		.bi_bvec_done = bvec_offset,
+	};
+	unsigned int count = 0;
+	unsigned int remaining = len;
+	unsigned int index;
+	unsigned int offset;
+
+	if (!bvec_iter_advance(bvec, &iter, base))
+		return -1;
+	index = iter.bi_idx;
+	offset = iter.bi_bvec_done;
+	while (remaining) {
+		unsigned int avail;
+
+		if (index >= bvec_count)
+			return -1;
+		avail = bvec[index].bv_len - offset;
+		remaining -= min(remaining, avail);
+		count++;
+		index++;
+		offset = 0;
+	}
+
+	subbuf->bvec = &bvec[iter.bi_idx];
+	subbuf->bvec_count = count;
+	subbuf->bvec_offset = iter.bi_bvec_done;
+	subbuf->page_base = 0;
+	return 0;
+}
 
 /**
  * xdr_buf_subsegment - set subbuf to a portion of buf
@@ -1874,7 +2262,24 @@ EXPORT_SYMBOL_GPL(xdr_buf_from_iov);
 int xdr_buf_subsegment(const struct xdr_buf *buf, struct xdr_buf *subbuf,
 		       unsigned int base, unsigned int len)
 {
+	enum xdr_buf_page_mode page_mode = buf->page_mode;
+	struct bio_vec *bvec = NULL;
+	unsigned int bvec_count = 0;
+	unsigned int bvec_offset = 0;
+
+	if (xdr_buf_validate_page_mode(buf))
+		return -1;
+	if (page_mode == XDRBUF_PAGE_BVECS) {
+		if (base > buf->len || len > buf->len - base)
+			return -1;
+		bvec = buf->bvec;
+		bvec_count = buf->bvec_count;
+		bvec_offset = buf->bvec_offset;
+	}
 	subbuf->buflen = subbuf->len = len;
+	subbuf->page_mode = page_mode;
+	subbuf->bvec_count = 0;
+	subbuf->bvec_offset = 0;
 	if (base < buf->head[0].iov_len) {
 		subbuf->head[0].iov_base = buf->head[0].iov_base + base;
 		subbuf->head[0].iov_len = min_t(unsigned int, len,
@@ -1889,9 +2294,20 @@ int xdr_buf_subsegment(const struct xdr_buf *buf, struct xdr_buf *subbuf,
 
 	if (base < buf->page_len) {
 		subbuf->page_len = min(buf->page_len - base, len);
-		base += buf->page_base;
-		subbuf->page_base = base & ~PAGE_MASK;
-		subbuf->pages = &buf->pages[base >> PAGE_SHIFT];
+		if (page_mode == XDRBUF_PAGE_BVECS) {
+			if (subbuf->page_len &&
+			    xdr_buf_bvec_subsegment(bvec, bvec_count, bvec_offset,
+						    subbuf, base,
+						    subbuf->page_len))
+				return -1;
+			if (!subbuf->page_len)
+				subbuf->bvec = NULL;
+			subbuf->pages = buf->pages;
+		} else {
+			base += buf->page_base;
+			subbuf->page_base = base & ~PAGE_MASK;
+			subbuf->pages = &buf->pages[base >> PAGE_SHIFT];
+		}
 		len -= subbuf->page_len;
 		base = 0;
 	} else {
@@ -1899,6 +2315,8 @@ int xdr_buf_subsegment(const struct xdr_buf *buf, struct xdr_buf *subbuf,
 		subbuf->pages = buf->pages;
 		subbuf->page_base = 0;
 		subbuf->page_len = 0;
+		if (page_mode == XDRBUF_PAGE_BVECS)
+			subbuf->bvec = NULL;
 	}
 
 	if (base < buf->tail[0].iov_len) {
@@ -1943,6 +2361,8 @@ bool xdr_stream_subsegment(struct xdr_stream *xdr, struct xdr_buf *subbuf,
 	/* Extract @subbuf and bounds-check the fn arguments */
 	if (xdr_buf_subsegment(xdr->buf, subbuf, start, nbytes))
 		return false;
+	if (xdr_buf_has_authoritative_bvecs(xdr->buf))
+		return xdr_advance_authoritative(xdr, nbytes);
 
 	/* Advance @xdr by @nbytes */
 	for (remaining = nbytes; remaining;) {
@@ -1982,6 +2402,9 @@ unsigned int xdr_stream_move_subsegment(struct xdr_stream *xdr, unsigned int off
 	struct xdr_buf buf;
 	unsigned int shift;
 
+	if (xdr->buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return 0;
+
 	if (offset < target) {
 		shift = target - offset;
 		if (xdr_buf_subsegment(xdr->buf, &buf, offset, shift + length) < 0)
@@ -2007,6 +2430,9 @@ unsigned int xdr_stream_zero(struct xdr_stream *xdr, unsigned int offset,
 			     unsigned int length)
 {
 	struct xdr_buf buf;
+
+	if (xdr->buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return 0;
 
 	if (xdr_buf_subsegment(xdr->buf, &buf, offset, length) < 0)
 		return 0;
@@ -2035,6 +2461,9 @@ void xdr_buf_trim(struct xdr_buf *buf, unsigned int len)
 	size_t cur;
 	unsigned int trim = len;
 
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return;
+
 	if (buf->tail[0].iov_len) {
 		cur = min_t(size_t, buf->tail[0].iov_len, trim);
 		buf->tail[0].iov_len -= cur;
@@ -2061,6 +2490,21 @@ fix_len:
 }
 EXPORT_SYMBOL_GPL(xdr_buf_trim);
 
+static void xdr_copy_from_bvecs(void *obj, const struct xdr_buf *buf,
+				unsigned int len)
+{
+	struct bvec_iter iter, start = {
+		.bi_size = min(len, buf->page_len),
+		.bi_bvec_done = buf->bvec_offset,
+	};
+	struct bio_vec bv;
+
+	for_each_bvec(bv, buf->bvec, iter, start) {
+		memcpy_from_page(obj, bv.bv_page, bv.bv_offset, bv.bv_len);
+		obj += bv.bv_len;
+	}
+}
+
 static void __read_bytes_from_xdr_buf(const struct xdr_buf *subbuf,
 				      void *obj, unsigned int len)
 {
@@ -2071,7 +2515,11 @@ static void __read_bytes_from_xdr_buf(const struct xdr_buf *subbuf,
 	len -= this_len;
 	obj += this_len;
 	this_len = min_t(unsigned int, len, subbuf->page_len);
-	_copy_from_pages(obj, subbuf->pages, subbuf->page_base, this_len);
+	if (xdr_buf_has_authoritative_bvecs(subbuf))
+		xdr_copy_from_bvecs(obj, subbuf, this_len);
+	else
+		_copy_from_pages(obj, subbuf->pages, subbuf->page_base,
+				 this_len);
 	len -= this_len;
 	obj += this_len;
 	this_len = min_t(unsigned int, len, subbuf->tail[0].iov_len);
@@ -2116,6 +2564,9 @@ int write_bytes_to_xdr_buf(const struct xdr_buf *buf, unsigned int base,
 {
 	struct xdr_buf subbuf;
 	int status;
+
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return -EOPNOTSUPP;
 
 	status = xdr_buf_subsegment(buf, &subbuf, base, len);
 	if (status != 0)
@@ -2343,6 +2794,8 @@ out:
 int xdr_decode_array2(const struct xdr_buf *buf, unsigned int base,
 		      struct xdr_array2_desc *desc)
 {
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return -EOPNOTSUPP;
 	if (base >= buf->len)
 		return -EINVAL;
 
@@ -2353,6 +2806,8 @@ EXPORT_SYMBOL_GPL(xdr_decode_array2);
 int xdr_encode_array2(const struct xdr_buf *buf, unsigned int base,
 		      struct xdr_array2_desc *desc)
 {
+	if (buf->page_mode != XDRBUF_PAGE_ARRAY)
+		return -EOPNOTSUPP;
 	if ((unsigned long) base + 4 + desc->array_len * desc->elem_size >
 	    buf->head->iov_len + buf->page_len + buf->tail->iov_len)
 		return -EINVAL;
