@@ -1815,6 +1815,7 @@ void xdr_init_decode(struct xdr_stream *xdr, struct xdr_buf *buf, __be32 *p,
 	if (xdr_buf_validate_page_mode(buf)) {
 		xdr->nwords = 0;
 		xdr_set_iov(xdr, buf->head, 0, 0);
+		xdr->iov = NULL;
 		xdr->rqst = rqst;
 		return;
 	}
