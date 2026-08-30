@@ -8,6 +8,7 @@
 #include <linux/sunrpc/sched.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/svc.h>
+#include <linux/sunrpc/svcsock.h>
 #include <linux/sunrpc/xprtsock.h>
 #include <linux/sunrpc/svc_xprt.h>
 #include <net/tcp_states.h>
@@ -2315,6 +2316,147 @@ DEFINE_SVCSOCK_EVENT(tcp_recv_eagain);
 DEFINE_SVCSOCK_EVENT(tcp_recv_err);
 DEFINE_SVCSOCK_EVENT(data_ready);
 DEFINE_SVCSOCK_EVENT(write_space);
+
+TRACE_DEFINE_ENUM(SVC_TCP_RX_EMPTY);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_PREFIX);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_MIXED);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_COPY);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_PUBLISHED);
+
+#define show_svc_tcp_rx_mode(mode) \
+	__print_symbolic(mode, \
+		{ SVC_TCP_RX_EMPTY, "empty" }, \
+		{ SVC_TCP_RX_PREFIX, "prefix" }, \
+		{ SVC_TCP_RX_MIXED, "mixed" }, \
+		{ SVC_TCP_RX_COPY, "copy" }, \
+		{ SVC_TCP_RX_PUBLISHED, "published" })
+
+TRACE_DEFINE_ENUM(SVC_TCP_RX_CLASSIFY);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_MATERIALIZE);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_PUBLISH);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_ERROR);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_RELEASE);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_ABORT);
+
+#define show_svc_tcp_rx_action(action) \
+	__print_symbolic(action, \
+		{ SVC_TCP_RX_CLASSIFY, "classify" }, \
+		{ SVC_TCP_RX_MATERIALIZE, "materialize" }, \
+		{ SVC_TCP_RX_PUBLISH, "publish" }, \
+		{ SVC_TCP_RX_ERROR, "error" }, \
+		{ SVC_TCP_RX_RELEASE, "release" }, \
+		{ SVC_TCP_RX_ABORT, "abort" })
+
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_NONE);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_SHORT_PREFIX);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_TLS);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_DIRECTION);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_RPC_VERSION);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_PROGRAM);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_VERSION);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_PROCEDURE);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_AUTH);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_LOCKED_HEAD);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_MANAGED_FRAGS);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_CAPACITY);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_UNREADABLE);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_NET_IOV);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_NULL_PAGE);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_COPY_FAULT);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_INVARIANT);
+
+#define show_svc_tcp_rx_reason(reason) \
+	__print_symbolic(reason, \
+		{ SVC_TCP_RX_REASON_NONE, "none" }, \
+		{ SVC_TCP_RX_REASON_SHORT_PREFIX, "short-prefix" }, \
+		{ SVC_TCP_RX_REASON_TLS, "tls" }, \
+		{ SVC_TCP_RX_REASON_DIRECTION, "direction" }, \
+		{ SVC_TCP_RX_REASON_RPC_VERSION, "rpc-version" }, \
+		{ SVC_TCP_RX_REASON_PROGRAM, "program" }, \
+		{ SVC_TCP_RX_REASON_VERSION, "version" }, \
+		{ SVC_TCP_RX_REASON_PROCEDURE, "procedure" }, \
+		{ SVC_TCP_RX_REASON_AUTH, "auth" }, \
+		{ SVC_TCP_RX_REASON_LOCKED_HEAD, "locked-head" }, \
+		{ SVC_TCP_RX_REASON_MANAGED_FRAGS, "managed-frags" }, \
+		{ SVC_TCP_RX_REASON_CAPACITY, "capacity" }, \
+		{ SVC_TCP_RX_REASON_UNREADABLE, "unreadable" }, \
+		{ SVC_TCP_RX_REASON_NET_IOV, "net-iov" }, \
+		{ SVC_TCP_RX_REASON_NULL_PAGE, "null-page" }, \
+		{ SVC_TCP_RX_REASON_COPY_FAULT, "copy-fault" }, \
+		{ SVC_TCP_RX_REASON_INVARIANT, "invariant" })
+
+DECLARE_EVENT_CLASS(svcsock_tcp_rx_lifetime_class,
+	TP_PROTO(
+		const struct svc_xprt *xprt,
+		const struct svc_rqst *rqstp,
+		const struct svc_tcp_rx_state *state,
+		enum svc_tcp_rx_action action
+	),
+
+	TP_ARGS(xprt, rqstp, state, action),
+
+	TP_STRUCT__entry(
+		__field(const void *, xprt)
+		__field(const void *, rqstp)
+		__field(u64, sequence)
+		__field(u32, xid)
+		__field(u32, body_bytes)
+		__field(u32, fixed_bytes)
+		__field(u32, borrowed_bytes)
+		__field(u32, copied_bytes)
+		__field(u32, materialized_bytes)
+		__field(u32, page_pool_bytes)
+		__field(u32, bvec_count)
+		__field(u32, refs_acquired)
+		__field(u32, refs_released)
+		__field(u8, action)
+		__field(u8, mode)
+		__field(u8, reason)
+		__string(addr, xprt->xpt_remotebuf)
+	),
+
+	TP_fast_assign(
+		__entry->xprt = xprt;
+		__entry->rqstp = rqstp;
+		__entry->sequence = state->record_seq;
+		__entry->xid = state->xid;
+		__entry->body_bytes = state->body_bytes;
+		__entry->fixed_bytes = state->fixed_bytes;
+		__entry->borrowed_bytes = state->borrowed_bytes;
+		__entry->copied_bytes = state->copied_bytes;
+		__entry->materialized_bytes = state->materialized_bytes;
+		__entry->page_pool_bytes = state->page_pool_bytes;
+		__entry->bvec_count = state->count;
+		__entry->refs_acquired = state->refs_acquired;
+		__entry->refs_released = state->refs_released;
+		__entry->action = action;
+		__entry->mode = state->mode;
+		__entry->reason = state->reason;
+		__assign_str(addr);
+	),
+
+	TP_printk("addr=%s xprt=%p rqstp=%p sequence=%llu xid=0x%08x action=%s mode=%s reason=%s body=%u fixed=%u borrowed=%u copied=%u materialized=%u page_pool=%u bvecs=%u refs=%u/%u",
+		__get_str(addr), __entry->xprt, __entry->rqstp,
+		__entry->sequence, __entry->xid,
+		show_svc_tcp_rx_action(__entry->action),
+		show_svc_tcp_rx_mode(__entry->mode),
+		show_svc_tcp_rx_reason(__entry->reason),
+		__entry->body_bytes, __entry->fixed_bytes,
+		__entry->borrowed_bytes, __entry->copied_bytes,
+		__entry->materialized_bytes, __entry->page_pool_bytes,
+		__entry->bvec_count, __entry->refs_acquired,
+		__entry->refs_released)
+);
+
+DEFINE_EVENT(svcsock_tcp_rx_lifetime_class, svcsock_tcp_rx_lifetime,
+	TP_PROTO(
+		const struct svc_xprt *xprt,
+		const struct svc_rqst *rqstp,
+		const struct svc_tcp_rx_state *state,
+		enum svc_tcp_rx_action action
+	),
+	TP_ARGS(xprt, rqstp, state, action)
+);
 
 TRACE_EVENT(svcsock_tcp_recv_short,
 	TP_PROTO(
