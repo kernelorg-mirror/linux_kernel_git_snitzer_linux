@@ -1477,7 +1477,7 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (likely(!fhp->fh_use_wgather))
 		kiocb.ki_flags |= stable_flags;
 
-	nvecs = xdr_buf_to_bvec(rqstp->rq_bvec, rqstp->rq_maxpages, payload);
+	nvecs = xdr_buf_to_bvec(rqstp->rq_bvec, rqstp->rq_maxbvecs, payload);
 	if (nvecs < 0) {
 		host_err = nvecs;
 		goto out_nfserr;

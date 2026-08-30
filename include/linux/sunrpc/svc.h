@@ -20,6 +20,7 @@
 #include <linux/lwq.h>
 #include <linux/wait.h>
 #include <linux/mm.h>
+#include <linux/sizes.h>
 #include <linux/folio_batch.h>
 #include <linux/kthread.h>
 
@@ -186,6 +187,32 @@ static inline unsigned long svc_serv_maxpages(const struct svc_serv *serv)
 	return DIV_ROUND_UP(serv->sv_max_mesg, PAGE_SIZE) + 2 + 1;
 }
 
+/**
+ * svc_pages_to_bvecs - bvecs needed to describe a received message
+ * @pages: count of pages that can hold the message
+ *
+ * A received message need not be held in whole pages: a TCP receive
+ * whose payload is lent from the network stack takes one bvec per
+ * received fragment, and fragments do not grow with PAGE_SIZE. Size
+ * such arrays for 4 KiB fragments, so their capacity does not shrink
+ * on kernels with larger pages. On 4 KiB pages this is @pages.
+ */
+static inline unsigned long svc_pages_to_bvecs(unsigned long pages)
+{
+	return pages * (PAGE_SIZE / SZ_4K);
+}
+
+/**
+ * svc_serv_maxbvecs - maximum count of bvecs needed for one RPC message
+ * @serv: RPC service context
+ */
+static inline unsigned long svc_serv_maxbvecs(const struct svc_serv *serv)
+{
+	return svc_pages_to_bvecs(svc_serv_maxpages(serv));
+}
+
+struct svc_tcp_rx_state;
+
 /*
  * The context of a single thread, including the request currently being
  * processed.
@@ -227,6 +254,8 @@ struct svc_rqst {
 
 	struct folio_batch	rq_fbatch;
 	struct bio_vec		*rq_bvec;
+	unsigned long		rq_maxbvecs;	/* entries in rq_bvec */
+	struct svc_tcp_rx_state	*rq_tcp_rx;
 
 	__be32			rq_xid;		/* transmission id */
 	u32			rq_prog;	/* program number */
