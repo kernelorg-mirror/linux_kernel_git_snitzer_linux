@@ -342,6 +342,7 @@ nfsd_reply_cache_scan(struct shrinker *shrink, struct shrink_control *sc)
  * @buf: buffer containing a whole RPC Call message
  * @start: starting byte of the NFS Call header
  * @remaining: size of the NFS Call header, in bytes
+ * @scratch: buffer of at least RC_CSUMLEN bytes
  *
  * Compute a weak checksum of the leading bytes of an NFS procedure
  * call header to help verify that a retransmitted Call matches an
@@ -355,38 +356,13 @@ nfsd_reply_cache_scan(struct shrinker *shrink, struct shrink_control *sc)
  * Returns a 32-bit checksum value, as defined in RFC 793.
  */
 static __wsum nfsd_cache_csum(struct xdr_buf *buf, unsigned int start,
-			      unsigned int remaining)
+			      unsigned int remaining, __be32 *scratch)
 {
-	unsigned int base, len;
-	struct xdr_buf subbuf;
-	__wsum csum = 0;
-	void *p;
-	int idx;
-
 	if (remaining > RC_CSUMLEN)
 		remaining = RC_CSUMLEN;
-	if (xdr_buf_subsegment(buf, &subbuf, start, remaining))
-		return csum;
-
-	/* rq_arg.head first */
-	if (subbuf.head[0].iov_len) {
-		len = min_t(unsigned int, subbuf.head[0].iov_len, remaining);
-		csum = csum_partial(subbuf.head[0].iov_base, len, csum);
-		remaining -= len;
-	}
-
-	/* Continue into page array */
-	idx = subbuf.page_base / PAGE_SIZE;
-	base = subbuf.page_base & ~PAGE_MASK;
-	while (remaining) {
-		p = page_address(subbuf.pages[idx]) + base;
-		len = min_t(unsigned int, PAGE_SIZE - base, remaining);
-		csum = csum_partial(p, len, csum);
-		remaining -= len;
-		base = 0;
-		++idx;
-	}
-	return csum;
+	if (read_bytes_from_xdr_buf(buf, start, scratch, remaining))
+		return 0;
+	return csum_partial(scratch, remaining, 0);
 }
 
 static int
@@ -472,6 +448,7 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 	struct nfsd_net		*nn = net_generic(SVC_NET(rqstp), nfsd_net_id);
 	struct nfsd_thread_local_info *ntli = rqstp->rq_private;
 	struct nfsd_cacherep	*rp, *found;
+	__be32			csum_scratch[RC_CSUMLEN / sizeof(__be32)];
 	__wsum			csum;
 	struct nfsd_drc_bucket	*b;
 	int type = ntli->ntli_cachetype;
@@ -483,7 +460,7 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 		goto out;
 	}
 
-	csum = nfsd_cache_csum(&rqstp->rq_arg, start, len);
+	csum = nfsd_cache_csum(&rqstp->rq_arg, start, len, csum_scratch);
 
 	/*
 	 * Since the common case is a cache miss followed by an insert,
