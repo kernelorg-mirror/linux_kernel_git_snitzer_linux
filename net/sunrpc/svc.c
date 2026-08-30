@@ -1307,18 +1307,39 @@ void svc_printk(struct svc_rqst *rqstp, const char *fmt, ...)
 static __printf(2,3) void svc_printk(struct svc_rqst *rqstp, const char *fmt, ...) {}
 #endif
 
+__be32 svc_proc_lookup(const struct svc_program *progp, u32 version,
+		       u32 procedure, const struct svc_version **verspp,
+		       const struct svc_procedure **procpp)
+{
+	const struct svc_version *versp;
+
+	*verspp = NULL;
+	*procpp = NULL;
+	if (version >= progp->pg_nvers)
+		return rpc_prog_mismatch;
+	versp = progp->pg_vers[version];
+	if (!versp)
+		return rpc_prog_mismatch;
+	*verspp = versp;
+	if (procedure >= versp->vs_nproc)
+		return rpc_proc_unavail;
+	*procpp = &versp->vs_proc[procedure];
+	return rpc_success;
+}
+EXPORT_SYMBOL_GPL(svc_proc_lookup);
+
 __be32
 svc_generic_init_request(struct svc_rqst *rqstp,
 		const struct svc_program *progp,
 		struct svc_process_info *ret)
 {
-	const struct svc_version *versp = NULL;	/* compiler food */
-	const struct svc_procedure *procp = NULL;
+	const struct svc_procedure *procp;
+	const struct svc_version *versp;
+	__be32 status;
 
-	if (rqstp->rq_vers >= progp->pg_nvers )
-		goto err_bad_vers;
-	versp = progp->pg_vers[rqstp->rq_vers];
-	if (!versp)
+	status = svc_proc_lookup(progp, rqstp->rq_vers, rqstp->rq_proc,
+				 &versp, &procp);
+	if (status == rpc_prog_mismatch)
 		goto err_bad_vers;
 
 	/*
@@ -1336,9 +1357,9 @@ svc_generic_init_request(struct svc_rqst *rqstp,
 	    !test_bit(XPT_CONG_CTRL, &rqstp->rq_xprt->xpt_flags))
 		goto err_bad_vers;
 
-	if (rqstp->rq_proc >= versp->vs_nproc)
+	if (status == rpc_proc_unavail)
 		goto err_bad_proc;
-	rqstp->rq_procinfo = procp = &versp->vs_proc[rqstp->rq_proc];
+	rqstp->rq_procinfo = procp;
 
 	/* Initialize storage for argp and resp */
 	memset(rqstp->rq_argp, 0, procp->pc_argzero);

@@ -440,9 +440,17 @@ struct svc_procedure {
 	unsigned int		pc_argzero;	/* how much of argument to clear */
 	unsigned int		pc_ressize;	/* result struct size */
 	unsigned int		pc_cachetype;	/* cache info (NFS) */
-	unsigned int		pc_xdrressize;	/* maximum size of XDR reply */
+	unsigned int		pc_xdrressize : 31; /* maximum XDR reply size */
+	unsigned int		pc_xdr_bvec : 1; /* immutable receive bvecs */
 	const char *		pc_name;	/* for display */
 };
+
+static inline bool
+svc_proc_accepts_xdr_bvec(const struct svc_procedure *procp, u32 auth_flavor)
+{
+	return procp && procp->pc_xdr_bvec &&
+		(auth_flavor == RPC_AUTH_NULL || auth_flavor == RPC_AUTH_UNIX);
+}
 
 /*
  * Function prototypes.
@@ -490,6 +498,10 @@ char		  *svc_fill_symlink_pathname(struct svc_rqst *rqstp,
 __be32		   svc_generic_init_request(struct svc_rqst *rqstp,
 					    const struct svc_program *progp,
 					    struct svc_process_info *procinfo);
+__be32		   svc_proc_lookup(const struct svc_program *progp, u32 version,
+				   u32 procedure,
+				   const struct svc_version **verspp,
+				   const struct svc_procedure **procpp);
 int		   svc_generic_rpcbind_set(struct net *net,
 					   const struct svc_program *progp,
 					   u32 version, int family,

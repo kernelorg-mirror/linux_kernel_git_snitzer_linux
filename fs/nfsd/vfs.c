@@ -35,6 +35,7 @@
 #include <linux/fileattr.h>
 
 #include "xdr3.h"
+#include <linux/fileattr.h>
 
 #ifdef CONFIG_NFSD_V4
 #include "acl.h"

@@ -9,6 +9,7 @@
 #include <linux/ext2_fs.h>
 #include <linux/magic.h>
 #include <linux/namei.h>
+#include <linux/nfs3.h>
 
 #include "cache.h"
 #include "xdr3.h"
@@ -966,6 +967,7 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_ressize = sizeof(struct nfsd3_writeres),
 		.pc_cachetype = RC_REPLBUFF,
 		.pc_xdrressize = ST+WC+4,
+		.pc_xdr_bvec = true,
 		.pc_name = "WRITE",
 	},
 	[NFS3PROC_CREATE] = {

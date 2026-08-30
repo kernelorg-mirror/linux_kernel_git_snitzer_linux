@@ -341,6 +341,7 @@ nfsd_reply_cache_scan(struct shrinker *shrink, struct shrink_control *sc)
  * @buf: buffer containing a whole RPC Call message
  * @start: starting byte of the NFS Call header
  * @remaining: size of the NFS Call header, in bytes
+ * @scratch: caller-owned scratch of at least RC_CSUMLEN bytes
  *
  * Compute a weak checksum of the leading bytes of an NFS procedure
  * call header to help verify that a retransmitted Call matches an
@@ -354,39 +355,17 @@ nfsd_reply_cache_scan(struct shrinker *shrink, struct shrink_control *sc)
  * Returns a 32-bit checksum value, as defined in RFC 793.
  */
 static __wsum nfsd_cache_csum(struct xdr_buf *buf, unsigned int start,
-			      unsigned int remaining)
+			      unsigned int remaining, __be32 *scratch)
 {
-	unsigned int base, len;
-	struct xdr_buf subbuf;
-	__wsum csum = 0;
-	void *p;
-	int idx;
-
 	if (remaining > RC_CSUMLEN)
 		remaining = RC_CSUMLEN;
-	if (xdr_buf_subsegment(buf, &subbuf, start, remaining))
-		return csum;
-
-	/* rq_arg.head first */
-	if (subbuf.head[0].iov_len) {
-		len = min_t(unsigned int, subbuf.head[0].iov_len, remaining);
-		csum = csum_partial(subbuf.head[0].iov_base, len, csum);
-		remaining -= len;
-	}
-
-	/* Continue into page array */
-	idx = subbuf.page_base / PAGE_SIZE;
-	base = subbuf.page_base & ~PAGE_MASK;
-	while (remaining) {
-		p = page_address(subbuf.pages[idx]) + base;
-		len = min_t(unsigned int, PAGE_SIZE - base, remaining);
-		csum = csum_partial(p, len, csum);
-		remaining -= len;
-		base = 0;
-		++idx;
-	}
-	return csum;
+	if (read_bytes_from_xdr_buf(buf, start, scratch, remaining))
+		return 0;
+	return csum_partial(scratch, remaining, 0);
 }
+
+/* Leave scratch after a maximal accepted-Reply header and GSS wrap slack. */
+static_assert(RC_CSUMLEN + 3 * RPC_MAX_AUTH_SIZE + 6 * XDR_UNIT <= PAGE_SIZE);
 
 static int
 nfsd_cache_key_cmp(const struct nfsd_cacherep *key,
@@ -482,7 +461,14 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 		goto out;
 	}
 
-	csum = nfsd_cache_csum(&rqstp->rq_arg, start, len);
+	/*
+	 * The encode cursor is naturally XDR-aligned and points beyond the
+	 * accepted-Reply header. Procedure execution has not started, so the
+	 * following bytes are request-local scratch until normal Reply encoding
+	 * overwrites them.
+	 */
+	csum = nfsd_cache_csum(&rqstp->rq_arg, start, len,
+			       rqstp->rq_res_stream.p);
 
 	/*
 	 * Since the common case is a cache miss followed by an insert,
