@@ -32,11 +32,13 @@ nfs_dio_seg_init(struct nfs_dio_seg *seg, unsigned int direction,
 }
 
 /*
- * Is every bio_vec of @iter aligned to @mem_align in memory, and its total
- * length to @len_align?  A vector built from RPC receive buffers or from a
- * pinned O_DIRECT user buffer is contiguous after its first entry, so the
- * loop rarely has more than one entry to reject; it is kept for the vectors
- * that are not.
+ * Is every bio_vec of @iter aligned to @mem_align in memory, both where it
+ * starts and in how much of it the iterator covers, and the iterator's total
+ * length to @len_align?  A vector built from a copied RPC receive buffer or
+ * from a pinned O_DIRECT user buffer is contiguous after its first entry, so
+ * only its ends can be misaligned; a vector of loaned receive pages is not,
+ * each fragment may start and end anywhere in its page, so every one is
+ * checked (the iov_iter_alignment() test).
  */
 static bool
 nfs_dio_iter_aligned(const struct iov_iter *iter, u32 mem_align, u32 len_align)
@@ -52,7 +54,8 @@ nfs_dio_iter_aligned(const struct iov_iter *iter, u32 mem_align, u32 len_align)
 
 		if (len > size)
 			len = size;
-		if ((unsigned long)(bvec->bv_offset + skip) & (mem_align - 1))
+		if (((unsigned long)(bvec->bv_offset + skip) | len) &
+		    (mem_align - 1))
 			return false;
 		bvec++;
 		size -= len;
