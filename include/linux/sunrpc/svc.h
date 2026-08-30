@@ -183,6 +183,8 @@ static inline unsigned long svc_serv_maxpages(const struct svc_serv *serv)
 	return DIV_ROUND_UP(serv->sv_max_mesg, PAGE_SIZE) + 2 + 1;
 }
 
+struct svc_tcp_rx_state;
+
 /*
  * The context of a single thread, including the request currently being
  * processed.
@@ -224,6 +226,7 @@ struct svc_rqst {
 
 	struct folio_batch	rq_fbatch;
 	struct bio_vec		*rq_bvec;
+	struct svc_tcp_rx_state	*rq_tcp_rx;
 
 	__be32			rq_xid;		/* transmission id */
 	u32			rq_prog;	/* program number */

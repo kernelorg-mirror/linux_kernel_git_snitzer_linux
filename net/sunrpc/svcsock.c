@@ -42,6 +42,7 @@
 #include <linux/highmem.h>
 #include <asm/ioctls.h>
 #include <linux/key.h>
+#include <linux/bitmap.h>
 
 #include <linux/sunrpc/types.h>
 #include <linux/sunrpc/clnt.h>
@@ -124,6 +125,357 @@ static void svc_reclassify_socket(struct socket *sock)
 }
 #endif
 
+static bool svc_tcp_rx_is_empty(const struct svc_tcp_rx_state *state)
+{
+	return state && state->mode == SVC_TCP_RX_EMPTY && !state->count &&
+		!state->body_bytes && !state->borrowed_count &&
+		state->refs_acquired == state->refs_released && !state->terminal;
+}
+
+struct svc_tcp_rx_state *svc_tcp_rx_state_alloc(unsigned long capacity,
+						gfp_t gfp, int node)
+{
+	struct svc_tcp_rx_state *state;
+	unsigned int entries;
+
+	if (!capacity || capacity > U32_MAX)
+		return NULL;
+	entries = capacity;
+	state = kzalloc_node(sizeof(*state), gfp, node);
+	if (!state)
+		return NULL;
+	state->bvec = kcalloc_node(entries, sizeof(*state->bvec), gfp, node);
+	if (!state->bvec)
+		goto out_free_state;
+	state->borrowed = bitmap_zalloc_node(entries, gfp, node);
+	if (!state->borrowed)
+		goto out_free_bvec;
+	state->page_pool = bitmap_zalloc_node(entries, gfp, node);
+	if (!state->page_pool)
+		goto out_free_borrowed;
+	state->capacity = entries;
+	return state;
+
+out_free_borrowed:
+	bitmap_free(state->borrowed);
+out_free_bvec:
+	kfree(state->bvec);
+out_free_state:
+	kfree(state);
+	return NULL;
+}
+
+static void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
+{
+	unsigned int capacity = state->capacity;
+	struct bio_vec *bvec = state->bvec;
+	unsigned long *borrowed = state->borrowed;
+	unsigned long *page_pool = state->page_pool;
+
+	if (WARN_ON_ONCE(!state->terminal || state->borrowed_count ||
+			 state->refs_acquired != state->refs_released))
+		return;
+	/* Append sets only [0, count); terminal owners clear it before reset. */
+	memset(state, 0, sizeof(*state));
+	state->capacity = capacity;
+	state->bvec = bvec;
+	state->borrowed = borrowed;
+	state->page_pool = page_pool;
+}
+
+static bool svc_tcp_rx_can_coalesce(const struct svc_tcp_rx_state *state,
+				    struct page *page, unsigned int offset,
+				    bool borrowed, bool page_pool)
+{
+	const struct bio_vec *last;
+	unsigned int index;
+
+	if (!state->count)
+		return false;
+	index = state->count - 1;
+	last = &state->bvec[index];
+	return test_bit(index, state->borrowed) == borrowed &&
+		test_bit(index, state->page_pool) == page_pool &&
+		last->bv_page == page && last->bv_offset + last->bv_len == offset;
+}
+
+static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
+			     struct page *page, unsigned int offset,
+			     unsigned int len, bool borrowed, bool page_pool)
+{
+	struct bio_vec *bvec;
+	u32 body_bytes;
+
+	if (WARN_ON_ONCE(state->mode != SVC_TCP_RX_MIXED || state->terminal) ||
+	    !page || !len ||
+	    (page_pool && !borrowed) ||
+	    offset >= PAGE_SIZE || len > PAGE_SIZE - offset ||
+	    check_add_overflow(state->body_bytes, len, &body_bytes))
+		return -EINVAL;
+	if (svc_tcp_rx_can_coalesce(state, page, offset, borrowed, page_pool)) {
+		bvec = &state->bvec[state->count - 1];
+		bvec->bv_len += len;
+	} else {
+		if (state->count == state->capacity)
+			return -ENOSPC;
+		bvec = &state->bvec[state->count];
+		if (borrowed)
+			get_page(page);
+		bvec_set_page(bvec, page, len, offset);
+		if (borrowed) {
+			__set_bit(state->count, state->borrowed);
+			state->borrowed_count++;
+			state->refs_acquired++;
+		}
+		if (page_pool)
+			__set_bit(state->count, state->page_pool);
+		state->count++;
+	}
+	state->body_bytes = body_bytes;
+	if (borrowed) {
+		state->borrowed_bytes += len;
+		if (page_pool)
+			state->page_pool_bytes += len;
+	} else {
+		state->copied_bytes += len;
+	}
+	return 0;
+}
+
+static int
+svc_tcp_rx_append_borrowed(struct svc_tcp_rx_state *state, struct page *page,
+			   unsigned int offset, unsigned int len,
+			   bool page_pool)
+{
+	return svc_tcp_rx_append(state, page, offset, len, true, page_pool);
+}
+
+static int
+svc_tcp_rx_append_copied(struct svc_tcp_rx_state *state, struct page *page,
+			 unsigned int offset, unsigned int len)
+{
+	return svc_tcp_rx_append(state, page, offset, len, false, false);
+}
+
+static int svc_tcp_rx_copy_to_arena(struct page **pages, unsigned int capacity,
+				    u32 body_offset,
+				    const struct bio_vec *source)
+{
+	unsigned int source_offset = 0;
+	unsigned int remaining = source->bv_len;
+
+	while (remaining) {
+		unsigned int page_index = body_offset >> PAGE_SHIFT;
+		unsigned int destination_offset = offset_in_page(body_offset);
+		unsigned int len = min_t(unsigned int, remaining,
+					 PAGE_SIZE - destination_offset);
+		void *source_addr, *destination_addr;
+
+		if (page_index >= capacity || !pages[page_index])
+			return -EFAULT;
+		source_addr = kmap_local_page(source->bv_page);
+		destination_addr = kmap_local_page(pages[page_index]);
+		memcpy(destination_addr + destination_offset,
+		       source_addr + source->bv_offset + source_offset, len);
+		kunmap_local(destination_addr);
+		kunmap_local(source_addr);
+		body_offset += len;
+		source_offset += len;
+		remaining -= len;
+	}
+	return 0;
+}
+
+static int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
+					    struct page **pages)
+{
+	u32 body_offset = state->fixed_bytes;
+	unsigned int index;
+
+	if (WARN_ON_ONCE(state->mode != SVC_TCP_RX_MIXED || state->terminal))
+		return -EINVAL;
+	for (index = 0; index < state->count; index++) {
+		struct bio_vec *bvec = &state->bvec[index];
+		int ret;
+
+		if (WARN_ON_ONCE(!bvec->bv_page || !bvec->bv_len ||
+				 bvec->bv_offset > PAGE_SIZE ||
+				 bvec->bv_len > PAGE_SIZE - bvec->bv_offset))
+			return -EINVAL;
+		if (test_bit(index, state->borrowed)) {
+			ret = svc_tcp_rx_copy_to_arena(pages, state->capacity,
+						       body_offset, bvec);
+			if (ret)
+				return ret;
+			put_page(bvec->bv_page);
+			__clear_bit(index, state->borrowed);
+			state->refs_released++;
+			state->borrowed_count--;
+			state->borrowed_bytes -= bvec->bv_len;
+			state->copied_bytes += bvec->bv_len;
+			state->materialized_bytes += bvec->bv_len;
+			if (test_bit(index, state->page_pool)) {
+				__clear_bit(index, state->page_pool);
+				state->page_pool_bytes -= bvec->bv_len;
+			}
+		}
+		body_offset += bvec->bv_len;
+	}
+	if (WARN_ON_ONCE(body_offset != state->body_bytes ||
+			 state->borrowed_count || state->borrowed_bytes ||
+			 state->page_pool_bytes ||
+			 state->refs_acquired != state->refs_released ||
+			 !bitmap_empty(state->borrowed, state->count) ||
+			 !bitmap_empty(state->page_pool, state->count)))
+		return -EINVAL;
+	state->count = 0;
+	state->mode = SVC_TCP_RX_COPY;
+	return 0;
+}
+
+static bool svc_tcp_rx_refs_valid(const struct svc_tcp_rx_state *state)
+{
+	unsigned int index;
+
+	if (!state || state->mode == SVC_TCP_RX_EMPTY || state->terminal ||
+	    state->count > state->capacity ||
+	    state->refs_released > state->refs_acquired ||
+	    state->refs_acquired - state->refs_released !=
+		state->borrowed_count ||
+	    state->borrowed_count > state->count ||
+	    state->page_pool_bytes > state->borrowed_bytes)
+		return false;
+	if (!state->count)
+		return !state->borrowed_count && !state->borrowed_bytes &&
+			!state->page_pool_bytes;
+	if (bitmap_weight(state->borrowed, state->count) !=
+		state->borrowed_count ||
+	    !bitmap_subset(state->page_pool, state->borrowed, state->count))
+		return false;
+	for (index = 0; index < state->count; index++)
+		if (test_bit(index, state->borrowed) &&
+		    (!state->bvec[index].bv_page ||
+		     !state->bvec[index].bv_len ||
+		     state->bvec[index].bv_offset >= PAGE_SIZE ||
+		     state->bvec[index].bv_len >
+			PAGE_SIZE - state->bvec[index].bv_offset))
+			return false;
+	return true;
+}
+
+static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+{
+	unsigned int index;
+
+	if (WARN_ON_ONCE(!svc_tcp_rx_refs_valid(state)))
+		return -EINVAL;
+	for (index = 0; index < state->count; index++) {
+		if (!test_bit(index, state->borrowed))
+			continue;
+		put_page(state->bvec[index].bv_page);
+		__clear_bit(index, state->borrowed);
+		__clear_bit(index, state->page_pool);
+		state->refs_released++;
+		state->borrowed_count--;
+	}
+	state->terminal = true;
+	if (WARN_ON_ONCE(state->borrowed_count ||
+			 (state->count &&
+			  (!bitmap_empty(state->borrowed, state->count) ||
+			   !bitmap_empty(state->page_pool, state->count))) ||
+			 state->refs_released != state->refs_acquired))
+		return -EINVAL;
+	return 0;
+}
+
+static int
+svc_tcp_rx_exchange(struct svc_tcp_rx_state **active,
+		    struct svc_tcp_rx_state **empty)
+{
+	struct svc_tcp_rx_state *state = *active;
+
+	if (WARN_ON(!state || !*empty ||
+		    state->capacity != (*empty)->capacity ||
+		    svc_tcp_rx_is_empty(state) ||
+		    state->mode == SVC_TCP_RX_PUBLISHED ||
+		    !svc_tcp_rx_refs_valid(state) ||
+		    !svc_tcp_rx_is_empty(*empty)))
+		return -EINVAL;
+	swap(*active, *empty);
+	return 0;
+}
+
+void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state)
+{
+	if (!state)
+		return;
+	if (WARN_ON_ONCE(!svc_tcp_rx_is_empty(state))) {
+		if (svc_tcp_rx_release_refs(state))
+			return;
+		svc_tcp_rx_reset(state);
+	}
+	bitmap_free(state->page_pool);
+	bitmap_free(state->borrowed);
+	kfree(state->bvec);
+	kfree(state);
+}
+
+static void svc_tcp_rx_clear_xdr(struct svc_rqst *rqstp)
+{
+	rqstp->rq_arg.page_mode = XDRBUF_PAGE_ARRAY;
+	rqstp->rq_arg.bvec = NULL;
+	rqstp->rq_arg.bvec_count = 0;
+	rqstp->rq_arg.bvec_offset = 0;
+	rqstp->rq_arg.page_base = 0;
+	rqstp->rq_arg.page_len = 0;
+}
+
+static int
+svc_tcp_rx_abort(struct svc_sock *svsk, struct svc_rqst *rqstp,
+		 struct svc_tcp_rx_state *state, enum svc_tcp_rx_action action,
+		 enum svc_tcp_rx_reason reason)
+{
+	if (WARN_ON_ONCE(!state || svc_tcp_rx_is_empty(state)))
+		return -EINVAL;
+	if (state->reason == SVC_TCP_RX_REASON_NONE)
+		state->reason = reason;
+	if (svc_tcp_rx_release_refs(state)) {
+		state->reason = SVC_TCP_RX_REASON_INVARIANT;
+		trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state, SVC_TCP_RX_ERROR);
+		return -EINVAL;
+	}
+	trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state, action);
+	if (rqstp)
+		svc_tcp_rx_clear_xdr(rqstp);
+	svc_tcp_rx_reset(state);
+	return 0;
+}
+
+static int svc_tcp_rx_abort_active(struct svc_sock *svsk,
+				   struct svc_rqst *rqstp,
+				   enum svc_tcp_rx_action action,
+				   enum svc_tcp_rx_reason reason,
+				   bool allow_no_record)
+{
+	bool request_active = rqstp && rqstp->rq_tcp_rx &&
+		!svc_tcp_rx_is_empty(rqstp->rq_tcp_rx);
+	bool socket_active = svsk->sk_rx &&
+		!svc_tcp_rx_is_empty(svsk->sk_rx);
+
+	if (!request_active && !socket_active) {
+		if (allow_no_record)
+			return 0;
+		WARN_ON_ONCE(1);
+		return -EINVAL;
+	}
+	if (WARN_ON_ONCE(request_active == socket_active))
+		return -EINVAL;
+	if (request_active)
+		return svc_tcp_rx_abort(svsk, rqstp, rqstp->rq_tcp_rx,
+					action, reason);
+	return svc_tcp_rx_abort(svsk, NULL, svsk->sk_rx, action, reason);
+}
+
 /**
  * svc_tcp_release_ctxt - Release transport-related resources
  * @xprt: the transport which owned the context
@@ -132,6 +484,30 @@ static void svc_reclassify_socket(struct socket *sock)
  */
 static void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt)
 {
+	struct svc_tcp_rx_state *state = ctxt;
+	struct svc_sock *svsk;
+	struct svc_rqst *rqstp;
+
+	if (!state)
+		return;
+	svsk = container_of(xprt, struct svc_sock, sk_xprt);
+	rqstp = state->rqstp;
+	if (WARN_ON_ONCE(state->mode != SVC_TCP_RX_PUBLISHED || !rqstp ||
+			 rqstp->rq_tcp_rx != state ||
+			 rqstp->rq_xprt_ctxt != state)) {
+		if (!svc_tcp_rx_is_empty(state))
+			svc_tcp_rx_abort(svsk, rqstp, state, SVC_TCP_RX_ERROR,
+					 SVC_TCP_RX_REASON_INVARIANT);
+		return;
+	}
+	if (svc_tcp_rx_release_refs(state)) {
+		state->reason = SVC_TCP_RX_REASON_INVARIANT;
+		trace_svcsock_tcp_rx_lifetime(xprt, rqstp, state, SVC_TCP_RX_ERROR);
+		return;
+	}
+	trace_svcsock_tcp_rx_lifetime(xprt, rqstp, state, SVC_TCP_RX_RELEASE);
+	svc_tcp_rx_clear_xdr(rqstp);
+	svc_tcp_rx_reset(state);
 }
 
 /**
@@ -955,14 +1331,19 @@ failed:
 	return NULL;
 }
 
-static void svc_tcp_restore_pages(struct svc_sock *svsk,
-				  struct svc_rqst *rqstp)
+static int svc_tcp_restore_pages(struct svc_sock *svsk,
+				 struct svc_rqst *rqstp)
 {
 	size_t len = svsk->sk_datalen;
 	unsigned int i, npages;
+	int ret;
 
-	if (!len)
-		return;
+	if (!len) {
+		if (WARN_ON_ONCE(!svc_tcp_rx_is_empty(svsk->sk_rx) ||
+				 !svc_tcp_rx_is_empty(rqstp->rq_tcp_rx)))
+			return -EINVAL;
+		return 0;
+	}
 	npages = (len + PAGE_SIZE - 1) >> PAGE_SHIFT;
 	for (i = 0; i < npages; i++) {
 		if (rqstp->rq_pages[i] != NULL)
@@ -971,27 +1352,43 @@ static void svc_tcp_restore_pages(struct svc_sock *svsk,
 		rqstp->rq_pages[i] = svsk->sk_pages[i];
 		svsk->sk_pages[i] = NULL;
 	}
+	ret = svc_tcp_rx_exchange(&svsk->sk_rx, &rqstp->rq_tcp_rx);
+	if (ret)
+		return ret;
+	if (WARN_ON_ONCE(rqstp->rq_tcp_rx->body_bytes != len))
+		return -EINVAL;
 	rqstp->rq_arg.head[0].iov_base = page_address(rqstp->rq_pages[0]);
+	return 0;
 }
 
-static void svc_tcp_save_pages(struct svc_sock *svsk, struct svc_rqst *rqstp)
+static int svc_tcp_save_pages(struct svc_sock *svsk, struct svc_rqst *rqstp)
 {
 	unsigned int i, len, npages;
+	int ret;
 
 	if (svsk->sk_datalen == 0)
-		return;
+		return 0;
 	len = svsk->sk_datalen;
+	if (WARN_ON_ONCE(rqstp->rq_tcp_rx->body_bytes != len))
+		return -EINVAL;
 	npages = (len + PAGE_SIZE - 1) >> PAGE_SHIFT;
 	for (i = 0; i < npages; i++) {
 		svsk->sk_pages[i] = rqstp->rq_pages[i];
 		rqstp->rq_pages[i] = NULL;
 	}
 	rqstp->rq_pages_nfree = npages;
+	ret = svc_tcp_rx_exchange(&rqstp->rq_tcp_rx, &svsk->sk_rx);
+	return ret;
 }
 
 static void svc_tcp_clear_pages(struct svc_sock *svsk)
 {
 	unsigned int i, len, npages;
+
+	if (svc_tcp_rx_abort_active(svsk, NULL, SVC_TCP_RX_ABORT,
+				    SVC_TCP_RX_REASON_NONE,
+				    svsk->sk_datalen == 0))
+		return;
 
 	if (svsk->sk_datalen == 0)
 		goto out;
@@ -1076,8 +1473,26 @@ struct svc_tcp_recv_ctx {
 static void svc_tcp_flush_pages(struct svc_sock *svsk,
 				struct svc_rqst *rqstp)
 {
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
 	unsigned int pg, pages = DIV_ROUND_UP(svsk->sk_datalen, PAGE_SIZE);
 
+	if (state->mode == SVC_TCP_RX_MIXED) {
+		struct page *last = rqstp->rq_pages[0];
+
+		flush_dcache_page(last);
+		for (pg = 0; pg < state->count; pg++) {
+			struct page *page;
+
+			if (test_bit(pg, state->borrowed))
+				continue;
+			page = state->bvec[pg].bv_page;
+			if (page != last) {
+				flush_dcache_page(page);
+				last = page;
+			}
+		}
+		return;
+	}
 	for (pg = 0; pg < pages; pg++)
 		flush_dcache_page(rqstp->rq_pages[pg]);
 }
@@ -1103,6 +1518,493 @@ static void svc_tcp_recv_iter_init(struct svc_rqst *rqstp,
 	iov_iter_advance(iter, seek);
 }
 
+#define SVC_TCP_RX_FIXED_BYTES	(7 * XDR_UNIT)
+
+static int svc_tcp_rx_start(struct svc_sock *svsk, struct svc_rqst *rqstp)
+{
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+
+	if (WARN_ON_ONCE(!state || !svc_tcp_rx_is_empty(state) ||
+			 !svc_tcp_rx_is_empty(svsk->sk_rx)))
+		return -EINVAL;
+	if (WARN_ON_ONCE(++svsk->sk_rx_sequence == 0))
+		return -EOVERFLOW;
+	state->record_seq = svsk->sk_rx_sequence;
+	state->mode = SVC_TCP_RX_PREFIX;
+	return 0;
+}
+
+static unsigned int
+svc_tcp_rx_copied_entries(const struct svc_rqst *rqstp,
+			  const struct svc_tcp_rx_state *state,
+			  u32 body_offset, unsigned int len)
+{
+	unsigned int entries = DIV_ROUND_UP(offset_in_page(body_offset) + len,
+						PAGE_SIZE);
+
+	if (state->count) {
+		const struct bio_vec *last = &state->bvec[state->count - 1];
+		struct page *page = rqstp->rq_pages[body_offset >> PAGE_SHIFT];
+
+		if (!test_bit(state->count - 1, state->borrowed) &&
+		    last->bv_page == page &&
+		    last->bv_offset + last->bv_len == offset_in_page(body_offset))
+			entries--;
+	}
+	return entries;
+}
+
+static int svc_tcp_rx_append_arena(struct svc_rqst *rqstp,
+				   struct svc_tcp_rx_state *state,
+				   u32 body_offset, unsigned int len)
+{
+	while (len) {
+		unsigned int page_index = body_offset >> PAGE_SHIFT;
+		unsigned int offset = offset_in_page(body_offset);
+		unsigned int take = min_t(unsigned int, len, PAGE_SIZE - offset);
+		int ret;
+
+		if (WARN_ON_ONCE(page_index >= state->capacity ||
+				 !rqstp->rq_pages[page_index]))
+			return -EINVAL;
+		ret = svc_tcp_rx_append_copied(state, rqstp->rq_pages[page_index],
+					       offset, take);
+		if (ret)
+			return ret;
+		body_offset += take;
+		len -= take;
+	}
+	return 0;
+}
+
+static int svc_tcp_rx_copy_skb(struct svc_sock *svsk, struct svc_rqst *rqstp,
+			       struct sk_buff *skb, unsigned int offset,
+			       unsigned int len)
+{
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+	u32 body_offset = state->body_bytes;
+	struct iov_iter iter;
+	u32 total;
+	int ret;
+
+	if (WARN_ON_ONCE(!len || state->mode == SVC_TCP_RX_EMPTY ||
+			 check_add_overflow(body_offset, len, &total)))
+		return -EINVAL;
+	if (state->mode == SVC_TCP_RX_MIXED &&
+	    svc_tcp_rx_copied_entries(rqstp, state, body_offset, len) >
+			state->capacity - state->count) {
+		state->reason = SVC_TCP_RX_REASON_CAPACITY;
+		ret = svc_tcp_rx_materialize(state, rqstp->rq_pages);
+		if (ret)
+			return ret;
+		trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state,
+					       SVC_TCP_RX_MATERIALIZE);
+	}
+
+	svc_tcp_recv_iter_init(rqstp, &iter, body_offset, len);
+	if (skb_copy_datagram_iter(skb, offset, &iter, len)) {
+		state->reason = skb_frags_readable(skb) ?
+			SVC_TCP_RX_REASON_COPY_FAULT : SVC_TCP_RX_REASON_UNREADABLE;
+		return -EFAULT;
+	}
+
+	switch (state->mode) {
+	case SVC_TCP_RX_PREFIX:
+		state->body_bytes = total;
+		state->fixed_bytes += len;
+		break;
+	case SVC_TCP_RX_MIXED:
+		ret = svc_tcp_rx_append_arena(rqstp, state, body_offset, len);
+		if (ret)
+			return ret;
+		break;
+	case SVC_TCP_RX_COPY:
+		state->body_bytes = total;
+		state->copied_bytes += len;
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static enum svc_tcp_rx_reason
+svc_tcp_rx_classify(struct svc_sock *svsk, struct svc_rqst *rqstp)
+{
+	const struct svc_version *versp;
+	const struct svc_procedure *procp;
+	const struct svc_program *progp = NULL;
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+	const __be32 *words = page_address(rqstp->rq_pages[0]);
+	struct svc_serv *serv = rqstp->rq_server;
+	u32 program, version, procedure, auth;
+	__be32 status;
+	unsigned int index;
+
+	if (WARN_ON_ONCE(state->mode != SVC_TCP_RX_PREFIX ||
+			 state->fixed_bytes != SVC_TCP_RX_FIXED_BYTES ||
+			 state->body_bytes != SVC_TCP_RX_FIXED_BYTES))
+		return SVC_TCP_RX_REASON_INVARIANT;
+	state->xid = be32_to_cpu(words[0]);
+	if (test_bit(XPT_TLS_SESSION, &svsk->sk_xprt.xpt_flags))
+		return SVC_TCP_RX_REASON_TLS;
+	if (words[1] != rpc_call)
+		return SVC_TCP_RX_REASON_DIRECTION;
+	if (words[2] != cpu_to_be32(RPC_VERSION))
+		return SVC_TCP_RX_REASON_RPC_VERSION;
+
+	program = be32_to_cpu(words[3]);
+	version = be32_to_cpu(words[4]);
+	procedure = be32_to_cpu(words[5]);
+	auth = be32_to_cpu(words[6]);
+	for (index = 0; index < serv->sv_nprogs; index++)
+		if (serv->sv_programs[index].pg_prog == program)
+			progp = &serv->sv_programs[index];
+	if (!progp)
+		return SVC_TCP_RX_REASON_PROGRAM;
+	status = svc_proc_lookup(progp, version, procedure, &versp, &procp);
+	if (status == rpc_prog_mismatch)
+		return SVC_TCP_RX_REASON_VERSION;
+	if (status != rpc_success)
+		return SVC_TCP_RX_REASON_PROCEDURE;
+	if (!svc_proc_accepts_xdr_bvec(procp, auth))
+		return SVC_TCP_RX_REASON_AUTH;
+	return SVC_TCP_RX_REASON_NONE;
+}
+
+static int svc_tcp_rx_finish_classify(struct svc_sock *svsk,
+				      struct svc_rqst *rqstp)
+{
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+	enum svc_tcp_rx_reason reason = svc_tcp_rx_classify(svsk, rqstp);
+
+	state->reason = reason;
+	state->mode = reason == SVC_TCP_RX_REASON_NONE ?
+		SVC_TCP_RX_MIXED : SVC_TCP_RX_COPY;
+	trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state,
+				       SVC_TCP_RX_CLASSIFY);
+	return reason == SVC_TCP_RX_REASON_INVARIANT ? -EINVAL : 0;
+}
+
+struct svc_tcp_rx_walk {
+	struct svc_sock		*svsk;
+	struct svc_rqst		*rqstp;
+	struct sk_buff		*root;
+	u32			first;
+	u32			last;
+	u32			body_base;
+};
+
+static int svc_tcp_rx_materialize_fallback(struct svc_tcp_rx_walk *walk,
+					   enum svc_tcp_rx_reason reason)
+{
+	struct svc_tcp_rx_state *state = walk->rqstp->rq_tcp_rx;
+	int ret;
+
+	if (state->mode == SVC_TCP_RX_COPY)
+		return 0;
+	if (WARN_ON_ONCE(state->mode != SVC_TCP_RX_MIXED))
+		return -EINVAL;
+	state->reason = reason;
+	ret = svc_tcp_rx_materialize(state, walk->rqstp->rq_pages);
+	if (ret)
+		return ret;
+	trace_svcsock_tcp_rx_lifetime(&walk->svsk->sk_xprt, walk->rqstp,
+				       state, SVC_TCP_RX_MATERIALIZE);
+	return 0;
+}
+
+static int svc_tcp_rx_copy_segment(struct svc_tcp_rx_walk *walk,
+				   u32 start, unsigned int len,
+				   enum svc_tcp_rx_reason reason)
+{
+	struct svc_tcp_rx_state *state = walk->rqstp->rq_tcp_rx;
+	u32 expected = walk->body_base + start - walk->first;
+
+	if (WARN_ON_ONCE(state->body_bytes != expected))
+		return -EINVAL;
+	if (state->mode == SVC_TCP_RX_MIXED &&
+	    state->reason == SVC_TCP_RX_REASON_NONE)
+		state->reason = reason;
+	return svc_tcp_rx_copy_skb(walk->svsk, walk->rqstp, walk->root,
+				   start, len);
+}
+
+static int svc_tcp_rx_borrow_segment(struct svc_tcp_rx_walk *walk,
+				     u32 start, struct page *page,
+				     unsigned int offset, unsigned int len)
+{
+	struct svc_tcp_rx_state *state = walk->rqstp->rq_tcp_rx;
+	unsigned int consumed = 0;
+	int ret;
+
+	while (consumed < len) {
+		unsigned int page_offset = offset_in_page(offset + consumed);
+		unsigned int take = min_t(unsigned int, len - consumed,
+					       PAGE_SIZE - page_offset);
+		struct page *span_page = page + ((offset + consumed) >> PAGE_SHIFT);
+		u32 expected = walk->body_base + start + consumed - walk->first;
+		bool page_pool = page_pool_page_is_pp(compound_head(span_page));
+
+		if (WARN_ON_ONCE(state->body_bytes != expected))
+			return -EINVAL;
+		if (state->mode == SVC_TCP_RX_COPY)
+			return svc_tcp_rx_copy_segment(walk, start + consumed,
+						       len - consumed,
+						       SVC_TCP_RX_REASON_CAPACITY);
+		ret = svc_tcp_rx_append_borrowed(state, span_page, page_offset,
+						 take, page_pool);
+		if (ret == -ENOSPC) {
+			ret = svc_tcp_rx_materialize_fallback(walk,
+						  SVC_TCP_RX_REASON_CAPACITY);
+			if (ret)
+				return ret;
+			return svc_tcp_rx_copy_segment(walk, start + consumed,
+						       len - consumed,
+						       SVC_TCP_RX_REASON_CAPACITY);
+		}
+		if (ret)
+			return ret;
+		consumed += take;
+	}
+	return 0;
+}
+
+static int svc_tcp_rx_walk_skb(struct svc_tcp_rx_walk *walk,
+			       struct sk_buff *skb, u32 base)
+{
+	struct svc_tcp_rx_state *state = walk->rqstp->rq_tcp_rx;
+	u32 skb_end = base + skb->len;
+	u32 cursor = base;
+	u32 start, end;
+	struct sk_buff *frag_skb;
+	unsigned int index;
+
+	start = max(walk->first, base);
+	end = min(walk->last, skb_end);
+	if (start >= end)
+		return 0;
+	if (state->mode == SVC_TCP_RX_COPY)
+		return svc_tcp_rx_copy_segment(walk, start, end - start,
+					       state->reason);
+	if (skb_zcopy(skb) || skb_zcopy_pure(skb) ||
+	    skb_zcopy_managed(skb)) {
+		int ret = svc_tcp_rx_materialize_fallback(walk,
+							SVC_TCP_RX_REASON_MANAGED_FRAGS);
+
+		if (ret)
+			return ret;
+		return svc_tcp_rx_copy_segment(walk, start, end - start,
+					       SVC_TCP_RX_REASON_MANAGED_FRAGS);
+	}
+
+	if (skb_headlen(skb)) {
+		u32 head_end = cursor + skb_headlen(skb);
+		u32 lo = max(walk->first, cursor);
+		u32 hi = min(walk->last, head_end);
+
+		if (lo < hi) {
+			int ret;
+
+			if (skb_head_is_locked(skb)) {
+				ret = svc_tcp_rx_copy_segment(
+					walk, lo, hi - lo,
+					SVC_TCP_RX_REASON_LOCKED_HEAD);
+			} else {
+				unsigned char *data = skb->data + lo - cursor;
+				unsigned int remaining = hi - lo;
+				u32 position = lo;
+
+				ret = 0;
+				while (remaining) {
+					struct page *page = virt_to_page(data);
+					unsigned int offset = offset_in_page(data);
+					unsigned int take = min_t(unsigned int, remaining,
+								  PAGE_SIZE - offset);
+
+					ret = svc_tcp_rx_borrow_segment(walk, position,
+								page, offset,
+								take);
+					if (ret)
+						break;
+					data += take;
+					position += take;
+					remaining -= take;
+				}
+			}
+			if (ret)
+				return ret;
+		}
+		cursor = head_end;
+	}
+
+	if (cursor < walk->last && !skb_frags_readable(skb)) {
+		state->reason = SVC_TCP_RX_REASON_UNREADABLE;
+		return -EFAULT;
+	}
+	for (index = 0; index < skb_shinfo(skb)->nr_frags; index++) {
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[index];
+		u32 frag_end = cursor + skb_frag_size(frag);
+		u32 lo = max(walk->first, cursor);
+		u32 hi = min(walk->last, frag_end);
+
+		if (lo < hi) {
+			struct page *page;
+			u32 page_offset, page_len, copied;
+
+			if (skb_frag_is_net_iov(frag)) {
+				state->reason = SVC_TCP_RX_REASON_NET_IOV;
+				return -EREMOTEIO;
+			}
+			page = skb_frag_page(frag);
+			if (!page) {
+				state->reason = SVC_TCP_RX_REASON_NULL_PAGE;
+				return -EFAULT;
+			}
+			skb_frag_foreach_page(frag,
+					      skb_frag_off(frag) + lo - cursor,
+					      hi - lo, page, page_offset,
+					      page_len, copied) {
+				int ret = svc_tcp_rx_borrow_segment(walk, lo + copied,
+								page, page_offset,
+								page_len);
+
+				if (ret)
+					return ret;
+			}
+		}
+		cursor = frag_end;
+	}
+
+	skb_walk_frags(skb, frag_skb) {
+		int ret = svc_tcp_rx_walk_skb(walk, frag_skb, cursor);
+
+		if (ret)
+			return ret;
+		cursor += frag_skb->len;
+	}
+	if (WARN_ON_ONCE(cursor != skb_end))
+		return -EINVAL;
+	return 0;
+}
+
+static int svc_tcp_rx_walk(struct svc_sock *svsk, struct svc_rqst *rqstp,
+			   struct sk_buff *skb, unsigned int offset,
+			   unsigned int len)
+{
+	struct svc_tcp_rx_walk walk = {
+		.svsk = svsk,
+		.rqstp = rqstp,
+		.root = skb,
+		.first = offset,
+		.last = offset + len,
+		.body_base = rqstp->rq_tcp_rx->body_bytes,
+	};
+	int ret;
+
+	if (WARN_ON_ONCE(walk.last < walk.first || walk.last > skb->len))
+		return -EINVAL;
+	ret = svc_tcp_rx_walk_skb(&walk, skb, 0);
+	if (ret)
+		return ret;
+	if (WARN_ON_ONCE(rqstp->rq_tcp_rx->body_bytes != walk.body_base + len))
+		return -EINVAL;
+	return 0;
+}
+
+static int svc_tcp_rx_validate_mixed(struct svc_sock *svsk,
+				     struct svc_rqst *rqstp)
+{
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+	u32 bytes = 0;
+	unsigned int index;
+
+	if (state->mode != SVC_TCP_RX_MIXED ||
+	    state->terminal ||
+	    state->fixed_bytes != SVC_TCP_RX_FIXED_BYTES ||
+	    state->body_bytes != svsk->sk_datalen ||
+	    state->borrowed_bytes + state->copied_bytes !=
+		state->body_bytes - state->fixed_bytes ||
+	    state->refs_acquired - state->refs_released !=
+		state->borrowed_count ||
+	    bitmap_weight(state->borrowed, state->capacity) !=
+		state->borrowed_count ||
+	    !bitmap_subset(state->page_pool, state->borrowed, state->capacity) ||
+	    state->page_pool_bytes > state->borrowed_bytes ||
+	    rqstp->rq_xprt_ctxt)
+		goto invalid;
+	for (index = 0; index < state->count; index++) {
+		const struct bio_vec *bvec = &state->bvec[index];
+
+		if (!bvec->bv_page || !bvec->bv_len ||
+		    bvec->bv_offset >= PAGE_SIZE ||
+		    bvec->bv_len > PAGE_SIZE - bvec->bv_offset ||
+		    check_add_overflow(bytes, bvec->bv_len, &bytes))
+			goto invalid;
+	}
+	if (bytes != state->body_bytes - state->fixed_bytes)
+		goto invalid;
+	return 0;
+
+invalid:
+	WARN_ON_ONCE(1);
+	state->reason = SVC_TCP_RX_REASON_INVARIANT;
+	return -EINVAL;
+}
+
+static int svc_tcp_rx_publish(struct svc_sock *svsk, struct svc_rqst *rqstp)
+{
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+	struct xdr_buf *arg = &rqstp->rq_arg;
+
+	if (state->mode == SVC_TCP_RX_PREFIX) {
+		state->reason = SVC_TCP_RX_REASON_SHORT_PREFIX;
+		state->mode = SVC_TCP_RX_COPY;
+		trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state,
+					       SVC_TCP_RX_CLASSIFY);
+	}
+	arg->len = svsk->sk_datalen;
+	arg->page_base = 0;
+	if (state->mode == SVC_TCP_RX_COPY) {
+		if (WARN_ON_ONCE(state->body_bytes != svsk->sk_datalen ||
+				 state->borrowed_count ||
+				 state->refs_acquired != state->refs_released))
+			return -EINVAL;
+		arg->page_mode = XDRBUF_PAGE_ARRAY;
+		arg->bvec = NULL;
+		arg->bvec_count = 0;
+		arg->bvec_offset = 0;
+		if (arg->len <= arg->head[0].iov_len) {
+			arg->head[0].iov_len = arg->len;
+			arg->page_len = 0;
+		} else {
+			arg->page_len = arg->len - arg->head[0].iov_len;
+		}
+		if (svc_tcp_rx_release_refs(state))
+			return -EINVAL;
+		trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state,
+					       SVC_TCP_RX_PUBLISH);
+		svc_tcp_rx_reset(state);
+		rqstp->rq_xprt_ctxt = NULL;
+		return 0;
+	}
+	if (svc_tcp_rx_validate_mixed(svsk, rqstp))
+		return -EINVAL;
+
+	arg->head[0].iov_len = SVC_TCP_RX_FIXED_BYTES;
+	arg->page_mode = XDRBUF_PAGE_BVECS;
+	arg->bvec = state->bvec;
+	arg->bvec_count = state->count;
+	arg->bvec_offset = 0;
+	arg->page_len = state->body_bytes - SVC_TCP_RX_FIXED_BYTES;
+	state->rqstp = rqstp;
+	state->mode = SVC_TCP_RX_PUBLISHED;
+	rqstp->rq_xprt_ctxt = state;
+	trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state,
+				       SVC_TCP_RX_PUBLISH);
+	return 0;
+}
+
 /*
  * ->read_sock actor, called under the socket lock. sk_datalen is both
  * the count of body octets received so far and their write offset into
@@ -1117,6 +2019,7 @@ static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
 		container_of(rqstp->rq_xprt, struct svc_sock, sk_xprt);
 	size_t reclen, received, want, take, n;
 	size_t consumed = 0;
+	int error = -EFAULT;
 
 	if (!desc->count)
 		return 0;
@@ -1159,11 +2062,45 @@ static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
 	take = min(want, len);
 
 	if (take) {
-		struct iov_iter iter;
+		unsigned int body_offset = offset;
+		unsigned int remaining = take;
+		struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
 
-		svc_tcp_recv_iter_init(rqstp, &iter, svsk->sk_datalen, take);
-		if (skb_copy_datagram_iter(skb, offset, &iter, take))
+		if (state->mode == SVC_TCP_RX_EMPTY) {
+			error = svc_tcp_rx_start(svsk, rqstp);
+			if (error)
+				goto fault;
+		}
+		if (state->body_bytes < SVC_TCP_RX_FIXED_BYTES) {
+			unsigned int prefix = min_t(unsigned int, remaining,
+					SVC_TCP_RX_FIXED_BYTES - state->body_bytes);
+
+			error = svc_tcp_rx_copy_skb(svsk, rqstp, skb, body_offset,
+						    prefix);
+			if (error)
+				goto fault;
+			body_offset += prefix;
+			remaining -= prefix;
+			if (state->fixed_bytes == SVC_TCP_RX_FIXED_BYTES) {
+				error = svc_tcp_rx_finish_classify(svsk, rqstp);
+				if (error)
+					goto fault;
+			}
+		}
+		if (remaining) {
+			if (state->mode == SVC_TCP_RX_COPY)
+				error = svc_tcp_rx_copy_skb(svsk, rqstp, skb,
+							    body_offset, remaining);
+			else
+				error = svc_tcp_rx_walk(svsk, rqstp, skb,
+							body_offset, remaining);
+			if (error)
+				goto fault;
+		}
+		if (WARN_ON_ONCE(state->body_bytes != svsk->sk_datalen + take)) {
+			error = -EINVAL;
 			goto fault;
+		}
 		svsk->sk_datalen += take;
 		svsk->sk_tcplen += take;
 		consumed += take;
@@ -1184,7 +2121,7 @@ static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
 	return consumed;
 
 fault:
-	desc->error = -EFAULT;
+	desc->error = error;
 	desc->count = 0;
 	return consumed;
 }
@@ -1230,7 +2167,9 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 	__be32 calldir;
 
 	clear_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags);
-	svc_tcp_restore_pages(svsk, rqstp);
+	len = svc_tcp_restore_pages(svsk, rqstp);
+	if (len < 0)
+		goto err_nuts;
 
 	lock_sock(sock->sk);
 	len = sock->ops->read_sock(sock->sk, &desc, svc_tcp_recv_actor);
@@ -1279,16 +2218,10 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 		goto err_nuts;
 
 	svc_tcp_flush_pages(svsk, rqstp);
+	len = svc_tcp_rx_publish(svsk, rqstp);
+	if (len < 0)
+		goto err_nuts;
 
-	rqstp->rq_arg.len = svsk->sk_datalen;
-	rqstp->rq_arg.page_base = 0;
-	if (rqstp->rq_arg.len <= rqstp->rq_arg.head[0].iov_len) {
-		rqstp->rq_arg.head[0].iov_len = rqstp->rq_arg.len;
-		rqstp->rq_arg.page_len = 0;
-	} else
-		rqstp->rq_arg.page_len = rqstp->rq_arg.len - rqstp->rq_arg.head[0].iov_len;
-
-	rqstp->rq_xprt_ctxt   = NULL;
 	rqstp->rq_prot	      = IPPROTO_TCP;
 	if (test_bit(XPT_LOCAL, &svsk->sk_xprt.xpt_flags))
 		set_bit(RQ_LOCAL, &rqstp->rq_flags);
@@ -1322,7 +2255,12 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 	return rqstp->rq_arg.len;
 
 err_incomplete:
-	svc_tcp_save_pages(svsk, rqstp);
+	if (svc_tcp_save_pages(svsk, rqstp)) {
+		len = -EINVAL;
+		svc_tcp_rx_abort_active(svsk, rqstp, SVC_TCP_RX_ERROR,
+					SVC_TCP_RX_REASON_INVARIANT, false);
+		goto err_delete;
+	}
 	if (len < 0 && len != -EAGAIN)
 		goto err_delete;
 	if (svsk->sk_tcplen >= sizeof(rpc_fraghdr))
@@ -1336,6 +2274,14 @@ error:
 	trace_svcsock_tcp_recv_eagain(&svsk->sk_xprt, 0);
 	goto err_noclose;
 err_nuts:
+	if (svc_tcp_rx_abort_active(svsk, rqstp, SVC_TCP_RX_ERROR,
+				    len == -EREMOTEIO ?
+					SVC_TCP_RX_REASON_NET_IOV :
+				    len == -EFAULT ?
+					SVC_TCP_RX_REASON_COPY_FAULT :
+					SVC_TCP_RX_REASON_INVARIANT,
+				    svsk->sk_datalen == 0))
+		len = -EINVAL;
 	/* svc_tcp_save_pages() has not run, so svsk->sk_pages[] is
 	 * empty. A non-zero sk_datalen makes the teardown-time
 	 * svc_tcp_clear_pages() walk empty slots and WARN.
@@ -1574,6 +2520,15 @@ static struct svc_sock *svc_setup_socket(struct svc_serv *serv,
 	svsk->sk_maxpages = pages;
 
 	inet = sock->sk;
+	if (sock->type == SOCK_STREAM && inet->sk_state != TCP_LISTEN) {
+		svsk->sk_rx = svc_tcp_rx_state_alloc(pages, GFP_KERNEL,
+						     NUMA_NO_NODE);
+		if (!svsk->sk_rx) {
+			kfree(svsk->sk_bvec);
+			kfree(svsk);
+			return ERR_PTR(-ENOMEM);
+		}
+	}
 
 	if (pmap_register) {
 		int err;
@@ -1582,6 +2537,7 @@ static struct svc_sock *svc_setup_socket(struct svc_serv *serv,
 				     inet->sk_protocol,
 				     ntohs(inet_sk(inet)->inet_sport));
 		if (err < 0) {
+			svc_tcp_rx_state_free(svsk->sk_rx);
 			kfree(svsk->sk_bvec);
 			kfree(svsk);
 			return ERR_PTR(err);
@@ -1803,6 +2759,7 @@ static void svc_sock_free(struct svc_xprt *xprt)
 		sock_release(sock);
 
 	page_frag_cache_drain(&svsk->sk_frag_cache);
+	svc_tcp_rx_state_free(svsk->sk_rx);
 	kfree(svsk->sk_bvec);
 	kfree(svsk);
 }
