@@ -7,6 +7,7 @@ ccflags-y += -I$(src)			# needed for trace events
 
 obj-$(CONFIG_NFSD)	+= nfsd.o
 obj-$(CONFIG_NFSD_BVEC_KUNIT_TEST) += nfsd_bvec_kunit.o
+obj-$(CONFIG_NFSD4_BVEC_KUNIT_TEST) += nfsd4_bvec_kunit.o
 
 # this one should be compiled first, as the tracing macros can easily blow up
 nfsd-y			+= trace.o
