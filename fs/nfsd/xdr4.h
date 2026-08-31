@@ -1102,4 +1102,14 @@ struct nfsd4_cb_recall_any {
 	u32			ra_bmval[1];
 };
 
+#if IS_ENABLED(CONFIG_KUNIT)
+struct svc_serv *nfsd4_kunit_serv(struct net *net);
+__be32 nfsd4_kunit_destroy_session(struct svc_rqst *rqstp,
+				   struct nfsd4_compound_state *cstate,
+				   union nfsd4_op_u *u);
+__be32 nfsd4_kunit_destroy_clientid(struct svc_rqst *rqstp,
+				    struct nfsd4_compound_state *cstate,
+				    union nfsd4_op_u *u);
+#endif
+
 #endif

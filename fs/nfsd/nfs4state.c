@@ -10574,3 +10574,31 @@ nfsd_handle_dir_event(u32 mask, const struct inode *dir, const void *data,
 	nfsd_notify_event_put(evt);
 	return 0;
 }
+
+#if IS_ENABLED(CONFIG_KUNIT)
+#include <kunit/visibility.h>
+
+struct svc_serv *nfsd4_kunit_serv(struct net *net)
+{
+	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+
+	return nn->nfsd_serv;
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd4_kunit_serv);
+
+__be32 nfsd4_kunit_destroy_session(struct svc_rqst *rqstp,
+				   struct nfsd4_compound_state *cstate,
+				   union nfsd4_op_u *u)
+{
+	return nfsd4_destroy_session(rqstp, cstate, u);
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd4_kunit_destroy_session);
+
+__be32 nfsd4_kunit_destroy_clientid(struct svc_rqst *rqstp,
+				    struct nfsd4_compound_state *cstate,
+				    union nfsd4_op_u *u)
+{
+	return nfsd4_destroy_clientid(rqstp, cstate, u);
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd4_kunit_destroy_clientid);
+#endif
