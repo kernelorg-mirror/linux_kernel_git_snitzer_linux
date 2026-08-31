@@ -17,4 +17,4 @@
 # 
 # ~~~
 # Commit: 83df7b5fa673 (HID: hyperv: add KUnit coverage for device info bounds)
-CONFIG_HID_HYPERV_MOUSE_KUNIT_TEST=y
+# CONFIG_HID_HYPERV_MOUSE_KUNIT_TEST is not set
