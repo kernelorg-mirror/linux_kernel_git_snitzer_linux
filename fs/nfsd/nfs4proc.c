@@ -4379,6 +4379,7 @@ static const struct svc_procedure nfsd_procedures4[2] = {
 		.pc_ressize = sizeof(struct nfsd4_compoundres),
 		.pc_release = nfsd4_release_compoundargs,
 		.pc_cachetype = RC_NOCACHE,
+		.pc_xdr_bvec = true,
 		.pc_xdrressize = 3+NFSSVC_MAXBLKSIZE/4,
 		.pc_name = "COMPOUND",
 	},
