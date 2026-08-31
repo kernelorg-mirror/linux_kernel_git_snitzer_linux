@@ -44,6 +44,7 @@
 #include <linux/xattr.h>
 #include <linux/vmalloc.h>
 #include <linux/nfsacl.h>
+#include <kunit/visibility.h>
 
 #include <uapi/linux/xattr.h>
 
@@ -173,6 +174,15 @@ svcxdr_savemem(struct nfsd4_compoundargs *argp, __be32 *p, size_t len)
 	memcpy(tmp, p, len);
 	return tmp;
 }
+
+#if IS_ENABLED(CONFIG_KUNIT)
+void *nfsd4_kunit_savemem(struct nfsd4_compoundargs *argp, __be32 *p,
+			  size_t len)
+{
+	return svcxdr_savemem(argp, p, len);
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd4_kunit_savemem);
+#endif
 
 /*
  * NFSv4 basic data type decoders
@@ -6895,6 +6905,7 @@ void nfsd4_release_compoundargs(struct svc_rqst *rqstp)
 		kfree(tb);
 	}
 }
+EXPORT_SYMBOL_IF_KUNIT(nfsd4_release_compoundargs);
 
 bool
 nfs4svc_decode_compoundargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
@@ -6926,6 +6937,7 @@ nfs4svc_decode_compoundargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 
 	return nfsd4_decode_compound(args);
 }
+EXPORT_SYMBOL_IF_KUNIT(nfs4svc_decode_compoundargs);
 
 bool
 nfs4svc_encode_compoundres(struct svc_rqst *rqstp, struct xdr_stream *xdr)

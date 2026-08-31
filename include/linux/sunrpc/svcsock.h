@@ -142,6 +142,28 @@ struct svc_tcp_rx_state *svc_tcp_rx_state_alloc(unsigned long capacity,
 						gfp_t gfp, int node);
 void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state);
 
+#if IS_ENABLED(CONFIG_KUNIT)
+extern bool svc_tcp_rx_loan_pages;
+
+int svc_tcp_rx_append_borrowed(struct svc_tcp_rx_state *state,
+			       struct page *page, unsigned int offset,
+			       unsigned int len, bool page_pool);
+int svc_tcp_rx_append_copied(struct svc_tcp_rx_state *state,
+			     struct page *page, unsigned int offset,
+			     unsigned int len);
+int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
+			   struct page **pages);
+int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state);
+void svc_tcp_rx_reset(struct svc_tcp_rx_state *state);
+int svc_tcp_rx_exchange(struct svc_tcp_rx_state **active,
+			struct svc_tcp_rx_state **empty);
+int svc_tcp_rx_abort(struct svc_sock *svsk, struct svc_rqst *rqstp,
+		     struct svc_tcp_rx_state *state,
+		     enum svc_tcp_rx_action action,
+		     enum svc_tcp_rx_reason reason);
+void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt);
+#endif
+
 /*
  * svc_makesock socket characteristics
  */

@@ -39,6 +39,7 @@
 #include <linux/kthread.h>
 #include <linux/namei.h>
 #include <linux/pagemap.h>
+#include <kunit/visibility.h>
 
 #include <linux/sunrpc/addr.h>
 #include <linux/nfs_ssc.h>
@@ -4307,6 +4308,14 @@ static const struct svc_procedure nfsd_procedures4[2] = {
 	},
 };
 
+VISIBLE_IF_KUNIT const struct svc_procedure *
+nfsd4_procedure(unsigned int procedure)
+{
+	if (procedure >= ARRAY_SIZE(nfsd_procedures4))
+		return NULL;
+	return &nfsd_procedures4[procedure];
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd4_procedure);
 const struct svc_version nfsd_version4 = {
 	.vs_vers		= 4,
 	.vs_nproc		= ARRAY_SIZE(nfsd_procedures4),

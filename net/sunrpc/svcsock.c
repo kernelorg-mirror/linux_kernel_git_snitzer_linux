@@ -43,6 +43,7 @@
 #include <asm/ioctls.h>
 #include <linux/key.h>
 #include <linux/bitmap.h>
+#include <kunit/visibility.h>
 
 #include <linux/sunrpc/types.h>
 #include <linux/sunrpc/clnt.h>
@@ -67,7 +68,8 @@
  * existed.  Consulted once per RPC record at classification time, so
  * flipping it never affects a record already in flight.
  */
-static bool svc_tcp_rx_loan_pages __read_mostly = true;
+VISIBLE_IF_KUNIT bool svc_tcp_rx_loan_pages __read_mostly = true;
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_loan_pages);
 module_param(svc_tcp_rx_loan_pages, bool, 0644);
 MODULE_PARM_DESC(svc_tcp_rx_loan_pages,
 		 "Loan TCP receive pages to eligible RPC requests (default: Y)");
@@ -176,8 +178,9 @@ out_free_state:
 	kfree(state);
 	return NULL;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_state_alloc);
 
-static void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
+VISIBLE_IF_KUNIT void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
 {
 	unsigned int capacity = state->capacity;
 	struct bio_vec *bvec = state->bvec;
@@ -194,6 +197,7 @@ static void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
 	state->borrowed = borrowed;
 	state->page_pool = page_pool;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_reset);
 
 static bool svc_tcp_rx_can_coalesce(const struct svc_tcp_rx_state *state,
 				    struct page *page, unsigned int offset,
@@ -254,15 +258,16 @@ static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
 	return 0;
 }
 
-static int
+VISIBLE_IF_KUNIT int
 svc_tcp_rx_append_borrowed(struct svc_tcp_rx_state *state, struct page *page,
 			   unsigned int offset, unsigned int len,
 			   bool page_pool)
 {
 	return svc_tcp_rx_append(state, page, offset, len, true, page_pool);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_append_borrowed);
 
-static int
+VISIBLE_IF_KUNIT int
 svc_tcp_rx_append_copied(struct svc_tcp_rx_state *state, struct page *page,
 			 unsigned int offset, unsigned int len)
 {
@@ -298,7 +303,7 @@ static int svc_tcp_rx_copy_to_arena(struct page **pages, unsigned int capacity,
 	return 0;
 }
 
-static int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
+VISIBLE_IF_KUNIT int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 					    struct page **pages)
 {
 	u32 body_offset = state->fixed_bytes;
@@ -344,6 +349,7 @@ static int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 	state->mode = SVC_TCP_RX_COPY;
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_materialize);
 
 static bool svc_tcp_rx_refs_valid(const struct svc_tcp_rx_state *state)
 {
@@ -375,7 +381,7 @@ static bool svc_tcp_rx_refs_valid(const struct svc_tcp_rx_state *state)
 	return true;
 }
 
-static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 {
 	unsigned int index;
 
@@ -399,8 +405,9 @@ static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 		return -EINVAL;
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_release_refs);
 
-static int
+VISIBLE_IF_KUNIT int
 svc_tcp_rx_exchange(struct svc_tcp_rx_state **active,
 		    struct svc_tcp_rx_state **empty)
 {
@@ -416,6 +423,7 @@ svc_tcp_rx_exchange(struct svc_tcp_rx_state **active,
 	swap(*active, *empty);
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_exchange);
 
 void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state)
 {
@@ -431,6 +439,7 @@ void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state)
 	kfree(state->bvec);
 	kfree(state);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_state_free);
 
 static void svc_tcp_rx_clear_xdr(struct svc_rqst *rqstp)
 {
@@ -442,7 +451,7 @@ static void svc_tcp_rx_clear_xdr(struct svc_rqst *rqstp)
 	rqstp->rq_arg.page_len = 0;
 }
 
-static int
+VISIBLE_IF_KUNIT int
 svc_tcp_rx_abort(struct svc_sock *svsk, struct svc_rqst *rqstp,
 		 struct svc_tcp_rx_state *state, enum svc_tcp_rx_action action,
 		 enum svc_tcp_rx_reason reason)
@@ -462,6 +471,7 @@ svc_tcp_rx_abort(struct svc_sock *svsk, struct svc_rqst *rqstp,
 	svc_tcp_rx_reset(state);
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_abort);
 
 static int svc_tcp_rx_abort_active(struct svc_sock *svsk,
 				   struct svc_rqst *rqstp,
@@ -494,7 +504,7 @@ static int svc_tcp_rx_abort_active(struct svc_sock *svsk,
  * @ctxt: the context from rqstp->rq_xprt_ctxt or dr->xprt_ctxt
  *
  */
-static void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt)
+VISIBLE_IF_KUNIT void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt)
 {
 	struct svc_tcp_rx_state *state = ctxt;
 	struct svc_sock *svsk;
@@ -521,6 +531,7 @@ static void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt)
 	svc_tcp_rx_clear_xdr(rqstp);
 	svc_tcp_rx_reset(state);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_release_ctxt);
 
 /**
  * svc_udp_release_ctxt - Release transport-related resources
@@ -1594,6 +1605,7 @@ static int svc_tcp_rx_append_arena(struct svc_rqst *rqstp,
 	}
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_append_copied);
 
 static int svc_tcp_rx_copy_skb(struct svc_sock *svsk, struct svc_rqst *rqstp,
 			       struct sk_buff *skb, unsigned int offset,

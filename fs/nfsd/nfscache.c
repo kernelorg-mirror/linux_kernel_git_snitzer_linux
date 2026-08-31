@@ -16,6 +16,7 @@
 #include <linux/highmem.h>
 #include <linux/log2.h>
 #include <linux/hash.h>
+#include <kunit/visibility.h>
 #include <net/checksum.h>
 
 #include "nfsd.h"
@@ -354,8 +355,10 @@ nfsd_reply_cache_scan(struct shrinker *shrink, struct shrink_control *sc)
  *
  * Returns a 32-bit checksum value, as defined in RFC 793.
  */
-static __wsum nfsd_cache_csum(struct xdr_buf *buf, unsigned int start,
-			      unsigned int remaining, __be32 *scratch)
+VISIBLE_IF_KUNIT __wsum nfsd_cache_csum(struct xdr_buf *buf,
+					unsigned int start,
+					unsigned int remaining,
+					__be32 *scratch)
 {
 	if (remaining > RC_CSUMLEN)
 		remaining = RC_CSUMLEN;
@@ -363,6 +366,7 @@ static __wsum nfsd_cache_csum(struct xdr_buf *buf, unsigned int start,
 		return 0;
 	return csum_partial(scratch, remaining, 0);
 }
+EXPORT_SYMBOL_IF_KUNIT(nfsd_cache_csum);
 
 /* Leave scratch after a maximal accepted-Reply header and GSS wrap slack. */
 static_assert(RC_CSUMLEN + 3 * RPC_MAX_AUTH_SIZE + 6 * XDR_UNIT <= PAGE_SIZE);

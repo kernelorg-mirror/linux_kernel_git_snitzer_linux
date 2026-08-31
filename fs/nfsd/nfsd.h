@@ -50,6 +50,12 @@ enum {
 
 extern struct svc_program	nfsd_programs[];
 extern const struct svc_version	nfsd_version2, nfsd_version3, nfsd_version4;
+#if IS_ENABLED(CONFIG_KUNIT)
+const struct svc_procedure *nfsd3_procedure(unsigned int procedure);
+#if IS_ENABLED(CONFIG_NFSD_V4)
+const struct svc_procedure *nfsd4_procedure(unsigned int procedure);
+#endif
+#endif
 extern struct mutex		nfsd_mutex;
 extern atomic_t			nfsd_th_cnt;		/* number of available threads */
 

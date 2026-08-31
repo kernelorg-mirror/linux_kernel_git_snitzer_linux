@@ -10,6 +10,7 @@
 #include <linux/magic.h>
 #include <linux/namei.h>
 #include <linux/nfs3.h>
+#include <kunit/visibility.h>
 
 #include "cache.h"
 #include "xdr3.h"
@@ -1134,6 +1135,17 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name = "COMMIT",
 	},
 };
+
+#if IS_ENABLED(CONFIG_KUNIT)
+const struct svc_procedure *
+nfsd3_procedure(unsigned int procedure)
+{
+	if (procedure >= ARRAY_SIZE(nfsd_procedures3))
+		return NULL;
+	return &nfsd_procedures3[procedure];
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd3_procedure);
+#endif
 
 const struct svc_version nfsd_version3 = {
 	.vs_vers	= 3,
