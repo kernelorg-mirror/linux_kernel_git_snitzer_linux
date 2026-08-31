@@ -48,6 +48,20 @@ config NFSD_BVEC_KUNIT_TEST
 	  and complete-vector direct-I/O alignment for authoritative bvec
 	  request payloads.
 
+config NFSD4_BVEC_KUNIT_TEST
+	tristate "KUnit tests for NFSDv4 immutable receive bvecs" if !KUNIT_ALL_TESTS
+	depends on KUNIT
+	depends on NFSD
+	depends on NFSD_V4
+	depends on m
+	default KUNIT_ALL_TESTS
+	help
+	  Build a module-only test of NFSv4 COMPOUND decoding from immutable
+	  authoritative bvec request payloads, including saved argument lifetime
+	  and WRITE subsegments.
+	  The suite also checks whole-procedure AUTH_NULL/AUTH_SYS capability and
+	  the copied RPCSEC_GSS fallback.
+
 config NFSD_V2
 	bool "NFS server support for NFS version 2 (DEPRECATED)"
 	depends on NFSD
