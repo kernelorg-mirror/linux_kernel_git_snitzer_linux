@@ -160,10 +160,12 @@ svcxdr_savemem(struct nfsd4_compoundargs *argp, __be32 *p, size_t len)
 	__be32 *tmp;
 
 	/*
-	 * The location of the decoded data item is stable,
-	 * so @p is OK to use. This is the common case.
+	 * Scratch is overwritten by the next fragmented inline decode.
+	 * A direct HIGHMEM pointer is valid only while its kmap_local_page()
+	 * mapping remains active. Keep only directly addressable request data.
 	 */
-	if (p != argp->xdr->scratch.iov_base)
+	if (p != argp->xdr->scratch.iov_base &&
+	    (!IS_ENABLED(CONFIG_HIGHMEM) || !argp->xdr->page_kaddr))
 		return p;
 
 	tmp = svcxdr_tmpalloc(argp, len);
