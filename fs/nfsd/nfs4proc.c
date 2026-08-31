@@ -4308,7 +4308,8 @@ static const struct svc_procedure nfsd_procedures4[2] = {
 	},
 };
 
-VISIBLE_IF_KUNIT const struct svc_procedure *
+#if IS_ENABLED(CONFIG_KUNIT)
+const struct svc_procedure *
 nfsd4_procedure(unsigned int procedure)
 {
 	if (procedure >= ARRAY_SIZE(nfsd_procedures4))
@@ -4316,6 +4317,8 @@ nfsd4_procedure(unsigned int procedure)
 	return &nfsd_procedures4[procedure];
 }
 EXPORT_SYMBOL_IF_KUNIT(nfsd4_procedure);
+#endif
+
 const struct svc_version nfsd_version4 = {
 	.vs_vers		= 4,
 	.vs_nproc		= ARRAY_SIZE(nfsd_procedures4),
