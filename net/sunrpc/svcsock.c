@@ -74,6 +74,46 @@ module_param(svc_tcp_rx_loan_pages, bool, 0644);
 MODULE_PARM_DESC(svc_tcp_rx_loan_pages,
 		 "Loan TCP receive pages to eligible RPC requests (default: Y)");
 
+#if IS_ENABLED(CONFIG_KUNIT)
+static enum svc_tcp_rx_kunit_fault svc_tcp_rx_kunit_fault;
+static unsigned int svc_tcp_rx_kunit_fault_skip;
+static u32 svc_tcp_rx_kunit_fault_acquired;
+static u32 svc_tcp_rx_kunit_fault_released;
+
+void svc_tcp_rx_kunit_fault_set(enum svc_tcp_rx_kunit_fault fault,
+				unsigned int skip)
+{
+	svc_tcp_rx_kunit_fault = fault;
+	svc_tcp_rx_kunit_fault_skip = skip;
+	svc_tcp_rx_kunit_fault_acquired = 0;
+	svc_tcp_rx_kunit_fault_released = 0;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_fault_set);
+
+void svc_tcp_rx_kunit_fault_observed(u32 *acquired, u32 *released)
+{
+	*acquired = svc_tcp_rx_kunit_fault_acquired;
+	*released = svc_tcp_rx_kunit_fault_released;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_fault_observed);
+
+static bool
+svc_tcp_rx_kunit_should_fail(enum svc_tcp_rx_kunit_fault fault,
+			     const struct svc_tcp_rx_state *state)
+{
+	if (svc_tcp_rx_kunit_fault != fault)
+		return false;
+	if (svc_tcp_rx_kunit_fault_skip) {
+		svc_tcp_rx_kunit_fault_skip--;
+		return false;
+	}
+	svc_tcp_rx_kunit_fault = SVC_TCP_RX_KUNIT_FAULT_NONE;
+	svc_tcp_rx_kunit_fault_acquired = state->refs_acquired;
+	svc_tcp_rx_kunit_fault_released = state->refs_released;
+	return true;
+}
+#endif
+
 /*
  * For UDP:
  * 1 for header page
@@ -228,6 +268,11 @@ static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
 	    offset >= PAGE_SIZE || len > PAGE_SIZE - offset ||
 	    check_add_overflow(state->body_bytes, len, &body_bytes))
 		return -EINVAL;
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (borrowed &&
+	    svc_tcp_rx_kunit_should_fail(SVC_TCP_RX_KUNIT_FAULT_APPEND, state))
+		return -EIO;
+#endif
 	if (svc_tcp_rx_can_coalesce(state, page, offset, borrowed, page_pool)) {
 		bvec = &state->bvec[state->count - 1];
 		bvec->bv_len += len;
@@ -280,7 +325,6 @@ static int svc_tcp_rx_copy_to_arena(struct page **pages, unsigned int capacity,
 {
 	unsigned int source_offset = 0;
 	unsigned int remaining = source->bv_len;
-
 	while (remaining) {
 		unsigned int page_index = body_offset >> PAGE_SHIFT;
 		unsigned int destination_offset = offset_in_page(body_offset);
@@ -314,12 +358,20 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 	for (index = 0; index < state->count; index++) {
 		struct bio_vec *bvec = &state->bvec[index];
 		int ret;
+#if IS_ENABLED(CONFIG_KUNIT)
+		enum svc_tcp_rx_kunit_fault fault =
+			SVC_TCP_RX_KUNIT_FAULT_MATERIALIZE;
+#endif
 
 		if (WARN_ON_ONCE(!bvec->bv_page || !bvec->bv_len ||
 				 bvec->bv_offset > PAGE_SIZE ||
 				 bvec->bv_len > PAGE_SIZE - bvec->bv_offset))
 			return -EINVAL;
 		if (test_bit(index, state->borrowed)) {
+#if IS_ENABLED(CONFIG_KUNIT)
+			if (svc_tcp_rx_kunit_should_fail(fault, state))
+				return -EFAULT;
+#endif
 			ret = svc_tcp_rx_copy_to_arena(pages, state->capacity,
 						       body_offset, bvec);
 			if (ret)
@@ -1354,8 +1406,8 @@ failed:
 	return NULL;
 }
 
-static int svc_tcp_restore_pages(struct svc_sock *svsk,
-				 struct svc_rqst *rqstp)
+VISIBLE_IF_KUNIT int svc_tcp_restore_pages(struct svc_sock *svsk,
+					   struct svc_rqst *rqstp)
 {
 	size_t len = svsk->sk_datalen;
 	unsigned int i, npages;
@@ -1383,8 +1435,10 @@ static int svc_tcp_restore_pages(struct svc_sock *svsk,
 	rqstp->rq_arg.head[0].iov_base = page_address(rqstp->rq_pages[0]);
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_restore_pages);
 
-static int svc_tcp_save_pages(struct svc_sock *svsk, struct svc_rqst *rqstp)
+VISIBLE_IF_KUNIT int svc_tcp_save_pages(struct svc_sock *svsk,
+					struct svc_rqst *rqstp)
 {
 	unsigned int i, len, npages;
 	int ret;
@@ -1403,8 +1457,9 @@ static int svc_tcp_save_pages(struct svc_sock *svsk, struct svc_rqst *rqstp)
 	ret = svc_tcp_rx_exchange(&rqstp->rq_tcp_rx, &svsk->sk_rx);
 	return ret;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_save_pages);
 
-static void svc_tcp_clear_pages(struct svc_sock *svsk)
+VISIBLE_IF_KUNIT void svc_tcp_clear_pages(struct svc_sock *svsk)
 {
 	unsigned int i, len, npages;
 
@@ -1429,6 +1484,7 @@ out:
 	svsk->sk_tcplen = 0;
 	svsk->sk_datalen = 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_clear_pages);
 
 static int receive_cb_reply(struct svc_sock *svsk, struct svc_rqst *rqstp)
 {
@@ -1470,6 +1526,13 @@ static void svc_tcp_fragment_received(struct svc_sock *svsk)
 	svsk->sk_tcplen = 0;
 	svsk->sk_marker = xdr_zero;
 }
+
+VISIBLE_IF_KUNIT void svc_tcp_recv_record_done(struct svc_sock *svsk)
+{
+	svsk->sk_datalen = 0;
+	svc_tcp_fragment_received(svsk);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_recv_record_done);
 
 /*
  * A non-final fragment carries four octets of marker and may carry
@@ -2133,7 +2196,8 @@ invalid:
 	return -EINVAL;
 }
 
-static int svc_tcp_rx_publish(struct svc_sock *svsk, struct svc_rqst *rqstp)
+VISIBLE_IF_KUNIT int svc_tcp_rx_publish(struct svc_sock *svsk,
+					struct svc_rqst *rqstp)
 {
 	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
 	struct xdr_buf *arg = &rqstp->rq_arg;
@@ -2185,6 +2249,7 @@ static int svc_tcp_rx_publish(struct svc_sock *svsk, struct svc_rqst *rqstp)
 				       SVC_TCP_RX_PUBLISH);
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_publish);
 
 /*
  * ->read_sock actor, called under the socket lock. sk_datalen is both
@@ -2307,6 +2372,30 @@ fault:
 	return consumed;
 }
 
+#if IS_ENABLED(CONFIG_KUNIT)
+int svc_tcp_recv_actor_kunit(struct svc_rqst *rqstp, unsigned int *frags,
+			     bool *complete, read_descriptor_t *desc,
+			     struct sk_buff *skb, unsigned int offset,
+			     size_t len)
+{
+	struct svc_tcp_recv_ctx ctx = {
+		.rqstp = rqstp,
+		.frags = *frags,
+		.complete = *complete,
+	};
+	void *arg = desc->arg.data;
+	int ret;
+
+	desc->arg.data = &ctx;
+	ret = svc_tcp_recv_actor(desc, skb, offset, len);
+	desc->arg.data = arg;
+	*frags = ctx.frags;
+	*complete = ctx.complete;
+	return ret;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_recv_actor_kunit);
+#endif
+
 static bool svc_tcp_at_urg_mark(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
@@ -2330,7 +2419,7 @@ static bool svc_tcp_at_urg_mark(struct sock *sk)
  * The state of a partial receive is preserved in the svc_sock for
  * the next call to svc_tcp_recvfrom.
  */
-static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
+VISIBLE_IF_KUNIT int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 {
 	struct svc_sock	*svsk =
 		container_of(rqstp->rq_xprt, struct svc_sock, sk_xprt);
@@ -2421,8 +2510,7 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 		len = receive_cb_reply(svsk, rqstp);
 
 	/* Reset TCP read info */
-	svsk->sk_datalen = 0;
-	svc_tcp_fragment_received(svsk);
+	svc_tcp_recv_record_done(svsk);
 
 	if (len < 0)
 		goto error;
@@ -2475,6 +2563,7 @@ err_noclose:
 	svc_xprt_received(rqstp->rq_xprt);
 	return 0;	/* record not complete */
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_recvfrom);
 
 /*
  * MSG_SPLICE_PAGES is used exclusively to reduce the number of

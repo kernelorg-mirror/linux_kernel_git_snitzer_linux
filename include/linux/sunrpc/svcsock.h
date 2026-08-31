@@ -145,6 +145,12 @@ void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state);
 #if IS_ENABLED(CONFIG_KUNIT)
 extern bool svc_tcp_rx_loan_pages;
 
+enum svc_tcp_rx_kunit_fault {
+	SVC_TCP_RX_KUNIT_FAULT_NONE,
+	SVC_TCP_RX_KUNIT_FAULT_APPEND,
+	SVC_TCP_RX_KUNIT_FAULT_MATERIALIZE,
+};
+
 int svc_tcp_rx_append_borrowed(struct svc_tcp_rx_state *state,
 			       struct page *page, unsigned int offset,
 			       unsigned int len, bool page_pool);
@@ -162,6 +168,19 @@ int svc_tcp_rx_abort(struct svc_sock *svsk, struct svc_rqst *rqstp,
 		     enum svc_tcp_rx_action action,
 		     enum svc_tcp_rx_reason reason);
 void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt);
+int svc_tcp_rx_publish(struct svc_sock *svsk, struct svc_rqst *rqstp);
+int svc_tcp_recv_actor_kunit(struct svc_rqst *rqstp, unsigned int *frags,
+			     bool *complete, read_descriptor_t *desc,
+			     struct sk_buff *skb, unsigned int offset,
+			     size_t len);
+int svc_tcp_restore_pages(struct svc_sock *svsk, struct svc_rqst *rqstp);
+int svc_tcp_save_pages(struct svc_sock *svsk, struct svc_rqst *rqstp);
+void svc_tcp_clear_pages(struct svc_sock *svsk);
+int svc_tcp_recvfrom(struct svc_rqst *rqstp);
+void svc_tcp_recv_record_done(struct svc_sock *svsk);
+void svc_tcp_rx_kunit_fault_set(enum svc_tcp_rx_kunit_fault fault,
+				unsigned int skip);
+void svc_tcp_rx_kunit_fault_observed(u32 *acquired, u32 *released);
 #endif
 
 /*
