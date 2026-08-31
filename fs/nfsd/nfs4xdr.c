@@ -861,9 +861,15 @@ nfsd4_decode_layoutreturn4(struct nfsd4_compoundargs *argp,
 		if (xdr_stream_decode_u32(argp->xdr, &lrp->lrf_body_len) < 0)
 			return nfserr_bad_xdr;
 		if (lrp->lrf_body_len > 0) {
-			lrp->lrf_body = xdr_inline_decode(argp->xdr, lrp->lrf_body_len);
-			if (!lrp->lrf_body)
+			__be32 *p = xdr_inline_decode(argp->xdr,
+						      lrp->lrf_body_len);
+
+			if (!p)
 				return nfserr_bad_xdr;
+			lrp->lrf_body = svcxdr_savemem(argp, p,
+						       lrp->lrf_body_len);
+			if (!lrp->lrf_body)
+				return nfserr_jukebox;
 		}
 		break;
 	case RETURN_FSID:
