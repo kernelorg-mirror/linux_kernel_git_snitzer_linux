@@ -4050,7 +4050,7 @@ static int shmem_rename2(const struct mnt_idmap *idmap,
 	return 0;
 }
 
-static int shmem_symlink(struct mnt_idmap *idmap, struct inode *dir,
+static int shmem_symlink(const struct mnt_idmap *idmap, struct inode *dir,
 			 struct dentry *dentry, const char *symname)
 {
 	int error;
