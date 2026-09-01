@@ -8041,7 +8041,7 @@ out:
 	return ret;
 }
 
-struct inode *btrfs_new_subvol_inode(struct mnt_idmap *idmap,
+struct inode *btrfs_new_subvol_inode(const struct mnt_idmap *idmap,
 				     struct inode *dir)
 {
 	struct inode *inode;
@@ -8559,7 +8559,7 @@ out_notrans:
 	return ret;
 }
 
-static struct inode *new_whiteout_inode(struct mnt_idmap *idmap,
+static struct inode *new_whiteout_inode(const struct mnt_idmap *idmap,
 					struct inode *dir)
 {
 	struct inode *inode;
@@ -8574,7 +8574,7 @@ static struct inode *new_whiteout_inode(struct mnt_idmap *idmap,
 	return inode;
 }
 
-static int btrfs_rename(struct mnt_idmap *idmap,
+static int btrfs_rename(const struct mnt_idmap *idmap,
 			struct inode *old_dir, struct dentry *old_dentry,
 			struct inode *new_dir, struct dentry *new_dentry,
 			unsigned int flags)
