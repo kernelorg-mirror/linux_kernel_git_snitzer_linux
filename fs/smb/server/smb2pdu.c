@@ -3695,7 +3695,7 @@ static int smb2_create_sd_buffer(struct ksmbd_work *work,
 }
 
 static int ksmbd_acls_fattr(struct smb_fattr *fattr,
-			    struct mnt_idmap *idmap,
+			    const struct mnt_idmap *idmap,
 			    struct inode *inode)
 {
 	struct posix_acl *acl;
