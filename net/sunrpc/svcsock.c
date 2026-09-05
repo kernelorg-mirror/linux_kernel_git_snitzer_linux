@@ -191,10 +191,15 @@ struct svc_tcp_rx_state *svc_tcp_rx_state_alloc(unsigned long capacity,
 	state->page_pool = bitmap_zalloc_node(entries, gfp, node);
 	if (!state->page_pool)
 		goto out_free_borrowed;
+	state->merged = bitmap_zalloc_node(entries, gfp, node);
+	if (!state->merged)
+		goto out_free_page_pool;
 	state->capacity = entries;
 	state->arena_pages = capacity;
 	return state;
 
+out_free_page_pool:
+	bitmap_free(state->page_pool);
 out_free_borrowed:
 	bitmap_free(state->borrowed);
 out_free_bvec:
@@ -211,6 +216,7 @@ static void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
 	struct bio_vec *bvec = state->bvec;
 	unsigned long *borrowed = state->borrowed;
 	unsigned long *page_pool = state->page_pool;
+	unsigned long *merged = state->merged;
 
 	if (WARN_ON_ONCE(!state->terminal || state->borrowed_count ||
 			 state->refs_acquired != state->refs_released))
@@ -222,6 +228,7 @@ static void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
 	state->bvec = bvec;
 	state->borrowed = borrowed;
 	state->page_pool = page_pool;
+	state->merged = merged;
 }
 
 static bool svc_tcp_rx_can_coalesce(const struct svc_tcp_rx_state *state,
@@ -352,9 +359,15 @@ static int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 			__clear_bit(index, state->borrowed);
 			state->refs_released++;
 			state->borrowed_count--;
-			state->borrowed_bytes -= bvec->bv_len;
-			state->copied_bytes += bvec->bv_len;
-			state->materialized_bytes += bvec->bv_len;
+			/*
+			 * A merge page's bytes were counted as copied when
+			 * they were copied into it; only a loan's bytes move.
+			 */
+			if (!__test_and_clear_bit(index, state->merged)) {
+				state->borrowed_bytes -= bvec->bv_len;
+				state->copied_bytes += bvec->bv_len;
+				state->materialized_bytes += bvec->bv_len;
+			}
 			if (test_bit(index, state->page_pool)) {
 				__clear_bit(index, state->page_pool);
 				state->page_pool_bytes -= bvec->bv_len;
@@ -367,7 +380,8 @@ static int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 			 state->page_pool_bytes ||
 			 state->refs_acquired != state->refs_released ||
 			 !bitmap_empty(state->borrowed, state->count) ||
-			 !bitmap_empty(state->page_pool, state->count)))
+			 !bitmap_empty(state->page_pool, state->count) ||
+			 !bitmap_empty(state->merged, state->count)))
 		return -EINVAL;
 	state->count = 0;
 	state->mode = SVC_TCP_RX_COPY;
@@ -391,7 +405,8 @@ static bool svc_tcp_rx_refs_valid(const struct svc_tcp_rx_state *state)
 			!state->page_pool_bytes;
 	if (bitmap_weight(state->borrowed, state->count) !=
 		state->borrowed_count ||
-	    !bitmap_subset(state->page_pool, state->borrowed, state->count))
+	    !bitmap_subset(state->page_pool, state->borrowed, state->count) ||
+	    !bitmap_subset(state->merged, state->borrowed, state->count))
 		return false;
 	for (index = 0; index < state->count; index++)
 		if (test_bit(index, state->borrowed) &&
@@ -416,6 +431,7 @@ static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 		put_page(state->bvec[index].bv_page);
 		__clear_bit(index, state->borrowed);
 		__clear_bit(index, state->page_pool);
+		__clear_bit(index, state->merged);
 		state->refs_released++;
 		state->borrowed_count--;
 	}
@@ -423,7 +439,8 @@ static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 	if (WARN_ON_ONCE(state->borrowed_count ||
 			 (state->count &&
 			  (!bitmap_empty(state->borrowed, state->count) ||
-			   !bitmap_empty(state->page_pool, state->count))) ||
+			   !bitmap_empty(state->page_pool, state->count) ||
+			   !bitmap_empty(state->merged, state->count))) ||
 			 state->refs_released != state->refs_acquired))
 		return -EINVAL;
 	return 0;
@@ -456,6 +473,7 @@ void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state)
 			return;
 		svc_tcp_rx_reset(state);
 	}
+	bitmap_free(state->merged);
 	bitmap_free(state->page_pool);
 	bitmap_free(state->borrowed);
 	kfree(state->bvec);
@@ -1597,6 +1615,12 @@ static int svc_tcp_rx_append_arena(struct svc_rqst *rqstp,
 				   struct svc_tcp_rx_state *state,
 				   u32 body_offset, unsigned int len)
 {
+	/*
+	 * An arena copy ends any merge top-up: the last bvec is no longer
+	 * the merge page, so borrowed bytes must not be copied into it.
+	 */
+	state->merge_fill = 0;
+
 	while (len) {
 		unsigned int page_index = body_offset >> PAGE_SHIFT;
 		unsigned int offset = offset_in_page(body_offset);
@@ -1773,6 +1797,129 @@ static int svc_tcp_rx_copy_segment(struct svc_tcp_rx_walk *walk,
 				   start, len);
 }
 
+/* Undo the most recent append; the caller re-lands its bytes elsewhere. */
+static void svc_tcp_rx_retract_last(struct svc_tcp_rx_state *state)
+{
+	unsigned int index = --state->count;
+	struct bio_vec *bvec = &state->bvec[index];
+
+	state->body_bytes -= bvec->bv_len;
+	if (__test_and_clear_bit(index, state->borrowed)) {
+		if (__test_and_clear_bit(index, state->merged))
+			state->copied_bytes -= bvec->bv_len;
+		else
+			state->borrowed_bytes -= bvec->bv_len;
+		if (__test_and_clear_bit(index, state->page_pool))
+			state->page_pool_bytes -= bvec->bv_len;
+		state->borrowed_count--;
+		state->refs_released++;
+		put_page(bvec->bv_page);
+	} else {
+		state->copied_bytes -= bvec->bv_len;
+	}
+}
+
+/*
+ * A small copied segment (the locked-skb-head case) that interrupts
+ * borrowed flow splits a page's worth of the stream three ways --
+ * partial borrowed tail, copied sliver at an unrelated arena offset,
+ * partial borrowed resume -- and that geometry costs the whole WRITE
+ * its direct path: the sub-page bvec lengths cannot satisfy the block
+ * layer's split alignment no matter where the pieces sit.
+ *
+ * Instead, land the copied bytes phase-adjacent to the loaned run:
+ * pull the trailing partial-page borrowed bytes back, copy them plus
+ * the locked bytes into a fresh page, and let the following borrowed
+ * bytes top the page up (state->merge_fill, consumed by
+ * svc_tcp_rx_borrow_segment()) -- publishing one whole-page bvec in
+ * place of the three-way split.  The page is appended as "borrowed"
+ * so its lifetime and any later materialize fallback follow the
+ * normal reference machinery, while the byte accounting records the
+ * truth: these bytes were copied.
+ */
+static int svc_tcp_rx_copy_segment_merged(struct svc_tcp_rx_walk *walk,
+					  u32 start, unsigned int len,
+					  enum svc_tcp_rx_reason reason)
+{
+	struct svc_tcp_rx_state *state = walk->rqstp->rq_tcp_rx;
+	struct bio_vec *last;
+	struct page *page;
+	unsigned int tail;
+	int ret;
+
+	if (WARN_ON_ONCE(state->body_bytes !=
+			 walk->body_base + start - walk->first))
+		return -EINVAL;
+	if (state->mode != SVC_TCP_RX_MIXED || state->merge_fill)
+		goto plain;
+	tail = 0;
+	last = NULL;
+	if (state->count) {
+		last = &state->bvec[state->count - 1];
+		if (test_bit(state->count - 1, state->borrowed) &&
+		    last->bv_offset + last->bv_len < PAGE_SIZE)
+			tail = last->bv_len;
+	}
+	if (tail + len >= PAGE_SIZE)
+		goto plain;
+
+	page = alloc_page(GFP_KERNEL | __GFP_NOWARN);
+	if (!page)
+		goto plain;
+
+	if (tail)
+		memcpy_page(page, 0, last->bv_page, last->bv_offset, tail);
+	if (skb_copy_bits(walk->root, start, page_address(page) + tail, len)) {
+		__free_page(page);
+		state->reason = SVC_TCP_RX_REASON_COPY_FAULT;
+		return -EFAULT;
+	}
+
+	if (tail)
+		svc_tcp_rx_retract_last(state);
+	ret = svc_tcp_rx_append(state, page, 0, tail + len, true, false);
+	if (ret) {
+		/*
+		 * Land the assembled bytes in the linear arena instead;
+		 * the merge page already holds them (the retracted tail
+		 * may span a previous skb, so it cannot be re-copied
+		 * from walk->root).
+		 */
+		struct iov_iter iter;
+		u32 body_offset = state->body_bytes;
+
+		svc_tcp_recv_iter_init(walk->rqstp, &iter, body_offset,
+				       tail + len);
+		if (copy_to_iter(page_address(page), tail + len, &iter) !=
+		    tail + len)
+			ret = -EFAULT;
+		else
+			ret = svc_tcp_rx_append_arena(walk->rqstp, state,
+						      body_offset, tail + len);
+		__free_page(page);
+		if (ret)
+			return ret;
+		if (state->reason == SVC_TCP_RX_REASON_NONE)
+			state->reason = reason;
+		return 0;
+	}
+	__free_page(page);	/* append took its own reference */
+	/*
+	 * the page holds copies; keep the byte accounting honest, and mark
+	 * the entry so that whatever takes it back out of the table knows
+	 */
+	__set_bit(state->count - 1, state->merged);
+	state->borrowed_bytes -= tail + len;
+	state->copied_bytes += tail + len;
+	state->merge_fill = PAGE_SIZE - (tail + len);
+	if (state->reason == SVC_TCP_RX_REASON_NONE)
+		state->reason = reason;
+	return 0;
+
+plain:
+	return svc_tcp_rx_copy_segment(walk, start, len, reason);
+}
+
 static int svc_tcp_rx_borrow_segment(struct svc_tcp_rx_walk *walk,
 				     u32 start, struct page *page,
 				     unsigned int offset, unsigned int len)
@@ -1795,6 +1942,39 @@ static int svc_tcp_rx_borrow_segment(struct svc_tcp_rx_walk *walk,
 			return svc_tcp_rx_copy_segment(walk, start + consumed,
 						       len - consumed,
 						       SVC_TCP_RX_REASON_CAPACITY);
+		if (state->merge_fill) {
+			/*
+			 * Top up the merge page started by
+			 * svc_tcp_rx_copy_segment_merged() so it publishes
+			 * as one whole-page bvec.
+			 */
+			struct page *mpage = state->bvec[state->count - 1].bv_page;
+			unsigned int fill_off = PAGE_SIZE - state->merge_fill;
+
+			take = min(take, state->merge_fill);
+			memcpy_page(mpage, fill_off, span_page, page_offset,
+				    take);
+			ret = svc_tcp_rx_append(state, mpage, fill_off, take,
+						true, false);
+			if (ret == -ENOSPC) {
+				state->merge_fill = 0;
+				ret = svc_tcp_rx_materialize_fallback(walk,
+						SVC_TCP_RX_REASON_CAPACITY);
+				if (ret)
+					return ret;
+				return svc_tcp_rx_copy_segment(walk,
+						start + consumed,
+						len - consumed,
+						SVC_TCP_RX_REASON_CAPACITY);
+			}
+			if (ret)
+				return ret;
+			state->borrowed_bytes -= take;
+			state->copied_bytes += take;
+			state->merge_fill -= take;
+			consumed += take;
+			continue;
+		}
 		ret = svc_tcp_rx_append_borrowed(state, span_page, page_offset,
 						 take, page_pool);
 		if (ret == -ENOSPC) {
@@ -1850,7 +2030,7 @@ static int svc_tcp_rx_walk_skb(struct svc_tcp_rx_walk *walk,
 			int ret;
 
 			if (skb_head_is_locked(skb)) {
-				ret = svc_tcp_rx_copy_segment(
+				ret = svc_tcp_rx_copy_segment_merged(
 					walk, lo, hi - lo,
 					SVC_TCP_RX_REASON_LOCKED_HEAD);
 			} else {

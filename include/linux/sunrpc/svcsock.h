@@ -60,6 +60,8 @@ struct svc_tcp_rx_state {
 	struct bio_vec		*bvec;
 	unsigned long		*borrowed;
 	unsigned long		*page_pool;
+	/* borrowed entries that are merge pages: their bytes count as copied */
+	unsigned long		*merged;
 	struct svc_rqst		*rqstp;
 	u32			capacity;
 	u32			count;
@@ -78,6 +80,8 @@ struct svc_tcp_rx_state {
 	u8			mode;
 	u8			reason;
 	bool			terminal;
+	/* bytes still to copy into the locked-head merge page */
+	u32			merge_fill;
 	/* pages in the copy arena (rq_pages); @capacity counts bvecs */
 	u32			arena_pages;
 } ____cacheline_aligned;
