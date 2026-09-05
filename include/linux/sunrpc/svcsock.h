@@ -76,6 +76,8 @@ struct svc_tcp_rx_state {
 	u8			mode;
 	u8			reason;
 	bool			terminal;
+	/* bytes still to copy into the locked-head merge page */
+	u32			merge_fill;
 } ____cacheline_aligned;
 
 /*
