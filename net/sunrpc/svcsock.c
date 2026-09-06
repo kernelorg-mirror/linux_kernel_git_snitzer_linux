@@ -61,6 +61,18 @@
 #define RPCDBG_FACILITY	RPCDBG_SVCXPRT
 
 /*
+ * Runtime kill-switch for TCP receive page loans.  When clear, every
+ * receive is classified SVC_TCP_RX_COPY (reason "disabled") and the
+ * payload is copied into rq_pages exactly as it was before loans
+ * existed.  Consulted once per RPC record at classification time, so
+ * flipping it never affects a record already in flight.
+ */
+static bool svc_tcp_rx_loan_pages __read_mostly = true;
+module_param(svc_tcp_rx_loan_pages, bool, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_loan_pages,
+		 "Loan TCP receive pages to eligible RPC requests (default: Y)");
+
+/*
  * For UDP:
  * 1 for header page
  * enough pages for RPCSVC_MAXPAYLOAD_UDP
@@ -1652,6 +1664,8 @@ svc_tcp_rx_classify(struct svc_sock *svsk, struct svc_rqst *rqstp)
 			 state->body_bytes != SVC_TCP_RX_FIXED_BYTES))
 		return SVC_TCP_RX_REASON_INVARIANT;
 	state->xid = be32_to_cpu(words[0]);
+	if (!READ_ONCE(svc_tcp_rx_loan_pages))
+		return SVC_TCP_RX_REASON_DISABLED;
 	if (test_bit(XPT_TLS_SESSION, &svsk->sk_xprt.xpt_flags))
 		return SVC_TCP_RX_REASON_TLS;
 	if (words[1] != rpc_call)
