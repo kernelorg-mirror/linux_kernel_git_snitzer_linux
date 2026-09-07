@@ -1471,6 +1471,12 @@ void nfs_writeback_update_inode(struct nfs_pgio_header *hdr)
 	struct nfs_fattr *fattr = &hdr->fattr;
 	struct inode *inode = hdr->inode;
 
+	/* LOCALIO direct completion invalidates under its existing inode lock. */
+	if (IS_ENABLED(CONFIG_NFS_LOCALIO) &&
+	    test_bit(NFS_IOHDR_ODIRECT, &hdr->flags) && !fattr->valid &&
+	    hdr->task.tk_ops && !hdr->task.tk_msg.rpc_proc)
+		return;
+
 	if (nfs_have_delegated_mtime(inode)) {
 		spin_lock(&inode->i_lock);
 		nfs_set_cache_invalid(inode, NFS_INO_INVALID_BLOCKS);
