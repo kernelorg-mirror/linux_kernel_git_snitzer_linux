@@ -789,6 +789,19 @@ static void nfs_direct_write_completion(struct nfs_pgio_header *hdr)
 
 	spin_lock(&inode->i_lock);
 	nfs_direct_file_adjust_size_locked(inode, dreq->io_start, dreq->count);
+	if (IS_ENABLED(CONFIG_NFS_LOCALIO) && !hdr->fattr.valid &&
+	    hdr->task.tk_ops && !hdr->task.tk_msg.rpc_proc) {
+		/* LOCALIO did not fetch post-op attributes for this direct write. */
+		nfs_fattr_set_barrier(&hdr->fattr);
+		NFS_I(inode)->attr_gencount = hdr->fattr.gencount;
+		if (nfs_have_delegated_mtime(inode))
+			nfs_set_cache_invalid(inode, NFS_INO_INVALID_BLOCKS);
+		else
+			nfs_post_op_update_inode_force_wcc_locked(inode, &hdr->fattr);
+		/* Revalidate even with an ordinary write delegation. */
+		NFS_I(inode)->cache_validity |= NFS_INO_INVALID_CHANGE |
+						NFS_INO_INVALID_SIZE;
+	}
 	nfs_update_delegated_mtime_locked(dreq->inode);
 	spin_unlock(&inode->i_lock);
 
