@@ -856,7 +856,10 @@ static void nfs_local_write_done(struct nfs_local_kiocb *iocb)
 static inline void nfs_local_write_iocb_done(struct nfs_local_kiocb *iocb)
 {
 	nfs_local_write_done(iocb);
-	nfs_local_vfs_getattr(iocb);
+	if (test_bit(NFS_IOHDR_ODIRECT, &iocb->hdr->flags))
+		iocb->hdr->fattr.valid = 0;
+	else
+		nfs_local_vfs_getattr(iocb);
 	nfs_local_pgio_release(iocb);
 }
 
