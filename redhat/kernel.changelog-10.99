@@ -1,3 +1,6 @@
+* Tue Sep 08 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-4]
+- NFS: flexfiles device notifications and caching for wide striped layouts
+
 * Mon Aug 24 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-3]
 - backfill upstream 7.3 commit ID and header updates for block/iomap DIO alignment fixes
 - NFSv4.1: zero referring call lists before decoding
