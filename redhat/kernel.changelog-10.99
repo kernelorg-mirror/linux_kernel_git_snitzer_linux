@@ -1,3 +1,10 @@
+* Wed Sep 09 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-5]
+- rebased Ben's 3 v7.1.8-2 changes ontop of his 24 patch series from v7.1.8-4
+- brd: iterate the bio by byte position, not bi_sector
+- zram: handle sub-page bvec segments without corrupting data
+- nfsd: fetch direct I/O alignment for files handed to the filecache
+- fix "NFSD: add NFSD_IO_DIRECT heuristic for small IO" to not clobber IOCB_DONTCACHE
+
 * Tue Sep 08 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-4]
 - NFS: flexfiles device notifications and caching for wide striped layouts
 
