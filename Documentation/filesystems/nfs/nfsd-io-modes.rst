@@ -245,6 +245,11 @@ Tracing:
                                      memory address aligned to the
                                      block device's dma_alignment; not
                                      split
+      nfsd_write_dio_gap_misaligned  the payload's pages have a gap
+                                     the device must split the I/O at,
+                                     at an offset that is not a
+                                     multiple of the offset alignment;
+                                     not split
 
     Enabling all of them but nfsd_write_dio_direct shows only the WRITEs
     that are not split, and why.

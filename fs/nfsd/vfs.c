@@ -1349,6 +1349,13 @@ static void nfsd_trace_write_dio(struct svc_rqst *rqstp, struct svc_fh *fhp,
 						    split->middle,
 						    split->suffix);
 		break;
+	case NFS_DIO_GAP_MISALIGNED:
+		trace_nfsd_write_dio_gap_misaligned(rqstp, fhp, offset, total,
+						    oa, ma, split->mem_offset,
+						    split->prefix,
+						    split->middle,
+						    split->suffix);
+		break;
 	}
 }
 
