@@ -32,35 +32,57 @@ nfs_dio_seg_init(struct nfs_dio_seg *seg, unsigned int direction,
 }
 
 /*
- * Is every bio_vec of @iter aligned to @mem_align in memory, both where it
- * starts and in how much of it the iterator covers, and the iterator's total
- * length to @len_align?  A vector built from a copied RPC receive buffer or
- * from a pinned O_DIRECT user buffer is contiguous after its first entry, so
- * only its ends can be misaligned; a vector of loaned receive pages is not,
- * each fragment may start and end anywhere in its page, so every one is
- * checked (the iov_iter_alignment() test).
+ * A vector built from a copied RPC receive buffer or from a pinned O_DIRECT
+ * user buffer is contiguous after its first entry, so only its ends can be
+ * misaligned.  A vector of loaned receive pages is not one contiguous
+ * page-tiled run: a fragment may end mid-page, or its successor may start at
+ * a non-zero page offset.  Two properties must hold before such an iterator
+ * may be issued as direct I/O:
+ *
+ * - every fragment's offset and length must satisfy the device's memory
+ *   alignment (the iov_iter_alignment() contract vs stx_dio_mem_align);
+ * - every interior discontinuity must land on an @offset_align multiple
+ *   (stx_dio_offset_align is never smaller than the logical block size).
+ *   On a queue with a virtual boundary (e.g. NVMe) each discontinuity
+ *   forces a bio split at that byte position, and bio_split_io_at() only
+ *   splits on a logical-block boundary: a discontinuity at a payload
+ *   position that is not a logical-block multiple strands a sub-sector
+ *   residue with no valid split point, and the submission would fail with
+ *   -EINVAL after any preceding split already wrote.
+ *
+ * One walk checks both: the alignment test must visit every fragment
+ * anyway, so the discontinuity test rides the same pass on data already in
+ * hand instead of a second O(nvecs) traversal, and the first violation of
+ * either property returns early.  A contiguous page-tiled payload has no
+ * interior discontinuities and is admitted on memory alignment alone.  The
+ * iterator's total length must also be an @offset_align multiple.
  */
 static bool
-nfs_dio_iter_aligned(const struct iov_iter *iter, u32 mem_align, u32 len_align)
+nfs_dio_iter_aligned_and_splittable(const struct iov_iter *iter,
+				    u32 mem_align, u32 offset_align)
 {
 	const struct bio_vec *bvec = iter->bvec;
 	size_t skip = iter->iov_offset;
-	size_t size = iter->count;
+	size_t left = iter->count;
+	loff_t pos = 0;
 
-	if (size & (len_align - 1))
+	if (left & (offset_align - 1))
 		return false;
-	do {
-		size_t len = bvec->bv_len - skip;
+	while (left) {
+		unsigned int off = bvec->bv_offset + skip;
+		size_t len = min_t(size_t, bvec->bv_len - skip, left);
 
-		if (len > size)
-			len = size;
-		if (((unsigned long)(bvec->bv_offset + skip) | len) &
-		    (mem_align - 1))
+		if ((off | len) & (mem_align - 1))
+			return false;
+		pos += len;
+		left -= len;
+		if (left &&
+		    (((off + len) | (bvec + 1)->bv_offset) & ~PAGE_MASK) &&
+		    (pos & (offset_align - 1)))
 			return false;
 		bvec++;
-		size -= len;
 		skip = 0;
-	} while (size);
+	}
 
 	return true;
 }
@@ -288,12 +310,14 @@ void nfs_dio_split(struct file *file, const struct nfs_dio_policy *policy,
 			 prefix, middle, iocb_flags);
 
 	/*
-	 * If the memory is not aligned, direct I/O is impossible for the
-	 * middle, so issue the entire payload as a single buffered segment:
-	 * splitting would only turn one buffered I/O into three.
+	 * If the memory is not aligned -- or the block stack could be forced
+	 * to split the payload at an interior discontinuity that is not
+	 * logical-block aligned -- direct I/O is impossible for the middle,
+	 * so issue the entire payload as a single buffered segment: splitting
+	 * would only turn one buffered I/O into three.
 	 */
-	if (!nfs_dio_iter_aligned(&split->segs[nsegs].iter, mem_align,
-				  offset_align)) {
+	if (!nfs_dio_iter_aligned_and_splittable(&split->segs[nsegs].iter,
+						 mem_align, offset_align)) {
 		disposition = NFS_DIO_MEM_MISALIGNED;
 		goto no_dio;
 	}
