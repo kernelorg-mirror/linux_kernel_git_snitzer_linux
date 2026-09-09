@@ -620,6 +620,7 @@ DEFINE_NFSD_WRITE_DIO_EVENT(no_alignment);
 DEFINE_NFSD_WRITE_DIO_EVENT(too_small);
 DEFINE_NFSD_WRITE_DIO_EVENT(no_middle);
 DEFINE_NFSD_WRITE_DIO_EVENT(mem_misaligned);
+DEFINE_NFSD_WRITE_DIO_EVENT(gap_misaligned);
 
 DECLARE_EVENT_CLASS(nfsd_read_dio_class,
 	TP_PROTO(struct svc_rqst *rqstp,

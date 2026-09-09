@@ -619,7 +619,8 @@ nfs_local_iocb_alloc(struct nfs_pgio_header *hdr,
 /*
  * Report a split through the tracepoints that predate the shared helper:
  * the geometry whenever one was computed, and "misaligned" when the payload
- * memory ruled the direct middle out.
+ * memory, its alignment or where its fragments' gaps fall, ruled the direct
+ * middle out.
  */
 static void
 nfs_local_dio_trace(struct nfs_local_kiocb *iocb, int rw, loff_t offset,
@@ -645,7 +646,8 @@ nfs_local_dio_trace(struct nfs_local_kiocb *iocb, int rw, loff_t offset,
 		trace_nfs_local_dio_read(inode, offset, len, &local_dio);
 	else
 		trace_nfs_local_dio_write(inode, offset, len, &local_dio);
-	if (disposition == NFS_DIO_MEM_MISALIGNED)
+	if (disposition == NFS_DIO_MEM_MISALIGNED ||
+	    disposition == NFS_DIO_GAP_MISALIGNED)
 		trace_nfs_local_dio_misaligned(inode, local_dio.middle_offset,
 					       local_dio.middle_len, &local_dio);
 }

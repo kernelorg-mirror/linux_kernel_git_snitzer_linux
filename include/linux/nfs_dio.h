@@ -21,6 +21,7 @@ enum nfs_dio_disposition {
 	NFS_DIO_NO_ALIGNMENT,	/* fs advertises no alignment: one segment */
 	NFS_DIO_TOO_SMALL,	/* len < max(offset_align, mem_align): one segment */
 	NFS_DIO_NO_MIDDLE,	/* no or tiny aligned middle: one segment */
+	NFS_DIO_GAP_MISALIGNED,	/* misplaced interior gap: one segment */
 };
 
 /* What the caller knows about the file, and wants from the split. */
