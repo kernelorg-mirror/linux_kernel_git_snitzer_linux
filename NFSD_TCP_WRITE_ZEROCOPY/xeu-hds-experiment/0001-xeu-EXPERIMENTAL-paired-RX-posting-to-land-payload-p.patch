@@ -1,0 +1,484 @@
+From e8f6176bad37bb18524bdfc2555f65a3ff9e2bb4 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@hammerspace.com>
+Date: Thu, 10 Sep 2026 12:46:36 -0400
+Subject: [PATCH] xeu: EXPERIMENTAL paired RX posting to land payload
+ page-aligned
+
+The E1 hands software payload at `headroom + parsed_header_length` --
+a header-length-dependent offset that is neither page- nor even
+4-byte-aligned (64 + 54 = 118; 118 & 3 == 2).  A consumer that wants to
+reference receive pages in place rather than copy them out of the socket
+-- NFSD's SUNRPC page loan -- is therefore handed payload it cannot
+submit as direct I/O, and every WRITE falls back to a copy.  That is
+what makes the loan series a no-op on this platform.
+
+This geometry is not a hardware limitation.  The RX submit descriptor
+already carries a per-buffer destination address and length (struct
+rx_sr_bd: dst_addr, len_rid_sid bits 19:0, up to 1 MB per buffer), the
+engine already spreads one frame over several buffers, and the driver
+already walks multi-buffer frames on receive (num_desc - 1 frags).  What
+produces the bad offsets is that xeu_rx_refill() posts one uniformly
+shaped buffer per frame: a whole page at dst_addr = dma_addr +
+XEU_RX_PAGE_HEADROOM, so headers and the start of payload necessarily
+share the first buffer.
+
+So approximate header-data split entirely in software: when hds_hdr_len
+is non-zero, post buffers in pairs -- a short header buffer at the usual
+headroom (the stack still gets a normally aligned linear head) followed
+by a payload buffer at offset 0 of its own page.  Bulk payload then
+begins page-aligned.
+
+Supporting changes:
+
+- struct xeu_sw_rx_desc records the offset and length each buffer was
+  posted with, and receive reads them back instead of assuming one fixed
+  in-page offset.  A ring may now mix buffer shapes; this is also the
+  part that keeps receive correct if the pairing ever goes out of phase.
+
+- xeu_rx_post_one() posts a single buffer with an explicit geometry, and
+  both the paired and the historical path go through it, so there is one
+  place where a descriptor is formed.
+
+- xeu_rx_hds_usable() refuses the pairing unless the largest frame the
+  MTU admits fits in one header plus one payload buffer: a frame needing
+  three buffers would consume an extra descriptor and leave every
+  subsequent frame's pairing out of phase.  xeu_change_mtu() refuses a
+  growth past that bound rather than silently degrading what is being
+  measured.
+
+- A one-shot per-ring report prints the posted header length beside the
+  parsed L0-L4 lengths the packet processor supplies, with num_desc and
+  the resulting linear length.  That is the measurement this patch
+  exists to take.
+
+Two things are deliberately left for hardware to answer, and both are
+why this defaults off.  RX_SR_BD_EOF is documented only as "End of frame
+indication" and this driver has always set it on every buffer, so its
+meaning on a mid-frame buffer is unestablished -- hence hds_hdr_eof, to
+try both without a rebuild.  And receive assumes the engine fills the
+posted header length before continuing (the conventional scatter
+semantic) rather than breaking at the parsed header boundary; set
+hds_hdr_len to the stream's exact header size, where both readings
+agree.  A wrong assumption shows up as checksum and data errors, never
+as silent misplacement.
+
+What this does not do: payload still lands one frame per page, so every
+inter-frame joint remains at a payload position that is not a multiple
+of the logical block size, and NFSD's direct-I/O admission gate will
+still demote the write.  Closing that needs payload coalescing across
+frames -- aggregating many frames' payload contiguously into one page,
+which the packet processor's per-flow GRO context state (1024 contexts,
+GRO_ADD_TO_AGG, unused by this driver) suggests may be reachable.  This
+patch establishes whether the placement half is reachable in software at
+all, which is the prerequisite for asking for the rest.
+
+Not tested on hardware: built warning-free against Linux 7.1.8 (W=1
+adds nothing over the unmodified driver) but no E1 was available.
+
+Assisted-by: Claude:claude-fable-5
+Signed-off-by: Mike Snitzer <snitzer@hammerspace.com>
+---
+ xeu_drv.c  | 273 +++++++++++++++++++++++++++++++++++++++++++++--------
+ xeu_drv.h  |   9 ++
+ xeu_ring.h |  12 +++
+ 3 files changed, 257 insertions(+), 37 deletions(-)
+
+diff --git xeu-esdk-v2.0.1.orig/xeu_drv.c xeu-esdk-v2.0.1/xeu_drv.c
+index a73a59b..b050998 100644
+--- xeu-esdk-v2.0.1.orig/xeu_drv.c
++++ xeu-esdk-v2.0.1/xeu_drv.c
+@@ -69,6 +69,45 @@ static unsigned int num_sa = 128;
+ module_param(num_sa, uint, XEU_PARM_RO);
+ MODULE_PARM_DESC(num_rings, "number of security associations");
+ 
++/*
++ * EXPERIMENTAL: approximate header-data split by posting RX buffers in
++ * pairs -- a short header buffer followed by a page-aligned payload
++ * buffer -- instead of one uniformly-offset buffer per frame.  The E1's
++ * RX submit descriptor already carries a per-buffer address and length
++ * and the engine already spreads one frame over several buffers (jumbo
++ * frames do it today), so no firmware change is needed to try this.
++ *
++ * Purpose: land bulk payload at offset 0 of its own page so a consumer
++ * that references receive pages in place (NFSD's SUNRPC page loan) sees
++ * page-aligned payload instead of payload starting at
++ * headroom + header_length.
++ *
++ * Zero (the default) posts exactly what this driver has always posted.
++ * Any non-zero value is the header-buffer length in bytes and should be
++ * set to the stream's actual L2+L3+L4 header size (54 for plain
++ * Ethernet/IPv4/TCP, 66 with TCP timestamps) -- see the caveats in
++ * xeu_rx_refill().  Load-time only: changing the posted geometry while
++ * a ring holds buffers would desynchronise it.
++ */
++static unsigned int hds_hdr_len;
++module_param(hds_hdr_len, uint, XEU_PARM_RO);
++MODULE_PARM_DESC(hds_hdr_len,
++		 "EXPERIMENTAL: header-buffer bytes for paired RX posting (0 = off)");
++
++/*
++ * Which descriptor of the pair carries RX_SR_BD_EOF.  The HSI documents
++ * the bit only as "End of frame indication" and this driver has always
++ * set it on every buffer, so its meaning for a mid-frame buffer is not
++ * established.  Default N clears it on the header buffer (reading it as
++ * "more buffers follow for this frame"); set Y to keep the historical
++ * every-buffer behaviour.  Exposed because this is the single unknown
++ * the experiment exists to resolve.
++ */
++static bool hds_hdr_eof;
++module_param(hds_hdr_eof, bool, XEU_PARM_RO);
++MODULE_PARM_DESC(hds_hdr_eof,
++		 "EXPERIMENTAL: set RX_SR_BD_EOF on the paired header buffer too");
++
+ #ifdef XEU_POLL
+ static unsigned int int_usecs = 1000;
+ module_param(int_usecs, uint, XEU_PARM_RO);
+@@ -450,54 +489,164 @@ static void xeu_rx_ring_page_pool_destroy(struct xeu_rx_ring *rxr)
+ 	}
+ }
+ 
++static void xeu_rx_sub_unmap_and_free(struct xeu_rx_ring *rxr,
++				      u16 start_sub_idx,
++				      u16 num_desc);
++
++/**
++ * xeu_rx_hds_usable - may this ring use paired header/payload posting?
++ * @dev: the netdev, for its MTU and for logging
++ *
++ * Paired posting requires every frame to land in exactly two buffers: a
++ * frame needing three would consume an extra descriptor and leave the
++ * ring's header/payload alternation out of phase for every frame after
++ * it.  So the largest frame the MTU admits must fit in one header plus
++ * one payload buffer.
++ *
++ * Return: true when paired posting may be used on this configuration.
++ */
++static bool xeu_rx_hds_usable(struct net_device *dev)
++{
++	unsigned int max_frame, capacity;
++
++	if (!hds_hdr_len)
++		return false;
++
++	if (hds_hdr_len > XEU_RX_PAGE_DATA_SIZE) {
++		netdev_err(dev, "hds_hdr_len=%u exceeds usable page bytes (%lu) - paired RX posting disabled\n",
++			   hds_hdr_len, (unsigned long)XEU_RX_PAGE_DATA_SIZE);
++		return false;
++	}
++
++	max_frame = dev->mtu + ETH_HLEN + VLAN_HLEN + ETH_FCS_LEN;
++	capacity = hds_hdr_len + XEU_RX_PAGE_PAYLOAD_SIZE;
++	if (max_frame > capacity) {
++		netdev_err(dev, "MTU %u needs %u frame bytes but a header+payload pair holds %u - paired RX posting disabled\n",
++			   dev->mtu, max_frame, capacity);
++		return false;
++	}
++
++	netdev_info(dev, "EXPERIMENTAL paired RX posting active: %u-byte header buffer (EOF %s) + page-aligned payload buffer\n",
++		    hds_hdr_len, hds_hdr_eof ? "set" : "clear");
++	return true;
++}
++
++/**
++ * xeu_rx_post_one - post a single RX buffer with an explicit geometry
++ * @rxr: RX ring
++ * @off: in-page offset to place the buffer at
++ * @len: buffer length to advertise to the engine
++ * @eof: whether to set RX_SR_BD_EOF on this descriptor
++ *
++ * Return: 0 on success, negative on page-pool exhaustion.
++ */
++static int xeu_rx_post_one(struct xeu_rx_ring *rxr, u32 off, u32 len, bool eof)
++{
++	struct xeu_ring *ring = &rxr->base;
++	struct xeu_sw_rx_desc *sw_rx_desc;
++	struct page *rx_page;
++	dma_addr_t dma_addr;
++	u8 ctrl;
++	u32 idx;
++
++	/* Allocate page from page pool */
++	rx_page = page_pool_alloc_pages(rxr->page_pool, GFP_ATOMIC);
++	if (unlikely(!rx_page)) {
++		netdev_err(ring->dev, "Failed to allocate Rx page from pool\n");
++		return -ENOMEM;
++	}
++
++	/* Get DMA address - already mapped by page pool */
++	dma_addr = page_pool_get_dma_addr(rx_page);
++
++	idx = ring->sr_prod_idx & ring->mask;
++	sw_rx_desc = &ring->rx_sw[idx];
++	sw_rx_desc->page = rx_page;
++	sw_rx_desc->buf_off = off;
++	sw_rx_desc->buf_len = len;
++
++	ctrl = eof ? RX_SR_BD_EOF : 0;
++#ifndef XEU_POLL
++	ctrl |= RX_SR_BD_INTR_EN;
++#endif
++
++	/* Fill the Rx Sub BD */
++	memset(&ring->rx_sr[idx], 0, sizeof(struct rx_sr_bd));
++	WRITE_ONCE(ring->rx_sr[idx].ring_profile, ring->dma_profile);
++	WRITE_ONCE(ring->rx_sr[idx].ctrl, ctrl);
++	WRITE_ONCE(ring->rx_sr[idx].dst_addr, dma_addr + off);
++	WRITE_ONCE(ring->rx_sr[idx].len_rid_sid, len);
++
++	/* Increment the tail */
++	ring->sr_prod_idx++;
++
++	return 0;
++}
++
+ /**
+  * xeu_rx_refill - Refill RX ring with pages from page pool
+  * @rxr: RX ring structure
+- * @n: Number of pages to allocate
++ * @n: Number of descriptors to fill
+  *
+  * Allocates pages from the page pool and populates the RX ring
+  * descriptors. Pages are already DMA mapped by the page pool.
+  * Updates the producer index and rings the doorbell when done.
+  *
+- * Return: Number of pages actually allocated
++ * Return: Number of descriptors actually filled
+  */
+ static int xeu_rx_refill(struct xeu_rx_ring *rxr, u32 n)
+ {
+ 	struct xeu_ring *ring = &rxr->base;
+-	struct xeu_sw_rx_desc *sw_rx_desc;
+-	struct page *rx_page;
+-	dma_addr_t dma_addr;
+-	u32 idx;
+ 	u16 i;
+ 
++	/*
++	 * EXPERIMENTAL paired posting: a short header buffer (at the usual
++	 * headroom, so the stack still gets a normally-aligned linear head)
++	 * followed by a payload buffer at offset 0 of its own page.
++	 *
++	 * Two properties keep this sound, and both are enforced elsewhere:
++	 *  - frames must fit in exactly two buffers, else a frame consuming
++	 *    three would leave the ring's pairing out of phase -- checked
++	 *    against the MTU by xeu_rx_hds_usable();
++	 *  - receive must not assume a uniform in-page offset -- it reads
++	 *    each buffer's posted geometry back from struct xeu_sw_rx_desc.
++	 *
++	 * What the engine does with a short first buffer is the open
++	 * question: if it fills the posted length and continues, the header
++	 * buffer holds hds_hdr_len bytes (headers plus the first payload
++	 * bytes when hds_hdr_len exceeds the real header size) and payload
++	 * resumes page-aligned in the second; if it instead breaks at the
++	 * parsed header boundary, the second buffer holds the whole payload.
++	 * Receive assumes the former -- the conventional scatter semantic --
++	 * so set hds_hdr_len to the stream's exact header size, where both
++	 * readings agree.  A wrong assumption shows up immediately as
++	 * checksum and data errors, never as silent misplacement, which is
++	 * why this defaults off and wants cmp-verified traffic.
++	 */
++	if (rxr->hds_active) {
++		for (i = 0; i + 1 < n; i += 2) {
++			if (xeu_rx_post_one(rxr, XEU_RX_PAGE_HEADROOM,
++					    hds_hdr_len, hds_hdr_eof))
++				goto finish_fill;
++			if (xeu_rx_post_one(rxr, 0,
++					    XEU_RX_PAGE_PAYLOAD_SIZE, true)) {
++				/*
++				 * Unpair the orphaned header buffer rather
++				 * than leave the ring out of phase.
++				 */
++				ring->sr_prod_idx--;
++				xeu_rx_sub_unmap_and_free(rxr,
++							  ring->sr_prod_idx, 1);
++				goto finish_fill;
++			}
++		}
++		goto finish_fill;
++	}
++
+ 	for (i = 0; i < n; i++) {
+-		/* Allocate page from page pool */
+-		rx_page = page_pool_alloc_pages(rxr->page_pool, GFP_ATOMIC);
+-		if (unlikely(!rx_page)) {
+-			netdev_err(ring->dev, "Failed to allocate Rx page from pool\n");
+-			goto finish_fill;
+-		}
+-
+-		/* Get DMA address - already mapped by page pool */
+-		dma_addr = page_pool_get_dma_addr(rx_page);
+-
+-		idx = ring->sr_prod_idx & ring->mask;
+-		sw_rx_desc = &ring->rx_sw[idx];
+-		sw_rx_desc->page = rx_page;
+-
+-		/* Fill the Rx Sub BD */
+-		memset(&ring->rx_sr[idx], 0, sizeof(struct rx_sr_bd));
+-		WRITE_ONCE(ring->rx_sr[idx].ring_profile, ring->dma_profile);
+-#ifdef XEU_POLL
+-		WRITE_ONCE(ring->rx_sr[idx].ctrl, RX_SR_BD_EOF);
+-#else
+-		WRITE_ONCE(ring->rx_sr[idx].ctrl, RX_SR_BD_EOF | RX_SR_BD_INTR_EN);
+-#endif
+-		WRITE_ONCE(ring->rx_sr[idx].dst_addr, dma_addr + XEU_RX_PAGE_HEADROOM);
+-		WRITE_ONCE(ring->rx_sr[idx].len_rid_sid, XEU_RX_PAGE_DATA_SIZE);
+-
+-		/* Increment the tail */
+-		ring->sr_prod_idx++;
++		if (xeu_rx_post_one(rxr, XEU_RX_PAGE_HEADROOM,
++				    XEU_RX_PAGE_DATA_SIZE, true))
++			break;
+ 	}
+ 
+ finish_fill:
+@@ -803,16 +952,45 @@ static int xeu_rx_poll(struct napi_struct *napi, int budget)
+ 			goto update_index;
+ 		}
+ 
+-		skb_reserve(skb, XEU_RX_PAGE_HEADROOM);
++		skb_reserve(skb, sw_rx_desc->buf_off);
+ 
+ 		/* Set linear data */
+ 		total_len = READ_ONCE(rx_cp->cmn.base.len) & RX_CR_LEN_MASK;
+-		linear_len = min_t(u32, total_len, XEU_RX_PAGE_DATA_SIZE);
++		linear_len = min_t(u32, total_len, sw_rx_desc->buf_len);
+ 		skb_put(skb, linear_len);
+ 
+ 		/* Mark SKB for page pool recycling */
+ 		skb_mark_for_recycle(skb);
+ 
++		/*
++		 * The experiment's decisive observation, reported once per
++		 * ring: the packet processor hands us the parsed per-layer
++		 * header lengths, so comparing their sum against the header
++		 * buffer we posted says which split the engine performed --
++		 * equal means it honoured the boundary, a posted length
++		 * larger than the parse means it simply filled the buffer
++		 * and the first payload bytes trail the headers.  num_desc
++		 * tells us whether it used the pair at all.
++		 */
++		if (unlikely(rxr->hds_active && !rxr->hds_reported)) {
++			u32 w8 = READ_ONCE(rx_cp->pre_hdr_prof_format_len_l0_l2);
++			u32 w9 = READ_ONCE(rx_cp->len_l3_l8);
++			u32 parsed;
++
++			parsed = ((w8 >> RX_CR_IN_L0_LEN_SHIFT) & RX_CR_IN_L0_LEN_MASK) +
++				 ((w8 >> RX_CR_IN_L1_LEN_SHIFT) & RX_CR_IN_L0_L2_LEN_MASK) +
++				 ((w8 >> RX_CR_IN_L2_LEN_SHIFT) & RX_CR_IN_L0_L2_LEN_MASK) +
++				 ((w9 >> RX_CR_IN_L3_LEN_SHIFT) & RX_CR_IN_L3_L8_LEN_MASK) +
++				 ((w9 >> RX_CR_IN_L4_LEN_SHIFT) & RX_CR_IN_L3_L8_LEN_MASK);
++
++			rxr->hds_reported = true;
++			netdev_info(net_dev,
++				    "paired RX posting: ring %u frame_len=%u num_desc=%u posted_hdr=%u parsed_hdr(L0-L4)=%u linear=%u payload_frag_off=%u\n",
++				    rxr->base.sw_ring_idx, total_len, num_desc,
++				    hds_hdr_len, parsed, linear_len,
++				    num_desc > 1 ? 0 : XEU_RX_PAGE_HEADROOM);
++		}
++
+ 		num_of_frags = num_desc - 1;
+ 		total_len -= linear_len;
+ 
+@@ -821,12 +999,12 @@ static int xeu_rx_poll(struct napi_struct *napi, int budget)
+ 			sub_idx = (sub_idx + 1) & ring->mask;
+ 			sw_rx_desc = &ring->rx_sw[sub_idx];
+ 
+-			frag_len = min_t(u32, total_len, XEU_RX_PAGE_DATA_SIZE);
++			frag_len = min_t(u32, total_len, sw_rx_desc->buf_len);
+ 
+ 			skb_add_rx_frag(skb,
+ 					frag_idx,
+ 					sw_rx_desc->page,
+-					XEU_RX_PAGE_HEADROOM,
++					sw_rx_desc->buf_off,
+ 					frag_len,
+ 					PAGE_SIZE);
+ 
+@@ -1021,6 +1199,20 @@ static int xeu_change_mtu(struct net_device *dev, int new_mtu)
+ 	struct xeu_dev *priv = netdev_priv(dev);
+ 	int rc = 0;
+ 
++	/*
++	 * Paired RX posting is only sound while a frame fits in one
++	 * header plus one payload buffer; growing past that would put the
++	 * rings' alternation out of phase.  Refuse rather than silently
++	 * degrade what the experiment is measuring.
++	 */
++	if (priv->rx_rings && priv->rx_rings[0].hds_active &&
++	    new_mtu + ETH_HLEN + VLAN_HLEN + ETH_FCS_LEN >
++	    hds_hdr_len + XEU_RX_PAGE_PAYLOAD_SIZE) {
++		netdev_err(dev, "MTU %d does not fit paired RX posting (hds_hdr_len=%u); reload without hds_hdr_len to raise it\n",
++			   new_mtu, hds_hdr_len);
++		return -EINVAL;
++	}
++
+ 	/* The MRU value is MTU plus ETH header (eth fcs is stripped by MAC) */
+ 	rc = xsl_rm_mru_set(priv->vnic, new_mtu + ETH_HLEN + VLAN_HLEN);
+ 	if (unlikely(rc)) {
+@@ -1091,6 +1283,13 @@ static int xeu_setup_ring(struct net_device *dev, u8 queue_id, bool is_rx)
+ 			return err;
+ 		}
+ 
++		/*
++		 * Decide the posted geometry once per ring, before any buffer
++		 * is posted: the pairing must not change underneath a ring
++		 * that already holds buffers.
++		 */
++		rxr->hds_active = xeu_rx_hds_usable(dev);
++
+ 		u64_stats_init(&rxr->stats_rx_sync);
+ 	} else {
+ 		/* TX ring setup unchanged */
+diff --git xeu-esdk-v2.0.1.orig/xeu_drv.h xeu-esdk-v2.0.1/xeu_drv.h
+index daf870d..44b28b7 100644
+--- xeu-esdk-v2.0.1.orig/xeu_drv.h
++++ xeu-esdk-v2.0.1/xeu_drv.h
+@@ -57,6 +57,15 @@
+ #define XEU_RX_PAGE_SHARED_INFO_SIZE (SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
+ #define XEU_RX_PAGE_DATA_SIZE (PAGE_SIZE - XEU_RX_PAGE_HEADROOM - XEU_RX_PAGE_SHARED_INFO_SIZE)
+ 
++/*
++ * A paired payload buffer (hds_hdr_len) starts at offset 0 so the bytes a
++ * consumer references are page-aligned, and still leaves the tail clear
++ * for skb_shared_info -- a payload page is normally only ever a frag, but
++ * napi_build_skb() would place shared info there if one ever became a
++ * frame's first buffer.
++ */
++#define XEU_RX_PAGE_PAYLOAD_SIZE (PAGE_SIZE - XEU_RX_PAGE_SHARED_INFO_SIZE)
++
+ #define XEU_DEFAULT_RING_SIZE 4096
+ #define XEU_MAX_RING_NUM 128
+ #define XEU_MSIX_PER_RING 1
+diff --git xeu-esdk-v2.0.1.orig/xeu_ring.h xeu-esdk-v2.0.1/xeu_ring.h
+index da5b764..6992f7e 100644
+--- xeu-esdk-v2.0.1.orig/xeu_ring.h
++++ xeu-esdk-v2.0.1/xeu_ring.h
+@@ -72,6 +72,13 @@
+ 
+ struct xeu_sw_rx_desc {
+ 	struct page *page;
++	/*
++	 * Geometry this buffer was posted with.  Receive reads it back
++	 * instead of assuming one fixed in-page offset for every buffer,
++	 * so a ring may mix buffer shapes (see hds_hdr_len).
++	 */
++	u32 buf_off;
++	u32 buf_len;
+ };
+ 
+ struct xeu_sw_tx_desc {
+@@ -230,6 +237,11 @@ struct xeu_rx_ring {
+ 	u64              pp_drops;
+ 	struct page_pool      *page_pool; /* Page pool for RX buffer management */
+ 
++	/* EXPERIMENTAL paired header/payload posting is in force (hds_hdr_len) */
++	bool             hds_active;
++	/* the one-shot geometry report has been emitted for this ring */
++	bool             hds_reported;
++
+ 	/* Below indices are for completion ring */
+ 	/* Estimated index of the producer */
+ 	u16              prod_index __xsl_cache_aligned;
+-- 
+2.52.0
+
