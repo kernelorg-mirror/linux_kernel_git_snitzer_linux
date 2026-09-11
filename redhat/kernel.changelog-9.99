@@ -1,3 +1,7 @@
+* Fri Sep 11 2026 Mike Snitzer [6.12.93-5]
+- NFS: defer the final superblock deactivation
+- redhat/kernel.spec: add missing BuildRequires deps needed for perf
+
 * Tue Jul 14 2026 Mike Snitzer [6.12.93-4]
 - NFS fixes through nfs-for-7.2-2
 - NFSD fixes through nfsd-7.2 and only select cel/nfsd-next fixes
