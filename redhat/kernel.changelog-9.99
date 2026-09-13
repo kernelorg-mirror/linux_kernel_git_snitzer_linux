@@ -1,3 +1,7 @@
+* Mon Sep 14 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-6]
+- redhat: move .gitlab-ci.yml to redhat/upstream-ci.yml.disabled
+- first use of HS's kernel-rpmtree scripts to audit, rebase and release all topic branches
+
 * Fri Sep 11 2026 Mike Snitzer [6.12.93-5]
 - NFS: defer the final superblock deactivation
 - redhat/kernel.spec: add missing BuildRequires deps needed for perf
