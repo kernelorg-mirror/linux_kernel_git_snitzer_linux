@@ -1,3 +1,10 @@
+* Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-1]
+- Rebase all branches on kernel-7.1.13-0
+- Drop 2 NFS FREE_STATEID fixes from nfs-for-7.2-3 that landed in 7.1.13
+- Collapse nfs-for-7.2-1 into nfs-for-7.2-3; its remaining commits are in 7.1.13
+- vfs-7.2-merge is now linear: the 3 upstream vfs-7.2-rc1 tag merges did not
+  survive the rebase, their commits did
+
 * Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-0]
 - Linux v7.1.13
 
