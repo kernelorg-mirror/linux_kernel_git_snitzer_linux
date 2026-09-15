@@ -343,7 +343,19 @@ static int __init crypto_rng_init(void)
 
 static void __exit crypto_rng_exit(void)
 {
+	int err;
+
+	/* Drop the /dev/random override before freeing what it uses: while the
+	 * hook is registered, crypto_devrandom_read_iter() can hold a reference
+	 * via crypto_get_default_rng(), and crypto_del_rng() then refuses with
+	 * -EBUSY and leaks the RNG. crypto_reseed_rng is freed with no refcount
+	 * check at all, so it depends on this too.
+	 */
 	random_unregister_extrng();
+
+	err = crypto_del_default_rng();
+	if (err)
+		pr_err("Failed delete default RNG: %d\n", err);
 }
 
 late_initcall(crypto_rng_init);
