@@ -74,6 +74,8 @@ struct nfs_client {
 	u64			cl_clientid;	/* constant */
 	nfs4_verifier		cl_confirm;	/* Clientid verifier */
 	unsigned long		cl_state;
+	/* bumped on each CB_NOTIFY_DEVICEID CHANGE for this client */
+	atomic_t		cl_deviceid_change_epoch;
 
 	spinlock_t		cl_lock;
 
@@ -101,6 +103,8 @@ struct nfs_client {
 	/* The flags used for obtaining the clientid during EXCHANGE_ID */
 	u32			cl_exchange_flags;
 	struct nfs4_session	*cl_session;	/* shared session */
+	/* CB_NOTIFY_DEVICEID DELETE suspects, protected by cl_lock */
+	struct list_head	cl_deviceid_deletes;
 	bool			cl_preserve_clid;
 	struct nfs41_server_owner *cl_serverowner;
 	struct nfs41_server_scope *cl_serverscope;
@@ -279,6 +283,7 @@ struct nfs_server {
 	void (*destroy)(struct nfs_server *);
 
 	atomic_t active; /* Keep trace of any activity to this server */
+	struct work_struct	deactivate_work; /* deferred final deactivate_super() */
 
 	/* mountd-related mount options */
 	struct sockaddr_storage	mountd_address;
