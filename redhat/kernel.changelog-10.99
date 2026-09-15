@@ -1,3 +1,6 @@
+* Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-0]
+- Linux v7.1.13
+
 * Sun Aug 09 2026 Justin M. Forbes <jforbes@fedoraproject.org> [7.1.8-0]
 - Config updates for 7.1.8 (Justin M. Forbes)
 - Add to BugsFixed (Justin M. Forbes)
