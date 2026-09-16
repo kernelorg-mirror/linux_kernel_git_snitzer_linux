@@ -99,7 +99,6 @@ struct nfs4_ff_layout_mirror {
 	u32				dss_count;
 	struct nfs4_ff_layout_ds_stripe *dss;
 	refcount_t			ref;
-	spinlock_t			lock;
 	unsigned long			flags;
 	u32				report_interval;
 };
