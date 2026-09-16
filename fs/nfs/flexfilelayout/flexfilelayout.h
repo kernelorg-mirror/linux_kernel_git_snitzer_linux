@@ -14,6 +14,7 @@
 #define FF_FLAGS_NO_IO_THRU_MDS  2
 #define FF_FLAGS_NO_READ_IO      4
 
+#include <linux/cache.h>
 #include <linux/refcount.h>
 #include "../pnfs.h"
 
@@ -86,8 +87,17 @@ struct nfs4_ff_layout_ds_stripe {
 	const struct cred __rcu		*ro_cred;
 	const struct cred __rcu		*rw_cred;
 	struct nfs_file_localio		nfl;
-	/* Protects read_stat, write_stat and start_time below */
-	spinlock_t			lock;
+	/*
+	 * Protects read_stat, write_stat and start_time below.
+	 *
+	 * Cacheline aligned so that the layoutstats accounting done on
+	 * every I/O to this stripe does not share cachelines with the
+	 * read-mostly members above, nor with the neighbouring stripes
+	 * in mirror->dss[]: aligning the first member of the guarded
+	 * set also rounds sizeof() up to a multiple of the cacheline,
+	 * which is what makes the array stride line-aligned.
+	 */
+	spinlock_t			lock ____cacheline_aligned_in_smp;
 	struct nfs4_ff_layoutstat	read_stat;
 	struct nfs4_ff_layoutstat	write_stat;
 	ktime_t				start_time;
