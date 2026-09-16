@@ -230,7 +230,6 @@ struct svc_rdma_write_info {
 	unsigned int		wi_next_off;
 
 	struct svc_rdma_chunk_ctxt	wi_cc;
-	struct work_struct	wi_work;
 };
 
 struct svc_rdma_send_ctxt {
@@ -328,6 +327,7 @@ extern int svc_rdma_result_payload(struct svc_rqst *rqstp, unsigned int offset,
 				   unsigned int length);
 
 /* svc_rdma_transport.c */
+extern void svc_rdma_xprt_deferred_close(struct svcxprt_rdma *rdma);
 extern struct svc_xprt_class svc_rdma_class;
 #ifdef CONFIG_SUNRPC_BACKCHANNEL
 extern struct svc_xprt_class svc_rdma_bc_class;
