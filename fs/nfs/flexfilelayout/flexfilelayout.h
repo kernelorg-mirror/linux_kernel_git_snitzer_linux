@@ -64,9 +64,13 @@ struct nfs4_ff_io_stat {
 	ktime_t				aggregate_completion_time;
 };
 
+/*
+ * Both members are serialised by the enclosing stripe's
+ * nfs4_ff_layout_ds_stripe::lock; see nfs4_ff_{start,end}_busy_timer().
+ */
 struct nfs4_ff_busy_timer {
 	ktime_t start_time;
-	atomic_t n_ops;
+	int n_ops;
 };
 
 struct nfs4_ff_layoutstat {
