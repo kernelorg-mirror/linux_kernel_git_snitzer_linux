@@ -477,7 +477,7 @@ extern int nfs_local_doio(struct nfs_client *,
 			  const struct rpc_call_ops *);
 extern int nfs_local_commit(struct nfsd_file *,
 			    struct nfs_commit_data *,
-			    const struct rpc_call_ops *, int);
+			    const struct rpc_call_ops *);
 extern bool nfs_server_is_local(const struct nfs_client *clp);
 
 #else /* CONFIG_NFS_LOCALIO */
@@ -499,7 +499,7 @@ static inline int nfs_local_doio(struct nfs_client *clp,
 }
 static inline int nfs_local_commit(struct nfsd_file *localio,
 				struct nfs_commit_data *data,
-				const struct rpc_call_ops *call_ops, int how)
+				const struct rpc_call_ops *call_ops)
 {
 	return -EINVAL;
 }
@@ -520,6 +520,7 @@ extern int __init register_nfs_fs(void);
 extern void __exit unregister_nfs_fs(void);
 extern bool nfs_sb_active(struct super_block *sb);
 extern void nfs_sb_deactive(struct super_block *sb);
+extern void nfs_sb_deactive_workfn(struct work_struct *work);
 extern int nfs_client_for_each_server(struct nfs_client *clp,
 				      int (*fn)(struct nfs_server *, void *),
 				      void *data);
