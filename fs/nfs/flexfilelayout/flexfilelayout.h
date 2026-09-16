@@ -64,18 +64,22 @@ struct nfs4_ff_io_stat {
 };
 
 /*
- * Both members are serialised by the enclosing stripe's
- * nfs4_ff_layout_ds_stripe::lock; see nfs4_ff_{start,end}_busy_timer().
+ * One direction's statistics for one stripe, with the lock that guards them.
+ *
+ * Exactly one cacheline, and aligned to one, so that an I/O dirties a single
+ * line: the lock, the in-flight count and every counter it touches are all in
+ * here, and the other direction's copy is in a line of its own.  Adding to
+ * this structure, or letting CONFIG_DEBUG_SPINLOCK or CONFIG_PROVE_LOCKING
+ * fatten spinlock_t, spills it into a second line.
  */
-struct nfs4_ff_busy_timer {
-	ktime_t start_time;
-	int ops_in_flight;
-};
-
 struct nfs4_ff_layoutstat {
-	struct nfs4_ff_io_stat io_stat;
-	struct nfs4_ff_busy_timer busy_timer;
-};
+	/* Protects every other member of this structure */
+	spinlock_t			lock;
+	int				ops_in_flight;
+	struct nfs4_ff_io_stat		io_stat;
+	/* Start of the interval io_stat.total_busy_time accrues */
+	ktime_t				busy_start_time;
+} ____cacheline_aligned_in_smp;
 
 /*
  * ffil_ops_requested is not stored.  An op is in flight from the moment it is
@@ -91,8 +95,7 @@ struct nfs4_ff_layoutstat {
 static inline __u64
 nfs4_ff_ops_requested(const struct nfs4_ff_layoutstat *layoutstat)
 {
-	return layoutstat->io_stat.ops_completed +
-	       layoutstat->busy_timer.ops_in_flight;
+	return layoutstat->io_stat.ops_completed + layoutstat->ops_in_flight;
 }
 
 struct nfs4_ff_layout_mirror;
@@ -108,21 +111,18 @@ struct nfs4_ff_layout_ds_stripe {
 	const struct cred __rcu		*ro_cred;
 	const struct cred __rcu		*rw_cred;
 	struct nfs_file_localio		nfl;
-	/*
-	 * Protects read_stat and write_stat below.
-	 *
-	 * Cacheline aligned so that the layoutstats accounting done on
-	 * every I/O to this stripe does not share cachelines with the
-	 * read-mostly members above, nor with the neighbouring stripes
-	 * in mirror->dss[]: aligning the first member of the guarded
-	 * set also rounds sizeof() up to a multiple of the cacheline,
-	 * which is what makes the array stride line-aligned.
-	 */
-	spinlock_t			lock ____cacheline_aligned_in_smp;
-	struct nfs4_ff_layoutstat	read_stat;
-	struct nfs4_ff_layoutstat	write_stat;
 	/* Published once by the first I/O; see nfs4_ff_layoutstat_set_start_time() */
 	ktime_t				start_time;
+	/*
+	 * A line each, and each carrying its own lock, so that a read and a
+	 * write to this stripe neither serialise against each other nor
+	 * share a line.  Their alignment also rounds this structure's
+	 * sizeof() up to a multiple of the cacheline, which is what keeps
+	 * the mirror->dss[] stride line-aligned and so stops stripe i
+	 * sharing a line with stripe i+1.
+	 */
+	struct nfs4_ff_layoutstat	read_stat;
+	struct nfs4_ff_layoutstat	write_stat;
 };
 
 struct nfs4_ff_layout_mirror {
