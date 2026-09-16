@@ -88,7 +88,7 @@ struct nfs4_ff_layout_ds_stripe {
 	const struct cred __rcu		*rw_cred;
 	struct nfs_file_localio		nfl;
 	/*
-	 * Protects read_stat, write_stat and start_time below.
+	 * Protects read_stat and write_stat below.
 	 *
 	 * Cacheline aligned so that the layoutstats accounting done on
 	 * every I/O to this stripe does not share cachelines with the
@@ -100,6 +100,7 @@ struct nfs4_ff_layout_ds_stripe {
 	spinlock_t			lock ____cacheline_aligned_in_smp;
 	struct nfs4_ff_layoutstat	read_stat;
 	struct nfs4_ff_layoutstat	write_stat;
+	/* Published once by the first I/O; see nfs4_ff_layoutstat_set_start_time() */
 	ktime_t				start_time;
 };
 
