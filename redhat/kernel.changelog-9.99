@@ -1,6 +1,39 @@
 * Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.110-0]
 - Linux v6.12.110
 
+* Mon Sep 14 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-6]
+- redhat: move .gitlab-ci.yml to redhat/upstream-ci.yml.disabled
+- first use of HS's kernel-rpmtree scripts to audit, rebase and release all topic branches
+
+* Fri Sep 11 2026 Mike Snitzer [6.12.93-5]
+- NFS: defer the final superblock deactivation
+- redhat/kernel.spec: add missing BuildRequires deps needed for perf
+
+* Tue Jul 14 2026 Mike Snitzer [6.12.93-4]
+- NFS fixes through nfs-for-7.2-2
+- NFSD fixes through nfsd-7.2 and only select cel/nfsd-next fixes
+- backports are getting more painful, really trying to only take in fixes!
+
+* Wed Jul 08 2026 Mike Snitzer [6.12.93-3]
+- various block layer DIO alignment fixes
+- NFS/localio: issue IO inline when not in a memory-reclaim context
+- NFS/localio: remove dead FLUSH_SYNC handling from nfs_local_commit
+- NFS/localio: issue commit inline when not in a memory-reclaim context
+- NFS/localio: fix nfs_local_dio_misaligned tracepoint
+
+* Fri Jun 19 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-2]
+- svcrdma: cap per-xprt sc_send_ctxts free list at sc_max_requests
+- svcrdma: track sc_send_ctxts_depth at alloc/destroy and gate _get on it
+- svcrdma: loosen sc_send_ctxts_depth cap to 4*sc_max_requests
+- nfsd: guard nfsd_serv deref in nfsd_file_net_dispose
+- nfsd: fix refcount leak in nfsd_file_lru_add on insertion failure
+- nfsd: fix fcache_disposal UAF by inlining dispose state into nfsd_net
+- nfsd: close shrinker/GC/fsnotify vs per-net shutdown race in filecache
+- NFSD: remove flawed WARN_ON_ONCE from nfsd_mode_check
+
+* Wed Jun 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-1]
+- Merge v6.12.93 for the benefit of more root exploit fixes
+
 * Wed Jun 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-0]
 - Linux v6.12.93
 
