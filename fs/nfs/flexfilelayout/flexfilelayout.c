@@ -293,8 +293,10 @@ static struct nfs4_ff_layout_mirror *ff_layout_alloc_mirror(u32 dss_count,
 		return NULL;
 	}
 
-	for (u32 dss_id = 0; dss_id < mirror->dss_count; dss_id++)
+	for (u32 dss_id = 0; dss_id < mirror->dss_count; dss_id++) {
+		spin_lock_init(&mirror->dss[dss_id].lock);
 		nfs_localio_file_init(&mirror->dss[dss_id].nfl);
+	}
 
 	return mirror;
 }
@@ -733,6 +735,7 @@ nfs4_ff_layoutstat_start_io(struct nfs4_ff_layout_mirror *mirror,
 {
 	s64 report_interval = FF_LAYOUTSTATS_REPORT_INTERVAL;
 	struct nfs4_flexfile_layout *ffl = FF_LAYOUT_FROM_HDR(mirror->layout);
+	ktime_t last_report;
 
 	nfs4_ff_start_busy_timer(&layoutstat->busy_timer, now);
 	if (!mirror->dss[dss_id].start_time)
@@ -741,13 +744,17 @@ nfs4_ff_layoutstat_start_io(struct nfs4_ff_layout_mirror *mirror,
 		report_interval = (s64)mirror->report_interval * 1000LL;
 	else if (layoutstats_timer != 0)
 		report_interval = (s64)layoutstats_timer * 1000LL;
-	if (ktime_to_ms(ktime_sub(now, ffl->last_report_time)) >=
-			report_interval) {
-		ffl->last_report_time = now;
-		return true;
-	}
 
-	return false;
+	/*
+	 * last_report_time is shared by every mirror and stripe of this
+	 * layout, so it was never serialised by the mirror lock either.
+	 * Make that explicit: whoever wins the cmpxchg() reports.
+	 */
+	last_report = READ_ONCE(ffl->last_report_time);
+	if (ktime_to_ms(ktime_sub(now, last_report)) < report_interval)
+		return false;
+
+	return try_cmpxchg64(&ffl->last_report_time, &last_report, now);
 }
 
 static void
@@ -791,13 +798,13 @@ nfs4_ff_layout_stat_io_start_read(struct inode *inode,
 {
 	bool report;
 
-	spin_lock(&mirror->lock);
+	spin_lock(&mirror->dss[dss_id].lock);
 	report = nfs4_ff_layoutstat_start_io(
 		mirror, dss_id, &mirror->dss[dss_id].read_stat, now);
 	nfs4_ff_layout_stat_io_update_requested(
 		&mirror->dss[dss_id].read_stat, requested);
+	spin_unlock(&mirror->dss[dss_id].lock);
 	set_bit(NFS4_FF_MIRROR_STAT_AVAIL, &mirror->flags);
-	spin_unlock(&mirror->lock);
 
 	if (report)
 		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
@@ -810,12 +817,12 @@ nfs4_ff_layout_stat_io_end_read(struct rpc_task *task,
 		__u64 requested,
 		__u64 completed)
 {
-	spin_lock(&mirror->lock);
+	spin_lock(&mirror->dss[dss_id].lock);
 	nfs4_ff_layout_stat_io_update_completed(&mirror->dss[dss_id].read_stat,
 			requested, completed,
 			ktime_get(), task->tk_start);
+	spin_unlock(&mirror->dss[dss_id].lock);
 	set_bit(NFS4_FF_MIRROR_STAT_AVAIL, &mirror->flags);
-	spin_unlock(&mirror->lock);
 }
 
 static void
@@ -826,7 +833,7 @@ nfs4_ff_layout_stat_io_start_write(struct inode *inode,
 {
 	bool report;
 
-	spin_lock(&mirror->lock);
+	spin_lock(&mirror->dss[dss_id].lock);
 	report = nfs4_ff_layoutstat_start_io(
 		mirror,
 		dss_id,
@@ -835,8 +842,8 @@ nfs4_ff_layout_stat_io_start_write(struct inode *inode,
 	nfs4_ff_layout_stat_io_update_requested(
 		&mirror->dss[dss_id].write_stat,
 		requested);
+	spin_unlock(&mirror->dss[dss_id].lock);
 	set_bit(NFS4_FF_MIRROR_STAT_AVAIL, &mirror->flags);
-	spin_unlock(&mirror->lock);
 
 	if (report)
 		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
@@ -853,11 +860,11 @@ nfs4_ff_layout_stat_io_end_write(struct rpc_task *task,
 	if (committed == NFS_UNSTABLE)
 		requested = completed = 0;
 
-	spin_lock(&mirror->lock);
+	spin_lock(&mirror->dss[dss_id].lock);
 	nfs4_ff_layout_stat_io_update_completed(&mirror->dss[dss_id].write_stat,
 			requested, completed, ktime_get(), task->tk_start);
+	spin_unlock(&mirror->dss[dss_id].lock);
 	set_bit(NFS4_FF_MIRROR_STAT_AVAIL, &mirror->flags);
-	spin_unlock(&mirror->lock);
 }
 
 static struct nfs4_ff_layout_ds *
@@ -2996,13 +3003,13 @@ ff_layout_encode_ff_layoutupdate(struct xdr_stream *xdr,
 	p = xdr_reserve_space(xdr, 4 + fh->size);
 	xdr_encode_opaque(p, fh->data, fh->size);
 	/* ff_io_latency4 read */
-	spin_lock(&dss_info->mirror->lock);
+	spin_lock(&dss_info->lock);
 	ff_layout_encode_io_latency(xdr,
 				    &dss_info->read_stat.io_stat);
 	/* ff_io_latency4 write */
 	ff_layout_encode_io_latency(xdr,
 				    &dss_info->write_stat.io_stat);
-	spin_unlock(&dss_info->mirror->lock);
+	spin_unlock(&dss_info->lock);
 	/* nfstime4 */
 	ff_layout_encode_nfstime(xdr,
 				 ktime_sub(ktime_get(),
@@ -3078,7 +3085,7 @@ ff_layout_mirror_prepare_stats(struct pnfs_layout_hdr *lo,
 			       NFS4_DEVICEID4_SIZE);
 			devinfo->offset = 0;
 			devinfo->length = NFS4_MAX_UINT64;
-			spin_lock(&mirror->lock);
+			spin_lock(&dss_info->lock);
 			devinfo->read_count =
 			    dss_info->read_stat.io_stat.ops_completed;
 			devinfo->read_bytes =
@@ -3087,7 +3094,7 @@ ff_layout_mirror_prepare_stats(struct pnfs_layout_hdr *lo,
 			    dss_info->write_stat.io_stat.ops_completed;
 			devinfo->write_bytes =
 			    dss_info->write_stat.io_stat.bytes_completed;
-			spin_unlock(&mirror->lock);
+			spin_unlock(&dss_info->lock);
 			devinfo->layout_type = LAYOUT_FLEX_FILES;
 			devinfo->ld_private.ops = &layoutstat_ops;
 			priv->dss_info = dss_info;
