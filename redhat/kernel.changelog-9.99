@@ -1,3 +1,13 @@
+* Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.110-1]
+- Rebase all branches on kernel-6.12.110-0
+- 6.12.110 carries a reworked head of the flexfiles striped layouts series, so
+  its first 2 commits are dropped and the other 6 adapted to that base
+- LOCALIO's cached nfsd_file(s) move from nfs4_ff_layout_mirror into its
+  per-stripe nfs4_ff_layout_ds_stripe
+- 6.12.110 sends from svsk->sk_bvec, so the rq_bvec conversion of svcsock is
+  dropped and RPCSVC_MAXPAGES removal updated to match
+- crypto: drop the /dev/random override before freeing what it uses
+
 * Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.110-0]
 - Linux v6.12.110
 
