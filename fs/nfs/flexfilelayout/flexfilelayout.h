@@ -55,7 +55,6 @@ struct nfs4_ff_layout_ds_err {
 };
 
 struct nfs4_ff_io_stat {
-	__u64				ops_requested;
 	__u64				bytes_requested;
 	__u64				ops_completed;
 	__u64				bytes_completed;
@@ -77,6 +76,24 @@ struct nfs4_ff_layoutstat {
 	struct nfs4_ff_io_stat io_stat;
 	struct nfs4_ff_busy_timer busy_timer;
 };
+
+/*
+ * ffil_ops_requested is not stored.  An op is in flight from the moment it is
+ * counted as requested until it is counted as completed, so
+ *
+ *	ops_requested == ops_completed + ops_in_flight
+ *
+ * holds by construction; see nfs4_ff_layoutstat_start_io() and
+ * nfs4_ff_layoutstat_end_io(), which maintain both halves together.
+ *
+ * Caller must hold the lock guarding this nfs4_ff_layoutstat.
+ */
+static inline __u64
+nfs4_ff_ops_requested(const struct nfs4_ff_layoutstat *layoutstat)
+{
+	return layoutstat->io_stat.ops_completed +
+	       layoutstat->busy_timer.ops_in_flight;
+}
 
 struct nfs4_ff_layout_mirror;
 
