@@ -152,15 +152,36 @@ out:
 	return parent;
 }
 
+static int nfs_set_nfs4_acl(struct inode *inode, struct nfs4_acl *acl)
+{
+	const struct nfs_rpc_ops *rpc_ops = NFS_SERVER(inode)->nfs_client->rpc_ops;
+
+	if (rpc_ops->set_nfs4_acl == NULL)
+		return -EOPNOTSUPP;
+	return rpc_ops->set_nfs4_acl(inode, acl);
+}
+
+static int nfs_get_nfs4_acl(struct inode *inode, struct nfs4_acl *acl)
+{
+	const struct nfs_rpc_ops *rpc_ops = NFS_SERVER(inode)->nfs_client->rpc_ops;
+
+	if (rpc_ops->get_nfs4_acl == NULL)
+		return -EOPNOTSUPP;
+	return rpc_ops->get_nfs4_acl(inode, acl);
+}
+
 const struct export_operations nfs_export_ops = {
 	.encode_fh = nfs_encode_fh,
 	.fh_to_dentry = nfs_fh_to_dentry,
 	.get_parent = nfs_get_parent,
+	.setacl = nfs_set_nfs4_acl,
+	.getacl = nfs_get_nfs4_acl,
 	.flags = EXPORT_OP_NOWCC		|
 		 EXPORT_OP_NOSUBTREECHK		|
 		 EXPORT_OP_CLOSE_BEFORE_UNLINK	|
 		 EXPORT_OP_REMOTE_FS		|
 		 EXPORT_OP_NOATOMIC_ATTR	|
 		 EXPORT_OP_FLUSH_ON_CLOSE	|
-		 EXPORT_OP_NOLOCKS,
+		 EXPORT_OP_NOLOCKS              |
+		 EXPORT_OP_NFSV4_ACL_PASSTHRU,
 };
