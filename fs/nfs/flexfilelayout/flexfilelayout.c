@@ -742,39 +742,48 @@ nfs4_ff_layoutstat_set_start_time(struct nfs4_ff_layout_ds_stripe *dss_info,
 }
 
 /*
- * Account for an I/O about to be sent to this stripe, and return true if a
- * LAYOUTSTATS report is due.
+ * Account for an I/O about to be sent to this stripe.
  *
  * The in-flight count and the requested-side counters are bumped here
  * together, so a new requested-side path cannot update one and miss the
- * other.
+ * other.  Everything this touches is in the cacheline the caller's lock
+ * guards; anything else belongs outside that lock.
+ */
+static void
+nfs4_ff_layoutstat_start_io(struct nfs4_ff_layoutstat *layoutstat,
+			    __u64 requested, ktime_t now)
+{
+	lockdep_assert_held(&layoutstat->lock);
+
+	nfs4_ff_start_busy_timer(layoutstat, now);
+	layoutstat->io_stat.bytes_requested += requested;
+}
+
+/*
+ * Is a LAYOUTSTATS report due?  Deliberately outside the statistics locks:
+ * none of this is covered by them, and all of it lives in other objects --
+ * mirror->report_interval and ffl->last_report_time, plus a division -- so
+ * running it under a lock would only lengthen a critical section that is
+ * otherwise two writes to one cacheline.
+ *
+ * last_report_time is shared by every mirror and stripe of this layout, so it
+ * was never serialised by the mirror lock either.  Make that explicit:
+ * whoever wins the cmpxchg() reports.
  */
 static bool
-nfs4_ff_layoutstat_start_io(struct nfs4_ff_layout_ds_stripe *dss_info,
-			    struct nfs4_ff_layoutstat *layoutstat,
-			    __u64 requested, ktime_t now)
+nfs4_ff_layoutstat_report_due(struct nfs4_ff_layout_ds_stripe *dss_info,
+			      ktime_t now)
 {
 	struct nfs4_ff_layout_mirror *mirror = dss_info->mirror;
 	struct nfs4_flexfile_layout *ffl = FF_LAYOUT_FROM_HDR(mirror->layout);
 	s64 report_interval = FF_LAYOUTSTATS_REPORT_INTERVAL;
 	ktime_t last_report;
 
-	lockdep_assert_held(&layoutstat->lock);
-
-	nfs4_ff_start_busy_timer(layoutstat, now);
-	layoutstat->io_stat.bytes_requested += requested;
-
-	nfs4_ff_layoutstat_set_start_time(dss_info, now);
 	if (mirror->report_interval != 0)
 		report_interval = (s64)mirror->report_interval * 1000LL;
 	else if (layoutstats_timer != 0)
 		report_interval = (s64)layoutstats_timer * 1000LL;
 
-	/*
-	 * last_report_time is shared by every mirror and stripe of this
-	 * layout, so it was never serialised by the mirror lock either.
-	 * Make that explicit: whoever wins the cmpxchg() reports.
-	 */
 	last_report = READ_ONCE(ffl->last_report_time);
 	if (ktime_to_ms(ktime_sub(now, last_report)) < report_interval)
 		return false;
@@ -788,8 +797,7 @@ nfs4_ff_layoutstat_start_io(struct nfs4_ff_layout_ds_stripe *dss_info,
  * it is bumped in nfs4_ff_layoutstat_start_io().
  */
 static void
-nfs4_ff_layoutstat_end_io(struct nfs4_ff_layout_ds_stripe *dss_info,
-			  struct nfs4_ff_layoutstat *layoutstat,
+nfs4_ff_layoutstat_end_io(struct nfs4_ff_layoutstat *layoutstat,
 			  __u64 requested,
 			  __u64 completed,
 			  ktime_t time_completed,
@@ -823,10 +831,11 @@ nfs4_ff_layout_stat_io_start_read(struct inode *inode,
 	bool report;
 
 	spin_lock(&dss_info->read_stat.lock);
-	report = nfs4_ff_layoutstat_start_io(dss_info, &dss_info->read_stat,
-					     requested, now);
+	nfs4_ff_layoutstat_start_io(&dss_info->read_stat, requested, now);
 	spin_unlock(&dss_info->read_stat.lock);
 
+	nfs4_ff_layoutstat_set_start_time(dss_info, now);
+	report = nfs4_ff_layoutstat_report_due(dss_info, now);
 	if (report)
 		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
 }
@@ -841,7 +850,7 @@ nfs4_ff_layout_stat_io_end_read(struct rpc_task *task,
 	struct nfs4_ff_layout_ds_stripe *dss_info = &mirror->dss[dss_id];
 
 	spin_lock(&dss_info->read_stat.lock);
-	nfs4_ff_layoutstat_end_io(dss_info, &dss_info->read_stat,
+	nfs4_ff_layoutstat_end_io(&dss_info->read_stat,
 				  requested, completed,
 				  ktime_get(), task->tk_start);
 	spin_unlock(&dss_info->read_stat.lock);
@@ -857,10 +866,11 @@ nfs4_ff_layout_stat_io_start_write(struct inode *inode,
 	bool report;
 
 	spin_lock(&dss_info->write_stat.lock);
-	report = nfs4_ff_layoutstat_start_io(dss_info, &dss_info->write_stat,
-					     requested, now);
+	nfs4_ff_layoutstat_start_io(&dss_info->write_stat, requested, now);
 	spin_unlock(&dss_info->write_stat.lock);
 
+	nfs4_ff_layoutstat_set_start_time(dss_info, now);
+	report = nfs4_ff_layoutstat_report_due(dss_info, now);
 	if (report)
 		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
 }
@@ -879,7 +889,7 @@ nfs4_ff_layout_stat_io_end_write(struct rpc_task *task,
 		requested = completed = 0;
 
 	spin_lock(&dss_info->write_stat.lock);
-	nfs4_ff_layoutstat_end_io(dss_info, &dss_info->write_stat,
+	nfs4_ff_layoutstat_end_io(&dss_info->write_stat,
 				  requested, completed,
 				  ktime_get(), task->tk_start);
 	spin_unlock(&dss_info->write_stat.lock);
