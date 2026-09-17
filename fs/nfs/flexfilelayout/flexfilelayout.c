@@ -3078,14 +3078,24 @@ ff_layout_mirror_prepare_stats(struct pnfs_layout_hdr *lo,
 	struct nfs4_ff_layout_ds_stripe *dss_info;
 	struct nfs4_ff_layout_ds *mirror_ds;
 	__u64 read_count, read_bytes, write_count, write_bytes, ops;
-	int i = 0, dss_id;
+	u32 dss_id, scanned;
+	int i = 0;
 
 	rcu_read_lock();
 	list_for_each_entry(mirror, &ff_layout->mirrors, mirrors) {
-		for (dss_id = 0; dss_id < mirror->dss_count; ++dss_id) {
-			dss_info = &mirror->dss[dss_id];
+		if (i >= dev_limit)
+			break;
+		for (scanned = 0; scanned < mirror->dss_count; ++scanned) {
 			if (i >= dev_limit)
 				break;
+			/* Resume where the last report of this mirror left
+			 * off; one subtraction suffices to wrap, as both
+			 * terms are below dss_count.
+			 */
+			dss_id = mirror->dss_report_start + scanned;
+			if (dss_id >= mirror->dss_count)
+				dss_id -= mirror->dss_count;
+			dss_info = &mirror->dss[dss_id];
 			mirror_ds = rcu_dereference(dss_info->mirror_ds);
 			if (IS_ERR_OR_NULL(mirror_ds))
 				continue;
@@ -3114,6 +3124,8 @@ ff_layout_mirror_prepare_stats(struct pnfs_layout_hdr *lo,
 			if (!refcount_inc_not_zero(&mirror->ref))
 				continue;
 			dss_info->last_reported_ops = ops;
+			mirror->dss_report_start =
+				dss_id + 1 < mirror->dss_count ? dss_id + 1 : 0;
 			/* The pin holds a reference; it is exchanged out only
 			 * under i_lock.  Put in ff_layout_free_layoutstats().
 			 */
