@@ -141,6 +141,13 @@ struct nfs4_ff_layout_mirror {
 	struct nfs4_ff_layout_ds_stripe *dss;
 	refcount_t			ref;
 	u32				report_interval;
+	/*
+	 * dss[] index to begin the next LAYOUTSTATS scan of this mirror at,
+	 * so that a mirror with more stripes than a report has room for
+	 * rotates through them rather than always reporting the lowest.
+	 * Serialised by the inode's i_lock, like last_reported_ops.
+	 */
+	u32				dss_report_start;
 };
 
 struct nfs4_ff_layout_segment {
