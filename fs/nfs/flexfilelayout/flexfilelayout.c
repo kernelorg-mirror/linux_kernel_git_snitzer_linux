@@ -826,7 +826,6 @@ nfs4_ff_layout_stat_io_start_read(struct inode *inode,
 	report = nfs4_ff_layoutstat_start_io(dss_info, &dss_info->read_stat,
 					     requested, now);
 	spin_unlock(&dss_info->read_stat.lock);
-	set_bit(NFS4_FF_MIRROR_STAT_AVAIL, &mirror->flags);
 
 	if (report)
 		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
@@ -846,7 +845,6 @@ nfs4_ff_layout_stat_io_end_read(struct rpc_task *task,
 				  requested, completed,
 				  ktime_get(), task->tk_start);
 	spin_unlock(&dss_info->read_stat.lock);
-	set_bit(NFS4_FF_MIRROR_STAT_AVAIL, &mirror->flags);
 }
 
 static void
@@ -862,7 +860,6 @@ nfs4_ff_layout_stat_io_start_write(struct inode *inode,
 	report = nfs4_ff_layoutstat_start_io(dss_info, &dss_info->write_stat,
 					     requested, now);
 	spin_unlock(&dss_info->write_stat.lock);
-	set_bit(NFS4_FF_MIRROR_STAT_AVAIL, &mirror->flags);
 
 	if (report)
 		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
@@ -886,7 +883,6 @@ nfs4_ff_layout_stat_io_end_write(struct rpc_task *task,
 				  requested, completed,
 				  ktime_get(), task->tk_start);
 	spin_unlock(&dss_info->write_stat.lock);
-	set_bit(NFS4_FF_MIRROR_STAT_AVAIL, &mirror->flags);
 }
 
 static struct nfs4_ff_layout_ds *
@@ -3081,6 +3077,7 @@ ff_layout_mirror_prepare_stats(struct pnfs_layout_hdr *lo,
 	struct nfs4_ff_layout_mirror *mirror;
 	struct nfs4_ff_layout_ds_stripe *dss_info;
 	struct nfs4_ff_layout_ds *mirror_ds;
+	__u64 read_count, read_bytes, write_count, write_bytes, ops;
 	int i = 0, dss_id;
 
 	rcu_read_lock();
@@ -3092,13 +3089,31 @@ ff_layout_mirror_prepare_stats(struct pnfs_layout_hdr *lo,
 			mirror_ds = rcu_dereference(dss_info->mirror_ds);
 			if (IS_ERR_OR_NULL(mirror_ds))
 				continue;
-			if (!test_and_clear_bit(NFS4_FF_MIRROR_STAT_AVAIL,
-						&mirror->flags) &&
+
+			spin_lock(&dss_info->read_stat.lock);
+			read_count = dss_info->read_stat.io_stat.ops_completed;
+			read_bytes = dss_info->read_stat.io_stat.bytes_completed;
+			spin_unlock(&dss_info->read_stat.lock);
+			spin_lock(&dss_info->write_stat.lock);
+			write_count = dss_info->write_stat.io_stat.ops_completed;
+			write_bytes = dss_info->write_stat.io_stat.bytes_completed;
+			spin_unlock(&dss_info->write_stat.lock);
+
+			/*
+			 * Nothing has completed on this stripe since it last
+			 * reported, so do not spend one of the few devinfo
+			 * slots on repeating those numbers.  A LAYOUTRETURN is
+			 * the last chance to report and says everything.
+			 */
+			ops = read_count + write_count;
+			if (ops == dss_info->last_reported_ops &&
 			    type != NFS4_FF_OP_LAYOUTRETURN)
 				continue;
+
 			/* mirror refcount put in cleanup_layoutstats */
 			if (!refcount_inc_not_zero(&mirror->ref))
 				continue;
+			dss_info->last_reported_ops = ops;
 			/* The pin holds a reference; it is exchanged out only
 			 * under i_lock.  Put in ff_layout_free_layoutstats().
 			 */
@@ -3108,18 +3123,10 @@ ff_layout_mirror_prepare_stats(struct pnfs_layout_hdr *lo,
 			       NFS4_DEVICEID4_SIZE);
 			devinfo->offset = 0;
 			devinfo->length = NFS4_MAX_UINT64;
-			spin_lock(&dss_info->read_stat.lock);
-			devinfo->read_count =
-			    dss_info->read_stat.io_stat.ops_completed;
-			devinfo->read_bytes =
-			    dss_info->read_stat.io_stat.bytes_completed;
-			spin_unlock(&dss_info->read_stat.lock);
-			spin_lock(&dss_info->write_stat.lock);
-			devinfo->write_count =
-			    dss_info->write_stat.io_stat.ops_completed;
-			devinfo->write_bytes =
-			    dss_info->write_stat.io_stat.bytes_completed;
-			spin_unlock(&dss_info->write_stat.lock);
+			devinfo->read_count = read_count;
+			devinfo->read_bytes = read_bytes;
+			devinfo->write_count = write_count;
+			devinfo->write_bytes = write_bytes;
 			devinfo->layout_type = LAYOUT_FLEX_FILES;
 			devinfo->ld_private.ops = &layoutstat_ops;
 			priv->dss_info = dss_info;
