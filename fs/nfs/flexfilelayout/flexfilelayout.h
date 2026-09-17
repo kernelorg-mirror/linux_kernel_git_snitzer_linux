@@ -114,6 +114,15 @@ struct nfs4_ff_layout_ds_stripe {
 	/* Published once by the first I/O; see nfs4_ff_layoutstat_set_start_time() */
 	ktime_t				start_time;
 	/*
+	 * Completed ops, both directions, as of this stripe's last
+	 * LAYOUTSTATS report.  Touched only by
+	 * ff_layout_mirror_prepare_stats(), so roughly once per report
+	 * interval, and serialised by the inode's i_lock, which both of its
+	 * callers hold.  Deliberately out here rather than in either
+	 * nfs4_ff_layoutstat: it must not cost the I/O paths a cacheline.
+	 */
+	__u64				last_reported_ops;
+	/*
 	 * A line each, and each carrying its own lock, so that a read and a
 	 * write to this stripe neither serialise against each other nor
 	 * share a line.  Their alignment also rounds this structure's
@@ -131,11 +140,8 @@ struct nfs4_ff_layout_mirror {
 	u32				dss_count;
 	struct nfs4_ff_layout_ds_stripe *dss;
 	refcount_t			ref;
-	unsigned long			flags;
 	u32				report_interval;
 };
-
-#define NFS4_FF_MIRROR_STAT_AVAIL	(0)
 
 struct nfs4_ff_layout_segment {
 	struct pnfs_layout_segment	generic_hdr;
