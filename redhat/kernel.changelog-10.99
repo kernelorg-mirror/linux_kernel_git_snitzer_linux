@@ -1,3 +1,12 @@
+* Thu Sep 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-3]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Keep NFSD out of the page cache whenever a direct-mode WRITE cannot be direct
+  I/O: every non-direct exit and every buffered segment of a split is now
+  DONTCACHE, and a WRITE whose middle cannot be direct is no longer split
+- Fix the io_cache_read debugfs knob ignoring the dontcache and direct modes
+- Add tracing for how a direct-mode READ or WRITE is serviced, and report the
+  DONTCACHE dirty backlog in the bdi debugfs stats
+
 * Thu Sep 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-2]
 - Update nfs-testing-canary; no other branch changed
 - Engage pNFS for wide striped layouts: LAYOUTGET now sizes loga_maxcount from
