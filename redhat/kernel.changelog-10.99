@@ -1,3 +1,12 @@
+* Thu Sep 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-2]
+- Update nfs-testing-canary; no other branch changed
+- Engage pNFS for wide striped layouts: LAYOUTGET now sizes loga_maxcount from
+  its reply buffer and retries once at the session maximum on NFS4ERR_TOOSMALL,
+  rather than falling back to the MDS
+- Scale flexfiles layoutstats: accounting moves from the per-mirror lock to a
+  per-stripe lock, one cacheline per I/O direction, and LAYOUTSTATS reporting
+  rotates over a mirror's stripes instead of always reporting the first four
+
 * Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-1]
 - Rebase all branches on kernel-7.1.13-0
 - Drop 2 NFS FREE_STATEID fixes from nfs-for-7.2-3 that landed in 7.1.13
