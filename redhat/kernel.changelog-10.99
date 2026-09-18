@@ -1,3 +1,14 @@
+* Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-4]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Persist a synchronous direct-mode WRITE once, after all of its segments,
+  rather than a range fsync after each segment: one cache flush and log force
+  per WRITE instead of up to three
+- Keep the tail page of a direct-mode WRITE cached so the next sequential
+  WRITE's prefix completes it without a read-modify-write; the completed prefix
+  page is dropped once the WRITE is persisted, so the page cache stays bounded
+- Extend that to UNSTABLE WRITEs: their completed boundary pages are dropped on
+  COMMIT, once its fsync has succeeded
+
 * Thu Sep 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-3]
 - Update nfsd-testing-canary-dontcache; no other branch changed
 - Keep NFSD out of the page cache whenever a direct-mode WRITE cannot be direct
