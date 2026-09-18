@@ -1,0 +1,91 @@
+Subject: Re: [PATCH 4/4] nfsd: fall back to buffered I/O when a direct write gets -EINVAL
+In-Reply-To: <995a853c-2c54-4bd0-9708-f6e0c1be7fd5@slotpi15m67>
+
+On 9/8/26 2:25 PM, Chuck Lever wrote:
+> The conclusion then was that -EINVAL from ->write_iter can come from
+> a number of conditions in the filesystem, so NFSD can't treat it as
+> meaning only that the I/O was misaligned. That still holds, so I'd
+> rather not use -EINVAL to signal a retry.
+
+Agreed, the -EINVAL retry is dropped. And your two questions were the
+right ones -- I went back to the rig with a probe on bio_split_io_at()
+that dumps the rejected bio's iterator and the queue limits, and the
+answers correct my patch's own story. Up front: the first bvec was
+never the problem, so the commit message's mechanism (and my proposed
+fallback, and the first-bvec-length gate) all aim at the wrong spot.
+
+> - Which -EINVAL in bio_split_io_at() fired: the per-bvec dma_alignment
+>   test, or the zero-length result after ALIGN_DOWN()?
+
+The zero-length result after ALIGN_DOWN(), every time. The per-bvec
+test cannot fire for an iterator nfsd's gate admits on this stack:
+dma_alignment is 3, and page tiling keeps every bvec offset and length
+a multiple of 4.
+
+Captured 12 rejections across 30 connections x 16 x 1 MiB O_DIRECT
+client writes; all 12 fit the same arithmetic. One instance, 4K pages:
+the payload bvec array was bv0=(408,3688) followed by page-tiled
+(0,4096) bvecs -- but with an interior discontinuity: bvec 64 started
+mid-page. On nvme (virt_boundary_mask=4095) that discontinuity is a
+segment gap, and it sat at payload byte 261736, which is not a multiple
+of the 512-byte logical block. The first split rounded down to 261632
+inside bvec 63 and succeeded (a 511-sector bio). The remainder bio then
+began with the 104-byte pre-gap residue (bi_idx=63, bi_bvec_done=3992)
+followed by the gap, so its own split walk reached the gap with only
+104 bytes accumulated: ALIGN_DOWN(104, 512) = 0 -> -EINVAL. That is
+bio_split_io_at()'s documented "virtual boundary gaps without having a
+valid block sized split" case.
+
+So the trigger is an interior run boundary at a non-lbs-aligned payload
+position, not the first fragment. As a control: with contiguous
+payloads of exactly the shape my commit message blamed -- first
+fragment starting mid-page, length not a sector multiple -- the same
+rig did ~960 mid-bvec splits (max_sectors=2040 against 1 MiB bios) with
+zero rejections and byte-identical readback (with the brd fix from
+patch 1). A contiguous run always has a valid split point; the block
+stack handles that geometry fine.
+
+That also bears on the first-bvec-remaining-length check: it would have
+rejected the observed bursts, but only coincidentally (their bv0 length
+happened to be misaligned too). It keys on bv0 while the rejection is
+caused by interior discontinuities, so it over-rejects contiguous
+payloads that work and would still admit a page-aligned payload whose
+interior discontinuity gets rejected.
+
+> - On the reproducer, how does stx_dio_offset_align compare with the
+>   queue's logical_block_size?
+
+Equal: stx_dio_offset_align=512 == logical_block_size=512 (XFS reports
+the bdev lbs; the fs has 4K blocks; stx_dio_mem_align=4 from the
+queue's dma_alignment=3).
+
+Now the part I owe you a straight answer on: where do discontiguous
+payload bvecs come from? Not from today's upstream NFSD -- svc_tcp
+receive copies the payload into rq_pages, so rq_bvec is always one
+contiguous page-tiled run over TCP. The rig that hit this carries an
+experimental receive page-loan patchset (not yet posted) in which WRITE
+payload bvecs mirror skb fragment geometry, so interior run boundaries
+can land on arbitrary byte positions. Loan off vs loan on, same host
+and kernel, is a clean A/B: 0 vs 12 rejections. I conflated the two
+when writing patch 4 (as I did with the function names -- you're right,
+nfsd_dio_iter_is_aligned() and bio_iov_bvec_set() were our internal
+tree's names; sloppy of me).
+
+So for v2 I propose dropping patch 4 entirely. Patches 1-3 stand on
+their own, with 1-2 the stable candidates. The correct gate belongs in
+the page-loan series that creates the geometry: at DIO admission, walk
+the payload bvecs and require every interior discontinuity to land on
+an offset_align multiple, else take the no_dio path. Single-run
+payloads -- everything upstream produces today -- pass unchanged;
+O(nvecs), using only data nfsd already has. If you'd rather have that
+walk upstream now as hardening for future ITER_BVEC sources, I'm happy
+to send it as part of this series instead, but it would be defending
+against a payload shape upstream can't yet produce.
+
+On the API-contract question (an error the filesystem/block layer could
+surface that distinguishes "unsupportable geometry" from a real
+-EINVAL): agreed that's for the fs/block folks, and the loan series is
+the concrete use case David was alluding to -- we'll bring it there
+rather than work around it in NFSD.
+
+Mike
