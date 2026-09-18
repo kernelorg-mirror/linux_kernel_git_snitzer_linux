@@ -1,0 +1,53 @@
+#!/usr/bin/env bpftrace
+// Capture bio_split_io_at() rejections: which -EINVAL branch, full bio geometry.
+
+kprobe:bio_split_io_at
+{
+	@bio[tid] = (struct bio *)arg0;
+	@lim[tid] = (struct queue_limits *)arg1;
+	@maxb[tid] = arg3;
+	@lam[tid] = arg4;
+}
+
+kretprobe:bio_split_io_at
+{
+	$ret = (int32)retval;
+	@rets[$ret] = count();
+	if ($ret < 0 && @bio[tid] != 0) {
+		$bio = @bio[tid];
+		$lim = @lim[tid];
+		printf("=== EINVAL ret=%d comm=%s disk=%s op=0x%x\n",
+		       $ret, comm, $bio->bi_bdev->bd_disk->disk_name,
+		       $bio->bi_opf);
+		printf("  iter: sector=%llu size=%u idx=%u bvec_done=%u vcnt=%u\n",
+		       $bio->bi_iter.bi_sector, $bio->bi_iter.bi_size,
+		       $bio->bi_iter.bi_idx, $bio->bi_iter.bi_bvec_done,
+		       (uint32)$bio->bi_vcnt);
+		printf("  args: max_bytes=%lu len_align_mask=0x%lx\n",
+		       @maxb[tid], @lam[tid]);
+		printf("  lim: dma=0x%x virt=0x%lx lbs=%u max_segs=%u max_sectors=%u chunk=%u fastseg=%u segbound=0x%lx\n",
+		       $lim->dma_alignment, $lim->virt_boundary_mask,
+		       $lim->logical_block_size, $lim->max_segments,
+		       $lim->max_sectors, $lim->chunk_sectors,
+		       $lim->max_fast_segment_size, $lim->seg_boundary_mask);
+		$i = (uint32)$bio->bi_iter.bi_idx;
+		unroll(24) {
+			if ($i < (uint32)$bio->bi_vcnt) {
+				printf("  bv[%u]=(%u,%u)\n", $i,
+				       $bio->bi_io_vec[$i].bv_offset,
+				       $bio->bi_io_vec[$i].bv_len);
+			}
+			$i++;
+		}
+	}
+	delete(@bio[tid]);
+	delete(@lim[tid]);
+	delete(@maxb[tid]);
+	delete(@lam[tid]);
+}
+
+END
+{
+	clear(@bio); clear(@lim); clear(@maxb); clear(@lam);
+	print(@rets);
+}
