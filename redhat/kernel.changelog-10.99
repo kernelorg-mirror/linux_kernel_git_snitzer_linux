@@ -1,3 +1,11 @@
+* Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-5]
+- Update nfs-testing-canary; no other branch changed
+- Keep pNFS data server connections across deviceid eviction: the data server
+  cache now holds its own reference, and an entry whose last layout is returned
+  lingers for dataserver_linger seconds (default 120, 0 restores the old
+  behaviour) instead of being torn down, so a NOCACHE deviceid no longer costs
+  a synchronous reconnect and NULL ping on every layout cycle
+
 * Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-4]
 - Update nfsd-testing-canary-dontcache; no other branch changed
 - Persist a synchronous direct-mode WRITE once, after all of its segments,
