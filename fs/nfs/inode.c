@@ -713,6 +713,42 @@ static void nfs_update_mtime(struct inode *inode)
 		~(NFS_INO_INVALID_CTIME | NFS_INO_INVALID_MTIME);
 }
 
+/*
+ * A delegated timestamp is set to the coarse clock, so once a request has
+ * updated it every further request in the same tick finds it current and
+ * nfs_update_atime()/nfs_update_mtime() would change nothing: the timestamp
+ * compare in inode_update_time() fails and the validity bits are already
+ * clear.  These lockless tests let the callers skip inode->i_lock in that
+ * case; the locked path is taken whenever they cannot prove it.
+ *
+ * The timestamps are read without the lock.  A torn read is only possible
+ * while another CPU is storing them under the lock, and what it stores is
+ * the current coarse time (or a newer one), so a torn value that happens
+ * to equal @now describes exactly the state we would leave behind, and any
+ * other torn value sends us to the locked path.
+ */
+static bool nfs_delegated_atime_is_current(struct inode *inode)
+{
+	struct timespec64 now = current_time(inode);
+	struct timespec64 atime = inode_get_atime(inode);
+
+	return timespec64_equal(&now, &atime) &&
+	       !(READ_ONCE(NFS_I(inode)->cache_validity) &
+		 NFS_INO_INVALID_ATIME);
+}
+
+static bool nfs_delegated_mtime_is_current(struct inode *inode)
+{
+	struct timespec64 now = current_time(inode);
+	struct timespec64 mtime = inode_get_mtime(inode);
+	struct timespec64 ctime = inode_get_ctime(inode);
+
+	return timespec64_equal(&now, &mtime) &&
+	       timespec64_equal(&now, &ctime) &&
+	       !(READ_ONCE(NFS_I(inode)->cache_validity) &
+		 (NFS_INO_INVALID_CTIME | NFS_INO_INVALID_MTIME));
+}
+
 void nfs_update_delegated_atime(struct inode *inode)
 {
 	/*
@@ -722,6 +758,8 @@ void nfs_update_delegated_atime(struct inode *inode)
 	 * delegated atime.  Recheck under the lock before updating.
 	 */
 	if (!nfs_have_delegated_atime(inode))
+		return;
+	if (nfs_delegated_atime_is_current(inode))
 		return;
 	spin_lock(&inode->i_lock);
 	if (nfs_have_delegated_atime(inode))
@@ -734,6 +772,18 @@ void nfs_update_delegated_mtime_locked(struct inode *inode)
 	if (nfs_have_delegated_mtime(inode) ||
 	    nfs_have_directory_delegation(inode))
 		nfs_update_mtime(inode);
+}
+
+/*
+ * For callers that would take inode->i_lock only to call
+ * nfs_update_delegated_mtime_locked(): true if that call would do anything.
+ */
+bool nfs_delegated_mtime_needs_update(struct inode *inode)
+{
+	if (!nfs_have_delegated_mtime(inode) &&
+	    !nfs_have_directory_delegation(inode))
+		return false;
+	return !nfs_delegated_mtime_is_current(inode);
 }
 
 void nfs_update_delegated_mtime(struct inode *inode)
