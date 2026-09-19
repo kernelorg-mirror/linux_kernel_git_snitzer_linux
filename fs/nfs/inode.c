@@ -1110,7 +1110,29 @@ static struct nfs_lock_context *__nfs_find_lock_context(struct nfs_open_context 
 struct nfs_lock_context *nfs_get_lock_context(struct nfs_open_context *ctx)
 {
 	struct nfs_lock_context *res, *new = NULL;
-	struct inode *inode = d_inode(ctx->dentry);
+	struct inode *inode;
+
+	/*
+	 * The lock context embedded in the open context belongs to the lock
+	 * owner that opened the file, and its count is the open context's
+	 * reference count, so taking it is just get_nfs_open_context().
+	 * Without this, an I/O issued while no other I/O is in flight on
+	 * the open context allocates a lock context and frees it again,
+	 * taking inode->i_lock both times.
+	 *
+	 * lockowner is set before the open context is published and never
+	 * changes.  If get_nfs_open_context() fails here it also fails
+	 * below, so the list never holds an entry for the opening lock
+	 * owner: all of that owner's I/O and unlocks use the embedded
+	 * context's io_count, which is the one nfs_iocounter_wait() and
+	 * nfs_async_iocounter_wait() look at.  Callers (e.g. the NLM
+	 * FL_CLOSE ops in nfs3proc.c) also rely on getting the same object
+	 * for the same (ctx, current->files), so keep this test purely on
+	 * the lock owner.
+	 */
+	if (ctx->lock_context.lockowner == current->files &&
+	    get_nfs_open_context(ctx))
+		return &ctx->lock_context;
 
 	rcu_read_lock();
 	res = __nfs_find_lock_context(ctx);
@@ -1120,6 +1142,7 @@ struct nfs_lock_context *nfs_get_lock_context(struct nfs_open_context *ctx)
 		if (new == NULL)
 			return ERR_PTR(-ENOMEM);
 		nfs_init_lock_context(new);
+		inode = d_inode(ctx->dentry);
 		spin_lock(&inode->i_lock);
 		res = __nfs_find_lock_context(ctx);
 		if (res == NULL) {
@@ -1142,8 +1165,17 @@ EXPORT_SYMBOL_GPL(nfs_get_lock_context);
 void nfs_put_lock_context(struct nfs_lock_context *l_ctx)
 {
 	struct nfs_open_context *ctx = l_ctx->open_context;
-	struct inode *inode = d_inode(ctx->dentry);
+	struct inode *inode;
 
+	/*
+	 * The embedded lock context is not on the list and is not freed on
+	 * its own: its count is the open context's reference count.
+	 */
+	if (l_ctx == &ctx->lock_context) {
+		put_nfs_open_context(ctx);
+		return;
+	}
+	inode = d_inode(ctx->dentry);
 	if (!refcount_dec_and_lock(&l_ctx->count, &inode->i_lock))
 		return;
 	list_del_rcu(&l_ctx->list);
