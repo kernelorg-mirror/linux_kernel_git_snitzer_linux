@@ -2666,6 +2666,22 @@ static void
 ff_layout_release_ds_info(struct pnfs_ds_commit_info *fl_cinfo,
 		struct inode *inode)
 {
+	/*
+	 * Commit arrays are only set up when a DS WRITE comes back
+	 * UNSTABLE, so a direct request whose WRITEs were all stable has
+	 * nothing to release and need not take i_lock.
+	 *
+	 * Arrays are only added from write completions, which happen
+	 * before their put_dreq(); the final kref_put() of the request
+	 * orders those adds before this check.  A concurrent
+	 * ff_layout_free_lseg() may still unlink arrays from this list
+	 * (they are also on lseg->pls_commits), but never adds any.
+	 * list_empty_careful() checks both ->next and ->prev, so once it
+	 * sees the list empty, that unlink has finished storing into
+	 * the request and it is safe to free it.
+	 */
+	if (list_empty_careful(&fl_cinfo->commits))
+		return;
 	spin_lock(&inode->i_lock);
 	pnfs_generic_ds_cinfo_destroy(fl_cinfo);
 	spin_unlock(&inode->i_lock);
