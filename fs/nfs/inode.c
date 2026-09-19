@@ -715,6 +715,14 @@ static void nfs_update_mtime(struct inode *inode)
 
 void nfs_update_delegated_atime(struct inode *inode)
 {
+	/*
+	 * The delegation is not protected by inode->i_lock (it is published
+	 * and detached under clp->cl_lock and checked under RCU), so there is
+	 * no point in taking the lock just to find out that there is no
+	 * delegated atime.  Recheck under the lock before updating.
+	 */
+	if (!nfs_have_delegated_atime(inode))
+		return;
 	spin_lock(&inode->i_lock);
 	if (nfs_have_delegated_atime(inode))
 		nfs_update_atime(inode);
