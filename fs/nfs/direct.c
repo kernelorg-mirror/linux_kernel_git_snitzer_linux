@@ -767,6 +767,7 @@ static void nfs_direct_write_completion(struct nfs_pgio_header *hdr)
 	struct nfs_commit_info cinfo;
 	struct inode *inode = dreq->inode;
 	int flags = NFS_ODIRECT_DONE;
+	loff_t end;
 
 	trace_nfs_direct_write_completion(dreq);
 
@@ -785,12 +786,28 @@ static void nfs_direct_write_completion(struct nfs_pgio_header *hdr)
 			dreq->flags = NFS_ODIRECT_DO_COMMIT;
 		flags = dreq->flags;
 	}
+	end = dreq->io_start + (loff_t)dreq->count;
 	spin_unlock(&dreq->lock);
 
-	spin_lock(&inode->i_lock);
-	nfs_direct_file_adjust_size_locked(inode, dreq->io_start, dreq->count);
-	nfs_update_delegated_mtime_locked(dreq->inode);
-	spin_unlock(&inode->i_lock);
+	/*
+	 * A completion that neither extends i_size nor holds a delegation
+	 * with delegated timestamps would do nothing under inode->i_lock,
+	 * so don't take it.  Checking locklessly is equivalent to taking
+	 * i_lock at the time of the check: every i_size writer holds
+	 * i_lock, i_size_read() only sees committed values, delegation
+	 * state is RCU protected, and both helpers recheck under the lock.
+	 * Note that i_size may also shrink here (e.g. nfs_update_inode()
+	 * applying server attributes), so do not rely on it only growing.
+	 */
+	if (end > i_size_read(inode) ||
+	    nfs_have_delegated_mtime(inode) ||
+	    nfs_have_directory_delegation(inode)) {
+		spin_lock(&inode->i_lock);
+		nfs_direct_file_adjust_size_locked(inode, dreq->io_start,
+						   end - dreq->io_start);
+		nfs_update_delegated_mtime_locked(inode);
+		spin_unlock(&inode->i_lock);
+	}
 
 	while (!list_empty(&hdr->pages)) {
 		struct nfs_page *req;
