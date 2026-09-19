@@ -1,3 +1,20 @@
+* Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-6]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Replace -4's tail-page scheme with one the page cache arbitrates: a split
+  WRITE's boundary page is claimed on first touch and marked dropbehind only by
+  the second writer to complete it, so interleaved writers from different
+  clients no longer force a read-modify-write and page cache growth is bounded
+  by writer concurrency rather than by bytes written
+- Defer the DONTCACHE writeback kick after a partial-page write by
+  dontcache_partial_writeback_delay_ms (new sysctl, default 10, 0 restores the
+  immediate kick), so a partner write can complete the page first and many
+  kicks fold into one writeback round
+- direct_misaligned_num_pages moves to debugfs and direct_misaligned_dontcache
+  joins it under /sys/kernel/debug/nfsd/; the latter selects DONTCACHE (Y,
+  default) or cached buffered IO for the non-direct parts of a direct-mode WRITE
+- nfsd_write_dio_split reports dontcache= as its own field; its disposition
+  drops the mem_misaligned_dontcache/_cached variants for plain mem_misaligned
+
 * Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-5]
 - Update nfs-testing-canary; no other branch changed
 - Keep pNFS data server connections across deviceid eviction: the data server
