@@ -155,6 +155,7 @@ struct nfs4_ff_layout_segment {
 	u64				stripe_unit;
 	u32				flags;
 	u32				mirror_array_cnt;
+	struct rcu_head			rcu;	/* lockless lookup, see lseg_hint */
 	struct nfs4_ff_layout_mirror	*mirror_array[] __counted_by(mirror_array_cnt);
 };
 
@@ -168,6 +169,13 @@ struct nfs4_flexfile_layout {
 	struct list_head	error_list; /* nfs4_ff_layout_ds_err */
 	ktime_t			last_report_time; /* Layoutstat report times */
 	unsigned long		flags;
+	/*
+	 * Last segment pnfs_update_layout() returned for a READ [0] or RW [1]
+	 * request: the candidate pnfs_lookup_cached_lseg() tries first.  Holds
+	 * no reference.  Set only by a holder of a reference on the segment;
+	 * cleared by ff_layout_free_lseg() before the RCU-deferred free.
+	 */
+	struct pnfs_layout_segment __rcu *lseg_hint[2] ____cacheline_aligned_in_smp;
 };
 
 /*

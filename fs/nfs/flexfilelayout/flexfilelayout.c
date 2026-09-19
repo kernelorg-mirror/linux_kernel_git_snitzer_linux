@@ -342,8 +342,76 @@ static void _ff_layout_free_lseg(struct nfs4_ff_layout_segment *fls)
 {
 	if (fls) {
 		ff_layout_free_mirror_array(fls);
-		kfree(fls);
+		/*
+		 * pnfs_lookup_cached_lseg() may still be looking at
+		 * pls_refcount through a stale lseg_hint.  It touches
+		 * nothing else unless it gets a reference, which it cannot
+		 * once the count is zero.
+		 */
+		kfree_rcu(fls, rcu);
 	}
+}
+
+static inline unsigned int ff_layout_hint_idx(enum pnfs_iomode iomode)
+{
+	return iomode == IOMODE_RW;
+}
+
+/* Called under rcu_read_lock() by pnfs_lookup_cached_lseg() */
+static struct pnfs_layout_segment *
+ff_layout_get_lseg_hint(struct pnfs_layout_hdr *lo, enum pnfs_iomode iomode)
+{
+	return rcu_dereference(FF_LAYOUT_FROM_HDR(lo)->lseg_hint[ff_layout_hint_idx(iomode)]);
+}
+
+/* Caller holds a reference on @lseg, so ff_layout_free_lseg() cannot run */
+static void
+ff_layout_set_lseg_hint(struct pnfs_layout_segment *lseg,
+			enum pnfs_iomode iomode)
+{
+	struct nfs4_flexfile_layout *ffl = FF_LAYOUT_FROM_HDR(lseg->pls_layout);
+	struct pnfs_layout_segment __rcu **slot =
+		&ffl->lseg_hint[ff_layout_hint_idx(iomode)];
+
+	if (rcu_access_pointer(*slot) != lseg &&
+	    test_bit(NFS_LSEG_VALID, &lseg->pls_flags))
+		rcu_assign_pointer(*slot, lseg);
+}
+
+static void
+ff_layout_clear_lseg_hint(struct nfs4_flexfile_layout *ffl,
+			  struct pnfs_layout_segment *lseg)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(ffl->lseg_hint); i++)
+		if (rcu_access_pointer(ffl->lseg_hint[i]) == lseg)
+			(void)cmpxchg(&ffl->lseg_hint[i],
+				      RCU_INITIALIZER(lseg), NULL);
+}
+
+/*
+ * pnfs_update_layout() for the per-I/O pg_init paths: try the lockless
+ * lookup of the cached segment first, fall back to the full thing.
+ */
+static struct pnfs_layout_segment *
+ff_layout_update_layout(struct nfs_pageio_descriptor *pgio,
+			struct nfs_page *req, enum pnfs_iomode iomode,
+			bool strict_iomode)
+{
+	struct nfs_open_context *ctx = nfs_req_openctx(req);
+	struct pnfs_layout_segment *lseg;
+
+	lseg = pnfs_lookup_cached_lseg(pgio->pg_inode, ctx, req_offset(req),
+				       req->wb_bytes, iomode, strict_iomode);
+	if (lseg)
+		return lseg;
+	lseg = pnfs_update_layout(pgio->pg_inode, ctx, req_offset(req),
+				  req->wb_bytes, iomode, strict_iomode,
+				  nfs_io_gfp_mask());
+	if (!IS_ERR_OR_NULL(lseg))
+		ff_layout_set_lseg_hint(lseg, iomode);
+	return lseg;
 }
 
 static bool
@@ -669,14 +737,16 @@ static void
 ff_layout_free_lseg(struct pnfs_layout_segment *lseg)
 {
 	struct nfs4_ff_layout_segment *fls = FF_LAYOUT_LSEG(lseg);
+	struct nfs4_flexfile_layout *ffl = FF_LAYOUT_FROM_HDR(lseg->pls_layout);
 
 	dprintk("--> %s\n", __func__);
 
+	/* Before the kfree_rcu() in _ff_layout_free_lseg() */
+	ff_layout_clear_lseg_hint(ffl, lseg);
+
 	if (lseg->pls_range.iomode == IOMODE_RW) {
-		struct nfs4_flexfile_layout *ffl;
 		struct inode *inode;
 
-		ffl = FF_LAYOUT_FROM_HDR(lseg->pls_layout);
 		inode = ffl->generic_hdr.plh_inode;
 		spin_lock(&inode->i_lock);
 		pnfs_generic_ds_cinfo_release_lseg(&ffl->commit_info, lseg);
@@ -998,10 +1068,8 @@ ff_layout_pg_get_read(struct nfs_pageio_descriptor *pgio,
 		      bool strict_iomode)
 {
 	pnfs_put_lseg(pgio->pg_lseg);
-	pgio->pg_lseg =
-		pnfs_update_layout(pgio->pg_inode, nfs_req_openctx(req),
-				   req_offset(req), req->wb_bytes, IOMODE_READ,
-				   strict_iomode, nfs_io_gfp_mask());
+	pgio->pg_lseg = ff_layout_update_layout(pgio, req, IOMODE_READ,
+						strict_iomode);
 	if (IS_ERR(pgio->pg_lseg)) {
 		pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 		pgio->pg_lseg = NULL;
@@ -1140,10 +1208,8 @@ ff_layout_pg_init_write(struct nfs_pageio_descriptor *pgio,
 retry:
 	pnfs_generic_pg_check_layout(pgio, req);
 	if (!pgio->pg_lseg) {
-		pgio->pg_lseg =
-			pnfs_update_layout(pgio->pg_inode, nfs_req_openctx(req),
-					   req_offset(req), req->wb_bytes,
-					   IOMODE_RW, false, nfs_io_gfp_mask());
+		pgio->pg_lseg = ff_layout_update_layout(pgio, req, IOMODE_RW,
+							false);
 		if (IS_ERR(pgio->pg_lseg)) {
 			pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 			pgio->pg_lseg = NULL;
@@ -1205,10 +1271,8 @@ ff_layout_pg_get_mirror_count_write(struct nfs_pageio_descriptor *pgio,
 				    struct nfs_page *req)
 {
 	if (!pgio->pg_lseg) {
-		pgio->pg_lseg =
-			pnfs_update_layout(pgio->pg_inode, nfs_req_openctx(req),
-					   req_offset(req), req->wb_bytes,
-					   IOMODE_RW, false, nfs_io_gfp_mask());
+		pgio->pg_lseg = ff_layout_update_layout(pgio, req, IOMODE_RW,
+							false);
 		if (IS_ERR(pgio->pg_lseg)) {
 			pgio->pg_error = PTR_ERR(pgio->pg_lseg);
 			pgio->pg_lseg = NULL;
@@ -3263,6 +3327,7 @@ static struct pnfs_layoutdriver_type flexfilelayout_type = {
 	.sync			= pnfs_nfs_generic_sync,
 	.prepare_layoutstats	= ff_layout_prepare_layoutstats,
 	.cancel_io		= ff_layout_cancel_io,
+	.get_cached_lseg_hint	= ff_layout_get_lseg_hint,
 };
 
 static int __init nfs4flexfilelayout_init(void)

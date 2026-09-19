@@ -399,6 +399,11 @@ pnfs_clear_lseg_state(struct pnfs_layout_segment *lseg,
 {
 	clear_bit(NFS_LSEG_ROC, &lseg->pls_flags);
 	clear_bit(NFS_LSEG_LAYOUTRETURN, &lseg->pls_flags);
+	/*
+	 * Must stay a fully ordered test_and_clear_bit() done before the
+	 * reference is dropped: pnfs_lookup_cached_lseg() takes a reference
+	 * and then tests NFS_LSEG_VALID without inode->i_lock.
+	 */
 	if (test_and_clear_bit(NFS_LSEG_VALID, &lseg->pls_flags))
 		pnfs_lseg_dec_and_remove_zero(lseg, free_me);
 	if (test_and_clear_bit(NFS_LSEG_LAYOUTCOMMIT, &lseg->pls_flags))
@@ -671,6 +676,11 @@ static int mark_lseg_invalid(struct pnfs_layout_segment *lseg,
 {
 	int rv = 0;
 
+	/*
+	 * Must stay a fully ordered test_and_clear_bit() done before the
+	 * reference is dropped: pnfs_lookup_cached_lseg() takes a reference
+	 * and then tests NFS_LSEG_VALID without inode->i_lock.
+	 */
 	if (test_and_clear_bit(NFS_LSEG_VALID, &lseg->pls_flags)) {
 		/* Remove the reference keeping the lseg in the
 		 * list.  It will now be removed when all
@@ -1944,7 +1954,11 @@ pnfs_find_alloc_layout(struct inode *ino,
 	spin_lock(&ino->i_lock);
 
 	if (likely(nfsi->layout == NULL)) {	/* Won the race? */
-		nfsi->layout = new;
+		/*
+		 * Pairs with READ_ONCE() in pnfs_lookup_cached_lseg(): a
+		 * lockless reader that sees @new sees it initialised.
+		 */
+		smp_store_release(&nfsi->layout, new);
 		return new;
 	} else if (new != NULL)
 		pnfs_free_layout_hdr(new);
@@ -2423,6 +2437,115 @@ out_unlock:
 	goto out_put_layout_hdr;
 }
 EXPORT_SYMBOL_GPL(pnfs_update_layout);
+
+/*
+ * Layout header states in which pnfs_update_layout() would not simply hand
+ * back a cached segment: it would wait, go to the MDS, retry a failed
+ * LAYOUTGET, or (via pnfs_put_layout_hdr) start a LAYOUTRETURN.
+ */
+#define PNFS_LAYOUT_FASTPATH_BUSY					\
+	(BIT(NFS_LAYOUT_BULK_RECALL) | BIT(NFS_LAYOUT_RETURN) |		\
+	 BIT(NFS_LAYOUT_RETURN_REQUESTED) | BIT(NFS_LAYOUT_INVALID_STID) |	\
+	 BIT(NFS_LAYOUT_FIRST_LAYOUTGET) | BIT(NFS_LAYOUT_INODE_FREEING))
+
+#define NFS4CLNT_FASTPATH_BUSY						\
+	(BIT(NFS4CLNT_MANAGER_RUNNING) | BIT(NFS4CLNT_CHECK_LEASE) |	\
+	 BIT(NFS4CLNT_LEASE_EXPIRED))
+
+/**
+ * pnfs_lookup_cached_lseg - lockless lookup of a cached layout segment
+ * @ino: inode
+ * @ctx: open context of the I/O
+ * @pos: offset of the I/O
+ * @count: length of the I/O
+ * @iomode: IOMODE_READ or IOMODE_RW
+ * @strict_iomode: as for pnfs_update_layout()
+ *
+ * The candidate segment comes from the layout driver's get_cached_lseg_hint()
+ * op (called here under rcu_read_lock()); a driver that does not provide it
+ * gets no fast path.  The driver must clear the hint before freeing a segment
+ * and free the segment memory only after an RCU grace period.
+ *
+ * Returns a referenced segment that pnfs_update_layout() could have returned
+ * as PNFS_UPDATE_LAYOUT_FOUND_CACHED, without taking inode->i_lock.  Returns
+ * NULL whenever anything but that outcome is possible; the caller then calls
+ * pnfs_update_layout(), which handles every such case exactly as before.
+ */
+struct pnfs_layout_segment *
+pnfs_lookup_cached_lseg(struct inode *ino, struct nfs_open_context *ctx,
+			loff_t pos, u64 count, enum pnfs_iomode iomode,
+			bool strict_iomode)
+{
+	struct pnfs_layout_range arg = {
+		.iomode = iomode,
+		.offset = pos,
+		.length = count,
+	};
+	struct nfs_server *server = NFS_SERVER(ino);
+	struct nfs_client *clp = server->nfs_client;
+	struct pnfs_layout_segment *lseg;
+	struct pnfs_layout_hdr *lo;
+	unsigned long flags;
+
+	if (!pnfs_enabled_sb(server) ||
+	    !server->pnfs_curr_ld->get_cached_lseg_hint ||
+	    pnfs_within_mdsthreshold(ctx, ino, iomode) ||
+	    !nfs4_valid_open_stateid(ctx->state))
+		return NULL;
+	/*
+	 * nfs4_client_recover_expired_lease() without the sleep and without
+	 * the clp->cl_count get/put: bail if it could do anything but
+	 * return 0 at once.
+	 */
+	if ((READ_ONCE(clp->cl_state) & NFS4CLNT_FASTPATH_BUSY) ||
+	    READ_ONCE(clp->cl_cons_state) < 0)
+		return NULL;
+
+	rcu_read_lock();
+	lo = READ_ONCE(NFS_I(ino)->layout);
+	if (!lo)
+		goto out_miss;
+	lseg = server->pnfs_curr_ld->get_cached_lseg_hint(lo, iomode);
+	/*
+	 * A zero count is final: the segment is off plh_segs or about to be,
+	 * and may be parked on plh_return_segs or awaiting its RCU-deferred
+	 * free.  Never resurrect it.
+	 */
+	if (!lseg || !refcount_inc_not_zero(&lseg->pls_refcount))
+		goto out_miss;
+	/*
+	 * Order our reference before the NFS_LSEG_VALID test.  Pairs with
+	 * the fully ordered test_and_clear_bit(NFS_LSEG_VALID) that precedes
+	 * the refcount drop in mark_lseg_invalid(): either we see the
+	 * segment invalid, or whoever invalidates it sees our reference.
+	 */
+	smp_mb__after_atomic();
+	if (!test_bit(NFS_LSEG_VALID, &lseg->pls_flags))
+		goto out_put;
+	flags = READ_ONCE(lo->plh_flags);
+	if (flags & (PNFS_LAYOUT_FASTPATH_BUSY |
+		     BIT(pnfs_iomode_to_fail_bit(iomode))))
+		goto out_put;
+	if ((flags & BIT(NFS_LAYOUT_DRAIN)) &&
+	    atomic_read(&lo->plh_outstanding) != 0)
+		goto out_put;
+	if (!pnfs_lseg_range_match(&lseg->pls_range, &arg, strict_iomode))
+		goto out_put;
+	rcu_read_unlock();
+	trace_pnfs_update_layout(ino, pos, count, iomode, lo, lseg,
+				 PNFS_UPDATE_LAYOUT_FOUND_CACHED);
+	return lseg;
+
+out_put:
+	rcu_read_unlock();
+	/* We hold a real reference; lock only if it turns out to be the last */
+	pnfs_put_lseg(lseg);
+	return NULL;
+out_miss:
+	rcu_read_unlock();
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(pnfs_lookup_cached_lseg);
 
 static bool
 pnfs_sanity_check_layout_range(struct pnfs_layout_range *range)
