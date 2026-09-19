@@ -258,9 +258,48 @@ void nfs_zap_acl_cache(struct inode *inode)
 }
 EXPORT_SYMBOL_GPL(nfs_zap_acl_cache);
 
+/*
+ * Return true if nfs_set_cache_invalid(inode, NFS_INO_INVALID_ATIME) would
+ * not change anything, so that nfs_invalidate_atime() can skip i_lock.
+ *
+ * Besides setting the bit, nfs_set_cache_invalid() drops a stale
+ * NFS_INO_INVALID_DATA once the page cache is empty. It also clears the
+ * out-of-order change attribute tracking (nfs_ooo_clear()) when the page
+ * cache is empty or about to be invalidated. When either of those still
+ * has work to do, take the slow path.
+ *
+ * This check is racy, just as a locked call is racy against a concurrent
+ * update. A stale answer only postpones that cleanup, and the cleanup errs
+ * towards invalidating.
+ */
+static bool nfs_atime_invalid_is_noop(struct inode *inode)
+{
+	struct nfs_inode *nfsi = NFS_I(inode);
+	unsigned long cache_validity = READ_ONCE(nfsi->cache_validity);
+
+	if (!(cache_validity & NFS_INO_INVALID_ATIME))
+		return false;
+	if (READ_ONCE(inode->i_mapping->nrpages) == 0) {
+		if (cache_validity & NFS_INO_INVALID_DATA)
+			return false;
+	} else if (!(cache_validity & NFS_INO_INVALID_DATA)) {
+		return true;
+	}
+	return !(cache_validity & NFS_INO_DATA_INVAL_DEFER) &&
+	       !READ_ONCE(nfsi->ooo);
+}
+
 void nfs_invalidate_atime(struct inode *inode)
 {
 	if (nfs_have_delegated_atime(inode))
+		return;
+	/*
+	 * Every READ reply lands here. The atime stays marked stale until
+	 * something refreshes or sets it, and that clears the bit under
+	 * i_lock. Until then, don't take inode->i_lock just to mark it
+	 * again.
+	 */
+	if (nfs_atime_invalid_is_noop(inode))
 		return;
 	spin_lock(&inode->i_lock);
 	nfs_set_cache_invalid(inode, NFS_INO_INVALID_ATIME);
