@@ -1,3 +1,19 @@
+* Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-7]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Mark the boundary page of a split direct-mode WRITE dropbehind after its data
+  is written rather than before: a writer that blocked on the filesystem inode
+  lock in between left a clean marked folio, which whatever writeback completed
+  next then dropped, so the write landed on a fresh folio and read the block
+  back; 0.026 to 0.017 device reads per direct-mode WRITE on interleaved
+  47008-byte records
+- Claim the edge pages of a WRITE that gets no direct middle, issued as a
+  single buffered DONTCACHE segment: its partial first and last pages are
+  shared with the neighbouring WRITEs exactly like a prefix or suffix but went
+  unclaimed, so each was dropped at writeback and read back by its partner,
+  one synchronous read inside every such WRITE; 0.985 to 0.001 device reads per
+  WRITE on 6000-byte records, a 62% higher WRITE rate, and page cache growth
+  over the run down from about 5% of the bytes written to zero
+
 * Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-6]
 - Update nfsd-testing-canary-dontcache; no other branch changed
 - Replace -4's tail-page scheme with one the page cache arbitrates: a split
