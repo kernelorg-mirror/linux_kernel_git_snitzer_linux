@@ -1,3 +1,26 @@
+* Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-8]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- No functional change from -7: the series is reordered and its commit
+  messages, code comments and Documentation/filesystems/nfs/nfsd-io-modes.rst
+  rewritten for upstream posting. The only code change is renaming complete to
+  complete_first, a second flag now sitting beside it for the last edge page;
+  mm/ and include/ are byte-identical to -7
+- Lead the series with the bdi WB_DONTCACHE_DIRTY debugfs stat, its only
+  Fixes-tagged commit and the one independently applicable change
+- Record why a boundary page is inserted unmarked and marked only after its
+  write, using the unaccounted setter: a page counted in WB_DONTCACHE_DIRTY is
+  written back, and dropped, by the DONTCACHE writeback kick in the gap between
+  the two WRITEs that share it. Measured 13 device reads per 45664 WRITEs of
+  47008-byte records and none for 6000-byte records, against 1213 and 2987 with
+  the mechanism disabled
+- State what the stable_how floor modes are for rather than offering them as an
+  experiment: they elide a COMMIT that is redundant once the data is persistent
+  when NFSD replies, worth about 20us of server CPU each, and the COMMITs cost
+  +31% server and +42% client CPU for the same bytes where every WRITE splits
+- Present direct_misaligned_dontcache as a page-cache policy choice rather than
+  a reference arm for A/B comparison, naming the workloads that want it off:
+  those that read back or repeatedly rewrite what they just wrote
+
 * Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-7]
 - Update nfsd-testing-canary-dontcache; no other branch changed
 - Mark the boundary page of a split direct-mode WRITE dropbehind after its data
