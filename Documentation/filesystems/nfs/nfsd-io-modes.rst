@@ -164,6 +164,21 @@ Misaligned WRITE:
     not split, as normal buffered IO instead of DONTCACHE, which suits a
     workload that reads back or rewrites what it just wrote.
 
+    The page holding a start or end segment is shared with the
+    neighbouring WRITE, which may arrive before, after or at the same
+    time, from any client. So that the second WRITE to such a page does
+    not have to read it back from disk, NFSD puts an empty page there
+    immediately before writing a start or end segment, if there is not
+    one already, without marking it DONTCACHE. The WRITE that finds the
+    page already there marks it DONTCACHE once it has written it, and
+    the writeback that then cleans it drops it. A page whose neighbouring
+    WRITE never arrives stays cached until it is reclaimed. The first and
+    last pages of a WRITE that is not split are handled the same way.
+
+    None of this applies when the start and end segments are normal
+    buffered IO, or when the filesystem's block size is larger than the
+    page size.
+
 Tracing:
     The nfsd_read_direct trace event shows how NFSD expands any
     misaligned READ to the next DIO-aligned block (on either end of the
