@@ -111,6 +111,13 @@ void nfs_evict_inode(struct inode *inode)
 	nfs_clear_inode(inode);
 }
 
+/*
+ * A caller holding inode->i_rwsem exclusively must call
+ * nfs_file_block_o_direct() first for regular files: O_DIRECT can be
+ * admitted without i_rwsem while the inode is in O_DIRECT mode, so the
+ * inode_dio_wait() here would otherwise neither exclude new O_DIRECT
+ * nor be guaranteed to finish.
+ */
 int nfs_sync_inode(struct inode *inode)
 {
 	inode_dio_wait(inode);

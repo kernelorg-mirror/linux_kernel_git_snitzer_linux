@@ -2726,8 +2726,11 @@ nfs_link(struct dentry *old_dentry, struct inode *dir, struct dentry *dentry)
 
 	trace_nfs_link_enter(inode, dir, dentry);
 	d_drop(dentry);
-	if (S_ISREG(inode->i_mode))
+	if (S_ISREG(inode->i_mode)) {
+		/* vfs_link() holds inode->i_rwsem exclusively */
+		nfs_file_block_o_direct(NFS_I(inode));
 		nfs_sync_inode(inode);
+	}
 	error = NFS_PROTO(dir)->link(inode, dir, &dentry->d_name);
 	if (error == 0) {
 		nfs_set_verifier(dentry, nfs_save_change_attribute(dir));
@@ -2849,8 +2852,11 @@ int nfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
 	}
 
 	if (S_ISREG(old_inode->i_mode) &&
-	    nfs_rename_is_unsafe_cross_dir(old_dentry, new_dentry))
+	    nfs_rename_is_unsafe_cross_dir(old_dentry, new_dentry)) {
+		/* vfs_rename() holds old_inode->i_rwsem exclusively */
+		nfs_file_block_o_direct(NFS_I(old_inode));
 		nfs_sync_inode(old_inode);
+	}
 	task = nfs_async_rename(old_dir, new_dir, old_dentry, new_dentry,
 				must_unblock ? nfs_unblock_rename : NULL);
 	if (IS_ERR(task)) {

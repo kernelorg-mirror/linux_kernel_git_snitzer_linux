@@ -535,6 +535,8 @@ extern __must_check int nfs_start_io_read(struct inode *inode);
 extern void nfs_end_io_read(struct inode *inode);
 extern  __must_check int nfs_start_io_write(struct inode *inode);
 extern void nfs_end_io_write(struct inode *inode);
+/* nfs_start_io_direct*(): lockless, caller owns an i_dio_count reference */
+#define NFS_IO_DIRECT_LOCKLESS	1
 extern __must_check int nfs_start_io_direct(struct inode *inode);
 extern __must_check int nfs_start_io_direct_nowait(struct inode *inode);
 extern void nfs_end_io_direct(struct inode *inode);
@@ -576,11 +578,23 @@ static inline void nfs_account_write_io(struct inode *inode, u64 count)
 		NFS_I(inode)->write_io += count;
 }
 
-/* Must be called with exclusively locked inode->i_rwsem */
+/*
+ * Must be called with exclusively locked inode->i_rwsem.
+ *
+ * Besides switching the inode out of O_DIRECT mode, this is what excludes
+ * lockless O_DIRECT (nfs_start_io_direct_lockless()) for the rest of the
+ * exclusive section: after it returns, no O_DIRECT request admitted
+ * without i_rwsem is in flight and no new one can be admitted until the
+ * flag is set again under the exclusive lock.  Any exclusive i_rwsem
+ * holder that needs O_DIRECT quiesced must call this, not just
+ * inode_dio_wait().  The barrier pairs with smp_mb__after_atomic() in
+ * nfs_start_io_direct_lockless().
+ */
 static inline void nfs_file_block_o_direct(struct nfs_inode *nfsi)
 {
 	if (test_bit(NFS_INO_ODIRECT, &nfsi->flags)) {
 		clear_bit(NFS_INO_ODIRECT, &nfsi->flags);
+		smp_mb__after_atomic();
 		inode_dio_wait(&nfsi->vfs_inode);
 	}
 }

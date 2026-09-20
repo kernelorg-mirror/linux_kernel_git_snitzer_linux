@@ -339,7 +339,7 @@ static const struct nfs_pgio_completion_ops nfs_direct_read_completion_ops = {
 
 static ssize_t nfs_direct_read_schedule_iovec(struct nfs_direct_req *dreq,
 					      struct iov_iter *iter,
-					      loff_t pos)
+					      loff_t pos, bool dio_ref_held)
 {
 	struct nfs_pageio_descriptor desc;
 	struct inode *inode = dreq->inode;
@@ -351,7 +351,9 @@ static ssize_t nfs_direct_read_schedule_iovec(struct nfs_direct_req *dreq,
 			     &nfs_direct_read_completion_ops);
 	get_dreq(dreq);
 	desc.pg_dreq = dreq;
-	inode_dio_begin(inode);
+	/* A lockless nfs_start_io_direct() already took our i_dio_count ref */
+	if (!dio_ref_held)
+		inode_dio_begin(inode);
 
 	while (iov_iter_count(iter)) {
 		struct page **pagevec;
@@ -439,6 +441,7 @@ ssize_t nfs_file_direct_read(struct kiocb *iocb, struct iov_iter *iter,
 	struct nfs_lock_context *l_ctx;
 	ssize_t result, requested;
 	size_t count = iov_iter_count(iter);
+	bool lockless = false;
 	nfs_add_stats(mapping->host, NFSIOS_DIRECTREADBYTES, count);
 
 	dfprintk(FILE, "NFS: direct read(%pD2, %zd@%Ld)\n",
@@ -482,19 +485,22 @@ ssize_t nfs_file_direct_read(struct kiocb *iocb, struct iov_iter *iter,
 			result = nfs_start_io_direct_nowait(inode);
 		else
 			result = nfs_start_io_direct(inode);
-		if (result) {
+		if (result < 0) {
 			/* release the reference that would usually be
 			 * consumed by nfs_direct_read_schedule_iovec()
 			 */
 			nfs_direct_req_release(dreq);
 			goto out_release;
 		}
+		lockless = result == NFS_IO_DIRECT_LOCKLESS;
 	}
 
 	nfs_account_read_io(inode, count);
-	requested = nfs_direct_read_schedule_iovec(dreq, iter, iocb->ki_pos);
+	/* Consumes the i_dio_count reference of a lockless start */
+	requested = nfs_direct_read_schedule_iovec(dreq, iter, iocb->ki_pos,
+						   lockless);
 
-	if (!swap)
+	if (!swap && !lockless)
 		nfs_end_io_direct(inode);
 
 	if (requested > 0) {
@@ -936,7 +942,9 @@ static const struct nfs_pgio_completion_ops nfs_direct_write_completion_ops = {
  */
 static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 					       struct iov_iter *iter,
-					       loff_t pos, int ioflags)
+					       loff_t pos, int ioflags,
+					       bool invalidate,
+					       bool dio_ref_held)
 {
 	struct nfs_pageio_descriptor desc;
 	struct inode *inode = dreq->inode;
@@ -944,6 +952,8 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 	ssize_t result = 0;
 	size_t requested_bytes = 0;
 	size_t wsize = max_t(size_t, NFS_SERVER(inode)->wsize, PAGE_SIZE);
+	pgoff_t first = pos >> PAGE_SHIFT;
+	pgoff_t last = (pos + iov_iter_count(iter) - 1) >> PAGE_SHIFT;
 	bool defer = false;
 
 	trace_nfs_direct_write_schedule_iovec(dreq);
@@ -952,7 +962,9 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 			      &nfs_direct_write_completion_ops);
 	desc.pg_dreq = dreq;
 	get_dreq(dreq);
-	inode_dio_begin(inode);
+	/* A lockless nfs_start_io_direct() already took our i_dio_count ref */
+	if (!dio_ref_held)
+		inode_dio_begin(inode);
 
 	nfs_account_write_io(inode, iov_iter_count(iter));
 	while (iov_iter_count(iter)) {
@@ -1024,6 +1036,19 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 	nfs_pageio_complete(&desc);
 
 	/*
+	 * Drop page cache pages (e.g. faulted in through mmap) over the range
+	 * just written.  This is done while we still hold our i_dio_count
+	 * reference and our dreq reference, so that it stays inside the
+	 * O_DIRECT exclusion window also when nfs_start_io_direct() was
+	 * lockless (the request may otherwise complete, and drop the
+	 * reference, before we get here).  Completion of the request is
+	 * therefore held until the invalidation is done; that only costs
+	 * anything when the mapping has pages.
+	 */
+	if (invalidate && inode->i_mapping->nrpages)
+		invalidate_inode_pages2_range(inode->i_mapping, first, last);
+
+	/*
 	 * If no bytes were started, return the error, and let the
 	 * generic layer handle the completion.
 	 */
@@ -1035,10 +1060,14 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 
 	/*
 	 * If the submitter drops the last reference of an async write, do
-	 * not run ki_complete from here: i_rwsem is still held (aio's
-	 * kiocb_end_write() would take sb_writers under it, a lockdep
-	 * inversion) and the caller still uses the iov_iter afterwards
-	 * (swap's ki_complete frees the bvec it points at).
+	 * not run ki_complete from here: i_rwsem may still be held (after a
+	 * slow-path nfs_start_io_direct(); aio's kiocb_end_write() would take
+	 * sb_writers under it, a lockdep inversion) and the caller still uses
+	 * the iov_iter afterwards (swap's ki_complete frees the bvec it
+	 * points at).  The page cache invalidation above has already run, so
+	 * whichever context finishes the dreq (here, rpciod or nfsiod) may
+	 * drop the i_dio_count reference, including the one taken by a
+	 * lockless nfs_start_io_direct().
 	 */
 	if (put_dreq(dreq)) {
 		if (dreq->iocb) {
@@ -1081,7 +1110,7 @@ ssize_t nfs_file_direct_write(struct kiocb *iocb, struct iov_iter *iter,
 	struct inode *inode = mapping->host;
 	struct nfs_direct_req *dreq;
 	struct nfs_lock_context *l_ctx;
-	loff_t pos, end;
+	loff_t pos;
 
 	dfprintk(FILE, "NFS: direct write(%pD2, %zd@%Ld)\n",
 		file, iov_iter_count(iter), (long long) iocb->ki_pos);
@@ -1097,7 +1126,6 @@ ssize_t nfs_file_direct_write(struct kiocb *iocb, struct iov_iter *iter,
 	nfs_add_stats(mapping->host, NFSIOS_DIRECTWRITTENBYTES, count);
 
 	pos = iocb->ki_pos;
-	end = (pos + iov_iter_count(iter) - 1) >> PAGE_SHIFT;
 
 	task_io_account_write(count);
 
@@ -1123,26 +1151,31 @@ ssize_t nfs_file_direct_write(struct kiocb *iocb, struct iov_iter *iter,
 
 	if (swap) {
 		requested = nfs_direct_write_schedule_iovec(dreq, iter, pos,
-							    FLUSH_STABLE);
+							    FLUSH_STABLE,
+							    false, false);
 	} else {
+		bool lockless;
+
 		result = nfs_start_io_direct(inode);
-		if (result) {
+		if (result < 0) {
 			/* release the reference that would usually be
 			 * consumed by nfs_direct_write_schedule_iovec()
 			 */
 			nfs_direct_req_release(dreq);
 			goto out_release;
 		}
+		lockless = result == NFS_IO_DIRECT_LOCKLESS;
 
+		/*
+		 * Consumes the i_dio_count reference of a lockless start, and
+		 * invalidates the page cache over the written range.
+		 */
 		requested = nfs_direct_write_schedule_iovec(dreq, iter, pos,
-							    FLUSH_COND_STABLE);
+							    FLUSH_COND_STABLE,
+							    true, lockless);
 
-		if (mapping->nrpages) {
-			invalidate_inode_pages2_range(mapping,
-						      pos >> PAGE_SHIFT, end);
-		}
-
-		nfs_end_io_direct(inode);
+		if (!lockless)
+			nfs_end_io_direct(inode);
 	}
 
 	if (requested > 0) {
