@@ -491,7 +491,7 @@ ssize_t nfs_file_direct_read(struct kiocb *iocb, struct iov_iter *iter,
 		}
 	}
 
-	NFS_I(inode)->read_io += count;
+	nfs_account_read_io(inode, count);
 	requested = nfs_direct_read_schedule_iovec(dreq, iter, iocb->ki_pos);
 
 	if (!swap)
@@ -907,7 +907,7 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 	get_dreq(dreq);
 	inode_dio_begin(inode);
 
-	NFS_I(inode)->write_io += iov_iter_count(iter);
+	nfs_account_write_io(inode, iov_iter_count(iter));
 	while (iov_iter_count(iter)) {
 		struct page **pagevec;
 		size_t bytes;

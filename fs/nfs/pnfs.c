@@ -2031,9 +2031,15 @@ pnfs_find_lseg(struct pnfs_layout_hdr *lo,
  * to the MDS or over pNFS
  *
  * The nfs_inode read_io and write_io fields are cumulative counters reset
- * when there are no layout segments. Note that in pnfs_update_layout iomode
- * is set to IOMODE_READ for a READ request, and set to IOMODE_RW for a
- * WRITE request.
+ * when there are no layout segments.  They are only maintained once an open
+ * context of the inode has received an I/O-size threshold (see
+ * NFS_INO_MDSTHRESHOLD_IO), which is the only case in which they are read
+ * below; I/O issued before any open of the inode received such a threshold
+ * is not counted, so the totals read here can be smaller than the I/O the
+ * inode has really done, which keeps them below the threshold, and so keeps
+ * this test returning true, for longer.  Note that in pnfs_update_layout
+ * iomode is set to IOMODE_READ for a READ request, and set to IOMODE_RW
+ * for a WRITE request.
  *
  * A return of true means use MDS I/O.
  *
