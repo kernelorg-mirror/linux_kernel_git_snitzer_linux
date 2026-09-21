@@ -1099,46 +1099,72 @@ ff_layout_lseg_is_striped(const struct nfs4_ff_layout_segment *fls)
 }
 
 /*
- * ff_layout_pg_test(). Called by nfs_can_coalesce_requests()
+ * ff_layout_pg_bsize - byte limit for the RPC being built on @pgm
  *
- * Return 0 if @req cannot be coalesced into @pgio, otherwise return the number
- * of bytes (maximum @req->wb_bytes) that can be coalesced.
+ * An RPC to a flexfiles data server must not run past the end of the layout
+ * segment, nor, on a striped layout, past the end of the stripe unit it
+ * starts in.  Rather than test that for every nfs_page (which used to read
+ * pls_range, stripe_unit and mirror_array[0] from the segment for each of the
+ * pages of an RPC, while other CPUs were dirtying the same cacheline with
+ * pls_refcount), fold the bound into the mirror's pg_bsize once, when
+ * ->pg_init() sets up the RPC.  nfs_generic_pg_test() then enforces it using
+ * only the descriptor: it caps what it accepts at pg_bsize - pg_count, and
+ * since every request after the first is contiguous with the previous one
+ * (nfs_page_is_contiguous()), pg_count is exactly req_offset(req) - start,
+ * so pg_bsize - pg_count is min(ds bsize - pg_count, boundary -
+ * req_offset(req)): what the old per-page test computed.
+ *
+ * @start is the file offset of the first request of the RPC: that of @req
+ * when @pgm is empty (the mirror ->pg_init() was called for), otherwise that
+ * of the first request already queued on @pgm (another mirror of a mirrored
+ * write; its bound is recomputed against the current pg_lseg, which is what
+ * the old per-page test did too).
+ *
+ * Must be called whenever pg_lseg is (re)established for an RPC, i.e. from
+ * every successful ->pg_init() path: nothing else stops an RPC from
+ * crossing a stripe (and so going to the wrong DS, as the DS is picked from
+ * hdr->args.offset) or the end of the segment.
+ *
+ * Not strictly identical to the old per-page test in one corner: for a
+ * mirrored write whose pg_lseg was replaced while another mirror had pages
+ * queued, the bound is measured from that mirror's first request against
+ * the new segment, so it may stop coalescing earlier (never later).
  */
 static size_t
-ff_layout_pg_test(struct nfs_pageio_descriptor *pgio, struct nfs_page *prev,
-		  struct nfs_page *req)
+ff_layout_pg_bsize(const struct nfs_pgio_mirror *pgm,
+		   const struct nfs_page *req,
+		   const struct pnfs_layout_segment *lseg, size_t bsize)
 {
-	unsigned int size;
-	u64 p_stripe, r_stripe;
-	u64 stripe_offset;
-	u64 stripe_unit = FF_LAYOUT_LSEG(pgio->pg_lseg)->stripe_unit;
+	const struct nfs4_ff_layout_segment *fls =
+		container_of(lseg, struct nfs4_ff_layout_segment, generic_hdr);
+	bool queued = !list_empty(&pgm->pg_list);
+	u64 start, seg_end, limit, stripe_offset;
 
-	/* calls nfs_generic_pg_test */
-	size = pnfs_generic_pg_test(pgio, prev, req);
-	if (!size)
-		return 0;
-	else if (!ff_layout_lseg_is_striped(FF_LAYOUT_LSEG(pgio->pg_lseg)))
-		return size;
+	if (queued)
+		req = nfs_list_entry(pgm->pg_list.next);
+	start = (u64)req_offset(req);
 
-	/* see if req and prev are in the same stripe */
-	if (prev) {
-		p_stripe = (u64)req_offset(prev);
-		r_stripe = (u64)req_offset(req);
-		p_stripe = div64_u64(p_stripe, stripe_unit);
-		r_stripe = div64_u64(r_stripe, stripe_unit);
+	seg_end = pnfs_end_offset(lseg->pls_range.offset,
+				  lseg->pls_range.length);
+	limit = seg_end > start ? seg_end - start : 0;
 
-		if (p_stripe != r_stripe)
-			return 0;
+	if (ff_layout_lseg_is_striped(fls)) {
+		div64_u64_rem(start, fls->stripe_unit, &stripe_offset);
+		limit = min_t(u64, limit, fls->stripe_unit - stripe_offset);
 	}
 
-	/* calculate remaining bytes in the current stripe */
-	div64_u64_rem((u64)req_offset(req),
-			stripe_unit,
-			&stripe_offset);
-	WARN_ON_ONCE(stripe_offset > stripe_unit);
-	if (stripe_offset >= stripe_unit)
-		return 0;
-	return min_t(u64, stripe_unit - stripe_offset, size);
+	if (limit < bsize)
+		bsize = limit;
+	/*
+	 * Never below what is already queued (a mirror whose bound moved
+	 * because pg_lseg changed under it): that just stops coalescing,
+	 * as the old per-page test did, without nfs_generic_pg_test()'s
+	 * "should never happen" WARN.  An empty mirror's pg_count is stale
+	 * here (nfs_pageio_do_add_request() zeroes it after ->pg_init()).
+	 */
+	if (queued && bsize < pgm->pg_count)
+		bsize = pgm->pg_count;
+	return bsize;
 }
 
 static void
@@ -1180,7 +1206,8 @@ retry:
 	}
 
 	pgm = &pgio->pg_mirrors[0];
-	pgm->pg_bsize = mirror_ds->ds_versions[0].rsize;
+	pgm->pg_bsize = ff_layout_pg_bsize(pgm, req, pgio->pg_lseg,
+					   mirror_ds->ds_versions[0].rsize);
 	nfs4_ff_layout_put_deviceid(mirror_ds);
 
 	pgio->pg_mirror_idx = ds_idx;
@@ -1260,7 +1287,8 @@ retry:
 			goto retry;
 		}
 		pgm = &pgio->pg_mirrors[i];
-		pgm->pg_bsize = mirror_ds->ds_versions[0].wsize;
+		pgm->pg_bsize = ff_layout_pg_bsize(pgm, req, pgio->pg_lseg,
+					mirror_ds->ds_versions[0].wsize);
 		nfs4_ff_layout_put_deviceid(mirror_ds);
 	}
 
@@ -1295,8 +1323,31 @@ ff_layout_pg_get_mirror_count_write(struct nfs_pageio_descriptor *pgio,
 			goto out;
 		}
 	}
-	if (pgio->pg_lseg)
+	if (pgio->pg_lseg) {
+		/*
+		 * Called for every nfs_page.  While the current mirror has
+		 * requests queued, ff_layout_pg_init_write() has already
+		 * checked pg_mirror_count against this very pg_lseg (it
+		 * fails the I/O with -EAGAIN and drops pg_lseg on a
+		 * mismatch, and any failure empties every mirror's list
+		 * via nfs_pageio_error_cleanup()), and neither can have
+		 * changed since: pg_lseg is only replaced by ->pg_init()
+		 * (which re-checks the count), by the NULL case above
+		 * (whose result nfs_pageio_setup_mirroring() immediately
+		 * makes pg_mirror_count) or dropped, and pg_mirror_count
+		 * only changes to what this function returns.  The segment
+		 * reference moved to the last pgio header by
+		 * pnfs_pg_hdr_lseg() leaves pg_lseg NULL, with every list
+		 * empty, so that takes the slow path too.  Answer from the
+		 * descriptor
+		 * and leave the segment's cacheline, which shares a line
+		 * with pls_refcount, alone for pages 2..n of an RPC.
+		 */
+		if (pgio->pg_mirror_idx < pgio->pg_mirror_count &&
+		    !list_empty(&pgio->pg_mirrors[pgio->pg_mirror_idx].pg_list))
+			return pgio->pg_mirror_count;
 		return FF_LAYOUT_MIRROR_COUNT(pgio->pg_lseg);
+	}
 
 	trace_pnfs_mds_fallback_pg_get_mirror_count(pgio->pg_inode,
 			0, NFS4_MAX_UINT64, IOMODE_RW,
@@ -1335,14 +1386,14 @@ ff_layout_pg_get_mirror_write(struct nfs_pageio_descriptor *desc, u32 idx)
 
 static const struct nfs_pageio_ops ff_layout_pg_read_ops = {
 	.pg_init = ff_layout_pg_init_read,
-	.pg_test = ff_layout_pg_test,
+	.pg_test = nfs_generic_pg_test,	/* bounds: ff_layout_pg_bsize() */
 	.pg_doio = pnfs_generic_pg_readpages,
 	.pg_cleanup = pnfs_generic_pg_cleanup,
 };
 
 static const struct nfs_pageio_ops ff_layout_pg_write_ops = {
 	.pg_init = ff_layout_pg_init_write,
-	.pg_test = ff_layout_pg_test,
+	.pg_test = nfs_generic_pg_test,	/* bounds: ff_layout_pg_bsize() */
 	.pg_doio = pnfs_generic_pg_writepages,
 	.pg_get_mirror_count = ff_layout_pg_get_mirror_count_write,
 	.pg_cleanup = pnfs_generic_pg_cleanup,
