@@ -621,7 +621,17 @@ struct rpc_clnt *rpc_create(struct rpc_create_args *args)
 		return clnt;
 
 	for (i = 0; i < args->nconnect - 1; i++) {
-		if (rpc_clnt_add_xprt(clnt, &xprtargs, NULL, NULL) < 0)
+		int err = rpc_clnt_add_xprt(clnt, &xprtargs, NULL, NULL);
+
+		/*
+		 * A transport that could not be added costs this client
+		 * that one transport, not the rest of them: each addition
+		 * is an independent attempt, and a later one may well
+		 * succeed.  The exception is -EAGAIN, which means the
+		 * client's transport switch has already gone away, so
+		 * nothing further can be added to it.
+		 */
+		if (err == -EAGAIN)
 			break;
 	}
 	return clnt;
