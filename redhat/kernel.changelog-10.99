@@ -1,3 +1,23 @@
+* Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-9]
+- Add nfs-testing-canary-reduce-i_lock-contention; no other branch changed
+- Stop taking a shared file's inode->i_lock once per O_DIRECT request: six call
+  sites on the write path and five on the read path each took it about 172,000
+  times a second with many processes doing small stable O_DIRECT I/O to one
+  file over pNFS flexfiles, and contended acquisitions for that workload fall
+  from 11.2M per 10s to 0.74M, total wait from 274s to 4.3s
+- Fix __nfs_find_lock_context() never finding the lock context embedded in the
+  open context, so every direct request for the owner that opened the file
+  allocated a second one and took i_lock twice to link and free it
+- Skip the locked update wherever it would change nothing: a WRITE reply that
+  carries no attributes and ends below EOF, an atime already marked stale, a
+  delegated atime or mtime already at the current coarse clock, and an empty
+  flexfiles commit array; anything else takes the existing locked path
+- Look up the cached pNFS layout segment under RCU with the new
+  pnfs_lookup_cached_lseg(), which returns a segment only where
+  pnfs_update_layout() would have reported it cached and otherwise falls back
+  to it; the new EXPORT_SYMBOL_GPL lives in nfsv4.ko and is used by
+  nfs_layout_flexfiles.ko, so the two modules must come from the same build
+
 * Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-8]
 - Update nfsd-testing-canary-dontcache; no other branch changed
 - No functional change from -7: the series is reordered and its commit
