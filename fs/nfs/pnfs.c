@@ -3542,12 +3542,67 @@ pnfs_try_to_write_data(struct nfs_pgio_header *hdr,
 	return trypnfs;
 }
 
+/*
+ * Give a new pgio header its reference to desc->pg_lseg.
+ *
+ * pg_doio is reached with pg_moreio clear only from
+ * nfs_pageio_complete_mirror(): __nfs_pageio_add_request() and
+ * nfs_pageio_cond_complete() set pg_moreio before they flush, and nothing
+ * clears it before nfs_pageio_init().  If this is also the last mirror to
+ * be flushed, the descriptor's next use of pg_lseg would be pg_cleanup's
+ * put, so hand the descriptor's reference to the header instead of taking
+ * a second one and dropping the first a moment later.  That saves two
+ * locked RMWs on the shared pls_refcount per descriptor, which for
+ * O_DIRECT is per I/O.
+ *
+ * pg_moreio clear is sufficient, not necessary: the last flush of a
+ * descriptor that already split an I/O (a stripe-crossing O_DIRECT I/O,
+ * buffered writeback) could also hand over, but telling that apart would
+ * need a new descriptor field, and the struct's layout is part of the ABI.
+ * Those keep taking their own reference -- and, FLUSH_COND_STABLE having
+ * been cleared in nfs_generic_pgio() once pg_moreio was set, are paying
+ * for a COMMIT as well.
+ *
+ * Should the descriptor be used again (recoalesce after PNFS_TRY_AGAIN),
+ * its mirror list is empty at that point, so pg_init runs before any
+ * pg_test and looks a segment up again (possibly getting a different one;
+ * before, it would have reused the one it held while that stayed valid),
+ * just as it does after pnfs_generic_pg_check_layout() drops one.  That
+ * fresh lookup is what the handover costs on the retry, which a layout
+ * driver reaches only when it could not prepare a data server; the MDS
+ * fallback resets the descriptor to the MDS and drops pg_lseg either way.
+ * No reference is held for longer than before: the descriptor's merely
+ * moves to the header.
+ *
+ * Callers of pnfs_generic_pg_{read,write}pages must not use desc->pg_lseg
+ * after they return: it may be NULL.  All in-tree drivers only install them
+ * as ->pg_doio.
+ */
+static struct pnfs_layout_segment *
+pnfs_pg_hdr_lseg(struct nfs_pageio_descriptor *desc)
+{
+	struct pnfs_layout_segment *lseg = desc->pg_lseg;
+
+	if (!desc->pg_moreio &&
+	    desc->pg_mirror_idx + 1 >= desc->pg_mirror_count) {
+		desc->pg_lseg = NULL;
+		return lseg;
+	}
+	return pnfs_get_lseg(lseg);
+}
+
 static void
 pnfs_do_write(struct nfs_pageio_descriptor *desc,
 	      struct nfs_pgio_header *hdr, int how)
 {
 	const struct rpc_call_ops *call_ops = desc->pg_rpc_callops;
-	struct pnfs_layout_segment *lseg = desc->pg_lseg;
+	/*
+	 * hdr may hold the only reference this task has on the segment
+	 * (pnfs_pg_hdr_lseg()), and once the layout driver has sent the RPC
+	 * its completion may free hdr: do not use lseg after
+	 * PNFS_ATTEMPTED.
+	 */
+	struct pnfs_layout_segment *lseg = hdr->lseg;
 	enum pnfs_try_status trypnfs;
 
 	trypnfs = pnfs_try_to_write_data(hdr, call_ops, lseg, how);
@@ -3588,7 +3643,7 @@ pnfs_generic_pg_writepages(struct nfs_pageio_descriptor *desc)
 	}
 	nfs_pgheader_init(desc, hdr, pnfs_writehdr_free);
 
-	hdr->lseg = pnfs_get_lseg(desc->pg_lseg);
+	hdr->lseg = pnfs_pg_hdr_lseg(desc);
 	ret = nfs_generic_pgio(desc, hdr);
 	if (!ret)
 		pnfs_do_write(desc, hdr, desc->pg_ioflags);
@@ -3693,7 +3748,13 @@ static void
 pnfs_do_read(struct nfs_pageio_descriptor *desc, struct nfs_pgio_header *hdr)
 {
 	const struct rpc_call_ops *call_ops = desc->pg_rpc_callops;
-	struct pnfs_layout_segment *lseg = desc->pg_lseg;
+	/*
+	 * hdr may hold the only reference this task has on the segment
+	 * (pnfs_pg_hdr_lseg()), and once the layout driver has sent the RPC
+	 * its completion may free hdr: do not use lseg after
+	 * PNFS_ATTEMPTED.
+	 */
+	struct pnfs_layout_segment *lseg = hdr->lseg;
 	enum pnfs_try_status trypnfs;
 
 	trypnfs = pnfs_try_to_read_data(hdr, call_ops, lseg);
@@ -3733,7 +3794,7 @@ pnfs_generic_pg_readpages(struct nfs_pageio_descriptor *desc)
 		return desc->pg_error;
 	}
 	nfs_pgheader_init(desc, hdr, pnfs_readhdr_free);
-	hdr->lseg = pnfs_get_lseg(desc->pg_lseg);
+	hdr->lseg = pnfs_pg_hdr_lseg(desc);
 	ret = nfs_generic_pgio(desc, hdr);
 	if (!ret)
 		pnfs_do_read(desc, hdr);
