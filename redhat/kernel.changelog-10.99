@@ -1,3 +1,46 @@
+* Mon Sep 21 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-10]
+- Update nfsd-testing-canary-dontcache and add
+  nfs-testing-canary-reduce-ff-layout-contention; no other branch changed
+- No functional change in nfsd-testing-canary-dontcache: the boundary-page
+  commit's message now states the measured result where it previously recorded
+  a known limitation. On a four-server pNFS flexfiles rig, three clients
+  writing 47008-byte records for 240s against 640 nfsd threads per server,
+  device reads fall from 0.014-0.015 per record to 0.003, page cache growth
+  over the write phase falls from about 11 GiB to 2.9 GiB, and write throughput
+  rises 2.4% to 4.9% across NFSD_IO_DIRECT and both stable_how floors, with
+  read throughput unchanged
+- Continue the inode->i_lock work with 7 further commits built on it, taking
+  the flexfiles layout segment and the O_DIRECT admission and completion paths
+  off the per-I/O path. With many threads doing O_DIRECT I/O through one
+  segment, the line holding pls_refcount and pls_flags is the hottest on the
+  client, and every other CPU using that segment eats the miss
+- Stop dirtying it on every data server RPC: four locked read-modify-writes
+  there change nothing after the first RPC, and are now tested before they are
+  set
+- Give the segment's read-mostly fields their own cacheline, so the reads every
+  RPC makes of stripe_unit, mirror_array and the rest no longer share a line
+  with the refcount other CPUs are writing
+- Bound a data server RPC with pg_bsize computed once in pg_init rather than a
+  test run for every page added, which read that same line each time:
+  ff_layout_pg_test was 7-13% of client CPU with 256 threads writing one file,
+  and ff_layout_pg_get_mirror_count_write another 12%
+- Hand the page I/O descriptor's segment reference to the pgio header instead
+  of taking a second one, removing two more locked updates of the shared
+  refcount per O_DIRECT I/O
+- Admit an O_DIRECT I/O without taking inode->i_rwsem: the shared lock does not
+  serialise the I/O, it only keeps NFS_INO_ODIRECT from being cleared
+  underneath it, so an inode already in O_DIRECT mode takes an i_dio_count
+  reference instead and hundreds of threads stop doing a pair of atomic
+  read-modify-writes on one inode's cacheline per I/O
+- Finish a stable O_DIRECT write inline instead of handing it to nfsiod: when
+  every WRITE came back stable there is nothing to commit or resend, and the
+  commit_mutex that path took was the client's most contended mutex, 9.6s of
+  wait per 10s of run with 256 threads
+- Account nfsi->read_io and nfsi->write_io only for an inode whose open context
+  carries an I/O mdsthreshold; for every NFSv3 file, every NFSv4.0 file and
+  every pNFS file whose server returns no I/O threshold they were write-only
+  and dirtied a shared nfs_inode cacheline on each I/O
+
 * Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-9]
 - Add nfs-testing-canary-reduce-i_lock-contention; no other branch changed
 - Stop taking a shared file's inode->i_lock once per O_DIRECT request: six call
