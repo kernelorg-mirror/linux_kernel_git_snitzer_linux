@@ -735,6 +735,28 @@ static void nfs_direct_write_clear_reqs(struct nfs_direct_req *dreq)
 	}
 }
 
+/*
+ * Final completion of an O_DIRECT write: nothing is left to commit or
+ * resend.  Requests may still sit on the dreq's commit lists (e.g. after
+ * a fatal COMMIT error, or a failed reschedule), and those need
+ * nfsi->commit_mutex to be torn down.  Every request on the MDS list or
+ * on a DS bucket's written list is counted in dreq->mds_cinfo.ncommit
+ * (nfs_request_add_commit_list_locked / nfs_request_remove_commit_list),
+ * and the DS committing lists are only non-empty for the duration of a
+ * commit call, which holds its own reference on the dreq.  So when
+ * ncommit is zero, nfs_direct_write_clear_reqs() would find nothing and
+ * the commit_mutex round trip can be skipped.  The counter was last
+ * modified before the final put_dreq()/nfs_commit_end(), whose
+ * atomic_dec_and_test() orders it before this read.
+ */
+static void nfs_direct_write_finish(struct nfs_direct_req *dreq)
+{
+	if (atomic_long_read(&dreq->mds_cinfo.ncommit))
+		nfs_direct_write_clear_reqs(dreq);
+	nfs_zap_mapping(dreq->inode, dreq->inode->i_mapping);
+	nfs_direct_complete(dreq);
+}
+
 static void nfs_direct_write_schedule_work(struct work_struct *work)
 {
 	struct nfs_direct_req *dreq = container_of(work, struct nfs_direct_req, work);
@@ -743,21 +765,46 @@ static void nfs_direct_write_schedule_work(struct work_struct *work)
 	dreq->flags = 0;
 	switch (flags) {
 		case NFS_ODIRECT_DO_COMMIT:
+			/* dreq may be freed by a concurrent completion after this */
 			nfs_direct_commit_schedule(dreq);
 			break;
 		case NFS_ODIRECT_RESCHED_WRITES:
 			nfs_direct_write_reschedule(dreq);
 			break;
 		default:
-			nfs_direct_write_clear_reqs(dreq);
-			nfs_zap_mapping(dreq->inode, dreq->inode->i_mapping);
-			nfs_direct_complete(dreq);
+			nfs_direct_write_finish(dreq);
 	}
 }
 
+/*
+ * Called by whoever drops the last I/O reference on the dreq.
+ *
+ * Sending a COMMIT or resending WRITEs allocates memory, takes
+ * nfsi->commit_mutex and issues new RPCs, so it must not run from RPC
+ * completion context and is handed to nfsiod.  The common case, where
+ * every WRITE came back stable and nothing is left on the commit lists,
+ * only needs what the O_DIRECT read path already does inline from the
+ * same contexts (inode_dio_end, ki_complete, complete(), dreq release)
+ * plus nfs_zap_mapping() (inode->i_lock), so finish it right here and
+ * save a trip through the nfsiod workqueue.  There are no concurrent
+ * users of dreq->flags or the commit lists once the last I/O reference
+ * has been dropped; nfs_direct_complete() drops the I/O side's kref
+ * exactly as the nfsiod path did.
+ */
 static void nfs_direct_write_complete(struct nfs_direct_req *dreq)
 {
 	trace_nfs_direct_write_complete(dreq);
+	switch (dreq->flags) {
+	case NFS_ODIRECT_DO_COMMIT:
+	case NFS_ODIRECT_RESCHED_WRITES:
+		break;
+	default:
+		if (!atomic_long_read(&dreq->mds_cinfo.ncommit)) {
+			dreq->flags = 0;
+			nfs_direct_write_finish(dreq);
+			return;
+		}
+	}
 	queue_work(nfsiod_workqueue, &dreq->work); /* Calls nfs_direct_write_schedule_work */
 }
 
@@ -986,8 +1033,20 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 		return result < 0 ? result : -EIO;
 	}
 
-	if (put_dreq(dreq))
-		nfs_direct_write_complete(dreq);
+	/*
+	 * If the submitter drops the last reference of an async write, do
+	 * not run ki_complete from here: i_rwsem is still held (aio's
+	 * kiocb_end_write() would take sb_writers under it, a lockdep
+	 * inversion) and the caller still uses the iov_iter afterwards
+	 * (swap's ki_complete frees the bvec it points at).
+	 */
+	if (put_dreq(dreq)) {
+		if (dreq->iocb) {
+			trace_nfs_direct_write_complete(dreq);
+			queue_work(nfsiod_workqueue, &dreq->work);
+		} else
+			nfs_direct_write_complete(dreq);
+	}
 	return requested_bytes;
 }
 
