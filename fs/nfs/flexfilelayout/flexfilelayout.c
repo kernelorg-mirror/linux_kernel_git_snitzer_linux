@@ -1076,6 +1076,22 @@ ff_layout_pg_get_read(struct nfs_pageio_descriptor *pgio,
 	}
 }
 
+/*
+ * See struct nfs4_ff_layout_segment: the read-mostly fields must start a
+ * cacheline past the generic header (so past pls_refcount and pls_flags),
+ * and at least mirror_array[0] must share that line.
+ */
+static_assert(offsetof(struct nfs4_ff_layout_segment, stripe_unit) >=
+	      sizeof(struct pnfs_layout_segment));
+static_assert(!IS_ENABLED(CONFIG_SMP) ||
+	      offsetof(struct nfs4_ff_layout_segment, stripe_unit) %
+	      SMP_CACHE_BYTES == 0);
+static_assert(!IS_ENABLED(CONFIG_SMP) ||
+	      offsetof(struct nfs4_ff_layout_segment, mirror_array) +
+	      sizeof(struct nfs4_ff_layout_mirror *) <=
+	      offsetof(struct nfs4_ff_layout_segment, stripe_unit) +
+	      SMP_CACHE_BYTES);
+
 static bool
 ff_layout_lseg_is_striped(const struct nfs4_ff_layout_segment *fls)
 {
