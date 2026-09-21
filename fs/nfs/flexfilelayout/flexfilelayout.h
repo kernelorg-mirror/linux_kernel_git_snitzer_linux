@@ -150,12 +150,31 @@ struct nfs4_ff_layout_mirror {
 	u32				dss_report_start;
 };
 
+/*
+ * The generic header's second cacheline holds pls_refcount and pls_flags,
+ * which every CPU doing I/O through this segment modifies several times per
+ * RPC.  The fields from stripe_unit on are written only while the segment is
+ * being built (before it is visible to any other task) and are then read for
+ * every RPC (->pg_init(), write/read_pagelist, prepare_ds, the done
+ * callbacks, the first page's pg_get_mirror_count): they start a cacheline
+ * of their own so those reads do not miss each time another CPU touches the
+ * refcount.  mirror_array[] follows in the same line (6 slots with 64-byte
+ * lines; more mirrors spill into the next line, which is read-mostly too).
+ * rcu is written only by kfree_rcu(), so it can live in the refcount's line.
+ *
+ * The offsets are checked by static_asserts in flexfilelayout.c.  That the
+ * object itself is cacheline aligned relies on kzalloc_flex() landing in a
+ * kmalloc-<power of two> cache (sizeof is 192, so 200 bytes and up: at least
+ * kmalloc-256), whose objects are naturally aligned in the absence of slab
+ * debugging redzones.  Misalignment would cost performance, not correctness.
+ */
 struct nfs4_ff_layout_segment {
 	struct pnfs_layout_segment	generic_hdr;
-	u64				stripe_unit;
+	struct rcu_head			rcu;	/* lockless lookup, see lseg_hint */
+	/* Read-mostly from here on: written only before the lseg is visible */
+	u64				stripe_unit ____cacheline_aligned_in_smp;
 	u32				flags;
 	u32				mirror_array_cnt;
-	struct rcu_head			rcu;	/* lockless lookup, see lseg_hint */
 	struct nfs4_ff_layout_mirror	*mirror_array[] __counted_by(mirror_array_cnt);
 };
 
