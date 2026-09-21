@@ -78,9 +78,9 @@ static void rpcrdma_ep_get(struct rpcrdma_ep *ep);
 static int rpcrdma_ep_put(struct rpcrdma_ep *ep);
 static struct rpcrdma_regbuf *
 rpcrdma_regbuf_alloc_node(size_t size, enum dma_data_direction direction,
-			  int node);
+			  int node, gfp_t gfp);
 static struct rpcrdma_regbuf *
-rpcrdma_regbuf_alloc(size_t size, enum dma_data_direction direction);
+rpcrdma_regbuf_alloc(size_t size, enum dma_data_direction direction, gfp_t gfp);
 static bool rpcrdma_regbuf_realloc_node(struct rpcrdma_regbuf *rb,
 					size_t size, gfp_t flags, int node);
 static void rpcrdma_regbuf_dma_unmap(struct rpcrdma_regbuf *rb);
@@ -905,20 +905,20 @@ void rpcrdma_mrs_refresh(struct rpcrdma_xprt *r_xprt)
  * Returns an allocated and fully initialized rpcrdma_req or NULL.
  */
 struct rpcrdma_req *rpcrdma_req_create(struct rpcrdma_xprt *r_xprt,
-				       size_t size)
+				       size_t size, gfp_t gfp)
 {
 	struct rpcrdma_buffer *buffer = &r_xprt->rx_buf;
 	struct rpcrdma_req *req;
 
-	req = kzalloc_obj(*req, XPRTRDMA_GFP_FLAGS);
+	req = kzalloc_obj(*req, gfp);
 	if (req == NULL)
 		goto out1;
 
-	req->rl_sendbuf = rpcrdma_regbuf_alloc(size, DMA_TO_DEVICE);
+	req->rl_sendbuf = rpcrdma_regbuf_alloc(size, DMA_TO_DEVICE, gfp);
 	if (!req->rl_sendbuf)
 		goto out2;
 
-	req->rl_recvbuf = rpcrdma_regbuf_alloc(size, DMA_NONE);
+	req->rl_recvbuf = rpcrdma_regbuf_alloc(size, DMA_NONE, gfp);
 	if (!req->rl_recvbuf)
 		goto out3;
 
@@ -954,7 +954,8 @@ int rpcrdma_req_setup(struct rpcrdma_xprt *r_xprt, struct rpcrdma_req *req)
 		     r_xprt->rx_ep->re_max_rdma_segs * rpcrdma_readchunk_maxsz;
 	maxhdrsize *= sizeof(__be32);
 	rb = rpcrdma_regbuf_alloc(__roundup_pow_of_two(maxhdrsize),
-				  DMA_TO_DEVICE);
+				  DMA_TO_DEVICE,
+				  XPRTRDMA_GFP_FLAGS);
 	if (!rb)
 		goto out;
 
@@ -1046,7 +1047,8 @@ struct rpcrdma_rep *rpcrdma_rep_create(struct rpcrdma_xprt *r_xprt)
 
 	rep->rr_rdmabuf = rpcrdma_regbuf_alloc_node(ep->re_inline_recv,
 						    DMA_FROM_DEVICE,
-						    ibdev_to_node(device));
+						    ibdev_to_node(device),
+						    XPRTRDMA_GFP_FLAGS);
 	if (!rep->rr_rdmabuf)
 		goto out_free;
 
@@ -1182,8 +1184,14 @@ int rpcrdma_buffer_create(struct rpcrdma_xprt *r_xprt)
 	for (i = 0; i < max_reqs; i++) {
 		struct rpcrdma_req *req;
 
+		/* Transport setup is not the Send path: nothing is
+		 * queued on this transport yet, and a failure here
+		 * fails the connect.  Allocate the way the rest of
+		 * transport creation does.
+		 */
 		req = rpcrdma_req_create(r_xprt,
-					 RPCRDMA_V1_DEF_INLINE_SIZE * 2);
+					 RPCRDMA_V1_DEF_INLINE_SIZE * 2,
+					 GFP_KERNEL);
 		if (!req)
 			goto out;
 		llist_add(&req->rl_node, &buf->rb_send_bufs);
@@ -1352,14 +1360,14 @@ void rpcrdma_buffer_put(struct rpcrdma_buffer *buffers, struct rpcrdma_req *req)
  */
 static struct rpcrdma_regbuf *
 rpcrdma_regbuf_alloc_node(size_t size, enum dma_data_direction direction,
-			  int node)
+			  int node, gfp_t gfp)
 {
 	struct rpcrdma_regbuf *rb;
 
-	rb = kmalloc_node(sizeof(*rb), XPRTRDMA_GFP_FLAGS, node);
+	rb = kmalloc_node(sizeof(*rb), gfp, node);
 	if (!rb)
 		return NULL;
-	rb->rg_data = kmalloc_node(size, XPRTRDMA_GFP_FLAGS, node);
+	rb->rg_data = kmalloc_node(size, gfp, node);
 	if (!rb->rg_data) {
 		kfree(rb);
 		return NULL;
@@ -1372,9 +1380,9 @@ rpcrdma_regbuf_alloc_node(size_t size, enum dma_data_direction direction,
 }
 
 static struct rpcrdma_regbuf *
-rpcrdma_regbuf_alloc(size_t size, enum dma_data_direction direction)
+rpcrdma_regbuf_alloc(size_t size, enum dma_data_direction direction, gfp_t gfp)
 {
-	return rpcrdma_regbuf_alloc_node(size, direction, NUMA_NO_NODE);
+	return rpcrdma_regbuf_alloc_node(size, direction, NUMA_NO_NODE, gfp);
 }
 
 /**
