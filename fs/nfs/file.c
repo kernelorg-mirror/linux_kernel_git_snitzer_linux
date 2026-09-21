@@ -472,7 +472,7 @@ static int nfs_write_end(const struct kiocb *iocb,
 		trace_nfs_write_end_done(file_inode(file), pos, len, status);
 		return status;
 	}
-	NFS_I(mapping->host)->write_io += copied;
+	nfs_account_write_io(mapping->host, copied);
 
 	if (nfs_ctx_key_to_expire(ctx, mapping->host))
 		nfs_wb_all(mapping->host);

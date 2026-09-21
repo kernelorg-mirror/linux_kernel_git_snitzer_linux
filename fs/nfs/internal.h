@@ -573,6 +573,47 @@ static inline bool nfs_no_io_thru_mds(struct inode *inode)
 	return test_bit(NFS_INO_NO_IO_THRU_MDS, &NFS_I(inode)->flags);
 }
 
+/*
+ * Module-private nfs_inode->flags bit, as above: set, and never cleared
+ * for the life of the in-core inode, once any NFSv4 OPEN of this inode
+ * has installed an mdsthreshold hint carrying an I/O-size threshold
+ * (THRESHOLD_RD_IO or THRESHOLD_WR_IO) in an open context.  The
+ * cumulative nfsi->read_io and nfsi->write_io counters have no consumer
+ * other than pnfs_within_mdsthreshold(), which only reads them for such a
+ * hint, so until this bit is set the per-I/O stores to them are skipped.
+ * That avoids dirtying a shared nfs_inode cacheline on every I/O for files
+ * that can never be subject to an I/O-size threshold (all NFSv3/v4.0 files
+ * and every pNFS file whose server returns no RD_IO/WR_IO threshold).
+ */
+#define NFS_INO_MDSTHRESHOLD_IO	(31)
+
+/*
+ * One load of nfsi->flags for both bits: account only while an I/O-size
+ * threshold is in use and the server has not forbidden I/O through the
+ * MDS, since pnfs_within_mdsthreshold() bails out before reading the
+ * counters for such a file.
+ */
+static inline bool nfs_mdsthreshold_io_accounting(struct inode *inode)
+{
+	unsigned long flags = READ_ONCE(NFS_I(inode)->flags);
+
+	return unlikely((flags & (BIT(NFS_INO_MDSTHRESHOLD_IO) |
+				  BIT(NFS_INO_NO_IO_THRU_MDS))) ==
+			BIT(NFS_INO_MDSTHRESHOLD_IO));
+}
+
+static inline void nfs_account_read_io(struct inode *inode, u64 count)
+{
+	if (nfs_mdsthreshold_io_accounting(inode))
+		NFS_I(inode)->read_io += count;
+}
+
+static inline void nfs_account_write_io(struct inode *inode, u64 count)
+{
+	if (nfs_mdsthreshold_io_accounting(inode))
+		NFS_I(inode)->write_io += count;
+}
+
 /* Must be called with exclusively locked inode->i_rwsem */
 static inline void nfs_file_block_o_direct(struct nfs_inode *nfsi)
 {

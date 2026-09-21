@@ -3245,6 +3245,15 @@ static int _nfs4_do_open(struct inode *dir,
 		*ctx_th = opendata->f_attr.mdsthreshold;
 		opendata->f_attr.mdsthreshold = NULL;
 	}
+	/*
+	 * Start I/O-size accounting for pnfs_within_mdsthreshold() before
+	 * this context can issue any I/O.  Checked on whatever threshold the
+	 * context holds (not only a freshly installed one) so the bit is
+	 * set whenever any open context of the inode has an I/O threshold.
+	 */
+	if (*ctx_th && ((*ctx_th)->bm & (THRESHOLD_RD_IO | THRESHOLD_WR_IO)) &&
+	    !test_bit(NFS_INO_MDSTHRESHOLD_IO, &NFS_I(state->inode)->flags))
+		set_bit(NFS_INO_MDSTHRESHOLD_IO, &NFS_I(state->inode)->flags);
 
 	nfs4_opendata_put(opendata);
 	nfs4_put_state_owner(sp);
