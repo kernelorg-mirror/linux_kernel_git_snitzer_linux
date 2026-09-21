@@ -3776,14 +3776,23 @@ pnfs_set_layoutcommit(struct inode *inode, struct pnfs_layout_segment *lseg,
 	bool mark_as_dirty = false;
 
 	spin_lock(&inode->i_lock);
-	if (!test_and_set_bit(NFS_INO_LAYOUTCOMMIT, &nfsi->flags)) {
+	/*
+	 * Every write completion lands here.  NFS_INO_LAYOUTCOMMIT and
+	 * NFS_LSEG_LAYOUTCOMMIT are only ever set or cleared under
+	 * inode->i_lock, which we hold, so a plain test_bit() is exact and
+	 * spares the shared nfs_inode and lseg cachelines a locked RMW when
+	 * the bits are already set (the common case under sustained I/O).
+	 */
+	if (!test_bit(NFS_INO_LAYOUTCOMMIT, &nfsi->flags)) {
+		set_bit(NFS_INO_LAYOUTCOMMIT, &nfsi->flags);
 		nfsi->layout->plh_lwb = end_pos;
 		mark_as_dirty = true;
 		dprintk("%s: Set layoutcommit for inode %llu ",
 			__func__, inode->i_ino);
 	} else if (end_pos > nfsi->layout->plh_lwb)
 		nfsi->layout->plh_lwb = end_pos;
-	if (!test_and_set_bit(NFS_LSEG_LAYOUTCOMMIT, &lseg->pls_flags)) {
+	if (!test_bit(NFS_LSEG_LAYOUTCOMMIT, &lseg->pls_flags)) {
+		set_bit(NFS_LSEG_LAYOUTCOMMIT, &lseg->pls_flags);
 		/* references matched in nfs4_layoutcommit_release */
 		pnfs_get_lseg(lseg);
 	}

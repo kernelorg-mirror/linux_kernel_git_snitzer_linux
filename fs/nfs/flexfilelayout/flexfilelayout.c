@@ -1777,6 +1777,28 @@ ff_layout_set_layoutcommit(struct inode *inode,
 		(unsigned long long) NFS_I(inode)->layout->plh_lwb);
 }
 
+/*
+ * Once an lseg has carried I/O, it must be returned (with its statistics)
+ * rather than silently dropped.  This runs at the end of every DS RPC, so
+ * test the bit before setting it: after the first RPC it is always already
+ * set, and an unconditional set_bit() would be a locked RMW that dirties the
+ * lseg cacheline (shared by every task using this layout segment) for no
+ * effect.
+ *
+ * The bit is only cleared when the lseg is torn down or cached for
+ * LAYOUTRETURN (pnfs_clear_lseg_state(), pnfs_cache_lseg_for_layoutreturn()).
+ * If such a clear races with us after test_bit() saw the bit set, the result
+ * is the same as the old unconditional set_bit() being ordered before that
+ * clear, which was always a possible interleaving.  set_bit() implies no
+ * memory ordering, so none is lost.
+ */
+static inline void
+ff_layout_mark_lseg_for_layoutreturn(struct pnfs_layout_segment *lseg)
+{
+	if (!test_bit(NFS_LSEG_LAYOUTRETURN, &lseg->pls_flags))
+		set_bit(NFS_LSEG_LAYOUTRETURN, &lseg->pls_flags);
+}
+
 static void ff_layout_read_record_layoutstats_start(struct rpc_task *task,
 		struct nfs_pgio_header *hdr)
 {
@@ -1821,7 +1843,7 @@ static void ff_layout_read_record_layoutstats_done(struct rpc_task *task,
 		dss_id,
 		hdr->args.count,
 		hdr->res.count);
-	set_bit(NFS_LSEG_LAYOUTRETURN, &hdr->lseg->pls_flags);
+	ff_layout_mark_lseg_for_layoutreturn(hdr->lseg);
 }
 
 static int ff_layout_read_prepare_common(struct rpc_task *task,
@@ -2046,7 +2068,7 @@ static void ff_layout_write_record_layoutstats_done(struct rpc_task *task,
 		hdr->args.count,
 		hdr->res.count,
 		hdr->res.verf->committed);
-	set_bit(NFS_LSEG_LAYOUTRETURN, &hdr->lseg->pls_flags);
+	ff_layout_mark_lseg_for_layoutreturn(hdr->lseg);
 }
 
 static int ff_layout_write_prepare_common(struct rpc_task *task,
@@ -2162,7 +2184,7 @@ static void ff_layout_commit_record_layoutstats_done(struct rpc_task *task,
 			FF_LAYOUT_COMP(cdata->lseg, idx),
 			dss_id,
 			count, count, NFS_FILE_SYNC);
-	set_bit(NFS_LSEG_LAYOUTRETURN, &cdata->lseg->pls_flags);
+	ff_layout_mark_lseg_for_layoutreturn(cdata->lseg);
 }
 
 static int ff_layout_commit_prepare_common(struct rpc_task *task,
