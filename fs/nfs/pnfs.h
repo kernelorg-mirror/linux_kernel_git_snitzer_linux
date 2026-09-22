@@ -67,6 +67,7 @@ struct nfs4_pnfs_ds {
 	u32			ds_version;	/* cache key, with ds_addrs */
 	unsigned long		ds_state;
 #define NFS4DS_CONNECTING	0	/* ds is establishing connection */
+#define NFS4DS_FALLBACK_REPORTED 1	/* connected past an earlier address */
 	unsigned long		ds_idle;	/* jiffies of the last put */
 	struct delayed_work	ds_reaper;
 };
