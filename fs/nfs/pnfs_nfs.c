@@ -965,6 +965,84 @@ void nfs4_pnfs_v3_ds_connect_unload(void)
 	}
 }
 
+/*
+ * A data server offers its addresses in the order it would like them used,
+ * and the connect loops below keep the first one that answers.  When every
+ * address of the transport it named first fails, the client ends up on a
+ * different transport -- typically TCP where RDMA was offered first -- and
+ * that choice is then permanent.  Below pNFS the connection is an ordinary
+ * transport, and SUNRPC reconnects it to the same address for as long as the
+ * cached client lives; a fresh layout finds the same cached data server and
+ * never re-examines the address list.  Only re-establishing the mount, or the
+ * data server entry expiring, offers the first transport again.
+ *
+ * Nothing in the protocol makes that visible, so say so here.  @cda is the
+ * address the client connected through, @fda the earlier address that was
+ * tried first and failed, and @error the error it failed with.
+ *
+ * Falling back within one transport is not reported.  A data server that
+ * offers one address per network for each transport it speaks does that
+ * whenever one of those networks is momentarily unavailable, and the client
+ * still ends up on the transport that was asked for; only a transport the
+ * client could not get at all is worth an operator's attention.  The test is
+ * on da_transport -- the XPRT_TRANSPORT_* identifier the address list was
+ * decoded into, and the same value the connect loops hand to the transport
+ * layer -- and not on da_netid, because a transport has one netid per address
+ * family.  "rdma" and "rdma6", like "tcp" and "tcp6", name one transport
+ * reached over IPv4 and over IPv6; comparing the strings would report a
+ * change of address family as a change of transport.
+ *
+ * The warning names the data server by the address whose connect failed.
+ * ds_remotestr is the brace-wrapped list of every address the data server
+ * advertised, built for the debug output, and it buries the four facts an
+ * operator acts on -- which server, which transport it could not get, why,
+ * and which transport it is on now -- in a line twice as long.  The failed
+ * address is the endpoint to act on; the tracepoint still records the list.
+ *
+ * One line per data server entry per fallback.  A data server advertised as
+ * several entries, one per pairing of its addresses, is reported once for
+ * each: every entry is a separate cached client on its own connection, they
+ * need not agree, and nothing here keeps state above the entry.
+ *
+ * Called from the connect helpers with NFS4DS_CONNECTING held and ds_clp
+ * still NULL, which is what keeps ds_state to this caller.  This reports; it
+ * changes nothing.
+ */
+static void nfs4_ds_report_fallback(struct nfs4_pnfs_ds *ds,
+				    const struct nfs4_pnfs_ds_addr *cda,
+				    const struct nfs4_pnfs_ds_addr *fda,
+				    int error)
+{
+	const char *connected, *skipped;
+
+	if (!cda)
+		return;
+	if (!fda || cda->da_transport == fda->da_transport) {
+		/*
+		 * The client is on the transport the data server asked for:
+		 * either its first address answered, or a later address of
+		 * the same transport did.  Forget any earlier fallback, so
+		 * that a later one is reported afresh.
+		 */
+		clear_bit(NFS4DS_FALLBACK_REPORTED, &ds->ds_state);
+		return;
+	}
+	/*
+	 * Once per data server per fallback.  The bit covers a data server
+	 * whose connect helper runs again while the fallback persists.
+	 */
+	if (test_and_set_bit(NFS4DS_FALLBACK_REPORTED, &ds->ds_state))
+		return;
+
+	connected = cda->da_remotestr ?: "unknown";
+	skipped = fda->da_remotestr ?: "unknown";
+
+	trace_pnfs_ds_fallback(ds->ds_remotestr, connected, cda->da_netid,
+			       fda->da_netid, error);
+	pr_warn_ratelimited("NFS: data server %s: %s connect failed (%d), using %s\n",
+			    skipped, fda->da_netid, error, cda->da_netid);
+}
+
 static int _nfs4_pnfs_v3_ds_connect(struct nfs_server *mds_srv,
 				 struct nfs4_pnfs_ds *ds,
 				 unsigned int timeo,
@@ -974,9 +1052,10 @@ static int _nfs4_pnfs_v3_ds_connect(struct nfs_server *mds_srv,
 	struct nfs_client *clp = ERR_PTR(-EIO);
 	struct nfs_client *mds_clp = mds_srv->nfs_client;
 	enum xprtsec_policies xprtsec_policy = mds_clp->cl_xprtsec.policy;
-	struct nfs4_pnfs_ds_addr *da;
+	struct nfs4_pnfs_ds_addr *da, *cda = NULL, *fda = NULL;
 	unsigned long connect_timeout = timeo * (retrans + 1) * HZ / 10;
 	int ds_proto;
+	int fda_error = 0;
 	int status = 0;
 
 	dprintk("--> %s DS %s\n", __func__, ds->ds_remotestr);
@@ -1022,8 +1101,14 @@ static int _nfs4_pnfs_v3_ds_connect(struct nfs_server *mds_srv,
 
 		clp = get_v3_ds_connect(mds_srv, &da->da_addr, da->da_addrlen,
 					ds_proto, timeo, retrans, nconnect);
-		if (IS_ERR(clp))
+		if (IS_ERR(clp)) {
+			if (!fda) {
+				fda = da;
+				fda_error = PTR_ERR(clp);
+			}
 			continue;
+		}
+		cda = da;
 		clp->cl_rpcclient->cl_softerr = 0;
 		clp->cl_rpcclient->cl_softrtry = 0;
 	}
@@ -1033,6 +1118,7 @@ static int _nfs4_pnfs_v3_ds_connect(struct nfs_server *mds_srv,
 		goto out;
 	}
 
+	nfs4_ds_report_fallback(ds, cda, fda, fda_error);
 	smp_wmb();
 	WRITE_ONCE(ds->ds_clp, clp);
 	dprintk("%s [new] addr: %s\n", __func__, ds->ds_remotestr);
@@ -1051,8 +1137,9 @@ static int _nfs4_pnfs_v4_ds_connect(struct nfs_server *mds_srv,
 	struct nfs_client *clp = ERR_PTR(-EIO);
 	struct nfs_client *mds_clp = mds_srv->nfs_client;
 	enum xprtsec_policies xprtsec_policy = mds_clp->cl_xprtsec.policy;
-	struct nfs4_pnfs_ds_addr *da;
+	struct nfs4_pnfs_ds_addr *da, *cda = NULL, *fda = NULL;
 	int ds_proto;
+	int fda_error = 0;
 	int status = 0;
 
 	dprintk("--> %s DS %s\n", __func__, ds->ds_remotestr);
@@ -1139,8 +1226,13 @@ static int _nfs4_pnfs_v4_ds_connect(struct nfs_server *mds_srv,
 						 timeo, retrans, nconnect,
 						 minor_version,
 						 tightly_coupled);
-			if (IS_ERR(clp))
+			if (IS_ERR(clp)) {
+				if (!fda) {
+					fda = da;
+					fda_error = PTR_ERR(clp);
+				}
 				continue;
+			}
 
 			status = nfs4_init_ds_session(clp,
 					mds_srv->nfs_client->cl_lease_time,
@@ -1148,8 +1240,13 @@ static int _nfs4_pnfs_v4_ds_connect(struct nfs_server *mds_srv,
 			if (status) {
 				nfs_put_client(clp);
 				clp = ERR_PTR(-EIO);
+				if (!fda) {
+					fda = da;
+					fda_error = status;
+				}
 				continue;
 			}
+			cda = da;
 		}
 	}
 
@@ -1158,6 +1255,7 @@ static int _nfs4_pnfs_v4_ds_connect(struct nfs_server *mds_srv,
 		goto out;
 	}
 
+	nfs4_ds_report_fallback(ds, cda, fda, fda_error);
 	smp_wmb();
 	WRITE_ONCE(ds->ds_clp, clp);
 	dprintk("%s [new] addr: %s\n", __func__, ds->ds_remotestr);
