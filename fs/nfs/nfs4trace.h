@@ -303,6 +303,43 @@ TRACE_EVENT(pnfs_ds_connect,
                 )
 );
 
+TRACE_EVENT(pnfs_ds_fallback,
+		TP_PROTO(
+			const char *ds_remotestr,
+			const char *da_remotestr,
+			const char *netid,
+			const char *failed_netid,
+			int error
+		),
+
+		TP_ARGS(ds_remotestr, da_remotestr, netid, failed_netid, error),
+
+		TP_STRUCT__entry(
+			__string(ds_ips, ds_remotestr)
+			__string(addr, da_remotestr)
+			__string(netid, netid)
+			__string(failed_netid, failed_netid)
+			__field(int, error)
+		),
+
+		TP_fast_assign(
+			__assign_str(ds_ips);
+			__assign_str(addr);
+			__assign_str(netid);
+			__assign_str(failed_netid);
+			__entry->error = error;
+		),
+
+		TP_printk(
+			"ds_ips=%s, connected_addr=%s, connected_netid=%s, failed_netid=%s, error=%d",
+			__get_str(ds_ips),
+			__get_str(addr),
+			__get_str(netid),
+			__get_str(failed_netid),
+			__entry->error
+		)
+);
+
 TRACE_EVENT(nfs4_setup_sequence,
 		TP_PROTO(
 			const struct nfs4_session *session,
