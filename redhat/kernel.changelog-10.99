@@ -1,3 +1,43 @@
+* Tue Sep 22 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-11]
+- Restructure the NFS client topics around anna-nfs-next; no NFSD branch
+  changed
+- Add trond-nfs-next, one fix: "NFSv4: Fix a regression in the handling of
+  CB_RECALL_ANY"
+- Add anna-nfs-next, 39 commits from Anna Schumaker's nfs-next: 35 of Ben
+  Coddington's flexfiles and pNFS patches, three from Chuck Lever and one from
+  Jeremy Jean, covering the flexfiles device-notification and stripe work,
+  LAYOUTGET sizing, and a client-side TLS alert record check. The O_DIRECT
+  changes at the head of that branch are deliberately left out until they have
+  had more soak time
+- Add snitzer-nfs-fixes on top of it: the localio misaligned-DIO tracepoint
+  fix, the deferred final superblock deactivation, and three patches honouring
+  FF_FLAGS_NO_IO_THRU_MDS over the mdsthreshold hint, so a layout that forbids
+  MDS I/O is not read through or resent to the MDS
+- Rebuild nfs-testing-canary on snitzer-nfs-fixes: 51 commits become 14. Of
+  the 37 that go, anna-nfs-next carries 35 of Ben's, and snitzer-nfs-fixes
+  carries two that moved into it, the localio misaligned-DIO tracepoint fix
+  and the deferred final superblock deactivation. What remains is the
+  UNCACHEABLE_DIRENT_METADATA support and the per-stripe layoutstats work
+- nfs-testing-canary-reduce-ff-layout-contention drops to 7 commits, its three
+  NO_IO_THRU_MDS patches having moved into snitzer-nfs-fixes;
+  reduce-i_lock-contention is unchanged at 8
+- Net effect on the tree is small, six files against -10, because
+  anna-nfs-next re-supplies most of what the canary carried
+- Add nfs-testing-canary-rdma-ds-connect, three commits on nfs-testing-canary
+  about reaching a data server on the transport it asked for
+- Let a transport's initial requests reclaim: xprtrdma allocates every
+  rpcrdma_req and regbuf without __GFP_DIRECT_RECLAIM, which is right on the
+  Send and Receive paths but not for the set built by xprt_create_transport(),
+  where nothing is queued yet and there is no caller to recover from a failure
+- Keep creating the remaining nconnect transports after one fails: rpc_create()
+  broke out of the loop on the first error and nothing added them later, so a
+  mount asking for nconnect=16 could come up with one transport for the life of
+  the client, out of a single transient failure
+- Report a data server left on a non-preferred transport: the connect loop
+  keeps the first address that answers, so a server whose RDMA listener is
+  absent silently leaves the client on TCP for good, the cached data server
+  being reused by every later layout and the address list never re-examined
+
 * Mon Sep 21 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-10]
 - Update nfsd-testing-canary-dontcache and add
   nfs-testing-canary-reduce-ff-layout-contention; no other branch changed
