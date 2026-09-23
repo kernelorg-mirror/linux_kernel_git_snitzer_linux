@@ -1,3 +1,20 @@
+* Wed Sep 23 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-12]
+- Rebase nfsd-testing and nfsd-testing-canary-dontcache; no other branch
+  changed
+- nfsd-testing moves from nfsd-7.2 onto nfsd-7.3 and takes two more of Chuck
+  Lever's commits: enum nfs3_stable_how moves to linux/nfs3.h, where a value
+  that only exists on the NFSv3 wire belongs, and nfsd_write() takes IOCB flags
+  in place of an NFSv3 stable_how, so a VFS-facing API no longer depends on an
+  XDR value that NFSv2 does not have and NFSv4 only borrows
+- nfsd-testing-canary-dontcache now builds on nfsd-testing rather than directly
+  on nfsd-7.3, which is what puts the dontcache work on top of that new
+  nfsd_write() signature rather than beside it
+- The dontcache series keeps all 13 of its commits and their subjects; five are
+  adapted to the new signature: returning an updated stable_how to clients,
+  the direct-mode stable_how floor, persisting a synchronous direct-mode WRITE
+  once after all of its segments, the boundary-page handling, and the
+  direct-mode tracing
+
 * Tue Sep 22 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-11]
 - Restructure the NFS client topics around anna-nfs-next; no NFSD branch
   changed
