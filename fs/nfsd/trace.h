@@ -11,11 +11,11 @@
 #include <linux/tracepoint.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/xprt.h>
+#include <linux/nfs_dio.h>
 #include <trace/misc/fs.h>
 #include <trace/misc/nfs.h>
 #include <trace/misc/sunrpc.h>
 
-#include "vfs.h"
 #include "export.h"
 #include "nfsfh.h"
 #include "xdr4.h"
@@ -515,19 +515,19 @@ DEFINE_NFSD_IO_EVENT(write_done);
 DEFINE_NFSD_IO_EVENT(commit_start);
 DEFINE_NFSD_IO_EVENT(commit_done);
 
-TRACE_DEFINE_ENUM(NFSD_WRITE_DIO_DIRECT);
-TRACE_DEFINE_ENUM(NFSD_WRITE_DIO_MEM_MISALIGNED);
-TRACE_DEFINE_ENUM(NFSD_WRITE_DIO_NO_ALIGNMENT);
-TRACE_DEFINE_ENUM(NFSD_WRITE_DIO_TOO_SMALL);
-TRACE_DEFINE_ENUM(NFSD_WRITE_DIO_NO_MIDDLE);
+TRACE_DEFINE_ENUM(NFS_DIO_DIRECT);
+TRACE_DEFINE_ENUM(NFS_DIO_MEM_MISALIGNED);
+TRACE_DEFINE_ENUM(NFS_DIO_NO_ALIGNMENT);
+TRACE_DEFINE_ENUM(NFS_DIO_TOO_SMALL);
+TRACE_DEFINE_ENUM(NFS_DIO_NO_MIDDLE);
 
 #define show_nfsd_write_dio_disposition(x)				\
 	__print_symbolic(x,						\
-		{ NFSD_WRITE_DIO_DIRECT,	"direct" },		\
-		{ NFSD_WRITE_DIO_MEM_MISALIGNED, "mem_misaligned" },	\
-		{ NFSD_WRITE_DIO_NO_ALIGNMENT,	"no_alignment" },	\
-		{ NFSD_WRITE_DIO_TOO_SMALL,	"too_small" },		\
-		{ NFSD_WRITE_DIO_NO_MIDDLE,	"no_middle" })
+		{ NFS_DIO_DIRECT,		"direct" },		\
+		{ NFS_DIO_MEM_MISALIGNED,	"mem_misaligned" },	\
+		{ NFS_DIO_NO_ALIGNMENT,		"no_alignment" },	\
+		{ NFS_DIO_TOO_SMALL,		"too_small" },		\
+		{ NFS_DIO_NO_MIDDLE,		"no_middle" })
 
 /*
  * Emitted once per direct-mode WRITE, before any segment is issued.
@@ -545,7 +545,7 @@ TRACE_EVENT(nfsd_write_dio_split,
 		 u32 prefix,
 		 u32 middle,
 		 u32 suffix,
-		 enum nfsd_write_dio_disposition disposition,
+		 enum nfs_dio_disposition disposition,
 		 bool dontcache),
 	TP_ARGS(rqstp, fhp, offset, len, offset_align, mem_align, mem_offset,
 		prefix, middle, suffix, disposition, dontcache),
