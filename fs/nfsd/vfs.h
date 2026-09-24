@@ -7,6 +7,7 @@
 #define LINUX_NFSD_VFS_H
 
 #include <linux/fs.h>
+#include <linux/nfs_dio.h>
 #include <linux/posix_acl.h>
 #include "nfsfh.h"
 
@@ -181,15 +182,5 @@ void		nfsd_filp_close(struct file *fp);
  * nfsd_write_dio_split's @dontcache, because it is the same answer for
  * every exit below.
  */
-enum nfsd_write_dio_disposition {
-	NFSD_WRITE_DIO_DIRECT,		/* aligned middle uses direct I/O */
-	NFSD_WRITE_DIO_MEM_MISALIGNED,	/* payload memory misaligned: one segment */
-	NFSD_WRITE_DIO_NO_ALIGN,	/* fs advertises no alignment: one segment */
-	NFSD_WRITE_DIO_TOO_SMALL,	/* len < max(offset_align, mem_align): one segment */
-	NFSD_WRITE_DIO_NO_MIDDLE,	/* no or tiny aligned middle: one segment */
-
-	/* ORed in: the WRITE's buffered segments carry IOCB_DONTCACHE */
-	NFSD_WRITE_DIO_DONTCACHE = 0x80,
-};
 
 #endif /* LINUX_NFSD_VFS_H */
