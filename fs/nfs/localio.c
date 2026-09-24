@@ -42,6 +42,9 @@ struct nfs_local_kiocb {
 	short int		end_iter_index;
 	atomic_t		n_iters;
 	struct nfs_dio_split	split;
+	/* A synchronous write is persisted once, after all its segments */
+	bool			sync;
+	bool			datasync;
 	/* End mostly DIO-specific members */
 };
 
@@ -765,6 +768,27 @@ static void nfs_local_vfs_getattr(struct nfs_local_kiocb *iocb)
 	fattr->du.nfs3.used = stat.blocks << 9;
 }
 
+/*
+ * Persist a synchronous write once all of its segments are written; see
+ * nfs_local_call_write().  Runs at completion, in process context, whether
+ * the last segment completed inline or through AIO.
+ */
+static void nfs_local_write_sync(struct nfs_local_kiocb *iocb)
+{
+	struct nfs_pgio_header *hdr = iocb->hdr;
+	loff_t start = hdr->args.offset;
+	int status;
+
+	if (!iocb->sync || hdr->task.tk_status < 0 || !hdr->res.count)
+		return;
+	status = vfs_fsync_range(iocb->kiocb.ki_filp, start,
+				 start + hdr->res.count - 1, iocb->datasync);
+	if (status < 0) {
+		hdr->res.op_status = nfs_localio_errno_to_nfs4_stat(status);
+		hdr->task.tk_status = status;
+	}
+}
+
 static void nfs_local_write_done(struct nfs_local_kiocb *iocb)
 {
 	struct nfs_pgio_header *hdr = iocb->hdr;
@@ -783,6 +807,7 @@ static void nfs_local_write_done(struct nfs_local_kiocb *iocb)
 
 static inline void nfs_local_write_iocb_done(struct nfs_local_kiocb *iocb)
 {
+	nfs_local_write_sync(iocb);
 	nfs_local_write_done(iocb);
 	if (test_bit(NFS_IOHDR_ODIRECT, &iocb->hdr->flags))
 		iocb->hdr->fattr.valid = 0;
@@ -808,7 +833,15 @@ static void nfs_local_write_aio_complete(struct kiocb *kiocb, long ret)
 	if (unlikely(!nfs_local_pgio_done(iocb, ret)))
 		return;
 
-	nfs_local_pgio_aio_complete(iocb); /* Calls nfs_local_write_aio_complete_work */
+	/*
+	 * A synchronous write still owes its fsync, which must not run on
+	 * nfsiod, a WQ_MEM_RECLAIM workqueue: the file system may flush its
+	 * own unreclaimable workqueues to complete it, see
+	 * nfs_local_defer_io().  Complete on the LOCALIO write queue instead.
+	 */
+	INIT_WORK(&iocb->work, iocb->aio_complete_work);
+	queue_work(iocb->sync ? nfslocaliod_workqueue : nfsiod_workqueue,
+		   &iocb->work);
 }
 
 static void nfs_local_call_write(struct work_struct *work)
@@ -819,19 +852,27 @@ static void nfs_local_call_write(struct work_struct *work)
 	unsigned long old_flags = current->flags;
 	const struct cred *save_cred;
 	ssize_t status;
-	int n_iters, sync_flags;
+	int n_iters;
 
 	current->flags |= PF_LOCAL_THROTTLE | PF_MEMALLOC_NOIO;
 
 	file_start_write(filp);
-	sync_flags = iocb->kiocb.ki_flags & (IOCB_DSYNC | IOCB_SYNC);
+	/*
+	 * A synchronous write (client FILE_SYNC/DATA_SYNC, or the stability a
+	 * direct write is given in nfs_local_iters_init()) is persisted once,
+	 * after all of its segments, by nfs_local_write_sync(), rather than
+	 * by generic_write_sync() after each of them: one cache flush and log
+	 * force instead of up to three.
+	 */
+	iocb->sync = iocb->kiocb.ki_flags & IOCB_DSYNC;
+	iocb->datasync = !(iocb->kiocb.ki_flags & IOCB_SYNC);
 	n_iters = atomic_read(&iocb->n_iters);
 	for (int i = 0; i < n_iters ; i++) {
 		struct nfs_dio_seg *seg = &iocb->split.segs[i];
 		struct nfs_dio_seg_hold hold;
 		size_t expected;
 
-		iocb->kiocb.ki_flags = seg->flags | sync_flags;
+		iocb->kiocb.ki_flags = seg->flags & ~(IOCB_DSYNC | IOCB_SYNC);
 		/* Only use AIO completion if the direct segment is last */
 		if ((seg->flags & IOCB_DIRECT) && i == iocb->end_iter_index) {
 			iocb->kiocb.ki_complete = nfs_local_write_aio_complete;
