@@ -273,9 +273,18 @@ the NFS server. See: fs/nfs/localio.c:nfs_local_doio() and
 fs/nfs/localio.c:nfs_local_commit().
 
 With LOCALIO, an application's O_DIRECT extends down to the underlying
-local filesystem. LOCALIO issues DIO-aligned IO as O_DIRECT. It issues
-IO that is not DIO-aligned as buffered IO, so misaligned application IO
-does not fail.
+local filesystem. LOCALIO splits a misaligned O_DIRECT read or write the
+way NFSD splits a misaligned WRITE in NFSD_IO_DIRECT mode. It issues the
+DIO-aligned middle as O_DIRECT, and a misaligned start or end as
+buffered IO. It issues an IO that cannot use O_DIRECT at all as buffered
+IO, so misaligned application IO does not fail.
+
+For writes, NFSD's direct_misaligned_min_bytes and
+direct_misaligned_dontcache debugfs knobs apply to LOCALIO too. NFSD's
+io_cache_read and io_cache_write knobs and the read_io= and write_io=
+export options do not apply: only the application's O_DIRECT selects
+the direct path. See "LOCALIO" in
+Documentation/filesystems/nfs/nfsd-io-modes.rst for the details.
 
 Security
 ========
