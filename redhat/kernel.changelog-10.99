@@ -1,3 +1,14 @@
+* Thu Sep 24 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-13]
+- Update nfs-testing-canary, and restack the three topics built on it --
+  reduce-i_lock-contention, reduce-ff-layout-contention and rdma-ds-connect --
+  with their patches unchanged; no other branch changed
+- Fold a fix into "rotate LAYOUTSTATS reporting across a mirror's stripes":
+  read dss_report_start once per mirror, before the stripe loop. The loop
+  advances it after each stripe it reports, so re-reading it moved the index
+  twice, skipping stripes and, on a mirror with stripes not yet written,
+  wrapping back onto one already reported -- which put the same deviceid in
+  one ff_iostats4 array twice with identical counters
+
 * Wed Sep 23 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-12]
 - Rebase nfsd-testing and nfsd-testing-canary-dontcache; no other branch
   changed
