@@ -123,14 +123,26 @@ nfsd_open_local_fh(struct net *net, struct auth_domain *dom,
 	return localio;
 }
 
-static void nfsd_file_dio_alignment(struct nfsd_file *nf,
-				    u32 *nf_dio_mem_align,
-				    u32 *nf_dio_offset_align,
-				    u32 *nf_dio_read_offset_align)
+/*
+ * How LOCALIO should split a direct I/O to this file: the alignments the
+ * file was opened with, and for a write the same misaligned-write policy
+ * nfsd_vfs_write() applies on this export.  The client's own O_DIRECT is
+ * what puts a LOCALIO I/O on the direct path; io_cache_write is not
+ * consulted.
+ */
+static void nfsd_file_dio_policy(struct nfsd_file *nf, unsigned int direction,
+				 struct nfs_dio_policy *policy)
 {
-	*nf_dio_mem_align = nf->nf_dio_mem_align;
-	*nf_dio_offset_align = nf->nf_dio_offset_align;
-	*nf_dio_read_offset_align = nf->nf_dio_read_offset_align;
+	policy->mem_align = nf->nf_dio_mem_align;
+	if (direction == ITER_SOURCE) {
+		policy->offset_align = nf->nf_dio_offset_align;
+		policy->min_middle_pages = nfsd_direct_misaligned_num_pages;
+		policy->dontcache = READ_ONCE(nfsd_direct_misaligned_dontcache);
+	} else {
+		policy->offset_align = nf->nf_dio_read_offset_align;
+		policy->min_middle_pages = 0;
+		policy->dontcache = false;
+	}
 }
 
 static const struct nfsd_localio_operations nfsd_localio_ops = {
@@ -139,7 +151,7 @@ static const struct nfsd_localio_operations nfsd_localio_ops = {
 	.nfsd_open_local_fh = nfsd_open_local_fh,
 	.nfsd_file_put_local = nfsd_file_put_local,
 	.nfsd_file_file = nfsd_file_file,
-	.nfsd_file_dio_alignment = nfsd_file_dio_alignment,
+	.nfsd_file_dio_policy = nfsd_file_dio_policy,
 };
 
 void nfsd_localio_ops_init(void)
