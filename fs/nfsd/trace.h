@@ -515,19 +515,19 @@ DEFINE_NFSD_IO_EVENT(write_done);
 DEFINE_NFSD_IO_EVENT(commit_start);
 DEFINE_NFSD_IO_EVENT(commit_done);
 
-TRACE_DEFINE_ENUM(NFSD_WRITE_DIO_DIRECT);
-TRACE_DEFINE_ENUM(NFSD_WRITE_DIO_MEM_MISALIGNED);
-TRACE_DEFINE_ENUM(NFSD_WRITE_DIO_NO_ALIGN);
-TRACE_DEFINE_ENUM(NFSD_WRITE_DIO_TOO_SMALL);
-TRACE_DEFINE_ENUM(NFSD_WRITE_DIO_NO_MIDDLE);
+TRACE_DEFINE_ENUM(NFS_DIO_DIRECT);
+TRACE_DEFINE_ENUM(NFS_DIO_MEM_MISALIGNED);
+TRACE_DEFINE_ENUM(NFS_DIO_NO_ALIGN);
+TRACE_DEFINE_ENUM(NFS_DIO_TOO_SMALL);
+TRACE_DEFINE_ENUM(NFS_DIO_NO_MIDDLE);
 
 #define show_nfsd_write_dio_disposition(x)				\
 	__print_symbolic(x,						\
-		{ NFSD_WRITE_DIO_DIRECT,	"direct" },		\
-		{ NFSD_WRITE_DIO_MEM_MISALIGNED, "mem_misaligned" },	\
-		{ NFSD_WRITE_DIO_NO_ALIGN,	"no_alignment" },	\
-		{ NFSD_WRITE_DIO_TOO_SMALL,	"too_small" },		\
-		{ NFSD_WRITE_DIO_NO_MIDDLE,	"no_middle" })
+		{ NFS_DIO_DIRECT,	"direct" },		\
+		{ NFS_DIO_MEM_MISALIGNED, "mem_misaligned" },	\
+		{ NFS_DIO_NO_ALIGN,	"no_alignment" },	\
+		{ NFS_DIO_TOO_SMALL,	"too_small" },		\
+		{ NFS_DIO_NO_MIDDLE,	"no_middle" })
 
 /**
  * nfsd_write_dio_split - how an NFSD_IO_DIRECT WRITE was split
@@ -585,8 +585,8 @@ TRACE_EVENT(nfsd_write_dio_split,
 		__entry->middle = middle;
 		__entry->suffix = suffix;
 		__entry->nsegs = nsegs;
-		__entry->disposition = disposition & ~NFSD_WRITE_DIO_DONTCACHE;
-		__entry->dontcache = !!(disposition & NFSD_WRITE_DIO_DONTCACHE);
+		__entry->disposition = disposition & ~NFS_DIO_DONTCACHE;
+		__entry->dontcache = !!(disposition & NFS_DIO_DONTCACHE);
 	),
 	TP_printk("xid=0x%08x fh_hash=0x%08x offset=%llu len=%u "
 		  "offset_align=%u mem_align=%u mem_offset=%u "
