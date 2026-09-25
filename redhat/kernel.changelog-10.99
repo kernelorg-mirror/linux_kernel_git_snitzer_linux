@@ -1,3 +1,39 @@
+* Thu Sep 24 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-14]
+- Update snitzer-nfs-fixes and nfs-testing-canary-reduce-i_lock-contention,
+  add nfsd-testing-canary-dontcache-LOCALIO, and restack nfs-testing-canary,
+  reduce-ff-layout-contention and rdma-ds-connect with their patches unchanged
+- LOCALIO: detect a short read or write before the iterator has moved. The
+  test compared the bytes moved against the iterator's count after the call
+  had advanced it, so a short I/O covering 50-99% of a segment slipped
+  through: the next segment went to the wrong file offset and the byte count
+  was over-reported
+- LOCALIO: report the stability a DIO WRITE actually has. Such a write is
+  persisted before it completes whatever was asked for, but the reply still
+  said UNSTABLE, so the client kept its pages and sent a COMMIT whose fsync
+  had nothing left to do
+- LOCALIO: stop fetching server attributes after each NFSv3 direct-write
+  header and invalidate them at completion instead, under the inode lock that
+  completion already takes, rather than taking that lock a second time
+- Share NFSD's direct-I/O write split and boundary-page helpers through
+  fs/nfs_common, and move LOCALIO onto them in place of its own older copy, so
+  a LOCALIO write to a file is split exactly as an RPC write to it would be,
+  under the same export settings
+- LOCALIO now writes the buffered start and end of a misaligned direct write
+  DONTCACHE, and holds the page each shares with the neighbouring write until
+  both have written it. Before, every such page stayed cached until reclaim:
+  628 GiB on an 8 TiB rig write
+- A LOCALIO write whose aligned middle is too small to be worth its own direct
+  I/O, or that cannot use direct I/O at all, is now written whole as a single
+  DONTCACHE buffered write. Before, LOCALIO split every such write in three
+  anyway, around a direct middle of a single page or of nothing at all
+- LOCALIO: persist a synchronous direct write once, after all its segments,
+  rather than a cache flush and log force after each of up to three
+- nfsd-testing-canary-dontcache-LOCALIO is built on a merge of
+  nfsd-testing-canary-dontcache and reduce-i_lock-contention, because the
+  LOCALIO change needs both the NFSD split code and the NFS client's
+  localio.c; the three LOCALIO fixes snitzer-nfs-fixes also carries drop out
+  of it
+
 * Thu Sep 24 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-13]
 - Update nfs-testing-canary, and restack the three topics built on it --
   reduce-i_lock-contention, reduce-ff-layout-contention and rdma-ds-connect --
