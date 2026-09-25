@@ -111,6 +111,83 @@ compile checks only. Run in this order, recording each result here:
    Run it in a separate worktree so the main tree stays on the tip, and
    never while a runtime step is using the modules.
 
+### Results — `7.1.13-14.hs.439.loanpages` (2026-09-25)
+
+Kernel built by Mike from this branch at `3ac9fd90f192` (build #19,
+16:26; `sunrpc.ko` relinked 16:35, after the fix was committed 16:30).
+
+1. **Kernel identified.** All 11 relevant installed modules
+   srcversion-match the in-tree objects (`sunrpc`, `svcsock_kunit`,
+   `xdr_kunit`, `nfsd`, `nfsd_bvec_kunit`, `nfsd4_bvec_kunit`, `nfs_dio`,
+   `nfs`, `nfs_localio`, `brd`, `zram`); the tree was clean, the source
+   carries `1e48b4d03cb8`, and `svcsock_kunit.ko` contains the new case.
+   `.config` now has `BLK_DEV_RAM=m`, `ZRAM=m`, `WERROR=y`.
+2. **KUnit: all pass.** `sunrpc-xdr-bvec` 7/7, `sunrpc-svcsock-rx`
+   **54/54** (`ok 8 svcsock_rx_back_to_back_locked_heads_test`),
+   `nfsd-receive-bvec` 5/5, `nfsd4-receive-bvec` 9/9; no WARN/BUG.
+3. **The regression case bites.** `sunrpc.ko` rebuilt with `1e48b4d03cb8`
+   reverted in the working copy only, loaded alone (NFS stack and
+   `rpc_pipefs` unloaded) with its matching `svcsock_kunit.ko`:
+   **53/54**, only the new case failing, and failing as the bug predicts —
+   `merge_fill` still set after the arena copy, `copied_bytes` /
+   `borrowed_bytes` wrong (the borrowed bytes were copied, not loaned), no
+   loan reference on the borrowed page, **the arena's fixed RPC header
+   overwritten**, and **published payload bytes not matching the record**.
+   No WARN/BUG/Oops: the stray top-up stays inside the fixture's own arena
+   page and its reference is released, so the damage is data and
+   accounting only, as in David's reports.  Installed `sunrpc` restored and
+   re-verified; tree rebuilt so its objects srcversion-match again (an
+   `M=` build hashes a different file set, as noted in
+   `../NFS_LOCALIO_DONTCACHE/` §5).
+4. **Runtime harness: all green.** `run-rig-cmp.sh` 30 × 16 MiB:
+   `dd_fails=0 cmp_mismatches=0 direct=468`, ~1.0 GB borrowed vs 164 KB
+   copied, and `split_einval.bt` saw **no `-EINVAL`** (10080 unsplit, 480
+   clean splits at 2040 sectors — the hs.160 shape). `run-loan-assert.sh`
+   10/10 connections fully loaned and fully direct (one locked head each).
+   `run-killswitch.sh` off: 16 disabled / 0 borrowed, on: 16 loaned, the
+   svcsock suite passes with the switch off. `run-system-correctness.sh`
+   0 fails (424 direct). `bvecrepro` **8/8 MATCH**: brd `off0` 684/160/0,
+   nvme-loop 684, zram (lzo-rle) 684/160/512/0.
+5. **Receive-queue collapse: not reproducible on loopback.** With
+   `tcp_rmem` max 64 KiB, `lo` MTU 1500 / 576 / 256, and forced TCP memory
+   pressure (`tcp_mem` "1 2 <high>", 39 pressure entries),
+   `TcpExtTCPRcvCollapsed` and `PruneCalled` stayed 0 and no record carried
+   `reason=locked-head` beyond the first head: loopback coalesces the
+   receive queue and the sender stays inside the window, so the queue is
+   never pruned. The one collapse-configured `run-rig-cmp.sh` run (64 KiB
+   `tcp_rmem`) was clean (30 × 16 MiB, 0 errors) but did not exercise the
+   geometry. An end-to-end reproduction needs a real NIC under
+   receive-buffer pressure (David's rig) or a fault-injection hook; the
+   deterministic proof is steps 2–3. All knobs were restored.
+6. **LOCALIO A/B: no behaviour change.** On the LOCALIO side the series
+   changes only `fs/nfs_common/nfs_dio.c` (`nfs_dio.h` unchanged, import
+   CRCs identical), so arm A = `v7.1.13-14`'s own `nfs_dio.c` built as
+   `nfs_dio.ko` for this kernel and arm B = the running one; nothing else
+   swapped, `/lib/modules` untouched, each arm's srcversion proven before
+   testing. Driver: a `localio-port-ab.sh` clone (fresh rig per arm,
+   LOCALIO on, v3, 8 ranks):
+
+   | | dioA (stock `-14`) | dioB (this branch) |
+   |---|---|---|
+   | rs=47008 WRITEs / reads per WRITE / resident | 45680 / 0.004 / 0.0% | 45680 / 0.006 / 0.0% |
+   | rs=6000 WRITEs / reads per WRITE / resident | 357912 / 0.000 / 0.0% | 357912 / 0.000 / 0.0% |
+   | DONTCACHE flusher rounds | 0 | 0 |
+   | short-read test | 5/5 PASS | 5/5 PASS |
+   | stability test | FILE_SYNC reported, no COMMIT | same |
+
+   0.004 vs 0.006 is the writer-concurrency residual of
+   `../NFS_LOCALIO_DONTCACHE/` §5b (0.005 at the port's tip).
+7. **Bisect walk: NOT RUN — blocked on disk space.** Launched from a
+   scratch copy (`BRANCH=kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY
+   BASE=v7.1.13-14`, cold worktree, running config minus debug info with
+   `WERROR=y` and the four suites `=m`); the cold full build of step 1
+   filled `/` (54 GB, ~4 GB free at the start) after 196 s and every later
+   checkout failed, so its "3/38 clean" summary is an infrastructure failure,
+   not a result. A full-tree cold walk needs more free space than the host
+   has; still to do. (Also learned: the script's cold/warm test counts any
+   `.o`, so a `make olddefconfig` in the walk worktree — which builds the
+   kconfig host tools — marks the baseline warm; `make mrproper` it first.)
+
 Not yet done: carry `1e48b4d03cb8` + `3ac9fd90f192` to
 `kernel-7.1/hs-7.1.13-12.NFSD_TCP_WRITE_ZEROCOPY` (or whichever HS base comes
 next).
