@@ -42,6 +42,79 @@ name the code they drive -- never the other way around:
 - **`nfsd4-receive-bvec`** (`CONFIG_NFSD4_BVEC_KUNIT_TEST`) — NFSv4
   COMPOUND receive bvecs, including session replay against a live nfsd.
 
+## Next regression run (handoff, 2026-09-25)
+
+State at hand-off: branch `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
+(`v7.1.13-14` + the series + the two merge-top-up commits, tip at or after
+`3ac9fd90f192`) checked out in `/root/kernel/linux`; Mike built a kernel
+from it and is rebooting into it. Nothing on this base has run yet —
+compile checks only. Run in this order, recording each result here:
+
+1. **Identify the kernel.** `uname -r`; confirm it was built from this
+   branch and carries `1e48b4d03cb8` (srcversion of `sunrpc.ko`, `nfsd.ko`,
+   `nfs_dio.ko`, `svcsock_kunit.ko` against the in-tree objects, as in the
+   hs.160 qualification). Label every result below with that release.
+2. **KUnit** (`run-kunit.sh`; needs nfs-server state for the NFSv4 suite as
+   the script sets up): expect `sunrpc-xdr-bvec` 7/7, `sunrpc-svcsock-rx`
+   **54/54** (53 + the new `svcsock_rx_back_to_back_locked_heads_test`),
+   `nfsd-receive-bvec` 5/5 (its `dio_segments_test` now drives
+   `nfs_dio_split()`), `nfsd4-receive-bvec` 9/9.
+3. **Prove the regression case bites.** Rebuild only
+   `net/sunrpc/svcsock.o` + `sunrpc.ko` with `1e48b4d03cb8` reverted (scratch
+   branch, never on the project branch), reload `sunrpc` and
+   `svcsock_kunit`: the new case must fail at the byte comparison. Restore.
+   (Alternative that needs no reboot or module swap: `kunit.py run
+   --arch=arm64` in a clean worktree under qemu TCG — RHEL's
+   `/usr/libexec/qemu-kvm` supports TCG and needs a `qemu-system-aarch64`
+   wrapper on `PATH`.)
+4. **Runtime harness** (needs `BLK_DEV_RAM=m` and `ZRAM=m`, which the
+   2026-09-25 `.config` lacked): `run-bvecrepro.sh`, `run-rig-cmp.sh`
+   (0 dd/cmp errors, 0 `bio_split_io_at()` rejections with
+   `split_einval.bt`), `run-loan-assert.sh`, `run-killswitch.sh`,
+   `run-system-correctness.sh`.
+5. **Reproduce the collapse geometry on purpose** — the case every earlier
+   run missed. Shrink the server's receive buffer (e.g. a small
+   `net.ipv4.tcp_rmem` max) so TCP collapses the receive queue, confirm
+   back-to-back `locked-head` records in `zcstat.sh` / the
+   `svcsock_tcp_rx_lifetime` reasons, and run `run-rig-cmp.sh` with loans on:
+   must be clean with the fix. If time allows, A/B against the fix-reverted
+   `sunrpc.ko` from step 3 to show it corrupting — that is the end-to-end
+   proof David's AI reported (corrupt with the bug, clean with the guard).
+6. **LOCALIO A/B** (`../NFS_LOCALIO_DONTCACHE/`). On `v7.1.13-14` the
+   DIRECT write split is the shared `nfs_dio_split()`, which this series
+   changes (per-fragment length check, discontinuity gate), so LOCALIO
+   writes now run the series' code. A = stock `v7.1.13-14`
+   `nfs`/`nfs_localio`/`nfs_dio`/`nfsd` modules, B = the running kernel's
+   (this branch); swap them as a set (`nfs_to` CRC) with
+   `swap-localio-arm.sh`. Expect no behaviour change: LOCALIO's pinned user
+   buffers are page-tiled after their first entry. Run
+   `localio-port-ab.sh` (resident pages, reads/WRITE, flusher rounds),
+   `localio-stable-test.sh` and `localio-short-read-test.sh` on both arms.
+   Note `prepare-localio-arms.sh` is hard-wired to `TAG=v7.1.13-12` and the
+   hs.436 release (arms lioA/lioB/lioC of the port itself); it needs its tag,
+   release check and arm definitions updated for this A/B first.
+7. **Per-commit bisect walk** — required on this boot (Mike, 2026-09-25):
+   every commit from `v7.1.13-14` to the tip, `CONFIG_WERROR=y` with the
+   four KUnit modules built, plus the sparse adjudication, via
+   `run-bisect-walk.sh` run from a scratch copy held outside the tree
+   (per-commit checkouts below the docs commit remove
+   `NFSD_TCP_WRITE_ZEROCOPY/`). Seed its config from the running kernel's
+   (`/lib/modules/$(uname -r)/build/.config`, or regenerate from the
+   `v7.1.13-14` src.rpm) with `WERROR=y` and the four suites `=m`; the
+   `v7.1.8-3-aarch64-*.config` seeds are stale for this base. The walk must
+   cover `fs/nfs_common/` now that the gate lives there (the script's full
+   `make C=1` does). Its defaults are stale — `BRANCH=kernel-7.1.8/main-5…`,
+   `BASE=v7.1.8-5`, `WALK_CONFIG=…/v7.1.8-3-aarch64-4k.config` and
+   `WORKDIR=/root/kernel/linux` — so run it as
+   `BRANCH=kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY BASE=v7.1.13-14
+   WALK_CONFIG=/abs/path/walk.config WORKDIR=<scratch worktree>`.
+   Run it in a separate worktree so the main tree stays on the tip, and
+   never while a runtime step is using the modules.
+
+Not yet done: carry `1e48b4d03cb8` + `3ac9fd90f192` to
+`kernel-7.1/hs-7.1.13-12.NFSD_TCP_WRITE_ZEROCOPY` (or whichever HS base comes
+next).
+
 ## Test coverage status (as of 2026-09-13)
 
 **Update 2026-09-25 — `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY` rebased
