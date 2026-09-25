@@ -1,5 +1,300 @@
+* Thu Sep 24 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-14]
+- Update snitzer-nfs-fixes and nfs-testing-canary-reduce-i_lock-contention,
+  add nfsd-testing-canary-dontcache-LOCALIO, and restack nfs-testing-canary,
+  reduce-ff-layout-contention and rdma-ds-connect with their patches unchanged
+- LOCALIO: detect a short read or write before the iterator has moved. The
+  test compared the bytes moved against the iterator's count after the call
+  had advanced it, so a short I/O covering 50-99% of a segment slipped
+  through: the next segment went to the wrong file offset and the byte count
+  was over-reported
+- LOCALIO: report the stability a DIO WRITE actually has. Such a write is
+  persisted before it completes whatever was asked for, but the reply still
+  said UNSTABLE, so the client kept its pages and sent a COMMIT whose fsync
+  had nothing left to do
+- LOCALIO: stop fetching server attributes after each NFSv3 direct-write
+  header and invalidate them at completion instead, under the inode lock that
+  completion already takes, rather than taking that lock a second time
+- Share NFSD's direct-I/O write split and boundary-page helpers through
+  fs/nfs_common, and move LOCALIO onto them in place of its own older copy, so
+  a LOCALIO write to a file is split exactly as an RPC write to it would be,
+  under the same export settings
+- LOCALIO now writes the buffered start and end of a misaligned direct write
+  DONTCACHE, and holds the page each shares with the neighbouring write until
+  both have written it. Before, every such page stayed cached until reclaim:
+  628 GiB on an 8 TiB rig write
+- A LOCALIO write whose aligned middle is too small to be worth its own direct
+  I/O, or that cannot use direct I/O at all, is now written whole as a single
+  DONTCACHE buffered write. Before, LOCALIO split every such write in three
+  anyway, around a direct middle of a single page or of nothing at all
+- LOCALIO: persist a synchronous direct write once, after all its segments,
+  rather than a cache flush and log force after each of up to three
+- nfsd-testing-canary-dontcache-LOCALIO is built on a merge of
+  nfsd-testing-canary-dontcache and reduce-i_lock-contention, because the
+  LOCALIO change needs both the NFSD split code and the NFS client's
+  localio.c; the three LOCALIO fixes snitzer-nfs-fixes also carries drop out
+  of it
+
+* Thu Sep 24 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-13]
+- Update nfs-testing-canary, and restack the three topics built on it --
+  reduce-i_lock-contention, reduce-ff-layout-contention and rdma-ds-connect --
+  with their patches unchanged; no other branch changed
+- Fold a fix into "rotate LAYOUTSTATS reporting across a mirror's stripes":
+  read dss_report_start once per mirror, before the stripe loop. The loop
+  advances it after each stripe it reports, so re-reading it moved the index
+  twice, skipping stripes and, on a mirror with stripes not yet written,
+  wrapping back onto one already reported -- which put the same deviceid in
+  one ff_iostats4 array twice with identical counters
+
+* Wed Sep 23 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-12]
+- Rebase nfsd-testing and nfsd-testing-canary-dontcache; no other branch
+  changed
+- nfsd-testing moves from nfsd-7.2 onto nfsd-7.3 and takes two more of Chuck
+  Lever's commits: enum nfs3_stable_how moves to linux/nfs3.h, where a value
+  that only exists on the NFSv3 wire belongs, and nfsd_write() takes IOCB flags
+  in place of an NFSv3 stable_how, so a VFS-facing API no longer depends on an
+  XDR value that NFSv2 does not have and NFSv4 only borrows
+- nfsd-testing-canary-dontcache now builds on nfsd-testing rather than directly
+  on nfsd-7.3, which is what puts the dontcache work on top of that new
+  nfsd_write() signature rather than beside it
+- The dontcache series keeps all 13 of its commits and their subjects; five are
+  adapted to the new signature: returning an updated stable_how to clients,
+  the direct-mode stable_how floor, persisting a synchronous direct-mode WRITE
+  once after all of its segments, the boundary-page handling, and the
+  direct-mode tracing
+
+* Tue Sep 22 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-11]
+- Restructure the NFS client topics around anna-nfs-next; no NFSD branch
+  changed
+- Add trond-nfs-next, one fix: "NFSv4: Fix a regression in the handling of
+  CB_RECALL_ANY"
+- Add anna-nfs-next, 39 commits from Anna Schumaker's nfs-next: 35 of Ben
+  Coddington's flexfiles and pNFS patches, three from Chuck Lever and one from
+  Jeremy Jean, covering the flexfiles device-notification and stripe work,
+  LAYOUTGET sizing, and a client-side TLS alert record check. The O_DIRECT
+  changes at the head of that branch are deliberately left out until they have
+  had more soak time
+- Add snitzer-nfs-fixes on top of it: the localio misaligned-DIO tracepoint
+  fix, the deferred final superblock deactivation, and three patches honouring
+  FF_FLAGS_NO_IO_THRU_MDS over the mdsthreshold hint, so a layout that forbids
+  MDS I/O is not read through or resent to the MDS
+- Rebuild nfs-testing-canary on snitzer-nfs-fixes: 51 commits become 14. Of
+  the 37 that go, anna-nfs-next carries 35 of Ben's, and snitzer-nfs-fixes
+  carries two that moved into it, the localio misaligned-DIO tracepoint fix
+  and the deferred final superblock deactivation. What remains is the
+  UNCACHEABLE_DIRENT_METADATA support and the per-stripe layoutstats work
+- nfs-testing-canary-reduce-ff-layout-contention drops to 7 commits, its three
+  NO_IO_THRU_MDS patches having moved into snitzer-nfs-fixes;
+  reduce-i_lock-contention is unchanged at 8
+- Net effect on the tree is small, six files against -10, because
+  anna-nfs-next re-supplies most of what the canary carried
+- Add nfs-testing-canary-rdma-ds-connect, three commits on nfs-testing-canary
+  about reaching a data server on the transport it asked for
+- Let a transport's initial requests reclaim: xprtrdma allocates every
+  rpcrdma_req and regbuf without __GFP_DIRECT_RECLAIM, which is right on the
+  Send and Receive paths but not for the set built by xprt_create_transport(),
+  where nothing is queued yet and there is no caller to recover from a failure
+- Keep creating the remaining nconnect transports after one fails: rpc_create()
+  broke out of the loop on the first error and nothing added them later, so a
+  mount asking for nconnect=16 could come up with one transport for the life of
+  the client, out of a single transient failure
+- Report a data server left on a non-preferred transport: the connect loop
+  keeps the first address that answers, so a server whose RDMA listener is
+  absent silently leaves the client on TCP for good, the cached data server
+  being reused by every later layout and the address list never re-examined
+
+* Mon Sep 21 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-10]
+- Update nfsd-testing-canary-dontcache and add
+  nfs-testing-canary-reduce-ff-layout-contention; no other branch changed
+- No functional change in nfsd-testing-canary-dontcache: the boundary-page
+  commit's message now states the measured result where it previously recorded
+  a known limitation. On a four-server pNFS flexfiles rig, three clients
+  writing 47008-byte records for 240s against 640 nfsd threads per server,
+  device reads fall from 0.014-0.015 per record to 0.003, page cache growth
+  over the write phase falls from about 11 GiB to 2.9 GiB, and write throughput
+  rises 2.4% to 4.9% across NFSD_IO_DIRECT and both stable_how floors, with
+  read throughput unchanged
+- Continue the inode->i_lock work with 7 further commits built on it, taking
+  the flexfiles layout segment and the O_DIRECT admission and completion paths
+  off the per-I/O path. With many threads doing O_DIRECT I/O through one
+  segment, the line holding pls_refcount and pls_flags is the hottest on the
+  client, and every other CPU using that segment eats the miss
+- Stop dirtying it on every data server RPC: four locked read-modify-writes
+  there change nothing after the first RPC, and are now tested before they are
+  set
+- Give the segment's read-mostly fields their own cacheline, so the reads every
+  RPC makes of stripe_unit, mirror_array and the rest no longer share a line
+  with the refcount other CPUs are writing
+- Bound a data server RPC with pg_bsize computed once in pg_init rather than a
+  test run for every page added, which read that same line each time:
+  ff_layout_pg_test was 7-13% of client CPU with 256 threads writing one file,
+  and ff_layout_pg_get_mirror_count_write another 12%
+- Hand the page I/O descriptor's segment reference to the pgio header instead
+  of taking a second one, removing two more locked updates of the shared
+  refcount per O_DIRECT I/O
+- Admit an O_DIRECT I/O without taking inode->i_rwsem: the shared lock does not
+  serialise the I/O, it only keeps NFS_INO_ODIRECT from being cleared
+  underneath it, so an inode already in O_DIRECT mode takes an i_dio_count
+  reference instead and hundreds of threads stop doing a pair of atomic
+  read-modify-writes on one inode's cacheline per I/O
+- Finish a stable O_DIRECT write inline instead of handing it to nfsiod: when
+  every WRITE came back stable there is nothing to commit or resend, and the
+  commit_mutex that path took was the client's most contended mutex, 9.6s of
+  wait per 10s of run with 256 threads
+- Account nfsi->read_io and nfsi->write_io only for an inode whose open context
+  carries an I/O mdsthreshold; for every NFSv3 file, every NFSv4.0 file and
+  every pNFS file whose server returns no I/O threshold they were write-only
+  and dirtied a shared nfs_inode cacheline on each I/O
+
+* Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-9]
+- Add nfs-testing-canary-reduce-i_lock-contention; no other branch changed
+- Stop taking a shared file's inode->i_lock once per O_DIRECT request: six call
+  sites on the write path and five on the read path each took it about 172,000
+  times a second with many processes doing small stable O_DIRECT I/O to one
+  file over pNFS flexfiles, and contended acquisitions for that workload fall
+  from 11.2M per 10s to 0.74M, total wait from 274s to 4.3s
+- Fix __nfs_find_lock_context() never finding the lock context embedded in the
+  open context, so every direct request for the owner that opened the file
+  allocated a second one and took i_lock twice to link and free it
+- Skip the locked update wherever it would change nothing: a WRITE reply that
+  carries no attributes and ends below EOF, an atime already marked stale, a
+  delegated atime or mtime already at the current coarse clock, and an empty
+  flexfiles commit array; anything else takes the existing locked path
+- Look up the cached pNFS layout segment under RCU with the new
+  pnfs_lookup_cached_lseg(), which returns a segment only where
+  pnfs_update_layout() would have reported it cached and otherwise falls back
+  to it; the new EXPORT_SYMBOL_GPL lives in nfsv4.ko and is used by
+  nfs_layout_flexfiles.ko, so the two modules must come from the same build
+
+* Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-8]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- No functional change from -7: the series is reordered and its commit
+  messages, code comments and Documentation/filesystems/nfs/nfsd-io-modes.rst
+  rewritten for upstream posting. The only code change is renaming complete to
+  complete_first, a second flag now sitting beside it for the last edge page;
+  mm/ and include/ are byte-identical to -7
+- Lead the series with the bdi WB_DONTCACHE_DIRTY debugfs stat, its only
+  Fixes-tagged commit and the one independently applicable change
+- Record why a boundary page is inserted unmarked and marked only after its
+  write, using the unaccounted setter: a page counted in WB_DONTCACHE_DIRTY is
+  written back, and dropped, by the DONTCACHE writeback kick in the gap between
+  the two WRITEs that share it. Measured 13 device reads per 45664 WRITEs of
+  47008-byte records and none for 6000-byte records, against 1213 and 2987 with
+  the mechanism disabled
+- State what the stable_how floor modes are for rather than offering them as an
+  experiment: they elide a COMMIT that is redundant once the data is persistent
+  when NFSD replies, worth about 20us of server CPU each, and the COMMITs cost
+  +31% server and +42% client CPU for the same bytes where every WRITE splits
+- Present direct_misaligned_dontcache as a page-cache policy choice rather than
+  a reference arm for A/B comparison, naming the workloads that want it off:
+  those that read back or repeatedly rewrite what they just wrote
+
+* Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-7]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Mark the boundary page of a split direct-mode WRITE dropbehind after its data
+  is written rather than before: a writer that blocked on the filesystem inode
+  lock in between left a clean marked folio, which whatever writeback completed
+  next then dropped, so the write landed on a fresh folio and read the block
+  back; 0.026 to 0.017 device reads per direct-mode WRITE on interleaved
+  47008-byte records
+- Claim the edge pages of a WRITE that gets no direct middle, issued as a
+  single buffered DONTCACHE segment: its partial first and last pages are
+  shared with the neighbouring WRITEs exactly like a prefix or suffix but went
+  unclaimed, so each was dropped at writeback and read back by its partner,
+  one synchronous read inside every such WRITE; 0.985 to 0.001 device reads per
+  WRITE on 6000-byte records, a 62% higher WRITE rate, and page cache growth
+  over the run down from about 5% of the bytes written to zero
+
+* Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-6]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Replace -4's tail-page scheme with one the page cache arbitrates: a split
+  WRITE's boundary page is claimed on first touch and marked dropbehind only by
+  the second writer to complete it, so interleaved writers from different
+  clients no longer force a read-modify-write and page cache growth is bounded
+  by writer concurrency rather than by bytes written
+- direct_misaligned_num_pages moves to debugfs and direct_misaligned_dontcache
+  joins it under /sys/kernel/debug/nfsd/; the latter selects DONTCACHE (Y,
+  default) or cached buffered IO for the non-direct parts of a direct-mode WRITE
+- nfsd_write_dio_split reports dontcache= as its own field; its disposition
+  drops the mem_misaligned_dontcache/_cached variants for plain mem_misaligned
+
+* Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-5]
+- Update nfs-testing-canary; no other branch changed
+- Keep pNFS data server connections across deviceid eviction: the data server
+  cache now holds its own reference, and an entry whose last layout is returned
+  lingers for dataserver_linger seconds (default 120, 0 restores the old
+  behaviour) instead of being torn down, so a NOCACHE deviceid no longer costs
+  a synchronous reconnect and NULL ping on every layout cycle
+
+* Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-4]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Persist a synchronous direct-mode WRITE once, after all of its segments,
+  rather than a range fsync after each segment: one cache flush and log force
+  per WRITE instead of up to three
+- Keep the tail page of a direct-mode WRITE cached so the next sequential
+  WRITE's prefix completes it without a read-modify-write; the completed prefix
+  page is dropped once the WRITE is persisted, so the page cache stays bounded
+- Extend that to UNSTABLE WRITEs: their completed boundary pages are dropped on
+  COMMIT, once its fsync has succeeded
+
+* Thu Sep 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-3]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Keep NFSD out of the page cache whenever a direct-mode WRITE cannot be direct
+  I/O: every non-direct exit and every buffered segment of a split is now
+  DONTCACHE, and a WRITE whose middle cannot be direct is no longer split
+- Fix the io_cache_read debugfs knob ignoring the dontcache and direct modes
+- Add tracing for how a direct-mode READ or WRITE is serviced, and report the
+  DONTCACHE dirty backlog in the bdi debugfs stats
+
+* Thu Sep 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-2]
+- Update nfs-testing-canary; no other branch changed
+- Engage pNFS for wide striped layouts: LAYOUTGET now sizes loga_maxcount from
+  its reply buffer and retries once at the session maximum on NFS4ERR_TOOSMALL,
+  rather than falling back to the MDS
+- Scale flexfiles layoutstats: accounting moves from the per-mirror lock to a
+  per-stripe lock, one cacheline per I/O direction, and LAYOUTSTATS reporting
+  rotates over a mirror's stripes instead of always reporting the first four
+
+* Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-1]
+- Rebase all branches on kernel-7.1.13-0
+- Drop 2 NFS FREE_STATEID fixes from nfs-for-7.2-3 that landed in 7.1.13
+- Collapse nfs-for-7.2-1 into nfs-for-7.2-3; its remaining commits are in 7.1.13
+- vfs-7.2-merge is now linear: the 3 upstream vfs-7.2-rc1 tag merges did not
+  survive the rebase, their commits did
+
 * Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-0]
 - Linux v7.1.13
+
+* Mon Sep 14 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-6]
+- redhat: move .gitlab-ci.yml to redhat/upstream-ci.yml.disabled
+- first use of HS's kernel-rpmtree scripts to audit, rebase and release all topic branches
+- NFS: defer the final superblock deactivation
+
+* Wed Sep 09 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-5]
+- rebased Ben's 3 v7.1.8-2 changes ontop of his 24 patch series from v7.1.8-4
+- brd: iterate the bio by byte position, not bi_sector
+- zram: handle sub-page bvec segments without corrupting data
+- nfsd: fetch direct I/O alignment for files handed to the filecache
+- fix "NFSD: add NFSD_IO_DIRECT heuristic for small IO" to not clobber IOCB_DONTCACHE
+
+* Tue Sep 08 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-4]
+- NFS: flexfiles device notifications and caching for wide striped layouts
+
+* Mon Aug 24 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-3]
+- backfill upstream 7.3 commit ID and header updates for block/iomap DIO alignment fixes
+- NFSv4.1: zero referring call lists before decoding
+- pNFS: Fix EBUSY check in pnfs_layout_need_return
+
+* Wed Aug 19 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-2]
+- NFSv4/flexfiles: report the intended opnum when DS connection setup fails
+- pNFS: allow layout drivers to cancel I/O to a single device
+- NFSv4/flexfiles: only cancel I/O to a failed mirror instance
+- iomap and NVMe performance improvements via vfs-7.3-rc1.iomap changes
+
+* Mon Aug 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-1]
+- Rebase all branches on kernel-7.1.8-0
+- Backfill VFS changes that were merged into 7.2 as deps for nfsd-7.2
+- Include NFS server changes from nfsd-7.3
+- Include NFS client changes that will be in nfs-for-7.3-1
 
 * Sun Aug 09 2026 Justin M. Forbes <jforbes@fedoraproject.org> [7.1.8-0]
 - Config updates for 7.1.8 (Justin M. Forbes)
