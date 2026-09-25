@@ -58,20 +58,22 @@
 
 #define NFSDBG_FACILITY		NFSDBG_VFS
 
-#define NFS_64_BIT_INODE_NUMBERS_ENABLED	1
+static bool enable_ino64;
 
-/* Default is to see 64-bit inode numbers */
-static bool enable_ino64 = NFS_64_BIT_INODE_NUMBERS_ENABLED;
+static int param_set_enable_ino64(const char *val, const struct kernel_param *kp)
+{
+	pr_notice("enable_ino64 is deprecated and has no effect\n");
+	return 0;
+}
+
+static const struct kernel_param_ops param_ops_enable_ino64 = {
+	.set = param_set_enable_ino64,
+	.get = param_get_bool,
+};
 
 static int nfs_update_inode(struct inode *, struct nfs_fattr *);
 
 static struct kmem_cache * nfs_inode_cachep;
-
-static inline unsigned long
-nfs_fattr_to_ino_t(struct nfs_fattr *fattr)
-{
-	return nfs_fileid_to_ino_t(fattr->fileid);
-}
 
 int nfs_wait_bit_killable(struct wait_bit_key *key, int mode)
 {
@@ -83,29 +85,6 @@ int nfs_wait_bit_killable(struct wait_bit_key *key, int mode)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(nfs_wait_bit_killable);
-
-/**
- * nfs_compat_user_ino64 - returns the user-visible inode number
- * @fileid: 64-bit fileid
- *
- * This function returns a 32-bit inode number if the boot parameter
- * nfs.enable_ino64 is zero.
- */
-u64 nfs_compat_user_ino64(u64 fileid)
-{
-#ifdef CONFIG_COMPAT
-	compat_ulong_t ino;
-#else	
-	unsigned long ino;
-#endif
-
-	if (enable_ino64)
-		return fileid;
-	ino = fileid;
-	if (sizeof(ino) < sizeof(fileid))
-		ino ^= fileid >> (sizeof(fileid)-sizeof(ino)) * 8;
-	return ino;
-}
 
 int nfs_drop_inode(struct inode *inode)
 {
@@ -280,9 +259,48 @@ void nfs_zap_acl_cache(struct inode *inode)
 }
 EXPORT_SYMBOL_GPL(nfs_zap_acl_cache);
 
+/*
+ * Return true if nfs_set_cache_invalid(inode, NFS_INO_INVALID_ATIME) would
+ * not change anything, so that nfs_invalidate_atime() can skip i_lock.
+ *
+ * Besides setting the bit, nfs_set_cache_invalid() drops a stale
+ * NFS_INO_INVALID_DATA once the page cache is empty. It also clears the
+ * out-of-order change attribute tracking (nfs_ooo_clear()) when the page
+ * cache is empty or about to be invalidated. When either of those still
+ * has work to do, take the slow path.
+ *
+ * This check is racy, just as a locked call is racy against a concurrent
+ * update. A stale answer only postpones that cleanup, and the cleanup errs
+ * towards invalidating.
+ */
+static bool nfs_atime_invalid_is_noop(struct inode *inode)
+{
+	struct nfs_inode *nfsi = NFS_I(inode);
+	unsigned long cache_validity = READ_ONCE(nfsi->cache_validity);
+
+	if (!(cache_validity & NFS_INO_INVALID_ATIME))
+		return false;
+	if (READ_ONCE(inode->i_mapping->nrpages) == 0) {
+		if (cache_validity & NFS_INO_INVALID_DATA)
+			return false;
+	} else if (!(cache_validity & NFS_INO_INVALID_DATA)) {
+		return true;
+	}
+	return !(cache_validity & NFS_INO_DATA_INVAL_DEFER) &&
+	       !READ_ONCE(nfsi->ooo);
+}
+
 void nfs_invalidate_atime(struct inode *inode)
 {
 	if (nfs_have_delegated_atime(inode))
+		return;
+	/*
+	 * Every READ reply lands here. The atime stays marked stale until
+	 * something refreshes or sets it, and that clears the bit under
+	 * i_lock. Until then, don't take inode->i_lock just to mark it
+	 * again.
+	 */
+	if (nfs_atime_invalid_is_noop(inode))
 		return;
 	spin_lock(&inode->i_lock);
 	nfs_set_cache_invalid(inode, NFS_INO_INVALID_ATIME);
@@ -314,8 +332,7 @@ struct nfs_find_desc {
 };
 
 /*
- * In NFSv3 we can have 64bit inode numbers. In order to support
- * this, and re-exported directories (also seen in NFSv2)
+ * For re-exported directories (also seen in NFSv2)
  * we are forced to allow 2 different inodes to have the same
  * i_ino.
  */
@@ -326,7 +343,7 @@ nfs_find_actor(struct inode *inode, void *opaque)
 	struct nfs_fh		*fh = desc->fh;
 	struct nfs_fattr	*fattr = desc->fattr;
 
-	if (NFS_FILEID(inode) != fattr->fileid)
+	if (inode->i_ino != fattr->fileid)
 		return 0;
 	if (inode_wrong_type(inode, fattr->mode))
 		return 0;
@@ -343,7 +360,7 @@ nfs_init_locked(struct inode *inode, void *opaque)
 	struct nfs_find_desc	*desc = opaque;
 	struct nfs_fattr	*fattr = desc->fattr;
 
-	set_nfs_fileid(inode, fattr->fileid);
+	inode->i_ino = fattr->fileid;
 	inode->i_mode = fattr->mode;
 	nfs_copy_fh(NFS_FH(inode), desc->fh);
 	return 0;
@@ -414,13 +431,13 @@ nfs_ilookup(struct super_block *sb, struct nfs_fattr *fattr, struct nfs_fh *fh)
 		.fattr	= fattr,
 	};
 	struct inode *inode;
-	unsigned long hash;
+	u64 hash;
 
 	if (!(fattr->valid & NFS_ATTR_FATTR_FILEID) ||
 	    !(fattr->valid & NFS_ATTR_FATTR_TYPE))
 		return NULL;
 
-	hash = nfs_fattr_to_ino_t(fattr);
+	hash = fattr->fileid;
 	inode = ilookup5(sb, hash, nfs_find_actor, &desc);
 
 	dprintk("%s: returning %p\n", __func__, inode);
@@ -457,7 +474,7 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 	};
 	struct inode *inode = ERR_PTR(-ENOENT);
 	u64 fattr_supported = NFS_SB(sb)->fattr_valid;
-	unsigned long hash;
+	u64 hash;
 
 	nfs_attr_check_mountpoint(sb, fattr);
 
@@ -468,7 +485,7 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 	if ((fattr->valid & NFS_ATTR_FATTR_TYPE) == 0)
 		goto out_no_inode;
 
-	hash = nfs_fattr_to_ino_t(fattr);
+	hash = fattr->fileid;
 
 	inode = iget5_locked(sb, hash, nfs_find_actor, nfs_init_locked, &desc);
 	if (inode == NULL) {
@@ -479,10 +496,6 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 	if (inode_state_read_once(inode) & I_NEW) {
 		struct nfs_inode *nfsi = NFS_I(inode);
 		unsigned long now = jiffies;
-
-		/* We set i_ino for the few things that still rely on it,
-		 * such as stat(2) */
-		inode->i_ino = hash;
 
 		/* We can't support update_atime(), since the server will reset it */
 		inode->i_flags |= S_NOATIME|S_NOCMTIME;
@@ -533,6 +546,8 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 		inode->i_blocks = 0;
 		nfsi->write_io = 0;
 		nfsi->read_io = 0;
+		nfsi->uncacheable_file_data = false;
+		nfsi->uncacheable_dirent_metadata = false;
 
 		nfsi->read_cache_jiffies = fattr->time_start;
 		nfsi->attr_gencount = fattr->gencount;
@@ -587,6 +602,22 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 		} else if (fattr_supported & NFS_ATTR_FATTR_SPACE_USED &&
 			   fattr->size != 0)
 			nfs_set_cache_invalid(inode, NFS_INO_INVALID_BLOCKS);
+		if (fattr->valid & NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA)
+			nfsi->uncacheable_file_data =
+				fattr->aux_flags & NFS_AUX_UNCACHEABLE_FILE_DATA;
+		else if (S_ISREG(inode->i_mode) &&
+			 (fattr_supported & NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA))
+			nfs_set_cache_invalid(inode, NFS_INO_INVALID_UNCACHEABLE_FILE_DATA);
+		/*
+		 * No invalidation bit for uncacheable_dirent_metadata: unlike
+		 * uncacheable_file_data, attr 88 is requested unconditionally
+		 * for directories via the nfs4_bitmap_copy_adjust() type gate,
+		 * so it is refetched on every directory getattr and cannot go
+		 * stale.
+		 */
+		if (fattr->valid & NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA)
+			nfsi->uncacheable_dirent_metadata =
+				fattr->aux_flags & NFS_AUX_UNCACHEABLE_DIRENT_METADATA;
 
 		nfs_setsecurity(inode, fattr);
 
@@ -607,7 +638,7 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 	}
 	dprintk("NFS: nfs_fhget(%s/%Lu fh_crc=0x%08x ct=%d)\n",
 		inode->i_sb->s_id,
-		(unsigned long long)NFS_FILEID(inode),
+		(unsigned long long)inode->i_ino,
 		nfs_display_fhandle_hash(fh),
 		icount_read(inode));
 
@@ -683,8 +714,54 @@ static void nfs_update_mtime(struct inode *inode)
 		~(NFS_INO_INVALID_CTIME | NFS_INO_INVALID_MTIME);
 }
 
+/*
+ * A delegated timestamp is set to the coarse clock, so once a request has
+ * updated it every further request in the same tick finds it current and
+ * nfs_update_atime()/nfs_update_mtime() would change nothing: the timestamp
+ * compare in inode_update_time() fails and the validity bits are already
+ * clear.  These lockless tests let the callers skip inode->i_lock in that
+ * case; the locked path is taken whenever they cannot prove it.
+ *
+ * The timestamps are read without the lock.  A torn read is only possible
+ * while another CPU is storing them under the lock, and what it stores is
+ * the current coarse time (or a newer one), so a torn value that happens
+ * to equal @now describes exactly the state we would leave behind, and any
+ * other torn value sends us to the locked path.
+ */
+static bool nfs_delegated_atime_is_current(struct inode *inode)
+{
+	struct timespec64 now = current_time(inode);
+	struct timespec64 atime = inode_get_atime(inode);
+
+	return timespec64_equal(&now, &atime) &&
+	       !(READ_ONCE(NFS_I(inode)->cache_validity) &
+		 NFS_INO_INVALID_ATIME);
+}
+
+static bool nfs_delegated_mtime_is_current(struct inode *inode)
+{
+	struct timespec64 now = current_time(inode);
+	struct timespec64 mtime = inode_get_mtime(inode);
+	struct timespec64 ctime = inode_get_ctime(inode);
+
+	return timespec64_equal(&now, &mtime) &&
+	       timespec64_equal(&now, &ctime) &&
+	       !(READ_ONCE(NFS_I(inode)->cache_validity) &
+		 (NFS_INO_INVALID_CTIME | NFS_INO_INVALID_MTIME));
+}
+
 void nfs_update_delegated_atime(struct inode *inode)
 {
+	/*
+	 * The delegation is not protected by inode->i_lock (it is published
+	 * and detached under clp->cl_lock and checked under RCU), so there is
+	 * no point in taking the lock just to find out that there is no
+	 * delegated atime.  Recheck under the lock before updating.
+	 */
+	if (!nfs_have_delegated_atime(inode))
+		return;
+	if (nfs_delegated_atime_is_current(inode))
+		return;
 	spin_lock(&inode->i_lock);
 	if (nfs_have_delegated_atime(inode))
 		nfs_update_atime(inode);
@@ -696,6 +773,18 @@ void nfs_update_delegated_mtime_locked(struct inode *inode)
 	if (nfs_have_delegated_mtime(inode) ||
 	    nfs_have_directory_delegation(inode))
 		nfs_update_mtime(inode);
+}
+
+/*
+ * For callers that would take inode->i_lock only to call
+ * nfs_update_delegated_mtime_locked(): true if that call would do anything.
+ */
+bool nfs_delegated_mtime_needs_update(struct inode *inode)
+{
+	if (!nfs_have_delegated_mtime(inode) &&
+	    !nfs_have_directory_delegation(inode))
+		return false;
+	return !nfs_delegated_mtime_is_current(inode);
 }
 
 void nfs_update_delegated_mtime(struct inode *inode)
@@ -1067,7 +1156,6 @@ out_no_revalidate:
 	stat->result_mask = nfs_get_valid_attrmask(inode) | request_mask;
 
 	generic_fillattr(&nop_mnt_idmap, request_mask, inode, stat);
-	stat->ino = nfs_compat_user_ino64(NFS_FILEID(inode));
 	stat->change_cookie = inode_peek_iversion_raw(inode);
 	stat->attributes_mask |= STATX_ATTR_CHANGE_MONOTONIC;
 	if (server->change_attr_type != NFS4_CHANGE_TYPE_IS_UNDEFINED)
@@ -1134,7 +1222,29 @@ static struct nfs_lock_context *__nfs_find_lock_context(struct nfs_open_context 
 struct nfs_lock_context *nfs_get_lock_context(struct nfs_open_context *ctx)
 {
 	struct nfs_lock_context *res, *new = NULL;
-	struct inode *inode = d_inode(ctx->dentry);
+	struct inode *inode;
+
+	/*
+	 * The lock context embedded in the open context belongs to the lock
+	 * owner that opened the file, and its count is the open context's
+	 * reference count, so taking it is just get_nfs_open_context().
+	 * Without this, an I/O issued while no other I/O is in flight on
+	 * the open context allocates a lock context and frees it again,
+	 * taking inode->i_lock both times.
+	 *
+	 * lockowner is set before the open context is published and never
+	 * changes.  If get_nfs_open_context() fails here it also fails
+	 * below, so the list never holds an entry for the opening lock
+	 * owner: all of that owner's I/O and unlocks use the embedded
+	 * context's io_count, which is the one nfs_iocounter_wait() and
+	 * nfs_async_iocounter_wait() look at.  Callers (e.g. the NLM
+	 * FL_CLOSE ops in nfs3proc.c) also rely on getting the same object
+	 * for the same (ctx, current->files), so keep this test purely on
+	 * the lock owner.
+	 */
+	if (ctx->lock_context.lockowner == current->files &&
+	    get_nfs_open_context(ctx))
+		return &ctx->lock_context;
 
 	rcu_read_lock();
 	res = __nfs_find_lock_context(ctx);
@@ -1144,6 +1254,7 @@ struct nfs_lock_context *nfs_get_lock_context(struct nfs_open_context *ctx)
 		if (new == NULL)
 			return ERR_PTR(-ENOMEM);
 		nfs_init_lock_context(new);
+		inode = d_inode(ctx->dentry);
 		spin_lock(&inode->i_lock);
 		res = __nfs_find_lock_context(ctx);
 		if (res == NULL) {
@@ -1166,8 +1277,17 @@ EXPORT_SYMBOL_GPL(nfs_get_lock_context);
 void nfs_put_lock_context(struct nfs_lock_context *l_ctx)
 {
 	struct nfs_open_context *ctx = l_ctx->open_context;
-	struct inode *inode = d_inode(ctx->dentry);
+	struct inode *inode;
 
+	/*
+	 * The embedded lock context is not on the list and is not freed on
+	 * its own: its count is the open context's reference count.
+	 */
+	if (l_ctx == &ctx->lock_context) {
+		put_nfs_open_context(ctx);
+		return;
+	}
+	inode = d_inode(ctx->dentry);
 	if (!refcount_dec_and_lock(&l_ctx->count, &inode->i_lock))
 		return;
 	list_del_rcu(&l_ctx->list);
@@ -1385,7 +1505,7 @@ __nfs_revalidate_inode(struct nfs_server *server, struct inode *inode)
 	struct nfs_inode *nfsi = NFS_I(inode);
 
 	dfprintk(PAGECACHE, "NFS: revalidating (%s/%Lu)\n",
-		inode->i_sb->s_id, (unsigned long long)NFS_FILEID(inode));
+		inode->i_sb->s_id, (unsigned long long)inode->i_ino);
 
 	trace_nfs_revalidate_inode_enter(inode);
 
@@ -1399,7 +1519,8 @@ __nfs_revalidate_inode(struct nfs_server *server, struct inode *inode)
 		status = pnfs_sync_inode(inode, false);
 		if (status)
 			goto out;
-	} else if (nfs_have_directory_delegation(inode)) {
+	} else if (nfs_have_directory_delegation(inode) &&
+		   !(NFS_I(inode)->cache_validity & NFS_INO_INVALID_ATTR)) {
 		status = 0;
 		goto out;
 	}
@@ -1415,7 +1536,7 @@ __nfs_revalidate_inode(struct nfs_server *server, struct inode *inode)
 	if (status != 0) {
 		dfprintk(PAGECACHE, "nfs_revalidate_inode: (%s/%Lu) getattr failed, error=%d\n",
 			 inode->i_sb->s_id,
-			 (unsigned long long)NFS_FILEID(inode), status);
+			 (unsigned long long)inode->i_ino, status);
 		switch (status) {
 		case -ETIMEDOUT:
 			/* A soft timeout occurred. Use cached information? */
@@ -1435,7 +1556,7 @@ __nfs_revalidate_inode(struct nfs_server *server, struct inode *inode)
 	if (status) {
 		dfprintk(PAGECACHE, "nfs_revalidate_inode: (%s/%Lu) refresh failed, error=%d\n",
 			 inode->i_sb->s_id,
-			 (unsigned long long)NFS_FILEID(inode), status);
+			 (unsigned long long)inode->i_ino, status);
 		goto out;
 	}
 
@@ -1446,7 +1567,7 @@ __nfs_revalidate_inode(struct nfs_server *server, struct inode *inode)
 
 	dfprintk(PAGECACHE, "NFS: (%s/%Lu) revalidation complete\n",
 		inode->i_sb->s_id,
-		(unsigned long long)NFS_FILEID(inode));
+		(unsigned long long)inode->i_ino);
 
 out:
 	nfs_free_fattr(fattr);
@@ -1495,7 +1616,7 @@ static int nfs_invalidate_mapping(struct inode *inode, struct address_space *map
 
 	dfprintk(PAGECACHE, "NFS: (%s/%Lu) data cache invalidated\n",
 			inode->i_sb->s_id,
-			(unsigned long long)NFS_FILEID(inode));
+			(unsigned long long)inode->i_ino);
 	return 0;
 }
 
@@ -1557,9 +1678,7 @@ int nfs_clear_invalid_mapping(struct address_space *mapping)
 	ret = nfs_invalidate_mapping(inode, mapping);
 	trace_nfs_invalidate_mapping_exit(inode, ret);
 
-	clear_bit_unlock(NFS_INO_INVALIDATING, bitlock);
-	smp_mb__after_atomic();
-	wake_up_bit(bitlock, NFS_INO_INVALIDATING);
+	clear_and_wake_up_bit(NFS_INO_INVALIDATING, bitlock);
 out:
 	return ret;
 }
@@ -1687,10 +1806,10 @@ static int nfs_check_inode_attributes(struct inode *inode, struct nfs_fattr *fat
 		if (fattr->valid & NFS_ATTR_FATTR_MOUNTED_ON_FILEID)
 			return 0;
 	/* Has the inode gone and changed behind our back? */
-	} else if (nfsi->fileid != fattr->fileid) {
+	} else if (inode->i_ino != fattr->fileid) {
 		/* Is this perhaps the mounted-on fileid? */
 		if ((fattr->valid & NFS_ATTR_FATTR_MOUNTED_ON_FILEID) &&
-		    nfsi->fileid == fattr->mounted_on_fileid)
+		    inode->i_ino == fattr->mounted_on_fileid)
 			return 0;
 		return -ESTALE;
 	}
@@ -2001,7 +2120,8 @@ static int nfs_inode_finish_partial_attr_update(const struct nfs_fattr *fattr,
 		NFS_INO_INVALID_ATIME | NFS_INO_INVALID_CTIME |
 		NFS_INO_INVALID_MTIME | NFS_INO_INVALID_SIZE |
 		NFS_INO_INVALID_BLOCKS | NFS_INO_INVALID_OTHER |
-		NFS_INO_INVALID_NLINK | NFS_INO_INVALID_BTIME;
+		NFS_INO_INVALID_NLINK | NFS_INO_INVALID_BTIME |
+		NFS_INO_INVALID_UNCACHEABLE_FILE_DATA;
 	unsigned long cache_validity = NFS_I(inode)->cache_validity;
 	enum nfs4_change_attr_type ctype = NFS_SERVER(inode)->change_attr_type;
 
@@ -2277,15 +2397,15 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 		if (fattr->valid & NFS_ATTR_FATTR_MOUNTED_ON_FILEID)
 			return 0;
 	/* Has the inode gone and changed behind our back? */
-	} else if (nfsi->fileid != fattr->fileid) {
+	} else if (inode->i_ino != fattr->fileid) {
 		/* Is this perhaps the mounted-on fileid? */
 		if ((fattr->valid & NFS_ATTR_FATTR_MOUNTED_ON_FILEID) &&
-		    nfsi->fileid == fattr->mounted_on_fileid)
+		    inode->i_ino == fattr->mounted_on_fileid)
 			return 0;
 		printk(KERN_ERR "NFS: server %s error: fileid changed\n"
 			"fsid %s: expected fileid 0x%Lx, got 0x%Lx\n",
 			NFS_SERVER(inode)->nfs_client->cl_hostname,
-			inode->i_sb->s_id, (long long)nfsi->fileid,
+			inode->i_sb->s_id, (long long)inode->i_ino,
 			(long long)fattr->fileid);
 		goto out_err;
 	}
@@ -2323,7 +2443,8 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 	nfsi->cache_validity &= ~(NFS_INO_INVALID_ATTR
 			| NFS_INO_INVALID_ATIME
 			| NFS_INO_REVAL_FORCED
-			| NFS_INO_INVALID_BLOCKS);
+			| NFS_INO_INVALID_BLOCKS
+			| NFS_INO_INVALID_UNCACHEABLE_FILE_DATA);
 
 	/* Do atomic weak cache consistency updates */
 	nfs_wcc_update_inode(inode, fattr);
@@ -2363,7 +2484,8 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 					| NFS_INO_INVALID_NLINK
 					| NFS_INO_INVALID_MODE
 					| NFS_INO_INVALID_OTHER
-					| NFS_INO_INVALID_BTIME;
+					| NFS_INO_INVALID_BTIME
+					| NFS_INO_INVALID_UNCACHEABLE_FILE_DATA;
 				if (S_ISDIR(inode->i_mode))
 					nfs_force_lookup_revalidate(inode);
 				attr_changed = true;
@@ -2486,6 +2608,18 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 	else if (fattr_supported & NFS_ATTR_FATTR_BLOCKS_USED)
 		nfsi->cache_validity |=
 			save_cache_validity & NFS_INO_INVALID_BLOCKS;
+
+	if (fattr->valid & NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA)
+		nfsi->uncacheable_file_data =
+				fattr->aux_flags & NFS_AUX_UNCACHEABLE_FILE_DATA;
+	else if (S_ISREG(inode->i_mode) &&
+		 (fattr_supported & NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA))
+		nfsi->cache_validity |=
+			save_cache_validity & NFS_INO_INVALID_UNCACHEABLE_FILE_DATA;
+
+	if (fattr->valid & NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA)
+		nfsi->uncacheable_dirent_metadata =
+				fattr->aux_flags & NFS_AUX_UNCACHEABLE_DIRENT_METADATA;
 
 	/* Update attrtimeo value if we're out of the unstable period */
 	if (attr_changed) {
@@ -2813,7 +2947,7 @@ static void __exit exit_nfs_fs(void)
 MODULE_AUTHOR("Olaf Kirch <okir@monad.swb.de>");
 MODULE_DESCRIPTION("NFS client support");
 MODULE_LICENSE("GPL");
-module_param(enable_ino64, bool, 0644);
+module_param_cb(enable_ino64, &param_ops_enable_ino64, &enable_ino64, 0644);
 
 module_init(init_nfs_fs)
 module_exit(exit_nfs_fs)

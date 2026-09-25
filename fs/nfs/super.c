@@ -203,12 +203,36 @@ bool nfs_sb_active(struct super_block *sb)
 }
 EXPORT_SYMBOL_GPL(nfs_sb_active);
 
+void nfs_sb_deactive_workfn(struct work_struct *work)
+{
+	struct nfs_server *server = container_of(work, struct nfs_server,
+						 deactivate_work);
+
+	/* May free @server; do not touch it after this call. */
+	deactivate_super(server->super);
+}
+
+/*
+ * Drop the superblock reference held on behalf of server->active.
+ *
+ * The final s_active reference must not be dropped synchronously: callers
+ * such as __put_nfs_open_context() can run from writeback, where
+ * __writeback_inodes_wb() already holds sb->s_umount shared, so the
+ * down_write() in deactivate_super() would self-deadlock. Non-final
+ * references are dropped inline; the final one is handed to nfsiod.
+ *
+ * The queued work owns an s_active reference until it runs, so no other
+ * caller can see s_active == 1 and try to queue it again while pending.
+ */
 void nfs_sb_deactive(struct super_block *sb)
 {
 	struct nfs_server *server = NFS_SB(sb);
 
-	if (atomic_dec_and_test(&server->active))
-		deactivate_super(sb);
+	if (!atomic_dec_and_test(&server->active))
+		return;
+	if (atomic_add_unless(&sb->s_active, -1, 1))
+		return;
+	queue_work(nfsiod_workqueue, &server->deactivate_work);
 }
 EXPORT_SYMBOL_GPL(nfs_sb_deactive);
 
@@ -509,6 +533,10 @@ static void nfs_show_mount_options(struct seq_file *m, struct nfs_server *nfss,
 	default:
 		break;
 	}
+	if (clp->cl_xprtsec.cert_serial)
+		seq_puts(m, ",cert_serial=<redacted>");
+	if (clp->cl_xprtsec.privkey_serial)
+		seq_puts(m, ",privkey_serial=<redacted>");
 
 	if (version != 4)
 		nfs_show_mountd_options(m, nfss, showdefaults);

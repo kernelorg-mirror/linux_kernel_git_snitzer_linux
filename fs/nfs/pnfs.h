@@ -57,14 +57,18 @@ struct nfs4_pnfs_ds_addr {
 };
 
 struct nfs4_pnfs_ds {
-	struct list_head	ds_node;  /* nfs4_pnfs_dev_hlist dev_dslist */
+	struct hlist_node	ds_node;  /* nfs_net nfs4_data_server_cache */
+	struct hlist_node	ds_tmpnode; /* for batched disposal */
 	char			*ds_remotestr;	/* comma sep list of addrs */
 	struct list_head	ds_addrs;
 	const struct net	*ds_net;
 	struct nfs_client	*ds_clp;
 	refcount_t		ds_count;
+	u32			ds_version;	/* cache key, with ds_addrs */
 	unsigned long		ds_state;
 #define NFS4DS_CONNECTING	0	/* ds is establishing connection */
+	unsigned long		ds_idle;	/* jiffies of the last put */
+	struct delayed_work	ds_reaper;
 };
 
 struct pnfs_layout_segment {
@@ -151,6 +155,20 @@ struct pnfs_layoutdriver_type {
 	void (*return_range) (struct pnfs_layout_hdr *lo,
 			      struct pnfs_layout_range *range);
 
+	/*
+	 * Lockless hint for pnfs_lookup_cached_lseg(): return the driver's
+	 * cached candidate segment for @iomode on @lo, or NULL.  Called under
+	 * rcu_read_lock(); must not sleep and must take no reference.  The
+	 * driver must clear the hint before freeing a segment and free the
+	 * segment memory only after an RCU grace period; the layout header
+	 * must likewise be freed only after an RCU grace period (kfree_rcu()
+	 * via plh_rcu, as every in-tree driver does), since the lookup reads
+	 * it under rcu_read_lock().  A driver that does not set this op never
+	 * uses the pnfs_lookup_cached_lseg() fast path.
+	 */
+	struct pnfs_layout_segment *(*get_cached_lseg_hint)(struct pnfs_layout_hdr *lo,
+							    enum pnfs_iomode iomode);
+
 	/* test for nfs page cache coalescing */
 	const struct nfs_pageio_ops *pg_read_ops;
 	const struct nfs_pageio_ops *pg_write_ops;
@@ -170,6 +188,25 @@ struct pnfs_layoutdriver_type {
 	struct nfs4_deviceid_node * (*alloc_deviceid_node)
 			(struct nfs_server *server, struct pnfs_device *pdev,
 			gfp_t gfp_flags);
+	/*
+	 * Re-resolve @lo's references to the changed deviceid @id.  Called
+	 * under @lo's inode i_lock inside an RCU read-side critical section:
+	 * must not sleep, allocations are GFP_ATOMIC.  Rather than put the
+	 * references it gives up (the final put can sleep), the hook
+	 * allocates an nfs4_deviceid_put per reference and queues it on
+	 * @put_list for the caller to put and free.  On allocation failure
+	 * it must leave the reference in place.
+	 */
+	void (*reresolve_deviceid)(struct pnfs_layout_hdr *lo,
+				   const struct nfs4_deviceid *id,
+				   bool immediate,
+				   struct list_head *put_list);
+	/*
+	 * Does @lo hold any reference to deviceid @id?  Called under
+	 * @lo's inode i_lock; must not sleep.
+	 */
+	bool (*layout_references_deviceid)(struct pnfs_layout_hdr *lo,
+					   const struct nfs4_deviceid *id);
 
 	int (*prepare_layoutreturn) (struct nfs4_layoutreturn_args *);
 
@@ -177,7 +214,8 @@ struct pnfs_layoutdriver_type {
 	int (*prepare_layoutcommit) (struct nfs4_layoutcommit_args *args);
 	int (*prepare_layoutstats) (struct nfs42_layoutstat_args *args);
 
-	void (*cancel_io)(struct pnfs_layout_segment *lseg);
+	void (*cancel_io)(struct pnfs_layout_segment *lseg,
+			  const struct nfs4_deviceid *devid);
 };
 
 struct pnfs_commit_ops {
@@ -300,7 +338,8 @@ int pnfs_mark_matching_lsegs_invalid(struct pnfs_layout_hdr *lo,
 int pnfs_mark_matching_lsegs_return(struct pnfs_layout_hdr *lo,
 				struct list_head *tmp_list,
 				const struct pnfs_layout_range *recall_range,
-				u32 seq);
+				u32 seq, bool cancel_io,
+				const struct nfs4_deviceid *devid);
 int pnfs_mark_layout_stateid_invalid(struct pnfs_layout_hdr *lo,
 		struct list_head *lseg_list);
 bool pnfs_roc(struct inode *ino, struct nfs4_layoutreturn_args *args,
@@ -329,6 +368,10 @@ struct pnfs_layout_segment *pnfs_update_layout(struct inode *ino,
 					       enum pnfs_iomode iomode,
 					       bool strict_iomode,
 					       gfp_t gfp_flags);
+struct pnfs_layout_segment *
+pnfs_lookup_cached_lseg(struct inode *ino, struct nfs_open_context *ctx,
+			loff_t pos, u64 count, enum pnfs_iomode iomode,
+			bool strict_iomode);
 void pnfs_layoutreturn_retry_later(struct pnfs_layout_hdr *lo,
 				   const nfs4_stateid *arg_stateid,
 				   const struct pnfs_layout_range *range);
@@ -350,9 +393,56 @@ int pnfs_read_done_resend_to_mds(struct nfs_pgio_header *);
 int pnfs_write_done_resend_to_mds(struct nfs_pgio_header *);
 struct nfs4_threshold *pnfs_mdsthreshold_alloc(void);
 void pnfs_error_mark_layout_for_return(struct inode *inode,
-				       struct pnfs_layout_segment *lseg);
+				       struct pnfs_layout_segment *lseg,
+				       const struct nfs4_deviceid *devid);
 void pnfs_layout_return_unused_byclid(struct nfs_client *clp,
 				      enum pnfs_iomode iomode);
+void pnfs_layout_reresolve_deviceid_byclid(struct nfs_client *clp,
+				const struct pnfs_layoutdriver_type *ld,
+				const struct nfs4_deviceid *devid,
+				bool immediate);
+bool pnfs_layout_deviceid_referenced_byclid(struct nfs_client *clp,
+				const struct pnfs_layoutdriver_type *ld,
+				const struct nfs4_deviceid *devid);
+
+/*
+ * One live layout referencing a deviceID, collected for the
+ * CB_NOTIFY_DEVICEID DELETE recovery: the hdr is pinned, the inode
+ * igrab'd with its superblock active, and the layout stateid and
+ * cred snapshotted for TEST_STATEID.
+ */
+struct nfs4_deviceid_ref {
+	struct list_head node;
+	struct pnfs_layout_hdr *lo;
+	struct inode *inode;
+	nfs4_stateid stateid;
+	const struct cred *cred;
+};
+
+int pnfs_layout_collect_deviceid_refs(struct nfs_client *clp,
+				const struct pnfs_layoutdriver_type *ld,
+				const struct nfs4_deviceid *devid,
+				struct list_head *result);
+void pnfs_layout_put_deviceid_refs(struct list_head *result);
+
+/*
+ * A CB_NOTIFY_DEVICEID DELETE naming a deviceID that live layouts
+ * still reference (RFC 8881 Section 18.40.4).  Queued on
+ * nfs_client.cl_deviceid_deletes under cl_lock for the state manager
+ * to resolve; holds a layoutdriver reference.
+ */
+struct nfs4_deviceid_delete {
+	struct list_head list;
+	const struct pnfs_layoutdriver_type *ld;
+	struct nfs4_deviceid id;
+};
+
+void pnfs_deviceid_delete_mark(struct nfs_client *clp,
+			       const struct pnfs_layoutdriver_type *ld,
+			       const struct nfs4_deviceid *id);
+struct nfs4_deviceid_delete *pnfs_deviceid_delete_dequeue(
+			       struct nfs_client *clp);
+void pnfs_deviceid_delete_queue_free(struct nfs_client *clp);
 int pnfs_layout_handle_reboot(struct nfs_client *clp);
 
 /* nfs4_deviceid_flags */
@@ -375,15 +465,32 @@ struct nfs4_deviceid_node {
 	atomic_t			ref;
 };
 
+/* One reference given up by reresolve_deviceid; nodes are shared, so a
+ * single pass can unpin the same node more than once.
+ */
+struct nfs4_deviceid_put {
+	struct list_head		node;
+	struct nfs4_deviceid_node	*dev;
+};
+
 struct nfs4_deviceid_node *
 nfs4_find_get_deviceid(struct nfs_server *server,
 		const struct nfs4_deviceid *id, const struct cred *cred,
 		gfp_t gfp_mask);
 void nfs4_delete_deviceid(const struct pnfs_layoutdriver_type *, const struct nfs_client *, const struct nfs4_deviceid *);
+void nfs4_deviceid_bump_change_epoch(struct nfs_client *clp);
 void nfs4_init_deviceid_node(struct nfs4_deviceid_node *, struct nfs_server *,
 			     const struct nfs4_deviceid *);
 bool nfs4_put_deviceid_node(struct nfs4_deviceid_node *);
 void nfs4_mark_deviceid_available(struct nfs4_deviceid_node *node);
+
+/* Put the device node reference carried by an in-flight I/O, if any */
+static inline void pnfs_put_ds_dev(struct nfs4_deviceid_node *dev)
+{
+	if (dev)
+		nfs4_put_deviceid_node(dev);
+}
+
 void nfs4_mark_deviceid_unavailable(struct nfs4_deviceid_node *node);
 bool nfs4_test_deviceid_unavailable(struct nfs4_deviceid_node *node);
 void nfs4_deviceid_purge_client(const struct nfs_client *);
@@ -415,16 +522,20 @@ int pnfs_generic_commit_pagelist(struct inode *inode,
 int pnfs_generic_scan_commit_lists(struct nfs_commit_info *cinfo, int max);
 void pnfs_generic_write_commit_done(struct rpc_task *task, void *data);
 void nfs4_pnfs_ds_put(struct nfs4_pnfs_ds *ds);
+void nfs4_pnfs_ds_reap_net(const struct net *net);
 struct nfs4_pnfs_ds *nfs4_pnfs_ds_add(const struct net *net,
 				      struct list_head *dsaddrs,
-				      gfp_t gfp_flags);
+				      u32 version, gfp_t gfp_flags);
 void nfs4_pnfs_v3_ds_connect_unload(void);
 int nfs4_pnfs_ds_connect(struct nfs_server *mds_srv, struct nfs4_pnfs_ds *ds,
 			  struct nfs4_deviceid_node *devid, unsigned int timeo,
-			  unsigned int retrans, u32 version, u32 minor_version);
+			  unsigned int retrans, unsigned int nconnect,
+			  u32 version, u32 minor_version,
+			  bool tightly_coupled);
 struct nfs4_pnfs_ds_addr *nfs4_decode_mp_ds_addr(struct net *net,
 						 struct xdr_stream *xdr,
 						 gfp_t gfp_flags);
+void nfs4_pnfs_ds_addr_list_free(struct list_head *dsaddrs);
 void pnfs_layout_mark_request_commit(struct nfs_page *req,
 				     struct pnfs_layout_segment *lseg,
 				     struct nfs_commit_info *cinfo,
@@ -688,10 +799,11 @@ pnfs_lseg_request_intersecting(struct pnfs_layout_segment *lseg, struct nfs_page
 }
 
 static inline void pnfs_lseg_cancel_io(struct nfs_server *server,
-				       struct pnfs_layout_segment *lseg)
+				       struct pnfs_layout_segment *lseg,
+				       const struct nfs4_deviceid *devid)
 {
 	if (server->pnfs_curr_ld->cancel_io)
-		server->pnfs_curr_ld->cancel_io(lseg);
+		server->pnfs_curr_ld->cancel_io(lseg, devid);
 }
 
 extern unsigned int layoutstats_timer;

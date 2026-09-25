@@ -466,14 +466,22 @@ ssize_t nfs_file_direct_read(struct kiocb *iocb, struct iov_iter *iter,
 		goto out_release;
 	}
 	dreq->l_ctx = l_ctx;
-	if (!is_sync_kiocb(iocb))
+	if (!is_sync_kiocb(iocb)) {
 		dreq->iocb = iocb;
+	} else if (iocb->ki_flags & IOCB_NOWAIT) {
+		result = -EAGAIN;
+		nfs_direct_req_release(dreq);
+		goto out_release;
+	}
 
 	if (user_backed_iter(iter))
 		dreq->flags = NFS_ODIRECT_SHOULD_DIRTY;
 
 	if (!swap) {
-		result = nfs_start_io_direct(inode);
+		if (iocb->ki_flags & IOCB_NOWAIT)
+			result = nfs_start_io_direct_nowait(inode);
+		else
+			result = nfs_start_io_direct(inode);
 		if (result) {
 			/* release the reference that would usually be
 			 * consumed by nfs_direct_read_schedule_iovec()
@@ -759,6 +767,8 @@ static void nfs_direct_write_completion(struct nfs_pgio_header *hdr)
 	struct nfs_commit_info cinfo;
 	struct inode *inode = dreq->inode;
 	int flags = NFS_ODIRECT_DONE;
+	bool localio_noattr;
+	loff_t end;
 
 	trace_nfs_direct_write_completion(dreq);
 
@@ -777,12 +787,48 @@ static void nfs_direct_write_completion(struct nfs_pgio_header *hdr)
 			dreq->flags = NFS_ODIRECT_DO_COMMIT;
 		flags = dreq->flags;
 	}
+	end = dreq->io_start + (loff_t)dreq->count;
 	spin_unlock(&dreq->lock);
 
-	spin_lock(&inode->i_lock);
-	nfs_direct_file_adjust_size_locked(inode, dreq->io_start, dreq->count);
-	nfs_update_delegated_mtime_locked(dreq->inode);
-	spin_unlock(&inode->i_lock);
+	/*
+	 * A completion that neither extends i_size nor has a delegated
+	 * mtime to bring up to date would do nothing under inode->i_lock,
+	 * so don't take it.  Checking locklessly is equivalent to taking
+	 * i_lock at the time of the check: every i_size writer holds
+	 * i_lock, i_size_read() only sees committed values, delegation
+	 * state is RCU protected, and both helpers recheck under the lock.
+	 * Note that i_size may also shrink here (e.g. nfs_update_inode()
+	 * applying server attributes), so do not rely on it only growing.
+	 * With a delegated mtime only the first completion in a coarse
+	 * clock tick has anything to store, see
+	 * nfs_delegated_mtime_needs_update().
+	 *
+	 * A LOCALIO direct write fetched no post-op attributes, so its
+	 * completion always has cached attributes to invalidate.
+	 */
+	localio_noattr = IS_ENABLED(CONFIG_NFS_LOCALIO) && !hdr->fattr.valid &&
+			 hdr->task.tk_ops && !hdr->task.tk_msg.rpc_proc;
+	if (localio_noattr || end > i_size_read(inode) ||
+	    nfs_delegated_mtime_needs_update(inode)) {
+		spin_lock(&inode->i_lock);
+		nfs_direct_file_adjust_size_locked(inode, dreq->io_start,
+						   end - dreq->io_start);
+		if (localio_noattr) {
+			/* LOCALIO did not fetch post-op attributes for this direct write. */
+			nfs_fattr_set_barrier(&hdr->fattr);
+			NFS_I(inode)->attr_gencount = hdr->fattr.gencount;
+			if (nfs_have_delegated_mtime(inode))
+				nfs_set_cache_invalid(inode, NFS_INO_INVALID_BLOCKS);
+			else
+				nfs_post_op_update_inode_force_wcc_locked(inode,
+									  &hdr->fattr);
+			/* Revalidate even with an ordinary write delegation. */
+			NFS_I(inode)->cache_validity |= NFS_INO_INVALID_CHANGE |
+							NFS_INO_INVALID_SIZE;
+		}
+		nfs_update_delegated_mtime_locked(inode);
+		spin_unlock(&inode->i_lock);
+	}
 
 	while (!list_empty(&hdr->pages)) {
 		struct nfs_page *req;
