@@ -379,6 +379,13 @@ config NFS_COMMON
 	depends on NFSD || NFS_FS || LOCKD
 	default y
 
+config NFS_COMMON_DIO
+	tristate
+	help
+	  Direct I/O helpers shared by the NFS server and the NFS client's
+	  LOCALIO path: splitting a misaligned write into direct and
+	  buffered segments, and holding the boundary pages they share.
+
 config NFS_COMMON_LOCALIO_SUPPORT
 	tristate
 	depends on NFS_LOCALIO
@@ -390,6 +397,7 @@ config NFS_LOCALIO
 	bool "NFS client and server support for LOCALIO auxiliary protocol"
 	depends on NFSD && NFS_FS
 	select NFS_COMMON_LOCALIO_SUPPORT
+	select NFS_COMMON_DIO
 	default n
 	help
 	  Some NFS servers support an auxiliary NFS LOCALIO protocol
