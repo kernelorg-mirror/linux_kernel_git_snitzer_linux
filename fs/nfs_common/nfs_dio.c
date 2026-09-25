@@ -48,7 +48,7 @@ nfs_dio_iter_aligned(const struct iov_iter *iter, u32 mem_align, u32 len_align)
 	if (size & (len_align - 1))
 		return false;
 	do {
-		size_t len = bvec->bv_len;
+		size_t len = bvec->bv_len - skip;
 
 		if (len > size)
 			len = size;
