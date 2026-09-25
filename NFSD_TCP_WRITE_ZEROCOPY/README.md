@@ -4,6 +4,20 @@ Server-side elimination of the redundant receive-side data copy on the NFS
 write path. This directory collects the context, build/test configs, and
 reproduction instructions for the "page-loan" patch series.
 
+> **Corruption fix + handoff (2026-09-25, later):** David Flynn's regression
+> testing found silent WRITE-payload corruption with loans on (clean with
+> `sunrpc.svc_tcp_rx_loan_pages=N`): two locked skb heads back to back — TCP
+> receive-queue collapse — send the second into the `rq_pages` arena while
+> `merge_fill` is still set, and the next borrowed bytes are copied into the
+> arena page as if it were the merge page. **Broken by** `f2ecc83eea82`
+> ("SUNRPC: merge locked-head copies into a whole-page loan bvec"); **fixed
+> by** `1e48b4d03cb8` ("SUNRPC: end the locked-head merge top-up when an arena
+> copy is appended", one assignment in `svc_tcp_rx_append_arena()`), with a
+> KUnit regression case in `3ac9fd90f192`. Both are incremental commits at
+> the tip, not yet run; the next regression run is laid out in `TESTING.md`
+> → "Next regression run (handoff)". Until it passes, keep
+> `svc_tcp_rx_loan_pages=N` wherever data matters.
+>
 > **Branch state (2026-09-25):** `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
 > is rebased onto **`v7.1.13-14`** (= `kernel-7.1.13/main`); the `-12`
 > version is kept as `….v7.1.13-12`. It is now **35 commits**: David Flynn's
