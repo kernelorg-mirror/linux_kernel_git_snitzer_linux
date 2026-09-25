@@ -25,12 +25,14 @@ Based on the configured settings, NFSD's IO will either be:
 - cached using page cache (NFSD_IO_BUFFERED=0)
 - cached but removed from page cache on completion (NFSD_IO_DONTCACHE=1)
 - not cached stable_how=NFS_UNSTABLE (NFSD_IO_DIRECT=2)
+- not cached stable_how=NFS_DATA_SYNC (NFSD_IO_DIRECT_WRITE_DATA_SYNC=3)
+- not cached stable_how=NFS_FILE_SYNC (NFSD_IO_DIRECT_WRITE_FILE_SYNC=4)
 
-To set an NFSD IO mode, write a supported value (0 - 2) to the
+To set an NFSD IO mode, write a supported value (0 - 4) to the
 corresponding IO operation's debugfs interface, e.g.::
 
   echo 2 > /sys/kernel/debug/nfsd/io_cache_read
-  echo 2 > /sys/kernel/debug/nfsd/io_cache_write
+  echo 4 > /sys/kernel/debug/nfsd/io_cache_write
 
 To check which IO mode NFSD is using for READ or WRITE, simply read the
 corresponding IO operation's debugfs interface, e.g.::
@@ -38,8 +40,54 @@ corresponding IO operation's debugfs interface, e.g.::
   cat /sys/kernel/debug/nfsd/io_cache_read
   cat /sys/kernel/debug/nfsd/io_cache_write
 
+The two NFSD_IO_DIRECT_WRITE_*_SYNC modes raise the stable_how of every
+WRITE to at least NFS_DATA_SYNC or NFS_FILE_SYNC, persist the WRITE
+accordingly before replying, and return the raised value to the client;
+a client that asked for a higher stable_how is left alone. With
+NFSD_IO_DIRECT_WRITE_FILE_SYNC the client sends no COMMIT. Against
+NFSD_IO_DIRECT the durability work is the same, one fsync per WRITE
+instead of one per COMMIT; what NFSD_IO_DIRECT adds is the COMMIT RPCs
+themselves, tens of microseconds of server CPU each plus a client cost
+that grows with the range committed, which matters in proportion to how
+many of a client's WRITEs need a COMMIT.
+
 If you experiment with NFSD's IO modes on a recent kernel and have
 interesting results, please report them to linux-nfs@vger.kernel.org
+
+READ and WRITE IO mode interlock
+================================
+
+Although io_cache_read and io_cache_write are separate interfaces, NFSD
+keeps them from being configured such that one of READ or WRITE uses
+DIRECT IO while the other uses the page cache. Mixing DIRECT and
+buffered IO to the same file causes needless page cache invalidation and
+writeback (see the DIRECT IO discussion in the Linux open(2) manpage),
+so writing one interface may adjust the other:
+
+- Setting io_cache_read to NFSD_IO_DIRECT (2) elevates io_cache_write
+  to NFSD_IO_DIRECT (2) if it was BUFFERED or DONTCACHE. A WRITE mode
+  that is already DIRECT (2, 3 or 4) is left unchanged.
+- Setting io_cache_write to any DIRECT mode (2, 3 or 4) elevates
+  io_cache_read to NFSD_IO_DIRECT (2) if it was BUFFERED or DONTCACHE.
+- Setting io_cache_read to NFSD_IO_BUFFERED (0) or NFSD_IO_DONTCACHE (1)
+  while io_cache_write is a DIRECT mode demotes io_cache_write to that
+  same value (0 or 1). A WRITE mode that is already BUFFERED or
+  DONTCACHE is left unchanged.
+- Setting io_cache_write to NFSD_IO_BUFFERED (0) or NFSD_IO_DONTCACHE
+  (1) while io_cache_read is NFSD_IO_DIRECT demotes io_cache_read to
+  that same value (0 or 1).
+
+Setting either interface to a value other than NFSD_IO_BUFFERED also
+disables NFSD's use of splice for READ, because both DONTCACHE and
+DIRECT READ must copy into the RPC reply buffer. This is reflected in
+/sys/kernel/debug/nfsd/disable-splice-read reading as 1. Writing 0 to
+disable-splice-read re-enables splice, which requires buffered READ, so
+it forces io_cache_read back to NFSD_IO_BUFFERED (0) and, if
+io_cache_write was a DIRECT mode, demotes it to NFSD_IO_BUFFERED (0) as
+well.
+
+Always read both interfaces back after writing either of them to
+confirm the resulting configuration.
 
 NFSD DONTCACHE
 ==============
@@ -121,33 +169,133 @@ Misaligned READ:
     verified to have proper offset/len (logical_block_size) and
     dma_alignment checking.
 
+    A READ smaller than dio_read_offset_align is not issued as O_DIRECT
+    at all. Expanding it would read a whole alignment unit, or two when
+    the READ straddles a boundary, to return those few bytes. Such a
+    READ is issued as DONTCACHE buffered IO instead (normal buffered IO
+    if the filesystem lacks FOP_DONTCACHE), mirroring the WRITE that is
+    smaller than its own alignment.
+
 Misaligned WRITE:
     If NFSD_IO_DIRECT is used, split any misaligned WRITE into a start,
     middle and end as needed. The large middle segment is DIO-aligned
     and the start and/or end are misaligned. Buffered IO is used for the
     misaligned segments and O_DIRECT is used for the middle DIO-aligned
-    segment. DONTCACHE buffered IO is _not_ used for the misaligned
-    segments because using normal buffered IO offers significant RMW
-    performance benefit when handling streaming misaligned WRITEs.
+    segment. If the underlying filesystem supports FOP_DONTCACHE, the
+    misaligned segments use DONTCACHE buffered IO so that their pages
+    are dropped from the page cache once written back.
+
+    A FILE_SYNC or DATA_SYNC WRITE (requested by the client, or imposed
+    as the floor by NFSD_IO_DIRECT_WRITE_FILE_SYNC and
+    NFSD_IO_DIRECT_WRITE_DATA_SYNC) is persisted once, after all of its
+    segments have been written, rather than after each segment.
+
+    The page holding a start or end segment is shared by exactly two
+    WRITEs, the one ending in it and the one starting in it, which may
+    arrive in either order, from different clients, and at the same
+    time. Both segments are issued as DONTCACHE buffered IO, so the page
+    would be dropped as soon as the first writer's data is written back,
+    leaving the second to read it back. Immediately before writing a
+    start or end segment NFSD therefore puts an empty page in the page
+    cache if there is not one already. That page is not marked "drop
+    behind" when it is created, so it does not count towards the
+    DONTCACHE writeback backlog and the writeback kick does not write it
+    back, and drop it, between the two WRITEs that share it.
+
+    Whichever WRITE finds the page already there is the second of the
+    two: it completes the page and marks it "drop behind" once its data
+    is in it, so whichever writeback cleans it afterwards (the WRITE's
+    own sync for FILE_SYNC or DATA_SYNC, the flusher or the client's
+    COMMIT for UNSTABLE) drops it. A WRITE that gets no direct middle at
+    all is issued as a single buffered DONTCACHE segment, and its first
+    and last pages are shared and handled the same way. The retained
+    page cache is the set of half-written boundary pages, which grows
+    with how far concurrent writers drift apart, not with bytes
+    written.
+
+    Whether those pages are dropped at all is a policy choice, selected
+    by /sys/kernel/debug/nfsd/direct_misaligned_dontcache (default Y).
+    Write N to issue the start and end segments, and the whole-WRITE
+    fallbacks, as ordinary cached buffered IO: nothing is claimed or
+    marked and the pages stay until reclaim, which suits a workload that
+    reads back or rewrites what it just wrote. The O_DIRECT middle
+    segment is unaffected. The knob is sampled once per WRITE, so a
+    change takes effect immediately.
+
+    The O_DIRECT middle segment also carries the DONTCACHE flag. It has
+    no effect while the IO really is O_DIRECT, but a filesystem may
+    decide on its own to service the segment with buffered IO instead
+    (XFS does so when it cannot invalidate page cache that overlaps the
+    segment, which can happen when another WRITE's buffered start or
+    end segment dirties the shared boundary page at the same time).
+    The flag makes that fallback DONTCACHE buffered IO rather than
+    normal buffered IO. Such fallbacks are visible through the
+    iomap_dio_invalidate_fail trace event; see Tracing below.
+
+    Whenever no part of a WRITE can use O_DIRECT, the whole WRITE is
+    issued as a single DONTCACHE buffered IO (normal buffered IO if the
+    filesystem lacks FOP_DONTCACHE). This covers: a filesystem that
+    advertises no DIO alignment requirements at all; a WRITE smaller
+    than the larger of the offset and memory alignments; a WRITE whose
+    DIO-aligned middle segment is smaller than
+    /sys/kernel/debug/nfsd/direct_misaligned_num_pages pages (default 2)
+    while also having a misaligned start or end; and a WRITE whose
+    payload memory is not aligned to the block device's dma_alignment,
+    which rules out O_DIRECT for the middle segment as well.
 
 Tracing:
     The nfsd_read_direct trace event shows how NFSD expands any
     misaligned READ to the next DIO-aligned block (on either end of the
-    original READ, as needed).
+    original READ, as needed). A READ that is serviced with buffered IO
+    instead emits nfsd_read_dontcache (DONTCACHE buffered IO) or
+    nfsd_read_vector (normal buffered IO).
 
     This combination of trace events is useful for READs::
 
       echo 1 > /sys/kernel/tracing/events/nfsd/nfsd_read_vector/enable
+      echo 1 > /sys/kernel/tracing/events/nfsd/nfsd_read_dontcache/enable
       echo 1 > /sys/kernel/tracing/events/nfsd/nfsd_read_direct/enable
       echo 1 > /sys/kernel/tracing/events/nfsd/nfsd_read_io_done/enable
       echo 1 > /sys/kernel/tracing/events/xfs/xfs_file_direct_read/enable
 
-    The nfsd_write_direct trace event shows how NFSD splits a given
-    misaligned WRITE into a DIO-aligned middle segment.
+    The nfsd_write_dio_split trace event is emitted once per WRITE
+    serviced in a DIRECT IO mode, before any IO is issued, and records
+    how the WRITE was split: the offset and memory alignments the
+    filesystem advertised, the memory offset of the WRITE payload, the
+    sizes of the start, middle and end segments, the number of segments
+    actually issued, and a disposition naming the reason::
+
+      direct          aligned middle segment uses O_DIRECT
+      mem_misaligned  payload memory is misaligned; one buffered segment
+      no_alignment    filesystem advertises no DIO alignment; one
+                      buffered segment
+      too_small       WRITE is smaller than the larger of the two
+                      alignments; one buffered segment
+      no_middle       no (or too small) aligned middle; one buffered
+                      segment
+
+    Whether those buffered segments are DONTCACHE or normal buffered IO
+    is reported separately, by dontcache=1 or dontcache=0, because it is
+    the same answer for every disposition: the buffered segments are
+    DONTCACHE when the filesystem supports FOP_DONTCACHE. For the direct
+    disposition it describes the prefix and suffix of the split, the
+    middle being O_DIRECT.
+
+    Each segment then emits one of nfsd_write_direct (O_DIRECT),
+    nfsd_write_dontcache (DONTCACHE buffered IO) or nfsd_write_vector
+    (normal buffered IO) with the segment's offset and length.
 
     This combination of trace events is useful for WRITEs::
 
       echo 1 > /sys/kernel/tracing/events/nfsd/nfsd_write_opened/enable
+      echo 1 > /sys/kernel/tracing/events/nfsd/nfsd_write_dio_split/enable
       echo 1 > /sys/kernel/tracing/events/nfsd/nfsd_write_direct/enable
+      echo 1 > /sys/kernel/tracing/events/nfsd/nfsd_write_dontcache/enable
+      echo 1 > /sys/kernel/tracing/events/nfsd/nfsd_write_vector/enable
       echo 1 > /sys/kernel/tracing/events/nfsd/nfsd_write_io_done/enable
       echo 1 > /sys/kernel/tracing/events/xfs/xfs_file_direct_write/enable
+      echo 1 > /sys/kernel/tracing/events/iomap/iomap_dio_invalidate_fail/enable
+
+    iomap_dio_invalidate_fail indicates an O_DIRECT middle segment that
+    the filesystem silently serviced with normal buffered IO because it
+    could not invalidate overlapping page cache first.
