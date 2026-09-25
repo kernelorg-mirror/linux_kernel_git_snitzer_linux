@@ -400,6 +400,16 @@ KUnit test modules compiled and linked — bisect-clean. See `README.md` →
 
 ## Open questions / next steps
 
+- [ ] **Run the 2026-09-25 regression plan** (`TESTING.md` → "Next
+      regression run (handoff)"): KUnit incl. the back-to-back locked-heads
+      case and its fix-reverted A/B, the runtime harness, a deliberate
+      receive-queue-collapse run, and the LOCALIO A/B against stock
+      `v7.1.13-14`. Until then the merge top-up fix (`1e48b4d03cb8`,
+      `Fixes: f2ecc83eea82`) is unverified here and
+      `svc_tcp_rx_loan_pages=N` stays the advice where data matters.
+- [ ] Consider letting a second locked head join a merge page that still has
+      room instead of falling back to the arena, so collapsed receives keep
+      their direct-I/O path (design change, after the fix is qualified).
 - [ ] **Re-qualify on `kernel-7.1/hs-7.1.13-5.NFSD_TCP_WRITE_ZEROCOPY`
       (2026-09-18 rebase).** Only a WERROR compile check of the tip has been
       done on this base: run the four KUnit suites, the bisect/sparse walk
