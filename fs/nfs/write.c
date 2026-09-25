@@ -1462,15 +1462,66 @@ static void nfs_writeback_check_extend(struct nfs_pgio_header *hdr,
 	fattr->valid |= NFS_ATTR_FATTR_SIZE;
 }
 
+#define NFS_INO_WB_STALE (NFS_INO_INVALID_CHANGE | NFS_INO_INVALID_CTIME | \
+			  NFS_INO_INVALID_MTIME | NFS_INO_INVALID_BLOCKS)
+
+/*
+ * A WRITE reply that carries no attributes (pNFS data servers: files and
+ * flexfiles layouts clear them) and that ends below EOF only marks the
+ * change attribute, times and block count stale, via nfs_set_cache_invalid().
+ * If those bits are already set and there is no out-of-order change
+ * tracking or deferred invalidation left for nfs_set_cache_invalid() to
+ * clean up, the locked update would change nothing, so skip inode->i_lock.
+ *
+ * i_size must be read before cache_validity (i_size_read() is an acquire).
+ * A concurrent truncate or attribute refresh then sees this reply as if it
+ * had been processed just before them, which is an order the locked path
+ * allows as well.  Reading cache_validity first could miss a refresh that
+ * clears the stale bits, and the stale marking would be lost.
+ */
+static bool nfs_writeback_update_is_noop(struct nfs_pgio_header *hdr)
+{
+	struct inode *inode = hdr->inode;
+	struct nfs_inode *nfsi = NFS_I(inode);
+	u64 end = hdr->args.offset + hdr->res.count;
+	unsigned long cache_validity;
+
+	if (hdr->fattr.valid & NFS_ATTR_FATTR)
+		return false;
+	if (nfs_size_to_loff_t(end) >= i_size_read(inode))
+		return false;
+	cache_validity = READ_ONCE(nfsi->cache_validity);
+	if ((cache_validity & NFS_INO_WB_STALE) != NFS_INO_WB_STALE)
+		return false;
+	if (cache_validity & (NFS_INO_INVALID_DATA | NFS_INO_DATA_INVAL_DEFER))
+		return false;
+	return !READ_ONCE(nfsi->ooo);
+}
+
 void nfs_writeback_update_inode(struct nfs_pgio_header *hdr)
 {
 	struct nfs_fattr *fattr = &hdr->fattr;
 	struct inode *inode = hdr->inode;
 
+	/* LOCALIO direct completion invalidates under its existing inode lock. */
+	if (IS_ENABLED(CONFIG_NFS_LOCALIO) &&
+	    test_bit(NFS_IOHDR_ODIRECT, &hdr->flags) && !fattr->valid &&
+	    hdr->task.tk_ops && !hdr->task.tk_msg.rpc_proc)
+		return;
+
 	if (nfs_have_delegated_mtime(inode)) {
 		spin_lock(&inode->i_lock);
 		nfs_set_cache_invalid(inode, NFS_INO_INVALID_BLOCKS);
 		spin_unlock(&inode->i_lock);
+		return;
+	}
+
+	if (nfs_writeback_update_is_noop(hdr)) {
+		/* As nfs_post_op_update_inode_force_wcc_locked() would */
+		fattr->valid &= ~(NFS_ATTR_FATTR_PRECHANGE
+				| NFS_ATTR_FATTR_PRESIZE
+				| NFS_ATTR_FATTR_PREMTIME
+				| NFS_ATTR_FATTR_PRECTIME);
 		return;
 	}
 
