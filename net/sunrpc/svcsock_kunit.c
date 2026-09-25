@@ -1012,6 +1012,82 @@ static void svcsock_rx_mixed_geometry_lifetime_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
 }
 
+/*
+ * Two locked skb heads back to back, as TCP receive-queue collapse
+ * produces, then borrowable data.  The first locked head starts a merge
+ * page; the second cannot join it and lands in the rq_pages arena; the
+ * borrowed bytes that follow must then be loaned, not copied into the
+ * last bvec as though it were still the merge page -- that bvec is now an
+ * arena page, and the copy would overwrite the bytes already there.
+ */
+static void svcsock_rx_back_to_back_locked_heads_test(struct kunit *test)
+{
+	enum {
+		FIRST_LEN = 9,
+		SECOND_LEN = 11,
+		BORROWED_LEN = 64,
+		BODY_LEN = 7 * XDR_UNIT + FIRST_LEN + SECOND_LEN + BORROWED_LEN,
+	};
+	struct svcsock_rx_fixture *fixture =
+		svcsock_rx_alloc_fixture(test, 16);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = sizeof(record) };
+	struct sk_buff *root, *second, *borrowed;
+	struct page *borrowed_page;
+	unsigned int borrowed_refs;
+	unsigned int cursor = 7 * XDR_UNIT + FIRST_LEN;
+	int ret;
+
+	svcsock_rx_fill_record(record, BODY_LEN, true, RPC_CALL, RPC_AUTH_UNIX);
+	/* linear (kmalloc'd) heads are locked: !head_frag */
+	root = svcsock_rx_build_linear_skb(test, record,
+					   sizeof(rpc_fraghdr) + cursor);
+	second = svcsock_rx_build_linear_skb(test,
+					     record + sizeof(rpc_fraghdr) + cursor,
+					     SECOND_LEN);
+	cursor += SECOND_LEN;
+	borrowed = svcsock_rx_build_page_skb(test,
+					     record + sizeof(rpc_fraghdr) + cursor,
+					     BORROWED_LEN, &borrowed_page,
+					     &borrowed_refs);
+	cursor += BORROWED_LEN;
+	KUNIT_ASSERT_EQ(test, cursor, (unsigned int)BODY_LEN);
+	KUNIT_ASSERT_TRUE(test, skb_head_is_locked(root));
+	KUNIT_ASSERT_TRUE(test, skb_head_is_locked(second));
+	KUNIT_ASSERT_FALSE(test, skb_head_is_locked(borrowed));
+	svcsock_rx_attach_frag_list(test, second, borrowed);
+	svcsock_rx_attach_frag_list(test, root, second);
+
+	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, root, 0,
+				   root->len);
+	KUNIT_ASSERT_EQ(test, ret, (int)root->len);
+	KUNIT_EXPECT_EQ(test, desc.error, 0);
+	KUNIT_EXPECT_TRUE(test, actor.complete);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
+	KUNIT_EXPECT_EQ(test, state->body_bytes, (u32)BODY_LEN);
+	KUNIT_EXPECT_EQ(test, state->merge_fill, 0U);
+	/* merge page, arena copy, loan */
+	KUNIT_EXPECT_EQ(test, state->count, 3U);
+	KUNIT_EXPECT_EQ(test, state->copied_bytes, (u32)(FIRST_LEN + SECOND_LEN));
+	KUNIT_EXPECT_EQ(test, state->borrowed_bytes, (u32)BORROWED_LEN);
+	KUNIT_EXPECT_EQ(test, page_ref_count(borrowed_page), borrowed_refs + 1);
+
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, fixture->rqstp), 0);
+	KUNIT_ASSERT_EQ(test, state->mode, (u8)SVC_TCP_RX_PUBLISHED);
+	KUNIT_EXPECT_MEMEQ(test, page_address(fixture->rqstp->rq_pages[0]),
+			   record + sizeof(rpc_fraghdr), 7 * XDR_UNIT);
+	svcsock_rx_expect_bvec_bytes(test, state,
+				     record + sizeof(rpc_fraghdr) + 7 * XDR_UNIT,
+				     BODY_LEN - 7 * XDR_UNIT);
+
+	kunit_kfree_skb(test, root);
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+	KUNIT_EXPECT_EQ(test, page_ref_count(borrowed_page), borrowed_refs - 1);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
+}
+
 static void svcsock_rx_capacity_plus_one_test(struct kunit *test)
 {
 	enum { FRAG_LEN = 8, BODY_LEN = 7 * XDR_UNIT + 3 * FRAG_LEN };
@@ -1528,6 +1604,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE_PARAM(svcsock_rx_materialize_fault_outer_close_test,
 			 svcsock_rx_fault_gen_params),
 	KUNIT_CASE(svcsock_rx_mixed_geometry_lifetime_test),
+	KUNIT_CASE(svcsock_rx_back_to_back_locked_heads_test),
 	KUNIT_CASE(svcsock_rx_capacity_plus_one_test),
 	KUNIT_CASE(svcsock_rx_partial_save_restore_test),
 	KUNIT_CASE(svcsock_rx_exclusion_table_test),
