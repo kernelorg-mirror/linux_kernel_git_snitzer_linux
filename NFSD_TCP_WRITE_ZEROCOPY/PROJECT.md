@@ -400,6 +400,11 @@ KUnit test modules compiled and linked — bisect-clean. See `README.md` →
 
 ## Open questions / next steps
 
+- [ ] **NVMe SGL support** (`NVME_SGL_SUPPORT_PROJECT.md`, scoped
+      2026-09-26): expose the device's memory-segment boundary from NVMe
+      through XFS and statx to `nfsd_file`, and relax the admission gate's
+      joint rule when it is 0; phase 1 validated on XFS-on-brd and
+      nvme-over-TCP, xeu placement is phase 2.
 - [ ] **Run the 2026-09-25 regression plan** (`TESTING.md` → "Next
       regression run (handoff)"): KUnit incl. the back-to-back locked-heads
       case and its fix-reverted A/B, the runtime harness, a deliberate
