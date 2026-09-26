@@ -60,6 +60,8 @@ struct nfsd_file {
 	u32			nf_dio_mem_align;
 	u32			nf_dio_offset_align;
 	u32			nf_dio_read_offset_align;
+	/* nfs_dio_policy encoding, 0 = not reported */
+	u32			nf_dio_seg_boundary;
 };
 
 int nfsd_file_cache_init(void);
