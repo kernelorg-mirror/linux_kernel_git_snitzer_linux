@@ -133,15 +133,15 @@ nfsd_open_local_fh(struct net *net, struct auth_domain *dom,
 static void nfsd_file_dio_policy(struct nfsd_file *nf, unsigned int direction,
 				 struct nfs_dio_policy *policy)
 {
-	policy->mem_align = nf->nf_dio_mem_align;
+	*policy = (struct nfs_dio_policy) {
+		.mem_align	= nf->nf_dio_mem_align,
+	};
 	if (direction == ITER_SOURCE) {
 		policy->offset_align = nf->nf_dio_offset_align;
 		policy->min_middle_pages = nfsd_direct_misaligned_num_pages;
 		policy->dontcache = READ_ONCE(nfsd_direct_misaligned_dontcache);
 	} else {
 		policy->offset_align = nf->nf_dio_read_offset_align;
-		policy->min_middle_pages = 0;
-		policy->dontcache = false;
 	}
 }
 
