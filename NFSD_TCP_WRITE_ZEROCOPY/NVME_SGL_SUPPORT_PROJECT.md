@@ -8,7 +8,10 @@ device can take it, which on NVMe means the controller submits it with SGLs.
 
 ## 0. Status / handoff
 
-- **Phase 1 implemented, not yet qualified** (2026-09-26): the commits
+- **Phase 1 implemented and runtime-qualified on `7.1.13-14.hs.440.loanpages`
+  (2026-09-26; section 6 → "Results"); per-commit bisect walk 51/51
+  clean, zero branch-introduced sparse findings.**
+  The commits
   below on `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`, on top of the
   scoping commit `8e804a14b33a`. Every commit is build-checked with
   `CONFIG_WERROR=y` (the directories it touches plus their users). **KUnit
@@ -341,6 +344,90 @@ Per rig:
   disposition counts need either such a generator or a real NIC.
 - The full existing harness (KUnit, bvecrepro, loan-assert, kill-switch,
   system-correctness) and the LOCALIO A/B stay green.
+
+### Results — `7.1.13-14.hs.440.loanpages` (2026-09-26)
+
+Kernel built by Mike from `5fa44f5060e6` with `NVME_TCP=m`,
+`NVME_TARGET_TCP=m`, `BLK_DEV_LOOP=m` added; all 21 relevant installed
+modules (sunrpc, nfsd, nfs, nfs_localio, nfs_dio, xfs, loop, nvme-tcp,
+nvmet-tcp, nvme-fabrics, nvmet, nvme-loop, brd, the four KUnit modules)
+srcversion-match the tree. Rigs: `run-sgl-rigs.sh up` (brd RAM disks:
+XFS on `ram0`; nvmet over NVMe/TCP on 127.0.0.1 backed by `ram1`; nvmet over
+nvme-loop backed by `ram2`; NVMe devices found by subsystem NQN only).
+
+1. **KUnit:** `sunrpc-xdr-bvec` 7/7, `sunrpc-svcsock-rx` 54/54,
+   `nfsd-receive-bvec` **6/6** (adds `nfsd_bvec_dio_seg_boundary_test`),
+   `nfsd4-receive-bvec` 9/9. `dio_segments_test` ran all 25 rows (the 12
+   existing + 13 segment-boundary rows, skipped-first-fragment ones
+   included). No WARN/BUG.
+2. **Queue limits as predicted:** brd `virt_boundary_mask=0
+   dma_alignment=511`; NVMe/TCP `0 / 3`; nvme-loop `4095 / 3`.
+3. **statx end to end** (`statx-dio.c`), `STATX_DIO_SEG_BOUNDARY` set in
+   `stx_mask` everywhere: XFS on NVMe/TCP `dio_seg_boundary=0`
+   (`dio_mem_align=4`); XFS on brd `0` (`512`); XFS on nvme-loop `4096`
+   (`4`); the raw devices report the same through `bdev_statx()`; the host's
+   VMware NVMe (`sgls: 0`) reports `4096`.
+4. **nfsd picks it up:** `nfsd_file_get_dio_attrs` shows
+   `DIO_SEG_BOUNDARY` in `flags=` with `seg_boundary=0 joint_boundary=0` on
+   NVMe/TCP and brd, `4096 / 4096` on nvme-loop.
+5. **Block acceptance** (`bvecrepro.c`'s new gapped mode, `frag=` /
+   `frag_off=`): NVMe/TCP takes 1448-byte fragments at page offset 64
+   (MATCH, ~725 segments split legally) and refuses them at offset 66
+   (`-22`: the 4-byte rule still holds); nvme-loop refuses the 4-aligned
+   gapped payload (`-22`, the documented root cause) but takes 2048-byte
+   fragments, whose gaps sit on 512-multiples (MATCH); brd copies and so
+   takes anything (its reported 512 is conservative). The existing
+   `off0=684` row MATCHes on all three. (Fragments must fit one page:
+   `frag=8948` is refused by the module on 4 KiB pages.)
+6. **nfsd WRITE path** (`run-sgl-nfsd-cmp.sh`, 10 × 16 MiB O_DIRECT per rig,
+   loans on, `io_cache_write=2`, LOCALIO off, `split_einval.bt` attached):
+   0 `dd` failures, 0 `cmp` mismatches on every rig, no `-EINVAL` (6741
+   unsplit bios, 161 clean splits). Dispositions: NVMe/TCP **160/160
+   direct**; nvme-loop 156 direct + 4 demoted (`mem_misaligned`, the gate
+   still demoting geometry that device cannot split); brd 160 demoted,
+   expected — loaned payloads start at RPC-header offsets that are not
+   512-aligned. ~168 MB borrowed per rig. The NVMe/TCP run's 5 locked-head
+   records all went direct where nvme-loop demoted 4 of its 10, consistent
+   with the relaxation but not attributable without a tracepoint on the
+   gate's joint decision; KUnit and the gapped bvecrepro are the
+   deterministic proof.
+7. **Loop commit:** a direct-I/O loop device over a file on XFS-on-nvme-loop
+   reports `virt_boundary_mask=4095` and `dio_seg_boundary=4096` (raw and
+   for XFS on it); over XFS-on-NVMe/TCP `0 / 0`; a buffered loop device
+   `0 / 0`. Without the commit the first case would report 0.
+8. **Existing harness green:** `run-rig-cmp.sh` (0 errors, 457 direct),
+   `run-loan-assert.sh` 10/10, `run-killswitch.sh`,
+   `run-system-correctness.sh`, `run-bvecrepro.sh` 4/4.
+9. **LOCALIO on a boundary-free device** (`run-sgl-localio-ab.sh`; uses the
+   tree-root `start-nfsd.sh` and `../NFS_LOCALIO_DONTCACHE/` harness). Same
+   tmpfs-file nvmet backing, only the transport changed:
+
+   | | NVMe/TCP (boundary 0) | nvme-loop (4096) |
+   |---|---|---|
+   | policy the LOCALIO opens got | `seg_boundary=0 joint_boundary=0` (9 opens, 0 RPC WRITEs) | `4096 / 4096` |
+   | rs=47008 reads/WRITE, resident | 0.008, 0.0% | 0.010, 0.0% |
+   | rs=6000 reads/WRITE, resident | 0.001, 0.0% | 0.000, 0.0% |
+   | flusher rounds; short-read; stability | 0; 5/5; FILE_SYNC, no COMMIT | same |
+
+   The relaxed policy reaches LOCALIO and LOCALIO stays correct on such a
+   device. No measurable LOCALIO benefit is expected or seen: its pinned
+   O_DIRECT buffers are page-tiled after the first entry, so the joint rule
+   never had anything to reject. **Rig caveat:** on brd-backed nvmet
+   namespaces the LOCALIO boundary test fails identically for both
+   boundaries (0.879 reads/WRITE at rs=47008, over the ceiling) — a backing
+   artifact, not the boundary; use tmpfs-file backing as above.
+10. **Per-commit bisect walk** (`run-bisect-walk.sh` from a scratch copy,
+    cold worktree, `BASE=v7.1.13-14`, running config minus debug info with
+    `WERROR=y` and the four suites `=m`; `NVME_TCP`, `NVME_TARGET_TCP` and
+    `BLK_DEV_LOOP` built): **51/51 clean**, 0 failures (44 built, 7 docs-only
+    skipped), sparse verdict **zero branch-introduced findings** against a
+    cold whole-tree baseline. The loop commit is built and checked here.
+11. **NVMe SGL selection:** for a gapped request nvme-pci does not depend on
+    `sgl_threshold`: `nvme_pci_use_sgls()` returns `SGL_FORCED` whenever
+    `req_phys_gap_mask(req) & (NVME_CTRL_PAGE_SIZE - 1)` (gaps tracked per
+    bio since `2f6b2565d43c`), and the average-segment heuristic applies
+    only to gap-free requests. Not exercisable here (no SGL-capable PCIe
+    NVMe; NVMe/TCP has no PRP/SGL choice) — confirm on tardis1.
 
 ## 7. Phase 2 — Xsight E1 (xeu) placement (after phase 1)
 
