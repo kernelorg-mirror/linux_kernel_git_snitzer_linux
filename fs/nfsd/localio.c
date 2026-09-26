@@ -135,6 +135,7 @@ static void nfsd_file_dio_policy(struct nfsd_file *nf, unsigned int direction,
 {
 	*policy = (struct nfs_dio_policy) {
 		.mem_align	= nf->nf_dio_mem_align,
+		.seg_boundary	= nf->nf_dio_seg_boundary,
 	};
 	if (direction == ITER_SOURCE) {
 		policy->offset_align = nf->nf_dio_offset_align;
