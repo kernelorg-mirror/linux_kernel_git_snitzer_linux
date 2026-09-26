@@ -302,6 +302,7 @@ struct nfsd_bvec_dio_case {
 	unsigned long	total;
 	u32		mem_align;
 	u32		offset_align;
+	u32		seg_boundary;
 	fop_flags_t	fop_flags;
 	unsigned int	nvecs;
 	unsigned int	offsets[3];
@@ -471,6 +472,189 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 			.expected_nsegs = 1,
 			.expected_counts = { 511 },
 		},
+		{
+			/*
+			 * A device with no segment boundary takes the mid-page
+			 * joint that discontinuity-misaligned-buffered demotes.
+			 */
+			.name = "no-boundary-mid-page-joint-direct",
+			.total = 8192,
+			.mem_align = 4,
+			.offset_align = 512,
+			.seg_boundary = NFS_DIO_SEG_BOUNDARY_NONE,
+			.nvecs = 3,
+			.lengths = { 4092, 4, 4096 },
+			.expected_nsegs = 1,
+			.expected_direct_mask = BIT(0),
+			.expected_counts = { 8192 },
+		},
+		{
+			/* TCP-segment geometry: fragments start mid-page */
+			.name = "no-boundary-tcp-segments-direct",
+			.total = 4096,
+			.mem_align = 4,
+			.offset_align = 512,
+			.seg_boundary = NFS_DIO_SEG_BOUNDARY_NONE,
+			.nvecs = 3,
+			.offsets = { 0, 2048, 512 },
+			.lengths = { 1448, 1448, 1200 },
+			.expected_nsegs = 1,
+			.expected_direct_mask = BIT(0),
+			.expected_counts = { 4096 },
+		},
+		{
+			.name = "default-boundary-tcp-segments-buffered",
+			.total = 4096,
+			.mem_align = 4,
+			.offset_align = 512,
+			.nvecs = 3,
+			.offsets = { 0, 2048, 512 },
+			.lengths = { 1448, 1448, 1200 },
+			.expected_nsegs = 1,
+			.expected_counts = { 4096 },
+		},
+		{
+			/* no boundary does not relax memory alignment */
+			.name = "no-boundary-2-byte-fragment-buffered",
+			.total = 8192,
+			.mem_align = 4,
+			.offset_align = 512,
+			.seg_boundary = NFS_DIO_SEG_BOUNDARY_NONE,
+			.nvecs = 3,
+			.lengths = { 4094, 2, 4096 },
+			.expected_nsegs = 1,
+			.expected_counts = { 8192 },
+		},
+		{
+			/*
+			 * Joints on 4 KiB multiples at payload byte 3996, not
+			 * a logical-block multiple: a 4096-byte boundary
+			 * admits them on every page size.
+			 */
+			.name = "boundary-4096-joint-on-boundary-direct",
+			.total = 8192,
+			.mem_align = 4,
+			.offset_align = 512,
+			.seg_boundary = 4096,
+			.nvecs = 3,
+			.offsets = { 100, 0, 0 },
+			.lengths = { 3996, 4096, 100 },
+			.expected_nsegs = 1,
+			.expected_direct_mask = BIT(0),
+			.expected_counts = { 8192 },
+		},
+		{
+			/* the page-sized default admits them only on 4 KiB pages */
+			.name = "default-boundary-joint-on-4096",
+			.total = 8192,
+			.mem_align = 4,
+			.offset_align = 512,
+			.nvecs = 3,
+			.offsets = { 100, 0, 0 },
+			.lengths = { 3996, 4096, 100 },
+			.expected_nsegs = 1,
+			.expected_direct_mask = PAGE_SIZE == 4096 ? BIT(0) : 0,
+			.expected_counts = { 8192 },
+		},
+		{
+			.name = "boundary-4096-mid-page-joint-buffered",
+			.total = 8192,
+			.mem_align = 4,
+			.offset_align = 512,
+			.seg_boundary = 4096,
+			.nvecs = 3,
+			.lengths = { 4092, 4, 4096 },
+			.expected_nsegs = 1,
+			.expected_counts = { 8192 },
+		},
+		{
+			/*
+			 * A boundary larger than a page makes the page joint
+			 * of a page-tiled payload a gap, at a position that is
+			 * not an offset_align multiple.
+			 */
+			.name = "boundary-above-page-page-tiled-buffered",
+			.total = 2 * PAGE_SIZE,
+			.mem_align = 4,
+			.offset_align = 2 * PAGE_SIZE,
+			.seg_boundary = 2 * PAGE_SIZE,
+			.nvecs = 2,
+			.lengths = { PAGE_SIZE, PAGE_SIZE },
+			.expected_nsegs = 1,
+			.expected_counts = { 2 * PAGE_SIZE },
+		},
+		{
+			.name = "default-boundary-page-tiled-direct",
+			.total = 2 * PAGE_SIZE,
+			.mem_align = 4,
+			.offset_align = 2 * PAGE_SIZE,
+			.nvecs = 2,
+			.lengths = { PAGE_SIZE, PAGE_SIZE },
+			.expected_nsegs = 1,
+			.expected_direct_mask = BIT(0),
+			.expected_counts = { 2 * PAGE_SIZE },
+		},
+		{
+			/*
+			 * The middle starts 384 bytes into bvec[0], whose
+			 * mid-page end is a joint at middle byte 616, not an
+			 * offset_align multiple: no boundary admits it.
+			 */
+			.name = "skipped-first-no-boundary-mid-page-joint-direct",
+			.position = 128,
+			.total = 2 * PAGE_SIZE + 512,
+			.mem_align = 4,
+			.offset_align = 512,
+			.seg_boundary = NFS_DIO_SEG_BOUNDARY_NONE,
+			.nvecs = 3,
+			.lengths = { 1000, PAGE_SIZE, PAGE_SIZE - 488 },
+			.expected_nsegs = 3,
+			.expected_direct_mask = BIT(1),
+			.expected_counts = { 384, 2 * PAGE_SIZE, 128 },
+		},
+		{
+			.name = "skipped-first-boundary-4096-mid-page-joint-buffered",
+			.position = 128,
+			.total = 2 * PAGE_SIZE + 512,
+			.mem_align = 4,
+			.offset_align = 512,
+			.seg_boundary = 4096,
+			.nvecs = 3,
+			.lengths = { 1000, PAGE_SIZE, PAGE_SIZE - 488 },
+			.expected_nsegs = 1,
+			.expected_counts = { 2 * PAGE_SIZE + 512 },
+		},
+		{
+			.name = "skipped-first-default-boundary-mid-page-joint-buffered",
+			.position = 128,
+			.total = 2 * PAGE_SIZE + 512,
+			.mem_align = 4,
+			.offset_align = 512,
+			.nvecs = 3,
+			.lengths = { 1000, PAGE_SIZE, PAGE_SIZE - 488 },
+			.expected_nsegs = 1,
+			.expected_counts = { 2 * PAGE_SIZE + 512 },
+		},
+		{
+			/*
+			 * bvec[0] (offset 100) ends on a 4 KiB multiple, so
+			 * its joint at middle byte 3612 is no gap under a
+			 * 4096-byte boundary on any page size; counting the
+			 * 384 skipped bytes into its end would make it one.
+			 */
+			.name = "skipped-first-boundary-4096-joint-on-boundary-direct",
+			.position = 128,
+			.total = 2 * PAGE_SIZE + 512,
+			.mem_align = 4,
+			.offset_align = 512,
+			.seg_boundary = 4096,
+			.nvecs = 3,
+			.offsets = { 100, 0, 0 },
+			.lengths = { 3996, PAGE_SIZE, PAGE_SIZE - 3484 },
+			.expected_nsegs = 3,
+			.expected_direct_mask = BIT(1),
+			.expected_counts = { 384, 2 * PAGE_SIZE, 128 },
+		},
 	};
 	unsigned int case_index;
 
@@ -497,6 +681,7 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 		const struct nfs_dio_policy policy = {
 			.mem_align = test_case->mem_align,
 			.offset_align = test_case->offset_align,
+			.seg_boundary = test_case->seg_boundary,
 			.min_middle_pages = 2,
 			.dontcache = true,
 		};
