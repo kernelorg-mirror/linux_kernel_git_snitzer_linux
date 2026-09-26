@@ -187,7 +187,11 @@ named below is folded into `dd2e42c5f547`) (build #19,
 
    0.004 vs 0.006 is the writer-concurrency residual of
    `../NFS_LOCALIO_DONTCACHE/` §5b (0.005 at the port's tip).
-7. **Bisect walk: NOT RUN — blocked on disk space.** Launched from a
+7. **Bisect walk: done 2026-09-26** on the next kernel,
+   `7.1.13-14.hs.440.loanpages`, over the whole branch including the NVMe
+   SGL phase 1: 51/51 clean, zero branch-introduced sparse findings
+   (`NVME_SGL_SUPPORT_PROJECT.md` section 6 → "Results"). The first
+   attempt, below, is kept as the record: **NOT RUN — blocked on disk space.** Launched from a
    scratch copy (`BRANCH=kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY
    BASE=v7.1.13-14`, cold worktree, running config minus debug info with
    `WERROR=y` and the four suites `=m`); the cold full build of step 1
