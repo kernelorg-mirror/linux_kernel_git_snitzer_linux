@@ -184,7 +184,17 @@ struct statx {
 
 	/* Optimised max atomic write unit in bytes */
 	__u32	stx_atomic_write_unit_max_opt;
-	__u32	__spare2[1];
+
+	/*
+	 * Direct I/O memory segment boundary, valid only when
+	 * STATX_DIO_SEG_BOUNDARY is set in stx_mask (otherwise assume
+	 * the page size).  0: the buffer may be physically discontiguous
+	 * anywhere, subject to stx_dio_mem_align.  Otherwise a power of
+	 * 2: every point where the buffer is not physically contiguous
+	 * must fall on a multiple of it; when it exceeds the page size,
+	 * that includes the page boundaries within the buffer.
+	 */
+	__u32	stx_dio_seg_boundary;
 
 	/* 0xc0 */
 	__u64	__spare3[8];	/* Spare space for future expansion */
@@ -219,6 +229,7 @@ struct statx {
 #define STATX_SUBVOL		0x00008000U	/* Want/got stx_subvol */
 #define STATX_WRITE_ATOMIC	0x00010000U	/* Want/got atomic_write_* fields */
 #define STATX_DIO_READ_ALIGN	0x00020000U	/* Want/got dio read alignment info */
+#define STATX_DIO_SEG_BOUNDARY	0x00040000U	/* Want/got stx_dio_seg_boundary */
 
 #define STATX__RESERVED		0x80000000U	/* Reserved for future struct statx expansion */
 
