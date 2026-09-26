@@ -1307,6 +1307,7 @@ nfsd_write_dio_iters_init(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	struct nfs_dio_policy policy = {
 		.mem_align = nf->nf_dio_mem_align,
 		.offset_align = nf->nf_dio_offset_align,
+		.seg_boundary = nf->nf_dio_seg_boundary,
 		.min_middle_bytes = nfsd_direct_misaligned_min_bytes,
 		.dontcache = nfsd_direct_misaligned_dontcache,
 	};
