@@ -55,6 +55,8 @@ struct kstat {
 	u32		dio_mem_align;
 	u32		dio_offset_align;
 	u32		dio_read_offset_align;
+	/* virt_boundary_mask + 1 (gap rule), not seg_boundary_mask */
+	u32		dio_seg_boundary;
 	u32		atomic_write_unit_min;
 	u32		atomic_write_unit_max;
 	u32		atomic_write_unit_max_opt;
