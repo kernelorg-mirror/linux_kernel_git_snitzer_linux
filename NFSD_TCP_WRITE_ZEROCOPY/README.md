@@ -120,6 +120,11 @@ reproduction instructions for the "page-loan" patch series.
 > section: kunit-core backports → the suites → configs → the kill-switch
 > and gate covers; then this documentation commit at the tip.
 
+Sub-project: letting loaned payloads with mid-page joints stay on the direct
+path on devices without a virtual boundary (NVMe with SGLs), with the device
+attribute exposed through XFS and statx to nfsd —
+[`NVME_SGL_SUPPORT_PROJECT.md`](NVME_SGL_SUPPORT_PROJECT.md).
+
 Deep technical notes (code path, alignment analysis, E1 NIC capabilities,
 design decisions): [`PROJECT.md`](PROJECT.md).
 How to test (KUnit suites + runtime validation + QA gates):
