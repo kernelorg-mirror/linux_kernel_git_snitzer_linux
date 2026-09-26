@@ -8,16 +8,46 @@ device can take it, which on NVMe means the controller submits it with SGLs.
 
 ## 0. Status / handoff
 
-- **Scoped, not started.** Everything below is from reading the tree
-  (`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY` on `v7.1.13-14`); nothing is
-  implemented, built or measured yet.
+- **Phase 1 implemented, not yet qualified** (2026-09-26): the commits
+  below on `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`, on top of the
+  scoping commit `8e804a14b33a`. Every commit is build-checked with
+  `CONFIG_WERROR=y` (the directories it touches plus their users). **KUnit
+  (4K and 64K configs) and the validation rigs (section 6) are pending.**
+  The review round's fixes were folded into the commits they fix
+  (2026-09-26, per Mike: the branch has not been pushed), so there is no
+  separate fix sprawl; section 9 keeps the record of what the review
+  changed.
+
+  | # | SHA | Subject |
+  |---|-----|---------|
+  | 1 | `72870a49cb2e` | block: add bdev_dio_seg_boundary() |
+  | 2 | `79d0dc0bf66b` | fs: add STATX_DIO_SEG_BOUNDARY |
+  | 3 | `2e6c4663bb74` | block: report STATX_DIO_SEG_BOUNDARY for block devices |
+  | 4 | `a42fcad8c444` | xfs: report the direct I/O segment boundary |
+  | 5 | `1b31a61beac9` | nfsd: zero the whole LOCALIO direct I/O policy before filling it |
+  | 6 | `51af155f395f` | nfs_common: let the direct I/O policy carry the device's segment boundary |
+  | 7 | `482d4414f9a3` | nfsd: record the direct I/O segment boundary of an nfsd_file |
+  | 8 | `96fed0e7083b` | nfsd: split direct writes by the device's segment boundary |
+  | 9 | `b2dc54218a0b` | loop: take the backing device's virtual boundary for direct I/O |
+  | 10 | `b747c8804176` | nfsd: test the direct I/O segment boundary in the receive-bvec KUnit suite |
+  | 11 | `7fcb1077753a` | nfsd: test the segment-boundary translation in the receive-bvec KUnit suite |
+
+  Commits 1-9 are feature commits, 10-11 KUnit. Behaviour changes only at
+  commit 8, and only for files whose file system sets
+  `STATX_DIO_SEG_BOUNDARY` (XFS from commit 4); every earlier commit, and
+  every caller that leaves the new policy field zero, runs today's code.
+  Commit 9 (loop) came out of the review round and is outside the scope
+  as set: loop is not built by the host `.config`, so it is only
+  compile-checked, and **Mike has not yet decided** whether it stays here,
+  moves to its own topic, or is dropped.
 - Work lands on `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY` as incremental
   commits at the tip, feature commits separate from KUnit commits (section 5).
 - **Phase 1** (sections 4–6): expose the device's memory-segment boundary
   from the block layer, through XFS and statx, into `nfsd_file`, and let the
-  DIO admission gate use it. Done when both validation rigs — XFS on brd and
-  XFS on nvme-over-TCP to a local nvmet target — pass with all the plumbing
-  in place (section 6).
+  DIO admission gate use it. Done when the validation rigs — primarily XFS
+  on nvme-over-TCP to a local nvmet target, plus XFS on brd with
+  512-byte-aligned fragments and the nvme-loop negative rig — pass with all
+  the plumbing in place (section 6, including its 2026-09-26 corrections).
 - **Phase 2** (section 7): the Xsight E1 (xeu) receive-placement changes.
   Not started until phase 1 is done.
 - **No shortcuts.** The attribute is exposed from inception on the full
@@ -98,89 +128,209 @@ writes on real NIC geometry.
 
 One new direct-I/O attribute, reported per file like the existing ones.
 
-- **Meaning:** the memory-segment boundary for direct I/O. `0` — the device
-  takes discontiguous memory segments anywhere (subject to
-  `dio_mem_align`); `N` — every interior joint between memory segments must
-  fall on a multiple of `N` bytes (a PRP NVMe device reports 4096). Reported
-  as a size, like `dio_mem_align`, not a mask.
-- **Working name:** `dio_seg_boundary` / `stx_dio_seg_boundary`, mask bit
-  `STATX_DIO_SEG_BOUNDARY`. The name is a placeholder for upstream review;
-  because `0` is a meaningful value, the result-mask bit is what tells
-  "reported" from "not reported".
-- **uapi space:** `struct statx` has a free `__u32 __spare2[1]` at 0xbc,
-  directly after `stx_dio_read_offset_align`; the next free mask bit is
-  `0x00040000U`. `tools/include/uapi/linux/stat.h` and
-  `tools/perf/trace/beauty/include/uapi/linux/stat.h` carry copies to sync.
-- **Consumers treat "not reported" as conservative** (assume a 4 KiB
-  boundary), so every filesystem that does not report it keeps today's
-  behaviour.
+- **Meaning:** the memory-segment boundary for direct I/O, as a size, like
+  `dio_mem_align`, not a mask. `0` — the device takes discontiguous memory
+  segments anywhere (subject to `dio_mem_align`); otherwise a power of two
+  `N` — every interior joint between memory segments must fall on a
+  multiple of `N` bytes (a PRP NVMe device reports 4096). A joint is
+  wherever the buffer is not physically contiguous, which includes page
+  boundaries: with `N` larger than a page, even a page-tiled buffer has
+  joints the device cares about.
+- **Source:** the queue's **virtual boundary** (`virt_boundary_mask`, the
+  gap rule `__bvec_gap_to_prev()` enforces), **not** `seg_boundary_mask`
+  (which limits where a single segment may cross an address boundary).
+- **Final names** (as implemented, following the existing DIO attributes at
+  every layer):
+
+  | Layer | Name |
+  |-------|------|
+  | block helper | `bool bdev_dio_seg_boundary(struct block_device *bdev, u32 *boundary)` (`include/linux/blkdev.h`, after `bdev_dma_alignment()`) |
+  | uapi mask bit | `STATX_DIO_SEG_BOUNDARY` = `0x00040000U` |
+  | uapi field | `__u32 stx_dio_seg_boundary` at 0xbc, replacing `__spare2[1]`; `__spare3` at 0xc0 and `sizeof(struct statx)` = 0x100 unchanged; synced to `tools/include/uapi/linux/stat.h` and `tools/perf/trace/beauty/include/uapi/linux/stat.h` |
+  | kstat | `u32 dio_seg_boundary`, after `dio_read_offset_align` |
+  | trace flag | `{ STATX_DIO_SEG_BOUNDARY, "DIO_SEG_BOUNDARY" }` in `show_statx_mask()` |
+  | nfsd_file | `u32 nf_dio_seg_boundary`, after `nf_dio_read_offset_align` (policy encoding, not the raw statx value) |
+  | policy | `u32 seg_boundary` in `struct nfs_dio_policy`, after `offset_align` |
+
+  `stx_dio_seg_boundary` remains a placeholder that fsdevel may rename
+  (e.g. `stx_dio_virt_boundary`).
+- **`bdev_dio_seg_boundary()`** does the mask-to-size conversion in one
+  place, shared by `bdev_statx()` and XFS. It returns false when the mask
+  cannot be expressed as 0 or a power of two that fits in a `u32`
+  (`mask > U32_MAX >> 1 || (mask & (mask + 1))`); the caller then leaves
+  `STATX_DIO_SEG_BOUNDARY` unset. This replaces the scoped
+  `bdev_virt_boundary()` raw-mask helper: with every caller doing
+  `mask ? mask + 1 : 0` into a `u32`, a boundary of 2^32 or more (ublk
+  passes a `__u64` `virt_boundary_mask` through) would wrap to 0 and read
+  as "no boundary", the least strict answer. An unrepresentable boundary
+  is now unreported, never 0.
+- **"Not reported" means page-sized.** Because `0` is meaningful, the
+  result-mask bit is what tells "reported" from "not reported", and a
+  consumer that does not see the bit keeps today's rule: joints are tested
+  against `PAGE_SIZE` (section 4, correction 1).
 
 ## 4. Phase 1 — core implementation (feature commits, no KUnit content)
 
-Each bullet is intended as one commit, in order. Per the series' KUnit
-decoupling policy these commits carry no KUnit references in code or
-message.
+Scoped as six commits (the scoping commit `8e804a14b33a` has the original
+list); implemented as feature commits 1-9 of section 0. Per the series'
+KUnit decoupling policy they carry no KUnit references in code or message.
 
-1. **block:** add `bdev_virt_boundary(bdev)` next to `bdev_dma_alignment()`
-   (`include/linux/blkdev.h`), returning
-   `queue_virt_boundary(bdev_get_queue(bdev))` — so filesystems read the
-   limit through the same kind of helper they use for the DMA alignment.
-2. **vfs/statx:** `STATX_DIO_SEG_BOUNDARY`, `stx_dio_seg_boundary` in the
-   uapi (and its tools copies), `u32 dio_seg_boundary` in `struct kstat`,
-   the copy in `cp_statx()` (`fs/stat.c`).
-3. **xfs:** report it in `xfs_report_dioalign()` when requested, from the same
-   `xfs_inode_buftarg(ip)->bt_bdev` the other DIO attributes use (so realtime
-   files report the realtime device): `mask ? mask + 1 : 0`.
-4. **nfsd:** `nf_dio_seg_boundary` in `struct nfsd_file`
-   (`fs/nfsd/filecache.h`); request `STATX_DIO_SEG_BOUNDARY` and fill it in
-   `nfsd_file_get_dio_attrs()`, defaulting to 4096 when not reported; add it
-   to the `nfsd_file_get_dio_attrs` tracepoint.
-5. **nfs_common:** `struct nfs_dio_policy` (`include/linux/nfs_dio.h`) gains
-   `seg_boundary`; `nfs_dio_iter_aligned_and_splittable()`
-   (`fs/nfs_common/nfs_dio.c`) keeps the per-fragment memory-alignment check
-   unchanged, skips the joint rule when `seg_boundary == 0`, and otherwise
-   tests joints against `seg_boundary` instead of `PAGE_SIZE` (more precise
-   on 64 KiB-page kernels, where NVMe's boundary is still 4 KiB).
-6. **nfsd + LOCALIO:** set `policy.seg_boundary` from `nf_dio_seg_boundary`
-   in `nfsd_write_dio_iters_init()` (`fs/nfsd/vfs.c`) and in the
-   `nfsd_file_dio_policy` op (`fs/nfsd/localio.c`), so LOCALIO's shared split
-   gets it too.
+What each does:
 
-Later, outside this sub-project's critical path: ext4 and other iomap
-filesystems report the attribute the same way; man-pages `statx(2)`.
+1. **block:** `bdev_dio_seg_boundary()` (section 3).
+2. **fs:** `STATX_DIO_SEG_BOUNDARY`, `stx_dio_seg_boundary` (and the two
+   tools copies), `kstat.dio_seg_boundary`, the copy in `cp_statx()`
+   (`fs/stat.c`), the `show_statx_mask()` flag.
+3. **block:** `bdev_statx()` reports it for block devices when requested.
+4. **xfs:** `xfs_report_dioalign()` reports it from
+   `xfs_inode_buftarg(ip)->bt_bdev` (so realtime files report the realtime
+   device); `xfs_vn_getattr()` calls it for `STATX_DIO_SEG_BOUNDARY` too.
+5. **nfsd (LOCALIO prep, no behaviour change):** `nfsd_file_dio_policy()`
+   (`fs/nfsd/localio.c`) starts from one compound-literal assignment of the
+   whole policy, then sets the direction-specific fields.
+6. **nfs_common:** `struct nfs_dio_policy` gains `seg_boundary`,
+   `NFS_DIO_SEG_BOUNDARY_NONE` and `nfs_dio_seg_boundary()`
+   (`include/linux/nfs_dio.h`); `nfs_dio_split()` computes
+   `nfs_dio_seg_mask(policy)` and passes it to
+   `nfs_dio_iter_aligned_and_splittable()` (`fs/nfs_common/nfs_dio.c`).
+7. **nfsd:** `fh_getattr()` requests the bit for regular files;
+   `nfsd_file_get_dio_attrs()` stores
+   `nfs_dio_seg_boundary(reported, stat.dio_seg_boundary)` in
+   `nf_dio_seg_boundary` (zeroed in `nfsd_file_alloc()`); tracepoint change.
+8. **nfsd + LOCALIO:** `nfsd_write_dio_iters_init()` (`fs/nfsd/vfs.c`) and
+   `nfsd_file_dio_policy()` pass `nf_dio_seg_boundary` into the policy. The
+   only commit that changes behaviour.
+
+Corrections to the scoping (2026-09-26):
+
+1. **Unknown = `PAGE_SIZE`, not 4096.** Defaulting a not-reported boundary to
+   4096 would relax the joint rule on 64 KiB-page kernels for every file
+   system that does not report it. The page-sized default is bit for bit
+   the `~PAGE_MASK` the gate tested before, so "not reported" behaves
+   exactly as today.
+2. **Policy encoding** of `nfs_dio_policy.seg_boundary` (and
+   `nf_dio_seg_boundary`):
+   - `0` — not known: `nfs_dio_seg_mask()` returns `PAGE_SIZE - 1`, today's
+     code path. Every caller that leaves the field zero (designated
+     initializers that omit it, `nfsd_file_alloc()`, `vfs_getattr_nosec()`'s
+     memset kstat) keeps today's behaviour.
+   - `NFS_DIO_SEG_BOUNDARY_NONE` (`U32_MAX`) — no boundary: mask 0, so
+     `((off + len) | next->bv_offset) & seg_mask` is always 0 and the joint
+     rule never fires. The per-fragment `(off | len) & (mem_align - 1)`
+     check, the total-length `offset_align` check and the skip accounting
+     are unchanged.
+   - a power of two `N` — mask `N - 1`, mirroring `__bvec_gap_to_prev()`
+     (`block/blk.h`).
+
+   `nfs_dio_seg_boundary(reported, b)` maps a statx report to it the same
+   way for every producer: not reported → 0; `b == 0` → NONE; power of two
+   → `b`; anything else → 0. `bdev_dio_seg_boundary()` already refuses
+   unrepresentable masks, so the power-of-two check is defence against
+   other file systems. `struct nfs_dio_policy` grows from 16 to 20 bytes
+   (the scoping's "no new padding" expectation was wrong).
+3. **Order:** the nfs_common commit comes before the nfsd_file commit, so
+   nfsd can store the policy encoding from the start.
+4. **LOCALIO prep commit (5).** The NFS client declares
+   `struct nfs_dio_policy policy;` on its stack uninitialized
+   (`fs/nfs/localio.c`) and `nfsd_file_dio_policy()` filled it field by
+   field, so a new field it did not name would reach `nfs_dio_split()` as
+   stack garbage at every commit between 6 and 8. With whole-struct
+   compound-literal assignments every unnamed field is zero.
+5. **`bdev_statx()` reporting (3)**, not in the scoping: an application doing
+   direct I/O to the raw device sees the same attribute as a file on it.
+6. **Tracepoint:** `nfsd_file_get_dio_attrs` gains a third argument, the
+   policy encoding, and records both the raw `stat->dio_seg_boundary`
+   (`seg_boundary=`) and the boundary the split enforces
+   (`joint_boundary=`: 0 = none, `PAGE_SIZE` = unknown, else `N`). The call
+   moved after the `nf_*` assignments. `nfsd_write_dio_split` is **not**
+   extended: it already has 12 arguments, and
+   `include/trace/bpf_probe.h` says tracepoints with more than 12 arguments
+   hit a build error.
+
+Behaviour at commit 8, for files whose file system reports the bit: a
+reported 4096 on a 4K-page kernel is identical to today; a reported 0 drops
+the joint rule; a reported 4096 on 64K pages tests joints on 4 KiB
+multiples; a reported boundary above `PAGE_SIZE` makes page joints count as
+discontinuities, so a payload is demoted at a page joint whose position is
+not an `offset_align` multiple — the block layer's gap rule, and
+conservative.
+
+Later, outside this sub-project's critical path — follow-up reporters, each
+next to its existing `STATX_DIOALIGN` handling: `ext4_getattr()`
+(`fs/ext4/inode.c` ~6192), `f2fs_getattr()` (`fs/f2fs/file.c` ~1006), the NFS
+client (`fs/nfs/inode.c` ~1181); man-pages `statx(2)`.
 
 ## 5. Phase 1 — KUnit (separate commits, after the feature commits)
 
-- `nfsd-receive-bvec`'s `dio_segments_test` (drives `nfs_dio_split()`
-  directly): new cases with `seg_boundary = 0` — fragments ending mid-page,
-  4-byte aligned, go direct; 2-byte-aligned ones are still demoted — and with
-  `seg_boundary = 4096` on a 64 KiB-page-style geometry. The existing cases
-  (implicit 4 KiB boundary) keep their expectations.
-- If `nfsd_file_get_dio_attrs()` gains logic worth isolating (the
-  not-reported default), a case for it in the same suite.
-- TESTING.md's KUnit coverage map gains the new cases.
+Implemented as commits 9 and 10 (section 0); not yet run.
 
-## 6. Phase 1 — validation (both rigs must pass)
+- **`dio_segments_test`** (`fs/nfsd/nfsd_bvec_kunit.c`, drives
+  `nfs_dio_split()` directly) gains a `seg_boundary` column, passed into the
+  test's policy. The existing rows leave it zero (unknown = page-sized) and
+  keep their expectations. Nine new rows, all `mem_align` 4,
+  `offset_align` 512 unless noted:
+
+  | # | Row | Geometry | 4K pages | 64K pages |
+  |---|-----|----------|----------|-----------|
+  | 1 | `no-boundary-mid-page-joint-direct` | NONE; lengths 4092/4/4096 | direct | direct |
+  | 2 | `no-boundary-tcp-segments-direct` | NONE; offsets 0/2048/512, lengths 1448/1448/1200 | direct | direct |
+  | 3 | `default-boundary-tcp-segments-buffered` | unknown; row 2's geometry | buffered | buffered |
+  | 4 | `no-boundary-2-byte-fragment-buffered` | NONE; lengths 4094/2/4096 (memory alignment still enforced) | buffered | buffered |
+  | 5 | `boundary-4096-joint-on-boundary-direct` | 4096; offsets 100/0/0, lengths 3996/4096/100 (joints on 4 KiB multiples at payload byte 3996) | direct | direct |
+  | 6 | `default-boundary-joint-on-4096` | unknown; row 5's geometry | direct | **buffered** |
+  | 7 | `boundary-4096-mid-page-joint-buffered` | 4096; lengths 4092/4/4096 | buffered | buffered |
+  | 8 | `boundary-above-page-page-tiled-buffered` | 2 x `PAGE_SIZE`, `offset_align` 2 x `PAGE_SIZE`; two full pages | buffered | buffered |
+  | 9 | `default-boundary-page-tiled-direct` | unknown; row 8's geometry | direct | direct |
+
+  Rows 5 and 6 differ only on a 64K-page kernel, so the 64K KUnit config
+  must be run for them to prove anything.
+- **`nfsd_bvec_dio_seg_boundary_test`** (new case, commit 10): the
+  `nfs_dio_seg_boundary()` translation — unreported 0 and 4096 → 0, reported
+  0 → NONE, 4096 and 65536 kept, 3000 → 0. The helper is a static inline, so
+  the suite reaches it without an export. `nfsd-receive-bvec` goes from 5 to
+  6 cases.
+- TESTING.md's KUnit coverage map and "Next regression run" carry the new
+  counts.
+
+## 6. Phase 1 — validation (all rigs must pass)
 
 Positive rigs, boundary 0 (the relaxed gate must admit gapped payloads):
 
-1. **XFS on brd.** brd has no virtual boundary and 4-byte DMA alignment.
-2. **XFS on nvme-over-TCP to a local nvmet target.** The NVMe-oF host
-   reports no boundary (`nvmf_get_virt_boundary()`), so this exercises the
-   real NVMe driver stack without SGL hardware.
+1. **XFS on nvme-over-TCP to a local nvmet target — the primary positive
+   rig.** The NVMe-oF host reports no boundary (`nvmf_get_virt_boundary()`)
+   and `nvme_set_ctrl_limits()` (`drivers/nvme/host/core.c` ~2063) sets
+   `dma_alignment = 3`, so XFS reports `dio_mem_align` 4 and
+   `dio_seg_boundary` 0, and this exercises the real NVMe driver stack
+   without SGL hardware.
+2. **XFS on brd, with 512-byte-aligned fragments only.** *Correction
+   (2026-09-26):* brd does **not** have 4-byte DMA alignment. `brd.c` sets
+   no `.dma_alignment`, so `blk_validate_limits()` defaults it to
+   `SECTOR_SIZE - 1` (`/sys/block/ram0/queue/dma_alignment` = 511), and XFS
+   on brd reports `dio_mem_align` 512. MSS-sized TCP fragments (1448, 8948)
+   are then demoted by the memory-alignment check whatever the boundary, so
+   a brd row proves the boundary change only with fragments whose offsets
+   and lengths are 512-byte multiples.
 
 Negative rig, boundary 4096 (behaviour must not change): **nvme-loop**, the
 existing project rig.
 
 Per rig:
 
-- **statx end to end:** a small test program (or `samples/vfs/test-statx.c`
-  extended) shows `stx_dio_seg_boundary` = 0 on the positive rigs and 4096 on
-  nvme-loop; the `nfsd_file_get_dio_attrs` tracepoint shows nfsd picked up
-  the same value.
-- **block acceptance:** extend `bvecrepro.c` with a gapped mode — 4-byte
-  aligned fragments ending mid-page — and show it MATCHes on both positive
-  rigs and fails with `-EINVAL` on nvme-loop (the documented root cause).
+- **Assert the attribute first.** Before any positive result is trusted, the
+  `nfsd_file_get_dio_attrs` tracepoint must show `DIO_SEG_BOUNDARY` in
+  `flags=` with the expected `joint_boundary=` (0 on the positive rigs, 4096
+  on nvme-loop). An export whose file system does not report the bit — ext4,
+  for one — keeps the page-sized rule and would silently test nothing.
+- **statx end to end:** `statx-dio.c` (this directory; build line in its
+  header) on a file of each rig's XFS shows `DIO_SEG_BOUNDARY` in `stx_mask`
+  with `dio_seg_boundary` = 0 on the positive rigs and 4096 on nvme-loop
+  (exit status 1 if the bit is missing); on the raw block device it shows
+  the `bdev_statx()` report. The tracepoint shows nfsd picked up the same
+  value.
+- **block acceptance:** extend `bvecrepro.c` with a gapped mode — fragments
+  ending mid-page, 4-byte aligned (512-byte aligned on brd) — and show it
+  MATCHes on the positive rigs and fails with `-EINVAL` on nvme-loop (the
+  documented root cause).
 - **nfsd path:** `run-rig-cmp.sh`-style data comparison with loans on, plus
   the `nfsd_write_dio_split` disposition counts: on the positive rigs
   gapped-but-aligned loaned WRITEs go direct; on nvme-loop they are still
@@ -238,3 +388,48 @@ Per rig:
   (sections 1–8). Mike: separate KUnit from core; xeu work is phase 2, after
   both boundary-free rigs pass; expose the attribute on the full path from
   inception, no shortcuts; separate claude.ai artifact for this line of work.
+- 2026-09-26: phase 1 implemented as ten commits, each
+  build-checked with `CONFIG_WERROR=y`; KUnit (4K and 64K) and the rigs
+  pending. Departures from the scoping recorded in sections 3-4 (unknown =
+  `PAGE_SIZE`; the 0 / NONE / power-of-two policy encoding and
+  `nfs_dio_seg_boundary()`; `bdev_dio_seg_boundary()` refusing
+  unrepresentable masks; nfs_common before nfsd_file; the LOCALIO
+  compound-literal prep commit; `bdev_statx()` reporting; the tracepoint's
+  `joint_boundary=`). Section 6 corrected: brd's DMA alignment is 511, so
+  nvme-tcp over loopback is the primary positive rig, and every rig first
+  asserts the reported boundary in `nfsd_file_get_dio_attrs`. Added
+  `statx-dio.c` for the statx end-to-end check.
+- 2026-09-26: review round, six commits (since folded, see below), each
+  build-checked with
+  `CONFIG_WERROR=y` (loop compile-checked only: `CONFIG_BLK_DEV_LOOP` is
+  off in this `.config`). Findings acted on: (a) a DIO-mode **loop device
+  reported no boundary** because it copied only `dma_alignment` from its
+  backing file, so XFS on loop-over-PRP-NVMe reported 0, nfsd admitted
+  joints the backing queue cannot split, and the WRITE could fail with
+  `-EINVAL` partway through; loop now takes the backing
+  `STATX_DIO_SEG_BOUNDARY` (else the backing `s_bdev`'s virt boundary)
+  as its own `virt_boundary_mask` while direct I/O is on (now commit 9). The gate
+  comment now says "no boundary" is only as good as the reporting queue's
+  limits: a stacking driver that forwards bvecs unchanged must carry the
+  lower `virt_boundary_mask` up (dm/md via `blk_stack_limits()`, loop via
+  12). (b) the uapi comment now states the user-visible contract only
+  (folded into 2). (c) the policy -> joint-boundary decode is shared as
+  `nfs_dio_joint_boundary()` by the gate and the tracepoint, and the
+  tracepoint's `seg_boundary=` prints -1 when the bit is not reported
+  (folded into 6 and 7). (d) KUnit rows with a non-zero write position exercise the
+  gate's skipped-first-fragment path under a non-zero segment mask (folded into 10).
+  Left as is: the `checkpatch --strict` alignment CHECK on the
+  `TP_printk` continuation, which matches the surrounding nfsd `trace.h`
+  style. KUnit and the rigs still pending; add a loop(dio)-over-XFS-over-
+  nvme-loop negative rig to section 6 (the loop device must report 4096).
+- 2026-09-26: folded per Mike (the branch has not been pushed): each review
+  fix went into the commit it fixed (the uapi-comment fix into 2, the
+  shared joint-boundary decode into 6, the tracepoint fix into 7, the
+  LOCALIO braces into 5, the skipped-first-fragment rows into 10, the
+  review-round docs into the phase-1 docs commit), the loop commit moved
+  in among the feature commits, and messages were updated for what each
+  commit now contains. The tree is byte-identical to the pre-fold tip; the
+  pre-fold history is kept on
+  `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY.pre-fold`. The same fold put
+  the merge top-up fix into "SUNRPC: merge locked-head copies into a
+  whole-page loan bvec".

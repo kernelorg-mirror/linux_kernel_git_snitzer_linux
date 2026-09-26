@@ -36,9 +36,13 @@ name the code they drive -- never the other way around:
   parity, duplicate-reply-cache checksum gathering, and DIO segment
   carving — including the IOCB_DONTCACHE no-alignment fallback
   (regression cover for the clobber fix, now folded into the base's
-  heuristic commit), and the interior-discontinuity gate (fused with
+  heuristic commit), the interior-discontinuity gate (fused with
   the memory-alignment test into one admission walk,
-  nfsd_dio_iter_is_aligned_and_splittable()).
+  nfs_dio_iter_aligned_and_splittable()), and the device's direct I/O
+  segment boundary (NVMe SGL sub-project, `NVME_SGL_SUPPORT_PROJECT.md`
+  section 5): no boundary, an explicit 4096, a boundary above the page
+  size, and unknown (= page-sized), plus the statx-report translation
+  (`nfsd_bvec_dio_seg_boundary_test`).
 - **`nfsd4-receive-bvec`** (`CONFIG_NFSD4_BVEC_KUNIT_TEST`) — NFSv4
   COMPOUND receive bvecs, including session replay against a live nfsd.
 
@@ -57,8 +61,12 @@ compile checks only. Run in this order, recording each result here:
 2. **KUnit** (`run-kunit.sh`; needs nfs-server state for the NFSv4 suite as
    the script sets up): expect `sunrpc-xdr-bvec` 7/7, `sunrpc-svcsock-rx`
    **54/54** (53 + the new `svcsock_rx_back_to_back_locked_heads_test`),
-   `nfsd-receive-bvec` 5/5 (its `dio_segments_test` now drives
-   `nfs_dio_split()`), `nfsd4-receive-bvec` 9/9.
+   `nfsd-receive-bvec` **6/6** (its `dio_segments_test` now drives
+   `nfs_dio_split()`; 6 with the NVMe SGL phase 1 commits, which add the
+   segment-boundary rows and `nfsd_bvec_dio_seg_boundary_test`),
+   `nfsd4-receive-bvec` 9/9. Run the suite on the 64K-page config too:
+   segment-boundary rows 5 and 6 (`NVME_SGL_SUPPORT_PROJECT.md` section 5)
+   differ only there.
 3. **Prove the regression case bites.** Rebuild only
    `net/sunrpc/svcsock.o` + `sunrpc.ko` with `1e48b4d03cb8` reverted (scratch
    branch, never on the project branch), reload `sunrpc` and
@@ -113,7 +121,9 @@ compile checks only. Run in this order, recording each result here:
 
 ### Results — `7.1.13-14.hs.439.loanpages` (2026-09-25)
 
-Kernel built by Mike from this branch at `3ac9fd90f192` (build #19,
+Kernel built by Mike from this branch at `3ac9fd90f192` (pre-fold; after the
+2026-09-26 fold the identical tree is `1fe6949a3f28`, and the fix `1e48b4d03cb8`
+named below is folded into `dd2e42c5f547`) (build #19,
 16:26; `sunrpc.ko` relinked 16:35, after the fix was committed 16:30).
 
 1. **Kernel identified.** All 11 relevant installed modules
@@ -188,7 +198,7 @@ Kernel built by Mike from this branch at `3ac9fd90f192` (build #19,
    `.o`, so a `make olddefconfig` in the walk worktree — which builds the
    kconfig host tools — marks the baseline warm; `make mrproper` it first.)
 
-Not yet done: carry `1e48b4d03cb8` + `3ac9fd90f192` to
+Not yet done: carry the merge top-up fix (now in `dd2e42c5f547`) + `1fe6949a3f28` to
 `kernel-7.1/hs-7.1.13-12.NFSD_TCP_WRITE_ZEROCOPY` (or whichever HS base comes
 next).
 

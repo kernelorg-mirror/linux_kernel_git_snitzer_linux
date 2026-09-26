@@ -9,14 +9,15 @@ reproduction instructions for the "page-loan" patch series.
 > `sunrpc.svc_tcp_rx_loan_pages=N`): two locked skb heads back to back — TCP
 > receive-queue collapse — send the second into the `rq_pages` arena while
 > `merge_fill` is still set, and the next borrowed bytes are copied into the
-> arena page as if it were the merge page. **Broken by** `f2ecc83eea82`
-> ("SUNRPC: merge locked-head copies into a whole-page loan bvec"); **fixed
-> by** `1e48b4d03cb8` ("SUNRPC: end the locked-head merge top-up when an arena
-> copy is appended", one assignment in `svc_tcp_rx_append_arena()`), with a
-> KUnit regression case in `3ac9fd90f192`. Both are incremental commits at
-> the tip, not yet run; the next regression run is laid out in `TESTING.md`
-> → "Next regression run (handoff)". Until it passes, keep
-> `svc_tcp_rx_loan_pages=N` wherever data matters.
+> arena page as if it were the merge page. It was broken by the locked-head
+> merge and first fixed incrementally (`1e48b4d03cb8`, `Fixes: f2ecc83eea82`,
+> so the defect stayed visible); on 2026-09-26 the fix was folded into
+> `dd2e42c5f547` ("SUNRPC: merge locked-head copies into a whole-page loan bvec",
+> one assignment in `svc_tcp_rx_append_arena()`), with the KUnit regression
+> case in `1fe6949a3f28`. Verified on 7.1.13-14.hs.439.loanpages by KUnit (the case fails
+> without the fix) and the runtime harness (`TESTING.md` → "Results"); the
+> collapse geometry itself could not be forced on loopback, so an end-to-end
+> reproduction on a real NIC is still outstanding.
 >
 > **Branch state (2026-09-25):** `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
 > is rebased onto **`v7.1.13-14`** (= `kernel-7.1.13/main`); the `-12`
