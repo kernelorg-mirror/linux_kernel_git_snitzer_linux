@@ -778,6 +778,25 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 	}
 }
 
+static void nfsd_bvec_dio_seg_boundary_test(struct kunit *test)
+{
+	KUNIT_EXPECT_EQ(test, nfs_dio_seg_boundary(false, 0), 0U);
+	KUNIT_EXPECT_EQ(test, nfs_dio_seg_boundary(false, 4096), 0U);
+	KUNIT_EXPECT_EQ(test, nfs_dio_seg_boundary(true, 0),
+			NFS_DIO_SEG_BOUNDARY_NONE);
+	KUNIT_EXPECT_EQ(test, nfs_dio_seg_boundary(true, 4096), 4096U);
+	KUNIT_EXPECT_EQ(test, nfs_dio_seg_boundary(true, 65536), 65536U);
+	KUNIT_EXPECT_EQ(test, nfs_dio_seg_boundary(true, 3000), 0U);
+
+	/* what the split enforces, and the tracepoint reports */
+	KUNIT_EXPECT_EQ(test, nfs_dio_joint_boundary(0), (u32)PAGE_SIZE);
+	KUNIT_EXPECT_EQ(test,
+			nfs_dio_joint_boundary(NFS_DIO_SEG_BOUNDARY_NONE), 0U);
+	KUNIT_EXPECT_EQ(test, nfs_dio_joint_boundary(4096), 4096U);
+	KUNIT_EXPECT_EQ(test, nfs_dio_joint_boundary(2 * PAGE_SIZE),
+			(u32)(2 * PAGE_SIZE));
+}
+
 static void nfsd_bvec_proc_dispatch_parity_test(struct kunit *test)
 {
 	static const struct svc_procedure procedures[2] = {
@@ -890,6 +909,7 @@ static struct kunit_case nfsd_bvec_test_cases[] = {
 	KUNIT_CASE(nfsd_bvec_decode_checksum_parity_test),
 	KUNIT_CASE(nfsd_bvec_decode_error_test),
 	KUNIT_CASE(nfsd_bvec_dio_segments_test),
+	KUNIT_CASE(nfsd_bvec_dio_seg_boundary_test),
 	KUNIT_CASE(nfsd_bvec_proc_dispatch_parity_test),
 	KUNIT_CASE(nfsd_bvec_nfs3_capability_test),
 	{}
