@@ -581,6 +581,8 @@ xfs_report_dioalign(
 
 	stat->result_mask |= STATX_DIOALIGN | STATX_DIO_READ_ALIGN;
 	stat->dio_mem_align = bdev_dma_alignment(bdev) + 1;
+	if (bdev_dio_seg_boundary(bdev, &stat->dio_seg_boundary))
+		stat->result_mask |= STATX_DIO_SEG_BOUNDARY;
 
 	/*
 	 * For COW inodes, we can only perform out of place writes of entire
@@ -739,7 +741,8 @@ xfs_vn_getattr(
 		stat->rdev = inode->i_rdev;
 		break;
 	case S_IFREG:
-		if (request_mask & (STATX_DIOALIGN | STATX_DIO_READ_ALIGN))
+		if (request_mask & (STATX_DIOALIGN | STATX_DIO_READ_ALIGN |
+				    STATX_DIO_SEG_BOUNDARY))
 			xfs_report_dioalign(ip, stat);
 		if (request_mask & STATX_WRITE_ATOMIC)
 			xfs_report_atomic_write(ip, stat);
