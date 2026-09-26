@@ -773,7 +773,8 @@ __be32 fh_getattr(const struct svc_fh *fhp, struct kstat *stat)
 	u32 request_mask = STATX_BASIC_STATS;
 
 	if (S_ISREG(inode->i_mode))
-		request_mask |= (STATX_DIOALIGN | STATX_DIO_READ_ALIGN);
+		request_mask |= (STATX_DIOALIGN | STATX_DIO_READ_ALIGN |
+				 STATX_DIO_SEG_BOUNDARY);
 
 	if (fhp->fh_maxsize == NFS4_FHSIZE)
 		request_mask |= (STATX_BTIME | STATX_CHANGE_COOKIE);

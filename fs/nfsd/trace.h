@@ -1267,15 +1267,18 @@ TRACE_EVENT(nfsd_file_alloc,
 TRACE_EVENT(nfsd_file_get_dio_attrs,
 	TP_PROTO(
 		const struct inode *inode,
-		const struct kstat *stat
+		const struct kstat *stat,
+		u32 seg_boundary
 	),
-	TP_ARGS(inode, stat),
+	TP_ARGS(inode, stat, seg_boundary),
 	TP_STRUCT__entry(
 		__field(const void *, inode)
 		__field(unsigned long, mask)
 		__field(u32, mem_align)
 		__field(u32, offset_align)
 		__field(u32, read_offset_align)
+		__field(s64, seg_boundary)
+		__field(u32, joint_boundary)
 	),
 	TP_fast_assign(
 		__entry->inode = inode;
@@ -1283,11 +1286,17 @@ TRACE_EVENT(nfsd_file_get_dio_attrs,
 		__entry->mem_align = stat->dio_mem_align;
 		__entry->offset_align = stat->dio_offset_align;
 		__entry->read_offset_align = stat->dio_read_offset_align;
+		/* -1: not reported, unlike 0, which is "no boundary" */
+		__entry->seg_boundary =
+			stat->result_mask & STATX_DIO_SEG_BOUNDARY ?
+			stat->dio_seg_boundary : -1;
+		__entry->joint_boundary = nfs_dio_joint_boundary(seg_boundary);
 	),
-	TP_printk("inode=%p flags=%s mem_align=%u offset_align=%u read_offset_align=%u",
+	TP_printk("inode=%p flags=%s mem_align=%u offset_align=%u read_offset_align=%u seg_boundary=%lld joint_boundary=%u",
 		__entry->inode, show_statx_mask(__entry->mask),
 		__entry->mem_align, __entry->offset_align,
-		__entry->read_offset_align
+		__entry->read_offset_align, __entry->seg_boundary,
+		__entry->joint_boundary
 	)
 );
 

@@ -244,6 +244,7 @@ nfsd_file_alloc(struct net *net, struct inode *inode, unsigned char need,
 	nf->nf_dio_mem_align = 0;
 	nf->nf_dio_offset_align = 0;
 	nf->nf_dio_read_offset_align = 0;
+	nf->nf_dio_seg_boundary = 0;
 	return nf;
 }
 
@@ -1152,8 +1153,6 @@ nfsd_file_get_dio_attrs(const struct svc_fh *fhp, struct nfsd_file *nf)
 	if (status != nfs_ok)
 		return status;
 
-	trace_nfsd_file_get_dio_attrs(inode, &stat);
-
 	if (stat.result_mask & STATX_DIOALIGN) {
 		nf->nf_dio_mem_align = stat.dio_mem_align;
 		nf->nf_dio_offset_align = stat.dio_offset_align;
@@ -1162,6 +1161,11 @@ nfsd_file_get_dio_attrs(const struct svc_fh *fhp, struct nfsd_file *nf)
 		nf->nf_dio_read_offset_align = stat.dio_read_offset_align;
 	else
 		nf->nf_dio_read_offset_align = nf->nf_dio_offset_align;
+	nf->nf_dio_seg_boundary =
+		nfs_dio_seg_boundary(stat.result_mask & STATX_DIO_SEG_BOUNDARY,
+				     stat.dio_seg_boundary);
+
+	trace_nfsd_file_get_dio_attrs(inode, &stat, nf->nf_dio_seg_boundary);
 
 	return nfs_ok;
 }
