@@ -8,6 +8,14 @@
  * (N = 1 MiB / PAGE_SIZE full pages: 64 bvecs + spill on 16K, 256 + spill on 4K)
  * submits it raw to the target device, reads the range back, and compares
  * against the stamped pattern (each u32 = its own payload offset).
+ *
+ * Gapped mode (frag=N, N > 0): the payload is instead cut into N-byte
+ * fragments, one per page, each starting at page offset frag_off, the last
+ * one taking the remainder -- the geometry of a loaned receive, one fragment
+ * per TCP segment.  Every joint is then a gap in memory.  A device with no
+ * virtual boundary takes it as long as every fragment meets its DMA
+ * alignment; a device with one must split at each gap on a logical-block
+ * multiple, which fails with -EINVAL when a gap is not on one.
  */
 #include <linux/module.h>
 #include <linux/blkdev.h>
@@ -21,6 +29,10 @@ static uint off0 = 684;
 module_param(off0, uint, 0444);
 static ulong start_sector = 4096;
 module_param(start_sector, ulong, 0444);
+static uint frag;
+module_param(frag, uint, 0444);
+static uint frag_off;
+module_param(frag_off, uint, 0444);
 
 #define TOTAL (1024 * 1024)
 
@@ -36,8 +48,13 @@ static int __init bvecrepro_init(void)
 	struct bio bio;
 	int ret;
 
-	if (off0 == 0)
+	if (frag) {
+		if (frag % 4 || frag_off + frag > PAGE_SIZE)
+			return -EINVAL;
+		npages = DIV_ROUND_UP(TOTAL, frag);
+	} else if (off0 == 0) {
 		npages = nfull;
+	}
 
 	bdev_file = bdev_file_open_by_path(dev, BLK_OPEN_READ | BLK_OPEN_WRITE,
 					   THIS_MODULE, NULL);
@@ -70,7 +87,12 @@ static int __init bvecrepro_init(void)
 
 	/* bvec geometry */
 	nvecs = 0;
-	if (off0) {
+	if (frag) {
+		for (i = 0, p = 0; p < TOTAL; i++, p += frag)
+			bvec_set_page(&bvecs[nvecs++], pages[i],
+				      min_t(unsigned int, frag, TOTAL - p),
+				      frag_off);
+	} else if (off0) {
 		bvec_set_page(&bvecs[nvecs++], pages[0], PAGE_SIZE - off0, off0);
 		for (i = 1; i < nfull; i++)
 			bvec_set_page(&bvecs[nvecs++], pages[i], PAGE_SIZE, 0);
@@ -100,8 +122,8 @@ static int __init bvecrepro_init(void)
 	bio.bi_iter.bi_size = TOTAL;
 	bio_set_flag(&bio, BIO_CLONED);
 	ret = submit_bio_wait(&bio);
-	pr_info("bvecrepro: WRITE dev=%s off0=%u nvecs=%u status=%d\n",
-		dev, off0, nvecs, ret);
+	pr_info("bvecrepro: WRITE dev=%s off0=%u frag=%u frag_off=%u nvecs=%u status=%d\n",
+		dev, off0, frag, frag_off, nvecs, ret);
 	if (ret)
 		goto out;
 
