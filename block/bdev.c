@@ -1317,7 +1317,7 @@ void sync_bdevs(bool wait)
 }
 
 /*
- * Handle STATX_{DIOALIGN, WRITE_ATOMIC} for block devices.
+ * Handle STATX_{DIOALIGN, DIO_SEG_BOUNDARY, WRITE_ATOMIC} for block devices.
  */
 void bdev_statx(const struct path *path, struct kstat *stat, u32 request_mask)
 {
@@ -1338,6 +1338,10 @@ void bdev_statx(const struct path *path, struct kstat *stat, u32 request_mask)
 		stat->dio_offset_align = bdev_logical_block_size(bdev);
 		stat->result_mask |= STATX_DIOALIGN;
 	}
+
+	if ((request_mask & STATX_DIO_SEG_BOUNDARY) &&
+	    bdev_dio_seg_boundary(bdev, &stat->dio_seg_boundary))
+		stat->result_mask |= STATX_DIO_SEG_BOUNDARY;
 
 	if (request_mask & STATX_WRITE_ATOMIC && bdev_can_atomic_write(bdev)) {
 		struct request_queue *bd_queue = bdev->bd_queue;
