@@ -476,10 +476,15 @@ static void loop_update_dio_alignment(struct loop_device *lo)
 	 * file can't be used for direct-io at all, so fall back to the block
 	 * device limits in that case.
 	 */
-	if (!vfs_getattr(&file->f_path, &st, STATX_DIOALIGN, 0) &&
+	if (!vfs_getattr(&file->f_path, &st,
+			 STATX_DIOALIGN | STATX_DIO_SEG_BOUNDARY, 0) &&
 	    (st.result_mask & STATX_DIOALIGN) && st.dio_mem_align) {
 		lo->lo_min_dio_size = st.dio_offset_align;
 		lo->lo_dio_mem_align = min(st.dio_mem_align - 1, PAGE_SIZE - 1);
+		if ((st.result_mask & STATX_DIO_SEG_BOUNDARY) &&
+		    (!st.dio_seg_boundary || is_power_of_2(st.dio_seg_boundary)))
+			lo->lo_dio_virt_boundary = st.dio_seg_boundary ?
+				st.dio_seg_boundary - 1 : 0;
 		return;
 	}
 
