@@ -410,8 +410,9 @@ KUnit test modules compiled and linked — bisect-clean. See `README.md` →
       case and its fix-reverted A/B, the runtime harness, a deliberate
       receive-queue-collapse run, and the LOCALIO A/B against stock
       `v7.1.13-14`. The merge top-up fix (first `1e48b4d03cb8`,
-      now folded into `dd2e42c5f547`) was verified by the 2026-09-25 run; until the
-      bisect walk also passes,
+      now folded into `dd2e42c5f547`) was verified by the 2026-09-25 run and the bisect walk passed
+      2026-09-26 (51/51); the end-to-end collapse reproduction on a real
+      NIC is still outstanding, so
       `svc_tcp_rx_loan_pages=N` stays the advice where data matters.
 - [ ] Consider letting a second locked head join a merge page that still has
       room instead of falling back to the arena, so collapsed receives keep
