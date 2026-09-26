@@ -55,6 +55,7 @@ struct loop_device {
 	struct file	*lo_backing_file;
 	unsigned int	lo_min_dio_size;
 	unsigned int	lo_dio_mem_align;
+	unsigned long	lo_dio_virt_boundary;
 	struct block_device *lo_device;
 
 	gfp_t		old_gfp_mask;
@@ -453,6 +454,19 @@ static void loop_update_dio_alignment(struct loop_device *lo)
 	struct file *file = lo->lo_backing_file;
 	struct block_device *sb_bdev = file->f_mapping->host->i_sb->s_bdev;
 	struct kstat st;
+
+	/*
+	 * The incoming request's bio_vec is forwarded to the backing file
+	 * unchanged, so where the backing device lets memory be
+	 * discontiguous is the loop device's own virtual boundary when used
+	 * for direct-io.  Without it, a gap the backing queue must split at
+	 * but cannot, because the split would not land on a logical block,
+	 * fails the I/O there, possibly after part of it was written.
+	 * Without a report, use the backing file system's device if it has
+	 * one, else assume no boundary as before.
+	 */
+	lo->lo_dio_virt_boundary = sb_bdev ?
+		queue_virt_boundary(bdev_get_queue(sb_bdev)) : 0;
 
 	/*
 	 * Use the dio alignment of the file system if provided.  The incomoing
@@ -958,13 +972,19 @@ static void loop_set_dma_limit(struct loop_device *lo, struct queue_limits *lim)
 {
 	/*
 	 * Direct I/O forwards the user pages to the backing file unchanged, so
-	 * track the backing's DMA alignment requirement as the mode is toggled.
+	 * track the backing's DMA alignment requirement and virtual boundary
+	 * as the mode is toggled.  Reset max_segment_size so that it is
+	 * recomputed for the new virtual boundary.
 	 */
-	if (lo->lo_flags & LO_FLAGS_DIRECT_IO)
+	if (lo->lo_flags & LO_FLAGS_DIRECT_IO) {
 		lim->dma_alignment = max_t(unsigned int, lo->lo_dio_mem_align,
 					   SECTOR_SIZE - 1);
-	else
+		lim->virt_boundary_mask = lo->lo_dio_virt_boundary;
+	} else {
 		lim->dma_alignment = SECTOR_SIZE - 1;
+		lim->virt_boundary_mask = 0;
+	}
+	lim->max_segment_size = 0;
 }
 
 static void loop_update_limits(struct loop_device *lo, struct queue_limits *lim,
