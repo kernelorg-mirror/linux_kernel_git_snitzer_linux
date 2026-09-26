@@ -1599,6 +1599,23 @@ static inline unsigned int bdev_dma_alignment(struct block_device *bdev)
 	return queue_dma_alignment(bdev_get_queue(bdev));
 }
 
+/*
+ * The direct I/O memory-segment boundary of @bdev as a size: 0 if the queue
+ * has no virtual boundary, else the power of two every gap between memory
+ * segments must fall on.  Returns false if the queue's virtual boundary
+ * cannot be expressed that way in 32 bits; callers then report nothing.
+ */
+static inline bool bdev_dio_seg_boundary(struct block_device *bdev,
+					 u32 *boundary)
+{
+	unsigned long mask = queue_virt_boundary(bdev_get_queue(bdev));
+
+	if (mask > (U32_MAX >> 1) || (mask & (mask + 1)))
+		return false;
+	*boundary = mask ? mask + 1 : 0;
+	return true;
+}
+
 static inline unsigned int
 blk_lim_dma_alignment_and_pad(struct queue_limits *lim)
 {
