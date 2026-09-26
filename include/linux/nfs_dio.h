@@ -7,8 +7,11 @@
 #ifndef _LINUX_NFS_DIO_H
 #define _LINUX_NFS_DIO_H
 
+#include <linux/limits.h>
+#include <linux/log2.h>
 #include <linux/types.h>
 #include <linux/uio.h>
+#include <asm/page.h>
 
 struct bio_vec;
 struct file;
@@ -25,10 +28,20 @@ enum nfs_dio_disposition {
 	NFS_DIO_DONTCACHE = 0x80,
 };
 
+/* device takes discontiguous memory segments anywhere */
+#define NFS_DIO_SEG_BOUNDARY_NONE	U32_MAX
+
 /* What the caller knows about the file, and wants from the split. */
 struct nfs_dio_policy {
 	u32		mem_align;	/* alignment the device needs of payload memory */
 	u32		offset_align;	/* alignment it needs of file offsets and lengths */
+	/*
+	 * Where the device lets payload memory be discontiguous: 0 if not
+	 * known (a page-sized boundary is assumed), NFS_DIO_SEG_BOUNDARY_NONE
+	 * if anywhere, else the power of two every gap between memory
+	 * segments must fall on.
+	 */
+	u32		seg_boundary;
 	/*
 	 * Do not split for a direct middle smaller than this many pages:
 	 * three I/Os for a write that small cost more than one buffered one.
@@ -42,6 +55,34 @@ struct nfs_dio_policy {
 	 */
 	bool		dontcache;
 };
+
+/*
+ * Translate a statx-style report (@reported: STATX_DIO_SEG_BOUNDARY was in
+ * the result mask; @boundary: dio_seg_boundary) into the policy encoding,
+ * so every producer maps an unreported or unusable value to the
+ * page-sized default the same way.
+ */
+static inline u32 nfs_dio_seg_boundary(bool reported, u32 boundary)
+{
+	if (!reported)
+		return 0;
+	if (!boundary)
+		return NFS_DIO_SEG_BOUNDARY_NONE;
+	return is_power_of_2(boundary) ? boundary : 0;
+}
+
+/*
+ * The boundary interior memory joints are held to for a policy
+ * @seg_boundary: 0 if none (NFS_DIO_SEG_BOUNDARY_NONE), else the reported
+ * boundary, or PAGE_SIZE when it is not known.  The split and the callers'
+ * tracepoints both use this, so a trace shows what the split enforces.
+ */
+static inline u32 nfs_dio_joint_boundary(u32 seg_boundary)
+{
+	if (seg_boundary == NFS_DIO_SEG_BOUNDARY_NONE)
+		return 0;
+	return seg_boundary ?: PAGE_SIZE;
+}
 
 #define NFS_DIO_MAX_SEGS	3
 

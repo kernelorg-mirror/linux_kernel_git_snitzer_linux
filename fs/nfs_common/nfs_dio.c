@@ -32,6 +32,11 @@ nfs_dio_seg_init(struct nfs_dio_seg *seg, unsigned int direction,
 }
 
 /*
+ * @seg_mask is the device's segment boundary minus one, as
+ * nfs_dio_seg_mask() derives it from the policy.  Its 0 means the device
+ * has no boundary, the opposite of a policy seg_boundary of 0: an unknown
+ * boundary has already been mapped to PAGE_SIZE - 1.
+ *
  * A vector built from a copied RPC receive buffer or from a pinned O_DIRECT
  * user buffer is contiguous after its first entry, so only its ends can be
  * misaligned.  A vector of loaned receive pages is not one contiguous
@@ -41,25 +46,36 @@ nfs_dio_seg_init(struct nfs_dio_seg *seg, unsigned int direction,
  *
  * - every fragment's offset and length must satisfy the device's memory
  *   alignment (the iov_iter_alignment() contract vs stx_dio_mem_align);
- * - every interior discontinuity must land on an @offset_align multiple
- *   (stx_dio_offset_align is never smaller than the logical block size).
- *   On a queue with a virtual boundary (e.g. NVMe) each discontinuity
- *   forces a bio split at that byte position, and bio_split_io_at() only
- *   splits on a logical-block boundary: a discontinuity at a payload
- *   position that is not a logical-block multiple strands a sub-sector
- *   residue with no valid split point, and the submission would fail with
- *   -EINVAL after any preceding split already wrote.
+ * - every interior discontinuity must land on an @offset_align multiple.
+ *   A joint is a discontinuity iff the previous fragment's end or the next
+ *   fragment's start is not a multiple of the device's segment boundary,
+ *   the same test __bvec_gap_to_prev() applies.  A queue with a boundary
+ *   splits there, and bio_split_io_at() rounds the split down to its split
+ *   alignment, so a discontinuity must land on an @offset_align multiple.
+ *   That assumes @offset_align is at least the device's split alignment:
+ *   the logical block size, or zone_write_granularity for writes to a
+ *   zoned device where it is larger, a case this does not cover.  With no
+ *   boundary, gaps never force splits, so the rule is skipped.  That relies
+ *   on @mem_align being at least the queue's dma_alignment + 1, the
+ *   stx_dio_mem_align contract, because bio_split_io_at() still rejects any
+ *   bvec whose offset or length breaks dma_alignment.  It also relies on
+ *   the reporting queue's limits covering every queue the bvecs reach: a
+ *   stacking driver that passes them on unchanged must carry the lower
+ *   queue's virt_boundary_mask up (dm and md stack it, loop copies it from
+ *   its backing file in direct I/O mode), or "no boundary" is only true of
+ *   the top queue.  An unknown boundary is taken to be PAGE_SIZE.
  *
  * One walk checks both: the alignment test must visit every fragment
  * anyway, so the discontinuity test rides the same pass on data already in
  * hand instead of a second O(nvecs) traversal, and the first violation of
  * either property returns early.  A contiguous page-tiled payload has no
- * interior discontinuities and is admitted on memory alignment alone.  The
- * iterator's total length must also be an @offset_align multiple.
+ * interior discontinuities (unless the boundary exceeds PAGE_SIZE) and is
+ * admitted on memory alignment alone.  The iterator's total length must
+ * also be an @offset_align multiple.
  */
 static bool
 nfs_dio_iter_aligned_and_splittable(const struct iov_iter *iter,
-				    u32 mem_align, u32 offset_align)
+				    u32 mem_align, u32 offset_align, u32 seg_mask)
 {
 	const struct bio_vec *bvec = iter->bvec;
 	size_t skip = iter->iov_offset;
@@ -77,7 +93,7 @@ nfs_dio_iter_aligned_and_splittable(const struct iov_iter *iter,
 		pos += len;
 		left -= len;
 		if (left &&
-		    (((off + len) | (bvec + 1)->bv_offset) & ~PAGE_MASK) &&
+		    (((off + len) | (bvec + 1)->bv_offset) & seg_mask) &&
 		    (pos & (offset_align - 1)))
 			return false;
 		bvec++;
@@ -85,6 +101,13 @@ nfs_dio_iter_aligned_and_splittable(const struct iov_iter *iter,
 	}
 
 	return true;
+}
+
+static u32 nfs_dio_seg_mask(const struct nfs_dio_policy *policy)
+{
+	u32 boundary = nfs_dio_joint_boundary(policy->seg_boundary);
+
+	return boundary ? boundary - 1 : 0;
 }
 
 /**
@@ -311,13 +334,14 @@ void nfs_dio_split(struct file *file, const struct nfs_dio_policy *policy,
 
 	/*
 	 * If the memory is not aligned -- or the block stack could be forced
-	 * to split the payload at an interior discontinuity that is not
+	 * to split the payload at a segment-boundary discontinuity that is not
 	 * logical-block aligned -- direct I/O is impossible for the middle,
 	 * so issue the entire payload as a single buffered segment: splitting
 	 * would only turn one buffered I/O into three.
 	 */
 	if (!nfs_dio_iter_aligned_and_splittable(&split->segs[nsegs].iter,
-						 mem_align, offset_align)) {
+						 mem_align, offset_align,
+						 nfs_dio_seg_mask(policy))) {
 		disposition = NFS_DIO_MEM_MISALIGNED;
 		goto no_dio;
 	}
