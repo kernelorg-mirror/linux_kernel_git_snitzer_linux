@@ -1,0 +1,22 @@
+#!/usr/bin/env bpftrace
+/*
+ * loan-geometry.bt - the geometry of every loaned (borrowed) receive fragment
+ * the NFSD page-loan path appends: where it starts in its page mod 4, its
+ * length mod 4, whether it ends mid-page (a gap for the block layer), and
+ * whether its page came from a NIC page_pool.  This is what decides whether a
+ * loaned WRITE can go direct: every fragment must start and end on the
+ * device's DMA alignment (4 on NVMe), and on a device with a virtual boundary
+ * every mid-page end is a joint that must also land on a logical block.
+ *
+ * svc_tcp_rx_append(state, page, offset, len, borrowed, page_pool)
+ * Run while loaned NFS WRITEs flow; Ctrl-C prints the histograms.
+ */
+kprobe:svc_tcp_rx_append /arg4/
+{
+	@frags = count();
+	@offset_mod4[arg2 & 3] = count();
+	@len_mod4[arg3 & 3] = count();
+	@ends_mid_page[((arg2 + arg3) & 4095) != 0] = count();
+	@page_pool[arg5] = count();
+	@bytes = sum(arg3);
+}
