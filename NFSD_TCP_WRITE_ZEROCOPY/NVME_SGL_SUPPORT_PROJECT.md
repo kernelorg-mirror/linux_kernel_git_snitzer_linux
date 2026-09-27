@@ -431,6 +431,15 @@ nvme-loop backed by `ram2`; NVMe devices found by subsystem NQN only).
 
 ## 7. Phase 2 — Xsight E1 (xeu) placement (after phase 1)
 
+**Moved to its own sub-project (2026-09-26):**
+[`xeu-SGL-compat-receive-placement/`](xeu-SGL-compat-receive-placement/) —
+the `rx_ip_align` driver change (2 extra bytes of RX headroom put IP header
+and TCP payload on a 4-byte boundary for every frame that fits one RX
+buffer), its tardis1 test plan, the `loan-geometry.bt` probe, and the
+questions for Xsight. The arm64 values measured there confirm the scoping below:
+`NET_SKB_PAD=64`, `NET_IP_ALIGN=0`, payload at 118 (130 with TCP
+timestamps), 2 mod 4. The notes below are the original scoping.
+
 - **4-byte payload alignment without header-data split.** xeu posts every RX
   buffer at `XEU_RX_PAGE_HEADROOM = NET_SKB_PAD + NET_IP_ALIGN`; on arm64
   `NET_IP_ALIGN` is 0, so payload lands at 64 + 54 = 118, which is 2 mod 4.
