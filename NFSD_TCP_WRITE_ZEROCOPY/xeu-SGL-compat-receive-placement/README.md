@@ -11,6 +11,46 @@ every loaned fragment must start and end on the device's DMA alignment,
 **Status:** driver change written and build-checked, not run on hardware.
 Test procedure for tardis1 in [`TESTING.md`](TESTING.md).
 
+## tardis1 result: its NVMe is PRP-only
+
+**tardis1's NVMe is PRP-only (Mike, 2026-09-27).** All nine namespaces
+report a 4 KiB virtual boundary:
+
+| device | virt_boundary_mask | dma_alignment | logical_block_size |
+|---|---|---|---|
+| nvme0n1 | 4095 | 3 | 4096 |
+| nvme1n1 | 4095 | 3 | 4096 |
+| nvme2n1 | 4095 | 3 | 4096 |
+| nvme3n1 | 4095 | 3 | 512 |
+| nvme4n1 | 4095 | 3 | 4096 |
+| nvme5n1 | 4095 | 3 | 4096 |
+| nvme6n1 | 4095 | 3 | 4096 |
+| nvme7n1 | 4095 | 3 | 4096 |
+| nvme8n1 | 4095 | 3 | 512 |
+
+Every 7.1 kernel carries `bc840b21a25a` ("nvme: remove virtual boundary for
+sgl capable devices"), and `nvme_pci_get_virt_boundary()` returns 0 exactly
+when `nvme_ctrl_sgl_supported()`; `sgl_threshold` does not enter into it.
+So `4095` means these controllers do not advertise SGLs (`nvme id-ctrl
+/dev/nvmeX | grep -w sgls` should read 0), not a kernel or setting
+problem. Consequences:
+
+- On these exports, phase 1 reports `dio_seg_boundary=4096` and the gate
+  keeps the joint rule, so loaned WRITEs with mid-page joints are demoted
+  to buffered, as before phase 1. That is the correct behaviour; phase 1
+  still pays off only on SGL-capable NVMe (or NVMe/TCP, NVMe/FC).
+- The phase 2 `rx_ip_align` change cannot make WRITEs direct on tardis1:
+  it fixes the 4-byte offsets, but every frame boundary remains a mid-page
+  joint that a 4096 boundary refuses. A tardis1 run would confirm the
+  placement (`loan-geometry.bt`) but not a disposition change.
+- A PRP-only device needs page-tiled payload: joints on 4096. On E1 that
+  is header-data split with payload coalescing (the firmware ask in the
+  page-loan status document), or SGL-capable NVMe in tardis1.
+
+The patch and test plan stand for an E1 host with SGL-capable NVMe. On
+tardis1 as equipped, pass B of `TESTING.md` can only show that the offsets
+become 0 mod 4.
+
 ## Why a 2-byte change is enough (for frames that fit one buffer)
 
 The driver posts every RX buffer identically, at

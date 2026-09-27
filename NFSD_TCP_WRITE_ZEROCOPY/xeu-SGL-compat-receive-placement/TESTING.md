@@ -25,6 +25,8 @@ reloads the known-good module before every load.
    file in the export must show `dio_mem_align=4 dio_seg_boundary=0`. If it
    shows `4096`, stop: this device cannot take the placement, whatever the
    NIC does.
+   **tardis1 (2026-09-27): all nine namespaces show `4095` — PRP-only.**
+   This gate fails there; see `README.md` → "tardis1 result".
 3. **Page size and MTU — use the 64 KiB arm64 kernel.** A frame must fit
    one RX buffer: 3710 bytes on a 4 KiB kernel (MTU 1500 only), 65150 on a
    64 KiB kernel (any MTU, including 9000). On 4 KiB with jumbo frames every
