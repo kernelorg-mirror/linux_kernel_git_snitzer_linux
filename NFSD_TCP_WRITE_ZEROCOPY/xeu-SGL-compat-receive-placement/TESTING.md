@@ -34,12 +34,43 @@ reloads the known-good module before every load.
    64 KiB kernel at MTU 9000; a 4 KiB kernel is only an optional control.
 4. **Traffic shape:** plain Ethernet (optionally VLAN) TCP, no tunnel.
 
+### Checking the export NVMe
+
+    findmnt -no SOURCE /path/to/export        # use the parent namespace of a partition
+    d=/sys/block/nvme0n1/queue
+    cat $d/virt_boundary_mask $d/dma_alignment $d/logical_block_size
+    nvme id-ctrl /dev/nvme0 | grep -w sgls    # sysfs does not expose this
+    cat /sys/module/nvme/parameters/sgl_threshold
+
+`virt_boundary_mask` must be `0` (`4095` = PRP only: stop), `dma_alignment`
+`3`. `sgls` low 2 bits non-zero (`1` = supported, `2` = supported with
+dword alignment; `0` = no SGLs, and the mask is then `4095`). Leave
+`sgl_threshold` at its default `32768`: it only affects gap-free requests,
+so loaned WRITEs get SGLs regardless, but `0` disables SGLs. On dm/md,
+check the top device's `queue/` too (it stacks the strictest limit). For
+comparison, this qualification box's `nvme0n1` shows `4095` and `sgls : 0`.
+
 ## 2. Build and load
 
 Apply `0001-xeu-add-rx_ip_align-...patch` at `-p0` from the extracted
 `kmod-xsight-2.0.1` root (or add it to `xsight.spec` as a `PatchN:`), build
 for the running kernel, and keep the unmodified `xeu.ko` for the deadman
 switch. `modinfo -p xeu.ko | grep rx_ip_align` confirms the parameter.
+
+Setting it persistently (it is read-only after load, so it takes effect at
+the next load of `xeu`):
+
+- **modprobe.d:** `echo 'options xeu rx_ip_align=2' > /etc/modprobe.d/xeu.conf`
+  (not `/etc/modules-load.d/`, which takes no parameters); if `xeu` is in
+  the initramfs, `dracut -f --kver <release>`.
+- **Kernel command line:**
+  `grubby --update-kernel=/boot/vmlinuz-<release> --args="xeu.rx_ip_align=2"`
+  (`--remove-args="xeu.rx_ip_align"` to undo); `modprobe` applies
+  `module.param=` entries from `/proc/cmdline` to loadable modules.
+
+For the A/B, prefer the command line on one grub entry and keep the
+known-good entry without it. Verify with
+`cat /sys/module/xeu/parameters/rx_ip_align`.
 
 ## 3. Two passes, same workload
 
