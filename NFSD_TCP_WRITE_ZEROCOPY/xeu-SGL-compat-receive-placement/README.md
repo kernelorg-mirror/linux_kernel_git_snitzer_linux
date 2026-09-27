@@ -57,9 +57,28 @@ against `kmod-xsight-2.0.1` (tarball-relative `.orig` paths, applies at
   posted at the same headroom, so its continuation data stays 2 mod 4. The
   driver warns when the MTU makes a frame span several buffers. One buffer
   holds `PAGE_SIZE - 66 - 320` bytes: **3710 on 4 KiB pages** (MTU 1500
-  fits, MTU 9000 does not) and ~65 KiB on 64 KiB pages (any supported MTU
-  fits). So use MTU 1500 on a 4 KiB kernel, or the 64 KiB kernel for jumbo
-  frames.
+  fits, MTU 9000 does not) and 65150 on 64 KiB pages (any supported MTU
+  fits).
+
+### 4 KiB arm64 with jumbo frames: continuation buffers stay 2 mod 4
+
+| Kernel | MTU 1500 (1514-byte frame) | MTU 9000 (9014-byte frame) |
+|---|---|---|
+| arm64, 4 KiB pages | 1 buffer: all payload 0 mod 4 | 3 buffers: continuation payload 2 mod 4 |
+| arm64, 64 KiB pages | 1 buffer: all payload 0 mod 4 | 1 buffer: all payload 0 mod 4 |
+
+With `rx_ip_align=2` on a 4 KiB kernel at MTU 9000, the first buffer's
+payload runs from 132 to 3776 (both 0 mod 4), but the frame continues into
+two more buffers posted at the same 66-byte headroom, so their payload
+fragments start at 66 = **2 mod 4**. Every jumbo frame contributes a
+misaligned fragment, so nearly every 1 MiB WRITE fails the gate and is
+demoted (`mem_misaligned`) — correct data, just not direct. Only a NIC that
+pads a frame's first buffer alone could fix that (Xsight question 2).
+
+**Therefore test on tardis1's E1 with the 64 KiB `PAGE_SIZE` arm64
+kernel:** it is the only configuration where jumbo frames — what a storage
+network runs — land entirely 4-byte aligned. A 4 KiB kernel is useful only
+at MTU 1500 (or as a control showing jumbo WRITEs demoted).
 
 Build check (2026-09-26, against `7.1.13-14.hs.440.loanpages`): builds with
 0 warnings, and `W=1` adds nothing over the unmodified driver (11
