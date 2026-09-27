@@ -1,0 +1,152 @@
+From 8518e14390a6a5a8fd7f2506db8eba6e43e4f1c8 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@hammerspace.com>
+Date: Sat, 26 Sep 2026 20:07:38 -0400
+Subject: [PATCH] xeu: add rx_ip_align to 4-byte align received IP headers and
+ TCP payload
+
+Every RX buffer is posted at dst_addr = dma_addr + NET_SKB_PAD +
+NET_IP_ALIGN.  NET_IP_ALIGN is 0 on arm64 and x86, so with Ethernet's
+14-byte header the IP header, and the TCP payload after it, land 2 bytes
+past a 4-byte boundary: payload at 64 + 54 = 118 (130 with TCP
+timestamps), 2 mod 4 either way.  IPv4, IPv6 and TCP headers are always
+multiples of 4 bytes, and a VLAN tag adds 4, so the offset is 2 mod 4
+for every such frame.
+
+That is the one thing keeping NFSD from writing received TCP payload
+pages with direct I/O.  With the SUNRPC TCP receive page loan, NFSD
+references the payload in the skb's pages rather than copying it, and a
+device that takes discontiguous memory (NVMe with SGLs) accepts those
+pages as long as each fragment starts and ends on its DMA alignment, 4
+bytes.  At 2 mod 4 every such WRITE is demoted to buffered I/O and the
+copy comes back.
+
+Add a load-time rx_ip_align parameter: 0 (default) posts buffers exactly
+as before; 2 adds two bytes of headroom, which puts the IP header and
+the TCP payload on a 4-byte boundary -- the classic NET_IP_ALIGN
+placement.  Buffer data size shrinks by the same 2 bytes.  The headroom
+is read at posting and at receive through one helper, and is fixed after
+load so a buffer is always parsed with the headroom it was posted with.
+
+A frame larger than one buffer continues in further buffers, which are
+posted at the same headroom, so its continuation data is still 2 mod 4.
+At a 1500-byte MTU on 4 KiB pages, and at any supported MTU on 64 KiB
+pages, a frame fits one buffer and this does not arise; otherwise warn
+when the MTU is set or the device is opened.  Aligning continuation data
+as well needs the hardware to shift only the first buffer of a frame
+(a receive pad), which the driver cannot do by itself.
+
+Assisted-by: Claude:claude-opus-5-5
+Signed-off-by: Mike Snitzer <snitzer@hammerspace.com>
+---
+ xeu-esdk-v2.0.1/xeu_drv.c | 53 +++++++++++++++++++++++++++++++++------
+ 1 file changed, 46 insertions(+), 7 deletions(-)
+
+diff --git xeu-esdk-v2.0.1.orig/xeu_drv.c xeu-esdk-v2.0.1/xeu_drv.c
+index a73a59b..ced0725 100644
+--- xeu-esdk-v2.0.1.orig/xeu_drv.c
++++ xeu-esdk-v2.0.1/xeu_drv.c
+@@ -69,6 +69,32 @@ static unsigned int num_sa = 128;
+ module_param(num_sa, uint, XEU_PARM_RO);
+ MODULE_PARM_DESC(num_rings, "number of security associations");
+ 
++/*
++ * Bytes added to the RX buffer headroom.  Every RX buffer is posted at
++ * NET_SKB_PAD + NET_IP_ALIGN + rx_ip_align.  NET_IP_ALIGN is 0 on arm64 and
++ * x86, so Ethernet's 14-byte header leaves the IP header, and the TCP payload
++ * after it, 2 bytes past a 4-byte boundary.  rx_ip_align=2 puts both on a
++ * 4-byte boundary, which is what lets NFSD write received TCP payload pages
++ * with direct I/O instead of copying them.  Only 0 and 2 are accepted.
++ *
++ * Load-time only: a buffer must be parsed with the headroom it was posted
++ * with.  Frames larger than one buffer continue in further buffers posted at
++ * the same headroom, so their continuation data is not 4-byte aligned.
++ */
++static unsigned int rx_ip_align;
++module_param(rx_ip_align, uint, XEU_PARM_RO);
++MODULE_PARM_DESC(rx_ip_align, "extra RX headroom bytes: 0 (default) or 2 to 4-byte align the IP header and TCP payload");
++
++static inline unsigned int xeu_rx_headroom(void)
++{
++	return XEU_RX_PAGE_HEADROOM + (rx_ip_align == 2 ? 2 : 0);
++}
++
++static inline unsigned int xeu_rx_data_size(void)
++{
++	return PAGE_SIZE - xeu_rx_headroom() - XEU_RX_PAGE_SHARED_INFO_SIZE;
++}
++
+ #ifdef XEU_POLL
+ static unsigned int int_usecs = 1000;
+ module_param(int_usecs, uint, XEU_PARM_RO);
+@@ -493,8 +519,8 @@ static int xeu_rx_refill(struct xeu_rx_ring *rxr, u32 n)
+ #else
+ 		WRITE_ONCE(ring->rx_sr[idx].ctrl, RX_SR_BD_EOF | RX_SR_BD_INTR_EN);
+ #endif
+-		WRITE_ONCE(ring->rx_sr[idx].dst_addr, dma_addr + XEU_RX_PAGE_HEADROOM);
+-		WRITE_ONCE(ring->rx_sr[idx].len_rid_sid, XEU_RX_PAGE_DATA_SIZE);
++		WRITE_ONCE(ring->rx_sr[idx].dst_addr, dma_addr + xeu_rx_headroom());
++		WRITE_ONCE(ring->rx_sr[idx].len_rid_sid, xeu_rx_data_size());
+ 
+ 		/* Increment the tail */
+ 		ring->sr_prod_idx++;
+@@ -803,11 +829,11 @@ static int xeu_rx_poll(struct napi_struct *napi, int budget)
+ 			goto update_index;
+ 		}
+ 
+-		skb_reserve(skb, XEU_RX_PAGE_HEADROOM);
++		skb_reserve(skb, xeu_rx_headroom());
+ 
+ 		/* Set linear data */
+ 		total_len = READ_ONCE(rx_cp->cmn.base.len) & RX_CR_LEN_MASK;
+-		linear_len = min_t(u32, total_len, XEU_RX_PAGE_DATA_SIZE);
++		linear_len = min_t(u32, total_len, xeu_rx_data_size());
+ 		skb_put(skb, linear_len);
+ 
+ 		/* Mark SKB for page pool recycling */
+@@ -821,12 +847,12 @@ static int xeu_rx_poll(struct napi_struct *napi, int budget)
+ 			sub_idx = (sub_idx + 1) & ring->mask;
+ 			sw_rx_desc = &ring->rx_sw[sub_idx];
+ 
+-			frag_len = min_t(u32, total_len, XEU_RX_PAGE_DATA_SIZE);
++			frag_len = min_t(u32, total_len, xeu_rx_data_size());
+ 
+ 			skb_add_rx_frag(skb,
+ 					frag_idx,
+ 					sw_rx_desc->page,
+-					XEU_RX_PAGE_HEADROOM,
++					xeu_rx_headroom(),
+ 					frag_len,
+ 					PAGE_SIZE);
+ 
+@@ -1029,6 +1055,11 @@ static int xeu_change_mtu(struct net_device *dev, int new_mtu)
+ 	}
+ 
+ 	dev->mtu = new_mtu;
++	if (xeu_rx_headroom() != XEU_RX_PAGE_HEADROOM &&
++	    new_mtu + ETH_HLEN + VLAN_HLEN > xeu_rx_data_size())
++		netdev_warn(dev, "rx_ip_align: MTU %d spans %u RX buffers; payload after the first buffer is not 4-byte aligned\n",
++			    new_mtu,
++			    DIV_ROUND_UP(new_mtu + ETH_HLEN + VLAN_HLEN, xeu_rx_data_size()));
+ 
+ 	return rc;
+ }
+@@ -1403,7 +1434,15 @@ static int xeu_open(struct net_device *dev)
+ 		goto err_free_rings;
+ 	}
+ 
+-	priv->max_rx_buf_per_pkt = DIV_ROUND_UP(XEU_MAX_MTU, XEU_RX_PAGE_DATA_SIZE);
++	priv->max_rx_buf_per_pkt = DIV_ROUND_UP(XEU_MAX_MTU, xeu_rx_data_size());
++	if (rx_ip_align && rx_ip_align != 2)
++		netdev_warn(dev, "rx_ip_align=%u ignored: only 0 and 2 are supported\n",
++			    rx_ip_align);
++	if (xeu_rx_headroom() != XEU_RX_PAGE_HEADROOM &&
++	    dev->mtu + ETH_HLEN + VLAN_HLEN > xeu_rx_data_size())
++		netdev_warn(dev, "rx_ip_align: MTU %u spans %u RX buffers; payload after the first buffer is not 4-byte aligned\n",
++			    dev->mtu,
++			    DIV_ROUND_UP(dev->mtu + ETH_HLEN + VLAN_HLEN, xeu_rx_data_size()));
+ 
+ 	rc = xsl_eth_rss_configure(dev);
+ 	if (unlikely(rc)) {
+-- 
+2.52.0
+
