@@ -25,10 +25,13 @@ reloads the known-good module before every load.
    file in the export must show `dio_mem_align=4 dio_seg_boundary=0`. If it
    shows `4096`, stop: this device cannot take the placement, whatever the
    NIC does.
-3. **Page size and MTU:** a frame must fit one RX buffer — 3710 bytes on a
-   4 KiB kernel (MTU 1500), ~65 KiB on a 64 KiB kernel (any MTU). With a
-   larger frame the driver logs `rx_ip_align: MTU ... spans N RX buffers` and
-   continuation payload stays misaligned.
+3. **Page size and MTU — use the 64 KiB arm64 kernel.** A frame must fit
+   one RX buffer: 3710 bytes on a 4 KiB kernel (MTU 1500 only), 65150 on a
+   64 KiB kernel (any MTU, including 9000). On 4 KiB with jumbo frames every
+   continuation buffer is posted at the same 66-byte headroom, so its payload
+   is 2 mod 4 and nearly every WRITE is demoted (see `README.md`); the driver
+   logs `rx_ip_align: MTU ... spans N RX buffers`. Run the main passes on the
+   64 KiB kernel at MTU 9000; a 4 KiB kernel is only an optional control.
 4. **Traffic shape:** plain Ethernet (optionally VLAN) TCP, no tunnel.
 
 ## 2. Build and load
@@ -40,7 +43,8 @@ switch. `modinfo -p xeu.ko | grep rx_ip_align` confirms the parameter.
 
 ## 3. Two passes, same workload
 
-Drive steady NFS WRITE load (O_DIRECT, 1 MiB records) from a client to the
+On the 64 KiB kernel at MTU 9000, drive steady NFS WRITE load (O_DIRECT,
+1 MiB records) from a client to the
 export, with loans on (`svc_tcp_rx_loan_pages=Y`) and
 `/sys/kernel/debug/nfsd/io_cache_write=2`. For each pass, collect for the
 same interval:
