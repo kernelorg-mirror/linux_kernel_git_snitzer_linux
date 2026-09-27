@@ -101,11 +101,13 @@ far smaller and does not depend on how E1 treats `RX_SR_BD_EOF`.
 ## What it depends on
 
 - A kernel carrying the page-loan series, the merge top-up fix and NVMe SGL
-  phase 1 (the gate's relaxed joint rule plus the attribute plumbing). Today
-  that is `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY` on `v7.1.13-14`; the
-  Hammerspace branch `kernel-7.1/hs-7.1.13-12.NFSD_TCP_WRITE_ZEROCOPY` has
-  neither the fix nor SGL phase 1, so tardis1 needs an HS kernel built from a
-  branch that does.
+  phase 1 (the gate's relaxed joint rule plus the attribute plumbing). For
+  tardis1 that is the Hammerspace branch
+  `kernel-7.1/hs-7.1.13-14.NFSD_TCP_WRITE_ZEROCOPY`: the whole of
+  `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY` through `3350af53be4b` (the
+  series, the folded fix `dd2e42c5f547` and all of SGL phase 1) with the
+  Hammerspace DP commits on top. A kernel is being built from it
+  (2026-09-26); tardis1 needs the 64 KiB page build (see above).
 - An export whose device reports no virtual boundary: `statx-dio` on a file
   shows `dio_seg_boundary=0` (for NVMe PCIe, a controller advertising SGLs).
   On such a controller the NVMe driver forces SGLs for any request with a
