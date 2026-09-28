@@ -991,6 +991,24 @@ void svc_rqst_release_pages(struct svc_rqst *rqstp)
 }
 
 /**
+ * svc_rqst_release_payload - Return a request's received payload early
+ * @rqstp: RPC transaction context
+ *
+ * The caller has consumed the argument payload (for example, copied a
+ * WRITE into the page cache) and will not read it again. A transport that
+ * loans its receive buffers returns them now instead of when the RPC
+ * completes; other transports do nothing.
+ */
+void svc_rqst_release_payload(struct svc_rqst *rqstp)
+{
+	struct svc_xprt *xprt = rqstp->rq_xprt;
+
+	if (xprt && xprt->xpt_ops->xpo_release_payload)
+		xprt->xpt_ops->xpo_release_payload(rqstp);
+}
+EXPORT_SYMBOL_GPL(svc_rqst_release_payload);
+
+/**
  * svc_exit_thread - finalise the termination of a sunrpc server thread
  * @rqstp: the svc_rqst which represents the thread.
  *

@@ -30,6 +30,7 @@ enum svc_tcp_rx_action {
 	SVC_TCP_RX_ERROR,
 	SVC_TCP_RX_RELEASE,
 	SVC_TCP_RX_ABORT,
+	SVC_TCP_RX_PAYLOAD_RELEASE,
 };
 
 enum svc_tcp_rx_reason {
