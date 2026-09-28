@@ -611,6 +611,35 @@ static void svcsock_rx_actor_split_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
 }
 
+/* A whole record at or below svc_tcp_rx_copy_below is copied, not loaned. */
+static void svcsock_rx_small_record_copied_test(struct kunit *test)
+{
+	enum { BODY_LEN = 7 * XDR_UNIT + 19 };
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = sizeof(record) };
+	struct page *page;
+	unsigned int refs;
+	struct sk_buff *skb;
+	int ret;
+
+	svc_tcp_rx_copy_below = BODY_LEN;
+	svcsock_rx_fill_record(record, BODY_LEN, true, RPC_CALL, RPC_AUTH_UNIX);
+	skb = svcsock_rx_build_page_skb(test, record, sizeof(record), &page,
+					&refs);
+	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, skb, 0,
+				   sizeof(record));
+	KUNIT_ASSERT_EQ(test, ret, (int)sizeof(record));
+	KUNIT_EXPECT_TRUE(test, actor.complete);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_COPY);
+	KUNIT_EXPECT_EQ(test, state->reason, (u8)SVC_TCP_RX_REASON_SMALL);
+	KUNIT_EXPECT_EQ(test, state->refs_acquired, 0U);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+	kunit_kfree_skb(test, skb);
+}
+
 /*
  * A caller that has consumed the payload returns the loan early; the
  * end-of-RPC release then finds nothing borrowed and puts nothing twice.
@@ -2117,6 +2146,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_mixed_geometry_lifetime_test),
 	KUNIT_CASE(svcsock_rx_back_to_back_locked_heads_test),
 	KUNIT_CASE(svcsock_rx_release_payload_test),
+	KUNIT_CASE(svcsock_rx_small_record_copied_test),
 	KUNIT_CASE(svcsock_rx_credit_fifo_test),
 	KUNIT_CASE(svcsock_rx_credit_reserve_oldest_test),
 	KUNIT_CASE(svcsock_rx_window_clamp_test),
@@ -2147,15 +2177,19 @@ static struct kunit_case svcsock_rx_test_cases[] = {
  * the region's, so the budget is never charged; a test about credit sets
  * the budgets it needs itself.
  */
+static unsigned int svcsock_rx_saved_copy_below;
 
 static int svcsock_rx_test_init(struct kunit *test)
 {
+	svcsock_rx_saved_copy_below = svc_tcp_rx_copy_below;
 	svc_tcp_rx_budget_kunit_default(SVCSOCK_RX_LOAN_BUDGET, 0);
+	svc_tcp_rx_copy_below = 0;	/* the loan tests use small records */
 	return 0;
 }
 
 static void svcsock_rx_test_exit(struct kunit *test)
 {
+	svc_tcp_rx_copy_below = svcsock_rx_saved_copy_below;
 }
 
 static struct kunit_suite svcsock_rx_test_suite = {
