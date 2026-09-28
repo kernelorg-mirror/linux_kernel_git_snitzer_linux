@@ -723,6 +723,63 @@ static void svcsock_rx_two_records_one_skb_test(struct kunit *test)
 			(u8)SVC_TCP_RX_EMPTY);
 }
 
+static void svcsock_rx_prefix_only_then_loan_test(struct kunit *test)
+{
+	enum {
+		FIRST_BODY_LEN = 7 * XDR_UNIT,
+		SECOND_BODY_LEN = FIRST_BODY_LEN + 11,
+		FIRST_RECORD_LEN = sizeof(rpc_fraghdr) + FIRST_BODY_LEN,
+		SECOND_RECORD_LEN = sizeof(rpc_fraghdr) + SECOND_BODY_LEN,
+	};
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	struct svc_rqst *rqstp = fixture->rqstp;
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = FIRST_RECORD_LEN + SECOND_RECORD_LEN };
+	u8 stream[FIRST_RECORD_LEN + SECOND_RECORD_LEN];
+	struct page *page;
+	unsigned int refs;
+	struct sk_buff *skb;
+	int consumed;
+
+	svcsock_rx_fill_record(stream, FIRST_BODY_LEN, true, RPC_CALL,
+			       RPC_AUTH_NULL);
+	svcsock_rx_fill_record(stream + FIRST_RECORD_LEN, SECOND_BODY_LEN,
+			       true, RPC_CALL, RPC_AUTH_NULL);
+	skb = svcsock_rx_build_page_skb(test, stream, sizeof(stream), &page,
+					&refs);
+	consumed = svcsock_rx_run_actor(rqstp, &actor, &desc, skb, 0,
+					 skb->len);
+	KUNIT_ASSERT_EQ(test, consumed, (int)FIRST_RECORD_LEN);
+	KUNIT_ASSERT_TRUE(test, actor.complete);
+	KUNIT_ASSERT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
+	KUNIT_EXPECT_EQ(test, state->count, 0U);
+	KUNIT_EXPECT_EQ(test, state->refs_acquired, 0U);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, rqstp), 0);
+	KUNIT_EXPECT_EQ(test, rqstp->rq_arg.page_mode, XDRBUF_PAGE_ARRAY);
+	KUNIT_EXPECT_EQ(test, rqstp->rq_arg.page_len, 0U);
+	KUNIT_EXPECT_EQ(test, rqstp->rq_arg.head[0].iov_len,
+			FIRST_BODY_LEN);
+	KUNIT_EXPECT_PTR_EQ(test, rqstp->rq_xprt_ctxt, NULL);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
+
+	/* A deferral has no context to transfer; this request can receive again. */
+	svc_tcp_recv_record_done(fixture->svsk);
+	actor.complete = false;
+	desc.count = SECOND_RECORD_LEN;
+	consumed = svcsock_rx_run_actor(rqstp, &actor, &desc, skb,
+					 FIRST_RECORD_LEN, SECOND_RECORD_LEN);
+	KUNIT_ASSERT_EQ(test, consumed, (int)SECOND_RECORD_LEN);
+	KUNIT_ASSERT_TRUE(test, actor.complete);
+	KUNIT_EXPECT_EQ(test, state->refs_acquired, 1U);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, rqstp), 0);
+	KUNIT_EXPECT_PTR_EQ(test, rqstp->rq_xprt_ctxt, state);
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
+	kunit_kfree_skb(test, skb);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
+}
+
 struct svcsock_rx_clear_param {
 	const char *event;
 };
@@ -1695,6 +1752,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 			 svcsock_rx_split_gen_params),
 	KUNIT_CASE(svcsock_rx_multifragment_fresh_request_test),
 	KUNIT_CASE(svcsock_rx_two_records_one_skb_test),
+	KUNIT_CASE(svcsock_rx_prefix_only_then_loan_test),
 	KUNIT_CASE_PARAM(svcsock_rx_socket_owned_clear_test,
 			 svcsock_rx_clear_gen_params),
 	KUNIT_CASE_PARAM(svcsock_rx_append_fault_outer_close_test,
