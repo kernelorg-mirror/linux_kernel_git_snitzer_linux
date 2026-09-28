@@ -611,6 +611,50 @@ static void svcsock_rx_actor_split_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
 }
 
+/*
+ * A caller that has consumed the payload returns the loan early; the
+ * end-of-RPC release then finds nothing borrowed and puts nothing twice.
+ */
+static void svcsock_rx_release_payload_test(struct kunit *test)
+{
+	enum { BODY_LEN = 7 * XDR_UNIT + 19 };
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = sizeof(record) };
+	struct page *page;
+	unsigned int refs;
+	struct sk_buff *skb;
+	int ret;
+
+	svcsock_rx_fill_record(record, BODY_LEN, true, RPC_CALL, RPC_AUTH_UNIX);
+	skb = svcsock_rx_build_page_skb(test, record, sizeof(record), &page,
+					&refs);
+	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, skb, 0,
+				   sizeof(record));
+	KUNIT_ASSERT_EQ(test, ret, (int)sizeof(record));
+	KUNIT_ASSERT_TRUE(test, actor.complete);
+	KUNIT_ASSERT_EQ(test, state->refs_acquired, 1U);
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_publish(fixture->svsk, fixture->rqstp), 0);
+	kunit_kfree_skb(test, skb);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+
+	svc_tcp_rx_release_payload(fixture->svsk, fixture->rqstp);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
+	KUNIT_EXPECT_EQ(test, state->refs_released, 1U);
+	KUNIT_EXPECT_TRUE(test, state->terminal);
+	KUNIT_EXPECT_EQ(test, fixture->rqstp->rq_arg.page_len, 0U);
+	/* A second early release is a no-op. */
+	svc_tcp_rx_release_payload(fixture->svsk, fixture->rqstp);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
+
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
+}
+
 static void svcsock_rx_multifragment_fresh_request_test(struct kunit *test)
 {
 	enum {
@@ -2072,6 +2116,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 			 svcsock_rx_fault_gen_params),
 	KUNIT_CASE(svcsock_rx_mixed_geometry_lifetime_test),
 	KUNIT_CASE(svcsock_rx_back_to_back_locked_heads_test),
+	KUNIT_CASE(svcsock_rx_release_payload_test),
 	KUNIT_CASE(svcsock_rx_credit_fifo_test),
 	KUNIT_CASE(svcsock_rx_credit_reserve_oldest_test),
 	KUNIT_CASE(svcsock_rx_window_clamp_test),
