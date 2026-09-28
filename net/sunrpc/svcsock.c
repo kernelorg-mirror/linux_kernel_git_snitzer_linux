@@ -61,6 +61,22 @@
 #define RPCDBG_FACILITY	RPCDBG_SVCXPRT
 
 /*
+ * A whole record this small (an NFSv4 SEQUENCE, GETATTR or COMMIT
+ * compound) costs less to copy than a loaned receive page, and a loan
+ * would pin that page until the RPC completes, storage waits included.
+ */
+static unsigned int svc_tcp_rx_copy_below __read_mostly = 1024;
+module_param(svc_tcp_rx_copy_below, uint, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_copy_below,
+		 "Copy, rather than loan, whole RPC records of at most this many bytes (0: loan all)");
+
+static bool svc_tcp_rx_small_record(struct svc_sock *svsk)
+{
+	return svc_sock_final_rec(svsk) && !svsk->sk_datalen &&
+	       svc_sock_reclen(svsk) <= READ_ONCE(svc_tcp_rx_copy_below);
+}
+
+/*
  * For UDP:
  * 1 for header page
  * enough pages for RPCSVC_MAXPAYLOAD_UDP
@@ -1671,6 +1687,8 @@ svc_tcp_rx_classify(struct svc_sock *svsk, struct svc_rqst *rqstp)
 	state->xid = be32_to_cpu(words[0]);
 	if (test_bit(XPT_TLS_SESSION, &svsk->sk_xprt.xpt_flags))
 		return SVC_TCP_RX_REASON_TLS;
+	if (svc_tcp_rx_small_record(svsk))
+		return SVC_TCP_RX_REASON_SMALL;
 	if (words[1] != rpc_call)
 		return SVC_TCP_RX_REASON_DIRECTION;
 	if (words[2] != cpu_to_be32(RPC_VERSION))
