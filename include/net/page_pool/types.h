@@ -166,6 +166,7 @@ struct page_pool_stats {
 #define PAGE_POOL_FRAG_GROUP_ALIGN	(4 * sizeof(long))
 
 struct memory_provider_ops;
+struct page_pool_rx_region;
 
 struct pp_memory_provider_params {
 	void *mp_priv;
@@ -259,6 +260,12 @@ struct page_pool {
 		ktime_t detach_time;
 		u32 id;
 	} user;
+
+	/* The fixed receive region the pool allocates from, or NULL: read
+	 * for every page a receive takes and recycled, so kept off the
+	 * lines the allocation and recycling write.
+	 */
+	struct page_pool_rx_region *rx_region;
 };
 
 struct page *page_pool_alloc_pages(struct page_pool *pool, gfp_t gfp);
