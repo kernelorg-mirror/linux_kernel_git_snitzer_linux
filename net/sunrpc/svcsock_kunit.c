@@ -15,6 +15,7 @@
 #include <linux/unaligned.h>
 
 #include <net/net_namespace.h>
+#include <net/page_pool/helpers.h>
 
 #define SVCSOCK_RX_TEST_PROGRAM	100003
 #define SVCSOCK_RX_TEST_VERSION	3
@@ -75,6 +76,54 @@ static struct page *svcsock_rx_alloc_page(struct kunit *test)
 	if (kunit_add_action_or_reset(test, svcsock_rx_free_page, page))
 		return NULL;
 	return page;
+}
+
+struct svcsock_rx_pp {
+	struct page_pool *pool;
+	struct page *page;
+};
+
+static void svcsock_rx_pp_release(void *data)
+{
+	struct svcsock_rx_pp *pp = data;
+
+	if (pp->page)
+		page_pool_put_full_page(pp->pool, pp->page, false);
+	page_pool_destroy(pp->pool);
+}
+
+/* One page from a private page pool, returned and destroyed with the test. */
+static struct page *svcsock_rx_alloc_pp_page(struct kunit *test,
+					     struct svcsock_rx_pp **out)
+{
+	struct page_pool_params params = {
+		.order = 0,
+		.pool_size = 16,
+		.nid = NUMA_NO_NODE,
+	};
+	struct svcsock_rx_pp *pp;
+
+	if (!IS_ENABLED(CONFIG_PAGE_POOL))
+		kunit_skip(test, "CONFIG_PAGE_POOL is not set");
+	pp = kunit_kzalloc(test, sizeof(*pp), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, pp);
+	pp->pool = page_pool_create(&params);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(pp->pool));
+	pp->page = page_pool_alloc_pages(pp->pool, GFP_KERNEL);
+	if (!pp->page)
+		page_pool_destroy(pp->pool);
+	KUNIT_ASSERT_NOT_NULL(test, pp->page);
+	KUNIT_ASSERT_EQ(test,
+			kunit_add_action_or_reset(test, svcsock_rx_pp_release, pp),
+			0);
+	if (out)
+		*out = pp;
+	return pp->page;
+}
+
+static long svcsock_rx_pp_refs(struct page *page)
+{
+	return atomic_long_read(netmem_get_pp_ref_count_ref(page_to_netmem(page)));
 }
 
 static struct svc_rqst *
@@ -1451,16 +1500,17 @@ static void svcsock_rx_materialize_test(struct kunit *test)
 static void svcsock_rx_capacity_release_test(struct kunit *test)
 {
 	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 1);
-	struct page *first = svcsock_rx_alloc_page(test);
+	struct page *first = svcsock_rx_alloc_pp_page(test, NULL);
 	struct page *second = svcsock_rx_alloc_page(test);
 	unsigned int first_refs;
 	unsigned int second_refs;
 	unsigned int i;
+	long first_pp_refs;
 
 	KUNIT_ASSERT_NOT_NULL(test, state);
-	KUNIT_ASSERT_NOT_NULL(test, first);
 	KUNIT_ASSERT_NOT_NULL(test, second);
 	first_refs = page_ref_count(first);
+	first_pp_refs = svcsock_rx_pp_refs(first);
 	second_refs = page_ref_count(second);
 
 	/* fill the table; gaps keep each fragment its own entry */
@@ -1472,13 +1522,15 @@ static void svcsock_rx_capacity_release_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test,
 			svc_tcp_rx_append_borrowed(state, second, 5, 7, false),
 			-ENOSPC);
-	KUNIT_EXPECT_EQ(test, page_ref_count(first),
-			first_refs + state->capacity);
+	KUNIT_EXPECT_EQ(test, page_ref_count(first), first_refs);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_pp_refs(first),
+			first_pp_refs + state->capacity);
 	KUNIT_EXPECT_EQ(test, page_ref_count(second), second_refs);
 	KUNIT_EXPECT_TRUE(test, test_bit(0, state->page_pool));
 
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
 	KUNIT_EXPECT_EQ(test, page_ref_count(first), first_refs);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_pp_refs(first), first_pp_refs);
 	KUNIT_EXPECT_EQ(test, state->refs_acquired, state->refs_released);
 }
 
@@ -1503,12 +1555,12 @@ static void svcsock_rx_capacity_sizing_test(struct kunit *test)
 	for (i = 0; i < state->capacity; i++)
 		KUNIT_ASSERT_EQ(test,
 				svc_tcp_rx_append_borrowed(state, page,
-							   i * 8, 4, true),
+							   i * 8, 4, false),
 				0);
 	KUNIT_EXPECT_EQ(test, state->count, state->capacity);
 	KUNIT_EXPECT_EQ(test,
 			svc_tcp_rx_append_borrowed(state, page,
-						   state->capacity * 8, 4, true),
+						   state->capacity * 8, 4, false),
 			-ENOSPC);
 
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
@@ -1552,6 +1604,39 @@ static void svcsock_rx_arena_bound_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
 	KUNIT_EXPECT_EQ(test, page_ref_count(first), first_refs);
 	KUNIT_EXPECT_EQ(test, page_ref_count(second), second_refs);
+}
+
+/*
+ * The skb drops its page-pool reference while the loan still holds the
+ * page; releasing the loan recycles the page into the same pool's ring
+ * instead of the page allocator.
+ */
+static void svcsock_rx_page_pool_recycle_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 1);
+	struct svcsock_rx_pp *pp;
+	struct page *page = svcsock_rx_alloc_pp_page(test, &pp);
+	unsigned int refs = page_ref_count(page);
+
+	KUNIT_ASSERT_NOT_NULL(test, state);
+	state->mode = SVC_TCP_RX_MIXED;
+	state->fixed_bytes = 28;
+	state->body_bytes = 28;
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_append_borrowed(state, page, 1, 3, true), 0);
+
+	pp->page = NULL;
+	page_pool_put_full_page(pp->pool, page, false);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+	KUNIT_EXPECT_TRUE(test, page_pool_page_is_pp(page));
+	KUNIT_EXPECT_TRUE(test, ptr_ring_empty(&pp->pool->ring));
+
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+	KUNIT_EXPECT_TRUE(test, page_pool_page_is_pp(page));
+	pp->page = netmem_to_page((__force netmem_ref)
+				  ptr_ring_consume_bh(&pp->pool->ring));
+	KUNIT_EXPECT_PTR_EQ(test, pp->page, page);
 }
 
 static void svcsock_rx_duplicate_cleanup_test(struct kunit *test)
@@ -1682,7 +1767,9 @@ static void svcsock_rx_max_capacity_reset_test(struct kunit *test)
 	struct svc_tcp_rx_state *state =
 		svcsock_rx_alloc_state(test, SVCSOCK_RX_TEST_MAX_CAPACITY);
 	struct page *page = svcsock_rx_alloc_page(test);
+	struct page *pp_page;
 	unsigned int refs;
+	long pp_refs;
 
 	KUNIT_ASSERT_NOT_NULL(test, state);
 	KUNIT_ASSERT_NOT_NULL(test, page);
@@ -1700,10 +1787,13 @@ static void svcsock_rx_max_capacity_reset_test(struct kunit *test)
 	state->mode = SVC_TCP_RX_MIXED;
 	state->fixed_bytes = 28;
 	state->body_bytes = 28;
+	pp_page = svcsock_rx_alloc_pp_page(test, NULL);
+	pp_refs = svcsock_rx_pp_refs(pp_page);
 	KUNIT_ASSERT_EQ(test,
-			svc_tcp_rx_append_borrowed(state, page, 1, 3, true), 0);
+			svc_tcp_rx_append_borrowed(state, pp_page, 1, 3, true), 0);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_pp_refs(pp_page), pp_refs + 1);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
-	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_pp_refs(pp_page), pp_refs);
 	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->borrowed, state->capacity));
 	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->page_pool, state->capacity));
 	svc_tcp_rx_reset(state);
@@ -1768,6 +1858,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_capacity_release_test),
 	KUNIT_CASE(svcsock_rx_capacity_sizing_test),
 	KUNIT_CASE(svcsock_rx_arena_bound_test),
+	KUNIT_CASE(svcsock_rx_page_pool_recycle_test),
 	KUNIT_CASE(svcsock_rx_duplicate_cleanup_test),
 	KUNIT_CASE(svcsock_rx_concurrent_release_test),
 	KUNIT_CASE(svcsock_rx_exchange_test),
