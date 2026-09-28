@@ -8,6 +8,7 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/net.h>
+#include <net/sock.h>
 #include <linux/percpu_counter.h>
 #include <linux/skbuff.h>
 #include <linux/sunrpc/msg_prot.h>
@@ -173,6 +174,8 @@ svcsock_rx_alloc_fixture(struct kunit *test, unsigned int capacity)
 	fixture->svsk = kunit_kzalloc(test,
 				      struct_size(fixture->svsk, sk_pages, capacity),
 			GFP_KERNEL);
+	if (fixture->svsk)
+		INIT_LIST_HEAD(&fixture->svsk->sk_credit_wait);
 	serv = kunit_kzalloc(test, sizeof(*serv), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, fixture->svsk);
 	KUNIT_ASSERT_NOT_NULL(test, serv);
@@ -1197,6 +1200,224 @@ static void svcsock_rx_back_to_back_locked_heads_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
 }
 
+static struct svc_sock *svcsock_rx_credit_sock(struct kunit *test)
+{
+	struct svc_sock *svsk = kunit_kzalloc(test, sizeof(*svsk), GFP_KERNEL);
+
+	KUNIT_ASSERT_NOT_NULL(test, svsk);
+	INIT_LIST_HEAD(&svsk->sk_credit_wait);
+	kref_init(&svsk->sk_xprt.xpt_ref);
+	svsk->sk_xprt.xpt_net = &init_net;
+	svsk->sk_xprt.xpt_locallen = sizeof(struct sockaddr_in);
+	svsk->sk_xprt.xpt_remotelen = sizeof(struct sockaddr_in);
+	svsk->sk_xprt.xpt_local.ss_family = AF_INET;
+	svsk->sk_xprt.xpt_remote.ss_family = AF_INET;
+	/* Busy transport: real enqueue observes DATA without needing a pool. */
+	set_bit(XPT_BUSY, &svsk->sk_xprt.xpt_flags);
+	return svsk;
+}
+
+/* Defined with the loan fixtures below. */
+static struct svc_tcp_rx_state *
+svcsock_rx_alloc_state(struct kunit *test, unsigned int capacity);
+
+static void svcsock_rx_budget_off(void *unused)
+{
+	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
+}
+
+/*
+ * Budget 40 pages, reserve 10, factor 100: a 10-page record costs 11.  Only
+ * the head waiter is admitted, credit returns on release, and the pool is
+ * whole once no record holds credit.
+ */
+static void svcsock_rx_credit_fifo_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *c = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *d = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock(test);
+	struct svc_sock *sc = svcsock_rx_credit_sock(test);
+	struct svc_sock *sd = svcsock_rx_credit_sock(test);
+	const u32 len = 10 * PAGE_SIZE;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 8L);
+	/* 8 < 11: c waits, then d queues behind it even if credit appears. */
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sc, c, len));
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sd, d, len));
+	svc_tcp_rx_credit_release(a);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 19L);
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sd, d, len));
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(sc, c, len));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
+	KUNIT_EXPECT_FALSE(test, list_empty(&sd->sk_credit_wait));
+	/* Reserve is untouched by ordinary admission. */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 10L);
+	svc_tcp_rx_credit_forget(sd);
+	svc_tcp_rx_credit_release(b);
+	svc_tcp_rx_credit_release(c);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 30L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 10L);
+	KUNIT_EXPECT_FALSE(test, a->credit_linked);
+	svc_tcp_rx_credit_release(a);	/* exactly once: a second call is a no-op */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 30L);
+}
+
+/*
+ * Only the oldest in-flight record draws on the reserve (and past the
+ * budget); a younger record that outgrows its grant pauses.
+ */
+static void svcsock_rx_credit_reserve_oldest_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *old = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *young = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *so = svcsock_rx_credit_sock(test);
+	struct svc_sock *sy = svcsock_rx_credit_sock(test);
+	const u32 len = 10 * PAGE_SIZE;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(30, 6, 100);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(so, old, len));
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sy, young, len));
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 2L);
+	/* The young record needs 14 > 11 + 2: it takes 2 and pauses. */
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_charge(sy, young, 14));
+	KUNIT_EXPECT_EQ(test, young->credit, 13U);
+	KUNIT_EXPECT_FALSE(test, list_empty(&sy->sk_credit_wait));
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 6L);
+	/* The oldest may take the whole reserve and then run past the budget. */
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(so, old, 20));
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
+	KUNIT_EXPECT_EQ(test, old->credit, 20U);
+	KUNIT_EXPECT_EQ(test, old->credit_reserve, 6U);
+	KUNIT_EXPECT_EQ(test, old->credit_over, 3U);
+	/* Release: the reserve refills, overrun is not returned to the pool. */
+	svc_tcp_rx_credit_release(old);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 6L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 11L);
+	/* Now oldest, the paused record completes on the reserve if needed. */
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sy, young, 14));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sy->sk_credit_wait));
+	svc_tcp_rx_credit_release(young);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 24L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 6L);
+}
+
+/* The window never promises more payload than the locked buffer holds. */
+/* Last release disables admission, then every queued transport resumes once. */
+static void svcsock_rx_credit_disable_waiters_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *c = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock(test);
+	struct svc_sock *sc = svcsock_rx_credit_sock(test);
+	const u32 len = 10 * PAGE_SIZE;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(10, 0, 100);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_ASSERT_FALSE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_ASSERT_FALSE(test, svc_tcp_rx_credit_admit(sc, c, len));
+	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sb->sk_xprt.xpt_flags));
+	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
+	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
+	svc_tcp_rx_credit_release(a);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 0L);
+	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sb->sk_xprt.xpt_flags));
+	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
+	KUNIT_EXPECT_EQ(test, kref_read(&sb->sk_xprt.xpt_ref), 1U);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sb->sk_credit_wait));
+	KUNIT_EXPECT_EQ(test, sb->sk_credit_ticket, 0ULL);
+	KUNIT_EXPECT_FALSE(test, b->credit_linked);
+	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
+	KUNIT_EXPECT_EQ(test, kref_read(&sc->sk_xprt.xpt_ref), 1U);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sc, c, len));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
+	KUNIT_EXPECT_EQ(test, sc->sk_credit_ticket, 0ULL);
+	KUNIT_EXPECT_FALSE(test, c->credit_linked);
+}
+
+static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
+	u32 credit;
+	long avail;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(10, 0, 100);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(svsk, state, 10 * PAGE_SIZE));
+	credit = state->credit;
+	avail = svc_tcp_rx_budget_avail();
+	state->terminal = false;
+	kunit_warning_suppress(test) {
+		svc_tcp_rx_reset(state);
+		KUNIT_EXPECT_SUPPRESSED_WARNING_COUNT(test, 1);
+	}
+	KUNIT_EXPECT_TRUE(test, state->credit_linked);
+	KUNIT_EXPECT_EQ(test, state->credit, credit);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), avail);
+	svc_tcp_rx_credit_release(state);
+	state->terminal = true;
+	svc_tcp_rx_reset(state);
+}
+
+static void svcsock_rx_credit_factor_bounds_test(struct kunit *test)
+{
+	/* The largest and the smallest factor a held buffer can be given. */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(22400), (u8)1);
+	KUNIT_EXPECT_GT(test, svc_tcp_rx_window_clamp(SOCK_MIN_RCVBUF, 22400), 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(50), (u8)224);
+}
+
+/* Credit stays off while the receive-buffer clamp is below the floor. */
+static void svcsock_rx_credit_rcvbuf_floor_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
+	const u32 len = 10 * PAGE_SIZE;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
+	svc_tcp_rx_budget_kunit_rcvbuf(64 * 1024);
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(svsk, state, len));
+	KUNIT_EXPECT_EQ(test, state->credit, 0U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 0L);
+	svc_tcp_rx_credit_release(state);
+	svc_tcp_rx_budget_kunit_rcvbuf(128 * 1024);
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(svsk, state, len));
+	KUNIT_EXPECT_EQ(test, state->credit, 11U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 19L);
+	svc_tcp_rx_credit_release(state);
+}
+
+static void svcsock_rx_window_clamp_test(struct kunit *test)
+{
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_window_clamp(262144, 150), 152917);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_window_clamp(65536, 280), 20480);
+	/* Below one page per payload page counts as one. */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_window_clamp(65536, 50), 57344);
+	/* The same geometry in TCP_RMEM_TO_WIN_SCALE (1/256) units. */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(150), 149);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(280), 80);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(50), 224);
+}
+
 static void svcsock_rx_capacity_plus_one_test(struct kunit *test)
 {
 	enum { FRAG_LEN = 8 };
@@ -1851,6 +2072,13 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 			 svcsock_rx_fault_gen_params),
 	KUNIT_CASE(svcsock_rx_mixed_geometry_lifetime_test),
 	KUNIT_CASE(svcsock_rx_back_to_back_locked_heads_test),
+	KUNIT_CASE(svcsock_rx_credit_fifo_test),
+	KUNIT_CASE(svcsock_rx_credit_reserve_oldest_test),
+	KUNIT_CASE(svcsock_rx_window_clamp_test),
+	KUNIT_CASE(svcsock_rx_credit_rcvbuf_floor_test),
+	KUNIT_CASE(svcsock_rx_credit_disable_waiters_test),
+	KUNIT_CASE(svcsock_rx_credit_invalid_reset_test),
+	KUNIT_CASE(svcsock_rx_credit_factor_bounds_test),
 	KUNIT_CASE(svcsock_rx_capacity_plus_one_test),
 	KUNIT_CASE(svcsock_rx_partial_save_restore_test),
 	KUNIT_CASE(svcsock_rx_exclusion_table_test),
