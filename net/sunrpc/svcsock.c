@@ -1516,7 +1516,8 @@ static void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt)
 					 SVC_TCP_RX_REASON_INVARIANT);
 		return;
 	}
-	if (svc_tcp_rx_release_refs(state)) {
+	/* A payload released early (terminal) holds no loaned pages. */
+	if (!state->terminal && svc_tcp_rx_release_refs(state)) {
 		state->reason = SVC_TCP_RX_REASON_INVARIANT;
 		trace_svcsock_tcp_rx_lifetime(xprt, rqstp, state, SVC_TCP_RX_ERROR);
 		return;
@@ -1524,6 +1525,42 @@ static void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt)
 	trace_svcsock_tcp_rx_lifetime(xprt, rqstp, state, SVC_TCP_RX_RELEASE);
 	svc_tcp_rx_clear_xdr(rqstp);
 	svc_tcp_rx_reset(state);
+}
+
+/**
+ * svc_tcp_rx_release_payload - Return a request's loaned payload early
+ * @svsk: the transport that loaned it
+ * @rqstp: the request whose payload the caller has consumed
+ *
+ * Drops the borrowed page references and returns the record's region
+ * credit, exactly once, then detaches the argument page vector so nothing
+ * reads it. svc_tcp_release_ctxt() later finds no payload to release.
+ */
+static void svc_tcp_rx_release_payload(struct svc_sock *svsk,
+				       struct svc_rqst *rqstp)
+{
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+
+	if (!state || state->mode != SVC_TCP_RX_PUBLISHED || state->terminal ||
+	    rqstp->rq_xprt_ctxt != state || rqstp->rq_deferred)
+		return;
+	if (svc_tcp_rx_release_refs(state)) {
+		state->reason = SVC_TCP_RX_REASON_INVARIANT;
+		trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state,
+					      SVC_TCP_RX_ERROR);
+		return;
+	}
+	svc_tcp_rx_credit_release(state);
+	trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state,
+				      SVC_TCP_RX_PAYLOAD_RELEASE);
+	svc_tcp_rx_clear_xdr(rqstp);
+}
+
+static void svc_tcp_release_payload(struct svc_rqst *rqstp)
+{
+	svc_tcp_rx_release_payload(container_of(rqstp->rq_xprt,
+						struct svc_sock, sk_xprt),
+				   rqstp);
 }
 
 /**
@@ -3666,6 +3703,7 @@ static const struct svc_xprt_ops svc_tcp_ops = {
 	.xpo_sendto = svc_tcp_sendto,
 	.xpo_result_payload = svc_sock_result_payload,
 	.xpo_release_ctxt = svc_tcp_release_ctxt,
+	.xpo_release_payload = svc_tcp_release_payload,
 	.xpo_detach = svc_tcp_sock_detach,
 	.xpo_free = svc_sock_free,
 	.xpo_has_wspace = svc_tcp_has_wspace,

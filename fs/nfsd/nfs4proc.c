@@ -1459,6 +1459,35 @@ static void nfsd4_file_mark_deleg_written(struct nfs4_file *fi)
 	spin_unlock(&fi->fi_lock);
 }
 
+/*
+ * May an operation after the current one still read the request's receive
+ * buffer?  The whole COMPOUND is decoded before any operation runs, and
+ * svcxdr_savemem() leaves file handles, names and opaques pointing into
+ * rq_arg, which for a TCP receive loan is the loaned pages.  Only
+ * operations whose decoded arguments are plain values are known not to;
+ * any other later operation keeps the payload.
+ */
+static bool nfsd4_payload_shared(struct svc_rqst *rqstp)
+{
+	struct nfsd4_compoundargs *args = rqstp->rq_argp;
+	struct nfsd4_compoundres *resp = rqstp->rq_resp;
+	u32 i;
+
+	/* the reply's tag is copied from rq_arg once every operation has run */
+	if (args->taglen)
+		return true;
+	for (i = resp->opcnt; i < args->opcnt; i++) {
+		switch (args->ops[i].opnum) {
+		case OP_GETATTR:	/* a copied bitmap */
+		case OP_COMMIT:		/* an offset and a count */
+			continue;
+		default:
+			return true;
+		}
+	}
+	return false;
+}
+
 static __be32
 nfsd4_write(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	    union nfsd4_op_u *u)
@@ -1489,10 +1518,13 @@ nfsd4_write(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	}
 
 	iocb_flags = nfsd4_iocb_flags(write->wr_stable_how);
+	if (nfsd4_payload_shared(rqstp))
+		set_bit(RQ_PAYLOAD_SHARED, &rqstp->rq_flags);
 	status = nfsd_vfs_write(rqstp, &cstate->current_fh, nf,
 				write->wr_offset, &write->wr_payload,
 				&cnt, &iocb_flags,
 				(__be32 *)write->wr_verifier.data);
+	clear_bit(RQ_PAYLOAD_SHARED, &rqstp->rq_flags);
 	write->wr_how_written = nfsd4_stable_how(iocb_flags);
 	nfsd_file_put(nf);
 

@@ -1445,6 +1445,7 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	unsigned int		pflags = current->flags;
 	bool			restore_flags = false;
 	int			nvecs;
+	int			sync;
 
 	trace_nfsd_write_opened(rqstp, fhp, offset, *cnt);
 
@@ -1500,11 +1501,24 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			kiocb.ki_flags |= IOCB_DONTCACHE;
 		fallthrough;
 	case NFSD_IO_BUFFERED:
+		/*
+		 * Copy into the page cache without waiting for storage,
+		 * return the request's receive buffers, then make the
+		 * written range stable if the client asked for that.
+		 */
+		sync = kiocb.ki_flags & (IOCB_DSYNC | IOCB_SYNC);
+		kiocb.ki_flags &= ~(IOCB_DSYNC | IOCB_SYNC);
 		iov_iter_bvec(&iter, ITER_SOURCE, rqstp->rq_bvec, nvecs, *cnt);
 		host_err = vfs_iocb_iter_write(file, &kiocb, &iter);
 		if (host_err < 0)
 			break;
 		*cnt = host_err;
+		if (!test_bit(RQ_PAYLOAD_SHARED, &rqstp->rq_flags))
+			svc_rqst_release_payload(rqstp);
+		if (sync && *cnt)
+			host_err = vfs_fsync_range(file, offset,
+						   offset + *cnt - 1,
+						   !(sync & IOCB_SYNC));
 		break;
 	}
 	if (host_err < 0) {
