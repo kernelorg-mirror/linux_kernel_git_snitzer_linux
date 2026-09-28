@@ -5,10 +5,10 @@
 # Proves the three properties the switch claims:
 #   1. OFF: every WRITE receive classifies mode=copy reason=disabled,
 #      borrowed=0 — and the data is byte-correct (the pre-loan receive).
-#   2. Flipping to ON takes effect on the SAME connection's next RPCs
-#      (per-record consultation), receives publish loans again.
-#   3. The svcsock KUnit suite passes with the switch OFF on the host
-#      (its init/exit forces the switch on per test and restores it).
+#   2. Flipping to ON takes effect on the same transport's later records
+#      (per-record consultation), and those receives publish loans again.
+# Optional KUnit execution is diagnostic here.  Required KUnit-profile rows
+# own KUnit coverage; this production oracle claims only runtime properties.
 #
 # Rig: brd -> nvme-loop -> XFS -> NFS, LOCALIO off (mirrors run-rig-cmp.sh).
 set -u
@@ -19,7 +19,108 @@ PARAM=/sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages
 FAILS=0
 fail() { echo "FAIL: $*"; FAILS=$((FAILS+1)); }
 
+require_default_on() {
+    [ -r "$1" ] && [ "$(cat "$1")" = Y ]
+}
+
+# Correlate classification and publication for each large RPC record.  A
+# common mount is not transport identity: xprt+sequence is the record key.
+check_trace() {
+    awk '
+        /svcsock_tcp_rx_lifetime/ {
+            delete v
+            for (f = 1; f <= NF; f++) {
+                split($f, kv, "=")
+                v[kv[1]] = kv[2]
+            }
+            key = v["xprt"] SUBSEP v["sequence"]
+            if (v["action"] == "classify") {
+                if (key in class_mode) {
+                    print "duplicate classify for " v["xprt"] "/" v["sequence"] > "/dev/stderr"
+                    bad = 1
+                }
+                class_mode[key] = v["mode"]
+                class_reason[key] = v["reason"]
+                next
+            }
+            if (v["action"] != "publish" || v["body"] + 0 < 1000000)
+                next
+            if (key in published) {
+                print "duplicate publish for " v["xprt"] "/" v["sequence"] > "/dev/stderr"
+                bad = 1
+                next
+            }
+            published[key] = 1
+            if (!(key in class_mode)) {
+                print "publish without classify for " v["xprt"] "/" v["sequence"] > "/dev/stderr"
+                bad = 1
+                next
+            }
+            if (only_xprt == "")
+                only_xprt = v["xprt"]
+            else if (v["xprt"] != only_xprt) {
+                print "large records crossed transports: " only_xprt " and " v["xprt"] > "/dev/stderr"
+                bad = 1
+            }
+            sequence = v["sequence"] + 0
+            if (class_mode[key] == "copy" && class_reason[key] == "disabled") {
+                if (v["mode"] != "copy" || v["reason"] != "disabled" ||
+                    v["borrowed"] + 0 != 0) {
+                    print "invalid disabled publish for " v["xprt"] "/" v["sequence"] > "/dev/stderr"
+                    bad = 1
+                }
+                disabled++
+                if (sequence > last_disabled)
+                    last_disabled = sequence
+            } else if (class_mode[key] == "mixed" && class_reason[key] == "none") {
+                if (v["mode"] != "published" ||
+                    (v["reason"] != "none" && v["reason"] != "locked-head") ||
+                    v["borrowed"] + 0 == 0) {
+                    print "invalid enabled publish for " v["xprt"] "/" v["sequence"] > "/dev/stderr"
+                    bad = 1
+                }
+                enabled++
+                if (!first_enabled || sequence < first_enabled)
+                    first_enabled = sequence
+            } else {
+                print "unexpected classify mode/reason " class_mode[key] "/" class_reason[key] \
+                      " for " v["xprt"] "/" v["sequence"] > "/dev/stderr"
+                bad = 1
+            }
+        }
+        END {
+            if (disabled != 16 || enabled != 16) {
+                print "expected 16 disabled and 16 enabled correlated records, saw " \
+                      disabled + 0 " and " enabled + 0 > "/dev/stderr"
+                bad = 1
+            }
+            if (!last_disabled || !first_enabled || last_disabled >= first_enabled) {
+                print "disabled records do not precede enabled records on one transport" > "/dev/stderr"
+                bad = 1
+            }
+            if (!bad)
+                print "correlated disabled=" disabled " enabled=" enabled \
+                      " xprt=" only_xprt " sequence=" last_disabled "<" first_enabled
+            exit bad
+        }' "$1"
+}
+
+if [ "${1:-}" = --check-trace ]; then
+    [ "$#" = 2 ] || { echo "usage: $0 --check-trace TRACE" >&2; exit 2; }
+    check_trace "$2"
+    exit $?
+fi
+if [ "${1:-}" = --check-default ]; then
+    [ "$#" = 2 ] || { echo "usage: $0 --check-default PARAM" >&2; exit 2; }
+    require_default_on "$2"
+    exit $?
+fi
+
 [ -w $PARAM ] || { echo "FAIL: $PARAM missing or not writable"; exit 1; }
+require_default_on "$PARAM" || {
+    echo "FAIL: $PARAM must be Y before production validation"
+    exit 1
+}
 
 # --- rig up (idempotent) ---
 modprobe brd rd_nr=1 rd_size=4194304
@@ -61,21 +162,6 @@ for e in sunrpc/svcsock_tcp_rx_lifetime nfsd/nfsd_write_direct \
     echo 1 > $TRACE/events/$e/enable 2>/dev/null || true
 done
 
-# Count 1 MiB WRITE publishes by (reason, borrowed-or-not) over the trace.
-count_big() {  # count_big REASON_REGEX BORROWED_TEST
-    awk -v re="$1" -v bt="$2" '
-        /svcsock_tcp_rx_lifetime/ && /action=publish/ {
-            delete v
-            for (f = 1; f <= NF; f++) { split($f, kv, "="); v[kv[1]] = kv[2] }
-            if (v["body"] + 0 < 1000000) next
-            if (v["reason"] !~ re) next
-            if (bt == "zero" && v["borrowed"] + 0 != 0) next
-            if (bt == "nonzero" && v["borrowed"] + 0 == 0) next
-            n++
-        }
-        END { print n + 0 }' $TRACE/trace
-}
-
 # --- phase 1+2: OFF then ON across one connection ---
 echo > $TRACE/trace
 echo 1 > $TRACE/tracing_on
@@ -92,23 +178,13 @@ echo 0 > $TRACE/tracing_on
 cmp -s $SRC /export/zc/ks-off || fail "off-state data mismatch"
 cmp -s $SRC /export/zc/ks-on  || fail "on-state data mismatch"
 
-disabled=$(count_big '^disabled$' zero)
-loaned=$(count_big '^(none|locked-head)$' nonzero)
-leaked=$(count_big '^(none|locked-head)$' zero)
 L=$(grep -c nfs_local_open_fh $TRACE/trace || true)
 [ "$L" = 0 ] || fail "LOCALIO engaged"
-[ "$disabled" = 16 ] || fail "expected 16 disabled 1M receives, saw $disabled"
-[ "$loaned" = 16 ] || fail "expected 16 loaned 1M receives after flip, saw $loaned"
-[ "$leaked" = 0 ] || fail "$leaked loan-reason receives with borrowed=0"
-borrowed_off=$(awk '/svcsock_tcp_rx_lifetime/ && /reason=disabled/ {
-        for (f = 1; f <= NF; f++) { split($f, kv, "="); v[kv[1]] = kv[2] }
-        s += v["borrowed"] } END { print s + 0 }' $TRACE/trace)
-[ "$borrowed_off" = 0 ] || fail "disabled receives borrowed $borrowed_off bytes"
-echo "== off/on: disabled-1M=$disabled loaned-1M-after-flip=$loaned" \
-     "borrowed-while-off=$borrowed_off"
+check_trace "$TRACE/trace" || fail "classify/publish correlation"
 rm -f /export/zc/ks-off /export/zc/ks-on
 
-# --- phase 3: svcsock KUnit suite with the switch OFF on the host ---
+# --- optional diagnostic: required KUnit-profile rows own KUnit coverage ---
+KUNIT=unavailable
 if modinfo svcsock_kunit >/dev/null 2>&1; then
     modprobe -r svcsock_kunit 2>/dev/null || true
     modprobe -r kunit 2>/dev/null || true
@@ -120,6 +196,7 @@ if modinfo svcsock_kunit >/dev/null 2>&1; then
     echo "== KUnit (switch off): ${totals:-NO RESULT}"
     echo "$totals" | grep -q 'fail:0' || fail "svcsock suite not green with switch off"
     [ "$(cat $PARAM)" = N ] || fail "suite did not restore the host's switch setting"
+    KUNIT=pass
     echo Y > $PARAM
     modprobe -r svcsock_kunit 2>/dev/null || true
 else
@@ -128,6 +205,6 @@ else
 fi
 
 echo Y > /sys/module/nfs/parameters/localio_enabled
-echo "== RESULT: fails=$FAILS (switch restored to Y)"
-[ $FAILS = 0 ] && echo "== KILL-SWITCH VALIDATED: off copies with reason=disabled, flip re-loans mid-connection, suite green with host switch off"
+echo "== RESULT: fails=$FAILS (switch restored to Y; optional-kunit=$KUNIT)"
+[ $FAILS = 0 ] && echo "== KILL-SWITCH VALIDATED: correlated off copies and later on loans on one transport"
 exit $FAILS
