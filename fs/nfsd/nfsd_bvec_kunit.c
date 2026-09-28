@@ -269,13 +269,13 @@ static void nfsd_bvec_decode_error_test(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, args);
 
 	/*
-	 * [p718 backport to v7.1.8] the NFSv3 WRITE decoder on this base does
-	 * not reject an out-of-range stable_how (that check arrived with
-	 * 9ff1cfefd2 in 7.2), so the rejection expectation is not applicable.
+	 * The selected public decoder rejects an out-of-range stable_how;
+	 * keep that provider behavior explicit while checking bvec errors.
 	 */
 	fixture->head[5] = cpu_to_be32(NFS_FILE_SYNC + 1);
 	nfsd_bvec_decode_context_init(context, &fixture->authoritative, args);
 	decoded = nfs3svc_decode_writeargs(&context->rqst, &context->stream);
+	KUNIT_EXPECT_FALSE(test, decoded);
 	fixture->head[5] = cpu_to_be32(NFS_UNSTABLE);
 
 	memset(args, 0, sizeof(*args));
