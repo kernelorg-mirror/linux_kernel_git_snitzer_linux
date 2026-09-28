@@ -9,6 +9,7 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/debugfs.h>
 #include <linux/device.h>
 
 #include <net/netdev_lock.h>
@@ -38,6 +39,252 @@ DEFINE_STATIC_KEY_FALSE(page_pool_mem_providers);
 #define DEFER_WARN_INTERVAL (60 * HZ)
 
 #define BIAS_MAX	(LONG_MAX >> 1)
+
+/*
+ * A pool's network device is named by its parent bus device (dev_name(), for
+ * example a PCI address or "virtio0"), which exists before a driver creates
+ * pools at probe and survives renames, or by its own name when it has no
+ * parent.  A pool created without a netdev is named by its DMA device: the
+ * same PCI address for a physical NIC, the interface itself for veth.
+ *
+ * Optional fixed receive-buffer region.  When rx_region_dev lists network
+ * devices (comma-separated) and rx_region_pages is non-zero, every order-0
+ * pool created for a listed device allocates only from one physically
+ * contiguous region that all listed devices share, allocated when the first
+ * such pool is created, and its pages return to the region instead of the
+ * page allocator.  An empty region fails the allocation: that is the receive
+ * stall.  A page another holder still references when its pool returns it
+ * leaves the region for good and is counted as escaped; it is never replaced.
+ *
+ * The region outlives its pools, so that taking a port down and up, or
+ * resizing its rings, finds the same memory again and needs no second
+ * contiguous allocation.  It is given back only once no pool is bound to it
+ * and it no longer matches what is asked for: rx_region_pages has changed, or
+ * rx_region_dev is empty.  That is checked when the last pool bound to it is
+ * destroyed and again when the next pool of a listed device is created, so a
+ * region is resized by taking every listed device's pools away (the ports
+ * down), writing the new size, and bringing them back.  A pool is not
+ * destroyed while any of its pages is still out, a loaned one included, so
+ * by then every page is either back in the region or escaped.
+ */
+#define RX_REGION_DEV_LEN	256
+static char rx_region_dev[RX_REGION_DEV_LEN];
+module_param_string(rx_region_dev, rx_region_dev, RX_REGION_DEV_LEN, 0644);
+MODULE_PARM_DESC(rx_region_dev,
+		 "Network devices, comma-separated (parent bus device, else interface name), whose page pools share the fixed receive region");
+static unsigned int rx_region_pages;
+module_param(rx_region_pages, uint, 0644);
+MODULE_PARM_DESC(rx_region_pages,
+		 "Pages in the fixed receive region, allocated with the device's first page pool; a change takes effect once no pool is bound to the region");
+
+struct page_pool_rx_region {
+	spinlock_t lock;
+	unsigned long base_pfn;
+	unsigned long nr;
+	unsigned long nfree;
+	unsigned long min_free;
+	unsigned long alloc_fail;
+	unsigned long escaped;
+	unsigned int pools;		/* bound to this region; rx_region_mutex */
+	struct dentry *debugfs;
+	struct page **free;
+	char dev[RX_REGION_DEV_LEN];
+};
+
+static struct page_pool_rx_region *rx_region;
+static DEFINE_MUTEX(rx_region_mutex);
+
+static int rx_region_show(struct seq_file *m, void *v)
+{
+	struct page_pool_rx_region *r = m->private;
+	unsigned long flags;
+
+	spin_lock_irqsave(&r->lock, flags);
+	seq_printf(m, "dev %s\nphys_base 0x%llx\npages %lu\nfree %lu\n"
+		   "min_free %lu\nalloc_fail %lu\nescaped %lu\n", r->dev,
+		   (u64)r->base_pfn << PAGE_SHIFT, r->nr, r->nfree,
+		   r->min_free, r->alloc_fail, r->escaped);
+	spin_unlock_irqrestore(&r->lock, flags);
+	return 0;
+}
+
+static int rx_region_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, rx_region_show, inode->i_private);
+}
+
+/* Any write restarts the low-water mark at the current free count. */
+static ssize_t rx_region_write(struct file *file, const char __user *buf,
+			       size_t len, loff_t *ppos)
+{
+	struct page_pool_rx_region *r = file_inode(file)->i_private;
+	unsigned long flags;
+
+	spin_lock_irqsave(&r->lock, flags);
+	r->min_free = r->nfree;
+	spin_unlock_irqrestore(&r->lock, flags);
+	return len;
+}
+
+static const struct file_operations rx_region_fops = {
+	.owner = THIS_MODULE,
+	.open = rx_region_open,
+	.read = seq_read,
+	.write = rx_region_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+/* @dev is one of the comma-separated names in rx_region_dev. */
+static bool page_pool_rx_region_listed(const char *dev)
+{
+	char list[RX_REGION_DEV_LEN], *cur = list, *name;
+
+	strscpy(list, rx_region_dev, sizeof(list));
+	while ((name = strsep(&cur, ",")) != NULL) {
+		name = strim(name);
+		if (*name && sysfs_streq(name, dev))
+			return true;
+	}
+	return false;
+}
+
+/*
+ * Give the region back if nothing is bound to it and it is not the one asked
+ * for any more.  Only the pages on the free list are ours to free: an escaped
+ * page went to the page allocator with its last reference.
+ */
+static void page_pool_rx_region_reap(void)
+{
+	struct page_pool_rx_region *r = rx_region;
+	unsigned long i;
+
+	lockdep_assert_held(&rx_region_mutex);
+	if (!r || r->pools)
+		return;
+	if (rx_region_dev[0] && READ_ONCE(rx_region_pages) == r->nr)
+		return;
+	/* No pool, so no page can be out: keep the memory if that is wrong. */
+	if (WARN_ON_ONCE(r->nfree + r->escaped != r->nr))
+		return;
+	debugfs_remove(r->debugfs);
+	for (i = 0; i < r->nfree; i++)
+		__free_page(r->free[i]);
+	pr_info("page_pool: fixed rx region for %s freed: %lu pages at 0x%llx, %lu escaped\n",
+		r->dev, r->nr, (u64)r->base_pfn << PAGE_SHIFT, r->escaped);
+	kvfree(r->free);
+	kfree(r);
+	rx_region = NULL;
+}
+
+/* @pool is being destroyed: every page it took is back or has escaped. */
+static void page_pool_rx_region_unbind(struct page_pool *pool)
+{
+	if (!pool->rx_region)
+		return;
+	mutex_lock(&rx_region_mutex);
+	if (pool->rx_region == rx_region && !WARN_ON_ONCE(!rx_region->pools))
+		rx_region->pools--;
+	pool->rx_region = NULL;
+	page_pool_rx_region_reap();
+	mutex_unlock(&rx_region_mutex);
+}
+
+static struct page_pool_rx_region *
+page_pool_rx_region_get(const struct page_pool *pool)
+{
+	const struct net_device *netdev = pool->slow.netdev;
+	unsigned long i, nr = READ_ONCE(rx_region_pages);
+	struct page_pool_rx_region *r;
+	struct page *base = NULL;
+	const char *dev;
+
+	if (!nr || pool->p.order || !rx_region_dev[0])
+		return NULL;
+	if (netdev)
+		dev = netdev->dev.parent ? dev_name(netdev->dev.parent) :
+					   netdev->name;
+	else if (pool->p.dev)
+		dev = dev_name(pool->p.dev);
+	else
+		return NULL;
+	if (!page_pool_rx_region_listed(dev))
+		return NULL;
+	mutex_lock(&rx_region_mutex);
+	/* A region left over from another size goes before a new one is made. */
+	page_pool_rx_region_reap();
+	/* Every listed device shares the one region. */
+	r = rx_region;
+	if (r)
+		goto out;
+	r = kzalloc(sizeof(*r), GFP_KERNEL);
+	if (!r)
+		goto out;
+	r->free = kvmalloc_array(nr, sizeof(*r->free), GFP_KERNEL);
+#ifdef CONFIG_CONTIG_ALLOC
+	if (r->free)
+		base = alloc_contig_pages(nr, GFP_KERNEL,
+					  pool->p.nid == NUMA_NO_NODE ?
+					  numa_mem_id() : pool->p.nid, NULL);
+#endif
+	if (!base) {
+		pr_warn("page_pool: no %lu-page fixed rx region for %s\n",
+			nr, dev);
+		kvfree(r->free);
+		kfree(r);
+		r = NULL;
+		goto out;
+	}
+	spin_lock_init(&r->lock);
+	r->base_pfn = page_to_pfn(base);
+	r->nr = nr;
+	for (i = 0; i < nr; i++) {
+		struct page *page = pfn_to_page(r->base_pfn + i);
+
+		/*
+		 * page_pool ORs its signature into pp_magic, which overlays
+		 * page->lru.next.  Pages from the page allocator carry list
+		 * poison there; a contiguous allocation may leave a live list
+		 * pointer, so start every region page as a released pool page.
+		 */
+		page->pp_magic = 0;
+		r->free[i] = page;
+	}
+	r->nfree = nr;
+	r->min_free = nr;
+	strscpy(r->dev, rx_region_dev, RX_REGION_DEV_LEN);
+	strim(r->dev);
+	rx_region = r;
+	r->debugfs = debugfs_create_file("page_pool_rx_region", 0600, NULL, r,
+					 &rx_region_fops);
+	pr_info("page_pool: fixed rx region for %s: %lu pages at 0x%llx\n",
+		r->dev, nr, (u64)r->base_pfn << PAGE_SHIFT);
+out:
+	if (r)
+		r->pools++;
+	mutex_unlock(&rx_region_mutex);
+	return r;
+}
+
+/* Return a region page; false when it is not ours or another holder has it. */
+static bool page_pool_rx_region_put(struct page_pool_rx_region *r,
+				    struct page *page)
+{
+	unsigned long pfn = page_to_pfn(page), flags;
+	bool kept = false;
+
+	if (pfn - r->base_pfn >= r->nr)
+		return false;
+	spin_lock_irqsave(&r->lock, flags);
+	if (page_ref_count(page) == 1) {
+		r->free[r->nfree++] = page;
+		kept = true;
+	} else {
+		r->escaped++;
+	}
+	spin_unlock_irqrestore(&r->lock, flags);
+	return kept;
+}
 
 #ifdef CONFIG_PAGE_POOL_STATS
 static DEFINE_PER_CPU(struct page_pool_recycle_stats, pp_system_recycle_stats);
@@ -302,6 +549,8 @@ static int page_pool_init(struct page_pool *pool,
 	} else if (pool->p.order > MAX_PAGE_ORDER) {
 		err = -EINVAL;
 		goto free_ptr_ring;
+	} else {
+		pool->rx_region = page_pool_rx_region_get(pool);
 	}
 
 	return 0;
@@ -359,6 +608,7 @@ page_pool_create_percpu(const struct page_pool_params *params, int cpuid)
 
 err_uninit:
 	page_pool_uninit(pool);
+	page_pool_rx_region_unbind(pool);
 err_free:
 	pr_warn("%s() gave up with errno %d\n", __func__, err);
 	kfree(pool);
@@ -607,6 +857,49 @@ static struct page *__page_pool_alloc_page_order(struct page_pool *pool,
 	return page;
 }
 
+/* Slow path for a pool bound to the fixed receive region. */
+static noinline netmem_ref page_pool_rx_region_alloc(struct page_pool *pool,
+						     gfp_t gfp)
+{
+	struct page_pool_rx_region *r = pool->rx_region;
+	struct page *pages[PP_ALLOC_CACHE_REFILL];
+	unsigned long flags;
+	netmem_ref netmem;
+	int i, n;
+
+	if (unlikely(pool->alloc.count > 0))
+		return pool->alloc.cache[--pool->alloc.count];
+
+	spin_lock_irqsave(&r->lock, flags);
+	n = min_t(unsigned long, r->nfree, PP_ALLOC_CACHE_REFILL);
+	for (i = 0; i < n; i++)
+		pages[i] = r->free[--r->nfree];
+	if (r->nfree < r->min_free)
+		r->min_free = r->nfree;
+	if (!n)
+		r->alloc_fail++;
+	spin_unlock_irqrestore(&r->lock, flags);
+
+	for (i = 0; i < n; i++) {
+		netmem = page_to_netmem(pages[i]);
+		if (pool->dma_map &&
+		    unlikely(!page_pool_dma_map(pool, netmem, gfp))) {
+			page_pool_rx_region_put(r, pages[i]);
+			continue;
+		}
+		page_pool_set_pp_info(pool, netmem);
+		pool->alloc.cache[pool->alloc.count++] = netmem;
+		pool->pages_state_hold_cnt++;
+		trace_page_pool_state_hold(pool, netmem,
+					   pool->pages_state_hold_cnt);
+	}
+	if (likely(pool->alloc.count > 0)) {
+		alloc_stat_inc(pool, slow);
+		return pool->alloc.cache[--pool->alloc.count];
+	}
+	return 0;
+}
+
 /* slow path */
 static noinline netmem_ref __page_pool_alloc_netmems_slow(struct page_pool *pool,
 							  gfp_t gfp)
@@ -684,6 +977,8 @@ netmem_ref page_pool_alloc_netmems(struct page_pool *pool, gfp_t gfp)
 	/* Slow-path: cache empty, do real allocation */
 	if (static_branch_unlikely(&page_pool_mem_providers) && pool->mp_ops)
 		netmem = pool->mp_ops->alloc_netmems(pool, gfp);
+	else if (unlikely(pool->rx_region))
+		netmem = page_pool_rx_region_alloc(pool, gfp);
 	else
 		netmem = __page_pool_alloc_netmems_slow(pool, gfp);
 	return netmem;
@@ -765,6 +1060,7 @@ static __always_inline void __page_pool_release_netmem_dma(struct page_pool *poo
  */
 static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem)
 {
+	struct page_pool_rx_region *region = pool->rx_region;
 	int count;
 	bool put;
 
@@ -782,7 +1078,9 @@ static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem)
 
 	if (put) {
 		page_pool_clear_pp_info(netmem);
-		put_page(netmem_to_page(netmem));
+		if (likely(!region) ||
+		    !page_pool_rx_region_put(region, netmem_to_page(netmem)))
+			put_page(netmem_to_page(netmem));
 	}
 	/* An optimization would be to call __free_pages(page, pool->p.order)
 	 * knowing page is not part of page-cache (thus avoiding a
@@ -1139,6 +1437,7 @@ static void __page_pool_destroy(struct page_pool *pool)
 
 	page_pool_unlist(pool);
 	page_pool_uninit(pool);
+	page_pool_rx_region_unbind(pool);
 
 	kfree(pool);
 }
