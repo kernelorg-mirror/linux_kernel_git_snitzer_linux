@@ -25,6 +25,7 @@
 #include <linux/slab.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
+#include <linux/skbuff_ref.h>
 #include <linux/file.h>
 #include <linux/freezer.h>
 #include <linux/bvec.h>
@@ -36,6 +37,7 @@
 #include <net/udp.h>
 #include <net/tcp.h>
 #include <net/tcp_states.h>
+#include <net/page_pool/helpers.h>
 #include <net/tls_prot.h>
 #include <net/handshake.h>
 #include <linux/uaccess.h>
@@ -247,6 +249,29 @@ static bool svc_tcp_rx_can_coalesce(const struct svc_tcp_rx_state *state,
 		last->bv_page == page && last->bv_offset + last->bv_len == offset;
 }
 
+/*
+ * A borrowed page-pool page from a recycling skb is held the way the skb
+ * holds it, by a page-pool reference, so releasing the loan recycles the
+ * page into its pool.  A plain page reference would make the pool eject the
+ * page when the skb is freed.  Every other borrowed page takes a page
+ * reference.
+ */
+static void svc_tcp_rx_get_borrowed(struct page *page, bool page_pool)
+{
+#if IS_ENABLED(CONFIG_PAGE_POOL)
+	if (page_pool) {
+		page_pool_ref_netmem(netmem_compound_head(page_to_netmem(page)));
+		return;
+	}
+#endif
+	get_page(page);
+}
+
+static void svc_tcp_rx_put_borrowed(struct page *page, bool page_pool)
+{
+	skb_page_unref(page_to_netmem(page), page_pool);
+}
+
 static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
 			     struct page *page, unsigned int offset,
 			     unsigned int len, bool borrowed, bool page_pool)
@@ -268,7 +293,7 @@ static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
 			return -ENOSPC;
 		bvec = &state->bvec[state->count];
 		if (borrowed)
-			get_page(page);
+			svc_tcp_rx_get_borrowed(page, page_pool);
 		bvec_set_page(bvec, page, len, offset);
 		if (borrowed) {
 			__set_bit(state->count, state->borrowed);
@@ -355,7 +380,8 @@ static int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 						       body_offset, bvec);
 			if (ret)
 				return ret;
-			put_page(bvec->bv_page);
+			svc_tcp_rx_put_borrowed(bvec->bv_page,
+						test_bit(index, state->page_pool));
 			__clear_bit(index, state->borrowed);
 			state->refs_released++;
 			state->borrowed_count--;
@@ -428,7 +454,8 @@ static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 	for (index = 0; index < state->count; index++) {
 		if (!test_bit(index, state->borrowed))
 			continue;
-		put_page(state->bvec[index].bv_page);
+		svc_tcp_rx_put_borrowed(state->bvec[index].bv_page,
+					test_bit(index, state->page_pool));
 		__clear_bit(index, state->borrowed);
 		__clear_bit(index, state->page_pool);
 		__clear_bit(index, state->merged);
@@ -1760,6 +1787,7 @@ struct svc_tcp_rx_walk {
 	u32			first;
 	u32			last;
 	u32			body_base;
+	bool			pp_recycle;	/* current skb holds page-pool refs */
 };
 
 static int svc_tcp_rx_materialize_fallback(struct svc_tcp_rx_walk *walk,
@@ -1805,15 +1833,17 @@ static void svc_tcp_rx_retract_last(struct svc_tcp_rx_state *state)
 
 	state->body_bytes -= bvec->bv_len;
 	if (__test_and_clear_bit(index, state->borrowed)) {
+		bool page_pool = __test_and_clear_bit(index, state->page_pool);
+
 		if (__test_and_clear_bit(index, state->merged))
 			state->copied_bytes -= bvec->bv_len;
 		else
 			state->borrowed_bytes -= bvec->bv_len;
-		if (__test_and_clear_bit(index, state->page_pool))
+		if (page_pool)
 			state->page_pool_bytes -= bvec->bv_len;
 		state->borrowed_count--;
 		state->refs_released++;
-		put_page(bvec->bv_page);
+		svc_tcp_rx_put_borrowed(bvec->bv_page, page_pool);
 	} else {
 		state->copied_bytes -= bvec->bv_len;
 	}
@@ -1934,7 +1964,8 @@ static int svc_tcp_rx_borrow_segment(struct svc_tcp_rx_walk *walk,
 					       PAGE_SIZE - page_offset);
 		struct page *span_page = page + ((offset + consumed) >> PAGE_SHIFT);
 		u32 expected = walk->body_base + start + consumed - walk->first;
-		bool page_pool = page_pool_page_is_pp(compound_head(span_page));
+		bool page_pool = walk->pp_recycle &&
+			page_pool_page_is_pp(compound_head(span_page));
 
 		if (WARN_ON_ONCE(state->body_bytes != expected))
 			return -EINVAL;
@@ -2007,6 +2038,7 @@ static int svc_tcp_rx_walk_skb(struct svc_tcp_rx_walk *walk,
 	end = min(walk->last, skb_end);
 	if (start >= end)
 		return 0;
+	walk->pp_recycle = skb->pp_recycle;
 	if (state->mode == SVC_TCP_RX_COPY)
 		return svc_tcp_rx_copy_segment(walk, start, end - start,
 					       state->reason);

@@ -166,6 +166,7 @@ struct page_pool_stats {
 #define PAGE_POOL_FRAG_GROUP_ALIGN	(4 * sizeof(long))
 
 struct memory_provider_ops;
+struct page_pool_rx_region;
 
 struct pp_memory_provider_params {
 	void *mp_priv;
@@ -236,6 +237,7 @@ struct page_pool {
 	const struct memory_provider_ops *mp_ops;
 
 	struct xarray dma_mapped;
+	struct page_pool_rx_region *rx_region;
 
 #ifdef CONFIG_PAGE_POOL_STATS
 	/* recycle stats are per-cpu to avoid locking */
