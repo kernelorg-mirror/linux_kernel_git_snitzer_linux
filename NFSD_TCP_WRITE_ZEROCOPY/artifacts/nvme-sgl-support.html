@@ -1,0 +1,600 @@
+<title>NVMe SGL Page Loan</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@85,500..750&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root {
+    --ground: #eef1f4; --surface: #ffffff; --surface-2: #f6f8fa;
+    --ink: #16202a; --ink-soft: #33434f; --muted: #5a6b78; --faint: #8595a1;
+    --hair: #dce3e9; --hair-strong: #c4cfd8;
+    --accent: #1f5c8b; --accent-soft: #e4eef5;
+    --cost: #b6431f; --cost-soft: #f7e6df;
+    --gain: #12735d; --gain-soft: #dcefe8;
+    --shadow: 0 1px 2px rgba(22,32,42,.05), 0 8px 24px -12px rgba(22,32,42,.14);
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --disp: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground: #0b1218; --surface: #121c24; --surface-2: #0e1720;
+      --ink: #e7eef4; --ink-soft: #c3d0da; --muted: #90a1ae; --faint: #6b7d8a;
+      --hair: #24333f; --hair-strong: #33454f;
+      --accent: #5ba3d6; --accent-soft: #16303f;
+      --cost: #e08a63; --cost-soft: #3a2015;
+      --gain: #4bbb9a; --gain-soft: #10302a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #0b1218; --surface: #121c24; --surface-2: #0e1720;
+    --ink: #e7eef4; --ink-soft: #c3d0da; --muted: #90a1ae; --faint: #6b7d8a;
+    --hair: #24333f; --hair-strong: #33454f;
+    --accent: #5ba3d6; --accent-soft: #16303f;
+    --cost: #e08a63; --cost-soft: #3a2015;
+    --gain: #4bbb9a; --gain-soft: #10302a;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--sans); font-size: 17px; line-height: 1.62;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+  @media (max-width: 480px) { .wrap { padding: 0 16px; } }
+  section { padding: 40px 0; border-top: 1px solid var(--hair); }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 14px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; flex: 0 0 auto; }
+  .eyebrow.hot { color: var(--cost); }
+  .eyebrow.hot::before { background: var(--cost); }
+  .eyebrow.ok { color: var(--gain); }
+  .eyebrow.ok::before { background: var(--gain); }
+
+  h1 {
+    font-family: var(--disp); font-weight: 720; font-stretch: 85%;
+    font-size: clamp(31px, 6.4vw, 48px); line-height: 1.04;
+    letter-spacing: -.015em; text-wrap: balance; margin: 0 0 18px;
+  }
+  h1 .ok { color: var(--gain); }
+  h1 .lock { color: var(--cost); }
+  h2 {
+    font-family: var(--disp); font-weight: 680; font-stretch: 87%;
+    font-size: clamp(22px, 4vw, 28px); letter-spacing: -.01em;
+    line-height: 1.12; text-wrap: balance; margin: 0 0 16px;
+  }
+  h3 { font-family: var(--disp); font-weight: 650; font-stretch: 90%; font-size: 18px; margin: 0 0 6px; text-wrap: balance; }
+  p { margin: 0 0 16px; color: var(--ink-soft); }
+  p:last-child { margin-bottom: 0; }
+  strong { color: var(--ink); font-weight: 640; }
+  a { color: var(--accent); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+  code {
+    font-family: var(--mono); font-size: .84em; background: var(--surface-2);
+    border: 1px solid var(--hair); padding: .08em .38em; border-radius: 4px;
+    color: var(--ink); overflow-wrap: anywhere;
+  }
+  .lede { font-size: 20px; line-height: 1.5; color: var(--ink); }
+  .lede .hl { color: var(--gain); font-weight: 600; }
+  .lede .hc { color: var(--cost); font-weight: 600; }
+
+  header { padding: 56px 0 40px; }
+  .provenance {
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+    line-height: 1.7; margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--hair);
+    overflow-wrap: anywhere;
+  }
+  .provenance span { color: var(--ink-soft); }
+
+  .metrics {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    background: var(--hair); border: 1px solid var(--hair);
+    border-radius: 10px; overflow: hidden; margin-top: 30px;
+  }
+  .metric { background: var(--surface); padding: 18px 16px; }
+  .metric .n {
+    font-family: var(--mono); font-size: clamp(20px, 4.4vw, 26px); font-weight: 600;
+    letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ink); line-height: 1;
+  }
+  .metric .n.cost { color: var(--cost); }
+  .metric .n.gain { color: var(--gain); }
+  .metric .l {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted); margin-top: 9px; line-height: 1.4;
+  }
+  @media (max-width: 560px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+
+  .delta { display: flex; gap: 16px; padding: 20px 0; border-top: 1px solid var(--hair); }
+  .delta:first-of-type { border-top: none; padding-top: 4px; }
+  .delta .mark {
+    flex: 0 0 auto; font-family: var(--mono); font-size: 15px; font-weight: 600;
+    color: var(--surface); background: var(--accent); width: 30px; height: 30px;
+    border-radius: 7px; display: flex; align-items: center; justify-content: center;
+  }
+  .delta .mark.cost { background: var(--cost); }
+  .delta .mark.gain { background: var(--gain); }
+  .delta .body { flex: 1 1 auto; min-width: 0; }
+  .delta .body p { margin: 0; font-size: 15.5px; }
+  .delta .body h3 { margin-bottom: 4px; }
+  .tag {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 4px;
+    margin-left: 8px; vertical-align: middle; white-space: nowrap; font-stretch: 100%;
+  }
+  .tag.base { background: var(--gain-soft); color: var(--gain); }
+  .tag.rework { background: var(--accent-soft); color: var(--accent); }
+  .tag.new { background: var(--cost-soft); color: var(--cost); }
+
+  /* attribute path diagram */
+  .diagram {
+    background: var(--surface); border: 1px solid var(--hair); border-radius: 12px;
+    padding: 24px 22px 20px; box-shadow: var(--shadow); margin: 8px 0 20px;
+  }
+  .path-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .path-name { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; color: var(--accent); }
+  .path-tally { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .path-tally b { color: var(--ink); font-weight: 600; }
+  .flow { display: flex; align-items: stretch; overflow-x: auto; padding-bottom: 4px; }
+  .stage { flex: 1 0 auto; min-width: 104px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; }
+  .chip {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.25; padding: 9px 10px;
+    border-radius: 7px; border: 1px solid var(--hair-strong); background: var(--surface-2);
+    color: var(--ink-soft); width: 100%; min-height: 52px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .chip.gate { border: 1.5px solid var(--gain); background: var(--gain-soft); color: var(--gain); font-weight: 600; }
+  .arrow { align-self: flex-start; flex: 0 0 auto; padding: 16px 6px 0; color: var(--faint); font-family: var(--mono); font-size: 15px; }
+  .stage .cap { font-family: var(--mono); font-size: 10.5px; color: var(--muted); line-height: 1.3; }
+  .diagram-note {
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin: 18px 0 0;
+    padding-top: 14px; border-top: 1px dashed var(--hair-strong); line-height: 1.6;
+  }
+
+  .verdict {
+    background: var(--surface); border: 1px solid var(--hair);
+    border-left: 4px solid var(--cost); border-radius: 10px;
+    padding: 26px 28px; box-shadow: var(--shadow); margin: 10px 0 22px;
+  }
+  .verdict.gain { border-left-color: var(--gain); }
+  .verdict.acc { border-left-color: var(--accent); }
+  @media (max-width: 480px) { .verdict { padding: 20px 18px; } }
+  .verdict .big {
+    font-family: var(--disp); font-weight: 700; font-stretch: 87%;
+    font-size: clamp(19px, 3.4vw, 23px); line-height: 1.3; color: var(--ink);
+    margin: 0 0 14px; text-wrap: balance;
+  }
+  .verdict .big em { font-style: normal; color: var(--cost); }
+  .verdict.gain .big em { color: var(--gain); }
+  .geom {
+    font-family: var(--mono); font-size: 13px; line-height: 1.8; color: var(--ink-soft);
+    background: var(--surface-2); border: 1px solid var(--hair); border-radius: 8px;
+    padding: 14px 18px; margin: 16px 0; overflow-x: auto; white-space: pre;
+  }
+  .geom b { color: var(--cost); font-weight: 600; }
+  .geom i { color: var(--gain); font-style: normal; font-weight: 600; }
+
+  .matrix {
+    display: grid; grid-template-columns: 1fr auto; gap: 1px;
+    background: var(--hair); border: 1px solid var(--hair);
+    border-radius: 10px; overflow: hidden; margin: 4px 0 8px;
+  }
+  .matrix .cell { background: var(--surface); padding: 12px 16px; align-content: center; font-size: 15px; }
+  .matrix .cell.k { color: var(--ink-soft); }
+  .matrix .cell.v { display: flex; align-items: center; justify-content: flex-end; }
+  .pill {
+    font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .pill.yes { background: var(--gain-soft); color: var(--gain); border-color: var(--gain); }
+  .pill.no  { background: var(--cost-soft); color: var(--cost); border-color: var(--cost); }
+  .pill.pend { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--hair); border-radius: 10px; margin: 6px 0 14px; background: var(--surface); }
+  table.q { width: 100%; border-collapse: collapse; font-size: 14.5px; min-width: 540px; }
+  table.q th, table.q td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--hair); vertical-align: top; }
+  table.q thead th { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); font-weight: 600; }
+  table.q tbody tr:last-child td { border-bottom: none; }
+  table.q td.r { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--gain); font-weight: 600; font-size: 13px; }
+  table.q td.x { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--cost); font-weight: 600; font-size: 13px; }
+  table.q td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; white-space: nowrap; }
+  table.q td.sha { font-family: var(--mono); font-size: 12px; color: var(--accent); white-space: nowrap; }
+  table.q td.sha.t { color: var(--muted); }
+  table.q tr.kunit td { background: var(--surface-2); }
+  table.q td code { white-space: nowrap; }
+
+  ul.steps { list-style: none; margin: 0 0 8px; padding: 0; }
+  ul.steps li { position: relative; padding: 12px 0 12px 28px; border-top: 1px solid var(--hair); color: var(--ink-soft); font-size: 15.5px; }
+  ul.steps li:first-child { border-top: none; }
+  ul.steps li::before { content: "\2192"; position: absolute; left: 0; top: 12px; font-family: var(--mono); color: var(--accent); }
+  ol.plan { margin: 0 0 8px; padding-left: 22px; color: var(--ink-soft); font-size: 15.5px; }
+  ol.plan li { padding: 6px 0; }
+  ol.plan li::marker { font-family: var(--mono); color: var(--accent); font-weight: 600; }
+
+  .branches { display: flex; flex-direction: column; gap: 12px; margin: 10px 0 4px; }
+  .branch { background: var(--surface); border: 1px solid var(--hair); border-left: 3px solid var(--accent); border-radius: 8px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .branch.clean { border-left-color: var(--gain); }
+  .branch.old { border-left-color: var(--hair-strong); }
+  .branch .bname { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--accent); word-break: break-all; margin-bottom: 6px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .branch.clean .bname { color: var(--gain); }
+  .branch.old .bname { color: var(--muted); }
+  .branch .bname .btag { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; font-weight: 600; word-break: normal; }
+  .branch.clean .bname .btag { background: var(--gain-soft); color: var(--gain); }
+  .branch .bname .btag.int { background: var(--accent-soft); color: var(--accent); }
+  .branch.old .bname .btag { background: var(--surface-2); color: var(--muted); border: 1px solid var(--hair-strong); }
+  .branch p { margin: 0; font-size: 15px; color: var(--ink-soft); }
+
+  footer {
+    padding: 34px 0 60px; border-top: 1px solid var(--hair);
+    font-family: var(--mono); font-size: 12px; color: var(--muted); line-height: 1.7;
+    overflow-wrap: anywhere;
+  }
+  footer .r { color: var(--ink-soft); }
+  footer a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  pre {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+    background: var(--surface-2); border: 1px solid var(--hair); border-radius: 8px;
+    padding: 16px 18px; overflow-x: auto; color: var(--ink-soft); margin: 0 0 16px;
+  }
+  pre .c { color: var(--faint); }
+  pre .hot { color: var(--cost); font-weight: 600; }
+  pre .ok { color: var(--gain); font-weight: 600; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">NFSD · block · XFS · NVMe · v7.1.13-14</p>
+    <h1>SGL devices can take the loan.<br><span class="lock">tardis1's NVMe can't.</span></h1>
+    <p class="lede">Phase 1 carries each device's direct I/O segment boundary from NVMe through XFS and statx into nfsd, so <span class="hl">a loaned WRITE with mid-page joints goes direct on an SGL-capable device</span>. It is qualified on this test rig. Phase 2 is a two-byte <code>xeu</code> RX headroom change that 4-byte aligns E1 payload. It is build-checked and has not run on hardware. <span class="hc">tardis1's NVMe controllers turned out to be PRP-only, so neither phase can make WRITEs direct there.</span></p>
+
+    <div class="metrics">
+      <div class="metric"><div class="n">11</div><div class="l">phase 1<br>code commits</div></div>
+      <div class="metric"><div class="n gain">160/160</div><div class="l">WRITEs direct<br>on NVMe/TCP</div></div>
+      <div class="metric"><div class="n cost">2 mod 4</div><div class="l">E1 payload today —<br>phase 2 target</div></div>
+      <div class="metric"><div class="n cost">PRP only</div><div class="l">tardis1 NVMe —<br>all 9 namespaces</div></div>
+    </div>
+
+    <p class="provenance">
+      <span>Branch:</span> <code>kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY</code> on tag <code>v7.1.13-14</code><br>
+      <span>Qualified on:</span> <code>7.1.13-14.hs.440.loanpages</code> (arm64, 4 KiB pages) · 2026-09-26<br>
+      <span>In-tree docs:</span> <code>NFSD_TCP_WRITE_ZEROCOPY/NVME_SGL_SUPPORT_PROJECT.md</code>, <code>…/xeu-SGL-compat-receive-placement/</code><br>
+      <span>Builds on:</span> the <a href="https://claude.ai/artifact/AaqMSpvXNrwbugt6BJ7MXX">NFSD Page Loan</a> status document
+    </p>
+  </header>
+
+  <section id="tardis1-nvme">
+    <p class="eyebrow hot">tardis1 · export NVMe · 2026-09-27</p>
+    <h2>Every NVMe namespace on tardis1 is PRP-only</h2>
+    <p>Read from sysfs on tardis1 (see <a href="#check-nvme">checking the export NVMe</a>). All nine namespaces report a 4 KiB virtual boundary:</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:460px">
+      <thead><tr><th>device</th><th>virt_boundary_mask</th><th>dma_alignment</th><th>logical_block_size</th></tr></thead>
+      <tbody>
+        <tr><td class="num">nvme0n1</td><td class="x">4095</td><td class="num">3</td><td class="num">4096</td></tr>
+        <tr><td class="num">nvme1n1</td><td class="x">4095</td><td class="num">3</td><td class="num">4096</td></tr>
+        <tr><td class="num">nvme2n1</td><td class="x">4095</td><td class="num">3</td><td class="num">4096</td></tr>
+        <tr><td class="num">nvme3n1</td><td class="x">4095</td><td class="num">3</td><td class="num">512</td></tr>
+        <tr><td class="num">nvme4n1</td><td class="x">4095</td><td class="num">3</td><td class="num">4096</td></tr>
+        <tr><td class="num">nvme5n1</td><td class="x">4095</td><td class="num">3</td><td class="num">4096</td></tr>
+        <tr><td class="num">nvme6n1</td><td class="x">4095</td><td class="num">3</td><td class="num">4096</td></tr>
+        <tr><td class="num">nvme7n1</td><td class="x">4095</td><td class="num">3</td><td class="num">4096</td></tr>
+        <tr><td class="num">nvme8n1</td><td class="x">4095</td><td class="num">3</td><td class="num">512</td></tr>
+      </tbody>
+    </table></div>
+    <p>The kernel isn't the cause. Every 7.1 kernel carries <code>bc840b21a25a</code>, and <code>nvme_pci_get_virt_boundary()</code> returns 0 exactly when the controller advertises SGLs. <code>sgl_threshold</code> doesn't affect it. So <code>4095</code> means these controllers don't support SGLs; <code>nvme id-ctrl /dev/nvmeX | grep -w sgls</code> should read 0.</p>
+    <div class="verdict">
+      <p class="big">On tardis1 as equipped, <em>neither phase makes loaned WRITEs direct</em>.</p>
+      <ul class="steps">
+        <li><strong>Phase 1 behaves correctly.</strong> These exports report <code>dio_seg_boundary=4096</code>, so the gate keeps the joint rule and WRITEs with mid-page joints go buffered, as before phase 1.</li>
+        <li><strong>Phase 2 can't help here.</strong> <code>rx_ip_align=2</code> fixes the 4-byte offsets, but every frame boundary is still a mid-page joint, which a 4096 boundary refuses. A tardis1 run would show the aligned offsets in <code>loan-geometry.bt</code>, not a change in dispositions.</li>
+        <li><strong>What a PRP-only device needs is page-tiled payload</strong>, with every joint on 4096. On E1 that means header-data split with payload coalescing, the firmware ask in the <a href="https://claude.ai/artifact/AaqMSpvXNrwbugt6BJ7MXX">NFSD Page Loan</a> document, or SGL-capable NVMe in tardis1.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow hot">The problem</p>
+    <h2>Loaned payload has mid-page joints that PRP-style devices refuse</h2>
+    <p>A loaned WRITE hands the file system the NIC's own receive pages. That is one fragment per TCP segment, about 1448 bytes each at MTU 1500, and every joint between fragments falls in the middle of a page. Before phase 1, nfsd's direct I/O gate assumed every device had a 4 KiB virtual boundary. It demoted any WRITE with a mid-page joint to buffered, because a bio carrying one would be split off a logical block and fail with <code>-EINVAL</code>.</p>
+    <p>That assumption is wrong for a large class of devices. Two block-layer rules decide what a device takes:</p>
+    <div class="matrix">
+      <div class="cell k"><code>virt_boundary_mask</code> — every interior joint must fall on this boundary. Gaps elsewhere force a split, and a split off a logical block is <code>-EINVAL</code>.</div>
+      <div class="cell v"><span class="pill pend">per device</span></div>
+      <div class="cell k"><code>dma_alignment</code> — each bvec's offset and length must be multiples of this. NVMe uses 3, meaning 4 bytes.</div>
+      <div class="cell v"><span class="pill pend">per device</span></div>
+    </div>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Transport</th><th>virt_boundary_mask</th><th>Mid-page joints</th></tr></thead>
+      <tbody>
+        <tr><td>NVMe PCIe advertising SGLs (<code>bc840b21a25a</code>)</td><td class="num">0</td><td class="r">accepted</td></tr>
+        <tr><td>NVMe/TCP, NVMe/FC</td><td class="num">0</td><td class="r">accepted</td></tr>
+        <tr><td>brd</td><td class="num">0 (but 512-byte DMA alignment)</td><td class="x">offsets refused</td></tr>
+        <tr><td>NVMe PCIe without SGLs, nvme-loop, NVMe/RDMA</td><td class="num">4095</td><td class="x">refused</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Are the loaned pages still needed if the device does SGL?</strong> Yes. SGL removes the page-tiling requirement, not the copy. Without the loan, SUNRPC still copies the payload into <code>rq_pages</code>, which are already page-tiled, so SGL alone saves nothing. The two together are what let the NIC's own pages reach NVMe without a copy.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Phase 1 design</p>
+    <h2>Expose the boundary end to end, from inception</h2>
+    <p>No HS-only shortcut: every interface is exposed properly, from the NVMe driver's queue limit through XFS and statx up to the <code>nfsd_file</code> that the WRITE path already consults for DIO alignment.</p>
+
+    <div class="diagram">
+      <div class="path-head">
+        <span class="path-name">Attribute path</span>
+        <span class="path-tally">queried once per <b>nfsd_file</b> open</span>
+      </div>
+      <div class="flow">
+        <div class="stage"><div class="chip">queue<br>limits</div><div class="cap">virt_boundary_mask</div></div>
+        <div class="arrow">&rarr;</div>
+        <div class="stage"><div class="chip">bdev_dio_seg_<br>boundary()</div><div class="cap">block helper</div></div>
+        <div class="arrow">&rarr;</div>
+        <div class="stage"><div class="chip">statx<br>0x00040000</div><div class="cap">xfs · bdev_statx</div></div>
+        <div class="arrow">&rarr;</div>
+        <div class="stage"><div class="chip">nf_dio_seg_<br>boundary</div><div class="cap">nfsd_file</div></div>
+        <div class="arrow">&rarr;</div>
+        <div class="stage"><div class="chip gate">split gate<br>seg_mask</div><div class="cap">nfs_dio.c</div></div>
+      </div>
+      <p class="diagram-note"><code>stx_dio_seg_boundary</code> at offset 0xbc: 0 means no boundary, otherwise the boundary in bytes (4096 for a 4095 mask). Inside nfs_dio, 0 means "unknown, use the PAGE_SIZE rule" and <code>NFS_DIO_SEG_BOUNDARY_NONE</code> (U32_MAX) means no boundary. So a file system that doesn't report the attribute keeps today's behaviour.</p>
+    </div>
+
+    <div class="delta">
+      <div class="mark">1</div>
+      <div class="body"><h3>One rule per joint, parameterized<span class="tag rework">gate</span></h3>
+      <p><code>nfs_dio_iter_aligned_and_splittable(seg_mask)</code> keeps the 4-byte memory check for every bvec. For each interior joint it requires alignment to the device's boundary. With no boundary, it drops the joint rule entirely and only the DMA alignment remains.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">2</div>
+      <div class="body"><h3>Shared with LOCALIO<span class="tag base">nfs_common</span></h3>
+      <p>The split lives in <code>fs/nfs_common/nfs_dio.c</code> on v7.1.13-14, so LOCALIO's direct I/O policy carries the same boundary. A separate commit zeroes the whole LOCALIO policy before filling it, so the new field can't pick up stack garbage.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">3</div>
+      <div class="body"><h3>KUnit split from the feature<span class="tag base">upstream-clean</span></h3>
+      <p>The feature commits carry no KUnit references. Two test commits follow them: the boundary cases in the receive-bvec suite (25 <code>dio_segments_test</code> rows in all) and the statx-to-policy translation.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Phase 1 commits</p>
+    <h2>Eleven commits, in dependency order</h2>
+    <p>Folded into the branch after the merge top-up fix. SHAs are as of the 2026-09-26 fold.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>SHA</th><th>Subject</th></tr></thead>
+      <tbody>
+        <tr><td class="sha">72870a49cb2e</td><td>block: add bdev_dio_seg_boundary()</td></tr>
+        <tr><td class="sha">79d0dc0bf66b</td><td>fs: add STATX_DIO_SEG_BOUNDARY</td></tr>
+        <tr><td class="sha">2e6c4663bb74</td><td>block: report STATX_DIO_SEG_BOUNDARY for block devices</td></tr>
+        <tr><td class="sha">a42fcad8c444</td><td>xfs: report the direct I/O segment boundary</td></tr>
+        <tr><td class="sha">1b31a61beac9</td><td>nfsd: zero the whole LOCALIO direct I/O policy before filling it</td></tr>
+        <tr><td class="sha">51af155f395f</td><td>nfs_common: let the direct I/O policy carry the device's segment boundary</td></tr>
+        <tr><td class="sha">482d4414f9a3</td><td>nfsd: record the direct I/O segment boundary of an nfsd_file</td></tr>
+        <tr><td class="sha">96fed0e7083b</td><td>nfsd: split direct writes by the device's segment boundary</td></tr>
+        <tr><td class="sha">b2dc54218a0b</td><td>loop: take the backing device's virtual boundary for direct I/O <span class="tag new">decision</span></td></tr>
+        <tr class="kunit"><td class="sha t">b747c8804176</td><td>nfsd: test the direct I/O segment boundary in the receive-bvec KUnit suite</td></tr>
+        <tr class="kunit"><td class="sha t">7fcb1077753a</td><td>nfsd: test the segment-boundary translation in the receive-bvec KUnit suite</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>The loop commit</strong> fixes a real gap: a direct-I/O loop device over a device with a boundary reported none. It is correct and tested, but the NFSD goal doesn't need it. Keep it in this series or send it separately?</p>
+  </section>
+
+  <section>
+    <p class="eyebrow ok">Phase 1 qualification · hs.440</p>
+    <h2>Everything passed on the rig</h2>
+    <p>The kernel was <code>7.1.13-14.hs.440.loanpages</code>, built from this branch at <code>5fa44f5060e6</code>, with all 21 relevant modules srcversion-matched to the tree. The rigs sit on brd RAM disks: XFS on brd directly, XFS on NVMe/TCP to a local nvmet target, and XFS on nvme-loop.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Rig</th><th>virt_boundary_mask</th><th>DMA align</th><th>statx seg boundary</th><th>nfsd joint rule</th></tr></thead>
+      <tbody>
+        <tr><td>NVMe/TCP (local nvmet)</td><td class="num">0</td><td class="num">3</td><td class="num">0</td><td class="r">none</td></tr>
+        <tr><td>brd</td><td class="num">0</td><td class="num">511</td><td class="num">0</td><td class="r">none</td></tr>
+        <tr><td>nvme-loop</td><td class="num">4095</td><td class="num">3</td><td class="num">4096</td><td class="num">joints on 4096</td></tr>
+      </tbody>
+    </table></div>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Check</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>KUnit — XDR bvec / svcsock receive / NFSv3 consumer / NFSv4 COMPOUND</td><td class="r">7/7 · 54/54 · 6/6 · 9/9</td></tr>
+        <tr><td>Block acceptance, new gapped <code>bvecrepro</code> mode (4-aligned 1448-byte fragments)</td><td class="r">NVMe/TCP matches · nvme-loop -EINVAL · 2 mod 4 refused everywhere</td></tr>
+        <tr><td>NFS WRITE path, loans on, 30 connections &times; 16 MiB O_DIRECT</td><td class="r">0 dd / cmp errors · no -EINVAL</td></tr>
+        <tr><td>Dispositions: NVMe/TCP · nvme-loop · brd</td><td class="r">160/160 direct · 4 demoted · all demoted (512 align)</td></tr>
+        <tr><td>Loop commit: DIO loop over nvme-loop · over NVMe/TCP or buffered</td><td class="r">4096 · 0</td></tr>
+        <tr><td>Existing harness: data compare, loan assert, kill switch, system correctness</td><td class="r">all green</td></tr>
+        <tr><td>Per-commit bisect walk, <code>CONFIG_WERROR=y</code> + sparse</td><td class="r">51/51 · 0 branch-introduced findings</td></tr>
+      </tbody>
+    </table></div>
+    <p>brd demoting everything is expected: loaned payload starts at RPC-header offsets, which its 512-byte DMA alignment refuses. The raw block devices report the same boundaries through <code>bdev_statx()</code>.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">LOCALIO and NVMe SGL selection</p>
+    <h2>Safe for LOCALIO, and SGLs are forced where it matters</h2>
+    <h3>LOCALIO on a device without a boundary</h3>
+    <p>The same LOCALIO DIRECT+DONTCACHE workload ran over two exports that differ only in how the NVMe namespace is attached. Both used nvmet backed by a tmpfs file, because a brd-backed rig demotes every WRITE on its 512-byte alignment for either boundary.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Export</th><th>seg boundary</th><th>reads / WRITE</th><th>resident</th><th>functional</th></tr></thead>
+      <tbody>
+        <tr><td>NVMe/TCP</td><td class="num">0 (none)</td><td class="num">0.008</td><td class="num">0%</td><td class="r">pass</td></tr>
+        <tr><td>nvme-loop</td><td class="num">4096</td><td class="num">0.010</td><td class="num">0%</td><td class="r">pass</td></tr>
+      </tbody>
+    </table></div>
+    <p>The boundary-0 policy reached LOCALIO in all 9 file opens. It made no measurable difference, as expected: LOCALIO's buffers come from the client's page cache and are already page-tiled. The run shows the no-boundary path is safe for LOCALIO, not that LOCALIO gets faster.</p>
+
+    <h3 style="margin-top:26px">Does NVMe actually pick SGLs?</h3>
+    <div class="verdict gain">
+      <p class="big">A loaned WRITE is <em>gapped</em>, so an SGL-capable controller always uses SGLs for it, whatever <code>sgl_threshold</code> says.</p>
+      <p><code>nvme_pci_use_sgls()</code> returns <code>SGL_FORCED</code> when the request's physical gap mask crosses the controller page (gaps are tracked per bio since <code>2f6b2565d43c</code>). The 32 KiB average-segment heuristic applies only to gap-free requests. A PRP-only controller keeps boundary 4095, so nfsd demotes those WRITEs instead of risking <code>-EINVAL</code>.</p>
+      <p>This rig has no SGL-capable PCIe NVMe, so this was confirmed from the source only. The NVMe/TCP rows stand in for it.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow hot">Phase 2 · xeu receive placement</p>
+    <h2>Two more bytes of headroom align every E1 payload</h2>
+    <p>Phase 1 lets an SGL device take mid-page joints, but each fragment must still start and end on 4 bytes. The <code>xeu</code> driver posts every RX buffer at <code>dst_addr = dma_addr + XEU_RX_PAGE_HEADROOM</code>, with headroom <code>NET_SKB_PAD + NET_IP_ALIGN</code>. On arm64 those are 64 and 0 (measured with a probe module).</p>
+    <div class="geom">frame start                        64   <i>0 mod 4</i>
+IP header (after 14-byte Ethernet) 78   <b>2 mod 4</b>
+TCP payload, no options           118   <b>2 mod 4</b>
+TCP payload, timestamps           130   <b>2 mod 4</b>
+with rx_ip_align=2, payload       132   <i>0 mod 4</i></div>
+    <p>IPv4, IPv6 and TCP headers, options included, are always multiples of 4 bytes, and a VLAN tag adds 4. So every plain Ethernet TCP payload is 2 mod 4, and <strong>two more bytes of headroom make all of them 0 mod 4</strong>. This is the classic <code>NET_IP_ALIGN = 2</code> placement. Fragment lengths are TCP payload sizes: MSS 1448 and 8948 are both multiples of 4.</p>
+
+    <div class="delta">
+      <div class="mark">&Delta;</div>
+      <div class="body"><h3>A load-time parameter, default off<span class="tag new">new</span></h3>
+      <p><code>rx_ip_align=0</code> posts exactly what the driver always posted, <code>2</code> adds the headroom, and other values are ignored with a warning. Every use of the headroom and buffer data size goes through two helpers: refill posting, <code>skb_reserve()</code>, the linear and fragment lengths, <code>skb_add_rx_frag()</code> and <code>max_rx_buf_per_pkt</code>. The parameter is read-only (0444): a buffer must be parsed with the headroom it was posted with.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">&check;</div>
+      <div class="body"><h3>Build-checked against hs.440<span class="tag base">0 warnings</span></h3>
+      <p><code>W=1</code> shows the same 11 warnings as the unmodified driver, none in <code>xeu_drv.c</code>. The build used <code>XEU_IPSEC_ENABLE=n</code> because this host lacks <code>CONFIG_XFRM_OFFLOAD</code>; the unmodified driver fails the same way without it. The production build goes through kernel-rpmtree against a RHEL-config kernel-devel, which has it. The patch applies at <code>-p0</code> as another <code>PatchN:</code> in <code>xsight.spec</code>.</p></div>
+    </div>
+
+    <div class="verdict">
+      <p class="big">On a 4 KiB kernel, jumbo frames leave <em>continuation buffers at 2 mod 4</em>. Test tardis1 on the <em>64 KiB</em> arm64 kernel.</p>
+      <p>The headroom applies to every RX buffer the driver posts, not only a frame's first. One buffer holds <code>PAGE_SIZE - 66 - 320</code> bytes of frame (headroom, then <code>skb_shared_info</code>): <strong>3710 bytes on 4 KiB pages, 65150 on 64 KiB pages</strong>.</p>
+      <div class="geom">4 KiB, MTU 9000, rx_ip_align=2 — one 9014-byte frame, 3 buffers
+  buffer 1  payload 132 .. 3776          <i>0 mod 4</i>
+  buffer 2  payload from 66              <b>2 mod 4</b>
+  buffer 3  payload from 66              <b>2 mod 4</b>
+  &rarr; nearly every 1 MiB WRITE demoted (mem_misaligned); data still correct</div>
+      <div class="matrix">
+        <div class="cell k">arm64 4 KiB · MTU 1500 (1514-byte frame, 1 buffer)</div>
+        <div class="cell v"><span class="pill yes">aligned</span></div>
+        <div class="cell k">arm64 4 KiB · MTU 9000 (9014-byte frame, 3 buffers)</div>
+        <div class="cell v"><span class="pill no">2 mod 4</span></div>
+        <div class="cell k">arm64 64 KiB · MTU 1500</div>
+        <div class="cell v"><span class="pill yes">aligned</span></div>
+        <div class="cell k">arm64 64 KiB · MTU 9000 (1 buffer)</div>
+        <div class="cell v"><span class="pill yes">aligned</span></div>
+      </div>
+      <p style="margin-top:14px">The 64 KiB kernel is the only configuration where jumbo frames, the MTU a storage network runs, land entirely aligned. The driver warns when the MTU makes a frame span several buffers. Fixing 4 KiB jumbo would need the E1 to pad only a frame's first buffer (Xsight question 2).</p>
+    </div>
+
+    <p>This is independent of the <a href="https://claude.ai/artifact/3JtqkiUizfKgSqzL9h6cyW">paired-posting HDS experiment</a>, which lands payload page-aligned for devices that do have a boundary. Phase 2 needs no buffer pairing and doesn't change the number of buffers per frame.</p>
+
+    <h3 style="margin-top:26px">Test plan for an E1 host with SGL-capable NVMe</h3>
+    <p>tardis1 fails the NVMe gate below (<a href="#tardis1-nvme">PRP-only</a>). Run there, the plan can only confirm the 4-byte placement.</p>
+    <ol class="plan">
+      <li><strong>Gates:</strong> the 64 KiB arm64 kernel carrying the series, the fix and phase 1; an export NVMe with <code>virt_boundary_mask</code> 0 and SGLs advertised (<code>statx-dio</code> shows <code>dio_seg_boundary=0</code>); no "spans N RX buffers" warning; plain Ethernet TCP.</li>
+      <li><strong>Two passes, same workload:</strong> O_DIRECT 1 MiB NFS WRITEs at MTU 9000, loans on, <code>io_cache_write=2</code>. Pass A with <code>rx_ip_align=0</code>, pass B with <code>rx_ip_align=2</code>.</li>
+      <li><strong>Collect each pass:</strong> <code>loan-geometry.bt</code> (fragment offset and length mod 4, mid-page ends, page_pool origin), split dispositions, <code>split_einval.bt</code> (must be empty) and a <code>cmp</code> of the data.</li>
+      <li><strong>Expect:</strong> A shows NIC-loan fragments at 2 mod 4 and demoted WRITEs; B shows 0 mod 4 and mostly <code>direct</code>.</li>
+      <li><strong>Optional control:</strong> a 4 KiB kernel at MTU 9000 should still demote nearly every WRITE, and at MTU 1500 should match the 64 KiB result.</li>
+    </ol>
+
+    <h3 id="check-nvme" style="margin-top:30px">Checking an export NVMe</h3>
+    <p>Find the namespace under the export first. If the source is a partition, use its parent namespace, for example <code>nvme0n1</code>. Then read its queue limits from sysfs:</p>
+<pre>findmnt -no SOURCE /path/to/export
+
+d=/sys/block/nvme0n1/queue
+cat $d/virt_boundary_mask $d/dma_alignment $d/logical_block_size</pre>
+    <div class="matrix">
+      <div class="cell k"><code>virt_boundary_mask</code> is <code>0</code>: no boundary, so mid-page joints are accepted</div>
+      <div class="cell v"><span class="pill yes">placement helps</span></div>
+      <div class="cell k"><code>virt_boundary_mask</code> is <code>4095</code>: PRPs only, and loaned WRITEs fall back to buffered whatever the NIC does</div>
+      <div class="cell v"><span class="pill no">stop</span></div>
+      <div class="cell k"><code>dma_alignment</code> is <code>3</code>: payload must be 4-byte aligned, which <code>rx_ip_align=2</code> gives</div>
+      <div class="cell v"><span class="pill yes">expected</span></div>
+    </div>
+    <p>sysfs doesn't show whether the controller supports SGLs, so ask nvme-cli. The low 2 bits must be non-zero: <code>1</code> means SGLs are supported, and <code>2</code> means they are supported with 4-byte alignment. Either works here. <code>0</code> means no SGLs, and then the mask will be <code>4095</code>. Also leave the SGL threshold at its default of <code>32768</code>. It only affects requests without gaps, so loaned WRITEs get SGLs regardless, but <code>0</code> turns SGLs off.</p>
+<pre>nvme id-ctrl /dev/nvme0 | grep -w sgls
+cat /sys/module/nvme/parameters/sgl_threshold      <span class="c"># default 32768; 0 disables SGLs</span>
+
+<span class="c"># every namespace at once</span>
+for d in /sys/block/nvme*n*; do
+  echo "${d##*/} vbm=$(cat $d/queue/virt_boundary_mask) dma=$(cat $d/queue/dma_alignment)"
+done</pre>
+    <p>If the export sits on dm or md rather than directly on the namespace, check the top device's <code>queue/</code> too: it takes the strictest limit of the devices beneath it. Once tardis1 runs the phase 1 kernel, <code>statx-dio</code> on a file in the export gives the same answer end to end: <code>dio_seg_boundary=0</code>.</p>
+    <p>For comparison, the qualification box's own <code>nvme0n1</code> is PRP-only, which is why phase 1 was qualified over NVMe/TCP instead:</p>
+<pre>nvme0n1 vbm=<span class="hot">4095</span> dma=3
+sgls      : <span class="hot">0</span></pre>
+
+    <h3 id="persist-param" style="margin-top:30px">Making <code>rx_ip_align</code> permanent</h3>
+    <p>There are two ways to set the parameter. Put <code>options</code> lines in <code>/etc/modprobe.d/</code>; <code>/etc/modules-load.d/</code> only lists modules to load and doesn't take parameters.</p>
+    <div class="delta">
+      <div class="mark">1</div>
+      <div class="body"><h3>modprobe.d</h3>
+      <p>This applies every time <code>xeu</code> loads, by udev at boot or by a manual <code>modprobe</code>. If <code>xeu</code> is in the initramfs, rebuild it so the copy there sees the option.</p></div>
+    </div>
+<pre>echo 'options xeu rx_ip_align=2' &gt; /etc/modprobe.d/xeu.conf
+dracut -f --kver &lt;release&gt;                       <span class="c"># only if xeu is in the initramfs</span>
+lsinitrd /boot/initramfs-&lt;release&gt;.img | grep -E 'xeu|modprobe.d'</pre>
+    <div class="delta">
+      <div class="mark">2</div>
+      <div class="body"><h3>Kernel command line</h3>
+      <p><code>modprobe</code> reads <code>/proc/cmdline</code> and applies <code>module.param=value</code> entries to modules it loads, so this works for a loadable <code>xeu</code> too. It takes effect from the next boot, and only for the kernels you updated.</p></div>
+    </div>
+<pre>grubby --update-kernel=/boot/vmlinuz-&lt;release&gt; --args="xeu.rx_ip_align=2"
+grubby --update-kernel=/boot/vmlinuz-&lt;release&gt; --remove-args="xeu.rx_ip_align"   <span class="c"># undo</span></pre>
+    <div class="verdict acc">
+      <p class="big">For the tardis1 A/B, use the <em>command line</em> on one grub entry.</p>
+      <p>Leave the known-good entry without the parameter, so going back is just choosing the other entry at boot. A modprobe.d file affects every kernel and needs editing to undo.</p>
+    </div>
+    <p>Check the value after load, either way. The parameter is read-only after load, so a new setting takes effect only when <code>xeu</code> loads again, either with <code>modprobe -r xeu &amp;&amp; modprobe xeu</code> or by rebooting. Reloading takes the link down, so follow the deadman-switch procedure in section 0 of <code>TESTING.md</code>.</p>
+<pre>cat /sys/module/xeu/parameters/rx_ip_align   <span class="c"># expect 2</span>
+dmesg | grep rx_ip_align                     <span class="c"># no "spans N RX buffers" warning</span></pre>
+  </section>
+
+  <section>
+    <p class="eyebrow">Open items</p>
+    <h2>What stands between here and tardis1</h2>
+    <h3>For phase 2 to pay off on E1</h3>
+    <ul class="steps">
+      <li><strong>An SGL-capable export NVMe — tardis1 has none.</strong> All nine namespaces are PRP-only (<a href="#tardis1-nvme">table above</a>). Phase 2 needs an E1 host with SGL-capable NVMe; otherwise the E1 needs header-data split with payload coalescing.</li>
+      <li><strong>An HS kernel, now building.</strong> <code>kernel-7.1/hs-7.1.13-14.NFSD_TCP_WRITE_ZEROCOPY</code> carries the series, the merge top-up fix and SGL phase 1 under the Hammerspace DP commits. tardis1 needs its 64 KiB page build.</li>
+      <li><strong>kmod-xsight with the patch</strong>, built through kernel-rpmtree against the new kernel-devel (RHEL configs), 4 KiB and 64 KiB flavors; <code>modinfo -p</code> must show <code>rx_ip_align</code> in both.</li>
+    </ul>
+    <h3 style="margin-top:22px">Questions for Xsight</h3>
+    <ul class="steps">
+      <li>Does the E1 RX DMA engine accept a <code>dst_addr</code> that is 2 mod 4 at full rate, with no alignment requirement or penalty?</li>
+      <li>Can the RX path pad only a frame's first buffer? That would align continuation buffers too, and so jumbo frames on 4 KiB pages.</li>
+      <li>Encapsulated traffic (VXLAN or Geneve inner Ethernet) shifts the payload by 14 bytes and breaks the rule. Is it in scope for NFS storage traffic on E1?</li>
+    </ul>
+    <h3 style="margin-top:22px">Decisions for Mike</h3>
+    <ul class="steps">
+      <li><strong>The loop commit</strong> <code>b2dc54218a0b</code>: keep it in the series or send it on its own.</li>
+      <li><strong>A runtime-changeable <code>rx_ip_align</code></strong>: read it per device at <code>xeu_open()</code> so a link down/up applies a new value without reloading the module.</li>
+    </ul>
+    <h3 style="margin-top:22px">Remaining coverage</h3>
+    <ul class="steps">
+      <li>KUnit on a 64 KiB page kernel: the walk built both page sizes, but only the 4 KiB kernel ran the tests.</li>
+      <li>SGL selection observed on real SGL-capable PCIe NVMe, which this rig doesn't have.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">Branches</p>
+    <h2>Where the work lives</h2>
+    <div class="branches">
+      <div class="branch clean">
+        <div class="bname">kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY <span class="btag">canonical · phase 1 qualified</span></div>
+        <p>The page-loan series, the folded merge top-up fix and SGL phase 1 on <code>v7.1.13-14</code>; all 51 commits walk clean. Not pushed.</p>
+      </div>
+      <div class="branch">
+        <div class="bname">xeu-SGL-compat-receive-placement/ <span class="btag int">phase 2 · in-tree</span></div>
+        <p>The <code>rx_ip_align</code> patch, <code>loan-geometry.bt</code>, README and TESTING for tardis1, under <code>NFSD_TCP_WRITE_ZEROCOPY/</code>.</p>
+      </div>
+      <div class="branch">
+        <div class="bname">kernel-7.1/hs-7.1.13-14.NFSD_TCP_WRITE_ZEROCOPY <span class="btag int">integration · tardis1 kernel</span></div>
+        <p>All of the canonical branch through <code>3350af53be4b</code>, with 30 Hammerspace DP commits on top. The kernel for the phase 2 run on tardis1 is being built from it.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span class="r">NVMe SGL support for NFSD page-loan WRITEs · phase 1 qualified, tardis1 NVMe PRP-only</span><br>
+    Canonical docs in-tree: <code>NFSD_TCP_WRITE_ZEROCOPY/NVME_SGL_SUPPORT_PROJECT.md</code> · <code>xeu-SGL-compat-receive-placement/</code><br>
+    Mike Snitzer · Hammerspace · 2026-09-26
+  </footer>
+
+</div>

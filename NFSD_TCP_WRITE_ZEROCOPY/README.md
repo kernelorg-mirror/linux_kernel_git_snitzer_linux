@@ -124,7 +124,15 @@ reproduction instructions for the "page-loan" patch series.
 Sub-project: letting loaned payloads with mid-page joints stay on the direct
 path on devices without a virtual boundary (NVMe with SGLs), with the device
 attribute exposed through XFS and statx to nfsd —
-[`NVME_SGL_SUPPORT_PROJECT.md`](NVME_SGL_SUPPORT_PROJECT.md).
+[`NVME_SGL_SUPPORT_PROJECT.md`](NVME_SGL_SUPPORT_PROJECT.md). Its phase 2,
+the xeu `rx_ip_align` change that 4-byte aligns E1 payload, is
+[`xeu-SGL-compat-receive-placement/`](xeu-SGL-compat-receive-placement/);
+tardis1's NVMe turned out PRP-only (2026-09-27), so it cannot pay off there.
+
+Sub-project: David Flynn's on-die receive copy — one prompt CPU copy out of
+a small cache-resident landing area, so PRP-only NVMe needs no SGL; scoping
+spec only, adversarially reviewed, no code —
+[`on-die-receive-copy/SPEC.md`](on-die-receive-copy/SPEC.md).
 
 Deep technical notes (code path, alignment analysis, E1 NIC capabilities,
 design decisions): [`PROJECT.md`](PROJECT.md).
@@ -146,6 +154,14 @@ Visual summaries (shareable reports):
   <https://claude.ai/code/artifact/12b1de8a-a8aa-49db-a233-3ecf312ce641>
 - original v7.1.8-3 baseline analysis (superseded, kept for the problem
   derivation): <https://claude.ai/code/artifact/ef217765-7c3c-45c4-999b-b1d4b88ff85f>
+- NVMe SGL support (phase 1 qualified, phase 2 xeu placement, tardis1
+  PRP-only): <https://claude.ai/artifact/FgYTWeV9FqCxwzeuESd7Ap>
+- on-die receive copy scoping spec:
+  <https://claude.ai/artifact/MsFFzUKYDgz6WhZ1C62jss>
+
+The HTML sources of the last two are kept in [`artifacts/`](artifacts/) so
+they can be republished to the same URLs (pass the URL when publishing from
+a new session).
 
 ---
 

@@ -1,0 +1,540 @@
+<title>On-Die Receive Copy</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@85,500..750&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root {
+    --ground: #eef1f4; --surface: #ffffff; --surface-2: #f6f8fa;
+    --ink: #16202a; --ink-soft: #33434f; --muted: #5a6b78; --faint: #8595a1;
+    --hair: #dce3e9; --hair-strong: #c4cfd8;
+    --accent: #1f5c8b; --accent-soft: #e4eef5;
+    --cost: #b6431f; --cost-soft: #f7e6df;
+    --gain: #12735d; --gain-soft: #dcefe8;
+    --shadow: 0 1px 2px rgba(22,32,42,.05), 0 8px 24px -12px rgba(22,32,42,.14);
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --disp: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground: #0b1218; --surface: #121c24; --surface-2: #0e1720;
+      --ink: #e7eef4; --ink-soft: #c3d0da; --muted: #90a1ae; --faint: #6b7d8a;
+      --hair: #24333f; --hair-strong: #33454f;
+      --accent: #5ba3d6; --accent-soft: #16303f;
+      --cost: #e08a63; --cost-soft: #3a2015;
+      --gain: #4bbb9a; --gain-soft: #10302a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #0b1218; --surface: #121c24; --surface-2: #0e1720;
+    --ink: #e7eef4; --ink-soft: #c3d0da; --muted: #90a1ae; --faint: #6b7d8a;
+    --hair: #24333f; --hair-strong: #33454f;
+    --accent: #5ba3d6; --accent-soft: #16303f;
+    --cost: #e08a63; --cost-soft: #3a2015;
+    --gain: #4bbb9a; --gain-soft: #10302a;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--sans); font-size: 17px; line-height: 1.62;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+  @media (max-width: 480px) { .wrap { padding: 0 16px; } }
+  section { padding: 40px 0; border-top: 1px solid var(--hair); }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 14px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; flex: 0 0 auto; }
+  .eyebrow.hot { color: var(--cost); }
+  .eyebrow.hot::before { background: var(--cost); }
+  .eyebrow.ok { color: var(--gain); }
+  .eyebrow.ok::before { background: var(--gain); }
+
+  h1 {
+    font-family: var(--disp); font-weight: 720; font-stretch: 85%;
+    font-size: clamp(31px, 6.4vw, 48px); line-height: 1.04;
+    letter-spacing: -.015em; text-wrap: balance; margin: 0 0 18px;
+  }
+  h1 .ok { color: var(--gain); }
+  h1 .lock { color: var(--cost); }
+  h2 {
+    font-family: var(--disp); font-weight: 680; font-stretch: 87%;
+    font-size: clamp(22px, 4vw, 28px); letter-spacing: -.01em;
+    line-height: 1.12; text-wrap: balance; margin: 0 0 16px;
+  }
+  h3 { font-family: var(--disp); font-weight: 650; font-stretch: 90%; font-size: 18px; margin: 0 0 6px; text-wrap: balance; }
+  p { margin: 0 0 16px; color: var(--ink-soft); }
+  p:last-child { margin-bottom: 0; }
+  strong { color: var(--ink); font-weight: 640; }
+  a { color: var(--accent); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+  code {
+    font-family: var(--mono); font-size: .84em; background: var(--surface-2);
+    border: 1px solid var(--hair); padding: .08em .38em; border-radius: 4px;
+    color: var(--ink); overflow-wrap: anywhere;
+  }
+  .lede { font-size: 20px; line-height: 1.5; color: var(--ink); }
+  .lede .hl { color: var(--gain); font-weight: 600; }
+  .lede .hc { color: var(--cost); font-weight: 600; }
+
+  header { padding: 56px 0 40px; }
+  .provenance {
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+    line-height: 1.7; margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--hair);
+    overflow-wrap: anywhere;
+  }
+  .provenance span { color: var(--ink-soft); }
+
+  .metrics {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    background: var(--hair); border: 1px solid var(--hair);
+    border-radius: 10px; overflow: hidden; margin-top: 30px;
+  }
+  .metric { background: var(--surface); padding: 18px 16px; }
+  .metric .n {
+    font-family: var(--mono); font-size: clamp(20px, 4.4vw, 26px); font-weight: 600;
+    letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ink); line-height: 1;
+  }
+  .metric .n.cost { color: var(--cost); }
+  .metric .n.gain { color: var(--gain); }
+  .metric .l {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted); margin-top: 9px; line-height: 1.4;
+  }
+  @media (max-width: 560px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+
+  .delta { display: flex; gap: 16px; padding: 20px 0; border-top: 1px solid var(--hair); }
+  .delta:first-of-type { border-top: none; padding-top: 4px; }
+  .delta .mark {
+    flex: 0 0 auto; font-family: var(--mono); font-size: 15px; font-weight: 600;
+    color: var(--surface); background: var(--accent); width: 30px; height: 30px;
+    border-radius: 7px; display: flex; align-items: center; justify-content: center;
+  }
+  .delta .mark.cost { background: var(--cost); }
+  .delta .mark.gain { background: var(--gain); }
+  .delta .body { flex: 1 1 auto; min-width: 0; }
+  .delta .body p { margin: 0; font-size: 15.5px; }
+  .delta .body h3 { margin-bottom: 4px; }
+  .tag {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 4px;
+    margin-left: 8px; vertical-align: middle; white-space: nowrap; font-stretch: 100%;
+  }
+  .tag.base { background: var(--gain-soft); color: var(--gain); }
+  .tag.rework { background: var(--accent-soft); color: var(--accent); }
+  .tag.new { background: var(--cost-soft); color: var(--cost); }
+
+  /* attribute path diagram */
+  .diagram {
+    background: var(--surface); border: 1px solid var(--hair); border-radius: 12px;
+    padding: 24px 22px 20px; box-shadow: var(--shadow); margin: 8px 0 20px;
+  }
+  .path-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .path-name { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; color: var(--accent); }
+  .path-tally { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .path-tally b { color: var(--ink); font-weight: 600; }
+  .flow { display: flex; align-items: stretch; overflow-x: auto; padding-bottom: 4px; }
+  .stage { flex: 1 0 auto; min-width: 104px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; }
+  .chip {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.25; padding: 9px 10px;
+    border-radius: 7px; border: 1px solid var(--hair-strong); background: var(--surface-2);
+    color: var(--ink-soft); width: 100%; min-height: 52px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .chip.gate { border: 1.5px solid var(--gain); background: var(--gain-soft); color: var(--gain); font-weight: 600; }
+  .arrow { align-self: flex-start; flex: 0 0 auto; padding: 16px 6px 0; color: var(--faint); font-family: var(--mono); font-size: 15px; }
+  .stage .cap { font-family: var(--mono); font-size: 10.5px; color: var(--muted); line-height: 1.3; }
+  .diagram-note {
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin: 18px 0 0;
+    padding-top: 14px; border-top: 1px dashed var(--hair-strong); line-height: 1.6;
+  }
+
+  .verdict {
+    background: var(--surface); border: 1px solid var(--hair);
+    border-left: 4px solid var(--cost); border-radius: 10px;
+    padding: 26px 28px; box-shadow: var(--shadow); margin: 10px 0 22px;
+  }
+  .verdict.gain { border-left-color: var(--gain); }
+  .verdict.acc { border-left-color: var(--accent); }
+  @media (max-width: 480px) { .verdict { padding: 20px 18px; } }
+  .verdict .big {
+    font-family: var(--disp); font-weight: 700; font-stretch: 87%;
+    font-size: clamp(19px, 3.4vw, 23px); line-height: 1.3; color: var(--ink);
+    margin: 0 0 14px; text-wrap: balance;
+  }
+  .verdict .big em { font-style: normal; color: var(--cost); }
+  .verdict.gain .big em { color: var(--gain); }
+  .geom {
+    font-family: var(--mono); font-size: 13px; line-height: 1.8; color: var(--ink-soft);
+    background: var(--surface-2); border: 1px solid var(--hair); border-radius: 8px;
+    padding: 14px 18px; margin: 16px 0; overflow-x: auto; white-space: pre;
+  }
+  .geom b { color: var(--cost); font-weight: 600; }
+  .geom i { color: var(--gain); font-style: normal; font-weight: 600; }
+
+  .matrix {
+    display: grid; grid-template-columns: 1fr auto; gap: 1px;
+    background: var(--hair); border: 1px solid var(--hair);
+    border-radius: 10px; overflow: hidden; margin: 4px 0 8px;
+  }
+  .matrix .cell { background: var(--surface); padding: 12px 16px; align-content: center; font-size: 15px; }
+  .matrix .cell.k { color: var(--ink-soft); }
+  .matrix .cell.v { display: flex; align-items: center; justify-content: flex-end; }
+  .pill {
+    font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .pill.yes { background: var(--gain-soft); color: var(--gain); border-color: var(--gain); }
+  .pill.no  { background: var(--cost-soft); color: var(--cost); border-color: var(--cost); }
+  .pill.pend { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--hair); border-radius: 10px; margin: 6px 0 14px; background: var(--surface); }
+  table.q { width: 100%; border-collapse: collapse; font-size: 14.5px; min-width: 540px; }
+  table.q th, table.q td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--hair); vertical-align: top; }
+  table.q thead th { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); font-weight: 600; }
+  table.q tbody tr:last-child td { border-bottom: none; }
+  table.q td.r { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--gain); font-weight: 600; font-size: 13px; }
+  table.q td.x { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--cost); font-weight: 600; font-size: 13px; }
+  table.q td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; white-space: nowrap; }
+  table.q td.sha { font-family: var(--mono); font-size: 12px; color: var(--accent); white-space: nowrap; }
+  table.q td.sha.t { color: var(--muted); }
+  table.q tr.kunit td { background: var(--surface-2); }
+  table.q td code { white-space: nowrap; }
+
+  ul.steps { list-style: none; margin: 0 0 8px; padding: 0; }
+  ul.steps li { position: relative; padding: 12px 0 12px 28px; border-top: 1px solid var(--hair); color: var(--ink-soft); font-size: 15.5px; }
+  ul.steps li:first-child { border-top: none; }
+  ul.steps li::before { content: "\2192"; position: absolute; left: 0; top: 12px; font-family: var(--mono); color: var(--accent); }
+  ol.plan { margin: 0 0 8px; padding-left: 22px; color: var(--ink-soft); font-size: 15.5px; }
+  ol.plan li { padding: 6px 0; }
+  ol.plan li::marker { font-family: var(--mono); color: var(--accent); font-weight: 600; }
+
+  .branches { display: flex; flex-direction: column; gap: 12px; margin: 10px 0 4px; }
+  .branch { background: var(--surface); border: 1px solid var(--hair); border-left: 3px solid var(--accent); border-radius: 8px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .branch.clean { border-left-color: var(--gain); }
+  .branch.old { border-left-color: var(--hair-strong); }
+  .branch .bname { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--accent); word-break: break-all; margin-bottom: 6px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .branch.clean .bname { color: var(--gain); }
+  .branch.old .bname { color: var(--muted); }
+  .branch .bname .btag { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; font-weight: 600; word-break: normal; }
+  .branch.clean .bname .btag { background: var(--gain-soft); color: var(--gain); }
+  .branch .bname .btag.int { background: var(--accent-soft); color: var(--accent); }
+  .branch.old .bname .btag { background: var(--surface-2); color: var(--muted); border: 1px solid var(--hair-strong); }
+  .branch p { margin: 0; font-size: 15px; color: var(--ink-soft); }
+
+  footer {
+    padding: 34px 0 60px; border-top: 1px solid var(--hair);
+    font-family: var(--mono); font-size: 12px; color: var(--muted); line-height: 1.7;
+    overflow-wrap: anywhere;
+  }
+  footer .r { color: var(--ink-soft); }
+  footer a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  pre {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+    background: var(--surface-2); border: 1px solid var(--hair); border-radius: 8px;
+    padding: 16px 18px; overflow-x: auto; color: var(--ink-soft); margin: 0 0 16px;
+  }
+  pre .c { color: var(--faint); }
+  pre .hot { color: var(--cost); font-weight: 600; }
+  pre .ok { color: var(--gain); font-weight: 600; }
+</style>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">NFSD · SUNRPC · xeu · tardis1 · spec</p>
+    <h1>One CPU copy, landing kept on-die.<br><span class="lock">First, prove the NIC writes stay in cache.</span></h1>
+    <p class="lede">David Flynn's idea for PRP-only NVMe: accept one CPU copy of each WRITE payload, but take it promptly from a small receive area that stays in on-die cache, so only the back-end copy goes to DRAM. <span class="hl">Today's copy path already has this shape.</span> What it lacks is a prompt copy and a small landing set, and <span class="hc">nobody knows yet whether E1's receive writes land in cache at all.</span></p>
+
+    <div class="metrics">
+      <div class="metric"><div class="n cost">4</div><div class="l">DRAM touches per<br>written byte today</div></div>
+      <div class="metric"><div class="n gain">2</div><div class="l">target, 3 if the copy<br>reads for ownership</div></div>
+      <div class="metric"><div class="n">20/20</div><div class="l">review findings<br>verified and fixed</div></div>
+      <div class="metric"><div class="n cost">R1?</div><div class="l">NIC writes into<br>cache — unverified</div></div>
+    </div>
+
+    <p class="provenance">
+      <span>Idea:</span> David Flynn, relayed by Mike Snitzer · scoped 2026-09-27<br>
+      <span>Spec:</span> <code>NFSD_TCP_WRITE_ZEROCOPY/on-die-receive-copy/SPEC.md</code> · commit <code>ba094911a502</code><br>
+      <span>Code state:</span> <code>kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY</code> at <code>5119bf775071</code><br>
+      <span>Method:</span> ultracode — four research agents, a draft, three adversarial reviewers, a revision · no code written<br>
+      <span>Follows:</span> <a href="https://claude.ai/artifact/FgYTWeV9FqCxwzeuESd7Ap">NVMe SGL Page Loan</a>, which found tardis1's NVMe PRP-only
+    </p>
+  </header>
+
+  <section>
+    <p class="eyebrow">The idea</p>
+    <h2>Make the one DRAM round trip the back-end one</h2>
+    <p>On tardis1 every NVMe namespace is PRP-only, so loaned NIC pages can't go O_DIRECT: each TCP segment is a fragment ending mid-page, and the admission gate demotes the WRITE to a page-cache copy. David's answer is to stop fighting the copy and control where it happens:</p>
+    <div class="delta">
+      <div class="mark">1</div>
+      <div class="body"><h3>Accept one CPU copy</h3><p>Two data movements per written byte are fine, as long as only one of them goes out to DRAM and back.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">2</div>
+      <div class="body"><h3>Copy promptly from a small landing area</h3><p>Copy within about 10 µs of landing, from receive buffers confined to a few MB, so the NIC write and the copy read both stay in on-die cache. A core or two could be dedicated to it.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">3</div>
+      <div class="body"><h3>Release the landing buffer before storage completes</h3><p>The copy destination absorbs NVMe latency, including its multi-millisecond tails; the landing area only has to cover the copy.</p></div>
+    </div>
+    <p style="margin-top:14px">The 10 µs and few-MB figures are David's starting guesses. The spec replaces them with a residency model that needs the system cache size, which nobody has yet.</p>
+
+    <div class="diagram">
+      <div class="path-head"><span class="path-name" style="color:var(--cost)">Copy path · today</span><span class="path-tally"><b>4</b> DRAM touches / byte</span></div>
+      <div class="flow">
+        <div class="stage"><div class="chip">NIC RX DMA</div><div class="cap">W to DRAM</div></div>
+        <div class="arrow">&rarr;</div>
+        <div class="stage"><div class="chip">copy reads<br>landing</div><div class="cap">R from DRAM</div></div>
+        <div class="arrow">&rarr;</div>
+        <div class="stage"><div class="chip">copy writes<br>rq_pages</div><div class="cap">W to DRAM</div></div>
+        <div class="arrow">&rarr;</div>
+        <div class="stage"><div class="chip">NVMe DMA</div><div class="cap">R from DRAM</div></div>
+      </div>
+      <div class="path-head" style="margin-top:22px"><span class="path-name" style="color:var(--gain)">Copy path · landing on-die</span><span class="path-tally"><b>2</b> DRAM touches / byte (3 with RFO)</span></div>
+      <div class="flow">
+        <div class="stage"><div class="chip gate">NIC RX DMA</div><div class="cap">stays in cache</div></div>
+        <div class="arrow">&rarr;</div>
+        <div class="stage"><div class="chip gate">copy reads<br>landing</div><div class="cap">cache hit</div></div>
+        <div class="arrow">&rarr;</div>
+        <div class="stage"><div class="chip">copy writes<br>rq_pages</div><div class="cap">W to DRAM</div></div>
+        <div class="arrow">&rarr;</div>
+        <div class="stage"><div class="chip">NVMe DMA</div><div class="cap">R from DRAM</div></div>
+      </div>
+      <p class="diagram-note">The 2-touch case also needs the next NIC write to overwrite the dirty landing line in cache, with no write-back to DRAM. If the copy's stores read the destination line first (RFO), add one DRAM read to every copy row.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow ok">What the tree already does</p>
+    <h2>Today's copy path is David's data path, minus the physics</h2>
+    <p>With loans off, or for any record that isn't loan-eligible, SUNRPC's <code>read_sock</code> actor copies the payload into the nfsd thread's own <code>rq_pages</code> (<code>svc_tcp_rx_copy_skb()</code>, <code>svcsock.c:1698</code>). The skb is unlinked in the same pass, before decode, storage or reply. The destination is page-tiled, so nfsd's split sends its middle segment O_DIRECT even on a 4095 boundary.</p>
+    <div class="matrix">
+      <div class="cell k">One CPU copy</div><div class="cell v"><span class="pill yes">already</span></div>
+      <div class="cell k">NIC buffer released before storage (skb free is deferred to the NAPI CPU)</div><div class="cell v"><span class="pill yes">already</span></div>
+      <div class="cell k">O_DIRECT from the destination on PRP NVMe, when the file offset is a multiple of 4</div><div class="cell v"><span class="pill yes">already</span></div>
+      <div class="cell k">Copy runs within µs of landing</div><div class="cell v"><span class="pill no">no</span></div>
+      <div class="cell k">Landing area small enough to stay in cache</div><div class="cell v"><span class="pill no">no</span></div>
+    </div>
+    <h3 style="margin-top:26px">Why the copy isn't prompt</h3>
+    <ul class="steps">
+      <li><strong>The copy waits for an idle nfsd thread</strong>, and the thread that copies a record then runs it: a synchronous O_DIRECT write through NVMe completion, plus fsync for stable writes. tardis1's workers were 86% busy.</li>
+      <li><strong>nfsd threads are dynamic.</strong> A wake with no idle thread spawns nothing; a new thread appears only after a running one comes back with <code>-EBUSY</code>, and idle threads die after 5 s.</li>
+      <li><strong>A reply backlog also blocks the receive:</strong> a transport with no write space isn't queued for reading (<code>svc_xprt_no_write_space</code>).</li>
+      <li><strong>Nothing bounds the unread backlog.</strong> TCP svc sockets autotune to <code>tcp_rmem[2]</code>, and xeu posts 8 rings × 4096 buffers, one order-0 page each.</li>
+    </ul>
+    <p style="margin-top:14px"><strong>So the sub-project may reduce to configuration:</strong> make the landing set small and recycled, and make the copy prompt. That is a hypothesis for measurement to settle, not a conclusion.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Mike's question, and David's</p>
+    <h2>This idea doesn't need buffered I/O</h2>
+    <div class="verdict acc">
+      <p class="big">"Buffered IO doesn't allow zero copy via O_DIRECT, right?" <em>Right.</em></p>
+      <p>A buffered write copies into page-cache folios, and writeback DMAs from those; the RPC buffer never reaches the device. But David's idea already accepts one CPU copy, and its "second copy" is the NVMe DMA out of the copy destination. When the destination is a page-tiled buffer written O_DIRECT, which is today's <code>rq_pages</code> plus <code>nfsd_direct_write</code>, the back end is already zero-copy from the destination. The page cache is one possible destination, not a requirement, and <code>io_cache_write=1</code> measured 17–38% slower for writes on perflab (2026-09-23).</p>
+    </div>
+    <h3>"Stable writes hold the RPC buffer until the I/O completes; unstable don't" — checked</h3>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>io_cache_write</th><th>UNSTABLE</th><th>FILE_SYNC / DATA_SYNC</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0 / 1 buffered, DONTCACHE</td><td>copy into page cache and return</td><td class="x">waits for NVMe while holding the RPC buffer — David is right here</td></tr>
+        <tr><td class="num">2 DIRECT</td><td class="x">synchronous kiocb holds the buffer across NVMe; no fsync</td><td class="x">same, plus one fsync</td></tr>
+        <tr><td class="num">3 / 4</td><td colspan="2">raised to DATA_SYNC / FILE_SYNC: held through device completion and fsync. tardis1 ran mode 4.</td></tr>
+      </tbody>
+    </table></div>
+    <p>In copy mode the held buffer is the destination, which is meant to absorb storage latency; the NIC buffer is already gone. What's held that matters is the <strong>thread</strong>, because only a free thread can do the next copy. The decoupling needed is thread from copy, not buffer from storage.</p>
+    <p><strong>David's "confine receive buffers to a pool":</strong> nothing in this repository confines receive buffers. Loans take plain page references, so pages that nfsd still holds leave the page_pool and the NIC's landing set grows. If David has a separate change, we need it.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow hot">Found in review · try first</p>
+    <h2>A zero-copy route on PRP NVMe: paired posting with MSS 8192</h2>
+    <p>The PRP gate tests joints against the 4 KiB segment boundary, not PAGE_SIZE. The existing, untested <code>xeu-hds-experiment</code> patch lands each frame's payload at offset 0 of its own page. Set MTU 8244 on both ends (20 IP + 32 TCP with timestamps + 8192) and every interior payload fragment becomes exactly one 8 KiB block starting at page offset 0:</p>
+    <div class="geom">MTU 8244, hds_hdr_len=66, 64 KiB pages, loans on
+  fragment        [off 0, len 8192]   end 8192 &amp; 4095 = 0   <i>no joint</i>
+  record's first  [off H, to 8192]    starts 4-aligned        <i>allowed</i>
+  record's last   [off 0, len y]                              <i>allowed</i>
+  &rarr; loaned WRITE goes O_DIRECT on PRP NVMe: no SGL, <i>no CPU copy</i></div>
+    <p>That costs one out-of-tree driver patch (already written) and an MTU change. It depends on four things: E1 honouring paired posting, TCP headers staying a fixed 66 bytes, the client sending full-MSS segments, and the network carrying MTU 8244. A short segment or odd header demotes only its record, with correct data. The loan is still held until the reply, and each 8 KiB segment occupies a 64 KiB page.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Route</th><th>DRAM touches</th><th>CPU copies</th><th>Premise</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Z1</strong> paired posting + MSS 8192</td><td class="num">2</td><td class="num">0</td><td>E1 honours paired posting; fixed headers; MTU 8244</td><td class="r">cheapest probe</td></tr>
+        <tr><td><strong>Z2</strong> NFS/RDMA</td><td class="num">2</td><td class="num">0</td><td>an E1 verbs driver (none ships); client RoCE</td><td class="x">blocked on software</td></tr>
+        <tr><td><strong>Z3</strong> SGL NVMe</td><td class="num">2</td><td class="num">0</td><td>SGL-capable SSDs</td><td class="x">not on tardis1</td></tr>
+        <tr><td><strong>Z4</strong> on-die copy (this spec)</td><td class="num">2 (3 with RFO)</td><td class="num">1</td><td>NIC writes allocate into cache and overwrite in place</td><td class="num">gated on R1</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">DRAM-touch budget</p>
+    <h2>Where each path spends DRAM</h2>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Path</th><th>Sequence</th><th>Touches</th><th>With RFO</th></tr></thead>
+      <tbody>
+        <tr><td>A. today's copy, landing evicted before the copy</td><td>NIC W, copy R, destination W, NVMe R</td><td class="x">4</td><td class="num">5</td></tr>
+        <tr><td>B. copy hits, but the dirty landing line is written back later</td><td>landing write-back, destination W, NVMe R</td><td class="num">3</td><td class="num">4</td></tr>
+        <tr><td>B′. <strong>target</strong>: landing confined and recycled in cache</td><td>destination W, NVMe R</td><td class="r">2</td><td class="num">3</td></tr>
+        <tr><td>C. loan + O_DIRECT (SGL NVMe, or Z1 on PRP)</td><td>NIC W, NVMe R</td><td class="r">2</td><td class="r">2</td></tr>
+        <tr><td>D. loan demoted to buffered (tardis1 today with loans on)</td><td>NIC W, copy R, page-cache W, writeback R</td><td class="x">4</td><td class="num">5</td></tr>
+      </tbody>
+    </table></div>
+    <p>B′ needs three things, all unverified on E1: NIC writes allocate into the system cache; a full-line NIC write to a resident dirty line replaces it with no DRAM write-back; and the copy's destination stores don't evict the landing set. Only C reaches 2 regardless.</p>
+    <p><strong>tardis1 being DRAM-bandwidth bound is itself unverified.</strong> The 72% memory-stall figure fits a latency-bound copy just as well, and no DRAM bandwidth was ever measured. The throughput gain is conditional on phase 0b showing the write run near the DRAM ceiling.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Recommended direction</p>
+    <h2>Probe cheap, gate on hardware, configure before coding</h2>
+    <ol class="plan">
+      <li><strong>Try Z1 first.</strong> If <code>nfsd_write_direct</code> dominates, the write path is zero-copy on PRP NVMe and this sub-project becomes the fallback for networks that can't run MTU 8244.</li>
+      <li><strong>Decide R1</strong> with an iperf3 small-ring test: no NFS, no NVMe. If NIC writes don't allocate into cache, stop Z4.</li>
+      <li><strong>Treat today's copy path as the Z4 data path.</strong> Write no new data-path code until measurements show it can't reach B′.</li>
+      <li><strong>Then configuration only:</strong> smaller rings (never below 32), <code>tcp_rmem</code> sized in truesize terms, loans off, a fixed nfsd thread count, priority, a dedicated NAPI core, and <code>io_cache_write</code> 2 against 4.</li>
+      <li><strong>Only if the copy is still thread-bound</strong> at <code>io_cache_write=2</code> with a fixed thread pool: split SUNRPC receive from execution. That is the one substantial kernel change anticipated, and it's upstreamable on its own merits.</li>
+    </ol>
+    <h3 style="margin-top:22px">Copy destination options</h3>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Destination</th><th>New code</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>D1 <code>rq_pages</code> + O_DIRECT (today)</td><td class="r">none</td><td><strong>dominates on PRP NVMe</strong></td></tr>
+        <tr><td>D2 file-offset-aligned bounce + O_DIRECT</td><td class="x">high: SUNRPC would decode NFS</td><td>little gain: <code>dma_alignment</code> is 4 bytes</td></tr>
+        <tr><td>D3 page cache</td><td class="num">low</td><td>fallback; frees the thread early for UNSTABLE</td></tr>
+        <tr><td>D4 loan, copy out, release loan</td><td class="x">medium-high</td><td>moves the copy later, after decode: wrong direction</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Measurement plan · before any code</p>
+    <h2>Each phase ends in a go/no-go</h2>
+    <p>All on tardis1, on the 64 KiB kernel from this tree's HS twin, XFS on the PRP NVMe, with the existing client load (1 client, nconnect 16 × 2 subnets, 1 MB wsize). Cheap tests that can end or redirect the sub-project run first.</p>
+    <div class="delta">
+      <div class="mark">0a</div>
+      <div class="body"><h3>Inventory<span class="tag base">minutes</span></h3><p>Cache sizes, the <code>arm_cmn</code> / SPE / memory-controller PMUs and the CMN node map, xeu coherence and TPH, <code>XEU_POLL</code>, <code>CPUECTLR.EXTLLC</code>, cpuidle exit latency, rings, <code>tcp_rmem</code>, nfsd threads. <strong>Go:</strong> some DRAM-traffic counter exists, ideally split into reads and writes.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">Z1</div>
+      <div class="body"><h3>Paired posting + MSS 8192<span class="tag new">zero-copy probe</span></h3><p>Load xeu with the paired-posting patch and <code>hds_hdr_len=66</code>, MTU 8244 both ends and on the switch, loans on. Count <code>nfsd_write_direct</code> against <code>nfsd_write_dontcache</code>. <strong>Go:</strong> most WRITEs direct, and Z1 leads.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">R1</div>
+      <div class="body"><h3>Does NIC landing allocate and overwrite in cache?<span class="tag new">hardware gate</span></h3><p>One xeu port, <code>ethtool -G rx 256</code>, iperf3 receiving into a small reused buffer, against default rings of 4096 and an idle-link baseline. Count DRAM write and read bytes per NIC byte landed.</p></div>
+    </div>
+    <div class="matrix" style="margin:10px 0 18px">
+      <div class="cell k">≤ 0.3 DRAM write bytes per landed byte (and reads ≤ 0.3)</div><div class="cell v"><span class="pill yes">go</span></div>
+      <div class="cell k">between: cache allocation for I/O is probably way-limited — get the size and limit first</div><div class="cell v"><span class="pill pend">ask</span></div>
+      <div class="cell k">≥ 0.9 DRAM write bytes per landed byte</div><div class="cell v"><span class="pill no">stop Z4</span></div>
+    </div>
+    <div class="delta">
+      <div class="mark">0b</div>
+      <div class="body"><h3>Baseline, loans off and on</h3><p>WRITE dispositions, thread wake and queue-time histograms, page_pool recycle stats, absolute DRAM bandwidth against a STREAM ceiling, an RFO check, and landing-to-copy age keyed on TCP sequence numbers (from xeu completion to the copy), joined with cache-residency samples.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">0c</div>
+      <div class="body"><h3>Configuration sweep, no kernel change</h3><p>Rings 4096 → 64, ring count 8 and 4, <code>tcp_rmem</code> in truesize terms, <code>skb_defer_max</code>, nfsd threads with min = max, priority, pinned NAPI, <code>io_cache_write</code> 4 / 2 / 1. <strong>Go:</strong> a knee near the predicted landing size where touches per byte fall toward 2, with no drops or TCP collapse.</p></div>
+    </div>
+    <div class="verdict" style="margin-top:22px">
+      <p class="big">Don't shrink xeu rings below 32: <em>RX stops for good</em>.</p>
+      <p>The driver refills only when 32 or more slots are free (<code>XEU_RX_REFILL_THRESHOLD</code>, <code>xeu_drv.c:109</code>), and ethtool accepts 16. A ring of 16 can never reach 32 free, so it stalls after the first 16 frames. Phase 1 scales the threshold with the ring size.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Implementation · sketch only</p>
+    <h2>Nothing starts before phase 0 and Mike's go</h2>
+    <ul class="steps">
+      <li><strong>Phase 1, xeu driver:</strong> scale the refill threshold with ring size; productize paired posting if Z1 wins. Out-of-tree vendor driver, reported to Xsight.</li>
+      <li><strong>Phase 2, SUNRPC receive/execute split,</strong> only if phase 0c shows thread availability bounds the copy. A receive stage fills free arenas and hands complete records to execution threads, with backpressure through the TCP window rather than drops. Exposed as SUNRPC service options.</li>
+      <li><strong>Phase 3, per-service TCP receive-buffer policy,</strong> like UDP's <code>svc_sock_setbufsize()</code>, sized in truesize terms, if system-wide <code>tcp_rmem</code> is too blunt.</li>
+      <li><strong>Phase 4, early loan release,</strong> in the parent series: only after the whole procedure returns, because decoded NFSv4 arguments such as file names point into loaned NIC pages, and later COMPOUND ops use them. KUnit must cover a WRITE followed by a name-bearing op in one COMPOUND.</li>
+      <li><strong>KUnit</strong> in separate commits after each feature. No HS-only shortcuts; module parameters only as kill switches.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow hot">Risks, ranked</p>
+    <h2>What could sink it</h2>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>#</th><th>Risk</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td class="num">R1</td><td>E1 NIC writes don't allocate into on-die cache, or only into a small way-limited slice</td><td class="x">hard blocker for Z4</td></tr>
+        <tr><td class="num">R2</td><td>dirty landing lines still get written back (reuse order, or the destination evicts them)</td><td>caps the gain at 3 touches</td></tr>
+        <tr><td class="num">R2a</td><td>the copy's destination stores read for ownership</td><td>best case becomes 3</td></tr>
+        <tr><td class="num">R3</td><td>small rings drop at 400G: a few MB covers 40–80 µs of line rate</td><td>loss and retransmit, not backpressure</td></tr>
+        <tr><td class="num">R4</td><td>"a core or two" is likely short of 100 GB/s of copy</td><td>more cores compete for the same cache</td></tr>
+        <tr><td class="num">R5</td><td>the receive/execute split is a real SUNRPC redesign</td><td>correctness exposure</td></tr>
+        <tr><td class="num">R6</td><td>a clamped rcvbuf triggers <code>tcp_collapse</code></td><td>a hidden extra copy</td></tr>
+        <tr><td class="num">R7</td><td>no DRAM counter with a read/write split</td><td>G4 and R1 only inferred</td></tr>
+        <tr><td class="num">R10</td><td>releasing a loan before the whole COMPOUND finishes</td><td class="x">use-after-free</td></tr>
+        <tr><td class="num">R11</td><td>Z1 depends on fixed headers, full-MSS segments and MTU 8244 everywhere</td><td>records demoted to buffered</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Open questions</p>
+    <h2>What we need from people and vendors</h2>
+    <h3>Mike / David</h3>
+    <ul class="steps">
+      <li>Where is David's "confine receive buffers to a pool" change? Nothing in this repository does it.</li>
+      <li>Is the client fleet TCP-only, or does it have RoCE?</li>
+      <li>Can the storage network run MTU 8244 (Z1)?</li>
+    </ul>
+    <h3 style="margin-top:20px">Xsight</h3>
+    <ul class="steps">
+      <li>Does E1 honour paired posting? Does it support header-data split with payload coalescing?</li>
+      <li>Do xeu DMA writes allocate into the system cache? Is that way-limited or tunable? Does a full-line write to a dirty cached line avoid a DRAM write-back?</li>
+      <li>Do the P-unit PCIe steering table and TPH cover the xeu function as well as the NVMe?</li>
+      <li>What clock drives the completion-coalescing timeout, and can the host set it?</li>
+      <li>Is there, or will there be, an E1 verbs driver svcrdma could use?</li>
+    </ul>
+    <h3 style="margin-top:20px">SoC vendor</h3>
+    <ul class="steps">
+      <li>The system cache size and topology, needed before any landing-size target can be set.</li>
+      <li>Whether NVMe DMA reads allocate; whether a memory-controller PMU splits DRAM reads from writes.</li>
+      <li>Whether N2 write-streaming engages for the kernel memcpy (no RFO), and whether firmware sets <code>CPUECTLR.EXTLLC</code>.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">Adversarial review</p>
+    <h2>Twenty findings, all verified and folded in</h2>
+    <p>Three reviewers attacked the draft: kernel correctness, hardware physics, and a skeptic of the whole idea. Every finding was checked against the code before being accepted; none were rejected. Several overlap across reviewers.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>What changed</th><th>From</th></tr></thead>
+      <tbody>
+        <tr><td>Z1 (paired posting + MSS 8192) added as the first probe and a zero-copy route on PRP</td><td class="num">skeptic</td></tr>
+        <tr><td>R1 moved to a cheap iperf3 small-ring gate at the front, with numeric thresholds</td><td class="num">physics, skeptic</td></tr>
+        <tr><td>A residency model replaces the 10 µs / few-MB targets; tardis1 "DRAM-bound" relabelled as unverified</td><td class="num">physics</td></tr>
+        <tr><td>RFO carried on every copy row; best case may be 3 touches</td><td class="num">physics</td></tr>
+        <tr><td>Early release allowed only after the whole COMPOUND: decoded names alias loaned NIC pages</td><td class="num">kernel</td></tr>
+        <tr><td>Landing set counted in bytes written; truesize (a full page per buffer) kept separate</td><td class="num">kernel, skeptic</td></tr>
+        <tr><td>Latency probe keyed on TCP sequence, from xeu completion, since TCP coalesces and frees skbs</td><td class="num">all three</td></tr>
+        <tr><td>Deferred skb free, dynamic nfsd threads, and the write-space gate described</td><td class="num">kernel</td></tr>
+        <tr><td>Copy path goes direct only when the file offset is a multiple of 4</td><td class="num">kernel</td></tr>
+        <tr><td>xeu rings below 32 stall RX permanently</td><td class="num">kernel</td></tr>
+        <tr><td>NFS/RDMA's exclusion given a real reason: no E1 verbs driver ships</td><td class="num">skeptic</td></tr>
+      </tbody>
+    </table></div>
+    <p>The full table of all 20, with citations, is section 10 of the spec.</p>
+  </section>
+
+  <footer>
+    <span class="r">On-die receive copy · scoping spec · reviewed, no code</span><br>
+    In-tree: <code>NFSD_TCP_WRITE_ZEROCOPY/on-die-receive-copy/SPEC.md</code> (commit <code>ba094911a502</code>)<br>
+    Idea: David Flynn · Mike Snitzer · Hammerspace · 2026-09-27
+  </footer>
+
+</div>
