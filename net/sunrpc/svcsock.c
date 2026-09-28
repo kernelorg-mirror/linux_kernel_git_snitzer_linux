@@ -14,6 +14,8 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/module.h>
+#include <linux/sysfs.h>
+#include <linux/math64.h>
 #include <linux/errno.h>
 #include <linux/fcntl.h>
 #include <linux/net.h>
@@ -38,6 +40,8 @@
 #include <net/tcp.h>
 #include <net/tcp_states.h>
 #include <net/page_pool/helpers.h>
+#include <net/netns/generic.h>
+#include <linux/sysctl.h>
 #include <net/tls_prot.h>
 #include <net/handshake.h>
 #include <linux/uaccess.h>
@@ -59,6 +63,7 @@
 
 #include "socklib.h"
 #include "sunrpc.h"
+#include "netns.h"
 
 #define RPCDBG_FACILITY	RPCDBG_SVCXPRT
 
@@ -155,6 +160,919 @@ static void svc_reclassify_socket(struct socket *sock)
 }
 #endif
 
+/*
+ * Region credit admission.  The budget is the limit that is configured;
+ * credit is what one record draws against it and returns when it ends.
+ *
+ * Each network namespace has a budget of pages of
+ * the fixed receive region that its TCP receive loans may hold, and one
+ * default budget covers namespaces without one of their own; the budgets
+ * together may not exceed the region.  The initial namespace's budget is
+ * svc_tcp_rx_budget_pages and svc_tcp_rx_budget_reserve, the default's is
+ * svc_tcp_rx_budget_default_pages and svc_tcp_rx_budget_default_reserve, and
+ * any namespace's is net.sunrpc.region_budget_pages and _reserve.
+ *
+ * A loaned record is admitted at its first skb that carries region pages,
+ * against an estimated page cost, each later skb is charged the region loan
+ * entries it can add, and a transport without credit stops reading so its
+ * bytes stay in the TCP receive queue and the advertised window closes.
+ * Records that never carry a region page are never admitted.  A reserve that
+ * ordinary admission cannot take lets the oldest in-flight record always
+ * finish, so the receive path cannot deadlock.  Credit returns when a record
+ * ends; waiting transports are woken oldest first.
+ *
+ * No region page is loaned without credit.  When the budget a transport
+ * would draw on is 0, its region records are copied rather than loaned,
+ * whether or not any other budget is set: with every budget at 0, loans of
+ * region pages would be unbounded, and connections that each hold part of
+ * a record can between them hold the whole region, so that no record can
+ * receive the frames it still needs and none ever ends.  A copied record
+ * holds region pages only while it is being copied, so reading always
+ * returns them.
+ */
+static unsigned int svc_tcp_rx_budget_pages;
+static unsigned int svc_tcp_rx_budget_reserve;
+static unsigned int svc_tcp_rx_budget_default_pages;
+static unsigned int svc_tcp_rx_budget_default_reserve;
+
+static unsigned int svc_tcp_rx_credit_factor = 150;
+/* Largest factor with a positive TCP_RMEM_TO_WIN_SCALE ratio. */
+#define SVC_TCP_RX_CREDIT_FACTOR_MAX 22400U
+static int svc_tcp_rx_credit_factor_set(const char *val,
+				       const struct kernel_param *kp)
+{
+	unsigned int factor;
+	int ret = kstrtouint(val, 0, &factor);
+
+	if (ret)
+		return ret;
+	if (factor > SVC_TCP_RX_CREDIT_FACTOR_MAX)
+		return -EINVAL;
+	WRITE_ONCE(*(unsigned int *)kp->arg, factor);
+	return 0;
+}
+
+static const struct kernel_param_ops svc_tcp_rx_credit_factor_ops = {
+	.set = svc_tcp_rx_credit_factor_set,
+	.get = param_get_uint,
+};
+module_param_cb(svc_tcp_rx_credit_factor, &svc_tcp_rx_credit_factor_ops,
+		&svc_tcp_rx_credit_factor, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_credit_factor,
+		 "Estimated loaned pages per 100 payload pages (0..22400; TCP geometry floors at 100)");
+static unsigned int svc_tcp_rx_rcvbuf;
+static void svc_tcp_rx_budget_apply_all(void);
+
+/* A clamp below SVC_TCP_RX_RCVBUF_MIN turns every budget off. */
+static int svc_tcp_rx_rcvbuf_set(const char *val,
+				 const struct kernel_param *kp)
+{
+	int ret = param_set_uint(val, kp);
+
+	if (!ret)
+		svc_tcp_rx_budget_apply_all();
+	return ret;
+}
+
+static const struct kernel_param_ops svc_tcp_rx_rcvbuf_ops = {
+	.set = svc_tcp_rx_rcvbuf_set,
+	.get = param_get_uint,
+};
+module_param_cb(svc_tcp_rx_rcvbuf, &svc_tcp_rx_rcvbuf_ops,
+		&svc_tcp_rx_rcvbuf, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_rcvbuf,
+		 "Receive buffer clamp in bytes for TCP transports set up afterwards (0: none)");
+
+/*
+ * The region budget bounds loans; only svc_tcp_rx_rcvbuf bounds unread data. A
+ * smaller clamp holds so few page-pool segments that one short segment
+ * overflows it, so budgets stay off below this.
+ */
+#define SVC_TCP_RX_RCVBUF_MIN	(128 * 1024)
+
+struct svc_tcp_rx_budget {
+	/* NULL for the default budget */
+	struct net		*net;
+	/* requested budget, for a namespace other than the initial one */
+	unsigned int		cfg_pages;
+	unsigned int		cfg_reserve;
+	struct list_head	node;		/* svc_rx_budget_pools */
+	struct ctl_table_header	*sysctl;
+	spinlock_t		lock;
+	long			avail;
+	long			reserve;
+	unsigned int		budget;		/* configuration in force */
+	unsigned int		reserve_size;
+	unsigned int		inflight_count;
+	u64			next_ticket;
+	struct list_head	inflight;	/* admitted records, oldest first */
+	struct list_head	waiters;	/* transports, oldest ticket first */
+	u64			admitted;
+	u64			denied;
+	u64			paused;
+	u64			overrun;
+	u64			orphaned;	/* pages kept spent by abandoned records */
+};
+
+static struct svc_tcp_rx_budget svc_rx_budget_default = {
+	.lock		= __SPIN_LOCK_UNLOCKED(svc_rx_budget_default.lock),
+	.next_ticket	= 1,
+	.node		= LIST_HEAD_INIT(svc_rx_budget_default.node),
+	.inflight	= LIST_HEAD_INIT(svc_rx_budget_default.inflight),
+	.waiters	= LIST_HEAD_INIT(svc_rx_budget_default.waiters),
+};
+
+/* Namespace budgets, the initial one included. */
+static LIST_HEAD(svc_rx_budget_pools);
+static struct svc_tcp_rx_budget *svc_rx_budget_init;
+static DEFINE_MUTEX(svc_rx_budget_cfg_lock);
+
+static struct svc_tcp_rx_budget *svc_tcp_rx_budget_net(const struct net *net)
+{
+	return ((struct sunrpc_net *)net_generic(net, sunrpc_net_id))->rx_budget;
+}
+
+/* The budget and reserve requested for @c. */
+static void svc_tcp_rx_budget_requested(const struct svc_tcp_rx_budget *c,
+					unsigned int *pages,
+					unsigned int *reserve)
+{
+	if (!c->net) {
+		*pages = READ_ONCE(svc_tcp_rx_budget_default_pages);
+		*reserve = READ_ONCE(svc_tcp_rx_budget_default_reserve);
+	} else if (net_eq(c->net, &init_net)) {
+		*pages = READ_ONCE(svc_tcp_rx_budget_pages);
+		*reserve = READ_ONCE(svc_tcp_rx_budget_reserve);
+	} else {
+		*pages = READ_ONCE(c->cfg_pages);
+		*reserve = READ_ONCE(c->cfg_reserve);
+	}
+}
+
+static bool svc_tcp_rx_budget_is_init(const struct svc_tcp_rx_budget *c)
+{
+	return c->net && net_eq(c->net, &init_net);
+}
+
+static void svc_tcp_rx_budget_apply(struct svc_tcp_rx_budget *c);
+
+/* NULL until the initial namespace's sunrpc state exists. */
+static struct svc_tcp_rx_budget *svc_tcp_rx_budget_initial(void)
+{
+	return svc_rx_budget_init;
+}
+
+/*
+ * Set the budget of @target to @pages, unless the budgets together would
+ * exceed the region.  @target is the default budget, a namespace's, or NULL
+ * for the initial namespace's before it exists (module parameters at load).
+ */
+static int svc_tcp_rx_budget_set(struct svc_tcp_rx_budget *target,
+				 unsigned int pages)
+{
+	unsigned long region = page_pool_rx_region_size(), total = 0;
+	bool init_target = !target || svc_tcp_rx_budget_is_init(target);
+	struct svc_tcp_rx_budget *pos;
+	unsigned int cur, reserve;
+	bool init_counted = false;
+
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	svc_tcp_rx_budget_requested(&svc_rx_budget_default, &cur, &reserve);
+	total += target == &svc_rx_budget_default ? pages : cur;
+	list_for_each_entry(pos, &svc_rx_budget_pools, node) {
+		svc_tcp_rx_budget_requested(pos, &cur, &reserve);
+		if (svc_tcp_rx_budget_is_init(pos)) {
+			init_counted = true;
+			if (init_target)
+				cur = pages;
+		} else if (pos == target) {
+			cur = pages;
+		}
+		total += cur;
+	}
+	if (!init_counted)
+		total += init_target ? pages : READ_ONCE(svc_tcp_rx_budget_pages);
+	if (region && total > region) {
+		mutex_unlock(&svc_rx_budget_cfg_lock);
+		return -ENOSPC;
+	}
+	if (target == &svc_rx_budget_default)
+		WRITE_ONCE(svc_tcp_rx_budget_default_pages, pages);
+	else if (init_target)
+		WRITE_ONCE(svc_tcp_rx_budget_pages, pages);
+	else
+		WRITE_ONCE(target->cfg_pages, pages);
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+	svc_tcp_rx_budget_apply(init_target ? svc_tcp_rx_budget_initial() :
+				target);
+	return 0;
+}
+
+static int svc_tcp_rx_budget_reserve_set(const char *val,
+					 const struct kernel_param *kp)
+{
+	int ret = param_set_uint(val, kp);
+
+	if (ret)
+		return ret;
+	svc_tcp_rx_budget_apply(kp->arg == &svc_tcp_rx_budget_default_reserve ?
+				&svc_rx_budget_default :
+				svc_tcp_rx_budget_initial());
+	return 0;
+}
+
+static int svc_tcp_rx_budget_pages_set(const char *val,
+				       const struct kernel_param *kp)
+{
+	unsigned int pages;
+	int ret = kstrtouint(val, 0, &pages);
+
+	if (ret)
+		return ret;
+	return svc_tcp_rx_budget_set(kp->arg == &svc_tcp_rx_budget_default_pages ?
+				     &svc_rx_budget_default :
+				     svc_tcp_rx_budget_initial(), pages);
+}
+
+static const struct kernel_param_ops svc_tcp_rx_budget_pages_ops = {
+	.set = svc_tcp_rx_budget_pages_set,
+	.get = param_get_uint,
+};
+module_param_cb(svc_tcp_rx_budget_pages, &svc_tcp_rx_budget_pages_ops,
+		&svc_tcp_rx_budget_pages, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_budget_pages,
+		 "Region pages the initial namespace's TCP receive loans may hold (0: none)");
+
+static const struct kernel_param_ops svc_tcp_rx_budget_reserve_ops = {
+	.set = svc_tcp_rx_budget_reserve_set,
+	.get = param_get_uint,
+};
+module_param_cb(svc_tcp_rx_budget_reserve, &svc_tcp_rx_budget_reserve_ops,
+		&svc_tcp_rx_budget_reserve, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_budget_reserve,
+		 "Pages of that budget only the oldest in-flight record may use");
+module_param_cb(svc_tcp_rx_budget_default_pages, &svc_tcp_rx_budget_pages_ops,
+		&svc_tcp_rx_budget_default_pages, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_budget_default_pages,
+		 "Region pages loans in namespaces without a budget may hold (0: copy their region records)");
+module_param_cb(svc_tcp_rx_budget_default_reserve,
+		&svc_tcp_rx_budget_reserve_ops,
+		&svc_tcp_rx_budget_default_reserve, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_budget_default_reserve,
+		 "Pages of the default budget only the oldest in-flight record may use");
+
+static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
+				    size_t size)
+{
+	unsigned int waiters = 0;
+	struct svc_sock *pos;
+	int len;
+
+	if (!c)
+		return scnprintf(buf, size, "none\n");
+	spin_lock_bh(&c->lock);
+	list_for_each_entry(pos, &c->waiters, sk_credit_wait)
+		waiters++;
+	len = scnprintf(buf, size,
+			"budget %u reserve_size %u avail %ld reserve %ld inflight %u waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu\n",
+			c->budget, c->reserve_size, c->avail, c->reserve,
+			c->inflight_count, waiters, c->admitted, c->denied,
+			c->paused, c->overrun, c->orphaned);
+	spin_unlock_bh(&c->lock);
+	return len;
+}
+
+static int svc_tcp_rx_budget_stats_get(char *buffer,
+				       const struct kernel_param *kp)
+{
+	return svc_tcp_rx_budget_format(kp->arg ? kp->arg :
+					svc_tcp_rx_budget_initial(),
+					buffer, PAGE_SIZE);
+}
+
+static const struct kernel_param_ops svc_tcp_rx_budget_stats_ops = {
+	.get = svc_tcp_rx_budget_stats_get,
+};
+module_param_cb(svc_tcp_rx_budget_stats, &svc_tcp_rx_budget_stats_ops,
+		NULL, 0444);
+MODULE_PARM_DESC(svc_tcp_rx_budget_stats,
+		 "State of the initial namespace's region budget");
+module_param_cb(svc_tcp_rx_budget_default_stats, &svc_tcp_rx_budget_stats_ops,
+		&svc_rx_budget_default, 0444);
+MODULE_PARM_DESC(svc_tcp_rx_budget_default_stats,
+		 "State of the default region budget");
+
+/* net.sunrpc.region_budget_pages and _reserve: a namespace's budget. */
+static int svc_tcp_rx_budget_sysctl(const struct ctl_table *table, int write,
+				    void *buffer, size_t *lenp, loff_t *ppos)
+{
+	struct svc_tcp_rx_budget *c = table->extra1;
+	bool is_reserve = table->extra2 != NULL;
+	unsigned int pages, reserve, val;
+	struct ctl_table tmp = *table;
+	int ret;
+
+	svc_tcp_rx_budget_requested(c, &pages, &reserve);
+	val = is_reserve ? reserve : pages;
+	tmp.data = &val;
+	tmp.maxlen = sizeof(val);
+	ret = proc_douintvec(&tmp, write, buffer, lenp, ppos);
+	if (ret || !write)
+		return ret;
+	if (!is_reserve)
+		return svc_tcp_rx_budget_set(c, val);
+	if (svc_tcp_rx_budget_is_init(c))
+		WRITE_ONCE(svc_tcp_rx_budget_reserve, val);
+	else
+		WRITE_ONCE(c->cfg_reserve, val);
+	svc_tcp_rx_budget_apply(c);
+	return 0;
+}
+
+/* net.sunrpc.region_budget_stats: a namespace's budget, as it stands. */
+static int svc_tcp_rx_budget_stats_sysctl(const struct ctl_table *table,
+					  int write, void *buffer, size_t *lenp,
+					  loff_t *ppos)
+{
+	struct ctl_table tmp = *table;
+	char buf[256];
+
+	if (write)
+		return -EPERM;
+	svc_tcp_rx_budget_format(table->extra1, buf, sizeof(buf));
+	strim(buf);
+	tmp.data = buf;
+	tmp.maxlen = sizeof(buf);
+	return proc_dostring(&tmp, 0, buffer, lenp, ppos);
+}
+
+static const struct ctl_table svc_tcp_rx_budget_sysctl_table[] = {
+	{
+		.procname	= "region_budget_pages",
+		.mode		= 0644,
+		.proc_handler	= svc_tcp_rx_budget_sysctl,
+	},
+	{
+		.procname	= "region_budget_reserve",
+		.mode		= 0644,
+		.proc_handler	= svc_tcp_rx_budget_sysctl,
+		.extra2		= (void *)1,
+	},
+	{
+		.procname	= "region_budget_stats",
+		.mode		= 0444,
+		.proc_handler	= svc_tcp_rx_budget_stats_sysctl,
+	},
+};
+
+int svc_tcp_rx_budget_net_init(struct net *net)
+{
+	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
+	struct svc_tcp_rx_budget *c;
+	struct ctl_table *table;
+	unsigned int i;
+
+	c = kzalloc(sizeof(*c), GFP_KERNEL);
+	if (!c)
+		return -ENOMEM;
+	c->net = net;
+	spin_lock_init(&c->lock);
+	c->next_ticket = 1;
+	INIT_LIST_HEAD(&c->inflight);
+	INIT_LIST_HEAD(&c->waiters);
+	table = kmemdup(svc_tcp_rx_budget_sysctl_table,
+			sizeof(svc_tcp_rx_budget_sysctl_table), GFP_KERNEL);
+	if (!table)
+		goto out_free;
+	for (i = 0; i < ARRAY_SIZE(svc_tcp_rx_budget_sysctl_table); i++)
+		table[i].extra1 = c;
+	c->sysctl = register_net_sysctl_sz(net, "net/sunrpc", table,
+					   ARRAY_SIZE(svc_tcp_rx_budget_sysctl_table));
+	if (!c->sysctl)
+		goto out_table;
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	list_add_tail(&c->node, &svc_rx_budget_pools);
+	if (net_eq(net, &init_net))
+		svc_rx_budget_init = c;
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+	sn->rx_budget = c;
+	return 0;
+
+out_table:
+	kfree(table);
+out_free:
+	kfree(c);
+	return -ENOMEM;
+}
+
+void svc_tcp_rx_budget_net_exit(struct net *net)
+{
+	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
+	struct svc_tcp_rx_budget *c = sn->rx_budget;
+	const struct ctl_table *table;
+
+	if (!c)
+		return;
+	table = c->sysctl->ctl_table_arg;
+	unregister_net_sysctl_table(c->sysctl);
+	kfree(table);
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	list_del(&c->node);
+	if (svc_rx_budget_init == c)
+		svc_rx_budget_init = NULL;
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+	/* The namespace's transports, and so their records, are gone. */
+	WARN_ON_ONCE(c->inflight_count || !list_empty(&c->waiters));
+	sn->rx_budget = NULL;
+	kfree(c);
+}
+
+/*
+ * Apply changed parameters at once.  Records in flight keep the credit they
+ * hold and return it to the new configuration when they end, so with records
+ * in flight the free counts move by the change (and may go negative until
+ * those records end); with none, they are set outright.  True if anything
+ * changed: the caller must then wake the oldest waiter, as nothing else may.
+ */
+static bool svc_tcp_rx_budget_configure_locked(struct svc_tcp_rx_budget *c)
+{
+	unsigned int budget, reserve;
+
+	svc_tcp_rx_budget_requested(c, &budget, &reserve);
+	if (budget && READ_ONCE(svc_tcp_rx_rcvbuf) < SVC_TCP_RX_RCVBUF_MIN)
+		budget = 0;
+	reserve = min(reserve, budget);
+
+	if (budget == c->budget && reserve == c->reserve_size)
+		return false;
+	if (c->inflight_count) {
+		c->avail += (long)(budget - reserve) -
+			    (long)(c->budget - c->reserve_size);
+		c->reserve += (long)reserve - (long)c->reserve_size;
+	} else {
+		c->avail = budget - reserve;
+		c->reserve = reserve;
+	}
+	c->budget = budget;
+	c->reserve_size = reserve;
+	return true;
+}
+
+static u32 svc_tcp_rx_credit_cost(const struct svc_tcp_rx_state *state,
+				  u32 reclen)
+{
+	u64 pages = DIV_ROUND_UP(reclen, PAGE_SIZE);
+
+	pages = DIV_ROUND_UP_ULL(pages * READ_ONCE(svc_tcp_rx_credit_factor),
+				 100) + 1;
+	return min_t(u64, pages, state->capacity);
+}
+
+static struct svc_sock *svc_tcp_rx_credit_head(struct svc_tcp_rx_budget *c)
+{
+	return list_first_entry_or_null(&c->waiters, struct svc_sock,
+					sk_credit_wait);
+}
+
+/* Queue @svsk behind every waiter with an older ticket. */
+static void svc_tcp_rx_credit_wait_locked(struct svc_tcp_rx_budget *c,
+					  struct svc_sock *svsk, u64 ticket)
+{
+	struct svc_sock *pos;
+
+	if (!list_empty(&svsk->sk_credit_wait))
+		return;
+	svsk->sk_credit_ticket = ticket;
+	svsk->sk_budget = c;
+	list_for_each_entry(pos, &c->waiters, sk_credit_wait) {
+		if (pos->sk_credit_ticket > ticket) {
+			list_add_tail(&svsk->sk_credit_wait,
+				      &pos->sk_credit_wait);
+			return;
+		}
+	}
+	list_add_tail(&svsk->sk_credit_wait, &c->waiters);
+}
+
+/* @svsk no longer waits. */
+static void svc_tcp_rx_credit_unwait_locked(struct svc_sock *svsk)
+{
+	if (!list_empty(&svsk->sk_credit_wait))
+		list_del_init(&svsk->sk_credit_wait);
+	svsk->sk_credit_ticket = 0;
+	svsk->sk_budget = NULL;
+}
+
+static void svc_tcp_rx_credit_link_locked(struct svc_tcp_rx_budget *c,
+					  struct svc_tcp_rx_state *state)
+{
+	struct svc_tcp_rx_state *pos;
+
+	list_for_each_entry(pos, &c->inflight, credit_node) {
+		if (pos->credit_ticket > state->credit_ticket) {
+			list_add_tail(&state->credit_node, &pos->credit_node);
+			goto linked;
+		}
+	}
+	list_add_tail(&state->credit_node, &c->inflight);
+linked:
+	state->credit_linked = true;
+	state->credit_budget = c;
+	c->inflight_count++;
+}
+
+/* Take a reference on the oldest waiter to wake once the lock is dropped. */
+static struct svc_sock *svc_tcp_rx_credit_wake_locked(struct svc_tcp_rx_budget *c)
+{
+	struct svc_sock *head = svc_tcp_rx_credit_head(c);
+
+	if (!head || (c->budget && c->avail + c->reserve <= 0))
+		return NULL;
+	svc_xprt_get(&head->sk_xprt);
+	return head;
+}
+
+static void svc_tcp_rx_credit_wake(struct svc_sock *svsk)
+{
+	if (!svsk)
+		return;
+	set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags);
+	svc_xprt_enqueue(&svsk->sk_xprt);
+	svc_xprt_put(&svsk->sk_xprt);
+}
+
+/*
+ * After a change applied on behalf of @svsk: wake the oldest waiter unless
+ * that is @svsk, which is running.
+ */
+static struct svc_sock *
+svc_tcp_rx_credit_wake_other_locked(struct svc_tcp_rx_budget *c,
+				    struct svc_sock *svsk)
+{
+	if (svc_tcp_rx_credit_head(c) == svsk)
+		return NULL;
+	return svc_tcp_rx_credit_wake_locked(c);
+}
+
+/*
+ * Apply @c's parameters now.  A change is a wake event: with no record in
+ * flight nothing else runs the pool, and data arriving on a waiting
+ * transport does not queue it, so its waiters would be stranded.
+ */
+static void svc_tcp_rx_budget_apply(struct svc_tcp_rx_budget *c)
+{
+	struct svc_sock *wake = NULL;
+
+	if (!c)
+		return;
+	spin_lock_bh(&c->lock);
+	if (svc_tcp_rx_budget_configure_locked(c))
+		wake = svc_tcp_rx_credit_wake_locked(c);
+	spin_unlock_bh(&c->lock);
+	svc_tcp_rx_credit_wake(wake);
+}
+
+static void svc_tcp_rx_budget_apply_all(void)
+{
+	struct svc_tcp_rx_budget *pos;
+
+	svc_tcp_rx_budget_apply(&svc_rx_budget_default);
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	list_for_each_entry(pos, &svc_rx_budget_pools, node)
+		svc_tcp_rx_budget_apply(pos);
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+}
+
+static bool svc_tcp_rx_budget_on(struct svc_tcp_rx_budget *c)
+{
+	unsigned int pages, reserve;
+	bool configured;
+
+	svc_tcp_rx_budget_requested(c, &pages, &reserve);
+	configured = pages != 0;
+	if (configured && READ_ONCE(svc_tcp_rx_rcvbuf) < SVC_TCP_RX_RCVBUF_MIN) {
+		pr_warn_once("svc: a region budget needs svc_tcp_rx_rcvbuf >= %u; budgets off\n",
+			     SVC_TCP_RX_RCVBUF_MIN);
+		configured = false;
+	}
+	return configured || READ_ONCE(c->budget);
+}
+
+/*
+ * The budget @svsk draws on: the one it waits on, else its namespace's if
+ * one is requested there, else the default one.  The budget in force is
+ * updated only when its pool is next used, so it is no guide here: a pool
+ * being drained keeps its waiters (sk_budget) and its records in flight
+ * (credit_budget), and takes no new ones.
+ */
+static struct svc_tcp_rx_budget *svc_tcp_rx_budget_for(struct svc_sock *svsk)
+{
+	struct svc_tcp_rx_budget *c = READ_ONCE(svsk->sk_budget);
+	unsigned int pages, reserve;
+
+	if (c)
+		return c;
+	c = svc_tcp_rx_budget_net(svsk->sk_xprt.xpt_net);
+	if (c) {
+		svc_tcp_rx_budget_requested(c, &pages, &reserve);
+		if (pages)
+			return c;
+	}
+	return &svc_rx_budget_default;
+}
+
+static void svc_tcp_rx_credit_forget(struct svc_sock *svsk);
+
+/*
+ * The budget @svsk would draw on is 0: its region records are copied, so
+ * they hold region pages only while being copied.  That holds with no
+ * budget set anywhere too; see "Region credit admission" above.  A
+ * transport that waited (its budget went to 0 while it waited) no longer
+ * waits: it reads on without admission, and the next waiter is woken.
+ */
+static bool svc_tcp_rx_budget_copy(struct svc_sock *svsk)
+{
+	struct svc_tcp_rx_budget *c;
+	unsigned int pages, reserve;
+
+	c = svc_tcp_rx_budget_for(svsk);
+	svc_tcp_rx_budget_requested(c, &pages, &reserve);
+	if (pages)
+		return false;
+	svc_tcp_rx_credit_forget(svsk);
+	return true;
+}
+
+/*
+ * Admit a record at its first skb that carries region pages.  False: leave
+ * it unread from there; the transport is woken, oldest first, when credit
+ * returns.
+ */
+static bool svc_tcp_rx_credit_admit(struct svc_sock *svsk,
+				    struct svc_tcp_rx_state *state,
+				    u32 reclen)
+{
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_for(svsk);
+	struct svc_sock *head, *wake = NULL;
+	u32 cost, from_avail, from_reserve;
+	bool changed;
+
+	if (!svc_tcp_rx_budget_on(c) && list_empty(&svsk->sk_credit_wait))
+		return true;
+	if (WARN_ON_ONCE(state->credit_linked))
+		return true;
+	cost = svc_tcp_rx_credit_cost(state, reclen);
+	spin_lock_bh(&c->lock);
+	changed = svc_tcp_rx_budget_configure_locked(c);
+	if (!c->budget) {
+		/* Disable drains existing waiters through the same FIFO wake chain. */
+		svc_tcp_rx_credit_unwait_locked(svsk);
+		wake = svc_tcp_rx_credit_wake_locked(c);
+		spin_unlock_bh(&c->lock);
+		svc_tcp_rx_credit_wake(wake);
+		return true;
+	}
+	head = svc_tcp_rx_credit_head(c);
+	if (head && head != svsk)
+		goto deny;
+	if (list_empty(&c->inflight)) {
+		/* The oldest record may use the reserve: it always starts. */
+		from_avail = min_t(long, cost, max(c->avail, 0L));
+		from_reserve = min_t(long, cost - from_avail,
+				     max(c->reserve, 0L));
+	} else if (c->avail >= cost) {
+		from_avail = cost;
+		from_reserve = 0;
+	} else {
+		goto deny;
+	}
+	c->avail -= from_avail;
+	c->reserve -= from_reserve;
+	state->credit = from_avail + from_reserve;
+	state->credit_reserve = from_reserve;
+	state->credit_over = 0;
+	state->credit_ticket = svsk->sk_credit_ticket ?: c->next_ticket++;
+	svc_tcp_rx_credit_unwait_locked(svsk);
+	svc_tcp_rx_credit_link_locked(c, state);
+	c->admitted++;
+	wake = svc_tcp_rx_credit_wake_locked(c);
+	spin_unlock_bh(&c->lock);
+	svc_tcp_rx_credit_wake(wake);
+	return true;
+
+deny:
+	svc_tcp_rx_credit_wait_locked(c, svsk,
+				      svsk->sk_credit_ticket ?: c->next_ticket++);
+	c->denied++;
+	if (changed)
+		wake = svc_tcp_rx_credit_wake_other_locked(c, svsk);
+	spin_unlock_bh(&c->lock);
+	svc_tcp_rx_credit_wake(wake);
+	return false;
+}
+
+/*
+ * Before an admitted record consumes an skb: make sure its credit covers the
+ * region pages @need more could hold.  False: pause the record at this skb
+ * boundary; the transport is woken when credit returns.
+ */
+static bool svc_tcp_rx_credit_charge(struct svc_sock *svsk,
+				     struct svc_tcp_rx_state *state,
+				     u32 need)
+{
+	struct svc_tcp_rx_budget *c = state->credit_budget;
+	u32 held = state->region_count + need;
+	struct svc_sock *wake = NULL;
+	bool oldest, changed;
+	long want, take;
+
+	if (!state->credit_linked || held <= state->credit)
+		return true;
+	want = held - state->credit;
+	spin_lock_bh(&c->lock);
+	changed = svc_tcp_rx_budget_configure_locked(c);
+	if (!c->budget) {
+		/* Admission was turned off: records in flight finish unthrottled. */
+		state->credit += want;
+		state->credit_over += want;
+		want = 0;
+	}
+	oldest = list_first_entry(&c->inflight, struct svc_tcp_rx_state,
+				  credit_node) == state;
+	take = min(want, max(c->avail, 0L));
+	c->avail -= take;
+	state->credit += take;
+	want -= take;
+	if (want && oldest) {
+		take = min(want, max(c->reserve, 0L));
+		c->reserve -= take;
+		state->credit += take;
+		state->credit_reserve += take;
+		want -= take;
+		if (want) {
+			/* Beyond the budget: progress over accounting. */
+			state->credit += want;
+			state->credit_over += want;
+			c->overrun++;
+			want = 0;
+		}
+	}
+	if (want) {
+		svc_tcp_rx_credit_wait_locked(c, svsk, state->credit_ticket);
+		c->paused++;
+	} else {
+		svc_tcp_rx_credit_unwait_locked(svsk);
+	}
+	if (changed)
+		wake = svc_tcp_rx_credit_wake_other_locked(c, svsk);
+	spin_unlock_bh(&c->lock);
+	svc_tcp_rx_credit_wake(wake);
+	return !want;
+}
+
+/* Return a record's credit; exactly once, from every terminal path. */
+static void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state)
+{
+	struct svc_tcp_rx_budget *c;
+	struct svc_sock *wake;
+
+	if (!state || !state->credit_linked)
+		return;
+	c = state->credit_budget;
+	spin_lock_bh(&c->lock);
+	list_del(&state->credit_node);
+	c->inflight_count--;
+	c->reserve += state->credit_reserve;
+	c->avail += state->credit - state->credit_reserve - state->credit_over;
+	state->credit = 0;
+	state->credit_reserve = 0;
+	state->credit_over = 0;
+	state->credit_linked = false;
+	state->credit_budget = NULL;
+	svc_tcp_rx_budget_configure_locked(c);
+	wake = svc_tcp_rx_credit_wake_locked(c);
+	spin_unlock_bh(&c->lock);
+	svc_tcp_rx_credit_wake(wake);
+}
+
+/*
+ * A record whose loaned pages could not be accounted for is abandoned, its
+ * pages possibly still held: keep its credit spent, but take it out of the
+ * in-flight order so the next record can be the oldest and draw the reserve.
+ */
+static void svc_tcp_rx_credit_orphan(struct svc_tcp_rx_state *state)
+{
+	struct svc_tcp_rx_budget *c;
+	struct svc_sock *wake;
+
+	if (!state || !state->credit_linked)
+		return;
+	c = state->credit_budget;
+	spin_lock_bh(&c->lock);
+	list_del(&state->credit_node);
+	c->inflight_count--;
+	c->orphaned += state->credit - state->credit_over;
+	state->credit = 0;
+	state->credit_reserve = 0;
+	state->credit_over = 0;
+	state->credit_linked = false;
+	state->credit_budget = NULL;
+	wake = svc_tcp_rx_credit_wake_locked(c);
+	spin_unlock_bh(&c->lock);
+	svc_tcp_rx_credit_wake(wake);
+}
+
+/* A transport going away stops waiting. */
+static void svc_tcp_rx_credit_forget(struct svc_sock *svsk)
+{
+	struct svc_tcp_rx_budget *c = READ_ONCE(svsk->sk_budget);
+	struct svc_sock *wake;
+
+	if (!c)
+		return;
+	spin_lock_bh(&c->lock);
+	svc_tcp_rx_credit_unwait_locked(svsk);
+	wake = svc_tcp_rx_credit_wake_locked(c);
+	spin_unlock_bh(&c->lock);
+	svc_tcp_rx_credit_wake(wake);
+}
+
+/*
+ * Region pages bytes [off, off + len) of @page add to a count whose last
+ * page was *@prev.  A receive page that holds several frames is handed over
+ * one fragment at a time: only the first of them adds the page.
+ */
+static u32 svc_tcp_rx_region_span(struct page *page, u32 off, u32 len,
+				  struct page **prev)
+{
+	struct page *first = page + (off >> PAGE_SHIFT);
+	u32 pages = DIV_ROUND_UP(offset_in_page(off) + len, PAGE_SIZE);
+	struct page *last = first + pages - 1;
+
+	if (!page_pool_page_in_rx_region(page))
+		return 0;
+	if (first == *prev)
+		pages--;
+	*prev = last;
+	return pages;
+}
+
+static u32 svc_tcp_rx_skb_region_pages_after(const struct sk_buff *skb,
+					     u32 base, u32 first, u32 last,
+					     struct page **prev)
+{
+	const struct sk_buff *frag_skb;
+	u32 cursor = base, pages = 0, lo, hi;
+	unsigned int index;
+
+	if (max(first, base) >= min(last, base + skb->len))
+		return 0;
+	if (skb_headlen(skb)) {
+		lo = max(first, cursor);
+		hi = min(last, cursor + skb_headlen(skb));
+		if (lo < hi) {
+			const unsigned char *data = skb->data + lo - cursor;
+
+			pages += svc_tcp_rx_region_span(virt_to_page(data),
+							offset_in_page(data),
+							hi - lo, prev);
+		}
+		cursor += skb_headlen(skb);
+	}
+	for (index = 0; index < skb_shinfo(skb)->nr_frags; index++) {
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[index];
+		struct page *page = skb_frag_page(frag);
+
+		lo = max(first, cursor);
+		hi = min(last, cursor + skb_frag_size(frag));
+		if (lo < hi && page)
+			pages += svc_tcp_rx_region_span(page,
+					skb_frag_off(frag) + lo - cursor,
+					hi - lo, prev);
+		cursor += skb_frag_size(frag);
+	}
+	skb_walk_frags(skb, frag_skb) {
+		pages += svc_tcp_rx_skb_region_pages_after(frag_skb, cursor,
+							   first, last, prev);
+		cursor += frag_skb->len;
+	}
+	return pages;
+}
+
+/*
+ * Upper bound on the region pages bytes [first, last) of @skb can add:
+ * only pages from a pool bound to the fixed receive region count, and a
+ * page counts once however many consecutive fragments lie in it.
+ */
+static u32 svc_tcp_rx_skb_region_pages(const struct sk_buff *skb, u32 base,
+				       u32 first, u32 last)
+{
+	struct page *prev = NULL;
+
+	return svc_tcp_rx_skb_region_pages_after(skb, base, first, last,
+						 &prev);
+}
+
 static bool svc_tcp_rx_is_empty(const struct svc_tcp_rx_state *state)
 {
 	return state && state->mode == SVC_TCP_RX_EMPTY && !state->count &&
@@ -223,6 +1141,7 @@ static void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
 	if (WARN_ON_ONCE(!state->terminal || state->borrowed_count ||
 			 state->refs_acquired != state->refs_released))
 		return;
+	svc_tcp_rx_credit_release(state);
 	/* Append sets only [0, count); terminal owners clear it before reset. */
 	memset(state, 0, sizeof(*state));
 	state->capacity = capacity;
@@ -299,6 +1218,11 @@ static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
 			__set_bit(state->count, state->borrowed);
 			state->borrowed_count++;
 			state->refs_acquired++;
+			if (page_pool && page_pool_page_in_rx_region(page) &&
+			    page != state->region_last) {
+				state->region_count++;
+				state->region_last = page;
+			}
 		}
 		if (page_pool)
 			__set_bit(state->count, state->page_pool);
@@ -383,6 +1307,7 @@ static int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 			svc_tcp_rx_put_borrowed(bvec->bv_page,
 						test_bit(index, state->page_pool));
 			__clear_bit(index, state->borrowed);
+			state->region_last = NULL;
 			state->refs_released++;
 			state->borrowed_count--;
 			/*
@@ -449,8 +1374,10 @@ static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 {
 	unsigned int index;
 
-	if (WARN_ON_ONCE(!svc_tcp_rx_refs_valid(state)))
+	if (WARN_ON_ONCE(!svc_tcp_rx_refs_valid(state))) {
+		svc_tcp_rx_credit_orphan(state);
 		return -EINVAL;
+	}
 	for (index = 0; index < state->count; index++) {
 		if (!test_bit(index, state->borrowed))
 			continue;
@@ -468,8 +1395,10 @@ static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 			  (!bitmap_empty(state->borrowed, state->count) ||
 			   !bitmap_empty(state->page_pool, state->count) ||
 			   !bitmap_empty(state->merged, state->count))) ||
-			 state->refs_released != state->refs_acquired))
+			 state->refs_released != state->refs_acquired)) {
+		svc_tcp_rx_credit_orphan(state);
 		return -EINVAL;
+	}
 	return 0;
 }
 
@@ -820,6 +1749,18 @@ static void svc_sock_secure_port(struct svc_rqst *rqstp)
 }
 
 /*
+ * A transport waiting for region credit has stopped reading, and the credit
+ * wake, not each arriving skb, runs it again: svc_tcp_rx_credit_wake() sets
+ * XPT_DATA and enqueues it when credit returns.  Read without the credit
+ * lock; a stale answer costs one extra enqueue, or none that the wake does
+ * not make.
+ */
+static bool svc_tcp_rx_credit_waiting(struct svc_sock *svsk)
+{
+	return !list_empty_careful(&svsk->sk_credit_wait);
+}
+
+/*
  * INET callback when data has been received on the socket.
  */
 static void svc_data_ready(struct sock *sk)
@@ -834,6 +1775,8 @@ static void svc_data_ready(struct sock *sk)
 		svsk->sk_odata(sk);
 		trace_svcsock_data_ready(&svsk->sk_xprt, 0);
 		if (test_bit(XPT_HANDSHAKE, &svsk->sk_xprt.xpt_flags))
+			return;
+		if (svc_tcp_rx_credit_waiting(svsk))
 			return;
 		if (!test_and_set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags))
 			svc_xprt_enqueue(&svsk->sk_xprt);
@@ -1547,6 +2490,8 @@ struct svc_tcp_recv_ctx {
 	struct svc_rqst		*rqstp;
 	unsigned int		frags;
 	bool			complete;
+	/* stopped for region credit: its wake-up re-arms XPT_DATA */
+	bool			credit_wait;
 };
 
 /*
@@ -1844,6 +2789,8 @@ static void svc_tcp_rx_retract_last(struct svc_tcp_rx_state *state)
 		state->borrowed_count--;
 		state->refs_released++;
 		svc_tcp_rx_put_borrowed(bvec->bv_page, page_pool);
+		/* No longer held by this entry: a later loan of it counts. */
+		state->region_last = NULL;
 	} else {
 		state->copied_bytes -= bvec->bv_len;
 	}
@@ -2281,7 +3228,18 @@ static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
 		container_of(rqstp->rq_xprt, struct svc_sock, sk_xprt);
 	size_t reclen, received, want, take, n;
 	size_t consumed = 0;
+	bool paused = false;
 	int error = -EFAULT;
+
+	/*
+	 * A transport holds its receive buffer to svc_tcp_rx_rcvbuf once it
+	 * receives region pages; svc_tcp_recvfrom() applies it after the
+	 * socket lock is released.
+	 */
+	if (!svsk->sk_rx_held && !svsk->sk_rx_hold_pending &&
+	    READ_ONCE(svc_tcp_rx_rcvbuf) &&
+	    svc_tcp_rx_skb_region_pages(skb, 0, offset, offset + len))
+		svsk->sk_rx_hold_pending = true;
 
 	if (!desc->count)
 		return 0;
@@ -2349,6 +3307,48 @@ static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
 					goto fault;
 			}
 		}
+		/*
+		 * Only region pages draw on region credit: a loaned record is
+		 * admitted at its first skb that carries one, and charged for
+		 * each later one.  Refused, it pauses at this skb.
+		 */
+		if (remaining && state->mode == SVC_TCP_RX_MIXED) {
+			struct page *prev = state->region_last;
+			u32 need = svc_tcp_rx_skb_region_pages_after(skb, 0,
+						body_offset,
+						body_offset + remaining,
+						&prev);
+
+			if (need && !state->credit_linked &&
+			    svc_tcp_rx_budget_copy(svsk)) {
+				/* No budget to draw on: copy, do not loan. */
+				state->reason = SVC_TCP_RX_REASON_NO_BUDGET;
+				error = svc_tcp_rx_materialize(state,
+							       rqstp->rq_pages);
+				if (error)
+					goto fault;
+				trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt,
+							       rqstp, state,
+							       SVC_TCP_RX_MATERIALIZE);
+			} else if (need &&
+			    ((!state->credit_linked &&
+			      !svc_tcp_rx_credit_admit(svsk, state, reclen)) ||
+			     !svc_tcp_rx_credit_charge(svsk, state, need))) {
+				/* Paused at this skb: keep only the prefix taken. */
+				take -= remaining;
+				remaining = 0;
+				paused = true;
+			}
+		}
+		/*
+		 * A transport that waited and now reads on without being
+		 * admitted (its queue was collapsed out of the region while
+		 * it waited, so this skb draws no credit) no longer waits.
+		 * Left on the list it would stay the oldest waiter, never
+		 * run again, and strand every transport behind it.
+		 */
+		if (!paused && svc_tcp_rx_credit_waiting(svsk))
+			svc_tcp_rx_credit_forget(svsk);
 		if (remaining) {
 			if (state->mode == SVC_TCP_RX_COPY)
 				error = svc_tcp_rx_copy_skb(svsk, rqstp, skb,
@@ -2369,6 +3369,11 @@ static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
 		desc->count -= take;
 	}
 
+	if (paused) {
+		ctx->credit_wait = true;
+		desc->count = 0;
+		return consumed;
+	}
 	if (take == want) {
 		if (svc_sock_final_rec(svsk)) {
 			ctx->complete = true;
@@ -2394,6 +3399,8 @@ static bool svc_tcp_at_urg_mark(struct sock *sk)
 
 	return tp->urg_data && tp->urg_seq == tp->copied_seq;
 }
+
+static void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
 
 /**
  * svc_tcp_recvfrom - Receive data from a TCP socket
@@ -2449,6 +3456,8 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 	if (!ctx.complete && svc_tcp_at_urg_mark(sock->sk))
 		desc.error = -EPROTO;
 	release_sock(sock->sk);
+	if (svsk->sk_rx_hold_pending)
+		svc_tcp_rx_hold_buffer(svsk);
 
 	/* ->read_sock returns the octets consumed before an actor
 	 * failure, so a positive len can accompany desc.error.
@@ -2462,7 +3471,11 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 
 	if (!ctx.complete) {
 		if (!desc.count) {
-			set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags);
+			/* Waiting for credit: re-arming here would spin
+			 * through the threads until credit returns.
+			 */
+			if (!ctx.credit_wait)
+				set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags);
 			goto err_incomplete;
 		}
 		/* A zero return leaves no record at the head to classify.
@@ -2681,6 +3694,63 @@ void svc_cleanup_xprt_sock(void)
 	svc_unreg_xprt_class(&svc_udp_class);
 }
 
+/*
+ * A transport waiting for credit stops reading, so its receive window must
+ * never promise more payload than its locked receive buffer holds, or the
+ * queue overflows and the sender retransmits. Loaned payload costs
+ * svc_tcp_rx_credit_factor pages per 100 payload pages; an eighth is kept
+ * back for sk_buff overhead.
+ */
+static int svc_tcp_rx_window_clamp(int rcvbuf, unsigned int factor)
+{
+	return div64_u64((u64)rcvbuf * 100 * 7, (u64)max(factor, 100U) * 8);
+}
+
+/*
+ * TCP converts free receive memory into window at a payload/truesize ratio
+ * it learns from full-size segments only. A reader stopped for credit lets
+ * the buffer fill to that estimate, and shorter segments (a record's tail
+ * still takes whole pages) then overflow it. Use the region's geometry,
+ * less the same eighth, in TCP_RMEM_TO_WIN_SCALE units.
+ */
+static u8 svc_tcp_rx_scaling_ratio(unsigned int factor)
+{
+	return div64_u64((u64)(100 * 7) << TCP_RMEM_TO_WIN_SCALE,
+			 (u64)max(factor, 100U) * 8);
+}
+
+/*
+ * A transport that receives region pages: lock its receive buffer to
+ * svc_tcp_rx_rcvbuf, cap the payload/truesize ratio TCP turns free buffer
+ * into window with at the region's geometry, and clamp the window, so its
+ * unread data stays its share of the region.  The ceiling also keeps TCP
+ * from raising the clamp again when it re-learns its ratio.  Transports
+ * that never receive a region page keep TCP's own buffer.  Called with the
+ * socket unlocked: each call takes the socket lock itself.
+ */
+static void svc_tcp_rx_hold_buffer(struct svc_sock *svsk)
+{
+	unsigned int bytes = READ_ONCE(svc_tcp_rx_rcvbuf);
+	unsigned int factor = READ_ONCE(svc_tcp_rx_credit_factor);
+	struct sock *sk = svsk->sk_sk;
+	int rcvbuf, clamp;
+	u8 ratio;
+
+	svsk->sk_rx_hold_pending = false;
+	if (!bytes || svsk->sk_rx_held)
+		return;
+	rcvbuf = max_t(int, bytes, SOCK_MIN_RCVBUF);
+	clamp = svc_tcp_rx_window_clamp(rcvbuf, factor);
+	ratio = svc_tcp_rx_scaling_ratio(factor);
+
+	/* Unread data is this transport's share of the region. */
+	sock_set_rcvbuf(sk, rcvbuf / 2);	/* doubled on the way in */
+	tcp_sock_set_scaling_ratio_max(sk, ratio);
+	if (tcp_sock_set_window_clamp(sk, clamp))
+		pr_warn_once("svc: TCP receive window clamp failed\n");
+	svsk->sk_rx_held = true;
+}
+
 static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 {
 	struct sock	*sk = svsk->sk_sk;
@@ -2699,7 +3769,6 @@ static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 		sk->sk_state_change = svc_tcp_state_change;
 		sk->sk_data_ready = svc_data_ready;
 		sk->sk_write_space = svc_write_space;
-
 		svsk->sk_marker = xdr_zero;
 		svsk->sk_tcplen = 0;
 		svsk->sk_datalen = 0;
@@ -2766,6 +3835,8 @@ static struct svc_sock *svc_setup_socket(struct svc_serv *serv,
 
 	pages = svc_serv_maxpages(serv);
 	svsk = kzalloc_flex(*svsk, sk_pages, pages);
+	if (svsk)
+		INIT_LIST_HEAD(&svsk->sk_credit_wait);
 	if (!svsk)
 		return ERR_PTR(-ENOMEM);
 
@@ -2997,6 +4068,7 @@ static void svc_tcp_sock_detach(struct svc_xprt *xprt)
 	svc_sock_detach(xprt);
 
 	if (!test_bit(XPT_LISTENER, &xprt->xpt_flags)) {
+		svc_tcp_rx_credit_forget(svsk);
 		svc_tcp_clear_pages(svsk);
 		kernel_sock_shutdown(svsk->sk_sock, SHUT_RDWR);
 	}

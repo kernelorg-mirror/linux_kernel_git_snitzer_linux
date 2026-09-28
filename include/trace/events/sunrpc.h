@@ -2366,6 +2366,7 @@ TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_NULL_PAGE);
 TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_COPY_FAULT);
 TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_INVARIANT);
 TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_SMALL);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_NO_BUDGET);
 
 #define show_svc_tcp_rx_reason(reason) \
 	__print_symbolic(reason, \
@@ -2387,7 +2388,8 @@ TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_SMALL);
 		{ SVC_TCP_RX_REASON_NULL_PAGE, "null-page" }, \
 		{ SVC_TCP_RX_REASON_COPY_FAULT, "copy-fault" }, \
 		{ SVC_TCP_RX_REASON_INVARIANT, "invariant" }, \
-		{ SVC_TCP_RX_REASON_SMALL, "small" })
+		{ SVC_TCP_RX_REASON_SMALL, "small" },				\
+		{ SVC_TCP_RX_REASON_NO_BUDGET, "no_budget" })
 
 DECLARE_EVENT_CLASS(svcsock_tcp_rx_lifetime_class,
 	TP_PROTO(
@@ -2413,6 +2415,7 @@ DECLARE_EVENT_CLASS(svcsock_tcp_rx_lifetime_class,
 		__field(u32, bvec_count)
 		__field(u32, refs_acquired)
 		__field(u32, refs_released)
+		__field(u32, credit)
 		__field(u8, action)
 		__field(u8, mode)
 		__field(u8, reason)
@@ -2433,13 +2436,14 @@ DECLARE_EVENT_CLASS(svcsock_tcp_rx_lifetime_class,
 		__entry->bvec_count = state->count;
 		__entry->refs_acquired = state->refs_acquired;
 		__entry->refs_released = state->refs_released;
+		__entry->credit = state->credit;
 		__entry->action = action;
 		__entry->mode = state->mode;
 		__entry->reason = state->reason;
 		__assign_str(addr);
 	),
 
-	TP_printk("addr=%s xprt=%p rqstp=%p sequence=%llu xid=0x%08x action=%s mode=%s reason=%s body=%u fixed=%u borrowed=%u copied=%u materialized=%u page_pool=%u bvecs=%u refs=%u/%u",
+	TP_printk("addr=%s xprt=%p rqstp=%p sequence=%llu xid=0x%08x action=%s mode=%s reason=%s body=%u fixed=%u borrowed=%u copied=%u materialized=%u page_pool=%u bvecs=%u refs=%u/%u credit=%u",
 		__get_str(addr), __entry->xprt, __entry->rqstp,
 		__entry->sequence, __entry->xid,
 		show_svc_tcp_rx_action(__entry->action),
@@ -2449,7 +2453,7 @@ DECLARE_EVENT_CLASS(svcsock_tcp_rx_lifetime_class,
 		__entry->borrowed_bytes, __entry->copied_bytes,
 		__entry->materialized_bytes, __entry->page_pool_bytes,
 		__entry->bvec_count, __entry->refs_acquired,
-		__entry->refs_released)
+		__entry->refs_released, __entry->credit)
 );
 
 DEFINE_EVENT(svcsock_tcp_rx_lifetime_class, svcsock_tcp_rx_lifetime,

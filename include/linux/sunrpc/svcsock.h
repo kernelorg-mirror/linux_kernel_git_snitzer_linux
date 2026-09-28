@@ -13,6 +13,8 @@
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/svc_xprt.h>
 
+struct svc_tcp_rx_budget;
+
 enum svc_tcp_rx_mode {
 	SVC_TCP_RX_EMPTY,
 	SVC_TCP_RX_PREFIX,
@@ -50,6 +52,7 @@ enum svc_tcp_rx_reason {
 	SVC_TCP_RX_REASON_COPY_FAULT,
 	SVC_TCP_RX_REASON_INVARIANT,
 	SVC_TCP_RX_REASON_SMALL,
+	SVC_TCP_RX_REASON_NO_BUDGET,
 };
 
 /*
@@ -84,6 +87,21 @@ struct svc_tcp_rx_state {
 	u32			merge_fill;
 	/* pages in the copy arena (rq_pages); @capacity counts bvecs */
 	u32			arena_pages;
+	/* region credit held by this record (svc_tcp_rx_credit_*) */
+	u64			credit_ticket;
+	u32			credit;
+	u32			credit_reserve;
+	u32			credit_over;
+	/*
+	 * region pages loaned, an upper bound on those held: a page counts
+	 * again only after a loan of another one (@region_last is the last)
+	 */
+	u32			region_count;
+	struct page		*region_last;
+	bool			credit_linked;
+	struct list_head	credit_node;
+	/* the budget this record's credit came from, while linked */
+	struct svc_tcp_rx_budget *credit_budget;
 } ____cacheline_aligned;
 
 /*
@@ -113,6 +131,15 @@ struct svc_sock {
 	u32			sk_datalen;
 	u64			sk_rx_sequence;
 	struct svc_tcp_rx_state	*sk_rx;
+	/* waiting for region credit, ordered by sk_credit_ticket */
+	struct list_head	sk_credit_wait;
+	u64			sk_credit_ticket;
+	/* the budget whose waiters @sk_credit_wait is on */
+	struct svc_tcp_rx_budget *sk_budget;
+	/* region pages seen: hold the receive buffer (set by the actor) */
+	bool			sk_rx_hold_pending;
+	/* receive buffer, window clamp and scaling ratio held */
+	bool			sk_rx_held;
 
 	struct page_frag_cache  sk_frag_cache;
 

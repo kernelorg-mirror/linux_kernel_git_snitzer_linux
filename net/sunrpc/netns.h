@@ -34,9 +34,15 @@ struct sunrpc_net {
 	atomic_t pipe_users;
 	struct proc_dir_entry *use_gssp_proc;
 	struct proc_dir_entry *gss_krb5_enctypes;
+
+	/* this namespace's share of the fixed receive region (svcsock.c) */
+	struct svc_tcp_rx_budget *rx_budget;
 };
 
 extern unsigned int sunrpc_net_id;
+
+int svc_tcp_rx_budget_net_init(struct net *net);
+void svc_tcp_rx_budget_net_exit(struct net *net);
 
 int ip_map_cache_create(struct net *);
 void ip_map_cache_destroy(struct net *);
