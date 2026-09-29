@@ -759,7 +759,7 @@ int nfs_initiate_pgio(struct rpc_clnt *clnt, struct nfs_pgio_header *hdr,
 	dprintk("NFS: initiated pgio call "
 		"(req %s/%llu, %u bytes @ offset %llu)\n",
 		hdr->inode->i_sb->s_id,
-		(unsigned long long)NFS_FILEID(hdr->inode),
+		(unsigned long long)hdr->inode->i_ino,
 		hdr->args.count,
 		(unsigned long long)hdr->args.offset);
 
@@ -770,7 +770,8 @@ int nfs_initiate_pgio(struct rpc_clnt *clnt, struct nfs_pgio_header *hdr,
 	task = rpc_run_task(&task_setup_data);
 	if (IS_ERR(task))
 		return PTR_ERR(task);
-	rpc_put_task(task);
+	/* The caller may be writeback: don't run rpc_release() here */
+	rpc_put_task_async(task);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(nfs_initiate_pgio);

@@ -225,8 +225,9 @@ const u32 nfs4_fattr_bitmap[3] = {
 	| FATTR4_WORD1_TIME_METADATA
 	| FATTR4_WORD1_TIME_MODIFY
 	| FATTR4_WORD1_MOUNTED_ON_FILEID,
+	FATTR4_WORD2_UNCACHEABLE_FILE_DATA
 #ifdef CONFIG_NFS_V4_SECURITY_LABEL
-	FATTR4_WORD2_SECURITY_LABEL
+	| FATTR4_WORD2_SECURITY_LABEL
 #endif
 };
 
@@ -250,6 +251,7 @@ static const u32 nfs4_pnfs_open_bitmap[3] = {
 #ifdef CONFIG_NFS_V4_SECURITY_LABEL
 	| FATTR4_WORD2_SECURITY_LABEL
 #endif
+	| FATTR4_WORD2_UNCACHEABLE_FILE_DATA
 };
 
 static const u32 nfs4_open_noattr_bitmap[3] = {
@@ -306,6 +308,15 @@ static void nfs4_bitmap_copy_adjust(__u32 *dst, const __u32 *src,
 	unsigned long cache_validity;
 
 	memcpy(dst, src, NFS4_BITMASK_SZ*sizeof(*dst));
+	/*
+	 * The uncacheable_file_data attribute applies only to regular files
+	 * (NF4REG); a server must reject a query of it on any other object
+	 * type with NFS4ERR_INVAL.  Never request it unless the target is
+	 * known to be a regular file (callers with an unknown object type,
+	 * e.g. LOOKUP, pass a NULL inode).
+	 */
+	if (!inode || !S_ISREG(inode->i_mode))
+		dst[2] &= ~FATTR4_WORD2_UNCACHEABLE_FILE_DATA;
 	if (!inode || !nfs_have_read_or_write_delegation(inode))
 		return;
 
@@ -326,6 +337,9 @@ static void nfs4_bitmap_copy_adjust(__u32 *dst, const __u32 *src,
 
 	if (!(cache_validity & NFS_INO_INVALID_BTIME))
 		dst[1] &= ~FATTR4_WORD1_TIME_CREATE;
+
+	if (!(cache_validity & NFS_INO_INVALID_UNCACHEABLE_FILE_DATA))
+		dst[2] &= ~FATTR4_WORD2_UNCACHEABLE_FILE_DATA;
 
 	if (nfs_have_delegated_mtime(inode)) {
 		if (!(cache_validity & NFS_INO_INVALID_ATIME))
@@ -377,7 +391,7 @@ static void nfs4_setup_readdir(u64 cookie, __be32 *verifier, struct dentry *dent
 		*p++ = htonl(attrs);                           /* bitmap */
 		*p++ = htonl(12);             /* attribute buffer length */
 		*p++ = htonl(NF4DIR);
-		p = xdr_encode_hyper(p, NFS_FILEID(d_inode(dentry)));
+		p = xdr_encode_hyper(p, d_inode(dentry)->i_ino);
 	}
 	
 	*p++ = xdr_one;                                  /* next */
@@ -391,7 +405,7 @@ static void nfs4_setup_readdir(u64 cookie, __be32 *verifier, struct dentry *dent
 	*p++ = htonl(12);             /* attribute buffer length */
 	*p++ = htonl(NF4DIR);
 	spin_lock(&dentry->d_lock);
-	p = xdr_encode_hyper(p, NFS_FILEID(d_inode(dentry->d_parent)));
+	p = xdr_encode_hyper(p, d_inode(dentry->d_parent)->i_ino);
 	spin_unlock(&dentry->d_lock);
 
 	readdir->pgbase = (char *)p - (char *)start;
@@ -3839,6 +3853,16 @@ nfs4_atomic_open(struct inode *dir, struct nfs_open_context *ctx,
 
 	if (IS_ERR(state))
 		return ERR_CAST(state);
+
+	/*
+	 * Use O_DIRECT if file was marked as Uncacheable, see:
+	 * https://datatracker.ietf.org/doc/draft-ietf-nfsv4-uncacheable-files/
+	 */
+	if (!(open_flags & O_DIRECT) && NFS_I(state->inode)->uncacheable_file_data) {
+		if (!(open_flags & O_APPEND))
+			set_bit(NFS_CONTEXT_O_DIRECT, &ctx->flags);
+	}
+
 	return state->inode;
 }
 
@@ -3857,7 +3881,7 @@ static void nfs4_close_context(struct nfs_open_context *ctx, int is_sync)
 
 #define FATTR4_WORD1_NFS40_MASK (2*FATTR4_WORD1_MOUNTED_ON_FILEID - 1UL)
 #define FATTR4_WORD2_NFS41_MASK (2*FATTR4_WORD2_SUPPATTR_EXCLCREAT - 1UL)
-#define FATTR4_WORD2_NFS42_MASK (2*FATTR4_WORD2_OPEN_ARGUMENTS - 1UL)
+#define FATTR4_WORD2_NFS42_MASK (2*FATTR4_WORD2_UNCACHEABLE_FILE_DATA - 1UL)
 
 #define FATTR4_WORD2_NFS42_TIME_DELEG_MASK \
 	(FATTR4_WORD2_TIME_DELEG_MODIFY|FATTR4_WORD2_TIME_DELEG_ACCESS)
@@ -3981,6 +4005,8 @@ static int _nfs4_server_capabilities(struct nfs_server *server, struct nfs_fh *f
 		memcpy(server->attr_bitmask_nl, res.attr_bitmask,
 				sizeof(server->attr_bitmask));
 		server->attr_bitmask_nl[2] &= ~FATTR4_WORD2_SECURITY_LABEL;
+		if (!(res.attr_bitmask[2] & FATTR4_WORD2_UNCACHEABLE_FILE_DATA))
+			server->fattr_valid &= ~NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA;
 
 		if (res.open_caps.oa_share_access_want[0] &
 		    NFS4_SHARE_WANT_OPEN_XOR_DELEGATION)
@@ -4591,6 +4617,7 @@ static int _nfs4_proc_lookup(struct rpc_clnt *clnt, struct inode *dir,
 		.rpc_resp = &res,
 	};
 	unsigned short task_flags = 0;
+	__u32 bitmask[NFS4_BITMASK_SZ];
 
 	if (nfs_server_capable(dir, NFS_CAP_MOVEABLE))
 		task_flags = RPC_TASK_MOVEABLE;
@@ -4599,7 +4626,13 @@ static int _nfs4_proc_lookup(struct rpc_clnt *clnt, struct inode *dir,
 	if (nfs_lookup_is_soft_revalidate(dentry))
 		task_flags |= RPC_TASK_TIMEOUT;
 
-	args.bitmask = nfs4_bitmask(server, fattr->label);
+	/*
+	 * The looked-up object's type is unknown here, so gate out the
+	 * regular-file-only uncacheable_file_data attribute (NULL inode).
+	 */
+	nfs4_bitmap_copy_adjust(bitmask, nfs4_bitmask(server, fattr->label),
+				NULL, 0);
+	args.bitmask = bitmask;
 
 	nfs_fattr_init(fattr);
 
@@ -4713,13 +4746,20 @@ static int _nfs4_proc_lookupp(struct inode *inode,
 		.rpc_resp = &res,
 	};
 	unsigned short task_flags = 0;
+	__u32 bitmask[NFS4_BITMASK_SZ];
 
 	if (server->flags & NFS_MOUNT_SOFTREVAL)
 		task_flags |= RPC_TASK_TIMEOUT;
 	if (server->caps & NFS_CAP_MOVEABLE)
 		task_flags |= RPC_TASK_MOVEABLE;
 
-	args.bitmask = nfs4_bitmask(server, fattr->label);
+	/*
+	 * The looked-up object's type is unknown here, so gate out the
+	 * regular-file-only uncacheable_file_data attribute (NULL inode).
+	 */
+	nfs4_bitmap_copy_adjust(bitmask, nfs4_bitmask(server, fattr->label),
+				NULL, 0);
+	args.bitmask = bitmask;
 
 	nfs_fattr_init(fattr);
 	nfs4_init_sequence(server->nfs_client, &args.seq_args, &res.seq_res, 0, 0);
@@ -5134,6 +5174,7 @@ struct nfs4_createdata {
 	struct nfs4_create_res res;
 	struct nfs_fh fh;
 	struct nfs_fattr fattr;
+	u32 bitmask[NFS4_BITMASK_SZ];
 };
 
 static struct nfs4_createdata *nfs4_alloc_createdata(struct inode *dir,
@@ -5157,7 +5198,14 @@ static struct nfs4_createdata *nfs4_alloc_createdata(struct inode *dir,
 		data->arg.name = name;
 		data->arg.attrs = sattr;
 		data->arg.ftype = ftype;
-		data->arg.bitmask = nfs4_bitmask(server, data->fattr.label);
+		/*
+		 * CREATE only makes non-regular objects, so gate out the
+		 * regular-file-only uncacheable_file_data attribute (NULL inode).
+		 */
+		nfs4_bitmap_copy_adjust(data->bitmask,
+					nfs4_bitmask(server, data->fattr.label),
+					NULL, 0);
+		data->arg.bitmask = data->bitmask;
 		data->arg.umask = current_umask();
 		data->res.server = server;
 		data->res.fh = &data->fh;
@@ -5809,6 +5857,13 @@ void nfs4_bitmask_set(__u32 bitmask[], const __u32 src[],
 		bitmask[1] |= FATTR4_WORD1_SPACE_USED;
 	if (cache_validity & NFS_INO_INVALID_BTIME)
 		bitmask[1] |= FATTR4_WORD1_TIME_CREATE;
+	/*
+	 * uncacheable_file_data (attr 87) applies only to regular files; a
+	 * directory can reach here via DELEGRETURN of a directory delegation.
+	 */
+	if ((cache_validity & NFS_INO_INVALID_UNCACHEABLE_FILE_DATA) &&
+	    S_ISREG(inode->i_mode))
+		bitmask[2] |= FATTR4_WORD2_UNCACHEABLE_FILE_DATA;
 
 	if (cache_validity & NFS_INO_INVALID_SIZE)
 		bitmask[0] |= FATTR4_WORD0_SIZE;
@@ -7762,6 +7817,7 @@ static int nfs4_add_lease(struct file *file, int arg, struct file_lease **lease,
 {
 	struct inode *inode = file_inode(file);
 	fmode_t type = arg == F_RDLCK ? FMODE_READ : FMODE_WRITE;
+	fl_owner_t owner = (*lease)->c.flc_owner;
 	int ret;
 
 	/* No delegation, no lease */
@@ -7771,7 +7827,8 @@ static int nfs4_add_lease(struct file *file, int arg, struct file_lease **lease,
 	if (ret || nfs4_have_delegation(inode, type, 0))
 		return ret;
 	/* We raced with a delegation return */
-	nfs4_delete_lease(file, priv);
+	dprintk("%s: raced with a delegation return\n", __func__);
+	nfs4_delete_lease(file, &owner);
 	return -EAGAIN;
 }
 
@@ -9624,6 +9681,14 @@ nfs4_layoutget_handle_exception(struct rpc_task *task,
 		status = -EOVERFLOW;
 		goto out;
 	/*
+	 * NFS4ERR_TOOSMALL means the layout for the requested range
+	 * exceeds what the client advertised in loga_maxcount (see
+	 * RFC8881 section 18.43.3).
+	 */
+	case -ETOOSMALL:
+		status = -EMSGSIZE;
+		goto out;
+	/*
 	 * NFS4ERR_LAYOUTTRYLATER is a conflict with another client
 	 * (or clients) writing to the same RAID stripe except when
 	 * the minlength argument is 0 (see RFC5661 section 18.43.3).
@@ -9990,6 +10055,38 @@ nfs4_layoutcommit_done(struct rpc_task *task, void *calldata)
 	case -NFS4ERR_GRACE:	    /* loca_recalim always false */
 		task->tk_status = 0;
 		break;
+	case -NFS4ERR_OLD_STATEID: {
+		u32 old_seqid = be32_to_cpu(data->args.stateid.seqid);
+		struct pnfs_layout_range range = {
+			.iomode = IOMODE_ANY,
+			.offset = 0,
+			.length = NFS4_MAX_UINT64,
+		};
+
+		if (nfs4_layout_refresh_old_stateid(&data->args.stateid,
+						    &range,
+						    data->args.inode)) {
+			struct pnfs_layout_hdr *lo;
+
+			spin_lock(&data->args.inode->i_lock);
+			lo = NFS_I(data->args.inode)->layout;
+			if (lo && pnfs_layout_is_valid(lo) &&
+			    nfs4_stateid_match_other(&data->args.stateid,
+						     &lo->plh_stateid))
+				pnfs_set_layout_stateid(lo, &data->args.stateid,
+							NULL, false);
+			spin_unlock(&data->args.inode->i_lock);
+
+			dprintk("%s: refreshed OLD_STATEID inode %llu seq %u->%u\n",
+				__func__, data->args.inode->i_ino,
+				old_seqid,
+				be32_to_cpu(data->args.stateid.seqid));
+
+			rpc_restart_call_prepare(task);
+			return;
+		}
+		fallthrough;
+	}
 	case 0:
 		break;
 	default:
@@ -10050,6 +10147,7 @@ nfs4_proc_layoutcommit(struct nfs4_layoutcommit_data *data, bool sync)
 			return -EAGAIN;
 		}
 		task_setup_data.flags = RPC_TASK_ASYNC;
+		task_setup_data.workqueue = nfsiod_workqueue;
 	}
 	nfs4_init_sequence(NFS_SERVER(data->args.inode)->nfs_client,
 			   &data->args.seq_args, &data->res.seq_res, 1, 0);
@@ -10060,7 +10158,11 @@ nfs4_proc_layoutcommit(struct nfs4_layoutcommit_data *data, bool sync)
 		status = task->tk_status;
 	trace_nfs4_layoutcommit(data->args.inode, &data->args.stateid, status);
 	dprintk("%s: status %d\n", __func__, status);
-	rpc_put_task(task);
+	/* An asynchronous caller may be writeback: don't run rpc_release() here */
+	if (sync)
+		rpc_put_task(task);
+	else
+		rpc_put_task_async(task);
 	return status;
 }
 
@@ -10407,6 +10509,134 @@ out_put_server:
 out_put_clp:
 	nfs_put_client(clp);
 	return ret;
+}
+
+/*
+ * GETDEVICEINFO surfacing the raw status; nfs4_get_device_info()
+ * swallows it.  A device too large for one page fails with something
+ * other than -ENOENT, which still proves existence.
+ */
+static int nfs4_deviceid_validate(struct nfs_server *server,
+		const struct pnfs_layoutdriver_type *ld,
+		const struct nfs4_deviceid *id, const struct cred *cred)
+{
+	struct pnfs_device pdev;
+	struct page *page;
+	int status;
+
+	page = alloc_page(GFP_KERNEL);
+	if (!page)
+		return -ENOMEM;
+
+	memset(&pdev, 0, sizeof(pdev));
+	memcpy(&pdev.dev_id, id, sizeof(pdev.dev_id));
+	pdev.layout_type = ld->id;
+	pdev.pages = &page;
+	pdev.pglen = PAGE_SIZE;
+	pdev.maxcount = PAGE_SIZE - nfs41_maxgetdevinfo_overhead;
+
+	status = nfs4_proc_getdeviceinfo(server, &pdev, cred);
+	__free_page(page);
+	return status;
+}
+
+/*
+ * A DELETE for a deviceID we still hold layouts on implies the server
+ * revoked them: run the RFC 8881 Section 18.40.4 recovery.  A layout the
+ * server still calls valid leaves the revocations unable to confirm the
+ * delete, so verify it with GETDEVICEINFO.
+ */
+static void nfs4_deviceid_delete_recover(struct nfs_client *clp,
+		const struct pnfs_layoutdriver_type *ld,
+		const struct nfs4_deviceid *id)
+{
+	LIST_HEAD(layouts);
+	struct nfs4_deviceid_ref *ref, *confirm = NULL;
+	bool revoked = false;
+	bool inconclusive = false;
+	int status;
+
+	if (pnfs_layout_collect_deviceid_refs(clp, ld, id, &layouts)) {
+		/* Only a partial list -- an allocation failed, or an inode is
+		 * being evicted.  Leave the device cached and recover on a
+		 * later notification.
+		 */
+		pnfs_layout_put_deviceid_refs(&layouts);
+		return;
+	}
+
+	if (list_empty(&layouts)) {
+		nfs4_delete_deviceid(ld, clp, id);
+		return;
+	}
+
+	list_for_each_entry(ref, &layouts, node) {
+		struct pnfs_layout_hdr *lo = ref->lo;
+		struct inode *inode = ref->inode;
+		bool invalidated = false;
+		LIST_HEAD(head);
+
+		status = nfs41_test_stateid(NFS_SERVER(inode), &ref->stateid,
+					    ref->cred);
+		switch (status) {
+		case NFS_OK:
+		case -NFS4ERR_OLD_STATEID:
+			if (!confirm)
+				confirm = ref;
+			break;
+		case -NFS4ERR_ADMIN_REVOKED:
+		case -NFS4ERR_DELEG_REVOKED:
+		case -NFS4ERR_EXPIRED:
+		case -NFS4ERR_BAD_STATEID:
+			spin_lock(&inode->i_lock);
+			if (pnfs_layout_is_valid(lo) &&
+			    nfs4_stateid_match_other(&ref->stateid,
+						     &lo->plh_stateid)) {
+				pnfs_mark_layout_stateid_invalid(lo, &head);
+				revoked = true;
+				invalidated = true;
+			}
+			spin_unlock(&inode->i_lock);
+			pnfs_free_lseg_list(&head);
+			if (invalidated)
+				nfs_commit_inode(inode, 0);
+			nfs41_free_stateid(NFS_SERVER(inode), &ref->stateid,
+					   ref->cred, true);
+			break;
+		default:
+			inconclusive = true;
+			break;
+		}
+	}
+
+	if (confirm) {
+		status = nfs4_deviceid_validate(NFS_SERVER(confirm->inode),
+						ld, id, confirm->cred);
+		if (status == -ENOENT) {
+			/* Section 18.40.4 prescribes EXCHANGE_ID here;
+			 * nfs4_schedule_lease_recovery() would only renew
+			 * the existing lease.
+			 */
+			pr_warn_ratelimited("NFS: server %s deleted a deviceID referred to by a layout it still considers valid; re-establishing the client ID\n",
+					    clp->cl_hostname);
+			nfs4_reset_all_state(clp);
+			nfs4_delete_deviceid(ld, clp, id);
+		}
+	} else if (revoked && !inconclusive) {
+		nfs4_delete_deviceid(ld, clp, id);
+	}
+	pnfs_layout_put_deviceid_refs(&layouts);
+}
+
+void nfs4_deviceid_delete_recover_run(struct nfs_client *clp)
+{
+	struct nfs4_deviceid_delete *dd;
+
+	while ((dd = pnfs_deviceid_delete_dequeue(clp)) != NULL) {
+		nfs4_deviceid_delete_recover(clp, dd->ld, &dd->id);
+		pnfs_put_layoutdriver(dd->ld);
+		kfree(dd);
+	}
 }
 
 static void
