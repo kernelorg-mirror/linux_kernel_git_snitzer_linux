@@ -243,8 +243,17 @@ rpcrdma_cm_event_handler(struct rdma_cm_id *id, struct rdma_cm_event *event)
 		complete(&ep->re_done);
 		return 0;
 	case RDMA_CM_EVENT_ADDR_CHANGE:
-		ep->re_connect_status = -ENODEV;
-		goto disconnected;
+		switch (xchg(&ep->re_connect_status, -ENODEV)) {
+		case 0:
+			goto wake_connect_worker;
+		case 1:
+			/* The later DISCONNECTED event balances the
+			 * ESTABLISHED get; do not put here.
+			 */
+			rpcrdma_force_disconnect(ep);
+			return 0;
+		}
+		return 0;
 	case RDMA_CM_EVENT_ESTABLISHED:
 		rpcrdma_ep_get(ep);
 		ep->re_connect_status = 1;
@@ -267,7 +276,6 @@ wake_connect_worker:
 		return 0;
 	case RDMA_CM_EVENT_DISCONNECTED:
 		ep->re_connect_status = -ECONNABORTED;
-disconnected:
 		rpcrdma_force_disconnect(ep);
 		return rpcrdma_ep_put(ep);
 	default:
@@ -324,6 +332,7 @@ static struct rdma_cm_id *rpcrdma_create_id(struct rpcrdma_xprt *r_xprt,
 	if (rc)
 		goto out;
 
+	ep->re_id = id;
 	rc = rpcrdma_rn_register(id->device, &ep->re_rn, rpcrdma_ep_removal_done);
 	if (rc)
 		goto out;
@@ -396,7 +405,6 @@ static int rpcrdma_ep_create(struct rpcrdma_xprt *r_xprt)
 	}
 	__module_get(THIS_MODULE);
 	device = id->device;
-	ep->re_id = id;
 	reinit_completion(&ep->re_done);
 
 	ep->re_max_requests = r_xprt->rx_xprt.max_reqs;
@@ -539,7 +547,17 @@ int rpcrdma_xprt_connect(struct rpcrdma_xprt *r_xprt)
 		goto out;
 	}
 	rpcrdma_mrs_create(r_xprt);
-	frwr_wp_create(r_xprt);
+
+	/*
+	 * rpcrdma_encode_write_list() dereferences the write-pad
+	 * MR with no NULL check, so fail the connect rather than
+	 * publish a transport whose write-pad MR is NULL.
+	 */
+	rc = frwr_wp_create(r_xprt);
+	if (rc) {
+		rc = -ENOTCONN;
+		goto out;
+	}
 
 out:
 	trace_xprtrdma_connect(r_xprt, rc);
@@ -708,6 +726,18 @@ out_emptyq:
 	 */
 	xprt_wait_for_buffer_space(&r_xprt->rx_xprt);
 	r_xprt->rx_stats.empty_sendctx_q++;
+
+	/* Recheck: a Send completion between the ring-empty test
+	 * and the set_bit could cause its xprt_write_space() to
+	 * miss, leaving XPRT_WRITE_SPACE set with a non-full ring.
+	 * The smp_mb__after_atomic() pairs with smp_store_release()
+	 * in rpcrdma_sendctx_put_locked().
+	 */
+	smp_mb__after_atomic();
+	next_head = rpcrdma_sendctx_next(buf, buf->rb_sc_head);
+	if (next_head != READ_ONCE(buf->rb_sc_tail))
+		xprt_write_space(&r_xprt->rx_xprt);
+
 	return NULL;
 }
 
@@ -739,7 +769,10 @@ static void rpcrdma_sendctx_put_locked(struct rpcrdma_xprt *r_xprt,
 
 	} while (buf->rb_sc_ctxs[next_tail] != sc);
 
-	/* Paired with READ_ONCE */
+	/* Paired with READ_ONCE in rpcrdma_sendctx_get_locked():
+	 * both the fast-path ring-full test and the post-set_bit
+	 * recheck in the slow path depend on this store-release.
+	 */
 	smp_store_release(&buf->rb_sc_tail, next_tail);
 
 	xprt_write_space(&r_xprt->rx_xprt);
@@ -1359,7 +1392,7 @@ void rpcrdma_post_recvs(struct rpcrdma_xprt *r_xprt, int needed)
 	if (likely(ep->re_receive_count > needed))
 		goto out;
 	needed -= ep->re_receive_count;
-	needed += RPCRDMA_MAX_RECV_BATCH;
+	needed += ep->re_recv_batch;
 
 	if (atomic_inc_return(&ep->re_receiving) > 1)
 		goto out_dec;

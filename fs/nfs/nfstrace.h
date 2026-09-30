@@ -1496,7 +1496,7 @@ DECLARE_EVENT_CLASS(nfs_page_class,
 			__field(dev_t, dev)
 			__field(u32, fhandle)
 			__field(u64, fileid)
-			__field(const struct nfs_page *__private, req)
+			__field(const struct nfs_page *, req)
 			__field(loff_t, offset)
 			__field(unsigned int, count)
 			__field(unsigned long, flags)
@@ -1771,7 +1771,10 @@ DECLARE_EVENT_CLASS(nfs_local_dio_class,
 		__entry->count = count;
 		__entry->mem_align = local_dio->mem_align;
 		__entry->offset_align = local_dio->offset_align;
-		__entry->start = offset;
+		if (local_dio->start_len)
+			__entry->start = local_dio->middle_offset - local_dio->start_len;
+		else
+			__entry->start = 0;
 		__entry->start_len = local_dio->start_len;
 		__entry->middle = local_dio->middle_offset;
 		__entry->middle_len = local_dio->middle_len;
