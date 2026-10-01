@@ -796,23 +796,7 @@ nfsd4_create(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	if (status)
 		return status;
 
-	/* Sanitize cr_type to avoid returning ATTRNOTSUPP. */
-	switch (create->cr_type) {
-	case NF4LNK:
-	case NF4BLK:
-	case NF4CHR:
-	case NF4SOCK:
-	case NF4FIFO:
-	case NF4DIR:
-		break;
-	default:
-		status = nfserr_badtype;
-		goto out_aftermask;
-	}
-
 	status = nfsd4_acl_to_attr(create->cr_type, create->cr_acl, &attrs);
-	if (status != nfs_ok)
-		goto out_aftermask;
 	current->fs->umask = create->cr_umask;
 	switch (create->cr_type) {
 	case NF4LNK:
@@ -879,7 +863,6 @@ out:
 	fh_put(&resfh);
 out_umask:
 	current->fs->umask = 0;
-out_aftermask:
 	nfsd_attrs_free(&attrs);
 	return status;
 }
@@ -1871,12 +1854,11 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		async_copy->cp_src = kmalloc(sizeof(*async_copy->cp_src), GFP_KERNEL);
 		if (!async_copy->cp_src)
 			goto out_dec_async_copy_err;
-		dup_copy_fields(copy, async_copy);
-
-		if (!nfs4_init_copy_state(nn, async_copy))
+		if (!nfs4_init_copy_state(nn, copy))
 			goto out_dec_async_copy_err;
-		memcpy(&result->cb_stateid, &async_copy->cp_stateid.cs_stid,
+		memcpy(&result->cb_stateid, &copy->cp_stateid.cs_stid,
 			sizeof(result->cb_stateid));
+		dup_copy_fields(copy, async_copy);
 		if ((READ_ONCE(copy->nf_dst->nf_file->f_mode) &
 			       FMODE_NOCMTIME) != 0)
 			async_copy->attr_update = true;
