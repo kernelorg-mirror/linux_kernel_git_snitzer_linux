@@ -1,17 +1,186 @@
+* Wed Sep 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-1]
+- Rebase all branches on kernel-6.12.111-0
+- Drop 9 commits from the topics that landed in 6.12.111:
+  "sunrpc: Add a helper to derive maxpages from sv_max_mesg"
+  "svcrdma: Adjust the number of entries in svc_rdma_recv_ctxt::rc_pages"
+  "NFSD: Rename a function parameter"
+  "SUNRPC: Introduce xdr_set_scratch_folio()"
+  "SUNRPC: Update svcxdr_init_decode() to call xdr_set_scratch_folio()"
+  "NFS: fix eof updates after NFSv4.2 fallocate/zero-range"
+  "svcrdma: Release transport resources synchronously"
+  "xdrgen: Fix union declarations"
+  "nfsd: update mtime/ctime on COPY in presence of delegated attributes"
+- Revert 16 NFSD backports in 6.12.111, written for 6.12's NFSD code, in the new topic
+  baseline-reverts, which localio-thru-nfs-for-6.14-1 builds on: the topics replace
+  that code with later upstream code and the backports conflict with it. 4 of them
+  the topics already carry their own copies of; the other 12 are carried by the new
+  topic nfsd-fixes-from-stable-baseline (on nfsd-next): upstream's versions, or
+  6.12.111's own backports where upstream's needs later features (the admin
+  state-revocation use-after-free series)
+
 * Wed Sep 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-0]
 - Linux v6.12.111
+
+* Wed Sep 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.110-3]
+- NFS: add fixes from kernel-7.1.13's snitzer-nfs-fixes to nfs-testing-canary:
+  "NFS: fix folio dereference before NULL check in nfs_inode_remove_request()"
+  "NFS/localio: detect a short read or write before the iterator has moved"
+  "NFS/localio: report the stability a DIO WRITE actually has"
+  "workqueue: Fix NULL current_pwq deref in mem-reclaim helper"
+- NFSD/NFS: add nfsd-testing-canary-dontcache-LOCALIO, as kernel-7.1.13 has it, so LOCALIO
+  shares NFSD's direct-write split and boundary-page code:
+  "NFS: invalidate LOCALIO direct-write post-op attributes at completion"
+  "nfs_common: share direct I/O write split and boundary-page helpers"
+  "NFS/localio: split direct writes using NFSD provided nfs_common code"
+  "NFS/localio: persist a synchronous direct write once, after all its segments"
+- NFSD: build nfsd-testing-canary on nfsd-next, dropping nfsd-testing-canary-dontcache's
+  duplicate of "nfsd: fix partial-write detection in nfsd_direct_write", so
+  nfsd_direct_write() no longer computes the expected write size twice
+- NFSD: check nfsd_vfs_write()'s xdr_buf_to_bvec() result for an overflow error: include the
+  fs/nfsd/vfs.c part of "SUNRPC: Return an error from xdr_buf_to_bvec() on overflow", which
+  the 6.12.110 stable backport of it left out
+
+* Wed Sep 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.110-2]
+- NFS: replace "NFS: defer the final superblock deactivation" with the series posted upstream:
+  "NFS: don't release the open context of a failed write from writeback"
+  "NFS: don't run the release of a WRITE or COMMIT in the submitter"
+  "NFSv4/pnfs: don't run the release of a LAYOUTCOMMIT in the submitter"
+- NFSD: drop the NFSD_IO_DIRECT heuristics and the interlock from nfsd-testing-canary:
+  "NFSD: add NFSD_IO_DIRECT heuristic for small IO"
+  "NFSD: add nfsd_direct_misaligned_num_pages modparam"
+  "nfsd: fallback to DONTCACHE if read IO less than nf_dio_read_offset_align"
+  "NFSD: add new NFSD_IO_DIRECT variants that may override stable_how"
+  "NFSD: interlock the use of NFSD_IO_DIRECT for NFS READ and WRITE"
+- sunrpc: make every topic from "sunrpc: Replace the rq_pages array with dynamically-allocated memory"
+  on build svc_rdma_rw.o: that commit now also converts the ARRAY_SIZE(rqstp->rq_pages) bound
+  check added by 6.12.y stable commit 5f140b525180, instead of a later revert and re-apply
+- Include "nfsd: fetch direct I/O alignment for files handed to the filecache"
+- NFSD: rebuild nfsd-testing-canary-dontcache to match kernel-7.1.13 by including:
+  "NFS: Move definition of enum nfs3_stable_how"
+  "NFSD: Replace nfsd_write()'s "stable" argument with "iocb_flags""
+  "NFSD: Move version-specific ACCESS maps into per-version code"
+  and "NFSD: Enable return of an updated stable_how to NFS clients" reworked onto @iocb_flags
+- NFSD: add the NFSD direct-mode series posted upstream (v2) to nfsd-testing-canary-dontcache:
+  "NFSD: mark the direct middle of a split WRITE IOCB_DONTCACHE as well"
+  "NFSD: only split a direct-mode WRITE for a worthwhile direct middle"
+  "NFSD: do not use direct I/O for a READ smaller than its alignment"
+  "NFSD: let a direct-mode WRITE raise stable_how and elide the client's COMMIT"
+  "NFSD: persist a synchronous direct-mode WRITE once, after all of its segments"
+  "NFSD: keep boundary page of a split direct-mode WRITE until both writers complete"
+  "NFSD: add direct_misaligned_dontcache debugfs knob"
+  "NFSD: add tracing for how direct-mode READ and WRITE are serviced"
+  with the fix they build on: "nfsd: fix partial-write detection in nfsd_direct_write"
+- mm: add DONTCACHE writeback tracking, as kernel-7.1.13 has it, to nfsd-testing-canary-dontcache:
+  "mm: rename filemap_fdatawrite_range_kick to filemap_flush_range"
+  "mm: track DONTCACHE dirty pages per bdi_writeback"
+  "mm: kick writeback flusher for IOCB_DONTCACHE with targeted dirty tracking"
+  "mm: expose WB_DONTCACHE_DIRTY in bdi debugfs stats"
+
+* Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.110-1]
+- Rebase all branches on kernel-6.12.110-0
+- 6.12.110 carries a reworked head of the flexfiles striped layouts series, so
+  its first 2 commits are dropped and the other 6 adapted to that base
+- LOCALIO's cached nfsd_file(s) move from nfs4_ff_layout_mirror into its
+  per-stripe nfs4_ff_layout_ds_stripe
+- 6.12.110 sends from svsk->sk_bvec, so the rq_bvec conversion of svcsock is
+  dropped and RPCSVC_MAXPAGES removal updated to match
+- crypto: drop the /dev/random override before freeing what it uses
+- Rebase nfsd-testing-canary's NFSD_IO_DIRECT heuristics to match kernel-7.1.13/nfsd-testing-canary
+- Fixes IOCB_DONTCACHE fallback flag being clobbered by nfsd_write_dio_seg_init()
+- Include "nfsd: fallback to DONTCACHE if read IO less than nf_dio_read_offset_align"
 
 * Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.110-0]
 - Linux v6.12.110
 
+* Mon Sep 14 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-6]
+- redhat: move .gitlab-ci.yml to redhat/upstream-ci.yml.disabled
+- first use of HS's kernel-rpmtree scripts to audit, rebase and release all topic branches
+
+* Fri Sep 11 2026 Mike Snitzer [6.12.93-5]
+- NFS: defer the final superblock deactivation
+- redhat/kernel.spec: add missing BuildRequires deps needed for perf
+
+* Tue Jul 14 2026 Mike Snitzer [6.12.93-4]
+- NFS fixes through nfs-for-7.2-2
+- NFSD fixes through nfsd-7.2 and only select cel/nfsd-next fixes
+- backports are getting more painful, really trying to only take in fixes!
+
+* Wed Jul 08 2026 Mike Snitzer [6.12.93-3]
+- various block layer DIO alignment fixes
+- NFS/localio: issue IO inline when not in a memory-reclaim context
+- NFS/localio: remove dead FLUSH_SYNC handling from nfs_local_commit
+- NFS/localio: issue commit inline when not in a memory-reclaim context
+- NFS/localio: fix nfs_local_dio_misaligned tracepoint
+
+* Fri Jun 19 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-2]
+- svcrdma: cap per-xprt sc_send_ctxts free list at sc_max_requests
+- svcrdma: track sc_send_ctxts_depth at alloc/destroy and gate _get on it
+- svcrdma: loosen sc_send_ctxts_depth cap to 4*sc_max_requests
+- nfsd: guard nfsd_serv deref in nfsd_file_net_dispose
+- nfsd: fix refcount leak in nfsd_file_lru_add on insertion failure
+- nfsd: fix fcache_disposal UAF by inlining dispose state into nfsd_net
+- nfsd: close shrinker/GC/fsnotify vs per-net shutdown race in filecache
+- NFSD: remove flawed WARN_ON_ONCE from nfsd_mode_check
+
+* Wed Jun 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-1]
+- Merge v6.12.93 for the benefit of more root exploit fixes
+
 * Wed Jun 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.93-0]
 - Linux v6.12.93
+
+* Mon Jun 08 2026 Mike Snitzer <snitzer@kernel.org> [6.12.87-3]
+- NFS: write_completion: dereference loop-local req, not hdr->req
+
+* Wed Jun 03 2026 Mike Snitzer <snitzer@kernel.org> [6.12.87-2]
+- Fix NFSD DIRECT debugfs interface to properly disable spliced_read when setting io_cache_write.
+- nfsd: fix partial-write detection in nfsd_direct_write
+- NFSv4/flexfiles: honor FF_FLAGS_NO_IO_THRU_MDS on fatal DS connect errors
+- NFSv4/flexfiles: honor FF_FLAGS_NO_IO_THRU_MDS in pg_get_mirror_count_write
+
+* Fri May 08 2026 Mike Snitzer <snitzer@kernel.org> [6.12.87-1]
+- Merge v6.12.87 for the benefit of more root exploit fixes
+- Drop "redhat/configs: disable esp4 and esp6 modules" since now fixed, restores full IPsec.
+- Keep "redhat/configs: disable rxrpc and AFS which depends on it" since fixes lagging and no use for either.
 
 * Fri May 08 2026 Mike Snitzer <snitzer@kernel.org> [6.12.87-0]
 - Linux v6.12.87
 
+* Thu May 07 2026 Mike Snitzer <snitzer@kernel.org> [6.12.85-2]
+- svcrdma: Release write chunk resources without re-queuing
+- Disable esp4, esp6 and rxrpc (and AFS due to rxrpc dep)
+
+* Thu Apr 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.85-1]
+- Merge v6.12.85 into existing v6.12.76 based topic branches.
+
 * Thu Apr 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.85-0]
 - Linux v6.12.85
+
+* Wed Apr 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-7]
+- Include NFS and NFSD changes that are destined for 7.1.
+- Include latest fixes from nfsd-testing.
+
+* Wed Apr 08 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-6]
+- Switch THP Kconfig default from always to madvise.
+- Disable CONFIG_NFS_FSCACHE.
+
+* Mon Mar 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-5]
+- Rebase nfsd-7.0-2 branch to include NFSD's dynamic threading.
+- Include nfsd-next and nfsd-testing changes (except some svcrdma and most lockd changes).
+- Include Trond's "NFSv4/pnfs: If the server is down, retry the layout returns on reboot".
+- Include Olga's "NFS: fix writeback in presence of errors".
+
+* Mon Mar 23 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-4]
+- Include fixes from upstream tags nfs-for-7.0-2 and nfsd-7.0-2
+- Include "NFSD: Sign filehandles"
+
+* Wed Mar 11 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-3]
+- Replace 6.12.76-2's fix with Ben's "sunrpc: refactor TLS transport to remove rpc_clnt dependency".
+
+* Tue Mar 10 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-2]
+- Include "sunrpc: fix TLS connect_worker rpc_clnt lifetime UAF" to address TLS-induced cred crashes.
+
+* Thu Mar 05 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-1]
+- Rebase all branches ontop of v6.12.76
 
 * Thu Mar 05 2026 Mike Snitzer <snitzer@kernel.org> [6.12.76-0]
 - Linux v6.12.76
