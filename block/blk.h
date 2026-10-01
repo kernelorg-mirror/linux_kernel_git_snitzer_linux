@@ -13,6 +13,9 @@
 
 struct elevator_type;
 
+#define	BLK_DEV_MAX_SECTORS	(LLONG_MAX >> 9)
+#define	BLK_MIN_SEGMENT_SIZE	4096
+
 /* Max future timer expiry for timeouts */
 #define BLK_MAX_TIMEOUT		(5 * HZ)
 
@@ -382,8 +385,20 @@ struct bio *bio_split_zone_append(struct bio *bio,
 static inline bool bio_may_need_split(struct bio *bio,
 		const struct queue_limits *lim)
 {
-	return lim->chunk_sectors || bio->bi_vcnt != 1 ||
-		bio->bi_io_vec->bv_len + bio->bi_io_vec->bv_offset > PAGE_SIZE;
+	const struct bio_vec *bv;
+
+	if (lim->chunk_sectors)
+		return true;
+
+	if (!bio->bi_io_vec)
+		return true;
+
+	bv = __bvec_iter_bvec(bio->bi_io_vec, bio->bi_iter);
+	if (bio->bi_iter.bi_size > bv->bv_len - bio->bi_iter.bi_bvec_done)
+		return true;
+	if ((bv->bv_offset | bv->bv_len) & lim->dma_alignment)
+		return true;
+	return bv->bv_len + bv->bv_offset > lim->max_fast_segment_size;
 }
 
 /**
