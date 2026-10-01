@@ -1493,8 +1493,8 @@ static int create_proc_exports_entry(void)
 unsigned int nfsd_net_id;
 
 struct nfsd_genl_rqstp {
-	struct sockaddr_storage	rq_daddr;
-	struct sockaddr_storage	rq_saddr;
+	struct sockaddr		rq_daddr;
+	struct sockaddr		rq_saddr;
 	unsigned long		rq_flags;
 	ktime_t			rq_stime;
 	__be32			rq_xid;
@@ -1529,7 +1529,7 @@ static int nfsd_genl_rpc_status_compose_msg(struct sk_buff *skb,
 			NFSD_A_RPC_STATUS_PAD))
 		goto out_cancel;
 
-	switch (genl_rqstp->rq_saddr.ss_family) {
+	switch (genl_rqstp->rq_saddr.sa_family) {
 	case AF_INET: {
 		const struct sockaddr_in *s_in, *d_in;
 
@@ -1620,7 +1620,7 @@ int nfsd_nl_rpc_status_get_dumpit(struct sk_buff *skb,
 		list_for_each_entry_rcu(rqstp,
 				&nn->nfsd_serv->sv_pools[i].sp_all_threads,
 				rq_all) {
-			struct nfsd_genl_rqstp genl_rqstp = {};
+			struct nfsd_genl_rqstp genl_rqstp;
 			unsigned int status_counter;
 
 			if (rqstp_index++ < thread_skip) /* already consumed */
@@ -1644,9 +1644,9 @@ int nfsd_nl_rpc_status_get_dumpit(struct sk_buff *skb,
 			genl_rqstp.rq_stime = rqstp->rq_stime;
 			genl_rqstp.rq_opcnt = 0;
 			memcpy(&genl_rqstp.rq_daddr, svc_daddr(rqstp),
-			       sizeof(struct sockaddr_storage));
+			       sizeof(struct sockaddr));
 			memcpy(&genl_rqstp.rq_saddr, svc_addr(rqstp),
-			       sizeof(struct sockaddr_storage));
+			       sizeof(struct sockaddr));
 
 #ifdef CONFIG_NFSD_V4
 			if (rqstp->rq_vers == NFS4_VERSION &&
