@@ -141,7 +141,9 @@ Misaligned WRITE:
     has no effect on the O_DIRECT segment unless the filesystem services
     it with buffered IO instead, as XFS does when it cannot invalidate
     page cache that overlaps the segment. The iomap_dio_invalidate_fail
-    trace event reports such a fallback.
+    trace event reports such a fallback. A split FILE_SYNC or DATA_SYNC
+    WRITE is persisted once, after all of its segments are written, not
+    once per segment.
 
     If NFSD does not split a misaligned WRITE, it issues the whole WRITE
     as a single DONTCACHE buffered IO (normal buffered IO if the
