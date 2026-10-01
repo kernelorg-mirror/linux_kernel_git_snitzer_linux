@@ -355,12 +355,10 @@ __nfsd4_remove_reclaim_record_grace(const char *dname, int len,
 		return;
 	}
 	name.len = len;
-	down_write(&nn->reclaim_str_hashtbl_lock);
 	crp = nfsd4_find_reclaim_client(name, nn);
+	kfree(name.data);
 	if (crp)
 		nfs4_remove_reclaim_record(crp, nn);
-	up_write(&nn->reclaim_str_hashtbl_lock);
-	kfree(name.data);
 }
 
 static void
@@ -561,7 +559,6 @@ nfs4_legacy_state_init(struct net *net)
 	for (i = 0; i < CLIENT_HASH_SIZE; i++)
 		INIT_LIST_HEAD(&nn->reclaim_str_hashtbl[i]);
 	nn->reclaim_str_hashtbl_size = 0;
-	init_rwsem(&nn->reclaim_str_hashtbl_lock);
 
 	return 0;
 }
@@ -681,16 +678,13 @@ nfsd4_check_legacy_client(struct nfs4_client *clp)
 		goto out_enoent;
 	}
 	name.len = HEXDIR_LEN;
-	down_read(&nn->reclaim_str_hashtbl_lock);
 	crp = nfsd4_find_reclaim_client(name, nn);
+	kfree(name.data);
 	if (crp) {
 		set_bit(NFSD4_CLIENT_STABLE, &clp->cl_flags);
 		crp->cr_clp = clp;
-	}
-	up_read(&nn->reclaim_str_hashtbl_lock);
-	kfree(name.data);
-	if (crp)
 		return 0;
+	}
 
 out_enoent:
 	return -ENOENT;
@@ -1288,7 +1282,6 @@ nfsd4_cld_check(struct nfs4_client *clp)
 		return 0;
 
 	/* look for it in the reclaim hashtable otherwise */
-	down_read(&nn->reclaim_str_hashtbl_lock);
 	crp = nfsd4_find_reclaim_client(clp->cl_name, nn);
 	if (crp)
 		goto found;
@@ -1300,16 +1293,13 @@ nfsd4_cld_check(struct nfs4_client *clp)
 		struct xdr_netobj name;
 
 		status = nfs4_make_rec_clidname(dname, &clp->cl_name);
-		if (status) {
-			up_read(&nn->reclaim_str_hashtbl_lock);
+		if (status)
 			return -ENOENT;
-		}
 
 		name.data = kmemdup(dname, HEXDIR_LEN, GFP_KERNEL);
 		if (!name.data) {
 			dprintk("%s: failed to allocate memory for name.data!\n",
 				__func__);
-			up_read(&nn->reclaim_str_hashtbl_lock);
 			return -ENOENT;
 		}
 		name.len = HEXDIR_LEN;
@@ -1320,11 +1310,9 @@ nfsd4_cld_check(struct nfs4_client *clp)
 
 	}
 #endif
-	up_read(&nn->reclaim_str_hashtbl_lock);
 	return -ENOENT;
 found:
 	crp->cr_clp = clp;
-	up_read(&nn->reclaim_str_hashtbl_lock);
 	return 0;
 }
 
@@ -1344,7 +1332,6 @@ nfsd4_cld_check_v2(struct nfs4_client *clp)
 		return 0;
 
 	/* look for it in the reclaim hashtable otherwise */
-	down_read(&nn->reclaim_str_hashtbl_lock);
 	crp = nfsd4_find_reclaim_client(clp->cl_name, nn);
 	if (crp)
 		goto found;
@@ -1355,16 +1342,13 @@ nfsd4_cld_check_v2(struct nfs4_client *clp)
 		char dname[HEXDIR_LEN];
 
 		status = nfs4_make_rec_clidname(dname, &clp->cl_name);
-		if (status) {
-			up_read(&nn->reclaim_str_hashtbl_lock);
+		if (status)
 			return -ENOENT;
-		}
 
 		name.data = kmemdup(dname, HEXDIR_LEN, GFP_KERNEL);
 		if (!name.data) {
 			dprintk("%s: failed to allocate memory for name.data\n",
 					__func__);
-			up_read(&nn->reclaim_str_hashtbl_lock);
 			return -ENOENT;
 		}
 		name.len = HEXDIR_LEN;
@@ -1375,7 +1359,6 @@ nfsd4_cld_check_v2(struct nfs4_client *clp)
 
 	}
 #endif
-	up_read(&nn->reclaim_str_hashtbl_lock);
 	return -ENOENT;
 found:
 	if (crp->cr_princhash.len) {
@@ -1383,33 +1366,26 @@ found:
 			principal = clp->cl_cred.cr_raw_principal;
 		else if (clp->cl_cred.cr_principal)
 			principal = clp->cl_cred.cr_principal;
-		if (principal == NULL) {
-			up_read(&nn->reclaim_str_hashtbl_lock);
+		if (principal == NULL)
 			return -ENOENT;
-		}
 		cksum.len = crypto_shash_digestsize(tfm);
 		cksum.data = kmalloc(cksum.len, GFP_KERNEL);
-		if (cksum.data == NULL) {
-			up_read(&nn->reclaim_str_hashtbl_lock);
+		if (cksum.data == NULL)
 			return -ENOENT;
-		}
 		status = crypto_shash_tfm_digest(tfm, principal,
 						 strlen(principal), cksum.data);
 		if (status) {
 			kfree(cksum.data);
-			up_read(&nn->reclaim_str_hashtbl_lock);
 			return -ENOENT;
 		}
 		if (memcmp(crp->cr_princhash.data, cksum.data,
 				crp->cr_princhash.len)) {
 			kfree(cksum.data);
-			up_read(&nn->reclaim_str_hashtbl_lock);
 			return -ENOENT;
 		}
 		kfree(cksum.data);
 	}
 	crp->cr_clp = clp;
-	up_read(&nn->reclaim_str_hashtbl_lock);
 	return 0;
 }
 
@@ -1509,7 +1485,6 @@ nfs4_cld_state_init(struct net *net)
 	for (i = 0; i < CLIENT_HASH_SIZE; i++)
 		INIT_LIST_HEAD(&nn->reclaim_str_hashtbl[i]);
 	nn->reclaim_str_hashtbl_size = 0;
-	init_rwsem(&nn->reclaim_str_hashtbl_lock);
 	nn->track_reclaim_completes = true;
 	atomic_set(&nn->nr_reclaim_complete, 0);
 
