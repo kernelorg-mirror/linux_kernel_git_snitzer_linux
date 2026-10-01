@@ -1,3 +1,23 @@
+* Wed Sep 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-1]
+- Rebase all branches on kernel-6.12.111-0
+- Drop 9 commits from the topics that landed in 6.12.111:
+  "sunrpc: Add a helper to derive maxpages from sv_max_mesg"
+  "svcrdma: Adjust the number of entries in svc_rdma_recv_ctxt::rc_pages"
+  "NFSD: Rename a function parameter"
+  "SUNRPC: Introduce xdr_set_scratch_folio()"
+  "SUNRPC: Update svcxdr_init_decode() to call xdr_set_scratch_folio()"
+  "NFS: fix eof updates after NFSv4.2 fallocate/zero-range"
+  "svcrdma: Release transport resources synchronously"
+  "xdrgen: Fix union declarations"
+  "nfsd: update mtime/ctime on COPY in presence of delegated attributes"
+- Revert 16 NFSD backports in 6.12.111, written for 6.12's NFSD code, in the new topic
+  baseline-reverts, which localio-thru-nfs-for-6.14-1 builds on: the topics replace
+  that code with later upstream code and the backports conflict with it. 4 of them
+  the topics already carry their own copies of; the other 12 are carried by the new
+  topic nfsd-fixes-from-stable-baseline (on nfsd-next): upstream's versions, or
+  6.12.111's own backports where upstream's needs later features (the admin
+  state-revocation use-after-free series)
+
 * Wed Sep 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-0]
 - Linux v6.12.111
 
