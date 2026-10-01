@@ -164,18 +164,18 @@ decode_name(struct xdr_stream *xdr, u32 *id)
 }
 
 static struct nfsd_file *
-ff_local_open_fh(struct nfs_client *clp, const struct cred *cred,
+ff_local_open_fh(struct pnfs_layout_segment *lseg, u32 ds_idx,
+		 struct nfs_client *clp, const struct cred *cred,
 		 struct nfs_fh *fh, fmode_t mode)
 {
-	if (mode & FMODE_WRITE) {
-		/*
-		 * Always request read and write access since this corresponds
-		 * to a rw layout.
-		 */
-		mode |= FMODE_READ;
-	}
+#if IS_ENABLED(CONFIG_NFS_LOCALIO)
+	struct nfs4_ff_layout_mirror *mirror = FF_LAYOUT_COMP(lseg, ds_idx);
+	u32 dss_id = 0;
 
-	return nfs_local_open_fh(clp, cred, fh, mode);
+	return nfs_local_open_fh(clp, cred, fh, &mirror->dss[dss_id].nfl, mode);
+#else
+	return NULL;
+#endif
 }
 
 static bool ff_mirror_match_fh(const struct nfs4_ff_layout_mirror *m1,
@@ -261,6 +261,9 @@ static struct nfs4_ff_layout_mirror *ff_layout_alloc_mirror(u32 dss_count,
 		return NULL;
 	}
 
+	for (u32 dss_id = 0; dss_id < mirror->dss_count; dss_id++)
+		nfs_localio_file_init(&mirror->dss[dss_id].nfl);
+
 	return mirror;
 }
 
@@ -276,6 +279,7 @@ static void ff_layout_free_mirror(struct nfs4_ff_layout_mirror *mirror)
 	put_cred(cred);
 	cred = rcu_access_pointer(mirror->dss[dss_id].rw_cred);
 	put_cred(cred);
+	nfs_close_local_fh(&mirror->dss[dss_id].nfl);
 	nfs4_ff_layout_put_deviceid(mirror->dss[dss_id].mirror_ds);
 
 	kfree(mirror->dss);
@@ -1933,7 +1937,7 @@ ff_layout_read_pagelist(struct nfs_pgio_header *hdr)
 	hdr->mds_offset = offset;
 
 	/* Start IO accounting for local read */
-	localio = ff_local_open_fh(ds->ds_clp, ds_cred, fh, FMODE_READ);
+	localio = ff_local_open_fh(lseg, idx, ds->ds_clp, ds_cred, fh, FMODE_READ);
 	if (localio) {
 		hdr->task.tk_start = ktime_get();
 		ff_layout_read_record_layoutstats_start(&hdr->task, hdr);
@@ -2020,7 +2024,7 @@ ff_layout_write_pagelist(struct nfs_pgio_header *hdr, int sync)
 	hdr->args.offset = offset;
 
 	/* Start IO accounting for local write */
-	localio = ff_local_open_fh(ds->ds_clp, ds_cred, fh,
+	localio = ff_local_open_fh(lseg, idx, ds->ds_clp, ds_cred, fh,
 				   FMODE_READ|FMODE_WRITE);
 	if (localio) {
 		hdr->task.tk_start = ktime_get();
@@ -2113,7 +2117,7 @@ static int ff_layout_initiate_commit(struct nfs_commit_data *data, int how)
 		data->args.fh = fh;
 
 	/* Start IO accounting for local commit */
-	localio = ff_local_open_fh(ds->ds_clp, ds_cred, fh,
+	localio = ff_local_open_fh(lseg, idx, ds->ds_clp, ds_cred, fh,
 				   FMODE_READ|FMODE_WRITE);
 	if (localio) {
 		data->task.tk_start = ktime_get();
