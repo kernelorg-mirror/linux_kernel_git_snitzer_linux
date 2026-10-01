@@ -38,6 +38,17 @@
 #define NFSD_MAY_CREATE		(NFSD_MAY_EXEC|NFSD_MAY_WRITE)
 #define NFSD_MAY_REMOVE		(NFSD_MAY_EXEC|NFSD_MAY_WRITE|NFSD_MAY_TRUNC)
 
+struct nfsd_access_map {
+	u32		access;
+	int		may;
+};
+
+struct nfsd_access_maps {
+	const struct nfsd_access_map	*regular;
+	const struct nfsd_access_map	*directory;
+	const struct nfsd_access_map	*other;
+};
+
 struct nfsd_file;
 
 /*
@@ -97,7 +108,9 @@ __be32		nfsd_create_locked(struct svc_rqst *, struct svc_fh *,
 __be32		nfsd_create(struct svc_rqst *, struct svc_fh *,
 				char *name, int len, struct nfsd_attrs *attrs,
 				int type, dev_t rdev, struct svc_fh *res);
-__be32		nfsd_access(struct svc_rqst *, struct svc_fh *, u32 *, u32 *);
+__be32		nfsd_access(struct svc_rqst *rqstp, struct svc_fh *fhp,
+				const struct nfsd_access_maps *maps,
+				u32 *access, u32 *supported);
 __be32		nfsd_create_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				struct svc_fh *resfhp, struct nfsd_attrs *iap);
 __be32		nfsd_commit(struct svc_rqst *rqst, struct svc_fh *fhp,
@@ -132,11 +145,13 @@ __be32		nfsd_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				u32 *eof);
 __be32		nfsd_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				loff_t offset, const struct xdr_buf *payload,
-				unsigned long *cnt, int stable, __be32 *verf);
+				unsigned long *cnt, int *iocb_flags,
+				__be32 *verf);
 __be32		nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				struct nfsd_file *nf, loff_t offset,
 				const struct xdr_buf *payload,
-				unsigned long *cnt, int stable, __be32 *verf);
+				unsigned long *cnt, int *iocb_flags,
+				__be32 *verf);
 __be32		nfsd_readlink(struct svc_rqst *, struct svc_fh *,
 				char *, int *);
 __be32		nfsd_symlink(struct svc_rqst *, struct svc_fh *,
@@ -161,5 +176,27 @@ __be32		nfsd_permission(struct svc_cred *cred, struct svc_export *exp,
 				struct dentry *dentry, int acc);
 
 void		nfsd_filp_close(struct file *fp);
+
+/*
+ * How nfsd_write_dio_iters_init() disposed of an NFSD_IO_DIRECT WRITE.
+ * "DONTCACHE segment" degrades to a cached segment when the file system
+ * lacks FOP_DONTCACHE.
+ */
+/*
+ * Which exit nfsd_write_dio_iters_init() took.  Whether the buffered
+ * segments carry IOCB_DONTCACHE is reported separately, by
+ * nfsd_write_dio_split's @dontcache, because it is the same answer for
+ * every exit below.
+ */
+enum nfsd_write_dio_disposition {
+	NFSD_WRITE_DIO_DIRECT,		/* aligned middle uses direct I/O */
+	NFSD_WRITE_DIO_MEM_MISALIGNED,	/* payload memory misaligned: one segment */
+	NFSD_WRITE_DIO_NO_ALIGN,	/* fs advertises no alignment: one segment */
+	NFSD_WRITE_DIO_TOO_SMALL,	/* len < max(offset_align, mem_align): one segment */
+	NFSD_WRITE_DIO_NO_MIDDLE,	/* no or tiny aligned middle: one segment */
+
+	/* ORed in: the WRITE's buffered segments carry IOCB_DONTCACHE */
+	NFSD_WRITE_DIO_DONTCACHE = 0x80,
+};
 
 #endif /* LINUX_NFSD_VFS_H */
