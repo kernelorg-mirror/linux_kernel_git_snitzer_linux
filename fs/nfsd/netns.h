@@ -106,8 +106,7 @@ struct nfsd_net {
 	struct list_head client_lru;
 	struct list_head close_lru;
 
-	/* protects del_recall_lru and delegation hash/unhash;
-	 * nests outside client_lock */
+	/* protects del_recall_lru and delegation hash/unhash */
 	spinlock_t deleg_lock ____cacheline_aligned;
 	struct list_head del_recall_lru;
 
@@ -116,8 +115,7 @@ struct nfsd_net {
 
 	struct delayed_work laundromat_work;
 
-	/* client_lock protects the client lru list and session hash
-	 * table; nests inside deleg_lock */
+	/* client_lock protects the client lru list and session hash table */
 	spinlock_t client_lock;
 
 	/* protects blocked_locks_lru */
