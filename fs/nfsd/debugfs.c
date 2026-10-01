@@ -140,4 +140,16 @@ void nfsd_debugfs_init(void)
 
 	debugfs_create_file("io_cache_write", 0644, nfsd_top_dir, NULL,
 			    &nfsd_io_cache_write_fops);
+
+	/*
+	 * /sys/kernel/debug/nfsd/direct_misaligned_min_bytes
+	 *
+	 * Minimum size, in bytes, of the DIO-aligned middle segment for NFSD
+	 * to split a misaligned direct-mode WRITE.  A WRITE with a misaligned
+	 * start or end and a smaller middle is issued as a single buffered
+	 * segment.  It is in bytes so that it means the same on every page
+	 * size.  The default value of this setting is 8192.
+	 */
+	debugfs_create_u32("direct_misaligned_min_bytes", 0644, nfsd_top_dir,
+			   &nfsd_direct_misaligned_min_bytes);
 }
