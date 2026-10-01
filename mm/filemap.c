@@ -1657,6 +1657,48 @@ void folio_end_dropbehind(struct folio *folio)
 EXPORT_SYMBOL_GPL(folio_end_dropbehind);
 
 /**
+ * folio_mark_dropbehind - mark an existing folio dropbehind
+ * @folio: the folio, locked by the caller
+ *
+ * Mark @folio so that the writeback that cleans it drops it.  A folio
+ * already counted as dirty is added to WB_DONTCACHE_DIRTY, as
+ * folio_account_dirtied() would have added it had it been marked when
+ * dirtied, so that the clean that subtracts it leaves the counter balanced.
+ *
+ * folio_account_dirtied() counts a folio under the i_pages lock, in the
+ * section that sets its dirty tag, after PG_dirty has been set without the
+ * folio lock.  Every path that uncounts a dirty folio holds the folio lock.
+ * So with the folio locked and the i_pages lock held, the folio is counted
+ * when both PG_dirty and the dirty tag are set.  PG_dirty alone is not
+ * enough: a dirtier past folio_test_set_dirty() but not yet counting finds
+ * the flag set and adds the folio itself.  The tag alone is not enough
+ * either: __folio_cancel_dirty() uncounts a folio and clears PG_dirty, but
+ * leaves the tag until writeback or truncation clears it.
+ */
+void folio_mark_dropbehind(struct folio *folio)
+{
+	struct address_space *mapping = folio->mapping;
+	unsigned long flags;
+
+	VM_WARN_ON_ONCE_FOLIO(!folio_test_locked(folio), folio);
+
+	if (folio_test_dropbehind(folio))
+		return;
+	if (!mapping || !mapping_can_writeback(mapping)) {
+		folio_set_dropbehind(folio);
+		return;
+	}
+	xa_lock_irqsave(&mapping->i_pages, flags);
+	folio_set_dropbehind(folio);
+	if (folio_test_dirty(folio) &&
+	    xa_get_mark(&mapping->i_pages, folio->index, PAGECACHE_TAG_DIRTY))
+		wb_stat_mod(inode_to_wb(mapping->host), WB_DONTCACHE_DIRTY,
+			    folio_nr_pages(folio));
+	xa_unlock_irqrestore(&mapping->i_pages, flags);
+}
+EXPORT_SYMBOL_GPL(folio_mark_dropbehind);
+
+/**
  * folio_end_writeback - End writeback against a folio.
  * @folio: The folio.
  *
