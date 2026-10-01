@@ -1,3 +1,12 @@
+* Thu Oct 01 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-2]
+- NFSD: update nfsd-testing-canary-dontcache from v2 to v3 of the NFSD direct-mode series
+  posted upstream (https://lore.kernel.org/linux-nfs/20261001045502.48381-1-snitzer@kernel.org/):
+  reordered (the direct_misaligned_dontcache knob first, the stable_how patches last),
+  "NFSD: let a direct-mode WRITE raise stable_how and elide the client's COMMIT" now
+  "NFSD: add direct-mode WRITE settings that persist each WRITE", and the stable_how
+  rework no longer lowers the reply to a FILE_SYNC or DATA_SYNC WRITE to an async export
+- NFSD/NFS: rebuild nfsd-testing-canary-dontcache-LOCALIO on it
+
 * Wed Sep 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-1]
 - Rebase all branches on kernel-6.12.111-0
 - Drop 9 commits from the topics that landed in 6.12.111:
