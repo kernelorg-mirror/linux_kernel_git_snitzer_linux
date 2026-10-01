@@ -1,6 +1,74 @@
 * Wed Sep 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-0]
 - Linux v6.12.111
 
+* Wed Sep 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.110-3]
+- NFS: add fixes from kernel-7.1.13's snitzer-nfs-fixes to nfs-testing-canary:
+  "NFS: fix folio dereference before NULL check in nfs_inode_remove_request()"
+  "NFS/localio: detect a short read or write before the iterator has moved"
+  "NFS/localio: report the stability a DIO WRITE actually has"
+  "workqueue: Fix NULL current_pwq deref in mem-reclaim helper"
+- NFSD/NFS: add nfsd-testing-canary-dontcache-LOCALIO, as kernel-7.1.13 has it, so LOCALIO
+  shares NFSD's direct-write split and boundary-page code:
+  "NFS: invalidate LOCALIO direct-write post-op attributes at completion"
+  "nfs_common: share direct I/O write split and boundary-page helpers"
+  "NFS/localio: split direct writes using NFSD provided nfs_common code"
+  "NFS/localio: persist a synchronous direct write once, after all its segments"
+- NFSD: build nfsd-testing-canary on nfsd-next, dropping nfsd-testing-canary-dontcache's
+  duplicate of "nfsd: fix partial-write detection in nfsd_direct_write", so
+  nfsd_direct_write() no longer computes the expected write size twice
+- NFSD: check nfsd_vfs_write()'s xdr_buf_to_bvec() result for an overflow error: include the
+  fs/nfsd/vfs.c part of "SUNRPC: Return an error from xdr_buf_to_bvec() on overflow", which
+  the 6.12.110 stable backport of it left out
+
+* Wed Sep 30 2026 Mike Snitzer <snitzer@kernel.org> [6.12.110-2]
+- NFS: replace "NFS: defer the final superblock deactivation" with the series posted upstream:
+  "NFS: don't release the open context of a failed write from writeback"
+  "NFS: don't run the release of a WRITE or COMMIT in the submitter"
+  "NFSv4/pnfs: don't run the release of a LAYOUTCOMMIT in the submitter"
+- NFSD: drop the NFSD_IO_DIRECT heuristics and the interlock from nfsd-testing-canary:
+  "NFSD: add NFSD_IO_DIRECT heuristic for small IO"
+  "NFSD: add nfsd_direct_misaligned_num_pages modparam"
+  "nfsd: fallback to DONTCACHE if read IO less than nf_dio_read_offset_align"
+  "NFSD: add new NFSD_IO_DIRECT variants that may override stable_how"
+  "NFSD: interlock the use of NFSD_IO_DIRECT for NFS READ and WRITE"
+- sunrpc: make every topic from "sunrpc: Replace the rq_pages array with dynamically-allocated memory"
+  on build svc_rdma_rw.o: that commit now also converts the ARRAY_SIZE(rqstp->rq_pages) bound
+  check added by 6.12.y stable commit 5f140b525180, instead of a later revert and re-apply
+- Include "nfsd: fetch direct I/O alignment for files handed to the filecache"
+- NFSD: rebuild nfsd-testing-canary-dontcache to match kernel-7.1.13 by including:
+  "NFS: Move definition of enum nfs3_stable_how"
+  "NFSD: Replace nfsd_write()'s "stable" argument with "iocb_flags""
+  "NFSD: Move version-specific ACCESS maps into per-version code"
+  and "NFSD: Enable return of an updated stable_how to NFS clients" reworked onto @iocb_flags
+- NFSD: add the NFSD direct-mode series posted upstream (v2) to nfsd-testing-canary-dontcache:
+  "NFSD: mark the direct middle of a split WRITE IOCB_DONTCACHE as well"
+  "NFSD: only split a direct-mode WRITE for a worthwhile direct middle"
+  "NFSD: do not use direct I/O for a READ smaller than its alignment"
+  "NFSD: let a direct-mode WRITE raise stable_how and elide the client's COMMIT"
+  "NFSD: persist a synchronous direct-mode WRITE once, after all of its segments"
+  "NFSD: keep boundary page of a split direct-mode WRITE until both writers complete"
+  "NFSD: add direct_misaligned_dontcache debugfs knob"
+  "NFSD: add tracing for how direct-mode READ and WRITE are serviced"
+  with the fix they build on: "nfsd: fix partial-write detection in nfsd_direct_write"
+- mm: add DONTCACHE writeback tracking, as kernel-7.1.13 has it, to nfsd-testing-canary-dontcache:
+  "mm: rename filemap_fdatawrite_range_kick to filemap_flush_range"
+  "mm: track DONTCACHE dirty pages per bdi_writeback"
+  "mm: kick writeback flusher for IOCB_DONTCACHE with targeted dirty tracking"
+  "mm: expose WB_DONTCACHE_DIRTY in bdi debugfs stats"
+
+* Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.110-1]
+- Rebase all branches on kernel-6.12.110-0
+- 6.12.110 carries a reworked head of the flexfiles striped layouts series, so
+  its first 2 commits are dropped and the other 6 adapted to that base
+- LOCALIO's cached nfsd_file(s) move from nfs4_ff_layout_mirror into its
+  per-stripe nfs4_ff_layout_ds_stripe
+- 6.12.110 sends from svsk->sk_bvec, so the rq_bvec conversion of svcsock is
+  dropped and RPCSVC_MAXPAGES removal updated to match
+- crypto: drop the /dev/random override before freeing what it uses
+- Rebase nfsd-testing-canary's NFSD_IO_DIRECT heuristics to match kernel-7.1.13/nfsd-testing-canary
+- Fixes IOCB_DONTCACHE fallback flag being clobbered by nfsd_write_dio_seg_init()
+- Include "nfsd: fallback to DONTCACHE if read IO less than nf_dio_read_offset_align"
+
 * Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [6.12.110-0]
 - Linux v6.12.110
 
