@@ -137,6 +137,19 @@ Misaligned WRITE:
     cannot invalidate page cache that overlaps the segment. The
     iomap_dio_invalidate_fail trace event reports such a fallback.
 
+    If NFSD does not split a misaligned WRITE, it issues the whole WRITE
+    as a single DONTCACHE buffered IO (normal buffered IO if the
+    filesystem lacks FOP_DONTCACHE). NFSD does not split a WRITE when:
+
+    - the filesystem advertises no DIO alignment;
+    - the WRITE is smaller than the larger of the offset and memory
+      alignments;
+    - the WRITE has a misaligned start or end and its DIO-aligned middle
+      is smaller than /sys/kernel/debug/nfsd/direct_misaligned_min_bytes
+      bytes (default 8192);
+    - the WRITE payload is not aligned in memory to the block device's
+      dma_alignment, so the middle cannot be O_DIRECT either.
+
 Tracing:
     The nfsd_read_direct trace event shows how NFSD expands any
     misaligned READ to the next DIO-aligned block (on either end of the
