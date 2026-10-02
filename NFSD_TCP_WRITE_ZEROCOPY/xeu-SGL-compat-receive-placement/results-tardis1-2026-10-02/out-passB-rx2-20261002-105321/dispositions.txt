@@ -1,0 +1,5 @@
+Attached 3 probes
+
+
+@[tracepoint:nfsd:nfsd_write_direct]: 1028235
+@[tracepoint:nfsd:nfsd_write_dontcache]: 2101056

@@ -1,0 +1,11 @@
+Attached 1 probe
+
+
+@bytes: 400533007400
+@ends_mid_page[true]: 23044891
+@frags: 23044891
+@len_mod4[0]: 23044891
+@offset_mod4[0]: 7
+@offset_mod4[2]: 23044884
+@page_pool[0]: 7
+@page_pool[1]: 23044884
