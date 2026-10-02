@@ -1093,24 +1093,38 @@ static void svcsock_rx_back_to_back_locked_heads_test(struct kunit *test)
 
 static void svcsock_rx_capacity_plus_one_test(struct kunit *test)
 {
-	enum { FRAG_LEN = 8, BODY_LEN = 7 * XDR_UNIT + 3 * FRAG_LEN };
+	enum { FRAG_LEN = 8 };
 	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 2);
 	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
-	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	/* one loaned fragment more than the table holds, in one skb */
+	unsigned int nfrags = state->capacity + 1;
+	unsigned int body_len = 7 * XDR_UNIT + nfrags * FRAG_LEN;
 	struct svcsock_rx_actor_state actor = {};
-	read_descriptor_t desc = { .count = sizeof(record) };
-	struct page *pages[3];
-	unsigned int refs[3];
+	read_descriptor_t desc = {};
+	struct page **pages;
+	unsigned int *refs;
 	struct sk_buff *skb;
 	const u8 *payload;
+	u8 *record;
 	unsigned int i;
 	int ret;
 
-	svcsock_rx_fill_record(record, BODY_LEN, true, RPC_CALL, RPC_AUTH_UNIX);
+	if (nfrags > MAX_SKB_FRAGS)
+		kunit_skip(test, "needs %u fragments in one skb, MAX_SKB_FRAGS is %u",
+			   nfrags, (unsigned int)MAX_SKB_FRAGS);
+	record = kunit_kzalloc(test, sizeof(rpc_fraghdr) + body_len, GFP_KERNEL);
+	pages = kunit_kcalloc(test, nfrags, sizeof(*pages), GFP_KERNEL);
+	refs = kunit_kcalloc(test, nfrags, sizeof(*refs), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, record);
+	KUNIT_ASSERT_NOT_NULL(test, pages);
+	KUNIT_ASSERT_NOT_NULL(test, refs);
+	desc.count = sizeof(rpc_fraghdr) + body_len;
+
+	svcsock_rx_fill_record(record, body_len, true, RPC_CALL, RPC_AUTH_UNIX);
 	skb = svcsock_rx_build_linear_skb(test, record,
 					  sizeof(rpc_fraghdr) + 7 * XDR_UNIT);
 	payload = record + sizeof(rpc_fraghdr) + 7 * XDR_UNIT;
-	for (i = 0; i < ARRAY_SIZE(pages); i++)
+	for (i = 0; i < nfrags; i++)
 		pages[i] = svcsock_rx_add_frag(test, skb, i,
 					       payload + i * FRAG_LEN, FRAG_LEN,
 					       31 + i * 19, &refs[i]);
@@ -1121,15 +1135,16 @@ static void svcsock_rx_capacity_plus_one_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, actor.complete);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_COPY);
 	KUNIT_EXPECT_EQ(test, state->reason, (u8)SVC_TCP_RX_REASON_CAPACITY);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, 2U);
-	KUNIT_EXPECT_EQ(test, state->refs_released, 2U);
-	KUNIT_EXPECT_EQ(test, state->materialized_bytes, 2U * FRAG_LEN);
+	KUNIT_EXPECT_EQ(test, state->refs_acquired, nfrags - 1);
+	KUNIT_EXPECT_EQ(test, state->refs_released, nfrags - 1);
+	KUNIT_EXPECT_EQ(test, state->materialized_bytes,
+			(nfrags - 1) * FRAG_LEN);
 	KUNIT_EXPECT_EQ(test, state->count, 0U);
 	KUNIT_EXPECT_MEMEQ(test, page_address(fixture->rqstp->rq_pages[0]),
-			   record + sizeof(rpc_fraghdr), BODY_LEN);
+			   record + sizeof(rpc_fraghdr), body_len);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, fixture->rqstp), 0);
 	kunit_kfree_skb(test, skb);
-	for (i = 0; i < ARRAY_SIZE(pages); i++)
+	for (i = 0; i < nfrags; i++)
 		KUNIT_EXPECT_EQ(test, page_ref_count(pages[i]), refs[i] - 1);
 }
 
@@ -1383,6 +1398,7 @@ static void svcsock_rx_capacity_release_test(struct kunit *test)
 	struct page *second = svcsock_rx_alloc_page(test);
 	unsigned int first_refs;
 	unsigned int second_refs;
+	unsigned int i;
 
 	KUNIT_ASSERT_NOT_NULL(test, state);
 	KUNIT_ASSERT_NOT_NULL(test, first);
@@ -1390,18 +1406,95 @@ static void svcsock_rx_capacity_release_test(struct kunit *test)
 	first_refs = page_ref_count(first);
 	second_refs = page_ref_count(second);
 
-	KUNIT_ASSERT_EQ(test,
-			svc_tcp_rx_append_borrowed(state, first, 1, 3, true), 0);
+	/* fill the table; gaps keep each fragment its own entry */
+	for (i = 0; i < state->capacity; i++)
+		KUNIT_ASSERT_EQ(test,
+				svc_tcp_rx_append_borrowed(state, first,
+							   1 + i * 8, 3, true),
+				0);
 	KUNIT_EXPECT_EQ(test,
 			svc_tcp_rx_append_borrowed(state, second, 5, 7, false),
 			-ENOSPC);
-	KUNIT_EXPECT_EQ(test, page_ref_count(first), first_refs + 1);
+	KUNIT_EXPECT_EQ(test, page_ref_count(first),
+			first_refs + state->capacity);
 	KUNIT_EXPECT_EQ(test, page_ref_count(second), second_refs);
 	KUNIT_EXPECT_TRUE(test, test_bit(0, state->page_pool));
 
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
 	KUNIT_EXPECT_EQ(test, page_ref_count(first), first_refs);
 	KUNIT_EXPECT_EQ(test, state->refs_acquired, state->refs_released);
+}
+
+/*
+ * The loan table is sized for 4 KiB fragments, not pages: a loan takes
+ * one entry per fragment, and fragments do not grow with PAGE_SIZE.
+ */
+static void svcsock_rx_capacity_sizing_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 2);
+	struct page *page = svcsock_rx_alloc_page(test);
+	unsigned int refs;
+	unsigned int i;
+
+	KUNIT_ASSERT_NOT_NULL(test, state);
+	KUNIT_ASSERT_NOT_NULL(test, page);
+	KUNIT_EXPECT_EQ(test, (unsigned long)state->capacity,
+			svc_pages_to_bvecs(2));
+	KUNIT_EXPECT_EQ(test, state->arena_pages, 2U);
+	refs = page_ref_count(page);
+
+	for (i = 0; i < state->capacity; i++)
+		KUNIT_ASSERT_EQ(test,
+				svc_tcp_rx_append_borrowed(state, page,
+							   i * 8, 4, true),
+				0);
+	KUNIT_EXPECT_EQ(test, state->count, state->capacity);
+	KUNIT_EXPECT_EQ(test,
+			svc_tcp_rx_append_borrowed(state, page,
+						   state->capacity * 8, 4, true),
+			-ENOSPC);
+
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+}
+
+/*
+ * When the table holds more entries than the arena has pages (pages
+ * larger than 4 KiB), materializing a record longer than the arena must
+ * fail at the arena bound instead of indexing past the page array.
+ */
+static void svcsock_rx_arena_bound_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 1);
+	struct page *arena = svcsock_rx_alloc_page(test);
+	struct page *first = svcsock_rx_alloc_page(test);
+	struct page *second = svcsock_rx_alloc_page(test);
+	struct page *pages[1];
+	unsigned int first_refs, second_refs;
+
+	if (svc_pages_to_bvecs(1) == 1)
+		kunit_skip(test, "table and arena are the same size on %lu-byte pages",
+			   PAGE_SIZE);
+	KUNIT_ASSERT_NOT_NULL(test, state);
+	KUNIT_ASSERT_NOT_NULL(test, arena);
+	KUNIT_ASSERT_NOT_NULL(test, first);
+	KUNIT_ASSERT_NOT_NULL(test, second);
+	pages[0] = arena;
+	first_refs = page_ref_count(first);
+	second_refs = page_ref_count(second);
+
+	/* 28 fixed bytes plus a full page: the record outgrows one page */
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_append_borrowed(state, first, 0,
+						   PAGE_SIZE / 2, false), 0);
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_append_borrowed(state, second, 0,
+						   PAGE_SIZE / 2, false), 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_materialize(state, pages), -EFAULT);
+
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
+	KUNIT_EXPECT_EQ(test, page_ref_count(first), first_refs);
+	KUNIT_EXPECT_EQ(test, page_ref_count(second), second_refs);
 }
 
 static void svcsock_rx_duplicate_cleanup_test(struct kunit *test)
@@ -1615,6 +1708,8 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_exclusion_table_test),
 	KUNIT_CASE(svcsock_rx_materialize_test),
 	KUNIT_CASE(svcsock_rx_capacity_release_test),
+	KUNIT_CASE(svcsock_rx_capacity_sizing_test),
+	KUNIT_CASE(svcsock_rx_arena_bound_test),
 	KUNIT_CASE(svcsock_rx_duplicate_cleanup_test),
 	KUNIT_CASE(svcsock_rx_concurrent_release_test),
 	KUNIT_CASE(svcsock_rx_exchange_test),
