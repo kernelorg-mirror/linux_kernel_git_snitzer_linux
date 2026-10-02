@@ -13,7 +13,8 @@ placement works: with `rx_ip_align=2` every NIC-loaned fragment is 0 mod 4
 (was 2 mod 4). WRITEs still could not go direct from loaned pages, for a
 reason outside this sub-project: on 64 KiB pages the loan table holds only
 20 fragments, so every WRITE falls back to a full copy. Results and cause
-in [`TESTING.md`](TESTING.md) section 6.
+in [`TESTING.md`](TESTING.md) section 6. The parent series now sizes the
+table for fragments (2026-10-02, not yet run); see the same section.
 
 ## tardis1 result: its NVMe is PRP-only
 

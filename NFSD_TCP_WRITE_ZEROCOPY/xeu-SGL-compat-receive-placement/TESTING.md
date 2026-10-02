@@ -242,4 +242,35 @@ borrows about a third of the record, then copies all of it. The receive
 placement cannot change that, and neither can SGL NVMe. On this hardware
 the loan series gives no zero-copy at all on 64 KiB pages until the table
 is sized for fragments rather than pages. That is a change to the parent
-series, not to this sub-project; not made.
+series, not to this sub-project.
+
+### The fix (2026-10-02, not yet run)
+
+Made in the parent series, after rebasing it onto `v7.1.13-19`:
+
+| commit | public | HS twin (`hs-7.1.13-19`) |
+|---|---|---|
+| SUNRPC: size rq_bvec for 4 KiB fragments, not pages | `4a678823e9b5` | `2f59ef861745` |
+| nfsd: convert a WRITE payload into rq_bvec by its own size | `82f26e77ef00` | `d4e18c8e0c04` |
+| SUNRPC: size the TCP receive loan table for fragments, not pages | `edb7716aced7` | `644125390c32` |
+| SUNRPC: test the fragment-sized TCP receive loan table | `42c89a91d4d7` | `036142176fac` |
+
+`svc_pages_to_bvecs()` sizes the loan table and nfsd's `rq_bvec` for 4 KiB
+fragments: 320 entries instead of 20 on a 64 KiB kernel, unchanged on 4 KiB.
+The copy arena's page count is kept separately (`arena_pages`), so the
+fallback copy cannot index past `rq_pages`. Built WERROR-clean at both tips
+(4 KiB config); KUnit and runtime not run.
+
+**Expect a different disposition on tardis1, not necessarily a faster
+one.** Today every WRITE falls back to a full copy into page-tiled
+`rq_pages`, which goes direct on the PRP NVMe. With the fix a 1 MB WRITE
+completes as a loan, its fragments still end off a 4 KiB boundary, and the
+PRP gate writes it buffered (DONTCACHE under `io_cache_write=4`). The fix
+pays off where loaned WRITEs can go direct: SGL NVMe, or page-aligned
+payload.
+
+To confirm it on a 64 KiB kernel built from the HS twin:
+`kprobe:svc_tcp_rx_materialize` should drop from about one per WRITE
+(`followup-materialize.txt`) to near zero, and `@rx_bytes_borrowed[1]`
+(`followup-dio-split-and-rx-bytes.txt`) should reach about the WRITE size
+per WRITE.
