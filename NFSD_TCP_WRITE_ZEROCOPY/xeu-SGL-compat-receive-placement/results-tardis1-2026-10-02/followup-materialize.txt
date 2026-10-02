@@ -1,0 +1,9 @@
+# tardis1, 2026-10-02, same state as followup-dio-split-and-rx-bytes.txt
+timeout -s INT 30 bpftrace -e '
+kprobe:svc_tcp_rx_materialize { @materialize = count(); }
+tracepoint:nfsd:nfsd_write_dio_split { @writes = count(); }'
+
+Attached 2 probes
+
+@materialize: 478415
+@writes: 465720

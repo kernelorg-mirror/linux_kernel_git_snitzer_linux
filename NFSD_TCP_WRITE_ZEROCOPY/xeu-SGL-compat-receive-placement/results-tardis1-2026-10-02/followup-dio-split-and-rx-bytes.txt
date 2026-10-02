@@ -1,0 +1,41 @@
+# tardis1, 2026-10-02: kernel 7.1.13-14.hs.441.loanpages_SGL.el9.aarch64+64k,
+# kmod-64k-xsight ...-2.rxipalign.el9, rx_ip_align=2, svc_tcp_rx_loan_pages=Y,
+# io_cache_write=4, MTU 9000. Client: pNFS flexfiles via HS MDS (no striping),
+# fio --direct=1 --bs=1MiB --iodepth=1 --ioengine=libaio --numjobs=32 --rw=write
+# over 8 hsvol mounts. Export /hs/nvme6 = XFS directly on nvme6n1
+# (virt_boundary_mask 4095).
+timeout -s INT 60 bpftrace -e '
+tracepoint:nfsd:nfsd_write_dio_split {
+  @disp[args->disposition & 0x7f] = count();
+  @len_by_disp[args->disposition & 0x7f] = sum(args->len);
+  @write_len = hist(args->len);
+  @off_4k_aligned[(args->offset & 4095) == 0] = count();
+}
+kprobe:svc_tcp_rx_append { @rx_bytes_borrowed[arg4] = sum(arg3); }
+kprobe:svc_tcp_rx_append /arg4 && arg5/ { @frag_len = hist(arg3); }'
+
+Attached 3 probes
+
+@disp[1]: 4551
+@disp[0]: 607940
+@frag_len:
+[16, 32)              17 |                                                    |
+[32, 64)               0 |                                                    |
+[64, 128)              4 |                                                    |
+[128, 256)            55 |                                                    |
+[256, 512)           186 |                                                    |
+[512, 1K)           5217 |                                                    |
+[1K, 2K)            1263 |                                                    |
+[2K, 4K)           31346 |                                                    |
+[4K, 8K)           17933 |                                                    |
+[8K, 16K)       11029555 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[16K, 32K)         84246 |                                                    |
+[32K, 64K)       1798961 |@@@@@@@@                                            |
+
+@len_by_disp[1]: 4551000000
+@len_by_disp[0]: 607940000000
+@off_4k_aligned[true]: 9581
+@off_4k_aligned[false]: 602910
+@rx_bytes_borrowed[1]: 212462382944
+@write_len:
+[512K, 1M)        612491 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|

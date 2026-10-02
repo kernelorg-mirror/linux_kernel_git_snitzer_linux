@@ -8,8 +8,12 @@ joints on a device without a virtual boundary; what is left is the NIC side:
 every loaned fragment must start and end on the device's DMA alignment,
 4 bytes on NVMe.
 
-**Status:** driver change written and build-checked, not run on hardware.
-Test procedure for tardis1 in [`TESTING.md`](TESTING.md).
+**Status (2026-10-02):** run on tardis1 (hs.441, 64 KiB pages). The
+placement works: with `rx_ip_align=2` every NIC-loaned fragment is 0 mod 4
+(was 2 mod 4). WRITEs still could not go direct from loaned pages, for a
+reason outside this sub-project: on 64 KiB pages the loan table holds only
+20 fragments, so every WRITE falls back to a full copy. Results and cause
+in [`TESTING.md`](TESTING.md) section 6.
 
 ## tardis1 result: its NVMe is PRP-only
 
