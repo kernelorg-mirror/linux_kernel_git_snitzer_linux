@@ -1,3 +1,16 @@
+* Thu Oct 01 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-3]
+- NFSD: update nfsd-testing-canary-dontcache to v4 of the NFSD direct-mode series:
+  new "mm: add folio_mark_dropbehind() to mark a folio dropbehind and account it",
+  which the boundary-page patch now uses so WB_DONTCACHE_DIRTY stays balanced; a
+  shared boundary page is only held when the DIO alignment is page-aligned and the
+  mapping's folios are a single page; a WRITE issued whole as direct I/O keeps
+  IOCB_DSYNC so a DATA_SYNC overwrite can complete with FUA writes; and
+  "NFSD: add direct-mode WRITE settings that persist each WRITE" is now
+  "NFSD: add io_cache_write modes that persist each direct-mode WRITE"
+- Rebuild nfsd-testing-canary-dontcache-LOCALIO on it: the nfs_common direct I/O
+  helpers take v4's boundary-page handling, and LOCALIO's persist-once write keeps
+  IOCB_DSYNC on a write issued whole as direct I/O, as NFSD does
+
 * Thu Oct 01 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-2]
 - NFSD: update nfsd-testing-canary-dontcache from v2 to v3 of the NFSD direct-mode series
   posted upstream (https://lore.kernel.org/linux-nfs/20261001045502.48381-1-snitzer@kernel.org/):
