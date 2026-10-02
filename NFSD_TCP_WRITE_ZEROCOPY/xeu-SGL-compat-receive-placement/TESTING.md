@@ -74,13 +74,60 @@ For the A/B, prefer the command line on one grub entry and keep the
 known-good entry without it. Verify with
 `cat /sys/module/xeu/parameters/rx_ip_align`.
 
+### Built for `7.1.13-14.hs.441.loanpages_SGL` (2026-10-01)
+
+Built through kernel-rpmtree as `KMOD-DIR-DEVEL.md` describes, against the
+el9 kernel RPMs Nexus holds in repository `kernel`, path
+`el9/kernel-7.1/hs-7.1.13-14.NFSD_TCP_WRITE_ZEROCOPY/441/aarch64/Packages/`
+(staged on the build host in `/root/hs/7.1.13/RPMS-hs441/aarch64/`). The
+patch went in as `Patch2:`, and the build used `-D "dist .rxipalign.el9"`
+so the packages cannot be mistaken for the stock ones of the same kernel:
+
+    /root/hs/7.1.13/RPMS-ubi9-hs441-rxipalign/aarch64/
+      kmod-64k-xsight-2.0.1_7.1.13_14.hs.441.loanpages_SGL-2.rxipalign.el9.aarch64.rpm
+      kmod-xsight-2.0.1_7.1.13_14.hs.441.loanpages_SGL-2.rxipalign.el9.aarch64.rpm
+      (+ -debuginfo for each)
+
+Checked: 64K `xeu.ko` vermagic `7.1.13-14.hs.441.loanpages_SGL.el9.aarch64+64k`
+and `parm: rx_ip_align` (the 4K one too), `Requires: kernel-64k-core`,
+`depmod -a "...+64k"` scriptlet. The stock package for the same kernel
+(`...-2.el9...`, no `rx_ip_align`) was fetched beside the kernel RPMs for
+the A/B and to revert.
+
+Install on tardis1 by **replacing** the stock package, not adding beside it.
+The kmod provides `installonlypkg(kernel-module)`, so `dnf install` would try
+to keep both and fail on the shared `xeu.ko` path. Plain `rpm -Uvh` upgrades
+by name (`2.rxipalign.el9` sorts after `2.el9`); revert with
+`rpm -Uvh --oldpackage` on the stock RPM. Reload `xeu` or reboot afterwards.
+
+The patch prints nothing when `rx_ip_align` takes effect, only warnings for
+a bad value or an MTU that spans RX buffers, so check positively:
+`rpm -qf $(modinfo -F filename xeu)` names the `.rxipalign` package and
+`/sys/module/xeu/parameters/rx_ip_align` reads `2`.
+
+Build-host gotcha: the build host was running a tree-built
+`6.12.93-7.hs.441.el9.aarch64+` with no `veth` module, so Docker's bridge
+network could not start the build container. The build ran with a `docker`
+wrapper first on `PATH` that adds `--network host` to `docker run`.
+
 ## 3. Two passes, same workload
 
 On the 64 KiB kernel at MTU 9000, drive steady NFS WRITE load (O_DIRECT,
 1 MiB records) from a client to the
 export, with loans on (`svc_tcp_rx_loan_pages=Y`) and
 `/sys/kernel/debug/nfsd/io_cache_write=2`. For each pass, collect for the
-same interval:
+same interval. `trace-loans.sh LABEL [SECONDS]` (this directory) does the
+first two below and saves them with the run's state (kernel, xeu package,
+`rx_ip_align`, loan switch, `io_cache_write`, MTU) under
+`out-LABEL-<timestamp>/`:
+
+    ./trace-loans.sh passA-rx0 60
+    ./trace-loans.sh passB-rx2 60
+
+On `hs.441` the probe target is sound: `svc_tcp_rx_append` is a real local
+function in the 64K `sunrpc.ko`, both `svc_tcp_rx_append_borrowed()` and
+`_copied()` call it, and the `nfsd_write_{direct,vector,dontcache}`
+tracepoints exist.
 
 - `bpftrace loan-geometry.bt` (this directory): per loaned fragment, page
   offset mod 4, length mod 4, whether it ends mid-page, and page_pool
@@ -107,6 +154,11 @@ server (as `../run-rig-cmp.sh` does locally) for both passes.
 | all 0 mod 4 | still `mem_misaligned` | lengths or another geometry fail the gate: check `@len_mod4`, and the NVMe `virt_boundary_mask` / `statx-dio` gate again |
 | still 2 mod 4 | — | the parameter did not take (check `modinfo`, `/sys/module/xeu/parameters/rx_ip_align`) or the E1 ignores the low address bits (Xsight question 1) |
 | any `-EINVAL`, or `cmp` mismatch | — | stop and capture: a correctness problem |
+
+On tardis1 the NVMe is PRP-only (see `README.md`), so pass B can only show
+the offsets moving to 0 mod 4; dispositions stay demoted and
+`@ends_mid_page[1]` stays high (it tests against 4 KiB, the PRP boundary,
+not the 64 KiB page). Judge that run by `@offset_mod4` for `@page_pool[1]`.
 
 Note: `loan-geometry.bt` counts every loaned fragment, including RPC header
 and small-record fragments, not only WRITE payload; judge the payload by the
