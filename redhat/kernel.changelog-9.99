@@ -1,3 +1,20 @@
+* Fri Oct 02 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-4]
+- SUNRPC: add new topic snitzer-nfsd-fixes, built on and merged after
+  nfsd-testing-canary: "SUNRPC: preserve RQ_SECURE across request deferral", so a
+  request deferred on an auth cache upcall, as is likely right after a server
+  restart, no longer has its privileged-port check fail (NFSv3 EPERM) or wrongly
+  pass when replayed
+- NFSD: in nfsd-testing-canary-dontcache, a split direct-mode WRITE marks the pages
+  it shares with its neighbours for dropping only once the whole WRITE is complete,
+  after its fsync if it has one, and a page already clean is dropped at once, so the
+  DONTCACHE writeback kick does not run to write back what the fsync is about to
+  write; backport "filemap: Add a helper for filesystems implementing dropbehind"
+  for it
+- NFS/LOCALIO: in nfsd-testing-canary-dontcache-LOCALIO, the nfs_common boundary-page
+  helpers and LOCALIO's direct write follow suit: the holds taken per segment are
+  kept in the nfs_local_kiocb and released when the write completes, inline or
+  through AIO
+
 * Thu Oct 01 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-3]
 - NFSD: update nfsd-testing-canary-dontcache to v4 of the NFSD direct-mode series:
   new "mm: add folio_mark_dropbehind() to mark a folio dropbehind and account it",
