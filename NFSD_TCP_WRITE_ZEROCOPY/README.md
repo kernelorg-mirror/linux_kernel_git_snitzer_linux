@@ -19,6 +19,28 @@ reproduction instructions for the "page-loan" patch series.
 > collapse geometry itself could not be forced on loopback, so an end-to-end
 > reproduction on a real NIC is still outstanding.
 >
+> **Branch state (2026-10-02):** `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
+> is rebased onto **`v7.1.13-19`** (= `kernel-7.1.13/main`) with
+> `git rebase --onto kernel-7.1.13/main v7.1.13-14`: main was rebuilt, so
+> `v7.1.13-14` is no longer its ancestor and a plain rebase would replay
+> hundreds of base commits. The `-14` version is kept as `….v7.1.13-14`.
+> The 67 commits replayed without conflicts, three with context-only
+> changes. The new base replaced `struct nfs_dio_seg`'s `boundary`/`edges`
+> flags with `claim` (`d6d140143dde`), so `dio_segments_test` was adapted
+> and folded into "nfsd: exhaustively test receive bvec consumers".
+> New at the tip, from the tardis1 run (`xeu-SGL-compat-receive-placement/`
+> `TESTING.md` section 6): the loan table is sized for 4 KiB fragments
+> instead of pages (20 entries became 320 on a 64 KiB kernel), with nfsd's
+> `rq_bvec` sized to match — three commits carrying `Fixes:` tags, plus
+> KUnit. The Hammerspace twin is
+> **`kernel-7.1/hs-7.1.13-19.NFSD_TCP_WRITE_ZEROCOPY`**: the same 67 on
+> `kernel-7.1/hs-7.1.13-19`, differing only by the rpcbind adaptation in
+> "SUNRPC: loan eligible TCP receive pages" (`[snitzer: …]` note), the
+> in-series `Fixes:` SHAs, and context. Both tips build WERROR-clean; the
+> public branch's nfsd/sunrpc build was walked commit by commit from the
+> folded KUnit commit to the tip. Not yet run on `-19`: KUnit, the runtime
+> harness, and the full bisect walk.
+>
 > **Branch state (2026-09-25):** `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
 > is rebased onto **`v7.1.13-14`** (= `kernel-7.1.13/main`); the `-12`
 > version is kept as `….v7.1.13-12`. It is now **35 commits**: David Flynn's
@@ -206,8 +228,15 @@ buffered I/O (the whole-iterator `nfsd_dio_iter_is_aligned()` check).
 
 Hammerspace Linux repo: `ssh://git@gitlab.lab.hammer.space:2222/engineering/linux.git`
 
-- **`kernel-7.1/hs-7.1.13-5.NFSD_TCP_WRITE_ZEROCOPY`** — **the current
-  branch** (2026-09-18): the regrouped 35-commit series on
+- **`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`** — **current** (2026-10-02):
+  67 commits on `v7.1.13-19`, the public branch. Development happens here
+  and is carried to the Hammerspace twin.
+- **`kernel-7.1/hs-7.1.13-19.NFSD_TCP_WRITE_ZEROCOPY`** — **current HS twin**
+  (2026-10-02): the same series on `kernel-7.1/hs-7.1.13-19`, the branch to
+  build tardis1 kernels from. Older twins `hs-7.1.13-14` and `hs-7.1.13-12`
+  are kept as history.
+- **`kernel-7.1/hs-7.1.13-5.NFSD_TCP_WRITE_ZEROCOPY`** — the current
+  branch on 2026-09-18: the regrouped 35-commit series on
   `kernel-7.1/hs-7.1.13-5`. Base tag `v7.1.13-5`; the Hammerspace DP stack is
   below the series, so this is both the development and the integration
   branch. Everything below this bullet describes the superseded branches and
