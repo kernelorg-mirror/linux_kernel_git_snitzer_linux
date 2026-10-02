@@ -369,6 +369,7 @@ struct svc_deferred_req {
 	struct sockaddr_storage	daddr;	/* where reply must come from */
 	size_t			daddrlen;
 	void			*xprt_ctxt;
+	bool			secure;	/* RQ_SECURE of the original request */
 	struct cache_deferred_req handle;
 	int			argslen;
 	__be32			args[];
