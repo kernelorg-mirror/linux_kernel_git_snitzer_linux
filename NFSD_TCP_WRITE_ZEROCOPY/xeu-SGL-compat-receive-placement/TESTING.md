@@ -172,3 +172,74 @@ In this file: the kernel release, NIC firmware/driver version, page size,
 MTU, the export's `virt_boundary_mask`, `sgls` and `statx-dio` output, both
 passes' histograms and disposition counts, the `split_einval.bt` result and
 the `cmp` result; then the answer to Xsight question 1 that the run implies.
+
+## 6. Results — tardis1, 2026-10-02
+
+Raw outputs: [`results-tardis1-2026-10-02/`](results-tardis1-2026-10-02/).
+Not recorded: NIC firmware version, the `split_einval.bt` result and a `cmp`
+of the written data.
+
+**State, every run:** kernel `7.1.13-14.hs.441.loanpages_SGL.el9.aarch64+64k`
+(64 KiB pages), `kmod-64k-xsight-...-2.rxipalign.el9`, loans on,
+`io_cache_write=4`, MTU 9000 on both E1 ports. Export `/hs/nvme6`: XFS
+directly on `nvme6n1`, `virt_boundary_mask` 4095 (PRP-only). Client: pNFS
+flexfiles through the HS metadata server (no striping), `fio --direct=1
+--bs=1MiB --iodepth=1 --ioengine=libaio --numjobs=32 --rw=write` over 8
+hsvol mounts.
+
+### Placement: works
+
+`trace-loans.sh`, 60 s each; pass B (10:53) ran before pass A (10:57).
+
+| | pass A, `rx_ip_align=0` | pass B, `rx_ip_align=2` |
+|---|---|---|
+| NIC-loan fragments (`@page_pool[1]`) | 23,044,884 | 21,787,252 |
+| offset 0 mod 4 | 0 | 21,787,252 (100%) |
+| offset 2 mod 4 | 23,044,884 (100%) | 0 |
+| length 0 mod 4 | 100% | 100% |
+| ends off a 4 KiB boundary | 100% | 100% (6 exceptions) |
+| `rx_ip_align` warnings in dmesg | none | none |
+| loaned bytes in 60 s | 400.5 GB | 376.9 GB |
+
+The E1 accepts a receive `dst_addr` that is 2 mod 4 (Xsight question 1,
+first half). Pass B moved ~6% fewer bytes, but that is one run each, back
+to back: no basis yet for a rate penalty.
+
+### Dispositions: unchanged, and not for the reason expected
+
+Per-segment counts were the same shape in both passes (pass A 1,088,516
+direct / 2,207,739 dontcache; pass B 1,028,235 / 2,101,056). A follow-up
+breakdown with `rx_ip_align=2` (`followup-dio-split-and-rx-bytes.txt`, 60 s):
+
+- 612,491 WRITEs, every one exactly 1,000,000 bytes; 1 in 64 offsets is
+  4 KiB-aligned (multiples of 1,000,000). So each WRITE splits into a
+  buffered head, a direct middle and a buffered tail: the 1:2 segment
+  ratio. fio issues 1 MiB writes; where the 1,000,000-byte chunking comes
+  from (client or metadata server) is open and outside this sub-project.
+- Disposition: 607,940 direct (99.3%), 4,551 memory-misaligned (0.7%).
+- Borrowed bytes: 212.5 GB, i.e. **346,882 bytes per WRITE**. Copy-mode
+  bytes do not pass through `svc_tcp_rx_append`, so copied bytes are not in
+  this count.
+- NIC-loan fragment sizes: mostly 8-16 KB (one MTU-9000 segment), with
+  ~14% at 32-64 KB.
+
+### The cause: the loan table is sized in pages
+
+`svc_tcp_rx_state_alloc()` sizes each record's loan bvec table at
+`svc_serv_maxpages()` = `DIV_ROUND_UP(sv_max_mesg, PAGE_SIZE) + 3`
+entries: 260 on a 4 KiB kernel, **20 on a 64 KiB kernel**. Every loaned
+fragment takes one entry whatever its length, so on 64 KiB pages a WRITE
+fills the table after about 20 fragments (~347 KB, matching the measured
+borrowed bytes per WRITE). The receive then hits the capacity fallback
+(`SVC_TCP_RX_REASON_CAPACITY`): `svc_tcp_rx_materialize()` copies the
+record into the page-tiled `rq_pages` arena, which goes direct on PRP NVMe.
+Confirmed (`followup-materialize.txt`, 30 s): **478,415
+`svc_tcp_rx_materialize` calls against 465,720 WRITEs**, about one per
+WRITE.
+
+So on the 64 KiB kernel a loaned WRITE never completes as a loan: it
+borrows about a third of the record, then copies all of it. The receive
+placement cannot change that, and neither can SGL NVMe. On this hardware
+the loan series gives no zero-copy at all on 64 KiB pages until the table
+is sized for fragments rather than pages. That is a change to the parent
+series, not to this sub-project; not made.
