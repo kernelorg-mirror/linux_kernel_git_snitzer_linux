@@ -260,7 +260,7 @@
     <div class="metrics">
       <div class="metric"><div class="n">11</div><div class="l">phase 1<br>code commits</div></div>
       <div class="metric"><div class="n gain">160/160</div><div class="l">WRITEs direct<br>on NVMe/TCP</div></div>
-      <div class="metric"><div class="n cost">2 mod 4</div><div class="l">E1 payload today —<br>phase 2 target</div></div>
+      <div class="metric"><div class="n gain">0 mod 4</div><div class="l">E1 payload with<br>rx_ip_align=2 (tardis1)</div></div>
       <div class="metric"><div class="n cost">PRP only</div><div class="l">tardis1 NVMe —<br>all 9 namespaces</div></div>
     </div>
 
@@ -567,6 +567,32 @@ rpm -qf $(modinfo -F filename xeu)                             <span class="c">#
 <pre>./trace-loans.sh passA-rx0 60      <span class="c"># stock module, or rx_ip_align=0</span>
 ./trace-loans.sh passB-rx2 60      <span class="c"># after reloading xeu with rx_ip_align=2</span></pre>
     <p>On hs.441 the probe is sound: <code>svc_tcp_rx_append</code> is a real function in the 64K <code>sunrpc.ko</code>, and both the borrowed and copied paths call it. On tardis1, judge the run by <code>@offset_mod4</code> for the NIC-loan fragments (<code>@page_pool[1]</code>), which should move from 2 to 0 mod 4. The PRP-only NVMe keeps the dispositions demoted and <code>@ends_mid_page[1]</code> high either way.</p>
+  </section>
+
+  <section id="tardis1-results">
+    <p class="eyebrow ok">tardis1 results · 2026-10-02</p>
+    <h2>The placement works; the loan runs out of room</h2>
+    <p>Kernel <code>7.1.13-14.hs.441.loanpages_SGL+64k</code>, the <code>.rxipalign</code> package, loans on, <code>io_cache_write=4</code>, MTU 9000. The export is XFS directly on PRP-only <code>nvme6n1</code>. The client is pNFS flexfiles through the HS metadata server, running <code>fio --direct=1 --bs=1MiB --iodepth=1</code>, 32 jobs on each of 8 volumes. Raw outputs are in <code>xeu-SGL-compat-receive-placement/results-tardis1-2026-10-02/</code>.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>60 s, NIC-loan fragments</th><th>rx_ip_align=0</th><th>rx_ip_align=2</th></tr></thead>
+      <tbody>
+        <tr><td>offset 0 mod 4</td><td class="x">0%</td><td class="r">100% (21,787,252)</td></tr>
+        <tr><td>offset 2 mod 4</td><td class="x">100% (23,044,884)</td><td class="r">0%</td></tr>
+        <tr><td>length 0 mod 4</td><td class="r">100%</td><td class="r">100%</td></tr>
+        <tr><td>ends off a 4 KiB boundary</td><td class="num">100%</td><td class="num">100%</td></tr>
+        <tr><td>loaned bytes</td><td class="num">400.5 GB</td><td class="num">376.9 GB</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>The E1 accepts a receive address that is 2 mod 4</strong>, and every loaned fragment lands 4-byte aligned. The ~6% fewer bytes in pass B comes from one run each, back to back, so it doesn't yet show a rate penalty.</p>
+    <div class="verdict">
+      <p class="big">On 64 KiB pages a WRITE <em>never completes as a loan</em>: the table holds 20 fragments.</p>
+      <p>The per-record loan table is sized in pages, <code>DIV_ROUND_UP(sv_max_mesg, PAGE_SIZE) + 3</code>: 260 entries on 4 KiB, 20 on 64 KiB. Every loaned fragment takes an entry, however short it is. A WRITE therefore loans about 20 segments, then hits the capacity fallback, and <code>svc_tcp_rx_materialize()</code> copies the whole record into the page-tiled arena, which goes direct on PRP NVMe.</p>
+      <div class="geom">borrowed bytes per WRITE          346,882    <b>&asymp; 20 fragments &times; ~17 KB</b>
+WRITE disposition: direct         99.3%      <b>copied arena, not the loan</b>
+svc_tcp_rx_materialize / WRITE    478,415 / 465,720 &asymp; <b>1.03</b></div>
+      <p>So <code>rx_ip_align</code> could not move the dispositions, and neither could SGL NVMe. The fix belongs to the parent series: size the table for fragments, not pages. It hasn't been made.</p>
+    </div>
+    <p>Also seen: every WRITE on the wire was exactly 1,000,000 bytes, although fio issues 1 MiB. Only 1 in 64 is 4 KiB-aligned, so each WRITE gets a buffered head and tail around its direct middle. Where that chunking happens, in the client or the metadata-server path, is still open.</p>
   </section>
 
   <section>
