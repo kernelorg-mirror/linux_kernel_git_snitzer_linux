@@ -253,7 +253,7 @@
 <div class="wrap">
 
   <header>
-    <p class="eyebrow">NFSD · block · XFS · NVMe · v7.1.13-14</p>
+    <p class="eyebrow">NFSD · block · XFS · NVMe · v7.1.13-19</p>
     <h1>SGL devices can take the loan.<br><span class="lock">tardis1's NVMe can't.</span></h1>
     <p class="lede">Phase 1 carries each device's direct I/O segment boundary from NVMe through XFS and statx into nfsd, so <span class="hl">a loaned WRITE with mid-page joints goes direct on an SGL-capable device</span>. It is qualified on this test rig. Phase 2 is a two-byte <code>xeu</code> RX headroom change that 4-byte aligns E1 payload. It is build-checked and has not run on hardware. <span class="hc">tardis1's NVMe controllers turned out to be PRP-only, so neither phase can make WRITEs direct there.</span></p>
 
@@ -265,7 +265,7 @@
     </div>
 
     <p class="provenance">
-      <span>Branch:</span> <code>kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY</code> on tag <code>v7.1.13-14</code><br>
+      <span>Branch:</span> <code>kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY</code>, rebased onto <code>v7.1.13-19</code> on 2026-10-02 (phase 1 was built and qualified on <code>v7.1.13-14</code>)<br>
       <span>Qualified on:</span> <code>7.1.13-14.hs.440.loanpages</code> (arm64, 4 KiB pages) · 2026-09-26<br>
       <span>In-tree docs:</span> <code>NFSD_TCP_WRITE_ZEROCOPY/NVME_SGL_SUPPORT_PROJECT.md</code>, <code>…/xeu-SGL-compat-receive-placement/</code><br>
       <span>Builds on:</span> the <a href="https://claude.ai/artifact/AaqMSpvXNrwbugt6BJ7MXX">NFSD Page Loan</a> status document
@@ -590,7 +590,24 @@ rpm -qf $(modinfo -F filename xeu)                             <span class="c">#
       <div class="geom">borrowed bytes per WRITE          346,882    <b>&asymp; 20 fragments &times; ~17 KB</b>
 WRITE disposition: direct         99.3%      <b>copied arena, not the loan</b>
 svc_tcp_rx_materialize / WRITE    478,415 / 465,720 &asymp; <b>1.03</b></div>
-      <p>So <code>rx_ip_align</code> could not move the dispositions, and neither could SGL NVMe. The fix belongs to the parent series: size the table for fragments, not pages. It hasn't been made.</p>
+      <p>So <code>rx_ip_align</code> could not move the dispositions, and neither could SGL NVMe. The fix belongs to the parent series: size the table for fragments, not pages.</p>
+    </div>
+    <h3 id="loan-table-fix" style="margin-top:26px">The fix: a loan table sized for fragments <span class="tag rework">2026-10-02 · not yet run</span></h3>
+    <p>Made in the parent series after rebasing it onto <code>v7.1.13-19</code>. <code>svc_pages_to_bvecs()</code> sizes both the loan table and nfsd's <code>rq_bvec</code> for 4 KiB fragments: <strong>320 entries instead of 20</strong> on a 64 KiB kernel, unchanged on 4 KiB. The copy arena keeps its own page count (<code>arena_pages</code>), so the fallback copy can't index past <code>rq_pages</code>. Three commits carry <code>Fixes:</code> tags; a fourth adds KUnit.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Commit</th><th>public</th><th>HS twin</th></tr></thead>
+      <tbody>
+        <tr><td>SUNRPC: size rq_bvec for 4 KiB fragments, not pages</td><td class="sha">4a678823e9b5</td><td class="sha">2f59ef861745</td></tr>
+        <tr><td>nfsd: convert a WRITE payload into rq_bvec by its own size</td><td class="sha">82f26e77ef00</td><td class="sha">d4e18c8e0c04</td></tr>
+        <tr><td>SUNRPC: size the TCP receive loan table for fragments, not pages</td><td class="sha">edb7716aced7</td><td class="sha">644125390c32</td></tr>
+        <tr class="kunit"><td>SUNRPC: test the fragment-sized TCP receive loan table</td><td class="sha t">42c89a91d4d7</td><td class="sha t">036142176fac</td></tr>
+      </tbody>
+    </table></div>
+    <p>The public branch is <code>kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY</code>; the HS twin is <code>kernel-7.1/hs-7.1.13-19.NFSD_TCP_WRITE_ZEROCOPY</code>, the branch to build tardis1 kernels from. Both tips build WERROR-clean; KUnit and the runtime harness haven't run on <code>-19</code> yet.</p>
+    <div class="verdict acc">
+      <p class="big">On tardis1, expect a <em>different</em> disposition, not necessarily a faster one.</p>
+      <p>Today every WRITE falls back to a full copy into page-tiled <code>rq_pages</code>, and that copy goes direct on the PRP NVMe. With the fix, a 1 MB WRITE completes as a loan. Its fragments still end off a 4 KiB boundary, so the PRP gate writes it buffered (DONTCACHE under <code>io_cache_write=4</code>). The fix pays off where loaned WRITEs can go direct: SGL NVMe, or page-aligned payload.</p>
+      <p>To confirm it on a 64 KiB kernel built from the HS twin, with the same client load: <code>kprobe:svc_tcp_rx_materialize</code> should drop from about one per WRITE to near zero, and borrowed bytes per WRITE should reach about the WRITE size.</p>
     </div>
     <p>Also seen: every WRITE on the wire was exactly 1,000,000 bytes, although fio issues 1 MiB. Only 1 in 64 is 4 KiB-aligned, so each WRITE gets a buffered head and tail around its direct middle. Where that chunking happens, in the client or the metadata-server path, is still open.</p>
   </section>
@@ -601,7 +618,7 @@ svc_tcp_rx_materialize / WRITE    478,415 / 465,720 &asymp; <b>1.03</b></div>
     <h3>For phase 2 to pay off on E1</h3>
     <ul class="steps">
       <li><strong>An SGL-capable export NVMe — tardis1 has none.</strong> All nine namespaces are PRP-only (<a href="#tardis1-nvme">table above</a>). Phase 2 needs an E1 host with SGL-capable NVMe; otherwise the E1 needs header-data split with payload coalescing.</li>
-      <li><strong>An HS kernel, now building.</strong> <code>kernel-7.1/hs-7.1.13-14.NFSD_TCP_WRITE_ZEROCOPY</code> carries the series, the merge top-up fix and SGL phase 1 under the Hammerspace DP commits. tardis1 needs its 64 KiB page build.</li>
+      <li><strong>A tardis1 kernel with the loan-table fix.</strong> Build the 64 KiB kernel from <code>kernel-7.1/hs-7.1.13-19.NFSD_TCP_WRITE_ZEROCOPY</code>, which carries the series, SGL phase 1 and the <a href="#loan-table-fix">fragment-sized loan table</a>. The first run on tardis1 used the <code>hs-7.1.13-14</code> twin.</li>
       <li><strong>kmod-xsight with the patch</strong>, built through kernel-rpmtree against the new kernel-devel (RHEL configs), 4 KiB and 64 KiB flavors; <code>modinfo -p</code> must show <code>rx_ip_align</code> in both.</li>
     </ul>
     <h3 style="margin-top:22px">Questions for Xsight</h3>
@@ -628,15 +645,15 @@ svc_tcp_rx_materialize / WRITE    478,415 / 465,720 &asymp; <b>1.03</b></div>
     <div class="branches">
       <div class="branch clean">
         <div class="bname">kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY <span class="btag">canonical · phase 1 qualified</span></div>
-        <p>The page-loan series, the folded merge top-up fix and SGL phase 1 on <code>v7.1.13-14</code>; all 51 commits walk clean. Not pushed.</p>
+        <p>The page-loan series, the folded merge top-up fix, SGL phase 1 and the fragment-sized loan table, 68 commits on <code>v7.1.13-19</code> (rebased 2026-10-02). Tip builds WERROR-clean; KUnit and runtime not yet re-run on <code>-19</code>. Not pushed.</p>
       </div>
       <div class="branch">
         <div class="bname">xeu-SGL-compat-receive-placement/ <span class="btag int">phase 2 · in-tree</span></div>
         <p>The <code>rx_ip_align</code> patch, <code>loan-geometry.bt</code>, README and TESTING for tardis1, under <code>NFSD_TCP_WRITE_ZEROCOPY/</code>.</p>
       </div>
       <div class="branch">
-        <div class="bname">kernel-7.1/hs-7.1.13-14.NFSD_TCP_WRITE_ZEROCOPY <span class="btag int">integration · tardis1 kernel</span></div>
-        <p>All of the canonical branch through <code>3350af53be4b</code>, with 30 Hammerspace DP commits on top. The kernel for the phase 2 run on tardis1 is being built from it.</p>
+        <div class="bname">kernel-7.1/hs-7.1.13-19.NFSD_TCP_WRITE_ZEROCOPY <span class="btag int">HS twin · next tardis1 kernel</span></div>
+        <p>The same series on <code>kernel-7.1/hs-7.1.13-19</code>, differing only by the rpcbind adaptation, in-series <code>Fixes:</code> SHAs and context. The previous twin, <code>hs-7.1.13-14</code>, built the kernel for the 2026-10-02 tardis1 run.</p>
       </div>
     </div>
   </section>
