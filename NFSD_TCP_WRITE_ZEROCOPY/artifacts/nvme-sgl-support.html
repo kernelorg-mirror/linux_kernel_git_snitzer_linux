@@ -543,6 +543,30 @@ grubby --update-kernel=/boot/vmlinuz-&lt;release&gt; --remove-args="xeu.rx_ip_al
     <p>Check the value after load, either way. The parameter is read-only after load, so a new setting takes effect only when <code>xeu</code> loads again, either with <code>modprobe -r xeu &amp;&amp; modprobe xeu</code> or by rebooting. Reloading takes the link down, so follow the deadman-switch procedure in section 0 of <code>TESTING.md</code>.</p>
 <pre>cat /sys/module/xeu/parameters/rx_ip_align   <span class="c"># expect 2</span>
 dmesg | grep rx_ip_align                     <span class="c"># no "spans N RX buffers" warning</span></pre>
+
+    <h3 id="hs441-build" style="margin-top:30px">Built for <code>7.1.13-14.hs.441.loanpages_SGL</code></h3>
+    <p>Built on 2026-10-01 through kernel-rpmtree's kmod-dir recipe, against the el9 kernel RPMs in Nexus (repository <code>kernel</code>, <code>el9/kernel-7.1/hs-7.1.13-14.NFSD_TCP_WRITE_ZEROCOPY/441/</code>). The release carries <code>.rxipalign</code>, so it can't be mistaken for the stock package of the same kernel:</p>
+<pre>/root/hs/7.1.13/RPMS-ubi9-hs441-rxipalign/aarch64/
+  kmod-64k-xsight-2.0.1_7.1.13_14.hs.441.loanpages_SGL-2.rxipalign.el9.aarch64.rpm   <span class="ok"># tardis1</span>
+<span class="c"># stock, for the A/B and to revert:</span>
+/root/hs/7.1.13/RPMS-hs441/aarch64/
+  kmod-64k-xsight-2.0.1_7.1.13_14.hs.441.loanpages_SGL-2.el9.aarch64.rpm</pre>
+    <div class="matrix">
+      <div class="cell k">64K <code>xeu.ko</code> vermagic <code>…loanpages_SGL.el9.aarch64+64k</code></div><div class="cell v"><span class="pill yes">matches</span></div>
+      <div class="cell k"><code>parm: rx_ip_align</code> in the 64K and 4K modules</div><div class="cell v"><span class="pill yes">present</span></div>
+      <div class="cell k">stock package for the same kernel</div><div class="cell v"><span class="pill no">no rx_ip_align</span></div>
+    </div>
+    <p><strong>Replace the stock package; don't install beside it.</strong> kmods are install-only for dnf, so <code>dnf install</code> would try to keep both and fail on the shared <code>xeu.ko</code> path. <code>rpm -Uvh</code> upgrades by name, since <code>2.rxipalign.el9</code> sorts after <code>2.el9</code>:</p>
+<pre>rpm -Uvh kmod-64k-xsight-…-2.rxipalign.el9.aarch64.rpm
+rpm -Uvh --oldpackage kmod-64k-xsight-…-2.el9.aarch64.rpm     <span class="c"># revert to stock</span>
+rpm -qf $(modinfo -F filename xeu)                             <span class="c"># which package is live</span></pre>
+    <p>The patch prints nothing when the setting takes effect, so confirm it from <code>rpm -qf</code> and <code>/sys/module/xeu/parameters/rx_ip_align</code>.</p>
+
+    <h3 id="trace-loans" style="margin-top:30px">Tracing the two passes</h3>
+    <p><code>trace-loans.sh</code>, next to <code>loan-geometry.bt</code> in <code>xeu-SGL-compat-receive-placement/</code>, runs the geometry probe and counts nfsd WRITE dispositions over one interval. It saves both, with the run's settings, under <code>out-LABEL-&lt;timestamp&gt;/</code>. Start the client WRITE load first, with loans on:</p>
+<pre>./trace-loans.sh passA-rx0 60      <span class="c"># stock module, or rx_ip_align=0</span>
+./trace-loans.sh passB-rx2 60      <span class="c"># after reloading xeu with rx_ip_align=2</span></pre>
+    <p>On hs.441 the probe is sound: <code>svc_tcp_rx_append</code> is a real function in the 64K <code>sunrpc.ko</code>, and both the borrowed and copied paths call it. On tardis1, judge the run by <code>@offset_mod4</code> for the NIC-loan fragments (<code>@page_pool[1]</code>), which should move from 2 to 0 mod 4. The PRP-only NVMe keeps the dispositions demoted and <code>@ends_mid_page[1]</code> high either way.</p>
   </section>
 
   <section>
