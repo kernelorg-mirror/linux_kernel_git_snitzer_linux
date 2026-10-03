@@ -266,6 +266,24 @@ out:
 	return r;
 }
 
+/**
+ * page_pool_rx_region_size - pages in the fixed receive region
+ *
+ * Return: the region's size once it exists, else the size configured for it
+ * (rx_region_pages); 0 when there is none.  Budgets that partition the region
+ * are checked against it.
+ */
+unsigned long page_pool_rx_region_size(void)
+{
+	unsigned long nr;
+
+	mutex_lock(&rx_region_mutex);
+	nr = rx_region ? rx_region->nr : READ_ONCE(rx_region_pages);
+	mutex_unlock(&rx_region_mutex);
+	return nr;
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_size);
+
 /* Return a region page; false when it is not ours or another holder has it. */
 static bool page_pool_rx_region_put(struct page_pool_rx_region *r,
 				    struct page *page)
