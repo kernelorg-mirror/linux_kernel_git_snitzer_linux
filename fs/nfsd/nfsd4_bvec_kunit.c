@@ -1834,6 +1834,77 @@ nfsd4_q35_expect_dispatch_pair(struct kunit *test,
 }
 
 #if IS_ENABLED(CONFIG_NFSD_PNFS)
+/*
+ * nfsd4_write() returns a WRITE's loaned receive pages before storage only
+ * when no later operation in the COMPOUND can still read them.  The whole
+ * COMPOUND is decoded before any operation runs, and svcxdr_savemem() leaves
+ * file handles, names and opaques pointing into the receive buffer, so only
+ * GETATTR (a copied bitmap) and COMMIT (an offset and a count) may follow.
+ * Operations before the WRITE have already run and do not matter.
+ */
+static void nfsd4_payload_shared_test(struct kunit *test)
+{
+	static const struct {
+		const char *name;
+		u32 ops[6];
+		unsigned int nops;
+		unsigned int write;	/* index of the WRITE being executed */
+		bool shared;
+	} cases[] = {
+		{ "WRITE last",
+		  { OP_SEQUENCE, OP_PUTFH, OP_WRITE }, 3, 2, false },
+		{ "WRITE, GETATTR",
+		  { OP_SEQUENCE, OP_PUTFH, OP_WRITE, OP_GETATTR }, 4, 2, false },
+		{ "WRITE, COMMIT",
+		  { OP_SEQUENCE, OP_PUTFH, OP_WRITE, OP_COMMIT }, 4, 2, false },
+		{ "WRITE, GETATTR, COMMIT",
+		  { OP_SEQUENCE, OP_PUTFH, OP_WRITE, OP_GETATTR, OP_COMMIT },
+		  5, 2, false },
+		{ "LOOKUP before WRITE",
+		  { OP_SEQUENCE, OP_PUTFH, OP_LOOKUP, OP_WRITE, OP_GETATTR },
+		  5, 3, false },
+		{ "WRITE, WRITE",
+		  { OP_SEQUENCE, OP_PUTFH, OP_WRITE, OP_WRITE }, 4, 2, true },
+		{ "WRITE, PUTFH, GETATTR",
+		  { OP_SEQUENCE, OP_PUTFH, OP_WRITE, OP_PUTFH, OP_GETATTR },
+		  5, 2, true },
+		{ "WRITE, RENAME",
+		  { OP_SEQUENCE, OP_PUTFH, OP_WRITE, OP_RENAME }, 4, 2, true },
+		{ "WRITE, SETATTR",
+		  { OP_SEQUENCE, OP_PUTFH, OP_WRITE, OP_SETATTR }, 4, 2, true },
+		{ "WRITE, GETATTR, LOOKUP",
+		  { OP_SEQUENCE, OP_PUTFH, OP_WRITE, OP_GETATTR, OP_LOOKUP },
+		  5, 2, true },
+	};
+	struct svc_rqst *rqstp = kunit_kzalloc(test, sizeof(*rqstp), GFP_KERNEL);
+	struct nfsd4_compoundargs *args =
+		kunit_kzalloc(test, sizeof(*args), GFP_KERNEL);
+	struct nfsd4_compoundres *resp =
+		kunit_kzalloc(test, sizeof(*resp), GFP_KERNEL);
+	unsigned int i, j;
+
+	KUNIT_ASSERT_NOT_NULL(test, rqstp);
+	KUNIT_ASSERT_NOT_NULL(test, args);
+	KUNIT_ASSERT_NOT_NULL(test, resp);
+	rqstp->rq_argp = args;
+	rqstp->rq_resp = resp;
+	args->ops = args->iops;
+
+	for (i = 0; i < ARRAY_SIZE(cases); i++) {
+		KUNIT_ASSERT_LE(test, cases[i].nops, ARRAY_SIZE(args->iops));
+		memset(args->iops, 0, sizeof(args->iops));
+		for (j = 0; j < cases[i].nops; j++)
+			args->iops[j].opnum = cases[i].ops[j];
+		args->opcnt = cases[i].nops;
+		KUNIT_ASSERT_EQ(test, args->iops[cases[i].write].opnum,
+				(u32)OP_WRITE);
+		/* nfsd4_proc_compound() advances opcnt before running an op */
+		resp->opcnt = cases[i].write + 1;
+		KUNIT_EXPECT_EQ_MSG(test, nfsd4_payload_shared(rqstp),
+				    cases[i].shared, "%s", cases[i].name);
+	}
+}
+
 static void nfsd4_bvec_layoutreturn_lifetime_test(struct kunit *test)
 {
 	static const u8 body[] = { 0xde, 0xad, 0xbe, 0xef, 0x31, 0x42, 0x53 };
@@ -1928,6 +1999,7 @@ static struct kunit_case nfsd4_bvec_test_cases[] = {
 	KUNIT_CASE(nfsd4_q35_session_replay_test),
 #if IS_ENABLED(CONFIG_NFSD_PNFS)
 	KUNIT_CASE(nfsd4_bvec_layoutreturn_lifetime_test),
+	KUNIT_CASE(nfsd4_payload_shared_test),
 #endif
 	KUNIT_CASE(nfsd_bvec_nfs4_capability_test),
 	{}
