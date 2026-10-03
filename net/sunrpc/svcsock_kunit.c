@@ -1639,6 +1639,76 @@ static void svcsock_rx_credit_default_budget_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), init_avail);
 }
 
+/*
+ * A default budget of 20 is in use, and the initial namespace's budget of
+ * 10 holds two waiters with nothing in flight.  Turning that budget off
+ * wakes the head, which then copies its region records rather than being
+ * admitted: it must stop waiting and wake the next, or both are stranded
+ * (a waiting transport is not re-queued by arriving data).
+ */
+static void svcsock_rx_credit_copy_unwaits_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *c = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock_forget(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock_forget(test);
+	struct svc_sock *sc = svcsock_rx_credit_sock_forget(test);
+	const u32 len = 10 * PAGE_SIZE;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_default_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_default(20, 0);
+	svc_tcp_rx_budget_kunit_configure(10, 0, 100);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_ASSERT_FALSE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_ASSERT_FALSE(test, svc_tcp_rx_credit_admit(sc, c, len));
+	svc_tcp_rx_credit_release(a);
+	KUNIT_ASSERT_FALSE(test, test_bit(XPT_DATA, &sb->sk_xprt.xpt_flags));
+
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_kunit_set(0), 0);
+	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sb->sk_xprt.xpt_flags));
+	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_budget_copy(sb));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sb->sk_credit_wait));
+	KUNIT_EXPECT_NULL(test, sb->sk_budget);
+	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
+	KUNIT_EXPECT_EQ(test, kref_read(&sc->sk_xprt.xpt_ref), 1U);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_budget_copy(sc));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
+}
+
+/*
+ * No region page is loaned without credit.  With no budget set anywhere a
+ * transport's region records are copied, exactly as when another budget is
+ * set and its own is 0; a budget it can draw on, its namespace's or the
+ * default, is what makes them loans.
+ */
+static void svcsock_rx_credit_copy_no_budget_test(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_credit_sock_forget(test);
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_default_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	svc_tcp_rx_budget_kunit_default(0, 0);
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_budget_copy(svsk));
+
+	svc_tcp_rx_budget_kunit_default(20, 0);
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_budget_copy(svsk));
+	svc_tcp_rx_budget_kunit_default(0, 0);
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_budget_copy(svsk));
+
+	svc_tcp_rx_budget_kunit_configure(10, 0, 100);
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_budget_copy(svsk));
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_budget_copy(svsk));
+}
+
 static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
 {
 	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 64);
@@ -2463,6 +2533,8 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_credit_orphan_test),
 	KUNIT_CASE(svcsock_rx_credit_reconfigure_inflight_test),
 	KUNIT_CASE(svcsock_rx_credit_reconfigure_wakes_test),
+	KUNIT_CASE(svcsock_rx_credit_copy_unwaits_test),
+	KUNIT_CASE(svcsock_rx_credit_copy_no_budget_test),
 	KUNIT_CASE(svcsock_rx_credit_data_ready_test),
 	KUNIT_CASE(svcsock_rx_credit_default_budget_test),
 	KUNIT_CASE(svcsock_rx_credit_factor_bounds_test),
