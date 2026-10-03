@@ -328,6 +328,15 @@ static inline bool page_pool_unref_and_test(netmem_ref netmem)
 	return page_pool_unref_netmem(netmem, 1) == 0;
 }
 
+#ifdef CONFIG_PAGE_POOL
+unsigned long page_pool_rx_region_size(void);
+#else
+static inline unsigned long page_pool_rx_region_size(void)
+{
+	return 0;
+}
+#endif
+
 /**
  * page_pool_page_in_rx_region() - is @page from a pool bound to the region
  * @page: any page
