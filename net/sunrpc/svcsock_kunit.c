@@ -1478,6 +1478,44 @@ static void svcsock_rx_credit_orphan_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
 }
 
+/*
+ * Budget 40, reserve 10, factor 100: a 10-page record costs 11.  A change
+ * applies with records in flight; they return their credit to the new
+ * budget, and turning admission off lets them finish unthrottled.
+ */
+static void svcsock_rx_credit_reconfigure_inflight_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock_forget(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock_forget(test);
+	const u32 len = 10 * PAGE_SIZE;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 19L);
+	svc_tcp_rx_budget_kunit_configure(80, 10, 100);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 48L);
+	svc_tcp_rx_credit_release(a);
+	svc_tcp_rx_credit_release(b);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 70L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 10L);
+
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
+	/* Off: no wait for credit, whatever the record needs. */
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sa, a, 100));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sa->sk_credit_wait));
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_EXPECT_FALSE(test, b->credit_linked);
+	svc_tcp_rx_credit_release(a);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 0L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
+}
+
 static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
 {
 	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 64);
@@ -2209,6 +2247,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_credit_disable_waiters_test),
 	KUNIT_CASE(svcsock_rx_credit_invalid_reset_test),
 	KUNIT_CASE(svcsock_rx_credit_orphan_test),
+	KUNIT_CASE(svcsock_rx_credit_reconfigure_inflight_test),
 	KUNIT_CASE(svcsock_rx_credit_factor_bounds_test),
 	KUNIT_CASE(svcsock_rx_capacity_plus_one_test),
 	KUNIT_CASE(svcsock_rx_partial_save_restore_test),
