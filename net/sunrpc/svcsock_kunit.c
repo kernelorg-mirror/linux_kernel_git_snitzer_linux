@@ -1299,6 +1299,22 @@ static void svcsock_rx_budget_off(void *unused)
 	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
 }
 
+/* A test that fails must not leave a freed transport on the wait list. */
+static void svcsock_rx_credit_forget_action(void *svsk)
+{
+	svc_tcp_rx_credit_forget(svsk);
+}
+
+static struct svc_sock *svcsock_rx_credit_sock_forget(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
+
+	KUNIT_ASSERT_NOT_NULL(test, svsk);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_credit_forget_action, svsk), 0);
+	return svsk;
+}
+
 /*
  * Budget 40 pages, reserve 10, factor 100: a 10-page record costs 11.  Only
  * the head waiter is admitted, credit returns on release, and the pool is
@@ -1421,6 +1437,45 @@ static void svcsock_rx_credit_disable_waiters_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
 	KUNIT_EXPECT_EQ(test, sc->sk_credit_ticket, 0ULL);
 	KUNIT_EXPECT_FALSE(test, c->credit_linked);
+}
+
+/*
+ * Budget 10 = reserve 10, factor 100: the first record takes the whole
+ * reserve.  When its loans cannot be accounted for, it is abandoned with its
+ * credit still spent, but it no longer blocks the next record from being the
+ * oldest, which then progresses on an overrun.
+ */
+static void svcsock_rx_credit_orphan_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock_forget(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock_forget(test);
+	const u32 len = 10 * PAGE_SIZE;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(10, 10, 100);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_EQ(test, a->credit, 10U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
+	/* A reference with no loan behind it fails the invariants. */
+	a->refs_acquired = 1;
+	kunit_warning_suppress(test) {
+		KUNIT_EXPECT_EQ(test, svc_tcp_rx_release_refs(a), -EINVAL);
+	}
+	a->refs_acquired = 0;
+	KUNIT_EXPECT_FALSE(test, a->credit_linked);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 0L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_EXPECT_TRUE(test, b->credit_linked);
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sb, b, 5));
+	KUNIT_EXPECT_EQ(test, b->credit_over, 5U);
+	svc_tcp_rx_credit_release(b);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
+	svc_tcp_rx_credit_release(a);	/* abandoned: nothing to return */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
 }
 
 static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
@@ -2153,6 +2208,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_credit_rcvbuf_floor_test),
 	KUNIT_CASE(svcsock_rx_credit_disable_waiters_test),
 	KUNIT_CASE(svcsock_rx_credit_invalid_reset_test),
+	KUNIT_CASE(svcsock_rx_credit_orphan_test),
 	KUNIT_CASE(svcsock_rx_credit_factor_bounds_test),
 	KUNIT_CASE(svcsock_rx_capacity_plus_one_test),
 	KUNIT_CASE(svcsock_rx_partial_save_restore_test),
