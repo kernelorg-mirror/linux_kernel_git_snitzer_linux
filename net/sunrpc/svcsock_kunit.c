@@ -1551,6 +1551,49 @@ static void svcsock_rx_credit_data_ready_test(struct kunit *test)
 	svc_tcp_rx_credit_release(a);
 }
 
+static void svcsock_rx_budget_default_off(void *unused)
+{
+	svc_tcp_rx_budget_kunit_default(0, 0);
+}
+
+/*
+ * No budget in the initial namespace, a default budget of 20 pages, factor
+ * 100: a transport there draws on the default budget.  A 10-page record
+ * costs 11, so a second waits; credit returns to the default budget, and
+ * the initial namespace's budget is never touched.
+ */
+static void svcsock_rx_credit_default_budget_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock_forget(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock_forget(test);
+	const u32 len = 10 * PAGE_SIZE;
+	long init_avail;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_default_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	svc_tcp_rx_budget_kunit_rcvbuf(128 * 1024);
+	svc_tcp_rx_budget_kunit_default(20, 0);
+	/* Whatever an earlier user left in force there, nothing changes it. */
+	init_avail = svc_tcp_rx_budget_avail();
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_TRUE(test, a->credit_linked);
+	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_default_avail(), 9L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), init_avail);
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	svc_tcp_rx_credit_release(a);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_default_avail(), 20L);
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	svc_tcp_rx_credit_release(b);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_default_avail(), 20L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), init_avail);
+}
+
 static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
 {
 	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 64);
@@ -2375,6 +2418,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_credit_orphan_test),
 	KUNIT_CASE(svcsock_rx_credit_reconfigure_inflight_test),
 	KUNIT_CASE(svcsock_rx_credit_data_ready_test),
+	KUNIT_CASE(svcsock_rx_credit_default_budget_test),
 	KUNIT_CASE(svcsock_rx_credit_factor_bounds_test),
 	KUNIT_CASE(svcsock_rx_capacity_plus_one_test),
 	KUNIT_CASE(svcsock_rx_partial_save_restore_test),
