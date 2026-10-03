@@ -328,6 +328,20 @@ static inline bool page_pool_unref_and_test(netmem_ref netmem)
 	return page_pool_unref_netmem(netmem, 1) == 0;
 }
 
+/**
+ * page_pool_page_in_rx_region() - is @page from a pool bound to the region
+ * @page: any page
+ *
+ * True for a page that a pool bound to the fixed receive region owns: such
+ * a pool allocates only from the region, so its pages are region pages,
+ * wherever they are while the pool owns them (in a ring, an skb or a loan).
+ */
+static inline bool page_pool_page_in_rx_region(struct page *page)
+{
+	return page_pool_page_is_pp(page) &&
+	       netmem_get_pp(page_to_netmem(page))->rx_region;
+}
+
 static inline void page_pool_put_netmem(struct page_pool *pool,
 					netmem_ref netmem,
 					unsigned int dma_sync_size,
