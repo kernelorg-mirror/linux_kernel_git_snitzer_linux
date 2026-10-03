@@ -2033,6 +2033,97 @@ static void svcsock_rx_arena_bound_test(struct kunit *test)
  * page; releasing the loan recycles the page into the same pool's ring
  * instead of the page allocator.
  */
+/*
+ * Stand-in for the fixed receive region: page_pool_page_in_rx_region() only
+ * asks whether a pool is bound to one, and the region code is never reached
+ * while the test holds the binding (it is cleared before any page returns).
+ */
+static int svcsock_rx_fake_region;
+
+static void svcsock_rx_unbind_region(void *pool)
+{
+	((struct page_pool *)pool)->rx_region = NULL;
+}
+
+static void svcsock_rx_bind_region(struct kunit *test, struct page_pool *pool)
+{
+	pool->rx_region = (struct page_pool_rx_region *)&svcsock_rx_fake_region;
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_unbind_region, pool), 0);
+}
+
+/*
+ * Only pages from a pool bound to the region count toward region credit:
+ * a plain head, a plain frag and a plain page-pool frag add nothing, a
+ * region frag adds its pages, in the parent and through frag_list alike.
+ */
+static void svcsock_rx_skb_region_pages_test(struct kunit *test)
+{
+	static const u8 bytes[64];
+	struct sk_buff *skb = svcsock_rx_build_linear_skb(test, bytes, 16);
+	struct sk_buff *child = svcsock_rx_build_linear_skb(test, bytes, 8);
+	struct svcsock_rx_pp *plain_pp, *region_pp, *child_pp;
+	struct page *plain_page, *region_page, *child_page;
+	unsigned int refs;
+
+	plain_page = svcsock_rx_alloc_pp_page(test, &plain_pp);
+	region_page = svcsock_rx_alloc_pp_page(test, &region_pp);
+	child_page = svcsock_rx_alloc_pp_page(test, &child_pp);
+	svcsock_rx_add_frag(test, skb, 0, bytes, 32, 0, &refs);
+	get_page(plain_page);
+	skb_add_rx_frag(skb, 1, plain_page, 0, 32, PAGE_SIZE);
+	get_page(region_page);
+	skb_add_rx_frag(skb, 2, region_page, 100, 40, PAGE_SIZE);
+	get_page(child_page);
+	skb_add_rx_frag(child, 0, child_page, 0, 24, PAGE_SIZE);
+	svcsock_rx_attach_frag_list(test, skb, child);
+
+	/* Nothing is bound to the region: nothing counts. */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_skb_region_pages(skb, 0, 0, skb->len),
+			0U);
+
+	svcsock_rx_bind_region(test, region_pp->pool);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_skb_region_pages(skb, 0, 0, skb->len),
+			1U);
+	/* Bytes before the region frag, and after it, count nothing. */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_skb_region_pages(skb, 0, 0, 80), 0U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_skb_region_pages(skb, 0, 120,
+							   skb->len), 0U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_skb_region_pages(skb, 0, 90, 100), 1U);
+
+	svcsock_rx_bind_region(test, child_pp->pool);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_skb_region_pages(skb, 0, 0, skb->len),
+			2U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_skb_region_pages(skb, 0, 120,
+							   skb->len), 1U);
+}
+
+/*
+ * A loan of a region page raises the record's region count; a loan of a
+ * plain page-pool page does not.  Charge measures what a record holds by it.
+ */
+static void svcsock_rx_region_count_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 4);
+	struct svcsock_rx_pp *plain_pp, *region_pp;
+	struct page *plain_page = svcsock_rx_alloc_pp_page(test, &plain_pp);
+	struct page *region_page = svcsock_rx_alloc_pp_page(test, &region_pp);
+
+	KUNIT_ASSERT_NOT_NULL(test, state);
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_append_borrowed(state, plain_page, 0, 8, true),
+			0);
+	KUNIT_EXPECT_EQ(test, state->region_count, 0U);
+	svcsock_rx_bind_region(test, region_pp->pool);
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_append_borrowed(state, region_page, 0, 8, true),
+			0);
+	KUNIT_EXPECT_EQ(test, state->region_count, 1U);
+	KUNIT_EXPECT_EQ(test, state->borrowed_count, 2U);
+	svcsock_rx_unbind_region(region_pp->pool);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
+}
+
 static void svcsock_rx_page_pool_recycle_test(struct kunit *test)
 {
 	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 1);
@@ -2293,6 +2384,8 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_capacity_sizing_test),
 	KUNIT_CASE(svcsock_rx_arena_bound_test),
 	KUNIT_CASE(svcsock_rx_page_pool_recycle_test),
+	KUNIT_CASE(svcsock_rx_skb_region_pages_test),
+	KUNIT_CASE(svcsock_rx_region_count_test),
 	KUNIT_CASE(svcsock_rx_duplicate_cleanup_test),
 	KUNIT_CASE(svcsock_rx_concurrent_release_test),
 	KUNIT_CASE(svcsock_rx_exchange_test),
