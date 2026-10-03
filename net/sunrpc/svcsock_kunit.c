@@ -1516,6 +1516,41 @@ static void svcsock_rx_credit_reconfigure_inflight_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
 }
 
+static void svcsock_rx_noop_data_ready(struct sock *sk)
+{
+}
+
+/*
+ * Budget 10, no reserve, factor 100: a 10-page record costs 11, so a second
+ * record waits.  Arriving data does not re-queue the waiting transport (the
+ * credit wake does); once it no longer waits, arriving data marks it again.
+ */
+static void svcsock_rx_credit_data_ready_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock_forget(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock_forget(test);
+	struct sock *sk = kunit_kzalloc(test, sizeof(*sk), GFP_KERNEL);
+	const u32 len = 10 * PAGE_SIZE;
+
+	KUNIT_ASSERT_NOT_NULL(test, sk);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	sk->sk_user_data = sb;
+	sb->sk_sk = sk;
+	sb->sk_odata = svcsock_rx_noop_data_ready;
+	svc_tcp_rx_budget_kunit_configure(10, 0, 100);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_ASSERT_FALSE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	svc_data_ready(sk);
+	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sb->sk_xprt.xpt_flags));
+	svc_tcp_rx_credit_forget(sb);
+	svc_data_ready(sk);
+	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sb->sk_xprt.xpt_flags));
+	svc_tcp_rx_credit_release(a);
+}
+
 static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
 {
 	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 64);
@@ -2248,6 +2283,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_credit_invalid_reset_test),
 	KUNIT_CASE(svcsock_rx_credit_orphan_test),
 	KUNIT_CASE(svcsock_rx_credit_reconfigure_inflight_test),
+	KUNIT_CASE(svcsock_rx_credit_data_ready_test),
 	KUNIT_CASE(svcsock_rx_credit_factor_bounds_test),
 	KUNIT_CASE(svcsock_rx_capacity_plus_one_test),
 	KUNIT_CASE(svcsock_rx_partial_save_restore_test),
