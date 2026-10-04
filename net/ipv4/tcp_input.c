@@ -246,6 +246,8 @@ static void tcp_measure_rcv_mss(struct sock *sk, const struct sk_buff *skb)
 			u8 old_ratio = tcp_sk(sk)->scaling_ratio;
 
 			do_div(val, skb->truesize);
+			if (tcp_sk(sk)->scaling_ratio_max)
+				val = min_t(u64, val, tcp_sk(sk)->scaling_ratio_max);
 			tcp_sk(sk)->scaling_ratio = val ? val : 1;
 
 			if (old_ratio != tcp_sk(sk)->scaling_ratio) {

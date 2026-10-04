@@ -3819,6 +3819,48 @@ int tcp_set_window_clamp(struct sock *sk, int val)
 	return 0;
 }
 
+/**
+ * tcp_sock_set_scaling_ratio_max - cap the payload/truesize ratio TCP learns
+ * @sk: a TCP socket
+ * @ratio: the ceiling, in TCP_RMEM_TO_WIN_SCALE units; 0 removes it
+ *
+ * TCP turns free receive memory into window at a payload/truesize ratio it
+ * learns from full-size segments (tcp_measure_rcv_mss()).  A kernel user
+ * whose receive memory costs more per payload byte than those segments show
+ * -- every skb, however short, holding whole pages of a bounded pool -- can
+ * cap it, so neither the window nor the window clamp TCP derives from
+ * sk_rcvbuf can promise more than that memory holds.  A current ratio above
+ * the ceiling is lowered now, and the clamp with it.
+ */
+void tcp_sock_set_scaling_ratio_max(struct sock *sk, u8 ratio)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+	int clamp;
+
+	lock_sock(sk);
+	tp->scaling_ratio_max = ratio;
+	if (ratio && tp->scaling_ratio > ratio) {
+		tp->scaling_ratio = ratio;
+		clamp = tcp_win_from_space(sk, sk->sk_rcvbuf);
+		if (clamp < tp->window_clamp)
+			tcp_set_window_clamp(sk, clamp);
+	}
+	release_sock(sk);
+}
+EXPORT_SYMBOL(tcp_sock_set_scaling_ratio_max);
+
+/* TCP_WINDOW_CLAMP for a kernel socket. */
+int tcp_sock_set_window_clamp(struct sock *sk, int val)
+{
+	int err;
+
+	lock_sock(sk);
+	err = tcp_set_window_clamp(sk, val);
+	release_sock(sk);
+	return err;
+}
+EXPORT_SYMBOL(tcp_sock_set_window_clamp);
+
 int tcp_sock_set_maxseg(struct sock *sk, int val)
 {
 	/* Values greater than interface MTU won't take effect. However

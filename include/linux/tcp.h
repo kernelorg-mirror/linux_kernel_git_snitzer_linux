@@ -412,6 +412,7 @@ struct tcp_sock {
 	u8	keepalive_probes; /* num of allowed keep alive probes	*/
 	u8	accecn_fail_mode:4,	/* AccECN failure handling */
 		saw_accecn_opt:2;	/* An AccECN option was seen */
+	u8	scaling_ratio_max;	/* ceiling on scaling_ratio (0: none) */
 	u32	tcp_tx_delay;	/* delay (in usec) added to TX packets */
 
 /* RTT measurement */
@@ -653,6 +654,8 @@ void tcp_sock_set_quickack(struct sock *sk, int val);
 int tcp_sock_set_syncnt(struct sock *sk, int val);
 int tcp_sock_set_user_timeout(struct sock *sk, int val);
 int tcp_sock_set_maxseg(struct sock *sk, int val);
+void tcp_sock_set_scaling_ratio_max(struct sock *sk, u8 ratio);
+int tcp_sock_set_window_clamp(struct sock *sk, int val);
 
 static inline bool dst_tcp_usec_ts(const struct dst_entry *dst)
 {
