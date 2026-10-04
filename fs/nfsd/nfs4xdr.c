@@ -6248,6 +6248,7 @@ nfsd4_encode_operation(struct nfsd4_compoundres *resp, struct nfsd4_op *op)
 	struct svc_rqst *rqstp = resp->rqstp;
 	const struct nfsd4_operation *opdesc = op->opdesc;
 	unsigned int op_status_offset;
+	struct page **next_page;
 	nfsd4_enc encoder;
 
 	if (xdr_stream_encode_u32(xdr, op->opnum) != XDR_UNIT)
@@ -6328,10 +6329,15 @@ release:
 		opdesc->op_release(&op->u);
 
 	/*
-	 * Account for pages consumed while encoding this operation.
-	 * The xdr_stream primitives don't manage rq_next_page.
+	 * Account for pages consumed while encoding this operation. The
+	 * xdr_stream primitives don't manage rq_next_page, and
+	 * xdr->page_ptr does not account for page_base. XDR padding can
+	 * carry page_base + page_len past rq_page_end.
 	 */
-	rqstp->rq_next_page = xdr->page_ptr + 1;
+	next_page = xdr->buf->pages +
+		DIV_ROUND_UP(xdr->buf->page_base + xdr->buf->page_len,
+			     PAGE_SIZE);
+	rqstp->rq_next_page = min(next_page, rqstp->rq_page_end);
 }
 
 /**
