@@ -409,6 +409,22 @@ static void svcsock_rx_destroy_pool_counter(void *data)
 	percpu_counter_destroy(data);
 }
 
+/*
+ * svc_xprt_received() asks a transport left with XPT_DATA whether it has
+ * write space.  The outer-receive tests expect XPT_CLOSE, which is queued
+ * without asking; answering "no" here makes a record that was delivered
+ * instead fail those expectations rather than call through a NULL
+ * xpt_ops.
+ */
+static int svcsock_rx_test_has_wspace(struct svc_xprt *xprt)
+{
+	return 0;
+}
+
+static const struct svc_xprt_ops svcsock_rx_test_xprt_ops = {
+	.xpo_has_wspace	= svcsock_rx_test_has_wspace,
+};
+
 static struct svc_pool *
 svcsock_rx_prepare_outer_receive(struct kunit *test,
 				 struct svcsock_rx_fixture *fixture,
@@ -451,6 +467,7 @@ svcsock_rx_prepare_outer_receive(struct kunit *test,
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	fixture->rqstp->rq_server->sv_pools = pool;
 
+	fixture->svsk->sk_xprt.xpt_ops = &svcsock_rx_test_xprt_ops;
 	kref_init(&fixture->svsk->sk_xprt.xpt_ref);
 	INIT_LIST_HEAD(&fixture->svsk->sk_xprt.xpt_list);
 	INIT_LIST_HEAD(&fixture->svsk->sk_xprt.xpt_deferred);
