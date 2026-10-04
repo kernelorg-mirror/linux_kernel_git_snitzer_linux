@@ -1051,24 +1051,45 @@ static void svcsock_rx_append_fault_outer_close_test(struct kunit *test)
 static void svcsock_rx_materialize_fault_outer_close_test(struct kunit *test)
 {
 	const struct svcsock_rx_fault_param *param = test->param_value;
-	enum { FRAG_LEN = 8, BODY_LEN = 7 * XDR_UNIT + 4 * FRAG_LEN };
-	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 3);
-	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
-	struct page *pages[4];
-	unsigned int refs[4];
+	enum { FRAG_LEN = 8 };
+	/*
+	 * The loan table holds svc_pages_to_bvecs() entries, which grows
+	 * with PAGE_SIZE: take the fewest arena pages whose table holds
+	 * the three loans the fault parameters release, then overflow
+	 * it by one fragment to force the materialize fallback.
+	 */
+	struct svcsock_rx_fixture *fixture =
+		svcsock_rx_alloc_fixture(test,
+					 DIV_ROUND_UP(3, PAGE_SIZE / SZ_4K));
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	unsigned int nfrags = state->capacity + 1;
+	unsigned int body_len = 7 * XDR_UNIT + nfrags * FRAG_LEN;
+	struct page **pages;
+	unsigned int *refs;
 	struct svc_pool *pool;
 	struct sk_buff *skb;
 	const u8 *payload;
 	unsigned int i;
 	u32 acquired;
 	u32 released;
+	u8 *record;
 	int ret;
 
-	svcsock_rx_fill_record(record, BODY_LEN, true, RPC_CALL, RPC_AUTH_UNIX);
+	if (nfrags > MAX_SKB_FRAGS)
+		kunit_skip(test, "needs %u fragments in one skb, MAX_SKB_FRAGS is %u",
+			   nfrags, (unsigned int)MAX_SKB_FRAGS);
+	record = kunit_kzalloc(test, sizeof(rpc_fraghdr) + body_len, GFP_KERNEL);
+	pages = kunit_kcalloc(test, nfrags, sizeof(*pages), GFP_KERNEL);
+	refs = kunit_kcalloc(test, nfrags, sizeof(*refs), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, record);
+	KUNIT_ASSERT_NOT_NULL(test, pages);
+	KUNIT_ASSERT_NOT_NULL(test, refs);
+
+	svcsock_rx_fill_record(record, body_len, true, RPC_CALL, RPC_AUTH_UNIX);
 	skb = svcsock_rx_build_linear_skb(test, record,
 					  sizeof(rpc_fraghdr) + 7 * XDR_UNIT);
 	payload = record + sizeof(rpc_fraghdr) + 7 * XDR_UNIT;
-	for (i = 0; i < ARRAY_SIZE(pages); i++) {
+	for (i = 0; i < nfrags; i++) {
 		pages[i] = svcsock_rx_add_frag(test, skb, i,
 					       payload + i * FRAG_LEN, FRAG_LEN,
 					       29 + i * 17, &refs[i]);
@@ -1082,10 +1103,10 @@ static void svcsock_rx_materialize_fault_outer_close_test(struct kunit *test)
 	ret = svc_tcp_recvfrom(fixture->rqstp);
 	KUNIT_EXPECT_EQ(test, ret, 0);
 	svc_tcp_rx_kunit_fault_observed(&acquired, &released);
-	KUNIT_EXPECT_EQ(test, acquired, 3U);
+	KUNIT_EXPECT_EQ(test, acquired, state->capacity);
 	KUNIT_EXPECT_EQ(test, released, (u32)param->fail_after);
 	KUNIT_EXPECT_EQ(test, acquired - released,
-			3U - (u32)param->fail_after);
+			state->capacity - (u32)param->fail_after);
 	svcsock_rx_expect_outer_close(test, fixture, pool);
 	KUNIT_EXPECT_EQ(test, fixture->rqstp->rq_tcp_rx->mode,
 			(u8)SVC_TCP_RX_EMPTY);
@@ -1098,10 +1119,10 @@ static void svcsock_rx_materialize_fault_outer_close_test(struct kunit *test)
 				   arena + 7 * XDR_UNIT + i * FRAG_LEN,
 				   payload + i * FRAG_LEN, FRAG_LEN);
 	}
-	for (i = 0; i < ARRAY_SIZE(pages); i++)
+	for (i = 0; i < nfrags; i++)
 		KUNIT_EXPECT_EQ(test, page_ref_count(pages[i]), refs[i]);
 	kunit_kfree_skb(test, skb);
-	for (i = 0; i < ARRAY_SIZE(pages); i++)
+	for (i = 0; i < nfrags; i++)
 		KUNIT_EXPECT_EQ(test, page_ref_count(pages[i]), refs[i] - 1);
 }
 
