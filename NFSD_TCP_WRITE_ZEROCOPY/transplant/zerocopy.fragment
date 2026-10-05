@@ -1,0 +1,60 @@
+# Kconfig options the page-loan series, its KUnit suites and its test
+# harness need, whatever the page size.  merge-config.sh merges this into a
+# host's known-good base .config and fails if olddefconfig drops or demotes
+# any of them; check-config.sh checks a finished config (a build's .config,
+# a redhat/configs flavor, or a running kernel's /boot/config) against it.
+#
+# "=m" here means "built, as a module or into the kernel": the checks accept
+# =y wherever this file says =m.  "=y" means it must be built in.
+
+# --- the series' KUnit suites (run-kunit.sh) ---
+CONFIG_KUNIT=m
+CONFIG_SUNRPC_XDR_KUNIT_TEST=m
+CONFIG_SUNRPC_SVCSOCK_KUNIT_TEST=m
+CONFIG_NFSD_BVEC_KUNIT_TEST=m
+CONFIG_NFSD4_BVEC_KUNIT_TEST=m
+
+# --- NFS server and client under test ---
+CONFIG_SUNRPC=m
+CONFIG_NFSD=m
+CONFIG_NFSD_V4=y
+CONFIG_NFS_FS=m
+CONFIG_NFS_V3=m
+CONFIG_NFS_V4=m
+CONFIG_NFS_V4_2=y
+CONFIG_NFS_LOCALIO=y
+
+# --- the fixed receive region: page_pool + a physically contiguous range ---
+CONFIG_PAGE_POOL=y
+CONFIG_CONTIG_ALLOC=y
+
+# --- rigs: veth+XDP clients in namespaces (run-budget.sh) ---
+CONFIG_NET_NS=y
+CONFIG_VETH=m
+CONFIG_BPF_SYSCALL=y
+CONFIG_BPF_JIT=y
+
+# --- rigs: storage (null_blk + dm-delay + nvme-loop; brd; nvme-tcp) ---
+CONFIG_BLK_DEV_NULL_BLK=m
+CONFIG_BLK_DEV_DM=m
+CONFIG_DM_DELAY=m
+CONFIG_BLK_DEV_RAM=m
+CONFIG_ZRAM=m
+CONFIG_CONFIGFS_FS=m
+CONFIG_NVME_CORE=m
+CONFIG_NVME_FABRICS=m
+CONFIG_NVME_TCP=m
+CONFIG_NVME_TARGET=m
+CONFIG_NVME_TARGET_LOOP=m
+CONFIG_NVME_TARGET_TCP=m
+CONFIG_XFS_FS=m
+CONFIG_TMPFS=y
+
+# --- observation: debugfs knobs, tracepoints, kprobes, bpftrace, drgn ---
+CONFIG_DEBUG_FS=y
+CONFIG_FTRACE=y
+CONFIG_KPROBES=y
+CONFIG_KPROBE_EVENTS=y
+CONFIG_BPF_EVENTS=y
+CONFIG_DEBUG_INFO_BTF=y
+CONFIG_DEBUG_INFO_BTF_MODULES=y
