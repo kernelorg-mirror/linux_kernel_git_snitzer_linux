@@ -33,23 +33,27 @@ this file in
   the second case.
 - **Tested:** KUnit and the whole runtime plan on 4 KiB (sections 7 and
   8, 2026-10-02 to -04) and on 16 KiB (`../transplant/README.md`,
-  2026-10-04). **Every result in this file was measured on nvme-loop**,
+  2026-10-05), there on both kinds of storage. **Every result in this file
+  was measured on nvme-loop**,
   which stands for storage that needs whole pages (tardis1's kind). What a
   WRITE does there depends on the budget:
   - **budget 0:** the WRITE is copied once, out of the region into the
     nfsd thread's own buffer (`rq_pages`). That buffer is laid out in whole
     pages, so it **is written direct**. This is the intended setup for
-    this storage. On 16 KiB all 170568 traced WRITEs of two such cells
-    went direct.
+    this storage. On 16 KiB every WRITE of two such cells went direct
+    (153215 and 2785).
   - **budget set:** the WRITE is loaned, its pieces end part-way through
     pages, this storage cannot take that direct, and it is written
     buffered: copied anyway, through the page cache.
 
-  The tables in section 8 are all of the second kind. The budget has not
-  yet been tested on storage where loans stay direct.
+  The tables in section 8 are all of the second kind, and their MB/s
+  columns were taken before the test storage's delay was fixed
+  (`../transplant/README.md`, problem 8): they compare nothing. The budget
+  on storage where loans stay direct was first run on 16 KiB; its results
+  are in `../transplant/README.md`.
 - **Not yet carried to the HS twin**
   (`kernel-7.1/hs-7.1.13-19.NFSD_TCP_WRITE_ZEROCOPY`).
-- **Open:** a 64 KiB run on tardis1; the budget on an NVMe/TCP rig; the
+- **Open:** a 64 KiB run on tardis1; a 4 KiB run on both kinds of storage; the
   credit factor for 16 and 64 KiB (section 7, finding 3); netdev review of
   the `page_pool` region (section 6).
 
@@ -235,8 +239,7 @@ tidied):
 Four more changes found on the 16 KiB host are not part of this run; they
 lead the series. "null_blk: keep each memory-backed copy within one block"
 (`../BIO-DRIVER-AUDIT.md`) and "dm-delay: do not round a short delay up to
-the next timer tick" (`../transplant/README.md`, "Why one copy cell was
-slow") are fixes to block-layer test devices that stand on their own. The write-split fix and its gate ("nfs_common:
+the next timer tick" (`../transplant/README.md`, problem 8) are fixes to block-layer test devices that stand on their own. The write-split fix and its gate ("nfs_common:
 split a write's direct middle at page boundaries", "NFSD: count the
 misaligned-WRITE split gate in bytes, not pages") follow, so that they can
 be folded into the baseline they correct (`NFSD_LOCALIO_DIRECT_SPLIT.md`).
@@ -344,8 +347,10 @@ Done:
 
 Open:
 
-- [ ] **The budget on storage where loans stay direct** (an NVMe/TCP
-      variant of `run-budget.sh`). Every result so far is on nvme-loop.
+- [ ] **The budget on storage where loans stay direct, at 4 KiB and
+      64 KiB.** `run-budget.sh STORAGE=sgl` does it and has run on 16 KiB
+      (`../transplant/README.md`). Every result in this file is on
+      nvme-loop.
 - [ ] **A 64 KiB pass on tardis1**, with the packaged kernel, per
       `../transplant/README.md`.
 - [ ] **Finding 3, the credit factor per page size.** `run-budget.sh`
