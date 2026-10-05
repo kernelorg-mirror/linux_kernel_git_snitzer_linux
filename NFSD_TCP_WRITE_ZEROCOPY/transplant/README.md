@@ -488,16 +488,20 @@ boot): 306 pages, budget of one WRITE's worth.
 
 | cell | conn | budget | whole pages: MB/s | arbitrary pieces: MB/s | drops | peak region pages |
 |---|---|---|---|---|---|---|
-| `edge-at-n1` | 1 | 130 | 274 | 276 | 0 | 144 |
-| `edge-at-n4` | 4 | 130 | 296 | 262 | 0 | 160 |
-| `edge-at-mixed-n4` | 4 | 130 | 123 | 124 | 0 | 160 |
-| `edge-at-step` | 1 | 130 | 825 | 636 | 0 | 144 |
-| `edge-below-n1` | 1 | 194 | 322 | 280 | 0 | 144 |
-| `edge-off-n1` (copy) | 1 | 0 | 392 | 345 | 0 | 224 |
+| `edge-at-n1` | 1 | 130 | 285 | 279 | 0 | 144 |
+| `edge-at-n4` | 4 | 130 | 292 | 270 | 0 | 160 |
+| `edge-at-mixed-n4` | 4 | 130 | 124 | 124 | 0 | 160 |
+| `edge-at-step` | 1 | 130 | 812 | 626 | 0 | 144 |
+| `edge-below-n1` | 1 | 194 | 311 | 275 | 0 | 144 |
+| `edge-copy-n1` (copy, buffer held) | 1 | 0 | 394 | 340 | 0 | 16 |
+| `edge-off-n1` (copy, buffer not held) | 1 | 0 | 382 | 339 | 0 | 208 / 256 |
 
 - WRITEs proceed one at a time, nothing is dropped, and the region is
   never more than 160 pages in use. Loans were written buffered on the
   first kind of storage and direct on the second, all of them.
+- `edge-copy-n1` is `edge-at-n1`'s twin that copies. It is no slower than
+  the loan held to one WRITE at a time, and uses 16 pages. These cells
+  write a new file, so the copy's figure is the XFS wait's.
 - David's `analyze.py` gives OVERALL PASS on phases A and B for each kind.
 
 **The budget's own behaviour**, whatever the storage:
@@ -521,9 +525,10 @@ boot): 306 pages, budget of one WRITE's worth.
   acknowledgements or turning probes off on the client remove, as on
   4 KiB.
 
-Phases D, TLP and N on the second kind of storage were added after the
-main run and run on a third boot of the same kernel, into the same
-results directory.
+The run took four boots of the same kernel, into the one results
+directory: the plan's two, a third when phases D, TLP and N were added on
+the second kind of storage, and a fourth when phases A and B were re-run
+with the cells of problem 11.
 
 ### The rest of the plan
 
@@ -662,8 +667,6 @@ already have their size (`SIZED=1`), and phase B has `edge-copy-n1`.
   buffered loans; and the fifth in the stalled-storage cell.
 - **What the held receive buffer costs with more than one connection, and
   on real hardware.** One connection on this rig loses up to a third.
-- **Phase B's new `edge-copy-n1` cell** has not run: it needs a fresh
-  boot.
 - **A KUnit pair** to stand where the old "no budget" cells stood: several
   half-received WRITEs that together exceed a small region must hold
   nothing at a budget of 0, and never more than the budget with one.
