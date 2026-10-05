@@ -709,7 +709,12 @@ if [ "$PHASE" = N ]; then
 	export REGDEV=rxsrv,rxsrv2,rxsrv3
 fi
 if [ "$PHASE" = D ]; then
-	[ -r $RG ] && { echo "a region already exists this boot (dev $(awk '$1 == "dev" {print $2}' $RG)); PHASE=D needs a fresh boot" >&2; exit 1; }
+	# A region that phase D itself created this boot (bound to both
+	# devices) is the one it wants: that is how the phase is repeated on
+	# the other STORAGE.
+	if [ -r $RG ] && [ "$(awk '$1 == "dev" {print $2}' $RG)" != rxsrv,rxsrv2 ]; then
+		echo "a region already exists this boot (dev $(awk '$1 == "dev" {print $2}' $RG)); PHASE=D needs a fresh boot" >&2; exit 1
+	fi
 	export REGDEV=rxsrv,rxsrv2 XDP2=1
 fi
 if [ "$PHASE" = A ] || [ "$PHASE" = TLP ] || [ "$PHASE" = X ] || [ "$PHASE" = D ]; then
