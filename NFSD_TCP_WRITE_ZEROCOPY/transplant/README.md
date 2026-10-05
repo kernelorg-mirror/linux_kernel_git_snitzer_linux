@@ -206,7 +206,7 @@ cold whole-tree baseline finds nothing the branch introduced. The last two runs 
 ## 16 KiB host (2026-10-05)
 
 The kernel was built on this host and the whole test plan run on it, on
-both kinds of storage. Ten problems were found and fixed on the way, in
+both kinds of storage. Eleven problems were found and fixed on the way, in
 the kernel, in two test devices and in the harness. This section gives the
 results of the last full run, then the problems, since each explains a
 change in the tree. Earlier runs on this host are not recorded: they were
@@ -223,6 +223,11 @@ of kernels and a harness that have since changed.
 - **On storage that takes arbitrary pieces, every loaned WRITE was written
   direct**, once the test network device placed the payload on a 4-byte
   boundary. Without that, none were.
+- **Copy and loan are level on this rig** once they are compared like
+  for like: within a few percent of each other on both kinds of storage,
+  with a copy holding 16 to 112 pages of the region and a loan about
+  1000. This is a VM with memory for storage, so it says nothing about
+  what a copy costs on hardware.
 - **A direct write to a file that is growing is slow on XFS, loaned or
   copied**: about 350 MB/s where the same write to a file that already has
   its size runs at 1600 to 2100. That, not the loan, is why loans written
@@ -316,33 +321,50 @@ of 1519 pages (24 MiB), MTU 9000, 1 MiB WRITEs. "Written" is how nfsd
 issued the cell's WRITEs, from the harness's counters; it was all one way
 in every cell.
 
-**The same cells on both kinds of storage** (phase A):
+**Copy against loan, on both kinds of storage** (phase A, re-run after
+the cells were made comparable; see problem 11). Each loan cell (`-on`:
+budget set) has a twin that copies (`-copy`: budget 0) and is otherwise
+the same, the held receive buffer included. The `-sized-` pairs write
+files that already have their size.
 
-| cell | conn | budget | whole pages: MB/s | written | arbitrary pieces: MB/s | written | drops (either) | peak region pages |
-|---|---|---|---|---|---|---|---|---|
-| `seq-off` (copy) | 1 | 0 | 381 | direct | 350 | direct | 0 | 192 |
-| `seq-on` (loan) | 1 | 1375 | 1808 | buffered | 349 | direct | 0 | 967 / 960 |
-| `mixed-on` (loan) | 16 | 1151 | 758 | buffered | 619 | direct | 0 | 1050 / 1042 |
-| `mixed-on-v42` (loan, NFSv4.2) | 16 | 1151 | 757 | buffered | 780 | direct | 0 | 1048 / 1058 |
-| `step-on` (loan, storage stalls mid-run) | 1 | 1375 | 1314 | buffered | 1043 | direct | 0 | 969 / 970 |
-| `step-on-n16` (loan, the same) | 16 | 1151 | 1466 | buffered | 1126 | direct | 0 | 1009 / 1010 |
-| `collapse-on` (loan, small socket memory) | 16 | 1151 | 744 | buffered | 559 | direct | 0 | 1050 / 1049 |
-| `collapse-off` (copy, the same) | 16 | 0 | 640 | direct | 607 | direct | 0 | 240 / 256 |
+| pair | conn | whole pages: copy / loan MB/s | loan written | arbitrary pieces: copy / loan MB/s | loan written | region pages: copy / loan |
+|---|---|---|---|---|---|---|
+| `seq-sized` | 1 | 1832 / 1802 | buffered | 1662 / 1612 | direct | 16 / 967 |
+| `mixed-sized` | 16 | 792 / 799 | buffered | 790 / 781 | direct | 112 / 1060 |
+| `step` (storage stalls mid-run) | 1 | 1194 / 1298 | buffered | 1085 / 1070 | direct | 32 / 970 |
+| `step-n16` (the same) | 16 | 1439 / 1439 | buffered | 1207 / 1128 | direct | 112 / 1010 |
+| `seq` (new file) | 1 | 414 / 1766 | buffered | 358 / 339 | direct | 16 / 965 |
+| `mixed` (new files) | 16 | 656 / 746 | buffered | 624 / 603 | direct | 112 / 1060 |
 
-- **With a budget, nothing dropped and the region never ran out**, on
-  either kind of storage. Loans hold about 1000 of the region's 1519
-  pages; copies hold 200 to 250.
+- **Nothing dropped and the region never ran out** in any of these cells,
+  on either kind of storage. A copy is always written direct.
 - **On storage that takes arbitrary pieces every loaned WRITE went
-  direct**: 512 of 512, 2785 of 2785, 119353 of 119353, 128681 of 128681.
-  This is the configuration that storage is meant to use, run under a
-  budget for the first time.
-- **It was not faster, and the cells that write a new file in order were
-  far slower** (349 against 1808 MB/s). The next part explains that: it
-  is a property of direct writes to a growing file, not of loans.
-- `mtu1500-on` is left out of the table: at MTU 1500 a 1 MiB WRITE has
-  more pieces than a loan can hold, so every one of its 512 WRITEs was
-  copied (traced: `reason=capacity`) and written direct on both kinds of
-  storage. It tests that fallback, not a loan.
+  direct**: 512 of 512, 2785 of 2785, 122469 of 122469, 128922 of 128922.
+- **Copy and loan are level on this rig.** Where the file has its size
+  they are within 3% of each other in three of the four pairs on each
+  kind of storage, and in the fourth (`step`, one connection) the loan
+  leads by 9% on the first kind and trails by 1% on the second. Each cell
+  is one run, so differences of this size are not findings.
+- **What does differ is the region:** a copy holds 16 to 112 pages of it,
+  a loan about 1000.
+- **The two new-file pairs measure XFS, not copy against loan.** A direct
+  write to a growing file waits (next part). On the first kind of storage
+  that hits the copy and not the loan, which is buffered there: 414
+  against 1766. On the second it hits both: 358 against 339.
+- This is a VM with memory for storage. A copy here costs nothing like
+  what it costs when the data has left the CPU's cache, so level here
+  does not mean level on hardware.
+
+Other cells of the phase:
+
+- `seq-off`, `mixed-off`, `step-off` have no budget and no held receive
+  buffer; they are under "What happens without the receive buffer held".
+- `mixed-on-v42` (NFSv4.2, loan): 792 and 787 MB/s, as `mixed-sized-on`.
+- `collapse-on` (loan, small socket memory): 766 and 624 MB/s, no drops.
+- `mtu1500-on`: at MTU 1500 a 1 MiB WRITE has more pieces than a loan can
+  hold, so every one of its 512 WRITEs was copied (traced:
+  `reason=capacity`) and written direct on both kinds of storage. It
+  tests that fallback, not a loan.
 
 **Why a direct write to a new file is slow.** `seq-on` and `seq-off`
 write a new 512 MiB file in order, sixteen 1 MiB WRITEs at a time, served
@@ -368,9 +390,10 @@ Two runs each with 2 GiB files, same kernel and region:
   slower than a loan written through the page cache** in this table (1571
   and 1642 against 1790 and 1796). "The remaining tenth" below takes that
   apart.
-- **The copy cells in this table are not comparable with the loan
-  cells:** they run without the receive buffer held, which the same part
-  shows to be worth more than anything else here.
+- **The copy cells in this table are `seq-off`, without the receive
+  buffer held**, which the same part shows to be worth more than anything
+  else here. The plan's cells have since been made comparable; the table
+  at the head of this section is the result.
 - **What it does say for a real server:** a workload that creates files
   with direct writes from several threads will meet this XFS wait,
   loaned or not. Whether tardis1's workload creates or overwrites decides
@@ -421,9 +444,9 @@ Two runs each with 2 GiB files, same kernel and region:
   the buffer held at 128 KiB, 1568 to 1724 at 256 KiB, and 1732 to 2307
   with it not held. Holding the buffer is what keeps the region from
   filling, and on a single connection it costs up to a third of the
-  throughput on this rig. The plan's copy cells (`seq-off`) run with the
-  buffer not held and its loan cells with it held, so their MB/s were
-  never comparing copy with loan.
+  throughput on this rig. The plan's only copy cells then (`seq-off` and
+  the like) ran with the buffer not held and its loan cells with it held,
+  so their MB/s were never comparing copy with loan (problem 11).
 - **Compared fairly, copy and loan are level here:** 1568 to 1724 copied
   against 1583 to 1615 loaned, both written direct, with the copy using
   16 region pages and the loan 968. That is not evidence about real
@@ -436,13 +459,13 @@ copied; the region fills with data nfsd has not read yet):
 
 | cell | conn | whole pages: MB/s | drops | arbitrary pieces: MB/s | drops | peak region pages |
 |---|---|---|---|---|---|---|
-| `step-off` | 1 | 1465 | 0 | 1242 | 0 | 1314 / 1386 |
-| `mixed-off` | 16 | 552 | 6962 | 553 | 8034 | 1519, all of it |
+| `step-off` | 1 | 1482 | 0 | 1262 | 0 | 1463 / 1488 |
+| `mixed-off` | 16 | 540 | 7196 | 566 | 7916 | 1519, all of it |
 | `x-off-R` | 16 | 548 | 7471 | 447 | 7620 | 1519, all of it |
 
 - With several connections the card drops packets. The data still
   verifies and nothing hangs. `floor-refused`, where a receive buffer too
-  small to hold is refused, shows the same (580 and 482 drops). The
+  small to hold is refused, shows the same (531 and 875 drops). The
   receive buffer has to be held.
 
 **The intended setup for storage that needs whole pages**: budget 0 with
@@ -607,6 +630,14 @@ stages now fail unless both phases' tables exist. `cells.tsv` also gained
 three columns saying how nfsd issued each cell's WRITEs, which is what
 problem 9 was found with.
 
+**11. The plan had no copy cell that could be compared with a loan
+cell.** Its `-off` cells have no budget and no held receive buffer; its
+`-on` cells have both. Holding the buffer alone costs one connection up
+to a third here, and a direct write to a new file waits on XFS, so the
+two differed in three things at once. Every `-on` cell now has a `-copy`
+twin (budget 0, the rest the same), two pairs also run on files that
+already have their size (`SIZED=1`), and phase B has `edge-copy-n1`.
+
 ### How the kernel was built
 
 - Mike's known-good 16 KiB config has no debug information, which the
@@ -631,9 +662,8 @@ problem 9 was found with.
   buffered loans; and the fifth in the stalled-storage cell.
 - **What the held receive buffer costs with more than one connection, and
   on real hardware.** One connection on this rig loses up to a third.
-- **The plan's new-file cells still measure the XFS wait** on any storage
-  where the WRITE is direct. They are left as they are, so results stay
-  comparable; `PREALLOC=1` takes it out when that is what is wanted.
+- **Phase B's new `edge-copy-n1` cell** has not run: it needs a fresh
+  boot.
 - **A KUnit pair** to stand where the old "no budget" cells stood: several
   half-received WRITEs that together exceed a small region must hold
   nothing at a budget of 0, and never more than the budget with one.

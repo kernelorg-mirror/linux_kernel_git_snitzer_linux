@@ -26,10 +26,16 @@
 #   Results go to OUTDIR/stress-<PHASE> either way: give each STORAGE its
 #   own OUTDIR.  rig.txt there records which it was.
 #
-#   PREALLOC=1 gives the seq and step profiles' file its size before the
-#   client writes it.  XFS makes a direct write that starts beyond the end
-#   of a growing file wait for every direct write in progress; this takes
-#   that out of a measurement.
+#   Cell names: "-on" loans (budget set, receive buffer held); "-copy" is
+#   its twin that copies (budget 0, the same held buffer, everything else
+#   the same), so the two can be compared; "-off" has neither budget nor
+#   held buffer and shows what happens without the mechanism.  "-sized-"
+#   cells write files that already have their size.
+#
+#   PREALLOC=1 gives every cell's files their size before the client writes
+#   (the "-sized-" cells do it for themselves).  XFS makes a direct write
+#   that starts beyond the end of a growing file wait for every direct
+#   write in progress; this takes that out of a measurement.
 #
 #   FORCE_DELAY=<ms> and FORCE_RCVBUF=<bytes> override every cell's storage
 #   delay and held receive buffer, to compare cells that differ in them.
@@ -632,11 +638,17 @@ cell() {
 		  nstat -saz TcpExtTCPRcvQDrop TcpExtTCPRcvCollapsed > "$O/nstat-spike.txt" 2>&1
 		  sleep 20; setdelay "$DELAY" ) & stepper=$!
 	fi
-	# PREALLOC=1: the seq and step profiles write a file that already has
-	# its size (unwritten extents), not one that grows as it is written.
-	if [ -n "${PREALLOC:-}" ] && [ "$PROF" != mixed ]; then
-		local psz=${MIB:-512}; [ "$PROF" = step ] && psz=1024
-		fallocate -l ${psz}M "$EXPORT/f-$name" && chmod 0666 "$EXPORT/f-$name"
+	# SIZED=1 (a cell's own setting) or PREALLOC=1 (every cell): the files
+	# already have their size (unwritten extents) and do not grow as they
+	# are written.
+	if [ -n "${SIZED:-}${PREALLOC:-}" ]; then
+		local pf psz
+		case $PROF in
+		seq)   psz=${MIB:-512};     pf="$EXPORT/f-$name" ;;
+		step)  psz=1024;            pf="$EXPORT/f-$name" ;;
+		mixed) psz=${MIXMIB:-256};  pf="$EXPORT/f-$name.0 $EXPORT/f-$name.1 $EXPORT/f-$name.2 $EXPORT/f-$name.3" ;;
+		esac
+		for pf in $pf; do fallocate -l ${psz}M "$pf" && chmod 0666 "$pf"; done
 	fi
 	echo "$(date +%s.%N) $name fio start" >> "$E/delay-steps.txt"
 	set +e
@@ -758,6 +770,11 @@ if [ "$PHASE" = A ] || [ "$PHASE" = TLP ] || [ "$PHASE" = X ] || [ "$PHASE" = D 
 	on1="BUDGET=$(budget 1 $RB256) RESERVE=$R9 RCVBUF=262144"
 	on16="BUDGET=$(budget 16 $RB128) RESERVE=$R9 RCVBUF=131072"
 	off="BUDGET=0 RESERVE=0 RCVBUF=0"
+	# A loan cell's twin that copies: budget 0, everything else the same,
+	# the held receive buffer included.  ("off" holds no buffer either: it
+	# shows what happens without the mechanism, and is not a twin.)
+	copy1="BUDGET=0 RESERVE=0 RCVBUF=262144"
+	copy16="BUDGET=0 RESERVE=0 RCVBUF=131072"
 	step="MTU=9000 FACTOR=$F9 VERS=3 DELAY=0 SPIKE=10"
 	if [ "$PHASE" = X ] || [ "$PHASE" = D ]; then
 	exportfs -o rw,sync,no_root_squash,insecure,no_subtree_check,fsid=$FSID "10.78.0.0/24:$EXPORT"
@@ -796,12 +813,22 @@ if [ "$PHASE" = A ] || [ "$PHASE" = TLP ] || [ "$PHASE" = X ] || [ "$PHASE" = D 
 	run $base BUDGET=0 RESERVE=0 RCVBUF=131072 NCONN=16 PROF=mixed CELL=mixed-rcvbuf
 	else
 	run $base $off NCONN=1 PROF=seq CELL=seq-off
+	run $base $copy1 NCONN=1 PROF=seq CELL=seq-copy
 	run $base $on1 NCONN=1 PROF=seq CELL=seq-on
+	# The same pair writing a file that already has its size: a direct
+	# write to a growing file waits on XFS, which hides everything else.
+	run $base $copy1 NCONN=1 PROF=seq SIZED=1 CELL=seq-sized-copy
+	run $base $on1 NCONN=1 PROF=seq SIZED=1 CELL=seq-sized-on
 	run $base $off NCONN=16 PROF=mixed CELL=mixed-off
+	run $base $copy16 NCONN=16 PROF=mixed CELL=mixed-copy
 	run $base $on16 NCONN=16 PROF=mixed CELL=mixed-on
+	run $base $copy16 NCONN=16 PROF=mixed SIZED=1 CELL=mixed-sized-copy
+	run $base $on16 NCONN=16 PROF=mixed SIZED=1 CELL=mixed-sized-on
 	run $base $on16 NCONN=16 PROF=mixed VERS=4.2 CELL=mixed-on-v42
 	run MTU=9000 FACTOR=$F9 VERS=3 DELAY=0 SPIKE=10 $off NCONN=1 PROF=step CELL=step-off
+	run MTU=9000 FACTOR=$F9 VERS=3 DELAY=0 SPIKE=10 $copy1 NCONN=1 PROF=step CELL=step-copy
 	run MTU=9000 FACTOR=$F9 VERS=3 DELAY=0 SPIKE=10 $on1 NCONN=1 PROF=step CELL=step-on
+	run MTU=9000 FACTOR=$F9 VERS=3 DELAY=0 SPIKE=10 $copy16 NCONN=16 PROF=step CELL=step-copy-n16
 	run MTU=9000 FACTOR=$F9 VERS=3 DELAY=0 SPIKE=10 $on16 NCONN=16 PROF=step CELL=step-on-n16
 	run MTU=1500 FACTOR=$F15 VERS=3 DELAY=1 $off NCONN=1 PROF=seq CELL=mtu1500-off
 	run MTU=1500 FACTOR=$F15 VERS=3 DELAY=1 BUDGET=$(budget 1 $RB256_15) RESERVE=$R15 RCVBUF=262144 NCONN=1 PROF=seq CELL=mtu1500-on
@@ -840,6 +867,8 @@ elif [ "$PHASE" = B ]; then
 	# 64 pages below the minimum.
 	run $base BUDGET=$(( SIZE + 64 - PARKED - 128 )) RESERVE=$R9 RCVBUF=262144 NCONN=1 PROF=seq CELL=edge-below-n1
 	run $base BUDGET=0 RESERVE=0 RCVBUF=0 NCONN=1 PROF=seq CELL=edge-off-n1
+	# edge-at-n1's twin that copies: budget 0, the same held buffer.
+	run $base BUDGET=0 RESERVE=0 RCVBUF=262144 NCONN=1 PROF=seq CELL=edge-copy-n1
 elif [ "$PHASE" = N ]; then
 	SIZE=${SIZE:-$REGION_DEFAULT}
 	if [ ! -r $RG ]; then

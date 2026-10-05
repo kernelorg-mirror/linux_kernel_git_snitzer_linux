@@ -23,6 +23,8 @@
 # in for PRP-only NVMe).  The -sgl stages repeat every one of them on storage
 # that takes arbitrary pieces (NVMe/TCP, standing in for NVMe with SGLs), into
 # their own directory (budget-sgl), so every page size has both results.
+# In phases A and B every loan cell ("-on", "edge-at-") has a twin that
+# copies ("-copy": budget 0, the rest the same), so the two can be compared.
 # budget-D-sgl and budget-B-sgl reuse the region budget-D and budget-B
 # created on their boot; either can also create it, on a fresh boot.
 #
@@ -53,7 +55,7 @@ while [ $# -gt 0 ]; do
 	--redo) REDO=$2; shift 2 ;;
 	--force) FORCE=1; shift ;;
 	--results) RES=$2; shift 2 ;;
-	*) sed -n '3,40p' "$0"; exit 2 ;;
+	*) sed -n '3,42p' "$0"; exit 2 ;;
 	esac
 done
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 2; }
