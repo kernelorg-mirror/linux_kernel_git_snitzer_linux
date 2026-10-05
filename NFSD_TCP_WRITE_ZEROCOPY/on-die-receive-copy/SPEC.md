@@ -450,9 +450,12 @@ new file, copied records written direct): all eight nfsd threads writing
 1213 MB/s. So for sequential file creation D1's destination writes are
 serialised by XFS as well as holding their threads (2.4); a file that is
 being overwritten, or preallocated to its size, is not affected. Only
-measured on that rig; see `../transplant/README.md`, "Why one copy cell is
-slow". Phase 0b should record whether tardis1's workload creates or
-overwrites.
+measured on that rig; see `../transplant/README.md`, "Why one copy cell was
+slow". (The 10 ms was itself a fault of the rig: dm-delay rounded the 1 ms
+asked for up to a 100 Hz timer tick. With that fixed on 2026-10-05 the same
+cell runs at 355 MB/s. The serialisation is unchanged; what it costs
+scales with how long each direct write takes.) Phase 0b should record
+whether tardis1's workload creates or overwrites.
 
 ### 3.5 David's "stable writes hold the buffer, unstable don't" — checked
 

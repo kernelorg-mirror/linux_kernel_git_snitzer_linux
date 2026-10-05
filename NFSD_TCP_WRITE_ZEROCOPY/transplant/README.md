@@ -440,25 +440,43 @@ with the page size, and a record smaller than a page is reported, not
 judged. Which of its two read limits applies now follows whether the
 record can be cut, not its literal size.
 
-### Why one copy cell is slow
+### Why one copy cell was slow
 
-`seq-off` writes a new file in order over one connection and runs at
-57 MB/s, where the same cell with loans runs at 416. That is not the cost
-of a copy.
+In the run above `seq-off`, which writes a new file in order over one
+connection, ran at 57 MB/s where the same cell with loans ran at 416.
+That was not the cost of a copy. Two things were:
 
-- On this storage a copied WRITE is written direct and a loaned one
-  buffered, so the two cells compare direct against buffered writes.
-- Eight nfsd threads write the file's WRITEs out of order. XFS makes a
-  direct write that starts beyond the current end of the file wait for
-  every direct write in progress, so the eight queue behind one another:
-  120 ms per WRITE with all eight threads busy.
-- Each direct write also costs 10 ms, not the 1 ms the harness asks for:
-  dm-delay counts in timer ticks and this kernel ticks at 100 Hz.
-- The same copied WRITEs written buffered run at 230 MB/s.
+- **The test storage was ten times slower than asked.** dm-delay kept the
+  time a write is due in timer ticks, and this kernel ticks at 100 Hz, so
+  the 1 ms the harness asks for became 10 ms. Fixed on 2026-10-05 ("dm-delay:
+  do not round a short delay up to the next timer tick"): a 1 ms delay now
+  measures 1.16 ms.
+- **XFS makes direct writes to a growing file wait for each other.** On
+  this storage a copied WRITE is written direct. Eight nfsd threads write
+  the file's WRITEs out of order, and XFS makes a direct write that starts
+  beyond the current end of the file wait for every direct write in
+  progress. So the eight queue behind one another, and each pays the
+  storage delay in turn. This is real and would affect any server writing
+  a new file direct from several threads; the slow storage multiplied it.
+  `../on-die-receive-copy/SPEC.md` section 3.4 is corrected for it.
 
-The XFS behaviour is real and would affect any server writing a new file
-direct from several threads. The 10 ms is an artefact of the test storage.
-`../on-die-receive-copy/SPEC.md` section 3.4 is corrected for the first.
+With the delay fixed, on the phase B region (306 pages), every write
+verified:
+
+| storage | cell | written | MB/s before | MB/s after |
+|---|---|---|---|---|
+| nvme-loop | seq-off (copy) | direct | 55 | 355 |
+| nvme-loop | seq-on (loan) | buffered | 52 | 320 |
+| NVMe/TCP, payload placed | seq-off (copy) | direct | 53 | 350 |
+| NVMe/TCP, payload placed | seq-on (loan) | direct | 52 | 315 |
+
+- **Every throughput figure recorded before this fix, in any cell with a
+  storage delay under 10 ms, was set by the tick and not by the code under
+  test.** That includes the 16 KiB tables above and the 4 KiB results.
+  Their drop, admission and region-use columns stand; their MB/s columns
+  do not compare anything.
+- These four cells are one run each. They are enough to show the delay is
+  honest, not to rank copy against loan.
 
 ### How the kernel was built
 
@@ -491,12 +509,14 @@ direct from several threads. The 10 ms is an artefact of the test storage.
 - **The whole plan with the NVMe/TCP stages.** Only the cells listed below
   have run: loans written direct under a budget in four cells, none of
   phase X, and phase A not on its own region.
-- **The veth module's parameter on a freshly booted kernel.** It was built
-  and loaded into the running kernel; the kernel has not been rebuilt and
-  rebooted with it.
+- **The veth and dm-delay changes on a freshly booted kernel.** Each was
+  built and loaded as a module into the running kernel. The kernel has
+  been rebuilt and installed with both, but not booted.
 - **Anything at 4 KiB or 64 KiB** with these fixes. Problems 2 and 4 change
   behaviour at 4 KiB in some configurations.
-- **A test storage delay that is honest at 100 Hz.**
+- **Throughput results with the storage delay fixed.** Only the four
+  cells in "Why one copy cell was slow" have run since. Every MB/s figure
+  before that needs re-measuring.
 - **A KUnit pair** to stand where the old "no budget" cells stood: several
   half-received WRITEs that together exceed a small region must hold
   nothing at a budget of 0, and never more than the budget with one.
@@ -571,9 +591,10 @@ The history from David's first Slipstream commit on was tidied on
 2026-10-04, at Mike's request, so that it reads as the work is now
 understood and not in the order it was discovered:
 
-- **Three code commits lead the series, before David's first commit.**
-  First "null_blk: keep each memory-backed copy within one block", a fix
-  to the block layer's test device that stands on its own. Then the
+- **Four code commits lead the series, before David's first commit.**
+  First two fixes to block-layer test devices that stand on their own:
+  "null_blk: keep each memory-backed copy within one block" and "dm-delay:
+  do not round a short delay up to the next timer tick" (2026-10-05). Then the
   write-split work: "nfs_common: split a write's direct middle at page
   boundaries" and "NFSD: count the misaligned-WRITE split gate in bytes,
   not pages". Those two correct code in the baseline, and sit there so

@@ -232,10 +232,11 @@ tidied):
 | tcp: let a kernel socket cap the receive scaling ratio | a TCP interface for the next commit |
 | SUNRPC: Hold a region transport's receive window through TCP's interfaces | SUNRPC no longer writes TCP's internal state (finding 4) |
 
-Three more changes found on the 16 KiB host are not part of this run; they
+Four more changes found on the 16 KiB host are not part of this run; they
 lead the series. "null_blk: keep each memory-backed copy within one block"
-is a fix to the block layer's test device that stands on its own
-(`../BIO-DRIVER-AUDIT.md`). The write-split fix and its gate ("nfs_common:
+(`../BIO-DRIVER-AUDIT.md`) and "dm-delay: do not round a short delay up to
+the next timer tick" (`../transplant/README.md`, "Why one copy cell was
+slow") are fixes to block-layer test devices that stand on their own. The write-split fix and its gate ("nfs_common:
 split a write's direct middle at page boundaries", "NFSD: count the
 misaligned-WRITE split gate in bytes, not pages") follow, so that they can
 be folded into the baseline they correct (`NFSD_LOCALIO_DIRECT_SPLIT.md`).
