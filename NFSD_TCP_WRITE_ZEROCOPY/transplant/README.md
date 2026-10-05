@@ -75,7 +75,26 @@ nothing there is taken for granted:
 The 4 KiB host has an older clone, an older kernel and a Claude memory
 that predate the changes above. "Run preflight.sh and then
 run-testplan.sh" is not enough: it needs the new branch and a kernel built
-from it first. Give its session this:
+from it first.
+
+**The first thing to say to a new session there.** That host has not
+pulled the branch that holds this file, so the session cannot be told to
+read it from the working tree. This reads the prompt from the remote
+before anything is reset:
+
+```
+In /root/kernel/linux: git fetch origin, then read the section "Starting the
+4 KiB host's session" with
+  git show origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY:NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md
+and follow the prompt in it. Don't reset or pull until you've told me what local
+commits, branches and untracked files this clone has.
+```
+
+Before sending it, change the path if the clone is elsewhere, and add
+which file is that host's known-good 4 KiB config: the prompt below asks
+for it without naming one.
+
+**The prompt it then follows** (or paste this instead of the above):
 
 ```
 Pull kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY (I force-pushed it; history was
