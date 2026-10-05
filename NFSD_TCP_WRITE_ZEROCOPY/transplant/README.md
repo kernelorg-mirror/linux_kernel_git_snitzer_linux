@@ -365,14 +365,12 @@ Two runs each with 2 GiB files, same kernel and region:
   first, the same writes run four to six times faster. Buffered writes do
   not care.
 - **With that out of the way a loan written direct is about a tenth
-  slower than a loan written through the page cache** (1571 and 1642
-  against 1790 and 1796), and a copy written direct is as fast as either
-  or faster. The tenth is not explained. A direct write waits for the
-  storage and a buffered one does not, which may be all of it.
-- **So on this rig nothing shows a loaned direct write beating a copied
-  one.** That is not evidence about real hardware: this is a VM, the
-  storage is memory behind a fixed delay, and a copy here costs nothing
-  like what it costs when the data has left the CPU's cache.
+  slower than a loan written through the page cache** in this table (1571
+  and 1642 against 1790 and 1796). "The remaining tenth" below takes that
+  apart.
+- **The copy cells in this table are not comparable with the loan
+  cells:** they run without the receive buffer held, which the same part
+  shows to be worth more than anything else here.
 - **What it does say for a real server:** a workload that creates files
   with direct writes from several threads will meet this XFS wait,
   loaned or not. Whether tardis1's workload creates or overwrites decides
@@ -382,6 +380,56 @@ Two runs each with 2 GiB files, same kernel and region:
   the file. Its direct loans still run about a fifth slower than buffered
   ones (1330); that cell stalls the storage for 20 seconds, which a
   direct write has to sit through.
+
+**The remaining tenth.** It is two things, and neither is the loan.
+
+- **About half is the transport.** The table above compares a direct
+  loan on NVMe/TCP with a buffered loan on nvme-loop. A buffered loan on
+  NVMe/TCP itself (payload not placed, so it falls back) runs at 1644 to
+  1649 MB/s, not 1790: NVMe/TCP is the slower way to reach the same test
+  device.
+- **The rest, about 6%, is real and small.** Same storage, same file
+  sized first, receive buffer held at 256 KiB, three runs each:
+
+  | WRITE | MB/s |
+  |---|---|
+  | loaned, written through the page cache | 1694, 1714, 1719 |
+  | loaned, written direct | 1601, 1615, 1583 |
+  | copied (budget 0), written direct | 1568, 1646, 1724 |
+
+- **What was established about the 6%:**
+  - It needs a storage delay. With the delay set to 0 (`FORCE_DELAY=0`)
+    the two loaned cells overlap: 1476, 1985, 1858 direct against 1637,
+    1956, 2016 buffered.
+  - It is not a shortage of nfsd threads (the same gap with 16 as with
+    8), not the budget (no WRITE was refused in either), and not TCP
+    (identical counters on both ends).
+  - Every WRITE here is a stable one, so nfsd waits for the data and for
+    the file system's log in both cases: 3.6 ms per WRITE buffered, 3.9
+    direct, measured inside nfsd. The difference is in the one 1 MiB
+    request to the device, which takes about 1.65 ms when issued direct
+    and 1.46 ms when issued by writeback.
+  - It is not the loan's many small pieces: a copied WRITE, which is
+    whole pages, takes just as long when written direct.
+  - Throughput follows the client's time per WRITE, sixteen in flight at
+    10.4 ms direct against 9.9 ms buffered.
+- **What was not established:** why the same request takes 0.2 ms longer
+  issued direct than by writeback on this device, and why 0.3 ms more in
+  the server becomes 0.5 ms at the client.
+- **A larger effect turned up on the way: the held receive buffer limits
+  one connection.** The same copied cell runs at 1295 to 1388 MB/s with
+  the buffer held at 128 KiB, 1568 to 1724 at 256 KiB, and 1732 to 2307
+  with it not held. Holding the buffer is what keeps the region from
+  filling, and on a single connection it costs up to a third of the
+  throughput on this rig. The plan's copy cells (`seq-off`) run with the
+  buffer not held and its loan cells with it held, so their MB/s were
+  never comparing copy with loan.
+- **Compared fairly, copy and loan are level here:** 1568 to 1724 copied
+  against 1583 to 1615 loaned, both written direct, with the copy using
+  16 region pages and the loan 968. That is not evidence about real
+  hardware: this is a VM, the storage is memory behind a fixed delay, and
+  a copy here costs nothing like what it costs when the data has left the
+  CPU's cache.
 
 **What happens without the receive buffer held** (budget 0, so WRITEs are
 copied; the region fills with data nfsd has not read yet):
@@ -578,9 +626,11 @@ problem 9 was found with.
 - **Anything at 4 KiB or 64 KiB** with these changes. Problems 2 and 4
   change behaviour at 4 KiB in some configurations, and problem 8 changes
   every throughput figure taken there.
-- **The tenth by which a loan written direct is still slower than one
-  written through the page cache** once the file is sized first, and the
-  fifth in the stalled-storage cell.
+- **Why a 1 MiB request takes 0.2 ms longer issued direct than by
+  writeback** on the test device, which is the 6% left between direct and
+  buffered loans; and the fifth in the stalled-storage cell.
+- **What the held receive buffer costs with more than one connection, and
+  on real hardware.** One connection on this rig loses up to a third.
 - **The plan's new-file cells still measure the XFS wait** on any storage
   where the WRITE is direct. They are left as they are, so results stay
   comparable; `PREALLOC=1` takes it out when that is what is wanted.
