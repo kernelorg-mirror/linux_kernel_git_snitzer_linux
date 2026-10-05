@@ -15,7 +15,14 @@
 #   boot 1: preflight budget-D kunit bvecrepro rig-cmp loan-assert killswitch
 #           system-correctness zc-down sgl-up sgl-brd sgl-tcp sgl-loop sgl-down
 #           localio-tcp localio-loop budget-A budget-TLP budget-X budget-N
-#   boot 2: preflight budget-B analyze-AB summary
+#           budget-A-sgl budget-X-sgl
+#   boot 2: preflight budget-B budget-B-sgl analyze-AB analyze-AB-sgl summary
+#
+# The budget phases run on storage that needs whole pages (nvme-loop, standing
+# in for PRP-only NVMe).  The -sgl stages repeat phases A, X and B on storage
+# that takes arbitrary pieces (NVMe/TCP, standing in for NVMe with SGLs), into
+# their own directory (budget-sgl), so every page size has both results.
+# budget-B-sgl reuses the region budget-B created on its boot.
 #
 # A stage that needs something this host lacks (bvecrepro needs a built tree
 # matching the running kernel) is recorded as SKIP with the reason.  Results
@@ -54,8 +61,9 @@ ST=$RES/status.tsv
 BOOT=$(cat /proc/sys/kernel/random/boot_id)
 RG=/sys/kernel/debug/page_pool_rx_region
 CR=$RES/budget          # all run-budget.sh phases share one OUTDIR (analyze.py wants stress-A and stress-B together)
+CRS=$RES/budget-sgl     # the same, for the phases repeated on NVMe/TCP
 
-STAGES="preflight budget-D kunit bvecrepro rig-cmp loan-assert killswitch system-correctness zc-down sgl-up sgl-brd sgl-tcp sgl-loop sgl-down localio-tcp localio-loop budget-A budget-TLP budget-X budget-N budget-B analyze-AB summary"
+STAGES="preflight budget-D kunit bvecrepro rig-cmp loan-assert killswitch system-correctness zc-down sgl-up sgl-brd sgl-tcp sgl-loop sgl-down localio-tcp localio-loop budget-A budget-TLP budget-X budget-N budget-A-sgl budget-X-sgl budget-B budget-B-sgl analyze-AB analyze-AB-sgl summary"
 FRESH="budget-D budget-B"
 
 result_of() { awk -F'\t' -v s="$1" '$1 == s {r = $2} END {print r}' "$ST"; }
@@ -97,7 +105,7 @@ st_localio()    { need_nfs_server; bash "$P/run-sgl-localio-ab.sh" "$2" "$1/loca
 # to be killed by its timeout (rc 124: a hang).  Either fails the stage.
 # (2026-10-04, 16 KiB: both happened in stages recorded DONE.)
 budget_verdict() {
-	local d=$CR/stress-$1 bad=0 n f
+	local d=$2/stress-$1 bad=0 n f
 	n=$(cat "$d"/*/fio.out "$d"/*/*/fio.out 2>/dev/null | grep -c 'verify:')
 	if [ "$n" -gt 0 ]; then
 		echo "!! budget-$1: $n fio verify failures:"
@@ -113,22 +121,31 @@ budget_verdict() {
 	return $bad
 }
 st_budget() {
-	local ph=$2 rc
+	local ph=$2 rc cr=$CR st=prp
+	case $ph in *-sgl) ph=${ph%-sgl}; cr=$CRS; st=sgl ;; esac
 	need_nfs_server
 	# Phases A, TLP, X and D each re-measure the parked pages into
-	# $CR/parked.txt; phase B is sized from phase A's, kept as parked-A.txt.
+	# parked.txt; phase B is sized from phase A's, kept as parked-A.txt.
+	# (The region is the PRP run's: both storages see the same one.)
 	if [ "$ph" = B ]; then
 		[ -r "$CR/parked-A.txt" ] || { echo "budget-B needs budget-A's $CR/parked-A.txt"; return 1; }
-		PARKED=$(cat "$CR/parked-A.txt") PHASE=B bash "$P/run-budget.sh" "$CR"; rc=$?
+		STORAGE=$st PARKED=$(cat "$CR/parked-A.txt") PHASE=B bash "$P/run-budget.sh" "$cr"; rc=$?
 	else
-		PHASE=$ph bash "$P/run-budget.sh" "$CR" || return
-		[ "$ph" = A ] && cp "$CR/parked.txt" "$CR/parked-A.txt"
+		STORAGE=$st PHASE=$ph bash "$P/run-budget.sh" "$cr" || return
+		[ "$ph" = A ] && cp "$cr/parked.txt" "$cr/parked-A.txt"
 		rc=0
 	fi
-	budget_verdict "$ph" || return 1
+	budget_verdict "$ph" "$cr" || return 1
 	return $rc
 }
-st_analyze()    { python3 "$P/slipstream/tools/analyze.py" "$CR"; }
+st_analyze() {
+	# analyze.py passes when it finds nothing to judge: require both tables.
+	local ph
+	for ph in A B; do
+		[ -r "$1/stress-$ph/cells.tsv" ] || { echo "no $1/stress-$ph/cells.tsv: phase $ph has not run"; return 1; }
+	done
+	python3 "$P/slipstream/tools/analyze.py" "$1"
+}
 st_summary() {
 	echo "kernel $KREL, page size $PS, $(sed -n 's/^describe=//p' /var/lib/zc-transplant/manifest 2>/dev/null)"
 	column -t -s $'\t' "$ST"
@@ -138,7 +155,8 @@ st_summary() {
 	1) echo "!! commits made on this host are not grouped code/KUnit/docs: regroup before handing back (transplant/README.md)" ;;
 	2) echo "(no upstream branch: run transplant/check-grouping.sh <last pushed commit> by hand)" ;;
 	esac
-	for f in "$CR"/geometry.txt "$CR"/stress-*/cells.tsv "$CR"/stress-*/xcells.tsv "$CR"/stress-*/ncells.tsv; do
+	for f in "$CR"/geometry.txt "$CR"/stress-*/rig.txt "$CR"/stress-*/cells.tsv "$CR"/stress-*/xcells.tsv "$CR"/stress-*/ncells.tsv \
+		 "$CRS"/stress-*/rig.txt "$CRS"/stress-*/cells.tsv "$CRS"/stress-*/xcells.tsv; do
 		[ -r "$f" ] && { echo "== $f"; column -t "$f"; }
 	done
 	true
@@ -162,7 +180,8 @@ run_stage() {
 	sgl-down)           st_sgl_down "$d" ;;
 	localio-tcp|localio-loop) st_localio "$d" "${s#localio-}" ;;
 	budget-*)           st_budget "$d" "${s#budget-}" ;;
-	analyze-AB)         st_analyze "$d" ;;
+	analyze-AB)         st_analyze "$CR" ;;
+	analyze-AB-sgl)     st_analyze "$CRS" ;;
 	summary)            st_summary "$d" ;;
 	*) echo "unknown stage $s"; return 1 ;;
 	esac > >(tee "$d/stage.log") 2>&1
