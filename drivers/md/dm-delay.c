@@ -14,6 +14,7 @@
 #include <linux/bio.h>
 #include <linux/slab.h>
 #include <linux/kthread.h>
+#include <linux/timekeeping.h>
 
 #include <linux/device-mapper.h>
 
@@ -47,7 +48,15 @@ struct dm_delay_info {
 	struct delay_c *context;
 	struct delay_class *class;
 	struct list_head list;
-	unsigned long expires;
+	/*
+	 * When the bio is due: in jiffies for the timer, or in nanoseconds
+	 * for the kthread, which polls more often than the tick and must
+	 * not round a short delay up to it.
+	 */
+	union {
+		unsigned long expires;
+		u64 expires_ns;
+	};
 };
 
 static void handle_delayed_timer(struct timer_list *t)
@@ -79,6 +88,13 @@ static void flush_bios(struct bio *bio)
 	}
 }
 
+static bool delay_expired(struct delay_c *dc, struct dm_delay_info *delayed)
+{
+	if (delay_is_fast(dc))
+		return ktime_get_ns() >= delayed->expires_ns;
+	return time_after_eq(jiffies, delayed->expires);
+}
+
 static void flush_delayed_bios(struct delay_c *dc, bool flush_all)
 {
 	struct dm_delay_info *delayed, *next;
@@ -94,7 +110,7 @@ static void flush_delayed_bios(struct delay_c *dc, bool flush_all)
 	spin_unlock(&dc->delayed_bios_lock);
 	list_for_each_entry_safe(delayed, next, &local_list, list) {
 		cond_resched();
-		if (flush_all || time_after_eq(jiffies, delayed->expires)) {
+		if (flush_all || delay_expired(dc, delayed)) {
 			struct bio *bio = dm_bio_from_per_bio_data(delayed,
 						sizeof(struct dm_delay_info));
 			list_del(&delayed->list);
@@ -309,7 +325,10 @@ static int delay_bio(struct delay_c *dc, struct delay_class *c, struct bio *bio)
 	delayed = dm_per_bio_data(bio, sizeof(struct dm_delay_info));
 
 	delayed->context = dc;
-	delayed->expires = expires = jiffies + msecs_to_jiffies(c->delay);
+	if (delay_is_fast(dc))
+		delayed->expires_ns = ktime_get_ns() + (u64)c->delay * NSEC_PER_MSEC;
+	else
+		delayed->expires = expires = jiffies + msecs_to_jiffies(c->delay);
 
 	spin_lock(&dc->delayed_bios_lock);
 	if (unlikely(!dc->may_delay)) {
