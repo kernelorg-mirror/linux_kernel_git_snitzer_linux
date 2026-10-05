@@ -214,7 +214,7 @@ of kernels and a harness that have since changed.
 
 ### In short
 
-- **The whole test plan passes at 16 KiB**, both boots, on storage that
+- **The whole test plan passes at 16 KiB**, every budget phase on storage that
   needs whole pages and on storage that takes arbitrary pieces: no data
   verification failure, no hang, no kernel warning.
 - **The budget does its job on both.** With a budget set and the receive
@@ -362,7 +362,7 @@ copied; the region fills with data nfsd has not read yet):
   receive buffer has to be held.
 
 **The intended setup for storage that needs whole pages**: budget 0 with
-the receive buffer held (phase TLP, nvme-loop only):
+the receive buffer held (phase TLP, nvme-loop):
 
 | cell | conn | MB/s | drops | peak region pages | written |
 |---|---|---|---|---|---|
@@ -399,16 +399,24 @@ boot): 306 pages, budget of one WRITE's worth.
   (phase X, both kinds): running alone it is never admitted or refused,
   and with a budget set it keeps 480 to 550 MB/s whether or not the region
   client beside it is being held to 100 to 130 MB/s by a tight budget.
-- **Two devices sharing one region** (phase D, nvme-loop): with a budget,
-  no drops and no allocation failures; the two clients get 360 and
-  355 MB/s. Without one, 8618 allocation failures.
-- **A budget per network namespace** (phase N, nvme-loop): each WRITE is
+- **Two devices sharing one region** (phase D, both kinds): with a
+  budget, no drops and no allocation failures; the two clients get 360
+  and 355 MB/s on the first kind of storage, 313 and 315 on the second.
+  Without one, 8618 and 7953 allocation failures.
+- **A budget per network namespace** (phase N, both kinds): each WRITE is
   counted against the right budget, whether its own, the default or none
   (copied, 5570 of 5570); a budget changed under load completes with fio
   rc 0; the region is whole afterwards. `n-exit` ends with fio rc 4, as
   intended: it deletes the server.
-- **Tail-loss probes** (phase TLP, nvme-loop): no retransmission timeouts
-  in any cell.
+- **Tail-loss probes** (phase TLP, both kinds): no retransmission
+  timeouts in any cell. The stalled-storage cell draws about 3000
+  spurious retransmissions on either kind (3148 and 3013), which quick
+  acknowledgements or turning probes off on the client remove, as on
+  4 KiB.
+
+Phases D, TLP and N on the second kind of storage were added after the
+main run and run on a third boot of the same kernel, into the same
+results directory.
 
 ### The rest of the plan
 
@@ -537,8 +545,6 @@ problem 9 was found with.
 - **Why a loan written direct is slower here than one written through the
   page cache.** One run per cell, and a test device whose delay is per
   write.
-- **Phases D, N and TLP on storage that takes arbitrary pieces.** The plan
-  repeats A, X and B there.
 - **A KUnit pair** to stand where the old "no budget" cells stood: several
   half-received WRITEs that together exceed a small region must hold
   nothing at a budget of 0, and never more than the budget with one.
