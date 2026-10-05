@@ -31,6 +31,9 @@
 #   of a growing file wait for every direct write in progress; this takes
 #   that out of a measurement.
 #
+#   FORCE_DELAY=<ms> and FORCE_RCVBUF=<bytes> override every cell's storage
+#   delay and held receive buffer, to compare cells that differ in them.
+#
 #   RX_IP_ALIGN=<0-3> is veth's rx_ip_align: extra bytes of headroom for the
 #   frames veth copies into page-pool pages.  At 0 the TCP payload is 2 bytes
 #   off a 4-byte boundary, as on a NIC that posts its buffers the usual way,
@@ -602,6 +605,10 @@ J
 printf 'cell prof vers nconn mtu delay_ms budget reserve factor rcvbuf MBps fio_rc drops alloc_fail escaped used_pages collapsed rcvq_drop zw_drop backlog_drop retrans loss_probes rto dsack admitted denied paused overrun wr_direct wr_dontcache wr_buffered\n' > "$E/cells.tsv"
 cell() {
 	local name=$1 O=$E/$1
+	# FORCE_DELAY=<ms> overrides every cell's storage delay (0: none);
+	# FORCE_RCVBUF=<bytes> every cell's held receive buffer (0: not held).
+	[ -n "${FORCE_DELAY:-}" ] && DELAY=$FORCE_DELAY
+	[ -n "${FORCE_RCVBUF:-}" ] && RCVBUF=$FORCE_RCVBUF
 	rm -rf "$O"; mkdir -p "$O"
 	echo 0 > $SP/svc_tcp_rx_budget_pages
 	echo "$RESERVE" > $SP/svc_tcp_rx_budget_reserve
