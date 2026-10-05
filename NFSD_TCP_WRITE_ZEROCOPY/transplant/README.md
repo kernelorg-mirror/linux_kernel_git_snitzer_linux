@@ -112,7 +112,7 @@ $T/run-testplan.sh     # bvecrepro is SKIPped (needs a built tree); all else run
 | 1 | `zc-down`, `sgl-up`, `sgl-brd/tcp/loop`, `sgl-down` | NVMe SGL rigs (`../NVME_SGL_SUPPORT_PROJECT.md` 6) | DONE; compare dispositions |
 | 1 | `localio-tcp`, `localio-loop` | `run-sgl-localio-ab.sh` (LOCALIO boundary, short-read and stable tests) | DONE; each test prints its own exit status |
 | 1 | `budget-A`, `budget-TLP`, `budget-X`, `budget-N` | `run-budget.sh` phases on the same region, on storage that needs whole pages (nvme-loop) | tables vs the 4 KiB results (`../slipstream/README.md` section 8, `BUDGET_SCOPE.md` 8) |
-| 1 | `budget-A-sgl`, `budget-X-sgl` | phases A and X again with `STORAGE=sgl`: storage that takes arbitrary pieces (NVMe/TCP), veth placing the payload on a 4-byte boundary (`RX_IP_ALIGN=2`) | tables beside the nvme-loop ones; `wr_direct` |
+| 1 | `budget-D-sgl` (after `budget-D`), `budget-A-sgl`, `budget-TLP-sgl`, `budget-X-sgl`, `budget-N-sgl` | the same phases again with `STORAGE=sgl`: storage that takes arbitrary pieces (NVMe/TCP), veth placing the payload on a 4-byte boundary (`RX_IP_ALIGN=2`) | tables beside the nvme-loop ones; `wr_direct` |
 | 2 (fresh) | `budget-B` | the region at its configured minimum (uses A's `parked.txt`) | |
 | 2 | `budget-B-sgl` | phase B again with `STORAGE=sgl`, on the region `budget-B` created | |
 | 2 | `analyze-AB`, `analyze-AB-sgl` | David's `slipstream/tools/analyze.py` on A and B, for each storage | OVERALL PASS/FAIL |

@@ -12,17 +12,19 @@
 # left for boot 2 -- the runner stops and says "reboot" when it reaches one
 # on a boot that is no longer fresh.
 #
-#   boot 1: preflight budget-D kunit bvecrepro rig-cmp loan-assert killswitch
-#           system-correctness zc-down sgl-up sgl-brd sgl-tcp sgl-loop sgl-down
-#           localio-tcp localio-loop budget-A budget-TLP budget-X budget-N
-#           budget-A-sgl budget-X-sgl
+#   boot 1: preflight budget-D budget-D-sgl kunit bvecrepro rig-cmp loan-assert
+#           killswitch system-correctness zc-down sgl-up sgl-brd sgl-tcp
+#           sgl-loop sgl-down localio-tcp localio-loop budget-A budget-TLP
+#           budget-X budget-N budget-A-sgl budget-TLP-sgl budget-X-sgl
+#           budget-N-sgl
 #   boot 2: preflight budget-B budget-B-sgl analyze-AB analyze-AB-sgl summary
 #
 # The budget phases run on storage that needs whole pages (nvme-loop, standing
-# in for PRP-only NVMe).  The -sgl stages repeat phases A, X and B on storage
+# in for PRP-only NVMe).  The -sgl stages repeat every one of them on storage
 # that takes arbitrary pieces (NVMe/TCP, standing in for NVMe with SGLs), into
 # their own directory (budget-sgl), so every page size has both results.
-# budget-B-sgl reuses the region budget-B created on its boot.
+# budget-D-sgl and budget-B-sgl reuse the region budget-D and budget-B
+# created on their boot; either can also create it, on a fresh boot.
 #
 # A stage that needs something this host lacks (bvecrepro needs a built tree
 # matching the running kernel) is recorded as SKIP with the reason.  Results
@@ -51,7 +53,7 @@ while [ $# -gt 0 ]; do
 	--redo) REDO=$2; shift 2 ;;
 	--force) FORCE=1; shift ;;
 	--results) RES=$2; shift 2 ;;
-	*) sed -n '3,33p' "$0"; exit 2 ;;
+	*) sed -n '3,40p' "$0"; exit 2 ;;
 	esac
 done
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 2; }
@@ -63,13 +65,18 @@ RG=/sys/kernel/debug/page_pool_rx_region
 CR=$RES/budget          # all run-budget.sh phases share one OUTDIR (analyze.py wants stress-A and stress-B together)
 CRS=$RES/budget-sgl     # the same, for the phases repeated on NVMe/TCP
 
-STAGES="preflight budget-D kunit bvecrepro rig-cmp loan-assert killswitch system-correctness zc-down sgl-up sgl-brd sgl-tcp sgl-loop sgl-down localio-tcp localio-loop budget-A budget-TLP budget-X budget-N budget-A-sgl budget-X-sgl budget-B budget-B-sgl analyze-AB analyze-AB-sgl summary"
-FRESH="budget-D budget-B"
+STAGES="preflight budget-D budget-D-sgl kunit bvecrepro rig-cmp loan-assert killswitch system-correctness zc-down sgl-up sgl-brd sgl-tcp sgl-loop sgl-down localio-tcp localio-loop budget-A budget-TLP budget-X budget-N budget-A-sgl budget-TLP-sgl budget-X-sgl budget-N-sgl budget-B budget-B-sgl analyze-AB analyze-AB-sgl summary"
+FRESH="budget-D budget-D-sgl budget-B"
 
 result_of() { awk -F'\t' -v s="$1" '$1 == s {r = $2} END {print r}' "$ST"; }
 record() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$BOOT" "$(date +%F_%T)" "$4" >> "$ST"; }
 done_ok() { case "$(result_of "$1")" in PASS|DONE|SKIP) return 0 ;; esac; return 1; }
 fresh_boot() { [ ! -e $RG ]; }
+# budget-D-sgl may also run straight after budget-D, on the region it made.
+follows_its_twin() {
+	[ "$1" = budget-D-sgl ] || return 1
+	[ "$(awk -F'\t' -v b="$BOOT" '$4 == b && $1 != "preflight" {print $1}' "$ST" | tr '\n' ' ')" = "budget-D " ]
+}
 ran_this_boot() { awk -F'\t' -v b="$BOOT" '$4 == b && $1 != "preflight"' "$ST" | grep -q .; }
 
 if [ $LIST = 1 ]; then
@@ -156,7 +163,7 @@ st_summary() {
 	2) echo "(no upstream branch: run transplant/check-grouping.sh <last pushed commit> by hand)" ;;
 	esac
 	for f in "$CR"/geometry.txt "$CR"/stress-*/rig.txt "$CR"/stress-*/cells.tsv "$CR"/stress-*/xcells.tsv "$CR"/stress-*/ncells.tsv \
-		 "$CRS"/stress-*/rig.txt "$CRS"/stress-*/cells.tsv "$CRS"/stress-*/xcells.tsv; do
+		 "$CRS"/stress-*/rig.txt "$CRS"/stress-*/cells.tsv "$CRS"/stress-*/xcells.tsv "$CRS"/stress-*/ncells.tsv; do
 		[ -r "$f" ] && { echo "== $f"; column -t "$f"; }
 	done
 	true
@@ -206,7 +213,7 @@ for s in $STAGES; do
 	[ "$s" = preflight ] && continue
 	done_ok "$s" && continue
 	case " $FRESH " in *" $s "*)
-		if ! fresh_boot || ran_this_boot; then
+		if { ! fresh_boot || ran_this_boot; } && ! follows_its_twin "$s"; then
 			echo "== $s needs a fresh boot (no receive region yet, nothing run first): reboot, then run $0 again"
 			exit 3
 		fi ;;
