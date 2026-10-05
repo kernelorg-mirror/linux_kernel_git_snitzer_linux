@@ -11,6 +11,11 @@ section 8), but they are of an older harness: nvme-loop only, no copy
 twins, and a test storage ten times slower than asked. They are not
 comparable with what is below, and a 4 KiB run replaces them.
 
+A status page for readers outside the tree, with the terms, the two kinds
+of storage and the 16 KiB results, is "NFSD Receive Region Budget":
+https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g (Mike's; private until he
+shares it). Update it when a host's record lands.
+
 ## How a host adds its column
 
 When `run-testplan.sh` has completed on a host (every stage PASS or DONE,
