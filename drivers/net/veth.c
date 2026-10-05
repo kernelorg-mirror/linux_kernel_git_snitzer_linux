@@ -37,6 +37,22 @@
 #define VETH_RING_SIZE		256
 #define VETH_XDP_HEADROOM	(XDP_PACKET_HEADROOM + NET_IP_ALIGN)
 
+/*
+ * Extra headroom, in bytes, for frames copied into page-pool pages when an
+ * XDP program is attached.  A test aid: 2 puts the IP header and the TCP
+ * payload of a plain Ethernet frame on a 4-byte boundary, as a NIC that
+ * posts its receive buffers that way does.
+ */
+static unsigned int rx_ip_align;
+module_param(rx_ip_align, uint, 0444);
+MODULE_PARM_DESC(rx_ip_align,
+		 "Extra headroom (0-3 bytes) for frames copied for XDP (test aid, default 0)");
+
+static unsigned int veth_xdp_headroom(void)
+{
+	return XDP_PACKET_HEADROOM + (rx_ip_align & 3);
+}
+
 #define VETH_XDP_TX_BULK_SIZE	16
 #define VETH_XDP_BATCH		16
 
@@ -759,7 +775,7 @@ static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
 	if (skb_shared(skb) || skb_head_is_locked(skb) ||
 	    skb_is_nonlinear(skb) ||
 	    skb_headroom(skb) < XDP_PACKET_HEADROOM) {
-		if (skb_pp_cow_data(rq->page_pool, pskb, XDP_PACKET_HEADROOM))
+		if (skb_pp_cow_data(rq->page_pool, pskb, veth_xdp_headroom()))
 			goto drop;
 
 		skb = *pskb;
@@ -1594,7 +1610,8 @@ static int veth_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 			goto err;
 		}
 
-		max_mtu = SKB_WITH_OVERHEAD(PAGE_SIZE - VETH_XDP_HEADROOM) -
+		max_mtu = SKB_WITH_OVERHEAD(PAGE_SIZE - VETH_XDP_HEADROOM -
+					    (rx_ip_align & 3)) -
 			  peer->hard_header_len;
 		/* Allow increasing the max_mtu if the program supports
 		 * XDP fragments.
