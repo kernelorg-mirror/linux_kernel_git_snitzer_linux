@@ -450,10 +450,10 @@ new file, copied records written direct): all eight nfsd threads writing
 1213 MB/s. So for sequential file creation D1's destination writes are
 serialised by XFS as well as holding their threads (2.4); a file that is
 being overwritten, or preallocated to its size, is not affected. Only
-measured on that rig; see `../transplant/README.md`, "Why one copy cell was
-slow". (The 10 ms was itself a fault of the rig: dm-delay rounded the 1 ms
-asked for up to a 100 Hz timer tick. With that fixed on 2026-10-05 the same
-cell runs at 355 MB/s. The serialisation is unchanged; what it costs
+measured on that rig; see `../transplant/README.md`, problem 8. (The
+10 ms was itself a fault of the rig: dm-delay rounded the 1 ms asked for up
+to a 100 Hz timer tick. With that fixed on 2026-10-05 the same cell runs at
+381 MB/s. The serialisation is unchanged; what it costs
 scales with how long each direct write takes.) Phase 0b should record
 whether tardis1's workload creates or overwrites.
 
@@ -969,8 +969,8 @@ Nothing here starts before phase 0.
     the region itself.
   - **Fixing each connection's TCP receive buffer at 128 KiB keeps the
     region nearly empty** (`svc_tcp_rx_rcvbuf`; mechanism M2 in 4.2). With
-    16 connections at most 112-128 region pages were in use, about 2 MiB,
-    with no packets dropped, and a region of 306 pages was enough. With
+    16 connections at most 112 region pages were in use, under 2 MiB, with
+    no packets dropped (the full run of 2026-10-05). With
     the receive buffers left to grow, data nfsd had not read yet filled
     the region and the card dropped packets. Every WRITE in those cells
     was written direct.

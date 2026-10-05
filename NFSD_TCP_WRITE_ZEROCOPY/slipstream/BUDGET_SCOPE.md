@@ -595,7 +595,7 @@ Kernel `7.1.13-19.hs.451` #38, modules = the tip (sunrpc
 - **Not re-run since the branch was tidied (2026-10-04):** the per-commit
   bisect walk and sparse.
 
-## 9. 16 KiB (2026-10-04)
+## 9. 16 KiB (2026-10-05)
 
 The whole plan, these phases included, was run on a 16 KiB host:
 `../transplant/README.md`, "16 KiB host". Two things there bear on this
@@ -605,7 +605,8 @@ design:
   The first form of the rule copied only while some other budget was set,
   and a region with no budget at all hung a server. S2 as worded above is
   the rule now.
-- **Which storage the harness models.** `run-budget.sh` writes to
-  nvme-loop, which needs its data in whole pages, so its loaned WRITEs are
-  written buffered. The cells here show the budget working; they do not
-  show loans avoiding a copy.
+- **Which storage the harness models.** The results in this document are
+  from nvme-loop, which needs its data in whole pages, so its loaned WRITEs
+  are written buffered: they show the budget working, not loans avoiding a
+  copy. `run-budget.sh STORAGE=sgl` now runs the same phases on NVMe/TCP,
+  where loans are written direct; the 16 KiB run did both.
