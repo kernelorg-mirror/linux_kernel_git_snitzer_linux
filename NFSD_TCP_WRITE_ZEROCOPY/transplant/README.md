@@ -70,6 +70,54 @@ nothing there is taken for granted:
 - **Timer tick.** Check `CONFIG_HZ`. The dm-delay fix makes the storage
   delay honest either way, but TCP's own timers differ with it.
 
+## Starting the 4 KiB host's session
+
+The 4 KiB host has an older clone, an older kernel and a Claude memory
+that predate the changes above. "Run preflight.sh and then
+run-testplan.sh" is not enough: it needs the new branch and a kernel built
+from it first. Give its session this:
+
+```
+Pull kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY (I force-pushed it; history was
+rewritten, so reset to origin rather than merge, and do not remove untracked
+files). If this clone has unpushed commits or local branches from the old
+history, tell me what they are and ask before resetting.
+
+Read AGENTS.md, then NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md from the top:
+"Where things stand", the build section, and the working rules at the end. Your
+memory of this project is stale: the tunables, script and stage names changed
+(credit -> budget), a budget of 0 now copies, and the plan now runs on two kinds
+of storage.
+
+Then:
+1. Run host-bootstrap.sh, check the config, and build with build-test-kernel.sh
+   from this host's known-good 4 KiB config. Tell me when to reboot.
+2. After the reboot: preflight.sh, then run-testplan.sh. It stops and asks for a
+   second reboot; after that, run it again to finish.
+3. Read every cell, not just stage status. Then extract this host's record with
+   results-table.py into transplant/results/4KiB.tsv, regenerate RESULTS.md, and
+   write the 4 KiB account in the README, replacing the superseded 4 KiB section.
+4. Commit as docs commits, run check-grouping.sh, and don't push.
+```
+
+What to expect:
+
+- **Three stops for Mike:** a reboot after the build, a reboot part-way
+  through the plan, and the push at the end. About an hour of run time on
+  the first boot and a few minutes on the second.
+- **`preflight.sh` fails on the old kernel**, by the tunables' names. That
+  is the check that the build and reboot happened.
+- **If the NVMe/TCP loan cells show their WRITEs written buffered**
+  (`wr_direct` 0), that is the 4 KiB veth frame layout described under
+  "Things to look at on 4 KiB". Record it; it is a finding, not a failure
+  of the run.
+- **Old results on that host** (`/var/tmp/zc-testplan-4k-*` and the like)
+  stay until Mike says to clear them, as on the 16 KiB host.
+
+For tardis1 the same prompt serves with step 1 replaced by "the packaged
+64 KiB kernel is installed; nothing is built here" and `64KiB.tsv` for the
+record.
+
 ## What is in this directory
 
 | file | does |
