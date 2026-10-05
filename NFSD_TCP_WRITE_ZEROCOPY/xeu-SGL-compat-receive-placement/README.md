@@ -205,6 +205,106 @@ far smaller and does not depend on how E1 treats `RX_SR_BD_EOF`.
   On such a controller the NVMe driver forces SGLs for any request with a
   gap (`nvme_pci_use_sgls()`), whatever `sgl_threshold` says.
 
+## A setting the network stack owns: one path forward (designed, not built)
+
+`rx_ip_align` now exists twice, as a private module parameter in `xeu` and
+in veth. Every other driver whose card should feed loaned WRITEs to NVMe
+would need a third, a fourth. This section records what a single,
+driver-neutral setting could look like, with veth as its first user. It
+is a design only: nothing here is implemented.
+
+**Mike's read (2026-10-05): this is unlikely to be acceptable upstream.**
+It is written down as one path forward, not as the plan.
+
+### What can and cannot be neutral
+
+Where a frame lands is decided by the address the driver hands the card
+for each receive buffer. The stack never sees that address, so no change
+in the core alone can move the payload: **every driver that takes part
+has to add the pad where it posts its buffers.** What the core can own is
+everything else: the setting, how it is configured and reported, its
+validation, and the arithmetic. A driver then opts in with a flag and a
+couple of lines, instead of inventing a parameter.
+
+### The pieces
+
+1. **Configuration, next to header-data split.** The stack already has
+   per-device receive settings that drivers opt into: `tcp-data-split` and
+   `hds-thresh`, set with `ethtool -G`, carried in `struct netdev_config`
+   (`dev->cfg`, with `dev->cfg_pending` while a change is applied;
+   `include/net/netdev_queues.h`, `net/ethtool/rings.c`). The new setting
+   would sit beside them:
+   - a field in `struct netdev_config`, say `rx_ip_pad` (0 to 3 bytes);
+   - a ring attribute, `ETHTOOL_A_RINGS_RX_IP_PAD`, so it is
+     `ethtool -G <dev> rx-ip-pad 2` and shows in `ethtool -g`;
+   - a capability flag, `ETHTOOL_RING_USE_RX_IP_PAD`, in the driver's
+     `supported_ring_params`. The core refuses the setting on a device
+     without it, as it does for the others.
+2. **One helper for the arithmetic**, for example
+   `netdev_rx_headroom(dev, base)`, returning the driver's own headroom
+   plus the configured pad. A driver calls it in the two places that must
+   agree: where it posts a buffer, and where it builds the skb or XDP
+   buffer over it.
+3. **The driver's side of the bargain**, which is the contract the flag
+   stands for: the pad goes in front of the frame in every buffer that
+   starts a frame; the driver's XDP headroom and its largest frame account
+   for it; and changing it re-posts the receive ring the way a ring-size
+   change does.
+4. **Reporting.** `ethtool -g` shows the value, so a test, or NFSD's
+   documentation, can say what a host needs without naming a driver.
+
+### veth as the first user
+
+veth is the natural first user because it has no hardware: the whole
+change is visible and testable anywhere.
+
+- Set `ETHTOOL_RING_USE_RX_IP_PAD` and give veth the ring operations it
+  lacks today (it has none).
+- In `veth_convert_skb_to_xdp_buff()` replace the headroom passed to
+  `skb_pp_cow_data()`, and in `veth_xdp_set()` the headroom in the MTU
+  limit, with the helper. That is the whole of today's `rx_ip_align`
+  commit, reading the device's setting where it now reads a module
+  parameter. It also becomes per device and changeable without reloading
+  the module.
+- `run-budget.sh` would then run `ethtool -G rxsrv rx-ip-pad 2` where it
+  now reloads veth, and the `RX_IP_ALIGN=0` / `2` pair above is the test.
+
+`xeu` would be the second user: `XEU_RX_PAGE_HEADROOM` becomes the helper,
+and the patch in this directory shrinks to that and the flag.
+
+### Why upstream may well say no
+
+- **It asks every driver for something only one consumer needs.** The
+  consumer is direct I/O from loaned receive pages, which is itself not
+  upstream.
+- **`NET_IP_ALIGN` already names this idea**, and arm64 and x86 set it to
+  0 on purpose: an unaligned IP header is free there, and a receive buffer
+  that starts off a 4-byte boundary costs some DMA engines. Bringing it
+  back as a runtime setting would have to answer that.
+- **A pad is not the direction receive placement is going.** Header-data
+  split, where the card supports it, puts the payload at the start of a
+  page. That is aligned to 4 bytes and to the page, which a pad never
+  gives, and it is already a neutral, opt-in setting.
+- **It only works for frames that fit one buffer.** Continuation buffers
+  are not padded ("4 KiB arm64 with jumbo frames" above), and neither is
+  anything inside a tunnel.
+
+### What else there is
+
+- **Header-data split** where the hardware has it: no new interface at
+  all. For the Xsight card this is a question for Xsight.
+- **Keep the private parameters.** Two exist. It is the least work and
+  needs nobody's agreement, at the price of one per driver.
+- **Do it in the pool, not the driver.** Page pools already carry an
+  `offset` that many drivers use as their headroom
+  (`struct page_pool_params`). A pad there reaches those drivers with no
+  new ethtool attribute, but only those, and it is a less visible place to
+  put policy.
+- **Not need it.** Copying out of a small receive region into nfsd's own
+  pages gives aligned memory whatever the card does
+  (`../on-die-receive-copy/SPEC.md`). The pad matters only where the loan
+  itself is to be written direct.
+
 ## Questions for Xsight
 
 1. Does the E1 RX DMA engine accept a `dst_addr` that is 2 mod 4, at full
