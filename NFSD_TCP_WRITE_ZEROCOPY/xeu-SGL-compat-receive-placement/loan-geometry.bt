@@ -9,6 +9,8 @@
  * every mid-page end is a joint that must also land on a logical block.
  *
  * svc_tcp_rx_append(state, page, offset, len, borrowed, page_pool)
+ * Usage: bpftrace loan-geometry.bt <page size>  (trace-loans.sh passes
+ * getconf PAGESIZE; "ends mid-page" is relative to it).
  * Run while loaned NFS WRITEs flow; Ctrl-C prints the histograms.
  */
 kprobe:svc_tcp_rx_append /arg4/
@@ -16,7 +18,7 @@ kprobe:svc_tcp_rx_append /arg4/
 	@frags = count();
 	@offset_mod4[arg2 & 3] = count();
 	@len_mod4[arg3 & 3] = count();
-	@ends_mid_page[((arg2 + arg3) & 4095) != 0] = count();
+	@ends_mid_page[((arg2 + arg3) & ($1 - 1)) != 0] = count();
 	@page_pool[arg5] = count();
 	@bytes = sum(arg3);
 }

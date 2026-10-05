@@ -13,7 +13,7 @@ echo "== kernel: $(uname -r), brd srcversion: $(modinfo -F srcversion brd)"
 
 # --- rig up ---
 modprobe brd rd_nr=1 rd_size=4194304
-modprobe nvmet nvme_loop
+modprobe -a nvmet nvme_loop
 mkdir -p $CFG/subsystems/zc/namespaces/1 $CFG/ports/1
 if [ "$(cat $CFG/subsystems/zc/namespaces/1/enable)" != 1 ]; then
     echo 1 > $CFG/subsystems/zc/attr_allow_any_host
@@ -89,3 +89,6 @@ cp $TRACE/trace /tmp/rig-cmp-trace.txt
 
 # restore localio; leave rig up for inspection (teardown script separate)
 echo Y > /sys/module/nfs/parameters/localio_enabled
+
+# pass/fail for runners: any dd failure, data mismatch or LOCALIO hit fails
+exit $(( fails + mismatches + (L > 0 ? 1 : 0) ))

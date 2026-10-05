@@ -124,7 +124,7 @@ require_default_on "$PARAM" || {
 
 # --- rig up (idempotent) ---
 modprobe brd rd_nr=1 rd_size=4194304
-modprobe nvmet nvme_loop
+modprobe -a nvmet nvme_loop
 mkdir -p $CFG/subsystems/zc/namespaces/1 $CFG/ports/1
 if [ "$(cat $CFG/subsystems/zc/namespaces/1/enable)" != 1 ]; then
     echo 1 > $CFG/subsystems/zc/attr_allow_any_host

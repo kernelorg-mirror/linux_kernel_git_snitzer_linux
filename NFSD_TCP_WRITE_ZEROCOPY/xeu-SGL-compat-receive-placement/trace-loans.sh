@@ -31,7 +31,7 @@ mkdir -p "$O"
 cat "$O/env.txt"
 
 echo "tracing for ${T}s into $O ..."
-timeout -s INT "$T" bpftrace "$D/loan-geometry.bt" > "$O/loan-geometry.txt" 2>&1 &
+timeout -s INT "$T" bpftrace "$D/loan-geometry.bt" "$(getconf PAGESIZE)" > "$O/loan-geometry.txt" 2>&1 &
 timeout -s INT "$T" bpftrace -e '
 tracepoint:nfsd:nfsd_write_direct,
 tracepoint:nfsd:nfsd_write_vector,

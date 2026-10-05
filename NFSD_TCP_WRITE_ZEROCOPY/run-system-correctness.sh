@@ -12,6 +12,9 @@
 # vers in {3, 4.2} x io_cache_write in {0, 2}; a mismatch anywhere is a
 # hard failure.  Mode 0 vs 2 also cross-checks the direct path against the
 # buffered path on identical inputs.
+# Page-crossing cases (unaligned tail, sub-page poke, odd appends) are
+# built from the page size so they still straddle pages on 16/64 KiB.
+PS=$(getconf PAGESIZE)
 set -u
 CONNS=${CONNS:-10}
 TRACE=/sys/kernel/tracing
@@ -25,7 +28,7 @@ fail() { echo "FAIL: $*"; FAILS=$((FAILS+1)); }
 
 # --- rig up (idempotent, mirrors run-rig-cmp.sh) ---
 modprobe brd rd_nr=1 rd_size=4194304
-modprobe nvmet nvme_loop
+modprobe -a nvmet nvme_loop
 mkdir -p $CFG/subsystems/zc/namespaces/1 $CFG/ports/1
 if [ "$(cat $CFG/subsystems/zc/namespaces/1/enable)" != 1 ]; then
     echo 1 > $CFG/subsystems/zc/attr_allow_any_host
@@ -92,17 +95,17 @@ run_matrix() {
     op d16 bs=1M count=16 oflag=direct                 || fail "$tag: d16 write"
     # 2. O_DIRECT with a trailing odd block (per-segment split decisions)
     op dodd bs=1M count=8 oflag=direct                 || fail "$tag: dodd write"
-    op dodd bs=4096 count=3 seek=2048 oflag=direct     || fail "$tag: dodd tail"
+    op dodd bs=$PS count=3 seek=$((8388608 / PS)) oflag=direct || fail "$tag: dodd tail"
     # 3. buffered odd record sizes (sub-sector lengths through the receive)
     op bo1 bs=3000 count=7                             || fail "$tag: bo1"
     op bo2 bs=999 count=1000                           || fail "$tag: bo2"
     # 4. sub-block overwrite at an odd offset (RMW correctness)
-    op rmw bs=16384 count=1                            || fail "$tag: rmw base"
-    op rmw bs=100 count=1 oflag=seek_bytes seek=4000   || fail "$tag: rmw poke"
+    op rmw bs=$((4 * PS)) count=1                       || fail "$tag: rmw base"
+    op rmw bs=100 count=1 oflag=seek_bytes seek=$((PS - 96)) || fail "$tag: rmw poke"
     # 5. append-style growth in odd increments
     local off=0 len
     for i in 1 2 3 4 5; do
-        len=$((4096 * i + 137))
+        len=$((PS * i + 137))
         op app bs=$len count=1 oflag=seek_bytes seek=$off || fail "$tag: app$i"
         off=$((off + len))
     done
