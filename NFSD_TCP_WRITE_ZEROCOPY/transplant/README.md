@@ -203,25 +203,31 @@ worktree at `cf9bc64125da`, base = the hs.448 production config):
 cold whole-tree baseline finds nothing the branch introduced. The last two runs of D and B on this VM are D4 and phase B
 (BUDGET_SCOPE 8.6, slipstream README).
 
-## 16 KiB host (2026-10-04)
+## 16 KiB host (2026-10-05)
 
-The kernel was built on this host, the whole test plan was run, and five
-problems were found and fixed on the way. This section is arranged by what
-a reader needs to know, not by the order things happened; the order is
-listed near the end.
+The kernel was built on this host and the whole test plan run on it, on
+both kinds of storage. Ten problems were found and fixed on the way, in
+the kernel, in two test devices and in the harness. This section gives the
+results of the last full run, then the problems, since each explains a
+change in the tree. Earlier runs on this host are not recorded: they were
+of kernels and a harness that have since changed.
 
 ### In short
 
-- **The whole test plan passes at 16 KiB on one kernel**, both boots: no
-  data verification failure, no hang, no kernel warning.
-- **Four kernel fixes were needed first:** where a misaligned write is cut
-  into direct and buffered parts; the unit of the knob that decides whether
-  to cut at all; what happens to a fixed receive region nobody set a limit
-  for; and a data-losing bug in null_blk, the test storage.
-- **What the results mean depends on what the storage can do.** There are
-  two cases, set out below, and the right configuration differs between
-  them. Most of the budget harness runs on only one of the two.
-- **Only 16 KiB was run.** Nothing here was run at 4 KiB or 64 KiB.
+- **The whole test plan passes at 16 KiB**, both boots, on storage that
+  needs whole pages and on storage that takes arbitrary pieces: no data
+  verification failure, no hang, no kernel warning.
+- **The budget does its job on both.** With a budget set and the receive
+  buffer held, no cell dropped a packet or ran the region out, whether its
+  loans were written through the page cache or direct.
+- **On storage that takes arbitrary pieces, every loaned WRITE was written
+  direct**, once the test network device placed the payload on a 4-byte
+  boundary. Without that, none were.
+- **Loans written direct were not faster than loans written through the
+  page cache** on this rig, and on one connection were much slower. That is
+  reported below and not yet explained.
+- **Only 16 KiB was run.** Nothing here was run at 4 KiB or 64 KiB with
+  these changes.
 
 ### Words used here
 
@@ -258,7 +264,7 @@ SGL support. The test stand-in is NVMe over TCP.
 - A loaned WRITE can be written direct as it stands: no copy anywhere.
 - **But only if the card puts the data on a 4-byte boundary**, which NVMe
   requires of memory. By default it lands 2 bytes off, on the Xsight card
-  and on this test rig alike; see "NVMe/TCP storage in the budget harness"
+  and on this test rig alike; see problem 9
   below. On the card that is fixed by loading `xeu` with `rx_ip_align=2`,
   and the rig's veth now has the same setting. Each is a private driver
   parameter; the network stack has no general way to ask for it. One
@@ -294,89 +300,126 @@ This two-way split leaves things out, and they matter:
 
 ### What was measured
 
-Kernel `7.1.13-19.hs.451.el9.aarch64+` build #12, built from the branch tip
-that carries the four fixes; sunrpc `3954E9CB`, nfsd `4E439F2B`, nfs_dio
-`A03FA30E`, null_blk `DC3E1848`. Results in
-`/var/tmp/zc-testplan-16k-run3/`. Every cell's fio exit status, run time and
-verification output was read, not only the stage's status.
+Kernel `7.1.13-19.hs.451.el9.aarch64+` build #17, built from branch tip
+`82d7a6d21207`; sunrpc `4882A601`, nfsd `4E439F2B`, nfs_dio `A03FA30E`,
+null_blk `DC3E1848`, dm_delay `689119E5`, veth `7E6CC94B`. Results in
+`/var/tmp/zc-testplan-16k-run4/`. Every cell's fio exit status and
+verification output was read, not only each stage's status.
 
-**Storage that needs whole pages** (the budget harness, `run-budget.sh`,
-whose device is nvme-loop). Region of 1519 pages, 24 MiB.
+The storage is the same for both kinds but for the transport: a
+memory-backed null_blk device behind dm-delay (1 ms per write unless a
+cell says otherwise), exported over nvme-loop (**needs whole pages**) or
+over NVMe/TCP with the payload placed (**takes arbitrary pieces**). Region
+of 1519 pages (24 MiB), MTU 9000, 1 MiB WRITEs. "Written" is how nfsd
+issued the cell's WRITEs, from the harness's counters; it was all one way
+in every cell.
 
-The intended setup, budget 0 with the receive buffer held:
+**The same cells on both kinds of storage** (phase A):
 
-| cell | connections | MB/s | packets dropped | most region pages in use |
-|---|---|---|---|---|
-| `step-rcvbuf-n16` (storage stalls 10 ms mid-run) | 16 | 1496 | 0 | 112 |
-| `mixed-rcvbuf` (mixed write sizes) | 16 | 89 | 0 | 128 |
+| cell | conn | budget | whole pages: MB/s | written | arbitrary pieces: MB/s | written | drops (either) | peak region pages |
+|---|---|---|---|---|---|---|---|---|
+| `seq-off` (copy) | 1 | 0 | 381 | direct | 350 | direct | 0 | 192 |
+| `seq-on` (loan) | 1 | 1375 | 1808 | buffered | 349 | direct | 0 | 967 / 960 |
+| `mixed-on` (loan) | 16 | 1151 | 758 | buffered | 619 | direct | 0 | 1050 / 1042 |
+| `mixed-on-v42` (loan, NFSv4.2) | 16 | 1151 | 757 | buffered | 780 | direct | 0 | 1048 / 1058 |
+| `step-on` (loan, storage stalls mid-run) | 1 | 1375 | 1314 | buffered | 1043 | direct | 0 | 969 / 970 |
+| `step-on-n16` (loan, the same) | 16 | 1151 | 1466 | buffered | 1126 | direct | 0 | 1009 / 1010 |
+| `collapse-on` (loan, small socket memory) | 16 | 1151 | 744 | buffered | 559 | direct | 0 | 1050 / 1049 |
+| `collapse-off` (copy, the same) | 16 | 0 | 640 | direct | 607 | direct | 0 | 240 / 256 |
 
-- All their WRITEs were copied and written direct: 170568 of 170568 in a
-  traced re-run.
-- The region is barely touched: about 2 MiB for 16 connections. A re-run
-  on a region of only 306 pages (4.8 MiB) gave 1472 and 93 MB/s, no drops,
-  the same 112 pages.
+- **With a budget, nothing dropped and the region never ran out**, on
+  either kind of storage. Loans hold about 1000 of the region's 1519
+  pages; copies hold 200 to 250.
+- **On storage that takes arbitrary pieces every loaned WRITE went
+  direct**: 512 of 512, 2785 of 2785, 119353 of 119353, 128681 of 128681.
+  This is the configuration that storage is meant to use, run under a
+  budget for the first time.
+- **It was not faster.** A loan written direct was slower than the same
+  loan written through the page cache in five of these six loaned cells,
+  and five times slower on one connection writing in order (349 against
+  1808 MB/s). The direct write waits for the storage, 1 ms each, where the
+  buffered one returns once the data is in the page cache; that would
+  account for it, but it has not been checked, and each cell is one run.
+  Whether a direct loan pays on real storage is not something this rig
+  can say.
+- `mtu1500-on` is left out of the table: at MTU 1500 a 1 MiB WRITE has
+  more pieces than a loan can hold, so every one of its 512 WRITEs was
+  copied (traced: `reason=capacity`) and written direct on both kinds of
+  storage. It tests that fallback, not a loan.
 
-The same setup without the receive buffer held:
+**What happens without the receive buffer held** (budget 0, so WRITEs are
+copied; the region fills with data nfsd has not read yet):
 
-| cell | connections | MB/s | packets dropped | most region pages in use |
-|---|---|---|---|---|
-| `step-off` | 1 | 1398 | 0 | 1446 |
-| `seq-off` | 1 | 57 (explained below) | 0 | 258 |
-| `mixed-off` | 16 | 83 | 8718 | 1519, all of it |
-| `x-off-R` | 16 | 83 | 8390 | 1519, all of it |
+| cell | conn | whole pages: MB/s | drops | arbitrary pieces: MB/s | drops | peak region pages |
+|---|---|---|---|---|---|---|
+| `step-off` | 1 | 1465 | 0 | 1242 | 0 | 1314 / 1386 |
+| `mixed-off` | 16 | 552 | 6962 | 553 | 8034 | 1519, all of it |
+| `x-off-R` | 16 | 548 | 7471 | 447 | 7620 | 1519, all of it |
 
-- With several connections the region fills with data nfsd has not read
-  yet and the card drops packets. The data still verifies and nothing
-  hangs. The receive buffer has to be held.
+- With several connections the card drops packets. The data still
+  verifies and nothing hangs. `floor-refused`, where a receive buffer too
+  small to hold is refused, shows the same (580 and 482 drops). The
+  receive buffer has to be held.
 
-With a budget set, so that WRITEs are loaned:
+**The intended setup for storage that needs whole pages**: budget 0 with
+the receive buffer held (phase TLP, nvme-loop only):
 
-| cell | connections | MB/s | packets dropped | most region pages in use |
-|---|---|---|---|---|
-| `step-on-n16` | 16 | 1527-1591 | 0 | about 1010 |
-| `mixed-on` | 16 | 114-117 | 0 | about 1050 |
-| `seq-on` | 1 | 416 | 0 | 967 |
+| cell | conn | MB/s | drops | peak region pages | written |
+|---|---|---|---|---|---|
+| `step-rcvbuf-n16` | 16 | 1351 | 0 | 112 | direct, 153215 of 153215 |
+| `mixed-rcvbuf` | 16 | 602 | 0 | 112 | direct, 2785 of 2785 |
 
-- Every loaned WRITE here was written buffered (512 of 512 traced), as the
-  storage requires. So these cells show that the budget does its job:
-  nothing dropped, nothing waiting for ever, the region never exhausted.
-  They do not show loans paying off, because on this storage they cannot.
-- They hold about ten times as much of the region as the intended setup.
+- One copy, then a direct write, and the region barely touched: under
+  2 MiB for 16 connections.
+- Beside them, the same loads loaned on this storage (`step-on-n16`
+  1364 MB/s, `mixed-on` 752) hold about 1010 and 1050 pages. So on this
+  rig the intended setup costs nothing in the stalled-storage cell and
+  about a fifth in the mixed one, for a tenth of the region.
 
-**Storage that takes arbitrary pieces** (NVMe over TCP).
+**The smallest workable region** (phase B, each kind on the same fresh
+boot): 306 pages, budget of one WRITE's worth.
 
-- Only the plan's SGL stage runs on it, with no region and no budget: 10
-  connections of 16 MiB, loans on, 0 compare mismatches, 124 of 160 WRITEs
-  direct.
-- **The budget has never been tested on this kind of storage**, which is
-  where it matters most: loans that stay direct and hold region pages for
-  as long as the device takes. The budget harness needs an NVMe/TCP variant
-  for that.
+| cell | conn | budget | whole pages: MB/s | arbitrary pieces: MB/s | drops | peak region pages |
+|---|---|---|---|---|---|---|
+| `edge-at-n1` | 1 | 130 | 274 | 276 | 0 | 144 |
+| `edge-at-n4` | 4 | 130 | 296 | 262 | 0 | 160 |
+| `edge-at-mixed-n4` | 4 | 130 | 123 | 124 | 0 | 160 |
+| `edge-at-step` | 1 | 130 | 825 | 636 | 0 | 144 |
+| `edge-below-n1` | 1 | 194 | 322 | 280 | 0 | 144 |
+| `edge-off-n1` (copy) | 1 | 0 | 392 | 345 | 0 | 224 |
 
-**The budget's own behaviour**, whatever the storage. All on nvme-loop:
+- WRITEs proceed one at a time, nothing is dropped, and the region is
+  never more than 160 pages in use. Loans were written buffered on the
+  first kind of storage and direct on the second, all of them.
+- David's `analyze.py` gives OVERALL PASS on phases A and B for each kind.
 
-- Two devices sharing one region (`budget-D`, run here for the first time
-  at 16 KiB): no allocation failures; the two clients get 57 MB/s each.
-- A separate budget per network namespace, a default budget, changing a
-  budget under load, and a namespace going away (`budget-N`): each WRITE is
-  counted against the right budget; `n-reconf` completes with fio rc 0;
-  the region is whole afterwards. `n-exit` ends with fio rc 4, as intended:
-  it deletes the server.
-- A client whose packets do not come from the region is never limited by
-  the budget (`budget-X`): all six of its cells verify.
-- The smallest workable region (`budget-B`, on its own fresh boot): 306
-  pages; with the budget equal to one WRITE's worth, WRITEs proceed one at
-  a time, 52 MB/s, nothing dropped, the region never more than 160 pages
-  in use. David's `analyze.py` gives OVERALL PASS on phases A and B.
+**The budget's own behaviour**, whatever the storage:
+
+- **A client whose packets do not come from the region is never limited**
+  (phase X, both kinds): running alone it is never admitted or refused,
+  and with a budget set it keeps 480 to 550 MB/s whether or not the region
+  client beside it is being held to 100 to 130 MB/s by a tight budget.
+- **Two devices sharing one region** (phase D, nvme-loop): with a budget,
+  no drops and no allocation failures; the two clients get 360 and
+  355 MB/s. Without one, 8618 allocation failures.
+- **A budget per network namespace** (phase N, nvme-loop): each WRITE is
+  counted against the right budget, whether its own, the default or none
+  (copied, 5570 of 5570); a budget changed under load completes with fio
+  rc 0; the region is whole afterwards. `n-exit` ends with fio rc 4, as
+  intended: it deletes the server.
+- **Tail-loss probes** (phase TLP, nvme-loop): no retransmission timeouts
+  in any cell.
 
 ### The rest of the plan
 
 - **KUnit:** 7/7, 41/41, 6/6, 10/10, no skips.
 - **PASS:** bvecrepro; rig-cmp (30 x 16 MiB, 0 mismatches); loan-assert
-  (50 of 50 connections fully direct); killswitch; system-correctness.
-- **SGL rigs:** 0 compare mismatches on brd, NVMe/TCP and nvme-loop.
-- **LOCALIO:** the boundary test exits 0 on both rigs (0.003 reads per
-  WRITE for 47008-byte records); the short-read and stable tests exit 0.
+  (50 of 50 connections fully loaned); killswitch; system-correctness.
+- **SGL rigs** (no region, no budget, payload not placed): 0 compare
+  mismatches on brd, NVMe/TCP and nvme-loop.
+- **LOCALIO:** the boundary test exits 0 on both rigs (0.002 and 0.004
+  reads per WRITE for 47008-byte records); the short-read and stable tests
+  exit 0.
 
 ### Problems found and fixed
 
@@ -440,43 +483,37 @@ with the page size, and a record smaller than a page is reported, not
 judged. Which of its two read limits applies now follows whether the
 record can be cut, not its literal size.
 
-### Why one copy cell was slow
+**8. The test storage was ten times slower than asked.** The harness asks
+dm-delay for a 1 ms storage delay. dm-delay kept the time a write is due in
+timer ticks, and this kernel ticks at 100 Hz, so every write took 10 ms. A
+copy cell that writes direct ran at 57 MB/s for that reason, and so did
+every cell whose WRITEs waited on the storage. Fixed by "dm-delay: do not
+round a short delay up to the next timer tick": a 1 ms delay now measures
+1.16 ms. Looking into that cell also showed something real about XFS,
+which `../on-die-receive-copy/SPEC.md` section 3.4 now records: a direct
+write that starts beyond the end of a growing file waits for every direct
+write in progress, so several nfsd threads creating one file direct queue
+behind one another.
 
-In the run above `seq-off`, which writes a new file in order over one
-connection, ran at 57 MB/s where the same cell with loans ran at 416.
-That was not the cost of a copy. Two things were:
+**9. On storage that takes arbitrary pieces, no loaned WRITE was written
+direct.** The budget harness only ran on nvme-loop. Given an NVMe/TCP
+variant (`STORAGE=sgl`), all 512 of 512 loaned WRITEs were still written
+through the page cache. NVMe wants memory aligned to 4 bytes, and veth
+with XDP puts every frame at a 256-byte headroom, so after the 14-byte
+Ethernet header the TCP payload is 2 bytes off. This is the misplacement
+the Xsight card has, which `xeu`'s `rx_ip_align=2` exists to fix,
+**reproduced with no Xsight hardware**. veth was given the same setting,
+for testing only ("veth: add rx_ip_align, extra headroom for frames copied
+for XDP"); with it 512 of 512 went direct. The harness sets it through
+`RX_IP_ALIGN` (2 with `STORAGE=sgl`, else 0). The reproducer, and one
+design for a setting the network stack would own, are in
+`../xeu-SGL-compat-receive-placement/README.md`.
 
-- **The test storage was ten times slower than asked.** dm-delay kept the
-  time a write is due in timer ticks, and this kernel ticks at 100 Hz, so
-  the 1 ms the harness asks for became 10 ms. Fixed on 2026-10-05 ("dm-delay:
-  do not round a short delay up to the next timer tick"): a 1 ms delay now
-  measures 1.16 ms.
-- **XFS makes direct writes to a growing file wait for each other.** On
-  this storage a copied WRITE is written direct. Eight nfsd threads write
-  the file's WRITEs out of order, and XFS makes a direct write that starts
-  beyond the current end of the file wait for every direct write in
-  progress. So the eight queue behind one another, and each pays the
-  storage delay in turn. This is real and would affect any server writing
-  a new file direct from several threads; the slow storage multiplied it.
-  `../on-die-receive-copy/SPEC.md` section 3.4 is corrected for it.
-
-With the delay fixed, on the phase B region (306 pages), every write
-verified:
-
-| storage | cell | written | MB/s before | MB/s after |
-|---|---|---|---|---|
-| nvme-loop | seq-off (copy) | direct | 55 | 355 |
-| nvme-loop | seq-on (loan) | buffered | 52 | 320 |
-| NVMe/TCP, payload placed | seq-off (copy) | direct | 53 | 350 |
-| NVMe/TCP, payload placed | seq-on (loan) | direct | 52 | 315 |
-
-- **Every throughput figure recorded before this fix, in any cell with a
-  storage delay under 10 ms, was set by the tick and not by the code under
-  test.** That includes the 16 KiB tables above and the 4 KiB results.
-  Their drop, admission and region-use columns stand; their MB/s columns
-  do not compare anything.
-- These four cells are one run each. They are enough to show the delay is
-  honest, not to rank copy against loan.
+**10. The harness could report a pass with nothing run.** David's
+`analyze.py` says OVERALL PASS on an empty directory. The plan's analyze
+stages now fail unless both phases' tables exist. `cells.tsv` also gained
+three columns saying how nfsd issued each cell's WRITEs, which is what
+problem 9 was found with.
 
 ### How the kernel was built
 
@@ -492,98 +529,25 @@ verified:
 - kernel-rpmtree's `--localmodconfig` cannot be used for this as it stands:
   it reduces after the harness options are merged and strips them.
 
-### Order of events
-
-1. Build; first boot: panic in KUnit (problem 1). Second boot: the same,
-   from another stage that loads the same suite.
-2. Third boot, a first pass through the plan: LOCALIO boundary test fails
-   (problem 2); `budget-D` silently not run (problem 6).
-3. Problems 2, 3 and 7 fixed; kernel rebuilt; second pass: a cell hangs
-   (problem 4), and fio verification failures are found in this pass and,
-   looking back, in the first (problem 5).
-4. Problems 4, 5 and 6 fixed; kernel rebuilt (build #12); third pass, both
-   boots: clean. That pass is what "What was measured" reports.
-
 ### Not done
 
-- **The whole plan with the NVMe/TCP stages.** Only the cells listed below
-  have run: loans written direct under a budget in four cells, none of
-  phase X, and phase A not on its own region.
-- **The veth and dm-delay changes on a freshly booted kernel.** Each was
-  built and loaded as a module into the running kernel. The kernel has
-  been rebuilt and installed with both, but not booted.
-- **Anything at 4 KiB or 64 KiB** with these fixes. Problems 2 and 4 change
-  behaviour at 4 KiB in some configurations.
-- **Throughput results with the storage delay fixed.** Only the four
-  cells in "Why one copy cell was slow" have run since. Every MB/s figure
-  before that needs re-measuring.
+- **Anything at 4 KiB or 64 KiB** with these changes. Problems 2 and 4
+  change behaviour at 4 KiB in some configurations, and problem 8 changes
+  every throughput figure taken there.
+- **Why a loan written direct is slower here than one written through the
+  page cache.** One run per cell, and a test device whose delay is per
+  write.
+- **Phases D, N and TLP on storage that takes arbitrary pieces.** The plan
+  repeats A, X and B there.
 - **A KUnit pair** to stand where the old "no budget" cells stood: several
   half-received WRITEs that together exceed a small region must hold
   nothing at a budget of 0, and never more than the budget with one.
-- **Unexplained:** why the cell of problem 4 only slowed down on 4 KiB, and
-  why it came free after nine minutes in the first pass here.
+- **Unexplained:** why the cell of problem 4 only slowed down on 4 KiB.
 - **For 64 KiB, by reading the code only:** a misaligned write smaller than
   a page has no whole page in it, so it is written buffered whatever
   problem 3's knob says.
-- **Sparse** has not run on any of today's commits; the host's version is
+- **Sparse** has not run on any of these commits; the host's version is
   refused by the kernel's Makefile.
-
-### NVMe/TCP storage in the budget harness (2026-10-05)
-
-`run-budget.sh` takes `STORAGE=prp` (nvme-loop, as before) or `STORAGE=sgl`
-(NVMe/TCP to 127.0.0.1, same null_blk and delay device behind it), and the
-plan repeats phases A, X and B on the second, so each page size gets both
-sets of results.
-
-**What it found first: on NVMe/TCP, loaned WRITEs were not written
-direct.** NVMe wants memory aligned to 4 bytes. veth with XDP puts every
-frame at a 256-byte headroom, so after the 14-byte Ethernet header the TCP
-payload is 2 bytes off a 4-byte boundary. nfsd sees that and falls back to
-a buffered write. This is the same misplacement the Xsight card has, which
-`xeu`'s `rx_ip_align=2` exists to fix, **reproduced here with no Xsight
-hardware**.
-
-**So veth was given the same setting**, for testing only ("veth: add
-rx_ip_align, extra headroom for frames copied for XDP"). `run-budget.sh`
-sets it through `RX_IP_ALIGN`, which defaults to 2 with `STORAGE=sgl` and 0
-otherwise, and records it in `rig.txt`. With it, every loaned WRITE on
-NVMe/TCP is written direct. `RX_IP_ALIGN=0 STORAGE=sgl` shows the problem
-again. Details: `../xeu-SGL-compat-receive-placement/README.md`.
-
-Measured on the 16 KiB host, region 306 pages, MTU 9000, 1 MiB WRITEs,
-every write verified by fio. The kernel is as in "State of the branch" plus
-the veth module rebuilt with the parameter.
-
-| storage | placement | cell | budget | MB/s | drops | peak pages | admitted | direct | buffered, pages dropped |
-|---|---|---|---|---|---|---|---|---|---|
-| nvme-loop | 0 | seq-off (copy) | 0 | 55 | 0 | 256 | 0 | 512 | 0 |
-| nvme-loop | 0 | seq-on (loan) | 146 | 52 | 0 | 144 | 512 | 0 | 512 |
-| NVMe/TCP | 0 | seq-off (copy) | 0 | 53 | 0 | 240 | 0 | 512 | 0 |
-| NVMe/TCP | 0 | seq-on (loan) | 146 | 52 | 0 | 144 | 512 | 0 | 512 |
-| NVMe/TCP | 2 | seq-off (copy) | 0 | 53 | 754 | 306 | 0 | 512 | 0 |
-| NVMe/TCP | 2 | seq-on (loan) | 146 | 52 | 0 | 144 | 512 | **512** | 0 |
-| NVMe/TCP | 0 | edge-at-n1 | 130 | 52 | 0 | 144 | 256 | 0 | 256 |
-| NVMe/TCP | 0 | edge-at-step | 130 | 676 | 0 | 144 | 77344 | 0 | 77344 |
-| NVMe/TCP | 0 | edge-below-n1 | 194 | 52 | 0 | 144 | 256 | 0 | 256 |
-| NVMe/TCP | 2 | edge-at-n1 | 130 | 52 | 0 | 144 | 256 | **256** | 0 |
-| NVMe/TCP | 2 | edge-at-step | 130 | 618 | 0 | 144 | 70683 | **70683** | 0 |
-| NVMe/TCP | 2 | edge-below-n1 | 194 | 52 | 0 | 144 | 256 | **256** | 0 |
-
-- The seq cells are two cells of phase A run by hand on the phase B
-  region. The edge cells are phase B cells through the plan's
-  `budget-B-sgl` stage.
-- **With the payload placed, the budget holds while loans are written
-  direct**: no drops, no allocation failures, and the same 144-page peak as
-  when the loans were going through the page cache. This is the first run
-  of the configuration the second kind of storage is meant to use.
-- **The seq-off cell that dropped 754 packets** is a copy cell with the
-  receive buffer not held, the third row of the table in "Two kinds of
-  storage". The warm-up cell, the same configuration, dropped packets in
-  two of four runs (291 and 247) whatever the placement. Both ran on a
-  region much smaller than phase A is meant to use. It is not caused by the
-  placement, but it has not been looked at further.
-- Throughput in the 52 MB/s cells is set by the test storage's delay, so
-  these runs say nothing about what the direct write is worth.
 
 ### State of the branch
 
@@ -629,14 +593,9 @@ understood and not in the order it was discovered:
   every commit builds.
 - `check-grouping.sh` says `grouping OK` when given the last commit of
   that first KUnit section as its base.
-- **The budget's names were settled after the 16 KiB run above.** That
-  run used the tunables under their earlier names (`svc_tcp_rx_credit_pages`
-  and so on). Since the rename: the four KUnit suites pass, `preflight.sh`
-  passes, and one loaned and one copied cell of `run-budget.sh` ran clean
-  with `analyze.py` passing. The whole plan has not been re-run.
-- **Not re-run on the tidied history:** the per-commit bisect walk with
-  `CONFIG_WERROR=y`, and sparse. The source is the tree that was tested
-  above, less one empty lock/unlock pair in a KUnit-only helper.
+- **Not run on this history:** the per-commit bisect walk with
+  `CONFIG_WERROR=y`, and sparse. The run recorded above is of the branch
+  tip, `82d7a6d21207`.
 
 ## What changes with the page size
 
@@ -655,11 +614,11 @@ for another page size:
 
 The factor for 16 and 64 KiB is computed from page_pool's frame placement.
 Read `paused` and `overrun` in the cells with a budget: many pauses or
-overruns mean it is low. At 16 KiB there were none (2026-10-04), so 190 and
+overruns mean it is low. At 16 KiB there were none (2026-10-05), so 190 and
 170 are not low; 64 KiB is unmeasured.
 
 **Results that differ from the 4 KiB record.** The 16 KiB column is what
-was measured on 2026-10-04; 64 KiB is expectation only.
+was measured on 2026-10-05; 64 KiB is expectation only.
 
 | check | 4 KiB | 16 / 64 KiB |
 |---|---|---|
