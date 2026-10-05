@@ -33,7 +33,7 @@ Per driver, two passes:
 | driver | verdict | date |
 |---|---|---|
 | brd | **EXPOSED — fixed** ("brd: iterate the bio by byte position, not bi_sector") | 2026-09-05 |
-| null_blk | **not exposed** (bio path removed upstream; MQ path byte-accurate) | 2026-09-05 |
+| null_blk | **loses data when its block is smaller than the page — fixed** ("null_blk: keep each memory-backed copy within one block"); a different defect from brd's, see below | 2026-10-04 |
 | dm core (dm.c) + linear + striped | **not exposed** (structurally immune — see below) | 2026-09-05 |
 | dm-crypt | **not exposed** (per-bvec guard fails non-512-multiple bvecs with EIO; no silent path) | 2026-09-05 |
 | dm-flakey | **not exposed** (byte cursors; whole-bio remap) | 2026-09-05 |
@@ -65,7 +65,60 @@ does), not by this series' NFSD path. DM core enforces none of this on
 incoming normal I/O (`bio_split_to_limits()` runs only for abnormal/zoned
 bios; dm.c:1979) — each target's own guard is the only enforcement.
 
-### null_blk — not exposed (2026-09-05)
+### null_blk — loses data when its block is smaller than the page; fixed (2026-10-04)
+
+This is a different defect from brd's, found on the 16 KiB test host. The
+2026-09-05 entry below is right as far as it goes: null_blk keeps an
+accurate byte position, which is what this audit was looking for.
+
+**What goes wrong.** A memory-backed null_blk device keeps, for each page
+of its storage, a note of which blocks in that page hold data, and reads a
+block with no note as zeroes. It copies a write in steps of up to one
+block and notes the block each step *starts* in. If one piece of a write
+is not a whole number of blocks, the next piece starts part-way through a
+block, and from then on every step runs from the middle of one block to
+the middle of the next. Those blocks get their data but not their note,
+and read back as zeroes. Reads that start part-way through a block go
+wrong the same way.
+
+**When.** Only when the block size is smaller than the page and larger
+than 512 bytes: 4096-byte blocks on 16 or 64 KiB pages, or 1024 / 2048 on
+any. With the block equal to the page (4096 on 4 KiB pages, the case this
+audit tested) each step is cut off at the page end and nothing is lost.
+
+**How it showed.** fio's verification found blocks of zeroes in files it
+had just written through nfsd, in the budget harness, whose storage is
+null_blk with 4096-byte blocks. Only direct writes were hit, because only
+they send nfsd's buffer to the device as it is, starting 132 bytes into
+its first page. The zeroes were on disk on the server. Nothing in nfsd or
+SUNRPC was at fault.
+
+**How to see it without NFS.** `null-blk-subpage-repro.py`: one
+`pwritev()` to the raw device, four blocks at an offset of one block, as
+two pieces of 1.5 and 2.5 blocks, read back and compared. Use a new device
+each time: a block that an earlier, aligned write noted keeps its note,
+which hides the problem (and is how a first set of tests on one device
+passed). On 16 KiB pages:
+
+| blocksize | before | after |
+|---|---|---|
+| 4096 | block 2 reads as zeroes | all four match |
+| 2048, 1024 | blocks 2 and 3 read as zeroes | all four match |
+| 512 | all four match | all four match |
+
+`bvecrepro` on fresh devices agrees: blocksize 4096, first piece starting
+132 bytes into its page, starting 4096 bytes past a page boundary, was
+corrupt from byte 16384 on before, and 36 of 36 combinations of block
+size, offset and start position match after.
+
+**Fix.** "null_blk: keep each memory-backed copy within one block": each
+step ends at the end of the block it is in, and a block is noted and
+looked up by its first sector. It is an upstream bug, introduced by
+`3451cf34f51b` ("null_blk: allow byte aligned memory offsets", 2025-11),
+and wants sending upstream.
+
+The original entry:
+
 
 - **Bio mode no longer exists.** Upstream `8b631f9cf0b8` ("null_blk: remove
   the bio based I/O path", 2024-02, in this tree) deleted it;
