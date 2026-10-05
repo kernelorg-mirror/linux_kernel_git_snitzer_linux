@@ -58,5 +58,13 @@ copy on the NFS write path — has its own directory:
   bisect-clean (base + all 30 commits build with zero warnings/errors under
   `CONFIG_WERROR=y`, on both 4K and 64K page sizes, with the KUnit tests built).
 
+**Moving to another test host** (the 16K host, tardis1 at 64K): start with
+[`NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md)
+-- bootstrap, config merge, build/install, preflight, the resumable test plan
+(`run-testplan.sh`), what changes with page size, and the working rules for
+this tree (they are not in a new host's Claude memory).  Anything committed on
+a test host must pass `transplant/check-grouping.sh` (code, then KUnit, then
+docs) before the work is handed back; regroup until it does.
+
 Start with the README before touching the series; it explains why each of the
 three base-adaptation commits exists and how to reproduce the bisect walk.
