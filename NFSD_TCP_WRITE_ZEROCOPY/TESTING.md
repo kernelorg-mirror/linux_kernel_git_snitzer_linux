@@ -14,6 +14,44 @@ Two levels of testing, independent:
    `v7.1.8-3-aarch64-{4k,16k,64k}.config`.
 2. **Functional** — the KUnit suites (below) and real NFS traffic (below).
 
+## Test kernel configs
+
+Use these for functional testing on the current base (`v7.1.13-19`); they
+live in [`configs/`](configs/):
+
+| page size | config | use |
+|---|---|---|
+| 4 KiB | **`configs/config-7.1.13-19.hs.451.el9.aarch64.kunit`** | the config of the qualified `7.1.13-19.hs.451` kernel: KUnit, the full harness, budget phases A and B |
+| 16 KiB | **the 16 KiB host's own known-good config + [`transplant/zerocopy.fragment`](transplant/zerocopy.fragment)**, merged by `transplant/merge-config.sh` | the larger-page run; see [`transplant/README.md`](transplant/README.md). `configs/config-7.1.13-19.hs.452.el9.aarch64.16k.kunit` is the 4 KiB VM's `localmodconfig`-reduced config with 16 KiB pages (113 modules): it builds every option the work needs but drives only that VM's hardware, so it is not for another host |
+| 64 KiB | **the packaged 64 KiB kernel from this branch's `redhat/configs`** (`kernel-7.1.13-aarch64-64k.config`; KUnit suites in `kernel-64k-modules-internal`) | tardis1; `transplant/check-config.sh` passes on it. `configs/config-7.1.13-14.hs.441.loanpages_SGL.el9.aarch64+64k` is the earlier tardis1 kernel, kept as a record |
+
+All three are `aarch64`. The 4 KiB and 16 KiB configs carry the four KUnit
+suites (`CONFIG_SUNRPC_XDR_KUNIT_TEST`, `CONFIG_SUNRPC_SVCSOCK_KUNIT_TEST`,
+`CONFIG_NFSD_BVEC_KUNIT_TEST`, `CONFIG_NFSD4_BVEC_KUNIT_TEST`) and the rig
+modules `run-budget.sh` needs (`CONFIG_VETH`, `CONFIG_DM_DELAY`,
+`CONFIG_BLK_DEV_NULL_BLK`) as modules. The 16 KiB config is the 4 KiB one with
+`CONFIG_ARM64_16K_PAGES=y`, resolved with `olddefconfig` (only the page-size
+derived options change) and `CONFIG_LOCALVERSION="-19.hs.452.el9.aarch64.16k"`;
+the build number is a placeholder, set it on the host that builds it. Load
+`kunit` with `enable=1` before the suites (`run-kunit.sh` does).
+
+**16 KiB as the larger-page run.** It exercises what 4 KiB cannot: the
+fragment-sized loan table with a multiplier of 4 (`PAGE_SIZE / SZ_4K`),
+loan entries at sub-page offsets, one MTU-9000 frame per page (the
+admission under-estimate of `slipstream/README.md` section 7, finding 3),
+the `arena_bound` KUnit case skipped on 4 KiB, and budget phases A and B
+with a region counted in 16 KiB pages. It does not reach the 64 KiB
+extremes (a multiplier of 16; a 1 MB record at about 118 entries against
+an estimate of 25; the 20-entry loan table seen on tardis1), so a short
+64 KiB pass on tardis1 stays on the list.
+
+The other files in `configs/` are earlier kernels' configs, kept as a
+record: `hs.440.loanpages` and `hs.441.loanpages_SGL` (`v7.1.13-14`),
+`hs.448` and `hs.448.kunit` (`v7.1.13-18`; `hs.451` is `hs.448.kunit` with
+a new `CONFIG_LOCALVERSION`), and `6.12.93-7.hs.441` (the 6.12 backport
+work). The `v7.1.8-3-aarch64-*.config` seeds at the top of this directory
+are for the old `v7.1.8` base only.
+
 ## KUnit coverage map
 
 The feature commits deliberately carry no KUnit references: the KUnit
@@ -44,7 +82,10 @@ name the code they drive -- never the other way around:
   size, and unknown (= page-sized), plus the statx-report translation
   (`nfsd_bvec_dio_seg_boundary_test`).
 - **`nfsd4-receive-bvec`** (`CONFIG_NFSD4_BVEC_KUNIT_TEST`) — NFSv4
-  COMPOUND receive bvecs, including session replay against a live nfsd.
+  COMPOUND receive bvecs, including session replay against a live nfsd,
+  and which operations may follow a WRITE whose receive loan is released
+  early (`nfsd4_payload_shared_test`, Slipstream patch 19 and its fix);
+  10 cases from `447f7a2465d0` on.
 
 ## Next regression run (handoff, 2026-09-25)
 
@@ -118,6 +159,50 @@ compile checks only. Run in this order, recording each result here:
    WALK_CONFIG=/abs/path/walk.config WORKDIR=<scratch worktree>`.
    Run it in a separate worktree so the main tree stays on the tip, and
    never while a runtime step is using the modules.
+
+### Results — `7.1.13-19.hs.451.el9.aarch64+` (2026-10-02)
+
+First run on the `v7.1.13-19` base. Kernel built with
+`build-kernel-on-host.sh --build-number 451` from this branch at
+`1edec0791264` (before the KUnit split; on `….pre-kunit-split`): the page-loan series, NVMe SGL phase 1, the fragment-sized
+loan table, and the Slipstream receive-path patches 04/06/16/18/19/20 with
+the fix for 19 (`slipstream/README.md` section 5). Config: the running
+`hs.448` config plus the four KUnit suites `=m`
+(`configs/config-7.1.13-19.hs.451.el9.aarch64.kunit`, see "Test kernel
+configs"). 4 KiB
+pages. sunrpc, nfsd, nfs, nfs_dio, nfs_localio, lockd, grace, auth_rpcgss,
+kunit and the four suite modules all srcversion-matched to the tree.
+New tunables at their defaults: `svc_tcp_rx_copy_below=1024`,
+`svc_tcp_rx_budget_pages=0` (no budget), `page_pool.rx_region_dev=""`
+(region off).
+
+| Check | Result |
+|---|---|
+| KUnit (`run-kunit.sh`) | sunrpc-xdr-bvec 7/7 · sunrpc-svcsock-rx 66 pass, 1 skip, 0 fail (67) · nfsd-receive-bvec 6/6 · nfsd4-receive-bvec 9/9; the skip is `svcsock_rx_arena_bound_test`, by design on 4 KiB pages; no warnings in dmesg |
+| `run-bvecrepro.sh` | all four rows MATCH: `/dev/ram0` off0=684/160/0 and nvme-loop off0=684 |
+| `run-rig-cmp.sh` | 30 connections × 16 MiB O_DIRECT: 0 dd failures, 0 cmp mismatches, direct 460 / vector 0, LOCALIO 0; 1.006 GB borrowed vs 314 KB copied; small records copied (`reason=small`, patch 20); write-path page cache 0 pages |
+| `run-loan-assert.sh` | 160/160 1 MiB receives fully loaned, 10/10 connections fully direct |
+| `run-killswitch.sh` | validated: 16 off copies and 16 on loans correlated on one transport, switch restored; its optional KUnit pass ran a 31-case subset (30 pass, 1 skip) |
+| `run-system-correctness.sh` | v3 and v4.2 × `io_cache_write` 0 and 2 plus anchor loops: fails 0, direct 466, vector 0, LOCALIO 0 |
+| Early loan release (patch 19 + fix), `io_cache_write=0` | 8/8 large WRITEs released early on NFSv4.2 (SEQUENCE, PUTFH, WRITE, GETATTR) and 8/8 on NFSv3; data byte-correct |
+| LOCALIO (`NFS_LOCALIO_DONTCACHE/`, tmpfs-backed `t4` rig, v3, 8 ranks) | boundary test: 47008-byte records 0.004 reads/WRITE, 6000-byte 0.000, resident 0.0% for both, invariants held; stable test: 512 UNSTABLE O_DIRECT WRITEs reported FILE_SYNC with no COMMIT, buffered and FILE_SYNC rows unchanged; short-read: 5/5 |
+
+`localio-port-ab.sh` was not run: it A/Bs stock LOCALIO against the
+DIRECT+DONTCACHE port by swapping in rebuilt modules, and on `v7.1.13-19`
+the port is already in the base, so both arms are the same code. The
+single-arm tests above cover what it was for here.
+
+Note for the harness: the scripts toggle `tracing_on` and leave it at 0, so
+a later ad hoc trace sees nothing until it is turned back on.
+
+Follow-up, same kernel: `nfsd4_payload_shared_test` added
+(`447f7a2465d0`). With the tree-built `nfsd.ko` and test module loaded by
+`insmod` (srcversion `BEC1A80BAD947DE96F0545C`; the installed modules are
+unchanged), `nfsd4-receive-bvec` is **10/10**. With the check temporarily
+reverted to patch 19's original rule (only a later WRITE keeps the loan) it
+is 9/10, failing exactly the WRITE+PUTFH, WRITE+RENAME, WRITE+SETATTR and
+WRITE+GETATTR+LOOKUP cases. Building tip: `make fs/nfsd/` does not relink
+`.ko` files and a single `.ko` target fails modpost, so use `make modules`.
 
 ### Results — `7.1.13-14.hs.439.loanpages` (2026-09-25)
 
@@ -212,7 +297,7 @@ next).
 onto `v7.1.13-14`:** compile check only (tip and the four hand-resolved
 commits, `CONFIG_WERROR=y`, running `hs.436` config + `NFS_COMMON_DIO=m`).
 `dio_segments_test` now calls `nfs_dio_split()` directly with nfsd's default
-policy (`min_middle_pages` 2, `dontcache` set) instead of
+policy (`min_middle_bytes` 8192, `dontcache` set) instead of
 `nfsd_write_dio_iters_init()`, so the knob pin and the `svc_rqst`/`svc_fh`
 stand-ins of the `-12` version are gone; expectations unchanged, and
 `later-length-misaligned` is what exercises the strengthened per-fragment
