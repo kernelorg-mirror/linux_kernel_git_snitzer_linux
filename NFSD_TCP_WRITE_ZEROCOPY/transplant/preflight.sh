@@ -90,6 +90,11 @@ else
 	ok "fresh boot: no receive region yet (budget phases B and D can run)"
 fi
 [ "$(cat /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages 2>/dev/null)" = Y ] && ok "page loans on by default" || bad "svc_tcp_rx_loan_pages is not Y"
+if modinfo -p veth 2>/dev/null | grep -q '^rx_ip_align:'; then
+	ok "veth has rx_ip_align (the NVMe/TCP budget stages can place the payload)"
+else
+	note "veth has no rx_ip_align: on the NVMe/TCP budget stages loaned WRITEs will not be written direct"
+fi
 
 echo "== host"
 "$HERE/host-bootstrap.sh" --check | sed 's/^/  /'
