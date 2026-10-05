@@ -1139,6 +1139,18 @@ again:
 	return 0;
 }
 
+/* Bytes from @pos to the end of the block it is in. */
+static size_t null_block_left(struct nullb *nullb, loff_t pos)
+{
+	return nullb->dev->blocksize - (pos & (nullb->dev->blocksize - 1));
+}
+
+/* The first sector of the block @pos is in: the one its page's bitmap marks. */
+static sector_t null_block_sector(struct nullb *nullb, loff_t pos)
+{
+	return (pos & ~((loff_t)nullb->dev->blocksize - 1)) >> SECTOR_SHIFT;
+}
+
 static blk_status_t copy_to_nullb(struct nullb *nullb, void *source,
 				  loff_t pos, size_t n, bool is_fua)
 {
@@ -1147,9 +1159,14 @@ static blk_status_t copy_to_nullb(struct nullb *nullb, void *source,
 	sector_t sector;
 
 	while (count < n) {
-		temp = min3(nullb->dev->blocksize, n - count,
+		/*
+		 * One block at a time, never across a block boundary: a
+		 * segment need not start or end on one, and a page's bitmap
+		 * records a block by its first sector only.
+		 */
+		temp = min3(null_block_left(nullb, pos), n - count,
 			    PAGE_SIZE - offset_in_page(pos));
-		sector = pos >> SECTOR_SHIFT;
+		sector = null_block_sector(nullb, pos);
 
 		if (null_cache_active(nullb) && !is_fua)
 			null_make_cache_space(nullb, PAGE_SIZE);
@@ -1181,9 +1198,9 @@ static void copy_from_nullb(struct nullb *nullb, void *dest, loff_t pos,
 	sector_t sector;
 
 	while (count < n) {
-		temp = min3(nullb->dev->blocksize, n - count,
+		temp = min3(null_block_left(nullb, pos), n - count,
 			    PAGE_SIZE - offset_in_page(pos));
-		sector = pos >> SECTOR_SHIFT;
+		sector = null_block_sector(nullb, pos);
 
 		t_page = null_lookup_page(nullb, sector, false,
 			!null_cache_active(nullb));
