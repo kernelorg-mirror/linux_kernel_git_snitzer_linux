@@ -111,10 +111,21 @@ $T/run-testplan.sh     # bvecrepro is SKIPped (needs a built tree); all else run
 | 1 | `rig-cmp`, `loan-assert`, `killswitch`, `system-correctness` | the zc rig runtime checks | PASS/FAIL (each exits with its failure count) |
 | 1 | `zc-down`, `sgl-up`, `sgl-brd/tcp/loop`, `sgl-down` | NVMe SGL rigs (`../NVME_SGL_SUPPORT_PROJECT.md` 6) | DONE; compare dispositions |
 | 1 | `localio-tcp`, `localio-loop` | `run-sgl-localio-ab.sh` (LOCALIO boundary, short-read and stable tests) | DONE; each test prints its own exit status |
-| 1 | `budget-A`, `budget-TLP`, `budget-X`, `budget-N` | `run-budget.sh` phases on the same region | tables vs the 4 KiB results (`../slipstream/README.md` section 8, `BUDGET_SCOPE.md` 8) |
+| 1 | `budget-A`, `budget-TLP`, `budget-X`, `budget-N` | `run-budget.sh` phases on the same region, on storage that needs whole pages (nvme-loop) | tables vs the 4 KiB results (`../slipstream/README.md` section 8, `BUDGET_SCOPE.md` 8) |
+| 1 | `budget-A-sgl`, `budget-X-sgl` | phases A and X again with `STORAGE=sgl`: storage that takes arbitrary pieces (NVMe/TCP), veth placing the payload on a 4-byte boundary (`RX_IP_ALIGN=2`) | tables beside the nvme-loop ones; `wr_direct` |
 | 2 (fresh) | `budget-B` | the region at its configured minimum (uses A's `parked.txt`) | |
-| 2 | `analyze-AB` | David's `slipstream/tools/analyze.py` on A and B | OVERALL PASS/FAIL |
+| 2 | `budget-B-sgl` | phase B again with `STORAGE=sgl`, on the region `budget-B` created | |
+| 2 | `analyze-AB`, `analyze-AB-sgl` | David's `slipstream/tools/analyze.py` on A and B, for each storage | OVERALL PASS/FAIL |
 | 2 | `summary` | `status.tsv` and every budget table | |
+
+The nvme-loop stages write to `<results>/budget`, the NVMe/TCP ones to
+`<results>/budget-sgl`. Each `stress-<phase>/rig.txt` records which storage
+it was and the device's `virt_boundary_mask` (the harness refuses to run if
+the device is not what `STORAGE` says). `cells.tsv` ends with `wr_direct`,
+`wr_dontcache` and `wr_buffered`: how many segments nfsd issued as direct
+writes, as buffered writes that drop their pages afterwards, and as plain
+buffered writes. That is what tells the two kinds of storage apart, so read
+it first.
 
 A stage that fails is recorded and the plan continues. Re-running resumes
 where it stopped. `--list` shows status, `--only STAGE` runs one stage, and
@@ -245,6 +256,12 @@ nvme-loop.
 SGL support. The test stand-in is NVMe over TCP.
 
 - A loaned WRITE can be written direct as it stands: no copy anywhere.
+- **But only if the card puts the data on a 4-byte boundary**, which NVMe
+  requires of memory. By default it lands 2 bytes off, on the Xsight card
+  and on this test rig alike; see "NVMe/TCP storage in the budget harness"
+  below. On the card that is fixed by loading `xeu` with `rx_ip_align=2`,
+  and the rig's veth now has the same setting. Each is a private driver
+  parameter; the network stack has no general way to ask for it.
 - The price is that the receive pages are held until the device has
   finished the write. With a region, that is what can use it up.
 - **The right configuration is: loans on, and if a region is used, a budget
@@ -468,8 +485,12 @@ direct from several threads. The 10 ms is an artefact of the test storage.
 
 ### Not done
 
-- **The budget on storage that takes arbitrary pieces** (an NVMe/TCP
-  variant of the budget harness).
+- **The whole plan with the NVMe/TCP stages.** Only the cells listed below
+  have run: loans written direct under a budget in four cells, none of
+  phase X, and phase A not on its own region.
+- **The veth module's parameter on a freshly booted kernel.** It was built
+  and loaded into the running kernel; the kernel has not been rebuilt and
+  rebooted with it.
 - **Anything at 4 KiB or 64 KiB** with these fixes. Problems 2 and 4 change
   behaviour at 4 KiB in some configurations.
 - **A test storage delay that is honest at 100 Hz.**
@@ -483,6 +504,63 @@ direct from several threads. The 10 ms is an artefact of the test storage.
   problem 3's knob says.
 - **Sparse** has not run on any of today's commits; the host's version is
   refused by the kernel's Makefile.
+
+### NVMe/TCP storage in the budget harness (2026-10-05)
+
+`run-budget.sh` takes `STORAGE=prp` (nvme-loop, as before) or `STORAGE=sgl`
+(NVMe/TCP to 127.0.0.1, same null_blk and delay device behind it), and the
+plan repeats phases A, X and B on the second, so each page size gets both
+sets of results.
+
+**What it found first: on NVMe/TCP, loaned WRITEs were not written
+direct.** NVMe wants memory aligned to 4 bytes. veth with XDP puts every
+frame at a 256-byte headroom, so after the 14-byte Ethernet header the TCP
+payload is 2 bytes off a 4-byte boundary. nfsd sees that and falls back to
+a buffered write. This is the same misplacement the Xsight card has, which
+`xeu`'s `rx_ip_align=2` exists to fix, **reproduced here with no Xsight
+hardware**.
+
+**So veth was given the same setting**, for testing only ("veth: add
+rx_ip_align, extra headroom for frames copied for XDP"). `run-budget.sh`
+sets it through `RX_IP_ALIGN`, which defaults to 2 with `STORAGE=sgl` and 0
+otherwise, and records it in `rig.txt`. With it, every loaned WRITE on
+NVMe/TCP is written direct. `RX_IP_ALIGN=0 STORAGE=sgl` shows the problem
+again. Details: `../xeu-SGL-compat-receive-placement/README.md`.
+
+Measured on the 16 KiB host, region 306 pages, MTU 9000, 1 MiB WRITEs,
+every write verified by fio. The kernel is as in "State of the branch" plus
+the veth module rebuilt with the parameter.
+
+| storage | placement | cell | budget | MB/s | drops | peak pages | admitted | direct | buffered, pages dropped |
+|---|---|---|---|---|---|---|---|---|---|
+| nvme-loop | 0 | seq-off (copy) | 0 | 55 | 0 | 256 | 0 | 512 | 0 |
+| nvme-loop | 0 | seq-on (loan) | 146 | 52 | 0 | 144 | 512 | 0 | 512 |
+| NVMe/TCP | 0 | seq-off (copy) | 0 | 53 | 0 | 240 | 0 | 512 | 0 |
+| NVMe/TCP | 0 | seq-on (loan) | 146 | 52 | 0 | 144 | 512 | 0 | 512 |
+| NVMe/TCP | 2 | seq-off (copy) | 0 | 53 | 754 | 306 | 0 | 512 | 0 |
+| NVMe/TCP | 2 | seq-on (loan) | 146 | 52 | 0 | 144 | 512 | **512** | 0 |
+| NVMe/TCP | 0 | edge-at-n1 | 130 | 52 | 0 | 144 | 256 | 0 | 256 |
+| NVMe/TCP | 0 | edge-at-step | 130 | 676 | 0 | 144 | 77344 | 0 | 77344 |
+| NVMe/TCP | 0 | edge-below-n1 | 194 | 52 | 0 | 144 | 256 | 0 | 256 |
+| NVMe/TCP | 2 | edge-at-n1 | 130 | 52 | 0 | 144 | 256 | **256** | 0 |
+| NVMe/TCP | 2 | edge-at-step | 130 | 618 | 0 | 144 | 70683 | **70683** | 0 |
+| NVMe/TCP | 2 | edge-below-n1 | 194 | 52 | 0 | 144 | 256 | **256** | 0 |
+
+- The seq cells are two cells of phase A run by hand on the phase B
+  region. The edge cells are phase B cells through the plan's
+  `budget-B-sgl` stage.
+- **With the payload placed, the budget holds while loans are written
+  direct**: no drops, no allocation failures, and the same 144-page peak as
+  when the loans were going through the page cache. This is the first run
+  of the configuration the second kind of storage is meant to use.
+- **The seq-off cell that dropped 754 packets** is a copy cell with the
+  receive buffer not held, the third row of the table in "Two kinds of
+  storage". The warm-up cell, the same configuration, dropped packets in
+  two of four runs (291 and 247) whatever the placement. Both ran on a
+  region much smaller than phase A is meant to use. It is not caused by the
+  placement, but it has not been looked at further.
+- Throughput in the 52 MB/s cells is set by the test storage's delay, so
+  these runs say nothing about what the direct write is worth.
 
 ### State of the branch
 
@@ -504,7 +582,8 @@ understood and not in the order it was discovered:
   "credit" is kept for what one WRITE draws against it. Each of his commits
   that this touched says so in a `[snitzer: ...]` note. His five code
   commits, Mike's three fixes, then the KUnit exposure and tests.
-- **Mike's later work follows as one run**: 10 code commits, then the
+- **Mike's later work follows as one run**: 11 code commits (the last a
+  test aid in veth, added 2026-10-05), then the
   KUnit commits (6 that expose internals, 8 tests), then the
   documentation. Two fixes to this work's own commits were folded into the
   commits they fixed (a transport that copies must stop waiting; a budget

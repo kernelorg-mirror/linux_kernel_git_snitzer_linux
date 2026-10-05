@@ -11,14 +11,34 @@
 # exportfs -ua, no brd, its own nvmet port and names:
 #
 #   null_blk "zcbudget" (memory backed) -> dm-delay "zcbudget" (storage
-#   latency, reloadable) -> nvmet subsystem "zc-budget" on a free loop port ->
+#   latency, reloadable) -> nvmet subsystem "zc-budget" on a free port ->
 #   /dev/nvmeXnY -> XFS /export/zcbudget, exported with exportfs -o to
-#   10.77.0.0/24.  Client: network namespace rxcli over veth rxsrv<->rxcli0
+#   10.77.0.0/24.
+#
+#   STORAGE picks the NVMe transport, and with it which kind of storage the
+#   export stands for:
+#     STORAGE=prp (default)  nvme-loop.  Like PRP-only NVMe it needs whole
+#                            pages (virt_boundary_mask 4095), so a loaned
+#                            WRITE cannot go direct.
+#     STORAGE=sgl            NVMe/TCP to 127.0.0.1.  Like NVMe with SGLs it
+#                            takes arbitrary pieces (virt_boundary_mask 0),
+#                            so a loaned WRITE goes direct.
+#   Results go to OUTDIR/stress-<PHASE> either way: give each STORAGE its
+#   own OUTDIR.  rig.txt there records which it was.
+#
+#   RX_IP_ALIGN=<0-3> is veth's rx_ip_align: extra bytes of headroom for the
+#   frames veth copies into page-pool pages.  At 0 the TCP payload is 2 bytes
+#   off a 4-byte boundary, as on a NIC that posts its buffers the usual way,
+#   and NVMe refuses loaned WRITEs as direct I/O for that alone.  2 puts it
+#   on the boundary.  Default: 2 with STORAGE=sgl, else 0.  veth is reloaded
+#   to change it, so no other veth device may exist; a veth without the
+#   parameter runs at 0 and says so.  Client: network namespace rxcli over veth rxsrv<->rxcli0
 #   with XDP_PASS on rxsrv, so received payload lands in page-pool pages
 #   (patch 16's region binds those pools).
 #
 # Needs: veth, dm-delay and null_blk (modules), fio, clang (BPF target),
-# nfs-server running, LOCALIO off for the run (set and restored here).
+# nfs-server running, LOCALIO off for the run (set and restored here);
+# nvmet-tcp and nvme-tcp for STORAGE=sgl.
 #
 # The fixed region is created once per boot, at the first matching pool, and
 # never freed: one boot tests one region size.  Phase A (default) uses a
@@ -51,10 +71,17 @@
 #   PHASE=TLP: the spurious tail-loss-probe A/B on the cells with a budget --
 #   baseline, server per-route quickack, client TLP off, and rcvbuf/clamp
 #   without budget admission (same rig, region and warm-up as phase A).
-# Results: OUTDIR/stress-A/cells.tsv, per-cell dirs, campaign.log.
+# Results: OUTDIR/stress-A/cells.tsv, per-cell dirs, campaign.log.  The
+# last three columns of cells.tsv say how nfsd issued the cell's WRITEs,
+# in segments: wr_direct (O_DIRECT), wr_dontcache, wr_buffered.
 set -Eeuo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 PHASE=${PHASE:-A}
+STORAGE=${STORAGE:-prp}
+case $STORAGE in prp|sgl) ;; *) echo "STORAGE=$STORAGE: prp or sgl" >&2; exit 2 ;; esac
+[ $STORAGE = sgl ] && RX_IP_ALIGN=${RX_IP_ALIGN:-2}
+RX_IP_ALIGN=${RX_IP_ALIGN:-0}
+case $RX_IP_ALIGN in 0|1|2|3) ;; *) echo "RX_IP_ALIGN=$RX_IP_ALIGN: 0 to 3" >&2; exit 2 ;; esac
 
 # --- page geometry ---------------------------------------------------------
 # Every page budget here was first sized on 4 KiB pages.  They are derived
@@ -125,6 +152,7 @@ RG=/sys/kernel/debug/page_pool_rx_region
 CFG=/sys/kernel/config
 T=/sys/kernel/tracing
 NQN=zc-budget
+NVME_TCP_PORT=${NVME_TCP_PORT:-4477}
 NB=zcbudget
 DM=zcbudget
 EXPORT=/export/zcbudget
@@ -328,6 +356,7 @@ cleanup() {
 	ip netns exec rxcl2 umount -f /mnt/rxr 2>/dev/null
 	ip netns exec rxcl3 umount -f /mnt/rxr 2>/dev/null
 	rig_down
+	[ -n "${SAVE_VETH_ALIGN:-}" ] && { modprobe -r veth 2>/dev/null; veth_load "$SAVE_VETH_ALIGN"; }
 	sysctl -qw net.ipv4.tcp_rmem="$SAVE_RMEM"
 	sysctl -qw net.core.skb_defer_max="$SAVE_DEFER"
 	echo "$SAVE_LIO" > /sys/module/nfs/parameters/localio_enabled
@@ -339,6 +368,7 @@ cleanup() {
 		eval "echo \$SAVE_$p > $SP/svc_tcp_rx_$p"
 	done
 	echo 0 > $T/events/sunrpc/svcsock_tcp_rx_lifetime/enable
+	wr_disarm
 	echo "$SAVE_TON" > $T/tracing_on
 	# The region object outlives this run (never freed); stop new pools binding it.
 	echo -n "$SAVE_REGDEV" > $PP/rx_region_dev
@@ -347,9 +377,56 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# --- how nfsd issued the WRITEs ---------------------------------------------
+# One histogram trigger per write tracepoint counts segments without filling
+# the trace buffer; a cell reports the difference across its run.
+WREV="nfsd_write_direct nfsd_write_dontcache nfsd_write_vector"
+wr_arm() {
+	local e
+	for e in $WREV; do
+		grep -q '^hist:' $T/events/nfsd/$e/trigger 2>/dev/null ||
+			echo 'hist:keys=common_type' > $T/events/nfsd/$e/trigger 2>/dev/null || true
+	done
+}
+wr_disarm() {
+	local e
+	for e in $WREV; do echo '!hist:keys=common_type' > $T/events/nfsd/$e/trigger 2>/dev/null || true; done
+}
+wr_hits() {	# -> "direct dontcache buffered"
+	local e o=
+	for e in $WREV; do
+		o="$o $(awk '/^ *Hits:/ {print $2; f = 1} END {if (!f) print 0}' $T/events/nfsd/$e/hist 2>/dev/null || echo 0)"
+	done
+	echo $o
+}
+
+# --- veth's receive placement ------------------------------------------------
+# rx_ip_align is a load-time parameter: reload veth to change it.
+VETH_ALIGN=/sys/module/veth/parameters/rx_ip_align
+veth_load() {	# veth_load <align>
+	modprobe -q veth rx_ip_align="$1" 2>/dev/null && return 0
+	[ -f "$HERE/../drivers/net/veth.ko" ] && insmod "$HERE/../drivers/net/veth.ko" rx_ip_align="$1"
+}
+veth_align() {	# veth_align <align>: make veth run with it, or say why not
+	local want=$1 cur
+	[ -d /sys/module/veth ] || veth_load "$want" 2>/dev/null || modprobe -q veth || true
+	if [ ! -r $VETH_ALIGN ]; then
+		[ "$want" = 0 ] || echo "!! this veth has no rx_ip_align: running at 0, not $want" >&2
+		RX_IP_ALIGN=0; return 0
+	fi
+	cur=$(cat $VETH_ALIGN)
+	[ "$cur" = "$want" ] && return 0
+	if ip -o link show type veth | grep -q .; then
+		echo "veth rx_ip_align is $cur, want $want, and veth devices exist: cannot reload veth" >&2; exit 2
+	fi
+	SAVE_VETH_ALIGN=${SAVE_VETH_ALIGN:-$cur}
+	modprobe -r veth && veth_load "$want" || { echo "cannot reload veth with rx_ip_align=$want" >&2; exit 2; }
+}
+
 # --- rig ---------------------------------------------------------------
 rig_up() {
 	rig_down
+	veth_align "$RX_IP_ALIGN"
 	# Not in the installed kernel's modules: load the tree's build.
 	local m ko
 	for m in veth dm_delay null_blk; do
@@ -365,7 +442,8 @@ rig_up() {
 	command -v fio >/dev/null || { echo "fio missing" >&2; exit 2; }
 	systemctl is-active -q nfs-server || systemctl start nfs-server
 	mountpoint -q $CFG || mount -t configfs none $CFG
-	modprobe nvmet; modprobe nvme-loop
+	modprobe nvmet
+	if [ $STORAGE = sgl ]; then modprobe nvmet-tcp; modprobe nvme-tcp; else modprobe nvme-loop; fi
 	mkdir "$CFG/nullb/$NB"
 	echo 1 > "$CFG/nullb/$NB/memory_backed"
 	echo 4096 > "$CFG/nullb/$NB/blocksize"
@@ -382,11 +460,20 @@ rig_up() {
 	echo 1 > "$CFG/nvmet/subsystems/$NQN/namespaces/1/enable"
 	for PORT in $(seq 7 64); do [ -e "$CFG/nvmet/ports/$PORT" ] || break; done
 	mkdir "$CFG/nvmet/ports/$PORT"
-	echo loop > "$CFG/nvmet/ports/$PORT/addr_trtype"
-	# nvme-loop takes the first loop port when no address is given; name ours.
-	echo "$NB" > "$CFG/nvmet/ports/$PORT/addr_traddr"
-	ln -s "$CFG/nvmet/subsystems/$NQN" "$CFG/nvmet/ports/$PORT/subsystems/$NQN"
-	nvme connect -t loop -n "$NQN" --traddr "$NB" >/dev/null
+	if [ $STORAGE = sgl ]; then
+		echo tcp > "$CFG/nvmet/ports/$PORT/addr_trtype"
+		echo ipv4 > "$CFG/nvmet/ports/$PORT/addr_adrfam"
+		echo 127.0.0.1 > "$CFG/nvmet/ports/$PORT/addr_traddr"
+		echo "$NVME_TCP_PORT" > "$CFG/nvmet/ports/$PORT/addr_trsvcid"
+		ln -s "$CFG/nvmet/subsystems/$NQN" "$CFG/nvmet/ports/$PORT/subsystems/$NQN"
+		nvme connect -t tcp -a 127.0.0.1 -s "$NVME_TCP_PORT" -n "$NQN" >/dev/null
+	else
+		echo loop > "$CFG/nvmet/ports/$PORT/addr_trtype"
+		# nvme-loop takes the first loop port when no address is given; name ours.
+		echo "$NB" > "$CFG/nvmet/ports/$PORT/addr_traddr"
+		ln -s "$CFG/nvmet/subsystems/$NQN" "$CFG/nvmet/ports/$PORT/subsystems/$NQN"
+		nvme connect -t loop -n "$NQN" --traddr "$NB" >/dev/null
+	fi
 	local dev="" c
 	for _ in $(seq 50); do
 		for c in /sys/class/nvme/nvme*; do
@@ -394,13 +481,18 @@ rig_up() {
 		done
 		[ -b "$dev" ] && break; sleep 0.1
 	done
-	[ -b "$dev" ] || { echo "no nvme-loop namespace for $NQN" >&2; exit 1; }
+	[ -b "$dev" ] || { echo "no NVMe namespace for $NQN (STORAGE=$STORAGE)" >&2; exit 1; }
+	# The rig is only what it claims to be if the device says so.
+	local vbm want=4095; vbm=$(cat /sys/block/$(basename $dev)/queue/virt_boundary_mask)
+	[ $STORAGE = sgl ] && want=0
+	[ "$vbm" = $want ] || { echo "STORAGE=$STORAGE: $dev has virt_boundary_mask $vbm, expected $want" >&2; exit 1; }
 	mkfs.xfs -q -f "$dev"
 	mkdir -p "$EXPORT"
 	mount "$dev" "$EXPORT"
 	chmod 0777 "$EXPORT"
 	exportfs -o rw,sync,no_root_squash,insecure,no_subtree_check,fsid=$FSID "10.77.0.0/24:$EXPORT"
-	echo "rig: nullb=$nbdev dm=/dev/mapper/$DM nvmet port=$PORT dev=$dev export=$EXPORT"
+	echo "rig: storage=$STORAGE virt_boundary_mask=$vbm rx_ip_align=$RX_IP_ALIGN nullb=$nbdev dm=/dev/mapper/$DM nvmet port=$PORT dev=$dev export=$EXPORT"
+	echo "storage=$STORAGE virt_boundary_mask=$vbm rx_ip_align=$RX_IP_ALIGN dev=$dev page_size=$PS kernel=$(uname -r)" > "$E/rig.txt"
 }
 setdelay() {
 	local ms=$1 sz; sz=$(blockdev --getsz /dev/$NB)
@@ -502,7 +594,7 @@ J
 	esac
 }
 
-printf 'cell prof vers nconn mtu delay_ms budget reserve factor rcvbuf MBps fio_rc drops alloc_fail escaped used_pages collapsed rcvq_drop zw_drop backlog_drop retrans loss_probes rto dsack admitted denied paused overrun\n' > "$E/cells.tsv"
+printf 'cell prof vers nconn mtu delay_ms budget reserve factor rcvbuf MBps fio_rc drops alloc_fail escaped used_pages collapsed rcvq_drop zw_drop backlog_drop retrans loss_probes rto dsack admitted denied paused overrun wr_direct wr_dontcache wr_buffered\n' > "$E/cells.tsv"
 cell() {
 	local name=$1 O=$E/$1
 	rm -rf "$O"; mkdir -p "$O"
@@ -517,7 +609,8 @@ cell() {
 	[ -w $RG ] && echo reset > $RG
 	echo "${MODE:-2}" > /sys/kernel/debug/nfsd/io_cache_write
 	jobfile "$O" "$PROF" "$name"
-	local s0 d0 f0 x0 rc
+	local s0 d0 f0 x0 rc w0 w1
+	wr_arm; w0=$(wr_hits)
 	s0=$(cat $SP/svc_tcp_rx_budget_stats); d0=$(drops); f0=$(reg alloc_fail); x0=$(reg escaped)
 	ctr "$O/srv0" "$SRV"; cctr "$O/cli0" "$CLI"
 	local stepper=
@@ -545,7 +638,8 @@ cell() {
 	local s1 mbps c; s1=$(cat $SP/svc_tcp_rx_budget_stats)
 	mbps=$(python3 -c "import json;t=open('$O/fio.json').read();j=json.loads(t[t.index('{'):])['jobs'];print(round(sum(x['write']['bw_bytes'] for x in j)/1e6))" 2>/dev/null || echo 0)
 	for c in admitted denied paused overrun; do eval "$c=\$(( \$(kv \"\$s1\" $c) - \$(kv \"\$s0\" $c) ))"; done
-	echo "$name $PROF $VERS $NCONN $MTU $DELAY $BUDGET $RESERVE $FACTOR $RCVBUF $mbps $rc $(( $(drops) - d0 )) $(( $(reg alloc_fail) - f0 )) $(( $(reg escaped) - x0 )) $(( SIZE - $(reg min_free) )) $(delta $O/srv0 $O/srv1 TcpExtTCPRcvCollapsed) $(delta $O/srv0 $O/srv1 TcpExtTCPRcvQDrop) $(delta $O/srv0 $O/srv1 TcpExtTCPZeroWindowDrop) $(delta $O/srv0 $O/srv1 TcpExtTCPBacklogDrop) $(delta $O/cli0 $O/cli1 TcpRetransSegs) $(delta $O/cli0 $O/cli1 TcpExtTCPLossProbes) $(delta $O/cli0 $O/cli1 TcpExtTCPTimeouts) $(delta $O/cli0 $O/cli1 TcpExtTCPDSACKRecv) $admitted $denied $paused $overrun" >> "$E/cells.tsv"
+	w1=$(paste -d- <(wr_hits | tr ' ' '\n') <(echo $w0 | tr ' ' '\n') | while read x; do echo -n "$(( x )) "; done)
+	echo "$name $PROF $VERS $NCONN $MTU $DELAY $BUDGET $RESERVE $FACTOR $RCVBUF $mbps $rc $(( $(drops) - d0 )) $(( $(reg alloc_fail) - f0 )) $(( $(reg escaped) - x0 )) $(( SIZE - $(reg min_free) )) $(delta $O/srv0 $O/srv1 TcpExtTCPRcvCollapsed) $(delta $O/srv0 $O/srv1 TcpExtTCPRcvQDrop) $(delta $O/srv0 $O/srv1 TcpExtTCPZeroWindowDrop) $(delta $O/srv0 $O/srv1 TcpExtTCPBacklogDrop) $(delta $O/cli0 $O/cli1 TcpRetransSegs) $(delta $O/cli0 $O/cli1 TcpExtTCPLossProbes) $(delta $O/cli0 $O/cli1 TcpExtTCPTimeouts) $(delta $O/cli0 $O/cli1 TcpExtTCPDSACKRecv) $admitted $denied $paused $overrun $w1" >> "$E/cells.tsv"
 	tail -1 "$E/cells.tsv"
 	veth_down
 	return 0
@@ -698,8 +792,10 @@ elif [ "$PHASE" = B ]; then
 	[ -n "${PARKED:-}" ] || { echo "PHASE=B needs PARKED= (phase A's parked.txt)" >&2; exit 2; }
 	SIZE=$(( PARKED + 4 * RB128 + R9 + 64 ))
 	# The region is created at the first matching pool and never freed.
-	if [ -r $RG ]; then
-		echo "a region already exists this boot (pages $(reg pages)); phase B needs a fresh boot" >&2
+	# One that phase B itself created this boot (same size) is the one it
+	# wants: that is how the phase is repeated on the other STORAGE.
+	if [ -r $RG ] && [ "$(reg pages)" != "$SIZE" ]; then
+		echo "a region of another size exists this boot (pages $(reg pages), phase B wants $SIZE); phase B needs a fresh boot" >&2
 		exit 1
 	fi
 	echo "$PARKED" > "$EV/parked.txt"

@@ -56,6 +56,53 @@ The patch and test plan stand for an E1 host with SGL-capable NVMe. On
 tardis1 as equipped, pass B of `TESTING.md` can only show that the offsets
 become 0 mod 4.
 
+## The same misplacement, and the same fix, without the hardware (veth, 2026-10-05)
+
+The problem this sub-project fixes in `xeu` can be reproduced on any host,
+with no Xsight card, by the budget harness on its NVMe/TCP storage. So can
+the fix:
+
+```
+RX_IP_ALIGN=0 STORAGE=sgl PHASE=A CELLS=seq-on bash NFSD_TCP_WRITE_ZEROCOPY/run-budget.sh /var/tmp/out0   # the problem
+RX_IP_ALIGN=2 STORAGE=sgl PHASE=A CELLS=seq-on bash NFSD_TCP_WRITE_ZEROCOPY/run-budget.sh /var/tmp/out2   # the fix
+```
+
+- **Why it reproduces.** The harness receives over a veth pair with an XDP
+  program attached, which makes veth copy each frame into a page-pool page
+  at a fixed headroom of `XDP_PACKET_HEADROOM`, 256 bytes
+  (`drivers/net/veth.c`). 256 is 0 mod 4, as xeu's 64 is, so after the
+  14-byte Ethernet header the IP header and the TCP payload are 2 mod 4,
+  exactly as in the table below.
+- **What it shows.** NVMe/TCP storage has no virtual boundary and wants
+  memory aligned to 4 bytes (`dio_mem_align=4`), like NVMe with SGLs. Every
+  loaned WRITE is refused as a direct write for its memory alignment alone
+  and is written through the page cache.
+- **The fix, in veth.** "veth: add rx_ip_align, extra headroom for frames
+  copied for XDP" gives veth the same load-time parameter as the `xeu`
+  patch here, for testing only: `rx_ip_align=2` adds 2 bytes of headroom.
+  `RX_IP_ALIGN` in `run-budget.sh` sets it (reloading veth), and defaults
+  to 2 with `STORAGE=sgl`. It is a private parameter in one more driver,
+  not a general answer; there is none in the network stack today.
+- **Measured** on the 16 KiB host (aarch64, `7.1.13-19.hs.451`, MTU 9000,
+  1 MiB WRITEs, classified by `nfsd_write_dio_split`):
+
+  | `rx_ip_align` | loaned WRITEs | first fragment | written direct |
+  |---|---|---|---|
+  | 0 | 512 | 2 mod 4 (offsets 822, 7834, 8490, 8522, 8554, ...) | 0 (`mem_misaligned`) |
+  | 2 | 512 | 0 mod 4 | 512 |
+
+  The same WRITEs copied into nfsd's own pages (budget 0) went direct
+  either way.
+- **How to read it.** `cells.tsv` ends with `wr_direct`, `wr_dontcache` and
+  `wr_buffered`, the number of segments nfsd issued each way. A loaned cell
+  with `wr_direct` 0 on `STORAGE=sgl` is this problem. For the offsets,
+  enable the `nfsd:nfsd_write_dio_split` tracepoint and read `mem_offset`
+  and `disposition`.
+- **What differs from the card.** veth copies a whole TCP send, up to
+  64 KiB, into one head page and then whole pages, where the card delivers
+  one frame per buffer. So this does not exercise the continuation-buffer
+  case below, nor one fragment per frame.
+
 ## Why a 2-byte change is enough (for frames that fit one buffer)
 
 The driver posts every RX buffer identically, at
