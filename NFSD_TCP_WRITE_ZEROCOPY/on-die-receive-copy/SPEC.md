@@ -436,6 +436,24 @@ record (`io_cache_write=1` measured 17-38% slower for writes on perflab,
 buffered writers per file (`XFS_IOLOCK_EXCL`, `fs/xfs/xfs_file.c:1037-1049`)
 where aligned DIO takes it shared (`:743-763`).
 
+**Correction (2026-10-04): aligned DIO is shared only when it does not start
+beyond EOF.** A direct write whose offset is past the current end of file
+goes through `xfs_file_write_checks()` -> `xfs_file_write_zero_eof()`,
+which upgrades to `XFS_IOLOCK_EXCL` and calls `inode_dio_wait()` before it
+proceeds. nfsd threads issue the WRITEs of a growing file out of order, so
+most of them start beyond EOF and queue behind every direct write in
+flight. Measured on the 16 KiB host (budget rig: null_blk, dm-delay,
+nvmet-loop, XFS; `seq-off`, one connection, 1 MiB sequential WRITEs of a
+new file, copied records written direct): all eight nfsd threads writing
+65% of the time, a mean WRITE of 120 ms where one such write alone takes
+10 ms, 55 MB/s. The same local test from a single in-order submitter runs
+1213 MB/s. So for sequential file creation D1's destination writes are
+serialised by XFS as well as holding their threads (2.4); a file that is
+being overwritten, or preallocated to its size, is not affected. Only
+measured on that rig; see `../transplant/README.md`, "Why one copy cell is
+slow". Phase 0b should record whether tardis1's workload creates or
+overwrites.
+
 ### 3.5 David's "stable writes hold the buffer, unstable don't" — checked
 
 `io_cache_write` values: `fs/nfsd/nfsd.h:143-150`.
@@ -936,6 +954,27 @@ Nothing here starts before phase 0.
   landing set counted in written bytes with truesize kept separate; probe
   keyed on TCP sequence; deferred skb free and dynamic nfsd threads
   described.
+- **2026-10-04** — What the 16 KiB test host run means for this spec
+  (`../transplant/README.md`, "16 KiB host"). That host's budget harness
+  writes to nvme-loop, which like tardis1's NVMe needs its data in whole
+  pages, so it is this spec's case.
+  - **A fixed receive region with no loan budget now copies.** Until today
+    such a region loaned its pages without limit and could hang the server.
+    Now each WRITE is copied out of the region into the nfsd thread's own
+    buffer and that buffer is written direct, which is the data path this
+    spec proposes (4.1, D1). Nothing has to be configured for it beyond
+    the region itself.
+  - **Fixing each connection's TCP receive buffer at 128 KiB keeps the
+    region nearly empty** (`svc_tcp_rx_rcvbuf`; mechanism M2 in 4.2). With
+    16 connections at most 112-128 region pages were in use, about 2 MiB,
+    with no packets dropped, and a region of 306 pages was enough. With
+    the receive buffers left to grow, data nfsd had not read yet filled
+    the region and the card dropped packets. Every WRITE in those cells
+    was written direct.
+  - **That host cannot say whether so small a region stays in the CPU's
+    cache.** It is a VM with virtual network devices. R1 and R2 stand.
+  - **Section 3.4 is corrected:** a direct write that starts beyond the end
+    of the file does not share the XFS I/O lock.
 
 ## 10. Adversarial review (2026-09-27)
 
