@@ -58,7 +58,19 @@ copy on the NFS write path — has its own directory:
   bisect-clean (base + all 30 commits build with zero warnings/errors under
   `CONFIG_WERROR=y`, on both 4K and 64K page sizes, with the KUnit tests built).
 
-**Moving to another test host** (the 16K host, tardis1 at 64K): start with
+**Words.** *Budget* is the configured limit on how much of the fixed
+receive region loaned WRITEs may hold (`svc_tcp_rx_budget_pages`,
+`net.sunrpc.region_budget_*`); a budget of 0 means copy. *Credit* is only
+what one WRITE draws against the budget. Results are described by what the
+storage can do: it *needs whole pages* (NVMe without SGLs, tardis1,
+nvme-loop) or *takes arbitrary pieces* (NVMe with SGLs, NVMe/TCP).
+
+**Results across page sizes** are in
+[`NFSD_TCP_WRITE_ZEROCOPY/transplant/RESULTS.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/RESULTS.md),
+one record per host. 16 KiB is complete (2026-10-05); the 4 KiB ARM host
+is next, then tardis1.
+
+**Moving to another test host** (the 4K host, the 16K host, tardis1 at 64K): start with
 [`NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md)
 -- bootstrap, config merge, build/install, preflight, the resumable test plan
 (`run-testplan.sh`), what changes with page size, and the working rules for
