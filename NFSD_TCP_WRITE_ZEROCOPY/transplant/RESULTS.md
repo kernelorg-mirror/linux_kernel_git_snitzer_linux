@@ -13,8 +13,9 @@ comparable with what is below, and a 4 KiB run replaces them.
 
 A status page for readers outside the tree, with the terms, the two kinds
 of storage and the 16 KiB results, is "NFSD Receive Region Budget":
-https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g (Mike's; private until he
-shares it). Update it when a host's record lands.
+https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g (Mike's, shared by link).
+The three earlier pages of the series point to it. Update it when a host's
+record lands.
 
 ## How a host adds its column
 
