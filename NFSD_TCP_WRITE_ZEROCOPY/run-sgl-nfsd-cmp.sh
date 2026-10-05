@@ -11,7 +11,9 @@ mountpoint -q $E && { exportfs -u "*:$E"; umount $E; }
 mkfs.xfs -f -q $D && mount $D $E || exit 1
 i=0; for r in brd tcp loop; do i=$((i+1)); [ $r = $R ] && exportfs -o rw,no_root_squash,insecure,fsid=88$i "*:$E"; done
 echo 2 > /sys/kernel/debug/nfsd/io_cache_write
+modprobe nfs   # fresh boot: nfs.ko (and its localio param) may not exist yet
 echo N > /sys/module/nfs/parameters/localio_enabled
+mkdir -p $M
 echo Y > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages
 echo 0 > $T/tracing_on; echo > $T/trace
 for e in nfsd/nfsd_write_dio_split nfsd/nfsd_write_direct nfsd/nfsd_write_vector sunrpc/svcsock_tcp_rx_lifetime nfsd/nfsd_file_get_dio_attrs; do echo 1 > $T/events/$e/enable; done

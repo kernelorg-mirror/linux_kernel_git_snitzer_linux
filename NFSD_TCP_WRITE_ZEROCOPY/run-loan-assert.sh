@@ -14,8 +14,9 @@
 # still holds).  The suite therefore requires at least one connection to
 # complete fully direct, and reports the split for every connection.
 set -u
-CONNS=${CONNS:-10}
 PAGE_SIZE=$(getconf PAGESIZE)
+# A fully page-aligned anchor is rarer on larger pages (16 KiB: 20 of 50).
+CONNS=${CONNS:-$(( PAGE_SIZE > 4096 ? 50 : 10 ))}
 TRACE=/sys/kernel/tracing
 CFG=/sys/kernel/config/nvmet
 SRC=/dev/shm/loan-src-16m
@@ -24,7 +25,7 @@ fail() { echo "FAIL: $*"; FAILS=$((FAILS+1)); }
 
 # --- rig up (idempotent, mirrors run-rig-cmp.sh) ---
 modprobe brd rd_nr=1 rd_size=4194304
-modprobe nvmet nvme_loop
+modprobe -a nvmet nvme_loop
 mkdir -p $CFG/subsystems/zc/namespaces/1 $CFG/ports/1
 if [ "$(cat $CFG/subsystems/zc/namespaces/1/enable)" != 1 ]; then
     echo 1 > $CFG/subsystems/zc/attr_allow_any_host
@@ -109,8 +110,12 @@ for i in $(seq 1 $CONNS); do
                 v["bvecs"] + 0 > maxbv) {
                 bad++
             } else if (v["reason"] == "locked-head") {
-                # merged whole pages only, and negligible next to the body
-                if (v["copied"] + 0 > 0 && v["copied"] + 0 < v["body"] / 16)
+                # merged whole pages only, and negligible next to the body:
+                # under body/16, or under four pages where one page is
+                # already body/16 (64 KiB pages and a 1 MiB body)
+                lim = v["body"] / 16
+                if (lim < 4 * ps) lim = 4 * ps
+                if (v["copied"] + 0 > 0 && v["copied"] + 0 < lim)
                     lh++
                 else
                     bad++
