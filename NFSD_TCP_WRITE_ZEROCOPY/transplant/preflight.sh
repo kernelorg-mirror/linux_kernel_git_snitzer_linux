@@ -90,6 +90,8 @@ else
 	ok "fresh boot: no receive region yet (budget phases B and D can run)"
 fi
 [ "$(cat /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages 2>/dev/null)" = Y ] && ok "page loans on by default" || bad "svc_tcp_rx_loan_pages is not Y"
+[ -e /sys/kernel/tracing/events/nfsd/nfsd_write_direct/hist ] && ok "histogram triggers (run-budget.sh counts how WRITEs were issued)" ||
+	bad "no histogram triggers (CONFIG_HIST_TRIGGERS): cells.tsv's wr_direct, wr_dontcache and wr_buffered would all read 0"
 if modinfo -p veth 2>/dev/null | grep -q '^rx_ip_align:'; then
 	ok "veth has rx_ip_align (the NVMe/TCP budget stages can place the payload)"
 else

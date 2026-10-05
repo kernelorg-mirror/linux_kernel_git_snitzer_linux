@@ -53,6 +53,8 @@ CONFIG_TMPFS=y
 # --- observation: debugfs knobs, tracepoints, kprobes, bpftrace, drgn ---
 CONFIG_DEBUG_FS=y
 CONFIG_FTRACE=y
+# how nfsd issued each cell's WRITEs is counted with histogram triggers (run-budget.sh)
+CONFIG_HIST_TRIGGERS=y
 CONFIG_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 CONFIG_BPF_EVENTS=y

@@ -1,21 +1,74 @@
 # Transplanting the page-loan test harness to another host
 
 Everything needed to take branch `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
-to a new aarch64 test host, build and boot its kernel there, and run the
-whole test plan, with no file from the original 4 KiB development VM.
+to an aarch64 test host, build or install its kernel there, run the whole
+test plan, and bring back results that can be set beside another page
+size's.
 
-Two transplants use it:
+## Where things stand (2026-10-05)
 
-1. **The 16 KiB host (dry run).** A host whose CPU implements the 16 KiB
-   granule. The kernel is built **on this host** from the host's own
-   known-good `.config`, plus the options this work needs.
-2. **tardis1 (64 KiB, Xsight E1).** Nothing is compiled on tardis1. Its
-   kernel is the **packaged** full 64 KiB build from this branch's
-   `redhat/configs`, installed from RPMs. Only the harness, a plain clone of
-   the branch, runs there.
+| host | page size | kernel | state |
+|---|---|---|---|
+| the 16 KiB host | 16 KiB | built on the host | **complete**: the whole plan, both kinds of storage. `results/16KiB.tsv`; the account is "16 KiB host" below |
+| the 4 KiB ARM host | 4 KiB | built on the host | **next.** Not run with this harness. The 4 KiB results in this tree are of an older one and are to be replaced |
+| tardis1 (Xsight E1) | 64 KiB | packaged RPMs | not run with this harness |
 
-The 16 KiB run proves the procedure and the harness at a page size larger
-than 4 KiB. tardis1 then repeats it with an install in place of the build.
+`RESULTS.md` is the side-by-side comparison, generated from one record per
+host. A host's work is done when its record is committed there.
+
+**What a run on the next host has to produce:**
+
+1. `preflight.sh` says PREFLIGHT PASS.
+2. `run-testplan.sh` completes: boot 1, reboot, boot 2. Every stage PASS or
+   DONE; every cell read, not only the stage status.
+3. `results-table.py extract <results dir> > results/<page>.tsv`, committed,
+   and `RESULTS.md` regenerated (`RESULTS.md` says how).
+4. An account of anything that differed, as a section of this file like
+   "16 KiB host", kept to the last full run and the problems that explain a
+   change in the tree.
+5. `check-grouping.sh` says `grouping OK`.
+
+**What is different since the last 4 KiB run** (2026-10-04), so that
+nothing there is taken for granted:
+
+- **Names.** The limit is the *budget* everywhere: `svc_tcp_rx_budget_pages`
+  and friends, `net.sunrpc.region_budget_*`, `run-budget.sh`,
+  `budget-*` stages. *Credit* is only what one WRITE draws against it
+  (`svc_tcp_rx_credit_factor` keeps its name).
+- **A budget of 0 copies, always**, even when no budget is set anywhere.
+  The old "region, no budget" cells that loaned without limit are gone.
+- **A misaligned write is cut at page boundaries**, and the knob that
+  decides whether to cut is in bytes (`direct_misaligned_min_bytes`). No
+  effect expected at 4 KiB; that is to be confirmed, not assumed.
+- **Two test devices are fixed in this kernel:** null_blk lost data with a
+  block size below the page size (not reachable at 4 KiB with 4096-byte
+  blocks), and dm-delay rounded short delays up to a timer tick. **The
+  second changes every throughput figure**: at 100 Hz the harness's 1 ms
+  storage delay was 10 ms.
+- **The plan runs every budget phase on two kinds of storage**, nvme-loop
+  and NVMe/TCP, and veth has a test-only `rx_ip_align` so that loans on
+  the second are written direct.
+- **Every loan cell has a twin that copies** (`-copy`), and two pairs
+  write files that already have their size (`-sized-`).
+- **`cells.tsv` says how each cell's WRITEs were issued** (`wr_direct`,
+  `wr_dontcache`, `wr_buffered`), which needs `CONFIG_HIST_TRIGGERS`.
+- **The plan fails a budget stage** on any fio verify failure or any cell
+  killed by its timeout, and the analyze stages fail when a phase is
+  missing.
+
+**Things to look at on 4 KiB in particular:**
+
+- **Does `rx_ip_align=2` give aligned loans?** At 4 KiB and MTU 9000 veth
+  lays a frame out as a head and two page fragments, not one page. If
+  `wr_direct` is 0 in the loan cells of the NVMe/TCP stages, that is why;
+  record it. MTU 1500 should be aligned either way.
+- **`mtu1500-on` may really loan** at 4 KiB (the loan table is larger
+  relative to the fragment count), where at 16 KiB it is always copied.
+- **The cell that hung at 16 KiB before the budget-0 fix only slowed down
+  at 4 KiB.** Nobody knows why. It cannot happen now, but if anything
+  stalls, look there first.
+- **Timer tick.** Check `CONFIG_HZ`. The dm-delay fix makes the storage
+  delay honest either way, but TCP's own timers differ with it.
 
 ## What is in this directory
 
@@ -30,13 +83,17 @@ than 4 KiB. tardis1 then repeats it with an install in place of the build.
 | `run-testplan.sh` | the whole test plan, stage by stage, resumable across its reboot; results in `/var/tmp/zc-testplan-<release>/` |
 | `zc-rig-down.sh` | teardown for the zc rig the zc runtime scripts leave up |
 | `check-grouping.sh [BASE]` | enforces the series' history layout (code, KUnit, docs; no mixed commits; `Fixes:` tags on the branch); **required after committing on a test host** |
+| `results-table.py extract DIR` / `compare FILES` | reduces a finished run to one record (`results/<page>.tsv`) and renders several side by side (`RESULTS.md`) |
+| `RESULTS.md`, `results/` | the comparison across page sizes, and each host's record |
 
-## The 16 KiB host
+## A host that builds its own kernel (4 KiB, 16 KiB)
+
+The 16 KiB host was done this way, and the 4 KiB ARM host is the same.
 
 Prerequisites, from Mike:
 - a clone of this branch at `/root/kernel/linux`;
 - kernel-rpmtree at `/root/kernel/kernel-rpmtree`;
-- the host's known-good 16 KiB `.config`;
+- the host's known-good `.config` for its page size;
 - root.
 
 ```sh
@@ -60,7 +117,25 @@ NFSD_TCP_WRITE_ZEROCOPY/transplant/preflight.sh      # must say PREFLIGHT PASS
 NFSD_TCP_WRITE_ZEROCOPY/transplant/run-testplan.sh   # boot 1; stops asking for a reboot
 reboot
 NFSD_TCP_WRITE_ZEROCOPY/transplant/run-testplan.sh   # boot 2: budget-B, analyze, summary
+
+cd NFSD_TCP_WRITE_ZEROCOPY/transplant
+./results-table.py extract /var/tmp/zc-testplan-$(uname -r) > results/4KiB.tsv   # this host's record
 ```
+
+Things the 16 KiB build taught, which apply to any host:
+
+- **A known-good config with no debug information fails the config
+  check** (BTF is required). Turn it on in a copy and pass that.
+- **`localmodconfig` to shorten the build** drops modules the harness
+  needs and the config check does not list. "How the kernel was built",
+  under "16 KiB host", says which and how they were restored.
+- **To rebuild one module after a change, run the whole incremental
+  build** (`make -j`, then copy the `.ko`), not `make path/to/module.ko`.
+  The single-module form fails at modpost for a module that uses another
+  module's symbols and leaves the old `.ko` in place, and it is easy to
+  miss the error.
+- **Allow about 7 minutes per build and an hour for the plan** (50
+  minutes on boot 1, 6 on boot 2) on a 4-CPU VM.
 
 The clone's branch tracks hs-gitlab's copy, which is what Mike pushed and
 the base `check-grouping.sh` uses. `-b` only saves a checkout: a plain
@@ -91,6 +166,13 @@ and `kernel-7.1.13-aarch64.config` (2026-10-03). The four KUnit suites
   `kmod-64k-xsight`), with the `rx_ip_align` patch if that experiment is
   wanted (`../xeu-SGL-compat-receive-placement/`)
 
+The RPMs must be built from this branch at or after `82d7a6d21207`
+(2026-10-05), which carries the null_blk and dm-delay fixes, veth's
+`rx_ip_align`, the write-split fix and the budget names. `preflight.sh`
+tells: it checks the tunables' names, veth's parameter and the histogram
+triggers. `CONFIG_HIST_TRIGGERS` was added to `zerocopy.fragment` on
+2026-10-05; re-run `check-config.sh` on the 64 KiB flavor.
+
 Then on tardis1, with a clone of the branch (nothing in it is built):
 
 ```sh
@@ -100,19 +182,36 @@ $T/preflight.sh        # no manifest: build identity skipped; config from /boot
 $T/run-testplan.sh     # bvecrepro is SKIPped (needs a built tree); all else runs
 ```
 
+What the plan does and does not use on tardis1:
+
+- **It tests the kernel on veth, not on the Xsight card.** Every rig is
+  local: veth with XDP for receive, null_blk behind nvme-loop or NVMe/TCP
+  for storage. It answers "does the series behave at 64 KiB", and is
+  comparable with the other two hosts for that reason.
+- **The card and the real NVMe are a separate exercise**
+  (`../xeu-SGL-compat-receive-placement/`, `../on-die-receive-copy/SPEC.md`
+  phases 0a to 0c): whether a small region stays in the CPU's cache, what
+  a copy costs there, and what the held receive buffer costs at 400G.
+  None of the three test hosts' veth results speak to those.
+- **Expect at 64 KiB:** a 1 MiB WRITE is 16 pages; the default region is
+  555 pages (35 MiB); veth packs several frames to a page; the credit
+  factor is 150, computed and never measured, so read `paused` and
+  `overrun` in the cells with a budget. A misaligned write smaller than a
+  page is written buffered.
+
 ## The test plan (`run-testplan.sh`)
 
 | boot | stage | what | judged by |
 |---|---|---|---|
 | any | `preflight` | `preflight.sh` | PASS/FAIL |
-| 1 (fresh) | `budget-D` | `PHASE=D run-budget.sh`: two devices share one region and budget. It must run before anything creates the region. | tables vs D-s4 / D4 (`../slipstream/BUDGET_SCOPE.md` 8.1, 8.6) |
+| 1 (fresh) | `budget-D`, then `budget-D-sgl` | `PHASE=D run-budget.sh`: two devices share one region and budget. It must run before anything creates the region; the NVMe/TCP pass follows on the region it made. | tables vs D-s4 / D4 (`../slipstream/BUDGET_SCOPE.md` 8.1, 8.6) |
 | 1 | `kunit` | `run-kunit.sh`: all four suites | PASS/FAIL; skip rule below |
 | 1 | `bvecrepro` | `run-bvecrepro.sh`, which needs a tree built for the running kernel | PASS/FAIL, or SKIP on a packaged kernel |
 | 1 | `rig-cmp`, `loan-assert`, `killswitch`, `system-correctness` | the zc rig runtime checks | PASS/FAIL (each exits with its failure count) |
 | 1 | `zc-down`, `sgl-up`, `sgl-brd/tcp/loop`, `sgl-down` | NVMe SGL rigs (`../NVME_SGL_SUPPORT_PROJECT.md` 6) | DONE; compare dispositions |
 | 1 | `localio-tcp`, `localio-loop` | `run-sgl-localio-ab.sh` (LOCALIO boundary, short-read and stable tests) | DONE; each test prints its own exit status |
-| 1 | `budget-A`, `budget-TLP`, `budget-X`, `budget-N` | `run-budget.sh` phases on the same region, on storage that needs whole pages (nvme-loop) | tables vs the 4 KiB results (`../slipstream/README.md` section 8, `BUDGET_SCOPE.md` 8) |
-| 1 | `budget-D-sgl` (after `budget-D`), `budget-A-sgl`, `budget-TLP-sgl`, `budget-X-sgl`, `budget-N-sgl` | the same phases again with `STORAGE=sgl`: storage that takes arbitrary pieces (NVMe/TCP), veth placing the payload on a 4-byte boundary (`RX_IP_ALIGN=2`) | tables beside the nvme-loop ones; `wr_direct` |
+| 1 | `budget-A`, `budget-TLP`, `budget-X`, `budget-N` | `run-budget.sh` phases on the same region, on storage that needs whole pages (nvme-loop) | no drops or allocation failures with a budget set; `RESULTS.md` beside the other page sizes |
+| 1 | `budget-A-sgl`, `budget-TLP-sgl`, `budget-X-sgl`, `budget-N-sgl` | the same phases again with `STORAGE=sgl`: storage that takes arbitrary pieces (NVMe/TCP), veth placing the payload on a 4-byte boundary (`RX_IP_ALIGN=2`) | tables beside the nvme-loop ones; `wr_direct` |
 | 2 (fresh) | `budget-B` | the region at its configured minimum (uses A's `parked.txt`) | |
 | 2 | `budget-B-sgl` | phase B again with `STORAGE=sgl`, on the region `budget-B` created | |
 | 2 | `analyze-AB`, `analyze-AB-sgl` | David's `slipstream/tools/analyze.py` on A and B, for each storage | OVERALL PASS/FAIL |
@@ -131,7 +230,14 @@ A stage that fails is recorded and the plan continues. Re-running resumes
 where it stopped. `--list` shows status, `--only STAGE` runs one stage, and
 `--redo STAGE` forgets a result.
 
-## Validated on 4 KiB (2026-10-03)
+## The 4 KiB VM, with the harness as it was (2026-10-03 and -04)
+
+**Superseded by the next 4 KiB run.** What follows shows that the runner
+and the build procedure worked on the original development VM. Its results
+are of the harness before the changes listed under "Where things stand":
+one kind of storage, no copy twins, a storage delay ten times what was
+asked, and the old tunable names. Do not compare its figures with
+`RESULTS.md`; delete this section when the 4 KiB host's record is in.
 
 The runner and every changed script were run on the original 4 KiB VM
 (kernel `7.1.13-19.hs.451` #38, modules = tip). `run-testplan.sh --only`
@@ -709,8 +815,9 @@ understood and not in the order it was discovered:
   "SUNRPC: Do not re-queue a transport that waits for region credit").
 - **The documentation was regrouped by subject** and rewritten where its
   framing was wrong or it recorded dead ends.
-- Nothing is pushed; the history before the tidy-up is kept on
-  `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY.pre-cleanup-2026-10-04`.
+- Mike pushed the tidied branch on 2026-10-05. The history before the
+  tidy-up, and before each later reordering, is kept on local branches of
+  the 16 KiB host named `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY.pre-*`.
 - **With the KUnit suites enabled, the series does not build from "NFSD:
   count the misaligned-WRITE split gate in bytes, not pages" until "NFSD:
   give the KUnit split test the byte-counted gate"**, nine commits later at
@@ -719,11 +826,14 @@ understood and not in the order it was discovered:
   when the pair is folded into the baseline, where the code and the test
   each go into the commit that introduced them. Without the KUnit suites
   every commit builds.
-- `check-grouping.sh` says `grouping OK` when given the last commit of
-  that first KUnit section as its base.
+- `check-grouping.sh` says `grouping OK` against what Mike pushed (its
+  default base). Over the whole series it needs the last commit of the
+  first KUnit section as its base, because the series reads code, KUnit,
+  code, KUnit, docs.
 - **Not run on this history:** the per-commit bisect walk with
   `CONFIG_WERROR=y`, and sparse. The run recorded above is of the branch
-  tip, `82d7a6d21207`.
+  tip. The kernel was built at `82d7a6d21207`; everything after it on the
+  branch is harness and documents.
 
 ## What changes with the page size
 
@@ -802,7 +912,33 @@ for this tree, from Mike:
 - **Label the code state first.** When reasoning about any result, first
   name the kernel, commit and modules it came from. Run the like-for-like
   control cell before attributing an effect.
-- **Record results** in `NFSD_TCP_WRITE_ZEROCOPY/` (`TESTING.md`,
-  `slipstream/BUDGET_SCOPE.md`) as docs commits.
+- **Record results** as docs commits: the host's record in
+  `transplant/results/`, the comparison in `transplant/RESULTS.md`, and
+  the account in this file.
+- **Keep only the last full run.** When a run is complete, results of
+  earlier runs on that host come out of the documents and off the disk
+  (`/var/tmp/zc-*`). Keep an earlier observation only where it explains a
+  change to the code or the harness.
+- **Read every cell.** A stage's DONE says the script finished. Check
+  each cell's fio exit status and verify output, the kernel log, and how
+  the WRITEs were issued before calling a stage clean.
+- **Check that a build did what was asked** before measuring: the exit
+  status of `make`, and the `.ko`'s date or symbols. A filter on its
+  output can hide the error.
+- **Words.** *Budget* is the configured limit; *credit* is what one WRITE
+  draws against it. Describe results by what the storage can do ("needs
+  whole pages", "takes arbitrary pieces") and by copy or loan, and say
+  which kernel, commit and modules a result is from.
+- **Compare like with like.** A copy cell and a loan cell are comparable
+  only if they differ in the budget alone: same held receive buffer, same
+  kind of file (growing or already sized), same storage.
+- **Shell traps on these hosts:** `cp` and `mv` are aliased to ask before
+  overwriting (use `\cp`, `\mv -f`); `pkill -f PATTERN` matches the shell
+  running it.
 - **Do not build anything Mike has not asked for.** On tardis1, nothing is
   built at all.
+- **Before changing a copy, loan or storage path, read the design**:
+  `../slipstream/README.md`, `../slipstream/BUDGET_SCOPE.md`,
+  `../on-die-receive-copy/SPEC.md`, `../NVME_SGL_SUPPORT_PROJECT.md`. The
+  intended setup differs by kind of storage, and a result means nothing
+  until it is known which is under test.
