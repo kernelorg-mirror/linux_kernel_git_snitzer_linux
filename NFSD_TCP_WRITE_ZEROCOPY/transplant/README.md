@@ -261,7 +261,10 @@ SGL support. The test stand-in is NVMe over TCP.
   and on this test rig alike; see "NVMe/TCP storage in the budget harness"
   below. On the card that is fixed by loading `xeu` with `rx_ip_align=2`,
   and the rig's veth now has the same setting. Each is a private driver
-  parameter; the network stack has no general way to ask for it.
+  parameter; the network stack has no general way to ask for it. One
+  design for a setting the stack would own, with veth as its first user,
+  is written up in `../xeu-SGL-compat-receive-placement/README.md`. It is
+  not built, and Mike expects upstream would not take it.
 - The price is that the receive pages are held until the device has
   finished the write. With a region, that is what can use it up.
 - **The right configuration is: loans on, and if a region is used, a budget
