@@ -815,9 +815,9 @@ understood and not in the order it was discovered:
   "SUNRPC: Do not re-queue a transport that waits for region credit").
 - **The documentation was regrouped by subject** and rewritten where its
   framing was wrong or it recorded dead ends.
-- Mike pushed the tidied branch on 2026-10-05. The history before the
-  tidy-up, and before each later reordering, is kept on local branches of
-  the 16 KiB host named `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY.pre-*`.
+- Mike pushed the tidied branch on 2026-10-05. The backup branches made
+  on the 16 KiB host before the tidy-up and each later reordering were
+  deleted that day at his word; the history before them is not kept.
 - **With the KUnit suites enabled, the series does not build from "NFSD:
   count the misaligned-WRITE split gate in bytes, not pages" until "NFSD:
   give the KUnit split test the byte-counted gate"**, nine commits later at
