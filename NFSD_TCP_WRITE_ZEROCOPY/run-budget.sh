@@ -26,6 +26,11 @@
 #   Results go to OUTDIR/stress-<PHASE> either way: give each STORAGE its
 #   own OUTDIR.  rig.txt there records which it was.
 #
+#   PREALLOC=1 gives the seq and step profiles' file its size before the
+#   client writes it.  XFS makes a direct write that starts beyond the end
+#   of a growing file wait for every direct write in progress; this takes
+#   that out of a measurement.
+#
 #   RX_IP_ALIGN=<0-3> is veth's rx_ip_align: extra bytes of headroom for the
 #   frames veth copies into page-pool pages.  At 0 the TCP payload is 2 bytes
 #   off a 4-byte boundary, as on a NIC that posts its buffers the usual way,
@@ -619,6 +624,12 @@ cell() {
 		  ss -tmin state established '( sport = :2049 )' > "$O/ss-spike.txt" 2>&1
 		  nstat -saz TcpExtTCPRcvQDrop TcpExtTCPRcvCollapsed > "$O/nstat-spike.txt" 2>&1
 		  sleep 20; setdelay "$DELAY" ) & stepper=$!
+	fi
+	# PREALLOC=1: the seq and step profiles write a file that already has
+	# its size (unwritten extents), not one that grows as it is written.
+	if [ -n "${PREALLOC:-}" ] && [ "$PROF" != mixed ]; then
+		local psz=${MIB:-512}; [ "$PROF" = step ] && psz=1024
+		fallocate -l ${psz}M "$EXPORT/f-$name" && chmod 0666 "$EXPORT/f-$name"
 	fi
 	echo "$(date +%s.%N) $name fio start" >> "$E/delay-steps.txt"
 	set +e

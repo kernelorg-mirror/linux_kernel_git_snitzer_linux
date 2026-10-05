@@ -223,9 +223,11 @@ of kernels and a harness that have since changed.
 - **On storage that takes arbitrary pieces, every loaned WRITE was written
   direct**, once the test network device placed the payload on a 4-byte
   boundary. Without that, none were.
-- **Loans written direct were not faster than loans written through the
-  page cache** on this rig, and on one connection were much slower. That is
-  reported below and not yet explained.
+- **A direct write to a file that is growing is slow on XFS, loaned or
+  copied**: about 350 MB/s where the same write to a file that already has
+  its size runs at 1600 to 2100. That, not the loan, is why loans written
+  direct looked five times slower than loans written through the page
+  cache in the plan's new-file cells.
 - **Only 16 KiB was run.** Nothing here was run at 4 KiB or 64 KiB with
   these changes.
 
@@ -334,18 +336,52 @@ in every cell.
   direct**: 512 of 512, 2785 of 2785, 119353 of 119353, 128681 of 128681.
   This is the configuration that storage is meant to use, run under a
   budget for the first time.
-- **It was not faster.** A loan written direct was slower than the same
-  loan written through the page cache in five of these six loaned cells,
-  and five times slower on one connection writing in order (349 against
-  1808 MB/s). The direct write waits for the storage, 1 ms each, where the
-  buffered one returns once the data is in the page cache; that would
-  account for it, but it has not been checked, and each cell is one run.
-  Whether a direct loan pays on real storage is not something this rig
-  can say.
+- **It was not faster, and the cells that write a new file in order were
+  far slower** (349 against 1808 MB/s). The next part explains that: it
+  is a property of direct writes to a growing file, not of loans.
 - `mtu1500-on` is left out of the table: at MTU 1500 a 1 MiB WRITE has
   more pieces than a loan can hold, so every one of its 512 WRITEs was
   copied (traced: `reason=capacity`) and written direct on both kinds of
   storage. It tests that fallback, not a loan.
+
+**Why a direct write to a new file is slow.** `seq-on` and `seq-off`
+write a new 512 MiB file in order, sixteen 1 MiB WRITEs at a time, served
+by eight nfsd threads. XFS makes a direct write that starts beyond the
+current end of the file wait for every direct write in progress, so the
+threads queue behind one another and each pays the storage's 1 ms in turn
+(`../on-die-receive-copy/SPEC.md` section 3.4). Giving the file its size
+first (`PREALLOC=1`, which the harness gained for this) removes the wait.
+Two runs each with 2 GiB files, same kernel and region:
+
+| storage | cell | written | new file: MB/s | file already sized: MB/s |
+|---|---|---|---|---|
+| needs whole pages | `seq-off` (copy) | direct | 396, 347 | 2158, 2160 |
+| needs whole pages | `seq-on` (loan) | buffered | 1483, 1684 | 1790, 1796 |
+| takes arbitrary pieces | `seq-off` (copy) | direct | 340, 350 | 1542, 2032 |
+| takes arbitrary pieces | `seq-on` (loan) | direct | 335, 338 | 1571, 1642 |
+
+- **Every direct write to the growing file runs at 335 to 396 MB/s**,
+  whether it was loaned or copied and whichever storage it is on. Sized
+  first, the same writes run four to six times faster. Buffered writes do
+  not care.
+- **With that out of the way a loan written direct is about a tenth
+  slower than a loan written through the page cache** (1571 and 1642
+  against 1790 and 1796), and a copy written direct is as fast as either
+  or faster. The tenth is not explained. A direct write waits for the
+  storage and a buffered one does not, which may be all of it.
+- **So on this rig nothing shows a loaned direct write beating a copied
+  one.** That is not evidence about real hardware: this is a VM, the
+  storage is memory behind a fixed delay, and a copy here costs nothing
+  like what it costs when the data has left the CPU's cache.
+- **What it does say for a real server:** a workload that creates files
+  with direct writes from several threads will meet this XFS wait,
+  loaned or not. Whether tardis1's workload creates or overwrites decides
+  how much it matters there.
+- `step-on` is not helped by sizing the file (1038 and 1078 MB/s): it
+  rewrites one 1 GiB file for two minutes, so only its first pass grows
+  the file. Its direct loans still run about a fifth slower than buffered
+  ones (1330); that cell stalls the storage for 20 seconds, which a
+  direct write has to sit through.
 
 **What happens without the receive buffer held** (budget 0, so WRITEs are
 copied; the region fills with data nfsd has not read yet):
@@ -542,9 +578,12 @@ problem 9 was found with.
 - **Anything at 4 KiB or 64 KiB** with these changes. Problems 2 and 4
   change behaviour at 4 KiB in some configurations, and problem 8 changes
   every throughput figure taken there.
-- **Why a loan written direct is slower here than one written through the
-  page cache.** One run per cell, and a test device whose delay is per
-  write.
+- **The tenth by which a loan written direct is still slower than one
+  written through the page cache** once the file is sized first, and the
+  fifth in the stalled-storage cell.
+- **The plan's new-file cells still measure the XFS wait** on any storage
+  where the WRITE is direct. They are left as they are, so results stay
+  comparable; `PREALLOC=1` takes it out when that is what is wanted.
 - **A KUnit pair** to stand where the old "no budget" cells stood: several
   half-received WRITEs that together exceed a small region must hold
   nothing at a budget of 0, and never more than the budget with one.
