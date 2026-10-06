@@ -363,10 +363,9 @@ all. A packaged kernel's config is `/lib/modules/<release>/config`.
   which looks like a passphrase. So nothing was fetched; Mike confirmed
   both trees were current. Never push from here.
 - **Start the plan from somewhere other than `transplant/`.** fio writes
-  `local-*-verify.state` files into the current directory. Six are sitting
-  untracked in `transplant/` from this run, with an untracked `statx-dio`
-  binary in `NFSD_TCP_WRITE_ZEROCOPY/`. They were left alone (never remove
-  untracked files); ask Mike before clearing them.
+  `local-*-verify.state` files into the current directory. The six this run
+  left in `transplant/`, and an untracked `statx-dio` binary beside them,
+  were deleted on 2026-10-06 at Mike's request.
 - **`run-testplan.sh --redo STAGE` re-runs the stage itself** and then
   carries on with the plan (it also re-ran `preflight` and `kunit`,
   because `kunit` is FAIL and so not done). Do not follow it with
@@ -715,10 +714,42 @@ carries, in Mike's form:
   policy (came up empty).
 
 The two KUnit commits on the split became one, `NFSD: test the page cut of
-a split write in the KUnit suite`, with a gate of two pages. The series
-was then regrouped as a whole: code, KUnit preparation, KUnit tests, docs.
-The branch before the rebase is
-`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY.pre-rebase-v7.1.13-20`.
+a split write in the KUnit suite`, with a gate of two pages.
+
+The series was then regrouped as a whole, 151 commits:
+
+- **53 code commits.** None carries a KUnit annotation or hook any more.
+- **3 KUnit preparation commits:** the two upstream backports for
+  suppressing warning backtraces, then one commit, `SUNRPC/nfsd: expose
+  the receive internals for the KUnit suites`, which holds everything
+  KUnit-only in the code files. It replaces the nine "expose ... for the
+  KUnit suites" commits, and also takes the test hooks that used to
+  arrive inside test commits and the annotations code commits used to add
+  as they went.
+- **30 KUnit test commits,** each now only its test file and build glue.
+- **65 docs commits.**
+
+Every one of the 86 code and KUnit commits compiles (the files the series
+has changed up to that commit, `W=1`, no warnings, with build 455's
+config less module versions, BTF and signing, which this host cannot
+build). That is a compile check only: the suites have not been run on
+this history. `check-grouping.sh v7.1.13-20` passes over the whole series.
+
+**Bisecting test results is not the same as bisecting the build.** In the
+old order a test commit followed the code it tested, and a later code
+change came with a later test commit that updated the expectations. Now
+all the code is applied before the first test. So at a test commit in the
+middle of the test section, the code is already the final code but the
+test file is an earlier version of itself, and a case whose expectation a
+later test commit corrects can fail there. Example: the loan table is
+sized for fragments by a code commit, and the materialize-fault test is
+only resized to match by `SUNRPC: size the materialize-fault test from
+the loan table, not the page count`, twenty-two test commits after the
+test was added. Whether any case really fails at such a commit has not
+been checked; the suites are expected to pass at the end of the test
+section, which is the same test files and code as before the regroup.
+The backup branches made for the rebase and the regroup were deleted the
+same day, at Mike's request.
 
 Sections 1 to 11 name commits by the SHAs they had before this rebase.
 Build 455 is the `v7.1.13-19` series without the page-cut fix; nothing
