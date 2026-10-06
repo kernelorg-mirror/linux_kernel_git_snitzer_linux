@@ -1,8 +1,11 @@
 /* ior-hard-like interleaved writer: N ranks (threads) write RECSZ-byte
  * records O_DIRECT into one file; rank r's segment s lands at
  * offset (s*N + r)*RECSZ, so consecutive records in the file come from
- * different ranks in whatever order the threads happen to run. */
+ * different ranks in whatever order the threads happen to run.
+ * A rank stops at its first failed or short write, which is reported on
+ * stderr; the exit status is 1 if any rank stopped that way. */
 #define _GNU_SOURCE
+#include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -12,18 +15,24 @@
 #include <unistd.h>
 static int N; static long RECSZ = 47008; static double DUR; static const char *path; static long MAXREC = 0; /* per rank, 0 = unlimited */
 static volatile int stop;
+static volatile int failed; /* ranks that could not open, or stopped at a failed write */
 static struct timespec t0;
 static long done_recs[4096]; static double done_at[4096]; /* per rank: records written, time of last write */
 static double since_start(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) / 1e9; }
 static void *rank(void *arg) {
 	long r = (long)arg; char *buf; double topen = since_start(); int fd = open(path, O_WRONLY | O_DIRECT);
-	if (fd < 0) { perror("open"); return NULL; }
+	if (fd < 0) { perror("open"); __sync_fetch_and_add(&failed, 1); return NULL; }
 	double topened = since_start();
-	if (posix_memalign((void **)&buf, 4096, RECSZ)) return NULL;
+	if (posix_memalign((void **)&buf, 4096, RECSZ)) { __sync_fetch_and_add(&failed, 1); close(fd); return NULL; }
 	memset(buf, 'A' + (r % 26), RECSZ);
 	for (long s = 0; !stop && (!MAXREC || s < MAXREC); s++) {
 		off_t off = (off_t)(s * N + r) * RECSZ;
-		if (pwrite(fd, buf, RECSZ, off) != RECSZ) { perror("pwrite"); break; }
+		ssize_t n = pwrite(fd, buf, RECSZ, off);
+		if (n != RECSZ) {
+			fprintf(stderr, "rank %2ld: pwrite of record %ld at offset %lld failed after %ld records: %s\n", r, s * N + r, (long long)off, s,
+				n < 0 ? strerror(errno) : "short write");
+			__sync_fetch_and_add(&failed, 1); break;
+		}
 		if (s == 0) fprintf(stderr, "rank %2ld: open at %.3fs took %.3fs, first pwrite done at %.3fs\n", r, topen, topened - topen, since_start());
 		done_recs[r] = s + 1; done_at[r] = since_start();
 	}
@@ -43,5 +52,6 @@ int main(int argc, char **argv) {
 	/* summary on stdout: time of the last completed write (the ranks stop at the byte cap or at SECONDS) */
 	printf("iorhard: %d ranks wrote %ld records x %ld bytes = %.1f MiB in %.2fs (%.1f MiB/s, %.0f writes/s)\n",
 	       N, total, RECSZ, total * (double)RECSZ / 1048576, last, total * (double)RECSZ / 1048576 / last, total / last);
+	if (failed) { fprintf(stderr, "iorhard: %d of %d ranks stopped at a failed write\n", failed, N); return 1; }
 	return 0;
 }
