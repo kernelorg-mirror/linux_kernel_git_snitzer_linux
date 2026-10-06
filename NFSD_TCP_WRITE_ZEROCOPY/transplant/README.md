@@ -282,8 +282,31 @@ The RPMs must be built from this branch at or after `82d7a6d21207`
 (2026-10-05), which carries the null_blk and dm-delay fixes, veth's
 `rx_ip_align`, the write-split fix and the budget names. `preflight.sh`
 tells: it checks the tunables' names, veth's parameter and the histogram
-triggers. `CONFIG_HIST_TRIGGERS` was added to `zerocopy.fragment` on
-2026-10-05; re-run `check-config.sh` on the 64 KiB flavor.
+triggers.
+
+The 64 KiB config was checked against `zerocopy.fragment` on 2026-10-05
+(kernel-rpmtree's `rpmbuild/configs/kernel-aarch64-64k-rhel.config`):
+
+- **The five KUnit options are set, each `=m`:** `KUNIT`,
+  `SUNRPC_XDR_KUNIT_TEST`, `SUNRPC_SVCSOCK_KUNIT_TEST`,
+  `NFSD_BVEC_KUNIT_TEST`, `NFSD4_BVEC_KUNIT_TEST`.
+- **That config also has `CONFIG_KUNIT_ALL_TESTS=m`**, which the 4 KiB
+  and 16 KiB test kernels do not. It builds every KUnit suite in the tree,
+  not only these four. The harness is unaffected, since `run-kunit.sh`
+  loads its four suites by name, but the RPMs carry more modules.
+- **The suites ship in `kernel-64k-modules-internal`**, not in the main
+  modules package. The options being set does not help without that RPM
+  installed: the KUnit stage would find no modules to load.
+- **`CONFIG_HIST_TRIGGERS=y` is set**, which the harness's write-path
+  counters need. `CONFIG_HIST_TRIGGERS_DEBUG` is off and is not needed;
+  the other two hosts ran with it off.
+- **`check-config.sh` reports four options missing from that file, and
+  they are not:** `PAGE_POOL`, `NVME_CORE`, `NVME_FABRICS` and
+  `CONTIG_ALLOC` have no prompt, so an unresolved RHEL-style config never
+  lists them. Kconfig sets them at build time from options that are in the
+  file (`BLK_DEV_NVME`, `NVME_TCP`, `NVME_TARGET_TCP`, `CMA`). The check
+  that counts is on the built kernel's `/boot/config-<release>`, which
+  `preflight.sh` reads.
 
 Then on tardis1, with a clone of the branch (nothing in it is built):
 
