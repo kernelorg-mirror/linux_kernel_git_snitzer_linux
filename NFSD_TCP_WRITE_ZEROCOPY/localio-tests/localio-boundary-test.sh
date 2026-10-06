@@ -89,7 +89,7 @@ KICK_BDEV=$bdev
 # fsync if it has one, and so should wake it (almost) never.  The kick check
 # therefore applies only where no buffered segment can cover a whole page
 # and no page has more than two writers: records large enough to always
-# split (direct middle of at least direct_misaligned_min_bytes bytes, ends
+# split (direct middle of at least the split gate, gate_bytes below, ends
 # within one page each).  A record smaller than a page is not judged, for
 # the reason its reads are not: more than two writes share a page, every
 # one after the first marks it, and with several writing at once it is
@@ -106,14 +106,19 @@ KICK_BDEV=$bdev
 # WRITE plus 100; measured 2026-10-02 on 7.1.13-18: 0.003-0.015 with the
 # pages marked after the fsync, 0.10 (3000-byte records) to 0.54 (47008)
 # with them marked dirty, and 2026-09-20 marking at creation: 0.9.
-# The split gate: bytes (direct_misaligned_min_bytes) on kernels that have
-# it, pages (direct_misaligned_num_pages) on older ones.
+# The split gate, in bytes.  It is counted in pages
+# (direct_misaligned_min_pages, default 2 on 4 KiB pages and 1 on larger
+# ones; direct_misaligned_num_pages, default 2, before v7.1.13-20), except
+# on the kernels of 2026-10-04 to 2026-10-06 that counted it in bytes
+# (direct_misaligned_min_bytes).
 gate_bytes() {
-	local np
-	if [ -r /sys/kernel/debug/nfsd/direct_misaligned_min_bytes ]; then
-		cat /sys/kernel/debug/nfsd/direct_misaligned_min_bytes
+	local d=/sys/kernel/debug/nfsd np
+	if [ -r $d/direct_misaligned_min_pages ]; then
+		echo $((PAGE * $(cat $d/direct_misaligned_min_pages)))
+	elif [ -r $d/direct_misaligned_min_bytes ]; then
+		cat $d/direct_misaligned_min_bytes
 	else
-		np=$(cat /sys/kernel/debug/nfsd/direct_misaligned_num_pages 2>/dev/null || echo 2)
+		np=$(cat $d/direct_misaligned_num_pages 2>/dev/null || echo 2)
 		echo $((PAGE * np))
 	fi
 }

@@ -307,7 +307,7 @@ do_status() {
 	echo "== nfs client localio =="
 	echo "  nfs.localio_enabled=$(cat $LOCALIO_PARAM 2>/dev/null || echo n/a)  mounted-server localio=$(cat /sys/fs/nfs/*/localio 2>/dev/null | head -1)"
 	echo "== nfsd io modes / knobs (debugfs) =="
-	for f in io_cache_read io_cache_write disable-splice-read direct_misaligned_min_bytes direct_misaligned_num_pages direct_misaligned_dontcache; do
+	for f in io_cache_read io_cache_write disable-splice-read direct_misaligned_min_pages direct_misaligned_min_bytes direct_misaligned_num_pages direct_misaligned_dontcache; do
 		printf '  %s=%s\n' "$f" "$(cat /sys/kernel/debug/nfsd/$f 2>/dev/null || echo n/a)"
 	done
 	printf '  vm.dontcache_partial_writeback_delay_ms=%s\n' "$(sysctl -n vm.dontcache_partial_writeback_delay_ms 2>/dev/null || echo 'n/a (kernel lacks it)')"
