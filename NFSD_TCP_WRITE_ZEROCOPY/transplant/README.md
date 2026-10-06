@@ -40,7 +40,9 @@ nothing there is taken for granted:
 - **A write is cut at page boundaries, at every end that is not on one**
   (since 2026-10-06 a DIO-aligned end too:
   `slipstream/NFSD_LOCALIO_DIRECT_SPLIT.md` section 7), and the knob that
-  decides whether to cut is in bytes (`direct_misaligned_min_bytes`). No
+  decides whether to cut is in pages again since `v7.1.13-20`
+  (`direct_misaligned_min_pages`, default 2 on 4 KiB pages and 1 on
+  larger ones; it was `direct_misaligned_min_bytes` for the runs below). No
   effect expected at 4 KiB; that is to be confirmed, not assumed.
 - **Two test devices are fixed in this kernel:** null_blk lost data with a
   block size below the page size (not reachable at 4 KiB with 4096-byte
@@ -830,7 +832,10 @@ full account, with what is still open, is in
 
 **3. The knob that decides whether to cut was counted in pages.**
 `direct_misaligned_num_pages`, default 2, meant 8 KiB on 4 KiB pages and
-128 KiB on 64 KiB. Replaced by `direct_misaligned_min_bytes`, default 8192.
+128 KiB on 64 KiB. Replaced by `direct_misaligned_min_bytes`, default 8192,
+for the runs recorded here. **Since `v7.1.13-20` it is
+`direct_misaligned_min_pages`**, default 2 on 4 KiB pages and 1 on larger
+ones, and the byte-counted commit is gone from this branch.
 **Mike is not convinced by this one and wants it revisited**; it leads the
 TODO list in the document above.
 
