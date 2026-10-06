@@ -5,6 +5,17 @@ what was wrong with it on anything but 4 KiB pages over 4096-byte blocks,
 and what was changed on the 16 KiB test host on 2026-10-04. The code is
 `nfs_dio_split()` in `fs/nfs_common/nfs_dio.c`, shared by both.
 
+**Since the rebase onto `v7.1.13-20` (2026-10-06) the split is the
+baseline's, not this branch's.** `v7.1.13-20` cuts both ends of a write at
+page boundaries (section 7's rule, in a simpler form) and counts the gate
+in pages again: `direct_misaligned_min_pages`, default 2 on 4 KiB pages
+and 1 on larger ones. The four commits section 6 lists and section 7's
+code commit were dropped from this branch in that rebase; what it still
+carries is one KUnit commit, `NFSD: test the page cut of a split write in
+the KUnit suite`, whose test sets a gate of two pages. Where this file
+says `direct_misaligned_min_bytes`, that is the knob of the kernels the
+measurements were made on.
+
 **Sections 3 and 5 describe the per-end cut of 2026-10-04, which section 7
 replaced on 2026-10-06:** every end that is not on a page boundary is now
 cut at one, DIO-aligned or not. Read section 7 before relying on anything

@@ -23,7 +23,7 @@ kernel has run.
 | branch tip | `d063737e2ed3` pushed by Mike 2026-10-05 (section 7); only later edits to this file come after it |
 | new kernel | `7.1.13-19.hs.455.loanpages_pool.el9.aarch64+64k`, installed and booted 2026-10-06; sunrpc srcversion `9611113753DDA35599A6AE2` (differs from 454's, as it must), nfsd unchanged |
 | build 455 | **the whole plan is complete**: boot 1 (2026-10-06 11:11 to 12:03, **section 10**) and boot 2 (12:38 to 12:43, **section 11**), every stage PASS or DONE, `analyze.py` OVERALL PASS on both kinds of storage |
-| waiting on | Mike: a kernel built with the page-cut change (**section 10.3**; committed 2026-10-06, not built), reconciled with the simplified version of that change and the `-20` baseline. Then the LOCALIO stages again on it, and only then the 64 KiB record. The 16-connection gap (10.2) is still open |
+| waiting on | Mike: a kernel built from this branch as rebased onto `v7.1.13-20` (**section 12**), which has the both-ends page cut. Then the LOCALIO stages again on it, and only then the 64 KiB record. The 16-connection gap (10.2) is still open |
 
 Short version of the findings:
 
@@ -699,3 +699,28 @@ Not done: `results/64KiB.tsv`, `RESULTS.md` and the README's 64 KiB
 account (section 9 step 6). Sections 10.2 (the 16-connection gap) and 10.3
 (the invalidation message) are still open, and 10.3 says to understand
 that message first; it now is (10.3), and it is a defect.
+
+## 12. 2026-10-06: rebased onto `v7.1.13-20`
+
+The branch was rebased from `v7.1.13-19` onto `v7.1.13-20`, which already
+carries, in Mike's form:
+
+- the cut of both ends of a write at page boundaries (section 10.3's fix;
+  the commit made here for it was dropped);
+- the split gate counted in pages, `direct_misaligned_min_pages`, default
+  2 on 4 KiB pages and 1 on larger ones (the byte-counted gate and its
+  KUnit commit were dropped);
+- the null_blk and dm-delay fixes and the `nfs_dio_iter_aligned()` skip
+  fix (identical; dropped as duplicates), and the zeroing of the LOCALIO
+  policy (came up empty).
+
+The two KUnit commits on the split became one, `NFSD: test the page cut of
+a split write in the KUnit suite`, with a gate of two pages. The series
+was then regrouped as a whole: code, KUnit preparation, KUnit tests, docs.
+The branch before the rebase is
+`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY.pre-rebase-v7.1.13-20`.
+
+Sections 1 to 11 name commits by the SHAs they had before this rebase.
+Build 455 is the `v7.1.13-19` series without the page-cut fix; nothing
+built from the rebased branch has run. The boundary test reads the new
+knob.
