@@ -121,6 +121,16 @@ page_pool is built into vmlinux.)
 - The admission estimate stays the record's page estimate (`factor`); only
   when it is applied changes. Records already linked are charged as today,
   but only for region pages.
+- **The charge counts pages, not fragments** (2026-10-05, found on tardis1
+  at 64 KiB). The count was one per skb fragment, which is one per page
+  only while a frame has a page to itself (16 KiB at MTU 9000). At 64 KiB
+  veth packs about seven 9000-byte frames into a page, so a 1 MiB WRITE
+  was charged about 117 against the 17 pages it held, a 475-page budget
+  admitted four WRITEs, and loans paused with a sixth of the budget in
+  use. Now a fragment in the same region page as the one before it adds
+  nothing, in `svc_tcp_rx_skb_region_pages()` and in the record's
+  `region_count` alike. The count is still an upper bound: a page seen
+  again after another one counts again.
 - S2 in the rare case of a record whose region pages arrive while credit
   cannot be granted and the record cannot pause (none today: every charge
   point can pause at an skb boundary): materialize, as the copy fallback
