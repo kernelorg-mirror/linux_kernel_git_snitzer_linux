@@ -65,6 +65,22 @@ directory stays on the host; the `.tsv` is what travels.
 
 ## What the comparison says
 
+**Copying leaves the receive region nearly empty; loaning ties most of it
+up.** The most of the region in use at any moment, across the four pairs
+of cells that differ only in copy or loan (`seq-sized`, `mixed-sized`,
+`step`, `step-n16`), on both kinds of storage:
+
+| page size | region | a copy holds | a loan holds |
+|---|---|---|---|
+| 4 KiB | 16 MiB | 0.25 to 1.75 MiB (2 to 11%) | 8.3 to 9.6 MiB (52 to 60%) |
+| 16 KiB | 24 MiB | 0.25 to 1.75 MiB (1 to 7%) | 15.1 to 16.7 MiB (64 to 70%) |
+| 64 KiB | 35 MiB | not yet run | not yet run |
+
+A host fills in its row from its record: the smallest and largest
+`used_MiB` of those eight `-copy` cells and of those eight `-on` cells in
+phase A, against `region/prp/A/MiB`. The status page on claude.ai leads
+with the same table.
+
 4 KiB and 16 KiB (`README.md`, "4 KiB host" and "16 KiB host", have the
 accounts) give the same answers:
 
