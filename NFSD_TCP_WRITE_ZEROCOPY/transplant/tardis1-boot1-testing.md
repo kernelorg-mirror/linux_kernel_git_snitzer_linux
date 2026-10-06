@@ -20,7 +20,7 @@ kernel has run.
 | kernel run | `7.1.13-19.hs.454.loanpages_pool.el9.aarch64+64k`, packaged RPMs, built by Mike from `42c4c8306b98`; sunrpc srcversion `4882A60124EF5C26B2AF247`, nfsd `4E439F2B24A4A7C3A8521DE` |
 | same code as | the 4 KiB host's run (`26e799b10e8e`): the two commits differ only in docs and harness files, and sunrpc's srcversion matches |
 | plan | boot 1 complete (2026-10-05 22:12 to 23:08, 56 minutes). **Boot 2 not run, on purpose** |
-| branch tip | `573d3938239b`, four commits on top of `42c4c8306b98`, **not pushed** (section 7) |
+| branch tip | this file's commit; `573d3938239b` and below are pushed, the capacity + 1 KUnit commit `86b745caa01c` and this file are not (section 7) |
 | waiting on | Mike: a new 64 KiB kernel built from the tip, installed on tardis1 |
 | then | a full plan run, both boots, on the new kernel (section 9) |
 
@@ -33,8 +33,9 @@ Short version of the findings:
 2. **A test ceiling that does not hold for records smaller than a page,**
    changed: the LOCALIO boundary test's DONTCACHE kick-round check
    (section 4).
-3. **One KUnit skip that fails the stage** and is structural at 64 KiB,
-   left for Mike to decide (section 5).
+3. **One KUnit skip that fails the stage** and is structural at 64 KiB;
+   the test was rewritten afterwards to run there, not yet built
+   (section 5).
 4. **One harness fix:** `preflight.sh` could not find a packaged kernel's
    config on this host (section 6).
 5. **Safety held throughout:** with a budget set, no cell dropped a frame
@@ -194,9 +195,9 @@ built on tardis1.
   veth packs frames at 64 KiB, and that is the next thing to look at.
 - **Still no drops and no allocation failures with a budget set**, now
   with the region genuinely in use.
-- The new KUnit cases pass, and the suite counts become
-  `sunrpc-svcsock-rx` 40 pass, 1 skip as before (the cases were added to
-  existing tests, so the totals do not change).
+- The new KUnit cases pass (they were added to existing tests, so the
+  suite's total stays 41; with section 5's change it should be 41 pass,
+  0 skip).
 
 ### 3.6 Open on this subject
 
@@ -297,7 +298,7 @@ was changed for it. Whether it matters depends on whether tardis1's real
 workload writes such records. `NFSD_LOCALIO_DIRECT_SPLIT.md` section 5
 ("64 KiB, from the code, not run") is the place to compare against.
 
-## 5. KUnit: `svcsock_rx_capacity_plus_one_test` skips at 64 KiB (open, Mike's call)
+## 5. KUnit: `svcsock_rx_capacity_plus_one_test` skips at 64 KiB (test rewritten, not yet built)
 
 - All four suites ran, 0 failures: `sunrpc-xdr-bvec` 7/7,
   `sunrpc-svcsock-rx` 40 pass + 1 skip of 41, `nfsd-receive-bvec` 6/6,
@@ -310,10 +311,21 @@ workload writes such records. `NFSD_LOCALIO_DIRECT_SPLIT.md` section 5
   `capacity_plus_one` skips, check whether capacity + 1 > MAX_SKB_FRAGS
   before calling it a defect." It is: 33 > 17. The test cannot be built on
   this kernel.
-- **Not changed.** Options for Mike: have `run-kunit.sh` expect this skip
-  when the page size makes capacity + 1 exceed `MAX_SKB_FRAGS`; or build
-  the test's record across more than one skb. Until then `kunit` FAIL on
-  tardis1 with exactly this one skip is the expected result.
+- **Changed after the run (2026-10-05, Mike's choice): the test now runs
+  at 64 KiB.** It spreads its capacity + 1 loaned fragments over as many
+  skbs as `MAX_SKB_FRAGS` requires (two here: 17 and 16) and feeds them to
+  the actor in turn, so the table fills in a later skb with the earlier
+  skb's loans already taken. The `kunit_skip()` is gone. Where the table
+  fits in one skb (4 KiB, 16 KiB) it builds one skb, as before. The
+  expectations are unchanged: copy mode, reason "capacity", every loan
+  released, bytes intact.
+- **Not compiled, not run.** It needs the new kernel. The thing to watch
+  is whether falling back in the second skb really does release and copy
+  the first skb's loans as the one-skb case does: the test now asks a
+  question at 64 KiB that no test asked before, so a failure here may be
+  the code and not the test.
+- On the new kernel expect `sunrpc-svcsock-rx` **41 pass, 0 skip** and the
+  `kunit` stage PASS. `run-kunit.sh` is unchanged.
 
 ## 6. Host setup: what was done to tardis1, and its traps
 
@@ -371,9 +383,17 @@ all. A packaged kernel's config is `/lib/modules/<release>/config`.
   build number will tell the new kernel apart; `preflight.sh` cannot tell
   whether a running kernel has `c84e1147bde7` (section 9).
 
-## 7. Commits made on tardis1 (not pushed)
+## 7. Commits made on tardis1
 
 On `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`, on top of `42c4c8306b98`.
+Mike pushed the first four (through `573d3938239b`) on 2026-10-05; the
+capacity + 1 KUnit commit and this file came after and are **not pushed**.
+A kernel built from `573d3938239b` has the charge fix but not the
+rewritten capacity + 1 test, and its `kunit` stage will still show the
+skip. The KUnit commit was moved ahead of this file's commits to keep the
+grouping; the branch before that move is
+`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY.pre-regroup-20261005` (same
+tree).
 `check-grouping.sh`: `grouping OK: code, then KUnit, then docs`.
 
 | kind | commit | subject |
@@ -382,7 +402,8 @@ On `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`, on top of `42c4c8306b98`.
 | KUnit | `19a1bb8479e4` | SUNRPC: test that region credit counts a page once in the svcsock KUnit suite |
 | docs | `1e38df3a02fe` | NFSD_TCP_WRITE_ZEROCOPY: record the page charge found at 64 KiB, and let preflight find a packaged kernel's config |
 | docs | `573d3938239b` | NFSD_TCP_WRITE_ZEROCOPY: do not judge DONTCACHE kick rounds for a record smaller than a page |
-| docs | (this file) | |
+| KUnit | `86b745caa01c` | SUNRPC: run the capacity + 1 svcsock KUnit test where the table exceeds one skb |
+| docs | (this file, two commits) | |
 
 The code commit carries `Fixes: 49f73a653f81 ("SUNRPC: Credit only the
 region pages a TCP receive loan holds")`. All end with
@@ -427,8 +448,8 @@ copied=54760`. Not yet set beside the other hosts' dispositions.
 
 ## 9. What to do next
 
-**When Mike has built a kernel from the tip** (`573d3938239b` or later; it
-must contain `c84e1147bde7`) and installed it with
+**When Mike has built a kernel from the tip** (it must contain
+`c84e1147bde7`; with `86b745caa01c` too the `kunit` stage can pass) and installed it with
 `kernel-64k-modules-internal`, `kernel-64k-devel` and `kmod-64k-xsight`:
 
 1. Ask Mike whether the window is quiet (`pl-105` is a live client), and
@@ -445,8 +466,9 @@ must contain `c84e1147bde7`) and installed it with
    `run-testplan.sh`; reboot when it asks; `run-testplan.sh` again.
 4. Read every cell, then check section 3.5's list first: sized pairs
    level, region use up near the budget, overruns, no drops with a budget.
-5. Expect `kunit` FAIL with the one skip (section 5) unless that has been
-   settled, and both LOCALIO stages with boundary exit 0.
+5. Expect `kunit` PASS with no skip (section 5: the rewritten
+   `capacity_plus_one` test runs for the first time), and both LOCALIO
+   stages with boundary exit 0.
 6. Only then write the 64 KiB record: `results-table.py extract ... >
    results/64KiB.tsv`, regenerate `RESULTS.md`, add the "64 KiB host"
    account to `transplant/README.md`, update its "Where things stand"
@@ -459,7 +481,6 @@ must contain `c84e1147bde7`) and installed it with
 
 **Decisions waiting on Mike:**
 
-- the `capacity_plus_one` skip (section 5);
 - whether the sub-page read-back through LOCALIO matters (section 4.5);
 - carrying the four commits to the HS twin (section 7);
 - clearing the untracked files and the old results (sections 6 and 9).
