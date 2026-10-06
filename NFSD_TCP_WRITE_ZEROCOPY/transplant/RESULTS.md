@@ -84,9 +84,11 @@ accounts) give the same answers:
 Throughput is not compared across the two hosts: they are different
 machines.
 
-The 16 KiB column's `n-reconf` changed the budget after its load had
-finished (`README.md`, "4 KiB host", "Problem found and fixed"); the 4 KiB
-column's was re-run with the fix.
+`n-reconf` in both columns is from a re-run of phase N with the harness
+fix that keeps its load running through the budget changes (`README.md`,
+"4 KiB host", "Problem found and fixed"). On both hosts and both kinds of
+storage the changes then landed with records in flight, the cell ended
+with no waiters and the pool whole, and fio verified the data.
 
 What 64 KiB (tardis1) should be read for: the loan table (sized for 4 KiB
 fragments since 2026-10-02, never run), the split of a misaligned write
@@ -101,8 +103,8 @@ real hardware whether a small region stays in the CPU's cache.
 | --- | --- | --- |
 | kernel | 7.1.13-19.hs.451.el9.aarch64+ | 7.1.13-19.hs.451.el9.aarch64+ |
 | built from | v7.1.13-7433-g26e799b10e8eb | v7.1.13-7420-g82d7a6d21207 |
-| boots used | 2 | 4 |
-| last stage finished | 2026-10-05_20:16:18 | 2026-10-05_18:02:10 |
+| boots used | 2 | 5 |
+| last stage finished | 2026-10-05_20:16:18 | 2026-10-05_20:52:11 |
 | page budgets | geometry: page 4096, 1 MiB = 256 pages; factor 150 (MTU 9000) 280 (MTU 1500); record cost 385 / 718, reserve 390 / 720; rcvbuf pages 256K 128 128K 64 64K 32 (256K at MTU 1500 128); region default 4096; collapse tcp_rmem 4096 32768 65536 | geometry: page 16384, 1 MiB = 64 pages; factor 190 (MTU 9000) 170 (MTU 1500); record cost 123 / 110, reserve 130 / 110; rcvbuf pages 256K 32 128K 16 64K 8 (256K at MTU 1500 32); region default 1519; collapse tcp_rmem 16384 131072 262144 |
 | nvme-loop: virt_boundary_mask | 4095 | 4095 |
 | NVMe/TCP: virt_boundary_mask | 0 | 0 |
@@ -269,6 +271,12 @@ Phase X, storage that needs whole pages (nvme-loop):
 | --- | --- | --- | --- | --- |
 | `warmup` | 1 | no | 1678 · 0 · 3.73 · direct | 2397 · 0 · 4.00 · direct |
 
+Phase N, storage that needs whole pages (nvme-loop):
+
+| cell | conn | budget set | 4 KiB | 16 KiB |
+| --- | --- | --- | --- | --- |
+| `warmup` | 1 | no | - | 1637 · 0 · 5.62 · direct |
+
 Phase A, storage that takes arbitrary pieces (NVMe/TCP):
 
 | cell | conn | budget set | 4 KiB | 16 KiB |
@@ -394,21 +402,21 @@ Phase N, storage that needs whole pages (nvme-loop):
 
 | cell | 4 KiB | 16 KiB |
 | --- | --- | --- |
-| `n-own` | - · 692 · 0 · 6.74 | - · 730 · 0 · 10.45 |
-| `n-default` | - · 781 · 0 · 6.74 | - · 736 · 0 · 10.56 |
-| `n-copy` | - · 846 · 5570 · 1.79 | - · 803 · 5570 · 4.03 |
-| `n-both` | 547 · 551 · 0 · 11.05 | 560 · 544 · 0 · 16.72 |
-| `n-reconf` | - · 1422 · 0 · 8.27 | - · 706 · 0 · 10.61 |
-| `n-exit` | - · 476 · 0 · 6.79 | - · 443 · 0 · 10.56 |
+| `n-own` | - · 692 · 0 · 6.74 | - · 597 · 0 · 10.64 |
+| `n-default` | - · 781 · 0 · 6.74 | - · 720 · 0 · 10.53 |
+| `n-copy` | - · 846 · 5570 · 1.79 | - · 792 · 5570 · 3.95 |
+| `n-both` | 547 · 551 · 0 · 11.05 | 500 · 511 · 0 · 16.69 |
+| `n-reconf` | - · 1422 · 0 · 8.27 | - · 1327 · 0 · 12.98 |
+| `n-exit` | - · 476 · 0 · 6.79 | - · 426 · 0 · 10.58 |
 
 Phase N, storage that takes arbitrary pieces (NVMe/TCP):
 
 | cell | 4 KiB | 16 KiB |
 | --- | --- | --- |
-| `n-own` | - · 757 · 0 · 6.79 | - · 797 · 0 · 8.83 |
-| `n-default` | - · 769 · 0 · 6.75 | - · 800 · 0 · 8.84 |
-| `n-copy` | - · 869 · 5570 · 1.72 | - · 812 · 5570 · 3.84 |
-| `n-both` | 507 · 615 · 0 · 11.09 | 598 · 587 · 0 · 14.48 |
-| `n-reconf` | - · 1465 · 0 · 7.74 | - · 732 · 0 · 9.61 |
-| `n-exit` | - · 428 · 0 · 6.79 | - · 450 · 0 · 9.44 |
+| `n-own` | - · 757 · 0 · 6.79 | - · 737 · 0 · 9.20 |
+| `n-default` | - · 769 · 0 · 6.75 | - · 800 · 0 · 8.97 |
+| `n-copy` | - · 869 · 5570 · 1.72 | - · 811 · 5570 · 3.81 |
+| `n-both` | 507 · 615 · 0 · 11.09 | 548 · 539 · 0 · 14.67 |
+| `n-reconf` | - · 1465 · 0 · 7.74 | - · 1692 · 0 · 10.28 |
+| `n-exit` | - · 428 · 0 · 6.79 | - · 437 · 0 · 9.27 |
 
