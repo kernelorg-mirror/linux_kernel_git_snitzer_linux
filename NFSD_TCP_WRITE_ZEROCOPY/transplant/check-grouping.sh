@@ -12,14 +12,17 @@
 #   code commits, then KUnit commits (enablement first, then tests), then
 #   docs commits -- never interleaved, never mixed within one commit;
 #   every Fixes: tag names a commit that is on the branch (after a fold or
-#   regroup the SHAs move and the tags must be re-pointed);
+#   regroup the SHAs move and the tags must be re-pointed), or, for a
+#   backport that keeps its upstream tag, quotes the subject of one;
 #   every commit carries Assisted-by: or no AI trailer, and never
 #   Co-Authored-By:.
 #
 # Classes, by the files a commit touches:
 #   docs  -- only NFSD_TCP_WRITE_ZEROCOPY/ and AGENTS.md
 #   kunit -- a *kunit* file, or a subject "... for the KUnit suites"
-#            (VISIBLE_IF_KUNIT / EXPORT_SYMBOL_IF_KUNIT enablement)
+#            (VISIBLE_IF_KUNIT / EXPORT_SYMBOL_IF_KUNIT enablement), or any
+#            other subject that names KUnit (a backported fix to KUnit's
+#            own support code, the configs that enable the suites)
 #   code  -- anything else
 # A commit mixing docs with code or KUnit files is reported as mixed.
 #
@@ -55,7 +58,7 @@ for c in $(git rev-list --reverse "$BASE..$BRANCH"); do
 		*) nc=$((nc + 1)) ;;
 		esac
 	done
-	case "$subj" in *"for the KUnit suites"*) [ $nc -gt 0 ] && { nk=$((nk + nc)); nc=0; } ;; esac
+	case "$subj" in *[Kk][Uu]nit*) [ $nc -gt 0 ] && { nk=$((nk + nc)); nc=0; } ;; esac
 	if [ $nd -gt 0 ] && [ $((nk + nc)) -gt 0 ]; then
 		cls=mixed
 	elif [ $nd -gt 0 ]; then cls=2
@@ -70,10 +73,14 @@ for c in $(git rev-list --reverse "$BASE..$BRANCH"); do
 	else
 		phase=$cls
 	fi
-	for f in $(git log -1 --format=%B "$c" | sed -n 's/^Fixes: \([0-9a-f]\{12,\}\).*/\1/p'); do
-		git merge-base --is-ancestor "$f" "$BRANCH" 2>/dev/null ||
-			{ msg="$msg${msg:+; }Fixes: $f is not on the branch (re-point it)"; bad=1; }
-	done
+	while read -r f fsubj; do
+		[ -n "$f" ] || continue
+		git merge-base --is-ancestor "$f" "$BRANCH" 2>/dev/null && continue
+		# a backport's upstream tag: the commit it fixes is here under another SHA
+		fsubj=${fsubj#(\"}; fsubj=${fsubj%\")}
+		git log --format=%s "$BASE..$BRANCH" | grep -qxF -- "$fsubj" && continue
+		msg="$msg${msg:+; }Fixes: $f is not on the branch (re-point it)"; bad=1
+	done < <(git log -1 --format=%B "$c" | sed -n 's/^Fixes: \([0-9a-f]\{12,\}\) \(.*\)/\1 \2/p')
 	git log -1 --format=%B "$c" | grep -qi '^Co-Authored-By:' && { msg="$msg${msg:+; }has Co-Authored-By: (use Assisted-by:)"; bad=1; }
 	printf '  %-5s %s %s%s\n' "$([ "$cls" = mixed ] && echo mixed || echo "${name[$cls]}")" \
 		"$(git rev-parse --short=12 "$c")" "$subj" "${msg:+   <-- $msg}"
