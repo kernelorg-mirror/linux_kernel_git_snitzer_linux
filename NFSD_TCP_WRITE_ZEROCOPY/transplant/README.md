@@ -10,7 +10,7 @@ size's.
 | host | page size | kernel | state |
 |---|---|---|---|
 | the 16 KiB host | 16 KiB | built on the host | **complete**: the whole plan, both kinds of storage. `results/16KiB.tsv`; the account is "16 KiB host" below |
-| the 4 KiB ARM host | 4 KiB | built on the host | **in progress** (2026-10-05): kernel #43 from `26e799b10e8e`, PREFLIGHT PASS; boot 1 complete, every stage PASS or DONE; `budget-N` and `budget-N-sgl` re-run after the n-reconf fix (`0d3ab1e2c6f2`); boot 2 (budget-B, analyze) next. The 4 KiB results further down are of an older harness and are to be replaced |
+| the 4 KiB ARM host | 4 KiB | built on the host | **complete** (2026-10-05): the whole plan, both kinds of storage. `results/4KiB.tsv`; the account is "4 KiB host" below |
 | tardis1 (Xsight E1) | 64 KiB | packaged RPMs | not run with this harness |
 
 `RESULTS.md` is the side-by-side comparison, generated from one record per
@@ -297,84 +297,89 @@ A stage that fails is recorded and the plan continues. Re-running resumes
 where it stopped. `--list` shows status, `--only STAGE` runs one stage, and
 `--redo STAGE` forgets a result.
 
-## The 4 KiB VM, with the harness as it was (2026-10-03 and -04)
+## 4 KiB host (2026-10-05)
 
-**Superseded by the next 4 KiB run.** What follows shows that the runner
-and the build procedure worked on the original development VM. Its results
-are of the harness before the changes listed under "Where things stand":
-one kind of storage, no copy twins, a storage delay ten times what was
-asked, and the old tunable names. Do not compare its figures with
-`RESULTS.md`; delete this section when the 4 KiB host's record is in.
+The original development VM, as the 4 KiB host: aarch64, 8 CPUs, 11 GiB,
+`CONFIG_HZ=100`. Kernel `7.1.13-19.hs.451.el9.aarch64+` #43, built here
+by `build-test-kernel.sh` from `26e799b10e8e` with the VM's own config
+(the one #42 was built from; it lacked nothing in `zerocopy.fragment`);
+sunrpc `4882A601`. `preflight.sh`: PASS. Results:
+`/var/tmp/zc-testplan-7.1.13-19.hs.451.el9.aarch64+`; the record is
+`results/4KiB.tsv`.
 
-The runner and every changed script were run on the original 4 KiB VM
-(kernel `7.1.13-19.hs.451` #38, modules = tip). `run-testplan.sh --only`
-covered each stage that needs no fresh boot, with results in
-`/var/tmp/zc-testplan-4k-validate/`:
+### In short
 
-- **PASS:** bvecrepro, rig-cmp, loan-assert, killswitch, system-correctness.
-- **DONE:** zc-down (left nothing behind), sgl-up, sgl-brd/tcp/loop, sgl-down.
-- **LOCALIO tcp and loop:** DONE. The boundary, short-read and stable tests
-  all exit 0. At record size 47008 the result was 0.004 reads per WRITE on
-  tcp and 0.007 on loop; at 6000 it was 0.000; 0.0% resident.
-- **budget-X:** DONE, with derived budgets identical to the constants
-  (budget 2698, reserve 390, tight 390). Its cells match X-s4 and X3.
-- **kunit:** PASS, run separately, 7/7, 38 + 1 expected skip of 39, 6/6,
-  10/10.
-- **The runner's gating:** it stops at budget-D on a boot that is no longer
-  fresh.
+- **The whole plan passes, on both kinds of storage, in two boots.** Every
+  stage PASS or DONE; `analyze.py` OVERALL PASS for nvme-loop and for
+  NVMe/TCP; no fio verify failure, hang or kernel warning in any cell.
+- **The answers are the 16 KiB answers.** With a budget set and the
+  receive buffer held nothing is dropped and the region never runs out.
+  A loan is written direct on storage that takes arbitrary pieces and
+  through the page cache on storage that needs whole pages; a copy is
+  always written direct. Copy and loan are level in throughput in the
+  sized pairs; a loan holds 8 to 10 MiB of the 16 MiB region, a copy 0.25
+  to 1.8 MiB.
+- **One harness fault, found here and fixed:** n-reconf no longer changed
+  the budget under load, on either host (below).
 
-**Full plan, boot 1** (2026-10-04, fresh boot of #38, `run-testplan.sh --force
---results /var/tmp/zc-testplan-4k-fresh`; `--force` because the VM keeps its
-own nfs.conf, the preflight's one failure):
+### The questions 4 KiB was to answer
 
-- **budget-D** ran through the fresh-boot gate and matches D4 cell for cell
-  (0 allocation failures with a budget set, 2785 / 5570 admitted).
-- **PASS:** kunit, bvecrepro, rig-cmp, loan-assert, killswitch,
-  system-correctness.
-- **DONE:** zc-down, sgl-up/brd/tcp/loop/down.
-- **LOCALIO tcp and loop:** all tests exit 0; 0.006 reads per WRITE at
-  47008, 0.000 at 6000, 0.0% resident.
-- **budget-A:** cells with a budget have 0 drops. It wrote `parked.txt`
-  (257).
-- **budget-TLP and budget-X:** X matches X3.
-- **budget-N:** every cell passes, including n-reconf with fio rc 0 at 103
-  MB/s, the sum check and n-exit.
-- **The runner then stopped at budget-B** with "reboot, then run again"
-  (exit 3), as designed.
+- **Does `rx_ip_align=2` give aligned loans at 4 KiB?** Yes. veth lays an
+  MTU 9000 frame out as a head and two page fragments here, and still
+  every loaned WRITE on NVMe/TCP was written direct: `seq-on` 512 of 512,
+  `mixed-on` 2785 of 2785, and every other loan cell of phases A, TLP and
+  B.
+- **Does `mtu1500-on` loan at 4 KiB?** No. It is admitted (512 records)
+  and written direct, as at 16 KiB, on both kinds of storage: it is copied.
+- **The cell that slowed down at 4 KiB before the budget-0 fix** ran
+  normally; nothing stalled.
+- **Timer tick.** `CONFIG_HZ=100`. The dm-delay fix makes the 1 ms storage
+  delay honest here, which is why every figure is about five times the
+  older 4 KiB records'.
 
-**Full plan, boot 2** (fresh boot, same command):
+### What else was seen
 
-- **budget-B** ran at the configured minimum, 967 pages (A's 257 parked +
-  256 + 390 + 64). Every edge cell admitted with 0 drops and 0 allocation
-  failures, the region peaking at 416-480 pages.
-- **analyze-AB:** David's `analyze.py` gives **OVERALL PASS** on A and B.
-- **summary:** DONE.
+- **Parked pages: 128** in every phase on both kinds of storage, so phase
+  B's minimum region is 838 pages (128 + 256 + 390 + 64).
+- **KUnit:** svcsock 40 + 1 skip of 41 (`svcsock_rx_arena_bound_test`, by
+  design on 4 KiB), xdr 7/7, nfsd receive 6/6, nfsd4 receive 10/10.
+- **zc rig and SGL rigs:** rig-cmp 457 direct, 0 vector; loan-assert 10 of
+  10 connections fully direct; system-correctness 439 direct. SGL rigs,
+  500 loaned WRITEs each: NVMe/TCP 160 of 160 direct, nvme-loop 156
+  direct and 4 memory-misaligned, brd (512-byte memory alignment) 10
+  direct and 150 memory-misaligned.
+- **LOCALIO:** boundary, short-read and stable tests exit 0 on both
+  transports; 0.002 (tcp) and 0.005 (loop) reads per WRITE at 47008,
+  0.000 at 6000, 0.0% resident.
+- **TLP:** `step-on-n16` on nvme-loop shows the spurious tail-loss probes
+  the TLP study explained (7877 retransmits, 8871 probes, harmless); the
+  quickack cell its usual 3 collapsed and 1 receive-queue drop. NVMe/TCP
+  showed neither.
+- **`collapse-off` on nvme-loop wrote 10 of 2785 WRITEs through the page
+  cache**, where 16 KiB wrote all 2785 direct. That cell has no budget,
+  so its region records are copied. TCP collapsed its receive queue 18
+  times in that cell (16 on NVMe/TCP, which wrote everything direct), and
+  a collapse rebuilds the data in ordinary kernel memory, outside the
+  region, where the budget does not apply: such records can still be
+  loaned, and their data is not in whole pages. The counts are
+  consistent with that; the cell keeps no per-record trace, so it is not
+  proven. fio verified the data.
 
-The whole plan has now run on 4 KiB, both fresh-boot stages included.
-One runner fix came out of it: phases TLP, X and D re-measure the parked
-pages into the same `parked.txt`, so budget-B now reads phase A's own value,
-kept as `parked-A.txt`. This run used A's logged 257.
+### Problem found and fixed
 
-**`build-test-kernel.sh` trial** (2026-10-04, `--no-install`, in a scratch
-worktree at `cf9bc64125da`, base = the hs.448 production config):
-- **Merge:** `merge-config.sh` added exactly the seven options the base
-  lacked (four KUnit suites, veth, null_blk, dm-delay). The resolved config
-  passes `check-config.sh` and is identical to the qualified hs.451 KUnit
-  config except `CONFIG_LOCALVERSION`, which `build-kernel-on-host.sh` sets
-  itself.
-- **Build:** `build-kernel-on-host.sh --build-number 451` named the kernel
-  `7.1.13-19.hs.451.el9.aarch64+` and built it. The worktree had just been
-  built with the same config, so make had nothing to do.
-- **Manifest:** written; sunrpc srcversion `CCD0706E`, the qualified build's.
-- **Not exercised:** a long compile from a different config, and the
-  install, boot-entry and `/boot/config` steps. The 16 KiB host is their
-  first real run.
-
-**Bisect walk of the TCP ratio-hook section**
-(`17e45531ee8a..cf9bc64125da`, hs.451 KUnit config with
-`CONFIG_WERROR=y`): 9/9 clean (4 built, 5 docs skipped). Sparse against a
-cold whole-tree baseline finds nothing the branch introduced. The last two runs of D and B on this VM are D4 and phase B
-(BUDGET_SCOPE 8.6, slipstream README).
+**n-reconf no longer tested a budget change under load.** Its hook sets
+the second namespace's budget to 400, 0 and 2000 at 6, 12 and 18 s, but
+its load was sized in data (4 jobs of 768 MiB). Once dm-delay stopped
+rounding the delay up to a tick, that load finished in about 4 s: at the
+first change B's pool was idle with its whole count admitted. The 16 KiB
+record shows the same (8352 admitted, as here), so its n-reconf did not
+test it either. `0d3ab1e2c6f2` runs ten verified passes over the same
+files (about 40 s here). Re-run on this boot (`budget-N` and
+`budget-N-sgl`, `--only`), both kinds of storage show records in flight
+and waiters at the first change (1 and 16), the waiters drained after the
+change to 0, B's records drew on the default budget while its own was 0
+(16729 to 17995 of them), fio exit 0. The 16 KiB host's n-reconf is to be
+re-run the same way.
 
 ## 16 KiB host (2026-10-05)
 
