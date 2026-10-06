@@ -1321,6 +1321,7 @@ nfsd_write_dio_iters_init(struct nfsd_file *nf, struct bio_vec *bvec,
 	size_t prefix, middle, suffix;
 	loff_t offset = iocb->ki_pos;
 	unsigned int nsegs = 0;
+	u32 cut;
 
 	/*
 	 * Check if direct I/O is feasible for this write request.
@@ -1334,6 +1335,18 @@ nfsd_write_dio_iters_init(struct nfsd_file *nf, struct bio_vec *bvec,
 	prefix_end = round_up(offset, offset_align);
 	orig_end = offset + total;
 	middle_end = round_down(orig_end, offset_align);
+
+	/*
+	 * The direct middle invalidates the page cache over its range, so it
+	 * must not share a page with a buffered end.  An aligned end needs no
+	 * buffered segment; a misaligned one is cut on a page boundary even
+	 * where the offset alignment is finer than a page.
+	 */
+	cut = max_t(u32, offset_align, PAGE_SIZE);
+	if (prefix_end != offset)
+		prefix_end = min(round_up(offset, cut), orig_end);
+	if (middle_end != orig_end)
+		middle_end = max(round_down(orig_end, cut), prefix_end);
 
 	prefix = prefix_end - offset;
 	middle = middle_end - prefix_end;
