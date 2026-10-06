@@ -5,6 +5,11 @@ what was wrong with it on anything but 4 KiB pages over 4096-byte blocks,
 and what was changed on the 16 KiB test host on 2026-10-04. The code is
 `nfs_dio_split()` in `fs/nfs_common/nfs_dio.c`, shared by both.
 
+**Sections 3 and 5 describe the per-end cut of 2026-10-04, which section 7
+replaced on 2026-10-06:** every end that is not on a page boundary is now
+cut at one, DIO-aligned or not. Read section 7 before relying on anything
+3 or 5 say about an aligned end or a DIO-aligned write staying direct.
+
 This belongs with `NFS_LOCALIO_DONTCACHE/`, which lives on another system;
 it is kept here until it can be moved. The session that did the work had
 not read that directory or the history of the split. What this says the
@@ -73,9 +78,15 @@ something checked against the original design record.
       that introduced them.
 - [ ] **Sparse has not run** on any of these commits (the 16 KiB host's
       sparse 0.6.4 is refused by the kernel Makefile). W=1 is quiet.
-- [ ] **A runtime test of a DIO-aligned, not page-aligned write staying
-      direct.** Covered by KUnit only
-      (`dontcache-aligned-ends-mid-page-all-direct`).
+- [x] ~~A runtime test of a DIO-aligned, not page-aligned write staying
+      direct.~~ Such a write no longer stays direct (section 7).
+- [ ] **Run the boundary test on a kernel with section 7's cut**, at
+      64 KiB with 47008-byte records on both rigs: no failed write, no
+      invalidation message. It has only been compiled and its KUnit test
+      run.
+- [ ] **Measure what section 7 costs** a workload of DIO-aligned writes
+      smaller than a page on 16 and 64 KiB (4096- or 8192-byte O_DIRECT
+      writes): they are buffered now.
 
 ## 2. What the split is for, and the oversight
 
@@ -295,3 +306,90 @@ about one READ per WRITE at 47008 bytes against 0.004-0.007 on 4 KiB.
 `nfs_dio_split()` held shared pages only when the alignment was a page
 multiple; `statx` on the rig showed `dio_offset_align=4096`; the same test
 on a device with a 16 KiB logical block showed 0.001.
+
+## 7. 2026-10-06: every end is cut at a page boundary
+
+`nfs_common: cut both ends of a write's direct middle at page boundaries`,
+with its KUnit commit. Found on tardis1 (64 KiB), build 455;
+`transplant/tardis1-boot1-testing.md` section 10.3 has the trace.
+
+**What section 3's rule got wrong.** It let the middle start or stop
+mid-page at an end that was already a DIO-alignment multiple, on the
+reasoning that no buffered segment exists there. None of *that* write's
+does. But the write on the other side of that end decides for itself, and
+it is buffered in the shared page whenever it has no direct middle:
+
+- its other end is misaligned and it holds no whole page (a record
+  smaller than a page);
+- its middle is under `direct_misaligned_min_bytes`;
+- its memory is misaligned.
+
+Section 3 named this ("what per-end does not guarantee") for *unrelated*
+writes and expected only a read-back. Both parts were wrong: the two
+writes are back-to-back neighbours of one workload, and the cost is a
+failed write.
+
+**What happened.** 47008-byte records, 4096-byte alignment, 64 KiB pages,
+eight writers through LOCALIO on nvme-loop. Every 128th record boundary is
+a 4096-byte multiple, and mid-page. Record 6655 ends on one, 16384 bytes
+into page 4774: its middle was written direct into the first 16384 bytes
+of that page. Record 6656 starts there, ends misaligned in the same page,
+holds no whole page and was written buffered, 0.19 ms later. The direct
+write completed with the page dirty, could not invalidate it
+(`Page cache invalidation failure on direct I/O`), and that sets `-EIO` in
+the file's writeback error. Record 6656's write syncs the file and stopped
+there with a failed `pwrite()`. In that run 102 pages were shared this
+way, 31 pairs within 2 ms; on NVMe/TCP 178 and 51, none of which lost the
+race. `nfsd_vfs_write()` uses the same split and checks the writeback
+error after its write; it was not tested.
+
+**The rule now.** Where the DIO alignment is finer than a page, the middle
+of a write is whole pages and nothing else. An end that is not on a page
+boundary is a buffered segment to the nearest page boundary inside the
+write, whether or not it is DIO-aligned. So no direct middle, of any
+write, enters a page that any write buffers. Reads, and alignments that
+are page-size multiples, are as before.
+
+Section 3's worked examples (16 KiB pages, 4096-byte alignment) become:
+
+| write | per-end cut (section 3) | now |
+|---|---|---|
+| offset 188032, length 47008 | prefix 8576, middle 196608+32768, suffix 5664 | the same |
+| offset 4096, length 8192 (both ends aligned, mid-page) | all direct | **one buffered segment** (holds no whole page) |
+| offset 4096, length 40000 | no prefix, middle 4096+28672, suffix 11328 | **prefix 12288**, middle 16384+16384, suffix 11328 |
+
+**What it costs**, and section 3 rejected it for this reason on
+2026-10-04: a write that is DIO-aligned but not page-aligned is no longer
+direct throughout, and one that holds no whole page is not direct at all.
+On 64 KiB that is every write under 64 KiB and, by where it falls, up to
+128 KiB; a 4096- or 8192-byte O_DIRECT write through LOCALIO, or with
+`io_cache_write` direct, is now a buffered write that is synced. Mike
+chose it on 2026-10-06 against a write failing. Not measured.
+
+Section 5's first bullet ("a DIO-aligned write stays fully direct,
+whatever its size") no longer holds; its option 2 (fall back to the
+DIO-alignment cut where there is no middle) is exactly what cannot be
+done, since it puts a direct write in a shared page.
+
+**KUnit.** `nfsd_bvec_dio_segments_test`, 33 cases. Fourteen cases that
+exercise the memory and joint checks used fixed 4096- and 8192-byte
+writes, which hold no whole page on 16 and 64 KiB and would now be
+buffered before those checks are reached; they are whole pages now
+(`2 * PAGE_SIZE`, or `PAGE_SIZE`), each keeping its joint where it was
+relative to the page. `dontcache-aligned-ends-mid-page-all-direct` became
+`...-buffered`; `dontcache-aligned-start-misaligned-end` expects a prefix;
+`dontcache-aligned-mid-page-end-cut-at-page` is new and is the write that
+collided.
+
+**Verified how.** Both files compile (W=1) as external modules against
+build 455's `-devel` files. The split test passes on tardis1 at 64 KiB,
+run from a test-only module carrying a private copy of the new split
+(the live `nfs_dio` cannot be replaced under a running nfsd). A model of
+the split agrees with the table at 4, 16 and 64 KiB. **No kernel with
+the change has been built or booted, and the boundary test has not been
+run against it.**
+
+**The boundary test** now fails a record size if any write fails
+(`iorhard` exits 1 and names the record) or the kernel logs the
+invalidation message. Before, `iorhard`'s stderr went to `/dev/null`, it
+exited 0, and the run above passed.

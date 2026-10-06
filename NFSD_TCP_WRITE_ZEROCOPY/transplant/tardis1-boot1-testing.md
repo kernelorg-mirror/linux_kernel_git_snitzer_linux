@@ -22,9 +22,8 @@ kernel has run.
 | plan | boot 1 complete (2026-10-05 22:12 to 23:08, 56 minutes). **Boot 2 not run, on purpose** |
 | branch tip | `d063737e2ed3` pushed by Mike 2026-10-05 (section 7); only later edits to this file come after it |
 | new kernel | `7.1.13-19.hs.455.loanpages_pool.el9.aarch64+64k`, installed and booted 2026-10-06; sunrpc srcversion `9611113753DDA35599A6AE2` (differs from 454's, as it must), nfsd unchanged |
-| build 455 | **boot 1 complete** (2026-10-06 11:11 to 12:03), every stage PASS or DONE: **section 10** |
-| waiting on | Mike: the reboot for boot 2 |
-| then | `run-testplan.sh` again from a directory other than `transplant/` (boot 2: `budget-B`, `budget-B-sgl`, the analyze stages, `summary`), then section 9 from step 4 |
+| build 455 | **the whole plan is complete**: boot 1 (2026-10-06 11:11 to 12:03, **section 10**) and boot 2 (12:38 to 12:43, **section 11**), every stage PASS or DONE, `analyze.py` OVERALL PASS on both kinds of storage |
+| waiting on | Mike: a kernel built with the page-cut change (**section 10.3**; committed 2026-10-06, not built), reconciled with the simplified version of that change and the `-20` baseline. Then the LOCALIO stages again on it, and only then the 64 KiB record. The 16-connection gap (10.2) is still open |
 
 Short version of the findings:
 
@@ -576,13 +575,71 @@ Page cache invalidation failure on direct I/O.  Possible data corruption due to 
 File: /export/t4/liob.ior PID: 452 Comm: kworker/54:1
 ```
 
-The message is rate-limited, so once does not mean one event. The test
-exited 0. Section 2 lists what build 454's log showed and this is not
-there, but 454's log is gone with the reboot, so "new" is from that list
-only. **Not examined.** It is a direct write completing over a page that a
-buffered write holds, in the LOCALIO split path with records smaller than
-a page: section 4.5's subject, and it should be understood before the
-64 KiB record is written.
+**Examined 2026-10-06, from the saved trace** (`localio-loop/.../boundary/rs47008.trace`);
+the rig is gone, so nothing was re-run. It is a hole in the split rule, and
+it **failed a write**:
+
+- The message prints up to ten times a day, so one line is one event.
+- **What collided.** Record 6655 (rank 7) ends on a 4096-byte multiple,
+  16384 bytes into page 4774. That end "needs no buffered segment", so its
+  middle was written direct into the first 16384 bytes of the page. Record
+  6656 (rank 0) starts there and ends misaligned in the same page; it
+  holds no whole page, so it has no middle and was written buffered into
+  the rest of that page, 0.19 ms later. The direct write completed with
+  the page dirty, could not invalidate it, logged the message and set
+  `-EIO` in the mapping's `wb_err`.
+- **What it cost.** Record 6656's write is synced by
+  `nfs_local_write_sync()` (`vfs_fsync_range()`), which reported that
+  `-EIO`. Rank 0's `pwrite()` failed and it stopped after 833 records, at
+  exactly that record; the other seven wrote 5710 each. That is why this
+  run wrote 40802 records (1829 MiB) where NVMe/TCP wrote 45680 (2047
+  MiB).
+- **The test did not notice:** it sends `iorhard`'s stderr to `/dev/null`,
+  `iorhard` exits 0 after a failed `pwrite()`, and nothing compares the
+  record count. "boundary exit 0" was wrong for this run.
+- **The rule that allows it** is in `nfs_dio_split()`: "an end that is
+  already an `offset_align` multiple needs no buffered segment, and the
+  middle starts or stops right there, mid-page or not". That is safe only
+  if the neighbouring write is direct in that page too. The neighbour is
+  buffered there whenever it has no direct middle: it holds no whole page
+  (a record smaller than a page), its middle is under
+  `direct_misaligned_min_bytes`, or its memory is misaligned.
+- **How often.** In this trace 102 pages were written by one record's
+  direct middle and another record's buffered segment, 31 of those pairs
+  within 2 ms of each other; one lost the race. NVMe/TCP's trace has 178
+  such pages and 51 pairs within 2 ms, and none lost it. The 96000-byte
+  record has none on either rig (both neighbours are direct).
+- **Not only 64 KiB, not only LOCALIO.** The same split serves
+  `nfsd_vfs_write()`, which checks `wb_err` after its write. The geometry
+  needs a page larger than `offset_align` and a neighbour without a
+  middle; 64 KiB pages with records under a page are simply where the
+  test's sizes reach it. Whether the 4 KiB and 16 KiB hosts' record sizes
+  can reach it was worked out by hand only for 16 KiB (47008 and 6000: no).
+- **Data:** not checked, the files are gone. From the code, the direct
+  bytes are on disk and XFS writes back only the blocks the buffered write
+  dirtied, so the exposure looks like the `-EIO` and a page cache copy
+  that may be stale until it is dropped; that is a reading, not a test.
+- **Changed 2026-10-06, Mike's decision:** the middle of a write is now
+  whole pages only; every end that is not on a page boundary is cut at
+  one, aligned or not (`nfs_dio_split()`, with its KUnit cases and
+  `nfsd-io-modes.rst`). The cost: a write that is block-aligned but not
+  page-aligned is no longer direct throughout, and one that holds no
+  whole page (anything under 64 KiB here) is buffered.
+  `slipstream/NFSD_LOCALIO_DIRECT_SPLIT.md` section 7 has the account.
+- **The test is fixed:** `iorhard` names a failed write and exits 1, and
+  the boundary test fails the record size on that or on the kernel
+  message.
+- **How far it is verified:** compiled against build 455's `-devel`
+  files, and the split KUnit test passes here at 64 KiB from a test-only
+  module with a private copy of the new split. **Not built into a kernel,
+  not booted, the boundary test not re-run.** That needs build 456.
+- **Done to the host for that check:** `kunit` was reloaded with
+  `enable=1`, the test module loaded and removed, then `kunit` (disabled)
+  and `nfsd4_bvec_kunit` loaded again as `/etc/modules-load.d/nfs.conf`
+  has them. nfsd was not stopped. The kernel is now tainted N (a KUnit
+  test ran) until the next boot. **`dmesg -c` was run by mistake at
+  13:14 and cleared the ring buffer;** the journal (`journalctl -k -b`)
+  still has this boot's messages.
 
 Otherwise the log has only the two messages section 2 names, and no
 WARNING, BUG, stall or allocation failure.
@@ -596,3 +653,49 @@ WARNING, BUG, stall or allocation failure.
   probes of the TLP study.
 - `seq-on` on NVMe/TCP held 316 pages where `seq-sized-on` held 188.
 
+## 11. Build 455, boot 2 (2026-10-06): phase B and the analysis
+
+Fresh boot of the same kernel (sunrpc `9611113753DDA35599A6AE2`), 12:38 to
+12:43, five minutes. Run log: `/var/tmp/zc-run-logs/boot2-455.log`, started
+from `/var/tmp/zc-run-logs/cwd-455`. One nfsd client was connected when it
+started; Mike asked for the run.
+
+- **Stages:** `preflight` PASS (fresh boot), `budget-B` DONE, `budget-B-sgl`
+  DONE, `analyze-AB` PASS, `analyze-AB-sgl` PASS, `summary` DONE. The plan
+  is complete for build 455.
+- **`analyze.py`: OVERALL PASS** for nvme-loop and for NVMe/TCP, every
+  judged cell of phases A and B PASS.
+- **Phase B** (region at its configured minimum, 114 pages; budget 30,
+  equal to the reserve; `edge-below-n1` budget 46):
+
+| cell | conn | nvme-loop MB/s | NVMe/TCP MB/s | peak region pages (loop, tcp) | denied (loop, tcp) |
+|---|---|---|---|---|---|
+| `edge-at-n1` | 1 | 370 | 336 | 24, 28 | 319, 341 |
+| `edge-at-n4` | 4 | 349 | 325 | 36, 36 | 516, 522 |
+| `edge-at-mixed-n4` | 4 | 146 | 140 | 36, 36 | 5597, 5592 |
+| `edge-at-step` | 1 | 896 | 759 | 28, 28 | 103113, 89059 |
+| `edge-below-n1` | 1 | 362 | 337 | 28, 24 | 270, 274 |
+| `edge-off-n1` (no receive buffer held) | 1 | 441 | 403 | 8, 8 | 0, 0 |
+| `edge-copy-n1` | 1 | 434 | 398 | 4, 4 | 0, 0 |
+
+- **Every cell:** fio exit 0, no drops, no allocation failures, 0 paused,
+  0 overrun, nothing collapsed. Loans are written dontcache on nvme-loop
+  and direct on NVMe/TCP, every one (`admitted` equals the count); the two
+  copy cells are direct.
+- `edge-at-step` retransmits 925 and 1071 times, with as many loss probes
+  and duplicate acknowledgements and no timeout. The 16 KiB and 4 KiB
+  records show the same in this cell (617 to 1193).
+- Peak region use is 1.5 to 2.25 MiB, where 16 KiB shows 2.25 to 2.5 MiB
+  and 4 KiB 1.6 to 1.9 MiB.
+- **`edge-off-n1` did not drop here** (nor at 16 KiB); at 4 KiB it drops
+  482 and 1389 frames. It held 8 pages, 0.5 MiB, against 3.25 to 4 MiB on
+  the other hosts. Not examined.
+- **Kernel log, boot 2:** only the `DISCARD` "operation not supported"
+  lines on the nvme-loop test device, once per stage. No WARNING, BUG,
+  stall or allocation failure, and no repeat of 10.3's invalidation
+  message (no LOCALIO stage runs on boot 2).
+
+Not done: `results/64KiB.tsv`, `RESULTS.md` and the README's 64 KiB
+account (section 9 step 6). Sections 10.2 (the 16-connection gap) and 10.3
+(the invalidation message) are still open, and 10.3 says to understand
+that message first; it now is (10.3), and it is a defect.
