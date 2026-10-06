@@ -22,7 +22,8 @@
 # with three or more writers, which the two-writer claim does not cover.
 # The small record is therefore scaled, 6000 * PAGE_SIZE / 4096 (6000,
 # 24000, 96000).  On larger pages a raw 6000-byte row is still run, and
-# any record smaller than a page has its reads reported, not judged.  The
+# any record smaller than a page has its reads and its kick rounds
+# reported, not judged.  The
 # two ceilings are the 4 KiB ones; which applies follows what the record
 # does (never_split below), not its size.
 #
@@ -74,10 +75,19 @@ KICK_BDEV=$bdev
 # DONTCACHE writeback kick whatever NFSD does.  The pages NFSD keeps for a
 # neighbouring WRITE are marked only once the WRITE is complete, after its
 # fsync if it has one, and so should wake it (almost) never.  The kick check
-# therefore applies only where no buffered segment can cover a whole page:
-# records smaller than a page, or large enough to always split (direct
-# middle of at least direct_misaligned_min_bytes bytes, ends within one page
-# each).  It no longer depends on the export's logical block size: a split
+# therefore applies only where no buffered segment can cover a whole page
+# and no page has more than two writers: records large enough to always
+# split (direct middle of at least direct_misaligned_min_bytes bytes, ends
+# within one page each).  A record smaller than a page is not judged, for
+# the reason its reads are not: more than two writes share a page, every
+# one after the first marks it, and with several writing at once it is
+# marked while a neighbour's data is still dirty.  Measured 2026-10-05 at
+# 64 KiB, 6000-byte records, 8 ranks, about 11 writes to a page: 0.058
+# rounds per WRITE on NVMe/TCP and 0.106 on nvme-loop, following how often
+# two tasks wrote the same page within 0.5 ms (41% and 76%).  A ceiling
+# scaled by writers per page would reach the 0.10-0.54 measured below for
+# pages marked dirty, and so would catch nothing.
+# It no longer depends on the export's logical block size: a split
 # DONTCACHE write is cut at page boundaries when the DIO offset alignment is
 # finer than a page, so its pages are kept there too.  Elsewhere the rounds
 # are reported, not judged.  Ceiling: 0.05 rounds per
@@ -104,7 +114,7 @@ never_split() { [ $(( $1 / PAGE * PAGE )) -lt "$(gate_bytes)" ]; }
 kick_checked() {	# kick_checked RS -> true if rounds must stay near zero
 	local rs=$1 page=$PAGE min
 	min=$(gate_bytes)
-	[ "$rs" -lt "$page" ] || [ "$rs" -ge $((min + 2 * page)) ]
+	[ "$rs" -ge "$page" ] && [ "$rs" -ge $((min + 2 * page)) ]
 }
 echo "== localio boundary ${LABEL:+[$LABEL] }ranks=$RANKS nfs=$(cat /sys/module/nfs/srcversion) nfsd=$(cat /sys/module/nfsd/srcversion) nfs_dio=$(cat /sys/module/nfs_dio/srcversion 2>/dev/null || echo none) export=$dev($bdi) -> $OUT" | tee "$OUT/summary.txt"
 for rs in $RS; do
@@ -138,13 +148,15 @@ for rs in $RS; do
 	else
 		if never_split "$rs"; then lim=$((w / 200 + 50)); else lim=$((w / 40 + 50)); fi
 		klim=$((w / 20 + 100))
-		if ! kick_checked "$rs"; then
+		if [ "$rs" -lt "$PAGE" ]; then
+			:	# said with the reads, below
+		elif ! kick_checked "$rs"; then
 			v="kick rounds not judged (a buffered segment can cover a whole page)"
 		elif [ "$rounds" -gt "$klim" ]; then
 			v="FAIL: $rounds DONTCACHE kick rounds, over the $klim ceiling (kept pages marked while dirty)"; FAILED=$((FAILED+1))
 		fi
 		if [ "$rs" -lt "$PAGE" ]; then
-			case $v in FAIL*) ;; *) v="reads not judged: record smaller than a page, more than two writers share one" ;; esac
+			v="reads and kick rounds not judged: record smaller than a page, more than two writers share one"
 		elif [ "$rb" -gt "$lim" ]; then
 			v="FAIL: $rb READ bios for $w WRITEs, over the $lim ceiling (shared pages not kept)"; FAILED=$((FAILED+1))
 		fi

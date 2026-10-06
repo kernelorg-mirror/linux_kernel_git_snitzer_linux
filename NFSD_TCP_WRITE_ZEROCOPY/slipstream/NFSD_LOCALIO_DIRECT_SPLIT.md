@@ -273,7 +273,12 @@ unrelated to what it checks:
 - the small record is scaled, `6000 * PAGE_SIZE / 4096`;
 - a record smaller than a page has its reads reported, not judged, and a
   raw 6000-byte row still runs on larger pages so the gap stays visible;
-- kick rounds are judged without requiring a page-multiple block size;
+- kick rounds are judged without requiring a page-multiple block size,
+  but not for a record smaller than a page (2026-10-05, from tardis1 at
+  64 KiB: about eleven 6000-byte writes share a page and each after the
+  first marks it, often while a neighbour's data is dirty; 0.058 and
+  0.106 rounds per WRITE against the 0.05 ceiling). They are reported,
+  like that record's reads;
 - the two read ceilings keep their values, but which applies follows
   whether the record **can split under the gate**, not its literal size:
   a 24000-byte record on 16 KiB can split, and against the never-split
