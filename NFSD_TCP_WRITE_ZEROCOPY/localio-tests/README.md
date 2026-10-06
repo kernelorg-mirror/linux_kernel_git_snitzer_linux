@@ -8,7 +8,7 @@ fresh clone of this branch can run the LOCALIO A/B stage:
 |---|---|---|
 | `start-nfsd.sh` | tree root | none |
 | `localio-boundary-test.sh`, `localio-short-read-test.sh`, `localio-stable-test.sh`, `odirect_pread.c` | `NFS_LOCALIO_DONTCACHE/` | `iorhard` and `resident` are built here from source when missing |
-| `iorhard.c`, `resident.c` | `NFSD_DONTCACHE_FALLBACK/` | none |
+| `iorhard.c`, `resident.c` | `NFSD_DONTCACHE_FALLBACK/` | `iorhard` reports a failed or short write and exits 1; `resident.c` none |
 
 Binaries (`iorhard`, `resident`, `odirect_pread`) are built beside the
 scripts on first use (`gcc -O2 [-pthread]`) and are not tracked.  The
