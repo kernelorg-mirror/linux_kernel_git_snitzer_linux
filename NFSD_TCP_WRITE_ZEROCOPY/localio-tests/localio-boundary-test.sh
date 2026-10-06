@@ -17,6 +17,15 @@
 # from meminfo Cached, which the tmpfs-backed export image confounds.
 # Applies boundary-ab.sh's invariants.  Needs LOCALIO active on the mount.
 #
+# Every write must succeed.  A rank whose write fails stops there, iorhard
+# exits 1, and the record size is a FAIL whatever its counters say; the
+# reason is in rs<RS>.ior.err.  The kernel log is also checked for a page
+# cache invalidation failure on direct I/O, which is what a direct and a
+# buffered write meeting in one page leaves behind (it set -EIO on the file
+# and failed a neighbour's write, 2026-10-06 at 64 KiB, and this test passed).
+# The kernel prints that at most ten times a day, so its absence proves less
+# than its presence.
+#
 # Page size.  The read invariant is about a page two writes share, so it
 # holds only for records of at least a page: a smaller record leaves pages
 # with three or more writers, which the two-writer claim does not cover.
@@ -44,7 +53,9 @@ while getopts "l:r:n:" o; do case $o in l) LABEL=$OPTARG;; r) RS=$OPTARG;; n) RA
 shift $((OPTIND-1))
 HERE=$(cd "$(dirname "$0")" && pwd)
 IOR=${IOR:-$HERE/iorhard}
-[ -x "$IOR" ] || gcc -O2 -pthread -o "$IOR" "$HERE/iorhard.c" || exit 2
+# Rebuild a binary older than its source: an old iorhard exits 0 after a
+# failed write, which the check below relies on it not doing.
+{ [ -x "$IOR" ] && ! [ "$HERE/iorhard.c" -nt "$IOR" ]; } || gcc -O2 -pthread -o "$IOR" "$HERE/iorhard.c" || exit 2
 MNT=/mnt/t4; EXP=/export/t4
 OUT=${1:-/var/tmp/localio-boundary-$(date +%Y%m%d-%H%M%S)}; mkdir -p "$OUT"
 T=/sys/kernel/tracing/instances/lioboundary
@@ -67,6 +78,7 @@ cleanup() { for e in $EVENTS; do echo 0 > $T/events/$e/enable; done; rmdir $T 2>
 trap cleanup EXIT
 
 cached_kb() { awk '/^Cached:/ {print $2}' /proc/meminfo; }
+inval_msgs() { dmesg | grep -c 'Page cache invalidation failure on direct I/O'; }
 
 FAILED=0
 KICK_BDEV=$bdev
@@ -122,7 +134,9 @@ for rs in $RS; do
 	echo 0 > $T/tracing_on; echo > $T/trace
 	c0=$(cached_kb)
 	echo 1 > $T/tracing_on
-	"$IOR" $MNT/liob.ior $RANKS 15 $rs $((2*1024*1024*1024)) 2>/dev/null > "$OUT/rs$rs.ior"
+	inval0=$(inval_msgs)
+	"$IOR" $MNT/liob.ior $RANKS 15 $rs $((2*1024*1024*1024)) 2> "$OUT/rs$rs.ior.err" > "$OUT/rs$rs.ior"
+	ior_rc=$?
 	sync; sleep 2
 	echo 0 > $T/tracing_on
 	c1=$(cached_kb)
@@ -161,9 +175,15 @@ for rs in $RS; do
 			v="FAIL: $rb READ bios for $w WRITEs, over the $lim ceiling (shared pages not kept)"; FAILED=$((FAILED+1))
 		fi
 	fi
+	inval=$(( $(inval_msgs) - inval0 ))
+	if [ "$ior_rc" -ne 0 ]; then
+		v="FAIL: a write failed (iorhard exit $ior_rc: $(grep -m1 'pwrite of record' "$OUT/rs$rs.ior.err" | sed 's/^rank *//')); $v"; FAILED=$((FAILED+1))
+	elif [ "$inval" -gt 0 ]; then
+		v="FAIL: $inval page cache invalidation failure(s) on direct I/O in the kernel log; $v"; FAILED=$((FAILED+1))
+	fi
 	printf 'rs=%-6s WRITEs=%-7s reads/WRITE=%-6s READbios=%-6s dontcache_rounds=%-5s resident=%s%% of %s MiB (meminfo Cached +%s%%) | %s\n' \
 		"$rs" "$w" "$rpw" "$rb" "$rounds" "${resident:-?}" "$((wb / 1048576))" "$pct" "$v" | tee -a "$OUT/summary.txt"
 done
 rm -f $MNT/liob.ior
-if [ $FAILED -gt 0 ]; then echo "== $FAILED invariant failure(s); see $OUT/summary.txt" | tee -a "$OUT/summary.txt"; exit 1; fi
-echo "== invariants held: kept pages do not wake the DONTCACHE kick, no read amplification" | tee -a "$OUT/summary.txt"
+if [ $FAILED -gt 0 ]; then echo "== $FAILED failure(s); see $OUT/summary.txt" | tee -a "$OUT/summary.txt"; exit 1; fi
+echo "== every write succeeded and the invariants held: kept pages do not wake the DONTCACHE kick, no read amplification" | tee -a "$OUT/summary.txt"
