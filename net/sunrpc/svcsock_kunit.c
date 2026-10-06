@@ -1875,43 +1875,56 @@ static void svcsock_rx_capacity_plus_one_test(struct kunit *test)
 	enum { FRAG_LEN = 8 };
 	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 2);
 	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
-	/* one loaned fragment more than the table holds, in one skb */
+	/*
+	 * One loaned fragment more than the table holds.  An skb takes
+	 * MAX_SKB_FRAGS of them, so where the table is larger than that (64 KiB
+	 * pages) the record continues in further skbs and the table fills in
+	 * a later one, with the loans of the earlier ones already taken.
+	 */
 	unsigned int nfrags = state->capacity + 1;
+	unsigned int nskbs = DIV_ROUND_UP(nfrags, MAX_SKB_FRAGS);
 	unsigned int body_len = 7 * XDR_UNIT + nfrags * FRAG_LEN;
 	struct svcsock_rx_actor_state actor = {};
 	read_descriptor_t desc = {};
+	struct sk_buff **skbs;
 	struct page **pages;
 	unsigned int *refs;
-	struct sk_buff *skb;
 	const u8 *payload;
 	u8 *record;
 	unsigned int i;
 	int ret;
 
-	if (nfrags > MAX_SKB_FRAGS)
-		kunit_skip(test, "needs %u fragments in one skb, MAX_SKB_FRAGS is %u",
-			   nfrags, (unsigned int)MAX_SKB_FRAGS);
 	record = kunit_kzalloc(test, sizeof(rpc_fraghdr) + body_len, GFP_KERNEL);
 	pages = kunit_kcalloc(test, nfrags, sizeof(*pages), GFP_KERNEL);
 	refs = kunit_kcalloc(test, nfrags, sizeof(*refs), GFP_KERNEL);
+	skbs = kunit_kcalloc(test, nskbs, sizeof(*skbs), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, record);
 	KUNIT_ASSERT_NOT_NULL(test, pages);
 	KUNIT_ASSERT_NOT_NULL(test, refs);
+	KUNIT_ASSERT_NOT_NULL(test, skbs);
 	desc.count = sizeof(rpc_fraghdr) + body_len;
 
 	svcsock_rx_fill_record(record, body_len, true, RPC_CALL, RPC_AUTH_UNIX);
-	skb = svcsock_rx_build_linear_skb(test, record,
-					  sizeof(rpc_fraghdr) + 7 * XDR_UNIT);
 	payload = record + sizeof(rpc_fraghdr) + 7 * XDR_UNIT;
-	for (i = 0; i < nfrags; i++)
-		pages[i] = svcsock_rx_add_frag(test, skb, i,
+	for (i = 0; i < nfrags; i++) {
+		unsigned int s = i / MAX_SKB_FRAGS;
+		/* The first skb leads with the record marker and RPC header. */
+		unsigned int head = s ? 0 : sizeof(rpc_fraghdr) + 7 * XDR_UNIT;
+
+		if (i % MAX_SKB_FRAGS == 0)
+			skbs[s] = svcsock_rx_build_linear_skb(test, record,
+							      head);
+		pages[i] = svcsock_rx_add_frag(test, skbs[s], i % MAX_SKB_FRAGS,
 					       payload + i * FRAG_LEN, FRAG_LEN,
 					       31 + i * 19, &refs[i]);
+	}
 
-	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, skb, 0,
-				   skb->len);
-	KUNIT_ASSERT_EQ(test, ret, (int)skb->len);
-	KUNIT_EXPECT_TRUE(test, actor.complete);
+	for (i = 0; i < nskbs; i++) {
+		ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc,
+					   skbs[i], 0, skbs[i]->len);
+		KUNIT_ASSERT_EQ(test, ret, (int)skbs[i]->len);
+		KUNIT_EXPECT_EQ(test, actor.complete, i == nskbs - 1);
+	}
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_COPY);
 	KUNIT_EXPECT_EQ(test, state->reason, (u8)SVC_TCP_RX_REASON_CAPACITY);
 	KUNIT_EXPECT_EQ(test, state->refs_acquired, nfrags - 1);
@@ -1922,7 +1935,8 @@ static void svcsock_rx_capacity_plus_one_test(struct kunit *test)
 	KUNIT_EXPECT_MEMEQ(test, page_address(fixture->rqstp->rq_pages[0]),
 			   record + sizeof(rpc_fraghdr), body_len);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, fixture->rqstp), 0);
-	kunit_kfree_skb(test, skb);
+	for (i = 0; i < nskbs; i++)
+		kunit_kfree_skb(test, skbs[i]);
 	for (i = 0; i < nfrags; i++)
 		KUNIT_EXPECT_EQ(test, page_ref_count(pages[i]), refs[i] - 1);
 }
