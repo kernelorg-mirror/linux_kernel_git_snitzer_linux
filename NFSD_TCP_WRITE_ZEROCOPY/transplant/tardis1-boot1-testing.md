@@ -21,8 +21,10 @@ kernel has run.
 | same code as | the 4 KiB host's run (`26e799b10e8e`): the two commits differ only in docs and harness files, and sunrpc's srcversion matches |
 | plan | boot 1 complete (2026-10-05 22:12 to 23:08, 56 minutes). **Boot 2 not run, on purpose** |
 | branch tip | `d063737e2ed3` pushed by Mike 2026-10-05 (section 7); only later edits to this file come after it |
-| waiting on | Mike: the new 64 KiB kernel, **being built from `d063737e2ed3`** (2026-10-05), to be installed on tardis1 |
-| then | a full plan run, both boots, on the new kernel (section 9) |
+| new kernel | `7.1.13-19.hs.455.loanpages_pool.el9.aarch64+64k`, installed and booted 2026-10-06; sunrpc srcversion `9611113753DDA35599A6AE2` (differs from 454's, as it must), nfsd unchanged |
+| build 455 | **boot 1 complete** (2026-10-06 11:11 to 12:03), every stage PASS or DONE: **section 10** |
+| waiting on | Mike: the reboot for boot 2 |
+| then | `run-testplan.sh` again from a directory other than `transplant/` (boot 2: `budget-B`, `budget-B-sgl`, the analyze stages, `summary`), then section 9 from step 4 |
 
 Short version of the findings:
 
@@ -482,3 +484,115 @@ copied=54760`. Not yet set beside the other hosts' dispositions.
 - whether the sub-page read-back through LOCALIO matters (section 4.5);
 - carrying the four commits to the HS twin (section 7);
 - clearing the untracked files and the old results (sections 6 and 9).
+
+## 10. Build 455, boot 1 (2026-10-06): the charge fix measured
+
+Kernel `7.1.13-19.hs.455.loanpages_pool.el9.aarch64+64k`, packaged RPMs
+(with `-modules-internal` and `-devel`), built by Mike and said to be from
+`d063737e2ed3`; sunrpc `9611113753DDA35599A6AE2`, nfsd
+`4E439F2B24A4A7C3A8521DE`. `preflight.sh`: PASS on a fresh boot. Results:
+`/var/tmp/zc-testplan-7.1.13-19.hs.455.loanpages_pool.el9.aarch64+64k/`.
+Run log: `/var/tmp/zc-run-logs/boot1-455.log`. The plan was started from
+`/var/tmp/zc-run-logs/cwd-455`, where fio left its six state files.
+`pl-105` was connected (seven connections) when the run started; Mike asked
+for the run.
+
+Nothing here is in `README.md`, `RESULTS.md` or `results/64KiB.tsv` yet:
+boot 2 has not run.
+
+### 10.1 Stages
+
+Every stage PASS or DONE, 52 minutes. No fio verify failure, no cell
+killed by its timeout.
+
+- **KUnit: PASS, no skip.** 7/7, **41/41**, 6/6, 10/10.
+  `svcsock_rx_capacity_plus_one_test` ran for the first time at 64 KiB and
+  passed (section 5's question: the second skb's fallback does release and
+  copy the first skb's loans).
+- **bvecrepro** MATCH; **rig-cmp** PASS; **loan-assert** 50 of 50
+  connections fully direct; **killswitch** validated; **system-correctness**
+  fails=0, direct=500, vector=0.
+- **SGL rigs,** `dd_fails=0 cmp_mismatches=0` each: brd 10 direct and 150
+  `mem_misaligned`; NVMe/TCP 160 direct; nvme-loop 152 direct and 8
+  `mem_misaligned`. (Build 454: 8/152, 160, 160/0.)
+- **LOCALIO, both rigs:** boundary exit 0, short-read exit 0, stable exit
+  0. Reads per WRITE 0.417 and 0.299 at 47008, 0.007 and 0.008 at 96000,
+  0.738 and 0.707 at 6000 (tcp, loop); 0.0% resident throughout.
+
+### 10.2 Section 3.5's list
+
+| pair (phase A) | conn | nvme-loop: copy / loan MB/s | NVMe/TCP: copy / loan MB/s | peak region pages, loan (loop, tcp) | paused (loop, tcp) |
+|---|---|---|---|---|---|
+| `seq-sized` | 1 | 2130 / 2130 | 2191 / 2165 | 180, 188 | 0, 0 |
+| `step` | 1 | 1320 / 1319 | 1320 / 1317 | 318, 317 | 0, 0 |
+| `mixed-sized` | 16 | 2684 / 1104 | 2886 / 1106 | 272, 264 | 1057, 958 |
+| `step-n16` | 16 | 1902 / 1259 | 1841 / 1007 | 279, 280 | 98355, 96370 |
+| `seq` (new file) | 1 | 439 / 2114 | 401 / 394 | 180, 316 | 0, 0 |
+| `mixed` (new files) | 16 | 440 / 1160 | 446 / 805 | 276, 320 | 1044, 992 |
+
+- **Overruns are gone:** 0 in every cell of every phase on both kinds of
+  storage (build 454: 1537572 by the end of boot 1). The init counter
+  reads `overrun 4` at the end; no cell's table shows where those came
+  from.
+- **One connection: copy and loan are level, and nothing pauses.** On
+  build 454 `seq-sized-on` ran at 1000 and 983 MB/s with 758 and 779
+  pauses.
+- **Sixteen connections: the loan is still well behind its copy, and
+  still pauses.** `mixed-sized-on` is at 41% and 38% of its copy (build
+  454: 10% and 12%), `step-on-n16` at 66% and 55%. About 1000 pauses per
+  2785 WRITEs in every 16-connection `mixed` loan cell, and about 96000 to
+  137000 in the `step` ones. So the "sized pairs level" expectation holds
+  for one connection only.
+- **The region is not used up to the budget.** Peak use is 180 to 318
+  pages on one connection (budget 471 to 479) and 256 to 360 on sixteen
+  (budget 415 to 423), up from 80 and 124 to 148 on build 454.
+- **No drops and no allocation failures in any cell with a budget set**
+  and the receive buffer held. The cells meant to drop did: `floor-refused`
+  596 and 1902, `x-off-RN` 4087 and 4131. `n-exit` fio exit 4, as intended.
+  `region-final.txt`'s `alloc_fail` (4683, 10716) is exactly those cells'
+  sum.
+- **How WRITEs were issued:** on nvme-loop every loan is dontcache and
+  every copy direct; on NVMe/TCP every loan is direct (`wr_direct` equals
+  the admitted count in every loan cell). `mtu1500-on` is 512 direct on
+  both, 16 region pages.
+
+A reading of the 16-connection gap, not checked: the peak of about 272
+pages is sixteen records of 17 pages, and a budget of 423 less the reserve
+of 30 admits fifteen records at a cost of 25. So the budget is doing what
+it is set to do, one record or so per connection, and the copy beside it
+has no such limit on this 64-CPU host. Whether that is the factor (150,
+25 charged for 17 held), the reserve, or simply the price of a 555-page
+region with sixteen connections is the next thing to look at. Phase D and
+X show the same shape (`d-on-N` 1151 and 854, `x-on-R` 1075 and 838, each
+with about 1000 pauses).
+
+### 10.3 New in the kernel log
+
+Once, at 11:17:25, as `localio-loop`'s boundary test began its first
+record size (47008):
+
+```
+Page cache invalidation failure on direct I/O.  Possible data corruption due to collision with buffered I/O!
+File: /export/t4/liob.ior PID: 452 Comm: kworker/54:1
+```
+
+The message is rate-limited, so once does not mean one event. The test
+exited 0. Section 2 lists what build 454's log showed and this is not
+there, but 454's log is gone with the reboot, so "new" is from that list
+only. **Not examined.** It is a direct write completing over a page that a
+buffered write holds, in the LOCALIO split path with records smaller than
+a page: section 4.5's subject, and it should be understood before the
+64 KiB record is written.
+
+Otherwise the log has only the two messages section 2 names, and no
+WARNING, BUG, stall or allocation failure.
+
+### 10.4 Other things to set beside the other hosts
+
+- `early-release-m1-d10`: 256 admitted, `wr_direct`, `wr_dontcache` and
+  `wr_buffered` all 0, on both kinds of storage. Not compared.
+- `step-on-n16` draws 6633 to 7770 retransmits and as many loss probes,
+  none with quick acknowledgements or probes off: the spurious tail-loss
+  probes of the TLP study.
+- `seq-on` on NVMe/TCP held 316 pages where `seq-sized-on` held 188.
+
