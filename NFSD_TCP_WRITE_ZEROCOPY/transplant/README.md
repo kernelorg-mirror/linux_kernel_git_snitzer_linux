@@ -133,9 +133,51 @@ What to expect:
 - **Old results on that host** (`/var/tmp/zc-testplan-4k-*` and the like)
   stay until Mike says to clear them, as on the 16 KiB host.
 
-For tardis1 the same prompt serves with step 1 replaced by "the packaged
-64 KiB kernel is installed; nothing is built here" and `64KiB.tsv` for the
-record.
+## Starting tardis1's session
+
+**First, the kernel, which is Mike's to do.** Nothing is built on tardis1.
+
+- The packaged 64 KiB RPMs listed under "tardis1 (64 KiB)" below must be
+  installed and booted, `kernel-64k-modules-internal` and
+  `kernel-64k-devel` included, built from a tree that has everything up to
+  at least `82d7a6d21207`.
+- **Which branch they are built from matters.** Earlier tardis1 kernels
+  came from the HS twin, `kernel-7.1/hs-7.1.13-19.NFSD_TCP_WRITE_ZEROCOPY`,
+  and this work has not been carried to it. Build from this branch, or
+  carry the work to the twin first.
+- Run `check-config.sh` on the 64 KiB config before building:
+  `CONFIG_HIST_TRIGGERS` joined the fragment after that config was last
+  checked.
+- `preflight.sh` fails on a kernel without the work (the tunables' names,
+  veth's parameter), so the wrong kernel cannot slip through.
+
+**Then the first thing to say to a new session there:**
+
+```
+In <path to the clone>: git fetch origin, then read the section "Starting the
+4 KiB host's session" with
+  git show origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY:NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md
+and follow the prompt in it, with these changes for this host: this is tardis1,
+64 KiB pages. The packaged 64 KiB kernel is already installed and booted; build
+nothing here, so skip step 1 except host-bootstrap.sh. The record is
+results/64KiB.tsv, and RESULTS.md has a 64 KiB row waiting in its first table.
+Also read the sections "Starting tardis1's session" and "tardis1 (64 KiB)".
+Don't reset or pull until you've told me what local commits, branches and
+untracked files this clone has.
+```
+
+What is different about this host:
+
+- **It is not a scratch VM.** The harness is written to touch nothing but
+  its own exports, devices and namespaces, and restores the settings it
+  changes. It does stop and start nfsd for the KUnit stage and reloads the
+  veth module. If tardis1 is serving anything, say so in the message or
+  pick a quiet window.
+- **The plan runs on veth and test storage, not on the Xsight card or the
+  real NVMe.** It answers whether the series behaves at 64 KiB. Whether the
+  region stays in the CPU's cache and what a copy costs there are a
+  separate exercise.
+- **Two reboots**, as on the other hosts.
 
 ## What is in this directory
 
@@ -228,6 +270,9 @@ and `kernel-7.1.13-aarch64.config` (2026-10-03). The four KUnit suites
 - `kernel-64k`, `kernel-64k-core`, `kernel-64k-modules-core`, `kernel-64k-modules`
 - `kernel-64k-modules-internal`, which holds the KUnit suites
   (`redhat/rhel_files/def_variants.yaml.rhel`: `.*kunit.*: modules-internal`)
+- `kernel-64k-devel`, which the `bvecrepro` stage builds its small test
+  module against (with `gcc` and `make`, which `host-bootstrap.sh`
+  installs). Without it that one stage is skipped
 - the Xsight NIC driver built against those RPMs
   (`build-kernel-in-ubi.sh --kernel-rpms … --kmod-dir xsight=<ver>`, giving
   `kmod-64k-xsight`), with the `rx_ip_align` patch if that experiment is
@@ -246,8 +291,17 @@ Then on tardis1, with a clone of the branch (nothing in it is built):
 T=NFSD_TCP_WRITE_ZEROCOPY/transplant
 $T/host-bootstrap.sh
 $T/preflight.sh        # no manifest: build identity skipped; config from /boot
-$T/run-testplan.sh     # bvecrepro is SKIPped (needs a built tree); all else runs
+$T/run-testplan.sh     # every stage runs; bvecrepro builds against kernel-64k-devel
 ```
+
+`bvecrepro` loads a test module of the harness's own, so it needs the
+running kernel's build files. On a host that built its kernel that is the
+tree; on a packaged kernel it is `/lib/modules/<release>/build`, from the
+`-devel` package. Until 2026-10-05 the plan only knew the first and
+skipped the stage on a packaged kernel. `preflight.sh` now says which it
+found. The packaged path has been run only on the 16 KiB host, where that
+directory is the tree itself: on tardis1 it is the first real use, and a
+kernel that refuses unsigned modules would fail it there.
 
 What the plan does and does not use on tardis1:
 
@@ -273,7 +327,7 @@ What the plan does and does not use on tardis1:
 | any | `preflight` | `preflight.sh` | PASS/FAIL |
 | 1 (fresh) | `budget-D`, then `budget-D-sgl` | `PHASE=D run-budget.sh`: two devices share one region and budget. It must run before anything creates the region; the NVMe/TCP pass follows on the region it made. | tables vs D-s4 / D4 (`../slipstream/BUDGET_SCOPE.md` 8.1, 8.6) |
 | 1 | `kunit` | `run-kunit.sh`: all four suites | PASS/FAIL; skip rule below |
-| 1 | `bvecrepro` | `run-bvecrepro.sh`, which needs a tree built for the running kernel | PASS/FAIL, or SKIP on a packaged kernel |
+| 1 | `bvecrepro` | `run-bvecrepro.sh`, which builds a test module against the tree, or against a packaged kernel's `-devel` files | PASS/FAIL, or SKIP with neither |
 | 1 | `rig-cmp`, `loan-assert`, `killswitch`, `system-correctness` | the zc rig runtime checks | PASS/FAIL (each exits with its failure count) |
 | 1 | `zc-down`, `sgl-up`, `sgl-brd/tcp/loop`, `sgl-down` | NVMe SGL rigs (`../NVME_SGL_SUPPORT_PROJECT.md` 6) | DONE; compare dispositions |
 | 1 | `localio-tcp`, `localio-loop` | `run-sgl-localio-ab.sh` (LOCALIO boundary, short-read and stable tests) | DONE; each test prints its own exit status |
