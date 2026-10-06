@@ -28,8 +28,9 @@
 # budget-D-sgl and budget-B-sgl reuse the region budget-D and budget-B
 # created on their boot; either can also create it, on a fresh boot.
 #
-# A stage that needs something this host lacks (bvecrepro needs a built tree
-# matching the running kernel) is recorded as SKIP with the reason.  Results
+# A stage that needs something this host lacks (bvecrepro needs a tree built
+# for the running kernel, or the packaged kernel's -devel files) is recorded
+# as SKIP with the reason.  Results
 # are judged per TESTING.md and slipstream/README.md: scripts with their own
 # pass/fail (KUnit, loan-assert, killswitch, system-correctness, rig-cmp,
 # analyze-AB) are PASS/FAIL here; the budget phases' tables are DONE and
@@ -95,10 +96,18 @@ need_nfs_server() { systemctl is-active -q nfs-server || systemctl start nfs-ser
 st_preflight()  { "$HERE/preflight.sh"; }
 st_kunit()      { systemctl stop nfs-server; "$P/run-kunit.sh" "$1/kunit.log"; local rc=$?; need_nfs_server; return $rc; }
 st_bvecrepro() {
-	if [ ! -r "$TOP/Module.symvers" ] || [ "$(make -s -C "$TOP" kernelrelease 2>/dev/null)" != "$KREL" ]; then
-		echo "no built tree for $KREL at $TOP (packaged kernel): out-of-tree module cannot be built"; return 3
+	# The test module is built against this tree if it was built for the
+	# running kernel, else against a packaged kernel's devel files.
+	local kb=
+	if [ -r "$TOP/Module.symvers" ] && [ "$(make -s -C "$TOP" kernelrelease 2>/dev/null)" = "$KREL" ]; then
+		kb=$TOP
+	elif [ -r "/lib/modules/$KREL/build/Module.symvers" ] && [ -r "/lib/modules/$KREL/build/Makefile" ]; then
+		kb=/lib/modules/$KREL/build
+	else
+		echo "nothing to build the test module against: no tree built for $KREL at $TOP, and no /lib/modules/$KREL/build (install the kernel's -devel package: kernel-devel, or kernel-64k-devel for the 64 KiB flavor)"; return 3
 	fi
-	B=$1/bvecrepro-build bash "$P/run-bvecrepro.sh"
+	echo "building bvecrepro against $kb"
+	KBUILD=$kb B=$1/bvecrepro-build bash "$P/run-bvecrepro.sh"
 }
 st_rig_cmp()    { need_nfs_server; bash "$P/run-rig-cmp.sh"; }
 st_loan_assert(){ need_nfs_server; bash "$P/run-loan-assert.sh"; }

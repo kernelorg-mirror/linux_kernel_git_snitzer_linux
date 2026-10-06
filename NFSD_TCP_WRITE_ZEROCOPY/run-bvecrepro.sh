@@ -8,10 +8,14 @@ set -e
 # checkout path (was hardcoded /root/kernel/linux)
 K=${K:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 B=${B:-/tmp/bvecrepro-build}
+# KBUILD: what the module is built against.  A tree built for the running
+# kernel, or a packaged kernel's devel files (/lib/modules/<release>/build).
+# The source always comes from this tree.
+KBUILD=${KBUILD:-$K}
 mkdir -p $B
 cp $K/NFSD_TCP_WRITE_ZEROCOPY/bvecrepro.c $B/
 echo 'obj-m := bvecrepro.o' > $B/Makefile
-make -C $K M=$B modules -j8 >/dev/null
+make -C $KBUILD M=$B modules -j8 >/dev/null
 
 modprobe brd rd_nr=1 rd_size=4194304 2>/dev/null || true
 
