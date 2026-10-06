@@ -2347,6 +2347,17 @@ static void svcsock_rx_skb_region_pages_test(struct kunit *test)
 			2U);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_skb_region_pages(skb, 0, 120,
 							   skb->len), 1U);
+
+	/*
+	 * A second frame in the region page: two fragments, one page.  Where
+	 * a page holds several frames the charge follows the pages.
+	 */
+	get_page(region_page);
+	skb_add_rx_frag(skb, 3, region_page, 400, 40, PAGE_SIZE);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_skb_region_pages(skb, 0, 0, skb->len),
+			2U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_skb_region_pages(skb, 0, 80, 160),
+			1U);
 }
 
 /*
@@ -2371,6 +2382,12 @@ static void svcsock_rx_region_count_test(struct kunit *test)
 			0);
 	KUNIT_EXPECT_EQ(test, state->region_count, 1U);
 	KUNIT_EXPECT_EQ(test, state->borrowed_count, 2U);
+	/* Another fragment of the same region page is one more loan, no more pages. */
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_append_borrowed(state, region_page, 64, 8, true),
+			0);
+	KUNIT_EXPECT_EQ(test, state->region_count, 1U);
+	KUNIT_EXPECT_EQ(test, state->borrowed_count, 3U);
 	svcsock_rx_unbind_region(region_pp->pool);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
 }
