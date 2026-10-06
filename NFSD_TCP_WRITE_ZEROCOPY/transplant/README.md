@@ -10,7 +10,7 @@ size's.
 | host | page size | kernel | state |
 |---|---|---|---|
 | the 16 KiB host | 16 KiB | built on the host | **complete**: the whole plan, both kinds of storage. `results/16KiB.tsv`; the account is "16 KiB host" below |
-| the 4 KiB ARM host | 4 KiB | built on the host | **next.** Not run with this harness. The 4 KiB results in this tree are of an older one and are to be replaced |
+| the 4 KiB ARM host | 4 KiB | built on the host | **in progress** (2026-10-05): kernel #43 from `26e799b10e8e`, PREFLIGHT PASS; boot 1 complete, every stage PASS or DONE; `budget-N` and `budget-N-sgl` re-run after the n-reconf fix (`0d3ab1e2c6f2`); boot 2 (budget-B, analyze) next. The 4 KiB results further down are of an older harness and are to be replaced |
 | tardis1 (Xsight E1) | 64 KiB | packaged RPMs | not run with this harness |
 
 `RESULTS.md` is the side-by-side comparison, generated from one record per
