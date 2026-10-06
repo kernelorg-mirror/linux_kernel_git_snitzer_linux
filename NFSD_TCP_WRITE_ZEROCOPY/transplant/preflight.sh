@@ -48,6 +48,8 @@ fi
 echo "== config"
 CFG=/boot/config-$KREL
 [ -r "$CFG" ] || [ ! -r "$STATE/manifest" ] || CFG=$(sed -n 's/^config=//p' "$STATE/manifest")
+# a packaged kernel on a host that boots from a UKI or has no /boot copy
+[ -r "$CFG" ] || [ ! -r "/lib/modules/$KREL/config" ] || CFG=/lib/modules/$KREL/config
 if [ -r "$CFG" ]; then
 	"$HERE/check-config.sh" "$CFG" | sed 's/^/  /'
 	[ "${PIPESTATUS[0]}" = 0 ] || fails=$((fails + 1))
