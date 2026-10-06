@@ -20,8 +20,8 @@ kernel has run.
 | kernel run | `7.1.13-19.hs.454.loanpages_pool.el9.aarch64+64k`, packaged RPMs, built by Mike from `42c4c8306b98`; sunrpc srcversion `4882A60124EF5C26B2AF247`, nfsd `4E439F2B24A4A7C3A8521DE` |
 | same code as | the 4 KiB host's run (`26e799b10e8e`): the two commits differ only in docs and harness files, and sunrpc's srcversion matches |
 | plan | boot 1 complete (2026-10-05 22:12 to 23:08, 56 minutes). **Boot 2 not run, on purpose** |
-| branch tip | this file's commit; `573d3938239b` and below are pushed, the capacity + 1 KUnit commit `86b745caa01c` and this file are not (section 7) |
-| waiting on | Mike: a new 64 KiB kernel built from the tip, installed on tardis1 |
+| branch tip | `d063737e2ed3` pushed by Mike 2026-10-05 (section 7); only later edits to this file come after it |
+| waiting on | Mike: the new 64 KiB kernel, **being built from `d063737e2ed3`** (2026-10-05), to be installed on tardis1 |
 | then | a full plan run, both boots, on the new kernel (section 9) |
 
 Short version of the findings:
@@ -386,11 +386,10 @@ all. A packaged kernel's config is `/lib/modules/<release>/config`.
 ## 7. Commits made on tardis1
 
 On `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`, on top of `42c4c8306b98`.
-Mike pushed the first four (through `573d3938239b`) on 2026-10-05; the
-capacity + 1 KUnit commit and this file came after and are **not pushed**.
-A kernel built from `573d3938239b` has the charge fix but not the
-rewritten capacity + 1 test, and its `kunit` stage will still show the
-skip. The KUnit commit was moved ahead of this file's commits to keep the
+Mike pushed all of these on 2026-10-05, through `d063737e2ed3`, and is
+building the new kernel from that commit: it has the charge fix and the
+rewritten capacity + 1 test.
+The KUnit commit was moved ahead of this file's commits to keep the
 grouping; the branch before that move is
 `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY.pre-regroup-20261005` (same
 tree).
@@ -448,8 +447,7 @@ copied=54760`. Not yet set beside the other hosts' dispositions.
 
 ## 9. What to do next
 
-**When Mike has built a kernel from the tip** (it must contain
-`c84e1147bde7`; with `86b745caa01c` too the `kunit` stage can pass) and installed it with
+**When Mike has built the kernel from `d063737e2ed3`** and installed it with
 `kernel-64k-modules-internal`, `kernel-64k-devel` and `kmod-64k-xsight`:
 
 1. Ask Mike whether the window is quiet (`pl-105` is a live client), and
