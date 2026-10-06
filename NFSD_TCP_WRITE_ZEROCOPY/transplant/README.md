@@ -37,7 +37,9 @@ nothing there is taken for granted:
   (`svc_tcp_rx_credit_factor` keeps its name).
 - **A budget of 0 copies, always**, even when no budget is set anywhere.
   The old "region, no budget" cells that loaned without limit are gone.
-- **A misaligned write is cut at page boundaries**, and the knob that
+- **A write is cut at page boundaries, at every end that is not on one**
+  (since 2026-10-06 a DIO-aligned end too:
+  `slipstream/NFSD_LOCALIO_DIRECT_SPLIT.md` section 7), and the knob that
   decides whether to cut is in bytes (`direct_misaligned_min_bytes`). No
   effect expected at 4 KiB; that is to be confirmed, not assumed.
 - **Two test devices are fixed in this kernel:** null_blk lost data with a
