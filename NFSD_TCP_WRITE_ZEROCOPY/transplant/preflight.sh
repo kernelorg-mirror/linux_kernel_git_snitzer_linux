@@ -92,6 +92,11 @@ fi
 [ "$(cat /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages 2>/dev/null)" = Y ] && ok "page loans on by default" || bad "svc_tcp_rx_loan_pages is not Y"
 [ -e /sys/kernel/tracing/events/nfsd/nfsd_write_direct/hist ] && ok "histogram triggers (run-budget.sh counts how WRITEs were issued)" ||
 	bad "no histogram triggers (CONFIG_HIST_TRIGGERS): cells.tsv's wr_direct, wr_dontcache and wr_buffered would all read 0"
+if [ -r "/lib/modules/$(uname -r)/build/Module.symvers" ]; then
+	ok "kernel build files for $(uname -r) (bvecrepro can build its test module)"
+else
+	note "no /lib/modules/$(uname -r)/build: bvecrepro will be SKIPped; install the kernel's -devel package (kernel-64k-devel on the 64 KiB flavor)"
+fi
 if modinfo -p veth 2>/dev/null | grep -q '^rx_ip_align:'; then
 	ok "veth has rx_ip_align (the NVMe/TCP budget stages can place the payload)"
 else
