@@ -576,6 +576,7 @@ directory=/mnt/rxr
 rw=write
 bssplit=4k/20:64k/30:256k/20:1m/30
 size=${MIXMIB:-256}M
+loops=${LOOPS:-1}
 direct=1
 ioengine=libaio
 iodepth=32
@@ -884,9 +885,11 @@ elif [ "$PHASE" = N ]; then
 	nrun $nb I=$(nf 1000) DF=0 BB=0 CL=B CELL=n-copy
 	nrun $nb I=$(nf 1600) DF=0 BB=$(nf 1600) CL=RB CELL=n-both
 	# B's budget changed under load: 2000, 400, 0 (new records go to the
-	# default budget), 2000 again; both pools must end idle and whole.
-	# 4 jobs of 768 MiB fit the 4096 MiB export and outlast the hook.
-	nrun $nb I=0 DF=$(nf 1500) BB=$(nf 2000) CL=B MIXMIB=768 CELL=n-reconf \
+	# default budget), 2000 again; both pools must end idle and whole.  4 jobs of
+	# 768 MiB fit the 4096 MiB export; ten passes over them (each verified)
+	# keep the load running past the hook's last change at 18 s -- one pass
+	# took about 4 s once dm-delay stopped rounding the delay up to a tick.
+	nrun $nb I=0 DF=$(nf 1500) BB=$(nf 2000) CL=B MIXMIB=768 LOOPS=10 CELL=n-reconf \
 		HOOK='sleep 6; ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_pages=$(nf 400); echo "6s B=$(nf 400) [$(bstats)]"; sleep 6; ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_pages=0; echo "12s B=0 [$(bstats)]"; sleep 6; ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_pages=$(nf 2000); echo "18s B=$(nf 2000) [$(bstats)]"'
 	# The sum check: the region has $SIZE pages.
 	# sysctl(8) exits 0 even when the write is refused: read the value back.
