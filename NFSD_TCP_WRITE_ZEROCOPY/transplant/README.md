@@ -378,8 +378,8 @@ files (about 40 s here). Re-run on this boot (`budget-N` and
 `budget-N-sgl`, `--only`), both kinds of storage show records in flight
 and waiters at the first change (1 and 16), the waiters drained after the
 change to 0, B's records drew on the default budget while its own was 0
-(16729 to 17995 of them), fio exit 0. The 16 KiB host's n-reconf is to be
-re-run the same way.
+(16729 to 17995 of them), fio exit 0. The 16 KiB host's n-reconf was
+re-run the same way afterwards; its result is under "16 KiB host".
 
 ## 16 KiB host (2026-10-05)
 
@@ -694,17 +694,26 @@ boot): 306 pages, budget of one WRITE's worth.
   Without one, 8618 and 7953 allocation failures.
 - **A budget per network namespace** (phase N, both kinds): each WRITE is
   counted against the right budget, whether its own, the default or none
-  (copied, 5570 of 5570); a budget changed under load completes with fio
-  rc 0; the region is whole afterwards. `n-exit` ends with fio rc 4, as
-  intended: it deletes the server.
+  (copied, 5570 of 5570); the region is whole afterwards. `n-exit` ends
+  with fio rc 4, as intended: it deletes the server.
+- **A budget changed under load** (`n-reconf`, both kinds; re-run on a
+  fifth boot with the harness fix `0d3ab1e2c6f2`, which keeps the load
+  running through the changes at 6, 12 and 18 s). Each change landed with
+  the load running: 13922 and 17233 WRITEs already admitted at the first.
+  At the change to 0, eight connections were waiting on each kind of
+  storage; the cell went on, B's WRITEs drew on the default budget while
+  its own was 0 (15404 and 22644 of them), and it ended with no waiters,
+  nothing in flight, the pool whole and fio exit 0 with its data verified.
+  The cell keeps two snapshots and no per-record trace, so that the eight
+  were woken is inferred from the cell finishing, not observed one by one.
 - **Tail-loss probes** (phase TLP, both kinds): no retransmission
   timeouts in any cell. The stalled-storage cell draws about 3000
   spurious retransmissions on either kind (3148 and 3013), which quick
   acknowledgements or turning probes off on the client remove, as on
   4 KiB.
 
-The run took four boots of the same kernel, into the one results
-directory: the plan's two, a third when phases D, TLP and N were added on
+The run took five boots of the same kernel, into the one results
+directory (the fifth for the `n-reconf` re-run above): the plan's two, a third when phases D, TLP and N were added on
 the second kind of storage, and a fourth when phases A and B were re-run
 with the cells of problem 11.
 
