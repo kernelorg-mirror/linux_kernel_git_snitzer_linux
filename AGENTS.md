@@ -68,7 +68,11 @@ nvme-loop) or *takes arbitrary pieces* (NVMe with SGLs, NVMe/TCP).
 **Results across page sizes** are in
 [`NFSD_TCP_WRITE_ZEROCOPY/transplant/RESULTS.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/RESULTS.md),
 one record per host. 16 KiB and 4 KiB are complete (2026-10-05); tardis1
-is next.
+is next. **On tardis1, read
+[`NFSD_TCP_WRITE_ZEROCOPY/transplant/tardis1-boot1-testing.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/tardis1-boot1-testing.md)
+first:** its first run found a charge defect at 64 KiB, the fix is
+committed but not yet built, and that file is the only record of where
+the work stands.
 
 **Moving to another test host** (the 4K host, the 16K host, tardis1 at 64K): start with
 [`NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md)
