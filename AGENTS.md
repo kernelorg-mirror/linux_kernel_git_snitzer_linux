@@ -67,8 +67,8 @@ nvme-loop) or *takes arbitrary pieces* (NVMe with SGLs, NVMe/TCP).
 
 **Results across page sizes** are in
 [`NFSD_TCP_WRITE_ZEROCOPY/transplant/RESULTS.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/RESULTS.md),
-one record per host. 16 KiB is complete (2026-10-05); the 4 KiB ARM host
-is next, then tardis1.
+one record per host. 16 KiB and 4 KiB are complete (2026-10-05); tardis1
+is next.
 
 **Moving to another test host** (the 4K host, the 16K host, tardis1 at 64K): start with
 [`NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md)
