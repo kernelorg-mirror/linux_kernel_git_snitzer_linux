@@ -305,8 +305,8 @@ struct nfsd_bvec_dio_case {
 	u32		seg_boundary;
 	fop_flags_t	fop_flags;
 	unsigned int	nvecs;
-	unsigned int	offsets[3];
-	unsigned int	lengths[3];
+	unsigned int	offsets[4];
+	unsigned int	lengths[4];
 	unsigned int	expected_nsegs;
 	unsigned int	expected_direct_mask;
 	unsigned int	expected_dontcache_mask;
@@ -317,70 +317,77 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 {
 	static const struct nfsd_bvec_dio_case cases[] = {
 		{
+			/*
+			 * The fixed geometries below are whole pages, so that on any
+			 * page size the write has a middle and the memory checks are
+			 * what decides it: a write that holds no whole page is
+			 * buffered before they are consulted.
+			 */
 			.name = "aligned-first-middle-last",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 512,
 			.offset_align = 512,
 			.nvecs = 3,
-			.lengths = { 4096, 3584, 512 },
+			.lengths = { PAGE_SIZE, PAGE_SIZE - 512, 512 },
 			.expected_nsegs = 1,
 			.expected_direct_mask = BIT(0),
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			.name = "later-offset-misaligned",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 512,
 			.offset_align = 512,
 			.nvecs = 3,
 			.offsets = { 0, 1, 0 },
-			.lengths = { 4096, 3584, 512 },
+			.lengths = { PAGE_SIZE, PAGE_SIZE - 512, 512 },
 			.expected_nsegs = 1,
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			.name = "later-length-misaligned",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 512,
 			.offset_align = 512,
 			.nvecs = 3,
-			.lengths = { 4096, 3583, 513 },
+			.lengths = { PAGE_SIZE, PAGE_SIZE - 513, 513 },
 			.expected_nsegs = 1,
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			/*
-			 * A misaligned write whose aligned middle is smaller
-			 * than nfsd_direct_misaligned_num_pages (default 2)
-			 * pages must not be split: one buffered segment.
+			 * A misaligned write whose direct middle is smaller
+			 * than the misaligned-split gate (one page, under a
+			 * gate of two) must not be split: one buffered segment.
 			 */
 			.name = "small-middle-below-misaligned-gate",
 			.position = 128,
-			.total = 4096,
-			.mem_align = 512,
-			.offset_align = 512,
-			.nvecs = 2,
-			.offsets = { 128, 0 },
-			.lengths = { 3968, 128 },
-			.expected_nsegs = 1,
-			.expected_counts = { 4096 },
-		},
-		{
-			/*
-			 * Middle sized exactly at the misaligned-split gate
-			 * (2 pages) so the split happens on any page size.
-			 */
-			.name = "buffered-prefix-direct-middle-buffered-suffix",
-			.position = 128,
-			.total = 2 * PAGE_SIZE + 512,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 512,
 			.offset_align = 512,
 			.nvecs = 3,
 			.offsets = { 128, 0, 0 },
-			.lengths = { PAGE_SIZE - 128, PAGE_SIZE, 640 },
+			.lengths = { PAGE_SIZE - 128, PAGE_SIZE, 128 },
+			.expected_nsegs = 1,
+			.expected_counts = { 2 * PAGE_SIZE },
+		},		{
+			/*
+			 * Both ends misaligned: each buffered end runs to the
+			 * page boundary inside the write, not to the 512-byte
+			 * one, so the middle is whole pages.  Two pages are at
+			 * the misaligned-split gate, so the write is split.
+			 */
+			.name = "buffered-prefix-direct-middle-buffered-suffix",
+			.position = 128,
+			.total = 3 * PAGE_SIZE + 512,
+			.mem_align = 512,
+			.offset_align = 512,
+			.nvecs = 4,
+			.offsets = { 128, 0, 0, 0 },
+			.lengths = { PAGE_SIZE - 128, PAGE_SIZE, PAGE_SIZE, 640 },
 			.expected_nsegs = 3,
 			.expected_direct_mask = BIT(1),
-			.expected_counts = { 384, 2 * PAGE_SIZE, 128 },
+			.expected_counts = { PAGE_SIZE - 128, 2 * PAGE_SIZE, 640 },
 		},
 		{
 			.name = "no-memory-alignment",
@@ -404,16 +411,16 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 		},
 		{
 			.name = "later-offset-misaligned-dontcache",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 512,
 			.offset_align = 512,
 			.fop_flags = FOP_DONTCACHE,
 			.nvecs = 3,
 			.offsets = { 0, 1, 0 },
-			.lengths = { 4096, 3584, 512 },
+			.lengths = { PAGE_SIZE, PAGE_SIZE - 512, 512 },
 			.expected_nsegs = 1,
 			.expected_dontcache_mask = BIT(0),
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			/*
@@ -424,43 +431,43 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 			 * (dma_alignment=3, lbs=512).
 			 */
 			.name = "discontinuity-aligned-direct",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 4,
 			.offset_align = 512,
 			.nvecs = 3,
-			.lengths = { 3584, 512, 4096 },
+			.lengths = { PAGE_SIZE - 512, 512, PAGE_SIZE },
 			.expected_nsegs = 1,
 			.expected_direct_mask = BIT(0),
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			/*
-			 * A discontinuity at payload byte 4092 is not a
-			 * logical-block multiple: a forced split there would
+			 * A discontinuity four bytes short of a page is not at
+			 * a logical-block multiple: a forced split there would
 			 * strand a sub-sector residue and the block stack
 			 * would reject the bio, so the gate must demote the
 			 * segment to buffered.
 			 */
 			.name = "discontinuity-misaligned-buffered",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 4,
 			.offset_align = 512,
 			.nvecs = 3,
-			.lengths = { 4092, 4, 4096 },
+			.lengths = { PAGE_SIZE - 4, 4, PAGE_SIZE },
 			.expected_nsegs = 1,
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			.name = "discontinuity-misaligned-dontcache",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 4,
 			.offset_align = 512,
 			.fop_flags = FOP_DONTCACHE,
 			.nvecs = 3,
-			.lengths = { 4092, 4, 4096 },
+			.lengths = { PAGE_SIZE - 4, 4, PAGE_SIZE },
 			.expected_nsegs = 1,
 			.expected_dontcache_mask = BIT(0),
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			.name = "short-write",
@@ -478,94 +485,94 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 			 * joint that discontinuity-misaligned-buffered demotes.
 			 */
 			.name = "no-boundary-mid-page-joint-direct",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 4,
 			.offset_align = 512,
 			.seg_boundary = NFS_DIO_SEG_BOUNDARY_NONE,
 			.nvecs = 3,
-			.lengths = { 4092, 4, 4096 },
+			.lengths = { PAGE_SIZE - 4, 4, PAGE_SIZE },
 			.expected_nsegs = 1,
 			.expected_direct_mask = BIT(0),
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			/* TCP-segment geometry: fragments start mid-page */
 			.name = "no-boundary-tcp-segments-direct",
-			.total = 4096,
+			.total = PAGE_SIZE,
 			.mem_align = 4,
 			.offset_align = 512,
 			.seg_boundary = NFS_DIO_SEG_BOUNDARY_NONE,
 			.nvecs = 3,
 			.offsets = { 0, 2048, 512 },
-			.lengths = { 1448, 1448, 1200 },
+			.lengths = { 1448, 1448, PAGE_SIZE - 2896 },
 			.expected_nsegs = 1,
 			.expected_direct_mask = BIT(0),
-			.expected_counts = { 4096 },
+			.expected_counts = { PAGE_SIZE },
 		},
 		{
 			.name = "default-boundary-tcp-segments-buffered",
-			.total = 4096,
+			.total = PAGE_SIZE,
 			.mem_align = 4,
 			.offset_align = 512,
 			.nvecs = 3,
 			.offsets = { 0, 2048, 512 },
-			.lengths = { 1448, 1448, 1200 },
+			.lengths = { 1448, 1448, PAGE_SIZE - 2896 },
 			.expected_nsegs = 1,
-			.expected_counts = { 4096 },
+			.expected_counts = { PAGE_SIZE },
 		},
 		{
 			/* no boundary does not relax memory alignment */
 			.name = "no-boundary-2-byte-fragment-buffered",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 4,
 			.offset_align = 512,
 			.seg_boundary = NFS_DIO_SEG_BOUNDARY_NONE,
 			.nvecs = 3,
-			.lengths = { 4094, 2, 4096 },
+			.lengths = { PAGE_SIZE - 2, 2, PAGE_SIZE },
 			.expected_nsegs = 1,
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			/*
-			 * Joints on 4 KiB multiples at payload byte 3996, not
-			 * a logical-block multiple: a 4096-byte boundary
-			 * admits them on every page size.
+			 * Joints on 4 KiB multiples, the first at payload byte
+			 * 3996, not a logical-block multiple: a 4096-byte
+			 * boundary admits them on every page size.
 			 */
 			.name = "boundary-4096-joint-on-boundary-direct",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 4,
 			.offset_align = 512,
 			.seg_boundary = 4096,
 			.nvecs = 3,
 			.offsets = { 100, 0, 0 },
-			.lengths = { 3996, 4096, 100 },
+			.lengths = { 3996, PAGE_SIZE, PAGE_SIZE - 3996 },
 			.expected_nsegs = 1,
 			.expected_direct_mask = BIT(0),
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			/* the page-sized default admits them only on 4 KiB pages */
 			.name = "default-boundary-joint-on-4096",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 4,
 			.offset_align = 512,
 			.nvecs = 3,
 			.offsets = { 100, 0, 0 },
-			.lengths = { 3996, 4096, 100 },
+			.lengths = { 3996, PAGE_SIZE, PAGE_SIZE - 3996 },
 			.expected_nsegs = 1,
 			.expected_direct_mask = PAGE_SIZE == 4096 ? BIT(0) : 0,
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			.name = "boundary-4096-mid-page-joint-buffered",
-			.total = 8192,
+			.total = 2 * PAGE_SIZE,
 			.mem_align = 4,
 			.offset_align = 512,
 			.seg_boundary = 4096,
 			.nvecs = 3,
-			.lengths = { 4092, 4, 4096 },
+			.lengths = { PAGE_SIZE - 4, 4, PAGE_SIZE },
 			.expected_nsegs = 1,
-			.expected_counts = { 8192 },
+			.expected_counts = { 2 * PAGE_SIZE },
 		},
 		{
 			/*
@@ -596,64 +603,204 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 		},
 		{
 			/*
-			 * The middle starts 384 bytes into bvec[0], whose
-			 * mid-page end is a joint at middle byte 616, not an
+			 * The prefix runs to the page boundary, so the middle
+			 * starts PAGE_SIZE - 128 bytes into bvec[0], whose
+			 * mid-page end is a joint at middle byte 100, not an
 			 * offset_align multiple: no boundary admits it.
 			 */
 			.name = "skipped-first-no-boundary-mid-page-joint-direct",
 			.position = 128,
-			.total = 2 * PAGE_SIZE + 512,
+			.total = 3 * PAGE_SIZE - 28,
 			.mem_align = 4,
 			.offset_align = 512,
 			.seg_boundary = NFS_DIO_SEG_BOUNDARY_NONE,
 			.nvecs = 3,
-			.lengths = { 1000, PAGE_SIZE, PAGE_SIZE - 488 },
+			.lengths = { PAGE_SIZE - 28, PAGE_SIZE, PAGE_SIZE },
 			.expected_nsegs = 3,
 			.expected_direct_mask = BIT(1),
-			.expected_counts = { 384, 2 * PAGE_SIZE, 128 },
+			.expected_counts = { PAGE_SIZE - 128, 2 * PAGE_SIZE, 100 },
 		},
 		{
 			.name = "skipped-first-boundary-4096-mid-page-joint-buffered",
 			.position = 128,
-			.total = 2 * PAGE_SIZE + 512,
+			.total = 3 * PAGE_SIZE - 28,
 			.mem_align = 4,
 			.offset_align = 512,
 			.seg_boundary = 4096,
 			.nvecs = 3,
-			.lengths = { 1000, PAGE_SIZE, PAGE_SIZE - 488 },
+			.lengths = { PAGE_SIZE - 28, PAGE_SIZE, PAGE_SIZE },
 			.expected_nsegs = 1,
-			.expected_counts = { 2 * PAGE_SIZE + 512 },
+			.expected_counts = { 3 * PAGE_SIZE - 28 },
 		},
 		{
 			.name = "skipped-first-default-boundary-mid-page-joint-buffered",
 			.position = 128,
-			.total = 2 * PAGE_SIZE + 512,
+			.total = 3 * PAGE_SIZE - 28,
 			.mem_align = 4,
 			.offset_align = 512,
 			.nvecs = 3,
-			.lengths = { 1000, PAGE_SIZE, PAGE_SIZE - 488 },
+			.lengths = { PAGE_SIZE - 28, PAGE_SIZE, PAGE_SIZE },
 			.expected_nsegs = 1,
-			.expected_counts = { 2 * PAGE_SIZE + 512 },
+			.expected_counts = { 3 * PAGE_SIZE - 28 },
 		},
 		{
 			/*
-			 * bvec[0] (offset 100) ends on a 4 KiB multiple, so
-			 * its joint at middle byte 3612 is no gap under a
-			 * 4096-byte boundary on any page size; counting the
-			 * 384 skipped bytes into its end would make it one.
+			 * bvec[0] (offset 100) ends on a page boundary, a
+			 * 4 KiB multiple on any page size, so its joint at
+			 * middle byte 28 is no gap under a 4096-byte boundary;
+			 * counting the PAGE_SIZE - 128 skipped bytes into its
+			 * end would make it one.
 			 */
 			.name = "skipped-first-boundary-4096-joint-on-boundary-direct",
 			.position = 128,
-			.total = 2 * PAGE_SIZE + 512,
+			.total = 3 * PAGE_SIZE - 100,
 			.mem_align = 4,
 			.offset_align = 512,
 			.seg_boundary = 4096,
 			.nvecs = 3,
 			.offsets = { 100, 0, 0 },
-			.lengths = { 3996, PAGE_SIZE, PAGE_SIZE - 3484 },
+			.lengths = { PAGE_SIZE - 100, PAGE_SIZE, PAGE_SIZE },
 			.expected_nsegs = 3,
 			.expected_direct_mask = BIT(1),
-			.expected_counts = { 384, 2 * PAGE_SIZE, 128 },
+			.expected_counts = { PAGE_SIZE - 128, 2 * PAGE_SIZE, 28 },
+		},
+		{
+			/*
+			 * A misaligned start with DONTCACHE: the prefix is cut
+			 * at the page boundary and claims its shared page.
+			 * The direct middle carries DONTCACHE too, for a file
+			 * system that falls back to buffered I/O.
+			 */
+			.name = "dontcache-misaligned-start-cut-at-page",
+			.position = 128,
+			.total = 3 * PAGE_SIZE - 128,
+			.mem_align = 512,
+			.offset_align = 512,
+			.fop_flags = FOP_DONTCACHE,
+			.nvecs = 3,
+			.offsets = { 128, 0, 0 },
+			.lengths = { PAGE_SIZE - 128, PAGE_SIZE, PAGE_SIZE },
+			.expected_nsegs = 2,
+			.expected_direct_mask = BIT(1),
+			.expected_dontcache_mask = BIT(0) | BIT(1),
+			.expected_counts = { PAGE_SIZE - 128, 2 * PAGE_SIZE },
+		},
+		{
+			/* The cut does not depend on DONTCACHE. */
+			.name = "cached-misaligned-start-cut-at-page",
+			.position = 128,
+			.total = 3 * PAGE_SIZE - 128,
+			.mem_align = 512,
+			.offset_align = 512,
+			.nvecs = 3,
+			.offsets = { 128, 0, 0 },
+			.lengths = { PAGE_SIZE - 128, PAGE_SIZE, PAGE_SIZE },
+			.expected_nsegs = 2,
+			.expected_direct_mask = BIT(1),
+			.expected_counts = { PAGE_SIZE - 128, 2 * PAGE_SIZE },
+		},
+		{
+			/* A misaligned end: the suffix starts on a page boundary. */
+			.name = "dontcache-misaligned-end-cut-at-page",
+			.total = 2 * PAGE_SIZE + 640,
+			.mem_align = 512,
+			.offset_align = 512,
+			.fop_flags = FOP_DONTCACHE,
+			.nvecs = 3,
+			.lengths = { PAGE_SIZE, PAGE_SIZE, 640 },
+			.expected_nsegs = 2,
+			.expected_direct_mask = BIT(0),
+			.expected_dontcache_mask = BIT(0) | BIT(1),
+			.expected_counts = { 2 * PAGE_SIZE, 640 },
+		},
+		{
+			.name = "cached-misaligned-end-cut-at-page",
+			.total = 2 * PAGE_SIZE + 640,
+			.mem_align = 512,
+			.offset_align = 512,
+			.nvecs = 3,
+			.lengths = { PAGE_SIZE, PAGE_SIZE, 640 },
+			.expected_nsegs = 2,
+			.expected_direct_mask = BIT(0),
+			.expected_counts = { 2 * PAGE_SIZE, 640 },
+		},
+		{
+			/*
+			 * Both ends are offset_align multiples and neither is
+			 * on a page boundary.  The write holds no whole page, so
+			 * it has no middle and is one buffered segment: direct, it
+			 * would share its page with a neighbour that may be
+			 * buffered there.
+			 */
+			.name = "dontcache-aligned-ends-mid-page-buffered",
+			.position = 512,
+			.total = 1024,
+			.mem_align = 512,
+			.offset_align = 512,
+			.fop_flags = FOP_DONTCACHE,
+			.nvecs = 1,
+			.offsets = { 512 },
+			.lengths = { 1024 },
+			.expected_nsegs = 1,
+			.expected_dontcache_mask = BIT(0),
+			.expected_counts = { 1024 },
+		},
+		{
+			/*
+			 * An aligned mid-page start is cut at the page boundary
+			 * like a misaligned one: the write before it may be
+			 * buffered in that page.
+			 */
+			.name = "dontcache-aligned-start-misaligned-end",
+			.position = 512,
+			.total = 3 * PAGE_SIZE + 128,
+			.mem_align = 512,
+			.offset_align = 512,
+			.fop_flags = FOP_DONTCACHE,
+			.nvecs = 4,
+			.offsets = { 512, 0, 0, 0 },
+			.lengths = { PAGE_SIZE - 512, PAGE_SIZE, PAGE_SIZE, 640 },
+			.expected_nsegs = 3,
+			.expected_direct_mask = BIT(1),
+			.expected_dontcache_mask = BIT(0) | BIT(1) | BIT(2),
+			.expected_counts = { PAGE_SIZE - 512, 2 * PAGE_SIZE, 640 },
+		},
+		{
+			/*
+			 * An aligned mid-page end is cut the same way.  This is
+			 * the write that met a buffered neighbour in the page
+			 * it ends in, when its middle ran to the aligned end.
+			 */
+			.name = "dontcache-aligned-mid-page-end-cut-at-page",
+			.total = 2 * PAGE_SIZE + 512,
+			.mem_align = 512,
+			.offset_align = 512,
+			.fop_flags = FOP_DONTCACHE,
+			.nvecs = 3,
+			.lengths = { PAGE_SIZE, PAGE_SIZE, 512 },
+			.expected_nsegs = 2,
+			.expected_direct_mask = BIT(0),
+			.expected_dontcache_mask = BIT(0) | BIT(1),
+			.expected_counts = { 2 * PAGE_SIZE, 512 },
+		},
+		{
+			/*
+			 * A misaligned write with no whole page inside it: the
+			 * two cuts meet, there is no middle, and the single
+			 * buffered segment is exactly the write.
+			 */
+			.name = "dontcache-misaligned-no-whole-page",
+			.position = 128,
+			.total = PAGE_SIZE,
+			.mem_align = 512,
+			.offset_align = 512,
+			.fop_flags = FOP_DONTCACHE,
+			.nvecs = 2,
+			.offsets = { 128, 0 },
+			.lengths = { PAGE_SIZE - 128, 128 },
+			.expected_nsegs = 1,
+			.expected_dontcache_mask = BIT(0),
+			.expected_counts = { PAGE_SIZE },
 		},
 	};
 	unsigned int case_index;
@@ -662,7 +809,7 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 		const struct nfsd_bvec_dio_case *test_case = &cases[case_index];
 		struct nfs_dio_split split = {};
 		struct nfs_dio_seg *segments = split.segs;
-		struct bio_vec bvec[3] = {};
+		struct bio_vec bvec[4] = {};
 		/*
 		 * The split consults file->f_op->fop_flags for FOP_DONTCACHE,
 		 * so the file must carry real file_operations.
@@ -675,8 +822,8 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 		};
 		/*
 		 * The policy nfsd_write_dio_iters_init() hands the split for
-		 * this file under nfsd's defaults: direct_misaligned_min_bytes
-		 * of two pages and direct_misaligned_dontcache set.
+		 * this file with direct_misaligned_min_bytes at two pages, its
+		 * default on 4 KiB pages, and direct_misaligned_dontcache set.
 		 */
 		const struct nfs_dio_policy policy = {
 			.mem_align = test_case->mem_align,
@@ -728,9 +875,9 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 		/*
 		 * With DONTCACHE in effect, a buffered segment claims the
 		 * pages it shares with the neighbouring writes
-		 * (nfs_dio_seg_hold()): always when the WRITE is not split,
-		 * and for a split WRITE's prefix and suffix only when
-		 * offset_align is page aligned.  The direct middle never does.
+		 * (nfs_dio_seg_hold()), split or not: a split WRITE's
+		 * ends are cut at page boundaries, so its prefix
+		 * and suffix always can.  The direct middle never does.
 		 */
 		for (segment_index = 0; segment_index < nsegs;
 		     segment_index++) {
@@ -739,10 +886,7 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 				(test_case->fop_flags & FOP_DONTCACHE);
 
 			KUNIT_EXPECT_EQ(test, segments[segment_index].claim,
-					buffered_dontcache &&
-					(nsegs == 1 ||
-					 IS_ALIGNED(test_case->offset_align,
-						    PAGE_SIZE)));
+					buffered_dontcache);
 		}
 
 		consumed = 0;
