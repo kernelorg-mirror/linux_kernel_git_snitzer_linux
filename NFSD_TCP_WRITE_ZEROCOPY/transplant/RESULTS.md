@@ -136,12 +136,22 @@ throughput:**
   2474). With a storage delay it is not (`mixed-sized` at 1 ms 2232 /
   1165), because the same budget then admits six 1 MiB records at once
   where 150 admits fifteen. **On the region 350 derives (870 pages, a
-  budget of 734, twelve records at once; a fresh boot the same day) the
+  budget of 734, eleven records at once; a fresh boot the same day) the
   gap is smaller and still there when storage waits:** `mixed-sized` at
   1 ms 2581 / 1766, with no delay 2619 / 2625; `step-n16` about 2240 /
   2245 outside the stall and about 704 / 485 in it. 481 of 190507 1 MiB
-  records pause in `step-on-n16`. `tardis1-build457-handoff.md` sections
-  14 and 15.
+  records pause in `step-on-n16`. **On 1080 pages (a budget of 944,
+  fourteen at once; another boot) it is smaller again:** `mixed-sized`
+  at 1 ms 2261 / 1992, with no delay 2581 / 2468; `step-n16` about 2250
+  / 2205 outside the stall and about 704 / 634 in it; 4 pauses. So when
+  storage waits the loan is at about half of its copy with six records
+  admitted at once, two thirds with eleven and nine tenths with
+  fourteen. Sixteen at once (a 1172-page region) is not run. The most
+  of the region in use is 160 to 176 pages with six at once, 280 to 300
+  with eleven and 300 to 348 (21.75 MiB) with fourteen: 25 to 29 pages
+  per record admitted, against the 61 charged, and under the 32 MiB L3
+  the host reports. `tardis1-build457-handoff.md` sections 14, 15 and
+  17.
 - **The cells with no budget and no held buffer (`-off`) do not drop at
   64 KiB** except with two clients (`x-off-RN`, 4137 and 3914 drops):
   `mixed-off`, `x-off-R` and `d-off-N` drop thousands of packets at
