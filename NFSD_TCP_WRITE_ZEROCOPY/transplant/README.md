@@ -5,13 +5,13 @@ to an aarch64 test host, build or install its kernel there, run the whole
 test plan, and bring back results that can be set beside another page
 size's.
 
-## Where things stand (2026-10-05)
+## Where things stand (2026-10-07)
 
 | host | page size | kernel | state |
 |---|---|---|---|
 | the 16 KiB host | 16 KiB | built on the host | **complete**: the whole plan, both kinds of storage. `results/16KiB.tsv`; the account is "16 KiB host" below |
 | the 4 KiB ARM host | 4 KiB | built on the host | **complete** (2026-10-05): the whole plan, both kinds of storage. `results/4KiB.tsv`; the account is "4 KiB host" below |
-| tardis1 (Xsight E1) | 64 KiB | packaged RPMs | not run with this harness |
+| tardis1 (Xsight E1) | 64 KiB | packaged RPMs, build 458 | **complete** (2026-10-07): the whole plan, both kinds of storage, on veth. `results/64KiB.tsv`; the account is "64 KiB host" below. Its kernel is later than the other two hosts' |
 
 `RESULTS.md` is the side-by-side comparison, generated from one record per
 host. A host's work is done when its record is committed there.
@@ -1000,6 +1000,150 @@ understood and not in the order it was discovered:
   tip. The kernel was built at `82d7a6d21207`; everything after it on the
   branch is harness and documents.
 
+## 64 KiB host, tardis1 (2026-10-07)
+
+`tardis1.perf.hammer.space`: aarch64, 64 KiB pages, 64 CPUs, 63 GiB, a
+live NFS server. Kernel `7.1.13-20.hs.458.loanpages_pool.el9.aarch64+64k`,
+packaged RPMs built by Mike from the `-WIP` branch (`a1c37cac4922`);
+sunrpc `299EF7D944C6D4A8DA14765`, nfsd `5575F68355368469250681E`.
+`preflight.sh`: PASS on both boots. Results:
+`/var/tmp/zc-testplan-7.1.13-20.hs.458.loanpages_pool.el9.aarch64+64k`;
+the record is `results/64KiB.tsv`. Boot 1 took 53 minutes, boot 2 five.
+
+This is the fourth kernel run here (builds 454, 455, 457, 458). Each of
+the first three found a defect; only build 458's run is recorded.
+`tardis1-boot1-testing.md` (builds 454 and 455) and
+`tardis1-build457-handoff.md` (builds 457 and 458) are the working notes,
+with the evidence for each defect below.
+
+### In short
+
+- **The whole plan passes at 64 KiB, on both kinds of storage, in two
+  boots.** Every stage PASS or DONE; `analyze.py` OVERALL PASS for
+  nvme-loop and for NVMe/TCP; no fio verify failure, hang or kernel
+  warning in any cell.
+- **The budget does its job.** With a budget set and the receive buffer
+  held nothing is dropped and the region never runs out, and no cell
+  overran its credit. The cells meant to drop did (`floor-refused` 484
+  and 1729, `x-off-RN` 4137 and 3914).
+- **A loan is written direct on storage that takes arbitrary pieces and
+  through the page cache on storage that needs whole pages; a copy is
+  always written direct**, one segment each.
+- **One connection: copy and loan are level. Sixteen connections: the
+  loan runs at about half to two thirds of its copy**, and pauses. This
+  is the one result that differs from 4 KiB and 16 KiB, and its cause is
+  not established (below).
+- **Tested on veth, not on the Xsight card or the real NVMe.**
+
+### What was measured
+
+| pair (phase A) | conn | nvme-loop: copy / loan MB/s | NVMe/TCP: copy / loan MB/s | region MiB, loan (loop, tcp) | paused (loop, tcp) |
+|---|---|---|---|---|---|
+| `seq-sized` | 1 | 2174 / 2191 | 2174 / 2165 | 11.25, 11.75 | 0, 0 |
+| `step` | 1 | 1315 / 1323 | 1303 / 1323 | 19.81, 19.81 | 0, 0 |
+| `mixed-sized` | 16 | 2594 / 1236 | 2521 / 1142 | 17.00, 15.75 | 983, 940 |
+| `step-n16` | 16 | 1912 / 1229 | 1846 / 1009 | 17.88, 16.88 | 100638, 94753 |
+| `seq` (new file) | 1 | 438 / 2105 | 399 / 394 | 11.00, 19.75 | 0, 0 |
+| `mixed` (new files) | 16 | 440 / 1156 | 447 / 847 | 16.75, 20.75 | 1077, 907 |
+
+- **A copy holds 0.5 to 1.5 MiB of the 35 MiB region, a loan 11 to 20
+  MiB** (32 to 57%), less of the region than at 16 KiB (64 to 70%).
+- **The 16-connection gap.** Peak use of about 272 pages is sixteen
+  records of 17 pages; a budget of 423 less the reserve of 30 admits
+  fifteen records at a cost of 25. So the budget is doing what it is set
+  to do, about one record per connection, while the copy beside it has
+  no such limit on a 64-CPU host. Whether the answer is the factor (25
+  charged for 17 held), the reserve, or a larger region for sixteen
+  connections has not been looked at. Phase TLP's 16-connection loan
+  cells pause the same way.
+- **New-file copies are at about 440 MB/s** where sized ones reach 2174
+  to 2594: a direct write that starts beyond EOF waits on XFS
+  (`../slipstream/XFS_BEYOND_EOF_DIRECT.md`). On nvme-loop the loan is
+  written through the page cache and does not wait, which is why it
+  looks five times faster in the `seq` pair.
+- **Phase B** (region 114 pages, budget 30): `edge-at-n1` 363 and 332
+  MB/s against `edge-copy-n1` 438 and 398, 1.5 to 2.25 MiB held, no
+  pauses, no drops.
+- **The `-off` cells do not drop here** except `x-off-RN`: `mixed-off`,
+  `x-off-R`, `d-off-N` and `edge-off-n1` hold 0.25 to 3.25 MiB and drop
+  nothing, where 4 KiB and 16 KiB fill the region and drop thousands.
+  Not examined.
+
+### The rest of the plan
+
+- **KUnit:** xdr 7/7, svcsock 43/43, nfsd receive 6/6, nfsd4 receive
+  10/10, no skip.
+- **zc rig and SGL rigs:** bvecrepro MATCH; rig-cmp PASS; loan-assert 50
+  of 50 connections fully direct; killswitch validated;
+  system-correctness 517 direct, 0 vector. SGL rigs, `dd_fails=0
+  cmp_mismatches=0` each: NVMe/TCP 160 of 160 direct, nvme-loop 156
+  direct and 4 memory-misaligned, brd 9 direct and 151
+  memory-misaligned.
+- **LOCALIO, both rigs:** boundary, short-read and stable exit 0 and
+  every writer finished. Reads per WRITE 0.418 / 0.003 / 0.766 on
+  NVMe/TCP and 0.334 / 0.005 / 0.726 on nvme-loop at 47008, 96000 and
+  6000 bytes; 0.0% resident. The two sizes under a page read back a
+  third to three quarters of a page per WRITE (0.000 to 0.005 at 4 KiB):
+  a cost of misaligned records smaller than a page, left alone.
+- **Parked pages: 4** (8 in one phase).
+- **Phase N:** `n-sum` refused as it should (`init 270 + B 338 over
+  555`), `n-exit` fio exit 4 as intended. `n-reconf` copied 20 and 27
+  records for want of a budget, where the other hosts show 0, and
+  `n-own`, `n-default` and `n-copy` each show exactly 12.00 MiB held.
+  Neither was examined.
+- **Kernel log:** no WARNING, BUG, stall, allocation failure or
+  invalidation failure on either boot (boot 1 as read at the time; the
+  host keeps no journal across a reboot). Boot 2 shows only "operation
+  not supported" for `DISCARD` on the nvme-loop test device.
+- **TLP:** `step-on-n16` retransmits 6645 and 7714 times with no
+  timeout; with quick acknowledgements or with probes off, 0.
+
+### Problems found and fixed
+
+Commits are named as on this branch on 2026-10-07; a regroup renames them.
+
+1. **A loan was charged per skb fragment, not per region page** (build
+   454). veth packs about seven MTU 9000 frames to a 64 KiB page, so a
+   1 MiB WRITE was charged about 117 against a credit of 25 and every
+   loan was throttled to a quarter of the budget. `dff7f2d4f04a`. Where
+   a frame has a page to itself (16 KiB) or spans its own pages (4 KiB)
+   the charge is what it was; that is from the code, not from a run.
+2. **A waiting transport whose queued data TCP collapsed read on without
+   admission and stayed at the head of the wait list**, stopping every
+   other transport (build 457, `x-tight-RN`). Not specific to 64 KiB.
+   `3ec476031fd9`; verified at runtime with rebuilt modules (80 of 80
+   repetitions, the collapse seen once and survived) and by a KUnit
+   case.
+3. **Materializing a record that holds a merge page counted its bytes
+   twice** and faulted the receive with a warning (build 457,
+   `collapse-off`). `7abb45f322f7`; verified by its KUnit case only.
+4. **A direct middle and a neighbour's buffered segment in one page
+   failed a write with `-EIO`** through LOCALIO (build 455; the test did
+   not notice). First answered by cutting every end at a page boundary
+   (`v7.1.13-20`), which cost direct I/O for writes aligned to the
+   device but not to a page; then by cutting per end again and having
+   LOCALIO complete a direct write that shares a page before it returns
+   (`62286e633852`, `08d80dc89a93`, `11e038c05ac5`). Only XFS was run.
+5. **Tests and harness:** the capacity + 1 KUnit test spans skbs where
+   the table exceeds `MAX_SKB_FRAGS` (`6294e82414e2`); the LOCALIO
+   boundary test does not judge kick rounds for a record smaller than a
+   page, and fails on a failed write or the kernel's invalidation
+   message; `preflight.sh` finds a packaged kernel's config in
+   `/lib/modules/<release>/config`.
+
+### Not done
+
+- **The 4 KiB and 16 KiB hosts have not been run with problems 1 to 4's
+  changes.** Their columns in `RESULTS.md` are of `v7.1.13-19`.
+- **The 16-connection gap** has a reading and no experiment.
+- **The beyond-EOF rule** (`7809bfb4c8e9`: a write that starts beyond
+  EOF is issued buffered) is committed and undecided, and build 458 does
+  not have it. Measured once with rebuilt modules: `mixed-copy` 442 to
+  2355 MB/s, with 77% of its WRITEs no longer direct.
+- **The series is not regrouped** (`check-grouping.sh v7.1.13-20`:
+  `grouping BROKEN`) and none of this is on the HS twin.
+- **The Xsight card and the real NVMe.**
+
 ## What changes with the page size
 
 The harness derives its page budgets from `getconf PAGESIZE`. At 4 KiB each
@@ -1018,10 +1162,13 @@ for another page size:
 The factor for 16 and 64 KiB is computed from page_pool's frame placement.
 Read `paused` and `overrun` in the cells with a budget: many pauses or
 overruns mean it is low. At 16 KiB there were none (2026-10-05), so 190 and
-170 are not low; 64 KiB is unmeasured.
+170 are not low. At 64 KiB (2026-10-07) there were no overruns, so 150 is
+not low either, but the 16-connection loan cells pause ("64 KiB host").
 
 **Results that differ from the 4 KiB record.** The 16 KiB column is what
-was measured on 2026-10-05; 64 KiB is expectation only.
+was measured on 2026-10-05. The 64 KiB expectations here held on
+2026-10-07: no KUnit skip (the capacity + 1 test was rewritten to span
+skbs), loan-assert 50 of 50, `vector` 0.
 
 | check | 4 KiB | 16 / 64 KiB |
 |---|---|---|

@@ -952,10 +952,10 @@ for the run.
 
 **Still to do, none of it started:**
 
-- the 64 KiB record (`results/64KiB.tsv`, `RESULTS.md`, the README's
-  64 KiB account; `tardis1-boot1-testing.md` section 9 step 6), and the
-  artifact Mike named for this cycle (section 11);
-- reading phases D, TLP and N of boot 1 cell by cell;
+- the artifact Mike named for this cycle (section 11). **The 64 KiB
+  record is written** (2026-10-07): `results/64KiB.tsv`, `RESULTS.md`
+  and "64 KiB host" in `README.md`, which also has what phases D, TLP
+  and N showed;
 - the regroup, the HS twin, and Mike's decision on the beyond-EOF rule
   (section 10.3), which build 458 does not have;
 - the 16-connection gap (`tardis1-boot1-testing.md` 10.2), unchanged.
