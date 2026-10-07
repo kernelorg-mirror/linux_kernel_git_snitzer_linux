@@ -146,12 +146,19 @@ throughput:**
   / 2205 outside the stall and about 704 / 634 in it; 4 pauses. So when
   storage waits the loan is at about half of its copy with six records
   admitted at once, two thirds with eleven and nine tenths with
-  fourteen. Sixteen at once (a 1172-page region) is not run. The most
+  fourteen. **On 1180 pages (a budget of 1044, sixteen at once; another
+  boot) the stall no longer costs the loan anything, and the 1 ms mixed
+  cell does not move:** `step-n16` about 2240 / 2220 outside the stall
+  and about 705 / 701 in it, with 2 denials where 1080 pages had 95609;
+  `mixed-sized` with no delay 2587 / 2619, at 1 ms 2544 / 1977 with
+  3043 denials (3188 on 1080 pages). Those denials have 13 to 53
+  records in flight, of every record size, so the limit in that cell is
+  not sixteen 1 MiB records; what would lift it is not shown. The most
   of the region in use is 160 to 176 pages with six at once, 280 to 300
-  with eleven and 300 to 348 (21.75 MiB) with fourteen: 25 to 29 pages
-  per record admitted, against the 61 charged, and under the 32 MiB L3
-  the host reports. `tardis1-build457-handoff.md` sections 14, 15 and
-  17.
+  with eleven, 300 to 348 with fourteen and 312 to 408 (25.5 MiB) with
+  sixteen: 20 to 29 pages per record admitted, against the 61 charged,
+  and under the 32 MiB L3 the host reports.
+  `tardis1-build457-handoff.md` sections 14, 15, 17 and 19.
 - **The cells with no budget and no held buffer (`-off`) do not drop at
   64 KiB** except with two clients (`x-off-RN`, 4137 and 3914 drops):
   `mixed-off`, `x-off-R` and `d-off-N` drop thousands of packets at
