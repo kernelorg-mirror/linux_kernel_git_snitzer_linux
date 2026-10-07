@@ -959,3 +959,46 @@ for the run.
 - the regroup, the HS twin, and Mike's decision on the beyond-EOF rule
   (section 10.3), which build 458 does not have;
 - the 16-connection gap (`tardis1-boot1-testing.md` 10.2), unchanged.
+
+## 13. 2026-10-07: the 16-connection gap, what is known and the experiment armed
+
+**A new session after the reboot starts here.** Mike rebooted for this
+experiment; the region must be phase A's 555 pages, so run nothing of
+phase B or D first.
+
+Mike's question was whether the gap is XFS's beyond-EOF wait. **It is
+not:** the `-sized-` cells `fallocate` their files on the server before
+the client writes, the step cells overwrite a 1 GiB file, and on
+nvme-loop the loan is not direct I/O and shows the same gap.
+
+What points at the charge per WRITE instead (existing data, no new run):
+
+- `/var/tmp/zc-run-logs/hang-457-repro/trace1.out` (build 457, 16
+  connections, mixed sizes, `credit.bt`): a 1 MiB record is admitted
+  with 27 pages of credit; 36% of 50400 such records then paused in
+  `svc_tcp_rx_credit_charge()` wanting more, median 30, 90th percentile
+  38, maximum 54. 256 KiB records: admitted with 9, 12% paused, up to 22.
+- Only the 16-connection loan cells at 64 KiB pause; one connection and
+  every 4 KiB and 16 KiB cell show 0.
+- In `step-on-n16`'s 10 ms stall the loan runs at 48 MB/s (about one
+  WRITE per 20 ms); its copy and the one-connection loan both hold 705.
+
+**Reading, unconfirmed:** veth packs about seven frames to a 64 KiB
+page, and with sixteen connections interleaved they belong to different
+connections, so a record spans more region pages than the factor of 150
+allows for and stalls mid-receive holding its credit.
+
+**The experiment:** `mixed-sized-copy` and `mixed-sized-on` (and
+`step-copy-n16` / `step-on-n16` if time allows), `STORAGE=prp PHASE=A`
+with `CELLS=`, under `credit.bt`, at credit factors 150, 250 and 350.
+`FACTOR` comes from `F9` in `run-budget.sh` (check how to override it;
+the budget and the reserve are derived from it). Wanted: pauses gone and
+the loan at its copy's rate at some factor. If so the 64 KiB factor is
+too low for several connections, and the fix is in how it is computed.
+
+The artifact was reworded the same day to say the gap is under
+investigation and is not XFS; its source is kept at
+`/var/tmp/zc-run-logs/artifact/region-budget.html` (publish to the same
+URL). `RESULTS.md` and the README's "64 KiB host" still give the older
+reading ("the budget is doing what it is set to do"); correct them when
+the experiment has run. Mike, 2026-10-07: no regroup until he asks.
