@@ -1062,6 +1062,9 @@ Source33: %{name}-x86_64-debug-rhel.config
 # ARM64 64K page-size kernel config
 Source42: %{name}-aarch64-64k-rhel.config
 Source43: %{name}-aarch64-64k-debug-rhel.config
+# ARM64 16K page-size kernel config
+Source46: %{name}-aarch64-16k-rhel.config
+Source47: %{name}-aarch64-16k-debug-rhel.config
 
 Source44: %{name}-riscv64-rhel.config
 Source45: %{name}-riscv64-debug-rhel.config
