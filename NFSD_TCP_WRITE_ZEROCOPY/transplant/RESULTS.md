@@ -135,8 +135,13 @@ throughput:**
   (`step-n16` 2221 / 2202 MB/s outside the stall, `mixed-sized` 2651 /
   2474). With a storage delay it is not (`mixed-sized` at 1 ms 2232 /
   1165), because the same budget then admits six 1 MiB records at once
-  where 150 admits fifteen. A factor of 350 on the region it derives
-  (870 pages) is not yet run. `tardis1-build457-handoff.md` section 14.
+  where 150 admits fifteen. **On the region 350 derives (870 pages, a
+  budget of 734, twelve records at once; a fresh boot the same day) the
+  gap is smaller and still there when storage waits:** `mixed-sized` at
+  1 ms 2581 / 1766, with no delay 2619 / 2625; `step-n16` about 2240 /
+  2245 outside the stall and about 704 / 485 in it. 481 of 190507 1 MiB
+  records pause in `step-on-n16`. `tardis1-build457-handoff.md` sections
+  14 and 15.
 - **The cells with no budget and no held buffer (`-off`) do not drop at
   64 KiB** except with two clients (`x-off-RN`, 4137 and 3914 drops):
   `mixed-off`, `x-off-R` and `d-off-N` drop thousands of packets at

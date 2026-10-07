@@ -1078,3 +1078,49 @@ fewer than nine records in ten.
 
 `RESULTS.md`, the README's "64 KiB host" and the artifact were corrected
 the same day with these results.
+
+## 15. 2026-10-07: factor 350 on the region it derives (870 pages)
+
+Build 458, a fresh boot, `FACTOR9=350` without `SIZE=`, `STORAGE=prp
+PHASE=A`: the region is 870 pages (8 parked), the budget 734 and the
+reserve 60, so twelve 1 MiB records at once at 61 pages each (section 14
+expected fifteen; the 555-page region admitted six). Everything is in
+`/var/tmp/zc-run-logs/credit-factor-870/` (`run.sh`, `driver.log`, `f350`
+under section 14's fixed `credit.bt`, `d0-f350` untraced with
+`FORCE_DELAY=0`). Both runs rc 0, fio rc 0, no drops or allocation
+failures, kernel log clean.
+
+| cell (MB/s) | copy | loan | paused / denied | on 555 pages: copy / loan |
+|---|---|---|---|---|
+| `mixed-sized`, 1 ms | 2581 | 1766 | 1 / 3320 | 2232 / 1165 |
+| `mixed-sized`, no delay | 2619 | 2625 | 3 / 4730 | 2651 / 2474 |
+| `step-n16`, whole run | 1727 | 1665 | 500 / 234719 | 1715 / 1560 |
+
+The step cells by phase (no delay, the 10 ms stall, no delay), read from
+fio's 500 ms bandwidth log and so approximate: copy 2240 / 704 / 2240,
+loan 2245 / 485 / 2250.
+
+**What it shows:**
+
+- **With storage that does not wait the loan is level with its copy**
+  (2625 against 2619, and the step cells outside the stall).
+- **When storage waits the loan is at about two thirds of its copy**,
+  68% in the 1 ms mixed cell and 69% in the stall (52% and 34% on 555
+  pages). Twelve records at once is still a limit the copy does not
+  have.
+- **Pauses are nearly gone, not gone:** 481 of 190507 1 MiB records in
+  `step-on-n16` (0.25%, wanting 65 or 66 pages), none of the smaller
+  records. On 555 pages 350 showed none.
+- **Credit a 1 MiB record held at release:** median 61, 90% 61, 99% 63,
+  most 73 (62 on 555 pages). With twelve in flight 61 is not quite the
+  ceiling.
+- `step-on-n16` retransmits 5594 times (14018 on 555 pages), all loss
+  probes, no timeout. The copy's rate is not hurt by the larger region
+  (`mixed-sized-copy` 2581, 2232 on 555).
+
+**Not settled:** how the factor and the budget should be computed for
+64 KiB. A budget for fifteen or sixteen records at 350 has not been run.
+
+`RESULTS.md` and the README's "64 KiB host" carry these results. The
+artifact (`/var/tmp/zc-run-logs/artifact/region-budget.html`) does not
+yet.
