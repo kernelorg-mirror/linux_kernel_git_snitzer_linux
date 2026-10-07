@@ -1399,5 +1399,5 @@ section 19's, the same boot: 2544 at 1 ms, 2587 with no delay, about
 - The whole of the L3 as the share (512 pages) would admit all sixteen:
   section 19's 408 pages at a budget of 1044.
 
-`RESULTS.md` and the README's "64 KiB host" carry the bound; the
-artifact does not yet.
+`RESULTS.md`, the README's "64 KiB host" and the artifact carry the
+bound.
