@@ -1333,3 +1333,71 @@ results.
 **No regroup, and no mention of it, until Mike asks** (section 13, said
 again this session after the check was run and its result reported
 unasked). `AGENTS.md` and the README's working rules now say so.
+
+## 20. 2026-10-07: tardis1's bound at half of the L3 is a budget of 548
+
+Mike picked half of the L3 as the share to start with: 16 MiB, 256
+pages of 64 KiB in use. Section 16's steps 2 and 3.
+
+**From the four runs alone** (the most in use on sixteen connections:
+176 pages with six 1 MiB records at once, 300 with eleven, 348 with
+fourteen, 408 with sixteen) a straight line gives about 246 pages at
+nine records and 269 at ten. That is 10 pages under the limit on a fit
+that misses its own points by as much, so it was measured.
+
+**The measurement.** `/var/tmp/zc-run-logs/bound-half-l3/run.sh`, on
+the same boot and 1180-page region as section 19: credit factor 350,
+the budget forced to N x 61 + 60 for eight, nine and ten records
+(`FORCE_BUDGET=`, new in `run-budget.sh`; the pages in use depend on
+the budget, not on the region's size). Loan cells only, with one and
+with sixteen connections. All rc 0, fio rc 0, no drops, allocation
+failures, escaped pages or overruns.
+
+Peak pages in use (`used_pages`):
+
+| budget | 1 MiB records at once | 16 conn.: `mixed-sized-on` 1 ms / no delay | `step-on-n16` | 1 conn.: `seq-sized-on` | `step-on` |
+|---|---|---|---|---|---|
+| 548 | 8 | 216 / 248 | 228 | 160 | 164 |
+| 609 | 9 | 244 / 256 | 252 | 160 | 184 |
+| 670 | 10 | 256 / 296 | 270 | 168 | 204 |
+
+- **The bound is a budget of 548 pages: eight 1 MiB records at once,
+  248 pages (15.5 MiB) in use at the most.** 609 reaches 256 exactly,
+  in the mixed cell with no storage delay, so it is at the limit and
+  not under it; 670 goes to 296.
+- The margin at 548 is 8 pages and each cell is one run. The one
+  repeat there is of the 1 ms mixed cell (`rel-f350`, section 14) differed by 4.
+- One connection stays under the limit at all three budgets (204 at
+  the most).
+- By `run-budget.sh`'s sum a budget of 548 for sixteen connections is
+  a region of 548 + 8 + 64 + 64 = 684 pages (42.75 MiB).
+
+**What the bound costs** (sixteen connections, MB/s; the copies are
+section 19's, the same boot: 2544 at 1 ms, 2587 with no delay, about
+2240 / 705 in and out of the stall):
+
+| budget | `mixed-sized-on` 1 ms | no delay | `step-on-n16` outside the stall | in the stall | denied in the step cell |
+|---|---|---|---|---|---|
+| 548 | 1457 (57%) | 2587 (100%) | about 2260 (101%) | about 351 (50%) | 290472 |
+| 609 | 1610 (63%) | 2619 (101%) | about 2245 (100%) | about 391 (55%) | 273382 |
+| 670 | 1686 (66%) | 2563 (99%) | about 2240 (100%) | about 437 (62%) | 253399 |
+
+**What the bound supports, and what must copy:**
+
+- With storage that answers at once, sixteen connections loan at their
+  copy's rate under the bound.
+- With storage that waits (1 ms a WRITE, or a 10 ms stall) and sixteen
+  connections, the loan under the bound is at 50 to 57% of its copy.
+  Those are the cases a copy (budget 0) serves better while the pages
+  in use are held to half of the L3. A copy holds 8 to 12 pages.
+- Eight connections or fewer, each with one 1 MiB record admitted, is
+  what the budget covers by its arithmetic; no cell with two to fifteen
+  connections was run. The one-connection cells have no copy twin on
+  this boot, so they give pages in use and no ratio. One connection is
+  denied 11 to 3797 times at these budgets: it has more than one record
+  in flight.
+- The whole of the L3 as the share (512 pages) would admit all sixteen:
+  section 19's 408 pages at a budget of 1044.
+
+`RESULTS.md` and the README's "64 KiB host" carry the bound; the
+artifact does not yet.
