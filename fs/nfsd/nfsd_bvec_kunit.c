@@ -727,12 +727,11 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 		{
 			/*
 			 * Both ends are offset_align multiples and neither is
-			 * on a page boundary.  The write holds no whole page, so
-			 * it has no middle and is one buffered segment: direct, it
-			 * would share its page with a neighbour that may be
-			 * buffered there.
+			 * on a page boundary.  An aligned end needs no buffered
+			 * segment, so a write aligned to the device is direct
+			 * throughout, whatever the page size.
 			 */
-			.name = "dontcache-aligned-ends-mid-page-buffered",
+			.name = "dontcache-aligned-ends-mid-page-all-direct",
 			.position = 512,
 			.total = 1024,
 			.mem_align = 512,
@@ -742,14 +741,15 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 			.offsets = { 512 },
 			.lengths = { 1024 },
 			.expected_nsegs = 1,
+			.expected_direct_mask = BIT(0),
 			.expected_dontcache_mask = BIT(0),
 			.expected_counts = { 1024 },
 		},
 		{
 			/*
-			 * An aligned mid-page start is cut at the page boundary
-			 * like a misaligned one: the write before it may be
-			 * buffered in that page.
+			 * Each end is cut on its own: the aligned mid-page start
+			 * has no prefix and the middle starts there, while the
+			 * misaligned end is cut back to the page boundary.
 			 */
 			.name = "dontcache-aligned-start-misaligned-end",
 			.position = 512,
@@ -760,28 +760,30 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 			.nvecs = 4,
 			.offsets = { 512, 0, 0, 0 },
 			.lengths = { PAGE_SIZE - 512, PAGE_SIZE, PAGE_SIZE, 640 },
-			.expected_nsegs = 3,
-			.expected_direct_mask = BIT(1),
-			.expected_dontcache_mask = BIT(0) | BIT(1) | BIT(2),
-			.expected_counts = { PAGE_SIZE - 512, 2 * PAGE_SIZE, 640 },
+			.expected_nsegs = 2,
+			.expected_direct_mask = BIT(0),
+			.expected_dontcache_mask = BIT(0) | BIT(1),
+			.expected_counts = { 3 * PAGE_SIZE - 512, 640 },
 		},
 		{
 			/*
-			 * An aligned mid-page end is cut the same way.  This is
-			 * the write that met a buffered neighbour in the page
-			 * it ends in, when its middle ran to the aligned end.
+			 * An aligned mid-page end has no suffix: the middle runs
+			 * to it.  This write shares the page it ends in with a
+			 * neighbour that may be buffered there, which is why the
+			 * caller must not issue it for asynchronous completion,
+			 * see nfs_dio_write_shares_page().
 			 */
-			.name = "dontcache-aligned-mid-page-end-cut-at-page",
+			.name = "dontcache-aligned-mid-page-end-direct",
 			.total = 2 * PAGE_SIZE + 512,
 			.mem_align = 512,
 			.offset_align = 512,
 			.fop_flags = FOP_DONTCACHE,
 			.nvecs = 3,
 			.lengths = { PAGE_SIZE, PAGE_SIZE, 512 },
-			.expected_nsegs = 2,
+			.expected_nsegs = 1,
 			.expected_direct_mask = BIT(0),
-			.expected_dontcache_mask = BIT(0) | BIT(1),
-			.expected_counts = { 2 * PAGE_SIZE, 512 },
+			.expected_dontcache_mask = BIT(0),
+			.expected_counts = { 2 * PAGE_SIZE + 512 },
 		},
 		{
 			/*
