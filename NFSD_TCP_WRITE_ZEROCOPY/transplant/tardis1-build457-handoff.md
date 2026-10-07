@@ -1121,6 +1121,6 @@ loan 2245 / 485 / 2250.
 **Not settled:** how the factor and the budget should be computed for
 64 KiB. A budget for fifteen or sixteen records at 350 has not been run.
 
-`RESULTS.md` and the README's "64 KiB host" carry these results. The
-artifact (`/var/tmp/zc-run-logs/artifact/region-budget.html`) does not
-yet.
+`RESULTS.md`, the README's "64 KiB host" and the artifact (source
+`/var/tmp/zc-run-logs/artifact/region-budget.html`, version 11) carry
+these results.
