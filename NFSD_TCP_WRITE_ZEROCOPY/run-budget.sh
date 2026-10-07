@@ -39,6 +39,9 @@
 #
 #   FORCE_DELAY=<ms> and FORCE_RCVBUF=<bytes> override every cell's storage
 #   delay and held receive buffer, to compare cells that differ in them.
+#   FORCE_BUDGET=<pages> replaces the budget the phase derives from the
+#   region for its loan cells, to run a smaller budget on a larger region:
+#   the pages in use depend on the budget, not on the region's size.
 #
 #   RX_IP_ALIGN=<0-3> is veth's rx_ip_align: extra bytes of headroom for the
 #   frames veth copies into page-pool pages.  At 0 the TCP payload is 2 bytes
@@ -730,7 +733,7 @@ xcell() {
 	return 0
 }
 xrun() { ( export "$@"; xcell "$CELL" ) || echo "CELL aborted rc=$? ($*)"; }
-budget() { echo $(( SIZE - PARKED - $1 * $2 - 64 )); }
+budget() { echo ${FORCE_BUDGET:-$(( SIZE - PARKED - $1 * $2 - 64 ))}; }
 
 # --- campaign ------------------------------------------------------------
 echo "== kernel $(uname -r); sunrpc $(cat /sys/module/sunrpc/srcversion); nfsd $(cat /sys/module/nfsd/srcversion)"
