@@ -86,5 +86,11 @@ this tree (they are not in a new host's Claude memory).  Anything committed on
 a test host must pass `transplant/check-grouping.sh` (code, then KUnit, then
 docs) before the work is handed back; regroup until it does.
 
+**That rule is suspended on tardis1 (Mike, 2026-10-07): do not worry about
+regrouping until he asks.** The tip there is known not to be grouped.
+Commit at the tip and stop: do not run `check-grouping.sh`, report its
+result or offer a regroup. Claude's memory on the test hosts does not
+persist, so this is the only place a new session will find it.
+
 Start with the README before touching the series; it explains why each of the
 three base-adaptation commits exists and how to reproduce the bisect walk.
