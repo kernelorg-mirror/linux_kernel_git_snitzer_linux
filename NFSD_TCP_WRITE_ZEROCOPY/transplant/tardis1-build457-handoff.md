@@ -1061,7 +1061,20 @@ so a fresh boot: `FACTOR9=350` without `SIZE=`.
 `credit.bt` has never printed RELEASE on these builds: GCC split the body
 into `svc_tcp_rx_credit_release.part.0` and the callers in `svcsock.c`
 call that. A kprobe on it counts one release per admission (2235 of each
-in 10 s). The script needs `kprobe:…release.part.0` reading `arg0`.
+in 10 s). **Fixed** in `/var/tmp/zc-run-logs/credit-factor/credit.bt`
+(a kprobe on the part, reading `arg0`; skipped on a build without it);
+the copy in `hang-457-repro/` is as it was. `pauses.py` now also gives
+the credit a record held at release. `mixed-sized-on` again under it
+(`rel-f150`, `rel-f350`), 1 MiB records:
+
+| factor | admitted with | held at release: median / 90% / 99% / most |
+|---|---|---|
+| 150 | 27 | 39 / 45 / 51 / 57 |
+| 350 | 61 | 61 / 61 / 61 / 62 |
+
+So a 1 MiB record on sixteen connections holds up to 57 region pages for
+its 17 of payload, which is a factor of about 340; 250 (44 pages) covers
+fewer than nine records in ten.
 
 `RESULTS.md`, the README's "64 KiB host" and the artifact were corrected
 the same day with these results.
