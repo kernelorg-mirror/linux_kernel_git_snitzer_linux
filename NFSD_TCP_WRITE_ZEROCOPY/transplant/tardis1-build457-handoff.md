@@ -1124,3 +1124,56 @@ loan 2245 / 485 / 2250.
 `RESULTS.md`, the README's "64 KiB host" and the artifact (source
 `/var/tmp/zc-run-logs/artifact/region-budget.html`, version 11) carry
 these results.
+
+## 16. 2026-10-07: the 16-record run armed, and the region's upper bound on tardis1
+
+**A new session after the reboot starts here.** Mike rebooted for this
+run; the region must be 1080 pages, so run nothing else first.
+
+**The run:** `/var/tmp/zc-run-logs/credit-factor-b16/run.sh` (it refuses
+to start if a region of another size exists). Factor 350 charges a 1 MiB
+record 61 pages, so sixteen at once need a budget of 16 x 61 = 976;
+`run-budget.sh` sets the budget to region - parked - 16 x 2 - 64, so
+with 8 parked the region is `SIZE=1080` (67.5 MiB). Same cells as
+section 15: the mixed and step pairs under `credit.bt`, then the mixed
+pair untraced with `FORCE_DELAY=0`. The region is one contiguous
+allocation and 67.5 MiB is the largest tried here; if it fails the
+harness says so and stops.
+
+**What it decides:** with sixteen connections and twelve records
+admitted at once (section 15) four connections always wait on the
+budget. If the loan matches its copy with sixteen admitted, the
+remaining gap is the budget's size; if it still lags, something else
+costs the loan. Mike, 2026-10-07: this is the closing run of the factor
+line; after it the focus is sizing the region, so that the absolute
+upper bound on tardis1 is known.
+
+**tardis1's caches** (`lscpu`, build 458; 64 Neoverse-N2 cores, one
+socket): L2 512 KiB per core, **L3 32 MiB shared by all 64 cores**,
+which is 512 pages of 64 KiB. This is what the kernel reports from
+firmware tables; `on-die-receive-copy/SPEC.md` lists the system cache
+size as unverified, so confirm it against the SoC's documentation.
+
+- Every region tried is larger than the L3: 555 pages (34.7 MiB, the
+  default), 870 (54 MiB), 1080 (67.5 MiB).
+- What counts is the pages in use, not the region's size: the region's
+  free list returns the most recently freed page first
+  (`net/core/page_pool.c`), so pages never needed are never touched. A
+  copy holds 0.5 to 1.5 MiB whatever the region's size; a loan 11 to 20
+  MiB as configured; sixteen loans at 61 pages each are 61 MiB and
+  cannot fit.
+- Fitting in the L3 is only an upper bound. Whether received data stays
+  there under load is the hardware measurement the SPEC plans; veth
+  cannot show it.
+
+**After the run:**
+
+1. Take the peak pages in use (`used_pages`) from it, beside those for
+   six records at once (555 pages) and twelve (870).
+2. Work out the largest budget whose pages in use stay under a chosen
+   share of 32 MiB, per connection count. Mike picks the share; half of
+   the L3 is a starting point.
+3. Record that as tardis1's bound: the budget, the connections it
+   supports, and the cases that must copy.
+
+Mike, 2026-10-07: leave the HS twin branch alone until he says.
