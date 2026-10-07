@@ -900,14 +900,19 @@ static void nfs_local_call_write(struct work_struct *work)
 		iocb->kiocb.ki_flags = seg->flags & ~(IOCB_DSYNC | IOCB_SYNC);
 		if (!iocb->sync)
 			iocb->kiocb.ki_flags |= stable;
-		/* Only use AIO completion if the direct segment is last */
-		if ((seg->flags & IOCB_DIRECT) && i == iocb->end_iter_index) {
+		/* write_iter() advances the iterator: measure it beforehand */
+		expected = iov_iter_count(&seg->iter);
+		/*
+		 * Only use AIO completion if the direct segment is last, and
+		 * then only if it shares no page with a buffered write, see
+		 * nfs_dio_write_shares_page().
+		 */
+		if ((seg->flags & IOCB_DIRECT) && i == iocb->end_iter_index &&
+		    !nfs_dio_write_shares_page(iocb->kiocb.ki_pos, expected)) {
 			iocb->kiocb.ki_complete = nfs_local_write_aio_complete;
 			iocb->aio_complete_work = nfs_local_write_aio_complete_work;
 		}
 
-		/* write_iter() advances the iterator: measure it beforehand */
-		expected = iov_iter_count(&seg->iter);
 		/*
 		 * A buffered segment shares its end page(s) with the
 		 * neighbouring write; hold them across this write so the
