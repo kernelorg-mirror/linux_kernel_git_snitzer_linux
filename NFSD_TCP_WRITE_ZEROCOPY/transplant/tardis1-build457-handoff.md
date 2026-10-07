@@ -1177,3 +1177,73 @@ size as unverified, so confirm it against the SoC's documentation.
    supports, and the cases that must copy.
 
 Mike, 2026-10-07: leave the HS twin branch alone until he says.
+
+## 17. 2026-10-07: the 1080-page run admitted fourteen records at once, not sixteen
+
+Build 458, a fresh boot, `/var/tmp/zc-run-logs/credit-factor-b16/run.sh`
+as armed in section 16: the region is 1080 pages in one allocation
+(8 parked), the budget 944, the reserve 60. Both runs rc 0, fio rc 0, no
+drops, allocation failures or escaped pages, kernel log clean.
+
+**Sixteen at once was not reached.** Section 16's sum was wrong twice:
+a 128 KiB receive buffer is 4 pages here, not 2 (`budget()` takes
+16 x 4 = 64), and the reserve is not available to admissions. So the
+budget is 1080 - 8 - 64 - 64 = 944, of which 944 - 60 = 884 admit
+records: fourteen at 61 pages. `credit.bt` agrees: 1 MiB records are
+denied with fourteen in flight and 30 pages available (92076 of the
+denials). By the same count the 870-page region admitted **eleven** at
+once (denied with eleven in flight and 3 available), not the twelve
+section 15 gives; `RESULTS.md` and the README carry that twelve.
+Sixteen at once needs a budget of 16 x 61 + 60 = 1036, a region of
+1172 pages (73.25 MiB), and another boot.
+
+| cell (MB/s) | copy | loan | paused / denied | on 870 pages: copy / loan |
+|---|---|---|---|---|
+| `mixed-sized`, 1 ms | 2261 | 1992 | 4 / 3188 | 2581 / 1766 |
+| `mixed-sized`, no delay | 2581 | 2468 | 2 / 2283 | 2619 / 2625 |
+| `step-n16`, whole run | 1737 | 1691 | 0 / 95609 | 1727 / 1665 |
+
+The step cells by phase (no delay, the 10 ms stall, no delay), from
+fio's 500 ms bandwidth log and so approximate: copy 2251 / 704 / 2247,
+loan 2201 / 634 / 2210.
+
+**What it shows:**
+
+- **When storage waits the loan is at about nine tenths of its copy**
+  with fourteen admitted: 88% in the 1 ms mixed cell and 90% in the
+  stall (68% and 69% with eleven, 52% and 34% with six). The gap closes
+  as more records are admitted and has not closed at fourteen, where two
+  connections still wait; whether it closes at sixteen is not shown.
+- The 1 ms copy is lower on this boot (2261; 2581 on 870 pages, 2232 on
+  555), so the 88% owes something to the copy as well as the loan
+  (1992 against 1766).
+- With no delay the loan is at 96% of its copy (2468 against 2581); on
+  870 pages they were level.
+- Denials in `step-on-n16` fall to 95609 (234719 on 870 pages), its
+  retransmits to 1568 (5594), all loss probes, no timeout.
+- Pauses: 4 in the traced run, all 1 MiB records wanting 63 pages.
+  Credit a 1 MiB record held at release: median 61, 90% 61, 99% 62,
+  most 71.
+
+**Peak pages in use** (`used_pages`, the region's size less the lowest
+free count in the cell), which is section 16's first step:
+
+| region | 1 MiB records at once | `mixed-sized-on` 1 ms / no delay | `step-on-n16` | copies |
+|---|---|---|---|---|
+| 555 | 6 | 172 / 176 | 160 | 8 to 12 |
+| 870 | 11 | 280 / 300 | 282 | 8 to 12 |
+| 1080 | 14 | 348 / 300 | 324 | 8 to 12 |
+
+- The most seen is 348 pages, 21.75 MiB, which is inside the 32 MiB L3
+  (512 pages). Section 16 said sixteen loans could not fit, from the
+  charge of 61 pages a record; the pages actually off the free list at
+  the peak are 25 to 29 per admitted record.
+- At that rate sixteen at once would peak near 400 to 460 pages (25 to
+  29 MiB), still under the L3 but most of it.
+- Half of the L3 is 256 pages: about nine or ten records at once, a
+  budget near 9 x 61 + 60 = 609. That is arithmetic from three points,
+  not a run, and the share is Mike's to pick (section 16, steps 2
+  and 3).
+
+**Not done:** `RESULTS.md`, the README's "64 KiB host" and the artifact
+do not carry this run yet, and still say twelve for the 870-page region.
