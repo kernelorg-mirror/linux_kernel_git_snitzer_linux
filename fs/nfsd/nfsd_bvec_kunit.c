@@ -819,7 +819,12 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 		const struct file_operations fake_fops = {
 			.fop_flags = test_case->fop_flags,
 		};
+		/* Its size: no test write starts beyond EOF. */
+		static struct inode fake_inode = {
+			.i_size = MAX_LFS_FILESIZE,
+		};
 		struct file fake_file = {
+			.f_inode = &fake_inode,
 			.f_op = &fake_fops,
 		};
 		/*
