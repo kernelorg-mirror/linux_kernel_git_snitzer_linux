@@ -69,6 +69,27 @@ struct nfs_dio_seg_hold {
 	bool	complete_first, complete_last;
 };
 
+/*
+ * A direct write that starts or stops inside a page may share that page
+ * with a buffered write: nfs_dio_split() leaves an end that is already an
+ * offset_align multiple where it is, and the write on the other side of it
+ * is buffered there whenever it has no direct middle.  Such a direct write
+ * must complete before its ->write_iter() returns.  A file system keeps
+ * buffered writes out for the length of a synchronous direct write, the
+ * invalidation of the page cache after it included; it drops that
+ * exclusion when it queues an asynchronous one, and a page a neighbour
+ * dirties before the I/O completes cannot be invalidated: the direct write
+ * succeeds and the file's next fsync reports -EIO.
+ *
+ * True if a direct write of @len bytes at @pos must not be issued for
+ * asynchronous completion.  Where offset_align is a page-size multiple it
+ * never is.
+ */
+static inline bool nfs_dio_write_shares_page(loff_t pos, size_t len)
+{
+	return ((pos | (pos + len)) & ~PAGE_MASK) != 0;
+}
+
 void nfs_dio_split(struct file *file, const struct nfs_dio_policy *policy,
 		   unsigned int direction, struct bio_vec *bvec,
 		   unsigned int nvecs, loff_t pos, unsigned long total,
