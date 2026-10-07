@@ -120,7 +120,15 @@ Not taken:
 - **Making nfsd's direct writes asynchronous:** the beyond-EOF write
   then waits in `inode_dio_wait()` instead of on the lock.
 
-## 5. The prototype, measured (2026-10-07, not committed)
+## 5. The prototype, measured (2026-10-07)
+
+**Committed the same night, at the tip, not pushed, not regrouped, not on
+the HS twin, and not decided:** `7809bfb4c8e9` "nfs_common: do not issue
+a write that starts beyond EOF as direct I/O" and `aeed1c15a2ac` "NFSD:
+give the KUnit split test's file a size". Mike asked for the code to be
+saved in a commit; **whether the rule stays is open** (the end of this
+section). Between the two commits the KUnit split test dereferences a
+file with no inode.
 
 `nfs_dio_split()` with the rule of section 4 as a new disposition,
 `NFS_DIO_BEYOND_EOF` (`beyond_eof` in `nfsd_write_dio_split`), built as
@@ -162,8 +170,20 @@ write beyond EOF takes the exclusive path, so the distance does not
 obviously matter).
 
 The KUnit split test's fake file was given an inode whose size no test
-write exceeds, so the existing cases are unaffected; there is no case
-for the new disposition yet, and the suites were not run on this build.
+write exceeds, so the existing cases are unaffected:
+`nfsd-receive-bvec` passes 6/6 on this build, run alone. There is no
+case for the new disposition yet, and the other three suites were not
+run on this build.
+
+**Open, for Mike.** Three ways on from here, as put to him:
+
+1. Keep the rule, add its KUnit case.
+2. Drop it (revert `7809bfb4c8e9`; `aeed1c15a2ac` is harmless without
+   it) and accept slow direct writes to a growing file.
+3. Make it a policy knob beside `direct_misaligned_dontcache`, so the
+   two can be compared per workload. Suggested default on: the
+   difference is five-fold and the page cache footprint is unaffected,
+   but it trades away direct I/O for files that grow out of order.
 
 Sources for section 3:
 <https://kunit.googlesource.com/linux/+/3136e8bb3054d3bb68942f8f1ee6c26c05f798b0>,
