@@ -1329,3 +1329,7 @@ and 3 (the share of the L3, and tardis1's bound) are still Mike's to
 decide. `RESULTS.md`, the README's "64 KiB host" and the artifact
 (source `/var/tmp/zc-run-logs/artifact/region-budget.html`) carry these
 results.
+
+**No regroup, and no mention of it, until Mike asks** (section 13, said
+again this session after the check was run and its result reported
+unasked). `AGENTS.md` and the README's working rules now say so.
