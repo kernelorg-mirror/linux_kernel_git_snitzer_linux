@@ -835,3 +835,70 @@ Measured with it loaded, the same two cells, one run each
   only `nfs_dio`, the six client modules and `nfsd` were swapped; done
   in the order of 9.9 it took 9 seconds.
 
+
+## 11. Build 458, boot 1 (2026-10-07): complete, every stage PASS or DONE
+
+**A new session after the reboot starts here: boot 2 is what is left.**
+Run `preflight.sh`, then `run-testplan.sh` (from
+`/var/tmp/zc-run-logs/cwd-458`, logging to
+`/var/tmp/zc-run-logs/boot2-458.log`); it runs `budget-B`,
+`budget-B-sgl`, `analyze-AB`, `analyze-AB-sgl` and `summary`. Mike's
+plan for the cycle: if boot 1 and boot 2 both pass, update the claude.ai
+artifact ("NFSD Receive Region Budget",
+`https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g`, is the most recently
+updated one; confirm with Mike which he means).
+
+Kernel `7.1.13-20.hs.458.loanpages_pool.el9.aarch64+64k`, packaged RPMs,
+booted 2026-10-07 05:43; sunrpc `299EF7D944C6D4A8DA14765`, nfsd
+`5575F68355368469250681E`. **Built from the `-WIP` branch on purpose
+(Mike):** it has the hang fix, the materialize fix and section 9's
+per-end cut (`direct_misaligned_min_bytes`, 8192), and **not** section
+10's beyond-EOF rule (no `beyond_eof` disposition in `nfsd.ko`).
+`preflight.sh` PASS on the fresh boot
+(`/var/tmp/zc-run-logs/preflight-458.log`). Results:
+`/var/tmp/zc-testplan-7.1.13-20.hs.458.loanpages_pool.el9.aarch64+64k/`.
+Run log `/var/tmp/zc-run-logs/boot1-458.log`, 05:48 to 06:41, 53
+minutes. One nfsd client (pl-105) was connected; Mike asked for the run.
+
+- **Section 0's armed check: done by the plan's `kunit` stage, on the
+  shipped modules.** `ok 23 svcsock_rx_credit_collapsed_unwaits_test`,
+  `ok 32 svcsock_rx_merge_then_materialize_test`; 7/7, 43/43, 6/6,
+  10/10, no skip, `== KUNIT PASS`.
+- `bvecrepro`, `rig-cmp`, `loan-assert`, `killswitch`,
+  `system-correctness` PASS. SGL rigs `dd_fails=0 cmp_mismatches=0`
+  each.
+- **LOCALIO, both rigs, the first plan run with the per-end cut and the
+  fixed test:** boundary, short-read and stable exit 0; **every writer
+  finished** (45680, 22368 and 357912 WRITEs at 47008, 96000 and 6000
+  on both; build 455 lost a write on nvme-loop and stopped at 40802);
+  reads per WRITE 0.418 / 0.003 / 0.766 on NVMe/TCP and 0.334 / 0.005 /
+  0.726 on nvme-loop; 0.0% resident.
+- **`x-tight-RN` completed on both kinds of storage** (`R_rc 0`, `N_rc
+  0`, 2785 admitted; R 128 and 129 MB/s). One pass each: the collapse
+  that hung build 457 came about once in 34 repetitions, so this is not
+  by itself the runtime proof (section 8.3 is).
+- **No `svc_tcp_rx_materialize` warning.** `collapse-off` recorded 0
+  collapses on both, so the sequence that warned on build 457 probably
+  did not occur.
+- **Budget phases:** every cell fio exit 0 (`n-exit` 4, as intended); no
+  drops and no allocation failures with a budget set; overrun 0 in
+  every cell (the init counter ends at `overrun 4`, as on build 455).
+  Cells meant to drop did: `floor-refused` 484 and 1729, `x-off-RN`
+  4137 and 3914.
+- **Every copy is one direct segment again** on both kinds of storage,
+  and on NVMe/TCP every loan too. Growing-file copies are at about 440
+  MB/s (`seq-copy` 438 and 399, `mixed-copy` 440 and 447), as section
+  9.7 says to expect without the beyond-EOF rule; sized ones 2174 to
+  2594.
+- One connection: loan and copy level (`seq-sized-on` 2191 / 2174 and
+  2165 / 2174), 0 pauses. **Sixteen connections: the gap of
+  `tardis1-boot1-testing.md` 10.2 is unchanged** (`mixed-sized-on` 1236
+  / 2594 and 1142 / 2521, about 950 pauses; `step-on-n16` 1229 / 1912
+  and 1009 / 1846).
+- **Kernel log:** no WARNING, BUG, stall, allocation failure or
+  invalidation failure.
+
+Not read cell by cell: phases D, TLP and N beyond their exit statuses
+and the `n-sum` refusal (`init 270 + B 338 over 555 refused`). Nothing
+is in `RESULTS.md` or `results/64KiB.tsv` yet. fio's six state files
+are in `cwd-458`; the untracked `statx-dio` came back and was deleted.
