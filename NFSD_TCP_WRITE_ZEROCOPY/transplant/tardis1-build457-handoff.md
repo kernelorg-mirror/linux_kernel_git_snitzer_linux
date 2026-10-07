@@ -109,7 +109,8 @@ Seen in passing, not checked, to set beside build 455:
 - **The 16-connection `mixed` copies are no longer all direct:**
   `mixed-copy` and `mixed-sized-copy` show `wr_direct` 1407 and
   `wr_dontcache` 3938; on build 455 every copy was direct. Probably the
-  page cut; not confirmed.
+  page cut; not confirmed. **Confirmed the same night, and it is the
+  same thing as the bullet above: section 9.7.**
 - A comparison script for the three builds' cells is at
   `/tmp/claude-0/-home-serviceadmin-snitm-kernel-linux/7faf2fbc-bbfe-45e9-93b4-8229c848f82f/scratchpad/cmp.py`
   (`cmp.py A X` etc.); it may not survive, and is 40 lines to rewrite.
@@ -632,7 +633,51 @@ failure, and was left alone on purpose.
   its short-read and stable tests), then the gate back to 8192. Wanted:
   no `INVAL-FAIL` line and no failed write.
 
-### 9.7 How this build was made and loaded
+### 9.7 The 16-connection `mixed` copies: all direct again, and slow again on growing files
+
+Section 2 noted two things about build 457 "in passing": growing-file
+copies four to five times faster, and the `mixed` copies no longer all
+direct. **They are one effect, and it was the page cut.** Phase A's
+copy cells re-run on the loaded per-end cut (default 8192-byte gate),
+`CELLS="mixed-off mixed-copy mixed-sized-copy mixed-on" STORAGE=<prp|sgl>
+PHASE=A run-budget.sh`, one run each, in
+`/var/tmp/zc-run-logs/diocut-perend/mixed-prp` and `mixed-sgl`. MB/s,
+then segments direct + DONTCACHE:
+
+| cell | storage | build 455 | build 457 (page cut) | per-end cut |
+|---|---|---|---|---|
+| `mixed-copy` | nvme-loop | 440, 2785 + 0 | 2105, 1407 + 3938 | 446, 2785 + 0 |
+| `mixed-copy` | NVMe/TCP | 446, 2785 + 0 | 2223, 1407 + 3938 | 447, 2785 + 0 |
+| `mixed-off` | nvme-loop | 438, 2785 + 0 | 1956, 1407 + 3938 | 444, 2785 + 0 |
+| `mixed-off` | NVMe/TCP | 447, 2785 + 0 | 1907, 1407 + 3938 | 446, 2785 + 0 |
+| `mixed-sized-copy` | nvme-loop | 2684, 2785 + 0 | 2391, 1407 + 3938 | 2550, 2785 + 0 |
+| `mixed-sized-copy` | NVMe/TCP | 2886, 2785 + 0 | 2413, 1407 + 3938 | 2811, 2785 + 0 |
+| `mixed-on` (loans) | nvme-loop | 1160, 0 + 2785 | 1098, 0 + 2785 | 1156, 0 + 2785 |
+| `mixed-on` (loans) | NVMe/TCP | 805, 2785 + 0 | 1089, 1407 + 3938 | 872, 2785 + 0 |
+
+- **Every copy is one direct segment again**, as on build 455, on both
+  kinds of storage. The page cut had made these writes (aligned to the
+  device, not to a 64 KiB page) partly or wholly buffered.
+- **The growing-file copies (`mixed-copy`, `mixed-off`) are back to
+  about 445 MB/s from about 2000.** The speed on build 457 was those
+  writes not being direct, not a gain. The same workload on files that
+  already have their size (`mixed-sized-copy`) is all direct at 2550 to
+  2811, a little above the page cut's 2391 to 2413.
+- That direct writes to a growing file are slow is the series' earlier
+  finding (XFS makes a direct write that starts beyond end-of-file wait
+  for the direct writes in progress; `PREALLOC` in the harness exists
+  for it). **Not re-checked that night**; the sized twin being fast is
+  consistent with it.
+- Loans on NVMe/TCP (`mixed-on`) are all direct again too, 872 against
+  1089 under the page cut and 805 on build 455.
+- No write failed, nothing in the kernel log. **Single runs.**
+
+So the per-end cut gives back direct I/O for these writes and, with it,
+the growing-file cost the page cut had hidden. Whether that cost is
+acceptable, or wants its own answer, is Mike's to decide; nothing was
+changed for it.
+
+### 9.8 How this build was made and loaded
 
 As section 8.1, with `include/linux/nfs_dio.h` added to the overlay,
 into `/var/tmp/zc-mod-457fix/perend/` (`fs/nfs_common`, `fs/nfs`,
