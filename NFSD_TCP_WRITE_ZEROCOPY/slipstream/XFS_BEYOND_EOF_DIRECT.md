@@ -120,10 +120,50 @@ Not taken:
 - **Making nfsd's direct writes asynchronous:** the beyond-EOF write
   then waits in `inode_dio_wait()` instead of on the lock.
 
-## 5. Status
+## 5. The prototype, measured (2026-10-07, not committed)
 
-Proposed 2026-10-07 and agreed by Mike as a prototype to measure on the
-two cells of section 1. **Not built, not run** when this was written.
+`nfs_dio_split()` with the rule of section 4 as a new disposition,
+`NFS_DIO_BEYOND_EOF` (`beyond_eof` in `nfsd_write_dio_split`), built as
+modules against build 457 and loaded (`/var/tmp/zc-mod-457fix/eof/`;
+`nfs_dio` srcversion `D6126B95144A51490CC12C3`). The same two cells, the
+same trace, one run each, in `/var/tmp/zc-run-logs/xfs-eof/proto-*`:
+
+| | growing, before | growing, prototype | sized, before | sized, prototype |
+|---|---|---|---|---|
+| throughput | 442 MB/s | **2355 MB/s** | 2804 MB/s | 2526 MB/s |
+| WRITEs issued direct | 2913 | **668 (23%)** | 2913 | 2912 |
+| WRITEs buffered as beyond EOF | 0 | **2245 (77%)** | 0 | 1 |
+| time before the I/O starts, direct writes | 277.9 s | 2.0 s (mean 3 ms) | 0.016 s | 0.016 s |
+| writes that zeroed beyond EOF | 550 | 396 | 4 | 4 |
+
+- **The growing-file copy is fast again**, a little above what the page
+  cut gave (1956 to 2223), and nothing failed (`fio_rc 0`, data
+  verified by fio, nothing in the kernel log).
+- **But only 23% of its WRITEs are now direct.** Before, 19% of writes
+  zeroed beyond EOF; the rest had also started beyond it and waited
+  long enough for EOF to pass them. With no such wait the size is read
+  at once, and 77% are beyond it at that moment. The rule does what it
+  says and gives up most of the direct I/O on a file that grows this
+  way.
+- The buffered ones are DONTCACHE (`wr_dontcache` 2245), so the page
+  cache stays flat; what is given up is the direct path, not the
+  footprint.
+- The sized-file copy is unchanged: all direct, and its throughput is
+  within what single runs of it have shown (2550 to 2811).
+
+**What this settles and what it does not.** The cost of section 2 is
+avoidable from the split, and the price is that a file growing under
+out-of-order WRITEs is written mostly through the page cache. Whether
+that meets the aim of copy mode issuing O_DIRECT more often than not is
+Mike's to judge: it does for files that have their size and for in-order
+appends, and it does not for this cell. Nothing between the two was
+tried (for instance being direct when only a little beyond EOF: any
+write beyond EOF takes the exclusive path, so the distance does not
+obviously matter).
+
+The KUnit split test's fake file was given an inode whose size no test
+write exceeds, so the existing cases are unaffected; there is no case
+for the new disposition yet, and the suites were not run on this build.
 
 Sources for section 3:
 <https://kunit.googlesource.com/linux/+/3136e8bb3054d3bb68942f8f1ee6c26c05f798b0>,
