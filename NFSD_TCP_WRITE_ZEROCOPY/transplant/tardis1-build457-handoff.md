@@ -902,3 +902,60 @@ Not read cell by cell: phases D, TLP and N beyond their exit statuses
 and the `n-sum` refusal (`init 270 + B 338 over 555 refused`). Nothing
 is in `RESULTS.md` or `results/64KiB.tsv` yet. fio's six state files
 are in `cwd-458`; the untracked `statx-dio` came back and was deleted.
+
+## 12. Build 458, boot 2 (2026-10-07): the plan is complete for build 458
+
+**A new session starts here: nothing of the plan is left to run.** What
+is left is the 64 KiB record and Mike's decisions (below).
+
+Fresh boot of the same kernel (sunrpc `299EF7D944C6D4A8DA14765`, nfsd
+`5575F68355368469250681E`), 09:22 to 09:27, five minutes. `preflight.sh`
+PASS on the fresh boot (`/var/tmp/zc-run-logs/preflight-458-boot2.log`).
+Run log `/var/tmp/zc-run-logs/boot2-458.log`, started from
+`/var/tmp/zc-run-logs/cwd-458`. No nfsd client was connected; Mike asked
+for the run.
+
+- **Stages:** `preflight` PASS, `budget-B` DONE, `budget-B-sgl` DONE,
+  `analyze-AB` PASS, `analyze-AB-sgl` PASS, `summary` DONE.
+- **`analyze.py`: OVERALL PASS** for nvme-loop and for NVMe/TCP, every
+  judged cell of phases A and B PASS.
+- **Phase B** (region at its configured minimum, 114 pages; budget 30,
+  equal to the reserve; `edge-below-n1` budget 46):
+
+| cell | conn | nvme-loop MB/s | NVMe/TCP MB/s | peak region pages (loop, tcp) | denied (loop, tcp) |
+|---|---|---|---|---|---|
+| `edge-at-n1` | 1 | 363 | 332 | 24, 24 | 346, 288 |
+| `edge-at-n4` | 4 | 352 | 328 | 36, 36 | 517, 512 |
+| `edge-at-mixed-n4` | 4 | 146 | 144 | 36, 36 | 5583, 5606 |
+| `edge-at-step` | 1 | 896 | 764 | 28, 28 | 103593, 88737 |
+| `edge-below-n1` | 1 | 362 | 340 | 28, 24 | 353, 282 |
+| `edge-off-n1` (no receive buffer held) | 1 | 440 | 403 | 8, 4 | 0, 0 |
+| `edge-copy-n1` | 1 | 438 | 398 | 4, 8 | 0, 0 |
+
+- **Every cell:** fio exit 0, no drops, no allocation failures, 0 paused,
+  0 overrun, 0 collapsed. Loans are written dontcache on nvme-loop and
+  direct on NVMe/TCP, every one (the count equals `admitted`); the two
+  copy cells are direct.
+- **Within a few percent of build 455's boot 2**
+  (`tardis1-boot1-testing.md` section 11) in every cell: the largest
+  move is `edge-at-n1` on nvme-loop, 370 to 363.
+- `edge-at-step` retransmits 1359 and 1049 times with as many loss
+  probes and duplicate acknowledgements and no timeout (build 455: 925
+  and 1071).
+- **Kernel log, boot 2:** only the `DISCARD` "operation not supported"
+  line on the nvme-loop test device, once per stage. No WARNING, BUG,
+  stall, allocation failure, invalidation failure or
+  `svc_tcp_rx_materialize` warning.
+- The summary stage's `check-grouping.sh` reports `grouping BROKEN`, as
+  expected: section 10's two commits sit after docs commits.
+- After the run: rig down, nfsd active, budget 0, `inflight 0 waiters 0`.
+
+**Still to do, none of it started:**
+
+- the 64 KiB record (`results/64KiB.tsv`, `RESULTS.md`, the README's
+  64 KiB account; `tardis1-boot1-testing.md` section 9 step 6), and the
+  artifact Mike named for this cycle (section 11);
+- reading phases D, TLP and N of boot 1 cell by cell;
+- the regroup, the HS twin, and Mike's decision on the beyond-EOF rule
+  (section 10.3), which build 458 does not have;
+- the 16-connection gap (`tardis1-boot1-testing.md` 10.2), unchanged.
