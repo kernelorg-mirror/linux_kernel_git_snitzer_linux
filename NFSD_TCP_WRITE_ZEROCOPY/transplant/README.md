@@ -1066,6 +1066,7 @@ with the evidence for each defect below.
   | 150 | 2958 / 1060 | 2991 / 1538 | 2532 / 1740 | 719 / 50 | 15 |
   | 250 | 2789 / 1532 | not run | 2394 / 2318 | 709 / 80 | 9 |
   | 350 | 2232 / 1165 | 2651 / 2474 | 2221 / 2202 | 699 / 235 | 6 |
+  | 350, its own 870-page region | 2581 / 1766 | 2619 / 2625 | about 2240 / 2245 | about 704 / 485 | 12 |
 
   - With the pauses gone and storage that does not wait, the loan is at
     its copy's rate.
@@ -1073,8 +1074,15 @@ with the evidence for each defect below.
     factor, so a higher factor admits fewer records at once.
   - The factor slows the copy as well (2958 to 2232), because it also
     sets the held receive buffer's window clamp.
-  - Not yet run: 350 on the region it derives, 870 pages, which admits
-    fifteen records again. That takes a fresh boot.
+  - 350 on the region it derives (870 pages, a budget of 734; a fresh
+    boot, handoff section 15) admits twelve records at once, not
+    fifteen. With no storage delay the loan is level with its copy.
+    When storage waits it is at about two thirds of it, in the 1 ms
+    mixed cell and in the 10 ms stall alike: twelve records at once is
+    still a limit the copy does not have.
+  - There the factor is no longer quite enough: 481 of 190507 1 MiB
+    records pause in `step-on-n16` (none on 555 pages), and a record
+    holds up to 73 pages against the 61 it is admitted with.
 - **New-file copies are at about 440 MB/s** where sized ones reach 2174
   to 2594: a direct write that starts beyond EOF waits on XFS
   (`../slipstream/XFS_BEYOND_EOF_DIRECT.md`). On nvme-loop the loan is
@@ -1154,9 +1162,11 @@ Commits are named as on this branch on 2026-10-07; a regroup renames them.
 
 - **The 4 KiB and 16 KiB hosts have not been run with problems 1 to 4's
   changes.** Their columns in `RESULTS.md` are of `v7.1.13-19`.
-- **The 16-connection gap:** the factor of 150 is shown to be too low;
-  a factor of 350 on its own 870-page region is not run, and how the
-  factor should be computed for 64 KiB is not settled.
+- **The 16-connection gap:** the factor of 150 is shown to be too low.
+  A factor of 350 on its own 870-page region closes it when storage
+  does not wait and leaves the loan at about two thirds of its copy
+  when it does. How the factor and the budget should be computed for
+  64 KiB is not settled.
 - **The beyond-EOF rule** (`7809bfb4c8e9`: a write that starts beyond
   EOF is issued buffered) is committed and undecided, and build 458 does
   not have it. Measured once with rebuilt modules: `mixed-copy` 442 to
