@@ -25,7 +25,9 @@ all but the first two):
 The last two were left at the tip at Mike's request, so
 **`check-grouping.sh v7.1.13-20` reports `grouping BROKEN` until they are
 regrouped** (the fix to the end of the code section, the test to the end
-of the KUnit tests); regroup before handing back. `regroup-backup-kunit`
+of the KUnit tests); regroup before handing back. **Five more commits
+followed at the tip the same night (section 9: the write split is cut
+per end again), and they need the same regroup.** `regroup-backup-kunit`
 is the backup branch from the one regroup that session did; delete it
 when Mike is satisfied. Nothing has been carried to the HS twin.
 
@@ -40,7 +42,9 @@ run on build 457 with rebuilt modules).
    shipped sunrpc is `9611113753DDA35599A6AE2` and has neither fix.
 2. Ask Mike before the run (the host is a live server; the KUnit stage
    stops `nfs-server` for about a minute and starts it again).
-3. If the booted kernel was built from a tree with all four commits:
+3. If the booted kernel was built from a tree with all four commits
+   (and section 9's five; `run-kunit.sh` runs their suite too, and
+   section 9.6 has the runtime check that belongs to them):
 
    ```
    cd /var/tmp/zc-run-logs && systemctl stop nfs-server && \
@@ -345,7 +349,15 @@ Only on a kernel with the fix, since `x-tight-RN` can hang any run:
   directory other than `transplant/`.
 - The rig is down, nfsd is active, bpftrace stopped, budgets all 0.
 - **Since 21:57 the NFS and sunrpc modules are the rebuilt, fixed ones**
-  (section 8.2), not the shipped ones.
+  (section 8.2), not the shipped ones; **since 23:08 `nfs_dio`,
+  `nfs_localio`, `nfs` (with its five client modules) and `nfsd` are
+  section 9's build** (`/var/tmp/zc-mod-457fix/perend/`).
+- **The debugfs gate is `direct_misaligned_min_bytes` (8192) on the
+  loaded nfsd**, not `direct_misaligned_min_pages`; a reboot of build 457
+  brings the page-counted one back.
+- NFS service was stopped six times on 2026-10-06 between 21:57 and
+  23:40 (four module swaps, one of which took two attempts and one
+  about 75 seconds, and two KUnit runs). pl-105 reconnected each time.
 - **Two settings were not restored**, because harness runs were killed
   with SIGKILL early in the triage: `page_pool.rx_region_dev` reads
   `rxsrv,rxsrv2` and `/sys/kernel/tracing/tracing_on` reads 0. Their
@@ -480,4 +492,165 @@ What this does and does not show:
 
 The kernel is tainted by the unsigned modules as well as by KUnit. The
 rig is down, budgets are 0, bpftrace is stopped.
+
+## 9. 2026-10-06 night: the write split is cut per end again
+
+Mike, after sections 0 to 8 were done: the page cut of
+`slipstream/NFSD_LOCALIO_DIRECT_SPLIT.md` section 7 costs too much (a
+write aligned to the device but not to a page is buffered), so go back
+to cutting at the direct I/O alignment, reproduce the failure that
+motivated the page cut, and fix that failure instead. **That design
+record has not been updated; this section is the only account.**
+
+### 9.1 The commits (at the tip, not pushed, not regrouped, not on the HS twin)
+
+In this order, so that no commit has the cut without its fix:
+
+| commit | what |
+|---|---|
+| `62286e633852` | NFS/localio: complete a direct write that shares a page before it returns |
+| `08d80dc89a93` | nfs_common: leave an aligned end of a split write where it is |
+| `11e038c05ac5` | NFSD: count the misaligned-WRITE split gate in bytes, not pages |
+| `7b96742f6f12` | NFSD: give the KUnit split test the byte-counted gate |
+| `b494cd4d0711` | NFSD: test the per-end cut of a split write in the KUnit suite |
+
+- **The cut and the gate are Mike's**, taken from the state before the
+  page cut: `git diff v7.1.13-20 cb4917369ce9`, for `fs/nfs_common/nfs_dio.c`
+  byte for byte, with `nfsd-io-modes.rst` and the gate rename from the
+  same diff. Two conflicts with this branch were resolved by keeping its
+  `seg_boundary` policy field. (A first attempt that cut writes at the
+  offset alignment exactly as reads are was rejected by Mike and never
+  run.)
+- The KUnit suites do not build between `11e038c05ac5` and
+  `7b96742f6f12`: the code renames the policy field the test sets.
+
+### 9.2 The cut
+
+For a write, each end on its own: an end that is an `offset_align`
+multiple has no buffered segment and the middle starts or stops there,
+mid-page or not; a misaligned end is cut at a multiple of the larger of
+`offset_align` and the page size. Reads are cut at `offset_align`.
+Before the gate:
+
+| ends | direct middle |
+|---|---|
+| both aligned | the whole write |
+| one aligned | from the aligned end to the last page boundary before the misaligned end; none if no page boundary lies inside the write |
+| both misaligned | the whole pages between the cuts; none if the write holds no whole page |
+
+**So "a misaligned write that holds no whole page is one buffered
+segment" still holds for a write with two misaligned ends**, and Mike
+asked about exactly that. iorhard's records are almost all of that
+kind, by arithmetic: records are back to back, 47008 = 32 x 1469, so a
+record boundary is a 4096 multiple every 128 records and 713 of 45680
+records have one aligned end (6000 = 16 x 375: every 256, 2797 of
+357912). With a page boundary also needed inside the record, **490 and
+174 writes a run have a direct middle**, which the traces match
+exactly. Cutting a misaligned end at the offset alignment too would
+lift this; it was discussed and **not decided**. It would put a
+write's own buffered end and its own direct middle in one page (issued
+one after the other, so by reading the code safe), and bring back the
+read-back the page cut was first made for (0.988 reads per WRITE at
+16 KiB).
+
+### 9.3 The failure, reproduced
+
+`run-sgl-localio-ab.sh loop` (LOCALIO, XFS on nvme-loop, 4096-byte
+alignment, eight writers), the per-end cut, the gate at 0 so that small
+middles are issued. In `/var/tmp/zc-run-logs/diocut-perend/`:
+
+- **Six of six runs failed a write with `EIO`** at 6000-byte records
+  (one of six at 47008), 17 failed invalidations in all.
+- `inval.bt` there traces every failed `invalidate_inode_pages2_range()`
+  with its page range and caller. **Use it, not the kernel message:**
+  the message is limited to ten a day and had printed ten by 22:50.
+- Every failure came from `kiocb_invalidate_post_direct_write()` <-
+  `iomap_dio_complete()` <- `iomap_dio_complete_work()`, in a kworker.
+- The first one, page 2039: record 22271 (offset 133626000) was split
+  as a 1904-byte buffered prefix and a 4096-byte direct middle with no
+  suffix; three neighbours were buffered in that page within a
+  millisecond (`loop/boundary/rs6000.trace`).
+
+### 9.4 The cause and the fix
+
+- A direct write invalidates the page cache before it is submitted
+  (failure there falls back to buffered I/O, which is safe) and again
+  after it completes (failure there sets `-EIO` in `wb_err`).
+- For a synchronous kiocb XFS holds `IOLOCK_SHARED` across
+  `iomap_dio_rw()`, completion included, and a buffered write takes it
+  exclusive. For an asynchronous one the lock is dropped at
+  `-EIOCBQUEUED` and completion runs with nothing held.
+- **LOCALIO used asynchronous completion only for a direct segment that
+  is the last of its write**, which under the per-end cut is exactly a
+  write ending on an aligned boundary. NFSD's kiocbs are always
+  synchronous.
+- **The fix** (`62286e633852`): `nfs_dio_write_shares_page(pos, len)` in
+  `include/linux/nfs_dio.h` is true for a direct write that starts or
+  stops inside a page; `nfs_local_call_write()` uses AIO completion only
+  when it is false. Where the offset alignment is a page-size multiple
+  it is never true and nothing changes.
+- Considered and not taken: retrying the invalidation after a flush in
+  the generic code (narrows the race, does not close it, needs upstream
+  agreement); having the buffered segment wait for direct I/O in flight
+  (a new asynchronous direct write can start after the wait).
+
+### 9.5 What was run with the fix (all on build 457, 64 KiB, rebuilt modules)
+
+| what | result |
+|---|---|
+| LOCALIO, 6000-byte records, gate 0, twelve 15 s runs on one rig (`focus/`, `inval-focus.out`) | 12 of 12: every write succeeded, **0 failed invalidations**, 357912 WRITEs each |
+| LOCALIO, 6000 and 47008, gate 0, the full script (`final0-1`, `final0-2`; and `fixA1..5` on an equivalent cut with the page-counted gate at 0) | 7 of 7 clean |
+| LOCALIO, 6000 and 47008, default 8192-byte gate (`final1..5`) | 5 of 5 clean; at this gate the 6000-byte record's 4096-byte middle is not issued |
+| NFSD, `io_cache_write` 2 (direct), LOCALIO off, gate 0: 6000 x 4 runs, 47008 x 1 (`nfsd-boundary.sh`, `nfsd-gate0/`) | every write succeeded, 0 failed invalidations; 174 and 490 writes a run `disposition=direct`. **First run of the NFSD path with this cut.** The script's `with_direct_middle=0` is its own parsing error; count `disposition=direct` |
+| KUnit, four suites, before the three cases were reworked (`kunit-perend.log`) | `nfsd-receive-bvec` 5/6: the three cases that described the page cut; xdr 7/7, svcsock 43/43, nfsd4 10/10 |
+| KUnit `nfsd-receive-bvec` alone, after (`b494cd4d0711`) | 6/6 |
+
+Read-back is unchanged by any of this: about 0.70 READ bios per WRITE
+at 6000 bytes and 0.35 to 0.40 at 47008, LOCALIO. It is a cost, not a
+failure, and was left alone on purpose.
+
+### 9.6 Not done, not known
+
+- **The four KUnit suites have not been run together on the committed
+  tree**; `nfsd-receive-bvec` was run alone after its cases changed.
+- **Only XFS.** The fix relies on the file system keeping buffered
+  writes out for the length of a synchronous direct write. ext4 and
+  others were not read or run.
+- **Cost not measured:** a workload of writes aligned to the device but
+  not to a page now occupies its LOCALIO worker until each completes.
+- **Only 64 KiB.** 16 KiB, and 4 KiB over 512-byte blocks, reach the
+  same geometry and were not run.
+- **Docs owed:** `slipstream/NFSD_LOCALIO_DIRECT_SPLIT.md` (its sections
+  7 and 1 now describe a cut the code no longer has),
+  `localio-boundary-test.sh`'s comments on the cut and the gate (its
+  `gate_bytes()` already reads either knob), `AGENTS.md`'s line that
+  `v7.1.13-20` carries the page cut and the page-counted gate.
+- The runtime check to repeat on a built kernel: `inval.bt` attached,
+  `echo 0 > /sys/kernel/debug/nfsd/direct_misaligned_min_bytes`,
+  `BOUNDARY_RS="6000 6000 6000 6000" bash focused.sh loop <outdir>`
+  (`focused.sh` in the run directory is `run-sgl-localio-ab.sh` without
+  its short-read and stable tests), then the gate back to 8192. Wanted:
+  no `INVAL-FAIL` line and no failed write.
+
+### 9.7 How this build was made and loaded
+
+As section 8.1, with `include/linux/nfs_dio.h` added to the overlay,
+into `/var/tmp/zc-mod-457fix/perend/` (`fs/nfs_common`, `fs/nfs`,
+`fs/nfsd`; `fs/lockd` and `net/sunrpc` are section 8's). Loaded srcversions:
+`nfs_dio` `CFF9C7DDC678CC81302DF48`, `nfs_localio`
+`072AB9D318501946DB7FAA4`, `nfs` `4A6413247179A1E8A8DA9D9`, `nfsd`
+`2C5C663D4C9E884235B972A` (nfsd's is of the build before the KUnit
+cases changed; nfsd itself did not change).
+
+- **Swapping `nfs_dio` needs `nfsd` and `nfs` unloaded, and the gate
+  rename changes the version of `nfs_localio`'s `nfs_to` as well**, so
+  `nfs_localio` goes with them. Missing that left NFS down for about 75
+  seconds with "disagrees about version of symbol" for every import.
+- `nfsd` does not unload while `nfsdcld` runs: stop `nfsdcld`,
+  `nfs-idmapd` and `nfs-mountd` with `nfs-server`, start the first two
+  again before it. `sunrpc` can stay, so `rpc_pipefs` stays mounted.
+- Swapping only the client side (`nfs`, `nfsv3`, `nfsv4`, the three
+  layout drivers) needs no server stop when nothing is mounted.
+- Other directories there (`exp-perend`, `exp-nfs-sync`) are earlier
+  builds of the same work and can go.
 
