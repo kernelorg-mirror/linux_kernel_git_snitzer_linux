@@ -138,7 +138,10 @@ rcvpages() {
 	b=$(( ($1 + fr - 1) / fr ))
 	echo $(( a > b ? a : b ))
 }
-F9=$(factor 9000); F15=$(factor 1500)
+# FACTOR9=<n> replaces the derived factor for MTU 9000, to try another on
+# the same region: the reserve follows it, and so would the default region
+# size, so give SIZE= as well (the region is made once per boot).
+F9=${FACTOR9:-$(factor 9000)}; F15=$(factor 1500)
 R9=$(rec_reserve "$F9"); R15=$(rec_reserve "$F15")
 RB256=$(rcvpages 262144 9000); RB128=$(rcvpages 131072 9000); RB64=$(rcvpages 65536 9000)
 RB256_15=$(rcvpages 262144 1500)
