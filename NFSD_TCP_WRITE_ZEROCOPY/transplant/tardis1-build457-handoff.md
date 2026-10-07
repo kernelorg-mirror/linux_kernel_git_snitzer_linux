@@ -11,6 +11,58 @@ of the code section, so **every commit after it has a new SHA**. The
 backup branch made for that move was deleted the same day, at Mike's
 request.
 
+**Updated 2026-10-06, about 22:00, by the session after it**, which
+added four commits, none pushed (SHAs as of that session; a regroup moves
+all but the first two):
+
+| commit | what | where |
+|---|---|---|
+| `3ec476031fd9` | the hang fix (section 4) | end of the code section |
+| `1fcefc552397` | its KUnit case, `svcsock_rx_credit_collapsed_unwaits_test` | end of the KUnit tests, before the configs commit |
+| `7abb45f322f7` | the materialize fix (section 5): merge pages marked in a third bitmap | **at the tip, after the docs** |
+| `377d00eb185b` | its KUnit case, `svcsock_rx_merge_then_materialize_test` | **at the tip, after the docs** |
+
+The last two were left at the tip at Mike's request, so
+**`check-grouping.sh v7.1.13-20` reports `grouping BROKEN` until they are
+regrouped** (the fix to the end of the code section, the test to the end
+of the KUnit tests); regroup before handing back. `regroup-backup-kunit`
+is the backup branch from the one regroup that session did; delete it
+when Mike is satisfied. Nothing has been carried to the HS twin.
+
+## 0. Armed: the first thing to do on the next boot
+
+**Before anything else on the next boot, run the two KUnit cases that
+were added for the two defects, and record the result here.** Neither
+had run on a booted kernel when this was written (section 8 has what was
+run on build 457 with rebuilt modules).
+
+1. `uname -r` and `cat /sys/module/sunrpc/srcversion`. Build 457's
+   shipped sunrpc is `9611113753DDA35599A6AE2` and has neither fix.
+2. Ask Mike before the run (the host is a live server; the KUnit stage
+   stops `nfs-server` for about a minute and starts it again).
+3. If the booted kernel was built from a tree with all four commits:
+
+   ```
+   cd /var/tmp/zc-run-logs && systemctl stop nfs-server && \
+     bash ~/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/run-kunit.sh /var/tmp/zc-run-logs/kunit-armed-$(uname -r).log; \
+     systemctl start nfs-server
+   grep -E 'svcsock_rx_(credit_collapsed_unwaits|merge_then_materialize)_test|# sunrpc-svcsock-rx: pass' \
+     /var/tmp/zc-run-logs/kunit-armed-$(uname -r).log
+   ```
+
+   Wanted: `ok` for both cases, `== KUNIT PASS`, and no
+   `svc_tcp_rx_materialize` warning in `dmesg`. If either case is
+   **missing** from the log the kernel was not built from this tree's
+   tip: say so, do not report a pass.
+4. If the booted kernel is build 457 again (or any kernel without the
+   fixes), the shipped modules have neither the fixes nor the cases:
+   follow section 8 to load the rebuilt modules, then step 3 with the
+   rebuilt KUnit modules as section 8 says.
+5. Then the runtime checks that KUnit cannot give: the loop of section
+   3.3 under `credit.bt` until a `COLLAPSE ... waiting=1` line is
+   followed by the cell finishing, and `budget-A-sgl`'s `collapse-off`
+   cell with no warning.
+
 ## 1. Where things stand
 
 | | |
@@ -18,7 +70,7 @@ request.
 | kernel | `7.1.13-20.hs.457.loanpages_pool.el9.aarch64+64k`, packaged RPMs, booted 2026-10-06 19:23. sunrpc srcversion `9611113753DDA35599A6AE2` (same as build 455), nfsd `A1443B45D205F18D790B96C` (new). `direct_misaligned_min_pages` exists and reads 1, so it is from the branch as rebased onto `v7.1.13-20` |
 | branch | `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`. Build 457 was run with the tip at `e137fc262e46`; that commit is now `f99a4fbe8c90` (same content, after the regroup), with this file's commit on top |
 | plan | boot 1 **incomplete and stopped by hand**. Boot 2 not run |
-| found | a hang in region-credit admission, **root cause confirmed** (section 3); a `svc_tcp_rx_materialize` warning, **not examined** (section 5) |
+| found | a hang in region-credit admission, **root cause confirmed** (section 3), fixed (section 4); a `svc_tcp_rx_materialize` warning, cause read from the code (section 5), fixed. Both fixes have a KUnit case; see sections 0 and 8 for what has run |
 | installed this session | `drgn` 0.0.33 and `kernel-64k-debuginfo` / `kernel-debuginfo-common` for build 457 (Mike installed the debuginfo) |
 | not a fresh boot | the receive region exists; `budget-D` and `budget-B` need a reboot |
 
@@ -169,11 +221,16 @@ What the change does, for Mike to agree or redirect:
 
 Then:
 
-- **KUnit** (`sunrpc-svcsock-rx`): a transport denied at a region skb,
-  the same bytes then presented from a non-region skb, expect the record
-  completed, the transport off the waiter list and the next waiter woken.
-  Separate commit after the code (the series is code, then KUnit, then
-  docs).
+- **KUnit: written, `1fcefc552397`**
+  (`svcsock_rx_credit_collapsed_unwaits_test` in `sunrpc-svcsock-rx`).
+  Through the receive actor: budget 10 all held by one record; the
+  fixture transport is refused at a region page-pool fragment after its
+  28-byte prefix; a second transport queues behind it; the record in
+  flight ends with wakes suppressed, leaving two waiters and nothing in
+  flight; the rest of the record then comes from a plain-page skb.
+  Expects the record complete with no credit drawn, the transport off
+  the list (ticket and `sk_budget` cleared), the second transport woken
+  and then admitted.
 - **Compile check.** Nothing is built on tardis1; build 455's notes
   compiled changed files against the `-devel` config less module
   versions, BTF and signing.
@@ -191,7 +248,30 @@ Here it was 768 bytes over (131840 against 131072). A collapse also turns
 a loan into a copy. Whether the clamp's margin is short at 64 KiB, or the
 collapse is to be expected and only the list handling is wrong, is open.
 
-## 5. Task 2: the `svc_tcp_rx_materialize` warning (not examined)
+## 5. Task 2: the `svc_tcp_rx_materialize` warning (fixed as `7abb45f322f7`, not reproduced at runtime)
+
+**Fixed, Mike's choice of the two below: a third bitmap.**
+`7abb45f322f7` "SUNRPC: Count a merge page's bytes once when a TCP
+receive record is materialized", `Fixes: 1ecfe1f42fc6`. `struct
+svc_tcp_rx_state` gains `merged` beside `borrowed` and `page_pool`
+(**the struct's layout changes**, so sunrpc, nfsd and the KUnit modules
+must be built together). The bit is set when
+`svc_tcp_rx_copy_segment_merged()` enters its page; materialize moves no
+bytes for a marked entry (`borrowed_bytes`, `copied_bytes` and
+`materialized_bytes` are left alone) but still drops the reference;
+`svc_tcp_rx_retract_last()` gives a marked entry's bytes back to
+`copied_bytes` (by reading, it cannot meet one today); the mark is
+cleared wherever the borrowed one is, and checked empty with it.
+
+**KUnit: `377d00eb185b`** (`svcsock_rx_merge_then_materialize_test`): a
+locked-head skb with the prefix and 40 body bytes (merged), then an skb
+with the last 64 bytes on a region page and no budget anywhere, so the
+actor's "No budget to draw on" branch materializes the record with the
+merge page in its table. No collapse needed. Expects no error, the
+record complete as a copy with reason `NO_BUDGET`, nothing borrowed,
+`copied_bytes` 104, references balanced and the body intact.
+
+What follows is the examination that led there.
 
 Once, 2026-10-06 20:29:42, in the last seconds of `budget-A-sgl`
 (NVMe/TCP; the stage is recorded DONE at 20:29:49):
@@ -271,8 +351,57 @@ Only on a kernel with the fix, since `x-tight-RN` can hang any run:
 - `nfsd` `io_cache_write` reads 2 and `tcp_rmem` `65536 131072 33554432`;
   not compared with boot values.
 - The kernel is tainted (KUnit ran, the warning in section 5).
-- An untracked `NFSD_TCP_WRITE_ZEROCOPY/statx-dio` binary is back
-  (a harness build product); delete it before committing.
+- An untracked `NFSD_TCP_WRITE_ZEROCOPY/statx-dio` binary was back
+  (a harness build product); it was gone by the next session. Delete it
+  before committing if it returns.
 - A mistake to avoid: `pkill -f run-testplan.sh` from a shell whose own
   command line contains that string kills the shell too.
 - Results directories for builds 454 and 455 are still in `/var/tmp`.
+
+## 8. The fixes on build 457's running kernel, with rebuilt modules
+
+Mike asked for the fixed modules to be built against build 457's
+`kernel-64k-devel` and loaded into the running kernel, rather than wait
+for a kernel build. Everything is in `/var/tmp/zc-mod-457fix/`.
+
+### 8.1 How they are built (done, about 30 seconds in all)
+
+The struct change means the changed header must win over the devel
+tree's copy, and with `CONFIG_MODVERSIONS` (gendwarfksyms) it changes
+the CRC of 216 of sunrpc's 327 exported symbols, so **every module that
+imports from sunrpc is rebuilt**, not only sunrpc and nfsd:
+
+```
+KB=/lib/modules/$(uname -r)/build; W=/var/tmp/zc-mod-457fix; S=~/snitm/kernel/linux
+mkdir -p $W/overlay/include/linux/sunrpc
+cp $S/include/linux/sunrpc/svcsock.h $W/overlay/include/linux/sunrpc/
+make -j48 -C $KB M=$S/net/sunrpc MO=$W/sunrpc CC="gcc -I$W/overlay/include" modules
+ex=$W/sunrpc/Module.symvers
+for d in fs/nfs_common fs/lockd fs/nfs fs/nfsd; do n=$(basename $d)
+  make -j48 -C $KB M=$S/$d MO=$W/$n CC="gcc -I$W/overlay/include" \
+       KBUILD_EXTRA_SYMBOLS="$ex" modules; ex="$ex $W/$n/Module.symvers"; done
+```
+
+- `CC="gcc -I..."` puts the overlay ahead of the devel tree's `include/`;
+  `svcsock.h` is the only header that differs from the devel tree
+  (checked with `diff -rq` over the sunrpc, nfs, lockd and page_pool
+  headers). `MO=` keeps the objects out of the source tree.
+- 20 modules: `sunrpc`, `auth_rpcgss`, `rpcsec_gss_krb5`, `rpcrdma`,
+  `grace`, `nfs_acl`, `nfs_dio`, `nfs_localio`, `lockd`, `nfs`, `nfsv3`,
+  `nfsv4`, the three layout drivers, `nfsd`, and the four KUnit modules.
+- They are unsigned and have no BTF ("Skipping BTF generation ... due to
+  unavailability of vmlinux"); the kernel does not enforce signatures
+  (`sig_enforce` N, lockdown none). The compiler is gcc 11.5.0-14, the
+  kernel's 11.5.0-15.
+- **The method was checked against the shipped module:** the same build
+  of the tree with both fixes reversed (`$W/refsrc`, a detached worktree;
+  remove it with `git worktree remove`) gives all 327 CRCs equal to the
+  devel `Module.symvers` and all 3116 functions of `sunrpc.ko` the same
+  size as the shipped one. Its srcversion differs from the shipped
+  `9611113753DDA35599A6AE2` (`6B3F8B7A0EF7110D220E1BE`); not explained.
+- The fixed sunrpc's srcversion is `4BB9ADB459E9D7ED8831736`.
+
+### 8.2 Loading them, and what ran
+
+Not done when this was written; the next commit of this file records it.
+
