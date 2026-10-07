@@ -1083,8 +1083,8 @@ the same day with these results.
 
 Build 458, a fresh boot, `FACTOR9=350` without `SIZE=`, `STORAGE=prp
 PHASE=A`: the region is 870 pages (8 parked), the budget 734 and the
-reserve 60, so twelve 1 MiB records at once at 61 pages each (section 14
-expected fifteen; the 555-page region admitted six). Everything is in
+reserve 60, so twelve 1 MiB records at once at 61 pages each (eleven,
+in fact: section 17; section 14 expected fifteen; the 555-page region admitted six). Everything is in
 `/var/tmp/zc-run-logs/credit-factor-870/` (`run.sh`, `driver.log`, `f350`
 under section 14's fixed `credit.bt`, `d0-f350` untraced with
 `FORCE_DELAY=0`). Both runs rc 0, fio rc 0, no drops or allocation
@@ -1245,5 +1245,32 @@ free count in the cell), which is section 16's first step:
   not a run, and the share is Mike's to pick (section 16, steps 2
   and 3).
 
-**Not done:** `RESULTS.md`, the README's "64 KiB host" and the artifact
-do not carry this run yet, and still say twelve for the 870-page region.
+`RESULTS.md`, the README's "64 KiB host" and the artifact (source
+`/var/tmp/zc-run-logs/artifact/region-budget.html`) carry these results
+and say eleven for the 870-page region.
+
+## 18. 2026-10-07: the sixteen-at-once run armed again, on 1180 pages
+
+**A new session after the reboot starts here.** Mike reboots for this
+run; the region must be 1180 pages, so run nothing else first.
+
+**The run:** `/var/tmp/zc-run-logs/credit-factor-1180/run.sh`, the same
+cells as section 17 with `SIZE=1180` (73.75 MiB, larger than any region
+allocated here; if the allocation fails the harness says so and stops).
+Sixteen records at 61 pages and the 60-page reserve need a budget of
+1036, so 1172 pages with 8 parked. The untraced run of section 17 had
+12 parked, which on 1172 pages would admit fifteen; 1180 admits sixteen
+with up to 16 parked. With 8 parked the budget is 1180 - 8 - 64 - 64 =
+1044.
+
+**What to read from it:**
+
+1. The `budget` column of each loan cell: (budget - 60) / 61 must be 16
+   or more. Then, in `trace-f350.out`, the in-flight count on DENY
+   lines for 1 MiB records (`infl=`): with sixteen connections and
+   sixteen admitted there should be few denials or none.
+2. Loan against copy in the 1 ms mixed cell and in the stall, beside
+   88% and 90% with fourteen. The copy's own rate varies between boots
+   (2261 and 2581 at 1 ms), so compare within the boot.
+3. `used_pages`, beside section 17's table, for the bound on tardis1
+   (section 16, steps 2 and 3; the share of the L3 is Mike's to pick).
