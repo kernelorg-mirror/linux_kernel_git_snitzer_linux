@@ -677,7 +677,47 @@ the growing-file cost the page cut had hidden. Whether that cost is
 acceptable, or wants its own answer, is Mike's to decide; nothing was
 changed for it.
 
-### 9.8 How this build was made and loaded
+### 9.8 Which cut serves copy mode (assessment, 2026-10-07; Mike has not ruled on it)
+
+Mike's goal for the change: let copy mode (budget 0, region records
+copied) issue O_DIRECT more often than not. The assessment given, from
+this section's runs and the code:
+
+- **A copied record's memory is not the obstacle**: it lands in the
+  request's own pages. Whether it goes direct is decided by the file
+  offsets of its two ends.
+- **Most client WRITEs have both ends on a 4096 multiple** (page cache
+  writeback from a 4 KiB-page client, aligned O_DIRECT; a file's tail
+  is the exception). That is general Linux client behaviour, **not
+  measured here** beyond the fio cells of 9.7.
+- **The per-end cut (committed) makes exactly those writes direct
+  throughout** at any server page size: 9.7's copy cells, 2785 direct
+  segments and nothing buffered.
+
+On 64 KiB pages:
+
+| scheme | write aligned to the device, not to a page | write with misaligned ends | cost |
+|---|---|---|---|
+| page cut (`v7.1.13-20`) | buffered outside whole pages (1407 direct + 3938 DONTCACHE in the copy cells) | direct only for whole pages | loses direct I/O |
+| per-end (committed) | all direct | direct only for whole pages, or up to an aligned end | needed 9.4's fix; verified |
+| offset alignment at every end | all direct | a direct middle almost always | a write's middle shares a page with its own buffered ends; 0.988 reads per WRITE at 16 KiB under the original code; **untested on this code** |
+
+**Recommended: keep the per-end cut.** The third scheme only adds
+direct I/O for writes with two misaligned ends (iorhard's records),
+which is not what copy mode mostly sees.
+
+Two limits on the benefit, whatever the cut:
+
+- **Growing files.** Direct is not faster there (9.7: about 445 MB/s
+  all direct against about 2000 partly buffered; 2550 to 2811 on files
+  that already have their size). "Direct more often" buys a flat page
+  cache in copy mode, and throughput only where files are preallocated
+  or overwritten. **This is the next thing to decide.**
+- **Loans.** On storage that needs whole pages a loaned write cannot go
+  direct under any cut; on storage that takes arbitrary pieces loans
+  were all direct again under the per-end cut.
+
+### 9.9 How this build was made and loaded
 
 As section 8.1, with `include/linux/nfs_dio.h` added to the overlay,
 into `/var/tmp/zc-mod-457fix/perend/` (`fs/nfs_common`, `fs/nfs`,
