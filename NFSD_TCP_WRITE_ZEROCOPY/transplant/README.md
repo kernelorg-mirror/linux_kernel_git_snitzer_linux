@@ -1108,6 +1108,15 @@ with the evidence for each defect below.
     20 to 29 pages per record admitted against the 61 charged, and
     25.5 MiB at most, under the 32 MiB L3 the host reports. The copies
     hold 8 to 12 pages on every region.
+  - **tardis1's bound at half of the L3** (256 pages in use; Mike's
+    share to start with; handoff section 20): a budget of 548, eight
+    records at once, 248 pages at the most. Measured with the budget
+    forced (`FORCE_BUDGET=`) on the 1180-page region: 548, 609 and 670
+    peak at 248, 256 and 296 pages on sixteen connections and at 164,
+    184 and 204 on one. Under the bound sixteen connections loan at
+    their copy's rate with no storage delay, and at 57% of it at 1 ms
+    and 50% in the stall; those are the cases a copy serves better.
+    The margin is 8 pages and each cell is one run.
   - There the factor is no longer quite enough: 481 of 190507 1 MiB
     records pause in `step-on-n16` (none on 555 pages), and a record
     holds up to 73 pages against the 61 it is admitted with.

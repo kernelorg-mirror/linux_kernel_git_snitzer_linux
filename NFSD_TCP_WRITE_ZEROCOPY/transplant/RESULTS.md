@@ -157,8 +157,15 @@ throughput:**
   of the region in use is 160 to 176 pages with six at once, 280 to 300
   with eleven, 300 to 348 with fourteen and 312 to 408 (25.5 MiB) with
   sixteen: 20 to 29 pages per record admitted, against the 61 charged,
-  and under the 32 MiB L3 the host reports.
-  `tardis1-build457-handoff.md` sections 14, 15, 17 and 19.
+  and under the 32 MiB L3 the host reports. **Held to half of that L3
+  (256 pages in use, the share Mike picked to start with), the bound is
+  a budget of 548: eight records at once, 248 pages at the most**
+  (measured with the budget forced on the 1180-page region; 609 reaches
+  256 exactly, 670 goes to 296). Under it sixteen connections loan at
+  their copy's rate when storage does not wait and at 50 to 57% of it
+  when it does (`mixed-sized` at 1 ms 2544 / 1457, the stall about 705 /
+  351); one connection stays under the limit.
+  `tardis1-build457-handoff.md` sections 14, 15, 17, 19 and 20.
 - **The cells with no budget and no held buffer (`-off`) do not drop at
   64 KiB** except with two clients (`x-off-RN`, 4137 and 3914 drops):
   `mixed-off`, `x-off-R` and `d-off-N` drop thousands of packets at
