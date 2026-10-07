@@ -129,8 +129,14 @@ throughput:**
   (about 1000 times in the `mixed` cells, about 95000 to 100000 in the
   `step` ones); no 4 KiB or 16 KiB cell pauses. The region holds 16 to
   18 MiB of 35 MiB at the time, one 17-page record or so per connection.
-  The cause is not established; the host has 64 CPUs, far more than the other two,
-  and its 16-connection copies run about three times as fast as theirs.
+  **The credit factor of 150 is too low there** (experiment of
+  2026-10-07, nvme-loop, the same 555-page region): at 350 nothing
+  pauses and, with no storage delay, the loan is at its copy's rate
+  (`step-n16` 2221 / 2202 MB/s outside the stall, `mixed-sized` 2651 /
+  2474). With a storage delay it is not (`mixed-sized` at 1 ms 2232 /
+  1165), because the same budget then admits six 1 MiB records at once
+  where 150 admits fifteen. A factor of 350 on the region it derives
+  (870 pages) is not yet run. `tardis1-build457-handoff.md` section 14.
 - **The cells with no budget and no held buffer (`-off`) do not drop at
   64 KiB** except with two clients (`x-off-RN`, 4137 and 3914 drops):
   `mixed-off`, `x-off-R` and `d-off-N` drop thousands of packets at
