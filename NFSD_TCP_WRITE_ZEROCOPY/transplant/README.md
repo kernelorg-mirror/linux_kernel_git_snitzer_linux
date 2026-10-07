@@ -1066,7 +1066,8 @@ with the evidence for each defect below.
   | 150 | 2958 / 1060 | 2991 / 1538 | 2532 / 1740 | 719 / 50 | 15 |
   | 250 | 2789 / 1532 | not run | 2394 / 2318 | 709 / 80 | 9 |
   | 350 | 2232 / 1165 | 2651 / 2474 | 2221 / 2202 | 699 / 235 | 6 |
-  | 350, its own 870-page region | 2581 / 1766 | 2619 / 2625 | about 2240 / 2245 | about 704 / 485 | 12 |
+  | 350, its own 870-page region | 2581 / 1766 | 2619 / 2625 | about 2240 / 2245 | about 704 / 485 | 11 |
+  | 350, a 1080-page region | 2261 / 1992 | 2581 / 2468 | about 2250 / 2205 | about 704 / 634 | 14 |
 
   - With the pauses gone and storage that does not wait, the loan is at
     its copy's rate.
@@ -1075,11 +1076,26 @@ with the evidence for each defect below.
   - The factor slows the copy as well (2958 to 2232), because it also
     sets the held receive buffer's window clamp.
   - 350 on the region it derives (870 pages, a budget of 734; a fresh
-    boot, handoff section 15) admits twelve records at once, not
-    fifteen. With no storage delay the loan is level with its copy.
+    boot, handoff section 15) admits eleven records at once, not
+    fifteen: the 60-page reserve admits nothing, so 674 pages do, at 61
+    each. With no storage delay the loan is level with its copy.
     When storage waits it is at about two thirds of it, in the 1 ms
-    mixed cell and in the 10 ms stall alike: twelve records at once is
+    mixed cell and in the 10 ms stall alike: eleven records at once is
     still a limit the copy does not have.
+  - 350 on 1080 pages (a budget of 944; another boot, handoff section
+    17) admits fourteen. It was sized for sixteen, from a sum that
+    left out the reserve and took a 128 KiB receive buffer as 2 pages
+    where it is 4. When storage waits the loan is at about nine tenths
+    of its copy (88% at 1 ms, 90% in the stall); the 1 ms copy was
+    itself lower on that boot (2261 against 2581). With no delay the
+    loan is at 96%. Sixteen at once needs a budget of 16 x 61 + 60 =
+    1036 and a region of 1172 pages (73.25 MiB), and is not run.
+  - **Pages in use at the peak** in the loan cells: 160 to 176 with six
+    records at once (555 pages), 280 to 300 with eleven (870), 300 to
+    348 with fourteen (1080). That is 25 to 29 pages per record
+    admitted against the 61 charged, and 21.75 MiB at most, under the
+    32 MiB L3 the host reports. The copies hold 8 to 12 pages on every
+    region.
   - There the factor is no longer quite enough: 481 of 190507 1 MiB
     records pause in `step-on-n16` (none on 555 pages), and a record
     holds up to 73 pages against the 61 it is admitted with.
@@ -1163,9 +1179,11 @@ Commits are named as on this branch on 2026-10-07; a regroup renames them.
 - **The 4 KiB and 16 KiB hosts have not been run with problems 1 to 4's
   changes.** Their columns in `RESULTS.md` are of `v7.1.13-19`.
 - **The 16-connection gap:** the factor of 150 is shown to be too low.
-  A factor of 350 on its own 870-page region closes it when storage
-  does not wait and leaves the loan at about two thirds of its copy
-  when it does. How the factor and the budget should be computed for
+  A factor of 350 on a larger region closes it, or nearly, when storage
+  does not wait. When storage waits the loan is at about two thirds of
+  its copy with eleven records admitted at once (870 pages) and nine
+  tenths with fourteen (1080); sixteen at once (1172 pages) is not run.
+  How the factor and the budget should be computed for
   64 KiB is not settled.
 - **The beyond-EOF rule** (`7809bfb4c8e9`: a write that starts beyond
   EOF is issued buffered) is committed and undecided, and build 458 does
