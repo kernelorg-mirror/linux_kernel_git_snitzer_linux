@@ -194,6 +194,7 @@ svcsock_rx_alloc_fixture(struct kunit *test, unsigned int capacity)
 	fixture->svsk->sk_maxpages = capacity;
 	fixture->svsk->sk_xprt.xpt_server = serv;
 	/* Classification looks up the budget of the transport's namespace. */
+	fixture->svsk->sk_xprt.xpt_net = &init_net;
 	fixture->rqstp = svcsock_rx_alloc_request(test, fixture, capacity);
 	return fixture;
 }
@@ -2507,6 +2508,87 @@ static void svcsock_rx_credit_collapsed_unwaits_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
 }
 
+/*
+ * A record's first skb has a locked head, so its bytes past the prefix are
+ * copied into a merge page that sits in the table as a loan while its bytes
+ * are counted as copied.  The next skb carries a region page and there is
+ * no budget, so the record is materialized with the merge page in its
+ * table: the merge page's bytes must come off the borrowed count once, and
+ * be counted as copied once.
+ */
+static void svcsock_rx_merge_then_materialize_test(struct kunit *test)
+{
+	enum {
+		PREFIX_LEN = 7 * XDR_UNIT,
+		HEAD_LEN = sizeof(rpc_fraghdr) + PREFIX_LEN,
+		MERGE_LEN = 40,
+		TAIL_LEN = 64,
+		BODY_LEN = PREFIX_LEN + MERGE_LEN + TAIL_LEN,
+	};
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = sizeof(record) };
+	struct sk_buff *locked_skb, *region_skb;
+	struct svcsock_rx_pp *region_pp;
+	struct page *region_page;
+	int ret;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_default_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	svc_tcp_rx_budget_kunit_default(0, 0);
+
+	svcsock_rx_fill_record(record, BODY_LEN, true, RPC_CALL, RPC_AUTH_UNIX);
+	locked_skb = svcsock_rx_build_linear_skb(test, record,
+						 HEAD_LEN + MERGE_LEN);
+	KUNIT_ASSERT_TRUE(test, skb_head_is_locked(locked_skb));
+	region_page = svcsock_rx_alloc_pp_page(test, &region_pp);
+	svcsock_rx_bind_region(test, region_pp->pool);
+	region_skb = svcsock_rx_build_linear_skb(test, record, 0);
+	svcsock_rx_write(region_page, 0, record + HEAD_LEN + MERGE_LEN,
+			 TAIL_LEN);
+	get_page(region_page);
+	skb_add_rx_frag(region_skb, 0, region_page, 0, TAIL_LEN, PAGE_SIZE);
+
+	/* The locked head's bytes past the prefix land in a merge page. */
+	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, locked_skb,
+				   0, locked_skb->len);
+	KUNIT_ASSERT_EQ(test, ret, (int)(HEAD_LEN + MERGE_LEN));
+	KUNIT_ASSERT_FALSE(test, actor.complete);
+	KUNIT_ASSERT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
+	KUNIT_ASSERT_EQ(test, state->count, 1U);
+	KUNIT_ASSERT_EQ(test, state->borrowed_count, 1U);
+	KUNIT_ASSERT_EQ(test, state->merge_fill,
+			(u32)(PAGE_SIZE - MERGE_LEN));
+	KUNIT_ASSERT_EQ(test, state->borrowed_bytes, 0U);
+	KUNIT_ASSERT_EQ(test, state->copied_bytes, (u32)MERGE_LEN);
+
+	/* A region page and no budget: the record is copied, merge page too. */
+	desc.count = TAIL_LEN;
+	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, region_skb,
+				   0, region_skb->len);
+	KUNIT_EXPECT_EQ(test, desc.error, 0);
+	KUNIT_EXPECT_EQ(test, ret, (int)TAIL_LEN);
+	KUNIT_EXPECT_TRUE(test, actor.complete);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_COPY);
+	KUNIT_EXPECT_EQ(test, state->reason,
+			(u8)SVC_TCP_RX_REASON_NO_BUDGET);
+	KUNIT_EXPECT_EQ(test, state->borrowed_count, 0U);
+	KUNIT_EXPECT_EQ(test, state->borrowed_bytes, 0U);
+	KUNIT_EXPECT_EQ(test, state->copied_bytes,
+			(u32)(MERGE_LEN + TAIL_LEN));
+	KUNIT_EXPECT_EQ(test, state->refs_acquired, state->refs_released);
+	KUNIT_EXPECT_MEMEQ(test, page_address(fixture->rqstp->rq_pages[0]),
+			   record + sizeof(rpc_fraghdr), BODY_LEN);
+
+	kunit_kfree_skb(test, region_skb);
+	kunit_kfree_skb(test, locked_skb);
+}
+
 static void svcsock_rx_page_pool_recycle_test(struct kunit *test)
 {
 	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 1);
@@ -2769,6 +2851,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_partial_save_restore_test),
 	KUNIT_CASE(svcsock_rx_exclusion_table_test),
 	KUNIT_CASE(svcsock_rx_materialize_test),
+	KUNIT_CASE(svcsock_rx_merge_then_materialize_test),
 	KUNIT_CASE(svcsock_rx_capacity_release_test),
 	KUNIT_CASE(svcsock_rx_capacity_sizing_test),
 	KUNIT_CASE(svcsock_rx_arena_bound_test),
