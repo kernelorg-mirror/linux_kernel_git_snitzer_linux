@@ -1274,3 +1274,58 @@ with up to 16 parked. With 8 parked the budget is 1180 - 8 - 64 - 64 =
    (2261 and 2581 at 1 ms), so compare within the boot.
 3. `used_pages`, beside section 17's table, for the bound on tardis1
    (section 16, steps 2 and 3; the share of the L3 is Mike's to pick).
+
+## 19. 2026-10-07: the 1180-page run admitted sixteen records at once
+
+Build 458, a fresh boot, `/var/tmp/zc-run-logs/credit-factor-1180/run.sh`
+as armed in section 18: the region is 1180 pages in one allocation
+(8 parked), the budget 1044, the reserve 60, so (1044 - 60) / 61 = 16.
+Both runs rc 0, fio rc 0, no drops, allocation failures or escaped
+pages. The kernel log has only the harness's own setup, with a DISCARD
+"operation not supported" on `nvme9c9n1` at each mkfs.
+
+| cell (MB/s) | copy | loan | paused / denied | on 1080 pages: copy / loan |
+|---|---|---|---|---|
+| `mixed-sized`, 1 ms | 2544 | 1977 | 4 / 3043 | 2261 / 1992 |
+| `mixed-sized`, no delay | 2587 | 2619 | 0 / 612 | 2581 / 2468 |
+| `step-n16`, whole run | 1729 | 1717 | 3 / 2 | 1737 / 1691 |
+
+The step cells by phase (no delay, the 10 ms stall, no delay), from
+fio's 500 ms bandwidth log and so approximate: copy 2239 / 705 / 2241,
+loan 2218 / 701 / 2223.
+
+**What it shows:**
+
+- **With sixteen 1 MiB records admitted the stall no longer costs the
+  loan anything**: 99% of its copy in the stall (90% with fourteen, 69%
+  with eleven, 34% with six) and 99% over the whole step cell. Denials
+  in `step-on-n16` fall from 95609 to 2, both with fifteen in flight
+  and 59 or 60 pages available, one or two short of 61 because other
+  records had grown past 61. Retransmits fall from 1568 to 3.
+- **The 1 ms mixed cell did not move**: the loan is 1977 (1992 with
+  fourteen) and denials 3043 (3188). The 78% against 88% is the copy,
+  2544 on this boot and 2261 on the last. The denials here are not a
+  seventeenth connection waiting: they have 13 to 53 records in flight
+  (median 30) across all four record sizes (1127 of 1 MiB, 767 of
+  64 KiB, 596 of 4 KiB, 555 of 256 KiB), so with a 1 ms storage delay
+  more than one record a connection holds credit at once. Sixteen
+  slots is not the limit in this cell; what would lift it is not
+  shown.
+- With no delay the loan is level with its copy (2619 against 2587);
+  612 denials, none paused.
+- Pauses: 7 events in the traced run, on six 1 MiB records and one of
+  256 KiB. Credit a 1 MiB record held at release: median 61, 90% 61,
+  99% 62, most 73.
+
+**Peak pages in use**, added to section 17's table:
+
+| region | 1 MiB records at once | `mixed-sized-on` 1 ms / no delay | `step-on-n16` | copies |
+|---|---|---|---|---|
+| 1180 | 16 | 408 / 312 | 374 | 8 to 12 |
+
+The most seen is 408 pages, 25.5 MiB, inside the 32 MiB L3 (512 pages)
+and within the 400 to 460 section 17 predicted. Section 16's steps 2
+and 3 (the share of the L3, and tardis1's bound) are still Mike's to
+decide. `RESULTS.md`, the README's "64 KiB host" and the artifact
+(source `/var/tmp/zc-run-logs/artifact/region-budget.html`) carry these
+results.
