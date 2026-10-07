@@ -1031,8 +1031,9 @@ with the evidence for each defect below.
   always written direct**, one segment each.
 - **One connection: copy and loan are level. Sixteen connections: the
   loan runs at about half to two thirds of its copy**, and pauses. This
-  is the one result that differs from 4 KiB and 16 KiB, and its cause is
-  not established (below).
+  is the one result that differs from 4 KiB and 16 KiB. The credit
+  factor of 150 is too low for sixteen connections; a higher one on the
+  same region removes the pauses and not the whole gap (below).
 - **Tested on veth, not on the Xsight card or the real NVMe.**
 
 ### What was measured
@@ -1050,12 +1051,30 @@ with the evidence for each defect below.
   MiB** (32 to 57%), less of the region than at 16 KiB (64 to 70%).
 - **The 16-connection gap.** Peak use of about 272 pages is sixteen
   records of 17 pages; a budget of 423 less the reserve of 30 admits
-  fifteen records at a cost of 25. So the budget is doing what it is set
-  to do, about one record per connection, while the copy beside it has
-  no such limit on a 64-CPU host. Whether the answer is the factor (25
-  charged for 17 held), the reserve, or a larger region for sixteen
-  connections has not been looked at. Phase TLP's 16-connection loan
-  cells pause the same way.
+  fifteen records at a cost of 25. Phase TLP's 16-connection loan cells
+  pause the same way. It is not XFS's beyond-EOF wait: these files have
+  their size, and on nvme-loop the loan is not written direct.
+- **The credit factor of 150 is too low for sixteen connections**
+  (experiment of 2026-10-07; nvme-loop, the same region, `FACTOR9=` in
+  `run-budget.sh`; `tardis1-build457-handoff.md` section 14). A 1 MiB
+  record is admitted with 27 pages and 59% of them pause for more
+  mid-receive, holding their credit; at 250 (44 pages) 16% pause, at 350
+  (61 pages) none.
+
+  | factor | `mixed-sized` at 1 ms: copy / loan | the same, no delay | `step-n16` no delay: copy / loan | in the 10 ms stall | records admitted at once |
+  |---|---|---|---|---|---|
+  | 150 | 2958 / 1060 | 2991 / 1538 | 2532 / 1740 | 719 / 50 | 15 |
+  | 250 | 2789 / 1532 | not run | 2394 / 2318 | 709 / 80 | 9 |
+  | 350 | 2232 / 1165 | 2651 / 2474 | 2221 / 2202 | 699 / 235 | 6 |
+
+  - With the pauses gone and storage that does not wait, the loan is at
+    its copy's rate.
+  - When storage waits it is not: the budget is 423 pages at every
+    factor, so a higher factor admits fewer records at once.
+  - The factor slows the copy as well (2958 to 2232), because it also
+    sets the held receive buffer's window clamp.
+  - Not yet run: 350 on the region it derives, 870 pages, which admits
+    fifteen records again. That takes a fresh boot.
 - **New-file copies are at about 440 MB/s** where sized ones reach 2174
   to 2594: a direct write that starts beyond EOF waits on XFS
   (`../slipstream/XFS_BEYOND_EOF_DIRECT.md`). On nvme-loop the loan is
@@ -1135,7 +1154,9 @@ Commits are named as on this branch on 2026-10-07; a regroup renames them.
 
 - **The 4 KiB and 16 KiB hosts have not been run with problems 1 to 4's
   changes.** Their columns in `RESULTS.md` are of `v7.1.13-19`.
-- **The 16-connection gap** has a reading and no experiment.
+- **The 16-connection gap:** the factor of 150 is shown to be too low;
+  a factor of 350 on its own 870-page region is not run, and how the
+  factor should be computed for 64 KiB is not settled.
 - **The beyond-EOF rule** (`7809bfb4c8e9`: a write that starts beyond
   EOF is issued buffered) is committed and undecided, and build 458 does
   not have it. Measured once with rebuilt modules: `mixed-copy` 442 to
@@ -1162,8 +1183,8 @@ for another page size:
 The factor for 16 and 64 KiB is computed from page_pool's frame placement.
 Read `paused` and `overrun` in the cells with a budget: many pauses or
 overruns mean it is low. At 16 KiB there were none (2026-10-05), so 190 and
-170 are not low. At 64 KiB (2026-10-07) there were no overruns, so 150 is
-not low either, but the 16-connection loan cells pause ("64 KiB host").
+170 are not low. At 64 KiB (2026-10-07) there were no overruns, but the 16-connection loan
+cells pause, and 150 is low for them: at 350 they do not ("64 KiB host").
 
 **Results that differ from the 4 KiB record.** The 16 KiB column is what
 was measured on 2026-10-05. The 64 KiB expectations here held on

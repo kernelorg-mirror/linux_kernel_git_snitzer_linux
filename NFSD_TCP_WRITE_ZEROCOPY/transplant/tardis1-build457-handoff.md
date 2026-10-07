@@ -1002,3 +1002,66 @@ investigation and is not XFS; its source is kept at
 URL). `RESULTS.md` and the README's "64 KiB host" still give the older
 reading ("the budget is doing what it is set to do"); correct them when
 the experiment has run. Mike, 2026-10-07: no regroup until he asks.
+
+## 14. 2026-10-07: the credit factor experiment, run
+
+Build 458, fresh boot, phase A's 555-page region (4 parked), `STORAGE=prp`.
+`run-budget.sh` takes `FACTOR9=<n>` for the MTU 9000 factor; give `SIZE=`
+with it, because the default region size follows the factor. Everything is
+in `/var/tmp/zc-run-logs/credit-factor/` (`run.sh`, `f150` `f250` `f350`
+under `credit.bt`, `d0-f150` `d0-f350` untraced with `FORCE_DELAY=0`,
+`pauses.py` for the traces). All runs rc 0, fio rc 0, kernel log clean.
+
+The budget is 423 pages at every factor, so a higher factor admits fewer
+1 MiB records at once: 15 at 150 (27 pages each), 9 at 250 (44), 6 at 350
+(61).
+
+| factor | `mixed-sized-copy` | `mixed-sized-on` | paused / denied | `step-copy-n16` | `step-on-n16` | paused |
+|---|---|---|---|---|---|---|
+| 150 | 2958 | 1060 | 888 / 2797 | 1928 | 1183 | 100992 |
+| 250 | 2789 | 1532 | 50 / 3416 | 1833 | 1582 | 31370 |
+| 350 | 2232 | 1165 | 0 / 3635 | 1715 | 1560 | 0 |
+
+The step cells by phase (MB/s; no delay, the 10 ms stall, no delay):
+
+| factor | copy | loan |
+|---|---|---|
+| 150 | 2532 / 719 / 2526 | 1740 / 50 / 1740 |
+| 250 | 2394 / 709 / 2394 | 2318 / 80 / 2323 |
+| 350 | 2221 / 699 / 2224 | 2202 / 235 / 2208 |
+
+The mixed pair with no storage delay (`FORCE_DELAY=0`, untraced):
+
+| factor | copy | loan | paused / denied |
+|---|---|---|---|
+| 150 | 2991 | 1538 | 1020 / 1904 |
+| 350 | 2651 | 2474 | 0 / 5051 |
+
+**What it shows:**
+
+- **The charge is too low at 150 for sixteen connections.** 59% of 1 MiB
+  records pause mid-receive at 150, 16% at 250, none at 350. With the
+  pauses gone and storage that does not wait, the loan is at its copy's
+  rate: 2202 against 2221 (step) and 2474 against 2651 (mixed).
+- **On this region a higher factor does not close the gap when storage
+  waits.** Six records at once is then the limit: `mixed-sized-on` at
+  1 ms is 1165 against 2232, and the stall holds 235 against 699. The
+  stall at 150 is worse than its 15 records explain (50 MB/s): paused
+  records keep their credit while they wait for more.
+- **The factor costs the copy too**, 2958 to 2232 on the mixed cell: it
+  also sets the held buffer's window clamp
+  (`svc_tcp_rx_window_clamp()`).
+- `step-on-n16` retransmits more as the factor rises (6969, 8036, 14018,
+  all loss probes, no timeout).
+
+**Not yet shown:** that 350 with a budget for 15 records matches the copy
+when storage waits. That needs the region the factor derives (870 pages),
+so a fresh boot: `FACTOR9=350` without `SIZE=`.
+
+`credit.bt` has never printed RELEASE on these builds: GCC split the body
+into `svc_tcp_rx_credit_release.part.0` and the callers in `svcsock.c`
+call that. A kprobe on it counts one release per admission (2235 of each
+in 10 s). The script needs `kprobe:…release.part.0` reading `arg0`.
+
+`RESULTS.md`, the README's "64 KiB host" and the artifact were corrected
+the same day with these results.
