@@ -27,7 +27,8 @@ The last two were left at the tip at Mike's request, so
 regrouped** (the fix to the end of the code section, the test to the end
 of the KUnit tests); regroup before handing back. **Five more commits
 followed at the tip the same night (section 9: the write split is cut
-per end again), and they need the same regroup.** `regroup-backup-kunit`
+per end again) and two more after midnight (section 10: writes beyond
+EOF are not issued direct), and they need the same regroup.** `regroup-backup-kunit`
 is the backup branch from the one regroup that session did; delete it
 when Mike is satisfied. Nothing has been carried to the HS twin.
 
@@ -350,15 +351,18 @@ Only on a kernel with the fix, since `x-tight-RN` can hang any run:
   directory other than `transplant/`.
 - The rig is down, nfsd is active, bpftrace stopped, budgets all 0.
 - **Since 21:57 the NFS and sunrpc modules are the rebuilt, fixed ones**
-  (section 8.2), not the shipped ones; **since 23:08 `nfs_dio`,
-  `nfs_localio`, `nfs` (with its five client modules) and `nfsd` are
-  section 9's build** (`/var/tmp/zc-mod-457fix/perend/`).
+  (section 8.2), not the shipped ones; since 23:08 `nfs_localio` is
+  section 9's build (`/var/tmp/zc-mod-457fix/perend/`), and **since
+  00:38 on 2026-10-07 `nfs_dio`, `nfs` (with its five client modules)
+  and `nfsd` are section 10's** (`/var/tmp/zc-mod-457fix/eof/`), which
+  has everything of section 9 plus the beyond-EOF rule.
 - **The debugfs gate is `direct_misaligned_min_bytes` (8192) on the
   loaded nfsd**, not `direct_misaligned_min_pages`; a reboot of build 457
   brings the page-counted one back.
 - NFS service was stopped six times on 2026-10-06 between 21:57 and
   23:40 (four module swaps, one of which took two attempts and one
-  about 75 seconds, and two KUnit runs). pl-105 reconnected each time.
+  about 75 seconds, and two KUnit runs), and once more at 00:37 on
+  2026-10-07 (9 seconds). pl-105 reconnected each time.
 - **Two settings were not restored**, because harness runs were killed
   with SIGKILL early in the triage: `page_pool.rx_region_dev` reads
   `rxsrv,rxsrv2` and `/sys/kernel/tracing/tracing_on` reads 0. Their
@@ -712,7 +716,8 @@ Two limits on the benefit, whatever the cut:
   all direct against about 2000 partly buffered; 2550 to 2811 on files
   that already have their size). "Direct more often" buys a flat page
   cache in copy mode, and throughput only where files are preallocated
-  or overwritten. **This is the next thing to decide.**
+  or overwritten. **This is the next thing to decide.** Section 10 is
+  what was then done about it.
 - **Loans.** On storage that needs whole pages a loaned write cannot go
   direct under any cut; on storage that takes arbitrary pieces loans
   were all direct again under the per-end cut.
@@ -738,4 +743,79 @@ cases changed; nfsd itself did not change).
   layout drivers) needs no server stop when nothing is mounted.
 - Other directories there (`exp-perend`, `exp-nfs-sync`) are earlier
   builds of the same work and can go.
+
+## 10. 2026-10-07, after midnight: direct writes to a growing file on XFS
+
+Mike asked for the growing-file cost of sections 9.7 and 9.8 to be
+confronted: is it XFS's design, and can it be fixed.
+**`slipstream/XFS_BEYOND_EOF_DIRECT.md` is the full account**
+(measurements, the XFS code, upstream references, what was ruled out);
+this is the summary and the state.
+
+### 10.1 What was found
+
+- Traced at nfsd's call into XFS (`/var/tmp/zc-run-logs/xfs-eof/eof.bt`),
+  phase A's 16-connection copy cells on nvme-loop: on files that grow
+  (`mixed-copy`, 442 MB/s) a direct WRITE waits 95 ms on average before
+  its I/O starts and the I/O takes 3.3 ms; on the same files given
+  their size (`mixed-sized-copy`, 2804 MB/s) it waits 5 us.
+- **It is XFS's design.** A write that starts beyond EOF takes the
+  IOLOCK exclusive and waits for every direct write in flight, so that
+  it can zero from a file size that cannot move
+  (`xfs_file_write_zero_eof()`). nfsd's direct writes hold the lock
+  shared across their I/O, so writes beyond EOF run one at a time,
+  storage time included. 550 of 2913 WRITEs zeroed beyond EOF.
+- **Not fixable in XFS by this project.** The wait was added upstream on
+  purpose; skipping it needs proof that nothing in the gap needs
+  zeroing, and from the code a zeroing pass without it can meet a
+  write whose blocks are converted but whose size is not yet raised.
+  A reading, not a test; nothing was tried in XFS.
+
+### 10.2 What was done (committed at the tip, **not decided**)
+
+| commit | what |
+|---|---|
+| `7809bfb4c8e9` | nfs_common: do not issue a write that starts beyond EOF as direct I/O |
+| `aeed1c15a2ac` | NFSD: give the KUnit split test's file a size |
+
+`nfs_dio_split()` issues a write that starts beyond the file's size
+(read unlocked, a hint) as one buffered segment, DONTCACHE by policy: a
+new disposition `NFS_DIO_BEYOND_EOF`, `beyond_eof` in
+`nfsd_write_dio_split`. NFSD and LOCALIO both get it. The KUnit split
+test dereferences a file with no inode between the two commits.
+
+Measured with it loaded, the same two cells, one run each
+(`/var/tmp/zc-run-logs/xfs-eof/proto-*`):
+
+| | growing, before | growing, with the rule | sized, before | sized, with the rule |
+|---|---|---|---|---|
+| throughput | 442 MB/s | **2355 MB/s** | 2804 MB/s | 2526 MB/s |
+| WRITEs issued direct | 2913 | **668 (23%)** | 2913 | 2912 |
+| WRITEs buffered as beyond EOF | 0 | 2245 (77%) | 0 | 1 |
+
+- The growing-file copy is fast again, and **most of its WRITEs are no
+  longer direct**: with no wait, the size is read at once and most
+  out-of-order writes are still ahead of it. The buffered ones are
+  DONTCACHE, so the page cache stays flat.
+- Files that have their size are unaffected.
+- `fio_rc 0`, fio's verification passed, nothing in the kernel log.
+  `nfsd-receive-bvec` 6/6 on this build, run alone.
+
+### 10.3 Open
+
+- **Whether the rule stays is Mike's decision**, put to him as: keep it
+  and add its KUnit case; drop it (revert `7809bfb4c8e9`) and accept
+  slow direct writes to a growing file; or make it a policy knob beside
+  `direct_misaligned_dontcache`, suggested default on. It restores the
+  throughput and gives up direct I/O for files that grow out of order,
+  which is against the aim of 9.8 for exactly those files.
+- No KUnit case for `beyond_eof`. The other three suites were not run
+  on this build. LOCALIO was not run with the rule. Only XFS, only
+  64 KiB, only nvme-loop, single runs.
+- `nfsd-io-modes.rst` does not describe the rule or the new
+  disposition.
+- The swap for this build: as section 9.9, but `nfs_localio`'s exports
+  did not change (checked against the build's `Module.symvers`), so
+  only `nfs_dio`, the six client modules and `nfsd` were swapped; done
+  in the order of 9.9 it took 9 seconds.
 
