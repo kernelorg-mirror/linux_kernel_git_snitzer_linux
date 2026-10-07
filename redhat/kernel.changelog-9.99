@@ -1,3 +1,30 @@
+* Tue Oct 06 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-5]
+- block: add "dm-delay: do not round a short delay up to the next timer tick" to
+  block-DIO-alignment-fixes, so a delay under 50 ms on an HZ=100 kernel is no
+  longer stretched to the next tick
+- NFSD: add Chuck Lever's "nfsd: use direct I/O only for the last operation in
+  a COMPOUND" to nfsd-testing-canary, so an NFSv4 operation encoded after a
+  direct-mode READ no longer overwrites the tail of its payload
+- SUNRPC: carry "SUNRPC: preserve RQ_SECURE across request deferral" on
+  nfsd-testing-canary in the form Chuck Lever took into his nfsd-testing, and
+  stop merging the snitzer-nfsd-fixes topic
+- NFSD: update nfsd-testing-canary-dontcache: new "NFSD: cut a misaligned
+  direct-mode WRITE at page boundaries", so where the page is larger than the
+  DIO alignment both ends of a split WRITE are cut at page boundaries and its
+  direct middle no longer shares a page with a buffered write, of the same
+  WRITE or the next, which forced a read-back or failed the page cache
+  invalidation; a DIO-aligned WRITE smaller than a page is now buffered there.
+  direct_misaligned_num_pages is now direct_misaligned_min_pages, default 2 on
+  4 KiB pages and 1 on larger pages, and the page a split WRITE's buffered
+  start or end shares with the neighbouring WRITE is now kept, not dropped,
+  until that neighbour has written it too, on every system: before, that was
+  done only where the DIO alignment is at least the page size, as with 4 KiB
+  pages over 4096-byte blocks, and never with 16 KiB or 64 KiB pages over
+  4096-byte blocks, or over 512-byte blocks
+- Rebuild nfsd-testing-canary-dontcache-LOCALIO on it: LOCALIO direct writes
+  are cut at page boundaries the same way, and new "nfs_common: fix the skip
+  accounting in nfs_dio_iter_aligned()"
+
 * Fri Oct 02 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-4]
 - SUNRPC: add new topic snitzer-nfsd-fixes, built on and merged after
   nfsd-testing-canary: "SUNRPC: preserve RQ_SECURE across request deferral", so a
