@@ -1265,8 +1265,8 @@ for this tree, from Mike:
 - **Required before handing work back from a test host** (end of a session,
   or before Mike pulls) whenever anything was committed on the 16 KiB host
   or tardis1. Mike requires this cleanup pass every time.
-  **Suspended on tardis1 since 2026-10-07: Mike said not to worry about
-  regrouping until he asks.** Until then do not run the check, report
+  **Suspended on every test host since 2026-10-07: Mike said not to
+  worry about regrouping until he asks.** Until then do not run the check, report
   its result or offer a regroup; commit at the tip and stop.
   1. Run `transplant/check-grouping.sh`. Its base defaults to the branch's
      upstream, which is what Mike pushed. It checks code, then KUnit, then
