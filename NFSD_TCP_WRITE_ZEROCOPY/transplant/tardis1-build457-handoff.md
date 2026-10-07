@@ -344,6 +344,8 @@ Only on a kernel with the fix, since `x-tight-RN` can hang any run:
 - **It is a live server**; ask Mike before any run. Start the plan from a
   directory other than `transplant/`.
 - The rig is down, nfsd is active, bpftrace stopped, budgets all 0.
+- **Since 21:57 the NFS and sunrpc modules are the rebuilt, fixed ones**
+  (section 8.2), not the shipped ones.
 - **Two settings were not restored**, because harness runs were killed
   with SIGKILL early in the triage: `page_pool.rx_region_dev` reads
   `rxsrv,rxsrv2` and `/sys/kernel/tracing/tracing_on` reads 0. Their
@@ -401,7 +403,81 @@ for d in fs/nfs_common fs/lockd fs/nfs fs/nfsd; do n=$(basename $d)
   `9611113753DDA35599A6AE2` (`6B3F8B7A0EF7110D220E1BE`); not explained.
 - The fixed sunrpc's srcversion is `4BB9ADB459E9D7ED8831736`.
 
-### 8.2 Loading them, and what ran
+### 8.2 Loading them (done 2026-10-06 21:57, NFS service down about 2 minutes)
 
-Not done when this was written; the next commit of this file records it.
+**The rebuilt modules are what is loaded now**, until the next boot
+(nothing was installed under `/lib/modules`; a reboot of build 457 comes
+back with the shipped, unfixed modules). `cat /sys/module/sunrpc/srcversion`
+tells which: `4BB9ADB459E9D7ED8831736` rebuilt, `9611113753DDA35599A6AE2`
+shipped.
+
+```
+systemctl stop nfs-server nfs-mountd nfs-idmapd nfsdcld rpc-statd rpc-gssd gssproxy
+umount /proc/fs/nfsd; umount /var/lib/nfs/rpc_pipefs
+for m in nfsd rpcsec_gss_krb5 auth_rpcgss rpcrdma blocklayoutdriver nfs_layout_flexfiles \
+         nfs_layout_nfsv41_files nfsv4 nfsv3 nfs nfs_acl lockd grace nfs_localio nfs_dio sunrpc; do rmmod $m; done
+cd /var/tmp/zc-mod-457fix
+for m in sunrpc/sunrpc nfs_common/grace nfs_common/nfs_dio nfs_common/nfs_localio nfs_common/nfs_acl \
+         lockd/lockd sunrpc/auth_gss/auth_rpcgss sunrpc/auth_gss/rpcsec_gss_krb5 sunrpc/xprtrdma/rpcrdma \
+         nfs/nfs nfs/nfsv3 nfs/nfsv4 nfs/filelayout/nfs_layout_nfsv41_files \
+         nfs/flexfilelayout/nfs_layout_flexfiles nfs/blocklayout/blocklayoutdriver nfsd/nfsd; do insmod $m.ko; done
+systemctl start var-lib-nfs-rpc_pipefs.mount nfsdcld nfs-idmapd      # before nfs-server, see below
+echo 1 > /sys/kernel/debug/nfsd/disable-splice-read
+echo 2 > /sys/kernel/debug/nfsd/io_cache_read; echo 2 > /sys/kernel/debug/nfsd/io_cache_write
+sysctl -w fs.nfs.nlm_grace_period=10
+systemctl start nfs-server
+```
+
+Traps, all met once:
+
+- **`systemctl start nfs-server` does not bring `rpc_pipefs` back** after
+  it was unmounted by hand: `nfsdcld` stayed down, `nfs-idmapd` failed,
+  and nfsd started with "Unable to initialize client recovery tracking!
+  (-110)". It ran like that for about a minute before the mount and the
+  two daemons were started and nfsd restarted. The one connected client
+  (pl-105, NFSv4.2) was confirmed again afterwards.
+- **A reload resets what was set at runtime:** nfsd's debugfs
+  (`disable-splice-read` 1, `io_cache_read` 2, `io_cache_write` 2 before;
+  0, 0, 0 after) and `fs.nfs.nlm_grace_period` (10 before). Restored by
+  hand as above; the before and after values are in
+  `/var/tmp/zc-mod-457fix/state/`. Every other sunrpc, nfsd, nfs and lockd
+  parameter and sysctl compared equal.
+- After a KUnit run `region_budget_stats` shows the last test's budget
+  (`budget 10`) until the pool is next used; the requested budget is 0.
+- The rebuilt sunrpc has no BTF, so `credit.bt` (fentry on sunrpc
+  functions) does not attach. `/var/tmp/zc-run-logs/verify-457fix/credit-nobtf.bt`
+  is the same trace with kprobes and `struct svc_sock` offsets (600, 616,
+  624 for `sk_credit_wait`, `sk_credit_ticket`, `sk_budget` in this
+  build; re-derive with `pahole -C svc_sock sunrpc.ko` for any other).
+
+### 8.3 What ran on the rebuilt modules
+
+Logs in `/var/tmp/zc-run-logs/` and `/var/tmp/zc-run-logs/verify-457fix/`.
+
+| what | result |
+|---|---|
+| KUnit, four suites (`/var/tmp/zc-mod-457fix/run-kunit-rebuilt.sh`, which is `run-kunit.sh` loading the rebuilt test modules by path; log `kunit-457fix-rebuilt.log`) | **PASS**: `sunrpc-svcsock-rx` 43/43 with `ok 23 svcsock_rx_credit_collapsed_unwaits_test` and `ok 32 svcsock_rx_merge_then_materialize_test`; xdr 7/7, nfsd 6/6, nfsd4 10/10 |
+| the hang: `CELLS=x-tight-RN REPS=80 STORAGE=prp PHASE=X TMO=300 run-budget-cells.sh`, traced (`run-hang1.log`, `trace-hang.out`) | **80 of 80 completed**, `R_rc 0` and `N_rc 0` every time (R 137-141 MB/s, N about 2140), none killed by its timeout. Unfixed, the cell hung at repetition 34 |
+| the collapse the fix is for, in that run | **seen once and survived**: `COLLAPSE ... sv=0xffff008079b5e800 tk=128100 waiting=1 rmem=131328 rcvbuf=131072`, then `WAKE` of that transport, then `FORGET ... waiting=1 from=svc_tcp_recv_actor` 8 us later, then it is woken again with tickets 128118, 128140 and the run goes on. That is the only `FORGET` of a listed transport in the trace. Budget at the end: `inflight 0 waiters 0` |
+| materialize: `CELLS=collapse-off STORAGE=sgl PHASE=A run-budget.sh`, five times, traced (`run-collapse-off-N.log`, `trace-collapse-off.out`) | `fio_rc 0` five times; **14565 materializes from the receive actor, none returned an error**, no warning in the log. The fifth run recorded 6 collapses (one on a server socket in the trace) |
+
+What this does and does not show:
+
+- **The hang fix is verified at runtime**: the event that hung build 457
+  happened and the cell finished.
+- **The materialize fix is verified by KUnit only.** The runtime runs did
+  not trip the check, but nothing shows that a record holding a merge
+  page was materialized in them (the merge is not traced), and unfixed
+  the warning was seen once in one run. The KUnit case drives exactly
+  that sequence. The sunrpc module was reloaded, so its `WARN_ON_ONCE`
+  was armed again for these runs.
+- **Neither KUnit case was shown to fail on unfixed code.** The
+  reference build in 8.1 could do it (its `svcsock_kunit.ko` has both
+  cases, its `sunrpc.ko` neither fix) with one more module swap; not
+  done.
+- The clamp question of section 4 is still open: the collapse again came
+  with the queue just over the buffer (131328 against 131072).
+
+The kernel is tainted by the unsigned modules as well as by KUnit. The
+rig is down, budgets are 0, bpftrace is stopped.
 
