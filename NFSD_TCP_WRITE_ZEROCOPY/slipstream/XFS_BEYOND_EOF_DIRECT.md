@@ -122,8 +122,9 @@ Not taken:
 
 ## 5. The prototype, measured (2026-10-07)
 
-**Committed the same night, at the tip, not pushed, not regrouped, not on
-the HS twin, and not decided:** `7809bfb4c8e9` "nfs_common: do not issue
+**Committed the same night, at the tip, pushed by Mike only to
+`origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-WIP2`, not regrouped,
+not on the HS twin, and not decided:** `7809bfb4c8e9` "nfs_common: do not issue
 a write that starts beyond EOF as direct I/O" and `aeed1c15a2ac` "NFSD:
 give the KUnit split test's file a size". Mike asked for the code to be
 saved in a commit; **whether the rule stays is open** (the end of this

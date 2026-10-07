@@ -32,6 +32,22 @@ EOF are not issued direct), and they need the same regroup.** `regroup-backup-ku
 is the backup branch from the one regroup that session did; delete it
 when Mike is satisfied. Nothing has been carried to the HS twin.
 
+**Pushed by Mike on 2026-10-07, to two work-in-progress branches, not to
+the branch itself.** Where this file says "not pushed" it means
+`origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`, which is still at
+`e137fc262e46`, build 457's tip from before the regroups (so the local
+branch reads as far ahead of and behind it; that is rewritten history,
+nothing is lost):
+
+| remote branch | at | holds |
+|---|---|---|
+| `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-WIP` | `a1c37cac4922` | everything through section 9 |
+| `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-WIP2` | `767f20751a4d` | that plus section 10 (the XFS work and the beyond-EOF rule) |
+
+Neither is regrouped (`check-grouping.sh v7.1.13-20` reports `grouping
+BROKEN` for both), and nothing is on the HS twin. A regroup rewrites
+the SHAs this file names from `7abb45f322f7` on.
+
 ## 0. Armed: the first thing to do on the next boot
 
 **Before anything else on the next boot, run the two KUnit cases that
