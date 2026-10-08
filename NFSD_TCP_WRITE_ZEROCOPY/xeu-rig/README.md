@@ -40,13 +40,18 @@ drop, on each storage.
    (`/etc/modprobe.d` has `options xeu rx_ip_align=2`).
 3. **Is the driver's retry patch in?** `grep xeu_rx_refill_timer
    /proc/kallsyms`, and `rpm -q kmod-16k-xsight` (2.0.1-4 carries it).
-   The patch is `kernel-rpmtree` commit `c405aa5` (not pushed), built
-   and never loaded: this boot may be its first run. Without it a ring
-   that runs empty stays empty until the port is taken down and up
-   (5c); the scripts here bounce the port when the region runs dry and
-   the patch is absent. **If it is in, the first dry region is the
-   test of it: check every ring still receives (`ethtool -S`,
-   `ring_N_rx_packets`) and write down what happened.**
+   The patch is `kernel-rpmtree` commit `f61ea4c` (not pushed). It was
+   tested at 64 KiB on 2026-10-08 and works: four dry regions of four
+   left every ring receiving (`XEU_CONVERGENCE.md` 5c). Without it a
+   ring that runs empty stays empty until the port is taken down and
+   up; the scripts here bounce the port when the region runs dry and
+   the patch is absent. **If the 16 KiB kmod lacks it, say so to Mike
+   before the long sweep: it can be built on the host as the 64 KiB
+   one was** (`rpmbuild` with `--with kernel16k` and the macros
+   `kversion`, `kvermaj 7.1`, `kmodver 2.0.1`, against the installed
+   `kernel-16k-devel`; `/var/tmp/zc-run-logs/kmod-xsight-64k-build`
+   shows the tree), **but loading it means reloading `xeu`, which
+   needs his leave each time.**
 4. Nothing has made a region: `/sys/kernel/debug/page_pool_rx_region`
    does not exist. **Run nothing on veth this boot** (the veth harness
    would make the region for `rxsrv`).

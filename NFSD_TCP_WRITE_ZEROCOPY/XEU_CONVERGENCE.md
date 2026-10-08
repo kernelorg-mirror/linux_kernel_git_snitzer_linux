@@ -316,11 +316,12 @@ What follows from one frame having a 64 KiB page to itself:
 16. **Shrinking the rings barely moves the cache misses** of a copy
     cell: 12 to 14% fewer per megabyte from 4 x 256 to 4 x 64, about
     one L2 refill per line of payload at either (5f).
-17. **The driver has a patch for finding 2** in `kernel-rpmtree`
-    (5c), built and not yet loaded.
+17. **The driver has a patch for finding 2** in `kernel-rpmtree`,
+    and it works (5c): loaded on this boot, four dry regions of four
+    left every ring receiving.
 18. **Not obtained:** what one WRITE really holds; repeats (most
     figures are one run, and finding 12 shows what that is worth); a
-    profile by function; a run with the driver patch.
+    profile by function.
 
 **For 16 KiB.** A frame still has a page to itself, so findings 1 to 5
 carry over and 6 to 8 change by arithmetic: a 1 MiB WRITE is 117 pages
@@ -329,8 +330,9 @@ frames. Whether the stall of finding 10, the level rates of finding 12
 and the misses of finding 16 change with it is what the same cells are
 to show. It needs a 16 KiB build of the kernel and of `kmod-xsight`
 (only 4 KiB and 64 KiB are installed here; `kernel-rpmtree` builds a
-third with `--arm64-16k`), which will carry the driver patch, and a
-reboot, which is Mike's to time.
+third with `--arm64-16k`), and a reboot, which is Mike's to time.
+Mike has built the 16 KiB kernel; whether its kmod is 2.0.1-4, with
+the driver patch, is the first thing to check on that boot.
 
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
@@ -491,11 +493,28 @@ budget on this card have to be sized so that the pool never fails.
 
 A patch that retries is in `kernel-rpmtree` as `Patch3` of
 `xsight/xsight.spec` (`xeu-retry-an-RX-refill-that-came-up-short.patch`,
-kmod-xsight 2.0.1-4, commit `c405aa5`, not pushed): a timer per ring
-runs the poll again while the ring is short. It applies to the tarball
-the spec names and builds for the 458 64k kernel. **It has not been
-loaded**: reloading `xeu` takes `enp164s0f0` down too. The first boot
-of a kernel whose kmod carries it is its first test.
+kmod-xsight 2.0.1-4, commit `f61ea4c`, not pushed): a timer per ring
+runs the poll again while the ring is short.
+
+**It was tested on this boot on 2026-10-08, and it works.** The 64k
+package was built on tardis1 from that spec (`rpmbuild` on the host;
+`/var/tmp/zc-run-logs/kmod-xsight-64k-build`), installed, and `xeu`
+reloaded with Mike's leave (that takes `enp164s0f0` down for some
+seconds). Then, at 4 x 256 on the 2048-page region:
+
+| check | unpatched | patched |
+|---|---|---|
+| sixteen connections, buffers left to grow, 20 s: region dry (`min_free` 0) | a ring dead after, 1 of 1; 5 connections hung | 4 runs of 4: senders done in 20 s, every ring receiving |
+| 60 new connections to port 2049 after each | 2 of 12 timed out | 0 of 60 failed, 4 times |
+| the next load, sixteen connections at 128 KiB | (after a down and up) 3878 MB/s | 3936 MB/s on all four rings, no tail drop |
+| port brought up with 4 x 1024 to post from 2048 pages | not tried | the first fill retried every tick until the rings were made smaller |
+| `step-copy-n16` | 1718 to 2067 MB/s | 1811 MB/s |
+| "Failed to allocate Rx page" in the log | 13000 lines from one run | about 100 over four runs |
+| "Unbalanced enable for IRQ" or any warning | | none |
+
+`rpm -U` of the new package removed the kmod-64k-xsight packages of
+builds 454 and 455 with release 3 of 458, since they share a name:
+those two kernels have no xsight modules installed now.
 
 **The harness's budget is wrong for these pools.** It reads `parked`
 after the warm-up and takes the rest for the budget. Just after the
