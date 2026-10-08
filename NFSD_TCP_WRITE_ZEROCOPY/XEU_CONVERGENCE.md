@@ -288,7 +288,10 @@ What follows from one frame having a 64 KiB page to itself:
     pages with rings of 4 x 128.
 12. **Rings of 4 x 128 did not drop** in any NFS cell (5e), where
     iperf3 at 41 Gbit/s on one stream dropped 0.1% (5b).
-13. **Not obtained:** a copy cell at a 512 KiB buffer to set the
+13. **Shrinking the rings barely moves the cache misses** of a copy
+    cell: 12 to 14% fewer per megabyte from 4 x 256 to 4 x 64, about
+    one L2 refill per line of payload at either (5f).
+14. **Not obtained:** a copy cell at a 512 KiB buffer to set the
     512 KiB loans against, and repeats: every figure in 5e is one
     run.
 
@@ -612,6 +615,41 @@ What it shows:
 
 Next: the page size (Mike, 2026-10-07: 16 KiB and 4 KiB are open for
 this platform); a copy cell at 512 KiB and repeats of the cells above.
+
+## 5f. Cache misses in the copy cells at two ring sizes (2026-10-08)
+
+`perf stat -a` for 90 s inside each copy step cell on the local NVMe,
+at 4 x 256 and at 4 x 64 (`xeu-llc.log`, `xeu-llc-4x*-prp.*.perf`),
+less what the idle host counted at the same rate (8.5 million
+`l3d_cache_lmiss_rd` and 2.6 million `l2d_cache_refill` a second,
+unexplained; the other port has another client's connections). A
+megabyte is 16384 cache lines.
+
+| rings | cell | MB/s | pages in use | L2 refills per MB | L3 long misses per MB |
+|---|---|---|---|---|---|
+| 4 x 256 | step-copy | 769 | 1112 | 16400 | 41100 |
+| 4 x 64 | step-copy | 767 | 338 | 14500 | 35300 |
+| 4 x 256 | step-copy-n16 | 2067 | 1120 | 25300 | 59500 |
+| 4 x 64 | step-copy-n16 | 1633 | 337 | 21900 | 51300 |
+
+- Going from 1112 pages in use to 338 took 12 to 14% off the misses
+  per megabyte, no more. One connection's rate did not change; sixteen
+  connections lost a fifth of theirs, with 207 tail drops at 4 x 64.
+- About one L2 refill per cache line of payload at either size: the
+  first read of received data is not served from L2 whether the rings
+  are 70 MiB or 21 MiB of pages.
+- `l3d_cache_rd` reads 0 on this CPU, so there is no miss ratio, and
+  the long-miss count is above the L2 refill count, so it is not
+  simply "L2 misses that left the L3". Treat the last column as a
+  trend only.
+- This neither shows nor rules out that frame data is confined to a
+  seventh of the cache's sets at 64 KiB. At 4 x 64 the frames in the
+  rings are about 2.3 MiB, which would fit even in a seventh of the
+  L3, and the misses still did not fall away; so something other than
+  the rings' size sets most of them. Whether data the card has just
+  written is in the cache at all when the CPU first reads it is the
+  question this raises, and it is one for the on-die receive design,
+  not answered here.
 
 ## 6. The real drives behind veth (2026-10-07)
 
