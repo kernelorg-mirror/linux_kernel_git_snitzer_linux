@@ -1,0 +1,115 @@
+#!/usr/bin/bpftrace
+/* Trace region-credit admission and wakes; print the head waiter at every denial. */
+config = { max_strlen = 32; missing_probes = "warn" }
+
+fentry:sunrpc:svc_tcp_rx_credit_admit
+{
+	@adm[tid] = (uint64)args.svsk;
+}
+
+fexit:sunrpc:svc_tcp_rx_credit_admit
+{
+	$sv = args.svsk;
+	$c = $sv->sk_budget;
+	delete(@adm, tid);
+	if (retval) {
+		printf("%llu ADMIT sv=%p tk=%llu reclen=%u credit=%u\n", nsecs, $sv,
+		       args.state->credit_ticket, args.reclen, args.state->credit);
+	} else {
+		$h = (struct svc_sock *)((uint64)$c->waiters.next - offsetof(struct svc_sock, sk_credit_wait));
+		$hs = $h->sk_sk;
+		printf("%llu DENY sv=%p tk=%llu reclen=%u | avail=%ld res=%ld infl=%u | head=%p htk=%llu hflags=%lx hqlen=%u hrmem=%d htcplen=%u hdatalen=%u\n",
+		       nsecs, $sv, $sv->sk_credit_ticket, args.reclen,
+		       $c->avail, $c->reserve, $c->inflight_count,
+		       $h, $h->sk_credit_ticket, $h->sk_xprt.xpt_flags,
+		       $hs->sk_receive_queue.qlen, $hs->sk_backlog.rmem_alloc.counter,
+		       $h->sk_tcplen, $h->sk_datalen);
+	}
+}
+
+fexit:sunrpc:svc_tcp_rx_credit_charge
+/!retval/
+{
+	printf("%llu PAUSE sv=%p tk=%llu credit=%u need=%u\n", nsecs, args.svsk,
+	       args.state->credit_ticket, args.state->credit, args.need);
+}
+
+fentry:sunrpc:svc_tcp_rx_credit_release
+/args.state != 0 && args.state->credit_linked/
+{
+	printf("%llu RELEASE st=%p tk=%llu credit=%u res=%u over=%u\n", nsecs, args.state,
+	       args.state->credit_ticket, args.state->credit,
+	       args.state->credit_reserve, args.state->credit_over);
+}
+
+/*
+ * GCC may split the function: its callers in svcsock.c then test
+ * credit_linked themselves and call svc_tcp_rx_credit_release.part.0, and the
+ * probe above fires only for callers outside the file.  The part has no BTF,
+ * so it takes a kprobe; on a build without it this probe is skipped.
+ */
+kprobe:sunrpc:svc_tcp_rx_credit_release.part.0
+{
+	$st = (struct svc_tcp_rx_state *)arg0;
+	printf("%llu RELEASE st=%p tk=%llu credit=%u res=%u over=%u\n", nsecs, $st,
+	       $st->credit_ticket, $st->credit,
+	       $st->credit_reserve, $st->credit_over);
+}
+
+fentry:sunrpc:svc_tcp_rx_credit_orphan
+{
+	printf("%llu ORPHAN st=%p\n", nsecs, args.state);
+}
+
+fentry:sunrpc:svc_tcp_rx_credit_wake
+/args.svsk != 0/
+{
+	printf("%llu WAKE sv=%p tk=%llu flags=%lx by=%s\n", nsecs, args.svsk,
+	       args.svsk->sk_credit_ticket, args.svsk->sk_xprt.xpt_flags, comm);
+	@woken[(uint64)args.svsk] = nsecs;
+}
+
+fentry:sunrpc:svc_tcp_rx_credit_forget
+/args.svsk->sk_budget != 0/
+{
+	printf("%llu FORGET sv=%p tk=%llu\n", nsecs, args.svsk, args.svsk->sk_credit_ticket);
+}
+
+/* What a woken transport does next. */
+fentry:sunrpc:svc_tcp_recvfrom
+/@woken[(uint64)args.rqstp->rq_xprt]/
+{
+	$sv = (struct svc_sock *)args.rqstp->rq_xprt;
+	printf("%llu RECV sv=%p tk=%llu flags=%lx qlen=%u tcplen=%u datalen=%u wokenago_us=%llu\n",
+	       nsecs, $sv, $sv->sk_credit_ticket, $sv->sk_xprt.xpt_flags,
+	       $sv->sk_sk->sk_receive_queue.qlen, $sv->sk_tcplen, $sv->sk_datalen,
+	       (nsecs - @woken[(uint64)$sv]) / 1000);
+	@rcv[tid] = (uint64)$sv;
+}
+
+fexit:sunrpc:svc_tcp_recvfrom
+/@rcv[tid]/
+{
+	$sv = (struct svc_sock *)@rcv[tid];
+	printf("%llu RECVRET sv=%p ret=%d tk=%llu flags=%lx waiting=%d\n", nsecs, $sv, retval,
+	       $sv->sk_credit_ticket, $sv->sk_xprt.xpt_flags,
+	       (uint64)$sv->sk_credit_wait.next != (uint64)$sv + offsetof(struct svc_sock, sk_credit_wait));
+	if ((uint64)$sv->sk_credit_wait.next == (uint64)$sv + offsetof(struct svc_sock, sk_credit_wait)) {
+		delete(@woken, (uint64)$sv);
+	}
+	delete(@rcv, tid);
+}
+
+END { clear(@adm); clear(@woken); clear(@rcv); }
+
+/* A receive queue collapsed on an NFS server socket: was its transport waiting? */
+fentry:vmlinux:tcp_collapse
+/args.sk->__sk_common.skc_num == 2049/
+{
+	$sv = (struct svc_sock *)args.sk->sk_user_data;
+	printf("%llu COLLAPSE sk=%p sv=%p tk=%llu waiting=%d rmem=%d rcvbuf=%d qlen=%u start=%u end=%u\n",
+	       nsecs, args.sk, $sv, $sv->sk_credit_ticket,
+	       (uint64)$sv->sk_credit_wait.next != (uint64)$sv + offsetof(struct svc_sock, sk_credit_wait),
+	       args.sk->sk_backlog.rmem_alloc.counter, args.sk->sk_rcvbuf,
+	       args.sk->sk_receive_queue.qlen, args.start, args.end);
+}

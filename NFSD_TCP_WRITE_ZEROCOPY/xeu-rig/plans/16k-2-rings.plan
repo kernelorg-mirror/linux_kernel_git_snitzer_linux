@@ -1,0 +1,19 @@
+# Ring size, around the core: 4 x 64 and 4 x 256, 256 KiB buffer.
+# Change the buffer here to whichever the core showed best before running.
+# About 70 minutes.
+64 262144 0 prp step-copy step-copy-n16
+64 262144 2 prp step-on step-on-n16
+64 262144 4 prp step-on-n16
+64 262144 8 prp step-on-n16
+64 262144 0 sgl step-copy step-copy-n16
+64 262144 2 sgl step-on step-on-n16
+64 262144 4 sgl step-on-n16
+64 262144 8 sgl step-on-n16
+256 262144 0 prp step-copy step-copy-n16
+256 262144 2 prp step-on step-on-n16
+256 262144 4 prp step-on-n16
+256 262144 8 prp step-on-n16
+256 262144 0 sgl step-copy step-copy-n16
+256 262144 2 sgl step-on step-on-n16
+256 262144 4 sgl step-on-n16
+256 262144 8 sgl step-on-n16

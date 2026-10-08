@@ -1,0 +1,37 @@
+# The core of the hunt at 16 KiB: rings of 4 x 128, both storages.
+# For each held buffer: the copies, then loans at a budget of 1, 2, 4 and 8
+# WRITEs of 1 MiB.  One connection only where the budget is 1 or 2 WRITEs:
+# beyond that one connection follows its held buffer, not the budget (64K, 5e).
+# In order of priority, so that a sweep stopped part-way is still useful:
+# 256 KiB first, then 128 KiB (where 64 KiB stalled), then 512 KiB.
+# About 18 minutes per buffer and storage, 1 h 50 min in all.
+128 262144 0 prp step-copy step-copy-n16
+128 262144 1 prp step-on step-on-n16
+128 262144 2 prp step-on step-on-n16
+128 262144 4 prp step-on-n16
+128 262144 8 prp step-on-n16
+128 262144 0 sgl step-copy step-copy-n16
+128 262144 1 sgl step-on step-on-n16
+128 262144 2 sgl step-on step-on-n16
+128 262144 4 sgl step-on-n16
+128 262144 8 sgl step-on-n16
+128 131072 0 prp step-copy step-copy-n16
+128 131072 1 prp step-on step-on-n16
+128 131072 2 prp step-on step-on-n16
+128 131072 4 prp step-on-n16
+128 131072 8 prp step-on-n16
+128 131072 0 sgl step-copy step-copy-n16
+128 131072 1 sgl step-on step-on-n16
+128 131072 2 sgl step-on step-on-n16
+128 131072 4 sgl step-on-n16
+128 131072 8 sgl step-on-n16
+128 524288 0 prp step-copy step-copy-n16
+128 524288 1 prp step-on step-on-n16
+128 524288 2 prp step-on step-on-n16
+128 524288 4 prp step-on-n16
+128 524288 8 prp step-on-n16
+128 524288 0 sgl step-copy step-copy-n16
+128 524288 1 sgl step-on step-on-n16
+128 524288 2 sgl step-on step-on-n16
+128 524288 4 sgl step-on-n16
+128 524288 8 sgl step-on-n16

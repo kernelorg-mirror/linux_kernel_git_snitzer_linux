@@ -80,16 +80,19 @@ first** (and `tardis1-boot1-testing.md` for builds 454 and 455): it says
 which commits at the tip are still to be regrouped, carried to the HS
 twin or decided.
 
-**Converging on the Xsight driver** (tardis1, from 2026-10-07): the scope,
-the decisions waiting on Mike and the ordered work items are in
-[`NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`](NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md).
-Work from it. The bring-up of `enp161s0f0` (its section 5a) is done:
-**start at its section "64K"**, the findings at 64 KiB pages in one
-place (detail in 5b to 5d): how the port and the region were left,
-that a receive ring which runs empty stays empty until the port is
-taken down and up, and why sixteen connections stall on a budget of
-one WRITE. The page size for this platform is open (Mike, 2026-10-07).
-Run nothing on veth this boot.
+**Converging on the Xsight driver** (tardis1, from 2026-10-07).
+**Mike is rebooting tardis1 into a 16 KiB kernel on 2026-10-08. If
+`getconf PAGESIZE` says 16384, start at
+[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md).**
+It is the handoff for that boot: the job (find the best sizing against
+the L3 at 16 KiB on the real card, client and drives; Mike wants solid
+results the same day and it is the top priority), the first ten
+minutes, the scripts and plans that run it, and what went wrong at
+64 KiB. The 64 KiB account is the "64K" section of
+[`NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`](NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md)
+(detail in its 5b to 5g), with the rules for the rig in its section 0:
+only `enp161s0f0`, load only to the harness's own mount, `xeu` never
+reloaded. Run nothing on veth on a boot that is to use the card.
 
 **Moving to another test host** (the 4K host, the 16K host, tardis1 at 64K): start with
 [`NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md)
