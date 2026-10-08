@@ -14,7 +14,7 @@ for e in "${@:-64 128 256 512}"; do for e in $e; do
 		af0=$(reg alloc_fail); td0=$(tail_drops); echo > $RG
 		python3 $RIG/rcv.py $2 $1 20 > /tmp/.rcv.out 2>&1 & R=$!
 		sleep 1
-		rt=$(timeout 90 $SSHC "nstat -n >/dev/null 2>&1; timeout 60 python3 /var/tmp/zc-snd.py $1 20 2>/dev/null; nstat -a TcpRetransSegs 2>/dev/null | awk 'NR>1{print \$2}'")
+		rt=$(timeout 90 $SSHC "nstat -n >/dev/null 2>&1; timeout 60 python3 /var/tmp/zc-snd.py $1 20 2>/dev/null; nstat TcpRetransSegs 2>/dev/null | awk 'NR>1{print \$2}'")
 		sleep 2; kill $R 2>/dev/null; wait $R 2>/dev/null
 		mb=$(sed -n 's/.*: \([0-9]*\) MB\/s.*/\1/p' /tmp/.rcv.out)
 		echo "$e $1 $2 ${mb:-0} $(( $(tail_drops) - td0 )) $(( $(reg pages) - $(reg min_free) )) $(( $(reg alloc_fail) - af0 )) ${rt:-?}" | tee -a $OUT

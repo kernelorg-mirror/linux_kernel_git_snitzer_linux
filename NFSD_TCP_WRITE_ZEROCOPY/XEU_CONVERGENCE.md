@@ -334,6 +334,150 @@ third with `--arm64-16k`), and a reboot, which is Mike's to time.
 Mike has built the 16 KiB kernel; whether its kmod is 2.0.1-4, with
 the driver patch, is the first thing to check on that boot.
 
+## 16K. Findings at 16 KiB pages (tardis1, build 459, 2026-10-08)
+
+The same hunt on the `+16k` kernel
+(`7.1.13-21.hs.459.loanpages_pool.el9.aarch64+16k`), from
+`xeu-rig/README.md`. A 6144-page (96 MiB) region bound to
+`0000:a1:00.0`, 4 rings. The L3 is 2048 pages; half is 1024. Output is
+`/var/tmp/zc-run-logs/xeu-16k-*`. **Every cell here is one run** until
+the repeats are in.
+
+How the rig stood:
+
+- **The driver has the refill retry.** `kmod-16k-xsight` 2.0.1-4 was
+  built for the running kernel with `xeu-rig/build-kmod.sh`, installed
+  (`rpm -U` removed release 3) and `xeu` reloaded before any region
+  was bound; `xeu_rx_refill_timer` is in `/proc/kallsyms` and
+  `rx_ip_align` is 2.
+- **Only one port is up.** Mike tore down every other mount of tardis1
+  (192.168.0.105 had sixteen connections on `enp164s0f0`) and had
+  `enp164s0f0` taken down at 10:12:57 for the day, so that nothing
+  else is on the card. It is to come back up once the sizing with one
+  port is settled.
+- **The geometry is as the arithmetic said**: factor 190 at MTU 9000,
+  a record cost of 123 and a reserve of 130 pages, and `sweep.sh`
+  charges 126 pages for a WRITE of 1 MiB. A 128 KiB buffer is 9 pages,
+  256 KiB 17.
+- **A budget of n WRITEs admits n.** `xeu-rig/inflight.sh` sampled
+  `net.sunrpc.region_budget_stats` four times a second through the
+  sweep: budgets of 260, 386, 638 and 1142 pages showed at most 1, 2,
+  4 and 8 in flight, with up to 15 waiting.
+
+### Ring size under a plain network load
+
+`xeu-rig/ringsize.sh 64 128 256`, 20 s a cell, the Python sender and
+receiver (`xeu-16k-ringsize.tsv`; its `retrans` column is a running
+total on the client, which `ringsize.sh` no longer reports that way):
+
+| rings | streams | receive buffer | MB/s | tail drops | region pages in use at peak |
+|---|---|---|---|---|---|
+| 4 x 64 | 1 | autotuned | 5823 | 142515 | 572 |
+| 4 x 64 | 16 | autotuned | 28234 | 1210105 | 995 |
+| 4 x 64 | 1 | 256 KiB | 3647 | 0 | 502 |
+| 4 x 64 | 16 | 128 KiB | 12122 | 16860 | 483 |
+| 4 x 128 | 1 | autotuned | 8066 | 22502 | 1442 |
+| 4 x 128 | 16 | autotuned | 47359 | 473170 | 5134 |
+| 4 x 128 | 1 | 256 KiB | 3674 | 0 | 1050 |
+| 4 x 128 | 16 | 128 KiB | 11945 | 0 | 959 |
+| 4 x 256 | 1 | autotuned | 7272 | 0 | 1359 |
+| 4 x 256 | 16 | autotuned | 49483 | 8125 | 5889 |
+| 4 x 256 | 1 | 256 KiB | 3631 | 0 | 2084 |
+| 4 x 256 | 16 | 128 KiB | 11877 | 0 | 1988 |
+
+- With the buffer held, as every NFS cell holds it, **the smallest
+  ring that does not drop is 4 x 128**, for one connection and for
+  sixteen. 4 x 64 drops 0.06% of sixteen connections' frames.
+- Sixteen autotuned streams carry about 48 GB/s (380 Gbit/s). The
+  interface's `rx_bytes` gave 48448 MB/s where the receiver counted
+  47817 (`xeu-16k-ratecheck.out`), so the rate is the wire's and not
+  the receiver's arithmetic. They drop at every ring size and use
+  nearly the whole region.
+- Held buffers carry three to four times what they did at 64 KiB
+  (3.6 GB/s to one connection at 256 KiB against 0.9; 11.9 GB/s to
+  sixteen at 128 KiB against 3.9): a frame is charged a 16 KiB page.
+- `enp164s0f0` went down during the 4 x 128, one stream, autotuned
+  cell. Its rate lies between its neighbours' and it was not rerun.
+
+### The core: rings of 4 x 128, three buffers, both storages
+
+`plans/16k-1-core.plan` into `xeu-16k-core`, 120 s `step` cells, 1 MiB
+WRITEs. MB/s, with the copy of the same buffer and storage on the
+`copy` line. "Native" is `/hs/nvme0` (needs whole pages); NVMe/TCP is
+the loopback target on a file in `/hs/nvme1` (takes arbitrary pieces).
+Pages are the most of the region in use in the loan cells.
+
+| buffer | budget, WRITEs | native, 1 conn | native, 16 conn | NVMe/TCP, 1 conn | NVMe/TCP, 16 conn | pages | of the L3 | ring tail drops |
+|---|---|---|---|---|---|---|---|---|
+| 128 KiB | copy | 1375 | 2250 | 1197 | 2308 | 880 to 895 | 43% | 0 |
+| 128 KiB | 1 | 594 | 894 | 709 | 756 | 1089 to 1123 | 54% | 0 |
+| 128 KiB | 2 | 1056 | 1687 | 1196 | 1457 | 1240 | 60% | 0 |
+| 128 KiB | 4 | | 1264 | | 1939 | 1459 | 71% | 0 |
+| 128 KiB | 8 | | 1651 | | 2212 | 1881 to 1904 | 92% | 0 |
+| 256 KiB | copy | 1712 | 1978 | 1994 | 2151 | 871 to 893 | 43% | 0 |
+| 256 KiB | 1 | 793 | 1197 | 766 | 953 | 1210 | 59% | 0 |
+| 256 KiB | 2 | 1385 | 1627 | 1153 | 1690 | 1305 to 1318 | 64% | 0 |
+| 256 KiB | 4 | | 2223 | | 2175 | 1491 to 1499 | 73% | 0 |
+| 256 KiB | 8 | | 1532 | | 2187 | 1913 to 1935 | 94% | 11 native |
+| 512 KiB | copy | 1942 | 1946 | 1942 | 2377 | 889 to 907 | 44% | 0 |
+| 512 KiB | 1 | 865 | 1369 | 823 | 1051 | 1365 to 1370 | 67% | 0 |
+| 512 KiB | 2 | 1680 | 1922 | 1410 | 1899 | 1441 to 1472 | 71% | 5 native, 19 NVMe/TCP |
+| 512 KiB | 4 | | 2251 | | 2342 | 1613 | 78% | 422 native, 2576 NVMe/TCP |
+| 512 KiB | 8 | | 1625 | | 2069 | 1959 to 1986 | 96% | 574 native, 47 NVMe/TCP |
+
+No cell stalled, paused, overran or ran the region dry (`alloc_fail`
+0 throughout, `escaped` 0); one retransmit timeout in all, in the
+512 KiB, four WRITEs, NVMe/TCP cell.
+
+1. **Sixteen connections reach their copy at a budget of four WRITEs
+   with a 256 KiB buffer, on both storages**: 2223 against 1978 native,
+   2175 against 2151 on NVMe/TCP, with no ring drops, at about 1500
+   pages, 73% of the L3. The same budget at 512 KiB is level too (2251
+   against 1946, 2342 against 2377) but costs 120 pages more and is
+   the first to drop frames at rings of 4 x 128.
+2. **Nothing that is level fits in half of the L3.** The copy alone
+   holds about 880 pages (the rings' 512 and what the pools keep), so
+   there are under 150 pages of half the L3 left, and a WRITE is
+   charged 126. Every cell fits in the whole L3.
+3. **Budgets of one and two WRITEs leave the loan behind** at every
+   buffer: 33% to 70% of the copy at one, 58% to 100% at two (the
+   100% is one connection on NVMe/TCP at 128 KiB, 1196 against 1197).
+   About two WRITEs in three are denied at sixteen connections.
+4. **A budget of eight buys nothing over four** on NVMe/TCP at 256 KiB
+   (2187 against 2175) for 420 more pages, and on the native drive the
+   cell at eight was slower than at four at 256 and 512 KiB (1532,
+   1625). At 128 KiB the native cells are not in order either (1687,
+   1264, 1651 at two, four and eight). One run each: these are the
+   cells to repeat before anything is read into them.
+5. **A 128 KiB buffer is worse than 256 KiB and saves no pages**: no
+   sixteen-connection loan reaches its copy at 128 KiB (the nearest,
+   2212 against 2308, is on NVMe/TCP at eight WRITEs and 92% of the
+   L3), and the pages in use are within 40 of the 256 KiB cells'. The
+   footprint follows the rings and the budget.
+6. **The stall of 64 KiB (finding 10 there) is gone.** Sixteen
+   connections on a 128 KiB buffer and a budget of one WRITE ran at
+   894 MB/s native and 756 on NVMe/TCP, untraced, with no retransmit
+   timeout. A 128 KiB buffer is eight frames here where it was two.
+7. **How each was written is as at 64 KiB**: every copy direct on both
+   storages, every admitted loan direct on NVMe/TCP, every admitted
+   loan on the native drive through the page cache (dontcache).
+   Nothing keeps a loan off the storage that needs whole pages: the
+   transport loans by the region and the budget alone, and
+   `nfs_dio_split()` then finds the loaned vector misaligned for a
+   device with a `virt_boundary_mask` (`NFS_DIO_MEM_MISALIGNED`) and
+   issues the WRITE buffered with `IOCB_DONTCACHE`. So on the native
+   drive the loan trades the receive copy for a copy into the page
+   cache.
+8. **Server kernel CPU per GB, sixteen connections** (`summarize.py`,
+   system and softirq time over 90 s, less idle): on NVMe/TCP the loan
+   is at or a little under its copy at the budgets that are level
+   (0.96 against 0.97 at 256 KiB and four WRITEs, 0.87 against 0.90 at
+   512 KiB); on the native drive it is level at 256 KiB (0.48 against
+   0.49) and above at 512 KiB (0.45 against 0.38). Softirq time alone
+   is lower for every loan on NVMe/TCP at 256 KiB (0.155 against 0.172
+   CPU-seconds per GB at four WRITEs). Single runs; the differences
+   are small.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

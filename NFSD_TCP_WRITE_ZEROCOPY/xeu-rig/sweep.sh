@@ -18,7 +18,7 @@
 # PERF=1 adds cycles and instructions; PROFILE=1 adds a 30 s flat profile by
 # function (it sits inside the CPU window and costs a little).
 . "$(dirname "$0")/common.sh"
-OUT=${1:?outdir}; PLAN=${2:?plan file}
+OUT=${1:?outdir}; PLAN=$(readlink -f "${2:?plan file}")	# cd below: a relative plan would be lost
 mkdir -p $OUT; touch $OUT/done
 [ -e $RG ] || { echo "no region: run bringup.sh first"; exit 1; }
 cd $H || exit 1
