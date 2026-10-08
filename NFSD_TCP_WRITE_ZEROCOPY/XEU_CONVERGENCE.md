@@ -227,6 +227,64 @@ a ring change alone makes the pools again.
 To put the port back: `ethtool -L enp161s0f0 combined 8`,
 `ethtool -G enp161s0f0 rx 1024`; a reboot clears the region.
 
+## 64K. Findings at 64 KiB pages (tardis1, build 458, 2026-10-07)
+
+Everything found on the `xeu` port at `PAGE_SIZE` 64 KiB, in one
+place. The detail and the tables are in 5b (bring-up), 5c (baselines,
+ring stall, step cells) and 5d (the sixteen-connection stall) below.
+Every figure is from 4 rings and a 2048-page (128 MiB) region; most
+are one run.
+
+What holds whatever the page size:
+
+1. **The region is named by the PCI device** (`0000:a1:00.0`), not the
+   interface. Rings can be resized with the port up, under a bound
+   region (5b).
+2. **A receive ring that runs empty stays empty** until the port goes
+   down and up: the driver refills only from its own receive poll and
+   does not retry a failed allocation. Seen twice; read in the source
+   (5c). The pool must never fail on this card.
+3. **The pools keep pages.** At 4 x 256, 1024 are posted and the pools
+   come to hold about 600 more, so about 1650 of 2048 are gone before
+   any loan. The harness reads `parked` too early and derives a budget
+   the region cannot cover (5c).
+4. **The drive is not a limit** (10.4 GiB/s local). The network gives
+   7.0 GB/s to one autotuned connection and 3.9 GB/s to sixteen with
+   128 KiB buffers (5c).
+5. **Copies and loans both reach the drive direct** where the storage
+   allows it: every copy cell was written direct, every loan on
+   NVMe/TCP direct, every loan on the local NVMe through the page
+   cache (dontcache). No pause, overrun, orphan or escaped page in any
+   cell; the trace has every admitted WRITE released (5b, 5d).
+
+What follows from one frame having a 64 KiB page to itself:
+
+6. **A 1 MiB WRITE is about 117 pages, 7.3 MiB of region**, estimated
+   at 127 by the budget (factor 740). The estimate was never exceeded;
+   what a WRITE really holds was not measured (5b).
+7. **The L3 share does not fit.** The L3 is 32 MiB, 512 pages. Rings
+   that do not drop under iperf3 (4 x 256) are 1024 pages, and a ring
+   of 64 drops 1% of one fast stream (5b). Half of the L3 (256 pages)
+   cannot hold both rings and one WRITE.
+8. **A held receive buffer is two to four frames.** TCP charges 64 KiB
+   a frame, so 128 KiB is two frames and 256 KiB four. One connection
+   at 256 KiB is limited to 0.9 to 1.2 GB/s by that alone, and the
+   one-connection copy cells are at that ceiling (5c).
+9. **One connection, budget with room: the loan beat its copy by 14%**
+   on the local NVMe (880 against 771 MB/s, 120 s, one run each). At a
+   budget of one WRITE the loan is slower than its copy (5c).
+10. **Sixteen connections on a budget of one WRITE collapse** to a
+    WRITE every 40 to 90 s when untraced (4 runs of 4), through TCP
+    backoff on the client and not through the budget's accounting
+    (5d). With the trace attached the same cell runs at 315 MB/s
+    (6 runs of 6), against 1977 for its copy.
+11. **Not obtained:** a sixteen-connection loan at a budget of several
+    WRITEs, an NVMe/TCP loan at a budget with room, a larger held
+    buffer, the cell alone and untraced. The region has no room for
+    the first two at 4 x 256; runs of all four were queued and never
+    started (a fault in the queueing, nothing ran and nothing was
+    left behind).
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
@@ -422,7 +480,7 @@ and `paused`, `overrun` 0 in every row but the one marked.
   WRITEs were admitted in 120 s, with zero-window drops (60, 67),
   receive-queue drops, collapses and retransmission timeouts, no
   `alloc_fail` and every ring alive after. fio returned 0 with 0 MB/s.
-  Why admission stops is not known; it wants `credit.bt` on that cell.
+  Section 5d has why.
 - The sixteen-connection copy cells, 1977 and 2058 MB/s, are half of
   what the network allowed with the same buffers.
 - No sixteen-connection loan result exists yet on this card, and no
@@ -430,10 +488,58 @@ and `paused`, `overrun` 0 in every row but the one marked.
   not have at 4 x 256: smaller rings, or a larger region on the next
   boot (one boot has one region size).
 
-Next: trace `step-on-n16` at a budget of 250; choose the rings and the
-region size for the next boot from "posted, plus what the pools keep,
-plus the budget, plus the held buffers", with the pool never failing;
-then the measure of what one WRITE holds and decision 5.
+## 5d. Why sixteen connections stall on a budget of one WRITE (2026-10-07)
+
+`step-on-n16`, `FORCE_BUDGET=250` (one WRITE of 127 in flight, 120 in
+reserve), held buffer 128 KiB, local NVMe unless said.
+
+| invocation | trace | runs | result |
+|---|---|---|---|
+| after `step-copy-n16` (NVMe/TCP) or `step-on` | off | 4 | all stalled: 28 to 43 WRITEs admitted in 120 s |
+| alone after the warm-up | `credit.bt` | 5 | all ran: 311 to 320 MB/s, about 36000 admitted, 72000 denied |
+| after `step-on` | `credit.bt` | 1 | ran: 359 MB/s |
+
+The trace hides it, so it is a matter of timing; whether the cell
+before it matters is not known (the cell alone and untraced was not
+run). The traced runs have the same drops and timeouts in small
+numbers (zero-window drops 0 to 6, timeouts 0 to 4).
+
+Caught untraced, with a watcher that captured both ends only once
+admission had been flat for 20 s (`xeu-step-4x256-prp-b250-stall.bt/`):
+
+- **Budget:** `inflight 1`, `avail 3`, `reserve 120`, `waiters 15`,
+  unchanged for 40 s at a time. The accounting is consistent: it waits
+  for the one WRITE in flight.
+- **That WRITE's connection:** the server's socket is empty with a
+  window of 15360 open. The client has 2 segments unacknowledged, 400
+  KB not sent, `cwnd 1`, and its retransmission timer backed off nine
+  times to 103 s.
+- **The fifteen waiting:** each server socket holds one to three and a
+  half frames (65792 to 229888 of `rb131072`). On the client thirteen
+  are in zero-window probing backed off eight or nine times, timers 27
+  to 62 s; two are in retransmission backoff.
+- **The wire:** 8 packets in 40 s, all zero-window probes and their
+  `win 0` answers. No ring stopped, no `alloc_fail`, 468 pages free.
+- Server, this boot: `TCPZeroWindowDrop` 493, `TCPRcvQDrop` 151,
+  `TCPTimeouts` 99.
+
+The reading: a frame is charged 64 KiB, so a 128 KiB buffer is full at
+two frames and a connection denied credit shuts its window at once.
+With one WRITE admitted and sixteen connections, each waits many turns
+and its sender's timer doubles each time. Segments that arrive with
+the buffer over its limit are dropped, which puts that sender into
+retransmission backoff (this step is from the counters and the
+unacknowledged segments, not from a capture of a drop). When such a
+connection is admitted its sender sleeps for up to 100 s, the WRITE
+holds the whole budget until then, and the others back off further.
+
+It is the three together: a buffer of two frames, a budget of one
+WRITE, many connections. A larger held buffer and a budget of several
+WRITEs are the two things to try and neither has been run.
+
+Next: the page size (Mike, 2026-10-07: 16 KiB and 4 KiB are open for
+this platform); on 64 KiB, the untested runs of finding 11, which need
+smaller rings or a larger region.
 
 ## 6. The real drives behind veth (2026-10-07)
 
