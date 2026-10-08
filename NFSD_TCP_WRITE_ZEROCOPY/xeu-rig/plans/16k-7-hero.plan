@@ -1,0 +1,13 @@
+# As fast as writes will go from the client, not the smallest footprint:
+# sixteen connections, one step changed at a time.  A held buffer of 0 is
+# not held (autotuned).  Run with sixteen writers and no verify, and a
+# backing file with room for them:
+#     STEP_JOBS=16 NULLB_MIB=16384 ./sweep.sh <outdir> plans/16k-7-hero.plan
+# About 25 minutes.  The region may run dry with autotuned buffers.
+128 262144 0 prp step-copy-n16
+128 0 0 prp step-copy-n16
+256 0 0 prp step-copy-n16
+256 0 0 sgl step-copy-n16
+256 0 16 sgl step-on-n16
+256 1048576 16 sgl step-on-n16
+256 0 16 prp step-on-n16

@@ -641,6 +641,114 @@ file in `/hs/nvme1`); all removed after.
     the check of the data. `plans/16k-6-noverify.plan` is the shortlist
     for it.
 
+### The cells with the load uncapped: four writers, no verify
+
+`STEP_JOBS=4 ./sweep.sh xeu-16k-nv4 plans/16k-6-noverify.plan`. Rings
+of 4 x 128, 256 KiB buffer; one run each; MB/s. The client's fio
+threads are at 2% to 6% of a CPU each.
+
+| budget, WRITEs | native, 1 conn | native, 16 conn | NVMe/TCP, 1 conn | NVMe/TCP, 16 conn | pages | of the L3 |
+|---|---|---|---|---|---|---|
+| copy | 2767 | 4067 | 2575 | 8170 | 895 to 901 | 44% |
+| 2 | | 1438 | | 1879 | 1390 | 68% |
+| 4 | 2082 | 3054 | 2611 | 3119 | 1608 to 1612 | 79% |
+| 8 | | 3442 | | 4271 | 2045 to 2051 | 100% |
+
+No timeout, pause or `alloc_fail`; 113 and 77 ring drops in the two
+fastest NVMe/TCP cells.
+
+24. **With the load uncapped, the budget is what limits sixteen
+    connections' loans.** On NVMe/TCP the loan runs at 1879, 3119 and
+    4271 MB/s at two, four and eight WRITEs where its copy, which
+    nothing admits or refuses, runs at 8170. Finding 16 ("four WRITEs
+    are level") was the verifying job's ceiling and does not hold
+    here. One connection is level at four WRITEs on NVMe/TCP (2611
+    against 2575).
+25. **On the native drive the loan is behind its copy at every
+    budget** (35%, 75% and 85% at two, four and eight WRITEs), and
+    the native copy is half of NVMe/TCP's (4067 against 8170) though
+    both are written direct and the drive takes 11.2 GB/s. Why is not
+    known.
+26. **Where the loan is written direct it costs less server CPU**:
+    0.59 to 0.67 kernel CPU-seconds per GB for the sixteen-connection
+    loans on NVMe/TCP against 0.99 for their copy. One run each, at
+    different rates.
+
+## Hero. Writes from the client as fast as they will go (Mike, 2026-10-08)
+
+**This is the primary focus from the evening of 2026-10-08, until every
+win is wrung out and NFS writes from the remote client are near line
+rate.** It is not the sizing hunt: the footprint is allowed to be
+several times the L3. The sizing results above stand as they are.
+
+What there is to reach for, all measured at 16 KiB on this boot:
+
+| limit | rate |
+|---|---|
+| the wire: 16 TCP streams to a receiver that discards, buffers autotuned | 48 GB/s (380 Gbit/s) |
+| the wire, 16 streams, buffers held at 128 KiB | 11.9 GB/s |
+| one native drive, fio on tardis1 | 11.2 GB/s |
+| the NVMe/TCP loopback target, one queue / four | 4.4 / 11.2 GB/s |
+| NFS, best so far: copy, 16 connections, four writers, NVMe/TCP, 256 KiB held | 8.2 GB/s |
+| NFS, the same on the native drive | 4.1 GB/s |
+
+The brakes known to be on, in the order the ladder takes them off:
+
+1. **The load.** The verifying step job is one thread; four writers
+   without verify took the copy from 2.2 to 4.1 and 8.2 GB/s. More
+   writers: `STEP_JOBS`.
+2. **The held receive buffer.** Holding it took the wire from 48 to
+   12 GB/s. `FORCE_RCVBUF=0` (a buffer of 0 in a plan) leaves it
+   autotuned.
+3. **The rings.** 4 x 128 was chosen for its footprint; 4 x 256 is the
+   size that did not drop under autotuned streams.
+4. **The budget.** A loan's rate at sixteen connections follows it
+   (finding 24). Sixteen WRITEs admit every connection at once.
+5. **One drive.** 11.2 GB/s. Past that needs more than one drive under
+   the export: an MD stripe of four to six (Mike raised it; it means
+   remaking drives, which the rig's rule forbids until he says) or
+   several exports, one per drive (a harness change).
+
+Not limits now: nfsd has 128 threads on 64 CPUs; the client's fio
+threads idle with the verify off.
+
+**The ladder** is `xeu-rig/plans/16k-7-hero.plan`, sixteen connections,
+one thing changed per line:
+
+    STEP_JOBS=16 NULLB_MIB=16384 ./sweep.sh $L/xeu-16k-hero plans/16k-7-hero.plan
+
+| rung | rings | buffer | budget | storage | what it adds |
+|---|---|---|---|---|---|
+| 1 | 4 x 128 | 256 KiB | copy | native | sixteen writers |
+| 2 | 4 x 128 | autotuned | copy | native | the buffer let go |
+| 3 | 4 x 256 | autotuned | copy | native | the larger rings |
+| 4 | 4 x 256 | autotuned | copy | NVMe/TCP | the other storage |
+| 5 | 4 x 256 | autotuned | 16 WRITEs | NVMe/TCP | the loan, written direct |
+| 6 | 4 x 256 | 1 MiB | 16 WRITEs | NVMe/TCP | the loan with the buffer held |
+| 7 | 4 x 256 | autotuned | 16 WRITEs | native | the loan through the page cache |
+
+Read each rung against the one before it, and read `alloc_fail`: with
+autotuned buffers sixteen plain streams used 5900 of the region's 6144
+pages, so the region may run dry (the driver's refill retry is what
+makes that survivable; say if it happened). NVMe/TCP is a target on
+the same host, so its cells also pay the target's CPU.
+
+Where to look next, by what the ladder shows (none of these is tried):
+
+- If rung 1 is no faster than four writers, the limit is on the
+  server or the wire and not the load: profile it (`PROFILE=1`).
+- Why the native copy is half of NVMe/TCP's (finding 25). The native
+  export is a directory of a file system that is 68% full and the
+  files are made by the cell; `PREALLOC=1` or a file system of its own
+  would say whether allocation is the cost.
+- More than sixteen connections: `nconnect` stops at 16, so more
+  needs more mounts or more clients.
+- A larger region and budget than this boot's 6144 pages
+  (`rx_region_pages` is set once a boot, by `bringup.sh`).
+- The second port, `enp164s0f0`, which Mike had taken down on
+  2026-10-08 until one port is optimized.
+- Past one drive: rung 5 of the brakes above.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
