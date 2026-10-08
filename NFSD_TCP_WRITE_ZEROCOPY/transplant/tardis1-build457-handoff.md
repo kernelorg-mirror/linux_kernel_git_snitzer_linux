@@ -1439,3 +1439,22 @@ four decisions waiting on him and nine work items are in
 `../XEU_CONVERGENCE.md`; nothing on the card or the drives has been
 changed. The veth figures (credit factor 350, the 548-page bound) do
 not carry over: `xeu` gives each frame a 64 KiB page.
+
+## 22. 2026-10-07: the harness takes a real device, a remote client and the real drives
+
+`../XEU_CONVERGENCE.md` work items 1 to 3, in `run-budget.sh`:
+`NETDEV=` with `CLIENT=` (a real port and a client over `ssh`),
+`EXPORT_DIR=` (a directory of a mounted file system), `BACKING=` (the
+NVMe target in front of a file or device), `FRAME_PAGE=1` (geometry for
+one frame per page), `NOREGION=1`. The veth mode is unchanged and was
+re-run. Mike gave `/hs/nvme0` for the PRP export and `/hs/nvme1` for
+the NVMe/TCP backing; both were run behind veth and the results are in
+that document's section 6. The remote-client path has only been run
+with a stand-in for `ssh`: 192.168.0.105's credentials are still to
+come, and no region is bound to an `xeu` port yet (work item 4).
+
+Section 20's 1 ms mixed figures were re-run as copy-then-loan pairs at
+the three budgets (`bound-half-l3/pair-b*`): 2521 / 1447, 2544 / 1595
+and 2468 / 1660, which is 57%, 63% and 67%, as recorded there. One of
+four runs of that loan cell at the full budget came in at 1598 where
+the others gave 1959 to 1981, so that cell can vary by a fifth.

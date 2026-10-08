@@ -43,6 +43,39 @@
 #   region for its loan cells, to run a smaller budget on a larger region:
 #   the pages in use depend on the budget, not on the region's size.
 #
+#   A real device, a remote client, an existing export (PHASE=A only; see
+#   XEU_CONVERGENCE.md):
+#     NETDEV=<dev> CLIENT=<[user@]host>
+#                 The server receives on <dev> and the client is another
+#                 machine, driven over ssh (keys, no password; SSH_OPTS= for
+#                 more options).  No veth, namespace or XDP is set up, and
+#                 the device's MTU, rings and module parameters are left
+#                 alone: a cell that wants another MTU is skipped.  The
+#                 client mounts SERVER_ADDR (default: <dev>'s address),
+#                 keeps each cell's files under CLIENT_DIR (default
+#                 /var/tmp/zc-budget-client) and needs fio and nstat.  The
+#                 region must already be bound to <dev> (rx_region_dev and
+#                 rx_region_pages set before the device made its pools);
+#                 NOREGION=1 runs without one, to check the plumbing.
+#                 FRAME_PAGE=1 (the default on xeu) derives the geometry for
+#                 a driver that gives each frame a whole page.
+#     EXPORT_DIR=<dir>
+#                 Export this directory of a file system that is already
+#                 mounted, in place of making null_blk, nvmet and XFS.  It
+#                 must not be a mount point itself; only the cells' own
+#                 files (f-*) are created and removed.  STORAGE= must say
+#                 what the device under it is, and is checked.
+#     BACKING=<block device or file>
+#                 The NVMe target's namespace is this, in place of null_blk
+#                 behind dm-delay: a file on a real drive puts NVMe/TCP (or
+#                 nvme-loop) in front of that drive.  A file that does not
+#                 exist is made, written through at NULLB_MIB MiB, and
+#                 removed after.
+#                 A block device is REFORMATTED.
+#   With EXPORT_DIR or BACKING there is no dm-delay: cells run with no
+#   storage delay but the device's own, and the "step" cells run as a steady
+#   120 s load with no stall.
+#
 #   RX_IP_ALIGN=<0-3> is veth's rx_ip_align: extra bytes of headroom for the
 #   frames veth copies into page-pool pages.  At 0 the TCP payload is 2 bytes
 #   off a 4-byte boundary, as on a NIC that posts its buffers the usual way,
@@ -100,6 +133,27 @@ case $STORAGE in prp|sgl) ;; *) echo "STORAGE=$STORAGE: prp or sgl" >&2; exit 2 
 RX_IP_ALIGN=${RX_IP_ALIGN:-0}
 case $RX_IP_ALIGN in 0|1|2|3) ;; *) echo "RX_IP_ALIGN=$RX_IP_ALIGN: 0 to 3" >&2; exit 2 ;; esac
 
+# --- a real device, a remote client, an existing export ---------------------
+NETDEV=${NETDEV:-}; CLIENT=${CLIENT:-}; EXPORT_DIR=${EXPORT_DIR:-}; BACKING=${BACKING:-}
+HW=; [ -n "$NETDEV" ] && HW=1
+NODELAY=; [ -n "$EXPORT_DIR$BACKING" ] && NODELAY=1
+if [ -n "$HW$NODELAY$CLIENT" ]; then
+	[ "$PHASE" = A ] || { echo "NETDEV, CLIENT, EXPORT_DIR and BACKING are for PHASE=A only" >&2; exit 2; }
+	[ -n "$HW" ] && [ -z "$CLIENT" ] && { echo "NETDEV=$NETDEV needs CLIENT=<[user@]host>" >&2; exit 2; }
+	[ -z "$HW" ] && [ -n "$CLIENT" ] && { echo "CLIENT=$CLIENT needs NETDEV=<dev>" >&2; exit 2; }
+	[ -n "$EXPORT_DIR" ] && [ -n "$BACKING" ] && { echo "EXPORT_DIR or BACKING, not both" >&2; exit 2; }
+	[ -n "$HW" ] && [ ! -d "/sys/class/net/$NETDEV" ] && { echo "NETDEV=$NETDEV: no such device" >&2; exit 2; }
+fi
+# One frame per page: what xeu posts (one order-0 page per descriptor).
+if [ -n "$HW" ] && [ "$(basename "$(readlink -f "/sys/class/net/$NETDEV/device/driver" 2>/dev/null)")" = xeu ]; then
+	FRAME_PAGE=${FRAME_PAGE:-1}
+fi
+# What a real device was loaded with is what the run has; it is not changed.
+if [ -n "$HW" ]; then
+	RX_IP_ALIGN=$(cat "/sys/module/$(basename "$(readlink -f "/sys/class/net/$NETDEV/device/driver" 2>/dev/null)")/parameters/rx_ip_align" 2>/dev/null || echo -)
+fi
+FRAME_PAGE=${FRAME_PAGE:-0}
+
 # --- page geometry ---------------------------------------------------------
 # Every page budget here was first sized on 4 KiB pages.  They are derived
 # from the running kernel's page size with the kernel's own admission
@@ -125,7 +179,7 @@ factor() {
 	local mtu=$1 fb pay frames per pages f
 	case "$PS:$mtu" in 4096:9000) echo 150; return ;; 4096:1500) echo 280; return ;; esac
 	pay=$(( mtu - 52 )); frames=$(( (1048576 + pay - 1) / pay )); fb=$(( mtu + 576 ))
-	if [ $(( fb * 2 )) -gt "$PS" ]; then
+	if [ "$FRAME_PAGE" = 1 ] || [ $(( fb * 2 )) -gt "$PS" ]; then
 		pages=$(( frames * ((fb + PS - 1) / PS) ))
 	else
 		per=$(( PS / fb )); pages=$(( (frames + per - 1) / per ))
@@ -137,6 +191,10 @@ factor() {
 # Region pages a locked receive buffer of $1 bytes can pin at MTU $2: 2 KiB of
 # payload per page (4 KiB) or one page per frame, whichever is more pages.
 rcvpages() {
+	# One frame per page: TCP charges a page of truesize for each frame, so
+	# the buffer is full at bytes / page size frames, and admits one more.
+	# Provisional: not measured on such a device.
+	[ "$FRAME_PAGE" = 1 ] && { echo $(( ($1 + PS - 1) / PS + 1 )); return; }
 	local a=$(( $1 * 2 / PS )) fr=$(( $2 > PS / 2 ? $2 : PS / 2 )) b
 	b=$(( ($1 + fr - 1) / fr ))
 	echo $(( a > b ? a : b ))
@@ -158,7 +216,7 @@ geometry() {
 	echo "geometry: page $PS, 1 MiB = $MIB_PAGES pages; factor $F9 (MTU 9000) $F15 (MTU 1500);" \
 	     "record cost $(rec_cost "$F9") / $(rec_cost "$F15"), reserve $R9 / $R15;" \
 	     "rcvbuf pages 256K $RB256 128K $RB128 64K $RB64 (256K at MTU 1500 $RB256_15);" \
-	     "region default $REGION_DEFAULT; collapse tcp_rmem $RMEMS"
+	     "region default $REGION_DEFAULT; collapse tcp_rmem $RMEMS$([ "$FRAME_PAGE" = 1 ] && echo '; one frame per page')"
 }
 if [ -n "${GEOMETRY:-}" ]; then geometry; exit 0; fi
 EV=${1:-/var/tmp/budget-$(date +%Y%m%d-%H%M%S)}
@@ -176,7 +234,19 @@ NVME_TCP_PORT=${NVME_TCP_PORT:-4477}
 NB=zcbudget
 DM=zcbudget
 EXPORT=/export/zcbudget
+[ -n "$EXPORT_DIR" ] && EXPORT=$EXPORT_DIR
 FSID=7712
+# Who the client is, and where it finds the server.
+RDEV=${NETDEV:-rxsrv}
+SRVADDR=10.77.0.1
+CLNET=10.77.0.0/24
+if [ -n "$HW" ]; then
+	SRVADDR=${SERVER_ADDR:-$(ip -4 -o addr show dev "$NETDEV" | awk '{sub(/\/.*/, "", $4); print $4; exit}')}
+	[ -n "$SRVADDR" ] || { echo "NETDEV=$NETDEV has no IPv4 address (SERVER_ADDR=)" >&2; exit 2; }
+	CLNET=${CLIENT_ADDR:-${CLIENT#*@}}
+fi
+SSH=${SSH:-ssh -o BatchMode=yes -o ConnectTimeout=10 ${SSH_OPTS:-}}
+CLIENT_DIR=${CLIENT_DIR:-/var/tmp/zc-budget-client}
 XDPO=$EV/xdp_pass.o
 XDPC=${XDPC:-$(ls "$HERE"/slipstream/tools/xdp_pass.c "$HERE"/slipstream/slipstream-kernel-overlays-hs-*/tools/xdp_pass.c 2>/dev/null | head -1 || true)}
 
@@ -352,9 +422,18 @@ rig_down() {
 	veth_down
 	veth2_down
 	srvb_down
-	exportfs -u "10.77.0.0/24:$EXPORT" 2>/dev/null || true
+	exportfs -u "$CLNET:$EXPORT" 2>/dev/null || true
 	exportfs -u "10.78.0.0/24:$EXPORT" 2>/dev/null || true
-	mountpoint -q "$EXPORT" && umount "$EXPORT"
+	if [ -n "$EXPORT_DIR" ]; then
+		# Not ours to unmount.  Take the directory away only if this
+		# script made it and nothing but its marker is left in it.
+		if [ -e "$EXPORT/.zcbudget-made" ]; then
+			rm -f "$EXPORT"/f-* "$EXPORT/.zcbudget-made"
+			rmdir "$EXPORT" 2>/dev/null || true
+		fi
+	else
+		mountpoint -q "$EXPORT" && umount "$EXPORT"
+	fi
 	nvme disconnect -n "$NQN" >/dev/null 2>&1 || true
 	local l
 	for l in "$CFG"/nvmet/ports/*/subsystems/"$NQN"; do
@@ -369,9 +448,14 @@ rig_down() {
 		echo 0 > "$CFG/nullb/$NB/power" 2>/dev/null || true
 		rmdir "$CFG/nullb/$NB"
 	fi
+	if [ -n "$BACKING" ] && [ -e "$BACKING.zcbudget-made" ]; then
+		rm -f "$BACKING" "$BACKING.zcbudget-made"
+	fi
+	return 0
 }
 cleanup() {
 	set +e
+	[ -n "$HW" ] && $SSH "$CLIENT" 'umount -f /mnt/rxr' 2>/dev/null
 	ip netns exec rxcli umount -f /mnt/rxr 2>/dev/null
 	ip netns exec rxcl2 umount -f /mnt/rxr 2>/dev/null
 	ip netns exec rxcl3 umount -f /mnt/rxr 2>/dev/null
@@ -391,8 +475,11 @@ cleanup() {
 	wr_disarm
 	echo "$SAVE_TON" > $T/tracing_on
 	# The region object outlives this run (never freed); stop new pools binding it.
-	echo -n "$SAVE_REGDEV" > $PP/rx_region_dev
-	echo "$SAVE_REGPAGES" > $PP/rx_region_pages
+	# (With NETDEV the region's parameters are never written here.)
+	if [ -z "$HW" ]; then
+		echo -n "$SAVE_REGDEV" > $PP/rx_region_dev
+		echo "$SAVE_REGPAGES" > $PP/rx_region_pages
+	fi
 	echo "== restored host settings"
 }
 trap cleanup EXIT
@@ -446,10 +533,12 @@ veth_align() {	# veth_align <align>: make veth run with it, or say why not
 # --- rig ---------------------------------------------------------------
 rig_up() {
 	rig_down
-	veth_align "$RX_IP_ALIGN"
+	[ -z "$HW" ] && veth_align "$RX_IP_ALIGN"
 	# Not in the installed kernel's modules: load the tree's build.
-	local m ko
-	for m in veth dm_delay null_blk; do
+	local m ko mods=
+	[ -z "$HW" ] && mods=veth
+	[ -z "$NODELAY" ] && mods="$mods dm_delay null_blk"
+	for m in $mods; do
 		[ -d /sys/module/$m ] && continue
 		modprobe -q $m 2>/dev/null && continue
 		case $m in
@@ -459,62 +548,97 @@ rig_up() {
 		esac
 		[ -f "$ko" ] && insmod "$ko" || { echo "module $m not available" >&2; exit 2; }
 	done
-	command -v fio >/dev/null || { echo "fio missing" >&2; exit 2; }
-	systemctl is-active -q nfs-server || systemctl start nfs-server
-	mountpoint -q $CFG || mount -t configfs none $CFG
-	modprobe nvmet
-	if [ $STORAGE = sgl ]; then modprobe nvmet-tcp; modprobe nvme-tcp; else modprobe nvme-loop; fi
-	mkdir "$CFG/nullb/$NB"
-	echo 1 > "$CFG/nullb/$NB/memory_backed"
-	echo 4096 > "$CFG/nullb/$NB/blocksize"
-	echo "${NULLB_MIB:-4096}" > "$CFG/nullb/$NB/size"
-	echo 2 > "$CFG/nullb/$NB/queue_mode"
-	echo 1 > "$CFG/nullb/$NB/power"
-	local nbdev=/dev/$NB
-	[ -b $nbdev ] || { echo "no null_blk device $nbdev" >&2; exit 1; }
-	dmsetup create "$DM" --table "0 $(blockdev --getsz $nbdev) delay $nbdev 0 0 $nbdev 0 0"
-	mkdir "$CFG/nvmet/subsystems/$NQN"
-	echo 1 > "$CFG/nvmet/subsystems/$NQN/attr_allow_any_host"
-	mkdir "$CFG/nvmet/subsystems/$NQN/namespaces/1"
-	echo /dev/mapper/$DM > "$CFG/nvmet/subsystems/$NQN/namespaces/1/device_path"
-	echo 1 > "$CFG/nvmet/subsystems/$NQN/namespaces/1/enable"
-	for PORT in $(seq 7 64); do [ -e "$CFG/nvmet/ports/$PORT" ] || break; done
-	mkdir "$CFG/nvmet/ports/$PORT"
-	if [ $STORAGE = sgl ]; then
-		echo tcp > "$CFG/nvmet/ports/$PORT/addr_trtype"
-		echo ipv4 > "$CFG/nvmet/ports/$PORT/addr_adrfam"
-		echo 127.0.0.1 > "$CFG/nvmet/ports/$PORT/addr_traddr"
-		echo "$NVME_TCP_PORT" > "$CFG/nvmet/ports/$PORT/addr_trsvcid"
-		ln -s "$CFG/nvmet/subsystems/$NQN" "$CFG/nvmet/ports/$PORT/subsystems/$NQN"
-		nvme connect -t tcp -a 127.0.0.1 -s "$NVME_TCP_PORT" -n "$NQN" >/dev/null
+	if [ -n "$HW" ]; then
+		$SSH "$CLIENT" 'command -v fio nstat >/dev/null' ||
+			{ echo "CLIENT=$CLIENT: no ssh, or no fio or nstat there" >&2; exit 2; }
 	else
-		echo loop > "$CFG/nvmet/ports/$PORT/addr_trtype"
-		# nvme-loop takes the first loop port when no address is given; name ours.
-		echo "$NB" > "$CFG/nvmet/ports/$PORT/addr_traddr"
-		ln -s "$CFG/nvmet/subsystems/$NQN" "$CFG/nvmet/ports/$PORT/subsystems/$NQN"
-		nvme connect -t loop -n "$NQN" --traddr "$NB" >/dev/null
+		command -v fio >/dev/null || { echo "fio missing" >&2; exit 2; }
 	fi
-	local dev="" c
-	for _ in $(seq 50); do
-		for c in /sys/class/nvme/nvme*; do
-			[ "$(cat $c/subsysnqn 2>/dev/null)" = "$NQN" ] && dev=/dev/$(basename $c)n1
-		done
-		[ -b "$dev" ] && break; sleep 0.1
-	done
-	[ -b "$dev" ] || { echo "no NVMe namespace for $NQN (STORAGE=$STORAGE)" >&2; exit 1; }
-	# The rig is only what it claims to be if the device says so.
-	local vbm want=4095; vbm=$(cat /sys/block/$(basename $dev)/queue/virt_boundary_mask)
+	systemctl is-active -q nfs-server || systemctl start nfs-server
+	local dev="" blk c vbm want=4095 sgls=- what
 	[ $STORAGE = sgl ] && want=0
+	if [ -n "$EXPORT_DIR" ]; then
+		# An existing file system: nothing is made but the directory.
+		mountpoint -q "$EXPORT" && { echo "EXPORT_DIR=$EXPORT is a mount point: give a directory under it" >&2; exit 2; }
+		if [ ! -d "$EXPORT" ]; then
+			mkdir -p "$EXPORT" && touch "$EXPORT/.zcbudget-made"
+		fi
+		chmod 0777 "$EXPORT"
+		dev=$(findmnt -no SOURCE -T "$EXPORT")
+		blk=$(lsblk -no PKNAME "$dev" 2>/dev/null | head -1); [ -n "$blk" ] || blk=$(basename "$dev")
+		what="existing $(findmnt -no FSTYPE -T "$EXPORT") on $dev"
+	else
+		mountpoint -q $CFG || mount -t configfs none $CFG
+		modprobe nvmet
+		if [ $STORAGE = sgl ]; then modprobe nvmet-tcp; modprobe nvme-tcp; else modprobe nvme-loop; fi
+		local back
+		if [ -n "$BACKING" ]; then
+			# A new file is written through once, so no cell pays for
+			# allocating it (and mkfs below must not discard it away).
+			if [ ! -e "$BACKING" ]; then
+				touch "$BACKING.zcbudget-made"
+				dd if=/dev/zero of="$BACKING" bs=1M count="${NULLB_MIB:-4096}" oflag=direct status=none
+			fi
+			back=$BACKING
+		else
+			mkdir "$CFG/nullb/$NB"
+			echo 1 > "$CFG/nullb/$NB/memory_backed"
+			echo 4096 > "$CFG/nullb/$NB/blocksize"
+			echo "${NULLB_MIB:-4096}" > "$CFG/nullb/$NB/size"
+			echo 2 > "$CFG/nullb/$NB/queue_mode"
+			echo 1 > "$CFG/nullb/$NB/power"
+			local nbdev=/dev/$NB
+			[ -b $nbdev ] || { echo "no null_blk device $nbdev" >&2; exit 1; }
+			dmsetup create "$DM" --table "0 $(blockdev --getsz $nbdev) delay $nbdev 0 0 $nbdev 0 0"
+			back=/dev/mapper/$DM
+		fi
+		mkdir "$CFG/nvmet/subsystems/$NQN"
+		echo 1 > "$CFG/nvmet/subsystems/$NQN/attr_allow_any_host"
+		mkdir "$CFG/nvmet/subsystems/$NQN/namespaces/1"
+		echo "$back" > "$CFG/nvmet/subsystems/$NQN/namespaces/1/device_path"
+		echo 1 > "$CFG/nvmet/subsystems/$NQN/namespaces/1/enable"
+		for PORT in $(seq 7 64); do [ -e "$CFG/nvmet/ports/$PORT" ] || break; done
+		mkdir "$CFG/nvmet/ports/$PORT"
+		if [ $STORAGE = sgl ]; then
+			echo tcp > "$CFG/nvmet/ports/$PORT/addr_trtype"
+			echo ipv4 > "$CFG/nvmet/ports/$PORT/addr_adrfam"
+			echo 127.0.0.1 > "$CFG/nvmet/ports/$PORT/addr_traddr"
+			echo "$NVME_TCP_PORT" > "$CFG/nvmet/ports/$PORT/addr_trsvcid"
+			ln -s "$CFG/nvmet/subsystems/$NQN" "$CFG/nvmet/ports/$PORT/subsystems/$NQN"
+			nvme connect -t tcp -a 127.0.0.1 -s "$NVME_TCP_PORT" -n "$NQN" >/dev/null
+		else
+			echo loop > "$CFG/nvmet/ports/$PORT/addr_trtype"
+			# nvme-loop takes the first loop port when no address is given; name ours.
+			echo "$NB" > "$CFG/nvmet/ports/$PORT/addr_traddr"
+			ln -s "$CFG/nvmet/subsystems/$NQN" "$CFG/nvmet/ports/$PORT/subsystems/$NQN"
+			nvme connect -t loop -n "$NQN" --traddr "$NB" >/dev/null
+		fi
+		for _ in $(seq 50); do
+			for c in /sys/class/nvme/nvme*; do
+				[ "$(cat $c/subsysnqn 2>/dev/null)" = "$NQN" ] && dev=/dev/$(basename $c)n1
+			done
+			[ -b "$dev" ] && break; sleep 0.1
+		done
+		[ -b "$dev" ] || { echo "no NVMe namespace for $NQN (STORAGE=$STORAGE)" >&2; exit 1; }
+		blk=$(basename "$dev")
+		what="nvmet port=$PORT backing=$back"
+	fi
+	# The rig is only what it claims to be if the device says so.
+	vbm=$(cat "/sys/block/$blk/queue/virt_boundary_mask")
 	[ "$vbm" = $want ] || { echo "STORAGE=$STORAGE: $dev has virt_boundary_mask $vbm, expected $want" >&2; exit 1; }
-	mkfs.xfs -q -f "$dev"
-	mkdir -p "$EXPORT"
-	mount "$dev" "$EXPORT"
-	chmod 0777 "$EXPORT"
-	exportfs -o rw,sync,no_root_squash,insecure,no_subtree_check,fsid=$FSID "10.77.0.0/24:$EXPORT"
-	echo "rig: storage=$STORAGE virt_boundary_mask=$vbm rx_ip_align=$RX_IP_ALIGN nullb=$nbdev dm=/dev/mapper/$DM nvmet port=$PORT dev=$dev export=$EXPORT"
-	echo "storage=$STORAGE virt_boundary_mask=$vbm rx_ip_align=$RX_IP_ALIGN dev=$dev page_size=$PS kernel=$(uname -r)" > "$E/rig.txt"
+	sgls=$(nvme id-ctrl "/dev/${blk%n*}" 2>/dev/null | awk '$1 == "sgls" {print $3}'); sgls=${sgls:--}
+	if [ -z "$EXPORT_DIR" ]; then
+		mkfs.xfs -q -f ${BACKING:+-K} "$dev"
+		mkdir -p "$EXPORT"
+		mount "$dev" "$EXPORT"
+		chmod 0777 "$EXPORT"
+	fi
+	exportfs -o rw,sync,no_root_squash,insecure,no_subtree_check,fsid=$FSID "$CLNET:$EXPORT"
+	echo "rig: storage=$STORAGE virt_boundary_mask=$vbm sgls=$sgls rx_ip_align=$RX_IP_ALIGN $what dev=$dev export=$EXPORT netdev=$RDEV client=${CLIENT:-netns rxcli} server=$SRVADDR"
+	echo "storage=$STORAGE virt_boundary_mask=$vbm sgls=$sgls rx_ip_align=$RX_IP_ALIGN dev=$dev export=$EXPORT netdev=$RDEV client=${CLIENT:-netns} page_size=$PS kernel=$(uname -r)" > "$E/rig.txt"
 }
 setdelay() {
+	[ -n "$NODELAY" ] && return 0
 	local ms=$1 sz; sz=$(blockdev --getsz /dev/$NB)
 	dmsetup suspend "$DM"
 	dmsetup reload "$DM" --table "0 $sz delay /dev/$NB 0 0 /dev/$NB 0 $ms"
@@ -549,14 +673,44 @@ veth_up() {
 	ip link set dev rxsrv xdp obj "$XDPO" sec xdp.frags
 }
 
+# The server's receiving device for a cell: the veth pair and its client
+# namespace, or the real device as it stands.
+net_up() {	# net_up <region pages>
+	[ -z "$HW" ] && { veth_up "$@"; return; }
+	local cur; cur=$(cat "/sys/class/net/$NETDEV/mtu")
+	[ "$cur" = "${MTU:-$cur}" ] || { echo "$NETDEV is at MTU $cur and the cell wants $MTU: it is not changed here" >&2; return 1; }
+	[ "${QUICKACK:-0}${NOTLP:-0}" = 00 ] || { echo "QUICKACK and NOTLP are not set up on a real device" >&2; return 1; }
+	return 0
+}
+net_down() { [ -z "$HW" ] && veth_down; return 0; }
+# The client: a namespace of this host, or another machine over ssh.  A cell's
+# files are in the same place for a namespace; a remote client keeps its own
+# copy under CLIENT_DIR, sent before the cell and fetched after it.
+cl() {
+	if [ -n "$HW" ]; then $SSH "$CLIENT" "bash -c $(printf %q "$1")"
+	else ip netns exec rxcli bash -c "$1"; fi
+}
+cdir() { if [ -n "$HW" ]; then echo "$CLIENT_DIR/$(basename "$1")"; else echo "$1"; fi; }
+cl_put() {	# cl_put <cell dir>
+	[ -z "$HW" ] && return 0
+	local d; d=$(cdir "$1")
+	tar -C "$1" -cf - . | $SSH "$CLIENT" "rm -rf '$d' && mkdir -p '$d' && tar -C '$d' -xf -"
+}
+cl_get() {	# cl_get <cell dir>
+	[ -z "$HW" ] && return 0
+	$SSH "$CLIENT" "tar -C '$(cdir "$1")' -cf - ." | tar -C "$1" -xf -
+}
+
 # --- measurement helpers (as in David's stress.sh) -------------------------
 reg() { [ -r $RG ] && awk -v k="$1" '$1 == k {print $2}' $RG || echo 0; }
-drops() { ip -s link show rxsrv | awk '/RX:/{getline; print $4}'; }
+drops() { ip -s link show "$RDEV" | awk '/RX:/{getline; print $4}'; }
+# The most of the region in use since the cell's reset; 0 with no region.
+used() { if [ -n "${NOREGION:-}" ]; then echo 0; else echo $(( SIZE - $(reg min_free) )); fi; }
 kv() { awk -v k="$2" '{for (i = 1; i < NF; i += 2) if ($i == k) print $(i + 1)}' <<< "$1"; }
 SRV="TcpExtTCPRcvCollapsed TcpExtRcvPruned TcpExtTCPRcvQDrop TcpExtTCPZeroWindowDrop TcpExtTCPBacklogDrop TcpExtTCPOFODrop TcpExtTCPToZeroWindowAdv TcpExtTCPWantZeroWindowAdv TcpExtDelayedACKs TcpExtDelayedACKLocked TcpExtDelayedACKLost TcpExtTCPDSACKOldSent TcpExtTCPDSACKOfoSent TcpOutSegs TcpInSegs"
 CLI="TcpRetransSegs TcpExtTCPLossProbes TcpExtTCPTimeouts TcpExtTCPFastRetrans TcpExtTCPSlowStartRetrans TcpExtTCPSpuriousRTOs TcpExtTCPDSACKRecv TcpExtTCPDSACKOfoRecv TcpExtTCPLossProbeRecovery TcpExtTCPDSACKUndo TcpExtTCPLossUndo TcpOutSegs"
 ctr() { nstat -saz $2 2>/dev/null | awk 'NR > 1 && $1 !~ /^#/ {print $1, $2}' > "$1"; }
-cctr() { ip netns exec rxcli nstat -saz $2 2>/dev/null | awk 'NR > 1 && $1 !~ /^#/ {print $1, $2}' > "$1"; }
+cctr() { cl "nstat -saz $2" 2>/dev/null | awk 'NR > 1 && $1 !~ /^#/ {print $1, $2}' > "$1"; }
 delta() { join <(sort "$1") <(sort "$2") | awk -v k="$3" '$1 == k {print $3 - $2; f = 1} END {if (!f) print 0}'; }
 
 jobfile() {	# jobfile <dir> <profile> <name>
@@ -608,7 +762,7 @@ iodepth=16
 verify=crc32c
 verify_backlog=64
 do_verify=1
-write_bw_log=$1/bw
+write_bw_log=$(cdir "$1")/bw
 log_avg_msec=500
 J
 	;;
@@ -622,6 +776,9 @@ cell() {
 	# FORCE_RCVBUF=<bytes> every cell's held receive buffer (0: not held).
 	[ -n "${FORCE_DELAY:-}" ] && DELAY=$FORCE_DELAY
 	[ -n "${FORCE_RCVBUF:-}" ] && RCVBUF=$FORCE_RCVBUF
+	# No dm-delay under an existing export or a BACKING: the cell has the
+	# device's own latency, and a step cell is a steady load.
+	[ -n "$NODELAY" ] && { DELAY=0; SPIKE=; }
 	rm -rf "$O"; mkdir -p "$O"
 	echo 0 > $SP/svc_tcp_rx_budget_pages
 	echo "$RESERVE" > $SP/svc_tcp_rx_budget_reserve
@@ -630,16 +787,17 @@ cell() {
 	echo "$BUDGET" > $SP/svc_tcp_rx_budget_pages
 	sysctl -qw net.ipv4.tcp_rmem="${RMEM:-$SAVE_RMEM}"
 	setdelay "$DELAY"
-	MTU=$MTU veth_up "$SIZE"
+	MTU=$MTU net_up "$SIZE" || { echo "$name: skipped"; return 0; }
 	[ -w $RG ] && echo reset > $RG
 	echo "${MODE:-2}" > /sys/kernel/debug/nfsd/io_cache_write
 	jobfile "$O" "$PROF" "$name"
-	local s0 d0 f0 x0 rc w0 w1
+	local s0 d0 f0 x0 rc w0 w1 CO
+	CO=$(cdir "$O"); cl_put "$O"
 	wr_arm; w0=$(wr_hits)
 	s0=$(cat $SP/svc_tcp_rx_budget_stats); d0=$(drops); f0=$(reg alloc_fail); x0=$(reg escaped)
 	ctr "$O/srv0" "$SRV"; cctr "$O/cli0" "$CLI"
 	local stepper=
-	if [ "$PROF" = step ]; then
+	if [ "$PROF" = step ] && [ -n "${SPIKE:-}" ]; then
 		( sleep 40; setdelay "$SPIKE"; sleep 20
 		  ss -tmin state established '( sport = :2049 )' > "$O/ss-spike.txt" 2>&1
 		  nstat -saz TcpExtTCPRcvQDrop TcpExtTCPRcvCollapsed > "$O/nstat-spike.txt" 2>&1
@@ -659,11 +817,12 @@ cell() {
 	fi
 	echo "$(date +%s.%N) $name fio start" >> "$E/delay-steps.txt"
 	set +e
-	ip netns exec rxcli bash -c "
-		mkdir -p /mnt/rxr && mount -t nfs -o vers=$VERS,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 10.77.0.1:$EXPORT /mnt/rxr || exit 90
-		timeout ${TMO:-900} fio --output-format=json --output=$O/fio.json $O/job.fio > $O/fio.out 2>&1
+	cl "
+		mkdir -p /mnt/rxr && mount -t nfs -o vers=$VERS,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 $SRVADDR:$EXPORT /mnt/rxr || exit 90
+		timeout ${TMO:-900} fio --output-format=json --output=$CO/fio.json $CO/job.fio > $CO/fio.out 2>&1
 		rc=\$?; ${KEEPFILES:+: }rm -f /mnt/rxr/f-$name*; umount /mnt/rxr; exit \$rc"
 	rc=$?
+	cl_get "$O"
 	# POSTCELL: a command run here, on the server, with the rig still up
 	# (and the cell's files still on the export if KEEPFILES is set).
 	[ -n "${POSTCELL:-}" ] && O=$O EXPORT=$EXPORT name=$name bash -c "$POSTCELL" || true
@@ -676,9 +835,9 @@ cell() {
 	mbps=$(python3 -c "import json;t=open('$O/fio.json').read();j=json.loads(t[t.index('{'):])['jobs'];print(round(sum(x['write']['bw_bytes'] for x in j)/1e6))" 2>/dev/null || echo 0)
 	for c in admitted denied paused overrun; do eval "$c=\$(( \$(kv \"\$s1\" $c) - \$(kv \"\$s0\" $c) ))"; done
 	w1=$(paste -d- <(wr_hits | tr ' ' '\n') <(echo $w0 | tr ' ' '\n') | while read x; do echo -n "$(( x )) "; done)
-	echo "$name $PROF $VERS $NCONN $MTU $DELAY $BUDGET $RESERVE $FACTOR $RCVBUF $mbps $rc $(( $(drops) - d0 )) $(( $(reg alloc_fail) - f0 )) $(( $(reg escaped) - x0 )) $(( SIZE - $(reg min_free) )) $(delta $O/srv0 $O/srv1 TcpExtTCPRcvCollapsed) $(delta $O/srv0 $O/srv1 TcpExtTCPRcvQDrop) $(delta $O/srv0 $O/srv1 TcpExtTCPZeroWindowDrop) $(delta $O/srv0 $O/srv1 TcpExtTCPBacklogDrop) $(delta $O/cli0 $O/cli1 TcpRetransSegs) $(delta $O/cli0 $O/cli1 TcpExtTCPLossProbes) $(delta $O/cli0 $O/cli1 TcpExtTCPTimeouts) $(delta $O/cli0 $O/cli1 TcpExtTCPDSACKRecv) $admitted $denied $paused $overrun $w1" >> "$E/cells.tsv"
+	echo "$name $PROF $VERS $NCONN $MTU $DELAY $BUDGET $RESERVE $FACTOR $RCVBUF $mbps $rc $(( $(drops) - d0 )) $(( $(reg alloc_fail) - f0 )) $(( $(reg escaped) - x0 )) $(used) $(delta $O/srv0 $O/srv1 TcpExtTCPRcvCollapsed) $(delta $O/srv0 $O/srv1 TcpExtTCPRcvQDrop) $(delta $O/srv0 $O/srv1 TcpExtTCPZeroWindowDrop) $(delta $O/srv0 $O/srv1 TcpExtTCPBacklogDrop) $(delta $O/cli0 $O/cli1 TcpRetransSegs) $(delta $O/cli0 $O/cli1 TcpExtTCPLossProbes) $(delta $O/cli0 $O/cli1 TcpExtTCPTimeouts) $(delta $O/cli0 $O/cli1 TcpExtTCPDSACKRecv) $admitted $denied $paused $overrun $w1" >> "$E/cells.tsv"
 	tail -1 "$E/cells.tsv"
-	veth_down
+	net_down
 	return 0
 }
 # CELLS="name ..." runs only the named cells of a phase (the warm-up still runs).
@@ -733,12 +892,15 @@ xcell() {
 	return 0
 }
 xrun() { ( export "$@"; xcell "$CELL" ) || echo "CELL aborted rc=$? ($*)"; }
-budget() { echo ${FORCE_BUDGET:-$(( SIZE - PARKED - $1 * $2 - 64 ))}; }
+budget() {
+	[ -n "${NOREGION:-}" ] && { echo "${FORCE_BUDGET:-0}"; return; }
+	echo ${FORCE_BUDGET:-$(( SIZE - PARKED - $1 * $2 - 64 ))}
+}
 
 # --- campaign ------------------------------------------------------------
 echo "== kernel $(uname -r); sunrpc $(cat /sys/module/sunrpc/srcversion); nfsd $(cat /sys/module/nfsd/srcversion)"
 geometry | tee "$EV/geometry.txt"
-[ -n "$XDPC" ] && [ -f "$XDPC" ] || { echo "xdp_pass.c not found (XDPC=)" >&2; exit 2; }
+[ -n "$HW" ] || { [ -n "$XDPC" ] && [ -f "$XDPC" ]; } || { echo "xdp_pass.c not found (XDPC=)" >&2; exit 2; }
 sysctl -qw net.core.skb_defer_max=0
 modprobe nfs; echo N > /sys/module/nfs/parameters/localio_enabled
 rig_up > "$E/rig.txt"; cat "$E/rig.txt"
@@ -755,22 +917,39 @@ if [ "$PHASE" = D ]; then
 	export REGDEV=rxsrv,rxsrv2 XDP2=1
 fi
 if [ "$PHASE" = A ] || [ "$PHASE" = TLP ] || [ "$PHASE" = X ] || [ "$PHASE" = D ]; then
+	# A real device's region is whatever was bound to it: this script does
+	# not make one, since that takes the device's pools being made again.
+	if [ -n "$HW" ]; then
+		if [ -n "${NOREGION:-}" ]; then
+			SIZE=0
+		else
+			case ",$(awk '$1 == "dev" {print $2}' $RG 2>/dev/null)," in
+			*,"$NETDEV",*) ;;
+			*) echo "no region is bound to $NETDEV (rx_region_dev $(cat $PP/rx_region_dev), rx_region_pages $(cat $PP/rx_region_pages)):" >&2
+			   echo "set both and have the device make its pools again (XEU_CONVERGENCE.md item 4), or NOREGION=1" >&2; exit 1 ;;
+			esac
+			SIZE=${SIZE:-$(reg pages)}
+		fi
+	fi
 	SIZE=${SIZE:-$REGION_DEFAULT}
 	# Parked pages: what the idle pool keeps after a verified warm-up write.
 	run BUDGET=0 RESERVE=0 FACTOR=$F9 RCVBUF=0 MTU=9000 NCONN=1 PROF=seq VERS=3 DELAY=0 MIB=64 SIZE=$SIZE CELL=warmup
 	wrc=$(tail -1 "$E/cells.tsv" | awk '{print $12}')
 	[ "$wrc" = 0 ] || { echo "warm-up cell failed (fio_rc $wrc); not running the campaign" >&2; exit 1; }
-	MTU=9000 veth_up "$SIZE"
-	ip netns exec rxcli bash -c "mkdir -p /mnt/rxr && mount -t nfs -o vers=3,nolock,proto=tcp,nconnect=16 10.77.0.1:$EXPORT /mnt/rxr && dd if=/dev/zero of=/mnt/rxr/warm bs=1M count=64 oflag=direct status=none && rm /mnt/rxr/warm && umount /mnt/rxr"
+	MTU=9000 net_up "$SIZE"
+	cl "mkdir -p /mnt/rxr && mount -t nfs -o vers=3,nolock,proto=tcp,nconnect=16 $SRVADDR:$EXPORT /mnt/rxr && dd if=/dev/zero of=/mnt/rxr/warm bs=1M count=64 oflag=direct status=none && rm /mnt/rxr/warm && umount /mnt/rxr"
 	sleep 3
-	if [ ! -r $RG ] || [ "$(reg pages)" != "$SIZE" ]; then
+	if [ -n "${NOREGION:-}" ]; then
+		:
+	elif [ ! -r $RG ] || [ "$(reg pages)" != "$SIZE" ]; then
 		echo "no $SIZE-page fixed region (allocation failed or a region of another size exists this boot):" >&2
 		[ -r $RG ] && cat $RG >&2
 		dmesg | grep -i 'rx region' | tail -2 >&2
 		exit 1
 	fi
 	PARKED=$(( SIZE - $(reg free) ))
-	veth_down
+	[ -n "${NOREGION:-}" ] && PARKED=0
+	net_down
 	echo "$PARKED" > "$EV/parked.txt"; echo "parked=$PARKED region=$SIZE"
 	export SIZE PARKED
 	base="MTU=9000 FACTOR=$F9 VERS=3 DELAY=1"
