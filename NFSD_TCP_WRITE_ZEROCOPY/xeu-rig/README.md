@@ -38,20 +38,47 @@ drop, on each storage.
 1. `getconf PAGESIZE` is 16384 and `uname -r` ends `+16k`.
 2. `cat /sys/module/xeu/parameters/rx_ip_align` is 2
    (`/etc/modprobe.d` has `options xeu rx_ip_align=2`).
-3. **Is the driver's retry patch in?** `grep xeu_rx_refill_timer
-   /proc/kallsyms`, and `rpm -q kmod-16k-xsight` (2.0.1-4 carries it).
-   The patch is `kernel-rpmtree` commit `f61ea4c` (not pushed). It was
-   tested at 64 KiB on 2026-10-08 and works: four dry regions of four
-   left every ring receiving (`XEU_CONVERGENCE.md` 5c). Without it a
-   ring that runs empty stays empty until the port is taken down and
-   up; the scripts here bounce the port when the region runs dry and
-   the patch is absent. **If the 16 KiB kmod lacks it, say so to Mike
-   before the long sweep: it can be built on the host as the 64 KiB
-   one was** (`rpmbuild` with `--with kernel16k` and the macros
-   `kversion`, `kvermaj 7.1`, `kmodver 2.0.1`, against the installed
-   `kernel-16k-devel`; `/var/tmp/zc-run-logs/kmod-xsight-64k-build`
-   shows the tree), **but loading it means reloading `xeu`, which
-   needs his leave each time.**
+3. **Is the driver's retry patch in?** `grep -c xeu_rx_refill_timer
+   /proc/kallsyms` (1 is yes) and `rpm -q kmod-16k-xsight` (release 4
+   carries it). The patch is `kernel-rpmtree` commit `f61ea4c` (not
+   pushed); it was tested at 64 KiB on 2026-10-08 and works
+   (`XEU_CONVERGENCE.md` 5c). **Mike expects it to be missing from the
+   16 KiB kmod and wants release 4 rebuilt against the 16 KiB kernel by
+   the same method (2026-10-08). Do this before `bringup.sh`:** with no
+   region bound yet, the reload needs no care about the rings.
+
+   1. `./build-kmod.sh` builds `kmod-16k-xsight` 2.0.1-4 for the
+      running kernel from the `kernel-rpmtree` spec and patches, into
+      `/var/tmp/zc-run-logs/kmod-xsight-16k-build`, and checks the
+      result: the vermagic must be the running kernel's and "retry
+      patch in xeu.ko" must be 1. It installs and loads nothing. About
+      two minutes. It needs `kernel-16k-devel` and
+      `kernel-16k-modules-core` of the running kernel; if either is
+      missing, say so to Mike.
+   2. Installing it and reloading `xeu` takes `enp164s0f0` down for a
+      few seconds and drops the other client's connections, so **it
+      needs Mike's leave, and the session's permissions may refuse it
+      even then** (they did at 64 KiB until he gave the commands
+      himself). Give him these to approve or to run, each as its own
+      prompt starting with `!`:
+
+          ! rpm -Uvh /var/tmp/zc-run-logs/kmod-xsight-16k-build/RPMS/aarch64/kmod-16k-xsight-2.0.1_*-4.el9.aarch64.rpm
+          ! rmmod xeu && modprobe xeu
+
+      `rpm -U` removes every other installed `kmod-16k-xsight`, since
+      they share a name (at 64 KiB it took the kmods of builds 454 and
+      455 with it). If a region is already bound, first
+      `echo none > /sys/module/page_pool/parameters/rx_region_dev`: a
+      fresh load gives the port 8 rings of 1024.
+   3. Afterwards: `grep -c xeu_rx_refill_timer /proc/kallsyms` is 1,
+      `rx_ip_align` is 2, both ports have their addresses, and
+      192.168.0.105's connections are back
+      (`ss -tn state established '( sport = :2049 )'`).
+
+   Without the patch a ring that runs empty stays empty until the port
+   is taken down and up; the scripts here bounce the port when the
+   region runs dry and the patch is absent, so the sweep can run
+   either way, but say which it was.
 4. Nothing has made a region: `/sys/kernel/debug/page_pool_rx_region`
    does not exist. **Run nothing on veth this boot** (the veth harness
    would make the region for `rxsrv`).
@@ -160,8 +187,8 @@ level rates and the misses change with that is what the plans show.
 
 ## Where things are
 
-- `common.sh`, `bringup.sh`, `ringsize.sh`, `sweep.sh`, `summarize.py`,
-  `plans/`: this directory. `rcv.py` and `snd.py` are `ringsize.sh`'s
+- `common.sh`, `build-kmod.sh`, `bringup.sh`, `ringsize.sh`, `sweep.sh`,
+  `summarize.py`, `plans/`: this directory. `rcv.py` and `snd.py` are `ringsize.sh`'s
   sender and receiver (only the server's receive buffer is set).
   `credit.bt` is the admission trace.
 - `../run-budget.sh`: the harness (`NETDEV=`, `CLIENT=`, `STORAGE=`,
