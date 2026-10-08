@@ -83,21 +83,27 @@ The cells stay the ones compared so far: `seq-sized`, `mixed-sized`,
 `step` with one and sixteen connections, each as `-copy` (budget 0) and
 `-on` (budget set), with the receive buffer held in both.
 
-## 4. Decisions for Mike
+## 4. Decisions
 
-1. **Taking a port down.** Binding the region needs a boot with
-   `rx_region_dev` naming the port; shrinking the rings is an
-   `ethtool -G` / `-L` on it. Both drop the mounts 192.168.0.105 holds.
-   Is that client ours to interrupt, and may it be the load generator
-   (`ssh` access from tardis1 is needed)? Which port: `enp164s0f0` is
-   the one with connections today.
-2. **Which local NVMe.** Test files in a new directory on one
-   `/hs/nvmeN` (which one), with no mkfs, or a drive given over and
-   reformatted?
-3. **What backs the NVMe/TCP target.** null_blk, as on veth (covers
-   SGLs, touches no second drive, timing is memory's), or a second
-   local drive?
-4. **The share of the L3 on this card.** Half (256 pages) is the share
+Answered by Mike on 2026-10-07:
+
+1. **The client and the ports.** 192.168.0.105 is the load generator;
+   its `ssh` credentials are still to come. The second 400G port
+   reaches the same client at 192.168.1.105. Another client can be
+   added later; first see how far one goes.
+2. **The local NVMe.** `/hs/nvme0` (and `/dev/nvme0n1`): test files in
+   a directory of it, no mkfs.
+3. **The NVMe/TCP target's backing.** `/hs/nvme1` may be used. The
+   harness puts a 4 GiB file there (`BACKING=`), so NVMe/TCP is in
+   front of a real drive and nothing is reformatted. The raw
+   `/dev/nvme1n1` is not touched.
+
+Still open:
+
+4. **Taking a port down** to bind the region and shrink the rings
+   (work item 4): not yet said in so many words, and it waits for the
+   client's credentials in any case.
+5. **The share of the L3 on this card.** Half (256 pages) is the share
    picked for veth. With the rings inside the region it may leave room
    for one or two WRITEs; decide once work item 5 has the numbers.
 
@@ -105,22 +111,29 @@ The cells stay the ones compared so far: `seq-sized`, `mixed-sized`,
 
 In order. Items 1 to 3 need no decision and no change to the card.
 
-1. **Harness: a real device and a remote client.** `run-budget.sh`
-   builds a veth pair, a namespace and an XDP program. Add a mode that
-   takes `REGDEV=<port>`, `CLIENT=<host>` (commands by `ssh`, fio's
-   JSON and bandwidth log copied back) and the server address the
-   client mounts, and skips the veth, namespace and XDP setup. The
-   counters read on the client (`nstat`, `ss`) move with it.
-2. **Harness: an existing export.** A mode that takes `EXPORT=<dir>` on
-   a mounted file system in place of making null_blk, nvme-loop and
-   XFS: no mkfs, the files removed at the end, the storage delay
-   skipped. `rig.txt` records the device, its `virt_boundary_mask` and
-   `sgls`.
-3. **Harness: the region's sum for a hardware ring.** `budget()` takes
-   `SIZE - PARKED - conns x rcvbuf pages - 64`. `PARKED` is read after
-   a warm-up, which on a ring should give rings x entries; check that
-   it does, and take the receive buffer's pages from `xeu`'s one page
-   per frame. `FORCE_BUDGET=` already exists.
+1. **Harness: a real device and a remote client. Done 2026-10-07,
+   not yet run against a real client.** `run-budget.sh` takes
+   `NETDEV=<port> CLIENT=<[user@]host>`: no veth, namespace or XDP, the
+   client driven over `ssh`, its fio output and bandwidth log fetched
+   back, its counters read there. The port's MTU, rings and module
+   parameters are never changed; a cell that wants another MTU is
+   skipped. Checked with a stand-in for `ssh` that runs the commands on
+   tardis1 (`NOREGION=1`, traffic over loopback): the plumbing works
+   and nothing on the port changed.
+2. **Harness: an existing export. Done and run.** `EXPORT_DIR=<dir>`
+   exports a directory of a mounted file system: no mkfs, only the
+   cells' own files, the directory removed after if the script made
+   it, a mount point refused. `BACKING=<file or device>` puts the NVMe
+   target in front of that in place of null_blk. Neither has dm-delay,
+   so cells run with the device's own latency and the step cells are a
+   steady 120 s load. `rig.txt` records the device, its
+   `virt_boundary_mask` and `sgls`.
+3. **Harness: the region's sum for a hardware ring. Done, provisional.**
+   `FRAME_PAGE=1` (the default when `NETDEV` is an `xeu` port) derives
+   the geometry for one frame per page: credit factor 740, a 1 MiB
+   record costing 120 pages, 3 pages for a 128 KiB held buffer and 5
+   for 256 KiB. These are from the arithmetic of section 2 and are what
+   work item 5 checks. `PARKED` is still read after the warm-up.
 4. **Bring-up on one port** (decision 1). Stage the deadman switch of
    `xeu-hds-experiment/TESTING.md` section 0. Set `num_rings` and the
    ring size, boot with `page_pool.rx_region_dev=<port>` and
@@ -146,7 +159,45 @@ In order. Items 1 to 3 need no decision and no change to the card.
    per run, the account in `transplant/README.md` and `RESULTS.md`, and
    the artifact when Mike asks.
 
-## 6. What this does not cover
+## 6. The real drives behind veth (2026-10-07)
+
+The two storage modes were run with the veth client, on this boot's
+1180-page region with credit factor 350, so the storage is real and the
+network is not. No storage delay; MB/s, copy / loan; all fio rc 0, no
+drops. `/var/tmp/zc-run-logs/harness-modes/`.
+
+| pair | needs whole pages: `EXPORT_DIR=/hs/nvme0/zcbudget` | takes arbitrary pieces: NVMe/TCP, `BACKING` a file on `/hs/nvme1` |
+|---|---|---|
+| `seq-sized`, 1 connection | 1851 / 1754 | 1851 / 1726 |
+| `mixed-sized`, 16 connections | 1884 / 1385 | 1729 / 2130 |
+| `step-n16` (steady, 16 connections, 1 MiB) | 2231 / 2029 | 2156 / 2174 |
+| how the loan was written | every one through the page cache (DONTCACHE) | every one direct |
+| most of the region in use, copy / loan | 4 to 12 / 316 to 428 pages | 4 to 12 / 316 to 432 pages |
+
+- On the drive that needs whole pages a loan is slower than its copy
+  in all three pairs (95%, 74%, 91%); the copy is written direct.
+- On NVMe/TCP every loan is written direct and is level with its copy
+  or ahead with sixteen connections (123%, 101%), behind with one
+  (93%).
+- Each cell is one run, and the 1 ms veth cell has been seen to vary by
+  a fifth between runs, so the single figures are not findings yet.
+- A first run with the backing file made sparse was slow in its first
+  cells (the copy at 432 MB/s): mkfs discarded the file and the cells
+  paid for allocating it. The file is now written through once and
+  mkfs told not to discard.
+
+**To run on the card** once the client has `ssh` keys and a region is
+bound to the port (work item 4):
+
+    NETDEV=enp164s0f0 CLIENT=root@192.168.0.105 STORAGE=prp \
+        EXPORT_DIR=/hs/nvme0/zcbudget ./run-budget.sh <outdir>
+    NETDEV=enp164s0f0 CLIENT=root@192.168.0.105 STORAGE=sgl \
+        BACKING=/hs/nvme1/zcbudget-nvmet.img ./run-budget.sh <outdir>
+
+`NOREGION=1` runs the same before a region is bound, to check the
+plumbing; its loan cells have a budget of 0 and so copy.
+
+## 7. What this does not cover
 
 - Whether the region stays in the CPU's cache, and what a copy costs
   once the data has left it: `on-die-receive-copy/SPEC.md` section 6,
