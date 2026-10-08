@@ -94,6 +94,17 @@ minutes, the scripts and plans that run it, and what went wrong at
 only `enp161s0f0`, load only to the harness's own mount, `xeu` never
 reloaded. Run nothing on veth on a boot that is to use the card.
 
+**The primary focus from the evening of 2026-10-08 (Mike): NFS writes
+from the remote client as fast as they will go, near line rate.** Start
+at the "Hero" section of
+[`NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`](NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md):
+what there is to reach for (the wire carries 48 GB/s, one drive takes
+11.2), the brakes known to be on, the ladder
+(`xeu-rig/plans/16k-7-hero.plan`) and where to look next. The 16 KiB
+sizing results are its "16K" section. The step cell's verifying fio job
+limits every cell near 2.3 GB/s; use `STEP_JOBS` for anything about
+rate.
+
 **Moving to another test host** (the 4K host, the 16K host, tardis1 at 64K): start with
 [`NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md)
 -- bootstrap, config merge, build/install, preflight, the resumable test plan
