@@ -299,6 +299,27 @@ arrives on `xemi0`, which `xeu` does not drive.
   cell with two WRITEs in flight at the denials, and 54 in the traced
   run.
 
+- **The same pair on NVMe/TCP** (`STORAGE=sgl`,
+  `BACKING=/hs/nvme1/zcbudget-nvmet.img`, `virt_boundary_mask` 0;
+  `/var/tmp/zc-run-logs/xeu-geometry-4x256-sgl`), the first of work
+  item 7:
+
+  | cell | budget | MB/s | used_pages | admitted | denied | paused | overrun | written |
+  |---|---|---|---|---|---|---|---|---|
+  | seq-sized-copy | 0 | 1220 | 1636 | 0 | 0 | 0 | 0 | 512 direct |
+  | seq-sized-on | 343 | 619 | 1640 | 512 | 511 | 0 | 0 | 512 direct |
+
+  Every loan was written direct, and the loan cell ran at half its
+  copy. All but one WRITE was denied once before it was admitted. The
+  budget the harness derived was 343, where it was 462 for the PRP
+  pair, because `parked` had risen to 1636; at 127 a WRITE and a
+  reserve of 120 that is one WRITE in flight and sometimes two. That
+  the budget is what halves the rate is the likely reading and is not
+  shown: `FORCE_BUDGET=` on this region, or a larger region on the
+  next boot, would show it. `fio_rc` 0, no retransmits, no tail drops,
+  `alloc_fail` unchanged. The backing file was removed; the `nvmet`
+  and `nvme-tcp` modules stay loaded.
+
 Next: the measure of what one WRITE holds (the rest of work item 5),
 then the ring size for the NFS cells, then decision 5 with those
 numbers.
