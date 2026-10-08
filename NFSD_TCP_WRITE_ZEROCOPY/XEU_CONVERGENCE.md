@@ -274,16 +274,23 @@ What follows from one frame having a 64 KiB page to itself:
    on the local NVMe (880 against 771 MB/s, 120 s, one run each). At a
    budget of one WRITE the loan is slower than its copy (5c).
 10. **Sixteen connections on a budget of one WRITE collapse** to a
-    WRITE every 40 to 90 s when untraced (4 runs of 4), through TCP
-    backoff on the client and not through the budget's accounting
+    WRITE every 40 to 90 s when untraced (9 runs of 9, on both
+    storages and both ring sizes, the cell alone included), through
+    TCP backoff on the client and not through the budget's accounting
     (5d). With the trace attached the same cell runs at 315 MB/s
     (6 runs of 6), against 1977 for its copy.
-11. **Not obtained:** a sixteen-connection loan at a budget of several
-    WRITEs, an NVMe/TCP loan at a budget with room, a larger held
-    buffer, the cell alone and untraced. The region has no room for
-    the first two at 4 x 256; runs of all four were queued and never
-    started (a fault in the queueing, nothing ran and nothing was
-    left behind).
+11. **Either a larger held buffer or a budget of several WRITEs ends
+    the collapse, and both together bring sixteen connections' loans
+    to their copy** (5e): 576 MB/s with a 256 KiB buffer alone, 1241
+    to 1539 with a budget of four to six WRITEs alone, 1779 to 2309
+    with both, against 2090 to 2286 for the copy cells. None of it
+    fits in half of the L3: the best cells peak at 1500 of the 2048
+    pages with rings of 4 x 128.
+12. **Rings of 4 x 128 did not drop** in any NFS cell (5e), where
+    iperf3 at 41 Gbit/s on one stream dropped 0.1% (5b).
+13. **Not obtained:** a copy cell at a 512 KiB buffer to set the
+    512 KiB loans against, and repeats: every figure in 5e is one
+    run.
 
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
@@ -534,12 +541,77 @@ connection is admitted its sender sleeps for up to 100 s, the WRITE
 holds the whole budget until then, and the others back off further.
 
 It is the three together: a buffer of two frames, a budget of one
-WRITE, many connections. A larger held buffer and a budget of several
-WRITEs are the two things to try and neither has been run.
+WRITE, many connections. Section 5e takes each away in turn.
+
+## 5e. The held buffer and the budget, varied (2026-10-07 and 08)
+
+One sequential queue, untraced, every cell 120 s and one run
+(`/var/tmp/zc-run-logs/xeu-queue.log`, directories `xeu-q-*`). No
+`alloc_fail`, no overrun, no tail drop on any ring and no ring stopped
+in any of it; `paused` was 0 but for three cells (1, 10, 10). The
+rings went to 4 x 128 for the budgets beyond one WRITE, which do not
+fit at 4 x 256, and were put back after. At 4 x 128 the region has
+about 1160 pages free at idle: 512 posted and about 375 kept by the
+pools.
+
+**`step-on-n16` alone after the warm-up, untraced, budget 250, 128 KiB
+buffer, 4 x 256, local NVMe:** three runs, all stalled (38, 37 and 27
+WRITEs admitted). The cell before it is not needed; it is the trace
+that hid the stall.
+
+**Sixteen connections, loans** (`step-on-n16`), MB/s:
+
+| rings | storage | buffer | budget 250 | budget 630 | budget 880 |
+|---|---|---|---|---|---|
+| 4 x 256 | local NVMe | 128 KiB | 0 (stall) | | |
+| 4 x 256 | local NVMe | 256 KiB | 576 | | |
+| 4 x 128 | local NVMe | 128 KiB | 0 (stall) | 1241 | 1395 |
+| 4 x 128 | local NVMe | 256 KiB | | 1796 | 1985 |
+| 4 x 128 | local NVMe | 512 KiB | | 1989 | 1979 |
+| 4 x 128 | NVMe/TCP | 128 KiB | 0 (stall) | 1270 | 1539 |
+| 4 x 128 | NVMe/TCP | 256 KiB | | 1779 | 1939 |
+| 4 x 128 | NVMe/TCP | 512 KiB | | 2044 | 2309 |
+
+**Sixteen connections, copies** (`step-copy-n16`, budget 0): 2286 at
+256 KiB on 4 x 256 (local NVMe); 2090 (local NVMe) and 2225 (NVMe/TCP)
+at 128 KiB on 4 x 128; 1977 and 2058 at 128 KiB on 4 x 256 (5c). No
+copy was run at 512 KiB.
+
+**One connection, loans** (`step-on`), MB/s, 4 x 128 unless said:
+
+| storage | buffer | budget 250 | budget 630 | budget 880 |
+|---|---|---|---|---|
+| local NVMe | 256 KiB | 568 (649 at 4 x 256) | 869, 889 | 803, 878 |
+| local NVMe | 512 KiB | | 1536 | 1444 |
+| NVMe/TCP | 256 KiB | 551 | 798, 796 | 856, 810 |
+| NVMe/TCP | 512 KiB | | 1406 | 1420 |
+
+What it shows:
+
+- **The stall needs both a two-frame buffer and a budget of one
+  WRITE.** A 256 KiB buffer at a budget of 250 runs (576 MB/s, no
+  zero-window drop, no timeout); a budget of 630 or 880 at 128 KiB
+  runs (a few zero-window drops and 5 to 9 timeouts per cell, against
+  58 to 99 and 21 to 25 in a stalled one).
+- **Sixteen connections reach their copy only with both.** At a budget
+  of 880 and a 512 KiB buffer the loans ran at 1979 (local NVMe) and
+  2309 (NVMe/TCP); the copies at smaller buffers ran at 2090 to 2286.
+  Whether a loan beats its copy at the same buffer is not shown.
+- **One connection follows the held buffer**, as the baseline of 5c
+  said it would: about 800 to 890 MB/s at 256 KiB whatever the budget
+  beyond one WRITE, 1400 to 1540 at 512 KiB.
+- **The denials stay high where it runs well** (260000 to 350000 a
+  cell at sixteen connections): admission is being used all the time,
+  and it holds.
+- **What it costs in pages.** The best cells peak at about 1500 to
+  1535 pages in use of 2048 (`used_pages`), with 512 posted. That is
+  three times the whole L3.
+- Three larger-buffer runs at 4 x 256 were skipped for want of pages
+  (404 free at idle): 512 KiB on the local NVMe, 256 and 512 KiB on
+  NVMe/TCP.
 
 Next: the page size (Mike, 2026-10-07: 16 KiB and 4 KiB are open for
-this platform); on 64 KiB, the untested runs of finding 11, which need
-smaller rings or a larger region.
+this platform); a copy cell at 512 KiB and repeats of the cells above.
 
 ## 6. The real drives behind veth (2026-10-07)
 
