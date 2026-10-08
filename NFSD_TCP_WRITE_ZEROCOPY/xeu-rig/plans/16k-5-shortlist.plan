@@ -1,0 +1,15 @@
+# The shortlist after the core, ring and 4 x 64 sweeps, for repeats: run it
+# into a new outdir each time and give summarize.py all of them.  256 KiB
+# buffer.  4 x 64 at three and four WRITEs (about half of the L3), then
+# 4 x 128 at four (the first setting that was level on both storages).
+# About 52 minutes.
+64 262144 0 prp step-copy step-copy-n16
+64 262144 3 prp step-on step-on-n16
+64 262144 4 prp step-on step-on-n16
+64 262144 0 sgl step-copy step-copy-n16
+64 262144 3 sgl step-on step-on-n16
+64 262144 4 sgl step-on step-on-n16
+128 262144 0 prp step-copy step-copy-n16
+128 262144 4 prp step-on step-on-n16
+128 262144 0 sgl step-copy step-copy-n16
+128 262144 4 sgl step-on step-on-n16

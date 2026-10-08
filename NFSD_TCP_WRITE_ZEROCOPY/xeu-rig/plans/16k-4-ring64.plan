@@ -1,0 +1,12 @@
+# Rings of 4 x 64, 256 KiB buffer: the budgets between the two WRITEs that
+# fit in half of the L3 and the eight that were level (16k-2-rings.plan).
+# Mike, 2026-10-08: ring drops of the order of 0.03% of frames are
+# acceptable where the rate is level with the copy.  About 35 minutes.
+64 262144 3 prp step-on step-on-n16
+64 262144 3 sgl step-on step-on-n16
+64 262144 4 prp step-on
+64 262144 4 sgl step-on
+64 262144 6 prp step-on-n16
+64 262144 6 sgl step-on-n16
+64 262144 0 prp step-copy step-copy-n16
+64 262144 0 sgl step-copy step-copy-n16
