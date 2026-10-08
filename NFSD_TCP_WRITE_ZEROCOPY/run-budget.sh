@@ -923,8 +923,12 @@ if [ "$PHASE" = A ] || [ "$PHASE" = TLP ] || [ "$PHASE" = X ] || [ "$PHASE" = D 
 		if [ -n "${NOREGION:-}" ]; then
 			SIZE=0
 		else
+			# The region matches a device with a parent (a PCI
+			# function, say) by the parent's name, not the
+			# interface's.
+			REGNAME=$(basename "$(readlink -f /sys/class/net/$NETDEV/device 2>/dev/null)")
 			case ",$(awk '$1 == "dev" {print $2}' $RG 2>/dev/null)," in
-			*,"$NETDEV",*) ;;
+			*,"$NETDEV",*|*,"${REGNAME:-$NETDEV}",*) ;;
 			*) echo "no region is bound to $NETDEV (rx_region_dev $(cat $PP/rx_region_dev), rx_region_pages $(cat $PP/rx_region_pages)):" >&2
 			   echo "set both and have the device make its pools again (XEU_CONVERGENCE.md item 4), or NOREGION=1" >&2; exit 1 ;;
 			esac

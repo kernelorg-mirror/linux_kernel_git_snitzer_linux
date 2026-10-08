@@ -198,8 +198,8 @@ a ring change alone makes the pools again.
 3. `ethtool -L enp161s0f0 combined 4` and `ethtool -G enp161s0f0 rx 64`
    (256 posted pages). If the driver refuses with the port down, do it
    after step 5 and then take the port down and up once more.
-4. `echo enp161s0f0 > /sys/module/page_pool/parameters/rx_region_dev`
-   and `echo 2048 > /sys/module/page_pool/parameters/rx_region_pages`.
+4. `echo 0000:a1:00.0 > /sys/module/page_pool/parameters/rx_region_dev`
+   (the port's PCI function, not `enp161s0f0`: see 5b) and `echo 2048 > /sys/module/page_pool/parameters/rx_region_pages`.
    2048 pages (128 MiB) is for measuring, not the bound: room for rings
    up to 8 x 128 and a budget of several 120-page WRITEs. One boot has
    one region size.
@@ -226,6 +226,82 @@ a ring change alone makes the pools again.
 
 To put the port back: `ethtool -L enp161s0f0 combined 8`,
 `ethtool -G enp161s0f0 rx 1024`; a reboot clears the region.
+
+## 5b. What the bring-up found (2026-10-07, after the reboot)
+
+Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
+the region is **2048 pages bound to `0000:a1:00.0`**, and `enp164s0f0`
+was not touched. A deadman that restored only `enp161s0f0` was staged
+for the changes and cancelled once the port answered; the session
+arrives on `xemi0`, which `xeu` does not drive.
+
+- **The region is named by the parent device.** A pool whose netdev has
+  a parent matches `rx_region_dev` against the parent's name
+  (`page_pool_rx_region_get()`), so the name is `0000:a1:00.0`
+  (`readlink /sys/class/net/enp161s0f0/device`). With `enp161s0f0`
+  written there the port came up with new pools and no region.
+  `run-budget.sh` now accepts either name for `NETDEV`.
+- **What the driver allows.** `ethtool -L` works with the port down.
+  `ethtool -G` is refused with the port down ("requested ring size
+  exceeds maximum") and works with it up. Either a down and up or a
+  ring change with the port up makes the pools again, so the ring can
+  be changed in place under a bound region.
+- **`alloc_fail` is not zero this boot** and the harness reports its
+  change per cell, so that does not matter: 2 from the first up at
+  4 x 1024 (4096 posted against 2048), 1 from a ring change, and
+  1336988 from the sixteen-stream iperf3 run at 4 x 256 below.
+- **iperf3 from the client** to 192.168.1.211, 20 s, MSS 8948, 2048-page
+  region; drops are `rx_hw_tail_drop_packets`, the pages in use are
+  2048 less `min_free`:
+
+  | rings x entries | streams | Gbit/s | tail drops | pages in use at peak |
+  |---|---|---|---|---|
+  | 4 x 64 | 1 | 41.7 | 115191 (1.0%) | 754 |
+  | 4 x 64 | 16 | 45.2 | 231 | 1739 |
+  | 4 x 128 | 1 | 41.3 | 12349 (0.1%) | 1034 |
+  | 4 x 128 | 16 | 49.8 | 0 | 1993 |
+  | 4 x 256 | 1 | 49.0 | 0 | 1262 |
+  | 4 x 256 | 16 | 40.9 | 0 | 2048, and 1336988 `alloc_fail` |
+
+  The smallest ring that does not drop is 256 for one stream and 128
+  for sixteen. 4 x 256 is 1024 posted pages, twice the whole L3, so
+  the share of decision 5 cannot hold the rings at a size that does
+  not drop under this load. iperf3 at 40 to 50 Gbit/s with autotuned
+  receive buffers is harder than the NFS cells; whether a 64-entry
+  ring drops under those is not measured.
+- **Pages stay with the pools at idle.** After the runs at 4 x 256,
+  with iperf3 stopped, `free` was 531: 1024 posted and 493 more held
+  by the pools (`pool_size` is the ring size, so each pool's own ring
+  can keep up to 256, and its cache more). The harness read
+  `parked=1517` after its first warm-up and 1628 in the next run: on
+  this card "parked" is the posted pages plus what the pools keep, and
+  it moves between runs.
+- **The cells** (`STORAGE=prp`, `/hs/nvme0/zcbudget`, one connection,
+  1 MiB WRITEs, 256 KiB held buffer; `/var/tmp/zc-run-logs/xeu-geometry-4x256`):
+
+  | cell | budget | MB/s | drops | used_pages | admitted | denied | paused | overrun | written |
+  |---|---|---|---|---|---|---|---|---|---|
+  | seq-sized-copy | 0 | 1196 | 0 | 1517 | 0 | 0 | 0 | 0 | 512 direct |
+  | seq-sized-on | 462 | 929 | 0 | 1647 | 512 | 135 | 0 | 0 | 512 dontcache |
+
+  The `drops` column of `cells.tsv` reads 2 or 3 for every cell,
+  warm-up included: it is the interface's `dropped`, not the ring's
+  tail drops, and is not from the load. With a region bound the copy
+  cell is written direct (it was not in section 6). Data verified,
+  `fio_rc` 0, no retransmits.
+- **The credit factor is bounded, not measured.** The trace
+  (`xeu-geometry-4x256-trace.bt/credit.log`, 512 WRITEs) has every
+  WRITE admitted with credit 127 and released with credit 127, `over`
+  0, and no PAUSE. 127 is the estimate at factor 740, so one WRITE
+  holds no more than that; how many pages it does hold is still to be
+  measured (lower the factor until charges pause, or trace `need` in
+  `svc_tcp_rx_credit_charge`). `used_pages` rose 130 over the copy
+  cell with two WRITEs in flight at the denials, and 54 in the traced
+  run.
+
+Next: the measure of what one WRITE holds (the rest of work item 5),
+then the ring size for the NFS cells, then decision 5 with those
+numbers.
 
 ## 6. The real drives behind veth (2026-10-07)
 
