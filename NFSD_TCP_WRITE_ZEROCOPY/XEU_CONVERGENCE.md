@@ -176,6 +176,57 @@ In order. Items 1 to 3 need no decision and no change to the card.
    per run, the account in `transplant/README.md` and `RESULTS.md`, and
    the artifact when Mike asks.
 
+## 5a. Bring-up after the reboot of 2026-10-07 (work item 4): START HERE
+
+Mike said yes to `enp161s0f0` (rings and region) and rebooted tardis1
+for it. `enp164s0f0` is left alone: 192.168.0.105's connections are on
+it. Nothing below has been run; each step says what to check.
+
+The region is made at the first pool that matches, once per boot, and
+`page_pool` is built in, so its parameters can be written after boot.
+`xeu` is loaded from `/etc/modules-load.d`, so its pools exist by then;
+they must be made again with the parameters set. Unknown until tried:
+whether `xeu` lets the rings be changed with the port down, and whether
+a ring change alone makes the pools again.
+
+1. Check first: `cat /sys/kernel/debug/page_pool_rx_region` must not
+   exist (no region yet this boot); `rx_ip_align` reads 2; the client
+   answers (`ssh -i /root/.ssh/id_ed25519_snitzer2 root@192.168.1.106`).
+   Run nothing on veth before this: the veth harness would make the
+   region for `rxsrv`.
+2. `ip link set enp161s0f0 down`
+3. `ethtool -L enp161s0f0 combined 4` and `ethtool -G enp161s0f0 rx 64`
+   (256 posted pages). If the driver refuses with the port down, do it
+   after step 5 and then take the port down and up once more.
+4. `echo enp161s0f0 > /sys/module/page_pool/parameters/rx_region_dev`
+   and `echo 2048 > /sys/module/page_pool/parameters/rx_region_pages`.
+   2048 pages (128 MiB) is for measuring, not the bound: room for rings
+   up to 8 x 128 and a budget of several 120-page WRITEs. One boot has
+   one region size.
+5. `ip link set enp161s0f0 up`; then `page_pool_rx_region` must show
+   `dev enp161s0f0`, `pages 2048`, `alloc_fail 0`, and `free` lower by
+   about the posted pages. `dmesg | grep 'rx region'`.
+6. From the client, `iperf3` to 192.168.1.211 (start `iperf3 -s` on
+   tardis1 bound to that address): drops (`ip -s link`, `ethtool -S`),
+   `alloc_fail`, `escaped`. This is traffic to tardis1 itself, not to a
+   mount. If it drops, lengthen the ring (128) before adding rings.
+7. Then work item 5 with the harness, which needs no `NOREGION` now:
+
+       export SSH_OPTS="-i /root/.ssh/id_ed25519_snitzer2"
+       NETDEV=enp161s0f0 CLIENT=root@192.168.1.106 STORAGE=prp \
+           EXPORT_DIR=/hs/nvme0/zcbudget \
+           CELLS="seq-sized-copy seq-sized-on" ./run-budget.sh <outdir>
+
+   Read `parked`, `used_pages`, `paused`, `overrun`, drops, and whether
+   the copy cell is now written direct (it was not with no region,
+   section 6). Trace one loan cell with
+   `/var/tmp/zc-run-logs/credit-factor-1180/credit.bt` for the credit a
+   1 MiB WRITE holds at release: that is the factor for this card (740
+   is the arithmetic).
+
+To put the port back: `ethtool -L enp161s0f0 combined 8`,
+`ethtool -G enp161s0f0 rx 1024`; a reboot clears the region.
+
 ## 6. The real drives behind veth (2026-10-07)
 
 The two storage modes were run with the veth client, on this boot's
