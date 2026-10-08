@@ -7,12 +7,14 @@ Direction for AI agents (and humans) working in this tree on the branches
 ## Branch workflow
 
 - **`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`** carries the series on the
-  public `kernel-7.1.13/main`, rebased 2026-10-06 onto **`v7.1.13-20`** (the
+  public `kernel-7.1.13/main`, rebased 2026-10-07 onto **`v7.1.13-21`** (the
   whole series, laid out as code, then KUnit preparation, then KUnit
-  tests, then docs; `v7.1.13-20` itself carries the write split's cut at
-  page boundaries, the page-counted split gate
-  `direct_misaligned_min_pages` and the `nfs_dio_iter_aligned()` skip
-  fix, so the branch no longer has commits for those). The write
+  tests, then docs; `v7.1.13-21` itself carries the write split's cut
+  per end, the byte-counted split gate `direct_misaligned_min_bytes`,
+  LOCALIO's completion of a direct write that shares a page and the
+  `nfs_dio_iter_aligned()` skip fix, so the branch no longer has commits
+  for those; the tip before that rebase is kept as
+  `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY.pre-rebase-v7.1.13-21`). The write
   split lives in `fs/nfs_common/nfs_dio.c` (`nfs_dio_split()`, shared with
   NFS LOCALIO), so the immutable-bvec and gate commits change that file, not
   `fs/nfsd/vfs.c`; see `../NFS_LOCALIO_DONTCACHE/`. The `v7.1.13-12` version
