@@ -78,6 +78,11 @@ first** (and `tardis1-boot1-testing.md` for builds 454 and 455): it says
 which commits at the tip are still to be regrouped, carried to the HS
 twin or decided.
 
+**Converging on the Xsight driver** (tardis1, from 2026-10-07): the scope,
+the decisions waiting on Mike and the ordered work items are in
+[`NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`](NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md).
+Work from it.
+
 **Moving to another test host** (the 4K host, the 16K host, tardis1 at 64K): start with
 [`NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md)
 -- bootstrap, config merge, build/install, preflight, the resumable test plan
