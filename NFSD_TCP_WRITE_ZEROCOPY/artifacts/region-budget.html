@@ -303,7 +303,19 @@
         </tbody>
       </table></div>
       <p><strong>Copy against loan, with room.</strong> With a 512 KiB buffer and a budget of about six WRITEs, a loan and its copy are level, within about 10% either way. One cell did not repeat: the sixteen-connection loan on the local NVMe ran at 1979 MB/s and then at 569. No saving in server CPU shows for the loan. On NVMe/TCP the kernel time per GB is the same as the copy's; that storage is a stand-in on the same host and costs more CPU than the NFS path, so the measure is blunt. These settings peak at about 94 MiB of region in use, three times the cache.</p>
-      <p><strong>A driver defect.</strong> When the region ran dry, a receive ring that emptied never filled again, and every connection steered to it hung until the port was taken down and up. The driver refills a ring only when a frame arrives in it. Seen twice. A patch that retries is written and built, and has not been loaded.</p>
+      <p><strong>A driver defect, now fixed and tested.</strong> When the region ran dry, a receive ring that emptied never filled again, and every connection steered to it hung until the port was taken down and up. The driver refills a ring only when a frame arrives in it. Seen both times it was looked for. A patch makes the driver try again every timer tick while a ring is short of buffers. With the patched driver loaded, the same load ran the region dry four times and every ring was receiving after each.</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:500px">
+        <thead><tr><th>Check, 64 KiB</th><th>Driver as shipped</th><th>With the patch</th></tr></thead>
+        <tbody>
+          <tr><td>Region run dry by sixteen connections with receive buffers left to grow</td><td class="x">a ring dead, 5 connections hung</td><td class="r">4 runs of 4: all finished on time, every ring receiving</td></tr>
+          <tr><td>New connections to the NFS port afterwards</td><td class="x">2 of 12 timed out</td><td class="r">0 of 60 failed, four times</td></tr>
+          <tr><td>The next load, sixteen connections with 128 KiB buffers</td><td class="c">3878 MB/s (after the port was taken down and up)</td><td class="r">3936 MB/s on every ring, nothing dropped</td></tr>
+          <tr><td>Port brought up with more buffers to post than the region holds</td><td class="m">not tried</td><td class="r">retried until the rings were made smaller</td></tr>
+          <tr><td>An ordinary sixteen-connection copy load</td><td class="c">1718 to 2067 MB/s</td><td class="c">1811 MB/s</td></tr>
+          <tr><td>Allocation failure lines in the kernel log</td><td class="x">about 13000 from one run</td><td class="r">about 100 over four runs</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">No interrupt imbalance or other kernel warning appeared with the patch. It is carried in the driver's packaging as kmod-xsight 2.0.1-4 and is not yet pushed. Not covered: page sizes other than 64 KiB, and memory pressure with no fixed region.</p>
       <p><strong>Cache.</strong> Cutting the pages in use from 1112 to 338 took only 12 to 14% off the cache misses of a copy load: about one refill per cache line of data at either size. Whether data the card has just written is in the cache when the CPU first reads it is a question for the on-die receive design.</p>
       <p class="note"><strong>Next:</strong> tardis1 moves to a 16 KiB kernel, where a frame still has a page to itself but a 1 MiB WRITE is 1.8 MiB of region, the cache is 2048 pages and a 128 KiB buffer is eight frames. The same cells run there. The account with every table is the section "64K" of <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>.</p>
     </div>
