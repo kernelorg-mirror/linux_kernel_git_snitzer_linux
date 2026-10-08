@@ -442,7 +442,10 @@ No cell stalled, paused, overran or ran the region dry (`alloc_fail`
 3. **Budgets of one and two WRITEs leave the loan behind** at every
    buffer: 33% to 70% of the copy at one, 58% to 100% at two (the
    100% is one connection on NVMe/TCP at 128 KiB, 1196 against 1197).
-   About two WRITEs in three are denied at sixteen connections.
+   `denied` there is about twice `admitted`: it counts refusals to
+   admit, after which the connection waits, and not WRITEs that were
+   copied. Every WRITE of a loan cell is admitted in the end
+   (`admitted` is the cell's count of WRITEs).
 4. **A budget of eight buys nothing over four** on NVMe/TCP at 256 KiB
    (2187 against 2175) for 420 more pages, and on the native drive the
    cell at eight was slower than at four at 256 and 512 KiB (1532,
@@ -477,6 +480,76 @@ No cell stalled, paused, overran or ran the region dry (`alloc_fail`
    is lower for every loan on NVMe/TCP at 256 KiB (0.155 against 0.172
    CPU-seconds per GB at four WRITEs). Single runs; the differences
    are small.
+
+### The rings: 4 x 64 and 4 x 256 against 4 x 128, 256 KiB buffer
+
+`plans/16k-2-rings.plan` into `xeu-16k-rings`, then
+`plans/16k-4-ring64.plan` into `xeu-16k-ring64` (budgets of three, four
+and six WRITEs at 4 x 64, and the copies a second time). MB/s; one run
+each but for the 4 x 64 copies, which are two. Pages are the most in
+use in the cell; drops are the ring's over the 90 s window; timeouts
+are the client's retransmit timeouts.
+
+| rings | budget, WRITEs | storage | 1 conn | 16 conn | pages, 16 conn | of the L3 | tail drops, 16 conn | timeouts | paused |
+|---|---|---|---|---|---|---|---|---|---|
+| 4 x 64 | copy | native | 1701, 1687 | 2225, 2079 | 382 to 404 | 20% | 0, 46 | 0 | 0 |
+| 4 x 64 | copy | NVMe/TCP | 1727, 1749 | 2300, 2166 | 382 to 412 | 20% | 199, 0 | 0 | 0 |
+| 4 x 64 | 2 | native | 1225 | 1771 | 891 | 43% | 1176 | 0 | 15 |
+| 4 x 64 | 2 | NVMe/TCP | 1133 | 1745 | 906 | 44% | 1123 | 1 | 70 |
+| 4 x 64 | 3 | native | 1556 | 1894 | 984 | 48% | 891 | 2 | 1 |
+| 4 x 64 | 3 | NVMe/TCP | 1767 | 2170 | 1000 | 49% | 2793 | 2 | 236 |
+| 4 x 64 | 4 | native | 2050 | 1620 | 1102 | 54% | 4801 | 15 | 29 |
+| 4 x 64 | 4 | NVMe/TCP | 2016 | 2139 | 1063 | 52% | 1761 | 0 | 15 |
+| 4 x 64 | 6 | native | | 1745 | 1304 | 64% | 6340 | 24 | 32 |
+| 4 x 64 | 6 | NVMe/TCP | | 2235 | 1286 | 63% | 10649 | 42 | 17 |
+| 4 x 64 | 8 | native | | 2266 | 1504 | 73% | 4692 | 31 | 4 |
+| 4 x 64 | 8 | NVMe/TCP | | 2029 | 1501 | 73% | 7679 | 89 | 6 |
+| 4 x 256 | copy | native | 1527 | 1987 | 1152 | 56% | 0 | 0 | 0 |
+| 4 x 256 | copy | NVMe/TCP | 1734 | 2359 | 1908 | 93% | 0 | 0 | 0 |
+| 4 x 256 | 2 | native | 1223 | 1837 | 2032 | 99% | 0 | 0 | 0 |
+| 4 x 256 | 2 | NVMe/TCP | 1142 | 1743 | 2145 | 105% | 0 | 0 | 0 |
+| 4 x 256 | 4 | native | | 1219 | 2365 | 115% | 0 | 0 | 0 |
+| 4 x 256 | 4 | NVMe/TCP | | 2130 | 2298 | 112% | 0 | 0 | 0 |
+| 4 x 256 | 8 | native | | 1452 | 2737 | 134% | 0 | 0 | 0 |
+| 4 x 256 | 8 | NVMe/TCP | | 2014 | 2648 | 129% | 0 | 0 | 0 |
+
+`alloc_fail` 0 and `escaped` 0 throughout. `inflight.sh` had budgets of
+512, 638 and 890 pages at 3, 4 and 6 in flight.
+
+9. **Rings of 4 x 256 are out.** Every loan cell holds the whole L3 or
+   more, no loan is faster than at 4 x 128, and 4 x 128 did not drop
+   either.
+10. **Rings of 4 x 64 take 400 to 500 pages off every cell.** The copy
+    holds about 390 pages where it holds 880 at 4 x 128: the pools
+    keep fewer as well as the rings posting 256 fewer.
+11. **Every sixteen-connection loan at 4 x 64 drops frames at the
+    ring**, 900 to 10600 in 90 s, more as the budget grows, with
+    retransmit timeouts from a budget of four up; the one-connection
+    cells drop none. 4801 drops is about 0.03% of the frames of that
+    cell. **Mike, 2026-10-08: drops of that order are acceptable where
+    the rate is level with the copy.** That relaxes the "no drop" of
+    the handoff, and it is on that reading that 4 x 64 is a candidate.
+12. **A budget of three WRITEs at 4 x 64 is the first setting inside
+    half of the L3 that is near level**: at about 1000 pages (49%),
+    NVMe/TCP ran at 2170 with sixteen connections against copies of
+    2300 and 2166, and at 1767 with one against 1727 and 1749; the
+    native drive at 1894 against 2225 and 2079, and 1556 against 1701
+    and 1687.
+13. **One connection at a budget of four WRITEs is ahead of its copy**
+    on both storages at 4 x 64: 2050 against 1701 native, 2016 against
+    1727 on NVMe/TCP, at about 860 pages (42%).
+14. **The native drive's sixteen-connection loans are not in order by
+    budget at any ring size** (4 x 64: 1771, 1894, 1620, 1745, 2266 at
+    two, three, four, six and eight; 4 x 128: 1627, 2223, 1532;
+    4 x 256: 1837, 1219, 1452), where NVMe/TCP's rise and level off.
+    The copies of one setting differ by 7% between two runs (2225,
+    2079). Repeats are needed before any native cell is called level
+    or not.
+15. **Server kernel CPU per GB on NVMe/TCP is under the copy's in 7 of
+    the 9 sixteen-connection cells** at budgets of two, four and eight
+    across the three ring sizes (for example 0.94 against 1.06 at
+    4 x 256 and four WRITEs); the two that are not are both at eight.
+    On the native drive the loan costs the same or more.
 
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
