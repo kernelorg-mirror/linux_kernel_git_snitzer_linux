@@ -196,14 +196,19 @@ int frwr_query_device(struct rpcrdma_ep *ep, const struct ib_device *device)
 	if (attrs->kernel_cap_flags & IBK_SG_GAPS_REG)
 		ep->re_mrtype = IB_MR_TYPE_SG_GAPS;
 
-	/* Quirk: Some devices advertise a large max_fast_reg_page_list_len
-	 * capability, but perform optimally when the MRs are not larger
-	 * than a page.
+	/* RPCRDMA_MAX_DATA_SEGS is sized so that a single MR covers a
+	 * maximum-size payload, with one page of slack for a misaligned
+	 * start, and xprt->max_payload is derived from the same constant.
+	 * Reducing the depth below it therefore forces every maximum-size
+	 * RPC to use several MRs with distinct R_keys.
+	 *
+	 * That is not merely more registrations: svc_rdma_get_inv_rkey()
+	 * grants remote invalidation only when the transport header carries
+	 * exactly one distinct R_key. Several R_keys disqualify the reply
+	 * from SEND_WITH_INV, and each MR must then be torn down with its
+	 * own LOCAL_INV work request in the client's completion path.
 	 */
-	if (attrs->max_sge_rd > RPCRDMA_MAX_HDR_SEGS)
-		ep->re_max_fr_depth = attrs->max_sge_rd;
-	else
-		ep->re_max_fr_depth = attrs->max_fast_reg_page_list_len;
+	ep->re_max_fr_depth = attrs->max_fast_reg_page_list_len;
 	if (ep->re_max_fr_depth > RPCRDMA_MAX_DATA_SEGS)
 		ep->re_max_fr_depth = RPCRDMA_MAX_DATA_SEGS;
 
