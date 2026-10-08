@@ -231,7 +231,8 @@ To put the port back: `ethtool -L enp161s0f0 combined 8`,
 
 Everything found on the `xeu` port at `PAGE_SIZE` 64 KiB, in one
 place. The detail and the tables are in 5b (bring-up), 5c (baselines,
-ring stall, step cells) and 5d (the sixteen-connection stall) below.
+ring stall, step cells), 5d (the sixteen-connection stall), 5e (the
+held buffer and the budget varied) and 5f (cache misses) below.
 Every figure is from 4 rings and a 2048-page (128 MiB) region; most
 are one run.
 
