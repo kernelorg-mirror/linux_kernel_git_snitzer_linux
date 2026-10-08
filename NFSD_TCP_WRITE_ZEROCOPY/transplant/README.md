@@ -40,9 +40,10 @@ nothing there is taken for granted:
 - **A write is cut at page boundaries, at every end that is not on one**
   (since 2026-10-06 a DIO-aligned end too:
   `slipstream/NFSD_LOCALIO_DIRECT_SPLIT.md` section 7), and the knob that
-  decides whether to cut is in pages again since `v7.1.13-20`
+  decides whether to cut was in pages again in `v7.1.13-20`
   (`direct_misaligned_min_pages`, default 2 on 4 KiB pages and 1 on
-  larger ones; it was `direct_misaligned_min_bytes` for the runs below). No
+  larger ones; it was `direct_misaligned_min_bytes` for the runs below,
+  and is again in `v7.1.13-21`, the branch's base since 2026-10-07). No
   effect expected at 4 KiB; that is to be confirmed, not assumed.
 - **Two test devices are fixed in this kernel:** null_blk lost data with a
   block size below the page size (not reachable at 4 KiB with 4096-byte
@@ -833,9 +834,11 @@ full account, with what is still open, is in
 **3. The knob that decides whether to cut was counted in pages.**
 `direct_misaligned_num_pages`, default 2, meant 8 KiB on 4 KiB pages and
 128 KiB on 64 KiB. Replaced by `direct_misaligned_min_bytes`, default 8192,
-for the runs recorded here. **Since `v7.1.13-20` it is
+for the runs recorded here. **In `v7.1.13-20` it was
 `direct_misaligned_min_pages`**, default 2 on 4 KiB pages and 1 on larger
-ones, and the byte-counted commit is gone from this branch.
+ones. **`v7.1.13-21` counts it in bytes again**
+(`direct_misaligned_min_bytes`), taken from this branch, which therefore
+no longer has a commit for it.
 **Mike is not convinced by this one and wants it revisited**; it leads the
 TODO list in the document above.
 
@@ -1004,7 +1007,7 @@ understood and not in the order it was discovered:
 
 `tardis1.perf.hammer.space`: aarch64, 64 KiB pages, 64 CPUs, 63 GiB, a
 live NFS server. Kernel `7.1.13-20.hs.458.loanpages_pool.el9.aarch64+64k`,
-packaged RPMs built by Mike from the `-WIP` branch (`a1c37cac4922`);
+packaged RPMs built by Mike from the `-WIP` branch (`fb2d0f658a2e`);
 sunrpc `299EF7D944C6D4A8DA14765`, nfsd `5575F68355368469250681E`.
 `preflight.sh`: PASS on both boots. Results:
 `/var/tmp/zc-testplan-7.1.13-20.hs.458.loanpages_pool.el9.aarch64+64k`;
@@ -1169,27 +1172,28 @@ Commits are named as on this branch on 2026-10-07; a regroup renames them.
 1. **A loan was charged per skb fragment, not per region page** (build
    454). veth packs about seven MTU 9000 frames to a 64 KiB page, so a
    1 MiB WRITE was charged about 117 against a credit of 25 and every
-   loan was throttled to a quarter of the budget. `dff7f2d4f04a`. Where
+   loan was throttled to a quarter of the budget. `000929541397`. Where
    a frame has a page to itself (16 KiB) or spans its own pages (4 KiB)
    the charge is what it was; that is from the code, not from a run.
 2. **A waiting transport whose queued data TCP collapsed read on without
    admission and stayed at the head of the wait list**, stopping every
    other transport (build 457, `x-tight-RN`). Not specific to 64 KiB.
-   `3ec476031fd9`; verified at runtime with rebuilt modules (80 of 80
+   `fbcf5bb0a44e`; verified at runtime with rebuilt modules (80 of 80
    repetitions, the collapse seen once and survived) and by a KUnit
    case.
 3. **Materializing a record that holds a merge page counted its bytes
    twice** and faulted the receive with a warning (build 457,
-   `collapse-off`). `7abb45f322f7`; verified by its KUnit case only.
+   `collapse-off`). `fc9a60f5b298`; verified by its KUnit case only.
 4. **A direct middle and a neighbour's buffered segment in one page
    failed a write with `-EIO`** through LOCALIO (build 455; the test did
    not notice). First answered by cutting every end at a page boundary
    (`v7.1.13-20`), which cost direct I/O for writes aligned to the
    device but not to a page; then by cutting per end again and having
    LOCALIO complete a direct write that shares a page before it returns
-   (`62286e633852`, `08d80dc89a93`, `11e038c05ac5`). Only XFS was run.
+   (all three in `v7.1.13-21` now, and no longer commits of this
+   branch). Only XFS was run.
 5. **Tests and harness:** the capacity + 1 KUnit test spans skbs where
-   the table exceeds `MAX_SKB_FRAGS` (`6294e82414e2`); the LOCALIO
+   the table exceeds `MAX_SKB_FRAGS` (`c4a23c858bf5`); the LOCALIO
    boundary test does not judge kick rounds for a record smaller than a
    page, and fails on a failed write or the kernel's invalidation
    message; `preflight.sh` finds a packaged kernel's config in
@@ -1208,12 +1212,12 @@ Commits are named as on this branch on 2026-10-07; a regroup renames them.
   and at sixteen, 78 to 88% of a copy that varies between boots.
   How the factor and the budget should be computed for
   64 KiB is not settled.
-- **The beyond-EOF rule** (`7809bfb4c8e9`: a write that starts beyond
-  EOF is issued buffered) **was reverted on 2026-10-07** (`40f67123e8fa`, a
+- **The beyond-EOF rule** (`b30b48e034c2`: a write that starts beyond
+  EOF is issued buffered) **was reverted on 2026-10-07** (`2284e081a3e1`, a
   revert at the tip): Mike does not want it now and keeps it in history
   to come back to. Build 458 never had it. Measured once with rebuilt
   modules: `mixed-copy` 442 to 2355 MB/s, with 77% of its WRITEs no
-  longer direct. `aeed1c15a2ac`, which gives the KUnit split test's
+  longer direct. `f7021372f927`, which gives the KUnit split test's
   file a size, stays; the KUnit suites have not been run since the
   revert.
 - **The series is not regrouped** (`check-grouping.sh v7.1.13-20`:

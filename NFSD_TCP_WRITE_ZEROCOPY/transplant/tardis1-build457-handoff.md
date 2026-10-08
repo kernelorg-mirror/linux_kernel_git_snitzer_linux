@@ -5,8 +5,21 @@ Written 2026-10-06, about 21:15, at the end of the session that ran build
 where a new session starts.** Read `AGENTS.md`, then
 `tardis1-boot1-testing.md` (builds 454 and 455), then this.
 
+**Rebased 2026-10-07 onto `v7.1.13-21`** (Mike's request). The old tip
+`339d1ec030dc` is kept as
+`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY.pre-rebase-v7.1.13-21`. The
+tree is the old one plus `v7.1.13-21`'s release files and nothing else.
+Three commits dropped out as already in the base (the LOCALIO
+shared-page completion, the per-end cut and the byte-counted gate), and
+two conflicts were resolved by keeping the `seg_boundary` field beside
+the base's `min_middle_bytes`. **Every commit has a new SHA; the SHAs in
+this file, the README and `slipstream/XFS_BEYOND_EOF_DIRECT.md` that
+named commits of the old branch were rewritten to the new ones**, so a
+dated passage below may name a SHA that did not exist on its date. Not
+built since.
+
 That session committed two things, neither pushed: the fix for the hang
-(`3ec476031fd9`, section 4) and this file. The fix was moved to the end
+(`fbcf5bb0a44e`, section 4) and this file. The fix was moved to the end
 of the code section, so **every commit after it has a new SHA**. The
 backup branch made for that move was deleted the same day, at Mike's
 request.
@@ -17,10 +30,10 @@ all but the first two):
 
 | commit | what | where |
 |---|---|---|
-| `3ec476031fd9` | the hang fix (section 4) | end of the code section |
-| `1fcefc552397` | its KUnit case, `svcsock_rx_credit_collapsed_unwaits_test` | end of the KUnit tests, before the configs commit |
-| `7abb45f322f7` | the materialize fix (section 5): merge pages marked in a third bitmap | **at the tip, after the docs** |
-| `377d00eb185b` | its KUnit case, `svcsock_rx_merge_then_materialize_test` | **at the tip, after the docs** |
+| `fbcf5bb0a44e` | the hang fix (section 4) | end of the code section |
+| `3844b93e9c0f` | its KUnit case, `svcsock_rx_credit_collapsed_unwaits_test` | end of the KUnit tests, before the configs commit |
+| `fc9a60f5b298` | the materialize fix (section 5): merge pages marked in a third bitmap | **at the tip, after the docs** |
+| `87a38852530e` | its KUnit case, `svcsock_rx_merge_then_materialize_test` | **at the tip, after the docs** |
 
 The last two were left at the tip at Mike's request, so
 **`check-grouping.sh v7.1.13-20` reports `grouping BROKEN` until they are
@@ -41,12 +54,12 @@ nothing is lost):
 
 | remote branch | at | holds |
 |---|---|---|
-| `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-WIP` | `a1c37cac4922` | everything through section 9 |
-| `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-WIP2` | `767f20751a4d` | that plus section 10 (the XFS work and the beyond-EOF rule) |
+| `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-WIP` | `fb2d0f658a2e` | everything through section 9 |
+| `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-WIP2` | `2a3695ad1063` | that plus section 10 (the XFS work and the beyond-EOF rule) |
 
 Neither is regrouped (`check-grouping.sh v7.1.13-20` reports `grouping
 BROKEN` for both), and nothing is on the HS twin. A regroup rewrites
-the SHAs this file names from `7abb45f322f7` on.
+the SHAs this file names from `fc9a60f5b298` on.
 
 ## 0. Armed: the first thing to do on the next boot
 
@@ -198,9 +211,9 @@ All in `/var/tmp/zc-run-logs/hang-457-repro/`:
 Stop a hung run with `pkill -KILL -x fio`, then SIGTERM (not SIGKILL) to
 the script so its cleanup runs.
 
-## 4. Task 1: fix the hang (committed as `3ec476031fd9`, compiled, not run)
+## 4. Task 1: fix the hang (committed as `fbcf5bb0a44e`, compiled, not run)
 
-**Committed, not pushed:** `3ec476031fd9` "SUNRPC: Take a transport that
+**Committed, not pushed:** `fbcf5bb0a44e` "SUNRPC: Take a transport that
 reads on without admission off the credit wait list", nine lines in
 `net/sunrpc/svcsock.c`, the last commit of the code section.
 `check-grouping.sh v7.1.13-20`: `grouping OK`. The final tree compiles
@@ -209,17 +222,17 @@ versions, BTF and signing (`make O=/var/tmp/zc-build-check
 net/sunrpc/svcsock.o`; that directory can be reused or deleted). Not
 built into a kernel, not run.
 
-**Its `Fixes:` tag is `7c0a0bbe7ab2`** ("SUNRPC: Credit only the region
+**Its `Fixes:` tag is `ab8dc20744c2`** ("SUNRPC: Credit only the region
 pages a TCP receive loan holds"), from reading the diffs:
 
-- `7ab514bb557c` (region credit admission) asked for admission at the
+- `7672aff8b10a` (region credit admission) asked for admission at the
   start of every record, so a woken transport always asked again and
   could not be left on the list this way.
-- `7c0a0bbe7ab2` moved admission to a record's first skb that carries a
+- `ab8dc20744c2` moved admission to a record's first skb that carries a
   region page. From there a waiter whose skb no longer carries one
   passes without asking and stays listed; as the oldest waiter it blocks
   the rest until its own next region record, if one comes.
-- `e134479afcd2` (do not re-queue a waiting transport) made it worse:
+- `f0c6395de53f` (do not re-queue a waiting transport) made it worse:
   the listed transport itself no longer runs on new data. It did not
   introduce the defect. (The commit first cited this one, picked from
   its subject without reading it; corrected before the regroup.)
@@ -243,7 +256,7 @@ What the change does, for Mike to agree or redirect:
 
 Then:
 
-- **KUnit: written, `1fcefc552397`**
+- **KUnit: written, `3844b93e9c0f`**
   (`svcsock_rx_credit_collapsed_unwaits_test` in `sunrpc-svcsock-rx`).
   Through the receive actor: budget 10 all held by one record; the
   fixture transport is refused at a region page-pool fragment after its
@@ -270,11 +283,11 @@ Here it was 768 bytes over (131840 against 131072). A collapse also turns
 a loan into a copy. Whether the clamp's margin is short at 64 KiB, or the
 collapse is to be expected and only the list handling is wrong, is open.
 
-## 5. Task 2: the `svc_tcp_rx_materialize` warning (fixed as `7abb45f322f7`, not reproduced at runtime)
+## 5. Task 2: the `svc_tcp_rx_materialize` warning (fixed as `fc9a60f5b298`, not reproduced at runtime)
 
 **Fixed, Mike's choice of the two below: a third bitmap.**
-`7abb45f322f7` "SUNRPC: Count a merge page's bytes once when a TCP
-receive record is materialized", `Fixes: 1ecfe1f42fc6`. `struct
+`fc9a60f5b298` "SUNRPC: Count a merge page's bytes once when a TCP
+receive record is materialized", `Fixes: 8b7d6420965f`. `struct
 svc_tcp_rx_state` gains `merged` beside `borrowed` and `page_pool`
 (**the struct's layout changes**, so sunrpc, nfsd and the KUnit modules
 must be built together). The bit is set when
@@ -285,7 +298,7 @@ bytes for a marked entry (`borrowed_bytes`, `copied_bytes` and
 `copied_bytes` (by reading, it cannot meet one today); the mark is
 cleared wherever the borrowed one is, and checked empty with it.
 
-**KUnit: `377d00eb185b`** (`svcsock_rx_merge_then_materialize_test`): a
+**KUnit: `87a38852530e`** (`svcsock_rx_merge_then_materialize_test`): a
 locked-head skb with the prefix and 40 body bytes (merged), then an skb
 with the last 64 bytes on a region page and no budget anywhere, so the
 actor's "No budget to draw on" branch materializes the record with the
@@ -529,11 +542,11 @@ In this order, so that no commit has the cut without its fix:
 
 | commit | what |
 |---|---|
-| `62286e633852` | NFS/localio: complete a direct write that shares a page before it returns |
-| `08d80dc89a93` | nfs_common: leave an aligned end of a split write where it is |
-| `11e038c05ac5` | NFSD: count the misaligned-WRITE split gate in bytes, not pages |
-| `7b96742f6f12` | NFSD: give the KUnit split test the byte-counted gate |
-| `b494cd4d0711` | NFSD: test the per-end cut of a split write in the KUnit suite |
+| in `v7.1.13-21` (`bf4ec65f1e16`) | NFS/localio: complete a direct write that shares a page before it returns |
+| in `v7.1.13-21` (folded) | nfs_common: leave an aligned end of a split write where it is |
+| in `v7.1.13-21` (folded) | NFSD: count the misaligned-WRITE split gate in bytes, not pages |
+| `a1c8af65531b` | NFSD: give the KUnit split test the byte-counted gate |
+| `e0141f1d76fe` | NFSD: test the per-end cut of a split write in the KUnit suite |
 
 - **The cut and the gate are Mike's**, taken from the state before the
   page cut: `git diff v7.1.13-20 cb4917369ce9`, for `fs/nfs_common/nfs_dio.c`
@@ -542,8 +555,12 @@ In this order, so that no commit has the cut without its fix:
   `seg_boundary` policy field. (A first attempt that cut writes at the
   offset alignment exactly as reads are was rejected by Mike and never
   run.)
-- The KUnit suites do not build between `11e038c05ac5` and
-  `7b96742f6f12`: the code renames the policy field the test sets.
+- The KUnit suites did not build between the byte-counted gate commit
+  and `a1c8af65531b`: the code renames the policy field the test sets.
+  **Since the rebase onto `v7.1.13-21`, whose base has the renamed
+  field, that is from `36a1442c6ae5` (the test's own commit) to
+  `a1c8af65531b`, 102 commits**, most of them docs. From the source;
+  not built.
 
 ### 9.2 The cut
 
@@ -605,7 +622,7 @@ middles are issued. In `/var/tmp/zc-run-logs/diocut-perend/`:
   is the last of its write**, which under the per-end cut is exactly a
   write ending on an aligned boundary. NFSD's kiocbs are always
   synchronous.
-- **The fix** (`62286e633852`): `nfs_dio_write_shares_page(pos, len)` in
+- **The fix** (`bf4ec65f1e16` in `v7.1.13-21`): `nfs_dio_write_shares_page(pos, len)` in
   `include/linux/nfs_dio.h` is true for a direct write that starts or
   stops inside a page; `nfs_local_call_write()` uses AIO completion only
   when it is false. Where the offset alignment is a page-size multiple
@@ -624,7 +641,7 @@ middles are issued. In `/var/tmp/zc-run-logs/diocut-perend/`:
 | LOCALIO, 6000 and 47008, default 8192-byte gate (`final1..5`) | 5 of 5 clean; at this gate the 6000-byte record's 4096-byte middle is not issued |
 | NFSD, `io_cache_write` 2 (direct), LOCALIO off, gate 0: 6000 x 4 runs, 47008 x 1 (`nfsd-boundary.sh`, `nfsd-gate0/`) | every write succeeded, 0 failed invalidations; 174 and 490 writes a run `disposition=direct`. **First run of the NFSD path with this cut.** The script's `with_direct_middle=0` is its own parsing error; count `disposition=direct` |
 | KUnit, four suites, before the three cases were reworked (`kunit-perend.log`) | `nfsd-receive-bvec` 5/6: the three cases that described the page cut; xdr 7/7, svcsock 43/43, nfsd4 10/10 |
-| KUnit `nfsd-receive-bvec` alone, after (`b494cd4d0711`) | 6/6 |
+| KUnit `nfsd-receive-bvec` alone, after (`e0141f1d76fe`) | 6/6 |
 
 Read-back is unchanged by any of this: about 0.70 READ bios per WRITE
 at 6000 bytes and 0.35 to 0.40 at 47008, LOCALIO. It is a cost, not a
@@ -791,8 +808,8 @@ this is the summary and the state.
 
 | commit | what |
 |---|---|
-| `7809bfb4c8e9` | nfs_common: do not issue a write that starts beyond EOF as direct I/O |
-| `aeed1c15a2ac` | NFSD: give the KUnit split test's file a size |
+| `b30b48e034c2` | nfs_common: do not issue a write that starts beyond EOF as direct I/O |
+| `f7021372f927` | NFSD: give the KUnit split test's file a size |
 
 `nfs_dio_split()` issues a write that starts beyond the file's size
 (read unlocked, a hint) as one buffered segment, DONTCACHE by policy: a
@@ -819,13 +836,13 @@ Measured with it loaded, the same two cells, one run each
 
 ### 10.3 Open
 
-**Decided 2026-10-07: Mike had the rule reverted** (`40f67123e8fa`, a revert
-of `7809bfb4c8e9` at the tip), to keep in history and come back to; he
-does not want the capability now. `aeed1c15a2ac` stays. What follows is
+**Decided 2026-10-07: Mike had the rule reverted** (`2284e081a3e1`, a revert
+of `b30b48e034c2` at the tip), to keep in history and come back to; he
+does not want the capability now. `f7021372f927` stays. What follows is
 as it stood before that.
 
 - **Whether the rule stays is Mike's decision**, put to him as: keep it
-  and add its KUnit case; drop it (revert `7809bfb4c8e9`) and accept
+  and add its KUnit case; drop it (revert `b30b48e034c2`) and accept
   slow direct writes to a growing file; or make it a policy knob beside
   `direct_misaligned_dontcache`, suggested default on. It restores the
   throughput and gives up direct I/O for files that grow out of order,
@@ -963,7 +980,7 @@ for the run.
   and N showed;
 - the regroup, the HS twin, and Mike's decision on the beyond-EOF rule
   (section 10.3), which build 458 does not have (decided since: the
-  rule was reverted on 2026-10-07, `40f67123e8fa`);
+  rule was reverted on 2026-10-07, `2284e081a3e1`);
 - the 16-connection gap (`tardis1-boot1-testing.md` 10.2), unchanged.
 
 ## 13. 2026-10-07: the 16-connection gap, what is known and the experiment armed
