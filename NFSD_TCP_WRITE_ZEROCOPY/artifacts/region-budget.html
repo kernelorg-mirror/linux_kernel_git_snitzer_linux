@@ -1,0 +1,612 @@
+<title>NFSD Receive Region Budget</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@85,500..750&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root {
+    --ground: #eef1f4; --surface: #ffffff; --surface-2: #f6f8fa;
+    --ink: #16202a; --ink-soft: #33434f; --muted: #5a6b78; --faint: #8595a1;
+    --hair: #dce3e9; --hair-strong: #c4cfd8;
+    --accent: #1f5c8b; --accent-soft: #e4eef5;
+    --cost: #b6431f; --cost-soft: #f7e6df;
+    --gain: #12735d; --gain-soft: #dcefe8;
+    --shadow: 0 1px 2px rgba(22,32,42,.05), 0 8px 24px -12px rgba(22,32,42,.14);
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --disp: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground: #0b1218; --surface: #121c24; --surface-2: #0e1720;
+      --ink: #e7eef4; --ink-soft: #c3d0da; --muted: #90a1ae; --faint: #6b7d8a;
+      --hair: #24333f; --hair-strong: #33454f;
+      --accent: #5ba3d6; --accent-soft: #16303f;
+      --cost: #e08a63; --cost-soft: #3a2015;
+      --gain: #4bbb9a; --gain-soft: #10302a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #0b1218; --surface: #121c24; --surface-2: #0e1720;
+    --ink: #e7eef4; --ink-soft: #c3d0da; --muted: #90a1ae; --faint: #6b7d8a;
+    --hair: #24333f; --hair-strong: #33454f;
+    --accent: #5ba3d6; --accent-soft: #16303f;
+    --cost: #e08a63; --cost-soft: #3a2015;
+    --gain: #4bbb9a; --gain-soft: #10302a;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--sans); font-size: 17px; line-height: 1.62;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+  @media (max-width: 480px) { .wrap { padding: 0 16px; } }
+  section { padding: 40px 0; border-top: 1px solid var(--hair); }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 14px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; flex: 0 0 auto; }
+  .eyebrow.hot { color: var(--cost); }
+  .eyebrow.hot::before { background: var(--cost); }
+  .eyebrow.ok { color: var(--gain); }
+  .eyebrow.ok::before { background: var(--gain); }
+
+  h1 {
+    font-family: var(--disp); font-weight: 720; font-stretch: 85%;
+    font-size: clamp(31px, 6.4vw, 48px); line-height: 1.04;
+    letter-spacing: -.015em; text-wrap: balance; margin: 0 0 18px;
+  }
+  h1 .ok { color: var(--gain); }
+  h1 .lock { color: var(--cost); }
+  h2 {
+    font-family: var(--disp); font-weight: 680; font-stretch: 87%;
+    font-size: clamp(22px, 4vw, 28px); letter-spacing: -.01em;
+    line-height: 1.12; text-wrap: balance; margin: 0 0 16px;
+  }
+  h3 { font-family: var(--disp); font-weight: 650; font-stretch: 90%; font-size: 18px; margin: 0 0 6px; text-wrap: balance; }
+  p { margin: 0 0 16px; color: var(--ink-soft); }
+  p:last-child { margin-bottom: 0; }
+  strong { color: var(--ink); font-weight: 640; }
+  a { color: var(--accent); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+  code {
+    font-family: var(--mono); font-size: .84em; background: var(--surface-2);
+    border: 1px solid var(--hair); padding: .08em .38em; border-radius: 4px;
+    color: var(--ink); overflow-wrap: anywhere;
+  }
+  .lede { font-size: 20px; line-height: 1.5; color: var(--ink); }
+  .lede .hl { color: var(--gain); font-weight: 600; }
+  .lede .hc { color: var(--cost); font-weight: 600; }
+
+  header { padding: 56px 0 40px; }
+  .provenance {
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+    line-height: 1.7; margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--hair);
+    overflow-wrap: anywhere;
+  }
+  .provenance span { color: var(--ink-soft); }
+
+  .metrics {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    background: var(--hair); border: 1px solid var(--hair);
+    border-radius: 10px; overflow: hidden; margin-top: 30px;
+  }
+  .metric { background: var(--surface); padding: 18px 16px; }
+  .metric .n {
+    font-family: var(--mono); font-size: clamp(20px, 4.4vw, 26px); font-weight: 600;
+    letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ink); line-height: 1;
+  }
+  .metric .n.cost { color: var(--cost); }
+  .metric .n.gain { color: var(--gain); }
+  .metric .l {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted); margin-top: 9px; line-height: 1.4;
+  }
+  @media (max-width: 560px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+
+  .delta { display: flex; gap: 16px; padding: 20px 0; border-top: 1px solid var(--hair); }
+  .delta:first-of-type { border-top: none; padding-top: 4px; }
+  .delta .mark {
+    flex: 0 0 auto; font-family: var(--mono); font-size: 15px; font-weight: 600;
+    color: var(--surface); background: var(--accent); width: 30px; height: 30px;
+    border-radius: 7px; display: flex; align-items: center; justify-content: center;
+  }
+  .delta .mark.cost { background: var(--cost); }
+  .delta .mark.gain { background: var(--gain); }
+  .delta .body { flex: 1 1 auto; min-width: 0; }
+  .delta .body p { margin: 0; font-size: 15.5px; }
+  .delta .body h3 { margin-bottom: 4px; }
+  .tag {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 4px;
+    margin-left: 8px; vertical-align: middle; white-space: nowrap; font-stretch: 100%;
+  }
+  .tag.base { background: var(--gain-soft); color: var(--gain); }
+  .tag.rework { background: var(--accent-soft); color: var(--accent); }
+  .tag.new { background: var(--cost-soft); color: var(--cost); }
+
+  .verdict {
+    background: var(--surface); border: 1px solid var(--hair);
+    border-left: 4px solid var(--cost); border-radius: 10px;
+    padding: 26px 28px; box-shadow: var(--shadow); margin: 10px 0 22px;
+  }
+  .verdict.gain { border-left-color: var(--gain); }
+  .verdict.acc { border-left-color: var(--accent); }
+  @media (max-width: 480px) { .verdict { padding: 20px 18px; } }
+  .verdict .big {
+    font-family: var(--disp); font-weight: 700; font-stretch: 87%;
+    font-size: clamp(19px, 3.4vw, 23px); line-height: 1.3; color: var(--ink);
+    margin: 0 0 14px; text-wrap: balance;
+  }
+  .verdict .big em { font-style: normal; color: var(--cost); }
+  .verdict.gain .big em { color: var(--gain); }
+
+  .matrix {
+    display: grid; grid-template-columns: 1fr auto; gap: 1px;
+    background: var(--hair); border: 1px solid var(--hair);
+    border-radius: 10px; overflow: hidden; margin: 4px 0 8px;
+  }
+  .matrix .cell { background: var(--surface); padding: 12px 16px; align-content: center; font-size: 15px; }
+  .matrix .cell.k { color: var(--ink-soft); }
+  .matrix .cell.v { display: flex; align-items: center; justify-content: flex-end; }
+  .pill {
+    font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .pill.yes { background: var(--gain-soft); color: var(--gain); border-color: var(--gain); }
+  .pill.no  { background: var(--cost-soft); color: var(--cost); border-color: var(--cost); }
+  .pill.pend { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--hair); border-radius: 10px; margin: 6px 0 14px; background: var(--surface); }
+  table.q { width: 100%; border-collapse: collapse; font-size: 14.5px; min-width: 540px; }
+  table.q th, table.q td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--hair); vertical-align: top; }
+  table.q thead th { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); font-weight: 600; }
+  table.q tbody tr:last-child td { border-bottom: none; }
+  table.q td.r { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--gain); font-weight: 600; font-size: 13px; }
+  table.q td.x { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--cost); font-weight: 600; font-size: 13px; }
+  table.q td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; white-space: nowrap; }
+  table.q td code { white-space: nowrap; }
+
+  footer {
+    padding: 34px 0 60px; border-top: 1px solid var(--hair);
+    font-family: var(--mono); font-size: 12px; color: var(--muted); line-height: 1.7;
+    overflow-wrap: anywhere;
+  }
+  footer .r { color: var(--ink-soft); }
+  footer a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* glossary and the two-storage decision grid */
+  dl.terms { margin: 6px 0 0; display: grid; grid-template-columns: minmax(120px, 190px) 1fr; gap: 1px; background: var(--hair); border: 1px solid var(--hair); border-radius: 10px; overflow: hidden; }
+  dl.terms dt, dl.terms dd { background: var(--surface); margin: 0; padding: 13px 16px; font-size: 15.5px; min-width: 0; }
+  dl.terms dt { font-family: var(--disp); font-weight: 660; font-stretch: 90%; color: var(--ink); }
+  dl.terms dd { color: var(--ink-soft); }
+  @media (max-width: 560px) { dl.terms { grid-template-columns: 1fr; } dl.terms dt { padding-bottom: 2px; } dl.terms dd { padding-top: 2px; } }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 10px 0 18px; }
+  @media (max-width: 640px) { .two { grid-template-columns: 1fr; } }
+  .kind { background: var(--surface); border: 1px solid var(--hair); border-top: 3px solid var(--accent); border-radius: 10px; padding: 18px 18px 16px; box-shadow: var(--shadow); min-width: 0; }
+  .kind.b { border-top-color: var(--gain); }
+  .kind .who { font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  .kind p { font-size: 15.5px; margin: 0 0 10px; }
+  .kind .set { font-family: var(--mono); font-size: 12.5px; color: var(--ink); background: var(--surface-2); border: 1px solid var(--hair); border-radius: 7px; padding: 9px 11px; margin-top: 12px; line-height: 1.6; }
+  table.q td.c { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; white-space: nowrap; color: var(--ink); }
+  table.q td.m { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; white-space: nowrap; color: var(--muted); }
+  .note { font-size: 14.5px; color: var(--muted); }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">NFSD &middot; SUNRPC &middot; page_pool &middot; 4, 16 and 64 KiB pages &middot; v7.1.13-20</p>
+    <h1>Two kinds of storage, two right answers.<br><span class="ok">One budget holds for both.</span></h1>
+    <p class="lede">NFSD can hand a WRITE's network receive pages straight to the file system, or copy the data out of them first. Which is right depends on what the storage can take. A fixed receive region with a budget makes both safe. <span class="hl">On 4 KiB, 16 KiB and now 64 KiB kernels the whole test plan passes on both kinds of storage.</span> On the test rigs copying and loaning come out level in speed. Those rigs are virtual machines on a MacBook Pro for two of the three page sizes: a VMware Fusion guest for 4 KiB and a UTM guest for 16 KiB. The 64 KiB plan ran on tardis1, a 64-CPU server, over veth and memory-backed storage. That is not all of the 64 KiB testing: on 7 and 8 October the same kernel ran on tardis1 over its Xsight card with the <code>xeu</code> driver, from a separate client, onto real NVMe. One drive was used as it is, which needs whole pages (PRP). A second sat behind an NVMe/TCP target, which takes arbitrary pieces and stands in for a drive with SGLs. It is the most real testing so far, and it is summarized at the top of the <a href="#xeu64">64 KiB section</a>. <span class="hc">One case is open: at 64 KiB with sixteen connections a loan is slower than its copy. It is charged too little against the budget there. Charged more, the loan is level or nearly level with its copy when the storage answers at once. When the storage stalls it depends on how many WRITEs the budget lets in at once: about two thirds of its copy with 11, about nine tenths with 14, level with all 16. On mixed write sizes with storage that takes 1 ms per WRITE the loan stays at about four fifths of its copy even with 16.</span> What a copy costs on real hardware is still the open question.</p>
+
+    <div class="metrics">
+      <div class="metric"><div class="n gain">30 / 30</div><div class="l">plan stages clean, on<br>4, 16 and 64 KiB pages</div></div>
+      <div class="metric"><div class="n gain">0</div><div class="l">packets dropped<br>with a budget set</div></div>
+      <div class="metric"><div class="n gain">100%</div><div class="l">of loans written direct<br>on NVMe/TCP</div></div>
+      <div class="metric"><div class="n">&lt;11% vs &gt;30%</div><div class="l">of the receive region tied up:<br>copying vs loaning</div></div>
+    </div>
+
+    <p class="provenance">
+      <span>Branch:</span> <code>kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY</code> on <code>v7.1.13-20</code><br>
+      <span>Runs:</span> kernel <code>7.1.13-20.hs.458.loanpages_pool.el9.aarch64+64k</code>, packaged RPMs, tardis1 (64 CPUs), 64 KiB pages &middot; 2026-10-07<br>
+      kernel <code>7.1.13-19.hs.451.el9.aarch64+</code> build #17, UTM guest on a MacBook Pro, 16 KiB pages &middot; 2026-10-05<br>
+      kernel <code>7.1.13-20.hs.458.el9.aarch64+</code> build #45 from <code>59eb4beed308</code> (<code>-WIP</code>, with the four fixes found on tardis1), VMware Fusion guest on a MacBook Pro, 4 KiB pages &middot; 2026-10-07<br>
+      <span>In-tree:</span> <code>NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md</code> (the accounts), <code>transplant/RESULTS.md</code> (the comparison across page sizes), <code>XEU_CONVERGENCE.md</code> (the Xsight card, 64 KiB)<br>
+      <span>Builds on:</span> <a href="https://claude.ai/artifact/AaqMSpvXNrwbugt6BJ7MXX">NFSD Page Loan</a>, <a href="https://claude.ai/artifact/FgYTWeV9FqCxwzeuESd7Ap">NVMe SGL Page Loan</a>, <a href="https://claude.ai/artifact/MsFFzUKYDgz6WhZ1C62jss">On-Die Receive Copy</a>
+    </p>
+  </header>
+
+  <section id="region-use">
+    <p class="eyebrow">At a glance</p>
+    <h2>Copying leaves the receive region nearly empty; loaning ties much of it up</h2>
+    <p>A copy hands the receive pages straight back. A loan holds them until the storage has finished the write. That difference is the same at every page size.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:480px">
+      <thead><tr><th>Page size</th><th>Region</th><th>A copy holds</th><th>A loan holds</th></tr></thead>
+      <tbody>
+        <tr><td class="c">4 KiB</td><td class="m">16 MiB</td><td class="r">0.25&ndash;1.75 MiB (2&ndash;11%)</td><td class="x">8.3&ndash;9.6 MiB (52&ndash;60%)</td></tr>
+        <tr><td class="c">16 KiB</td><td class="m">24 MiB</td><td class="r">0.25&ndash;1.75 MiB (1&ndash;7%)</td><td class="x">15.1&ndash;16.7 MiB (64&ndash;70%)</td></tr>
+        <tr><td class="c">64 KiB</td><td class="m">35 MiB</td><td class="r">0.50&ndash;1.50 MiB (1&ndash;4%)</td><td class="x">11.3&ndash;19.8 MiB (32&ndash;57%)</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">The most of the region in use at any moment, across the four pairs of test cells that differ only in copy or loan (one and sixteen connections, steady and stalling storage), on both kinds of storage. The 4 KiB and 64 KiB rows are of build 458 (<code>v7.1.13-20</code> with tardis1's fixes); the 16 KiB row is of the earlier <code>v7.1.13-19</code> kernel.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">The words</p>
+    <h2>What each term means here</h2>
+    <p>Earlier documents used some of these loosely, and two of them for the same thing. This is how they are used now, in the code and the documents alike.</p>
+    <dl class="terms">
+      <dt>Loan</dt><dd>nfsd hands the file system the network card's own receive pages, holding the data just as it arrived. Nothing is copied. The pages are not free again until the write has finished.</dd>
+      <dt>Copy</dt><dd>nfsd copies the WRITE's data out of the receive pages into its own buffer, and the receive pages go straight back to the card.</dd>
+      <dt>Direct write</dt><dd>The file system sends memory to the device as it is. Nothing passes through the page cache.</dd>
+      <dt>Region</dt><dd>A fixed, small block of memory that named network devices must receive into. It is small so that the place packets land can stay in the CPU's cache, which is what makes copying out of it cheap. Being fixed, it can run out.</dd>
+      <dt>Budget</dt><dd>The configured limit, in pages, on how much of the region loans may hold at once. A connection whose next WRITE does not fit waits, and TCP slows its sender. <strong>A budget of 0 means copy.</strong> Set per host or per network namespace.</dd>
+      <dt>Credit</dt><dd>What one WRITE draws against the budget, and gives back when it ends. Only that. The limit itself is never called credit any more.</dd>
+      <dt>Held receive buffer</dt><dd>Each connection's TCP receive buffer fixed at a small size and not left to grow. It limits how much data nfsd has not read yet is sitting in the region.</dd>
+    </dl>
+  </section>
+
+  <section>
+    <p class="eyebrow">How it comes together</p>
+    <h2>The storage decides which path is right</h2>
+    <p>A loaned WRITE reaches the file system as one piece per network packet, each ending part-way through a page. Whether that can be written direct is a property of the storage, and it splits the world in two.</p>
+    <div class="two">
+      <div class="kind">
+        <p class="who">Storage that needs whole pages</p>
+        <h3>NVMe without SGLs</h3>
+        <p>This is what tardis1 has. It cannot take a loan as a direct write, so a loan falls back to the page cache: the copy comes back, later, and the receive pages are held longer.</p>
+        <p><strong>Right answer: copy on arrival.</strong> nfsd's own buffer is laid out in whole pages and is written direct. The region stays nearly empty.</p>
+        <div class="set">region &middot; budget 0 &middot; receive buffer held</div>
+      </div>
+      <div class="kind b">
+        <p class="who">Storage that takes arbitrary pieces</p>
+        <h3>NVMe with SGLs</h3>
+        <p>A loan can be written direct as it stands, with no copy anywhere, provided the card puts the data on a 4-byte boundary. The price is that region pages are held until the device finishes.</p>
+        <p><strong>Right answer: loan, under a budget.</strong> The budget is what stops loans from using the region up.</p>
+        <div class="set">region &middot; budget set &middot; receive buffer held</div>
+      </div>
+    </div>
+    <p>One mechanism serves both. The region bounds where packets land. The budget says how much of it loans may hold, and at 0 turns every WRITE into a copy. The held receive buffer keeps unread data from filling the region in either case. The test stand-ins are nvme-loop for the first kind and NVMe over TCP for the second.</p>
+    <div class="verdict acc">
+      <p class="big">The 4-byte placement is a card setting, and the test rig now has it too.</p>
+      <p>By default a frame's data lands 2 bytes off a 4-byte boundary, which NVMe refuses as direct I/O. On the Xsight card that is fixed by loading its driver with <code>rx_ip_align=2</code>. The same misplacement shows up on a plain veth pair with no Xsight hardware: 0 of 512 loaned WRITEs went direct. veth was given the same setting for testing, and then 512 of 512 did. There is no general way to ask a network device for this placement; a design for one is written up in the tree and is not expected to be accepted upstream.</p>
+    </div>
+  </section>
+
+  <section id="p64">
+    <p class="eyebrow ok">64 KiB &middot; tardis1 &middot; the whole plan</p>
+    <h2>It passes at 64 KiB, with one result the other page sizes do not show</h2>
+
+    <div class="verdict acc" id="xeu64">
+      <p class="big">Summary, 8 October: the first runs on the Xsight card itself. The mechanism works there, and 64 KiB pages are a poor fit for this card. The work moves to 16 KiB.</p>
+      <p>Everything below this box is the test plan on veth and memory-backed storage. On 7 and 8 October the same cells ran over one port of the Xsight card from a separate client machine, onto a real NVMe drive (which needs whole pages) and onto NVMe/TCP in front of a second drive (which takes arbitrary pieces). Most figures are one run of 120 seconds.</p>
+      <p><strong>What held.</strong> Every copy was written direct. Every loan on NVMe/TCP was written direct, and every loan on the local NVMe went through the page cache, as designed. No WRITE overran its credit, and the trace has every admitted WRITE released. The drive is not a limit (10.4 GiB/s locally) and neither is the wire (7.0 GB/s for one connection left to tune itself).</p>
+      <p><strong>What 64 KiB costs on this card.</strong> The driver gives each 9000-byte frame a whole 64 KiB page. So a 1 MiB WRITE takes about 117 pages, 7.3 MiB of the region. Receive rings that do not drop under a plain network load are 64 MiB, twice the whole 32 MiB cache, so half of the cache cannot hold the rings and one WRITE. And a receive buffer held at 128 KiB is full after two frames.</p>
+      <p><strong>The stall.</strong> With sixteen connections, that two-frame buffer and a budget of one WRITE, the load collapses to one WRITE every 40 to 90 seconds: 9 untraced runs of 9. The budget's accounting is sound. The client's senders are asleep in TCP backoff, among them the one whose WRITE holds the budget. A buffer of 256 KiB or a budget of four or more WRITEs ends it.</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:500px">
+        <thead><tr><th>512 KiB buffer, MB/s</th><th>Conn.</th><th>Copy</th><th>Loan</th><th>Second run<br>copy / loan</th><th>Server CPU-s per GB<br>copy / loan</th></tr></thead>
+        <tbody>
+          <tr><td>Local NVMe (loan buffered)</td><td class="m">1</td><td class="c">1341</td><td class="c">1444</td><td class="m">1097 / 1467</td><td class="c">0.35 / 0.45</td></tr>
+          <tr><td>Local NVMe (loan buffered)</td><td class="m">16</td><td class="c">1936</td><td class="c">1979</td><td class="x">1718 / 569</td><td class="c">0.39 / 0.45</td></tr>
+          <tr><td>NVMe/TCP (loan direct)</td><td class="m">1</td><td class="c">1548</td><td class="c">1420</td><td class="m">1556 / 1736</td><td class="c">0.84 / 0.83</td></tr>
+          <tr><td>NVMe/TCP (loan direct)</td><td class="m">16</td><td class="c">2074</td><td class="c">2309</td><td class="m">2327 / 2056</td><td class="c">0.84 / 0.85</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>Copy against loan, with room.</strong> With a 512 KiB buffer and a budget of about six WRITEs, a loan and its copy are level, within about 10% either way. One cell did not repeat: the sixteen-connection loan on the local NVMe ran at 1979 MB/s and then at 569. No saving in server CPU shows for the loan. On NVMe/TCP the kernel time per GB is the same as the copy's; that storage is a stand-in on the same host and costs more CPU than the NFS path, so the measure is blunt. These settings peak at about 94 MiB of region in use, three times the cache.</p>
+      <p><strong>A driver defect.</strong> When the region ran dry, a receive ring that emptied never filled again, and every connection steered to it hung until the port was taken down and up. The driver refills a ring only when a frame arrives in it. Seen twice. A patch that retries is written and built, and has not been loaded.</p>
+      <p><strong>Cache.</strong> Cutting the pages in use from 1112 to 338 took only 12 to 14% off the cache misses of a copy load: about one refill per cache line of data at either size. Whether data the card has just written is in the cache when the CPU first reads it is a question for the on-die receive design.</p>
+      <p class="note"><strong>Next:</strong> tardis1 moves to a 16 KiB kernel, where a frame still has a page to itself but a 1 MiB WRITE is 1.8 MiB of region, the cache is 2048 pages and a 128 KiB buffer is eight frames. The same cells run there. The account with every table is the section "64K" of <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>.</p>
+    </div>
+
+    <p>One kernel (build 458), two boots, every budget phase on nvme-loop and on NVMe/TCP, every cell read. tardis1 is a 64-CPU server; the plan ran there on veth and test storage, not on its Xsight card or real NVMe. It was the fourth kernel run on the host: each of the first three found a defect, listed further down.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Check</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Plan stages</td><td class="r">30 of 30 PASS or DONE</td></tr>
+        <tr><td>fio data verification &middot; cells hung or killed &middot; kernel warnings</td><td class="r">0 &middot; 0 &middot; 0</td></tr>
+        <tr><td>David's acceptance check (phases A and B), each kind of storage</td><td class="r">OVERALL PASS &middot; OVERALL PASS</td></tr>
+        <tr><td>KUnit: XDR bvec &middot; svcsock receive &middot; NFSv3 &middot; NFSv4</td><td class="r">7/7 &middot; 43/43, no skip &middot; 6/6 &middot; 10/10</td></tr>
+        <tr><td>Packets dropped or allocations failed, any cell with a budget and the buffer held</td><td class="r">0</td></tr>
+        <tr><td>WRITEs that overran their credit (the 64 KiB cost estimate, never measured before)</td><td class="r">0 in every cell</td></tr>
+        <tr><td>Loaned WRITEs written direct on NVMe/TCP &middot; copies written direct on both</td><td class="r">all of them &middot; all of them</td></tr>
+        <tr><td>Smallest workable region, 114 pages (7.1 MiB), one WRITE at a time</td><td class="r">no drops; loans hold at most 2.25 MiB</td></tr>
+        <tr><td>LOCALIO boundary, short-read and stable tests, both kinds of storage</td><td class="r">exit 0; every writer finished</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3 style="margin-top:26px">Copy against loan at 64 KiB</h3>
+    <p>The same pairs as at the other page sizes: files that already have their size, twins that differ only in the budget. MB/s, copy / loan. The region is 35 MiB here.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Pair</th><th>Conn.</th><th>Needs whole pages<br>(loan buffered)</th><th>Arbitrary pieces<br>(loan direct)</th><th>Region held<br>copy / loan</th><th>Loan paused</th></tr></thead>
+      <tbody>
+        <tr><td>In-order 1 MiB writes</td><td class="m">1</td><td class="c">2174 / 2191</td><td class="c">2174 / 2165</td><td class="c">0.5 / 11.8 MiB</td><td class="r">0</td></tr>
+        <tr><td>Storage stalls mid-run</td><td class="m">1</td><td class="c">1315 / 1323</td><td class="c">1303 / 1323</td><td class="c">0.5 / 19.8 MiB</td><td class="r">0</td></tr>
+        <tr><td>Mixed write sizes</td><td class="m">16</td><td class="x">2594 / 1236</td><td class="x">2521 / 1142</td><td class="c">1.5 / 17.0 MiB</td><td class="x">about 950</td></tr>
+        <tr><td>Storage stalls mid-run</td><td class="m">16</td><td class="x">1912 / 1229</td><td class="x">1846 / 1009</td><td class="c">1.25 / 17.9 MiB</td><td class="x">about 97000</td></tr>
+      </tbody>
+    </table></div>
+    <div class="verdict">
+      <p class="big">One connection: level. Sixteen connections: <em>the loan is at 45 to 65% of its copy</em>. The charge per WRITE is too low there. With a larger charge and a larger region, the loan is level or nearly level when storage answers at once; in a storage stall it is at about two thirds of its copy with 11 WRITEs let in at once, about nine tenths with 14 and level with all 16. On mixed write sizes with storage that takes 1 ms per WRITE it stays at about four fifths.</p>
+      <p><strong>It is not XFS.</strong> These pairs write files that already have their size, so the wait XFS imposes on direct writes to a growing file does not apply, and on nvme-loop the loan is not written direct at all and shows the same gap.</p>
+      <p><strong>What the evidence points at:</strong> on 64 KiB pages about seven network frames share one receive page, and with sixteen connections those frames belong to different connections. A 1 MiB WRITE is charged 27 pages when it starts. In a saved trace of sixteen connections, 36% of such WRITEs then needed more (30 at the median, up to 54) and stopped part-way through being received until another finished. No cell with one connection pauses, and none at 4 KiB or 16 KiB, where frames do not share pages this way. During a storage stall the sixteen-connection loan falls to 48 MB/s, about one WRITE at a time, where its copy and the one-connection loan both hold 705.</p>
+      <p><strong>The experiment (7 October, storage that needs whole pages).</strong> The same pairs were repeated with the charge for a 1 MiB WRITE raised from 27 pages to 44 and to 61, on the same region. At 27 pages 59% of such WRITEs stopped part-way; at 44, 16%; at 61, none. With none stopping and storage that answers at once, the loan runs at its copy's rate: 2202 against 2221 MB/s on the steady load, 2474 against 2651 on the mixed one (1538 against 2991 at the original charge).</p>
+      <p><strong>On the same region that is not enough when storage waits.</strong> The budget was the same size throughout, so the larger charge let 6 WRITEs in at once where the original lets in 15. When the storage takes 1 ms or more per WRITE that is the limit: 1165 against 2232 MB/s on the mixed load, and 235 against 699 during the stall. The larger charge also slows the copy somewhat (2958 to 2232), because the same setting narrows the receive window.</p>
+      <p><strong>The larger charge on a region sized for it (7 October, a fresh boot).</strong> With 61 pages per 1 MiB WRITE the region is 54 MiB where it was 35, and the budget lets 11 WRITEs in at once. (An earlier version of this page said 12; the trace shows WRITEs refused with 11 in progress, because the budget's reserve does not admit one.)</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:500px">
+        <thead><tr><th>Sixteen connections, MB/s</th><th>Copy</th><th>Loan</th><th>Loan / copy</th><th>On the 35 MiB region</th></tr></thead>
+        <tbody>
+          <tr><td>Mixed write sizes, storage answers at once</td><td class="c">2619</td><td class="c">2625</td><td class="r">100%</td><td class="m">93%</td></tr>
+          <tr><td>Steady load outside the stall</td><td class="c">about 2240</td><td class="c">about 2245</td><td class="r">100%</td><td class="m">99%</td></tr>
+          <tr><td>Mixed write sizes, 1 ms per WRITE</td><td class="c">2581</td><td class="c">1766</td><td class="x">68%</td><td class="m">52%</td></tr>
+          <tr><td>During the 10 ms stall</td><td class="c">about 704</td><td class="c">about 485</td><td class="x">69%</td><td class="m">34%</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>A larger region still (7 October, another fresh boot).</strong> A 67.5 MiB region, sized with the intention of letting all 16 in. It let in 14: the sizing missed the reserve and counted the held receive buffers at half their size.</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:500px">
+        <thead><tr><th>Sixteen connections, MB/s</th><th>Copy</th><th>Loan</th><th>Loan / copy<br>with 14 at once</th><th>With 11</th><th>With 6</th></tr></thead>
+        <tbody>
+          <tr><td>Mixed write sizes, storage answers at once</td><td class="c">2581</td><td class="c">2468</td><td class="r">96%</td><td class="m">100%</td><td class="m">93%</td></tr>
+          <tr><td>Steady load outside the stall</td><td class="c">about 2250</td><td class="c">about 2205</td><td class="r">98%</td><td class="m">100%</td><td class="m">99%</td></tr>
+          <tr><td>Mixed write sizes, 1 ms per WRITE</td><td class="c">2261</td><td class="c">1992</td><td class="x">88%</td><td class="m">68%</td><td class="m">52%</td></tr>
+          <tr><td>During the 10 ms stall</td><td class="c">about 704</td><td class="c">about 634</td><td class="x">90%</td><td class="m">69%</td><td class="m">34%</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>All sixteen let in (7 October, a third fresh boot).</strong> A 73.75 MiB region, whose budget lets in 16 WRITEs of 1 MiB at once. On the stalling load the refusals fell from 95609 to 2, and the loan is level with its copy through the stall. On the mixed load at 1 ms per WRITE nothing changed: the loan ran at 1977 MB/s where it ran at 1992 with 14, and was refused about as often (3043 times against 3188).</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:500px">
+        <thead><tr><th>Sixteen connections, MB/s</th><th>Copy</th><th>Loan</th><th>Loan / copy<br>with 16 at once</th><th>With 14</th><th>With 11</th><th>With 6</th></tr></thead>
+        <tbody>
+          <tr><td>Mixed write sizes, storage answers at once</td><td class="c">2587</td><td class="c">2619</td><td class="r">101%</td><td class="m">96%</td><td class="m">100%</td><td class="m">93%</td></tr>
+          <tr><td>Steady load outside the stall</td><td class="c">about 2240</td><td class="c">about 2220</td><td class="r">99%</td><td class="m">98%</td><td class="m">100%</td><td class="m">99%</td></tr>
+          <tr><td>Mixed write sizes, 1 ms per WRITE</td><td class="c">2544</td><td class="c">1977</td><td class="x">78%</td><td class="m">88%</td><td class="m">68%</td><td class="m">52%</td></tr>
+          <tr><td>During the 10 ms stall</td><td class="c">about 705</td><td class="c">about 701</td><td class="r">99%</td><td class="m">90%</td><td class="m">69%</td><td class="m">34%</td></tr>
+        </tbody>
+      </table></div>
+      <p>The 78% is lower than the 88% with 14 only because the copy was faster on this boot (2544 against 2261); the loan is the same. The refusals on that load are not a seventeenth WRITE waiting its turn. When they happen, 13 to 53 WRITEs of all four sizes are in progress (30 at the median) on sixteen connections: with storage that takes 1 ms, a connection has more than one WRITE holding credit at a time. So room for sixteen 1 MiB WRITEs is not the limit on that load.</p>
+      <p><strong>What the region actually held.</strong> The charge of 61 pages is what one 1 MiB WRITE can hold at worst. At its fullest the region held far less than the charges add up to: 20 to 29 pages for each WRITE let in.</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:440px">
+        <thead><tr><th>Region</th><th>1 MiB WRITEs at once</th><th>Most held by loans</th><th>By copies</th></tr></thead>
+        <tbody>
+          <tr><td class="c">35 MiB</td><td class="m">6</td><td class="c">10.0 to 11.0 MiB</td><td class="m">0.5 to 0.75 MiB</td></tr>
+          <tr><td class="c">54 MiB</td><td class="m">11</td><td class="c">17.5 to 18.8 MiB</td><td class="m">0.5 to 0.75 MiB</td></tr>
+          <tr><td class="c">67.5 MiB</td><td class="m">14</td><td class="c">18.8 to 21.8 MiB</td><td class="m">0.5 to 0.75 MiB</td></tr>
+          <tr><td class="c">73.75 MiB</td><td class="m">16</td><td class="c">19.5 to 25.5 MiB</td><td class="m">0.5 to 0.75 MiB</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">tardis1's shared cache is reported as 32 MiB. The pages a loan load touches fit inside it at every size run, though the regions themselves do not. Whether received data stays in cache under load is a hardware measurement; this rig cannot show it.</p>
+      <p><strong>A bound for this host: half of the shared cache.</strong> Taking half of the 32 MiB cache, 16 MiB, as the most that loans may have in use, the largest budget that stays under it lets in 8 WRITEs of 1 MiB at once. This was measured, not worked out from the runs above: the budget was set for 8, 9 and 10 WRITEs on the 73.75 MiB region and the loan loads run with one and with sixteen connections.</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:500px">
+        <thead><tr><th>1 MiB WRITEs at once</th><th>Most held,<br>16 connections</th><th>Most held,<br>1 connection</th><th>Loan / copy,<br>1 ms per WRITE</th><th>During the<br>10 ms stall</th><th>Storage answers<br>at once</th></tr></thead>
+        <tbody>
+          <tr><td class="c">8</td><td class="r">15.5 MiB</td><td class="c">10.25 MiB</td><td class="x">57%</td><td class="x">50%</td><td class="r">100%</td></tr>
+          <tr><td class="c">9</td><td class="x">16.0 MiB</td><td class="c">11.5 MiB</td><td class="x">63%</td><td class="x">55%</td><td class="r">101%</td></tr>
+          <tr><td class="c">10</td><td class="x">18.5 MiB</td><td class="c">12.75 MiB</td><td class="x">66%</td><td class="x">62%</td><td class="r">99%</td></tr>
+        </tbody>
+      </table></div>
+      <p>With 9 the region reached 16 MiB exactly, which is at the limit and not under it. So under this bound sixteen connections loan at their copy's rate when storage answers at once, and at about half of it when storage waits; those are the cases a copy serves better here, and a copy holds 0.5 to 0.75 MiB. The margin at 8 is half a MiB and each figure is one run. Nothing between one and sixteen connections was run. Half of the cache is a starting point, not a settled choice: all of it would let all 16 in.</p>
+      <p><strong>What is left.</strong> The stall gap closes with all 16 let in. The gap on the mixed load at 1 ms per WRITE does not, and what would close it is not shown. The comparisons there are not clean: the copy ran at 2581, 2261 and 2544 MB/s on the three boots, so the ratio moves with the copy as well as the loan. With storage that answers at once the loan was 4% behind its copy at 14 and level at 11 and at 16. A few WRITEs still stop part-way (481 of 190507 on the stalling load with 11 at once, 4 in the traced runs with 14, 7 with 16), and a WRITE held up to 73 pages against the 61 it was charged. How the charge and the budget should be computed when frames share pages is not settled. Each cell is one run; the stall figures are read from fio's half-second log.</p>
+    </div>
+
+    <h3 style="margin-top:26px">What else differs at 64 KiB</h3>
+    <div class="matrix">
+      <div class="cell k">Without the mechanism (no budget, buffer not held), one client: packets dropped. At 4 KiB and 16 KiB the same cells drop 6000 to 8000 and fill the region. Not examined.</div><div class="cell v"><span class="pill pend">0 here</span></div>
+      <div class="cell k">Without the mechanism, two clients sharing the region: packets dropped, region full</div><div class="cell v"><span class="pill no">4137 &middot; 3914</span></div>
+      <div class="cell k">LOCALIO, misaligned records smaller than a 64 KiB page: pages read back per WRITE (0.000 to 0.006 at 4 KiB). A cost, left alone; nothing stays in the page cache.</div><div class="cell v"><span class="pill pend">0.33 to 0.77</span></div>
+      <div class="cell k">A budget changed under load: records copied for want of a budget, where the other hosts show 0. Not examined.</div><div class="cell v"><span class="pill pend">20 &middot; 27</span></div>
+    </div>
+    <p style="margin-top:14px" class="note"><strong>The 16 KiB results are of an earlier kernel.</strong> Build 458 is <code>v7.1.13-20</code> with the four kernel fixes found on tardis1. The 4 KiB results on this page are of build 458 too; the 16 KiB results are of <code>v7.1.13-19</code> and have not been re-run with them. Throughput is not compared across hosts: they are different machines.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow hot">What tardis1 found</p>
+    <h2>Four kernel defects, two of them not about page size</h2>
+    <p>Builds 454, 455 and 457 each stopped on one of these. All four are fixed in build 458.</p>
+    <div class="delta">
+      <div class="mark cost">&Delta;</div>
+      <div class="body"><h3>A loan was charged per packet fragment, not per region page<span class="tag new">fixed</span></h3>
+      <p>On 64 KiB pages veth packs about seven jumbo frames into one page, so a 1 MiB WRITE holding 17 pages was charged about 117 against a credit of 25. Every loan was throttled to a quarter of the budget: 1000 MB/s where its copy ran at 2156. With pages counted once, the one-connection pairs are level and nothing overruns. Where a frame has a page to itself the charge is unchanged, which is from the code and not yet from a run.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark cost">&Delta;</div>
+      <div class="body"><h3>A waiting connection could block every other one for good<span class="tag new">fixed</span></h3>
+      <p>A connection refused budget waits its turn. If TCP rebuilt its queued data in ordinary memory meanwhile, it read on without asking again and stayed at the head of the queue, and every connection behind it waited on a release that never came. Seen once in a plan run and reproduced at about one in 34 repetitions of the tightest cell. With the fix, 80 of 80 repetitions finished, including one where the same event occurred. Not specific to 64 KiB.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark cost">&Delta;</div>
+      <div class="body"><h3>Falling back to a copy part-way through a record could count bytes twice<span class="tag new">fixed</span></h3>
+      <p>A record whose first short pieces had been merged into one page, and which then had to be copied, had that page's bytes subtracted twice. The receive failed with a kernel warning. Seen once; the fix is verified by a unit test that drives exactly that sequence, and has not been caught again at runtime. Not specific to 64 KiB.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark cost">&Delta;</div>
+      <div class="body"><h3>Two neighbouring misaligned writes in one page could fail one of them<span class="tag new">fixed</span></h3>
+      <p>Through LOCALIO, one write's direct middle and its neighbour's buffered end could land in the same page; the direct write then could not drop the page from the cache and the neighbour's write returned an I/O error. The test did not notice at first. Cutting every write at page boundaries cured it but made writes aligned to the device, and not to a 64 KiB page, mostly buffered. The cut is per end again, and LOCALIO now finishes a direct write that shares a page before it returns: 12 of 12 focused runs clean where 6 of 6 failed. Only XFS was run.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">i</div>
+      <div class="body"><h3>Slow direct writes to a growing file are XFS's design<span class="tag base">finding</span></h3>
+      <p>A direct write that starts beyond the end of the file waits for every direct write in progress: 95 ms on average here, against 5 microseconds on a file that has its size. A rule that issues such writes through the page cache instead took the sixteen-connection copy from 442 to 2355 MB/s, with 77% of its WRITEs no longer direct. It was written and measured once, and then taken out again: it is kept in the history to come back to and is not in the tree or in build 458.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow ok">16 KiB &middot; the whole plan</p>
+    <h2>It passes on both kinds of storage</h2>
+    <p>One kernel, five boots, every budget phase run on nvme-loop and again on NVMe/TCP. Every cell was read, not only each stage's status.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Check</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Plan stages</td><td class="r">30 of 30 PASS or DONE</td></tr>
+        <tr><td>fio data verification, every cell of 12 phase runs</td><td class="r">0 failures</td></tr>
+        <tr><td>Cells hung or killed by timeout &middot; kernel warnings</td><td class="r">0 &middot; 0</td></tr>
+        <tr><td>KUnit: XDR bvec &middot; svcsock receive &middot; NFSv3 &middot; NFSv4</td><td class="r">7/7 &middot; 41/41 &middot; 6/6 &middot; 10/10</td></tr>
+        <tr><td>Packets dropped or allocations failed, any cell with a budget and the buffer held</td><td class="r">0</td></tr>
+        <tr><td>Loaned WRITEs written direct on NVMe/TCP</td><td class="r">all of them, every loan cell</td></tr>
+        <tr><td>Smallest workable region, 306 pages (4.8 MiB), one WRITE at a time</td><td class="r">no drops; loans hold at most 2.5 MiB</td></tr>
+        <tr><td>Two devices sharing one region &middot; a budget per network namespace</td><td class="r">each WRITE counted against the right budget</td></tr>
+        <tr><td>A budget changed under load (<code>n-reconf</code>, fixed harness), both kinds of storage</td><td class="r">load ran through every change; no waiters left</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">The <code>n-reconf</code> row is from a re-run on a fifth boot, after the 4 KiB host found that the cell changed the budget once its load had finished (below). With the fixed harness, eight connections were waiting on each kind of storage when the budget went to 0; the cell carried on, drawing on the default budget meanwhile, and ended with no waiters, nothing in flight and the data verified. The cell keeps snapshots and no per-WRITE trace, so that those eight were woken is inferred from the cell finishing.</p>
+
+    <h3 style="margin-top:26px">Copy against loan, compared like for like</h3>
+    <p>Each loan cell has a twin that copies and differs in nothing but the budget. These pairs write files that already have their size. MB/s, copy / loan.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Pair</th><th>Conn.</th><th>Needs whole pages<br>(loan buffered)</th><th>Arbitrary pieces<br>(loan direct)</th><th>Region held<br>copy / loan</th></tr></thead>
+      <tbody>
+        <tr><td>In-order 1 MiB writes</td><td class="m">1</td><td class="c">1832 / 1802</td><td class="c">1662 / 1612</td><td class="c">0.25 / 15.1 MiB</td></tr>
+        <tr><td>Mixed write sizes</td><td class="m">16</td><td class="c">792 / 799</td><td class="c">790 / 781</td><td class="c">1.75 / 16.6 MiB</td></tr>
+        <tr><td>Storage stalls mid-run</td><td class="m">1</td><td class="c">1194 / 1298</td><td class="c">1085 / 1070</td><td class="c">0.5 / 15.2 MiB</td></tr>
+        <tr><td>Storage stalls mid-run</td><td class="m">16</td><td class="c">1439 / 1439</td><td class="c">1207 / 1128</td><td class="c">1.75 / 15.8 MiB</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Throughput is level; region use is not.</strong> Copy and loan are within 3% of each other in three of the four pairs on each kind of storage, and each cell is one run, so the remaining differences are not findings. What differs by a factor of ten to sixty is how much of the 24 MiB region each holds.</p>
+
+    <h3 style="margin-top:26px">Without the mechanism</h3>
+    <p>The same loads with no budget and the receive buffer left to grow fill the region with data nfsd has not read yet.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:460px">
+      <thead><tr><th>Cell</th><th>Conn.</th><th>Packets dropped</th><th>Region</th></tr></thead>
+      <tbody>
+        <tr><td>Mixed write sizes, nvme-loop</td><td class="m">16</td><td class="x">7196</td><td class="x">all 24 MiB</td></tr>
+        <tr><td>Mixed write sizes, NVMe/TCP</td><td class="m">16</td><td class="x">7916</td><td class="x">all 24 MiB</td></tr>
+        <tr><td>The same with the buffer held, budget 0</td><td class="m">16</td><td class="r">0</td><td class="r">1.75 MiB</td></tr>
+      </tbody>
+    </table></div>
+    <p>The data still verifies and nothing hangs, but the card drops packets. Holding the receive buffer is not optional.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow ok">4 KiB &middot; the whole plan</p>
+    <h2>The same answers at 4 KiB, on build 458</h2>
+    <p>Build 458 from the <code>-WIP</code> branch, which carries the four fixes tardis1 found. One kernel, two boots, every budget phase on nvme-loop and on NVMe/TCP, every cell read. The 4 KiB host is a different VM from the 16 KiB one, so throughput is not compared across the two.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Check</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Plan stages</td><td class="r">30 of 30 PASS or DONE</td></tr>
+        <tr><td>fio data verification &middot; cells hung or killed &middot; kernel warnings</td><td class="r">0 &middot; 0 &middot; 0</td></tr>
+        <tr><td>David's acceptance check (phases A and B), each kind of storage</td><td class="r">OVERALL PASS &middot; OVERALL PASS</td></tr>
+        <tr><td>KUnit: XDR bvec &middot; svcsock receive &middot; NFSv3 &middot; NFSv4</td><td class="r">7/7 &middot; 42/43, 1 skip by design at 4 KiB &middot; 6/6 &middot; 10/10</td></tr>
+        <tr><td>Packets dropped or allocations failed, any cell with a budget and the buffer held</td><td class="r">0</td></tr>
+        <tr><td>Loaned WRITEs written direct on NVMe/TCP</td><td class="r">all of them, every loan cell</td></tr>
+        <tr><td>Smallest workable region, 838 pages (3.3 MiB), one WRITE at a time</td><td class="r">no drops; loans hold at most 1.6 MiB</td></tr>
+        <tr><td>LOCALIO boundary, short-read and stable tests, both kinds of storage</td><td class="r">exit 0; at most 0.006 pages read back per WRITE, nothing left in the page cache</td></tr>
+        <tr><td>A budget changed under load (<code>n-reconf</code>, fixed harness), both kinds of storage</td><td class="r">waiters drain at every change</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3 style="margin-top:26px">Copy against loan at 4 KiB</h3>
+    <p>The same pairs as at 16 KiB: files that already have their size, twins that differ only in the budget. MB/s, copy / loan. The region is 16 MiB here.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Pair</th><th>Conn.</th><th>Needs whole pages<br>(loan buffered)</th><th>Arbitrary pieces<br>(loan direct)</th><th>Region held<br>copy / loan</th></tr></thead>
+      <tbody>
+        <tr><td>In-order 1 MiB writes</td><td class="m">1</td><td class="c">2049 / 2165</td><td class="c">1924 / 1981</td><td class="c">0.25 / 9.6 MiB</td></tr>
+        <tr><td>Mixed write sizes</td><td class="m">16</td><td class="c">842 / 852</td><td class="c">854 / 831</td><td class="c">1.7 / 9.2 MiB</td></tr>
+        <tr><td>Storage stalls mid-run</td><td class="m">1</td><td class="c">1300 / 1474</td><td class="c">1273 / 1364</td><td class="c">0.25 / 9.6 MiB</td></tr>
+        <tr><td>Storage stalls mid-run</td><td class="m">16</td><td class="c">1923 / 1964</td><td class="c">1814 / 1698</td><td class="c">1.5 / 8.3 MiB</td></tr>
+      </tbody>
+    </table></div>
+    <p>As at 16 KiB, throughput is close to level and region use is not: a loan holds five to forty times what a copy does. Without the mechanism (no budget, buffer not held) the mixed load dropped 7012 packets on nvme-loop and 6818 on NVMe/TCP and used the whole region; with the buffer held and a budget of 0, none, in 1.8 MiB.</p>
+
+    <h3 style="margin-top:26px">The questions 4 KiB was run for</h3>
+    <div class="matrix">
+      <div class="cell k">At 4 KiB veth lays a jumbo frame out as a head and two page fragments. Are loans still placed on a 4-byte boundary with <code>rx_ip_align=2</code>, so they can be written direct?</div><div class="cell v"><span class="pill yes">yes, every loan</span></div>
+      <div class="cell k">Does a 1500-byte MTU loan at 4 KiB, where at 16 KiB it is always copied?</div><div class="cell v"><span class="pill no">no, still copied</span></div>
+      <div class="cell k">Does anything stall where an earlier 4 KiB run slowed down before the budget-0 fix?</div><div class="cell v"><span class="pill yes">nothing stalled</span></div>
+    </div>
+    <p style="margin-top:14px" class="note">One small difference from 16 KiB: with no budget and the receive buffer free to grow, 7 of 2785 WRITEs on nvme-loop went through the page cache instead of direct. TCP collapsed its receive queue 21 times in that cell, rebuilding data outside the region, where the budget does not apply; the counts fit that, though the cell keeps no trace to prove it. The data verified.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow hot">What the 4 KiB and 16 KiB runs found</p>
+    <h2>Twelve problems, in the kernel, two test devices and the harness</h2>
+    <p>Each explains a change now in the tree. The ones that matter beyond those hosts:</p>
+    <div class="delta">
+      <div class="mark cost">&Delta;</div>
+      <div class="body"><h3>A region with no budget could hang the server<span class="tag new">fixed</span></h3>
+      <p>Sixteen connections each part-way through a 1 MiB WRITE held the whole region between them, so none could finish. A budget of 0 now means copy in every case, including when no budget is set anywhere. This is also what makes "region, budget 0" a setup that needs no further configuration.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark cost">&Delta;</div>
+      <div class="body"><h3>A misaligned write was cut in the wrong place on pages larger than 4 KiB<span class="tag new">fixed, then reworked</span></h3>
+      <p>nfsd and LOCALIO write a misaligned write's middle direct and its ends buffered. The cut was made at the storage's 4096-byte alignment, which is a page boundary only on 4 KiB pages. On 16 KiB each write then read back the pages it shared with its neighbours: 0.99 reads per WRITE, 0.003 once a misaligned end was cut at a page boundary. tardis1 later found the remaining case, an end that is aligned to the device but not to the page (above).</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark cost">&Delta;</div>
+      <div class="body"><h3>Two block-layer test devices were wrong<span class="tag rework">upstream fixes</span></h3>
+      <p>null_blk lost data when its block size was smaller than the page. dm-delay rounded short delays up to a timer tick, so the harness's 1 ms storage delay was 10 ms at 100 Hz. <strong>Every throughput figure taken before that fix was set by the tick.</strong> Both stand on their own as fixes.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">i</div>
+      <div class="body"><h3>A direct write to a growing file is slow on XFS, loaned or copied<span class="tag base">finding</span></h3>
+      <p>Eight nfsd threads creating one file queue behind one another: about 350 MB/s, against 1600 to 2100 for the same writes to a file that already has its size. This looked like loans being slow until the copy was shown to be just as slow. tardis1 traced the wait itself (above).</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">i</div>
+      <div class="body"><h3>The held receive buffer costs a single connection up to a third<span class="tag base">finding</span></h3>
+      <p>The same copied cell ran at about 1340 MB/s with the buffer held at 128 KiB, 1650 at 256 KiB and 2000 with it not held. Not measured with several connections or on hardware.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">&Delta;</div>
+      <div class="body"><h3>The budget-change cell changed the budget after its load had finished<span class="tag rework">harness &middot; 4 KiB</span></h3>
+      <p><code>n-reconf</code> changes a namespace's budget at 6, 12 and 18 seconds, but its load was sized in data. Once the storage delay was honest, that load finished in about 4 seconds, so on both hosts the budget changed with nothing in flight, and the cell passed without testing the two lost-wake fixes it exists for. It now runs ten verified passes, about 40 seconds. Re-run at 4 KiB, records were in flight and waiting at every change and the waiters drained each time. Re-run at 16 KiB, the load ran through all three changes and the cell ended with no waiters and its data verified.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">&Delta;</div>
+      <div class="body"><h3>The plan could not compare a copy with a loan, and could pass with nothing run<span class="tag rework">harness</span></h3>
+      <p>Its copy cells differed from its loan cells in three things at once. Every loan cell now has a twin that copies, the plan runs every budget phase on both kinds of storage, each cell records how its WRITEs were issued, and a stage fails on any verify failure, hang or missing table.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">What it does and does not say</p>
+    <h2>The mechanism holds. What it is worth is a hardware question.</h2>
+    <div class="matrix">
+      <div class="cell k">The budget bounds region use and nothing is dropped, on both kinds of storage, at 4, 16 and 64 KiB</div><div class="cell v"><span class="pill yes">shown</span></div>
+      <div class="cell k">Budget 0 with the buffer held: one copy, a direct write, a nearly empty region</div><div class="cell v"><span class="pill yes">shown</span></div>
+      <div class="cell k">A loan is written direct where the storage takes arbitrary pieces and the data is placed</div><div class="cell v"><span class="pill yes">shown</span></div>
+      <div class="cell k">A loan written direct is faster than a copy</div><div class="cell v"><span class="pill no">not on this rig</span></div>
+      <div class="cell k">A loan keeps up with its copy on sixteen connections at 64 KiB (45 to 65% as configured; with a larger charge per WRITE and a larger region, level or nearly so when storage answers at once; in a stall, about two thirds with 11 WRITEs let in at once, about nine tenths with 14 and level with 16; about four fifths on mixed sizes at 1 ms per WRITE even with 16)</div><div class="cell v"><span class="pill pend">partly shown</span></div>
+      <div class="cell k">The 4 KiB results hold with the fixes found on tardis1</div><div class="cell v"><span class="pill yes">shown</span></div>
+      <div class="cell k">The 16 KiB results hold with the fixes found on tardis1</div><div class="cell v"><span class="pill pend">not re-run</span></div>
+      <div class="cell k">A region this small stays in the CPU's cache</div><div class="cell v"><span class="pill pend">hardware</span></div>
+      <div class="cell k">What a copy costs once the data has left the cache</div><div class="cell v"><span class="pill pend">hardware</span></div>
+    </div>
+    <p style="margin-top:14px">Every run was on virtual network devices with memory for storage. A copy there is nearly free, which is why copy and loan come out level. On hardware the copy is the cost the whole effort began with, and the on-die receive copy design rests on keeping the region in cache so that it is cheap. Neither can be judged here.</p>
+    <p>Still unexplained on this rig: a loan written direct is about 6% slower than the same loan written through the page cache when the storage has a delay, with the difference inside the one request to the device.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Where it stands</p>
+    <h2>All three page sizes have run. What is left is named.</h2>
+    <div class="tbl-wrap"><table class="q" style="min-width:480px">
+      <thead><tr><th>Host</th><th>Page size</th><th>State</th><th>Kernel</th></tr></thead>
+      <tbody>
+        <tr><td>VMware Fusion guest, MacBook Pro</td><td class="m">4 KiB</td><td class="r">complete</td><td class="m">v7.1.13-20, build 458</td></tr>
+        <tr><td>UTM guest, MacBook Pro</td><td class="m">16 KiB</td><td class="r">complete</td><td class="m">v7.1.13-19</td></tr>
+        <tr><td>tardis1</td><td class="m">64 KiB</td><td class="r">complete</td><td class="m">v7.1.13-20, build 458</td></tr>
+      </tbody>
+    </table></div>
+    <div class="matrix">
+      <div class="cell k">The larger charge per WRITE on a region sized for it (sixteen connections, 64 KiB)</div><div class="cell v"><span class="pill yes">run</span></div>
+      <div class="cell k">Settle how the charge and the budget are computed when frames share pages; a budget for all 16 WRITEs at the larger charge closes the stall gap and not the one on mixed sizes at 1 ms per WRITE; held to half of the shared cache the budget lets in 8</div><div class="cell v"><span class="pill pend">next</span></div>
+      <div class="cell k">Issuing writes that start beyond the end of a file through the page cache: written, measured once, taken out for now</div><div class="cell v"><span class="pill pend">set aside</span></div>
+      <div class="cell k">The 16 KiB host on the kernel with tardis1's fixes</div><div class="cell v"><span class="pill pend">not run</span></div>
+      <div class="cell k">The Xsight card and the real NVMe on tardis1: first run at 64 KiB on 7 and 8 October (the summary at the top of the 64 KiB section). Whether the region stays in cache and what the copy costs are still open; the same cells are to run at 16 KiB</div><div class="cell v"><span class="pill pend">begun</span></div>
+    </div>
+  </section>
+
+  <footer>
+    <span class="r">NFSD receive region and budget &middot; 4, 16 and 64 KiB status</span><br>
+    In-tree: <code>NFSD_TCP_WRITE_ZEROCOPY/transplant/</code> (README.md &middot; RESULTS.md &middot; results/runs/4KiB-7.1.13-20.hs.458.tsv &middot; results/16KiB.tsv &middot; results/64KiB.tsv), <code>slipstream/</code>, <code>on-die-receive-copy/SPEC.md</code>, <code>xeu-SGL-compat-receive-placement/</code><br>
+    Series: David Flynn &middot; Mike Snitzer &middot; Hammerspace &middot; 2026-10-08
+  </footer>
+
+</div>

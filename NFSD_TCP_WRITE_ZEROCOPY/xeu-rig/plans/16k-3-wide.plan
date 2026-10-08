@@ -1,0 +1,11 @@
+# Budgets of 12 and 16 WRITEs (all sixteen connections admitted at once),
+# rings of 4 x 128.  These need the most region: lines that do not fit are
+# skipped and logged.  About 30 minutes.
+128 262144 12 prp step-on-n16
+128 262144 16 prp step-on-n16
+128 262144 12 sgl step-on-n16
+128 262144 16 sgl step-on-n16
+128 524288 12 prp step-on-n16
+128 524288 16 prp step-on-n16
+128 524288 12 sgl step-on-n16
+128 524288 16 sgl step-on-n16
