@@ -320,6 +320,27 @@ arrives on `xemi0`, which `xeu` does not drive.
   `alloc_fail` unchanged. The backing file was removed; the `nvmet`
   and `nvme-tcp` modules stay loaded.
 
+- **The budget is not what set that rate, and these cells are too
+  short to compare rates.** The NVMe/TCP loan cell again with
+  `FORCE_BUDGET=` (`xeu-geometry-4x256-sgl-b600`, `-b900`):
+
+  | budget | MB/s | denied | used_pages | its warm-up, MB/s |
+  |---|---|---|---|---|
+  | 343 (derived) | 619 | 511 | 1640 | 664 |
+  | 600 | 847 | 86 | 1861 | 860 |
+  | 900 | 498 | 0 | 1731 | 658 |
+
+  With no WRITE denied the cell was the slowest of the three, so the
+  reading above (the budget halves the rate) does not hold. Each
+  cell's rate follows its own warm-up, which is the same copy job run
+  moments before and itself ranged from 658 to 860 here and 1118 to
+  1342 on the PRP runs. A cell writes 512 MiB, under a second at these
+  rates, so one run's MB/s is not a measurement of copy against loan.
+  What these runs do show: every loan written direct, no pause or
+  overrun, no `alloc_fail`, no tail drops, at budgets beyond the 408
+  pages the region had free. Longer cells, repeated, are needed before
+  any rate is compared.
+
 Next: the measure of what one WRITE holds (the rest of work item 5),
 then the ring size for the NFS cells, then decision 5 with those
 numbers.
