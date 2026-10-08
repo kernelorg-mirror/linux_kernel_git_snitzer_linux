@@ -1458,3 +1458,15 @@ the three budgets (`bound-half-l3/pair-b*`): 2521 / 1447, 2544 / 1595
 and 2468 / 1660, which is 57%, 63% and 67%, as recorded there. One of
 four runs of that loan cell at the full budget came in at 1598 where
 the others gave 1959 to 1981, so that cell can vary by a fifth.
+
+## 23. 2026-10-07: the first run over the Xsight card, and the client is 106
+
+The load generator is 192.168.0.106 / 192.168.1.106 (`plsm121c-06`),
+key `/root/.ssh/id_ed25519_snitzer2`; 192.168.0.105 is another
+machine with connections on `enp164s0f0`, so the rig uses `enp161s0f0`.
+Mike's rule: generate load only against mounts of tardis1 he has given
+leave to use (`../XEU_CONVERGENCE.md` section 0). The harness's remote
+path ran end to end with no region and no change to the port; its
+"copy" cells turned out to be loans with no budget, because the budget
+governs region pages only (that document's section 6). Next is work
+item 4, which takes a port down and waits for Mike's yes.

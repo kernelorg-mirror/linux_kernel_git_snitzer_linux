@@ -18,6 +18,21 @@ Nothing on the card or the drives was changed in scoping this. The work
 items are in section 5; the decisions that block some of them are in
 section 4.
 
+## 0. Rules for this rig (Mike, 2026-10-07)
+
+- **Generate load only against mounts of tardis1 that Mike has given
+  leave to use.** That is the harness's own mount on the client
+  (`/mnt/rxr`) of `/hs/nvme0/zcbudget`, or of the export in front of a
+  backing file on `/hs/nvme1`. fio and the like never run against
+  anything else. The client has other mounts (`/mnt/save`,
+  `/mnt/ci-repos`, `/mnt/hs_test` of 192.168.1.161) and tardis1 has
+  other exports and another client (192.168.0.105): none of those are
+  ours.
+- On tardis1's drives only `/hs/nvme0` and `/hs/nvme1` may be used, as
+  files in them. No drive is reformatted.
+- A port is not taken down, and its rings are not changed, until Mike
+  has said yes to that (decision 4).
+
 ## 1. What tardis1 has now
 
 Read on 2026-10-07 unless a source is named.
@@ -28,7 +43,7 @@ Read on 2026-10-07 unless a source is named.
 | ports | `enp164s0f0` 192.168.0.211/24 and `enp161s0f0` 192.168.1.211/24, both up, MTU 9000 (the driver's maximum) |
 | rings | 8 combined channels (the maximum), 1024 receive descriptors each (range to 32768) |
 | receive buffers | page pools (`ring_N_rx_pp_*` in `ethtool -S`), so the region can bind them |
-| client | 192.168.0.105 holds NFS connections to this server; 192.168.1.105 is its other port. A non-interactive `ssh` from tardis1 did not get a shell |
+| client | **192.168.0.106 / 192.168.1.106** (`plsm121c-06`): x86_64, 4 KiB pages, 48 CPUs, 1 TB, two 400G `mlx5_core` ports at MTU 9000, kernel `6.12.76-2.hs.212.el8`, fio 3.35, nstat, iperf3. `ssh -i /root/.ssh/id_ed25519_snitzer2 root@192.168.0.106`. **192.168.0.105 is another machine, not ours**; it holds NFS connections to tardis1 on `enp164s0f0` |
 | local NVMe | eight WD SN8100 2 TB, `sgls: 0`, `virt_boundary_mask` 4095: all need whole pages. XFS at `/hs/nvme0` to `/hs/nvme7`, 68% full, exported to both client subnets |
 | NVMe/TCP | `nvmet-tcp` and `nvme-tcp` are built for this kernel; neither is loaded |
 | region this boot | 1180 pages bound to veth `rxsrv` (`page_pool.rx_region_dev`, `rx_region_pages`). A region is made once per boot |
@@ -73,7 +88,7 @@ measures them.
 | part | veth rig (now) | xeu rig |
 |---|---|---|
 | receiving device | veth `rxsrv`, XDP_PASS | one `xeu` port, small rings |
-| client | network namespace `rxcli` on the same host | 192.168.0.105 over the wire, driven by `ssh` |
+| client | network namespace `rxcli` on the same host | 192.168.1.106 over the wire, driven by `ssh` |
 | storage that needs whole pages | nvme-loop over null_blk | a local NVMe, XFS |
 | storage that takes arbitrary pieces | NVMe/TCP to 127.0.0.1 over null_blk | NVMe/TCP to 127.0.0.1, backing to be decided |
 | storage delay | dm-delay, 1 ms and a 10 ms step | the device's own; dm-delay only on the NVMe/TCP backend if wanted |
@@ -87,10 +102,12 @@ The cells stay the ones compared so far: `seq-sized`, `mixed-sized`,
 
 Answered by Mike on 2026-10-07:
 
-1. **The client and the ports.** 192.168.0.105 is the load generator;
-   its `ssh` credentials are still to come. The second 400G port
-   reaches the same client at 192.168.1.105. Another client can be
-   added later; first see how far one goes.
+1. **The client and the ports.** The load generator is `plsm121c-06`,
+   192.168.0.106 on `enp164s0f0`'s network and 192.168.1.106 on
+   `enp161s0f0`'s (Mike first said 105 and corrected it; 105 is not
+   ours). Key: `/root/.ssh/id_ed25519_snitzer2`. Another client can be
+   added later; first see how far one goes. **Use `enp161s0f0` and
+   192.168.1.106**: `enp164s0f0` carries 105's connections.
 2. **The local NVMe.** `/hs/nvme0` (and `/dev/nvme0n1`): test files in
    a directory of it, no mkfs.
 3. **The NVMe/TCP target's backing.** `/hs/nvme1` may be used. The
@@ -186,12 +203,36 @@ drops. `/var/tmp/zc-run-logs/harness-modes/`.
   paid for allocating it. The file is now written through once and
   mkfs told not to discard.
 
-**To run on the card** once the client has `ssh` keys and a region is
-bound to the port (work item 4):
+**First run over the card (2026-10-07, no region, nothing on the port
+changed).** `NOREGION=1`, `enp161s0f0` (8 rings of 1024, MTU 9000,
+`rx_ip_align=2`), client 192.168.1.106, `EXPORT_DIR=/hs/nvme0/zcbudget`;
+`/var/tmp/zc-run-logs/xeu-plumbing/copy-prp`. The whole path works:
+`ssh`, the mount, fio with verification, the client's counters and logs
+fetched back, the directory removed after.
 
-    NETDEV=enp164s0f0 CLIENT=root@192.168.0.105 STORAGE=prp \
+| cell (budget 0) | MB/s | fio rc | retransmits | port drops | WRITE segments direct / through the page cache |
+|---|---|---|---|---|---|
+| `seq-sized-copy`, 1 connection | 1598 | 0 | 0 | 2 | 0 / 512 |
+| `mixed-sized-copy`, 16 connections | 1561 | 0 | 0 | 2 | 624 / 2161 |
+| `step-copy-n16`, steady 1 MiB | 1523 | 0 | 0 | 126 | 0 / 174278 |
+
+- **These are not copies.** With a budget of 0 the WRITEs went through
+  the page cache, where a copy on this drive is written direct (as on
+  veth, above). The budget governs region pages only
+  (`page_pool_page_in_rx_region()` in `net/sunrpc/svcsock.c`), and with
+  no region bound to the port its pages are loaned with no budget.
+  That is read from the code and the counts; it was not traced.
+- So **a copy against a loan on the card needs the region bound** (work
+  item 4). Until then the only copy twin is
+  `sunrpc.svc_tcp_rx_loan_pages=N`, which the harness does not switch.
+- The port's drop counter is the whole port's, not this load's alone.
+
+**To run on the card** with a region bound to the port (work item 4):
+
+    export SSH_OPTS="-i /root/.ssh/id_ed25519_snitzer2"
+    NETDEV=enp161s0f0 CLIENT=root@192.168.1.106 STORAGE=prp \
         EXPORT_DIR=/hs/nvme0/zcbudget ./run-budget.sh <outdir>
-    NETDEV=enp164s0f0 CLIENT=root@192.168.0.105 STORAGE=sgl \
+    NETDEV=enp161s0f0 CLIENT=root@192.168.1.106 STORAGE=sgl \
         BACKING=/hs/nvme1/zcbudget-nvmet.img ./run-budget.sh <outdir>
 
 `NOREGION=1` runs the same before a region is bound, to check the
