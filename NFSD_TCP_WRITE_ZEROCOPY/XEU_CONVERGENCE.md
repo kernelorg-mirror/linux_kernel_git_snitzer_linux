@@ -115,18 +115,28 @@ Answered by Mike on 2026-10-07:
    front of a real drive and nothing is reformatted. The raw
    `/dev/nvme1n1` is not touched.
 
+4. **Taking a port down** to bind the region and shrink the rings:
+   yes for `enp161s0f0` (2026-10-07). `enp164s0f0` is never touched,
+   which also rules out reloading `xeu`.
+5. **The page size.** Open for this platform (2026-10-07), and on
+   2026-10-08 Mike chose to pivot to 16 KiB and repeat this testing
+   there. The 64 KiB work stops at the "64K" section below.
+
 Still open:
 
-4. **Taking a port down** to bind the region and shrink the rings
-   (work item 4): not yet said in so many words, and it waits for the
-   client's credentials in any case.
-5. **The share of the L3 on this card.** Half (256 pages) is the share
-   picked for veth. With the rings inside the region it may leave room
-   for one or two WRITEs; decide once work item 5 has the numbers.
+6. **The share of the L3 on this card.** Half (256 pages) is the share
+   picked for veth. At 64 KiB it does not fit: finding 7 of the "64K"
+   section. To be decided again at 16 KiB.
 
 ## 5. Work items
 
 In order. Items 1 to 3 need no decision and no change to the card.
+As of 2026-10-08, at 64 KiB: items 1 to 4 are done (5b); item 5 gave
+an upper bound and not a measure (5b); items 6 and 7 were run as the
+step cells and their variations (5c, 5e, 5g) and not as the plan's
+pairs; item 8 was not run as written, since the share does not fit;
+item 9 is this file and the artifact, with the handoff, `README.md` and
+`RESULTS.md` still to be brought to it.
 
 1. **Harness: a real device and a remote client. Done 2026-10-07,
    not yet run against a real client.** `run-budget.sh` takes
@@ -176,18 +186,18 @@ In order. Items 1 to 3 need no decision and no change to the card.
    per run, the account in `transplant/README.md` and `RESULTS.md`, and
    the artifact when Mike asks.
 
-## 5a. Bring-up after the reboot of 2026-10-07 (work item 4): START HERE
+## 5a. Bring-up after the reboot of 2026-10-07 (work item 4)
 
 Mike said yes to `enp161s0f0` (rings and region) and rebooted tardis1
 for it. `enp164s0f0` is left alone: 192.168.0.105's connections are on
-it. Nothing below has been run; each step says what to check.
+it. These are the steps as planned; they were run that day, and 5b has
+what differed (the region's name in step 4, and that `ethtool -G` in
+step 3 works only with the port up).
 
 The region is made at the first pool that matches, once per boot, and
 `page_pool` is built in, so its parameters can be written after boot.
 `xeu` is loaded from `/etc/modules-load.d`, so its pools exist by then;
-they must be made again with the parameters set. Unknown until tried:
-whether `xeu` lets the rings be changed with the port down, and whether
-a ring change alone makes the pools again.
+they must be made again with the parameters set.
 
 1. Check first: `cat /sys/kernel/debug/page_pool_rx_region` must not
    exist (no region yet this boot); `rx_ip_align` reads 2; the client
@@ -199,12 +209,13 @@ a ring change alone makes the pools again.
    (256 posted pages). If the driver refuses with the port down, do it
    after step 5 and then take the port down and up once more.
 4. `echo 0000:a1:00.0 > /sys/module/page_pool/parameters/rx_region_dev`
-   (the port's PCI function, not `enp161s0f0`: see 5b) and `echo 2048 > /sys/module/page_pool/parameters/rx_region_pages`.
+   (the port's PCI function, not `enp161s0f0`: see 5b) and
+   `echo 2048 > /sys/module/page_pool/parameters/rx_region_pages`.
    2048 pages (128 MiB) is for measuring, not the bound: room for rings
    up to 8 x 128 and a budget of several 120-page WRITEs. One boot has
    one region size.
 5. `ip link set enp161s0f0 up`; then `page_pool_rx_region` must show
-   `dev enp161s0f0`, `pages 2048`, `alloc_fail 0`, and `free` lower by
+   `dev 0000:a1:00.0`, `pages 2048`, `alloc_fail 0`, and `free` lower by
    about the posted pages. `dmesg | grep 'rx region'`.
 6. From the client, `iperf3` to 192.168.1.211 (start `iperf3 -s` on
    tardis1 bound to that address): drops (`ip -s link`, `ethtool -S`),
@@ -378,20 +389,18 @@ arrives on `xemi0`, which `xeu` does not drive.
   | seq-sized-copy | 0 | 1220 | 1636 | 0 | 0 | 0 | 0 | 512 direct |
   | seq-sized-on | 343 | 619 | 1640 | 512 | 511 | 0 | 0 | 512 direct |
 
-  Every loan was written direct, and the loan cell ran at half its
-  copy. All but one WRITE was denied once before it was admitted. The
-  budget the harness derived was 343, where it was 462 for the PRP
-  pair, because `parked` had risen to 1636; at 127 a WRITE and a
-  reserve of 120 that is one WRITE in flight and sometimes two. That
-  the budget is what halves the rate is the likely reading and is not
-  shown: `FORCE_BUDGET=` on this region, or a larger region on the
-  next boot, would show it. `fio_rc` 0, no retransmits, no tail drops,
+  Every loan was written direct. All but one WRITE was denied once
+  before it was admitted: the budget the harness derived was 343,
+  where it was 462 for the PRP pair, because `parked` had risen to
+  1636, and at 127 a WRITE and a reserve of 120 that is one WRITE in
+  flight and sometimes two. `fio_rc` 0, no retransmits, no tail drops,
   `alloc_fail` unchanged. The backing file was removed; the `nvmet`
   and `nvme-tcp` modules stay loaded.
 
-- **The budget is not what set that rate, and these cells are too
-  short to compare rates.** The NVMe/TCP loan cell again with
-  `FORCE_BUDGET=` (`xeu-geometry-4x256-sgl-b600`, `-b900`):
+- **These cells are too short to compare rates.** The loan cell ran
+  at half its copy, and the budget looked like the cause. It is not:
+  the same cell with `FORCE_BUDGET=` (`xeu-geometry-4x256-sgl-b600`,
+  `-b900`):
 
   | budget | MB/s | denied | used_pages | its warm-up, MB/s |
   |---|---|---|---|---|
@@ -399,18 +408,15 @@ arrives on `xemi0`, which `xeu` does not drive.
   | 600 | 847 | 86 | 1861 | 860 |
   | 900 | 498 | 0 | 1731 | 658 |
 
-  With no WRITE denied the cell was the slowest of the three, so the
-  reading above (the budget halves the rate) does not hold. Each
+  With no WRITE denied the cell was the slowest of the three. Each
   cell's rate follows its own warm-up, which is the same copy job run
   moments before and itself ranged from 658 to 860 here and 1118 to
   1342 on the PRP runs. A cell writes 512 MiB, under a second at these
-  rates, so one run's MB/s is not a measurement of copy against loan.
-  What these runs do show: every loan written direct, no pause or
-  overrun, no `alloc_fail`, no tail drops, at budgets beyond the 408
-  pages the region had free. Longer cells, repeated, are needed before
-  any rate is compared.
-
-Next: section 5c.
+  rates, so no `seq-sized` figure in this section is a measurement of
+  copy against loan; the 120 s step cells of 5c and 5e are. What these
+  runs do show: every loan written direct, no pause or overrun, no
+  `alloc_fail`, no tail drops, at budgets beyond the 408 pages the
+  region had free.
 
 ## 5c. Baselines, the ring stall and the step cells (2026-10-07)
 
@@ -458,6 +464,14 @@ Any pool allocation failure can do this; the region makes it easy to
 reach. Until the driver retries a short refill, the region and the
 budget on this card have to be sized so that the pool never fails.
 
+A patch that retries is in `kernel-rpmtree` as `Patch3` of
+`xsight/xsight.spec` (`xeu-retry-an-RX-refill-that-came-up-short.patch`,
+kmod-xsight 2.0.1-4, commit `c405aa5`, not pushed): a timer per ring
+runs the poll again while the ring is short. It applies to the tarball
+the spec names and builds for the 458 64k kernel. **It has not been
+loaded**: reloading `xeu` takes `enp164s0f0` down too. The first boot
+of a kernel whose kmod carries it is its first test.
+
 **The harness's budget is wrong for these pools.** It reads `parked`
 after the warm-up and takes the rest for the budget. Just after the
 port is brought up that is about 1130 (1024 posted and the caches);
@@ -494,10 +508,9 @@ and `paused`, `overrun` 0 in every row but the one marked.
   Section 5d has why.
 - The sixteen-connection copy cells, 1977 and 2058 MB/s, are half of
   what the network allowed with the same buffers.
-- No sixteen-connection loan result exists yet on this card, and no
-  NVMe/TCP loan at a budget with room. Both need pages the region does
-  not have at 4 x 256: smaller rings, or a larger region on the next
-  boot (one boot has one region size).
+- A sixteen-connection loan that runs, and an NVMe/TCP loan at a
+  budget with room, need pages the region does not have at 4 x 256.
+  Section 5e has them at 4 x 128.
 
 ## 5d. Why sixteen connections stall on a budget of one WRITE (2026-10-07)
 
@@ -507,13 +520,15 @@ reserve), held buffer 128 KiB, local NVMe unless said.
 | invocation | trace | runs | result |
 |---|---|---|---|
 | after `step-copy-n16` (NVMe/TCP) or `step-on` | off | 4 | all stalled: 28 to 43 WRITEs admitted in 120 s |
+| alone after the warm-up (5e) | off | 3 | all stalled: 27 to 38 admitted |
+| after two other cells, 4 x 128, each storage (5e) | off | 2 | both stalled: 29 admitted |
 | alone after the warm-up | `credit.bt` | 5 | all ran: 311 to 320 MB/s, about 36000 admitted, 72000 denied |
 | after `step-on` | `credit.bt` | 1 | ran: 359 MB/s |
 
-The trace hides it, so it is a matter of timing; whether the cell
-before it matters is not known (the cell alone and untraced was not
-run). The traced runs have the same drops and timeouts in small
-numbers (zero-window drops 0 to 6, timeouts 0 to 4).
+Untraced it stalls every time, 9 runs of 9, whatever ran before it,
+on either storage and at either ring size. The trace hides it, so it
+is a matter of timing. The traced runs have the same drops and
+timeouts in small numbers (zero-window drops 0 to 6, timeouts 0 to 4).
 
 Caught untraced, with a watcher that captured both ends only once
 admission had been flat for 20 s (`xeu-step-4x256-prp-b250-stall.bt/`):
@@ -578,8 +593,22 @@ that hid the stall.
 
 **Sixteen connections, copies** (`step-copy-n16`, budget 0): 2286 at
 256 KiB on 4 x 256 (local NVMe); 2090 (local NVMe) and 2225 (NVMe/TCP)
-at 128 KiB on 4 x 128; 1977 and 2058 at 128 KiB on 4 x 256 (5c). No
-copy was run at 512 KiB.
+at 128 KiB on 4 x 128; 1977 and 2058 at 128 KiB on 4 x 256 (5c).
+
+**Copy against loan at the same 512 KiB buffer**, 4 x 128, MB/s
+(`xeu-copy512.log`, `xeu-copy-4x128-*-rb524288`; the loans are the
+512 KiB rows of the tables here, at budgets 630 and 880):
+
+| storage | connections | copy | loan, budget 630 | loan, budget 880 |
+|---|---|---|---|---|
+| local NVMe | 1 | 1341 | 1536 | 1444 |
+| local NVMe | 16 | 1936 | 1989 | 1979 |
+| NVMe/TCP | 1 | 1548 | 1406 | 1420 |
+| NVMe/TCP | 16 | 2074 | 2044 | 2309 |
+
+At the same buffer the loan and its copy are level: within about 10%
+of each other and in both directions, on one run of each. Section 5g
+has a second run of the 880 column with the CPU counted.
 
 **One connection, loans** (`step-on`), MB/s, 4 x 128 unless said:
 
@@ -599,8 +628,8 @@ What it shows:
   58 to 99 and 21 to 25 in a stalled one).
 - **Sixteen connections reach their copy only with both.** At a budget
   of 880 and a 512 KiB buffer the loans ran at 1979 (local NVMe) and
-  2309 (NVMe/TCP); the copies at smaller buffers ran at 2090 to 2286.
-  Whether a loan beats its copy at the same buffer is not shown.
+  2309 (NVMe/TCP), against 1936 and 2074 for the copies at that
+  buffer.
 - **One connection follows the held buffer**, as the baseline of 5c
   said it would: about 800 to 890 MB/s at 256 KiB whatever the budget
   beyond one WRITE, 1400 to 1540 at 512 KiB.
@@ -614,8 +643,9 @@ What it shows:
   (404 free at idle): 512 KiB on the local NVMe, 256 and 512 KiB on
   NVMe/TCP.
 
-Next: the page size (Mike, 2026-10-07: 16 KiB and 4 KiB are open for
-this platform); a copy cell at 512 KiB and repeats of the cells above.
+Two repeats of all of the above were queued and cancelled before they
+started, on the decision to move to 16 KiB (section 4): every figure
+here is one run.
 
 ## 5f. Cache misses in the copy cells at two ring sizes (2026-10-08)
 
