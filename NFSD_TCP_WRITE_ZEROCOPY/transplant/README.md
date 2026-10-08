@@ -1007,7 +1007,7 @@ understood and not in the order it was discovered:
 
 `tardis1.perf.hammer.space`: aarch64, 64 KiB pages, 64 CPUs, 63 GiB, a
 live NFS server. Kernel `7.1.13-20.hs.458.loanpages_pool.el9.aarch64+64k`,
-packaged RPMs built by Mike from the `-WIP` branch (`fb2d0f658a2e`);
+packaged RPMs built by Mike from the `-WIP` branch (`8fc879065457`);
 sunrpc `299EF7D944C6D4A8DA14765`, nfsd `5575F68355368469250681E`.
 `preflight.sh`: PASS on both boots. Results:
 `/var/tmp/zc-testplan-7.1.13-20.hs.458.loanpages_pool.el9.aarch64+64k`;
@@ -1183,7 +1183,7 @@ Commits are named as on this branch on 2026-10-07; a regroup renames them.
    case.
 3. **Materializing a record that holds a merge page counted its bytes
    twice** and faulted the receive with a warning (build 457,
-   `collapse-off`). `fc9a60f5b298`; verified by its KUnit case only.
+   `collapse-off`). `97501da55117`; verified by its KUnit case only.
 4. **A direct middle and a neighbour's buffered segment in one page
    failed a write with `-EIO`** through LOCALIO (build 455; the test did
    not notice). First answered by cutting every end at a page boundary
@@ -1193,7 +1193,7 @@ Commits are named as on this branch on 2026-10-07; a regroup renames them.
    (all three in `v7.1.13-21` now, and no longer commits of this
    branch). Only XFS was run.
 5. **Tests and harness:** the capacity + 1 KUnit test spans skbs where
-   the table exceeds `MAX_SKB_FRAGS` (`c4a23c858bf5`); the LOCALIO
+   the table exceeds `MAX_SKB_FRAGS` (`5977a14dae1a`); the LOCALIO
    boundary test does not judge kick rounds for a record smaller than a
    page, and fails on a failed write or the kernel's invalidation
    message; `preflight.sh` finds a packaged kernel's config in
@@ -1212,12 +1212,12 @@ Commits are named as on this branch on 2026-10-07; a regroup renames them.
   and at sixteen, 78 to 88% of a copy that varies between boots.
   How the factor and the budget should be computed for
   64 KiB is not settled.
-- **The beyond-EOF rule** (`b30b48e034c2`: a write that starts beyond
-  EOF is issued buffered) **was reverted on 2026-10-07** (`2284e081a3e1`, a
+- **The beyond-EOF rule** (`d8c14f4572b7`: a write that starts beyond
+  EOF is issued buffered) **was reverted on 2026-10-07** (`0f36dabe5753`, a
   revert at the tip): Mike does not want it now and keeps it in history
   to come back to. Build 458 never had it. Measured once with rebuilt
   modules: `mixed-copy` 442 to 2355 MB/s, with 77% of its WRITEs no
-  longer direct. `f7021372f927`, which gives the KUnit split test's
+  longer direct. `0d1d4702c0f0`, which gives the KUnit split test's
   file a size, stays; the KUnit suites have not been run since the
   revert.
 - **The series is not regrouped** (`check-grouping.sh v7.1.13-20`:
