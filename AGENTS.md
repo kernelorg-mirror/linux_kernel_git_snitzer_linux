@@ -84,10 +84,12 @@ twin or decided.
 the decisions waiting on Mike and the ordered work items are in
 [`NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`](NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md).
 Work from it. The bring-up of `enp161s0f0` (its section 5a) is done:
-**start at its sections 5b and 5c**, which say how the port and the
-region were left, that a receive ring which runs empty stays empty
-until the port is taken down and up, and what is next. Run nothing on
-veth this boot.
+**start at its section "64K"**, the findings at 64 KiB pages in one
+place (detail in 5b to 5d): how the port and the region were left,
+that a receive ring which runs empty stays empty until the port is
+taken down and up, and why sixteen connections stall on a budget of
+one WRITE. The page size for this platform is open (Mike, 2026-10-07).
+Run nothing on veth this boot.
 
 **Moving to another test host** (the 4K host, the 16K host, tardis1 at 64K): start with
 [`NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md`](NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md)
