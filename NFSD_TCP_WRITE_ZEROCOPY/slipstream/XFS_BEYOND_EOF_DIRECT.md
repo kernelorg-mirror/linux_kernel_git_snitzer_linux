@@ -122,6 +122,12 @@ Not taken:
 
 ## 5. The prototype, measured (2026-10-07)
 
+**Reverted later the same day** (`40f67123e8fa`, a revert of `7809bfb4c8e9`
+at the tip of `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`): Mike took
+the second of the three ways below. The rule is in history to come back
+to and is not in the tree. `aeed1c15a2ac` stays. The rest of this
+section is as written before the revert.
+
 **Committed the same night, at the tip, pushed by Mike only to
 `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-WIP2`, not regrouped,
 not on the HS twin, and not decided:** `7809bfb4c8e9` "nfs_common: do not issue

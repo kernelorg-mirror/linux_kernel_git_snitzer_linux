@@ -187,7 +187,8 @@ record is materialized, and cuts a split write per end with the gate in
 bytes. The first of those matters only where frames share a page; the
 second and third are not specific to a page size, and **the 4 KiB and
 16 KiB hosts have not been run with them.** Build 458 does not have the
-rule that issues a write beyond EOF buffered, so its new-file copies are
+rule that issues a write beyond EOF buffered (reverted on the branch on
+2026-10-07), so its new-file copies are
 at about 440 MB/s like the other columns'.
 
 Throughput is not compared across hosts: they are different machines.
