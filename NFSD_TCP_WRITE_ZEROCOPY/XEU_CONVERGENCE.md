@@ -238,14 +238,15 @@ they must be made again with the parameters set.
 To put the port back: `ethtool -L enp161s0f0 combined 8`,
 `ethtool -G enp161s0f0 rx 1024`; a reboot clears the region.
 
-## 64K. Findings at 64 KiB pages (tardis1, build 458, 2026-10-07)
+## 64K. Findings at 64 KiB pages (tardis1, build 458, 2026-10-07 and 08)
 
 Everything found on the `xeu` port at `PAGE_SIZE` 64 KiB, in one
 place. The detail and the tables are in 5b (bring-up), 5c (baselines,
 ring stall, step cells), 5d (the sixteen-connection stall), 5e (the
-held buffer and the budget varied) and 5f (cache misses) below.
-Every figure is from 4 rings and a 2048-page (128 MiB) region; most
-are one run.
+held buffer and the budget varied), 5g (CPU per GB) and 5f (cache
+misses) below. Every figure is from 4 rings and a 2048-page (128 MiB)
+region; most are one run. The work at 64 KiB stops here: on 2026-10-08
+Mike chose to move tardis1 to 16 KiB pages and repeat it there.
 
 What holds whatever the page size:
 
@@ -292,20 +293,44 @@ What follows from one frame having a 64 KiB page to itself:
     (5d). With the trace attached the same cell runs at 315 MB/s
     (6 runs of 6), against 1977 for its copy.
 11. **Either a larger held buffer or a budget of several WRITEs ends
-    the collapse, and both together bring sixteen connections' loans
-    to their copy** (5e): 576 MB/s with a 256 KiB buffer alone, 1241
-    to 1539 with a budget of four to six WRITEs alone, 1779 to 2309
-    with both, against 2090 to 2286 for the copy cells. None of it
-    fits in half of the L3: the best cells peak at 1500 of the 2048
-    pages with rings of 4 x 128.
-12. **Rings of 4 x 128 did not drop** in any NFS cell (5e), where
-    iperf3 at 41 Gbit/s on one stream dropped 0.1% (5b).
-13. **Shrinking the rings barely moves the cache misses** of a copy
+    the collapse** (5e): 576 MB/s with a 256 KiB buffer alone, 1241 to
+    1539 with a budget of four to six WRITEs alone, 1779 to 2309 with
+    both.
+12. **At the same 512 KiB buffer the loan and its copy are level**
+    (5e, 5g): within about 10% either way at one and at sixteen
+    connections on both storages, on the first run. The second run
+    agrees but for the sixteen-connection loan on the local NVMe,
+    which ran at 569 MB/s where it had run at 1979.
+13. **No saving in server CPU shows for the loan** (5g): the same
+    kernel time per GB as its copy on NVMe/TCP, about a quarter more
+    on the local NVMe, where a loan goes through the page cache. The
+    NVMe/TCP stand-in on the same host costs more CPU than the NFS
+    path, so the measure is blunt.
+14. **None of the working settings fits in half of the L3.** The best
+    cells peak at 1500 of the 2048 pages with rings of 4 x 128.
+15. **Whether rings of 4 x 128 drop under the NFS cells is not known**
+    (5e: the counter was read after it had been zeroed). iperf3 at
+    41 Gbit/s on one stream dropped 0.1% at that size (5b), and
+    sixteen-connection copies lost a fifth of their rate with 207 tail
+    drops at 4 x 64 (5f).
+16. **Shrinking the rings barely moves the cache misses** of a copy
     cell: 12 to 14% fewer per megabyte from 4 x 256 to 4 x 64, about
     one L2 refill per line of payload at either (5f).
-14. **Not obtained:** a copy cell at a 512 KiB buffer to set the
-    512 KiB loans against, and repeats: every figure in 5e is one
-    run.
+17. **The driver has a patch for finding 2** in `kernel-rpmtree`
+    (5c), built and not yet loaded.
+18. **Not obtained:** what one WRITE really holds; repeats (most
+    figures are one run, and finding 12 shows what that is worth); a
+    profile by function; a run with the driver patch.
+
+**For 16 KiB.** A frame still has a page to itself, so findings 1 to 5
+carry over and 6 to 8 change by arithmetic: a 1 MiB WRITE is 117 pages
+of 16 KiB, 1.8 MiB; the L3 is 2048 pages; a 128 KiB buffer is eight
+frames. Whether the stall of finding 10, the level rates of finding 12
+and the misses of finding 16 change with it is what the same cells are
+to show. It needs a 16 KiB build of the kernel and of `kmod-xsight`
+(only 4 KiB and 64 KiB are installed here; `kernel-rpmtree` builds a
+third with `--arm64-16k`), which will carry the driver patch, and a
+reboot, which is Mike's to time.
 
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
@@ -566,8 +591,13 @@ WRITE, many connections. Section 5e takes each away in turn.
 
 One sequential queue, untraced, every cell 120 s and one run
 (`/var/tmp/zc-run-logs/xeu-queue.log`, directories `xeu-q-*`). No
-`alloc_fail`, no overrun, no tail drop on any ring and no ring stopped
-in any of it; `paused` was 0 but for three cells (1, 10, 10). The
+`alloc_fail`, no overrun and no ring stopped in any of it; `paused`
+was 0 but for three cells (1, 10, 10). **Whether a ring tail-dropped
+is not known:** the queue read `rx_hw_tail_drop_packets` after putting
+the rings back, and a ring change zeroes it. What stands in for it is
+the client's retransmissions: 0 to 100 in every copy cell and every
+one-connection cell, 228 to 5642 in the sixteen-connection loan cells
+that ran, nearly all of them tail loss probes. The
 rings went to 4 x 128 for the budgets beyond one WRITE, which do not
 fit at 4 x 256, and were put back after. At 4 x 128 the region has
 about 1160 pages free at idle: 512 posted and about 375 kept by the
@@ -646,6 +676,56 @@ What it shows:
 Two repeats of all of the above were queued and cancelled before they
 started, on the decision to move to 16 KiB (section 4): every figure
 here is one run.
+
+## 5g. CPU per GB written, copy against loan (2026-10-08)
+
+The four step cells on each storage at a 512 KiB held buffer, 4 x 128,
+loans at a budget of 880, one run (`xeu-cpu.log`,
+`xeu-cpu-4x128-*-b880-rb524288`, `xeu-cpu-*.perf`,
+`xeu-cpu-client.samples`). CPU time is the whole host's from
+`/proc/stat` over 90 s inside each cell, less the idle rate, over the
+gigabytes the cell wrote in that time. The server's figure is kernel
+time only (system and softirq): one window had 25 s of user time from
+something else on the host. The client's is all busy time less the
+lowest rate seen over any 30 s, 2.1 CPU-seconds a second, on a
+machine with other work; it is coarse.
+
+| storage | cell | conns | MB/s | server kernel CPU-s per GB | of which softirq | cycles per MB | client CPU-s per GB |
+|---|---|---|---|---|---|---|---|
+| local NVMe | copy | 1 | 1097 | 0.35 | 0.10 | 1.68 M | 1.0 |
+| local NVMe | loan | 1 | 1467 | 0.45 | 0.18 | 1.26 M | 0.8 |
+| local NVMe | copy | 16 | 1718 | 0.39 | 0.11 | 1.57 M | 1.2 |
+| local NVMe | loan | 16 | 569 | 0.45 | 0.08 | 1.46 M | 1.1 |
+| NVMe/TCP | copy | 1 | 1556 | 0.84 | 0.20 | 2.29 M | 0.9 |
+| NVMe/TCP | loan | 1 | 1736 | 0.83 | 0.22 | 2.24 M | 0.9 |
+| NVMe/TCP | copy | 16 | 2327 | 0.84 | 0.17 | 2.54 M | 1.0 |
+| NVMe/TCP | loan | 16 | 2056 | 0.85 | 0.18 | 2.51 M | 1.1 |
+
+- **No saving in server CPU shows for the loan.** On NVMe/TCP, where
+  the loan is written direct and nothing is copied by nfsd, the kernel
+  time per GB is the same as the copy's to within 2%, and the cycles
+  per MB are 1 to 2% lower. On the local NVMe the loan costs about a
+  quarter more kernel time at one connection (0.45 against 0.35): there
+  it goes through the page cache, which is a copy of its own.
+- **The NVMe/TCP figures are mostly the stand-in.** The target is
+  `nvmet-tcp` on the same host over loopback, and the NVMe/TCP cells
+  cost twice the kernel time of the local NVMe's for the same NFS work.
+  A saved copy in nfsd is a small part of that, and this measure may
+  not be fine enough to show it. A profile by function would say; one
+  was set up for the repeats and cancelled with them. One second of
+  profile taken at 64 KiB during a copy cell had `nfsd` in
+  `__memmove` at 6% of all samples.
+- **The client's CPU does not differ** between copy and loan, as
+  expected: about 1 CPU-second per GB.
+- **A second run of each cell, and they do not all agree with the
+  first** (5e, MB/s, first / this): local NVMe copy 1341 / 1097 and
+  1936 / 1718, loan 1444 / 1467 and 1979 / 569; NVMe/TCP copy
+  1548 / 1556 and 2074 / 2327, loan 1420 / 1736 and 2309 / 2056. The
+  sixteen-connection loan on the local NVMe ran at 569 here, steady
+  for the whole cell, with 51649 retransmissions that were all
+  spurious tail loss probes (as many DSACKs came back), no timeout and
+  no zero-window drop; its first run was 1979. So that cell has two
+  speeds and one run does not say which is usual.
 
 ## 5f. Cache misses in the copy cells at two ring sizes (2026-10-08)
 
