@@ -122,16 +122,16 @@ Not taken:
 
 ## 5. The prototype, measured (2026-10-07)
 
-**Reverted later the same day** (`40f67123e8fa`, a revert of `7809bfb4c8e9`
+**Reverted later the same day** (`2284e081a3e1`, a revert of `b30b48e034c2`
 at the tip of `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`): Mike took
 the second of the three ways below. The rule is in history to come back
-to and is not in the tree. `aeed1c15a2ac` stays. The rest of this
+to and is not in the tree. `f7021372f927` stays. The rest of this
 section is as written before the revert.
 
 **Committed the same night, at the tip, pushed by Mike only to
 `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-WIP2`, not regrouped,
-not on the HS twin, and not decided:** `7809bfb4c8e9` "nfs_common: do not issue
-a write that starts beyond EOF as direct I/O" and `aeed1c15a2ac` "NFSD:
+not on the HS twin, and not decided:** `b30b48e034c2` "nfs_common: do not issue
+a write that starts beyond EOF as direct I/O" and `f7021372f927` "NFSD:
 give the KUnit split test's file a size". Mike asked for the code to be
 saved in a commit; **whether the rule stays is open** (the end of this
 section). Between the two commits the KUnit split test dereferences a
@@ -185,7 +185,7 @@ run on this build.
 **Open, for Mike.** Three ways on from here, as put to him:
 
 1. Keep the rule, add its KUnit case.
-2. Drop it (revert `7809bfb4c8e9`; `aeed1c15a2ac` is harmless without
+2. Drop it (revert `b30b48e034c2`; `f7021372f927` is harmless without
    it) and accept slow direct writes to a growing file.
 3. Make it a policy knob beside `direct_misaligned_dontcache`, so the
    two can be compared per workload. Suggested default on: the
