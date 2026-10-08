@@ -341,9 +341,99 @@ arrives on `xemi0`, which `xeu` does not drive.
   pages the region had free. Longer cells, repeated, are needed before
   any rate is compared.
 
-Next: the measure of what one WRITE holds (the rest of work item 5),
-then the ring size for the NFS cells, then decision 5 with those
-numbers.
+Next: section 5c.
+
+## 5c. Baselines, the ring stall and the step cells (2026-10-07)
+
+All at 4 rings of 256 and the 2048-page region.
+
+**What a perfect cell is.** Client to 192.168.1.211, 20 s, a receiver
+that discards (`iperf3`, and a Python sender and receiver so that only
+the server's `SO_RCVBUF` is set); local fio on a scratch file in
+`/hs/nvme0`, removed after.
+
+| limit | measured |
+|---|---|
+| local NVMe, 1 MiB direct writes, iodepth 16 | 10.4 GiB/s |
+| network, 1 connection, autotuned buffer | 6997 MB/s (56 Gbit/s), 16811 tail drops |
+| network, 16 connections, `sk_rcvbuf` 131072 each | 3878 MB/s (31 Gbit/s), no drops |
+| network, 1 connection, `sk_rcvbuf` 262144 | 907 MB/s; 1180 MB/s with `iperf3 -w 131072`, which also limits the sender |
+
+One connection with the buffer held at 256 KiB is limited by that
+buffer, at about 0.9 to 1.2 GB/s: a frame is charged a whole 64 KiB
+page, so the buffer is four frames. The one-connection copy cells
+(1196, 1220 MB/s) are at that ceiling and a loan cannot pass it.
+Sixteen connections at 128 KiB have 3.9 GB/s. The drive limits neither.
+
+**A ring that runs empty stays empty.** Twice a load ran the region
+dry (`min_free` 0): sixteen connections with autotuned buffers, and
+`step-on-n16` with the budget the harness derived. Each time one ring
+(ring 0, then ring 3) stopped: `rx_packets` fixed, `rx_hw_tail_drop_packets`
+rising, connections that hash to it in retransmit backoff or timing
+out, with 400 pages free in the region. Down and up of the port clears
+it. The cause, from `xeu_drv.c` (the debuginfo source of
+`kmod-64k-xsight` hs.165; the loaded 458 module has the same
+`xeu_rx_refill`, `xeu_rx_poll`, `xeu_napi_intr` and no timer or work):
+
+- `xeu_rx_refill()` is called at open and at the end of
+  `xeu_rx_poll()`, nowhere else;
+- when `page_pool_alloc_pages()` fails, `xeu_rx_post_one()` logs
+  "Failed to allocate Rx page from pool" (once per page, not rate
+  limited) and the refill stops, with no retry;
+- the poll runs only from `xeu_napi_intr()`, and the interrupt is asked
+  for per posted buffer (`RX_SR_BD_INTR_EN`);
+- so a ring with nothing posted gets no completion, no interrupt, no
+  poll and no refill.
+
+Any pool allocation failure can do this; the region makes it easy to
+reach. Until the driver retries a short refill, the region and the
+budget on this card have to be sized so that the pool never fails.
+
+**The harness's budget is wrong for these pools.** It reads `parked`
+after the warm-up and takes the rest for the budget. Just after the
+port is brought up that is about 1130 (1024 posted and the caches);
+under load the pools come to keep about 1650. A budget of 796 derived
+from the first figure is what ran the region dry.
+
+**The step cells** (120 s each; `xeu-step-4x256-prp`,
+`xeu-step-4x256-sgl-b250`, `xeu-step-4x256-prp-b250`). `alloc_fail` 0
+and `paused`, `overrun` 0 in every row but the one marked.
+
+| storage | cell | conns | budget | MB/s | used_pages | admitted | denied | written |
+|---|---|---|---|---|---|---|---|---|
+| PRP | step-copy | 1 | 0 | 771 | 1140 | | | 88190 direct |
+| PRP | step-on | 1 | 839 (derived) | 880 | 1682 | 100727 | 94 | dontcache |
+| PRP | step-on | 1 | 250 | 378 | 1548 | 43302 | 42625 | dontcache |
+| PRP | step-copy-n16 | 16 | 0 | 1977 | 1335 | | | 225985 direct |
+| PRP | step-on-n16 | 16 | 796 (derived) | 9 | 2048 | 5377 | 9823 | dontcache; `alloc_fail` 15997, ring 3 stopped |
+| PRP | step-on-n16 | 16 | 250 | 0 | 1548 | 29 | 81 | dontcache |
+| SGL | step-copy | 1 | 0 | 766 | 1124 | | | 87699 direct |
+| SGL | step-on | 1 | 250 | 613 | 1228 | 70144 | 69048 | direct |
+| SGL | step-copy-n16 | 16 | 0 | 2058 | 1228 | | | 235419 direct |
+| SGL | step-on-n16 | 16 | 250 | 0 | 1536 | 43 | 115 | direct |
+
+- With room in the budget one connection's loan beat its copy by 14%
+  on the local NVMe (880 against 771), one run of each. That budget
+  was the over-promised 839 and the cell peaked at 1682 pages of 2048.
+- At a budget of 250 (one WRITE in flight; nearly every WRITE denied
+  once) one connection's loan is slower than its copy: 613 against 766
+  on NVMe/TCP, 378 against 771 on the local NVMe.
+- **Sixteen connections at a budget of 250 do not run.** 43 and 29
+  WRITEs were admitted in 120 s, with zero-window drops (60, 67),
+  receive-queue drops, collapses and retransmission timeouts, no
+  `alloc_fail` and every ring alive after. fio returned 0 with 0 MB/s.
+  Why admission stops is not known; it wants `credit.bt` on that cell.
+- The sixteen-connection copy cells, 1977 and 2058 MB/s, are half of
+  what the network allowed with the same buffers.
+- No sixteen-connection loan result exists yet on this card, and no
+  NVMe/TCP loan at a budget with room. Both need pages the region does
+  not have at 4 x 256: smaller rings, or a larger region on the next
+  boot (one boot has one region size).
+
+Next: trace `step-on-n16` at a budget of 250; choose the rings and the
+region size for the next boot from "posted, plus what the pools keep,
+plus the budget, plus the held buffers", with the pool never failing;
+then the measure of what one WRITE holds and decision 5.
 
 ## 6. The real drives behind veth (2026-10-07)
 
