@@ -551,6 +551,96 @@ are the client's retransmit timeouts.
     4 x 256 and four WRITEs); the two that are not are both at eight.
     On the native drive the loan costs the same or more.
 
+### The shortlist, three runs
+
+`plans/16k-5-shortlist.plan` twice more (`xeu-16k-short-a`, `-b`), with
+the runs above: `xeu-rig/summarize.py` over the five outdirs. 256 KiB
+buffer; median MB/s and the range of three runs (the 4 x 64 copies are
+four; the one-connection loans at 4 x 128 are two and are given whole).
+
+| setting | storage | 16 conn, loan | 16 conn, copy | loan of copy | 1 conn, loan | 1 conn, copy | pages | of the L3 |
+|---|---|---|---|---|---|---|---|---|
+| 4 x 128, 4 WRITEs | native | 2158 (1866 to 2223) | 2232 (1978 to 2331) | 97% | 1602, 1715 | 1982 (1712 to 2029) | 1491 to 1530 | 74% |
+| 4 x 128, 4 WRITEs | NVMe/TCP | 2331 (2175 to 2353) | 2139 (2132 to 2151) | 109% | 2021, 1590 | 1994 (1716 to 2000) | 1496 to 1530 | 74% |
+| 4 x 64, 4 WRITEs | native | 2009 (1620 to 2200) | 2254 (2079 to 2312) | 89% | 1971 (1787 to 2050) | 1694 (1649 to 1715) | 1090 to 1102 | 54% |
+| 4 x 64, 4 WRITEs | NVMe/TCP | 2164 (2139 to 2181) | 2286 (2166 to 2318) | 95% | 1757 (1635 to 2016) | 1745 (1727 to 1934) | 1053 to 1092 | 53% |
+| 4 x 64, 3 WRITEs | native | 1894 (1863 to 2079) | 2254 (2079 to 2312) | 84% | 1657 (1556 to 1784) | 1694 (1649 to 1715) | 968 to 990 | 48% |
+| 4 x 64, 3 WRITEs | NVMe/TCP | 2165 (1986 to 2170) | 2286 (2166 to 2318) | 95% | 1614 (1591 to 1767) | 1745 (1727 to 1934) | 970 to 1003 | 49% |
+
+Ring tail drops and the client's retransmit timeouts in the
+sixteen-connection loan cells, run by run:
+
+| setting | storage | tail drops | timeouts |
+|---|---|---|---|
+| 4 x 128, 4 WRITEs | both | 0, 0, 0 | 0, 0, 0 |
+| 4 x 64, 4 WRITEs | native | 4801, 4399, 486 | 15, 4, 2 |
+| 4 x 64, 4 WRITEs | NVMe/TCP | 1761, 55357, 6009 | 0, 191, 6 |
+| 4 x 64, 3 WRITEs | native | 891, 12000, 27211 | 2, 11, 46 |
+| 4 x 64, 3 WRITEs | NVMe/TCP | 2793, 4476, 20243 | 2, 2, 35 |
+
+16. **Rings of 4 x 128, a 256 KiB buffer and a budget of four WRITEs
+    hold over three runs**: sixteen connections' loans at 97% of their
+    copies on the native drive and 109% on NVMe/TCP, with no ring drop
+    and no timeout in any run, at 74% of the L3. One connection is
+    behind its copy there on the native drive (1602 and 1715 against
+    1982).
+17. **Rings of 4 x 64 fall short of level at sixteen connections**:
+    95% of the copy on NVMe/TCP at three and at four WRITEs, 84% and
+    89% on the native drive. The pages in use repeat to within 40.
+18. **The drops at 4 x 64 do not stay near 0.03%.** One setting's
+    three runs differ thirtyfold; the worst are about 0.15% of the
+    frames (three WRITEs, native) and 0.25% (four WRITEs, NVMe/TCP,
+    with 191 timeouts). The rate held through each: that run made
+    2181 MB/s.
+19. **The native drive's scatter was noise**: the four-WRITE cell at
+    4 x 64 that ran at 1620 ran at 2200 and 2009. A copy's own three
+    runs span 15% (1978 to 2331 at 4 x 128).
+20. **What a copy cell holds depends on what ran before it**: about
+    600 pages at 4 x 128 straight after a ring change, 880 after loan
+    cells have left pages in the pools. The loan cells' peaks do not
+    move with it.
+
+### What the storage takes, and what limits the cells
+
+`xeu-rig/nvme-baseline.sh prp` and `sgl`
+(`xeu-16k-nvme-baseline/`): fio on tardis1 itself, 1 MiB direct writes
+at iodepth 16, on a scratch directory in `/hs/nvme0` and on an
+NVMe/TCP loopback target made as the harness makes its own (a 4 GiB
+file in `/hs/nvme1`); all removed after.
+
+| job | native | NVMe/TCP |
+|---|---|---|
+| writes alone, one job, 120 s | 11207 MB/s | 4353 and 4440 MB/s (two runs) |
+| writes alone, four jobs, 60 s | 11201 MB/s | 11210 MB/s |
+| the step cell's own job, 120 s | 3034 MB/s | 1392 and 1389 MB/s |
+
+21. **Neither storage limits a cell, and the drive does not slow as it
+    is written**: 11.2 GB/s in each 10 s of 120 s on the native drive
+    (1.3 TB). NVMe/TCP is limited by the one queue a job uses (4.4
+    GB/s), not by its drive (11.2 GB/s with four jobs).
+22. **The step cell's job limits itself, and so limits every cell
+    above.** It is one fio thread that reads back and checksums each
+    block it writes (`verify_backlog`): fio reports as many bytes read
+    as written, and on tardis1 that thread is at 97% of a CPU at 3.0
+    GB/s. In the cells it runs on the client, where it is at 93% to
+    95% of a CPU in the best of them (78% user and 17% system in the
+    4 x 128, four WRITEs, NVMe/TCP loan at 2353 MB/s; 76% and 17% in
+    the native copy at 2232). So:
+    - the MB/s of every table above is the write half of a load that
+      is half reads;
+    - the 2.1 to 2.35 GB/s at which the good cells of every ring size,
+      buffer and storage agree is the client's fio thread;
+    - "level with its copy" means both carry all that this load
+      offers. A loan that is behind (budgets of one and two WRITEs, a
+      128 KiB buffer, 4 x 64 on the native drive) is behind; a loan
+      that is level may or may not be faster than its copy, and the
+      budget that suffices here may not under more load.
+    The footprints, drops and timeouts do not depend on this.
+23. **`STEP_JOBS=<n>`** (`run-budget.sh`) makes the step cell n writers
+    on a file each with no verify, which lifts that limit and gives up
+    the check of the data. `plans/16k-6-noverify.plan` is the shortlist
+    for it.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

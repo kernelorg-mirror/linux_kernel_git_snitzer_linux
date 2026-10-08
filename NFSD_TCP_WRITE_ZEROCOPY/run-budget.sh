@@ -748,7 +748,26 @@ filename_format=f-$3.\$jobnum
 numjobs=4
 J
 	;;
-	step) cat > "$f" <<J
+	step)
+	# STEP_JOBS=<n>: n writers, each on its own file of STEP_SIZE (default
+	# 512M), and no verify.  The verifying job is one thread that reads
+	# back and checksums all it writes: on the xeu rig that thread is the
+	# limit near 2.3 GB/s, whatever the server does (XEU_CONVERGENCE.md).
+	if [ -n "${STEP_JOBS:-}" ]; then cat > "$f" <<J
+[step]
+directory=/mnt/rxr
+filename_format=f-$3.\$jobnum
+numjobs=$STEP_JOBS
+rw=write
+bs=1M
+size=${STEP_SIZE:-512M}
+time_based
+runtime=120
+direct=1
+ioengine=libaio
+iodepth=16
+J
+	else cat > "$f" <<J
 [step]
 filename=/mnt/rxr/f-$3
 rw=write
@@ -765,6 +784,7 @@ do_verify=1
 write_bw_log=$(cdir "$1")/bw
 log_avg_msec=500
 J
+	fi
 	;;
 	esac
 }
