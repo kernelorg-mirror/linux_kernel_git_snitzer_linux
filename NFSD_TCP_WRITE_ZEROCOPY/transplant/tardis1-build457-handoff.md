@@ -1401,3 +1401,12 @@ section 19's, the same boot: 2544 at 1 ms, 2587 with no delay, about
 
 `RESULTS.md`, the README's "64 KiB host" and the artifact carry the
 bound.
+
+## 21. 2026-10-07: next, the Xsight driver
+
+Mike: the testing converges on the `xeu` driver, with an NVMe/TCP
+backend for SGL coverage and a local NVMe for PRP coverage. The scope,
+four decisions waiting on him and nine work items are in
+`../XEU_CONVERGENCE.md`; nothing on the card or the drives has been
+changed. The veth figures (credit factor 350, the 548-page bound) do
+not carry over: `xeu` gives each frame a 64 KiB page.
