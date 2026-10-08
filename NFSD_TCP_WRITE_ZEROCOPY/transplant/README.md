@@ -1209,9 +1209,13 @@ Commits are named as on this branch on 2026-10-07; a regroup renames them.
   How the factor and the budget should be computed for
   64 KiB is not settled.
 - **The beyond-EOF rule** (`7809bfb4c8e9`: a write that starts beyond
-  EOF is issued buffered) is committed and undecided, and build 458 does
-  not have it. Measured once with rebuilt modules: `mixed-copy` 442 to
-  2355 MB/s, with 77% of its WRITEs no longer direct.
+  EOF is issued buffered) **was reverted on 2026-10-07** (`40f67123e8fa`, a
+  revert at the tip): Mike does not want it now and keeps it in history
+  to come back to. Build 458 never had it. Measured once with rebuilt
+  modules: `mixed-copy` 442 to 2355 MB/s, with 77% of its WRITEs no
+  longer direct. `aeed1c15a2ac`, which gives the KUnit split test's
+  file a size, stays; the KUnit suites have not been run since the
+  revert.
 - **The series is not regrouped** (`check-grouping.sh v7.1.13-20`:
   `grouping BROKEN`) and none of this is on the HS twin.
 - **The Xsight card and the real NVMe.**

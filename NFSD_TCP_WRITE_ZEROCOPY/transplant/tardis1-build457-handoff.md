@@ -819,6 +819,11 @@ Measured with it loaded, the same two cells, one run each
 
 ### 10.3 Open
 
+**Decided 2026-10-07: Mike had the rule reverted** (`40f67123e8fa`, a revert
+of `7809bfb4c8e9` at the tip), to keep in history and come back to; he
+does not want the capability now. `aeed1c15a2ac` stays. What follows is
+as it stood before that.
+
 - **Whether the rule stays is Mike's decision**, put to him as: keep it
   and add its KUnit case; drop it (revert `7809bfb4c8e9`) and accept
   slow direct writes to a growing file; or make it a policy knob beside
@@ -957,7 +962,8 @@ for the run.
   and "64 KiB host" in `README.md`, which also has what phases D, TLP
   and N showed;
 - the regroup, the HS twin, and Mike's decision on the beyond-EOF rule
-  (section 10.3), which build 458 does not have;
+  (section 10.3), which build 458 does not have (decided since: the
+  rule was reverted on 2026-10-07, `40f67123e8fa`);
 - the 16-connection gap (`tardis1-boot1-testing.md` 10.2), unchanged.
 
 ## 13. 2026-10-07: the 16-connection gap, what is known and the experiment armed
