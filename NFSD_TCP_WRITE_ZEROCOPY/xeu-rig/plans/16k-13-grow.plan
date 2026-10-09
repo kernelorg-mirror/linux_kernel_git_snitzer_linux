@@ -1,0 +1,10 @@
+# The native copy and loan on files that grow for the whole cell, where
+# every other cell rewrites files that reached their size in the first
+# second.  XFS makes a direct write that starts beyond the end of the file
+# wait for every direct write in progress, so a copy (written direct) is
+# serialized per file while the file grows.  Native storage only: it needs
+# room (sixteen files of up to 256 GiB).
+#     STEP_SIZE=256G STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget ./sweep.sh <outdir> <this>
+128 262144 0 prp step-copy-n16
+256 1048576 0 prp step-copy-n16
+256 1048576 16 prp step-on-n16
