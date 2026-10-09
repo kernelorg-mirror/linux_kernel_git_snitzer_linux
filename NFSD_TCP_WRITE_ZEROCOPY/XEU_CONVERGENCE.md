@@ -994,6 +994,8 @@ C3. **An MD or device-mapper stripe takes away direct I/O from nfsd's
     and a copy's first piece has no more. Nothing in the tree says so.
     The limit is read-only at runtime; a stacked device taking its
     members' alignment is a change to the block layer.
+    (Made, and booted as build 461 on 9 October: see "Build 461"
+    below. A copy on the stripe is written direct there.)
 C4. The trim that the stripe needs (N1), the cost of the COMMITs and a
     stage that does not pass 30 GB/s whatever the budget, the rings,
     the files or the connections (N6, N7, N9 to N11, and 64 files with
@@ -1281,6 +1283,77 @@ L6. **What is left.** The loan stays at 30 GB/s with the client waiting
 The drives at 02:40 on 9 October: the six striped ones at 103 to 112 TB
 written in their lives and 4% of their endurance used; the cells after
 that added a few TB each.
+
+### Build 461: the copy on the stripe is written direct (9 October, 12:40 to 13:10)
+
+Mike built `7.1.13-21.hs.461.loanpages_pool.el9.aarch64+16k` from the
+tip, with "block: Let a stacking device take its members' memory
+alignment" in it, and rebooted. `kmod-16k-xsight` 2.0.1-4 came with the
+build and carries the refill retry; it was checked and not rebuilt.
+
+`/sys/block/md0/queue/dma_alignment` is **3**, as each of its six
+drives reports, where build 459 said 511. The array assembled by
+itself as `/dev/md0`. The region this boot is 32768 pages
+(`./bringup.sh 32768 256`), bound with no trouble.
+
+The best copy and the best loan of N1 again (`plans/16k-17-best.plan`),
+the same load: sixteen connections, 8 MiB writes, 512 nfsd threads,
+flushes sent, the stripe trimmed before every cell, 120 s cells, three
+runs (`xeu-16k-461-best1` to `-best3`):
+
+| cell | run 1 | run 2 | run 3 | build 459, three runs | how it was written |
+|---|---|---|---|---|---|
+| copy, 4 x 128, 256 KiB | 28070 | 27693 | 27314 | 25.4 GB/s (25.1 to 25.5) | `wr_direct` 3213288, 3170112, 3126648; none dontcache, none buffered |
+| loan, 16 WRITEs, 4 x 256, 1 MiB | 30352 | 30326 | 30157 | 30.1 GB/s (29.7 to 30.4) | `wr_dontcache` 3474328, 3471328, 3452344; none direct |
+
+MB/s. Over the 90 s window of each cell, the server's CPU-seconds
+(system, softirq) and what that is per GB written:
+
+| cell | system | softirq | CPU-seconds per GB | ring tail drops | RTOs | region pages in use at peak |
+|---|---|---|---|---|---|---|
+| copy | 867, 868, 867 | 347, 333, 337 | 0.48, 0.48, 0.49 | 0, 1144, 2 | 0, 0, 0 | 775, 770, 774 |
+| loan | 1258, 1208, 1223 | 257, 251, 251 | 0.55, 0.53, 0.54 | 143483, 318903, 165369 | 35, 98, 60 | 4154, 4180, 4091 |
+
+No cell ran the region dry (`alloc_fail` 0 throughout; the least free
+was 28588 of 32768).
+
+B1. **The stacking change does what it was written for: nfsd's copy on
+    an MD stripe is written direct.** Every WRITE of the three copy
+    cells, 9.5 million, went direct and none through the page cache.
+    C3 of the correction no longer holds on this kernel for a copy.
+B2. **Written direct, the copy carries 27.7 GB/s (27.3 to 28.1) where
+    it carried 25.4 through the page cache: 9% more.** The three runs
+    fall by 0.4 GB/s each in the order they were run; three runs do not
+    say whether that is the drives or chance.
+B3. **The loan is where it was: 30.3 GB/s (30.2 to 30.4) against 30.1.**
+    It still goes through the page cache, as it must on drives that
+    need whole pages; the alignment was never what kept it from a
+    direct write here.
+B4. **So the comparison the night was thought to be making, a direct
+    copy against a loan through the page cache, is 27.7 against 30.3:
+    the loan carries 9% more, not the 19% of N1.** N1's gap was one
+    copy against two.
+B5. **The direct copy now costs the server less CPU for each GB than
+    the loan does: 0.48 CPU-seconds against 0.54** (system and softirq,
+    all three runs each way). The loan's one copy into the page cache
+    and its writeback cost more than the copy cell's one copy out of
+    the receive pages. On this storage the loan's gain is rate, and its
+    cost is CPU, 4100 region pages against 770, and frames dropped at
+    the ring.
+B6. **A copy holding a 256 KiB buffer ran at 27.3 to 28.1 GB/s, above
+    the 24.3 that sixteen plain streams carried at that buffer
+    (L1).** L1 read 24.3 as the ceiling the copy cells stood at; on
+    this boot they pass it. `wirebuf.sh` has not been run on build 461,
+    so whether the wire's figure moved or the plain streams never were
+    the copy's ceiling is not known.
+
+Not run on this boot yet: step 4 of the handoff (deeper rings, larger
+buffers and budgets of 16 to 64 WRITEs in the room 32768 pages give),
+and the test of "page_pool: Give the fixed receive region back when it
+is resized" (the region has been set once and not resized). Mike asked
+for a pause after these three runs. `smartctl` is not installed on
+this boot's root, so the drives' wear was not read; the three runs
+wrote about 18 TB to the stripe, 3 TB a drive.
 
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
