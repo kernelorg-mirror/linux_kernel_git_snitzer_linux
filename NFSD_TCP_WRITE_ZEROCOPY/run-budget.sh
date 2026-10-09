@@ -629,7 +629,8 @@ rig_up() {
 	# The rig is only what it claims to be if the device says so.
 	vbm=$(cat "/sys/block/$blk/queue/virt_boundary_mask")
 	[ "$vbm" = $want ] || { echo "STORAGE=$STORAGE: $dev has virt_boundary_mask $vbm, expected $want" >&2; exit 1; }
-	sgls=$(nvme id-ctrl "/dev/${blk%n*}" 2>/dev/null | awk '$1 == "sgls" {print $3}'); sgls=${sgls:--}
+	# No controller to ask under md or dm: the boundary above is what counts.
+	sgls=$(nvme id-ctrl "/dev/${blk%n*}" 2>/dev/null | awk '$1 == "sgls" {print $3}' || true); sgls=${sgls:--}
 	if [ -z "$EXPORT_DIR" ]; then
 		mkfs.xfs -q -f ${BACKING:+-K} "$dev"
 		mkdir -p "$EXPORT"
