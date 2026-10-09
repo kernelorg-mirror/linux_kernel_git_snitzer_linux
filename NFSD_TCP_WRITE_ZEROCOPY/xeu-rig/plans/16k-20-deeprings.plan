@@ -1,0 +1,11 @@
+# Deeper rings.  At 30 GB/s a ring of 256 is 150 microseconds of frames; the
+# loan cells drop tens to hundreds of thousands a cell and the client's
+# congestion window sits near 60 segments.  The plain wire carries 49 GB/s to
+# sixteen streams held at 1 MiB with 24 drops (wirebuf.sh).  As deep as a
+# 6144-page region allows with each load.
+512 1048576 0 prp step-copy-n16
+1024 1048576 0 prp step-copy-n16
+1024 524288 0 prp step-copy-n16
+512 786432 16 prp step-on-n16
+512 1048576 14 prp step-on-n16
+256 1048576 16 prp step-on-n16

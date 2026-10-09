@@ -1,0 +1,56 @@
+#!/usr/bin/bpftrace
+/*
+ * napi.bt - is the receive poll of the port held off, and by what?
+ *   @gap_us[cpu]   time between one poll of an xeu ring and the next on
+ *                  that CPU (a ring of 256 at 15 GB/s is about 150 us deep)
+ *   @poll_us[cpu]  how long one poll took
+ *   @work[cpu]     frames a poll took (64 is the whole budget: more waiting)
+ *   @ksoftirqd_wait_us[cpu]  how long ksoftirqd waited to run once woken
+ *   @region_lock_us          how long a waiter waited for a contended lock
+ *                            from the region's alloc or put, by caller
+ * Run inside a cell:  timeout -s INT 25 bpftrace napi.bt
+ */
+config = { missing_probes = "warn" }
+
+tracepoint:napi:napi_poll
+/strncmp(str(args.dev_name), "enp161s0f0", 10) == 0/
+{
+	$c = cpu;
+	if (@last[$c]) { @gap_us[$c] = hist((nsecs - @last[$c]) / 1000); }
+	@last[$c] = nsecs;
+	@work[$c] = lhist(args.work, 0, 72, 8);
+}
+
+tracepoint:sched:sched_wakeup
+/strncmp(args.comm, "ksoftirqd", 9) == 0/
+{
+	@kwake[args.pid] = nsecs;
+}
+
+tracepoint:sched:sched_switch
+/strncmp(args.next_comm, "ksoftirqd", 9) == 0 && @kwake[args.next_pid]/
+{
+	@ksoftirqd_wait_us[cpu] = hist((nsecs - @kwake[args.next_pid]) / 1000);
+	delete(@kwake, args.next_pid);
+}
+
+tracepoint:sched:sched_switch
+/strncmp(args.next_comm, "ksoftirqd", 9) == 0/
+{
+	@ksoftirqd_runs[cpu] = count();
+}
+
+tracepoint:lock:contention_begin
+{
+	@cb[tid] = nsecs;
+}
+
+tracepoint:lock:contention_end
+/@cb[tid]/
+{
+	$d = (nsecs - @cb[tid]) / 1000;
+	delete(@cb, tid);
+	if ($d > 20) { @contended_us[kstack(4)] = hist($d); }
+}
+
+END { clear(@last); clear(@kwake); clear(@cb); }

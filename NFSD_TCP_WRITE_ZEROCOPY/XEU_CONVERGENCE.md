@@ -950,6 +950,64 @@ H18. **Four rings are not enough and are not evenly fed.** Sixteen
 H19. `rwsem_spin_on_owner` at 11% is a lock nfsd's threads spin on in
     the write. Which lock was not traced.
 
+### Correction, 2026-10-09: on the stripe nothing is written direct
+
+Found on the morning of 9 October, when Mike asked whether a loan is not
+written with O_DIRECT in the end. **Every native cell on `/dev/md0`,
+copy and loan alike, was written through the page cache
+(`IOCB_DONTCACHE`), and none direct**: `wr_direct` is 0 in every one
+(`summary.tsv`; the best copy 2923544 WRITEs dontcache, the best loan
+3402632). On the single drive a copy was written direct (H12, 16K
+finding 7); it was taken to be so on the stripe and not looked at.
+
+Why: `md0` reports a `dma_alignment` of 511 where its NVMe members
+report 3 (`/sys/block/*/queue/dma_alignment`), so nfsd's memory
+alignment for direct I/O there is 512 bytes and not 4
+(`xfs_io -c 'statx -m 0x2000'`: `dioattr.mem = 0x200`). A copied WRITE's
+data starts part-way into its first page, after the RPC header, at an
+offset that is a multiple of 4 and not of 512, and `nfs_dio_split()`
+issues the WRITE buffered (`NFS_DIO_MEM_MISALIGNED`). Seen with the
+tracepoint on the RAM disk, which asks for 512 too: 6311 of 6311
+`nfsd_write_dio_split` events `mem_align=512 ... disposition=mem_misaligned
+dontcache=1`, with `mem_offset` 300, 1920, 6976. A stripe made of 32
+null_blk devices (2 each) reported 511 as well: it is the stacking of
+the limits, not these drives.
+
+So, for everything from "Six drives" on:
+
+| on the stripe | what it was |
+|---|---|
+| copy, native | **two copies**: out of the receive pages, then into the page cache; written back, not direct |
+| loan, native | **one copy**: into the page cache; written back |
+| copy and loan, NVMe/TCP | written direct, through the target on the same host |
+
+C1. **The 30.1 against 25.4 GB/s of N1 is one copy against two, both
+    through the page cache.** It stands as measured. It is not a
+    zero-copy write against a direct one, and "half of the server's
+    cycles are the copy" (H17) was two copies.
+C2. **The only direct writes on the stripe are NVMe/TCP's**: the copy
+    24.8 GB/s and the loan 20.2 to 21.1 (flushes sent or not, 8 MiB
+    writes).
+C3. **An MD or device-mapper stripe takes away direct I/O from nfsd's
+    copy as well as from a loan**, on drives that would take either
+    direct by themselves. A loan needs 4-byte alignment (`rx_ip_align=2`)
+    and a copy's first piece has no more. Nothing in the tree says so.
+    The limit is read-only at runtime; a stacked device taking its
+    members' alignment is a change to the block layer.
+C4. The trim that the stripe needs (N1), the cost of the COMMITs and a
+    stage that does not pass 30 GB/s whatever the budget, the rings,
+    the files or the connections (N6, N7, N9 to N11, and 64 files with
+    22 WRITEs: 30.9) are all of a path that puts every byte through
+    the page cache and writeback.
+
+Storage tried for a loan written direct with no hop in front of it, and
+why each will not do: a memory-backed null_blk has no boundary and an
+alignment of 2 but copies under one lock (6.0 GB/s for copy and loan,
+`xeu-16k-nullb`); a stripe of 32 of them reports 511; brd (44 GB/s to
+fio) asks for 512, so copy and loan both go through the page cache
+there (19.6 and 21.8 GB/s, `xeu-16k-brd`). On this host only NVMe/TCP
+takes a loan direct.
+
 ### Six drives: `/dev/md0` (2026-10-08, evening)
 
 Mike had `nvme2` to `nvme7` striped: MD raid0, a 1 MiB chunk (the size
@@ -960,7 +1018,9 @@ one drive; `max_sectors_kb` is 1024), a 6 MiB stripe, XFS with
 and `/etc/exports` are commented out with `#stripe 2026-10-08-stripe#`
 and the files as they were are `/etc/fstab.2026-10-08-stripe` and
 `/etc/exports.2026-10-08-stripe`. `mdadm` was installed for it. The
-stripe needs whole pages as its drives do (`virt_boundary_mask` 4095).
+stripe needs whole pages as its drives do (`virt_boundary_mask` 4095),
+and it asks for 512-byte memory alignment where they ask for 4: **see
+the correction above, nothing native here was written direct.**
 The drives' volatile write cache is on and the kernel sends flushes
 (`write back`) in every run below.
 
@@ -982,7 +1042,8 @@ SGL_BACKING=/hs/stripe/zcbudget-nvmet.img`; `xeu-16k-stripe-sync`,
 | loan, NVMe/TCP, 16 WRITEs | 4 x 256, 1 MiB | 10647 | 20182 | 7657 |
 | loan, native, 16 WRITEs | 4 x 256, 1 MiB | to rerun | **32370** | 6838 |
 
-H20. **Durable copies reach 24.7 GB/s on the stripe** (198 Gbit/s),
+H20. **Durable copies reach 24.7 GB/s on the stripe** (198 Gbit/s;
+    the native one through the page cache, the correction above),
     where one drive gave 6.7 to 8.3, and stop at the copy's wall.
 H21. **The native loan, durable, runs at 32.4 GB/s** (259 Gbit/s, two
     thirds of what the wire carried) with 8 MiB blocks: 31% over its
@@ -1008,7 +1069,8 @@ H23. Two native cells of the 1 MiB run failed in the harness, which
 
 Mike, 2026-10-08: avoid the copy; find what holds the loan back. All on
 the stripe's native storage (a loan is written through the page cache
-there), sixteen connections, sixteen writers, 512 nfsd threads, 8 MiB
+there, **and so is a copy: the correction below "The wall near 25
+GB/s"**), sixteen connections, sixteen writers, 512 nfsd threads, 8 MiB
 writes unless said. Output `/var/tmp/zc-run-logs/xeu-16k-*`; the chain
 is `xeu-16k-night-driver.sh` and the drivers after it.
 
@@ -1022,7 +1084,8 @@ traced):
 | loan, 16 WRITEs, rings of 4 x 256, 1 MiB buffer | 29727 | 30054 | 30357 | 30054 |
 
 N1. **The loan carries 30.1 GB/s of durable writes against the copy's
-    25.4, 18% more, and it repeats** (29.7 to 30.4; 25.1 to 25.5). The
+    25.4, 18% more, and it repeats** (one copy against two, both
+    through the page cache: C1) (29.7 to 30.4; 25.1 to 25.5). The
     loan holds about 4200 pages of the region, the copy 770. The
     32.4 GB/s of H21 was one run and was not seen again.
 
