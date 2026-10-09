@@ -238,6 +238,13 @@ struct page_pool {
 
 	struct xarray dma_mapped;
 	struct page_pool_rx_region *rx_region;
+	/* Recycled pages of a pool bound to the fixed receive region: a
+	 * stack under ring.producer_lock, used in place of the ring so the
+	 * page freed last is the page allocated next.
+	 */
+	netmem_ref *rx_stack;
+	unsigned int rx_stack_n;
+	unsigned int rx_stack_size;
 
 #ifdef CONFIG_PAGE_POOL_STATS
 	/* recycle stats are per-cpu to avoid locking */

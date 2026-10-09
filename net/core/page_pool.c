@@ -569,6 +569,13 @@ static int page_pool_init(struct page_pool *pool,
 		goto free_ptr_ring;
 	} else {
 		pool->rx_region = page_pool_rx_region_get(pool);
+		/* Without the stack the pool recycles through the ring. */
+		if (pool->rx_region)
+			pool->rx_stack = kvcalloc(ring_qsize,
+						  sizeof(*pool->rx_stack),
+						  GFP_KERNEL);
+		if (pool->rx_stack)
+			pool->rx_stack_size = ring_qsize;
 	}
 
 	return 0;
@@ -586,6 +593,7 @@ free_ptr_ring:
 static void page_pool_uninit(struct page_pool *pool)
 {
 	ptr_ring_cleanup(&pool->ring, NULL);
+	kvfree(pool->rx_stack);
 	xa_destroy(&pool->dma_mapped);
 
 #ifdef CONFIG_PAGE_POOL_STATS
@@ -646,11 +654,61 @@ EXPORT_SYMBOL(page_pool_create);
 
 static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem);
 
+/*
+ * A pool bound to the fixed receive region keeps its recycled pages on a
+ * stack, not in the ring: a ring hands back the page that has waited
+ * longest, and a receive buffer is worth most while the cache still holds
+ * it.  The producer lock covers both ends; the consumer takes it once for
+ * each refill of the alloc cache.
+ */
+static bool page_pool_rx_stack_push(struct page_pool *pool, netmem_ref netmem)
+{
+	lockdep_assert_held(&pool->ring.producer_lock);
+
+	if (pool->rx_stack_n == pool->rx_stack_size)
+		return false;
+	pool->rx_stack[pool->rx_stack_n++] = netmem;
+	return true;
+}
+
+static noinline netmem_ref page_pool_rx_stack_refill(struct page_pool *pool)
+{
+	unsigned int n;
+	bool in_softirq;
+
+	/* Quicker fallback, avoid the lock when the stack is empty */
+	if (!READ_ONCE(pool->rx_stack_n)) {
+		alloc_stat_inc(pool, empty);
+		return 0;
+	}
+
+	in_softirq = page_pool_producer_lock(pool);
+	n = min_t(unsigned int, pool->rx_stack_n,
+		  PP_ALLOC_CACHE_REFILL - pool->alloc.count);
+	/* In stack order, so the alloc cache hands out the newest first. */
+	memcpy(&pool->alloc.cache[pool->alloc.count],
+	       &pool->rx_stack[pool->rx_stack_n - n],
+	       n * sizeof(*pool->rx_stack));
+	WRITE_ONCE(pool->rx_stack_n, pool->rx_stack_n - n);
+	pool->alloc.count += n;
+	page_pool_producer_unlock(pool, in_softirq);
+
+	if (unlikely(!pool->alloc.count)) {
+		alloc_stat_inc(pool, empty);
+		return 0;
+	}
+	alloc_stat_inc(pool, refill);
+	return pool->alloc.cache[--pool->alloc.count];
+}
+
 static noinline netmem_ref page_pool_refill_alloc_cache(struct page_pool *pool)
 {
 	struct ptr_ring *r = &pool->ring;
 	netmem_ref netmem;
 	int pref_nid; /* preferred NUMA node */
+
+	if (pool->rx_stack)
+		return page_pool_rx_stack_refill(pool);
 
 	/* Quicker fallback, avoid locks when ring is empty */
 	if (__ptr_ring_empty(r)) {
@@ -1112,7 +1170,10 @@ static bool page_pool_recycle_in_ring(struct page_pool *pool, netmem_ref netmem)
 
 	/* BH protection not needed if current is softirq */
 	in_softirq = page_pool_producer_lock(pool);
-	ret = !__ptr_ring_produce(&pool->ring, (__force void *)netmem);
+	if (pool->rx_stack)
+		ret = page_pool_rx_stack_push(pool, netmem);
+	else
+		ret = !__ptr_ring_produce(&pool->ring, (__force void *)netmem);
 	if (ret)
 		recycle_stat_inc(pool, ring);
 	page_pool_producer_unlock(pool, in_softirq);
@@ -1260,7 +1321,9 @@ static void page_pool_recycle_ring_bulk(struct page_pool *pool,
 	in_softirq = page_pool_producer_lock(pool);
 
 	for (i = 0; i < bulk_len; i++) {
-		if (__ptr_ring_produce(&pool->ring, (__force void *)bulk[i])) {
+		if (pool->rx_stack ?
+		    !page_pool_rx_stack_push(pool, bulk[i]) :
+		    __ptr_ring_produce(&pool->ring, (__force void *)bulk[i])) {
 			/* ring full */
 			recycle_stat_inc(pool, ring_full);
 			break;
@@ -1436,6 +1499,18 @@ EXPORT_SYMBOL(page_pool_alloc_frag);
 static void page_pool_empty_ring(struct page_pool *pool)
 {
 	netmem_ref netmem;
+
+	/* Empty the stack of a pool bound to the fixed receive region */
+	for (;;) {
+		bool in_softirq = page_pool_producer_lock(pool);
+
+		netmem = pool->rx_stack_n ?
+			pool->rx_stack[--pool->rx_stack_n] : 0;
+		page_pool_producer_unlock(pool, in_softirq);
+		if (!netmem)
+			break;
+		page_pool_return_netmem(pool, netmem);
+	}
 
 	/* Empty recycle ring */
 	while ((netmem = (__force netmem_ref)ptr_ring_consume_bh(&pool->ring))) {
