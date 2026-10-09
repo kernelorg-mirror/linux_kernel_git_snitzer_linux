@@ -1,12 +1,28 @@
-# The xeu rig at 16 KiB: where it stands (2026-10-09, morning)
+# The xeu rig at 16 KiB: where it stands (2026-10-09, written before a reboot into a new kernel)
 
 **Read this section first; the handoff below it was written before the
 16 KiB boot and is kept for the rig's rules and its scripts.** The
 results are in `../XEU_CONVERGENCE.md`: "16K" (sizing), "Hero" and what
-follows it (the fast runs), and **"Correction, 2026-10-09"**, which
-changes how every native figure from the stripe is read.
+follows it (the fast runs), **"Correction, 2026-10-09"**, which
+changes how every native figure from the stripe is read, and "The last
+runs on build 459".
 
-## The state of tardis1
+**Mike rebuilt the kernel from the tip on 9 October and rebooted.
+Whoever reads this after that reboot has no memory of the two days
+before it: everything known is in these files and in
+`/var/tmp/zc-run-logs/` (which is on the root file system and
+survives).** Commits here end with `Assisted-by:` and a `Signed-off-by:`
+of the configured git identity (`git commit -s`), never
+`Co-Authored-By` (AGENTS.md, "Commit trailers"). Mike corrected that
+once already.
+
+## The state of tardis1 before the reboot
+
+A reboot undoes some of this: no region is bound, the port is back at
+its 8 rings of 1024, nfsd at its own thread count, `enp164s0f0` is
+probably up again (leave it; it is not ours), `/hs/stripe` is not
+mounted (it is not in `/etc/fstab`) and the array may come up as
+`/dev/md127` and not `/dev/md0`.
 
 - Kernel `7.1.13-21.hs.459.loanpages_pool.el9.aarch64+16k`, `xeu` with
   the refill retry (kmod 2.0.1-4), `rx_ip_align` 2.
@@ -60,6 +76,13 @@ built but **not booted**:
 
 On that boot, in order:
 
+0. **The driver.** `uname -r` is a new build, so `kmod-16k-xsight` has
+   to be built for it before the port can be used: the first-ten-minutes
+   list of the handoff below, steps 1 to 3 (`./build-kmod.sh`, then the
+   `rpm -U` and the reload of `xeu`, which need Mike's leave because
+   the reload takes `enp164s0f0` down for a few seconds). Check
+   `rx_ip_align` is 2 and `xeu_rx_refill_timer` is in `/proc/kallsyms`.
+   **Run nothing on veth.**
 1. `cat /sys/block/md0/queue/dma_alignment` is 3 (it is 511 without
    the stacking change). If the array does not assemble by itself:
    `mdadm --assemble --scan`, then `mount -o noatime /dev/md0 /hs/stripe`.
@@ -70,6 +93,10 @@ On that boot, in order:
    with nfsd at 512 threads (`echo 512 > /proc/fs/nfsd/threads`).
    That is the comparison the night was thought to be making: a direct
    copy against a loan through the page cache.
+   Every cell of 120 s writes about 3 TB to the stripe, and the drives
+   are consumer ones at 4% of their endurance: say so to Mike before a
+   long queue. Start a queue from a driver script that waits on the
+   one before it (`tail --pid`), and wait on the driver.
 4. With the room the larger region gives: rings of 4 x 1024 or more
    with a 1 MiB or 2 MiB buffer and budgets of 16 to 64
    (`plans/16k-15-budget.plan` and `16k-20-deeprings.plan` are the
