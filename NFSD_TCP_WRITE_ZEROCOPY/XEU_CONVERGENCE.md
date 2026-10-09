@@ -1355,6 +1355,151 @@ for a pause after these three runs. `smartctl` is not installed on
 this boot's root, so the drives' wear was not read; the three runs
 wrote about 18 TB to the stripe, 3 TB a drive.
 
+### Build 461, traced: the rings, the pools, the locks and nfsd's outliers (9 October, 13:45 to 14:10)
+
+After a call with Xsight's engineers (Mike's transcript,
+`~/snitm/kernel/xsight_optimization_meeting_transcript.txt`). What they
+said that bears on this rig: a buffer must be reused while it is still
+in cache, so what is freed last should be allocated first (LIFO, as
+DPDK does); one burst of jitter can push the buffers out of cache into
+a slower state that does not recover, so try a load paced at the
+source and raised in steps; flows reach the rings by the hash of
+their five-tuples, so balance needs many more flows than rings and is
+read from `ethtool -S` as deltas; more rings is more memory posted.
+
+Two traced runs of `plans/16k-17-best.plan` (`xeu-16k-461-trace1`,
+`-trace2`) and one traced copy with 64 connections
+(`xeu-16k-461-copy-m4`), by `xeu-rig/trace-sweep.sh`: `where.sh`, the
+pools' counters, `perf lock contention`, a profile with call graphs
+and `nfsdlat.bt`. Traced, the copy ran at 27.7 and 27.7 GB/s and the
+loan at 29.8 and 29.5 (27.7 and 30.3 untraced).
+
+**The rings.** Sixteen flows on four rings fall as the source ports
+happen to hash, anew at each mount:
+
+| cell | ring 0 | 1 | 2 | 3 | tail drops |
+|---|---|---|---|---|---|
+| copy, 16 connections (trace1) | 25% | 6% | 31% | 37% | 0 in 10 s |
+| loan, 16 connections (trace1) | 26% | 14% | 19% | 42% | 17480 in 10 s |
+| loan, the last untraced cell, whole cell | 14% | 19% | 41% | 26% | 206600, every one on ring 2 |
+| copy, 64 connections | 28% | 27% | 20% | 25% | 23915 in 10 s |
+
+`xeu` gives no way to steer: `ethtool -x`, `-n rx-flow-hash` and
+ntuple filters are not supported. The Rx interrupts are on CPUs 0, 2,
+4 and 6 and the Tx ones on 1, 3, 5 and 7; nfsd's threads are held to
+CPUs 8 to 55 (`taskset -pc` of one), so nfsd is already off the
+rings' CPUs. `irqbalance` is running.
+
+**The pools reuse pages first in, first out.** Over 10 s:
+
+| | copy | loan | copy, 64 connections |
+|---|---|---|---|
+| pages received into | 41.1 M | 43.9 M | 32.6 M |
+| returned to the pool's ring (`recycle_ring`) | 41.08 M | 39.86 M | 32.32 M |
+| returned to the lockless cache (`recycle_cached`) | 10868 | 4179 | 254438 |
+| ring full, so back to the region (`recycle_ring_full`) | 8878 | 4.06 M | 41632 |
+| allocations that went to the region (`alloc_slow`) | 555 | 253861 | 2603 |
+
+T1. **Nearly every page goes back through the pool's `ptr_ring`,
+    which is a FIFO as long as the receive ring** (`xeu` sets
+    `pool_size` to the ring's size). The lockless cache, which is the
+    LIFO, is used only by the pool's own NAPI CPU, and the pages are
+    freed by nfsd on other CPUs. So a page freed now is reused after
+    every page ahead of it in that ring and then every buffer posted
+    ahead of it: the opposite of what Xsight described. The region's
+    own free list is a stack, but only what overflows reaches it.
+T2. **In the loan cell 9% of the returns overflow.** Each such page is
+    unmapped for DMA (an xarray erase under its lock), put on the
+    region's list under the region's one lock with interrupts off, and
+    mapped again when a pool takes it back, 16 at a time: 400 thousand
+    pages a second each way.
+T3. **nfsd's copy buffers are not reused either.** In the copy cell
+    the profile has nfsd releasing a batch of pages after each request
+    (`__folio_batch_release` from `svc_recv`) and `alloc_pages_bulk`
+    refilling: about 5% of the cycles, and the copy's destination is
+    whatever the page allocator hands out. Why the pages are released
+    is not read yet.
+
+**Locks**, from `perf lock contention -a -b` over 10 s:
+
+| lock, by caller | copy | loan | copy, 64 connections |
+|---|---|---|---|
+| the pool ring's producer lock (`page_pool_put_unrefed_netmem`), taken for each page | 88 k contended, 0.13 s waited | 568 k, 0.96 s | 178 k, 0.36 s |
+| the idle list of nfsd's one thread pool (`__lwq_dequeue`) | 129 k, 0.77 s | 13 k, 0.09 s | 351 k, **5.25 s** |
+| XFS inode lock (`xfs_ilock`) | 1.7 k, 0.01 s | 16 k read and 0.8 k write, 0.26 s by caller; **by lock 7.6, 3.1 and 2.8 s on three inodes** | 4.8 k, 0.31 s |
+| a connection's send mutex (`svc_tcp_sendto`) | 3.8 k, 2.95 s, **one of 2.84 s** | 2.9 k, 0.04 s | not in the top ten |
+| the region's lock (`page_pool_rx_region_put`) | not in the top thirty | 6.9 k, 0.013 s | not in the top ten |
+| DMA index of a released page (`page_pool_release_dma_index`) | none | 45 k, 0.09 s | none |
+
+T4. **The region's lock is not contended to speak of** (13 ms waited
+    in 10 s), though it is taken with interrupts off 800 thousand
+    times a second in the loan cell. What nfsd's threads do contend
+    on is the pool ring's producer lock, once for each page: a loaned
+    WRITE's pages are released one at a time (`skb_page_unref`).
+    Releasing a WRITE's pages in one batch
+    (`page_pool_put_netmem_bulk`) would take it once.
+T5. **The loan through the page cache queues on each file's inode
+    lock.** A buffered write takes it exclusively: 6.9% of all cycles
+    are `rwsem_spin_on_owner` under `down_write`, and single waits
+    reached seconds. A direct write takes it shared. That, and the
+    copy into the page cache (28% of cycles), is the path a loan has
+    on drives that need whole pages.
+T6. **With 64 connections the wake-up of nfsd's threads becomes the
+    contended lock**: 5.25 s waited in 10 s on the idle list of the
+    one pool (`pool_mode` is pernode on a host with one node, so all
+    512 threads share it).
+
+**nfsd's time**, from `nfsdlat.bt` over 15 s (the mount is NFSv3):
+
+| | copy, direct | loan, page cache |
+|---|---|---|
+| a WRITE in nfsd (`nfsd_write`) | 128 to 512 us for 87%; **4.4% take 2 to 8 ms** | 128 to 512 us for 96%; none over 4 ms |
+| a COMMIT | 0.5 to 2 ms for 57%; **24% take 4 to 32 ms** | 0.5 to 2 ms for 52%; **33% take 4 to 64 ms** |
+| RPCs over 10 ms | 4963 (4147 of them COMMITs) | 7879 (6575 COMMITs) |
+| sending a reply | 4 to 32 us; 10 over 0.5 ms | 8 to 128 us; 350 over 0.5 ms |
+
+T7. **The outliers are COMMITs**, which is these drives' cache flush;
+    the direct WRITE has a second, smaller tail of 2 to 8 ms that the
+    buffered one does not.
+T8. **The copy is slow for a copy**: 16.2% of 64 CPUs' cycles are
+    `memmove` in the receive copy at 27.7 GB/s, 2.7 GB/s for each CPU
+    doing it; in the loan cell 28% at 29.5, 1.65 GB/s each, into the
+    page cache. Both read what the card has just written and write to
+    pages not lately used. This is the figure the Xsight advice is
+    about, and T1 and T3 are where reuse is lost.
+T9. **The copy is held by the server's receive**: the client's
+    connections are `rwnd_limited` 98.5% of the time with sixteen
+    connections (85 to 97% in the loan cell).
+T10. **Sixty-four connections did not help the copy: 21.1 GB/s.** The
+    rings were more even and the client waited on the window less
+    (77%), but rings of 128 with 256 KiB buffers dropped 190306
+    frames and there were 1296 RTOs. It is not a fair test of more
+    connections: it wants deeper rings, which the 32768-page region
+    has room for.
+T11. `enable_irq()` called from `xeu_rx_poll` at the end of each poll
+    accounts for 6.1% of the samples in the copy cell (time with
+    interrupts off is charged to where they come back on). The rings'
+    CPUs go idle between polls: they are not saturated.
+
+Not run: a load paced at the source and raised in steps (the harness
+has no rate setting yet); the copy with more connections on deeper
+rings.
+
+What each finding suggests, none of it done:
+
+- **sunrpc:** release a loaned WRITE's pages in one batch (T4).
+- **page_pool:** for a pool bound to the region, a LIFO in place of
+  the FIFO ring, or a much shorter ring so that pages overflow to the
+  region's stack, with the DMA mapping kept while a page is in the
+  region (T1, T2). `xeu`'s `pool_size` is the same knob from the
+  driver's side and needs a kmod rebuild and a reload.
+- **nfsd:** keep and reuse a thread's copy buffers when the write was
+  direct (T3); a thread pool per CPU or several pools, so 512 threads
+  do not share one idle list (T6).
+- **storage:** on drives that need whole pages, copy and write direct;
+  the loan's inode-lock queue and second-rate copy are the page
+  cache's (T5, B5). A loan wants a drive that takes it direct.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

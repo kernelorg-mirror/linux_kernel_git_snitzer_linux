@@ -89,6 +89,14 @@ mounted (it is not in `/etc/fstab`) and the array may come up as
    three runs each.** The loan still goes through the page cache. The
    direct copy costs the server less CPU per GB than the loan (0.48
    against 0.54 CPU-seconds) and holds 770 region pages against 4100.
+6. **Traced on build 461** (after the call with Xsight; "Build 461,
+   traced" in `../XEU_CONVERGENCE.md`): the pools reuse pages through a
+   FIFO and not last in, first out; the rings take 6% to 42% each of
+   sixteen flows; a loan through the page cache queues on each file's
+   inode lock; the outliers in nfsd are COMMITs; 64 connections on
+   rings of 128 made the copy slower (21.1 GB/s). Nothing was changed
+   in the kernel for it. `trace-sweep.sh` and `nfsdlat.bt` are the
+   tools.
 
 ## This boot (build 461): steps 0 to 3 are done, 4 and 5 wait for Mike
 
