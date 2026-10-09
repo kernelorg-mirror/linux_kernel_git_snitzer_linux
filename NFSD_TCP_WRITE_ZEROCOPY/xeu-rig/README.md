@@ -1,22 +1,44 @@
-# The xeu rig at 16 KiB: where it stands (2026-10-09, written before a reboot into a new kernel)
+# The xeu rig at 16 KiB: where it stands (2026-10-09, 13:30, on build 461, paused for Mike)
 
 **Read this section first; the handoff below it was written before the
 16 KiB boot and is kept for the rig's rules and its scripts.** The
 results are in `../XEU_CONVERGENCE.md`: "16K" (sizing), "Hero" and what
 follows it (the fast runs), **"Correction, 2026-10-09"**, which
-changes how every native figure from the stripe is read, and "The last
-runs on build 459".
+changes how every native figure from the stripe is read, "The last
+runs on build 459", and **"Build 461"**, the first runs on the kernel
+with the stacking-alignment change.
 
-**Mike rebuilt the kernel from the tip on 9 October and rebooted.
-Whoever reads this after that reboot has no memory of the two days
-before it: everything known is in these files and in
+**Paused (Mike, 2026-10-09, about 13:00): after the three runs of step
+3 he asked for the documents and the artifact to be brought up to date
+and then to wait for his instruction. Nothing is running. Do not start
+step 4 or step 5 below until he says.**
+
+**Mike rebuilt the kernel from the tip on 9 October and rebooted into
+it (build 461). A session has no memory of the days before it:
+everything known is in these files and in
 `/var/tmp/zc-run-logs/` (which is on the root file system and
 survives).** Commits here end with `Assisted-by:` and a `Signed-off-by:`
 of the configured git identity (`git commit -s`), never
 `Co-Authored-By` (AGENTS.md, "Commit trailers"). Mike corrected that
 once already.
 
-## The state of tardis1 before the reboot
+## The state of tardis1 now (build 461, 2026-10-09 13:30)
+
+- Kernel `7.1.13-21.hs.461.loanpages_pool.el9.aarch64+16k`;
+  `kmod-16k-xsight` 2.0.1-4 for it is installed and loaded (retry
+  symbol present, `rx_ip_align` 2). It was checked, not rebuilt.
+- A **32768-page** region is bound to `0000:a1:00.0`; the port is at
+  4 rings of 256. `alloc_fail` 0.
+- `/dev/md0` assembled by itself and is mounted at `/hs/stripe`
+  (`mount -o noatime`, by hand: it is still not in `/etc/fstab`).
+  Its `dma_alignment` is 3.
+- nfsd is at **512** threads (the boot's own count is 128).
+- `enp164s0f0` came up with the boot and has its address. It is not
+  ours and was not touched. Nothing has run on veth.
+- `smartctl` is not installed on this root, so the drives' wear was
+  not read. This boot has written about 18 TB to the stripe.
+
+## The state of tardis1 before the reboot (build 459)
 
 A reboot undoes some of this: no region is bound, the port is back at
 its 8 rings of 1024, nfsd at its own thread count, `enp164s0f0` is
@@ -62,11 +84,25 @@ mounted (it is not in `/etc/fstab`) and the array may come up as
    buffer held. Nothing on the network side holds the loan at 30: not
    the budget past 16, the rings' depth or number, dropped frames,
    connections or files.
+5. **Build 461: the copy on the stripe is written direct, and carries
+   27.7 GB/s (27.3 to 28.1) against the loan's 30.3 (30.2 to 30.4),
+   three runs each.** The loan still goes through the page cache. The
+   direct copy costs the server less CPU per GB than the loan (0.48
+   against 0.54 CPU-seconds) and holds 770 region pages against 4100.
 
-## The next boot
+## This boot (build 461): steps 0 to 3 are done, 4 and 5 wait for Mike
 
-Three things are waiting for a kernel build, all at the tip and all
-built but **not booted**:
+Step 0 passed with no rebuild; step 1's `dma_alignment` is 3; step 2's
+region is bound and the stripe trimmed; step 3 ran three times
+(`$L/xeu-16k-461-best1` to `-best3`, driver
+`$L/xeu-16k-461-best-driver.sh`) and is written up as "Build 461" in
+`../XEU_CONVERGENCE.md`. **Steps 4 and 5 have not been started.** For
+step 5, the region has been set once this boot and never resized.
+`setsid` forks when started from a shell that leads its process group,
+so the PID `$!` gives is not the sweep's: find it with `pgrep -xf` of
+the exact command line, then `tail --pid`.
+
+Three things were waiting for this kernel build:
 
 | commit, by its subject | what |
 |---|---|
@@ -74,7 +110,7 @@ built but **not booted**:
 | "block: Let a stacking device take its members' memory alignment" | a stacking device (every MD level, device-mapper) takes its members' memory alignment |
 | (no commit) | a larger region: `./bringup.sh 32768 256` |
 
-On that boot, in order:
+The steps, in order:
 
 0. **The driver: check it, do not rebuild it.** Mike folded the Xsight
    changes he knows of (the refill retry among them) into

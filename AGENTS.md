@@ -112,9 +112,11 @@ reloaded. Run nothing on veth on a boot that is to use the card.
 from the remote client as fast as they will go, near line rate.** On
 tardis1 start at the first section of
 [`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md)
-("where it stands", 2026-10-09: the state of the host, six drives now
-an MD stripe, two kernel patches at the tip waiting for a build, and
-the next boot's steps). Then the "Hero" section of
+("where it stands", 2026-10-09: the state of the host on build 461,
+six drives now an MD stripe, which of the boot's steps are done, and
+that the work is paused until Mike says). The first runs on that build
+are "Build 461" in `XEU_CONVERGENCE.md`: a copy on the stripe is now
+written direct, 27.7 GB/s against the loan's 30.3. Then the "Hero" section of
 [`NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`](NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md):
 what there is to reach for (the wire carries 48 GB/s, one drive takes
 11.2), the brakes known to be on, the ladder
