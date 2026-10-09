@@ -39,7 +39,7 @@ RESERVE=$(sed -n 's/.*reserve \([0-9]*\) \/.*/\1/p' <<< "$G")
 # The kernel charges the payload pages times the factor; 2 over for rounding.
 CHARGE=$(( ( (1048716 + PS - 1) / PS * F9 + 99 ) / 100 + 2 ))
 echo "$G" > $OUT/geometry.txt
-echo "storage: prp $PRP_DIR, sgl $SGL_BACKING; nfsd threads $(cat /proc/fs/nfsd/threads); STEP_JOBS=${STEP_JOBS:-} STEP_BS=${STEP_BS:-} EXPORT_SYNC=${EXPORT_SYNC:-} MODE=${MODE:-} SKB_DEFER_MAX=${SKB_DEFER_MAX:-128}" | tee -a $OUT/geometry.txt
+echo "storage: prp $PRP_DIR, sgl $SGL_BACKING; nfsd threads $(cat /proc/fs/nfsd/threads); STEP_JOBS=${STEP_JOBS:-} STEP_BS=${STEP_BS:-} EXPORT_SYNC=${EXPORT_SYNC:-} MODE=${MODE:-} SKB_DEFER_MAX=${SKB_DEFER_MAX:-128} STEP_RATE=${STEP_RATE:-}" | tee -a $OUT/geometry.txt
 echo "page $PS factor $F9 reserve $RESERVE charge-per-1MiB-WRITE $CHARGE region $(reg pages) retry-patch $(has_retry_patch && echo yes || echo no)" | tee -a $OUT/geometry.txt
 
 stat1() { head -1 /proc/stat; }
@@ -126,6 +126,9 @@ while read -r entries rb writes st cells <&3; do
 		}' $o/stress-A/cells.tsv >> $OUT/summary.tsv
 	echo "-- $tag $(date +%T) rc=$rc budget=$budget free $free -> $(reg free) min_free $(reg min_free) alloc_fail +$daf" | tee -a $OUT/log
 	tail -n $(echo $cells | wc -w) $OUT/summary.tsv | awk '{printf "   %-14s conns=%-2s MB/s=%-5s used=%-5s admitted=%-7s denied=%-7s paused=%s rto=%s zw=%s tail_drops=%s\n", $7, $8, $9, $10, $11, $12, $13, $17, $18, $20}' | tee -a $OUT/log
+	for c in $cells; do
+		[ -s $o/stress-A/$c/ramp.tsv ] && sed 's/^/   /' $o/stress-A/$c/ramp.tsv | tee -a $OUT/log
+	done
 	if [ $daf -ne 0 ]; then
 		echo "   the region ran dry in this run" | tee -a $OUT/log
 		if ! has_retry_patch; then echo "   no retry patch: bouncing the port so no ring stays empty" | tee -a $OUT/log; bounce; fi

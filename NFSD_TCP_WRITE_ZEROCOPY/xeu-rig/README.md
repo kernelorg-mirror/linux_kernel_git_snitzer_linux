@@ -107,6 +107,15 @@ and **not booted**. By subject:
 | "SUNRPC: Trade pages with the socket when a partial record changes hands" | nfsd no longer frees and allocates a WRITE's pages each time a part-received record passes between threads (T3) | copy |
 | "page_pool: Recycle a region-bound pool's pages last in, first out" | a stack in place of the FIFO ring for pools bound to the region (T1) | both |
 | "SUNRPC: Return a loaned record's page-pool pages in batches" | the pool's lock is taken for each batch and not each page (T4) | loan |
+| "SUNRPC: Let a NUMA node have several thread pools" | `pools_per_node`: several queues of ready connections where 512 threads shared one (T6) | both |
+
+The last was written after Mike's build of `…-WIP3` began and is not
+in it. It does nothing until `pools_per_node` is set, and that is read
+when nfsd starts: `options sunrpc pools_per_node=4` in
+`/etc/modprobe.d` before a boot, or
+`echo 4 > /sys/module/sunrpc/parameters/pools_per_node` and a restart
+of nfsd, which drops every client's connections and so is Mike's to
+do. `cat /proc/fs/nfsd/pool_threads` then shows the pools.
 
 `net/core/page_pool.c` is built in, so they need a kernel build and a
 reboot. `svcsock_kunit` covers the save and restore of pages; run it
@@ -154,7 +163,16 @@ above makes the other half of the pages, those that overflow the
 Copy-mode things that need no build and are not run: fewer nfsd
 threads (idle threads are woken last in, first out already, so this
 may change nothing); 64 connections on rings deeper than 128; a load
-paced at the source.
+paced at the source, for which the harness now has `STEP_RATE`:
+
+    STEP_RATE="24000 27000 30000 33000" PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe STEP_JOBS=16 STEP_BS=8M ./trace-sweep.sh $L/<outdir> plans/16k-23-copy.plan
+
+One figure (MB/s, all writers together) paces the whole cell; several
+are steps of equal length within it, the same writers on the same
+files, each step starting as the one before ends. The log and
+`<cell>/ramp.tsv` have each step's rate against what it was offered,
+and the cell's MBps is their mean. `where.sh` and the tracers sample
+from 35 s in, so with four steps they see the second and third.
 
 ## This boot (build 461): steps 0 to 3 are done, 4 and 5 wait for Mike
 
