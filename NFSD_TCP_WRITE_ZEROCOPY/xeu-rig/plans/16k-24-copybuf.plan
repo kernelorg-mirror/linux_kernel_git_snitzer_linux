@@ -1,0 +1,6 @@
+# The direct copy with a larger held receive buffer, sixteen connections:
+# at 256 KiB a 1 MiB WRITE is received a GRO skb at a time, the connection
+# waiting for data for 38% of it (handoff.bt).
+#     STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget
+128 524288 0 prp step-copy-n16
+128 1048576 0 prp step-copy-n16

@@ -1,0 +1,5 @@
+# The direct copy with a 1 MiB held buffer on deeper rings: at 4 x 128 it
+# ran at 35.6 GB/s and dropped 1.5 million frames at the ring tail.
+#     STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget
+256 1048576 0 prp step-copy-n16
+512 1048576 0 prp step-copy-n16
