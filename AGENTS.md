@@ -118,11 +118,15 @@ reloaded. Run nothing on veth on a boot that is to use the card.
 from the remote client as fast as they will go, near line rate.** On
 tardis1 start at the first section of
 [`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md)
-("where it stands", 2026-10-09: the state of the host on build 461,
-six drives now an MD stripe, which of the boot's steps are done, and
-that the work is paused until Mike says). The first runs on that build
-are "Build 461" in `XEU_CONVERGENCE.md`: a copy on the stripe is now
-written direct, 27.7 GB/s against the loan's 30.3. Then the "Hero" section of
+("where it stands", written 2026-10-09 before a reboot into the kernel
+built from `…-WIP3`: its section "The boot after build 461" is the
+list to work from). **The direction is copy mode (Mike, 2026-10-09):
+the direct copy carries 35.9 GB/s with a 1 MiB held receive buffer,
+against 27.7 at 256 KiB and the loan's 30.3**, and a change is judged
+as one of many and not by its own effect on the rate. The harness
+turned deferred skb frees off until that afternoon. The account is
+`XEU_CONVERGENCE.md` from "Build 461" to "The copy with a larger held
+buffer". Then the "Hero" section of
 [`NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`](NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md):
 what there is to reach for (the wire carries 48 GB/s, one drive takes
 11.2), the brakes known to be on, the ladder

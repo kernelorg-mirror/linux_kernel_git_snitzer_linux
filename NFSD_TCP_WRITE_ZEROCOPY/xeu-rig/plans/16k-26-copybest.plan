@@ -1,0 +1,4 @@
+# The direct copy at its best setting so far (build 461: 35.9 GB/s), for
+# the first cell on a new kernel and for repeats:
+#     STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget
+256 1048576 0 prp step-copy-n16
