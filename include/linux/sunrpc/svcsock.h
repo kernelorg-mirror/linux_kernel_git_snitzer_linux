@@ -33,6 +33,14 @@ enum svc_tcp_rx_action {
 	SVC_TCP_RX_PAYLOAD_RELEASE,
 };
 
+/* Why a thread stopped waiting for the rest of a partly received record */
+enum svc_tcp_rx_linger_end {
+	SVC_TCP_RX_LINGER_DATA,
+	SVC_TCP_RX_LINGER_TIMEOUT,
+	SVC_TCP_RX_LINGER_CLOSE,
+	SVC_TCP_RX_LINGER_RESCHED,
+};
+
 enum svc_tcp_rx_reason {
 	SVC_TCP_RX_REASON_NONE,
 	SVC_TCP_RX_REASON_SHORT_PREFIX,

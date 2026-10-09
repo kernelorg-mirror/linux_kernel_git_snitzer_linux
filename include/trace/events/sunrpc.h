@@ -2468,6 +2468,55 @@ DEFINE_EVENT(svcsock_tcp_rx_lifetime_class, svcsock_tcp_rx_lifetime,
 	TP_ARGS(xprt, rqstp, state, action)
 );
 
+TRACE_DEFINE_ENUM(SVC_TCP_RX_LINGER_DATA);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_LINGER_TIMEOUT);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_LINGER_CLOSE);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_LINGER_RESCHED);
+
+#define show_svc_tcp_rx_linger_end(end) \
+	__print_symbolic(end, \
+		{ SVC_TCP_RX_LINGER_DATA, "data" }, \
+		{ SVC_TCP_RX_LINGER_TIMEOUT, "timeout" }, \
+		{ SVC_TCP_RX_LINGER_CLOSE, "close" }, \
+		{ SVC_TCP_RX_LINGER_RESCHED, "resched" })
+
+TRACE_EVENT(svcsock_tcp_rx_linger,
+	TP_PROTO(
+		const struct svc_xprt *xprt,
+		u64 waited_ns,
+		unsigned int limit_us,
+		u32 received,
+		u32 reclen,
+		enum svc_tcp_rx_linger_end end
+	),
+
+	TP_ARGS(xprt, waited_ns, limit_us, received, reclen, end),
+
+	TP_STRUCT__entry(
+		__field(u64, waited_ns)
+		__field(unsigned int, limit_us)
+		__field(u32, received)
+		__field(u32, reclen)
+		__field(u8, end)
+		__string(addr, xprt->xpt_remotebuf)
+	),
+
+	TP_fast_assign(
+		__entry->waited_ns = waited_ns;
+		__entry->limit_us = limit_us;
+		__entry->received = received;
+		__entry->reclen = reclen;
+		__entry->end = end;
+		__assign_str(addr);
+	),
+
+	TP_printk("addr=%s end=%s waited_ns=%llu limit_us=%u received=%u reclen=%u",
+		__get_str(addr), show_svc_tcp_rx_linger_end(__entry->end),
+		__entry->waited_ns, __entry->limit_us,
+		__entry->received, __entry->reclen
+	)
+);
+
 TRACE_EVENT(svcsock_tcp_recv_short,
 	TP_PROTO(
 		const struct svc_xprt *xprt,

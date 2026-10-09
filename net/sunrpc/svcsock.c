@@ -245,6 +245,12 @@ MODULE_PARM_DESC(svc_tcp_rx_rcvbuf,
 		 "Receive buffer clamp in bytes for TCP transports set up afterwards (0: none)");
 
 /*
+ * How long a thread stays with a transport whose record has not all
+ * arrived, waiting for the rest, before it parks the record on the socket
+ * and goes back to the pool.  0: it does not wait.
+ */
+#define SVC_TCP_RX_LINGER_MAX_US	1000
+/*
  * A thread that takes a partly received record back from a socket leaves
  * its own pages in the socket's sk_pages[], for the next thread that parks
  * a record there to take in exchange.  The pages a socket keeps that way
@@ -285,6 +291,11 @@ static void svc_tcp_spare_release(struct svc_sock *svsk, unsigned int n)
 	svsk->sk_spare_pages -= n;
 	atomic_long_sub(n, &svc_tcp_spare_pages);
 }
+
+static unsigned int svc_tcp_rx_linger_us;
+module_param(svc_tcp_rx_linger_us, uint, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_linger_us,
+		 "Microseconds a thread waits for the rest of a partly received TCP record before giving the transport up (0..1000, 0: none)");
 
 /*
  * The region budget bounds loans; only svc_tcp_rx_rcvbuf bounds unread data. A
@@ -3533,6 +3544,62 @@ static bool svc_tcp_at_urg_mark(struct sock *sk)
 
 static void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
 
+/*
+ * A record has been read in part and the socket is empty.  The rest is
+ * usually a round trip away: the sender was waiting for the window this
+ * read has just opened.  Giving the transport up now costs the record a
+ * move to the socket and back, a thread woken on another CPU, and the
+ * connection the time that takes, for every piece of a large WRITE.  Wait
+ * here for the next piece instead, for svc_tcp_rx_linger_us at most.
+ *
+ * svc_data_ready() sets XPT_DATA when data arrives, and cannot queue the
+ * transport while this thread has it (XPT_BUSY).
+ *
+ * Return: true if there is more to read now.
+ */
+static bool svc_tcp_rx_linger(struct svc_sock *svsk)
+{
+	unsigned int us = min(READ_ONCE(svc_tcp_rx_linger_us),
+			      SVC_TCP_RX_LINGER_MAX_US);
+	unsigned long *flags = &svsk->sk_xprt.xpt_flags;
+	enum svc_tcp_rx_linger_end why;
+	u64 start, end;
+
+	if (!us || test_bit(XPT_TLS_SESSION, flags))
+		return false;
+	/* Only for a record under way: an idle connection is given up. */
+	if (svsk->sk_tcplen <= sizeof(rpc_fraghdr))
+		return false;
+
+	start = ktime_get_ns();
+	end = start + (u64)us * NSEC_PER_USEC;
+	for (;;) {
+		if (test_bit(XPT_DATA, flags)) {
+			why = SVC_TCP_RX_LINGER_DATA;
+			break;
+		}
+		if (test_bit(XPT_CLOSE, flags)) {
+			why = SVC_TCP_RX_LINGER_CLOSE;
+			break;
+		}
+		if (need_resched()) {
+			why = SVC_TCP_RX_LINGER_RESCHED;
+			break;
+		}
+		if (ktime_get_ns() >= end) {
+			why = SVC_TCP_RX_LINGER_TIMEOUT;
+			break;
+		}
+		cpu_relax();
+	}
+	if (trace_svcsock_tcp_rx_linger_enabled())
+		trace_svcsock_tcp_rx_linger(&svsk->sk_xprt,
+					    ktime_get_ns() - start, us,
+					    svsk->sk_tcplen - sizeof(rpc_fraghdr),
+					    svc_sock_reclen(svsk), why);
+	return why == SVC_TCP_RX_LINGER_DATA;
+}
+
 /**
  * svc_tcp_recvfrom - Receive data from a TCP socket
  * @rqstp: request structure into which to receive an RPC Call
@@ -3571,6 +3638,7 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 	if (len < 0)
 		goto err_nuts;
 
+again:
 	lock_sock(sock->sk);
 	len = sock->ops->read_sock(sock->sk, &desc, svc_tcp_recv_actor);
 	/* ->read_sock stops at urgent data and consumes none of it.
@@ -3614,10 +3682,16 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 		 * other errors out first, because a probe calls
 		 * sock_error(), whose xchg clears sk->sk_err as it reads.
 		 */
-		if (len <= 0 && len != -EINVAL)
-			goto err_incomplete;
+		if (len > 0 || len == -EINVAL)
+			len = svc_tcp_recv_ctrl_record(svsk);
 
-		len = svc_tcp_recv_ctrl_record(svsk);
+		/* Nothing wrong and nothing left to read: the rest of the
+		 * record may be about to arrive.
+		 */
+		if ((len == 0 || len == -EAGAIN) && svc_tcp_rx_linger(svsk)) {
+			clear_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags);
+			goto again;
+		}
 		goto err_incomplete;
 	}
 	if (svsk->sk_datalen < 8)
