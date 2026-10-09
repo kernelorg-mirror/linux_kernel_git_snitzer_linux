@@ -52,16 +52,16 @@ changes how every native figure from the stripe is read.
 Three things are waiting for a kernel build, all at the tip and all
 built but **not booted**:
 
-| commit | what |
+| commit, by its subject | what |
 |---|---|
-| `374836fe6449` | page_pool: the region is given back when its size changes with no pool bound |
-| `9a621e18dbce` | md/raid0: the array takes its members' memory alignment |
+| "page_pool: Give the fixed receive region back when it is resized" | the region is given back when its size changes with no pool bound |
+| "block: Let a stacking device take its members' memory alignment" | a stacking device (every MD level, device-mapper) takes its members' memory alignment |
 | (no commit) | a larger region: `./bringup.sh 32768 256` |
 
 On that boot, in order:
 
 1. `cat /sys/block/md0/queue/dma_alignment` is 3 (it is 511 without
-   the raid0 change). If the array does not assemble by itself:
+   the stacking change). If the array does not assemble by itself:
    `mdadm --assemble --scan`, then `mount -o noatime /dev/md0 /hs/stripe`.
 2. `./bringup.sh 32768 256`, then `fstrim /hs/stripe`.
 3. The copy on the stripe, and that it is written direct now
