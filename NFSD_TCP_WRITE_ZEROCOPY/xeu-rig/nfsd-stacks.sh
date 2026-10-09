@@ -5,7 +5,7 @@
 # drives and the CPUs' time beside it.  A flat CPU profile does not show a
 # thread that waits; this does.
 O=${1:?out prefix}; N=${2:-20}
-( iostat -x -m 1 $N nvme0n1 nvme1n1 > $O.iostat 2>&1 & mpstat 1 $N > $O.mpstat 2>&1 & wait ) &
+( iostat -x -m 1 $N ${DEVS:-nvme0n1 nvme1n1 md0} > $O.iostat 2>&1 & mpstat 1 $N > $O.mpstat 2>&1 & wait ) &
 for i in $(seq $N); do
 	for p in $(pgrep -x nfsd); do
 		# frames 1 to 9, without offsets; an idle thread sits in svc_recv

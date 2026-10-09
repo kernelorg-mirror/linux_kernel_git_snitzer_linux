@@ -62,6 +62,11 @@ while read -r entries rb writes st cells <&3; do
 	grep -qxF "$line" $OUT/done && continue
 	n=$(( n + 1 ))
 	set_ring $entries || { echo "ring change to $entries failed"; exit 4; }
+	# TRIM=<mount point>: fstrim it before the line.  The cells delete their
+	# files and the file system is not mounted with discard; drives that
+	# were never told sustain less (2026-10-09: the stripe's loan 24 GB/s
+	# untrimmed, 28.7 after a trim).
+	[ -n "${TRIM:-}" ] && fstrim "$TRIM" 2>/dev/null
 	budget=0; [ "$writes" -gt 0 ] && budget=$(( writes * CHARGE + RESERVE + 4 ))
 	rbp=$(( 131072 / PS + 1 )); [ "$rb" != - ] && rbp=$(( rb / PS + 1 ))
 	free=$(reg free); need=$(( budget + 16 * ${STEP_MOUNTS:-1} * rbp + 64 ))

@@ -1,0 +1,13 @@
+# What a loan's rate does as the budget and the held buffer grow, as far as
+# a 6144-page region goes (sweep.sh skips a line that does not fit).  The
+# native loan, sixteen connections.  For capture-sweep.sh with
+#     STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget
+128 1048576 8 prp step-on-n16
+128 1048576 16 prp step-on-n16
+128 1048576 24 prp step-on-n16
+128 524288 16 prp step-on-n16
+128 524288 24 prp step-on-n16
+128 524288 32 prp step-on-n16
+256 1048576 20 prp step-on-n16
+256 524288 16 prp step-on-n16
+128 2097152 16 prp step-on-n16

@@ -1,0 +1,10 @@
+# The budget's curve where the rings do not drop (4 x 256), as far as a
+# 6144-page region goes, and a larger buffer at sixteen WRITEs.  The native
+# loan, sixteen connections; for capture-sweep.sh as 16k-15-budget.plan.
+256 1048576 16 prp step-on-n16
+256 1048576 18 prp step-on-n16
+256 1048576 20 prp step-on-n16
+256 1048576 22 prp step-on-n16
+256 1572864 16 prp step-on-n16
+256 1048576 12 prp step-on-n16
+256 1048576 0 prp step-copy-n16

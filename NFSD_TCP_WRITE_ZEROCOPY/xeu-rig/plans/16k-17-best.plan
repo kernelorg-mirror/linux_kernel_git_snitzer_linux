@@ -1,0 +1,4 @@
+# The best copy and the best loan on the stripe, for repeats.
+#     STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget
+128 262144 0 prp step-copy-n16
+256 1048576 16 prp step-on-n16
