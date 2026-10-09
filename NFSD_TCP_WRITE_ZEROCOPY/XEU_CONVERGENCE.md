@@ -1201,6 +1201,87 @@ to 01:00, most of it to the six striped drives: each went from about 75
 to about 95 TB written in its life, 3% to 4% of its rated endurance
 used, no media error (`xeu-16k-smart-*.txt`).
 
+### The last runs on build 459 (9 October, 01:00 to 06:20)
+
+All the native loan on the trimmed stripe (through the page cache, as
+the correction says), sixteen connections, 8 MiB writes, 512 nfsd
+threads, flushes sent, unless said. Each is a thing that might have
+held the loan at 30 GB/s and did not.
+
+**The budget, untraced** (`xeu-16k-budget256-trim`, rings of 4 x 256):
+29.8, 29.7, 30.8 and 30.5 GB/s at 16, 18, 20 and 22 WRITEs with a
+1 MiB buffer; 30.7 at 16 with 1.5 MiB; 27.7 at 12; the copy at the same
+rings and buffer 23.4.
+
+**The wire at each held buffer** (`wirebuf.sh`, sixteen plain TCP
+streams to a receiver that discards, rings of 4 x 256;
+`xeu-16k-wirebuf.tsv`):
+
+| the server's receive buffer | MB/s | ring tail drops | region pages in use |
+|---|---|---|---|
+| 256 KiB | 24267 | 0 | 1803 |
+| 512 KiB | 45031 | 0 | 1835 |
+| 1 MiB | 49314 | 24 | 2080 |
+| 2 MiB | 49487 | 87 | 2974 |
+| 4 MiB | 48514 | 900047 | 3700 |
+| not held | 49203 | 455433 | 4794 |
+
+One stream: 6364 MB/s at 1 MiB, 7369 not held.
+
+L1. **With a 1 MiB buffer held the wire is full (49 GB/s) and loses
+    nothing.** A loan at 30 is not at a ceiling of its transport. A
+    256 KiB buffer is one: 24.3 GB/s, which is where the copy cells
+    that hold 256 KiB stand (25.4).
+
+**Rings** (`xeu-16k-r8x128`, `-rps`, `-deeprings`; traced):
+
+| rings | cell | MB/s | ring tail drops | the busiest ring | its CPU in softirq |
+|---|---|---|---|---|---|
+| 8 x 128 | loan, 16 WRITEs, 1 MiB | 30430 | 383421 | 7.9 GB/s | 61% |
+| 8 x 128 | loan, 22 WRITEs, 1 MiB | 31849 | 618070 | 8.1 GB/s | 65% |
+| 8 x 128 | copy, 256 KiB / 1 MiB | 23481 / 25288 | 0 / 235292 | | |
+| 8 x 256 | loan, 16 WRITEs, 512 KiB | 26280 | 0 | | |
+| 4 x 256, RPS to CPUs 8 to 63 | copy / loan | 23189 / 30372 | 0 / 120151 | | |
+| 4 x 512 | copy, 1 MiB | 21361 | 0 | | |
+| 4 x 1024 | copy, 1 MiB / 512 KiB | 21392 / 21505 | 0 / 0 | | |
+| 4 x 512 | loan, 16 WRITEs, 768 KiB | 29365 | 0 | 10.9 GB/s | 72% |
+| 4 x 256 | loan, 16 WRITEs, 1 MiB | 30277 | 6 | 9.2 GB/s (all four even) | 63% |
+
+L2. **Eight rings halve what the busiest ring takes and add 4%.** RPS
+    adds nothing.
+L3. **Rings deep enough to drop nothing change nothing**: the copy at
+    4 x 512 and 4 x 1024 dropped no frame and ran at 21.4 GB/s; the
+    loan at 4 x 512 dropped none and ran at 29.4. The frames dropped
+    in other cells are not what limits either.
+L4. **The client's congestion window near 60 segments is not loss.**
+    It is the same in the cells that dropped nothing: a sender held by
+    the receiver's window does not grow it. `rwnd_limited` is 97% in
+    those cells.
+L5. What this boot's 6144 pages hold: the pools keep about 970 pages
+    on top of what the rings post, so 4 x 256 leaves about 4180 free
+    after a load, 4 x 512 3120 and 4 x 1024 1072. A loan at 16 WRITEs
+    and 1 MiB needs 3254.
+
+**Files** (`xeu-16k-files64`): 64 writers at depth 4 with 22 WRITEs,
+30.9 GB/s; with 16, 29.4. The file's lock is not it either.
+
+**Storage with nothing slow under it** (`xeu-16k-nullb`, `-brd`; in
+the correction above): a memory-backed null_blk 6.0, 5.8 and 5.6 GB/s
+for the copies and the loan, all written direct, under its one lock;
+brd 19.6 and 17.6 for the copies and 21.8, 21.8 and 18.8 for the loan
+at 16, 22 and 8 WRITEs, all through the page cache.
+
+L6. **What is left.** The loan stays at 30 GB/s with the client waiting
+    on the server 97% of the time, the budget full, the server's CPUs
+    mostly idle and nothing lost on the wire. Every such cell puts
+    every byte through the page cache and writeback, which the next
+    boot's raid0 alignment lets the copy, at least, avoid. With the
+    export async the same loan ran at 36.0 (one run, 8 October).
+
+The drives at 02:40 on 9 October: the six striped ones at 103 to 112 TB
+written in their lives and 4% of their endurance used; the cells after
+that added a few TB each.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
