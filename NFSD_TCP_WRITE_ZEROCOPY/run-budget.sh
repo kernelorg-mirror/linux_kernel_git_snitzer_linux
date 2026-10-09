@@ -466,6 +466,7 @@ cleanup() {
 	[ -n "${SAVE_VETH_ALIGN:-}" ] && { modprobe -r veth 2>/dev/null; veth_load "$SAVE_VETH_ALIGN"; }
 	sysctl -qw net.ipv4.tcp_rmem="$SAVE_RMEM"
 	sysctl -qw net.core.skb_defer_max="$SAVE_DEFER"
+	[ -w $SP/svc_tcp_rx_linger_us ] && echo 0 > $SP/svc_tcp_rx_linger_us
 	echo "$SAVE_LIO" > /sys/module/nfs/parameters/localio_enabled
 	echo "$SAVE_ICW" > /sys/kernel/debug/nfsd/io_cache_write
 	echo 0 > $SP/svc_tcp_rx_budget_pages
@@ -854,6 +855,10 @@ cell() {
 	echo "$FACTOR" > $SP/svc_tcp_rx_credit_factor
 	echo "$RCVBUF" > $SP/svc_tcp_rx_rcvbuf
 	echo "$BUDGET" > $SP/svc_tcp_rx_budget_pages
+	# RX_LINGER_US=<us>: a thread waits that long for the rest of a partly
+	# received record before it gives the connection up (0: it does not;
+	# kernels without the parameter are left alone).
+	[ -w $SP/svc_tcp_rx_linger_us ] && echo "${RX_LINGER_US:-0}" > $SP/svc_tcp_rx_linger_us
 	sysctl -qw net.ipv4.tcp_rmem="${RMEM:-$SAVE_RMEM}"
 	setdelay "$DELAY"
 	MTU=$MTU net_up "$SIZE" || { echo "$name: skipped"; return 0; }
