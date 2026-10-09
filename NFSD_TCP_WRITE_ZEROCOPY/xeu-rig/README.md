@@ -130,6 +130,15 @@ kernel: `rx_pp_alloc_refill` against `rx_pp_alloc_empty` in
 `pp-*.txt` (the stack in use), `__folio_batch_release` and
 `alloc_pages_bulk` gone from the profile, and the rate.
 
+**How to judge a change here (Mike, 2026-10-09): as one of many, not
+by whether it alone moves the rate.** A combination of changes can be
+what unlocks the rate, and one stage's limit hides the gain of a fix
+ahead of it. So a change that does what it is meant to (the counters,
+the lock contention, the order of reuse, the cycles in the profile)
+is kept and added to the others, and the whole is measured; "no gain
+alone" is a result to record and not a reason to drop it or to leave
+the next one untried.
+
 **The harness turns deferred skb frees off** (`net.core.skb_defer_max=0`
 in `run-budget.sh`, since 4 October, undocumented until 9 October), so
 every figure from this rig before 15:30 on 9 October was taken that
@@ -138,8 +147,9 @@ repeats the old behaviour, and a run whose `geometry.txt` does not name
 the setting was made with 0. On, half of the copy cell's pages come back
 by the pool's lockless cache and the rate is the same (27.3 and
 28.0 GB/s): "The harness had deferred skb frees off" in
-`../XEU_CONVERGENCE.md`. The page-pool patch above changes the same
-thing by another route and is not expected to help copy mode.
+`../XEU_CONVERGENCE.md`. That is one change alone. The page-pool patch
+above makes the other half of the pages, those that overflow the
+32-page cache, last in, first out as well.
 
 Copy-mode things that need no build and are not run: fewer nfsd
 threads (idle threads are woken last in, first out already, so this
