@@ -766,28 +766,56 @@ J
 	# own NCONN connections, the writers shared out among them.  nconnect
 	# stops at 16; this is how a cell has more connections than that.
 	# STEP_IODEPTH=<n> is each writer's depth (16).
+	# STEP_RATE="<MB/s> ..." paces the load at the source: the writers
+	# together offer that much and no more.  One figure holds for the
+	# cell.  Several are steps of equal length within it, the same
+	# writers on the same files at each (a load the server can take,
+	# then raised without stopping, to see whether it carries more that
+	# way than when offered everything at once); the cell's MBps is then
+	# the mean of the steps and ramp.tsv has each step's.
 	if [ -n "${STEP_JOBS:-}" ]; then
-		local m=${STEP_MOUNTS:-1} i d
+		local m=${STEP_MOUNTS:-1} i d k n r
+		local rates=(${STEP_RATE:-0})
+		local per=$(( STEP_JOBS / m ))
 		cat > "$f" <<J
 [global]
 rw=write
 bs=${STEP_BS:-1M}
 size=${STEP_SIZE:-512M}
 time_based
-runtime=120
+runtime=$(( 120 / ${#rates[@]} ))
 direct=1
 ioengine=libaio
 iodepth=${STEP_IODEPTH:-16}
-numjobs=$(( STEP_JOBS / m ))
 J
-		for i in $(seq 0 $(( m - 1 ))); do
-			d=/mnt/rxr; [ $i -gt 0 ] && d=/mnt/rxr.$i
-			cat >> "$f" <<J
+		if [ ${#rates[@]} -eq 1 ]; then
+			echo "numjobs=$per" >> "$f"
+			[ "${rates[0]}" -gt 0 ] && echo "rate=$(( rates[0] * 1000000 / (per * m) ))" >> "$f"
+			for i in $(seq 0 $(( m - 1 ))); do
+				d=/mnt/rxr; [ $i -gt 0 ] && d=/mnt/rxr.$i
+				cat >> "$f" <<J
 [step$i]
 directory=$d
 filename_format=f-$3.$i.\$jobnum
 J
-		done
+			done
+		else
+			# A section for each writer of each step, so that every
+			# step writes the same files; a step waits for the one
+			# before it (stonewall).
+			for k in $(seq 0 $(( ${#rates[@]} - 1 ))); do
+				r=$(( rates[k] * 1000000 / (per * m) ))
+				for i in $(seq 0 $(( m - 1 ))); do
+					d=/mnt/rxr; [ $i -gt 0 ] && d=/mnt/rxr.$i
+					for n in $(seq 0 $(( per - 1 ))); do
+						echo "[r$k.$i.$n]" >> "$f"
+						[ $i -eq 0 ] && [ $n -eq 0 ] && [ $k -gt 0 ] && echo stonewall >> "$f"
+						echo "filename=$d/f-$3.$i.$n" >> "$f"
+						[ $r -gt 0 ] && echo "rate=$r" >> "$f"
+					done
+				done
+			done
+		fi
 	else cat > "$f" <<J
 [step]
 filename=/mnt/rxr/f-$3
@@ -887,6 +915,24 @@ cell() {
 	ctr "$O/srv1" "$SRV"; cctr "$O/cli1" "$CLI"
 	local s1 mbps c; s1=$(cat $SP/svc_tcp_rx_budget_stats)
 	mbps=$(python3 -c "import json;t=open('$O/fio.json').read();j=json.loads(t[t.index('{'):])['jobs'];print(round(sum(x['write']['bw_bytes'] for x in j)/1e6))" 2>/dev/null || echo 0)
+	# Steps of STEP_RATE: each step's rate against what it was offered,
+	# and the cell's rate is their mean (the steps do not overlap).
+	local steps=(${STEP_RATE:-0})
+	if [ "$PROF" = step ] && [ -n "${STEP_JOBS:-}" ] && [ ${#steps[@]} -gt 1 ]; then
+		python3 - "$O/fio.json" ${steps[@]} > "$O/ramp.tsv" <<'P' || true
+import json, sys
+t = open(sys.argv[1]).read()
+got = {}
+for x in json.loads(t[t.index('{'):])['jobs']:
+    k = int(x['jobname'][1:].split('.')[0])
+    got[k] = got.get(k, 0) + x['write']['bw_bytes']
+print("step offered_MBps MBps")
+for k in sorted(got):
+    print(k, sys.argv[2 + k], round(got[k] / 1e6))
+P
+		cat "$O/ramp.tsv"
+		mbps=$(( mbps / ${#steps[@]} ))
+	fi
 	for c in admitted denied paused overrun; do eval "$c=\$(( \$(kv \"\$s1\" $c) - \$(kv \"\$s0\" $c) ))"; done
 	w1=$(paste -d- <(wr_hits | tr ' ' '\n') <(echo $w0 | tr ' ' '\n') | while read x; do echo -n "$(( x )) "; done)
 	echo "$name $PROF $VERS $NCONN $MTU $DELAY $BUDGET $RESERVE $FACTOR $RCVBUF $mbps $rc $(( $(drops) - d0 )) $(( $(reg alloc_fail) - f0 )) $(( $(reg escaped) - x0 )) $(used) $(delta $O/srv0 $O/srv1 TcpExtTCPRcvCollapsed) $(delta $O/srv0 $O/srv1 TcpExtTCPRcvQDrop) $(delta $O/srv0 $O/srv1 TcpExtTCPZeroWindowDrop) $(delta $O/srv0 $O/srv1 TcpExtTCPBacklogDrop) $(delta $O/cli0 $O/cli1 TcpRetransSegs) $(delta $O/cli0 $O/cli1 TcpExtTCPLossProbes) $(delta $O/cli0 $O/cli1 TcpExtTCPTimeouts) $(delta $O/cli0 $O/cli1 TcpExtTCPDSACKRecv) $admitted $denied $paused $overrun $w1" >> "$E/cells.tsv"
