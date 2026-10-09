@@ -64,7 +64,7 @@ while read -r entries rb writes st cells <&3; do
 	set_ring $entries || { echo "ring change to $entries failed"; exit 4; }
 	budget=0; [ "$writes" -gt 0 ] && budget=$(( writes * CHARGE + RESERVE + 4 ))
 	rbp=$(( 131072 / PS + 1 )); [ "$rb" != - ] && rbp=$(( rb / PS + 1 ))
-	free=$(reg free); need=$(( budget + 16 * rbp + 64 ))
+	free=$(reg free); need=$(( budget + 16 * ${STEP_MOUNTS:-1} * rbp + 64 ))
 	tag="r${entries}-b${rb/-/def}-w${writes}-$st"; i=1
 	while [ -e $OUT/$tag.$i ]; do i=$(( i + 1 )); done
 	tag=$tag.$i; o=$OUT/$tag
