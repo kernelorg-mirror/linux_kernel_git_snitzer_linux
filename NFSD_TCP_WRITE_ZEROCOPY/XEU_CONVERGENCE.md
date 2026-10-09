@@ -991,6 +991,15 @@ H21. **The native loan, durable, runs at 32.4 GB/s** (259 Gbit/s, two
 H22. **The NVMe/TCP loan is the slow one** (10.6 and 20.2 GB/s): it is
     written direct to a target on the same host, one more TCP hop
     through the same CPUs. It says little about a drive with SGLs.
+H24. **A copy costs less CPU with little of the region in use, and
+    goes no faster.** Server kernel CPU-seconds per GB on the stripe
+    with 8 MiB blocks: the native copy 0.80 at rings of 4 x 128 and a
+    256 KiB buffer (770 pages in use, 38% of the L3) and 1.32 at 4 x 256
+    and 1 MiB (2055 pages, all of the L3), at 24.7 and 24.8 GB/s;
+    NVMe/TCP's 1.01 and 1.47. The diagnostic of H15 had the same
+    (0.85 and 1.19). One run each, and the rings and the buffer differ
+    as well as the pages in use; cache misses were not counted. The
+    native loan beside them: 0.53 at 32.4 GB/s with 4229 pages in use.
 H23. Two native cells of the 1 MiB run failed in the harness, which
     asked `/dev/md0` for an NVMe controller; fixed, and they are to be
     rerun.
