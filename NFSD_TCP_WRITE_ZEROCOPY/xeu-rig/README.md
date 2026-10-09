@@ -132,7 +132,11 @@ the stripe (about 3 TB):
     PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe STEP_JOBS=16 STEP_BS=8M ./trace-sweep.sh $L/<outdir> plans/16k-23-copy.plan
 
 The figures to beat, build 461 with sixteen connections and 512 nfsd
-threads: 27.7 GB/s (27.3 to 28.1 untraced, 27.7 traced), 0.48 server
+threads: **35.9 GB/s with a 1 MiB held buffer on rings of 4 x 256**
+(`plans/16k-25-copybuf-rings.plan`, its first line; 0.49 server
+CPU-seconds per GB, 2054 region pages, 250 thousand frames dropped),
+and at the old setting of 256 KiB and 4 x 128, 27.7 GB/s (27.3 to
+28.1 untraced, 27.7 traced), 0.48 server
 CPU-seconds per GB, the client `rwnd_limited` 98.5%, `memmove` 16% of
 cycles, page frees and allocations about 5%. What to read on the new
 kernel: `rx_pp_alloc_refill` against `rx_pp_alloc_empty` in
@@ -165,8 +169,16 @@ is received" in `../XEU_CONVERGENCE.md`): 17 calls of
 `svc_tcp_recvfrom()` for each 1 MiB WRITE, 89% of them by another
 thread than the last, and the connection copied from for 44% of the
 time; 38% is waiting for data behind a 256 KiB buffer and 18% is
-waiting for a thread. A larger held buffer for the copy on this
-kernel is the run that follows from it and is not done.
+waiting for a thread.
+
+**The copy's best setting so far, build 461: a 1 MiB held buffer on
+rings of 4 x 128 or 4 x 256, 35.6 and 35.9 GB/s** (one traced run
+each; "The copy with a larger held buffer" in `../XEU_CONVERGENCE.md`).
+Rings of 4 x 512 drop nothing and run at 32.8: once the waiting is
+gone the copy's own speed is the limit, and it falls as the region in
+use passes the 32 MiB L3 (a 1 MiB WRITE's copy takes 224 us with
+24 MiB in use and 357 us with 48). Whatever has pages reused sooner
+or fewer of them idle is worth rate from here.
 
 Copy-mode things that need no build and are not run: fewer nfsd
 threads (idle threads are woken last in, first out already, so this

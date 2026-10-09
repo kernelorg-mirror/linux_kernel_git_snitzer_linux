@@ -1623,6 +1623,60 @@ What this adds to the list of changes, none of it run or written:
 - what a frame's page costs the receive buffer's accounting (16 KiB
   charged for 9000 bytes held).
 
+### The copy with a larger held buffer: 35.9 GB/s, and the copy slows as the region in use leaves the cache (9 October, 16:50 to 17:05)
+
+The direct copy, sixteen connections, 8 MiB writes, 512 nfsd threads,
+deferred frees on, build 461, one traced cell each
+(`xeu-16k-461-copybuf`, `-copybuf-rings`; `plans/16k-24-copybuf.plan`,
+`16k-25-copybuf-rings.plan`). The first column is the cell of W1.
+
+| held buffer, rings | 256 KiB, 4 x 128 | 512 KiB, 4 x 128 | 1 MiB, 4 x 128 | 1 MiB, 4 x 256 | 1 MiB, 4 x 512 |
+|---|---|---|---|---|---|
+| MB/s | 27658 | 31840 | **35627** | **35925** | 32795 |
+| region pages in use at peak | 936 | 1086 | 1534 | 2054 | 3072 |
+| the same in MiB (the L3 is 32) | 15 | 17 | 24 | 32 | 48 |
+| calls of `svc_tcp_recvfrom()` for a WRITE | 17.3 | 11.2 | 8.1 | 6.4 | 5.7 |
+| inside those calls, us for a 1 MiB WRITE | 242 | 217 | 224 | 269 | **357** |
+| the connection copied from, share of the WRITE's receipt | 44% | 47% | 56% | 69% | 83% |
+| `memmove`, share of all cycles | 17% | 21% | 24% | 30% | **38%** |
+| server CPU-seconds per GB | 0.49 | 0.43 | 0.44 | 0.49 | 0.60 |
+| ring tail drops, the cell | 0 | 843059 | 1506917 | 250564 | 0 |
+| client RTOs | 0 | 573 | 391 | 30 | 0 |
+| client `rwnd_limited`, median | 98.5% | 58.5% | 40.5% | 97.9% | 98.6% |
+| the busiest ring, GB/s, and its CPU in softirq | 12.4, 92% | 16.1, 92% | 14.2, 86% | 18.0, 86% | 12.5, 80% |
+
+Every WRITE of every cell was written direct.
+
+F1. **A 1 MiB held buffer takes the direct copy from 27.7 to 35.6 and
+    35.9 GB/s**, the most this rig has written durably, and past the
+    loan's 30.3. The stop and wait of W2 goes: a WRITE is received in
+    6 to 8 calls where it took 17.
+F2. **With the waiting gone, what holds the copy is the copy, and the
+    copy is as fast as the region in use is small.** A 1 MiB WRITE's
+    calls take 217 to 242 us with 15 to 24 MiB of the region in use,
+    269 us with 32 MiB, which is all of the L3, and 357 us with
+    48 MiB. `memmove` goes from 24% of cycles to 38% for less data
+    moved. This is what Xsight's engineers described, measured on
+    this path: the buffers have to come round while the cache still
+    holds them.
+F3. **So rings of 512 drop nothing and are slower (32.8), and rings
+    of 128 drop 1.5 million frames and are as fast as rings of 256.**
+    The frames dropped cost less than the cache lost.
+F4. The 256 KiB cell holds little (15 MiB) and is slow for another
+    reason, the wait for data (W2). The two wants pull apart: a buffer
+    deep enough not to wait, and a region in use small enough to stay
+    in cache.
+F5. At 4 x 256 the busiest ring took 18.0 GB/s of 44 and another 2.9:
+    the sixteen flows fell badly. Its CPU was at 86% in softirq.
+
+One run each, traced. What follows from F2, for the stack of changes:
+anything that has a page reused sooner or leaves fewer pages idle is
+now worth rate and not only order. That is the page-pool stack and the
+page swap in the kernel being built; fewer buffers posted and idle
+(4 x 256 is 1024 pages, half of the L3, waiting to be written); the
+driver posting a freed page sooner than every 32; and a 9000-byte
+frame not having 16 KiB to itself.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
