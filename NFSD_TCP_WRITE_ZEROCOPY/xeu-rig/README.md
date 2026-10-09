@@ -130,12 +130,19 @@ kernel: `rx_pp_alloc_refill` against `rx_pp_alloc_empty` in
 `pp-*.txt` (the stack in use), `__folio_batch_release` and
 `alloc_pages_bulk` gone from the profile, and the rate.
 
+**The harness turns deferred skb frees off** (`net.core.skb_defer_max=0`
+in `run-budget.sh`, since 4 October, undocumented until 9 October), so
+every figure from this rig was taken that way. `SKB_DEFER_MAX=128` to
+`sweep.sh` turns them on. On, half of the copy cell's pages come back
+by the pool's lockless cache and the rate is the same (27.3 and
+28.0 GB/s): "The harness had deferred skb frees off" in
+`../XEU_CONVERGENCE.md`. The page-pool patch above changes the same
+thing by another route and is not expected to help copy mode.
+
 Copy-mode things that need no build and are not run: fewer nfsd
 threads (idle threads are woken last in, first out already, so this
-may change nothing); `net.core.skb_defer_max` above its 128, which
-would have a received skb's pages freed on the ring's own CPU and so
-into the pool's lockless cache; 64 connections on rings deeper than
-128; a load paced at the source.
+may change nothing); 64 connections on rings deeper than 128; a load
+paced at the source.
 
 ## This boot (build 461): steps 0 to 3 are done, 4 and 5 wait for Mike
 

@@ -1400,6 +1400,9 @@ rings' CPUs. `irqbalance` is running.
 | ring full, so back to the region (`recycle_ring_full`) | 8878 | 4.06 M | 41632 |
 | allocations that went to the region (`alloc_slow`) | 555 | 253861 | 2603 |
 
+(T1 is of the harness's setting and not of nfsd: see "The harness had
+deferred skb frees off" below.)
+
 T1. **Nearly every page goes back through the pool's `ptr_ring`,
     which is a FIFO as long as the receive ring** (`xeu` sets
     `pool_size` to the ring's size). The lockless cache, which is the
@@ -1425,7 +1428,7 @@ T3. **nfsd's copy buffers are not reused either.** In the copy cell
 | lock, by caller | copy | loan | copy, 64 connections |
 |---|---|---|---|
 | the pool ring's producer lock (`page_pool_put_unrefed_netmem`), taken for each page | 88 k contended, 0.13 s waited | 568 k, 0.96 s | 178 k, 0.36 s |
-| the idle list of nfsd's one thread pool (`__lwq_dequeue`) | 129 k, 0.77 s | 13 k, 0.09 s | 351 k, **5.25 s** |
+| the queue of ready connections of nfsd's one thread pool (`__lwq_dequeue`) | 129 k, 0.77 s | 13 k, 0.09 s | 351 k, **5.25 s** |
 | XFS inode lock (`xfs_ilock`) | 1.7 k, 0.01 s | 16 k read and 0.8 k write, 0.26 s by caller; **by lock 7.6, 3.1 and 2.8 s on three inodes** | 4.8 k, 0.31 s |
 | a connection's send mutex (`svc_tcp_sendto`) | 3.8 k, 2.95 s, **one of 2.84 s** | 2.9 k, 0.04 s | not in the top ten |
 | the region's lock (`page_pool_rx_region_put`) | not in the top thirty | 6.9 k, 0.013 s | not in the top ten |
@@ -1445,9 +1448,10 @@ T5. **The loan through the page cache queues on each file's inode
     copy into the page cache (28% of cycles), is the path a loan has
     on drives that need whole pages.
 T6. **With 64 connections the wake-up of nfsd's threads becomes the
-    contended lock**: 5.25 s waited in 10 s on the idle list of the
-    one pool (`pool_mode` is pernode on a host with one node, so all
-    512 threads share it).
+    contended lock**: 5.25 s waited in 10 s on the queue of ready
+    connections of the one pool (`pool_mode` is pernode on a host with
+    one node, so all 512 threads share it). Idle threads are woken
+    last in, first out already.
 
 **nfsd's time**, from `nfsdlat.bt` over 15 s (the mount is NFSv3):
 
@@ -1495,10 +1499,72 @@ What each finding suggests, none of it done:
   driver's side and needs a kmod rebuild and a reload.
 - **nfsd:** keep and reuse a thread's copy buffers when the write was
   direct (T3); a thread pool per CPU or several pools, so 512 threads
-  do not share one idle list (T6).
+  do not share one queue of ready connections (T6).
 - **storage:** on drives that need whole pages, copy and write direct;
   the loan's inode-lock queue and second-rate copy are the page
   cache's (T5, B5). A loan wants a drive that takes it direct.
+
+### The harness had deferred skb frees off; with them on the copy is no faster (9 October, 14:30 to 15:10)
+
+**`run-budget.sh` has set `net.core.skb_defer_max=0` for every cell
+since it was written on 4 October, with no comment and no word of it
+in any document.** With deferral on (the kernel's default is 128) a
+TCP receiver's consumed skb is handed back to the CPU that received it
+and freed there, where its pages may go into the page pool's lockless
+cache, which is last in, first out. With it off the skb is freed where
+it was consumed: for nfsd, on CPUs 8 to 55, through the pool's locked
+ring. So:
+
+- **every NFS figure from this rig, at 64 KiB and at 16 KiB, copy and
+  loan, was taken with deferred frees off.** They compare with each
+  other; none is the kernel's default behaviour.
+- **T1 above is what the harness's setting does, not what nfsd does.**
+- Two cells run "at 1024 and 4096" (`xeu-16k-461-defer1024`,
+  `-defer4096`: 29.9 and 25.7 GB/s) tested nothing, the harness having
+  put the setting back to 0; they are two more samples of the ordinary
+  copy cell. Four more cells went on finding that out
+  (`xeu-16k-461-defer-why` to `-why4`: 27.2, 27.4, a light one, 30.1).
+
+How it was found: a plain TCP receiver outside the harness
+(`wirebuf.sh`) had 93% of its pages put back on the ring's own CPU; in
+an NFS cell 4.69 million of 5.04 million calls of
+`skb_attempt_defer_free()` by nfsd took the immediate-free branch and
+none reached the deferral code.
+
+The harness now takes `SKB_DEFER_MAX=` (default 0, as before) and
+`sweep.sh` writes it in `geometry.txt`. The direct copy with it on,
+one traced cell each (`xeu-16k-461-deferon128`, `-deferon32`), against
+the same cell with it off:
+
+| over 10 s | off (trace1) | 128 | 32 |
+|---|---|---|---|
+| MB/s, the cell | 27713 | 27289 | 27970 |
+| pages into the lockless cache (`recycle_cached`) | 10868 | 21.07 M | 21.13 M |
+| cache full, so to the ring (`recycle_cache_full`) | 0 | 18.64 M | 18.67 M |
+| pages into the ring (`recycle_ring`) | 41.08 M | 20.19 M | 20.21 M |
+| refills of the alloc cache from the ring | 2.58 M | 1.26 M | 1.26 M |
+| the pool ring's producer lock, contended | 88 k | not in the top seven | not in the top seven |
+| server CPU-seconds per GB | 0.48 | 0.50 | 0.49 |
+| softirq CPU-seconds in 90 s | 347 | 359 | 356 |
+| `memmove`, share of cycles | 16.8% | 16.9% | 17.2% |
+| client `rwnd_limited` | 98.5% | 97.8% | 98.5% |
+
+D1. **Deferral does what it says: half of the pages now come back
+    through the lockless cache, on the ring's own CPU, and the pool
+    ring's lock drops out of the contended list.** The other half
+    overflow the cache, which holds 32 pages at this page size, into
+    the ring, from the same CPU.
+D2. **The copy is no faster and no cheaper for it: 27.3 and 28.0 GB/s
+    against 27.7.** Ten copy cells with deferral off today ran from
+    25.7 to 30.1. The order in which the region's pages are reused is
+    not what holds the copy.
+D3. So the page-pool stack ("page_pool: Recycle a region-bound pool's
+    pages last in, first out") is not expected to help copy mode
+    either: it changes the same thing by another route. The copy
+    itself is unchanged at 17% of cycles; what it reads is what the
+    card has just written, whichever page that is.
+D4. The freeing moves to the rings' CPUs, the busiest of which is at
+    88% to 92% in softirq in these cells; it did not cost rate here.
 
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
