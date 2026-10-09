@@ -18,7 +18,10 @@ set -u
 ST=${1:?prp or sgl}; . "$(dirname "$0")/common.sh"
 OUT=${2:-$L/xeu-$(( PS / 1024 ))k-nvme-baseline}; mkdir -p $OUT
 CFG=/sys/kernel/config; NQN=zc-baseline; TPORT=4478
-IMG=/hs/nvme1/zcbaseline-nvmet.img; MNT=/mnt/zcbaseline
+# PRP_BASE and SGL_BASE: the mounted file systems to measure (a stripe:
+# PRP_BASE=/hs/stripe SGL_BASE=/hs/stripe).  JOBS: the writers of the last job.
+PRP_BASE=${PRP_BASE:-/hs/nvme0}; SGL_BASE=${SGL_BASE:-/hs/nvme1}; JOBS=${JOBS:-4}
+IMG=$SGL_BASE/zcbaseline-nvmet.img; MNT=/mnt/zcbaseline
 pgrep -x sweep.sh > /dev/null && { echo "a sweep is running"; exit 1; }
 
 teardown() {
@@ -33,14 +36,14 @@ teardown() {
 		rmdir $CFG/nvmet/subsystems/$NQN 2>/dev/null
 		rm -f $IMG; rmdir $MNT 2>/dev/null
 	else
-		rm -rf /hs/nvme0/zcbaseline
+		rm -rf $PRP_BASE/zcbaseline
 	fi
 }
 trap teardown EXIT
 
 if [ $ST = sgl ]; then
 	modprobe nvmet; modprobe nvmet-tcp; modprobe nvme-tcp
-	dd if=/dev/zero of=$IMG bs=1M count=4096 oflag=direct status=none || exit 1
+	dd if=/dev/zero of=$IMG bs=1M count=${IMG_MIB:-4096} oflag=direct status=none || exit 1
 	mkdir $CFG/nvmet/subsystems/$NQN || exit 1
 	echo 1 > $CFG/nvmet/subsystems/$NQN/attr_allow_any_host
 	mkdir $CFG/nvmet/subsystems/$NQN/namespaces/1
@@ -65,7 +68,7 @@ if [ $ST = sgl ]; then
 	mkfs.xfs -q -f -K $dev && mkdir -p $MNT && mount $dev $MNT || exit 1
 	DIR=$MNT; SZ4=512M
 else
-	dev=/dev/nvme0n1; DIR=/hs/nvme0/zcbaseline; mkdir -p $DIR; SZ4=1G
+	dev=$(findmnt -n -o SOURCE --target $PRP_BASE); DIR=$PRP_BASE/zcbaseline; mkdir -p $DIR; SZ4=1G
 fi
 echo "$ST: $dev virt_boundary_mask $(cat /sys/block/$(basename $dev)/queue/virt_boundary_mask), files in $DIR, page $PS, $(uname -r)" | tee $OUT/$ST.rig
 
@@ -74,7 +77,7 @@ s0=$(head -1 /proc/stat)
 fio --name=step --filename=$DIR/f-step --size=1G --runtime=120 --verify=crc32c --verify_backlog=64 --do_verify=1 $COMMON > $OUT/$ST.step.json
 fio --name=write --filename=$DIR/f-write --size=1G --runtime=120 --write_bw_log=$OUT/$ST.write --log_avg_msec=10000 $COMMON > $OUT/$ST.write.json
 rm -f $DIR/f-step $DIR/f-write	# the 4 GiB target has no room for them and four more
-fio --name=write4 --directory=$DIR --size=$SZ4 --numjobs=4 --group_reporting --runtime=60 $COMMON > $OUT/$ST.write4.json
+fio --name=write4 --directory=$DIR --size=$SZ4 --numjobs=$JOBS --group_reporting --runtime=60 $COMMON > $OUT/$ST.write4.json
 for j in step write write4; do
 	python3 -c "
 import json,sys

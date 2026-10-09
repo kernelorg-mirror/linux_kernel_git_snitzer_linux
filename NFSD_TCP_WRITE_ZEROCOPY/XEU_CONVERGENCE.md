@@ -907,6 +907,94 @@ H16. **At 25 to 31 GB/s the server is not the limit**: 95% to 97% of
 4. **Above 30 GB/s, something not yet found** (H16): the client, its
    sixteen connections, or TCP with held buffers.
 
+### The wall near 25 GB/s is the receive copy (2026-10-08, late)
+
+Mike, 2026-10-08: about half of line rate is the norm for writes on
+this hardware, so 25 GB/s is where it has always stood; what is wanted
+is a way through it. This is the observation that points at one.
+
+**The copy stops at 25 to 26 GB/s whatever is under it, and the loan
+goes past on less than half the CPU.** With the storage out of the way
+(one drive, page cache, export async) the copy ran at 24.9, 25.2, 26.0
+and 26.3 GB/s across two buffers and sixteen or thirty-two writers,
+and the loan at 30.6 and 30.9 on 0.56 kernel CPU-seconds per GB
+against the copy's 1.19 (H15). With six drives under it and every
+WRITE durable the copy is at the same place, 24.7 GB/s, and the loan
+at 32.4. So the wall is not storage, not nfsd's threads (95% idle
+there) and not the number of writers. It is something the copy loads
+and the loan does not, per connection or per receive CPU.
+
+`xeu-rig/where.sh` during the native copy on the stripe (8 MiB blocks,
+rings of 4 x 256, 1 MiB buffer, about 28 GB/s on the wire over the
+10 s; `xeu-16k-where-stripe-prp-copy.*`) says what:
+
+| what | measured |
+|---|---|
+| server cycles in `__memmove` | 49.5% of all |
+| server cycles in `rwsem_spin_on_owner` | 11.0% |
+| receive per ring | 10.2, 8.6, 5.6 and 3.5 GB/s |
+| the two busiest ring CPUs (0 and 2) | 89% and 90% busy, 70% to 75% of it softirq |
+| every one of the client's 16 connections | 49% to 57% of its busy time waiting on the server's window (`rwnd_limited`, `ss -ti`) |
+| the server's CPUs overall | 40% idle |
+| the client's CPUs overall | 71% idle; two at 100% |
+
+H17. **Half of the server's cycles are the copy, and the client waits
+    on the server.** Each connection is received by one nfsd thread at
+    a time, which copies the record out; while it copies, the window
+    stays shut. Sixteen connections each about half-limited by the
+    window is the 25 GB/s.
+H18. **Four rings are not enough and are not evenly fed.** Sixteen
+    connections hash 10.2 : 8.6 : 5.6 : 3.5 across them, and the two
+    CPUs that take the most are at 90%. The port was put at four rings
+    for its footprint (`bringup.sh`); it comes up with eight.
+H19. `rwsem_spin_on_owner` at 11% is a lock nfsd's threads spin on in
+    the write. Which lock was not traced.
+
+### Six drives: `/dev/md0` (2026-10-08, evening)
+
+Mike had `nvme2` to `nvme7` striped: MD raid0, a 1 MiB chunk (the size
+of a WRITE and of fio's block, so an aligned WRITE is one request to
+one drive; `max_sectors_kb` is 1024), a 6 MiB stripe, XFS with
+`sunit` and `swidth` to match, mounted at `/hs/stripe` and not in
+`/etc/fstab`. Their 1.3 TB each is gone; their lines in `/etc/fstab`
+and `/etc/exports` are commented out with `#stripe 2026-10-08-stripe#`
+and the files as they were are `/etc/fstab.2026-10-08-stripe` and
+`/etc/exports.2026-10-08-stripe`. `mdadm` was installed for it. The
+stripe needs whole pages as its drives do (`virt_boundary_mask` 4095).
+The drives' volatile write cache is on and the kernel sends flushes
+(`write back`) in every run below.
+
+fio on tardis1 (`PRP_BASE=/hs/stripe JOBS=16 nvme-baseline.sh prp`):
+27.9 GB/s to one writer and **67.3 GB/s to sixteen**, six times one
+drive and more than the wire carried.
+
+Sixteen connections, sixteen writers, 512 nfsd threads, the export
+sync, MB/s (`PRP_DIR=/hs/stripe/zcbudget
+SGL_BACKING=/hs/stripe/zcbudget-nvmet.img`; `xeu-16k-stripe-sync`,
+`-sync-bs8m`):
+
+| cell | rings, buffer | 1 MiB blocks | 8 MiB blocks | one drive, best |
+|---|---|---|---|---|
+| copy, native | 4 x 128, 256 KiB | to rerun | 24702 | 6704 |
+| copy, NVMe/TCP | 4 x 128, 256 KiB | 20325 | 24763 | 8339 |
+| copy, native | 4 x 256, 1 MiB | 22305 | | 4983 |
+| copy, NVMe/TCP | 4 x 256, 1 MiB | 19730 | 22496 | 7295 |
+| loan, NVMe/TCP, 16 WRITEs | 4 x 256, 1 MiB | 10647 | 20182 | 7657 |
+| loan, native, 16 WRITEs | 4 x 256, 1 MiB | to rerun | **32370** | 6838 |
+
+H20. **Durable copies reach 24.7 GB/s on the stripe** (198 Gbit/s),
+    where one drive gave 6.7 to 8.3, and stop at the copy's wall.
+H21. **The native loan, durable, runs at 32.4 GB/s** (259 Gbit/s, two
+    thirds of what the wire carried) with 8 MiB blocks: 31% over its
+    copy. It is written through the page cache and each 8 MiB block is
+    committed. 4780 ring drops, no timeout, 4229 pages in use.
+H22. **The NVMe/TCP loan is the slow one** (10.6 and 20.2 GB/s): it is
+    written direct to a target on the same host, one more TCP hop
+    through the same CPUs. It says little about a drive with SGLs.
+H23. Two native cells of the 1 MiB run failed in the harness, which
+    asked `/dev/md0` for an NVMe controller; fixed, and they are to be
+    rerun.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
