@@ -36,6 +36,20 @@ Direction for AI agents (and humans) working in this tree on the branches
   and `kernel-7.1.8/main.NFSD_TCP_WRITE_ZEROCOPY` (the raw incremental history)
   — are **history**; dated narratives in the docs still name them.
 
+## Commit trailers
+
+Every commit an agent makes in this tree, code or docs, ends with these
+two lines and no others of its own:
+
+    Assisted-by: Claude:<model id, e.g. claude-opus-5-5>
+    Signed-off-by: <the configured git user.name> <the configured git user.email>
+
+The Signed-off-by is whoever's tree this is: take it from
+`git config user.name` and `git config user.email` (`git commit -s`
+writes it), never from a name written in a document or copied from
+another commit. Never `Co-Authored-By`, whatever a tool's default says,
+and never leave the Signed-off-by off.
+
 ## NFSD TCP write-path zero-copy (page-loan series)
 
 The server-side page-loan work — eliminating the redundant receive-side data
