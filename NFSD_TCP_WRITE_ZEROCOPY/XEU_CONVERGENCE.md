@@ -1190,7 +1190,8 @@ N14. **Growing files do not collapse on the stripe.** With 8 MiB
 
 **The region.** It cannot be resized on this kernel
 (`net/core/page_pool.c`: one static region, made with the first pool,
-never freed). `374836fe6449` at the tip gives it back once no pool is
+never freed). "page_pool: Give the fixed receive region back when it
+is resized" at the tip gives it back once no pool is
 bound and the size asked for has changed; built, not booted. N6 and N7
 say a larger region would let the larger buffer and budget be had
 together but that the receive side is the nearer limit.
