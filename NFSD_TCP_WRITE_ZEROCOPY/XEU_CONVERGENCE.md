@@ -1004,6 +1004,139 @@ H23. Two native cells of the 1 MiB run failed in the harness, which
     asked `/dev/md0` for an NVMe controller; fixed, and they are to be
     rerun.
 
+### Hero, the night of 8 to 9 October: what holds the loan
+
+Mike, 2026-10-08: avoid the copy; find what holds the loan back. All on
+the stripe's native storage (a loan is written through the page cache
+there), sixteen connections, sixteen writers, 512 nfsd threads, 8 MiB
+writes unless said. Output `/var/tmp/zc-run-logs/xeu-16k-*`; the chain
+is `xeu-16k-night-driver.sh` and the drivers after it.
+
+**The result that stands, three runs each** (`xeu-16k-best-trim-a`,
+`-b`, `-c`: the stripe trimmed before every cell, flushes sent, nothing
+traced):
+
+| | run a | run b | run c | median |
+|---|---|---|---|---|
+| copy, rings of 4 x 128, 256 KiB buffer | 25539 | 25360 | 25142 | 25360 |
+| loan, 16 WRITEs, rings of 4 x 256, 1 MiB buffer | 29727 | 30054 | 30357 | 30054 |
+
+N1. **The loan carries 30.1 GB/s of durable writes against the copy's
+    25.4, 18% more, and it repeats** (29.7 to 30.4; 25.1 to 25.5). The
+    loan holds about 4200 pages of the region, the copy 770. The
+    32.4 GB/s of H21 was one run and was not seen again.
+
+**The stripe must be trimmed.** Its file system is not mounted with
+discard and every cell deletes its files. Untrimmed after about 150 TB
+the same cells gave the copy 22.6 to 23.3 and the loan 23.6 to 24.8,
+level; one `fstrim` (12 s) later, 25.4 and 28.7. fio on tardis1 did not
+show it (66.9 GB/s before the trim, 67.1 after, 60 s). `TRIM=/hs/stripe`
+makes `sweep.sh` trim before every line.
+
+N2. **A loan that looked bistable was the drives.** Through the evening
+    the loan ran at 30 to 32 GB/s in four cells and 22.8 to 26.0 in
+    seven, and the cells with `where.sh` and `anat.bt` inside them ran
+    low, which was put down to the tracing. It was not: traced cells on
+    the trimmed stripe ran at 29.4 to 30.6. Figures from 22:00 to
+    00:45 on 8 to 9 October (`xeu-16k-anat-*`, `-budget`, `-mounts*`,
+    `-best-noflush-*`, `-best-flush-*`) compare within a run and not
+    with others.
+
+**What a loaned WRITE's time is made of** (`anat.bt` and `where.sh`
+inside the cell, `capture-sweep.sh`; the loan at 16 WRITEs, 4 x 256,
+1 MiB):
+
+| | measured |
+|---|---|
+| admissions that had first been refused | 98% to 100% |
+| WRITEs in flight at a refusal | 16 in 87%, 15 in 10% |
+| a WRITE holds its credit for | 0.25 to 1 ms |
+| a refused connection waits | 0.25 to 0.5 ms |
+| the client's connections waiting on the server's window | 92% to 96% of their busy time |
+| server CPUs idle | a third or more |
+| `__memmove` (the copy into the page cache) | 28% of cycles |
+
+N3. **At sixteen WRITEs the budget is full all the time**: a
+    connection has one WRITE in flight, and must receive it, write it
+    and give its credit back before its next is let in. The client
+    waits on the server's window while it does.
+N4. **A WRITE's hold grows with how many are in flight** (mostly 0.25
+    to 0.5 ms at 8 and 12 WRITEs, 0.5 to 1 ms at 22 and 24), so the
+    rate does not follow the budget: halving it to 8 cost 17%.
+N5. **A larger buffer shortens the hold**: with 256 KiB most holds are
+    0.5 to 1 ms, with 1 MiB they are spread from 0.25 ms, because less
+    of the record has still to cross the wire once it is admitted.
+
+**The budget and the buffer, rings that do not drop** (4 x 256,
+`xeu-16k-budget256`, traced, the stripe trimmed at the start):
+
+| buffer | WRITEs | MB/s | client waiting on the window | the busiest ring | its CPU in softirq |
+|---|---|---|---|---|---|
+| 1 MiB | 12 | 26655 | 96% | 14.2 GB/s | 80% |
+| 1 MiB | 16 | 29383 | 96% | 14.6 GB/s | 81% |
+| 1 MiB | 18 | 29426 | | | |
+| 1 MiB | 20 | 29918 | | | |
+| 1 MiB | 22 | 30569 | 41% | 14.9 GB/s | 88% |
+| 1.5 MiB | 16 | 30022 | 96% | 14.9 GB/s | 80% |
+
+N6. **Past sixteen WRITEs the budget buys 4%.** At 22 the client no
+    longer waits on the server and the rate is the same.
+N7. **One ring takes half of the traffic and its CPU is at 80% to 88%
+    in softirq.** Sixteen connections do not hash evenly over four
+    rings (`ethtool -S`: for example 7.2, 9.5, 14.6 and 4.7 GB/s). That
+    is the loan's next limit on this boot, ahead of the budget.
+N8. **Rings of 4 x 128 cannot carry a 1 MiB buffer**: 0.3 to 2.1
+    million frames dropped a cell and hundreds of timeouts
+    (`xeu-16k-budget`), which spoils the larger budgets there.
+
+**Tried and of no use:**
+
+N9. **More connections** (`STEP_MOUNTS`, a second and a fourth address
+    of the server on the port, 32 and 64 connections;
+    `xeu-16k-mounts*`): the copy 18.3 and 24.1 GB/s at sixteen, 12.8
+    and 19.7 at 32, 21.1 and 18.8 at 64; the loan 27.1 at sixteen, 15.0
+    at 32; ring drops and timeouts up with the count (3285 timeouts in
+    one 64-connection copy). One budget shared by more connections
+    leaves more of them waiting.
+N10. **Eight rings of 256** for the copy (25.0 and 23.9 against 25.5),
+    and the loan does not fit: eight rings of 256 leave 3184 pages
+    free.
+N11. **More files** (64 writers at depth 4 for 16 at depth 16): the
+    copy 25.8, the loan 31.1, as before. The lock nfsd spins on
+    (`rwsem_spin_on_owner`, 5% to 11% of cycles) is not what limits.
+N12. **Not sending the flush** (the kernel told `write through` on the
+    members and `md0`, the drives' cache on: as a drive with power-loss
+    protection): with 1 MiB writes the copy gained 16% to 22% (27.1
+    GB/s) and the loans 78% to 130% (18.7 and 19.0); with 8 MiB writes
+    nothing moved. It matters to a client that syncs every megabyte.
+N13. **The client's write size decides the native loan**: 8.1 GB/s
+    with 1 MiB writes and flushes sent, 18.7 with none sent, 30 with
+    8 MiB writes. A 1 MiB direct write is one FILE_SYNC WRITE, which
+    nfsd maps to `IOCB_DSYNC | IOCB_SYNC` (`nfs3proc.c`), an fsync of
+    page-cache data and of the inode after every WRITE.
+
+**Files that grow** (`STEP_SIZE=256G`, so no write is an overwrite;
+checked on the server; `xeu-16k-stripe-grow*`, before the trim):
+
+N14. **Growing files do not collapse on the stripe.** With 8 MiB
+    writes the copy ran at 26.3 and 23.3 GB/s and the loan at 26.0;
+    with 1 MiB writes the copy at 22.7 and 20.7 (27.1 on files that
+    have their size) and the loan at 17.1. XFS's wait for direct
+    writes in progress, 95 ms a write on one drive at 64 KiB, costs
+    15% to 20% here at most.
+
+**The region.** It cannot be resized on this kernel
+(`net/core/page_pool.c`: one static region, made with the first pool,
+never freed). `374836fe6449` at the tip gives it back once no pool is
+bound and the size asked for has changed; built, not booted. N6 and N7
+say a larger region would let the larger buffer and budget be had
+together but that the receive side is the nearer limit.
+
+**The drives.** About 230 TB were written on 8 October and 9 October up
+to 01:00, most of it to the six striped drives: each went from about 75
+to about 95 TB written in its life, 3% to 4% of its rated endurance
+used, no media error (`xeu-16k-smart-*.txt`).
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

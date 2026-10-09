@@ -1,0 +1,9 @@
+# Eight receive rings of 128 (the same 1024 buffers posted as 4 x 256), for
+# the loan: at 30 GB/s on four rings one ring takes half the load and its
+# CPU is at 80% to 88% in softirq.  Set the ring count first (ethtool -L,
+# port down); sweep.sh sets only the ring size.
+128 1048576 16 prp step-on-n16
+128 1048576 22 prp step-on-n16
+128 262144 0 prp step-copy-n16
+128 1048576 0 prp step-copy-n16
+256 524288 16 prp step-on-n16

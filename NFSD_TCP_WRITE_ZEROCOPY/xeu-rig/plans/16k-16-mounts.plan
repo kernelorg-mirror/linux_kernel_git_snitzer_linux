@@ -1,0 +1,8 @@
+# For STEP_MOUNTS=1, 2 and 4 (16, 32 and 64 connections): the native copy at
+# its two settings and the native loan with as large a buffer as the region
+# has room for with that many connections.
+#     STEP_MOUNTS=<m> STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget
+128 262144 0 prp step-copy-n16
+256 1048576 0 prp step-copy-n16
+128 1048576 16 prp step-on-n16
+128 524288 16 prp step-on-n16
