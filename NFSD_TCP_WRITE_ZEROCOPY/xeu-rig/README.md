@@ -132,8 +132,10 @@ kernel: `rx_pp_alloc_refill` against `rx_pp_alloc_empty` in
 
 **The harness turns deferred skb frees off** (`net.core.skb_defer_max=0`
 in `run-budget.sh`, since 4 October, undocumented until 9 October), so
-every figure from this rig was taken that way. `SKB_DEFER_MAX=128` to
-`sweep.sh` turns them on. On, half of the copy cell's pages come back
+every figure from this rig before 15:30 on 9 October was taken that
+way. **The harness's default is now 128, on (Mike);** `SKB_DEFER_MAX=0`
+repeats the old behaviour, and a run whose `geometry.txt` does not name
+the setting was made with 0. On, half of the copy cell's pages come back
 by the pool's lockless cache and the rate is the same (27.3 and
 28.0 GB/s): "The harness had deferred skb frees off" in
 `../XEU_CONVERGENCE.md`. The page-pool patch above changes the same

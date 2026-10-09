@@ -1531,8 +1531,11 @@ an NFS cell 4.69 million of 5.04 million calls of
 `skb_attempt_defer_free()` by nfsd took the immediate-free branch and
 none reached the deferral code.
 
-The harness now takes `SKB_DEFER_MAX=` (default 0, as before) and
-`sweep.sh` writes it in `geometry.txt`. The direct copy with it on,
+The harness now takes `SKB_DEFER_MAX=`, and from 15:30 on 9 October
+**its default is 128, deferral on** (Mike). `sweep.sh` writes the value
+in `geometry.txt`; a run whose `geometry.txt` does not name it was made
+with 0. That goes for every user of `run-budget.sh`, the test plan on
+veth included: to repeat an earlier figure, pass `SKB_DEFER_MAX=0`. The direct copy with it on,
 one traced cell each (`xeu-16k-461-deferon128`, `-deferon32`), against
 the same cell with it off:
 

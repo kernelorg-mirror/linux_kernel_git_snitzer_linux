@@ -955,11 +955,12 @@ budget() {
 echo "== kernel $(uname -r); sunrpc $(cat /sys/module/sunrpc/srcversion); nfsd $(cat /sys/module/nfsd/srcversion)"
 geometry | tee "$EV/geometry.txt"
 [ -n "$HW" ] || { [ -n "$XDPC" ] && [ -f "$XDPC" ]; } || { echo "xdp_pass.c not found (XDPC=)" >&2; exit 2; }
-# Deferred skb frees are off unless SKB_DEFER_MAX says otherwise: a skb on a
-# CPU's defer list still holds its receive pages.  With them on (the
-# kernel's default is 128) a skb nfsd has consumed is freed on the CPU that
-# received it, so its pages go back by the page pool's lockless cache.
-sysctl -qw net.core.skb_defer_max=${SKB_DEFER_MAX:-0}
+# Deferred skb frees are on, at the kernel's default of 128: a skb nfsd has
+# consumed is freed on the CPU that received it, so its pages go back by
+# the page pool's lockless cache, last in, first out.  SKB_DEFER_MAX=0
+# turns them off, which is how every run before 2026-10-09 15:30 was made
+# (a skb on a CPU's defer list still holds its receive pages).
+sysctl -qw net.core.skb_defer_max=${SKB_DEFER_MAX:-128}
 modprobe nfs; echo N > /sys/module/nfs/parameters/localio_enabled
 rig_up > "$E/rig.txt"; cat "$E/rig.txt"
 if [ "$PHASE" = N ]; then
