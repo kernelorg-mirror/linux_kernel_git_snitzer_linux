@@ -1,0 +1,10 @@
+# Storage that takes arbitrary pieces with no network hop in front of it:
+# XFS on a memory-backed null_blk (no virt_boundary_mask), so a loan is
+# written direct, as it would be to a drive with SGLs.  null_blk copies what
+# it is given into its own pages, so a copy is made, in the driver.
+#     PRP_STORAGE=sgl PRP_DIR=/hs/nullb/zcbudget STEP_BS=8M STEP_JOBS=16
+128 262144 0 prp step-copy-n16
+256 1048576 0 prp step-copy-n16
+256 1048576 16 prp step-on-n16
+256 1048576 22 prp step-on-n16
+256 1048576 8 prp step-on-n16
