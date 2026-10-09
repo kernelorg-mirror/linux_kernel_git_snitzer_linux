@@ -1,0 +1,64 @@
+#!/usr/bin/bpftrace
+/*
+ * handoff.bt - how a WRITE's record is received: how many calls of
+ * svc_tcp_recvfrom() it takes (each one that leaves the record incomplete
+ * parks it on the socket and lets the thread go), how long the connection
+ * waits between one call and the next, whether the next is the same
+ * thread, and how much of the time from the record's first call to its
+ * last was spent inside the calls; and, of the wait before a call, how
+ * much was a thread getting to a transport already queued for one.  Run it for a fixed time inside a cell:
+ *     timeout -s INT 10 bpftrace handoff.bt
+ * XPT_QTIME_OFFSET is of the running kernel:
+ *     drgn -q -e 'from drgn import offsetof; print(offsetof(prog.type("struct svc_xprt"), "xpt_qtime"))'
+ */
+#define XPT_QTIME_OFFSET 24
+
+config = { missing_probes = "warn" }
+
+fentry:sunrpc:svc_tcp_recvfrom
+{
+	$x = (uint64)args.rqstp->rq_xprt;
+	@in[tid] = nsecs;
+	if (@out[$x]) {
+		@wait_between_calls_us = hist((nsecs - @out[$x]) / 1000);
+		@next_call_by[@last[$x] == tid ? "same thread" : "another thread"] = count();
+	}
+	if (!@first[$x]) { @first[$x] = nsecs; }
+	/* From the transport being queued for a thread to a thread reading it. */
+	/* xpt_qtime, by its offset in struct svc_xprt (bpftrace does not resolve ktime_t here) */
+	$q = *(uint64 *)($x + XPT_QTIME_OFFSET);
+	@queued_to_read_us = hist((nsecs - $q) / 1000);
+}
+
+fexit:sunrpc:svc_tcp_recvfrom
+/@in[tid]/
+{
+	$x = (uint64)args.rqstp->rq_xprt;
+	$d = nsecs - @in[tid];
+	delete(@in, tid);
+	@busy[$x] += $d;
+	@calls[$x] += 1;
+	@call_us = hist($d / 1000);
+	if (retval > 65536) {
+		$span = nsecs - @first[$x];
+		if (@first[$x] == 0 || $span > 1000000000) { return; }
+		@calls_per_write = lhist(@calls[$x], 0, 40, 1);
+		@write_first_to_last_us = hist($span / 1000);
+		@write_in_calls_us = hist(@busy[$x] / 1000);
+		@pct_of_span_in_calls = lhist(100 * @busy[$x] / $span, 0, 100, 10);
+		@writes = count();
+		@sum_calls = sum(@calls[$x]);
+		@sum_span_us = sum($span / 1000);
+		@sum_busy_us = sum(@busy[$x] / 1000);
+	}
+	if (retval > 0) {
+		@first[$x] = (uint64)0; @busy[$x] = (uint64)0; @calls[$x] = 0;
+		@out[$x] = (uint64)0; @last[$x] = (uint32)0;
+	} else {
+		@out[$x] = nsecs;
+		@last[$x] = tid;
+		@incomplete = count();
+	}
+}
+
+END { clear(@in); clear(@first); clear(@busy); clear(@calls); clear(@out); clear(@last); }

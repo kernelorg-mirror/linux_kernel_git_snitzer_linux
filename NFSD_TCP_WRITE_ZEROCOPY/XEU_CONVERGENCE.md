@@ -1571,6 +1571,58 @@ D3. That is deferral alone, and with it only half of the pages take
 D4. The freeing moves to the rings' CPUs, the busiest of which is at
     88% to 92% in softirq in these cells; it did not cost rate here.
 
+### How a WRITE is received in copy mode: seventeen calls, and the connection idle for half of it (9 October, 16:30)
+
+`xeu-rig/handoff.bt` inside the direct copy cell (sixteen connections,
+256 KiB held buffer, rings of 4 x 128, deferred frees on, build 461),
+10 s each: `xeu-16k-461-handoff` (27.5 GB/s) and `-handoff3`
+(27.7 GB/s); the figures are of the second, the first agrees.
+(`-handoff2` ran with a tracer that had not loaded and measured
+nothing.)
+
+A record that has not all arrived is parked on the socket and the
+thread goes back to the pool; the next data to arrive queues the
+connection again and a thread is woken for it.
+
+| for each 1 MiB WRITE | |
+|---|---|
+| calls of `svc_tcp_recvfrom()` | **17.3** (most take 15 to 20) |
+| data read by a call | about 60 KiB, one GRO skb |
+| the next call is by another thread | **89%** |
+| from the first call to the last | 552 us |
+| of that, inside the calls (the copy) | 242 us, **44%** |
+| of that, a queued connection waiting for a thread | about 100 us, 18% (6 us a time; half are under 6 us, 1.7% over 16 us) |
+| of that, nothing queued: no data has arrived | about 210 us, 38% (13 us a time) |
+
+W1. **A connection is being copied from for 44% of the time it takes
+    to receive a WRITE.** While it is, the copy runs at 4.3 GB/s
+    (1 MiB in 242 us); over the whole WRITE the connection carries
+    1.9 GB/s. The 2.7 GB/s for each CPU of T8 had the waits in it.
+W2. **Most of the idle time is the connection waiting for data, with a
+    client that is waiting for the window 98% of the time.** Each call
+    empties the socket, the window opens, the client sends, and the
+    data is about 13 us in coming: the receive is stop and wait, a
+    GRO skb at a time. A 256 KiB receive buffer holds about 140 KiB of
+    data when each 9000-byte frame has a 16 KiB page to itself. The
+    plain wire showed the same thing: 24 GB/s at 256 KiB, 45 at
+    512 KiB, 49 at 1 MiB (L1).
+W3. **A third of the idle time is the hand-off**: 6 us from the
+    connection being queued to a thread reading it, sixteen times a
+    WRITE, and nine times in ten a different thread on a different
+    CPU, which then takes the record's pages from the socket.
+
+What this adds to the list of changes, none of it run or written:
+
+- a larger held buffer for copy mode (512 KiB, 1 MiB) on build 461:
+  the copy at 1 MiB was run only on build 459, through the page cache;
+  the region has the room now;
+- the thread that finds a record incomplete staying with the
+  connection for a few microseconds before it parks the record, or a
+  receive low-water mark, so that a WRITE is one thread's and a few
+  calls;
+- what a frame's page costs the receive buffer's accounting (16 KiB
+  charged for 9000 bytes held).
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

@@ -160,6 +160,14 @@ by the pool's lockless cache and the rate is the same (27.3 and
 above makes the other half of the pages, those that overflow the
 32-page cache, last in, first out as well.
 
+**How a WRITE is received in copy mode** (`handoff.bt`; "How a WRITE
+is received" in `../XEU_CONVERGENCE.md`): 17 calls of
+`svc_tcp_recvfrom()` for each 1 MiB WRITE, 89% of them by another
+thread than the last, and the connection copied from for 44% of the
+time; 38% is waiting for data behind a 256 KiB buffer and 18% is
+waiting for a thread. A larger held buffer for the copy on this
+kernel is the run that follows from it and is not done.
+
 Copy-mode things that need no build and are not run: fewer nfsd
 threads (idle threads are woken last in, first out already, so this
 may change nothing); 64 connections on rings deeper than 128; a load
