@@ -244,6 +244,48 @@ MODULE_PARM_DESC(svc_tcp_rx_rcvbuf,
 		 "Receive buffer clamp in bytes for TCP transports set up afterwards (0: none)");
 
 /*
+ * A thread that takes a partly received record back from a socket leaves
+ * its own pages in the socket's sk_pages[], for the next thread that parks
+ * a record there to take in exchange.  The pages a socket keeps that way
+ * are bounded, across all sockets, by this many bytes; past it a restore
+ * frees the thread's pages as it would with no exchange.  0 keeps none.
+ */
+static unsigned long svc_tcp_spare_bytes_max = SZ_64M;
+module_param(svc_tcp_spare_bytes_max, ulong, 0644);
+MODULE_PARM_DESC(svc_tcp_spare_bytes_max,
+		 "Bytes of pages TCP sockets keep, across all sockets, to exchange with threads that receive a record in pieces (0: none)");
+
+static atomic_long_t svc_tcp_spare_pages = ATOMIC_LONG_INIT(0);
+
+/*
+ * Reserve room for up to @n spare pages under svc_tcp_spare_bytes_max.
+ * Returns how many of them a socket may keep.  Reservations that race
+ * may each keep fewer than there is room for, never more.
+ */
+static unsigned int svc_tcp_spare_reserve(unsigned int n)
+{
+	long max = READ_ONCE(svc_tcp_spare_bytes_max) >> PAGE_SHIFT;
+	long total, over;
+
+	if (!n)
+		return 0;
+	total = atomic_long_add_return(n, &svc_tcp_spare_pages);
+	if (total <= max)
+		return n;
+	over = min_t(long, total - max, n);
+	atomic_long_sub(over, &svc_tcp_spare_pages);
+	return n - over;
+}
+
+static void svc_tcp_spare_release(struct svc_sock *svsk, unsigned int n)
+{
+	if (WARN_ON_ONCE(n > svsk->sk_spare_pages))
+		n = svsk->sk_spare_pages;
+	svsk->sk_spare_pages -= n;
+	atomic_long_sub(n, &svc_tcp_spare_pages);
+}
+
+/*
  * The region budget bounds loans; only svc_tcp_rx_rcvbuf bounds unread data. A
  * smaller clamp holds so few page-pool segments that one short segment
  * overflows it, so budgets stay off below this.
@@ -2399,7 +2441,7 @@ static int svc_tcp_restore_pages(struct svc_sock *svsk,
 				 struct svc_rqst *rqstp)
 {
 	size_t len = svsk->sk_datalen;
-	unsigned int i, npages;
+	unsigned int i, npages, keep;
 	int ret;
 
 	if (!len) {
@@ -2409,12 +2451,31 @@ static int svc_tcp_restore_pages(struct svc_sock *svsk,
 		return 0;
 	}
 	npages = (len + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	/*
+	 * Trade pages with the socket: the pages this thread gives up wait
+	 * in sk_pages[] for the thread that next saves a partial record
+	 * here, as many as svc_tcp_spare_bytes_max leaves room for.  The
+	 * rest are freed.
+	 */
+	for (i = 0, keep = 0; i < npages; i++)
+		if (rqstp->rq_pages[i])
+			keep++;
+	keep = svc_tcp_spare_reserve(keep);
 	for (i = 0; i < npages; i++) {
-		if (rqstp->rq_pages[i] != NULL)
-			svc_rqst_page_release(rqstp, rqstp->rq_pages[i]);
+		struct page *page = rqstp->rq_pages[i];
+
 		BUG_ON(svsk->sk_pages[i] == NULL);
 		rqstp->rq_pages[i] = svsk->sk_pages[i];
 		svsk->sk_pages[i] = NULL;
+		if (!page)
+			continue;
+		if (keep) {
+			svsk->sk_pages[i] = page;
+			svsk->sk_spare_pages++;
+			keep--;
+		} else {
+			svc_rqst_page_release(rqstp, page);
+		}
 	}
 	ret = svc_tcp_rx_exchange(&svsk->sk_rx, &rqstp->rq_tcp_rx);
 	if (ret)
@@ -2427,7 +2488,7 @@ static int svc_tcp_restore_pages(struct svc_sock *svsk,
 
 static int svc_tcp_save_pages(struct svc_sock *svsk, struct svc_rqst *rqstp)
 {
-	unsigned int i, len, npages;
+	unsigned int i, len, npages, taken = 0;
 	int ret;
 
 	if (svsk->sk_datalen == 0)
@@ -2436,10 +2497,16 @@ static int svc_tcp_save_pages(struct svc_sock *svsk, struct svc_rqst *rqstp)
 	if (WARN_ON_ONCE(rqstp->rq_tcp_rx->body_bytes != len))
 		return -EINVAL;
 	npages = (len + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	/*
+	 * Take the pages an earlier restore left here in exchange.
+	 * svc_alloc_arg() fills whichever of these entries is still NULL.
+	 */
 	for (i = 0; i < npages; i++) {
-		svsk->sk_pages[i] = rqstp->rq_pages[i];
-		rqstp->rq_pages[i] = NULL;
+		if (svsk->sk_pages[i])
+			taken++;
+		swap(svsk->sk_pages[i], rqstp->rq_pages[i]);
 	}
+	svc_tcp_spare_release(svsk, taken);
 	rqstp->rq_pages_nfree = npages;
 	ret = svc_tcp_rx_exchange(&rqstp->rq_tcp_rx, &svsk->sk_rx);
 	return ret;
@@ -2454,19 +2521,18 @@ static void svc_tcp_clear_pages(struct svc_sock *svsk)
 				    svsk->sk_datalen == 0))
 		return;
 
-	if (svsk->sk_datalen == 0)
-		goto out;
+	/* A partial record's pages, and the pages left by a restore. */
+	svc_tcp_spare_release(svsk, svsk->sk_spare_pages);
 	len = svsk->sk_datalen;
 	npages = (len + PAGE_SIZE - 1) >> PAGE_SHIFT;
-	for (i = 0; i < npages; i++) {
+	for (i = 0; i < svsk->sk_maxpages; i++) {
 		if (svsk->sk_pages[i] == NULL) {
-			WARN_ON_ONCE(1);
+			WARN_ON_ONCE(i < npages);
 			continue;
 		}
 		put_page(svsk->sk_pages[i]);
 		svsk->sk_pages[i] = NULL;
 	}
-out:
 	svsk->sk_tcplen = 0;
 	svsk->sk_datalen = 0;
 }
@@ -3592,8 +3658,8 @@ err_nuts:
 					SVC_TCP_RX_REASON_INVARIANT,
 				    svsk->sk_datalen == 0))
 		len = -EINVAL;
-	/* svc_tcp_save_pages() has not run, so svsk->sk_pages[] is
-	 * empty. A non-zero sk_datalen makes the teardown-time
+	/* svc_tcp_save_pages() has not run, so svsk->sk_pages[] holds
+	 * no record. A non-zero sk_datalen makes the teardown-time
 	 * svc_tcp_clear_pages() walk empty slots and WARN.
 	 */
 	svsk->sk_datalen = 0;

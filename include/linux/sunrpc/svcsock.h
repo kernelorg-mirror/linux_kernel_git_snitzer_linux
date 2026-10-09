@@ -147,6 +147,7 @@ struct svc_sock {
 	struct completion	sk_handshake_done;
 
 	/* received data */
+	unsigned int		sk_spare_pages;	/* left by a restore, for a save */
 	unsigned long		sk_maxpages;
 	struct page *		sk_pages[] __counted_by(sk_maxpages);
 };
