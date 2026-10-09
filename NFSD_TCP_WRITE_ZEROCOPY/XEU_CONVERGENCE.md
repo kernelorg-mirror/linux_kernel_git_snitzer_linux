@@ -733,7 +733,8 @@ pages, so the region may run dry (the driver's refill retry is what
 makes that survivable; say if it happened). NVMe/TCP is a target on
 the same host, so its cells also pay the target's CPU.
 
-Where to look next, by what the ladder shows (none of these is tried):
+Where to look next, as written before the ladder ran (what it and the
+runs after it found is "Hero, the first evening" below):
 
 - If rung 1 is no faster than four writers, the limit is on the
   server or the wire and not the load: profile it (`PROFILE=1`).
@@ -748,6 +749,163 @@ Where to look next, by what the ladder shows (none of these is tried):
 - The second port, `enp164s0f0`, which Mike had taken down on
   2026-10-08 until one port is optimized.
 - Past one drive: rung 5 of the brakes above.
+
+### Hero, the first evening (2026-10-08)
+
+All at sixteen connections with sixteen writers and no verify
+(`STEP_JOBS=16`), one run each, MB/s. Loans are at a budget of sixteen
+WRITEs (2150 pages). Output `/var/tmp/zc-run-logs/xeu-16k-hero`,
+`-profile`, `-sync-*`, `-t512-r256`, `-async`, `-pagecache`.
+
+**Where it stands.**
+
+| | durable (the export sync) | not durable (export async, a diagnostic) |
+|---|---|---|
+| copy, native | 6704 | 10601 |
+| copy, NVMe/TCP | 8339 | 11300 |
+| loan, NVMe/TCP (written direct) | 7657 | 11212 |
+| loan, native (through the page cache) | 6838 | 30858 |
+| copy, native, through the page cache (`MODE=1`) | | 25182 |
+
+The best of each over the runs below. One drive takes 11.2 GB/s; the
+wire carried 48 GB/s.
+
+**The ladder** (`plans/16k-7-hero.plan`, 128 nfsd threads, 1 MiB blocks):
+
+| rung | rings | buffer | cell | MB/s | pages | tail drops | timeouts | `alloc_fail` |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 4 x 128 | 256 KiB | copy, native | 4755 | 782 | 2 | 0 | 0 |
+| 2 | 4 x 128 | autotuned | copy, native | 5407 | 6144 | 494980 | 380 | 4180 |
+| 3 | 4 x 256 | autotuned | copy, native | 5351 | 6144 | 474672 | 2849 | 67822 |
+| 4 | 4 x 256 | autotuned | copy, NVMe/TCP | 7979 | 6144 | 159917 | 1305 | 28392 |
+| 5 | 4 x 256 | autotuned | loan, NVMe/TCP | 2485 | 6144 | 590349 | 6239 | 44519 |
+| 6 | 4 x 256 | 1 MiB | loan, NVMe/TCP | 4713 | 4341 | 20 | 0 | 0 |
+| 7 | 4 x 256 | autotuned | loan, native | 2462 | 6144 | 663349 | 6611 | 53743 |
+
+H1. **An autotuned receive buffer is a dead end with this region.** The
+    sockets' queues take every page of it (6144 of 6144), the card
+    drops half a million frames, and it gains a copy 14% at most. A
+    loan cell with no page left loans nothing (`admitted` 0, rungs 5
+    and 7) and collapses under timeouts. Hold the buffer.
+H2. **The driver's refill retry works under it**: five runs emptied the
+    region (`alloc_fail` 198656 in all) and each time every ring came
+    back by itself.
+H3. **More writers alone add little** (4067 with four, 4755 with
+    sixteen): the load was not the native copy's limit.
+
+**Where nfsd's threads are** (`xeu-rig/nfsd-stacks.sh`: every nfsd
+thread's kernel stack once a second for 20 s; copies at 4 x 128,
+256 KiB, 128 threads; `plans/16k-8-profile.plan`):
+
+| the thread is | native (5595 MB/s) | NVMe/TCP (7330 MB/s) |
+|---|---|---|
+| waiting for its direct write (`blk_io_schedule`) | 37% | 25% |
+| in the fsync after it, on the XFS log (`xlog_wait_on_iclog`, `xlog_wait`) | 44% | 49% |
+| in the fsync after it, on the device's cache flush (`blkdev_issue_flush`) | 15% | 20% |
+| idle | 2% | 1% |
+| receiving (`tcp_read_sock`) | under 1% | under 1% |
+
+H4. **Every WRITE is followed by an fsync, and the threads spend 60%
+    to 70% of their time in it**: `iomap_dio_complete` to
+    `vfs_fsync_range` to `xfs_file_fsync`, a log force and a cache
+    flush. No thread is idle, so the rate is the thread count over the
+    time of one WRITE. The CPUs are 40% idle.
+H5. **The native drive is the slower because its flush is**: 4800
+    flushes a second at 14 ms each, against 5700 at 2 ms on NVMe/TCP
+    (`iostat`). The WD_BLACK SN8100 has a volatile write cache
+    (`write_cache` is `write back`). The local fio that took 11.2 GB/s
+    issued none. This is the gap of finding 25.
+H6. Why each WRITE is stable was not traced. The likely cause: the job
+    writes 1 MiB blocks with `direct=1` over a mount with a `wsize` of
+    1 MiB, so a block is one WRITE, and the Linux client sends a direct
+    write that fits one request as FILE_SYNC. `io_cache_write` is 2
+    (direct) in the cells, which sets no floor of its own.
+H7. The flat profile's largest item is the copy: `__memmove` in nfsd,
+    17% of all cycles in the native copy.
+
+**Threads and block size** (`plans/16k-9-sync.plan`, rings of 4 x 128;
+copies hold 256 KiB, loans 1 MiB):
+
+| cell | 128 threads, 1 MiB | 512 threads, 1 MiB | 128 threads, 8 MiB | 512 threads, 8 MiB |
+|---|---|---|---|---|
+| copy, native | 4755, 5595 | 6063, 6102 | 6277 | 6704 |
+| copy, NVMe/TCP | 7330 | 8339, 7840 | 4734 | 6867 |
+| loan, NVMe/TCP | | 6242 | 7401 | 7657 |
+| loan, native | | 4126 | 5134 | 6838 |
+
+H8. **512 nfsd threads and 8 MiB blocks each help the loans and the
+    native copy, and add up** (`/proc/fs/nfsd/threads`; `STEP_BS=8M`
+    sends a block as eight UNSTABLE WRITEs and a COMMIT). Sixteen
+    writers at iodepth 16 keep 256 WRITEs in flight at 1 MiB, so more
+    than 256 threads cannot be busy there.
+H9. **The NVMe/TCP copy is slower with 8 MiB blocks** (4734 and 6867
+    against 7330 to 8339). Not explained.
+H10. **A 1 MiB buffer wants rings of 4 x 256.** At 4 x 128 the loans
+    drop 42000 to 483000 frames; at 4 x 256 with 512 threads and 1 MiB
+    blocks (`xeu-16k-t512-r256`) the NVMe/TCP loan runs at 6235 with
+    2332 drops and the native at 4770 with 128, about 4400 pages in
+    use. Their copies at the same rings and buffer: 7295 and 4983, so
+    the loans are at 85% and 96%. A 1 MiB buffer does not help a copy
+    (7295 against 7840, 4983 against 6102 at 256 KiB).
+
+**With no WRITE made durable** (`EXPORT_SYNC=async`, 512 threads, 1 MiB
+blocks; `plans/16k-10-async.plan`). A diagnostic: nfsd answers before
+the data is safe, which no server that keeps its promise does.
+
+| cell | rings, buffer | MB/s | written | tail drops | kernel CPU-s per GB |
+|---|---|---|---|---|---|
+| copy, native | 4 x 128, 256 KiB | 9381 | direct | 0 | 0.49 |
+| copy, NVMe/TCP | 4 x 128, 256 KiB | 10954 | direct | 3690 | 0.75 |
+| copy, native | 4 x 256, 1 MiB | 10601 | direct | 0 | 0.39 |
+| copy, NVMe/TCP | 4 x 256, 1 MiB | 11300 | direct | 0 | 0.70 |
+| loan, NVMe/TCP | 4 x 256, 1 MiB | 11212 | direct | 0 | 0.52 |
+| loan, native | 4 x 256, 1 MiB | 30858 | page cache | 395 | 0.52 |
+
+H11. **The fsync of each WRITE costs 30% to 50%**: the copies go from
+    6102 and 7840 to 9381 and 10954 with nothing else changed.
+H12. **Without it, all that is written direct stops at one drive**,
+    10.6 to 11.3 GB/s against the 11.2 the drive takes.
+H13. **At that ceiling the NVMe/TCP loan is level with its copy on a
+    quarter less server CPU** (11212 against 11300; 0.52 against 0.70
+    kernel CPU-seconds per GB), same rings and buffer.
+H14. **The native loan's 30.9 GB/s (247 Gbit/s) is not what the drive
+    took.** It goes through the page cache, and with nothing forcing
+    it out the cell overwrites the same 8 GiB of files in memory; the
+    drive was writing 10.1 GB/s the while (`iostat`). It is what the
+    wire and the receive path carry with the storage out of the way.
+
+**The receive path alone: copy against loan, both through the page
+cache** (`EXPORT_SYNC=async MODE=1`, `plans/16k-11-pagecache.plan`,
+rings of 4 x 256, 512 threads):
+
+| buffer | copy | loan | loan of copy | kernel CPU-s per GB, copy / loan | CPUs idle, copy / loan |
+|---|---|---|---|---|---|
+| 1 MiB | 24915 | 30552 | 123% | 1.19 / 0.56 | 50% / 70% |
+| 256 KiB | 25182 | 21226 | 84% | 0.85 / 0.50 | |
+
+H15. **With the storage out of the way and a 1 MiB buffer, the loan
+    carries 23% more than the copy on less than half the server CPU**
+    (30.6 against 24.9 GB/s; 0.56 against 1.19). With a 256 KiB buffer
+    the loan is the slower (21.2 against 25.2), still on less CPU.
+H16. **At 25 to 31 GB/s the server is not the limit**: 95% to 97% of
+    the 512 nfsd threads are idle and half or more of the CPUs. The
+    client has 11 to 14 CPUs busy and its fio jobs are at 16% to 23% of
+    a CPU each. What limits there is not found.
+
+**What stands between this and line rate, in order:**
+
+1. **One drive** (11.2 GB/s). Every durable figure and every direct one
+   is under it. More drives under the export is Mike's to decide: an MD
+   stripe remakes drives.
+2. **The fsync of each WRITE** on drives whose flush is slow (H4, H5,
+   H11). The ways round it: a workload that sends UNSTABLE WRITEs and
+   COMMITs (larger blocks, or buffered writers); drives with power-loss
+   protection; or, to see it only, telling the kernel a drive's cache
+   is write-through, which Mike must decide since `/hs/nvme0` holds
+   1.3 TB of other data.
+3. **nfsd threads**: 128 are all busy under a durable load.
+4. **Above 30 GB/s, something not yet found** (H16): the client, its
+   sixteen connections, or TCP with held buffers.
 
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 

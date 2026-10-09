@@ -1,0 +1,8 @@
+# Two copies and the NVMe/TCP loan, sixteen connections, for the runs that
+# vary what the profile found: nfsd's thread count and the fsync of every
+# WRITE (STEP_BS).  Rings of 4 x 128; the loan holds 1 MiB as the hero
+# ladder's best loan did.
+128 262144 0 prp step-copy-n16
+128 262144 0 sgl step-copy-n16
+128 1048576 16 sgl step-on-n16
+128 1048576 16 prp step-on-n16
