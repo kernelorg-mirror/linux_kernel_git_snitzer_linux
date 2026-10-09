@@ -1,4 +1,4 @@
-# The xeu rig at 16 KiB: where it stands (2026-10-09, 13:30, on build 461, paused for Mike)
+# The xeu rig at 16 KiB: where it stands (2026-10-09, 15:00, on build 461)
 
 **Read this section first; the handoff below it was written before the
 16 KiB boot and is kept for the rig's rules and its scripts.** The
@@ -8,10 +8,9 @@ changes how every native figure from the stripe is read, "The last
 runs on build 459", and **"Build 461"**, the first runs on the kernel
 with the stacking-alignment change.
 
-**Paused (Mike, 2026-10-09, about 13:00): after the three runs of step
-3 he asked for the documents and the artifact to be brought up to date
-and then to wait for his instruction. Nothing is running. Do not start
-step 4 or step 5 below until he says.**
+**From 14:30 on 9 October Mike's direction is copy mode: see "Three
+patches at the tip" below. Steps 4 and 5 of the boot's list are not
+started and are not the priority.**
 
 **Mike rebuilt the kernel from the tip on 9 October and rebooted into
 it (build 461). A session has no memory of the days before it:
@@ -97,6 +96,46 @@ mounted (it is not in `/etc/fstab`) and the array may come up as
    rings of 128 made the copy slower (21.1 GB/s). Nothing was changed
    in the kernel for it. `trace-sweep.sh` and `nfsdlat.bt` are the
    tools.
+
+## Three patches at the tip, waiting for a build (2026-10-09, 15:00)
+
+Written after the tracing, compiled (W=1, the running kernel's config)
+and **not booted**. By subject:
+
+| commit | what | which mode it is for |
+|---|---|---|
+| "SUNRPC: Trade pages with the socket when a partial record changes hands" | nfsd no longer frees and allocates a WRITE's pages each time a part-received record passes between threads (T3) | copy |
+| "page_pool: Recycle a region-bound pool's pages last in, first out" | a stack in place of the FIFO ring for pools bound to the region (T1) | both |
+| "SUNRPC: Return a loaned record's page-pool pages in batches" | the pool's lock is taken for each batch and not each page (T4) | loan |
+
+`net/core/page_pool.c` is built in, so they need a kernel build and a
+reboot. `svcsock_kunit` covers the save and restore of pages; run it
+on the new kernel.
+
+**The testing is of copy mode (Mike, 2026-10-09).** The aim is the
+shortest time from a frame landing to its buffer being back in the
+pool, by making the copy and the direct write as efficient as they
+will go; that path is also what a loan to a drive that takes
+arbitrary pieces uses. Each iteration is the copy cell alone,
+`plans/16k-23-copy.plan`, which halves what an iteration writes to
+the stripe (about 3 TB):
+
+    PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe STEP_JOBS=16 STEP_BS=8M ./trace-sweep.sh $L/<outdir> plans/16k-23-copy.plan
+
+The figures to beat, build 461 with sixteen connections and 512 nfsd
+threads: 27.7 GB/s (27.3 to 28.1 untraced, 27.7 traced), 0.48 server
+CPU-seconds per GB, the client `rwnd_limited` 98.5%, `memmove` 16% of
+cycles, page frees and allocations about 5%. What to read on the new
+kernel: `rx_pp_alloc_refill` against `rx_pp_alloc_empty` in
+`pp-*.txt` (the stack in use), `__folio_batch_release` and
+`alloc_pages_bulk` gone from the profile, and the rate.
+
+Copy-mode things that need no build and are not run: fewer nfsd
+threads (idle threads are woken last in, first out already, so this
+may change nothing); `net.core.skb_defer_max` above its 128, which
+would have a received skb's pages freed on the ring's own CPU and so
+into the pool's lockless cache; 64 connections on rings deeper than
+128; a load paced at the source.
 
 ## This boot (build 461): steps 0 to 3 are done, 4 and 5 wait for Mike
 
