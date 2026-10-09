@@ -1,0 +1,6 @@
+# The loan on the stripe with a budget above sixteen and more files than
+# sixteen: a write through the page cache holds its file's lock alone, so
+# sixteen files are sixteen writes at once whatever the budget.
+#     STEP_JOBS=64 STEP_IODEPTH=4 STEP_SIZE=128M STEP_BS=8M
+256 1048576 22 prp step-on-n16
+256 1048576 16 prp step-on-n16

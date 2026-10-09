@@ -22,6 +22,8 @@
 # directory of the "prp" lines and the file behind the NVMe/TCP target of
 # the "sgl" lines.  The defaults are the single drives; a stripe is
 #     PRP_DIR=/hs/stripe/zcbudget SGL_BACKING=/hs/stripe/zcbudget-nvmet.img
+# PRP_STORAGE=sgl says the file system of PRP_DIR is on a device that takes
+# arbitrary pieces (no virt_boundary_mask), so its loans are written direct.
 PRP_DIR=${PRP_DIR:-/hs/nvme0/zcbudget}
 SGL_BACKING=${SGL_BACKING:-/hs/nvme1/zcbudget-nvmet.img}
 OUT=${1:?outdir}; PLAN=$(readlink -f "${2:?plan file}")	# cd below: a relative plan would be lost
@@ -77,7 +79,7 @@ while read -r entries rb writes st cells <&3; do
 		echo "-- $tag SKIPPED: $free region pages free at idle, need $need" | tee -a $OUT/log
 		continue
 	fi
-	if [ $st = prp ]; then a="STORAGE=prp EXPORT_DIR=$PRP_DIR"; else a="STORAGE=sgl BACKING=$SGL_BACKING"; fi
+	if [ $st = prp ]; then a="STORAGE=${PRP_STORAGE:-prp} EXPORT_DIR=$PRP_DIR"; else a="STORAGE=sgl BACKING=$SGL_BACKING"; fi
 	[ "$rb" != - ] && a="$a FORCE_RCVBUF=$rb"
 	[ "$writes" -gt 0 ] && a="$a FORCE_BUDGET=$budget"
 	af0=$(reg alloc_fail)
