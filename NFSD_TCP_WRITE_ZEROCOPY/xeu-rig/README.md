@@ -149,6 +149,21 @@ kernel: `rx_pp_alloc_refill` against `rx_pp_alloc_empty` in
 `pp-*.txt` (the stack in use), `__folio_batch_release` and
 `alloc_pages_bulk` gone from the profile, and the rate.
 
+**The driver's refill threshold is a module parameter in
+`kernel-rpmtree`, uncommitted (2026-10-09).** `xsight/xeu-make-the-RX-refill-threshold-a-module-parameter.patch`
+is Patch4 of `xsight.spec`, whose Release is 5: `rx_refill_thresh`,
+default 32 (as the driver is), the empty slots at which a poll refills
+the ring, writable while the port is up. It is not committed there
+because that repository has no git identity configured for this user
+and its AGENTS.md forbids taking one from the history; the spec has no
+changelog entry for the same reason. `./build-kmod.sh` built it
+against build 461 into `$L/kmod-xsight-16k-build-r5` (the parameter is
+in `modinfo`); nothing was installed or loaded. A new kernel needs the
+kmod built against it, and loading it reloads `xeu`, which is Mike's
+to do. After that
+`echo 8 > /sys/module/xeu/parameters/rx_refill_thresh` needs no
+reload.
+
 **How to judge a change here (Mike, 2026-10-09): as one of many, not
 by whether it alone moves the rate.** A combination of changes can be
 what unlocks the rate, and one stage's limit hides the gain of a fix
