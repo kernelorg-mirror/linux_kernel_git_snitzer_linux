@@ -1561,11 +1561,13 @@ D2. **The copy is no faster and no cheaper for it: 27.3 and 28.0 GB/s
     against 27.7.** Ten copy cells with deferral off today ran from
     25.7 to 30.1. The order in which the region's pages are reused is
     not what holds the copy.
-D3. So the page-pool stack ("page_pool: Recycle a region-bound pool's
-    pages last in, first out") is not expected to help copy mode
-    either: it changes the same thing by another route. The copy
-    itself is unchanged at 17% of cycles; what it reads is what the
-    card has just written, whichever page that is.
+D3. That is deferral alone, and with it only half of the pages take
+    the last-in, first-out route. The page-pool stack ("page_pool:
+    Recycle a region-bound pool's pages last in, first out") does the
+    same for the half that overflow. Neither is judged by its own
+    effect on the rate: they are two of the changes to be measured
+    together (Mike, 2026-10-09). The copy itself was unchanged at 17%
+    of cycles in these two cells.
 D4. The freeing moves to the rings' CPUs, the busiest of which is at
     88% to 92% in softirq in these cells; it did not cost rate here.
 
