@@ -109,8 +109,14 @@ and **not booted**. By subject:
 | "SUNRPC: Return a loaned record's page-pool pages in batches" | the pool's lock is taken for each batch and not each page (T4) | loan |
 | "SUNRPC: Let a NUMA node have several thread pools" | `pools_per_node`: several queues of ready connections where 512 threads shared one (T6) | both |
 
-The last was written after Mike's build of `…-WIP3` began and is not
-in it. It does nothing until `pools_per_node` is set, and that is read
+| "SUNRPC: Let a thread wait for the rest of a partly received TCP record" | `svc_tcp_rx_linger_us`: a WRITE is received by one thread, which waits for the next piece and does not park the record (W3) | both |
+
+The last two were written after Mike's build of `…-WIP3` began and are
+not in it. The linger is off at 0; `RX_LINGER_US=50` to `sweep.sh`
+sets it for a run (a piece is about 13 us in coming), and
+`handoff.bt` shows whether it took: calls for each WRITE near 1 and
+the next call by the same thread. It is a busy wait, so read the
+server's CPU with it. `pools_per_node` does nothing until it is set, and that is read
 when nfsd starts: `options sunrpc pools_per_node=4` in
 `/etc/modprobe.d` before a boot, or
 `echo 4 > /sys/module/sunrpc/parameters/pools_per_node` and a restart
