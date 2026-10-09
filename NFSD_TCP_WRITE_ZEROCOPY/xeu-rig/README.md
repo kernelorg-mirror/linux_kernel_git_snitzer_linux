@@ -1,3 +1,105 @@
+# The xeu rig at 16 KiB: where it stands (2026-10-09, morning)
+
+**Read this section first; the handoff below it was written before the
+16 KiB boot and is kept for the rig's rules and its scripts.** The
+results are in `../XEU_CONVERGENCE.md`: "16K" (sizing), "Hero" and what
+follows it (the fast runs), and **"Correction, 2026-10-09"**, which
+changes how every native figure from the stripe is read.
+
+## The state of tardis1
+
+- Kernel `7.1.13-21.hs.459.loanpages_pool.el9.aarch64+16k`, `xeu` with
+  the refill retry (kmod 2.0.1-4), `rx_ip_align` 2.
+- `enp164s0f0` is **down** (Mike, 2026-10-08) and every other mount of
+  tardis1 was torn down. Both wait for him.
+- A 6144-page region is bound to `0000:a1:00.0`. It cannot be resized
+  on this kernel. The port was left at 4 rings of 256.
+- **`nvme2` to `nvme7` are an MD raid0, `/dev/md0`, XFS at
+  `/hs/stripe`** (1 MiB chunk; not in `/etc/fstab`; made with
+  `mdadm --create /dev/md0 --level=0 --chunk=1024 --raid-devices=6`).
+  What they held is gone. Their lines in `/etc/fstab` and `/etc/exports`
+  are commented out with `#stripe 2026-10-08-stripe#`; the files as they
+  were are `/etc/fstab.2026-10-08-stripe` and
+  `/etc/exports.2026-10-08-stripe`. `mdadm` was installed. `nvme0` and
+  `nvme1` are as they were.
+- The drives took about 20 TB each on the night of 8 to 9 October
+  (3% to 4% of their endurance used; `xeu-16k-smart-*.txt` in the run
+  logs). **Trim the stripe before a run** (`TRIM=/hs/stripe` to
+  `sweep.sh`): untrimmed it gives up a fifth.
+- nfsd is back at 128 threads; the drives' and `md0`'s `write_cache`
+  are back at `write back`; `null_blk` is loaded and unused.
+
+## What was found, in one place
+
+1. Sizing (8 October): rings of 4 x 128, a 256 KiB buffer and a budget
+   of four WRITEs are the smallest setting that kept up, at 73% of the
+   L3, under a load that the client's verifying fio thread held to
+   2.2 GB/s. Use `STEP_JOBS` for anything about rate.
+2. On the stripe, durable, three runs each: **the loan 30.1 GB/s, the
+   copy 25.4** (sixteen connections, 8 MiB writes, 512 nfsd threads;
+   the loan at 16 WRITEs, 4 x 256, 1 MiB; the copy at 4 x 128,
+   256 KiB).
+3. **Neither was written direct.** `md0` asks for 512-byte memory
+   alignment where its drives ask for 4, so nfsd's copy goes through
+   the page cache there as a loan does: two copies against one.
+4. The wire carries 49 GB/s to sixteen plain streams with a 1 MiB
+   buffer held. Nothing on the network side holds the loan at 30: not
+   the budget past 16, the rings' depth or number, dropped frames,
+   connections or files.
+
+## The next boot
+
+Three things are waiting for a kernel build, all at the tip and all
+built but **not booted**:
+
+| commit | what |
+|---|---|
+| `374836fe6449` | page_pool: the region is given back when its size changes with no pool bound |
+| `9a621e18dbce` | md/raid0: the array takes its members' memory alignment |
+| (no commit) | a larger region: `./bringup.sh 32768 256` |
+
+On that boot, in order:
+
+1. `cat /sys/block/md0/queue/dma_alignment` is 3 (it is 511 without
+   the raid0 change). If the array does not assemble by itself:
+   `mdadm --assemble --scan`, then `mount -o noatime /dev/md0 /hs/stripe`.
+2. `./bringup.sh 32768 256`, then `fstrim /hs/stripe`.
+3. The copy on the stripe, and that it is written direct now
+   (`wr_direct` in `summary.tsv`):
+   `PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe STEP_JOBS=16 STEP_BS=8M ./sweep.sh $L/<outdir> plans/16k-17-best.plan`
+   with nfsd at 512 threads (`echo 512 > /proc/fs/nfsd/threads`).
+   That is the comparison the night was thought to be making: a direct
+   copy against a loan through the page cache.
+4. With the room the larger region gives: rings of 4 x 1024 or more
+   with a 1 MiB or 2 MiB buffer and budgets of 16 to 64
+   (`plans/16k-15-budget.plan` and `16k-20-deeprings.plan` are the
+   shapes; none of their larger lines fitted in 6144 pages).
+5. To test the region patch: with the port down,
+   `echo 16384 > /sys/module/page_pool/parameters/rx_region_pages`, port
+   up, and `/sys/kernel/debug/page_pool_rx_region` shows the new size
+   and the kernel log the old region freed.
+
+A loan written direct with no hop in front of it has no storage on this
+host: these drives need whole pages, a memory-backed null_blk copies
+under one lock (6 GB/s) and brd asks for 512-byte alignment. NVMe/TCP
+on the same host is the only one, at about 20 GB/s.
+
+## Scripts added on 8 and 9 October
+
+`sweep.sh` takes `TRIM=`, `PRP_DIR=`, `SGL_BACKING=`, `PRP_STORAGE=`;
+`run-budget.sh` takes `STEP_JOBS=`, `STEP_BS=`, `STEP_SIZE=`,
+`STEP_IODEPTH=`, `STEP_MOUNTS=`, `EXPORT_SYNC=`. `capture-sweep.sh` runs
+`where.sh` (both ends' CPUs, the rings, a profile, the client's view of
+each connection) and `anat.bt` (what a loaned WRITE waits for) inside
+every cell. `nfsd-stacks.sh` says where nfsd's threads are;
+`wirebuf.sh` what the wire carries at each held buffer;
+`nvme-baseline.sh` what the storage takes; `napi.bt` whether the
+receive poll is held off (written, not yet used). **A sweep started
+detached is not waited on by anything: start the next one from a driver
+script, or it will sit idle** (it did, for two and a half hours).
+
+---
+
 # The xeu rig: 16 KiB handoff (written 2026-10-08 on the 64 KiB boot)
 
 **A session on tardis1 after the reboot into the 16 KiB kernel starts
