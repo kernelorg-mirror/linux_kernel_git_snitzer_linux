@@ -18,6 +18,12 @@
 # PERF=1 adds cycles and instructions; PROFILE=1 adds a 30 s flat profile by
 # function (it sits inside the CPU window and costs a little).
 . "$(dirname "$0")/common.sh"
+# PRP_DIR and SGL_BACKING say where the two storages are: the export
+# directory of the "prp" lines and the file behind the NVMe/TCP target of
+# the "sgl" lines.  The defaults are the single drives; a stripe is
+#     PRP_DIR=/hs/stripe/zcbudget SGL_BACKING=/hs/stripe/zcbudget-nvmet.img
+PRP_DIR=${PRP_DIR:-/hs/nvme0/zcbudget}
+SGL_BACKING=${SGL_BACKING:-/hs/nvme1/zcbudget-nvmet.img}
 OUT=${1:?outdir}; PLAN=$(readlink -f "${2:?plan file}")	# cd below: a relative plan would be lost
 mkdir -p $OUT; touch $OUT/done
 [ -e $RG ] || { echo "no region: run bringup.sh first"; exit 1; }
@@ -31,6 +37,7 @@ RESERVE=$(sed -n 's/.*reserve \([0-9]*\) \/.*/\1/p' <<< "$G")
 # The kernel charges the payload pages times the factor; 2 over for rounding.
 CHARGE=$(( ( (1048716 + PS - 1) / PS * F9 + 99 ) / 100 + 2 ))
 echo "$G" > $OUT/geometry.txt
+echo "storage: prp $PRP_DIR, sgl $SGL_BACKING; nfsd threads $(cat /proc/fs/nfsd/threads); STEP_JOBS=${STEP_JOBS:-} STEP_BS=${STEP_BS:-} EXPORT_SYNC=${EXPORT_SYNC:-} MODE=${MODE:-}" | tee -a $OUT/geometry.txt
 echo "page $PS factor $F9 reserve $RESERVE charge-per-1MiB-WRITE $CHARGE region $(reg pages) retry-patch $(has_retry_patch && echo yes || echo no)" | tee -a $OUT/geometry.txt
 
 stat1() { head -1 /proc/stat; }
@@ -65,7 +72,7 @@ while read -r entries rb writes st cells <&3; do
 		echo "-- $tag SKIPPED: $free region pages free at idle, need $need" | tee -a $OUT/log
 		continue
 	fi
-	if [ $st = prp ]; then a="STORAGE=prp EXPORT_DIR=/hs/nvme0/zcbudget"; else a="STORAGE=sgl BACKING=/hs/nvme1/zcbudget-nvmet.img"; fi
+	if [ $st = prp ]; then a="STORAGE=prp EXPORT_DIR=$PRP_DIR"; else a="STORAGE=sgl BACKING=$SGL_BACKING"; fi
 	[ "$rb" != - ] && a="$a FORCE_RCVBUF=$rb"
 	[ "$writes" -gt 0 ] && a="$a FORCE_BUDGET=$budget"
 	af0=$(reg alloc_fail)
