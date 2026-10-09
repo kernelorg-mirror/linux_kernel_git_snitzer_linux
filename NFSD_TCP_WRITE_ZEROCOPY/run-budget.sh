@@ -121,6 +121,9 @@
 #   PHASE=TLP: the spurious tail-loss-probe A/B on the cells with a budget --
 #   baseline, server per-route quickack, client TLP off, and rcvbuf/clamp
 #   without budget admission (same rig, region and warm-up as phase A).
+#   EXPORT_SYNC=async exports the cell's file system async, so nfsd does not
+#   make a WRITE durable before it answers: only to see what the fsync of
+#   each WRITE costs, never as a result for a server that keeps its promise.
 # Results: OUTDIR/stress-A/cells.tsv, per-cell dirs, campaign.log.  The
 # last three columns of cells.tsv say how nfsd issued the cell's WRITEs,
 # in segments: wr_direct (O_DIRECT), wr_dontcache, wr_buffered.
@@ -633,7 +636,7 @@ rig_up() {
 		mount "$dev" "$EXPORT"
 		chmod 0777 "$EXPORT"
 	fi
-	exportfs -o rw,sync,no_root_squash,insecure,no_subtree_check,fsid=$FSID "$CLNET:$EXPORT"
+	exportfs -o rw,${EXPORT_SYNC:-sync},no_root_squash,insecure,no_subtree_check,fsid=$FSID "$CLNET:$EXPORT"
 	echo "rig: storage=$STORAGE virt_boundary_mask=$vbm sgls=$sgls rx_ip_align=$RX_IP_ALIGN $what dev=$dev export=$EXPORT netdev=$RDEV client=${CLIENT:-netns rxcli} server=$SRVADDR"
 	echo "storage=$STORAGE virt_boundary_mask=$vbm sgls=$sgls rx_ip_align=$RX_IP_ALIGN dev=$dev export=$EXPORT netdev=$RDEV client=${CLIENT:-netns} page_size=$PS kernel=$(uname -r)" > "$E/rig.txt"
 }
@@ -753,13 +756,17 @@ J
 	# 512M), and no verify.  The verifying job is one thread that reads
 	# back and checksums all it writes: on the xeu rig that thread is the
 	# limit near 2.3 GB/s, whatever the server does (XEU_CONVERGENCE.md).
+	# STEP_BS=<size> is their block size.  At 1M, the mount's wsize, each
+	# direct write is one WRITE and the client sends it FILE_SYNC, so nfsd
+	# fsyncs every WRITE; a larger block goes as several UNSTABLE WRITEs
+	# of 1 MiB and one COMMIT.
 	if [ -n "${STEP_JOBS:-}" ]; then cat > "$f" <<J
 [step]
 directory=/mnt/rxr
 filename_format=f-$3.\$jobnum
 numjobs=$STEP_JOBS
 rw=write
-bs=1M
+bs=${STEP_BS:-1M}
 size=${STEP_SIZE:-512M}
 time_based
 runtime=120
