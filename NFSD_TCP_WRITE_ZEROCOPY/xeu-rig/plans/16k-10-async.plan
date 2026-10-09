@@ -1,0 +1,11 @@
+# The copies and the loans at sixteen connections with nothing held back:
+# rings of 4 x 128 for the copies as before, 4 x 256 for the loans with a
+# 1 MiB buffer (4 x 128 drops under it).  For EXPORT_SYNC=async, 512 nfsd
+# threads and sixteen writers: what the path does when no WRITE waits to
+# be made durable.
+128 262144 0 prp step-copy-n16
+128 262144 0 sgl step-copy-n16
+256 1048576 16 sgl step-on-n16
+256 1048576 16 prp step-on-n16
+256 1048576 0 sgl step-copy-n16
+256 1048576 0 prp step-copy-n16

@@ -1,0 +1,10 @@
+# The loan and the copy when both go through the page cache and nothing
+# waits for the drive: the receive path alone.  For
+#     EXPORT_SYNC=async MODE=1 STEP_JOBS=16 ./sweep.sh <outdir> <this>
+# (MODE=1 is io_cache_write dontcache, so the copy is written as the loan on
+# the native drive is) with 512 nfsd threads.  A diagnostic, not a result:
+# the data is not durable and mostly never reaches the drive.
+256 1048576 0 prp step-copy-n16
+256 1048576 16 prp step-on-n16
+256 262144 0 prp step-copy-n16
+256 262144 16 prp step-on-n16
