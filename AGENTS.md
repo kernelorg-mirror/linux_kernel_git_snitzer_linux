@@ -50,6 +50,12 @@ writes it), never from a name written in a document or copied from
 another commit. Never `Co-Authored-By`, whatever a tool's default says,
 and never leave the Signed-off-by off.
 
+A commit message says what the change is and why. It carries no
+disclaimer about the state of the work ("Not booted.", "untested",
+"compile-tested only"): this series is being polished, and such lines
+read as a mark against the code (Mike, 2026-10-09). What has and has
+not been run belongs in the handoff documents.
+
 ## NFSD TCP write-path zero-copy (page-loan series)
 
 The server-side page-loan work — eliminating the redundant receive-side data
