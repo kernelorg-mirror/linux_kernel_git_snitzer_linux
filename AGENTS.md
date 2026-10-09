@@ -95,8 +95,12 @@ only `enp161s0f0`, load only to the harness's own mount, `xeu` never
 reloaded. Run nothing on veth on a boot that is to use the card.
 
 **The primary focus from the evening of 2026-10-08 (Mike): NFS writes
-from the remote client as fast as they will go, near line rate.** Start
-at the "Hero" section of
+from the remote client as fast as they will go, near line rate.** On
+tardis1 start at the first section of
+[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md)
+("where it stands", 2026-10-09: the state of the host, six drives now
+an MD stripe, two kernel patches at the tip waiting for a build, and
+the next boot's steps). Then the "Hero" section of
 [`NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`](NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md):
 what there is to reach for (the wire carries 48 GB/s, one drive takes
 11.2), the brakes known to be on, the ladder
