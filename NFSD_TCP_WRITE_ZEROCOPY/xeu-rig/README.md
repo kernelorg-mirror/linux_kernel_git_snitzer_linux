@@ -1,4 +1,4 @@
-# The xeu rig at 16 KiB: where it stands (2026-10-09, 15:00, on build 461)
+# The xeu rig at 16 KiB: where it stands (2026-10-09, 17:30, written before a reboot into the kernel built from `…-WIP3`)
 
 **Read this section first; the handoff below it was written before the
 16 KiB boot and is kept for the rig's rules and its scripts.** The
@@ -8,9 +8,86 @@ changes how every native figure from the stripe is read, "The last
 runs on build 459", and **"Build 461"**, the first runs on the kernel
 with the stacking-alignment change.
 
-**From 14:30 on 9 October Mike's direction is copy mode: see "Three
-patches at the tip" below. Steps 4 and 5 of the boot's list are not
-started and are not the priority.**
+**From 14:30 on 9 October Mike's direction is copy mode. Start at "The
+boot after build 461" just below.** Steps 4 and 5 of build 461's list,
+further down, were not started and are not the priority.
+
+## The boot after build 461: start here
+
+Mike built a kernel from `origin/…-WIP3` (its tip is "AGENTS.md: a
+commit message carries no disclaimer about the work's state") and is
+installing it. **It has three of the five code patches written on
+9 October; the other two are sunrpc's alone and can be built as a
+module** (the table in "The patches" below).
+
+What 9 October found, in the order it matters for copy mode
+(`../XEU_CONVERGENCE.md`, from "Build 461" to "The copy with a larger
+held buffer"):
+
+1. On build 461 nfsd's copy on the stripe is written direct.
+2. **The harness had deferred skb frees off in every run before 15:30
+   on 9 October**; they are on now (`SKB_DEFER_MAX`, default 128).
+3. At a 256 KiB held buffer a 1 MiB WRITE is received in 17 calls, a
+   GRO skb at a time, by a different thread nine times in ten, and
+   its connection is copied from for 44% of the time.
+4. **With a 1 MiB held buffer the copy carries 35.6 GB/s on rings of
+   4 x 128 and 35.9 on 4 x 256** (27.7 at 256 KiB; the loan 30.3).
+5. With the waiting gone the copy's own speed is the limit and it
+   falls as the region in use passes the 32 MiB L3: rings of 4 x 512
+   drop nothing and carry 32.8. Whatever has a page reused sooner or
+   fewer pages idle is worth rate.
+
+**A change is one of many** (Mike; the paragraph "How to judge a
+change here" below). Keep what does its job and measure them
+together.
+
+On the new kernel, in order:
+
+0. The driver, checked and not rebuilt, as on build 461:
+   `grep -c xeu_rx_refill_timer /proc/kallsyms` is 1,
+   `cat /sys/module/xeu/parameters/rx_ip_align` is 2, `rpm -q
+   kmod-16k-xsight` names the running kernel, `enp161s0f0` has its
+   address. **Run nothing on veth.**
+1. `cat /sys/block/md0/queue/dma_alignment` is 3; then
+   `mount -o noatime /dev/md0 /hs/stripe` (`mdadm --assemble --scan`
+   first if the array is not there).
+2. `./bringup.sh 32768 256`, `echo 512 > /proc/fs/nfsd/threads`.
+3. The KUnit suites, `svcsock_kunit` above all: the page swap changed
+   `svc_tcp_save_pages()`, `svc_tcp_restore_pages()` and
+   `svc_tcp_clear_pages()` (`../TESTING.md` has how they are run).
+4. The copy at its best setting, traced, three times (about 3 TB
+   each; the stripe is trimmed before each by `TRIM=`):
+
+       PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe STEP_JOBS=16 STEP_BS=8M ./trace-sweep.sh $L/xeu-16k-<build>-copybest1 plans/16k-26-copybest.plan
+
+   **Load every tracer at idle first** (`timeout -s INT 3 bpftrace
+   nfsdlat.bt`, the same for `handoff.bt`; `handoff.bt` has
+   `XPT_QTIME_OFFSET`, which is of the kernel, and says how to read
+   it): a cell was thrown away on a tracer that had not loaded.
+   Against build 461's one traced run of that cell: 35.9 GB/s, 0.49
+   server CPU-seconds per GB, 2054 region pages, 6.4 calls for a
+   WRITE, 269 us in them, `memmove` 30% of cycles, 250564 frames
+   dropped. What to read for each patch: in `pp-*.txt`,
+   `rx_pp_recycle_ring_full` near zero and `rx_pp_alloc_refill`
+   taking what `rx_pp_recycle_cached` does not (the stack);
+   `__folio_batch_release` and `alloc_pages_bulk` gone from the
+   profile (the page swap).
+5. The two sunrpc patches that are not in the build:
+   `./build-sunrpc.sh` builds `sunrpc.ko` from this tree for the
+   running kernel (it needs that kernel's `-devel`; a minute) and says
+   whether nfsd can load against it as it is. **Putting it in place
+   stops nfsd and drops every client, the other client on
+   `enp164s0f0` too: ask Mike.** Then `RX_LINGER_US=50` to the sweep
+   for the linger, and `pools_per_node` as described below.
+6. The driver's refill threshold: "The driver's refill threshold is a
+   module parameter" below. It needs the kmod built for the new
+   kernel and `xeu` reloaded, which is Mike's.
+7. Not run on any kernel: a load paced at the source (`STEP_RATE`,
+   below); 64 connections at a 1 MiB buffer; a 2 MiB buffer; rings of
+   4 x 128 against 4 x 256 with the patches in.
+
+`smartctl` is not installed, so the drives' wear is not read; 9 October
+wrote about 90 TB to the stripe, 15 TB a drive.
 
 **Mike rebuilt the kernel from the tip on 9 October and rebooted into
 it (build 461). A session has no memory of the days before it:
@@ -97,10 +174,10 @@ mounted (it is not in `/etc/fstab`) and the array may come up as
    in the kernel for it. `trace-sweep.sh` and `nfsdlat.bt` are the
    tools.
 
-## Three patches at the tip, waiting for a build (2026-10-09, 15:00)
+## The patches (2026-10-09)
 
-Written after the tracing, compiled (W=1, the running kernel's config)
-and **not booted**. By subject:
+Five code patches at the tip, by subject. The first three are in the
+kernel Mike built from `…-WIP3`; the last two are not:
 
 | commit | what | which mode it is for |
 |---|---|---|
