@@ -3,8 +3,9 @@
 # cell from 35 s in: where.sh (both ends' CPUs, the rings, a profile), the
 # page pools' counters over the same 10 s, perf lock contention by caller
 # (10 s), a profile with call graphs (8 s, left as cg-*.data for perf
-# report), and nfsdlat.bt (15 s: the histograms of an nfsd
-# WRITE and who takes the region's lock).  A traced cell's rate is a traced
+# report), nfsdlat.bt (15 s: the histograms of an nfsd
+# WRITE and who takes the region's lock) and handoff.bt (8 s: how many
+# calls a WRITE's record is received in and what it waits for).  A traced cell's rate is a traced
 # rate.  The environment is passed on to sweep.sh.
 cd "$(dirname "$0")"
 . ./common.sh
@@ -29,6 +30,7 @@ while kill -0 $SW 2>/dev/null; do
 		perf lock contention -a -b -E 30 -- sleep 10 > $O/lock-caller-$t-$c.txt 2>&1
 		perf record -a -g -F 99 -o $O/cg-$t-$c.data -- sleep 8 > /dev/null 2>&1
 		timeout -s INT 15 bpftrace nfsdlat.bt > $O/nfsdlat-$t-$c.txt 2>&1
+		timeout -s INT 8 bpftrace handoff.bt > $O/handoff-$t-$c.txt 2>&1
 	done
 	sleep 1
 done
