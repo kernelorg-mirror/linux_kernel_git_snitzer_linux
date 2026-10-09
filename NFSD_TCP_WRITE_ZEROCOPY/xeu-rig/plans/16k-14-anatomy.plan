@@ -1,0 +1,8 @@
+# The native loan, sixteen connections, taken apart: the setting that ran
+# fastest, then one thing changed a line.  For capture-sweep.sh with
+#     STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget
+256 1048576 16 prp step-on-n16
+256 262144 16 prp step-on-n16
+256 1048576 8 prp step-on-n16
+128 1048576 16 prp step-on-n16
+256 1048576 0 prp step-copy-n16

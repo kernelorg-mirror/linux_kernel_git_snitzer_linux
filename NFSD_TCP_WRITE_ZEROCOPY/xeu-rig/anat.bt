@@ -1,0 +1,53 @@
+#!/usr/bin/bpftrace
+/*
+ * anat.bt - what a loaned WRITE's time is made of, as histograms and not a
+ * line per event: how long a connection waits between its first refusal and
+ * its admission, how long an admitted WRITE holds its credit, and how many
+ * are in flight at each admission and each refusal.  Run it for a fixed
+ * time inside a cell:  timeout -s INT 20 bpftrace anat.bt
+ */
+config = { missing_probes = "warn" }
+
+fexit:sunrpc:svc_tcp_rx_credit_admit
+{
+	$sv = (uint64)args.svsk;
+	$c = args.svsk->sk_budget;
+	if (retval) {
+		@admitted = count();
+		@inflight_at_admit = lhist($c->inflight_count, 0, 34, 1);
+		@held[(uint64)args.state] = nsecs;
+		if (@refused[$sv]) {
+			@wait_us = hist((nsecs - @refused[$sv]) / 1000);
+			delete(@refused, $sv);
+		} else {
+			@admitted_at_once = count();
+		}
+	} else {
+		@denied = count();
+		@inflight_at_deny = lhist($c->inflight_count, 0, 34, 1);
+		@avail_at_deny = hist($c->avail);
+		if (!@refused[$sv]) { @refused[$sv] = nsecs; }
+	}
+}
+
+fentry:sunrpc:svc_tcp_rx_credit_release
+/args.state != 0 && @held[(uint64)args.state]/
+{
+	@hold_us = hist((nsecs - @held[(uint64)args.state]) / 1000);
+	delete(@held, (uint64)args.state);
+}
+
+kprobe:sunrpc:svc_tcp_rx_credit_release.part.0
+/@held[arg0]/
+{
+	@hold_us = hist((nsecs - @held[arg0]) / 1000);
+	delete(@held, arg0);
+}
+
+fexit:sunrpc:svc_tcp_rx_credit_charge
+/!retval/
+{
+	@paused = count();
+}
+
+END { clear(@held); clear(@refused); }

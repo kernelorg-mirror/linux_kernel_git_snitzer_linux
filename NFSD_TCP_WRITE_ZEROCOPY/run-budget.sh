@@ -761,11 +761,15 @@ J
 	# direct write is one WRITE and the client sends it FILE_SYNC, so nfsd
 	# fsyncs every WRITE; a larger block goes as several UNSTABLE WRITEs
 	# of 1 MiB and one COMMIT.
-	if [ -n "${STEP_JOBS:-}" ]; then cat > "$f" <<J
-[step]
-directory=/mnt/rxr
-filename_format=f-$3.\$jobnum
-numjobs=$STEP_JOBS
+	# STEP_MOUNTS=<m> (hardware client only): m mounts of the export, each
+	# of another address of the server on the same port and each with its
+	# own NCONN connections, the writers shared out among them.  nconnect
+	# stops at 16; this is how a cell has more connections than that.
+	# STEP_IODEPTH=<n> is each writer's depth (16).
+	if [ -n "${STEP_JOBS:-}" ]; then
+		local m=${STEP_MOUNTS:-1} i d
+		cat > "$f" <<J
+[global]
 rw=write
 bs=${STEP_BS:-1M}
 size=${STEP_SIZE:-512M}
@@ -773,8 +777,17 @@ time_based
 runtime=120
 direct=1
 ioengine=libaio
-iodepth=16
+iodepth=${STEP_IODEPTH:-16}
+numjobs=$(( STEP_JOBS / m ))
 J
+		for i in $(seq 0 $(( m - 1 ))); do
+			d=/mnt/rxr; [ $i -gt 0 ] && d=/mnt/rxr.$i
+			cat >> "$f" <<J
+[step$i]
+directory=$d
+filename_format=f-$3.$i.\$jobnum
+J
+		done
 	else cat > "$f" <<J
 [step]
 filename=/mnt/rxr/f-$3
@@ -843,13 +856,26 @@ cell() {
 		esac
 		for pf in $pf; do fallocate -l ${psz}M "$pf" && chmod 0666 "$pf"; done
 	fi
+	# The further mounts of STEP_MOUNTS: an address of the server each,
+	# added to the port for the cell and taken off after it.
+	local xm="" xu="" xa="" mi ma
+	if [ -n "$HW" ] && [ "${STEP_MOUNTS:-1}" -gt 1 ]; then
+		for mi in $(seq 1 $(( STEP_MOUNTS - 1 ))); do
+			ma=${SRVADDR%.*}.$(( ${SRVADDR##*.} + mi ))
+			ip addr add $ma/24 dev "$RDEV" 2>/dev/null && xa="$xa $ma"
+			xm="$xm mkdir -p /mnt/rxr.$mi && mount -t nfs -o vers=$VERS,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 $ma:$EXPORT /mnt/rxr.$mi || exit 90;"
+			xu="$xu umount /mnt/rxr.$mi;"
+		done
+	fi
 	echo "$(date +%s.%N) $name fio start" >> "$E/delay-steps.txt"
 	set +e
 	cl "
 		mkdir -p /mnt/rxr && mount -t nfs -o vers=$VERS,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 $SRVADDR:$EXPORT /mnt/rxr || exit 90
+		$xm
 		timeout ${TMO:-900} fio --output-format=json --output=$CO/fio.json $CO/job.fio > $CO/fio.out 2>&1
-		rc=\$?; ${KEEPFILES:+: }rm -f /mnt/rxr/f-$name*; umount /mnt/rxr; exit \$rc"
+		rc=\$?; ${KEEPFILES:+: }rm -f /mnt/rxr/f-$name*; $xu umount /mnt/rxr; exit \$rc"
 	rc=$?
+	for ma in $xa; do ip addr del $ma/24 dev "$RDEV" 2>/dev/null; done
 	cl_get "$O"
 	# POSTCELL: a command run here, on the server, with the rig still up
 	# (and the cell's files still on the export if KEEPFILES is set).
