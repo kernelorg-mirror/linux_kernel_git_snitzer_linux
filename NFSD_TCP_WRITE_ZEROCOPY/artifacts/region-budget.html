@@ -207,7 +207,7 @@
   <header>
     <p class="eyebrow">NFSD &middot; SUNRPC &middot; page_pool &middot; 4, 16 and 64 KiB pages &middot; v7.1.13-20 and -21</p>
     <h1>Two kinds of storage, two right answers.<br><span class="ok">One budget holds for both.</span></h1>
-    <p class="lede"><span class="hl">Newest, 8 October:</span> on tardis1's Xsight card at 16 KiB pages, onto real NVMe, a loan carried 32.4 GB/s of durable writes where its copy stops at 24.7. The copy itself turned out to be what holds writes to half of line rate. <a href="#xeu16">That day is summarized first, below</a>; the rest of this page is the test plan across three page sizes.</p>
+    <p class="lede"><span class="hl">Newest, 8 and 9 October:</span> on tardis1's Xsight card at 16 KiB pages, onto six striped NVMe drives, a loan carried 30.1 GB/s of durable writes where its copy carries 25.4, three runs each. <span class="hc">Both went through the page cache there: the stripe takes direct I/O away from nfsd, so this is one copy against two, not a zero-copy write against a direct one.</span> <a href="#xeu16">That day is summarized first, below</a>; the rest of this page is the test plan across three page sizes.</p>
     <p>NFSD can hand a WRITE's network receive pages straight to the file system, or copy the data out of them first. Which is right depends on what the storage can take. A fixed receive region with a budget makes both safe. <span class="hl">On 4 KiB, 16 KiB and now 64 KiB kernels the whole test plan passes on both kinds of storage.</span> On the test rigs copying and loaning come out level in speed. Those rigs are virtual machines on a MacBook Pro for two of the three page sizes: a VMware Fusion guest for 4 KiB and a UTM guest for 16 KiB. The 64 KiB plan ran on tardis1, a 64-CPU server, over veth and memory-backed storage. That is not all of the 64 KiB testing: on 7 and 8 October the same kernel ran on tardis1 over its Xsight card with the <code>xeu</code> driver, from a separate client, onto real NVMe. One drive was used as it is, which needs whole pages (PRP). A second sat behind an NVMe/TCP target, which takes arbitrary pieces and stands in for a drive with SGLs. It is the most real testing so far, and it is summarized at the top of the <a href="#xeu64">64 KiB section</a>. What a copy costs on real hardware was the open question, and the 16 KiB day answered it for this card: half of the server's CPU, and a ceiling near 25 GB/s. Still open is the cache: a copy with little of the region in use cost 40% less CPU and went no faster, and that is one run.</p>
 
     <div class="metrics">
@@ -229,26 +229,32 @@
   </header>
 
   <section id="xeu16">
-    <p class="eyebrow ok">Summary &middot; 16 KiB &middot; tardis1 &middot; the Xsight card and real NVMe &middot; 8 October</p>
-    <h2>On the real card the copy is the wall, and the loan goes through it</h2>
-    <p>One day on tardis1 at 16 KiB pages: one port of the Xsight card (<code>xeu</code> driver), a separate client with sixteen connections, and the server's own NVMe drives. It began as a hunt for the smallest receive region that works and ended as a hunt for the fastest writes the path will carry. Nearly every figure is one run of 120 seconds.</p>
+    <p class="eyebrow ok">Summary &middot; 16 KiB &middot; tardis1 &middot; the Xsight card and real NVMe &middot; 8 and 9 October</p>
+    <h2>On the real card a loan carries a fifth more than its copy, and both were going through the page cache</h2>
+    <p>One day on tardis1 at 16 KiB pages: one port of the Xsight card (<code>xeu</code> driver), a separate client with sixteen connections, and the server's own NVMe drives. It began as a hunt for the smallest receive region that works and ended as a hunt for the fastest writes the path will carry. The headline figures are three runs of 120 seconds each; most others are one.</p>
+    <div class="verdict">
+      <p class="big">Correction, 9 October: <em>on the six-drive stripe nothing was written direct</em>, copy or loan.</p>
+      <p>The stripe (MD raid0) reports that it needs memory aligned to 512 bytes, where each drive in it needs 4. A copied WRITE's data starts just after the RPC header, at an offset that is a multiple of 4 and not of 512, so nfsd writes it through the page cache instead of direct. A loan was going through the page cache already, because these drives need whole pages. Every fast figure on this page from the stripe is therefore: <strong>copy = two copies</strong> (out of the receive pages, then into the page cache), <strong>loan = one copy</strong> (into the page cache), and both written back, not direct. An earlier version of this section called the copy a direct write. On one drive it was; on the stripe it was not, and that was not checked until Mike asked.</p>
+      <p>This is a finding in its own right: a software stripe takes direct I/O away from nfsd's copy, and would take it from a loan too on drives that accept arbitrary pieces. The only direct writes on the stripe were through the NVMe/TCP stand-in: copy 24.8 GB/s, loan about 20.</p>
+    </div>
 
     <div class="metrics">
-      <div class="metric"><div class="n gain">32.4 GB/s</div><div class="l">durable NFS writes, loaned<br>(259 Gbit/s)</div></div>
-      <div class="metric"><div class="n">24.7 GB/s</div><div class="l">the same writes, copied<br>(198 Gbit/s)</div></div>
+      <div class="metric"><div class="n gain">30.1 GB/s</div><div class="l">durable NFS writes, loaned<br>(one copy, 241 Gbit/s)</div></div>
+      <div class="metric"><div class="n">25.4 GB/s</div><div class="l">the same writes, copied<br>(two copies, 203 Gbit/s)</div></div>
       <div class="metric"><div class="n">48 GB/s</div><div class="l">what the wire carried:<br>16 plain TCP streams</div></div>
       <div class="metric"><div class="n gain">0.56 vs 1.19</div><div class="l">server CPU-seconds per GB,<br>loan vs copy, storage aside</div></div>
     </div>
 
     <div class="verdict gain" style="margin-top:22px">
-      <p class="big">A copy stops near 25 GB/s whatever storage is under it. A loan <em>goes past it on less than half the server CPU</em>.</p>
+      <p class="big">Two copies stop near 25 GB/s whatever storage is under them. One copy <em>goes past on less than half the server CPU</em>, and stops near 30.</p>
       <p>About half of line rate has been the norm for writes on this hardware, and 25 GB/s is where the copy stands here too. It is not the storage: with one drive and nothing forced to disk the copy ran at 24.9 to 26.3 GB/s, and with six drives and every write durable it runs at 24.7. It is not nfsd's threads, 95% of which were idle, and it is not the number of writers.</p>
       <p>A capture taken during a copy at that rate shows what it is. Half of all the server's CPU cycles are the copy itself. Each connection is received by one nfsd thread at a time, and while that thread copies, the connection's window stays shut: every one of the client's sixteen connections spent about half its time waiting on it. The four receive rings are also unevenly fed, and the two busiest of their CPUs are at 90%.</p>
-      <p>The loan does not make that copy. With the storage out of the way it carried 30.6 GB/s against the copy's 24.9. On six striped drives, durably, it carried 32.4 against 24.7.</p>
+      <p>The loan does not make the receive copy. With the storage out of the way it carried 30.6 GB/s against the copy's 24.9. On six striped drives, durably, it carried 30.1 against 25.4 over three runs each (29.7 to 30.4; 25.1 to 25.5). A single early run at 32.4 was not seen again.</p>
+      <p>What holds the loan at 30 was hunted through the night and not found in the network: the plain wire carries 49 GB/s with the same held buffer; a budget of 22 WRITEs is no better than 16; deeper rings remove every dropped frame and change nothing; eight rings, 64 connections and 64 files change nothing. The client waits on the server 97% of the time. What every one of those cells shares is the page cache and its writeback, which the correction above explains.</p>
     </div>
 
     <h3 style="margin-top:26px">The configuration that did best</h3>
-    <p>Two answers, because the two goals pull apart. The first column is the setting behind the 32.4 GB/s. The second is the smallest setting that kept up with a modest load and dropped nothing.</p>
+    <p>Two answers, because the two goals pull apart. The first column is the setting behind the 30.1 GB/s. The second is the smallest setting that kept up with a modest load and dropped nothing.</p>
     <div class="tbl-wrap"><table class="q">
       <thead><tr><th>Setting</th><th>For the fastest writes</th><th>For the smallest footprint</th></tr></thead>
       <tbody>
@@ -258,9 +264,9 @@
         <tr><td>Region in use at peak</td><td class="x">about 4200 pages, 66 MiB,<br>twice the 32 MiB cache</td><td class="r">about 1500 pages, 24 MiB,<br>73% of the cache</td></tr>
         <tr><td>nfsd threads</td><td class="c">512</td><td class="c">128</td></tr>
         <tr><td>Client's write size</td><td class="c">8 MiB (eight WRITEs, one COMMIT)</td><td class="m">1 MiB</td></tr>
-        <tr><td>Storage</td><td class="c">six drives, MD raid0,<br>1 MiB chunk</td><td class="m">one drive</td></tr>
+        <tr><td>Storage</td><td class="c">six drives, MD raid0,<br>1 MiB chunk, trimmed before each run</td><td class="m">one drive</td></tr>
         <tr><td>Driver</td><td class="c" colspan="2"><code>rx_ip_align=2</code> and the refill retry patch (kmod-xsight 2.0.1-4)</td></tr>
-        <tr><td>What it gave, sixteen connections</td><td class="r">loan 32.4 GB/s, copy 24.7,<br>4780 frames dropped at the ring</td><td class="c">loan level with its copy at 2.2 GB/s,<br>three runs, no drop</td></tr>
+        <tr><td>What it gave, sixteen connections</td><td class="r">loan 30.1 GB/s, copy 25.4<br>(three runs each)</td><td class="c">loan level with its copy at 2.2 GB/s,<br>three runs, no drop</td></tr>
       </tbody>
     </table></div>
     <p class="note">The small setting was found under a load that could offer only 2.2 GB/s (see the second finding below). Offered more, a budget of four WRITEs holds the loan to about three quarters of its copy on one drive, so it is the answer for a footprint and not for speed. Rings of 4 x 64 take another 400 to 500 pages off and put a loan inside half of the cache, but they drop frames under sixteen connections, thirtyfold more in some runs than others.</p>
@@ -272,18 +278,18 @@
         <tr><td>The test plan's own load, one drive</td><td class="c">2.2</td><td class="c">2.2</td><td>the client's one verifying fio thread</td></tr>
         <tr><td>Four writers, no verify</td><td class="c">4.1 to 8.2</td><td class="c">3.4 to 4.3</td><td>a budget of 8 WRITEs for the loan; an fsync of every WRITE for the copy</td></tr>
         <tr><td>Sixteen writers, 512 nfsd threads, 8 MiB writes</td><td class="c">6.7 to 6.9</td><td class="c">6.8 to 7.7</td><td>one drive, and its slow cache flush</td></tr>
-        <tr><td>Six drives striped</td><td class="c">24.7</td><td class="r">32.4</td><td>for the copy, the copy itself</td></tr>
+        <tr><td>Six drives striped (both through the page cache)</td><td class="c">25.4</td><td class="r">30.1</td><td>the page cache: two copies, and one</td></tr>
         <tr><td class="m">For scale: no storage at all (nothing made durable)</td><td class="m">24.9 to 26.3</td><td class="m">30.6</td><td class="m">a diagnostic, not a result</td></tr>
         <tr><td class="m">For scale: the wire, no NFS</td><td class="m" colspan="2">48</td><td class="m">sixteen TCP streams to a receiver that discards</td></tr>
       </tbody>
     </table></div>
-    <p class="note">Ranges are the two storages (the drive as it is, and NVMe/TCP in front of a drive). All sixteen connections. The 32.4 is the drive as it is, where a loan is written through the page cache; on that storage the page-cache copy the loan makes is cheaper than the receive copy it avoids.</p>
+    <p class="note">Ranges are the two storages (the drive as it is, and NVMe/TCP in front of a drive). All sixteen connections. The stripe row is the drives as they are; see the correction at the top of this section for how each was written.</p>
 
     <h3 style="margin-top:26px">What the day found</h3>
     <div class="delta">
       <div class="mark gain">1</div>
-      <div class="body"><h3>The receive copy is what holds writes to half of line rate<span class="tag base">finding</span></h3>
-      <p>During a durable copy at about 25 GB/s: 49.5% of the server's cycles in <code>memmove</code>, each client connection waiting on the server's window 49 to 57% of the time, and the four receive rings taking 10.2, 8.6, 5.6 and 3.5 GB/s with the two busiest CPUs at 90%. The server as a whole was 40% idle.</p></div>
+      <div class="body"><h3>Copying is what holds writes to half of line rate<span class="tag base">finding</span></h3>
+      <p>During a durable copy at about 25 GB/s (two copies on the stripe, see the correction): 49.5% of the server's cycles in <code>memmove</code>, each client connection waiting on the server's window 49 to 57% of the time, and the four receive rings taking 10.2, 8.6, 5.6 and 3.5 GB/s with the two busiest CPUs at 90%. The server as a whole was 40% idle.</p></div>
     </div>
     <div class="delta">
       <div class="mark cost">2</div>
@@ -313,11 +319,13 @@
 
     <h3 style="margin-top:26px">What is not settled</h3>
     <div class="matrix">
-      <div class="cell k">More receive rings. The port has four, unevenly fed; it comes up with eight</div><div class="cell v"><span class="pill pend">next</span></div>
-      <div class="cell k">More than sixteen connections, which needs more than one mount</div><div class="cell v"><span class="pill pend">next</span></div>
-      <div class="cell k">The same runs with no cache flush sent, as drives with power-loss protection would behave</div><div class="cell v"><span class="pill pend">running</span></div>
+      <div class="cell k">More receive rings (eight), deeper rings (to 1024), more connections (64), more files (64), a larger budget (22 WRITEs): none moved the copy or the loan</div><div class="cell v"><span class="pill no">no gain</span></div>
+      
+      <div class="cell k">The same runs with no cache flush sent, as drives with power-loss protection would behave: a fifth more for a client that syncs every megabyte, nothing for one that writes 8 MiB at a time</div><div class="cell v"><span class="pill yes">run</span></div>
+      <div class="cell k">Direct I/O on the stripe. It needs a stacked device to report its drives' memory alignment, a block-layer change; then the copy would be one copy and a direct write there</div><div class="cell v"><span class="pill pend">next</span></div>
+      <div class="cell k">The stripe has to be trimmed. Untrimmed after about 150 TB the loan and the copy were level at 23 to 25 GB/s</div><div class="cell v"><span class="pill yes">found</span></div>
       <div class="cell k">A loan written direct to a drive that takes arbitrary pieces. The stand-in is NVMe/TCP on the same host, which costs a second trip through the same CPUs: 20.2 GB/s on the stripe</div><div class="cell v"><span class="pill no">no such drive here</span></div>
-      <div class="cell k">Repeats. The sizing shortlist has three runs each; the fast figures are single runs</div><div class="cell v"><span class="pill pend">owed</span></div>
+      <div class="cell k">Repeats. The sizing shortlist and the two headline figures have three runs each; the rest are single runs</div><div class="cell v"><span class="pill pend">partly</span></div>
     </div>
     <p style="margin-top:14px" class="note">The account with every table is in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>: the section "16K" for the sizing and "Hero" for the fast runs. Kernel <code>7.1.13-21.hs.459.loanpages_pool.el9.aarch64+16k</code>. For the fast runs six of the server's drives were striped and what they held was given up.</p>
   </section>
@@ -682,7 +690,7 @@
       <div class="cell k">Budget 0 with the buffer held: one copy, a direct write, a nearly empty region</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">A loan is written direct where the storage takes arbitrary pieces and the data is placed</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">A loan written direct is faster than a copy</div><div class="cell v"><span class="pill no">not on the test rigs</span></div>
-      <div class="cell k">On the Xsight card at 16 KiB, a loan carries more than its copy once the copy is the limit: 32.4 against 24.7 GB/s, durable, the loan written through the page cache (one run)</div><div class="cell v"><span class="pill yes">shown</span></div>
+      <div class="cell k">On the Xsight card at 16 KiB, a loan carries more than its copy: 30.1 against 25.4 GB/s, durable, three runs each. Both went through the page cache on the stripe, one copy against two</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">A loan keeps up with its copy on sixteen connections at 64 KiB (45 to 65% as configured; with a larger charge per WRITE and a larger region, level or nearly so when storage answers at once; in a stall, about two thirds with 11 WRITEs let in at once, about nine tenths with 14 and level with 16; about four fifths on mixed sizes at 1 ms per WRITE even with 16)</div><div class="cell v"><span class="pill pend">partly shown</span></div>
       <div class="cell k">The 4 KiB results hold with the fixes found on tardis1</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">The 16 KiB results hold with the fixes found on tardis1</div><div class="cell v"><span class="pill pend">not re-run</span></div>
@@ -690,7 +698,7 @@
       <div class="cell k">What a copy costs on hardware: half of the server's CPU cycles and a ceiling near 25 GB/s on sixteen connections (the Xsight card, 16 KiB)</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">Whether a copy is cheaper when little of the region is in use. With 770 pages in use (38% of the cache) the copy took 0.80 server CPU-seconds per GB; with 2055 (all of it), 1.32. The rate was the same, 24.7 and 24.8 GB/s. One run each, and the rings and buffer differ too; cache misses were not counted</div><div class="cell v"><span class="pill pend">a first sign</span></div>
     </div>
-    <p style="margin-top:14px">The test plan ran on virtual network devices with memory for storage. A copy there is nearly free, which is why copy and loan come out level in it. On the Xsight card it is not free: during a copy at 25 GB/s half of the server's cycles were the copy, and the loan carried a third more on less than half the CPU (the <a href="#xeu16">first section</a>). The on-die receive copy design rests on a region kept in cache so that the copy is cheap. There is a first sign of that here: the same copy cost 40% less CPU with 770 pages of the region in use than with 2055, at the same rate. It did not go faster, and whether the data was in cache was not measured.</p>
+    <p style="margin-top:14px">The test plan ran on virtual network devices with memory for storage. A copy there is nearly free, which is why copy and loan come out level in it. On the Xsight card it is not free: during a copy at 25 GB/s half of the server's cycles were copying (two copies on the stripe, as it turned out), and the loan, with one, carried a fifth more on less than half the CPU (the <a href="#xeu16">first section</a>). The on-die receive copy design rests on a region kept in cache so that the copy is cheap. There is a first sign of that here: the same copy cost 40% less CPU with 770 pages of the region in use than with 2055, at the same rate. It did not go faster, and whether the data was in cache was not measured.</p>
     <p>Still unexplained on this rig: a loan written direct is about 6% slower than the same loan written through the page cache when the storage has a delay, with the difference inside the one request to the device.</p>
   </section>
 
