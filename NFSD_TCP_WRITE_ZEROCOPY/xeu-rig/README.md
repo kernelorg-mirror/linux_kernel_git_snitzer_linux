@@ -76,12 +76,16 @@ built but **not booted**:
 
 On that boot, in order:
 
-0. **The driver.** `uname -r` is a new build, so `kmod-16k-xsight` has
-   to be built for it before the port can be used: the first-ten-minutes
-   list of the handoff below, steps 1 to 3 (`./build-kmod.sh`, then the
-   `rpm -U` and the reload of `xeu`, which need Mike's leave because
-   the reload takes `enp164s0f0` down for a few seconds). Check
-   `rx_ip_align` is 2 and `xeu_rx_refill_timer` is in `/proc/kallsyms`.
+0. **The driver: check it, do not rebuild it.** Mike folded the Xsight
+   changes he knows of (the refill retry among them) into
+   `kernel-rpmtree`, so the kmod built with the new kernel should carry
+   them (Mike, 2026-10-09). Check and go on:
+   `grep -c xeu_rx_refill_timer /proc/kallsyms` is 1,
+   `cat /sys/module/xeu/parameters/rx_ip_align` is 2, `rpm -q
+   kmod-16k-xsight` names the running kernel, and `enp161s0f0` has its
+   address. Only if one of those fails is the handoff's
+   `./build-kmod.sh` and reload wanted, and then say so to Mike first
+   (the reload takes `enp164s0f0` down for a few seconds).
    **Run nothing on veth.**
 1. `cat /sys/block/md0/queue/dma_alignment` is 3 (it is 511 without
    the stacking change). If the array does not assemble by itself:
