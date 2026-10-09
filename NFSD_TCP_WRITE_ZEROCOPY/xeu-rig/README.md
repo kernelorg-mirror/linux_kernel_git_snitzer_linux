@@ -41,24 +41,52 @@ held buffer"):
 change here" below). Keep what does its job and measure them
 together.
 
-On the new kernel, in order:
+On the new kernel, in order. **Everything goes in first and the whole
+is measured (Mike, 2026-10-09): the two sunrpc patches and the
+driver's parameter are loaded before any cell is run, not after the
+kernel's three have been measured alone.** All three of those are
+off until set (`svc_tcp_rx_linger_us` 0, `pools_per_node` 1,
+`rx_refill_thresh` 32), so the kernel's three patches by themselves
+are still one run away, with nothing to unload. And straight after a
+boot is the cheapest time for both swaps: no region is bound, and the
+clients have to be dropped once and not twice.
 
-0. The driver, checked and not rebuilt, as on build 461:
-   `grep -c xeu_rx_refill_timer /proc/kallsyms` is 1,
-   `cat /sys/module/xeu/parameters/rx_ip_align` is 2, `rpm -q
-   kmod-16k-xsight` names the running kernel, `enp161s0f0` has its
-   address. **Run nothing on veth.**
-1. `cat /sys/block/md0/queue/dma_alignment` is 3; then
-   `mount -o noatime /dev/md0 /hs/stripe` (`mdadm --assemble --scan`
-   first if the array is not there).
-2. `./bringup.sh 32768 256`, `echo 512 > /proc/fs/nfsd/threads`.
-3. The KUnit suites, `svcsock_kunit` above all: the page swap changed
+0. `cat /sys/block/md0/queue/dma_alignment` is 3 and `enp161s0f0` has
+   its address. **Run nothing on veth.**
+1. **The sunrpc module.** `./build-sunrpc.sh` builds `sunrpc.ko` from
+   this tree for the running kernel (it needs that kernel's `-devel`;
+   a minute) and says whether nfsd can load against it as it is: no
+   export missing and none with another version. It builds
+   `svcsock_kunit.ko` beside it. **Putting it in place stops nfsd,
+   unmounts every NFS mount and drops every client, the other client
+   on `enp164s0f0` too: ask Mike, and keep the installed
+   `sunrpc.ko` beside the new one.** If `pools_per_node` is wanted
+   for the first runs, set it before nfsd starts again
+   (`echo 4 > /sys/module/sunrpc/parameters/pools_per_node`;
+   `cat /proc/fs/nfsd/pool_threads` then shows four pools).
+2. **The driver.** The refill threshold is Patch4 of
+   `kernel-rpmtree/xsight/xsight.spec`, uncommitted ("The driver's
+   refill threshold is a module parameter" below). If Mike's build
+   did not carry it, `T=$L/kmod-xsight-16k-build-r5 ./build-kmod.sh`
+   builds release 5 for the running kernel; installing it and
+   reloading `xeu` takes `enp164s0f0` down for a few seconds and is
+   Mike's (the commands are in the handoff further down, with 5 for
+   4). Then: `grep -c xeu_rx_refill_timer /proc/kallsyms` is 1,
+   `rx_ip_align` is 2, `rx_refill_thresh` is 32, both ports have their
+   addresses.
+3. `mount -o noatime /dev/md0 /hs/stripe` (`mdadm --assemble --scan`
+   first if the array is not there), `./bringup.sh 32768 256`,
+   `echo 512 > /proc/fs/nfsd/threads`.
+4. The KUnit suites, `svcsock_kunit` above all: the page swap changed
    `svc_tcp_save_pages()`, `svc_tcp_restore_pages()` and
    `svc_tcp_clear_pages()` (`../TESTING.md` has how they are run).
-4. The copy at its best setting, traced, three times (about 3 TB
-   each; the stripe is trimmed before each by `TRIM=`):
+   Before any load.
+5. **The whole stack**, the copy at its best setting, traced, three
+   times (about 3 TB each; the stripe is trimmed before each by
+   `TRIM=`):
 
-       PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe STEP_JOBS=16 STEP_BS=8M ./trace-sweep.sh $L/xeu-16k-<build>-copybest1 plans/16k-26-copybest.plan
+       echo 8 > /sys/module/xeu/parameters/rx_refill_thresh
+       RX_LINGER_US=50 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe STEP_JOBS=16 STEP_BS=8M ./trace-sweep.sh $L/xeu-16k-<build>-stack1 plans/16k-26-copybest.plan
 
    **Load every tracer at idle first** (`timeout -s INT 3 bpftrace
    nfsdlat.bt`, the same for `handoff.bt`; `handoff.bt` has
@@ -67,24 +95,21 @@ On the new kernel, in order:
    Against build 461's one traced run of that cell: 35.9 GB/s, 0.49
    server CPU-seconds per GB, 2054 region pages, 6.4 calls for a
    WRITE, 269 us in them, `memmove` 30% of cycles, 250564 frames
-   dropped. What to read for each patch: in `pp-*.txt`,
+   dropped. What shows each change is doing its job: in `pp-*.txt`,
    `rx_pp_recycle_ring_full` near zero and `rx_pp_alloc_refill`
    taking what `rx_pp_recycle_cached` does not (the stack);
    `__folio_batch_release` and `alloc_pages_bulk` gone from the
-   profile (the page swap).
-5. The two sunrpc patches that are not in the build:
-   `./build-sunrpc.sh` builds `sunrpc.ko` from this tree for the
-   running kernel (it needs that kernel's `-devel`; a minute) and says
-   whether nfsd can load against it as it is. **Putting it in place
-   stops nfsd and drops every client, the other client on
-   `enp164s0f0` too: ask Mike.** Then `RX_LINGER_US=50` to the sweep
-   for the linger, and `pools_per_node` as described below.
-6. The driver's refill threshold: "The driver's refill threshold is a
-   module parameter" below. It needs the kmod built for the new
-   kernel and `xeu` reloaded, which is Mike's.
+   profile (the page swap); in `handoff-*.txt`, calls for a WRITE
+   near 1 and the next call by the same thread (the linger, which is
+   a busy wait: read the CPU for each GB with it); `__lwq_dequeue`
+   down the contended list (the pools). The values 50 and 8 are first
+   guesses: a piece of a WRITE is about 13 us in coming.
+6. Then what each is worth, by taking one away at a time from the
+   whole: `RX_LINGER_US=0`, `rx_refill_thresh` 32, `SKB_DEFER_MAX=0`;
+   `pools_per_node` needs nfsd restarted.
 7. Not run on any kernel: a load paced at the source (`STEP_RATE`,
    below); 64 connections at a 1 MiB buffer; a 2 MiB buffer; rings of
-   4 x 128 against 4 x 256 with the patches in.
+   4 x 128 against 4 x 256.
 
 `smartctl` is not installed, so the drives' wear is not read; 9 October
 wrote about 90 TB to the stripe, 15 TB a drive.
