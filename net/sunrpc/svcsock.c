@@ -40,6 +40,7 @@
 #include <net/tcp.h>
 #include <net/tcp_states.h>
 #include <net/page_pool/helpers.h>
+#include <net/xdp.h>
 #include <net/netns/generic.h>
 #include <linux/sysctl.h>
 #include <net/tls_prot.h>
@@ -1228,6 +1229,14 @@ static void svc_tcp_rx_get_borrowed(struct page *page, bool page_pool)
 	get_page(page);
 }
 
+/*
+ * Page-pool pages of one record returned to their pool at a time.
+ * page_pool_put_netmem_bulk() gathers the pages it recycles into an
+ * on-stack array of XDP_BULK_QUEUE_SIZE entries and does not check
+ * its bound, so a batch must not be larger.
+ */
+#define SVC_TCP_RX_PUT_BATCH	XDP_BULK_QUEUE_SIZE
+
 static void svc_tcp_rx_put_borrowed(struct page *page, bool page_pool)
 {
 	skb_page_unref(page_to_netmem(page), page_pool);
@@ -1414,7 +1423,11 @@ static bool svc_tcp_rx_refs_valid(const struct svc_tcp_rx_state *state)
 
 static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 {
-	unsigned int index;
+	netmem_ref batch[SVC_TCP_RX_PUT_BATCH];
+	unsigned int index, nr = 0;
+
+	/* page_pool_put_netmem_bulk() does not check its array's bound. */
+	BUILD_BUG_ON(SVC_TCP_RX_PUT_BATCH > XDP_BULK_QUEUE_SIZE);
 
 	if (WARN_ON_ONCE(!svc_tcp_rx_refs_valid(state))) {
 		svc_tcp_rx_credit_orphan(state);
@@ -1423,14 +1436,29 @@ static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 	for (index = 0; index < state->count; index++) {
 		if (!test_bit(index, state->borrowed))
 			continue;
-		svc_tcp_rx_put_borrowed(state->bvec[index].bv_page,
-					test_bit(index, state->page_pool));
+		/*
+		 * A record's page-pool pages go back in batches: the pool's
+		 * producer lock is taken for each batch and not each page.
+		 */
+		if (IS_ENABLED(CONFIG_PAGE_POOL) &&
+		    test_bit(index, state->page_pool)) {
+			batch[nr++] = page_to_netmem(state->bvec[index].bv_page);
+			if (nr == ARRAY_SIZE(batch)) {
+				page_pool_put_netmem_bulk(batch, nr);
+				nr = 0;
+			}
+		} else {
+			svc_tcp_rx_put_borrowed(state->bvec[index].bv_page,
+						false);
+		}
 		__clear_bit(index, state->borrowed);
 		__clear_bit(index, state->page_pool);
 		__clear_bit(index, state->merged);
 		state->refs_released++;
 		state->borrowed_count--;
 	}
+	if (nr)
+		page_pool_put_netmem_bulk(batch, nr);
 	state->terminal = true;
 	if (WARN_ON_ONCE(state->borrowed_count ||
 			 (state->count &&
