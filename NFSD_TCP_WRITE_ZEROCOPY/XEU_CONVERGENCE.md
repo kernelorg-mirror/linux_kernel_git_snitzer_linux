@@ -2200,6 +2200,68 @@ saved flows and the console, and the order is fixed.
 A client that reconnects during a cell gets a new source port and so
 a new entry: the cell does not place again.
 
+### What ring depth and the held buffer decide (10 October, with `plans/16k-29-depth-buf.plan` running)
+
+The main thing is how to spend the L3: the 5440-byte buffers left
+about 11 MiB of the 32 MiB cache unused, and these two settings decide
+what that headroom buys. Each one trades memory in the cache against a
+different kind of waiting or loss.
+
+**Ring depth** (128 or 256 frames a ring) sets:
+
+- **Memory posted to the card.** Every posted buffer is cache
+  footprint whether or not a frame lands in it.
+- **Tolerance for a late CPU.** A ring is served by one CPU; if it is
+  late, a shallow ring overflows and the frame is dropped, which the
+  client pays for in retransmits.
+- **The page pool's size.** `xeu` sizes each ring's pool to the ring,
+  so depth also changes how pages recycle.
+
+**Held receive buffer** (685 KiB or 1 MiB per connection) sets:
+
+- **How much unread data can sit in receive pages** per connection,
+  which is the other part of the footprint.
+- **The window the client sees.** Too small and the client stalls
+  waiting on the server, which is what held the copy at 27.7 GB/s on
+  9 October.
+- **Whether a whole 1 MiB WRITE fits**, which affects how many reads
+  it takes to receive one.
+- **Where back pressure lands**: the point at which the server makes
+  the client wait rather than taking more into memory.
+
+So across the four cells, what to read beyond the rate:
+
+- region pages in use at peak, against the 32 MiB cache;
+- time to copy one WRITE and `memmove`'s share of cycles, which show
+  whether the data is still in cache when it is copied;
+- ring drops and retransmits;
+- reads per WRITE and how long the client waits on the window;
+- server CPU per GB.
+
+Two things come along as side effects of the runs themselves:
+
+- **Run-to-run spread with placement.** These are the first repeats
+  with every flow placed, so they show how much of the earlier 4 GB/s
+  spread placement removes.
+- **Whether the scaled buffer was the right call.** In the A/B the
+  held buffer was shrunk to 685 KiB to keep the data window the same
+  as the whole-page control. The 1 MiB cells show whether that was
+  holding the rate back.
+
+What these runs do not vary is the linger, the refill threshold and
+the pool count. Those stay fixed so the four cells differ only in
+depth and buffer.
+
+The cells, each on `rx_buf_size=5440`, traced, sixteen connections,
+`PLACE=1`, the plan run twice (`$L/xeu-16k-463-depthbuf-1` and `-2`):
+
+| ring entries | frames a ring holds | held receive buffer |
+|---|---|---|
+| 4 x 512 | 256 | 685 KiB (1 MiB of data at this buffer size) |
+| 4 x 512 | 256 | 1 MiB |
+| 4 x 256 | 128 | 685 KiB |
+| 4 x 256 | 128 | 1 MiB |
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
