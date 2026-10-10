@@ -92,6 +92,14 @@
     overflow-wrap: anywhere;
   }
   .provenance span { color: var(--ink-soft); }
+  .prov { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--hair); display: grid; gap: 10px; }
+  .prov .pl { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0; }
+  .prov .pl:not(:first-child) { margin-top: 10px; }
+  dl.runs { margin: 0; display: grid; grid-template-columns: 9.5em 1fr; column-gap: 16px; row-gap: 8px; font-size: 14.5px; line-height: 1.5; }
+  dl.runs dt { font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; padding-top: 2px; }
+  dl.runs dd { margin: 0; color: var(--ink-soft); min-width: 0; }
+  dl.runs dd code { font-size: .8em; }
+  @media (max-width: 560px) { dl.runs { grid-template-columns: 1fr; row-gap: 2px; } dl.runs dd { margin-bottom: 8px; } }
 
   .metrics {
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
@@ -219,17 +227,24 @@
       <div class="metric"><div class="n">25.4 &rarr; 41</div><div class="l">GB/s, the same copy,<br>8 to 10 October</div></div>
     </div>
 
-    <p class="provenance">
-      <span>Branch:</span> <code>kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY</code> on <code>v7.1.13-21</code><br>
-      <span>Runs:</span> kernel <code>7.1.13-21.hs.463.loanpages_pool.el9.aarch64+16k</code> with kmod-xsight 2.0.1-6, tardis1, the Xsight card and six striped NVMe drives, 16 KiB pages &middot; 2026-10-10<br>
-      kernel <code>7.1.13-21.hs.461.loanpages_pool.el9.aarch64+16k</code> (with the block-layer stacking-alignment change), tardis1, the Xsight card and six striped NVMe drives, 16 KiB pages &middot; 2026-10-09<br>
-      kernel <code>7.1.13-21.hs.459.loanpages_pool.el9.aarch64+16k</code>, tardis1, the Xsight card and real NVMe, 16 KiB pages &middot; 2026-10-08<br>
-      kernel <code>7.1.13-20.hs.458.loanpages_pool.el9.aarch64+64k</code>, packaged RPMs, tardis1 (64 CPUs), 64 KiB pages &middot; 2026-10-07<br>
-      kernel <code>7.1.13-19.hs.451.el9.aarch64+</code> build #17, UTM guest on a MacBook Pro, 16 KiB pages &middot; 2026-10-05<br>
-      kernel <code>7.1.13-20.hs.458.el9.aarch64+</code> build #45 from <code>59eb4beed308</code> (<code>-WIP</code>, with the four fixes found on tardis1), VMware Fusion guest on a MacBook Pro, 4 KiB pages &middot; 2026-10-07<br>
-      <span>In-tree:</span> <code>NFSD_TCP_WRITE_ZEROCOPY/transplant/README.md</code> (the accounts), <code>transplant/RESULTS.md</code> (the comparison across page sizes), <code>XEU_CONVERGENCE.md</code> (the Xsight card, 64 KiB and 16 KiB)<br>
-      <span>Builds on:</span> <a href="https://claude.ai/artifact/AaqMSpvXNrwbugt6BJ7MXX">NFSD Page Loan</a>, <a href="https://claude.ai/artifact/FgYTWeV9FqCxwzeuESd7Ap">NVMe SGL Page Loan</a>, <a href="https://claude.ai/artifact/MsFFzUKYDgz6WhZ1C62jss">On-Die Receive Copy</a>
-    </p>
+    <div class="prov">
+      <p class="pl">Runs behind this page</p>
+      <dl class="runs">
+        <dt>10 Oct &middot; 16 KiB</dt><dd><strong>Build 463</strong> on tardis1: the Xsight card, six striped NVMe drives, kmod-xsight 2.0.1-6. <code>7.1.13-21.hs.463.loanpages_pool</code></dd>
+        <dt>9 Oct &middot; 16 KiB</dt><dd><strong>Builds 461 and 462</strong> on tardis1: the Xsight card and six striped NVMe drives, with the block-layer alignment change. <code>7.1.13-21.hs.461.loanpages_pool</code></dd>
+        <dt>8 Oct &middot; 16 KiB</dt><dd><strong>Build 459</strong> on tardis1: the Xsight card and real NVMe. <code>7.1.13-21.hs.459.loanpages_pool</code></dd>
+        <dt>7 Oct &middot; 64 KiB</dt><dd><strong>Build 458</strong> on tardis1 (64 CPUs), packaged RPMs. <code>7.1.13-20.hs.458.loanpages_pool</code></dd>
+        <dt>7 Oct &middot; 4 KiB</dt><dd><strong>Build 458</strong> in a VMware Fusion guest on a MacBook Pro, with the four fixes found on tardis1. <code>7.1.13-20.hs.458</code>, from <code>59eb4beed308</code></dd>
+        <dt>5 Oct &middot; 16 KiB</dt><dd><strong>Build 451</strong> in a UTM guest on a MacBook Pro. <code>7.1.13-19.hs.451</code></dd>
+      </dl>
+      <p class="pl">Where it is written up</p>
+      <dl class="runs">
+        <dt>Branch</dt><dd><code>kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY</code>, on <code>v7.1.13-21</code></dd>
+        <dt>The Xsight card</dt><dd><code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>, 64 KiB and 16 KiB</dd>
+        <dt>The test plan</dt><dd><code>transplant/README.md</code> for the accounts and <code>transplant/RESULTS.md</code> for the comparison across page sizes</dd>
+        <dt>Builds on</dt><dd><a href="https://claude.ai/artifact/AaqMSpvXNrwbugt6BJ7MXX">NFSD Page Loan</a> &middot; <a href="https://claude.ai/artifact/FgYTWeV9FqCxwzeuESd7Ap">NVMe SGL Page Loan</a> &middot; <a href="https://claude.ai/artifact/MsFFzUKYDgz6WhZ1C62jss">On-Die Receive Copy</a></dd>
+      </dl>
+    </div>
   </header>
 
   <section id="xeu463">
