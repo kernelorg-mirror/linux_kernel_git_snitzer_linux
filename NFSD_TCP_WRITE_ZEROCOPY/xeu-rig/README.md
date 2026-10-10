@@ -139,6 +139,32 @@ with it. Still near 9% of returns means keeping the mapping on region
 pages is the next change. It is in `net/core` and needs a kernel
 build.
 
+## How the flows fall on the rings: three work items
+
+The largest source of spread between runs of one cell is which ring
+each flow hashes to. Build 462's slow run had one ring at 19.9 GB/s
+and 440 thousand drops. **`xeu` supports no steering**: `ethtool -x`
+and `-X`, `-n rx-flow-hash` and ntuple filters were checked on build
+461 and are not there ("`xeu` gives no way to steer" in
+`../XEU_CONVERGENCE.md`). So no `ethtool` rule pins flows here. The
+work items, all three also in that document's "Since then" list:
+
+1. **More flows than rings.** At 64 connections the rings came out
+   even (28, 27, 20 and 25%), where sixteen gave 25, 6, 31 and 37%.
+   The 64-connection test below will show it again.
+2. **Mount again until the rings are even.** This is harness only,
+   with no build. Read each ring's packet delta from `ethtool -S` for
+   a few seconds at the start of a cell, and remount (new source
+   ports, new hashes) if one ring is far over a quarter. It does not
+   make the fall even. It stops one bad fall from deciding a result.
+   Not written.
+3. **Steering in `xeu`** (`ethtool -X` or ntuple rules): a kmod
+   change, and a question for Xsight.
+
+Until 2 exists, read the busiest and least busy ring of every run
+(`where-*.txt`) before comparing rates. Set aside a run whose busiest
+ring is far over a quarter, or say so with its figure.
+
 ## Does `pools_per_node` earn its place: 64 connections, 1 pool against 4
 
 "SUNRPC: Let a NUMA node have several thread pools" was written for

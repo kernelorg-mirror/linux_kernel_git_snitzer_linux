@@ -1565,6 +1565,27 @@ measured alone; that is step 6 of the README and waits for Mike.
 - **storage (T5, B5):** unchanged. Build 461's MD stacking change has
   the copy written direct on the stripe; the loan still goes through
   the page cache.
+- **rings, how the flows fall (F5, S5): new, none of it done.** Which
+  ring takes a flow is the hash of its five-tuple, and with sixteen
+  flows on four rings that alone moved build 462's runs by 4% (one
+  ring at 19.9 GB/s, 440 thousand drops). Steering on this card was
+  checked on build 461 and is not there: `xeu` supports none of
+  `ethtool -x`/`-X`, `-n rx-flow-hash` or ntuple filters ("`xeu`
+  gives no way to steer", above). Do not propose them again.
+  Three ways remain:
+  1. **More flows than rings.** At 64 connections the rings took 28,
+     27, 20 and 25% against 25, 6, 31 and 37% at sixteen. This is the
+     only one measured. The 64-connection `pools_per_node` test in the
+     README will show it again.
+  2. **Mount again until the rings are even (the harness, no build).**
+     Each mount gives its connections new source ports, so new hashes.
+     Before a cell's measured part, the harness reads each ring's
+     packets from `ethtool -S` over a few seconds and remounts if one
+     ring is far over a quarter. This does not balance the flows; it
+     keeps a bad fall from deciding a result. Not written.
+  3. **Steering in the driver.** `ethtool -X` (the indirection table)
+     or ntuple rules in `xeu`: a kmod change, and a question for
+     Xsight.
 
 ### The harness had deferred skb frees off; with them on the copy is no faster (9 October, 14:30 to 15:10)
 
