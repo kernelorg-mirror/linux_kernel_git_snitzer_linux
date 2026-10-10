@@ -1678,7 +1678,11 @@ measured alone; that is step 6 of the README and waits for Mike.
 
   So option 3's first ask, `get_rxfh`/`set_rxfh`, may be a small
   `xeu` change on calls that already exist. The draft to Xsight
-  (`xsight-steering-email.txt`) asks how they behave.
+  (`xsight-steering-email.txt`) asks how they behave. **Written the
+  same evening, built, not run:**
+  `kernel-rpmtree/xsight/xeu-expose-the-RSS-redirection-table-hash-key-and-function-to-ethtool.patch`
+  (untracked, not in the spec). The README's item 3 under "How the
+  flows fall on the rings" has what it does and how to try it.
   Three ways remain:
   1. **More flows than rings.** At 64 connections the rings took 28,
      27, 20 and 25% against 25, 6, 31 and 37% at sixteen. This is the
