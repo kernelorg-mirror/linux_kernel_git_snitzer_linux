@@ -66,6 +66,54 @@ can take down whichever host runs it.
 The state below is from before the crash. A reboot resets everything
 in it except the installed modules.
 
+## Does `pools_per_node` earn its place: 64 connections, 1 pool against 4
+
+"SUNRPC: Let a NUMA node have several thread pools" was written for
+T6 in `../XEU_CONVERGENCE.md`. With 64 connections and the one pool,
+512 threads waited 5.25 s in 10 s on its queue of ready connections
+(`__lwq_dequeue`). The build 462 runs had four pools but only sixteen
+connections, and at sixteen that lock is not near the top of the list
+on either build (S6). So nothing yet says the patch does its job. The
+test is the load that showed the problem, run with 1 pool and with 4.
+
+- **The cell:** the copy at its best setting, rings of 4 x 256 and a
+  1 MiB held buffer (`plans/16k-26-copybest.plan`), with
+  `STEP_MOUNTS=4`. That is four addresses of the server on
+  `enp161s0f0`, each with nconnect 16, so 64 connections; the harness
+  adds the addresses for the cell and removes them after. The rest of
+  the stack is as for build 462: linger 50, `rx_refill_thresh` 8,
+  deferred frees at 128. T10's 64-connection copy (21.1 GB/s) was on
+  rings of 4 x 128 with a 256 KiB buffer and dropped 190 thousand
+  frames, so it is not the figure to compare with. The comparison is
+  between the two runs here.
+- **The order:** after the sunrpc from the tip is in place (the crash
+  section above). Changing the pool count is
+  `systemctl stop nfs-server`, `echo <n> >
+  /sys/module/sunrpc/parameters/pools_per_node`,
+  `systemctl start nfs-server`, `echo 512 > /proc/fs/nfsd/threads`,
+  then check `cat /proc/fs/nfsd/pool_threads` (n pools). The value is
+  read only when nfsd's service is created. **Stopping nfsd drops
+  every client, including the other one on `enp164s0f0`, so each
+  change is Mike's.** Run 4 pools, then 1, then 4, then 1. At about
+  3 TB a run that is 12 TB on the stripe; trim before each run
+  (`TRIM=`).
+
+      STEP_MOUNTS=4 RX_LINGER_US=50 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe STEP_JOBS=16 STEP_BS=8M ./trace-sweep.sh $L/xeu-16k-<build>-m4-pools<n>-<k> plans/16k-26-copybest.plan
+
+- **What answers it:**
+  - In `perf lock contention`, `__lwq_dequeue`'s contended count and
+    time waited with 1 pool against 4. 4 should cut it by about the
+    number of pools. If it does not, the patch is not doing its job.
+  - `/proc/fs/nfsd/pool_stats`, saved by hand before and after the
+    sweep (the plan is one cell; the harness does not save it). Each pool's
+    packets and wakeups show whether the 64 connections spread over
+    the four pools. The pool is picked by a hash of the transport, so
+    expect an uneven split, not an even one.
+  - Then the rate, CPU-seconds per GB, drops and RTOs.
+  - Judged as one change of many (see "How to judge a change here"):
+    if the lock's wait time goes away and the rate does not move, the
+    patch still did its job, and something else is the limit.
+
 The state of tardis1 (it does not outlive a reboot, except where said):
 
 - Kernel `7.1.13-21.hs.462.el9.aarch64+16k`. **sunrpc is the module
@@ -213,7 +261,8 @@ clients have to be dropped once and not twice.
    whole: `RX_LINGER_US=0`, `rx_refill_thresh` 32, `SKB_DEFER_MAX=0`;
    `pools_per_node` needs nfsd restarted.
 7. Not run on any kernel: a load paced at the source (`STEP_RATE`,
-   below); 64 connections at a 1 MiB buffer; a 2 MiB buffer; rings of
+   below); 64 connections at a 1 MiB buffer (planned: "Does
+   `pools_per_node` earn its place" above); a 2 MiB buffer; rings of
    4 x 128 against 4 x 256.
 
 `smartctl` is not installed, so the drives' wear is not read; 9 October
