@@ -88,11 +88,23 @@ copy cell, for NFS.
    - Toeplitz over the 4-tuple with the shown key gives the hash, so
      a flow's entry can be computed from its ports;
    - this is one of the questions to Xsight, answered.
-5. If 4 holds, balancing means giving each flow's entry a ring of its
-   own choosing. The `ethtool` CLI sets only weights, not single
-   entries, so this needs a small tool that writes the table through
-   `ETHTOOL_SRSSH`. It is not written yet; it is the next thing to
-   write once 4 is known.
+5. If 4 holds, balance by giving each flow's entry a ring of your
+   choosing. The `ethtool` CLI (6.11) sets only weights, not single
+   entries. 7.1's netlink `rss-set` takes the whole table as an
+   `indir` array, and the in-tree `ynl` client sends it. Nothing new
+   is needed:
+
+       cd <the kernel tree>
+       tools/net/ynl/pyynl/cli.py --spec Documentation/netlink/specs/ethtool.yaml \
+           --do rss-set --json '{"header": {"dev-name": "enp161s0f0"}, "indir": [0, 1, 2, 3, ...]}'
+
+   The array is `rss_indir_size` (128) ring numbers, one for each
+   entry. To move one flow, read the table with `ethtool -x` (or
+   `--do rss-get` with the same header), change that flow's entry,
+   and send the whole table back. Then check with `rings.sh` and
+   `xeu-rx.bt` that the flow moved and nothing else did. `ynl` needs
+   Python 3 with PyYAML on tardis1, which has not been checked. With
+   sixteen flows on four rings the aim is four flows to a ring.
 
 Record it all as a new section of `../XEU_CONVERGENCE.md`.
 
