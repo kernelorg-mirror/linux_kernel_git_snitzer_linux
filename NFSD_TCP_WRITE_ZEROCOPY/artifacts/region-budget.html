@@ -300,7 +300,7 @@
     <p><strong>What goes back to Xsight.</strong> The work has produced five patches to their driver, one of which fixes a ring that never refilled once it ran empty, and three questions only they can answer: how the card's Toeplitz hash is computed, whether a flow can be steered to a ring by a filter, and whether interrupt moderation can be exposed. A note putting those to them is drafted.</p>
 
     <h3 style="margin-top:26px">How the copy got here</h3>
-    <div class="tbl-wrap"><table class="q">
+    <div class="tbl-wrap"><table class="q" style="min-width:0">
       <thead><tr><th>Build</th><th>What changed</th><th>Copy, GB/s</th></tr></thead>
       <tbody>
         <tr><td class="m">459 &middot; 8 Oct</td><td>Six drives striped. The copy went through the page cache: two copies</td><td class="c">25.4</td></tr>
@@ -308,9 +308,9 @@
         <tr><td class="m">461 &middot; 9 Oct</td><td>Receive buffer held at 1 MiB, not 256 KiB</td><td class="c">35.9</td></tr>
         <tr><td class="m">462 &middot; 9 Oct</td><td>Five kernel changes and the driver's refill threshold, loaded together</td><td class="c">38.0 (36.7 to 38.3)</td></tr>
         <tr><td class="m">463 &middot; 10 Oct</td><td>The same stack built in, flows kept off one busy ring before each run</td><td class="r">41.4 &middot; 38.3</td></tr>
-        <tr><td class="m">463 &middot; 10 Oct</td><td>5440-byte receive buffers</td><td class="r">41.0 &middot; 36.6, in 21 MiB</td></tr>
-        <tr><td class="m">463 &middot; 10 Oct</td><td>The same, with every connection placed: four to a ring</td><td class="r">39.9 (one run), in 21 MiB</td></tr>
-        <tr><td class="m">For scale</td><td class="m">The wire with no NFS, sixteen TCP streams &middot; the loan at its best (build 461)</td><td class="m">48 &middot; 30.3</td></tr>
+        <tr><td class="m">463 &middot; 10 Oct</td><td>5440-byte receive buffers</td><td class="r" style="white-space:normal">41.0 &middot; 36.6, in 21 MiB</td></tr>
+        <tr><td class="m">463 &middot; 10 Oct</td><td>The same, with every connection placed: four to a ring</td><td class="r" style="white-space:normal">39.9 (one run), in 21 MiB</td></tr>
+        <tr><td class="m">For scale</td><td class="m" style="white-space:normal">The wire with no NFS, sixteen TCP streams &middot; the loan at its best (build 461)</td><td class="m">48 &middot; 30.3</td></tr>
       </tbody>
     </table></div>
     <p class="note">Sixteen connections throughout. Build 462 is the median and range of three traced runs; the 463 rows are two traced runs each. A change is judged as one of many here, not by its own effect on the rate: what each is worth alone has not been measured.</p>
@@ -332,7 +332,7 @@
         <tr><td>Deferred skb frees, <code>net.core.skb_defer_max</code></td><td class="c">128 (on)</td><td>half of the pages return by the page pool's fast path</td></tr>
         <tr><td>Client</td><td class="c">nconnect 16, 8 MiB writes</td><td>eight WRITEs and one COMMIT, so nfsd does not sync every megabyte</td></tr>
         <tr><td>Storage</td><td class="c">six NVMe drives, MD raid0, XFS</td><td>1 MiB chunk, trimmed before each run</td></tr>
-        <tr><td>Flow placement</td><td class="r">each connection's RSS table entry set, four connections to a ring</td><td>each ring carries a quarter; before 10 October afternoon the runs mounted again until no ring had over 35%</td></tr>
+        <tr><td>Flow placement</td><td class="r" style="white-space:normal">each connection's RSS table entry set, four connections to a ring</td><td>each ring carries a quarter; before 10 October afternoon the runs mounted again until no ring had over 35%</td></tr>
       </tbody>
     </table></div>
     <p class="note">MTU 9000, one port of the card, a separate client machine. Kernel <code>7.1.13-21.hs.463.loanpages_pool.el9.aarch64+16k</code> and kmod-xsight 2.0.1-6.</p>
