@@ -1621,7 +1621,8 @@ measured alone; that is step 6 of the README and waits for Mike.
     alignment (128 bytes on arm64), so the driver rounds the size
     down to it: 5440 is 5376, still 2 and 3. **Written, built, not
     run:** `kernel-rpmtree/xsight/xeu-cut-RX-buffers-smaller-than-a-page-with-rx_buf_size.patch`
-    (the README has the details and the A/B).
+    (Patch6, Release 6, `kernel-rpmtree` 8c58863; the README has the
+    details and the A/B).
     The ring index is a mask, so a ring's size stays a power of two.
   - **What it can and cannot buy (correcting an earlier claim).** The
     unused 7 KiB of a page is never written or read, so it takes no
@@ -1685,7 +1686,7 @@ measured alone; that is step 6 of the README and waits for Mike.
   (`xsight-steering-email.txt`) asks how they behave. **Written the
   same evening, built, not run:**
   `kernel-rpmtree/xsight/xeu-expose-the-RSS-redirection-table-hash-key-and-function-to-ethtool.patch`
-  (untracked, not in the spec). The README's item 3 under "How the
+  (Patch5, Release 6, `kernel-rpmtree` 799acf5). The README's item 3 under "How the
   flows fall on the rings" has what it does and how to try it.
   Three ways remain:
   1. **More flows than rings.** At 64 connections the rings took 28,
