@@ -215,7 +215,7 @@
 <div class="wrap">
 
   <header>
-    <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 463 &middot; 10 October 2026</p>
+    <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 463 &middot; <span style="white-space:nowrap">10 October 2026</span></p>
     <h1>16 KiB pages and 5440-byte receive buffers: <span class="ok">41 GB/s of NFS WRITEs in 21 MiB of the E1's 32 MiB L3 cache.</span></h1>
     <p class="lede"><span class="hl">An NFS server on the E1 now takes 41 GB/s of durable WRITEs from one client</span>: sixteen connections over one port of the Xsight card, copied once on arrival and written direct to six striped NVMe drives. The wire itself carries 48 GB/s to a receiver that stores nothing. Two days earlier the same copy carried 25.4. With the card's receive buffers cut to 5440 bytes it does so in 21 MiB of receive region, inside the CPU's 32 MiB cache, and drops no frame. And the connections no longer fall on the card's receive rings by chance: each is placed, so every ring carries a quarter. <span class="hc">The 41 is the better of two traced runs at each of two settings; the others were 36.6 and 38.3.</span> <a href="#xeu463">What it took is summarized first, below</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
 
@@ -248,7 +248,7 @@
   </header>
 
   <section id="xeu463">
-    <p class="eyebrow ok">Newest &middot; 16 KiB &middot; tardis1 &middot; the Xsight card and six striped NVMe drives &middot; 10 October, build 463</p>
+    <p class="eyebrow ok">Newest &middot; 16 KiB &middot; tardis1 &middot; the Xsight card and six striped NVMe drives &middot; <span style="white-space:nowrap">10 October, build 463</span></p>
     <h2>41 GB/s copied and written direct, in 21 MiB of receive region, with no frame dropped</h2>
     <div class="verdict gain">
       <p class="big">10 October: with receive buffers of 5440 bytes the card puts a 9000-byte frame in two thirds of a page. <em>The copy holds three fifths of the region it did and stops dropping frames</em>, at the same rate.</p>
