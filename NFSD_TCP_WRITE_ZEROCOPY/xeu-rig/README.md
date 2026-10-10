@@ -111,7 +111,14 @@ Record it all as a new section of `../XEU_CONVERGENCE.md`.
 ### 2. `rx_buf_size`: one reload, then the A/B
 
 1. Reload `xeu` with pieces of a page. This is Mike's: it drops
-   `enp164s0f0` for a few seconds.
+   `enp164s0f0` for a few seconds. **Watch this reload:** it may be
+   the first time a pool bound to the region is destroyed on a kernel
+   with the LIFO stack. Destroying the pool drains the stack in
+   `page_pool_empty_ring()` ("page_pool: Recycle a region-bound pool's
+   pages last in, first out"). On build 462, `xeu` was reloaded for
+   kmod release 5, but the docs do not say whether a region was bound
+   then. Have `kernel.panic=10` set (step 0). Afterwards, check `dmesg`
+   for warnings from `page_pool` and that `alloc_fail` is still 0.
 
        echo none > /sys/module/page_pool/parameters/rx_region_dev
        rmmod xeu && modprobe xeu rss_indir_size=128 rx_buf_size=5440
@@ -142,6 +149,15 @@ Read every run's ring shares before comparing rates, or run with
 3. "Does `pools_per_node` earn its place" (64 connections; each pool
    change restarts nfsd, which is Mike's).
 4. The 4 x 128 cell ("The footprint against the L3").
+5. **The region resize test.** "page_pool: Give the fixed receive
+   region back when it is resized" has never run: it was queued after
+   the loan cell when tardis1 crashed. It takes the port down, so it
+   comes after the loads above. With the port down, write the new size
+   (`echo 16384 > /sys/module/page_pool/parameters/rx_region_pages`),
+   then bring the port up. `/sys/kernel/debug/page_pool_rx_region`
+   should show the new size, and the kernel log should show the old
+   region freed. Then `./bringup.sh 32768 256` puts the size back for
+   any later run.
 
 ## tardis1 crashed in the loan cell (2026-10-09, evening)
 
