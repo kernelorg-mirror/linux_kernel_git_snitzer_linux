@@ -8,6 +8,63 @@ of "The boot after build 461" below are done. **Step 6, what each
 change is worth, waits (Mike, 2026-10-09): do not start it unasked.**
 Step 7 has not been run.
 
+## tardis1 crashed in the loan cell (2026-10-09, evening): read first
+
+After the three runs above, the session started the loan cell, traced,
+twice: once with no linger and once with `svc_tcp_rx_linger_us` 50. It
+meant to run the region resize test next. **tardis1 crashed and did
+not reboot itself; it was unreachable until a hard power cycle.** The
+console was not read, and it is not yet known which of those runs was
+going when it crashed.
+
+**The likely cause is a stack overflow in the batched return** ("SUNRPC:
+Return a loaned record's page-pool pages in batches", `bdd837db04f1`).
+`svc_tcp_rx_release_refs()` handed `page_pool_put_netmem_bulk()` up to
+64 pages at a time. That function collects the pages whose last
+reference it drops into an on-stack `bulk[XDP_BULK_QUEUE_SIZE]` (16
+entries) and does not check the bound. A loaned 1 MiB WRITE at 16 KiB
+is 64 or more pages of one pool, and nfsd usually holds their last
+references, so nearly every loaned WRITE wrote up to 48 entries past
+the end of that array on an nfsd thread's stack. Only a loaned record
+takes this path: every copy-mode run of build 462 had the patch loaded
+and never ran it. The loan cell was the first run that did.
+
+Two commits at the tip:
+
+| commit | what |
+|---|---|
+| "SUNRPC: Keep page-pool return batches within the bulk API's bound" | the batch is `XDP_BULK_QUEUE_SIZE`; `Fixes: bdd837db04f1` |
+| "SUNRPC: test releasing more page-pool pages than one bulk batch in the svcsock KUnit suite" | `svcsock_rx_page_pool_bulk_release_test`: 65 pages of one pool, held only by the record, all back in the pool's ring after the release |
+
+`svcsock_kunit` passed 43/43 on the buggy module because no test
+dropped a last reference inside a batch, so nothing was collected. The
+new test passes on the fixed code. **Never run it against a sunrpc
+from before the fix.** It is expected to overflow the stack there and
+can take down whichever host runs it.
+
+**On the boot after the power cycle:**
+
+1. **The sunrpc with the bug is still installed.** It is
+   `/lib/modules/$(uname -r)/updates/sunrpc.ko` (srcversion
+   `988D31FBE6BF6DC88282CB6`) and loads again on boot. Copy mode does
+   not reach the bug; a loan does. Before any loan cell, run
+   `./build-sunrpc.sh` from the tip and `./swap-sunrpc.sh`, then
+   `../run-kunit.sh`: svcsock should be 44/44.
+2. Read the crash from the boot before: `journalctl -k -b -1` if the
+   journal is persistent, or else the BMC console. A
+   `__stack_chk_fail` panic, or a bad PC, under
+   `svc_tcp_rx_release_refs` or `page_pool_put_netmem_bulk` confirms
+   the cause. Anything else means it is still open: the linger, and
+   the region resize ("page_pool: Give the fixed receive region back
+   when it is resized"), are then the suspects.
+3. `sysctl kernel.panic=10` before any load, so that a panic reboots
+   the box instead of leaving it hung.
+4. Then the loan cell's two runs again (no linger, linger 50), and the
+   region resize test only after them.
+
+The state below is from before the crash. A reboot resets everything
+in it except the installed modules.
+
 The state of tardis1 (it does not outlive a reboot, except where said):
 
 - Kernel `7.1.13-21.hs.462.el9.aarch64+16k`. **sunrpc is the module
