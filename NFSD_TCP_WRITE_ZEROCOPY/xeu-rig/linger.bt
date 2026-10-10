@@ -1,0 +1,20 @@
+#!/usr/bin/bpftrace
+/*
+ * linger.bt - how long nfsd's threads wait for the rest of a partly
+ * received TCP record (svc_tcp_rx_linger_us), from the
+ * sunrpc:svcsock_tcp_rx_linger tracepoint: the histogram of the waits
+ * by how each ended (data came, the limit ran out, the transport
+ * closed, the thread had to yield), and the count of each.  The waits
+ * that end on data say what the limit has to be; a timeout is a wait
+ * spent for nothing.  Needs a sunrpc with the tracepoint ("SUNRPC: Trace
+ * how long a thread lingers for the rest of a TCP record").
+ *     timeout -s INT 8 bpftrace linger.bt
+ */
+tracepoint:sunrpc:svcsock_tcp_rx_linger
+{
+	$end = args.end == 0 ? "data" : args.end == 1 ? "timeout" :
+	       args.end == 2 ? "close" : "resched";
+	@waited_us[$end] = hist(args.waited_ns / 1000);
+	@ended[$end] = count();
+	@limit_us = max(args.limit_us);
+}
