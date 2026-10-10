@@ -27,7 +27,7 @@ the card" in `../XEU_CONVERGENCE.md`. In short:
 
 **The state of tardis1** (it does not outlive a reboot, except the
 modprobe file and the installed kmod): `xeu` loaded with
-`rx_buf_size=0`, a 32768-page region bound, rings of 4 x 256,
+`rx_buf_size=5440`, a 32768-page region bound, rings of 4 x 512,
 `rx_refill_thresh` 8, `pools_per_node` 4, nfsd at 512 threads,
 `/dev/md0` on `/hs/stripe`, `kernel.panic` 10. This boot wrote
 about 18 TB to the stripe.
@@ -35,9 +35,10 @@ about 18 TB to the stripe.
 **`rx_buf_size=5440` is settled for now (Mike, 2026-10-10): no more
 runs against the whole page.** What it gives is enough. The next work
 is to settle the other settings around it: ring depth, the held
-buffer, `rx_refill_thresh`, the linger, the pools. `xeu` is still
-loaded with 0 from the A/B's last cell; load it with 5440 (and put it
-in `/etc/modprobe.d/xeu.conf`) before that work starts. The artifact
+buffer, `rx_refill_thresh`, the linger, the pools. It is pinned:
+`/etc/modprobe.d/xeu.conf` has `rx_ip_align=2 rss_indir_size=128
+rx_buf_size=5440`, and `xeu` was reloaded with it (rings of 4 x 512,
+the region bound again, `rx_refill_thresh` 8). The artifact
 was republished on 2026-10-10 with a first section on build 463 and
 the call with Xsight (`id="xeu463"`, `id="call"`).
 
