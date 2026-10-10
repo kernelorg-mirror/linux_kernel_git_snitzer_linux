@@ -1,0 +1,10 @@
+# Ring depth and held buffer around rx_buf_size=5440 (two buffers to a
+# 9000-byte frame, so 512 entries hold 256 frames and 256 hold 128): each
+# depth with the buffer that holds 1 MiB of data at this buffer size
+# (701440: a frame's truesize is 11136 against 16640) and with 1 MiB.
+# The first line is 16k-28-copy-rxbuf5440.plan's cell.
+#     RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+512 701440 0 prp step-copy-n16
+512 1048576 0 prp step-copy-n16
+256 701440 0 prp step-copy-n16
+256 1048576 0 prp step-copy-n16
