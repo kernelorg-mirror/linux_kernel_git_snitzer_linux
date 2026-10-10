@@ -296,7 +296,7 @@
         <tr><td><strong>Pace the load at the source and step it up</strong></td><td class="m">not yet looked at</td><td>The harness can now offer a set rate and raise it in steps</td><td class="m">written, not run</td></tr>
       </tbody>
     </table></div>
-    <p class="note">Not every gain was Xsight's suggestion. The stripe's direct write and the 1 MiB held buffer came from this side's own tracing, the second of them on the afternoon of the call. What the call supplied was the frame to read the traces in: the measure of a change is how soon a buffer is back in the pool and still in cache. The same frame is why 5440-byte buffers are kept though they did not move the rate.</p>
+    <p class="note">Not every gain was Xsight's suggestion. The stripe's direct write and the 1 MiB held buffer came from Hammerspace's own tracing, and the held buffer was found on the afternoon of the call. What the call supplied was the context for reading those traces: a change is measured by how soon a buffer is back in the pool while it is still in cache. The 5440-byte buffers follow from that. They take the receive memory from 34 to 37 MiB, which is more than the L3 cache, down to 21 MiB inside it. That leaves 11 MiB of cache free to spend on the 7 GB/s still to find between 41 and the 48 the wire carries.</p>
     <p><strong>What goes back to Xsight.</strong> The work has produced five patches to their driver, one of which fixes a ring that never refilled once it ran empty, and three questions only they can answer: how the card's Toeplitz hash is computed, whether a flow can be steered to a ring by a filter, and whether interrupt moderation can be exposed. A note putting those to them is drafted.</p>
 
     <h3 style="margin-top:26px">How the copy got here</h3>
