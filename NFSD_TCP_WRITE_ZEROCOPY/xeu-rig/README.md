@@ -147,10 +147,23 @@ sizes, is "Receive buffers smaller than a page" in
 - `xeu` gets a load-time `rx_buf_size`;
 - each receive descriptor takes one piece of a page-pool page, built
   in place as today;
-- at 5440 bytes a 9018-byte frame takes 2 pieces, and a 16 KiB page
-  holds 3, so 2/3 of a page per frame where today it is a whole one.
+- at 5440 bytes (5376 once rounded down to the page pool's 128-byte
+  alignment) a 9018-byte frame takes 2 pieces, and a 16 KiB page holds
+  3, so 2/3 of a page per frame where today it is a whole one.
 
-**Not written.** It is kmod release 6, on top of release 5's patches.
+**Written, built, not run** (9 October, evening):
+`kernel-rpmtree/xsight/xeu-cut-RX-buffers-smaller-than-a-page-with-rx_buf_size.patch`,
+untracked there and not in `xsight.spec`, like the RSS patch. It
+applies at `-p0` after Patch0 to Patch4, alone or with the RSS patch
+in either order. Every object of the module that this host's 4 KiB
+config builds compiles clean (`xeu_ipsec.c` and `xeu_psp.c` need
+config this host lacks), with no new W=1 warnings. Besides the pieces,
+it counts the whole frame (MTU plus Ethernet and VLAN headers) when it
+tells the firmware how many buffers a frame may take, where the MTU
+alone could come out one short. The open logs the size in use. To
+build: add `Patch5:` (and `Patch6:` for the RSS patch) to the spec by
+hand, Release 6, `build-kmod.sh`; a size is set with
+`modprobe xeu rx_buf_size=5440`.
 Lowering the MTU tests nothing: the driver posts a whole page whatever
 the frame. 9000 is the driver's maximum MTU, so it cannot be raised
 either.
@@ -163,13 +176,13 @@ a few seconds, so each reload is Mike's.
 | `rx_buf_size` | ring entries | frames the ring holds | held receive buffer | the same data window |
 |---|---|---|---|---|
 | 0 (a page, the control) | 256 | 256 | 1 MiB | yes |
-| 5440 | 512 | 256 | 680 KiB | yes |
+| 5440 (5376) | 512 | 256 | 672 KiB | yes |
 | 4096 | 1024 | about 341 | 768 KiB | yes; more frames posted |
 
 Every row holds the same frames and the same data in the receive
 buffer. So what changes is the memory per frame, and what that does
-to the rate. 680 and 768 KiB are 1 MiB scaled by each size's truesize
-per frame (10880 and 12288 bytes against 16384). The ring size has to
+to the rate. 672 and 768 KiB are 1 MiB scaled by each size's truesize
+per frame (10752 and 12288 bytes against 16384). The ring size has to
 be a power of two, so 4096 cannot be held at 256 frames.
 
 The order: load 5440 and run the cell twice; load 4096, twice; load
