@@ -1385,7 +1385,11 @@ happen to hash, anew at each mount:
 | copy, 64 connections | 28% | 27% | 20% | 25% | 23915 in 10 s |
 
 `xeu` gives no way to steer: `ethtool -x`, `-n rx-flow-hash` and
-ntuple filters are not supported. The Rx interrupts are on CPUs 0, 2,
+ntuple filters are not supported. (Corrected from the driver source,
+9 October evening: ntuple takes exactly one rule, whose target can
+only be a VF, so it cannot steer to a ring either. The SDK in the
+module has an RSS redirection table and key that `xeu` does not
+expose. See "rings, how the flows fall" under "Since then".) The Rx interrupts are on CPUs 0, 2,
 4 and 6 and the Tx ones on 1, 3, 5 and 7; nfsd's threads are held to
 CPUs 8 to 55 (`taskset -pc` of one), so nfsd is already off the
 rings' CPUs. `irqbalance` is running.
@@ -1655,6 +1659,26 @@ measured alone; that is step 6 of the README and waits for Mike.
   checked on build 461 and is not there: `xeu` supports none of
   `ethtool -x`/`-X`, `-n rx-flow-hash` or ntuple filters ("`xeu`
   gives no way to steer", above). Do not propose them again.
+  **What the driver source shows** (stock 2.0.1, read 9 October
+  evening):
+  - ntuple takes exactly one rule, at location 0, whose target can
+    only be a VF (`xeu_set_rxnfc()`), so it cannot place a flow on a
+    ring.
+  - The Xsight SDK built into the module (`xsl_rm_eunit_lib.o`) has
+    the RSS controls that `xeu` does not wire to `ethtool`:
+    `xsl_rm_reta_set()`/`_get()`, a redirection table of up to 256
+    ring entries; `xsl_rm_rss_hash_set()`/`_get()`, a 68-byte seed
+    and the packet types hashed; and `xsl_rm_rss_hash_type_set()`,
+    Spooky (the default, `PP_RSS_DEFAULT_HASH`), Toeplitz or
+    symmetric Toeplitz.
+  - `xeu` calls only `xsl_rm_rss_configure()`, with its list of rings
+    and `max_rx_buf_per_pkt`.
+  - There are also flow-table RSS groups (`xsl_rm_ft_rss_group_set()`,
+    4 groups for each vNIC).
+
+  So option 3's first ask, `get_rxfh`/`set_rxfh`, may be a small
+  `xeu` change on calls that already exist. The draft to Xsight
+  (`xsight-steering-email.txt`) asks how they behave.
   Three ways remain:
   1. **More flows than rings.** At 64 connections the rings took 28,
      27, 20 and 25% against 25, 6, 31 and 37% at sixteen. This is the
