@@ -32,8 +32,16 @@ modprobe file and the installed kmod): `xeu` loaded with
 `/dev/md0` on `/hs/stripe`, `kernel.panic` 10. This boot wrote
 about 18 TB to the stripe.
 
-**Not done from the list below:** more runs of 5440 against the whole
-page (the A/B's two each do not settle the rate); 5440 at the old
+**`rx_buf_size=5440` is settled for now (Mike, 2026-10-10): no more
+runs against the whole page.** What it gives is enough. The next work
+is to settle the other settings around it: ring depth, the held
+buffer, `rx_refill_thresh`, the linger, the pools. `xeu` is still
+loaded with 0 from the A/B's last cell; load it with 5440 (and put it
+in `/etc/modprobe.d/xeu.conf`) before that work starts. The artifact
+was republished on 2026-10-10 with a first section on build 463 and
+the call with Xsight (`id="xeu463"`, `id="call"`).
+
+**Not done from the list below:** 5440 at the old
 setting of 256 entries and a 1 MiB buffer; and everything in step 3
 (the loan cell that crashed tardis1, the linger's values, the pools,
 4 x 128, the region resize test). Step 0's crash log cannot be read:
