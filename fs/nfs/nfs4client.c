@@ -386,8 +386,27 @@ static void nfs4_add_trunk(struct nfs_client *clp, struct nfs_client *old)
 		.net = old->cl_net,
 		.servername = old->cl_hostname,
 	};
-	int max_connect = test_bit(NFS_CS_PNFS, &clp->cl_flags) ?
-		clp->cl_max_connect : old->cl_max_connect;
+	struct rpc_add_xprt_ctl ctl = {
+		.max_connect = test_bit(NFS_CS_PNFS, &clp->cl_flags) ?
+			clp->cl_max_connect : old->cl_max_connect,
+		.count_addr = true,
+	};
+	/*
+	 * nconnect is a property of the SERVER, not of this mount: every
+	 * address of one server gets the same number of connections.  So it
+	 * comes from old->cl_nconnect, the client this address is being
+	 * folded into, and not from clp->cl_nconnect - clp is the throwaway
+	 * client built for this mount and is about to be discarded.
+	 *
+	 * Taking it per mount would let the second mount of a server pick a
+	 * different count and so create exactly the imbalance this is meant
+	 * to remove - nconnect=4 on one address and 8 on another - and would
+	 * silently give an address 1 connection when a mount omitted
+	 * nconnect= entirely.  A later mount does not get to change a
+	 * server's connection count in either direction.
+	 */
+	unsigned int nconnect = old->cl_nconnect;
+	unsigned int i;
 
 	if (clp->cl_proto != old->cl_proto)
 		return;
@@ -400,8 +419,37 @@ static void nfs4_add_trunk(struct nfs_client *clp, struct nfs_client *old)
 	xprt_args.dstaddr = clp_sap;
 	xprt_args.addrlen = clp_salen;
 
-	rpc_clnt_add_xprt(old->cl_rpcclient, &xprt_args,
-			  rpc_clnt_test_and_add_xprt, &max_connect);
+	/*
+	 * A repeat mount of an address this client is already trunking must
+	 * not grow the switch by another nconnect transports.  The first
+	 * add would short circuit inside rpc_clnt_test_and_add_xprt()
+	 * anyway; this stops the additional connections as well.
+	 */
+	if (rpc_clnt_xprt_switch_has_addr(old->cl_rpcclient, clp_sap))
+		return;
+
+	if (rpc_clnt_add_xprt(old->cl_rpcclient, &xprt_args,
+			      rpc_clnt_test_and_add_xprt, &ctl) < 0)
+		return;
+
+	/*
+	 * rpc_create() gives the address the client was mounted on
+	 * args->nconnect transports; without this loop every other address
+	 * of the same server gets exactly one, so a round robin iterator
+	 * hands that address 1/nconnect of the work and a second server NIC
+	 * stays idle.
+	 *
+	 * Each of these is trunking tested exactly like the first, so a
+	 * transport still only reaches the switch via rpc_cb_add_xprt_done()
+	 * on a successful NULL RPC.  count_addr is cleared because the
+	 * address has already been counted against max_connect.
+	 */
+	ctl.count_addr = false;
+	for (i = 1; i < nconnect; i++) {
+		if (rpc_clnt_add_xprt(old->cl_rpcclient, &xprt_args,
+				      rpc_clnt_test_and_add_xprt, &ctl) < 0)
+			break;
+	}
 }
 
 /**

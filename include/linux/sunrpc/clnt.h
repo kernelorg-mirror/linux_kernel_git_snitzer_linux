@@ -239,10 +239,27 @@ int 		rpc_clnt_iterate_for_each_xprt(struct rpc_clnt *clnt,
 			int (*fn)(struct rpc_clnt *, struct rpc_xprt *, void *),
 			void *data);
 
+/*
+ * Setup-callback data for rpc_clnt_test_and_add_xprt().  Passing NULL keeps
+ * the historic behaviour: the cap comes from clnt->cl_max_connect and the
+ * transport accounts for its destination address.
+ *
+ * count_addr is false for the second and subsequent connections to a
+ * destination address that has already been accounted for.  Those still get
+ * the same trunking test as the first one; they just do not consume another
+ * max_connect slot, because max_connect limits unique destination addresses
+ * and nconnect connections are explicitly outside that budget - see commit
+ * 7e134205f629 ("NFSv4 introduce max_connect mount options").
+ */
+struct rpc_add_xprt_ctl {
+	int	max_connect;
+	bool	count_addr;
+};
+
 int 		rpc_clnt_test_and_add_xprt(struct rpc_clnt *clnt,
 			struct rpc_xprt_switch *xps,
 			struct rpc_xprt *xprt,
-			void *dummy);
+			void *ctl);
 int		rpc_clnt_add_xprt(struct rpc_clnt *, struct xprt_create *,
 			int (*setup)(struct rpc_clnt *,
 				struct rpc_xprt_switch *,
