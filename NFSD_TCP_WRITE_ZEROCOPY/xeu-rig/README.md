@@ -66,6 +66,51 @@ can take down whichever host runs it.
 The state below is from before the crash. A reboot resets everything
 in it except the installed modules.
 
+## Is the linger worth its CPU in copy mode: 50, 25, 20 and 0 us
+
+What build 462 says so far (the whole stack, sixteen connections):
+
+| linger | runs | GB/s | CPU-seconds per GB | calls per WRITE |
+|---|---|---|---|---|
+| 50 us | 3 | 38.3, 38.0, 36.7 | 0.52, 0.52, 0.51 | 2.1, 2.1, 2.3 |
+| 0 (`xeu-16k-462-minus-linger`) | 1 | 37.2 | 0.43 | 6.9 |
+
+The linger does its job: a WRITE is received in about 2 calls where it
+took 7. But in copy mode it has not shown a gain in rate (37.2 is inside
+the spread of the three runs at 50), and it costs about a fifth more
+server CPU for each GB (0.52 against 0.43). Much of what it was meant
+to save between threads, the page swap already saves: a record that
+changes hands no longer frees and allocates its pages. And the copy is
+held by the L3 and by how the flows fall onto the rings, not by the
+server's CPU (38 GB/s at 0.52 is about 20 of the 64 CPUs). So in copy
+mode the linger's worth is open. A shorter wait could keep the calls
+near 2 at less CPU, or show that the linger is not needed in copy mode.
+For the loan it is a separate question: a loaned record that changes
+hands carries its loan table with it.
+
+- **The cell:** `plans/16k-26-copybest.plan` (rings of 4 x 256, 1 MiB
+  held buffer), the rest of the stack as on build 462, with
+  `RX_LINGER_US` at 50, 25, 20 and 0. The linger is set for each run,
+  so nothing needs a build or an nfsd restart and no client is dropped.
+  50 is run again as this boot's control, and 0 is the cell that
+  answers whether the linger is needed at all.
+- **The order:** after the fixed sunrpc is in place. 50, 25, 20, 0, and
+  then all four again. Eight runs of about 3 TB is 24 TB on the stripe:
+  say so to Mike before the queue, and trim before each run.
+
+      RX_LINGER_US=<us> PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe STEP_JOBS=16 STEP_BS=8M ./trace-sweep.sh $L/xeu-16k-<build>-linger<us>-<k> plans/16k-26-copybest.plan
+
+- **What decides it:** `@calls_per_write` and `@write_in_calls_us` in
+  `handoff-*.txt`, CPU-seconds per GB, `arch_counter_get_cntpct`'s share
+  of the profile, and the rate. The best value is the shortest linger
+  that keeps calls near 2, if the rate holds. If 0 runs as fast as the
+  others at less CPU, the linger is off for copy mode.
+- **Not measured, and what would pick the value directly:** how long
+  each wait lasts before data comes. `handoff.bt` does not record it,
+  and `svc_tcp_rx_linger()` is a static function that may be inlined. A
+  histogram of it would need a tracepoint or a counter in the wait
+  loop.
+
 ## The page-pool work items: what was done (2026-10-09, evening)
 
 T1 and T2 in `../XEU_CONVERGENCE.md` suggested three things for a pool
@@ -203,8 +248,8 @@ thread lingers, which is why CPU per GB went from 0.49 to 0.52.
 Three ways to reduce it, none written or run:
 
 - **A shorter linger.** A piece is about 13 us in coming, and 50 was a
-  first guess. Try 20 and 25 with `RX_LINGER_US`, and read calls per
-  WRITE in `handoff-*.txt` against CPU per GB.
+  first guess. Planned: "Is the linger worth its CPU in copy mode"
+  below.
 - **Sleeping instead of spinning.** The thread sleeps until
   `svc_data_ready()` wakes it, with a timer bounding the wait. One
   thread still receives the record and no core is held, at the cost of
