@@ -2996,19 +2996,24 @@ static const struct rpc_call_ops rpc_cb_add_xprt_call_ops = {
  * @clnt: pointer to struct rpc_clnt
  * @xps: pointer to struct rpc_xprt_switch,
  * @xprt: pointer struct rpc_xprt
- * @in_max_connect: pointer to the max_connect value for the passed in xprt transport
+ * @in_ctl: optional struct rpc_add_xprt_ctl; NULL means cap on
+ * clnt->cl_max_connect and account for the destination address
  */
 int rpc_clnt_test_and_add_xprt(struct rpc_clnt *clnt,
 		struct rpc_xprt_switch *xps, struct rpc_xprt *xprt,
-		void *in_max_connect)
+		void *in_ctl)
 {
 	struct rpc_cb_add_xprt_calldata *data;
+	struct rpc_add_xprt_ctl *ctl = in_ctl;
 	struct rpc_task *task;
 	int max_connect = clnt->cl_max_connect;
+	bool count_addr = true;
 
-	if (in_max_connect)
-		max_connect = *(int *)in_max_connect;
-	if (xps->xps_nunique_destaddr_xprts + 1 > max_connect) {
+	if (ctl) {
+		max_connect = ctl->max_connect;
+		count_addr = ctl->count_addr;
+	}
+	if (count_addr && xps->xps_nunique_destaddr_xprts + 1 > max_connect) {
 		rcu_read_lock();
 		pr_warn("SUNRPC: reached max allowed number (%d) did not add "
 			"transport to server: %s\n", max_connect,
@@ -3022,7 +3027,13 @@ int rpc_clnt_test_and_add_xprt(struct rpc_clnt *clnt,
 		return -ENOMEM;
 	data->xps = xprt_switch_get(xps);
 	data->xprt = xprt_get(xprt);
-	if (rpc_xprt_switch_has_addr(data->xps, (struct sockaddr *)&xprt->addr)) {
+	/*
+	 * An address already in the switch needs no further trunking test -
+	 * unless we were asked for another connection to it, in which case
+	 * the point is precisely to add one more.
+	 */
+	if (count_addr &&
+	    rpc_xprt_switch_has_addr(data->xps, (struct sockaddr *)&xprt->addr)) {
 		rpc_cb_add_xprt_release(data);
 		goto success;
 	}
@@ -3032,7 +3043,8 @@ int rpc_clnt_test_and_add_xprt(struct rpc_clnt *clnt,
 	if (IS_ERR(task))
 		return PTR_ERR(task);
 
-	data->xps->xps_nunique_destaddr_xprts++;
+	if (count_addr)
+		data->xps->xps_nunique_destaddr_xprts++;
 	rpc_put_task(task);
 success:
 	return 1;
