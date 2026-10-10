@@ -1,0 +1,9 @@
+# Thirty-two connections (STEP_MOUNTS=2: two mounts of nconnect 16, to two
+# addresses of the server on the port) on rx_buf_size=5440 and rings of
+# 4 x 512, at both held buffers.  STEP_JOBS stays 16, eight writers to a
+# mount, so only the number of connections differs from
+# 16k-29-depth-buf.plan's first two lines.  A connection is read by one
+# thread at a time and a 1 MiB WRITE takes about 360 us to receive on it.
+#     STEP_MOUNTS=2 RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+512 1048576 0 prp step-copy-n16
+512 701440 0 prp step-copy-n16
