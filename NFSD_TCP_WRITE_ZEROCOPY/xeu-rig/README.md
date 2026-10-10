@@ -65,9 +65,13 @@ went past the L3 (32 to 33 MiB). With the 685 KiB buffer eight rings carry 39.8 
 rings' rate. The rings' CPUs are not the limit. **The port is back at
 4 rings of 512 entries and nfsd's threads on CPUs 8-55.** A 1 MiB
 WRITE takes about 360 us to receive on its connection, one thread at
-a time, so sixteen connections top out near 46 GB/s: the next thing
-to try is 32 connections (`STEP_MOUNTS=2`) ("Eight rings: the rings'
-CPUs were not the limit" in `../XEU_CONVERGENCE.md`).
+a time, so sixteen connections top out near 46 GB/s: 32 connections
+(`STEP_MOUNTS=2`) were tried and the client fell over: 12 GB/s with
+the client's CPUs 80% in system time and the server 88% idle. Mike
+stopped the queue. **Do not run two mounts from this client again
+without looking at the client first** ("Thirty-two connections" in
+`../XEU_CONVERGENCE.md`; it also records a page pool that has not
+finished shutting down since the 8-to-4 ring change).
 
 **Not done from the list below:** 5440 at the old
 setting of 256 entries and a 1 MiB buffer; and everything in step 3

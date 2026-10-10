@@ -2381,6 +2381,55 @@ After the follow-up the port was put back to 4 rings of 512 entries
 (`ethtool -X equal 4` first: the ring count cannot be lowered while
 the table names a ring that would go) and nfsd's threads to CPUs 8-55.
 
+### Thirty-two connections: the client fell over, and the queue was stopped (10 October, 17:15 to 17:30)
+
+`plans/16k-31-conns32.plan`, `STEP_MOUNTS=2` (two mounts of nconnect
+16 to two addresses of the server), sixteen writers as before, rings
+of 4 x 512, `PLACE=1`, traced. The first pass ran; **Mike stopped the
+second pass in its first cell (the client was clearly unhappy)**.
+`$L/xeu-16k-463-conns32-1` has the two cells; `-2` is a stopped cell
+and is not a result.
+
+| held buffer | GB/s | region pages | ring drops | retransmits | RTOs |
+|---|---|---|---|---|---|
+| 1 MiB | 12.2 | 2580 | 26995 | 64633 | 28 |
+| 685 KiB | 12.1 | 2532 | 32 | 4448 | 9 |
+
+**This is not a figure for the server.** In the 1 MiB cell the
+client's CPUs were 80% in system time and 15% idle (41% and 46% in the
+one-mount cells) and the server 88% idle. The client's connections
+waited on the server's window 48% to 71% of the time, against 95% to
+99% with one mount. A 1 MiB WRITE took 1.86 ms from its first read to
+its last, of which 0.27 ms was reading: the data was not arriving.
+What the client was doing is not known: it has no `perf`.
+
+Not ours, on the client (192.168.1.106) at the time: an NFS mount of
+192.168.1.161 not responding, with eighteen `find` blocked on it and
+a load average over 100, and two `grep` at 100% of a CPU each for
+weeks. Whether the client collapses with two mounts on a quiet day
+was not separated from that.
+
+**It puts T10 in question** ("Sixty-four connections did not help the
+copy: 21.1 GB/s", build 461, four mounts): that was read as the
+server's doing and the client's CPUs were not looked at.
+
+Placement worked with 32 flows over two mounts: 10/7/7/8 and 9/7/8/8
+flows a ring (balanced by bytes), the busiest ring 29% and 26% in the
+check.
+
+Stopping it: the driver, `trace-sweep.sh` and `sweep.sh` were killed
+by PID and `run-budget.sh` sent TERM, whose exit trap took the export
+and the second address down; `fio` was killed on the client, which
+had no mount left; the cell's files were removed from the export.
+
+**Left over from the ring change of 17:14 (8 rings to 4): one page
+pool does not finish shutting down.** `page_pool_release_retry()
+stalled pool shutdown: id 454, 24 inflight`, once a minute since. 24
+pages of a pool of rings 4 to 7 are still out. One guess, not shown:
+skbs on the deferred-free lists of CPUs 8 to 14, which are flushed by
+those CPUs' own receive softirq, and no ring interrupts there any
+more. A loopback ping from every CPU was tried to flush them.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
