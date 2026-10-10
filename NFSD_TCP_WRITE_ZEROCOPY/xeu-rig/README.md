@@ -29,12 +29,13 @@ the end of that array on an nfsd thread's stack. Only a loaned record
 takes this path: every copy-mode run of build 462 had the patch loaded
 and never ran it. The loan cell was the first run that did.
 
-Two commits at the tip:
+Three commits at the tip:
 
 | commit | what |
 |---|---|
 | "SUNRPC: Keep page-pool return batches within the bulk API's bound" | the batch is `XDP_BULK_QUEUE_SIZE`; `Fixes: bdd837db04f1` |
 | "SUNRPC: test releasing more page-pool pages than one bulk batch in the svcsock KUnit suite" | `svcsock_rx_page_pool_bulk_release_test`: 65 pages of one pool, held only by the record, all back in the pool's ring after the release |
+| "SUNRPC: Refuse to build a page-pool return batch the bulk API cannot take" | a `BUILD_BUG_ON` in `svc_tcp_rx_release_refs()`: a batch over `XDP_BULK_QUEUE_SIZE` fails the build (checked: 64 does) |
 
 `svcsock_kunit` passed 43/43 on the buggy module because no test
 dropped a last reference inside a batch, so nothing was collected. The
