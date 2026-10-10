@@ -153,15 +153,16 @@ sizes, is "Receive buffers smaller than a page" in
 
 **Written, built, not run** (9 October, evening):
 `kernel-rpmtree/xsight/xeu-cut-RX-buffers-smaller-than-a-page-with-rx_buf_size.patch`,
-Patch6 of `xsight.spec`, Release 6 (`kernel-rpmtree` 8c58863,
-unpushed). The spec's `%prep` applies Patch0 to Patch6 in order. Every object of the module that this host's 4 KiB
-config builds compiles clean (`xeu_ipsec.c` and `xeu_psp.c` need
-config this host lacks), with no new W=1 warnings. Besides the pieces,
-it counts the whole frame (MTU plus Ethernet and VLAN headers) when it
-tells the firmware how many buffers a frame may take, where the MTU
-alone could come out one short. The open logs the size in use. To
-build: `build-kmod.sh` (Release 6 has both patches); a size is set
-with `modprobe xeu rx_buf_size=5440`.
+Patch6 of `xsight.spec`, Release 6 (`kernel-rpmtree` 8c58863, on its
+`xsight-WIP3` branch). The spec's `%prep` applies Patch0 to Patch6 in
+order. Every object of the module that this host's 4 KiB config builds
+compiles clean (`xeu_ipsec.c` and `xeu_psp.c` need config this host
+lacks), with no new W=1 warnings. Besides the pieces, it counts the
+whole frame (MTU plus Ethernet and VLAN headers) when it tells the
+firmware how many buffers a frame may take, where the MTU alone could
+come out one short. The open logs the size in use. To build: `build-
+kmod.sh` (Release 6 has both patches); a size is set with `modprobe
+xeu rx_buf_size=5440`.
 Lowering the MTU tests nothing: the driver posts a whole page whatever
 the frame. 9000 is the driver's maximum MTU, so it cannot be raised
 either.
@@ -250,7 +251,7 @@ work items, all three also in that document's "Since then" list:
    written** (9 October, evening; built, not run):
    `kernel-rpmtree/xsight/xeu-expose-the-RSS-redirection-table-hash-key-and-function-to-ethtool.patch`,
    Patch5 of `xsight.spec`, Release 6 (`kernel-rpmtree` 799acf5,
-   unpushed). It wires `ethtool -x`/`-X`
+   on its `xsight-WIP3` branch). It wires `ethtool -x`/`-X`
    to the SDK's existing calls:
    - the redirection table, sized by the new load-time
      `rss_indir_size` (default 0 means no table, as before; at most
@@ -391,7 +392,8 @@ and 440 thousand drops); the linger's busy wait, 14% to 17% of cycles;
 itself (now a work item: "Receive buffers smaller than a page"
 above). The driver's `rx_refill_thresh` patch is Release 5 in
 `kernel-rpmtree` (3bc8f82); Release 6 adds the RSS and `rx_buf_size`
-patches (799acf5, 8c58863). None of it is pushed.
+patches (799acf5, 8c58863). Mike pushed them to the `xsight-WIP3`
+branch of the kernel-rpmtree remote; `main` there does not have them.
 
 **The footprint against the L3 is the next lever for the copy.** Build
 462 used 2052 to 2291 region pages, 32 to 36 MiB, which is the whole
