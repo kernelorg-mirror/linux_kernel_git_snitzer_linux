@@ -216,15 +216,15 @@
 
   <header>
     <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 463 &middot; 10&nbsp;October&nbsp;2026</p>
-    <h1>16 KiB pages and 5440-byte receive buffers: <span class="ok">41 GB/s of NFS WRITEs in 21 MiB of the E1's 32 MiB L3 cache.</span></h1>
-    <p class="lede"><span class="hl">An NFS server on the E1 now takes 41 GB/s of durable WRITEs from one client</span>: sixteen connections over one port of the Xsight card, copied once on arrival and written direct to six striped NVMe drives. The wire itself carries 48 GB/s to a receiver that stores nothing. Two days earlier the same copy carried 25.4. With the card's receive buffers cut to 5440 bytes it does so in 21 MiB of receive region, inside the CPU's 32 MiB cache, and drops no frame. And the connections no longer fall on the card's receive rings by chance: each is placed, so every ring carries a quarter. Placed, that setting repeats at 39.4 to 39.9 GB/s, and with each connection's receive buffer held at 1 MiB it carries 40.7 to 41.8 in 29 to 30 MiB. <span class="hc">The 41 is the better of two traced runs at each of two settings; the others were 36.6 and 38.3.</span> <a href="#xeu463">What it took is summarized first, below</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
+    <h1>16 KiB pages and 5440-byte receive buffers: <span class="ok">41.8 GB/s of NFS WRITEs inside the E1's 32 MiB L3 cache.</span></h1>
+    <p class="lede"><span class="hl">An NFS server on the E1 now takes 41.8 GB/s of durable WRITEs from one client</span>: sixteen connections over one port of the Xsight card, copied once on arrival and written direct to six striped NVMe drives. The wire itself carries 48 GB/s to a receiver that stores nothing. Two days earlier the same copy carried 25.4. The receive memory in use stays at 30 MiB, inside the CPU's 32 MiB cache, and no frame is dropped. Three settings do it together: the card's receive buffers cut to 5440 bytes, each connection's receive buffer held at 1 MiB, and every connection placed on a receive ring so that each ring carries a quarter. <span class="hc">The 41.8 is the better of two traced runs; the other was 40.7. With a smaller held buffer the same load repeats at 39.4 to 39.9 GB/s in 21 to 24 MiB.</span> <a href="#xeu463">What it took is summarized first, below</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
 
 
     <div class="metrics">
-      <div class="metric"><div class="n gain">41 GB/s</div><div class="l">durable NFS WRITEs,<br>best of two runs (36.6 the other)</div></div>
-      <div class="metric"><div class="n gain">21 MiB</div><div class="l">receive memory used,<br>of 32 MiB L3 cache</div></div>
+      <div class="metric"><div class="n gain">41.8 GB/s</div><div class="l">durable NFS WRITEs,<br>best of two runs (40.7 the other)</div></div>
+      <div class="metric"><div class="n gain">30 MiB</div><div class="l">receive memory used,<br>of 32 MiB L3 cache</div></div>
       <div class="metric"><div class="n gain">0</div><div class="l">frames dropped<br>at the receive rings</div></div>
-      <div class="metric"><div class="n">25.4 &rarr; 41</div><div class="l">GB/s, the same copy,<br>8 to 10 October</div></div>
+      <div class="metric"><div class="n">25.4 &rarr; 41.8</div><div class="l">GB/s, the same copy,<br>8 to 10 October</div></div>
     </div>
 
     <div class="prov">
@@ -249,7 +249,7 @@
 
   <section id="xeu463">
     <p class="eyebrow ok"><span>Newest &middot; 16 KiB &middot; tardis1 &middot; the Xsight card and six striped NVMe drives<br>10 October, build 463</span></p>
-    <h2>41 GB/s copied and written direct, in 21 MiB of receive region, with no frame dropped</h2>
+    <h2>41.8 GB/s copied and written direct, inside the 32 MiB cache, with no frame dropped</h2>
     <div class="verdict gain">
       <p class="big">10 October: with receive buffers of 5440 bytes the card puts a 9000-byte frame in two thirds of a page. <em>The copy holds three fifths of the region it did and stops dropping frames</em>, at the same rate.</p>
       <p>Until now the <code>xeu</code> driver gave every frame a whole 16 KiB page, so more than 7 KiB of each was never written. A new load-time setting, <code>rx_buf_size</code>, cuts each page into pieces: at 5440 bytes a page holds three and a full frame takes two. The table is the same NFS load at three buffer sizes: sixteen connections writing 8 MiB at a time, copied by nfsd and written direct to the stripe, two traced runs of 120 seconds each.</p>
@@ -321,7 +321,7 @@
       <div class="metric"><div class="n">27.7 GB/s</div><div class="l">the direct copy at the<br>time of the call</div></div>
       <div class="metric"><div class="n gain">35.9</div><div class="l">the same afternoon,<br>after tracing</div></div>
       <div class="metric"><div class="n gain">38.0</div><div class="l">that evening, with the<br>changes loaded (build 462)</div></div>
-      <div class="metric"><div class="n gain">41</div><div class="l">the next day (build 463),<br>in 21 MiB of region</div></div>
+      <div class="metric"><div class="n gain">41.8</div><div class="l">the next day (build 463),<br>inside the L3 cache</div></div>
     </div>
     <p style="margin-top:18px"><strong>What Hammerspace brought to it.</strong> By 9 October there had been a week of runs on the card, and so the call could be about how a buffer lives and not about which features the card lacks. The measurements already said that the wire carries line rate when nothing has to be stored, that the copy stopped near 25 to 28 GB/s, that the client spent its time waiting on the server, that the receive memory was being held inside the 32 MiB cache with back pressure to the sender, and that the page pool's locking was one of the costs. Earlier requests to Xsight had been for features other cards have, such as header-data split and coalescing of received frames. With those figures in hand the question put to them was a better one: how does a buffer have to move for this hardware to perform?</p>
     <p><strong>What Xsight said.</strong> A buffer has to be used again while it is still in the cache, so its whole life, from the ring to the copy and back to the pool, must fit in the cache's footprint. The buffer freed last should be the one allocated next, as DPDK does. One burst of delay can push the buffers out of cache into a slower state that does not recover, so try a load paced at the source and raised in steps. Flows reach the rings by the hash of their addresses and ports, so an even spread needs many more flows than rings, and is read from the per-ring counters as differences. More rings, or deeper ones, is more memory posted.</p>
@@ -336,7 +336,7 @@
         <tr><td><strong>Pace the load at the source and step it up</strong></td><td class="m">not yet looked at</td><td>The harness can now offer a set rate and raise it in steps</td><td class="m">written, not run</td></tr>
       </tbody>
     </table></div>
-    <p class="note">Not every gain was Xsight's suggestion. The stripe's direct write and the 1 MiB held buffer came from Hammerspace's own tracing, and the held buffer was found on the afternoon of the call. What the call supplied was the context for reading those traces: a change is measured by how soon a buffer is back in the pool while it is still in cache. The 5440-byte buffers follow from that. They take the receive memory from 34 to 37 MiB, which is more than the L3 cache, down to 21 MiB inside it. That leaves 11 MiB of cache free to spend on the 7 GB/s still to find between 41 and the 48 the wire carries.</p>
+    <p class="note">Not every gain was Xsight's suggestion. The stripe's direct write and the 1 MiB held buffer came from Hammerspace's own tracing, and the held buffer was found on the afternoon of the call. What the call supplied was the context for reading those traces: a change is measured by how soon a buffer is back in the pool while it is still in cache. The 5440-byte buffers follow from that. They take the receive memory from 34 to 37 MiB, which is more than the L3 cache, down to 21 MiB inside it. That left 11 MiB of cache free. The 1 MiB receive buffer now spends most of it to reach 41.8 GB/s, and about 6 GB/s remain to the 48 the wire carries.</p>
     <p><strong>What goes back to Xsight.</strong> The work has produced five patches to their driver, one of which fixes a ring that never refilled once it ran empty, and three questions only they can answer: how the card's Toeplitz hash is computed, whether a flow can be steered to a ring by a filter, and whether interrupt moderation can be exposed. A note putting those to them is drafted.</p>
 
     <h3 style="margin-top:26px">How the copy got here</h3>
