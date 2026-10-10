@@ -18,6 +18,7 @@
 #include <net/net_namespace.h>
 #include <net/page_pool/helpers.h>
 #include <net/tcp.h>
+#include <net/xdp.h>
 
 #define SVCSOCK_RX_TEST_PROGRAM	100003
 #define SVCSOCK_RX_TEST_VERSION	3
@@ -2617,6 +2618,97 @@ static void svcsock_rx_page_pool_recycle_test(struct kunit *test)
 	KUNIT_EXPECT_PTR_EQ(test, pp->page, page);
 }
 
+/* More than one full batch of one pool's pages, and a remainder. */
+#define SVCSOCK_RX_TEST_BULK_PAGES	(4 * XDP_BULK_QUEUE_SIZE + 1)
+
+struct svcsock_rx_pp_set {
+	struct page_pool *pool;
+	unsigned int held;	/* pages[0..held) are the test's to put */
+	struct page *pages[SVCSOCK_RX_TEST_BULK_PAGES];
+};
+
+static void svcsock_rx_pp_set_release(void *data)
+{
+	struct svcsock_rx_pp_set *set = data;
+
+	while (set->held)
+		page_pool_put_full_page(set->pool, set->pages[--set->held],
+					false);
+	page_pool_destroy(set->pool);
+}
+
+/*
+ * A record whose page-pool pages it alone holds gives them all back to
+ * their pool when it is released.  The pages go to the pool in batches;
+ * page_pool_put_netmem_bulk() takes no more than XDP_BULK_QUEUE_SIZE at
+ * a time, so a record of more pages than that, all of one pool and all
+ * dropping their last reference, must be split before it gets there.
+ */
+static void svcsock_rx_page_pool_bulk_release_test(struct kunit *test)
+{
+	struct page_pool_params params = {
+		.order = 0,
+		.pool_size = 2 * SVCSOCK_RX_TEST_BULK_PAGES,
+		.nid = NUMA_NO_NODE,
+	};
+	struct svc_tcp_rx_state *state;
+	struct svcsock_rx_pp_set *set;
+	unsigned int i, refs;
+	netmem_ref netmem;
+
+	if (!IS_ENABLED(CONFIG_PAGE_POOL))
+		kunit_skip(test, "CONFIG_PAGE_POOL is not set");
+	set = kunit_kzalloc(test, sizeof(*set), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, set);
+	set->pool = page_pool_create(&params);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(set->pool));
+	KUNIT_ASSERT_EQ(test,
+			kunit_add_action_or_reset(test,
+						  svcsock_rx_pp_set_release,
+						  set),
+			0);
+	state = svcsock_rx_alloc_state(test, SVCSOCK_RX_TEST_BULK_PAGES);
+	KUNIT_ASSERT_NOT_NULL(test, state);
+
+	for (i = 0; i < SVCSOCK_RX_TEST_BULK_PAGES; i++) {
+		struct page *page = page_pool_alloc_pages(set->pool,
+							  GFP_KERNEL);
+
+		KUNIT_ASSERT_NOT_NULL(test, page);
+		set->pages[set->held++] = page;
+		KUNIT_ASSERT_EQ(test,
+				svc_tcp_rx_append_borrowed(state, page, 1, 3,
+							   true), 0);
+	}
+	KUNIT_EXPECT_EQ(test, state->count, SVCSOCK_RX_TEST_BULK_PAGES);
+	refs = page_ref_count(set->pages[0]);
+
+	/* The record now holds each page's last reference. */
+	while (set->held)
+		page_pool_put_full_page(set->pool, set->pages[--set->held],
+					false);
+	KUNIT_EXPECT_TRUE(test, ptr_ring_empty(&set->pool->ring));
+
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
+	KUNIT_EXPECT_EQ(test, state->refs_acquired, state->refs_released);
+	KUNIT_EXPECT_EQ(test, state->borrowed_count, 0U);
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->borrowed, state->capacity));
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->page_pool, state->capacity));
+
+	/* Every page went back to the pool, none to the page allocator. */
+	while (set->held < SVCSOCK_RX_TEST_BULK_PAGES &&
+	       (netmem = (__force netmem_ref)
+			ptr_ring_consume_bh(&set->pool->ring))) {
+		struct page *page = netmem_to_page(netmem);
+
+		set->pages[set->held++] = page;
+		KUNIT_EXPECT_TRUE(test, page_pool_page_is_pp(page));
+		KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+	}
+	KUNIT_EXPECT_EQ(test, set->held, SVCSOCK_RX_TEST_BULK_PAGES);
+	KUNIT_EXPECT_TRUE(test, ptr_ring_empty(&set->pool->ring));
+}
+
 static void svcsock_rx_duplicate_cleanup_test(struct kunit *test)
 {
 	struct svc_tcp_rx_state *release_state = svcsock_rx_alloc_state(test, 1);
@@ -2856,6 +2948,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_capacity_sizing_test),
 	KUNIT_CASE(svcsock_rx_arena_bound_test),
 	KUNIT_CASE(svcsock_rx_page_pool_recycle_test),
+	KUNIT_CASE(svcsock_rx_page_pool_bulk_release_test),
 	KUNIT_CASE(svcsock_rx_skb_region_pages_test),
 	KUNIT_CASE(svcsock_rx_region_count_test),
 	KUNIT_CASE(svcsock_rx_duplicate_cleanup_test),
