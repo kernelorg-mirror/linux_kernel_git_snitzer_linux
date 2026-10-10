@@ -171,6 +171,22 @@ and 440 thousand drops); the linger's busy wait, 14% to 17% of cycles;
 itself. The driver's `rx_refill_thresh` patch is still uncommitted in
 `kernel-rpmtree`.
 
+**The footprint against the L3 is the next lever for the copy.** Build
+462 used 2052 to 2291 region pages, 32 to 36 MiB, which is the whole
+L3. On build 461 the copy's time was set by how much of the region was
+in use: a 1 MiB WRITE's calls took 224 us with 24 MiB in use, 269 with
+32 and 357 with 48, and `memmove` rose from 24% of cycles to 38%
+("The copy with a larger held buffer", F2). With `memmove` still 25%
+to 27% of cycles, whatever keeps the pages in use under 32 MiB should
+show directly in the copy's time. First, rings of 4 x 128 on the
+whole stack, against 4 x 256. On build 461 that ring size used
+24 MiB and ran at 35.6 GB/s, but dropped 1.5 million frames. On build
+462 the drops at 4 x 256 fell from 250 thousand to about 3 thousand,
+so what to read is whether 4 x 128 now holds without dropping. The
+cell is `plans/16k-27-copy128.plan`, run the same way as
+`16k-26-copybest.plan`, two or three runs of each: how the flows fell
+onto the rings moved build 462's runs by 4% on its own.
+
 ## Before the reboot into build 462 (2026-10-09, 17:30)
 
 **Read this section first; the handoff below it was written before the
@@ -283,7 +299,8 @@ clients have to be dropped once and not twice.
 7. Not run on any kernel: a load paced at the source (`STEP_RATE`,
    below); 64 connections at a 1 MiB buffer (planned: "Does
    `pools_per_node` earn its place" above); a 2 MiB buffer; rings of
-   4 x 128 against 4 x 256.
+   4 x 128 against 4 x 256 (why it matters now: "The footprint
+   against the L3" at the top).
 
 `smartctl` is not installed, so the drives' wear is not read; 9 October
 wrote about 90 TB to the stripe, 15 TB a drive.
