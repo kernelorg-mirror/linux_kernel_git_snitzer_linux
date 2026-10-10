@@ -839,6 +839,55 @@ J
 	esac
 }
 
+# BALANCE=<percent> (hardware client, step cells with STEP_JOBS): before a
+# cell is measured, mount, run a short load (BALANCE_SECS, default 4 s, the
+# cell's own writers on files of their own) and read what each receive ring
+# of the port took.  If the busiest ring took more than <percent> of it,
+# unmount and mount again: the connections get new source ports, so their
+# flows hash to rings afresh.  At most BALANCE_TRIES mounts (default 6); if
+# none comes within <percent>, the cell runs on the last and says so.  This
+# does not make the flows even (xeu cannot steer them); it keeps one bad
+# fall of the flows from deciding a cell.  Each try is a line of
+# <cell>/balance.txt.
+ringbytes() { ethtool -S "$RDEV" | awk '$1 ~ /^ring_[0-9]+_rx_bytes:$/ {sub(/:$/, "", $1); print $1, $2}'; }
+cports() { ss -Htn state established '( sport = :2049 )' dst "$CLNET" | awk '{n = split($4, a, ":"); print a[n]}' | sort -n | tr '\n' ' '; }
+# balance_mount <cell dir> <client's cell dir> <mounts> <unmounts>: leaves
+# the cell's mounts up and sets BAL_SHARE to the busiest ring's percent;
+# returns non-zero if a mount failed.
+balance_mount() {
+	local O=$1 CO=$2 xm=$3 xu=$4 t=0 r0 r1 share shares ports prev=""
+	local lim=$BALANCE tries=${BALANCE_TRIES:-6}
+	sed -e "s/^runtime=.*/runtime=${BALANCE_SECS:-4}/" \
+	    -e 's#\([=/]\)f-#\1bal-#' "$O/job.fio" > "$O/balance.fio"
+	cl_put "$O"
+	: > "$O/balance.txt"
+	while :; do
+		t=$(( t + 1 ))
+		cl "mkdir -p /mnt/rxr && mount -t nfs -o vers=$VERS,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 $SRVADDR:$EXPORT /mnt/rxr || exit 90
+			$xm" || { cl "$xu umount /mnt/rxr" > /dev/null 2>&1; return 90; }
+		r0=$(ringbytes)
+		cl "timeout 120 fio $CO/balance.fio > $CO/balance.out 2>&1; rm -f /mnt/rxr/bal-* /mnt/rxr.*/bal-* 2>/dev/null; exit 0"
+		r1=$(ringbytes)
+		read -r share shares < <(paste <(echo "$r0") <(echo "$r1") | awk '
+			{d[NR] = $4 - $2; s += d[NR]}
+			END {if (!s) {print 100, "no-traffic"; exit}
+			     for (i = 1; i <= NR; i++) {p = int(100 * d[i] / s + 0.5); o = o (i > 1 ? "/" : "") p; if (p > m) m = p}
+			     print m, o}')
+		ports=$(cports)
+		echo "try $t busiest ${share}% rings ${shares}% ports ${ports}$( [ -n "$prev" ] && [ "$ports" = "$prev" ] && echo ' (the same ports as the try before: remounting did not change them)')" >> "$O/balance.txt"
+		BAL_SHARE=$share
+		[ "$share" -le "$lim" ] && break
+		if [ $t -ge "$tries" ]; then
+			echo "not within ${lim}% after $t mounts: the cell runs with the busiest ring at ${share}%" >> "$O/balance.txt"
+			break
+		fi
+		prev=$ports
+		cl "$xu umount /mnt/rxr"
+	done
+	echo "$name: rings $(tail -1 "$O/balance.txt")"
+	return 0
+}
+
 printf 'cell prof vers nconn mtu delay_ms budget reserve factor rcvbuf MBps fio_rc drops alloc_fail escaped used_pages collapsed rcvq_drop zw_drop backlog_drop retrans loss_probes rto dsack admitted denied paused overrun wr_direct wr_dontcache wr_buffered\n' > "$E/cells.tsv"
 cell() {
 	local name=$1 O=$E/$1
@@ -900,11 +949,16 @@ cell() {
 			xu="$xu umount /mnt/rxr.$mi;"
 		done
 	fi
-	echo "$(date +%s.%N) $name fio start" >> "$E/delay-steps.txt"
 	set +e
+	local mnt="mkdir -p /mnt/rxr && mount -t nfs -o vers=$VERS,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 $SRVADDR:$EXPORT /mnt/rxr || exit 90
+		$xm"
+	if [ -n "${BALANCE:-}" ] && [ -n "$HW" ] && [ "$PROF" = step ] && [ -n "${STEP_JOBS:-}" ]; then
+		# The mounts are up already, chosen by balance_mount.
+		balance_mount "$O" "$CO" "$xm" "$xu" && mnt=: || mnt="exit 90"
+	fi
+	echo "$(date +%s.%N) $name fio start" >> "$E/delay-steps.txt"
 	cl "
-		mkdir -p /mnt/rxr && mount -t nfs -o vers=$VERS,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 $SRVADDR:$EXPORT /mnt/rxr || exit 90
-		$xm
+		$mnt
 		timeout ${TMO:-900} fio --output-format=json --output=$CO/fio.json $CO/job.fio > $CO/fio.out 2>&1
 		rc=\$?; ${KEEPFILES:+: }rm -f /mnt/rxr/f-$name*; $xu umount /mnt/rxr; exit \$rc"
 	rc=$?

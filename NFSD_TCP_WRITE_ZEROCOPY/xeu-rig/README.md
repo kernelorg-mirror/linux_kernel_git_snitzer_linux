@@ -152,16 +152,36 @@ work items, all three also in that document's "Since then" list:
 1. **More flows than rings.** At 64 connections the rings came out
    even (28, 27, 20 and 25%), where sixteen gave 25, 6, 31 and 37%.
    The 64-connection test below will show it again.
-2. **Mount again until the rings are even.** This is harness only,
-   with no build. Read each ring's packet delta from `ethtool -S` for
-   a few seconds at the start of a cell, and remount (new source
-   ports, new hashes) if one ring is far over a quarter. It does not
-   make the fall even. It stops one bad fall from deciding a result.
-   Not written.
+2. **Mount again until the rings are even: `BALANCE=<percent>`** to
+   `run-budget.sh`, and so to `sweep.sh` and `trace-sweep.sh`. It
+   applies to the hardware client's step cells with `STEP_JOBS`.
+   Before the cell is measured, the harness:
+   - mounts and runs the cell's own writers for `BALANCE_SECS`
+     (default 4), on files of their own, deleted after;
+   - reads each ring's `rx_bytes` from `ethtool -S`;
+   - if the busiest ring took more than `<percent>`, unmounts and
+     mounts again. Each mount gets new client source ports, so new
+     hashes.
+
+   It tries at most `BALANCE_TRIES` mounts (default 6). If none comes
+   within the limit, the cell runs on the last mount and says so.
+   Each try is a line of `<cell>/balance.txt`: the busiest ring's
+   share, every ring's share, and the client's source ports. A try
+   whose ports are the same as the one before is marked, since then
+   remounting changed nothing. The tracers' 35 s count from the
+   cell's start, after the balancing, as before. `geometry.txt` names
+   the setting.
+
+   For four rings `BALANCE=35` is a guess to start from: an even fall
+   is 25%. Build 462's busiest ring carried 19.9 GB/s in the slow run
+   and 14.5 in the fast one; the shares were not read. It does not make the
+   flows even. It stops one bad fall from deciding a cell. **Not run
+   yet:** that the client's ports change with each mount, and how
+   many tries a balanced fall takes, are the first things to read.
 3. **Steering in `xeu`** (`ethtool -X` or ntuple rules): a kmod
    change, and a question for Xsight.
 
-Until 2 exists, read the busiest and least busy ring of every run
+Without `BALANCE`, read the busiest and least busy ring of every run
 (`where-*.txt`) before comparing rates. Set aside a run whose busiest
 ring is far over a quarter, or say so with its figure.
 
