@@ -1613,11 +1613,15 @@ measured alone; that is step 6 of the README and waits for Mike.
     |---|---|---|---|---|
     | 16384 (today) | ~16000 | 1 | 1 | 1 |
     | 8192 | ~7800 | 2 | 2 | 1, no gain |
-    | **5440** | ~5050 | **2** | **3** | **2/3** |
+    | **5440** (5376 on arm64) | ~4990 | **2** | **3** | **2/3** |
     | 4096 | ~3710 | 3 | 4 | 3/4 |
 
     Any size from about 4900 to 5461 gives 2 pieces per frame and 3
-    per page. 5440 leaves room for the estimates above to be off.
+    per page. The page pool rounds a fragment up to the DMA cache
+    alignment (128 bytes on arm64), so the driver rounds the size
+    down to it: 5440 is 5376, still 2 and 3. **Written, built, not
+    run:** `kernel-rpmtree/xsight/xeu-cut-RX-buffers-smaller-than-a-page-with-rx_buf_size.patch`
+    (the README has the details and the A/B).
     The ring index is a mask, so a ring's size stays a power of two.
   - **What it can and cannot buy (correcting an earlier claim).** The
     unused 7 KiB of a page is never written or read, so it takes no
