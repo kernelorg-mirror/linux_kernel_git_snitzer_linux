@@ -7,3 +7,6 @@
 #     RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
 256 1048576 0 prp step-copy-n16
 512 1048576 0 prp step-copy-n16
+# The follow-up: the 685 KiB buffer on eight rings of 128 frames, to put
+# the region in use back under the L3.  Run from its own plan file below
+# (a sweep skips lines already done only within one outdir).
