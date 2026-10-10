@@ -178,8 +178,20 @@ work items, all three also in that document's "Since then" list:
    flows even. It stops one bad fall from deciding a cell. **Not run
    yet:** that the client's ports change with each mount, and how
    many tries a balanced fall takes, are the first things to read.
-3. **Steering in `xeu`** (`ethtool -X` or ntuple rules): a kmod
-   change, and a question for Xsight.
+3. **Steering in `xeu`**: a kmod change. What to ask for, in order:
+   - the RSS indirection table and key (`ethtool -x`/`-X`). It is the
+     cheapest, works with standard tools, and with the key readable it
+     places a flow by moving its table entry;
+   - ntuple filters (`ethtool -N ... action <ring>`), for two hot flows
+     in one entry;
+   - interrupt coalescing (`ethtool -C`). It is not steering, but it is
+     missing too, and `enable_irq` was 6.1% of samples.
+
+   aRFS and RFS would not help: sunrpc reads with `tcp_read_sock()`,
+   which does not record a flow's CPU. The reasons, and the questions
+   for Xsight (is there a table, how large, Toeplitz and its key,
+   filters, moderation), are under "rings, how the flows fall" in
+   `../XEU_CONVERGENCE.md`'s "Since then".
 
 Without `BALANCE`, read the busiest and least busy ring of every run
 (`where-*.txt`) before comparing rates. Set aside a run whose busiest
