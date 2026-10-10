@@ -2048,6 +2048,124 @@ checkpatch; nothing has run. The README's section on the crash has the
 next boot's order. The sunrpc with the bug is still installed in
 `updates/` and loads on boot.
 
+### Build 463: the RSS table and `rx_buf_size` on the card (10 October, 12:00 to 12:50)
+
+Build 463 (`7.1.13-21.hs.463.loanpages_pool`) has the sunrpc fixes built
+in and kmod-xsight 2.0.1-6. The KUnit suites pass (svcsock 44/44 with
+`svcsock_rx_page_pool_bulk_release_test`). The journal holds only the
+running boot, so the crash of 9 October was not read. `xeu` was loaded
+without `rss_indir_size`; the session added it to
+`/etc/modprobe.d/xeu.conf` and reloaded `xeu` (Mike's leave, given for
+this boot). The runs are `$L/xeu-16k-463-*`.
+
+**The RSS table works, and a flow's ring can be chosen.** Sixteen
+`iperf3` streams to the port, eight rings, `rss_indir_size=128`:
+
+- `ethtool -X weight` moved every flow to ring 0, then to ring 1, then
+  to rings 6 and 7, and `equal 8` spread them again. All 128 entries
+  are used.
+- **Bits 13 to 19 of a flow's hash pick its table entry.** The hash is
+  the one `xeu` puts in the skb (`xeu-rx.bt` shows it). An even table
+  showed bits 13 to 15 naming the ring for all sixteen flows, and a
+  table in blocks of eight showed bits 16 to 18.
+- So a flow is placed by reading its hash and setting its entry.
+  `xeu-rig/rss-balance.py` builds the `rss-set` request from
+  `xeu-rx.bt`'s output. It took the rings from 1, 4, 1, 3, 3, 2, 0 and
+  2 flows to 2, 2, 2, 2, 2, 2, 3 and 1 (two flows shared an entry).
+- `ynl` needs `--no-schema` on tardis1 (no `jsonschema`); PyYAML was
+  installed for it.
+
+**Two bugs in the RSS patch, found here and fixed** (kernel-rpmtree,
+folded into the Release 6 commits, which Mike force-pushes):
+
+1. **Setting the key stopped the hashing.** The patch read the packet
+   types back with `xsl_rm_rss_hash_get()` and wrote them with the key.
+   The firmware's reply says only that a type is hashed, not on which
+   fields, so the write left none: every packet hashed to 0 and landed
+   on ring 0, and putting the old key back did not undo it. Only a
+   reload of `xeu` did. The fix sends the key with no packet type
+   marked valid, which the firmware takes as the seed alone.
+2. **The firmware's own table could not be read.**
+   `xsl_rm_reta_get()` returns handles whose id is the ring's number
+   across all DMA engines (64 to an engine), so a ring of engine 2
+   read back as `0x2010080` where its handle is `0x2010000`. `ethtool
+   -x` failed with `EIO` until a table had been set, and so did a
+   netlink `rss-set` of the hash function alone. The fix takes either
+   form as the ring.
+
+Both fixes ran on the card: `ethtool -x` shows the firmware's table
+(rings 0 to 7 in turn), `ethtool -X hkey` changes every flow's hash
+with the flows still spread, and `rss-set` with `"hfunc": 1` works
+before any table is set.
+
+**Still open in the RSS support:**
+
+- `ethtool -X hfunc toeplitz` from the `ethtool` 6.15 command fails
+  with `EINVAL`. The command sends no hash function in its request
+  while the port reports none (Spooky has no ethtool name), and the
+  core refuses a request that changes nothing; `xeu` is not called.
+  `ynl` sets it: `--do rss-set --json '{"header": {"dev-name":
+  "enp161s0f0"}, "hfunc": 1}'`.
+- There is no way back from Toeplitz to Spooky without reloading `xeu`.
+- **A flow's hash cannot be computed from its ports.** With Toeplitz
+  set every hash changes, and with a key that repeats every 16 bits
+  the hashes repeat every 16 bits, as Toeplitz would. But they are not
+  the standard function over the addresses and ports with the key
+  shown, in any field order tried. A question for Xsight. Placing
+  flows does not need it.
+
+**`rx_buf_size=5440` works.** The open logs "5440-byte RX buffers, 3 to
+a page, up to 2 to a 9000-byte MTU frame": the size is not rounded to
+5376, since the DMA cache alignment on this host is 64 bytes. A full
+frame reaches GRO with a truesize of 11136 and one frag, where a whole
+page gives 16640 and none. The driver also warns that with two buffers
+to a frame the payload after the first is not 4-byte aligned; that
+does not matter to the copy, and will to a loan written direct.
+Reloading `xeu` with a region bound (unbound first with `echo none >
+rx_region_dev`) gave every page back and logged nothing: the first
+drain of the LIFO stack at a pool's destruction.
+
+**The A/B: the copy cell at three buffer sizes, two traced runs each.**
+The whole stack as on build 462 (linger 50, `rx_refill_thresh` 8, four
+pools, 512 threads, deferred frees on), `BALANCE=35`, sixteen
+connections, the stripe trimmed before each. Each row holds the same
+frames on a ring where it can, and the held buffer is 1 MiB scaled by
+a frame's truesize.
+
+| `rx_buf_size` | rings | held buffer | GB/s | region pages | ring drops | retransmits | CPU-s per GB | `memmove` |
+|---|---|---|---|---|---|---|---|---|
+| 5440 | 4 x 512 | 685 KiB | 41.0, 36.6 | 1376, 1360 | 0, 0 | 17, 3507 | 0.49, 0.54 | 23.8%, 23.9% |
+| 4096 | 4 x 1024 | 772 KiB | 35.8, 37.4 | 1808, 1968 | 0, 0 | 3277, 4230 | 0.57, 0.54 | 27.2%, 27.1% |
+| 0 (a page) | 4 x 256 | 1 MiB | 41.4, 38.3 | 2376, 2168 | 3557, 127510 | 27016, 157375 | 0.48, 0.52 | 27.1%, 27.1% |
+
+- **The footprint is what was predicted.** 5440 holds 1360 to 1376
+  region pages, 21 MiB, against the whole page's 2168 to 2376: about
+  three fifths, and under the 32 MiB L3. 4096 posts a third more
+  frames and holds 1808 to 1968.
+- **The rate does not separate the sizes.** Two runs of one size
+  differ by 2 to 4 GB/s, as much as the sizes differ. 5440 and the
+  whole page each have a run at 41 and a run at 37 to 38; 4096 has
+  neither run above 37.4.
+- **The pieces dropped nothing.** The whole page lost 3557 and 127510
+  frames at the ring tail and retransmitted 27 and 157 thousand
+  segments; neither smaller size dropped a frame. (4096 has more
+  frames posted; 5440 has the same 256.)
+- `memmove` is 24% of cycles at 5440 and 27% at the others. A WRITE is
+  received in 2.1 to 2.3 calls in every run.
+- `rx_pp_recycle_ring_full` is 0 with the pieces and 52 and 1434 with
+  whole pages; `alloc_fail` stayed 0 throughout.
+
+With the fall of the flows what it is, more runs of 5440 against the
+whole page are needed to say whether the smaller footprint is worth
+rate. What the two runs each do say: 5440 costs nothing, holds three
+fifths of the memory and ends the tail drops at 256 frames a ring. The
+whole-page runs are also this boot's figure for the stack on build
+463: 41.4 and 38.3 GB/s against build 462's 38.3, 38.0 and 36.7.
+
+After the A/B `xeu` is loaded with `rx_buf_size=0`, rings of 4 x 256,
+and the region bound; `/etc/modprobe.d/xeu.conf` has `rx_ip_align=2
+rss_indir_size=128`.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

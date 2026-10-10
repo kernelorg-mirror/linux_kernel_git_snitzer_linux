@@ -1,12 +1,49 @@
-# The xeu rig at 16 KiB: where it stands (2026-10-09, 19:10, on build 462 with the whole stack loaded)
+# The xeu rig at 16 KiB: where it stands (2026-10-10, 12:50, on build 463)
 
-**Build 462 is running with every change of 9 October in it, and the
-whole stack carries 38.0 GB/s at the median of three traced runs
-(36.7 to 38.3), against build 461's 35.9.** The account is "Build 462:
-the whole stack of changes" in `../XEU_CONVERGENCE.md`. Steps 0 to 5
-of "The boot after build 461" below are done. **Step 6, what each
-change is worth, waits (Mike, 2026-10-09): do not start it unasked.**
-Step 7 has not been run.
+**Build 463 is running, and both new `xeu` features work on the
+card.** The account is "Build 463: the RSS table and `rx_buf_size` on
+the card" in `../XEU_CONVERGENCE.md`. In short:
+
+- **The RSS table** (`rss_indir_size=128`, now in
+  `/etc/modprobe.d/xeu.conf`): `ethtool -X` moves flows between
+  rings, and bits 13 to 19 of a flow's hash pick its table entry, so a
+  flow is placed by setting that entry (`ynl` `rss-set`, with
+  `--no-schema`; `rss-balance.py` builds the request
+  from `xeu-rx.bt`'s output).
+- **Two bugs in the RSS patch were fixed** and the kmod rebuilt and
+  loaded (`xeu` srcversion `9B0770879836A992C43D41D`, still Release
+  6, from `$L/kmod-xsight-16k-463-r6fix`): setting the key had
+  stopped the hashing, and the firmware's own table could not be
+  read. **A kmod built before kernel-rpmtree `b32b6c9` has both
+  bugs: do not use `ethtool -X hkey` on it.**
+- **`rx_buf_size=5440`** receives a frame in two buffers and three
+  fifths of the region pages (1360 to 1376 against 2168 to 2376), and
+  dropped no frames where the whole page dropped 3557 and 127510. The
+  rate does not separate the sizes in two runs each (41.0 and 36.6
+  GB/s against 41.4 and 38.3).
+- The `ethtool` 6.15 command cannot set the hash function on this
+  port; `ynl` can. A flow's hash cannot yet be computed from its
+  ports.
+
+**The state of tardis1** (it does not outlive a reboot, except the
+modprobe file and the installed kmod): `xeu` loaded with
+`rx_buf_size=0`, a 32768-page region bound, rings of 4 x 256,
+`rx_refill_thresh` 8, `pools_per_node` 4, nfsd at 512 threads,
+`/dev/md0` on `/hs/stripe`, `kernel.panic` 10. This boot wrote
+about 18 TB to the stripe.
+
+**Not done from the list below:** more runs of 5440 against the whole
+page (the A/B's two each do not settle the rate); 5440 at the old
+setting of 256 entries and a 1 MiB buffer; and everything in step 3
+(the loan cell that crashed tardis1, the linger's values, the pools,
+4 x 128, the region resize test). Step 0's crash log cannot be read:
+the journal holds only the running boot.
+
+**From build 462, still standing:** the whole stack carried 38.0 GB/s
+at the median of three traced runs there (36.7 to 38.3; "Build 462:
+the whole stack of changes" in `../XEU_CONVERGENCE.md`). **Step 6 of
+"The boot after build 461", what each change is worth, waits (Mike,
+2026-10-09): do not start it unasked.** Step 7 has not been run.
 
 ## The boot into the next kernel: the new xeu features first (planned 2026-10-09, late)
 
