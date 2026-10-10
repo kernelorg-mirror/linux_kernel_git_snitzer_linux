@@ -1489,7 +1489,9 @@ Not run: a load paced at the source and raised in steps (the harness
 has no rate setting yet); the copy with more connections on deeper
 rings.
 
-What each finding suggests, none of it done:
+What each finding suggests (none of it done when this was written;
+what came of each, as of the evening of 9 October, is in "Since
+then" after the list):
 
 - **sunrpc:** release a loaned WRITE's pages in one batch (T4).
 - **page_pool:** for a pool bound to the region, a LIFO in place of
@@ -1503,6 +1505,66 @@ What each finding suggests, none of it done:
 - **storage:** on drives that need whole pages, copy and write direct;
   the loan's inode-lock queue and second-rate copy are the page
   cache's (T5, B5). A loan wants a drive that takes it direct.
+
+**Since then (9 October, evening).** Every change below has run only in
+copy mode, in build 462's three runs and all together. None has been
+measured alone; that is step 6 of the README and waits for Mike.
+
+- **sunrpc, batch release (T4): written, and it had a bug.** "SUNRPC:
+  Return a loaned record's page-pool pages in batches"
+  (`bdd837db04f1`) handed `page_pool_put_netmem_bulk()` 64 pages where
+  its on-stack array takes 16. A loaned record was the first thing to
+  run it, and tardis1 crashed in that loan cell ("tardis1 crashed in
+  the loan cell" below). It is fixed at the tip, with a KUnit test and
+  a `BUILD_BUG_ON`, and has not run since.
+- **page_pool, LIFO (T1): done.** "page_pool: Recycle a region-bound
+  pool's pages last in, first out" (`e2aa12b004e65`, in build 462)
+  gives a pool bound to the region a stack in place of its ring, as
+  large as the ring and under the ring's producer lock. In build 462's
+  copy runs `rx_pp_recycle_ring_full` fell from 17278 to 178 and 111
+  in 10 s, and `rx_pp_alloc_empty` from 1077 to 11 and 7. Neither can
+  be put down to the stack alone: `rx_refill_thresh` 8 and deferred
+  frees changed in the same runs, and a stack the ring's size fills no
+  less often than the ring. `memmove` went from 30% to 27% of cycles,
+  the only sign that reuse is warmer, and that is not isolated either.
+  **The loan, where T2 had 9% of returns overflow, has not been
+  measured with it**: the one loan run on build 462 is the one that
+  crashed.
+- **page_pool, a much shorter ring: not done.** The LIFO was chosen
+  instead. `xeu` still sets `pool_size` to the ring's size, and no
+  patch in `kernel-rpmtree/xsight/` changes that. Release 5's
+  `rx_refill_thresh` is a different knob: how empty the receive ring
+  gets before a poll refills it.
+- **page_pool, the DMA mapping kept while a page is in the region (T2):
+  not done.** A page that overflows its pool still goes through
+  `page_pool_return_netmem()`: unmapped (`dma_unmap_page_attrs()`, and
+  the xarray erase in `page_pool_release_dma_index()`), put on the
+  region's list under the region's lock, and mapped again when a pool
+  takes it back. In copy mode on build 462 the overflow is near zero,
+  so there is little to gain there. Whether it is wanted depends on the
+  loan cell, rerun on the fixed sunrpc: read `rx_pp_recycle_ring_full`
+  and `alloc_slow` against T2's 4.06 million and 254 thousand in 10 s.
+  If the overflow is still near 9%, keep the mapping on region pages,
+  since the region is bound to one device. That is a `net/core` change
+  and needs a kernel build.
+- **nfsd, reuse a thread's copy buffers (T3): done, in sunrpc.** The
+  cause was not the direct write. A part-received record parked on the
+  socket and picked up by another thread had its pages freed and
+  allocated again each time. "SUNRPC: Trade pages with the socket when
+  a partial record changes hands" (`47f13c685c5b5`) exchanges them
+  instead. In build 462 `__folio_batch_release`, `alloc_pages_bulk` and
+  `free_unref_folios` are gone from the profile (S3). A socket now
+  keeps up to the pages of its largest parked record until it closes;
+  nothing bounds that yet.
+- **nfsd, several thread pools (T6): written, not shown to work.** "SUNRPC:
+  Let a NUMA node have several thread pools" (`72766c5ac54ae`) adds
+  `pools_per_node`; build 462 ran with 4. T6's contention was at 64
+  connections and build 462 ran sixteen, where `__lwq_dequeue` is not
+  near the top of the lock list (S6). The test is in the README: "Does
+  `pools_per_node` earn its place".
+- **storage (T5, B5):** unchanged. Build 461's MD stacking change has
+  the copy written direct on the stripe; the loan still goes through
+  the page cache.
 
 ### The harness had deferred skb frees off; with them on the copy is no faster (9 October, 14:30 to 15:10)
 
@@ -1742,6 +1804,35 @@ stopped. Its first cell had finished: no linger, the rest on, one
 traced run (`xeu-16k-462-minus-linger`): 37.2 GB/s, 0.43 server
 CPU-seconds for each GB, 6.9 calls for a WRITE, 257573 frames dropped,
 20 RTOs. One run, and within the spread of the three above.
+
+### tardis1 crashed in the loan cell (9 October, evening)
+
+After the three runs, the loan cell was started, traced, twice: once
+with no linger and once with a linger of 50 us. A test of the region
+resize was to follow. **tardis1 crashed and did not reboot itself; it
+was unreachable until a hard power cycle.** The console has not been
+read, and which run was going is not known.
+
+The likely cause is in "SUNRPC: Return a loaned record's page-pool
+pages in batches" (`bdd837db04f1`). `svc_tcp_rx_release_refs()` passed
+`page_pool_put_netmem_bulk()` up to 64 pages. That function collects
+the pages whose last reference it drops into an on-stack
+`bulk[XDP_BULK_QUEUE_SIZE]`, which has 16 entries, and does not check
+the bound. A loaned 1 MiB WRITE at 16 KiB is 64 or more pages of one
+pool, mostly with nfsd holding the last reference. So nearly every
+loaned WRITE wrote up to 48 entries past that array on an nfsd
+thread's stack. Only a loaned record takes the path: the copy runs
+above had the patch loaded and never ran it. `svcsock_kunit` passed
+43/43 because no test dropped a last reference inside a batch.
+
+At the tip: "SUNRPC: Keep page-pool return batches within the bulk
+API's bound" (the batch is `XDP_BULK_QUEUE_SIZE`), "SUNRPC: test
+releasing more page-pool pages than one bulk batch in the svcsock
+KUnit suite", and "SUNRPC: Refuse to build a page-pool return batch the
+bulk API cannot take" (a `BUILD_BUG_ON`). Built with W=1 and checked by
+checkpatch; nothing has run. The README's section on the crash has the
+next boot's order. The sunrpc with the bug is still installed in
+`updates/` and loads on boot.
 
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 

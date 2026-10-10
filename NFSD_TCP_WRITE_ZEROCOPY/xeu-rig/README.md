@@ -66,6 +66,26 @@ can take down whichever host runs it.
 The state below is from before the crash. A reboot resets everything
 in it except the installed modules.
 
+## The page-pool work items: what was done (2026-10-09, evening)
+
+T1 and T2 in `../XEU_CONVERGENCE.md` suggested three things for a pool
+bound to the region. "Since then", after that document's list of
+suggestions, has the account.
+
+| item | state |
+|---|---|
+| a LIFO in place of the pool's FIFO ring | done: "page_pool: Recycle a region-bound pool's pages last in, first out", in build 462; run only in copy mode, with other changes, never alone |
+| a much shorter ring (`xeu`'s `pool_size`) | not done; the LIFO was chosen instead. `rx_refill_thresh` is another knob |
+| the DMA mapping kept while a page is in the region | not done; an overflowing page is still unmapped, put on the region's list and mapped again |
+
+**What decides the rest is the loan cell, rerun on the fixed sunrpc**
+(step 4 of the crash section). Read `rx_pp_recycle_ring_full` and
+`alloc_slow` in `pp-*.txt` against T2's 4.06 million and 254 thousand
+in 10 s. Near zero means the LIFO and the rest of the stack have dealt
+with it. Still near 9% of returns means keeping the mapping on region
+pages is the next change. It is in `net/core` and needs a kernel
+build.
+
 ## Does `pools_per_node` earn its place: 64 connections, 1 pool against 4
 
 "SUNRPC: Let a NUMA node have several thread pools" was written for
