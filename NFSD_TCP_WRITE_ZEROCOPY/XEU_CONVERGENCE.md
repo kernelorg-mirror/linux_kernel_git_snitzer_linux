@@ -2166,6 +2166,40 @@ After the A/B `xeu` is loaded with `rx_buf_size=0`, rings of 4 x 256,
 and the region bound; `/etc/modprobe.d/xeu.conf` has `rx_ip_align=2
 rss_indir_size=128`.
 
+### Flows placed on the rings under NFS: `PLACE=1` (10 October, 14:25)
+
+`rx_buf_size=5440` is settled for now (Mike) and pinned in
+`/etc/modprobe.d/xeu.conf`. The harness can now place the flows where
+it only rejected a bad fall (`BALANCE`). **`PLACE=1`** to
+`run-budget.sh`, and so to `sweep.sh` and `trace-sweep.sh`: before a
+step cell is measured it mounts, starts a short load, reads each flow's
+hash and bytes, and points each flow's RSS table entry at a ring so
+that the rings carry the same (`xeu-rig/rss-place.py`: the busiest
+entry to the ring with the least so far). The mount is kept for the
+cell. `<cell>/place.txt` has every flow's hash, entry and ring and the
+rings' shares before and after.
+
+One traced run of the 5440 copy cell proved it
+(`$L/xeu-16k-463-place-1`):
+
+| | ring 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| as the sixteen flows fell at the mount | 23% | 21% | 36% | 20% |
+| after the table was set, in the short load | 25% | 25% | 25% | 25% |
+| 10 s of the cell itself, from 35 s in | 25.0% | 25.0% | 25.4% | 24.6% |
+
+Four flows to a ring, no two sharing an entry. The cell carried
+**39.9 GB/s** with 1376 region pages, no ring drops, no RTO, 0.50
+CPU-seconds per GB and `memmove` at 24%. That is one run; with
+`BALANCE=35` the same cell gave 41.0 and 36.6. Whether placing ends
+the spread between runs needs repeats. In this run the harness lost
+`place.txt` (it was made before the cell's directory went to the
+client and was fetched back empty); the file was rebuilt from the
+saved flows and the console, and the order is fixed.
+
+A client that reconnects during a cell gets a new source port and so
+a new entry: the cell does not place again.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

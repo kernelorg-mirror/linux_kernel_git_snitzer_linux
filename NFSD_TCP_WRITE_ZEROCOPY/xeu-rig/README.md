@@ -42,6 +42,13 @@ the region bound again, `rx_refill_thresh` 8). The artifact
 was republished on 2026-10-10 with a first section on build 463 and
 the call with Xsight (`id="xeu463"`, `id="call"`).
 
+**`PLACE=1` places the flows (2026-10-10, 14:25):** the harness sets
+the RSS table so each ring carries a quarter, in place of
+`BALANCE=35`. Proved under NFS in one cell: 23/21/36/20% as the flows
+fell, 25.0/25.0/25.4/24.6% in the cell, 39.9 GB/s. Use it for every
+cell from here ("Flows placed on the rings under NFS" in
+`../XEU_CONVERGENCE.md`).
+
 **Not done from the list below:** 5440 at the old
 setting of 256 entries and a 1 MiB buffer; and everything in step 3
 (the loan cell that crashed tardis1, the linger's values, the pools,

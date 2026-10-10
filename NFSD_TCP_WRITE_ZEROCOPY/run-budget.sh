@@ -888,6 +888,64 @@ balance_mount() {
 	return 0
 }
 
+# PLACE=1 (hardware client, step cells with STEP_JOBS; needs a port whose
+# driver has an RSS table, as xeu loaded with rss_indir_size): before a
+# cell is measured, mount, start a short load (the cell's own writers on
+# files of their own), read each flow's hash and bytes from the frames the
+# port hands up, and point each flow's entry of the RSS table at a ring so
+# that the rings carry the same (xeu-rig/rss-place.py).  The mount is kept
+# for the cell, so the flows measured are the flows placed.  The rest of
+# the short load then shows what each ring took, which is the check.
+# <cell>/place.txt has each flow's hash, entry and ring, and the rings'
+# shares before and after; PLACE_SHARE is the busiest ring's after.  The
+# table stays as set when the cell ends.  PLACE takes the place of BALANCE.
+YNL="$HERE/../tools/net/ynl/pyynl/cli.py --no-schema --spec $HERE/../Documentation/netlink/specs/ethtool.yaml"
+ringshares() {	# ringshares "<ringbytes a>" "<ringbytes b>": busiest%, a/b/c/d
+	paste <(echo "$1") <(echo "$2") | awk '
+		{d[NR] = $4 - $2; s += d[NR]}
+		END {if (!s) {print 100, "no-traffic"; exit}
+		     for (i = 1; i <= NR; i++) {p = int(100 * d[i] / s + 0.5); o = o (i > 1 ? "/" : "") p; if (p > m) m = p}
+		     print m, o}'
+}
+place_mount() {
+	local O=$1 CO=$2 xm=$3 xu=$4 nr n tbl r0 r1 share shares lp
+	nr=$(ethtool -l "$RDEV" | awk '/^Combined:/ {v = $2} END {print v}')
+	n=$($YNL --do rss-get --json "{\"header\": {\"dev-name\": \"$RDEV\"}}" --output-json 2>/dev/null | python3 -c 'import json, sys; print(len(json.load(sys.stdin).get("indir", [])))' 2>/dev/null)
+	sed -e "s/^runtime=.*/runtime=${PLACE_SECS:-14}/" \
+	    -e 's#\([=/]\)f-#\1bal-#' "$O/job.fio" > "$O/balance.fio"
+	cl_put "$O"
+	# After cl_put: the client's copy of the cell's directory is fetched
+	# back over this one when the cell ends.
+	: > "$O/place.txt"
+	if [ -z "$n" ] || [ "$n" -lt "$nr" ]; then
+		echo "$name: PLACE: $RDEV has no RSS table to set (xeu wants rss_indir_size)" | tee -a "$O/place.txt"
+		return 90
+	fi
+	cl "mkdir -p /mnt/rxr && mount -t nfs -o vers=$VERS,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 $SRVADDR:$EXPORT /mnt/rxr || exit 90
+		$xm" || { cl "$xu umount /mnt/rxr" > /dev/null 2>&1; return 90; }
+	cl "timeout 120 fio $CO/balance.fio > $CO/balance.out 2>&1; rm -f /mnt/rxr/bal-* /mnt/rxr.*/bal-* 2>/dev/null; exit 0" &
+	lp=$!
+	sleep 3
+	r0=$(ringbytes)
+	timeout -s INT 3 bpftrace -e "tracepoint:net:napi_gro_receive_entry /str(args.name) == \"$RDEV\"/ { @flow[args.hash, args.napi_id] = sum(args.len); }" > "$O/place-flows.txt" 2>&1 < /dev/null
+	r1=$(ringbytes)
+	read -r share shares < <(ringshares "$r0" "$r1")
+	echo "before: busiest ${share}% rings ${shares}% ports $(cports)" >> "$O/place.txt"
+	if tbl=$("$HERE/xeu-rig/rss-place.py" "$O/place-flows.txt" "$nr" "$n" ${PLACE_SHIFT:-13} 2>> "$O/place.txt") &&
+	   $YNL --do rss-set --json "{\"header\": {\"dev-name\": \"$RDEV\"}, \"indir\": $tbl}" >> "$O/place.txt" 2>&1; then
+		sleep 1
+		r0=$(ringbytes); sleep 3; r1=$(ringbytes)
+		read -r share shares < <(ringshares "$r0" "$r1")
+		echo "after: busiest ${share}% rings ${shares}%" >> "$O/place.txt"
+	else
+		echo "the table was not set: the cell runs as the flows fell" >> "$O/place.txt"
+	fi
+	PLACE_SHARE=$share
+	wait $lp
+	echo "$name: $(grep '^placed' "$O/place.txt"); $(grep '^before' "$O/place.txt" | cut -d' ' -f1-5); $(tail -1 "$O/place.txt")"
+	return 0
+}
+
 printf 'cell prof vers nconn mtu delay_ms budget reserve factor rcvbuf MBps fio_rc drops alloc_fail escaped used_pages collapsed rcvq_drop zw_drop backlog_drop retrans loss_probes rto dsack admitted denied paused overrun wr_direct wr_dontcache wr_buffered\n' > "$E/cells.tsv"
 cell() {
 	local name=$1 O=$E/$1
@@ -952,7 +1010,10 @@ cell() {
 	set +e
 	local mnt="mkdir -p /mnt/rxr && mount -t nfs -o vers=$VERS,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 $SRVADDR:$EXPORT /mnt/rxr || exit 90
 		$xm"
-	if [ -n "${BALANCE:-}" ] && [ -n "$HW" ] && [ "$PROF" = step ] && [ -n "${STEP_JOBS:-}" ]; then
+	if [ -n "${PLACE:-}" ] && [ -n "$HW" ] && [ "$PROF" = step ] && [ -n "${STEP_JOBS:-}" ]; then
+		# The mounts are up already, their flows placed by place_mount.
+		place_mount "$O" "$CO" "$xm" "$xu" && mnt=: || mnt="exit 90"
+	elif [ -n "${BALANCE:-}" ] && [ -n "$HW" ] && [ "$PROF" = step ] && [ -n "${STEP_JOBS:-}" ]; then
 		# The mounts are up already, chosen by balance_mount.
 		balance_mount "$O" "$CO" "$xm" "$xu" && mnt=: || mnt="exit 90"
 	fi
