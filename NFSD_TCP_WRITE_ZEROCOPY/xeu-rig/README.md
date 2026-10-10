@@ -187,6 +187,32 @@ cell is `plans/16k-27-copy128.plan`, run the same way as
 `16k-26-copybest.plan`, two or three runs of each: how the flows fell
 onto the rings moved build 462's runs by 4% on its own.
 
+**The linger's 14% to 17% of cycles in `arch_counter_get_cntpct` is
+the busy wait itself, not an extra cost of reading the clock.** The
+wait loop in `svc_tcp_rx_linger()` calls `ktime_get_ns()` on every
+pass, to check the deadline. On arm64 that reads the counter as
+`isb; mrs cntpct_el0` followed by `arch_counter_enforce_ordering()`: a
+pipeline flush and a dependency on the value. The rest of a pass is
+two bit tests, `need_resched()` and a `yield`, so nearly every sample
+taken while a thread lingers lands in the counter read. A session
+suggested reading the clock only every N passes to win that back
+(2026-10-09, in chat only). That would not work: the samples would
+move to the bit test and the `yield`, and the core would stay held
+until data came or the time ran out. What costs CPU is how long a
+thread lingers, which is why CPU per GB went from 0.49 to 0.52.
+Three ways to reduce it, none written or run:
+
+- **A shorter linger.** A piece is about 13 us in coming, and 50 was a
+  first guess. Try 20 and 25 with `RX_LINGER_US`, and read calls per
+  WRITE in `handoff-*.txt` against CPU per GB.
+- **Sleeping instead of spinning.** The thread sleeps until
+  `svc_data_ready()` wakes it, with a timer bounding the wait. One
+  thread still receives the record and no core is held, at the cost of
+  a wakeup's latency for each piece.
+- **`WFE` instead of `yield`** (`smp_cond_load_relaxed()` on the
+  flags word). The core idles more cheaply until the flag's cache
+  line changes, but it is still held for that thread.
+
 ## Before the reboot into build 462 (2026-10-09, 17:30)
 
 **Read this section first; the handoff below it was written before the
