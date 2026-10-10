@@ -22,9 +22,17 @@ rm -rf $O; mkdir -p $O/inc/linux
 cp -a $TREE/net/sunrpc $O/sunrpc
 cp -a $TREE/include/linux/sunrpc $O/inc/linux/
 git -C $TREE log --oneline -1 -- net/sunrpc include/linux/sunrpc
+# A module gets its BTF against vmlinux, which -devel does not carry, and
+# without BTF the tracers' fentry:sunrpc: probes do not attach.  The running
+# kernel's own BTF stands in for it while the module is built.
+if [ ! -e $KB/vmlinux ] && [ -e /sys/kernel/btf/vmlinux ]; then
+	ln -s /sys/kernel/btf/vmlinux $KB/vmlinux
+	trap 'rm -f $KB/vmlinux' EXIT
+fi
 make -C $KB M=$O/sunrpc NOSTDINC_FLAGS="-nostdinc -I$O/inc" -j$(nproc) modules > $O/build.log 2>&1 ||
 	{ echo "build failed:"; grep -i -m5 error $O/build.log; exit 1; }
 echo "built: $O/sunrpc/sunrpc.ko"
+readelf -S $O/sunrpc/sunrpc.ko | grep -q ' \.BTF ' && echo "BTF: in sunrpc.ko" || echo "BTF: ABSENT (the tracers will not attach)"
 modinfo $O/sunrpc/sunrpc.ko | grep -E '^vermagic|^parm: +(svc_tcp_rx_linger_us|pools_per_node)'
 awk '$3 ~ /sunrpc$/ && $3 !~ /auth_gss|xprtrdma/ {print $2, $1}' $KB/Module.symvers | sort > $O/old.syms
 awk '{print $2, $1}' $O/sunrpc/Module.symvers | sort > $O/new.syms

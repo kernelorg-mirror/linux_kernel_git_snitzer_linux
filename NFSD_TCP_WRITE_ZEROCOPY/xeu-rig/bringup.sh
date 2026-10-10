@@ -17,7 +17,7 @@ echo "page size $PS, kernel $(uname -r), xeu $(cat /sys/module/xeu/srcversion), 
 # This session must not arrive over the port (it should be on xemi0).
 ip route get "${SSH_CONNECTION%% *}" 2>/dev/null | grep -q "dev $D" && { echo "this session arrives on $D"; exit 1; }
 # Deadman: put the port back if this script dies with it down.
-( sleep 300; ip link set $D up ) & DM=$!
+( sleep 300; ip link set $D up ) > /dev/null 2>&1 & DM=$!
 ip link set $D down
 ethtool -L $D combined 4
 echo "$PCI" > $PP/rx_region_dev
