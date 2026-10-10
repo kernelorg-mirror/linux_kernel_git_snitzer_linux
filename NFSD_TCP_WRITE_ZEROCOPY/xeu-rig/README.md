@@ -1,4 +1,51 @@
-# The xeu rig at 16 KiB: where it stands (2026-10-09, 17:30, written before a reboot into the kernel built from `…-WIP3`)
+# The xeu rig at 16 KiB: where it stands (2026-10-09, 19:10, on build 462 with the whole stack loaded)
+
+**Build 462 is running with every change of 9 October in it, and the
+whole stack carries 38.0 GB/s at the median of three traced runs
+(36.7 to 38.3), against build 461's 35.9.** The account is "Build 462:
+the whole stack of changes" in `../XEU_CONVERGENCE.md`. Steps 0 to 5
+of "The boot after build 461" below are done. **Step 6, what each
+change is worth, waits (Mike, 2026-10-09): do not start it unasked.**
+Step 7 has not been run.
+
+The state of tardis1 (it does not outlive a reboot, except where said):
+
+- Kernel `7.1.13-21.hs.462.el9.aarch64+16k`. **sunrpc is the module
+  built from the tip, in `/lib/modules/$(uname -r)/updates/sunrpc.ko`**
+  (srcversion `988D31FBE6BF6DC88282CB6`; the kernel's own
+  `sunrpc.ko.xz` is where it was). `svcsock_kunit.ko` and
+  `xdr_kunit.ko` built with it are beside it. They stay across a
+  reboot of this kernel; `pools_per_node` does not, being given to
+  `modprobe` by `swap-sunrpc.sh` and in no file of `/etc/modprobe.d`.
+- `pools_per_node` 4 (four pools of 128 threads; chosen by the
+  session, Mike has not said 4 or 1), `svc_tcp_rx_linger_us` 0 until a
+  run sets it, nfsd at 512 threads.
+- `kmod-16k-xsight` 2.0.1-5 for build 462 is installed and loaded
+  (the kmods of builds 459 and 461 went with the upgrade);
+  `rx_refill_thresh` is **8**, `rx_ip_align` 2.
+- A 32768-page region is bound to `0000:a1:00.0`, rings of 4 x 256,
+  `alloc_fail` 0. `/dev/md0` is mounted at `/hs/stripe` by hand.
+- This boot wrote about 12 TB to the stripe. No client other than the
+  harness's was connected at any check.
+
+How the module was put in: `./build-sunrpc.sh` (it now gives the
+module BTF, without which `nfsdlat.bt` and `handoff.bt` do not
+attach), then `POOLS_PER_NODE=4 ./swap-sunrpc.sh`, which stops the NFS
+services, unloads sunrpc and what depends on it, installs and starts
+them again. `../run-kunit.sh` wants nfs-server stopped and leaves it
+so: afterwards `systemctl restart hs-nfsd-blksize; systemctl start
+nfs-server; systemctl restart hammerspace-nfsd-tuning` and set the
+threads. The module build warns that the compiler is not the one the
+kernel was built with.
+
+What is left open, by what the runs showed: how the sixteen flows fall
+on the four rings (the one slow run of three had a ring at 19.9 GB/s
+and 440 thousand drops); the linger's busy wait, 14% to 17% of cycles;
+`memmove`, still a quarter of them; a 9000-byte frame with 16 KiB to
+itself. The driver's `rx_refill_thresh` patch is still uncommitted in
+`kernel-rpmtree`.
+
+## Before the reboot into build 462 (2026-10-09, 17:30)
 
 **Read this section first; the handoff below it was written before the
 16 KiB boot and is kept for the rig's rules and its scripts.** The
