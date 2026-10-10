@@ -2343,16 +2343,43 @@ cells** (`taskset`, 40 CPUs for 48).
    and 26% on four rings. The four-ring cell has not been run with
    nfsd on 16-55.
 
-After these cells the port is at 8 rings of 256 entries and nfsd's
-threads are on CPUs 16-55. The best setting is 4 x 512: `ip link set
+After these cells the port was at 8 rings of 256 entries and nfsd's
+threads on CPUs 16-55 (both put back after the follow-up below). The
+best setting is 4 x 512: `ip link set
 enp161s0f0 down; ethtool -L enp161s0f0 combined 4; ip link set
 enp161s0f0 up; ethtool -G enp161s0f0 rx 512`, and `systemctl restart
 hammerspace-nfsd-tuning` (or `taskset -pc 8-55` on each nfsd thread)
 puts nfsd back.
 
-Not run: eight rings of 128 frames with the 685 KiB buffer, which
-would put the footprint back under the L3 and say whether relieved
-ring CPUs help when the copy is not paying for it.
+**The follow-up, eight rings of 128 frames with the 685 KiB buffer
+(17:25 to 17:40, `$L/xeu-16k-463-rings8-685k-1` and `-2`): 39.8 and
+39.8 GB/s**, which is four rings' rate with that buffer (39.4, 39.6,
+39.9). The rings' CPUs were 54% to 67% idle. So the rings' CPUs are
+not the limit at either buffer. The footprint did not come back under
+the L3 as meant: 2046 and 2074 pages, the same as with 1 MiB, so on
+eight rings it is not the held buffers that set it (eight pools, each
+with its own cache and stack, are the likely cause; not looked into).
+`memmove` 22.5% and 22.8%, CPU 0.61 CPU-seconds per GB, no drops, 3
+and 1 RTOs.
+
+**What the rate is made of, from `handoff.bt` in the four-ring cells.**
+A 1 MiB WRITE takes 356 to 365 us from its first `svc_tcp_recvfrom()`
+to its last with the 1 MiB buffer and 378 to 379 us with 685 KiB. At
+41.8 GB/s each of the sixteen connections completes a WRITE every
+401 us, so a connection is inside one WRITE's receive for about nine
+tenths of the time and the gap between WRITEs is about 45 us. One
+connection is received by one thread at a time, so **sixteen
+connections cannot carry much more than 16 x 1 MiB / 360 us = 46.6
+GB/s, and carry 41.8**. What is left is in the time to receive one
+WRITE on one connection, or in the number of connections. The copy
+itself is about 150 us of the 360 (0.50 CPU-seconds per GB at 30%
+`memmove`); the rest is waiting for the WRITE's data to arrive and
+the per-call work. Not run: 32 connections (`STEP_MOUNTS=2`) on this
+stack.
+
+After the follow-up the port was put back to 4 rings of 512 entries
+(`ethtool -X equal 4` first: the ring count cannot be lowered while
+the table names a ring that would go) and nfsd's threads to CPUs 8-55.
 
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
