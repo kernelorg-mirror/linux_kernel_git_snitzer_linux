@@ -197,9 +197,13 @@ is the first thing to instrument.
 The largest source of spread between runs of one cell is which ring
 each flow hashes to. Build 462's slow run had one ring at 19.9 GB/s
 and 440 thousand drops. **`xeu` supports no steering**: `ethtool -x`
-and `-X`, `-n rx-flow-hash` and ntuple filters were checked on build
-461 and are not there ("`xeu` gives no way to steer" in
-`../XEU_CONVERGENCE.md`). So no `ethtool` rule pins flows here. The
+and `-X` and `-n rx-flow-hash` were checked on build 461 and are not
+there, and its one ntuple rule can only target a VF. The SDK built
+into the module does have an RSS redirection table and key
+(`xsl_rm_reta_set()`, `xsl_rm_rss_hash_set()`), which `xeu` does not
+expose ("`xeu` gives no way to steer" and "rings, how the flows
+fall" in `../XEU_CONVERGENCE.md`). So no `ethtool` rule pins flows
+here yet. The
 work items, all three also in that document's "Since then" list:
 
 1. **More flows than rings.** At 64 connections the rings came out
