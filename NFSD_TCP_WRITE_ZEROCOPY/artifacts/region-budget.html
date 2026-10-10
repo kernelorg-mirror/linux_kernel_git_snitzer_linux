@@ -122,6 +122,8 @@
   .delta .mark.gain { background: var(--gain); }
   .delta .body { flex: 1 1 auto; min-width: 0; }
   .delta .body p { margin: 0; font-size: 15.5px; }
+  .delta .body p + p, .delta .body .tbl-wrap + p { margin-top: 10px; }
+  .delta .body .tbl-wrap { margin: 10px 0 0; }
   .delta .body h3 { margin-bottom: 4px; }
   .tag {
     font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em;
@@ -351,7 +353,17 @@
     <div class="delta">
       <div class="mark gain">3</div>
       <div class="body"><h3>A thread waits briefly for the rest of a WRITE<span class="tag base">sunrpc</span></h3>
-      <p>With a short wait for the next piece (the linger), a 1 MiB WRITE is received in about 2 reads by one thread. It is a busy wait and costs about a fifth more server CPU per GB; how short it can be is not settled.</p></div>
+      <p>A 1 MiB WRITE arrives as about 118 jumbo frames, which the network stack hands up a burst at a time. nfsd read whatever had arrived and, if the WRITE was not complete, parked it on the connection and went on to other work; the next burst woke some thread to read the next piece.</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:0">
+        <thead><tr><th>One 1 MiB WRITE, sixteen connections</th><th>Reads to receive it</th></tr></thead>
+        <tbody>
+          <tr><td>256 KiB receive buffer (build 461)</td><td class="x">17, nine in ten by a different thread from the one before</td></tr>
+          <tr><td>1 MiB receive buffer (builds 461 and 462)</td><td class="c">6 to 7</td></tr>
+          <tr><td>1 MiB receive buffer, and a thread that waits up to 50 &micro;s for the next piece (builds 462 and 463)</td><td class="r">2, by the same thread</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>What the pieces cost.</strong> Every extra read is a thread woken and a WRITE handed over. In between, the rest of the WRITE sits unread in the connection's receive queue, in pages that came off the rings, and those pages cannot go back to the pool until some thread gets to them. So the receive memory in use is larger, the rings are refilled with pages that have been idle longer, and the connection's window stays shut to the client. With the 256 KiB buffer a connection was being read for only 44% of the time: for 38% it was waiting for data and for 18% for a thread. A piece is about 13 &micro;s in coming, so a wait far shorter than a wake-up keeps one thread on the WRITE until it is whole.</p>
+      <p>With the wait and the other changes loaded together, frames dropped at the rings fell from 251 thousand to about 3 thousand in the same run on rings of 4 x 256; how much of that is the wait alone has not been measured. It is a busy wait and costs about a fifth more server CPU per GB (0.52 against 0.43 CPU-seconds), and how short it can be is not settled.</p></div>
     </div>
     <div class="delta">
       <div class="mark gain">4</div>
