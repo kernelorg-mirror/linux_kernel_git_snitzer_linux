@@ -205,16 +205,16 @@
 <div class="wrap">
 
   <header>
-    <p class="eyebrow">NFSD &middot; SUNRPC &middot; page_pool &middot; 4, 16 and 64 KiB pages &middot; v7.1.13-20 and -21</p>
-    <h1>Two kinds of storage, two right answers.<br><span class="ok">One budget holds for both.</span></h1>
-    <p class="lede"><span class="hl">Newest, 10 October: copying on arrival and writing direct now carries 41 GB/s of durable NFS writes</span> on tardis1's Xsight card at 16 KiB pages, onto six striped NVMe drives. Two days earlier the same copy carried 25.4. With the card's receive buffers cut to 5440 bytes it does so in 21 MiB of receive region, inside the CPU's 32 MiB cache, and drops no frame. <span class="hc">The 41 is the better of two traced runs at each of two settings; the others were 36.6 and 38.3.</span> <a href="#xeu463">What it took is summarized first, below</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#xeu16">the days before it</a>; the rest of this page is the test plan across three page sizes.</p>
-    <p>NFSD can hand a WRITE's network receive pages straight to the file system, or copy the data out of them first. Which is right depends on what the storage can take. A fixed receive region with a budget makes both safe. <span class="hl">On 4 KiB, 16 KiB and now 64 KiB kernels the whole test plan passes on both kinds of storage.</span> On the test rigs copying and loaning come out level in speed. Those rigs are virtual machines on a MacBook Pro for two of the three page sizes: a VMware Fusion guest for 4 KiB and a UTM guest for 16 KiB. The 64 KiB plan ran on tardis1, a 64-CPU server, over veth and memory-backed storage. That is not all of the 64 KiB testing: on 7 and 8 October the same kernel ran on tardis1 over its Xsight card with the <code>xeu</code> driver, from a separate client, onto real NVMe. One drive was used as it is, which needs whole pages (PRP). A second sat behind an NVMe/TCP target, which takes arbitrary pieces and stands in for a drive with SGLs. It is the most real testing so far, and it is summarized at the top of the <a href="#xeu64">64 KiB section</a>. What a copy costs on real hardware was the open question, and the 16 KiB day answered it for this card: half of the server's CPU, and a ceiling near 25 GB/s. Still open is the cache: a copy with little of the region in use cost 40% less CPU and went no faster, and that is one run.</p>
+    <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 463 &middot; 10 October 2026</p>
+    <h1>16 KiB pages and 5440-byte receive buffers: <span class="ok">41 GB/s of NFS WRITEs in 21 MiB of the E1's 32 MiB L3 cache.</span></h1>
+    <p class="lede"><span class="hl">An NFS server on the E1 now takes 41 GB/s of durable WRITEs from one client</span>: sixteen connections over one port of the Xsight card, copied once on arrival and written direct to six striped NVMe drives. The wire itself carries 48 GB/s to a receiver that stores nothing. Two days earlier the same copy carried 25.4. With the card's receive buffers cut to 5440 bytes it does so in 21 MiB of receive region, inside the CPU's 32 MiB cache, and drops no frame. <span class="hc">The 41 is the better of two traced runs at each of two settings; the others were 36.6 and 38.3.</span> <a href="#xeu463">What it took is summarized first, below</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
+
 
     <div class="metrics">
-      <div class="metric"><div class="n gain">30 / 30</div><div class="l">plan stages clean, on<br>4, 16 and 64 KiB pages</div></div>
-      <div class="metric"><div class="n gain">0</div><div class="l">packets dropped<br>with a budget set</div></div>
-      <div class="metric"><div class="n gain">100%</div><div class="l">of loans written direct<br>on NVMe/TCP</div></div>
-      <div class="metric"><div class="n">&lt;11% vs &gt;30%</div><div class="l">of the receive region tied up:<br>copying vs loaning</div></div>
+      <div class="metric"><div class="n gain">41 GB/s</div><div class="l">durable NFS WRITEs,<br>best of two runs (36.6 the other)</div></div>
+      <div class="metric"><div class="n gain">21 MiB</div><div class="l">of receive memory in use,<br>in a 32 MiB L3 cache</div></div>
+      <div class="metric"><div class="n gain">0</div><div class="l">frames dropped<br>at the receive rings</div></div>
+      <div class="metric"><div class="n">25.4 &rarr; 41</div><div class="l">GB/s, the same copy,<br>8 to 10 October</div></div>
     </div>
 
     <p class="provenance">
@@ -526,6 +526,18 @@
       <div class="cell k">Repeats. The sizing shortlist and the two headline figures have three runs each; the rest are single runs</div><div class="cell v"><span class="pill pend">partly</span></div>
     </div>
     <p style="margin-top:14px" class="note">The account with every table is in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>: the section "16K" for the sizing, "Hero" for the fast runs, and from "Build 461" to "The copy with a larger held buffer" for 9 October. Kernels <code>7.1.13-21.hs.459.loanpages_pool.el9.aarch64+16k</code> and <code>hs.461</code>. For the fast runs six of the server's drives were striped and what they held was given up.</p>
+  </section>
+
+  <section id="plan">
+    <p class="eyebrow">The first half of the project &middot; 4 KiB, then 16 KiB, then 64 KiB on the E1</p>
+    <h2>Two kinds of storage, two right answers. <span style="color:var(--gain)">One budget holds for both.</span></h2>
+    <p>NFSD can hand a WRITE's network receive pages straight to the file system, or copy the data out of them first. Which is right depends on what the storage can take. A fixed receive region with a budget makes both safe. <span class="hl">On 4 KiB, 16 KiB and now 64 KiB kernels the whole test plan passes on both kinds of storage.</span> On the test rigs copying and loaning come out level in speed. Those rigs are virtual machines on a MacBook Pro for two of the three page sizes: a VMware Fusion guest for 4 KiB and a UTM guest for 16 KiB. The 64 KiB plan ran on tardis1, a 64-CPU server, over veth and memory-backed storage. That is not all of the 64 KiB testing: on 7 and 8 October the same kernel ran on tardis1 over its Xsight card with the <code>xeu</code> driver, from a separate client, onto real NVMe. One drive was used as it is, which needs whole pages (PRP). A second sat behind an NVMe/TCP target, which takes arbitrary pieces and stands in for a drive with SGLs. It is the most real testing so far, and it is summarized at the top of the <a href="#xeu64">64 KiB section</a>. What a copy costs on real hardware was the open question, and the 16 KiB day answered it for this card: half of the server's CPU, and a ceiling near 25 GB/s. Still open is the cache: a copy with little of the region in use cost 40% less CPU and went no faster, and that is one run.</p>
+    <div class="metrics" style="margin-bottom:6px">
+      <div class="metric"><div class="n gain">30 / 30</div><div class="l">plan stages clean, on<br>4, 16 and 64 KiB pages</div></div>
+      <div class="metric"><div class="n gain">0</div><div class="l">packets dropped<br>with a budget set</div></div>
+      <div class="metric"><div class="n gain">100%</div><div class="l">of loans written direct<br>on NVMe/TCP</div></div>
+      <div class="metric"><div class="n">&lt;11% vs &gt;30%</div><div class="l">of the receive region tied up:<br>copying vs loaning</div></div>
+    </div>
   </section>
 
   <section id="region-use">
