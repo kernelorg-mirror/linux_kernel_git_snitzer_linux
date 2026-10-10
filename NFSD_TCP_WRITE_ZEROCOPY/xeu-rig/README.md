@@ -8,7 +8,134 @@ of "The boot after build 461" below are done. **Step 6, what each
 change is worth, waits (Mike, 2026-10-09): do not start it unasked.**
 Step 7 has not been run.
 
-## tardis1 crashed in the loan cell (2026-10-09, evening): read first
+## The boot into the next kernel: the new xeu features first (planned 2026-10-09, late)
+
+**Mike is building a kernel from the tip of this tree (`…-WIP3`, to be
+pushed to hs-gitlab) with kmod-xsight 2.0.1-6 (kernel-rpmtree
+`xsight-WIP3`, 8c58863).** On that boot, test the two new `xeu`
+features first: where flows land on the rings (the RSS table) and
+receive buffers smaller than a page (`rx_buf_size`). Mike wants to
+see both working. Everything else in this file comes after.
+
+What that kernel has, so none of it needs building or swapping:
+- the sunrpc fixes, built in: the stack-overflow fix, its KUnit test,
+  the `BUILD_BUG_ON`, and the linger tracepoint;
+- kmod-xsight 2.0.1-6, with `rss_indir_size` and `rx_buf_size`
+  beside `rx_refill_thresh` and `rx_ip_align`.
+
+The `updates/sunrpc.ko` of build 462 is under that kernel's own
+`/lib/modules`, so it does not load on the new one.
+
+**Before the reboot (Mike):** add `rss_indir_size=128` to the
+`options xeu` line in `/etc/modprobe.d` that has `rx_ip_align=2`. Then
+the first boot has the table, and the RSS tests need no reload of
+`xeu`.
+
+### 0. First checks (minutes)
+
+- `uname -r` is the new kernel and `getconf PAGESIZE` is 16384.
+- `rpm -q kmod-16k-xsight` is 2.0.1-6.
+- `modinfo xeu | grep -E 'parm: *(rss_indir_size|rx_buf_size)'`
+  shows both.
+- `cat /sys/module/xeu/parameters/{rx_ip_align,rss_indir_size,rx_buf_size,rx_refill_thresh}`
+  reads 2, 128, 0 and 32.
+- `ls /sys/kernel/tracing/events/sunrpc/svcsock_tcp_rx_linger` exists.
+- `sysctl kernel.panic=10`, so a panic reboots and does not hang.
+- The crash: `journalctl --list-boots`, then `journalctl -k -b <the
+  boot that crashed>`. It is a stack-protector panic, or a bad PC,
+  under `svc_tcp_rx_release_refs` or `page_pool_put_netmem_bulk`, if
+  the crash section below has the cause right.
+- `../run-kunit.sh`: svcsock 44/44 with
+  `svcsock_rx_page_pool_bulk_release_test`. Before any load, with
+  nfs-server stopped; afterwards restore nfsd as "How the module was
+  put in" below says.
+- `mount -o noatime /dev/md0 /hs/stripe`, `./bringup.sh 32768 256`,
+  `echo 512 > /proc/fs/nfsd/threads`. **Run nothing on veth.**
+
+### 1. Ring placement (the RSS table): about an hour, no reload
+
+The tools:
+- `./rings.sh 5`: each ring's GB/s, share, frames, and the tail drops.
+- `timeout -s INT 5 bpftrace xeu-rx.bt`: each flow's hash (the card's)
+  and the NAPI, which is the ring, it landed on; the buffers' truesize
+  and frags. It fires on every frame, so the rate while it runs is a
+  traced rate.
+
+A load to watch: 16 TCP streams to the port. Run `iperf3 -s -B
+192.168.1.211 -D` here, and `iperf3 -c 192.168.1.211 -P 16 -t 60`
+on the client, as in 5b of `../XEU_CONVERGENCE.md`. Then the harness's
+copy cell, for NFS.
+
+1. `ethtool -x enp161s0f0` before setting anything: the firmware's own
+   table. If it fails, `dmesg` names the first entry that is not one of
+   the port's rings. Either way, record what it shows. It answers the
+   question of how big the hardware's table is.
+2. Under load: `rings.sh` and `xeu-rx.bt` give the baseline, the
+   shares as they fall and which flow is on which ring.
+3. `ethtool -X enp161s0f0 weight 1 0 0 0`. **Everything should move to
+   ring 0** (`rings.sh`, under load). That shows the table is used.
+   - If only part moves, the hardware indexes fewer entries than
+     were set. Reload with a smaller `rss_indir_size` (64, 16, 4).
+     The reload is Mike's.
+   - Then `weight 0 1 0 0`, and `equal 4` to spread it again.
+4. `ethtool -X enp161s0f0 hfunc toeplitz`; `ethtool -x` then shows it
+   with the key. In `xeu-rx.bt` the flows' hashes change. Then check
+   whether **the hash's low bits pick the entry**: for each flow in
+   `@flow`, take hash mod 128, look that entry up in `ethtool -x`, and
+   see whether it names the ring the flow is on. If it does for every
+   flow:
+   - a flow's ring can be chosen;
+   - Toeplitz over the 4-tuple with the shown key gives the hash, so
+     a flow's entry can be computed from its ports;
+   - this is one of the questions to Xsight, answered.
+5. If 4 holds, balancing means giving each flow's entry a ring of its
+   own choosing. The `ethtool` CLI sets only weights, not single
+   entries, so this needs a small tool that writes the table through
+   `ETHTOOL_SRSSH`. It is not written yet; it is the next thing to
+   write once 4 is known.
+
+Record it all as a new section of `../XEU_CONVERGENCE.md`.
+
+### 2. `rx_buf_size`: one reload, then the A/B
+
+1. Reload `xeu` with pieces of a page. This is Mike's: it drops
+   `enp164s0f0` for a few seconds.
+
+       echo none > /sys/module/page_pool/parameters/rx_region_dev
+       rmmod xeu && modprobe xeu rss_indir_size=128 rx_buf_size=5440
+       ./bringup.sh 32768 256
+
+2. `dmesg | grep rx_buf_size` should show: "5376-byte RX buffers, 3 to a
+   page, up to 2 to a 9000-byte MTU frame".
+3. **See it work.** Under load, `xeu-rx.bt` should show `@truesize`
+   10752 with 1 frag for full frames, where a whole page showed 16384
+   with 0. Then compare the region's `used_pages` for the same copy
+   cell against the control. Expect about 2/3.
+4. Then the A/B in "Receive buffers smaller than a page" below:
+   - 5376, twice, now;
+   - 4096, twice, after another reload;
+   - the default, twice, as this boot's control, after a reload
+     with `rx_buf_size` left out.
+
+Read every run's ring shares before comparing rates, or run with
+`BALANCE=35`.
+
+### 3. Then, in this order
+
+1. The loan cell again, which crashed tardis1, with and without the
+   linger. Reading its `rx_pp_recycle_ring_full` and `alloc_slow`
+   decides the page-pool items.
+2. "Is the linger worth its CPU in copy mode" (50, 25, 20 and 0 us,
+   with `linger.bt`).
+3. "Does `pools_per_node` earn its place" (64 connections; each pool
+   change restarts nfsd, which is Mike's).
+4. The 4 x 128 cell ("The footprint against the L3").
+
+## tardis1 crashed in the loan cell (2026-10-09, evening)
+
+(On the next kernel, which has the fix built in, step 1 of "On the
+boot after the power cycle" below does not apply. The section above
+has that boot's order.)
 
 After the three runs above, the session started the loan cell, traced,
 twice: once with no linger and once with `svc_tcp_rx_linger_us` 50. It

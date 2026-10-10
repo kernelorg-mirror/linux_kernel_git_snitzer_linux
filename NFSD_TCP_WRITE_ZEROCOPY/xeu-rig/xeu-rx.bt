@@ -1,0 +1,25 @@
+#!/usr/bin/bpftrace
+/*
+ * xeu-rx.bt - what the port hands to GRO, frame by frame, from the
+ * net:napi_gro_receive_entry tracepoint:
+ *   @truesize, @frags  the RX buffers: a whole page per frame shows the page
+ *                      size and 0 frags; rx_buf_size=5440 (5376 on arm64)
+ *                      shows 10752 and 1 frag for a full 9000-MTU frame
+ *   @len               the frame's length (to tell full frames from short)
+ *   @ring_bytes        bytes by NAPI id: one NAPI per RX ring, ids in ring
+ *                      order (check the shares against rings.sh)
+ *   @flow              bytes by (RSS hash, NAPI id): each flow, and the ring
+ *                      it landed on; the hash is the card's, as xeu sets it
+ * Every frame fires it, millions a second at full rate, so run it for a few
+ * seconds and read the rate it was taken at as traced:
+ *     timeout -s INT 5 bpftrace xeu-rx.bt
+ */
+tracepoint:net:napi_gro_receive_entry
+/str(args.name) == "enp161s0f0"/
+{
+	@truesize[args.truesize] = count();
+	@frags[args.nr_frags] = count();
+	@len = hist(args.len);
+	@ring_bytes[args.napi_id] = sum(args.len);
+	@flow[args.hash, args.napi_id] = sum(args.len);
+}
