@@ -105,11 +105,19 @@ hands carries its loan table with it.
   of the profile, and the rate. The best value is the shortest linger
   that keeps calls near 2, if the rate holds. If 0 runs as fast as the
   others at less CPU, the linger is off for copy mode.
-- **Not measured, and what would pick the value directly:** how long
-  each wait lasts before data comes. `handoff.bt` does not record it,
-  and `svc_tcp_rx_linger()` is a static function that may be inlined. A
-  histogram of it would need a tracepoint or a counter in the wait
-  loop.
+- **How long each wait lasts, which picks the value directly.** "SUNRPC:
+  Trace how long a thread lingers for the rest of a TCP record" adds
+  the tracepoint `sunrpc:svcsock_tcp_rx_linger`. It fires once per
+  wait, with the time waited, the limit, how much of the fragment had
+  arrived, and why the wait ended: data, timeout, close or resched.
+  `linger.bt` makes histograms of it by outcome, and `trace-sweep.sh`
+  runs it for 8 s in every cell, into `linger-*.txt`. The cell's
+  tracers now end at about 94 s of its 120. Read the waits that ended
+  on data: the limit wants to sit just above most of them. Every
+  timeout is a wait spent for nothing. The tracepoint is in sunrpc, so
+  it comes with the module build of the tip. Neither the tracepoint
+  nor `linger.bt` has run yet. With an older sunrpc, `linger.bt`
+  fails to attach and leaves only its error in the file.
 
 ## The page-pool work items: what was done (2026-10-09, evening)
 
