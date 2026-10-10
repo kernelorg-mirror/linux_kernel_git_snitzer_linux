@@ -1,0 +1,9 @@
+# Eight rings on rx_buf_size=5440, a 1 MiB held buffer: 256 entries are
+# 128 frames a ring, the memory 4 x 512 posts; 512 entries are 256 frames
+# a ring and twice that.  The port is set to eight rings by hand first
+# (down, ethtool -L combined 8, up), and nfsd's threads are moved to CPUs
+# 16-55: rings 4 to 7 interrupt on CPUs 8, 10, 12 and 14, which nfsd's
+# usual 8-55 includes.
+#     RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+256 1048576 0 prp step-copy-n16
+512 1048576 0 prp step-copy-n16

@@ -2304,6 +2304,56 @@ Next, not started: a buffer past 1 MiB on 4 x 512 (does it gain, or
 does the region leave the cache), then the linger, `rx_refill_thresh`
 and the pools.
 
+### Eight rings: the rings' CPUs were not the limit (10 October, 16:50 to 17:10)
+
+In the 41.8 GB/s cell the four rings' CPUs (0, 2, 4, 6) were 91% busy,
+about 80% of it softirq, and the client's connections waited on the
+server's window 95% to 99% of the time. So eight rings were tried, to
+halve each ring CPU's load: `plans/16k-30-rings8.plan`,
+`$L/xeu-16k-463-rings8-1` and `-2`, 5440-byte buffers, a 1 MiB held
+buffer, `PLACE=1`, traced. With eight rings, rings 4 to 7 interrupt
+on CPUs 8, 10, 12 and 14 (Tx on 9, 11, 13, 15), which nfsd's 8-55
+includes, so **nfsd's threads were moved to CPUs 16-55 for these
+cells** (`taskset`, 40 CPUs for 48).
+
+| rings (frames a ring) | GB/s | region pages | ring drops | RTOs | CPU-s per GB | `memmove` | calls per WRITE |
+|---|---|---|---|---|---|---|---|
+| 4 x 512 (256), the cell before | 41.8, 40.7 | 1904, 1824 | 0, 0 | 0, 1 | 0.50, 0.49 | 30.1%, 28.5% | 2.0, 2.1 |
+| 8 x 256 (128) | 39.6, 39.3 | 2085, 2048 | 0, 0 | 34, 6 | 0.63, 0.62 | 28.8%, 27.5% | 1.8, 1.9 |
+| 8 x 512 (256) | 36.0 | 2848 | 0 | 0 | 0.69 | 34.3% | 1.6 |
+
+1. **No gain: 39.6 and 39.3 GB/s against 41.8 and 40.7.** The rings'
+   CPUs were relieved as meant: each of the eight was 60% to 70% idle,
+   where the four had been 9% idle. So their load was not what held
+   the rate.
+2. **The footprint grew past the L3 and the copy got dearer.** Eight
+   rings of 128 frames post the memory four of 256 do, but the region
+   in use peaked at 2048 to 2085 pages (32 to 33 MiB) against 1824 to
+   1904. Server CPU per GB rose from 0.50 to 0.62. At 8 x 512 the
+   region reached 2848 pages (44.5 MiB), `memmove` 34% of cycles, and
+   the rate fell to 36.0. It is the copy against the cache again
+   ("The copy with a larger held buffer", F2).
+3. **Eight shallow rings do not drop.** 128 frames a ring dropped 880
+   thousand frames a run on four rings and none on eight, with each
+   ring carrying an eighth. The 34 and 6 RTOs are not explained.
+4. Placement put two flows on each of the eight rings in all three
+   cells; in the cells the rings carried 12% to 13% each.
+5. Not separated: nfsd on 40 CPUs and not 48. Its CPUs showed 55% to
+   58% system time and about 9% idle (the rest I/O wait) against 30%
+   and 26% on four rings. The four-ring cell has not been run with
+   nfsd on 16-55.
+
+After these cells the port is at 8 rings of 256 entries and nfsd's
+threads are on CPUs 16-55. The best setting is 4 x 512: `ip link set
+enp161s0f0 down; ethtool -L enp161s0f0 combined 4; ip link set
+enp161s0f0 up; ethtool -G enp161s0f0 rx 512`, and `systemctl restart
+hammerspace-nfsd-tuning` (or `taskset -pc 8-55` on each nfsd thread)
+puts nfsd back.
+
+Not run: eight rings of 128 frames with the 685 KiB buffer, which
+would put the footprint back under the L3 and say whether relieved
+ring CPUs help when the copy is not paying for it.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
