@@ -1565,6 +1565,89 @@ measured alone; that is step 6 of the README and waits for Mike.
 - **storage (T5, B5):** unchanged. Build 461's MD stacking change has
   the copy written direct on the stripe; the loan still goes through
   the page cache.
+- **Receive buffers smaller than a page: `xeu` `rx_buf_size` (W2,
+  F2): new, not written. The README has the A/B ("Receive buffers
+  smaller than a page").** Today `xeu` posts one whole page-pool page
+  per receive descriptor, so at 16 KiB pages a 9018-byte frame has a
+  16 KiB page to itself, and the ~7 KiB after it is never used.
+  Details:
+  - **What the driver does now** (stock 2.0.1, `xeu_drv.c`):
+    `xeu_rx_refill()` takes a page with `page_pool_alloc_pages()`
+    and posts `dst_addr = dma + XEU_RX_PAGE_HEADROOM` with
+    `len = XEU_RX_PAGE_DATA_SIZE`, which is `PAGE_SIZE` less the
+    headroom and `skb_shared_info`. `xeu_rx_poll()` builds the skb
+    on the first buffer with `napi_build_skb(page, PAGE_SIZE)`. If a
+    frame spans several descriptors (`num_desc`), it adds the rest
+    as frags with `skb_add_rx_frag(..., PAGE_SIZE)`.
+    `max_rx_buf_per_pkt` is `DIV_ROUND_UP(XEU_MAX_MTU,
+    XEU_RX_PAGE_DATA_SIZE)`, and is passed to the firmware in
+    `xsl_rm_rss_configure()`. The hardware takes any address and
+    length per descriptor (`PROJECT.md`, "Xsight E1 RX
+    capabilities").
+  - **The change.** Add a load-time parameter `rx_buf_size` in bytes
+    (0, the default, means `PAGE_SIZE`, which is today's behaviour).
+    Each descriptor gets one `rx_buf_size` piece of a page-pool page
+    (`page_pool_dev_alloc_frag()`), at that piece's offset. Each
+    piece keeps its own headroom and `skb_shared_info` room, because
+    any descriptor can be the first of a frame, so the skb is still
+    built in place. Concretely:
+    - `xeu_sw_rx_desc` records the offset;
+    - the refill posts `dma + offset + headroom`;
+    - the poll uses `napi_build_skb(addr + offset, rx_buf_size)` and
+      gives frags the offset and a truesize of `rx_buf_size`;
+    - the data size becomes a per-device value;
+    - `max_rx_buf_per_pkt` is computed from it, so the firmware
+      allows the extra buffers per frame.
+
+    Page-pool fragment references are what our loan, region and
+    recycle paths already count.
+  - **Which sizes are worth it.** Each piece holds `rx_buf_size`
+    less about 66 bytes of headroom (64 plus `rx_ip_align`'s 2) and
+    about 320 of `skb_shared_info`. A 9018-byte frame then needs:
+
+    | `rx_buf_size` | data per piece | pieces per frame | pieces per 16 KiB page | page per frame |
+    |---|---|---|---|---|
+    | 16384 (today) | ~16000 | 1 | 1 | 1 |
+    | 8192 | ~7800 | 2 | 2 | 1, no gain |
+    | **5440** | ~5050 | **2** | **3** | **2/3** |
+    | 4096 | ~3710 | 3 | 4 | 3/4 |
+
+    Any size from about 4900 to 5461 gives 2 pieces per frame and 3
+    per page. 5440 leaves room for the estimates above to be off.
+    The ring index is a mask, so a ring's size stays a power of two.
+  - **What it can and cannot buy (correcting an earlier claim).** The
+    unused 7 KiB of a page is never written or read, so it takes no
+    cache. "A 1 MiB WRITE is 1.8 MiB of region" counts pages, not
+    cache lines, and F2's curve cannot simply be read at 25% fewer
+    pages. What denser buffers do buy:
+    - truesize: a held receive buffer carries 83% data at 5440,
+      against 55% at a page per frame (W2's 256 KiB held 140 KiB);
+    - posted and region memory per frame, about 2/3: the region and
+      a loan's charge are counted in pages;
+    - possibly cache sets. Every frame now sits at the same offset
+      of its page, so the frame bytes cover only part of each page's
+      cache sets. Spread over three offsets, they use more of the L3.
+      That is a guess, and the A/B would show it.
+
+    What it costs:
+    - twice the descriptors per frame;
+    - each frame brings two frags to GRO in place of one, so a GRO
+      skb holds about half as many frames. That means more skbs for
+      each WRITE, and more per-skb work in TCP and in
+      `svc_tcp_recv_actor()`.
+  - **Things in the same code.** These all touch the descriptor and
+    poll paths that the change rewrites, and must be carried with
+    it:
+    - `rx_ip_align` (the headroom, per piece);
+    - the refill retry, and `rx_refill_thresh`, which both count
+      descriptors, so the threshold wants scaling;
+    - the paired-posting experiment in `xeu-hds-experiment/`, which
+      is the same code with a different aim; the two are exclusive.
+
+    The harness's loan geometry (`FRAME_PAGE`, the charge per WRITE)
+    assumes a frame per page. It needs changing before a loan cell
+    runs at another `rx_buf_size`. Copy cells, at budget 0, do not
+    use it.
 - **rings, how the flows fall (F5, S5): new, none of it done.** Which
   ring takes a flow is the hash of its five-tuple, and with sixteen
   flows on four rings that alone moved build 462's runs by 4% (one

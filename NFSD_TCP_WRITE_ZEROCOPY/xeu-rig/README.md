@@ -139,6 +139,59 @@ with it. Still near 9% of returns means keeping the mapping on region
 pages is the next change. It is in `net/core` and needs a kernel
 build.
 
+## Receive buffers smaller than a page: `rx_buf_size`, and its A/B
+
+The work item, with the driver's code as it is, the change and the
+sizes, is "Receive buffers smaller than a page" in
+`../XEU_CONVERGENCE.md`'s "Since then". In short:
+- `xeu` gets a load-time `rx_buf_size`;
+- each receive descriptor takes one piece of a page-pool page, built
+  in place as today;
+- at 5440 bytes a 9018-byte frame takes 2 pieces, and a 16 KiB page
+  holds 3, so 2/3 of a page per frame where today it is a whole one.
+
+**Not written.** It is kmod release 6, on top of release 5's patches.
+Lowering the MTU tests nothing: the driver posts a whole page whatever
+the frame. 9000 is the driver's maximum MTU, so it cannot be raised
+either.
+
+**The A/B.** The cell is `plans/16k-26-copybest.plan`'s copy cell, on
+the whole stack with the fixed sunrpc, `BALANCE` on. Each
+`rx_buf_size` is a reload of `xeu`. That takes `enp164s0f0` down for
+a few seconds, so each reload is Mike's.
+
+| `rx_buf_size` | ring entries | frames the ring holds | held receive buffer | the same data window |
+|---|---|---|---|---|
+| 0 (a page, the control) | 256 | 256 | 1 MiB | yes |
+| 5440 | 512 | 256 | 680 KiB | yes |
+| 4096 | 1024 | about 341 | 768 KiB | yes; more frames posted |
+
+Every row holds the same frames and the same data in the receive
+buffer. So what changes is the memory per frame, and what that does
+to the rate. 680 and 768 KiB are 1 MiB scaled by each size's truesize
+per frame (10880 and 12288 bytes against 16384). The ring size has to
+be a power of two, so 4096 cannot be held at 256 frames.
+
+The order: load 5440 and run the cell twice; load 4096, twice; load
+the default, twice, as this boot's control. Six runs at about 3 TB
+each is 18 TB on the stripe; trim before each. After that, if 5440
+wins, run it once at the old setting (256 entries, 1 MiB) as well.
+That is half the frames posted and more data in the buffer, to see
+what the denser buffers allow and not only what they cost.
+
+**What decides it:**
+- the rate, at equal frames and equal data window;
+- `used_pages`, expected near 2/3 of the control's at 5440;
+- `memmove`'s share of cycles, and calls per WRITE (`handoff.bt`);
+- CPU-seconds per GB, which carries the cost of twice the
+  descriptors and of smaller GRO skbs;
+- ring drops and `rx_pp_*`.
+
+If 5440 is not faster and `memmove` is no smaller, the page per frame
+is not what holds the copy, and the default stays. The size of a GRO
+skb is not measured by anything here. If the CPU per GB rises, that
+is the first thing to instrument.
+
 ## How the flows fall on the rings: three work items
 
 The largest source of spread between runs of one cell is which ring
@@ -279,7 +332,8 @@ What is left open, by what the runs showed: how the sixteen flows fall
 on the four rings (the one slow run of three had a ring at 19.9 GB/s
 and 440 thousand drops); the linger's busy wait, 14% to 17% of cycles;
 `memmove`, still a quarter of them; a 9000-byte frame with 16 KiB to
-itself. The driver's `rx_refill_thresh` patch is still uncommitted in
+itself (now a work item: "Receive buffers smaller than a page"
+above). The driver's `rx_refill_thresh` patch is still uncommitted in
 `kernel-rpmtree`.
 
 **The footprint against the L3 is the next lever for the copy.** Build
