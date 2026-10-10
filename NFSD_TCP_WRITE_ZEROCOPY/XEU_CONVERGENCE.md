@@ -1560,6 +1560,40 @@ measured alone; that is step 6 of the README and waits for Mike.
   `free_unref_folios` are gone from the profile (S3). A socket now
   keeps up to the pages of its largest parked record until it closes;
   nothing bounds that yet.
+- **sunrpc, the pages a socket keeps after the page swap: new, not
+  done.** Since "SUNRPC: Trade pages with the socket when a partial
+  record changes hands" (`47f13c685c5b5`), when a thread takes a parked
+  record back (`svc_tcp_restore_pages()`), it swaps its own pages into
+  the socket's `sk_pages[]` where it used to free them. They stay there
+  for the next thread that parks a record on that socket.
+  - **How much:** as many pages as the largest record that changed
+    hands on the connection, so at most `svc_serv_maxpages()` (the
+    largest RPC message plus 3 pages). For nfsd's 1 MiB that is about
+    1 MiB a connection, at any page size.
+  - **For how long:** until the connection closes.
+    `svc_tcp_clear_pages()`, at close, walks every slot and frees them,
+    so nothing leaks (checked 9 October against its early return,
+    which is taken only on an invariant violation, with a warning).
+  - **What they are:** ordinary page-allocator pages, the threads'
+    `rq_pages`, not region pages. No shrinker reaches them.
+  - **What changed:** before the patch a connection between records
+    held none. Now every connection that ever received a large WRITE
+    in more than one call keeps about 1 MiB. That is 16 MiB for this
+    rig's sixteen connections. With nconnect=16 from a thousand
+    clients it is about 16 GiB that comes back only as clients
+    disconnect. The total has no bound.
+  - **Ways to bound it, none written:**
+    1. Free the kept pages when the connection goes quiet: a read
+       that finds no data and no record under way. That keeps the
+       swap inside a burst of WRITEs, which is where it pays.
+    2. A cap on pages kept across all sockets, as a module parameter.
+       Over the cap a restore frees, as before the patch.
+    3. A shrinker over the kept pages.
+
+    1 does most of it, and 2 is a cheap backstop. The linger makes a
+    record change hands less often (2 calls for a WRITE where it was
+    6), so with it on there is less for the swap to save, but the
+    pages are kept all the same once a record has changed hands.
 - **nfsd, several thread pools (T6): written, not shown to work.** "SUNRPC:
   Let a NUMA node have several thread pools" (`72766c5ac54ae`) adds
   `pools_per_node`; build 462 ran with 4. T6's contention was at 64

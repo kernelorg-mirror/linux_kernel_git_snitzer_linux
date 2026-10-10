@@ -274,6 +274,19 @@ hands carries its loan table with it.
   nor `linger.bt` has run yet. With an older sunrpc, `linger.bt`
   fails to attach and leaves only its error in the file.
 
+## A known gap in the page swap: pages a socket keeps (work item)
+
+Since the page swap (`47f13c685c5b5`), a connection keeps the pages a
+thread gave it in exchange for a parked record. That is up to the
+largest record that changed hands on it, about 1 MiB for nfsd, and it
+keeps them until it closes. 16 MiB for this rig, about 16 GiB for a
+thousand nconnect=16 clients. They are freed at close, so nothing
+leaks, but nothing bounds the total. The details and three ways to
+bound it are under "sunrpc, the pages a socket keeps after the page
+swap" in `../XEU_CONVERGENCE.md`'s "Since then". It does not affect
+this rig's measurements. It has to be bounded before the page swap
+goes to production or upstream.
+
 ## The page-pool work items: what was done (2026-10-09, evening)
 
 T1 and T2 in `../XEU_CONVERGENCE.md` suggested three things for a pool
