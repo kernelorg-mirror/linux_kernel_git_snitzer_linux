@@ -1,0 +1,7 @@
+# The direct copy on xeu loaded with rx_buf_size=5440 (three buffers to a
+# 16 KiB page, two to a 9000-byte frame): the same 256 frames to a ring
+# and the same data in the held buffer as 16k-26-copybest.plan, so 512
+# ring entries and 1 MiB scaled by the truesize of a frame (11136 bytes
+# against 16640).
+#     RX_LINGER_US=50 BALANCE=35 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+512 701440 0 prp step-copy-n16
