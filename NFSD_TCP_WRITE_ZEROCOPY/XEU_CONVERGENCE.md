@@ -2262,6 +2262,48 @@ The cells, each on `rx_buf_size=5440`, traced, sixteen connections,
 | 4 x 256 | 128 | 685 KiB |
 | 4 x 256 | 128 | 1 MiB |
 
+### Ring depth and the held buffer on 5440-byte buffers: the results (10 October, 15:20 to 16:05)
+
+`$L/xeu-16k-463-depthbuf-1` and `-2`: the plan run twice, traced,
+`PLACE=1`, the rest of the stack as before.
+
+| rings (frames) | held buffer | GB/s | region pages | ring drops | retransmits | RTOs | CPU-s per GB | `memmove` | `arch_counter_get_cntpct` | calls per WRITE |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 4 x 512 (256) | 685 KiB | 39.4, 39.6 | 1536, 1456 | 0, 0 | 4546, 3902 | 0, 0 | 0.49, 0.50 | 23.7%, 23.6% | 19.0%, 18.8% | 2.3, 2.3 |
+| 4 x 512 (256) | 1 MiB | **41.8, 40.7** | 1904, 1824 | 0, 0 | 4765, 5001 | 0, 1 | 0.50, 0.49 | 30.1%, 28.5% | 11.7%, 12.8% | 2.0, 2.1 |
+| 4 x 256 (128) | 685 KiB | 40.5, 40.3 | 1056, 1126 | 106001, 105372 | 146140, 149346 | 18, 23 | 0.48, 0.48 | 21.7%, 21.8% | 20.1%, 20.3% | 2.3, 2.4 |
+| 4 x 256 (128) | 1 MiB | 40.9, 40.8 | 1451, 1499 | 884434, 875254 | 1204311, 1192019 | 200, 203 | 0.47, 0.46 | 24.7%, 23.9% | 16.1%, 16.5% | 2.2, 2.3 |
+
+1. **4 x 512 with a 1 MiB buffer is the best: 41.8 and 40.7 GB/s, no
+   drops.** About 1.7 GB/s over the 685 KiB buffer on the same rings.
+   The linger's busy wait falls from 19% of cycles to 12%, since more
+   of a WRITE has arrived when a thread reads; `memmove` rises from
+   24% to 29%, with 28.5 to 30 MiB of region in use against 23 to
+   24. It spends nearly all of the L3.
+2. **Rings of 128 frames drop.** 105 thousand frames a run at 685 KiB
+   and 880 thousand at 1 MiB, with 18 to 200 RTOs on the client. The
+   rate holds at 40.3 to 40.9 through TCP's resends, in as little as
+   16.5 MiB. Not a setting to keep.
+3. **Placed runs repeat.** The two runs of a setting differ by 0.1 to
+   1.1 GB/s. 4 x 512 at 685 KiB has three placed runs now, 39.4, 39.6
+   and 39.9, where `BALANCE=35` gave 41.0 and 36.6.
+4. **The placement.** Before the table was set the flows fell with up
+   to 57% on a ring and as little as 0% (the table of the cell before
+   is still in force at the mount, so this is not the card's own
+   fall). In seven cells of eight the rings then carried 24% to 26%
+   each through the cell. In `depthbuf-2`'s first cell they carried
+   31/19/25/25%: `rss-place.py` balances by the bytes of a 3 s sample
+   and put 5, 3, 4 and 4 flows on the rings. Balancing by flow count
+   when the flows are symmetric, or sampling longer, would avoid it.
+5. `place.txt` was kept in every cell (the fix of the first run's
+   loss). `rx_pp_recycle_ring_full` 0 and `alloc_fail` 0 throughout.
+6. 4 x 512 at 685 KiB peaked at 1456 to 1536 pages here and at 1360
+   to 1376 in the three runs before; not looked into.
+
+Next, not started: a buffer past 1 MiB on 4 x 512 (does it gain, or
+does the region leave the cache), then the linger, `rx_refill_thresh`
+and the pools.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

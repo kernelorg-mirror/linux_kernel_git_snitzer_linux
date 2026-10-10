@@ -49,6 +49,15 @@ fell, 25.0/25.0/25.4/24.6% in the cell, 39.9 GB/s. Use it for every
 cell from here ("Flows placed on the rings under NFS" in
 `../XEU_CONVERGENCE.md`).
 
+**Ring depth and the held buffer (2026-10-10, 16:05):** on 5440-byte
+buffers, placed, two runs each: **4 x 512 with a 1 MiB buffer carries
+41.8 and 40.7 GB/s with no drops, in 28.5 to 30 MiB**; 685 KiB on the
+same rings 39.4 and 39.6; rings of 4 x 256 drop 105 to 880 thousand
+frames. The rings were left at 4 x 256 by the last cell: `ethtool -G
+enp161s0f0 rx 512` before anything else. The account is "Ring depth
+and the held buffer on 5440-byte buffers: the results" in
+`../XEU_CONVERGENCE.md`.
+
 **Not done from the list below:** 5440 at the old
 setting of 256 entries and a 1 MiB buffer; and everything in step 3
 (the loan cell that crashed tardis1, the linger's values, the pools,
