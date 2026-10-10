@@ -58,6 +58,14 @@ enp161s0f0 rx 512` before anything else. The account is "Ring depth
 and the held buffer on 5440-byte buffers: the results" in
 `../XEU_CONVERGENCE.md`.
 
+**Eight rings did not help (2026-10-10, 17:10):** 39.6 and 39.3 GB/s
+at 8 x 256 with the 1 MiB buffer against 4 x 512's 41.8 and 40.7; the
+rings' CPUs went from 9% idle to 60% to 70% idle and the region in use
+went past the L3 (32 to 33 MiB). **The port was left at 8 rings of 256
+entries and nfsd's threads on CPUs 16-55: put both back before any
+run at the best setting** ("Eight rings: the rings' CPUs were not the
+limit" in `../XEU_CONVERGENCE.md` has the commands).
+
 **Not done from the list below:** 5440 at the old
 setting of 256 entries and a 1 MiB buffer; and everything in step 3
 (the loan cell that crashed tardis1, the linger's values, the pools,
