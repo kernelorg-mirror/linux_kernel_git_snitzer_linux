@@ -1,0 +1,76 @@
+To: <Xsight engineering contact>
+Subject: xeu on E1: receive flow steering, RSS table and interrupt coalescing
+
+Hi <name>,
+
+Thanks again for the call about the receive path. We have acted on
+what you told us about reuse: page-pool pages bound to our receive
+region are now recycled last in, first out, and your point about
+keeping buffers in cache has held up in our measurements.
+
+The next thing limiting us is how flows land on the receive rings, and
+we need help from the driver to deal with it.
+
+The setup: an E1 port (xeu 2.0.1, with a few small local patches) on
+an arm64 server with 16 KiB pages, 4 RX rings of 256 entries, MTU
+9000. A single client writes over NFS on 16 TCP connections
+(nconnect=16) at 36 to 38 GB/s.
+
+What we see: which ring a connection lands on is decided by the hash
+of its addresses and ports. With 16 flows on 4 rings that spread is
+uneven and changes from mount to mount. On one run the rings took 25%,
+6%, 31% and 37% of the traffic. Across three runs of the same test,
+the run with the worst spread was the slowest: its busiest ring
+carried 19.9 GB/s, and the run dropped 440 thousand frames at the ring
+tail, where the other two runs dropped about 3 thousand each. That
+spread is now the largest source of run-to-run variation we have. With
+64 connections the rings come out much more even (28/27/20/25%), as
+you said they would, but we would like to control placement rather
+than rely on numbers.
+
+What we found missing in xeu: `ethtool -x` and `-X` (the RSS
+indirection table and key), `ethtool -n rx-flow-hash`, and ntuple
+filters (`ethtool -N ... action <ring>`) are all unsupported. From our
+reading of the driver source, there are also no interrupt coalescing
+controls (`ethtool -C`). In our profiles, re-enabling the interrupt at
+the end of each RX poll accounts for about 6% of samples.
+
+In order of priority, this is what would help us most:
+
+1. RSS indirection table and hash key, through `ethtool -x` / `-X`
+   (get_rxfh / set_rxfh). If the hardware already spreads flows
+   through a table, exposing it is likely the cheapest change. It
+   would let us weight rings and, with the key readable, work out
+   which table entry each connection uses and move a busy entry to an
+   idle ring, with no remounting.
+
+2. ntuple flow filters, through `ethtool -N flow-type tcp4 ...
+   action <ring>`, to place a single connection on a chosen ring. The
+   table cannot separate two busy flows that share one entry; a
+   filter can.
+
+3. Interrupt coalescing / moderation, through `ethtool -C`, ideally
+   per ring.
+
+We do not need accelerated RFS. Our server reads its sockets in a way
+that does not record a flow's CPU, and any server thread can serve any
+connection, so there is no CPU to steer towards.
+
+Our questions:
+
+- Does the E1 have an RSS indirection table, and how many entries does
+  it have?
+- Is the RSS hash Toeplitz? Can the key be read, and set?
+- Is there a flow-filter (ntuple) table? How many entries, and can an
+  entry match a TCP 4-tuple and direct it to a ring?
+- Can interrupt moderation be set, and per ring?
+- If the table exists, could xeu expose get_rxfh / set_rxfh? If a
+  patch from us would be welcome, we are glad to write one against
+  your source.
+
+Any hardware documentation on the RSS block, the flow filters and
+interrupt moderation would also help us.
+
+Thanks,
+Mike Snitzer
+Hammerspace
