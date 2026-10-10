@@ -28,26 +28,42 @@ spread is now the largest source of run-to-run variation we have. With
 you said they would, but we would like to control placement rather
 than rely on numbers.
 
-What we found missing in xeu: `ethtool -x` and `-X` (the RSS
-indirection table and key), `ethtool -n rx-flow-hash`, and ntuple
-filters (`ethtool -N ... action <ring>`) are all unsupported. From our
-reading of the driver source, there are also no interrupt coalescing
-controls (`ethtool -C`). In our profiles, re-enabling the interrupt at
-the end of each RX poll accounts for about 6% of samples.
+What we found in xeu 2.0.1: there is no get_rxfh / set_rxfh, so
+`ethtool -x` and `-X` (the RSS indirection table and key) do nothing.
+`ethtool -n rx-flow-hash` returns EOPNOTSUPP. ntuple takes exactly one
+rule, at location 0, and its target can only be a VF, not an RX ring.
+From our reading of the driver source, there are no interrupt
+coalescing controls (`ethtool -C`) either. In our profiles,
+re-enabling the interrupt at the end of each RX poll accounts for
+about 6% of samples.
+
+The SDK built into the module seems to have most of what we need
+already. The RM library has:
+- xsl_rm_reta_set() and xsl_rm_reta_get(): a redirection table of up
+  to 256 ring entries;
+- xsl_rm_rss_hash_set() and xsl_rm_rss_hash_get(): a 68-byte seed,
+  and which packet types are hashed;
+- xsl_rm_rss_hash_type_set(): Spooky, which is the default, Toeplitz
+  or symmetric Toeplitz.
+
+xeu does not call any of them. It only calls xsl_rm_rss_configure()
+with its list of rings. So exposing the table and the key may be a
+small driver change, which we would be glad to write if you can
+confirm how these calls behave.
 
 In order of priority, this is what would help us most:
 
 1. RSS indirection table and hash key, through `ethtool -x` / `-X`
-   (get_rxfh / set_rxfh). If the hardware already spreads flows
-   through a table, exposing it is likely the cheapest change. It
-   would let us weight rings and, with the key readable, work out
-   which table entry each connection uses and move a busy entry to an
-   idle ring, with no remounting.
+   (get_rxfh / set_rxfh), on top of xsl_rm_reta_set/get and
+   xsl_rm_rss_hash_set/get. It would let us weight rings and, with
+   the key readable and the hash Toeplitz, work out which table entry
+   each connection uses and move a busy entry to an idle ring, with
+   no remounting.
 
-2. ntuple flow filters, through `ethtool -N flow-type tcp4 ...
-   action <ring>`, to place a single connection on a chosen ring. The
-   table cannot separate two busy flows that share one entry; a
-   filter can.
+2. ntuple flow filters that target an RX ring, through `ethtool -N
+   flow-type tcp4 ... action <ring>`, and more than one of them, to
+   place a single connection on a chosen ring. The table cannot
+   separate two busy flows that share one entry; a filter can.
 
 3. Interrupt coalescing / moderation, through `ethtool -C`, ideally
    per ring.
@@ -58,15 +74,22 @@ connection, so there is no CPU to steer towards.
 
 Our questions:
 
-- Does the E1 have an RSS indirection table, and how many entries does
-  it have?
-- Is the RSS hash Toeplitz? Can the key be read, and set?
-- Is there a flow-filter (ntuple) table? How many entries, and can an
-  entry match a TCP 4-tuple and direct it to a ring?
+- How is the redirection table indexed? Is it the low bits of the
+  hash, as the RSS group's load-balancing mask suggests, and is its
+  size fixed at 256 entries or set by the number of rings?
+- Can xsl_rm_reta_set() be called while the port is up and traffic is
+  flowing, and do the flows move cleanly?
+- With xsl_rm_rss_hash_type_set() set to Toeplitz, is it the standard
+  Microsoft Toeplitz over the IPv4/IPv6 TCP 4-tuple, with the seed as
+  its key? Which bytes of the 68-byte seed are used for IPv4 TCP?
+- Is there a reason the default hash is Spooky (PP_RSS_DEFAULT_HASH)
+  and xeu does not expose these calls: a firmware limitation, or a
+  known problem?
+- Can the ntuple rule target an RX ring instead of a VF, and can there
+  be more than one rule? If not in xeu, can the flow table (the "FT"
+  RSS groups, xsl_rm_ft_rss_group_set()) steer a single TCP flow to a
+  ring?
 - Can interrupt moderation be set, and per ring?
-- If the table exists, could xeu expose get_rxfh / set_rxfh? If a
-  patch from us would be welcome, we are glad to write one against
-  your source.
 
 Any hardware documentation on the RSS block, the flow filters and
 interrupt moderation would also help us.
