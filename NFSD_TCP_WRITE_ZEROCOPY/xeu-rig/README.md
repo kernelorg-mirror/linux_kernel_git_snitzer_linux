@@ -153,17 +153,15 @@ sizes, is "Receive buffers smaller than a page" in
 
 **Written, built, not run** (9 October, evening):
 `kernel-rpmtree/xsight/xeu-cut-RX-buffers-smaller-than-a-page-with-rx_buf_size.patch`,
-untracked there and not in `xsight.spec`, like the RSS patch. It
-applies at `-p0` after Patch0 to Patch4, alone or with the RSS patch
-in either order. Every object of the module that this host's 4 KiB
+Patch6 of `xsight.spec`, Release 6 (`kernel-rpmtree` 8c58863,
+unpushed). The spec's `%prep` applies Patch0 to Patch6 in order. Every object of the module that this host's 4 KiB
 config builds compiles clean (`xeu_ipsec.c` and `xeu_psp.c` need
 config this host lacks), with no new W=1 warnings. Besides the pieces,
 it counts the whole frame (MTU plus Ethernet and VLAN headers) when it
 tells the firmware how many buffers a frame may take, where the MTU
 alone could come out one short. The open logs the size in use. To
-build: add `Patch5:` (and `Patch6:` for the RSS patch) to the spec by
-hand, Release 6, `build-kmod.sh`; a size is set with
-`modprobe xeu rx_buf_size=5440`.
+build: `build-kmod.sh` (Release 6 has both patches); a size is set
+with `modprobe xeu rx_buf_size=5440`.
 Lowering the MTU tests nothing: the driver posts a whole page whatever
 the frame. 9000 is the driver's maximum MTU, so it cannot be raised
 either.
@@ -251,7 +249,8 @@ work items, all three also in that document's "Since then" list:
 3. **Steering in `xeu`**: a kmod change. **The first of it is
    written** (9 October, evening; built, not run):
    `kernel-rpmtree/xsight/xeu-expose-the-RSS-redirection-table-hash-key-and-function-to-ethtool.patch`,
-   untracked there and not in `xsight.spec`. It wires `ethtool -x`/`-X`
+   Patch5 of `xsight.spec`, Release 6 (`kernel-rpmtree` 799acf5,
+   unpushed). It wires `ethtool -x`/`-X`
    to the SDK's existing calls:
    - the redirection table, sized by the new load-time
      `rss_indir_size` (default 0 means no table, as before; at most
@@ -270,9 +269,8 @@ work items, all three also in that document's "Since then" list:
    `xeu_ipsec.c` needs XFRM offload, which this host's 4 KiB config
    lacks.
 
-   **To try it on tardis1** (`build-kmod.sh` with a `Patch5:` line
-   added to the spec by hand, Release 6; loading it reloads `xeu`, so
-   it is Mike's):
+   **To try it on tardis1** (`build-kmod.sh` builds Release 6;
+   loading it reloads `xeu`, so it is Mike's):
 
        modprobe xeu rss_indir_size=128     # after rmmod xeu
        ethtool -x enp161s0f0               # the firmware's table
@@ -391,8 +389,9 @@ on the four rings (the one slow run of three had a ring at 19.9 GB/s
 and 440 thousand drops); the linger's busy wait, 14% to 17% of cycles;
 `memmove`, still a quarter of them; a 9000-byte frame with 16 KiB to
 itself (now a work item: "Receive buffers smaller than a page"
-above). The driver's `rx_refill_thresh` patch is still uncommitted in
-`kernel-rpmtree`.
+above). The driver's `rx_refill_thresh` patch is Release 5 in
+`kernel-rpmtree` (3bc8f82); Release 6 adds the RSS and `rx_buf_size`
+patches (799acf5, 8c58863). None of it is pushed.
 
 **The footprint against the L3 is the next lever for the copy.** Build
 462 used 2052 to 2291 region pages, 32 to 36 MiB, which is the whole
