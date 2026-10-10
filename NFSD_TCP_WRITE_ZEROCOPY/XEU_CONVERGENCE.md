@@ -1585,9 +1585,50 @@ measured alone; that is step 6 of the README and waits for Mike.
      keeps a bad fall from deciding a result. Written as
      `BALANCE=<percent>` to `run-budget.sh` (the README has how to
      use it); not run yet.
-  3. **Steering in the driver.** `ethtool -X` (the indirection table)
-     or ntuple rules in `xeu`: a kmod change, and a question for
-     Xsight.
+  3. **Steering in the driver**: a kmod change, and questions for
+     Xsight. What to ask for, in order:
+     1. **The RSS indirection table and key, `ethtool -x`/`-X`
+        (`get_rxfh`/`set_rxfh`).** It comes first. It is cheap
+        wherever the hardware already spreads flows by a hash through
+        a table, and it works with the standard tools. It lets rings
+        be weighted. With the key readable, a client's 4-tuple names
+        a flow's table entry, so moving a hot entry to an idle ring
+        places that flow with no remounting. A harness, or a daemon
+        on a production server, could balance deterministically on
+        that alone. Its limit is two hot flows in one entry.
+     2. **ntuple filters, `ethtool -N flow-type tcp4 ... action
+        <ring>`.** These place one flow exactly, which covers the case
+        the table cannot. The limits are the hardware's filter table
+        and the rules: for NFS they are written after each mount,
+        since the client's ports change. aRFS is built on them.
+     3. **Interrupt coalescing, `ethtool -C`.** It is not steering, but
+        it is also missing ("no interrupt coalescing controls" in
+        section 1). `enable_irq` from `xeu_rx_poll` was 6.1% of the
+        samples (T11), and coalescing is the usual knob for that cost.
+
+     Not worth asking for now:
+     - **aRFS, and RFS in software.** RFS learns a flow's CPU from
+       `sock_rps_record_flow()`. TCP calls it from `recvmsg`, splice
+       and zerocopy receive (`net/ipv4/af_inet.c`, `net/ipv4/tcp.c`),
+       but not from `tcp_read_sock()`, which is how sunrpc reads. And
+       any nfsd thread serves any connection, so there is no CPU to
+       steer to. It would need sunrpc changes before it could pay.
+     - **Setting `rx-flow-hash`.** That only chooses the hash's fields,
+       and the ports are evidently in it. A read-only `-n
+       rx-flow-hash` would confirm it.
+
+     **Questions for Xsight:**
+     - Does the hardware have an RSS indirection table, and how many
+       entries?
+     - Is the hash Toeplitz, and can the key be read and set?
+     - Is there a flow-filter (ntuple) table, how many entries, and
+       can it match a TCP 4-tuple to a ring?
+     - Can interrupt moderation be set, per ring?
+     - If the table exists, can `xeu` expose `get_rxfh`/`set_rxfh`?
+
+     This order is from the driver notes in section 1 and the traces
+     here, not from Xsight's hardware documentation, which has not
+     been read.
 
 ### The harness had deferred skb frees off; with them on the copy is no faster (9 October, 14:30 to 15:10)
 
