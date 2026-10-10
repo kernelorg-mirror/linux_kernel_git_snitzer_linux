@@ -1,0 +1,6 @@
+# The direct copy with a 1 MiB held buffer on rings of 4 x 128, against
+# 16k-26-copybest.plan's 4 x 256: the region in use under the 32 MiB L3.
+# On build 461 it used 24 MiB, ran at 35.6 GB/s and dropped 1.5 million
+# frames; read whether the whole stack keeps it from dropping.
+#     RX_LINGER_US=50 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+128 1048576 0 prp step-copy-n16
