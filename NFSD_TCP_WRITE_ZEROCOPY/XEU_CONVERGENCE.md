@@ -1677,6 +1677,72 @@ page swap in the kernel being built; fewer buffers posted and idle
 driver posting a freed page sooner than every 32; and a 9000-byte
 frame not having 16 KiB to itself.
 
+### Build 462: the whole stack of changes (9 October, 18:10 to 19:00)
+
+Mike built `7.1.13-21.hs.462` from `…-WIP3` and rebooted into it. It
+has the page swap, the page-pool stack and the batched return. The two
+sunrpc patches written after that build began (`pools_per_node`,
+`svc_tcp_rx_linger_us`) were built as a module from the tip and put in
+place of the kernel's (`xeu-rig/build-sunrpc.sh`, `swap-sunrpc.sh`),
+with `pools_per_node=4`; `kmod-16k-xsight` release 5 was built for the
+kernel, installed and `xeu` reloaded, which gives `rx_refill_thresh`.
+No client was connected for any of it. The four KUnit suites pass on
+the new sunrpc (xdr 7/7, svcsock 43/43, nfsd 6/6, nfsd4 10/10).
+
+The cell is the copy's best of build 461, sixteen connections, 8 MiB
+writes, 512 nfsd threads, rings of 4 x 256, a 1 MiB held buffer
+(`plans/16k-26-copybest.plan`), with everything on: a linger of 50 us,
+a refill threshold of 8, deferred skb frees at 128, four pools.
+Traced, three runs (`xeu-16k-462-stack1` to `-stack3`), against build
+461's one traced run of the same cell:
+
+| | build 461 | run 1 | run 2 | run 3 |
+|---|---|---|---|---|
+| GB/s | 35.9 | 38.3 | 38.0 | 36.7 |
+| server CPU-seconds for each GB | 0.49 | 0.52 | 0.52 | 0.51 |
+| region pages in use at peak | 2054 | 2052 | 2106 | 2291 |
+| calls of `svc_tcp_recvfrom()` for a WRITE | 6.4 | 2.1 | 2.1 | 2.3 |
+| us in those calls for a WRITE | 269 | 351 | 354 | 345 |
+| `memmove`, of cycles | 30% | 27% | 27% | 25% |
+| `arch_counter_get_cntpct`, of cycles | 0.4% | 14.6% | 13.6% | 17.3% |
+| frames dropped at the ring's tail | 250564 | 3442 | 3257 | 440528 |
+| client RTOs | 30 | 1 | 2 | 139 |
+| `rx_pp_recycle_ring_full`, 10 s | 17278 | 178 | 111 | 5360 |
+| `rx_pp_alloc_empty`, 10 s | 1077 | 11 | 7 | 335 |
+| the busiest ring and the least busy, GB/s | 18.0, 2.9 | 14.5, 8.7 | | 19.9, 6.2 |
+
+Every WRITE was written direct and the region failed no allocation.
+
+S1. **The stack carries 38.0 GB/s at the median (36.7 to 38.3), 6%
+    over build 461's 35.9**, which was one run.
+S2. **The linger does what it is for and is paid for in CPU.** A WRITE
+    is received in 2 calls where it took 6.4. The wait is a busy one
+    and reads the clock: `arch_counter_get_cntpct` is 14% to 17% of
+    all cycles, and the time in the calls for a WRITE went up, since
+    the waiting is now inside them. The CPU for each GB is up by 5%
+    with the rate up by 6%.
+S3. **The page swap shows**: `free_unref_folios` (0.6% on build 461)
+    is out of the profile and neither `__folio_batch_release` nor
+    `alloc_pages_bulk` is in it.
+S4. **The pools' rings almost never fill and the pools almost never
+    run empty** in runs 1 and 2.
+S5. **Two runs of three dropped nearly nothing (3 thousand frames
+    against 250 thousand), and the third dropped 440 thousand and was
+    the slowest.** What differs in the third is how the sixteen flows
+    fell on the rings: one ring took 19.9 GB/s. The flows' fall is the
+    variable left that nothing here sets.
+S6. `__lwq_dequeue` is in the head of the lock contention list on
+    neither build, so that list does not say what the pools did.
+    `svc_tcp_sendto`'s mutex was waited on for 5.4 s in 10 s against
+    19.1 s.
+
+**What each change is worth was not measured (Mike, 2026-10-09: wait
+on that).** A queue that took one away at a time was started and
+stopped. Its first cell had finished: no linger, the rest on, one
+traced run (`xeu-16k-462-minus-linger`): 37.2 GB/s, 0.43 server
+CPU-seconds for each GB, 6.9 calls for a WRITE, 257573 frames dropped,
+20 RTOs. One run, and within the spread of the three above.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
