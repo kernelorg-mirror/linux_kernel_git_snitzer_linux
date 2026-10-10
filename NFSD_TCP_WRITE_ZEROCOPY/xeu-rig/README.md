@@ -235,7 +235,48 @@ work items, all three also in that document's "Since then" list:
    flows even. It stops one bad fall from deciding a cell. **Not run
    yet:** that the client's ports change with each mount, and how
    many tries a balanced fall takes, are the first things to read.
-3. **Steering in `xeu`**: a kmod change. What to ask for, in order:
+3. **Steering in `xeu`**: a kmod change. **The first of it is
+   written** (9 October, evening; built, not run):
+   `kernel-rpmtree/xsight/xeu-expose-the-RSS-redirection-table-hash-key-and-function-to-ethtool.patch`,
+   untracked there and not in `xsight.spec`. It wires `ethtool -x`/`-X`
+   to the SDK's existing calls:
+   - the redirection table, sized by the new load-time
+     `rss_indir_size` (default 0 means no table, as before; at most
+     255);
+   - the 68-byte key;
+   - the hash function, of which only Toeplitz can be set. Spooky,
+     the firmware's default, shows as unknown.
+
+   It also adds `get_rx_ring_count`, without which 7.1's `ethtool` core
+   refuses any table. What `ethtool -X` set is programmed again after
+   every reconfiguration of the port.
+
+   It applies at `-p0` after Patch0 to Patch4, and its four files
+   compile with no new warnings (also at W=1) against the 7.1.13 tree.
+   The whole module could not be built here: the vendor's
+   `xeu_ipsec.c` needs XFRM offload, which this host's 4 KiB config
+   lacks.
+
+   **To try it on tardis1** (`build-kmod.sh` with a `Patch5:` line
+   added to the spec by hand, Release 6; loading it reloads `xeu`, so
+   it is Mike's):
+
+       modprobe xeu rss_indir_size=128     # after rmmod xeu
+       ethtool -x enp161s0f0               # the firmware's table
+       ethtool -X enp161s0f0 hfunc toeplitz
+       ethtool -X enp161s0f0 weight 1 0 0 0   # everything to ring 0
+       ethtool -X enp161s0f0 equal 4
+
+   Read the first `ethtool -x`. If it fails, the warning in `dmesg`
+   names the first entry that is not one of the port's rings: that is
+   the end of the firmware's own table, or its handles are not the
+   rings'. After `weight 1 0 0 0`, a short load should land on ring 0
+   alone (`ethtool -S` ring counters as deltas). If it does not, the
+   hardware indexes fewer entries than were set, so try sizes down to
+   the ring count. The rest is the questions in
+   `../xsight-steering-email.txt`.
+
+   Still to ask for, in order:
    - the RSS indirection table and key (`ethtool -x`/`-X`). It is the
      cheapest, works with standard tools, and with the key readable it
      places a flow by moving its table entry;
