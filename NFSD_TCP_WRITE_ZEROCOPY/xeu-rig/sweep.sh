@@ -39,7 +39,7 @@ RESERVE=$(sed -n 's/.*reserve \([0-9]*\) \/.*/\1/p' <<< "$G")
 # The kernel charges the payload pages times the factor; 2 over for rounding.
 CHARGE=$(( ( (1048716 + PS - 1) / PS * F9 + 99 ) / 100 + 2 ))
 echo "$G" > $OUT/geometry.txt
-echo "storage: prp $PRP_DIR, sgl $SGL_BACKING; nfsd threads $(cat /proc/fs/nfsd/threads); STEP_JOBS=${STEP_JOBS:-} STEP_BS=${STEP_BS:-} EXPORT_SYNC=${EXPORT_SYNC:-} MODE=${MODE:-} SKB_DEFER_MAX=${SKB_DEFER_MAX:-128} STEP_RATE=${STEP_RATE:-} RX_LINGER_US=${RX_LINGER_US:-0}" | tee -a $OUT/geometry.txt
+echo "storage: prp $PRP_DIR, sgl $SGL_BACKING; nfsd threads $(cat /proc/fs/nfsd/threads); STEP_JOBS=${STEP_JOBS:-} STEP_BS=${STEP_BS:-} EXPORT_SYNC=${EXPORT_SYNC:-} MODE=${MODE:-} SKB_DEFER_MAX=${SKB_DEFER_MAX:-128} STEP_RATE=${STEP_RATE:-} RX_LINGER_US=${RX_LINGER_US:-0} BALANCE=${BALANCE:-}" | tee -a $OUT/geometry.txt
 echo "page $PS factor $F9 reserve $RESERVE charge-per-1MiB-WRITE $CHARGE region $(reg pages) retry-patch $(has_retry_patch && echo yes || echo no)" | tee -a $OUT/geometry.txt
 
 stat1() { head -1 /proc/stat; }

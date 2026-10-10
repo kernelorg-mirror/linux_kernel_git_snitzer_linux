@@ -1582,7 +1582,9 @@ measured alone; that is step 6 of the README and waits for Mike.
      Before a cell's measured part, the harness reads each ring's
      packets from `ethtool -S` over a few seconds and remounts if one
      ring is far over a quarter. This does not balance the flows; it
-     keeps a bad fall from deciding a result. Not written.
+     keeps a bad fall from deciding a result. Written as
+     `BALANCE=<percent>` to `run-budget.sh` (the README has how to
+     use it); not run yet.
   3. **Steering in the driver.** `ethtool -X` (the indirection table)
      or ntuple rules in `xeu`: a kmod change, and a question for
      Xsight.
