@@ -7,13 +7,18 @@
 . "$(dirname "$0")/common.sh"
 O=${1:?out prefix}; N=${2:-10}
 $SSHC "ss -tin dst $SRVIP" > $O.ss0 2>&1
-r0=$(ethtool -S $D | grep -E 'ring_[0-9]+_rx_(packets|bytes)'); t0=$(tail_drops)
+r0=$(ethtool -S $D | grep -E 'ring_[0-9]+_rx_(packets|bytes)'); t0=$(tail_drops); s0=$(date +%s.%N)
 mpstat -P ALL $N 1 > $O.srv-mpstat 2>&1 &
 $SSHC "mpstat -P ALL $N 1" > $O.cli-mpstat 2>&1 &
 perf record -a -F 199 -o $O.data -- sleep $N > /dev/null 2>&1
 wait
-r1=$(ethtool -S $D | grep -E 'ring_[0-9]+_rx_(packets|bytes)')
-paste <(echo "$r0") <(echo "$r1") | awk -v n=$N '{printf "%s %.0f /s\n", $1, ($4-$2)/n}' > $O.rings
+r1=$(ethtool -S $D | grep -E 'ring_[0-9]+_rx_(packets|bytes)'); s1=$(date +%s.%N)
+# Over the time between the two readings, not $N: perf's start and stop and
+# the wait for the client's mpstat are inside it, and until 2026-10-10 the
+# rates here were divided by $N and came out a tenth or more too high (the
+# rings' shares were right).
+paste <(echo "$r0") <(echo "$r1") | awk -v n=$(echo "$s1 $s0" | awk '{print $1 - $2}') '{printf "%s %.0f /s\n", $1, ($4-$2)/n}' > $O.rings
+echo "rings read $(echo "$s1 $s0" | awk '{printf "%.2f", $1 - $2}') s apart" >> $O.rings
 echo "tail drops in $N s: $(( $(tail_drops) - t0 ))" >> $O.rings
 $SSHC "ss -tin dst $SRVIP" > $O.ss1 2>&1
 perf report -i $O.data --stdio --sort symbol 2>/dev/null | grep -v '^#' | grep -v '^$' | head -45 > $O.profile; rm -f $O.data

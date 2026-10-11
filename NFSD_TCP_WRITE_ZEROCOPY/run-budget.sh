@@ -683,7 +683,9 @@ veth_up() {
 net_up() {	# net_up <region pages>
 	[ -z "$HW" ] && { veth_up "$@"; return; }
 	local cur; cur=$(cat "/sys/class/net/$NETDEV/mtu")
-	[ "$cur" = "${MTU:-$cur}" ] || { echo "$NETDEV is at MTU $cur and the cell wants $MTU: it is not changed here" >&2; return 1; }
+	# HW_ANY_MTU=1: run the cell at whatever MTU the device has (a cell's
+	# MTU= is then a label only, and cells.tsv's mtu column with it).
+	[ "$cur" = "${MTU:-$cur}" ] || [ -n "${HW_ANY_MTU:-}" ] || { echo "$NETDEV is at MTU $cur and the cell wants $MTU: it is not changed here (HW_ANY_MTU=1 runs it as it is)" >&2; return 1; }
 	[ "${QUICKACK:-0}${NOTLP:-0}" = 00 ] || { echo "QUICKACK and NOTLP are not set up on a real device" >&2; return 1; }
 	return 0
 }

@@ -83,6 +83,16 @@ once as its baseline (41.8, 40.7 and 41.1 GB/s on the old one), then
 collapse. `kernel-rpmtree` was copied to the client at
 `/root/snitm/git/kernel-rpmtree`.
 
+**The best setting is now 8192-byte buffers with the MTU at 7792
+(2026-10-10, 21:15): 43.2 and 43.3 GB/s** in 24 to 26 MiB, against
+5440's 41 to 42 in 27 to 30. One buffer to a frame, so it is also the
+setting a loan should try first. `plans/16k-35-rxbuf8192.plan`, run
+with `HW_ANY_MTU=1`; `xeu` is loaded that way now from the command
+line and the port's MTU set by hand, and **`xeu.conf` still pins
+5440: Mike has not said to change the pin.** The account is "One
+buffer to a frame" in `../XEU_CONVERGENCE.md`, which also says that
+`where.sh`'s per-ring GB/s were a tenth too high before this.
+
 **Where the search for the rest stands (2026-10-10, 19:45).** The
 copy carries 41 to 42 GB/s of the wire's 48 at the best setting
 (`plans/16k-32-best.plan`), on the 6.12 client and on the 7.1.13-21
@@ -458,7 +468,8 @@ To work out, none of it started:
    copy on 5440-byte buffers, by the storage.
 
 5. **A frame that fits in one buffer** (thought of on reading the
-   gate; not run). The misplacement is of a frame's second buffer, so
+   gate; run in copy mode the same evening: 43.2 and 43.3 GB/s, the
+   best yet, and every frame one buffer. Not run as a loan). The misplacement is of a frame's second buffer, so
    it goes away if no frame has one. A buffer holds its size less 386
    bytes (66 of headroom, 320 of `skb_shared_info`): 5054 at 5440, and
    7806 at 8192, which is two buffers to a 16 KiB page. With

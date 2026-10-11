@@ -2583,6 +2583,73 @@ placement has to be revisited. The work item, with what there is to find out and
 fallback (`rx_buf_size=0` for a loan), is "TODO: 4-byte placement
 with `rx_buf_size`" in `xeu-rig/README.md`.
 
+### One buffer to a frame: `rx_buf_size=8192` with the MTU at 7792 carries 43.3 GB/s (10 October, 20:45 to 21:15)
+
+Where it came from: on 5440-byte buffers a 9000-byte frame takes two,
+and the second is not on a 4-byte boundary, which would send every
+loaned WRITE through the page cache ("TODO: 4-byte placement with
+`rx_buf_size`" in `xeu-rig/README.md`). A frame that fits one buffer
+has no second. A buffer holds its size less 386 bytes, so an 8192-byte
+buffer, two to a 16 KiB page, holds 7806: an MTU of 7792 and the
+14-byte Ethernet header. Only the server's MTU is lowered; its MSS
+sets the client's segments, and the client's port stays at 9000.
+
+`xeu` loaded with `rx_buf_size=8192` (on the command line;
+`/etc/modprobe.d/xeu.conf` still pins 5440), `ip link set enp161s0f0
+mtu 7792`, rings of 4 x 256 entries (256 frames, as 4 x 512 are at
+5440), a 1 MiB held buffer, the rest of the best setting, `PLACE=1`,
+traced, copy mode: `plans/16k-35-rxbuf8192.plan`,
+`$L/xeu-16k-463-rxbuf8192-1` and `-2`. Under 16 iperf3 streams every
+one of 2.8 million frames was one buffer (truesize 8448, no frags) and
+the wire carried 49.9 Gbit/s.
+
+| | 5440, MTU 9000 (the best until now) | 8192, MTU 7792 |
+|---|---|---|
+| GB/s | 41.8, 40.7, 41.1, 41.6 | **43.2, 43.3** |
+| region pages | 1754 to 1904 | 1517, 1658 |
+| ring drops | 0 to 213 | 9, 7 |
+| retransmits, RTOs | about 5000 to 25000, 0 to 15 | 10961 and 7595, 3 and 0 |
+| CPU-seconds per GB | 0.49 to 0.50 | 0.46, 0.46 |
+| `memmove` | 28.5% to 30.1% | 25.8%, 25.2% |
+| linger's busy wait | 11.7% to 13.0% | 14.6%, 15.3% |
+| a WRITE, first read to last | 350 to 365 us | 347, 344 us |
+| frames a second (second run, timed) | | 5.56 million |
+| rings in the cell | | 24/26/25/25%, 25/25/25/25% |
+
+1. **It is the first change of the day that gains rate and gives
+   back memory together**: 2 GB/s more in 24 to 26 MiB against 27 to
+   30. The buffers are denser: 8448 bytes of truesize for 7752 of
+   payload (1.09) against 11136 for 8960 (1.24), so the same held
+   buffer and the same rings hold more data in less of the cache, and
+   the copy is cheaper (`memmove` 25% against 29%).
+2. **A fifth more frames cost nothing that shows**: 9 and 7 ring
+   drops, and less CPU for each GB.
+3. Every WRITE was written direct.
+4. **For a loan this is the setting to try first on the SGL drives**:
+   one buffer to a frame, so `rx_ip_align=2` places every piece. Not
+   run as a loan.
+5. The driver's warning "MTU 7792 spans 2 RX buffers" is wrong here:
+   it allows for a VLAN tag (7792 + 18 = 7810 against 7806). No frame
+   took two. An MTU of 7788 would quiet it.
+
+**The harness** would not run at this MTU (every cell is labelled
+9000 and a real device's MTU is checked against it): `HW_ANY_MTU=1`
+runs a cell at the device's own, and `sweep.sh` now writes the MTU
+and `rx_buf_size` into `geometry.txt`.
+
+**`where.sh`'s per-ring rates were too high until now.** It divided
+the rings' byte counters by its nominal 10 s, and the two readings
+are about 11.2 s apart (perf's start and stop and the wait for the
+client's `mpstat` are between them). So every "GB/s" of a ring or of
+the wire from `where-*.rings` before this is a tenth or more too
+high: the 19.9 GB/s ring of build 462, the 11.1/11.1/11.3/10.9 of the
+placement cell, "wire 44 to 47". The shares in percent, and every
+rate that comes from fio, were right. It now divides by the measured
+time and writes it down; `rings.sh` always timed its own sleep.
+
+After these runs: `xeu` is loaded with `rx_buf_size=8192`, the port's
+MTU is 7792, rings of 4 x 256. Neither survives a reload or a reboot.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
