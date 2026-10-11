@@ -1,27 +1,30 @@
-# After the reboot into build 464: start here (written 2026-10-11, on build 463)
+# On build 464: start here (2026-10-11, 10:00)
 
-Mike is building and installing 464. **Run nothing until he says the
-host is rebooted and ready.**
+## 1. The baseline is done: 43.0 and 42.5 GB/s
 
-## 1. The first baseline, one run
-
-The pinned copy configuration, unchanged: `rx_buf_size=8192` and MTU
-7792 (both outlive the reboot), rings of 4 x 256,
+Build 464 carries the tip and is level with 463 (42.5 and 42.7) at the
+pinned copy setting: `rx_buf_size=8192`, MTU 7792, rings of 4 x 256,
 `rx_refill_thresh=8`, a 1 MiB held buffer, 16 connections, `PLACE=1`,
-plan `plans/16k-35-rxbuf8192.plan`. Before it:
+plan `plans/16k-35-rxbuf8192.plan`, run by
+`$L/xeu-16k-464-baseline-driver.sh` (`RUNS="5 6"` for two more). The
+account is "Build 464: the baseline" in `../XEU_CONVERGENCE.md`.
 
-- Check what `sunrpc` is loaded. The hand-built modules are in
-  `/lib/modules/7.1.13-21.hs.463…/updates/` and belong to 463 only; if
-  464 carries the tip they are stale and can be removed.
-- `svc_tcp_rx_credit_factor` should not exist, and a budget's
-  statistics should show `hold_factor` (107 on these buffers).
+**Do not run `../run-kunit.sh` on a module that is then measured.**
+The svcsock suite leaves the factor fixed at 150 in the loaded
+`sunrpc`, and every window after it is 348 KiB where it should be 487
+(41.6 and 40.4 GB/s, the first two runs of this boot). After the
+suites: `SUNRPC_KO=none POOLS_PER_NODE=4 ./swap-sunrpc.sh` and
+`echo 512 > /proc/fs/nfsd/threads`. Check `rcv_ssthresh` in a run's
+`ss-server.txt` (487424 or 483497 here). The suite is not yet fixed.
 
-The figures to set it against, all on 463 on the night of 10 October:
-42.5 and 42.7 GB/s on the tip, 42.4 and 42.0 on the old code, in 24 to
-26 MiB. The 43.2 and 43.3 of three hours earlier were not reproduced
-by any code that night and the cause is not known.
+**The state of tardis1 this boot:** the kernel's own `sunrpc`, loaded
+again after the suites, `pools_per_node` 4, nfsd at 512 threads, a
+32768-page region bound, rings of 4 x 256, `/dev/md0` on `/hs/stripe`,
+`kernel.panic` 10. About 12 TB written to the stripe. The hand-built
+modules in `/lib/modules/7.1.13-21.hs.463…/updates/` are still there
+and belong to 463 only.
 
-## 2. TODO, immediately after the baseline: what limits the drain (Mike, 2026-10-11)
+## 2. TODO, next: what limits the drain (Mike, 2026-10-11)
 
 The saved traces of the 42.7 GB/s run
 (`$L/xeu-16k-463-tipcheck-2`) say the limit is how fast the server
