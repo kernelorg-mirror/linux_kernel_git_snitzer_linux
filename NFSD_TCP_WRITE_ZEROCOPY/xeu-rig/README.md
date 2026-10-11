@@ -92,6 +92,17 @@ rise a hundred times. **The window is not the limit; look at the
 client next.** "A larger held buffer, with and without claiming" in
 `../XEU_CONVERGENCE.md`. The pinned setting stays at 1 MiB.
 
+**The client looked at (2026-10-11)**: `client-look.sh` (run on the
+client during a cell: counters 20 s apart and a 10 s profile). **The
+client puts 355 to 363 Gbit/s on the wire, 92% to 94% of the 48.4 GB/s
+iperf3 put on it; about 3.5 GB/s is all that is left.** It is not the
+limit: every socket has megabytes unsent, a WRITE waits 11.6 ms for
+its connection, a third of its CPUs are idle and no thread is near a
+whole CPU. It copies what it sends (16% of its cycles; the RPC
+client's send does not splice pages). "The client" in
+`../XEU_CONVERGENCE.md`. Not tried: `fq` pacing on the client so that
+a larger window does not arrive as bursts the rings drop.
+
 **Noted.**
 
 - 12% of lingers time out (287,671 of 2.37 million), 50 us of a
