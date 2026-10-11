@@ -2864,8 +2864,14 @@ ran it (`$L/xeu-16k-464-baseline-driver.sh`):
    gives 487424, while the budget's statistics still show `hold_factor`
    107. It costs 1 to 2 GB/s here. Only loading `sunrpc` again (or a
    reboot) clears it: `SUNRPC_KO=none POOLS_PER_NODE=4
-   ./swap-sunrpc.sh`, then 512 threads. **Not fixed in the code.** The
-   suite should put the factor back to 0 when a test ends.
+   ./swap-sunrpc.sh`, then 512 threads. **Fixed at the tip** ("SUNRPC:
+   Leave no factor fixed when a svcsock KUnit test ends":
+   `svcsock_rx_budget_off()` now clears it). Read from the loaded
+   module, `svc_tcp_rx_kunit_factor` is 0 after the fixed suite, 150
+   after 464's installed one and 0 after the fixed one again, 46/46
+   each time. 464's installed `svcsock_kunit` is the one before the
+   fix; the fixed one is `$L/sunrpc-$(uname -r)/sunrpc/svcsock_kunit.ko`
+   and loads against 464's `sunrpc`.
 3. The check that catches it: `rcv_ssthresh` in the run's
    `ss-server.txt` is 483497 or 487424 at this setting.
 
