@@ -2577,8 +2577,9 @@ starts at 120, on a 4-byte boundary; the rest of the frame starts at
 takes arbitrary pieces needs every piece on a 4-byte boundary, and
 that placement is the most a loan can have on the E1: Xsight was
 asked for header-data split with coalescing and showed no interest.
-So before a loan is run on these buffers the placement has to be
-revisited. The work item, with what there is to find out and the
+Sample NVMe drives with SGLs are coming to tardis1 (NVMe/TCP has been
+their stand-in), so before a loan is run on these buffers the
+placement has to be revisited. The work item, with what there is to find out and the
 fallback (`rx_buf_size=0` for a loan), is "TODO: 4-byte placement
 with `rx_buf_size`" in `xeu-rig/README.md`.
 
