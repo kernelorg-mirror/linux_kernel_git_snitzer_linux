@@ -2650,6 +2650,66 @@ time and writes it down; `rings.sh` always timed its own sleep.
 After these runs: `xeu` is loaded with `rx_buf_size=8192`, the port's
 MTU is 7792, rings of 4 x 256. Neither survives a reload or a reboot.
 
+### The loan on 8192-byte buffers is written direct: NVMe/TCP, 20.9 GB/s (10 October, 21:10 to 21:25)
+
+`rx_buf_size=8192` and the MTU of 7792 are pinned on tardis1 now
+(`/etc/modprobe.d/xeu.conf`, NetworkManager's `enp161s0f0` profile).
+`plans/16k-36-loan8192-sgl.plan`: the loan with a budget of 16 WRITEs
+and then its copy, both on NVMe/TCP in front of a file on the stripe
+(`SGL_BACKING=/hs/stripe/zcbudget-nvmet.img NULLB_MIB=16384`), the
+stand-in for the SGL drives that are coming. Rings of 4 x 256, a 1 MiB
+held buffer, sixteen connections, `PLACE=1`, `HW_ANY_MTU=1`, traced,
+the pools emptied first (`$L/xeu-16k-463-loan8192-sgl-1`).
+
+| | loan, budget 16 WRITEs | copy |
+|---|---|---|
+| GB/s | 20.9 | 25.4 |
+| how the WRITEs were issued | **direct, all 2,495,528** | direct, all 3,252,528 |
+| CPU-seconds per GB | 0.61 | 1.43 |
+| server idle | 70% | 31% |
+| `memmove` | 18.8% | 42.5% |
+| region pages | 3003 (47 MiB) | 1553 (24 MiB) |
+| admitted, denied, overrun | 2,495,528, 4,566,142, 0 | |
+| ring drops, retransmits, RTOs | 144, 27480, 0 | 0, 1,863,472, 11 |
+| client waits on the window | 98% to 100% | 19% to 22% |
+| a WRITE, first read to last (in the calls) | 634 us (113) | 569 us (612) |
+
+1. **Every loaned WRITE was written direct.** One buffer to a frame
+   puts every piece on a 4-byte boundary and `nfs_dio_split()` passes
+   them all: none `NFS_DIO_MEM_MISALIGNED`, none buffered. On
+   5440-byte buffers every one would have gone through the page
+   cache. This is the setting for the SGL drives.
+2. **The loan did not crash the host.** It is the first loan run
+   since the one of 9 October; the fix of the batched return ("SUNRPC:
+   Keep page-pool return batches within the bulk API's bound") had
+   run only in KUnit.
+3. **The loan is behind its copy on this stand-in, 20.9 against
+   25.4, at well under half the CPU**: 0.61 CPU-seconds per GB
+   against 1.43, the server 70% idle against 31%. NVMe/TCP on the
+   same host copies the data again on its way to the file (`memmove`
+   is 19% of cycles in the loan cell, which makes no receive copy),
+   so neither figure is one for a real drive.
+4. **The loan is held by its budget.** 4.57 million refusals to 2.50
+   million admissions, and the reading thread is in the calls for
+   113 us of the 634 a WRITE takes. The charge is too high for these
+   buffers: the harness and `svc_tcp_rx_credit_factor` (190) still
+   count a whole page to a frame, about 126 pages for a 1 MiB WRITE,
+   where two frames to a page make it about 70. So a budget "of 16
+   WRITEs" (2150 pages) admits what it would for 9 of them at the
+   true cost. Next: the factor for two frames to a page (`FACTOR9`),
+   or a larger budget.
+5. `rx_pp_recycle_ring_full` 18628 and `alloc_slow` 6536 in 10 s in
+   the loan cell, against T2's 4.06 million and 254 thousand on build
+   461: the stack and the batched return have dealt with most of the
+   overflow, which was the question left for the page-pool items.
+6. Not explained: the copy cell's 1.86 million retransmitted
+   segments with no ring drop, and the client waiting on the window
+   only a fifth of the time there.
+7. `xeu` logs "Packet dropped - 0x2000 (num_desc - 2)" for a frame
+   that needs two buffers at this MTU: four times, for the four
+   8500-byte pings of the MTU check. So the card drops what does not
+   fit one buffer.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
