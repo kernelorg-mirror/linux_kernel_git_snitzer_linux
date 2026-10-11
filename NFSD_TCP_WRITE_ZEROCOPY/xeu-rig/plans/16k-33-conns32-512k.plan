@@ -1,0 +1,5 @@
+# Thirty-two connections (STEP_MOUNTS=2) with half the held buffer: 32 x
+# 512 KiB is the data in receive memory that 16 x 1 MiB is, so the cell
+# differs from 16k-32-best.plan in the number of connections and not in
+# the footprint.  Run by conns-watch.sh 2 <outdir> <this plan>.
+512 524288 0 prp step-copy-n16

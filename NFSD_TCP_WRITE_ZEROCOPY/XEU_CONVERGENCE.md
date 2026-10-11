@@ -2520,9 +2520,19 @@ cell's own high-water mark, the second on top of the first.
    and had 50 RTOs, and its CPUs were 19% idle. A WRITE took 671 us
    from first read to last where sixteen connections take 350, with
    the same 361 us of it inside the calls: each connection gets data
-   half as fast. Not run: 32 connections with a held buffer of half
-   the size, which would hold the same data in receive memory as
-   sixteen at 1 MiB.
+   half as fast.
+   **With half the held buffer (512 KiB, `plans/16k-33-conns32-512k.plan`,
+   `$L/xeu-16k-463-conns32-512k`, the pools emptied first): 35.7
+   GB/s.** The region in use was 1754 pages, the sixteen-connection
+   cell's, with no ring drop and no RTO, so the footprint and the
+   loss are out of it and it is still 6 GB/s under sixteen
+   connections. The client waits on the server's window again (91% to
+   95%) with its CPUs 69% in the kernel and 21% idle. On the server
+   the linger's busy wait is 24% of cycles (13% at sixteen) and
+   `memmove` 20%: a WRITE takes 712 us from first read to last, 377
+   of it in the calls, at 2.9 calls for a WRITE. More connections
+   from this client do not carry more, with the footprint held or
+   not. Sixty-four were not run.
 4. `rss-place.py` counted flows before bytes for the first time in
    the second cell and put 8 on each ring; the check showed
    25/26/25/25%. In the cell itself the rings carried 21/21/25/33%,
