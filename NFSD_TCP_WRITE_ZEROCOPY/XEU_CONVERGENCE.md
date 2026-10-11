@@ -2430,6 +2430,47 @@ skbs on the deferred-free lists of CPUs 8 to 14, which are flushed by
 those CPUs' own receive softirq, and no ring interrupts there any
 more. A loopback ping from every CPU was tried to flush them.
 
+### The client rebooted; the best cell again, and a load paced at the source (10 October, 18:00 to 18:15)
+
+Mike rebooted the client (192.168.1.106): idle, none of its own NFS
+mounts, MTU 9000, its sysctls at their defaults.
+
+**The best cell repeats: 41.1 GB/s** (`plans/16k-32-best.plan`: rings
+of 4 x 512, a 1 MiB held buffer, `PLACE=1`, traced;
+`$L/xeu-16k-463-best-rebooted-client`). No ring drops, 0.49
+CPU-seconds per GB, `memmove` 29.6%, rings 24/25/25/26% in the cell,
+359 us for a WRITE's receive. The client 42% system and 47% idle, as
+before its reboot. 25148 retransmits and 15 RTOs with no ring drop,
+against about 5000 and 0 to 1 before: not explained.
+
+**`used_pages` is a high-water mark across cells, not one cell's
+footprint.** This cell reported 2644 pages, and the region showed that
+many in use at idle before it started: the pools keep the pages they
+have recycled (the stack is as large as the ring), and the 32
+connection cells had left 2580. A figure taken after a larger cell is
+inflated. The figures of the depth and buffer runs were taken in
+rising order within a pass, but the second pass followed the first.
+Before a cell whose footprint matters, empty the pools: take the port
+down and up (or change the ring size and back).
+
+**Pacing at the source gains nothing** (`STEP_RATE="36000 39000 42000
+45000"`, the same cell, 30 s a step without stopping;
+`$L/xeu-16k-463-paced-1`):
+
+| offered, GB/s | carried, GB/s |
+|---|---|
+| 36.0 | 36.0 |
+| 39.0 | 39.0 |
+| 42.0 | 41.6 |
+| 45.0 | 40.8 |
+
+A load the server can take, raised in steps, tops out where the load
+offered all at once does (41.1, 41.8, 40.7). So there is no lower
+state here that a flat-out start falls into and a paced one avoids,
+which was Xsight's suggestion to check. 35 ring drops, no RTO. The
+placement put 4, 4, 3 and 5 flows on the rings (two shared an entry)
+and the rings carried 24/24/22/30% in the check.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
