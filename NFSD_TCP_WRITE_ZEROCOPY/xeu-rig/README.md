@@ -79,9 +79,18 @@ default 0. 43.6 to 44.0 GB/s against 44.2: no gain, though the client
 is held by the window less (85% of the time against 96%). Retransmits
 rise four to ten times. "Two threads on one connection" in
 `../XEU_CONVERGENCE.md`. **Everything tried on the server's drain
-today lands between 43.5 and 44.2**; the client has not been looked at
+today lands between 43.5 and 44.6**; the client has not been looked at
 since. Two runs of ten had about 360 RTOs and 34 to 35 GB/s, not
 explained.
+
+**A larger held buffer with claiming (2026-10-11)**:
+`plans/16k-40-claim-1536k.plan`, `16k-41-claim-2m.plan`. Claiming
+gains nothing at 1.5 MiB or 2 MiB (43.9 to 44.1 against 44.3 to 44.6
+without). The client is held by the window 30% to 59% of the time
+instead of 96% and the rate does not move; ring drops and retransmits
+rise a hundred times. **The window is not the limit; look at the
+client next.** "A larger held buffer, with and without claiming" in
+`../XEU_CONVERGENCE.md`. The pinned setting stays at 1 MiB.
 
 **Noted.**
 
