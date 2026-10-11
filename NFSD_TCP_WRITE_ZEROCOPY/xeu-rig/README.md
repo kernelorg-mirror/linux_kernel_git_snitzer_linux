@@ -73,6 +73,16 @@ without looking at the client first** ("Thirty-two connections" in
 `../XEU_CONVERGENCE.md`; it also records a page pool that has not
 finished shutting down since the 8-to-4 ring change).
 
+**The client's kernel changes (Mike, 2026-10-10, about 18:40):** he
+is rebooting 192.168.1.106 from `6.12.76-2.hs.212.el8` into
+`v7.1.13-21.hs.460.el9`, which is built on the same `v7.1.13-21` as
+tardis1's kernel. Every figure before that was taken with the 6.12
+client. On the new client kernel, first run `plans/16k-32-best.plan`
+once as its baseline (41.8, 40.7 and 41.1 GB/s on the old one), then
+`./conns-watch.sh 2 <outdir>` to see whether two mounts still
+collapse. `kernel-rpmtree` was copied to the client at
+`/root/snitm/git/kernel-rpmtree`.
+
 **Not done from the list below:** 5440 at the old
 setting of 256 entries and a 1 MiB buffer; and everything in step 3
 (the loan cell that crashed tardis1, the linger's values, the pools,
