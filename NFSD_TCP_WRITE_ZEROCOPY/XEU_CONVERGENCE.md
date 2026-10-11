@@ -2875,6 +2875,59 @@ ran it (`$L/xeu-16k-464-baseline-driver.sh`):
 3. The check that catches it: `rcv_ssthresh` in the run's
    `ss-server.txt` is 483497 or 487424 at this setting.
 
+### What limits the drain, step A: the saved call graph (11 October, 10:30)
+
+The call graph of the 42.7 GB/s run on 463
+(`$L/xeu-16k-463-tipcheck-2/cg-…-step-copy-n16.data`, 8 s at 99 Hz, all
+CPUs), read on 464. No test run.
+
+**Reading it.** `perf report --no-inline`. With inlines the `sunrpc`
+frames come out under the names of other modules' functions
+(`__traceiter_nfsd_cb_layout_done` for `nfsd`), because the
+`sunrpc.ko` in 463's `updates/` was built again after the run and is
+not the one recorded. The plain frames come from the saved kallsyms and
+are right. It takes half a second a report, not minutes.
+
+| share of all cycles | what |
+|---|---|
+| 73.7% | the nfsd threads (swapper 23.3%) |
+| 55.7% | `svc_tcp_recvfrom`, all that it calls |
+| 31.0% | `svc_tcp_rx_copy_skb`, of which `__memmove` 25.3% |
+| 14.4% | `svc_tcp_rx_linger`, of which `arch_counter_get_cntpct` 13.6% |
+| 4.1% | `tcp_cleanup_rbuf`, sending ACKs as the read goes |
+| 1.9% | `__release_sock`, the backlog taken in when the read lets go |
+| 16.5% | `svc_process`; `nfsd_vfs_write` 6.7% |
+| 2.6% | `svc_tcp_sendto` |
+
+1. **`arch_counter_get_cntpct` is the linger, not the tracing**: 13.63
+   of its 13.89% is `svc_tcp_recvfrom` > `svc_tcp_rx_linger` >
+   `ktime_get`. The loop tests three flags, reads the clock and
+   relaxes, so the clock is what a spinning thread is seen in. A
+   cheaper clock would move the cycles to `cpu_relax` and free
+   nothing.
+2. **What it does measure is how long a connection's reader has
+   nothing to read.** nfsd's threads were 15.8 CPUs busy (`sys` 24.7%
+   of 64). By their shares of nfsd's cycles that is about 12 CPUs in
+   `svc_tcp_recvfrom` for 16 connections, 6.6 of them copying and 3.1
+   spinning in the linger. A connection is copying about two fifths
+   of the time and waiting on an empty socket with a record part read
+   about one fifth. The client's side of the same thing is its
+   connections held by the window 94% to 98% of the time: the reader
+   empties the socket, and what it reads opens the window for data
+   that is a round trip away. So the drain is not held by the speed
+   of the copy alone. These shares are of cycles, with the CPUs taken
+   as running at one speed: a reading, not a trace of each connection.
+3. **The copy is done with the socket locked**, in the trace and in
+   the code: every `__memmove` is under `svc_tcp_recvfrom` >
+   `tcp_read_sock` > `svc_tcp_recv_actor` > `svc_tcp_recv_skb` >
+   `svc_tcp_rx_copy_skb` > `skb_copy_datagram_iter`, and
+   `svc_tcp_recvfrom()` takes `lock_sock()` round `->read_sock()`.
+   Segments that arrive meanwhile go to the backlog and are taken in
+   by the nfsd thread in `release_sock()` (1.9% of cycles), and a
+   reply to that connection waits in `tcp_sendmsg()` for the same
+   lock while holding the send mutex, which is the 415 us average
+   wait in `lock-caller-*.txt`.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
