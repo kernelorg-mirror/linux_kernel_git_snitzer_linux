@@ -2494,6 +2494,42 @@ The placement put 8, 9, 7 and 8 of the 32 flows on the rings. The
 stop left the cell's second address on the port (the cell removes it
 itself and was killed first); `conns-watch.sh` now takes it off.
 
+### The client on 7.1.13-21: the baseline, and 32 connections that no longer collapse (10 October, 19:15 to 19:30)
+
+Mike rebooted the client into `7.1.13-21.hs.460.el9.x86_64` (it was
+`6.12.76-2.hs.212.el8`). It has `perf` now. The port was taken down
+and up first, to empty the pools, so `used_pages` below is each
+cell's own high-water mark, the second on top of the first.
+
+| cell (rings of 4 x 512, 1 MiB buffer, `PLACE=1`, traced) | GB/s | region pages | ring drops | retransmits | RTOs | CPU-s per GB | client sys / idle | client waits on the window |
+|---|---|---|---|---|---|---|---|---|
+| 16 connections (`xeu-16k-463-best-client71-1`) | 41.6 | 1754 | 213 | 5926 | 4 | 0.50 | 50% / 38% | 95% to 99% |
+| 32 connections, two mounts (`xeu-16k-463-conns32-client71`) | 37.0 | 2725 | 43916 | 253141 | 50 | 0.51 | 70% / 19% | 73% to 86% |
+
+1. **The baseline is the old client's: 41.6 GB/s** against 41.8, 40.7
+   and 41.1, with the same CPU per GB, `memmove` share (29%) and time
+   to receive a WRITE (350 us). The client spends 50% of its CPUs in
+   the kernel for it where the 6.12 kernel spent 42%.
+2. **Two mounts no longer collapse on this client kernel**: 37.6 GB/s
+   on the wire at 30 s where 6.12 gave 12.4 twice. So that was the
+   6.12 client's NFS or TCP, not its state that day.
+3. **Thirty-two connections carry less than sixteen: 37.0 GB/s.** The
+   region in use reached 2725 pages, 42.6 MiB, well past the L3:
+   twice the connections with a 1 MiB buffer each. The rings dropped
+   44 thousand frames, the client retransmitted 253 thousand segments
+   and had 50 RTOs, and its CPUs were 19% idle. A WRITE took 671 us
+   from first read to last where sixteen connections take 350, with
+   the same 361 us of it inside the calls: each connection gets data
+   half as fast. Not run: 32 connections with a held buffer of half
+   the size, which would hold the same data in receive memory as
+   sixteen at 1 MiB.
+4. `rss-place.py` counted flows before bytes for the first time in
+   the second cell and put 8 on each ring; the check showed
+   25/26/25/25%. In the cell itself the rings carried 21/21/25/33%,
+   so with two mounts the flows do not carry the same for long. The
+   first cell was the last with the old script: 4/4/5/3 flows,
+   25/25/30/20%.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
