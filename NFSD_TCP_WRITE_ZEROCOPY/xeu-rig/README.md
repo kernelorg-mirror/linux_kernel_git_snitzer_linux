@@ -113,6 +113,14 @@ the server a single non-TCP packet over 7792 bytes will lose it. The account is 
 buffer to a frame" in `../XEU_CONVERGENCE.md`, which also says that
 `where.sh`'s per-ring GB/s were a tenth too high before this.
 
+**The loan is written direct on the 8192-byte buffers (2026-10-10,
+21:25):** on NVMe/TCP, all 2.5 million loaned WRITEs direct, 20.9
+GB/s against its copy's 25.4 at 0.61 CPU-seconds per GB against 1.43,
+and no crash. It is held by its budget, charged as if a frame had a
+whole page: set the factor for two frames to a page before the next
+loan run ("The loan on 8192-byte buffers is written direct" in
+`../XEU_CONVERGENCE.md`).
+
 **Where the search for the rest stands (2026-10-10, 19:45).** The
 copy carries 41 to 42 GB/s of the wire's 48 at the best setting
 (`plans/16k-32-best.plan`), on the 6.12 client and on the 7.1.13-21
@@ -489,7 +497,8 @@ To work out, none of it started:
 
 5. **A frame that fits in one buffer** (thought of on reading the
    gate; run in copy mode the same evening: 43.2 and 43.3 GB/s, the
-   best yet, and every frame one buffer. Not run as a loan). The misplacement is of a frame's second buffer, so
+   best yet, and every frame one buffer. Run as a loan on NVMe/TCP the
+   same night: every loaned WRITE was written direct). The misplacement is of a frame's second buffer, so
    it goes away if no frame has one. A buffer holds its size less 386
    bytes (66 of headroom, 320 of `skb_shared_info`): 5054 at 5440, and
    7806 at 8192, which is two buffers to a 16 KiB page. With

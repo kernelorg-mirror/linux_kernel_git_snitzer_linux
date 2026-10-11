@@ -1,0 +1,9 @@
+# The loan on rx_buf_size=8192 with the MTU at 7792 (one buffer to a
+# frame, so every piece is on a 4-byte boundary), on storage that takes
+# arbitrary pieces: NVMe/TCP in front of a file on the stripe, the
+# stand-in for the SGL drives.  A budget of 16 WRITEs, then its copy on
+# the same storage.  What to read first is wr_direct against
+# wr_dontcache: whether the loaned WRITEs were written direct.
+#     SGL_BACKING=/hs/stripe/zcbudget-nvmet.img NULLB_MIB=16384 HW_ANY_MTU=1 RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 TRIM=/hs/stripe
+256 1048576 16 sgl step-on-n16
+256 1048576 0 sgl step-copy-n16
