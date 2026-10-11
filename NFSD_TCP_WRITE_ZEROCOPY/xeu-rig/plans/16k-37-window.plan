@@ -1,0 +1,9 @@
+# The copy at the pinned setting (rx_buf_size=8192, MTU 7792, rings of
+# 4 x 256) on a kernel that measures what a transport's skbs occupy (107
+# to the 100 here) and opens its window to half of what its held buffer
+# holds.  1 MiB then has the window the 43.3 GB/s cells had, 487 KiB, with
+# the buffer they had.  The others are an eighth either side.
+#     HW_ANY_MTU=1 RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+256 1048576 0 prp step-copy-n16
+256 917504 0 prp step-copy-n16
+256 1179648 0 prp step-copy-n16

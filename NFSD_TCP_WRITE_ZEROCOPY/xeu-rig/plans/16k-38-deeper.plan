@@ -1,0 +1,8 @@
+# On the kernel that measures and halves the window: rings twice as deep
+# (512 frames) with the 1 MiB buffer and with 1.25 MiB, whose window of
+# 609 KiB dropped frames on rings of 256; then the loan on NVMe/TCP as it
+# was run on 2026-10-10, to see the loan path through the same changes.
+#     FACTOR9=150 SGL_BACKING=/hs/stripe/zcbudget-nvmet.img NULLB_MIB=16384 HW_ANY_MTU=1 RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+512 1048576 0 prp step-copy-n16
+512 1310720 0 prp step-copy-n16
+256 1048576 16 sgl step-on-n16

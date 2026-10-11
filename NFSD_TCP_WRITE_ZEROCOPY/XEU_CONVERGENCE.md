@@ -2764,6 +2764,80 @@ beside it) and loads at boot; `pools_per_node` 4 was given to
 `modprobe` and is in no file. To go back to the kernel's own: `rm`
 the three, `depmod -a`, `SUNRPC_KO=none ./swap-sunrpc.sh`.
 
+### The factor is gone: the window is measured and opened to half the buffer (10 October 22:45 to 11 October 00:20)
+
+Mike asked for the receive window to be derived from the packets and
+for `svc_tcp_rx_credit_factor` to go, tested until the copy was back
+at its best, with as few runs as would do. The explanation of how the
+factor reached copy mode is "Copy and loan: one receive path, one
+switch" in `PROJECT.md`.
+
+**The commits**, in order, at the tip:
+
+| commit | what |
+|---|---|
+| "SUNRPC: Hold a transport's receive window by what its packets occupy" | each transport sums the truesize and the payload of the skbs it reads; every 4 MiB their ratio is a sample; the buffer is held to the higher of the last two |
+| "SUNRPC: test what a held receive buffer is measured by in the svcsock KUnit suite" | `svcsock_rx_geometry_test` |
+| "SUNRPC: Remove svc_tcp_rx_credit_factor" | the module parameter; only KUnit can fix a factor |
+| "SUNRPC: Show what receive buffers are held to in a budget's statistics" | `hold_factor` beside `cost_factor` |
+| "SUNRPC: Measure a held receive buffer by the skbs that carry data" | the stall below: skbs under 1024 bytes not measured, no partial sample, no clamp under two segments |
+| "SUNRPC: Open a held transport's window to half of what its buffer holds" | half where it was seven eighths |
+
+svcsock KUnit 46/46 on the loaded module. The harness no longer writes
+the factor where the kernel has none (`setfactor` in `run-budget.sh`).
+
+**Five batches** on the stripe, all the pinned copy setting (8192-byte
+buffers, MTU 7792, rings of 4 x 256, sixteen connections, `PLACE=1`,
+traced) unless said:
+
+| batch | held buffer | window | GB/s | region pages | ring drops | RTOs |
+|---|---|---|---|---|---|---|
+| 1, window of seven eighths (`window-1`) | 593 KiB | | the cell stalled | | | |
+| | 768 KiB | 643 KiB | 43.7 | 1521 | 230561 | 7 |
+| | 1 MiB | 857 KiB | 40.7 | 1754 | 742142 | 109 |
+| 2, after the stall's fix (`window-2`) | 512 KiB | 428 KiB | 40.4 | 1136 | 0 | 0 |
+| | 578 KiB | 484 KiB | 41.4 | 1248 | 0 | 0 |
+| | 644 KiB | 539 KiB | 41.6 | 1360 | 0 | 0 |
+| 3, window of half (`window-3`) | 896 KiB | 417 KiB | 41.5 | 1488 | 0 | 0 |
+| | 1 MiB | 487 KiB | 41.1 | 1360 | 0 | 0 |
+| | 1.125 MiB | 548 KiB | 36.8 | 1613 | 0 | 319 |
+| controls, the code before, factor 190 (`control-kernel`, `-oldsrc`) | 1 MiB | 483 KiB | 42.4, 42.0 | 1503, 1496 | 184, 278 | 2, 0 |
+| 4, window of half again (`tipcheck-1`, `-2`) | 1 MiB | 487 KiB | **42.5, 42.7** | 1472, 1494 | 488, 515 | 0, 0 |
+| 5, rings of 4 x 512 (`deeper-1`) | 1 MiB | 487 KiB | 39.8 | 1904 | 0 | 0 |
+| | 1.25 MiB | 609 KiB | 40.9 | 2256 | 0 | 0 |
+
+1. **The kernel measures 107** (`hold_factor`): 8192 bytes of buffer
+   and an skb's own for 7740 of payload, where 190 was written by
+   hand.
+2. **The first cell on a freshly loaded module stalled.** Its first
+   transport read the mount's calls, a hundred bytes each in a whole
+   receive buffer, was held as if a byte of payload cost eighty, and
+   got a window clamp of 6 KiB under a 7740-byte segment, which TCP
+   does not advertise. Fixed in the fifth commit.
+3. **What the old factor did was not what it said.** 190 on these
+   buffers made the window 0.46 of the held buffer. All of the buffer
+   as window is worse two ways: at 1 MiB sixteen windows of 857 KiB
+   arrive as a burst the rings do not hold (742 thousand drops); at
+   578 KiB the window is the old one with nothing behind it, and the
+   client is held up whenever the reader is a little behind (41.4).
+   Half is the old behaviour, and the classic rule.
+4. **The rig drifted about 1 GB/s down over the evening.** The
+   kernel's own sunrpc with the factor at 190 gave 43.2 and 43.3 at
+   about 21:00 and 42.4 at 23:50; the same source built here, 42.0.
+   Not explained (the stripe had taken about 50 TB in between).
+5. **The tip is level with the code before: 42.5 and 42.7** against
+   42.4 and 42.0, with nothing to set. Batch 3's 41.1 at the same
+   setting was a low run; the sockets in batch 4 have the window
+   (`rcv_ssthresh` 487424) and the buffer (`rb1048576`) as meant.
+6. **Deeper rings do not help**: 39.8 and 40.9 on rings of 4 x 512,
+   with 30 and 35 MiB of region in use.
+7. **The loan through the same code** (batch 5's third cell, NVMe/TCP,
+   a budget sized for 16 WRITEs): 20.2 GB/s, every WRITE direct, none
+   paused, none over its credit, `cost_factor` 154, `hold_factor` 107.
+
+The copy's best setting is unchanged: rings of 4 x 256, a 1 MiB held
+buffer. About 60 TB went to the stripe for this.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
