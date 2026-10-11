@@ -398,6 +398,73 @@ KUnit test modules compiled and linked — bisect-clean. See `README.md` →
   `nfsd-receive-bvec` stays 5 tests; the DIO case table grew 6 → 9
   (later 12, after the fused-gate discontinuity cases).
 
+## Copy and loan: one receive path, one switch (written 2026-10-10)
+
+There is no "mode" setting. Copy and loan are the same receive path,
+and which one a WRITE takes falls out of the budget.
+
+**How a record comes to be copied or loaned.**
+
+- `svc_tcp_rx_budget_pages` = 0, the default: **copy**. A WRITE that
+  arrives in region pages is copied into nfsd's own buffer
+  (`rq_pages`) and the receive pages go straight back to the card.
+- `svc_tcp_rx_budget_pages` > 0: **loan**. A WRITE keeps the receive
+  pages it arrived in, up to that many pages across all the WRITEs in
+  flight, and returns them when the RPC ends.
+- Whether a loan is tried at all for a record: `svc_tcp_rx_loan_pages`
+  is the kill switch (off: everything is copied as before the series);
+  `svc_tcp_rx_copy_below` (1024 bytes) copies small records, a GETATTR
+  or a COMMIT, since pinning a page for one costs more than copying
+  it; and the RPC procedure has to opt in, which for nfsd is WRITE.
+
+In the harness a "copy" cell is a cell with a budget of 0
+(`step-copy-n16`) and a "loan" cell one with a budget (`step-on-n16`).
+
+**What the two share.** Nearly everything:
+
+| piece | copy | loan |
+|---|---|---|
+| the fixed receive region in the page pool (`rx_region_dev`, `rx_region_pages`) | yes | yes |
+| the pool's last in, first out recycling | yes | yes |
+| the driver's settings (`rx_buf_size`, `rx_ip_align`, rings, RSS placement) | yes | yes |
+| the held receive buffer of a connection (`svc_tcp_rx_rcvbuf`) | yes | yes |
+| the receive code, the linger, the page swap, the thread pools | yes | yes |
+| nfsd's choice of a direct write (`nfs_dio_split()`) | yes | yes |
+| budget, credit, admission, the charge | no | yes |
+| pages returned in batches when the RPC ends | no | yes |
+
+The difference is one step. A copy puts the payload in nfsd's
+page-aligned buffer, which any drive takes as a direct write. A loan
+hands the storage the receive pages themselves, which is a direct
+write only where the storage takes arbitrary pieces and every piece is
+on a 4-byte boundary. Everything before that step is common.
+
+**The factor did two jobs.** `svc_tcp_rx_credit_factor`, "loaned pages
+per 100 payload pages", was used for:
+
+1. **The charge for a loan**: what a WRITE is charged against the
+   budget when it starts. Copy never uses it. Since "SUNRPC: Learn a
+   loaned record's charge from the records" each budget learns it.
+2. **How far a connection's receive window is held**, in both modes.
+   The held receive buffer is counted in memory (truesize) and the
+   window the client sees in payload, and the factor converts one to
+   the other: the window is the held buffer times 100 over the
+   factor, less an eighth.
+
+The second is how a loan's setting reached copy mode. The harness
+wrote 190 (a whole page to a frame) for every cell, so every
+copy-mode figure up to 2026-10-10 had each connection's window at
+0.46 of its "held buffer": the "1 MiB" of the 43.3 GB/s cell was a
+window of 483 KiB, in about 0.5 MiB of memory on 8192-byte buffers,
+where memory is 1.09 times payload.
+
+Learning the charge does not help the second job in copy mode: the
+charge is learned from loaned records as they end, and copy loans
+none. What does is in every packet: an skb has both the memory it
+occupies and the payload it carries. The window is now derived from
+those ("SUNRPC: Hold a transport's receive window by what its packets
+occupy"), and the factor is gone as a setting.
+
 ## Open questions / next steps
 
 - [ ] **NVMe SGL support** (`NVME_SGL_SUPPORT_PROJECT.md`, scoped
