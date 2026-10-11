@@ -1517,10 +1517,10 @@ static void svcsock_rx_geometry_window(struct svc_sock *svsk,
 
 /*
  * A transport's receive buffer is held by what its skbs occupy for each
- * 100 bytes of payload.  With nothing measured that is 150; then what the
- * transport has read so far; then the higher of its last two samples.  A
- * transport that has read nothing starts from what another of its budget
- * measured.  A fixed factor overrides all of it.
+ * 100 bytes of payload: the higher of its last two samples, a sample being
+ * a window's worth of skbs that carry data.  Until it has one it is held
+ * to what another transport of its budget measured, or to 150.  A fixed
+ * factor overrides all of it.
  */
 static void svcsock_rx_geometry_test(struct kunit *test)
 {
@@ -1532,19 +1532,28 @@ static void svcsock_rx_geometry_test(struct kunit *test)
 	svc_tcp_rx_budget_kunit_configure(0, 0, 0);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 150U);
 
-	/* One skb: 8448 bytes for 7740 of payload is 110 to the 100. */
+	/* A few skbs are counted and are not yet a sample. */
 	svc_tcp_rx_geometry_account(sa, 8448, 7740, 7740);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 110U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 150U);
 	/* Half of an skb read is half of its memory. */
 	svc_tcp_rx_geometry_account(sa, 8448, 7740, 3870);
 	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_mem, 8448U + 4224U);
 	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_pay, 7740U + 3870U);
-	/* Nothing read of it, or an empty one, counts for nothing. */
+	/*
+	 * Nothing read of an skb counts for nothing, and neither does an
+	 * skb too small to carry data: a call in a receive buffer of its
+	 * own would have the transport held to less than a segment.
+	 */
 	svc_tcp_rx_geometry_account(sa, 8448, 7740, 0);
-	svc_tcp_rx_geometry_account(sa, 8448, 0, 100);
+	svc_tcp_rx_geometry_account(sa, 8448, 100, 100);
+	svc_tcp_rx_geometry_account(sa, 8448, 1023, 1023);
+	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_mem, 8448U + 4224U);
 	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_pay, 7740U + 3870U);
 
-	/* A window of them is a sample, and the budget's other transports' start. */
+	/*
+	 * A window of them is a sample: 8448 bytes for 7740 of payload is
+	 * 110 to the 100.  The budget's other transports start from it.
+	 */
 	svcsock_rx_geometry_window(sa, 8448, 7740);
 	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_factor[0], 110U);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 110U);
@@ -1558,9 +1567,9 @@ static void svcsock_rx_geometry_test(struct kunit *test)
 	svcsock_rx_geometry_window(sa, 8448, 7740);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 110U);
 
-	/* Short segments in whole buffers are measured as they are. */
-	svcsock_rx_geometry_window(sb, 8448, 100);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sb), 8448U);
+	/* Small writes, each in a buffer of its own, are measured as they are. */
+	svcsock_rx_geometry_window(sb, 8448, 1024);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sb), 825U);
 
 	/* A fixed factor is used as it is. */
 	svc_tcp_rx_budget_kunit_configure(0, 0, 190);
