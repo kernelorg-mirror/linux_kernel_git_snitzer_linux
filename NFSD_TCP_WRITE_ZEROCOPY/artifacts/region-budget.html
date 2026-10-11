@@ -449,6 +449,30 @@
     <p style="margin-top:14px" class="note">The account is "Build 463: the RSS table and <code>rx_buf_size</code> on the card" in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>, with "Build 462: the whole stack of changes" before it.</p>
   </section>
 
+  <section id="tried">
+    <p class="eyebrow hot">10 October, afternoon and evening &middot; build 463 &middot; what was tried past 41.8</p>
+    <h2>What did not help: every setting trades waiting for cache</h2>
+    <p>With 41.8 GB/s in hand and the wire carrying 48, five more things were tried to find the rest. None passed it. Each run is the best setting with one thing changed, every connection placed on a ring.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:0">
+      <thead><tr><th>What was changed</th><th>GB/s</th><th>What happened</th></tr></thead>
+      <tbody>
+        <tr><td class="m" style="white-space:normal">The best setting, for reference</td><td class="r">41.8 &middot; 40.7 &middot; 41.1 &middot; 41.6</td><td>four runs, two client kernels; 27 to 30 MiB of receive memory</td></tr>
+        <tr><td>Eight receive rings, not four</td><td class="c">39.6 &middot; 39.3</td><td>the rings' CPUs went from 9% idle to over 60% idle, so they were not the limit; receive memory rose past the cache</td></tr>
+        <tr><td>The load paced at the client and stepped up</td><td class="c" style="white-space:normal">41.6 at 42 offered, 40.8 at 45</td><td>a load raised in steps tops out where a load offered all at once does</td></tr>
+        <tr><td>32 connections, 1 MiB buffer each</td><td class="x">37.0</td><td>receive memory doubled to 43 MiB; 44 thousand frames dropped</td></tr>
+        <tr><td>32 connections, 512 KiB buffer each</td><td class="x">35.7</td><td>the same memory as the best setting and nothing dropped, yet each connection got its data half as fast and threads waited twice as much</td></tr>
+        <tr><td>A 1.5 MiB receive buffer</td><td class="c">41.4</td><td>threads waited half as much; receive memory went to 38 MiB and the copy cost a third more</td></tr>
+      </tbody>
+    </table></div>
+    <div class="verdict">
+      <p class="big">Inside the cache the copy is cheap and threads wait for data. Outside it the waiting ends and <em>the copy slows by as much</em>.</p>
+      <p>That is the one pattern in all five. A deeper buffer, more rings and more connections each put more data in receive memory, which ends some of the waiting and pushes the memory past the 32 MiB cache. Sixteen connections come out at 41 to 42 GB/s either way.</p>
+      <p><strong>Where the time goes.</strong> One connection is read by one thread at a time, and a 1 MiB WRITE takes about 350 &micro;s to receive on it, of which the copy is about 150. At 41.6 GB/s every connection is inside a WRITE's receive for nine tenths of the time. So sixteen connections cannot carry much more than they do, and adding connections from one client only spread the same data more thinly.</p>
+      <p><strong>What it means.</strong> The 6 GB/s still short of the wire is not in these settings. Reaching it means changing how a WRITE is received: taking the copy out, which is the loan and needs storage or receive buffers that allow a direct write, or letting more than one thread work on a connection.</p>
+    </div>
+    <p class="note">One traced run of 120 seconds each unless two figures are given. An earlier attempt at 32 connections fell to 12 GB/s with the client's own CPUs saturated; that was the client's older kernel, and it went away when the client moved to the kernel the server is built on. Shallow rings (128 frames) are in the first section: they hold the rate only by dropping and resending. The account is in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>, from "Eight rings" to "A 1.5 MiB held buffer".</p>
+  </section>
+
   <section id="xeu16">
     <p class="eyebrow">Before that &middot; 16 KiB &middot; tardis1 &middot; the Xsight card and real NVMe &middot; 8 and 9 October</p>
     <h2>Copy mode, written direct, with a deeper receive buffer: 35.9 GB/s</h2>
