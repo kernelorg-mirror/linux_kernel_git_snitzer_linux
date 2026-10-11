@@ -9,16 +9,16 @@ plan `plans/16k-35-rxbuf8192.plan`, run by
 `$L/xeu-16k-464-baseline-driver.sh` (`RUNS="5 6"` for two more). The
 account is "Build 464: the baseline" in `../XEU_CONVERGENCE.md`.
 
-**After `../run-kunit.sh` on 464, clear the factor before measuring.**
-464's installed svcsock suite leaves the factor fixed at 150 in the
-loaded `sunrpc`, and every window after it is 348 KiB where it should
-be 487 (41.6 and 40.4 GB/s, the first two runs of this boot). The fix
-is at the tip and a build after 464 will carry it. On 464, either load
-the fixed suite once afterwards (`modprobe kunit enable=1; insmod
-$L/sunrpc-$(uname -r)/sunrpc/svcsock_kunit.ko`, then `rmmod` both) or
-load `sunrpc` again (`SUNRPC_KO=none POOLS_PER_NODE=4
-./swap-sunrpc.sh` and `echo 512 > /proc/fs/nfsd/threads`). The check:
-`rcv_ssthresh` in a run's `ss-server.txt` is 487424 or 483497 here.
+**The svcsock KUnit suite used to leave the factor fixed at 150** in
+the loaded `sunrpc`, and every window after it was 348 KiB where it
+should be 487 (41.6 and 40.4 GB/s, the first two runs of this boot).
+It is fixed at the tip, and the fixed `svcsock_kunit.ko` is installed
+in 464's `updates/`, so `../run-kunit.sh` on this build is safe to
+measure after. It was not seen before 10 October because the harness
+wrote `svc_tcp_rx_credit_factor` for every cell, which put back
+whatever the suite had left; the parameter's removal took that away.
+The check, if in doubt: `rcv_ssthresh` in a run's `ss-server.txt` is
+487424 or 483497 here.
 
 **The state of tardis1 this boot:** the kernel's own `sunrpc` with no
 factor fixed (the fixed suite ran last), `pools_per_node` 4, nfsd at 512 threads, a

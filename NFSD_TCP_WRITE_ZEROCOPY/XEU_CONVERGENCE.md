@@ -2869,9 +2869,11 @@ ran it (`$L/xeu-16k-464-baseline-driver.sh`):
    `svcsock_rx_budget_off()` now clears it). Read from the loaded
    module, `svc_tcp_rx_kunit_factor` is 0 after the fixed suite, 150
    after 464's installed one and 0 after the fixed one again, 46/46
-   each time. 464's installed `svcsock_kunit` is the one before the
-   fix; the fixed one is `$L/sunrpc-$(uname -r)/sunrpc/svcsock_kunit.ko`
-   and loads against 464's `sunrpc`.
+   each time. The fixed `svcsock_kunit.ko` is in 464's `updates/`, so
+   `modprobe` and `run-kunit.sh` load it in place of the packaged one.
+   This began with "SUNRPC: Remove svc_tcp_rx_credit_factor": until
+   then the suite wrote the parameter itself, and the harness wrote
+   it again for every cell.
 3. The check that catches it: `rcv_ssthresh` in the run's
    `ss-server.txt` is 483497 or 487424 at this setting.
 
