@@ -503,13 +503,26 @@
       </tbody>
     </table></div>
     <p><strong>Too high wastes the budget; too low stalls WRITEs half received.</strong> The figure for a whole page to a frame was stale once the buffers changed and admitted about nine WRITEs where sixteen were meant. The neat figure was too low, because frames do share pages. A new kernel change removes the guess: each budget watches what its own WRITEs actually held and charges the next ones by the most any of the last one to two thousand did. Left to itself on this card it settled at 164 and stalled fewer WRITEs than any value set by hand that was not over-charging.</p>
-    <p class="note">One run of 120 seconds for each row, the same loan cell. The setting still exists, to fix the charge for an experiment; left at its new default of 0 the kernel learns. It also sets how far each connection's receive window is held, and copy mode, which loans nothing, has nothing to learn from: taking the setting out of that as well is not written yet.</p>
+    <p class="note">One run of 120 seconds for each row, the same loan cell. These runs still had the setting, left at 0 so that the kernel learned. It has since been removed altogether (next).</p>
+
+    <h3 style="margin-top:26px" id="nofactor">The setting is removed: the receive window is measured too</h3>
+    <p>The same setting did a second job, and that one reached copy mode. It told the kernel how much memory a connection's packets take up for each byte of data, which decides how much receive window a held buffer can offer. It had been set to 190 by hand, right for a whole page to a frame; on 8192-byte buffers the true figure is 107. The kernel now measures it on each connection, from the packets it reads, and <code>svc_tcp_rx_credit_factor</code> no longer exists.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:520px">
+      <thead><tr><th>Copy mode, the 43.3 GB/s configuration, one night</th><th>Memory for each 100 of data</th><th>GB/s</th></tr></thead>
+      <tbody>
+        <tr><td>The old code, from the kernel package</td><td class="c">190, set by hand</td><td class="c">42.4</td></tr>
+        <tr><td>The old code, built on the host</td><td class="c">190, set by hand</td><td class="c">42.0</td></tr>
+        <tr><td><strong>No setting</strong></td><td class="r">107, measured</td><td class="r">42.5 &middot; 42.7</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Level with the old code, with nothing to set.</strong> The work also showed why the old value had worked: 190 was, by accident, offering about half of each held buffer as window. Offering all of it dropped 742 thousand frames in a run, so half is now the rule in the code. A loan run on the final code gave 20.2 GB/s with every WRITE written direct, none stalled and none over its charge.</p>
+    <p class="note">One run of 120 seconds for each figure, late on 10 October. Every run that night, the old code included, came in about 1 GB/s under the 43.2 and 43.3 measured three hours earlier; the cause has not been found. Rings twice as deep were also tried on the new code and did not help: 39.8 and 40.9 GB/s, with receive memory at 30 and 35 MiB. The account is "The factor is gone" in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>.</p>
 
     <h3 style="margin-top:26px">Before the SGL drives arrive</h3>
     <div class="matrix">
       <div class="cell k">A loaned WRITE written direct on this card, with receive buffers small enough to keep the footprint down</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">The budget holds: no WRITE held more than it was charged, in any loan run</div><div class="cell v"><span class="pill yes">shown</span></div>
-      <div class="cell k">The charge needs no setting for the card, the MTU or the buffer size</div><div class="cell v"><span class="pill yes">in the kernel</span></div>
+      <div class="cell k">Neither the charge nor the receive window needs a setting for the card, the MTU or the buffer size</div><div class="cell v"><span class="pill yes">in the kernel</span></div>
       <div class="cell k">What a loan carries when the storage is a real SGL drive and not a stand-in that copies</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
       <div class="cell k">The loan's footprint. It holds 45 to 50 MiB, past the cache. Whether a smaller budget or a smaller held buffer brings it inside without costing rate depends on how fast the real drives finish a write</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
       <div class="cell k">4-byte placement in every buffer of a frame, asked of Xsight. It would let a loan use the smallest buffers at an MTU of 9000. Until then it is one buffer to a frame</div><div class="cell v"><span class="pill pend">asked</span></div>
