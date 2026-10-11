@@ -35,23 +35,20 @@ drains each connection: the client's sixteen connections were
 `rwnd_limited` for 94% to 98% of their busy time. The copy is 25% of
 server cycles. What else is there, before it and after it:
 
-**Step A: read the saved call graph. No test run.**
-`perf report -i cg-r256-b1048576-w0-prp.1-step-copy-n16.data` in that
-directory. It is slow (minutes for each symbol) and takes a CPU, so do
-not run it during a measurement. Two questions:
+**Step A is done (2026-10-11): "What limits the drain, step A" in
+`../XEU_CONVERGENCE.md`.** Use `perf report --no-inline` on that file;
+it is quick.
 
-- **Who calls `arch_counter_get_cntpct`?** It is 14.5% of cycles, the
-  second item in the profile. The suspects are the linger's wait loop
-  and the tracing itself. If it is the linger, an eighth of the
-  server's cycles is a thread reading the clock.
-- **Is the copy done with the socket locked?** 50,554 waits for the
-  send mutex in `svc_tcp_sendto`, 21 s in all and 415 us each on
-  average, which is about one WRITE's receive. That is an inference
-  from `lock-caller-*.txt`, not a trace. Confirm it from the callers of
-  `__memmove` and from the code (`svc_tcp_recv_skb()` runs under
-  `tcp_read_sock()`). If so, segments that arrive during a copy go to
-  the socket's backlog, and moving the copy outside the lock is also
-  the first step towards two threads on one connection.
+- `arch_counter_get_cntpct` is the linger's wait loop, not the
+  tracing. The cycles are a thread waiting, and a cheaper clock would
+  free nothing.
+- A connection copies about two fifths of the time and waits in the
+  linger on an empty socket about one fifth. The copy's own speed is
+  not all that holds the drain: the window and the round trip to
+  refill it are in it.
+- The copy is done with the socket locked (trace and code). Arrivals
+  go to the backlog and a reply waits for the lock under the send
+  mutex.
 
 **Step B: one batch of runs.** The ring CPUs (0, 2, 4 and 6) were 8%
 idle at about 10.7 GB/s a ring. Eight rings were tried only on
