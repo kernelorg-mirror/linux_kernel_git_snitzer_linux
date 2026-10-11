@@ -1954,9 +1954,9 @@ static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
 static void svcsock_rx_credit_factor_bounds_test(struct kunit *test)
 {
 	/* The largest and the smallest factor a held buffer can be given. */
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(22400), (u8)1);
-	KUNIT_EXPECT_GT(test, svc_tcp_rx_window_clamp(SOCK_MIN_RCVBUF, 22400), 0);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(50), (u8)224);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(12800), (u8)1);
+	KUNIT_EXPECT_GT(test, svc_tcp_rx_window_clamp(SOCK_MIN_RCVBUF, 12800), 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(50), (u8)128);
 }
 
 /* Credit stays off while the receive-buffer clamp is below the floor. */
@@ -1983,14 +1983,14 @@ static void svcsock_rx_credit_rcvbuf_floor_test(struct kunit *test)
 
 static void svcsock_rx_window_clamp_test(struct kunit *test)
 {
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_window_clamp(262144, 150), 152917);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_window_clamp(65536, 280), 20480);
-	/* Below one page per payload page counts as one. */
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_window_clamp(65536, 50), 57344);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_window_clamp(262144, 150), 87040);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_window_clamp(65536, 280), 11520);
+	/* Under a byte of memory to a byte of payload counts as one. */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_window_clamp(65536, 50), 32768);
 	/* The same geometry in TCP_RMEM_TO_WIN_SCALE (1/256) units. */
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(150), 149);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(280), 80);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(50), 224);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(150), 85);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(280), 45);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(50), 128);
 }
 
 static void svcsock_rx_sock_release(void *sock)
@@ -2002,7 +2002,7 @@ static void svcsock_rx_sock_release(void *sock)
  * A transport that receives region pages holds its receive window through
  * TCP's interfaces: the buffer locked at svc_tcp_rx_rcvbuf, and the ratio
  * TCP turns free buffer into window with capped at the region's geometry.
- * Factor 280 puts the ceiling (80) below TCP's starting ratio (128), so the
+ * Factor 280 puts the ceiling (45) below TCP's starting ratio (128), so the
  * ratio and the window clamp drop at once; TCP keeps the ceiling for when it
  * re-learns its ratio.  Held once per transport.
  */
