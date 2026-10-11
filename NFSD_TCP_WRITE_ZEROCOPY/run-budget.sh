@@ -202,9 +202,14 @@ rcvpages() {
 	b=$(( ($1 + fr - 1) / fr ))
 	echo $(( a > b ? a : b ))
 }
-# KERNEL_CREDIT_FACTOR=<n> is written to svc_tcp_rx_credit_factor in place of
-# a cell's factor, which still sizes the cell's budget: 0 leaves the kernel
-# to learn the charge from its records (svc_tcp_rx_cost_learn_locked()).
+# A kernel that still has svc_tcp_rx_credit_factor is given a cell's factor,
+# or KERNEL_CREDIT_FACTOR=<n> in its place (0: learn the charge, where the
+# kernel can).  A kernel without the parameter learns the charge and measures
+# what a held buffer is held to; a cell's factor then only sizes its budget.
+setfactor() {
+	[ -e $SP/svc_tcp_rx_credit_factor ] || return 0
+	echo "${KERNEL_CREDIT_FACTOR:-$1}" > $SP/svc_tcp_rx_credit_factor
+}
 # FACTOR9=<n> replaces the derived factor for MTU 9000, to try another on
 # the same region: the reserve follows it, and so would the default region
 # size, so give SIZE= as well (the region is made once per boot).
@@ -267,6 +272,7 @@ SAVE_TON=$(cat $T/tracing_on)
 SAVE_REGDEV=$(cat $PP/rx_region_dev)
 SAVE_REGPAGES=$(cat $PP/rx_region_pages)
 for p in budget_pages budget_reserve credit_factor rcvbuf; do
+	[ -e $SP/svc_tcp_rx_$p ] || continue	# credit_factor: gone from newer kernels
 	eval "SAVE_$p=\$(cat $SP/svc_tcp_rx_$p)"
 done
 PORT=""
@@ -388,7 +394,7 @@ ncell() {
 	local name=$1 O=$E/$1 si0 sd0 sb0 si1 sd1 sb1 pr= pb= hk= rcr=- rcb=- mr=- mb=- nb c w0
 	rm -rf "$O"; mkdir -p "$O/R" "$O/B"
 	echo "$RCVBUF" > $SP/svc_tcp_rx_rcvbuf
-	echo "${KERNEL_CREDIT_FACTOR:-$F9}" > $SP/svc_tcp_rx_credit_factor
+	setfactor "$F9"
 	setdelay "$DELAY"
 	set_budgets "$2" "$3" "$4" || { echo "$name: budgets $2/$3/$4 refused"; return 0; }
 	if [ "$5" = RB ]; then MTU=$MTU veth_up "$SIZE"; fi
@@ -476,6 +482,7 @@ cleanup() {
 	echo 0 > $SP/svc_tcp_rx_budget_default_pages
 	echo 0 > $SP/svc_tcp_rx_budget_default_reserve
 	for p in budget_reserve credit_factor rcvbuf budget_pages; do
+		[ -e $SP/svc_tcp_rx_$p ] || continue
 		eval "echo \$SAVE_$p > $SP/svc_tcp_rx_$p"
 	done
 	echo 0 > $T/events/sunrpc/svcsock_tcp_rx_lifetime/enable
@@ -964,7 +971,7 @@ cell() {
 	rm -rf "$O"; mkdir -p "$O"
 	echo 0 > $SP/svc_tcp_rx_budget_pages
 	echo "$RESERVE" > $SP/svc_tcp_rx_budget_reserve
-	echo "${KERNEL_CREDIT_FACTOR:-$FACTOR}" > $SP/svc_tcp_rx_credit_factor
+	setfactor "$FACTOR"
 	echo "$RCVBUF" > $SP/svc_tcp_rx_rcvbuf
 	echo "$BUDGET" > $SP/svc_tcp_rx_budget_pages
 	# RX_LINGER_US=<us>: a thread waits that long for the rest of a partly
@@ -1085,7 +1092,7 @@ xcell() {
 	rm -rf "$O"; mkdir -p "$O/R" "$O/N"
 	echo 0 > $SP/svc_tcp_rx_budget_pages
 	echo "$RESERVE" > $SP/svc_tcp_rx_budget_reserve
-	echo "${KERNEL_CREDIT_FACTOR:-$FACTOR}" > $SP/svc_tcp_rx_credit_factor
+	setfactor "$FACTOR"
 	echo "$RCVBUF" > $SP/svc_tcp_rx_rcvbuf
 	echo "$BUDGET" > $SP/svc_tcp_rx_budget_pages
 	setdelay "$DELAY"

@@ -121,6 +121,17 @@ whole page: set the factor for two frames to a page before the next
 loan run ("The loan on 8192-byte buffers is written direct" in
 `../XEU_CONVERGENCE.md`).
 
+**`svc_tcp_rx_credit_factor` is gone (2026-10-11, 00:20).** A
+transport's window is held by what its skbs are measured to occupy
+(`hold_factor` in the budget's statistics: 107 here) and opened to
+half of what its held buffer holds; a budget learns a loan's charge.
+The copy at the pinned setting: 42.5 and 42.7 GB/s, against 42.4 and
+42.0 the same night on the code before with its factor at 190. **The
+rig is about 1 GB/s under its 43.3 of 21:00 whichever code runs**, not
+explained. The sunrpc of the tip is loaded from `updates/`
+(`954D242F33480A3301D26E3`). "The factor is gone" in
+`../XEU_CONVERGENCE.md` has the six commits and the five batches.
+
 **The kernel learns a loan's charge now (2026-10-10, 22:30).**
 "SUNRPC: Learn a loaned record's charge from the records":
 `svc_tcp_rx_credit_factor` 0, the default, has each budget keep the

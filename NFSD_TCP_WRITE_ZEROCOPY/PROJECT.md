@@ -465,6 +465,14 @@ occupies and the payload it carries. The window is now derived from
 those ("SUNRPC: Hold a transport's receive window by what its packets
 occupy"), and the factor is gone as a setting.
 
+With the factor measured, what it had been doing showed: 190 on
+buffers whose real figure is 107 made the window about half of the
+held buffer. That half is now the rule ("SUNRPC: Open a held
+transport's window to half of what its buffer holds"): the client may
+have half on the way and the other half is for what has arrived and
+not been read. The whole buffer as window either bursts past the
+rings or, in a smaller buffer, leaves no room behind the window.
+
 ## Open questions / next steps
 
 - [ ] **NVMe SGL support** (`NVME_SGL_SUPPORT_PROJECT.md`, scoped
