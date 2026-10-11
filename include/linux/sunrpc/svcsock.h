@@ -64,6 +64,9 @@ enum svc_tcp_rx_reason {
 	SVC_TCP_RX_REASON_NO_BUDGET,
 };
 
+/* Records a budget learns its charge over: see svc_tcp_rx_cost_learn_locked(). */
+#define SVC_TCP_RX_COST_WINDOW	1024
+
 /*
  * Receive descriptors and their page references move together by exchanging
  * this preallocated object between a request and a connected TCP socket.
@@ -149,6 +152,16 @@ struct svc_sock {
 	bool			sk_rx_hold_pending;
 	/* receive buffer, window clamp and scaling ratio held */
 	bool			sk_rx_held;
+	/* what they were held to (svc_tcp_rx_hold_factor()) */
+	unsigned int		sk_rx_hold_factor;
+	/*
+	 * What the skbs read since the last sample occupy and carry, and
+	 * the last two samples, newest first, as bytes occupied for each
+	 * 100 of payload (svc_tcp_rx_geometry_account())
+	 */
+	u32			sk_rx_geo_mem;
+	u32			sk_rx_geo_pay;
+	unsigned int		sk_rx_geo_factor[2];
 
 	struct page_frag_cache  sk_frag_cache;
 

@@ -177,6 +177,12 @@ static void svc_reclassify_socket(struct socket *sock)
  * against an estimated page cost, each later skb is charged the region loan
  * entries it can add, and a transport without credit stops reading so its
  * bytes stay in the TCP receive queue and the advertised window closes.
+ * The estimate is learned: each budget keeps the most region pages a record
+ * of its last one to two thousand held for each 100 pages of record.  How
+ * many pages a record holds follows from how the device cuts its pages into
+ * receive buffers and how connections' frames interleave in them, which
+ * only the records show.  Until a budget's first record has ended, a record
+ * is charged all it could hold, so records go one at a time.
  * Records that never carry a region page are never admitted.  A reserve that
  * ordinary admission cannot take lets the oldest in-flight record always
  * finish, so the receive path cannot deadlock.  Credit returns when a record
@@ -196,33 +202,28 @@ static unsigned int svc_tcp_rx_budget_reserve;
 static unsigned int svc_tcp_rx_budget_default_pages;
 static unsigned int svc_tcp_rx_budget_default_reserve;
 
-static unsigned int svc_tcp_rx_credit_factor = 150;
+/*
+ * Two estimates that used to be one setting are found out as the server
+ * runs: each budget learns what its loaned records hold
+ * (svc_tcp_rx_cost_learn_locked()) and each transport measures what its
+ * skbs occupy (svc_tcp_rx_geometry_account()).  Both are kept as a factor,
+ * so many to the 100, and neither can be set: they follow from how the
+ * device cuts its pages into receive buffers, from the MTU and from how
+ * connections' frames interleave, and a value set by hand is wrong as soon
+ * as one of those changes.
+ */
 /* Largest factor with a positive TCP_RMEM_TO_WIN_SCALE ratio. */
-#define SVC_TCP_RX_CREDIT_FACTOR_MAX 22400U
-static int svc_tcp_rx_credit_factor_set(const char *val,
-				       const struct kernel_param *kp)
-{
-	unsigned int factor;
-	int ret = kstrtouint(val, 0, &factor);
+#define SVC_TCP_RX_CREDIT_FACTOR_MAX 12800U
+/* What a receive buffer is held to before anything has been measured. */
+#define SVC_TCP_RX_CREDIT_FACTOR_UNLEARNED	150U
 
-	if (ret)
-		return ret;
-	if (factor > SVC_TCP_RX_CREDIT_FACTOR_MAX)
-		return -EINVAL;
-	WRITE_ONCE(*(unsigned int *)kp->arg, factor);
-	return 0;
-}
-
-static const struct kernel_param_ops svc_tcp_rx_credit_factor_ops = {
-	.set = svc_tcp_rx_credit_factor_set,
-	.get = param_get_uint,
-};
-module_param_cb(svc_tcp_rx_credit_factor, &svc_tcp_rx_credit_factor_ops,
-		&svc_tcp_rx_credit_factor, 0644);
-MODULE_PARM_DESC(svc_tcp_rx_credit_factor,
-		 "Estimated loaned pages per 100 payload pages (0..22400; TCP geometry floors at 100)");
 static unsigned int svc_tcp_rx_rcvbuf;
 static void svc_tcp_rx_budget_apply_all(void);
+static bool svc_tcp_rx_hold_stale(struct svc_sock *svsk);
+static void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
+					unsigned int truesize,
+					unsigned int skb_len,
+					unsigned int used);
 
 /* A clamp below SVC_TCP_RX_RCVBUF_MIN turns every budget off. */
 static int svc_tcp_rx_rcvbuf_set(const char *val,
@@ -319,6 +320,23 @@ struct svc_tcp_rx_budget {
 	unsigned int		reserve_size;
 	unsigned int		inflight_count;
 	u64			next_ticket;
+	/*
+	 * Region pages a record held per 100 pages of record, learned from
+	 * the records that ended; 0 until one has.  It is the most any of
+	 * the last SVC_TCP_RX_COST_WINDOW records showed, and of this
+	 * window's so far (svc_tcp_rx_cost_learn_locked()).
+	 */
+	unsigned int		cost_factor;
+	/*
+	 * What the skbs of one of its transports last occupied for each
+	 * 100 bytes of payload: where a new transport's receive buffer is
+	 * held until it has measured its own.  Written without the lock;
+	 * any transport's figure will do.
+	 */
+	unsigned int		hold_factor;
+	unsigned int		cost_peak;	/* of this window */
+	unsigned int		cost_last_peak;	/* of the window before */
+	unsigned int		cost_records;	/* in this window */
 	struct list_head	inflight;	/* admitted records, oldest first */
 	struct list_head	waiters;	/* transports, oldest ticket first */
 	u64			admitted;
@@ -488,10 +506,11 @@ static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 	list_for_each_entry(pos, &c->waiters, sk_credit_wait)
 		waiters++;
 	len = scnprintf(buf, size,
-			"budget %u reserve_size %u avail %ld reserve %ld inflight %u waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu\n",
+			"budget %u reserve_size %u avail %ld reserve %ld inflight %u waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu cost_factor %u hold_factor %u\n",
 			c->budget, c->reserve_size, c->avail, c->reserve,
 			c->inflight_count, waiters, c->admitted, c->denied,
-			c->paused, c->overrun, c->orphaned);
+			c->paused, c->overrun, c->orphaned, c->cost_factor,
+			READ_ONCE(c->hold_factor));
 	spin_unlock_bh(&c->lock);
 	return len;
 }
@@ -672,14 +691,68 @@ static bool svc_tcp_rx_budget_configure_locked(struct svc_tcp_rx_budget *c)
 	return true;
 }
 
-static u32 svc_tcp_rx_credit_cost(const struct svc_tcp_rx_state *state,
-				  u32 reclen)
+/*
+ * The pages per 100 of record a record of @c is charged at admission: what
+ * @c has learned, or 0 while it has learned nothing.
+ */
+static unsigned int svc_tcp_rx_cost_factor(const struct svc_tcp_rx_budget *c)
 {
-	u64 pages = DIV_ROUND_UP(reclen, PAGE_SIZE);
+	return READ_ONCE(c->cost_factor);
+}
 
-	pages = DIV_ROUND_UP_ULL(pages * READ_ONCE(svc_tcp_rx_credit_factor),
-				 100) + 1;
-	return min_t(u64, pages, state->capacity);
+static u32 svc_tcp_rx_credit_cost(const struct svc_tcp_rx_budget *c,
+				  const struct svc_tcp_rx_state *state,
+				  u32 pages)
+{
+	unsigned int factor = svc_tcp_rx_cost_factor(c);
+	u64 cost;
+
+	/* Nothing learned yet: all a record can hold. */
+	if (!factor)
+		return state->capacity;
+	cost = DIV_ROUND_UP_ULL((u64)pages * factor, 100) + 1;
+	return min_t(u64, cost, state->capacity);
+}
+
+/*
+ * A record of @c has ended: learn from the region pages it was lent.
+ * @state->region_count is an upper bound on the pages it held and the
+ * bytes it received are the record, all of it unless it was cut short.
+ * The sample is the factor that would have charged it what it held, less
+ * the page every charge adds.
+ *
+ * A record charged too little stops part-way, holding what it has, so the
+ * estimate has to cover the records that hold the most: frames of several
+ * connections share pages, and how many of a record's do varies from one
+ * record to the next.  A higher sample is taken at once.  The estimate
+ * comes down only when a whole window of records, and the one before it,
+ * stayed below it, so a record or a thousand whose frames happened to
+ * share their pages do not lower it.  A record that was copied part-way
+ * shows fewer pages than a loaned one and cannot lower it either while
+ * loaned ones are still ending.
+ */
+static void svc_tcp_rx_cost_learn_locked(struct svc_tcp_rx_budget *c,
+					 const struct svc_tcp_rx_state *state)
+{
+	u32 pages = DIV_ROUND_UP((u64)state->fixed_bytes + state->body_bytes,
+				 PAGE_SIZE);
+	unsigned int sample, factor = c->cost_factor;
+
+	if (!state->region_count || !pages)
+		return;
+	sample = min_t(u64, DIV_ROUND_UP_ULL((u64)(state->region_count - 1) *
+					     100, pages),
+		       SVC_TCP_RX_CREDIT_FACTOR_MAX);
+	sample = max(sample, 100U);
+	c->cost_peak = max(c->cost_peak, sample);
+	factor = max(factor, sample);
+	if (++c->cost_records >= SVC_TCP_RX_COST_WINDOW) {
+		factor = max(c->cost_peak, c->cost_last_peak);
+		c->cost_last_peak = c->cost_peak;
+		c->cost_peak = 0;
+		c->cost_records = 0;
+	}
+	WRITE_ONCE(c->cost_factor, factor);
 }
 
 static struct svc_sock *svc_tcp_rx_credit_head(struct svc_tcp_rx_budget *c)
@@ -868,6 +941,7 @@ static bool svc_tcp_rx_credit_admit(struct svc_sock *svsk,
 {
 	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_for(svsk);
 	struct svc_sock *head, *wake = NULL;
+	u32 pages = DIV_ROUND_UP(reclen, PAGE_SIZE);
 	u32 cost, from_avail, from_reserve;
 	bool changed;
 
@@ -875,8 +949,8 @@ static bool svc_tcp_rx_credit_admit(struct svc_sock *svsk,
 		return true;
 	if (WARN_ON_ONCE(state->credit_linked))
 		return true;
-	cost = svc_tcp_rx_credit_cost(state, reclen);
 	spin_lock_bh(&c->lock);
+	cost = svc_tcp_rx_credit_cost(c, state, pages);
 	changed = svc_tcp_rx_budget_configure_locked(c);
 	if (!c->budget) {
 		/* Disable drains existing waiters through the same FIFO wake chain. */
@@ -998,6 +1072,7 @@ static void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state)
 	c->inflight_count--;
 	c->reserve += state->credit_reserve;
 	c->avail += state->credit - state->credit_reserve - state->credit_over;
+	svc_tcp_rx_cost_learn_locked(c, state);
 	state->credit = 0;
 	state->credit_reserve = 0;
 	state->credit_over = 0;
@@ -2617,6 +2692,12 @@ static void svc_tcp_fragment_received(struct svc_sock *svsk)
 	svsk->sk_marker = xdr_zero;
 }
 
+static void svc_tcp_recv_record_done(struct svc_sock *svsk)
+{
+	svsk->sk_datalen = 0;
+	svc_tcp_fragment_received(svsk);
+}
+
 /*
  * A non-final fragment carries four octets of marker and may carry
  * no payload at all. sk_datalen advances only by the payload, so a
@@ -3361,8 +3442,8 @@ static int svc_tcp_rx_publish(struct svc_sock *svsk, struct svc_rqst *rqstp)
  * the count of body octets received so far and their write offset into
  * rq_pages.
  */
-static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
-			      unsigned int offset, size_t len)
+static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
+			    unsigned int offset, size_t len)
 {
 	struct svc_tcp_recv_ctx *ctx = desc->arg.data;
 	struct svc_rqst *rqstp = ctx->rqstp;
@@ -3382,6 +3463,10 @@ static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
 	    READ_ONCE(svc_tcp_rx_rcvbuf) &&
 	    svc_tcp_rx_skb_region_pages(skb, 0, offset, offset + len))
 		svsk->sk_rx_hold_pending = true;
+	else if (svsk->sk_rx_held && svc_tcp_rx_hold_stale(svsk)) {
+		svsk->sk_rx_held = false;
+		svsk->sk_rx_hold_pending = true;
+	}
 
 	if (!desc->count)
 		return 0;
@@ -3532,6 +3617,20 @@ static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
 fault:
 	desc->error = error;
 	desc->count = 0;
+	return consumed;
+}
+
+static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
+			      unsigned int offset, size_t len)
+{
+	struct svc_tcp_recv_ctx *ctx = desc->arg.data;
+	struct svc_sock *svsk =
+		container_of(ctx->rqstp->rq_xprt, struct svc_sock, sk_xprt);
+	int consumed = svc_tcp_recv_skb(desc, skb, offset, len);
+
+	if (consumed > 0 && (svsk->sk_rx_held || svsk->sk_rx_hold_pending))
+		svc_tcp_rx_geometry_account(svsk, skb->truesize, skb->len,
+					    consumed);
 	return consumed;
 }
 
@@ -3718,8 +3817,7 @@ again:
 		len = receive_cb_reply(svsk, rqstp);
 
 	/* Reset TCP read info */
-	svsk->sk_datalen = 0;
-	svc_tcp_fragment_received(svsk);
+	svc_tcp_recv_record_done(svsk);
 
 	if (len < 0)
 		goto error;
@@ -3901,28 +3999,127 @@ void svc_cleanup_xprt_sock(void)
 }
 
 /*
- * A transport waiting for credit stops reading, so its receive window must
- * never promise more payload than its locked receive buffer holds, or the
- * queue overflows and the sender retransmits. Loaned payload costs
- * svc_tcp_rx_credit_factor pages per 100 payload pages; an eighth is kept
- * back for sk_buff overhead.
- */
-static int svc_tcp_rx_window_clamp(int rcvbuf, unsigned int factor)
-{
-	return div64_u64((u64)rcvbuf * 100 * 7, (u64)max(factor, 100U) * 8);
-}
-
-/*
+ * A transport's receive buffer is locked, and counted in the memory its
+ * skbs occupy, @factor bytes for each 100 of payload
+ * (svc_tcp_rx_hold_factor()).  Half of the payload it can hold is the most
+ * its window is opened to.
+ *
+ * The window is what the client may have on the way, and the other half is
+ * for what has arrived and not been read: a thread is still copying the
+ * record before, or waiting for credit.  With a window of all the buffer
+ * every byte not yet read comes off what the client may send, and it is
+ * held up whenever the reader is a little behind; and all the transports'
+ * windows together arrive as one burst that the device's rings have to
+ * take.
+ *
  * TCP converts free receive memory into window at a payload/truesize ratio
- * it learns from full-size segments only. A reader stopped for credit lets
- * the buffer fill to that estimate, and shorter segments (a record's tail
- * still takes whole pages) then overflow it. Use the region's geometry,
- * less the same eighth, in TCP_RMEM_TO_WIN_SCALE units.
+ * it learns from full-size segments only, and would open the window to all
+ * the buffer holds.  Cap the ratio at half of what the transport's skbs
+ * were measured to occupy, in TCP_RMEM_TO_WIN_SCALE units, so that the
+ * window also closes by half of what is left as the buffer fills.
  */
 static u8 svc_tcp_rx_scaling_ratio(unsigned int factor)
 {
-	return div64_u64((u64)(100 * 7) << TCP_RMEM_TO_WIN_SCALE,
-			 (u64)max(factor, 100U) * 8);
+	return div64_u64((u64)100 << TCP_RMEM_TO_WIN_SCALE,
+			 (u64)max(factor, 100U) * 2);
+}
+
+/*
+ * The most a transport's window is opened to: what TCP makes of the whole
+ * of @rcvbuf at svc_tcp_rx_scaling_ratio(), so that the clamp is never
+ * more than TCP would offer of an empty buffer.
+ */
+static int svc_tcp_rx_window_clamp(int rcvbuf, unsigned int factor)
+{
+	return ((u64)rcvbuf * svc_tcp_rx_scaling_ratio(factor)) >>
+	       TCP_RMEM_TO_WIN_SCALE;
+}
+
+/*
+ * Bytes of payload a transport reads between two samples of what its skbs
+ * occupy.  Long enough to hold several records, so that a record's short
+ * last segment, which takes a whole receive buffer, weighs in a sample as
+ * it does in the receive queue.
+ */
+#define SVC_TCP_RX_GEOMETRY_WINDOW	(4U << 20)
+/*
+ * An skb with less payload than this is not measured.  A call, a reply's
+ * acknowledgment or a small request has a receive buffer to itself, a
+ * hundred bytes in several thousand, and a transport that reads a few of
+ * those before any data would be held to a window of less than a segment,
+ * which TCP does not advertise at all: the first connection of a freshly
+ * loaded server stopped that way.  A record's short last segment is not
+ * lost by this, since GRO has it in an skb with the full ones before it.
+ */
+#define SVC_TCP_RX_GEOMETRY_MIN_SKB	1024U
+
+static unsigned int svc_tcp_rx_geometry_sample(u32 mem, u32 pay)
+{
+	return clamp_t(u64, DIV_ROUND_UP_ULL((u64)mem * 100, pay), 100,
+		       SVC_TCP_RX_CREDIT_FACTOR_MAX);
+}
+
+/*
+ * @svsk read @used bytes of an skb of @skb_len bytes that occupies
+ * @truesize.  TCP counts a receive buffer in truesize and a window in
+ * payload, and what one is to the other is a property of how the device
+ * cuts its pages into receive buffers and of the segments' sizes, so it is
+ * measured: the memory and the payload of everything the transport reads
+ * are summed, and every SVC_TCP_RX_GEOMETRY_WINDOW bytes their ratio is a
+ * sample.  The transport's receive buffer is held to the higher of its
+ * last two (svc_tcp_rx_hold_factor()).  Only the thread reading the
+ * transport gets here.
+ */
+static void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
+					unsigned int truesize,
+					unsigned int skb_len,
+					unsigned int used)
+{
+	if (skb_len < SVC_TCP_RX_GEOMETRY_MIN_SKB || !used)
+		return;
+	svsk->sk_rx_geo_mem += div_u64((u64)truesize * min(used, skb_len),
+				       skb_len);
+	svsk->sk_rx_geo_pay += used;
+	if (svsk->sk_rx_geo_pay < SVC_TCP_RX_GEOMETRY_WINDOW)
+		return;
+	svsk->sk_rx_geo_factor[1] = svsk->sk_rx_geo_factor[0];
+	svsk->sk_rx_geo_factor[0] =
+		svc_tcp_rx_geometry_sample(svsk->sk_rx_geo_mem,
+					   svsk->sk_rx_geo_pay);
+	svsk->sk_rx_geo_mem = 0;
+	svsk->sk_rx_geo_pay = 0;
+	WRITE_ONCE(svc_tcp_rx_budget_for(svsk)->hold_factor,
+		   max(svsk->sk_rx_geo_factor[0], svsk->sk_rx_geo_factor[1]));
+}
+
+/*
+ * What @svsk's receive buffer is held to, as the bytes its skbs occupy for
+ * each 100 of payload: the higher of the transport's last two samples,
+ * else, until it has one, what another transport of its budget measured,
+ * else the factor this code had before it measured.  What a transport has
+ * read of its first window is not used: a few skbs are not a sample.
+ */
+static unsigned int svc_tcp_rx_hold_factor(struct svc_sock *svsk)
+{
+	unsigned int factor;
+
+	factor = max(svsk->sk_rx_geo_factor[0], svsk->sk_rx_geo_factor[1]);
+	if (factor)
+		return factor;
+	return READ_ONCE(svc_tcp_rx_budget_for(svsk)->hold_factor) ?:
+	       SVC_TCP_RX_CREDIT_FACTOR_UNLEARNED;
+}
+
+/*
+ * A transport whose buffer is held to one figure and has since measured
+ * another is held again, once the two are an eighth apart.
+ */
+static bool svc_tcp_rx_hold_stale(struct svc_sock *svsk)
+{
+	unsigned int held = svsk->sk_rx_hold_factor;
+	unsigned int now = svc_tcp_rx_hold_factor(svsk);
+
+	return abs_diff(now, held) * 8 > held;
 }
 
 /*
@@ -3937,7 +4134,7 @@ static u8 svc_tcp_rx_scaling_ratio(unsigned int factor)
 static void svc_tcp_rx_hold_buffer(struct svc_sock *svsk)
 {
 	unsigned int bytes = READ_ONCE(svc_tcp_rx_rcvbuf);
-	unsigned int factor = READ_ONCE(svc_tcp_rx_credit_factor);
+	unsigned int factor = svc_tcp_rx_hold_factor(svsk);
 	struct sock *sk = svsk->sk_sk;
 	int rcvbuf, clamp;
 	u8 ratio;
@@ -3945,8 +4142,14 @@ static void svc_tcp_rx_hold_buffer(struct svc_sock *svsk)
 	svsk->sk_rx_hold_pending = false;
 	if (!bytes || svsk->sk_rx_held)
 		return;
+	svsk->sk_rx_hold_factor = factor;
 	rcvbuf = max_t(int, bytes, SOCK_MIN_RCVBUF);
-	clamp = svc_tcp_rx_window_clamp(rcvbuf, factor);
+	/*
+	 * Never under two segments: TCP advertises no window smaller than
+	 * one, and the sender then waits on a receiver that waits on it.
+	 */
+	clamp = max_t(int, svc_tcp_rx_window_clamp(rcvbuf, factor),
+		      2 * READ_ONCE(tcp_sk(sk)->advmss));
 	ratio = svc_tcp_rx_scaling_ratio(factor);
 
 	/* Unread data is this transport's share of the region. */
@@ -3955,6 +4158,7 @@ static void svc_tcp_rx_hold_buffer(struct svc_sock *svsk)
 	if (tcp_sock_set_window_clamp(sk, clamp))
 		pr_warn_once("svc: TCP receive window clamp failed\n");
 	svsk->sk_rx_held = true;
+	trace_svcsock_tcp_rx_hold(&svsk->sk_xprt, factor, rcvbuf, clamp);
 }
 
 static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)

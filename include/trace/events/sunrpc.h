@@ -2517,6 +2517,41 @@ TRACE_EVENT(svcsock_tcp_rx_linger,
 	)
 );
 
+/*
+ * A transport's receive buffer was held: to how many bytes, counted at
+ * @factor bytes of buffer for each 100 of payload, and the most its window
+ * is opened to.
+ */
+TRACE_EVENT(svcsock_tcp_rx_hold,
+	TP_PROTO(
+		const struct svc_xprt *xprt,
+		unsigned int factor,
+		int rcvbuf,
+		int clamp
+	),
+
+	TP_ARGS(xprt, factor, rcvbuf, clamp),
+
+	TP_STRUCT__entry(
+		__field(unsigned int, factor)
+		__field(int, rcvbuf)
+		__field(int, clamp)
+		__string(addr, xprt->xpt_remotebuf)
+	),
+
+	TP_fast_assign(
+		__entry->factor = factor;
+		__entry->rcvbuf = rcvbuf;
+		__entry->clamp = clamp;
+		__assign_str(addr);
+	),
+
+	TP_printk("addr=%s factor=%u rcvbuf=%d window_clamp=%d",
+		__get_str(addr), __entry->factor, __entry->rcvbuf,
+		__entry->clamp
+	)
+);
+
 TRACE_EVENT(svcsock_tcp_recv_short,
 	TP_PROTO(
 		const struct svc_xprt *xprt,
