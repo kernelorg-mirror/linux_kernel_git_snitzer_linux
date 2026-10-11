@@ -1,3 +1,6 @@
+* Sun Oct 11 2026 Mike Snitzer <snitzer@kernel.org> [7.3-0]
+- Linux v7.3-rc6, from kernel-ark kernel-7.3.0-0.rc6.a5ebb76233b7.57
+
 * Sun Oct 11 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc6.a5ebb76233b7.57]
 - Revert "isofs: Drop support of directory entries straddling blocks" (Justin M. Forbes)
 - redhat: fix builds by disabling HYPERV_MOUSE_KUNIT_TEST (Nico Pache)
