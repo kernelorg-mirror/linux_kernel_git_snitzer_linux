@@ -83,6 +83,18 @@ once as its baseline (41.8, 40.7 and 41.1 GB/s on the old one), then
 collapse. `kernel-rpmtree` was copied to the client at
 `/root/snitm/git/kernel-rpmtree`.
 
+**Where the search for the rest stands (2026-10-10, 19:45).** The
+copy carries 41 to 42 GB/s of the wire's 48 at the best setting
+(`plans/16k-32-best.plan`), on the 6.12 client and on the 7.1.13-21
+one. Tried since and not a gain: eight rings (the rings' CPUs were
+not the limit), a load paced at the source and stepped up, and 32
+connections from two mounts (37.0 GB/s at 1 MiB a connection, 35.7 at
+512 KiB with the footprint held). A 1 MiB WRITE takes about 350 us to
+receive on its connection, of which the copy is about 150. Not tried:
+a held buffer past 1 MiB (1.5 or 2 MiB, so that a whole WRITE can be
+in flight), a shorter or longer linger, `rx_refill_thresh`, one pool
+against four.
+
 **Not done from the list below:** 5440 at the old
 setting of 256 entries and a 1 MiB buffer; and everything in step 3
 (the loan cell that crashed tardis1, the linger's values, the pools,
