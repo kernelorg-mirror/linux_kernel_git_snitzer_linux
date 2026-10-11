@@ -96,14 +96,19 @@ held buffer gave 41.4: less waiting and a dearer copy (38 MiB in use,
 `rx_refill_thresh`, one pool against four; none is expected to move
 the rate.
 
-**The loan written direct is not reachable on this hardware (Mike,
-2026-10-10).** The E1's port offers no header-data split and no
-payload aggregation across frames. Hammerspace raised header-data
-split with coalescing with Xsight, who showed no interest in
-delivering it. The drives need whole pages. So "take the copy out" is closed here,
-and `../xeu-hds-experiment/` is not being pursued. What is left for
-the copy past 41 to 42 GB/s is how one connection's WRITE is
-received (one thread at a time, about 350 us for 1 MiB).
+**The loan written direct waits for drives, not for the card (Mike,
+2026-10-10).** Sample NVMe drives that support SGLs are coming to
+tardis1. NVMe/TCP was used as the stand-in so that everything a loan
+needs for storage that takes arbitrary pieces is in place when they
+arrive. What the card will not do is header-data split or payload
+aggregation: Hammerspace raised header-data split with coalescing
+with Xsight, who showed no interest in delivering it, and
+`../xeu-hds-experiment/` is not being pursued. So on the drives
+tardis1 has today, which need whole pages, a loan goes through the
+page cache; on the SGL drives it can be written direct if every piece
+is on a 4-byte boundary, which is the TODO below. For the copy past
+41 to 42 GB/s what is left is how one connection's WRITE is received
+(one thread at a time, about 350 us for 1 MiB).
 
 **Not done from the list below:** 5440 at the old
 setting of 256 entries and a 1 MiB buffer; and everything in step 3
@@ -388,8 +393,10 @@ hands carries its loan table with it.
 **The most a loan can hope for on the E1 is 4-byte placement**, so
 that a loaned WRITE goes direct to storage that takes arbitrary pieces
 (NVMe with SGLs, NVMe/TCP). Header-data split and payload aggregation
-are not coming from Xsight (above), and tardis1's own drives need
-whole pages whatever the placement.
+are not coming from Xsight (above). **It matters on tardis1: sample
+NVMe drives with SGLs are coming, and this has to be settled before
+they are used for a loan.** The drives there today need whole pages
+whatever the placement.
 
 **`rx_buf_size=5440` breaks the placement `rx_ip_align=2` gave, and
 it has to be revisited before any loan is run on these buffers.** The
