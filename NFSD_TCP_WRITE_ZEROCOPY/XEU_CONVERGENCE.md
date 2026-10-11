@@ -2568,6 +2568,20 @@ as much. Sixteen connections come out at 41 to 42 GB/s either way, 345
 to 360 us for each 1 MiB WRITE on its connection. What is left of the
 wire's 48 is not in these settings.
 
+### TODO: 4-byte placement across the buffers of a frame (Mike, 10 October)
+
+With `rx_buf_size=5440` a 9000-byte frame takes two buffers, each
+posted with the same 66 bytes of headroom. The payload in the first
+starts at 120, on a 4-byte boundary; the rest of the frame starts at
+66 in the second, 2 past one. A loan written direct to storage that
+takes arbitrary pieces needs every piece on a 4-byte boundary, and
+that placement is the most a loan can have on the E1: Xsight was
+asked for header-data split with coalescing and showed no interest.
+So before a loan is run on these buffers the placement has to be
+revisited. The work item, with what there is to find out and the
+fallback (`rx_buf_size=0` for a loan), is "TODO: 4-byte placement
+with `rx_buf_size`" in `xeu-rig/README.md`.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

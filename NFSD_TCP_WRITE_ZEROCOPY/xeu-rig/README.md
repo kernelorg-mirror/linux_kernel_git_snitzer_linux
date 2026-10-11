@@ -383,6 +383,52 @@ hands carries its loan table with it.
   nor `linger.bt` has run yet. With an older sunrpc, `linger.bt`
   fails to attach and leaves only its error in the file.
 
+## TODO: 4-byte placement with `rx_buf_size` (work item; Mike, 2026-10-10)
+
+**The most a loan can hope for on the E1 is 4-byte placement**, so
+that a loaned WRITE goes direct to storage that takes arbitrary pieces
+(NVMe with SGLs, NVMe/TCP). Header-data split and payload aggregation
+are not coming from Xsight (above), and tardis1's own drives need
+whole pages whatever the placement.
+
+**`rx_buf_size=5440` breaks the placement `rx_ip_align=2` gave, and
+it has to be revisited before any loan is run on these buffers.** The
+driver says so at every open: "MTU 9000 spans 2 RX buffers; payload
+after the first buffer is not 4-byte aligned".
+
+- Every buffer is posted with the same headroom, 64 + 2 = 66 bytes,
+  because any descriptor can be the first of a frame.
+- In a frame's first buffer the payload starts at 66 + 54 = 120 (132
+  with TCP timestamps): on a 4-byte boundary, which is what
+  `rx_ip_align=2` is for.
+- The rest of the frame starts at byte 66 of the next buffer: 2 past a
+  4-byte boundary. So with two buffers to a 9000-byte frame, about
+  half of every loaned WRITE's pieces fail the 4-byte gate.
+- With `rx_ip_align=0` it is the other way about (118 and 64): one of
+  the two is off whichever is chosen, as long as both buffers are
+  posted alike.
+
+To work out, none of it started:
+
+1. What nfsd does today with a loaned record whose pieces are part
+   aligned and part not: the whole WRITE to the page cache, or a copy
+   of the misaligned pieces only. Read the gate before anything else.
+2. Whether the driver can post a frame's later buffers at a headroom
+   that is a multiple of 4. It does not know at posting time which
+   buffer will be first; a short frame (an ACK, the tail of a burst)
+   takes one buffer and shifts the order.
+3. Whether the card can be told where a continuation lands (a second
+   address or an offset in the descriptor): a question for Xsight,
+   and a smaller one than header-data split.
+4. The fallback that needs nothing: a loan runs with
+   `rx_buf_size=0`, a whole page to a frame, where `rx_ip_align=2`
+   places every piece. That gives back the footprint 5440 saved (34
+   to 37 MiB against 21), so it is a choice between the copy at 5440
+   and the loan at a whole page, for each kind of storage.
+
+Copy mode is not affected: nfsd copies the pieces out and its own
+buffer is what is written.
+
 ## A known gap in the page swap: pages a socket keeps (work item)
 
 Since the page swap (`47f13c685c5b5`), a connection keeps the pages a
