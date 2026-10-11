@@ -3178,6 +3178,50 @@ lets through (deeper rings cost region pages and were level at
 have to pace so that sixteen connections' bursts do not coincide
 (`fq` on the client in place of `fq_codel`; not tried).
 
+### fq on the client: the loss goes and the rate does not come (11 October, 15:20 to 15:50)
+
+The client's port had `mq` with `fq_codel` on each of its 48 queues,
+which does not keep TCP's pacing rate; cubic then sends what its
+windows allow at once. With `fq` on each queue instead
+(`tc qdisc replace dev ens3np0 root handle 1: mq`, then
+`... parent 1:<n> fq` for each; `mq` as found has no handle to hang a
+child on), the pinned copy setting with held buffers of 1 MiB,
+1.5 MiB and 2 MiB, twice each, the copy made as the socket is read
+(`$L/xeu-16k-464-fq-{1m,1536k,2m}-{1,2}`, driver
+`$L/xeu-16k-464-fq-driver.sh`). The `fq_codel` rows are the batches
+before.
+
+| held buffer | client qdisc | GB/s | region pages | ring drops | retransmits | RTOs | client held by the window |
+|---|---|---|---|---|---|---|---|
+| 1 MiB | fq_codel | 43.9, 44.2 | 1509, 1578 | 163, 116 | 17834, 18214 | 1, 2 | 95.9%, 96.5% |
+| 1 MiB | fq | 42.0, 42.2 | 1509, 1519 | 11, 36 | 3704, 4262 | 0, 0 | 97.5%, 97.9% |
+| 1.5 MiB | fq_codel | 44.6, 44.3 | 1928, 1893 | 32509, 35434 | 437617, 360941 | 7, 10 | 56.3%, 59.1% |
+| 1.5 MiB | fq | 43.2, 43.6 | 1760, 1785 | 13467, 14858 | 54731, 81381 | 3, 3 | 88.5%, 85.0% |
+| 2 MiB | fq_codel | 44.4, 44.3 | 2325, 2357 | 201408, 188712 | 907186, 855173 | 29, 15 | 37.0%, 39.1% |
+| 2 MiB | fq | 44.4, 44.2 | 2238, 2196 | 74855, 71915 | 343938, 418972 | 5, 8 | 56.1%, 52.2% |
+
+1. **Pacing takes the loss down and not the rate up.** Ring drops and
+   retransmits fall to between a tenth and two fifths at every size,
+   RTOs with them, and the region in use by 100 to 150 pages at the
+   larger buffers. The rate is 1.8 GB/s lower at 1 MiB, 0.9 lower at
+   1.5 MiB and level at 2 MiB.
+2. **A paced sender waits on the window more.** At 1.5 MiB the
+   connections are held by it 85% to 88% of the time against 56% to
+   59%. Pacing spreads what the window allows over time, so the
+   window is what is left to run out. `fq` throttled about 500
+   thousand times a second across the port and dropped nothing.
+3. **The ceiling is the same with the cause changed.** 44.2 to 44.6
+   GB/s is reached by a window that keeps the sender waiting, by one
+   that lets it lose, and by one paced between the two. 2 MiB with
+   `fq` is the cleanest way there (72 to 75 thousand drops for 190 to
+   200 thousand) and costs 2200 pages, 35 MiB, over the 32 MiB L3.
+
+The client's port is back to `mq` with `fq_codel` (the root deleted,
+which puts the default back). Its `fq_codel` now shows quantum 9014
+where it showed 1514 as found, the port's MTU having been raised
+since those were made; nothing else differs. The pinned setting stays
+1 MiB with `fq_codel`.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
