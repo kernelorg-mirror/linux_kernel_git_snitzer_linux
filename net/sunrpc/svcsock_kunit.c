@@ -1335,9 +1335,14 @@ static struct svc_sock *svcsock_rx_credit_sock(struct kunit *test)
 static struct svc_tcp_rx_state *
 svcsock_rx_alloc_state(struct kunit *test, unsigned int capacity);
 
+/*
+ * No budget and no fixed factor.  A factor left fixed would outlive the
+ * suite in the loaded sunrpc: every transport set up afterwards would be
+ * held to it and not to what its skbs are measured to occupy.
+ */
 static void svcsock_rx_budget_off(void *unused)
 {
-	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 0);
 }
 
 /* A test that fails must not leave a freed transport on the wait list. */
