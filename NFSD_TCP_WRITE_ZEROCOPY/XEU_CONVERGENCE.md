@@ -2471,6 +2471,29 @@ which was Xsight's suggestion to check. 35 ring drops, no RTO. The
 placement put 4, 4, 3 and 5 flows on the rings (two shared an entry)
 and the rings carried 24/24/22/30% in the check.
 
+### Thirty-two connections on the rebooted client: the same collapse (10 October, 18:20)
+
+One cell of `plans/16k-32-best.plan` with `STEP_MOUNTS=2`, run by
+`xeu-rig/conns-watch.sh`, which reads the port and the client's CPUs
+30 s into the cell and stops it under 25 GB/s
+(`$L/xeu-16k-463-conns32-fresh`). **It stopped it: the port carried
+12.4 GB/s and the client's CPUs were 81% in system time and 15%
+idle.** The client had been rebooted an hour before and was idle, and
+the one-mount cell just before this carried 41.1 with the client 47%
+idle. So two mounts of nconnect 16 are what this client cannot drive,
+whatever else was wrong with it earlier, and T10's four mounts on
+build 461 (21.1 GB/s) most likely had the same cause.
+
+What the client's kernel is doing with 39 of its 48 CPUs is not
+known: it has neither `perf` nor `bpftrace` (kernel 6.12.76-2.hs.212,
+`mlx5_core`, 48 queues). That is the next thing to find out, and
+installing either is Mike's. Until then more than sixteen connections
+from this client says nothing about the server.
+
+The placement put 8, 9, 7 and 8 of the 32 flows on the rings. The
+stop left the cell's second address on the port (the cell removes it
+itself and was killed first); `conns-watch.sh` now takes it off.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
