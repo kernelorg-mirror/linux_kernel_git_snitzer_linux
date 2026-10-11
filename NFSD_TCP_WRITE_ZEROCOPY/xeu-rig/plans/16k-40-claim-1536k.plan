@@ -1,0 +1,6 @@
+# The pinned copy setting (rx_buf_size=8192, MTU 7792, rings of 4 x 256)
+# with the held buffer at 1.5 MiB, to pair with svc_tcp_rx_copy_threads:
+# a thread that claims a record's data returns the window before it
+# copies, so the held buffer no longer has to cover the copy.
+#     HW_ANY_MTU=1 RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+256 1572864 0 prp step-copy-n16

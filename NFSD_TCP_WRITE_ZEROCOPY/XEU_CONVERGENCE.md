@@ -3059,9 +3059,52 @@ the order 0, 1, 2, 0, 1, 2.
    `struct svc_sock` changes the versions of 14 exports, all for
    KUnit; nfsd and the rest load against the module as they are.
 
-Not tried: a larger window with claiming (with the window opened
-before the copy, the held buffer is no longer all that a connection
-has waiting), and more than two threads.
+Not tried: more than two threads. A larger window with claiming is
+the next section.
+
+### A larger held buffer, with and without claiming (11 October, 14:15 to 14:55)
+
+`plans/16k-40-claim-1536k.plan` and `16k-41-claim-2m.plan`: the pinned
+copy setting with the held buffer at 1.5 MiB and 2 MiB, each with
+`svc_tcp_rx_copy_threads` 0 and 2 by turns, twice
+(`$L/xeu-16k-464-claimwin-{1536k,2m}-{0,2}-{1,2}`, driver
+`$L/xeu-16k-464-claimwin-driver.sh`). The 1 MiB rows are the batch
+before. The window is what the server's sockets showed
+(`rcv_ssthresh`); "held by the window" is the median of the client's
+sixteen connections.
+
+| held buffer | window | threads | GB/s | region pages | ring drops | retransmits | RTOs | client held by the window |
+|---|---|---|---|---|---|---|---|---|
+| 1 MiB | 487 KiB | 0 | 34.3, 44.2 | 1510, 1578 | 84, 116 | 24265, 18214 | 374, 2 | 96.5% |
+| 1 MiB | 487 KiB | 2 | 44.0, 43.6 | 1540, 1572 | 217, 257 | 165864, 186539 | 1, 2 | 85.6%, 85.1% |
+| 1.5 MiB | 714 KiB | 0 | 44.6, 44.3 | 1928, 1893 | 32509, 35434 | 437617, 360941 | 7, 10 | 56.3%, 59.1% |
+| 1.5 MiB | 714 KiB | 2 | 43.9, 44.1 | 2006, 2054 | 48029, 51970 | 876700, 1009788 | 21, 15 | 52.2%, 48.6% |
+| 2 MiB | 952 KiB | 0 | 44.4, 44.3 | 2325, 2357 | 201408, 188712 | 907186, 855173 | 29, 15 | 37.0%, 39.1% |
+| 2 MiB | 952 KiB | 2 | 44.0, 44.1 | 2507, 2516 | 240892, 229131 | 1683938, 1856299 | 34, 38 | 28.3%, 31.3% |
+
+1. **Claiming does not gain with a larger window either**: 43.9 to
+   44.1 at both sizes, against 44.3 to 44.6 without it. At every size
+   it is a few tenths under the copy made as the socket is read, with
+   about twice the retransmits.
+2. **The window is not what holds the rate.** The client goes from
+   held by it 96% of the time to 30% and the rate stays between 43.9
+   and 44.6. What takes its place is loss: ring drops go from a
+   hundred to 200 thousand and retransmits from 20 thousand to 1.8
+   million, so the client is held by its congestion window instead.
+3. **1.5 MiB without claiming is the best pair of the day, 44.6 and
+   44.3**, a few tenths over 1 MiB's best and no more than the spread
+   between repeats. It costs 350 more region pages (1900, 30 MiB,
+   against the 32 MiB L3) and 300 times the ring drops. 2 MiB adds
+   nothing over it and reaches 2350 to 2500 pages, 37 to 39 MiB.
+   Build 463 had 41.4 at 1.5 MiB on rings of 512, with 2444 pages.
+4. No run with hundreds of RTOs in these eight. Nothing in `dmesg`.
+
+Six ways of draining a connection (locked, unlocked, claimed, two
+threads, and the last two with twice the window) land between 43.5
+and 44.6 GB/s. The server's CPUs for the rings stay mostly idle and
+the client is no longer waiting on the window, so the next place to
+look is the client and the wire: what a connection there is doing
+when it is neither held by the window nor recovering a loss.
 
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
