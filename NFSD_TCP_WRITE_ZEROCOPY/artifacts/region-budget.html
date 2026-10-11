@@ -355,7 +355,13 @@
         <tr><td>Flow placement</td><td class="r" style="white-space:normal">each connection's RSS table entry set, four connections to a ring</td><td>each ring carries a quarter; before 10 October afternoon the runs mounted again until no ring had over 35%</td></tr>
       </tbody>
     </table></div>
-    <p class="note">MTU 9000, one port of the card, a separate client machine. Kernel <code>7.1.13-21.hs.463.loanpages_pool.el9.aarch64+16k</code> and kmod-xsight 2.0.1-6.</p>
+    <p class="note">One port of the card, a separate client machine. Kernel <code>7.1.13-21.hs.463.loanpages_pool.el9.aarch64+16k</code> and kmod-xsight 2.0.1-6.</p>
+    <div class="verdict acc" style="margin-top:18px">
+      <p class="big">Only the server's MTU is lowered. The client keeps 9000, and nothing on the client changes.</p>
+      <p><strong>Why that works.</strong> When a TCP connection opens, each end tells the other the largest segment it will accept, worked out from its own MTU. The server now says 7752 bytes. A sender never exceeds what the receiver asked for, so the client cuts its data into segments the server's buffers hold, whatever its own MTU is. Measured on the client during a run: its connections to the server use a segment size of 7740 bytes (7752 less the 12 bytes of TCP timestamps) while its own port still reports an MTU of 9000.</p>
+      <p><strong>Why it is safe.</strong> The limit is agreed for each connection, by the two ends, before any data moves, so there is nothing to fragment and nothing to discover along the path. In the other direction the server sends frames of at most 7792 bytes, which a 9000-byte port accepts. Nothing between the two hosts needs changing, and the client's other traffic, to other servers, still uses 9000.</p>
+      <p><strong>The one limit.</strong> This protects TCP only. A single packet larger than 7792 bytes that is not TCP, such as a large ping or a large UDP datagram, has no such agreement and does not get through: an 8500-byte ping from the client to the server goes unanswered, where a 7792-byte one is answered. NFS here runs over TCP, including the mount, so it is not affected.</p>
+    </div>
 
     <h3 style="margin-top:26px">The Linux changes it took</h3>
     <div class="delta">
