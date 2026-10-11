@@ -2756,8 +2756,6 @@ learning it (`KERNEL_CREDIT_FACTOR=0`; the budget sized as for 150):
   buffer. Deriving the clamp from the skbs' own truesize, so that copy
   mode needs no factor either, is not written.
 - Removing the parameter, once the learned value is trusted.
-- **The two commits are on `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
-  only; they have to be carried to the Hammerspace twin.**
 
 On tardis1 the sunrpc built from the tip is in
 `/lib/modules/$(uname -r)/updates/` (srcversion

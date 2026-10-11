@@ -127,8 +127,7 @@ loan run ("The loan on 8192-byte buffers is written direct" in
 most pages a record held. The sunrpc built from the tip is loaded
 from `updates/` (`7ED891B5AFE050EE947DD94`). A loan cell is run with
 `KERNEL_CREDIT_FACTOR=0`; the harness still writes its own factor for
-copy cells. Not yet carried to the Hammerspace twin ("The charge for
-a loan" in `../XEU_CONVERGENCE.md`).
+copy cells ("The charge for a loan" in `../XEU_CONVERGENCE.md`).
 
 **Where the search for the rest stands (2026-10-10, 19:45).** The
 copy carries 41 to 42 GB/s of the wire's 48 at the best setting
