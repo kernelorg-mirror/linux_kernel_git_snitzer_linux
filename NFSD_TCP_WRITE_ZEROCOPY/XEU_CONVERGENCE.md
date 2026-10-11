@@ -3106,6 +3106,78 @@ the client is no longer waiting on the window, so the next place to
 look is the client and the wire: what a connection there is doing
 when it is neither held by the window nor recovering a loss.
 
+### The client: it is not the limit, and the wire is nearly full (11 October, 15:00 to 15:10)
+
+Two cells at the pinned copy setting with the copy made as the socket
+is read, one with the 1 MiB held buffer and one with 2 MiB
+(`$L/xeu-16k-464-client-1m`, `-2m`, driver
+`$L/xeu-16k-464-client-driver.sh`). 25 s into each, `xeu-rig/client-look.sh`
+ran on the client: its counters 20 s apart (`ethtool -S`,
+`/proc/net/netstat`, `mountstats`, `ss`, qdisc), `top -H`, then a
+10 s system-wide `perf record -g` (the client has `perf` now). The
+output is `client-look-1m` and `-2m` in each cell's directory. The
+cells gave 43.9 and 44.3 GB/s, as without the profile.
+
+| | 1 MiB | 2 MiB |
+|---|---|---|
+| NFS rate | 43.9 GB/s | 44.3 GB/s |
+| on the wire from the client (`tx_bytes_phy`) | 44.4 GB/s, 355 Gbit/s | 45.4 GB/s, 363 Gbit/s |
+| segments retransmitted in the 20 s | 1951 | 145965 |
+| connections held by the server's window (median) | 95.9% | 39.5% |
+| connections held by their send buffer | 0% | 0% |
+| unsent in a connection's socket (median) | 3.1 MB | 2.4 MB |
+| congestion window (median, segments) | 81 | 54 |
+| a WRITE waits on the client to be sent | 11.6 ms | 11.9 ms |
+| a WRITE from sent to reply | 3.1 ms | 3.1 ms |
+| a COMMIT from sent to reply | 13.0 ms | 11.8 ms |
+| client CPUs idle | 32% | 35% |
+
+1. **The wire is 92% to 94% full.** Sixteen iperf3 streams to a
+   receiver that discards put 48.4 GB/s on this port ("The wire"
+   above); these cells put 44.4 and 45.4. NFS payload is 98.7% of
+   what is sent. What is left to reach for is about 3.5 GB/s, 8%,
+   and that is if NFS could fill the wire as a discarding receiver
+   lets iperf3 fill it, drops and all.
+2. **The client offers more than the connections carry.** Every
+   connection has 2.4 to 3.1 MB in its socket not yet sent, none is
+   held by its send buffer, and a WRITE waits 11.6 ms for its
+   connection before it is sent and 3.1 ms for its reply. So the
+   client's NFS and RPC layers are not what holds the rate.
+3. **The client's CPUs are not it either.** A third are idle. The
+   sixteen fio threads run at 58% to 61% of a CPU each, and the
+   workers that send (xprtiod, rpciod, nfsiod) at 27% to 34% each,
+   none near a whole CPU. No transmit queue stopped, no pause frame
+   either way, no discard, and the qdisc requeued 729 and 3171
+   packets of 114 million.
+4. **The client copies what it sends**: `memcpy` under
+   `tcp_sendmsg_locked` from `xs_tcp_send_request` is 16.2% of its
+   cycles, a quarter of what is not idle. The RPC client's send does
+   not pass `MSG_SPLICE_PAGES` (only the server's reply path does, in
+   `svcsock.c`). It is the largest item on the client and it is not
+   the limit while the workers that do it are a third busy. Then
+   fio's `get_io_u` 9.4%, and 10% in the direct write's request and
+   commit lists (`__list_del_entry_valid_or_report` 6.5% from
+   `nfs_scan_commit_list` and `nfs_direct_write_completion`,
+   `__slab_free` under a contended lock from
+   `nfs_direct_commit_complete`).
+5. **With the window open the connections are held by loss.** At
+   2 MiB they wait on the window 40% of the time, retransmit 75
+   times as much and run a smaller congestion window, and send 2%
+   more. The loss is the server's rings dropping (208 thousand in the
+   cell).
+6. The client's receive lanes correct 1.7 million bits a second
+   (`rx_corrected_bits_phy`, lane 0 most), none uncorrected. That is
+   the direction the ACKs come in and is within what the FEC is for.
+
+What holds the last 8% is then the pair: a window small enough that
+the rings do not drop keeps the sender waiting on it, and a larger
+one trades the wait for drops and retransmits at the same rate. To
+gain there the rings would have to take the bursts a larger window
+lets through (deeper rings cost region pages and were level at
+4 x 512, "step B" had eight rings level too), or the sender would
+have to pace so that sixteen connections' bursts do not coincide
+(`fq` on the client in place of `fq_codel`; not tried).
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
