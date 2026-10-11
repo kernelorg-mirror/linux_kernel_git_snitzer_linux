@@ -1,0 +1,5 @@
+# The copy at its best setting as of 2026-10-10: rx_buf_size=5440, rings
+# of 4 x 512 (256 frames), a 1 MiB held buffer, every flow placed.
+# 41.8 and 40.7 GB/s on build 463.
+#     RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+512 1048576 0 prp step-copy-n16
