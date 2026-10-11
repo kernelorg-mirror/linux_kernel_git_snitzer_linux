@@ -1,3 +1,16 @@
+* Sun Oct 11 2026 Mike Snitzer <snitzer@kernel.org> [7.3-1]
+- Rebase all branches on kernel-7.3-0, Linux v7.3-rc6 from kernel-ark
+- Stop merging the 8 topics v7.3-rc6 carries in full: vfs-7.3-rc1.iomap,
+  vfs-7.2-merge, nfsd-7.2, nfsd-7.2-1, nfsd-7.2-2, nfsd-7.3, nfs-for-7.2-3
+  and nfs-for-7.3-1
+- Drop the commits of the other topics that v7.3-rc6 carries, among them 10
+  of block-DIO-alignment-fixes' 14
+- redhat/configs: sign modules with RSA, not ML-DSA-87, replacing the 3
+  commits that reverted kernel-ark's ML-DSA module signing configs
+- Drop Revert "uki: use systemd-pcrphase dracut module": kernel-ark now adds
+  systemd-pcrphase or systemd-pcrextend only when dracut has it
+- Rename nfs4_acl-passthru to nfs-testing-canary-nfs4_acl-passthru
+
 * Sun Oct 11 2026 Mike Snitzer <snitzer@kernel.org> [7.3-0]
 - Linux v7.3-rc6, from kernel-ark kernel-7.3.0-0.rc6.a5ebb76233b7.57
 
