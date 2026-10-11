@@ -1402,6 +1402,111 @@ static void svcsock_rx_credit_fifo_test(struct kunit *test)
 }
 
 /*
+ * With no fixed factor a budget learns what its records hold.  Until one
+ * has ended a record is charged all it could hold; then the factor is the
+ * most pages a record was lent for each 100 of record, less the page every
+ * charge adds: taken at once when higher, kept until two windows of
+ * records have stayed below it, left alone by a record that was lent none.
+ * A fixed factor overrides it.
+ */
+static void svcsock_rx_credit_learn_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock(test);
+	const u32 len = 10 * PAGE_SIZE;
+	unsigned int ended = 0;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(200, 10, 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 0U);
+
+	/*
+	 * Nothing learned: all the record could hold, which is more than
+	 * the budget, so the oldest record takes the whole of it and its
+	 * reserve.
+	 */
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_EQ(test, a->credit, 200U);
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	svc_tcp_rx_credit_forget(sb);
+	a->fixed_bytes = 0;
+	a->body_bytes = len;
+	b->fixed_bytes = 0;
+	b->body_bytes = len;
+
+	/* 16 pages for 10 of record: 150 covers it with the page added. */
+	a->region_count = 16;
+	svc_tcp_rx_credit_release(a);
+	ended++;
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 150U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 190L);
+
+	/* Charged by what that one held. */
+	a->region_count = 0;
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_EQ(test, a->credit, 16U);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_EXPECT_EQ(test, b->credit, 16U);
+
+	/* More than was charged for: taken at once. */
+	a->region_count = 21;
+	svc_tcp_rx_credit_release(a);
+	ended++;
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 200U);
+
+	/* Fewer does not lower it. */
+	b->region_count = 11;
+	svc_tcp_rx_credit_release(b);
+	ended++;
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 200U);
+
+	/* A record that was lent no region page teaches nothing. */
+	a->region_count = 0;
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_EQ(test, a->credit, 21U);
+	svc_tcp_rx_credit_release(a);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 200U);
+
+	/* A record cut short is measured by what it received: 6 for 2. */
+	a->body_bytes = 2 * PAGE_SIZE;
+	a->region_count = 6;
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	svc_tcp_rx_credit_release(a);
+	ended++;
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 250U);
+	a->body_bytes = len;
+
+	/*
+	 * The window that saw 250 ends and the next passes without it: it
+	 * still stands.  Only when a window and the one before it stayed
+	 * under it does the estimate come down, and never under one region
+	 * page to a page of record.
+	 */
+	a->region_count = 2;
+	for (; ended < 2 * SVC_TCP_RX_COST_WINDOW; ended++) {
+		KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+		svc_tcp_rx_credit_release(a);
+	}
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 250U);
+	for (; ended < 3 * SVC_TCP_RX_COST_WINDOW; ended++) {
+		KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+		svc_tcp_rx_credit_release(a);
+	}
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 100U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 190L);
+
+	/* A fixed factor is used as it is, whatever was learned. */
+	svc_tcp_rx_budget_kunit_configure(200, 10, 100);
+	a->region_count = 0;
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	svc_tcp_rx_credit_release(a);
+}
+
+/*
  * Only the oldest in-flight record draws on the reserve (and past the
  * budget); a younger record that outgrows its grant pauses.
  */
@@ -2924,6 +3029,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_release_payload_test),
 	KUNIT_CASE(svcsock_rx_small_record_copied_test),
 	KUNIT_CASE(svcsock_rx_credit_fifo_test),
+	KUNIT_CASE(svcsock_rx_credit_learn_test),
 	KUNIT_CASE(svcsock_rx_credit_reserve_oldest_test),
 	KUNIT_CASE(svcsock_rx_window_clamp_test),
 	KUNIT_CASE(svcsock_rx_hold_buffer_test),
