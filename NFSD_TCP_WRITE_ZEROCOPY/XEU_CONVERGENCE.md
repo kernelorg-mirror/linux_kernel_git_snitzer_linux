@@ -2838,6 +2838,37 @@ traced) unless said:
 The copy's best setting is unchanged: rings of 4 x 256, a 1 MiB held
 buffer. About 60 TB went to the stripe for this.
 
+### Build 464: the baseline, and what the KUnit suite leaves behind (11 October, 09:30 to 10:00)
+
+Build 464 carries the tip: its own `sunrpc` (srcversion
+`7F23045CFCCEBF26ED9D34A`, nothing in `updates/`), no
+`svc_tcp_rx_credit_factor`, `hold_factor` 107 after a run, the four
+KUnit suites 7, 46, 6 and 10 with no failure. `xeu` is the kmod of 463
+(`9B0770879836A992C43D41D`). The pinned copy setting, as `tipcheck`
+ran it (`$L/xeu-16k-464-baseline-driver.sh`):
+
+| run (`$L/xeu-16k-464-baseline-`) | window | GB/s | region pages | ring drops | RTOs |
+|---|---|---|---|---|---|
+| `1`, `2`: after the KUnit suites, same module | 348 KiB | 41.6, 40.4 | 1280, 1440 | 0, 0 | 1, 0 |
+| **`3`, `4`: `sunrpc` loaded again** | 487 KiB | **43.0, 42.5** | 1529, 1527 | 528, 523 | 2, 2 |
+
+1. **464 is level with 463**: 43.0 and 42.5 against 42.5 and 42.7, in
+   24 MiB.
+2. **The svcsock KUnit suite leaves the factor fixed at 150** in the
+   module it ran against. Its tests end with
+   `svc_tcp_rx_budget_kunit_configure(0, 0, 150)`
+   (`svcsock_rx_budget_off()` and others), which writes
+   `svc_tcp_rx_kunit_factor`, and `svc_tcp_rx_hold_factor()` returns
+   that before anything measured. Every transport afterwards is held
+   for 150: a window of 348160 bytes under a 1 MiB buffer where 107
+   gives 487424, while the budget's statistics still show `hold_factor`
+   107. It costs 1 to 2 GB/s here. Only loading `sunrpc` again (or a
+   reboot) clears it: `SUNRPC_KO=none POOLS_PER_NODE=4
+   ./swap-sunrpc.sh`, then 512 threads. **Not fixed in the code.** The
+   suite should put the factor back to 0 when a test ends.
+3. The check that catches it: `rcv_ssthresh` in the run's
+   `ss-server.txt` is 483497 or 487424 at this setting.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
