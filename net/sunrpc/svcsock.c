@@ -326,6 +326,36 @@ MODULE_PARM_DESC(svc_tcp_rx_linger_us,
 		 "Microseconds a thread waits for the rest of a partly received TCP record before giving the transport up (0..1000, 0: none)");
 
 /*
+ * How many threads may be copying one transport's records at a time.
+ *
+ * 0: a record is copied by the ->read_sock actor, skb by skb as TCP hands
+ * them over, and TCP counts an skb as read once it has been copied.
+ *
+ * 1: the actor only claims the data (a clone of each skb), and the thread
+ * copies what it claimed once ->read_sock has returned.  TCP then counts the
+ * data as read, and opens the window for more, before it has been copied:
+ * the next part of the record is on its way while this one is copied.  The
+ * thread keeps the transport until it has copied.
+ *
+ * 2 or more: as 1, and when the claim completes a record the thread gives
+ * the transport up before it copies, so that another thread reads the next
+ * record meanwhile; that many less one may be copying after giving it up.
+ *
+ * Claimed data is no longer charged to the socket, so a transport can have
+ * as much again as its receive buffer waiting to be copied, for each thread
+ * that may be copying.
+ *
+ * With 1 or more, every copy of SVC_TCP_RX_COPY_UNLOCKED_MIN or more is made
+ * with the socket unlocked: what was claimed once ->read_sock has returned,
+ * and what the actor could not claim by svc_tcp_rx_copy_unlocked().  With 0
+ * the actor copies under the socket lock.
+ */
+static unsigned int svc_tcp_rx_copy_threads;
+module_param(svc_tcp_rx_copy_threads, uint, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_copy_threads,
+		 "Threads that may be copying one TCP transport's received records at a time (0: copy as the socket is read)");
+
+/*
  * The region budget bounds loans; only svc_tcp_rx_rcvbuf bounds unread data. A
  * smaller clamp holds so few page-pool segments that one short segment
  * overflows it, so budgets stay off below this.
@@ -2736,12 +2766,34 @@ static void svc_tcp_recv_record_done(struct svc_sock *svsk)
  */
 #define SVC_TCP_MAX_FRAGS		256
 
+/*
+ * Data the actor claimed and did not copy: @len bytes at @offset of @skb,
+ * a clone, for @body_offset of the record.
+ */
+struct svc_tcp_rx_claim {
+	struct sk_buff		*skb;
+	unsigned int		offset;
+	unsigned int		len;
+	u32			body_offset;
+};
+
+/* Enough for a 1 MiB record in GRO's skbs; what is over is copied at once. */
+#define SVC_TCP_RX_CLAIM_MAX	32
+
 struct svc_tcp_recv_ctx {
 	struct svc_rqst		*rqstp;
 	unsigned int		frags;
 	bool			complete;
 	/* stopped for region credit: its wake-up re-arms XPT_DATA */
 	bool			credit_wait;
+	/* the actor may drop the socket lock to copy */
+	bool			unlocked;
+	/* the actor may claim data and leave the copy to its caller */
+	bool			claim;
+	/* counted in sk_rx_copying */
+	bool			copying;
+	unsigned int		nclaims;
+	struct svc_tcp_rx_claim	claims[SVC_TCP_RX_CLAIM_MAX];
 };
 
 /*
@@ -2862,12 +2914,114 @@ static int svc_tcp_rx_append_arena(struct svc_rqst *rqstp,
 	return 0;
 }
 
+/* A shorter copy is not worth a clone and a round trip of the lock. */
+#define SVC_TCP_RX_COPY_UNLOCKED_MIN	4096U
+
+/*
+ * Copy @len bytes at @offset of @skb, which is on @sk's receive queue, with
+ * @sk unlocked.  A megabyte takes a few hundred microseconds to copy, and
+ * with the socket locked for that long the segments that arrive meanwhile
+ * wait on its backlog, unacknowledged, and a reply to the same connection
+ * waits for the lock.
+ *
+ * Unlocked, TCP may free @skb: tcp_collapse() replaces queued skbs when
+ * receive memory runs short, and frees them whatever references they have.
+ * So the copy is made from a clone, which holds the data.  The data does
+ * not change either: TCP adds to a queued skb only by coalescing, and does
+ * not coalesce into a cloned one.  The clone is freed before the caller
+ * returns to TCP, so the last reference, and the return of the pages to the
+ * CPU that received them, is still the queue's.
+ *
+ * tcp_read_sock() allows for an actor that drops the lock: it looks @skb up
+ * again by sequence number, and counts nothing as read until the actor
+ * returns.  The caller must not touch @skb afterwards.
+ */
+static int svc_tcp_rx_copy_unlocked(struct sock *sk, struct sk_buff *skb,
+				    unsigned int offset, struct iov_iter *iter,
+				    unsigned int len)
+{
+	struct sk_buff *clone = skb_clone(skb, GFP_KERNEL | __GFP_NOWARN);
+	int ret;
+
+	if (!clone)
+		return skb_copy_datagram_iter(skb, offset, iter, len);
+	release_sock(sk);
+	ret = skb_copy_datagram_iter(clone, offset, iter, len);
+	consume_skb(clone);
+	lock_sock(sk);
+	return ret;
+}
+
+/*
+ * Claim @len bytes at @offset of @skb for @body_offset of the record: the
+ * caller of ->read_sock copies them (svc_tcp_rx_copy_claims()).  A clone
+ * holds the data once TCP has freed @skb, which it does when the actor
+ * returns.  False if the data is to be copied now.
+ */
+static bool svc_tcp_rx_claim(struct svc_tcp_recv_ctx *ctx, struct sk_buff *skb,
+			     unsigned int offset, unsigned int len,
+			     u32 body_offset)
+{
+	struct svc_tcp_rx_claim *claim;
+	struct sk_buff *clone;
+
+	if (!ctx->claim || ctx->nclaims == SVC_TCP_RX_CLAIM_MAX)
+		return false;
+	clone = skb_clone(skb, GFP_KERNEL | __GFP_NOWARN);
+	if (!clone)
+		return false;
+	claim = &ctx->claims[ctx->nclaims++];
+	claim->skb = clone;
+	claim->offset = offset;
+	claim->len = len;
+	claim->body_offset = body_offset;
+	return true;
+}
+
+/*
+ * Copy what the actor claimed into @rqstp's pages and let the clones go.
+ * @flush: the record's pages have been flushed already, so flush what is
+ * written here.  Without @rqstp nothing is copied.
+ */
+static int svc_tcp_rx_copy_claims(struct svc_rqst *rqstp,
+				  struct svc_tcp_recv_ctx *ctx, bool flush)
+{
+	unsigned int i, pg;
+	int ret = 0;
+
+	for (i = 0; i < ctx->nclaims; i++) {
+		struct svc_tcp_rx_claim *claim = &ctx->claims[i];
+		struct iov_iter iter;
+
+		if (rqstp && !ret) {
+			svc_tcp_recv_iter_init(rqstp, &iter, claim->body_offset,
+					       claim->len);
+			if (skb_copy_datagram_iter(claim->skb, claim->offset,
+						   &iter, claim->len))
+				ret = -EFAULT;
+			for (pg = claim->body_offset >> PAGE_SHIFT;
+			     flush && pg <= (claim->body_offset +
+					     claim->len - 1) >> PAGE_SHIFT;
+			     pg++)
+				flush_dcache_page(rqstp->rq_pages[pg]);
+		}
+		consume_skb(claim->skb);
+	}
+	ctx->nclaims = 0;
+	return ret;
+}
+
+/*
+ * @ctx: of the ->read_sock actor that may leave the copy to its caller or
+ * drop the socket lock for it; @skb is then not to be used again.
+ */
 static int svc_tcp_rx_copy_skb(struct svc_sock *svsk, struct svc_rqst *rqstp,
 			       struct sk_buff *skb, unsigned int offset,
-			       unsigned int len)
+			       unsigned int len, struct svc_tcp_recv_ctx *ctx)
 {
 	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
 	u32 body_offset = state->body_bytes;
+	bool readable = skb_frags_readable(skb);
 	struct iov_iter iter;
 	u32 total;
 	int ret;
@@ -2886,9 +3040,19 @@ static int svc_tcp_rx_copy_skb(struct svc_sock *svsk, struct svc_rqst *rqstp,
 					       SVC_TCP_RX_MATERIALIZE);
 	}
 
-	svc_tcp_recv_iter_init(rqstp, &iter, body_offset, len);
-	if (skb_copy_datagram_iter(skb, offset, &iter, len)) {
-		state->reason = skb_frags_readable(skb) ?
+	if (ctx && readable && len >= SVC_TCP_RX_COPY_UNLOCKED_MIN &&
+	    svc_tcp_rx_claim(ctx, skb, offset, len, body_offset)) {
+		ret = 0;
+	} else {
+		svc_tcp_recv_iter_init(rqstp, &iter, body_offset, len);
+		if (ctx && ctx->unlocked && len >= SVC_TCP_RX_COPY_UNLOCKED_MIN)
+			ret = svc_tcp_rx_copy_unlocked(svsk->sk_sk, skb, offset,
+						       &iter, len);
+		else
+			ret = skb_copy_datagram_iter(skb, offset, &iter, len);
+	}
+	if (ret) {
+		state->reason = readable ?
 			SVC_TCP_RX_REASON_COPY_FAULT : SVC_TCP_RX_REASON_UNREADABLE;
 		return -EFAULT;
 	}
@@ -3017,7 +3181,7 @@ static int svc_tcp_rx_copy_segment(struct svc_tcp_rx_walk *walk,
 	    state->reason == SVC_TCP_RX_REASON_NONE)
 		state->reason = reason;
 	return svc_tcp_rx_copy_skb(walk->svsk, walk->rqstp, walk->root,
-				   start, len);
+				   start, len, NULL);
 }
 
 /* Undo the most recent append; the caller re-lands its bytes elsewhere. */
@@ -3550,7 +3714,7 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 					SVC_TCP_RX_FIXED_BYTES - state->body_bytes);
 
 			error = svc_tcp_rx_copy_skb(svsk, rqstp, skb, body_offset,
-						    prefix);
+						    prefix, NULL);
 			if (error)
 				goto fault;
 			body_offset += prefix;
@@ -3605,8 +3769,10 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 			svc_tcp_rx_credit_forget(svsk);
 		if (remaining) {
 			if (state->mode == SVC_TCP_RX_COPY)
+				/* The last use of @skb: see the actor. */
 				error = svc_tcp_rx_copy_skb(svsk, rqstp, skb,
-							    body_offset, remaining);
+							    body_offset, remaining,
+							    ctx);
 			else
 				error = svc_tcp_rx_walk(svsk, rqstp, skb,
 							body_offset, remaining);
@@ -3653,11 +3819,12 @@ static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
 	struct svc_tcp_recv_ctx *ctx = desc->arg.data;
 	struct svc_sock *svsk =
 		container_of(ctx->rqstp->rq_xprt, struct svc_sock, sk_xprt);
+	/* svc_tcp_recv_skb() may drop the socket lock, and @skb with it. */
+	unsigned int truesize = skb->truesize, skb_len = skb->len;
 	int consumed = svc_tcp_recv_skb(desc, skb, offset, len);
 
 	if (consumed > 0 && (svsk->sk_rx_held || svsk->sk_rx_hold_pending))
-		svc_tcp_rx_geometry_account(svsk, skb->truesize, skb->len,
-					    consumed);
+		svc_tcp_rx_geometry_account(svsk, truesize, skb_len, consumed);
 	return consumed;
 }
 
@@ -3798,6 +3965,10 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 		goto err_nuts;
 
 again:
+	/* Only TCP's own ->read_sock is known to allow for either: not kTLS's. */
+	ctx.claim = READ_ONCE(svc_tcp_rx_copy_threads) &&
+		    sock->ops->read_sock == tcp_read_sock;
+	ctx.unlocked = ctx.claim;
 	lock_sock(sock->sk);
 	len = sock->ops->read_sock(sock->sk, &desc, svc_tcp_recv_actor);
 	/* ->read_sock stops at urgent data and consumes none of it.
@@ -3818,6 +3989,26 @@ again:
 	release_sock(sock->sk);
 	if (svsk->sk_rx_hold_pending)
 		svc_tcp_rx_hold_buffer(svsk);
+
+	/*
+	 * Copy what the actor claimed.  If that completes the record and
+	 * fewer threads than allowed are copying this transport's records
+	 * with the transport given up, be one of them: the copy is then left
+	 * until the transport has been given up, below.
+	 */
+	if (ctx.nclaims) {
+		if (ctx.complete && !desc.error) {
+			unsigned int threads = READ_ONCE(svc_tcp_rx_copy_threads);
+
+			if (atomic_inc_return(&svsk->sk_rx_copying) < threads)
+				ctx.copying = true;
+			else
+				atomic_dec(&svsk->sk_rx_copying);
+		}
+		if (!ctx.copying && svc_tcp_rx_copy_claims(rqstp, &ctx, false) &&
+		    !desc.error)
+			desc.error = -EFAULT;
+	}
 
 	/* ->read_sock returns the octets consumed before an actor
 	 * failure, so a positive len can accompany desc.error.
@@ -3875,8 +4066,13 @@ again:
 
 	p = (__be32 *)rqstp->rq_arg.head[0].iov_base;
 	calldir = p[1];
-	if (calldir)
-		len = receive_cb_reply(svsk, rqstp);
+	if (calldir) {
+		/* A reply is read here, so it is copied here. */
+		if (svc_tcp_rx_copy_claims(rqstp, &ctx, true))
+			len = -EFAULT;
+		else
+			len = receive_cb_reply(svsk, rqstp);
+	}
 
 	/* Reset TCP read info */
 	svc_tcp_recv_record_done(svsk);
@@ -3890,6 +4086,20 @@ again:
 
 	svc_sock_secure_port(rqstp);
 	svc_xprt_received(rqstp->rq_xprt);
+	/*
+	 * Another thread may now be reading the next record.  This one's
+	 * pages are the request's own, and nothing has read past its
+	 * header.
+	 */
+	if (ctx.copying) {
+		int err = svc_tcp_rx_copy_claims(rqstp, &ctx, true);
+
+		atomic_dec(&svsk->sk_rx_copying);
+		if (err) {
+			svc_xprt_deferred_close(&svsk->sk_xprt);
+			return 0;
+		}
+	}
 	return rqstp->rq_arg.len;
 
 err_incomplete:
@@ -3929,6 +4139,10 @@ err_delete:
 	trace_svcsock_tcp_recv_err(&svsk->sk_xprt, len);
 	svc_xprt_deferred_close(&svsk->sk_xprt);
 err_noclose:
+	/* A record that failed after it was claimed is not copied. */
+	svc_tcp_rx_copy_claims(NULL, &ctx, false);
+	if (ctx.copying)
+		atomic_dec(&svsk->sk_rx_copying);
 	if (READ_ONCE(svc_tcp_rx_keep))
 		svc_xprt_received_keep(rqstp->rq_xprt);
 	else

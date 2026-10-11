@@ -150,6 +150,8 @@ struct svc_sock {
 	struct svc_tcp_rx_budget *sk_budget;
 	/* region pages seen: hold the receive buffer (set by the actor) */
 	bool			sk_rx_hold_pending;
+	/* threads copying a claimed record after giving the transport up */
+	atomic_t		sk_rx_copying;
 	/* receive buffer, window clamp and scaling ratio held */
 	bool			sk_rx_held;
 	/* what they were held to (svc_tcp_rx_hold_factor()) */
