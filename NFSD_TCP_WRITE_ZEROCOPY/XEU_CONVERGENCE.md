@@ -3011,6 +3011,58 @@ in the order Y, N, Y, N.
    CPUs 8-55; in the morning the 384 added by `echo 512` were on all
    CPUs, the rings' included.
 
+### Two threads on one connection: claim, then copy (11 October, 12:10 to 13:05)
+
+"SUNRPC: Let a thread claim a TCP record's data and copy it
+afterwards": `svc_tcp_rx_copy_threads`. At 1 the actor only clones
+each skb and the thread copies after `->read_sock` returns, so TCP
+opens the window before the data is copied. At 2 a thread whose claim
+completes a record gives the transport up first, and a second thread
+reads the next record while the first copies. At 0, the default, the
+copy is made as the socket is read (unlocked, as the section before).
+One loaded module (srcversion `B03DE9225F9A7210617707D`),
+`$L/xeu-16k-464-threads-driver.sh`, the pinned copy setting, traced, in
+the order 0, 1, 2, 0, 1, 2.
+
+| copying threads | GB/s | region pages | ring drops | retransmits | RTOs | client held by the window | pages recycled by cache, by ring (ring 0) |
+|---|---|---|---|---|---|---|---|
+| 0 (`threads-0-1`, `-2`) | 34.3, 44.2 | 1510, 1578 | 84, 116 | 24265, 18214 | 374, 2 | 96.5% (second run) | 6.7 M, 2.3 M |
+| 1 (`threads-1-1`, `-2`) | 43.7, 43.7 | 1572, 1556 | 277, 290 | 76465, 144898 | 0, 3 | 90.9% | 2.5 M, 6.8 M |
+| 2 (`threads-2-1`, `-2`) | 44.0, 43.6 | 1540, 1572 | 217, 257 | 165864, 186539 | 1, 2 | 85.6%, 85.1% | 2.2 M, 6.0 M |
+
+1. **No gain in rate: 43.6 to 44.0 with one or two threads copying,
+   44.2 without.** Seven runs today with the copy locked, unlocked,
+   claimed, and claimed by two threads are all between 43.5 and 44.2.
+2. **The drain did change, as meant.** The client's connections were
+   held by the server's window 96.5% of the time (median of sixteen),
+   then 90.9%, then 85.6%: the server takes the data sooner. The rate
+   did not follow, so at this setting the time a connection's window
+   is shut is not what sets the rate either, or not alone. Where the
+   time goes on the client (its CPUs are 35% idle overall, the
+   busiest 20%) has not been looked at since.
+3. **What claiming costs.** Retransmits are four to ten times as many
+   (76 to 187 thousand against 18 to 24 thousand) with the ring drops
+   only doubled and no more RTOs: not explained. A ring's pages go
+   back by the pool's ring and not its cache (6 to 7 million against
+   2.3 million), because the clone outlives TCP's own free of the skb
+   and the last reference is dropped on nfsd's CPU. The region in use
+   did not grow (1540 to 1572 pages against 1510 to 1578).
+4. **A run with 374 RTOs again**: 34.3 GB/s with 0, as 35.5 with 358
+   in the batch before. Two of ten runs since noon, both with the
+   copy made as the socket is read, neither the first after a module
+   load. The rings' CPUs were 62% to 70% idle in it. Not explained.
+5. **Checked before it was measured:** the four KUnit suites (which do
+   not reach this path) and verifying cells with 1 and 2
+   (`$L/xeu-16k-464-claim-verify-t1`, `-t2`): 213 and 254 GiB written
+   and read back with crc32c, no error. Those run near 2 GB/s; the
+   rate runs do not verify. Nothing in `dmesg`. The new field in
+   `struct svc_sock` changes the versions of 14 exports, all for
+   KUnit; nfsd and the rest load against the module as they are.
+
+Not tried: a larger window with claiming (with the window opened
+before the copy, the held buffer is no longer all that a connection
+has waiting), and more than two threads.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
