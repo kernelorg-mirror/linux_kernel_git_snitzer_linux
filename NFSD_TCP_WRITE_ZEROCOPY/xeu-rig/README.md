@@ -90,10 +90,11 @@ one. Tried since and not a gain: eight rings (the rings' CPUs were
 not the limit), a load paced at the source and stepped up, and 32
 connections from two mounts (37.0 GB/s at 1 MiB a connection, 35.7 at
 512 KiB with the footprint held). A 1 MiB WRITE takes about 350 us to
-receive on its connection, of which the copy is about 150. Not tried:
-a held buffer past 1 MiB (1.5 or 2 MiB, so that a whole WRITE can be
-in flight), a shorter or longer linger, `rx_refill_thresh`, one pool
-against four.
+receive on its connection, of which the copy is about 150. A 1.5 MiB
+held buffer gave 41.4: less waiting and a dearer copy (38 MiB in use,
+`memmove` 38%), which cancel. Not tried: a shorter or longer linger,
+`rx_refill_thresh`, one pool against four; none is expected to move
+the rate.
 
 **Not done from the list below:** 5440 at the old
 setting of 256 entries and a 1 MiB buffer; and everything in step 3
