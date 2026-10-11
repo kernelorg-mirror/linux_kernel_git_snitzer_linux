@@ -6,6 +6,15 @@ Direction for AI agents (and humans) working in this tree on the branches
 
 ## Branch workflow
 
+**Do not concern yourself with the Hammerspace twin branch (Mike,
+2026-10-10).** Work on `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`,
+which has everything needed for now. Do not carry changes to
+`kernel-7.1/hs-7.1.13-5.NFSD_TCP_WRITE_ZEROCOPY`, do not list "carry to
+the twin" as work owed, and do not raise it in reports. Porting to the
+full private Hammerspace kernel is not this work's concern until Mike
+says so. This overrides what the two entries below say about keeping
+the branches in step and about where development is done.
+
 - **`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`** carries the series on the
   public `kernel-7.1.13/main`, rebased 2026-10-07 onto **`v7.1.13-21`** (the
   whole series, laid out as code, then KUnit preparation, then KUnit
