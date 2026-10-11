@@ -2930,6 +2930,49 @@ are right. It takes half a second a report, not minutes.
    lock while holding the send mutex, which is the 415 us average
    wait in `lock-caller-*.txt`.
 
+### What limits the drain, step B: eight rings on 8192-byte buffers, and deferred interrupts (11 October, 10:35 to 11:25)
+
+`plans/16k-39-rings8-8192.plan`, `$L/xeu-16k-464-rings8-driver.sh`: the
+pinned copy setting on eight rings of 128 frames, nfsd's threads on
+CPUs 16-55, traced. `sunrpc` is the tip built here with the
+`svcsock_tcp_rx_hold` tracepoint (srcversion
+`431512D24FA9C5C6545222B`, in 464's `updates/`).
+
+| rings | GB/s | region pages | ring drops | retransmits | RTOs | server `sys` | rings' CPUs idle |
+|---|---|---|---|---|---|---|---|
+| 4 x 256, the baseline (`baseline-3`, `-4`) | 43.0, 42.5 | 1529, 1527 | 528, 523 | 11396, 6146 | 2, 2 | 24.5% | 8% |
+| 8 x 128 (`rings8-plain-1`, `-2`) | 42.2, 41.9 | 1629, 1614 | 28941, 23393 | 46087, 38039 | 0, 1 | 33.0%, 32.7% | 53% to 64% |
+
+1. **Eight rings do not help on these buffers either**: 42.2 and 41.9
+   against 43.0 and 42.5. The rings' CPUs went from 8% idle to about
+   58% idle, so they are not what holds the rate, as on 5440-byte
+   buffers.
+2. They cost: 6 pages in 100 more of the region, fifty times the ring
+   drops (128 frames a ring is shallow for the bursts), and a third
+   more system time (33% of 64 CPUs against 24.5%).
+3. **Deferring interrupts stops the port.** With
+   `napi_defer_hard_irqs` 2 and `gro_flush_timeout` 50000 on
+   `enp161s0f0` the port answered the mount and the warm-up, then
+   received nothing more: the cell hung at 10:43, the rings' packet
+   counts stood still and the client did not answer a ping. Writing 0
+   to both did not bring it back; `ip link set down` and `up` did.
+   Nothing in `dmesg`. So `xeu` does not work with the kernel's
+   deferral: one more question for Xsight, with what the card itself
+   can do to hold interrupts back. **Do not set either on this port.**
+   No rate was measured with it: the figure in
+   `rings8-defer-1/summary.tsv` (41.1) is the cell finishing after the
+   port was brought back, with deferral off, and is not a result.
+4. **The hold tracepoint**, first cell after the module was loaded
+   (`rings8-plain-1/hold-trace.txt`): the first two transports held at
+   factor 150 with a clamp of 348160; one of them held again 0.3 s
+   later at 108 (483328); the warm-up's 17 connections at 108 from
+   the start; the cell's 17 at 107 (487424), and none held again.
+
+The port is back at 4 rings of 256 and nfsd's threads on 8-55.
+`systemctl restart hammerspace-nfsd-tuning` sets nfsd to 128 threads
+and pins those; threads added after it are on all CPUs, so `taskset
+-pc 8-55` each one after `echo 512 > /proc/fs/nfsd/threads`.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

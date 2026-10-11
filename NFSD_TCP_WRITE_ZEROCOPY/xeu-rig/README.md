@@ -20,10 +20,12 @@ whatever the suite had left; the parameter's removal took that away.
 The check, if in doubt: `rcv_ssthresh` in a run's `ss-server.txt` is
 487424 or 483497 here.
 
-**The state of tardis1 this boot:** the kernel's own `sunrpc` with no
-factor fixed (the fixed suite ran last), `pools_per_node` 4, nfsd at 512 threads, a
+**The state of tardis1 this boot:** `sunrpc` built from the tip in
+464's `updates/` (it has the hold tracepoint; the packaged one is
+beside it), `pools_per_node` 4, nfsd at 512 threads, a
 32768-page region bound, rings of 4 x 256, `/dev/md0` on `/hs/stripe`,
-`kernel.panic` 10. About 12 TB written to the stripe. The hand-built
+`kernel.panic` 10, nfsd's threads on CPUs 8-55. About 21 TB written
+to the stripe. The hand-built
 modules in `/lib/modules/7.1.13-21.hs.463…/updates/` are still there
 and belong to 463 only.
 
@@ -50,21 +52,20 @@ it is quick.
   go to the backlog and a reply waits for the lock under the send
   mutex.
 
-**Step B: one batch of runs.** The ring CPUs (0, 2, 4 and 6) were 8%
-idle at about 10.7 GB/s a ring. Eight rings were tried only on
-5440-byte buffers, where they took receive memory past the cache
-(39.6 and 39.3 GB/s).
+**Step B is done (2026-10-11): "What limits the drain, step B" in
+`../XEU_CONVERGENCE.md`.**
 
-- Eight rings of 128 on 8192-byte buffers: the same number of ring
-  entries as 4 x 256, so the same memory. `ethtool -X equal` before
-  `-L`, then place the flows.
-- The same with interrupts deferred: `napi_defer_hard_irqs` and
-  `gro_flush_timeout` on the port are both 0. The port refuses
-  `ethtool -c` and `xeu` has no parameter for it, so what the card
-  itself does to hold interrupts back is a question for Xsight.
-- The baseline of step 1 is the reference; do not repeat it.
+- Eight rings of 128 on 8192-byte buffers: 42.2 and 41.9, no better
+  than four (43.0 and 42.5), with the rings' CPUs 58% idle, fifty
+  times the ring drops and a third more system time. The rings' CPUs
+  are not the limit.
+- **Do not set `napi_defer_hard_irqs` or `gro_flush_timeout` on the
+  port: it stops receiving** and only a down and up brings it back.
+  For Xsight.
+- `svcsock_tcp_rx_hold` (in the hand-built `sunrpc` now loaded) shows
+  what each transport is held to.
 
-**Noted, not for this batch.**
+**Noted.**
 
 - 12% of lingers time out (287,671 of 2.37 million), 50 us of a
   thread each and a hand-off of the connection.
