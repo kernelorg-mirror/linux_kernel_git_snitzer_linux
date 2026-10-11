@@ -1,3 +1,76 @@
+# After the reboot into build 464: start here (written 2026-10-11, on build 463)
+
+Mike is building and installing 464. **Run nothing until he says the
+host is rebooted and ready.**
+
+## 1. The first baseline, one run
+
+The pinned copy configuration, unchanged: `rx_buf_size=8192` and MTU
+7792 (both outlive the reboot), rings of 4 x 256,
+`rx_refill_thresh=8`, a 1 MiB held buffer, 16 connections, `PLACE=1`,
+plan `plans/16k-35-rxbuf8192.plan`. Before it:
+
+- Check what `sunrpc` is loaded. The hand-built modules are in
+  `/lib/modules/7.1.13-21.hs.463…/updates/` and belong to 463 only; if
+  464 carries the tip they are stale and can be removed.
+- `svc_tcp_rx_credit_factor` should not exist, and a budget's
+  statistics should show `hold_factor` (107 on these buffers).
+
+The figures to set it against, all on 463 on the night of 10 October:
+42.5 and 42.7 GB/s on the tip, 42.4 and 42.0 on the old code, in 24 to
+26 MiB. The 43.2 and 43.3 of three hours earlier were not reproduced
+by any code that night and the cause is not known.
+
+## 2. TODO, immediately after the baseline: what limits the drain (Mike, 2026-10-11)
+
+The saved traces of the 42.7 GB/s run
+(`$L/xeu-16k-463-tipcheck-2`) say the limit is how fast the server
+drains each connection: the client's sixteen connections were
+`rwnd_limited` for 94% to 98% of their busy time. The copy is 25% of
+server cycles. What else is there, before it and after it:
+
+**Step A: read the saved call graph. No test run.**
+`perf report -i cg-r256-b1048576-w0-prp.1-step-copy-n16.data` in that
+directory. It is slow (minutes for each symbol) and takes a CPU, so do
+not run it during a measurement. Two questions:
+
+- **Who calls `arch_counter_get_cntpct`?** It is 14.5% of cycles, the
+  second item in the profile. The suspects are the linger's wait loop
+  and the tracing itself. If it is the linger, an eighth of the
+  server's cycles is a thread reading the clock.
+- **Is the copy done with the socket locked?** 50,554 waits for the
+  send mutex in `svc_tcp_sendto`, 21 s in all and 415 us each on
+  average, which is about one WRITE's receive. That is an inference
+  from `lock-caller-*.txt`, not a trace. Confirm it from the callers of
+  `__memmove` and from the code (`svc_tcp_recv_skb()` runs under
+  `tcp_read_sock()`). If so, segments that arrive during a copy go to
+  the socket's backlog, and moving the copy outside the lock is also
+  the first step towards two threads on one connection.
+
+**Step B: one batch of runs.** The ring CPUs (0, 2, 4 and 6) were 8%
+idle at about 10.7 GB/s a ring. Eight rings were tried only on
+5440-byte buffers, where they took receive memory past the cache
+(39.6 and 39.3 GB/s).
+
+- Eight rings of 128 on 8192-byte buffers: the same number of ring
+  entries as 4 x 256, so the same memory. `ethtool -X equal` before
+  `-L`, then place the flows.
+- The same with interrupts deferred: `napi_defer_hard_irqs` and
+  `gro_flush_timeout` on the port are both 0. The port refuses
+  `ethtool -c` and `xeu` has no parameter for it, so what the card
+  itself does to hold interrupts back is a question for Xsight.
+- The baseline of step 1 is the reference; do not repeat it.
+
+**Noted, not for this batch.**
+
+- 12% of lingers time out (287,671 of 2.37 million), 50 us of a
+  thread each and a hand-off of the connection.
+- A quarter of direct writes take over 1 ms (147 thousand of 619
+  thousand; most take 130 to 500 us) and 52 thousand take 4 to 8 ms.
+  XFS's inode lock and log are in the lock table. With 512 threads and
+  the client waiting on the window, this is not the limit now; it
+  would matter once the drain is faster.
+
 # The xeu rig at 16 KiB: where it stands (2026-10-10, 12:50, on build 463)
 
 **Build 463 is running, and both new `xeu` features work on the
