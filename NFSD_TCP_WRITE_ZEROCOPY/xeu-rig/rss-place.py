@@ -6,9 +6,12 @@
 # from net:napi_gro_receive_entry under the load to be placed (xeu-rx.bt has
 # one).  On xeu the hash is the card's, and bits <shift> (13) and up pick the
 # flow's entry of the RSS table, so pointing that entry at a ring puts the
-# flow there.  Flows that share an entry go together.  The busiest entry is
-# given to the ring with the least so far, and so on down; entries no flow
-# uses keep the even spread.
+# flow there.  Flows that share an entry go together.  The entry with the
+# most flows (then the most bytes) is given to the ring with the fewest
+# flows so far (then the fewest bytes), and so on down; entries no flow
+# uses keep the even spread.  Flows are counted before bytes because a few
+# seconds' sample of like writers does not show them carrying the same,
+# and balancing its bytes put 5 and 3 flows on two rings of four.
 #
 # stdout: the ethtool netlink rss-set request's "indir" array, as JSON.
 # stderr: a line per flow (hash, entry, ring, bytes) and each ring's flows
@@ -33,8 +36,8 @@ for h, b in fl.items():
 load = [0] * nr
 count = [0] * nr
 tbl = [i % nr for i in range(n)]
-for e in sorted(ent, key=lambda e: -sum(fl[h] for h in ent[e])):
-    r = min(range(nr), key=lambda r: (load[r], count[r], r))
+for e in sorted(ent, key=lambda e: (-len(ent[e]), -sum(fl[h] for h in ent[e]))):
+    r = min(range(nr), key=lambda r: (count[r], load[r], r))
     tbl[e] = r
     load[r] += sum(fl[h] for h in ent[e])
     count[r] += len(ent[e])
