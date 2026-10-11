@@ -1506,6 +1506,67 @@ static void svcsock_rx_credit_learn_test(struct kunit *test)
 	svc_tcp_rx_credit_release(a);
 }
 
+/* Read whole skbs of @len bytes in @truesize until a sample is taken. */
+static void svcsock_rx_geometry_window(struct svc_sock *svsk,
+				       unsigned int truesize, unsigned int len)
+{
+	do {
+		svc_tcp_rx_geometry_account(svsk, truesize, len, len);
+	} while (svsk->sk_rx_geo_pay);
+}
+
+/*
+ * A transport's receive buffer is held by what its skbs occupy for each
+ * 100 bytes of payload.  With nothing measured that is 150; then what the
+ * transport has read so far; then the higher of its last two samples.  A
+ * transport that has read nothing starts from what another of its budget
+ * measured.  A fixed factor overrides all of it.
+ */
+static void svcsock_rx_geometry_test(struct kunit *test)
+{
+	struct svc_sock *sa = svcsock_rx_credit_sock(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock(test);
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 150U);
+
+	/* One skb: 8448 bytes for 7740 of payload is 110 to the 100. */
+	svc_tcp_rx_geometry_account(sa, 8448, 7740, 7740);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 110U);
+	/* Half of an skb read is half of its memory. */
+	svc_tcp_rx_geometry_account(sa, 8448, 7740, 3870);
+	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_mem, 8448U + 4224U);
+	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_pay, 7740U + 3870U);
+	/* Nothing read of it, or an empty one, counts for nothing. */
+	svc_tcp_rx_geometry_account(sa, 8448, 7740, 0);
+	svc_tcp_rx_geometry_account(sa, 8448, 0, 100);
+	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_pay, 7740U + 3870U);
+
+	/* A window of them is a sample, and the budget's other transports' start. */
+	svcsock_rx_geometry_window(sa, 8448, 7740);
+	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_factor[0], 110U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 110U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sb), 110U);
+
+	/* A whole page to a frame: the higher sample is the one in force. */
+	svcsock_rx_geometry_window(sa, 16640, 8960);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 186U);
+	svcsock_rx_geometry_window(sa, 8448, 7740);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 186U);
+	svcsock_rx_geometry_window(sa, 8448, 7740);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 110U);
+
+	/* Short segments in whole buffers are measured as they are. */
+	svcsock_rx_geometry_window(sb, 8448, 100);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sb), 8448U);
+
+	/* A fixed factor is used as it is. */
+	svc_tcp_rx_budget_kunit_configure(0, 0, 190);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_hold_factor(sa), 190U);
+}
+
 /*
  * Only the oldest in-flight record draws on the reserve (and past the
  * budget); a younger record that outgrows its grant pauses.
@@ -3030,6 +3091,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_small_record_copied_test),
 	KUNIT_CASE(svcsock_rx_credit_fifo_test),
 	KUNIT_CASE(svcsock_rx_credit_learn_test),
+	KUNIT_CASE(svcsock_rx_geometry_test),
 	KUNIT_CASE(svcsock_rx_credit_reserve_oldest_test),
 	KUNIT_CASE(svcsock_rx_window_clamp_test),
 	KUNIT_CASE(svcsock_rx_hold_buffer_test),
