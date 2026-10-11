@@ -2973,6 +2973,44 @@ The port is back at 4 rings of 256 and nfsd's threads on 8-55.
 and pins those; threads added after it are on all CPUs, so `taskset
 -pc 8-55` each one after `echo 512 > /proc/fs/nfsd/threads`.
 
+### The copy outside the socket lock (11 October, 11:25 to 12:00)
+
+"SUNRPC: Copy a received TCP record with the socket unlocked": the
+actor clones the skb, drops the socket lock, copies from the clone and
+takes the lock again. Unread data stays charged to the socket until it
+is copied, so the window and the held buffer are as before.
+`svc_tcp_rx_copy_unlocked` (default Y) switches it, so both were run on
+one loaded module (srcversion `4BB31C574D6E80E01507CAD`):
+`$L/xeu-16k-464-unlocked-driver.sh`, the pinned copy setting, traced,
+in the order Y, N, Y, N.
+
+| copy | GB/s | region pages | ring drops | RTOs | waits for the send mutex | lingers ended by data |
+|---|---|---|---|---|---|---|
+| unlocked (`unlocked-Y-1`, `-2`) | 43.6, 43.5 | 1456, 1533 | 132, 69 | 3, 5 | 10976, 11608 | 1.62 M, 1.46 M |
+| locked (`unlocked-N-1`, `-2`) | 35.5, 43.6 | 1521, 1545 | 27, 34 | 358, 0 | 7998, 44378 | 2.52 M, 2.46 M |
+
+1. **No gain in rate: 43.6 and 43.5 unlocked, 43.6 locked.** The lock
+   held for the copy is not what limits the drain. The segments that
+   waited on the backlog were only late by the rest of one skb's
+   copy, and the client is held by the window, not by late ACKs.
+2. The locked run at 35.5 had 358 RTOs and 4527 loss probes with 27
+   ring drops. Not explained, and not counted against the locked copy:
+   its other run and the morning's two (43.0, 42.5) had 0 to 2.
+3. What did change: two fifths fewer lingers find data (1.5 M against
+   2.5 M in 8 s), since arrivals during a copy are queued at once and
+   read in the same call. The send mutex's waits do not separate the
+   two (11 thousand both times unlocked; 8 and 44 thousand locked).
+4. **Checked before it was measured:** the four KUnit suites (they do
+   not reach the unlocked path, whose sockets must be real), and a
+   verifying cell over the port, 220 GiB written and read back with
+   crc32c, no error (`$L/xeu-16k-464-unlocked-verify`). Nothing in
+   `dmesg` in any run. There is no KUnit test of the unlocked copy.
+5. All four runs, either way, are 0.5 to 1 GB/s above the morning's
+   baseline, and the rings' CPUs are 17% to 20% idle where they were
+   8%. The difference in the setup is that every nfsd thread is now on
+   CPUs 8-55; in the morning the 384 added by `echo 512` were on all
+   CPUs, the rings' included.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
