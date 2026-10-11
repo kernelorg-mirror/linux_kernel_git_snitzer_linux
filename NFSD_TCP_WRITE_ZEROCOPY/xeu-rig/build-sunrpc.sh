@@ -5,8 +5,8 @@
 # builds: it installs nothing and loads nothing.
 #
 # The running kernel's own headers are used for everything but
-# include/linux/sunrpc, so what is built in (the page pool, TCP) is seen as
-# that kernel has it.  The exported symbols' versions are compared with the
+# include/linux/sunrpc and sunrpc's own trace events, so what is built in
+# (the page pool, TCP) is seen as that kernel has it.  The exported symbols' versions are compared with the
 # installed module's: if they all match, nfsd and the other modules that
 # depend on sunrpc load against the new one as they are.
 #
@@ -21,6 +21,8 @@ KB=/lib/modules/$(uname -r)/build
 rm -rf $O; mkdir -p $O/inc/linux
 cp -a $TREE/net/sunrpc $O/sunrpc
 cp -a $TREE/include/linux/sunrpc $O/inc/linux/
+mkdir -p $O/inc/trace/events
+cp -a $TREE/include/trace/events/sunrpc.h $TREE/include/trace/events/sunrpc_base.h $O/inc/trace/events/
 git -C $TREE log --oneline -1 -- net/sunrpc include/linux/sunrpc
 # A module gets its BTF against vmlinux, which -devel does not carry, and
 # without BTF the tracers' fentry:sunrpc: probes do not attach.  The running
