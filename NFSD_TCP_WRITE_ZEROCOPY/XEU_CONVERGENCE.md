@@ -3222,6 +3222,35 @@ where it showed 1514 as found, the port's MTU having been raised
 since those were made; nothing else differs. The pinned setting stays
 1 MiB with `fq_codel`.
 
+### More than two threads on one connection (11 October, 15:55 to 16:35)
+
+`svc_tcp_rx_copy_threads` 0, 3, 4 and 8 by turns at the pinned copy
+setting (1 MiB, `fq_codel` on the client), twice each
+(`$L/xeu-16k-464-threads-more-{0,3,4,8}-{1,2}`, driver
+`$L/xeu-16k-464-more-threads.sh`). With n, up to n - 1 threads copy a
+connection's records after giving the transport up. A verifying cell
+with 8 ran first (`$L/xeu-16k-464-claim-verify-t8`): 1.9 GB/s for
+120 s written and read back with crc32c, no error.
+
+| threads | GB/s | region pages | ring drops | retransmits | RTOs | client held by the window |
+|---|---|---|---|---|---|---|
+| 0 | 44.3, 40.5 | 1527, 1539 | 115, 131 | 15697, 12699 | 0, 194 | 92.4%, 92.9% |
+| 3 | 43.9, 44.3 | 1607, 1600 | 324, 237 | 201841, 261735 | 1, 4 | 83.1%, 81.4% |
+| 4 | 43.7, 43.8 | 1552, 1572 | 210, 150 | 167484, 245823 | 1, 3 | 87.0%, 85.7% |
+| 8 | 43.8, 44.1 | 1540, 1588 | 358, 325 | 138750, 198325 | 3, 4 | 88.8%, 85.2% |
+
+1. **More threads are as two were**: 43.7 to 44.3 GB/s, the window
+   shut 81% to 89% of the time, retransmits ten times the copy made
+   as the socket is read. Nothing moves between 2, 3, 4 and 8, so a
+   connection seldom has more than one record claimed and not yet
+   copied; how many copy at once was not counted.
+2. **A third run with hundreds of RTOs, again with 0**: 40.5 GB/s
+   with 194. Since noon the copy made as the socket is read has had
+   three such runs in nine at 1 MiB (35.5 with 358, 34.3 with 374,
+   this), and claiming none in twelve. That is the one thing
+   claiming may be worth here, and twelve runs do not settle it;
+   what happens in such a run is still not known.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

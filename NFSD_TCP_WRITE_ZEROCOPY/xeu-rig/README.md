@@ -112,6 +112,13 @@ The client's `mq` has no handle: `tc qdisc replace dev ens3np0 root
 handle 1: mq` first, and `tc qdisc del dev ens3np0 root` puts
 `fq_codel` back.
 
+**More than two threads (2026-10-11)**: `svc_tcp_rx_copy_threads` 3, 4
+and 8 give 43.7 to 44.3, as 2 did. **The runs with hundreds of RTOs
+(34 to 40 GB/s) have all been with 0: three of nine at 1 MiB, none of
+twelve with claiming.** Not settled, and what happens in such a run
+is the open question on the server. "More than two threads" in
+`../XEU_CONVERGENCE.md`.
+
 **Noted.**
 
 - 12% of lingers time out (287,671 of 2.37 million), 50 us of a
