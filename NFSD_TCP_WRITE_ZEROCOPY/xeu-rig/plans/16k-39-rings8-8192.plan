@@ -1,0 +1,7 @@
+# Eight rings of 128 frames on 8192-byte buffers (MTU 7792): the ring
+# entries of 4 x 256, so the same posted memory, an eighth of the load to
+# a ring.  The port at 8 rings first (ethtool -L with it down), nfsd's
+# threads off the rings' CPUs (16-55).  The reference is the 4 x 256
+# baseline on build 464, 43.0 and 42.5 GB/s.
+#     RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+128 1048576 0 prp step-copy-n16
