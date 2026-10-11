@@ -98,8 +98,9 @@ the rate.
 
 **The loan written direct is not reachable on this hardware (Mike,
 2026-10-10).** The E1's port offers no header-data split and no
-payload aggregation across frames, and Xsight has provided neither;
-the drives need whole pages. So "take the copy out" is closed here,
+payload aggregation across frames. Hammerspace raised header-data
+split with coalescing with Xsight, who showed no interest in
+delivering it. The drives need whole pages. So "take the copy out" is closed here,
 and `../xeu-hds-experiment/` is not being pursued. What is left for
 the copy past 41 to 42 GB/s is how one connection's WRITE is
 received (one thread at a time, about 350 us for 1 MiB).
