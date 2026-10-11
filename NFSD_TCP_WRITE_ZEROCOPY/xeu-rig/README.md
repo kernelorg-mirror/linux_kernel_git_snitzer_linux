@@ -100,8 +100,17 @@ limit: every socket has megabytes unsent, a WRITE waits 11.6 ms for
 its connection, a third of its CPUs are idle and no thread is near a
 whole CPU. It copies what it sends (16% of its cycles; the RPC
 client's send does not splice pages). "The client" in
-`../XEU_CONVERGENCE.md`. Not tried: `fq` pacing on the client so that
-a larger window does not arrive as bursts the rings drop.
+`../XEU_CONVERGENCE.md`.
+
+**fq on the client (2026-10-11)**: tried at 1 MiB, 1.5 MiB and 2 MiB
+and put back. Ring drops and retransmits fall to a tenth to two
+fifths; the rate is 42.0 to 42.2 at 1 MiB, 43.2 to 43.6 at 1.5 MiB,
+44.2 to 44.4 at 2 MiB, so no gain. A paced sender waits on the window
+more. "fq on the client" in `../XEU_CONVERGENCE.md`. **44.2 to 44.6
+GB/s is the ceiling by every route tried: window, loss, or pacing.**
+The client's `mq` has no handle: `tc qdisc replace dev ens3np0 root
+handle 1: mq` first, and `tc qdisc del dev ens3np0 root` puts
+`fq_codel` back.
 
 **Noted.**
 
