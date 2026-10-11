@@ -24,7 +24,7 @@ The check, if in doubt: `rcv_ssthresh` in a run's `ss-server.txt` is
 464's `updates/` (it has the hold tracepoint; the packaged one is
 beside it), `pools_per_node` 4, nfsd at 512 threads, a
 32768-page region bound, rings of 4 x 256, `/dev/md0` on `/hs/stripe`,
-`kernel.panic` 10, nfsd's threads on CPUs 8-55. About 33 TB written
+`kernel.panic` 10, nfsd's threads on CPUs 8-55. About 52 TB written
 to the stripe. The hand-built
 modules in `/lib/modules/7.1.13-21.hs.463…/updates/` are still there
 and belong to 463 only.
@@ -72,6 +72,16 @@ It is the first step towards two threads on one connection. "The copy
 outside the socket lock" in `../XEU_CONVERGENCE.md`. **Pin every nfsd
 thread to 8-55 after `echo 512`:** with that the baseline is 43.5,
 not 42.5 to 43.0.
+
+**Two threads on one connection (2026-10-11)**:
+`svc_tcp_rx_copy_threads` 1 or 2, at the tip and in the loaded module,
+default 0. 43.6 to 44.0 GB/s against 44.2: no gain, though the client
+is held by the window less (85% of the time against 96%). Retransmits
+rise four to ten times. "Two threads on one connection" in
+`../XEU_CONVERGENCE.md`. **Everything tried on the server's drain
+today lands between 43.5 and 44.2**; the client has not been looked at
+since. Two runs of ten had about 360 RTOs and 34 to 35 GB/s, not
+explained.
 
 **Noted.**
 
