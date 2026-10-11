@@ -1,0 +1,5 @@
+# The best setting with the held buffer at 1.5 MiB: a 1 MiB WRITE and its
+# header do not fit in the window a 1 MiB buffer gives, so the client
+# stops part-way through each and waits for the window to reopen.
+#     RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+512 1572864 0 prp step-copy-n16

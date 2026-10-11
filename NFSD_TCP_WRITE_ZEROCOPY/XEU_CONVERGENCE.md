@@ -2540,6 +2540,34 @@ cell's own high-water mark, the second on top of the first.
    first cell was the last with the old script: 4/4/5/3 flows,
    25/25/30/20%.
 
+### A 1.5 MiB held buffer: less waiting, a dearer copy, the same rate (10 October, 19:55)
+
+`plans/16k-34-buf1536k.plan`, the best setting with the held buffer at
+1.5 MiB, sixteen connections, `PLACE=1`, traced, the pools emptied
+first (`$L/xeu-16k-463-buf1536k-1`). The thought was that a 1 MiB
+WRITE and its header do not fit in a 1 MiB buffer's window, so the
+client stops part-way and waits.
+
+| held buffer | GB/s | region pages | ring drops | RTOs | CPU-s per GB | `memmove` | linger's wait | calls per WRITE | a WRITE, first read to last |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 MiB (`best-client71-1`) | 41.6 | 1754 (27 MiB) | 213 | 4 | 0.50 | 29.3% | 12.6% | 2.1 | 350 us |
+| 1.5 MiB | 41.4 | 2444 (38 MiB) | 8111 | 8 | 0.53 | 37.7% | 6.9% | 1.8 | 343 us |
+
+The waiting did fall: the linger's busy wait from 12.6% of cycles to
+6.9% and the calls for a WRITE from 2.1 to 1.8. The region in use
+went from 27 MiB to 38, past the L3, and `memmove` from 29% to 38%.
+The two cancel: 41.4 against 41.6 GB/s, and a WRITE's receive takes
+343 us against 350. The rings carried 24/26/25/25% (four flows each,
+by count).
+
+**Every setting tried on 10 October trades the same two things.**
+Receive memory inside the L3 keeps the copy cheap and leaves threads
+waiting for data; more memory (a deeper buffer, deeper or more rings,
+more connections) ends the waiting and makes the copy dearer by about
+as much. Sixteen connections come out at 41 to 42 GB/s either way, 345
+to 360 us for each 1 MiB WRITE on its connection. What is left of the
+wire's 48 is not in these settings.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
