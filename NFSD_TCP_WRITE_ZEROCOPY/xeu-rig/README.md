@@ -24,7 +24,7 @@ The check, if in doubt: `rcv_ssthresh` in a run's `ss-server.txt` is
 464's `updates/` (it has the hold tracepoint; the packaged one is
 beside it), `pools_per_node` 4, nfsd at 512 threads, a
 32768-page region bound, rings of 4 x 256, `/dev/md0` on `/hs/stripe`,
-`kernel.panic` 10, nfsd's threads on CPUs 8-55. About 21 TB written
+`kernel.panic` 10, nfsd's threads on CPUs 8-55. About 33 TB written
 to the stripe. The hand-built
 modules in `/lib/modules/7.1.13-21.hs.463…/updates/` are still there
 and belong to 463 only.
@@ -64,6 +64,14 @@ it is quick.
   For Xsight.
 - `svcsock_tcp_rx_hold` (in the hand-built `sunrpc` now loaded) shows
   what each transport is held to.
+
+**The copy is made outside the socket lock (2026-10-11)**, at the tip
+and in the loaded module: 43.6 and 43.5 GB/s against 43.6 with
+`svc_tcp_rx_copy_unlocked=N` on the same module, so no gain by itself.
+It is the first step towards two threads on one connection. "The copy
+outside the socket lock" in `../XEU_CONVERGENCE.md`. **Pin every nfsd
+thread to 8-55 after `echo 512`:** with that the baseline is 43.5,
+not 42.5 to 43.0.
 
 **Noted.**
 
