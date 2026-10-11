@@ -2710,6 +2710,62 @@ the pools emptied first (`$L/xeu-16k-463-loan8192-sgl-1`).
    8500-byte pings of the MTU check. So the card drops what does not
    fit one buffer.
 
+### The charge for a loan: corrected by hand, then learned by the kernel (10 October, 21:30 to 22:30)
+
+The loan cell of the section before, on NVMe/TCP with a budget "of 16
+WRITEs", again at other values of `svc_tcp_rx_credit_factor`
+(`FACTOR9`, which also sizes the budget), and then with the kernel
+learning it (`KERNEL_CREDIT_FACTOR=0`; the budget sized as for 150):
+
+| factor | budget, pages | GB/s | paused | overrun | written direct | `$L/` |
+|---|---|---|---|---|---|---|
+| 190, for a whole page to a frame | 2150 | 20.9 | 0 | 0 | all | `xeu-16k-463-loan8192-sgl-1` |
+| 150 | 1704 | 21.3 | 284 | 0 | all | `xeu-16k-463-loan8192-f150` |
+| 110, for frames that pair up in a page | 1268 | 20.8 | 157399 | 0 | all | `xeu-16k-463-loan8192-f110` |
+| learned, first version (ended at 114) | 1704 | 22.7 | 44647 | 0 | all | `xeu-16k-463-loan8192-learned` |
+| **learned, as committed (ended at 164)** | 1704 | 20.6 | **53** | 0 | all | `xeu-16k-463-loan8192-learned2` |
+
+1. **The budget was not what held the loan at 21 GB/s** (the section
+   before said it was). The rate is the same at every factor. The
+   refusals are connections waiting for the storage to finish the
+   WRITEs before; the limit is the NVMe/TCP stand-in.
+2. **Frames of different connections do share pages.** At 110 a
+   record stopped part-way for more credit 157 thousand times. A
+   1 MiB WRITE on these buffers holds between 70 pages and about 120.
+3. **The kernel now learns the factor**: "SUNRPC: Learn a loaned
+   record's charge from the records" and its KUnit test
+   (`svcsock_rx_credit_learn_test`; svcsock 45/45). Each budget keeps
+   the most pages a record of its last one to two thousand held for
+   each 100 of record. `svc_tcp_rx_credit_factor` defaults to 0,
+   which means that; another value fixes the charge as before.
+   `cost_factor` in the budget's statistics is the one in force.
+4. The first version took a higher sample at once and came down a
+   sixteenth of the way to each lower one. Most records hold fewer
+   pages than the ones that matter, so it sank to 114 and stopped 44
+   thousand records. The committed one comes down only when two
+   windows of 1024 records stayed below it: 164, and 53 stopped.
+
+**Still to do for the charge.**
+
+- The factor also sets each transport's window clamp and scaling
+  ratio. With 0 those use what the budget learned, or 150 before it
+  has and in copy mode, where nothing is learned. The harness writes
+  its own factor (190 at MTU 9000) for every cell unless
+  `KERNEL_CREDIT_FACTOR` is set, so **every copy-mode figure so far
+  was taken with the window clamped for 190**, about 0.46 of the held
+  buffer. Deriving the clamp from the skbs' own truesize, so that copy
+  mode needs no factor either, is not written.
+- Removing the parameter, once the learned value is trusted.
+- **The two commits are on `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
+  only; they have to be carried to the Hammerspace twin.**
+
+On tardis1 the sunrpc built from the tip is in
+`/lib/modules/$(uname -r)/updates/` (srcversion
+`7ED891B5AFE050EE947DD94`, with `svcsock_kunit.ko` and `xdr_kunit.ko`
+beside it) and loads at boot; `pools_per_node` 4 was given to
+`modprobe` and is in no file. To go back to the kernel's own: `rm`
+the three, `depmod -a`, `SUNRPC_KO=none ./swap-sunrpc.sh`.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

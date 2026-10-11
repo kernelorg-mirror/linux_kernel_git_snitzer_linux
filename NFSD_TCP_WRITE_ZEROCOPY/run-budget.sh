@@ -202,6 +202,9 @@ rcvpages() {
 	b=$(( ($1 + fr - 1) / fr ))
 	echo $(( a > b ? a : b ))
 }
+# KERNEL_CREDIT_FACTOR=<n> is written to svc_tcp_rx_credit_factor in place of
+# a cell's factor, which still sizes the cell's budget: 0 leaves the kernel
+# to learn the charge from its records (svc_tcp_rx_cost_learn_locked()).
 # FACTOR9=<n> replaces the derived factor for MTU 9000, to try another on
 # the same region: the reserve follows it, and so would the default region
 # size, so give SIZE= as well (the region is made once per boot).
@@ -385,7 +388,7 @@ ncell() {
 	local name=$1 O=$E/$1 si0 sd0 sb0 si1 sd1 sb1 pr= pb= hk= rcr=- rcb=- mr=- mb=- nb c w0
 	rm -rf "$O"; mkdir -p "$O/R" "$O/B"
 	echo "$RCVBUF" > $SP/svc_tcp_rx_rcvbuf
-	echo "$F9" > $SP/svc_tcp_rx_credit_factor
+	echo "${KERNEL_CREDIT_FACTOR:-$F9}" > $SP/svc_tcp_rx_credit_factor
 	setdelay "$DELAY"
 	set_budgets "$2" "$3" "$4" || { echo "$name: budgets $2/$3/$4 refused"; return 0; }
 	if [ "$5" = RB ]; then MTU=$MTU veth_up "$SIZE"; fi
@@ -961,7 +964,7 @@ cell() {
 	rm -rf "$O"; mkdir -p "$O"
 	echo 0 > $SP/svc_tcp_rx_budget_pages
 	echo "$RESERVE" > $SP/svc_tcp_rx_budget_reserve
-	echo "$FACTOR" > $SP/svc_tcp_rx_credit_factor
+	echo "${KERNEL_CREDIT_FACTOR:-$FACTOR}" > $SP/svc_tcp_rx_credit_factor
 	echo "$RCVBUF" > $SP/svc_tcp_rx_rcvbuf
 	echo "$BUDGET" > $SP/svc_tcp_rx_budget_pages
 	# RX_LINGER_US=<us>: a thread waits that long for the rest of a partly
@@ -1082,7 +1085,7 @@ xcell() {
 	rm -rf "$O"; mkdir -p "$O/R" "$O/N"
 	echo 0 > $SP/svc_tcp_rx_budget_pages
 	echo "$RESERVE" > $SP/svc_tcp_rx_budget_reserve
-	echo "$FACTOR" > $SP/svc_tcp_rx_credit_factor
+	echo "${KERNEL_CREDIT_FACTOR:-$FACTOR}" > $SP/svc_tcp_rx_credit_factor
 	echo "$RCVBUF" > $SP/svc_tcp_rx_rcvbuf
 	echo "$BUDGET" > $SP/svc_tcp_rx_budget_pages
 	setdelay "$DELAY"
