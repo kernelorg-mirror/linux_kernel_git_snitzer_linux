@@ -87,9 +87,14 @@ collapse. `kernel-rpmtree` was copied to the client at
 (2026-10-10, 21:15): 43.2 and 43.3 GB/s** in 24 to 26 MiB, against
 5440's 41 to 42 in 27 to 30. One buffer to a frame, so it is also the
 setting a loan should try first. `plans/16k-35-rxbuf8192.plan`, run
-with `HW_ANY_MTU=1`; `xeu` is loaded that way now from the command
-line and the port's MTU set by hand, and **`xeu.conf` still pins
-5440: Mike has not said to change the pin.** The account is "One
+with `HW_ANY_MTU=1`; **Both are pinned (Mike, 2026-10-10, 21:40):**
+`/etc/modprobe.d/xeu.conf` has `rx_ip_align=2 rss_indir_size=128
+rx_buf_size=8192`, and NetworkManager's `enp161s0f0` profile has MTU
+7792 (`nmcli con mod enp161s0f0 802-3-ethernet.mtu 7792`). The region,
+the four rings of 256 and `rx_refill_thresh` 8 are still set by hand
+after a boot or a reload. `rx_buf_size` is the driver's, so the other
+port, `enp164s0f0`, has 8192-byte buffers too; its MTU is still 9000,
+where a frame takes two of them. The account is "One
 buffer to a frame" in `../XEU_CONVERGENCE.md`, which also says that
 `where.sh`'s per-ring GB/s were a tenth too high before this.
 
