@@ -440,14 +440,22 @@ To work out, none of it started:
    that is a multiple of 4. It does not know at posting time which
    buffer will be first; a short frame (an ACK, the tail of a burst)
    takes one buffer and shifts the order.
-3. Whether the card can be told where a continuation lands (a second
-   address or an offset in the descriptor): a question for Xsight,
-   and a smaller one than header-data split.
-4. The fallback that needs nothing: a loan runs with
-   `rx_buf_size=0`, a whole page to a frame, where `rx_ip_align=2`
-   places every piece. That gives back the footprint 5440 saved (34
-   to 37 MiB against 21), so it is a choice between the copy at 5440
-   and the loan at a whole page, for each kind of storage.
+3. **The ask of Xsight, already mentioned to them (Mike,
+   2026-10-10): that every buffer of a frame allows 4-byte
+   placement.** It is the change that would help most, and a far
+   smaller one than header-data split. One way to put it: the driver
+   posts every buffer at a headroom that is a multiple of 4, and the
+   card skips 2 bytes at the start of a frame only, so the IP header
+   and the payload are placed in the first buffer and the rest of the
+   frame starts on a boundary in the next. Today the 2 bytes are in
+   the address the driver posts, so every buffer has them.
+4. **The fallback that needs nothing, and is proven: 16 KiB pages
+   with a whole page to a frame** (`rx_buf_size=0`), where
+   `rx_ip_align=2` places every piece. Loans went direct that way on
+   NVMe/TCP, the SGL drives' stand-in. It bloats the L3: 34 to 37 MiB
+   of receive memory for the copy against 21 at 5440, and a loan
+   holds more. So until 3 or 5 it is the loan on whole pages or the
+   copy on 5440-byte buffers, by the storage.
 
 5. **A frame that fits in one buffer** (thought of on reading the
    gate; not run). The misplacement is of a frame's second buffer, so
