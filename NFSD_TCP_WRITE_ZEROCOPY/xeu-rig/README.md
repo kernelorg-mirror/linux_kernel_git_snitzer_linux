@@ -410,16 +410,32 @@ after the first buffer is not 4-byte aligned".
   `rx_ip_align=2` is for.
 - The rest of the frame starts at byte 66 of the next buffer: 2 past a
   4-byte boundary. So with two buffers to a 9000-byte frame, about
-  half of every loaned WRITE's pieces fail the 4-byte gate.
+  half of every loaned WRITE's pieces fail the 4-byte gate. Only the
+  offset fails: the lengths are multiples of 4 (5000 and 3960 bytes of
+  payload in the two buffers; 4988 and 3960 with TCP timestamps,
+  which both ends have on), and the three buffers of a page start at
+  0, 5440 and 10880.
 - With `rx_ip_align=0` it is the other way about (118 and 64): one of
   the two is off whichever is chosen, as long as both buffers are
   posted alike.
 
 To work out, none of it started:
 
-1. What nfsd does today with a loaned record whose pieces are part
-   aligned and part not: the whole WRITE to the page cache, or a copy
-   of the misaligned pieces only. Read the gate before anything else.
+1. **Read, 2026-10-10: one misplaced piece sends the whole WRITE
+   through the page cache.** `nfs_dio_split()`
+   (`fs/nfs_common/nfs_dio.c`) walks every fragment of the payload in
+   `nfs_dio_iter_aligned_and_splittable()` and returns at the first
+   whose offset or length is not a multiple of the file's
+   `dio_mem_align` (`(off | len) & (mem_align - 1)`). The split is then
+   `NFS_DIO_MEM_MISALIGNED`: the payload is issued as one buffered
+   segment, with `IOCB_DONTCACHE` since
+   `nfsd_direct_misaligned_dontcache` is on by default, and
+   `nfsd_write_dio_split` traces it. There is no partial path: the
+   split divides a WRITE by file offset (a prefix, a direct middle, a
+   suffix), never by which pieces of memory are aligned. Every loaned
+   WRITE larger than one buffer has a continuation piece, so **on
+   5440-byte buffers every loaned WRITE would be buffered**, not half
+   of them.
 2. Whether the driver can post a frame's later buffers at a headroom
    that is a multiple of 4. It does not know at posting time which
    buffer will be first; a short frame (an ACK, the tail of a burst)
@@ -432,6 +448,19 @@ To work out, none of it started:
    places every piece. That gives back the footprint 5440 saved (34
    to 37 MiB against 21), so it is a choice between the copy at 5440
    and the loan at a whole page, for each kind of storage.
+
+5. **A frame that fits in one buffer** (thought of on reading the
+   gate; not run). The misplacement is of a frame's second buffer, so
+   it goes away if no frame has one. A buffer holds its size less 386
+   bytes (66 of headroom, 320 of `skb_shared_info`): 5054 at 5440, and
+   7806 at 8192, which is two buffers to a 16 KiB page. With
+   `rx_buf_size=8192` and the server's MTU at 7792 (the client's can
+   stay 9000: the server's MSS sets the segment size) every frame is
+   one buffer placed by `rx_ip_align=2`. And it is denser than today:
+   8192 bytes of buffer for 7752 of payload is 1.06 a byte, against
+   10880 for 8960 (1.21) at 5440 and 16384 for 8960 (1.83) with whole
+   pages. The price is 16% more frames for the same data. Worth a
+   copy-mode cell for the footprint alone, before any loan.
 
 Copy mode is not affected: nfsd copies the pieces out and its own
 buffer is what is written.
