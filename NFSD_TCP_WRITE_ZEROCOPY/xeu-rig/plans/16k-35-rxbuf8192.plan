@@ -1,0 +1,7 @@
+# rx_buf_size=8192 with the server's MTU at 7792: two buffers to a 16 KiB
+# page and one to a frame (a buffer holds 7806 bytes and the frame is
+# 7806), so rx_ip_align=2 places every piece of every frame.  256 entries
+# are 256 frames, as 512 are at 5440.  The port needs "ip link set
+# enp161s0f0 mtu 7792" and xeu loaded with rx_buf_size=8192 first.
+#     RX_LINGER_US=50 PLACE=1 STEP_BS=8M STEP_JOBS=16 PRP_DIR=/hs/stripe/zcbudget TRIM=/hs/stripe
+256 1048576 0 prp step-copy-n16
