@@ -94,7 +94,22 @@ rx_buf_size=8192`, and NetworkManager's `enp161s0f0` profile has MTU
 the four rings of 256 and `rx_refill_thresh` 8 are still set by hand
 after a boot or a reload. `rx_buf_size` is the driver's, so the other
 port, `enp164s0f0`, has 8192-byte buffers too; its MTU is still 9000,
-where a frame takes two of them. The account is "One
+where a frame takes two of them.
+
+**The client keeps MTU 9000, and that is safe.** Each end of a TCP
+connection advertises its MSS from its own MTU in the SYN, and a
+sender never sends more than the peer's. The server advertises 7752
+(7792 less 40), so the client's segments fit a buffer whatever its
+own MTU is. Read on the client during a run (`ss -tin dst
+192.168.1.211`): `mss:7740` (7752 less 12 of TCP timestamps),
+`advmss:8948`, `pmtu:9000`. It is per connection and settled before
+data moves, so nothing is fragmented and no path MTU discovery is
+involved; the server's own frames are at most 7792, which a
+9000-byte port takes; the client's traffic to other hosts is
+untouched. **It covers TCP only**: `ping -s 8500` from the client to
+the server gets no answer (with or without DF), where `ping -M do -s
+7764` does. NFS and its mount here are over TCP. Anything that sends
+the server a single non-TCP packet over 7792 bytes will lose it. The account is "One
 buffer to a frame" in `../XEU_CONVERGENCE.md`, which also says that
 `where.sh`'s per-ring GB/s were a tenth too high before this.
 
