@@ -217,7 +217,7 @@
   <header>
     <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 464 &middot; 11&nbsp;October&nbsp;2026</p>
     <h1>16 KiB pages, 8192-byte receive buffers and an MTU of 7792: <span class="ok">44 GB/s of NFS WRITEs inside the E1's 32 MiB L3 cache.</span></h1>
-    <p class="lede"><span class="hl">An NFS server on the E1 now takes 44 GB/s of durable WRITEs from one client</span>: sixteen connections over one port of the Xsight card, copied once on arrival and written direct to six striped NVMe drives. That is 92% of what the wire carries to a receiver that stores nothing (48 GB/s), and three days earlier the same copy carried 25.4. The receive memory in use stays at 24 to 25 MiB, inside the CPU's 32 MiB cache. Three settings do it together: the card's receive buffers cut to 8192 bytes with the MTU lowered so that each frame fills one, each connection's receive buffer held at 1 MiB, and every connection placed on a receive ring so that each ring carries a quarter. <span class="hc">On build 464, 21 runs of that setting gave 43.4 to 44.3; the highest single run of the day was 44.6.</span> <a href="#xeu464">Build 464 is first, below</a>: <a href="#claim">more than one thread receiving and copying on a connection</a>, <a href="#window">a larger receive window</a>, and <a href="#fq">pacing at the client</a> all reach the same ceiling, and <a href="#client">the client is not what holds it</a>. Then <a href="#xeu463">what it took to get here</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#loan">the loan, made ready for NVMe drives with SGLs</a>, with <a href="#nofactor">a setting the kernel now measures for itself</a>, then <a href="#tried">what was tried before it and did not help</a>, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
+    <p class="lede"><span class="hl">An NFS server on the E1 now takes 44 GB/s of durable WRITEs from one client</span>: sixteen connections over one port of the Xsight card, copied once on arrival and written direct to six striped NVMe drives. That is 92% of what the wire carries to a receiver that stores nothing (48 GB/s), and three days earlier the same copy carried 25.4. The receive memory in use stays at 24 to 25 MiB, inside the CPU's 32 MiB cache. Three settings do it together: the card's receive buffers cut to 8192 bytes with the MTU lowered so that each frame fills one, each connection's receive buffer held at 1 MiB, and every connection placed on a receive ring so that each ring carries a quarter. <span class="hc">On build 464, 21 runs of that setting gave 43.4 to 44.3; the highest single run of the day was 44.6.</span> <a href="#pinned">The configuration that is pinned now is first, below</a>, then <a href="#xeu464">build 464</a>: <a href="#claim">more than one thread receiving and copying on a connection</a>, <a href="#window">a larger receive window</a>, and <a href="#fq">pacing at the client</a> all reach the same ceiling, and <a href="#client">the client is not what holds it</a>. Then <a href="#xeu463">what it took to get here</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#loan">the loan, made ready for NVMe drives with SGLs</a>, with <a href="#nofactor">a setting the kernel now measures for itself</a>, then <a href="#tried">what was tried before it and did not help</a>, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
 
 
     <div class="metrics">
@@ -247,6 +247,49 @@
       </dl>
     </div>
   </header>
+
+  <section id="pinned">
+    <p class="eyebrow"><span>The settled configuration &middot; as of 11 October, build 464<br>it will change as the work goes on</span></p>
+    <h2>What is pinned now: the settings behind 44 GB/s</h2>
+    <p>This is the configuration every figure in the build 464 section was measured on, unless a row there says otherwise. Each value has been compared against its neighbours at least once; the last column says where it is kept, because not all of it survives a reboot yet.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:640px">
+      <thead><tr><th>Setting</th><th>Pinned value</th><th>Where it is kept</th></tr></thead>
+      <tbody>
+        <tr><td>Receive buffer size, <code>xeu</code> <code>rx_buf_size</code></td><td class="r">8192</td><td><code>modprobe.d/xeu.conf</code></td></tr>
+        <tr><td>IP header placement, <code>xeu</code> <code>rx_ip_align</code></td><td class="c">2</td><td><code>modprobe.d/xeu.conf</code></td></tr>
+        <tr><td>RSS table, <code>xeu</code> <code>rss_indir_size</code></td><td class="c">128</td><td><code>modprobe.d/xeu.conf</code></td></tr>
+        <tr><td>Refill threshold, <code>xeu</code> <code>rx_refill_thresh</code></td><td class="c">8</td><td class="x" style="white-space:normal">set by hand after each load; to be added to <code>xeu.conf</code></td></tr>
+        <tr><td>MTU on the server's port</td><td class="r">7792</td><td class="x" style="white-space:normal">set by hand, per port</td></tr>
+        <tr><td>Receive rings</td><td class="c">4 rings of 256</td><td class="x" style="white-space:normal">test harness, per port</td></tr>
+        <tr><td>Receive region</td><td class="c" style="white-space:normal">32768 pages, bound to the port</td><td class="x" style="white-space:normal">test harness, per port</td></tr>
+        <tr><td>Flow placement</td><td class="c" style="white-space:normal">four connections to a ring</td><td class="x" style="white-space:normal">test harness, at each mount</td></tr>
+        <tr><td>Budget, <code>svc_tcp_rx_budget_pages</code></td><td class="c">0 (copy mode)</td><td>the default</td></tr>
+        <tr><td>Held receive buffer, <code>svc_tcp_rx_rcvbuf</code></td><td class="r">1 MiB</td><td class="x" style="white-space:normal">test harness, per run; to go in <code>modprobe.d/sunrpc.conf</code></td></tr>
+        <tr><td>Linger, <code>svc_tcp_rx_linger_us</code></td><td class="c">50</td><td class="x" style="white-space:normal">test harness, per run; to go in <code>sunrpc.conf</code></td></tr>
+        <tr><td>Thread pools, <code>pools_per_node</code></td><td class="c">4</td><td class="x" style="white-space:normal">passed at module load; to go in <code>sunrpc.conf</code></td></tr>
+        <tr><td>Threads copying on a connection, <code>svc_tcp_rx_copy_threads</code></td><td class="c">0</td><td style="white-space:normal">the default. 2 is being compared (<a href="#claim">below</a>)</td></tr>
+        <tr><td>nfsd threads</td><td class="c" style="white-space:normal">512, all on CPUs 8 to 55</td><td style="white-space:normal">the tuning service, changed on 11 October to set 512 before it pins</td></tr>
+        <tr><td>nfsd write mode, <code>io_cache_write</code></td><td class="c">2 (direct)</td><td class="x" style="white-space:normal">test harness, per run; the tuning service sets 4, which has not been measured</td></tr>
+        <tr><td>Deferred skb frees, <code>net.core.skb_defer_max</code></td><td class="c">128</td><td>the default</td></tr>
+        <tr><td>Client</td><td class="c" style="white-space:normal">nconnect 16, 1 MiB wsize, MTU 9000, <code>fq_codel</code></td><td style="white-space:normal">nothing on the client is changed</td></tr>
+        <tr><td>Storage</td><td class="c" style="white-space:normal">six NVMe drives, MD raid0, XFS</td><td class="m" style="white-space:normal">as built</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>The two files that hold the module settings.</strong> The first exists without its last option; the second is not written yet.</p>
+    <div class="kind" style="margin:10px 0 18px">
+      <p class="who">/etc/modprobe.d/xeu.conf</p>
+      <div class="set" style="margin-top:0">options xeu rx_ip_align=2 rss_indir_size=128 rx_buf_size=8192 rx_refill_thresh=8</div>
+      <p class="who" style="margin-top:14px">/etc/modprobe.d/sunrpc.conf</p>
+      <div class="set" style="margin-top:0">options sunrpc pools_per_node=4 svc_tcp_rx_rcvbuf=1048576 svc_tcp_rx_linger_us=50</div>
+    </div>
+    <p><strong>All of it has been measured on one port and one client.</strong> The module settings apply to every port the driver has and to every NFS connection, not to one. A second port left at an MTU of 9000 would take two receive buffers to a frame, and the 1 MiB held buffer and the linger would apply to every client. Nothing has been run with two ports carrying load.</p>
+    <div class="matrix">
+      <div class="cell k">Whether two threads copying on a connection should be the default: level on rate, ten times the retransmits, under investigation</div><div class="cell v"><span class="pill pend">open</span></div>
+      <div class="cell k">The write mode a reboot leaves (4) against the one every run used (2)</div><div class="cell v"><span class="pill pend">not measured</span></div>
+      <div class="cell k">512 nfsd threads: about 120 to 150 are busy at 44 GB/s on one port. Kept at 512 for more than one port</div><div class="cell v"><span class="pill pend">not compared</span></div>
+      <div class="cell k">What the linger is worth alone in copy mode, for its fifth more CPU per GB</div><div class="cell v"><span class="pill pend">not measured</span></div>
+    </div>
+  </section>
 
   <section id="xeu464">
     <p class="eyebrow ok"><span>Newest &middot; 16 KiB &middot; tardis1 &middot; the Xsight card and six striped NVMe drives<br>11 October, build 464</span></p>
