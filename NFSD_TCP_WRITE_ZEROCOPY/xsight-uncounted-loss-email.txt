@@ -1,5 +1,5 @@
 To: <Xsight engineering contact>
-Subject: xeu on E1: frames dropped at the port's RX FIFO, uncounted, hold us at 44 GB/s (and four smaller questions)
+Subject: xeu on E1: frames dropped at the port's RX FIFO and counted nowhere (and five smaller questions)
 
 Hi <name>,
 
@@ -10,7 +10,7 @@ few percent, we have found frames that the client transmits and that
 appear in none of the counters `ethtool -S` shows for the port,
 neither as received nor as dropped. We have since found them: they
 are dropped at the port's RX FIFO, ahead of the rings. That is the
-main reason for this note. Four smaller questions follow it.
+main reason for this note. Five smaller questions follow it.
 
 
 1. Frames dropped at the port's RX FIFO, and not counted
@@ -103,8 +103,17 @@ port's RX FIFO overflows in bursts. It holds 2 MiB for this port's
 one traffic class, as eu_rx_fifos_init() sizes it and as we measured
 (16327 lines at its fullest, read 175 times a second): some 268 of
 our frames, 46 microseconds of traffic at this rate. It was under a
-sixteenth full in 72% of those readings. We believe this is what
-holds us at 44 GB/s.
+sixteenth full in 72% of those readings. That FIFO is where our
+loss is.
+
+It is not the whole of what holds the rate, though. When we pace the
+client's transmit (the fq qdisc) the FIFO's drops fall to between an
+eightieth and a fifth, at the same rate or a little less. And when we
+also hold each of the 16 connections to 23 Gbit/s, so that together
+they cannot offer more than 368 Gbit/s, the FIFO is never used (one
+line at most, no drop) and the rate falls from 44 GB/s to 38.7, with
+the rings tail-dropping 42 thousand frames. So with the bursts gone
+the limit is behind the FIFO, and lower.
 
 Our questions:
 
@@ -177,6 +186,21 @@ d. A flow filter that targets a ring. ntuple takes one rule, at
    location 0, and its target can only be a VF. Can a rule target an
    RX ring, and can there be more than one? The RSS table cannot
    separate two busy flows that share an entry; a filter could.
+
+e. Receive coalescing. The port has no hardware coalescing and no
+   header-data split (LRO and rx-gro-hw are off and fixed, TCP data
+   split is n/a), so all merging of received frames is the kernel's
+   software GRO, on the one CPU that serves each ring. It does a lot
+   here: in a run the four rings received 581 million frames and TCP
+   saw 93 million segments, about six frames merged into each. We
+   suspect that is why evenly paced traffic is carried worse than
+   bursts, as in the 38.7 GB/s run above: frames of 16 connections
+   arriving interleaved leave less of one connection together to
+   merge, and the per-packet work lands on those four CPUs. We have
+   not measured that yet. Can the card coalesce received TCP segments
+   of a flow, or split headers from payload so that payload can be
+   coalesced? It would take that sensitivity away, and it is the
+   same capability we asked about when we first spoke.
 
 We carry six small patches to xeu 2.0.1 that came out of this work:
 rx_ip_align (received data on a 4-byte boundary), a retry so that a
