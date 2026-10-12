@@ -3497,6 +3497,46 @@ to off.
 For Xsight, with the rest: what else has to be set for the port to
 send pause frames.
 
+### fq on the client again, with the FIFO's counters (11 October, 21:35 to 22:00)
+
+`fq` on the client's 48 queues as before, `rx_port_stats` on, the
+FIFO's fill read as fast as `ethtool -S` returns for 20 s of each
+cell (`fifo-fill.txt`), the copy made as the socket is read
+(`$L/xeu-16k-464-fqfifo-*`, driver `$L/xeu-16k-464-fqfifo-driver.sh`).
+`fq23` is `fq maxrate 23gbit`: no flow faster than 23 Gbit/s, so
+sixteen cannot offer more than 368 Gbit/s. The `fq_codel` rows at
+1 MiB and 2 MiB are cells from earlier in the evening.
+
+| client qdisc | held buffer | GB/s | FIFO drops | ring drops | retransmits | client held by the window | FIFO fill: most, 99th, 90th (of 16384) |
+|---|---|---|---|---|---|---|---|
+| fq_codel | 1 MiB | 44.1 | 13,038 | 100 | 16,326 | 96% | |
+| fq | 1 MiB | 42.2 | 167 | 143 | 4,365 | 97.5% | 8488, 2991, 1 |
+| fq_codel | 1.5 MiB | 44.5 | 284,663 | 72,854 | 382,813 | 60.8% | 16300, 13686, 5360 |
+| fq | 1.5 MiB | 43.5 | 32,531 | 38,421 | 78,266 | 87.6% | 16276, 9879, 1413 |
+| fq_codel | 2 MiB | 43.5 | 611,187 | 260,899 | 966,982 | | 16327, 14859, 6629 |
+| fq | 2 MiB | 43.7 | 109,821 | 215,498 | 384,777 | 63.3% | 16306, 10906, 1553 |
+| fq23 | 2 MiB | 38.7 | 0 | 41,860 | 48,867 | 95.9% | 1, 1, 1 |
+
+1. **`fq` keeps most of the load out of the FIFO.** Its drops fall to
+   an eightieth at 1 MiB, a ninth at 1.5 MiB and under a fifth at
+   2 MiB, and it runs emptier (a tenth full at the 90th percentile
+   where `fq_codel` has it a third full). The rate is the same or a
+   little lower, as before: the sender then waits on the window.
+2. **With every flow held to 23 Gbit/s the FIFO is never used** (1
+   line at most, no drop), **and the rate is 38.7 GB/s.** The rings
+   drop 42 thousand frames with nothing queued ahead of them, and the
+   client waits on the window 96% of the time under a 952 KiB
+   window. So with the bursts gone the limit is behind the FIFO, at
+   the rings and what drains them, and it is lower than with bursts.
+   Why evenly spaced frames from sixteen flows are carried worse than
+   bursts is not known; fewer segments of one flow arriving together
+   for GRO to merge is the first thing to look at.
+3. So the FIFO is where the loss is, and removing the loss there
+   does not raise the rate. The best pairing is still `fq_codel`
+   with 1 MiB: 44 GB/s for 13 thousand frames lost in 700 million.
+
+The client's port is back to `mq` with `fq_codel`.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
