@@ -103,8 +103,6 @@ function merge_configs()
 		echo "# arm64" > "$name";;
 	"ppc64le")
 		echo "# powerpc" > "$name";;
-	"riscv64")
-		echo "# riscv" > "$name";;
 	*)
 		echo "# $arch" > "$name";;
 	esac
