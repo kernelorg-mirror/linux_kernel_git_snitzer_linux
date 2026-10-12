@@ -3854,6 +3854,68 @@ rings back, and `iperf2port.sh` places them before it starts.
 `write through` with power states off (persistent), the client on
 build 469. Nothing exported or mounted.
 
+### nfsd's threads split by port, and who wakes whom (12 October, 14:00 to 15:00)
+
+**Threads split by port: not a gain.** A transport's pool among its
+node's pools is chosen by a hash of the transport, so a pool serves
+both ports. An experimental option, `pools_by_local` (the patch is
+`$L/pools-by-local.patch`, not committed), chooses it by the local
+address instead; with `pools_per_node=2` the two ports' addresses
+fall in different pools (192.168.1.211 in pool 1, 192.168.0.211 in
+pool 0), 256 threads each. At the two-port setting, in GB/s:
+
+| pools | threads | runs |
+|---|---|---|
+| 2, by port | both pools on CPUs 8-55 | 54.1, 54.4 |
+| 2, by port | port a's pool on 8-31, port b's on 32-55 | 55.3, 53.8 |
+| 4, by transport (as pinned) | all on 8-55 | 57.4 |
+
+A trace of the dequeues confirmed the split: each address was served
+only by its own 24 CPUs. A third split run was lost: a second batch
+was started while it ran and reloaded `sunrpc` under it.
+`swap-sunrpc.sh` now refuses while NFS connections are up
+(`DROP_CLIENTS=1` to override). The loaded `sunrpc` has the option,
+off; `pools_per_node` is back at 4.
+
+**The cycles in `_raw_spin_unlock_irqrestore` and
+`finish_task_switch` (8.0% and 4.6% in the 57.4 run).** They are
+not one thing:
+
+- 4.4% of all cycles are `xeu_rx_poll` re-enabling its interrupt at
+  the end of a poll (`enable_irq`), on the rings' CPUs: the cost
+  already put to Xsight as interrupt deferral and moderation.
+- 1.9% are unlocks in nfsd.
+- 3.4% are idle CPUs switching to a woken thread.
+
+**Who wakes whom.** 1.5 million context switches and 670 to 700
+thousand wakeups a second, against 56 thousand WRITEs: about 12
+wakeups for each WRITE. 95% of them wake an nfsd thread on an idle
+CPU of nfsd's, and 90% arrive by IPI from another CPU. By who asks
+for them (`sched_waking`, resolved against `/proc/kallsyms`; perf
+does not resolve the hand-built module's symbols):
+
+| share | from |
+|---|---|
+| 48% | an nfsd thread, in `svc_recv` and the thread's loop |
+| 33% | `tcp_data_ready` in the rings' softirq |
+| 9% | the direct write's completion (`iomap_dio_done`), one a WRITE |
+| 5% | `release_sock` after the reply is sent |
+
+The counters say why (per second, with tracing on, 54.3 GB/s):
+`svc_process` 62.8 thousand, `svcsock_tcp_recv` 859 thousand of
+which `svcsock_tcp_recv_short` 796 thousand, `svc_xprt_enqueue`
+1.21 million, `svcsock_data_ready` 1.10 million. A 1 MiB WRITE
+arrives in about 14 pieces, and each piece is a visit by a thread:
+it copies what is there, finds the record short, gives the
+connection up and sleeps. Half the time more has already arrived,
+so the thread giving it up wakes another to carry on. That is what
+the linger was for; it is 0 at this setting. Not done: a thread
+that keeps the connection while data is waiting, or `sk_rcvlowat`
+set from what the record still lacks so that a thread is woken for
+more than one piece. Either would save CPU; nfsd's CPUs are half
+idle and the copy is at 90% of what the machine can copy, so a gain
+in rate is not expected from it alone.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
