@@ -69,6 +69,27 @@ static inline fmode_t flags_to_mode(int flags)
 #define NFS_UNSPEC_RETRANS	(UINT_MAX)
 #define NFS_UNSPEC_TIMEO	(UINT_MAX)
 
+#define NFS_MAX_CONNECTIONS 128
+
+/*
+ * Number of transports to open to a pNFS data server.
+ *
+ * The dataserver_nconnect module parameter overrides the value inherited
+ * from the MDS mount when it is set; otherwise the MDS value is inherited.
+ * Both inputs are already bounded by NFS_MAX_CONNECTIONS - the mount option
+ * by fs_context.c, the module parameter by its own setter - so there is
+ * nothing left to clamp here.
+ */
+static inline unsigned int nfs_ds_nconnect(const struct nfs_client *mds_clp,
+					   unsigned int ds_nconnect)
+{
+	if (ds_nconnect)
+		return ds_nconnect;
+	if (mds_clp->cl_nconnect > 1)
+		return mds_clp->cl_nconnect;
+	return 0;
+}
+
 struct nfs_client_initdata {
 	unsigned long init_flags;
 	const char *hostname;			/* Hostname of the server */

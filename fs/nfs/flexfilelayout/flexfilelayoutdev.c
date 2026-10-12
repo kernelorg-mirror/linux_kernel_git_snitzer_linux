@@ -681,8 +681,21 @@ module_param(dataserver_timeo, uint, 0644);
 MODULE_PARM_DESC(dataserver_timeo, "The time (in tenths of a second) the "
 			"NFSv4.1  client  waits for a response from a "
 			" data server before it retries an NFS request.");
-module_param(dataserver_nconnect, uint, 0644);
-MODULE_PARM_DESC(dataserver_nconnect, "The maximum number of connections "
-			"the NFSv4.1 client opens to each data server, "
-			"capping the value inherited from the MDS nconnect "
-			"mount option.  0 (default) applies no cap.");
+static int param_set_dataserver_nconnect(const char *val,
+					 const struct kernel_param *kp)
+{
+	return param_set_uint_minmax(val, kp, 0, NFS_MAX_CONNECTIONS);
+}
+
+static const struct kernel_param_ops param_ops_dataserver_nconnect = {
+	.set = param_set_dataserver_nconnect,
+	.get = param_get_uint,
+};
+
+module_param_cb(dataserver_nconnect, &param_ops_dataserver_nconnect,
+		&dataserver_nconnect, 0644);
+MODULE_PARM_DESC(dataserver_nconnect, "The number of connections the "
+			"client opens to each data server, "
+			"overriding the value inherited from the MDS nconnect "
+			"mount option.  0 (default) inherits from the MDS.  "
+			"The maximum is 16.");
