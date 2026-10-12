@@ -27,6 +27,13 @@ if findmnt -t nfs,nfs4 -no TARGET | grep -q .; then
 	echo "NFS mounts on this host; unmount them first:"; findmnt -t nfs,nfs4 -no TARGET; exit 1
 fi
 
+# A client with connections up would lose them, and a run in progress its
+# server: refuse unless told that is meant.
+n=$(ss -Htn state established '( sport = :2049 )' | wc -l)
+if [ "$n" -gt 0 ] && [ -z "${DROP_CLIENTS:-}" ]; then
+	echo "$n NFS connections are up; DROP_CLIENTS=1 to drop them"; exit 1
+fi
+
 was=$(for u in $UNITS; do systemctl is-active -q $u && echo $u; done)
 echo "running sunrpc: $(cat /sys/module/sunrpc/srcversion); active: "$was
 
