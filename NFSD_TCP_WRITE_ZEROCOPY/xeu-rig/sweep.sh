@@ -24,8 +24,8 @@
 #     PRP_DIR=/hs/stripe/zcbudget SGL_BACKING=/hs/stripe/zcbudget-nvmet.img
 # PRP_STORAGE=sgl says the file system of PRP_DIR is on a device that takes
 # arbitrary pieces (no virt_boundary_mask), so its loans are written direct.
-PRP_DIR=${PRP_DIR:-/hs/nvme0/zcbudget}
-SGL_BACKING=${SGL_BACKING:-/hs/nvme1/zcbudget-nvmet.img}
+PRP_DIR=${PRP_DIR:-/hs/stripe/zcbudget}
+SGL_BACKING=${SGL_BACKING:-/hs/stripe1/zcbudget-nvmet.img}
 OUT=${1:?outdir}; PLAN=$(readlink -f "${2:?plan file}")	# cd below: a relative plan would be lost
 mkdir -p $OUT; touch $OUT/done
 [ -e $RG ] || { echo "no region: run bringup.sh first"; exit 1; }

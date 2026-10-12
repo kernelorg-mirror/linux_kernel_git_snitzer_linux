@@ -184,6 +184,17 @@ all on 8-55. They hold for every port and every NFS connection.
 where it wrote 0. Not in a file yet: the port's MTU of 7792, its
 rings and region.
 
+**Two stripes of four drives (2026-10-11, 22:40), for runs on both
+ports**: `/dev/md0` (`nvme0n1` to `nvme3n1`) on `/hs/stripe` and
+`/dev/md1` (`nvme4n1` to `nvme7n1`) on `/hs/stripe1`, raid0 with a
+1 MiB chunk, XFS, `zcbudget` in each. `/hs/nvme0` and `/hs/nvme1`
+were wiped for it (Mike) and are out of `/etc/fstab` and
+`/etc/exports`. After a boot: `mdadm --assemble --scan`, then `mount
+-o noatime` each. Locally each takes 41 to 44 GB/s, alone or
+together, **which is about what one port carries: run the pinned
+setting again on four drives before comparing two ports with one.**
+"Two stripes of four drives" in `../XEU_CONVERGENCE.md`.
+
 **`io_cache_write` 2 is pinned (2026-10-11, 19:20)**: one cell with 4,
 which the tuning service's profile set, carried 28.6 GB/s against 44:
 nfsd syncs every 1 MiB WRITE where the client's COMMIT syncs 8 MiB.
@@ -1495,7 +1506,9 @@ drop, on each storage.
 
 - Load goes only to the harness's own mount of tardis1 on the client.
   Never to the client's other mounts, never to tardis1's other exports.
-- Only `/hs/nvme0` and `/hs/nvme1`, as files. No drive is reformatted.
+- (2026-10-11: `/hs/nvme0` and `/hs/nvme1` are gone, see "Two
+  stripes" at the top.) Until then: only `/hs/nvme0` and `/hs/nvme1`,
+  as files; no drive is reformatted.
 - Only `enp161s0f0`. **`enp164s0f0` carries another client's
   (192.168.0.105) connections and is never touched, so `xeu` is never
   reloaded.** A reboot is Mike's to do.
