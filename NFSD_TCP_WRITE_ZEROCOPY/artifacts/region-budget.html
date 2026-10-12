@@ -329,13 +329,17 @@
     <h3 style="margin-top:26px" id="twoflush">12 October: no cache flush to the drives</h3>
     <p>The writers make 8 MiB direct writes. The NFS client sends each as eight 1 MiB WRITEs and then one COMMIT, and with the export <code>sync</code> every COMMIT flushed the write cache of all four drives of the stripe: 3,550 flushes a second to each drive in a one-port run. A drive that is flushing that often writes 8.7 GB/s where it otherwise writes 10.3 to 10.8, so four of them held one port at 36 GB/s.</p>
     <p>From 12 October the rig runs as enterprise storage with a protected cache does: Linux is told the drives have no volatile write cache (<code>write through</code>), so it sends no flush, and the drives' own caches stay enabled. The export stays <code>sync</code>.</p>
+    <p>What that did to the rate, in GB/s:</p>
     <div class="tbl-wrap"><table class="q" style="min-width:560px">
-      <thead><tr><th>Best run, and the runs behind it</th><th>Drives flushing</th><th>No flush sent</th></tr></thead>
+      <thead><tr><th>Ports loaded</th><th>Cache flushes</th><th>Best run</th><th>All runs</th><th>Runs</th></tr></thead>
       <tbody>
-        <tr><td>Two ports, the two-port settings</td><td class="c">54.2 GB/s (seven runs on the earlier client kernel, 48.1 to 54.2; three on the client's new one, 48.1 to 52.1)</td><td class="r">58.5 GB/s (seven runs, 45.0 to 58.5)</td></tr>
-        <tr><td>One port, the one-port settings, four drives</td><td class="c">36.4 GB/s (seven runs, 28.8 to 36.4)</td><td class="c">42.2 GB/s (six runs, 18.1 to 42.2), the drives 96 to 100% busy in each</td></tr>
+        <tr><td>Two</td><td>sent on every COMMIT</td><td class="c">54.2</td><td class="c">48.1 to 54.2</td><td class="c">10</td></tr>
+        <tr><td>Two</td><td>not sent</td><td class="r">58.5</td><td class="c">45.0 to 58.5</td><td class="c">7</td></tr>
+        <tr><td>One</td><td>sent on every COMMIT</td><td class="c">36.4</td><td class="c">28.8 to 36.4</td><td class="c">7</td></tr>
+        <tr><td>One</td><td>not sent</td><td class="r">42.2</td><td class="c">18.1 to 42.2</td><td class="c">6</td></tr>
       </tbody>
     </table></div>
+    <p>Not sending the flush is worth about 4 GB/s on two ports and 6 on one. The one-port runs spread widely because the four drives are 96 to 100% busy in every one of them and their own speed varies, as below.</p>
     <p>In the 58.5 GB/s run the ports carried 29.0 and 29.4 GB/s, with no drops at the card's FIFO, 92 at the rings and 96 retransmits in 70 seconds. The drives were 71 to 73% busy at 7.4 GB/s each, the ring CPUs 47 to 50% and nfsd's CPUs 49%.</p>
     <div class="matrix">
       <div class="cell k">One port is limited by its four drives in every run, and how fast the drives are changes. After minutes of sustained writing each wrote 6.3 GB/s while 99% busy, and 4 GB/s in a local test with no NFS; after about three minutes of rest they were back at 11. No thermal throttling is recorded. It looks like the drives' fast write cache running out, which is not proven</div><div class="cell v"><span class="pill pend">the drives</span></div>
