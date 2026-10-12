@@ -215,21 +215,22 @@
 <div class="wrap">
 
   <header>
-    <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 463 &middot; 10&nbsp;October&nbsp;2026</p>
-    <h1>16 KiB pages, 8192-byte receive buffers and an MTU of 7792: <span class="ok">43.3 GB/s of NFS WRITEs inside the E1's 32 MiB L3 cache.</span></h1>
-    <p class="lede"><span class="hl">An NFS server on the E1 now takes 43.3 GB/s of durable WRITEs from one client</span>: sixteen connections over one port of the Xsight card, copied once on arrival and written direct to six striped NVMe drives. The wire itself carries 48 GB/s to a receiver that stores nothing. Two days earlier the same copy carried 25.4. The receive memory in use stays at 24 to 26 MiB, inside the CPU's 32 MiB cache. Three settings do it together: the card's receive buffers cut to 8192 bytes with the MTU lowered so that each frame fills one, each connection's receive buffer held at 1 MiB, and every connection placed on a receive ring so that each ring carries a quarter. <span class="hc">Two traced runs gave 43.2 and 43.3.</span> <a href="#xeu463">What it took is summarized first, below</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#loan">the loan, made ready for NVMe drives with SGLs</a>, with <a href="#nofactor">a setting the kernel now measures for itself</a>, then <a href="#tried">what was tried before it and did not help</a>, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
+    <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 464 &middot; 11&nbsp;October&nbsp;2026</p>
+    <h1>16 KiB pages, 8192-byte receive buffers and an MTU of 7792: <span class="ok">44 GB/s of NFS WRITEs inside the E1's 32 MiB L3 cache.</span></h1>
+    <p class="lede"><span class="hl">An NFS server on the E1 now takes 44 GB/s of durable WRITEs from one client</span>: sixteen connections over one port of the Xsight card, copied once on arrival and written direct to six striped NVMe drives. That is 92% of what the wire carries to a receiver that stores nothing (48 GB/s), and three days earlier the same copy carried 25.4. The receive memory in use stays at 24 to 25 MiB, inside the CPU's 32 MiB cache. Three settings do it together: the card's receive buffers cut to 8192 bytes with the MTU lowered so that each frame fills one, each connection's receive buffer held at 1 MiB, and every connection placed on a receive ring so that each ring carries a quarter. <span class="hc">On build 464, 21 runs of that setting gave 43.4 to 44.3; the highest single run of the day was 44.6.</span> <a href="#xeu464">Build 464 is first, below</a>: more than one thread receiving and copying on a connection, a larger receive window, and pacing at the client all reach the same ceiling. Then <a href="#xeu463">what it took to get here</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#loan">the loan, made ready for NVMe drives with SGLs</a>, with <a href="#nofactor">a setting the kernel now measures for itself</a>, then <a href="#tried">what was tried before it and did not help</a>, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
 
 
     <div class="metrics">
-      <div class="metric"><div class="n gain">43.3 GB/s</div><div class="l">durable NFS WRITEs,<br>two runs (43.2 the other)</div></div>
-      <div class="metric"><div class="n gain">26 MiB</div><div class="l">receive memory used,<br>of 32 MiB L3 cache</div></div>
-      <div class="metric"><div class="n gain">1 : 1</div><div class="l">one receive buffer to a frame,<br>two to a 16 KiB page</div></div>
-      <div class="metric"><div class="n">25.4 &rarr; 43.3</div><div class="l">GB/s, the same copy,<br>8 to 10 October</div></div>
+      <div class="metric"><div class="n gain">44 GB/s</div><div class="l">durable NFS WRITEs,<br>43.4 to 44.3 over 21 runs</div></div>
+      <div class="metric"><div class="n gain">25 MiB</div><div class="l">receive memory used,<br>of 32 MiB L3 cache</div></div>
+      <div class="metric"><div class="n gain">92%</div><div class="l">of the 48 GB/s the wire<br>carries with no NFS</div></div>
+      <div class="metric"><div class="n">25.4 &rarr; 44</div><div class="l">GB/s, the same copy,<br>8 to 11 October</div></div>
     </div>
 
     <div class="prov">
       <p class="pl">Runs behind this page</p>
       <dl class="runs">
+        <dt>11 Oct &middot; 16 KiB</dt><dd><strong>Build 464</strong> on tardis1: the same card, drives and client, with the receive window measured by the kernel. <code>7.1.13-21.hs.464.loanpages_pool</code></dd>
         <dt>10 Oct &middot; 16 KiB</dt><dd><strong>Build 463</strong> on tardis1: the Xsight card, six striped NVMe drives, kmod-xsight 2.0.1-6. <code>7.1.13-21.hs.463.loanpages_pool</code></dd>
         <dt>9 Oct &middot; 16 KiB</dt><dd><strong>Builds 461 and 462</strong> on tardis1: the Xsight card and six striped NVMe drives, with the block-layer alignment change. <code>7.1.13-21.hs.461.loanpages_pool</code></dd>
         <dt>8 Oct &middot; 16 KiB</dt><dd><strong>Build 459</strong> on tardis1: the Xsight card and real NVMe. <code>7.1.13-21.hs.459.loanpages_pool</code></dd>
@@ -247,8 +248,77 @@
     </div>
   </header>
 
+  <section id="xeu464">
+    <p class="eyebrow ok"><span>Newest &middot; 16 KiB &middot; tardis1 &middot; the Xsight card and six striped NVMe drives<br>11 October, build 464</span></p>
+    <h2>Build 464 holds 44 GB/s, and three ways of draining a connection faster reach the same ceiling</h2>
+    <div class="verdict gain">
+      <p class="big">Build 464 repeats the best setting at <em>43.4 to 44.3 GB/s</em> over 21 runs. The client is already putting 355 Gbit/s on the wire, so about 3.5 GB/s is all that is left.</p>
+      <p><strong>The setting is the one from 10 October</strong>: 8192-byte receive buffers at an MTU of 7792, four rings of 256, a 1 MiB held buffer, sixteen placed connections. Build 464 has the whole stack built in, and the kernel now measures what a connection's receive buffer holds and sets the window from it (487 KiB under a 1 MiB buffer here). The first runs gave 43.0 and 42.5. Pinning all 512 nfsd threads to the CPUs away from the rings, where only the first 128 had been pinned, coincides with the rise to 44; that was not run as its own comparison.</p>
+      <p><strong>Then the question was what limits a connection.</strong> A profile showed the copy being made with the connection's socket locked, and the client waiting on the server's window 96% of the time. Three changes went after that, and a look at the client followed.</p>
+    </div>
+
+    <h3 style="margin-top:26px" id="claim">More than one thread receiving and copying on a connection</h3>
+    <p>nfsd reads a connection with one thread at a time, and that thread copies each WRITE's data out of the receive pages while it holds the socket. Two changes take the copy out of the way, both off unless set:</p>
+    <div class="delta">
+      <div class="mark">1</div>
+      <div class="body"><h3>The copy made with the socket unlocked<span class="tag new">sunrpc</span></h3>
+      <p>The thread takes its own reference to the received data and drops the socket lock while it copies, so the network stack can queue what arrives meanwhile.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">2</div>
+      <div class="body"><h3>Claim, then copy: <code>svc_tcp_rx_copy_threads</code><span class="tag new">sunrpc</span></h3>
+      <p>The thread only claims a WRITE's data while it reads the socket, which returns the window to the client at once, and copies afterwards. With 2 or more it gives the connection up before it copies, so another thread reads the next WRITE while the first is still copying.</p></div>
+    </div>
+    <div class="tbl-wrap"><table class="q" style="min-width:620px">
+      <thead><tr><th>1 MiB held buffer, 16 connections</th><th>GB/s</th><th>Client held by the window</th><th>Retransmits a run</th></tr></thead>
+      <tbody>
+        <tr><td>Copied as the socket is read, locked</td><td class="c">43.6</td><td class="c">97%</td><td class="c">7,600</td></tr>
+        <tr><td>Copied as the socket is read, unlocked</td><td class="c">43.5 to 44.3</td><td class="c">92% to 96%</td><td class="c">13,000 to 22,000</td></tr>
+        <tr><td>Claimed, one thread</td><td class="c">43.7 &middot; 43.7</td><td class="c">91%</td><td class="x">76,000 &middot; 145,000</td></tr>
+        <tr><td>Claimed, two threads</td><td class="c">44.0 &middot; 43.6</td><td class="r">85%</td><td class="x">166,000 &middot; 187,000</td></tr>
+        <tr><td>Claimed, 3, 4 and 8 threads</td><td class="c">43.7 to 44.3</td><td class="r">81% to 89%</td><td class="x">139,000 to 262,000</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>It works and it does not raise the rate.</strong> The window is shut less, as intended, and the rate stays where it was. Retransmits rise about ten times, which is not yet explained. Data written with 1, 2 and 8 threads was read back and checksummed without error. Claiming stays off: it will be used only if a direct comparison shows a benefit, and six pairs of runs with 0 and 2 threads, nothing else varied, are under way.</p>
+    <p class="note">One thing may yet count for it. Three of the runs that copied as the socket was read had hundreds of retransmission timeouts and carried 34 to 40 GB/s; none of the claiming runs did. Fourteen further runs watched every second did not show another, so what happens in such a run is not known.</p>
+
+    <h3 style="margin-top:26px" id="window">A larger window, with and without claiming</h3>
+    <div class="tbl-wrap"><table class="q" style="min-width:640px">
+      <thead><tr><th>Held buffer (window)</th><th>GB/s</th><th>GB/s, two threads claiming</th><th>Client held by the window</th><th>Frames dropped at the rings</th><th>Receive memory</th></tr></thead>
+      <tbody>
+        <tr><td>1 MiB (487 KiB)</td><td class="c">43.5 to 44.3</td><td class="c">44.0 &middot; 43.6</td><td class="x">96%</td><td class="r">about 100</td><td class="r">24 to 25 MiB</td></tr>
+        <tr><td>1.5 MiB (714 KiB)</td><td class="r">44.6 &middot; 44.3</td><td class="c">43.9 &middot; 44.1</td><td class="c">58%</td><td class="x">34,000</td><td class="c">30 MiB</td></tr>
+        <tr><td>2 MiB (952 KiB)</td><td class="c">44.4 &middot; 44.3</td><td class="c">44.0 &middot; 44.1</td><td class="r">38%</td><td class="x">195,000</td><td class="x">37 MiB</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>The window is not the limit.</strong> Opening it takes the client from waiting on it 96% of the time to 38%, and the rate moves by a few tenths, no more than two runs of one setting differ. What takes the window's place is loss: the rings drop two thousand times as many frames and the client retransmits fifty times as much. 44.6 GB/s at 1.5 MiB is the highest run so far. It is not adopted, since it gains little and brings the drops with it.</p>
+
+    <h3 style="margin-top:26px" id="client">The client is not the limit either</h3>
+    <p>Counters and a profile taken on the client during two runs:</p>
+    <div class="matrix">
+      <div class="cell k">On the wire from the client: 355 to 363 Gbit/s, which is 92% to 94% of what sixteen plain TCP streams put on this port</div><div class="cell v"><span class="pill yes">nearly full</span></div>
+      <div class="cell k">Every connection has 2 to 3 MB waiting unsent in its socket, and a WRITE waits 11.6 ms for its connection against 3.1 ms for its reply</div><div class="cell v"><span class="pill yes">offers more</span></div>
+      <div class="cell k">A third of the client's CPUs are idle and no thread uses a whole one. No transmit queue stopped, no pause frames, no discards</div><div class="cell v"><span class="pill yes">not saturated</span></div>
+      <div class="cell k">The client copies everything it sends: 16% of its cycles, a quarter of what is not idle. The largest item there, and not what holds the rate today</div><div class="cell v"><span class="pill pend">noted</span></div>
+    </div>
+
+    <h3 style="margin-top:26px" id="fq">Pacing at the client: <code>fq</code> against <code>fq_codel</code></h3>
+    <p>The client's port queues with <code>fq_codel</code>, which is the default and does not pace: a connection sends whatever its windows allow in one burst. <code>fq</code> spreads the same data out at TCP's pacing rate. If bursts are what the rings drop, pacing should let a larger window through.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:640px">
+      <thead><tr><th>Held buffer</th><th>GB/s, <code>fq_codel</code></th><th>GB/s, <code>fq</code></th><th>Ring drops, <code>fq_codel</code></th><th>Ring drops, <code>fq</code></th><th>Held by the window, <code>fq</code></th></tr></thead>
+      <tbody>
+        <tr><td>1 MiB</td><td class="r">43.9 &middot; 44.2</td><td class="x">42.0 &middot; 42.2</td><td class="c">about 100</td><td class="r">11 &middot; 36</td><td class="x">98%</td></tr>
+        <tr><td>1.5 MiB</td><td class="r">44.6 &middot; 44.3</td><td class="c">43.2 &middot; 43.6</td><td class="x">34,000</td><td class="c">14,000</td><td class="c">87%</td></tr>
+        <tr><td>2 MiB</td><td class="c">44.4 &middot; 44.3</td><td class="c">44.4 &middot; 44.2</td><td class="x">195,000</td><td class="c">73,000</td><td class="c">54%</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Pacing removes most of the loss and none of the ceiling.</strong> Drops and retransmits fall to between a tenth and two fifths at every size. The rate is lower at 1 MiB and 1.5 MiB and level at 2 MiB, because a paced sender spends longer waiting on the window.</p>
+    <p><strong>What it means.</strong> The same 44 GB/s is reached three ways: with a window small enough that the sender waits on it, with a larger one that lets it lose frames, and with a larger one paced in between. So the limit is neither the window, the loss nor the bursts alone, and the port is within 8% of full. For a deployment it means the client needs nothing changed: the default <code>fq_codel</code> with a 1 MiB held buffer is the best pairing and the one that stays inside the cache. A client that does pace with <code>fq</code> gives up about 2 GB/s at 1 MiB, and gets it back with a 2 MiB held buffer at the cost of 35 MiB of receive memory, which is more than the L3 cache.</p>
+    <p class="note">Two runs of 120 seconds for each figure pair. The client's port was put back to <code>fq_codel</code>. Also tried on build 464 and level or worse: eight rings of 128 in place of four of 256 (42.2 and 41.9). Deferring the port's interrupts stopped it receiving until it was taken down and up, a question for Xsight. The account is "Build 464" to "fq on the client" in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>.</p>
+  </section>
+
   <section id="xeu463">
-    <p class="eyebrow ok"><span>Newest &middot; 16 KiB &middot; tardis1 &middot; the Xsight card and six striped NVMe drives<br>10 October, build 463</span></p>
+    <p class="eyebrow ok"><span>16 KiB &middot; tardis1 &middot; the Xsight card and six striped NVMe drives<br>10 October, build 463</span></p>
     <h2>43.3 GB/s copied and written direct, in 24 to 26 MiB of the 32 MiB cache</h2>
     <div class="verdict gain" id="depth">
       <p class="big">10 October: 8192-byte receive buffers with the MTU at 7792, a 1 MiB held buffer and every connection placed on a ring. <em>43.2 and 43.3 GB/s</em>, in 24 to 26 MiB of the 32 MiB cache.</p>
@@ -1104,7 +1174,7 @@
   <footer>
     <span class="r">NFSD receive region and budget &middot; 4, 16 and 64 KiB status</span><br>
     In-tree: <code>NFSD_TCP_WRITE_ZEROCOPY/transplant/</code> (README.md &middot; RESULTS.md &middot; results/runs/4KiB-7.1.13-20.hs.458.tsv &middot; results/16KiB.tsv &middot; results/64KiB.tsv), <code>slipstream/</code>, <code>on-die-receive-copy/SPEC.md</code>, <code>xeu-SGL-compat-receive-placement/</code><br>
-    Series: David Flynn &middot; Mike Snitzer &middot; Hammerspace &middot; 2026-10-10
+    Series: David Flynn &middot; Mike Snitzer &middot; Hammerspace &middot; 2026-10-11
   </footer>
 
 </div>
