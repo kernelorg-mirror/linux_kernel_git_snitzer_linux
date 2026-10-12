@@ -3,14 +3,13 @@ Subject: xeu on E1: frames dropped at the port's RX FIFO and counted nowhere (an
 
 Hi <name>,
 
-We are now carrying about 44 GB/s of NFS writes into one E1 port,
-which is 92% of what the wire carries with no NFS at all. Thank you
-for the guidance that got us there. Looking at what holds the last
-few percent, we have found frames that the client transmits and that
-appear in none of the counters `ethtool -S` shows for the port,
-neither as received nor as dropped. We have since found them: they
-are dropped at the port's RX FIFO, ahead of the rings. That is the
-main reason for this note. Five smaller questions follow it.
+We are now carrying 44.6 GB/s of NFS writes into one E1 port at best
+(runs of the same setting are between 43.4 and 44.6), which is 92% of
+what the wire carries with no NFS at all. Thank you for the guidance
+that got us there. Looking at what holds the last few percent, we
+found that the port's RX FIFO, ahead of the rings, drops frames, and
+that nothing `ethtool -S` shows for the port counts them. That is
+the main reason for this note. Five smaller questions follow it.
 
 
 1. Frames dropped at the port's RX FIFO, and not counted
@@ -19,101 +18,85 @@ The setup: one E1 port (xeu 2.0.1 with our local patches, including
 rx_buf_size=8192) on an arm64 server with 16 KiB pages, 4 RX rings of
 256 entries, MTU 7792. The client is an x86 machine with a 400G mlx5
 port, cabled to the E1 port, writing over NFS on 16 TCP connections.
-No pause frames are enabled at either end.
 
-What we measured. We took the counters at both ends with the link
-idle, ran one 120-second test, and took them again with the link
-idle. The E1's ring counters had been zeroed by taking the port down
-and up before the test. On the client we used the port's physical
-transmit count (mlx5 tx_packets_phy). On the E1 we summed, over the
-four rings, rx_packets, rx_hw_tail_drop_packets and
-rx_hw_pp_drop_packets from `ethtool -S`. rx_hw_mru_exceed_packets,
-rx_hw_other_packets and rx_sw_dropped were 0 throughout.
+What we found. `ethtool -S` on the port lists what each ring was
+handed and what was dropped at the ring, and nothing for the port
+itself. The SDK built into the module has
+xsl_rm_eu_rx_port_counters_get(), which returns the port's RX FIFO
+counters (struct rm_rx_port_ctr: tc_drop_packets and tc_drop_bytes,
+tc_curr_lines and tc_curr_packets for each traffic class, and
+fc_curr_lines). xeu does not call it. We wrote a patch that reads it
+with the rest of the statistics and lists those counters in
+`ethtool -S`. The first read after boot returned 12,015,394 frames
+dropped in traffic class 0.
 
-                            run A           run B
-  client transmitted        695,385,986     703,254,608
+With the patch, every frame of a run is accounted for:
+
+                              run 1           run 2
+  client transmitted          719,376,635     694,859,522
   E1 rings: received
-    + tail drop + pp drop   695,380,833     703,019,906
-  not accounted for               5,153         234,702
-  TCP retransmits (client)       10,492         240,733
-  ring tail drops                    78             233
+    + tail drop + pp drop     719,365,190     694,626,015
+  never reached a ring             11,445         233,507
+  RX FIFO drops, class 0           13,038         234,332
+  ring tail drops                   1,462           7,501
+  TCP retransmits (client)         16,326         244,687
 
-The two ends agree to within about 100 packets while idle, so the
-difference is not a matter of when the counters were read.
+Each run is 120 seconds at about 44 GB/s. We took the counters at
+both ends with the link idle, ran the test, and took them again with
+the link idle; the two ends agree to within about 100 packets while
+idle. The frame counts cover the test's short warm-up as well as its
+120 seconds (the rings dropped 100 and 261 frames in the 120 seconds
+themselves); the retransmits are of the 120 seconds. The ring
+counters had been zeroed by taking the port down and up. On the
+client we used the port's physical transmit count (mlx5
+tx_packets_phy). rx_hw_mru_exceed_packets, rx_hw_other_packets and
+rx_sw_dropped were 0 throughout.
 
-The two runs carry the same data at the same rate (43.7 and 44.2
-GB/s). They differ in one setting of our NFS server. In run B the
-server returns TCP receive window to the client sooner, so it sends
-about 65% more ACKs (51 million in the run against 31 million), and
-the client's 16 connections spend less time waiting for window and
-send closer together.
+The two runs carry the same data at the same rate and differ in one
+setting of our NFS server. In run 2 the server returns TCP receive
+window to the client sooner, so it sends about 65% more ACKs (51
+million in the run against 31 million), and the client's 16
+connections spend less time waiting for window and send closer
+together.
 
-Why we think the frames are lost at or ahead of the rings, and not in
-Linux:
+Nothing else loses these frames:
 
-- From our reading of xeu_drv.c, rx_packets is not counted by the
-  driver's poll loop. It is the hardware's count of frames forwarded
-  to the ring (fwd_packets from xsl_rm_eu_rx_ring_stats_get()). So a
-  frame missing from it never reached a ring.
-- The client's retransmissions match the missing frames in both runs,
-  and the server reports almost none of them as duplicates (8 DSACKs
-  in a run). They are filling real holes.
-- Nothing in the server's network stack drops them. The TCP receive
+- rx_packets is not counted by the driver's poll loop. It is the
+  hardware's count of frames forwarded to the ring (fwd_packets from
+  xsl_rm_eu_rx_ring_stats_get()), so a frame missing from it never
+  reached a ring.
+- The server's network stack does not drop them. The TCP receive
   queue, backlog, out-of-order and zero-window drop counters are all
   0, there are no checksum errors, and a trace of every skb freed
   with a drop reason shows a few hundred a run, the same in both.
-- The client's port shows no transmit drops or discards.
+- The client's retransmissions fill real holes: the server reports
+  almost none of them as duplicates (8 DSACKs in a run).
+- The client's port shows no transmit drops or discards, and
+  `xsllink get --fec-hist` shows no uncorrectable codeword on either
+  E1 port (NCCW 0).
 
-We see the same pattern whenever the sender is less held back. With a
-larger receive window (and the server setting of run A) the client
-retransmits 360 to 900 thousand segments a run while the rings report
-32 to 200 thousand tail drops. Pacing the client's transmit (the fq
-qdisc) reduces both.
+How the FIFO behaves. It holds 2 MiB for this port's one traffic
+class, as eu_rx_fifos_init() sizes it and as we measured: read 175
+times a second, its fill reached 16327 lines of 16384. That is some
+268 of our frames, 46 microseconds of traffic at this rate. It was
+under a sixteenth full in 72% of those readings and over three
+quarters full in 2%. So it is nearly empty most of the time and
+overflows in bursts.
 
-What we cannot see. `ethtool -S` on the port has only the per-ring
-counters and four dev_* counters. There are no MAC, PCS/FEC or
-port-level receive counters, so we cannot tell a frame the MAC
-rejected from one the port dropped before choosing a ring. The
-client's end of the link reports FEC corrections on its own receive
-lanes (about 1.7 million corrected bits a second, none uncorrected).
+It gets worse whenever the sender is less held back. With a larger
+TCP receive window on the server (and the setting of run 1) the FIFO
+dropped 611 thousand frames in a run and the rings 261 thousand, for
+967 thousand retransmits.
 
-In the SDK built into the module we found
-xsl_rm_eu_rx_port_counters_get(), which returns struct rm_rx_port_ctr
-with per-priority tc_drop_packets and tc_drop_bytes, tc_curr_lines,
-tc_curr_packets and fc_curr_lines. xeu does not call it. It looks as
-if it may be the missing count: the RM reads it from the port's RX
-FIFO (eu_rx_fifo_get_port_counters()), ahead of the rings. We have
-written a patch that reads it with the rest of the statistics and
-lists those counters in `ethtool -S`, and with it every frame is
-accounted for:
-
-                            run C           run D
-  client transmitted        719,376,635     694,859,522
-  E1 rings: received
-    + tail drop + pp drop   719,365,190     694,626,015
-  not accounted for              11,445         233,507
-  RX FIFO drops, class 0         13,038         234,332
-  TCP retransmits (client)       16,326         244,687
-
-(C and D are a second pair of runs, like A and B.) The first read of
-the counter after boot returned 12,015,394 frames dropped in traffic
-class 0. Its fill reached 8139 lines and 133 packets, and was 0 at
-more than half of our readings, which were 2 seconds apart. So the
-port's RX FIFO overflows in bursts. It holds 2 MiB for this port's
-one traffic class, as eu_rx_fifos_init() sizes it and as we measured
-(16327 lines at its fullest, read 175 times a second): some 268 of
-our frames, 46 microseconds of traffic at this rate. It was under a
-sixteenth full in 72% of those readings. That FIFO is where our
-loss is.
-
-It is not the whole of what holds the rate, though. When we pace the
-client's transmit (the fq qdisc) the FIFO's drops fall to between an
-eightieth and a fifth, at the same rate or a little less. And when we
-also hold each of the 16 connections to 23 Gbit/s, so that together
-they cannot offer more than 368 Gbit/s, the FIFO is never used (one
-line at most, no drop) and the rate falls from 44 GB/s to 38.7, with
-the rings tail-dropping 42 thousand frames. So with the bursts gone
-the limit is behind the FIFO, and lower.
+The FIFO is where our loss is, but it is not the whole of what holds
+the rate. When we pace the client's transmit (the fq qdisc) the
+FIFO's drops fall to between an eightieth and a fifth, at the same
+rate or a little less. And when we also hold each of the 16
+connections to 23 Gbit/s, so that together they cannot offer more
+than 368 Gbit/s, the FIFO is never used (one line at most, no drop)
+and the rate falls from 44 GB/s to 38.7, with the rings tail-dropping
+42 thousand frames. So with the bursts gone the limit is behind the
+FIFO, and lower.
 
 Our questions:
 
@@ -133,22 +116,24 @@ d. `xsllink get --fec-hist` shows no uncorrectable codewords on
    either port (NCCW 0), so we take the link itself to be clean. Are
    there MAC receive counters as well (frames received, FCS errors)
    that the driver could list?
-e. We could not get the port to send pause frames. With
-   `ethtool -A <port> tx on` (which xeu passes to xsl_rm_eu_fc_set()
-   with xoff at 12288 lines and xon at 10240) and the client set to
-   obey pause, the FIFO's fill passed xoff in about 2% of our
-   readings and reached 16327 lines, it went on dropping, and the
-   client's port counted no pause frame received in four runs. With
+e. We could not get the port to send pause frames. Pause is off at
+   both ends in everything above. With `ethtool -A <port> tx on`
+   (which xeu passes to xsl_rm_eu_fc_set() with xoff at 12288 lines
+   and xon at 10240) and the client set to obey pause, the FIFO's
+   fill passed xoff as before, it went on dropping, and the client's
+   port counted no pause frame received in four runs. With
    `rx on tx on` and the port taken down and up, the rings stopped
    tail-dropping and the FIFO dropped everything instead (1.36
    million frames in a run), still with no pause frame on the wire.
    What else has to be set for the port to send pause, and would you
    expect it to help here?
 
-One limit on what we know: each table is one run of each kind. The
-retransmit counts, which track the loss, repeat across about twenty
-runs (10 to 16 thousand a run for A and C, 146 to 248 thousand for B
-and D).
+One limit on what we know: the table is one run of each kind. A pair
+of runs before we had the FIFO's counters showed the same shortfall
+at the rings (5,153 and 234,702 frames), and the retransmit counts,
+which track the loss, repeat across about twenty runs (10 to 16
+thousand a run for the first setting, 146 to 248 thousand for the
+second).
 
 
 2. Smaller questions
