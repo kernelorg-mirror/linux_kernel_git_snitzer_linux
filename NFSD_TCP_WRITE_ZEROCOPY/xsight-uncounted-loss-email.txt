@@ -229,14 +229,20 @@ e. Receive coalescing. The port has no hardware coalescing and no
    coalesced? It would take that sensitivity away, and it is the
    same capability we asked about when we first spoke.
 
-f. Where the rings' interrupts go after a resize. We place each
-   port's ring interrupts on its own eight CPUs by writing
-   smp_affinity. After `ethtool -G <port> rx <n>` on the second port,
-   its ring interrupts were back on CPUs 0 to 7, the same CPUs as the
-   first port's, and the two ports together then carried 65 GB/s of
-   plain TCP where they carry 83 to 90 with the interrupts apart.
-   Does xeu set an affinity hint when it remakes the rings, and can
-   it keep what was set, or spread the ports over different CPUs?
+f. Every port's ring interrupts on the same CPUs. In
+   xeu_setup_rings_irq() the Rx ring i gets CPU (2i) % num_online_cpus
+   and the Tx ring i gets CPU (2i + 1) % num_online_cpus, whichever
+   port it is, and irq_set_affinity_hint() on current kernels sets
+   the affinity as well as the hint. So with four rings both ports'
+   interrupts land on CPUs 0 to 7, and they return there each time
+   the port is opened: after a down and up, and after
+   `ethtool -G <port> rx <n>`. We move the second port's to eight
+   other CPUs by writing smp_affinity, and have to do it again after
+   each. With both ports' interrupts on 0 to 7 the two ports carried
+   65 GB/s of plain TCP, where they carry 83 to 90 with them apart.
+   Could xeu spread ports over different CPUs (by NUMA node and port,
+   as cpumask_local_spread() does), and set only the hint
+   (irq_update_affinity_hint()) so that a placement survives?
 
 We carry six small patches to xeu 2.0.1 that came out of this work:
 rx_ip_align (received data on a 4-byte boundary), a retry so that a
