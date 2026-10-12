@@ -3251,6 +3251,91 @@ with 8 ran first (`$L/xeu-16k-464-claim-verify-t8`): 1.9 GB/s for
    claiming may be worth here, and twelve runs do not settle it;
    what happens in such a run is still not known.
 
+### 0 and 2 threads by turns, and where claiming's retransmits come from (11 October, 17:55 to 18:50)
+
+Mike, 17:50: stop spending runs on catching an RTO episode (fourteen
+watched runs, `$L/xeu-16k-464-rto-{1..10}` and `-rto-alt-{1..4}`, had
+0 to 3 RTOs each); leave the code as it is and use claiming only if it
+is in fact beneficial. So `svc_tcp_rx_copy_threads` 0 and 2 by turns at
+the pinned setting, six of each, nothing else varied
+(`$L/xeu-16k-464-ab-{0,2}-{1..6}`, driver
+`$L/xeu-16k-464-ab-driver.sh`). Every cell is watched by the second on
+both ends (`xeu-rig/client-rto-watch.sh`, `server-rto-watch.sh`:
+`rto-watch/` and `server-watch/` in each cell's directory).
+
+| threads | GB/s | retransmits | ring drops | RTOs |
+|---|---|---|---|---|
+| 0 | 43.9, 44.6, 43.8, 43.4, (42.9), 43.7 | 10 to 15 thousand | 78 to 139 | 0 to 1 |
+| 2 | 44.1, 44.3, 44.4, 43.8, (42.9), 44.2 | 146 to 248 thousand | 218 to 280 | 1 to 6 |
+
+Run 5 of each (in brackets) had a kprobe on every received segment
+for ten seconds (`xeu-rig/gro-order.bt`), which slowed the rings'
+CPUs enough to drop 20 and 25 thousand frames: leave both out, and
+do not probe per segment on this path again. Without them 0 has a
+mean of 43.9 and 2 of 44.2, the difference inside the spread of
+either. No run in either arm had an RTO episode.
+
+**Where the retransmits come from.** Three runs of each compared from
+the watchers, then every packet of one cell of each accounted for:
+
+1. **They fill real holes.** A run with 2 has 215 thousand fast
+   retransmits on the client against 6.9 thousand, and the server
+   reports 8 of them as duplicates in either case
+   (`TCPDSACKRecv`). The server's TCP queues 407 thousand segments
+   out of order against 20 thousand.
+2. **Nothing in the server's stack drops them.** `TCPRcvQDrop`,
+   `TCPBacklogDrop`, `TCPOFODrop`, `TCPZeroWindowDrop`, `RcvPruned`
+   and checksum errors are 0 in both; `kfree_skb` by reason shows a
+   few hundred a run, the same in both; the rings' `sw_dropped`,
+   `pp_drop` and `mru_exceed` are 0 and `pp_alloc_empty` is 7.
+3. **They never reach the rings' counters.** The driver's
+   `rx_packets` is the card's own count of frames forwarded to a
+   ring (`rm_stats[].fwd_packets` in `xeu_drv.c`), and the bounce
+   before a cell zeroes it. From there to idle after the cell
+   (`$L/acct/`, both ends every 2 s):
+
+   | cell | client sent (`tx_packets_phy`) | rings forwarded + tail + pp drops | not accounted for | retransmits in the cell |
+   |---|---|---|---|---|
+   | 0 threads, run 6 | 695,385,986 | 695,380,833 | 5,153 | 10,492 |
+   | 2 threads, run 6 | 703,254,608 | 703,019,906 | 234,702 | 240,733 |
+
+   The two ends' idle counts before the cell agree to within 100
+   packets. So 235 thousand frames left the client's PHY and appear
+   in none of the card's per-ring counts, forwarded or dropped, and
+   the client retransmitted that many.
+4. **What claiming changes on the wire** is the server's ACKs: 51
+   million a run against 31 million, since a thread that claims
+   returns the window as it reads and not as it copies. The client
+   then waits on the window less (85% against 96%) and sends closer
+   together. That the card loses frames ahead of its rings when
+   sixteen connections send that way is the reading; it is not
+   measured, since the port exposes no MAC or port counters
+   (`ethtool -S` has only `dev_*` and `ring_*`).
+
+This is also what the larger windows showed without being read that
+way: at 1.5 MiB and 2 MiB retransmits were 360 to 900 thousand with
+32 to 200 thousand ring drops, and `fq` on the client took both
+down. **The retransmits are frames the card loses and does not
+count, and what a setting costs in loss has to be read from the
+client's retransmits, not from the ring drops.** A question for
+Xsight: where can a received frame be dropped ahead of the rings'
+`fwd`, `tail_drop` and `pp_drop` counts, and is there a counter for
+it?
+
+So claiming does not mishandle TCP; it lets the sender run into a
+loss the card does not report. On one port it buys nothing for that:
+keep `svc_tcp_rx_copy_threads` at 0.
+
+**The tuning service pins all 512 (18:48).**
+`/etc/systemd/system/hammerspace-nfsd-tuning.service.d/threads.conf`
+runs the service's script with `--nfsd-threads 512`, so it sets the
+count and then pins: from 128 threads, a restart leaves 512, all on
+8-55, and `/etc/nfs.conf` has `threads=512`. The service still
+writes `io_cache_write` 4; the harness sets 2 for each cell. About
+95 to 120 nfsd threads were in a WRITE or a COMMIT at any moment of
+a 44 GB/s cell (their stacks, six passes), those on a CPU not
+counted; pool 0 has taken 39% of the traffic this boot.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

@@ -1,0 +1,24 @@
+// What order the port hands a connection's segments to the stack in: for
+// each segment for port 2049 seen by GRO, is it the next in sequence, ahead
+// of it (segments missing before it) or behind it (late or sent again)?
+kprobe:tcp_gro_receive
+{
+	$skb = (struct sk_buff *)arg1;
+	$th = (struct tcphdr *)arg2;
+	if ($th->dest == 0x0108) {
+		$sp = $th->source;
+		$seq = bswap($th->seq);
+		$pl = (uint32)$skb->len - 20 - (uint32)$th->doff * 4;
+		if ($pl > 0 && $pl < 70000) {
+			$exp = @nxt[$sp];
+			if ($exp != 0) {
+				$d = (int32)($seq - $exp);
+				if ($d == 0) { @inorder = count(); }
+				else if ($d > 0) { @ahead = count(); @ahead_bytes = hist($d); }
+				else { @behind = count(); @behind_bytes = hist(-$d); }
+			}
+			if ($exp == 0 || (int32)($seq + $pl - $exp) > 0) { @nxt[$sp] = $seq + $pl; }
+		}
+	}
+}
+interval:s:10 { clear(@nxt); exit(); }
