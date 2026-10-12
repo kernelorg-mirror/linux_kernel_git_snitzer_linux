@@ -107,9 +107,9 @@ Summary: The Linux kernel
 %endif
 
 # Arches whose kernels ship device tree blobs
-%global dtb_arches aarch64 riscv64
+%global dtb_arches aarch64
 # Arches that build the EFI unified kernel images
-%global uki_arches x86_64 aarch64 riscv64
+%global uki_arches x86_64 aarch64
 
 # RHEL/CentOS specific .SBAT entries
 %if 0%{?centos}
@@ -447,7 +447,7 @@ Summary: The Linux kernel
 %define with_automotive 0
 %define with_stock 0
 %define with_debug 0
-%ifarch ppc64le riscv64
+%ifarch ppc64le
 %define with_debuginfo 0
 %define with_base 0
 %endif
@@ -629,13 +629,6 @@ Summary: The Linux kernel
 %define kernel_image arch/arm64/boot/vmlinuz.efi
 %endif
 
-%ifarch riscv64
-%define asmarch riscv
-%define hdrarch riscv
-%define make_target vmlinuz.efi
-%define kernel_image arch/riscv/boot/vmlinuz.efi
-%endif
-
 # Should make listnewconfig fail if there's config options
 # printed out?
 %if %{nopatches}
@@ -673,7 +666,7 @@ Summary: The Linux kernel
 %define _enable_debug_packages 0
 %endif
 
-%ifnarch x86_64 ppc64le s390x aarch64 riscv64
+%ifnarch x86_64 ppc64le s390x aarch64
 %define with_kmap 0
 %endif
 
@@ -683,7 +676,7 @@ Summary: The Linux kernel
 %endif
 
 # Architectures we build tools/cpupower on
-%define cpupowerarchs x86_64 ppc64le aarch64 riscv64
+%define cpupowerarchs x86_64 ppc64le aarch64
 
 %if 0%{?use_vdso}
 %define _use_vdso 1
@@ -748,9 +741,9 @@ Release: %{pkg_release}
 # DO NOT CHANGE THE 'ExclusiveArch' LINE TO TEMPORARILY EXCLUDE AN ARCHITECTURE BUILD.
 # SET %%nobuildarches (ABOVE) INSTEAD
 %if 0%{?fedora}
-ExclusiveArch: noarch x86_64 aarch64 ppc64le riscv64
+ExclusiveArch: noarch x86_64 aarch64 ppc64le
 %else
-ExclusiveArch: noarch i386 i686 x86_64 aarch64 ppc64le riscv64
+ExclusiveArch: noarch i386 i686 x86_64 aarch64 ppc64le
 %endif
 ExclusiveOS: Linux
 %ifnarch %{nobuildarches}
@@ -845,7 +838,7 @@ BuildRequires: openssl-devel
 
 %if %{with_selftests}
 BuildRequires: clang llvm-devel fuse-devel zlib-devel binutils-devel libuuid-devel python3-docutils python3-jsonschema
-%ifarch x86_64 riscv64
+%ifarch x86_64
 BuildRequires: lld
 %endif
 #BuildRequires: libasan-static
@@ -891,7 +884,7 @@ BuildRequires: openssl
 %if 0%{?rhel}%{?centos} && !0%{?eln}
 BuildRequires: system-sb-certs
 %endif
-%ifarch x86_64 aarch64 riscv64
+%ifarch x86_64 aarch64
 BuildRequires: nss-tools
 BuildRequires: pesign >= 0.10-4
 %endif
@@ -1022,8 +1015,6 @@ Source43: %{name}-aarch64-64k-debug-rhel.config
 Source46: %{name}-aarch64-16k-rhel.config
 Source47: %{name}-aarch64-16k-debug-rhel.config
 
-Source44: %{name}-riscv64-rhel.config
-Source45: %{name}-riscv64-debug-rhel.config
 %endif
 
 %if 0%{?include_rhel} || 0%{?include_automotive}
@@ -1043,8 +1034,6 @@ Source56: %{name}-ppc64le-fedora.config
 Source57: %{name}-ppc64le-debug-fedora.config
 Source60: %{name}-x86_64-fedora.config
 Source61: %{name}-x86_64-debug-fedora.config
-Source700: %{name}-riscv64-fedora.config
-Source701: %{name}-riscv64-debug-fedora.config
 
 Source62: def_variants.yaml.fedora
 %endif
@@ -1106,12 +1095,10 @@ Source200: check-kabi
 Source201: Module.kabi_aarch64
 Source202: Module.kabi_ppc64le
 Source204: Module.kabi_x86_64
-Source205: Module.kabi_riscv64
 
 Source210: Module.kabi_dup_aarch64
 Source211: Module.kabi_dup_ppc64le
 Source213: Module.kabi_dup_x86_64
-Source214: Module.kabi_dup_riscv64
 
 Source300: kernel-abi-stablelists-%{kabiversion}.tar.xz
 Source301: kernel-kabi-dw-%{kabiversion}.tar.xz
@@ -1132,8 +1119,6 @@ Source482: %{name}-aarch64-rt-64k-fedora.config
 Source483: %{name}-aarch64-rt-64k-debug-fedora.config
 Source484: %{name}-x86_64-rt-fedora.config
 Source485: %{name}-x86_64-rt-debug-fedora.config
-Source486: %{name}-riscv64-rt-fedora.config
-Source487: %{name}-riscv64-rt-debug-fedora.config
 %endif
 %endif
 
@@ -2202,7 +2187,6 @@ GetArch()
   *aarch64*) echo "aarch64" ;;
   *ppc64le*) echo "ppc64le" ;;
   *x86_64*) echo "x86_64" ;;
-  *riscv64*) echo "riscv64" ;;
   # no arch, apply everywhere
   *) echo "" ;;
   esac
@@ -3683,7 +3667,7 @@ find $RPM_BUILD_ROOT/usr/include \
 %endif
 
 %if %{with_cross_headers}
-HDR_ARCH_LIST='arm64 powerpc x86 riscv'
+HDR_ARCH_LIST='arm64 powerpc x86'
 mkdir -p $RPM_BUILD_ROOT/usr/tmp-headers
 
 for arch in $HDR_ARCH_LIST; do
@@ -4456,7 +4440,7 @@ fi\
 %endif
 
 %if %{with_kabidw_base}
-%ifarch x86_64 ppc64le aarch64 riscv64
+%ifarch x86_64 ppc64le aarch64
 %files -n %{name}-kabidw-base-internal
 %defattr(-,root,root)
 /kabidw-base/%{_target_cpu}*/*
