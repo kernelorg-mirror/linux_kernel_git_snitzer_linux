@@ -264,6 +264,21 @@ MODULE_PARM_DESC(svc_tcp_rx_keep,
 		 "After a short TCP receive, do not wake another thread for data that has already arrived (default: N)");
 
 /*
+ * A large record arrives in many pieces, and each piece that TCP queues
+ * makes the socket readable and wakes a thread, which copies it, finds
+ * the record short and sleeps again. svc_tcp_rx_lowat raises the socket's
+ * low-water mark while a record is short, to what the record still lacks
+ * or to this many bytes, whichever is less, so that a thread is woken for
+ * more than one piece. TCP also reports the socket readable when its
+ * receive window is nearly closed, whatever the mark, so a mark the
+ * window cannot hold costs rate and loses nothing. 0 leaves the mark at 1.
+ */
+static unsigned int svc_tcp_rx_lowat;
+module_param(svc_tcp_rx_lowat, uint, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_lowat,
+		 "Bytes of a short TCP record to wait for before a thread is woken (0: none)");
+
+/*
  * A thread that takes a partly received record back from a socket leaves
  * its own pages in the socket's sk_pages[], for the next thread that parks
  * a record there to take in exchange.  The pages a socket keeps that way
@@ -3711,6 +3726,39 @@ static bool svc_tcp_rx_linger(struct svc_sock *svsk)
 	return why == SVC_TCP_RX_LINGER_DATA;
 }
 
+/*
+ * Set the socket's low-water mark for what was just read, with the socket
+ * locked. @short_drained: the record is short and the read took all that
+ * was queued, so what arrives next is the rest of this record. The mark
+ * then is what the record lacks, up to svc_tcp_rx_lowat; in every other
+ * case it is 1. It is set as SO_RCVLOWAT sets it, through ->set_rcvlowat:
+ * TCP caps it at half the receive buffer and wakes the transport at once if
+ * what is queued already meets it. Segments that arrived during the read
+ * are in the backlog and are queued against the new mark when the lock is
+ * released, so none is left unreported. A TLS transport is left alone: its
+ * records are not the bytes TCP counts.
+ */
+static void svc_tcp_rx_set_lowat(struct svc_sock *svsk, struct socket *sock,
+				 bool short_drained)
+{
+	unsigned int cap = READ_ONCE(svc_tcp_rx_lowat);
+	struct sock *sk = sock->sk;
+	int lowat = 1;
+
+	if (test_bit(XPT_TLS_SESSION, &svsk->sk_xprt.xpt_flags) ||
+	    !sock->ops->set_rcvlowat)
+		return;
+	if (cap && short_drained && svsk->sk_tcplen >= sizeof(rpc_fraghdr)) {
+		u32 got = svsk->sk_tcplen - sizeof(rpc_fraghdr);
+		u32 reclen = svc_sock_reclen(svsk);
+
+		if (reclen > got)
+			lowat = min_t(u32, reclen - got, cap);
+	}
+	if (READ_ONCE(sk->sk_rcvlowat) != lowat)
+		sock->ops->set_rcvlowat(sk, lowat);
+}
+
 /**
  * svc_tcp_recvfrom - Receive data from a TCP socket
  * @rqstp: request structure into which to receive an RPC Call
@@ -3765,6 +3813,8 @@ again:
 	 */
 	if (!ctx.complete && svc_tcp_at_urg_mark(sock->sk))
 		desc.error = -EPROTO;
+	svc_tcp_rx_set_lowat(svsk, sock,
+			     !ctx.complete && !desc.error && desc.count);
 	release_sock(sock->sk);
 	if (svsk->sk_rx_hold_pending)
 		svc_tcp_rx_hold_buffer(svsk);
