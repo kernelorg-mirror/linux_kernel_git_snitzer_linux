@@ -1,5 +1,5 @@
 To: <Xsight engineering contact>
-Subject: xeu on E1: received frames lost ahead of the RX rings and not counted (and four smaller questions)
+Subject: xeu on E1: frames dropped at the port's RX FIFO, uncounted, hold us at 44 GB/s (and four smaller questions)
 
 Hi <name>,
 
@@ -7,12 +7,13 @@ We are now carrying about 44 GB/s of NFS writes into one E1 port,
 which is 92% of what the wire carries with no NFS at all. Thank you
 for the guidance that got us there. Looking at what holds the last
 few percent, we have found frames that the client transmits and that
-appear in none of the port's receive counters, neither as received
-nor as dropped. That is the main reason for this note. Four smaller
-questions follow it.
+appear in none of the counters `ethtool -S` shows for the port,
+neither as received nor as dropped. We have since found them: they
+are dropped at the port's RX FIFO, ahead of the rings. That is the
+main reason for this note. Four smaller questions follow it.
 
 
-1. Frames lost ahead of the rings, and not counted
+1. Frames dropped at the port's RX FIFO, and not counted
 
 The setup: one E1 port (xeu 2.0.1 with our local patches, including
 rx_buf_size=8192) on an arm64 server with 16 KiB pages, 4 RX rings of
@@ -85,18 +86,36 @@ tc_curr_packets and fc_curr_lines. xeu does not call it. It looks as
 if it may be the missing count: the RM reads it from the port's RX
 FIFO (eu_rx_fifo_get_port_counters()), ahead of the rings. We have
 written a patch that reads it with the rest of the statistics and
-lists those counters in `ethtool -S`. <It is built and not yet loaded
-/ what it showed>.
+lists those counters in `ethtool -S`, and with it every frame is
+accounted for:
+
+                            run C           run D
+  client transmitted        719,376,635     694,859,522
+  E1 rings: received
+    + tail drop + pp drop   719,365,190     694,626,015
+  not accounted for              11,445         233,507
+  RX FIFO drops, class 0         13,038         234,332
+  TCP retransmits (client)       16,326         244,687
+
+(C and D are a second pair of runs, like A and B.) The first read of
+the counter after boot returned 12,015,394 frames dropped in traffic
+class 0. Its fill reached 8139 lines and 133 packets, and was 0 at
+more than half of our readings, which were 2 seconds apart. So the
+port's RX FIFO overflows in bursts and holds about 1 MiB, some 134 of
+our frames: 23 microseconds of traffic at this rate. We believe this
+is what holds us at 44 GB/s.
 
 Our questions:
 
-a. Where can a received frame be dropped before it is counted as
-   forwarded, tail-dropped or pp-dropped on a ring? Is there a
-   port-level or per-priority buffer ahead of the rings, and is
-   tc_drop_packets its drop count?
-b. If so, what sizes that buffer, and can it be made deeper or its
-   threshold changed? What do tc_curr_lines and fc_curr_lines
-   measure?
+a. Is our reading right: the frames are dropped at the port's RX
+   FIFO because the packet processor does not move them to the rings
+   as fast as they arrive in a burst? What rate can it sustain from
+   that FIFO to four rings, and what would raise it?
+b. Can the FIFO be made larger for one port and one traffic class?
+   The SDK has EU_RX_FIFOS_TOTAL_SIZE_LINES of 2 MiB and
+   eu_rx_fifos_set_sizes(); we use one traffic class on each port.
+   How is it divided today, and is there a supported way to change
+   it?
 c. Is xsl_rm_eu_rx_port_counters_get() safe to call from the driver's
    statistics path while traffic is flowing? Outside NIC mode it
    flushes the packet processor's counter cache and waits for it.
@@ -106,13 +125,15 @@ c. Is xsl_rm_eu_rx_port_counters_get() safe to call from the driver's
 d. Are there MAC and FEC receive counters we can read on the E1 port
    (FCS errors, corrected and uncorrectable FEC blocks), so that we
    can rule the link in or out?
-e. Are the ring statistics exact when read while a ring is busy? The
-   driver reads and accumulates them, and we would like to be sure
-   nothing is lost between reads.
+e. Would you expect link flow control to help here? Pause is off at
+   both ends today. xeu has rx_fc_ena and the FIFO has xon and xoff
+   thresholds; what are they set to, and are they right for a FIFO
+   this size at 400G?
 
-One limit on what we know: the table above is one run of each kind.
-The retransmit counts, which track it, repeat across about twenty
-runs (10 to 15 thousand a run for A, 146 to 248 thousand for B).
+One limit on what we know: each table is one run of each kind. The
+retransmit counts, which track the loss, repeat across about twenty
+runs (10 to 16 thousand a run for A and C, 146 to 248 thousand for B
+and D).
 
 
 2. Smaller questions

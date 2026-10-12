@@ -137,22 +137,22 @@ per-priority `tc_drop_packets`, which `xeu` never calls. The older
 `../xsight-steering-email.txt` predates the RSS table patch and is
 superseded by it.
 
-**The port's RX counters are a driver patch, built and not loaded
-(2026-10-11, 20:00)**: kmod-xsight 2.0.1-7 in kernel-rpmtree
-(`6f0bebb`, Patch7) reads `xsl_rm_eu_rx_port_counters_get()` with the
-statistics and lists `port_rx_fifo_tc<N>_{lines,packets,drop_packets,drop_bytes}`,
-`port_rx_fifo_fc_lines`, `port_rx_non_prom_drop_packets` and
-`port_rx_mcast_filtered_packets` in `ethtool -S`; the FIFO's drops
-are also `rx_fifo_errors`. `./build-kmod.sh` built it for 464 in
-`$L/kmod-xsight-16k-464-r7` (`xeu.ko` srcversion
-`6BA6864AF98536BBED8F4E5`, the same symbol versions as the one
-loaded). **Loading it reloads `xeu`, which is Mike's to ask for.**
-Once it is in: repeat the packet accounting of a 0-thread and a
-2-thread cell and see whether `port_rx_fifo_tc*_drop_packets` is the
-235 thousand. `rx_port_stats=N`
-(`/sys/module/xeu/parameters/rx_port_stats`) stops the reading if it
-disturbs the port; that it does not is not yet known. The note to
-Xsight has a placeholder to fill in with what it shows.
+**The uncounted loss is the port's RX FIFO (2026-10-11, 20:30).**
+kmod-xsight 2.0.1-7 (kernel-rpmtree `7a06a06`) is installed and
+loaded: with `echo Y > /sys/module/xeu/parameters/rx_port_stats`
+(default N), `ethtool -S` lists `port_rx_fifo_tc<N>_drop_packets`
+and the FIFO's fill. Accounted packet by packet, the FIFO dropped
+13,038 frames in a cell with 0 threads and 234,332 with 2, which is
+what was missing (11,445 and 233,507). It is about 1 MiB for this
+port's traffic class 0, 134 frames, 23 microseconds at 44 GB/s.
+**The ceiling near 44 GB/s is that FIFO overflowing in bursts, with
+flow control off.** Next: `ethtool -A` on both ends so that it
+pauses the sender, and whether it can be made larger (for Xsight).
+"The uncounted loss is the port's RX FIFO" in
+`../XEU_CONVERGENCE.md`. After a reload of `xeu`, `bringup.sh`
+refuses because the region still shows: run its steps by hand (that
+section says which). `rpm -ivh --force` and `rpm -e --justdb` of the
+old release install a kmod without removing other kernels' kmods.
 "0 and 2 threads by turns" in `../XEU_CONVERGENCE.md`. Do not kprobe
 every received segment (`gro-order.bt`): it makes the rings drop.
 
