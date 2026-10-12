@@ -132,6 +132,20 @@ reconfigured or `xeu` reloaded (192.168.0.105 has mounted over
 `enp164s0f0` before). The first section of `xeu-rig/README.md` has
 where that stands.
 
+**Always run tardis1 in the mode that acts like enterprise storage
+(Mike, 2026-10-12: "seriously: never forget this").** Advertise WCE=0
+to Linux, so the sync to storage is elided, and leave the drives' own
+write caches enabled: `/sys/block/<dev>/queue/write_cache` reads
+`write through` on the eight data drives and on `md0` and `md1`. The
+export stays `sync`; an `async` export is not the way to get this.
+`xeu-rig/drive-cache.sh` applies and prints it, `twoport.sh` and
+`sweep.sh` apply it at the start of a run, and
+`/etc/udev/rules.d/99-zc-write-through.rules` sets it at boot. Check it
+before any run. With the drives flushing (`write back`, everything on
+the four-drive stripes before that date) each COMMIT flushes every
+drive of the stripe and one port carries 36 GB/s where it otherwise
+carries 43; those figures are not comparable with later ones.
+
 **The primary focus from the evening of 2026-10-08 (Mike): NFS writes
 from the remote client as fast as they will go, near line rate.** On
 tardis1 start at the first section of
