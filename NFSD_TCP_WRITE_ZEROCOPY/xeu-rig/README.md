@@ -151,7 +151,12 @@ clean (`xsllink get --fec-hist port=0`: `NCCW: 0`).
 flow control off.** Next: `ethtool -A` on both ends so that it
 pauses the sender, and whether it can be made larger (for Xsight).
 "The uncounted loss is the port's RX FIFO" in
-`../XEU_CONVERGENCE.md`. After a reload of `xeu`, `bringup.sh`
+`../XEU_CONVERGENCE.md`. **Flow control was tried and does not
+reach the wire**: with `ethtool -A enp161s0f0 tx on` (and `rx on`
+on the client) the client received no pause frame in four cells and
+the FIFO went on dropping; `rx on tx on` with the port remade stops
+the rings dropping and the FIFO drops it all. For Xsight. The FIFO
+is 2 MiB, measured (16327 lines of 16384 at its fullest). After a reload of `xeu`, `bringup.sh`
 refuses because the region still shows: run its steps by hand (that
 section says which). `rpm -ivh --force` and `rpm -e --justdb` of the
 old release install a kmod without removing other kernels' kmods.
