@@ -259,9 +259,48 @@ void nfs_zap_acl_cache(struct inode *inode)
 }
 EXPORT_SYMBOL_GPL(nfs_zap_acl_cache);
 
+/*
+ * Return true if nfs_set_cache_invalid(inode, NFS_INO_INVALID_ATIME) would
+ * not change anything, so that nfs_invalidate_atime() can skip i_lock.
+ *
+ * Besides setting the bit, nfs_set_cache_invalid() drops a stale
+ * NFS_INO_INVALID_DATA once the page cache is empty. It also clears the
+ * out-of-order change attribute tracking (nfs_ooo_clear()) when the page
+ * cache is empty or about to be invalidated. When either of those still
+ * has work to do, take the slow path.
+ *
+ * This check is racy, just as a locked call is racy against a concurrent
+ * update. A stale answer only postpones that cleanup, and the cleanup errs
+ * towards invalidating.
+ */
+static bool nfs_atime_invalid_is_noop(struct inode *inode)
+{
+	struct nfs_inode *nfsi = NFS_I(inode);
+	unsigned long cache_validity = READ_ONCE(nfsi->cache_validity);
+
+	if (!(cache_validity & NFS_INO_INVALID_ATIME))
+		return false;
+	if (READ_ONCE(inode->i_mapping->nrpages) == 0) {
+		if (cache_validity & NFS_INO_INVALID_DATA)
+			return false;
+	} else if (!(cache_validity & NFS_INO_INVALID_DATA)) {
+		return true;
+	}
+	return !(cache_validity & NFS_INO_DATA_INVAL_DEFER) &&
+	       !READ_ONCE(nfsi->ooo);
+}
+
 void nfs_invalidate_atime(struct inode *inode)
 {
 	if (nfs_have_delegated_atime(inode))
+		return;
+	/*
+	 * Every READ reply lands here. The atime stays marked stale until
+	 * something refreshes or sets it, and that clears the bit under
+	 * i_lock. Until then, don't take inode->i_lock just to mark it
+	 * again.
+	 */
+	if (nfs_atime_invalid_is_noop(inode))
 		return;
 	spin_lock(&inode->i_lock);
 	nfs_set_cache_invalid(inode, NFS_INO_INVALID_ATIME);
@@ -675,8 +714,54 @@ static void nfs_update_mtime(struct inode *inode)
 		~(NFS_INO_INVALID_CTIME | NFS_INO_INVALID_MTIME);
 }
 
+/*
+ * A delegated timestamp is set to the coarse clock, so once a request has
+ * updated it every further request in the same tick finds it current and
+ * nfs_update_atime()/nfs_update_mtime() would change nothing: the timestamp
+ * compare in inode_update_time() fails and the validity bits are already
+ * clear.  These lockless tests let the callers skip inode->i_lock in that
+ * case; the locked path is taken whenever they cannot prove it.
+ *
+ * The timestamps are read without the lock.  A torn read is only possible
+ * while another CPU is storing them under the lock, and what it stores is
+ * the current coarse time (or a newer one), so a torn value that happens
+ * to equal @now describes exactly the state we would leave behind, and any
+ * other torn value sends us to the locked path.
+ */
+static bool nfs_delegated_atime_is_current(struct inode *inode)
+{
+	struct timespec64 now = current_time(inode);
+	struct timespec64 atime = inode_get_atime(inode);
+
+	return timespec64_equal(&now, &atime) &&
+	       !(READ_ONCE(NFS_I(inode)->cache_validity) &
+		 NFS_INO_INVALID_ATIME);
+}
+
+static bool nfs_delegated_mtime_is_current(struct inode *inode)
+{
+	struct timespec64 now = current_time(inode);
+	struct timespec64 mtime = inode_get_mtime(inode);
+	struct timespec64 ctime = inode_get_ctime(inode);
+
+	return timespec64_equal(&now, &mtime) &&
+	       timespec64_equal(&now, &ctime) &&
+	       !(READ_ONCE(NFS_I(inode)->cache_validity) &
+		 (NFS_INO_INVALID_CTIME | NFS_INO_INVALID_MTIME));
+}
+
 void nfs_update_delegated_atime(struct inode *inode)
 {
+	/*
+	 * The delegation is not protected by inode->i_lock (it is published
+	 * and detached under clp->cl_lock and checked under RCU), so there is
+	 * no point in taking the lock just to find out that there is no
+	 * delegated atime.  Recheck under the lock before updating.
+	 */
+	if (!nfs_have_delegated_atime(inode))
+		return;
+	if (nfs_delegated_atime_is_current(inode))
+		return;
 	spin_lock(&inode->i_lock);
 	if (nfs_have_delegated_atime(inode))
 		nfs_update_atime(inode);
@@ -688,6 +773,18 @@ void nfs_update_delegated_mtime_locked(struct inode *inode)
 	if (nfs_have_delegated_mtime(inode) ||
 	    nfs_have_directory_delegation(inode))
 		nfs_update_mtime(inode);
+}
+
+/*
+ * For callers that would take inode->i_lock only to call
+ * nfs_update_delegated_mtime_locked(): true if that call would do anything.
+ */
+bool nfs_delegated_mtime_needs_update(struct inode *inode)
+{
+	if (!nfs_have_delegated_mtime(inode) &&
+	    !nfs_have_directory_delegation(inode))
+		return false;
+	return !nfs_delegated_mtime_is_current(inode);
 }
 
 void nfs_update_delegated_mtime(struct inode *inode)
@@ -1125,7 +1222,29 @@ static struct nfs_lock_context *__nfs_find_lock_context(struct nfs_open_context 
 struct nfs_lock_context *nfs_get_lock_context(struct nfs_open_context *ctx)
 {
 	struct nfs_lock_context *res, *new = NULL;
-	struct inode *inode = d_inode(ctx->dentry);
+	struct inode *inode;
+
+	/*
+	 * The lock context embedded in the open context belongs to the lock
+	 * owner that opened the file, and its count is the open context's
+	 * reference count, so taking it is just get_nfs_open_context().
+	 * Without this, an I/O issued while no other I/O is in flight on
+	 * the open context allocates a lock context and frees it again,
+	 * taking inode->i_lock both times.
+	 *
+	 * lockowner is set before the open context is published and never
+	 * changes.  If get_nfs_open_context() fails here it also fails
+	 * below, so the list never holds an entry for the opening lock
+	 * owner: all of that owner's I/O and unlocks use the embedded
+	 * context's io_count, which is the one nfs_iocounter_wait() and
+	 * nfs_async_iocounter_wait() look at.  Callers (e.g. the NLM
+	 * FL_CLOSE ops in nfs3proc.c) also rely on getting the same object
+	 * for the same (ctx, current->files), so keep this test purely on
+	 * the lock owner.
+	 */
+	if (ctx->lock_context.lockowner == current->files &&
+	    get_nfs_open_context(ctx))
+		return &ctx->lock_context;
 
 	rcu_read_lock();
 	res = __nfs_find_lock_context(ctx);
@@ -1135,6 +1254,7 @@ struct nfs_lock_context *nfs_get_lock_context(struct nfs_open_context *ctx)
 		if (new == NULL)
 			return ERR_PTR(-ENOMEM);
 		nfs_init_lock_context(new);
+		inode = d_inode(ctx->dentry);
 		spin_lock(&inode->i_lock);
 		res = __nfs_find_lock_context(ctx);
 		if (res == NULL) {
@@ -1157,8 +1277,17 @@ EXPORT_SYMBOL_GPL(nfs_get_lock_context);
 void nfs_put_lock_context(struct nfs_lock_context *l_ctx)
 {
 	struct nfs_open_context *ctx = l_ctx->open_context;
-	struct inode *inode = d_inode(ctx->dentry);
+	struct inode *inode;
 
+	/*
+	 * The embedded lock context is not on the list and is not freed on
+	 * its own: its count is the open context's reference count.
+	 */
+	if (l_ctx == &ctx->lock_context) {
+		put_nfs_open_context(ctx);
+		return;
+	}
+	inode = d_inode(ctx->dentry);
 	if (!refcount_dec_and_lock(&l_ctx->count, &inode->i_lock))
 		return;
 	list_del_rcu(&l_ctx->list);
