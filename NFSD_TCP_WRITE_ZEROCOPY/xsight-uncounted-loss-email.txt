@@ -82,7 +82,11 @@ In the SDK built into the module we found
 xsl_rm_eu_rx_port_counters_get(), which returns struct rm_rx_port_ctr
 with per-priority tc_drop_packets and tc_drop_bytes, tc_curr_lines,
 tc_curr_packets and fc_curr_lines. xeu does not call it. It looks as
-if it may be the missing count.
+if it may be the missing count: the RM reads it from the port's RX
+FIFO (eu_rx_fifo_get_port_counters()), ahead of the rings. We have
+written a patch that reads it with the rest of the statistics and
+lists those counters in `ethtool -S`. <It is built and not yet loaded
+/ what it showed>.
 
 Our questions:
 
@@ -94,9 +98,11 @@ b. If so, what sizes that buffer, and can it be made deeper or its
    threshold changed? What do tc_curr_lines and fc_curr_lines
    measure?
 c. Is xsl_rm_eu_rx_port_counters_get() safe to call from the driver's
-   statistics path while traffic is flowing, and is it clear-on-read
-   like the ring statistics? If it is, we would be glad to add those
-   counters to `ethtool -S` ourselves and send you the patch.
+   statistics path while traffic is flowing? Outside NIC mode it
+   flushes the packet processor's counter cache and waits for it.
+   From the source we take the FIFO's drop counters and the
+   non-promiscuous drop counter to clear on read, and the fill counts
+   and the multicast filter's count not to; is that right?
 d. Are there MAC and FEC receive counters we can read on the E1 port
    (FCS errors, corrected and uncorrectable FEC blocks), so that we
    can rule the link in or out?
@@ -145,12 +151,12 @@ d. A flow filter that targets a ring. ntuple takes one rule, at
    RX ring, and can there be more than one? The RSS table cannot
    separate two busy flows that share an entry; a filter could.
 
-We carry five small patches to xeu 2.0.1 that came out of this work:
+We carry six small patches to xeu 2.0.1 that came out of this work:
 rx_ip_align (received data on a 4-byte boundary), a retry so that a
 ring that ran empty refills, rx_refill_thresh, rx_buf_size (receive
-buffers smaller than a page), and the RSS table, key and hash
-function through ethtool. We would be glad to send them if they are
-of use to you.
+buffers smaller than a page), the RSS table, key and hash function
+through ethtool, and the port's RX counters in `ethtool -S`. We would
+be glad to send them if they are of use to you.
 
 Thanks,
 Mike Snitzer

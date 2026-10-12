@@ -136,6 +136,23 @@ to a ring). The SDK has `xsl_rm_eu_rx_port_counters_get()` with
 per-priority `tc_drop_packets`, which `xeu` never calls. The older
 `../xsight-steering-email.txt` predates the RSS table patch and is
 superseded by it.
+
+**The port's RX counters are a driver patch, built and not loaded
+(2026-10-11, 20:00)**: kmod-xsight 2.0.1-7 in kernel-rpmtree
+(`6f0bebb`, Patch7) reads `xsl_rm_eu_rx_port_counters_get()` with the
+statistics and lists `port_rx_fifo_tc<N>_{lines,packets,drop_packets,drop_bytes}`,
+`port_rx_fifo_fc_lines`, `port_rx_non_prom_drop_packets` and
+`port_rx_mcast_filtered_packets` in `ethtool -S`; the FIFO's drops
+are also `rx_fifo_errors`. `./build-kmod.sh` built it for 464 in
+`$L/kmod-xsight-16k-464-r7` (`xeu.ko` srcversion
+`6BA6864AF98536BBED8F4E5`, the same symbol versions as the one
+loaded). **Loading it reloads `xeu`, which is Mike's to ask for.**
+Once it is in: repeat the packet accounting of a 0-thread and a
+2-thread cell and see whether `port_rx_fifo_tc*_drop_packets` is the
+235 thousand. `rx_port_stats=N`
+(`/sys/module/xeu/parameters/rx_port_stats`) stops the reading if it
+disturbs the port; that it does not is not yet known. The note to
+Xsight has a placeholder to fill in with what it shows.
 "0 and 2 threads by turns" in `../XEU_CONVERGENCE.md`. Do not kprobe
 every received segment (`gro-order.bt`): it makes the rings drop.
 
