@@ -1,3 +1,38 @@
+# 12 October, 13:30: read this first
+
+**The drives are run as enterprise storage (Mike: "never forget
+this").** Linux sees `write through` on the eight data drives and
+both stripes, so no cache flush is sent; the drives' caches stay on
+and the export stays `sync`. Check with `./drive-cache.sh` before
+any run (`twoport.sh` and `sweep.sh` run it; a udev rule sets it at
+boot, with the drives' autonomous power states off). Before this,
+every COMMIT (one per 8 MiB write of the job) flushed all four
+drives of a stripe and held one port at 36 GB/s.
+
+**Two ports: 58.5 GB/s at best** (seven runs with no flush sent,
+45.0 to 58.5), same setting as before:
+
+    RCVBUF=393216 ENTRIES=128 QDISC=fq LINGER=0 ./twoport.sh <out> ab
+
+**One port on four drives: 42.2 at best, and limited by the drives
+in every run** (six runs, 18.1 to 42.2). The drives slow under
+sustained writing, to 6.3 and even 4 GB/s each, and are back at 11
+after about three minutes of rest. Read `drives.txt` in a run's
+directory, or `drvbusy_a`/`drvbusy_b` in the TSV, before believing a
+one-port figure. `twoport.sh` warms up for 40 s (`WARM`) before fio
+counts. The best one port has carried is still 44.6, on six drives.
+
+**The copy is at about 90% of what the machine can copy** (62 to
+68 GB/s memory to memory, reached with 8 CPUs). A copy that does
+not fetch its destination gains nothing: `copybench.c`, and
+`../TARDIS1_COPY_PERFORMANCE.md`. Next: what sets that ceiling
+(memory channels populated?), and the loan. The 12% of cycles in
+wakeups and context switches has not been traced.
+
+The client is on 7.3.0-0.rc7.2.hs.469, which changed little. The
+account is "No cache flush to the drives, and two ports at 58.5
+GB/s" in `../XEU_CONVERGENCE.md`.
+
 # On build 464: start here (2026-10-11, 10:00)
 
 ## 1. The baseline is done: 43.0 and 42.5 GB/s
