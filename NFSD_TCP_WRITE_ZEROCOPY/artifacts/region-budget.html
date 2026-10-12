@@ -258,15 +258,15 @@
         <tr><td>Receive buffer size, <code>xeu</code> <code>rx_buf_size</code></td><td class="r">8192</td><td><code>modprobe.d/xeu.conf</code></td></tr>
         <tr><td>IP header placement, <code>xeu</code> <code>rx_ip_align</code></td><td class="c">2</td><td><code>modprobe.d/xeu.conf</code></td></tr>
         <tr><td>RSS table, <code>xeu</code> <code>rss_indir_size</code></td><td class="c">128</td><td><code>modprobe.d/xeu.conf</code></td></tr>
-        <tr><td>Refill threshold, <code>xeu</code> <code>rx_refill_thresh</code></td><td class="c">8</td><td class="x" style="white-space:normal">set by hand after each load; to be added to <code>xeu.conf</code></td></tr>
+        <tr><td>Refill threshold, <code>xeu</code> <code>rx_refill_thresh</code></td><td class="c">8</td><td><code>modprobe.d/xeu.conf</code></td></tr>
         <tr><td>MTU on the server's port</td><td class="r">7792</td><td class="x" style="white-space:normal">set by hand, per port</td></tr>
         <tr><td>Receive rings</td><td class="c">4 rings of 256</td><td class="x" style="white-space:normal">test harness, per port</td></tr>
         <tr><td>Receive region</td><td class="c" style="white-space:normal">32768 pages, bound to the port</td><td class="x" style="white-space:normal">test harness, per port</td></tr>
         <tr><td>Flow placement</td><td class="c" style="white-space:normal">four connections to a ring</td><td class="x" style="white-space:normal">test harness, at each mount</td></tr>
         <tr><td>Budget, <code>svc_tcp_rx_budget_pages</code></td><td class="c">0 (copy mode)</td><td>the default</td></tr>
-        <tr><td>Held receive buffer, <code>svc_tcp_rx_rcvbuf</code></td><td class="r">1 MiB</td><td class="x" style="white-space:normal">test harness, per run; to go in <code>modprobe.d/sunrpc.conf</code></td></tr>
-        <tr><td>Linger, <code>svc_tcp_rx_linger_us</code></td><td class="c">50</td><td class="x" style="white-space:normal">test harness, per run; to go in <code>sunrpc.conf</code></td></tr>
-        <tr><td>Thread pools, <code>pools_per_node</code></td><td class="c">4</td><td class="x" style="white-space:normal">passed at module load; to go in <code>sunrpc.conf</code></td></tr>
+        <tr><td>Held receive buffer, <code>svc_tcp_rx_rcvbuf</code></td><td class="r">1 MiB</td><td><code>modprobe.d/sunrpc.conf</code></td></tr>
+        <tr><td>Linger, <code>svc_tcp_rx_linger_us</code></td><td class="c">50</td><td><code>modprobe.d/sunrpc.conf</code></td></tr>
+        <tr><td>Thread pools, <code>pools_per_node</code></td><td class="c">4</td><td><code>modprobe.d/sunrpc.conf</code></td></tr>
         <tr><td>Threads copying on a connection, <code>svc_tcp_rx_copy_threads</code></td><td class="c">0</td><td style="white-space:normal">the default. 2 was compared and is level (<a href="#claim">below</a>)</td></tr>
         <tr><td>nfsd threads</td><td class="c" style="white-space:normal">512, all on CPUs 8 to 55</td><td style="white-space:normal">the tuning service, changed on 11 October to set 512 before it pins</td></tr>
         <tr><td>nfsd write mode, <code>io_cache_write</code></td><td class="c">2 (direct)</td><td class="x" style="white-space:normal">test harness, per run; the tuning service sets 4, which has not been measured</td></tr>
@@ -275,7 +275,7 @@
         <tr><td>Storage</td><td class="c" style="white-space:normal">six NVMe drives, MD raid0, XFS</td><td class="m" style="white-space:normal">as built</td></tr>
       </tbody>
     </table></div>
-    <p><strong>The two files that hold the module settings.</strong> The first exists without its last option; the second is not written yet.</p>
+    <p><strong>The two files that hold the module settings.</strong> Both are on tardis1 since 11 October, and <code>sunrpc</code> has been reloaded from its file and came up with all three values.</p>
     <div class="kind" style="margin:10px 0 18px">
       <p class="who">/etc/modprobe.d/xeu.conf</p>
       <div class="set" style="margin-top:0">options xeu rx_ip_align=2 rss_indir_size=128 rx_buf_size=8192 rx_refill_thresh=8</div>
