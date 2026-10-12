@@ -3916,6 +3916,37 @@ more than one piece. Either would save CPU; nfsd's CPUs are half
 idle and the copy is at 90% of what the machine can copy, so a gain
 in rate is not expected from it alone.
 
+### A thread keeps the connection after a short receive: `svc_tcp_rx_keep` (12 October, 15:10 to 15:45)
+
+The first of the two changes the wakeup trace pointed at. A thread
+that finds a record short gives the transport up, and if more has
+arrived meanwhile that queues the transport and wakes an idle thread,
+while the thread giving it up goes straight back to look for work:
+the two race for it. With `svc_tcp_rx_keep` (a `sunrpc` parameter,
+off unless set, read at each receive) the transport is queued and
+no thread is woken (`svc_xprt_received_keep()`); the thread finds it
+when it looks. At the two-port setting, by turns:
+
+| `svc_tcp_rx_keep` | GB/s | threads woken a second | context switches a second | nfsd CPUs busy |
+|---|---|---|---|---|
+| N | 53.7 | 1.15 million | 1.46 million | 50% |
+| Y | 54.0 | 0.79 million | 1.17 million | 46% |
+| N | 48.9 | 1.06 million | 1.34 million | 35% |
+| Y | 53.4 | 0.81 million | 1.10 million | 48% |
+| Y | 51.9 | 0.83 million | 1.04 million | 43% |
+
+About 30% fewer wakeups and 20% fewer context switches, for the
+same rate: a saving of CPU, as expected, and not a gain in rate.
+The 48.9 run is port a carrying 18.8 GB/s for part of its window
+with its drives 45% busy and its rings' CPUs 31%: a stall of the
+kind seen before, and not the setting. All five are below the 57 to
+58 of the early afternoon; the WRITE rate sampled for 10 s in each
+was 56.5 to 57.4 thousand a second, so the runs reach it and do not
+hold it. What is left, about 14 wakeups a WRITE, is a thread woken
+for each piece that arrives and sleeping between pieces: the second
+change, `sk_rcvlowat` from what the record lacks, is the one that
+goes after that. The parameter is left N.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
