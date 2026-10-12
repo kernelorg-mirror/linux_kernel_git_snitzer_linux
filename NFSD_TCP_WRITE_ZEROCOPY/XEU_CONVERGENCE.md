@@ -3336,6 +3336,30 @@ writes `io_cache_write` 4; the harness sets 2 for each cell. About
 a 44 GB/s cell (their stacks, six passes), those on a CPU not
 counted; pool 0 has taken 39% of the traffic this boot.
 
+### nfsd's write mode: 2 carries 44 GB/s and 4 carries 28.6 (11 October, 19:10 to 19:20)
+
+Every cell has run with `io_cache_write` 2, which the harness sets
+(`MODE`), and the tuning service's e1 profile leaves 4. One cell at
+the pinned copy setting with `MODE=4` (`$L/xeu-16k-464-icw-4-1`,
+driver `$L/xeu-16k-464-icw-driver.sh`); Mike stopped the batch on its
+result.
+
+| `io_cache_write` | GB/s | COMMITs | a WRITE, sent to reply | a WRITE waits on the client |
+|---|---|---|---|---|
+| 2: direct | 43.5 to 44.6 | 5200 a second, 12 to 13 ms each | 3.1 ms | 11.6 ms |
+| 4: direct, FILE_SYNC | 28.6 | none | 15.9 ms | 24.1 ms |
+
+With 4 nfsd makes each 1 MiB WRITE durable before it replies and
+says so, and the client sends no COMMIT. With 2 the client's 8 MiB
+write is eight WRITEs and one COMMIT, so the sync is paid once for
+8 MiB. All 3.3 million WRITEs of the cell with 4 were direct.
+
+**Mode 2 is pinned (Mike).** The service's drop-in
+(`hammerspace-nfsd-tuning.service.d/threads.conf`) now passes
+`--io-cache-write 2` with `--nfsd-threads 512`; after a restart
+`io_cache_write` reads 2 and the 512 threads are on 8-55. Until this
+a reboot would have left 4.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
