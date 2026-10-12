@@ -355,10 +355,11 @@
       <tbody>
         <tr><td>Receivers that discard without copying</td><td class="c">49.8 GB/s</td><td class="r">99.4 GB/s</td></tr>
         <tr><td>Receivers that copy into a small buffer they reuse</td><td class="m">not run</td><td class="c">86.5 GB/s</td></tr>
-        <tr><td>NFS, copied and written to the drives, one-port settings</td><td class="c">36.4 GB/s</td><td class="x">43.3 GB/s</td></tr>
+        <tr><td>NFS, copied and written to the drives: the best run of each</td><td class="c">44.6 GB/s</td><td class="r">58.5 GB/s</td></tr>
+        <tr><td>NFS on 11 October, where this began: one port's settings on both, the drives flushing</td><td class="m">36.4 GB/s</td><td class="m">43.3 GB/s</td></tr>
       </tbody>
     </table></div>
-    <p><strong>The card, the wire, the client and the network stack carry both ports at line rate when nothing is copied.</strong> What the two ports share is the copy: a copy from memory to memory on this machine reaches about 62 GB/s however many CPUs do it, and the copy is a third of all the server's cycles in a two-port run.</p>
+    <p><strong>The card, the wire, the client and the network stack carry both ports at line rate when nothing is copied.</strong> What the two ports share is the copy: a copy from memory to memory on this machine reaches 62 to 68 GB/s however many CPUs do it, and the copy is 29% of all the server's cycles in a two-port run. At 58.5 GB/s the server is at about 90% of that.</p>
 
 
     <h3 style="margin-top:26px" id="twoflush">12 October: no cache flush to the drives</h3>
@@ -385,7 +386,7 @@
 
     <h3 style="margin-top:26px">The receive memory in use decides the rate</h3>
     <div class="tbl-wrap"><table class="q" style="min-width:560px">
-      <thead><tr><th>Receive memory in use, both ports</th><th>Settings that give it</th><th>Total GB/s</th></tr></thead>
+      <thead><tr><th>Receive memory in use, both ports</th><th>Settings that give it</th><th>Total GB/s, drives flushing</th></tr></thead>
       <tbody>
         <tr><td class="x">47 to 49 MiB</td><td>1 MiB held buffers, rings of 256: the one-port settings</td><td class="x">41.0 to 42.7</td></tr>
         <tr><td class="x">35 to 42 MiB</td><td>512 or 768 KiB with rings of 256, or 1 MiB with rings of 128</td><td class="c">42.5 to 43.9</td></tr>
@@ -394,7 +395,7 @@
         <tr><td class="c">15 to 19 MiB</td><td>256 KiB buffers, or rings of 64</td><td class="c">41.7 to 51.9</td></tr>
       </tbody>
     </table></div>
-    <p>58 runs on both ports, all with the drives flushing. Shrinking the held buffer alone, or the rings alone, gains nothing; the two together bring the memory under the 32 MiB cache and the rate up by 11 GB/s. Below about 20 MiB the window or the rings are too small and cost more than the memory saves.</p>
+    <p>58 runs on both ports on 11 and 12 October, all before the flushes were stopped, so its rates are lower than today's best; the shape is what it shows. Shrinking the held buffer alone, or the rings alone, gains nothing; the two together bring the memory under the 32 MiB cache and the rate up by 11 GB/s. Below about 20 MiB the window or the rings are too small and cost more than the memory saves.</p>
 
     <h3 style="margin-top:26px">The best settings found for two ports</h3>
     <div class="tbl-wrap"><table class="q" style="min-width:560px">
@@ -408,7 +409,7 @@
         <tr><td>Receive memory in use</td><td class="c">24 to 25 MiB</td><td class="r">21 to 22 MiB for both</td></tr>
         <tr><td>Drives' write cache, as Linux sees it</td><td class="c">write through: no flush sent</td><td class="r">the same</td></tr>
         <tr><td>Best rate, no flush sent</td><td class="c">42.2 GB/s on four drives, limited by them</td><td class="r">58.5 GB/s (seven runs, 45.0 to 58.5)</td></tr>
-        <tr><td>Best rate, drives flushing</td><td class="c">36.4 GB/s on four drives</td><td class="r">54.2 GB/s (seven runs, 48.1 to 54.2)</td></tr>
+        <tr><td>Best rate, drives flushing</td><td class="c">36.4 GB/s on four drives</td><td class="r">54.2 GB/s (ten runs, 48.1 to 54.2)</td></tr>
       </tbody>
     </table></div>
     <p>At that setting nothing is lost: no drops at the card's FIFO, under 200 at the rings, a few hundred retransmits in 70 seconds. Everything else is as pinned above: 8192-byte receive buffers, an MTU of 7792, 512 nfsd threads, the direct write mode.</p>
@@ -419,7 +420,7 @@
       <div class="cell k">The second port ran 2 to 4 GB/s under the first when both were loaded and the drives flushing. With no flush sent the two are within 1.5 GB/s in the three best runs</div><div class="cell v"><span class="pill pend">not looked into</span></div>
       <div class="cell k">Not gains on two ports: two threads copying on a connection, more or fewer connections, more writers, eight rings, the client's writers pinned to their NIC</div><div class="cell v"><span class="pill yes">tried</span></div>
     </div>
-    <p style="margin-top:14px" class="note">Each run is 120 seconds of 16 writers a port making 8 MiB direct writes, every connection placed on a ring; from the afternoon of 12 October a 40 second warm-up comes first and is not counted. The second port's settings are set by hand and do not survive a reboot. The account is "Two ports: why they did not add up, and the setting that carries 54 GB/s" in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>, and every run is a line of <code>xeu-rig/results-twoport-464.tsv</code>.</p>
+    <p style="margin-top:14px" class="note">Each run is 120 seconds of 16 writers a port making 8 MiB direct writes, every connection placed on a ring; from the afternoon of 12 October a 40 second warm-up comes first and is not counted. The second port's settings are set by hand and do not survive a reboot. The accounts are "Two ports: why they did not add up, and the setting that carries 54 GB/s" and "No cache flush to the drives, and two ports at 58.5 GB/s" in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>, the copy test is in <code>TARDIS1_COPY_PERFORMANCE.md</code>, and every run is a line of <code>xeu-rig/results-twoport-464.tsv</code>.</p>
   </section>
 
   <section id="xeu464">
