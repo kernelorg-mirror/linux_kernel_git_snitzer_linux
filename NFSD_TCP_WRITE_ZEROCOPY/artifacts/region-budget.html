@@ -269,7 +269,7 @@
         <tr><td>Thread pools, <code>pools_per_node</code></td><td class="c">4</td><td><code>modprobe.d/sunrpc.conf</code></td></tr>
         <tr><td>Threads copying on a connection, <code>svc_tcp_rx_copy_threads</code></td><td class="c">0</td><td style="white-space:normal">the default. 2 was compared and is level (<a href="#claim">below</a>)</td></tr>
         <tr><td>nfsd threads</td><td class="c" style="white-space:normal">512, all on CPUs 8 to 55</td><td style="white-space:normal">the tuning service, changed on 11 October to set 512 before it pins</td></tr>
-        <tr><td>nfsd write mode, <code>io_cache_write</code></td><td class="c">2 (direct)</td><td class="x" style="white-space:normal">test harness, per run; the tuning service sets 4, which has not been measured</td></tr>
+        <tr><td>nfsd write mode, <code>io_cache_write</code></td><td class="c">2 (direct)</td><td style="white-space:normal">the tuning service, changed on 11 October from 4, which carried 28.6 GB/s</td></tr>
         <tr><td>Deferred skb frees, <code>net.core.skb_defer_max</code></td><td class="c">128</td><td>the default</td></tr>
         <tr><td>Client</td><td class="c" style="white-space:normal">nconnect 16, 1 MiB wsize, MTU 9000, <code>fq_codel</code></td><td style="white-space:normal">nothing on the client is changed</td></tr>
         <tr><td>Storage</td><td class="c" style="white-space:normal">six NVMe drives, MD raid0, XFS</td><td class="m" style="white-space:normal">as built</td></tr>
@@ -286,7 +286,7 @@
     <div class="matrix">
       <div class="cell k">Two threads copying on a connection: level on rate on one port, and its retransmits are frames the card loses uncounted. Kept at 0; to be tried again with more than one port</div><div class="cell v"><span class="pill yes">settled for one port</span></div>
       <div class="cell k">Where the card drops frames ahead of its rings without counting them: 5 thousand a run at this setting, 235 thousand with claiming</div><div class="cell v"><span class="pill pend">for Xsight</span></div>
-      <div class="cell k">The write mode a reboot leaves (4) against the one every run used (2)</div><div class="cell v"><span class="pill pend">not measured</span></div>
+      <div class="cell k">The write mode: 2, where the client makes 8 MiB durable with one COMMIT, carries 44 GB/s. 4, where nfsd makes every 1 MiB WRITE durable, carried 28.6</div><div class="cell v"><span class="pill yes">2 is pinned</span></div>
       <div class="cell k">512 nfsd threads: about 120 to 150 are busy at 44 GB/s on one port. Kept at 512 for more than one port</div><div class="cell v"><span class="pill pend">not compared</span></div>
       <div class="cell k">What the linger is worth alone in copy mode, for its fifth more CPU per GB</div><div class="cell v"><span class="pill pend">not measured</span></div>
     </div>
