@@ -18,6 +18,7 @@
 # PERF=1 adds cycles and instructions; PROFILE=1 adds a 30 s flat profile by
 # function (it sits inside the CPU window and costs a little).
 . "$(dirname "$0")/common.sh"
+"$(dirname "$0")/drive-cache.sh" > /dev/null || { echo "drive-cache.sh failed"; exit 1; }	# no cache flush to the drives (AGENTS.md)
 # PRP_DIR and SGL_BACKING say where the two storages are: the export
 # directory of the "prp" lines and the file behind the NVMe/TCP target of
 # the "sgl" lines.  The defaults are the single drives; a stripe is

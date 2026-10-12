@@ -27,6 +27,7 @@
 #   EXPORT_SYNC=async  export async, so a COMMIT does not sync the file or flush the drives
 # TSV=<file>: append a line of the run's figures (TAG=<label> names it).
 . "$(dirname "$0")/common.sh"
+"$(dirname "$0")/drive-cache.sh" > /dev/null || { echo "drive-cache.sh failed"; exit 1; }	# no cache flush to the drives (AGENTS.md)
 OUT=${1:?out dir}; WHICH=${2:-ab}
 RUNTIME=${RUNTIME:-120}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
 YNL="$H/../tools/net/ynl/pyynl/cli.py --no-schema --spec $H/../Documentation/netlink/specs/ethtool.yaml"
