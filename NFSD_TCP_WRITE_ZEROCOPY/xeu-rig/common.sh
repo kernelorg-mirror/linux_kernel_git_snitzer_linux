@@ -1,7 +1,8 @@
 # Shared by the xeu-rig scripts.  Source it.
-# The rules (XEU_CONVERGENCE.md section 0): only enp161s0f0 is ours; load
-# goes only to the harness's own mount; enp164s0f0 and the xeu module are
-# never touched.
+# The rules (XEU_CONVERGENCE.md section 0): load goes only to the
+# harness's own mount.  Both ports are ours from 2026-10-11 (the default
+# here is enp161s0f0; D, SRVIP and CLIIP name the other); check that no
+# NFS client is connected before a port is reconfigured.
 D=${D:-enp161s0f0}
 SRVIP=${SRVIP:-192.168.1.211}
 CLIIP=${CLIIP:-192.168.1.106}

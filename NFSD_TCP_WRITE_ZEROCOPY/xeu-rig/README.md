@@ -1509,7 +1509,10 @@ drop, on each storage.
 - (2026-10-11: `/hs/nvme0` and `/hs/nvme1` are gone, see "Two
   stripes" at the top.) Until then: only `/hs/nvme0` and `/hs/nvme1`,
   as files; no drive is reformatted.
-- Only `enp161s0f0`. **`enp164s0f0` carries another client's
+- (2026-10-11, Mike: this rule is lifted. Both ports are ours, for
+  runs on two ports at once. Check that no NFS client is connected
+  before reconfiguring one.) Until then:
+  only `enp161s0f0`. **`enp164s0f0` carries another client's
   (192.168.0.105) connections and is never touched, so `xeu` is never
   reloaded.** A reboot is Mike's to do.
 - Commit at the tip of `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`; no
