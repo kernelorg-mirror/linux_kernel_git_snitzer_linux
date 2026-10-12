@@ -1,10 +1,11 @@
 #!/bin/bash
 # ring-irqs.sh <port> <first cpu> - put a port's ring interrupts on eight
 # CPUs from <first cpu>: Rx-i on first + 2i, Tx-i on first + 2i + 1, for
-# four rings.  xeu hints enp161s0f0's rings to CPUs 0 to 7, which are
-# outside nfsd's (8-55), and enp164s0f0's to 32 to 39, which are not: its
-# rings go on 56 to 63.  The hints come back when the port is taken down
-# and up, so this is run after each.
+# four rings.  xeu puts every port's rings on the same CPUs, Rx-i on 2i
+# and Tx-i on 2i + 1 (0 to 7 for four rings), so two ports' rings would
+# share eight CPUs: enp164s0f0's go on 56 to 63, which like 0 to 7 are
+# outside nfsd's (8-55).  The driver puts them back whenever the port is
+# opened (down and up, ethtool -G), so this is run after each.
 d=${1:?port}; c0=${2:?first cpu}
 pci=$(basename "$(readlink -f /sys/class/net/$d/device)")
 nr=$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')

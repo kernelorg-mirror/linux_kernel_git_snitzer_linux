@@ -3583,10 +3583,18 @@ Mike lifted the rule on `enp164s0f0` for this. What was set up:
   region with the first port's (`rx_region_dev` is a list:
   `0000:a1:00.0,0000:a4:00.0`). Set by hand, for this boot.
 - **Its rings' interrupts on CPUs 56 to 63** (`xeu-rig/ring-irqs.sh`).
-  `xeu` hints `enp161s0f0`'s to CPUs 0 to 7, outside nfsd's 8-55,
-  and `enp164s0f0`'s to 32 to 39, inside them. 0-7 and 56-63 are
-  what the tuning profile keeps from nfsd, so nfsd's pinning stays.
-  The hints return when a port is taken down and up.
+  `xeu` puts every port's ring interrupts on the same CPUs: Rx ring
+  i on CPU 2i and Tx ring i on 2i + 1, so 0 to 7 for four rings
+  (`xeu_setup_rings_irq()`; its `irq_set_affinity_hint()` sets the
+  affinity as well as the hint on this kernel). Left there, both
+  ports' rings share eight CPUs. `enp164s0f0`'s were found on 32 to
+  39, inside nfsd's CPUs: that was the host's tuning service
+  (`/usr/local/sbin/irq_tuning.sh`), which had placed its eight
+  rings there at boot, and not the driver, as this said until
+  2026-10-12. 0-7 and 56-63 are the CPUs the tuning profile keeps
+  from nfsd, so the second port's rings went on the free 56-63 and
+  nfsd's pinning stays. The driver puts them back whenever
+  the port is opened: after a down and up, and after `ethtool -G`.
 - **A stripe and an export to a port**: `/hs/stripe/zcbudget` to
   192.168.1.106 only, mounted through 192.168.1.211, and
   `/hs/stripe1/zcbudget` to 192.168.0.106 only, through
