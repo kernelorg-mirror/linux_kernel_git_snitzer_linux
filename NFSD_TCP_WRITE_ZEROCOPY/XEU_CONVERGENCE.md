@@ -3451,6 +3451,52 @@ its steps were run by hand (port down, `ethtool -L combined 4`, the
 PCI name to `rx_region_dev`, 32768 to `rx_region_pages`, up,
 `ethtool -G rx 256`) and the region is bound with 4 rings of 256.
 
+### Flow control: the port takes the setting and sends no pause frame (11 October, 20:55 to 21:30)
+
+`ethtool -A enp161s0f0 tx on` on the server, which `xeu` passes to
+`xsl_rm_eu_fc_set()` ("Configure Rx path to send pause frame when
+necessary") with xoff at 12288 lines and xon at 10240 of the FIFO's
+16384, and `ethtool -A ens3np0 rx on` on the client so that it obeys.
+Both report it set. `rx_port_stats` on. Cells
+`$L/xeu-16k-464-fc-{1m-0,2m-0,1m-2}` (held buffer, then
+`svc_tcp_rx_copy_threads`), driver `$L/xeu-16k-464-fc-driver.sh`;
+then `$L/xeu-16k-464-fc-rxtx-2m-0` with `rx on tx on` on the server
+and the port taken down and up after it was set. Both ends are back
+to off.
+
+| cell | server pause | GB/s | FIFO drops | ring drops | retransmits | RTOs | pause frames at the client |
+|---|---|---|---|---|---|---|---|
+| 1 MiB, 0 | tx | 35.7 | 5,237 | 95 | 14,430 | 350 | 0 |
+| 2 MiB, 0 | tx | 43.5 | 611,187 | 260,899 | 966,982 | 21 | 0 |
+| 1 MiB, 2 | tx | 43.8 | 200,065 | 233 | 207,857 | 2 | 0 |
+| 2 MiB, 0 | rx and tx, port down and up | 43.3 | 1,364,037 | 0 | 1,365,758 | 284 | 0 |
+
+1. **No pause frame reached the client in any cell**
+   (`rx_pause_ctrl_phy`, `rx_global_pause` 0), and the FIFO went on
+   dropping. So this is not a measure of what flow control would do:
+   it does not happen on the wire.
+2. **`rx on` with the port remade does something inside the card**:
+   the rings dropped nothing and the FIFO dropped it all, 1.36
+   million frames, as many as were retransmitted. `rx_fc_ena` goes
+   to `xsl_rm_rss_configure()` when the rings are set up, so the
+   rings then hold the FIFO back where they tail-dropped. The rate
+   is the same.
+3. **The FIFO is 2 MiB, measured.** Its fill read 175 times a second
+   for 30 s of the 2 MiB cell (`$L/fifo-fill-2m-0.txt`): 16327 lines
+   at most of 16384, under a sixteenth full in 72% of the readings,
+   over half in 7% and over three quarters, where xoff is, in 2%.
+4. **Two more runs with hundreds of RTOs**: 35.7 GB/s with 350, with
+   5 thousand FIFO drops and 14 thousand retransmits, which is to say
+   with no more loss than a good run; and 284 in the last cell at an
+   ordinary rate. Six today. Whether pause being on has a part in
+   these two is not known.
+5. With the FIFO's drops counted, the loss at 2 MiB adds up: 611
+   thousand in the FIFO and 261 thousand at the rings for 967
+   thousand retransmits.
+
+For Xsight, with the rest: what else has to be set for the port to
+send pause frames.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

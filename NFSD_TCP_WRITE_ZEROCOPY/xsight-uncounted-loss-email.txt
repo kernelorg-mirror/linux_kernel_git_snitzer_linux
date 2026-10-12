@@ -99,10 +99,12 @@ accounted for:
 the counter after boot returned 12,015,394 frames dropped in traffic
 class 0. Its fill reached 8139 lines and 133 packets, and was 0 at
 more than half of our readings, which were 2 seconds apart. So the
-port's RX FIFO overflows in bursts. From eu_rx_fifos_init() we take
-it to hold 2 MiB for this port's one traffic class, some 268 of our
-frames: 46 microseconds of traffic at this rate. We believe this is
-what holds us at 44 GB/s.
+port's RX FIFO overflows in bursts. It holds 2 MiB for this port's
+one traffic class, as eu_rx_fifos_init() sizes it and as we measured
+(16327 lines at its fullest, read 175 times a second): some 268 of
+our frames, 46 microseconds of traffic at this rate. It was under a
+sixteenth full in 72% of those readings. We believe this is what
+holds us at 44 GB/s.
 
 Our questions:
 
@@ -110,10 +112,8 @@ a. Is our reading right: the frames are dropped at the port's RX
    FIFO because the packet processor does not move them to the rings
    as fast as they arrive in a burst? What rate can it sustain from
    that FIFO to four rings, and what would raise it?
-b. Is the FIFO 2 MiB for our port, as eu_rx_fifos_init() suggests
-   (EU_RX_FIFOS_TOTAL_SIZE_LINES for an E-unit with one port and one
-   traffic class)? Is that the size of the memory, or can it be made
-   larger?
+b. Is 2 MiB the size of the FIFO's memory, or can it be made larger
+   for an E-unit with one port and one traffic class?
 c. Is xsl_rm_eu_rx_port_counters_get() safe to call from the driver's
    statistics path while traffic is flowing? Outside NIC mode it
    flushes the packet processor's counter cache and waits for it.
@@ -124,10 +124,17 @@ d. `xsllink get --fec-hist` shows no uncorrectable codewords on
    either port (NCCW 0), so we take the link itself to be clean. Are
    there MAC receive counters as well (frames received, FCS errors)
    that the driver could list?
-e. Would you expect link flow control to help here? Pause is off at
-   both ends today. xeu has rx_fc_ena and the FIFO has xon and xoff
-   thresholds; what are they set to, and are they right for a FIFO
-   this size at 400G?
+e. We could not get the port to send pause frames. With
+   `ethtool -A <port> tx on` (which xeu passes to xsl_rm_eu_fc_set()
+   with xoff at 12288 lines and xon at 10240) and the client set to
+   obey pause, the FIFO's fill passed xoff in about 2% of our
+   readings and reached 16327 lines, it went on dropping, and the
+   client's port counted no pause frame received in four runs. With
+   `rx on tx on` and the port taken down and up, the rings stopped
+   tail-dropping and the FIFO dropped everything instead (1.36
+   million frames in a run), still with no pause frame on the wire.
+   What else has to be set for the port to send pause, and would you
+   expect it to help here?
 
 One limit on what we know: each table is one run of each kind. The
 retransmit counts, which track the loss, repeat across about twenty
