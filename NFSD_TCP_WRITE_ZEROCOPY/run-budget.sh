@@ -271,7 +271,7 @@ SAVE_ICW=$(cat /sys/kernel/debug/nfsd/io_cache_write)
 SAVE_TON=$(cat $T/tracing_on)
 SAVE_REGDEV=$(cat $PP/rx_region_dev)
 SAVE_REGPAGES=$(cat $PP/rx_region_pages)
-for p in budget_pages budget_reserve credit_factor rcvbuf; do
+for p in budget_pages budget_reserve credit_factor rcvbuf linger_us; do
 	[ -e $SP/svc_tcp_rx_$p ] || continue	# credit_factor: gone from newer kernels
 	eval "SAVE_$p=\$(cat $SP/svc_tcp_rx_$p)"
 done
@@ -475,13 +475,12 @@ cleanup() {
 	[ -n "${SAVE_VETH_ALIGN:-}" ] && { modprobe -r veth 2>/dev/null; veth_load "$SAVE_VETH_ALIGN"; }
 	sysctl -qw net.ipv4.tcp_rmem="$SAVE_RMEM"
 	sysctl -qw net.core.skb_defer_max="$SAVE_DEFER"
-	[ -w $SP/svc_tcp_rx_linger_us ] && echo 0 > $SP/svc_tcp_rx_linger_us
 	echo "$SAVE_LIO" > /sys/module/nfs/parameters/localio_enabled
 	echo "$SAVE_ICW" > /sys/kernel/debug/nfsd/io_cache_write
 	echo 0 > $SP/svc_tcp_rx_budget_pages
 	echo 0 > $SP/svc_tcp_rx_budget_default_pages
 	echo 0 > $SP/svc_tcp_rx_budget_default_reserve
-	for p in budget_reserve credit_factor rcvbuf budget_pages; do
+	for p in budget_reserve credit_factor rcvbuf linger_us budget_pages; do
 		[ -e $SP/svc_tcp_rx_$p ] || continue
 		eval "echo \$SAVE_$p > $SP/svc_tcp_rx_$p"
 	done
