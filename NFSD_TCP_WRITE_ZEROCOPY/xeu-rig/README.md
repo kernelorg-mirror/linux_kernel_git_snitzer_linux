@@ -129,6 +129,13 @@ than the rings forwarded or dropped with 2 threads, 5,153 with 0, and
 the client retransmitted 240,733 and 10,492. Read a setting's loss
 from the client's retransmits, not from the ring drops. For Xsight:
 where is a frame dropped ahead of `fwd`, `tail_drop` and `pp_drop`?
+The note to Xsight is drafted, not sent:
+`../xsight-uncounted-loss-email.txt`, this first and the smaller
+questions after it (deferral, moderation, the Toeplitz hash, a filter
+to a ring). The SDK has `xsl_rm_eu_rx_port_counters_get()` with
+per-priority `tc_drop_packets`, which `xeu` never calls. The older
+`../xsight-steering-email.txt` predates the RSS table patch and is
+superseded by it.
 "0 and 2 threads by turns" in `../XEU_CONVERGENCE.md`. Do not kprobe
 every received segment (`gro-order.bt`): it makes the rings drop.
 

@@ -1,0 +1,157 @@
+To: <Xsight engineering contact>
+Subject: xeu on E1: received frames lost ahead of the RX rings and not counted (and four smaller questions)
+
+Hi <name>,
+
+We are now carrying about 44 GB/s of NFS writes into one E1 port,
+which is 92% of what the wire carries with no NFS at all. Thank you
+for the guidance that got us there. Looking at what holds the last
+few percent, we have found frames that the client transmits and that
+appear in none of the port's receive counters, neither as received
+nor as dropped. That is the main reason for this note. Four smaller
+questions follow it.
+
+
+1. Frames lost ahead of the rings, and not counted
+
+The setup: one E1 port (xeu 2.0.1 with our local patches, including
+rx_buf_size=8192) on an arm64 server with 16 KiB pages, 4 RX rings of
+256 entries, MTU 7792. The client is an x86 machine with a 400G mlx5
+port, cabled to the E1 port, writing over NFS on 16 TCP connections.
+No pause frames are enabled at either end.
+
+What we measured. We took the counters at both ends with the link
+idle, ran one 120-second test, and took them again with the link
+idle. The E1's ring counters had been zeroed by taking the port down
+and up before the test. On the client we used the port's physical
+transmit count (mlx5 tx_packets_phy). On the E1 we summed, over the
+four rings, rx_packets, rx_hw_tail_drop_packets and
+rx_hw_pp_drop_packets from `ethtool -S`. rx_hw_mru_exceed_packets,
+rx_hw_other_packets and rx_sw_dropped were 0 throughout.
+
+                            run A           run B
+  client transmitted        695,385,986     703,254,608
+  E1 rings: received
+    + tail drop + pp drop   695,380,833     703,019,906
+  not accounted for               5,153         234,702
+  TCP retransmits (client)       10,492         240,733
+  ring tail drops                    78             233
+
+The two ends agree to within about 100 packets while idle, so the
+difference is not a matter of when the counters were read.
+
+The two runs carry the same data at the same rate (43.7 and 44.2
+GB/s). They differ in one setting of our NFS server. In run B the
+server returns TCP receive window to the client sooner, so it sends
+about 65% more ACKs (51 million in the run against 31 million), and
+the client's 16 connections spend less time waiting for window and
+send closer together.
+
+Why we think the frames are lost at or ahead of the rings, and not in
+Linux:
+
+- From our reading of xeu_drv.c, rx_packets is not counted by the
+  driver's poll loop. It is the hardware's count of frames forwarded
+  to the ring (fwd_packets from xsl_rm_eu_rx_ring_stats_get()). So a
+  frame missing from it never reached a ring.
+- The client's retransmissions match the missing frames in both runs,
+  and the server reports almost none of them as duplicates (8 DSACKs
+  in a run). They are filling real holes.
+- Nothing in the server's network stack drops them. The TCP receive
+  queue, backlog, out-of-order and zero-window drop counters are all
+  0, there are no checksum errors, and a trace of every skb freed
+  with a drop reason shows a few hundred a run, the same in both.
+- The client's port shows no transmit drops or discards.
+
+We see the same pattern whenever the sender is less held back. With a
+larger receive window (and the server setting of run A) the client
+retransmits 360 to 900 thousand segments a run while the rings report
+32 to 200 thousand tail drops. Pacing the client's transmit (the fq
+qdisc) reduces both.
+
+What we cannot see. `ethtool -S` on the port has only the per-ring
+counters and four dev_* counters. There are no MAC, PCS/FEC or
+port-level receive counters, so we cannot tell a frame the MAC
+rejected from one the port dropped before choosing a ring. The
+client's end of the link reports FEC corrections on its own receive
+lanes (about 1.7 million corrected bits a second, none uncorrected).
+We have no such reading for the E1's receive direction, which is the
+one that carries the data.
+
+In the SDK built into the module we found
+xsl_rm_eu_rx_port_counters_get(), which returns struct rm_rx_port_ctr
+with per-priority tc_drop_packets and tc_drop_bytes, tc_curr_lines,
+tc_curr_packets and fc_curr_lines. xeu does not call it. It looks as
+if it may be the missing count.
+
+Our questions:
+
+a. Where can a received frame be dropped before it is counted as
+   forwarded, tail-dropped or pp-dropped on a ring? Is there a
+   port-level or per-priority buffer ahead of the rings, and is
+   tc_drop_packets its drop count?
+b. If so, what sizes that buffer, and can it be made deeper or its
+   threshold changed? What do tc_curr_lines and fc_curr_lines
+   measure?
+c. Is xsl_rm_eu_rx_port_counters_get() safe to call from the driver's
+   statistics path while traffic is flowing, and is it clear-on-read
+   like the ring statistics? If it is, we would be glad to add those
+   counters to `ethtool -S` ourselves and send you the patch.
+d. Are there MAC and FEC receive counters we can read on the E1 port
+   (FCS errors, corrected and uncorrectable FEC blocks), so that we
+   can rule the link in or out?
+e. Are the ring statistics exact when read while a ring is busy? The
+   driver reads and accumulates them, and we would like to be sure
+   nothing is lost between reads.
+
+One limit on what we know: the table above is one run of each kind.
+The retransmit counts, which track it, repeat across about twenty
+runs (10 to 15 thousand a run for A, 146 to 248 thousand for B).
+
+
+2. Smaller questions
+
+These do not hold us up today. Answers when convenient would help.
+
+a. Deferring interrupts stops the port. With the kernel's per-device
+   napi_defer_hard_irqs set to 2 and gro_flush_timeout to 50000 ns,
+   the port carried a mount and a few seconds of load and then
+   received nothing more: the rings' packet counts stood still and
+   the client's pings went unanswered. Writing 0 to both did not
+   bring it back. Taking the port down and up did. Nothing was
+   logged. Is xeu expected to work with these, and if not, what does
+   the card offer to hold interrupts back? In our profiles,
+   re-enabling the interrupt at the end of each RX poll is about 6%
+   of samples.
+
+b. Interrupt moderation. xeu has no `ethtool -C`. Can moderation be
+   set, and per ring?
+
+c. The Toeplitz hash. We have exposed the RSS table, key and hash
+   function through ethtool, on top of xsl_rm_reta_set/get,
+   xsl_rm_rss_hash_set/get and xsl_rm_rss_hash_type_set(), and we now
+   place each connection on a ring by pointing its table entry there.
+   That works well: four rings each carry a quarter to within half a
+   percent. To place a flow we read its hash from a received packet,
+   because we cannot compute it. With Toeplitz selected the hashes
+   change, and a key that repeats every 16 bits gives hashes that
+   repeat every 16 bits, but they are not the standard Toeplitz over
+   the IPv4 addresses and TCP ports with the key shown, in any field
+   order we tried. Which bytes of the 68-byte seed are used for
+   IPv4 TCP, over which fields and in what order?
+
+d. A flow filter that targets a ring. ntuple takes one rule, at
+   location 0, and its target can only be a VF. Can a rule target an
+   RX ring, and can there be more than one? The RSS table cannot
+   separate two busy flows that share an entry; a filter could.
+
+We carry five small patches to xeu 2.0.1 that came out of this work:
+rx_ip_align (received data on a 4-byte boundary), a retry so that a
+ring that ran empty refills, rx_refill_thresh, rx_buf_size (receive
+buffers smaller than a page), and the RSS table, key and hash
+function through ethtool. We would be glad to send them if they are
+of use to you.
+
+Thanks,
+Mike Snitzer
+Hammerspace
