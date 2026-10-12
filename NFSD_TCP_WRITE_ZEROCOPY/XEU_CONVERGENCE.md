@@ -4042,6 +4042,31 @@ past the cache, and cost 8 GB/s with nothing lost on the wire: the
 memory again. The Tx rings on two CPUs are 24 to 52% in softirq
 there, more than their 6 to 30% spread over four.
 
+### No MD: a filesystem on each drive (12 October, 18:45 to 19:10)
+
+Mike: do without raid0. Both arrays stopped and their superblocks
+zeroed, all eight drives formatted again (`nvme format --lbaf=1
+--ses=1`), `mkfs.xfs` on each and `mount -o noatime` on `/hs/nvme0`
+to `/hs/nvme7`, `zcbudget` in each. `twoport.sh` takes a list of
+filesystems for a port (`FS_A`, `FS_B`; the first four drives and
+the other four by default), exports each (fsid 7701n and 7702n),
+mounts each on the client (`/mnt/rxr-a1` to `-a4`, `-b1` to `-b4`)
+and gives fio a section for each with a quarter of the port's
+writers. The four mounts to one address share its 16 connections.
+`drive-cache.sh` skips the arrays when there are none. `sweep.sh`
+and `run-budget.sh` still default to `/hs/stripe` and need
+`PRP_DIR` naming a drive's filesystem.
+
+Two ports at the two-port setting: 52.6, 50.9 and 50.4 GB/s
+(`nomd-two-*`), against 55.6, 51.7 and 50.8 on the stripes after
+their format and 54.3 and 55.3 an hour before: not a gain in rate.
+What it shows that the stripes hid is each drive: in the second run
+`nvme7n1` wrote 4.4 GB/s at 98% busy with its three neighbours at
+7.3 and 90%, and in the third it was `nvme5n1`. A drive goes slow
+for a run, a different one each time, an hour after its format. The
+worst write latency in the three was 0.6 s; the stalls of seconds
+did not appear.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
