@@ -3574,6 +3574,71 @@ compared with one.
 `sweep.sh` and `nvme-baseline.sh` defaulted to `/hs/nvme0` and
 `/hs/nvme1`; they now default to `/hs/stripe` and `/hs/stripe1`.
 
+### Two ports: each carries 36 GB/s alone and the two together 43 (11 October, 22:50 to 23:40)
+
+Mike lifted the rule on `enp164s0f0` for this. What was set up:
+
+- **The second port like the first** (`xeu-rig/port-setup.sh
+  enp164s0f0 56`): MTU 7792, 4 rings of 256, and its pools in the
+  region with the first port's (`rx_region_dev` is a list:
+  `0000:a1:00.0,0000:a4:00.0`). Set by hand, for this boot.
+- **Its rings' interrupts on CPUs 56 to 63** (`xeu-rig/ring-irqs.sh`).
+  `xeu` hints `enp161s0f0`'s to CPUs 0 to 7, outside nfsd's 8-55,
+  and `enp164s0f0`'s to 32 to 39, inside them. 0-7 and 56-63 are
+  what the tuning profile keeps from nfsd, so nfsd's pinning stays.
+  The hints return when a port is taken down and up.
+- **A stripe and an export to a port**: `/hs/stripe/zcbudget` to
+  192.168.1.106 only, mounted through 192.168.1.211, and
+  `/hs/stripe1/zcbudget` to 192.168.0.106 only, through
+  192.168.0.211. The 512 nfsd threads in four pools and the region
+  are shared.
+- **`xeu-rig/twoport.sh <out> a|b|ab`**: the pinned load on either
+  port or both at once. `sweep.sh` and `run-budget.sh` drive one port
+  and keep the server's settings to themselves, so two cannot run
+  together. It places every connection on a ring as `PLACE=1` does
+  and reads the FIFO's counters.
+
+| run | GB/s | FIFO drops (70 s) | ring drops | client retransmits (70 s) | rings' CPUs busy | nfsd's CPUs: sys, iowait | region pages |
+|---|---|---|---|---|---|---|---|
+| a alone, harness, six drives (earlier) | 44 | | 100 | | | | 1550 |
+| a alone, harness, four drives | 36.3, 36.0 | | 192, 189 | | | | 1541, 1616 |
+| a alone, `twoport.sh` | 36.3 | 1,117 | 84 | 1,131 | 36% | 30%, 67% | |
+| b alone, `twoport.sh` | 36.4 | 0 | 78 | 79 | 36% | 30%, 67% | |
+| a and b together | 21.5 + 21.8 = 43.3 | 868,487 + 866,760 | 0 + 4 | 1,724,814 | 32%, 32% | 67%, 20% | 3103 |
+
+(`$L/xeu-16k-464-threads-4drv-0-{1,2}`,
+`$L/xeu-16k-464-twoport-{a,b,ab}-1`.)
+
+1. **Four drives hold one port to 36 GB/s.** The same cell carried 44
+   on six. nfsd's CPUs wait on the drives two thirds of the time.
+2. **The two ports are alike**, and `twoport.sh` gives what the
+   harness gives.
+3. **Together they carry 43.3 GB/s, 21.6 each: no more than one port
+   carried on six drives.** Each port's FIFO drops 870 thousand
+   frames in 70 s at half the rate it carried alone without loss,
+   the rings drop nothing and their CPUs are a third busy, and
+   nfsd's CPUs go from 30% in system time to 67% for a fifth more
+   data. The client's CPUs are 41% busy, none over half; its
+   connections wait on the window half the time.
+4. **Not known: what the 43 to 44 is.** It is the figure one port
+   reached on six drives, and here two ports and eight drives reach
+   it together. What could be shared and was not measured: the
+   card's capacity to move frames from two ports' FIFOs to the host
+   (each FIFO overflows at 22 GB/s with its rings idle), memory
+   bandwidth on the server (every byte is written by the card, read
+   and written by the copy, and read by the drives), the cache (the
+   two ports' receive memory together is 3103 pages, 48 MiB, against
+   the 32 MiB L3 that one port's 24 MiB fits in), and the one client
+   that sends both.
+
+Next, to tell these apart: sixteen iperf3 streams to each port at
+once, to a receiver that discards, which is the two ports' rate with
+no NFS and no drives (one port carried 48.4 alone); and a profile of
+nfsd during a run on both.
+
+`twoport.sh` printed nfsd's CPUs as 3% idle in these runs: it took
+iowait for use. It now prints busy.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
