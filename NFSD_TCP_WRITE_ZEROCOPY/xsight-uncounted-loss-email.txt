@@ -76,8 +76,6 @@ port-level receive counters, so we cannot tell a frame the MAC
 rejected from one the port dropped before choosing a ring. The
 client's end of the link reports FEC corrections on its own receive
 lanes (about 1.7 million corrected bits a second, none uncorrected).
-We have no such reading for the E1's receive direction, which is the
-one that carries the data.
 
 In the SDK built into the module we found
 xsl_rm_eu_rx_port_counters_get(), which returns struct rm_rx_port_ctr
@@ -101,9 +99,10 @@ accounted for:
 the counter after boot returned 12,015,394 frames dropped in traffic
 class 0. Its fill reached 8139 lines and 133 packets, and was 0 at
 more than half of our readings, which were 2 seconds apart. So the
-port's RX FIFO overflows in bursts and holds about 1 MiB, some 134 of
-our frames: 23 microseconds of traffic at this rate. We believe this
-is what holds us at 44 GB/s.
+port's RX FIFO overflows in bursts. From eu_rx_fifos_init() we take
+it to hold 2 MiB for this port's one traffic class, some 268 of our
+frames: 46 microseconds of traffic at this rate. We believe this is
+what holds us at 44 GB/s.
 
 Our questions:
 
@@ -111,20 +110,20 @@ a. Is our reading right: the frames are dropped at the port's RX
    FIFO because the packet processor does not move them to the rings
    as fast as they arrive in a burst? What rate can it sustain from
    that FIFO to four rings, and what would raise it?
-b. Can the FIFO be made larger for one port and one traffic class?
-   The SDK has EU_RX_FIFOS_TOTAL_SIZE_LINES of 2 MiB and
-   eu_rx_fifos_set_sizes(); we use one traffic class on each port.
-   How is it divided today, and is there a supported way to change
-   it?
+b. Is the FIFO 2 MiB for our port, as eu_rx_fifos_init() suggests
+   (EU_RX_FIFOS_TOTAL_SIZE_LINES for an E-unit with one port and one
+   traffic class)? Is that the size of the memory, or can it be made
+   larger?
 c. Is xsl_rm_eu_rx_port_counters_get() safe to call from the driver's
    statistics path while traffic is flowing? Outside NIC mode it
    flushes the packet processor's counter cache and waits for it.
    From the source we take the FIFO's drop counters and the
    non-promiscuous drop counter to clear on read, and the fill counts
    and the multicast filter's count not to; is that right?
-d. Are there MAC and FEC receive counters we can read on the E1 port
-   (FCS errors, corrected and uncorrectable FEC blocks), so that we
-   can rule the link in or out?
+d. `xsllink get --fec-hist` shows no uncorrectable codewords on
+   either port (NCCW 0), so we take the link itself to be clean. Are
+   there MAC receive counters as well (frames received, FCS errors)
+   that the driver could list?
 e. Would you expect link flow control to help here? Pause is off at
    both ends today. xeu has rx_fc_ena and the FIFO has xon and xoff
    thresholds; what are they set to, and are they right for a FIFO
