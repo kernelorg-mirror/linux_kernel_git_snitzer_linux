@@ -126,12 +126,7 @@ struct nfs_client *nfs3_set_ds_client(struct nfs_server *mds_srv,
 		fallthrough;
 	case XPRT_TRANSPORT_RDMA:
 	case XPRT_TRANSPORT_TCP:
-		if (mds_clp->cl_nconnect > 1) {
-			cl_init.nconnect = mds_clp->cl_nconnect;
-			if (ds_nconnect)
-				cl_init.nconnect = min(cl_init.nconnect,
-						       ds_nconnect);
-		}
+		cl_init.nconnect = nfs_ds_nconnect(mds_clp, ds_nconnect);
 	}
 
 	if (mds_srv->flags & NFS_MOUNT_NORESVPORT)
