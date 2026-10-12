@@ -195,6 +195,17 @@ together, **which is about what one port carries: run the pinned
 setting again on four drives before comparing two ports with one.**
 "Two stripes of four drives" in `../XEU_CONVERGENCE.md`.
 
+**Two ports (2026-10-11, 23:40): 36 GB/s each alone on four drives,
+and 43.3 together (21.6 each), with each port's FIFO dropping 870
+thousand frames in 70 s.** No gain over one port on six drives, and
+what the shared limit is is not known: iperf3 to both ports at once
+and a profile are next. `./port-setup.sh enp164s0f0 56` gives the
+second port the pinned settings and puts it in the region (this boot
+only), `./ring-irqs.sh <port> <cpu>` puts its rings' interrupts on
+56-63 (the driver's hint, 32-39, is inside nfsd's CPUs; redo after a
+down and up), `./twoport.sh <out> a|b|ab` runs either port or both.
+"Two ports" in `../XEU_CONVERGENCE.md`.
+
 **`io_cache_write` 2 is pinned (2026-10-11, 19:20)**: one cell with 4,
 which the tuning service's profile set, carried 28.6 GB/s against 44:
 nfsd syncs every 1 MiB WRITE where the client's COMMIT syncs 8 MiB.
