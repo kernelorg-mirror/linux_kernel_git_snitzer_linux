@@ -3989,6 +3989,38 @@ port the mark changes little. `svc_tcp_rx_lowat=131072` is in
 drives were the slower all afternoon, and that is the likely reason
 port a has run behind port b in the two-port runs since 15:00.
 
+### Both stripes on formatted drives (12 October, 17:20 to 18:00)
+
+Mike: format the drives and build the stripes again. For each stripe:
+unmounted, the array stopped and its members' superblocks zeroed,
+`nvme format /dev/nvmeNn1 --lbaf=1 --ses=1 --force` on each of the four
+(a second each), then `mdadm --create` (raid0, 1 MiB chunk), `mkfs.xfs`,
+`mount -o noatime`, `zcbudget`, and `drive-cache.sh`. `nvme4n1` had
+been on the 512-byte format and is now 4 KiB like the other seven;
+all eight drives and both arrays are 4096 logical and physical. The
+arrays have new UUIDs; there is no `/etc/mdadm.conf` and nothing in
+`/etc/fstab` to change. Locally `/hs/stripe` wrote 47.4 GB/s, each
+drive flat at 11.
+
+Two ports after it, with `svc_tcp_rx_keep` and the 128 KiB mark:
+55.6, 51.7 and 50.8 GB/s (`fmt-two-*`), the drives 46 to 76% busy.
+**So the drives are not what holds two ports under 58, and the
+format did not bring it back.** What the low runs have:
+
+- **Port a stalls for seconds.** In `fmt-two-2` port a carried 21.9
+  GB/s with a worst write latency of 16.7 s and a lowest second of
+  0.25 GB/s, where the 55.6 run's worst was 0.22 s. Its drives were
+  46% busy and it had 63 retransmits in the window. Port b's worst
+  in that run was 3.3 s. The cause is not known; these are what
+  earlier accounts called stalls and RTO episodes.
+- **The rings' receive CPUs are nearer their limit than the average
+  says.** A port's eight ring CPUs are "48% busy" because four take
+  the Rx rings and four the Tx: at 27 GB/s a port the Rx CPUs (0, 2,
+  4, 6) are 82 to 83% in softirq and 17% idle, and the Tx CPUs 8 to
+  14% busy. Eight rings were tried on 11 October with each ring's Rx
+  and Tx on one CPU and were not a gain; Rx rings on eight CPUs of
+  their own have not been tried.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
