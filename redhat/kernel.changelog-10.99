@@ -1,3 +1,16 @@
+* Mon Oct 12 2026 Mike Snitzer <snitzer@kernel.org> [7.3-3]
+- Update anna-nfs-next with the 8 commits anna-nfs/linux-next has added,
+  each cherry-picked with -x from its current commit: Chuck Lever's
+  series naming each network namespace's .nfs keyring in the x509 TLS
+  handshake, "xprtrdma: prevent disconnect feedback during endpoint
+  teardown", "xprtrdma: trim head iovec when the payload arrives via a
+  Write chunk" and "nfs: set gencount on protocol-specific remove"
+- Add Jon Flynn's "xprtrdma: do not clamp the FRWR depth below one
+  chunk": on mlx5 the clamp to max_sge_rd registered a maximum-size READ
+  with 9 MRs, each torn down with its own LOCAL_INV; one MR again lets
+  the reply use SEND_WITH_INV
+- Rename nfs-testing-canary-rdma-ds-connect to nfs-testing-canary-rdma
+
 * Mon Oct 12 2026 Mike Snitzer <snitzer@kernel.org> [7.3-2]
 - redhat: remove all riscv configs and kernel.spec enablement
 - Rebase all branches on Linux v7.3-rc7
