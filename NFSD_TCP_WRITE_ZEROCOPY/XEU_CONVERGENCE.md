@@ -3947,6 +3947,36 @@ for each piece that arrives and sleeping between pieces: the second
 change, `sk_rcvlowat` from what the record lacks, is the one that
 goes after that. The parameter is left N.
 
+### A thread woken for more than one piece: `svc_tcp_rx_lowat` (12 October, 15:50 to 16:35)
+
+The second change. `svc_tcp_rx_keep` is kept (Mike) and is on in
+`/etc/modprobe.d/sunrpc.conf` and in every run here. While a record
+is short and the read has taken all that was queued, the socket's
+low-water mark (`sk_rcvlowat`) is set to what the record still
+lacks, or to `svc_tcp_rx_lowat` bytes if that is less; otherwise it
+is 1. TCP then reports the socket readable, and a thread is woken,
+only when that much has arrived, or when the receive window is
+nearly closed. The mark is written with the socket locked, after
+the read: segments that arrived during the read are in the backlog
+and are queued against the new mark when the lock is released. At
+the two-port setting (384 KiB held buffer), by turns:
+
+| `svc_tcp_rx_lowat` | GB/s | threads woken a second | context switches a second | nfsd CPUs busy | region pages |
+|---|---|---|---|---|---|
+| 0 | 55.3, 53.4 | 830, 826 thousand | 1.25, 1.20 million | 44%, 43% | 1216, 1296 |
+| 65536 | 54.6, 49.9 | 483, 489 thousand | 0.86, 0.86 million | 43%, 40% | 1280, 1248 |
+| 131072 | 53.0, 55.1 | 398, 399 thousand | 0.74, 0.77 million | 42%, 43% | 1403, 1344 |
+
+Wakeups halve at 128 KiB, to about 7 for each WRITE, and the rate
+is level; the 49.9 is port a carrying 22.8 GB/s, the stall seen in
+other runs today. With `svc_tcp_rx_keep` before it, the two take
+wakeups from 1.15 million a second to 0.40 million and context
+switches from 1.46 million to 0.75 million. nfsd's CPUs are only a
+point or two less busy for it: the time is in the copy. The
+receive memory in use rises by about 1.5 MiB at 128 KiB, still
+inside the cache. Not tried: a mark with a larger held buffer, or
+on one port. The parameter is left at 0.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
