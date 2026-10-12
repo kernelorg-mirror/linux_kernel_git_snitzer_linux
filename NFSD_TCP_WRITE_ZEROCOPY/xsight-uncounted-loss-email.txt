@@ -95,8 +95,10 @@ rate or a little less. And when we also hold each of the 16
 connections to 23 Gbit/s, so that together they cannot offer more
 than 368 Gbit/s, the FIFO is never used (one line at most, no drop)
 and the rate falls from 44 GB/s to 38.7, with the rings tail-dropping
-42 thousand frames. So with the bursts gone the limit is behind the
-FIFO, and lower.
+42 thousand frames. So with the bursts gone the frames are lost at
+the rings and not at the FIFO: our host does not empty the rings fast
+enough, and what it carries that way, 38.7 GB/s, is less than the 44
+it carries when the traffic arrives in bursts.
 
 Our questions:
 
