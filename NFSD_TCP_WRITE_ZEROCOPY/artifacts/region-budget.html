@@ -354,11 +354,12 @@
       <thead><tr><th>16 TCP streams to each port</th><th>One port</th><th>Both ports</th></tr></thead>
       <tbody>
         <tr><td>Receivers that discard without copying</td><td class="c">49.8 GB/s</td><td class="r">99.4 GB/s</td></tr>
-        <tr><td>Receivers that copy into a small buffer they reuse</td><td class="m">not run</td><td class="c">86.5 GB/s</td></tr>
+        <tr><td>Receivers that copy into a small buffer they reuse</td><td class="c">49.8 GB/s</td><td class="c">89.9 GB/s</td></tr>
         <tr><td>NFS, copied and written to the drives: the best run of each</td><td class="c">44.6 GB/s</td><td class="r">58.5 GB/s</td></tr>
         <tr><td>NFS on 11 October, where this began: one port's settings on both, the drives flushing</td><td class="m">36.4 GB/s</td><td class="m">43.3 GB/s</td></tr>
       </tbody>
     </table></div>
+    <p>Each figure is the best run: one port with the copy gave 49.5, 49.8 and 49.8 GB/s, and both ports 82.8, 86.5 and 89.9. One port is at line rate with the copy or without it; only with both ports loaded does the copy cost anything, about a tenth.</p>
     <p><strong>The card, the wire, the client and the network stack carry both ports at line rate when nothing is copied.</strong> What the two ports share is the copy: a copy from memory to memory on this machine reaches 62 to 68 GB/s however many CPUs do it, and the copy is 29% of all the server's cycles in a two-port run. At 58.5 GB/s the server is at about 90% of that.</p>
 
 

@@ -18,6 +18,9 @@ rxbytes() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_rx_bytes:$/{s+=$2} END{print
 shares() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_rx_bytes:$/{print $2}' | tr '\n' ' '; }
 trap 'pkill -x iperf3; pkill -f "[w]ire-rcv[.]py"; $SSHC "pkill -x iperf3; pkill -f "[w]ire-snd[.]py"" < /dev/null; echo N > /sys/module/xeu/parameters/rx_port_stats' EXIT
 echo Y > /sys/module/xeu/parameters/rx_port_stats
+# Each port's ring interrupts on its own CPUs, as twoport.sh has them.
+declare -A IRQ0=([a]=0 [b]=56)
+for p in $PORTS; do "$(dirname "$0")/ring-irqs.sh" ${DEV[$p]} ${IRQ0[$p]} > /dev/null; done
 pkill -x iperf3; sleep 1
 c=""
 if [ -n "${MODE:-}" ]; then

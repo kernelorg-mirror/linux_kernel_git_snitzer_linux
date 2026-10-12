@@ -66,6 +66,9 @@ cleanup() {
 	# The RSS table may name rings that are going: spread it over four first.
 	[ -n "${RINGS:-}" ] && { for p in $PORTS; do ethtool -X ${DEV[$p]} equal 4 2>/dev/null; ip link set ${DEV[$p]} down; sleep 1; ethtool -L ${DEV[$p]} combined 4; ip link set ${DEV[$p]} up; done; sleep 7; for p in $PORTS; do "$RIG/ring-irqs.sh" ${DEV[$p]} ${IRQ0[$p]} > /dev/null; done; }
 	[ -n "${ENTRIES:-}${RINGS:-}" ] && for p in $PORTS; do ethtool -G ${DEV[$p]} rx 256 2>/dev/null; done
+	# Resizing the rings puts their interrupts back where the driver hints
+	# (both ports on CPUs 0-7): place them again.
+	[ -n "${ENTRIES:-}${RINGS:-}" ] && { sleep 7; for p in $PORTS; do "$RIG/ring-irqs.sh" ${DEV[$p]} ${IRQ0[$p]} > /dev/null; done; }
 	for p in $PORTS; do
 		cl "rm -f /mnt/rxr-$p/f-* /mnt/rxr-$p/bal-* 2>/dev/null; umount -f /mnt/rxr-$p 2>/dev/null"
 		exportfs -u "${CLI[$p]}:${FS[$p]}/zcbudget" 2>/dev/null
