@@ -225,7 +225,7 @@
   <header>
     <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 464 &middot; 11&nbsp;October&nbsp;2026</p>
     <h1>16 KiB pages, 8192-byte receive buffers and an MTU of 7792: <span class="ok">44.6 GB/s of NFS WRITEs inside the E1's 32 MiB L3 cache.</span></h1>
-    <p class="lede"><span class="hl">An NFS server on the E1 now takes 44.6 GB/s of durable WRITEs from one client</span>: sixteen connections over one port of the Xsight card, copied once on arrival and written direct to six striped NVMe drives. That is 92% of what the wire carries to a receiver that stores nothing (48 GB/s), and three days earlier the same copy carried 25.4. The receive memory in use stays at 24 to 25 MiB, inside the CPU's 32 MiB cache. Three settings do it together: the card's receive buffers cut to 8192 bytes with the MTU lowered so that each frame fills one, each connection's receive buffer held at 1 MiB, and every connection placed on a receive ring so that each ring carries a quarter. <span class="hc">That is the best run on build 464; runs of the same setting gave 43.4 to 44.6.</span> <a href="#pinned">The configuration that is pinned now is first, below</a>, then <a href="#xeu464">build 464</a>: <a href="#claim">more than one thread receiving and copying on a connection</a>, <a href="#window">a larger receive window</a>, and <a href="#fq">pacing at the client</a> all reach the same ceiling, and <a href="#client">the client is not what holds it</a>. One setting tried there cost a third of the rate: <a href="#mode4">nfsd making every WRITE durable</a> carried 28.6 GB/s. Then <a href="#xeu463">what it took to get here</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#loan">the loan, made ready for NVMe drives with SGLs</a>, with <a href="#nofactor">a setting the kernel now measures for itself</a>, then <a href="#tried">what was tried before it and did not help</a>, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
+    <p class="lede"><span class="hl">An NFS server on the E1 now takes 44.6 GB/s of durable WRITEs from one client</span>: sixteen connections over one port of the Xsight card, copied once on arrival and written direct to six striped NVMe drives. That is 92% of what the wire carries to a receiver that stores nothing (48 GB/s), and three days earlier the same copy carried 25.4. The receive memory in use stays at 24 to 25 MiB, inside the CPU's 32 MiB cache. Three settings do it together: the card's receive buffers cut to 8192 bytes with the MTU lowered so that each frame fills one, each connection's receive buffer held at 1 MiB, and every connection placed on a receive ring so that each ring carries a quarter. <span class="hc">That is the best run on build 464; runs of the same setting gave 43.4 to 44.6.</span> <a href="#pinned">The configuration that is pinned now is first, below</a>, then <a href="#twoport">both ports of the card together, which carry 54 GB/s</a>, then <a href="#xeu464">build 464 on one port</a>: <a href="#claim">more than one thread receiving and copying on a connection</a>, <a href="#window">a larger receive window</a>, and <a href="#fq">pacing at the client</a> all reach the same ceiling, and <a href="#client">the client is not what holds it</a>. One setting tried there cost a third of the rate: <a href="#mode4">nfsd making every WRITE durable</a> carried 28.6 GB/s. Then <a href="#xeu463">what it took to get here</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#loan">the loan, made ready for NVMe drives with SGLs</a>, with <a href="#nofactor">a setting the kernel now measures for itself</a>, then <a href="#tried">what was tried before it and did not help</a>, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
 
 
     <div class="metrics">
@@ -238,6 +238,7 @@
     <div class="prov">
       <p class="pl">Runs behind this page, and the best rate measured on each</p>
       <dl class="runs">
+        <dt>12 Oct &middot; 16 KiB</dt><dd><strong>Build 464, both ports</strong> on tardis1, each onto its own stripe of four drives. Not on the scale below, which is one port's wire: two ports' is 96 GB/s.<div class="pk"><span class="pkn none"><strong style="font-weight:600;color:var(--ink)">54.2 GB/s</strong> over two ports</span></div></dd>
         <dt>11 Oct &middot; 16 KiB</dt><dd><strong>Build 464</strong> on tardis1: the same card, drives and client, with the receive window measured by the kernel and all 512 nfsd threads kept off the rings' CPUs. <code class="kv">7.1.13-21.hs.464.loanpages_pool.el9.aarch64+16k</code><div class="pk"><div class="pktrack"><span class="pkbar gain" style="width:92.9%"></span></div><span class="pkn">44.6 GB/s</span></div></dd>
         <dt>10 Oct &middot; 16 KiB</dt><dd><strong>Build 463</strong> on tardis1: receive buffers a frame fills, and every connection placed on a ring. kmod-xsight 2.0.1-6. <code class="kv">7.1.13-21.hs.463.loanpages_pool.el9.aarch64+16k</code><div class="pk"><div class="pktrack"><span class="pkbar gain" style="width:90.2%"></span></div><span class="pkn">43.3 GB/s</span></div></dd>
         <dt>9 Oct &middot; 16 KiB</dt><dd><strong>Build 462</strong> on tardis1: five kernel changes and the driver's refill threshold, loaded together. <code class="kv">7.1.13-21.hs.462.el9.aarch64+16k</code><div class="pk"><div class="pktrack"><span class="pkbar gain" style="width:79.8%"></span></div><span class="pkn">38.3 GB/s</span></div></dd>
@@ -292,7 +293,7 @@
       <p class="who" style="margin-top:14px">/etc/modprobe.d/sunrpc.conf</p>
       <div class="set" style="margin-top:0">options sunrpc pools_per_node=4 svc_tcp_rx_rcvbuf=1048576 svc_tcp_rx_linger_us=50</div>
     </div>
-    <p><strong>All of it has been measured on one port and one client.</strong> The module settings apply to every port the driver has and to every NFS connection, not to one. A second port left at an MTU of 9000 would take two receive buffers to a frame, and the 1 MiB held buffer and the linger would apply to every client. Nothing has been run with two ports carrying load.</p>
+    <p><strong>This is the configuration for one port carrying load.</strong> The module settings apply to every port the driver has and to every NFS connection, not to one. With both ports loaded a different held buffer, ring depth and linger carry more (<a href="#twoport">below</a>), and those settings carry less on one port, so which is right depends on how many ports are in use.</p>
     <div class="matrix">
       <div class="cell k">Two threads copying on a connection: level on rate on one port, and its retransmits are frames the port's receive FIFO drops. Kept at 0; to be tried again with more than one port</div><div class="cell v"><span class="pill yes">settled for one port</span></div>
       <div class="cell k">Where the card drops frames without counting them: found. A 2 MiB receive FIFO ahead of the rings overflows in bursts. A driver patch now shows its drops</div><div class="cell v"><span class="pill yes">found</span></div>
@@ -304,8 +305,65 @@
     </div>
   </section>
 
+  <section id="twoport">
+    <p class="eyebrow ok"><span>Newest &middot; both ports of the card &middot; 16 KiB &middot; tardis1<br>11 and 12 October, build 464</span></p>
+    <h2>Two ports: 54 GB/s once both ports' receive memory fits in the cache</h2>
+    <div class="verdict gain">
+      <p class="big">With the one-port settings on both ports the server carried <em>43 GB/s</em> in all, no more than one port had. Retuned so that the two ports' receive memory fits in the L3 cache, it carries <em>54 GB/s</em>.</p>
+      <p><strong>The setup.</strong> The eight data drives became two stripes of four, one for each port, each exported to and mounted through its own port from the same client. The second port was given the first's settings and a place in the same receive region, and its rings' interrupts were moved off the CPUs nfsd runs on. On four drives one port alone carries 36 GB/s, where it carried 44.6 on six.</p>
+    </div>
+
+    <h3 style="margin-top:26px">Why the two ports did not add up: the copy</h3>
+    <p>Plain TCP from the same client into the two ports, with no NFS and no drives, shows where the limit is not:</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:560px">
+      <thead><tr><th>16 TCP streams to each port</th><th>One port</th><th>Both ports</th></tr></thead>
+      <tbody>
+        <tr><td>Receivers that discard without copying</td><td class="c">49.8 GB/s</td><td class="r">99.4 GB/s</td></tr>
+        <tr><td>Receivers that copy into a small buffer they reuse</td><td class="m">not run</td><td class="c">86.5 GB/s</td></tr>
+        <tr><td>NFS, copied and written to the drives, one-port settings</td><td class="c">36.4 GB/s</td><td class="x">43.3 GB/s</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>The card, the wire, the client and the network stack carry both ports at line rate when nothing is copied.</strong> What the two ports share is the copy: a copy from memory to memory on this machine reaches about 62 GB/s however many CPUs do it, and the copy is a third of all the server's cycles in a two-port run.</p>
+
+    <h3 style="margin-top:26px">The receive memory in use decides the rate</h3>
+    <div class="tbl-wrap"><table class="q" style="min-width:560px">
+      <thead><tr><th>Receive memory in use, both ports</th><th>Settings that give it</th><th>Total GB/s</th></tr></thead>
+      <tbody>
+        <tr><td class="x">47 to 49 MiB</td><td>1 MiB held buffers, rings of 256: the one-port settings</td><td class="x">41.0 to 42.7</td></tr>
+        <tr><td class="x">35 to 42 MiB</td><td>512 or 768 KiB with rings of 256, or 1 MiB with rings of 128</td><td class="c">42.5 to 43.9</td></tr>
+        <tr><td class="c">24 to 29 MiB</td><td>512 or 768 KiB with rings of 128</td><td class="c">45.6 to 52.4</td></tr>
+        <tr><td class="r">20 to 22 MiB</td><td>320 to 384 KiB with rings of 128</td><td class="r">46.8 to 54.2</td></tr>
+        <tr><td class="c">15 to 19 MiB</td><td>256 KiB buffers, or rings of 64</td><td class="c">41.7 to 51.9</td></tr>
+      </tbody>
+    </table></div>
+    <p>57 runs on both ports. Shrinking the held buffer alone, or the rings alone, gains nothing; the two together bring the memory under the 32 MiB cache and the rate up by 11 GB/s. Below about 20 MiB the window or the rings are too small and cost more than the memory saves.</p>
+
+    <h3 style="margin-top:26px">The best settings found for two ports</h3>
+    <div class="tbl-wrap"><table class="q" style="min-width:560px">
+      <thead><tr><th>Setting</th><th>One port (pinned)</th><th>Two ports</th></tr></thead>
+      <tbody>
+        <tr><td>Held receive buffer, per connection</td><td class="c">1 MiB</td><td class="r">384 KiB</td></tr>
+        <tr><td>Receive rings, per port</td><td class="c">4 of 256</td><td class="r">4 of 128</td></tr>
+        <tr><td>Linger</td><td class="c">50 &micro;s</td><td class="r">0</td></tr>
+        <tr><td>Client's queueing</td><td class="c"><code>fq_codel</code>, as found</td><td class="r"><code>fq</code> (worth about 2 GB/s)</td></tr>
+        <tr><td>Second port's ring interrupts</td><td class="m">not in use</td><td class="r">CPUs 56 to 63, off nfsd's</td></tr>
+        <tr><td>Receive memory in use</td><td class="c">24 to 25 MiB</td><td class="r">21 to 22 MiB for both</td></tr>
+        <tr><td>Rate</td><td class="c">36 GB/s on four drives</td><td class="r">54 GB/s: seven runs, 48.1 to 54.2</td></tr>
+      </tbody>
+    </table></div>
+    <p>At that setting nothing is lost: no drops at the card's FIFO, under 200 at the rings, a few hundred retransmits in 70 seconds. Everything else is as pinned above: 8192-byte receive buffers, an MTU of 7792, 512 nfsd threads, the direct write mode.</p>
+    <div class="matrix">
+      <div class="cell k">The two-port settings are not the best for one port: one port alone with them carries 31 GB/s, against 36 with its own. The configuration depends on how many ports carry load</div><div class="cell v"><span class="pill pend">a trade</span></div>
+      <div class="cell k">Two ports give 1.5 times one port, not twice. Copy mode on this machine has about 54 GB/s; the loan, which does not copy, is what the card's 99 GB/s is there for, and it needs drives that take arbitrary pieces</div><div class="cell v"><span class="pill pend">the copy</span></div>
+      <div class="cell k">Why the smaller memory helps: the processor's counters show the copy reading as much from memory at 21 MiB as at 48 MiB, so it is not simply the copy finding its data in the cache</div><div class="cell v"><span class="pill no">not explained</span></div>
+      <div class="cell k">The second port runs 2 to 4 GB/s under the first when both are loaded; alone they are equal</div><div class="cell v"><span class="pill pend">not looked into</span></div>
+      <div class="cell k">Not gains on two ports: two threads copying on a connection, more or fewer connections, more writers, eight rings, the client's writers pinned to their NIC</div><div class="cell v"><span class="pill yes">tried</span></div>
+    </div>
+    <p style="margin-top:14px" class="note">Each run is 120 seconds of 16 writers a port making 8 MiB direct writes, every connection placed on a ring. The second port's settings are set by hand and do not survive a reboot. The account is "Two ports: why they did not add up, and the setting that carries 54 GB/s" in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>, and every run is a line of <code>xeu-rig/results-twoport-464.tsv</code>.</p>
+  </section>
+
   <section id="xeu464">
-    <p class="eyebrow ok"><span>Newest &middot; 16 KiB &middot; tardis1 &middot; the Xsight card and six striped NVMe drives<br>11 October, build 464</span></p>
+    <p class="eyebrow ok"><span>One port &middot; 16 KiB &middot; tardis1 &middot; the Xsight card and six striped NVMe drives<br>11 October, build 464</span></p>
     <h2>Build 464 reaches 44.6 GB/s, and three ways of draining a connection faster reach the same ceiling</h2>
     <div class="verdict gain">
       <p class="big">Build 464 carries <em>44.6 GB/s</em> at the best setting, with runs between 43.4 and 44.6. The client is already putting 355 Gbit/s on the wire, so about 3.5 GB/s is all that is left.</p>
