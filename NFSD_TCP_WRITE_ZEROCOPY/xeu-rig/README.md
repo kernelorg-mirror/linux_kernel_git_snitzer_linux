@@ -195,6 +195,25 @@ together, **which is about what one port carries: run the pinned
 setting again on four drives before comparing two ports with one.**
 "Two stripes of four drives" in `../XEU_CONVERGENCE.md`.
 
+**Two ports, the best setting found (2026-10-12, 01:35): 54 GB/s**
+(seven runs, 48.1 to 54.2, middle 54.0), with the two ports' receive
+memory in 21 MiB of the 32 MiB L3:
+
+    RCVBUF=393216 ENTRIES=128 QDISC=fq LINGER=0 ./twoport.sh <out> ab
+
+384 KiB held buffer, rings of 4 x 128, linger 0, `fq` on the client
+(`fq_codel`: 52). The one-port setting on two ports is 43 (48 MiB).
+**It is not the one-port setting: one port alone with it carries 31,
+against 36 with 1 MiB and 4 x 256.** Why two ports did not add up:
+with receivers that discard without copying, plain TCP carries 99.4
+GB/s on the two ports (`MODE=trunc ./iperf2port.sh ab`); with a copy,
+86.5; and a memory-to-memory copy on this machine tops out near 62
+GB/s. The copy is what the ports share. Every run is in
+`results-twoport-464.tsv`; the account is "Two ports: why they did
+not add up" in `../XEU_CONVERGENCE.md`. Open: port b runs 2 to 4 GB/s
+under port a when both are loaded, and what the smaller memory saves
+is not explained by the cache counters.
+
 **Two ports (2026-10-11, 23:40): 36 GB/s each alone on four drives,
 and 43.3 together (21.6 each), with each port's FIFO dropping 870
 thousand frames in 70 s.** No gain over one port on six drives, and

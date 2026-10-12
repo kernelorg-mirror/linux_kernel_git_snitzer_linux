@@ -15,7 +15,16 @@
 # port down and up first, which zeroes its rings' counters, and puts the
 # rings' interrupts back on their CPUs afterwards.
 # RUNTIME=<s> (120), JOBS=<n> (16), BS (8M), NCONN (16), PLACE=0 to leave
-# the flows where they fall.
+# the flows where they fall.  For a run and put back after it:
+#   RCVBUF=<bytes>   svc_tcp_rx_rcvbuf, the held receive buffer
+#   LINGER=<us>      svc_tcp_rx_linger_us
+#   THREADS=<n>      svc_tcp_rx_copy_threads
+#   ENTRIES=<n>      entries of each RX ring, on the ports used
+#   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
+#   QDISC=fq|fqNN    fq on the client's ports (fqNN: maxrate NN Gbit/s a flow)
+#   PROFILE=1        a 10 s system-wide perf record and perf stat mid-run
+#   PIN=1            each port's writers on the client CPUs of its NIC's NUMA node
+# TSV=<file>: append a line of the run's figures (TAG=<label> names it).
 . "$(dirname "$0")/common.sh"
 OUT=${1:?out dir}; WHICH=${2:-ab}
 RUNTIME=${RUNTIME:-120}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
@@ -23,6 +32,7 @@ YNL="$H/../tools/net/ynl/pyynl/cli.py --no-schema --spec $H/../Documentation/net
 declare -A DEV=([a]=enp161s0f0 [b]=enp164s0f0) SRV=([a]=192.168.1.211 [b]=192.168.0.211)
 declare -A CLI=([a]=192.168.1.106 [b]=192.168.0.106) FS=([a]=/hs/stripe [b]=/hs/stripe1)
 declare -A IRQ0=([a]=0 [b]=56) FSID=([a]=7701 [b]=7702)
+declare -A CPUS=([a]=0-23 [b]=24-47)	# the client's CPUs on each port's NUMA node, for PIN=1
 PORTS=$(sed 's/./& /g' <<< "$WHICH")
 SSHC="ssh -o BatchMode=yes -o ConnectTimeout=10 -i $KEY root@${CLI[a]}"
 cl() { $SSHC "$@" < /dev/null; }
@@ -36,7 +46,23 @@ rxbytes() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_rx_bytes:$/{s+=$2} END{print
 ringshare() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_rx_bytes:$/{print $2}' | tr '\n' ' '; }
 cretr() { cl "awk '/^Tcp:/ && !h {for (i = 1; i <= NF; i++) if (\$i == \"RetransSegs\") c = i; h = 1; next} /^Tcp:/ {print \$c}' /proc/net/snmp"; }
 
+SP=/sys/module/sunrpc/parameters
+declare -A SAVE
+for k in rcvbuf linger_us copy_threads; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k); done
+declare -A CDEV=([a]=ens3np0 [b]=ens6np0)
+setq() {	# setq <client dev> <codel|fq|fqNN>
+	case $2 in
+	codel) cl "tc qdisc del dev $1 root 2>/dev/null; true" ;;
+	fq)    cl "tc qdisc replace dev $1 root handle 1: mq && for i in \$(seq 1 48); do tc qdisc replace dev $1 parent 1:\$(printf %x \$i) fq || exit 1; done" ;;
+	fq*)   cl "tc qdisc replace dev $1 root handle 1: mq && for i in \$(seq 1 48); do tc qdisc replace dev $1 parent 1:\$(printf %x \$i) fq maxrate ${2#fq}gbit || exit 1; done" ;;
+	esac
+}
 cleanup() {
+	for k in rcvbuf linger_us copy_threads; do echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
+	[ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} codel; done
+	# The RSS table may name rings that are going: spread it over four first.
+	[ -n "${RINGS:-}" ] && { for p in $PORTS; do ethtool -X ${DEV[$p]} equal 4 2>/dev/null; ip link set ${DEV[$p]} down; sleep 1; ethtool -L ${DEV[$p]} combined 4; ip link set ${DEV[$p]} up; done; sleep 7; for p in $PORTS; do "$RIG/ring-irqs.sh" ${DEV[$p]} ${IRQ0[$p]} > /dev/null; done; }
+	[ -n "${ENTRIES:-}${RINGS:-}" ] && for p in $PORTS; do ethtool -G ${DEV[$p]} rx 256 2>/dev/null; done
 	for p in $PORTS; do
 		cl "rm -f /mnt/rxr-$p/f-* /mnt/rxr-$p/bal-* 2>/dev/null; umount -f /mnt/rxr-$p 2>/dev/null"
 		exportfs -u "${CLI[$p]}:${FS[$p]}/zcbudget" 2>/dev/null
@@ -48,12 +74,20 @@ trap cleanup EXIT
 echo "twoport $WHICH: kernel $(uname -r), xeu $(cat /sys/module/xeu/srcversion), sunrpc $(cat /sys/module/sunrpc/srcversion)" | tee geometry.txt
 echo "rcvbuf $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_rcvbuf) linger $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_linger_us) copy_threads $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_copy_threads) io_cache_write $(cat /sys/kernel/debug/nfsd/io_cache_write) nfsd threads $(cat /proc/fs/nfsd/threads) rx_refill_thresh $(cat /sys/module/xeu/parameters/rx_refill_thresh) region dev $(cat $PP/rx_region_dev)" | tee -a geometry.txt
 echo Y > /sys/module/xeu/parameters/rx_port_stats
+[ -n "${RCVBUF:-}" ] && echo $RCVBUF > $SP/svc_tcp_rx_rcvbuf
+[ -n "${LINGER:-}" ] && echo $LINGER > $SP/svc_tcp_rx_linger_us
+[ -n "${THREADS:-}" ] && echo $THREADS > $SP/svc_tcp_rx_copy_threads
+[ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} $QDISC || { echo "qdisc not set"; exit 1; }; done
+echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us) copy_threads $(cat $SP/svc_tcp_rx_copy_threads) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS" | tee -a geometry.txt
 
 for p in $PORTS; do
 	d=${DEV[$p]}
-	ip link set $d down; sleep 1; ip link set $d up
+	ip link set $d down; sleep 1
+	[ -n "${RINGS:-}" ] && { ethtool -X $d equal $RINGS 2>/dev/null; ethtool -L $d combined $RINGS; }
+	ip link set $d up
 done
 sleep 7
+[ -n "${ENTRIES:-}" ] && { for p in $PORTS; do ethtool -G ${DEV[$p]} rx $ENTRIES; done; sleep 7; }
 for p in $PORTS; do
 	d=${DEV[$p]}
 	"$RIG/ring-irqs.sh" $d ${IRQ0[$p]} >> geometry.txt
@@ -78,6 +112,7 @@ ioengine=libaio
 iodepth=16
 numjobs=$JOBS
 group_reporting
+${PIN:+cpus_allowed=${CPUS[$1]}}
 [$2$1]
 directory=/mnt/rxr-$1
 filename_format=$2-$1.\$jobnum
@@ -120,6 +155,13 @@ declare -A F0 T0 B0 S0
 for p in $PORTS; do d=${DEV[$p]}; F0[$p]=$(fifo $d); T0[$p]=$(ringdrop $d); B0[$p]=$(rxbytes $d); S0[$p]=$(ringshare $d); done
 R0=$(cretr)
 mpstat -P ALL $W 1 > srv-mpstat.txt 2>&1 &
+if [ -n "${PROFILE:-}" ]; then
+	( sleep 10
+	  perf stat -a -x, -e cycles,instructions,l3d_cache_lmiss_rd,l3d_cache_refill,bus_access_rd,bus_access_wr,l2d_cache_refill -o perf-stat.txt -- sleep 10 2> /dev/null
+	  perf record -a -g -F 199 -o perf.data -- sleep 10 > /dev/null 2>&1
+	  perf report -i perf.data --no-children --no-inline -g none --percent-limit 0.7 --sort symbol 2> /dev/null | grep -v '^$' | head -60 > perf-sym.txt
+	  rm -f perf.data ) &
+fi
 cl "mpstat -P ALL $W 1" > cli-mpstat.txt 2>&1 &
 sleep $W
 R1=$(cretr)
@@ -153,6 +195,7 @@ for p in sys.argv[1:]:
     f = w.get(p, ['-'] * 8)
     print("port %s %s: %.2f GB/s (fio, whole run); in the %s s window: wire %s GB/s, FIFO drops %s, ring drops %s, rings %s%%" % (p, f[1], bw, f[7], f[3], f[4], f[5], f[6]))
 print("total %.2f GB/s" % tot)
+open('total.txt', 'w').write("%.2f\n" % tot)
 for l in open('window.txt'):
     if l.startswith('client'): print(l.strip())
 # A CPU waiting on I/O is not in use: busy is what is neither idle nor iowait.
@@ -167,3 +210,10 @@ print("server CPUs busy: rings of a (0-7) %.0f%%, rings of b (56-63) %.0f%%, nfs
 print("client CPUs busy: %.0f%%" % busy('cli-mpstat.txt', range(0, 48)))
 EOF
 echo "region pages in use at most: $(( $(reg pages) - $(reg min_free) ))" | tee -a summary.txt
+if [ -n "${TSV:-}" ]; then
+	[ -s $TSV ] || echo "tag which total_GBps a_GBps b_GBps fifo_a fifo_b ringdrop_a ringdrop_b cli_retrans region_pages nfsd_busy ringcpu_a ringcpu_b rcvbuf linger threads entries qdisc nconn jobs" > $TSV
+	g() { awk -v p=$1 -v c=$2 '$1 == p {print $c}' window.txt; }
+	fb() { python3 -c "import json;print('%.2f' % (json.load(open('fio-$1.json'))['jobs'][0]['write']['bw_bytes']/1e9))" 2> /dev/null || echo -; }
+	cb=$(awk '$1 == "Average:" && $2 ~ /^[0-9]+$/ {b = 100 - $NF - $6; c = $2 + 0; if (c < 8) a += b; else if (c >= 56) z += b; else n += b} END {printf "%.0f %.0f %.0f", n / 48, a / 8, z / 8}' srv-mpstat.txt)
+	echo "${TAG:-$(basename $OUT)} $WHICH $(cat total.txt) $(fb a) $(fb b) $(g a 5) $(g b 5) $(g a 6) $(g b 6) $(awk '/^client retransmits/{print $NF}' window.txt) $(( $(reg pages) - $(reg min_free) )) $cb $(cat $SP/svc_tcp_rx_rcvbuf) $(cat $SP/svc_tcp_rx_linger_us) $(cat $SP/svc_tcp_rx_copy_threads) ${ENTRIES:-256} ${QDISC:-codel} $NCONN $JOBS" | sed 's/  */ /g' >> $TSV
+fi

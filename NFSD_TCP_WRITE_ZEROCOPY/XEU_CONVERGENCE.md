@@ -3639,6 +3639,113 @@ nfsd during a run on both.
 `twoport.sh` printed nfsd's CPUs as 3% idle in these runs: it took
 iowait for use. It now prints busy.
 
+### Two ports: why they did not add up, and the setting that carries 54 GB/s (11 October 23:45 to 12 October 01:35)
+
+Mike: find why two ports do not scale, keep the receive memory in the
+32 MiB L3 that both ports and all 64 CPUs share, and find the best
+setting. All of this is on the two four-drive stripes, where one port
+alone carries 36 GB/s.
+
+**Where the limit is not.** Plain TCP from the same client, no NFS
+and no drives, 16 streams to a port, the receivers on nfsd's CPUs
+(`xeu-rig/iperf2port.sh`; the rate is the rings' byte counts):
+
+| receivers | one port | both ports | FIFO drops, both |
+|---|---|---|---|
+| discard without copying (`MODE=trunc`, `MSG_TRUNC`) | 49.8 GB/s | 49.5 + 49.9 = 99.4 | 0 |
+| copy into a 1 MiB buffer each, reused (`MODE=copy`) | | 42.8 + 43.7 = 86.5 | 115 thousand |
+| iperf3 3.9 | 49.6, 49.8 | 30.2 + 30.2 = 60.4 | 548 thousand |
+
+So the card, the wire, the client and the server's TCP carry both
+ports at line rate when nothing is copied, and what the two ports
+share is the copy. A copy from memory to memory on this machine
+(`perf bench mem memcpy -s 2GB`, one a CPU on 8-55) is 14.6 GB/s for
+one CPU, 66 for eight and 60 to 62 for 16, 32 or 48: about 62 GB/s is
+all the copying this machine's memory carries, whatever the CPUs. The
+profile of a run on both ports has `__memmove` at 31% to 35% of all
+cycles.
+
+**The matrix.** `xeu-rig/twoport.sh ab` once for each setting (driver
+`$L/xeu-16k-464-twoport-matrix.sh`, lists `$L/tp-list-{1..7}.txt`,
+runs `$L/xeu-16k-464-tp-*`); every run is a line of
+`xeu-rig/results-twoport-464.tsv`. What moves the rate is the receive
+memory in use (region pages at most, the two ports together):
+
+| region in use | settings that give it | total GB/s |
+|---|---|---|
+| 47 to 49 MiB | 1 MiB buffers, rings of 4 x 256 (the one-port setting) | 41.0 to 42.7 |
+| 35 to 42 MiB | 512 or 768 KiB, 4 x 256; or 1 MiB, 4 x 128 | 42.5 to 43.9 |
+| 30 to 33 MiB | 384 KiB, 4 x 256; or 384 KiB with 8 x 128 | 42.7; 45.6 to 46.5 |
+| 24 to 29 MiB | 512 or 768 KiB, 4 x 128 | 45.6 to 52.4 |
+| 20 to 22 MiB | 320 to 384 KiB, 4 x 128 | 46.8 to 54.2 |
+| 15 to 19 MiB | 256 KiB, 4 x 128; or rings of 64 | 41.7 to 51.9 |
+
+1. **Fitting both ports' receive memory in the L3 is worth 11 GB/s**:
+   43 at 48 MiB, 54 at 21 MiB. Under about 24 MiB there is no more to
+   gain from memory, and the window (256 KiB) or the rings (64, which
+   drop a million frames or more) cost more than they save.
+2. **Each lever alone does nothing**: 512 KiB buffers on rings of 256
+   (35 MiB) and rings of 128 with 1 MiB buffers (40 MiB) are both
+   still 43. Together (25 MiB) they are 45.6 to 47.9.
+3. **`fq` on the client is worth 2 to 4 GB/s here**, where on one port
+   it cost rate: with 512 KiB and 4 x 128, 51.4 to 52.4 against 45.6
+   to 47.9, and the rings' drops go from 250 thousand to 6 thousand.
+   With 384 KiB the loss is already gone and `fq` is worth less (52.0
+   on `fq_codel`, two runs, against a middle of 54).
+4. **The linger is not needed on two ports**: 0 gives the same rate or
+   a little more at 52% to 56% of nfsd's CPUs busy where 50 us has
+   67% to 72%.
+5. **Not gains**: two copying threads (49 to 51 where the same
+   setting gives 52 to 54), 8 or 12 connections a port, 24 or 32
+   writers, the client's writers pinned to their NIC's NUMA node,
+   eight rings (8 x 64: 49.5 and 52.4; 8 x 128 takes the memory back
+   to 32 MiB and the rate to 46).
+
+**The best setting found for two ports: 384 KiB held buffer, rings of
+4 x 128, linger 0, `fq` on the client.** Seven runs: 48.1, 52.2,
+52.4, 54.0, 54.0, 54.1, 54.2 GB/s, with no FIFO drop, 60 to 180 ring
+drops and 70 to 2300 retransmits in 70 s, 21 to 22 MiB of the region,
+nfsd's CPUs 51% to 56% busy. Without the client's `fq`: 51.7 and
+52.4.
+
+    RCVBUF=393216 ENTRIES=128 QDISC=fq LINGER=0 ./twoport.sh <out> ab
+
+What it does not do:
+
+- **It is not the best setting for one port.** One port alone with it
+  carries 31.0 GB/s where the pinned one-port setting (1 MiB, 4 x
+  256, linger 50, `fq_codel`) carries 36 on four drives and 44.6 on
+  six. The smaller window is what a port gives up so that two fit.
+- **Two ports are still 1.5 times one, not twice** (54 against 36 on
+  these stripes; 54 against 44.6 on six drives). In the best run
+  nfsd's CPUs are 54% in system time and 33% waiting on the drives,
+  the rings' receive CPUs 81% to 84% in softirq, the client 61% busy.
+  `l3d_cache_lmiss_rd` counts 1.78 billion lines a second read from
+  memory for 0.85 billion lines of payload, about two reads a line,
+  and the one-port setting on two ports, at 48 MiB, has the same
+  (1.25 billion for 0.66, `$L/xeu-16k-464-tp-base-prof2`): the copy
+  reads its source from memory and reads its destination before
+  writing it, cache or no cache. So the gain from the smaller memory is real and
+  is not explained by the copy finding its source in the L3; what it
+  is was not found.
+- **Port b is 2 to 4 GB/s under port a in nearly every run** (25
+  against 28), and once 21. Alone they are equal. Not looked into.
+
+What follows from the copy being the shared limit: on this machine
+copy mode has about 54 GB/s for two ports, and the loan, which does
+not copy, is what the card's 99 GB/s is there for. tardis1's drives
+need whole pages and so cannot take a loan direct; drives with SGLs
+can.
+
+**State left:** both ports at 4 rings of 256 with their interrupts
+placed, `svc_tcp_rx_rcvbuf` 1 MiB and linger 50 (the one-port
+setting, as `/etc/modprobe.d/sunrpc.conf` has it), the client on
+`fq_codel`, nothing exported or mounted. `twoport.sh` sets and
+restores what a run asks for. The RSS table has to be spread over
+four rings (`ethtool -X <port> equal 4`) before a port with more can
+go back to four; `twoport.sh` now does that (two runs of the sixth
+list ran on 8 x 128 because it had not: they are marked in the TSV).
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
