@@ -256,8 +256,8 @@ what the shared limit is is not known: iperf3 to both ports at once
 and a profile are next. `./port-setup.sh enp164s0f0 56` gives the
 second port the pinned settings and puts it in the region (this boot
 only), `./ring-irqs.sh <port> <cpu>` puts its rings' interrupts on
-56-63 (the driver's hint, 32-39, is inside nfsd's CPUs; redo after a
-down and up), `./twoport.sh <out> a|b|ab` runs either port or both.
+56-63 (the driver puts every port's rings on 0-7, so two ports would
+share them; redo after a down and up or an `ethtool -G`), `./twoport.sh <out> a|b|ab` runs either port or both.
 "Two ports" in `../XEU_CONVERGENCE.md`.
 
 **`io_cache_write` 2 is pinned (2026-10-11, 19:20)**: one cell with 4,
