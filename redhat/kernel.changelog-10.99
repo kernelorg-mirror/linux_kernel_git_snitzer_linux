@@ -1,3 +1,27 @@
+* Mon Oct 12 2026 Mike Snitzer <snitzer@kernel.org> [7.3-2]
+- redhat: remove all riscv configs and kernel.spec enablement
+- Rebase all branches on Linux v7.3-rc7
+- Update anna-nfs-next to all of anna-nfs/linux-next, each commit
+  cherry-picked with -x from its current commit. New with it: NFS direct
+  I/O moved to iov_iter_extract_pages() with pinned nfs_pages, the pNFS
+  block and SCSI layouts split into PNFS_BLOCK_LAYOUT and
+  PNFS_SCSI_LAYOUT, and "NFS: return DENIED in decode_lock_denied if we
+  cannot decode owner"
+- Add nfsd-next: all of cel/nfsd-next that v7.3-rc7 lacks, 184 commits,
+  each cherry-picked with -x from its current commit, merged ahead of
+  nfsd-testing, which now builds on it as cel/nfsd-testing does
+- nfsd-testing: drop the 4 commits nfsd-next now carries, and take
+  "nfsd: use direct I/O only for the last operation in a COMPOUND" and
+  "SUNRPC: preserve RQ_SECURE across request deferral" from their
+  current cel/nfsd-testing commits; the former now includes xdr4.h
+- Rename snitzer-nfs-fixes to snitzer-nfs-fixes-canary and drop 6
+  NFS/localio and pNFS/flexfiles fixes from it: anna-nfs-next carries
+  them now
+- Carry "NFSv4/pnfs: Give the data server cache its own reference" and
+  "NFSv4/pnfs: Let unused data server connections linger" at the bottom
+  of nfs-testing-canary: anna-nfs/linux-next no longer has them
+- redhat/configs: enable PNFS_BLOCK_LAYOUT and PNFS_SCSI_LAYOUT
+
 * Sun Oct 11 2026 Mike Snitzer <snitzer@kernel.org> [7.3-1]
 - Rebase all branches on kernel-7.3-0, Linux v7.3-rc6 from kernel-ark
 - Stop merging the 8 topics v7.3-rc6 carries in full: vfs-7.3-rc1.iomap,
