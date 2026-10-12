@@ -3,8 +3,8 @@
 # takes from fio run on tardis1 itself, with nothing of NFS or the network in
 # the way: the ceiling for the cells of that storage.
 #
-#   prp  a scratch directory in /hs/nvme0 (the native drive, needs whole pages)
-#   sgl  an NVMe/TCP target over loopback on a 4 GiB file in /hs/nvme1, with
+#   prp  a scratch directory in /hs/stripe (native drives, need whole pages)
+#   sgl  an NVMe/TCP target over loopback on a 4 GiB file in /hs/stripe1, with
 #        XFS on it, made as run-budget.sh makes its own (its own NQN and port)
 #
 # Three jobs, all 1 MiB direct writes at iodepth 16:
@@ -20,7 +20,7 @@ OUT=${2:-$L/xeu-$(( PS / 1024 ))k-nvme-baseline}; mkdir -p $OUT
 CFG=/sys/kernel/config; NQN=zc-baseline; TPORT=4478
 # PRP_BASE and SGL_BASE: the mounted file systems to measure (a stripe:
 # PRP_BASE=/hs/stripe SGL_BASE=/hs/stripe).  JOBS: the writers of the last job.
-PRP_BASE=${PRP_BASE:-/hs/nvme0}; SGL_BASE=${SGL_BASE:-/hs/nvme1}; JOBS=${JOBS:-4}
+PRP_BASE=${PRP_BASE:-/hs/stripe}; SGL_BASE=${SGL_BASE:-/hs/stripe1}; JOBS=${JOBS:-4}
 IMG=$SGL_BASE/zcbaseline-nvmet.img; MNT=/mnt/zcbaseline
 pgrep -x sweep.sh > /dev/null && { echo "a sweep is running"; exit 1; }
 

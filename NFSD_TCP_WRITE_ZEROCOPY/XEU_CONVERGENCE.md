@@ -3537,6 +3537,43 @@ sixteen cannot offer more than 368 Gbit/s. The `fq_codel` rows at
 
 The client's port is back to `mq` with `fq_codel`.
 
+### Two stripes of four drives, for two ports (11 October, 22:40)
+
+For runs on both ports, one stripe to a port (Mike). All eight
+WD_BLACK SN8100 drives are used: the six-drive `md0` was stopped and
+`/hs/nvme0` and `/hs/nvme1` were given up. Those two were single
+drives with XFS, mounted from `/etc/fstab` and exported with pNFS,
+and each held 1.3 TB of fio files from August to 7 October (a
+`client1` of 1.1 TB, `testfiles`, a 64 GB `testfile`); Mike said to
+wipe them. No NFS client was connected.
+
+    mdadm --create /dev/md0 --level=0 --chunk=1024 --raid-devices=4 /dev/nvme[0-3]n1
+    mdadm --create /dev/md1 --level=0 --chunk=1024 --raid-devices=4 /dev/nvme[4-7]n1
+    mkfs.xfs /dev/md0; mkfs.xfs /dev/md1
+    mount -o noatime /dev/md0 /hs/stripe; mount -o noatime /dev/md1 /hs/stripe1
+
+Every drive was wiped (`wipefs -a`) and discarded whole
+(`blkdiscard`) first. Each array is 7.3 TiB, reports its drives'
+memory alignment (`dma_alignment` 3) and has `zcbudget` made in it.
+The lines for `/hs/nvme0` and `/hs/nvme1` in `/etc/fstab` and
+`/etc/exports` are commented out with `#stripe
+2026-10-11-two-stripes#`, and the files as they were are
+`/etc/fstab.2026-10-11-two-stripes` and
+`/etc/exports.2026-10-11-two-stripes`. Neither array is in
+`/etc/fstab`: after a boot, `mdadm --assemble --scan` and the two
+mounts.
+
+Written to locally, direct, 16 jobs of 1 MiB writes at depth 16 for
+15 s: 41.2 GB/s on `/hs/stripe` and 42.8 on `/hs/stripe1` one at a
+time, 42.9 and 43.9 both at once. So the two do not hold each other
+back, **and four drives take about what one port has carried (44.6
+on the six-drive stripe)**: a port's rate on its own stripe may now
+be the drives' and has to be measured again before two ports are
+compared with one.
+
+`sweep.sh` and `nvme-baseline.sh` defaulted to `/hs/nvme0` and
+`/hs/nvme1`; they now default to `/hs/stripe` and `/hs/stripe1`.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
