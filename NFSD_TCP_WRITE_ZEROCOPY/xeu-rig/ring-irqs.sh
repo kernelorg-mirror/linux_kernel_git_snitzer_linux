@@ -12,11 +12,15 @@ nr=$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')
 # More than four rings: a ring's Rx and Tx share a CPU, Rx-i and Tx-i on
 # first + i, so that eight rings still keep to the eight CPUs.
 st=2; tx=1; [ "$nr" -gt 4 ] && { st=1; tx=0; }
+# A third argument, <first tx cpu>: the Rx rings have the eight CPUs to
+# themselves, Rx-i on first + i, and the Tx rings go on two CPUs from
+# <first tx cpu>.
+txc=${3:-}
 for i in $(ls /sys/bus/pci/devices/$pci/msi_irqs); do
 	n=$(awk -v i="$i:" '$1 == i {print $NF}' /proc/interrupts)
 	case "$n" in
-	$d-Rx-*) echo $(( c0 + (st * ${n##*-}) % 8 )) > /proc/irq/$i/smp_affinity_list ;;
-	$d-Tx-*) echo $(( c0 + (st * ${n##*-} + tx) % 8 )) > /proc/irq/$i/smp_affinity_list ;;
+	$d-Rx-*) if [ -n "$txc" ]; then echo $(( c0 + ${n##*-} % 8 )); else echo $(( c0 + (st * ${n##*-}) % 8 )); fi > /proc/irq/$i/smp_affinity_list ;;
+	$d-Tx-*) if [ -n "$txc" ]; then echo $(( txc + ${n##*-} % 2 )); else echo $(( c0 + (st * ${n##*-} + tx) % 8 )); fi > /proc/irq/$i/smp_affinity_list ;;
 	esac
 done
 echo "$d ring interrupts: $(for i in $(ls /sys/bus/pci/devices/$pci/msi_irqs); do n=$(awk -v i="$i:" '$1 == i {print $NF}' /proc/interrupts); case "$n" in $d-[RT]x-*) echo "${n#$d-}:$(cat /proc/irq/$i/smp_affinity_list)";; esac; done | sort | tr '\n' ' ')"
