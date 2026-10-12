@@ -125,9 +125,13 @@ reloaded. Run nothing on veth on a boot that is to use the card.
 
 **Both ports are ours from 2026-10-11 (Mike): the rule that
 `enp164s0f0` is never touched is lifted**, for runs on two ports at
-once. The eight data drives are two stripes of four for it,
-`/hs/stripe` and `/hs/stripe1`; `/hs/nvme0` and `/hs/nvme1` no longer
-exist. Still check that no NFS client is connected before a port is
+once. The eight data drives were two stripes of four for it until
+2026-10-12; **since then there is no MD (Mike): each drive has its own
+XFS, `/hs/nvme0` to `/hs/nvme7`**, the first four for `enp161s0f0`
+and the other four for `enp164s0f0`, and `xeu-rig/twoport.sh` exports
+and mounts each and divides a port's writers among its four. They are
+not in `/etc/fstab`: after a boot, `mount -o noatime /dev/nvmeNn1
+/hs/nvmeN` for each. Still check that no NFS client is connected before a port is
 reconfigured or `xeu` reloaded (192.168.0.105 has mounted over
 `enp164s0f0` before). The first section of `xeu-rig/README.md` has
 where that stands.
@@ -136,7 +140,8 @@ where that stands.
 (Mike, 2026-10-12: "seriously: never forget this").** Advertise WCE=0
 to Linux, so the sync to storage is elided, and leave the drives' own
 write caches enabled: `/sys/block/<dev>/queue/write_cache` reads
-`write through` on the eight data drives and on `md0` and `md1`. The
+`write through` on the eight data drives (and on `md0` and `md1`
+when there were stripes). The
 export stays `sync`; an `async` export is not the way to get this.
 `xeu-rig/drive-cache.sh` applies and prints it, `twoport.sh` and
 `sweep.sh` apply it at the start of a run, and

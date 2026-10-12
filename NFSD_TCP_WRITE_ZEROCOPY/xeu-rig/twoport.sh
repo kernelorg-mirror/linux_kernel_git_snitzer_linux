@@ -6,8 +6,14 @@
 # this is the same load (16 connections, 16 writers of 8 MiB direct writes
 # for 120 s, every connection placed on a ring) set up once for both.
 #
-#   a   enp161s0f0  192.168.1.211  /hs/stripe/zcbudget   client ens3np0
-#   b   enp164s0f0  192.168.0.211  /hs/stripe1/zcbudget  client ens6np0
+#   a   enp161s0f0  192.168.1.211  /hs/nvme0 to /hs/nvme3  client ens3np0
+#   b   enp164s0f0  192.168.0.211  /hs/nvme4 to /hs/nvme7  client ens6np0
+#
+# A port's drives each carry a filesystem of their own (no MD since
+# 2026-10-12): each is exported and mounted, /mnt/rxr-<port><n> on the
+# client, and the port's writers are divided evenly among them.  The
+# mounts of one port share its connections.  FS_A and FS_B name other
+# filesystems, one or several.
 #
 # It expects what the pinned configuration leaves: svc_tcp_rx_rcvbuf,
 # svc_tcp_rx_linger_us and io_cache_write as pinned, both ports set up by
@@ -35,8 +41,9 @@ OUT=${1:?out dir}; WHICH=${2:-ab}
 RUNTIME=${RUNTIME:-120}; WARM=${WARM:-40}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
 YNL="$H/../tools/net/ynl/pyynl/cli.py --no-schema --spec $H/../Documentation/netlink/specs/ethtool.yaml"
 declare -A DEV=([a]=enp161s0f0 [b]=enp164s0f0) SRV=([a]=192.168.1.211 [b]=192.168.0.211)
-declare -A CLI=([a]=192.168.1.106 [b]=192.168.0.106) FS=([a]=/hs/stripe [b]=/hs/stripe1)
+declare -A CLI=([a]=192.168.1.106 [b]=192.168.0.106) FS=([a]="${FS_A:-/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3}" [b]="${FS_B:-/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7}")
 declare -A IRQ0=([a]=0 [b]=56) FSID=([a]=7701 [b]=7702) TXIRQ=([a]=${TXIRQ_A:-} [b]=${TXIRQ_B:-})
+declare -A NFS	# how many filesystems each port has
 declare -A CPUS=([a]=0-23 [b]=24-47)	# the client's CPUs on each port's NUMA node, for PIN=1
 PORTS=$(sed 's/./& /g' <<< "$WHICH")
 SSHC="ssh -o BatchMode=yes -o ConnectTimeout=10 -i $KEY root@${CLI[a]}"
@@ -72,8 +79,8 @@ cleanup() {
 	# (both ports on CPUs 0-7): place them again.
 	[ -n "${ENTRIES:-}${RINGS:-}" ] && { sleep 7; for p in $PORTS; do "$RIG/ring-irqs.sh" ${DEV[$p]} ${IRQ0[$p]} > /dev/null; done; }
 	for p in $PORTS; do
-		cl "rm -f /mnt/rxr-$p/f-* /mnt/rxr-$p/bal-* 2>/dev/null; umount -f /mnt/rxr-$p 2>/dev/null"
-		exportfs -u "${CLI[$p]}:${FS[$p]}/zcbudget" 2>/dev/null
+		cl "rm -f /mnt/rxr-$p[0-9]*/f-* /mnt/rxr-$p[0-9]*/bal-* 2>/dev/null; for m in /mnt/rxr-$p[0-9]*; do umount -f \$m 2>/dev/null; done"
+		for fs in ${FS[$p]}; do exportfs -u "${CLI[$p]}:$fs/zcbudget" 2>/dev/null; done
 	done
 	echo N > /sys/module/xeu/parameters/rx_port_stats
 }
@@ -101,13 +108,22 @@ for p in $PORTS; do
 	"$RIG/ring-irqs.sh" $d ${IRQ0[$p]} ${TXIRQ[$p]} >> geometry.txt
 	echo "$p: $d mtu $(cat /sys/class/net/$d/mtu) rings $(ethtool -l $d | awk '/Combined/{v=$2} END{print v}') x $(ethtool -g $d | awk '/^RX:/{v=$2} END{print v}')" | tee -a geometry.txt
 	ping -c2 -W2 -I $d ${CLI[$p]} > /dev/null || { echo "$p: no answer from ${CLI[$p]}"; exit 1; }
-	fstrim ${FS[$p]}
-	mkdir -p ${FS[$p]}/zcbudget; chmod 777 ${FS[$p]}/zcbudget
-	exportfs -o rw,${EXPORT_SYNC:-sync},no_root_squash,insecure,no_subtree_check,fsid=${FSID[$p]} "${CLI[$p]}:${FS[$p]}/zcbudget" || exit 1
-	cl "mkdir -p /mnt/rxr-$p && mount -t nfs -o vers=3,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 ${SRV[$p]}:${FS[$p]}/zcbudget /mnt/rxr-$p" || { echo "$p: mount failed"; exit 1; }
+	i=0
+	for fs in ${FS[$p]}; do
+		i=$((i + 1))
+		mountpoint -q $fs || { echo "$p: $fs is not mounted"; exit 1; }
+		fstrim $fs
+		mkdir -p $fs/zcbudget; chmod 777 $fs/zcbudget
+		exportfs -o rw,${EXPORT_SYNC:-sync},no_root_squash,insecure,no_subtree_check,fsid=${FSID[$p]}$i "${CLI[$p]}:$fs/zcbudget" || exit 1
+		cl "mkdir -p /mnt/rxr-$p$i && mount -t nfs -o vers=3,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 ${SRV[$p]}:$fs/zcbudget /mnt/rxr-$p$i" || { echo "$p: mount of $fs failed"; exit 1; }
+	done
+	NFS[$p]=$i
+	echo "$p: $i filesystems: ${FS[$p]}" | tee -a geometry.txt
 done
 
 job() {	# job <port> <prefix> <seconds> [seconds of warm-up fio leaves out of its figures]
+	local n=${NFS[$1]} per i
+	per=$(( JOBS / n )); [ $per -lt 1 ] && per=1
 	cat <<J
 [global]
 rw=write
@@ -119,13 +135,17 @@ ${4:+ramp_time=$4}
 direct=1
 ioengine=libaio
 iodepth=16
-numjobs=$JOBS
+numjobs=$per
 group_reporting
 ${PIN:+cpus_allowed=${CPUS[$1]}}
-[$2$1]
-directory=/mnt/rxr-$1
+J
+	for i in $(seq 1 $n); do
+		cat <<J
+[$2$1$i]
+directory=/mnt/rxr-$1$i
 filename_format=$2-$1.\$jobnum
 J
+	done
 }
 
 # Place every connection on a ring, as run-budget.sh's PLACE=1 does: a
@@ -134,7 +154,7 @@ J
 # at a ring.  The mounts stay up, so the flows measured are those placed.
 if [ "${PLACE:-1}" != 0 ]; then
 	for p in $PORTS; do job $p bal 16 | clput /tmp/twoport-bal-$p.fio; done
-	for p in $PORTS; do cl "fio /tmp/twoport-bal-$p.fio > /tmp/twoport-bal-$p.out 2>&1; rm -f /mnt/rxr-$p/bal-*" & done
+	for p in $PORTS; do cl "fio /tmp/twoport-bal-$p.fio > /tmp/twoport-bal-$p.out 2>&1; rm -f /mnt/rxr-$p[0-9]*/bal-*" & done
 	sleep 3
 	for p in $PORTS; do
 		d=${DEV[$p]}
@@ -154,13 +174,19 @@ fi
 for p in $PORTS; do job $p f $RUNTIME $WARM | clput /tmp/twoport-$p.fio; done
 echo 1 > $RG	# the region's low-water mark starts again from here
 for p in $PORTS; do
-	cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio; rm -f /mnt/rxr-$p/f-*" &
+	cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio; rm -f /mnt/rxr-$p[0-9]*/f-*" &
 done
 W=$(( RUNTIME - 50 )); [ $W -lt 10 ] && W=10
 sleep $(( WARM + 25 ))	# the warm-up, then 25 s into what fio counts
 # The drives under each port's stripe over the window: sectors written and
 # milliseconds busy, from /proc/diskstats.
-drives() { for m in $(ls /sys/block/$(basename $(findmnt -no SOURCE ${FS[$1]}))/slaves); do awk -v d=$m '$3 == d {print d, $10, $13}' /proc/diskstats; done; }
+drives() {
+	local fs b m
+	for fs in ${FS[$1]}; do
+		b=$(basename $(findmnt -no SOURCE $fs)); m=$(ls /sys/block/$b/slaves 2> /dev/null)
+		for m in ${m:-$b}; do awk -v d=$m '$3 == d {print d, $10, $13}' /proc/diskstats; done
+	done
+}
 for p in $PORTS; do drives $p > drives-$p.0; done
 ss -tmi '( sport = :2049 )' > ss-server.txt 2>&1
 cl "ss -tmi '( dport = :2049 )'" > ss-client.txt 2>&1
@@ -180,7 +206,7 @@ sleep $W
 for p in $PORTS; do drives $p > drives-$p.1; done
 R1=$(cretr)
 for p in $PORTS; do
-	paste drives-$p.0 drives-$p.1 | awk -v w=$W -v p=$p -v fs=${FS[$p]} '
+	paste drives-$p.0 drives-$p.1 | awk -v w=$W -v p=$p -v fs="${FS[$p]}" '
 		{g = ($5 - $2) * 512 / w / 1e9; u = ($6 - $3) / w / 10; if (NR == 1 || g < gmin) gmin = g; if (g > gmax) gmax = g; if (u > umax) umax = u}
 		END {printf "drives of %s (%s): %d, each writing %.1f to %.1f GB/s, busiest %.0f%% busy%s\n", p, fs, NR, gmin, gmax, umax, (umax >= 90 ? " -- DRIVE-LIMITED" : "")}'
 done > drives.txt

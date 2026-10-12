@@ -1,4 +1,16 @@
-# 12 October, 13:30: read this first
+# 12 October, 19:10: read this first
+
+**There is no MD any more (Mike, 12 October evening).** Each data
+drive has its own XFS on `/hs/nvme0` to `/hs/nvme7` (not in
+`/etc/fstab`: `mount -o noatime /dev/nvmeNn1 /hs/nvmeN` after a
+boot). `twoport.sh` exports and mounts a port's four and divides its
+writers among them. All eight drives were formatted (`nvme format`)
+that evening and are 4 KiB. Where this section says stripe, read the
+port's four drives. Two ports that way: 52.6, 50.9, 50.4 GB/s, no
+gain over the stripes; single drives go slow for a run (4.4 GB/s at
+98% busy), a different one each time. Also tried that evening and
+not gains: eight receive rings on CPUs of their own, nfsd's threads
+split by port.
 
 **The drives are run as enterprise storage (Mike: "never forget
 this").** Linux sees `write through` on the eight data drives and
