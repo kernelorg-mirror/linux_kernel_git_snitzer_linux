@@ -24,6 +24,7 @@
 #   QDISC=fq|fqNN    fq on the client's ports (fqNN: maxrate NN Gbit/s a flow)
 #   PROFILE=1        a 10 s system-wide perf record and perf stat mid-run
 #   PIN=1            each port's writers on the client CPUs of its NIC's NUMA node
+#   EXPORT_SYNC=async  export async, so a COMMIT does not sync the file or flush the drives
 # TSV=<file>: append a line of the run's figures (TAG=<label> names it).
 . "$(dirname "$0")/common.sh"
 OUT=${1:?out dir}; WHICH=${2:-ab}
@@ -95,7 +96,7 @@ for p in $PORTS; do
 	ping -c2 -W2 -I $d ${CLI[$p]} > /dev/null || { echo "$p: no answer from ${CLI[$p]}"; exit 1; }
 	fstrim ${FS[$p]}
 	mkdir -p ${FS[$p]}/zcbudget; chmod 777 ${FS[$p]}/zcbudget
-	exportfs -o rw,sync,no_root_squash,insecure,no_subtree_check,fsid=${FSID[$p]} "${CLI[$p]}:${FS[$p]}/zcbudget" || exit 1
+	exportfs -o rw,${EXPORT_SYNC:-sync},no_root_squash,insecure,no_subtree_check,fsid=${FSID[$p]} "${CLI[$p]}:${FS[$p]}/zcbudget" || exit 1
 	cl "mkdir -p /mnt/rxr-$p && mount -t nfs -o vers=3,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 ${SRV[$p]}:${FS[$p]}/zcbudget /mnt/rxr-$p" || { echo "$p: mount failed"; exit 1; }
 done
 
