@@ -3360,6 +3360,76 @@ write is eight WRITEs and one COMMIT, so the sync is paid once for
 `io_cache_write` reads 2 and the 512 threads are on 8-55. Until this
 a reboot would have left 4.
 
+### The uncounted loss is the port's RX FIFO (11 October, 19:40 to 20:30)
+
+The card has an RX FIFO for each port ahead of the rings, with a fill
+count and a drop count for each of eight traffic classes
+(`eu_rx_fifo_get_port_counters()` in the SDK's core), and the RM
+library returns them from `xsl_rm_eu_rx_port_counters_get()`. `xeu`
+never called it. kmod-xsight 2.0.1-7 (kernel-rpmtree `7a06a06`,
+Patch7) reads it with the statistics when the new `rx_port_stats` is
+set (default N, since the RM may flush the packet processor's counter
+cache to answer, and writable while the port is up) and lists
+`port_rx_fifo_tc<N>_{lines,packets,drop_packets,drop_bytes}`,
+`port_rx_fifo_fc_lines`, `port_rx_non_prom_drop_packets` and
+`port_rx_mcast_filtered_packets` in `ethtool -S`. The FIFO's drops
+are also `rx_fifo_errors`. Built with `xeu-rig/build-kmod.sh` into
+`$L/kmod-xsight-16k-464-r7`, installed (`rpm -ivh --force`, then
+`rpm -e --justdb` of release 6, which leaves the kmods of builds 462
+and 463 where `rpm -U` would remove them) and `xeu` reloaded with no
+client connected. The module's files of release 6 are in
+`$L/kmod-464-6-backup`.
+
+**The first read showed 12,015,394 frames dropped in the FIFO since
+boot**, all in traffic class 0 and 93.8 GB of them: the hardware
+counter clears when read and had never been read.
+
+Then the packet accounting again, both ends every 2 s
+(`$L/acct2/`, driver `$L/xeu-16k-464-acct-driver.sh`,
+`$L/xeu-16k-464-acct-{0,2}`):
+
+| cell | GB/s | client sent | rings forwarded + ring drops | missing | FIFO drops | left over | retransmits |
+|---|---|---|---|---|---|---|---|
+| 0 threads | 44.1 | 719,376,635 | 719,365,190 | 11,445 | 13,038 | -1,593 | 16,326 |
+| 2 threads | 43.8 | 694,859,522 | 694,626,015 | 233,507 | 234,332 | -825 | 244,687 |
+
+1. **The FIFO's drops are the frames that were missing**, to within
+   0.4% of them in the run with 2, which is the idle traffic at
+   either end of the count. Every frame is now accounted for.
+2. **The FIFO is small.** Traffic class 0 was seen up to 8139 lines
+   and 133 packets full, and the SDK has 128-byte lines and
+   `EU_RX_FIFOS_TOTAL_SIZE_LINES` of 2 MiB for all ports and classes:
+   this port's class 0 has about 1 MiB, 134 frames of 7806 bytes,
+   which is 23 microseconds of traffic at 44 GB/s. Its fill was 0 at
+   more than half of the 2 s readings, so it overflows in bursts.
+   Drops came in about half of the 2 s intervals of either cell, up
+   to 405 in one with 0 threads.
+3. **Reading the counters every 2 s through both cells did no harm**:
+   44.1 and 43.8 GB/s, nothing logged.
+
+So the ceiling near 44 GB/s is at the card: when sixteen connections
+send together, frames arrive faster than the packet processor moves
+them from a 1 MiB FIFO to the rings, and the rest are dropped without
+a pause frame (flow control is off at both ends) and without a count
+anyone read. The window, the client's pacing and claiming each change
+how hard the sender leans on that FIFO, which is why they trade
+waiting for loss at one rate.
+
+Not tried, and next: flow control on the link (`ethtool -A` on both
+ends; `xeu` has `rx_fc_ena` and the FIFO has xon and xoff
+thresholds), so the FIFO pauses the sender where it drops; and
+whether the FIFO's sizes (`eu_rx_fifos_set_sizes()`, 2 MiB shared)
+can give one port's class 0 all of it. Both are in the note to
+Xsight.
+
+**State after this:** `xeu` 2.0.1-7 loaded (srcversion
+`C812558B8FE3B38F09C9BA1`), `rx_port_stats` N; `echo Y >
+/sys/module/xeu/parameters/rx_port_stats` to read the counters. After
+the reload the region showed as still made, so `bringup.sh` refused:
+its steps were run by hand (port down, `ethtool -L combined 4`, the
+PCI name to `rx_region_dev`, 32768 to `rx_region_pages`, up,
+`ethtool -G rx 256`) and the region is bound with 4 rings of 256.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
