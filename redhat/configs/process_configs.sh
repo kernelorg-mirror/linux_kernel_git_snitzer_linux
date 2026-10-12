@@ -108,9 +108,6 @@ determine_config_path()
 		powerpc)
 			config_path="$config_path/powerpc"
 			;;
-		riscv)
-			config_path="$config_path/riscv/riscv64"
-			;;
 		x86_64)
 			config_path="$config_path/x86"
 			;;
