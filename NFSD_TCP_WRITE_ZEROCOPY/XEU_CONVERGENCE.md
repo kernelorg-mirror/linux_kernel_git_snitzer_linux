@@ -4021,6 +4021,27 @@ format did not bring it back.** What the low runs have:
   and Tx on one CPU and were not a gain; Rx rings on eight CPUs of
   their own have not been tried.
 
+### Eight receive rings on CPUs of their own (12 October, 18:05 to 18:40)
+
+The Rx CPUs are 81 to 86% in softirq at four rings, so: eight rings
+a port, each Rx ring on a CPU of its own (0-7, 56-63) and the Tx
+rings on two CPUs at the edge of nfsd's (8-9, 54-55;
+`TXIRQ_A=8 TXIRQ_B=54`). At the two-port setting, GB/s:
+
+| rings | runs | Rx CPUs in softirq | ring drops, a and b | retransmits | region pages |
+|---|---|---|---|---|---|
+| 4 x 128 | 54.3, 55.3 | 80 to 86% | 6 to 29 | 48, 28 | 1360, 1344 |
+| 8 x 64, Rx on its own CPUs | 52.9, 52.2 | 40 to 59% | 1234 to 6033 | 7243, 5966 | 1557, 1507 |
+| 8 x 64, Rx and Tx sharing | 53.7 | 55 to 76% | 1320, 1909 | 3193 | 1465 |
+| 8 x 128, Rx on its own CPUs | 47.0 | 46 to 52% | 0 | 0 | 2176 |
+
+Not a gain. The Rx CPUs go from 83% to about 52% busy and the rate
+does not rise, so they are not what holds two ports. Rings of 64
+drop, and rings of 128 on eight take the receive memory to 34 MiB,
+past the cache, and cost 8 GB/s with nothing lost on the wire: the
+memory again. The Tx rings on two CPUs are 24 to 52% in softirq
+there, more than their 6 to 30% spread over four.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

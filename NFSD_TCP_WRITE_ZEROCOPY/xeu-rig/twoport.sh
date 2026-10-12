@@ -21,6 +21,8 @@
 #   THREADS=<n>      svc_tcp_rx_copy_threads
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
+#   TXIRQ_A=<cpu> TXIRQ_B=<cpu>  a port's Tx rings on two CPUs from <cpu>, and
+#                    its Rx rings one to a CPU on the port's eight
 #   QDISC=fq|fqNN    fq on the client's ports (fqNN: maxrate NN Gbit/s a flow)
 #   PROFILE=1        a 10 s system-wide perf record and perf stat mid-run
 #   PIN=1            each port's writers on the client CPUs of its NIC's NUMA node
@@ -34,7 +36,7 @@ RUNTIME=${RUNTIME:-120}; WARM=${WARM:-40}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN
 YNL="$H/../tools/net/ynl/pyynl/cli.py --no-schema --spec $H/../Documentation/netlink/specs/ethtool.yaml"
 declare -A DEV=([a]=enp161s0f0 [b]=enp164s0f0) SRV=([a]=192.168.1.211 [b]=192.168.0.211)
 declare -A CLI=([a]=192.168.1.106 [b]=192.168.0.106) FS=([a]=/hs/stripe [b]=/hs/stripe1)
-declare -A IRQ0=([a]=0 [b]=56) FSID=([a]=7701 [b]=7702)
+declare -A IRQ0=([a]=0 [b]=56) FSID=([a]=7701 [b]=7702) TXIRQ=([a]=${TXIRQ_A:-} [b]=${TXIRQ_B:-})
 declare -A CPUS=([a]=0-23 [b]=24-47)	# the client's CPUs on each port's NUMA node, for PIN=1
 PORTS=$(sed 's/./& /g' <<< "$WHICH")
 SSHC="ssh -o BatchMode=yes -o ConnectTimeout=10 -i $KEY root@${CLI[a]}"
@@ -96,7 +98,7 @@ sleep 7
 [ -n "${ENTRIES:-}" ] && { for p in $PORTS; do ethtool -G ${DEV[$p]} rx $ENTRIES; done; sleep 7; }
 for p in $PORTS; do
 	d=${DEV[$p]}
-	"$RIG/ring-irqs.sh" $d ${IRQ0[$p]} >> geometry.txt
+	"$RIG/ring-irqs.sh" $d ${IRQ0[$p]} ${TXIRQ[$p]} >> geometry.txt
 	echo "$p: $d mtu $(cat /sys/class/net/$d/mtu) rings $(ethtool -l $d | awk '/Combined/{v=$2} END{print v}') x $(ethtool -g $d | awk '/^RX:/{v=$2} END{print v}')" | tee -a geometry.txt
 	ping -c2 -W2 -I $d ${CLI[$p]} > /dev/null || { echo "$p: no answer from ${CLI[$p]}"; exit 1; }
 	fstrim ${FS[$p]}
