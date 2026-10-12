@@ -3746,6 +3746,95 @@ four rings (`ethtool -X <port> equal 4`) before a port with more can
 go back to four; `twoport.sh` now does that (two runs of the sixth
 list ran on 8 x 128 because it had not: they are marked in the TSV).
 
+### No cache flush to the drives, and two ports at 58.5 GB/s (12 October, 10:30 to 13:30)
+
+The client was rebooted from 7.1.13-21.hs.460 into
+7.3.0-0.rc7.2.hs.469. Six runs against it, with everything else as
+before, say the client's kernel changes little: one port 34.6, 35.8
+and 28.8 GB/s (36.0 to 36.4 before), two ports 52.1, 48.1 and 48.8
+(48.1 to 54.2 before).
+
+**Why one port carries 36 GB/s on four drives and not 44.** The
+writers make 8 MiB direct writes (`bs=8M` in `twoport.sh`). The NFS
+client sends each as eight 1 MiB unstable WRITEs and one COMMIT:
+counted on the client for five seconds, 9,263 direct writes, 74,104
+WRITEs, 9,183 COMMITs. The export is `sync`, so each COMMIT syncs
+the file, and that sends a cache flush to all four drives of the
+stripe: 3,550 a second to each drive. A drive flushing that often
+writes 8.7 GB/s at 96% busy. With the export `async`
+(`EXPORT_SYNC=async`), which makes a COMMIT do nothing, two runs
+carried 41.8 and 43.4 GB/s and each drive wrote 10.3. Six drives
+had hidden it: at 44.6 GB/s each wrote 7.4. A job of 1 MiB writes
+would have had no COMMIT at all: the client sends a direct write
+that fits one WRITE as a stable one, and the server syncs for each.
+
+**The rig runs as enterprise storage from here (Mike: "never forget
+this").** Linux is told the data drives have no volatile write
+cache (`write through` in `queue/write_cache` on `nvme0n1` to
+`nvme7n1`, `md0` and `md1`), so no flush or FUA is sent; the drives'
+own caches stay enabled and the export stays `sync`.
+`xeu-rig/drive-cache.sh` sets and prints it, `twoport.sh` and
+`sweep.sh` run it first, and
+`/etc/udev/rules.d/99-zc-write-through.rules` sets it at boot. The
+same script and rule turn the drives' autonomous power states off.
+Figures from before this, on the four-drive stripes, had the drives
+flushing and are not comparable.
+
+**Results with no flush sent** (GB/s, best first; the two-port
+setting is 384 KiB, 4 x 128, linger 0, `fq`):
+
+| ports | flushes | best | all runs | runs |
+|---|---|---|---|---|
+| two | sent | 54.2 | 48.1 to 54.2 | 10 |
+| two | not sent | 58.5 | 45.0 to 58.5 | 7 |
+| one | sent | 36.4 | 28.8 to 36.4 | 7 |
+| one | not sent | 42.2 | 18.1 to 42.2 | 6 |
+
+In the 58.5 run (`warm-two-1`) the ports carried 29.0 and 29.4,
+with no FIFO drops, 92 ring drops and 96 retransmits in 70 s; the
+drives were 71 to 73% busy at 7.4 GB/s each, the ring CPUs 47 to
+50%, nfsd's 49% and the client's 66%. Two more at the setting,
+`warm-two-lmiss` and `warm-two-prof`, gave 58.2 and 54.5.
+
+**One port is limited by its four drives, and the drives' speed
+changes.** They were 96 to 100% busy in every one-port run. In
+`warm-one-1` and `-2` each wrote 6.3 GB/s for the whole window, in
+`warm-one-3` 10.8. A local fio straight after the batch (no NFS)
+got 4 GB/s a drive, before and after an `fstrim`; three minutes
+later 11 again. Earlier in the day three local runs began with 19
+to 35 s at 0 to 5 GB/s and 45 to 250 ms write latency, then 10.7
+flat. Tried and ruled out for that slow start: fresh files,
+preallocated files, an idle of 15 or 45 s, heat (no throttle event,
+22 to 29 C). With the autonomous power states off it was not seen
+in five tries; with them on it did not come back in the two tries
+made to bring it back, so they are not shown to be the cause. The
+drives are WD_BLACK SN8100 2 TB with 6 to 13% of their rated life
+used; it looks like their fast write cache running out under
+sustained writing, which is not proven. `twoport.sh` now has the
+writers run for `WARM` seconds (40) before fio counts, and records
+each stripe's drives over the window (`drives.txt`, and
+`drvbusy_a`, `drvbusy_b` in the TSV), marking a run DRIVE-LIMITED
+at 90% busy.
+
+**The copy is at what this machine can copy.** The profile at the
+two-port setting has `__memmove` at 29% of cycles and the server
+fetching 2.2 lines from memory for each line of payload. The
+thought that one of those is the destination, fetched only to be
+overwritten, was tested with `xeu-rig/copybench.c` and is wrong: a
+plain copy fetches one line per line, a `DC ZVA` copy is slower
+(46 GB/s at 48 threads) and non-temporal stores no faster (63). A
+copy from memory to memory reaches 62 to 68 GB/s by any method and
+gets there with 8 CPUs. At 58.5 the server is at about 90% of
+that, and its bus writes (2.1e9 a second) equal the saturated
+test's. All of it is in `TARDIS1_COPY_PERFORMANCE.md`. What sets
+that ceiling is the next question: memory bandwidth most likely,
+and how many memory channels are populated is not known (dmidecode
+shows no DIMM detail). Past it the route is the loan.
+
+**State left:** as after the last section, plus the drives
+`write through` with power states off (persistent), the client on
+build 469. Nothing exported or mounted.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
