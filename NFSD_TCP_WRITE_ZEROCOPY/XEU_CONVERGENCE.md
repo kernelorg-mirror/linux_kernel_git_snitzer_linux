@@ -3974,8 +3974,20 @@ wakeups from 1.15 million a second to 0.40 million and context
 switches from 1.46 million to 0.75 million. nfsd's CPUs are only a
 point or two less busy for it: the time is in the copy. The
 receive memory in use rises by about 1.5 MiB at 128 KiB, still
-inside the cache. Not tried: a mark with a larger held buffer, or
-on one port. The parameter is left at 0.
+inside the cache. Not tried: a mark with a larger held buffer.
+
+**On one port (16:40 to 17:10), and pinned at 128 KiB (Mike).** The
+one-port setting, mark off and at 131072 by turns: port a 30.9 and
+14.0 off, 25.6 and 28.0 on; port b 29.0 off, 35.1 on. Five of the
+six were limited by their drives, which wrote 3.6 to 10.0 GB/s each
+at 93 to 100% busy, so the rates say nothing of the mark. What they
+do say: nothing stalled with it, and with the 50 us linger a thread
+is already woken only about twice a WRITE (84 to 88 thousand a
+second off, 98 to 99 thousand on, at 40 thousand WRITEs), so on one
+port the mark changes little. `svc_tcp_rx_lowat=131072` is in
+`/etc/modprobe.d/sunrpc.conf` with `svc_tcp_rx_keep=1`. Stripe a's
+drives were the slower all afternoon, and that is the likely reason
+port a has run behind port b in the two-port runs since 15:00.
 
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 

@@ -284,6 +284,8 @@
         <tr><td>Held receive buffer, <code>svc_tcp_rx_rcvbuf</code></td><td class="r">1 MiB</td><td><code>modprobe.d/sunrpc.conf</code></td></tr>
         <tr><td>Linger, <code>svc_tcp_rx_linger_us</code></td><td class="c">50</td><td><code>modprobe.d/sunrpc.conf</code></td></tr>
         <tr><td>Thread pools, <code>pools_per_node</code></td><td class="c">4</td><td><code>modprobe.d/sunrpc.conf</code></td></tr>
+        <tr><td>No hand-off after a short receive, <code>svc_tcp_rx_keep</code></td><td class="c">1</td><td><code>modprobe.d/sunrpc.conf</code>, since 12 October</td></tr>
+        <tr><td>Wake a thread for 128 KiB of a short WRITE, <code>svc_tcp_rx_lowat</code></td><td class="c">131072</td><td><code>modprobe.d/sunrpc.conf</code>, since 12 October</td></tr>
         <tr><td>Threads copying on a connection, <code>svc_tcp_rx_copy_threads</code></td><td class="c">0</td><td style="white-space:normal">the default. 2 was compared and is level (<a href="#claim">below</a>)</td></tr>
         <tr><td>nfsd threads</td><td class="c" style="white-space:normal">512, all on CPUs 8 to 55</td><td style="white-space:normal">the tuning service, changed on 11 October to set 512 before it pins</td></tr>
         <tr><td>nfsd write mode, <code>io_cache_write</code></td><td class="c">2 (direct)</td><td style="white-space:normal">the tuning service, changed on 11 October from 4, which carried 28.6 GB/s</td></tr>
@@ -311,6 +313,8 @@
         <tr><td>Held receive buffer, <code>svc_tcp_rx_rcvbuf</code></td><td class="r">384 KiB</td><td class="x" style="white-space:normal">test harness, per run</td></tr>
         <tr><td>Linger, <code>svc_tcp_rx_linger_us</code></td><td class="r">0</td><td class="x" style="white-space:normal">test harness, per run</td></tr>
         <tr><td>Thread pools, <code>pools_per_node</code></td><td class="c">4</td><td><code>modprobe.d/sunrpc.conf</code></td></tr>
+        <tr><td>No hand-off after a short receive, <code>svc_tcp_rx_keep</code></td><td class="c">1</td><td><code>modprobe.d/sunrpc.conf</code>, since 12 October</td></tr>
+        <tr><td>Wake a thread for 128 KiB of a short WRITE, <code>svc_tcp_rx_lowat</code></td><td class="c">131072</td><td><code>modprobe.d/sunrpc.conf</code>, since 12 October</td></tr>
         <tr><td>Threads copying on a connection, <code>svc_tcp_rx_copy_threads</code></td><td class="c">0</td><td style="white-space:normal">the default. 2 was compared on two ports and is not a gain</td></tr>
         <tr><td>nfsd threads</td><td class="c" style="white-space:normal">512, all on CPUs 8 to 55</td><td>the tuning service</td></tr>
         <tr><td>nfsd write mode, <code>io_cache_write</code></td><td class="c">2 (direct)</td><td>the tuning service</td></tr>
@@ -326,7 +330,7 @@
       <p class="who">/etc/modprobe.d/xeu.conf</p>
       <div class="set" style="margin-top:0">options xeu rx_ip_align=2 rss_indir_size=128 rx_buf_size=8192 rx_refill_thresh=8</div>
       <p class="who" style="margin-top:14px">/etc/modprobe.d/sunrpc.conf</p>
-      <div class="set" style="margin-top:0">options sunrpc pools_per_node=4 svc_tcp_rx_rcvbuf=1048576 svc_tcp_rx_linger_us=50</div>
+      <div class="set" style="margin-top:0">options sunrpc pools_per_node=4 svc_tcp_rx_rcvbuf=1048576 svc_tcp_rx_linger_us=50 svc_tcp_rx_keep=1 svc_tcp_rx_lowat=131072</div>
     </div>
     <p><strong>This is the configuration for one port carrying load.</strong> The module settings apply to every port the driver has and to every NFS connection, not to one. With both ports loaded a different held buffer, ring depth and linger carry more (<a href="#twoport">below</a>), and those settings carry less on one port, so which is right depends on how many ports are in use.</p>
     <div class="matrix">
@@ -382,6 +386,8 @@
       <div class="cell k">One port is limited by its four drives in every run, and how fast the drives are changes. After minutes of sustained writing each wrote 6.3 GB/s while 99% busy, and 4 GB/s in a local test with no NFS; after about three minutes of rest they were back at 11. No thermal throttling is recorded. It looks like the drives' fast write cache running out, which is not proven</div><div class="cell v"><span class="pill pend">the drives</span></div>
       <div class="cell k">Each run now writes for 40 seconds before fio starts counting, and records what each stripe's drives wrote and how busy they were, so a run the drives limited is marked as one</div><div class="cell v"><span class="pill yes">in the harness</span></div>
       <div class="cell k">The copy has no cheap fix left. A profile at this setting has it at 29% of all cycles, and the server fetching 2.2 cache lines from memory for each line of payload. The thought was that one of those is the destination page, read in only to be overwritten. A standalone copy test says not: a plain copy here fetches one line per line, the source alone, and a copy written not to fetch its destination is slower (<code>DC ZVA</code>, 46 GB/s) or no faster (non-temporal stores, 63)</div><div class="cell v"><span class="pill no">ruled out</span></div>
+      <div class="cell k">Fewer wakeups of nfsd's threads. A 1 MiB WRITE arrives in about fourteen pieces and each woke a thread, about 20 wakeups a WRITE in all. Two settings, pinned on 12 October, bring that to about 7: a thread that finds a WRITE short no longer wakes another for data already there, and a thread is woken when 128 KiB has arrived and not for each piece. Thread wakeups go from 1.15 million a second to 0.40 million at the same rate; it saves a little CPU and no more</div><div class="cell v"><span class="pill yes">pinned</span></div>
+      <div class="cell k">nfsd's threads split by port, each port's connections served by threads on CPUs of their own: 55.3 and 53.8 GB/s against 54.1 and 54.4 unsplit</div><div class="cell v"><span class="pill no">not a gain</span></div>
       <div class="cell k">Where to look next. The machine copies memory to memory at 62 to 68 GB/s by any method, and reaches that with 8 CPUs; more add nothing. At 58.5 GB/s the server is at about 90% of it, and its writes to memory are at the same rate as the saturated test's. So the ceiling is something the CPUs share, most likely memory bandwidth. How many memory channels are populated is not known. Past that ceiling the only route is not to copy, which is the loan</div><div class="cell v"><span class="pill pend">next</span></div>
     </div>
 
