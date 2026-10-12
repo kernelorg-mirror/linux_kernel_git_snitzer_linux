@@ -267,7 +267,7 @@
         <tr><td>Held receive buffer, <code>svc_tcp_rx_rcvbuf</code></td><td class="r">1 MiB</td><td class="x" style="white-space:normal">test harness, per run; to go in <code>modprobe.d/sunrpc.conf</code></td></tr>
         <tr><td>Linger, <code>svc_tcp_rx_linger_us</code></td><td class="c">50</td><td class="x" style="white-space:normal">test harness, per run; to go in <code>sunrpc.conf</code></td></tr>
         <tr><td>Thread pools, <code>pools_per_node</code></td><td class="c">4</td><td class="x" style="white-space:normal">passed at module load; to go in <code>sunrpc.conf</code></td></tr>
-        <tr><td>Threads copying on a connection, <code>svc_tcp_rx_copy_threads</code></td><td class="c">0</td><td style="white-space:normal">the default. 2 is being compared (<a href="#claim">below</a>)</td></tr>
+        <tr><td>Threads copying on a connection, <code>svc_tcp_rx_copy_threads</code></td><td class="c">0</td><td style="white-space:normal">the default. 2 was compared and is level (<a href="#claim">below</a>)</td></tr>
         <tr><td>nfsd threads</td><td class="c" style="white-space:normal">512, all on CPUs 8 to 55</td><td style="white-space:normal">the tuning service, changed on 11 October to set 512 before it pins</td></tr>
         <tr><td>nfsd write mode, <code>io_cache_write</code></td><td class="c">2 (direct)</td><td class="x" style="white-space:normal">test harness, per run; the tuning service sets 4, which has not been measured</td></tr>
         <tr><td>Deferred skb frees, <code>net.core.skb_defer_max</code></td><td class="c">128</td><td>the default</td></tr>
@@ -284,7 +284,8 @@
     </div>
     <p><strong>All of it has been measured on one port and one client.</strong> The module settings apply to every port the driver has and to every NFS connection, not to one. A second port left at an MTU of 9000 would take two receive buffers to a frame, and the 1 MiB held buffer and the linger would apply to every client. Nothing has been run with two ports carrying load.</p>
     <div class="matrix">
-      <div class="cell k">Whether two threads copying on a connection should be the default: level on rate, ten times the retransmits, under investigation</div><div class="cell v"><span class="pill pend">open</span></div>
+      <div class="cell k">Two threads copying on a connection: level on rate on one port, and its retransmits are frames the card loses uncounted. Kept at 0; to be tried again with more than one port</div><div class="cell v"><span class="pill yes">settled for one port</span></div>
+      <div class="cell k">Where the card drops frames ahead of its rings without counting them: 5 thousand a run at this setting, 235 thousand with claiming</div><div class="cell v"><span class="pill pend">for Xsight</span></div>
       <div class="cell k">The write mode a reboot leaves (4) against the one every run used (2)</div><div class="cell v"><span class="pill pend">not measured</span></div>
       <div class="cell k">512 nfsd threads: about 120 to 150 are busy at 44 GB/s on one port. Kept at 512 for more than one port</div><div class="cell v"><span class="pill pend">not compared</span></div>
       <div class="cell k">What the linger is worth alone in copy mode, for its fifth more CPU per GB</div><div class="cell v"><span class="pill pend">not measured</span></div>
@@ -322,8 +323,9 @@
         <tr><td>Claimed, 3, 4 and 8 threads</td><td class="c">43.7 to 44.3</td><td class="r">81% to 89%</td><td class="x">139,000 to 262,000</td></tr>
       </tbody>
     </table></div>
-    <p><strong>It works and it does not raise the rate.</strong> The window is shut less, as intended, and the rate stays where it was. Retransmits rise about ten times, which is not yet explained. Data written with 1, 2 and 8 threads was read back and checksummed without error. Claiming stays off: it will be used only if a direct comparison shows a benefit, and six pairs of runs with 0 and 2 threads, nothing else varied, are under way.</p>
-    <p class="note">One thing may yet count for it. Three of the runs that copied as the socket was read had hundreds of retransmission timeouts and carried 34 to 40 GB/s; none of the claiming runs did. Fourteen further runs watched every second did not show another, so what happens in such a run is not known.</p>
+    <p><strong>It works and it does not raise the rate.</strong> The window is shut less, as intended, and the rate stays where it was. Retransmits rise about ten times, which is not yet explained. Data written with 1, 2 and 8 threads was read back and checksummed without error. Claiming stays off on one port. Six runs of each, 0 and 2 threads by turns with nothing else varied, gave 43.9 and 44.2 GB/s on average, a difference smaller than two runs of one setting show.</p>
+    <p><strong>The retransmits are frames the card loses and does not count.</strong> Every packet of one run of each was accounted for. With two threads the client put 234,702 more frames on the wire than the card's rings report as forwarded or dropped, and retransmitted 240,733; without claiming the figures are 5,153 and 10,492. Nothing in the server's network stack drops them. A thread that claims returns the window sooner, the server sends two thirds more ACKs, and the client sends closer together; the card then loses frames ahead of its rings. So claiming does not mishandle TCP, and a setting's loss has to be read from the client's retransmits, since the card's ring drops miss most of it. Where those frames go is a question for Xsight.</p>
+    <p class="note">Three earlier runs that copied as the socket was read had hundreds of retransmission timeouts and carried 34 to 40 GB/s. Twenty further runs of that kind, watched every second, did not show another, so what happens in such a run is not known.</p>
 
     <h3 style="margin-top:26px" id="window">A larger window, with and without claiming</h3>
     <div class="tbl-wrap"><table class="q" style="min-width:640px">
