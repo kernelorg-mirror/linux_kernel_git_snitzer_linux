@@ -24,12 +24,13 @@
 #   QDISC=fq|fqNN    fq on the client's ports (fqNN: maxrate NN Gbit/s a flow)
 #   PROFILE=1        a 10 s system-wide perf record and perf stat mid-run
 #   PIN=1            each port's writers on the client CPUs of its NIC's NUMA node
+#   WARM=<s>         the writers run this long before fio starts counting (40)
 #   EXPORT_SYNC=async  export async, so a COMMIT does not sync the file or flush the drives
 # TSV=<file>: append a line of the run's figures (TAG=<label> names it).
 . "$(dirname "$0")/common.sh"
 "$(dirname "$0")/drive-cache.sh" > /dev/null || { echo "drive-cache.sh failed"; exit 1; }	# no cache flush to the drives (AGENTS.md)
 OUT=${1:?out dir}; WHICH=${2:-ab}
-RUNTIME=${RUNTIME:-120}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
+RUNTIME=${RUNTIME:-120}; WARM=${WARM:-40}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
 YNL="$H/../tools/net/ynl/pyynl/cli.py --no-schema --spec $H/../Documentation/netlink/specs/ethtool.yaml"
 declare -A DEV=([a]=enp161s0f0 [b]=enp164s0f0) SRV=([a]=192.168.1.211 [b]=192.168.0.211)
 declare -A CLI=([a]=192.168.1.106 [b]=192.168.0.106) FS=([a]=/hs/stripe [b]=/hs/stripe1)
@@ -101,7 +102,7 @@ for p in $PORTS; do
 	cl "mkdir -p /mnt/rxr-$p && mount -t nfs -o vers=3,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 ${SRV[$p]}:${FS[$p]}/zcbudget /mnt/rxr-$p" || { echo "$p: mount failed"; exit 1; }
 done
 
-job() {	# job <port> <prefix> <seconds>
+job() {	# job <port> <prefix> <seconds> [seconds of warm-up fio leaves out of its figures]
 	cat <<J
 [global]
 rw=write
@@ -109,6 +110,7 @@ bs=$BS
 size=512M
 time_based
 runtime=$3
+${4:+ramp_time=$4}
 direct=1
 ioengine=libaio
 iodepth=16
@@ -144,13 +146,17 @@ if [ "${PLACE:-1}" != 0 ]; then
 	wait
 fi
 
-for p in $PORTS; do job $p f $RUNTIME | clput /tmp/twoport-$p.fio; done
+for p in $PORTS; do job $p f $RUNTIME $WARM | clput /tmp/twoport-$p.fio; done
 echo 1 > $RG	# the region's low-water mark starts again from here
 for p in $PORTS; do
 	cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio; rm -f /mnt/rxr-$p/f-*" &
 done
 W=$(( RUNTIME - 50 )); [ $W -lt 10 ] && W=10
-sleep 25
+sleep $(( WARM + 25 ))	# the warm-up, then 25 s into what fio counts
+# The drives under each port's stripe over the window: sectors written and
+# milliseconds busy, from /proc/diskstats.
+drives() { for m in $(ls /sys/block/$(basename $(findmnt -no SOURCE ${FS[$1]}))/slaves); do awk -v d=$m '$3 == d {print d, $10, $13}' /proc/diskstats; done; }
+for p in $PORTS; do drives $p > drives-$p.0; done
 ss -tmi '( sport = :2049 )' > ss-server.txt 2>&1
 cl "ss -tmi '( dport = :2049 )'" > ss-client.txt 2>&1
 declare -A F0 T0 B0 S0
@@ -166,7 +172,13 @@ if [ -n "${PROFILE:-}" ]; then
 fi
 cl "mpstat -P ALL $W 1" > cli-mpstat.txt 2>&1 &
 sleep $W
+for p in $PORTS; do drives $p > drives-$p.1; done
 R1=$(cretr)
+for p in $PORTS; do
+	paste drives-$p.0 drives-$p.1 | awk -v w=$W -v p=$p -v fs=${FS[$p]} '
+		{g = ($5 - $2) * 512 / w / 1e9; u = ($6 - $3) / w / 10; if (NR == 1 || g < gmin) gmin = g; if (g > gmax) gmax = g; if (u > umax) umax = u}
+		END {printf "drives of %s (%s): %d, each writing %.1f to %.1f GB/s, busiest %.0f%% busy%s\n", p, fs, NR, gmin, gmax, umax, (umax >= 90 ? " -- DRIVE-LIMITED" : "")}'
+done > drives.txt
 {
 	echo "port dev fio_GBps wire_GBps fifo_drops ring_drops ring_shares window_s"
 	for p in $PORTS; do
@@ -195,11 +207,12 @@ for p in sys.argv[1:]:
         print(p, 'no fio result:', e); continue
     tot += bw
     f = w.get(p, ['-'] * 8)
-    print("port %s %s: %.2f GB/s (fio, whole run); in the %s s window: wire %s GB/s, FIFO drops %s, ring drops %s, rings %s%%" % (p, f[1], bw, f[7], f[3], f[4], f[5], f[6]))
+    print("port %s %s: %.2f GB/s (fio, after the warm-up); in the %s s window: wire %s GB/s, FIFO drops %s, ring drops %s, rings %s%%" % (p, f[1], bw, f[7], f[3], f[4], f[5], f[6]))
 print("total %.2f GB/s" % tot)
 open('total.txt', 'w').write("%.2f\n" % tot)
 for l in open('window.txt'):
     if l.startswith('client'): print(l.strip())
+print(open('drives.txt').read().strip())
 # A CPU waiting on I/O is not in use: busy is what is neither idle nor iowait.
 def busy(path, cpus):
     v = []
@@ -213,9 +226,10 @@ print("client CPUs busy: %.0f%%" % busy('cli-mpstat.txt', range(0, 48)))
 EOF
 echo "region pages in use at most: $(( $(reg pages) - $(reg min_free) ))" | tee -a summary.txt
 if [ -n "${TSV:-}" ]; then
-	[ -s $TSV ] || echo "tag which total_GBps a_GBps b_GBps fifo_a fifo_b ringdrop_a ringdrop_b cli_retrans region_pages nfsd_busy ringcpu_a ringcpu_b rcvbuf linger threads entries qdisc nconn jobs" > $TSV
+	[ -s $TSV ] || echo "tag which total_GBps a_GBps b_GBps fifo_a fifo_b ringdrop_a ringdrop_b cli_retrans region_pages nfsd_busy ringcpu_a ringcpu_b rcvbuf linger threads entries qdisc nconn jobs drvbusy_a drvbusy_b warm" > $TSV
 	g() { awk -v p=$1 -v c=$2 '$1 == p {print $c}' window.txt; }
+	db() { awk -v p=$1 '$3 == p {for (i = 1; i <= NF; i++) if ($i == "busiest") {sub(/%/, "", $(i+1)); print $(i+1); f = 1}} END {if (!f) print "-"}' drives.txt; }
 	fb() { python3 -c "import json;print('%.2f' % (json.load(open('fio-$1.json'))['jobs'][0]['write']['bw_bytes']/1e9))" 2> /dev/null || echo -; }
 	cb=$(awk '$1 == "Average:" && $2 ~ /^[0-9]+$/ {b = 100 - $NF - $6; c = $2 + 0; if (c < 8) a += b; else if (c >= 56) z += b; else n += b} END {printf "%.0f %.0f %.0f", n / 48, a / 8, z / 8}' srv-mpstat.txt)
-	echo "${TAG:-$(basename $OUT)} $WHICH $(cat total.txt) $(fb a) $(fb b) $(g a 5) $(g b 5) $(g a 6) $(g b 6) $(awk '/^client retransmits/{print $NF}' window.txt) $(( $(reg pages) - $(reg min_free) )) $cb $(cat $SP/svc_tcp_rx_rcvbuf) $(cat $SP/svc_tcp_rx_linger_us) $(cat $SP/svc_tcp_rx_copy_threads) ${ENTRIES:-256} ${QDISC:-codel} $NCONN $JOBS" | sed 's/  */ /g' >> $TSV
+	echo "${TAG:-$(basename $OUT)} $WHICH $(cat total.txt) $(fb a) $(fb b) $(g a 5) $(g b 5) $(g a 6) $(g b 6) $(awk '/^client retransmits/{print $NF}' window.txt) $(( $(reg pages) - $(reg min_free) )) $cb $(cat $SP/svc_tcp_rx_rcvbuf) $(cat $SP/svc_tcp_rx_linger_us) $(cat $SP/svc_tcp_rx_copy_threads) ${ENTRIES:-256} ${QDISC:-codel} $NCONN $JOBS $(db a) $(db b) $WARM" | sed 's/  */ /g' >> $TSV
 fi
