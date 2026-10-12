@@ -119,6 +119,24 @@ twelve with claiming.** Not settled, and what happens in such a run
 is the open question on the server. "More than two threads" in
 `../XEU_CONVERGENCE.md`.
 
+**0 and 2 by turns, six each (2026-10-11, evening)**: 43.9 against
+44.2 GB/s on average, inside the spread; no RTO episode in either, or
+in fourteen watched runs before. **Keep `svc_tcp_rx_copy_threads` at
+0 on one port.** Its retransmits are explained: **the card loses
+frames ahead of its rings and counts them nowhere.** One cell of each
+accounted for packet by packet: the client's PHY sent 234,702 more
+than the rings forwarded or dropped with 2 threads, 5,153 with 0, and
+the client retransmitted 240,733 and 10,492. Read a setting's loss
+from the client's retransmits, not from the ring drops. For Xsight:
+where is a frame dropped ahead of `fwd`, `tail_drop` and `pp_drop`?
+"0 and 2 threads by turns" in `../XEU_CONVERGENCE.md`. Do not kprobe
+every received segment (`gro-order.bt`): it makes the rings drop.
+
+**The tuning service sets 512 threads and pins them all** (a drop-in,
+`hammerspace-nfsd-tuning.service.d/threads.conf`). No more `echo 512`
+and `taskset` by hand; a restart of the service does both. It still
+leaves `io_cache_write` at 4, which no cell has measured.
+
 **Noted.**
 
 - 12% of lingers time out (287,671 of 2.37 million), 50 us of a
