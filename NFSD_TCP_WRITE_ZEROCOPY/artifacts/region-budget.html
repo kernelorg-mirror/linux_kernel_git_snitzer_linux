@@ -213,7 +213,6 @@
   .pk { display: flex; align-items: center; gap: 12px; margin-top: 7px; }
   .pktrack { flex: 1 1 auto; height: 8px; background: var(--hair); border-radius: 4px; overflow: hidden; min-width: 0; }
   .pkbar { display: block; height: 100%; background: var(--gain); border-radius: 4px 0 0 4px; }
-  .pkbar.acc { background: var(--accent); }
   .pkn { flex: 0 0 auto; font-family: var(--mono); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; min-width: 6.4em; text-align: right; }
   .pkn.none { color: var(--muted); font-weight: 400; min-width: 0; text-align: left; }
 </style>
@@ -241,11 +240,11 @@
         <dt>9 Oct &middot; 16 KiB</dt><dd><strong>Build 462</strong> on tardis1: five kernel changes and the driver's refill threshold, loaded together. <code>7.1.13-21.hs.462</code><div class="pk"><div class="pktrack"><span class="pkbar gain" style="width:79.2%"></span></div><span class="pkn">38.0 GB/s</span></div></dd>
         <dt>9 Oct &middot; 16 KiB</dt><dd><strong>Build 461</strong> on tardis1: the stripe written direct (27.7), then each connection's receive buffer held at 1 MiB. <code>7.1.13-21.hs.461.loanpages_pool</code><div class="pk"><div class="pktrack"><span class="pkbar gain" style="width:74.8%"></span></div><span class="pkn">35.9 GB/s</span></div></dd>
         <dt>8 Oct &middot; 16 KiB</dt><dd><strong>Build 459</strong> on tardis1: the first runs at 16 KiB on the Xsight card and six striped NVMe drives, copied twice through the page cache. <code>7.1.13-21.hs.459.loanpages_pool</code><div class="pk"><div class="pktrack"><span class="pkbar gain" style="width:52.9%"></span></div><span class="pkn">25.4 GB/s</span></div></dd>
-        <dt>7 Oct &middot; 64 KiB</dt><dd><strong>Build 458</strong> on tardis1 (64 CPUs), packaged RPMs: the first runs on the card, onto one drive, with a load that reads back and checks all it writes. <code>7.1.13-20.hs.458.loanpages_pool</code><div class="pk"><div class="pktrack"><span class="pkbar acc" style="width:4.8%"></span></div><span class="pkn">2.3 GB/s</span></div></dd>
+        <dt>7 Oct &middot; 64 KiB</dt><dd><strong>Build 458</strong> on tardis1 (64 CPUs), packaged RPMs. <code>7.1.13-20.hs.458.loanpages_pool</code><div class="pk"><span class="pkn none">the test plan and the first runs on the card, not a rate</span></div></dd>
         <dt>7 Oct &middot; 4 KiB</dt><dd><strong>Build 458</strong> in a VMware Fusion guest on a MacBook Pro, with the four fixes found on tardis1. <code>7.1.13-20.hs.458</code><div class="pk"><span class="pkn none">the test plan, not a rate</span></div></dd>
         <dt>5 Oct &middot; 16 KiB</dt><dd><strong>Build 451</strong> in a UTM guest on a MacBook Pro. <code>7.1.13-19.hs.451</code><div class="pk"><span class="pkn none">the test plan, not a rate</span></div></dd>
       </dl>
-      <p class="note" style="margin:2px 0 0">Each bar is the best durable NFS write rate from one client that the build carried in copy mode, sixteen connections, on a scale that ends at the 48 GB/s the wire carries with no NFS. Build 464's is the middle of 21 runs between 43.4 and 44.3; its highest single run was 44.6. The 64 KiB figure is from a checking load that cannot go much faster, so it marks where the card runs began and is not a rate to compare.</p>
+      <p class="note" style="margin:2px 0 0">Each bar is the best durable NFS write rate from one client that the build carried in copy mode, sixteen connections, on a scale that ends at the 48 GB/s the wire carries with no NFS. Build 464's is the middle of 21 runs between 43.4 and 44.3; its highest single run was 44.6. The three earliest entries ran the test plan, with a load that reads back and checks everything it writes, and were not measures of rate.</p>
       <p class="pl">Where it is written up</p>
       <dl class="runs">
         <dt>Branch</dt><dd><code>kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY</code>, on <code>v7.1.13-21</code></dd>
