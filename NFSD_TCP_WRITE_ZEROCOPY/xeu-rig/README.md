@@ -146,7 +146,13 @@ connected) and came up with all three, 512 threads in pools of 128,
 all on 8-55. They hold for every port and every NFS connection.
 `run-budget.sh` now puts the linger back as it found it after a run,
 where it wrote 0. Not in a file yet: the port's MTU of 7792, its
-rings and region, and `io_cache_write`.
+rings and region.
+
+**`io_cache_write` 2 is pinned (2026-10-11, 19:20)**: one cell with 4,
+which the tuning service's profile set, carried 28.6 GB/s against 44:
+nfsd syncs every 1 MiB WRITE where the client's COMMIT syncs 8 MiB.
+The service's drop-in now passes `--io-cache-write 2`, so a restart
+or a boot leaves 2. "nfsd's write mode" in `../XEU_CONVERGENCE.md`.
 
 **Noted.**
 
