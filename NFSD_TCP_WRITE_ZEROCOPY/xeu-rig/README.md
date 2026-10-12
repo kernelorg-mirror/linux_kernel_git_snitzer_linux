@@ -153,6 +153,10 @@ which the tuning service's profile set, carried 28.6 GB/s against 44:
 nfsd syncs every 1 MiB WRITE where the client's COMMIT syncs 8 MiB.
 The service's drop-in now passes `--io-cache-write 2`, so a restart
 or a boot leaves 2. "nfsd's write mode" in `../XEU_CONVERGENCE.md`.
+The bundle's own `e1` profile (`HS_IO_CACHE_WRITE=4` in
+`/usr/local/sbin/hs-tune-common.sh`) is unchanged: the fix is this
+host's drop-in only. Changing the default there is for later (Mike,
+2026-10-11); do not edit the profile until he asks.
 
 **Noted.**
 
