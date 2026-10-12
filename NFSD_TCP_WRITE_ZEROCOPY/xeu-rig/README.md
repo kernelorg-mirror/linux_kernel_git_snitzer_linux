@@ -143,8 +143,10 @@ loaded: with `echo Y > /sys/module/xeu/parameters/rx_port_stats`
 (default N), `ethtool -S` lists `port_rx_fifo_tc<N>_drop_packets`
 and the FIFO's fill. Accounted packet by packet, the FIFO dropped
 13,038 frames in a cell with 0 threads and 234,332 with 2, which is
-what was missing (11,445 and 233,507). It is about 1 MiB for this
-port's traffic class 0, 134 frames, 23 microseconds at 44 GB/s.
+what was missing (11,445 and 233,507). By the SDK's sizing it is
+2 MiB for this port, 268 frames, 46 microseconds at 44 GB/s, and
+that is all there is: there is nothing to resize it to. The link is
+clean (`xsllink get --fec-hist port=0`: `NCCW: 0`).
 **The ceiling near 44 GB/s is that FIFO overflowing in bursts, with
 flow control off.** Next: `ethtool -A` on both ends so that it
 pauses the sender, and whether it can be made larger (for Xsight).

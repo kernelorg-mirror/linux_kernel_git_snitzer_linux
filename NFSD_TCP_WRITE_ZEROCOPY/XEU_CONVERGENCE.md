@@ -3396,31 +3396,52 @@ Then the packet accounting again, both ends every 2 s
 1. **The FIFO's drops are the frames that were missing**, to within
    0.4% of them in the run with 2, which is the idle traffic at
    either end of the count. Every frame is now accounted for.
-2. **The FIFO is small.** Traffic class 0 was seen up to 8139 lines
-   and 133 packets full, and the SDK has 128-byte lines and
-   `EU_RX_FIFOS_TOTAL_SIZE_LINES` of 2 MiB for all ports and classes:
-   this port's class 0 has about 1 MiB, 134 frames of 7806 bytes,
-   which is 23 microseconds of traffic at 44 GB/s. Its fill was 0 at
-   more than half of the 2 s readings, so it overflows in bursts.
-   Drops came in about half of the 2 s intervals of either cell, up
-   to 405 in one with 0 threads.
+2. **The FIFO is small.** By the SDK's sizing it is 2 MiB: 128-byte
+   lines, `EU_RX_FIFOS_TOTAL_SIZE_LINES` of 2 MiB for an E-unit,
+   shared equally by its ports and then by traffic class
+   (`eu_rx_fifos_init()`), and each of this card's two E-units has
+   one port and one class (`eu_ports 1,1`, `TCs 1` in the boot log).
+   2 MiB is 268 frames of 7806 bytes, 46 microseconds of traffic at
+   44 GB/s. The fullest it was seen is 8139 lines, 1 MiB and 133
+   packets, but that is the largest of some 240 readings 2 s apart
+   and not its size (corrected 20:50: this first said "about
+   1 MiB"). Its fill was 0 at more than half of the readings, so it
+   overflows in bursts. Drops came in about half of the 2 s intervals
+   of either cell, up to 405 in one with 0 threads.
 3. **Reading the counters every 2 s through both cells did no harm**:
    44.1 and 43.8 GB/s, nothing logged.
 
 So the ceiling near 44 GB/s is at the card: when sixteen connections
 send together, frames arrive faster than the packet processor moves
-them from a 1 MiB FIFO to the rings, and the rest are dropped without
+them from a 2 MiB FIFO to the rings, and the rest are dropped without
 a pause frame (flow control is off at both ends) and without a count
 anyone read. The window, the client's pacing and claiming each change
 how hard the sender leans on that FIFO, which is why they trade
 waiting for loss at one rate.
 
 Not tried, and next: flow control on the link (`ethtool -A` on both
-ends; `xeu` has `rx_fc_ena` and the FIFO has xon and xoff
-thresholds), so the FIFO pauses the sender where it drops; and
-whether the FIFO's sizes (`eu_rx_fifos_set_sizes()`, 2 MiB shared)
-can give one port's class 0 all of it. Both are in the note to
-Xsight.
+ends; `xeu` has `rx_fc_ena`, and the FIFO's xoff is set to three
+quarters of it and xon to a quarter), so the FIFO pauses the sender
+where it drops.
+
+**Resizing the FIFO is not there to try (20:50).** This port's class
+0 already has the whole of its E-unit's 2 MiB, by the sizing above,
+and 2 MiB is a constant of the SDK, which reads as the size of the
+memory. `eu_rx_fifos_set_sizes()` is called once, from
+`eu_rx_fifos_init()` when `xsl_core` brings the card up, after the
+FIFOs' pointers are reset; it rewrites every FIFO's base and size,
+no RM message reaches it, and `xsl_core` serves both ports. What the
+sizes are derived from is the ports of an E-unit, which the firmware
+reports, and the traffic classes, fixed at 1 in `xsl_attr.c`.
+Neither is a setting of `nvc` or `xsllink`. The card's sysfs tree
+(`/sys/kernel/xsl/eunit0/port0/fn0/tc`) has the traffic classes'
+maps and rates and nothing of the FIFO; that is where a read-only
+size, fill and thresholds would belong.
+
+**The link is not it.** `xsllink get --fec-hist port=0` and `port=1`
+(xsight-utils) show the E1's FEC histogram: no uncorrectable
+codeword on either port (`NCCW: 0`), with symbol error rates of
+1.1e-8 and 9.0e-5. So no frame is lost to the link's errors.
 
 **State after this:** `xeu` 2.0.1-7 loaded (srcversion
 `C812558B8FE3B38F09C9BA1`), `rx_port_stats` N; `echo Y >
