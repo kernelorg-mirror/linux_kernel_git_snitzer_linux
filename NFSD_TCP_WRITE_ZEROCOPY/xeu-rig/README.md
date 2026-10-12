@@ -137,6 +137,17 @@ every received segment (`gro-order.bt`): it makes the rings drop.
 and `taskset` by hand; a restart of the service does both. It still
 leaves `io_cache_write` at 4, which no cell has measured.
 
+**The pinned module settings are in `/etc/modprobe.d` (2026-10-11,
+19:00)**: `xeu.conf` gained `rx_refill_thresh=8` (no more setting it
+by hand after a load), and a new `sunrpc.conf` has `pools_per_node=4
+svc_tcp_rx_rcvbuf=1048576 svc_tcp_rx_linger_us=50`. `sunrpc` was
+reloaded from it (`SUNRPC_KO=none ./swap-sunrpc.sh`, no clients
+connected) and came up with all three, 512 threads in pools of 128,
+all on 8-55. They hold for every port and every NFS connection.
+`run-budget.sh` now puts the linger back as it found it after a run,
+where it wrote 0. Not in a file yet: the port's MTU of 7792, its
+rings and region, and `io_cache_write`.
+
 **Noted.**
 
 - 12% of lingers time out (287,671 of 2.37 million), 50 us of a
