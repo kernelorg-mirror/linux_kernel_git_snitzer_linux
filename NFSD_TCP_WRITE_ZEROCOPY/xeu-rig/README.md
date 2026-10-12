@@ -29,6 +29,16 @@ not fetch its destination gains nothing: `copybench.c`, and
 (memory channels populated?), and the loan. The 12% of cycles in
 wakeups and context switches has not been traced.
 
+**Two `sunrpc` settings pinned on 12 October, both in
+`/etc/modprobe.d/sunrpc.conf`:** `svc_tcp_rx_keep=1` (a thread that
+finds a WRITE short does not wake another for data already there)
+and `svc_tcp_rx_lowat=131072` (a thread is woken when 128 KiB of a
+short WRITE has arrived, not for each piece). Together they take
+thread wakeups on two ports from 1.15 million a second to 0.40
+million at the same rate. Splitting nfsd's threads by port was tried
+and is not a gain. All in `../XEU_CONVERGENCE.md` from "nfsd's
+threads split by port".
+
 The client is on 7.3.0-0.rc7.2.hs.469, which changed little. The
 account is "No cache flush to the drives, and two ports at 58.5
 GB/s" in `../XEU_CONVERGENCE.md`.
