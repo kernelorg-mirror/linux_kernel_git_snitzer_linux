@@ -3831,6 +3831,17 @@ that ceiling is the next question: memory bandwidth most likely,
 and how many memory channels are populated is not known (dmidecode
 shows no DIMM detail). Past it the route is the loan.
 
+**Plain TCP with receivers that copy, one port (14:30).** `MODE=copy
+./iperf2port.sh a` gives 49.5, 49.8 and 49.8 GB/s: one port is at
+line rate with the copy as without it (49.8). Both ports again: 89.9
+and 82.8 (86.5 the day before). A first try at both gave 64.9, and
+that found a fault in the rig: putting the rings back to 256 after a
+run moves a port's ring interrupts back to the driver's hint, which
+for both ports is now CPUs 0-7, so the two ports' rings shared eight
+CPUs. `twoport.sh` placed them at the start of every run, so no NFS
+run was measured that way; it now places them again when it puts the
+rings back, and `iperf2port.sh` places them before it starts.
+
 **State left:** as after the last section, plus the drives
 `write through` with power states off (persistent), the client on
 build 469. Nothing exported or mounted.
