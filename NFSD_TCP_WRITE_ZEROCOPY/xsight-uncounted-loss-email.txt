@@ -1,5 +1,5 @@
 To: <Xsight engineering contact>
-Subject: xeu on E1: frames dropped at the port's RX FIFO and counted nowhere (and five smaller questions)
+Subject: xeu on E1: frames dropped at the port's RX FIFO and counted nowhere (with two-port results and six smaller questions)
 
 Hi <name>,
 
@@ -9,7 +9,9 @@ what the wire carries with no NFS at all. Thank you for the guidance
 that got us there. Looking at what holds the last few percent, we
 found that the port's RX FIFO, ahead of the rings, drops frames, and
 that nothing `ethtool -S` shows for the port counts them. That is
-the main reason for this note. Five smaller questions follow it.
+the main reason for this note. What we see with both ports loaded
+follows it (58.5 GB/s of NFS writes, and 99.4 GB/s of plain TCP),
+then six smaller questions.
 
 
 1. Frames dropped at the port's RX FIFO, and not counted
@@ -138,7 +140,45 @@ thousand a run for the first setting, 146 to 248 thousand for the
 second).
 
 
-2. Smaller questions
+2. Both ports at once
+
+We have since loaded both E1 ports together, each from its own 400G
+mlx5 port on the same client, 16 TCP connections to each. The short
+version: the card carries both ports at line rate, and what limits
+NFS on two ports is our host, not the card.
+
+                                          one port    both ports
+  plain TCP, receivers discard
+    without copying                       49.8 GB/s   99.4 GB/s
+  plain TCP, receivers copy into a
+    small buffer                          49.8 GB/s   89.9 GB/s
+  NFS writes, copied once and written
+    to NVMe drives                        44.6 GB/s   58.5 GB/s
+
+Each figure is the best run of its kind. Plain TCP is measured from
+the rings' byte counts; NFS is the client's write rate. In the
+99.4 GB/s run the two ports' RX FIFOs dropped nothing.
+
+For NFS the limit with both ports loaded is the copy our server makes
+of each write: this host copies memory to memory at 62 to 68 GB/s
+however many CPUs do it, and 58.5 GB/s is about 90% of that. Getting
+there took different settings from one port's. With one port's
+settings on both ports (a 1 MiB TCP receive buffer for each
+connection, rings of 256) the two ports carried 43 GB/s between them
+and each port's RX FIFO dropped about 870 thousand frames in 70
+seconds. With a 384 KiB receive buffer, rings of 128 and the client
+pacing its transmit (the fq qdisc), they carry 58.5 GB/s and neither
+FIFO drops a frame: 29.0 and 29.4 GB/s on the two ports, 92 frames
+dropped at the rings and 96 TCP retransmits in 70 seconds.
+
+So on two ports the FIFO of section 1 is not what holds us, and we
+have no question for you about it there. We mention it because it
+bears on how the FIFO behaves: the same sender filling two ports
+overflows both FIFOs with a large window, and neither with a small
+one and pacing.
+
+
+3. Smaller questions
 
 These do not hold us up today. Answers when convenient would help.
 
@@ -188,6 +228,15 @@ e. Receive coalescing. The port has no hardware coalescing and no
    of a flow, or split headers from payload so that payload can be
    coalesced? It would take that sensitivity away, and it is the
    same capability we asked about when we first spoke.
+
+f. Where the rings' interrupts go after a resize. We place each
+   port's ring interrupts on its own eight CPUs by writing
+   smp_affinity. After `ethtool -G <port> rx <n>` on the second port,
+   its ring interrupts were back on CPUs 0 to 7, the same CPUs as the
+   first port's, and the two ports together then carried 65 GB/s of
+   plain TCP where they carry 83 to 90 with the interrupts apart.
+   Does xeu set an affinity hint when it remakes the rings, and can
+   it keep what was set, or spread the ports over different CPUs?
 
 We carry six small patches to xeu 2.0.1 that came out of this work:
 rx_ip_align (received data on a 4-byte boundary), a retry so that a
