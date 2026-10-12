@@ -252,6 +252,18 @@ MODULE_PARM_DESC(svc_tcp_rx_rcvbuf,
  */
 #define SVC_TCP_RX_LINGER_MAX_US	1000
 /*
+ * A thread that finds a record short gives the transport up and looks for
+ * work. If more of the record arrived while it read, giving the transport
+ * up queues it and wakes an idle thread to carry on, and the two then race
+ * for it. With svc_tcp_rx_keep the thread queues the transport without
+ * waking anyone and takes it up again itself.
+ */
+static bool svc_tcp_rx_keep;
+module_param(svc_tcp_rx_keep, bool, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_keep,
+		 "After a short TCP receive, do not wake another thread for data that has already arrived (default: N)");
+
+/*
  * A thread that takes a partly received record back from a socket leaves
  * its own pages in the socket's sk_pages[], for the next thread that parks
  * a record there to take in exchange.  The pages a socket keeps that way
@@ -3867,7 +3879,10 @@ err_delete:
 	trace_svcsock_tcp_recv_err(&svsk->sk_xprt, len);
 	svc_xprt_deferred_close(&svsk->sk_xprt);
 err_noclose:
-	svc_xprt_received(rqstp->rq_xprt);
+	if (READ_ONCE(svc_tcp_rx_keep))
+		svc_xprt_received_keep(rqstp->rq_xprt);
+	else
+		svc_xprt_received(rqstp->rq_xprt);
 	return 0;	/* record not complete */
 }
 

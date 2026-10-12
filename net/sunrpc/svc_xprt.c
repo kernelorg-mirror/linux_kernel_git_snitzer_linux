@@ -224,7 +224,9 @@ EXPORT_SYMBOL_GPL(svc_xprt_init);
  * leave the bit set until a read attempt finds no (or insufficient)
  * data, or clear it as soon as it consumes the last queued receive.
  */
-void svc_xprt_received(struct svc_xprt *xprt)
+static void svc_xprt_do_enqueue(struct svc_xprt *xprt, bool wake);
+
+static void __svc_xprt_received(struct svc_xprt *xprt, bool wake)
 {
 	if (!test_bit(XPT_BUSY, &xprt->xpt_flags)) {
 		WARN_ONCE(1, "xprt=0x%p already busy!", xprt);
@@ -248,11 +250,33 @@ void svc_xprt_received(struct svc_xprt *xprt)
 	if (READ_ONCE(xprt->xpt_flags) &
 	    (BIT(XPT_CONN) | BIT(XPT_CLOSE) | BIT(XPT_HANDSHAKE) |
 	     BIT(XPT_DATA) | BIT(XPT_DEFERRED)))
-		svc_xprt_enqueue(xprt);
+		svc_xprt_do_enqueue(xprt, wake);
 
 	svc_xprt_put(xprt);
 }
+
+void svc_xprt_received(struct svc_xprt *xprt)
+{
+	__svc_xprt_received(xprt, true);
+}
 EXPORT_SYMBOL_GPL(svc_xprt_received);
+
+/**
+ * svc_xprt_received_keep - Give a transport back without waking a thread
+ * @xprt: a transport the calling service thread has finished with
+ *
+ * As svc_xprt_received(), for a service thread that is about to return to
+ * svc_recv() with nothing to process. If the transport has more for a
+ * thread to do it is queued, and no idle thread is woken for it: the
+ * caller finds it when it looks for work, which it is about to do. A
+ * thread that sleeps or goes on to process a request must use
+ * svc_xprt_received().
+ */
+void svc_xprt_received_keep(struct svc_xprt *xprt)
+{
+	__svc_xprt_received(xprt, false);
+}
+EXPORT_SYMBOL_GPL(svc_xprt_received_keep);
 
 void svc_add_new_perm_xprt(struct svc_serv *serv, struct svc_xprt *new)
 {
@@ -507,7 +531,7 @@ static bool svc_xprt_ready(struct svc_xprt *xprt)
  * @xprt: transport with data pending
  *
  */
-void svc_xprt_enqueue(struct svc_xprt *xprt)
+static void svc_xprt_do_enqueue(struct svc_xprt *xprt, bool wake)
 {
 	struct svc_pool *pool;
 
@@ -528,7 +552,13 @@ void svc_xprt_enqueue(struct svc_xprt *xprt)
 	xprt->xpt_qtime = ktime_get();
 	lwq_enqueue(&xprt->xpt_ready, &pool->sp_xprts);
 
-	svc_pool_wake_idle_thread(pool);
+	if (wake)
+		svc_pool_wake_idle_thread(pool);
+}
+
+void svc_xprt_enqueue(struct svc_xprt *xprt)
+{
+	svc_xprt_do_enqueue(xprt, true);
 }
 EXPORT_SYMBOL_GPL(svc_xprt_enqueue);
 
