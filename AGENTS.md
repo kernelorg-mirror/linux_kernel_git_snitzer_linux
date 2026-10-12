@@ -123,6 +123,15 @@ minutes, the scripts and plans that run it, and what went wrong at
 only `enp161s0f0`, load only to the harness's own mount, `xeu` never
 reloaded. Run nothing on veth on a boot that is to use the card.
 
+**Both ports are ours from 2026-10-11 (Mike): the rule that
+`enp164s0f0` is never touched is lifted**, for runs on two ports at
+once. The eight data drives are two stripes of four for it,
+`/hs/stripe` and `/hs/stripe1`; `/hs/nvme0` and `/hs/nvme1` no longer
+exist. Still check that no NFS client is connected before a port is
+reconfigured or `xeu` reloaded (192.168.0.105 has mounted over
+`enp164s0f0` before). The first section of `xeu-rig/README.md` has
+where that stands.
+
 **The primary focus from the evening of 2026-10-08 (Mike): NFS writes
 from the remote client as fast as they will go, near line rate.** On
 tardis1 start at the first section of
