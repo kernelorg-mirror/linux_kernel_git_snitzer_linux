@@ -34,6 +34,17 @@ the drives' fast region:
 
 ## Next: what a loaned byte costs in memory (Mike, 13 October)
 
+**Begun the same evening: `../LOAN-PERFORMANCE.md`.** The counter is
+calibrated, and the card and the drives measured by themselves: both
+move data through the cache, so a loaned byte that is still in the
+cache when the drive takes it asks about 0.1 requests of memory a
+line, against a copied byte's 2.17. The paragraph below was the
+question as first put; its "bounded near 83 GB/s" does not hold.
+**All of it is to be run again on the 7.3-rc7 kernel the series is
+being rebased onto (Mike), with one-port and two-port copy-mode runs
+to show no regression**: "The battery" in that document, and
+`memcost-cal.sh`.
+
 With no copy a payload byte still enters memory once from the card
 and leaves once to a drive. If both count against the same 166
 GB/s, a loan is bounded near 83 GB/s here too and not at the card's
