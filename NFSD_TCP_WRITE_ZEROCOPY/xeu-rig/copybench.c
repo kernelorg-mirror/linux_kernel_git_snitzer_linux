@@ -1,6 +1,9 @@
 // copybench: N threads each copy a large source to a large destination,
 // both far larger than the caches, by one of four methods.  Reports GB/s.
 //   copybench <method> <threads> <first cpu> <seconds> [MiB per buffer]
+//   PIECE=<bytes> copies in pieces as frames are received, each SOFF bytes into its
+//   own STRIDE-byte buffer; RUN=<n> takes the buffers in runs of <n> neighbours, the
+//   runs in random order (as buffers cut from one page are neighbours and pages are not)
 //   methods: libc  stp  zva  stnp, and for what memory takes one way only:
 //            wr (stores to the destination alone)  rd (loads from the source alone)
 #define _GNU_SOURCE
@@ -14,7 +17,7 @@
 #include <time.h>
 #include <unistd.h>
 
-static size_t SZ, PIECE, STRIDE, SOFF; static int method, secs; static volatile int go, stop;
+static size_t SZ, PIECE, STRIDE, SOFF, RUN; static int method, secs; static volatile int go, stop;
 struct th { pthread_t t; int cpu; uint64_t bytes; char *src, *dst; };
 
 static void copy_stp(char *d, const char *s, size_t n)
@@ -53,6 +56,15 @@ static void *run(void *a)
 	t->dst = mmap(0, SZ, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 	madvise(t->src, SZ, MADV_HUGEPAGE); madvise(t->dst, SZ, MADV_HUGEPAGE);
 	memset(t->src, 0x5a, SZ); memset(t->dst, 1, SZ);
+	size_t nb = SZ / (STRIDE ? STRIDE : 1), bi = 0; uint32_t *ord = 0;
+	if (PIECE && RUN) {	// the order the buffers are copied from: runs of RUN neighbours, shuffled
+		size_t nr = nb / RUN; uint32_t *r = malloc(nr * sizeof *r); unsigned seed = 12345 + t->cpu;
+		for (size_t i = 0; i < nr; i++) r[i] = i;
+		for (size_t i = nr - 1; i > 0; i--) { size_t j = rand_r(&seed) % (i + 1); uint32_t x = r[i]; r[i] = r[j]; r[j] = x; }
+		ord = malloc(nr * RUN * sizeof *ord); nb = nr * RUN;
+		for (size_t i = 0; i < nr; i++) for (size_t k = 0; k < RUN; k++) ord[i * RUN + k] = r[i] * RUN + k;
+		free(r);
+	}
 	__sync_fetch_and_add(&go, 1);
 	while (go >= 0) ;
 	while (!stop) {
@@ -60,7 +72,8 @@ static void *run(void *a)
 			if (PIECE) {	// as received: pieces of PIECE bytes, each from SOFF into its own STRIDE-byte buffer
 				for (size_t d = 0; d < 1 << 20; d += PIECE, so += STRIDE) {
 					size_t n = (1 << 20) - d < PIECE ? (1 << 20) - d : PIECE;
-					if (so + STRIDE > SZ) so = 0;
+					if (ord) { so = (size_t)ord[bi] * STRIDE; if (++bi == nb) bi = 0; }
+					else if (so + STRIDE > SZ) so = 0;
 					if (method == 0) memcpy(t->dst + o + d, t->src + so + SOFF, n);
 					else if (method == 4) __builtin_memmove(t->dst + o + d, t->src + so + SOFF, n);
 				}
@@ -84,7 +97,7 @@ int main(int c, char **v)
 	const char *m[] = {"libc", "stp", "zva", "stnp", "mm", "wr", "rd"};
 	if (c < 5) return 1;
 	for (method = 0; method < 6 && strcmp(m[method], v[1]); method++) ;
-	PIECE = getenv("PIECE") ? atoi(getenv("PIECE")) : 0; STRIDE = getenv("STRIDE") ? atoi(getenv("STRIDE")) : 8192; SOFF = getenv("SOFF") ? atoi(getenv("SOFF")) : 68;
+	PIECE = getenv("PIECE") ? atoi(getenv("PIECE")) : 0; STRIDE = getenv("STRIDE") ? atoi(getenv("STRIDE")) : 8192; SOFF = getenv("SOFF") ? atoi(getenv("SOFF")) : 68; RUN = getenv("RUN") ? atoi(getenv("RUN")) : 0;
 	int n = atoi(v[2]), cpu0 = atoi(v[3]); secs = atoi(v[4]); SZ = (size_t)(c > 5 ? atoi(v[5]) : 64) << 20;
 	uint64_t z; asm("mrs %0, dczid_el0" : "=r"(z));
 	if (method == 2 && ((z & 0x1f) != 4)) { fprintf(stderr, "DC ZVA block is not 64 bytes (dczid %lx)\n", z); return 1; }
