@@ -4324,6 +4324,37 @@ No drive stepped down in the eight runs. Four of 128 stays. The runs
 are `r13-*` in `xeu-rig/results-twoport-464.tsv`
 (`$L/rings13-driver.sh`).
 
+### The client's queueing again: `fq` is worth nothing now and is unpinned (13 October, 15:45 to 17:10 by tardis1's clock)
+
+`fq` on the client's ports became part of the two-port setting on
+the night of 11 October, for 2 to 4 GB/s at a 512 KiB held buffer
+and "less" at 384 KiB (two `fq_codel` runs at 51.7 and 52.4 against
+seven of `fq` from 48.1 to 54.2). The drives were then flushed on
+every COMMIT and a run wrote twice their fast region. Again, by
+turns, every run inside the fast region, the mark off:
+
+| client's queueing | GB/s, two ports | middle |
+|---|---|---|
+| `fq` | 60.74, 60.68, 60.72, 59.67, 59.94, 59.38, 60.47 | 60.47 |
+| `fq nopacing` (`QDISC=fqnp`) | 60.29, 60.29, 59.90, 60.10, 59.98, 60.28 | 60.19 |
+| `fq_codel`, the default | 60.16, 60.20, 59.96, 60.17, 60.41, 60.34 | 60.19 |
+
+The means are 60.23, 60.14 and 60.21. No drive stepped down and no
+port went silent in the 19 runs. **`fq` is unpinned (Mike): the
+two-port setting is now `RCVBUF=393216 ENTRIES=128 LINGER=0
+LOWAT=0`, and nothing on the client is changed for it.**
+
+The batch was run for the silent port, which is `SILENT-PORT.md`: a
+port carrying nothing for 25 s, five times by this afternoon, all
+with `fq`, the fifth caught at both ends five times a second. For
+1.4 s the client's transmit side for the port lets nothing out, and
+`fq`'s pacing then holds it at a trickle. Port a's link turned out
+to be optical with 1.5 million bits a second corrected by FEC at the
+client where port b's copper corrects none, which is not the cause
+(the fifth event was on port b). It is set aside again until it
+shows (Mike). The runs are `silent-*` and `qd-*` in
+`xeu-rig/results-twoport-464.tsv`.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,

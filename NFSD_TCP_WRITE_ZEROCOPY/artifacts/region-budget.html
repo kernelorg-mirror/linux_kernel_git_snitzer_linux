@@ -324,18 +324,19 @@
     <h3 style="margin-top:26px">Two ports are at the machine's copy ceiling</h3>
     <p>A standalone copy between buffers larger than the caches reaches 62 to 68 GB/s on this machine with 8 CPUs and no more with 48. Copied in 7,740-byte pieces, as frames arrive here, it reaches 60.1. Two ports of NFS carried 59.6 to 61.0 in seven runs, with nfsd's CPUs and the rings' CPUs each about half idle. The limit is something the CPUs share, most likely memory bandwidth. Past it the routes are to fetch less memory for each line of payload (NFS fetches 2.2 lines, the bare copy 1.1) or not to copy, which is the loan.</p>
 
-    <h3 style="margin-top:26px" id="fq2">Pacing at the client is worth 0.5 GB/s on two ports, not 2</h3>
+    <h3 style="margin-top:26px" id="fq2">Pacing at the client is worth nothing on two ports, and the client is left as it comes</h3>
     <p><code>fq</code> on the client's ports was made part of the two-port setting late on 11 October, when it looked to be worth 2 to 4 GB/s. That was measured with the drives flushing on every COMMIT and with runs of twice the drives' fast region, and at the setting finally chosen it rested on two runs against seven that spread over 6 GB/s. Compared again on 13 October, by turns, every run inside the fast region:</p>
     <div class="tbl-wrap"><table class="q" style="min-width:520px">
-      <thead><tr><th>The client's queueing</th><th>GB/s, two ports</th><th>Middle</th></tr></thead>
+      <thead><tr><th>The client's queueing</th><th>GB/s, two ports</th><th>Mean</th></tr></thead>
       <tbody>
-        <tr><td><code>fq</code>, which paces each connection</td><td class="c" style="white-space:normal">60.74 &middot; 60.68 &middot; 60.72 &middot; 59.67</td><td class="r">60.7</td></tr>
-        <tr><td><code>fq</code> with pacing off</td><td class="c" style="white-space:normal">60.29 &middot; 60.29 &middot; 59.90</td><td class="c">60.3</td></tr>
-        <tr><td><code>fq_codel</code>, the client's default</td><td class="c" style="white-space:normal">60.16 &middot; 60.20 &middot; 59.96</td><td class="c">60.2</td></tr>
+        <tr><td><code>fq</code>, which paces each connection</td><td class="c" style="white-space:normal">60.74 &middot; 60.68 &middot; 60.72 &middot; 59.67 &middot; 59.94 &middot; 59.38 &middot; 60.47</td><td class="c">60.2</td></tr>
+        <tr><td><code>fq</code> with pacing off</td><td class="c" style="white-space:normal">60.29 &middot; 60.29 &middot; 59.90 &middot; 60.10 &middot; 59.98 &middot; 60.28</td><td class="c">60.1</td></tr>
+        <tr><td><code>fq_codel</code>, the client's default</td><td class="r" style="white-space:normal">60.16 &middot; 60.20 &middot; 59.96 &middot; 60.17 &middot; 60.41 &middot; 60.34</td><td class="r">60.2</td></tr>
       </tbody>
     </table></div>
-    <p>So a client left as it comes carries two ports within half a GB/s of the best. That matters beyond the rate: about one two-port run in ten has had one port go silent for 25 seconds, and what is known of it so far is that the client's own pacing is what holds the port at a trickle once it has begun. Whether it happens at all without pacing is being measured.</p>
-    <p class="note">Ten runs so far of a batch of 24. The account of the silent port is <code>NFSD_TCP_WRITE_ZEROCOPY/SILENT-PORT.md</code>.</p>
+    <p><strong><code>fq</code> is dropped from the two-port setting.</strong> A client left as it comes carries the same, so for two ports as for one, nothing on the client needs changing. (An earlier version of this page, from part-way through these runs, put <code>fq</code> at 0.5 GB/s; with all 19 runs in, it is level.)</p>
+    <p><strong>It also bears on a fault that is set aside for now.</strong> In about one two-port run in ten, five times by 13 October, one port carried nothing for about 25 seconds while the other carried on, and the run lost 7 to 9 GB/s. One was caught with both ends' counters read five times a second: nothing is lost on the wire, the drives and the server's software are not involved, and for 1.4 seconds the client's own transmit side for that port lets nothing out, after which <code>fq</code>'s pacing holds it at a trickle. All five were with <code>fq</code>. None showed in these 19 runs under any queueing, so whether it happens without pacing is not shown; it will be chased if it shows again.</p>
+    <p class="note">19 runs of a batch of 24, stopped there. The accounts are "The client's queueing again" in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code> and <code>SILENT-PORT.md</code>.</p>
 
     <h3 style="margin-top:26px" id="four">The last 4% of the copy: real, accounted for, and left alone for the loan's sake</h3>
     <figure class="aside-fig"><img src="droids.gif" width="640" height="330" alt="Obi-Wan Kenobi waving his hand at a stormtrooper: these are not the droids you are looking for"><figcaption>This is not the 4% you are looking for.</figcaption></figure>
@@ -389,7 +390,7 @@
 
     <h3 style="margin-top:26px">Still open</h3>
     <div class="matrix">
-      <div class="cell k">One port went silent for 25 s in one run of 12 October while the other carried on: nothing dropped at the server, the client's retransmission timers firing. Not the drives. Not seen in ten watched runs after it, nor on 13 October</div><div class="cell v"><span class="pill pend">seen once</span></div>
+      <div class="cell k">One port silent for about 25 s while the other carries on: once on 12 October and four times on 13 October, on either port. Not the drives, the server's card or its software; the client's transmit side for the port stops and its pacing then holds it back (<a href="#fq2">above</a>). The client's pacing has been dropped; to be chased if it shows again</div><div class="cell v"><span class="pill pend">set aside</span></div>
       <div class="cell k">The first port alone drops 33 to 1,087 frames at the card's FIFO in a run; the second drops none</div><div class="cell v"><span class="pill pend">not looked into</span></div>
       <div class="cell k">Eight receive rings a port, run again on 13 October with the mark off: eight of 64 carry 59.5 to 60.5 GB/s against 59.6 to 61.0 for four of 128, with the receive CPUs at 49 to 63% in place of 80 to 89%. They drop 59 to 104 frames a run, not the thousands of 12 October. The card takes only powers of two for a ring's depth, so nothing between 64 and 128 exists. Eight of 128 with a 256 KiB held buffer carried 51.9 and 52.1</div><div class="cell v"><span class="pill yes">level, four stays</span></div>
       <div class="cell k">What paused the writes in 12 October's runs once the drives were past their fast region. No such pause occurred on 13 October, and the slow state was reproduced only locally</div><div class="cell v"><span class="pill pend">not known</span></div>
@@ -454,7 +455,7 @@
         <tr><td>nfsd threads</td><td class="c" style="white-space:normal">512, all on CPUs 8 to 55</td><td>the tuning service</td></tr>
         <tr><td>nfsd write mode, <code>io_cache_write</code></td><td class="c">2 (direct)</td><td>the tuning service</td></tr>
         <tr><td>Deferred skb frees, <code>net.core.skb_defer_max</code></td><td class="c">128</td><td>the default</td></tr>
-        <tr><td>Client</td><td class="r" style="white-space:normal">nconnect 16 to each port, 1 MiB wsize, MTU 9000, <code>fq</code></td><td class="x" style="white-space:normal">test harness sets <code>fq</code>, per run. Worth about 0.5 GB/s over the client's default (<a href="#fq2">below</a>)</td></tr>
+        <tr><td>Client</td><td class="c" style="white-space:normal">nconnect 16 to each port, 1 MiB wsize, MTU 9000, <code>fq_codel</code></td><td style="white-space:normal">nothing on the client is changed. <code>fq</code> was part of this setting until 13 October (<a href="#fq2">below</a>)</td></tr>
         <tr><td>Storage</td><td class="r" style="white-space:normal">four NVMe drives for each port, an XFS on each, no MD</td><td class="m" style="white-space:normal">mounted by hand after a boot. Two stripes of four until the evening of 12 October</td></tr>
         <tr><td>Length of a run</td><td class="r" style="white-space:normal">45 s counted after a 15 s warm-up: under 600 GB to each drive</td><td style="white-space:normal">the test harness</td></tr>
         <tr><td>Drives' write cache, as Linux sees it</td><td class="r" style="white-space:normal">write through: no cache flush is sent</td><td style="white-space:normal">a udev rule, and the test harness at each run</td></tr>
@@ -549,7 +550,7 @@
         <tr><td>Held receive buffer, per connection</td><td class="c">1 MiB</td><td class="r">384 KiB</td></tr>
         <tr><td>Receive rings, per port</td><td class="c">4 of 256</td><td class="r">4 of 128</td></tr>
         <tr><td>Linger</td><td class="c">50 &micro;s</td><td class="r">0</td></tr>
-        <tr><td>Client's queueing</td><td class="c"><code>fq_codel</code>, as found</td><td class="r" style="white-space:normal"><code>fq</code> (worth about 0.5 GB/s, measured again on 13 October; the 2 GB/s of 11 October was with the drives flushing and runs twice the drives' fast region)</td></tr>
+        <tr><td>Client's queueing</td><td class="c"><code>fq_codel</code>, as found</td><td class="c" style="white-space:normal"><code>fq_codel</code>, as found. <code>fq</code> was chosen here on 11 October for 2 GB/s; measured again on 13 October it is worth nothing and was dropped</td></tr>
         <tr><td>Second port's ring interrupts</td><td class="m">not in use</td><td class="r">CPUs 56 to 63, off nfsd's</td></tr>
         <tr><td>Receive memory in use</td><td class="c">24 to 25 MiB</td><td class="r">21 to 22 MiB for both</td></tr>
         <tr><td>Drives' write cache, as Linux sees it</td><td class="c">write through: no flush sent</td><td class="r">the same</td></tr>

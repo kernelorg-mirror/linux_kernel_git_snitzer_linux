@@ -51,7 +51,8 @@ groups (`perf-sym*.txt`, `perf-lmiss-*.txt`), by task
         ./twoport.sh $L/xeu-16k-464-<tag> ab
 
 The setting is the pinned two-port one (384 KiB held buffer, no
-linger, mark off, `fq` on the client, 16 connections a port placed
+linger, mark off, `fq` on the client (it was unpinned later that
+day; the default `fq_codel` carries the same), 16 connections a port placed
 evenly on the rings), with four rings of 128 a port or eight of 64
 (`RINGS=8 ENTRIES=64 TXIRQ_A=8 TXIRQ_B=54`).
 

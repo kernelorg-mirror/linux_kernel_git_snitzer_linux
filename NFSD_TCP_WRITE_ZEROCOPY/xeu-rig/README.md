@@ -32,6 +32,20 @@ was: 120 s on two ports is 1.28 TB a drive. "What a drive takes" in
   for 4 x 128, with the Rx CPUs a third less busy. `xeu` takes only
   powers of two for a ring's depth. Four of 128 stays. "Eight
   receive rings again" in `../XEU_CONVERGENCE.md`.
+- **`fq` on the client is unpinned (Mike, 13 October): the two-port
+  setting leaves the client on its default `fq_codel`,** so nothing
+  on the client is changed. By turns inside the drives' fast region:
+  `fq` 59.4 to 60.7 (seven runs), `fq nopacing` 59.9 to 60.3,
+  `fq_codel` 60.0 to 60.4. The 2 GB/s of 11 October was with the
+  drives flushing and runs past the fast region. Do not pass
+  `QDISC=fq`. "The client's queueing again" in
+  `../XEU_CONVERGENCE.md`.
+- **The silent port** (a port carrying nothing for 25 s in about one
+  two-port run in ten, five times by 13 October) is set aside again
+  (Mike): chase it if it shows again. All five were with `fq`, whose
+  pacing is what holds the port at a trickle once it has begun; none
+  showed in 19 runs of the comparison. `../SILENT-PORT.md`, with
+  `stall-sample.py` and `stall-read.py` to catch one at both ends.
 - Nothing is left from `../LOST-TIME-CHASING-SPENT-DRIVES.md`
   (Mike, 13 October): raid0 is not compared again, and the silent
   port only if it shows again. The work now is two ports with more
@@ -61,9 +75,10 @@ every COMMIT (one per 8 MiB write of the job) flushed all four
 drives of a stripe and held one port at 36 GB/s.
 
 **Two ports: 58.5 GB/s at best** (seven runs with no flush sent,
-45.0 to 58.5), same setting as before:
+45.0 to 58.5), same setting as before (61.0 on 13 October with the
+mark off; `QDISC=fq` was part of it until that day and is not now):
 
-    RCVBUF=393216 ENTRIES=128 QDISC=fq LINGER=0 ./twoport.sh <out> ab
+    RCVBUF=393216 ENTRIES=128 LINGER=0 LOWAT=0 ./twoport.sh <out> ab
 
 **One port on four drives: 42.2 at best, and limited by the drives
 in every run** (six runs, 18.1 to 42.2), each of them past the
@@ -299,7 +314,8 @@ memory in 21 MiB of the 32 MiB L3:
     RCVBUF=393216 ENTRIES=128 QDISC=fq LINGER=0 ./twoport.sh <out> ab
 
 384 KiB held buffer, rings of 4 x 128, linger 0, `fq` on the client
-(`fq_codel`: 52). The one-port setting on two ports is 43 (48 MiB).
+(`fq_codel`: 52). **`fq` is no longer part of it (13 October): the
+client keeps its default `fq_codel`, which carries the same.** The one-port setting on two ports is 43 (48 MiB).
 **It is not the one-port setting: one port alone with it carries 31,
 against 36 with 1 MiB and 4 x 256.** Why two ports did not add up:
 with receivers that discard without copying, plain TCP carries 99.4

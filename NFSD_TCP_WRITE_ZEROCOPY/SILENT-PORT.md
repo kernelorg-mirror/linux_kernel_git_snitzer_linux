@@ -19,8 +19,8 @@ was found.
 | `prof-4x128-1` | 13:17 | a | second 56 | the server's cycles being recorded as it began |
 | `silent-1` | 15:47 | **b** | second 35 | both ends' counters five times a second, before and after |
 
-All are two ports at the two-port setting with `fq` on the client's
-ports. 13 October: five events in about 50 two-port runs since
+All are two ports at the two-port setting of the time, with `fq` on
+the client's ports (unpinned since; see below). 13 October: five events in about 50 two-port runs since
 11:40 and none in the 20 before. In each the other port takes up
 load (35 to 38 GB/s) while the silent one is out.
 
@@ -123,14 +123,48 @@ At five samples a second it cannot be said whether the client
 stopped sending first or stopped hearing acknowledgements first, so
 what starts it is not shown.
 
-## In hand
+## The client's queueing compared, and `fq` unpinned (13 October, 15:55 to 17:10)
 
 `$L/qdisc-driver.sh`: the client's queueing by turns, `fq` (pacing),
 `fq nopacing` (`QDISC=fqnp`, new in `twoport.sh`) and the client's
-default `fq_codel`, eight rounds, the samplers on every run. If the
-silences go or shrink to blips without pacing, pacing is what turns
-a hiccup into 25 s, and what is left of the hiccup can be looked at
-by itself.
+default `fq_codel`, the samplers on every run. Stopped after 19 of
+24 runs, on Mike's word:
+
+| client's queueing | GB/s, two ports | middle | a port silent |
+|---|---|---|---|
+| `fq` | 60.74, 60.68, 60.72, 59.67, 59.94, 59.38, 60.47 | 60.47 | none |
+| `fq nopacing` | 60.29, 60.29, 59.90, 60.10, 59.98, 60.28 | 60.19 | none |
+| `fq_codel`, the default | 60.16, 60.20, 59.96, 60.17, 60.41, 60.34 | 60.19 | none |
+
+- **`fq` is worth nothing that can be measured**: the means are
+  60.23, 60.14 and 60.21. It was made part of the two-port setting
+  on 11 October for 2 to 4 GB/s, measured with the drives flushing
+  on every COMMIT and runs of twice the drives' fast region.
+- **No port went silent in the 19 runs,** nor in the one before
+  them, so the comparison says nothing about whether a silence
+  happens without pacing. At one run in ten, 20 clean runs come up
+  about one time in eight.
+
+**`fq` is unpinned (Mike, 13 October): the two-port setting leaves
+the client on its default `fq_codel`, and nothing on the client is
+changed. The silent port is set aside again: chase it if it shows
+again.** All five events were with `fq`. What is known of it says
+pacing is what holds a port at a trickle once it has begun, so
+without `fq` an event should be shorter if it happens at all; that
+is expected and not shown.
+
+## If it shows again
+
+1. `stall-sample.py` on both ends for the run (below), or
+   `$L/silent-driver.sh`, which keeps the samples of a run with a
+   silence. Note which queueing the client had.
+2. `stall-read.py` gives the start in fifths of a second. What is
+   not known is which stops first, the client's sending or the
+   acknowledgements reaching it; a finer clock on the port's
+   connections (a capture of headers on one connection, or
+   `tcp:tcp_probe` on the client) would say.
+3. Keep the harness's own ssh off the port under test: the client's
+   management address is 10.20.12.106.
 
 ## To reproduce
 
