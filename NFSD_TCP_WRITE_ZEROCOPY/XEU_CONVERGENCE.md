@@ -4115,6 +4115,114 @@ counters and connections, and the server's, when a port that was
 carrying load falls under 2 GB/s for three seconds inside the
 measured part of a run.
 
+### What a drive takes: a fast region of 625 GB, and a pause after it is what costs (12 October, 21:07 to 22:30 by tardis1's clock)
+
+Times here are the host's clock (MDT); the last NFS run before this
+ended at 18:46 by it, so the drives had rested 2 h 20 min. Locally,
+no NFS, with `xeu-rig/drvchar.py`: one fio for each drive writing
+what the two-port load writes to it (four files of 512 MiB, 1 MiB
+direct writes, over and over), at a set rate or flat out, every
+drive read each second. All eight drives give the same figures to
+within 2%, whatever their wear (10 to 18% used).
+
+**The slow state is the drive's, it is not heat, and rest is not what
+it takes to avoid it.** What was found, in the order it was found:
+
+| what was written to a drive | what it did |
+|---|---|
+| 7.25 GB/s, steady, 300 s (2.2 TB) | 7.25 throughout, 60 to 78% busy |
+| flat out, 300 s (3.4 TB) | 11.9 GB/s for 50 s, then 11.2 to the end |
+| 7.25 GB/s with an fsync every 8 MiB (as a COMMIT is) or every 1 MiB, 240 s, then 420 s more half a minute later | 7.25 throughout, 86 to 95% busy, with single seconds at 4.5 to 6 (1 to 18 of them in 420 s) |
+| flat out with an fsync every 8 MiB, 180 s | 11.4 GB/s for the first 625 to 640 GB (54 to 60 s), then 8.6 |
+| the same again after an idle of 20, 30, 45, 60, 75, 90, 150, 240, 360 or 480 s | 11.8 GB/s for 625 GB again, every time |
+| the same again after an idle of 5, 10 or 15 s | **4.0 GB/s at 100% busy** for 40 to 50 s, then a few seconds near nothing, then 11 |
+| 7.25 GB/s with an fsync every 8 MiB and a pause every 10 or 20 s (0.3 s, 1 s or 3 s) | 7.25 until 640 GB had been written (89 s), then **4 GB/s from the next pause**, for 25 to 55 s; then 11 for 15 to 20 s, and 4 again from the pause after that. 5.7 to 6.3 GB/s over the 200 s. |
+| the same with no pause (two drives, beside those) | 7.25 for the 200 s |
+
+So a drive has a fast region of about 625 GB. Twenty seconds of idle
+give all of it back, from any state tried, a drive stopped in its
+slow state included. Once 625 GB have been written since such an
+idle the drive still keeps up, at 7.25 GB/s and at 8.6 with fsyncs,
+for as long as the writes do not stop. **If they stop, for 0.3 s or
+for 15 s, it comes back at 4 GB/s** and stays there until it has
+done what it does on an idle (25 to 55 s under load, under 20 s
+left alone). The sensor on the drive read 50 C in a slow state and
+69 C in the fastest runs, and no drive has ever counted a thermal
+throttle: it is not heat. Nor is it the fsyncs, the order of the
+writes (random 1 MiB writes with fsyncs at 7.25: no dip in 240 s),
+or how much was written before (8 to 10 TB a drive in the first 23
+minutes here, with no slow state until a short idle was tried).
+
+**This is what 12 October's NFS runs did.** A two-port run wrote
+1.28 TB to each drive (16 s to place the flows, 40 s of warm-up,
+120 s counted, at 7.25 GB/s), twice the fast region. In the sampled
+runs of that evening (`stall-two-1`, `-2`, `-4`, `-5`) every drive
+steps down in the same second, 50 to 56 s into the sample, which
+with the placement load before it is about 600 GB into the run; and the stream over NFS did pause (all
+eight drives at 4 then 13 GB/s in the same second, every 10 to 20
+s). The local probe of that afternoon that found 4 GB/s a drive for
+150 s and then 11 was the same thing. A run of 120 s gets through
+only if nothing pauses after its first 80 s, which is what the 58.5
+of the early afternoon would have been. Nothing rests a drive enough for a run
+that long: the rest was never the matter, the length was.
+
+**So a run has to stay inside the fast region**, the placement load
+counted: at 7.25 GB/s a drive that is 82 s, at 11 GB/s 54 s.
+`twoport.sh` now defaults to `WARM=15 RUNTIME=45` (it was 40 and
+120), waits `REST` seconds (30) before it starts, samples every
+drive each second of the load (`drives-sec.tsv`, and
+`drives-sec.tsv.temp` for the temperatures; `xeu-rig/drvsample.py`,
+summarised by `xeu-rig/drvsum.sh`), and writes to `drives.txt` what
+each drive wrote in the run (marked past 600 GB) and whether one
+stepped down. One port on its own four drives needs `WARM=10
+RUNTIME=25`; or give it all eight (`FS_A` or `FS_B`) and it has 60 s.
+
+**Run again that way, 60 s apart: two ports 57.0, 58.0, 58.2 GB/s;
+one port 45.2 to 46.8.** Fifteen runs
+(`$L/rested-driver.sh`, `rested-*` in `results-twoport-464.tsv`),
+five kinds by turns, three rounds. No drive stepped down in any, and
+each wrote 460 to 579 GB in a run.
+
+| run | setting | GB/s, three rounds | drives |
+|---|---|---|---|
+| two ports, four drives each | `RCVBUF=393216 ENTRIES=128 QDISC=fq LINGER=0`, 45 s counted | 57.02, 57.98, 58.19 (a 28.8 to 29.7, b 28.2 to 28.7) | 7.2 GB/s each, 74 to 79% busy |
+| port a on all eight drives | as pinned (1 MiB buffer, linger 50, rings of 256), 60 s counted | 46.62, 45.78, 45.21 | 5.7 GB/s each, 58 to 59% busy |
+| port b on all eight drives | the same | 46.39, 46.76, 45.90 | 5.7 GB/s each, 58 to 60% busy |
+| port a on its four drives | the same, 25 s counted | 45.01, 44.39, 45.24 | 11.3 GB/s each, 100% busy |
+| port b on its four drives | the same, 25 s counted | 44.57, 44.54, 44.71 | 11.3 GB/s each, 100% busy |
+
+- **Two ports: 57.7 on average over a spread of 1.2**, where the
+  evening before gave 37.4 to 52.6 and the whole of 12 October 37.4
+  to 58.5. The 58.5 stands as the best and is what the setting
+  carries; nothing was lost in the server that afternoon.
+- **One port: 46.8 at best, 46.3 on average on port b and 45.9 on
+  port a, on eight drives.** The best before was 44.6 (six drives,
+  11 October), and 42.2 with no flush sent. Plain TCP on one port is
+  49.8, so NFS writes are at 93 to 94% of what the wire carries.
+- **One port on four drives is still the drives' figure**, 44.4 to
+  45.2 with every drive at its 11.3 GB/s: 1 to 1.5 GB/s under the
+  same port on eight. A one-port figure for the server is to be
+  taken on eight.
+- Port a alone dropped 57 to 177 frames at the port's FIFO in the
+  10 s window of each of its six one-port runs, with up to 184
+  client retransmits; port b alone dropped none. Not looked into.
+- The streams did not pause in these runs (no second under 7 on any
+  drive in the two-port runs), so the pauses of the evening before
+  are not a constant of the load. What they were is not known; a
+  port gone silent (above) is one kind.
+
+**What this does not say.** The 625 GB is for these drives nearly
+empty and trimmed, written over the same 2 GB; a fuller drive may
+have less. Every run now counts 25 to 60 s where it counted 120:
+a rate that takes longer than that to show is not seen, and a rate
+sustained past 625 GB a drive is these drives' to decide, not the
+server's. In a run this short the window figures of `summary.txt`
+(the wire's GB/s, each drive's GB/s) are about 10% high, because
+the 10 s window is timed by `sleep` and the readings around it take
+a second; fio's figure and `drives-sec.tsv` are right. The session
+wrote 17 to 19 TB to each drive, and their life used went up by a
+point on five of them (10 to 18% now).
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
