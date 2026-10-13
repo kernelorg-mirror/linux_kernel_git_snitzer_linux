@@ -38,7 +38,9 @@ drives' fast region" (13 October).
   cpu>]` places them again and `twoport.sh` runs it after each
   change.
 - The two-port setting otherwise: 384 KiB held receive buffer, no
-  linger, `svc_tcp_rx_keep=1`, `svc_tcp_rx_lowat=0`, `fq` on the
+  linger, `svc_tcp_rx_keep=1`, `svc_tcp_rx_lowat=0`, `fq` (in every
+  run of this document; unpinned later that day, the default
+  `fq_codel` carrying the same) on the
   client, 16 connections a port placed evenly on the rings by the
   RSS table, 8192-byte receive buffers at an MTU of 7792.
 
@@ -323,7 +325,9 @@ So the length of the silence is made on the client: once a
 connection's round-trip estimate is hundreds of milliseconds, `fq`
 releases its packets at megabits, and the estimate stays high while
 it does. `fq` on the client's ports is this rig's own two-port
-setting (`QDISC=fq`, worth about 2 GB/s on 11 October). Not shown:
+setting (`QDISC=fq`, worth about 2 GB/s on 11 October; measured
+again later this day it is worth nothing and was unpinned,
+`SILENT-PORT.md`). Not shown:
 what starts it. Something leaves port a's connections without an
 ACK for about a second, several at the same instant, and whether
 that second is the server's (its port, its ring CPUs, nfsd) or the
@@ -387,7 +391,7 @@ in 40 two-port runs since 11:40 and none in the 20 before.
 
     cd NFSD_TCP_WRITE_ZEROCOPY/xeu-rig
     L=/var/tmp/zc-run-logs
-    TSV=$PWD/results-twoport-464.tsv TAG=<tag> QDISC=fq LINGER=0 LOWAT=0 \
+    TSV=$PWD/results-twoport-464.tsv TAG=<tag> LINGER=0 LOWAT=0 \
         RCVBUF=393216 WARM=15 RUNTIME=45 \
         RINGS=8 ENTRIES=64 TXIRQ_A=8 TXIRQ_B=54 \
         ./twoport.sh $L/xeu-16k-464-<tag> ab
