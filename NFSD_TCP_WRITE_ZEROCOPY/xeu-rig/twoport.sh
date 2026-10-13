@@ -42,7 +42,8 @@
 #   TXN=<n>          with TXIRQ_A/B: the Tx rings on <n> CPUs from <cpu>, not two
 #   NFSD_CPUS=<list> nfsd's threads on these CPUs for the run (8-55 after it), to
 #                    keep them off CPUs given to Tx rings
-#   QDISC=fq|fqNN    fq on the client's ports (fqNN: maxrate NN Gbit/s a flow)
+#   QDISC=fq|fqnp|fqNN  fq on the client's ports (fqnp: fq with pacing off; fqNN: maxrate
+#                    NN Gbit/s a flow)
 #   PROFILE=1        mid-run: perf stat for the rings' CPUs and the rest, then where the
 #                    cycles and the fetches from memory go (needs RUNTIME=55 at least)
 #   PIN=1            each port's writers on the client CPUs of its NIC's NUMA node
@@ -83,6 +84,7 @@ setq() {	# setq <client dev> <codel|fq|fqNN>
 	case $2 in
 	codel) cl "tc qdisc del dev $1 root 2>/dev/null; true" ;;
 	fq)    cl "tc qdisc replace dev $1 root handle 1: mq && for i in \$(seq 1 48); do tc qdisc replace dev $1 parent 1:\$(printf %x \$i) fq || exit 1; done" ;;
+	fqnp)  cl "tc qdisc replace dev $1 root handle 1: mq && for i in \$(seq 1 48); do tc qdisc replace dev $1 parent 1:\$(printf %x \$i) fq nopacing || exit 1; done" ;;
 	fq*)   cl "tc qdisc replace dev $1 root handle 1: mq && for i in \$(seq 1 48); do tc qdisc replace dev $1 parent 1:\$(printf %x \$i) fq maxrate ${2#fq}gbit || exit 1; done" ;;
 	esac
 }
