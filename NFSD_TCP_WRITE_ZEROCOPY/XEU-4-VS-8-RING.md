@@ -229,13 +229,112 @@ port and the same 25 s:
 
 The stall watchers were not running. nfsd was on 32 CPUs in this
 layout and had run out of CPU in round 1, which may be what provokes
-it; one occurrence does not show that. Mike had set the silent port
-aside until it showed again. From the next batch both watchers
-(`stall-watch-server.sh`, `stall-watch-client.sh`) run beside every
-run.
+it; the next event, below, was with nfsd on all 48 and says not.
+Mike had set the silent port aside until it showed again. From the
+next batch both watchers (`stall-watch-server.sh`,
+`stall-watch-client.sh`) run beside every run.
 
 The runs are `r13b-*` in `xeu-rig/results-twoport-464.tsv`
 (`$L/rings13b-driver.sh`).
+
+## More than one thread copying a connection's data (13 October, 12:22 to 13:07)
+
+`svc_tcp_rx_copy_threads` (`THREADS=` in `twoport.sh`): at 0 a
+thread copies a WRITE's data as it reads the socket; at 2 or more it
+claims the data, which returns the window to the client at once,
+gives the connection up and copies afterwards, so that another
+thread reads the next WRITE meanwhile, and that many less one may be
+copying a connection's data at a time. 0, 2 and 4 on the pinned
+four rings of 128 and on eight of 64 with the transmit interrupts on
+two CPUs shared with nfsd, by turns in two rounds, mark off, both
+stall watchers beside every run. Each cell is round 1, round 2:
+
+| rings a port | copy threads | GB/s | ring drops, both ports | client retransmits | region pages | nfsd (CPUs 10-53): sys, idle | threads woken a WRITE |
+|---|---|---|---|---|---|---|---|
+| 4 x 128 | 0 | 59.86, (52.83) | 5, 0 | 5, 5 | 1200, 1184 | 47 / 34 | 13.8 |
+| 4 x 128 | 2 | 60.19, 60.31 | 2337, 3049 | 2489, 3276 | 1280, 1312 | 60, 60 / 23, 22 | 10.6, 11.1 |
+| 4 x 128 | 4 | 60.22, 60.41 | 4361, 1880 | 4642, 1964 | 1296, 1280 | 62, 57 / 21, 25 | 10.6, 11.1 |
+| 8 x 64 | 0 | 59.35, 59.24 | 277, 84 | 282, 96 | 1407, 1388 | 49, 48 / 32, 34 | 14.0, 13.5 |
+| 8 x 64 | 2 | 56.54, 56.57 | 1629, 1811 | 1752, 1933 | 1491, 1490 | 62, 63 / 22, 21 | 9.9, 10.1 |
+| 8 x 64 | 4 | 56.32, 56.51 | 1970, 1257 | 2075, 1387 | 1491, 1491 | 63, 59 / 21, 24 | 9.9, 10.2 |
+
+The 52.83 is a run in which port a went silent (next section), and
+its CPU figures are left out.
+
+- **On four rings copy threads do not move the rate**: 60.2 to 60.4
+  with 2 or 4 against 59.6 to 61.0 for 0 that day. They cost a third
+  more of nfsd's CPU (60% in the kernel for 47%) and the rings drop
+  two to four thousand frames in the 10 s window where they dropped
+  a handful, with as many retransmits.
+- **On eight rings they cost 3 GB/s**, 56.3 to 56.6 against 59.2 to
+  59.4, and repeat to within 0.2. Rings of 64 have half the room for
+  the closer-spaced sending that a window returned sooner brings.
+- **4 is no different from 2** on either.
+- Receive memory rises by about 100 pages (1.5 MiB) and stays inside
+  the cache; no frame was dropped at the card's FIFO in any run.
+- No drive stepped down in the twelve runs.
+
+It is what one port showed on 11 October: the window is shut less,
+the loss goes up and the rate stays where it was. With the copy
+ceiling where it is, taking the copy off the socket's critical path
+gives the copy nothing more to run on. `svc_tcp_rx_copy_threads`
+stays 0. The runs are `ct*` in `xeu-rig/results-twoport-464.tsv`
+(`$L/copythr-driver.sh`).
+
+## The silent port, caught: the client paces its connections at megabits (13 October, 12:47)
+
+`ct0-4x128-2`, the pinned setting with nothing changed and nfsd on
+all 48 CPUs: 52.83 GB/s, port a 21.4 and port b 31.4. Port a's
+drives wrote 29 to 30 GB/s between them for 47 s, 25 in second 48, 0
+to 4 for three seconds, then 13 to 21 until the run ended at 60;
+port b's rose from 31 to 35-38. Port a's drives were 62% busy and
+none stepped down; the server dropped nothing (no FIFO or ring drops
+and 5 retransmits in the window, which was before it). So the
+squeezed nfsd of the earlier event is not what it needs.
+
+The client's watcher dumped port a 3 s into the silence
+(`$L/ct0-4x128-2.clwatch/dump-ens3np0-1`; its other five dumps and
+all the server's are from the end of the run, when the load stops:
+the watchers outlive a 45 s run). In that dump:
+
+- **Round-trip estimates of 17 to 529 ms on eleven of port a's
+  sixteen connections** (`rtt:` in `ss`), where the five healthy
+  ones and all of port b's are at 0.05 to 0.13 ms and the least ever
+  seen on the same connections is 0.011 to 0.012 ms.
+- **TCP's pacing rate follows it down**: 4 to 142 Mbit/s on those
+  eleven, 23 to 59 Gbit/s on the healthy ones. Nine of the port's
+  `fq` qdiscs hold packets for throttled flows, the next due in
+  anything from microseconds to 185 ms.
+- **Retransmission timers of 0.4 to 3.8 s** (0.2 is the floor), with
+  10 to 16 segments unacknowledged, congestion windows of 21 to 43
+  segments and 1.2 to 1.8 MB waiting unsent. The windows are not
+  what holds them.
+- Over the 12 s after it, from the counters of that dump and the
+  next: `TCPTimeouts` 93, `TCPSpuriousRTOs` 47, `TCPLossUndo` 47,
+  `TCPSpuriousRtxHostQueues` 197 (a retransmit not made because the
+  original was still in the client's own queues), and only 18
+  segments retransmitted.
+- Three of the stalled connections had last received anything from
+  the server 1.826 to 1.827 s before, two more 1.0 s and one 2.9 s.
+  In the earlier event (`r13b-8x64-tx8own-2`) the server's sockets
+  for port a had all last received about 0.9 s before the snapshot.
+
+So the length of the silence is made on the client: once a
+connection's round-trip estimate is hundreds of milliseconds, `fq`
+releases its packets at megabits, and the estimate stays high while
+it does. `fq` on the client's ports is this rig's own two-port
+setting (`QDISC=fq`, worth about 2 GB/s on 11 October). Not shown:
+what starts it. Something leaves port a's connections without an
+ACK for about a second, several at the same instant, and whether
+that second is the server's (its port, its ring CPUs, nfsd) or the
+client's is not in this dump. The server's watcher needs three
+seconds under 2 GB/s and the port was back above that sooner.
+
+Three events are known: `stall-two-3` on 12 October and these two,
+all on port a (`enp161s0f0`, the client's `ens3np0`), in 12 and 24
+two-port runs on 13 October. To do: the server's watcher to dump on
+a one-second gap, and `fq` against the client's default `fq_codel`
+for whether a gap still grows into a silence.
 
 ## Layouts not run
 
