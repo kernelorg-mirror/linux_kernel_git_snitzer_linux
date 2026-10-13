@@ -293,6 +293,65 @@ should break fewer pairs), and whether anything in software can
 stop the prefetcher at a piece's end (its controls are not
 reachable from the kernel on this machine as far as is known).
 
+### Scoping the buffer order: what there is to gain, and where the change would be (13 October, 14:45 to 15:10)
+
+Mike asked whether the order of the buffers is worth going after
+with `xeu` changes of our own. Two things were looked at, and
+nothing was changed.
+
+**How long a connection's runs of frames are on a ring.**
+`xeu-rig/ring-flow-runs.bt` (a kprobe on `dev_gro_receive` on the
+rings' CPUs) counts frames in a row with one RSS hash. 5 s of a
+two-port run at the pinned setting (`runs-4x128`, 59.68 GB/s with
+the probe on, no drive stepped down), 35.8 million frames:
+
+| frames in a row from one connection | share of frames |
+|---|---|
+| 8 or more | 74% |
+| 4 to 7 | 19% |
+| 2 or 3 | 4% |
+| 1 | 3% |
+
+The commonest run is exactly 8 (2.56 million runs), then 7, then 1,
+with smaller peaks at 15 and 16: the client sends 62 KiB at a time,
+which is eight frames. So the runs are there on the wire. A
+connection's frames reach a ring eight at a time, and what breaks
+them up in memory is only that the pool hands the ring unrelated
+pages.
+
+**Where the order is decided.** The driver takes its buffers with
+`page_pool_alloc_frag()`, two to a 16 KiB page. The region
+(`net/core/page_pool.c`) is one physically contiguous range, so its
+pages are neighbours of one another, but it keeps its free pages on
+a last-in, first-out stack, binds only order-0 pools, and each
+ring's pool recycles the page freed last. Three ways to longer runs:
+
+| way | where the change is | what it would reach |
+|---|---|---|
+| The ring's pool hands out its pages in address order, not last freed first | `net/core/page_pool.c`, built into the kernel: a rebuild and a reboot | runs of 8, as the bursts allow: 1.134 for 1.18 to 1.20, about 0.8% |
+| The region binds order-2 pools and the driver asks for 64 KiB blocks, 8 buffers to a block | the same file, and a parameter in `xeu` | a burst is not lined up with a block, so runs of about 4: about 0.5%. In loan mode a block is held while any of its eight frames is |
+| The driver asks for 64 KiB blocks and its pools are not in the region | `xeu` alone, a module reload | the same 0.5% at best, with the region's bound on receive memory gone and its pools recycling first in, first out |
+
+- **The gain is 0.5 to 0.8%, 0.3 to 0.5 GB/s**, against a spread of
+  1.1 to 1.5 GB/s between two-port runs. It could be shown in the
+  copy's fetches for each line (1.20 now, 1.13 to 1.15 after) and
+  not in the rate.
+- **The first way undoes the last-in, first-out reuse** that was
+  put in on 9 October, when it took the pages turned away from a
+  full pool from 17,278 to under 1,500 in 10 s. What it was worth
+  alone was never measured, and the payload is fetched from memory
+  either way, so it may cost nothing; it is not known.
+- **The 2% of the benchmark is from buffers at random.** NFS is
+  already at pairs, and the bursts cap a run at 8, so the part of
+  it that can be had is under 1%.
+
+**Recommendation: not worth implementing by itself.** It is
+approachable (the driver's part is a parameter) but the larger part
+is in the kernel's page pool and needs a reboot, for a gain smaller
+than the rate can show. It becomes worth doing together with packed
+payloads, if the card ever gives header-data split: then the order
+is the first half of 3.5 to 5%.
+
 ### To reproduce
 
     gcc -O2 -pthread -o /tmp/copybench xeu-rig/copybench.c
@@ -300,4 +359,5 @@ reachable from the kernel on this machine as far as is known).
         env PIECE=7740 STRIDE=8192 SOFF=68 RUN=2 /tmp/copybench libc 48 8 5 64
     # during a two-port run, 25 s or more into the load:
     bpftrace xeu-rig/copy-adjacency.bt
+    bpftrace xeu-rig/ring-flow-runs.bt
 
