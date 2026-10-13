@@ -20,9 +20,20 @@ was: 120 s on two ports is 1.28 TB a drive. "What a drive takes" in
   runs: two ports 57.0, 58.0, 58.2 GB/s; one port on eight drives
   45.2 to 46.8 (93 to 94% of plain TCP); one port on its four 44.4
   to 45.2, the drives at 100%.** `$L/rested-driver.sh` ran them.
+- **The 128 KiB mark is unpinned (13 October):
+  `svc_tcp_rx_lowat=0` in `/etc/modprobe.d/sunrpc.conf`.** Off, two
+  ports carry 60.0 and 60.7 GB/s and one port 46.5 to 47.4; at
+  131072, 57.9 and 57.3, and 45.6 to 46.3. `LOWAT=` in `twoport.sh`
+  sets it for a run. The account is "The 128 KiB mark off and on" in
+  `../XEU_CONVERGENCE.md`. The artifact was brought up to date the
+  same morning.
+- **Eight receive rings were run again (13 October) and are level
+  with four**: 8 x 64 carries 59.5 to 60.5 GB/s against 59.6 to 60.7
+  for 4 x 128, with the Rx CPUs a third less busy. `xeu` takes only
+  powers of two for a ring's depth. Four of 128 stays. "Eight
+  receive rings again" in `../XEU_CONVERGENCE.md`.
 - Still to do from `../LOST-TIME-CHASING-SPENT-DRIVES.md`: the
-  128 KiB mark off and on for rate, eight rings again if wanted, the
-  artifact, the silent port. Each is now a comparison on a level
+  silent port. Each is now a comparison on a level
   floor. Where this section says a figure was "limited by the
   drives" or gives a range of two-port totals, that was this.
 
@@ -73,7 +84,8 @@ finds a WRITE short does not wake another for data already there)
 and `svc_tcp_rx_lowat=131072` (a thread is woken when 128 KiB of a
 short WRITE has arrived, not for each piece). Together they take
 thread wakeups on two ports from 1.15 million a second to 0.40
-million at the same rate. Splitting nfsd's threads by port was tried
+million. **The second was taken off on 13 October: it costs 2 to 3
+GB/s on two ports and about 1 on one.** Splitting nfsd's threads by port was tried
 and is not a gain. All in `../XEU_CONVERGENCE.md` from "nfsd's
 threads split by port".
 

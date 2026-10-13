@@ -9,6 +9,7 @@
     --accent: #1f5c8b; --accent-soft: #e4eef5;
     --cost: #b6431f; --cost-soft: #f7e6df;
     --gain: #12735d; --gain-soft: #dcefe8;
+    --two: #2a6fe8;
     --shadow: 0 1px 2px rgba(22,32,42,.05), 0 8px 24px -12px rgba(22,32,42,.14);
     --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -22,7 +23,7 @@
       --hair: #24333f; --hair-strong: #33454f;
       --accent: #5ba3d6; --accent-soft: #16303f;
       --cost: #e08a63; --cost-soft: #3a2015;
-      --gain: #4bbb9a; --gain-soft: #10302a;
+      --gain: #4bbb9a; --gain-soft: #10302a; --two: #5b9dff;
       --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
     }
   }
@@ -33,7 +34,7 @@
     --hair: #24333f; --hair-strong: #33454f;
     --accent: #5ba3d6; --accent-soft: #16303f;
     --cost: #e08a63; --cost-soft: #3a2015;
-    --gain: #4bbb9a; --gain-soft: #10302a;
+    --gain: #4bbb9a; --gain-soft: #10302a; --two: #5b9dff;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
   }
 
@@ -218,34 +219,39 @@
   .pkbar { display: block; height: 100%; background: var(--gain); border-radius: 4px 0 0 4px; }
   .pkn { flex: 0 0 auto; font-family: var(--mono); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; min-width: 6.4em; text-align: right; }
   .pkn.none { color: var(--muted); font-weight: 400; min-width: 0; text-align: left; }
+  .pkbar.p2 { background: var(--two); }
+  .pkl { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); min-width: 5.6em; }
+  .key { display: inline-block; width: 18px; height: 8px; border-radius: 2px; background: var(--gain); vertical-align: baseline; margin-right: 5px; }
+  .key.p2 { background: var(--two); }
 </style>
 
 <div class="wrap">
 
   <header>
-    <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 464 &middot; 11&nbsp;October&nbsp;2026</p>
-    <h1>16 KiB pages, 8192-byte receive buffers and an MTU of 7792: <span class="ok" style="display:block">1 port: 44.6 GB/s of NFS WRITEs.</span><span class="ok" style="display:block">2 ports: 58.5 GB/s of NFS WRITEs.</span><span style="display:block">All inside the E1's 32 MiB L3 cache.</span></h1>
-    <p class="lede"><span class="hl">An NFS server on the E1 now takes 44.6 GB/s of durable WRITEs from one client</span>: sixteen connections over one port of the Xsight card, copied once on arrival and written direct to six striped NVMe drives. That is 92% of what the wire carries to a receiver that stores nothing (48 GB/s), and three days earlier the same copy carried 25.4. The receive memory in use stays at 24 to 25 MiB, inside the CPU's 32 MiB cache. Three settings do it together: the card's receive buffers cut to 8192 bytes with the MTU lowered so that each frame fills one, each connection's receive buffer held at 1 MiB, and every connection placed on a receive ring so that each ring carries a quarter. <span class="hc">That is the best run on build 464; runs of the same setting gave 43.4 to 44.6.</span> <a href="#pinned">The configuration that is pinned now is first, below</a>, then <a href="#twoport">both ports of the card together, which carry 58.5 GB/s</a>, then <a href="#xeu464">build 464 on one port</a>: <a href="#claim">more than one thread receiving and copying on a connection</a>, <a href="#window">a larger receive window</a>, and <a href="#fq">pacing at the client</a> all reach the same ceiling, and <a href="#client">the client is not what holds it</a>. One setting tried there cost a third of the rate: <a href="#mode4">nfsd making every WRITE durable</a> carried 28.6 GB/s. Then <a href="#xeu463">what it took to get here</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#loan">the loan, made ready for NVMe drives with SGLs</a>, with <a href="#nofactor">a setting the kernel now measures for itself</a>, then <a href="#tried">what was tried before it and did not help</a>, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
+    <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 464 &middot; 13&nbsp;October&nbsp;2026</p>
+    <h1>16 KiB pages, 8192-byte receive buffers and an MTU of 7792: <span class="ok" style="display:block">1 port: 47.4 GB/s of NFS WRITEs.</span><span class="ok" style="display:block">2 ports: 60.7 GB/s of NFS WRITEs.</span><span style="display:block">All inside the E1's 32 MiB L3 cache.</span></h1>
+    <p class="lede"><span class="hl">An NFS server on the E1 now takes 60.7 GB/s of durable WRITEs from one client over both ports of the Xsight card, and 47.4 GB/s over one</span>: sixteen connections a port, copied once on arrival and written direct to eight NVMe drives, each with its own file system. One port is at 95% of what the wire carries to a receiver that stores nothing (49.8 GB/s), and five days earlier the same copy carried 25.4. Two ports are at about what this machine can copy from memory to memory by any method. The receive memory in use stays inside the CPU's 32 MiB cache. <a href="#oct13">The newest section, first below, is 13 October</a>: what the drives take before they slow, which of 12 October's conclusions that leaves standing, and a setting that was pinned and is now off. Three settings do it together: the card's receive buffers cut to 8192 bytes with the MTU lowered so that each frame fills one, each connection's receive buffer held at 1 MiB, and every connection placed on a receive ring so that each ring carries a quarter. <span class="hc">Both are the best run of their setting: one port gave 46.5 to 47.4 in four runs, two ports 59.6 to 60.7 in four.</span> Then <a href="#pinned">the configuration that is pinned now</a>, then <a href="#twoport">12 October's account of both ports together</a>, then <a href="#xeu464">build 464 on one port</a>: <a href="#claim">more than one thread receiving and copying on a connection</a>, <a href="#window">a larger receive window</a>, and <a href="#fq">pacing at the client</a> all reach the same ceiling, and <a href="#client">the client is not what holds it</a>. One setting tried there cost a third of the rate: <a href="#mode4">nfsd making every WRITE durable</a> carried 28.6 GB/s. Then <a href="#xeu463">what it took to get here</a>, with <a href="#call">the call with Xsight's engineers on 9 October</a> that set its direction, then <a href="#loan">the loan, made ready for NVMe drives with SGLs</a>, with <a href="#nofactor">a setting the kernel now measures for itself</a>, then <a href="#tried">what was tried before it and did not help</a>, then <a href="#xeu16">the days before it</a>. The <a href="#plan">second half of this page</a> is the work that came first: the receive region and its budget, tested on 4 KiB, 16 KiB and 64 KiB kernels.</p>
 
 
     <div class="metrics">
-      <div class="metric"><div class="n gain">44.6 GB/s</div><div class="l">durable NFS WRITEs on one port, the best run;<br>43.4 to 44.6 across runs</div></div>
-      <div class="metric"><div class="n gain">25 MiB</div><div class="l">receive memory used,<br>of 32 MiB L3 cache</div></div>
-      <div class="metric"><div class="n gain">92%</div><div class="l">of the 48 GB/s the wire<br>carries with no NFS</div></div>
-      <div class="metric"><div class="n">25.4 &rarr; 44.6</div><div class="l">GB/s, the same copy,<br>8 to 11 October</div></div>
+      <div class="metric"><div class="n gain">47.4 GB/s</div><div class="l">durable NFS WRITEs on one port, the best run;<br>46.5 to 47.4 in four runs</div></div>
+      <div class="metric"><div class="n gain">8 drives</div><div class="l">a file system on each,<br>about 59% busy</div></div>
+      <div class="metric"><div class="n gain">95%</div><div class="l">of the 49.8 GB/s the wire<br>carries with no NFS</div></div>
+      <div class="metric"><div class="n">25.4 &rarr; 47.4</div><div class="l">GB/s, the same copy,<br>8 to 13 October</div></div>
     </div>
     <div class="metrics" style="margin-top:12px">
-      <div class="metric"><div class="n gain">58.5 GB/s</div><div class="l">durable NFS WRITEs on two ports, the best run;<br>45.0 to 58.5 across runs</div></div>
-      <div class="metric"><div class="n gain">21 MiB</div><div class="l">receive memory used by both ports,<br>of 32 MiB L3 cache</div></div>
-      <div class="metric"><div class="n gain">59%</div><div class="l">of the 99 GB/s the two ports<br>carry with no NFS</div></div>
-      <div class="metric"><div class="n">43.3 &rarr; 58.5</div><div class="l">GB/s, both ports,<br>11 to 12 October</div></div>
+      <div class="metric"><div class="n gain">60.7 GB/s</div><div class="l">durable NFS WRITEs on two ports, the best run;<br>59.6 to 60.7 in four runs</div></div>
+      <div class="metric"><div class="n gain">19 MiB</div><div class="l">receive memory used by both ports,<br>of 32 MiB L3 cache</div></div>
+      <div class="metric"><div class="n gain">61%</div><div class="l">of the 99 GB/s the two ports<br>carry with no NFS</div></div>
+      <div class="metric"><div class="n">43.3 &rarr; 60.7</div><div class="l">GB/s, both ports,<br>11 to 13 October</div></div>
     </div>
 
     <div class="prov">
       <p class="pl">Runs behind this page, and the best rate measured on each</p>
       <dl class="runs">
-        <dt>12 Oct &middot; 16 KiB</dt><dd><strong>Build 464, both ports</strong> on tardis1, each onto its own stripe of four drives. Not on the scale below, which is one port's wire: two ports' is 96 GB/s.<div class="pk"><span class="pkn none"><strong style="font-weight:600;color:var(--ink)">58.5 GB/s</strong> over two ports</span></div></dd>
-        <dt>11 Oct &middot; 16 KiB</dt><dd><strong>Build 464</strong> on tardis1: the same card, drives and client, with the receive window measured by the kernel and all 512 nfsd threads kept off the rings' CPUs. <code class="kv">7.1.13-21.hs.464.loanpages_pool.el9.aarch64+16k</code><div class="pk"><div class="pktrack"><span class="pkbar gain" style="width:92.9%"></span></div><span class="pkn">44.6 GB/s</span></div></dd>
+        <dt>13 Oct &middot; 16 KiB</dt><dd><strong>Build 464, runs kept inside the drives' fast region</strong> on tardis1: eight drives with a file system each, the 128 KiB wakeup mark off. One port is on all eight drives, two ports on four each.<div class="pk"><span class="pkl">1 port</span><div class="pktrack"><span class="pkbar gain" style="width:98.8%"></span></div><span class="pkn">47.4 GB/s</span></div><div class="pk"><span class="pkl">2 ports</span><div class="pktrack"><span class="pkbar p2" style="width:63.2%"></span></div><span class="pkn">60.7 GB/s</span></div></dd>
+        <dt>12 Oct &middot; 16 KiB</dt><dd><strong>Build 464, both ports</strong> on tardis1, each onto its own stripe of four drives, with no cache flush sent to them. One port alone was limited by its four drives that day and has no bar.<div class="pk"><span class="pkl">2 ports</span><div class="pktrack"><span class="pkbar p2" style="width:60.9%"></span></div><span class="pkn">58.5 GB/s</span></div></dd>
+        <dt>11 Oct &middot; 16 KiB</dt><dd><strong>Build 464</strong> on tardis1: the same card, drives and client, with the receive window measured by the kernel and all 512 nfsd threads kept off the rings' CPUs. Both ports were first loaded that evening, with one port's settings on each. <code class="kv">7.1.13-21.hs.464.loanpages_pool.el9.aarch64+16k</code><div class="pk"><span class="pkl">1 port</span><div class="pktrack"><span class="pkbar gain" style="width:92.9%"></span></div><span class="pkn">44.6 GB/s</span></div><div class="pk"><span class="pkl">2 ports</span><div class="pktrack"><span class="pkbar p2" style="width:45.1%"></span></div><span class="pkn">43.3 GB/s</span></div></dd>
         <dt>10 Oct &middot; 16 KiB</dt><dd><strong>Build 463</strong> on tardis1: receive buffers a frame fills, and every connection placed on a ring. kmod-xsight 2.0.1-6. <code class="kv">7.1.13-21.hs.463.loanpages_pool.el9.aarch64+16k</code><div class="pk"><div class="pktrack"><span class="pkbar gain" style="width:90.2%"></span></div><span class="pkn">43.3 GB/s</span></div></dd>
         <dt>9 Oct &middot; 16 KiB</dt><dd><strong>Build 462</strong> on tardis1: five kernel changes and the driver's refill threshold, loaded together. <code class="kv">7.1.13-21.hs.462.el9.aarch64+16k</code><div class="pk"><div class="pktrack"><span class="pkbar gain" style="width:79.8%"></span></div><span class="pkn">38.3 GB/s</span></div></dd>
         <dt>9 Oct &middot; 16 KiB</dt><dd><strong>Build 461</strong> on tardis1: the stripe written direct (27.7), then each connection's receive buffer held at 1 MiB. <code class="kv">7.1.13-21.hs.461.loanpages_pool.el9.aarch64+16k</code><div class="pk"><div class="pktrack"><span class="pkbar gain" style="width:74.8%"></span></div><span class="pkn">35.9 GB/s</span></div></dd>
@@ -254,20 +260,95 @@
         <dt>7 Oct &middot; 4 KiB</dt><dd><strong>Build 458</strong> in a VMware Fusion guest on a MacBook Pro, with the four fixes found on tardis1. <code class="kv">7.1.13-20.hs.458</code><div class="pk"><span class="pkn none">the test plan, not a rate</span></div></dd>
         <dt>5 Oct &middot; 16 KiB</dt><dd><strong>Build 451</strong> in a UTM guest on a MacBook Pro. <code class="kv">7.1.13-19.hs.451</code><div class="pk"><span class="pkn none">the test plan, not a rate</span></div></dd>
       </dl>
-      <p class="note" style="margin:2px 0 0">Each bar is the best durable NFS write rate from one client that the build carried in copy mode, sixteen connections, on a scale that ends at the 48 GB/s the wire carries with no NFS. Every bar is the single best run on that build, not an average: build 464's other runs of the same setting were between 43.4 and 44.6, and build 462's three were 36.7 to 38.3. The three earliest entries ran the test plan, with a load that reads back and checks everything it writes, and were not measures of rate.</p>
+      <p class="note" style="margin:2px 0 0"><span class="key"></span>One port, on a scale that ends at the 48 GB/s one port's wire carries with no NFS. <span class="key p2" style="margin-left:10px"></span>Both ports, on a scale that ends at the 96 GB/s of two. Each bar is the best durable NFS write rate from one client that the build carried in copy mode, sixteen connections a port, so a bar's length is its share of the wire. Every bar is the single best run on that build, not an average: 13 October's four one-port runs were 46.5 to 47.4, 11 October's were between 43.4 and 44.6, and build 462's three were 36.7 to 38.3. The three earliest entries ran the test plan, with a load that reads back and checks everything it writes, and were not measures of rate.</p>
       <p class="pl">Where it is written up</p>
       <dl class="runs">
         <dt>Branch</dt><dd><code>kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY</code>, on <code>v7.1.13-21</code></dd>
-        <dt>The Xsight card</dt><dd><code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>, 64 KiB and 16 KiB</dd>
+        <dt>The Xsight card</dt><dd><code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>, 64 KiB and 16 KiB; the drives are its section "What a drive takes"</dd>
+        <dt>12 October reviewed</dt><dd><code>NFSD_TCP_WRITE_ZEROCOPY/LOST-TIME-CHASING-SPENT-DRIVES.md</code></dd>
         <dt>The test plan</dt><dd><code>transplant/README.md</code> for the accounts and <code>transplant/RESULTS.md</code> for the comparison across page sizes</dd>
         <dt>Builds on</dt><dd><a href="https://claude.ai/artifact/AaqMSpvXNrwbugt6BJ7MXX">NFSD Page Loan</a> &middot; <a href="https://claude.ai/artifact/FgYTWeV9FqCxwzeuESd7Ap">NVMe SGL Page Loan</a> &middot; <a href="https://claude.ai/artifact/MsFFzUKYDgz6WhZ1C62jss">On-Die Receive Copy</a></dd>
       </dl>
     </div>
   </header>
 
+  <section id="oct13">
+    <p class="eyebrow ok"><span>Newest &middot; 16 KiB &middot; tardis1 &middot; both ports and one<br>12 October, late, and 13 October, build 464</span></p>
+    <h2>The drives have a fast region of 625 GB. Kept inside it, two ports carry 60.7 GB/s and one carries 47.4</h2>
+    <div class="verdict gain">
+      <p class="big">For most of 12 October the drives were slow and their figures were read as the server's. The cause is found: <em>a run wrote twice what a drive takes at full rate</em>. With runs shortened to fit, two ports repeat within 1.2 GB/s and no drive slowed in 35 runs.</p>
+      <p><strong>What a drive does</strong>, measured locally with no NFS on all eight (WD_BLACK SN8100 2 TB, a consumer model). They behave alike to within 2%.</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:560px">
+        <thead><tr><th>What was measured</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td>Written at full rate from the drive's last idle</td><td class="r" style="white-space:normal">about 625 GB, at 11.4 to 11.9 GB/s</td></tr>
+          <tr><td>Idle that gives all of it back</td><td class="r" style="white-space:normal">20 s (20 s to 8 min all did; 5, 10 and 15 s did not)</td></tr>
+          <tr><td>Past 625 GB, writes that never pause</td><td class="c" style="white-space:normal">still 7.25 GB/s steady, 8.6 flat out</td></tr>
+          <tr><td>Past 625 GB, a pause in the writes of 0.3 s or more</td><td class="x" style="white-space:normal">4 GB/s at 100% busy for 25 to 55 s</td></tr>
+          <tr><td>Temperature in the slow state &middot; thermal throttling counted</td><td class="c" style="white-space:normal">50 &deg;C (69 at the fastest) &middot; none</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>So it was the length of a run, not a want of rest.</strong> A 120-second two-port run wrote 1.28 TB to each drive. In 12 October's sampled runs every drive steps down in the same second, about 600 GB in. Runs are now 45 seconds counted after a 15-second warm-up, 30 seconds of idle come first, and each run records what every drive wrote and whether one slowed. Neither heat, the cache flushes, the write order nor the total written is the cause.</p>
+    </div>
+
+    <h3 style="margin-top:26px">The rates, with every run inside the fast region</h3>
+    <div class="tbl-wrap"><table class="q" style="min-width:620px">
+      <thead><tr><th>Run</th><th>Counted</th><th>GB/s, mark at 128 KiB</th><th>GB/s, mark off</th><th>Each drive</th></tr></thead>
+      <tbody>
+        <tr><td>Two ports, four drives each</td><td class="m">45 s</td><td class="c" style="white-space:normal">57.0 &middot; 58.0 &middot; 58.2 &middot; 57.9 &middot; 57.3</td><td class="r" style="white-space:normal">60.0 &middot; 60.7 &middot; 60.7 &middot; 59.6</td><td class="c" style="white-space:normal">7.2 to 7.7 GB/s, 68 to 79% busy</td></tr>
+        <tr><td>First port on all eight drives</td><td class="m">60 s</td><td class="c" style="white-space:normal">46.6 &middot; 45.8 &middot; 45.2 &middot; 45.8 &middot; 45.8</td><td class="r">47.3 &middot; 46.5</td><td class="c" style="white-space:normal">5.7 to 6.0 GB/s, about 59% busy</td></tr>
+        <tr><td>Second port on all eight drives</td><td class="m">60 s</td><td class="c" style="white-space:normal">46.4 &middot; 46.8 &middot; 45.9 &middot; 46.3 &middot; 45.6</td><td class="r">46.8 &middot; 47.4</td><td class="c" style="white-space:normal">5.7 to 6.0 GB/s, about 59% busy</td></tr>
+        <tr><td>One port on its own four drives</td><td class="m">25 s</td><td class="c" style="white-space:normal">44.4 to 45.2, six runs</td><td class="m">not run</td><td class="x" style="white-space:normal">11.3 GB/s, 100% busy</td></tr>
+      </tbody>
+    </table></div>
+    <p>A one-port figure for the server is the one on eight drives. On four the drives are full and the figure is theirs. The counted time is shorter than the 120 seconds of earlier runs; a rate held past 625 GB a drive is for the drives to decide. The 625 GB was measured on nearly empty, trimmed drives, and fuller ones may have less.</p>
+
+    <h3 style="margin-top:26px" id="mark">The 128 KiB wakeup mark is off again</h3>
+    <p><code>svc_tcp_rx_lowat=131072</code> was pinned on 12 October for halving thread wakeups "at the same rate". That rate was read from runs the drives were limiting. Compared again on 13 October, off and on by turns with the order swapped between rounds:</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:620px">
+      <thead><tr><th>Setting</th><th>Mark</th><th>GB/s, round 1 &middot; round 2</th><th>Threads woken a second</th><th>Wakeups a WRITE</th></tr></thead>
+      <tbody>
+        <tr><td>Two ports</td><td>off</td><td class="r">60.0 &middot; 60.7</td><td class="c">770 &middot; 797 thousand</td><td class="c">13.3 &middot; 13.8</td></tr>
+        <tr><td>Two ports</td><td>128 KiB</td><td class="x">57.9 &middot; 57.3</td><td class="c">400 &middot; 405 thousand</td><td class="c">7.2 &middot; 7.4</td></tr>
+        <tr><td>First port alone</td><td>off</td><td class="r">47.3 &middot; 46.5</td><td class="c">107 &middot; 106 thousand</td><td class="c">2.4 &middot; 2.4</td></tr>
+        <tr><td>First port alone</td><td>128 KiB</td><td class="x">45.8 &middot; 45.8</td><td class="c">120 &middot; 121 thousand</td><td class="x">2.7 &middot; 2.8</td></tr>
+        <tr><td>Second port alone</td><td>off</td><td class="r">46.8 &middot; 47.4</td><td class="c">106 &middot; 107 thousand</td><td class="c">2.4 &middot; 2.4</td></tr>
+        <tr><td>Second port alone</td><td>128 KiB</td><td class="x">46.3 &middot; 45.6</td><td class="c">119 &middot; 119 thousand</td><td class="x">2.7 &middot; 2.7</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>It saves wakeups and costs rate.</strong> On two ports the mark halves the wakeups and costs 2.1 and 3.4 GB/s. On one port, where a thread already waits 50 &micro;s for the rest of a WRITE, there is little to save: the mark costs 0.6 to 1.8 GB/s and wakes threads slightly more often, for a reason not yet traced. Wakeups are CPU time and CPU is not what is short. The setting is 0 in <code>modprobe.d</code> from 13 October; <code>svc_tcp_rx_keep=1</code> stays.</p>
+
+    <h3 style="margin-top:26px">Two ports are at the machine's copy ceiling</h3>
+    <p>A standalone copy between buffers larger than the caches reaches 62 to 68 GB/s on this machine with 8 CPUs and no more with 48. Copied in 7,740-byte pieces, as frames arrive here, it reaches 60.1. Two ports of NFS carried 60.0 and 60.7, with nfsd's CPUs and the rings' CPUs each about half idle. The limit is something the CPUs share, most likely memory bandwidth. Past it the routes are to fetch less memory for each line of payload (NFS fetches 2.2 lines, the bare copy 1.1) or not to copy, which is the loan.</p>
+
+    <h3 style="margin-top:26px">What 12 October's conclusions are worth now</h3>
+    <div class="matrix">
+      <div class="cell k">Plain TCP at 49.8 and 99.4 GB/s; the copy test; what the driver does with ring interrupts; the wakeup counts for <code>svc_tcp_rx_keep</code> and the mark; the count of cache flushes and that stopping them helps. None depends on the drives</div><div class="cell v"><span class="pill yes">stand</span></div>
+      <div class="cell k">58.5 GB/s on two ports and its neighbours at 57 to 58: the drives were 71 to 75% busy in those runs</div><div class="cell v"><span class="pill yes">stand</span></div>
+      <div class="cell k">nfsd's threads split by port is not a gain; the client on build 469 changes little. Each was compared within one batch, on drives that were slowing as they ran, from two or three runs</div><div class="cell v"><span class="pill pend">direction only</span></div>
+      <div class="cell k">Eight receive rings cost 2 GB/s and drop thousands of frames. Run again inside the drives' fast region they are level with four and hardly drop (below)</div><div class="cell v"><span class="pill yes">replaced</span></div>
+      <div class="cell k">"The first port stalls" and "the second port runs behind". In most of those runs it was a slow drive in that port's stripe</div><div class="cell v"><span class="pill no">withdrawn</span></div>
+      <div class="cell k">The mark pinned as costing no rate. It costs 2 to 3 GB/s on two ports (above)</div><div class="cell v"><span class="pill no">withdrawn</span></div>
+      <div class="cell k">"Formatting the drives did not bring the rate back", and raid0 against a file system on each drive (52.6, 50.9, 50.4 against 55.6, 51.7, 50.8). Both sets ran on drives past their fast region</div><div class="cell v"><span class="pill no">not a comparison</span></div>
+      <div class="cell k">One port with no flush sent, 18.1 to 42.2 on four drives: all six runs were the drives' figure. On eight drives it is 45.2 to 47.4</div><div class="cell v"><span class="pill yes">replaced</span></div>
+      <div class="cell k">The early-afternoon slide from 57 to 54 GB/s, and write latencies of 12 to 26 s at the end of two runs: the drives stepping down</div><div class="cell v"><span class="pill yes">explained</span></div>
+      <div class="cell k">The drives' "slow start" of the morning and their autonomous power states, which were turned off. It may be the same slow state seen from the other end; whether the power states matter is not shown</div><div class="cell v"><span class="pill pend">not settled</span></div>
+    </div>
+
+    <h3 style="margin-top:26px">Still open</h3>
+    <div class="matrix">
+      <div class="cell k">One port went silent for 25 s in one run of 12 October while the other carried on: nothing dropped at the server, the client's retransmission timers firing. Not the drives. Not seen in ten watched runs after it, nor on 13 October</div><div class="cell v"><span class="pill pend">seen once</span></div>
+      <div class="cell k">The first port alone drops 33 to 1,087 frames at the card's FIFO in a run; the second drops none</div><div class="cell v"><span class="pill pend">not looked into</span></div>
+      <div class="cell k">Eight receive rings a port, run again on 13 October with the mark off: eight of 64 carry 59.5 to 60.5 GB/s against 59.6 to 60.7 for four of 128, with the receive CPUs at 49 to 63% in place of 80 to 89%. They drop 59 to 104 frames a run, not the thousands of 12 October. The card takes only powers of two for a ring's depth, so nothing between 64 and 128 exists. Eight of 128 with a 256 KiB held buffer carried 51.9 and 52.1</div><div class="cell v"><span class="pill yes">level, four stays</span></div>
+      <div class="cell k">What paused the writes in 12 October's runs once the drives were past their fast region. No such pause occurred on 13 October, and the slow state was reproduced only locally</div><div class="cell v"><span class="pill pend">not known</span></div>
+      <div class="cell k">How many memory channels are populated, which would set the copy ceiling</div><div class="cell v"><span class="pill pend">not known</span></div>
+    </div>
+    <p style="margin-top:14px" class="note">15 runs late on 12 October and 20 on 13 October, each a line of <code>xeu-rig/results-twoport-464.tsv</code> (<code>rested-*</code>, <code>mark*</code> and <code>r13-*</code>). One run's check flagged a drive that was short of work for five seconds at 30% busy, not slow. The drive probe is <code>xeu-rig/drvchar.py</code>. The accounts are "What a drive takes" in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code> and <code>LOST-TIME-CHASING-SPENT-DRIVES.md</code>.</p>
+  </section>
+
   <section id="pinned">
-    <p class="eyebrow"><span>The settled configuration &middot; as of 11 October, build 464<br>it will change as the work goes on</span></p>
-    <h2>What is pinned now for one port: the settings behind 44.6 GB/s</h2>
+    <p class="eyebrow"><span>The settled configuration &middot; as of 13 October, build 464<br>it will change as the work goes on</span></p>
+    <h2>What is pinned now for one port: the settings behind 47.4 GB/s</h2>
     <p>This is the configuration every figure in the build 464 section was measured on, unless a row there says otherwise. Each value has been compared against its neighbours at least once; the last column says where it is kept, because not all of it survives a reboot yet.</p>
     <div class="tbl-wrap"><table class="q" style="min-width:640px">
       <thead><tr><th>Setting</th><th>Pinned value</th><th>Where it is kept</th></tr></thead>
@@ -285,18 +366,20 @@
         <tr><td>Linger, <code>svc_tcp_rx_linger_us</code></td><td class="c">50</td><td><code>modprobe.d/sunrpc.conf</code></td></tr>
         <tr><td>Thread pools, <code>pools_per_node</code></td><td class="c">4</td><td><code>modprobe.d/sunrpc.conf</code></td></tr>
         <tr><td>No hand-off after a short receive, <code>svc_tcp_rx_keep</code></td><td class="c">1</td><td><code>modprobe.d/sunrpc.conf</code>, since 12 October</td></tr>
-        <tr><td>Wake a thread for 128 KiB of a short WRITE, <code>svc_tcp_rx_lowat</code></td><td class="c">131072</td><td><code>modprobe.d/sunrpc.conf</code>, since 12 October</td></tr>
+        <tr><td>Wake a thread for 128 KiB of a short WRITE, <code>svc_tcp_rx_lowat</code></td><td class="r">0 (off)</td><td style="white-space:normal"><code>modprobe.d/sunrpc.conf</code>. 131072 was pinned on 12 October and taken off on 13 October (<a href="#mark">above</a>)</td></tr>
         <tr><td>Threads copying on a connection, <code>svc_tcp_rx_copy_threads</code></td><td class="c">0</td><td style="white-space:normal">the default. 2 was compared and is level (<a href="#claim">below</a>)</td></tr>
         <tr><td>nfsd threads</td><td class="c" style="white-space:normal">512, all on CPUs 8 to 55</td><td style="white-space:normal">the tuning service, changed on 11 October to set 512 before it pins</td></tr>
         <tr><td>nfsd write mode, <code>io_cache_write</code></td><td class="c">2 (direct)</td><td style="white-space:normal">the tuning service, changed on 11 October from 4, which carried 28.6 GB/s</td></tr>
         <tr><td>Deferred skb frees, <code>net.core.skb_defer_max</code></td><td class="c">128</td><td>the default</td></tr>
         <tr><td>Client</td><td class="c" style="white-space:normal">nconnect 16, 1 MiB wsize, MTU 9000, <code>fq_codel</code></td><td style="white-space:normal">nothing on the client is changed</td></tr>
-        <tr><td>Storage</td><td class="c" style="white-space:normal">six NVMe drives, MD raid0, XFS</td><td class="m" style="white-space:normal">as built</td></tr>
+        <tr><td>Storage</td><td class="r" style="white-space:normal">eight NVMe drives, an XFS on each, no MD; the port's writers divided among them</td><td class="m" style="white-space:normal">mounted by hand after a boot. 44.6 GB/s on 11 October was on six drives striped</td></tr>
+        <tr><td>Drives' write cache, as Linux sees it</td><td class="c" style="white-space:normal">write through: no cache flush is sent</td><td style="white-space:normal">a udev rule, and the test harness at each run</td></tr>
+        <tr><td>Length of a run</td><td class="c" style="white-space:normal">under 600 GB written to each drive, after 20 s idle</td><td style="white-space:normal">the test harness, which marks a run that goes past it</td></tr>
       </tbody>
     </table></div>
 
-    <h3 style="margin-top:26px">For two ports: the settings behind 58.5 GB/s</h3>
-    <p>The same table for both ports carrying load at once, as of 12 October. Values that differ from one port's are marked. They are set for a run by the test harness and put back after it: the files in <code>modprobe.d</code> still hold one port's values.</p>
+    <h3 style="margin-top:26px">For two ports: the settings behind 60.7 GB/s</h3>
+    <p>The same table for both ports carrying load at once, as of 13 October. Values that differ from one port's are marked. They are set for a run by the test harness and put back after it: the files in <code>modprobe.d</code> still hold one port's values.</p>
     <div class="tbl-wrap"><table class="q" style="min-width:640px">
       <thead><tr><th>Setting</th><th>Value for two ports</th><th>Where it is kept</th></tr></thead>
       <tbody>
@@ -306,7 +389,7 @@
         <tr><td>Refill threshold, <code>xeu</code> <code>rx_refill_thresh</code></td><td class="c">8</td><td><code>modprobe.d/xeu.conf</code></td></tr>
         <tr><td>MTU on the server's ports</td><td class="c">7792 on both</td><td class="x" style="white-space:normal">set by hand, per port</td></tr>
         <tr><td>Receive rings</td><td class="r">4 rings of 128 on each port</td><td class="x" style="white-space:normal">test harness, per run</td></tr>
-        <tr><td>Ring interrupts</td><td class="r" style="white-space:normal">first port on CPUs 0 to 7, second on 56 to 63</td><td class="x" style="white-space:normal">set by hand, per port</td></tr>
+        <tr><td>Ring interrupts</td><td class="r" style="white-space:normal">first port on CPUs 0 to 7, second on 56 to 63</td><td style="white-space:normal">the test harness, at every run and after every ring change</td></tr>
         <tr><td>Receive region</td><td class="r" style="white-space:normal">32768 pages, shared by both ports</td><td class="x" style="white-space:normal">set by hand, per boot</td></tr>
         <tr><td>Flow placement</td><td class="c" style="white-space:normal">four connections to a ring</td><td class="x" style="white-space:normal">test harness, at each mount</td></tr>
         <tr><td>Budget, <code>svc_tcp_rx_budget_pages</code></td><td class="c">0 (copy mode)</td><td>the default</td></tr>
@@ -314,23 +397,24 @@
         <tr><td>Linger, <code>svc_tcp_rx_linger_us</code></td><td class="r">0</td><td class="x" style="white-space:normal">test harness, per run</td></tr>
         <tr><td>Thread pools, <code>pools_per_node</code></td><td class="c">4</td><td><code>modprobe.d/sunrpc.conf</code></td></tr>
         <tr><td>No hand-off after a short receive, <code>svc_tcp_rx_keep</code></td><td class="c">1</td><td><code>modprobe.d/sunrpc.conf</code>, since 12 October</td></tr>
-        <tr><td>Wake a thread for 128 KiB of a short WRITE, <code>svc_tcp_rx_lowat</code></td><td class="c">131072</td><td><code>modprobe.d/sunrpc.conf</code>, since 12 October</td></tr>
+        <tr><td>Wake a thread for 128 KiB of a short WRITE, <code>svc_tcp_rx_lowat</code></td><td class="r">0 (off)</td><td style="white-space:normal"><code>modprobe.d/sunrpc.conf</code>. 131072 was pinned on 12 October and taken off on 13 October (<a href="#mark">above</a>)</td></tr>
         <tr><td>Threads copying on a connection, <code>svc_tcp_rx_copy_threads</code></td><td class="c">0</td><td style="white-space:normal">the default. 2 was compared on two ports and is not a gain</td></tr>
         <tr><td>nfsd threads</td><td class="c" style="white-space:normal">512, all on CPUs 8 to 55</td><td>the tuning service</td></tr>
         <tr><td>nfsd write mode, <code>io_cache_write</code></td><td class="c">2 (direct)</td><td>the tuning service</td></tr>
         <tr><td>Deferred skb frees, <code>net.core.skb_defer_max</code></td><td class="c">128</td><td>the default</td></tr>
         <tr><td>Client</td><td class="r" style="white-space:normal">nconnect 16 to each port, 1 MiB wsize, MTU 9000, <code>fq</code></td><td class="x" style="white-space:normal">test harness sets <code>fq</code>, per run</td></tr>
-        <tr><td>Storage</td><td class="r" style="white-space:normal">a stripe of four NVMe drives for each port, MD raid0, XFS</td><td class="m" style="white-space:normal">as built; assembled by hand after a boot</td></tr>
+        <tr><td>Storage</td><td class="r" style="white-space:normal">four NVMe drives for each port, an XFS on each, no MD</td><td class="m" style="white-space:normal">mounted by hand after a boot. Two stripes of four until the evening of 12 October</td></tr>
+        <tr><td>Length of a run</td><td class="r" style="white-space:normal">45 s counted after a 15 s warm-up: under 600 GB to each drive</td><td style="white-space:normal">the test harness</td></tr>
         <tr><td>Drives' write cache, as Linux sees it</td><td class="r" style="white-space:normal">write through: no cache flush is sent</td><td style="white-space:normal">a udev rule, and the test harness at each run</td></tr>
-        <tr><td>Receive memory in use</td><td class="r">21 MiB for both ports</td><td class="m">measured</td></tr>
+        <tr><td>Receive memory in use</td><td class="r">19 MiB for both ports</td><td class="m">measured</td></tr>
       </tbody>
     </table></div>
-    <p><strong>The two files that hold the module settings.</strong> Both are on tardis1 since 11 October, and <code>sunrpc</code> has been reloaded from its file and came up with all three values.</p>
+    <p><strong>The two files that hold the module settings.</strong> Both are on tardis1 since 11 October, and <code>sunrpc</code> has been reloaded from its file and came up with its values; the file holds five since 12 October.</p>
     <div class="kind" style="margin:10px 0 18px">
       <p class="who">/etc/modprobe.d/xeu.conf</p>
       <div class="set" style="margin-top:0">options xeu rx_ip_align=2 rss_indir_size=128 rx_buf_size=8192 rx_refill_thresh=8</div>
       <p class="who" style="margin-top:14px">/etc/modprobe.d/sunrpc.conf</p>
-      <div class="set" style="margin-top:0">options sunrpc pools_per_node=4 svc_tcp_rx_rcvbuf=1048576 svc_tcp_rx_linger_us=50 svc_tcp_rx_keep=1 svc_tcp_rx_lowat=131072</div>
+      <div class="set" style="margin-top:0">options sunrpc pools_per_node=4 svc_tcp_rx_rcvbuf=1048576 svc_tcp_rx_linger_us=50 svc_tcp_rx_keep=1 svc_tcp_rx_lowat=0</div>
     </div>
     <p><strong>This is the configuration for one port carrying load.</strong> The module settings apply to every port the driver has and to every NFS connection, not to one. With both ports loaded a different held buffer, ring depth and linger carry more (<a href="#twoport">below</a>), and those settings carry less on one port, so which is right depends on how many ports are in use.</p>
     <div class="matrix">
@@ -345,11 +429,12 @@
   </section>
 
   <section id="twoport">
-    <p class="eyebrow ok"><span>Newest &middot; both ports of the card &middot; 16 KiB &middot; tardis1<br>11 and 12 October, build 464</span></p>
+    <p class="eyebrow"><span>Both ports of the card &middot; 16 KiB &middot; tardis1<br>11 and 12 October, build 464</span></p>
     <h2>Two ports: 58.5 GB/s, with both ports' receive memory in the cache and no cache flush sent to the drives</h2>
+    <p class="note"><strong>This section is the account as of mid-afternoon on 12 October.</strong> Its best figure has since been passed (60.7 GB/s) and some of what it says about the drives and the wakeup mark is superseded; <a href="#oct13">the section above</a> says which.</p>
     <div class="verdict gain">
       <p class="big">With the one-port settings on both ports the server carried <em>43 GB/s</em> in all, no more than one port had. Retuned so that the two ports' receive memory fits in the L3 cache, it carries <em>54 GB/s</em>, and <em>58.5 GB/s</em> at best once the drives are no longer sent a cache flush for every COMMIT.</p>
-      <p><strong>The setup.</strong> The eight data drives became two stripes of four, one for each port, each exported to and mounted through its own port from the same client. The second port was given the first's settings and a place in the same receive region, and its rings' interrupts were moved off the CPUs nfsd runs on. On four drives one port alone carries 36 GB/s with the drives flushing, where it carried 44.6 on six; <a href="#twoflush">the flushes are why</a>.</p>
+      <p><strong>The setup.</strong> The eight data drives became two stripes of four, one for each port, each exported to and mounted through its own port from the same client. The second port was given the first's settings and a place in the same receive region, and its rings' interrupts were moved off the CPUs nfsd runs on. On four drives one port alone carries 36 GB/s with the drives flushing, where it carried 44.6 on six; <a href="#twoflush">the flushes are why</a>. On the evening of 12 October the stripes were removed: each drive now has its own file system, four to a port, so that each drive can be seen.</p>
     </div>
 
     <h3 style="margin-top:26px">Why the two ports did not add up: the copy</h3>
@@ -380,15 +465,16 @@
         <tr><td>One</td><td>not sent</td><td class="r">42.2</td><td class="c">18.1 to 42.2</td><td class="c">6</td></tr>
       </tbody>
     </table></div>
-    <p>Not sending the flush is worth about 4 GB/s on two ports and 6 on one. The one-port runs spread widely because the four drives are 96 to 100% busy in every one of them and their own speed varies, as below.</p>
+    <p>Not sending the flush is worth about 4 GB/s on two ports and 6 on one, from few runs. The run counts stop at early afternoon: by the end of 12 October there were about 60 two-port runs with no flush sent, from 37.4 to 58.5, most of them limited by drives past their fast region. All six one-port runs were the drives' figure; on eight drives one port carries 45.2 to 47.4 (<a href="#oct13">above</a>).</p>
     <p>In the 58.5 GB/s run the ports carried 29.0 and 29.4 GB/s, with no drops at the card's FIFO, 92 at the rings and 96 retransmits in 70 seconds. The drives were 71 to 73% busy at 7.4 GB/s each, the ring CPUs 47 to 50% and nfsd's CPUs 49%.</p>
     <div class="matrix">
-      <div class="cell k">One port is limited by its four drives in every run, and how fast the drives are changes. After minutes of sustained writing each wrote 6.3 GB/s while 99% busy, and 4 GB/s in a local test with no NFS; after about three minutes of rest they were back at 11. No thermal throttling is recorded. It looks like the drives' fast write cache running out, which is not proven</div><div class="cell v"><span class="pill pend">the drives</span></div>
-      <div class="cell k">Each run now writes for 40 seconds before fio starts counting, and records what each stripe's drives wrote and how busy they were, so a run the drives limited is marked as one</div><div class="cell v"><span class="pill yes">in the harness</span></div>
+      <div class="cell k">One port is limited by its four drives in every run, and how fast the drives are changed through the day. Found on the night of 12 October: a drive takes about 625 GB at full rate from its last idle of 20 s, and past that any pause in the writes leaves it at 4 GB/s. These runs wrote 1.28 TB to each drive</div><div class="cell v"><span class="pill yes">found</span></div>
+      <div class="cell k">Each run now writes for 15 seconds before fio starts counting and counts 45, samples every drive each second, and records what each wrote and whether one slowed, so a run the drives limited is marked as one</div><div class="cell v"><span class="pill yes">in the harness</span></div>
       <div class="cell k">The copy has no cheap fix left. A profile at this setting has it at 29% of all cycles, and the server fetching 2.2 cache lines from memory for each line of payload. The thought was that one of those is the destination page, read in only to be overwritten. A standalone copy test says not: a plain copy here fetches one line per line, the source alone, and a copy written not to fetch its destination is slower (<code>DC ZVA</code>, 46 GB/s) or no faster (non-temporal stores, 63)</div><div class="cell v"><span class="pill no">ruled out</span></div>
-      <div class="cell k">Fewer wakeups of nfsd's threads. A 1 MiB WRITE arrives in about fourteen pieces and each woke a thread, about 20 wakeups a WRITE in all. Two settings, pinned on 12 October, bring that to about 7: a thread that finds a WRITE short no longer wakes another for data already there, and a thread is woken when 128 KiB has arrived and not for each piece. Thread wakeups go from 1.15 million a second to 0.40 million at the same rate; it saves a little CPU and no more</div><div class="cell v"><span class="pill yes">pinned</span></div>
-      <div class="cell k">nfsd's threads split by port, each port's connections served by threads on CPUs of their own: 55.3 and 53.8 GB/s against 54.1 and 54.4 unsplit</div><div class="cell v"><span class="pill no">not a gain</span></div>
-      <div class="cell k">Where to look next. The machine copies memory to memory at 62 to 68 GB/s by any method, and reaches that with 8 CPUs; more add nothing. At 58.5 GB/s the server is at about 90% of it, and its writes to memory are at the same rate as the saturated test's. So the ceiling is something the CPUs share, most likely memory bandwidth. How many memory channels are populated is not known. Past that ceiling the only route is not to copy, which is the loan</div><div class="cell v"><span class="pill pend">next</span></div>
+      <div class="cell k">Fewer wakeups of nfsd's threads. A 1 MiB WRITE arrives in about fourteen pieces and each woke a thread, about 20 wakeups a WRITE in all. A thread that finds a WRITE short no longer wakes another for data already there (<code>svc_tcp_rx_keep</code>, kept): about 13 a WRITE. Waking a thread only when 128 KiB has arrived brings that to 7 and was pinned on 12 October; it costs 2 to 3 GB/s and is off again (<a href="#mark">above</a>)</div><div class="cell v"><span class="pill pend">keep stays, mark off</span></div>
+      <div class="cell k">nfsd's threads split by port, each port's connections served by threads on CPUs of their own: 55.3 and 53.8 GB/s against 54.1 and 54.4 unsplit, on drives that were slowing</div><div class="cell v"><span class="pill no">not a gain</span></div>
+      <div class="cell k">Eight receive rings a port, each on a CPU of its own: 52.9 and 52.2 GB/s against 54.3 and 55.3 with four. The receive CPUs fell from 83% to 52% busy and the rate did not rise. Rings of 64 dropped frames and rings of 128 took the receive memory past the cache, so neither was a fair test. Run again on 13 October inside the drives' fast region, eight of 64 are level with four of 128 (<a href="#oct13">above</a>)</div><div class="cell v"><span class="pill yes">level</span></div>
+      <div class="cell k">Where to look next. The machine copies memory to memory at 62 to 68 GB/s by any method, and reaches that with 8 CPUs; more add nothing. At 58.5 GB/s the server is at about 90% of it (60.7 on 13 October is at the 60.1 the test carries in frame-sized pieces), and its writes to memory are at the same rate as the saturated test's. So the ceiling is something the CPUs share, most likely memory bandwidth. How many memory channels are populated is not known. Past that ceiling the only route is not to copy, which is the loan</div><div class="cell v"><span class="pill pend">next</span></div>
     </div>
 
     <h3 style="margin-top:26px">The receive memory in use decides the rate</h3>
@@ -424,10 +510,10 @@
       <div class="cell k">The two-port settings are not the best for one port: one port alone with them carries 31 GB/s, against 36 with its own, both with the drives flushing. The configuration depends on how many ports carry load</div><div class="cell v"><span class="pill pend">a trade</span></div>
       <div class="cell k">Two ports give 1.3 times the best one port has carried (44.6 GB/s, on six drives), not twice. Copy mode on this machine has reached 58.5 GB/s; the loan, which does not copy, is what the card's 99 GB/s is there for, and it needs drives that take arbitrary pieces</div><div class="cell v"><span class="pill pend">the copy</span></div>
       <div class="cell k">Why the smaller memory helps: the processor's counters show the copy reading as much from memory at 21 MiB as at 48 MiB, so it is not simply the copy finding its data in the cache</div><div class="cell v"><span class="pill no">not explained</span></div>
-      <div class="cell k">The second port ran 2 to 4 GB/s under the first when both were loaded and the drives flushing. With no flush sent the two are within 1.5 GB/s in the three best runs</div><div class="cell v"><span class="pill pend">not looked into</span></div>
+      <div class="cell k">One port running behind the other. With the drives flushing the second ran 2 to 4 GB/s under the first; later the first was usually behind. In most runs it was a slow drive under that port, and once a 25 s silence that is not the drives. Inside the drives' fast region the two are within 1 GB/s</div><div class="cell v"><span class="pill yes">mostly the drives</span></div>
       <div class="cell k">Not gains on two ports: two threads copying on a connection, more or fewer connections, more writers, eight rings, the client's writers pinned to their NIC</div><div class="cell v"><span class="pill yes">tried</span></div>
     </div>
-    <p style="margin-top:14px" class="note">Each run is 120 seconds of 16 writers a port making 8 MiB direct writes, every connection placed on a ring; from the afternoon of 12 October a 40 second warm-up comes first and is not counted. The second port's settings are set by hand and do not survive a reboot. The accounts are "Two ports: why they did not add up, and the setting that carries 54 GB/s" and "No cache flush to the drives, and two ports at 58.5 GB/s" in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>, the copy test is in <code>TARDIS1_COPY_PERFORMANCE.md</code>, and every run is a line of <code>xeu-rig/results-twoport-464.tsv</code>.</p>
+    <p style="margin-top:14px" class="note">Each run in this section is 120 seconds of 16 writers a port making 8 MiB direct writes, every connection placed on a ring; from the afternoon of 12 October a 40 second warm-up came first and was not counted. From that night a run is 45 seconds after a 15 second warm-up. The second port's region and MTU are set by hand and do not survive a reboot. The accounts are "Two ports: why they did not add up, and the setting that carries 54 GB/s" and "No cache flush to the drives, and two ports at 58.5 GB/s" in <code>NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md</code>, the copy test is in <code>TARDIS1_COPY_PERFORMANCE.md</code>, and every run is a line of <code>xeu-rig/results-twoport-464.tsv</code>.</p>
   </section>
 
   <section id="xeu464">
@@ -1386,7 +1472,7 @@
   <footer>
     <span class="r">NFSD receive region and budget &middot; 4, 16 and 64 KiB status</span><br>
     In-tree: <code>NFSD_TCP_WRITE_ZEROCOPY/transplant/</code> (README.md &middot; RESULTS.md &middot; results/runs/4KiB-7.1.13-20.hs.458.tsv &middot; results/16KiB.tsv &middot; results/64KiB.tsv), <code>slipstream/</code>, <code>on-die-receive-copy/SPEC.md</code>, <code>xeu-SGL-compat-receive-placement/</code><br>
-    Series: David Flynn &middot; Mike Snitzer &middot; Hammerspace &middot; 2026-10-11
+    Series: David Flynn &middot; Mike Snitzer &middot; Hammerspace &middot; 2026-10-13
   </footer>
 
 </div>
