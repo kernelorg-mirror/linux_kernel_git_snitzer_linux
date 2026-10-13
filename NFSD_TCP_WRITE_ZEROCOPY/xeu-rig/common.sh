@@ -6,9 +6,14 @@
 D=${D:-enp161s0f0}
 SRVIP=${SRVIP:-192.168.1.211}
 CLIIP=${CLIIP:-192.168.1.106}
+# The client's management address (its ens8f0; the server's is 10.20.12.211
+# on xemi0).  Every script's ssh and scp to the client goes here, so that the
+# harness's own traffic is not on a port under test (2026-10-13).  CLIIP stays
+# the client's address on the port: what is mounted from and pinged.
+CLIMGMT=${CLIMGMT:-10.20.12.106}
 KEY=${KEY:-/root/.ssh/id_ed25519_snitzer2}
 export SSH_OPTS="-i $KEY"
-SSHC="ssh -o BatchMode=yes -o ConnectTimeout=10 -i $KEY root@$CLIIP"
+SSHC="ssh -o BatchMode=yes -o ConnectTimeout=10 -i $KEY root@$CLIMGMT"
 RG=/sys/kernel/debug/page_pool_rx_region
 PP=/sys/module/page_pool/parameters
 L=${L:-/var/tmp/zc-run-logs}

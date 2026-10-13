@@ -11,7 +11,7 @@
 WHICH=${1:?a|b|ab}; N=${2:-16}; SECS=${3:-20}
 declare -A DEV=([a]=enp161s0f0 [b]=enp164s0f0) SRV=([a]=192.168.1.211 [b]=192.168.0.211) CLI=([a]=192.168.1.106 [b]=192.168.0.106)
 PORTS=$(sed 's/./& /g' <<< "$WHICH")
-SSHC="ssh -o BatchMode=yes -o ConnectTimeout=10 -i $KEY root@192.168.1.106"
+SSHC="ssh -o BatchMode=yes -o ConnectTimeout=10 -i $KEY root@$CLIMGMT"
 fifo() { ethtool -S $1 | awk '/port_rx_fifo_tc[0-9]_drop_packets/{s+=$2} END{print s+0}'; }
 ringdrop() { ethtool -S $1 | awk '/rx_hw_tail_drop_packets/{s+=$2} END{print s+0}'; }
 rxbytes() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_rx_bytes:$/{s+=$2} END{print s+0}'; }
@@ -27,7 +27,7 @@ if [ -n "${MODE:-}" ]; then
 	# MODE=copy|trunc: python receivers and senders (wire-rcv.py,
 	# wire-snd.py), one process a port and a thread a stream.  trunc
 	# has the kernel discard what arrives without copying it.
-	pkill -f "[w]ire-rcv[.]py"; scp -q -o BatchMode=yes -i $KEY $RIG/wire-snd.py root@192.168.1.106:/var/tmp/wire-snd.py
+	pkill -f "[w]ire-rcv[.]py"; scp -q -o BatchMode=yes -i $KEY $RIG/wire-snd.py root@$CLIMGMT:/var/tmp/wire-snd.py
 	for p in $PORTS; do
 		taskset -c 8-55 python3 $RIG/wire-rcv.py ${SRV[$p]} 5300 $N $MODE > /tmp/.wire-rcv-$p.out 2>&1 &
 		c="$c python3 /var/tmp/wire-snd.py ${SRV[$p]} 5300 ${CLI[$p]} $N $SECS &"
