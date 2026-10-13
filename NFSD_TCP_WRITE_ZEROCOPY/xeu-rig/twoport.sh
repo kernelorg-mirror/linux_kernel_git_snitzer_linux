@@ -39,6 +39,9 @@
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
 #   TXIRQ_A=<cpu> TXIRQ_B=<cpu>  a port's Tx rings on two CPUs from <cpu>, and
 #                    its Rx rings one to a CPU on the port's eight
+#   TXN=<n>          with TXIRQ_A/B: the Tx rings on <n> CPUs from <cpu>, not two
+#   NFSD_CPUS=<list> nfsd's threads on these CPUs for the run (8-55 after it), to
+#                    keep them off CPUs given to Tx rings
 #   QDISC=fq|fqNN    fq on the client's ports (fqNN: maxrate NN Gbit/s a flow)
 #   PROFILE=1        a 10 s system-wide perf record and perf stat mid-run
 #   PIN=1            each port's writers on the client CPUs of its NIC's NUMA node
@@ -95,6 +98,7 @@ cleanup() {
 		cl "rm -f /mnt/rxr-$p[0-9]*/f-* /mnt/rxr-$p[0-9]*/bal-* 2>/dev/null; for m in /mnt/rxr-$p[0-9]*; do umount -f \$m 2>/dev/null; done"
 		for fs in ${FS[$p]}; do exportfs -u "${CLI[$p]}:$fs/zcbudget" 2>/dev/null; done
 	done
+	[ -n "${NFSD_CPUS:-}" ] && for t in $(pgrep -x nfsd); do taskset -cp 8-55 $t > /dev/null 2>&1; done
 	echo N > /sys/module/xeu/parameters/rx_port_stats
 }
 trap cleanup EXIT
@@ -106,6 +110,7 @@ echo Y > /sys/module/xeu/parameters/rx_port_stats
 [ -n "${LINGER:-}" ] && echo $LINGER > $SP/svc_tcp_rx_linger_us
 [ -n "${THREADS:-}" ] && echo $THREADS > $SP/svc_tcp_rx_copy_threads
 [ -n "${LOWAT:-}" ] && echo $LOWAT > $SP/svc_tcp_rx_lowat
+[ -n "${NFSD_CPUS:-}" ] && { for t in $(pgrep -x nfsd); do taskset -cp $NFSD_CPUS $t > /dev/null 2>&1; done; echo "nfsd on CPUs $NFSD_CPUS for this run" | tee -a geometry.txt; }
 [ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} $QDISC || { echo "qdisc not set"; exit 1; }; done
 echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us) copy_threads $(cat $SP/svc_tcp_rx_copy_threads) lowat $(cat $SP/svc_tcp_rx_lowat) keep $(cat $SP/svc_tcp_rx_keep) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS" | tee -a geometry.txt
 
