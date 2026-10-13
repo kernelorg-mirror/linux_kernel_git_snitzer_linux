@@ -1,0 +1,19 @@
+// Where each piece nfsd copies comes from, against the piece the same thread copied before it.
+kprobe:simple_copy_to_iter /comm == "nfsd"/
+{
+	$b = arg0 & 0xffffffffffffe000;	// the 8192-byte receive buffer
+	$p = @last[tid];
+	if ($p != 0) {
+		$d = (int64)($b - $p);
+		if ($d == 0) { @from["same buffer"] = count(); }
+		else if ($d == 8192) { @from["next buffer up (+8192)"] = count(); }
+		else if ($d == -8192) { @from["next buffer down (-8192)"] = count(); }
+		else if ($d > 0 && $d <= 65536) { @from["within 64 KiB up"] = count(); }
+		else if ($d < 0 && $d >= -65536) { @from["within 64 KiB down"] = count(); }
+		else { @from["elsewhere"] = count(); }
+	}
+	@last[tid] = $b;
+	@half[(arg0 & 0x3fff) / 8192] = count();
+	@bytes = hist(arg1);
+}
+interval:s:5 { clear(@last); exit(); }
