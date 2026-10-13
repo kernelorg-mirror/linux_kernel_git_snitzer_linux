@@ -33,7 +33,7 @@ mkdir -p $OUT; touch $OUT/done
 cd $H || exit 1
 
 # --- geometry: what the harness and the kernel charge for a 1 MiB WRITE ---
-G=$(GEOMETRY=1 NETDEV=$D CLIENT=root@$CLIIP ./run-budget.sh /dev/null 2>/dev/null | grep '^geometry')
+G=$(GEOMETRY=1 NETDEV=$D CLIENT=root@$CLIMGMT CLIENT_ADDR=$CLIIP ./run-budget.sh /dev/null 2>/dev/null | grep '^geometry')
 F9=$(sed -n 's/.*factor \([0-9]*\) (MTU 9000).*/\1/p' <<< "$G")
 RESERVE=$(sed -n 's/.*reserve \([0-9]*\) \/.*/\1/p' <<< "$G")
 [ -n "$F9" ] && [ -n "$RESERVE" ] || { echo "cannot read the geometry: $G"; exit 1; }
@@ -84,7 +84,7 @@ while read -r entries rb writes st cells <&3; do
 	[ "$rb" != - ] && a="$a FORCE_RCVBUF=$rb"
 	[ "$writes" -gt 0 ] && a="$a FORCE_BUDGET=$budget"
 	af0=$(reg alloc_fail)
-	env $a NETDEV=$D CLIENT=root@$CLIIP CELLS="$cells" ./run-budget.sh $o > $o.console 2>&1 &
+	env $a NETDEV=$D CLIENT=root@$CLIMGMT CLIENT_ADDR=$CLIIP CELLS="$cells" ./run-budget.sh $o > $o.console 2>&1 &
 	HP=$!
 	: > $o.windows
 	for c in $cells; do
