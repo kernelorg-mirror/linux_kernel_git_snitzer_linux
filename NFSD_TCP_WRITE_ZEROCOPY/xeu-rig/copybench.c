@@ -1,7 +1,8 @@
 // copybench: N threads each copy a large source to a large destination,
 // both far larger than the caches, by one of four methods.  Reports GB/s.
 //   copybench <method> <threads> <first cpu> <seconds> [MiB per buffer]
-//   methods: libc  stp  zva  stnp
+//   methods: libc  stp  zva  stnp, and for what memory takes one way only:
+//            wr (stores to the destination alone)  rd (loads from the source alone)
 #define _GNU_SOURCE
 #include <pthread.h>
 #include <sched.h>
@@ -34,6 +35,16 @@ static void copy_stnp(char *d, const char *s, size_t n)
 		asm volatile("ldp q0, q1, [%0]\n ldp q2, q3, [%0, #32]\n stnp q0, q1, [%1]\n stnp q2, q3, [%1, #32]"
 			     :: "r"(s), "r"(d) : "v0", "v1", "v2", "v3", "memory");
 }
+static void store_only(char *d, size_t n)
+{	// whole lines stored and nothing loaded: what memory takes written
+	for (; n >= 64; n -= 64, d += 64)
+		asm volatile("stp q0, q1, [%0]\n stp q2, q3, [%0, #32]" :: "r"(d) : "memory");
+}
+static void load_only(const char *s, size_t n)
+{	// whole lines loaded and nothing stored: what memory gives read
+	for (; n >= 64; n -= 64, s += 64)
+		asm volatile("ldp q0, q1, [%0]\n ldp q2, q3, [%0, #32]" :: "r"(s) : "v0", "v1", "v2", "v3", "memory");
+}
 static void *run(void *a)
 {
 	struct th *t = a; cpu_set_t c; CPU_ZERO(&c); CPU_SET(t->cpu, &c);
@@ -60,6 +71,8 @@ static void *run(void *a)
 			case 1: copy_stp(t->dst + o, t->src + o, 1 << 20); break;
 			case 2: copy_zva(t->dst + o, t->src + o, 1 << 20); break;
 			case 3: copy_stnp(t->dst + o, t->src + o, 1 << 20); break;
+			case 5: store_only(t->dst + o, 1 << 20); break;
+			case 6: load_only(t->src + o, 1 << 20); break;
 			}
 			t->bytes += 1 << 20;
 		}
@@ -68,9 +81,9 @@ static void *run(void *a)
 }
 int main(int c, char **v)
 {
-	const char *m[] = {"libc", "stp", "zva", "stnp"};
+	const char *m[] = {"libc", "stp", "zva", "stnp", "mm", "wr", "rd"};
 	if (c < 5) return 1;
-	for (method = 0; method < 4 && strcmp(m[method], v[1]); method++) ;
+	for (method = 0; method < 6 && strcmp(m[method], v[1]); method++) ;
 	PIECE = getenv("PIECE") ? atoi(getenv("PIECE")) : 0; STRIDE = getenv("STRIDE") ? atoi(getenv("STRIDE")) : 8192; SOFF = getenv("SOFF") ? atoi(getenv("SOFF")) : 68;
 	int n = atoi(v[2]), cpu0 = atoi(v[3]); secs = atoi(v[4]); SZ = (size_t)(c > 5 ? atoi(v[5]) : 64) << 20;
 	uint64_t z; asm("mrs %0, dczid_el0" : "=r"(z));
@@ -83,7 +96,7 @@ int main(int c, char **v)
 	clock_gettime(CLOCK_MONOTONIC, &b);
 	uint64_t tot = 0; for (int i = 0; i < n; i++) { pthread_join(t[i].t, 0); tot += t[i].bytes; }
 	double s = (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9;
-	if (!PIECE && memcmp(t[0].dst, t[0].src, 1 << 20)) { fprintf(stderr, "copy is wrong\n"); return 1; }
+	if (!PIECE && method < 5 && memcmp(t[0].dst, t[0].src, 1 << 20)) { fprintf(stderr, "copy is wrong\n"); return 1; }
 	printf("%s threads %d: %.1f GB/s\n", m[method], n, tot / s / 1e9);
 	return 0;
 }
