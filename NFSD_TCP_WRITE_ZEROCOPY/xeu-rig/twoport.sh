@@ -43,7 +43,8 @@
 #   NFSD_CPUS=<list> nfsd's threads on these CPUs for the run (8-55 after it), to
 #                    keep them off CPUs given to Tx rings
 #   QDISC=fq|fqNN    fq on the client's ports (fqNN: maxrate NN Gbit/s a flow)
-#   PROFILE=1        a 10 s system-wide perf record and perf stat mid-run
+#   PROFILE=1        mid-run: perf stat for the rings' CPUs and the rest, then where the
+#                    cycles and the fetches from memory go (needs RUNTIME=55 at least)
 #   PIN=1            each port's writers on the client CPUs of its NIC's NUMA node
 #   WARM=<s>         the writers run this long before fio starts counting (15)
 #   REST=<s>         wait this long first, for the drives (30)
@@ -225,11 +226,22 @@ for p in $PORTS; do d=${DEV[$p]}; F0[$p]=$(fifo $d); T0[$p]=$(ringdrop $d); B0[$
 N0=$(nfsdc); TN0=$(now)
 mpstat -P ALL $W 1 > srv-mpstat.txt 2>&1 &
 if [ -n "${PROFILE:-}" ]; then
-	( sleep 10
-	  perf stat -a -x, -e cycles,instructions,l3d_cache_lmiss_rd,l3d_cache_refill,bus_access_rd,bus_access_wr,l2d_cache_refill -o perf-stat.txt -- sleep 10 2> /dev/null
-	  perf record -a -g -F 199 -o perf.data -- sleep 10 > /dev/null 2>&1
-	  perf report -i perf.data --no-children --no-inline -g none --percent-limit 0.7 --sort symbol 2> /dev/null | grep -v '^$' | head -60 > perf-sym.txt
-	  rm -f perf.data ) &
+	# 23 s from the start of the window, so RUNTIME=55 at least.  Counters for the
+	# rings' CPUs and for the rest apart, then where the cycles go, then where the
+	# fetches from memory are made; each by symbol for the two groups of CPUs.
+	RC=0-7,56-63; NC=8-55; EV=cycles,instructions,l3d_cache_lmiss_rd,bus_access_rd,bus_access_wr,l2d_cache_refill
+	rpt() { perf report -i $1 --no-children --no-inline -g none --percent-limit ${3:-0.5} --sort symbol ${2:+--cpu $2} 2> /dev/null | grep -v '^$' | head -70; }
+	( sleep 1
+	  perf stat -C $RC -x, -e $EV -o perf-stat-rings.txt -- sleep 8 2> /dev/null &
+	  perf stat -C $NC -x, -e $EV -o perf-stat-nfsd.txt -- sleep 8 2> /dev/null; wait
+	  perf record -a -g -F 499 -o perf.data -- sleep 8 > /dev/null 2>&1
+	  perf record -a -g -e l3d_cache_lmiss_rd -c 20000 -o perf-lmiss.data -- sleep 6 > /dev/null 2>&1
+	  rpt perf.data > perf-sym.txt; rpt perf.data $RC > perf-sym-rings.txt; rpt perf.data $NC > perf-sym-nfsd.txt
+	  perf report -i perf.data --no-children --no-inline --sort comm 2> /dev/null -g none | grep -v '^$' | head -30 > perf-comm.txt
+	  perf report -i perf.data --no-children --no-inline -g caller,0.5,callee,function,percent --percent-limit 1.5 --sort symbol 2> /dev/null | grep -v '^$' | head -400 > perf-callers.txt
+	  rpt perf-lmiss.data > perf-lmiss-sym.txt; rpt perf-lmiss.data $RC > perf-lmiss-rings.txt; rpt perf-lmiss.data $NC > perf-lmiss-nfsd.txt
+	  perf report -i perf-lmiss.data --no-children --no-inline -g caller,0.5,callee,function,percent --percent-limit 2 --sort symbol 2> /dev/null | grep -v '^$' | head -300 > perf-lmiss-callers.txt
+	  [ -n "${KEEP_PERF:-}" ] || rm -f perf.data perf-lmiss.data ) &
 fi
 cl "mpstat -P ALL $W 1" > cli-mpstat.txt 2>&1 &
 sleep $W

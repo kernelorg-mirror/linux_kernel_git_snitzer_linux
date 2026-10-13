@@ -336,6 +336,167 @@ two-port runs on 13 October. To do: the server's watcher to dump on
 a one-second gap, and `fq` against the client's default `fq_codel`
 for whether a gap still grows into a silence.
 
+## The receive path traced at 60 GB/s (13 October, 13:15 to 13:30)
+
+`PROFILE=1`, extended for this: over the middle of a run, `perf
+stat` for the rings' CPUs (0-7, 56-63) and for nfsd's (8-55) apart,
+then 8 s of cycles sampled at 499 Hz with call graphs, then 6 s
+sampled on `l3d_cache_lmiss_rd` (a line fetched from beyond the L3),
+each reported by symbol for the two groups of CPUs. Runs of 55 s
+counted, each layout twice: `prof-4x128-1` (51.69, port a silent
+from second 56, below), `prof-8x64-1` (59.58), `prof-4x128-2`
+(59.89), `prof-8x64-2` (60.23). The profiler cost no rate. Each
+drive wrote 628 to 654 GB in these, just past the fast region
+(the placement load before the warm-up was not counted in sizing
+them); none stepped down.
+
+**Sampling caveat.** This kernel has no pseudo-NMI, so a sample due
+while interrupts are off is taken where they come back on. The
+large `_raw_spin_unlock_irqrestore` on the rings' CPUs is mostly
+`enable_irq()` at the end of `xeu_rx_poll()`, and
+`finish_task_switch` and `default_idle_call` collect the same way.
+Read those three as "somewhere with interrupts off before here".
+
+### Counters, for each line of payload
+
+A line is 64 bytes; 60 GB/s is 0.94e9 lines a second.
+
+| | 4 x 128 | 8 x 64 | 8 x 64 | `copybench stp`, 48 threads |
+|---|---|---|---|---|
+| run | `prof-4x128-2` | `prof-8x64-1` | `prof-8x64-2` | no NFS |
+| GB/s | 59.89 | 59.58 | 60.23 | 63.6 |
+| lines fetched from memory, rings' CPUs | 0.12 | 0.11 | 0.11 | |
+| lines fetched from memory, nfsd's CPUs | 1.97 | 2.01 | 1.95 | 1.01 |
+| bus reads a second, all CPUs | 3.73e9 | 3.77e9 | 3.69e9 | 2.02e9 |
+| bus writes a second, all CPUs | 2.11e9 | 2.10e9 | 2.13e9 | 2.08e9 |
+| cycles a second, rings' 16 CPUs | 17.7e9 | 21.0e9 | 21.4e9 | |
+| cycles a second, nfsd's 48 CPUs | 52.9e9 | 55.5e9 | 58.4e9 | |
+| instructions a cycle, rings / nfsd | 1.28 / 0.54 | 1.11 / 0.56 | 1.10 / 0.54 | |
+
+- **The two layouts are the same machine at work**: every figure for
+  nfsd's CPUs is within 3%. Eight rings spend a fifth more cycles on
+  the rings' CPUs for the same data and nothing else changes.
+- **The rings' CPUs hardly touch memory**: 5% of the fetches. The
+  driver and TCP receive handle headers; the payload is first read
+  by the copy.
+- **nfsd's CPUs run at 0.54 instructions a cycle**: they wait on
+  memory.
+
+### Where the cycles go (`prof-4x128-2`; eight rings within a point or two)
+
+Of all cycles, 62% are in nfsd's threads and 37% in the idle task
+(which is where softirq work on the rings' CPUs is counted).
+
+| nfsd's CPUs | | rings' CPUs | |
+|---|---|---|---|
+| `__memmove` | 39.1% | `_raw_spin_unlock_irqrestore` (see the caveat) | 22.3% |
+| `default_idle_call` | 11.0% | `default_idle_call` | 10.0% |
+| `finish_task_switch` | 5.5% | `handle_softirqs` | 5.9% |
+| `_raw_spin_unlock_irqrestore` | 1.9% | `eth_type_trans` | 4.3% |
+| `skb_release_data` | 1.6% | `xeu_rx_poll` | 4.1% |
+| `_raw_spin_lock` | 1.6% | `napi_pp_put_page` | 3.5% |
+| `check_heap_object` | 1.3% | `tcp_gro_receive` | 2.8% |
+| `flush_dcache_page` | 1.0% | `skb_defer_free_flush` | 2.7% |
+| nothing else over 0.75% | | `xeu_tx_poll`, `svc_data_ready` | 2.5%, 2.4% |
+
+### Where the fetches from memory are made, nfsd's CPUs (`prof-4x128-2`)
+
+1.97 lines fetched for each line of payload, over 1010 symbols:
+
+| what the code is doing | share | lines fetched per line of payload |
+|---|---|---|
+| the copy, `__memmove` under `svc_tcp_rx_copy_skb` | 61.0% | 1.20 |
+| scheduler: switch, idle, wake | 8.4% | 0.16 |
+| TCP and IP, receive and send, in nfsd's context | 6.4% | 0.13 |
+| sunrpc and nfsd | 6.2% | 0.12 |
+| locks, and samples deferred to an interrupt restore | 3.8% | 0.08 |
+| the write: VFS, XFS, iomap, block, NVMe | 2.9% | 0.06 |
+| usercopy checks and the iterator's copy glue | 2.7% | 0.05 |
+| freeing and recycling skbs and pages | 2.2% | 0.04 |
+| everything else, no symbol over 0.5% | 6.4% | 0.13 |
+
+`prof-8x64-1` has the copy at 60.0% the same way. (`prof-8x64-2`'s
+fetch sampling started after its load had ended and is of an idle
+machine: the cycles recording took too long to write out. Not used.)
+
+- **The copy fetches 1.20 lines for each line it copies**, which is
+  what `copybench` does copying in 7,740-byte pieces 68 bytes into
+  a buffer (1.12). The payload is read from memory once: the card
+  writes it there and it is not in the cache when the copy comes for
+  it, whatever the size of the receive region.
+- **The other 0.77 (and the rings' 0.12) have no large item.** The
+  biggest group is the scheduler at 0.16, from 780 thousand wakeups
+  a second. There is no single function to fix.
+
+### What the limit is: the benchmark with stores alone and loads alone
+
+`copybench` gained two methods for this, `wr` (lines stored and
+nothing loaded) and `rd` (lines loaded and nothing stored), 4 MiB
+buffers, CPUs from 8:
+
+| method | threads | GB/s | lines fetched a second | bus reads a second | bus writes a second |
+|---|---|---|---|---|---|
+| `stp` (copy) | 8 | 66.0 | 1.04e9 | 2.08e9 | 2.22e9 |
+| `stp` | 16 | 68.2 | 1.07e9 | 2.14e9 | 2.18e9 |
+| `stp` | 48 | 63.6 | 1.01e9 | 2.02e9 | 2.08e9 |
+| `wr` | 8 | 105.0 | | | 3.28e9 |
+| `wr` | 16 | 138.6 | | | 4.34e9 |
+| `wr` | 48 | 126.3 | | | 4.00e9 |
+| `rd` | 8 | 105.4 | 1.66e9 | 3.31e9 | 0.31e9 |
+| `rd` | 16 | 164.1 | 2.57e9 | 5.14e9 | 0.26e9 |
+| `rd` | 48 | 161.9 | 2.54e9 | 5.07e9 | 0.23e9 |
+
+- **Writes to memory are not capped at the 2.1e9 a second that
+  every NFS run and the saturated copy show**: stores alone reach
+  4.0 to 4.3e9. Loads alone reach 5.1e9. So neither direction is at
+  its own limit in the copy; it is the two together. A copy moves
+  128 to 136 GB/s of memory traffic, which is what stores alone
+  manage (126 to 139).
+- **NFS at 60 GB/s moves more than that**: 1.95e9 lines read and
+  about 1.05e9 written a second is 192 GB/s, above any figure in
+  this table. Either some of what the counter calls a fetch from
+  beyond the L3 is a line brought from another CPU's cache and not
+  from memory (nfsd's threads share a good deal across 48 CPUs), or
+  the traffic limit is not one number. Not resolved, and it decides
+  what follows.
+- **What can be said:** two ports of NFS carry what the bare
+  piecewise copy carries (60.1 GB/s), while fetching 0.89 lines
+  more for each line of payload than that copy does. If those extra
+  fetches were costing rate, NFS would be under the benchmark, and
+  it is not. So on this evidence removing them (fewer wakeups, less
+  shared state) would save CPU and not raise the rate, and the copy
+  itself is the whole of the limit: one read and one write of every
+  payload byte through memory. Within copy mode what is left is the
+  4% between copying in pieces and copying whole (62.5 against
+  60.1). Past that it is not copying, or more memory bandwidth (the
+  DIMM layout is still not known).
+
+### The silent port, a fourth time, with the server's CPUs recorded as it began
+
+`prof-4x128-1`: port a level at 30 to 31 GB/s for 55 s, then 0 to 3
+from second 56 until the run ended. The cycles recording spanned
+the start of it. Cycles in each eighth of the 8 s, on the CPUs of
+port a's receive rings (0, 2, 4, 6), port b's (56, 58, 60, 62),
+port a's transmit rings (1, 3, 5, 7) and nfsd's:
+
+| eighth | a Rx | b Rx | a Tx | nfsd |
+|---|---|---|---|---|
+| 1 to 5 | 6.3 to 7.0e9 | 6.2 to 6.8e9 | 1.7 to 2.0e9 | 46 to 51e9 |
+| 6 | 1.4e9 | 7.0e9 | 0.45e9 | 26e9 |
+| 7 | 0.25e9 | 6.5e9 | 0.16e9 | 20e9 |
+| 8 | 2.4e9 | 7.0e9 | 0.73e9 | 28e9 |
+
+Port a's receive CPUs go idle; they are not stuck. In the last
+eighth their profile is the usual one with more idle
+(`default_idle_call` 16% for 3.5%), port a's transmit CPUs are 59%
+idle, and nfsd's is the copy at 28% with more idle. Nothing on the
+server spins, holds a lock or runs out of CPU as it starts: frames
+stop arriving at port a. With the client's dump of the 12:47 event,
+that puts the start between the client's sender and the card's
+delivery of frames to port a's rings, and not in the server's
+software. Four events now, all port a, three of them on 13 October
+in 40 two-port runs since 11:40 and none in the 20 before.
+
 ## Layouts not run
 
 - Four rings with the receive interrupts on all eight of a port's
