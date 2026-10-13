@@ -229,12 +229,13 @@ are among them. The benchmark rows are with 4 MiB buffers, part of
 which stay in cache (which is how `rd` shows more than 166 GB/s), so
 they are a little under what larger buffers would ask.
 
-**What it means for the loan** is not measured and matters: with no
-copy, a payload byte still enters memory once from the card and
-leaves it once to a drive. If both of those are requests to memory,
-a loan is bounded near 83 GB/s here as well, and not at the card's
-99. `hnf_mc_reqs` during a loan run on the NVMe/TCP stand-in would
-say how many requests a loaned byte costs.
+**What it means for the loan** was put here as an inference: with
+no copy a payload byte still enters memory once from the card and
+leaves once to a drive, and if both are requests to memory a loan is
+bounded near 83 GB/s as well. **Measured the same evening, that is
+wrong.** The card writes into the cache and a drive takes from it;
+memory is asked only for what falls out in between, about 0.1
+requests a line where a copy asks 2.17. `LOAN-PERFORMANCE.md`.
 
 ## The 4% between copying in pieces and copying whole (13 October, 14:00 to 14:30)
 
