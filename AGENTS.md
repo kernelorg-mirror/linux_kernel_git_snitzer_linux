@@ -151,6 +151,18 @@ the four-drive stripes before that date) each COMMIT flushes every
 drive of the stripe and one port carries 36 GB/s where it otherwise
 carries 43; those figures are not comparable with later ones.
 
+**Keep a run inside the drives' fast region (found 2026-10-12).** A
+data drive takes about 625 GB at full rate from its last idle of 20 s.
+Past that, any pause in the writes (0.3 s) leaves it at 4 GB/s for 25
+to 55 s, and the drives decide the figure. So it is the length of a
+run that matters, not rest: `twoport.sh` defaults to `WARM=15
+RUNTIME=45` for it (two ports, four drives each); one port on its own
+four needs `WARM=10 RUNTIME=25`, or all eight drives in `FS_A`. Read
+`drives.txt` of every run (what each drive wrote, and `no drive
+stepped down`) before believing its figure. `xeu-rig/drvchar.py` is
+the local probe; the account is "What a drive takes" in
+`NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`.
+
 **The primary focus from the evening of 2026-10-08 (Mike): NFS writes
 from the remote client as fast as they will go, near line rate.** On
 tardis1 start at the first section of
