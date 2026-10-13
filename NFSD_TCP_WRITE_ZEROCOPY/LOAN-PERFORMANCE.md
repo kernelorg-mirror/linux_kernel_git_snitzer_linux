@@ -36,6 +36,13 @@ being 64 bytes):
 | stores alone (`wr`) | 152.4 | 2.38e9 | 2.49e9 |
 | a copy (`stp`) | 73.7 | 1.15e9 | 1.91e9 |
 
+**The mesh counts two of its events at a time.** With five asked
+for, as in every reading below, each was counted about 40% of the
+time and scaled up by `perf`. For loads that hold steady over the 10
+s that is an estimate and not a count; `memcost-cal.sh` asks for two
+(`hnf_mc_reqs` and `hnf_cache_fill`) so that the battery's figures
+are counted throughout.
+
 Stores alone give about one request for each line stored, so it
 counts writes to memory as well as reads. Loads alone and the copy
 come out under one a line because 4 MiB buffers partly stay in cache
@@ -130,19 +137,79 @@ Not shown by any of this: a loan itself. These are the two ends
 measured apart, and the stand-in below is the only loan this host
 can write direct.
 
-## The loan on the stand-in
+## The loan on the stand-in (13 October, 19:10 to 19:20)
 
-(In hand, 13 October, 19:10: `plans/16k-36-loan8192-sgl.plan`
-through `sweep.sh`, a loan cell with a budget of 16 WRITEs and its
-copy twin, one port, the backing file on `/hs/nvme0`, the counter
-every 5 s. To be added here.)
+`plans/16k-36-loan8192-sgl.plan` through `sweep.sh`: a loan cell
+with a budget of 16 WRITEs and its copy twin, one port (a), sixteen
+connections, 1 MiB held buffer, rings of 256, the linger at 50 us,
+NVMe/TCP on this host in front of a 16 GiB file on `/hs/nvme0`. The
+counter every 5 s through both cells (`perf stat -I 5000`), with the
+port's bytes and the drive's beside it; a cell is 120 s.
 
-Read it knowing what it is: NVMe/TCP on the same host takes the
-loaned pages as they are and then copies them once into its own
-buffers on the way to the file, on the same CPUs. So its requests
-to memory are a copy's, made later and by someone else. It shows
-that a loaned WRITE is written direct and what the loan path itself
-holds, not what an SGL drive will see.
+    SGL_BACKING=/hs/nvme0/zcbudget-nvmet.img NULLB_MIB=16384 HW_ANY_MTU=1 RX_LINGER_US=50 PLACE=1 \
+        PRP_DIR=/hs/nvme0/zcbudget STEP_JOBS=16 STEP_BS=8M ./sweep.sh $L/xeu-16k-464-loanmem-1 plans/16k-36-loan8192-sgl.plan
+
+| | the loan | its copy |
+|---|---|---|
+| GB/s over the cell (fio) | 11.42 | 7.13 |
+| how the WRITEs were issued | direct, all 1,466,728 | direct, all 976,208 |
+| WRITEs that held more than they were charged | 0 | |
+| region pages in use at most | 4878 (76 MiB) | 3261 (51 MiB) |
+| client retransmits, timeouts | 11,035, 0 | 268,691, 5 |
+| the stretch the counter is read over | 110 s at 10.3 to 12.0 GB/s | 30 s at 10.3 to 12.0 GB/s |
+| requests to memory a second | 0.70e9 | 1.06e9 |
+| **for each line of payload** | **3.99** (3.92 to 4.15) | **5.72** (5.67 to 5.96) |
+| lines filled into the cache, a line of payload | 3.05 | 4.66 |
+| lines the cores count fetched from beyond the L3 | 3.00 | 4.09 |
+
+- **A loaned WRITE is still written direct, every one**, on build
+  464 with the charge learned by the kernel, the scripts reaching
+  the client by its management address and the backing file on one
+  drive. Nothing held more than it was charged.
+- **The loan asks 1.7 fewer requests of memory for each line than
+  its copy** (3.99 for 5.72), which is about what a copy was found
+  to cost by itself (2.17 a line on two ports to the drives).
+- **The stand-in is most of both figures.** About 4 requests a line
+  are there with no copy by nfsd at all: NVMe/TCP on the same host
+  sends the loaned pages through TCP to itself and receives them
+  into its own buffers before the file is written. It is a copy
+  made later by someone else, and then some. So the 3.99 is not
+  what an SGL drive would see; the calibration above (about 0.1 to
+  1.6) is the better guide to that, and this run's use is the
+  difference between the two cells.
+- **One drive holds both cells to about 11 GB/s**, where the stripe
+  let the stand-in reach 20 to 22. The loan held to that for the
+  whole cell. The copy did not: its cell averaged 7.13 with 268
+  thousand retransmits, and only 30 s of it were steady enough to
+  read the counter over. The drive was past its fast region by then
+  (the loan's cell had just written 1.3 TB to it), so the copy's
+  rate here is not a finding; its requests a line, read over the
+  steady stretch at the loan's rate, are.
+- The loan held 76 MiB of the region, more than twice the cache,
+  so much of what it received was evicted before the stand-in took
+  it. How much a loan holds in front of drives that finish a write
+  quickly is the open figure.
+
+Read with the five mesh events, so each counted 40% of the time.
+The samples are `$L/loanmem-1.cmn.txt` (the counter),
+`loanmem-1.srv.txt` (the port) and `loanmem-1.drv.txt` (the drive
+and the region).
+
+## What is not measured, and cannot be on this host
+
+A loan written direct to a drive that takes arbitrary pieces, with
+nothing in between. These drives need whole pages, so a loan to
+them goes through the page cache (a copy, later); the stand-in adds
+its own. What this host can still give:
+
+- the stand-in pair again with the backing file's drive rested and
+  each cell kept inside its fast region (`STEP` cells are 120 s; a
+  shorter one would need `run-budget.sh` changed), for a copy
+  figure at a steady rate;
+- how the loan's footprint moves with its budget (4, 8, 16 WRITEs)
+  and what that does to the requests a line, since the footprint
+  against the cache is what the calibration says matters;
+- the same pair on two ports, which `sweep.sh` does not do.
 
 ## The battery, for this kernel and the next
 
