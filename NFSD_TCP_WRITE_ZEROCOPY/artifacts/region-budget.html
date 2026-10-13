@@ -324,6 +324,19 @@
     <h3 style="margin-top:26px">Two ports are at the machine's copy ceiling</h3>
     <p>A standalone copy between buffers larger than the caches reaches 62 to 68 GB/s on this machine with 8 CPUs and no more with 48. Copied in 7,740-byte pieces, as frames arrive here, it reaches 60.1. Two ports of NFS carried 59.6 to 61.0 in seven runs, with nfsd's CPUs and the rings' CPUs each about half idle. The limit is something the CPUs share, most likely memory bandwidth. Past it the routes are to fetch less memory for each line of payload (NFS fetches 2.2 lines, the bare copy 1.1) or not to copy, which is the loan.</p>
 
+    <h3 style="margin-top:26px" id="fq2">Pacing at the client is worth 0.5 GB/s on two ports, not 2</h3>
+    <p><code>fq</code> on the client's ports was made part of the two-port setting late on 11 October, when it looked to be worth 2 to 4 GB/s. That was measured with the drives flushing on every COMMIT and with runs of twice the drives' fast region, and at the setting finally chosen it rested on two runs against seven that spread over 6 GB/s. Compared again on 13 October, by turns, every run inside the fast region:</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:520px">
+      <thead><tr><th>The client's queueing</th><th>GB/s, two ports</th><th>Middle</th></tr></thead>
+      <tbody>
+        <tr><td><code>fq</code>, which paces each connection</td><td class="c" style="white-space:normal">60.74 &middot; 60.68 &middot; 60.72 &middot; 59.67</td><td class="r">60.7</td></tr>
+        <tr><td><code>fq</code> with pacing off</td><td class="c" style="white-space:normal">60.29 &middot; 60.29 &middot; 59.90</td><td class="c">60.3</td></tr>
+        <tr><td><code>fq_codel</code>, the client's default</td><td class="c" style="white-space:normal">60.16 &middot; 60.20 &middot; 59.96</td><td class="c">60.2</td></tr>
+      </tbody>
+    </table></div>
+    <p>So a client left as it comes carries two ports within half a GB/s of the best. That matters beyond the rate: about one two-port run in ten has had one port go silent for 25 seconds, and what is known of it so far is that the client's own pacing is what holds the port at a trickle once it has begun. Whether it happens at all without pacing is being measured.</p>
+    <p class="note">Ten runs so far of a batch of 24. The account of the silent port is <code>NFSD_TCP_WRITE_ZEROCOPY/SILENT-PORT.md</code>.</p>
+
     <h3 style="margin-top:26px" id="four">The last 4% of the copy: real, accounted for, and left alone for the loan's sake</h3>
     <figure class="aside-fig"><img src="droids.gif" width="640" height="330" alt="Obi-Wan Kenobi waving his hand at a stormtrooper: these are not the droids you are looking for"><figcaption>This is not the 4% you are looking for.</figcaption></figure>
     <p>A bare copy on this machine carries 62.5 GB/s when it copies whole megabytes and about 59 when it copies as NFS does, a frame at a time out of 8192-byte receive buffers. That gap was traced on 13 October and all of it is explained. <strong>The processor's prefetcher runs about 25 cache lines past the end of every frame's buffer.</strong> When the buffer copied next is not the next one in memory, those lines are fetched for nothing.</p>
@@ -441,7 +454,7 @@
         <tr><td>nfsd threads</td><td class="c" style="white-space:normal">512, all on CPUs 8 to 55</td><td>the tuning service</td></tr>
         <tr><td>nfsd write mode, <code>io_cache_write</code></td><td class="c">2 (direct)</td><td>the tuning service</td></tr>
         <tr><td>Deferred skb frees, <code>net.core.skb_defer_max</code></td><td class="c">128</td><td>the default</td></tr>
-        <tr><td>Client</td><td class="r" style="white-space:normal">nconnect 16 to each port, 1 MiB wsize, MTU 9000, <code>fq</code></td><td class="x" style="white-space:normal">test harness sets <code>fq</code>, per run</td></tr>
+        <tr><td>Client</td><td class="r" style="white-space:normal">nconnect 16 to each port, 1 MiB wsize, MTU 9000, <code>fq</code></td><td class="x" style="white-space:normal">test harness sets <code>fq</code>, per run. Worth about 0.5 GB/s over the client's default (<a href="#fq2">below</a>)</td></tr>
         <tr><td>Storage</td><td class="r" style="white-space:normal">four NVMe drives for each port, an XFS on each, no MD</td><td class="m" style="white-space:normal">mounted by hand after a boot. Two stripes of four until the evening of 12 October</td></tr>
         <tr><td>Length of a run</td><td class="r" style="white-space:normal">45 s counted after a 15 s warm-up: under 600 GB to each drive</td><td style="white-space:normal">the test harness</td></tr>
         <tr><td>Drives' write cache, as Linux sees it</td><td class="r" style="white-space:normal">write through: no cache flush is sent</td><td style="white-space:normal">a udev rule, and the test harness at each run</td></tr>
@@ -536,7 +549,7 @@
         <tr><td>Held receive buffer, per connection</td><td class="c">1 MiB</td><td class="r">384 KiB</td></tr>
         <tr><td>Receive rings, per port</td><td class="c">4 of 256</td><td class="r">4 of 128</td></tr>
         <tr><td>Linger</td><td class="c">50 &micro;s</td><td class="r">0</td></tr>
-        <tr><td>Client's queueing</td><td class="c"><code>fq_codel</code>, as found</td><td class="r"><code>fq</code> (worth about 2 GB/s)</td></tr>
+        <tr><td>Client's queueing</td><td class="c"><code>fq_codel</code>, as found</td><td class="r" style="white-space:normal"><code>fq</code> (worth about 0.5 GB/s, measured again on 13 October; the 2 GB/s of 11 October was with the drives flushing and runs twice the drives' fast region)</td></tr>
         <tr><td>Second port's ring interrupts</td><td class="m">not in use</td><td class="r">CPUs 56 to 63, off nfsd's</td></tr>
         <tr><td>Receive memory in use</td><td class="c">24 to 25 MiB</td><td class="r">21 to 22 MiB for both</td></tr>
         <tr><td>Drives' write cache, as Linux sees it</td><td class="c">write through: no flush sent</td><td class="r">the same</td></tr>
