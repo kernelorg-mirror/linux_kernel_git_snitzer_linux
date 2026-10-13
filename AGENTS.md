@@ -163,6 +163,17 @@ stepped down`) before believing its figure. `xeu-rig/drvchar.py` is
 the local probe; the account is "What a drive takes" in
 `NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`.
 
+**Do not optimize copy mode at the loan's expense (Mike,
+2026-10-13).** The loan path is to stay as fast as it can be, for
+NVMe drives with SGLs when they come. Copy mode is at what a
+piecewise copy carries on this machine (60 to 61 GB/s on two ports),
+and the last 4% of it would take receive buffers in blocks, pools
+outside the region or packed payloads, each of which a loan pays
+for. Keep the receive path as a loan needs it: one frame to a
+buffer, pages returned last in, first out, all inside the region.
+The account is "The 4%" in
+`NFSD_TCP_WRITE_ZEROCOPY/TRACING-NFSD-AND-XEU-MEMCPY-TIME.md`.
+
 **The primary focus from the evening of 2026-10-08 (Mike): NFS writes
 from the remote client as fast as they will go, near line rate.** On
 tardis1 start at the first section of
