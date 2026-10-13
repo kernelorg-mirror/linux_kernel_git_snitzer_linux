@@ -1,0 +1,9 @@
+// On each ring's CPU: how many frames in a row belong to one connection (by the frame's RSS hash).
+kprobe:dev_gro_receive /cpu < 8 || cpu >= 56/
+{
+	$skb = (struct sk_buff *)arg1;
+	$h = $skb->hash;
+	if ($h == @h[cpu]) { @n[cpu]++; }
+	else { if (@n[cpu] > 0) { @runs = lhist(@n[cpu], 0, 40, 1); @frames_in_runs_of[@n[cpu] >= 8 ? 8 : (@n[cpu] >= 4 ? 4 : (@n[cpu] >= 2 ? 2 : 1))] = sum(@n[cpu]); } @h[cpu] = $h; @n[cpu] = 1; }
+}
+interval:s:5 { clear(@h); clear(@n); exit(); }
