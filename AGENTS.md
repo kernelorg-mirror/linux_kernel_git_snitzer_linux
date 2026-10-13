@@ -163,6 +163,19 @@ stepped down`) before believing its figure. `xeu-rig/drvchar.py` is
 the local probe; the account is "What a drive takes" in
 `NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`.
 
+**From the evening of 2026-10-13, on tardis1 start at the first
+section of
+[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md),
+"13 October, evening: read this first".** It is the handoff: where
+copy mode stands (60.41 GB/s on two ports, 47.39 on one, the limit
+on two ports being memory with the DIMMs fully populated), the two
+pinned command lines, the rules for a run, what was decided that day
+and is not to be undone from older text (`svc_tcp_rx_lowat=0`, no
+`fq` on the client, the client reached at its management address
+10.20.12.106), and **the next step (Mike): what a loaned byte costs
+in memory**. The paragraphs below that name earlier starting points
+are history.
+
 **Do not optimize copy mode at the loan's expense (Mike,
 2026-10-13).** The loan path is to stay as fast as it can be, for
 NVMe drives with SGLs when they come. Copy mode is at what a

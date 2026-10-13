@@ -1,4 +1,157 @@
-# 12 October, 22:30: read this first
+# 13 October, evening: read this first
+
+Written at the end of 13 October on tardis1 (build 464, 16 KiB
+pages) as the handoff. Everything below this section is dated
+history and says so; where it differs from this section, this
+section is right.
+
+## Where it stands
+
+Copy mode, NFS WRITEs from the one client, durable, every run inside
+the drives' fast region:
+
+| | best run | runs of the setting | setting |
+|---|---|---|---|
+| two ports | **60.41 GB/s** | 59.96 to 60.41 in seven | `RCVBUF=393216 ENTRIES=128 LINGER=0 LOWAT=0 ./twoport.sh <out> ab` |
+| one port, on all eight drives | **47.39 GB/s** | 46.5 to 47.4 in four | `FS_A="/hs/nvme0 ... /hs/nvme7" RUNTIME=60 LOWAT=0 ./twoport.sh <out> a` (`FS_B=`, `b` for the other) |
+
+- Two ports: 384 KiB held buffer, four rings of 128 a port, no
+  linger. One port: the values in `/etc/modprobe.d/sunrpc.conf` (1 MiB,
+  linger 50) and four rings of 256. Both: `svc_tcp_rx_keep=1`,
+  `svc_tcp_rx_lowat=0`, 8192-byte receive buffers at an MTU of 7792,
+  512 nfsd threads on CPUs 8-55, the client untouched.
+- 61.02 GB/s was carried once on two ports with `fq` on the client,
+  which is no longer part of the setting and is worth nothing
+  measurable.
+- **The limit on two ports is memory.** The DIMMs are fully
+  populated (Mike: four at 5200 MT/s, 166 GB/s in theory). A copy
+  sends each byte through memory twice, so it cannot pass 83 GB/s
+  here and reaches 62 to 68 in a bare benchmark, 60.1 in frame-sized
+  pieces. NFS on two ports is at that, asking of memory what the
+  saturated benchmark does (2.05e9 requests a second against 1.91e9).
+  Nothing that adds parallelism around the copy moves it.
+- One port is at 95% of what its wire carries with no NFS (49.8).
+
+## Next: what a loaned byte costs in memory (Mike, 13 October)
+
+With no copy a payload byte still enters memory once from the card
+and leaves once to a drive. If both count against the same 166
+GB/s, a loan is bounded near 83 GB/s here too and not at the card's
+99. To measure: `arm_cmn/hnf_mc_reqs/` (requests to the memory
+controller) during a loan written direct, for each line of payload,
+beside the same figure for its copy. A copy on two ports costs 2.2
+requests a line (`cmn-two-1`); the method is "The memory itself" in
+`../TRACING-NFSD-AND-XEU-MEMCPY-TIME.md`:
+
+    perf stat -a -e arm_cmn/hnf_mc_reqs/,arm_cmn/hnf_cache_miss/,l3d_cache_lmiss_rd,bus_access_wr -- sleep 10
+
+What to know before starting, none of it tried since 10 October:
+
+- A loan written direct needs storage that takes arbitrary pieces.
+  These drives need whole pages, so the stand-in is NVMe/TCP on this
+  host in front of a file. The last loan runs were
+  `plans/16k-36-loan8192-sgl.plan` through `sweep.sh`, driven by
+  `/var/tmp/zc-run-logs/xeu-16k-463-loan8192-factor-driver.sh`
+  (20.2 to 22.7 GB/s, every WRITE direct).
+- That driver names `/hs/stripe`, which is gone: there is no MD and
+  it is not to be used. The backing file has to go on one drive's
+  filesystem (`SGL_BACKING=/hs/nvmeN/...`), which holds the loan to
+  that drive's rate and its 625 GB. The rate does not matter for
+  this: the figure wanted is requests for each line of payload.
+- `sweep.sh` is one port, and since this evening reaches the client
+  by its management address with the port's address passed as
+  `CLIENT_ADDR`. That path is changed and not yet run.
+- The driver sets a credit factor that no longer exists
+  (`svc_tcp_rx_credit_factor` went on 11 October; the kernel learns
+  the charge).
+- The stand-in copies once more on its way to the file, on the same
+  CPUs. Its requests to memory are the stand-in's as well as the
+  loan's; the copy cell beside it is what to compare with.
+- Read whether the card's writes into memory and a drive's reads
+  from it are counted at all: a run of plain TCP into the port
+  (`iperf2port.sh`, receivers that discard) and a local direct read
+  or write of a drive, each with the counter, would say.
+
+## The rules
+
+- **A run stays inside the drives' fast region**: about 625 GB a
+  drive from its last idle of 20 s. `twoport.sh` defaults to
+  `WARM=15 RUNTIME=45` after `REST=30`; a traced run
+  (`PROFILE=1`, `RUNTIME=55`) wants `WARM=10`. Read `drives.txt` of
+  every run (what each drive wrote, and `no drive stepped down`)
+  before its figure.
+- **The drives are `write through`** (Mike: "never forget this").
+  `./drive-cache.sh` prints it; `twoport.sh` applies it.
+- **Nothing connected before a port is reconfigured or `xeu`
+  reloaded**: `ss -tn state established '( sport = :2049 )'`.
+- **The client is reached at 10.20.12.106** (`CLIMGMT`), not over a
+  port under test.
+- **Copy mode is not optimized at the loan's expense** (Mike): one
+  frame to a buffer, pages returned last in first out, all inside
+  the region.
+- After a boot: `mount -o noatime /dev/nvmeNn1 /hs/nvmeN` for 0 to
+  7; the region and the second port's MTU are set by hand
+  (`port-setup.sh`).
+
+## Decided on 13 October: do not undo from older text
+
+| what | now | why |
+|---|---|---|
+| `svc_tcp_rx_lowat` | 0, in `modprobe.d` | 131072 halves wakeups on two ports and costs 2 to 3 GB/s; about 1 on one port |
+| `fq` on the client | not set; the client keeps `fq_codel` | level with it over 19 runs; the 2 GB/s of 11 October was on flushing drives and runs past the fast region |
+| ssh to the client | the management address | the harness's traffic was on port a |
+| rings a port | four of 128 on two ports | eight of 64 are level in four layouts, never better |
+| `svc_tcp_rx_copy_threads` | 0 | level on four rings, 3 GB/s down on eight, thousands of ring drops |
+| the copy's last 4% | left alone | every way to it costs the loan |
+| MD raid0 | not used, not compared | Mike |
+
+## Set aside, with what would reopen it
+
+**The silent port**: a port carrying nothing for about 25 s while
+the other carries on, five times by 13 October, on either port, all
+with `fq`. Not the drives, the card or the server's software: the
+client's transmit side for the port stops for about 1.4 s and `fq`'s
+pacing then holds it at a trickle. Not seen in the 21 runs since,
+under any queueing. **Chase it if it shows again** (Mike):
+`../SILENT-PORT.md` has the account and what to do, and
+`$L/silent-driver.sh` runs with both ends sampled.
+
+Noted and not looked into: port a alone drops 33 to 1,087 frames at
+the card's FIFO in a one-port run and port b none; port a's link is
+optical with 1.5 million bits a second corrected by FEC at the
+client, port b's is 2 m of copper with none.
+
+## Where each account is
+
+| document | what |
+|---|---|
+| `../XEU_CONVERGENCE.md` | the dated accounts; 13 October's are "What a drive takes", "The 128 KiB mark off and on", "Eight receive rings again" and "The client's queueing again" |
+| `../XEU-4-VS-8-RING.md` | where interrupts and CPUs sit with four rings and eight, the eight-ring layouts, copy threads |
+| `../TRACING-NFSD-AND-XEU-MEMCPY-TIME.md` | the receive path traced at 60 GB/s, the memory's limit, where the copy's 4% goes and why it is left |
+| `../SILENT-PORT.md` | the silent port |
+| `../TARDIS1_COPY_PERFORMANCE.md` | the copy benchmark of 12 October |
+| `../LOST-TIME-CHASING-SPENT-DRIVES.md` | what 12 October's slow drives skewed; closed |
+| `results-twoport-464.tsv` | a line for every two-port and one-port run |
+| the artifact | "NFSD Receive Region Budget", https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g, source `../artifacts/region-budget.html` (its `droids.gif` is published beside it and is not in the tree) |
+
+Tools new on 13 October, all in this directory: `drvchar.py` (a
+drive's fast region), `stall-sample.py` and `stall-read.py` (both
+ends of both ports five times a second), `copy-adjacency.bt` and
+`ring-flow-runs.bt` (where the copy's pieces come from, and a
+connection's runs of frames on a ring), `copybench.c` with `wr`,
+`rd` and `RUN=`; `twoport.sh` gained `LOWAT=`, `TXN=`, `NFSD_CPUS=`,
+`QDISC=fqnp` and a `PROFILE=1` that reports by group of CPUs.
+
+The host as left: no NFS connections, nothing exported, both client
+ports on `fq_codel`, the drives `write through`, the live
+`svc_tcp_rx_lowat` 0, four rings of 256 on each port.
+
+# 12 October, 22:30, with 13 October's notes as they were added (history: the section above supersedes it)
+
+Its figures for two ports (58.5), for one port on four drives (42.2)
+and "two `sunrpc` settings pinned" are of 12 October; the command
+lines below that pass `QDISC=fq` are of then.
+
 
 **The drives are characterised (12 October, 21:07 to 22:30 by
 tardis1's clock), and a run has to stay inside their fast region.**
