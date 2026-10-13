@@ -129,8 +129,7 @@ the 32 MiB L3.
   either day. They are not what holds two ports.
 - **The eight-ring layout that was run is lopsided.** It relieves
   the receive CPUs and loads four CPUs with a port's whole transmit
-  side plus nfsd. Whether that costs the eight-ring runs anything
-  has not been tested.
+  side plus nfsd. Tested since, below: it costs nothing.
 - **The four-ring layout wastes the other way**: the transmit CPUs
   of each port sit about 85% idle beside receive CPUs near full.
 - **Transmit queue selection (XPS)** is as the driver leaves it and
@@ -144,17 +143,108 @@ the 32 MiB L3.
   ring whose interrupt is on a third CPU. Nothing ties the three
   together today.
 
-## Layouts not yet run
+## The eight-ring layouts, run (13 October, 11:40 to 12:22 by tardis1's clock)
 
-- Eight rings with the transmit interrupts spread over four or eight
-  CPUs taken out of nfsd's set (nfsd on 12 to 51, say), so that no
-  transmit CPU is shared with nfsd.
-- Eight rings with each ring's receive and transmit on one CPU,
-  inside the drives' fast region.
+Six layouts by turns in two rounds, two ports, mark off, 60 s of
+idle between runs, every run inside the drives' fast region. Two
+knobs were added to `twoport.sh` for it: `TXN=<n>` puts a port's
+transmit interrupts on `<n>` CPUs from `TXIRQ_A`/`TXIRQ_B` and not
+two, and `NFSD_CPUS=<list>` moves nfsd's threads for the run and
+puts them back on 8 to 55 after it.
+
+| layout | Rx interrupts | Tx interrupts | nfsd's CPUs |
+|---|---|---|---|
+| 4 x 128 (pinned) | every other ring CPU | the ring CPUs between | 8-55 |
+| 8 x 64, Tx on 2 | all eight ring CPUs | 8-9 and 54-55, shared with nfsd | 8-55 |
+| 8 x 64, sharing | all eight ring CPUs | the same CPU as the ring's Rx | 8-55 |
+| 8 x 64, Tx on 4 of their own | all eight ring CPUs | 8-11 and 52-55 | 12-51 |
+| 8 x 64, Tx on 8 of their own | all eight ring CPUs | 8-15 and 48-55 | 16-47 |
+| 4 x 128, nfsd on 12-51 (control) | as pinned | as pinned | 12-51 |
+
+The control is there because the two "of their own" layouts take 8
+and 16 CPUs from nfsd: it shows what that costs by itself. Each cell
+is round 1, round 2:
+
+| layout | GB/s | ring drops, both ports | client retransmits | region pages | ring CPUs: softirq, idle | Tx-only CPUs: softirq, idle | nfsd: sys, idle | threads woken a WRITE |
+|---|---|---|---|---|---|---|---|---|
+| 4 x 128 | 60.06, 61.02 | 5, 25 | 5, 25 | 1200, 1168 | 48, 50 / 51, 50 | | 48, 51 / 33, 30 | 13.7, 13.5 |
+| 8 x 64, Tx on 2 | 59.45, 60.27 | 64, 102 | 64, 115 | 1391, 1402 | 58, 60 / 42, 40 | | 47, 51 / 32, 29 | 13.8, 13.1 |
+| 8 x 64, sharing | 59.29, 59.55 | 213, 226 | 236, 242 | 1371, 1372 | 70, 71 / 29, 29 | | 50, 52 / 32, 30 | 13.9, 13.7 |
+| 8 x 64, Tx on 4 of their own | 59.25, 58.62 | 78, 27 | 86, 28 | 1404, 1406 | 59, 57 / 41, 43 | 13, 14 / 87, 86 | 65, 62 / 19, 22 | 12.8, 13.1 |
+| 8 x 64, Tx on 8 of their own | 52.92, 44.70 | 10, 29 | 13, 57 | 1407, 1457 | 49, 39 / 51, 61 | 3, 3 / 96, 97 | 89, 65 / 5, 20 | 5.8, 8.4 |
+| 4 x 128, nfsd on 12-51 | 59.62, 59.13 | 22, 12 | 22, 12 | 1248, 1216 | 49, 48 / 50, 52 | 0, 0 / 99, 100 | 67, 63 / 18, 21 | 12.0, 12.8 |
+
+The ring CPUs' figure for four rings averages a port's receive CPUs
+(80 to 89% in softirq) with its transmit CPUs (6 to 23%). In the
+"Tx on 2" layout the nfsd figure includes CPUs 8, 9, 54 and 55,
+which carry transmit as well.
+
+- **No eight-ring layout beats four rings.** The best, transmit on
+  two CPUs shared with nfsd, is 59.5 to 60.3 (four runs that day:
+  59.5, 59.9, 59.9, 60.3) against 59.6 to 61.0 for four rings (six
+  runs: 59.6, 60.0, 60.1, 60.7, 60.7, 61.0). **61.02 is the best
+  two-port figure so far**, on the pinned setting.
+- **Where the transmit interrupts go makes no difference to the
+  rate** while nfsd keeps its CPUs: sharing two of nfsd's, sharing
+  the receive CPU, or four of their own are within 0.2 GB/s in round
+  1. A port's whole transmit side is 13 to 14% of four CPUs, about
+  half a CPU. So the lopsidedness of the layout run earlier was not
+  what held eight rings level.
+- **Receive and transmit on one CPU drops the most**, 213 and 226
+  frames a run with the ring CPUs 70% in softirq, and is still at
+  59.3 to 59.6.
+- **nfsd's CPUs do matter.** On 40 (12 to 51) it is 63 to 67% in the
+  kernel and about 20% idle, and the four-ring rate is 59.1 to 59.6
+  where it is 60.1 to 61.0 on 48: about half to one GB/s. On 32 (16
+  to 47) it ran out in round 1, 89% in the kernel and 5% idle, at
+  52.9 GB/s, with wakeups down to 5.8 a WRITE because a thread
+  finds data already waiting. So 60 GB/s needs between 32 and 40 of
+  these CPUs for nfsd as it is.
+- **Sixteen transmit CPUs are 96 to 97% idle**, and the eight that
+  the control leaves empty are 99 to 100% idle. With four rings there
+  are CPUs to spare outside nfsd's set; with eight there are none
+  unless nfsd gives them up.
+- No drive stepped down in the twelve runs.
+
+### The silent port again, in round 2 of "Tx on 8 of their own"
+
+`r13b-8x64-tx8own-2` carried 44.70 GB/s, port a 13.3 and port b
+31.4, and that is not a layout result. From second 30 to second 54
+of the run port a's drives wrote 0 to 2 GB/s between them (one
+second at 23), then 27 again; port b's rose from 26 to 37 while it
+was out. It is what `stall-two-3` showed on 12 October, the same
+port and the same 25 s:
+
+- Not the drives: port a's four were 26% busy and none stepped down.
+- Not loss at the server's card: no FIFO drops, 16 ring drops on
+  port a, 57 client retransmits in the 10 s window.
+- The harness's socket snapshots fell inside the silence. On the
+  server, port a's sockets had empty receive queues (`r0`) and had
+  last received 0.9 s before, with one or two packets counted as
+  dropped by the socket (`d1`, `d2`). On the client, 15 of port a's
+  16 connections had retransmission timers of 1.1 to 2.9 s (0.2 s is
+  usual), congestion windows of 26 to 42 segments, 13 to 23 segments
+  unacknowledged and 1.0 to 1.5 MB not yet sent.
+- The worst write on port a waited 17.5 s (6.5 s on port b).
+
+The stall watchers were not running. nfsd was on 32 CPUs in this
+layout and had run out of CPU in round 1, which may be what provokes
+it; one occurrence does not show that. Mike had set the silent port
+aside until it showed again. From the next batch both watchers
+(`stall-watch-server.sh`, `stall-watch-client.sh`) run beside every
+run.
+
+The runs are `r13b-*` in `xeu-rig/results-twoport-464.tsv`
+(`$L/rings13b-driver.sh`).
+
+## Layouts not run
+
 - Four rings with the receive interrupts on all eight of a port's
   CPUs is not possible without RPS: a ring has one interrupt. RPS, or
   threaded NAPI, would be the way to spread one ring's receive work
   over two CPUs.
+- Eight rings of 128 at the 384 KiB held buffer, inside the drives'
+  fast region (47.0 GB/s at 34 MiB on 12 October, on slow drives).
 
 ## How to run one
 
@@ -168,6 +258,8 @@ the 32 MiB L3.
 `geometry.txt` of a run has where every interrupt was put,
 `window.txt` each ring's share, `srv-mpstat.txt` every CPU, and
 `drives.txt` what each drive wrote: read its last line (`no drive
-stepped down`) before the figure. `PROFILE=1` adds a 10 s `perf
+stepped down`) before the figure. `TXN=4` with `TXIRQ_A=8
+TXIRQ_B=52` spreads a port's transmit interrupts over four CPUs, and
+`NFSD_CPUS=12-51` keeps nfsd off them for the run. `PROFILE=1` adds a 10 s `perf
 record` and `perf stat` mid-run. `$L/rings13-driver.sh` ran the
 table above.
