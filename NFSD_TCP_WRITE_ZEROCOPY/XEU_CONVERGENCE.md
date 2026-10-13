@@ -4067,6 +4067,54 @@ for a run, a different one each time, an hour after its format. The
 worst write latency in the three was 0.6 s; the stalls of seconds
 did not appear.
 
+### The two things that pull a two-port run down: the drives' slow state, and a port gone silent (12 October, 19:15 to 21:45)
+
+Twenty-three two-port runs on the eight separate filesystems, five
+sampled once a second (`xeu-rig/stall-sampler.sh`: each port's ring
+bytes, each drive, nfsd's threads by state; the client's TCP
+counters beside it) and ten watched for a port whose rate collapses
+(`stall-watch-server.sh`, `stall-watch-client.sh`). Totals 37.4 to
+52.6 GB/s, against 58 on rested drives. Two different things:
+
+**1. A drive steps down to about 4.5 GB/s and stays there.** A
+drive's rate by second in `stall-two-1`: `7 7 7 7 8 7 7 8 7 7 7 7 7
+7 4 9 5 3 5 4 4 4 4 4 4 4`, then 4 to the end at 94% busy. In that
+run four of the eight were in that state and the total was 41.6. In
+`catch-two-3` and `-7` both ports step down together twice, 24 and
+27 GB/s to 18 and 20 to 14 and 16, and port a to 10: the drives
+going to 4.5, then 3.5, then 2.5 GB/s each. Two ports at 58 GB/s
+need 7.25 GB/s of every drive, which they give from the fast state
+only (10.7 fresh, about 4.5 sustained): this is what the afternoon's
+decline was, with batches back to back and no rest. Which drive, of
+the fourteen runs with per-drive figures (slow: about 4.5 GB/s with
+neighbours at 6 to 7.5): nvme0 4, nvme1 0, nvme2 5, nvme3 6, nvme4
+6, nvme5 6, nvme6 1, nvme7 3. Not one bad drive and not one port's.
+Same model and firmware (830ZRR02), each on its own 32 GT/s x4
+link. The long write latencies at the end of those runs (12 to 26
+s) come with it.
+
+**2. A port's connections go silent for seconds, with the client's
+retransmission timers firing.** Caught once, in `stall-two-3`: for
+25 s port a received 0 to 4 GB/s and its four drives wrote nothing,
+while port b carried 24 to 39 GB/s through the same CPUs and
+threads. The server's port dropped nothing (FIFO 0, 15 at the
+rings in 70 s). On the client `TCPTimeouts` rose by 10 to 38 a
+second and segments retransmitted by 0 to 24, often 0: a timer
+that fires and sends nothing is what Linux does when the segment is
+still in the sender's own queue. So the leading suspect is the
+client's transmit path for that port (its qdisc or the NIC's
+transmit queues); the client's queues were not sampled in that
+run, so it is not shown. It did not come back in the ten watched
+runs. This is what earlier accounts call RTO episodes and stalls
+of port a (16.7 s in `fmt-two-2`, on the stripes).
+
+**For the next session:** rest the drives before measuring and keep
+a run inside their fast state (a shorter `RUNTIME`), or the drives
+decide every figure. The watchers dump the client's qdisc, NIC
+counters and connections, and the server's, when a port that was
+carrying load falls under 2 GB/s for three seconds inside the
+measured part of a run.
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
