@@ -264,6 +264,19 @@ the region: two ports 57.0, 58.0, 58.2 GB/s, one port 45.2 to 46.8.
 drive was slow in a run because the run went past 625 GB and then
 paused, whatever came before it.
 
+**The mark of item 3 and item 4 are done (13 October): "The 128 KiB
+mark off and on" in `XEU_CONVERGENCE.md`.** The mark costs 2 to 3
+GB/s on two ports and about 1 on one, and is 0 in `modprobe.d`; two
+ports carry 60.7 GB/s without it and one port 47.4. The artifact has
+a section for 13 October that says which of the conclusions above
+stand.
+
+**Eight rings of item 3 are done too (13 October): "Eight receive
+rings again" in `XEU_CONVERGENCE.md`.** Eight of 64 are level with
+four of 128 (59.5 to 60.5 against 59.6 to 60.7 GB/s) and hardly drop
+inside the drives' fast region. Left: raid0 against separate
+filesystems, if it matters, and item 5.
+
 1. The drives, locally and with no NFS: what a rested drive takes
    at 7 GB/s and at 11 before it steps down, and how long a rest
    restores it. `/var/tmp/zc-run-logs/drvprobe.sh <tag> <dir> <secs>`

@@ -34,6 +34,7 @@
 #   RCVBUF=<bytes>   svc_tcp_rx_rcvbuf, the held receive buffer
 #   LINGER=<us>      svc_tcp_rx_linger_us
 #   THREADS=<n>      svc_tcp_rx_copy_threads
+#   LOWAT=<bytes>    svc_tcp_rx_lowat, the mark a short WRITE's thread is woken at (0: off)
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
 #   TXIRQ_A=<cpu> TXIRQ_B=<cpu>  a port's Tx rings on two CPUs from <cpu>, and
@@ -72,7 +73,7 @@ cretr() { cl "awk '/^Tcp:/ && !h {for (i = 1; i <= NF; i++) if (\$i == \"Retrans
 
 SP=/sys/module/sunrpc/parameters
 declare -A SAVE
-for k in rcvbuf linger_us copy_threads; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k); done
+for k in rcvbuf linger_us copy_threads lowat; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k); done
 declare -A CDEV=([a]=ens3np0 [b]=ens6np0)
 setq() {	# setq <client dev> <codel|fq|fqNN>
 	case $2 in
@@ -82,7 +83,7 @@ setq() {	# setq <client dev> <codel|fq|fqNN>
 	esac
 }
 cleanup() {
-	for k in rcvbuf linger_us copy_threads; do echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
+	for k in rcvbuf linger_us copy_threads lowat; do echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
 	[ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} codel; done
 	# The RSS table may name rings that are going: spread it over four first.
 	[ -n "${RINGS:-}" ] && { for p in $PORTS; do ethtool -X ${DEV[$p]} equal 4 2>/dev/null; ip link set ${DEV[$p]} down; sleep 1; ethtool -L ${DEV[$p]} combined 4; ip link set ${DEV[$p]} up; done; sleep 7; for p in $PORTS; do "$RIG/ring-irqs.sh" ${DEV[$p]} ${IRQ0[$p]} > /dev/null; done; }
@@ -104,8 +105,9 @@ echo Y > /sys/module/xeu/parameters/rx_port_stats
 [ -n "${RCVBUF:-}" ] && echo $RCVBUF > $SP/svc_tcp_rx_rcvbuf
 [ -n "${LINGER:-}" ] && echo $LINGER > $SP/svc_tcp_rx_linger_us
 [ -n "${THREADS:-}" ] && echo $THREADS > $SP/svc_tcp_rx_copy_threads
+[ -n "${LOWAT:-}" ] && echo $LOWAT > $SP/svc_tcp_rx_lowat
 [ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} $QDISC || { echo "qdisc not set"; exit 1; }; done
-echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us) copy_threads $(cat $SP/svc_tcp_rx_copy_threads) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS" | tee -a geometry.txt
+echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us) copy_threads $(cat $SP/svc_tcp_rx_copy_threads) lowat $(cat $SP/svc_tcp_rx_lowat) keep $(cat $SP/svc_tcp_rx_keep) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS" | tee -a geometry.txt
 
 for p in $PORTS; do
 	d=${DEV[$p]}
@@ -206,12 +208,16 @@ drives() {
 		for m in ${m:-$b}; do awk -v d=$m '$3 == d {print d, $10, $13}' /proc/diskstats; done
 	done
 }
-for p in $PORTS; do drives $p > drives-$p.0; done
+now() { date +%s.%N; }
+# WRITEs, threads woken and context switches, for what a WRITE costs in wakeups.
+nfsdc() { echo "$(awk '/^proc3/{print $10}' /proc/net/rpc/nfsd) $(awk '!/^#/{s += $4} END {print s}' /proc/fs/nfsd/pool_stats) $(awk '/^ctxt/{print $2}' /proc/stat)"; }
+for p in $PORTS; do drives $p > drives-$p.0; done; TD0=$(now)
 ss -tmi '( sport = :2049 )' > ss-server.txt 2>&1
 cl "ss -tmi '( dport = :2049 )'" > ss-client.txt 2>&1
-declare -A F0 T0 B0 S0
-for p in $PORTS; do d=${DEV[$p]}; F0[$p]=$(fifo $d); T0[$p]=$(ringdrop $d); B0[$p]=$(rxbytes $d); S0[$p]=$(ringshare $d); done
+declare -A F0 T0 B0 S0 TB0
 R0=$(cretr)
+for p in $PORTS; do d=${DEV[$p]}; F0[$p]=$(fifo $d); T0[$p]=$(ringdrop $d); B0[$p]=$(rxbytes $d); TB0[$p]=$(now); S0[$p]=$(ringshare $d); done
+N0=$(nfsdc); TN0=$(now)
 mpstat -P ALL $W 1 > srv-mpstat.txt 2>&1 &
 if [ -n "${PROFILE:-}" ]; then
 	( sleep 10
@@ -222,31 +228,34 @@ if [ -n "${PROFILE:-}" ]; then
 fi
 cl "mpstat -P ALL $W 1" > cli-mpstat.txt 2>&1 &
 sleep $W
-for p in $PORTS; do drives $p > drives-$p.1; done
-R1=$(cretr)
+N1=$(nfsdc); TN1=$(now)
+for p in $PORTS; do drives $p > drives-$p.1; done; TD1=$(now)
 for p in $PORTS; do
-	paste drives-$p.0 drives-$p.1 | awk -v w=$W -v p=$p -v fs="${FS[$p]}" '
+	paste drives-$p.0 drives-$p.1 | awk -v w=$(echo "$TD1 - $TD0" | bc) -v p=$p -v fs="${FS[$p]}" '
 		{g = ($5 - $2) * 512 / w / 1e9; u = ($6 - $3) / w / 10; if (NR == 1 || g < gmin) gmin = g; if (g > gmax) gmax = g; if (u > umax) umax = u}
 		END {printf "drives of %s (%s): %d, each writing %.1f to %.1f GB/s, busiest %.0f%% busy%s\n", p, fs, NR, gmin, gmax, umax, (umax >= 90 ? " -- DRIVE-LIMITED" : "")}'
 done > drives.txt
 {
 	echo "port dev fio_GBps wire_GBps fifo_drops ring_drops ring_shares window_s"
 	for p in $PORTS; do
-		d=${DEV[$p]}; f1=$(fifo $d); t1=$(ringdrop $d); b1=$(rxbytes $d); s1=$(ringshare $d)
+		d=${DEV[$p]}; f1=$(fifo $d); t1=$(ringdrop $d); b1=$(rxbytes $d); tb1=$(now); s1=$(ringshare $d)
 		sh=$(paste <(tr ' ' '\n' <<< "${S0[$p]}") <(tr ' ' '\n' <<< "$s1") | awk 'NF == 2 {d[NR] = $2 - $1; s += d[NR]} END {for (i = 1; i <= NR; i++) if (d[i] != "") printf "%s%d", (i > 1 ? "/" : ""), 100 * d[i] / s + 0.5}')
-		echo "$p $d - $(awk -v b=$(( b1 - ${B0[$p]} )) -v w=$W 'BEGIN {printf "%.2f", b / w / 1e9}') $(( f1 - ${F0[$p]} )) $(( t1 - ${T0[$p]} )) $sh $W"
+		echo "$p $d - $(awk -v b=$(( b1 - ${B0[$p]} )) -v w=$(echo "$tb1 - ${TB0[$p]}" | bc) 'BEGIN {printf "%.2f", b / w / 1e9}') $(( f1 - ${F0[$p]} )) $(( t1 - ${T0[$p]} )) $sh $W"
 	done
 } > window.txt
+R1=$(cretr)
 echo "client retransmits in the window: $(( R1 - R0 ))" >> window.txt
+echo "$N0 $N1" | awk -v w=$(echo "$TN1 - $TN0" | bc) '{printf "nfsd in the window, a second: WRITEs %d, threads woken %d, context switches %d\n", ($4 - $1) / w, ($5 - $2) / w, ($6 - $3) / w}' >> window.txt
 wait
 wrote > wrote.1
 paste wrote.0 wrote.1 | awk -v lim=${DRIVE_GB:-600} '{g = ($4 - $2) * 512 / 1e9; printf "%s%s %.0f", (NR > 1 ? ", " : "written in the run, GB: "), $1, g; if (g > lim) o = o " " $1} END {printf "%s\n", (o ? " -- PAST THE FAST REGION:" o : "")}' >> drives.txt
 # A drive that fell under 65% of the busiest drive's median for five
-# seconds running, in what fio counted, stepped down.
-awk -v w=$WARM 'NR == 1 {for (i = 2; i <= NF; i += 3) {split($i, x, "_"); nm[i] = x[1]}; next} $1 > w + 3 {n++; for (i in nm) v[i, n] = $i}
+# seconds running while at least 85% busy, in what fio counted, stepped
+# down.  One that is slow and not busy is short of work, not slow.
+awk -v w=$WARM 'NR == 1 {for (i = 2; i <= NF; i += 3) {split($i, x, "_"); nm[i] = x[1]}; next} $1 > w + 3 {n++; for (i in nm) {v[i, n] = $i; u[i, n] = $(i + 1)}}
 	END {for (i = 2; i in nm; i += 3) {for (j = 1; j <= n; j++) a[j] = v[i, j]; asort(a); m[i] = a[int((n + 1) / 2)]; if (m[i] > M) M = m[i]}
 	     for (i = 2; i in nm; i += 3) {r = 0; s = 0
-		for (j = 1; j <= n; j++) {if (v[i, j] < 0.65 * M) {if (++r == 5 && !s) s = j - 4 + w + 3} else r = 0}
+		for (j = 1; j <= n; j++) {if (v[i, j] < 0.65 * M && u[i, j] >= 85) {if (++r == 5 && !s) s = j - 4 + w + 3} else r = 0}
 		if (s && m[i] > 0.5) o = o sprintf(" %s at %d s", nm[i], s)}
 	     print (o ? "STEPPED DOWN:" o : "no drive stepped down")}' drives-sec.tsv >> drives.txt
 for p in $PORTS; do cl "cat /tmp/twoport-$p.json" > fio-$p.json; done
@@ -271,7 +280,7 @@ for p in sys.argv[1:]:
 print("total %.2f GB/s" % tot)
 open('total.txt', 'w').write("%.2f\n" % tot)
 for l in open('window.txt'):
-    if l.startswith('client'): print(l.strip())
+    if l.startswith(('client', 'nfsd')): print(l.strip())
 print(open('drives.txt').read().strip())
 # A CPU waiting on I/O is not in use: busy is what is neither idle nor iowait.
 def busy(path, cpus):
@@ -286,10 +295,10 @@ print("client CPUs busy: %.0f%%" % busy('cli-mpstat.txt', range(0, 48)))
 EOF
 echo "region pages in use at most: $(( $(reg pages) - $(reg min_free) ))" | tee -a summary.txt
 if [ -n "${TSV:-}" ]; then
-	[ -s $TSV ] || echo "tag which total_GBps a_GBps b_GBps fifo_a fifo_b ringdrop_a ringdrop_b cli_retrans region_pages nfsd_busy ringcpu_a ringcpu_b rcvbuf linger threads entries qdisc nconn jobs drvbusy_a drvbusy_b warm" > $TSV
-	g() { awk -v p=$1 -v c=$2 '$1 == p {print $c}' window.txt; }
+	[ -s $TSV ] || echo "tag which total_GBps a_GBps b_GBps fifo_a fifo_b ringdrop_a ringdrop_b cli_retrans region_pages nfsd_busy ringcpu_a ringcpu_b rcvbuf linger threads entries qdisc nconn jobs drvbusy_a drvbusy_b warm lowat writes_ps woken_ps ctxsw_ps" > $TSV
+	g() { awk -v p=$1 -v c=$2 '$1 == p {print $c; f = 1} END {if (!f) print "-"}' window.txt; }	# "-" for a port not run, so the columns stay put
 	db() { awk -v p=$1 '$3 == p {for (i = 1; i <= NF; i++) if ($i == "busiest") {sub(/%/, "", $(i+1)); print $(i+1); f = 1}} END {if (!f) print "-"}' drives.txt; }
 	fb() { python3 -c "import json;print('%.2f' % (json.load(open('fio-$1.json'))['jobs'][0]['write']['bw_bytes']/1e9))" 2> /dev/null || echo -; }
 	cb=$(awk '$1 == "Average:" && $2 ~ /^[0-9]+$/ {b = 100 - $NF - $6; c = $2 + 0; if (c < 8) a += b; else if (c >= 56) z += b; else n += b} END {printf "%.0f %.0f %.0f", n / 48, a / 8, z / 8}' srv-mpstat.txt)
-	echo "${TAG:-$(basename $OUT)} $WHICH $(cat total.txt) $(fb a) $(fb b) $(g a 5) $(g b 5) $(g a 6) $(g b 6) $(awk '/^client retransmits/{print $NF}' window.txt) $(( $(reg pages) - $(reg min_free) )) $cb $(cat $SP/svc_tcp_rx_rcvbuf) $(cat $SP/svc_tcp_rx_linger_us) $(cat $SP/svc_tcp_rx_copy_threads) ${ENTRIES:-256} ${QDISC:-codel} $NCONN $JOBS $(db a) $(db b) $WARM" | sed 's/  */ /g' >> $TSV
+	echo "${TAG:-$(basename $OUT)} $WHICH $(cat total.txt) $(fb a) $(fb b) $(g a 5) $(g b 5) $(g a 6) $(g b 6) $(awk '/^client retransmits/{print $NF}' window.txt) $(( $(reg pages) - $(reg min_free) )) $cb $(cat $SP/svc_tcp_rx_rcvbuf) $(cat $SP/svc_tcp_rx_linger_us) $(cat $SP/svc_tcp_rx_copy_threads) ${ENTRIES:-256} ${QDISC:-codel} $NCONN $JOBS $(db a) $(db b) $WARM $(cat $SP/svc_tcp_rx_lowat) $(awk '/^nfsd in the window/{gsub(",", ""); print $8, $11, $14}' window.txt)" | sed 's/  */ /g' >> $TSV
 fi

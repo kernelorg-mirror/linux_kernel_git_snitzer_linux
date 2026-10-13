@@ -4223,6 +4223,107 @@ a second; fio's figure and `drives-sec.tsv` are right. The session
 wrote 17 to 19 TB to each drive, and their life used went up by a
 point on five of them (10 to 18% now).
 
+### The 128 KiB mark off and on, for rate: it costs 2 to 3 GB/s and is unpinned (13 October, 09:30 to 10:15 by tardis1's clock)
+
+`svc_tcp_rx_lowat=131072` was pinned on 12 October on wakeup counts
+"at the same rate", and the rate was read from runs the drives were
+limiting. Compared again with every run inside the drives' fast
+region: off and at 131072 by turns, off first in round 1 and the mark
+first in round 2, 60 s of idle between runs. Two ports at the two-port
+setting (384 KiB held buffer, rings of 128, no linger, `fq`), and each
+port alone at the pinned one-port setting (1 MiB, rings of 256, the
+50 us linger) on all eight drives. `twoport.sh` has `LOWAT=` for it
+and now counts WRITEs, threads woken and context switches over its
+window. Each cell is round 1, round 2:
+
+| | mark | GB/s | threads woken a second | per WRITE | context switches a second | region pages |
+|---|---|---|---|---|---|---|
+| two ports | 0 | 59.98, 60.70 | 770, 797 thousand | 13.3, 13.8 | 1.18, 1.07 million | 1200, 1216 |
+| two ports | 131072 | 57.91, 57.32 | 400, 405 thousand | 7.2, 7.4 | 0.76, 0.74 million | 1344, 1280 |
+| port a alone | 0 | 47.32, 46.54 | 107, 106 thousand | 2.37, 2.38 | 0.39, 0.39 million | |
+| port a alone | 131072 | 45.79, 45.83 | 120, 121 thousand | 2.74, 2.76 | 0.38, 0.39 million | |
+| port b alone | 0 | 46.84, 47.39 | 106, 107 thousand | 2.36, 2.39 | 0.39, 0.39 million | |
+| port b alone | 131072 | 46.26, 45.60 | 119, 119 thousand | 2.71, 2.74 | 0.39, 0.39 million | |
+
+- **Two ports: the mark halves the wakeups and costs 2.1 and 3.4
+  GB/s.** It also holds about 100 more pages of the region (1.5 MiB).
+  60.70 and 59.98 are the best two-port figures so far (58.5 before),
+  and are at what `copybench` carries in 7,740-byte pieces (60.1):
+  two ports are at the machine's copy ceiling, with nfsd's CPUs 48 to
+  51% busy and the rings' 50%.
+- **One port: the mark costs 0.6 to 1.8 GB/s and adds wakeups**, 2.7
+  a WRITE for 2.4. With the linger a thread already waits for the
+  rest of a WRITE, so there is little for the mark to save. Why it
+  wakes threads more often has not been traced; the count is every
+  nfsd wakeup, not only those for a short WRITE. 47.39 is the best
+  one-port figure (46.8 before), 95% of plain TCP's 49.8.
+- No drive stepped down in the twelve runs. One run was flagged for
+  nvme1 writing 3.0 to 3.6 GB/s for five seconds at 30 to 36% busy:
+  short of work as fio began counting, not slow. The check now also
+  requires the drive to be 85% busy.
+- Port a alone dropped 33 to 1,087 frames at its FIFO in a run and
+  port b none, as on the night before. Not looked into.
+
+**Unpinned (Mike, 13 October):** `svc_tcp_rx_lowat=0` in
+`/etc/modprobe.d/sunrpc.conf`; `svc_tcp_rx_keep=1` stays. Two more
+rounds were planned and stopped, the cost being bounded well enough.
+The runs are `mark0k-*` and `mark128k-*` in
+`xeu-rig/results-twoport-464.tsv` (`$L/mark-driver.sh`); the last
+four columns of a line are the mark and the three rates, new that
+morning. One-port lines of that file up to these runs have their
+columns after `b_GBps` shifted left (the figures of the port not run
+were empty); read those from the run's `summary.txt`. From 11:00
+that day a port not run gets a `-`.
+
+The window figures in `summary.txt` (wire GB/s, each drive's GB/s)
+read about 10% high in short runs until that morning: they were
+divided by the nominal window and not by the time between the two
+readings. They are now divided by the time measured.
+
+### Eight receive rings again, inside the drives' fast region: level with four (13 October, 10:25 to 10:55 by tardis1's clock)
+
+12 October's eight-ring runs were on drives past their fast region,
+and rings of 64 dropped frames there. Again with the mark off, two
+ports at the two-port setting, each receive ring on a CPU of its own
+and the Tx rings on two (`TXIRQ_A=8 TXIRQ_B=54`), the four settings
+by turns in two rounds. `xeu` takes only a power of two for a ring's
+depth: `ethtool -G rx 96`, `80` and `112` all give 64. So "eight of
+64 with enough depth" was tried as an earlier refill
+(`rx_refill_thresh` 2 for 8, written to the live parameter for the
+run), and eight of 128 with the held buffer cut to 256 KiB to pay for
+the rings' memory.
+
+| rings a port | GB/s | ring drops, both ports | client retransmits | region pages | Rx CPUs in softirq |
+|---|---|---|---|---|---|
+| 4 x 128 | 60.70, 59.56 | 17, 4 | 18, 4 | 1216, 1200 | 80 to 89% |
+| 8 x 64 | 59.92, 59.87 | 104, 59 | 107, 61 | 1387, 1400 | 49 to 63% |
+| 8 x 64, `rx_refill_thresh` 2 | 59.53, 60.45 | 12, 37 | 24, 38 | 1422, 1397 | 49 to 63% |
+| 8 x 128, 256 KiB held buffer | 51.89, 52.09 | 0, 0 | 0, 0 | 1808, 1808 | 52 to 58% (one at 76%) |
+
+- **Eight rings of 64 are level with four of 128**: 59.5 to 60.5
+  against 59.6 to 60.7, and four runs of four rings that morning
+  spread over 1.1 GB/s. Not a gain, and not the 2 GB/s loss of 12
+  October either.
+- **Rings of 64 hardly drop here**: 59 to 104 frames a run, where 12
+  October's runs dropped 1,234 to 6,033 with 3,000 to 7,000
+  retransmits. Those were with the drives stepping down and the
+  mark at 128 KiB; which of the two made the drops was not separated.
+  The earlier refill takes the drops to 12 to 37 and does nothing
+  for the rate.
+- **The Rx CPUs go from 80 to 89% in softirq to 49 to 63% and the
+  rate does not move.** They are not what holds two ports, as on 12
+  October. It fits the copy ceiling: there is no rate left to gain.
+- **Eight of 128 with a 256 KiB buffer costs 8 GB/s** with nothing
+  dropped and 28 MiB in use, inside the cache. A 256 KiB buffer was
+  the weaker setting in 11 October's sweep as well; these runs do
+  not say how much is the buffer and how much the rings. Eight of
+  128 at 384 KiB was 47.0 at 34 MiB on 12 October, on slow drives,
+  and was not run again.
+
+No drive stepped down in the eight runs. Four of 128 stays. The runs
+are `r13-*` in `xeu-rig/results-twoport-464.tsv`
+(`$L/rings13-driver.sh`).
+
 ## 5b. What the bring-up found (2026-10-07, after the reboot)
 
 Steps 1 to 7 of 5a were run. The port is left at **4 rings of 256**,
