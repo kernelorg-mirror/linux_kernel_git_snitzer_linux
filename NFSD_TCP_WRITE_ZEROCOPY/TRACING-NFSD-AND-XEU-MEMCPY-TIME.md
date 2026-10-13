@@ -185,8 +185,56 @@ buffers, CPUs from 8:
   itself is the whole of the limit: one read and one write of every
   payload byte through memory. Within copy mode what is left is the
   4% between copying in pieces and copying whole (62.5 against
-  60.1). Past that it is not copying, or more memory bandwidth (the
-  DIMM layout is still not known).
+  60.1). Past that it is not copying; there is no more memory
+  bandwidth to be had (the DIMMs are fully populated, next section).
+
+## The memory itself: four DIMMs, 166 GB/s, and NFS at what a saturated copy asks of it (13 October, evening)
+
+**The DIMMs are fully populated (Mike): four at 5200 MT/s, a
+theoretical 166 GB/s.** That is 2.6e9 lines a second. No channel is
+empty, so there is no memory to add: the question left open above
+and in `TARDIS1_COPY_PERFORMANCE.md` is closed.
+
+The mesh has a counter for it. `arm_cmn/hnf_mc_reqs/` counts the
+requests the cache's home nodes make of the memory controller,
+which the cores' own counters cannot tell from a line brought from
+elsewhere in the cache. `copybench`, 16 threads from CPU 8, 4 MiB
+buffers, and a two-port run at the pinned setting (`cmn-two-1`,
+60.38 GB/s, 10 s mid-run, no drive stepped down):
+
+| | GB/s | requests to memory a second | L3 misses at the home nodes | lines the cores count fetched from beyond the L3 |
+|---|---|---|---|---|
+| `rd`, loads alone | 177.6 | 2.03e9 | 2.57e9 | 2.62e9 |
+| `wr`, stores alone | 152.4 | 2.49e9 | 2.07e9 | 0 |
+| `stp`, a copy | 73.7 | 1.91e9 | 2.28e9 | 1.14e9 |
+| NFS, two ports | 60.4 | 2.05e9 | 2.02e9 | 1.77e9 |
+
+- **NFS at 60 GB/s asks of memory what the saturated copy does**:
+  2.05e9 requests a second against 1.91e9, and 1.9 to 2.5e9 is all
+  any method here reaches. If a request is a line, that is 131
+  GB/s, four fifths of what the DIMMs can do in theory.
+- **That settles the 192 GB/s that did not add up.** A third of
+  what the cores count as fetched from beyond the L3, and as
+  written to the bus, never reaches memory: it is served within the
+  cache. NFS makes twice the L3 accesses of the bare copy (5.9e9 a
+  second against 2.8e9).
+- So the limit on two ports is memory bandwidth, the DIMMs are all
+  there, and a copy spends it twice over for each byte of payload.
+  A copy cannot pass 83 GB/s on this machine in theory and reaches
+  62 to 68 in practice.
+
+Not checked: exactly what the counter takes for one request, and
+whether the card's writes into memory and the drives' reads from it
+are among them. The benchmark rows are with 4 MiB buffers, part of
+which stay in cache (which is how `rd` shows more than 166 GB/s), so
+they are a little under what larger buffers would ask.
+
+**What it means for the loan** is not measured and matters: with no
+copy, a payload byte still enters memory once from the card and
+leaves it once to a drive. If both of those are requests to memory,
+a loan is bounded near 83 GB/s here as well, and not at the card's
+99. `hnf_mc_reqs` during a loan run on the NVMe/TCP stand-in would
+say how many requests a loaned byte costs.
 
 ## The 4% between copying in pieces and copying whole (13 October, 14:00 to 14:30)
 

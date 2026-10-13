@@ -1,5 +1,12 @@
 # Memory copy performance on tardis1
 
+**Since answered (Mike, 2026-10-13): the DIMMs are fully populated,
+four at 5200 MT/s, a theoretical 166 GB/s.** No channel is empty, so
+the first item under "Where that leaves the search for more" is
+closed. A counter of requests to memory puts two ports of NFS at what
+the saturated copy asks of it: "The memory itself" in
+`TRACING-NFSD-AND-XEU-MEMCPY-TIME.md`.
+
 Measured 2026-10-12 on tardis1 (aarch64 Neoverse-N2, 64 CPUs, one NUMA
 node, 16 KiB pages, 32 MiB shared L3, 63 GB of RAM), kernel
 7.1.13-21.hs.464. The question was whether the receive copy in copy
