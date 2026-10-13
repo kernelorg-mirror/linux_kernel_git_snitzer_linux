@@ -32,8 +32,10 @@ was: 120 s on two ports is 1.28 TB a drive. "What a drive takes" in
   for 4 x 128, with the Rx CPUs a third less busy. `xeu` takes only
   powers of two for a ring's depth. Four of 128 stays. "Eight
   receive rings again" in `../XEU_CONVERGENCE.md`.
-- Still to do from `../LOST-TIME-CHASING-SPENT-DRIVES.md`: the
-  silent port. Each is now a comparison on a level
+- Nothing is left from `../LOST-TIME-CHASING-SPENT-DRIVES.md`
+  (Mike, 13 October): raid0 is not compared again, and the silent
+  port only if it shows again. The work now is two ports with more
+  parallelism: `../XEU-4-VS-8-RING.md`. Each is now a comparison on a level
   floor. Where this section says a figure was "limited by the
   drives" or gives a range of two-port totals, that was this.
 
