@@ -3,8 +3,17 @@
 # other, or both at once, each port onto its own stripe from its own mount
 # on the client.  sweep.sh and run-budget.sh drive one port and keep the
 # server's settings to themselves, so two of them cannot run together;
-# this is the same load (16 connections, 16 writers of 8 MiB direct writes
-# for 120 s, every connection placed on a ring) set up once for both.
+# this is the same load (16 connections, 16 writers of 8 MiB direct writes,
+# every connection placed on a ring) set up once for both.
+#
+# A run has to stay inside the drives' fast region: about 625 GB a drive
+# from its last idle of 20 s, the placement load counted (drvchar.py, and
+# "What a drive takes" in XEU_CONVERGENCE.md).  Past it, the first pause
+# in the writes leaves the drive at 4 GB/s.  The defaults (15 s of warm-up
+# and 45 s counted) keep two ports inside it on four drives each; one port
+# on its own four needs WARM=10 RUNTIME=25, or all eight drives in FS_A
+# (or FS_B) with RUNTIME=60.  drives.txt says what each drive wrote and
+# whether one stepped down.
 #
 #   a   enp161s0f0  192.168.1.211  /hs/nvme0 to /hs/nvme3  client ens3np0
 #   b   enp164s0f0  192.168.0.211  /hs/nvme4 to /hs/nvme7  client ens6np0
@@ -20,7 +29,7 @@
 # port-setup.sh (MTU 7792, 4 rings of 256, in the region).  It takes each
 # port down and up first, which zeroes its rings' counters, and puts the
 # rings' interrupts back on their CPUs afterwards.
-# RUNTIME=<s> (120), JOBS=<n> (16), BS (8M), NCONN (16), PLACE=0 to leave
+# RUNTIME=<s> (45), JOBS=<n> (16), BS (8M), NCONN (16), PLACE=0 to leave
 # the flows where they fall.  For a run and put back after it:
 #   RCVBUF=<bytes>   svc_tcp_rx_rcvbuf, the held receive buffer
 #   LINGER=<us>      svc_tcp_rx_linger_us
@@ -32,13 +41,15 @@
 #   QDISC=fq|fqNN    fq on the client's ports (fqNN: maxrate NN Gbit/s a flow)
 #   PROFILE=1        a 10 s system-wide perf record and perf stat mid-run
 #   PIN=1            each port's writers on the client CPUs of its NIC's NUMA node
-#   WARM=<s>         the writers run this long before fio starts counting (40)
+#   WARM=<s>         the writers run this long before fio starts counting (15)
+#   REST=<s>         wait this long first, for the drives (30)
+#   DRIVE_GB=<n>     mark the run if a drive wrote more than this in it (600)
 #   EXPORT_SYNC=async  export async, so a COMMIT does not sync the file or flush the drives
 # TSV=<file>: append a line of the run's figures (TAG=<label> names it).
 . "$(dirname "$0")/common.sh"
 "$(dirname "$0")/drive-cache.sh" > /dev/null || { echo "drive-cache.sh failed"; exit 1; }	# no cache flush to the drives (AGENTS.md)
 OUT=${1:?out dir}; WHICH=${2:-ab}
-RUNTIME=${RUNTIME:-120}; WARM=${WARM:-40}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
+RUNTIME=${RUNTIME:-45}; WARM=${WARM:-15}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
 YNL="$H/../tools/net/ynl/pyynl/cli.py --no-schema --spec $H/../Documentation/netlink/specs/ethtool.yaml"
 declare -A DEV=([a]=enp161s0f0 [b]=enp164s0f0) SRV=([a]=192.168.1.211 [b]=192.168.0.211)
 declare -A CLI=([a]=192.168.1.106 [b]=192.168.0.106) FS=([a]="${FS_A:-/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3}" [b]="${FS_B:-/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7}")
@@ -52,6 +63,7 @@ clput() { $SSHC "cat > $1"; }	# stdin to a file on the client
 
 [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ] || { echo "NFS connections are up: not ours to disturb"; exit 1; }
 mkdir -p $OUT; cd $OUT || exit 1
+sleep ${REST:-30}	# 20 s of idle gives a drive its fast region back
 fifo() { ethtool -S $1 | awk '/port_rx_fifo_tc[0-9]_drop_packets/{s+=$2} END{print s+0}'; }
 ringdrop() { ethtool -S $1 | awk '/rx_hw_tail_drop_packets/{s+=$2} END{print s+0}'; }
 rxbytes() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_rx_bytes:$/{s+=$2} END{print s+0}'; }
@@ -148,6 +160,11 @@ J
 	done
 }
 
+# A drive's fast region is about 625 GB (XEU_CONVERGENCE.md, "What a drive
+# takes"): what each has written from here to the end says whether the run
+# stayed inside it.
+wrote() { for p in $PORTS; do for fs in ${FS[$p]}; do b=$(basename $(findmnt -no SOURCE $fs)); awk -v d=$b '$3 == d {print d, $10}' /proc/diskstats; done; done; }
+wrote > wrote.0
 # Place every connection on a ring, as run-budget.sh's PLACE=1 does: a
 # short load of the same writers, each flow's hash and bytes read from the
 # frames the port hands up, and each flow's entry of the RSS table pointed
@@ -173,11 +190,13 @@ fi
 
 for p in $PORTS; do job $p f $RUNTIME $WARM | clput /tmp/twoport-$p.fio; done
 echo 1 > $RG	# the region's low-water mark starts again from here
+"$RIG/drvsample.py" drives-sec.tsv $(( WARM + RUNTIME + 3 )) &	# every drive, each second of the load
 for p in $PORTS; do
 	cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio; rm -f /mnt/rxr-$p[0-9]*/f-*" &
 done
 W=$(( RUNTIME - 50 )); [ $W -lt 10 ] && W=10
-sleep $(( WARM + 25 ))	# the warm-up, then 25 s into what fio counts
+LEAD=25; [ $(( LEAD + W + 3 )) -gt $RUNTIME ] && LEAD=$(( (RUNTIME - W) / 2 ))	# a short run: the window in its middle
+sleep $(( WARM + LEAD ))	# the warm-up, then 25 s into what fio counts
 # The drives under each port's stripe over the window: sectors written and
 # milliseconds busy, from /proc/diskstats.
 drives() {
@@ -220,6 +239,16 @@ done > drives.txt
 } > window.txt
 echo "client retransmits in the window: $(( R1 - R0 ))" >> window.txt
 wait
+wrote > wrote.1
+paste wrote.0 wrote.1 | awk -v lim=${DRIVE_GB:-600} '{g = ($4 - $2) * 512 / 1e9; printf "%s%s %.0f", (NR > 1 ? ", " : "written in the run, GB: "), $1, g; if (g > lim) o = o " " $1} END {printf "%s\n", (o ? " -- PAST THE FAST REGION:" o : "")}' >> drives.txt
+# A drive that fell under 65% of the busiest drive's median for five
+# seconds running, in what fio counted, stepped down.
+awk -v w=$WARM 'NR == 1 {for (i = 2; i <= NF; i += 3) {split($i, x, "_"); nm[i] = x[1]}; next} $1 > w + 3 {n++; for (i in nm) v[i, n] = $i}
+	END {for (i = 2; i in nm; i += 3) {for (j = 1; j <= n; j++) a[j] = v[i, j]; asort(a); m[i] = a[int((n + 1) / 2)]; if (m[i] > M) M = m[i]}
+	     for (i = 2; i in nm; i += 3) {r = 0; s = 0
+		for (j = 1; j <= n; j++) {if (v[i, j] < 0.65 * M) {if (++r == 5 && !s) s = j - 4 + w + 3} else r = 0}
+		if (s && m[i] > 0.5) o = o sprintf(" %s at %d s", nm[i], s)}
+	     print (o ? "STEPPED DOWN:" o : "no drive stepped down")}' drives-sec.tsv >> drives.txt
 for p in $PORTS; do cl "cat /tmp/twoport-$p.json" > fio-$p.json; done
 reg min_free > region-min-free.txt; cat $RG > region.txt
 python3 - $PORTS <<'EOF' | tee summary.txt

@@ -1,14 +1,30 @@
-# 12 October, 19:10: read this first
+# 12 October, 22:30: read this first
 
-**First thing on 13 October (Mike: rest now, characterise tomorrow):**
-the drives. Locally, no NFS: how much a rested drive takes at
-7 GB/s before it steps down to 4.5, and how long a rest brings it
-back. Those two numbers set `RUNTIME` and the pause between runs;
-until then a two-port figure is the drives', not the server's
-("The two things that pull a two-port run down" in
-`../XEU_CONVERGENCE.md`). `$L/drvprobe.sh <tag> <dir> <secs>` is the
-local probe. The drives were left resting from 21:45 on 12 October,
-at 9 to 17% of their rated life used.
+**The drives are characterised (12 October, 21:07 to 22:30 by
+tardis1's clock), and a run has to stay inside their fast region.**
+A drive takes about 625 GB at full rate from its last idle of 20 s.
+Past that it keeps up only while the writes do not stop: after any
+pause, 0.3 s is enough, it is at 4 GB/s for 25 to 55 s. Rest was
+never the matter (20 s is all a drive needs); the length of the run
+was: 120 s on two ports is 1.28 TB a drive. "What a drive takes" in
+`../XEU_CONVERGENCE.md`; `./drvchar.py` is the local probe.
+
+- `twoport.sh` now defaults to `WARM=15 RUNTIME=45` and waits
+  `REST=30` first: two ports stay inside the region. **One port on
+  its own four drives needs `WARM=10 RUNTIME=25`; better, give it
+  all eight** (`FS_A="/hs/nvme0 ... /hs/nvme7"`, `RUNTIME=60`).
+- **Read `drives.txt` of every run**: what each drive wrote (marked
+  past 600 GB) and `no drive stepped down`. `drives-sec.tsv` is
+  every drive each second; `./drvsum.sh` summarises it.
+- **Rerun that way, 60 s apart, no drive stepping down in fifteen
+  runs: two ports 57.0, 58.0, 58.2 GB/s; one port on eight drives
+  45.2 to 46.8 (93 to 94% of plain TCP); one port on its four 44.4
+  to 45.2, the drives at 100%.** `$L/rested-driver.sh` ran them.
+- Still to do from `../LOST-TIME-CHASING-SPENT-DRIVES.md`: the
+  128 KiB mark off and on for rate, eight rings again if wanted, the
+  artifact, the silent port. Each is now a comparison on a level
+  floor. Where this section says a figure was "limited by the
+  drives" or gives a range of two-port totals, that was this.
 
 **There is no MD any more (Mike, 12 October evening).** Each data
 drive has its own XFS on `/hs/nvme0` to `/hs/nvme7` (not in
@@ -37,12 +53,12 @@ drives of a stripe and held one port at 36 GB/s.
     RCVBUF=393216 ENTRIES=128 QDISC=fq LINGER=0 ./twoport.sh <out> ab
 
 **One port on four drives: 42.2 at best, and limited by the drives
-in every run** (six runs, 18.1 to 42.2). The drives slow under
-sustained writing, to 6.3 and even 4 GB/s each, and are back at 11
-after about three minutes of rest. Read `drives.txt` in a run's
+in every run** (six runs, 18.1 to 42.2), each of them past the
+drives' fast region (above). Read `drives.txt` in a run's
 directory, or `drvbusy_a`/`drvbusy_b` in the TSV, before believing a
-one-port figure. `twoport.sh` warms up for 40 s (`WARM`) before fio
-counts. The best one port has carried is still 44.6, on six drives.
+one-port figure. `twoport.sh` warms up for 15 s (`WARM`; 40 when
+these were run) before fio counts. The best one port has carried is
+now 46.8, on all eight drives (above).
 
 **The copy is at about 90% of what the machine can copy** (62 to
 68 GB/s memory to memory, reached with 8 CPUs). A copy that does

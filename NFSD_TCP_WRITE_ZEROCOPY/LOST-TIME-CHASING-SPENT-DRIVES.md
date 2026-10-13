@@ -253,6 +253,17 @@ option stays in `twoport.sh`, unused).
 
 ## To settle on 13 October, in order
 
+**Items 1 and 2 are done, and a two-port and a one-port baseline of
+item 3 (12 October, 21:07 to 22:30 by tardis1's clock): "What a
+drive takes" in `XEU_CONVERGENCE.md`.** A drive has a fast region of
+about 625 GB that 20 s of idle gives back; past it, any pause in the
+writes leaves it at 4 GB/s. The runs of the day wrote twice that to
+each drive, so it was their length and not a want of rest. Inside
+the region: two ports 57.0, 58.0, 58.2 GB/s, one port 45.2 to 46.8.
+"Rested" and "spent" in what is above are to be read with that: a
+drive was slow in a run because the run went past 625 GB and then
+paused, whatever came before it.
+
 1. The drives, locally and with no NFS: what a rested drive takes
    at 7 GB/s and at 11 before it steps down, and how long a rest
    restores it. `/var/tmp/zc-run-logs/drvprobe.sh <tag> <dir> <secs>`
