@@ -63,11 +63,14 @@ server's receivers are not known. Port a alone drops 33 to 1,087
 frames at the card's FIFO in a one-port run and port b none, which
 may or may not be related.
 
-**The harness and the old watchers reach the client by its port a
-address** (192.168.1.106), so their ssh traffic rides the port under
-test. The client has a management address, 10.20.12.106 (the
-server's is 10.20.12.211 on `xemi0`), and `stall-sample.py` is run
-over that.
+**Until the evening of 13 October the harness and the old watchers
+reached the client by its port a address** (192.168.1.106), so their
+ssh traffic rode the port under test, in every run of every event
+above. The client has a management address, 10.20.12.106 on its
+`ens8f0` (the server's is 10.20.12.211 on `xemi0`). `stall-sample.py`
+was run over that from the start, and since then so is every script
+in `xeu-rig/` (`CLIMGMT` in `common.sh`). There is no evidence that
+the harness's traffic had any part in a silence.
 
 ## What the client's side looks like once it has begun (`ct0-4x128-2`)
 
@@ -163,8 +166,9 @@ is expected and not shown.
    acknowledgements reaching it; a finer clock on the port's
    connections (a capture of headers on one connection, or
    `tcp:tcp_probe` on the client) would say.
-3. Keep the harness's own ssh off the port under test: the client's
-   management address is 10.20.12.106.
+3. The harness's own ssh is off the ports under test now (the
+   client's management address, 10.20.12.106); if `CLIMGMT` has
+   been pointed back at a port, note it.
 
 ## To reproduce
 

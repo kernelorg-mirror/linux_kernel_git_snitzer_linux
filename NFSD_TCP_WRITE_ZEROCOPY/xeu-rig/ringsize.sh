@@ -6,7 +6,7 @@
 . "$(dirname "$0")/common.sh"
 OUT=${OUT:-$L/xeu-$(( PS / 1024 ))k-ringsize.tsv}
 trap '$SSHC "pkill -f zc-snd.py; rm -f /var/tmp/zc-snd.py" 2>/dev/null; pkill -f "$RIG/rcv.py" 2>/dev/null' EXIT
-scp -q -o BatchMode=yes -i $KEY $RIG/snd.py root@$CLIIP:/var/tmp/zc-snd.py
+scp -q -o BatchMode=yes -i $KEY $RIG/snd.py root@$CLIMGMT:/var/tmp/zc-snd.py
 [ -s $OUT ] || echo "entries streams rcvbuf MBps tail_drops peak_pages alloc_fail retrans" > $OUT
 for e in "${@:-64 128 256 512}"; do for e in $e; do
 	set_ring $e || exit 1

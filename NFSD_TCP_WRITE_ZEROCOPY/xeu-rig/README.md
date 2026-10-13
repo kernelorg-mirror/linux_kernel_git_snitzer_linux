@@ -40,6 +40,13 @@ was: 120 s on two ports is 1.28 TB a drive. "What a drive takes" in
   drives flushing and runs past the fast region. Do not pass
   `QDISC=fq`. "The client's queueing again" in
   `../XEU_CONVERGENCE.md`.
+- **The scripts reach the client over the management network (13
+  October): `CLIMGMT`, 10.20.12.106, in `common.sh`.** Every ssh and
+  scp to the client goes there and not over a port under test.
+  `CLIIP` and `twoport.sh`'s `CLI[]` stay the client's addresses on
+  the ports, for what is exported to, mounted and pinged. The first
+  two-port run that way, on the client's default queueing:
+  `mgmt-two-1`, 60.32 GB/s.
 - **The silent port** (a port carrying nothing for 25 s in about one
   two-port run in ten, five times by 13 October) is set aside again
   (Mike): chase it if it shows again. All five were with `fq`, whose

@@ -7,7 +7,7 @@
 N=${1:-16}; shift
 OUT=${OUT:-$L/xeu-$(( PS / 1024 ))k-wirebuf.tsv}
 trap '$SSHC "pkill -f zc-snd.py; rm -f /var/tmp/zc-snd.py" 2>/dev/null; pkill -f "$RIG/rcv.py" 2>/dev/null' EXIT
-scp -q -o BatchMode=yes -i $KEY $RIG/snd.py root@$CLIIP:/var/tmp/zc-snd.py
+scp -q -o BatchMode=yes -i $KEY $RIG/snd.py root@$CLIMGMT:/var/tmp/zc-snd.py
 [ -s $OUT ] || echo "rings entries streams rcvbuf MBps tail_drops peak_pages alloc_fail retrans rwnd_limited_pct" > $OUT
 for rb in "${@:-262144 524288 1048576 2097152 4194304 0}"; do for rb in $rb; do
 	af0=$(reg alloc_fail); td0=$(tail_drops); echo > $RG

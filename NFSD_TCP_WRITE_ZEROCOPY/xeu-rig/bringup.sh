@@ -12,7 +12,7 @@ ENTRIES=${2:-128}
 PCI=$(basename "$(readlink -f /sys/class/net/$D/device)")
 [ -e $RG ] && { echo "a region already exists this boot:"; cat $RG; exit 1; }
 [ "$(cat /sys/module/xeu/parameters/rx_ip_align)" = 2 ] || echo "WARNING: rx_ip_align is not 2: loans will not be written direct on NVMe/TCP"
-$SSHC true || { echo "client $CLIIP does not answer"; exit 1; }
+$SSHC true || { echo "client $CLIMGMT does not answer"; exit 1; }
 echo "page size $PS, kernel $(uname -r), xeu $(cat /sys/module/xeu/srcversion), retry patch: $(has_retry_patch && echo present || echo ABSENT)"
 # This session must not arrive over the port (it should be on xemi0).
 ip route get "${SSH_CONNECTION%% *}" 2>/dev/null | grep -q "dev $D" && { echo "this session arrives on $D"; exit 1; }
