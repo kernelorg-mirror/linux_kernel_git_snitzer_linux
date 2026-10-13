@@ -13,19 +13,21 @@
 #
 # Each line of <out>/summary.txt is the rate, the requests to memory a
 # second and for each 64-byte line moved, and what the cache was filled
-# with and evicted.  Nothing may be connected or exported, and the drives
+# with.  Nothing may be connected or exported, and the drives
 # get 25 s of idle before each of their turns (20 gives a drive its fast
 # region back; a turn writes 22 s).
 . "$(dirname "$0")/common.sh"
 O=${1:?out dir}; mkdir -p $O
-EV=arm_cmn/hnf_mc_reqs/,arm_cmn/hnf_cache_miss/,arm_cmn/hnf_slc_sf_cache_access/,arm_cmn/hnf_cache_fill/,arm_cmn/hnf_slc_eviction/,l3d_cache_lmiss_rd,bus_access_wr
+# The mesh counts two of its events at a time: with more, each is counted
+# part of the time and scaled up.  These two are counted throughout.
+EV=arm_cmn/hnf_mc_reqs/,arm_cmn/hnf_cache_fill/,l3d_cache_lmiss_rd,bus_access_wr
 [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ] || { echo "NFS connections are up"; exit 1; }
 "$RIG/drive-cache.sh" > /dev/null || exit 1
 line() {	# line <tag> <GB/s moved> <perf stat file>: one line of the summary
 	awk -F, -v t="$1" -v g="$2" '$1 ~ /^[0-9]/ {split($3, n, "/"); v[n[2] ? n[2] : $3] = $1 / 10}
 		END {l = g * 1e9 / 64; printf "%-22s %6.1f GB/s  to memory %.3fe9/s", t, g, v["hnf_mc_reqs"] / 1e9
 		     if (l > 0) printf " = %.2f a line", v["hnf_mc_reqs"] / l
-		     printf "  cache filled %.3fe9/s evicted %.3fe9/s  lmiss %.3fe9/s bus_wr %.3fe9/s\n", v["hnf_cache_fill"] / 1e9, v["hnf_slc_eviction"] / 1e9, v["l3d_cache_lmiss_rd"] / 1e9, v["bus_access_wr"] / 1e9}' "$3" | tee -a $O/summary.txt
+		     printf "  cache filled %.3fe9/s  lmiss %.3fe9/s bus_wr %.3fe9/s\n", v["hnf_cache_fill"] / 1e9, v["l3d_cache_lmiss_rd"] / 1e9, v["bus_access_wr"] / 1e9}' "$3" | tee -a $O/summary.txt
 }
 : > $O/summary.txt
 perf stat -a -x, -e $EV -o $O/idle.txt -- sleep 10 2> /dev/null; line idle 0 $O/idle.txt
