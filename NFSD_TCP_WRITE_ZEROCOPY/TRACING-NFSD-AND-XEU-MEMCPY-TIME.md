@@ -345,7 +345,29 @@ ring's pool recycles the page freed last. Three ways to longer runs:
   already at pairs, and the bursts cap a run at 8, so the part of
   it that can be had is under 1%.
 
-**Recommendation: not worth implementing by itself.** It is
+**It is not to be done: the loan comes first (Mike, 13 October).**
+The loan path is to be kept as fast as it can be, for NVMe drives
+with SGLs when they come, and these changes are paid for there. The
+loan does not copy, so it gains nothing from a better-ordered copy
+and only bears the cost:
+
+- Buffers cut from 64 KiB blocks: a block stays held while any of
+  its eight frames is on loan. It is the 64 KiB page result again,
+  where frames sharing a page made loans hold more than they were
+  charged and WRITEs stopped part-way.
+- The same blocks from pools outside the region: a loan's budget is
+  a share of the region, so those pools cannot loan under a budget.
+- Payloads packed with header-data split: frames of different
+  WRITEs share a page.
+- Pages handed out in address order: undoes the last-in, first-out
+  reuse. What that does to a loan's footprint is not measured; this
+  one is not known to hurt.
+
+So copy mode is not to be optimized past the point where the
+receive path stops suiting a loan: one frame to a buffer, pages
+returned last in, first out, all inside the region.
+
+**Before that was said, the recommendation was already not to implement it by itself.** It is
 approachable (the driver's part is a parameter) but the larger part
 is in the kernel's page pool and needs a reboot, for a gain smaller
 than the rate can show. It becomes worth doing together with packed
