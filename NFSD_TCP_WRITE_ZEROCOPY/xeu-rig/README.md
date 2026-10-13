@@ -1,5 +1,15 @@
 # 12 October, 19:10: read this first
 
+**First thing on 13 October (Mike: rest now, characterise tomorrow):**
+the drives. Locally, no NFS: how much a rested drive takes at
+7 GB/s before it steps down to 4.5, and how long a rest brings it
+back. Those two numbers set `RUNTIME` and the pause between runs;
+until then a two-port figure is the drives', not the server's
+("The two things that pull a two-port run down" in
+`../XEU_CONVERGENCE.md`). `$L/drvprobe.sh <tag> <dir> <secs>` is the
+local probe. The drives were left resting from 21:45 on 12 October,
+at 9 to 17% of their rated life used.
+
 **There is no MD any more (Mike, 12 October evening).** Each data
 drive has its own XFS on `/hs/nvme0` to `/hs/nvme7` (not in
 `/etc/fstab`: `mount -o noatime /dev/nvmeNn1 /hs/nvmeN` after a
