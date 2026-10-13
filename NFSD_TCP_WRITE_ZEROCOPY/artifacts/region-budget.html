@@ -220,6 +220,9 @@
   .pkn { flex: 0 0 auto; font-family: var(--mono); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; min-width: 6.4em; text-align: right; }
   .pkn.none { color: var(--muted); font-weight: 400; min-width: 0; text-align: left; }
   .pkbar.p2 { background: var(--two); }
+  .aside-fig { margin: 12px 0 18px; }
+  .aside-fig img { display: block; width: 100%; max-width: 480px; height: auto; border-radius: 10px; border: 1px solid var(--hair); }
+  .aside-fig figcaption { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 8px; }
   .pkl { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); min-width: 5.6em; }
   .key { display: inline-block; width: 18px; height: 8px; border-radius: 2px; background: var(--gain); vertical-align: baseline; margin-right: 5px; }
   .key.p2 { background: var(--two); }
@@ -322,6 +325,7 @@
     <p>A standalone copy between buffers larger than the caches reaches 62 to 68 GB/s on this machine with 8 CPUs and no more with 48. Copied in 7,740-byte pieces, as frames arrive here, it reaches 60.1. Two ports of NFS carried 59.6 to 61.0 in seven runs, with nfsd's CPUs and the rings' CPUs each about half idle. The limit is something the CPUs share, most likely memory bandwidth. Past it the routes are to fetch less memory for each line of payload (NFS fetches 2.2 lines, the bare copy 1.1) or not to copy, which is the loan.</p>
 
     <h3 style="margin-top:26px" id="four">The last 4% of the copy: real, accounted for, and left alone for the loan's sake</h3>
+    <figure class="aside-fig"><img src="droids.gif" width="640" height="330" alt="Obi-Wan Kenobi waving his hand at a stormtrooper: these are not the droids you are looking for"><figcaption>This is not the 4% you are looking for.</figcaption></figure>
     <p>A bare copy on this machine carries 62.5 GB/s when it copies whole megabytes and about 59 when it copies as NFS does, a frame at a time out of 8192-byte receive buffers. That gap was traced on 13 October and all of it is explained. <strong>The processor's prefetcher runs about 25 cache lines past the end of every frame's buffer.</strong> When the buffer copied next is not the next one in memory, those lines are fetched for nothing.</p>
     <div class="tbl-wrap"><table class="q" style="min-width:560px">
       <thead><tr><th>The copy benchmark, 48 CPUs, no NFS</th><th>GB/s</th><th>Lines fetched for each line copied</th></tr></thead>
