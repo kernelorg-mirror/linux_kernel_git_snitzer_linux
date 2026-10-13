@@ -274,8 +274,12 @@ stand.
 **Eight rings of item 3 are done too (13 October): "Eight receive
 rings again" in `XEU_CONVERGENCE.md`.** Eight of 64 are level with
 four of 128 (59.5 to 60.5 against 59.6 to 60.7 GB/s) and hardly drop
-inside the drives' fast region. Left: raid0 against separate
-filesystems, if it matters, and item 5.
+inside the drives' fast region.
+
+**Nothing is left to do from this list (Mike, 13 October).** raid0
+is not to be used and is not compared again; the silent port of item
+5 is looked at only if it shows again. Four rings against eight
+carries on in `XEU-4-VS-8-RING.md`.
 
 1. The drives, locally and with no NFS: what a rested drive takes
    at 7 GB/s and at 11 before it steps down, and how long a rest
