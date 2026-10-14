@@ -9,19 +9,24 @@
 # run is $L/rwbase-<build>-<tag>-<round>, so that one kernel's runs never
 # replace another's; a line of each goes to $L/rwbase-<build>.tsv.  Rounds
 # are numbered from [first round] (1), so that more rounds can be added.
-# About 30 min a round.
+# About 30 min a round.  It stops at the first run that fails, a refusal by
+# settled.sh's audit included.
 cd "$(dirname "$0")" || exit 1
 . ./common.sh
 B=${1:?build}; N=${2:-2}; R0=${3:-1}; T=$L/rwbase-$B.tsv
 two() {	# two <tag> <env...>
 	local tag=$1; shift
 	env RCVBUF=393216 ENTRIES=128 LINGER=0 LOWAT=0 RWTSV=$T TAG=$tag "$@" ./twoport.sh $L/rwbase-$B-$tag > $L/rwbase-$B-$tag.log 2>&1
-	echo "$(date +%T) $tag rc=$? $(grep '^total' $L/rwbase-$B-$tag.log)"
+	local rc=$?
+	echo "$(date +%T) $tag rc=$rc $(grep '^total' $L/rwbase-$B-$tag.log)"
+	[ $rc = 0 ] || { echo "stopped: $(grep -E 'BAD|FAILED' $L/rwbase-$B-$tag.log | head -5)"; exit 1; }
 }
 one() {
 	local tag=$1; shift
 	env FS_A="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3 /hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7" FS_B= RUNTIME=60 LOWAT=0 RWTSV=$T TAG=$tag "$@" ./twoport.sh $L/rwbase-$B-$tag a > $L/rwbase-$B-$tag.log 2>&1
-	echo "$(date +%T) $tag rc=$? $(grep '^total' $L/rwbase-$B-$tag.log)"
+	local rc=$?
+	echo "$(date +%T) $tag rc=$rc $(grep '^total' $L/rwbase-$B-$tag.log)"
+	[ $rc = 0 ] || { echo "stopped: $(grep -E 'BAD|FAILED' $L/rwbase-$B-$tag.log | head -5)"; exit 1; }
 }
 for r in $(seq $R0 $((R0 + N - 1))); do
 	two ab-read-8m-$r      RW=read

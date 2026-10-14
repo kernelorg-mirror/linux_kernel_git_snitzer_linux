@@ -205,6 +205,20 @@ for it. After a boot and after anything that changes the host, run
 get past a BAD item by hand. A change to the setting is made in
 `settled.sh`, after a run that shows why, and nowhere else.
 
+**!!! Hammerspace's `irq_tuning.service` and `rps_xps_tuning.service`
+are MASKED on tardis1 (Mike, 2026-10-14), and our tuning is TO BE
+RECONCILED with them. !!!** Their E1 profile puts port a's interrupts
+on CPUs 8-31 and port b's on 32-55, on nfsd's CPUs, writes its own
+XPS map, and ran again on every reload of `xeu`, undoing
+`settled.sh`'s layout. They are masked, not removed: the units, their
+udev rule (`70-xeu-nic.rules`) and the irqbalance file they wrote are
+in `/root/hs-tuning-units-masked-2026-10-14/` with how to put them
+back, and `settled.sh` now sets the card's PCIe MaxReadReq of 512
+that `irq_tuning` used to. Nothing measured on this rig says what
+Hammerspace's own layout carries: before this work goes into
+Hammerspace's product, the two layouts are to be measured against
+each other and made one. Keep this note until that is done.
+
 **Keep a run inside the drives' fast region (found 2026-10-12).** A
 data drive takes about 625 GB at full rate from its last idle of 20 s.
 Past that, any pause in the writes (0.3 s) leaves it at 4 GB/s for 25

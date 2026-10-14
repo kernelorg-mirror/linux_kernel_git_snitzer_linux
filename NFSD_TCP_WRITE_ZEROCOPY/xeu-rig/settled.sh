@@ -55,6 +55,17 @@
 #     nfsd's CPUs, and writes its own transmit steering (below)
 #   - the svcsock KUnit suite before its fix: it left svc_tcp_rx_rcvbuf at 0
 #
+# !!! irq_tuning.service AND rps_xps_tuning.service ARE MASKED ON TARDIS1 !!!
+# !!! (14 October, Mike) and our tuning is TO BE RECONCILED with them.    !!!
+# Hammerspace's platform tuning for E1 lays the ports out against this
+# setting (rings on nfsd's CPUs, its own XPS map) and re-ran on any reload
+# of xeu, so they are masked, not removed: the units, their udev rule and
+# irqbalance's file are kept in /root/hs-tuning-units-masked-2026-10-14/
+# with how to put them back.  What irq_tuning did that this setting needs,
+# the card's PCIe MaxReadReq of 512, place does now.  Until the two are
+# reconciled, a host with those services running is not at this setting,
+# and nothing measured here says what Hammerspace's layout carries.
+#
 # TRANSMIT STEERING (XPS), and the inconsistency it is locked against
 #
 # Every reply nfsd sends and every ACK TCP sends goes out through one of a
@@ -107,6 +118,7 @@ declare -A PCPU=([a]=0 [b]=56)		# a port's eight CPUs start here
 declare -A PXPS=([a]=8 [b]=32)		# tx-i's XPS CPU, as recorded: <this> + i
 RINGS=4
 MTU=7792
+MRRS=512	# PCIe MaxReadReq, bytes, of the card's two functions and the eight drives
 REGION_PAGES=32768
 # The sunrpc module's settings that a run may change, and their values at
 # rest.  A mode changes some of them (mode_expect below).
@@ -129,6 +141,17 @@ declare -A REST=(
 declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128)
 declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
 SUNRPC=/sys/module/sunrpc/parameters
+
+pci_of() { basename "$(readlink -f $1)"; }	# pci_of <sysfs device link>
+mrrs() {	# mrrs <pci address>: its PCIe MaxReadReq in bytes, from DevCtl bits 14:12
+	local v; v=$(setpci -s $1 CAP_EXP+0x08.w 2> /dev/null) || { echo unreadable; return; }
+	echo $(( 128 << ((0x$v >> 12) & 7) ))
+}
+set_mrrs() {	# set_mrrs <pci address> <bytes>
+	local v c=0; v=$(setpci -s $1 CAP_EXP+0x08.w) || return 1
+	while [ $(( 128 << c )) -lt $2 ]; do c=$(( c + 1 )); done
+	setpci -s $1 CAP_EXP+0x08.w=$(printf %04x $(( (0x$v & ~(7 << 12)) | (c << 12) )))
+}
 
 # --- reading the live state -------------------------------------------------
 port_irqs() {	# port_irqs <dev>: "<irq> <name>" for each of the port's interrupts
@@ -251,6 +274,10 @@ audit() {
 		"$(for p in a b; do basename "$(readlink -f /sys/class/net/${PDEV[$p]}/device)"; done | sort | paste -sd ' ')"
 	for k in 0 1 2 3 4 5 6 7; do
 		want "nvme${k}n1 cache" "$(cat /sys/block/nvme${k}n1/queue/write_cache)" "write through"
+		want "nvme${k}n1 PCIe MaxReadReq" "$(mrrs $(pci_of /sys/block/nvme${k}n1/device/device))" $MRRS
+	done
+	for k in a b; do
+		want "${PDEV[$k]} PCIe MaxReadReq" "$(mrrs $(pci_of /sys/class/net/${PDEV[$k]}/device))" $MRRS
 	done
 	[ $mode = rest ] && want "NFS connections" "$(ss -Htn state established '( sport = :2049 )' | wc -l)" 0
 	if [ $BAD != 0 ]; then
@@ -289,6 +316,9 @@ place() {	# place [a] [b]: the CPU layout of nfsd and of the ports named (both)
 		done
 		for q in /sys/class/net/$d/queues/rx-*; do echo 0 > $q/rps_cpus; done
 		echo 0 > /sys/class/net/$d/threaded
+		# irq_tuning.service set this until it was masked (below); a reload
+		# of xeu puts it back to the card's 256.
+		set_mrrs $(pci_of /sys/class/net/$d/device) $MRRS
 	done
 }
 
