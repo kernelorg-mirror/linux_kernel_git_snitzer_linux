@@ -35,6 +35,14 @@ the drives' fast region:
   load), `iperf2port.sh` and `memcost-cal.sh` refuse to run off it,
   and `run-kunit.sh` restores it. Its header says what undoes each
   part and why XPS is held where it is.
+- **!!! `irq_tuning.service` and `rps_xps_tuning.service` are MASKED
+  (Mike, 14 October) and are TO BE RECONCILED with this setting. !!!**
+  Hammerspace's E1 profile puts the rings on nfsd's CPUs (port a on
+  8-31, port b on 32-55) with its own XPS map, and re-ran on every
+  reload of `xeu`. Kept, with how to put them back, in
+  `/root/hs-tuning-units-masked-2026-10-14/`; the card's MaxReadReq
+  of 512, which `irq_tuning` set, `settled.sh` sets now. See
+  `AGENTS.md`.
 - 61.02 GB/s was carried once on two ports with `fq` on the client,
   which is no longer part of the setting and is worth nothing
   measurable.
