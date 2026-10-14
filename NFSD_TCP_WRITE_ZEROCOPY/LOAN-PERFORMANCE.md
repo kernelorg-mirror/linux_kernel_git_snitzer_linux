@@ -9,11 +9,12 @@ is what NVMe drives with SGLs are for when they come. The question
 here (Mike, 13 October) is how much memory a loaned byte uses, and
 so what bounds a loan on this machine.
 
-**This is to be run again, all of it, on the series' rebase onto
-`v7.3-3` (after 7.3-rc7; Mike, 13 October), with one-port
-and two-port copy-mode runs beside it to show no regression.** So
-each step here is a script and a table that can be laid beside the
-next kernel's. "The battery" at the end is the list.
+**Run again on the series' rebase onto `v7.3-3` (after 7.3-rc7;
+Mike, 13 October), build 473, on 14 October, with one-port and
+two-port copy-mode runs beside it, and it agrees with build 464**:
+"On the 7.3 kernel" below. Each step here is a script and a table
+that can be laid beside the next kernel's; "The battery" at the end
+is the list.
 
 The page for it is "NFSD Loan Performance",
 https://claude.ai/artifact/1hAkQK1xDiqPr1efdv4ZDb (source
@@ -26,7 +27,8 @@ the cache when the drive takes it uses about 0.1 bytes of memory
 traffic, where a copied byte uses 2.17. On the NVMe/TCP stand-in the
 loan's use falls with its footprint, from 4.07 at about 37 MiB to a
 floor near 1.3 at 17 to 18 MiB, and that floor is the stand-in's
-own; its copy stays at 4.7 to 5.75 whatever it holds.
+own; its copy stays at 4.7 to 5.75 whatever it holds. Build 473, on
+the 7.3 kernel, gives the same, cell for cell, with a floor of 1.24.
 
 ## The measure: bytes through memory for each byte of payload
 
@@ -352,10 +354,110 @@ What this host could still give: the same pairs on two ports, which
 of its passages, which would take tracing the stand-in and says
 nothing of a drive.
 
+## On the 7.3 kernel: build 473 (14 October)
+
+Build 473 is the series on `v7.3-3`
+(`7.3.0-0.rc7.3.hs.473.loanpages_pool.el9.aarch64+16k`). The battery
+below was run on it from its second step, every run first audited
+against the settled setting (`xeu-rig/settled.sh`: where nfsd and each
+port's interrupts run, the module and network settings on both hosts,
+the drives' caches), and each loan cell again once its load was
+running, against its plan line. The first step, the counter against
+`copybench`'s known traffic, was not run again; the card and the drives
+alone came out as on build 464, which says the counter reads as it
+did. The runs are `$L/memcost-cal-473`, `$L/b473-*`,
+`$L/xeu-16k-473-loanmem-1` to `-3` and the memory samples beside them;
+the rig's README has the same tables, "Copy mode on 7.3" and "The loan
+on 7.3".
+
+**The card and the drives alone** (`memcost-cal.sh`, finding 1's
+table):
+
+| | build 473: GB/s | bytes through memory for each byte | build 464 |
+|---|---|---|---|
+| plain TCP, port a, receivers discard unread | 49.8 | 0.01 | 49.6, 0.03 |
+| plain TCP, port b, the same | 49.8 | 0.01 | 49.7, 0.02 |
+| plain TCP, both ports, the same | 98.0 | 0.16 | 99.6, 0.25 |
+| plain TCP, both ports, receivers copy into a small buffer | 83.1 | 1.28 | 82.7, 1.17 |
+| drives writing, queue depth 32 | 58.0 | 0.59 | 58.0, 0.58 |
+| drives writing, queue depth 1 | 94.9 | 0.07 | 94.9, 0.09 |
+| drives reading, queue depth 32 | 105.4 | 1.03 | 105.4, 1.04 |
+| drives reading, queue depth 1 | 105.4 | 0.26 | 105.4, 0.22 |
+
+Finding 1 holds: the card and the drives move data through the
+cache. (A first calibration that morning showed the queue-depth-32
+reads at 52.8 GB/s, from the disk statistics alone; fio read at full
+rate throughout. It was discarded with the rest of that morning's runs
+and did not recur.)
+
+**Copy mode**, the client on its default `fq_codel`, as for build
+464's comparison runs:
+
+| | build 473: GB/s | bytes through memory for each byte of payload | build 464 |
+|---|---|---|---|
+| two ports, four drives each | 59.27, 59.36 | 2.25, 2.23 | 59.96 to 60.41 in eight runs; 2.17 |
+| one port on all eight drives, port a | 46.77, 45.98, 47.59 | 1.44, 1.42, 1.46 | 46.5 to 47.4; not measured |
+| one port on all eight drives, port b | 47.76, 47.54, 47.06 | 1.48, 1.47, 1.46 | the same |
+
+One port shows no regression; two ports carry about 1.5% less, with
+about 3% more memory for each byte, from two runs, not yet looked into
+(a third two-port run lost port b to the silent port, `SILENT-PORT.md`,
+and is not counted). A copy on one port uses 1.42 to 1.48 bytes
+through memory for each byte against 2.23 to 2.25 on two: why is not
+measured, and the likely reason is that with half the traffic more of
+nfsd's buffers are still in the cache when the drives take them. A
+two-port figure here divides the mesh's requests by both ports'
+payload; `memcost-read.py` reads one port's, so its own figure for a
+two-port run is that port's and is halved only when the ports are
+even.
+
+**The loan and its copy on the stand-in**, the three plans with
+`CELL_BOUNCE=1` throughout (on build 464 in the third plan only, so the
+first two plans' footprints are not compared):
+
+| rings, held buffer | WRITEs let in | build 473: GB/s | bytes through memory, each byte of payload | ring drops | build 464: GB/s, bytes, drops |
+|---|---|---|---|---|---|
+| 256, 1 MiB | 16 | 11.74 | 4.01 | 0 | 11.74, 4.07, 359 |
+| 256, 1 MiB | 8 | 11.72 | 2.99 | 0 | 11.74, 2.99, 269 |
+| 256, 1 MiB | 4 | 10.65 | 2.37 | 0 | 10.59, 2.28, 297 |
+| 256, 1 MiB | copy | 10.44 | 5.97 | 0 | 10.35, 5.75, 6,203 |
+| 128, 384 KiB | 8 | 11.73 | 2.14 | 1 | 11.73, 2.00, 646 |
+| 128, 384 KiB | 4 | 8.45 | 1.11 | 0 | 8.40, 0.93, 207 |
+| 128, 384 KiB | copy | 10.49 | 5.11 | 5 | 10.41, 5.02, 17,966 |
+| 128, 256 KiB | 8 | 11.66, 11.70 | 1.86, 1.78 | 0, 0 | 11.72, 1.86, 203; 11.71, 1.89, 221 |
+| 128, 256 KiB | 6 | 9.90 | 1.42 | 0 | 10.28, 1.39, 162 |
+| 128, 256 KiB | 4 | 7.44 | 1.01 | 0 | 7.45, 0.80, 120 |
+| 128, 256 KiB | copy | 10.41 | 4.96 | 0 | 10.41, 4.90, 171 |
+| 128, 192 KiB | 8 | 11.50 | 1.72 | 0 | 11.55, 1.70, 154 |
+| 128, 128 KiB | 8 | 10.74 | 1.68 | 0 | 10.81, 1.62, 121 |
+| 64, 256 KiB | 8 | 11.63 | 1.42 | 13,509 | 11.60, 1.36, 64,803 |
+| 64, 192 KiB | 8 | 11.46 | 1.38 | 3,216 | 11.43, 1.34, 19,809 |
+| 64, 128 KiB | 8 | 10.48 | 1.24 | 1 | 10.74, 1.32, 7,463 |
+| 64, 128 KiB | 6 | 8.24 | 0.79 | 0 | 8.12, 0.77, 865 |
+| 64, 128 KiB | copy | 10.48 | 4.72 | 0 | 10.47, 4.71, 7,898 |
+
+- **Finding 2 holds on 7.3, cell for cell.** The loan's use of memory
+  falls with what it holds, to a floor of 1.24 at rings of 64 and a
+  128 KiB held buffer (1.32 on build 464), and its copy stays at 4.7 to
+  6.0 whatever it holds. The edges are where they were, and the best
+  setting that loses nothing is still rings of 128, a 192 to 256 KiB
+  held buffer and 8 WRITEs let in, at 1.7 to 1.9.
+- **Every loaned WRITE was written direct**, 9.70 million in the 15
+  loan cells, **and none held more than it was charged**.
+- **Fewer frames dropped at the rings** in most cells than on build
+  464, none over 5 at rings of 128. One run of each cell on each build;
+  not looked into.
+- These runs copied with the socket unlocked
+  (`svc_tcp_rx_copy_unlocked=Y`, then the default). The knob is gone
+  from the code after build 473; see "The copy outside the socket
+  lock" in `XEU_CONVERGENCE.md`.
+
 ## The battery, for this kernel and the next
 
-Run on build 464, and to be run again on the v7.3-3 rebase, each
-run inside the drives' fast region with `drives.txt` read first:
+Run on build 464 and on build 473 (the v7.3-3 rebase; "On the 7.3
+kernel" above, from the second step), and to be run on any kernel
+that follows, each run inside the drives' fast region with
+`drives.txt` read first and audited by `xeu-rig/settled.sh`:
 
 | step | how | what to lay side by side |
 |---|---|---|
