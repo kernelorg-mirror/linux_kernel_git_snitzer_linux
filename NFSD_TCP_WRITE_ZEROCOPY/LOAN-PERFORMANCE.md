@@ -143,7 +143,8 @@ only for what falls out of the cache in between.
   has held 45 to 50 MiB on the NVMe/TCP stand-in, more than the 32
   MiB L3; what it holds in front of drives that finish a write
   quickly is not known.
-- **A loan is not bounded by memory at 83 GB/s as a copy is.** That
+- **A loan is not bounded by memory as a copy is** (62 to 68 GB/s
+  for a bare copy here, measured). That
   was the inference before this calibration
   (`TRACING-NFSD-AND-XEU-MEMCPY-TIME.md`, "The memory itself") and
   it was wrong: it took the card's writes and the drives' reads for
