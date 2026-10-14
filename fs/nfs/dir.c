@@ -1851,17 +1851,20 @@ static int
 __nfs_lookup_revalidate(struct dentry *dentry, unsigned int flags)
 {
 	if (flags & LOOKUP_RCU) {
-		if (dentry->d_fsdata == NFS_FSDATA_BLOCKED)
+		/* One load: no lock is held and there are two values */
+		if (nfs_fsdata_blocked(READ_ONCE(dentry->d_fsdata)))
 			return -ECHILD;
 	} else {
+		void **fsdata = &dentry->d_fsdata;
+
 		/* Wait for unlink to complete - see unblock_revalidate().
 		 * smp_load_acquire() ensures ->d_fsdata is read after
 		 * ->d_seq was read, matching block_revalidate() which
 		 * sets ->d_fsdata before ->d_seq.
 		 */
-		wait_var_event(&dentry->d_fsdata,
-			       smp_load_acquire(&dentry->d_fsdata)
-			       != NFS_FSDATA_BLOCKED);
+		wait_var_event(fsdata,
+			       /* one load: there are two values to test */
+			       !nfs_fsdata_blocked(smp_load_acquire(fsdata)));
 	}
 	return 0;
 }

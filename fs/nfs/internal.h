@@ -45,6 +45,64 @@ static inline bool nfs_lookup_is_soft_revalidate(const struct dentry *dentry)
 	return true;
 }
 
+/*
+ * ->d_fsdata holds NFS_FSDATA_BLOCKED or NFS_FSDATA_BLOCKED_SHARED while a
+ * removal of the dentry's name is in flight: the first when the remover
+ * holds the parent's i_rwsem exclusive, the second when it holds it shared,
+ * and the second until the VFS ends the removal, after any delete event for
+ * it (see the client's ->unlink_shared_done()).
+ * ->d_revalidate() waits for either to clear.  The two differ in what the
+ * dentry is to the removal.
+ *
+ * Under an exclusive parent no resolver of the name can make a new dentry
+ * for it, so a victim that gets unhashed is harmless.  (That holds while
+ * the VFS calls d_alloc_parallel() under the parent's i_rwsem, as it does
+ * today; a VFS that allocates in-lookup dentries before taking i_rwsem
+ * would end it.  nfs_call_unlink() calls it without i_rwsem, for a
+ * silly-renamed name, but the dentry it makes there is never hashed, and
+ * goes once its REMOVE is done.)  Under a shared parent the hashed dentry
+ * is what every resolver of the name is handed - d_alloc_parallel() looks
+ * in the hash before it creates in-lookup state - and so it is what routes
+ * a lookup or open of the name through ->d_revalidate(), where a resolver
+ * that consults it after the sentinel is stored waits.  Unhash it, and a
+ * lookup or open of the name allocates a fresh dentry, finds no removal in
+ * flight and can reach the server ahead of the REMOVE: an open then gets
+ * the file being removed, which the REMOVE goes on to delete while this
+ * client holds it open, without the silly-rename that would otherwise have
+ * kept it.  Such a dentry is the removal's anchor.  A path in the client
+ * that unhashes a dentry it does not own, or that reaches one without
+ * ->d_revalidate(), has to leave an anchor hashed or wait for its sentinel
+ * to clear.
+ *
+ * The shared sentinel is stored and cleared within one shared hold of the
+ * parent, so it is never present while the parent is held exclusive.  That
+ * is why the two tests made with the parent exclusive, the WARN_ON()s in
+ * nfs_unlink() and nfs_rename(), still compare against NFS_FSDATA_BLOCKED
+ * alone.  They are the only bare compares against a sentinel; every other
+ * test uses the helpers below.
+ */
+static inline bool nfs_fsdata_blocked(const void *fsdata)
+{
+	return fsdata == NFS_FSDATA_BLOCKED ||
+	       fsdata == NFS_FSDATA_BLOCKED_SHARED;
+}
+
+static inline bool nfs_fsdata_blocked_shared(const void *fsdata)
+{
+	return fsdata == NFS_FSDATA_BLOCKED_SHARED;
+}
+
+/*
+ * Is a removal of this name in flight?  The caller holds ->d_lock, which
+ * the sentinels are stored under but not cleared under:
+ * unblock_revalidate() clears them without it, hence READ_ONCE().
+ */
+static inline bool nfs_dentry_is_blocked(struct dentry *dentry)
+{
+	lockdep_assert_held(&dentry->d_lock);
+	return nfs_fsdata_blocked(READ_ONCE(dentry->d_fsdata));
+}
+
 static inline fmode_t flags_to_mode(int flags)
 {
 	fmode_t res = (__force fmode_t)flags & FMODE_EXEC;
