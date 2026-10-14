@@ -142,9 +142,26 @@ static int nfs_call_unlink(struct dentry *dentry, struct inode *inode, struct nf
 		 * the sillyrename information to the aliased dentry.
 		 */
 		spin_lock(&alias->d_lock);
+		/*
+		 * Not if a removal of this name already owns the alias:
+		 * ->d_fsdata == NFS_FSDATA_BLOCKED means nfs_unlink() has a
+		 * REMOVE of exactly this name, or nfs_rename() a RENAME onto
+		 * it, in flight and ->d_revalidate() is waiting on that field,
+		 * so storing over it would lift the block early and the later
+		 * unblock_revalidate() would store NULL over @data.  Tested
+		 * under the same ->d_lock block_revalidate() stores under.
+		 * Skip rather than wait: that removal makes this sillydelete
+		 * redundant if it succeeds, and a wait here would sleep in a
+		 * dput() path -- the nfsiod callback that releases a
+		 * silly-rename among its callers -- for the length of another
+		 * task's RPC, with ->d_lock dropped and these tests redone.
+		 * If that removal then fails, the silly-renamed file stays on
+		 * the server: the price of skipping.
+		 */
 		if (d_really_is_positive(alias) &&
 		    !nfs_compare_fh(NFS_FH(inode), NFS_FH(d_inode(alias))) &&
-		    !(alias->d_flags & DCACHE_NFSFS_RENAMED)) {
+		    !(alias->d_flags & DCACHE_NFSFS_RENAMED) &&
+		    alias->d_fsdata != NFS_FSDATA_BLOCKED) {
 			devname_garbage = alias->d_fsdata;
 			alias->d_fsdata = data;
 			alias->d_flags |= DCACHE_NFSFS_RENAMED;
