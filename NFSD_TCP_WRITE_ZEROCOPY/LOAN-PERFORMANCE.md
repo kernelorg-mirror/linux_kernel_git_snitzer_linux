@@ -177,7 +177,7 @@ port's bytes and the drive's beside it; a cell is 120 s.
 | GB/s over the cell (fio) | 11.42 | 7.13 |
 | how the WRITEs were issued | direct, all 1,466,728 | direct, all 976,208 |
 | WRITEs that held more than they were charged | 0 | |
-| region pages in use at most | 4878 (76 MiB) | 3261 (51 MiB) |
+| region pages in use at most, the idle baseline included (see "The footprints, counted properly") | 4878 (76 MiB) | 3261 (51 MiB) |
 | client retransmits, timeouts | 11,035, 0 | 268,691, 5 |
 | the stretch the counter is read over | 110 s at 10.3 to 12.0 GB/s | 30 s at 10.3 to 12.0 GB/s |
 | requests to memory a second | 0.70e9 | 1.06e9 |
@@ -208,10 +208,11 @@ port's bytes and the drive's beside it; a cell is 120 s.
   (the loan's cell had just written 1.3 TB to it), so the copy's
   rate here is not a finding; its requests a line, read over the
   steady stretch at the loan's rate, are.
-- The loan held 76 MiB of the region, more than twice the cache,
-  so much of what it received was evicted before the stand-in took
-  it. How much a loan holds in front of drives that finish a write
-  quickly is the open figure.
+- The region showed 76 MiB in use at most, of which 49 were there
+  before the load began; the loan's own footprint was about 37 MiB
+  ("The footprints, counted properly"), a little more than the
+  cache. How much a loan holds in front of drives that finish a
+  write quickly is the open figure.
 
 Read with the five mesh events, so each counted 40% of the time.
 The samples are `$L/loanmem-1.cmn.txt` (the counter),
@@ -240,7 +241,7 @@ mesh's two events counted the whole time:
 | WRITEs written direct | all 719,736 | all 719,656 | all 645,456 | all 657,096 |
 | WRITEs over their charge | 0 | 0 | 0 | |
 | WRITEs refused admission and retried | 1,535,632 | 1,532,890 | 1,380,139 | |
-| region in use, steady / at most | 76 / 78 MiB | 62 / 65 MiB | 59 / 60 MiB | 49 / 51 MiB |
+| region in use, steady / at most, the idle baseline of 49 MiB included | 76 / 78 MiB | 62 / 65 MiB | 59 / 60 MiB | 49 / 51 MiB |
 | client retransmits, timeouts | 1,576, 0 | 1,382, 2 | 471, 0 | 248,392, 7 |
 | requests to memory a second | 0.75e9 | 0.55e9 | 0.38e9 | 1.06e9 |
 | **for each line of payload** | **4.07** (4.03 to 4.09) | **2.99** (2.94 to 3.35) | **2.28** (2.11 to 2.62) | **5.75** (5.65 to 6.78) |
@@ -268,12 +269,10 @@ mesh's two events counted the whole time:
   How far it would fall in front of drives that take the pages
   themselves is the calibration's 0.1 to 1.6, and where in that it
   lands depends on the same footprint.
-- Even the smallest footprint here, 59 MiB, is nearly twice the
-  cache. The region in use is not only what loans hold: sixteen
-  connections' held receive buffers and the rings are in it too (a
-  copy holds 49 MiB at this setting). A loan cell with a smaller
-  held buffer and shallower rings has not been run with the
-  counter.
+- The 59 MiB and the copy's 49 are not footprints: 49 MiB of the
+  region was in use before any load, in the rings of both ports and
+  in pages parked in their pools. Counted properly below, the loans
+  here hold about 37, 24 and 19 MiB and the copy about 10.
 
 ## The loan with a smaller footprint: rings of 128 and a 384 or 256 KiB held buffer (13 October, 20:00 to 20:20)
 
@@ -283,12 +282,12 @@ before it (`loanmem-3`), the counter counted throughout:
 | held buffer | | loan, 8 WRITEs | loan, 4 | the copy |
 |---|---|---|---|---|
 | 384 KiB | GB/s over the cell (fio) | 11.73 | 8.40 | 10.41 |
-| | region in use, steady / at most | 48 / 50 MiB | 43 / 46 MiB | 37 / 38 MiB |
+| | region in use, steady / at most, an idle baseline of 30 to 37 MiB included | 48 / 50 MiB | 43 / 46 MiB | 37 / 38 MiB |
 | | client retransmits, ring drops | 1,974, 646 | 163, 207 | 21,660, 17,966 |
 | | **requests to memory a line of payload** | **2.00** (1.87 to 2.25) | **0.93** (0.88 to 1.22) | **5.02** (4.94 to 5.64) |
 | | lines filled into the cache, a line | 2.71 | 2.54 | 4.48 |
 | 256 KiB | GB/s over the cell (fio) | 11.72 | 7.45 | 10.41 |
-| | region in use, steady / at most | 46 / 49 MiB | 41 / 45 MiB | 37 / 37 MiB |
+| | region in use, steady / at most, an idle baseline of 37 MiB included | 46 / 49 MiB | 41 / 45 MiB | 37 / 37 MiB |
 | | client retransmits, ring drops | 1,371, 203 | 72, 120 | 3,952, 171 |
 | | **requests to memory a line of payload** | **1.86** (1.79 to 2.02) | **0.80** (0.71 to 1.07) | **4.90** (4.58 to 5.31) |
 | | lines filled into the cache, a line | 2.67 | 2.51 | 4.47 |
@@ -300,21 +299,22 @@ was charged.
 Across the three runs, the loan at the stand-in's full rate (11.7
 GB/s) with what it held and what it asked of memory:
 
-| rings, held buffer, budget | region in use | requests to memory a line | its copy at the same rings and buffer |
-|---|---|---|---|
-| 256, 1 MiB, 16 WRITEs | 76 MiB | 4.07 | 5.75 |
-| 256, 1 MiB, 8 | 62 MiB | 2.99 | 5.75 |
-| 128, 384 KiB, 8 | 48 MiB | 2.00 | 5.02 |
-| 128, 256 KiB, 8 | 46 MiB | 1.86 | 4.90 |
+| rings, held buffer, budget | region in use, idle baseline included | footprint | requests to memory a line | its copy at the same rings and buffer |
+|---|---|---|---|---|
+| 256, 1 MiB, 16 WRITEs | 76 MiB | about 37 MiB | 4.07 | 5.75 |
+| 256, 1 MiB, 8 | 62 MiB | about 24 MiB | 2.99 | 5.75 |
+| 128, 384 KiB, 8 | 48 MiB | about 24 MiB | 2.00 | 5.02 |
+| 128, 256 KiB, 8 | 46 MiB | 23 MiB (measured clean, below) | 1.86 | 4.90 |
 
 - **The loan's cost in memory follows what it holds, all the way
-  down**: from 4.07 requests a line at 76 MiB to 1.86 at 46 MiB,
-  with no loss of rate. At the smallest setting it asks under two
+  down**: from 4.07 requests a line at about 37 MiB held to 1.86 at
+  23, with no loss of rate. At the smallest setting it asks under two
   fifths of what its copy does (1.86 for 4.90), and less than a
   copy straight to the drives (2.17) though it still carries the
   stand-in's own passage of the data.
-- **The copy does not move**: 5.75, 5.02, 4.90. Its footprint
-  falls as well (49 MiB to 37) and it gains little, because what a
+- **The copy does not move**: 5.75, 5.02, 4.90. It holds next to
+  nothing in the region beyond the rings (0 to 2 MiB), as a copy
+  always has, and gains little from shallower rings, because what a
   copy pays for is its destination, which is outside the region and
   as large as ever.
 - **With 4 WRITEs let in it is under one request a line** (0.93
@@ -323,10 +323,10 @@ GB/s) with what it held and what it asked of memory:
   most of them wait. That is the budget holding the load back, not
   memory. A budget of 8 is the smallest here that carries the
   stand-in's full rate.
-- Even 41 MiB is more than the 32 MiB cache, and the stand-in adds
-  its own data in flight to what the region shows. So the figures
-  are still falling at the smallest setting tried: the floor on
-  this stand-in has not been found.
+- The 41 to 48 MiB include an idle baseline of 30 to 37 MiB. Counted
+  properly below these loans hold 11 to 24 MiB, inside the cache
+  already, so what they still ask of memory is not the region
+  overflowing it. The floor is the next section but one.
 - The copy at 384 KiB dropped 17,966 frames at rings of 128 and
   retransmitted 21,660 segments; at 256 KiB, 171 and 3,952. The
   loans dropped a few hundred at most.
@@ -336,6 +336,102 @@ directly, as before. But the one thing the calibration predicted
 that could be tested here has held three times over. A loaned
 byte's cost in memory is set by how much is waiting, and the budget
 and the held buffer are the controls for that.
+
+## The footprints, counted properly (found 13 October, 21:30)
+
+The "region in use" of the three runs above is the region's pages
+less its free ones, and that is not a load's footprint. Before a
+cell's load began the region already had 49 MiB in use with rings
+of 256 and 30 to 37 MiB with rings of 128: the buffers posted in
+both ports' rings (16 MiB at 256 on both) and pages parked in the
+ports' page pools by the cells before. Taking what was there idle
+from the most in use, and adding back the buffers posted in the
+loaded port's own rings (8 MiB at four rings of 256, 4 at 128),
+which the card does write through:
+
+| cell | region in use at most | of it idle | the cell took | port a's rings | footprint | requests to memory a line |
+|---|---|---|---|---|---|---|
+| loan, rings 256, 1 MiB, 16 WRITEs | 78 MiB | 49 | 29 | 8 | 37 MiB | 4.07 |
+| loan, rings 256, 1 MiB, 8 | 65 | 49 | 16 | 8 | 24 | 2.99 |
+| loan, rings 256, 1 MiB, 4 | 60 | 49 | 11 | 8 | 19 | 2.28 |
+| copy, rings 256, 1 MiB | 51 | 49 | 2 | 8 | 10 | 5.75 |
+| loan, rings 128, 384 KiB, 8 | 50 | 30 | 20 | 4 | 24 | 2.00 |
+| loan, rings 128, 384 KiB, 4 | 46 | 37 | 9 | 4 | 13 | 0.93 |
+| copy, rings 128, 384 KiB | 38 | 37 | 0.4 | 4 | 4 | 5.02 |
+| loan, rings 128, 256 KiB, 8 | 49 | 37 | 12 | 4 | 16 | 1.86 |
+| loan, rings 128, 256 KiB, 4 | 45 | 37 | 7 | 4 | 11 | 0.80 |
+| copy, rings 128, 256 KiB | 37 | 37 | 0 | 4 | 4 | 4.90 |
+
+These are lower bounds for the loans: a page parked in port a's
+pool can be taken up by the load without the region's free count
+moving. The run below takes the port down and up before each cell
+(`CELL_BOUNCE=1`, new in `sweep.sh`), which empties its pools back
+into the region, and had port b's emptied once before it. The same
+cell then reads 23 MiB where this table has 16: rings of 128, 256
+KiB, 8 WRITEs took 19 MiB of the region with the pools empty and 12
+with them full.
+
+Nothing above about what a loan asks of memory changes, nor that it
+falls with what the loan holds. What does: the loans were not "more
+than twice the cache", only the first was above it at all, and a
+copy holds 0 to 2 MiB in the region beyond its rings, as it always
+has here.
+
+## The floor on the stand-in: about 1.3 requests a line, at 17 MiB (13 October, 21:35 to 22:02)
+
+`plans/16k-44-loan-memcost-floor.plan`, run as the others with
+`CELL_BOUNCE=1` (`loanmem-4`): rings of 128 and 64, the held buffer
+from 256 KiB to 128 KiB, 8 and 6 WRITEs let in, and a copy. The
+region's idle baseline is then the rings' posted buffers of both
+ports and little else: 14 MiB with rings of 128 on port a, 12 with
+64 (port b's 256 are 8 of it and are not written to).
+
+| rings | held buffer | WRITEs let in | GB/s | took from the region | footprint | requests to memory a line | ring drops | client retransmits |
+|---|---|---|---|---|---|---|---|---|
+| 128 | 256 KiB | 8 | 11.71 | 19.1 MiB | 23 MiB | 1.89 | 221 | 1,441 |
+| 128 | 256 KiB | 6 | 10.28 | 16.2 | 20 | 1.39 | 162 | 101 |
+| 128 | 192 KiB | 8 | 11.55 | 17.8 | 22 | 1.70 | 154 | 1,471 |
+| 128 | 128 KiB | 8 | 10.81 | 16.7 | 21 | 1.62 | 121 | 456 |
+| 64 | 256 KiB | 8 | 11.60 | 16.5 | 18.5 | 1.36 | 64,803 | 65,708 |
+| 64 | 192 KiB | 8 | 11.43 | 15.6 | 17.6 | 1.34 | 19,809 | 20,668 |
+| 64 | 128 KiB | 8 | 10.74 | 14.8 | 16.8 | 1.32 | 7,463 | 7,439 |
+| 64 | 128 KiB | 6 | 8.12 | 11.8 | 13.8 | 0.77 | 865 | 825 |
+| 64 | 128 KiB | the copy | 10.47 | 2.2 | 4.2 | 4.71 | 7,898 | 11,666 |
+
+Every loaned WRITE was written direct in all eight loan cells and
+none was over its charge. The first row repeats the last run's best
+(1.86 there, 1.89 here).
+
+- **At the stand-in's rate the loan levels off near 1.3 requests a
+  line.** With rings of 64 it is 1.36, 1.34 and 1.32 as the held
+  buffer goes from 256 KiB to 128 KiB and the footprint from 18.5
+  MiB to 16.8: no longer falling with what is held. All of that is
+  well inside the 32 MiB cache, so what remains is not the region.
+  It is the stand-in: the data's passage through TCP to itself and
+  into buffers of its own, which are ordinary memory outside the
+  region and which a drive would not have.
+- **It goes lower only with the rate.** 6 WRITEs let in gives 1.39
+  at 10.3 GB/s and 0.77 at 8.1; 4 gave 0.93 and 0.80 at 8.4 and 7.5.
+  At a lower rate the stand-in has less of its own in flight. That
+  is not a setting to want.
+- **Rings of 64 reach the floor and pay for it in loss**: 7 to 65
+  thousand frames dropped at the rings and as many retransmits,
+  most with the larger held buffer, at 1 to 2% under the rate of
+  rings of 128. Rings of 128 drop a couple of hundred and sit at
+  1.6 to 1.9.
+- **A held buffer of 128 KiB starts to cost rate** (10.8 GB/s for
+  11.6 on either ring depth); 192 KiB does not.
+- **The copy at the smallest setting still asks 4.71**, three and a
+  half times the loan beside it, from a footprint of 4 MiB.
+
+So on this stand-in: the best setting that loses nothing is rings
+of 128, a 192 to 256 KiB held buffer and 8 WRITEs let in, at 1.7 to
+1.9 requests a line and 22 to 23 MiB; the floor is about 1.3 at 17
+to 18 MiB, and below that the stand-in itself is what is being
+measured. For drives that take the pages themselves the stand-in's
+share goes, and the calibration's 0.1 for data still in the cache is
+what a footprint of 17 to 23 MiB points at. That is still an
+inference until there is such a drive.
 
 ## Dialing in loan mode
 
@@ -365,8 +461,9 @@ is allowed to wait.
 
 On the stand-in, sixteen connections: 16 WRITEs let in carry the
 full rate at 4.07 requests to memory a line; 8 carry it at 2.99,
-and at 1.86 with rings of 128 and a 256 KiB buffer; 4 are under one
-a line with a third of the rate gone.
+at 1.7 to 1.9 with rings of 128 and a 192 to 256 KiB buffer, and at
+1.3 with rings of 64, which drop frames; 6 lose a tenth of the rate
+and 4 a third.
 
 **The stand-in's answer will not be the drives'.** The right budget
 is about how many WRITEs are in flight at once: the rate times how
@@ -419,14 +516,13 @@ nothing in between. These drives need whole pages, so a loan to
 them goes through the page cache (a copy, later); the stand-in adds
 its own. What this host can still give:
 
-- the floor on the stand-in: rings of 64 or eight connections, to
-  bring the region in use under 32 MiB with a budget that still
-  carries the rate (6 WRITEs has not been tried);
-- the same pair on two ports, which `sweep.sh` does not do.
+- the same pair on two ports, which `sweep.sh` does not do;
+- how much of the stand-in's 1.3 is which of its passages, which
+  would take tracing the stand-in and says nothing of a drive.
 
 Done since this was first written, above: the pair with each cell
-inside the drive's fast region, the loan against its budget, and
-the loan with shallower rings and a smaller held buffer.
+inside the drive's fast region, the loan against its budget, the
+loan with shallower rings and a smaller held buffer, and the floor.
 
 ## The battery, for this kernel and the next
 
@@ -442,6 +538,10 @@ first:
 | copy mode, one port on eight drives | `FS_A="/hs/nvme0 ... /hs/nvme7" RUNTIME=60 LOWAT=0 ./twoport.sh <out> a`, and `b`, three each | GB/s (46.5 to 47.4 on build 464) |
 | the loan at three budgets and its copy on the stand-in | `plans/16k-42-loan-memcost.plan` through `sweep.sh` with `memcost-log.sh` beside it, as above | GB/s, written direct or not, region held, requests a line (4.07, 2.99, 2.28 and 5.75 on build 464) |
 | the same with rings of 128 and a 384 and 256 KiB held buffer | `plans/16k-43-loan-memcost-small.plan`, the same way; put the port's rings back to 256 after it | the same (2.00, 0.93, 5.02; 1.86, 0.80, 4.90) |
+| the floor, each cell's footprint counted clean | `plans/16k-44-loan-memcost-floor.plan` with `CELL_BOUNCE=1`, port b taken down and up once first; rings back to 256 after it | GB/s, footprint, requests a line (the table in "The floor") |
+
+Run the two plans above with `CELL_BOUNCE=1` as well on the next
+kernel, so that their footprints are counted the same way.
 
 `memcost-log.sh <prefix> <seconds> <port> [drives]` beside a
 `twoport.sh` run and `memcost-read.py <prefix> <port>` after it give
