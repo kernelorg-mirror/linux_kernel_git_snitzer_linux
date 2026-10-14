@@ -10,10 +10,10 @@ to rebase them into (Mike, 14 October). The goal of the reordering:
   immediately after its target where it can be.
 - **Features that are off by default last** in the code group.
 
-This file records the survey (step 1) and is to be kept up to date
-through the reordering itself. The groups stay as `AGENTS.md` has them,
+This file records the survey (step 1) and the trial rebase (step 2),
+and is to be kept up to date through the reordering itself. The groups stay as `AGENTS.md` has them,
 code, then KUnit interface, then KUnit tests, then docs, and one group
-to a commit. Nothing here has been rebased yet.
+to a commit. The branch itself has not been changed yet.
 
 ## Step 1: the survey (14 October)
 
@@ -172,13 +172,133 @@ pushed.
 
 Dropped: 43, 44.
 
+## Step 2: the trial rebase (14 October)
+
+On the scratch branch `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-reorder-1`,
+in a worktree of its own (the rig runs its scripts from the main one),
+with the tip of the day saved first as
+`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-reorder` (`a57fe1eca868`).
+The code group was cherry-picked onto `v7.3-3` in a new order, then the
+KUnit group and the docs group in theirs, the two KUnit commits of 14
+October moved into place (the interface one after the interface
+commit, the test one after the last test).
+
+**The result: 471 commits, and the tree is identical to the tip's.**
+`git diff` between the two is empty: the reorder, the dropped pair,
+the folds and the two conflicts resolved by hand change no code.
+`transplant/check-grouping.sh v7.3-3` passes ("code, then KUnit, then
+docs"). The code group is 61 commits: 66, less 43 and 44, less 57
+folded into 56 and 62 and 66 folded into 63.
+
+### The order it settled on
+
+| cluster | commits, by their survey numbers |
+|---|---|
+| block, file systems, loop, TCP | 46, 10, 11, 12, 13, 17, 37 |
+| XDR from bvecs | 1, 2, 3 |
+| nfsd and nfs_common: direct writes split by the device | 4, 19 (fixes 4), 5, 14, 15, 16 |
+| the loan | 6, 18, 21 (fixes to 6), 7, 20 (fixes 6), 8, 9 |
+| the region | 22, 29, 31, 33, 45, 49 |
+| the budget and the loan's life under it | 23, 27, 28 (fixes to 23), 24, 26 (fixes 24), 25, 30, 40, 41 (fixes to 30), 42 (fixes 7), 32, 34, 35, 36 (fixes 23), 38, 47, 48, 52, 53 (fix 48) |
+| receive-path features in use | 50 (pools), 51 and 54 (the linger and its trace) |
+| the held window | 55, 56 with 57, 58, 59, 60, 61 |
+| `keep`, in use | 64 |
+| off by default, not adopted | 63 with 62 and 66, 65, 39 |
+
+### What moved back, and why
+
+Each was moved where the first order put it, conflicted, and went back
+to follow the commit it is written on:
+
+- **20** (fixes 6) after **7**: it adds fields beside `merge_fill`,
+  which 7 adds.
+- **42** (fixes 7) after **41**, not beside 7: it calls
+  `svc_tcp_rx_credit_orphan()` (27) and changes code the region (22)
+  wrote.
+- **24, 25, 26, 47, 48, 52, 53** after the region and the budget, not
+  in the loan's cluster: they are written on 22 and 23.
+- **36** (fixes 23) after **34** and **35**, not with 23's other
+  fixes: it is written on both.
+- **61** after **54**, and so the pools and the linger (50, 51, 54)
+  before the held window (55 to 61), as they were: 61's tracepoint sits
+  beside 54's.
+
+### Resolved by hand
+
+**64** (`keep`) was written on **63** (the claim): its change to the
+error path of `svc_tcp_recvfrom()` sits after the claim's own lines
+there. With 63 moved after 64, 64 was applied without the claim's
+lines (`svc_xprt_received_keep()` when `keep` is set, as its own
+change), and the claim's fold put them back in front of it. The tree
+being identical at the end is the check that both were right. git's
+rerere has both resolutions.
+
+### Before it can replace the branch
+
+- **The messages of the folds.** 56 with 57 keeps 56's message for
+  now and has to say that the factor goes. 63 with 62 and 66 has 63's
+  message; the refined one (Mike: "with the commit header refined
+  accordingly") is drafted below.
+- **21's message** rewritten (above), with `Fixes:` on 6, and **53**
+  tagged `Fixes:` on 48.
+- **The `Fixes:` tags re-pointed.** 15 carry the old IDs: 13 in the code
+  group and 2 in the KUnit group (on "SUNRPC: exhaustively test TCP
+  receive page loans"). Each still quotes its target's subject, which is
+  why the grouping check passes.
+- **The commits made at the tip since the trial began** carried over:
+  "the loan page's lede links to the loan in outline" (`85e8ab4b7aef`)
+  and this file's own commits.
+- **The region budget page's** "kept in the history" for the beyond-EOF
+  rule (43, 44) pointed at the branch that keeps it.
+- Then step 3 below: each commit built in turn.
+
+### The folded claim commit's message, drafted
+
+    SUNRPC: Let a thread claim a TCP record's data and copy it outside the socket lock
+
+    svc_tcp_recvfrom() holds the socket lock across ->read_sock(), and a
+    record that is copied is copied by the actor, skb by skb, under that
+    lock: a few hundred microseconds for a 1 MiB WRITE.  TCP counts each
+    skb as read, and opens the window for more, only once it has been
+    copied; segments that arrive meanwhile wait on the socket's backlog,
+    unacknowledged; a reply to the same connection waits for the lock;
+    and one thread at a time copies for a transport.
+
+    Add svc_tcp_rx_copy_threads.  At 1 the actor claims the data, a clone
+    of each skb, and the thread copies what it claimed once ->read_sock
+    has returned, with the socket unlocked: the next part of the record
+    is on its way while this one is copied.  At 2 or more, a thread whose
+    claim completes a record gives the transport up before it copies, so
+    that another reads the next record meanwhile; sk_rx_copying holds the
+    threads doing so for one transport to that many less one, and at the
+    limit a thread copies before it gives the transport up.  At 0, the
+    default, the actor copies under the lock as before.
+
+    What the actor cannot claim, past SVC_TCP_RX_CLAIM_MAX, it copies
+    itself with the socket unlocked, from a clone of the skb: TCP may free
+    a queued skb once the lock is dropped (tcp_collapse() frees whatever
+    references it has), the clone holds the data, and TCP does not
+    coalesce into a cloned skb.  tcp_read_sock() allows for an actor that
+    drops the lock: it looks the skb up again by sequence number and
+    counts nothing as read until the actor returns.
+
+    A complete record's pages are the request's own and nothing reads
+    past its header before svc_tcp_recvfrom() returns, which it does
+    after the copy.  A backchannel reply is copied before it is read, and
+    a record that fails after it was claimed is not copied.  Only TCP's
+    own ->read_sock is treated this way, not kTLS's, and only copies of
+    4 KiB or more; the record marker, the fixed prefix and a loaned
+    record's copies stay under the lock.
+
+    Claimed data is no longer charged to the socket: a transport can have
+    as much again as its receive buffer waiting to be copied for each
+    thread that may be copying.
+
 ## Next steps
 
 1. Mike reviews the survey and the first order.
-2. A trial rebase on a scratch branch (`…-reorder-1`), the current tip
-   kept as `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-reorder`: the
-   order above, the folds, the dropped pair, the `Fixes:` SHAs
-   re-pointed. Record every conflict here.
+2. ~~A trial rebase on a scratch branch~~: done, step 2 above. The
+   final pass adds the messages, the tags and the commits since.
 3. The tree at the new code group's end compared with today's
    (`git diff` empty but for 43/44 and the folds, which change no code),
    then each code commit built in turn (bisect-clean, `W=1`, sparse,
