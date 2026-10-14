@@ -72,6 +72,11 @@ while read -r entries rb writes st cells <&3; do
 	[ -n "${TRIM:-}" ] && fstrim "$TRIM" 2>/dev/null
 	# CELL_REST=<s>: idle before the line, for drives that want it (20 s
 	# gives a tardis1 drive its fast region back).
+	# CELL_BOUNCE=1: take the port down and up before the line.  Its page
+	# pools go and what they had parked returns to the region, so that the
+	# region's free count before the load is the rings' posted buffers and
+	# no more, and what the load takes from it is the load's footprint.
+	[ -n "${CELL_BOUNCE:-}" ] && bounce
 	[ -n "${CELL_REST:-}" ] && sleep $CELL_REST
 	budget=0; [ "$writes" -gt 0 ] && budget=$(( writes * CHARGE + RESERVE + 4 ))
 	rbp=$(( 131072 / PS + 1 )); [ "$rb" != - ] && rbp=$(( rb / PS + 1 ))

@@ -1,0 +1,16 @@
+# Looking for the least a loan asks of memory on the stand-in while it
+# still carries the stand-in's rate: rings of 128 then 64, the held
+# buffer from 256 KiB down to 128 KiB, 8 and 6 WRITEs let in, and one
+# copy.  CELL_BOUNCE=1 so that each cell's draw on the region is its own
+# footprint (../LOAN-PERFORMANCE.md).  Put the port's rings back to 256
+# afterwards.
+#     SGL_BACKING=/hs/nvme0/zcbudget-nvmet.img NULLB_MIB=16384 HW_ANY_MTU=1 RX_LINGER_US=50 PLACE=1 PRP_DIR=/hs/nvme0/zcbudget STEP_JOBS=16 STEP_BS=8M STEP_SECS=50 CELL_REST=30 CELL_BOUNCE=1
+128 262144 8 sgl step-on-n16
+128 262144 6 sgl step-on-n16
+128 196608 8 sgl step-on-n16
+128 131072 8 sgl step-on-n16
+64 262144 8 sgl step-on-n16
+64 196608 8 sgl step-on-n16
+64 131072 8 sgl step-on-n16
+64 131072 6 sgl step-on-n16
+64 131072 0 sgl step-copy-n16
