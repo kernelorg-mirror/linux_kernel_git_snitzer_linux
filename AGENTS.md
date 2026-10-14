@@ -83,6 +83,28 @@ disclaimer about the state of the work ("Not booted.", "untested",
 read as a mark against the code (Mike, 2026-10-09). What has and has
 not been run belongs in the handoff documents.
 
+## One group to a commit (hard rule)
+
+**Keep code, KUnit interface, KUnit tests and docs in separate
+commits, so that they can be regrouped later (Mike, 2026-10-14).**
+Every commit belongs to exactly one of the four groups the series is
+laid out in; a change that spans two is two commits, even when one
+cannot be used without the other:
+
+- **code**: the kernel itself, outside the suites and what only they
+  use.
+- **KUnit interface**: what the kernel exposes or adds only for the
+  suites (`VISIBLE_IF_KUNIT`, `EXPORT_SYMBOL_IF_KUNIT`, helpers under
+  `CONFIG_KUNIT` and their declarations). Its subject ends "for the
+  KUnit suites", as `transplant/check-grouping.sh` expects.
+- **KUnit tests**: the `*_kunit.c` files and what builds them.
+- **docs**: `NFSD_TCP_WRITE_ZEROCOPY/` (the rig's scripts included)
+  and this file.
+
+This holds while regrouping itself is suspended (below): commit at the
+tip, but never one commit across two groups. Before committing, check
+`git diff --cached --stat` against the list above.
+
 ## NFSD TCP write-path zero-copy (page-loan series)
 
 The server-side page-loan work — eliminating the redundant receive-side data
