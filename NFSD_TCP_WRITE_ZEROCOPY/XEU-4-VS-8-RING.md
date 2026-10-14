@@ -134,11 +134,14 @@ the 32 MiB L3.
   side plus nfsd. Tested since, below: it costs nothing.
 - **The four-ring layout wastes the other way**: the transmit CPUs
   of each port sit about 85% idle beside receive CPUs near full.
-- **Transmit queue selection (XPS)** is as the driver leaves it and
-  has not been looked at: with four rings, port a's four transmit
-  queues are mapped to CPUs 8, 9, 10 and 11 and port b's to CPUs 32,
-  33, 34 and 35, one each. A sender on any other CPU has no queue
-  mapped to it and falls back to the flow hash.
+- **Transmit queue selection (XPS)** has not been looked at: with
+  four rings, port a's four transmit queues are mapped to CPUs 8, 9,
+  10 and 11 and port b's to CPUs 32, 33, 34 and 35, one each. A
+  sender on any other CPU has no queue mapped to it and falls back to
+  the flow hash. (Not the driver's doing, as this said at first: the
+  platform's `rps_xps_tuning.service` writes it at boot for eight
+  queues, and four rings keep the first four. Since 14 October
+  `xeu-rig/settled.sh` holds it as recorded here and explains it.)
 - **Where a connection's work lands.** A connection's frames are
   received on its ring's CPU; the nfsd thread that copies them runs
   on any of 8 to 55; the reply and the ACKs go out through a transmit

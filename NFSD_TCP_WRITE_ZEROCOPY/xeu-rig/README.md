@@ -22,6 +22,19 @@ the drives' fast region:
   linger 50) and four rings of 256. Both: `svc_tcp_rx_keep=1`,
   `svc_tcp_rx_lowat=0`, 8192-byte receive buffers at an MTU of 7792,
   512 nfsd threads on CPUs 8-55, the client untouched.
+- **The setting, the CPU layout included, is `settled.sh`'s, and
+  every run is audited against it (Mike, 14 October: "lock it down
+  hard").** nfsd on CPUs 8-55 and nothing of the ports' there; port
+  a's Rx-i on CPU 2i and Tx-i on 2i+1, port b's on 56+2i and 57+2i,
+  each port's async interrupt with its Tx-0 (1 and 57); transmit
+  steering (XPS) port a's tx-i to CPU 8+i and port b's to 32+i, the
+  map every figure here was measured with; no RPS, NAPI not threaded,
+  irqbalance kept off nfsd's CPUs and the card. `./settled.sh audit
+  rest` checks it all, and the module settings, live; `./settled.sh
+  apply` puts it back. `twoport.sh`, `sweep.sh` (each cell, under
+  load), `iperf2port.sh` and `memcost-cal.sh` refuse to run off it,
+  and `run-kunit.sh` restores it. Its header says what undoes each
+  part and why XPS is held where it is.
 - 61.02 GB/s was carried once on two ports with `fq` on the client,
   which is no longer part of the setting and is worth nothing
   measurable.
@@ -50,16 +63,13 @@ first round overwrote (their lines in the table and the `.tsv` are
 all that is left of them). `rwbase.sh` now names each run
 `$L/rwbase-<build>-<tag>-<round>`.
 
-**Restarting nfs-server unpins nfsd.** `hammerspace-nfsd-tuning`
-pins nfsd's threads to CPUs 8-55 at boot, and a stop and start of
-nfs-server (`run-kunit.sh` needs one) brings up 512 threads on all 64
-CPUs, among the ports' ring CPUs. After any restart, `systemctl
-restart hammerspace-nfsd-tuning`, or `taskset -pc 8-55` on each nfsd
-thread, and check with `pgrep -x nfsd | xargs -n1 taskset -cp`.
-`twoport.sh` refuses to run while any nfsd thread is off 8-55.
-Build 473's first round of `rwbase.sh` ran unpinned until 10:28 on
-14 October: the ring CPUs spent 13 to 18% in nfsd, and the 1 MiB
-random READs carried 44.1 GB/s against 464's 49.1.
+**A restart of nfs-server puts nfsd on all 64 CPUs.**
+`hammerspace-nfsd-tuning` puts nfsd's threads on CPUs 8-55 at boot,
+and a stop and start of nfs-server (`run-kunit.sh` needs one) brings
+up 512 threads on every CPU, among the ports' ring CPUs. `systemctl
+restart hammerspace-nfsd-tuning` puts them back, starting nfs-server
+if it is stopped; `run-kunit.sh` now does that itself, and
+`settled.sh` refuses a run until it is so.
 
 Two ports at the two-port setting, four drives a port:
 
@@ -108,14 +118,31 @@ One port over all eight drives, at the one-port setting:
 
 **The series is rebased onto `v7.3-3`** (`kernel-7.3/main`, after
 7.3-rc7), on the branch `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`,
-done on 14 October. It compiles with no errors or warnings at the
-end of the code, of the KUnit interface and at the tip, and sunrpc
-and nfsd compile with `CONFIG_KUNIT` off; no kernel has been built
-from it to boot, and its KUnit suites have not been run. A 7.3
-`.config` is still to be made from build 464's (the client's
-7.3.0-0.rc7 kernel is the other starting point). When tardis1 is
-on it, run the KUnit suites, then "The battery" at the end of `../LOAN-PERFORMANCE.md`
-and lay each figure beside build 464's, which are in that table:
+done on 14 October, and tardis1 booted build 473 from it that
+morning (`7.3.0-0.rc7.3.hs.473.loanpages_pool.el9.aarch64+16k`).
+Its KUnit suites pass: 7, 46, 6 and 10, the same as on 7.1.13.
+
+**Every run on build 473 so far is discarded and is to be done again
+(Mike, 14 October)**, kept in `$L/b473-discarded/` with a README.
+None of it was at the settled setting:
+- the KUnit run restarted nfs-server, which put nfsd's 512 threads
+  on all 64 CPUs, among the ports' ring CPUs, until 10:28 (the ring
+  CPUs spent 13 to 18% in nfsd, and the 1 MiB random READs carried
+  44.1 GB/s against 464's 49.1);
+- the svcsock suite left `svc_tcp_rx_rcvbuf` at 0 (fixed in the
+  suite, which now puts back what it changes; the installed one does
+  not, and `run-kunit.sh` writes the setting back after it), so
+  every one-port run and every loan cell after it held no buffer;
+- each port's async interrupt sat on one of nfsd's CPUs, and the
+  transmit steering was not checked by anything.
+`settled.sh` (under "Where it stands") was written for it: every
+script that runs a load now audits the host against the settled
+setting and refuses to run off it.
+
+Run the KUnit suites with `run-kunit.sh` (it leaves the host at the
+settled setting and says so), then "The battery" at the end of
+`../LOAN-PERFORMANCE.md` from its first step, and lay each figure
+beside build 464's, which are in that table:
 
 1. `./memcost-cal.sh $L/memcost-cal-<build>`: the card and the drives
    by themselves (about 6 min, no NFS).
@@ -132,10 +159,10 @@ and lay each figure beside build 464's, which are in that table:
    `plans/16k-42-loan-memcost.plan`, `16k-43-loan-memcost-small.plan`
    and `16k-44-loan-memcost-floor.plan` through `sweep.sh` with
    `CELL_BOUNCE=1` and `memcost-log.sh` beside each, as written out
-   in that document. Take port b down and up once first, and **put
-   port a's rings back to 256 afterwards** (`ethtool -G enp161s0f0
-   rx 256`, then `./ring-irqs.sh enp161s0f0 0`): a sweep leaves them
-   where its last line had them.
+   in that document. Take port b down and up once first (`ip link
+   set enp164s0f0 down; ip link set enp164s0f0 up`, then
+   `./settled.sh place b`). A sweep now ends with port a's rings back
+   at 256 and its layout in place, and writes `audit-end.txt`.
 5. **The silent port** (Mike, 14 October): chase it on this kernel,
    after the four above. See "Set aside" below and
    `../SILENT-PORT.md`; whether 7.3 still shows it is the first
@@ -143,9 +170,9 @@ and lay each figure beside build 464's, which are in that table:
    showed.
 
 Before any of it on a new boot: the "After a boot" line under the
-rules, `getconf PAGESIZE` (16384), that `xeu` came up with
-`rx_buf_size=8192` and the ports at an MTU of 7792, and that
-`/etc/modprobe.d/sunrpc.conf` still gives `svc_tcp_rx_lowat=0`. The
+rules, `getconf PAGESIZE` (16384), and `./settled.sh apply` ending in
+"the settled setting" (it checks `xeu`'s settings, the MTU, the
+module settings and the CPU layout; a BAD item names what is off). The
 mesh's counter is `arm_cmn/hnf_mc_reqs/`: check that the new kernel
 still has it (`ls
 /sys/bus/event_source/devices/arm_cmn_0/events/hnf_mc_reqs`, and
@@ -222,8 +249,14 @@ dwelling on what they said before; the loan page and
   frame to a buffer, pages returned last in first out, all inside
   the region.
 - After a boot: `mount -o noatime /dev/nvmeNn1 /hs/nvmeN` for 0 to
-  7; the region and the second port's MTU are set by hand
-  (`port-setup.sh`).
+  7, `./bringup.sh 32768 256` (the region and port a), `./port-setup.sh
+  enp164s0f0 56` (port b), then `./settled.sh apply`, which has to
+  end in "the settled setting".
+- **Every run is audited against `settled.sh` and refuses to run off
+  it** (Mike, 14 October). Do not get past a BAD item by hand or by
+  a variable: put the host back with `./settled.sh apply` (or what
+  the item names), and change the setting itself only in
+  `settled.sh`, after a run that shows why.
 
 ## Decided on 13 October: do not undo from older text
 

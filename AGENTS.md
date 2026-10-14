@@ -191,6 +191,20 @@ the four-drive stripes before that date) each COMMIT flushes every
 drive of the stripe and one port carries 36 GB/s where it otherwise
 carries 43; those figures are not comparable with later ones.
 
+**Every run on tardis1 is audited against
+`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/settled.sh` and refuses to run off
+it (Mike, 2026-10-14: "lock it down hard").** It holds the settled
+setting in one place: where nfsd's threads and each port's ring,
+async and transmit (XPS) work run, the sunrpc, xeu and nfsd settings
+at rest and for the one-port and two-port settings, the region and
+the drives' caches. A restart of nfs-server, any open of a port, a
+reload of xeu and the svcsock KUnit suite each undid part of it on 14
+October unseen, and every run on build 473 that day was thrown away
+for it. After a boot and after anything that changes the host, run
+`./settled.sh apply` and see it end in "the settled setting"; never
+get past a BAD item by hand. A change to the setting is made in
+`settled.sh`, after a run that shows why, and nowhere else.
+
 **Keep a run inside the drives' fast region (found 2026-10-12).** A
 data drive takes about 625 GB at full rate from its last idle of 20 s.
 Past that, any pause in the writes (0.3 s) leaves it at 4 GB/s for 25
