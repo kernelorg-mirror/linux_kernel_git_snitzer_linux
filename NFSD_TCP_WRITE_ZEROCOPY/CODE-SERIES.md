@@ -301,16 +301,18 @@ The branch `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-reorder-1`, rebuilt
 from `v7.3-3` in the trial's order with three changes of plan, and the
 messages and tags done:
 
-- **62, 63 and 66 kept apart**, at the end of the code group in that
-  order (Mike). Whether the unlocked copy should stay the default is
-  open: on 7.3, two ports carried 59.13 to 59.36 GB/s with it in five
-  clean runs and 57.82 to 58.21 without it in four, but the two sets ran
-  one after the other while the drives were degrading, and both tries at
-  alternating them (`b473/ab.sh`, `ab2.sh`) lost their runs to drives
-  stepping down. Once the drives have rested it is to be run again,
-  alternating. Then 66 is dropped if the unlocked copy is faster (and
-  62 stays as it is), or 62, 63 and 66 are folded into one commit if
-  they are level, with the message drafted in step 2.
+- **62, 63 and 66 folded into one commit, at the end of the code
+  group** (Mike, after the measurement below), with the message drafted
+  in step 2: "SUNRPC: Let a thread claim a TCP record and copy it
+  outside the socket lock". On one port, on seven drives (nvme3 left
+  out: it stepped down first), alternating six runs of 10 s + 30 s with
+  120 s of rest (`b473/ab4.sh`), the unlocked copy (473's own sunrpc)
+  carried 44.66, 45.62 and 45.93 GB/s and the copy under the lock (the
+  tip's, `1db924c7059d`) 45.71, 45.43 and 46.30: level, no drive
+  stepping down. Server CPU was the same; the unlocked copy made about
+  20% fewer context switches. Two ports were not settled: the gap of
+  2.2% seen earlier came from runs one set after the other while the
+  drives were degrading.
 - **57 folded into 56**, whose message now says the factor goes and
   why.
 - **21's message rewritten** to describe its fix in this series, with
@@ -325,11 +327,11 @@ messages and tags done:
 - **The commits made at the tip since the trial** carried over (the
   loan page's three, this file's step 2, and the SGL note).
 
-**The result: 478 commits, 63 of them code, and a tree identical to
+**The result: 478 commits, 61 of them code, and a tree identical to
 the branch tip's**; `check-grouping.sh v7.3-3` passes. The one
 conflict, 64 against 63, was settled by the resolution rerere recorded
-in the trial. The region budget page now says which branches keep the
-beyond-EOF rule (43, 44).
+in the trial. The region budget page no longer mentions the beyond-EOF rule (43,
+44) at all (Mike).
 
 **Not done yet:** every code commit built in turn (step 3 of "Next
 steps"), held back while tardis1 measures and its drives rest; then the
@@ -401,11 +403,9 @@ the reorder and after it.
 | 56 | 60 | SUNRPC: Open a held transport's window to half of what its buffer holds | `a1a2e6d3554d` | `6f88b4d86042` |
 | 57 | 61 | SUNRPC: Trace what a transport's receive buffer is held to | `a9fe067f1882` | `67b2f07d02e1` |
 | 58 | 64 | SUNRPC: svc_tcp_rx_keep: a thread that finds a record short does not wake another | `273a1b9f355c` | `58491437a704` |
-| 59 | 62 | SUNRPC: Copy a received TCP record with the socket unlocked | `e8bb4b0bf2ed` | `92d27661b1e3` |
-| 60 | 63 | SUNRPC: Let a thread claim a TCP record's data and copy it afterwards | `8439fe6d5edc` | `ab6cec9f488a` |
-| 61 | 66 | SUNRPC: Copy with the socket unlocked only when records are claimed | `1db924c7059d` | `598b1d3c6acc` |
-| 62 | 65 | SUNRPC: svc_tcp_rx_lowat: wake a thread for more than one piece of a short record | `ad121a71159b` | `761375eb640f` |
-| 63 | 39 | veth: add rx_ip_align, extra headroom for frames copied for XDP | `a057f0952ad0` | `c5f37bb91a15` |
+| 59 | 65 | SUNRPC: svc_tcp_rx_lowat: wake a thread for more than one piece of a short record | `ad121a71159b` | `a56a165c938e` |
+| 60 | 39 | veth: add rx_ip_align, extra headroom for frames copied for XDP | `a057f0952ad0` | `3741a2bf0256` |
+| 61 | 62, 63, 66 | SUNRPC: Let a thread claim a TCP record and copy it outside the socket lock | `e8bb4b0bf2ed`, `8439fe6d5edc`, `1db924c7059d` | `7f08e7673de7` |
 
 ## Next steps
 
