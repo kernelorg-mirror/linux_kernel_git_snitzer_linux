@@ -51,7 +51,7 @@
 #   REST=<s>         wait this long first, for the drives (30)
 #   DRIVE_GB=<n>     mark the run if a drive wrote more than this in it (600)
 #   EXPORT_SYNC=async  export async, so a COMMIT does not sync the file or flush the drives
-#   RW=<fio rw>      read, randread, rw, randrw (write); a run that reads first
+#   RW=<fio rw>      read, randread, rw, randrw, randwrite (write); any run but write first
 #                    writes every file whole once (8 MiB direct writes) and rests 20 s
 #   RWMIX=<n>        the share of reads in a mixed run, percent (fio's 50)
 #   IODEPTH=<n> (16), SIZE=<fio size> (512M): each writer's queue and file
