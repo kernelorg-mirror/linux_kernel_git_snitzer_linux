@@ -321,6 +321,92 @@ in suggests.
 **The target** is the footprint, for both ports together, inside the
 32 MiB cache.
 
+### How slow is too slow for an SGL drive (14 October)
+
+Asked when choosing SGL drives to buy (Jon Flynn, Mike: "if SGL is too
+slow it'll blow out the 32MB L3 cache... What is too slow?"). Worked
+from Little's law and this document's measurements; nothing of it has
+been measured on an SGL drive.
+
+A loaned page is held from the moment its WRITE is whole in the region
+until the drive reports the write done and the page is returned. So
+the region held by loans at any moment is
+
+    held = R x t x k
+
+with R the rate of WRITE payload, t how long a WRITE stays loaned
+(whole in the region to the drive's completion and the release), and k
+the region bytes held for each byte of payload: 1.09 for 8192-byte
+buffers a frame fills, up to 1.64 where frames of different
+connections share a page (the charge the kernel learns on this card);
+1.3 to 1.6 is the range to use.
+
+**What the loan has of the cache.** On the stand-in a footprint up to
+about 23 MiB stayed cheap and 37 MiB used four times the memory
+(finding 2). The rings take 4 MiB a port (four of 128 at 8192 bytes),
+and data received and not yet read up to a held buffer for each
+connection takes some MiB a port more. That leaves the loans about 7
+to 15 MiB of region, which at k = 1.3 to 1.6 is **about 5 to 10 MB of
+payload in flight**, the lower end with both ports loaded.
+
+**So t, whole WRITE to completion, may be at most:**
+
+| rate | t at most |
+|---|---|
+| 96 GB/s, both ports at the wire's rate | about 50 to 100 us |
+| 60 GB/s, copy mode's rate today | about 85 to 170 us |
+| 48 GB/s, one port at the wire's rate | about 100 to 200 us |
+| 24 GB/s | about 200 to 400 us |
+| 12 GB/s | about 0.4 to 0.8 ms |
+
+t is nfsd's handing over and completing, estimated at 20 to 30 us and
+not measured, plus the drive's completion time for the WRITE's I/O at
+that load. For both ports at full rate inside the cache, that leaves
+the drives about 30 to 70 us.
+
+**Past it the loan gets dearer, not broken.** Loaned data that leaves
+the cache before the drive takes it costs about 1.6 bytes through
+memory for each byte of payload (finding 1: written out once, 0.58 to
+fetch back), against 0.1 inside the cache and a copy's 2.17. So a
+slow drive still leaves the loan cheaper than a copy, until the DIMMs
+are the limit: about 130 to 160 GB/s of memory traffic at 1.6 a byte
+is about 80 to 100 GB/s. The budget keeps the loans to what it allows
+whatever the drives do, and the 512 MiB region would allow a t of
+about 3 ms at 96 GB/s before the region itself were the limit.
+
+**Three numbers decide a set of drives:**
+
+1. **Sustained write bandwidth past the drive's SLC cache, times the
+   drives**, at least the rate wanted. This is the hard limit (what
+   tardis1's drives showed as their 625 GB fast region). A drive that
+   writes to SLC acknowledges quickly only while its SLC lasts.
+2. **The completion time of a WRITE's I/O at that load**: 30 to 70 us
+   keeps a loan at full rate in the cache; longer costs memory
+   traffic and still beats a copy.
+3. **How a WRITE is split over the drives.** A 1 MiB WRITE written
+   whole to one drive of 3 GB/s takes at least 350 us to move; cut in
+   128 KiB pieces over 8 drives, each piece takes about 45 us plus the
+   drive's own latency.
+
+**Datasheet latencies are a floor, not t.** A figure such as 21 to 40
+us for 4 KiB or 32 KiB writes at low queue depth (Solidigm 122.88 TB)
+says little about 1 MiB, or the stripe's piece, under sustained load
+past the SLC cache. If such a drive writes about 3 GB/s sustained (to
+be checked on its datasheet), a whole 1 MiB WRITE takes at least 350
+us on it: inside the cache only to about 15 to 30 GB/s, and over 30 of
+them for the wire's rate on two ports.
+
+**To qualify a drive:** `fio`, direct, 1 MiB and 128 KiB writes,
+queue depth 1 to 8, long enough to be past the SLC cache; mean and
+99th-percentile completion with the bandwidth at each; then R x t x k
+against the 5 to 10 MB above. In the rig, loan mode on the drives as
+"The order, when the drives are here" below, with `memcost-log.sh`
+giving the bytes through memory for each byte directly.
+
+What rests on the stand-in and the calibration, and not on an SGL
+drive: the 5 to 10 MB, the 1.6 past the cache, and the 20 to 30 us of
+software.
+
 **The order, when the drives are here:**
 
 1. That every loaned WRITE is written direct (`wr_direct` against
