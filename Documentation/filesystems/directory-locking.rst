@@ -50,6 +50,47 @@ For our purposes all operations fall in 6 classes:
 	* find the victim
 	* lock the victim (exclusive)
 
+	unlink(2) of a non-directory is the one exception: if the
+	filesystem provides ->unlink_shared() together with ->unlink() and
+	->unlink_shared_done(), and its superblock has not set
+	SB_I_NAMES_COLLIDE, the parent is locked shared for it, the victim
+	is found through d_alloc_parallel() and locked exclusive as before,
+	and exclusion for the name comes from the filesystem instead - see
+	Documentation/filesystems/locking.rst.  That takes an existing lock
+	in shared mode and in the existing order, parent before victim; it
+	adds no lock and no new ordering.  That holds while
+	d_alloc_parallel() is called with the parent's ->i_rwsem held, as it
+	is here; once in-lookup dentries are taken before ->i_rwsem, the
+	lookup of the victim has to move ahead of the shared parent lock with
+	them.  If the filesystem declines, or the victim turns out to be a
+	directory, everything is dropped and the removal is done again under
+	the rules above; a name ending in a slash is instead answered -EISDIR
+	or -ENOTDIR from the victim's type alone, as before.
+
+	The victim's parent and name are stable under the shared lock
+	because it is not a directory.  Splicing (see below) moves only
+	directory aliases, and can do so holding the old parent no more
+	than shared, which is why a directory found by the shared lookup is
+	let go with nothing but its type examined.  Any other change of a
+	dentry's parent or name is made by __d_move() for a rename, and
+	every rename holds the parents involved exclusive.  That includes a
+	filesystem renaming the victim to carry out a removal, which
+	->unlink_shared() must therefore hand back.  With the victim's
+	parent and name stable, the ordering analysis below is unaffected.
+
+	Such a removal can make a lookup of its name wait in
+	->d_revalidate() while that lookup holds the parent shared.  The
+	wake comes after the VFS has emitted the delete event, which the
+	removal reaches having let the victim go: by then it needs ->d_lock
+	and the victim's ->i_lock for the unhash, and the notification
+	subsystem's own locks and an allocation for the event.  A waiter in
+	->d_revalidate() holds the parent shared and a reference on the
+	dentry and takes no lock of its own, so it still cannot be blocking
+	the thread that must wake it; the wait is as long as the removal and
+	its delete event together.  An O_CREAT open made under the exception
+	in class 2 can wait there in the same way, and for the same reason
+	cannot be blocking the remover either.
+
 4. link creation.  Locking rules:
 
 	* lock the parent (exclusive)
