@@ -2958,6 +2958,116 @@ void end_dirop(struct dentry *de)
 }
 EXPORT_SYMBOL(end_dirop);
 
+/*
+ * Resolve @name in @base for a removal, with the parent's i_rwsem held and
+ * possibly only shared.  Unlike lookup_one_qstr_excl() this uses the
+ * in-lookup protocol -- d_alloc_parallel() rather than d_alloc() plus
+ * ->lookup() -- because only that excludes a second resolver of the same
+ * name when the parent lock does not.  A negative result is -ENOENT;
+ * LOOKUP_CREATE and LOOKUP_EXCL have no meaning here.
+ *
+ * A directory is returned like anything else, and the caller must let go
+ * of it having looked at no more than its type: __d_unalias() can move or
+ * rename a directory alias holding its parent's i_rwsem no more than
+ * shared, which a shared hold does not exclude.  A non-directory's parent
+ * and name change only in __d_move() for a rename or a silly-rename, both
+ * of which hold the parent exclusive.
+ */
+static struct dentry *lookup_one_qstr_shared(const struct qstr *name,
+					     struct dentry *base,
+					     unsigned int flags)
+{
+	/* LOOKUP_SHARED: the parent is held shared, as for lookup_slow() */
+	struct dentry *dentry = __lookup_slow(name, base, flags | LOOKUP_SHARED);
+
+	if (IS_ERR(dentry))
+		return dentry;
+	if (d_is_negative(dentry)) {
+		dput(dentry);
+		return ERR_PTR(-ENOENT);
+	}
+	return dentry;
+}
+
+/**
+ * start_dirop_shared - begin a removal with the parent held shared
+ * @parent:       the dentry of the parent in which the operation will occur
+ * @name:         a qstr holding the name within that parent
+ * @lookup_flags: intent and other lookup flags
+ *
+ * As start_dirop(), except that the parent's i_rwsem is taken shared, so
+ * what excludes a concurrent operation on this name is not the lock.  It is
+ * the returned dentry -- positive, referenced for as long as the caller
+ * holds it, and resolved under this hold through d_alloc_parallel() -- and
+ * whatever the filesystem builds on that, because the VFS does not keep the
+ * dentry hashed.  Only for a directory whose filesystem provides
+ * ->unlink_shared().
+ *
+ * end_dirop_shared() must be used to finish, not end_dirop().
+ *
+ * Returns: a positive dentry, which may be a directory, or an error.
+ */
+static struct dentry *start_dirop_shared(struct dentry *parent,
+					 struct qstr *name,
+					 unsigned int lookup_flags)
+{
+	struct inode *dir = d_inode(parent);
+	struct dentry *dentry;
+
+	/* I_MUTEX_PARENT, as __start_dirop(): __vfs_unlink() nests
+	 * inode_lock() on the victim inside this one.
+	 */
+	inode_lock_shared_nested(dir, I_MUTEX_PARENT);
+	dentry = lookup_one_qstr_shared(name, parent, lookup_flags);
+	if (IS_ERR(dentry))
+		inode_unlock_shared(dir);
+	return dentry;
+}
+
+/**
+ * end_dirop_shared - signal completion of a dirop started shared
+ * @parent: the parent that was passed to start_dirop_shared()
+ * @de: the dentry which was returned by start_dirop_shared()
+ *
+ * As end_dirop(), for the shared lock.  If @de is an error, nothing
+ * happens.  The lock dropped is the one start_dirop_shared() took, not
+ * re-derived from @de->d_parent as end_dirop() does: it is the exclusive
+ * parent lock that makes a child's d_parent stable, and this is not it.
+ */
+static void end_dirop_shared(struct dentry *parent, struct dentry *de)
+{
+	if (!IS_ERR(de)) {
+		inode_unlock_shared(d_inode(parent));
+		dput(de);
+	}
+}
+
+/*
+ * The pair filename_unlinkat() begins and ends a removal with: the shared
+ * pair above when @unlink_shared is the method it read, start_dirop() and
+ * end_dirop() when it is NULL.  The caller passes the same pointer to both.
+ */
+static struct dentry *start_unlink_dirop(struct dentry *parent,
+					 struct qstr *name,
+					 unsigned int lookup_flags,
+					 int (*unlink_shared)(struct inode *,
+							      struct dentry *))
+{
+	if (unlink_shared)
+		return start_dirop_shared(parent, name, lookup_flags);
+	return start_dirop(parent, name, lookup_flags);
+}
+
+static void end_unlink_dirop(struct dentry *parent, struct dentry *de,
+			     int (*unlink_shared)(struct inode *,
+						  struct dentry *))
+{
+	if (unlink_shared)
+		end_dirop_shared(parent, de);
+	else
+		end_dirop(de);
+}
+
 /* does lookup, returns the object with parent locked */
 struct dentry *start_removing_path(const char *name, struct path *path)
 {
@@ -5710,7 +5820,9 @@ static int __vfs_unlink(struct mnt_idmap *idmap, struct inode *dir,
 			struct dentry *dentry,
 			struct delegated_inode *delegated_inode,
 			int (*method)(struct inode *dir,
-				      struct dentry *dentry));
+				      struct dentry *dentry),
+			void (*done)(struct inode *dir,
+				     struct dentry *dentry));
 
 /**
  * vfs_unlink - unlink a filesystem object
@@ -5740,21 +5852,40 @@ static int __vfs_unlink(struct mnt_idmap *idmap, struct inode *dir,
 int vfs_unlink(struct mnt_idmap *idmap, struct inode *dir,
 	       struct dentry *dentry, struct delegated_inode *delegated_inode)
 {
-	return __vfs_unlink(idmap, dir, dentry, delegated_inode, NULL);
+	return __vfs_unlink(idmap, dir, dentry, delegated_inode, NULL, NULL);
 }
 EXPORT_SYMBOL(vfs_unlink);
 
 /*
  * The body of vfs_unlink().  @method, if not NULL, is called in place of
- * dir->i_op->unlink(); vfs_unlink() passes NULL.
+ * dir->i_op->unlink(); vfs_unlink() passes NULL, so ->unlink() is still
+ * called only with dir->i_rwsem held exclusive.  vfs_unlink_shared() passes
+ * the directory's ->unlink_shared(), which its caller read before taking
+ * the lock, to choose the shared mode it then took.  It is passed in, not
+ * read here, so that the lock mode and the method come from one read of
+ * ->i_op.  A positive return from it means that nothing was removed:
+ * everything that follows a removal is skipped, and the value is handed
+ * back.
+ *
+ * @done is the directory's ->unlink_shared_done(), from that same read of
+ * ->i_op: both or neither.  It is called when @method has been called and
+ * has not handed the removal back, after any event for the removal is out
+ * and before the caller drops the parent's lock, to end the exclusion for
+ * the name that @method returned still holding.  A creator of the name that
+ * the call releases therefore cannot have its create event out first.  The
+ * paths that do not reach @method installed no exclusion and so make no
+ * call: this is the one function that knows which of the two happened.
  */
 static int __vfs_unlink(struct mnt_idmap *idmap, struct inode *dir,
 			struct dentry *dentry,
 			struct delegated_inode *delegated_inode,
 			int (*method)(struct inode *dir,
-				      struct dentry *dentry))
+				      struct dentry *dentry),
+			void (*done)(struct inode *dir,
+				     struct dentry *dentry))
 {
 	struct inode *target = dentry->d_inode;
+	bool call_done = false;
 	int error = may_delete_dentry(idmap, dir, dentry, false);
 
 	if (error)
@@ -5777,10 +5908,13 @@ static int __vfs_unlink(struct mnt_idmap *idmap, struct inode *dir,
 			error = try_break_deleg(target, 0, delegated_inode);
 			if (error)
 				goto out;
-			if (method)
+			if (method) {
 				error = method(dir, dentry);
-			else
+				/* A positive return left nothing to end. */
+				call_done = error <= 0;
+			} else {
 				error = dir->i_op->unlink(dir, dentry);
+			}
 			if (!error) {
 				dont_mount(dentry);
 				detach_mounts(dentry);
@@ -5798,7 +5932,41 @@ out:
 		d_delete_notify(dir, dentry);
 	}
 
+	/*
+	 * After the event, so that the exclusion the method kept for the name
+	 * outlasts it: a creator of the name waiting for that exclusion is
+	 * still waiting while the event is delivered, and one waiting for the
+	 * parent's lock is waiting for a lock the caller still holds.
+	 */
+	if (call_done)
+		done(dir, dentry);
+
 	return error;
+}
+
+/*
+ * As vfs_unlink(), for a caller that read @unlink_shared, the directory's
+ * ->unlink_shared(), to choose the lock mode, and then took dir->i_rwsem
+ * shared.  @dentry must be a non-directory that start_dirop_shared()
+ * resolved under that hold.  Returns a positive value, UNLINK_NEED_EXCL,
+ * with nothing removed, if the filesystem could not do it with the lock
+ * shared; the caller then does it again through vfs_unlink() with the lock
+ * held exclusive.  @unlink_shared_done is the directory's
+ * ->unlink_shared_done(), from the same read of ->i_op, and goes with it.
+ * Not exported: filename_unlinkat() is the only caller.
+ */
+static int vfs_unlink_shared(struct mnt_idmap *idmap, struct inode *dir,
+			     struct dentry *dentry,
+			     struct delegated_inode *delegated_inode,
+			     int (*unlink_shared)(struct inode *dir,
+						  struct dentry *dentry),
+			     void (*unlink_shared_done)(struct inode *dir,
+							struct dentry *dentry))
+{
+	/* A directory is never kept under the shared lock. */
+	VFS_WARN_ON_ONCE(d_is_dir(dentry));
+	return __vfs_unlink(idmap, dir, dentry, delegated_inode,
+			    unlink_shared, unlink_shared_done);
 }
 
 /*
@@ -5817,7 +5985,16 @@ int filename_unlinkat(int dfd, struct filename *name)
 	struct inode *inode;
 	struct delegated_inode delegated_inode = { };
 	unsigned int lookup_flags = 0;
+	const struct inode_operations *iop;
+	int (*unlink_shared)(struct inode *dir, struct dentry *dentry);
+	void (*unlink_shared_done)(struct inode *dir, struct dentry *dentry);
+	bool force_excl = false;
 retry:
+	/*
+	 * An -ESTALE re-resolution starts over: an escalation a previous pass
+	 * asked for applied to the dentry that pass found, not to this one.
+	 */
+	force_excl = false;
 	error = filename_parentat(dfd, name, lookup_flags, &path, &last, &type);
 	if (error)
 		return error;
@@ -5830,7 +6007,33 @@ retry:
 	if (error)
 		goto exit_path_put;
 retry_deleg:
-	dentry = start_dirop(path.dentry, &last, lookup_flags);
+	/*
+	 * One read of ->i_op decides the lock mode, the lookup protocol, the
+	 * method that is called and the unlock.  What is read is the method
+	 * itself, and that is what is passed down, so the method that chose
+	 * the lock mode is the method that is called, and nothing below goes
+	 * back to ->i_op for it.  It is read after retry_deleg: so that each
+	 * acquisition of the lock reads it afresh.  The exclusive retry needs
+	 * ->unlink(), so a filesystem that provides only ->unlink_shared() has
+	 * not opted in.  Nor has one that provides it without
+	 * ->unlink_shared_done(): the exclusion the first installs for the name
+	 * is ended by the second, and there is nowhere else to end it, so the
+	 * three are taken together or not at all.  Nor on a superblock that
+	 * has set SB_I_NAMES_COLLIDE: the exclusion the method installs is per
+	 * name as the dcache compares names, as an O_CREAT open's is, and it
+	 * is tested last for the same reason; see atomic_open_create_shared().
+	 * An O_CREAT open follows the same rule in lookup_open().
+	 */
+	iop = path.dentry->d_inode->i_op;
+	unlink_shared = force_excl ? NULL : iop->unlink_shared;
+	unlink_shared_done = iop->unlink_shared_done;
+	if (!iop->unlink || !unlink_shared || !unlink_shared_done ||
+	    (READ_ONCE(path.dentry->d_sb->s_iflags) & SB_I_NAMES_COLLIDE)) {
+		unlink_shared = NULL;
+		unlink_shared_done = NULL;
+	}
+	dentry = start_unlink_dirop(path.dentry, &last, lookup_flags,
+				    unlink_shared);
 	error = PTR_ERR(dentry);
 	if (IS_ERR(dentry))
 		goto exit_drop_write;
@@ -5841,24 +6044,59 @@ retry_deleg:
 			error = -EISDIR;
 		else
 			error = -ENOTDIR;
-		end_dirop(dentry);
+		end_unlink_dirop(path.dentry, dentry, unlink_shared);
 		goto exit_drop_write;
+	}
+	/*
+	 * A directory is not kept under the shared lock.  __d_unalias() can
+	 * move or rename a directory alias while holding its parent no more
+	 * than shared, and may_delete_dentry() looks at ->d_parent in a
+	 * BUG_ON() before it answers -EISDIR.  Nothing above looked at more
+	 * than the type, and end_dirop_shared() unlocks the parent it is
+	 * given.  Do it again with the lock held exclusive, where the answer
+	 * is the one it has always been.
+	 */
+	if (unlink_shared && d_is_dir(dentry)) {
+		end_dirop_shared(path.dentry, dentry);
+		force_excl = true;
+		goto retry_deleg;
 	}
 	inode = dentry->d_inode;
 	ihold(inode);
 	error = security_path_unlink(&path, dentry);
 	if (error)
 		goto exit_end_dirop;
-	error = vfs_unlink(mnt_idmap(path.mnt), path.dentry->d_inode,
-			   dentry, &delegated_inode);
+	if (unlink_shared)
+		error = vfs_unlink_shared(mnt_idmap(path.mnt),
+					  path.dentry->d_inode, dentry,
+					  &delegated_inode, unlink_shared,
+					  unlink_shared_done);
+	else
+		error = vfs_unlink(mnt_idmap(path.mnt), path.dentry->d_inode,
+				   dentry, &delegated_inode);
 exit_end_dirop:
-	end_dirop(dentry);
+	end_unlink_dirop(path.dentry, dentry, unlink_shared);
 	iput(inode);	/* truncate the inode here */
 	if (is_delegated(&delegated_inode)) {
 		error = break_deleg_wait(&delegated_inode);
 		if (!error)
 			goto retry_deleg;
 	}
+	/*
+	 * UNLINK_NEED_EXCL: ->unlink_shared() cannot do this one with the
+	 * parent held shared, and did nothing.  Do it again with the lock
+	 * held exclusive, through ->unlink(), which cannot ask again; that
+	 * bounds this.  Every positive value is treated alike, so none
+	 * reaches user space from the shared pass.  Being positive, it is
+	 * neither an errno nor the delegation return handled above, which is
+	 * made before the method is called.
+	 */
+	if (unlink_shared && unlikely(error > 0)) {
+		force_excl = true;
+		goto retry_deleg;
+	}
+	/* Only ->unlink_shared() may return a positive value. */
+	VFS_WARN_ON_ONCE(error > 0);
 exit_drop_write:
 	mnt_drop_write(path.mnt);
 exit_path_put:

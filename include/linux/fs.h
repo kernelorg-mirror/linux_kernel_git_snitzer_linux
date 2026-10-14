@@ -2053,7 +2053,40 @@ struct inode_operations {
 	struct dentry *(*mkdir2) (struct mnt_idmap *, struct inode *,
 				  struct dentry *, umode_t, unsigned int);
 	iop_flags_t iop_flags;
+	/* Last, not beside ->unlink, so that no other member moves */
+	int (*unlink_shared)(struct inode *dir, struct dentry *dentry);
+	void (*unlink_shared_done)(struct inode *dir, struct dentry *dentry);
 } ____cacheline_aligned;
+
+/**
+ * enum unlink_shared_returns - positive returns of ->unlink_shared()
+ *
+ * @UNLINK_NEED_EXCL: this removal cannot be made with the parent's i_rwsem
+ *	held shared, and nothing was done.  The VFS drops the lock, takes it
+ *	exclusive, looks the name up again and calls ->unlink() for it, which
+ *	cannot ask again.
+ *
+ * ->unlink_shared() is ->unlink() for a filesystem that can remove a
+ * non-directory with the parent's i_rwsem held shared; providing it, along
+ * with ->unlink() and ->unlink_shared_done(), is the opt-in.  The VFS calls
+ * it only with the lock held shared and goes on calling ->unlink() only with
+ * the lock held exclusive, so neither method has to ask which mode it was
+ * given.  It returns 0, a negative errno, or a value from this enum, which
+ * no other inode operation may return.  What the VFS still provides under
+ * the shared lock, and what the filesystem owes for the exclusion the lock
+ * no longer gives, is set out in Documentation/filesystems/locking.rst.
+ *
+ * ->unlink_shared() returns with whatever it installed to order the removal
+ * against the resolvers of the name still installed, and
+ * ->unlink_shared_done() ends it.  The VFS calls that after any delete
+ * event for the removal and before it drops the parent's i_rwsem, for every
+ * call of ->unlink_shared() that did not return a positive value and for no
+ * other, so a filesystem providing one without the other has not opted in
+ * and its removals keep the exclusive lock.
+ */
+enum unlink_shared_returns {
+	UNLINK_NEED_EXCL	= 1,
+};
 
 /*
  * ->atomic_open() may be called with the parent directory's i_rwsem held
@@ -2078,7 +2111,11 @@ struct inode_operations {
  *    serialized against all of them.  It runs concurrently with other
  *    O_CREAT opens, with an ->atomic_open() for the same or another name
  *    without O_CREAT, and with ->lookup() and ->iterate_shared(), which
- *    already run with i_rwsem held shared.
+ *    already run with i_rwsem held shared.  A filesystem that also
+ *    provides ->unlink_shared() adds the removal of a non-directory to
+ *    that list, the same name included: it orders the two itself, and
+ *    ->unlink_shared_done() is what keeps the order of their
+ *    notifications for one name.  See enum unlink_shared_returns above.
  *
  * Ignored unless the filesystem also provides ->atomic_open, and ignored on
  * a superblock with SB_I_NAMES_COLLIDE set in ->s_iflags: there the in-lookup

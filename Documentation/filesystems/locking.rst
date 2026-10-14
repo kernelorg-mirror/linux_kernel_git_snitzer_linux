@@ -65,6 +65,8 @@ prototypes::
 	struct dentry * (*lookup) (struct inode *,struct dentry *, unsigned int);
 	int (*link) (struct dentry *,struct inode *,struct dentry *);
 	int (*unlink) (struct inode *,struct dentry *);
+	int (*unlink_shared) (struct inode *,struct dentry *);
+	void (*unlink_shared_done) (struct inode *,struct dentry *);
 	int (*symlink) (struct mnt_idmap *, struct inode *,struct dentry *,const char *);
 	struct dentry *(*mkdir) (struct mnt_idmap *, struct inode *,struct dentry *,umode_t);
 	int (*rmdir) (struct inode *,struct dentry *);
@@ -107,6 +109,7 @@ mknod:		exclusive
 symlink:	exclusive
 mkdir:		exclusive
 unlink:		exclusive (both)
+unlink_shared:	shared on parent, exclusive on victim (see below)
 rmdir:		exclusive (both)(see below)
 rename:		exclusive (both parents, some children)	(see below)
 readlink:	no
@@ -128,12 +131,16 @@ get_offset_ctx  no
 ==============	==================================================
 
 
-	Additionally, ->rmdir(), ->unlink() and ->rename() have ->i_rwsem
-	exclusive on victim.
+	Additionally, ->rmdir(), ->unlink(), ->unlink_shared() and ->rename()
+	have ->i_rwsem exclusive on victim.
 	cross-directory ->rename() has (per-superblock) ->s_vfs_rename_sem.
-	->unlink() and ->rename() have ->i_rwsem exclusive on all non-directories
-	involved.
+	->unlink(), ->unlink_shared() and ->rename() have ->i_rwsem exclusive
+	on all non-directories involved.
 	->rename() has ->i_rwsem exclusive on any subdirectory that changes parent.
+	->unlink_shared_done() has ->i_rwsem shared on the parent and nothing
+	on the victim.  It is not an operation on the directory but the end of
+	one, and is described with ->unlink_shared() below rather than listed
+	above.
 
 	->atomic_open() with O_CREAT set is called with ->i_rwsem on the
 	parent held exclusive, unless the filesystem has set
@@ -168,7 +175,8 @@ get_offset_ctx  no
 	Nothing else changes: ->create(), ->link(), ->unlink(), ->mkdir(),
 	->rmdir(), ->mknod(), ->symlink() and ->rename() still take
 	->i_rwsem exclusive on the parent, so a create holding it shared
-	still excludes them.
+	still excludes them.  It does not exclude ->unlink_shared(), if the
+	filesystem provides that as well; see below.
 
 	The flag is also ignored, and the parent taken exclusive, on a
 	superblock that has set SB_I_NAMES_COLLIDE in ->s_iflags.  A
@@ -213,6 +221,168 @@ get_offset_ctx  no
 	d_alloc_parallel() from ->atomic_open() instead relies on in-lookup
 	dentries being allocated under ->i_rwsem, which is planned to
 	change.
+
+	->unlink_shared() is an optional second removal method.  For a
+	directory whose ->i_op provides it together with ->unlink() and
+	->unlink_shared_done(), filename_unlinkat() - the path of unlink(2),
+	and of unlinkat(2) without AT_REMOVEDIR - takes ->i_rwsem on the
+	parent shared and calls ->unlink_shared() where it used to call
+	->unlink().  ->unlink() itself is still called only with the parent
+	held exclusive: by the retry described below, and by every other
+	caller of vfs_unlink(), none of which changes.  So each of the two
+	methods knows the mode of the parent lock from having been called,
+	and neither needs to ask the lock.  On a superblock that has set
+	SB_I_NAMES_COLLIDE, ->unlink_shared() is not called, for the reason
+	given for O_CREAT above: the exclusion it installs is per name as
+	the dcache compares names.  The VFS reads the bit before it takes
+	the parent lock, so a removal that read it clear may still call
+	->unlink_shared() after it is set; a filesystem that sets the bit
+	while mounted must hand such a removal back.
+
+	->unlink_shared_done() is the other half of the method and is
+	mandatory with it: a directory whose ->i_op has one without the
+	other has not opted in, and its removals go to ->unlink() with the
+	parent held exclusive as before.  The VFS calls it for every call of
+	->unlink_shared() that did not return a positive value, and for no
+	other, with ->i_rwsem on the parent still held shared and nothing
+	held on the victim, after any delete event for the removal and
+	before the parent lock is dropped.  It is where the exclusion
+	->unlink_shared() installed for the name ends; see the order of
+	notifications below.
+
+	With the parent held shared the VFS still provides this much.  The
+	dentry was resolved under this hold of the lock through
+	d_alloc_parallel(); it is positive, is not a directory, and is
+	referenced until after the method returns.  ->i_rwsem on the victim
+	is held exclusive across the call, as it is for ->unlink(), so two
+	removals of one inode are serialized.  ->create(), ->link(),
+	->symlink(), ->mkdir(), ->mknod(), ->rmdir() and ->rename() still
+	take the parent exclusive and so are still excluded.  And while the
+	dentry stays hashed, no second dentry for its name can be hashed:
+	d_alloc_parallel() returns a hashed dentry rather than creating
+	in-lookup state for the name, so a lookup or an open that resolves
+	the name calls ->d_revalidate() on that dentry, and a hashed
+	positive dentry is never passed to ->atomic_open().
+
+	What the VFS no longer provides is exclusion of ->lookup(), of any
+	->atomic_open() called with the parent held shared (with O_CREAT
+	too, if the filesystem has set IOPF_ATOMIC_OPEN_CREATE_SHARED), of
+	->iterate_shared() or of a second ->unlink_shared() for the same
+	name.  Nor does it keep the dentry hashed: a lookup whose
+	->d_revalidate() fails d_invalidate()s it, and d_delete() on behalf
+	of another remover of the name unhashes it while it is still
+	positive.  Nor is anything except a lookup of the name routed
+	through ->d_revalidate(): the filesystem's own users of d_lookup()
+	and d_alloc_parallel(), readdir priming among them, reach the
+	dentry directly.
+
+	The filesystem therefore orders the removal itself against every
+	lookup, open and create of the same name that the parent lock no
+	longer excludes, and against its own directory listings: a listing
+	that the backing store may have produced before a removal took
+	effect - one begun before the removal, or while it was in flight -
+	must not instantiate the removed name, and must not refresh the
+	inode being removed, once that removal may have completed.
+	Whatever it anchors that ordering on is found through the dcache,
+	which compares names as the filesystem's dentry operations do, byte
+	for byte without them.  If the backing store treats two names as
+	one object where those do not compare equal, through case folding
+	or Unicode normalization, the removal of one name is not ordered
+	against a lookup or open of the other that the parent lock no
+	longer excludes.  Such removals must be handed back, and where the
+	filesystem cannot tell that they can happen, that is a limitation
+	it documents.
+
+	One arrangement that provides the ordering is a per-dentry marker
+	that ->d_revalidate() waits on, kept by these rules:
+
+	- the marker is installed under ->d_lock, and only on a dentry that
+	  in that same ->d_lock section is still hashed, is still positive
+	  and has no reference but the caller's.  A resolver that can fail
+	  ->d_revalidate(), and so have the dentry unhashed, takes its
+	  reference before it consults ->d_revalidate(), so with a count of
+	  one every resolver that consults ->d_revalidate() after the marker
+	  is installed finds it and waits.  In that same ->d_lock section,
+	  after installing the marker and not before, invalidate ->d_seq
+	  (write_seqcount_invalidate(), whose barrier orders only earlier
+	  stores): an RCU-walk that consulted ->d_revalidate() before the
+	  marker was installed then fails its ->d_seq recheck when it takes
+	  its reference, and retries in ref-walk, where it finds the marker
+	  and waits.  The one resolver this does not reach is an open by
+	  file handle, whose reference comes from d_obtain_alias() without a
+	  ->d_revalidate(); the exclusive parent lock never excluded it
+	  either;
+	- RCU-walk consults ->d_revalidate() without a reference and cannot
+	  wait, so for the rule above to hold ->d_revalidate() must answer
+	  -ECHILD under LOOKUP_RCU while the marker is set, and must never
+	  answer 0 under LOOKUP_RCU.  -ECHILD sends the walk to ref-walk,
+	  where the consult is repeated with a reference held;
+	- none of the filesystem's own paths but the remover's unhashes the
+	  dentry while the marker is set, and the remover does so only once
+	  the backing store has answered its removal; none hands the dentry
+	  to a caller as the result of a lookup without waiting for the
+	  marker.  Erring toward leaving the dentry hashed is safe: a later
+	  resolver of the name waits for the removal, after which the
+	  remover's own d_delete() normally unhashes it, and an open by path
+	  that fails on it with -EOPENSTALE is retried by the VFS, first in
+	  ref-walk if it was begun in RCU-walk and, if it fails again, with
+	  LOOKUP_REVAL, which tells ->d_revalidate() not to trust its cache;
+	- the marker is cleared in ->unlink_shared_done() and not before
+	  ->unlink_shared() returns, so that it outlasts the delete event the
+	  VFS emits for the removal;
+	- anything else - a second reference, a dentry that is no longer
+	  hashed, a removal the filesystem would carry out by renaming - is
+	  answered with UNLINK_NEED_EXCL.
+
+	UNLINK_NEED_EXCL is a positive value that only ->unlink_shared() may
+	return.  It says that this removal cannot be made with the parent
+	held shared and that nothing was done.  The VFS then drops the lock,
+	takes it exclusive, looks the name up again and calls ->unlink(),
+	which cannot ask again.  A directory found by the shared lookup is
+	sent the same way without the method being called, unless the name
+	ends in a slash, which is answered -EISDIR from its type alone; so
+	->unlink_shared() is never passed a directory.  A removal that the
+	method hands back runs the permission check, the audit record, both
+	security hooks and both delegation checks once in each pass, and its
+	name is looked up twice.
+
+	A lookup that holds the parent shared can now wait in
+	->d_revalidate() for such a removal, for as long as the removal
+	takes; before, it would have waited for the parent lock instead.  If
+	the filesystem's wait there is uninterruptible, so is this one.
+
+	The order of notifications for one name is what
+	->unlink_shared_done() keeps.  ->unlink_shared() returns with its
+	exclusion for the name still installed; the VFS emits the delete
+	event for the removal, then calls ->unlink_shared_done() to end it,
+	then drops the parent lock.  A creator of the name that the call
+	releases emits its create event after that delete event whichever
+	mode it holds the parent in: one that takes the parent exclusive is
+	waiting for a lock that is held until after the call, and one that
+	holds it shared - an O_CREAT ->atomic_open(), once the filesystem
+	has set IOPF_ATOMIC_OPEN_CREATE_SHARED - is waiting for the
+	exclusion itself.  A filesystem that ends its exclusion inside
+	->unlink_shared() instead loses that order against a creator of the
+	second kind: the create event can come before the delete event of
+	the removal it waited for, and a watcher then concludes that the
+	name is gone while it exists.  That is why ->unlink_shared_done() is
+	not optional.
+
+	What this does not order is a creator that never met the exclusion.
+	When d_delete_notify() unhashes the name before it emits the event -
+	when another reference is held at the delete, or the
+	fs.dentry-negative sysctl is set - a resolver that arrives after the
+	unhash finds no dentry for the name, makes its own, and is ordered
+	against the removal by nothing; the window is the span of the event
+	itself.  Nor does any of this decide what a creator released by
+	->unlink_shared_done() goes on to resolve: the dentry it was waiting
+	on may still be positive, and whether ->d_revalidate() then sends it
+	to the backing store is the filesystem's answer and not the VFS's.
+
+	->unlink_shared() is meant as a transitional interface.  It lets one
+	filesystem at a time stop relying on the exclusive parent lock for
+	removal, and ->unlink() and ->unlink_shared() can become one again
+	once removal locks the target dentry and not the parent.
 
 See Documentation/filesystems/directory-locking.rst for more detailed discussion
 of the locking scheme for directory operations.

@@ -1409,3 +1409,38 @@ use only if you have no alternative.
 The .create inode_operation no longer receives the 'excl' arg.  It must
 always assume the file does not already exist.  If the filesystem needs
 to be involved in non-exclusive create, it should provide atomic_open.
+
+---
+
+**informational**
+
+->unlink_shared() is added, as an optional inode operation.  A filesystem
+that does not provide it sees no change: ->unlink() is still called with the
+parent's ->i_rwsem held exclusive.  One that provides it has unlink(2) call
+it with the parent held shared instead, and takes on ordering a removal
+against the lookups and opens of the same name that the lock no longer
+excludes, and against its own directory listings.  It may return
+UNLINK_NEED_EXCL, having done nothing, to have ->unlink() called for that
+removal with the parent held exclusive after all; ->unlink() has to stay
+correct for that case and for every other caller of vfs_unlink().
+
+->unlink_shared() is paired with ->unlink_shared_done() and needs it: a
+filesystem that provides one without the other has not opted in.  Whatever
+->unlink_shared() installed to order the removal against the resolvers of the
+name is still installed when it returns, and ->unlink_shared_done() ends it,
+after any delete event the VFS emits for the removal.  The VFS calls it for
+every call of ->unlink_shared() that did not return a positive value, and for
+no other.
+
+For such a filesystem the ->iterate_shared() entry above no longer holds in
+full.  ->iterate_shared() is not excluded from that removal, and for dcache
+pre-seeding d_alloc_parallel() alone is not enough: a listing that may have
+been produced before a removal took effect, including one begun while the
+removal was in flight, must not instantiate the removed name, or refresh the
+inode being removed, once that removal may have completed.  See
+Documentation/filesystems/locking.rst.
+
+If the filesystem has also set IOPF_ATOMIC_OPEN_CREATE_SHARED, the opens
+that the lock no longer excludes include O_CREAT ones.  That flag already
+makes the ->iterate_shared() entry untrue for those opens, which hold the
+parent shared alongside ->iterate_shared().
