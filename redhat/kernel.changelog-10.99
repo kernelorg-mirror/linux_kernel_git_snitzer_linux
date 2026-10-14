@@ -1,3 +1,14 @@
+* Wed Oct 14 2026 Mike Snitzer <snitzer@kernel.org> [7.3-4]
+- Move "NFSD: Enable return of an updated stable_how to NFS clients" and
+  "NFSD: add io_cache_write modes that persist each direct-mode WRITE"
+  out of nfsd-testing-canary-dontcache and into the Hammerspace private
+  patches
+- Reword commit messages in nfsd-testing-canary-dontcache and
+  nfsd-testing-canary-dontcache-LOCALIO, and shorten the comment on the
+  IOCB_DONTCACHE of nfs_dio_split()'s direct middle
+- Credit LLM assistance in every canary topic as "Assisted-by: LLM",
+  directly above the author's Signed-off-by
+
 * Mon Oct 12 2026 Mike Snitzer <snitzer@kernel.org> [7.3-3]
 - Update anna-nfs-next with the 8 commits anna-nfs/linux-next has added,
   each cherry-picked with -x from its current commit: Chuck Lever's
