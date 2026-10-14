@@ -1,0 +1,12 @@
+# The loan's whole footprint brought toward the cache: rings of 128 and a
+# held receive buffer of 384 KiB, then 256 KiB, with 8 and 4 WRITEs let in
+# at once, and the copy at each.  Cells of 50 s and 30 s of idle before
+# each, as 16k-42-loan-memcost.plan, which is the same at rings of 256 and
+# 1 MiB (../LOAN-PERFORMANCE.md).
+#     SGL_BACKING=/hs/nvme0/zcbudget-nvmet.img NULLB_MIB=16384 HW_ANY_MTU=1 RX_LINGER_US=50 PLACE=1 PRP_DIR=/hs/nvme0/zcbudget STEP_JOBS=16 STEP_BS=8M STEP_SECS=50 CELL_REST=30
+128 393216 8 sgl step-on-n16
+128 393216 4 sgl step-on-n16
+128 393216 0 sgl step-copy-n16
+128 262144 8 sgl step-on-n16
+128 262144 4 sgl step-on-n16
+128 262144 0 sgl step-copy-n16

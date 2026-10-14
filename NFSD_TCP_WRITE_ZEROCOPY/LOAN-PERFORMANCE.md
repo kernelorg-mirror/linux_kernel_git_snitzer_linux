@@ -274,6 +274,68 @@ mesh's two events counted the whole time:
   held buffer and shallower rings has not been run with the
   counter.
 
+## The loan with a smaller footprint: rings of 128 and a 384 or 256 KiB held buffer (13 October, 20:00 to 20:20)
+
+`plans/16k-43-loan-memcost-small.plan`, run and read as the one
+before it (`loanmem-3`), the counter counted throughout:
+
+| held buffer | | loan, 8 WRITEs | loan, 4 | the copy |
+|---|---|---|---|---|
+| 384 KiB | GB/s over the cell (fio) | 11.73 | 8.40 | 10.41 |
+| | region in use, steady / at most | 48 / 50 MiB | 43 / 46 MiB | 37 / 38 MiB |
+| | client retransmits, ring drops | 1,974, 646 | 163, 207 | 21,660, 17,966 |
+| | **requests to memory a line of payload** | **2.00** (1.87 to 2.25) | **0.93** (0.88 to 1.22) | **5.02** (4.94 to 5.64) |
+| | lines filled into the cache, a line | 2.71 | 2.54 | 4.48 |
+| 256 KiB | GB/s over the cell (fio) | 11.72 | 7.45 | 10.41 |
+| | region in use, steady / at most | 46 / 49 MiB | 41 / 45 MiB | 37 / 37 MiB |
+| | client retransmits, ring drops | 1,371, 203 | 72, 120 | 3,952, 171 |
+| | **requests to memory a line of payload** | **1.86** (1.79 to 2.02) | **0.80** (0.71 to 1.07) | **4.90** (4.58 to 5.31) |
+| | lines filled into the cache, a line | 2.67 | 2.51 | 4.47 |
+
+Every loaned WRITE was written direct in all four loan cells
+(718,808, 508,528, 717,472 and 453,680) and none held more than it
+was charged.
+
+Across the three runs, the loan at the stand-in's full rate (11.7
+GB/s) with what it held and what it asked of memory:
+
+| rings, held buffer, budget | region in use | requests to memory a line | its copy at the same rings and buffer |
+|---|---|---|---|
+| 256, 1 MiB, 16 WRITEs | 76 MiB | 4.07 | 5.75 |
+| 256, 1 MiB, 8 | 62 MiB | 2.99 | 5.75 |
+| 128, 384 KiB, 8 | 48 MiB | 2.00 | 5.02 |
+| 128, 256 KiB, 8 | 46 MiB | 1.86 | 4.90 |
+
+- **The loan's cost in memory follows what it holds, all the way
+  down**: from 4.07 requests a line at 76 MiB to 1.86 at 46 MiB,
+  with no loss of rate. At the smallest setting it asks under two
+  fifths of what its copy does (1.86 for 4.90), and less than a
+  copy straight to the drives (2.17) though it still carries the
+  stand-in's own passage of the data.
+- **The copy does not move**: 5.75, 5.02, 4.90. Its footprint
+  falls as well (49 MiB to 37) and it gains little, because what a
+  copy pays for is its destination, which is outside the region and
+  as large as ever.
+- **With 4 WRITEs let in it is under one request a line** (0.93
+  and 0.80), and the rate goes with it: 8.40 and 7.45 GB/s for
+  11.7. Sixteen connections share four WRITEs' worth of budget and
+  most of them wait. That is the budget holding the load back, not
+  memory. A budget of 8 is the smallest here that carries the
+  stand-in's full rate.
+- Even 41 MiB is more than the 32 MiB cache, and the stand-in adds
+  its own data in flight to what the region shows. So the figures
+  are still falling at the smallest setting tried: the floor on
+  this stand-in has not been found.
+- The copy at 384 KiB dropped 17,966 frames at rings of 128 and
+  retransmitted 21,660 segments; at 256 KiB, 171 and 3,952. The
+  loans dropped a few hundred at most.
+
+What it says for drives that take the pages themselves: nothing
+directly, as before. But the one thing the calibration predicted
+that could be tested here has held three times over. A loaned
+byte's cost in memory is set by how much is waiting, and the budget
+and the held buffer are the controls for that.
+
 ## What is not measured, and cannot be on this host
 
 A loan written direct to a drive that takes arbitrary pieces, with
@@ -281,13 +343,14 @@ nothing in between. These drives need whole pages, so a loan to
 them goes through the page cache (a copy, later); the stand-in adds
 its own. What this host can still give:
 
-- the loan with the whole footprint brought inside the cache (a 256
-  or 384 KiB held buffer, rings of 128, a budget of 4 to 8 WRITEs),
-  to see how low the requests a line go on the stand-in;
+- the floor on the stand-in: rings of 64 or eight connections, to
+  bring the region in use under 32 MiB with a budget that still
+  carries the rate (6 WRITEs has not been tried);
 - the same pair on two ports, which `sweep.sh` does not do.
 
 Done since this was first written, above: the pair with each cell
-inside the drive's fast region, and the loan against its budget.
+inside the drive's fast region, the loan against its budget, and
+the loan with shallower rings and a smaller held buffer.
 
 ## The battery, for this kernel and the next
 
@@ -302,6 +365,7 @@ first:
 | copy mode, two ports | `RCVBUF=393216 ENTRIES=128 LINGER=0 LOWAT=0 ./twoport.sh <out> ab`, three runs | GB/s (60.0 to 60.4 on build 464), requests a line (2.17) |
 | copy mode, one port on eight drives | `FS_A="/hs/nvme0 ... /hs/nvme7" RUNTIME=60 LOWAT=0 ./twoport.sh <out> a`, and `b`, three each | GB/s (46.5 to 47.4 on build 464) |
 | the loan at three budgets and its copy on the stand-in | `plans/16k-42-loan-memcost.plan` through `sweep.sh` with `memcost-log.sh` beside it, as above | GB/s, written direct or not, region held, requests a line (4.07, 2.99, 2.28 and 5.75 on build 464) |
+| the same with rings of 128 and a 384 and 256 KiB held buffer | `plans/16k-43-loan-memcost-small.plan`, the same way; put the port's rings back to 256 after it | the same (2.00, 0.93, 5.02; 1.86, 0.80, 4.90) |
 
 `memcost-log.sh <prefix> <seconds> <port> [drives]` beside a
 `twoport.sh` run and `memcost-read.py <prefix> <port>` after it give
