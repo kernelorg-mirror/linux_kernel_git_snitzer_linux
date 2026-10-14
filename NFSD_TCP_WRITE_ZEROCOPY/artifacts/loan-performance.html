@@ -277,13 +277,13 @@
     <div class="tbl-wrap"><table class="q" style="min-width:600px">
       <thead><tr><th>What was running</th><th>Build 473: GB/s</th><th>Bytes through memory for each byte moved</th><th>Build 464</th></tr></thead>
       <tbody>
-        <tr><td>One port receiving plain TCP, the receivers discarding it unread</td><td class="c">49.8</td><td class="r">0.01</td><td class="m">49.6 &middot; 0.03</td></tr>
+        <tr><td>One port receiving plain TCP, the receivers discarding it unread</td><td class="c">49.8</td><td class="c">0.01</td><td class="m">49.6 &middot; 0.03</td></tr>
         <tr><td>Both ports, the same</td><td class="c">98.0</td><td class="c">0.16</td><td class="m">99.6 &middot; 0.25</td></tr>
-        <tr><td>Both ports, the receivers copying it into a small buffer</td><td class="c">83.1</td><td class="x">1.28</td><td class="m">82.7 &middot; 1.17</td></tr>
-        <tr><td>All eight drives writing data that is still in the cache</td><td class="c">94.9</td><td class="r">0.07</td><td class="m">94.9 &middot; 0.09</td></tr>
+        <tr><td>Both ports, the receivers copying it into a small buffer</td><td class="c">83.1</td><td class="c">1.28</td><td class="m">82.7 &middot; 1.17</td></tr>
+        <tr><td>All eight drives writing data that is still in the cache</td><td class="c">94.9</td><td class="c">0.07</td><td class="m">94.9 &middot; 0.09</td></tr>
         <tr><td>All eight drives writing data that has left the cache</td><td class="c">58.0</td><td class="c">0.59</td><td class="m">58.0 &middot; 0.58</td></tr>
         <tr><td>All eight drives reading into buffers that stay in the cache</td><td class="c">105.4</td><td class="c">0.26</td><td class="m">105.4 &middot; 0.22</td></tr>
-        <tr><td>All eight drives reading into buffers that do not</td><td class="c">105.4</td><td class="x">1.03</td><td class="m">105.4 &middot; 1.04</td></tr>
+        <tr><td>All eight drives reading into buffers that do not</td><td class="c">105.4</td><td class="c">1.03</td><td class="m">105.4 &middot; 1.04</td></tr>
       </tbody>
     </table></div>
     <p>The first finding holds on 7.3: the card and the drives move data through the cache, and memory is involved only for what falls out of it.</p>
@@ -293,7 +293,7 @@
       <thead><tr><th>Copy mode, the client on its default <code>fq_codel</code></th><th>Build 473: GB/s</th><th>Bytes through memory for each byte of payload</th><th>Build 464</th></tr></thead>
       <tbody>
         <tr><td>Two ports, four drives each</td><td class="c">59.27 &middot; 59.36</td><td class="c">2.25 &middot; 2.23</td><td class="m" style="white-space:normal">59.96 to 60.41 in eight runs &middot; 2.17</td></tr>
-        <tr><td>One port on all eight drives, six runs on the two ports</td><td class="r">45.98 to 47.76</td><td class="r">1.42 to 1.48</td><td class="m" style="white-space:normal">46.5 to 47.4 &middot; not measured</td></tr>
+        <tr><td>One port on all eight drives, six runs on the two ports</td><td class="c">45.98 to 47.76</td><td class="c">1.42 to 1.48</td><td class="m" style="white-space:normal">46.5 to 47.4 &middot; not measured</td></tr>
       </tbody>
     </table></div>
     <p>One port shows no regression, and its 47.76 GB/s is the best one-port run on either build. Two ports carry about 1.5% less than on build 464 and use about 3% more memory for each byte, from two runs; that is not yet looked into, and a comparison of the client's queueing on 7.3 is queued behind the loan plans. <strong>A copy on one port uses 1.42 to 1.48 bytes through memory for each byte of payload</strong>, against 2.23 to 2.25 on two. Why is not measured; the likely reason is that with half the traffic more of nfsd's buffers are still in the cache when the drives take them. On build 464 this was measured for two ports only.</p>
@@ -303,10 +303,10 @@
     <div class="tbl-wrap"><table class="q" style="min-width:640px">
       <thead><tr><th>WRITEs let in</th><th>Build 473: GB/s</th><th>Bytes through memory, each byte of payload</th><th>Frames dropped at the rings</th><th>Build 464: GB/s &middot; bytes through memory</th></tr></thead>
       <tbody>
-        <tr><td class="c">16</td><td class="c">11.74</td><td class="c">4.01</td><td class="r">0</td><td class="m">11.74 &middot; 4.07</td></tr>
-        <tr><td class="c">8</td><td class="c">11.72</td><td class="c">2.99</td><td class="r">0</td><td class="m">11.74 &middot; 2.99</td></tr>
-        <tr><td class="c">4</td><td class="x">10.65</td><td class="r">2.37</td><td class="r">0</td><td class="m">10.59 &middot; 2.28</td></tr>
-        <tr><td class="m">copy</td><td class="c">10.44</td><td class="x">5.97</td><td class="r">0</td><td class="m">10.35 &middot; 5.75</td></tr>
+        <tr><td class="c">16</td><td class="c">11.74</td><td class="c">4.01</td><td class="c">0</td><td class="m">11.74 &middot; 4.07</td></tr>
+        <tr><td class="c">8</td><td class="c">11.72</td><td class="c">2.99</td><td class="c">0</td><td class="m">11.74 &middot; 2.99</td></tr>
+        <tr><td class="c">4</td><td class="c">10.65</td><td class="c">2.37</td><td class="c">0</td><td class="m">10.59 &middot; 2.28</td></tr>
+        <tr><td class="m">copy</td><td class="c">10.44</td><td class="c">5.97</td><td class="c">0</td><td class="m">10.35 &middot; 5.75</td></tr>
       </tbody>
     </table></div>
     <p><strong>The loan's cost in memory falls with what it holds, as on build 464, and its copy's does not.</strong> Every loaned WRITE was written direct, 2.08 million in the three loan cells, and none held more than it was charged. No cell dropped a frame at the rings, where build 464's run of this plan dropped 269 to 6,203 a cell. The other two plans, which take the loan down to its floor near 1.3 with rings of 128 and 64, are running and will be added here.</p>
