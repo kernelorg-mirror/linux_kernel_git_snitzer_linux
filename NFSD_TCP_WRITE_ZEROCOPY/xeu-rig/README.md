@@ -25,9 +25,8 @@ the drives' fast region:
   measurable.
 - **The limit on two ports is memory.** The DIMMs are fully
   populated (Mike: four at 5200 MT/s, 166 GB/s in theory). A copy
-  sends each byte through memory twice, so it cannot pass 83 GB/s
-  here and reaches 62 to 68 in a bare benchmark, 60.1 in frame-sized
-  pieces. NFS on two ports is at that, asking of memory what the
+  sends each byte through memory twice: the measured limit is a bare
+  benchmark's 62 to 68 GB/s, 60.1 in frame-sized pieces. NFS on two ports is at that, asking of memory what the
   saturated benchmark does (2.05e9 requests a second against 1.91e9).
   Nothing that adds parallelism around the copy moves it.
 - One port is at 95% of what its wire carries with no NFS (49.8).
@@ -39,7 +38,8 @@ calibrated, and the card and the drives measured by themselves: both
 move data through the cache, so a loaned byte that is still in the
 cache when the drive takes it asks about 0.1 requests of memory a
 line, against a copied byte's 2.17. The paragraph below was the
-question as first put; its "bounded near 83 GB/s" does not hold.
+question as first put; its supposing a loan bounded by memory as a
+copy is does not hold.
 **All of it is to be run again on the 7.3-rc7 kernel the series is
 being rebased onto (Mike), with one-port and two-port copy-mode runs
 to show no regression**: "The battery" in that document, and
@@ -47,7 +47,7 @@ to show no regression**: "The battery" in that document, and
 
 With no copy a payload byte still enters memory once from the card
 and leaves once to a drive. If both count against the same 166
-GB/s, a loan is bounded near 83 GB/s here too and not at the card's
+GB/s, a loan is bounded by memory as a copy is and not at the card's
 99. To measure: `arm_cmn/hnf_mc_reqs/` (requests to the memory
 controller) during a loan written direct, for each line of payload,
 beside the same figure for its copy. A copy on two ports costs 2.2
