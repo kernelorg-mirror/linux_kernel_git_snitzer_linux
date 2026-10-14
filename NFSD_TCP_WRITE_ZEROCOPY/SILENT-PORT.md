@@ -20,6 +20,7 @@ was found.
 | `silent-1` | 15:47 | **b** | second 35 | both ends' counters five times a second, before and after |
 | `rwbase-ab-randread-1m-2` | 14 October, 06:17 | a | second 37 | both ends' sockets 1.3 s in; READs, the client on `fq_codel` |
 | `rwbase-473-ab-rw70-8m-2` | 14 October, 12:17:50 | **b** | second 24 | **build 473 (7.3)**; a 70/30 8 MiB mix; the server's sockets 16 s in, the client's 15 s just before |
+| `b473-ab-3` | 14 October, 12:47:50 | **b** | second 25 | build 473; copy mode, two ports, WRITEs (the battery's regression check); per-second drives only |
 
 All are two ports at the two-port setting of the time. The first
 five are WRITEs with `fq` on the client's ports (unpinned since; see
@@ -228,16 +229,29 @@ GB/s apiece in bursts).
   advertisements of a zero receive window and 37,344 times it wanted
   to advertise one; on the server, no retransmissions in those 15 s.
   Port b was receiving 21.7 GB/s at the client and port a 17.8.
-- That sample's last ssh to the client (its management address,
-  `ss`, `nstat` and `ethtool -S` there) ended 6 s before the silence
-  began. The six events before it had no such sampling, so it is not
-  needed for one; whether it can set one off is not known.
+- That sample's last ssh to the client ended 6 s before the silence
+  began, which means less than it seems: the harness itself logs in
+  to the client about ten times a minute through every run (23 logins
+  in the 2.5 minutes around it), so an ssh near an event is routine.
+  The client's sshd journal does not have them all (none of the
+  sample's, none in the 3 minutes around the eighth), so they cannot
+  be lined up to the second from it.
 
 So the seventh has the sixth's signature, the client's side of one
 port no longer reaching the server, all of the port's connections
 at once, and the server's TCP sitting in backed-off timeouts, on a
 7.3 kernel at the settled setting. What stops the client's side is
 still not shown.
+
+**The eighth, 30 minutes later** (12:47:50, `$L/b473-ab-3`): port b
+again, 25 s into the battery's third two-port copy-mode run of
+WRITEs, at the settled setting with every audit passed. Its drives
+fell from 24 GB/s to 0 to 2 and port a's rose from 31 to 39; port b
+came to 14.64 GB/s, port a 32.81, the run 47.45 against 59.27 and
+59.36 for the two before it. No sampling of either end was under way
+beyond the harness's own. Two in the 21 two-port runs of build 473's
+battery (11:34 to 12:48), both on port b, one on READs mixed with
+WRITEs and one on WRITEs.
 
 Found the same day and not the silent port:
 - **Uneven splits between the ports in two-port 8 MiB loads**, on
