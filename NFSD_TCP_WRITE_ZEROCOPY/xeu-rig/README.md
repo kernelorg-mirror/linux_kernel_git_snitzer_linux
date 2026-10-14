@@ -99,6 +99,55 @@ lines in `$L/b473/results-twoport-473.tsv`, the memory samples
   figures should match these; `settled.sh` reports the knob as not in
   that kernel rather than failing on it.
 
+## The loan on 7.3: build 473 (14 October)
+
+The battery's step 4 on build 473: `plans/16k-42-loan-memcost.plan`,
+`16k-43-loan-memcost-small.plan` and `16k-44-loan-memcost-floor.plan`
+through `sweep.sh` on the stand-in, as written out in
+`../LOAN-PERFORMANCE.md`, 13:04 to 14:03 by tardis1's clock, with
+`CELL_BOUNCE=1` for all three (on build 464 for the third only, so the
+first two plans' footprints are not compared). Every cell was audited
+once its load was running, against its plan line, and passed. The runs
+are `$L/xeu-16k-473-loanmem-1` to `-3`, the memory samples
+`$L/loanmem-473-1` to `-3` and their readings `$L/loanmem-473-<n>.read.txt`.
+
+| rings, held buffer | WRITEs let in | build 473: GB/s | bytes through memory for each byte of payload | ring drops | build 464: GB/s, bytes, drops |
+|---|---|---|---|---|---|
+| 256, 1 MiB | 16 | 11.74 | 4.01 | 0 | 11.74, 4.07, 359 |
+| 256, 1 MiB | 8 | 11.72 | 2.99 | 0 | 11.74, 2.99, 269 |
+| 256, 1 MiB | 4 | 10.65 | 2.37 | 0 | 10.59, 2.28, 297 |
+| 256, 1 MiB | copy | 10.44 | 5.97 | 0 | 10.35, 5.75, 6,203 |
+| 128, 384 KiB | 8 | 11.73 | 2.14 | 1 | 11.73, 2.00, 646 |
+| 128, 384 KiB | 4 | 8.45 | 1.11 | 0 | 8.40, 0.93, 207 |
+| 128, 384 KiB | copy | 10.49 | 5.11 | 5 | 10.41, 5.02, 17,966 |
+| 128, 256 KiB | 8 | 11.66, 11.70 | 1.86, 1.78 | 0, 0 | 11.72, 1.86, 203; 11.71, 1.89, 221 |
+| 128, 256 KiB | 6 | 9.90 | 1.42 | 0 | 10.28, 1.39, 162 |
+| 128, 256 KiB | 4 | 7.44 | 1.01 | 0 | 7.45, 0.80, 120 |
+| 128, 256 KiB | copy | 10.41 | 4.96 | 0 | 10.41, 4.90, 171 |
+| 128, 192 KiB | 8 | 11.50 | 1.72 | 0 | 11.55, 1.70, 154 |
+| 128, 128 KiB | 8 | 10.74 | 1.68 | 0 | 10.81, 1.62, 121 |
+| 64, 256 KiB | 8 | 11.63 | 1.42 | 13,509 | 11.60, 1.36, 64,803 |
+| 64, 192 KiB | 8 | 11.46 | 1.38 | 3,216 | 11.43, 1.34, 19,809 |
+| 64, 128 KiB | 8 | 10.48 | 1.24 | 1 | 10.74, 1.32, 7,463 |
+| 64, 128 KiB | 6 | 8.24 | 0.79 | 0 | 8.12, 0.77, 865 |
+| 64, 128 KiB | copy | 10.48 | 4.72 | 0 | 10.47, 4.71, 7,898 |
+
+- **The loan on 7.3 is build 464's, cell for cell**: the same rates,
+  its cost in memory falling with what it holds to a floor of 1.24
+  (1.32 on 464), and its copy at 4.7 to 6.0 whatever it holds. The
+  edges are where they were: fewer than 8 WRITEs let in costs rate, a
+  128 KiB held buffer about 8%, and rings of 64 with a larger held
+  buffer drop frames by the thousand. The best setting that loses
+  nothing is still rings of 128, a 192 to 256 KiB held buffer and 8
+  WRITEs let in, at 1.7 to 1.9.
+- **Every loaned WRITE was written direct**, 9.70 million in the 15
+  loan cells (`wr_direct`, none buffered or `wr_dontcache`), **and none
+  held more than it was charged** (`overrun` 0).
+- **Fewer frames dropped at the rings** in most cells than on 464,
+  none over 5 at rings of 128. One run of each cell on each build; not
+  looked into.
+- On the loan page, "NFSD Loan Performance", from 14 October.
+
 ## Reads and mixes: the 7.1.13 baseline (build 464, 14 October)
 
 Taken before the boot into 7.3 so that it can be laid beside it:
@@ -216,6 +265,8 @@ beside build 464's, which are in that table:
    set enp164s0f0 down; ip link set enp164s0f0 up`, then
    `./settled.sh place b`). A sweep now ends with port a's rings back
    at 256 and its layout in place, and writes `audit-end.txt`.
+   **Done on build 473**: "The loan on 7.3" above. The loan is
+   build 464's, cell for cell.
 5. **The silent port** (Mike, 14 October): chase it on this kernel,
    after the four above. See "Set aside" below and
    `../SILENT-PORT.md`. **7.3 shows it**: the seventh event, on port
