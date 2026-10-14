@@ -234,8 +234,9 @@ no copy a payload byte still enters memory once from the card and
 leaves once to a drive, and if both are requests to memory a loan is
 bounded by memory as a copy is. **Measured the same evening, that is
 wrong.** The card writes into the cache and a drive takes from it;
-memory is asked only for what falls out in between, about 0.1
-requests a line where a copy asks 2.17. `LOAN-PERFORMANCE.md`.
+memory is used only for what falls out in between: about 0.1 bytes
+through memory for each byte of payload where a copy uses 2.17.
+`LOAN-PERFORMANCE.md`.
 
 ## The 4% between copying in pieces and copying whole (13 October, 14:00 to 14:30)
 
