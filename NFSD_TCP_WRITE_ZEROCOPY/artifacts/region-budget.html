@@ -1352,7 +1352,7 @@
     <div class="delta">
       <div class="mark">i</div>
       <div class="body"><h3>Slow direct writes to a growing file are XFS's design<span class="tag base">finding</span></h3>
-      <p>A direct write that starts beyond the end of the file waits for every direct write in progress: 95 ms on average here, against 5 microseconds on a file that has its size. A rule that issues such writes through the page cache instead took the sixteen-connection copy from 442 to 2355 MB/s, with 77% of its WRITEs no longer direct. It was written and measured once, and then taken out again. It is not in the series or in build 458; the commit and its revert are kept, to come back to, on <code>kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-reorder</code> and the 7.1.13 branches.</p></div>
+      <p>A direct write that starts beyond the end of the file waits for every direct write in progress: 95 ms on average here, against 5 microseconds on a file that has its size.</p></div>
     </div>
   </section>
 
@@ -1518,7 +1518,6 @@
     <div class="matrix">
       <div class="cell k">The larger charge per WRITE on a region sized for it (sixteen connections, 64 KiB)</div><div class="cell v"><span class="pill yes">run</span></div>
       <div class="cell k">Settle how the charge and the budget are computed when frames share pages; a budget for all 16 WRITEs at the larger charge closes the stall gap and not the one on mixed sizes at 1 ms per WRITE; held to half of the shared cache the budget lets in 8</div><div class="cell v"><span class="pill pend">next</span></div>
-      <div class="cell k">Issuing writes that start beyond the end of a file through the page cache: written, measured once, taken out for now</div><div class="cell v"><span class="pill pend">set aside</span></div>
       <div class="cell k">The 16 KiB host on the kernel with tardis1's fixes</div><div class="cell v"><span class="pill pend">not run</span></div>
       <div class="cell k">The Xsight card and the real NVMe on tardis1: first run at 64 KiB on 7 and 8 October (the summary at the top of the 64 KiB section). Whether the region stays in cache and what the copy costs are still open. Run at 16 KiB from 8 to 10 October: the <a href="#xeu463">first</a> and <a href="#xeu16">second</a> sections</div><div class="cell v"><span class="pill yes">run at 16 KiB</span></div>
     </div>
