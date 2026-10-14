@@ -1,8 +1,8 @@
 # 13 October, evening: read this first
 
 Written at the end of 13 October on tardis1 (build 464, 16 KiB
-pages) as the handoff, and brought up to date after the evening's
-loan measurements. Everything below this section is dated
+pages) as the handoff, and brought up to date late that night after
+the loan measurements and the loan page. Everything below this section is dated
 history and says so; where it differs from this section, this
 section is right.
 
@@ -27,8 +27,9 @@ the drives' fast region:
 - **The limit on two ports is memory.** The DIMMs are fully
   populated (Mike: four at 5200 MT/s, 166 GB/s in theory). A copy
   sends each byte through memory twice: the measured limit is a bare
-  benchmark's 62 to 68 GB/s, 60.1 in frame-sized pieces. NFS on two ports is at that, asking of memory what the
-  saturated benchmark does (2.05e9 requests a second against 1.91e9).
+  benchmark's 62 to 68 GB/s, 60.1 in frame-sized pieces. NFS on two
+  ports is at that: 2.17 bytes through memory for each byte of
+  payload, about 131 GB/s of the DIMMs' 166 at 60.4.
   Nothing that adds parallelism around the copy moves it.
 - One port is at 95% of what its wire carries with no NFS (49.8).
 
@@ -45,7 +46,8 @@ and lay each figure beside build 464's, which are in that table:
    "Where it stands" above. **This is the check for a regression**:
    60.0 to 60.4 GB/s on two ports and 46.5 to 47.4 on one on build
    464. `memcost-log.sh` beside a run and `memcost-read.py` after it
-   give its requests to memory for each line (2.17 on two ports).
+   give its bytes through memory for each byte of payload (2.17 on
+   two ports).
 3. The loan and its copy on the stand-in:
    `plans/16k-42-loan-memcost.plan`, `16k-43-loan-memcost-small.plan`
    and `16k-44-loan-memcost-floor.plan` through `sweep.sh` with
@@ -79,10 +81,9 @@ Performance", https://claude.ai/artifact/1hAkQK1xDiqPr1efdv4ZDb
   the cache use 0.09, and 0.58 for data that has left it. So a
   loaned byte uses about 0.1 if it is still in the cache when a
   drive takes it and about 1.6 if not.
-- **A loan is not bounded by memory as a copy is.** That was
-  supposed, here and on the first page, before it was measured. A
-  copy's measured limit is the bare benchmark's 62 to 68 GB/s; do
-  not quote a figure derived from the DIMMs' 166 for it (Mike).
+- **A loan is not bounded by memory as a copy is.** A copy's limit
+  is quoted only as measured, the bare benchmark's 62 to 68 GB/s;
+  no figure derived from the DIMMs' 166 (Mike).
 - **On the stand-in the loan's use falls with its footprint**: 4.07
   at about 37 MiB, 2.99 at about 24, 1.89 at 23 with rings of 128,
   and a floor near 1.3 at 17 to 18 MiB with rings of 64, all at
@@ -109,9 +110,14 @@ Performance", https://claude.ai/artifact/1hAkQK1xDiqPr1efdv4ZDb
   each is counted part of the time and scaled.
 
 Not done, and not asked for: the loan on two ports, which `sweep.sh`
-does not do. What a loan
-costs and carries in front of a drive that takes the pages itself
-waits for the SGL drives.
+does not do. What a loan uses and carries in front of a drive that
+takes the pages itself waits for the SGL drives.
+
+**Writing about it:** the measure is "bytes through memory for each
+byte of payload", and a footprint is as above. Mike asked for the
+pages to be rewritten when a figure or a term changed, without
+dwelling on what they said before; the loan page and
+`../LOAN-PERFORMANCE.md` are written that way.
 
 ## The rules
 
@@ -189,8 +195,15 @@ gained `STEP_SECS=` and `sweep.sh` `CELL_REST=`.
 
 The host as left: no NFS connections, nothing exported, both client
 ports on `fq_codel`, the drives `write through`, the live
-`svc_tcp_rx_lowat` 0, budget 0, four rings of 256 on each port, the
-stand-in's modules loaded and idle.
+`svc_tcp_rx_lowat` 0, budget 0, four rings of 256 on each port (both
+taken down and up during the floor run, their interrupts placed
+again), the stand-in's modules loaded and idle.
+
+The branch was pushed by Mike to
+`origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-7.1.13-21.hs.464.loanpages_pool.el9.aarch64+16k`
+at `497309da7f10`; the loan's floor, the footprints and the loan
+page's rewrites came after it. `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
+itself was not pushed to that day.
 
 # 12 October, 22:30, with 13 October's notes as they were added (history: the section above supersedes it)
 
