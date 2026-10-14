@@ -19,11 +19,13 @@ was found.
 | `prof-4x128-1` | 13:17 | a | second 56 | the server's cycles being recorded as it began |
 | `silent-1` | 15:47 | **b** | second 35 | both ends' counters five times a second, before and after |
 | `rwbase-ab-randread-1m-2` | 14 October, 06:17 | a | second 37 | both ends' sockets 1.3 s in; READs, the client on `fq_codel` |
+| `rwbase-473-ab-rw70-8m-2` | 14 October, 12:17:50 | **b** | second 24 | **build 473 (7.3)**; a 70/30 8 MiB mix; the server's sockets 16 s in, the client's 15 s just before |
 
 All are two ports at the two-port setting of the time. The first
 five are WRITEs with `fq` on the client's ports (unpinned since; see
 below); the sixth is READs with the client on its default
-`fq_codel` (below). 13 October: five events in about 50 two-port runs since
+`fq_codel`, and the seventh, the first on 7.3, a mix of READs and
+WRITEs on `fq_codel` (both below). 13 October: five events in about 50 two-port runs since
 11:40 and none in the 20 before. In each the other port takes up
 load (35 to 38 GB/s) while the silent one is out.
 
@@ -192,6 +194,60 @@ over 20 s, so pacing is not what holds it; the timers' backoff, on
 both ends, is the likelier hold. What stops the client's side is
 still not shown.
 
+## The seventh, the first on 7.3 (14 October, build 473)
+
+**7.3 shows it too.** On build 473 (the series on `v7.3-3`), at the
+settled setting with every audit of `xeu-rig/settled.sh` passed
+before and during the run, in round 2 of `rwbase.sh`'s two-port
+70/30 mix of 8 MiB READs and WRITEs (`$L/rwbase-473-ab-rw70-8m-2`):
+port b's drives went to nothing from second 24 of the load to second
+47, 12:17:50 to 12:18:13 by tardis1's clock, 21 to 23 s, while port
+a's rose from 8 GB/s to 11 to 12 and took up the load. Port b's run
+came to 13.66 GB/s against port a's 32.10, its 99th-percentile READ
+3.2 s and WRITE 4.7 s. The client was on `fq_codel`, nothing on it
+changed. It is the only silence in the 23 two-port runs of 473 and
+464 on record that day (`drives-sec.tsv` of each: a port's drives
+under 0.3 GB/s while the other's over 3, by the second; the sixth
+event does not meet that test, its silent port's drives reading 0.5
+GB/s apiece in bursts).
+
+- **The server, port b, 16 s in** (the harness's snapshot): every
+  one of its 16 connections had received nothing from the client for
+  1.06 to 1.11 s, all from the same moment; some at a congestion
+  window of 1 with 137 to 399 segments unacknowledged and their
+  retransmission timers backed off to 1.63 s. Port a's connections
+  at round trips of 0.2 to 0.3 ms and windows of 544 to 554.
+- **The client**: its snapshot fell at 12:18:13, as the silence
+  ended, and shows port b already back (last received 1 to 2 ms
+  before, round trips 0.1 to 0.3 ms), so it says nothing of the
+  silence itself.
+- **The 15 s just before it, both ends** (`b473/portb/rw70-8m-2.*`,
+  12:17:28 to 12:17:44, taken to look at retransmissions, not for
+  this): on the client, no out-of-order arrivals in 77 million data
+  segments, no backlog, socket or NIC drops on either port, but 1,162
+  advertisements of a zero receive window and 37,344 times it wanted
+  to advertise one; on the server, no retransmissions in those 15 s.
+  Port b was receiving 21.7 GB/s at the client and port a 17.8.
+- That sample's last ssh to the client (its management address,
+  `ss`, `nstat` and `ethtool -S` there) ended 6 s before the silence
+  began. The six events before it had no such sampling, so it is not
+  needed for one; whether it can set one off is not known.
+
+So the seventh has the sixth's signature, the client's side of one
+port no longer reaching the server, all of the port's connections
+at once, and the server's TCP sitting in backed-off timeouts, on a
+7.3 kernel at the settled setting. What stops the client's side is
+still not shown.
+
+Found the same day and not the silent port:
+- **Uneven splits between the ports in two-port 8 MiB loads**, on
+  both builds (b/a from 0.74 to 1.39), with the total steady: none
+  of them has a silent stretch. Random loads split evenly.
+- **Retransmission on two-port READs**, on both builds: 0.05 to 0.41
+  segments in a thousand, about a third of them duplicates by the
+  client's DSACKs, with the client's NIC accounting for few or none of
+  the rest. Not on 4 KiB loads.
+
 ## If it shows again
 
 1. `stall-sample.py` on both ends for the run (below), or
@@ -205,6 +261,10 @@ still not shown.
 3. The harness's own ssh is off the ports under test now (the
    client's management address, 10.20.12.106); if `CLIMGMT` has
    been pointed back at a port, note it.
+4. Look for it in every run, not only in the figures:
+   `drives-sec.tsv` shows a silence as one port's drives at nothing
+   while the other's carry on. And note any sampling of the client
+   near it (the seventh had some 6 s before).
 
 ## To reproduce
 
