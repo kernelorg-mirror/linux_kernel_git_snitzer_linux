@@ -59,6 +59,12 @@
 # run's only.  RWTSV=<file>: the same for any run, reads and writes apart.
 . "$(dirname "$0")/common.sh"
 "$(dirname "$0")/drive-cache.sh" > /dev/null || { echo "drive-cache.sh failed"; exit 1; }	# no cache flush to the drives (AGENTS.md)
+# nfsd's threads on CPUs 8-55, off the ports' ring CPUs: hammerspace-nfsd-tuning
+# pins them at boot, and a restart of nfs-server brings them up unpinned
+# (README.md).  NFSD_CPUS= moves them for a run from there and puts them back.
+nfsd_all=$(pgrep -x nfsd | wc -l)
+nfsd_off=$(for t in $(pgrep -x nfsd); do taskset -cp $t 2> /dev/null; done | awk '$NF != "8-55"' | wc -l)
+[ $nfsd_all -gt 0 ] && [ $nfsd_off = 0 ] || { echo "nfsd: $nfsd_off of $nfsd_all threads not on CPUs 8-55: systemctl restart hammerspace-nfsd-tuning"; exit 1; }
 OUT=${1:?out dir}; WHICH=${2:-ab}
 RUNTIME=${RUNTIME:-45}; WARM=${WARM:-15}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
 RW=${RW:-write}; IODEPTH=${IODEPTH:-16}; SIZE=${SIZE:-512M}

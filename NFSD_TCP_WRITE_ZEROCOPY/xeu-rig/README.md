@@ -56,6 +56,7 @@ nfs-server (`run-kunit.sh` needs one) brings up 512 threads on all 64
 CPUs, among the ports' ring CPUs. After any restart, `systemctl
 restart hammerspace-nfsd-tuning`, or `taskset -pc 8-55` on each nfsd
 thread, and check with `pgrep -x nfsd | xargs -n1 taskset -cp`.
+`twoport.sh` refuses to run while any nfsd thread is off 8-55.
 Build 473's first round of `rwbase.sh` ran unpinned until 10:28 on
 14 October: the ring CPUs spent 13 to 18% in nfsd, and the 1 MiB
 random READs carried 44.1 GB/s against 464's 49.1.
