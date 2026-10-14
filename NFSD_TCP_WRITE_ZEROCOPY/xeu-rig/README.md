@@ -47,12 +47,13 @@ and lay each figure beside build 464's, which are in that table:
    464. `memcost-log.sh` beside a run and `memcost-read.py` after it
    give its requests to memory for each line (2.17 on two ports).
 3. The loan and its copy on the stand-in:
-   `plans/16k-42-loan-memcost.plan` and
-   `plans/16k-43-loan-memcost-small.plan` through `sweep.sh` with
-   `memcost-log.sh` beside each, as written out in that document.
-   **Put port a's rings back to 256 after the second** (`ethtool -G
-   enp161s0f0 rx 256`, then `./ring-irqs.sh enp161s0f0 0`): the
-   sweep leaves them at 128.
+   `plans/16k-42-loan-memcost.plan`, `16k-43-loan-memcost-small.plan`
+   and `16k-44-loan-memcost-floor.plan` through `sweep.sh` with
+   `CELL_BOUNCE=1` and `memcost-log.sh` beside each, as written out
+   in that document. Take port b down and up once first, and **put
+   port a's rings back to 256 afterwards** (`ethtool -G enp161s0f0
+   rx 256`, then `./ring-irqs.sh enp161s0f0 0`): a sweep leaves them
+   where its last line had them.
 
 Before any of it on a new boot: the "After a boot" line under the
 rules, `getconf PAGESIZE` (16384), that `xeu` came up with
@@ -70,22 +71,34 @@ The account is `../LOAN-PERFORMANCE.md`, and the page is "NFSD Loan
 Performance", https://claude.ai/artifact/1hAkQK1xDiqPr1efdv4ZDb
 (source `../artifacts/loan-performance.html`).
 
+- **The measure is bytes through memory for each byte of payload**
+  (the mesh's requests to the memory controller, 64 bytes each,
+  over the payload carried). Copy mode on two ports is 2.17.
 - **The card and the drives move data through the cache.** One port
-  receiving 49.6 GB/s asks 0.03 requests of memory for each line;
-  the drives writing data still in the cache ask 0.09, and 0.58 for
-  data that has left it. So a loaned byte costs about 0.1 requests
-  a line if it is still in the cache when a drive takes it and about
-  1.6 if not, where a copied byte costs 2.17.
+  receiving 49.6 GB/s uses 0.03; the drives writing data still in
+  the cache use 0.09, and 0.58 for data that has left it. So a
+  loaned byte uses about 0.1 if it is still in the cache when a
+  drive takes it and about 1.6 if not.
 - **A loan is not bounded by memory as a copy is.** That was
   supposed, here and on the first page, before it was measured. A
   copy's measured limit is the bare benchmark's 62 to 68 GB/s; do
   not quote a figure derived from the DIMMs' 166 for it (Mike).
-- **On the stand-in the loan's cost falls with what it holds**: 4.07
-  requests a line at 76 MiB of the region in use, 2.99 at 62, 2.00
-  at 48, 1.86 at 46, all at 11.7 GB/s, where its copy asks 5.75 to
-  4.90. Every loaned WRITE was written direct and none was over its
-  charge. With 4 WRITEs let in it is under one a line and the rate
-  falls by a third: the budget holding it back, not memory.
+- **On the stand-in the loan's use falls with its footprint**: 4.07
+  at about 37 MiB, 2.99 at about 24, 1.89 at 23 with rings of 128,
+  and a floor near 1.3 at 17 to 18 MiB with rings of 64, all at
+  11.4 to 11.7 GB/s, where its copy uses 5.75 to 4.71. The floor is
+  inside the cache and is the stand-in's own. Every loaned WRITE
+  was written direct and none was over its charge. Fewer than 8
+  WRITEs let in costs rate (a tenth at 6, a third at 4), a 128 KiB
+  held buffer costs 7%, and rings of 64 drop tens of thousands of
+  frames; the best setting that loses nothing is rings of 128, a
+  192 to 256 KiB held buffer and 8 WRITEs let in.
+- **A footprint** is what a load takes from the region beyond what
+  was there idle plus its own port's posted rings. `CELL_BOUNCE=1`
+  to `sweep.sh` empties the port's pools before each cell so that
+  it reads true; the region's pages less its free ones is not it.
+- "Dialing in loan mode" in that document is what to do when the
+  SGL drives are here.
 - **The stand-in** is NVMe/TCP on this host in front of a file on
   `/hs/nvme0`. It passes the data through TCP to itself, so its
   figures are not an SGL drive's; the difference between a loan and
@@ -95,10 +108,8 @@ Performance", https://claude.ai/artifact/1hAkQK1xDiqPr1efdv4ZDb
   (`hnf_mc_reqs`, `hnf_cache_fill`), as the scripts do; with more,
   each is counted part of the time and scaled.
 
-Not done, and not asked for: the floor on the stand-in (the smallest
-footprint tried was 41 MiB, more than the 32 MiB cache, and the cost
-was still falling: rings of 64 or eight connections, a budget of 6),
-and the loan on two ports, which `sweep.sh` does not do. What a loan
+Not done, and not asked for: the loan on two ports, which `sweep.sh`
+does not do. What a loan
 costs and carries in front of a drive that takes the pages itself
 waits for the SGL drives.
 

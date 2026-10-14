@@ -2,9 +2,12 @@
 # memcost-read.py <prefix> <port> [<GB/s that counts as a cell: 4>]
 #
 # From what memcost-log.sh took: each stretch in which the port carried
-# load (a cell), and over its steady part what was asked of memory for
-# each 64-byte line of payload.  Payload is the port's bytes less each
-# frame's headers (7740 of 7806 at the rig's MTU of 7792).
+# load (a cell), and over its steady part the bytes that went through
+# memory for each byte of payload: the mesh's requests to the memory
+# controller, taken as 64 bytes each, over the payload carried.  Payload
+# is the port's bytes less each frame's headers (7740 of 7806 at the rig's
+# MTU of 7792).  The region figure is its pages less its free ones, which
+# includes what was there idle: the sweep's log has what a cell took.
 import statistics as st, sys
 
 P, port = sys.argv[1], sys.argv[2]
@@ -48,7 +51,7 @@ for c in cells:
     per = lambda k: [r[4][k] / step / l for r, l in zip(c, L) if k in r[4]]
     m = per('hnf_mc_reqs')
     print('%4d to %4d s: wire %.1f GB/s (%.1f to %.1f), drives writing %.1f GB/s, region in use %d pages (%.0f MiB) at the middle, %d at most;'
-          ' requests to memory %.2fe9/s = %.2f a line of payload (%.2f to %.2f); cache fills %.2f a line; lmiss %.2f, bus_wr %.2f' % (
+          ' requests to memory %.2fe9/s = %.2f bytes through memory for each byte of payload (%.2f to %.2f); cache fills %.2f a line; lmiss %.2f, bus_wr %.2f' % (
           c[0][0], c[-1][0], st.median(r[1] for r in c), min(r[1] for r in c), max(r[1] for r in c),
           st.median(r[2] for r in c), st.median(r[3] for r in c), st.median(r[3] for r in c) * 16 / 1024, max(r[3] for r in c),
           st.median(r[4]['hnf_mc_reqs'] / step for r in c) / 1e9, st.median(m), min(m), max(m),
