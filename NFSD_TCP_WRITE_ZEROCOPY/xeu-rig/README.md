@@ -1,7 +1,8 @@
 # 13 October, evening: read this first
 
 Written at the end of 13 October on tardis1 (build 464, 16 KiB
-pages) as the handoff. Everything below this section is dated
+pages) as the handoff, and brought up to date after the evening's
+loan measurements. Everything below this section is dated
 history and says so; where it differs from this section, this
 section is right.
 
@@ -31,57 +32,73 @@ the drives' fast region:
   Nothing that adds parallelism around the copy moves it.
 - One port is at 95% of what its wire carries with no NFS (49.8).
 
-## Next: what a loaned byte costs in memory (Mike, 13 October)
+## Next: the same battery on the 7.3-rc7 rebase (Mike, 13 October)
 
-**Begun the same evening: `../LOAN-PERFORMANCE.md`.** The counter is
-calibrated, and the card and the drives measured by themselves: both
-move data through the cache, so a loaned byte that is still in the
-cache when the drive takes it asks about 0.1 requests of memory a
-line, against a copied byte's 2.17. The paragraph below was the
-question as first put; its supposing a loan bounded by memory as a
-copy is does not hold.
-**All of it is to be run again on the 7.3-rc7 kernel the series is
-being rebased onto (Mike), with one-port and two-port copy-mode runs
-to show no regression**: "The battery" in that document, and
-`memcost-cal.sh`.
+**Mike is rebasing the series onto a 7.3-rc7 kernel.** When tardis1
+is on it, run "The battery" at the end of `../LOAN-PERFORMANCE.md`
+and lay each figure beside build 464's, which are in that table:
 
-With no copy a payload byte still enters memory once from the card
-and leaves once to a drive. If both count against the same 166
-GB/s, a loan is bounded by memory as a copy is and not at the card's
-99. To measure: `arm_cmn/hnf_mc_reqs/` (requests to the memory
-controller) during a loan written direct, for each line of payload,
-beside the same figure for its copy. A copy on two ports costs 2.2
-requests a line (`cmn-two-1`); the method is "The memory itself" in
-`../TRACING-NFSD-AND-XEU-MEMCPY-TIME.md`:
+1. `./memcost-cal.sh $L/memcost-cal-<build>`: the card and the drives
+   by themselves (about 6 min, no NFS).
+2. Copy mode on two ports, three runs, and on one port over all
+   eight drives, three for each port: the command lines under
+   "Where it stands" above. **This is the check for a regression**:
+   60.0 to 60.4 GB/s on two ports and 46.5 to 47.4 on one on build
+   464. `memcost-log.sh` beside a run and `memcost-read.py` after it
+   give its requests to memory for each line (2.17 on two ports).
+3. The loan and its copy on the stand-in:
+   `plans/16k-42-loan-memcost.plan` and
+   `plans/16k-43-loan-memcost-small.plan` through `sweep.sh` with
+   `memcost-log.sh` beside each, as written out in that document.
+   **Put port a's rings back to 256 after the second** (`ethtool -G
+   enp161s0f0 rx 256`, then `./ring-irqs.sh enp161s0f0 0`): the
+   sweep leaves them at 128.
 
-    perf stat -a -e arm_cmn/hnf_mc_reqs/,arm_cmn/hnf_cache_miss/,l3d_cache_lmiss_rd,bus_access_wr -- sleep 10
+Before any of it on a new boot: the "After a boot" line under the
+rules, `getconf PAGESIZE` (16384), that `xeu` came up with
+`rx_buf_size=8192` and the ports at an MTU of 7792, and that
+`/etc/modprobe.d/sunrpc.conf` still gives `svc_tcp_rx_lowat=0`. The
+mesh's counter is `arm_cmn/hnf_mc_reqs/`: check that `perf list`
+still has it on the new kernel, since every memory figure rests on
+it.
 
-What to know before starting, none of it tried since 10 October:
+## What a loaned byte costs in memory: done on build 464 (13 October, evening)
 
-- A loan written direct needs storage that takes arbitrary pieces.
-  These drives need whole pages, so the stand-in is NVMe/TCP on this
-  host in front of a file. The last loan runs were
-  `plans/16k-36-loan8192-sgl.plan` through `sweep.sh`, driven by
-  `/var/tmp/zc-run-logs/xeu-16k-463-loan8192-factor-driver.sh`
-  (20.2 to 22.7 GB/s, every WRITE direct).
-- That driver names `/hs/stripe`, which is gone: there is no MD and
-  it is not to be used. The backing file has to go on one drive's
-  filesystem (`SGL_BACKING=/hs/nvmeN/...`), which holds the loan to
-  that drive's rate and its 625 GB. The rate does not matter for
-  this: the figure wanted is requests for each line of payload.
-- `sweep.sh` is one port, and since this evening reaches the client
-  by its management address with the port's address passed as
-  `CLIENT_ADDR`. That path is changed and not yet run.
-- The driver sets a credit factor that no longer exists
-  (`svc_tcp_rx_credit_factor` went on 11 October; the kernel learns
-  the charge).
-- The stand-in copies once more on its way to the file, on the same
-  CPUs. Its requests to memory are the stand-in's as well as the
-  loan's; the copy cell beside it is what to compare with.
-- Read whether the card's writes into memory and a drive's reads
-  from it are counted at all: a run of plain TCP into the port
-  (`iperf2port.sh`, receivers that discard) and a local direct read
-  or write of a drive, each with the counter, would say.
+The account is `../LOAN-PERFORMANCE.md`, and the page is "NFSD Loan
+Performance", https://claude.ai/artifact/1hAkQK1xDiqPr1efdv4ZDb
+(source `../artifacts/loan-performance.html`).
+
+- **The card and the drives move data through the cache.** One port
+  receiving 49.6 GB/s asks 0.03 requests of memory for each line;
+  the drives writing data still in the cache ask 0.09, and 0.58 for
+  data that has left it. So a loaned byte costs about 0.1 requests
+  a line if it is still in the cache when a drive takes it and about
+  1.6 if not, where a copied byte costs 2.17.
+- **A loan is not bounded by memory as a copy is.** That was
+  supposed, here and on the first page, before it was measured. A
+  copy's measured limit is the bare benchmark's 62 to 68 GB/s; do
+  not quote a figure derived from the DIMMs' 166 for it (Mike).
+- **On the stand-in the loan's cost falls with what it holds**: 4.07
+  requests a line at 76 MiB of the region in use, 2.99 at 62, 2.00
+  at 48, 1.86 at 46, all at 11.7 GB/s, where its copy asks 5.75 to
+  4.90. Every loaned WRITE was written direct and none was over its
+  charge. With 4 WRITEs let in it is under one a line and the rate
+  falls by a third: the budget holding it back, not memory.
+- **The stand-in** is NVMe/TCP on this host in front of a file on
+  `/hs/nvme0`. It passes the data through TCP to itself, so its
+  figures are not an SGL drive's; the difference between a loan and
+  its copy is what to read. It leaves `nvmet`, `nvmet_tcp` and
+  `nvme_tcp` loaded with nothing configured.
+- The mesh counts two of its events at a time. Ask for two
+  (`hnf_mc_reqs`, `hnf_cache_fill`), as the scripts do; with more,
+  each is counted part of the time and scaled.
+
+Not done, and not asked for: the floor on the stand-in (the smallest
+footprint tried was 41 MiB, more than the 32 MiB cache, and the cost
+was still falling: rings of 64 or eight connections, a budget of 6),
+and the loan on two ports, which `sweep.sh` does not do. What a loan
+costs and carries in front of a drive that takes the pages itself
+waits for the SGL drives.
 
 ## The rules
 
@@ -141,21 +158,26 @@ client, port b's is 2 m of copper with none.
 | `../TRACING-NFSD-AND-XEU-MEMCPY-TIME.md` | the receive path traced at 60 GB/s, the memory's limit, where the copy's 4% goes and why it is left |
 | `../SILENT-PORT.md` | the silent port |
 | `../TARDIS1_COPY_PERFORMANCE.md` | the copy benchmark of 12 October |
+| `../LOAN-PERFORMANCE.md` | what a loaned byte costs in memory: the counter, the card and the drives alone, the loan on the stand-in, and the battery for the next kernel |
 | `../LOST-TIME-CHASING-SPENT-DRIVES.md` | what 12 October's slow drives skewed; closed |
 | `results-twoport-464.tsv` | a line for every two-port and one-port run |
-| the artifact | "NFSD Receive Region Budget", https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g, source `../artifacts/region-budget.html` (its `droids.gif` is published beside it and is not in the tree) |
+| the artifacts | "NFSD Receive Region Budget", https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g, source `../artifacts/region-budget.html` (its `droids.gif` is published beside it and is not in the tree): copy mode. "NFSD Loan Performance", https://claude.ai/artifact/1hAkQK1xDiqPr1efdv4ZDb, source `../artifacts/loan-performance.html`: the loan. Both are open to anyone with the link (Mike). To change one from another session, read it first and publish to its link |
 
 Tools new on 13 October, all in this directory: `drvchar.py` (a
 drive's fast region), `stall-sample.py` and `stall-read.py` (both
 ends of both ports five times a second), `copy-adjacency.bt` and
 `ring-flow-runs.bt` (where the copy's pieces come from, and a
 connection's runs of frames on a ring), `copybench.c` with `wr`,
-`rd` and `RUN=`; `twoport.sh` gained `LOWAT=`, `TXN=`, `NFSD_CPUS=`,
-`QDISC=fqnp` and a `PROFILE=1` that reports by group of CPUs.
+`rd` and `RUN=`, `memcost-cal.sh`, `memcost-log.sh` and
+`memcost-read.py` (requests to memory for each line of payload);
+`twoport.sh` gained `LOWAT=`, `TXN=`, `NFSD_CPUS=`, `QDISC=fqnp` and
+a `PROFILE=1` that reports by group of CPUs; `../run-budget.sh`
+gained `STEP_SECS=` and `sweep.sh` `CELL_REST=`.
 
 The host as left: no NFS connections, nothing exported, both client
 ports on `fq_codel`, the drives `write through`, the live
-`svc_tcp_rx_lowat` 0, four rings of 256 on each port.
+`svc_tcp_rx_lowat` 0, budget 0, four rings of 256 on each port, the
+stand-in's modules loaded and idle.
 
 # 12 October, 22:30, with 13 October's notes as they were added (history: the section above supersedes it)
 

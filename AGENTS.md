@@ -172,8 +172,11 @@ on two ports being memory with the DIMMs fully populated), the two
 pinned command lines, the rules for a run, what was decided that day
 and is not to be undone from older text (`svc_tcp_rx_lowat=0`, no
 `fq` on the client, the client reached at its management address
-10.20.12.106), and **the next step (Mike): what a loaned byte costs
-in memory**. The paragraphs below that name earlier starting points
+10.20.12.106), what a loaned byte costs in memory as measured that
+evening (`NFSD_TCP_WRITE_ZEROCOPY/LOAN-PERFORMANCE.md`), and **the
+next step (Mike): the series is being rebased onto 7.3-rc7, and on
+that kernel the loan's memory-cost battery is to be run again with
+one-port and two-port copy mode beside it to show no regression**. The paragraphs below that name earlier starting points
 are history.
 
 **Do not optimize copy mode at the loan's expense (Mike,
