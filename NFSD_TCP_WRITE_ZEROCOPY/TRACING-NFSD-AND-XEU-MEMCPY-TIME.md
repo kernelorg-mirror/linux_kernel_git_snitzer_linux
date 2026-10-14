@@ -220,8 +220,8 @@ buffers, and a two-port run at the pinned setting (`cmn-two-1`,
   second against 2.8e9).
 - So the limit on two ports is memory bandwidth, the DIMMs are all
   there, and a copy spends it twice over for each byte of payload.
-  A copy cannot pass 83 GB/s on this machine in theory and reaches
-  62 to 68 in practice.
+  The measured limit for a copy on this machine is the bare
+  benchmark's 62 to 68 GB/s.
 
 Not checked: exactly what the counter takes for one request, and
 whether the card's writes into memory and the drives' reads from it
@@ -232,7 +232,7 @@ they are a little under what larger buffers would ask.
 **What it means for the loan** was put here as an inference: with
 no copy a payload byte still enters memory once from the card and
 leaves once to a drive, and if both are requests to memory a loan is
-bounded near 83 GB/s as well. **Measured the same evening, that is
+bounded by memory as a copy is. **Measured the same evening, that is
 wrong.** The card writes into the cache and a drive takes from it;
 memory is asked only for what falls out in between, about 0.1
 requests a line where a copy asks 2.17. `LOAN-PERFORMANCE.md`.

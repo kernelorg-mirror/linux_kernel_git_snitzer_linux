@@ -251,7 +251,7 @@
   <header>
     <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 464 &middot; 13&nbsp;October&nbsp;2026 &middot; early findings</p>
     <h1>At 60.4 GB/s copy mode is at limit of memory. <span class="ok" style="display:block">A loaned WRITE asks a fraction of it.</span></h1>
-    <p class="lede">An NFS server on the E1 takes <span class="hl">60.4 GB/s of durable WRITEs over two ports and 47.4 over one</span> by copying each WRITE once on arrival. That is as far as copying goes here: the machine's four DIMMs carry 166 GB/s in theory, a copy sends every byte through them twice, and two ports of NFS already ask of memory what a saturated copy benchmark does. <span class="hc">The card can deliver 99 GB/s. The way to it is not to copy</span>, which is the loan, and a loan can only be written straight to storage by NVMe drives with SGLs. Those drives are on their way. This page is what was measured ahead of them on 13 October: what a loaned byte costs in memory, and what decides it.</p>
+    <p class="lede">An NFS server on the E1 takes <span class="hl">60.4 GB/s of durable WRITEs over two ports and 47.4 over one</span> by copying each WRITE once on arrival. That is as far as copying goes here: the machine's four DIMMs carry 166 GB/s in theory, a copy sends every byte through them twice, a bare copy benchmark reaches 62 to 68 GB/s, and two ports of NFS already ask of memory what that benchmark does. <span class="hc">The card can deliver 99 GB/s. The way to it is not to copy</span>, which is the loan, and a loan can only be written straight to storage by NVMe drives with SGLs. Those drives are on their way. This page is what was measured ahead of them on 13 October: what a loaned byte costs in memory, and what decides it.</p>
     <div class="metrics">
       <div class="metric"><div class="n">2.17</div><div class="l">requests to memory for each line of payload, copied, two ports</div></div>
       <div class="metric"><div class="n gain">0.1</div><div class="l">the same for a loaned line still in the cache when a drive takes it</div></div>
@@ -276,8 +276,7 @@
       <thead><tr><th>What bounds a copy on this machine</th><th>GB/s</th></tr></thead>
       <tbody>
         <tr><td>The DIMMs: four at 5200 MT/s, fully populated</td><td class="c">166 in theory</td></tr>
-        <tr><td>A copy, which reads every byte from memory and writes it back: half of that</td><td class="c">83 in theory</td></tr>
-        <tr><td>A bare copy benchmark, whole megabytes</td><td class="c">62 to 68</td></tr>
+        <tr><td>A bare copy benchmark, whole megabytes: every byte read from memory and written back</td><td class="c">62 to 68, measured</td></tr>
         <tr><td>The same benchmark copying a frame at a time, as NFS must</td><td class="c">60.1</td></tr>
         <tr><td>NFS, two ports, copy mode</td><td class="r">60.4</td></tr>
         <tr><td>What the card delivers on two ports when nothing is copied</td><td class="x">99.6</td></tr>
@@ -354,7 +353,7 @@
       <div class="lab">Loaned, evicted before the drive takes it<small>one eviction, 0.58 to fetch it back</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:26.7%"></span></div><span class="n">1.60</span></div></div>
       <div class="lab">Copied, two ports of NFS<small>measured at 60.4 GB/s</small></div><div class="bars"><div class="row"><div class="track"><span class="fill cp" style="width:36.2%"></span></div><span class="n">2.17</span></div></div>
     </div>
-    <p>An earlier reading of the limit had a loan bounded by memory near 83 GB/s, as a copy is, on the reasoning that a byte still enters memory once and leaves once. These measurements say otherwise: both of those passes go through the cache, and what decides a loan's cost is how much received data is waiting for the drives, against the size of the cache. That is what the region, the budget and the held buffer exist to bound.</p>
+    <p>An earlier reading of the limit had a loan bounded by memory as a copy is, on the reasoning that a byte still enters memory once and leaves once. These measurements say otherwise: both of those passes go through the cache, and what decides a loan's cost is how much received data is waiting for the drives, against the size of the cache. That is what the region, the budget and the held buffer exist to bound.</p>
   </section>
 
   <section id="standin">
