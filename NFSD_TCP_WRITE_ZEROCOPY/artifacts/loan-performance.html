@@ -250,7 +250,7 @@
 
   <header>
     <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; builds 464 and 473 &middot; 13 and 14&nbsp;October&nbsp;2026 &middot; early findings</p>
-    <h1>At 60.4 GB/s copy mode is at limit of memory. <span class="ok" style="display:block">A loaned WRITE asks a fraction of it.</span></h1>
+    <h1>At 60.4 GB/s copy mode is at the limit of memory.<span class="ok" style="display:block">A loaned WRITE asks a fraction of it.</span></h1>
     <p class="lede">An NFS server on the E1 takes <span class="hl">60.4 GB/s of durable WRITEs over two ports and 47.8 over one</span> by copying each WRITE once on arrival. That is as far as copying goes here: the machine's four DIMMs carry 166 GB/s in theory, a copy sends every byte through them twice, a bare copy benchmark reaches 62 to 68 GB/s, and two ports of NFS already ask of memory what that benchmark does. <span class="hc">The card can deliver 99 GB/s. The way to it is not to copy</span>, which is the loan, and a loan can only be written straight to storage by NVMe drives with SGLs. Those drives are on their way. This page is what was measured ahead of them on 13 October: how many bytes have to pass through memory for each byte of payload a loan carries, and what decides it. <a href="#b473">On 14 October the same measurements began again on the 7.3 kernel</a>, and so far they agree.</p>
     <div class="metrics">
       <div class="metric"><div class="n">2.17</div><div class="l">bytes through memory for each byte of payload: copied, two ports</div></div>
