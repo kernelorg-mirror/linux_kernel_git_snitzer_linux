@@ -366,10 +366,10 @@ run inside the drives' fast region with `drives.txt` read first:
 | the loan and its copy on the stand-in | the three plans, `16k-42`, `16k-43` and `16k-44`, through `sweep.sh` with `CELL_BOUNCE=1` and `memcost-log.sh` beside each, as written out above | the table under "Every cell" |
 
 - Take port b down and up once before the loan plans (`ip link set
-  enp164s0f0 down; ip link set enp164s0f0 up`, then `./ring-irqs.sh
-  enp164s0f0 56`), and put port a's rings back to 256 after them
-  (`ethtool -G enp161s0f0 rx 256`, then `./ring-irqs.sh enp161s0f0
-  0`): a sweep leaves them where its last line had them.
+  enp164s0f0 down; ip link set enp164s0f0 up`, then `./settled.sh
+  place b`). A sweep audits the host against `settled.sh` before it
+  starts and each cell against its plan line under load, refuses to
+  go on off it, and ends with port a's rings back at 256.
 - `memcost-log.sh <prefix> <seconds> <port> [drives]` beside a
   `twoport.sh` run and `memcost-read.py <prefix> <port>` after it
   give copy mode's figure the same way. For two ports the reader
