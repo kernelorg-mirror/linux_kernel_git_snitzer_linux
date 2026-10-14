@@ -223,6 +223,14 @@ struct nfs_inode {
 			/* Readers: in-flight sillydelete RPC calls */
 			/* Writers: rmdir */
 			struct rw_semaphore	rmdir_sem;
+			/*
+			 * Removals made with i_rwsem held shared: how many
+			 * have finished, and how many are waiting for the
+			 * reply to their REMOVE.  Both change under
+			 * ->i_lock; see fs/nfs/internal.h.
+			 */
+			unsigned long	shared_removal_seq;
+			unsigned int	shared_removals;
 		};
 		/* Regular file */
 		struct {
