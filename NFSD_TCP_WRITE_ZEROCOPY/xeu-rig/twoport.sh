@@ -244,6 +244,7 @@ fi
 EXPENV="EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_COPY_THREADS=${THREADS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}" ] && EXPENV="$EXPENV EXP_LAYOUT=RINGS=${RINGS:-4},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-}"
+case "${QDISC:-}" in fq*) EXPENV="$EXPENV EXP_QDISC=fq" ;; codel) EXPENV="$EXPENV EXP_QDISC=fq_codel" ;; esac
 env $EXPENV "$RIG/settled.sh" audit $MODE_SET > audit.txt 2>&1 || { grep -E 'BAD|FAILED' audit.txt; exit 1; }
 tail -1 audit.txt | tee -a geometry.txt
 echo 1 > $RG	# the region's low-water mark starts again from here
