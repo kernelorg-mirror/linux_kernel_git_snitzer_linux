@@ -52,10 +52,11 @@ exactly what it takes for one request.
 
 ## Calibration: the card and the drives by themselves (13 October, 18:30 to 19:00)
 
-`xeu-rig/memcost-cal.sh <out>` is this, as one script. (It was
-written from the commands run by hand that evening and has not yet
-been run as a script.) The figures are in
-`/var/tmp/zc-run-logs/cmn-cal/`.
+`xeu-rig/memcost-cal.sh <out>` is this, as one script. The two
+tables below are from the commands run by hand, with five mesh
+events and so scaled from 40% of the time; the script's own first
+run, counted throughout, is after them and agrees. The figures are
+in `/var/tmp/zc-run-logs/cmn-cal/` and `memcost-cal-464/`.
 
 ### The card writing into memory: plain TCP, no NFS, no drives
 
@@ -102,6 +103,27 @@ counter over 10 s, 25 s of idle before each:
   (1.65e9 lines a second either way) and reaches memory only if it
   is evicted before it is overwritten, one request a line into 1
   GiB of buffers and a quarter of one into 32 MiB.
+
+### The same as one script, counted throughout (13 October, 19:50)
+
+`./memcost-cal.sh $L/memcost-cal-464`, its `summary.txt`. This is
+the table to lay beside the next kernel's:
+
+| | GB/s | requests to memory a second | for each line | cache filled a second |
+|---|---|---|---|---|
+| idle | 0 | 0.002e9 | | 0.007e9 |
+| plain TCP, port a, receivers discard | 49.6 | 0.019e9 | 0.03 | 0.838e9 |
+| plain TCP, port b, receivers discard | 49.7 | 0.019e9 | 0.02 | 0.831e9 |
+| plain TCP, both ports, receivers discard | 99.6 | 0.391e9 | 0.25 | 1.677e9 |
+| plain TCP, both ports, receivers copy | 82.7 | 1.512e9 | 1.17 | 2.857e9 |
+| drives writing, queue depth 32 (1 GiB of buffers) | 58.0 | 0.524e9 | 0.58 | 0.157e9 |
+| drives reading, queue depth 32 | 105.4 | 1.717e9 | 1.04 | 1.673e9 |
+| drives writing, queue depth 1 (32 MiB of buffers) | 94.9 | 0.131e9 | 0.09 | 0.200e9 |
+| drives reading, queue depth 1 | 105.4 | 0.358e9 | 0.22 | 1.653e9 |
+
+Every figure is within 0.03 a line of the hand run's but the copy's
+(1.17 for 1.36, at 82.7 GB/s for 86.2), which is the one load here
+that does not hold steady.
 
 ## What follows for a loan
 
@@ -195,6 +217,63 @@ The samples are `$L/loanmem-1.cmn.txt` (the counter),
 `loanmem-1.srv.txt` (the port) and `loanmem-1.drv.txt` (the drive
 and the region).
 
+## The loan against its budget, each cell inside the drive's fast region (13 October, 19:30 to 19:45)
+
+`plans/16k-42-loan-memcost.plan`: the loan with 16, 8 and 4 WRITEs
+let in at once and its copy, cells of 50 s (`STEP_SECS=50`, new in
+`run-budget.sh`) with 30 s of idle before each (`CELL_REST=30`, new
+in `sweep.sh`), so that the one drive is at full rate throughout.
+`memcost-log.sh` beside it and `memcost-read.py` to read it, the
+mesh's two events counted the whole time:
+
+    ./memcost-log.sh $L/loanmem-2 1500 enp161s0f0 nvme0n1 &
+    SGL_BACKING=/hs/nvme0/zcbudget-nvmet.img NULLB_MIB=16384 HW_ANY_MTU=1 RX_LINGER_US=50 PLACE=1 \
+        PRP_DIR=/hs/nvme0/zcbudget STEP_JOBS=16 STEP_BS=8M STEP_SECS=50 CELL_REST=30 \
+        ./sweep.sh $L/xeu-16k-464-loanmem-2 plans/16k-42-loan-memcost.plan
+    ./memcost-read.py $L/loanmem-2 enp161s0f0
+
+| | loan, 16 WRITEs | loan, 8 | loan, 4 | the copy |
+|---|---|---|---|---|
+| budget, pages | 2150 | 1142 | 638 | 0 |
+| GB/s over the cell (fio) | 11.74 | 11.74 | 10.59 | 10.35 |
+| WRITEs written direct | all 719,736 | all 719,656 | all 645,456 | all 657,096 |
+| WRITEs over their charge | 0 | 0 | 0 | |
+| WRITEs refused admission and retried | 1,535,632 | 1,532,890 | 1,380,139 | |
+| region in use, steady / at most | 76 / 78 MiB | 62 / 65 MiB | 59 / 60 MiB | 49 / 51 MiB |
+| client retransmits, timeouts | 1,576, 0 | 1,382, 2 | 471, 0 | 248,392, 7 |
+| requests to memory a second | 0.75e9 | 0.55e9 | 0.38e9 | 1.06e9 |
+| **for each line of payload** | **4.07** (4.03 to 4.09) | **2.99** (2.94 to 3.35) | **2.28** (2.11 to 2.62) | **5.75** (5.65 to 6.78) |
+| lines filled into the cache, a line of payload | 3.09 | 2.97 | 2.95 | 4.70 |
+
+- **The pair, at a steady rate: 4.07 against 5.75.** The first
+  run's 3.99 and 5.72 repeat, now with both cells inside the drive's
+  fast region and the counter not scaled. The loan also carries 13%
+  more than its copy here (11.74 for 10.35) with a hundredth of the
+  retransmits.
+- **A smaller budget costs the loan less in memory, as the
+  calibration said it would.** Halving the budget from 16 WRITEs to
+  8 takes the region in use from 76 MiB to 62 and the requests a
+  line from 4.07 to 2.99, at the same rate. At 4 WRITEs it is 2.28,
+  for a tenth of the rate (10.59). What a loan holds waiting for the
+  storage is what it pays for in memory.
+- **The stand-in's own share can now be bounded.** The cache fills
+  hardly move across the three loans (3.09, 2.97, 2.95 a line): that
+  is the card's writes and the stand-in's passage of the data
+  through TCP to itself, and it is there whatever the budget. The
+  requests to memory are what fall as the footprint does.
+- At the smallest budget the loan on this stand-in asks 2.28
+  requests a line, about what a copy straight to the drives asks
+  (2.17 on two ports), while carrying the stand-in's extra passage.
+  How far it would fall in front of drives that take the pages
+  themselves is the calibration's 0.1 to 1.6, and where in that it
+  lands depends on the same footprint.
+- Even the smallest footprint here, 59 MiB, is nearly twice the
+  cache. The region in use is not only what loans hold: sixteen
+  connections' held receive buffers and the rings are in it too (a
+  copy holds 49 MiB at this setting). A loan cell with a smaller
+  held buffer and shallower rings has not been run with the
+  counter.
+
 ## What is not measured, and cannot be on this host
 
 A loan written direct to a drive that takes arbitrary pieces, with
@@ -202,14 +281,13 @@ nothing in between. These drives need whole pages, so a loan to
 them goes through the page cache (a copy, later); the stand-in adds
 its own. What this host can still give:
 
-- the stand-in pair again with the backing file's drive rested and
-  each cell kept inside its fast region (`STEP` cells are 120 s; a
-  shorter one would need `run-budget.sh` changed), for a copy
-  figure at a steady rate;
-- how the loan's footprint moves with its budget (4, 8, 16 WRITEs)
-  and what that does to the requests a line, since the footprint
-  against the cache is what the calibration says matters;
+- the loan with the whole footprint brought inside the cache (a 256
+  or 384 KiB held buffer, rings of 128, a budget of 4 to 8 WRITEs),
+  to see how low the requests a line go on the stand-in;
 - the same pair on two ports, which `sweep.sh` does not do.
+
+Done since this was first written, above: the pair with each cell
+inside the drive's fast region, and the loan against its budget.
 
 ## The battery, for this kernel and the next
 
@@ -223,7 +301,11 @@ first:
 | the card and the drives alone | `xeu-rig/memcost-cal.sh <out>` | `summary.txt` |
 | copy mode, two ports | `RCVBUF=393216 ENTRIES=128 LINGER=0 LOWAT=0 ./twoport.sh <out> ab`, three runs | GB/s (60.0 to 60.4 on build 464), requests a line (2.17) |
 | copy mode, one port on eight drives | `FS_A="/hs/nvme0 ... /hs/nvme7" RUNTIME=60 LOWAT=0 ./twoport.sh <out> a`, and `b`, three each | GB/s (46.5 to 47.4 on build 464) |
-| the loan and its copy on the stand-in | `plans/16k-36-loan8192-sgl.plan` through `sweep.sh` | GB/s, written direct or not, region held, requests a line |
+| the loan at three budgets and its copy on the stand-in | `plans/16k-42-loan-memcost.plan` through `sweep.sh` with `memcost-log.sh` beside it, as above | GB/s, written direct or not, region held, requests a line (4.07, 2.99, 2.28 and 5.75 on build 464) |
 
-`twoport.sh` does not read the counter itself yet; `cmn-two-1` had
-it read by hand 30 s into the load.
+`memcost-log.sh <prefix> <seconds> <port> [drives]` beside a
+`twoport.sh` run and `memcost-read.py <prefix> <port>` after it give
+copy mode's requests a line the same way; `cmn-two-1` had the
+counter read by hand 30 s into the load (2.17, scaled from 40%).
+For two ports the reader takes one port's bytes: run it for each
+and add, or log `enp161s0f0` and double.

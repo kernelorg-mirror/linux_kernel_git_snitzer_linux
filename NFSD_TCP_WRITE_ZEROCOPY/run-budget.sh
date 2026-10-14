@@ -778,6 +778,8 @@ J
 	# own NCONN connections, the writers shared out among them.  nconnect
 	# stops at 16; this is how a cell has more connections than that.
 	# STEP_IODEPTH=<n> is each writer's depth (16).
+	# STEP_SECS=<s> is how long they write (120): shorter where the
+	# storage has only so much to give at full rate.
 	# STEP_RATE="<MB/s> ..." paces the load at the source: the writers
 	# together offer that much and no more.  One figure holds for the
 	# cell.  Several are steps of equal length within it, the same
@@ -795,7 +797,7 @@ rw=write
 bs=${STEP_BS:-1M}
 size=${STEP_SIZE:-512M}
 time_based
-runtime=$(( 120 / ${#rates[@]} ))
+runtime=$(( ${STEP_SECS:-120} / ${#rates[@]} ))
 direct=1
 ioengine=libaio
 iodepth=${STEP_IODEPTH:-16}
