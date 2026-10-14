@@ -5706,6 +5706,12 @@ SYSCALL_DEFINE1(rmdir, const char __user *, pathname)
 	return filename_rmdir(AT_FDCWD, name);
 }
 
+static int __vfs_unlink(struct mnt_idmap *idmap, struct inode *dir,
+			struct dentry *dentry,
+			struct delegated_inode *delegated_inode,
+			int (*method)(struct inode *dir,
+				      struct dentry *dentry));
+
 /**
  * vfs_unlink - unlink a filesystem object
  * @idmap:	idmap of the mount the inode was found from
@@ -5734,6 +5740,20 @@ SYSCALL_DEFINE1(rmdir, const char __user *, pathname)
 int vfs_unlink(struct mnt_idmap *idmap, struct inode *dir,
 	       struct dentry *dentry, struct delegated_inode *delegated_inode)
 {
+	return __vfs_unlink(idmap, dir, dentry, delegated_inode, NULL);
+}
+EXPORT_SYMBOL(vfs_unlink);
+
+/*
+ * The body of vfs_unlink().  @method, if not NULL, is called in place of
+ * dir->i_op->unlink(); vfs_unlink() passes NULL.
+ */
+static int __vfs_unlink(struct mnt_idmap *idmap, struct inode *dir,
+			struct dentry *dentry,
+			struct delegated_inode *delegated_inode,
+			int (*method)(struct inode *dir,
+				      struct dentry *dentry))
+{
 	struct inode *target = dentry->d_inode;
 	int error = may_delete_dentry(idmap, dir, dentry, false);
 
@@ -5757,7 +5777,10 @@ int vfs_unlink(struct mnt_idmap *idmap, struct inode *dir,
 			error = try_break_deleg(target, 0, delegated_inode);
 			if (error)
 				goto out;
-			error = dir->i_op->unlink(dir, dentry);
+			if (method)
+				error = method(dir, dentry);
+			else
+				error = dir->i_op->unlink(dir, dentry);
 			if (!error) {
 				dont_mount(dentry);
 				detach_mounts(dentry);
@@ -5777,7 +5800,6 @@ out:
 
 	return error;
 }
-EXPORT_SYMBOL(vfs_unlink);
 
 /*
  * Make sure that the actual truncation of the file will occur outside its
