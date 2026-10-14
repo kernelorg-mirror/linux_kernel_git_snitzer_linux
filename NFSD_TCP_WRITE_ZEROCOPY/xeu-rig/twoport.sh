@@ -158,7 +158,11 @@ for p in $PORTS; do
 		"$RIG/settled.sh" place $p || exit 1
 	fi
 	echo "$p: $d mtu $(cat /sys/class/net/$d/mtu) rings $(ethtool -l $d | awk '/Combined/{v=$2} END{print v}') x $(ethtool -g $d | awk '/^RX:/{v=$2} END{print v}')" | tee -a geometry.txt
-	ping -c2 -W2 -I $d ${CLI[$p]} > /dev/null || { echo "$p: no answer from ${CLI[$p]}"; exit 1; }
+	# Straight after the port is opened the client's entry for the server's
+	# address can still be FAILED from the down (seen 14 October): it takes a
+	# few seconds to resolve again.  Up to 20 s for an answer, then refuse.
+	for i in $(seq 1 10); do ping -c1 -W2 -I $d ${CLI[$p]} > /dev/null && break; done
+	ping -c2 -W2 -I $d ${CLI[$p]} > /dev/null || { echo "$p: no answer from ${CLI[$p]} in 20 s"; exit 1; }
 	i=0
 	for fs in ${FS[$p]}; do
 		i=$((i + 1))
