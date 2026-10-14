@@ -161,6 +161,7 @@ struct nfs_readdir_descriptor {
 
 	__be32		verf[NFS_DIR_VERIFIER_SIZE];
 	unsigned long	dir_verifier;
+	unsigned long	shared_removal_seq;
 	unsigned long	timestamp;
 	unsigned long	gencount;
 	unsigned long	attr_gencount;
@@ -599,6 +600,7 @@ static int nfs_readdir_xdr_filler(struct nfs_readdir_descriptor *desc,
 	timestamp = jiffies;
 	gencount = nfs_inc_attr_generation_counter();
 	desc->dir_verifier = nfs_save_change_attribute(inode);
+	desc->shared_removal_seq = nfs_dir_shared_removal_seq(inode);
 	error = NFS_PROTO(inode)->readdir(&arg, &res);
 	if (error < 0) {
 		/* We requested READDIRPLUS, but the server doesn't grok it */
@@ -727,7 +729,7 @@ static void nfs_lookup_advise_force_readdirplus(struct inode *dir,
 
 static
 void nfs_prime_dcache(struct dentry *parent, struct nfs_entry *entry,
-		unsigned long dir_verifier)
+		      unsigned long dir_verifier, unsigned long removal_seq)
 {
 	struct qstr filename = QSTR_INIT(entry->name, entry->len);
 	struct dentry *dentry;
@@ -829,6 +831,15 @@ again:
 		d_lookup_done(dentry);
 		goto out;
 	}
+	/*
+	 * Make no dentry for a name that a removal under a shared parent may
+	 * have taken away after the server built this listing; see
+	 * nfs_dir_shared_removal_since().
+	 */
+	if (nfs_dir_shared_removal_since(d_inode(parent), removal_seq)) {
+		d_lookup_done(dentry);
+		goto out;
+	}
 
 	nfs_set_verifier(dentry, dir_verifier);
 	inode = nfs_fhget(dentry->d_sb, entry->fh, entry->fattr);
@@ -857,7 +868,8 @@ static int nfs_readdir_entry_decode(struct nfs_readdir_descriptor *desc,
 	ret = xdr_decode(desc, entry, stream);
 	if (ret || !desc->plus)
 		return ret;
-	nfs_prime_dcache(file_dentry(desc->file), entry, desc->dir_verifier);
+	nfs_prime_dcache(file_dentry(desc->file), entry, desc->dir_verifier,
+			 desc->shared_removal_seq);
 	return 0;
 }
 

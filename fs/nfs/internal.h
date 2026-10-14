@@ -153,6 +153,69 @@ static inline void nfs_d_drop_unless_anchored(struct dentry *dentry)
 	spin_unlock(&dentry->d_lock);
 }
 
+/*
+ * readdir holds the directory shared, so a listing can run beside a removal
+ * made under a shared parent, and the server can build the listing before
+ * the REMOVE while the client decodes it after.  Once the removal is done
+ * its anchor no longer stands in the way - the remover's d_delete() leaves
+ * the dentry unhashed or negative - and priming the dcache from such a
+ * listing would put the removed name back, as a positive dentry with a
+ * valid verifier.
+ *
+ * So a remover counts itself in ->shared_removals from before it sends its
+ * REMOVE until the reply is in, and then advances ->shared_removal_seq,
+ * before anything it does can unhash the anchor.  readdir samples the
+ * sequence before it sends the READDIR, and makes no new dentry from the
+ * listing while a removal is counted or once the sequence has moved.  A
+ * listing whose sample is the advanced value was sent after the server had
+ * answered the REMOVE.  The count makes priming stand aside even if the
+ * anchor were to be lost while the REMOVE is in flight.  A dentry that
+ * priming finds hashed is left to the test in nfs_prime_dcache(), which
+ * leaves it alone while it is anchored and once it has been unhashed;
+ * one that the removal left negative is dropped there, and its name
+ * then gets no new dentry from such a listing either.
+ *
+ * Both fields change under the directory's ->i_lock, and the test reads
+ * them under it.  The sample is taken without the lock.
+ */
+static inline unsigned long nfs_dir_shared_removal_seq(struct inode *dir)
+{
+	return READ_ONCE(NFS_I(dir)->shared_removal_seq);
+}
+
+/*
+ * Has a removal under a shared parent been in flight in @dir since @seq was
+ * sampled, or is one in flight now?
+ */
+static inline bool nfs_dir_shared_removal_since(struct inode *dir,
+						unsigned long seq)
+{
+	struct nfs_inode *nfsi = NFS_I(dir);
+	bool since;
+
+	spin_lock(&dir->i_lock);
+	since = nfsi->shared_removals || nfsi->shared_removal_seq != seq;
+	spin_unlock(&dir->i_lock);
+	return since;
+}
+
+static inline void nfs_dir_start_shared_removal(struct inode *dir)
+{
+	spin_lock(&dir->i_lock);
+	NFS_I(dir)->shared_removals++;
+	spin_unlock(&dir->i_lock);
+}
+
+static inline void nfs_dir_end_shared_removal(struct inode *dir)
+{
+	struct nfs_inode *nfsi = NFS_I(dir);
+
+	spin_lock(&dir->i_lock);
+	nfsi->shared_removals--;
+	WRITE_ONCE(nfsi->shared_removal_seq, nfsi->shared_removal_seq + 1);
+	spin_unlock(&dir->i_lock);
+}
+
 static inline fmode_t flags_to_mode(int flags)
 {
 	fmode_t res = (__force fmode_t)flags & FMODE_EXEC;
