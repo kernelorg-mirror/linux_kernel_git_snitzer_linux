@@ -44,7 +44,21 @@ whole (16 GiB a port) and rests 20 s. nfsd serves READs direct
 (`io_cache_read` 2), so they come from the drives, not the server's
 page cache. 16 writers a port at a queue of 16, 512 MiB files.
 Both rounds' lines are in `results-rwbase-464.tsv`; each run is
-`$L/rwbase-<tag>-<round>`.
+`$L/rwbase-464-saved/rwbase-<tag>-<round>`, except round 1's 8 MiB
+READ, 1 MiB random READ and 4 KiB random READ, which build 473's
+first round overwrote (their lines in the table and the `.tsv` are
+all that is left of them). `rwbase.sh` now names each run
+`$L/rwbase-<build>-<tag>-<round>`.
+
+**Restarting nfs-server unpins nfsd.** `hammerspace-nfsd-tuning`
+pins nfsd's threads to CPUs 8-55 at boot, and a stop and start of
+nfs-server (`run-kunit.sh` needs one) brings up 512 threads on all 64
+CPUs, among the ports' ring CPUs. After any restart, `systemctl
+restart hammerspace-nfsd-tuning`, or `taskset -pc 8-55` on each nfsd
+thread, and check with `pgrep -x nfsd | xargs -n1 taskset -cp`.
+Build 473's first round of `rwbase.sh` ran unpinned until 10:28 on
+14 October: the ring CPUs spent 13 to 18% in nfsd, and the 1 MiB
+random READs carried 44.1 GB/s against 464's 49.1.
 
 Two ports at the two-port setting, four drives a port:
 
