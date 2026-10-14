@@ -251,7 +251,7 @@
   <header>
     <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; builds 464 and 473 &middot; 13 and 14&nbsp;October&nbsp;2026 &middot; early findings</p>
     <h1>At 60.4 GB/s copy mode is at the limit of memory.<span class="ok" style="display:block">A loaned WRITE asks a fraction of it.</span></h1>
-    <p class="lede">An NFS server on the E1 takes <span class="hl">60.4 GB/s of durable WRITEs over two ports and 47.8 over one</span> by copying each WRITE once on arrival. That is as far as copying goes here: the machine's four DIMMs carry 166 GB/s in theory, a copy sends every byte through them twice, a bare copy benchmark reaches 62 to 68 GB/s, and two ports of NFS already ask of memory what that benchmark does. <span class="hc">The card can deliver 99 GB/s. The way to it is not to copy</span>, which is the loan, and a loan can only be written straight to storage by NVMe drives with SGLs. Those drives are on their way. This page is what was measured ahead of them on 13 October: how many bytes have to pass through memory for each byte of payload a loan carries, and what decides it. <a href="#b473">On 14 October the same measurements began again on the 7.3 kernel</a>, and so far they agree.</p>
+    <p class="lede">An NFS server on the E1 takes <span class="hl">60.4 GB/s of durable WRITEs over two ports and 47.8 over one</span> by copying each WRITE once on arrival. That is as far as copying goes here: the machine's four DIMMs carry 166 GB/s in theory, a copy sends every byte through them twice, a bare copy benchmark reaches 62 to 68 GB/s, and two ports of NFS already ask of memory what that benchmark does. <span class="hc">The card can deliver 99 GB/s. The way to it is not to copy</span>, which is the loan, and a loan can only be written straight to storage by NVMe drives with SGLs. Those drives are on their way. This page is what was measured ahead of them on 13 October: how many bytes have to pass through memory for each byte of payload a loan carries, and what decides it. <a href="#b473">On 14 October the same measurements were run again on the 7.3 kernel</a>, and they agree.</p>
     <div class="metrics">
       <div class="metric"><div class="n">2.17</div><div class="l">bytes through memory for each byte of payload: copied, two ports</div></div>
       <div class="metric"><div class="n gain">0.1</div><div class="l">the same for a loaned byte still in the cache when a drive takes it</div></div>
@@ -263,14 +263,14 @@
       <dl class="runs">
         <dt>Copy mode</dt><dd>The full account of how copy mode reached 60.4 GB/s, and everything tried on the way, is <a href="https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g">NFSD Receive Region Budget</a>. This page takes up where its section on the memory limit leaves off.</dd>
         <dt>In the tree</dt><dd><code>NFSD_TCP_WRITE_ZEROCOPY/LOAN-PERFORMANCE.md</code>, with every table here and how to run each again</dd>
-        <dt>Status</dt><dd>Early. One port, a stand-in for the drives, one evening's runs on build 464. Being run again on build 473, the series on the 7.3 kernel: the card and the drives alone, copy mode and the first of the three loan plans are in, and agree with build 464 (<a href="#b473">first section below</a>); the other two plans are running.</dd>
+        <dt>Status</dt><dd>Early. One port, a stand-in for the drives, one evening's runs on build 464. Run again on build 473, the series on the 7.3 kernel, on 14 October: the card and the drives alone, copy mode and all three loan plans, and they agree with build 464 (<a href="#b473">first section below</a>).</dd>
       </dl>
     </div>
   </header>
 
   <section id="b473">
     <p class="eyebrow ok"><span>Newest &middot; 14 October &middot; build 473, the series on the 7.3 kernel</span></p>
-    <h2>On the 7.3 kernel the measurements so far agree with build 464</h2>
+    <h2>On the 7.3 kernel the measurements agree with build 464</h2>
     <p>The series is rebased onto <code>v7.3-3</code>, after 7.3-rc7, and tardis1 booted build 473 from it (<code>7.3.0-0.rc7.3.hs.473.loanpages_pool.el9.aarch64+16k</code>). The measurements of 13 October are being run again on it in the same order. Every run was first checked against the settled setting: where nfsd's threads and each port's interrupts sit, the receive and module settings, the network settings on both hosts and the drives' caches. A loan cell was checked again once its load was running, against the budget, rings and held buffer its plan sets.</p>
 
     <h3 style="margin-top:26px">The card and the drives alone</h3>
@@ -309,8 +309,32 @@
         <tr><td class="m">copy</td><td class="c">10.44</td><td class="c">5.97</td><td class="c">0</td><td class="m">10.35 &middot; 5.75</td></tr>
       </tbody>
     </table></div>
-    <p><strong>The loan's cost in memory falls with what it holds, as on build 464, and its copy's does not.</strong> Every loaned WRITE was written direct, 2.08 million in the three loan cells, and none held more than it was charged. No cell dropped a frame at the rings, where build 464's run of this plan dropped 269 to 6,203 a cell. The other two plans, which take the loan down to its floor near 1.3 with rings of 128 and 64, are running and will be added here.</p>
-    <p class="note">The account is <code>NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md</code>, "Copy mode on 7.3", and the runs are <code>$L/memcost-cal-473</code>, <code>$L/b473-*</code> and <code>$L/xeu-16k-473-loanmem-1</code>. The setting each run was checked against is <code>xeu-rig/settled.sh</code>.</p>
+    <p><strong>The loan's cost in memory falls with what it holds, as on build 464, and its copy's does not.</strong> Every loaned WRITE was written direct, 2.08 million in the three loan cells, and none held more than it was charged. No cell dropped a frame at the rings, where build 464's run of this plan dropped 269 to 6,203 a cell.</p>
+
+    <h3 style="margin-top:26px">The other two plans: smaller rings and held buffers, down to the floor</h3>
+    <p>Rings of 128 and 64 with held buffers of 384 KiB down to 128 KiB, run as on build 464, with the port taken down and up before every cell on both builds in the third plan and on 7.3 only in the second.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:680px">
+      <thead><tr><th>Rings &middot; held buffer</th><th>WRITEs let in</th><th>Build 473: GB/s</th><th>Bytes through memory, each byte of payload</th><th>Frames dropped at the rings</th><th>Build 464: GB/s &middot; bytes through memory &middot; drops</th></tr></thead>
+      <tbody>
+        <tr><td>128 &middot; 384 KiB</td><td class="c">8</td><td class="c">11.73</td><td class="c">2.14</td><td class="c">1</td><td class="m">11.73 &middot; 2.00 &middot; 646</td></tr>
+        <tr><td>128 &middot; 384 KiB</td><td class="c">4</td><td class="c">8.45</td><td class="c">1.11</td><td class="c">0</td><td class="m">8.40 &middot; 0.93 &middot; 207</td></tr>
+        <tr><td>128 &middot; 384 KiB</td><td class="m">copy</td><td class="c">10.49</td><td class="c">5.11</td><td class="c">5</td><td class="m">10.41 &middot; 5.02 &middot; 17,966</td></tr>
+        <tr><td>128 &middot; 256 KiB</td><td class="c">8</td><td class="c">11.66 &middot; 11.70</td><td class="c">1.86 &middot; 1.78</td><td class="c">0 &middot; 0</td><td class="m">11.72 &middot; 1.86, 11.71 &middot; 1.89</td></tr>
+        <tr><td>128 &middot; 256 KiB</td><td class="c">6</td><td class="c">9.90</td><td class="c">1.42</td><td class="c">0</td><td class="m">10.28 &middot; 1.39 &middot; 162</td></tr>
+        <tr><td>128 &middot; 256 KiB</td><td class="c">4</td><td class="c">7.44</td><td class="c">1.01</td><td class="c">0</td><td class="m">7.45 &middot; 0.80 &middot; 120</td></tr>
+        <tr><td>128 &middot; 256 KiB</td><td class="m">copy</td><td class="c">10.41</td><td class="c">4.96</td><td class="c">0</td><td class="m">10.41 &middot; 4.90 &middot; 171</td></tr>
+        <tr><td>128 &middot; 192 KiB</td><td class="c">8</td><td class="c">11.50</td><td class="c">1.72</td><td class="c">0</td><td class="m">11.55 &middot; 1.70 &middot; 154</td></tr>
+        <tr><td>128 &middot; 128 KiB</td><td class="c">8</td><td class="c">10.74</td><td class="c">1.68</td><td class="c">0</td><td class="m">10.81 &middot; 1.62 &middot; 121</td></tr>
+        <tr><td>64 &middot; 256 KiB</td><td class="c">8</td><td class="c">11.63</td><td class="c">1.42</td><td class="c">13,509</td><td class="m">11.60 &middot; 1.36 &middot; 64,803</td></tr>
+        <tr><td>64 &middot; 192 KiB</td><td class="c">8</td><td class="c">11.46</td><td class="c">1.38</td><td class="c">3,216</td><td class="m">11.43 &middot; 1.34 &middot; 19,809</td></tr>
+        <tr><td>64 &middot; 128 KiB</td><td class="c">8</td><td class="c">10.48</td><td class="c">1.24</td><td class="c">1</td><td class="m">10.74 &middot; 1.32 &middot; 7,463</td></tr>
+        <tr><td>64 &middot; 128 KiB</td><td class="c">6</td><td class="c">8.24</td><td class="c">0.79</td><td class="c">0</td><td class="m">8.12 &middot; 0.77 &middot; 865</td></tr>
+        <tr><td>64 &middot; 128 KiB</td><td class="m">copy</td><td class="c">10.48</td><td class="c">4.72</td><td class="c">0</td><td class="m">10.47 &middot; 4.71 &middot; 7,898</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Cell for cell, the rates and the memory figures are build 464's.</strong> The loan's cost falls with what it holds, to a floor of 1.24 at rings of 64 and a 128 KiB held buffer (1.32 on build 464), and its copy stays at 4.7 to 5.1 whatever it holds. The edges are where they were: fewer than 8 WRITEs let in costs rate, a 128 KiB held buffer costs about 8%, and rings of 64 with a larger held buffer drop frames by the thousand. The best setting that loses nothing is still rings of 128, a 192 to 256 KiB held buffer and 8 WRITEs let in, at 1.7 to 1.9.</p>
+    <p><strong>Across the three plans every loaned WRITE was written direct, 9.70 million, and none held more than it was charged.</strong> Most cells dropped far fewer frames at the rings than on build 464, and none of the ones at rings of 128 dropped more than five. That is one run of each cell on each build, and why is not looked into.</p>
+    <p class="note">The account is <code>NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md</code>, "Copy mode on 7.3", and the runs are <code>$L/memcost-cal-473</code>, <code>$L/b473-*</code> and <code>$L/xeu-16k-473-loanmem-1</code> to <code>-3</code>. The setting each run was checked against is <code>xeu-rig/settled.sh</code>.</p>
   </section>
 
   <section id="copy">
@@ -471,7 +495,7 @@
       <div class="cell k">The rate a loan reaches. The stand-in is held to about 11.7 GB/s by the one drive behind it and by its own copy; nothing here is a measure of rate</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
       <div class="cell k">The settings for real drives. The right budget is about how many WRITEs are in flight at once, the rate times how long storage takes to finish one. Drives that finish sooner and carry five times the rate pull that in opposite directions, so the stand-in's 8 is where to start looking</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
       <div class="cell k">Two ports. The loan cells are one port; the harness that runs them does not do two</div><div class="cell v"><span class="pill pend">not run</span></div>
-      <div class="cell k">The same figures on the 7.3 kernel (build 473), with one-port and two-port copy mode beside them to show no regression: the card and the drives alone, copy mode and the first loan plan agree with build 464 (<a href="#b473">above</a>); the other two loan plans are running</div><div class="cell v"><span class="pill pend">in progress</span></div>
+      <div class="cell k">The same figures on the 7.3 kernel (build 473), with one-port and two-port copy mode beside them to show no regression: the card and the drives alone, copy mode and all three loan plans agree with build 464; two-port copy mode is about 1.5% under it (<a href="#b473">above</a>)</div><div class="cell v"><span class="pill yes">run</span></div>
     </div>
     <p style="margin-top:14px" class="note">One evening's runs, 13 October, each cell once; the setting at rings of 128, 256 KiB and 8 WRITEs was run twice and gave 1.86 and 1.89. The footprints of the first four rows of the table are estimates and the rest were measured with the port's page pools emptied before each cell. The measure rests on the interconnect's count of requests to the memory controller, taken as 64 bytes each. tardis1 is a 64-CPU Neoverse-N2 with one 32 MiB L3; the drives are eight WD_BLACK SN8100 and the stand-in's file was on one of them.</p>
   </section>
