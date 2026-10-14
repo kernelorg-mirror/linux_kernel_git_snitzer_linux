@@ -29,11 +29,17 @@ tail_drops() { ethtool -S $D | awk -F': ' '/rx_hw_tail_drop_packets/{s+=$2} END{
 ring_packets() { ethtool -S $D | awk -F': ' '/ring_[0-9]+_rx_packets/{printf "%s ", $2}'; }
 # A ring that ran empty never refills on a driver without the retry patch
 # (XEU_CONVERGENCE.md 5c).  Down and up reposts every ring.
-bounce() { ip link set $D down; sleep 1; ip link set $D up; sleep 6; ping -c2 -W2 $CLIIP > /dev/null; }
+# An open of the port puts its interrupts back on CPUs 0-7: both put the
+# settled CPU layout back after it (settled.sh).
+port_of() { case $1 in enp161s0f0) echo a ;; enp164s0f0) echo b ;; esac; }
+bounce() { ip link set $D down; sleep 1; ip link set $D up; sleep 6; "$RIG/settled.sh" place $(port_of $D) || return 1; ping -c2 -W2 $CLIIP > /dev/null; }
 set_ring() {	# set_ring <entries>: only with the port up
 	[ "$(rx_entries)" = "$1" ] && return 0
 	ethtool -G $D rx $1 || return 1
 	sleep 6
+	"$RIG/settled.sh" place $(port_of $D) || return 1
 	ping -c2 -W2 $CLIIP > /dev/null
 }
+# audit_or_die <mode> <file>: settled.sh's audit into <file>; refuse to go on
+audit_or_die() { "$RIG/settled.sh" audit $1 > $2 2>&1 || { grep -E 'BAD|FAILED' $2; exit 1; }; tail -1 $2; }
 has_retry_patch() { grep -q 'xeu_rx_refill_timer' /proc/kallsyms; }

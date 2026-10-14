@@ -40,6 +40,8 @@ RESERVE=$(sed -n 's/.*reserve \([0-9]*\) \/.*/\1/p' <<< "$G")
 # The kernel charges the payload pages times the factor; 2 over for rounding.
 CHARGE=$(( ( (1048716 + PS - 1) / PS * F9 + 99 ) / 100 + 2 ))
 echo "$G" > $OUT/geometry.txt
+# The host has to be at the settled setting before the sweep changes anything.
+audit_or_die rest $OUT/audit-start.txt
 echo "storage: prp $PRP_DIR, sgl $SGL_BACKING; nfsd threads $(cat /proc/fs/nfsd/threads); STEP_JOBS=${STEP_JOBS:-} STEP_BS=${STEP_BS:-} EXPORT_SYNC=${EXPORT_SYNC:-} MODE=${MODE:-} SKB_DEFER_MAX=${SKB_DEFER_MAX:-128} STEP_RATE=${STEP_RATE:-} RX_LINGER_US=${RX_LINGER_US:-0} BALANCE=${BALANCE:-} PLACE=${PLACE:-} mtu $(cat /sys/class/net/$D/mtu) rx_buf_size $(cat /sys/module/xeu/parameters/rx_buf_size 2>/dev/null)" | tee -a $OUT/geometry.txt
 echo "page $PS factor $F9 reserve $RESERVE charge-per-1MiB-WRITE $CHARGE region $(reg pages) retry-patch $(has_retry_patch && echo yes || echo no)" | tee -a $OUT/geometry.txt
 
@@ -61,6 +63,8 @@ HDR="tag entries rcvbuf writes budget storage cell conns MBps used_pages admitte
 n=0
 while read -r entries rb writes st cells <&3; do
 	case "$entries" in ''|'#'*) continue ;; esac
+	# The audit holds a cell to its line: a line has to give its held buffer.
+	[ "$rb" = - ] && { echo "line \"$entries $rb $writes $st $cells\": give the held buffer, not -"; exit 1; }
 	line="$entries $rb $writes $st $cells"
 	grep -qxF "$line" $OUT/done && continue
 	n=$(( n + 1 ))
@@ -102,6 +106,14 @@ while read -r entries rb writes st cells <&3; do
 		done
 		kill -0 $HP 2>/dev/null || break
 		sleep 15
+		# The cell's load is running: the live state against its line.
+		res=0; [ "$writes" -gt 0 ] && res=$RESERVE
+		if ! EXP_ENTRIES_A=$entries EXP_RCVBUF=$rb EXP_BUDGET=$budget EXP_BUDGET_RESERVE=$res \
+		     EXP_LINGER=${RX_LINGER_US:-0} "$RIG/settled.sh" audit cell > $o.$c.audit.txt 2>&1; then
+			grep -E 'BAD|FAILED' $o.$c.audit.txt | tee -a $OUT/log
+			kill $HP; wait $HP; exit 1
+		fi
+		tail -1 $o.$c.audit.txt >> $OUT/log
 		s0=$(stat1); c0=$(cstat1); t0=$(tail_drops)
 		if [ -n "${PERF:-}" ]; then
 			perf stat -a -x, -e cycles,instructions -o $o.$c.perf -- sleep 90 2>/dev/null
@@ -150,4 +162,8 @@ while read -r entries rb writes st cells <&3; do
 	echo "$line" >> $OUT/done
 done 3< $PLAN
 echo "== sweep over: $n lines run; rings 4 x $(rx_entries); $(grep -E '^free|alloc_fail' $RG | tr '\n' ' ')" | tee -a $OUT/log
+# Back to the settled setting: the rings at rest (set_ring places the layout
+# again), and a record of the host as the sweep leaves it.
+set_ring 256 || echo "rings not put back to 256" | tee -a $OUT/log
+"$RIG/settled.sh" audit rest > $OUT/audit-end.txt 2>&1 || { echo "the host is not at the settled setting after the sweep:"; grep -E 'BAD|FAILED' $OUT/audit-end.txt; } | tee -a $OUT/log
 echo SWEEPDONE
