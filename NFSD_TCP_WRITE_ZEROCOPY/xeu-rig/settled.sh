@@ -140,6 +140,73 @@ declare -A REST=(
 # The xeu module's, set by /etc/modprobe.d/xeu.conf at load.
 declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128)
 declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
+# The server's network sysctls, as every figure here was measured with them.
+# netdev_max_backlog and netdev_budget come from Hammerspace's tuned profile
+# hs-e1; the 16384 at the bottom of tcp_wmem and tcp_rmem is the kernel's
+# one page.  tcp_wmem's 4194304 caps each NFS connection's send buffer at
+# 4 MiB, which is what holds the 1 MiB random READ (14 October).
+TUNED=hs-e1
+declare -A SYSCTL=(
+	[net.ipv4.tcp_wmem]="16384 16384 4194304"
+	[net.ipv4.tcp_rmem]="16384 131072 33554432"
+	[net.ipv4.tcp_mem]="191472 255297 382944"
+	[net.core.wmem_max]=4194304
+	[net.core.rmem_max]=4194304
+	[net.core.wmem_default]=212992
+	[net.core.rmem_default]=212992
+	[net.core.optmem_max]=81920
+	[net.ipv4.tcp_congestion_control]=cubic
+	[net.core.default_qdisc]=fq_codel
+	[net.core.netdev_max_backlog]=250000
+	[net.core.netdev_budget]=600
+	[net.core.netdev_budget_usecs]=20000
+	[net.core.dev_weight]=64
+	[net.core.busy_poll]=0
+	[net.core.busy_read]=0
+	[net.core.skb_defer_max]=128
+	[net.ipv4.tcp_limit_output_bytes]=4194304
+	[net.ipv4.tcp_notsent_lowat]=4294967295
+	[net.ipv4.tcp_autocorking]=1
+	[net.ipv4.tcp_sack]=1
+	[net.ipv4.tcp_dsack]=1
+	[net.ipv4.tcp_timestamps]=1
+	[net.ipv4.tcp_window_scaling]=1
+	[net.ipv4.tcp_moderate_rcvbuf]=1
+	[net.ipv4.tcp_adv_win_scale]=1
+	[net.ipv4.tcp_slow_start_after_idle]=1
+	[net.ipv4.tcp_no_metrics_save]=0
+	[net.ipv4.tcp_mtu_probing]=0
+	[net.ipv4.tcp_ecn]=2
+	[net.ipv4.tcp_reordering]=3
+	[net.ipv4.tcp_recovery]=1
+	[net.ipv4.tcp_early_retrans]=3
+	[net.ipv4.tcp_frto]=2
+	[net.ipv4.tcp_tso_win_divisor]=3
+	[net.ipv4.tcp_min_tso_segs]=2
+	[net.ipv4.tcp_pacing_ss_ratio]=200
+	[net.ipv4.tcp_pacing_ca_ratio]=120
+	[net.ipv4.tcp_rto_min_us]=200000
+)
+# The client's, read over its management address and never changed from
+# here ("the client untouched"): what bears on how it receives and sends.
+declare -A CLI_SYSCTL=(
+	[net.ipv4.tcp_rmem]="4096 131072 33554432"
+	[net.ipv4.tcp_wmem]="4096 16384 4194304"
+	[net.core.rmem_max]=4194304
+	[net.core.wmem_max]=4194304
+	[net.ipv4.tcp_congestion_control]=cubic
+	[net.core.netdev_max_backlog]=1000
+	[net.core.netdev_budget]=300
+	[net.core.netdev_budget_usecs]=2000
+	[net.core.busy_poll]=0
+	[net.core.busy_read]=0
+	[net.ipv4.tcp_limit_output_bytes]=4194304
+	[net.ipv4.tcp_moderate_rcvbuf]=1
+	[net.ipv4.tcp_sack]=1
+	[net.ipv4.tcp_timestamps]=1
+	[net.ipv4.tcp_ecn]=2
+)
+declare -A CLI_DEV=([a]=ens3np0 [b]=ens6np0)	# the client's end of each port
 SUNRPC=/sys/module/sunrpc/parameters
 
 pci_of() { basename "$(readlink -f $1)"; }	# pci_of <sysfs device link>
@@ -207,6 +274,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "${ENTRIES[b]}" = "${SETTLED[entries_b]}" ] || OFF="$OFF rings_b=${ENTRIES[b]}"
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
 	[ -n "${EXP_LAYOUT:-}" ] && OFF="$OFF layout=$EXP_LAYOUT"
+	[ -n "${EXP_QDISC:-}" ] && [ "$EXP_QDISC" != fq_codel ] && OFF="$OFF client_qdisc=$EXP_QDISC"
 	return 0
 }
 
@@ -219,6 +287,26 @@ audit_nfsd() {
 		want "nfsd $k" "$(cat /sys/kernel/debug/nfsd/$k 2>/dev/null)" "${NFSD_DBG[$k]}"
 	done
 	want "nfsd max_block_size" "$(cat /proc/fs/nfsd/max_block_size 2>/dev/null)" 1048576
+}
+
+audit_sysctl() {
+	local k
+	want "tuned profile" "$(tuned-adm active 2>/dev/null | sed -n 's/^Current active profile: //p')" $TUNED
+	for k in $(printf '%s\n' "${!SYSCTL[@]}" | sort); do
+		want "sysctl $k" "$(sysctl -n $k 2>/dev/null | tr -s ' \t' '  ')" "${SYSCTL[$k]}"
+	done
+}
+
+audit_client() {	# read only: nothing on the client is changed from here
+	local out k p
+	out=$($SSHC "for k in ${!CLI_SYSCTL[*]}; do echo \"\$k \$(sysctl -n \$k | tr -s ' \\t' '  ')\"; done; for d in ${CLI_DEV[*]}; do echo \"qdisc_\$d \$(tc qdisc show dev \$d | awk '\$1 == \"qdisc\" && \$2 != \"mq\" {print \$2}' | sort -u | paste -sd,)\"; done" 2>/dev/null) ||
+		{ bad "client reachable at $CLIMGMT" no yes; return; }
+	for k in $(printf '%s\n' "${!CLI_SYSCTL[@]}" | sort); do
+		want "client sysctl $k" "$(awk -v k=$k '$1 == k {$1 = ""; sub(/^ /, ""); print}' <<< "$out")" "${CLI_SYSCTL[$k]}"
+	done
+	for p in a b; do
+		want "client ${CLI_DEV[$p]} qdisc" "$(awk -v k=qdisc_${CLI_DEV[$p]} '$1 == k {print $2}' <<< "$out")" "${EXP_QDISC:-fq_codel}"
+	done
 }
 
 audit_irqbalance() {
@@ -261,6 +349,8 @@ audit() {
 	echo "settled.sh audit $mode: kernel $(uname -r), $(date '+%F %T')"
 	audit_nfsd
 	audit_irqbalance
+	audit_sysctl
+	audit_client
 	audit_port a
 	audit_port b
 	for k in $(printf '%s\n' "${!EXPECT[@]}" | sort); do
@@ -325,6 +415,9 @@ place() {	# place [a] [b]: the CPU layout of nfsd and of the ports named (both)
 apply() {	# the CPU layout, the resting module settings, and the audit
 	local k
 	place || return 1
+	for k in "${!SYSCTL[@]}"; do
+		[ "$(sysctl -n $k | tr -s ' \t' '  ')" = "${SYSCTL[$k]}" ] || sysctl -qw "$k=${SYSCTL[$k]}"
+	done
 	if [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ]; then
 		for k in "${!REST[@]}"; do
 			[ -w $SUNRPC/$k ] && [ "$(cat $SUNRPC/$k)" != "${REST[$k]}" ] && echo "${REST[$k]}" > $SUNRPC/$k
