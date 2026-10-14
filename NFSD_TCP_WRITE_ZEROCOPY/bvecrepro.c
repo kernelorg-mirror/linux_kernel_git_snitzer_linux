@@ -22,6 +22,7 @@
 #include <linux/bio.h>
 #include <linux/highmem.h>
 #include <linux/vmalloc.h>
+#include <linux/version.h>
 
 static char *dev = "/dev/nvme0n1";
 module_param(dev, charp, 0444);
@@ -118,7 +119,11 @@ static int __init bvecrepro_init(void)
 	bio.bi_iter.bi_sector = start_sector;
 	bio.bi_io_vec = bvecs;
 	bio.bi_iter.bi_idx = 0;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 3, 0)
+	bio.bi_iter.bi_offset = 0;	/* bi_bvec_done before 7.3 */
+#else
 	bio.bi_iter.bi_bvec_done = 0;
+#endif
 	bio.bi_iter.bi_size = TOTAL;
 	bio_set_flag(&bio, BIO_CLONED);
 	ret = submit_bio_wait(&bio);
