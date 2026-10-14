@@ -251,12 +251,12 @@
   <header>
     <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; build 464 &middot; 13&nbsp;October&nbsp;2026 &middot; early findings</p>
     <h1>At 60.4 GB/s copy mode is at limit of memory. <span class="ok" style="display:block">A loaned WRITE asks a fraction of it.</span></h1>
-    <p class="lede">An NFS server on the E1 takes <span class="hl">60.4 GB/s of durable WRITEs over two ports and 47.4 over one</span> by copying each WRITE once on arrival. That is as far as copying goes here: the machine's four DIMMs carry 166 GB/s in theory, a copy sends every byte through them twice, a bare copy benchmark reaches 62 to 68 GB/s, and two ports of NFS already ask of memory what that benchmark does. <span class="hc">The card can deliver 99 GB/s. The way to it is not to copy</span>, which is the loan, and a loan can only be written straight to storage by NVMe drives with SGLs. Those drives are on their way. This page is what was measured ahead of them on 13 October: what a loaned byte costs in memory, and what decides it.</p>
+    <p class="lede">An NFS server on the E1 takes <span class="hl">60.4 GB/s of durable WRITEs over two ports and 47.4 over one</span> by copying each WRITE once on arrival. That is as far as copying goes here: the machine's four DIMMs carry 166 GB/s in theory, a copy sends every byte through them twice, a bare copy benchmark reaches 62 to 68 GB/s, and two ports of NFS already ask of memory what that benchmark does. <span class="hc">The card can deliver 99 GB/s. The way to it is not to copy</span>, which is the loan, and a loan can only be written straight to storage by NVMe drives with SGLs. Those drives are on their way. This page is what was measured ahead of them on 13 October: how many bytes have to pass through memory for each byte of payload a loan carries, and what decides it.</p>
     <div class="metrics">
-      <div class="metric"><div class="n">2.17</div><div class="l">requests to memory for each line of payload, copied, two ports</div></div>
-      <div class="metric"><div class="n gain">0.1</div><div class="l">the same for a loaned line still in the cache when a drive takes it</div></div>
-      <div class="metric"><div class="n gain">1.86 vs 4.90</div><div class="l">loan against its copy on the stand-in, smallest footprint tried</div></div>
-      <div class="metric"><div class="n gain">100%</div><div class="l">of loaned WRITEs written direct, none over its charge</div></div>
+      <div class="metric"><div class="n">2.17</div><div class="l">bytes through memory for each byte of payload: copied, two ports</div></div>
+      <div class="metric"><div class="n gain">0.1</div><div class="l">the same for a loaned byte still in the cache when a drive takes it</div></div>
+      <div class="metric"><div class="n gain">1.3 vs 4.7</div><div class="l">loan against its copy on the stand-in, at the loan's floor</div></div>
+      <div class="metric"><div class="n gain">100%</div><div class="l">of 7.3 million loaned WRITEs written direct, none over its charge</div></div>
     </div>
     <div class="prov">
       <p class="pl">Where this sits</p>
@@ -302,7 +302,7 @@
           <li>The receive pages go straight back to the card.</li>
           <li>The file system writes nfsd's buffer to the drives.</li>
         </ol>
-        <div class="set">receive pages held for microseconds &middot; every byte through memory twice</div>
+        <div class="set">receive pages held for microseconds &middot; 2.17 bytes through memory for each byte of payload</div>
       </div>
       <div class="kind b">
         <p class="who">Loan</p>
@@ -318,13 +318,13 @@
     <p>A copy frees the card's memory at once and pays for it in memory bandwidth. A loan pays nothing for a copy and holds the card's memory for as long as the storage takes. The card receives into a fixed, small region, so pages that are out on loan are pages the card cannot receive into. Left alone, sixteen connections part-way through a WRITE each could hold all of it between them and stop. The settings below are what prevent that, and they are the terms the findings are stated in.</p>
     <dl class="terms">
       <dt>Region</dt><dd>The fixed block of memory the card receives into: 32,768 pages of 16 KiB here, shared by both ports. It is kept small on purpose, so that what is in use at any moment can sit in the CPU's 32 MiB cache.</dd>
-      <dt>Region in use</dt><dd>How much of the region holds data right now: frames waiting in the rings, data the connections have received and nfsd has not yet read, and pages out on loan. This is the loan's footprint.</dd>
+      <dt>Footprint</dt><dd>How much of the region a load keeps in play: the buffers posted in its port's rings, the data its connections have received and nfsd has not yet read, and the pages out on loan. The card writes through all of it, so this is what has to fit in the cache.</dd>
       <dt>Budget</dt><dd>The limit on how much of the region loans may hold at once, in pages. A budget of 0 means copy.</dd>
       <dt>WRITEs let in</dt><dd>The budget stated as a count: how many 1 MiB WRITEs may be in progress as loans at the same time. "16 WRITEs let in" is a budget of 2,150 pages; 8 is 1,142; 4 is 638. A connection whose next WRITE does not fit waits, and TCP slows its sender. With sixteen connections and 8 let in, about half of them are waiting at any moment.</dd>
       <dt>Charge</dt><dd>What one WRITE is counted as holding against the budget, taken when it starts and given back when the storage has finished it. The kernel learns it from what WRITEs actually held; no WRITE in these runs held more than it was charged.</dd>
       <dt>Held receive buffer</dt><dd>Each connection's TCP receive buffer, fixed at a set size and not left to grow: 1 MiB, 384 KiB or 256 KiB in these runs. It caps how much data nfsd has not read yet is sitting in the region for that connection. Sixteen connections at 1 MiB can hold 16 MiB before any loan is counted.</dd>
       <dt>Rings</dt><dd>The card's receive rings for the port, four of them, each posted with 256 or 128 buffers of 8192 bytes. Buffers posted and waiting for frames are in the region too: 8 MiB at 256, 4 MiB at 128.</dd>
-      <dt>Requests to memory for each line</dt><dd>The measure used below. A line is 64 bytes, the unit the cache works in. The machine's interconnect counts every request its cache makes of the memory controller, which separates data that came from the DIMMs from data that was already in the cache. Divided by the lines of payload carried, it says what a byte of payload cost in memory bandwidth.</dd>
+      <dt>Bytes through memory for each byte of payload</dt><dd>The measure used below. The machine's interconnect counts every time its cache has to fetch from the DIMMs or write out to them, which separates data that came from memory from data that was already in the cache. Divided by the payload carried, it says how much of the memory's bandwidth each byte of payload used. A figure of 2 means two bytes moved through the DIMMs for every byte the server took in. The DIMMs move 166 GB/s at most, so the figure times the rate has to stay under that.</dd>
       <dt>Stand-in</dt><dd>NVMe over TCP on tardis1 itself, in front of a file on one drive. It takes data in arbitrary pieces as an SGL drive would, so a loan can be written direct to it. It then passes the data through TCP to itself and receives it into buffers of its own, which a drive would not do.</dd>
     </dl>
   </section>
@@ -334,7 +334,7 @@
     <h2>The card and the drives both move data through the cache</h2>
     <p>Before a loan was measured, each end of its journey was measured alone: the card receiving with nobody reading the data, and the drives writing and reading with no network.</p>
     <div class="tbl-wrap"><table class="q" style="min-width:600px">
-      <thead><tr><th>What was running</th><th>GB/s</th><th>Requests to memory for each line</th></tr></thead>
+      <thead><tr><th>What was running</th><th>GB/s</th><th>Bytes through memory for each byte moved</th></tr></thead>
       <tbody>
         <tr><td>One port receiving plain TCP, the receivers discarding it unread</td><td class="c">49.6</td><td class="r">0.03</td></tr>
         <tr><td>Both ports, the same</td><td class="c">99.6</td><td class="c">0.25</td></tr>
@@ -345,63 +345,71 @@
         <tr><td>All eight drives reading into buffers that do not</td><td class="c">105.4</td><td class="x">1.04</td></tr>
       </tbody>
     </table></div>
-    <p><strong>The card writes what it receives into the cache, not into memory.</strong> One port brings in 0.78 billion lines a second and the memory controller is asked for 0.02 billion. <strong>A drive takes what it writes from the cache</strong> when it is still there. Memory is asked only for what falls out of the cache between being written and being read.</p>
+    <p><strong>The card writes what it receives into the cache, not into memory.</strong> One port brings in 49.6 GB/s and under 2 GB/s of it touches the DIMMs. <strong>A drive takes what it writes from the cache</strong> when it is still there. Memory is involved only for what falls out of the cache between being written and being read.</p>
     <p>That gives a loaned byte's cost before any loan is run:</p>
-    <p class="legend"><span class="key"></span>loaned <span class="key cp" style="margin-left:12px"></span>copied &nbsp;&middot;&nbsp; requests to memory for each line of payload, on a scale of 0 to 6</p>
+    <p class="legend"><span class="key"></span>loaned <span class="key cp" style="margin-left:12px"></span>copied &nbsp;&middot;&nbsp; bytes through memory for each byte of payload, on a scale of 0 to 6</p>
     <div class="mem">
       <div class="lab">Loaned, still in the cache when the drive takes it<small>0.03 arriving, 0.09 leaving</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:2.0%"></span></div><span class="n">0.12</span></div></div>
-      <div class="lab">Loaned, evicted before the drive takes it<small>one eviction, 0.58 to fetch it back</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:26.7%"></span></div><span class="n">1.60</span></div></div>
+      <div class="lab">Loaned, pushed out of the cache before the drive takes it<small>written out once, 0.58 to fetch it back</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:26.7%"></span></div><span class="n">1.60</span></div></div>
       <div class="lab">Copied, two ports of NFS<small>measured at 60.4 GB/s</small></div><div class="bars"><div class="row"><div class="track"><span class="fill cp" style="width:36.2%"></span></div><span class="n">2.17</span></div></div>
     </div>
-    <p>An earlier reading of the limit had a loan bounded by memory as a copy is, on the reasoning that a byte still enters memory once and leaves once. These measurements say otherwise: both of those passes go through the cache, and what decides a loan's cost is how much received data is waiting for the drives, against the size of the cache. That is what the region, the budget and the held buffer exist to bound.</p>
+    <p>Both passes of a loaned byte go through the cache. What decides its cost is how much received data is waiting for the drives, against the size of the cache. That is what the region, the budget and the held buffer exist to bound, and it is why a loan is not held to the 60 GB/s that a copy is: at 2.17 bytes through memory for each byte of payload, 60.4 GB/s needs about 131 GB/s of the DIMMs' 166. At 0.1 the DIMMs are hardly in it.</p>
   </section>
 
   <section id="standin">
     <p class="eyebrow ok">Finding 2 &middot; the loan on the stand-in, one port, sixteen connections</p>
-    <h2>The less a loan holds, the less it asks of memory. Its copy does not move.</h2>
-    <p>The loan and a copy that differs from it in nothing else were run on the stand-in at three budgets, two ring depths and three held buffers. Every cell is 50 seconds at the stand-in's full rate, with the one drive behind it kept inside its fast range.</p>
-    <p class="legend"><span class="key"></span>the loan <span class="key cp" style="margin-left:12px"></span>its copy at the same rings and buffer &nbsp;&middot;&nbsp; requests to memory for each line of payload, 0 to 6</p>
+    <h2>The less a loan holds, the less memory it uses, down to a floor that is the stand-in's own. Its copy does not move.</h2>
+    <p>The loan and a copy that differs from it in nothing else were run on the stand-in across budgets, ring depths and held buffers. Every cell is 50 seconds at the stand-in's rate, with the one drive behind it kept inside its fast range.</p>
+    <p class="legend"><span class="key"></span>the loan <span class="key cp" style="margin-left:12px"></span>its copy at the same or the nearest setting &nbsp;&middot;&nbsp; bytes through memory for each byte of payload, 0 to 6</p>
     <div class="mem">
-      <div class="lab">Rings of 256, 1 MiB buffer, 16 WRITEs let in<small>76 MiB of the region in use</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:67.8%"></span></div><span class="n">4.07</span></div><div class="row"><div class="track"><span class="fill cp" style="width:95.8%"></span></div><span class="n">5.75</span></div></div>
-      <div class="lab">Rings of 256, 1 MiB buffer, 8 let in<small>62 MiB in use</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:49.8%"></span></div><span class="n">2.99</span></div><div class="row"><div class="track"><span class="fill cp" style="width:95.8%"></span></div><span class="n">5.75</span></div></div>
-      <div class="lab">Rings of 128, 384 KiB buffer, 8 let in<small>48 MiB in use</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:33.3%"></span></div><span class="n">2.00</span></div><div class="row"><div class="track"><span class="fill cp" style="width:83.7%"></span></div><span class="n">5.02</span></div></div>
-      <div class="lab">Rings of 128, 256 KiB buffer, 8 let in<small>46 MiB in use</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:31.0%"></span></div><span class="n">1.86</span></div><div class="row"><div class="track"><span class="fill cp" style="width:81.7%"></span></div><span class="n">4.90</span></div></div>
+      <div class="lab">Footprint about 37 MiB<small>rings of 256, 1 MiB buffer, 16 WRITEs let in</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:67.8%"></span></div><span class="n">4.07</span></div><div class="row"><div class="track"><span class="fill cp" style="width:95.8%"></span></div><span class="n">5.75</span></div></div>
+      <div class="lab">About 24 MiB<small>rings of 256, 1 MiB buffer, 8 let in</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:49.8%"></span></div><span class="n">2.99</span></div><div class="row"><div class="track"><span class="fill cp" style="width:95.8%"></span></div><span class="n">5.75</span></div></div>
+      <div class="lab">23 MiB<small>rings of 128, 256 KiB buffer, 8 let in</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:31.5%"></span></div><span class="n">1.89</span></div><div class="row"><div class="track"><span class="fill cp" style="width:81.7%"></span></div><span class="n">4.90</span></div></div>
+      <div class="lab">18 MiB<small>rings of 64, 192 KiB buffer, 8 let in</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:22.3%"></span></div><span class="n">1.34</span></div><div class="row"><div class="track"><span class="fill cp" style="width:78.5%"></span></div><span class="n">4.71</span></div></div>
     </div>
-    <p>All four loans carried 11.7 GB/s; the copies carried 10.4. Read the bars against each other and not against the first finding: the stand-in's own passage of the data through TCP adds to both.</p>
-    <div class="tbl-wrap"><table class="q" style="min-width:680px">
-      <thead><tr><th>Rings &middot; held buffer</th><th>WRITEs let in</th><th>GB/s</th><th>Region in use</th><th>Requests to memory, each line</th><th>Client retransmits</th></tr></thead>
+    <p>All four loans carried 11.4 to 11.7 GB/s; the copies carried 10.4. Read the bars against each other and not against the first finding: the stand-in's own passage of the data through TCP adds to both.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:720px">
+      <thead><tr><th>Rings &middot; held buffer</th><th>WRITEs let in</th><th>GB/s</th><th>Footprint</th><th>Bytes through memory, each byte of payload</th><th>Frames dropped at the rings</th></tr></thead>
       <tbody>
-        <tr><td>256 &middot; 1 MiB</td><td class="c">16</td><td class="c">11.74</td><td class="c">76 MiB</td><td class="c">4.07</td><td class="c">1,576</td></tr>
-        <tr><td>256 &middot; 1 MiB</td><td class="c">8</td><td class="c">11.74</td><td class="c">62 MiB</td><td class="c">2.99</td><td class="c">1,382</td></tr>
-        <tr><td>256 &middot; 1 MiB</td><td class="c">4</td><td class="x">10.59</td><td class="c">59 MiB</td><td class="c">2.28</td><td class="c">471</td></tr>
-        <tr><td>256 &middot; 1 MiB</td><td class="m">copy</td><td class="c">10.35</td><td class="c">49 MiB</td><td class="x">5.75</td><td class="x">248,392</td></tr>
-        <tr><td>128 &middot; 384 KiB</td><td class="c">8</td><td class="c">11.73</td><td class="c">48 MiB</td><td class="r">2.00</td><td class="c">1,974</td></tr>
-        <tr><td>128 &middot; 384 KiB</td><td class="c">4</td><td class="x">8.40</td><td class="c">43 MiB</td><td class="r">0.93</td><td class="c">163</td></tr>
-        <tr><td>128 &middot; 384 KiB</td><td class="m">copy</td><td class="c">10.41</td><td class="c">37 MiB</td><td class="x">5.02</td><td class="x">21,660</td></tr>
-        <tr><td>128 &middot; 256 KiB</td><td class="c">8</td><td class="c">11.72</td><td class="c">46 MiB</td><td class="r">1.86</td><td class="c">1,371</td></tr>
-        <tr><td>128 &middot; 256 KiB</td><td class="c">4</td><td class="x">7.45</td><td class="c">41 MiB</td><td class="r">0.80</td><td class="c">72</td></tr>
-        <tr><td>128 &middot; 256 KiB</td><td class="m">copy</td><td class="c">10.41</td><td class="c">37 MiB</td><td class="x">4.90</td><td class="x">3,952</td></tr>
+        <tr><td>256 &middot; 1 MiB</td><td class="c">16</td><td class="c">11.74</td><td class="c">about 37 MiB</td><td class="c">4.07</td><td class="c">359</td></tr>
+        <tr><td>256 &middot; 1 MiB</td><td class="c">8</td><td class="c">11.74</td><td class="c">about 24 MiB</td><td class="c">2.99</td><td class="c">269</td></tr>
+        <tr><td>256 &middot; 1 MiB</td><td class="c">4</td><td class="x">10.59</td><td class="c">about 19 MiB</td><td class="c">2.28</td><td class="c">297</td></tr>
+        <tr><td>256 &middot; 1 MiB</td><td class="m">copy</td><td class="c">10.35</td><td class="c">about 10 MiB</td><td class="x">5.75</td><td class="x">6,203</td></tr>
+        <tr><td>128 &middot; 256 KiB</td><td class="c">8</td><td class="c">11.71</td><td class="c">23 MiB</td><td class="r">1.89</td><td class="c">221</td></tr>
+        <tr><td>128 &middot; 256 KiB</td><td class="c">6</td><td class="x">10.28</td><td class="c">20 MiB</td><td class="r">1.39</td><td class="c">162</td></tr>
+        <tr><td>128 &middot; 192 KiB</td><td class="c">8</td><td class="c">11.55</td><td class="c">22 MiB</td><td class="r">1.70</td><td class="c">154</td></tr>
+        <tr><td>128 &middot; 128 KiB</td><td class="c">8</td><td class="x">10.81</td><td class="c">21 MiB</td><td class="r">1.62</td><td class="c">121</td></tr>
+        <tr><td>64 &middot; 256 KiB</td><td class="c">8</td><td class="c">11.60</td><td class="c">18.5 MiB</td><td class="r">1.36</td><td class="x">64,803</td></tr>
+        <tr><td>64 &middot; 192 KiB</td><td class="c">8</td><td class="c">11.43</td><td class="c">17.6 MiB</td><td class="r">1.34</td><td class="x">19,809</td></tr>
+        <tr><td>64 &middot; 128 KiB</td><td class="c">8</td><td class="x">10.74</td><td class="c">16.8 MiB</td><td class="r">1.32</td><td class="x">7,463</td></tr>
+        <tr><td>64 &middot; 128 KiB</td><td class="c">6</td><td class="x">8.12</td><td class="c">13.8 MiB</td><td class="r">0.77</td><td class="c">865</td></tr>
+        <tr><td>64 &middot; 128 KiB</td><td class="m">copy</td><td class="c">10.47</td><td class="c">4.2 MiB</td><td class="x">4.71</td><td class="x">7,898</td></tr>
       </tbody>
     </table></div>
     <div class="delta">
       <div class="mark gain">1</div>
       <div class="body"><h3>The loan's cost follows its footprint, with no loss of rate</h3>
-      <p>From 76 MiB in use to 46, the requests to memory for each line fall from 4.07 to 1.86 while the rate stays at 11.7 GB/s. At the smallest setting the loan asks under two fifths of what its copy does, and less than a copy straight to the drives (2.17), though it is still carrying the stand-in's extra passage.</p></div>
+      <p>From about 37 MiB held to 18, the bytes through memory for each byte of payload fall from 4.07 to 1.34 while the rate stays at 11.4 to 11.7 GB/s. At 18 MiB the loan uses under a third of what its copy does, and less than a copy straight to the drives (2.17), though it is still carrying the stand-in's extra passage.</p></div>
     </div>
     <div class="delta">
-      <div class="mark cost">2</div>
+      <div class="mark gain">2</div>
+      <div class="body"><h3>It levels off near 1.3, and what is left is the stand-in's</h3>
+      <p>With rings of 64 the figure is 1.36, 1.34 and 1.32 as the footprint goes from 18.5 MiB to 16.8. It has stopped falling, and all of that is well inside the 32 MiB cache. What remains is the stand-in passing the data through TCP to itself and into buffers of its own, which are ordinary memory outside the region and which a drive would not have. For a drive that takes the pages itself, the first finding's 0.1 is what a footprint of this size points at.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark cost">3</div>
       <div class="body"><h3>The copy gains nothing from the same change</h3>
-      <p>Its footprint falls too, from 49 MiB to 37, and its cost stays near 5. What a copy pays for is its destination: nfsd's own buffers, far larger in all than the cache and outside the region, written out to memory and fetched back for the drive.</p></div>
+      <p>A copy holds almost nothing in the region beyond its rings, 10 MiB falling to 4, and still uses 4.7 to 5.75 bytes of memory for each byte of payload. What a copy pays for is its destination: nfsd's own buffers, far larger in all than the cache and outside the region, written out to memory and fetched back for the drive.</p></div>
     </div>
     <div class="delta">
-      <div class="mark">3</div>
-      <div class="body"><h3>Too small a budget costs rate, not memory</h3>
-      <p>With 4 WRITEs let in, the loan is under one request a line (0.93 and 0.80) and carries 8.4 and 7.5 GB/s where 8 let in carries 11.7. Sixteen connections are sharing four WRITEs' worth of budget and most are waiting. Eight is the smallest budget here that carries the stand-in's full rate.</p></div>
+      <div class="mark">4</div>
+      <div class="body"><h3>The settings have edges, and they are now known for this stand-in</h3>
+      <p>Fewer than 8 WRITEs let in costs rate: 6 gives up a tenth and 4 a third, because sixteen connections are sharing too little budget and most are waiting. A held buffer of 128 KiB gives up about 7%; 192 KiB does not. Rings of 64 reach the floor and drop 7 to 65 thousand frames a cell doing it; rings of 128 drop a couple of hundred. The best setting that loses nothing is rings of 128, a 192 to 256 KiB held buffer and 8 WRITEs let in, at 1.7 to 1.9 and 22 to 23 MiB.</p></div>
     </div>
     <div class="delta">
-      <div class="mark gain">4</div>
+      <div class="mark gain">5</div>
       <div class="body"><h3>The loan path is sound on this kernel</h3>
-      <p>Every loaned WRITE in every cell was written direct, 4.5 million in all, and none held more than it was charged. The loan also carries about 13% more than its copy on the stand-in, with a hundredth of the client's retransmits at the larger settings.</p></div>
+      <p>Every loaned WRITE in every cell was written direct, 7.3 million in all, and none held more than it was charged. The loan also carries about 13% more than its copy on the stand-in.</p></div>
     </div>
   </section>
 
@@ -410,21 +418,22 @@
     <h2>The direction is measured. The figure for a real drive is not.</h2>
     <div class="matrix">
       <div class="cell k">The card's writes and the drives' reads go through the cache, and reach memory only for what falls out of it</div><div class="cell v"><span class="pill yes">shown</span></div>
-      <div class="cell k">A loan's cost in memory falls with how much it holds: three runs, budget, rings and held buffer each varied</div><div class="cell v"><span class="pill yes">shown</span></div>
+      <div class="cell k">A loan's cost in memory falls with its footprint: four runs, with the budget, the rings and the held buffer each varied</div><div class="cell v"><span class="pill yes">shown</span></div>
+      <div class="cell k">On the stand-in it levels off near 1.3 bytes through memory for each byte of payload, at a footprint of 17 to 18 MiB, inside the cache</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">A copy's cost does not fall the same way</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">Loaned WRITEs are written direct on build 464 and stay within their charge</div><div class="cell v"><span class="pill yes">shown</span></div>
-      <div class="cell k">What a loaned byte costs in front of a drive that takes the pages itself. The stand-in adds a passage through TCP that a drive does not; the first finding puts the answer between 0.1 and 1.6 requests a line</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
+      <div class="cell k">What a loaned byte costs in front of a drive that takes the pages itself. The stand-in adds a passage through TCP that a drive does not; the first finding puts the answer between 0.1 and 1.6, and a footprint inside the cache points at the low end</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
       <div class="cell k">The rate a loan reaches. The stand-in is held to about 11.7 GB/s by the one drive behind it and by its own copy; nothing here is a measure of rate</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
-      <div class="cell k">The floor. The smallest footprint tried, 41 MiB, is still more than the 32 MiB cache, and the cost was still falling</div><div class="cell v"><span class="pill pend">not found</span></div>
+      <div class="cell k">The settings for real drives. The right budget is about how many WRITEs are in flight at once, the rate times how long storage takes to finish one. Drives that finish sooner and carry five times the rate pull that in opposite directions, so the stand-in's 8 is where to start looking</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
       <div class="cell k">Two ports. The loan cells are one port; the harness that runs them does not do two</div><div class="cell v"><span class="pill pend">not run</span></div>
       <div class="cell k">The same figures on the 7.3-rc7 kernel the series is being rebased onto, with one-port and two-port copy mode beside them to show no regression</div><div class="cell v"><span class="pill pend">next</span></div>
     </div>
-    <p style="margin-top:14px" class="note">One evening's runs, 13 October, each cell once. The first finding's figures were taken twice, by hand and then by script, and agree to within 0.03 a line except where a load did not hold steady. tardis1 is a 64-CPU Neoverse-N2 with one 32 MiB L3; the drives are eight WD_BLACK SN8100 and the stand-in's file was on one of them.</p>
+    <p style="margin-top:14px" class="note">One evening's runs, 13 October, each cell once; the setting at rings of 128, 256 KiB and 8 WRITEs was run twice and gave 1.86 and 1.89. The footprints of the first four rows of the table are estimates and the rest were measured with the port's page pools emptied before each cell. The measure rests on the interconnect's count of requests to the memory controller, taken as 64 bytes each. tardis1 is a 64-CPU Neoverse-N2 with one 32 MiB L3; the drives are eight WD_BLACK SN8100 and the stand-in's file was on one of them.</p>
   </section>
 
   <footer>
     <span class="r">NFSD loan performance &middot; early findings on build 464</span><br>
-    In-tree: <code>NFSD_TCP_WRITE_ZEROCOPY/LOAN-PERFORMANCE.md</code>, <code>TRACING-NFSD-AND-XEU-MEMCPY-TIME.md</code>, <code>xeu-rig/memcost-cal.sh</code>, <code>memcost-log.sh</code>, <code>memcost-read.py</code>, <code>plans/16k-42-loan-memcost.plan</code>, <code>plans/16k-43-loan-memcost-small.plan</code><br>
+    In-tree: <code>NFSD_TCP_WRITE_ZEROCOPY/LOAN-PERFORMANCE.md</code>, <code>TRACING-NFSD-AND-XEU-MEMCPY-TIME.md</code>, <code>xeu-rig/memcost-cal.sh</code>, <code>memcost-log.sh</code>, <code>memcost-read.py</code>, <code>plans/16k-42-loan-memcost.plan</code>, <code>16k-43-loan-memcost-small.plan</code>, <code>16k-44-loan-memcost-floor.plan</code><br>
     Copy mode: <a href="https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g">NFSD Receive Region Budget</a><br>
     Series: David Flynn &middot; Mike Snitzer &middot; Hammerspace &middot; 2026-10-13
   </footer>
