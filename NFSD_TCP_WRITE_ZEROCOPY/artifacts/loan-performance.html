@@ -263,10 +263,57 @@
       <dl class="runs">
         <dt>Copy mode</dt><dd>The full account of how copy mode reached 60.4 GB/s, and everything tried on the way, is <a href="https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g">NFSD Receive Region Budget</a>. This page takes up where its section on the memory limit leaves off.</dd>
         <dt>In the tree</dt><dd><code>NFSD_TCP_WRITE_ZEROCOPY/LOAN-PERFORMANCE.md</code>, with every table here and how to run each again</dd>
-        <dt>Status</dt><dd>Early. One port, a stand-in for the drives, one evening's runs on build 464. Run again on build 473, the series on the 7.3 kernel, on 14 October: the card and the drives alone, copy mode and all three loan plans, and they agree with build 464 (<a href="#b473">first section below</a>).</dd>
+        <dt>Status</dt><dd>Early. One port, a stand-in for the drives, one evening's runs on build 464. Run again on build 473, the series on the 7.3 kernel, on 14 October: the card and the drives alone, copy mode and all three loan plans, and they agree with build 464 (<a href="#b473">below</a>).</dd>
       </dl>
     </div>
   </header>
+
+  <section id="model">
+    <p class="eyebrow">The loan, in outline</p>
+    <h2>How a loaned WRITE moves, and the settings that shape it</h2>
+    <p>The two paths differ in one step, and that step changes what has to be bounded.</p>
+    <div class="path">
+      <div class="kind">
+        <p class="who">Copy</p>
+        <ol class="hop">
+          <li>The card writes arriving frames into pages of the receive region.</li>
+          <li>nfsd copies the WRITE's data out into its own buffer.</li>
+          <li>The receive pages go straight back to the card.</li>
+          <li>The file system writes nfsd's buffer to the drives.</li>
+        </ol>
+        <div class="set">receive pages held for microseconds &middot; 2.17 bytes through memory for each byte of payload</div>
+      </div>
+      <div class="kind b">
+        <p class="who">Loan</p>
+        <ol class="hop">
+          <li>The card writes arriving frames into pages of the receive region.</li>
+          <li>nfsd hands those same pages to the file system.</li>
+          <li>The file system writes them to the drives as they are.</li>
+          <li>Only then do the pages go back to the card.</li>
+        </ol>
+        <div class="set">no copy &middot; receive pages held until the drive has finished</div>
+      </div>
+    </div>
+    <p>A copy frees the card's memory at once and pays for it in memory bandwidth. A loan pays nothing for a copy and holds the card's memory for as long as the storage takes. The card receives into a fixed, small region, so pages that are out on loan are pages the card cannot receive into. Left alone, sixteen connections part-way through a WRITE each could hold all of it between them and stop. The settings below are what prevent that, and they are the terms the findings are stated in.</p>
+    <dl class="terms">
+      <dt>Region</dt><dd>The fixed block of memory the card receives into: 32,768 pages of 16 KiB here, shared by both ports. It is kept small on purpose, so that what is in use at any moment can sit in the CPU's 32 MiB cache.</dd>
+      <dt>Footprint</dt><dd>How much of the region a load keeps in play: the buffers posted in its port's rings, the data its connections have received and nfsd has not yet read, and the pages out on loan. The card writes through all of it, so this is what has to fit in the cache.</dd>
+      <dt>Budget</dt><dd>The limit on how much of the region loans may hold at once, in pages. A budget of 0 means copy.</dd>
+      <dt>WRITEs let in</dt><dd>The budget stated as a count: how many 1 MiB WRITEs may be in progress as loans at the same time. "16 WRITEs let in" is a budget of 2,150 pages; 8 is 1,142; 4 is 638. A connection whose next WRITE does not fit waits, and TCP slows its sender. With sixteen connections and 8 let in, about half of them are waiting at any moment.</dd>
+      <dt>Charge</dt><dd>What one WRITE is counted as holding against the budget, taken when it starts and given back when the storage has finished it. The kernel learns it from what WRITEs actually held; no WRITE in these runs held more than it was charged.</dd>
+      <dt>Held receive buffer</dt><dd>Each connection's TCP receive buffer, fixed at a set size and not left to grow: 1 MiB, 384 KiB or 256 KiB in these runs. It caps how much data nfsd has not read yet is sitting in the region for that connection. Sixteen connections at 1 MiB can have 16 MiB of the region taken up by data waiting to be read. That is on top of the pages out on loan: the budget limits loans and this limits unread data, and the two add.</dd>
+      <dt>Rings</dt><dd>The card's receive rings for the port, four of them, each posted with 256 or 128 buffers of 8192 bytes. Buffers posted and waiting for frames are in the region too: 8 MiB at 256, 4 MiB at 128.</dd>
+      <dt>Bytes through memory for each byte of payload</dt><dd>The measure used below. The machine's interconnect counts every time its cache has to fetch from the DIMMs or write out to them, which separates data that came from memory from data that was already in the cache. Divided by the payload carried, it says how much of the memory's bandwidth each byte of payload used. A figure of 2 means two bytes moved through the DIMMs for every byte the server took in. The DIMMs move 166 GB/s at most, so the figure times the rate has to stay under that.</dd>
+      <dt>Stand-in</dt><dd>NVMe over TCP on tardis1 itself, in front of a file on one drive. It takes data in arbitrary pieces as an SGL drive would, so a loan can be written direct to it. It then passes the data through TCP to itself and receives it into buffers of its own, which a drive would not do.</dd>
+    </dl>
+    <div class="verdict acc" id="tooslow" style="margin-top:26px">
+      <p class="big">How slow is too slow for an SGL drive</p>
+      <p><strong>Loaned data in flight is the write rate &times; the time each WRITE stays loaned &times; about 1.5.</strong> The time runs from the WRITE being fully received to the NVMe completion; 1.5 is the page overhead. To stay in the 32 MiB L3, which leaves about 5 to 10 MB of payload for loans after the rings and socket buffers, a WRITE's loan time must be under about 50 to 100 &micro;s at 96 GB/s (both ports at line rate), about 85 to 170 &micro;s at 60 GB/s (today's copy-mode rate), and about 100 to 200 &micro;s at 48 GB/s (one port). Take off about 20 to 30 &micro;s of software and the rest is the drive's completion budget for the WRITE's I/O under load.</p>
+      <p><strong>Past that it isn't a failure.</strong> Loaned data spills to DRAM at about 1.6 bytes of memory traffic for each byte, still cheaper than a copy's 2.17, until DRAM bandwidth runs out at around 80 to 100 GB/s.</p>
+      <p><strong>So what matters is</strong> sustained write bandwidth past the SLC cache &times; the number of drives, at least the target rate, and the completion latency of a 1 MiB write (or of a stripe's piece) at that load, not a 4K or 32K latency at queue depth 1. A drive of about 3 GB/s needs at least 350 &micro;s to absorb a whole 1 MiB write, which fits the cache only up to about 15 to 30 GB/s unless writes are striped across many drives.</p>
+      <p class="note"><strong>To qualify a candidate:</strong> fio, 1 MiB and 128 KiB direct writes, queue depth 1 to 8, run long enough to get past the SLC cache, recording mean and 99th-percentile latency and bandwidth. Worked from these measurements and Little's law, not yet measured on an SGL drive; the working is in <code>LOAN-PERFORMANCE.md</code>, "How slow is too slow for an SGL drive".</p>
+    </div>
+  </section>
 
   <section id="b473">
     <p class="eyebrow ok"><span>Newest &middot; 14 October &middot; build 473, the series on the 7.3 kernel</span></p>
@@ -355,53 +402,6 @@
     <div class="verdict acc">
       <p class="big">So the 40 GB/s between what copy mode carries and what the card delivers is not there to be tuned out. It is the copy.</p>
       <p>The loan hands the file system the receive pages themselves. Nothing is copied. For that to reach the drives as a direct write, the drives must take data in arbitrary pieces, because each network frame's payload starts part-way into a page. NVMe drives with SGLs do. The drives in tardis1 do not, so a loan to them falls back to the page cache, which is a copy made later.</p>
-    </div>
-  </section>
-
-  <section id="model">
-    <p class="eyebrow">The loan, in outline</p>
-    <h2>How a loaned WRITE moves, and the settings that shape it</h2>
-    <p>The two paths differ in one step, and that step changes what has to be bounded.</p>
-    <div class="path">
-      <div class="kind">
-        <p class="who">Copy</p>
-        <ol class="hop">
-          <li>The card writes arriving frames into pages of the receive region.</li>
-          <li>nfsd copies the WRITE's data out into its own buffer.</li>
-          <li>The receive pages go straight back to the card.</li>
-          <li>The file system writes nfsd's buffer to the drives.</li>
-        </ol>
-        <div class="set">receive pages held for microseconds &middot; 2.17 bytes through memory for each byte of payload</div>
-      </div>
-      <div class="kind b">
-        <p class="who">Loan</p>
-        <ol class="hop">
-          <li>The card writes arriving frames into pages of the receive region.</li>
-          <li>nfsd hands those same pages to the file system.</li>
-          <li>The file system writes them to the drives as they are.</li>
-          <li>Only then do the pages go back to the card.</li>
-        </ol>
-        <div class="set">no copy &middot; receive pages held until the drive has finished</div>
-      </div>
-    </div>
-    <p>A copy frees the card's memory at once and pays for it in memory bandwidth. A loan pays nothing for a copy and holds the card's memory for as long as the storage takes. The card receives into a fixed, small region, so pages that are out on loan are pages the card cannot receive into. Left alone, sixteen connections part-way through a WRITE each could hold all of it between them and stop. The settings below are what prevent that, and they are the terms the findings are stated in.</p>
-    <dl class="terms">
-      <dt>Region</dt><dd>The fixed block of memory the card receives into: 32,768 pages of 16 KiB here, shared by both ports. It is kept small on purpose, so that what is in use at any moment can sit in the CPU's 32 MiB cache.</dd>
-      <dt>Footprint</dt><dd>How much of the region a load keeps in play: the buffers posted in its port's rings, the data its connections have received and nfsd has not yet read, and the pages out on loan. The card writes through all of it, so this is what has to fit in the cache.</dd>
-      <dt>Budget</dt><dd>The limit on how much of the region loans may hold at once, in pages. A budget of 0 means copy.</dd>
-      <dt>WRITEs let in</dt><dd>The budget stated as a count: how many 1 MiB WRITEs may be in progress as loans at the same time. "16 WRITEs let in" is a budget of 2,150 pages; 8 is 1,142; 4 is 638. A connection whose next WRITE does not fit waits, and TCP slows its sender. With sixteen connections and 8 let in, about half of them are waiting at any moment.</dd>
-      <dt>Charge</dt><dd>What one WRITE is counted as holding against the budget, taken when it starts and given back when the storage has finished it. The kernel learns it from what WRITEs actually held; no WRITE in these runs held more than it was charged.</dd>
-      <dt>Held receive buffer</dt><dd>Each connection's TCP receive buffer, fixed at a set size and not left to grow: 1 MiB, 384 KiB or 256 KiB in these runs. It caps how much data nfsd has not read yet is sitting in the region for that connection. Sixteen connections at 1 MiB can have 16 MiB of the region taken up by data waiting to be read. That is on top of the pages out on loan: the budget limits loans and this limits unread data, and the two add.</dd>
-      <dt>Rings</dt><dd>The card's receive rings for the port, four of them, each posted with 256 or 128 buffers of 8192 bytes. Buffers posted and waiting for frames are in the region too: 8 MiB at 256, 4 MiB at 128.</dd>
-      <dt>Bytes through memory for each byte of payload</dt><dd>The measure used below. The machine's interconnect counts every time its cache has to fetch from the DIMMs or write out to them, which separates data that came from memory from data that was already in the cache. Divided by the payload carried, it says how much of the memory's bandwidth each byte of payload used. A figure of 2 means two bytes moved through the DIMMs for every byte the server took in. The DIMMs move 166 GB/s at most, so the figure times the rate has to stay under that.</dd>
-      <dt>Stand-in</dt><dd>NVMe over TCP on tardis1 itself, in front of a file on one drive. It takes data in arbitrary pieces as an SGL drive would, so a loan can be written direct to it. It then passes the data through TCP to itself and receives it into buffers of its own, which a drive would not do.</dd>
-    </dl>
-    <div class="verdict acc" id="tooslow" style="margin-top:26px">
-      <p class="big">How slow is too slow for an SGL drive</p>
-      <p><strong>Loaned data in flight is the write rate &times; the time each WRITE stays loaned &times; about 1.5.</strong> The time runs from the WRITE being fully received to the NVMe completion; 1.5 is the page overhead. To stay in the 32 MiB L3, which leaves about 5 to 10 MB of payload for loans after the rings and socket buffers, a WRITE's loan time must be under about 50 to 100 &micro;s at 96 GB/s (both ports at line rate), about 85 to 170 &micro;s at 60 GB/s (today's copy-mode rate), and about 100 to 200 &micro;s at 48 GB/s (one port). Take off about 20 to 30 &micro;s of software and the rest is the drive's completion budget for the WRITE's I/O under load.</p>
-      <p><strong>Past that it isn't a failure.</strong> Loaned data spills to DRAM at about 1.6 bytes of memory traffic for each byte, still cheaper than a copy's 2.17, until DRAM bandwidth runs out at around 80 to 100 GB/s.</p>
-      <p><strong>So what matters is</strong> sustained write bandwidth past the SLC cache &times; the number of drives, at least the target rate, and the completion latency of a 1 MiB write (or of a stripe's piece) at that load, not a 4K or 32K latency at queue depth 1. A drive of about 3 GB/s needs at least 350 &micro;s to absorb a whole 1 MiB write, which fits the cache only up to about 15 to 30 GB/s unless writes are striped across many drives.</p>
-      <p class="note"><strong>To qualify a candidate:</strong> fio, 1 MiB and 128 KiB direct writes, queue depth 1 to 8, run long enough to get past the SLC cache, recording mean and 99th-percentile latency and bandwidth. Worked from these measurements and Little's law, not yet measured on an SGL drive; the working is in <code>LOAN-PERFORMANCE.md</code>, "How slow is too slow for an SGL drive".</p>
     </div>
   </section>
 
