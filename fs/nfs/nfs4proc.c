@@ -11245,6 +11245,109 @@ MODULE_PARM_DESC(parallel_create,
 		 "LAB ONLY: shared parent lock for O_CREAT (default Y)");
 
 /*
+ * SECOND KNOB, same banner, same rules: the shared parent lock for
+ * unlink.  It is not part of the O_CREAT instrument above, but it
+ * depends on it: that instrument is what drops "const" from the table,
+ * and with "const" restored this knob's write would fault, since module
+ * read-only data is enforced (STRICT_MODULE_RWX).  So the two lab
+ * commits are one unit: they sit together after every posting patch and
+ * are dropped together, never one without the other.  The .unlink_shared
+ * line in the table above is the patch; this knob only clears and
+ * restores that pointer at runtime, and its default matches that line.
+ *
+ * N IS THE EXCLUSIVE PATH, NOT "SHARED FIRST, THEN RETRY".  The pointer
+ * is the whole opt-in.  filename_unlinkat() reads it once for each
+ * acquisition of the parent's i_rwsem; NULL means the exclusive lock,
+ * vfs_unlink() and nfs_unlink(), and nfs_unlink() is not modified by
+ * this work.  Nothing stores NFS_FSDATA_BLOCKED_SHARED under N, so each
+ * guard that tests for it goes on to the unhash it always made.  N is
+ * not base text: the series' NULL tests, compares, lock round trips,
+ * assertions and warnings still run there, none of them able to change
+ * behavior, and the silly-delete hardening applies on every arm.
+ *
+ * THE A/B CHECK: under N, nfs:nfs_unlink_shared_enter counts zero.  It
+ * fires on every call of nfs_unlink_shared(), before any test it makes,
+ * so under Y it counts the shared passes, except on a mount whose
+ * superblock has SB_I_NAMES_COLLIDE (case-insensitive or not
+ * case-preserving: caps bits 6 and 7 in /proc/self/mountstats), where
+ * the VFS never calls it and Y also counts zero.  Record the caps with
+ * the knob.  A zero count of
+ * nfs:nfs_unlink_need_excl is not the check: that event fires only
+ * when a shared pass hands a removal back, and on a workload whose
+ * removals are all the clean case Y hands none back either.
+ * nfs:nfs_unlink_enter and nfs:nfs_unlink_exit fire for removals made
+ * either way, so they cannot tell the arms apart, and the REMOVEs that
+ * either path sends are counted by nfs:nfs_remove_enter.
+ *
+ * Calls, hand-backs and unlink(2)s are not one to one.  An -ESTALE
+ * restart goes back to the shared pass, so one unlink(2) can call the
+ * method, and be handed back, twice.  A delegation break repeats a pass
+ * before NFS is called.  A directory found by the shared lookup goes to
+ * the exclusive pass without reaching NFS, and nothing counts it.  A
+ * pass that is handed back has sent no REMOVE, but its lookup and its
+ * permission check can have sent LOOKUP, GETATTR and ACCESS.  On a
+ * server that ignores or does not preserve case no removal takes the
+ * shared pass at all: the VFS takes the parent exclusive from the start.
+ *
+ * FLIPPING IT UNDER LOAD IS ARGUED SAFE AND HAS NOT BEEN DRIVEN.  The
+ * VFS hands the pointer it read down to the call, so no removal takes
+ * the lock in one mode and then calls or unlocks in the other, and a
+ * pointer cleared in between is not read a second time.  The guards
+ * and the listing check key on the sentinel and the
+ * counts that a shared removal has already set, not on this pointer,
+ * so a Y->N flip withdraws nothing from a removal in flight; N->Y meets
+ * only blocks set under the exclusive lock, which are handled as they
+ * always were.  An earlier form of this knob was argued safe as well
+ * and was not.  Until a test has flipped it under load, flip it between
+ * runs, with no removal in flight on any NFSv4 mount of the kernel.  It
+ * is a measurement boundary in any case: start timing after the flip.
+ *
+ * The VFS reads the pointer with a plain load, which is correct for a
+ * const ops table.  Under this knob that is a data race and KCSAN will
+ * say so, as for parallel_create.  Do not answer it by adding
+ * READ_ONCE() to fs/namei.c: the field is immutable in the submitted
+ * form.
+ *
+ * Its setter writes only this pointer, and sysfs runs the setters of
+ * one module's parameters one at a time (param_attr_store() holds the
+ * module's param_lock), so it cannot race parallel_create's setter.
+ *
+ * SCOPE is the same as parallel_create's: one table, every NFSv4
+ * directory in the kernel, not per mount.  NFSv2 and NFSv3 are
+ * unaffected either way: their tables provide no ->unlink_shared.
+ */
+
+static bool nfs4_parallel_unlink = true;
+
+static int nfs4_param_set_parallel_unlink(const char *val,
+					  const struct kernel_param *kp)
+{
+	int ret;
+
+	ret = param_set_bool(val, kp);
+	if (ret)
+		return ret;
+
+	WRITE_ONCE(nfs4_dir_inode_operations.unlink_shared,
+		   nfs4_parallel_unlink ? nfs_unlink_shared : NULL);
+
+	pr_notice("NFS: shared parent lock for unlink %s\n",
+		  nfs4_parallel_unlink ? "enabled" : "disabled");
+	return 0;
+}
+
+static const struct kernel_param_ops nfs4_parallel_unlink_param_ops = {
+	.flags	= KERNEL_PARAM_OPS_FL_NOARG,
+	.set	= nfs4_param_set_parallel_unlink,
+	.get	= param_get_bool,
+};
+
+module_param_cb(parallel_unlink, &nfs4_parallel_unlink_param_ops,
+		&nfs4_parallel_unlink, 0644);
+MODULE_PARM_DESC(parallel_unlink,
+		 "LAB ONLY: shared parent lock for unlink (default Y)");
+
+/*
  * ======================= END LAB-ONLY INSTRUMENT =====================
  */
 
