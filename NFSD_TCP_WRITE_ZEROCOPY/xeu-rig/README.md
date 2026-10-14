@@ -199,11 +199,11 @@ ports on `fq_codel`, the drives `write through`, the live
 taken down and up during the floor run, their interrupts placed
 again), the stand-in's modules loaded and idle.
 
-The branch was pushed by Mike to
-`origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-7.1.13-21.hs.464.loanpages_pool.el9.aarch64+16k`
-at `497309da7f10`; the loan's floor, the footprints and the loan
-page's rewrites came after it. `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
-itself was not pushed to that day.
+Mike pushes this branch to
+`origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-7.1.13-21.hs.464.loanpages_pool.el9.aarch64+16k`;
+at the end of 13 October it held all of that day's work.
+`origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY` itself was not
+pushed to that day and is at `e3e102675121`.
 
 # 12 October, 22:30, with 13 October's notes as they were added (history: the section above supersedes it)
 
