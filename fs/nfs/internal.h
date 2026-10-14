@@ -50,7 +50,7 @@ static inline bool nfs_lookup_is_soft_revalidate(const struct dentry *dentry)
  * removal of the dentry's name is in flight: the first when the remover
  * holds the parent's i_rwsem exclusive, the second when it holds it shared,
  * and the second until the VFS ends the removal, after any delete event for
- * it (see the client's ->unlink_shared_done()).
+ * it (see nfs_unlink_shared_done()).
  * ->d_revalidate() waits for either to clear.  The two differ in what the
  * dentry is to the removal.
  *
@@ -74,12 +74,15 @@ static inline bool nfs_lookup_is_soft_revalidate(const struct dentry *dentry)
  * ->d_revalidate(), has to leave an anchor hashed or wait for its sentinel
  * to clear.
  *
- * The shared sentinel is stored and cleared within one shared hold of the
- * parent, so it is never present while the parent is held exclusive.  That
- * is why the two tests made with the parent exclusive, the WARN_ON()s in
- * nfs_unlink() and nfs_rename(), still compare against NFS_FSDATA_BLOCKED
- * alone.  They are the only bare compares against a sentinel; every other
- * test uses the helpers below.
+ * The shared sentinel is stored in nfs_unlink_shared() and cleared in
+ * nfs_unlink_shared_done(), which the VFS calls while it still holds the
+ * parent shared, so it is stored and cleared within one shared hold of the
+ * parent and is never present while the parent is held exclusive.  That
+ * is why the WARN_ON()s in nfs_unlink() and nfs_rename(), made with the
+ * parent exclusive, still compare against NFS_FSDATA_BLOCKED alone, and
+ * why block_revalidate(), which both call, warns if it finds
+ * NFS_FSDATA_BLOCKED_SHARED.  Those WARN_ON()s are the only bare compares
+ * against a sentinel; every other test uses the helpers below.
  */
 static inline bool nfs_fsdata_blocked(const void *fsdata)
 {
@@ -640,6 +643,8 @@ struct dentry *nfs_mkdir2(struct mnt_idmap *, struct inode *, struct dentry *,
 			  umode_t, unsigned int);
 int nfs_rmdir(struct inode *, struct dentry *);
 int nfs_unlink(struct inode *, struct dentry *);
+int nfs_unlink_shared(struct inode *dir, struct dentry *dentry);
+void nfs_unlink_shared_done(struct inode *dir, struct dentry *dentry);
 int nfs_symlink(struct mnt_idmap *, struct inode *, struct dentry *,
 		const char *);
 int nfs_link(struct dentry *, struct inode *, struct dentry *);

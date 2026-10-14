@@ -1931,12 +1931,12 @@ static int nfs_lookup_revalidate(struct inode *dir, const struct qstr *name,
 	return nfs_do_lookup_revalidate(dir, name, dentry, flags);
 }
 
-static void block_revalidate(struct dentry *dentry)
+static void __block_revalidate(struct dentry *dentry, void *sentinel)
 {
 	/* old devname - just in case */
 	kfree(dentry->d_fsdata);
 
-	dentry->d_fsdata = NFS_FSDATA_BLOCKED;
+	dentry->d_fsdata = sentinel;
 
 	/* Any new reference that could lead to an open
 	 * will either:
@@ -1945,20 +1945,29 @@ static void block_revalidate(struct dentry *dentry)
 	 *    after taking the reference.
 	 *
 	 * Holding this lock and invalidating ->d_seq *after* recording
-	 * NFS_FSDATA_BLOCKED ensures we cannot race with
-	 * __nfs_lookup_revalidate().
-	 * If __nfs_lookup_revalidate() doesn't see NFS_FSDATA_BLOCKED then:
+	 * @sentinel ensures we cannot race with __nfs_lookup_revalidate().
+	 * If __nfs_lookup_revalidate() doesn't see @sentinel then:
 	 * In the ref-walk case - d_lookup() will have incremented
 	 * d_count() before we check it.
 	 * In the RCU-walk case - ->d_seq must have been sampled before
 	 * we call write_seqcount_invalidate() below (because it was sampled
-	 * before we set NFS_FSDATA_BLOCKED) so d_count() will have been
+	 * before we set @sentinel) so d_count() will have been
 	 * incremented or the d_seq check will fail in legitimize_path()
 	 * (or both).
 	 */
 	lockdep_assert_held(&dentry->d_lock);
 	write_seqcount_invalidate(&dentry->d_seq);
 
+}
+
+static void block_revalidate(struct dentry *dentry)
+{
+	/*
+	 * The caller holds the parent's i_rwsem exclusive, and a shared
+	 * remover's sentinel does not outlive its shared hold of that lock.
+	 */
+	WARN_ON_ONCE(nfs_fsdata_blocked_shared(dentry->d_fsdata));
+	__block_revalidate(dentry, NFS_FSDATA_BLOCKED);
 }
 
 static void unblock_revalidate(struct dentry *dentry)
@@ -2709,6 +2718,168 @@ out:
 	return error;
 }
 EXPORT_SYMBOL_GPL(nfs_unlink);
+
+/*
+ * ->unlink_shared(): remove a file with the parent's i_rwsem held shared.
+ *
+ * The lock then excludes no lookup of this name, and no open of it but
+ * one that takes the parent exclusive.  What orders those behind the
+ * REMOVE is the dentry.  While it is hashed it is what every resolver of
+ * the name is handed, and NFS_FSDATA_BLOCKED_SHARED in ->d_fsdata makes
+ * each one that consults ->d_revalidate() after it is stored wait there
+ * until the removal is over: the REMOVE, and the VFS's report of it (see
+ * nfs_unlink_shared_done()).  That works only for a dentry in the one
+ * clean state tested below.  Anything else is handed back with
+ * UNLINK_NEED_EXCL and is done by nfs_unlink() with the parent held
+ * exclusive, as it always has been.  Nothing here silly-renames, and
+ * nothing here waits for another removal.
+ *
+ * An RCU-walk that consulted ->d_revalidate() before the store does not
+ * get past it: __block_revalidate() invalidates ->d_seq after the store,
+ * in the same ->d_lock section, so the walk fails its recheck and waits
+ * in ref-walk.  The one resolver that does get past, as it gets past the
+ * exclusive lock, is set out below.
+ *
+ * NFSv4 sets IOPF_ATOMIC_OPEN_CREATE_SHARED, so an O_CREAT open of the
+ * name takes the parent shared too, and the lock does not exclude it
+ * either.  While the dentry is hashed, such an open is handed it like any
+ * other resolver, and waits as they do.
+ *
+ * The sentinel is not cleared here.  nfs_unlink_shared_done() clears it, and
+ * the VFS calls that after any event for the removal is out, so that an open
+ * released by the clear cannot create the name and have its create event out
+ * before the delete event of the removal it waited for.
+ */
+int nfs_unlink_shared(struct inode *dir, struct dentry *dentry)
+{
+	int error;
+
+	dfprintk(VFS, "NFS: unlink_shared(%s/%llu, %pd)\n", dir->i_sb->s_id,
+		 dir->i_ino, dentry);
+
+	lockdep_assert_held_read(&dir->i_rwsem);
+	trace_nfs_unlink_shared_enter(dir, dentry);
+
+	/*
+	 * The anchor is keyed on the dcache name, and NFS installs no
+	 * ->d_hash or ->d_compare, so names are compared byte for byte: the
+	 * anchor assumes that the server keeps one object per byte string.
+	 * On a server for which "FOO" and "foo" are one object the client
+	 * can hold two independent hashed dentries, and blocking one of them
+	 * makes no resolver of the other wait.  A server that reports itself
+	 * case-insensitive, or as not preserving case, has SB_I_NAMES_COLLIDE
+	 * on its superblock (nfs_server_publish_name_caps()), and the VFS does
+	 * not call this method there; the test here hands back a removal whose
+	 * caller read the bit before it was set.  A server that makes one
+	 * object of other names that differ as byte strings, as Unicode
+	 * normalization does, is not detected, and a removal there is not
+	 * ordered against an open of another spelling; that is a limitation
+	 * of this method.
+	 */
+	if (READ_ONCE(dir->i_sb->s_iflags) & SB_I_NAMES_COLLIDE)
+		goto need_excl;
+
+	spin_lock(&dentry->d_lock);
+	/*
+	 * The clean state, read in the ->d_lock section the sentinel is
+	 * stored in, so that nothing can come between the two.
+	 *
+	 * A count of one is the interlock everything else rests on.  A second
+	 * reference either calls for a silly-rename, which ends in d_move()
+	 * and needs the parent exclusive, or belongs to a resolver that may
+	 * be past its ->d_revalidate() consult and would then unhash the
+	 * dentry without having seen the sentinel.  Every resolver that can
+	 * do that takes its reference before it consults, so with a count of
+	 * one here every resolver that consults from now on finds the
+	 * sentinel and waits.  The readdir guard in nfs_prime_dcache()
+	 * depends on this test and the store staying in one ->d_lock
+	 * section.
+	 *
+	 * One resolver escapes, as it escapes the exclusive lock: an open by
+	 * file handle, whose reference comes from d_obtain_alias() with no
+	 * ->d_revalidate().  It may go on to fail its open, reaching
+	 * nfs_d_drop_unless_anchored(), to open the file that the REMOVE then
+	 * deletes, or to get -ESTALE from the server.  An RCU-walk that
+	 * consulted ->d_revalidate() before the store does not escape; see
+	 * above.
+	 *
+	 * A victim that is no longer hashed and positive is no anchor.
+	 * Nothing between the lookup and here re-tests either, and with the
+	 * parent shared a failed ->d_revalidate() in another lookup, or
+	 * another remover's d_delete(), may have unhashed it since.  That is
+	 * not -ENOENT: a name invalidated locally may still exist on the
+	 * server.  A pending silly-delete on the dentry, or a block already
+	 * present, is for the exclusive pass to answer as well, and both
+	 * tests have to stay ahead of the store: __block_revalidate()
+	 * kfree()s ->d_fsdata, which while DCACHE_NFSFS_RENAMED is set is
+	 * the queued struct nfs_unlinkdata, and a store over another
+	 * sentinel would end that block early.
+	 */
+	if (d_count(dentry) > 1 ||
+	    (dentry->d_flags & DCACHE_NFSFS_RENAMED) ||
+	    nfs_dentry_is_blocked(dentry) ||
+	    d_unhashed(dentry) || d_really_is_negative(dentry)) {
+		spin_unlock(&dentry->d_lock);
+		goto need_excl;
+	}
+	__block_revalidate(dentry, NFS_FSDATA_BLOCKED_SHARED);
+	spin_unlock(&dentry->d_lock);
+
+	trace_nfs_unlink_enter(dir, dentry);
+	/*
+	 * The REMOVE of nfs_safe_remove(), less its silly-renamed case, which
+	 * the tests above hand back; the protocol's ->remove() drops the link
+	 * count itself.  It is copied and not called so that the directory's
+	 * removal sequence moves as soon as the server has answered, whatever
+	 * the answer, and before anything here can unhash the anchor: on
+	 * -ENOENT, nfs_dentry_handle_enoent() does.  See
+	 * nfs_dir_shared_removal_since().
+	 */
+	trace_nfs_remove_enter(dir, dentry);
+	nfs_dir_start_shared_removal(dir);
+	error = NFS_PROTO(dir)->remove(dir, dentry);
+	nfs_dir_end_shared_removal(dir);
+	/* Nothing may unhash an anchor while its REMOVE is in flight */
+	WARN_ON_ONCE(!error && d_unhashed(dentry));
+	if (error == -ENOENT)
+		nfs_dentry_handle_enoent(dentry);
+	trace_nfs_remove_exit(dir, dentry, error);
+
+	nfs_dentry_remove_handle_error(dir, dentry, error);
+	trace_nfs_unlink_exit(dir, dentry, error);
+	return error;
+
+need_excl:
+	trace_nfs_unlink_need_excl(dir, dentry);
+	return UNLINK_NEED_EXCL;
+}
+EXPORT_SYMBOL_GPL(nfs_unlink_shared);
+
+/*
+ * ->unlink_shared_done(): end the exclusion nfs_unlink_shared() installed.
+ *
+ * The VFS calls this for a call of nfs_unlink_shared() that did not hand the
+ * removal back, with the parent still held shared and the event for the
+ * removal, if there was one, already out.  Clearing the sentinel here rather
+ * than at the end of nfs_unlink_shared() is what keeps the notifications for
+ * the name in order: an O_CREAT open released by the clear would otherwise be
+ * able to create the name and have its create event out first.
+ *
+ * Every such call stored the sentinel, both of the tests that hand a removal
+ * back being made before the store, so there is nothing to test for here.
+ * Nor can anything have replaced it: nfs_unlink_shared() anchors only on a
+ * dentry with no reference but the caller's, which the caller still holds, so
+ * no second remover can anchor on it and nfs_d_release() cannot run;
+ * nfs_call_unlink() skips a dentry that is blocked; and every other writer of
+ * the field needs either the parent held exclusive or DCACHE_NFSFS_RENAMED,
+ * which is one of the cases handed back above.
+ */
+void nfs_unlink_shared_done(struct inode *dir, struct dentry *dentry)
+{
+	lockdep_assert_held_read(&dir->i_rwsem);
+	unblock_revalidate(dentry);
+}
+EXPORT_SYMBOL_GPL(nfs_unlink_shared_done);
 
 /*
  * To create a symbolic link, most file systems instantiate a new inode,

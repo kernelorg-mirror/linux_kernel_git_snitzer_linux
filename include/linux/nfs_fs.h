@@ -719,12 +719,11 @@ static inline bool nfs_ooo_test(struct nfs_inode *nfsi)
  *  - NFS_FSDATA_BLOCKED, while a REMOVE of the name, or a RENAME onto it,
  *    is in flight with the parent's i_rwsem held exclusive.  It outlives
  *    that hold only when a rename is killed, until its RENAME completes;
- *  - NFS_FSDATA_BLOCKED_SHARED, from the store in the client's
- *    ->unlink_shared(), with the parent's i_rwsem held shared, until its
- *    ->unlink_shared_done(), which the VFS calls after any delete event
- *    for the removal, whether or not it succeeded, and before it drops
- *    that hold.  The dentry may be negative, or positive and unhashed,
- *    by then.
+ *  - NFS_FSDATA_BLOCKED_SHARED, from the store in nfs_unlink_shared(),
+ *    with the parent's i_rwsem held shared, until nfs_unlink_shared_done(),
+ *    which the VFS calls after any delete event for the removal, whether
+ *    or not it succeeded, and before it drops that hold.  The dentry may
+ *    be negative, or positive and unhashed, by then.
  * Both sentinels are stored under ->d_lock and cleared by
  * unblock_revalidate(), and ->d_revalidate() waits while either is set.
  * fs/nfs/internal.h says what else has to respect them.
