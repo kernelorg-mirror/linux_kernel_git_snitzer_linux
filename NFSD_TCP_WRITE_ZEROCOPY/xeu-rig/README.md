@@ -188,7 +188,7 @@ ends of both ports five times a second), `copy-adjacency.bt` and
 `ring-flow-runs.bt` (where the copy's pieces come from, and a
 connection's runs of frames on a ring), `copybench.c` with `wr`,
 `rd` and `RUN=`, `memcost-cal.sh`, `memcost-log.sh` and
-`memcost-read.py` (requests to memory for each line of payload);
+`memcost-read.py` (bytes through memory for each byte of payload);
 `twoport.sh` gained `LOWAT=`, `TXN=`, `NFSD_CPUS=`, `QDISC=fqnp` and
 a `PROFILE=1` that reports by group of CPUs; `../run-budget.sh`
 gained `STEP_SECS=` and `sweep.sh` `CELL_REST=`.
