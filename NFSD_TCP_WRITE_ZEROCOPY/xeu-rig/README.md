@@ -55,6 +55,41 @@ the drives' fast region:
   Nothing that adds parallelism around the copy moves it.
 - One port is at 95% of what its wire carries with no NFS (49.8).
 
+## Copy mode on 7.3: build 473 (14 October)
+
+The battery's regression check (step 3 under "Next"), on build 473
+(`7.3.0-0.rc7.3.hs.473.loanpages_pool.el9.aarch64+16k`, the series on
+`v7.3-3`), 12:41 to 13:04 by tardis1's clock. Each run at the setting
+under "Where it stands", audited by `settled.sh` before it changed
+anything and again just before its load, the client on `fq_codel` as
+for build 464's comparison runs, and `memcost-log.sh` beside each. No
+drive stepped down in any of them. The runs are `$L/b473-<tag>`, their
+lines in `$L/b473/results-twoport-473.tsv`, the memory samples
+`$L/b473/copymem-<tag>`.
+
+| | build 473 | GB/s | bytes through memory for each byte of payload | build 464 |
+|---|---|---|---|---|
+| two ports | `ab-1`, `ab-2` | **59.27, 59.36** (ports 28.2 + 31.1, 28.7 + 30.7) | 2.25, 2.23 | 59.96 to 60.41 in eight runs on `fq_codel`; 2.17 (`cmn-two-1`, 60.38) |
+| two ports | `ab-3` | 47.45, port b silent from second 25 (the eighth event, `../SILENT-PORT.md`) | | |
+| one port a, eight drives | `a8-1` to `-3` | 46.77, 45.98, 47.59 | 1.44, 1.42, 1.46 | 46.5 to 47.4 (both ports' runs) |
+| one port b, eight drives | `b8-1` to `-3` | **47.76**, 47.54, 47.06 | 1.48, 1.47, 1.46 | the same |
+
+- **One port shows no regression on 7.3.** Its six runs (45.98 to
+  47.76) cover 464's range (46.5 to 47.4), and `b8-1`'s 47.76 GB/s,
+  at 1.48 bytes through memory for each byte, is the best one-port
+  run on either build. It is the newest entry on the region budget
+  page.
+- **Two ports are about 1.5% under 464**, 59.27 and 59.36 against a
+  mean of 60.24, with about 3% more memory traffic for each byte (2.25
+  and 2.23 against 2.17). Two runs; not yet looked into. The figures
+  divide the mesh's requests by the run's whole payload, as 464's 2.17
+  does: `memcost-read.py` reads one port's payload, so its figure for
+  a two-port run is that port's, and halving it is right only when the
+  ports are even.
+- What differs from 464's runs besides the kernel: the async
+  interrupts on CPUs 1 and 57 (on 464 they sat on nfsd's 8 and 9),
+  which fired no times, and nothing else `settled.sh` holds.
+
 ## Reads and mixes: the 7.1.13 baseline (build 464, 14 October)
 
 Taken before the boot into 7.3 so that it can be laid beside it:
@@ -162,7 +197,8 @@ beside build 464's, which are in that table:
    60.0 to 60.4 GB/s on two ports and 46.5 to 47.4 on one on build
    464. `memcost-log.sh` beside a run and `memcost-read.py` after it
    give its bytes through memory for each byte of payload (2.17 on
-   two ports).
+   two ports). **Done on build 473**: "Copy mode on 7.3" above. One
+   port shows no regression; two ports are about 1.5% under.
 4. The loan and its copy on the stand-in:
    `plans/16k-42-loan-memcost.plan`, `16k-43-loan-memcost-small.plan`
    and `16k-44-loan-memcost-floor.plan` through `sweep.sh` with
