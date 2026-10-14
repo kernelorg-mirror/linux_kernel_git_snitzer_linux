@@ -29,6 +29,32 @@ reproduction instructions for the "page-loan" patch series.
 > `AGENTS.md` lists them. The 7.1.13 branch below is kept as it was
 > force-pushed that day (`ea18d80f8bda`).
 >
+> The 15 dropped commits, as the upstream commits in `v7.3-3` that carry
+> them (each the same patch by `git patch-id`; none is in `v7.1.13-21`),
+> in the order they were committed upstream:
+>
+> ```
+> 85347718ab0d bug/kunit: Core support for suppressing warning backtraces
+> 5142c5665157 bug: fix warning suppressions with kunit built as module
+> 81a646df7ed9 SUNRPC: Reject a TLS alert record that is not two octets
+> f12dfba8b380 SUNRPC: Do not credit control-record octets to the RPC stream
+> fc62e4d78a67 SUNRPC: Treat every TLS error alert as fatal
+> 58bb2f9380b6 SUNRPC: Resume receiving after a TLS control record
+> 848287b07363 nfsd: preflight SEQUENCE replies before accepting a slot
+> af3778ecd37e nfsd: set op->status when an operation's header cannot be encoded
+> fc40dcf3df4a SUNRPC: Reject a socket that already has an svc_sock attached
+> 249f578f95c0 SUNRPC: Close the transport on an unhandled TLS record type
+> 651f9c8589ff SUNRPC: Separate the TLS control-record receive from its policy
+> 2567d6899bd7 SUNRPC: Receive RPC records with ->read_sock
+> aa63a3af6ad8 SUNRPC: Flush a received record's pages once it is complete
+> e8d302340c33 nfsd: don't modify a session slot when replaying its cached reply
+> fed0a61342f5 SUNRPC: Bypass sock_recvmsg() for the TLS control-record receive
+> ```
+>
+> The pre-rebase tip, with the series' own copies of them, is
+> `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-rebase-v7.3-3`;
+> `git cherry v7.3-3 <that branch> v7.1.13-21` marks them `-`.
+>
 > **Branch state (2026-10-02):** `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
 > is rebased onto **`v7.1.13-19`** (= `kernel-7.1.13/main`) with
 > `git rebase --onto kernel-7.1.13/main v7.1.13-14`: main was rebuilt, so
