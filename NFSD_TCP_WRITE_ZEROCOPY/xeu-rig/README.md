@@ -58,9 +58,11 @@ Before any of it on a new boot: the "After a boot" line under the
 rules, `getconf PAGESIZE` (16384), that `xeu` came up with
 `rx_buf_size=8192` and the ports at an MTU of 7792, and that
 `/etc/modprobe.d/sunrpc.conf` still gives `svc_tcp_rx_lowat=0`. The
-mesh's counter is `arm_cmn/hnf_mc_reqs/`: check that `perf list`
-still has it on the new kernel, since every memory figure rests on
-it.
+mesh's counter is `arm_cmn/hnf_mc_reqs/`: check that the new kernel
+still has it (`ls
+/sys/bus/event_source/devices/arm_cmn_0/events/hnf_mc_reqs`, and
+`perf stat -a -e arm_cmn/hnf_mc_reqs/ -- sleep 1` reading a few
+million idle), since every memory figure rests on it.
 
 ## What a loaned byte costs in memory: done on build 464 (13 October, evening)
 
