@@ -51,11 +51,17 @@
 #   REST=<s>         wait this long first, for the drives (30)
 #   DRIVE_GB=<n>     mark the run if a drive wrote more than this in it (600)
 #   EXPORT_SYNC=async  export async, so a COMMIT does not sync the file or flush the drives
-# TSV=<file>: append a line of the run's figures (TAG=<label> names it).
+#   RW=<fio rw>      read, randread, rw, randrw (write); a run that reads first
+#                    writes every file whole once (8 MiB direct writes) and rests 20 s
+#   RWMIX=<n>        the share of reads in a mixed run, percent (fio's 50)
+#   IODEPTH=<n> (16), SIZE=<fio size> (512M): each writer's queue and file
+# TSV=<file>: append a line of the run's figures (TAG=<label> names it); a write
+# run's only.  RWTSV=<file>: the same for any run, reads and writes apart.
 . "$(dirname "$0")/common.sh"
 "$(dirname "$0")/drive-cache.sh" > /dev/null || { echo "drive-cache.sh failed"; exit 1; }	# no cache flush to the drives (AGENTS.md)
 OUT=${1:?out dir}; WHICH=${2:-ab}
 RUNTIME=${RUNTIME:-45}; WARM=${WARM:-15}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
+RW=${RW:-write}; IODEPTH=${IODEPTH:-16}; SIZE=${SIZE:-512M}
 YNL="$H/../tools/net/ynl/pyynl/cli.py --no-schema --spec $H/../Documentation/netlink/specs/ethtool.yaml"
 declare -A DEV=([a]=enp161s0f0 [b]=enp164s0f0) SRV=([a]=192.168.1.211 [b]=192.168.0.211)
 declare -A CLI=([a]=192.168.1.106 [b]=192.168.0.106) FS=([a]="${FS_A:-/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3}" [b]="${FS_B:-/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7}")
@@ -73,6 +79,7 @@ sleep ${REST:-30}	# 20 s of idle gives a drive its fast region back
 fifo() { ethtool -S $1 | awk '/port_rx_fifo_tc[0-9]_drop_packets/{s+=$2} END{print s+0}'; }
 ringdrop() { ethtool -S $1 | awk '/rx_hw_tail_drop_packets/{s+=$2} END{print s+0}'; }
 rxbytes() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_rx_bytes:$/{s+=$2} END{print s+0}'; }
+txbytes() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_tx_bytes:$/{s+=$2} END{print s+0}'; }
 ringshare() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_rx_bytes:$/{print $2}' | tr '\n' ' '; }
 cretr() { cl "awk '/^Tcp:/ && !h {for (i = 1; i <= NF; i++) if (\$i == \"RetransSegs\") c = i; h = 1; next} /^Tcp:/ {print \$c}' /proc/net/snmp"; }
 
@@ -115,7 +122,7 @@ echo Y > /sys/module/xeu/parameters/rx_port_stats
 [ -n "${LOWAT:-}" ] && echo $LOWAT > $SP/svc_tcp_rx_lowat
 [ -n "${NFSD_CPUS:-}" ] && { for t in $(pgrep -x nfsd); do taskset -cp $NFSD_CPUS $t > /dev/null 2>&1; done; echo "nfsd on CPUs $NFSD_CPUS for this run" | tee -a geometry.txt; }
 [ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} $QDISC || { echo "qdisc not set"; exit 1; }; done
-echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us) copy_threads $(cat $SP/svc_tcp_rx_copy_threads) lowat $(cat $SP/svc_tcp_rx_lowat) keep $(cat $SP/svc_tcp_rx_keep) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS" | tee -a geometry.txt
+echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us) copy_threads $(cat $SP/svc_tcp_rx_copy_threads) lowat $(cat $SP/svc_tcp_rx_lowat) keep $(cat $SP/svc_tcp_rx_keep) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read)" | tee -a geometry.txt
 
 for p in $PORTS; do
 	d=${DEV[$p]}
@@ -148,15 +155,16 @@ job() {	# job <port> <prefix> <seconds> [seconds of warm-up fio leaves out of it
 	per=$(( JOBS / n )); [ $per -lt 1 ] && per=1
 	cat <<J
 [global]
-rw=write
+rw=${5:-$RW}
+${RWMIX:+rwmixread=$RWMIX}
 bs=$BS
-size=512M
+size=$SIZE
 time_based
 runtime=$3
 ${4:+ramp_time=$4}
 direct=1
 ioengine=libaio
-iodepth=16
+iodepth=$IODEPTH
 numjobs=$per
 group_reporting
 ${PIN:+cpus_allowed=${CPUS[$1]}}
@@ -180,7 +188,7 @@ wrote > wrote.0
 # frames the port hands up, and each flow's entry of the RSS table pointed
 # at a ring.  The mounts stay up, so the flows measured are those placed.
 if [ "${PLACE:-1}" != 0 ]; then
-	for p in $PORTS; do job $p bal 16 | clput /tmp/twoport-bal-$p.fio; done
+	for p in $PORTS; do job $p bal 16 "" write | clput /tmp/twoport-bal-$p.fio; done
 	for p in $PORTS; do cl "fio /tmp/twoport-bal-$p.fio > /tmp/twoport-bal-$p.out 2>&1; rm -f /mnt/rxr-$p[0-9]*/bal-*" & done
 	sleep 3
 	for p in $PORTS; do
@@ -199,6 +207,12 @@ if [ "${PLACE:-1}" != 0 ]; then
 fi
 
 for p in $PORTS; do job $p f $RUNTIME $WARM | clput /tmp/twoport-$p.fio; done
+if [ "$RW" != write ]; then	# a run that reads: every file written whole first, then a rest
+	for p in $PORTS; do job $p f 0 "" write | sed -e '/^time_based/d' -e '/^runtime=/d' -e '/^rwmixread=/d' -e 's/^bs=.*/bs=8M/' | clput /tmp/twoport-fill-$p.fio; done
+	for p in $PORTS; do cl "fio /tmp/twoport-fill-$p.fio > /tmp/twoport-fill-$p.out 2>&1" & done; wait
+	echo "files written before the run: $(cl "du -sch /mnt/rxr-*/f-* | tail -1")" | tee -a geometry.txt
+	sleep 20
+fi
 echo 1 > $RG	# the region's low-water mark starts again from here
 "$RIG/drvsample.py" drives-sec.tsv $(( WARM + RUNTIME + 3 )) &	# every drive, each second of the load
 for p in $PORTS; do
@@ -213,7 +227,7 @@ drives() {
 	local fs b m
 	for fs in ${FS[$1]}; do
 		b=$(basename $(findmnt -no SOURCE $fs)); m=$(ls /sys/block/$b/slaves 2> /dev/null)
-		for m in ${m:-$b}; do awk -v d=$m '$3 == d {print d, $10, $13}' /proc/diskstats; done
+		for m in ${m:-$b}; do awk -v d=$m '$3 == d {print d, $10, $13, $6}' /proc/diskstats; done
 	done
 }
 now() { date +%s.%N; }
@@ -222,9 +236,9 @@ nfsdc() { echo "$(awk '/^proc3/{print $10}' /proc/net/rpc/nfsd) $(awk '!/^#/{s +
 for p in $PORTS; do drives $p > drives-$p.0; done; TD0=$(now)
 ss -tmi '( sport = :2049 )' > ss-server.txt 2>&1
 cl "ss -tmi '( dport = :2049 )'" > ss-client.txt 2>&1
-declare -A F0 T0 B0 S0 TB0
+declare -A F0 T0 B0 S0 TB0 X0
 R0=$(cretr)
-for p in $PORTS; do d=${DEV[$p]}; F0[$p]=$(fifo $d); T0[$p]=$(ringdrop $d); B0[$p]=$(rxbytes $d); TB0[$p]=$(now); S0[$p]=$(ringshare $d); done
+for p in $PORTS; do d=${DEV[$p]}; F0[$p]=$(fifo $d); T0[$p]=$(ringdrop $d); B0[$p]=$(rxbytes $d); X0[$p]=$(txbytes $d); TB0[$p]=$(now); S0[$p]=$(ringshare $d); done
 N0=$(nfsdc); TN0=$(now)
 mpstat -P ALL $W 1 > srv-mpstat.txt 2>&1 &
 if [ -n "${PROFILE:-}" ]; then
@@ -251,8 +265,11 @@ N1=$(nfsdc); TN1=$(now)
 for p in $PORTS; do drives $p > drives-$p.1; done; TD1=$(now)
 for p in $PORTS; do
 	paste drives-$p.0 drives-$p.1 | awk -v w=$(echo "$TD1 - $TD0" | bc) -v p=$p -v fs="${FS[$p]}" '
-		{g = ($5 - $2) * 512 / w / 1e9; u = ($6 - $3) / w / 10; if (NR == 1 || g < gmin) gmin = g; if (g > gmax) gmax = g; if (u > umax) umax = u}
-		END {printf "drives of %s (%s): %d, each writing %.1f to %.1f GB/s, busiest %.0f%% busy%s\n", p, fs, NR, gmin, gmax, umax, (umax >= 90 ? " -- DRIVE-LIMITED" : "")}'
+		{g = ($6 - $2) * 512 / w / 1e9; u = ($7 - $3) / w / 10; r = ($8 - $4) * 512 / w / 1e9
+		 if (NR == 1 || g < gmin) gmin = g; if (g > gmax) gmax = g; if (NR == 1 || r < rmin) rmin = r; if (r > rmax) rmax = r; if (u > umax) umax = u}
+		END {printf "drives of %s (%s): %d, each writing %.1f to %.1f GB/s", p, fs, NR, gmin, gmax
+		     if (rmax > 0.05) printf " and reading %.1f to %.1f", rmin, rmax
+		     printf ", busiest %.0f%% busy%s\n", umax, (umax >= 90 ? " -- DRIVE-LIMITED" : "")}'
 done > drives.txt
 {
 	echo "port dev fio_GBps wire_GBps fifo_drops ring_drops ring_shares window_s"
@@ -262,6 +279,7 @@ done > drives.txt
 		echo "$p $d - $(awk -v b=$(( b1 - ${B0[$p]} )) -v w=$(echo "$tb1 - ${TB0[$p]}" | bc) 'BEGIN {printf "%.2f", b / w / 1e9}') $(( f1 - ${F0[$p]} )) $(( t1 - ${T0[$p]} )) $sh $W"
 	done
 } > window.txt
+for p in $PORTS; do echo "sent: $p ${DEV[$p]} $(awk -v b=$(( $(txbytes ${DEV[$p]}) - ${X0[$p]} )) -v w=$(echo "$(now) - ${TB0[$p]}" | bc) 'BEGIN {printf "%.2f", b / w / 1e9}') GB/s on the wire" >> window.txt; done
 R1=$(cretr)
 echo "client retransmits in the window: $(( R1 - R0 ))" >> window.txt
 echo "$N0 $N1" | awk -v w=$(echo "$TN1 - $TN0" | bc) '{printf "nfsd in the window, a second: WRITEs %d, threads woken %d, context switches %d\n", ($4 - $1) / w, ($5 - $2) / w, ($6 - $3) / w}' >> window.txt
@@ -279,27 +297,42 @@ awk -v w=$WARM 'NR == 1 {for (i = 2; i <= NF; i += 3) {split($i, x, "_"); nm[i] 
 	     print (o ? "STEPPED DOWN:" o : "no drive stepped down")}' drives-sec.tsv >> drives.txt
 for p in $PORTS; do cl "cat /tmp/twoport-$p.json" > fio-$p.json; done
 reg min_free > region-min-free.txt; cat $RG > region.txt
-python3 - $PORTS <<'EOF' | tee summary.txt
-import json, sys
+RW=$RW RWMIX=${RWMIX:-} BS=$BS IODEPTH=$IODEPTH JOBS=$JOBS RWTSV=${RWTSV:-} TAG=${TAG:-} python3 - $PORTS <<'EOF' | tee summary.txt
+import json, os, sys
 w = {}
 for l in open('window.txt'):
     f = l.split()
     if len(f) == 8 and f[0] in ('a', 'b'):
         w[f[0]] = f
-tot = 0
+tot = 0; rw = {}
+def lat(d):	# completion latency, mean and 99th percentile, ms
+    c = d.get('clat_ns', {})
+    return c.get('mean', 0) / 1e6, c.get('percentile', {}).get('99.000000', 0) / 1e6
 for p in sys.argv[1:]:
     try:
-        j = json.load(open('fio-%s.json' % p))['jobs'][0]['write']
-        bw = j['bw_bytes'] / 1e9
+        j = json.load(open('fio-%s.json' % p))['jobs'][0]
     except Exception as e:
         print(p, 'no fio result:', e); continue
+    rw[p] = {d: (j[d]['bw_bytes'] / 1e9, j[d]['iops'] / 1e3) + lat(j[d]) for d in ('read', 'write')}
+    bw = rw[p]['read'][0] + rw[p]['write'][0]
     tot += bw
     f = w.get(p, ['-'] * 8)
     print("port %s %s: %.2f GB/s (fio, after the warm-up); in the %s s window: wire %s GB/s, FIFO drops %s, ring drops %s, rings %s%%" % (p, f[1], bw, f[7], f[3], f[4], f[5], f[6]))
+    for d in ('read', 'write'):
+        if rw[p][d][1]:
+            print("  %s: %.2f GB/s, %.1fk IOPS, completion %.2f ms mean, %.2f ms at the 99th percentile" % ((d,) + rw[p][d]))
 print("total %.2f GB/s" % tot)
+if os.environ.get('RWTSV'):
+    t = os.environ['RWTSV']; e = os.environ
+    if not os.path.exists(t) or not os.path.getsize(t):
+        open(t, 'w').write('tag which rw rwmixread bs iodepth jobs read_GBps write_GBps read_kiops write_kiops read_ms read_p99_ms write_ms write_p99_ms\n')
+    s = lambda d, i: sum(rw[p][d][i] for p in rw)
+    m = lambda d, i: max([rw[p][d][i] for p in rw] or [0])
+    open(t, 'a').write('%s %s %s %s %s %s %s %.2f %.2f %.1f %.1f %.2f %.2f %.2f %.2f\n' % (e.get('TAG') or os.path.basename(os.getcwd()), ''.join(sys.argv[1:]), e['RW'], e.get('RWMIX') or '-', e['BS'], e['IODEPTH'], e['JOBS'],
+        s('read', 0), s('write', 0), s('read', 1), s('write', 1), m('read', 2), m('read', 3), m('write', 2), m('write', 3)))
 open('total.txt', 'w').write("%.2f\n" % tot)
 for l in open('window.txt'):
-    if l.startswith(('client', 'nfsd')): print(l.strip())
+    if l.startswith(('client', 'nfsd')) or l.startswith('sent:'): print(l.strip())
 print(open('drives.txt').read().strip())
 # A CPU waiting on I/O is not in use: busy is what is neither idle nor iowait.
 def busy(path, cpus):
@@ -313,7 +346,7 @@ print("server CPUs busy: rings of a (0-7) %.0f%%, rings of b (56-63) %.0f%%, nfs
 print("client CPUs busy: %.0f%%" % busy('cli-mpstat.txt', range(0, 48)))
 EOF
 echo "region pages in use at most: $(( $(reg pages) - $(reg min_free) ))" | tee -a summary.txt
-if [ -n "${TSV:-}" ]; then
+if [ -n "${TSV:-}" ] && [ "$RW" = write ]; then
 	[ -s $TSV ] || echo "tag which total_GBps a_GBps b_GBps fifo_a fifo_b ringdrop_a ringdrop_b cli_retrans region_pages nfsd_busy ringcpu_a ringcpu_b rcvbuf linger threads entries qdisc nconn jobs drvbusy_a drvbusy_b warm lowat writes_ps woken_ps ctxsw_ps" > $TSV
 	g() { awk -v p=$1 -v c=$2 '$1 == p {print $c; f = 1} END {if (!f) print "-"}' window.txt; }	# "-" for a port not run, so the columns stay put
 	db() { awk -v p=$1 '$3 == p {for (i = 1; i <= NF; i++) if ($i == "busiest") {sub(/%/, "", $(i+1)); print $(i+1); f = 1}} END {if (!f) print "-"}' drives.txt; }
