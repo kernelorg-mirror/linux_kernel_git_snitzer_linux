@@ -104,7 +104,14 @@ out:
 	return err;
 
 out_drop:
-	d_drop(dentry);
+	/*
+	 * Unhash, unless a removal made under a shared parent anchors on
+	 * the dentry.  For an open by path, -EOPENSTALE makes the VFS redo
+	 * the lookup either way, and that lookup waits for the removal in
+	 * ->d_revalidate(); an open by file handle is not looked up again,
+	 * as it never was.
+	 */
+	nfs_d_drop_unless_anchored(dentry);
 	err = -EOPENSTALE;
 	goto out_put_ctx;
 }

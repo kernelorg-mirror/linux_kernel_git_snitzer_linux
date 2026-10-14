@@ -760,6 +760,48 @@ again:
 		return;
 
 	if (!d_in_lookup(dentry)) {
+		bool hands_off;
+
+		/*
+		 * Leave alone a dentry that a removal made under a shared
+		 * parent anchors on, or that has been unhashed.  readdir holds
+		 * the parent shared as well, so it can run beside such a
+		 * removal, and while the REMOVE is in flight neither of the
+		 * two things done below is safe: unhashing the dentry would
+		 * let a lookup or open of the name overtake the REMOVE, and
+		 * refreshing its inode from this reply would advance the
+		 * attribute generation that the remover's nfs_drop_nlink()
+		 * compares against, so that the removed file kept its link
+		 * count.  Nor is a refresh safe once the REMOVE has succeeded,
+		 * since this reply can still list the name: on a server that
+		 * reports how its change attribute behaves, nfs_refresh_inode()
+		 * takes attributes with a newer change attribute whatever
+		 * their generation, and would put back the link count that
+		 * the removal took away.
+		 *
+		 * Both are tested once, before anything else is done with the
+		 * dentry, in a ->d_lock section of their own.  This caller has
+		 * held a counted reference since before the test, and the
+		 * remover stores the sentinel only on a dentry whose count it
+		 * reads as one in the section it stores in: either the remover
+		 * sees this reference and hands the removal back, or the
+		 * sentinel was stored first.  If the REMOVE then succeeds, the
+		 * VFS calls d_delete() before ->unlink_shared_done() clears the
+		 * sentinel.  A d_delete() that finds this reference only
+		 * unhashes the dentry, under ->d_lock, so a test that finds the
+		 * sentinel gone comes after that section and sees the unhash.
+		 * One that ran before this reference was taken left the dentry
+		 * negative instead, and the code below drops a negative dentry
+		 * and treats the name as one it has no dentry for.  -ENOENT
+		 * ends either way too, through nfs_dentry_handle_enoent(), and
+		 * any other failure leaves the file in place.
+		 */
+		spin_lock(&dentry->d_lock);
+		hands_off = nfs_dentry_is_shared_anchor(dentry) ||
+			    d_unhashed(dentry);
+		spin_unlock(&dentry->d_lock);
+		if (hands_off)
+			goto out;
 		/* Is there a mountpoint here? If so, just exit */
 		if (!nfs_fsid_equal(&NFS_SB(dentry->d_sb)->fsid,
 					&entry->fattr->fsid))
