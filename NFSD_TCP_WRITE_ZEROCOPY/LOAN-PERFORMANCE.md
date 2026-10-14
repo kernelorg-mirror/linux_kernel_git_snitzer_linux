@@ -337,6 +337,81 @@ that could be tested here has held three times over. A loaned
 byte's cost in memory is set by how much is waiting, and the budget
 and the held buffer are the controls for that.
 
+## Dialing in loan mode
+
+Copy mode was dialed in by its rings and its buffers. Those dials
+all still apply to a loan, and one is added that matters most: the
+budget. What changes is what they are tuned against. In copy mode
+the aim was that no data should wait; in loan mode it is how much
+is allowed to wait.
+
+**Fixed, not dialed:**
+
+- 8192-byte receive buffers at an MTU of 7792 (`rx_buf_size=8192`).
+  For a copy it was the best setting. For a loan it is required:
+  one buffer to a frame is what puts every piece on a 4-byte
+  boundary, and without that a loaned WRITE is not written direct.
+- Every connection placed on a ring (`PLACE=1`).
+- The charge for a WRITE: the kernel learns it.
+
+**Dialed, and what each trades:**
+
+| dial | too small | too large |
+|---|---|---|
+| the budget, as WRITEs let in (`svc_tcp_rx_budget_pages`) | connections wait to be let in and the rate falls | loans hold more than the cache and each byte asks more of memory |
+| the held receive buffer (`svc_tcp_rx_rcvbuf`) | a connection waits for data | unread data sits in the region on top of the loans |
+| ring depth | frames dropped in bursts | more memory written through before a buffer comes round again |
+| rings a port | one ring's CPU runs out | more posted memory for the same traffic |
+
+On the stand-in, sixteen connections: 16 WRITEs let in carry the
+full rate at 4.07 requests to memory a line; 8 carry it at 2.99,
+and at 1.86 with rings of 128 and a 256 KiB buffer; 4 are under one
+a line with a third of the rate gone.
+
+**The stand-in's answer will not be the drives'.** The right budget
+is about how many WRITEs are in flight at once: the rate times how
+long the storage takes to finish one. The stand-in is slow to
+finish a write and carries 11.7 GB/s. SGL drives will finish one
+far sooner and are to carry five times the rate over two ports.
+Those pull opposite ways, so 8 is where to start looking and no
+more.
+
+**One thing a copy never had to mind:** a 16 KiB page holds two
+8192-byte buffers, so two frames share it, and they may be of
+different connections. The page is out on loan until both are
+written. The learned charge allows for it (164 pages for each 100 of
+WRITE on this card, where frames that paired up would be 110), but
+a loan's footprint is that much more than the count of WRITEs let
+in suggests.
+
+**What a footprint is, for these tables.** What the load takes from
+the region beyond what was there idle, plus the buffers posted in
+the rings of the port carrying it (8 MiB at four rings of 256, 4 at
+128, 2 at 64). A ring hands its buffers to the card in turn, so its
+whole posted set is memory the card writes through, held or not.
+The other port's posted buffers in a one-port run are not touched
+and do not count; nor do pages parked in a pool, while they stay
+parked. The target is that footprint, for both ports together,
+inside the 32 MiB cache.
+
+**The order, when the drives are here:**
+
+1. That every loaned WRITE is written direct (`wr_direct` against
+   `wr_dontcache`), at copy mode's rings and buffer and a generous
+   budget.
+2. The smallest budget that carries the rate: stepped down, reading
+   the rate and the WRITEs refused admission.
+3. Then the held buffer, then the ring depth, down until the rate
+   falls or frames are lost, and back one step.
+4. At each step the footprint and the requests to memory for each
+   line (`memcost-log.sh`, `memcost-read.py`).
+5. Again on two ports, where the budget and the region are shared.
+
+Not known: whether a loan wants a smaller held buffer than copy
+mode's 384 KiB to 1 MiB (256 KiB cost nothing on the stand-in, which
+is not fast enough to show a connection starved of data), and what
+the two-port setting is at all, since `sweep.sh` is one port.
+
 ## What is not measured, and cannot be on this host
 
 A loan written direct to a drive that takes arbitrary pieces, with
