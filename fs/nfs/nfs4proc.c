@@ -2821,8 +2821,9 @@ static int _nfs4_open_expired(struct nfs_open_context *ctx, struct nfs4_state *s
 	 */
 	opendata->o_arg.open_flags = O_DIRECT;
 	ret = nfs4_open_recover(opendata, state);
+	/* Unhash, unless a removal under a shared parent anchors here */
 	if (ret == -ESTALE)
-		d_drop(ctx->dentry);
+		nfs_d_drop_unless_anchored(ctx->dentry);
 	nfs4_opendata_put(opendata);
 	return ret;
 }

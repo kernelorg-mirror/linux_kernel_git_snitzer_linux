@@ -103,6 +103,56 @@ static inline bool nfs_dentry_is_blocked(struct dentry *dentry)
 	return nfs_fsdata_blocked(READ_ONCE(dentry->d_fsdata));
 }
 
+/*
+ * Does a removal made under a shared parent anchor on this dentry?  The
+ * caller holds ->d_lock; READ_ONCE() as in nfs_dentry_is_blocked().
+ */
+static inline bool nfs_dentry_is_shared_anchor(struct dentry *dentry)
+{
+	lockdep_assert_held(&dentry->d_lock);
+	return nfs_fsdata_blocked_shared(READ_ONCE(dentry->d_fsdata));
+}
+
+/**
+ * nfs_d_drop_unless_anchored - unhash a dentry unless a removal anchors on it
+ * @dentry: dentry to unhash
+ *
+ * As d_drop(), except that a dentry carrying NFS_FSDATA_BLOCKED_SHARED is
+ * left hashed: a removal of its name is in flight under a shared parent,
+ * and unhashing the dentry would let a lookup or open of the same name
+ * overtake the REMOVE.  The test and the unhash are one ->d_lock section,
+ * and ->d_lock is the lock the sentinel is stored under.  The sentinel is
+ * all that is consulted - not the parent's lock and not its operations
+ * table - and a further condition, if one is ever added here, has to come
+ * after that test, not in front of it.
+ *
+ * The callers hold a reference to the dentry and no lock on the parent.
+ * The remover anchors only on a dentry that nobody else holds, so they can
+ * meet an anchor only if that reference was taken after the sentinel was
+ * stored, by a path that did not then consult ->d_revalidate(), which would
+ * have waited.  An RCU-walk that consulted ->d_revalidate() before the
+ * sentinel was stored is not such a path: the store is followed, in the
+ * same ->d_lock section, by write_seqcount_invalidate(), so the walk's
+ * ->d_seq recheck in legitimize_path() fails and it retries in ref-walk,
+ * where ->d_revalidate() waits.  An open by file handle is such a path:
+ * its reference comes from d_obtain_alias().
+ *
+ * The sentinel is cleared without ->d_lock, so the test can still see it
+ * for an instant after the REMOVE has completed and leave hashed a dentry
+ * that would otherwise have been dropped.  That direction is safe: the
+ * remover's own d_delete() normally unhashes the dentry, and an open by
+ * path that returns -EOPENSTALE is retried by the VFS, first in ref-walk
+ * if it was begun in RCU-walk and, if it fails again, with LOOKUP_REVAL,
+ * whose ->d_revalidate() asks the server.
+ */
+static inline void nfs_d_drop_unless_anchored(struct dentry *dentry)
+{
+	spin_lock(&dentry->d_lock);
+	if (!nfs_dentry_is_shared_anchor(dentry))
+		__d_drop(dentry);
+	spin_unlock(&dentry->d_lock);
+}
+
 static inline fmode_t flags_to_mode(int flags)
 {
 	fmode_t res = (__force fmode_t)flags & FMODE_EXEC;
