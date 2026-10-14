@@ -121,6 +121,11 @@ and lay each figure beside build 464's, which are in that table:
    port a's rings back to 256 afterwards** (`ethtool -G enp161s0f0
    rx 256`, then `./ring-irqs.sh enp161s0f0 0`): a sweep leaves them
    where its last line had them.
+5. **The silent port** (Mike, 14 October): chase it on this kernel,
+   after the four above. See "Set aside" below and
+   `../SILENT-PORT.md`; whether 7.3 still shows it is the first
+   thing to learn, and the 1 MiB random READ is where it last
+   showed.
 
 Before any of it on a new boot: the "After a boot" line under the
 rules, `getconf PAGESIZE` (16384), that `xeu` came up with
@@ -226,9 +231,10 @@ client's transmit side for the port stops for about 1.4 s and `fq`'s
 pacing then holds it at a trickle. **It showed again on 14 October**
 (port a, in the READ baseline above), with the client on `fq_codel`
 and lasting the 24 s to the end of the run, so pacing is not what
-holds it. **Chase it if it shows again** (Mike):
-`../SILENT-PORT.md` has the account and what to do, and
-`$L/silent-driver.sh` runs with both ends sampled.
+holds it. **It is to be chased on the 7.3 kernel (Mike, 14
+October)**, after the battery under "Next": `../SILENT-PORT.md` has
+the account and what to do, and `$L/silent-driver.sh` runs with both
+ends sampled.
 
 Noted and not looked into: port a alone drops 33 to 1,087 frames at
 the card's FIFO in a one-port run and port b none; port a's link is
