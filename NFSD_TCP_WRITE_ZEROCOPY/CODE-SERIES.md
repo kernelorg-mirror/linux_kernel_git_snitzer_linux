@@ -10,8 +10,9 @@ to rebase them into (Mike, 14 October). The goal of the reordering:
   immediately after its target where it can be.
 - **Features that are off by default last** in the code group.
 
-This file records the survey (step 1) and the trial rebase (step 2),
-and is to be kept up to date through the reordering itself. The groups stay as `AGENTS.md` has them,
+This file records the survey (step 1), the trial rebase (step 2) and
+the final pass (step 3), and is to be kept up to date through the
+reordering itself. The groups stay as `AGENTS.md` has them,
 code, then KUnit interface, then KUnit tests, then docs, and one group
 to a commit. The branch itself has not been changed yet.
 
@@ -293,6 +294,118 @@ rerere has both resolutions.
     Claimed data is no longer charged to the socket: a transport can have
     as much again as its receive buffer waiting to be copied for each
     thread that may be copying.
+
+## Step 3: the final pass (14 October)
+
+The branch `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-reorder-1`, rebuilt
+from `v7.3-3` in the trial's order with three changes of plan, and the
+messages and tags done:
+
+- **62, 63 and 66 kept apart**, at the end of the code group in that
+  order (Mike). Whether the unlocked copy should stay the default is
+  open: on 7.3, two ports carried 59.13 to 59.36 GB/s with it in five
+  clean runs and 57.82 to 58.21 without it in four, but the two sets ran
+  one after the other while the drives were degrading, and both tries at
+  alternating them (`b473/ab.sh`, `ab2.sh`) lost their runs to drives
+  stepping down. Once the drives have rested it is to be run again,
+  alternating. Then 66 is dropped if the unlocked copy is faster (and
+  62 stays as it is), or 62, 63 and 66 are folded into one commit if
+  they are level, with the message drafted in step 2.
+- **57 folded into 56**, whose message now says the factor goes and
+  why.
+- **21's message rewritten** to describe its fix in this series, with
+  `Fixes:` on 6; David Flynn's authorship and Signed-off-by kept, and
+  the rewrite noted in its `[snitzer: ...]` line.
+- **53 tagged `Fixes:` on 48.**
+- **Every `Fixes:` re-pointed** to the new IDs (`git filter-branch`
+  with a message filter that finds each tag's target by its quoted
+  subject; every subject in the series is unique). 17 tags, each
+  checked to name a commit before it on the branch whose subject is the
+  one quoted.
+- **The commits made at the tip since the trial** carried over (the
+  loan page's three, this file's step 2, and the SGL note).
+
+**The result: 478 commits, 63 of them code, and a tree identical to
+the branch tip's**; `check-grouping.sh v7.3-3` passes. The one
+conflict, 64 against 63, was settled by the resolution rerere recorded
+in the trial. The region budget page now says which branches keep the
+beyond-EOF rule (43, 44).
+
+**Not done yet:** every code commit built in turn (step 3 of "Next
+steps"), held back while tardis1 measures and its drives rest; then the
+branch put in place of `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`, and
+pushed by Mike.
+
+### The code group, old and new
+
+The new position, the survey's number, the subject, the commit before
+the reorder and after it.
+
+| new | survey | subject | before | after |
+|---|---|---|---|---|
+| 1 | 46 | block: Let a stacking device take its members' memory alignment | `2e9af09d3257` | `8ce3b8845deb` |
+| 2 | 10 | block: add bdev_dio_seg_boundary() | `ed42ca4c8830` | `c2882fc1209c` |
+| 3 | 11 | fs: add STATX_DIO_SEG_BOUNDARY | `388d9c180230` | `29df8cf690dd` |
+| 4 | 12 | block: report STATX_DIO_SEG_BOUNDARY for block devices | `5af8f3fd0693` | `32e78ebdc08c` |
+| 5 | 13 | xfs: report the direct I/O segment boundary | `afde964fae63` | `c5b71babaeea` |
+| 6 | 17 | loop: take the backing device's virtual boundary for direct I/O | `ea72a31c91f1` | `d2a699bdf360` |
+| 7 | 37 | tcp: let a kernel socket cap the receive scaling ratio | `838bd0cbdb9b` | `9fda9805446b` |
+| 8 | 1 | SUNRPC: distinguish authoritative XDR bvecs | `804337ca897a` | `4770d94a72f6` |
+| 9 | 2 | SUNRPC: decode XDR from authoritative bvecs | `35d13946eb7c` | `a3b821de267c` |
+| 10 | 3 | SUNRPC: poison invalid XDR decode streams | `57e1da8f9133` | `b3dd38ff8b16` |
+| 11 | 4 | nfsd: accept immutable receive bvec requests | `9cfc14eec1cb` | `23970ee63bc5` |
+| 12 | 19 | nfsd: convert a WRITE payload into rq_bvec by its own size | `f904a540b8c7` | `3be5a3c3fe74` |
+| 13 | 5 | nfsd: require interior payload discontinuities to be logical-block aligned | `f830dc5d450b` | `eaf16d61300c` |
+| 14 | 14 | nfs_common: let the direct I/O policy carry the device's segment boundary | `85bde8a734fd` | `6cb79ede23c5` |
+| 15 | 15 | nfsd: record the direct I/O segment boundary of an nfsd_file | `4066c940a926` | `c1f1b9efd549` |
+| 16 | 16 | nfsd: split direct writes by the device's segment boundary | `c2f75320d2b6` | `ae280626377f` |
+| 17 | 6 | SUNRPC: loan eligible TCP receive pages | `88a3b0ea0f4e` | `23e14d089960` |
+| 18 | 18 | SUNRPC: size rq_bvec for 4 KiB fragments, not pages | `3b80699d33d9` | `65d0e7b1470c` |
+| 19 | 21 | SUNRPC: Publish prefix-only loan records as COPY | `c84cc87f5105` | `0a607f4045ef` |
+| 20 | 7 | SUNRPC: merge locked-head copies into a whole-page loan bvec | `dc72421fb1ad` | `8808aff9ba60` |
+| 21 | 20 | SUNRPC: size the TCP receive loan table for fragments, not pages | `14c4fa69dfb7` | `b05e6f356bb9` |
+| 22 | 8 | nfsd: accept receive bvecs for NFSv4 COMPOUND | `bb17236427cb` | `3e7040f99c30` |
+| 23 | 9 | SUNRPC: add a runtime switch to disable TCP receive page loans | `037f7f5cc3aa` | `7a8edfa3db54` |
+| 24 | 22 | page_pool: Fixed receive-buffer region for one NIC; recycle loaned pages | `ac560819d57a` | `959c4789dadf` |
+| 25 | 29 | page_pool: Add page_pool_page_in_rx_region() | `9dd367d4c162` | `eb8238e0a0ac` |
+| 26 | 31 | page_pool: Let several devices share the fixed receive region | `1057421174ba` | `d48579e71897` |
+| 27 | 33 | page_pool: Export page_pool_rx_region_size() | `ff643ab2540a` | `412fafe21ceb` |
+| 28 | 45 | page_pool: Give the fixed receive region back when it is resized | `23871cb87de9` | `482d472913a6` |
+| 29 | 49 | page_pool: Recycle a region-bound pool's pages last in, first out | `1900843944ab` | `28848297923a` |
+| 30 | 23 | SUNRPC: Region credit admission (TCP flow control instead of ring drops) | `405009496e90` | `5f0ae612cbfd` |
+| 31 | 27 | SUNRPC: Orphan a credited record whose loans cannot be accounted for | `f00504046ada` | `a0effaa07bfc` |
+| 32 | 28 | SUNRPC: Apply region budget changes while records are in flight | `b9581988624c` | `262ba9c4314b` |
+| 33 | 24 | nfsd: Release a WRITE's receive loan after the page-cache copy, before storage | `bff6e0e23f84` | `cd8072596adb` |
+| 34 | 26 | nfsd: keep a WRITE's receive loan while a later operation may read it | `032a08a2f5b5` | `e469e3ce751d` |
+| 35 | 25 | SUNRPC: Copy small RPC records instead of loaning a receive page | `c59293e1fe58` | `ac41798806fc` |
+| 36 | 30 | SUNRPC: Credit only the region pages a TCP receive loan holds | `78a2a0b985c4` | `e71f4481a8d5` |
+| 37 | 40 | SUNRPC: Charge a TCP receive loan for the region pages it holds, not its fragments | `af3843ce958d` | `da17e528098b` |
+| 38 | 41 | SUNRPC: Take a transport that reads on without admission off the credit wait list | `bfa0e3ee56b9` | `32da1945d889` |
+| 39 | 42 | SUNRPC: Count a merge page's bytes once when a TCP receive record is materialized | `55688fb1ebcb` | `0cd70ee8694e` |
+| 40 | 32 | SUNRPC: Hold the receive buffer only on transports that receive region pages | `465163e8d519` | `e446995331a6` |
+| 41 | 34 | SUNRPC: Give each network namespace its own region budget | `db41b8c114bb` | `ebef03ac0fb4` |
+| 42 | 35 | SUNRPC: Copy region records when the budget drawn on is 0 | `6c8a4633a068` | `0cdef15309fa` |
+| 43 | 36 | SUNRPC: Do not re-queue a transport that waits for region credit | `384c23ff8de4` | `0e1df4da2875` |
+| 44 | 38 | SUNRPC: Hold a region transport's receive window through TCP's interfaces | `8c9a24c566b1` | `83d947a710c4` |
+| 45 | 47 | SUNRPC: Trade pages with the socket when a partial record changes hands | `1b062140c3a2` | `bae36faa8ba3` |
+| 46 | 48 | SUNRPC: Return a loaned record's page-pool pages in batches | `87fa242b3e50` | `23fd50f7fde3` |
+| 47 | 52 | SUNRPC: Keep page-pool return batches within the bulk API's bound | `72330b2d351d` | `85aa02ef276a` |
+| 48 | 53 | SUNRPC: Refuse to build a page-pool return batch the bulk API cannot take | `1b949fb90e2b` | `ad48c010bca5` |
+| 49 | 50 | SUNRPC: Let a NUMA node have several thread pools | `45e48770d02d` | `187b2045f5f6` |
+| 50 | 51 | SUNRPC: Let a thread wait for the rest of a partly received TCP record | `7554e4ce6244` | `984ee94bc218` |
+| 51 | 54 | SUNRPC: Trace how long a thread lingers for the rest of a TCP record | `c02c85e0d27f` | `b7a047d834f3` |
+| 52 | 55 | SUNRPC: Learn a loaned record's charge from the records | `384086e570a7` | `dac23d425fdb` |
+| 53 | 56 | SUNRPC: Hold a transport's receive window by what its packets occupy | `afcf88ab9cc7` | `8cd0d72dccb2` |
+| 54 | 58 | SUNRPC: Show what receive buffers are held to in a budget's statistics | `48ce6e5c445c` | `de766439219e` |
+| 55 | 59 | SUNRPC: Measure a held receive buffer by the skbs that carry data | `4fad48bed76f` | `e53ce65143e5` |
+| 56 | 60 | SUNRPC: Open a held transport's window to half of what its buffer holds | `a1a2e6d3554d` | `6f88b4d86042` |
+| 57 | 61 | SUNRPC: Trace what a transport's receive buffer is held to | `a9fe067f1882` | `67b2f07d02e1` |
+| 58 | 64 | SUNRPC: svc_tcp_rx_keep: a thread that finds a record short does not wake another | `273a1b9f355c` | `58491437a704` |
+| 59 | 62 | SUNRPC: Copy a received TCP record with the socket unlocked | `e8bb4b0bf2ed` | `92d27661b1e3` |
+| 60 | 63 | SUNRPC: Let a thread claim a TCP record's data and copy it afterwards | `8439fe6d5edc` | `ab6cec9f488a` |
+| 61 | 66 | SUNRPC: Copy with the socket unlocked only when records are claimed | `1db924c7059d` | `598b1d3c6acc` |
+| 62 | 65 | SUNRPC: svc_tcp_rx_lowat: wake a thread for more than one piece of a short record | `ad121a71159b` | `761375eb640f` |
+| 63 | 39 | veth: add rx_ip_align, extra headroom for frames copied for XDP | `a057f0952ad0` | `c5f37bb91a15` |
 
 ## Next steps
 

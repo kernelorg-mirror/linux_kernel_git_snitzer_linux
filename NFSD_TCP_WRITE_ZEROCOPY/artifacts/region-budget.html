@@ -1352,7 +1352,7 @@
     <div class="delta">
       <div class="mark">i</div>
       <div class="body"><h3>Slow direct writes to a growing file are XFS's design<span class="tag base">finding</span></h3>
-      <p>A direct write that starts beyond the end of the file waits for every direct write in progress: 95 ms on average here, against 5 microseconds on a file that has its size. A rule that issues such writes through the page cache instead took the sixteen-connection copy from 442 to 2355 MB/s, with 77% of its WRITEs no longer direct. It was written and measured once, and then taken out again: it is kept in the history to come back to and is not in the tree or in build 458.</p></div>
+      <p>A direct write that starts beyond the end of the file waits for every direct write in progress: 95 ms on average here, against 5 microseconds on a file that has its size. A rule that issues such writes through the page cache instead took the sixteen-connection copy from 442 to 2355 MB/s, with 77% of its WRITEs no longer direct. It was written and measured once, and then taken out again. It is not in the series or in build 458; the commit and its revert are kept, to come back to, on <code>kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-reorder</code> and the 7.1.13 branches.</p></div>
     </div>
   </section>
 
