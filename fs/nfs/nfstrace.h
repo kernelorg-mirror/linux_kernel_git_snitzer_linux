@@ -754,6 +754,8 @@ DEFINE_NFS_DIRECTORY_EVENT(nfs_remove_enter);
 DEFINE_NFS_DIRECTORY_EVENT_DONE(nfs_remove_exit);
 DEFINE_NFS_DIRECTORY_EVENT(nfs_unlink_enter);
 DEFINE_NFS_DIRECTORY_EVENT_DONE(nfs_unlink_exit);
+DEFINE_NFS_DIRECTORY_EVENT(nfs_unlink_shared_enter);
+DEFINE_NFS_DIRECTORY_EVENT(nfs_unlink_need_excl);
 DEFINE_NFS_DIRECTORY_EVENT(nfs_symlink_enter);
 DEFINE_NFS_DIRECTORY_EVENT_DONE(nfs_symlink_exit);
 
