@@ -419,6 +419,8 @@ As of kernel 2.6.22, the following members are defined:
 		struct dentry * (*lookup) (struct inode *,struct dentry *, unsigned int);
 		int (*link) (struct dentry *,struct inode *,struct dentry *);
 		int (*unlink) (struct inode *,struct dentry *);
+		int (*unlink_shared) (struct inode *,struct dentry *);
+		void (*unlink_shared_done) (struct inode *,struct dentry *);
 		int (*symlink) (struct mnt_idmap *, struct inode *,struct dentry *,const char *);
 		struct dentry *(*mkdir) (struct mnt_idmap *, struct inode *,struct dentry *,umode_t);
 		int (*rmdir) (struct inode *,struct dentry *);
@@ -480,6 +482,29 @@ otherwise noted.
 ``unlink``
 	called by the unlink(2) system call.  Only required if you want
 	to support deleting inodes
+
+``unlink_shared``
+	optional.  As ``unlink``, but called by the unlink(2) system
+	call with the parent directory's i_rwsem held shared, not
+	exclusive, and never for a directory.  Providing it, together
+	with ``unlink`` and ``unlink_shared_done``, is how a filesystem
+	opts in to concurrent removals in one directory; the filesystem
+	then itself orders a removal against the lookups and opens of the
+	same name that the lock no longer excludes, and against its own
+	directory listings.  It may return UNLINK_NEED_EXCL, having done
+	nothing, and the VFS then calls ``unlink`` for that removal with
+	the lock held exclusive.  ``unlink`` is still what every other
+	caller uses.  ``unlink_shared`` is not called on a superblock that
+	has set SB_I_NAMES_COLLIDE, except by a removal that read the bit
+	before it was set.  See Documentation/filesystems/locking.rst.
+
+``unlink_shared_done``
+	required with ``unlink_shared``.  Called after every call of
+	``unlink_shared`` that did not return a positive value, whether
+	the removal succeeded or not, after any delete event for it and
+	before the parent directory's i_rwsem is dropped, to end the
+	exclusion for the name that ``unlink_shared`` set up.  See
+	Documentation/filesystems/locking.rst.
 
 ``symlink``
 	called by the symlink(2) system call.  Only required if you want
