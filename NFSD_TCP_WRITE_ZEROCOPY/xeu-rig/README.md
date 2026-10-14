@@ -173,9 +173,9 @@ beside build 464's, which are in that table:
    at 256 and its layout in place, and writes `audit-end.txt`.
 5. **The silent port** (Mike, 14 October): chase it on this kernel,
    after the four above. See "Set aside" below and
-   `../SILENT-PORT.md`; whether 7.3 still shows it is the first
-   thing to learn, and the 1 MiB random READ is where it last
-   showed.
+   `../SILENT-PORT.md`. **7.3 shows it**: the seventh event, on port
+   b in round 2's 70/30 8 MiB mix on build 473 (12:17:50, 21 to 23
+   s, the same signature as the sixth); see "The seventh" there.
 
 Before any of it on a new boot: the "After a boot" line under the
 rules, `getconf PAGESIZE` (16384), and `./settled.sh apply` ending in
