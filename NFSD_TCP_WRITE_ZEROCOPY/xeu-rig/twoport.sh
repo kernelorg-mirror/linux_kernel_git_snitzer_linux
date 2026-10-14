@@ -31,6 +31,13 @@
 # rings' interrupts back on their CPUs afterwards.
 # RUNTIME=<s> (45), JOBS=<n> (16), BS (8M), NCONN (16), PLACE=0 to leave
 # the flows where they fall.  For a run and put back after it:
+# The setting is settled.sh's: a run on both ports is at the two-port
+# setting (RCVBUF=393216 ENTRIES=128 LINGER=0 unless given), a run on one
+# port at the one-port setting.  settled.sh audits the host before the run
+# changes anything (audit-start.txt) and the live state just before the load
+# (audit.txt), and the run refuses if anything differs from the setting or
+# from what the run itself set; the variables below take a run off the
+# settled setting, and audit.txt's last line says where.
 #   RCVBUF=<bytes>   svc_tcp_rx_rcvbuf, the held receive buffer
 #   LINGER=<us>      svc_tcp_rx_linger_us
 #   THREADS=<n>      svc_tcp_rx_copy_threads
@@ -59,13 +66,15 @@
 # run's only.  RWTSV=<file>: the same for any run, reads and writes apart.
 . "$(dirname "$0")/common.sh"
 "$(dirname "$0")/drive-cache.sh" > /dev/null || { echo "drive-cache.sh failed"; exit 1; }	# no cache flush to the drives (AGENTS.md)
-# nfsd's threads on CPUs 8-55, off the ports' ring CPUs: hammerspace-nfsd-tuning
-# pins them at boot, and a restart of nfs-server brings them up unpinned
-# (README.md).  NFSD_CPUS= moves them for a run from there and puts them back.
-nfsd_all=$(pgrep -x nfsd | wc -l)
-nfsd_off=$(for t in $(pgrep -x nfsd); do taskset -cp $t 2> /dev/null; done | awk '$NF != "8-55"' | wc -l)
-[ $nfsd_all -gt 0 ] && [ $nfsd_off = 0 ] || { echo "nfsd: $nfsd_off of $nfsd_all threads not on CPUs 8-55: systemctl restart hammerspace-nfsd-tuning"; exit 1; }
 OUT=${1:?out dir}; WHICH=${2:-ab}
+# A run on both ports is at the two-port setting and one on one port at the
+# one-port setting, unless it asks otherwise (settled.sh, README.md "Where
+# it stands").
+if [ ${#WHICH} = 2 ]; then
+	MODE_SET=two; RCVBUF=${RCVBUF-393216}; ENTRIES=${ENTRIES-128}; LINGER=${LINGER-0}
+else
+	MODE_SET=one
+fi
 RUNTIME=${RUNTIME:-45}; WARM=${WARM:-15}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
 RW=${RW:-write}; IODEPTH=${IODEPTH:-16}; SIZE=${SIZE:-512M}
 YNL="$H/../tools/net/ynl/pyynl/cli.py --no-schema --spec $H/../Documentation/netlink/specs/ethtool.yaml"
@@ -81,6 +90,8 @@ clput() { $SSHC "cat > $1"; }	# stdin to a file on the client
 
 [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ] || { echo "NFS connections are up: not ours to disturb"; exit 1; }
 mkdir -p $OUT; cd $OUT || exit 1
+# The host has to be at the settled setting before the run changes anything.
+audit_or_die rest audit-start.txt
 sleep ${REST:-30}	# 20 s of idle gives a drive its fast region back
 fifo() { ethtool -S $1 | awk '/port_rx_fifo_tc[0-9]_drop_packets/{s+=$2} END{print s+0}'; }
 ringdrop() { ethtool -S $1 | awk '/rx_hw_tail_drop_packets/{s+=$2} END{print s+0}'; }
@@ -105,17 +116,18 @@ cleanup() {
 	for k in rcvbuf linger_us copy_threads lowat; do echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
 	[ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} codel; done
 	# The RSS table may name rings that are going: spread it over four first.
-	[ -n "${RINGS:-}" ] && { for p in $PORTS; do ethtool -X ${DEV[$p]} equal 4 2>/dev/null; ip link set ${DEV[$p]} down; sleep 1; ethtool -L ${DEV[$p]} combined 4; ip link set ${DEV[$p]} up; done; sleep 7; for p in $PORTS; do "$RIG/ring-irqs.sh" ${DEV[$p]} ${IRQ0[$p]} > /dev/null; done; }
-	[ -n "${ENTRIES:-}${RINGS:-}" ] && for p in $PORTS; do ethtool -G ${DEV[$p]} rx 256 2>/dev/null; done
-	# Resizing the rings puts their interrupts back where the driver hints
-	# (both ports on CPUs 0-7): place them again.
-	[ -n "${ENTRIES:-}${RINGS:-}" ] && { sleep 7; for p in $PORTS; do "$RIG/ring-irqs.sh" ${DEV[$p]} ${IRQ0[$p]} > /dev/null; done; }
+	[ -n "${RINGS:-}" ] && { for p in $PORTS; do ethtool -X ${DEV[$p]} equal 4 2>/dev/null; ip link set ${DEV[$p]} down; sleep 1; ethtool -L ${DEV[$p]} combined 4; ip link set ${DEV[$p]} up; done; sleep 7; }
+	[ -n "${ENTRIES:-}${RINGS:-}" ] && { for p in $PORTS; do ethtool -G ${DEV[$p]} rx 256 2>/dev/null; done; sleep 7; }
 	for p in $PORTS; do
 		cl "rm -f /mnt/rxr-$p[0-9]*/f-* /mnt/rxr-$p[0-9]*/bal-* 2>/dev/null; for m in /mnt/rxr-$p[0-9]*; do umount -f \$m 2>/dev/null; done"
 		for fs in ${FS[$p]}; do exportfs -u "${CLI[$p]}:$fs/zcbudget" 2>/dev/null; done
 	done
-	[ -n "${NFSD_CPUS:-}" ] && for t in $(pgrep -x nfsd); do taskset -cp 8-55 $t > /dev/null 2>&1; done
 	echo N > /sys/module/xeu/parameters/rx_port_stats
+	# An open of a port put its interrupts back on CPUs 0-7, and NFSD_CPUS=
+	# moved nfsd: the settled CPU layout back, and the host as the run left it.
+	"$RIG/settled.sh" place $PORTS
+	sleep 2
+	"$RIG/settled.sh" audit rest > $OUT/audit-end.txt 2>&1 || { echo "the host is not at the settled setting after the run:"; grep -E 'BAD|FAILED' $OUT/audit-end.txt; }
 }
 trap cleanup EXIT
 
@@ -140,7 +152,11 @@ sleep 7
 [ -n "${ENTRIES:-}" ] && { for p in $PORTS; do ethtool -G ${DEV[$p]} rx $ENTRIES; done; sleep 7; }
 for p in $PORTS; do
 	d=${DEV[$p]}
-	"$RIG/ring-irqs.sh" $d ${IRQ0[$p]} ${TXIRQ[$p]} >> geometry.txt
+	if [ -n "${RINGS:-}${TXIRQ[$p]}" ]; then
+		"$RIG/ring-irqs.sh" $d ${IRQ0[$p]} ${TXIRQ[$p]} >> geometry.txt	# an experiment's layout
+	else
+		"$RIG/settled.sh" place $p || exit 1
+	fi
 	echo "$p: $d mtu $(cat /sys/class/net/$d/mtu) rings $(ethtool -l $d | awk '/Combined/{v=$2} END{print v}') x $(ethtool -g $d | awk '/^RX:/{v=$2} END{print v}')" | tee -a geometry.txt
 	ping -c2 -W2 -I $d ${CLI[$p]} > /dev/null || { echo "$p: no answer from ${CLI[$p]}"; exit 1; }
 	i=0
@@ -219,6 +235,13 @@ if [ "$RW" != write ]; then	# a run that reads: every file written whole first, 
 	echo "files written before the run: $(cl "du -sch /mnt/rxr-*/f-* | tail -1")" | tee -a geometry.txt
 	sleep 20
 fi
+# Just before the load: the live state, all of it, against the setting this
+# run is at; anything the run set on purpose is held to what it set.
+EXPENV="EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_COPY_THREADS=${THREADS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-}"
+for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
+[ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}" ] && EXPENV="$EXPENV EXP_LAYOUT=RINGS=${RINGS:-4},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-}"
+env $EXPENV "$RIG/settled.sh" audit $MODE_SET > audit.txt 2>&1 || { grep -E 'BAD|FAILED' audit.txt; exit 1; }
+tail -1 audit.txt | tee -a geometry.txt
 echo 1 > $RG	# the region's low-water mark starts again from here
 "$RIG/drvsample.py" drives-sec.tsv $(( WARM + RUNTIME + 3 )) &	# every drive, each second of the load
 for p in $PORTS; do

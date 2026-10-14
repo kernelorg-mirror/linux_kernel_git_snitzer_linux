@@ -23,6 +23,7 @@ O=${1:?out dir}; mkdir -p $O
 EV=arm_cmn/hnf_mc_reqs/,arm_cmn/hnf_cache_fill/,l3d_cache_lmiss_rd,bus_access_wr
 [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ] || { echo "NFS connections are up"; exit 1; }
 "$RIG/drive-cache.sh" > /dev/null || exit 1
+audit_or_die rest $O/audit-start.txt	# the host at the settled setting (settled.sh)
 line() {	# line <tag> <GB/s moved> <perf stat file>: one line of the summary
 	awk -F, -v t="$1" -v g="$2" '$1 ~ /^[0-9]/ {split($3, n, "/"); v[n[2] ? n[2] : $3] = $1 / 10}
 		END {l = g * 1e9 / 64; printf "%-22s %6.1f GB/s  to memory %.3fe9/s", t, g, v["hnf_mc_reqs"] / 1e9

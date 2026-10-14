@@ -28,6 +28,7 @@ kill $DM 2>/dev/null
 ping -c2 -W2 $CLIIP | tail -1
 echo "rings $(rx_rings) x $(rx_entries)"
 cat $RG || { echo "NO REGION: check 'dmesg | grep page_pool'"; exit 1; }
+"$RIG/settled.sh" place a	# the settled CPU layout for nfsd and the port
 dmesg | grep 'page_pool: ' | tail -2
 [ "$(reg dev)" = "$PCI" ] && [ "$(reg pages)" = "$PAGES" ] || { echo "region is not as asked"; exit 1; }
 echo "alloc_fail now $(reg alloc_fail): the sweep reports its change per run"
