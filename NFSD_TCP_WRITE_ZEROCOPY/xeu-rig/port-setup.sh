@@ -17,6 +17,7 @@ ip link set $d mtu 7792
 ip link set $d up; sleep 5
 ethtool -G $d rx $n; sleep 6
 kill $DM 2>/dev/null
-"$RIG/ring-irqs.sh" $d $c0
+[ "$c0" = $([ $d = enp164s0f0 ] && echo 56 || echo 0) ] || echo "$d: its ring CPUs are settled.sh's, not from $c0"
+"$RIG/settled.sh" place $(port_of $d) || exit 1	# the settled CPU layout for nfsd and the port
 echo "$d: mtu $(cat /sys/class/net/$d/mtu), rings $(ethtool -l $d | awk '/Combined/{v=$2} END{print v}') x $(ethtool -g $d | awk '/^RX:/{v=$2} END{print v}'), region dev $(cat $PP/rx_region_dev)"
 cat $RG
