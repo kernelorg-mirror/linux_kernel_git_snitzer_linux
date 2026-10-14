@@ -34,6 +34,61 @@ the drives' fast region:
   Nothing that adds parallelism around the copy moves it.
 - One port is at 95% of what its wire carries with no NFS (49.8).
 
+## Reads and mixes: the 7.1.13 baseline (build 464, 14 October)
+
+Taken before the boot into 7.3 so that it can be laid beside it:
+`./rwbase.sh <build>` runs the same loads (about 25 minutes a round,
+two rounds), each through `twoport.sh`, whose `RW=`, `RWMIX=` and
+`RWTSV=` are new for it. A run that reads first writes its files
+whole (16 GiB a port) and rests 20 s. nfsd serves READs direct
+(`io_cache_read` 2), so they come from the drives, not the server's
+page cache. 16 writers a port at a queue of 16, 512 MiB files.
+Both rounds' lines are in `results-rwbase-464.tsv`; each run is
+`$L/rwbase-<tag>-<round>`.
+
+Two ports at the two-port setting, four drives a port:
+
+| load | round 1 | round 2 | of which READ / WRITE | completion, mean |
+|---|---|---|---|---|
+| READ, 8 MiB sequential | 52.72 GB/s | 53.71 | | 81 ms |
+| READ, 1 MiB random | 49.08 | 38.61, port a silent | | 13 ms |
+| READ, 4 KiB random | 1.16 M IOPS (4.76 GB/s) | 1.16 M (4.75) | | 0.44 ms |
+| 70/30, 8 MiB sequential | 55.68 | 56.03 | 38.9 / 16.8 and 39.2 / 16.9 | 80 / 89 ms |
+| 70/30, 1 MiB random | 54.72 | 54.69 | 38.3 / 16.4 both | 9.5 / 10.6 ms |
+| 70/30, 4 KiB random | 944 k IOPS (3.87 GB/s) | 951 k (3.89) | 661 k / 283 k and 666 k / 285 k | 0.49 / 0.67 ms |
+| WRITE, 8 MiB sequential | 54.90 | 57.99 | | 83 ms |
+
+One port over all eight drives, at the one-port setting:
+
+| load | round 1 | round 2 | of which READ / WRITE |
+|---|---|---|---|
+| READ, 8 MiB sequential | 37.51 GB/s | 36.90 | |
+| 70/30, 8 MiB sequential | 31.59 | 36.38 | 22.1 / 9.5 and 25.4 / 10.9 |
+
+- **Large reads are not limited by the drives.** On two ports each
+  drive reads 6.5 to 6.8 GB/s at 61 to 67% busy. On one port it is
+  4.6 at 50%, and the port sends 36.8 GB/s, well short of the 47.4
+  it takes in WRITEs. Not looked into.
+- **4 KiB is limited by nfsd's CPUs**: CPUs 8-55 are 97 to 98% busy
+  in every 4 KiB run. The drives read 0.6 GB/s each and show 99%
+  busy, but for an NVMe drive that only means something was always
+  outstanding; the script's "DRIVE-LIMITED" mark there is not the
+  limit.
+- **The two WRITE runs** (54.90 and 57.99) are below the 60.0 to
+  60.4 of 13 October's seven runs at the same setting. They ran
+  after the mixes, with the usual 30 s of rest; every drive stayed
+  inside its fast region and none stepped down. Not looked into.
+- **The one-port 70/30 mix varies** by 15% between its two rounds,
+  for no reason seen in the drives (46 to 50% busy).
+- **Port a went silent** in round 2's 1 MiB random READs, from 22 s
+  into what fio counted to the end: the 1 MiB figure to lay beside
+  is round 1's. This is the sixth event, the first on a read load
+  and the first with the client on `fq_codel`; see
+  `../SILENT-PORT.md`.
+- The mixes drop a few frames at the card (up to 84 at the FIFO and
+  128 at the rings in a window) and the client retransmits 100 to
+  360 segments in one; the READ-only loads drop none.
+
 ## Next: the same battery on the v7.3-3 rebase (Mike, 13 October)
 
 **The series is rebased onto `v7.3-3`** (`kernel-7.3/main`, after
@@ -49,14 +104,16 @@ and lay each figure beside build 464's, which are in that table:
 
 1. `./memcost-cal.sh $L/memcost-cal-<build>`: the card and the drives
    by themselves (about 6 min, no NFS).
-2. Copy mode on two ports, three runs, and on one port over all
+2. `./rwbase.sh <build>`: the READs and mixes above, beside build
+   464's (`results-rwbase-464.tsv`).
+3. Copy mode on two ports, three runs, and on one port over all
    eight drives, three for each port: the command lines under
    "Where it stands" above. **This is the check for a regression**:
    60.0 to 60.4 GB/s on two ports and 46.5 to 47.4 on one on build
    464. `memcost-log.sh` beside a run and `memcost-read.py` after it
    give its bytes through memory for each byte of payload (2.17 on
    two ports).
-3. The loan and its copy on the stand-in:
+4. The loan and its copy on the stand-in:
    `plans/16k-42-loan-memcost.plan`, `16k-43-loan-memcost-small.plan`
    and `16k-44-loan-memcost-floor.plan` through `sweep.sh` with
    `CELL_BOUNCE=1` and `memcost-log.sh` beside each, as written out
@@ -166,8 +223,10 @@ dwelling on what they said before; the loan page and
 the other carries on, five times by 13 October, on either port, all
 with `fq`. Not the drives, the card or the server's software: the
 client's transmit side for the port stops for about 1.4 s and `fq`'s
-pacing then holds it at a trickle. Not seen in the 21 runs since,
-under any queueing. **Chase it if it shows again** (Mike):
+pacing then holds it at a trickle. **It showed again on 14 October**
+(port a, in the READ baseline above), with the client on `fq_codel`
+and lasting the 24 s to the end of the run, so pacing is not what
+holds it. **Chase it if it shows again** (Mike):
 `../SILENT-PORT.md` has the account and what to do, and
 `$L/silent-driver.sh` runs with both ends sampled.
 

@@ -18,9 +18,12 @@ was found.
 | `ct0-4x128-2` | 12:47 | a | second 48 | the client watcher's dump, 3 s in |
 | `prof-4x128-1` | 13:17 | a | second 56 | the server's cycles being recorded as it began |
 | `silent-1` | 15:47 | **b** | second 35 | both ends' counters five times a second, before and after |
+| `rwbase-ab-randread-1m-2` | 14 October, 06:17 | a | second 37 | both ends' sockets 1.3 s in; READs, the client on `fq_codel` |
 
-All are two ports at the two-port setting of the time, with `fq` on
-the client's ports (unpinned since; see below). 13 October: five events in about 50 two-port runs since
+All are two ports at the two-port setting of the time. The first
+five are WRITEs with `fq` on the client's ports (unpinned since; see
+below); the sixth is READs with the client on its default
+`fq_codel` (below). 13 October: five events in about 50 two-port runs since
 11:40 and none in the 20 before. In each the other port takes up
 load (35 to 38 GB/s) while the silent one is out.
 
@@ -153,8 +156,41 @@ the client on its default `fq_codel`, and nothing on the client is
 changed. The silent port is set aside again: chase it if it shows
 again.** All five events were with `fq`. What is known of it says
 pacing is what holds a port at a trickle once it has begun, so
-without `fq` an event should be shorter if it happens at all; that
-is expected and not shown.
+without `fq` an event was expected to be shorter. The sixth event
+says otherwise.
+
+## The sixth, on READs and without `fq` (14 October)
+
+In the READ baseline before the boot into 7.3 (`xeu-rig/rwbase.sh`,
+round 2 of 1 MiB random READs, two ports): port a's drives went from
+50 to 60% busy to under 5% at second 37, 22 s into what fio counted,
+with bursts back to 30 to 45% for a second or two, until the run
+ended at second 60. Port b's went up to 65 to 74% and carried 26.6
+GB/s; port a's run came to 12.0. Nothing in either kernel's log. It
+was the only such event in 18 runs that morning (seven loads, two
+rounds each on two ports, and four on one port).
+
+The harness's socket snapshots fell 1.3 s into it:
+
+- **The server, port a**: 15 of its 16 connections at a congestion
+  window of 1 with 370 to 540 segments unacknowledged (3 to 4 MB
+  each), the retransmission timer backed off to 0.84 to 1.34 s, and
+  nothing received from the client on any of them for 1.29 s, all
+  from the same moment.
+- **The client, port a**: round-trip estimates of 13 to 401 ms on
+  most connections (0.15 to 2 on the rest) and pacing rates of 0.4 to
+  650 Mbit/s, though `fq_codel` does not pace; last received 80 to
+  100 ms before.
+- **Port b at both ends**: round trips near 1.2 ms, timers at 0.2 s,
+  windows of 136 to 437.
+
+So, as in `silent-1`, the client's side of one port stopped reaching
+the server, every connection of the port at once, here while the
+server was the one sending the data. The server's TCP then sat in
+backed-off retransmission timeouts. Without `fq` it still lasted
+over 20 s, so pacing is not what holds it; the timers' backoff, on
+both ends, is the likelier hold. What stops the client's side is
+still not shown.
 
 ## If it shows again
 
