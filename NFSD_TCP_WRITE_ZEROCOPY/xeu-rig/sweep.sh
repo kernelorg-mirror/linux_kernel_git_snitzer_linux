@@ -70,6 +70,9 @@ while read -r entries rb writes st cells <&3; do
 	# were never told sustain less (2026-10-09: the stripe's loan 24 GB/s
 	# untrimmed, 28.7 after a trim).
 	[ -n "${TRIM:-}" ] && fstrim "$TRIM" 2>/dev/null
+	# CELL_REST=<s>: idle before the line, for drives that want it (20 s
+	# gives a tardis1 drive its fast region back).
+	[ -n "${CELL_REST:-}" ] && sleep $CELL_REST
 	budget=0; [ "$writes" -gt 0 ] && budget=$(( writes * CHARGE + RESERVE + 4 ))
 	rbp=$(( 131072 / PS + 1 )); [ "$rb" != - ] && rbp=$(( rb / PS + 1 ))
 	free=$(reg free); need=$(( budget + 16 * ${STEP_MOUNTS:-1} * rbp + 64 ))
@@ -104,7 +107,7 @@ while read -r entries rb writes st cells <&3; do
 			rm -f $o.$c.data
 			sleep 40
 		else
-			sleep 90
+			sleep $(( ${STEP_SECS:-120} - 30 ))
 		fi
 		s1=$(stat1); c1=$(cstat1); t1=$(tail_drops)
 		cy=-; ins=-

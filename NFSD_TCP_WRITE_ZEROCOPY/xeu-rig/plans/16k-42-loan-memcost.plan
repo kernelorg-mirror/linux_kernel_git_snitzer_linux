@@ -1,0 +1,11 @@
+# What a loaned byte asks of memory on the stand-in, against its budget:
+# the loan with 16, 8 and 4 WRITEs let in at once, and its copy, on
+# rx_buf_size=8192 at an MTU of 7792.  Cells of 50 s so that one drive's
+# 625 GB at full rate holds the stand-in's 11 GB/s, and 30 s of idle
+# before each.  memcost-log.sh runs beside it and memcost-read.py reads it
+# (../LOAN-PERFORMANCE.md).
+#     SGL_BACKING=/hs/nvme0/zcbudget-nvmet.img NULLB_MIB=16384 HW_ANY_MTU=1 RX_LINGER_US=50 PLACE=1 PRP_DIR=/hs/nvme0/zcbudget STEP_JOBS=16 STEP_BS=8M STEP_SECS=50 CELL_REST=30
+256 1048576 16 sgl step-on-n16
+256 1048576 0 sgl step-copy-n16
+256 1048576 8 sgl step-on-n16
+256 1048576 4 sgl step-on-n16
