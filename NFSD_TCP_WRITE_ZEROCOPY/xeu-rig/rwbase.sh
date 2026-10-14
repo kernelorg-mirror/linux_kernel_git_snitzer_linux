@@ -7,7 +7,7 @@
 # drives write through.  Two ports at the two-port setting, four drives a
 # port; then one port over all eight drives at the one-port setting.  Each
 # run is $L/rwbase-<tag>-<round>; a line of each goes to $L/rwbase-<build>.tsv.
-# About 25 min a round.
+# About 30 min a round.
 cd "$(dirname "$0")" || exit 1
 . ./common.sh
 B=${1:?build}; N=${2:-2}; T=$L/rwbase-$B.tsv
@@ -29,6 +29,8 @@ for r in $(seq 1 $N); do
 	two ab-randrw70-1m-$r  RW=randrw RWMIX=70 BS=1M
 	two ab-randrw70-4k-$r  RW=randrw RWMIX=70 BS=4k
 	two ab-write-8m-$r     RW=write
+	two ab-write-1m-$r     RW=write BS=1M
+	two ab-randwrite-1m-$r RW=randwrite BS=1M
 	one a8-read-8m-$r      RW=read
 	one a8-rw70-8m-$r      RW=rw RWMIX=70
 done
