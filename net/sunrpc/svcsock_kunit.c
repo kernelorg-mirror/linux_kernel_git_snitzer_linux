@@ -3163,8 +3163,21 @@ static void svcsock_rx_test_exit(struct kunit *test)
 	svc_tcp_rx_copy_below = svcsock_rx_saved_copy_below;
 }
 
+static int svcsock_rx_suite_init(struct kunit_suite *suite)
+{
+	svc_tcp_rx_kunit_save();
+	return 0;
+}
+
+static void svcsock_rx_suite_exit(struct kunit_suite *suite)
+{
+	svc_tcp_rx_kunit_restore();
+}
+
 static struct kunit_suite svcsock_rx_test_suite = {
 	.name = "sunrpc-svcsock-rx",
+	.suite_init = svcsock_rx_suite_init,
+	.suite_exit = svcsock_rx_suite_exit,
 	.init = svcsock_rx_test_init,
 	.exit = svcsock_rx_test_exit,
 	.test_cases = svcsock_rx_test_cases,
