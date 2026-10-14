@@ -1,22 +1,40 @@
 # AGENTS.md
 
-Direction for AI agents (and humans) working in this tree on the branches
-`kernel-7.1/hs-7.1.13-5.NFSD_TCP_WRITE_ZEROCOPY` and
-`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`.
+Direction for AI agents (and humans) working in this tree on the branch
+`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` and the 7.1 branches it came
+from.
 
 ## Branch workflow
 
 **Do not concern yourself with the Hammerspace twin branch (Mike,
-2026-10-10).** Work on `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`,
-which has everything needed for now. Do not carry changes to
-`kernel-7.1/hs-7.1.13-5.NFSD_TCP_WRITE_ZEROCOPY`, do not list "carry to
+2026-10-10).** Work on `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`
+(since 2026-10-14), which has everything needed for now. Do not carry
+changes to `kernel-7.1/hs-7.1.13-5.NFSD_TCP_WRITE_ZEROCOPY`, do not list "carry to
 the twin" as work owed, and do not raise it in reports. Porting to the
 full private Hammerspace kernel is not this work's concern until Mike
 says so. This overrides what the two entries below say about keeping
 the branches in step and about where development is done.
 
-- **`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`** carries the series on the
-  public `kernel-7.1.13/main`, rebased 2026-10-07 onto **`v7.1.13-21`** (the
+- **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` is the branch to work on**:
+  the series on the public `kernel-7.3/main`, rebased 2026-10-14 onto
+  **`v7.3-3`** (after `v7.3-rc7`): 442 commits, laid out as code, then KUnit interface, then
+  KUnit tests, then docs. `v7.3-3` already carries 15 of the series'
+  commits (the TLS control-record and alert fixes, the nfsd session-slot
+  fixes, receiving RPC records with `->read_sock`, and the two `bug/kunit`
+  warning-suppression commits), so the branch no longer has them. Five
+  commits were adapted to the new base, each with a `[snitzer: …]` note:
+  three for context `v7.3-3` changed (an include in `fs/nfsd/vfs.c` and in
+  `fs/nfsd/nfs3xdr.c`, and loop's direct-I/O alignment checks), one for
+  `struct bvec_iter`'s `bi_bvec_done` being renamed `bi_offset`, and one for
+  nfsd's status codes moving to `fs/nfsd/nfserr.h`. The tip before the
+  rebase, the same as the 7.1.13 branch's, is kept as
+  `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-rebase-v7.3-3`. Commit at
+  its tip.
+- **`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`** is the same series on
+  7.1.13, as regrouped and force-pushed on 2026-10-14 (`ea18d80f8bda`).
+  Build 464, which tardis1 runs until a 7.3 kernel is booted, was built
+  from it. It is on the public `kernel-7.1.13/main`, rebased 2026-10-07
+  onto **`v7.1.13-21`** (the
   whole series, laid out as code, then KUnit preparation, then KUnit
   tests, then docs; `v7.1.13-21` itself carries the write split's cut
   per end, the byte-counted split gate `direct_misaligned_min_bytes`,
@@ -174,9 +192,10 @@ and is not to be undone from older text (`svc_tcp_rx_lowat=0`, no
 `fq` on the client, the client reached at its management address
 10.20.12.106), what a loaned byte costs in memory as measured that
 evening (`NFSD_TCP_WRITE_ZEROCOPY/LOAN-PERFORMANCE.md`), and **the
-next step (Mike): the series is being rebased onto 7.3-rc7, and on
-that kernel the loan's memory-cost battery is to be run again with
-one-port and two-port copy mode beside it to show no regression**. The paragraphs below that name earlier starting points
+next step (Mike): the series is rebased onto `v7.3-3` (after
+7.3-rc7; done 2026-10-14, see "Branch workflow"), and on that kernel
+the loan's memory-cost battery is to be run again with one-port and
+two-port copy mode beside it to show no regression**. The paragraphs below that name earlier starting points
 are history.
 
 **Do not optimize copy mode at the loan's expense (Mike,
