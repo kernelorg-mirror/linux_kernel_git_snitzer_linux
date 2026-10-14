@@ -1,8 +1,9 @@
 # 13 October, evening: read this first
 
 Written at the end of 13 October on tardis1 (build 464, 16 KiB
-pages) as the handoff, and brought up to date late that night after
-the loan measurements and the loan page. Everything below this section is dated
+pages) as the handoff, brought up to date late that night after the
+loan measurements and the loan page, and on 14 October for the
+rebase onto `v7.3-3`. Everything below this section is dated
 history and says so; where it differs from this section, this
 section is right.
 
@@ -33,10 +34,17 @@ the drives' fast region:
   Nothing that adds parallelism around the copy moves it.
 - One port is at 95% of what its wire carries with no NFS (49.8).
 
-## Next: the same battery on the 7.3-rc7 rebase (Mike, 13 October)
+## Next: the same battery on the v7.3-3 rebase (Mike, 13 October)
 
-**Mike is rebasing the series onto a 7.3-rc7 kernel.** When tardis1
-is on it, run "The battery" at the end of `../LOAN-PERFORMANCE.md`
+**The series is rebased onto `v7.3-3`** (`kernel-7.3/main`, after
+7.3-rc7), on the branch `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`,
+done on 14 October. It compiles with no errors or warnings at the
+end of the code, of the KUnit interface and at the tip, and sunrpc
+and nfsd compile with `CONFIG_KUNIT` off; no kernel has been built
+from it to boot, and its KUnit suites have not been run. A 7.3
+`.config` is still to be made from build 464's (the client's
+7.3.0-0.rc7 kernel is the other starting point). When tardis1 is
+on it, run the KUnit suites, then "The battery" at the end of `../LOAN-PERFORMANCE.md`
 and lay each figure beside build 464's, which are in that table:
 
 1. `./memcost-cal.sh $L/memcost-cal-<build>`: the card and the drives
@@ -199,11 +207,13 @@ ports on `fq_codel`, the drives `write through`, the live
 taken down and up during the floor run, their interrupts placed
 again), the stand-in's modules loaded and idle.
 
-Mike pushes this branch to
+Build 464 was built from
 `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY-7.1.13-21.hs.464.loanpages_pool.el9.aarch64+16k`;
-at the end of 13 October it held all of that day's work.
-`origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY` itself was not
-pushed to that day and is at `e3e102675121`.
+at the end of 13 October that held all of that day's work. On 14
+October the series was regrouped (code, KUnit interface, KUnit tests,
+docs) and `origin/kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY` force-pushed
+at `ea18d80f8bda`; the same series was then rebased onto `v7.3-3` as
+`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`, where work goes on.
 
 # 12 October, 22:30, with 13 October's notes as they were added (history: the section above supersedes it)
 

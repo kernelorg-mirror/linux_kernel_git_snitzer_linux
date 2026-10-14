@@ -19,6 +19,16 @@ reproduction instructions for the "page-loan" patch series.
 > collapse geometry itself could not be forced on loopback, so an end-to-end
 > reproduction on a real NIC is still outstanding.
 >
+> **Branch state (2026-10-14):** the series is on
+> **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`**, rebased onto **`v7.3-3`**
+> (`kernel-7.3/main`, after 7.3-rc7) with `git cherry` dropping the 15
+> commits `v7.3-3` already carries: 442 commits as code, KUnit
+> interface, KUnit tests, docs. Five carry `[snitzer: …]` notes for the
+> new base, among them `struct bvec_iter`'s `bi_bvec_done` renamed
+> `bi_offset` and nfsd's status codes moved to `fs/nfsd/nfserr.h`;
+> `AGENTS.md` lists them. The 7.1.13 branch below is kept as it was
+> force-pushed that day (`ea18d80f8bda`).
+>
 > **Branch state (2026-10-02):** `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
 > is rebased onto **`v7.1.13-19`** (= `kernel-7.1.13/main`) with
 > `git rebase --onto kernel-7.1.13/main v7.1.13-14`: main was rebuilt, so
@@ -228,7 +238,9 @@ buffered I/O (the whole-iterator `nfsd_dio_iter_is_aligned()` check).
 
 Hammerspace Linux repo: `ssh://git@gitlab.lab.hammer.space:2222/engineering/linux.git`
 
-- **`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`** — **current** (2026-10-02):
+- **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`** — **current** (2026-10-14):
+  442 commits on `v7.3-3`, the public 7.3 branch. Development happens here.
+- **`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`** — current from 2026-10-02 to 2026-10-14:
   67 commits on `v7.1.13-19`, the public branch. Development happens here
   and is carried to the Hammerspace twin.
 - **`kernel-7.1/hs-7.1.13-19.NFSD_TCP_WRITE_ZEROCOPY`** — **current HS twin**

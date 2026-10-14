@@ -9,8 +9,8 @@ is what NVMe drives with SGLs are for when they come. The question
 here (Mike, 13 October) is how much memory a loaned byte uses, and
 so what bounds a loan on this machine.
 
-**This is to be run again, all of it, on the 7.3-rc7 kernel the
-series is about to be rebased onto (Mike, 13 October), with one-port
+**This is to be run again, all of it, on the series' rebase onto
+`v7.3-3` (after 7.3-rc7; Mike, 13 October), with one-port
 and two-port copy-mode runs beside it to show no regression.** So
 each step here is a script and a table that can be laid beside the
 next kernel's. "The battery" at the end is the list.
@@ -354,7 +354,7 @@ nothing of a drive.
 
 ## The battery, for this kernel and the next
 
-Run on build 464, and to be run again on the 7.3-rc7 rebase, each
+Run on build 464, and to be run again on the v7.3-3 rebase, each
 run inside the drives' fast region with `drives.txt` read first:
 
 | step | how | what to lay side by side |
