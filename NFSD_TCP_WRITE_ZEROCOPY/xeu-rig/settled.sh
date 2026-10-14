@@ -137,6 +137,13 @@ declare -A REST=(
 	[svc_tcp_rx_copy_below]=1024
 	[pools_per_node]=4
 )
+# Settings a later kernel no longer has: held where the kernel has them, and
+# reported, not failed, where it does not.  svc_tcp_rx_copy_unlocked was
+# removed after build 473 ("SUNRPC: Copy with the socket unlocked only when
+# records are claimed"): on 473 and before it is Y, as every figure there was
+# measured; without it a copy is made under the socket lock unless
+# svc_tcp_rx_copy_threads is 1 or more.
+declare -A GONE_LATER=([svc_tcp_rx_copy_unlocked]=1)
 # The xeu module's, set by /etc/modprobe.d/xeu.conf at load.
 declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128)
 declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
@@ -354,6 +361,10 @@ audit() {
 	audit_port a
 	audit_port b
 	for k in $(printf '%s\n' "${!EXPECT[@]}" | sort); do
+		if [ ! -e $SUNRPC/$k ] && [ -n "${GONE_LATER[$k]:-}" ]; then
+			printf '  --   %-34s %s\n' "sunrpc $k" "not in this kernel"
+			continue
+		fi
 		want "sunrpc $k" "$(cat $SUNRPC/$k 2>/dev/null)" "${EXPECT[$k]}"
 	done
 	for k in $(printf '%s\n' "${!XEU[@]}" | sort); do

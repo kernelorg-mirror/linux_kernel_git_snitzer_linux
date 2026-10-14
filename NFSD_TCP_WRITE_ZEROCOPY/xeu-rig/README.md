@@ -89,6 +89,15 @@ lines in `$L/b473/results-twoport-473.tsv`, the memory samples
 - What differs from 464's runs besides the kernel: the async
   interrupts on CPUs 1 and 57 (on 464 they sat on nfsd's 8 and 9),
   which fired no times, and nothing else `settled.sh` holds.
+- **These runs copied with the socket unlocked**
+  (`svc_tcp_rx_copy_unlocked=Y`, the default on 464 and 473). The knob
+  is gone from the code after build 473 (Mike, 14 October; "SUNRPC:
+  Copy with the socket unlocked only when records are claimed"): a
+  kernel built from the tip copies under the lock unless
+  `svc_tcp_rx_copy_threads` is 1 or more. On 464 the two carried the
+  same (43.6 and 43.5 against 43.6, one port), so the next build's
+  figures should match these; `settled.sh` reports the knob as not in
+  that kernel rather than failing on it.
 
 ## Reads and mixes: the 7.1.13 baseline (build 464, 14 October)
 

@@ -2975,6 +2975,12 @@ and pins those; threads added after it are on all CPUs, so `taskset
 
 ### The copy outside the socket lock (11 October, 11:25 to 12:00)
 
+**Removed after build 473 (14 October, Mike):** `svc_tcp_rx_copy_unlocked`
+is gone. It gained nothing by itself (below) and `svc_tcp_rx_copy_threads`,
+the feature it led to, is off, so a copy is now made with the socket
+unlocked only when `svc_tcp_rx_copy_threads` is 1 or more, and under the
+lock otherwise. Builds 464 and 473 ran with it on.
+
 "SUNRPC: Copy a received TCP record with the socket unlocked": the
 actor clones the skb, drops the socket lock, copies from the clone and
 takes the lock again. Unread data stays charged to the socket until it
