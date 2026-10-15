@@ -101,6 +101,96 @@ the other seven). After a reboot they have rested; still read
 night used `WARM=10 RUNTIME=30 REST=120`, and nvme3 still stepped down
 once at 34 s on two ports).
 
+## Build 474: steps 1 to 4 done, no regression (15 October)
+
+Build 474 (`7.3.0-0.rc7.3.hs.474.loanpages_pool.el9.aarch64+16k`) is
+the reworked tree: `modinfo` says "(default: N)" for
+`svc_tcp_rx_loan_pages`. It has neither of the two `.73rebase9`
+changes. The runs are in `$L` (`/var/tmp/zc-run-logs`); the driver is
+`$L/b474/battery.sh`, which runs 473's `resume.sh` steps 3 and 4
+unchanged but for the build number, and its log is
+`$L/b474/battery.log`. Every audit came back at the settled setting,
+and the host was left at it.
+
+- **Steps 1 and 2.** On a fresh boot `settled.sh apply` refuses at
+  once ("enp161s0f0 does not have 4 rings"). The ports come first:
+  `./bringup.sh 32768 256` and `./port-setup.sh enp164s0f0 56`, as
+  "The rules" says, then `./settled.sh apply` ends in "the settled
+  setting" with `svc_tcp_rx_loan_pages` at Y.
+- **Step 3: the KUnit suites pass on the reworked tree**, 7, 46, 6
+  and 10 cases with no failure and no skip, as on 473
+  (`$L/kunit-474.log`). `run-kunit.sh` put the server and the setting
+  back.
+- **Step 4: copy mode**, 10:38 to 11:01 by tardis1's clock, with
+  `memcost-log.sh` beside each run (`$L/b474-<tag>`, their lines in
+  `$L/b474/results-twoport-474.tsv`, memory samples
+  `$L/b474/copymem-<tag>`):
+
+  | | build 474: GB/s | bytes through memory for each byte of payload | drives | build 473 |
+  |---|---|---|---|---|
+  | two ports, `ab-1` to `-3` | **59.76**, 59.56, 59.18 (ports 29.3 + 30.5, 30.4 + 29.1, 29.6 + 29.6) | 2.19, 2.17, 2.23 | nvme2 stepped down at 43 s in `ab-1` | 59.27, 59.36; 2.25, 2.23 |
+  | one port a, eight drives, `a8-1` to `-3` | 41.62, 45.02, **47.62** | 1.38, 1.44, 1.39 | three stepped down in each of `a8-1` and `a8-2`; none in `a8-3` | 46.77, 45.98, 47.59 |
+  | one port b, eight drives, `b8-1` to `-3` | **47.18**, 46.17, 46.00 | 1.42, 1.42, 1.42 | none in `b8-1`; three in `b8-2`, nvme2 in `b8-3` | 47.76, 47.54, 47.06 |
+
+  Two ports carry what 473 carried, at a little less memory for each
+  byte; still about 1% under 464's mean of 60.24. One port: the two
+  runs in which no drive stepped down (47.62, 47.18) are inside 473's
+  range, and in the others the wire carried 46.8 to 48.0 GB/s in the
+  read window, so the drives decide those totals, not the kernel.
+- **The drives are still tired after the reboot.** nvme2 or nvme3
+  stepped down in five of the nine copy runs, nvme3 as early as 28 s
+  (`a8-1`, the first one-port run after the three two-port runs): its
+  drives wrote 453 to 520 GB each at 2.3 to 5.0 GB/s, where 473's
+  `a8-1` wrote 523 each at 5.8 to 5.9 with none stepping down. Rest
+  between runs was the harness's default (`REST=30`). Rest alone did
+  not restore them; a trim of the data drives, or runs on seven drives
+  without nvme3 as on 14 October, is the next thing to try.
+- **Step 4: the loan**, the three plans through `sweep.sh` exactly as
+  on 473 (`CELL_BOUNCE=1` for all three), 11:01 to 12:01. Runs
+  `$L/xeu-16k-474-loanmem-1` to `-3`, memory samples
+  `$L/loanmem-474-<n>`, readings `$L/loanmem-474-<n>.read.txt`:
+
+  | rings, held buffer | WRITEs let in | build 474: GB/s | bytes through memory for each byte of payload | ring drops | build 473: GB/s, bytes, drops |
+  |---|---|---|---|---|---|
+  | 256, 1 MiB | 16 | 11.74 | 3.92 | 0 | 11.74, 4.01, 0 |
+  | 256, 1 MiB | 8 | 11.74 | 2.91 | 0 | 11.72, 2.99, 0 |
+  | 256, 1 MiB | 4 | 10.55 | 2.04 | 0 | 10.65, 2.37, 0 |
+  | 256, 1 MiB | copy | 10.40 | 5.73 | 8 | 10.44, 5.97, 0 |
+  | 128, 384 KiB | 8 | 11.73 | 2.04 | 0 | 11.73, 2.14, 1 |
+  | 128, 384 KiB | 4 | 9.08 | 1.01 | 0 | 8.45, 1.11, 0 |
+  | 128, 384 KiB | copy | 10.39 | 5.20 | 0 | 10.49, 5.11, 5 |
+  | 128, 256 KiB | 8 | 11.70, 11.72 | 1.78, 1.78 | 0, 0 | 11.66, 1.86, 0; 11.70, 1.78, 0 |
+  | 128, 256 KiB | 6 | 10.51 | 1.25 | 0 | 9.90, 1.42, 0 |
+  | 128, 256 KiB | 4 | 7.65 | 0.77 | 0 | 7.44, 1.01, 0 |
+  | 128, 256 KiB | copy | 10.43 | 5.09 | 0 | 10.41, 4.96, 0 |
+  | 128, 192 KiB | 8 | 11.60 | 1.63 | 0 | 11.50, 1.72, 0 |
+  | 128, 128 KiB | 8 | 11.31 | 1.42 | 0 | 10.74, 1.68, 0 |
+  | 64, 256 KiB | 8 | 11.71 | 1.32 | 12,374 | 11.63, 1.42, 13,509 |
+  | 64, 192 KiB | 8 | 11.51 | 1.20 | 2,243 | 11.46, 1.38, 3,216 |
+  | 64, 128 KiB | 8 | 10.63 | 1.14 | 1 | 10.48, 1.24, 1 |
+  | 64, 128 KiB | 6 | 8.34 | 0.68 | 0 | 8.24, 0.79, 0 |
+  | 64, 128 KiB | copy | 10.47 | 4.72 | 0 | 10.48, 4.72, 0 |
+
+  The loan on 474 is 473's: the same rates within about 1% in most
+  cells, three cells better (rings of 128 with 384 KiB and 4 WRITEs,
+  256 KiB and 6, 128 KiB and 8), and its cost in memory level or
+  lower everywhere, to a floor of 1.14 (1.24 on 473). Every loaned
+  WRITE was written direct (`wr_direct`, none buffered or
+  `wr_dontcache`) and none held more than it was charged (`overrun`
+  0). One run of each cell on each build; the differences are not
+  looked into.
+- **Step 5 is ready for Mike.** `sunrpc.ko` from the branch (sunrpc
+  at `67a5625f68bb`), with the window clamp put back to the
+  `TCP_WINDOW_CLAMP` socket option for the build only (reverted
+  afterwards, nothing committed), is at
+  `$L/sunrpc-474-lowat/sunrpc/sunrpc.ko`; all 326 of the installed
+  module's exports match, so nfsd loads against it. To put it in:
+  `./swap-sunrpc.sh $L/sunrpc-474-lowat`, then compare it with this
+  kernel's own sunrpc at `svc_tcp_rx_lowat=131072
+  svc_tcp_rx_keep=1`. `build-sunrpc.sh` complains that it cannot copy
+  `include/trace/events/sunrpc_base.h`, which 7.3 does not have; the
+  build is not affected.
+
 ## Still Mike's to decide
 
 Dropping the first three code commits (the stacking device's DMA
