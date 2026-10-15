@@ -513,6 +513,120 @@ the changes made on purpose: loans off by default, a tagged COMPOUND
 keeping its loan, the reply cache checksum from a stack buffer,
 `pc_xdr_bvec` a bool, no unused include, and the comments.
 
+## Step 6: what runs in practice (15 October)
+
+Mike asked how much of the code group is dead in practice: many of its
+features are off by default, and the low-water mark is not used at the
+settled setting. The survey in step 1 sorted the knobs by their
+defaults and intent. This step sorts the 39 code commits on the branch
+(the 38 of step 5 and "SUNRPC: Bound the pages TCP sockets keep for
+exchange with threads") by what runs, first by reading the code and
+the rig, then (pending) by counting calls on tardis1.
+
+The numbers are the commits' order in the code group today
+(`git log --reverse v7.3-3..` without the KUnit and docs commits; 39 is
+the spare bound).
+
+**What the rig runs**, checked on tardis1 on build 474 and against
+`xeu-rig/settled.sh`:
+
+- NFSv3 (`vers=3`) for every copy run (`twoport.sh`) and for the loan
+  step cells (`run-budget.sh`'s step cells); NFSv4.2 only in the
+  harness's "mixed" cell, which the rig does not run.
+- No MD since 12 October (each drive has its own XFS), no loop device,
+  no veth ("Run nothing on veth").
+- nfsd writes direct (`io_cache_write=2`).
+- `svc_tcp_rx_loan_pages=Y`, but the budget is 0, so every record is
+  copied. Loans are made only in `sweep.sh`'s loan cells, which force a
+  budget.
+
+### Never run on this rig, in any mode
+
+| # | commit | why |
+|---|---|---|
+| 1 | block: let a stacking device inherit its members' DMA alignment | no MD or device-mapper since 12 October |
+| 3 | veth: add rx_ip_align | no veth on a boot that uses the card |
+| 4, 9 | loop: the virtual boundary, and the segment boundary from the backing file | no loop device; 4 fixes mainline (`6c8dec275ccc`) |
+| 10 | NFSD: Save the LAYOUTRETURN body when it is decoded into scratch | pNFS only; fixes mainline (`645fcad37142`) |
+| 18, 19 | NFSD: the saved argument, and receive bvecs for NFSv4 COMPOUND | the rig is NFSv3; the nfsd4 KUnit suite covers them |
+| 37 | SUNRPC: Optionally raise SO_RCVLOWAT while a TCP record is incomplete | `svc_tcp_rx_lowat=0`: the mark costs about 3 GB/s on two ports and adds wakeups on one (13 October; again on build 474, `xeu-rig/README.md`) |
+| 38 | SUNRPC: Optionally copy TCP record data outside the socket lock | `svc_tcp_rx_copy_threads=0`: level with the copy under the lock on one port (45.81 against 45.40 GB/s, 14 October) |
+
+### Run only when a record is loaned
+
+11, 12, 16, 17, 20, 21, 24, 31, 33, the budget and credit half of 30,
+and the charge half of 35. They run in the loan cells, never at the
+settled copy setting, and with upstream's defaults (loans off, no
+region) never at all. They are the series' purpose, and the loan is to
+stay as fast as it can be for NVMe drives with SGLs (Mike, 13
+October), so they are not dead; but nothing in daily use on tardis1
+exercises them, and only the loan plans through `sweep.sh` and the
+KUnit suites do.
+
+### Run at the settled copy setting
+
+| # | commit | what it does there |
+|---|---|---|
+| 25, 26, 27, 28 | page_pool: the fixed receive region, its helpers, last-in-first-out recycling | every receive buffer of both ports comes from the region |
+| 29 | tcp: let a kernel socket cap its receive window | holds the receive window to the held buffer |
+| 30 | SUNRPC: Bound TCP receive loans with a region page budget | its held receive buffer (`svc_tcp_rx_rcvbuf`: 1 MiB on one port, 384 KiB on two); the budget itself is 0 |
+| 35 | SUNRPC: Learn the region costs of loans and held receive buffers | the held buffer's factor |
+| 32, 39 | SUNRPC: swap pages with the socket on a partial record; bound what sockets keep | every record received in pieces |
+| 34 | SUNRPC: Optionally wait for the rest of a partially received TCP record | `svc_tcp_rx_linger_us=50` on one port; 0 on two |
+| 36 | SUNRPC: Optionally avoid waking a thread after a short TCP receive | `svc_tcp_rx_keep=Y` |
+| 2 | SUNRPC: Allow more than one thread pool per NUMA node | `pools_per_node=4` |
+| 15 | NFSD: Checksum a cached call's header through the XDR reader | every NFSv3 WRITE goes through the reply cache |
+| 5 to 8, 13, 23 | the direct I/O segment boundary: statx, block, xfs, nfsd's file attributes; nfs_common's per-bvec check | queried on each file open and checked on each direct write |
+| 14, 22 | nfs_common: the interior gaps of a direct write's payload | checked on every direct write, but a copied payload is whole pages and has none; only a loan's has (to be confirmed by the counts) |
+
+**The held receive buffer, which copy mode's figures rest on, is
+applied only to transports that receive region pages** ("Hold the
+receive buffer only on transports that receive region pages", folded
+into 30). So the region is part of copy mode on this rig, not only of
+the loan.
+
+**With upstream's defaults** (loans off, `rx_region_pages=0`, every
+`svc_tcp_rx_*` knob at 0 or N, `pools_per_node=1`), the series changes
+the behaviour of a server only through 5 to 8, 13 and 23 (the segment
+boundary reported and used), 15 (the reply cache checksum), and 32
+and 39 (the page swap and its bound). The rest is inert until it is
+configured.
+
+### What follows from it
+
+- **To drop, Mike's to decide** (the open question in `AGENTS.md`):
+  37 and 38, off by default and measured to carry nothing; 3, for the
+  rig only and not used on the card; and 1 unless Hammerspace's
+  product stacks MD or device-mapper over its drives.
+- **In use but never shown to earn their place on their own**:
+  `pools_per_node=4` (2; "written, not shown to work" in
+  `XEU_CONVERGENCE.md`), `svc_tcp_rx_keep=Y` (36; pinned on 12 October
+  together with the mark, and its effect on rate never measured apart
+  from it), and the 50 us linger on one port (34; its own account is
+  "Is the linger worth its CPU" in `xeu-rig/README.md`). Each wants an
+  A/B at the settled setting, on and off by turns, before it goes
+  upstream as something a server is told to set.
+- **Fixes to mainline that this rig does not exercise** (4, 9, 10):
+  not dead; they can go upstream on their own, apart from the series.
+
+### The counts (pending)
+
+`/var/tmp/zc-run-logs/b474cov/cov.sh`, queued on tardis1 after the
+spare-bound runs: the tip's sunrpc (`sunrpc-474-spare`, built
+against build 474) swapped in, and bpftrace counting calls to 91
+functions (`b474cov/funcs.txt`, each with its commit): every probeable
+function a code commit adds, and a few existing ones a commit changes
+(`nfs_dio_split`, `nfsd_cache_lookup`, `nfsd_cache_csum`,
+`nfsd_file_get_dio_attrs`, the statx ones, `blk_set_stacking_limits`,
+`svc_tcp_restore_pages` and `svc_tcp_save_pages`). Three loads at the
+settled setting: one port with the linger, two ports, and the loan cell
+of rings 128, a 256 KiB held buffer and 8 WRITEs. The table is
+`b474cov/coverage.txt`. A count says a function was called, not that
+the commit's new branch inside it was taken; for the commits that
+change existing functions behind a knob, the knob's setting above
+decides. Inlined functions cannot be counted (44 of those the
+commits add, among them `svc_tcp_spare_release()`).
+
 ## Next steps
 
 1. Mike reviews the survey and the first order.
