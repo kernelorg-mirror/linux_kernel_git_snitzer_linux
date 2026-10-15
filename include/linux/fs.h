@@ -2005,6 +2005,8 @@ enum fs_update_time {
 	FS_UPD_CMTIME,
 };
 
+typedef unsigned int __bitwise iop_flags_t;
+
 struct inode_operations {
 	struct dentry * (*lookup) (struct inode *,struct dentry *, unsigned int);
 	const char * (*get_link) (struct dentry *, struct inode *, struct delayed_call *);
@@ -2050,7 +2052,40 @@ struct inode_operations {
 	struct offset_ctx *(*get_offset_ctx)(struct inode *inode);
 	struct dentry *(*mkdir2) (struct mnt_idmap *, struct inode *,
 				  struct dentry *, umode_t, unsigned int);
+	iop_flags_t iop_flags;
 } ____cacheline_aligned;
+
+/*
+ * ->atomic_open() may be called with the parent directory's i_rwsem held
+ * shared even when O_CREAT is set.  A filesystem setting this accepts that,
+ * for such an open, the only exclusion against another opener of the same
+ * name is the in-lookup state of the dentry it is given:
+ *
+ *  - that dentry is always in-lookup (DCACHE_PAR_LOOKUP), so a concurrent
+ *    d_alloc_parallel() for the name finds it and waits on it;
+ *  - it must be hashed only through d_add() or d_splice_alias(), which end
+ *    the in-lookup state under the parent's i_dir_seq (d_add_ci() leaves it
+ *    unhashed and publishes the case-exact name instead).  Hashing it
+ *    with d_rehash() instead loses the exclusion: the name becomes findable
+ *    without the in-lookup state ending, so a concurrent d_alloc_parallel()
+ *    neither waits nor retries and a second dentry for the name can be
+ *    hashed;
+ *  - d_drop() on it does not break that: it unhashes from the main hash
+ *    only, leaving the in-lookup hash entry and the waiters in place;
+ *  - no other directory-modifying operation becomes concurrent.  ->create,
+ *    ->link, ->unlink, ->symlink, ->mkdir, ->rmdir, ->mknod and ->rename
+ *    still run with i_rwsem held exclusive, so an O_CREAT open is
+ *    serialized against all of them.  It runs concurrently with other
+ *    O_CREAT opens, with an ->atomic_open() for the same or another name
+ *    without O_CREAT, and with ->lookup() and ->iterate_shared(), which
+ *    already run with i_rwsem held shared.
+ *
+ * Ignored unless the filesystem also provides ->atomic_open, and ignored on
+ * a superblock with SB_I_NAMES_COLLIDE set in ->s_iflags: there the in-lookup
+ * state of "foo" does not exclude a create of "FOO", which the filesystem
+ * may make the same entry, so the parent is taken exclusive.
+ */
+#define IOPF_ATOMIC_OPEN_CREATE_SHARED	((__force iop_flags_t)(1 << 0))
 
 /* Did the driver provide valid mmap hook configuration? */
 static inline bool can_mmap_file(struct file *file)
