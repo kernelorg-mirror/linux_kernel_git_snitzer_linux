@@ -51,6 +51,7 @@
 #include <linux/key.h>
 #include <linux/bitmap.h>
 #include <linux/jump_label.h>
+#include <kunit/visibility.h>
 
 #include <linux/sunrpc/types.h>
 #include <linux/sunrpc/clnt.h>
@@ -74,7 +75,8 @@
  * compound) costs less to copy than a loaned receive page, and a loan
  * would pin that page until the RPC completes, storage waits included.
  */
-static unsigned int svc_tcp_rx_copy_below __read_mostly = 1024;
+VISIBLE_IF_KUNIT unsigned int svc_tcp_rx_copy_below __read_mostly = 1024;
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_copy_below);
 module_param(svc_tcp_rx_copy_below, uint, 0644);
 MODULE_PARM_DESC(svc_tcp_rx_copy_below,
 		 "Copy, rather than loan, whole RPC records of at most this many bytes (0: loan all)");
@@ -84,6 +86,46 @@ static bool svc_tcp_rx_small_record(struct svc_sock *svsk)
 	return svc_sock_final_rec(svsk) && !svsk->sk_datalen &&
 	       svc_sock_reclen(svsk) <= READ_ONCE(svc_tcp_rx_copy_below);
 }
+
+#if IS_ENABLED(CONFIG_KUNIT)
+static enum svc_tcp_rx_kunit_fault svc_tcp_rx_kunit_fault;
+static unsigned int svc_tcp_rx_kunit_fault_skip;
+static u32 svc_tcp_rx_kunit_fault_acquired;
+static u32 svc_tcp_rx_kunit_fault_released;
+
+void svc_tcp_rx_kunit_fault_set(enum svc_tcp_rx_kunit_fault fault,
+				unsigned int skip)
+{
+	svc_tcp_rx_kunit_fault = fault;
+	svc_tcp_rx_kunit_fault_skip = skip;
+	svc_tcp_rx_kunit_fault_acquired = 0;
+	svc_tcp_rx_kunit_fault_released = 0;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_fault_set);
+
+void svc_tcp_rx_kunit_fault_observed(u32 *acquired, u32 *released)
+{
+	*acquired = svc_tcp_rx_kunit_fault_acquired;
+	*released = svc_tcp_rx_kunit_fault_released;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_fault_observed);
+
+static bool
+svc_tcp_rx_kunit_should_fail(enum svc_tcp_rx_kunit_fault fault,
+			     const struct svc_tcp_rx_state *state)
+{
+	if (svc_tcp_rx_kunit_fault != fault)
+		return false;
+	if (svc_tcp_rx_kunit_fault_skip) {
+		svc_tcp_rx_kunit_fault_skip--;
+		return false;
+	}
+	svc_tcp_rx_kunit_fault = SVC_TCP_RX_KUNIT_FAULT_NONE;
+	svc_tcp_rx_kunit_fault_acquired = state->refs_acquired;
+	svc_tcp_rx_kunit_fault_released = state->refs_released;
+	return true;
+}
+#endif
 
 /*
  * For UDP:
@@ -211,13 +253,21 @@ static unsigned int svc_tcp_rx_budget_default_reserve;
 /* What a receive buffer is held to before anything has been measured. */
 #define SVC_TCP_RX_CREDIT_FACTOR_UNLEARNED	150U
 
+/* The KUnit suite fixes the factor, to have charges it can count. */
+#if IS_ENABLED(CONFIG_KUNIT)
+static unsigned int svc_tcp_rx_kunit_factor;
+#define svc_tcp_rx_fixed_factor()	READ_ONCE(svc_tcp_rx_kunit_factor)
+#else
+#define svc_tcp_rx_fixed_factor()	0U
+#endif
+
 static unsigned int svc_tcp_rx_rcvbuf;
 static void svc_tcp_rx_budget_apply_all(void);
 static bool svc_tcp_rx_hold_stale(struct svc_sock *svsk);
-static void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
-					unsigned int truesize,
-					unsigned int skb_len,
-					unsigned int used);
+VISIBLE_IF_KUNIT void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
+						  unsigned int truesize,
+						  unsigned int skb_len,
+						  unsigned int used);
 
 /* A clamp below SVC_TCP_RX_RCVBUF_MIN turns every budget off. */
 static int svc_tcp_rx_rcvbuf_set(const char *val,
@@ -280,6 +330,22 @@ static void svc_tcp_spare_release(struct svc_sock *svsk, unsigned int n)
 	svsk->sk_spare_pages -= n;
 	atomic_long_sub(n, &svc_tcp_spare_pages);
 }
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/* Set svc_tcp_spare_bytes_max; returns what it was. */
+unsigned long svc_tcp_spare_kunit_set_max(unsigned long bytes)
+{
+	return xchg(&svc_tcp_spare_bytes_max, bytes);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_spare_kunit_set_max);
+
+/* The pages all sockets keep for exchange. */
+long svc_tcp_spare_kunit_pages(void)
+{
+	return atomic_long_read(&svc_tcp_spare_pages);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_spare_kunit_pages);
+#endif
 
 /*
  * The region budget bounds loans; only svc_tcp_rx_rcvbuf bounds unread data. A
@@ -679,6 +745,110 @@ void svc_tcp_rx_budget_net_exit(struct net *net)
 	kfree(c);
 }
 
+#if IS_ENABLED(CONFIG_KUNIT)
+static bool svc_tcp_rx_budget_kunit_nowake;
+
+static void svc_tcp_rx_cost_forget(struct svc_tcp_rx_budget *c)
+{
+	spin_lock_bh(&c->lock);
+	WRITE_ONCE(c->cost_factor, 0);
+	WRITE_ONCE(c->hold_factor, 0);
+	c->cost_peak = 0;
+	c->cost_last_peak = 0;
+	c->cost_records = 0;
+	spin_unlock_bh(&c->lock);
+}
+
+void svc_tcp_rx_budget_kunit_configure(unsigned int pages,
+				       unsigned int reserve,
+				       unsigned int factor)
+{
+	WRITE_ONCE(svc_tcp_rx_budget_pages, pages);
+	WRITE_ONCE(svc_tcp_rx_budget_reserve, reserve);
+	WRITE_ONCE(svc_tcp_rx_kunit_factor, factor);
+	WRITE_ONCE(svc_tcp_rx_rcvbuf, pages ? SVC_TCP_RX_RCVBUF_MIN : 0);
+	svc_tcp_rx_budget_kunit_nowake = pages != 0;
+	/* Each test starts with nothing learned. */
+	svc_tcp_rx_cost_forget(svc_tcp_rx_budget_initial());
+	svc_tcp_rx_cost_forget(&svc_rx_budget_default);
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	svc_tcp_rx_loans_update_locked();
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_configure);
+
+void svc_tcp_rx_budget_kunit_rcvbuf(unsigned int bytes)
+{
+	WRITE_ONCE(svc_tcp_rx_rcvbuf, bytes);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_rcvbuf);
+
+void svc_tcp_rx_budget_kunit_default(unsigned int pages, unsigned int reserve)
+{
+	WRITE_ONCE(svc_tcp_rx_budget_default_pages, pages);
+	WRITE_ONCE(svc_tcp_rx_budget_default_reserve, reserve);
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	svc_tcp_rx_loans_update_locked();
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_default);
+
+/* Set the initial namespace's budget as its parameter does, waking freely. */
+int svc_tcp_rx_budget_kunit_set(unsigned int pages)
+{
+	svc_tcp_rx_budget_kunit_nowake = false;
+	return svc_tcp_rx_budget_set(svc_tcp_rx_budget_initial(), pages);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_set);
+
+/*
+ * The suites run in a live kernel, whose nfsd serves from these settings:
+ * keep them as a suite found them and put them back when it ends.
+ */
+static struct {
+	unsigned int rcvbuf;
+	unsigned int budget_pages;
+	unsigned int budget_reserve;
+	unsigned int factor;
+	unsigned int default_pages;
+	unsigned int default_reserve;
+	bool nowake;
+} svc_tcp_rx_kunit_saved;
+
+void svc_tcp_rx_kunit_save(void)
+{
+	svc_tcp_rx_kunit_saved.rcvbuf = READ_ONCE(svc_tcp_rx_rcvbuf);
+	svc_tcp_rx_kunit_saved.budget_pages = READ_ONCE(svc_tcp_rx_budget_pages);
+	svc_tcp_rx_kunit_saved.budget_reserve = READ_ONCE(svc_tcp_rx_budget_reserve);
+	svc_tcp_rx_kunit_saved.factor = READ_ONCE(svc_tcp_rx_kunit_factor);
+	svc_tcp_rx_kunit_saved.default_pages =
+		READ_ONCE(svc_tcp_rx_budget_default_pages);
+	svc_tcp_rx_kunit_saved.default_reserve =
+		READ_ONCE(svc_tcp_rx_budget_default_reserve);
+	svc_tcp_rx_kunit_saved.nowake = svc_tcp_rx_budget_kunit_nowake;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_save);
+
+void svc_tcp_rx_kunit_restore(void)
+{
+	WRITE_ONCE(svc_tcp_rx_rcvbuf, svc_tcp_rx_kunit_saved.rcvbuf);
+	WRITE_ONCE(svc_tcp_rx_budget_pages, svc_tcp_rx_kunit_saved.budget_pages);
+	WRITE_ONCE(svc_tcp_rx_budget_reserve, svc_tcp_rx_kunit_saved.budget_reserve);
+	WRITE_ONCE(svc_tcp_rx_kunit_factor, svc_tcp_rx_kunit_saved.factor);
+	WRITE_ONCE(svc_tcp_rx_budget_default_pages,
+		   svc_tcp_rx_kunit_saved.default_pages);
+	WRITE_ONCE(svc_tcp_rx_budget_default_reserve,
+		   svc_tcp_rx_kunit_saved.default_reserve);
+	svc_tcp_rx_budget_kunit_nowake = svc_tcp_rx_kunit_saved.nowake;
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	svc_tcp_rx_loans_update_locked();
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+	svc_tcp_rx_kunit_fault_set(SVC_TCP_RX_KUNIT_FAULT_NONE, 0);
+	svc_tcp_rx_budget_apply_all();
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_restore);
+#endif
+
 /*
  * Apply changed parameters at once.  Records in flight keep the credit they
  * hold and return it to the new configuration when they end, so with records
@@ -712,11 +882,11 @@ static bool svc_tcp_rx_budget_configure_locked(struct svc_tcp_rx_budget *c)
 
 /*
  * The pages per 100 of record a record of @c is charged at admission: what
- * @c has learned, or 0 while it has learned nothing.
+ * @c has learned, or 0 (a KUnit test's fixed factor goes before it).
  */
 static unsigned int svc_tcp_rx_cost_factor(const struct svc_tcp_rx_budget *c)
 {
-	return READ_ONCE(c->cost_factor);
+	return svc_tcp_rx_fixed_factor() ?: READ_ONCE(c->cost_factor);
 }
 
 static u32 svc_tcp_rx_credit_cost(const struct svc_tcp_rx_budget *c,
@@ -853,6 +1023,10 @@ static struct svc_sock *svc_tcp_rx_credit_wake_locked(struct svc_tcp_rx_budget *
 {
 	struct svc_sock *head = svc_tcp_rx_credit_head(c);
 
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (svc_tcp_rx_budget_kunit_nowake)
+		return NULL;
+#endif
 	if (!head || (c->budget && c->avail + c->reserve <= 0))
 		return NULL;
 	if (c->budget && !list_empty(&c->inflight) &&
@@ -970,7 +1144,7 @@ static bool svc_tcp_rx_budget_none(struct svc_sock *svsk)
 	return svc_tcp_rx_budget_zero(svc_tcp_rx_budget_for(svsk));
 }
 
-static void svc_tcp_rx_credit_forget(struct svc_sock *svsk);
+VISIBLE_IF_KUNIT void svc_tcp_rx_credit_forget(struct svc_sock *svsk);
 
 /*
  * The budget @svsk would draw on is 0: its region records are copied, so
@@ -1060,14 +1234,31 @@ deny:
 	return false;
 }
 
+#if IS_ENABLED(CONFIG_KUNIT)
+/* The copy check and the admission, each looking up the budget itself. */
+bool svc_tcp_rx_budget_copy(struct svc_sock *svsk)
+{
+	return svc_tcp_rx_budget_copy_from(svsk, svc_tcp_rx_budget_for(svsk));
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_copy);
+
+bool svc_tcp_rx_credit_admit(struct svc_sock *svsk,
+			     struct svc_tcp_rx_state *state, u32 reclen)
+{
+	return svc_tcp_rx_credit_admit_to(svsk, svc_tcp_rx_budget_for(svsk),
+					  state, reclen);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_credit_admit);
+#endif
+
 /*
  * Before an admitted record consumes an skb: make sure its credit covers the
  * region pages @need more could hold.  False: pause the record at this skb
  * boundary; the transport is woken when credit returns.
  */
-static bool svc_tcp_rx_credit_charge(struct svc_sock *svsk,
-				     struct svc_tcp_rx_state *state,
-				     u32 need)
+VISIBLE_IF_KUNIT bool svc_tcp_rx_credit_charge(struct svc_sock *svsk,
+					       struct svc_tcp_rx_state *state,
+					       u32 need)
 {
 	struct svc_tcp_rx_budget *c = state->credit_budget;
 	u32 held = state->region_count + need;
@@ -1118,9 +1309,10 @@ static bool svc_tcp_rx_credit_charge(struct svc_sock *svsk,
 	svc_tcp_rx_credit_wake(wake);
 	return !want;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_credit_charge);
 
 /* Return a record's credit; exactly once, from every terminal path. */
-static void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state)
+VISIBLE_IF_KUNIT void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state)
 {
 	struct svc_tcp_rx_budget *c;
 	struct svc_sock *wake;
@@ -1144,6 +1336,7 @@ static void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state)
 	spin_unlock_bh(&c->lock);
 	svc_tcp_rx_credit_wake(wake);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_credit_release);
 
 /*
  * A record whose loaned pages could not be accounted for is abandoned, its
@@ -1173,7 +1366,7 @@ static void svc_tcp_rx_credit_orphan(struct svc_tcp_rx_state *state)
 }
 
 /* A transport going away stops waiting. */
-static void svc_tcp_rx_credit_forget(struct svc_sock *svsk)
+VISIBLE_IF_KUNIT void svc_tcp_rx_credit_forget(struct svc_sock *svsk)
 {
 	struct svc_tcp_rx_budget *c = READ_ONCE(svsk->sk_budget);
 	struct svc_sock *wake;
@@ -1186,6 +1379,33 @@ static void svc_tcp_rx_credit_forget(struct svc_sock *svsk)
 	spin_unlock_bh(&c->lock);
 	svc_tcp_rx_credit_wake(wake);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_credit_forget);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+long svc_tcp_rx_budget_avail(void)
+{
+	return READ_ONCE(svc_tcp_rx_budget_initial()->avail);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_avail);
+
+unsigned int svc_tcp_rx_budget_cost_factor(void)
+{
+	return READ_ONCE(svc_tcp_rx_budget_initial()->cost_factor);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_cost_factor);
+
+long svc_tcp_rx_budget_reserve_avail(void)
+{
+	return READ_ONCE(svc_tcp_rx_budget_initial()->reserve);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_reserve_avail);
+
+long svc_tcp_rx_budget_default_avail(void)
+{
+	return READ_ONCE(svc_rx_budget_default.avail);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_default_avail);
+#endif
 
 /*
  * Region pages bytes [off, off + len) of @page add to a count whose last
@@ -1295,14 +1515,15 @@ static void svc_tcp_rx_prefetch_pages(const struct sk_buff *skb, u32 base,
  * only pages from a pool bound to the fixed receive region count, and a
  * page counts once however many consecutive fragments lie in it.
  */
-static u32 svc_tcp_rx_skb_region_pages(const struct sk_buff *skb, u32 base,
-				       u32 first, u32 last)
+VISIBLE_IF_KUNIT u32 svc_tcp_rx_skb_region_pages(const struct sk_buff *skb,
+						 u32 base, u32 first, u32 last)
 {
 	struct page *prev = NULL;
 
 	return svc_tcp_rx_skb_region_pages_after(skb, base, first, last,
 						 &prev);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_skb_region_pages);
 
 static bool svc_tcp_rx_is_empty(const struct svc_tcp_rx_state *state)
 {
@@ -1359,8 +1580,9 @@ out_free_state:
 	kfree(state);
 	return NULL;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_state_alloc);
 
-static void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
+VISIBLE_IF_KUNIT void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
 {
 	unsigned int capacity = state->capacity;
 	unsigned int arena_pages = state->arena_pages;
@@ -1382,6 +1604,7 @@ static void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
 	state->page_pool = page_pool;
 	state->merged = merged;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_reset);
 
 static bool svc_tcp_rx_can_coalesce(const struct svc_tcp_rx_state *state,
 				    struct page *page, unsigned int offset,
@@ -1443,6 +1666,11 @@ static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
 	    offset >= PAGE_SIZE || len > PAGE_SIZE - offset ||
 	    check_add_overflow(state->body_bytes, len, &body_bytes))
 		return -EINVAL;
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (borrowed &&
+	    svc_tcp_rx_kunit_should_fail(SVC_TCP_RX_KUNIT_FAULT_APPEND, state))
+		return -EIO;
+#endif
 	if (svc_tcp_rx_can_coalesce(state, page, offset, borrowed, page_pool)) {
 		bvec = &state->bvec[state->count - 1];
 		bvec->bv_len += len;
@@ -1478,15 +1706,16 @@ static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
 	return 0;
 }
 
-static int
+VISIBLE_IF_KUNIT int
 svc_tcp_rx_append_borrowed(struct svc_tcp_rx_state *state, struct page *page,
 			   unsigned int offset, unsigned int len,
 			   bool page_pool)
 {
 	return svc_tcp_rx_append(state, page, offset, len, true, page_pool);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_append_borrowed);
 
-static int
+VISIBLE_IF_KUNIT int
 svc_tcp_rx_append_copied(struct svc_tcp_rx_state *state, struct page *page,
 			 unsigned int offset, unsigned int len)
 {
@@ -1522,7 +1751,7 @@ static int svc_tcp_rx_copy_to_arena(struct page **pages, unsigned int capacity,
 	return 0;
 }
 
-static int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
+VISIBLE_IF_KUNIT int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 					    struct page **pages)
 {
 	u32 body_offset = state->fixed_bytes;
@@ -1533,12 +1762,20 @@ static int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 	for (index = 0; index < state->count; index++) {
 		struct bio_vec *bvec = &state->bvec[index];
 		int ret;
+#if IS_ENABLED(CONFIG_KUNIT)
+		enum svc_tcp_rx_kunit_fault fault =
+			SVC_TCP_RX_KUNIT_FAULT_MATERIALIZE;
+#endif
 
 		if (WARN_ON_ONCE(!bvec->bv_page || !bvec->bv_len ||
 				 bvec->bv_offset > PAGE_SIZE ||
 				 bvec->bv_len > PAGE_SIZE - bvec->bv_offset))
 			return -EINVAL;
 		if (test_bit(index, state->borrowed)) {
+#if IS_ENABLED(CONFIG_KUNIT)
+			if (svc_tcp_rx_kunit_should_fail(fault, state))
+				return -EFAULT;
+#endif
 			ret = svc_tcp_rx_copy_to_arena(pages, state->arena_pages,
 						       body_offset, bvec);
 			if (ret)
@@ -1577,6 +1814,7 @@ static int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 	state->mode = SVC_TCP_RX_COPY;
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_materialize);
 
 /* The record's counts agree; checks no entry. */
 static bool svc_tcp_rx_counts_valid(const struct svc_tcp_rx_state *state)
@@ -1615,7 +1853,7 @@ static bool svc_tcp_rx_refs_valid(const struct svc_tcp_rx_state *state)
 	return true;
 }
 
-static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 {
 	netmem_ref batch[SVC_TCP_RX_PUT_BATCH];
 	unsigned int index, nr = 0;
@@ -1665,8 +1903,9 @@ static int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 	}
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_release_refs);
 
-static int
+VISIBLE_IF_KUNIT int
 svc_tcp_rx_exchange(struct svc_tcp_rx_state **active,
 		    struct svc_tcp_rx_state **empty)
 {
@@ -1689,6 +1928,7 @@ svc_tcp_rx_exchange(struct svc_tcp_rx_state **active,
 	swap(*active, *empty);
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_exchange);
 
 void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state)
 {
@@ -1705,6 +1945,7 @@ void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state)
 	kfree(state->bvec);
 	kfree(state);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_state_free);
 
 static void svc_tcp_rx_clear_xdr(struct svc_rqst *rqstp)
 {
@@ -1716,7 +1957,7 @@ static void svc_tcp_rx_clear_xdr(struct svc_rqst *rqstp)
 	rqstp->rq_arg.page_len = 0;
 }
 
-static int
+VISIBLE_IF_KUNIT int
 svc_tcp_rx_abort(struct svc_sock *svsk, struct svc_rqst *rqstp,
 		 struct svc_tcp_rx_state *state, enum svc_tcp_rx_action action,
 		 enum svc_tcp_rx_reason reason)
@@ -1736,6 +1977,7 @@ svc_tcp_rx_abort(struct svc_sock *svsk, struct svc_rqst *rqstp,
 	svc_tcp_rx_reset(state);
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_abort);
 
 static int svc_tcp_rx_abort_active(struct svc_sock *svsk,
 				   struct svc_rqst *rqstp,
@@ -1768,7 +2010,7 @@ static int svc_tcp_rx_abort_active(struct svc_sock *svsk,
  * @ctxt: the context from rqstp->rq_xprt_ctxt or dr->xprt_ctxt
  *
  */
-static void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt)
+VISIBLE_IF_KUNIT void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt)
 {
 	struct svc_tcp_rx_state *state = ctxt;
 	struct svc_sock *svsk;
@@ -1796,6 +2038,7 @@ static void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt)
 	svc_tcp_rx_clear_xdr(rqstp);
 	svc_tcp_rx_reset(state);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_release_ctxt);
 
 /**
  * svc_tcp_rx_release_payload - Return a request's loaned payload early
@@ -1806,8 +2049,8 @@ static void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt)
  * credit, exactly once, then detaches the argument page vector so nothing
  * reads it. svc_tcp_release_ctxt() later finds no payload to release.
  */
-static void svc_tcp_rx_release_payload(struct svc_sock *svsk,
-				       struct svc_rqst *rqstp)
+VISIBLE_IF_KUNIT void svc_tcp_rx_release_payload(struct svc_sock *svsk,
+						 struct svc_rqst *rqstp)
 {
 	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
 
@@ -1825,6 +2068,7 @@ static void svc_tcp_rx_release_payload(struct svc_sock *svsk,
 				      SVC_TCP_RX_PAYLOAD_RELEASE);
 	svc_tcp_rx_clear_xdr(rqstp);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_release_payload);
 
 static void svc_tcp_release_payload(struct svc_rqst *rqstp)
 {
@@ -2085,7 +2329,7 @@ static bool svc_tcp_rx_wait_rest(struct svc_sock *svsk, struct sock *sk)
 /*
  * INET callback when data has been received on the socket.
  */
-static void svc_data_ready(struct sock *sk)
+VISIBLE_IF_KUNIT void svc_data_ready(struct sock *sk)
 {
 	struct svc_sock	*svsk = (struct svc_sock *)sk->sk_user_data;
 
@@ -2115,6 +2359,7 @@ static void svc_data_ready(struct sock *sk)
 			svc_xprt_enqueue(&svsk->sk_xprt);
 	}
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_data_ready);
 
 /*
  * INET callback when space is newly available on the socket.
@@ -2691,8 +2936,8 @@ failed:
 	return NULL;
 }
 
-static int svc_tcp_restore_pages(struct svc_sock *svsk,
-				 struct svc_rqst *rqstp)
+VISIBLE_IF_KUNIT int svc_tcp_restore_pages(struct svc_sock *svsk,
+					   struct svc_rqst *rqstp)
 {
 	size_t len = svsk->sk_datalen;
 	unsigned int i, npages, keep;
@@ -2739,8 +2984,10 @@ static int svc_tcp_restore_pages(struct svc_sock *svsk,
 	rqstp->rq_arg.head[0].iov_base = page_address(rqstp->rq_pages[0]);
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_restore_pages);
 
-static int svc_tcp_save_pages(struct svc_sock *svsk, struct svc_rqst *rqstp)
+VISIBLE_IF_KUNIT int svc_tcp_save_pages(struct svc_sock *svsk,
+					struct svc_rqst *rqstp)
 {
 	unsigned int i, len, npages, taken = 0;
 	int ret;
@@ -2765,8 +3012,9 @@ static int svc_tcp_save_pages(struct svc_sock *svsk, struct svc_rqst *rqstp)
 	ret = svc_tcp_rx_exchange(&rqstp->rq_tcp_rx, &svsk->sk_rx);
 	return ret;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_save_pages);
 
-static void svc_tcp_clear_pages(struct svc_sock *svsk)
+VISIBLE_IF_KUNIT void svc_tcp_clear_pages(struct svc_sock *svsk)
 {
 	unsigned int i, len, npages;
 
@@ -2790,6 +3038,7 @@ static void svc_tcp_clear_pages(struct svc_sock *svsk)
 	svsk->sk_tcplen = 0;
 	svsk->sk_datalen = 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_clear_pages);
 
 static int receive_cb_reply(struct svc_sock *svsk, struct svc_rqst *rqstp)
 {
@@ -2832,11 +3081,12 @@ static void svc_tcp_fragment_received(struct svc_sock *svsk)
 	svsk->sk_marker = xdr_zero;
 }
 
-static void svc_tcp_recv_record_done(struct svc_sock *svsk)
+VISIBLE_IF_KUNIT void svc_tcp_recv_record_done(struct svc_sock *svsk)
 {
 	svsk->sk_datalen = 0;
 	svc_tcp_fragment_received(svsk);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_recv_record_done);
 
 /*
  * A non-final fragment carries four octets of marker and may carry
@@ -2974,6 +3224,7 @@ static int svc_tcp_rx_append_arena(struct svc_rqst *rqstp,
 	}
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_append_copied);
 
 static int svc_tcp_rx_copy_skb(struct svc_sock *svsk, struct svc_rqst *rqstp,
 			       struct sk_buff *skb, unsigned int offset,
@@ -3517,7 +3768,8 @@ invalid:
 	return -EINVAL;
 }
 
-static int svc_tcp_rx_publish(struct svc_sock *svsk, struct svc_rqst *rqstp)
+VISIBLE_IF_KUNIT int svc_tcp_rx_publish(struct svc_sock *svsk,
+					struct svc_rqst *rqstp)
 {
 	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
 	struct xdr_buf *arg = &rqstp->rq_arg;
@@ -3576,6 +3828,7 @@ static int svc_tcp_rx_publish(struct svc_sock *svsk, struct svc_rqst *rqstp)
 				       SVC_TCP_RX_PUBLISH);
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_publish);
 
 /*
  * ->read_sock actor, called under the socket lock. sk_datalen is both
@@ -3767,6 +4020,10 @@ fault:
 	return consumed;
 }
 
+/*
+ * A transport whose receive buffer is held measures what it is held to
+ * from the skbs it reads: see svc_tcp_rx_geometry_account().
+ */
 static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
 			      unsigned int offset, size_t len)
 {
@@ -3780,6 +4037,30 @@ static int svc_tcp_recv_actor(read_descriptor_t *desc, struct sk_buff *skb,
 					    consumed);
 	return consumed;
 }
+
+#if IS_ENABLED(CONFIG_KUNIT)
+int svc_tcp_recv_actor_kunit(struct svc_rqst *rqstp, unsigned int *frags,
+			     bool *complete, read_descriptor_t *desc,
+			     struct sk_buff *skb, unsigned int offset,
+			     size_t len)
+{
+	struct svc_tcp_recv_ctx ctx = {
+		.rqstp = rqstp,
+		.frags = *frags,
+		.complete = *complete,
+	};
+	void *arg = desc->arg.data;
+	int ret;
+
+	desc->arg.data = &ctx;
+	ret = svc_tcp_recv_actor(desc, skb, offset, len);
+	desc->arg.data = arg;
+	*frags = ctx.frags;
+	*complete = ctx.complete;
+	return ret;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_recv_actor_kunit);
+#endif
 
 static bool svc_tcp_at_urg_mark(struct sock *sk)
 {
@@ -3802,9 +4083,9 @@ static bool svc_tcp_at_urg_mark(struct sock *sk)
  * new mark when the lock is released.  A TLS transport is left alone: its
  * records are not the bytes TCP counts.
  */
-static void svc_tcp_rx_set_want(struct svc_sock *svsk,
-				const struct svc_tcp_rx_state *state,
-				bool drained)
+VISIBLE_IF_KUNIT void svc_tcp_rx_set_want(struct svc_sock *svsk,
+					  const struct svc_tcp_rx_state *state,
+					  bool drained)
 {
 	u32 want = 0;
 
@@ -3821,8 +4102,9 @@ static void svc_tcp_rx_set_want(struct svc_sock *svsk,
 	if (READ_ONCE(svsk->sk_rx_want) != want)
 		WRITE_ONCE(svsk->sk_rx_want, want);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_set_want);
 
-static void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
+VISIBLE_IF_KUNIT void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
 
 /**
  * svc_tcp_recvfrom - Receive data from a TCP socket
@@ -3840,7 +4122,7 @@ static void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
  * The state of a partial receive is preserved in the svc_sock for
  * the next call to svc_tcp_recvfrom.
  */
-static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
+VISIBLE_IF_KUNIT int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 {
 	struct svc_sock	*svsk =
 		container_of(rqstp->rq_xprt, struct svc_sock, sk_xprt);
@@ -3998,6 +4280,7 @@ err_noclose:
 	svc_xprt_received(rqstp->rq_xprt);
 	return 0;	/* record not complete */
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_recvfrom);
 
 /*
  * MSG_SPLICE_PAGES is used exclusively to reduce the number of
@@ -4146,22 +4429,24 @@ void svc_cleanup_xprt_sock(void)
  * were measured to occupy, in TCP_RMEM_TO_WIN_SCALE units, so that the
  * window also closes by half of what is left as the buffer fills.
  */
-static u8 svc_tcp_rx_scaling_ratio(unsigned int factor)
+VISIBLE_IF_KUNIT u8 svc_tcp_rx_scaling_ratio(unsigned int factor)
 {
 	return div64_u64((u64)100 << TCP_RMEM_TO_WIN_SCALE,
 			 (u64)max(factor, 100U) * 2);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_scaling_ratio);
 
 /*
  * The most a transport's window is opened to: what TCP makes of the whole
  * of @rcvbuf at svc_tcp_rx_scaling_ratio(), so that the clamp is never
  * more than TCP would offer of an empty buffer.
  */
-static int svc_tcp_rx_window_clamp(int rcvbuf, unsigned int factor)
+VISIBLE_IF_KUNIT int svc_tcp_rx_window_clamp(int rcvbuf, unsigned int factor)
 {
 	return ((u64)rcvbuf * svc_tcp_rx_scaling_ratio(factor)) >>
 	       TCP_RMEM_TO_WIN_SCALE;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_window_clamp);
 
 /*
  * Bytes of payload a transport reads between two samples of what its skbs
@@ -4198,10 +4483,10 @@ static unsigned int svc_tcp_rx_geometry_sample(u32 mem, u32 pay)
  * last two (svc_tcp_rx_hold_factor()).  Only the thread reading the
  * transport gets here.
  */
-static void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
-					unsigned int truesize,
-					unsigned int skb_len,
-					unsigned int used)
+VISIBLE_IF_KUNIT void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
+						  unsigned int truesize,
+						  unsigned int skb_len,
+						  unsigned int used)
 {
 	if (skb_len < SVC_TCP_RX_GEOMETRY_MIN_SKB || !used)
 		return;
@@ -4219,6 +4504,7 @@ static void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
 	WRITE_ONCE(svc_tcp_rx_budget_for(svsk)->hold_factor,
 		   max(svsk->sk_rx_geo_factor[0], svsk->sk_rx_geo_factor[1]));
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_geometry_account);
 
 /*
  * What @svsk's receive buffer is held to, as the bytes its skbs occupy for
@@ -4227,16 +4513,19 @@ static void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
  * else the factor this code had before it measured.  What a transport has
  * read of its first window is not used: a few skbs are not a sample.
  */
-static unsigned int svc_tcp_rx_hold_factor(struct svc_sock *svsk)
+VISIBLE_IF_KUNIT unsigned int svc_tcp_rx_hold_factor(struct svc_sock *svsk)
 {
-	unsigned int factor;
+	unsigned int factor = svc_tcp_rx_fixed_factor();
 
+	if (factor)
+		return factor;
 	factor = max(svsk->sk_rx_geo_factor[0], svsk->sk_rx_geo_factor[1]);
 	if (factor)
 		return factor;
 	return READ_ONCE(svc_tcp_rx_budget_for(svsk)->hold_factor) ?:
 	       SVC_TCP_RX_CREDIT_FACTOR_UNLEARNED;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_hold_factor);
 
 /*
  * A transport whose buffer is held to one figure and has since measured
@@ -4259,7 +4548,7 @@ static bool svc_tcp_rx_hold_stale(struct svc_sock *svsk)
  * that never receive a region page keep TCP's own buffer.  Called with the
  * socket unlocked: each call takes the socket lock itself.
  */
-static void svc_tcp_rx_hold_buffer(struct svc_sock *svsk)
+VISIBLE_IF_KUNIT void svc_tcp_rx_hold_buffer(struct svc_sock *svsk)
 {
 	unsigned int bytes = READ_ONCE(svc_tcp_rx_rcvbuf);
 	unsigned int factor = svc_tcp_rx_hold_factor(svsk);
@@ -4296,6 +4585,7 @@ static void svc_tcp_rx_hold_buffer(struct svc_sock *svsk)
 	svsk->sk_rx_held = true;
 	trace_svcsock_tcp_rx_hold(&svsk->sk_xprt, factor, rcvbuf, clamp);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_hold_buffer);
 
 static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 {

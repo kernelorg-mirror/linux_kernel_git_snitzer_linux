@@ -88,5 +88,9 @@ int	nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 void	nfsd_cache_update(struct svc_rqst *rqstp, struct nfsd_cacherep *rp,
 			  int cachetype, __be32 *statp);
 int	nfsd_reply_cache_stats_show(struct seq_file *m, void *v);
+#if IS_ENABLED(CONFIG_KUNIT)
+__wsum	nfsd_cache_csum(struct xdr_buf *buf, unsigned int start,
+			unsigned int remaining, __be32 *scratch);
+#endif
 
 #endif /* NFSCACHE_H */

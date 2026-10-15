@@ -18,6 +18,7 @@
 #include <linux/sunrpc/xdr.h>
 #include <linux/sunrpc/msg_prot.h>
 #include <linux/bvec.h>
+#include <kunit/visibility.h>
 #include <trace/events/sunrpc.h>
 
 static void _copy_to_pages(struct page **, size_t, const char *, size_t);
@@ -166,6 +167,7 @@ size_t xdr_buf_pagecount(const struct xdr_buf *buf)
 		return 0;
 	return (buf->page_base + buf->page_len + PAGE_SIZE - 1) >> PAGE_SHIFT;
 }
+EXPORT_SYMBOL_IF_KUNIT(xdr_buf_pagecount);
 
 int
 xdr_alloc_bvec(struct xdr_buf *buf, gfp_t gfp)
@@ -187,6 +189,7 @@ xdr_alloc_bvec(struct xdr_buf *buf, gfp_t gfp)
 	}
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(xdr_alloc_bvec);
 
 void
 xdr_free_bvec(struct xdr_buf *buf)
@@ -196,6 +199,7 @@ xdr_free_bvec(struct xdr_buf *buf)
 	kfree(buf->bvec);
 	buf->bvec = NULL;
 }
+EXPORT_SYMBOL_IF_KUNIT(xdr_free_bvec);
 
 /**
  * xdr_buf_to_bvec - Copy components of an xdr_buf into a bio_vec array
