@@ -407,6 +407,80 @@ the reorder and after it.
 | 60 | 39 | veth: add rx_ip_align, extra headroom for frames copied for XDP | `a057f0952ad0` | `3741a2bf0256` |
 | 61 | 62, 63, 66 | SUNRPC: Let a thread claim a TCP record and copy it outside the socket lock | `e8bb4b0bf2ed`, `8439fe6d5edc`, `1db924c7059d` | `7f08e7673de7` |
 
+## Step 4: the code group on its own (14 October, evening)
+
+The code group was taken off the branch on its own, as
+`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-code` (`v7.3-3` and the code
+commits only), to rebase it quickly; the KUnit interface, KUnit test
+and docs commits wait on `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-reorder-1.full`
+to be put back on top. Every stage was walked commit by commit on
+tardis1 (16 KiB, build 473's configuration cut down with kernel-rpmtree's
+`build-kernel-on-host.sh --localmodconfig`, debug info off,
+`CONFIG_WERROR=y`, sparse from git master; the walk and its logs are in
+`/hs/nvme3/walk-logs/`), and each clean stage kept as a branch:
+
+| branch | tip | code commits | what it is |
+|---|---|---|---|
+| `…-code.73rebase1` | `f5fe77ac4ac4` | 57 | the loan sized for fragments from its first commit (the rq_bvec and loan-table sizing and nfsd's bound folded into it); loans off by default (`svc_tcp_rx_loan_pages` folded into the loan commit, default N); a COMPOUND with a tag keeps its loan to the reply |
+| `…-code.73rebase2` | `a6eaef5fbe83` | 47 | the first round of folds: each fix into its target, the region's sharing and resizing into the region, the bulk-return bounds into batching |
+| `…-code.73rebase3` | `e91d853717c0` | 32 | the region budget as one commit (its six fixes, per-namespace budgets, waking on any change, copying at budget 0, the window held through TCP's helpers); the held-window run as one commit; no `Fixes:` left inside the series |
+
+Two things the walk found that the order had hidden: a WRITE fix that
+used `rq_maxbvecs` before it existed, and two commits ahead of the
+helpers they called (`svc_tcp_rx_credit_waiting()` now comes with the
+commit that first calls it). The tree changed only where meant to:
+loans off by default, and the tagged COMPOUND.
+
+### The review
+
+Each code commit was read against its message as Chuck Lever,
+Christoph Hellwig and the netdev maintainers would read it; the four
+write-ups are in `code-review/` (positions as in
+`code-review/positions-reviewed.txt`, the 61-commit order before
+`.73rebase1`). Besides the folds and the two bugs above, it found: the
+messages full of downstream and lab material (rewritten drafts were
+made for every commit); commits that are each several changes (6, 11,
+23 and 61 in that order); commits likely to be refused or better sent
+on their own (01 stacking alignment, the veth `rx_ip_align`, several
+pools per node, the statx/block/xfs sub-series); a page_pool region
+netdev would likely refuse in this form (a memory provider bound to
+receive queues is the shape they would want); about a dozen module
+parameters and three sysctls, several of them overlapping or off by
+default; and Ronaldo's author address, a Tailscale host name that
+fails the DCO, on three commits.
+
+### The claim-and-copy commit (32 in `.73rebase3`): split or drop
+
+"SUNRPC: Let a thread claim a TCP record and copy it outside the socket
+lock" is 62, 63 and 66 folded on Mike's word (step 3). Those three were
+cut by history (the unlocked copy, the claim, the copy unlocked only
+when claimed); the review would cut it by design, into three:
+
+1. copying with the socket lock dropped, from a clone, what the actor
+   cannot claim (`svc_tcp_rx_copy_unlocked()`);
+2. claiming clones in the actor and copying them once `->read_sock()`
+   has returned (`svc_tcp_rx_claim()`, `svc_tcp_rx_copy_claims()`);
+3. giving the transport up before the copy so that several threads
+   copy one transport's records (`sk_rx_copying`), which changes the
+   receive concurrency model and needs its own argument.
+
+What netdev will ask whichever way it is cut: claimed clones escape
+socket memory accounting (the commit says a transport can hold as much
+again as its receive buffer for each copying thread); a `->read_sock`
+actor that drops the socket lock, relying on `tcp_read_sock()` looking
+the skb up again and on TCP not coalescing into a cloned skb; why
+`sk_flush_backlog()` under the lock (as `tcp_recvmsg_locked()` does) is
+not enough; `claims[32]` puts about 768 bytes on the nfsd thread's
+stack; an `skb_clone()` for each GRO skb; and another knob
+(`svc_tcp_rx_copy_threads`) that defaults to off.
+
+What it measured: on one port, seven drives, six runs alternating,
+the copy under the lock carried 45.81 GB/s and the unlocked copy 45.40,
+level, with about 20% fewer context switches unlocked; two ports were
+not settled. That is the case for dropping it: off by default, level on
+the rig, and the commit netdev will look at hardest. **Held (Mike,
+14 October): not split; it may be dropped entirely.**
+
 ## Next steps
 
 1. Mike reviews the survey and the first order.

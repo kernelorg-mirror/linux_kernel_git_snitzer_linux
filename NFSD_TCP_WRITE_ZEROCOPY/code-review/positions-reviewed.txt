@@ -1,0 +1,61 @@
+01 8ce3b8845deb Mike Snitzer | block: Let a stacking device take its members' memory alignment
+02 c2882fc1209c Mike Snitzer | block: add bdev_dio_seg_boundary()
+03 29df8cf690dd Mike Snitzer | fs: add STATX_DIO_SEG_BOUNDARY
+04 32e78ebdc08c Mike Snitzer | block: report STATX_DIO_SEG_BOUNDARY for block devices
+05 c5b71babaeea Mike Snitzer | xfs: report the direct I/O segment boundary
+06 d2a699bdf360 Mike Snitzer | loop: take the backing device's virtual boundary for direct I/O
+07 9fda9805446b Mike Snitzer | tcp: let a kernel socket cap the receive scaling ratio
+08 4770d94a72f6 David Flynn | SUNRPC: distinguish authoritative XDR bvecs
+09 a3b821de267c David Flynn | SUNRPC: decode XDR from authoritative bvecs
+10 b3dd38ff8b16 David Flynn | SUNRPC: poison invalid XDR decode streams
+11 23970ee63bc5 Ronaldo Pagani Yamashita | nfsd: accept immutable receive bvec requests
+12 de24cd7a2cde Ronaldo Pagani Yamashita | SUNRPC: loan eligible TCP receive pages
+13 9ac0d9420a83 Mike Snitzer | SUNRPC: size rq_bvec for 4 KiB fragments, not pages
+14 1e3d3c6e424f Mike Snitzer | nfsd: convert a WRITE payload into rq_bvec by its own size
+15 73dd7e4434ef David Flynn | SUNRPC: Publish prefix-only loan records as COPY
+16 5d2a79a5a31d Mike Snitzer | SUNRPC: size the TCP receive loan table for fragments, not pages
+17 30b2668e7aad Mike Snitzer | nfsd: require interior payload discontinuities to be logical-block aligned
+18 46e8d4a7c82c Mike Snitzer | nfs_common: let the direct I/O policy carry the device's segment boundary
+19 86dd05b884dc Mike Snitzer | nfsd: record the direct I/O segment boundary of an nfsd_file
+20 0dfe5616ef63 Mike Snitzer | nfsd: split direct writes by the device's segment boundary
+21 b5b0f1a837b5 Mike Snitzer | SUNRPC: merge locked-head copies into a whole-page loan bvec
+22 a744a283d962 Mike Snitzer | SUNRPC: Count a merge page's bytes once when a TCP receive record is materialized
+23 1af3854fa0a9 Ronaldo Pagani Yamashita | nfsd: accept receive bvecs for NFSv4 COMPOUND
+24 f5426ad04d24 Mike Snitzer | SUNRPC: add a runtime switch to disable TCP receive page loans
+25 47a1390e23b5 David Flynn | page_pool: Fixed receive-buffer region for one NIC; recycle loaned pages
+26 d79138c90f5c Mike Snitzer | page_pool: Add page_pool_page_in_rx_region()
+27 aedf6fd4a714 Mike Snitzer | page_pool: Let several devices share the fixed receive region
+28 5de11c15ec41 Mike Snitzer | page_pool: Export page_pool_rx_region_size()
+29 387fa26ffad4 Mike Snitzer | page_pool: Give the fixed receive region back when it is resized
+30 365ad6e8cab5 Mike Snitzer | page_pool: Recycle a region-bound pool's pages last in, first out
+31 941958c6324f David Flynn | SUNRPC: Region credit admission (TCP flow control instead of ring drops)
+32 2cf8d648e6af Mike Snitzer | SUNRPC: Orphan a credited record whose loans cannot be accounted for
+33 cc12e16f3e32 Mike Snitzer | SUNRPC: Apply region budget changes while records are in flight
+34 4175422d80e7 Mike Snitzer | SUNRPC: Credit only the region pages a TCP receive loan holds
+35 360337514116 Mike Snitzer | SUNRPC: Hold the receive buffer only on transports that receive region pages
+36 df7b94354b4f Mike Snitzer | SUNRPC: Charge a TCP receive loan for the region pages it holds, not its fragments
+37 76bb156fc1f1 Mike Snitzer | SUNRPC: Take a transport that reads on without admission off the credit wait list
+38 0168f65db212 Mike Snitzer | SUNRPC: Give each network namespace its own region budget
+39 c6cf07b4bfa7 Mike Snitzer | SUNRPC: Do not re-queue a transport that waits for region credit
+40 b20e046c9136 David Flynn | nfsd: Release a WRITE's receive loan after the page-cache copy, before storage
+41 d00eb537d4e0 Mike Snitzer | nfsd: keep a WRITE's receive loan while a later operation may read it
+42 5f4e4323ad1f David Flynn | SUNRPC: Copy small RPC records instead of loaning a receive page
+43 6457c46b484f Mike Snitzer | SUNRPC: Copy region records when the budget drawn on is 0
+44 f3effc4e538c Mike Snitzer | SUNRPC: Hold a region transport's receive window through TCP's interfaces
+45 68ed55b7bad5 Mike Snitzer | SUNRPC: Trade pages with the socket when a partial record changes hands
+46 d120a8bf8c90 Mike Snitzer | SUNRPC: Return a loaned record's page-pool pages in batches
+47 55c801e63be8 Mike Snitzer | SUNRPC: Keep page-pool return batches within the bulk API's bound
+48 5dc599ad5704 Mike Snitzer | SUNRPC: Refuse to build a page-pool return batch the bulk API cannot take
+49 9c56ecd06a59 Mike Snitzer | SUNRPC: Let a NUMA node have several thread pools
+50 e22124ff4db6 Mike Snitzer | SUNRPC: Let a thread wait for the rest of a partly received TCP record
+51 6e8fc71c2baa Mike Snitzer | SUNRPC: Trace how long a thread lingers for the rest of a TCP record
+52 acba1351f191 Mike Snitzer | SUNRPC: Learn a loaned record's charge from the records
+53 e56b22cb2e00 Mike Snitzer | SUNRPC: Hold a transport's receive window by what its packets occupy
+54 befe7874fb20 Mike Snitzer | SUNRPC: Show what receive buffers are held to in a budget's statistics
+55 04c4ac676cde Mike Snitzer | SUNRPC: Measure a held receive buffer by the skbs that carry data
+56 89c7d570ae71 Mike Snitzer | SUNRPC: Open a held transport's window to half of what its buffer holds
+57 6b2566d1c796 Mike Snitzer | SUNRPC: Trace what a transport's receive buffer is held to
+58 efdb9110f861 Mike Snitzer | SUNRPC: svc_tcp_rx_keep: a thread that finds a record short does not wake another
+59 1806c79a6de4 Mike Snitzer | SUNRPC: svc_tcp_rx_lowat: wake a thread for more than one piece of a short record
+60 60ca2691eab0 Mike Snitzer | veth: add rx_ip_align, extra headroom for frames copied for XDP
+61 d76b21a997fb Mike Snitzer | SUNRPC: Let a thread claim a TCP record and copy it outside the socket lock
