@@ -850,6 +850,10 @@ void warn_on_nonidempotent_op(struct nfsd4_op *op);
 
 bool nfsd4_mach_creds_match(struct nfs4_client *cl, struct svc_rqst *rqstp);
 bool nfs4svc_decode_compoundargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
+#if IS_ENABLED(CONFIG_KUNIT)
+void *nfsd4_kunit_savemem(struct nfsd4_compoundargs *argp, __be32 *p,
+			  size_t len);
+#endif
 bool nfs4svc_encode_compoundres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 __be32 nfsd4_check_resp_size(struct nfsd4_compoundres *, u32);
 void nfsd4_encode_operation(struct nfsd4_compoundres *, struct nfsd4_op *);
@@ -974,5 +978,16 @@ struct nfsd4_cb_recall_any {
 	u32			ra_keep;
 	u32			ra_bmval[1];
 };
+
+#if IS_ENABLED(CONFIG_KUNIT)
+struct svc_serv *nfsd4_kunit_serv(struct net *net);
+bool nfsd4_payload_shared(struct svc_rqst *rqstp);
+__be32 nfsd4_kunit_destroy_session(struct svc_rqst *rqstp,
+				   struct nfsd4_compound_state *cstate,
+				   union nfsd4_op_u *u);
+__be32 nfsd4_kunit_destroy_clientid(struct svc_rqst *rqstp,
+				    struct nfsd4_compound_state *cstate,
+				    union nfsd4_op_u *u);
+#endif
 
 #endif

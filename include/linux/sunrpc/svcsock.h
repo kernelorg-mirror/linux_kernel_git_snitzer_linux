@@ -196,6 +196,81 @@ struct svc_tcp_rx_state *svc_tcp_rx_state_alloc(unsigned long capacity,
 						gfp_t gfp, int node);
 void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state);
 
+#if IS_ENABLED(CONFIG_KUNIT)
+extern unsigned int svc_tcp_rx_copy_below;
+
+enum svc_tcp_rx_kunit_fault {
+	SVC_TCP_RX_KUNIT_FAULT_NONE,
+	SVC_TCP_RX_KUNIT_FAULT_APPEND,
+	SVC_TCP_RX_KUNIT_FAULT_MATERIALIZE,
+};
+
+int svc_tcp_rx_append_borrowed(struct svc_tcp_rx_state *state,
+			       struct page *page, unsigned int offset,
+			       unsigned int len, bool page_pool);
+int svc_tcp_rx_append_copied(struct svc_tcp_rx_state *state,
+			     struct page *page, unsigned int offset,
+			     unsigned int len);
+int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
+			   struct page **pages);
+int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state);
+void svc_tcp_rx_reset(struct svc_tcp_rx_state *state);
+int svc_tcp_rx_exchange(struct svc_tcp_rx_state **active,
+			struct svc_tcp_rx_state **empty);
+int svc_tcp_rx_abort(struct svc_sock *svsk, struct svc_rqst *rqstp,
+		     struct svc_tcp_rx_state *state,
+		     enum svc_tcp_rx_action action,
+		     enum svc_tcp_rx_reason reason);
+void svc_tcp_release_ctxt(struct svc_xprt *xprt, void *ctxt);
+int svc_tcp_rx_publish(struct svc_sock *svsk, struct svc_rqst *rqstp);
+int svc_tcp_recv_actor_kunit(struct svc_rqst *rqstp, unsigned int *frags,
+			     bool *complete, read_descriptor_t *desc,
+			     struct sk_buff *skb, unsigned int offset,
+			     size_t len);
+int svc_tcp_restore_pages(struct svc_sock *svsk, struct svc_rqst *rqstp);
+int svc_tcp_save_pages(struct svc_sock *svsk, struct svc_rqst *rqstp);
+void svc_tcp_clear_pages(struct svc_sock *svsk);
+int svc_tcp_recvfrom(struct svc_rqst *rqstp);
+void svc_tcp_recv_record_done(struct svc_sock *svsk);
+void svc_tcp_rx_kunit_fault_set(enum svc_tcp_rx_kunit_fault fault,
+				unsigned int skip);
+void svc_tcp_rx_kunit_fault_observed(u32 *acquired, u32 *released);
+struct kernel_param;
+void svc_tcp_rx_budget_kunit_configure(unsigned int pages,
+				       unsigned int reserve,
+				       unsigned int factor);
+void svc_tcp_rx_budget_kunit_rcvbuf(unsigned int bytes);
+void svc_tcp_rx_budget_kunit_default(unsigned int pages, unsigned int reserve);
+int svc_tcp_rx_budget_kunit_set(unsigned int pages);
+void svc_tcp_rx_kunit_save(void);
+void svc_tcp_rx_kunit_restore(void);
+unsigned long svc_tcp_spare_kunit_set_max(unsigned long bytes);
+long svc_tcp_spare_kunit_pages(void);
+long svc_tcp_rx_budget_default_avail(void);
+bool svc_tcp_rx_credit_admit(struct svc_sock *svsk,
+			     struct svc_tcp_rx_state *state, u32 reclen);
+bool svc_tcp_rx_credit_charge(struct svc_sock *svsk,
+			      struct svc_tcp_rx_state *state, u32 need);
+void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state);
+void svc_tcp_rx_credit_forget(struct svc_sock *svsk);
+bool svc_tcp_rx_budget_copy(struct svc_sock *svsk);
+long svc_tcp_rx_budget_avail(void);
+unsigned int svc_tcp_rx_budget_cost_factor(void);
+long svc_tcp_rx_budget_reserve_avail(void);
+void svc_tcp_rx_release_payload(struct svc_sock *svsk, struct svc_rqst *rqstp);
+void svc_data_ready(struct sock *sk);
+u32 svc_tcp_rx_skb_region_pages(const struct sk_buff *skb, u32 base,
+				u32 first, u32 last);
+int svc_tcp_rx_window_clamp(int rcvbuf, unsigned int factor);
+void svc_tcp_rx_geometry_account(struct svc_sock *svsk, unsigned int truesize,
+				 unsigned int skb_len, unsigned int used);
+unsigned int svc_tcp_rx_hold_factor(struct svc_sock *svsk);
+u8 svc_tcp_rx_scaling_ratio(unsigned int factor);
+void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
+void svc_tcp_rx_set_want(struct svc_sock *svsk,
+			 const struct svc_tcp_rx_state *state, bool drained);
+#endif
+
 /*
  * svc_makesock socket characteristics
  */
