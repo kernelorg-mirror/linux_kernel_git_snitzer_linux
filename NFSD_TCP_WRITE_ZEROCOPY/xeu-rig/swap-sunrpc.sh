@@ -9,8 +9,7 @@
 # to ask for.  Nothing is installed until sunrpc has unloaded, so if a module
 # will not unload the services are started again on the old one.
 #
-# POOLS_PER_NODE=n loads the new module with pools_per_node=n (it is read
-# when nfsd starts).  To go back: rm updates/sunrpc.ko, depmod -a, and run
+# To go back: rm updates/sunrpc.ko, depmod -a, and run
 # this again with SUNRPC_KO=none.
 . "$(dirname "$0")/common.sh"
 O=${1:-$L/sunrpc-$(uname -r)}
@@ -76,11 +75,11 @@ if [ "$KO" != none ]; then
 fi
 depmod -a
 echo "modprobe will load: $(modinfo -n sunrpc)"
-modprobe sunrpc ${POOLS_PER_NODE:+pools_per_node=$POOLS_PER_NODE} || { echo "the new sunrpc did not load"; exit 1; }
+modprobe sunrpc || { echo "the new sunrpc did not load"; exit 1; }
 start
 
 echo "running sunrpc: $(cat /sys/module/sunrpc/srcversion)"
-for p in pools_per_node svc_tcp_rx_linger_us; do
+for p in svc_tcp_rx_linger_us; do
 	[ -e /sys/module/sunrpc/parameters/$p ] && echo "$p $(cat /sys/module/sunrpc/parameters/$p)"
 done
 echo "nfsd threads: $(cat /proc/fs/nfsd/threads 2>&1); pools: $(cat /proc/fs/nfsd/pool_threads 2>&1)"

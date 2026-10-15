@@ -35,7 +35,7 @@ make -C $KB M=$O/sunrpc NOSTDINC_FLAGS="-nostdinc -I$O/inc" -j$(nproc) modules >
 	{ echo "build failed:"; grep -i -m5 error $O/build.log; exit 1; }
 echo "built: $O/sunrpc/sunrpc.ko"
 readelf -S $O/sunrpc/sunrpc.ko | grep -q ' \.BTF ' && echo "BTF: in sunrpc.ko" || echo "BTF: ABSENT (the tracers will not attach)"
-modinfo $O/sunrpc/sunrpc.ko | grep -E '^vermagic|^parm: +(svc_tcp_rx_linger_us|pools_per_node)'
+modinfo $O/sunrpc/sunrpc.ko | grep -E '^vermagic|^parm: +svc_tcp_rx_linger_us'
 awk '$3 ~ /sunrpc$/ && $3 !~ /auth_gss|xprtrdma/ {print $2, $1}' $KB/Module.symvers | sort > $O/old.syms
 awk '{print $2, $1}' $O/sunrpc/Module.symvers | sort > $O/new.syms
 echo "exports of the installed module: $(wc -l < $O/old.syms); with another version in the new one: $(join $O/old.syms $O/new.syms | awk '$2 != $3' | wc -l); missing from it: $(join -v1 $O/old.syms $O/new.syms | wc -l)"

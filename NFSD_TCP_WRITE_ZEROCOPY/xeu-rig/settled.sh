@@ -29,7 +29,7 @@
 #
 # THE CPU LAYOUT (XEU-4-VS-8-RING.md, "Four rings of 128 a port")
 #
-#   CPUs 8-55   nfsd, 512 threads in four pools of 128, and nothing of the
+#   CPUs 8-55   nfsd, 512 threads in one pool, and nothing of the
 #               ports'.  irqbalance is barred from them and from the card's
 #               interrupts (--banmod=xeu), so it cannot move either.
 #   CPUs 0-7    port a (enp161s0f0): Rx-i on 2i, Tx-i on 2i+1, its async
@@ -112,7 +112,7 @@
 # --- the settled setting --------------------------------------------------
 NFSD_CPUSET=8-55
 NFSD_THREADS=512
-NFSD_POOLS="128 128 128 128"
+NFSD_POOLS=512	# one pool: pools_per_node was dropped from the series on 15 October
 declare -A PDEV=([a]=enp161s0f0 [b]=enp164s0f0)
 declare -A PCPU=([a]=0 [b]=56)		# a port's eight CPUs start here
 declare -A PXPS=([a]=8 [b]=32)		# tx-i's XPS CPU, as recorded: <this> + i
@@ -135,7 +135,7 @@ declare -A REST=(
 	[svc_tcp_rx_loan_pages]=Y
 	[svc_tcp_rx_copy_unlocked]=Y
 	[svc_tcp_rx_copy_below]=1024
-	[pools_per_node]=4
+	[svc_tcp_spare_bytes_max]=67108864
 )
 # Settings a later kernel no longer has: held where the kernel has them, and
 # reported, not failed, where it does not.  svc_tcp_rx_copy_unlocked was
@@ -144,6 +144,11 @@ declare -A REST=(
 # measured; without it a copy is made under the socket lock unless
 # svc_tcp_rx_copy_threads is 1 or more.
 declare -A GONE_LATER=([svc_tcp_rx_copy_unlocked]=1)
+# Settings an earlier kernel does not have yet: held where the kernel has
+# them, and reported, not failed, where it does not.  svc_tcp_spare_bytes_max
+# came after build 474 ("SUNRPC: Bound the pages TCP sockets keep for
+# exchange with threads"); at rest it is its default, 64 MiB.
+declare -A NEW_LATER=([svc_tcp_spare_bytes_max]=1)
 # The xeu module's, set by /etc/modprobe.d/xeu.conf at load.
 declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128)
 declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
@@ -270,6 +275,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_LINGER:-}" ] && EXPECT[svc_tcp_rx_linger_us]=$EXP_LINGER
 	[ -n "${EXP_LOWAT:-}" ] && EXPECT[svc_tcp_rx_lowat]=$EXP_LOWAT
 	[ -n "${EXP_COPY_THREADS:-}" ] && EXPECT[svc_tcp_rx_copy_threads]=$EXP_COPY_THREADS
+	[ -n "${EXP_SPARE:-}" ] && EXPECT[svc_tcp_spare_bytes_max]=$EXP_SPARE
 	[ -n "${EXP_BUDGET:-}" ] && EXPECT[svc_tcp_rx_budget_pages]=$EXP_BUDGET
 	[ -n "${EXP_BUDGET_RESERVE:-}" ] && EXPECT[svc_tcp_rx_budget_reserve]=$EXP_BUDGET_RESERVE
 	[ -n "${EXP_ENTRIES_A:-${EXP_ENTRIES:-}}" ] && ENTRIES[a]=${EXP_ENTRIES_A:-$EXP_ENTRIES}
@@ -361,7 +367,7 @@ audit() {
 	audit_port a
 	audit_port b
 	for k in $(printf '%s\n' "${!EXPECT[@]}" | sort); do
-		if [ ! -e $SUNRPC/$k ] && [ -n "${GONE_LATER[$k]:-}" ]; then
+		if [ ! -e $SUNRPC/$k ] && [ -n "${GONE_LATER[$k]:-}${NEW_LATER[$k]:-}" ]; then
 			printf '  --   %-34s %s\n' "sunrpc $k" "not in this kernel"
 			continue
 		fi

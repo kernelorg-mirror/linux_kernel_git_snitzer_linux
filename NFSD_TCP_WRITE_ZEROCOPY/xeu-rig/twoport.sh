@@ -42,6 +42,7 @@
 #   LINGER=<us>      svc_tcp_rx_linger_us
 #   THREADS=<n>      svc_tcp_rx_copy_threads
 #   LOWAT=<bytes>    svc_tcp_rx_lowat, the mark a short WRITE's thread is woken at (0: off)
+#   SPARE=<bytes>    svc_tcp_spare_bytes_max, the pages sockets keep for exchange (0: none)
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
 #   TXIRQ_A=<cpu> TXIRQ_B=<cpu>  a port's Tx rings on two CPUs from <cpu>, and
@@ -103,6 +104,7 @@ cretr() { cl "awk '/^Tcp:/ && !h {for (i = 1; i <= NF; i++) if (\$i == \"Retrans
 SP=/sys/module/sunrpc/parameters
 declare -A SAVE
 for k in rcvbuf linger_us copy_threads lowat; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k); done
+SAVE[spare]=$(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null)
 declare -A CDEV=([a]=ens3np0 [b]=ens6np0)
 setq() {	# setq <client dev> <codel|fq|fqNN>
 	case $2 in
@@ -114,6 +116,7 @@ setq() {	# setq <client dev> <codel|fq|fqNN>
 }
 cleanup() {
 	for k in rcvbuf linger_us copy_threads lowat; do echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
+	[ -n "${SAVE[spare]}" ] && echo ${SAVE[spare]} > $SP/svc_tcp_spare_bytes_max
 	[ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} codel; done
 	# The RSS table may name rings that are going: spread it over four first.
 	[ -n "${RINGS:-}" ] && { for p in $PORTS; do ethtool -X ${DEV[$p]} equal 4 2>/dev/null; ip link set ${DEV[$p]} down; sleep 1; ethtool -L ${DEV[$p]} combined 4; ip link set ${DEV[$p]} up; done; sleep 7; }
@@ -138,9 +141,10 @@ echo Y > /sys/module/xeu/parameters/rx_port_stats
 [ -n "${LINGER:-}" ] && echo $LINGER > $SP/svc_tcp_rx_linger_us
 [ -n "${THREADS:-}" ] && echo $THREADS > $SP/svc_tcp_rx_copy_threads
 [ -n "${LOWAT:-}" ] && echo $LOWAT > $SP/svc_tcp_rx_lowat
+[ -n "${SPARE:-}" ] && { echo $SPARE > $SP/svc_tcp_spare_bytes_max || { echo "no svc_tcp_spare_bytes_max in this sunrpc"; exit 1; }; }
 [ -n "${NFSD_CPUS:-}" ] && { for t in $(pgrep -x nfsd); do taskset -cp $NFSD_CPUS $t > /dev/null 2>&1; done; echo "nfsd on CPUs $NFSD_CPUS for this run" | tee -a geometry.txt; }
 [ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} $QDISC || { echo "qdisc not set"; exit 1; }; done
-echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us) copy_threads $(cat $SP/svc_tcp_rx_copy_threads) lowat $(cat $SP/svc_tcp_rx_lowat) keep $(cat $SP/svc_tcp_rx_keep) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read)" | tee -a geometry.txt
+echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us) copy_threads $(cat $SP/svc_tcp_rx_copy_threads) lowat $(cat $SP/svc_tcp_rx_lowat) keep $(cat $SP/svc_tcp_rx_keep) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read)" | tee -a geometry.txt
 
 for p in $PORTS; do
 	d=${DEV[$p]}
@@ -241,7 +245,7 @@ if [ "$RW" != write ]; then	# a run that reads: every file written whole first, 
 fi
 # Just before the load: the live state, all of it, against the setting this
 # run is at; anything the run set on purpose is held to what it set.
-EXPENV="EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_COPY_THREADS=${THREADS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-}"
+EXPENV="EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}" ] && EXPENV="$EXPENV EXP_LAYOUT=RINGS=${RINGS:-4},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-}"
 case "${QDISC:-}" in fq*) EXPENV="$EXPENV EXP_QDISC=fq" ;; codel) EXPENV="$EXPENV EXP_QDISC=fq_codel" ;; esac
