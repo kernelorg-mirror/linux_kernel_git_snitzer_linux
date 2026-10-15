@@ -1270,8 +1270,8 @@ for this tree, from Mike:
 - **Never `git add -A`.** Stage explicit paths.
 - **Never `git push`.** Mike pushes and force-pushes himself.
 - **Never delete a branch without asking.**
-- **Commits on `kernel-7.1.13/*`** end with `Assisted-by: Claude:<model-id>`
-  and `Signed-off-by: Mike Snitzer <snitzer@kernel.org>`. Never use
+- **Commits on `kernel-7.1.13/*`** end with `Assisted-by: LLM`
+  (once, naming no model; since 2026-10-15) and `Signed-off-by: Mike Snitzer <snitzer@kernel.org>`. Never use
   `Co-Authored-By:`.
 - **Commit grouping in this series:**
   - Code commits come first and carry no KUnit references.

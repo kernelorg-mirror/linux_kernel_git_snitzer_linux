@@ -95,8 +95,14 @@ the branches in step and about where development is done.
 Every commit an agent makes in this tree, code or docs, ends with these
 two lines and no others of its own:
 
-    Assisted-by: Claude:<model id, e.g. claude-opus-5-5>
+    Assisted-by: LLM
     Signed-off-by: <the configured git user.name> <the configured git user.email>
+
+The Assisted-by names no tool or model: it is `Assisted-by: LLM`
+exactly, once, however many agents worked on the commit (Mike,
+2026-10-15; every commit on the branch and on `.73rebase9` was
+rewritten to it that day, the tips before kept with the suffix
+`.pre-llm-trailer`).
 
 The Signed-off-by is whoever's tree this is: take it from
 `git config user.name` and `git config user.email` (`git commit -s`
