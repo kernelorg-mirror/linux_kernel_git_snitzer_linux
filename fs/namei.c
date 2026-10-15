@@ -4415,11 +4415,48 @@ static struct dentry *atomic_open(const struct path *path, struct dentry *dentry
 }
 
 /*
+ * Can this directory's ->atomic_open() be given an O_CREAT open with
+ * i_rwsem held shared?  The method must be present: without it
+ * lookup_open() goes on to break the directory lease and call ->create(),
+ * and the in-lookup protocol covers neither, so a filesystem that sets the
+ * flag and supplies no ->atomic_open keeps the exclusive lock rather than
+ * silently losing exclusion.
+ *
+ * Nor on a superblock that has set SB_I_NAMES_COLLIDE.  The in-lookup state
+ * that stands in for the exclusive lock is per name as the dcache compares
+ * names, so where the filesystem makes one entry of two names the dcache
+ * holds apart, it excludes a second create of "foo" but not a create of
+ * "FOO", while the exclusive lock excluded both.  The filesystem may learn
+ * that about a superblock only after a directory has taken its ->i_op, and
+ * may learn it again, so it is a superblock bit and not an ops-table flag.
+ * It is tested last, so only an O_CREAT open in a directory that has opted
+ * in reads it.
+ *
+ * The bit is read once per pass of lookup_open(), before the parent lock is
+ * taken.  An open that read it clear may still run shared after the
+ * filesystem has set it, until that open completes; every open that reads
+ * it set takes the parent exclusive and so excludes the shared ones.
+ */
+static inline bool atomic_open_create_shared(struct inode *dir)
+{
+	const struct inode_operations *iop = dir->i_op;
+
+	return iop->atomic_open &&
+	       (iop->iop_flags & IOPF_ATOMIC_OPEN_CREATE_SHARED) &&
+	       !(READ_ONCE(dir->i_sb->s_iflags) & SB_I_NAMES_COLLIDE);
+}
+
+/*
  * Look up and maybe create and open the last component.
  *
- * Takes the parent inode lock itself, exclusive if O_CREAT was requested and
- * shared otherwise, and drops it again before returning.  The caller must not
- * hold it.
+ * Takes the parent inode lock itself, and drops it again before returning;
+ * the caller must not hold it.  O_CREAT normally takes it exclusive, every
+ * other open shared.  A directory whose ->atomic_open() has declared
+ * IOPF_ATOMIC_OPEN_CREATE_SHARED takes it shared for O_CREAT as well,
+ * unless its superblock has set SB_I_NAMES_COLLIDE, and
+ * the dentry handed to ->atomic_open() is then guaranteed to be in-lookup:
+ * that in-lookup state, not the parent lock, is what excludes another opener
+ * of the same name.
  *
  * On success returns the dentry of the last component.  If FMODE_OPENED is set
  * on file->f_mode the file was also opened and attached to @file; otherwise
@@ -4440,6 +4477,7 @@ static struct dentry *lookup_open(struct nameidata *nd, struct file *file,
 	int error, create_error;
 	umode_t mode;
 	bool got_write;
+	bool create_shared;
 	unsigned int shared_flag;
 
 retry:
@@ -4447,7 +4485,22 @@ retry:
 	got_write = false;
 	mode = op->mode;
 	create_error = 0;
-	shared_flag = (open_flag & O_CREAT) ? 0 : LOOKUP_SHARED;
+	/*
+	 * One evaluation of atomic_open_create_shared(), which reads ->i_op
+	 * and the superblock's SB_I_NAMES_COLLIDE, decides the lock mode, the
+	 * unlock at out: and the in-lookup guarantee this function then owes
+	 * ->atomic_open(), so the three cannot disagree.  It is after retry:,
+	 * so a delegation retry re-reads it for the lock it is about to take.
+	 *
+	 * LOOKUP_SHARED states how the parent is locked, so it follows the
+	 * lock and not O_CREAT.  create_shared is the narrower question --
+	 * O_CREAT holding the parent shared -- and only that case may reject
+	 * a hashed negative dentry below.
+	 */
+	create_shared = (open_flag & O_CREAT) &&
+			atomic_open_create_shared(dir_inode);
+	shared_flag = (!(open_flag & O_CREAT) || create_shared) ?
+		      LOOKUP_SHARED : 0;
 
 	if (open_flag & (O_CREAT | O_TRUNC | O_WRONLY | O_RDWR)) {
 		got_write = !mnt_want_write(nd->path.mnt);
@@ -4478,10 +4531,23 @@ retry:
 			break;
 
 		error = d_revalidate(dir_inode, &nd->last, dentry, nd->flags);
-		if (likely(error > 0))
-			break;
-		if (error)
+		if (unlikely(error < 0))
 			goto out_dput;
+		/*
+		 * A valid dentry would normally end the loop here.  With the
+		 * parent held shared a negative one cannot: hashed and not
+		 * in-lookup, it leaves ->atomic_open() no exclusion for this
+		 * name, because __d_add() takes the i_dir_seq window only for
+		 * an in-lookup dentry but rehashes any dentry it finds
+		 * unhashed, so once this one has been dropped a second opener
+		 * can hash the same name independently.
+		 * Reject it and go round; d_alloc_parallel() then returns an
+		 * in-lookup dentry.  On a negative, d_invalidate() is an
+		 * unhash and nothing more.  A positive is kept: it is returned
+		 * just below and never reaches ->atomic_open().
+		 */
+		if (likely(error > 0) && (!create_shared || dentry->d_inode))
+			break;
 		d_invalidate(dentry);
 		dput(dentry);
 		dentry = NULL;
@@ -4519,6 +4585,12 @@ retry:
 	if (create_error)
 		open_flag &= ~O_CREAT;
 	if (dir_inode->i_op->atomic_open) {
+		/*
+		 * With the parent held shared, this dentry being in-lookup is
+		 * what excludes another opener of the same name.  The loop
+		 * above established it and nothing since can have cleared it.
+		 */
+		VFS_WARN_ON_ONCE(create_shared && !d_in_lookup(dentry));
 		if (nd->flags & LOOKUP_DIRECTORY)
 			open_flag |= O_DIRECTORY;
 		dentry = atomic_open(&nd->path, dentry, file, open_flag, mode,

@@ -25,6 +25,25 @@ For our purposes all operations fall in 6 classes:
 
 	* lock the directory we are accessing (exclusive)
 
+	An O_CREAT open is the one exception: if the filesystem has set
+	IOPF_ATOMIC_OPEN_CREATE_SHARED in ->iop_flags and its superblock has
+	not set SB_I_NAMES_COLLIDE, its ->atomic_open() for such an open is
+	called with the directory locked shared, and exclusion for the name
+	being created comes from the in-lookup state of the dentry instead -
+	see Documentation/filesystems/locking.rst.
+	That takes an existing lock in shared mode; it adds no lock and no
+	new ordering, so the ordering analysis below is unaffected.  That
+	holds while d_alloc_parallel() is called with the parent's ->i_rwsem
+	held, as it is here; once in-lookup dentries are taken before
+	->i_rwsem, the create's lookup has to move ahead of the shared parent
+	lock with them.
+
+	Such a create can sleep waiting for an in-lookup dentry while
+	holding the parent shared.  That is not a new wait: a shared-mode
+	lookup already does it, and no thread that has published an
+	in-lookup dentry needs the parent's ->i_rwsem to finish with it, so
+	the waiter cannot be blocking the thread that must wake it.
+
 3. object removal.  Locking rules:
 
 	* lock the parent (exclusive)
