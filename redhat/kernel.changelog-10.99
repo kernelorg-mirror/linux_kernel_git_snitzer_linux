@@ -1,3 +1,64 @@
+* Wed Oct 14 2026 Mike Snitzer <snitzer@kernel.org> [7.3-4]
+- Move "NFSD: Enable return of an updated stable_how to NFS clients" and
+  "NFSD: add io_cache_write modes that persist each direct-mode WRITE"
+  out of nfsd-testing-canary-dontcache and into the Hammerspace private
+  patches
+- Reword commit messages in nfsd-testing-canary-dontcache and
+  nfsd-testing-canary-dontcache-LOCALIO, and shorten the comment on the
+  IOCB_DONTCACHE of nfs_dio_split()'s direct middle
+- Credit LLM assistance in every canary topic as "Assisted-by: LLM",
+  directly above the author's Signed-off-by
+
+* Mon Oct 12 2026 Mike Snitzer <snitzer@kernel.org> [7.3-3]
+- Update anna-nfs-next with the 8 commits anna-nfs/linux-next has added,
+  each cherry-picked with -x from its current commit: Chuck Lever's
+  series naming each network namespace's .nfs keyring in the x509 TLS
+  handshake, "xprtrdma: prevent disconnect feedback during endpoint
+  teardown", "xprtrdma: trim head iovec when the payload arrives via a
+  Write chunk" and "nfs: set gencount on protocol-specific remove"
+- Add Jon Flynn's "xprtrdma: do not clamp the FRWR depth below one
+  chunk": on mlx5 the clamp to max_sge_rd registered a maximum-size READ
+  with 9 MRs, each torn down with its own LOCAL_INV; one MR again lets
+  the reply use SEND_WITH_INV
+- Rename nfs-testing-canary-rdma-ds-connect to nfs-testing-canary-rdma
+
+* Mon Oct 12 2026 Mike Snitzer <snitzer@kernel.org> [7.3-2]
+- redhat: remove all riscv configs and kernel.spec enablement
+- Rebase all branches on Linux v7.3-rc7
+- Update anna-nfs-next to all of anna-nfs/linux-next, each commit
+  cherry-picked with -x from its current commit. New with it: NFS direct
+  I/O moved to iov_iter_extract_pages() with pinned nfs_pages, the pNFS
+  block and SCSI layouts split into PNFS_BLOCK_LAYOUT and
+  PNFS_SCSI_LAYOUT, and "NFS: return DENIED in decode_lock_denied if we
+  cannot decode owner"
+- Add nfsd-next: all of cel/nfsd-next that v7.3-rc7 lacks, 184 commits,
+  each cherry-picked with -x from its current commit, merged ahead of
+  nfsd-testing, which now builds on it as cel/nfsd-testing does
+- nfsd-testing: drop the 4 commits nfsd-next now carries, and take
+  "nfsd: use direct I/O only for the last operation in a COMPOUND" and
+  "SUNRPC: preserve RQ_SECURE across request deferral" from their
+  current cel/nfsd-testing commits; the former now includes xdr4.h
+- Rename snitzer-nfs-fixes to snitzer-nfs-fixes-canary and drop 6
+  NFS/localio and pNFS/flexfiles fixes from it: anna-nfs-next carries
+  them now
+- Carry "NFSv4/pnfs: Give the data server cache its own reference" and
+  "NFSv4/pnfs: Let unused data server connections linger" at the bottom
+  of nfs-testing-canary: anna-nfs/linux-next no longer has them
+- redhat/configs: enable PNFS_BLOCK_LAYOUT and PNFS_SCSI_LAYOUT
+
+* Sun Oct 11 2026 Mike Snitzer <snitzer@kernel.org> [7.3-1]
+- Rebase all branches on kernel-7.3-0, Linux v7.3-rc6 from kernel-ark
+- Stop merging the 8 topics v7.3-rc6 carries in full: vfs-7.3-rc1.iomap,
+  vfs-7.2-merge, nfsd-7.2, nfsd-7.2-1, nfsd-7.2-2, nfsd-7.3, nfs-for-7.2-3
+  and nfs-for-7.3-1
+- Drop the commits of the other topics that v7.3-rc6 carries, among them 10
+  of block-DIO-alignment-fixes' 14
+- redhat/configs: sign modules with RSA, not ML-DSA-87, replacing the 3
+  commits that reverted kernel-ark's ML-DSA module signing configs
+- Drop Revert "uki: use systemd-pcrphase dracut module": kernel-ark now adds
+  systemd-pcrphase or systemd-pcrextend only when dracut has it
+- Rename nfs4_acl-passthru to nfs-testing-canary-nfs4_acl-passthru
+
 * Sun Oct 11 2026 Mike Snitzer <snitzer@kernel.org> [7.3-0]
 - Linux v7.3-rc6, from kernel-ark kernel-7.3.0-0.rc6.a5ebb76233b7.57
 
@@ -24,9 +85,61 @@ Resolves:
 - Linux v7.3.0-0.rc6.0c2669a9f4a1
 Resolves: 
 
+* Wed Oct 07 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-21]
+- redhat: build the aarch64 rhel config with 16K pages too: new
+  kernel-aarch64-16k-rhel.config and its debug variant, the aarch64 config
+  with ARM64_16K_PAGES, PAGE_SIZE_16KB and PAGE_BLOCK_MAX_ORDER=11, so a
+  kernel-16k build (--with arm64_16k, still off by default) has a config
+- NFSD: update nfsd-testing-canary-dontcache: an end of a split WRITE that
+  is already DIO-aligned gets no buffered segment, and only a misaligned end
+  is cut back to a page boundary, so where the page is larger than the DIO
+  alignment a DIO-aligned WRITE smaller than a page can be issued as direct
+  I/O; direct_misaligned_min_pages is replaced by direct_misaligned_min_bytes,
+  default 8192, so the smallest direct middle worth a split no longer grows
+  with the page size
+- Rebuild nfsd-testing-canary-dontcache-LOCALIO on it: LOCALIO direct writes
+  are split the same way, and new "NFS/localio: complete a direct write that
+  shares a page before it returns", so a LOCALIO direct write whose end is
+  DIO-aligned but not on a page boundary is completed before it returns
+  rather than asynchronously, and a buffered write beside it can no longer
+  dirty the shared page before its page cache invalidation, which failed it
+  and made the file's next fsync return -EIO; rebuild
+  nfs-testing-canary-reduce-i_lock-contention-LOCALIO on the result
+
 * Wed Oct 07 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc6.602042bf29f6.52]
 - Linux v7.3.0-0.rc6.602042bf29f6
 Resolves: 
+
+* Tue Oct 06 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-20]
+- block: add two fixes to block-DIO-alignment-fixes: "null_blk: keep each
+  memory-backed copy within one block", so a memory-backed device whose block
+  size is between 512 bytes and the page size no longer reads back blocks of a
+  write that starts mid-block as zeroes, and "dm-delay: do not round a short
+  delay up to the next timer tick", so a delay under 50 ms on an HZ=100 kernel
+  is no longer stretched to the next tick
+- NFSD: add Chuck Lever's "nfsd: use direct I/O only for the last operation in
+  a COMPOUND" to nfsd-testing, so an NFSv4 operation encoded after a direct-mode
+  READ no longer overwrites the tail of its payload
+- SUNRPC: carry "SUNRPC: preserve RQ_SECURE across request deferral" on
+  nfsd-testing in the form Chuck Lever took into his nfsd-testing, and stop
+  merging the snitzer-nfsd-fixes topic
+- NFSD: update nfsd-testing-canary-dontcache: new "NFSD: cut a misaligned
+  direct-mode WRITE at page boundaries", so where the page is larger than the
+  DIO alignment both ends of a split WRITE are cut at page boundaries and its
+  direct middle no longer shares a page with a buffered write, of the same
+  WRITE or the next, which forced a read-back or failed the page cache
+  invalidation; a DIO-aligned WRITE smaller than a page is now buffered there.
+  direct_misaligned_num_pages is now direct_misaligned_min_pages, default 2 on
+  4 KiB pages and 1 on larger pages, and the page a split WRITE's buffered
+  start or end shares with the neighbouring WRITE is now kept, not dropped,
+  until that neighbour has written it too, on every system: before, that was
+  done only where the DIO alignment is at least the page size, as with 4 KiB
+  pages over 4096-byte blocks, and never with 16 KiB or 64 KiB pages over
+  4096-byte blocks, or over 512-byte blocks
+- Rebuild nfsd-testing-canary-dontcache-LOCALIO on it: LOCALIO direct writes
+  are cut at page boundaries the same way, and new "nfs_common: fix the skip
+  accounting in nfs_dio_iter_aligned()"; rebuild
+  nfs-testing-canary-reduce-i_lock-contention-LOCALIO on the result
 
 * Tue Oct 06 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc6.22430ae5d90a.51]
 - Linux v7.3.0-0.rc6.22430ae5d90a
@@ -47,9 +160,45 @@ Resolves:
 - Linux v7.3.0-0.rc5.e767a4ea70a3
 Resolves: 
 
+* Fri Oct 02 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-19]
+- SUNRPC: add new topic snitzer-nfsd-fixes, merged after nfsd-testing:
+  "SUNRPC: preserve RQ_SECURE across request deferral", so a request deferred on an
+  auth cache upcall, as is likely right after a server restart, no longer has its
+  privileged-port check fail (NFSv3 EPERM) or wrongly pass when replayed
+
 * Fri Oct 02 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc5.ce1e0223d8ad.47]
 - Linux v7.3.0-0.rc5.ce1e0223d8ad
 Resolves: 
+
+* Thu Oct 01 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-18]
+- NFSD: update nfsd-testing-canary-dontcache to v4 of the NFSD direct-mode series:
+  new "mm: add folio_mark_dropbehind() to mark a folio dropbehind and account it",
+  which the boundary-page patch now uses so WB_DONTCACHE_DIRTY stays balanced; a
+  shared boundary page is only held when the DIO alignment is page-aligned and the
+  mapping's folios are a single page; a WRITE issued whole as direct I/O keeps
+  IOCB_DSYNC so a DATA_SYNC overwrite can complete with FUA writes; a split WRITE
+  marks the pages it shares with its neighbours for dropping only once the whole
+  WRITE is complete, after its fsync if it has one, so the DONTCACHE writeback kick
+  does not run to write back what the fsync is about to write; and
+  "NFSD: add direct-mode WRITE settings that persist each WRITE" is now
+  "NFSD: add io_cache_write modes that persist each direct-mode WRITE"
+- Rebuild nfsd-testing-canary-dontcache-LOCALIO on it: the nfs_common direct I/O
+  helpers take v4's boundary-page handling, LOCALIO's direct write releases its
+  boundary-page holds when the write completes, inline or through AIO, and
+  LOCALIO's persist-once write keeps IOCB_DSYNC on a write issued whole as direct
+  I/O, as NFSD does; rebuild nfs-testing-canary-reduce-i_lock-contention-LOCALIO
+  on the result
+
+* Thu Oct 01 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-17]
+- NFSD: update nfsd-testing-canary-dontcache from v2 to v3 of the NFSD direct-mode series
+  posted upstream (https://lore.kernel.org/linux-nfs/20261001045502.48381-1-snitzer@kernel.org/):
+  reordered (the direct_misaligned_dontcache knob first, the stable_how patches last),
+  "NFSD: let a direct-mode WRITE raise stable_how and elide the client's COMMIT" now
+  "NFSD: add direct-mode WRITE settings that persist each WRITE", and the stable_how
+  rework no longer lowers the reply to a FILE_SYNC or DATA_SYNC WRITE to an async export
+- Rebuild nfsd-testing-canary-dontcache-LOCALIO on it, and
+  nfs-testing-canary-reduce-i_lock-contention-LOCALIO on the result, both with their
+  patches unchanged
 
 * Thu Oct 01 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc5.551c722f4080.46]
 - redhat: resolve rpmbuild via PATH and fail early if missing (Julio Faracco)
@@ -59,6 +208,66 @@ Resolves: RHEL-266578
 * Wed Sep 30 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc5.551c722f4080.45]
 - Linux v7.3.0-0.rc5.551c722f4080
 Resolves: 
+
+* Tue Sep 29 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-16]
+- Add Chuck Lever's "NFSD: Move version-specific ACCESS maps into
+  per-version code" from nfsd-next to nfsd-testing: each NFS version now has
+  its own ACCESS tables, so NFSv3 and NFSv2-ACL no longer answer for the
+  NFSv4.2 extended-attribute bits
+- Replace the top ten commits of nfsd-testing-canary-dontcache with the
+  series as posted to linux-nfs against nfsd-next:
+  https://lore.kernel.org/linux-nfs/20260929173423.16149-1-snitzer@kernel.org/
+  What each patch does is unchanged, and "NFSD: Enable return of an updated
+  stable_how to NFS clients" now applies beside the new ACCESS tables in
+  nfs4proc.c
+- Drop "NFSD: interlock the use of NFSD_IO_DIRECT for NFS READ and WRITE"
+  from nfsd-testing-canary-dontcache, as it is not going upstream:
+  io_cache_read and io_cache_write are set independently of each other again
+- Rebuild nfsd-testing-canary-dontcache-LOCALIO on a new merge of
+  nfsd-testing-canary-dontcache and snitzer-nfs-fixes, and
+  nfs-testing-canary-reduce-i_lock-contention-LOCALIO on the result, both
+  with their patches unchanged; no other branch changed
+
+* Mon Sep 28 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-15]
+- Update snitzer-nfs-fixes with its first six patches as posted to
+  linux-nfs, in place of the earlier versions of the same six:
+  https://lore.kernel.org/linux-nfs/20260928155430.95985-1-snitzer@kernel.org/
+  Only their commit messages and one code comment changed; two are retitled,
+  "pNFS/flexfiles: don't read through MDS when previous layout forbid it" and
+  "pNFS/flexfiles: don't reset to MDS for v4 error when previous layout forbid
+  it"
+- Replace "NFS: defer the final superblock deactivation" at the tip of
+  snitzer-nfs-fixes with its v2, a three-patch series posted to linux-nfs:
+  https://lore.kernel.org/linux-nfs/20260928185751.98682-1-snitzer@kernel.org/
+  Rather than deferring the final deactivate_super() an open context's
+  release can trigger, writeback no longer releases an open context at all:
+  the flusher holds s_umount and I_SYNC, and could deadlock on either
+- A write that fails before it is sent no longer releases its open context
+  in the flusher, but on nfsiod; this is the hang hit in the field when a
+  server began returning AUTH_TOOWEAK
+- WRITE, COMMIT and the asynchronous LAYOUTCOMMIT that ->write_inode() sends
+  no longer run their release in the submitter, but on nfsiod, where every
+  other write already runs it
+- Add Pavankumar Kondeti's "workqueue: Fix NULL current_pwq deref in
+  mem-reclaim helper", acked by Tejun Heo, to snitzer-nfs-fixes:
+  current_is_workqueue_mem_reclaim(), which LOCALIO uses to decide whether to
+  issue I/O inline, dereferenced current_pwq on a kworker that was not
+  running a work item, where it is NULL
+- nfsd-testing-canary-dontcache-LOCALIO no longer depends on the other NFS
+  client topics: it is now built on a merge of nfsd-testing-canary-dontcache
+  and snitzer-nfs-fixes, and merged before nfs-testing-canary and the topics
+  built on it
+- David Flynn's "NFS: invalidate LOCALIO direct-write post-op attributes at
+  completion" moves from reduce-i_lock-contention to the LOCALIO topic, in
+  its original form, which takes inode->i_lock unconditionally
+- New topic nfs-testing-canary-reduce-i_lock-contention-LOCALIO merges
+  reduce-i_lock-contention and the LOCALIO topic, both of which change
+  nfs_direct_write_completion(); a LOCALIO direct write without post-op
+  attributes becomes one more reason to take inode->i_lock there. The kernel
+  built is identical to the one before this reorganization
+- Restack nfs-testing-canary, reduce-i_lock-contention,
+  reduce-ff-layout-contention and rdma-ds-connect with their patches
+  unchanged; no other branch changed
 
 * Mon Sep 28 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc5.44]
 - Linux v7.3.0-0.rc5
@@ -117,10 +326,74 @@ Resolves:
 - Linux v7.3.0-0.rc4.165768bb7026
 Resolves: 
 
+* Thu Sep 24 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-14]
+- Update snitzer-nfs-fixes and nfs-testing-canary-reduce-i_lock-contention,
+  add nfsd-testing-canary-dontcache-LOCALIO, and restack nfs-testing-canary,
+  reduce-ff-layout-contention and rdma-ds-connect with their patches unchanged
+- LOCALIO: detect a short read or write before the iterator has moved. The
+  test compared the bytes moved against the iterator's count after the call
+  had advanced it, so a short I/O covering 50-99% of a segment slipped
+  through: the next segment went to the wrong file offset and the byte count
+  was over-reported
+- LOCALIO: report the stability a DIO WRITE actually has. Such a write is
+  persisted before it completes whatever was asked for, but the reply still
+  said UNSTABLE, so the client kept its pages and sent a COMMIT whose fsync
+  had nothing left to do
+- LOCALIO: stop fetching server attributes after each NFSv3 direct-write
+  header and invalidate them at completion instead, under the inode lock that
+  completion already takes, rather than taking that lock a second time
+- Share NFSD's direct-I/O write split and boundary-page helpers through
+  fs/nfs_common, and move LOCALIO onto them in place of its own older copy, so
+  a LOCALIO write to a file is split exactly as an RPC write to it would be,
+  under the same export settings
+- LOCALIO now writes the buffered start and end of a misaligned direct write
+  DONTCACHE, and holds the page each shares with the neighbouring write until
+  both have written it. Before, every such page stayed cached until reclaim:
+  628 GiB on an 8 TiB rig write
+- A LOCALIO write whose aligned middle is too small to be worth its own direct
+  I/O, or that cannot use direct I/O at all, is now written whole as a single
+  DONTCACHE buffered write. Before, LOCALIO split every such write in three
+  anyway, around a direct middle of a single page or of nothing at all
+- LOCALIO: persist a synchronous direct write once, after all its segments,
+  rather than a cache flush and log force after each of up to three
+- nfsd-testing-canary-dontcache-LOCALIO is built on a merge of
+  nfsd-testing-canary-dontcache and reduce-i_lock-contention, because the
+  LOCALIO change needs both the NFSD split code and the NFS client's
+  localio.c; the three LOCALIO fixes snitzer-nfs-fixes also carries drop out
+  of it
+
+* Thu Sep 24 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-13]
+- Update nfs-testing-canary, and restack the three topics built on it --
+  reduce-i_lock-contention, reduce-ff-layout-contention and rdma-ds-connect --
+  with their patches unchanged; no other branch changed
+- Fold a fix into "rotate LAYOUTSTATS reporting across a mirror's stripes":
+  read dss_report_start once per mirror, before the stripe loop. The loop
+  advances it after each stripe it reports, so re-reading it moved the index
+  twice, skipping stripes and, on a mirror with stripes not yet written,
+  wrapping back onto one already reported -- which put the same deviceid in
+  one ff_iostats4 array twice with identical counters
+
 * Thu Sep 24 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc4.62f4c998b297.40]
 - redhat/configs/fedora: Enable AW88399 HDA side codec (Junjie Cao) [2537033]
 - Linux v7.3.0-0.rc4.62f4c998b297
 Resolves: rhbz#2537033
+
+* Wed Sep 23 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-12]
+- Rebase nfsd-testing and nfsd-testing-canary-dontcache; no other branch
+  changed
+- nfsd-testing moves from nfsd-7.2 onto nfsd-7.3 and takes two more of Chuck
+  Lever's commits: enum nfs3_stable_how moves to linux/nfs3.h, where a value
+  that only exists on the NFSv3 wire belongs, and nfsd_write() takes IOCB flags
+  in place of an NFSv3 stable_how, so a VFS-facing API no longer depends on an
+  XDR value that NFSv2 does not have and NFSv4 only borrows
+- nfsd-testing-canary-dontcache now builds on nfsd-testing rather than directly
+  on nfsd-7.3, which is what puts the dontcache work on top of that new
+  nfsd_write() signature rather than beside it
+- The dontcache series keeps all 13 of its commits and their subjects; five are
+  adapted to the new signature: returning an updated stable_how to clients,
+  the direct-mode stable_how floor, persisting a synchronous direct-mode WRITE
+  once after all of its segments, the boundary-page handling, and the
+  direct-mode tracing
 
 * Wed Sep 23 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc4.fe2ec83746e5.39]
 - fedora: arm64: enable Samsung S6E3FA7 panel driver (Sam Day)
@@ -131,19 +404,193 @@ Resolves: rhbz#2537033
 - Linux v7.3.0-0.rc4.fe2ec83746e5
 Resolves: 
 
+* Tue Sep 22 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-11]
+- Restructure the NFS client topics around anna-nfs-next; no NFSD branch
+  changed
+- Add trond-nfs-next, one fix: "NFSv4: Fix a regression in the handling of
+  CB_RECALL_ANY"
+- Add anna-nfs-next, 39 commits from Anna Schumaker's nfs-next: 35 of Ben
+  Coddington's flexfiles and pNFS patches, three from Chuck Lever and one from
+  Jeremy Jean, covering the flexfiles device-notification and stripe work,
+  LAYOUTGET sizing, and a client-side TLS alert record check. The O_DIRECT
+  changes at the head of that branch are deliberately left out until they have
+  had more soak time
+- Add snitzer-nfs-fixes on top of it: the localio misaligned-DIO tracepoint
+  fix, the deferred final superblock deactivation, and three patches honouring
+  FF_FLAGS_NO_IO_THRU_MDS over the mdsthreshold hint, so a layout that forbids
+  MDS I/O is not read through or resent to the MDS
+- Rebuild nfs-testing-canary on snitzer-nfs-fixes: 51 commits become 14. Of
+  the 37 that go, anna-nfs-next carries 35 of Ben's, and snitzer-nfs-fixes
+  carries two that moved into it, the localio misaligned-DIO tracepoint fix
+  and the deferred final superblock deactivation. What remains is the
+  UNCACHEABLE_DIRENT_METADATA support and the per-stripe layoutstats work
+- nfs-testing-canary-reduce-ff-layout-contention drops to 7 commits, its three
+  NO_IO_THRU_MDS patches having moved into snitzer-nfs-fixes;
+  reduce-i_lock-contention is unchanged at 8
+- Net effect on the tree is small, six files against -10, because
+  anna-nfs-next re-supplies most of what the canary carried
+- Add nfs-testing-canary-rdma-ds-connect, three commits on nfs-testing-canary
+  about reaching a data server on the transport it asked for
+- Let a transport's initial requests reclaim: xprtrdma allocates every
+  rpcrdma_req and regbuf without __GFP_DIRECT_RECLAIM, which is right on the
+  Send and Receive paths but not for the set built by xprt_create_transport(),
+  where nothing is queued yet and there is no caller to recover from a failure
+- Keep creating the remaining nconnect transports after one fails: rpc_create()
+  broke out of the loop on the first error and nothing added them later, so a
+  mount asking for nconnect=16 could come up with one transport for the life of
+  the client, out of a single transient failure
+- Report a data server left on a non-preferred transport: the connect loop
+  keeps the first address that answers, so a server whose RDMA listener is
+  absent silently leaves the client on TCP for good, the cached data server
+  being reused by every later layout and the address list never re-examined
+
 * Tue Sep 22 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc4.f0100363d8c3.38]
 - redhat/configs/rhel: Enable kmod ML-DSA-87 signing for RHEL (Lenny Szubowicz)
 - Linux v7.3.0-0.rc4.f0100363d8c3
 Resolves: 
 
+* Mon Sep 21 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-10]
+- Update nfsd-testing-canary-dontcache and add
+  nfs-testing-canary-reduce-ff-layout-contention; no other branch changed
+- No functional change in nfsd-testing-canary-dontcache: the boundary-page
+  commit's message now states the measured result where it previously recorded
+  a known limitation. On a four-server pNFS flexfiles rig, three clients
+  writing 47008-byte records for 240s against 640 nfsd threads per server,
+  device reads fall from 0.014-0.015 per record to 0.003, page cache growth
+  over the write phase falls from about 11 GiB to 2.9 GiB, and write throughput
+  rises 2.4% to 4.9% across NFSD_IO_DIRECT and both stable_how floors, with
+  read throughput unchanged
+- Continue the inode->i_lock work with 7 further commits built on it, taking
+  the flexfiles layout segment and the O_DIRECT admission and completion paths
+  off the per-I/O path. With many threads doing O_DIRECT I/O through one
+  segment, the line holding pls_refcount and pls_flags is the hottest on the
+  client, and every other CPU using that segment eats the miss
+- Stop dirtying it on every data server RPC: four locked read-modify-writes
+  there change nothing after the first RPC, and are now tested before they are
+  set
+- Give the segment's read-mostly fields their own cacheline, so the reads every
+  RPC makes of stripe_unit, mirror_array and the rest no longer share a line
+  with the refcount other CPUs are writing
+- Bound a data server RPC with pg_bsize computed once in pg_init rather than a
+  test run for every page added, which read that same line each time:
+  ff_layout_pg_test was 7-13% of client CPU with 256 threads writing one file,
+  and ff_layout_pg_get_mirror_count_write another 12%
+- Hand the page I/O descriptor's segment reference to the pgio header instead
+  of taking a second one, removing two more locked updates of the shared
+  refcount per O_DIRECT I/O
+- Admit an O_DIRECT I/O without taking inode->i_rwsem: the shared lock does not
+  serialise the I/O, it only keeps NFS_INO_ODIRECT from being cleared
+  underneath it, so an inode already in O_DIRECT mode takes an i_dio_count
+  reference instead and hundreds of threads stop doing a pair of atomic
+  read-modify-writes on one inode's cacheline per I/O
+- Finish a stable O_DIRECT write inline instead of handing it to nfsiod: when
+  every WRITE came back stable there is nothing to commit or resend, and the
+  commit_mutex that path took was the client's most contended mutex, 9.6s of
+  wait per 10s of run with 256 threads
+- Account nfsi->read_io and nfsi->write_io only for an inode whose open context
+  carries an I/O mdsthreshold; for every NFSv3 file, every NFSv4.0 file and
+  every pNFS file whose server returns no I/O threshold they were write-only
+  and dirtied a shared nfs_inode cacheline on each I/O
+
 * Mon Sep 21 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc4.37]
 - Linux v7.3.0-0.rc4
 Resolves: 
+
+* Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-9]
+- Add nfs-testing-canary-reduce-i_lock-contention; no other branch changed
+- Stop taking a shared file's inode->i_lock once per O_DIRECT request: six call
+  sites on the write path and five on the read path each took it about 172,000
+  times a second with many processes doing small stable O_DIRECT I/O to one
+  file over pNFS flexfiles, and contended acquisitions for that workload fall
+  from 11.2M per 10s to 0.74M, total wait from 274s to 4.3s
+- Fix __nfs_find_lock_context() never finding the lock context embedded in the
+  open context, so every direct request for the owner that opened the file
+  allocated a second one and took i_lock twice to link and free it
+- Skip the locked update wherever it would change nothing: a WRITE reply that
+  carries no attributes and ends below EOF, an atime already marked stale, a
+  delegated atime or mtime already at the current coarse clock, and an empty
+  flexfiles commit array; anything else takes the existing locked path
+- Look up the cached pNFS layout segment under RCU with the new
+  pnfs_lookup_cached_lseg(), which returns a segment only where
+  pnfs_update_layout() would have reported it cached and otherwise falls back
+  to it; the new EXPORT_SYMBOL_GPL lives in nfsv4.ko and is used by
+  nfs_layout_flexfiles.ko, so the two modules must come from the same build
+
+* Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-8]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- No functional change from -7: the series is reordered and its commit
+  messages, code comments and Documentation/filesystems/nfs/nfsd-io-modes.rst
+  rewritten for upstream posting. The only code change is renaming complete to
+  complete_first, a second flag now sitting beside it for the last edge page;
+  mm/ and include/ are byte-identical to -7
+- Lead the series with the bdi WB_DONTCACHE_DIRTY debugfs stat, its only
+  Fixes-tagged commit and the one independently applicable change
+- Record why a boundary page is inserted unmarked and marked only after its
+  write, using the unaccounted setter: a page counted in WB_DONTCACHE_DIRTY is
+  written back, and dropped, by the DONTCACHE writeback kick in the gap between
+  the two WRITEs that share it. Measured 13 device reads per 45664 WRITEs of
+  47008-byte records and none for 6000-byte records, against 1213 and 2987 with
+  the mechanism disabled
+- State what the stable_how floor modes are for rather than offering them as an
+  experiment: they elide a COMMIT that is redundant once the data is persistent
+  when NFSD replies, worth about 20us of server CPU each, and the COMMITs cost
+  +31% server and +42% client CPU for the same bytes where every WRITE splits
+- Present direct_misaligned_dontcache as a page-cache policy choice rather than
+  a reference arm for A/B comparison, naming the workloads that want it off:
+  those that read back or repeatedly rewrite what they just wrote
+
+* Sun Sep 20 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-7]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Mark the boundary page of a split direct-mode WRITE dropbehind after its data
+  is written rather than before: a writer that blocked on the filesystem inode
+  lock in between left a clean marked folio, which whatever writeback completed
+  next then dropped, so the write landed on a fresh folio and read the block
+  back; 0.026 to 0.017 device reads per direct-mode WRITE on interleaved
+  47008-byte records
+- Claim the edge pages of a WRITE that gets no direct middle, issued as a
+  single buffered DONTCACHE segment: its partial first and last pages are
+  shared with the neighbouring WRITEs exactly like a prefix or suffix but went
+  unclaimed, so each was dropped at writeback and read back by its partner,
+  one synchronous read inside every such WRITE; 0.985 to 0.001 device reads per
+  WRITE on 6000-byte records, a 62% higher WRITE rate, and page cache growth
+  over the run down from about 5% of the bytes written to zero
 
 * Sat Sep 19 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc3.40288c9206c1.36]
 - Keep the older NTFS3 module around as well for Fedora (Justin M. Forbes)
 - Linux v7.3.0-0.rc3.40288c9206c1
 Resolves: 
+
+* Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-6]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Replace -4's tail-page scheme with one the page cache arbitrates: a split
+  WRITE's boundary page is claimed on first touch and marked dropbehind only by
+  the second writer to complete it, so interleaved writers from different
+  clients no longer force a read-modify-write and page cache growth is bounded
+  by writer concurrency rather than by bytes written
+- direct_misaligned_num_pages moves to debugfs and direct_misaligned_dontcache
+  joins it under /sys/kernel/debug/nfsd/; the latter selects DONTCACHE (Y,
+  default) or cached buffered IO for the non-direct parts of a direct-mode WRITE
+- nfsd_write_dio_split reports dontcache= as its own field; its disposition
+  drops the mem_misaligned_dontcache/_cached variants for plain mem_misaligned
+
+* Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-5]
+- Update nfs-testing-canary; no other branch changed
+- Keep pNFS data server connections across deviceid eviction: the data server
+  cache now holds its own reference, and an entry whose last layout is returned
+  lingers for dataserver_linger seconds (default 120, 0 restores the old
+  behaviour) instead of being torn down, so a NOCACHE deviceid no longer costs
+  a synchronous reconnect and NULL ping on every layout cycle
+
+* Fri Sep 18 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-4]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Persist a synchronous direct-mode WRITE once, after all of its segments,
+  rather than a range fsync after each segment: one cache flush and log force
+  per WRITE instead of up to three
+- Keep the tail page of a direct-mode WRITE cached so the next sequential
+  WRITE's prefix completes it without a read-modify-write; the completed prefix
+  page is dropped once the WRITE is persisted, so the page cache stays bounded
+- Extend that to UNSTABLE WRITEs: their completed boundary pages are dropped on
+  COMMIT, once its fsync has succeeded
 
 * Fri Sep 18 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc3.5dd1818b15d9.35]
 - redhat: add vfio selftests to kernel-modules-internal package (Rodolfo Vick) [RHEL-237560]
@@ -154,6 +601,24 @@ Resolves:
 - Linux v7.3.0-0.rc3.5dd1818b15d9
 Resolves: RHEL-127733, RHEL-237560
 
+* Thu Sep 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-3]
+- Update nfsd-testing-canary-dontcache; no other branch changed
+- Keep NFSD out of the page cache whenever a direct-mode WRITE cannot be direct
+  I/O: every non-direct exit and every buffered segment of a split is now
+  DONTCACHE, and a WRITE whose middle cannot be direct is no longer split
+- Fix the io_cache_read debugfs knob ignoring the dontcache and direct modes
+- Add tracing for how a direct-mode READ or WRITE is serviced, and report the
+  DONTCACHE dirty backlog in the bdi debugfs stats
+
+* Thu Sep 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-2]
+- Update nfs-testing-canary; no other branch changed
+- Engage pNFS for wide striped layouts: LAYOUTGET now sizes loga_maxcount from
+  its reply buffer and retries once at the session maximum on NFS4ERR_TOOSMALL,
+  rather than falling back to the MDS
+- Scale flexfiles layoutstats: accounting moves from the per-mirror lock to a
+  per-stripe lock, one cacheline per I/O direction, and LAYOUTSTATS reporting
+  rotates over a mirror's stripes instead of always reporting the first four
+
 * Thu Sep 17 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc3.238650ef6c7c.34]
 - Linux v7.3.0-0.rc3.238650ef6c7c
 Resolves: 
@@ -162,11 +627,26 @@ Resolves:
 - Linux v7.3.0-0.rc3.9b87fdc9af2f
 Resolves: 
 
+* Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-1]
+- Rebase all branches on kernel-7.1.13-0
+- Drop 2 NFS FREE_STATEID fixes from nfs-for-7.2-3 that landed in 7.1.13
+- Collapse nfs-for-7.2-1 into nfs-for-7.2-3; its remaining commits are in 7.1.13
+- vfs-7.2-merge is now linear: the 3 upstream vfs-7.2-rc1 tag merges did not
+  survive the rebase, their commits did
+
+* Tue Sep 15 2026 Mike Snitzer <snitzer@kernel.org> [7.1.13-0]
+- Linux v7.1.13
+
 * Tue Sep 15 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc3.587858367581.32]
 - redhat/configs/fedora: Enable dwc dual-role and ulpi phy support (Hans de Goede)
 - redhat/configs/fedora: Enable some drivers for x86 tablets (Hans de Goede)
 - Linux v7.3.0-0.rc3.587858367581
 Resolves: 
+
+* Mon Sep 14 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-6]
+- redhat: move .gitlab-ci.yml to redhat/upstream-ci.yml.disabled
+- first use of HS's kernel-rpmtree scripts to audit, rebase and release all topic branches
+- NFS: defer the final superblock deactivation
 
 * Mon Sep 14 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc3.704340f1cd0d.31]
 - redhat/configs: automotive: disable CONFIG_CRYPTO_DEV_TEGRA (Erico Nunes)
@@ -193,9 +673,19 @@ Resolves:
 - Linux v7.3.0-0.rc2.50d05c7c76c9
 Resolves: 
 
+* Wed Sep 09 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-5]
+- rebased Ben's 3 v7.1.8-2 changes ontop of his 24 patch series from v7.1.8-4
+- brd: iterate the bio by byte position, not bi_sector
+- zram: handle sub-page bvec segments without corrupting data
+- nfsd: fetch direct I/O alignment for files handed to the filecache
+- fix "NFSD: add NFSD_IO_DIRECT heuristic for small IO" to not clobber IOCB_DONTCACHE
+
 * Wed Sep 09 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc2.893e11787f78.26]
 - Linux v7.3.0-0.rc2.893e11787f78
 Resolves: 
+
+* Tue Sep 08 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-4]
+- NFS: flexfiles device notifications and caching for wide striped layouts
 
 * Tue Sep 08 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc2.28924df2a08f.25]
 - redhat: remove the dead debugbuildsenabled machinery (Jan Stancek)
@@ -265,6 +755,11 @@ Resolves:
 - Linux v7.3.0-0.rc0.66498c75b4f8
 Resolves: 
 
+* Mon Aug 24 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-3]
+- backfill upstream 7.3 commit ID and header updates for block/iomap DIO alignment fixes
+- NFSv4.1: zero referring call lists before decoding
+- pNFS: Fix EBUSY check in pnfs_layout_need_return
+
 * Mon Aug 24 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc0.47096fc3d064.10]
 - Fix up an s390 mismatch (Justin M. Forbes)
 - Switch CPU_IDLE for a mismatch (Justin M. Forbes)
@@ -293,6 +788,12 @@ Resolves:
 * Thu Aug 20 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc0.bd5f485f3f02.5]
 - Turn off RUST in pending for ppc to revisit after merge window (Justin M. Forbes)
 Resolves: 
+
+* Wed Aug 19 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-2]
+- NFSv4/flexfiles: report the intended opnum when DS connection setup fails
+- pNFS: allow layout drivers to cancel I/O to a single device
+- NFSv4/flexfiles: only cancel I/O to a failed mirror instance
+- iomap and NVMe performance improvements via vfs-7.3-rc1.iomap changes
 
 * Wed Aug 19 2026 Fedora Kernel Team <kernel-team@fedoraproject.org> [7.3.0-0.rc0.bd5f485f3f02.4]
 - Turn on QCOM_PAS in pending (Justin M. Forbes)
@@ -3659,3 +4160,9 @@ Resolves:
 - [initial commit] Add Makefiles (Laura Abbott)
 - Linux v7.3.0-0.rc0.0f23d56f17fd
 Resolves: RHEL-100104, RHEL-104231, RHEL-119326, RHEL-122979, RHEL-1242, RHEL-135256, RHEL-141647, RHEL-142637, RHEL-147296, RHEL-150853, RHEL-185930, RHEL-186934, RHEL-1927, RHEL-23931, RHEL-24047, RHEL-24137, RHEL-26170, RHEL-29245, RHEL-32110, RHEL-32895, RHEL-32987, RHEL-35995, RHEL-36646, RHEL-36647, RHEL-40251, RHEL-40411, RHEL-40937, RHEL-41231, RHEL-43425, RHEL-43556, RHEL-44306, RHEL-49398, RHEL-50799, RHEL-51896, RHEL-52629, RHEL-54183, RHEL-56069, RHEL-68296, RHEL-72093, RHEL-78341, RHEL-78931, RHEL-79711, RHEL-79818, RHEL-82779, RHEL-85301, RHEL-8810, RHEL-88228, RHEL-88635, RHEL-94503, RHEL-95436, RHEL-96987, rhbz#1471185, rhbz#1518076, rhbz#1519554, rhbz#1546831, rhbz#1559877, rhbz#1561171, rhbz#1563590, rhbz#1565704, rhbz#1565717, rhbz#1572321, rhbz#1590829, rhbz#1595918, rhbz#1602033, rhbz#1609604, rhbz#1610493, rhbz#1613522, rhbz#1638087, rhbz#1652256, rhbz#1652266, rhbz#1663728, rhbz#1670017, rhbz#1722136, rhbz#1730649, rhbz#1802694, rhbz#1810301, rhbz#1821565, rhbz#1831065, rhbz#1855161, rhbz#1856174, rhbz#1856176, rhbz#1858592, rhbz#1858594, rhbz#1858596, rhbz#1858599, rhbz#1869674, rhbz#1871130, rhbz#1876435, rhbz#1876436, rhbz#1876977, rhbz#1877192, rhbz#1880486, rhbz#1890304, rhbz#1903201, rhbz#1915073, rhbz#1915290, rhbz#1930649, rhbz#1939095, rhbz#1940075, rhbz#1940794, rhbz#1943423, rhbz#1945002, rhbz#1945179, rhbz#1945477, rhbz#1947240, rhbz#1948340, rhbz#1952426, rhbz#1952863, rhbz#1953486, rhbz#1956988, rhbz#1957210, rhbz#1957219, rhbz#1957305, rhbz#1957636, rhbz#1957819, rhbz#1961178, rhbz#1962936, rhbz#1964537, rhbz#1967640, rhbz#1972795, rhbz#1976270, rhbz#1976835, rhbz#1976877, rhbz#1976884, rhbz#1977056, rhbz#1977529, rhbz#1978539, rhbz#1979379, rhbz#1981406, rhbz#1983298, rhbz#1986223, rhbz#1988254, rhbz#1988384, rhbz#1990040, rhbz#1993393, rhbz#1994858, rhbz#1998953, rhbz#2000835, rhbz#2002344, rhbz#2004233, rhbz#2004821, rhbz#2006813, rhbz#2007430, rhbz#2012226, rhbz#2014492, rhbz#2019377, rhbz#2020132, rhbz#2022578, rhbz#2023782, rhbz#2024595, rhbz#2025985, rhbz#2026319, rhbz#2027506, rhbz#2031547, rhbz#2032758, rhbz#2034670, rhbz#2038999, rhbz#2040643, rhbz#2041184, rhbz#2041186, rhbz#2041365, rhbz#2041990, rhbz#2042240, rhbz#2042241, rhbz#2043141, rhbz#2044155, rhbz#2053836, rhbz#2054579, rhbz#2062054, rhbz#2062909, rhbz#2071969, rhbz#2089765, rhbz#2115876, rhbz#2120968, rhbz#2122595, rhbz#2140017, rhbz#2142658, rhbz#2149273, rhbz#2153073, rhbz#2166911, rhbz#2188441, rhbz#2208834, rhbz#2216678, rhbz#2227793, rhbz#2231407, rhbz#2233269, rhbz#2375049
+* Mon Aug 17 2026 Mike Snitzer <snitzer@kernel.org> [7.1.8-1]
+- Rebase all branches on kernel-7.1.8-0
+- Backfill VFS changes that were merged into 7.2 as deps for nfsd-7.2
+- Include NFS server changes from nfsd-7.3
+- Include NFS client changes that will be in nfs-for-7.3-1
+
