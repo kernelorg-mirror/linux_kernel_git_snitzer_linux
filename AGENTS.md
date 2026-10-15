@@ -49,11 +49,19 @@ the branches in step and about where development is done.
   in behaviour came with it: **TCP receive page loans are off by default**
   (`sunrpc.svc_tcp_rx_loan_pages=N`; `xeu-rig/settled.sh` sets `Y` for
   the rig), and an NFSv4 COMPOUND with a tag keeps its loan until the
-  reply is encoded. Still open (Mike): whether to drop the first three
-  code commits (the stacking device's DMA alignment, several thread
-  pools per NUMA node, veth's `rx_ip_align`) and the last ("SUNRPC:
-  Optionally copy TCP record data outside the socket lock") and the
-  page_pool region's future upstream. Ronaldo's twelve commits carry
+  reply is encoded. **On 15 October several thread pools per NUMA node
+  (`pools_per_node`) was dropped (Mike: Chuck Lever has called it a
+  dead end; the patch is in `NFSD_TCP_WRITE_ZEROCOPY/patches/dropped/`,
+  tardis1 runs one pool), and the spare-page bound was folded into the
+  page-swap commit it fixes**, so the code group is 37 commits; the
+  tips before are kept as `.pre-drop-pools` and `.pre-fold-spare`.
+  What of the code group runs in practice is step 6 of
+  `NFSD_TCP_WRITE_ZEROCOPY/CODE-SERIES.md` (a survey, not a decision:
+  nothing else is to be dropped unless Mike says so). Still open
+  (Mike): whether to drop the stacking device's DMA alignment, veth's
+  `rx_ip_align` and the last code commit ("SUNRPC: Optionally copy TCP
+  record data outside the socket lock"), and the page_pool region's
+  future upstream. Ronaldo's twelve commits carry
   his mail address, `ronaldo@slipstream-io.com`, as author and in his
   Signed-off-by since 2026-10-15 (Mike); the tips before that are kept
   with the suffix `.pre-ronaldo-addr`.
