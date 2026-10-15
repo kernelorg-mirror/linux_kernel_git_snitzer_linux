@@ -11119,7 +11119,7 @@ static void nfs4_disable_swap(struct inode *inode)
 	wake_up_var(&clp->cl_state);
 }
 
-static const struct inode_operations nfs4_dir_inode_operations = {
+static struct inode_operations nfs4_dir_inode_operations = {
 	.create		= nfs_create,
 	.lookup		= nfs_lookup,
 	.atomic_open	= nfs_atomic_open,
@@ -11140,6 +11140,113 @@ static const struct inode_operations nfs4_dir_inode_operations = {
 	.mkdir2		= nfs_mkdir2,
 	.iop_flags	= IOPF_ATOMIC_OPEN_CREATE_SHARED,
 };
+
+/*
+ * =====================================================================
+ * LAB-ONLY A/B INSTRUMENT.  NOT FOR SUBMISSION.  DELETE BEFORE POSTING.
+ * =====================================================================
+ *
+ * Everything from this banner down to the END banner below, together
+ * with the removal of "const" from nfs4_dir_inode_operations above,
+ * exists only so that one build can be measured with the shared parent
+ * lock for O_CREAT both on and off.  It is not upstream material.  To
+ * recover the submitted patch: delete everything from this banner
+ * through the END banner inclusive and put "const" back.  The
+ * .iop_flags line above stays -- that line, and only that line, is the
+ * patch.
+ *
+ * The flag is written at runtime, which is why const had to go: a const
+ * ops table lands in the module's read-only data, and with
+ * CONFIG_STRICT_MODULE_RWX=y writing to it would oops.
+ *
+ * SCOPE.  nfs4_dir_inode_operations is one table that every NFSv4
+ * directory inode on every NFSv4 mount in the kernel points at (the
+ * S_ISDIR arm of nfs_fhget() in fs/nfs/inode.c), so a write here takes
+ * effect at once for every NFSv4 directory, already-cached ones
+ * included -- and NOT per mount.  Two arms cannot be run side by side
+ * on two mounts of one kernel.
+ *
+ * THE KNOB IS SAFE TO FLIP UNDER LOAD, and on this base the argument is
+ * shorter than it was.  lookup_open() takes the parent's i_rwsem
+ * itself, and reads this field once after its retry: label, into
+ * create_shared, beside the lock mode it selects and the dentry
+ * handling it governs.  One frame, one read, one acquisition; nothing
+ * is passed down and no second frame re-derives it.  So a single open
+ * cannot take i_rwsem shared on one read of the flag and then skip the
+ * in-lookup conversion on another read of it.  An open that reads the
+ * flag set takes i_rwsem shared and is guaranteed an in-lookup dentry;
+ * an open that reads it clear takes i_rwsem exclusive and behaves
+ * exactly as an unpatched kernel does.  The two cannot overlap in one
+ * directory, because a shared holder and an exclusive holder of the
+ * same i_rwsem exclude each other, and the in-lookup lifetime ends
+ * inside the lock -- atomic_open() calls d_lookup_done() immediately
+ * after ->atomic_open() returns, well before the parent is unlocked.  A
+ * flip therefore changes arms one open at a time, each open internally
+ * consistent, so no quiesce is needed.  (An open that goes round
+ * lookup_open()'s delegation retry re-reads the field for the lock it
+ * is about to take, which is again one read per acquisition.)
+ *
+ * It is still a measurement boundary rather than an instant one: an
+ * open already past the read in lookup_open() completes in the previous
+ * arm, so start timing after the flip rather than across it.  A
+ * non-O_CREAT open is unaffected in either arm; create_shared
+ * short-circuits on O_CREAT and this field is never read.
+ *
+ * The VFS reads the field with a plain load, which is correct for a
+ * const ops table.  Under this knob that is a data race and KCSAN will
+ * say so.  Do not answer it by adding READ_ONCE() to fs/namei.c: the
+ * field is immutable in the submitted form.
+ *
+ * The read-modify-write below needs no lock of its own, and this is
+ * worth stating because it looks like it does.  param_attr_store() in
+ * kernel/params.c wraps ->set() in kernel_param_lock(mk->mod), which is
+ * mutex_lock(&mod->param_lock), so every sysfs write to a parameter of
+ * one module is serialized against every other.  A second lab knob on
+ * this same table -- there is one, for the parallel-unlink series --
+ * therefore cannot interleave with this setter and lose its bit, and
+ * neither can a concurrent write to this knob itself.  Module load sets
+ * parameters one at a time, so it is covered too.  Do not add a mutex
+ * here; it would be dead weight in a commit that must not be posted.
+ */
+
+static bool nfs4_parallel_create = true;
+
+static int nfs4_param_set_parallel_create(const char *val,
+					  const struct kernel_param *kp)
+{
+	iop_flags_t flags;
+	int ret;
+
+	ret = param_set_bool(val, kp);
+	if (ret)
+		return ret;
+
+	flags = nfs4_dir_inode_operations.iop_flags;
+	if (nfs4_parallel_create)
+		flags |= IOPF_ATOMIC_OPEN_CREATE_SHARED;
+	else
+		flags &= ~IOPF_ATOMIC_OPEN_CREATE_SHARED;
+	WRITE_ONCE(nfs4_dir_inode_operations.iop_flags, flags);
+
+	pr_notice("NFS: shared parent lock for O_CREAT %s\n",
+		  nfs4_parallel_create ? "enabled" : "disabled");
+	return 0;
+}
+
+static const struct kernel_param_ops nfs4_parallel_create_param_ops = {
+	.flags	= KERNEL_PARAM_OPS_FL_NOARG,
+	.set	= nfs4_param_set_parallel_create,
+	.get	= param_get_bool,
+};
+
+module_param_cb(parallel_create, &nfs4_parallel_create_param_ops,
+		&nfs4_parallel_create, 0644);
+MODULE_PARM_DESC(parallel_create,
+		 "LAB ONLY: shared parent lock for O_CREAT (default Y)");
+
+/*
+ * ======================= END LAB-ONLY INSTRUMENT =====================
+ */
 
 static const struct inode_operations nfs4_file_inode_operations = {
 	.permission	= nfs_permission,
