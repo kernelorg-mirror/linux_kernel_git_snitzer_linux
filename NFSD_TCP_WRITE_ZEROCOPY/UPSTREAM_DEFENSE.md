@@ -102,7 +102,8 @@ to be a blocker.
   switch to disable TCP receive page loans" + "SUNRPC: cover the loan
   kill-switch in the svcsock KUnit suite" (placement footnotes in both
   for the final rebase). Shape chosen: a writable module parameter,
-  `sunrpc.svc_tcp_rx_loan_pages` (bool, default Y, 0644), read once
+  `sunrpc.svc_tcp_rx_loan_pages` (bool, default N since 14 October
+  2026, when loans became opt-in; 0644), read once
   per RPC record in `svc_tcp_rx_classify()` right after the XID is
   captured; clear → `SVC_TCP_RX_COPY` with new named reason
   `disabled` (enum + tracepoint string). Off state is byte-identical
