@@ -2162,6 +2162,150 @@ static void svcsock_rx_partial_save_restore_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, page_ref_count(head_page), head_refs - 1);
 }
 
+static void svcsock_rx_spare_restore_max(void *data)
+{
+	svc_tcp_spare_kunit_set_max((unsigned long)data);
+}
+
+/* Bound the pages sockets keep for exchange to @bytes for this test. */
+static void svcsock_rx_spare_set_max(struct kunit *test, unsigned long bytes)
+{
+	unsigned long old = svc_tcp_spare_kunit_set_max(bytes);
+
+	KUNIT_ASSERT_EQ(test,
+			kunit_add_action_or_reset(test,
+						  svcsock_rx_spare_restore_max,
+						  (void *)old),
+			0);
+}
+
+/*
+ * Park a one-page partial record on the socket, then give the thread a
+ * page of its own in place of the one it parked, as svc_alloc_arg()
+ * would.  The caller restores the record into that thread.
+ */
+static struct sk_buff *
+svcsock_rx_spare_park(struct kunit *test, struct svcsock_rx_fixture *fixture,
+		      struct page **own, unsigned int *own_refs)
+{
+	enum { BODY_LEN = 7 * XDR_UNIT + 12 };
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = sizeof(record) };
+	struct page *head_page;
+	unsigned int head_refs;
+	struct sk_buff *skb;
+	int ret;
+
+	svcsock_rx_fill_record(record, BODY_LEN, false, RPC_CALL, RPC_AUTH_UNIX);
+	skb = svcsock_rx_build_page_skb(test, record, sizeof(record),
+					&head_page, &head_refs);
+	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, skb, 0,
+				   skb->len);
+	KUNIT_ASSERT_EQ(test, ret, (int)skb->len);
+	KUNIT_ASSERT_FALSE(test, actor.complete);
+	KUNIT_ASSERT_EQ(test, svc_tcp_save_pages(fixture->svsk, fixture->rqstp), 0);
+	KUNIT_ASSERT_NULL(test, fixture->rqstp->rq_pages[0]);
+
+	/* The test's reference keeps the page across a free by the code. */
+	*own = svcsock_rx_alloc_page(test);
+	KUNIT_ASSERT_NOT_NULL(test, *own);
+	get_page(*own);
+	*own_refs = page_ref_count(*own);
+	fixture->rqstp->rq_pages[0] = *own;
+	return skb;
+}
+
+/* End the restored record and close the socket's receive state. */
+static void svcsock_rx_spare_finish(struct kunit *test,
+				    struct svcsock_rx_fixture *fixture,
+				    struct sk_buff *skb)
+{
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_abort(fixture->svsk, fixture->rqstp,
+					 fixture->rqstp->rq_tcp_rx,
+					 SVC_TCP_RX_ERROR,
+					 SVC_TCP_RX_REASON_COPY_FAULT), 0);
+	kunit_kfree_skb(test, skb);
+	svc_tcp_recv_record_done(fixture->svsk);
+	svc_tcp_clear_pages(fixture->svsk);
+}
+
+/*
+ * With no room under svc_tcp_spare_bytes_max, a restore frees the
+ * thread's pages, as it did before sockets kept any.
+ */
+static void svcsock_rx_spare_none_test(struct kunit *test)
+{
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	unsigned int own_refs;
+	struct sk_buff *skb;
+	struct page *own;
+	long base;
+
+	svcsock_rx_spare_set_max(test, 0);
+	skb = svcsock_rx_spare_park(test, fixture, &own, &own_refs);
+	base = svc_tcp_spare_kunit_pages();
+
+	KUNIT_ASSERT_EQ(test, svc_tcp_restore_pages(fixture->svsk,
+						    fixture->rqstp), 0);
+	KUNIT_EXPECT_NULL(test, fixture->svsk->sk_pages[0]);
+	KUNIT_EXPECT_PTR_NE(test, fixture->rqstp->rq_pages[0], own);
+	KUNIT_EXPECT_EQ(test, fixture->svsk->sk_spare_pages, 0U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_spare_kunit_pages(), base);
+	KUNIT_ASSERT_EQ(test,
+			folio_batch_count(&fixture->rqstp->rq_fbatch), 1U);
+	folio_batch_release(&fixture->rqstp->rq_fbatch);
+	KUNIT_EXPECT_EQ(test, page_ref_count(own), own_refs - 1);
+
+	svcsock_rx_spare_finish(test, fixture, skb);
+	KUNIT_EXPECT_EQ(test, svc_tcp_spare_kunit_pages(), base);
+}
+
+/*
+ * With room, a restore keeps the thread's pages on the socket and counts
+ * them; a save takes them back, and the close frees them, each giving
+ * the count back.
+ */
+static void svcsock_rx_spare_kept_test(struct kunit *test)
+{
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	unsigned int own_refs;
+	struct sk_buff *skb;
+	struct page *own;
+	long base;
+
+	svcsock_rx_spare_set_max(test, ULONG_MAX);
+	skb = svcsock_rx_spare_park(test, fixture, &own, &own_refs);
+	base = svc_tcp_spare_kunit_pages();
+
+	KUNIT_ASSERT_EQ(test, svc_tcp_restore_pages(fixture->svsk,
+						    fixture->rqstp), 0);
+	KUNIT_EXPECT_PTR_EQ(test, fixture->svsk->sk_pages[0], own);
+	KUNIT_EXPECT_EQ(test, fixture->svsk->sk_spare_pages, 1U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_spare_kunit_pages(), base + 1);
+	KUNIT_EXPECT_EQ(test,
+			folio_batch_count(&fixture->rqstp->rq_fbatch), 0U);
+
+	/* The next save takes the kept page in exchange. */
+	KUNIT_ASSERT_EQ(test, svc_tcp_save_pages(fixture->svsk,
+						 fixture->rqstp), 0);
+	KUNIT_EXPECT_PTR_EQ(test, fixture->rqstp->rq_pages[0], own);
+	KUNIT_EXPECT_EQ(test, fixture->svsk->sk_spare_pages, 0U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_spare_kunit_pages(), base);
+
+	/* Kept again, and freed when the socket closes. */
+	KUNIT_ASSERT_EQ(test, svc_tcp_restore_pages(fixture->svsk,
+						    fixture->rqstp), 0);
+	KUNIT_EXPECT_PTR_EQ(test, fixture->svsk->sk_pages[0], own);
+	KUNIT_EXPECT_EQ(test, svc_tcp_spare_kunit_pages(), base + 1);
+	svcsock_rx_spare_finish(test, fixture, skb);
+	KUNIT_EXPECT_NULL(test, fixture->svsk->sk_pages[0]);
+	KUNIT_EXPECT_EQ(test, fixture->svsk->sk_spare_pages, 0U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_spare_kunit_pages(), base);
+	KUNIT_EXPECT_EQ(test, page_ref_count(own), own_refs - 1);
+}
+
 static void svcsock_rx_exclusion_table_test(struct kunit *test)
 {
 	static const struct {
@@ -3123,6 +3267,8 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_credit_factor_bounds_test),
 	KUNIT_CASE(svcsock_rx_capacity_plus_one_test),
 	KUNIT_CASE(svcsock_rx_partial_save_restore_test),
+	KUNIT_CASE(svcsock_rx_spare_none_test),
+	KUNIT_CASE(svcsock_rx_spare_kept_test),
 	KUNIT_CASE(svcsock_rx_exclusion_table_test),
 	KUNIT_CASE(svcsock_rx_materialize_test),
 	KUNIT_CASE(svcsock_rx_merge_then_materialize_test),
