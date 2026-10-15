@@ -1,4 +1,104 @@
-# 13 October, evening: read this first
+# 15 October: the boot into the reworked tree — read this first
+
+Written late on 14 October, after Mike pushed
+`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` at `32cf5556bd2e` (459
+commits on `v7.3-3`) and started a pipeline build of it, for the
+session after he reboots tardis1 into that build. Where it differs
+from the sections after it, it is right.
+
+## What the kernel is
+
+The series reworked for upstream that night: the code group reviewed,
+folded, split and given upstream messages, 38 code commits, then 44
+KUnit interface and test commits, then the docs. The account is steps
+3 to 5 of `../CODE-SERIES.md`; `AGENTS.md`'s branch entry has the
+summary. Build 473 was built from the tree before it. The code differs
+from 473's in six places only (`git diff
+kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-code.pre-fixes
+kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-code.73rebase8`, 6 files):
+
+- **TCP receive page loans are off by default**
+  (`svc_tcp_rx_loan_pages`, Y on 473). `settled.sh` sets Y and its
+  audit holds the rig to Y, so the rig loans as before; a kernel booted
+  without it applied copies every record.
+- An NFSv4 COMPOUND with a tag keeps its loan until the reply is
+  encoded (the tag is copied from the received pages then).
+- The reply cache checksums a call's first bytes from a buffer on the
+  stack, not from the reply buffer.
+- `pc_xdr_bvec` is a bool, `svc_proc_lookup()` is exported only for
+  KUnit, an unused include is gone, and the KUnit-only
+  `svc_tcp_rx_fixed_factor()` lives in the KUnit interface.
+- `svc_tcp_rx_copy_unlocked` was already gone (see "Copy mode on 7.3"):
+  records are copied under the socket lock unless
+  `svc_tcp_rx_copy_threads` is 1 or more. On one port the two carried
+  the same on 473 (45.81 GB/s locked, 45.40 unlocked, six runs
+  alternating on seven drives, `$L/b473/ab4.log`); two ports were not
+  settled.
+
+Recognise it: `uname -r` names a build after 473, and
+`modinfo -p sunrpc | grep loan_pages` says "(default: N)".
+
+## First, in this order
+
+1. `getconf PAGESIZE` is 16384. Mount the data drives (not in
+   `/etc/fstab`): `for n in 0 1 2 3 4 5 6 7; do mount -o noatime
+   /dev/nvme${n}n1 /hs/nvme$n; done`; `./drive-cache.sh` shows `write
+   through` on all eight.
+2. `./settled.sh apply` ends in "the settled setting"; never get past a
+   BAD item by hand. Then `cat
+   /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages` is `Y`.
+3. **The four KUnit suites, never yet run on the reworked tree**:
+   `../run-kunit.sh` with nfs-server stopped (it puts the server and
+   the settled setting back and fails if the host is not at it). It
+   needs the suites installed for this kernel (the RPM's
+   modules-internal package). On 473 they ran 7, 46, 6 and 10 cases
+   with no failure and no skip; the tests did not change in the rework,
+   so the same is expected. Both the tip with KUnit and without it were
+   built clean with `CONFIG_WERROR=y` on 14 October
+   (`/hs/nvme3/kbuild-logs/`), but nothing was run.
+4. **No regression against build 473**, at the setting and with the
+   commands under "Where it stands" and "The loan on 7.3":
+   two ports (`RCVBUF=393216 ENTRIES=128 LINGER=0 LOWAT=0 ./twoport.sh
+   <out> ab`; 473: 59.27 and 59.36), one port on eight drives (473:
+   45.98 to 47.76), and the three loan plans through `sweep.sh` (473's
+   table below). Same code as 473 but for the six changes, so the same
+   figures are expected.
+
+**The drives first.** On 14 October they were tired: after 13 minutes
+idle nvme2 stepped down at 341 GB (a fresh drive takes about 625) and
+nvme3 had been stepping down first in every run; the one-port
+comparison that night ran on seven drives without nvme3 (`FS_A` of
+the other seven). After a reboot they have rested; still read
+`drives.txt` of every run, and keep runs short (the comparisons that
+night used `WARM=10 RUNTIME=30 REST=120`, and nvme3 still stepped down
+once at 34 s on two ports).
+
+## Still Mike's to decide
+
+Dropping the first three code commits (the stacking device's DMA
+alignment, several thread pools per NUMA node, veth's `rx_ip_align`)
+and the last ("SUNRPC: Optionally copy TCP record data outside the
+socket lock"; the case is in `../CODE-SERIES.md`, step 4); the
+page_pool region's future upstream; Ronaldo's author address on his
+twelve commits. Do not act on these unasked.
+
+## Left over from 14 October
+
+- Worktrees on nvme3, a data drive kept out of the measurements: the
+  walk's tree `/hs/nvme3/walk` (logs `/hs/nvme3/walk-logs/`, the walk
+  script `walk.sh` there, `run14-73rebase8` the last clean walk) and
+  `/hs/nvme3/kbuild`. Remove them with `git worktree remove` before
+  nvme3 is measured again.
+- The rework's working worktree was in a session scratch directory
+  under `/tmp`; if a reboot removed it, `git worktree prune`. Its
+  branches stay: `…-code.73rebase1` to `.73rebase8` are the stages
+  worth keeping; `…-code` and the `…-code.pre-*`, `.restructure*`,
+  `.splits*`, `.msgs`, `.comments`, `.bvecmove-1`, `-reorder-1*` and
+  `-reorder-2` branches are working copies Mike may delete.
+- `sparse` v0.6.5-rc1 from git master is in `/usr/local/bin` (EPEL's
+  0.6.4 fails the kernel's checker probe).
+
+# 13 October, evening
 
 Written at the end of 13 October on tardis1 (build 464, 16 KiB
 pages) as the handoff, brought up to date late that night after the
