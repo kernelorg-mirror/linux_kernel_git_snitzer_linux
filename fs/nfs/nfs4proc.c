@@ -11135,6 +11135,7 @@ static const struct inode_operations nfs4_dir_inode_operations = {
 	.listxattr	= nfs4_listxattr,
 	.fileattr_get	= nfs_fileattr_get,
 	.mkdir2		= nfs_mkdir2,
+	.iop_flags	= IOPF_ATOMIC_OPEN_CREATE_SHARED,
 };
 
 static const struct inode_operations nfs4_file_inode_operations = {
