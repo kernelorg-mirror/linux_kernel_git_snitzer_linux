@@ -1191,8 +1191,8 @@ time. Clear it and every receive classifies `mode=copy reason=disabled`
 — the pre-loan receive, byte-identical. Toggle at runtime:
 
 ```sh
-echo N > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages   # loans off
-echo Y > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages   # loans on (default)
+echo N > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages   # loans off (default)
+echo Y > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages   # loans on
 ```
 
 Because the switch is consulted per record (not per connection), a flip
