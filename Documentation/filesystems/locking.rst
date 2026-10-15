@@ -120,7 +120,7 @@ listxattr:	no
 fiemap:		no
 update_time:	no
 sync_lazytime:	no
-atomic_open:	shared (exclusive if O_CREAT is set in open flags)
+atomic_open:	shared (exclusive if O_CREAT unless the fs opts in)
 tmpfile:	no
 fileattr_get:	no or exclusive
 fileattr_set:	exclusive
@@ -134,6 +134,85 @@ get_offset_ctx  no
 	->unlink() and ->rename() have ->i_rwsem exclusive on all non-directories
 	involved.
 	->rename() has ->i_rwsem exclusive on any subdirectory that changes parent.
+
+	->atomic_open() with O_CREAT set is called with ->i_rwsem on the
+	parent held exclusive, unless the filesystem has set
+	IOPF_ATOMIC_OPEN_CREATE_SHARED in the ->iop_flags of that
+	directory's ->i_op; then lookup_open() calls it with ->i_rwsem held
+	shared, as ->atomic_open() without O_CREAT already is;
+	dentry_create(), which nfsd uses, is still called with it held
+	exclusive.  The flag is a property of the ->i_op instance, so it
+	applies to every directory using it.  It is ignored unless the
+	filesystem also provides ->atomic_open(): without that method the
+	parent is still taken exclusive, so ->create() is never called with
+	->i_rwsem held shared.
+
+	IOPF_ATOMIC_OPEN_CREATE_SHARED is transitional: it chooses how the
+	parent is locked for a create, and goes away once the VFS no longer
+	takes the parent lock for one.
+
+	Setting IOPF_ATOMIC_OPEN_CREATE_SHARED is a statement that the
+	filesystem does not rely on the exclusive parent lock to exclude
+	other creates in the same directory, or to serialize its own
+	per-directory state.  Creates in one directory may then run
+	concurrently with each other, with an ->atomic_open() for the same
+	or another name without O_CREAT, and with ->lookup() and
+	->iterate_shared().  What excludes two creates of the same name is
+	the in-lookup protocol: whenever ->atomic_open() is called with
+	O_CREAT set and ->i_rwsem held shared, the VFS guarantees that the
+	dentry passed is in-lookup (d_in_lookup() is true), so a concurrent
+	lookup or create of that name finds it in the in-lookup hash and
+	waits for it.  With ->i_rwsem held exclusive - on a superblock that
+	has set SB_I_NAMES_COLLIDE, or through dentry_create() - the dentry
+	need not be in-lookup and may be a hashed negative one, as before.
+	Nothing else changes: ->create(), ->link(), ->unlink(), ->mkdir(),
+	->rmdir(), ->mknod(), ->symlink() and ->rename() still take
+	->i_rwsem exclusive on the parent, so a create holding it shared
+	still excludes them.
+
+	The flag is also ignored, and the parent taken exclusive, on a
+	superblock that has set SB_I_NAMES_COLLIDE in ->s_iflags.  A
+	filesystem sets that bit when two names the dcache compares as
+	different - byte for byte, or through ->d_hash() and ->d_compare()
+	where it has them - can be one directory entry, as they are on a
+	case-insensitive server whose client does not fold case in the
+	dcache.  The in-lookup protocol is per name as the dcache compares
+	names, so there it would exclude a second create of "foo" and not a
+	create of "FOO".  A filesystem whose ->d_compare() already makes such
+	names equal, as a casefolded directory's does, has no reason to set
+	it.  The bit may change while the filesystem is mounted.  The VFS
+	reads it for each open before it takes the parent lock, so an open
+	that read it clear may still be running shared when it is set.
+
+	A filesystem that sets the flag must publish its result on the
+	dentry passed to ->atomic_open() with d_splice_alias() or d_add(),
+	which hash it and end the in-lookup state together, inside the
+	parent's ->i_dir_seq window, or with d_add_ci(), which leaves it
+	unhashed and publishes a dentry of the case-exact name that way.
+	It must not hash it with d_rehash().  d_rehash() takes ->d_lock and
+	adds the name to the dentry hash, nothing more: the in-lookup state
+	does not end, no ->i_dir_seq window is taken, and the waiters are
+	not woken.  A concurrent d_alloc_parallel() for the name then
+	neither finds a reason to retry nor has anything to wait for, and
+	hashes a second dentry for it.  The result is two hashed dentries
+	for one name with independent inode state, lookups getting either,
+	and nothing in the VFS detecting the condition.
+
+	The guarantee is for the O_CREAT opener only.  Under the shared lock
+	an O_CREAT open can run concurrently with a plain open of the same
+	name, and only the O_CREAT one is handed an in-lookup dentry; the
+	other may be holding a dentry it found hashed and revalidated.  That
+	pairing is not new - two plain opens of one name can already reach
+	->atomic_open() that way under the same shared lock - and the VFS
+	does not close it.  A filesystem setting this flag is responsible
+	for it, as it is today.  One way, which NFS uses, is for
+	->d_revalidate() to report a cached negative dentry invalid when
+	LOOKUP_OPEN is set without LOOKUP_CREATE: lookup_open() then drops
+	it and calls d_alloc_parallel() itself, so the plain open is also
+	handed an in-lookup dentry, or waits on the creator's.  Calling
+	d_alloc_parallel() from ->atomic_open() instead relies on in-lookup
+	dentries being allocated under ->i_rwsem, which is planned to
+	change.
 
 See Documentation/filesystems/directory-locking.rst for more detailed discussion
 of the locking scheme for directory operations.
