@@ -481,6 +481,35 @@ not settled. That is the case for dropping it: off by default, level on
 the rig, and the commit netdev will look at hardest. **Held (Mike,
 14 October): not split; it may be dropped entirely.**
 
+## Step 5: the code group finished, and the rest put back (14 October, night)
+
+On from `.73rebase4`, each stage again kept as a branch:
+
+| branch | tip | what changed |
+|---|---|---|
+| `…-code.73rebase5` | `40758310a924` | the tcp commit (`tcp_sock_set_scaling_ratio_max()`) moved next to its only user, the region budget |
+| `…-code.73rebase6` | `fbf4c9cbc99e` | the three commits proposed for dropping (the stacking device's DMA alignment, several thread pools per NUMA node, veth's `rx_ip_align`) moved to the front, so they can go without touching the rest |
+| `…-code.73rebase7` | `7470262a5041` | every message rewritten for upstream (no lab, product, KUnit or downstream text; the folded commits described as they now are), NFSD and SUNRPC subjects in Chuck Lever's style |
+| `…-code.comments` | `61e3ae890a5a` | the code's own comments cleaned: the Xsight E1 figures and the KUnit remarks out of svcsock.c, and the KUnit-only `svc_tcp_rx_fixed_factor()` out of the code group (`.73rebase8` once its walk is clean) |
+
+The code group is 38 commits with no `Fixes:` inside it; the two that
+remain point into mainline (the loop fix on `6c8dec275ccc`, the
+LAYOUTRETURN fix on `645fcad37142`).
+
+`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-reorder-2` is that code group
+with the KUnit interface, KUnit test and docs commits of
+`…-reorder-1.full` put back on top. Only the first KUnit interface
+commit ("SUNRPC/nfsd: expose the receive internals for the KUnit
+suites") needed resolving, and it now carries what the code group gave
+up: `EXPORT_SYMBOL_IF_KUNIT(svc_proc_lookup)` (the code no longer
+exports it; the nfsd suite calls it from its own module), the
+`svc_tcp_rx_fixed_factor()` hook with its two uses, and
+`svc_tcp_rx_loan_pages` visible to the suites at its new default, off.
+Apart from the docs, the tip differs from `…-reorder-1.full` only by
+the changes made on purpose: loans off by default, a tagged COMPOUND
+keeping its loan, the reply cache checksum from a stack buffer,
+`pc_xdr_bvec` a bool, no unused include, and the comments.
+
 ## Next steps
 
 1. Mike reviews the survey and the first order.
