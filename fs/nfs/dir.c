@@ -1901,6 +1901,11 @@ out_bad:
 	return nfs_lookup_revalidate_done(dir, dentry, inode, error);
 }
 
+/*
+ * Answers -ECHILD under LOOKUP_RCU while a removal of the name is in
+ * flight.  Otherwise waits for any such removal to end, and answers 1 if
+ * the one it found was made with the parent held shared, else 0.
+ */
 static int
 __nfs_lookup_revalidate(struct dentry *dentry, unsigned int flags)
 {
@@ -1910,15 +1915,28 @@ __nfs_lookup_revalidate(struct dentry *dentry, unsigned int flags)
 			return -ECHILD;
 	} else {
 		void **fsdata = &dentry->d_fsdata;
+		void *mark;
 
-		/* Wait for unlink to complete - see unblock_revalidate().
-		 * smp_load_acquire() ensures ->d_fsdata is read after
-		 * ->d_seq was read, matching block_revalidate() which
-		 * sets ->d_fsdata before ->d_seq.
+		/*
+		 * Wait for unlink to complete - see unblock_revalidate().  One
+		 * load, as there are two values to test.  smp_load_acquire()
+		 * ensures ->d_fsdata is read after ->d_seq was read, matching
+		 * __block_revalidate(), which sets ->d_fsdata before ->d_seq.
+		 * The acquire in the wait pairs with the release in
+		 * unblock_revalidate(): a waiter that finds the mark clear
+		 * sees what the remover did before clearing it.  For a removal
+		 * made with the parent held shared, that includes the unhash of
+		 * a dentry it took away, as the VFS calls d_delete() before
+		 * ->unlink_shared_done(); nfs_unlink() and nfs_rename() may
+		 * clear the mark first and unhash after.
 		 */
+		mark = smp_load_acquire(fsdata);
+		if (!nfs_fsdata_blocked(mark))
+			return 0;
 		wait_var_event(fsdata,
-			       /* one load: there are two values to test */
+			       /* acquire: pairs with unblock_revalidate() */
 			       !nfs_fsdata_blocked(smp_load_acquire(fsdata)));
+		return nfs_fsdata_blocked_shared(mark);
 	}
 	return 0;
 }
@@ -1926,7 +1944,7 @@ __nfs_lookup_revalidate(struct dentry *dentry, unsigned int flags)
 static int nfs_lookup_revalidate(struct inode *dir, const struct qstr *name,
 				 struct dentry *dentry, unsigned int flags)
 {
-	if (__nfs_lookup_revalidate(dentry, flags))
+	if (__nfs_lookup_revalidate(dentry, flags) < 0)
 		return -ECHILD;
 	return nfs_do_lookup_revalidate(dir, name, dentry, flags);
 }
@@ -2341,9 +2359,27 @@ nfs4_lookup_revalidate(struct inode *dir, const struct qstr *name,
 		       struct dentry *dentry, unsigned int flags)
 {
 	struct inode *inode;
+	int ret;
 
-	if (__nfs_lookup_revalidate(dentry, flags))
+	ret = __nfs_lookup_revalidate(dentry, flags);
+	if (ret < 0)
 		return -ECHILD;
+
+	/*
+	 * A removal made with the parent held shared that succeeded while
+	 * this lookup waited for it, holding the dentry, has left the dentry
+	 * positive but unhashed: d_delete() empties a dentry only for its last
+	 * user.  The dentry no longer stands for its name, so have the caller
+	 * look the name up again; the checks below could accept it, since
+	 * with a directory delegation the removal stamped it delegated.  Only
+	 * ref-walk waits, so this never answers 0 under LOOKUP_RCU.  A dentry
+	 * found unhashed without such a wait is left to the checks below, as
+	 * before: its holder may be unable to look the name up again, as
+	 * overlayfs is for the dentries of its lower layers, which it
+	 * revalidates itself.
+	 */
+	if (ret && d_unhashed(dentry))
+		return 0;
 
 	trace_nfs_lookup_revalidate_enter(dir, dentry, flags);
 
