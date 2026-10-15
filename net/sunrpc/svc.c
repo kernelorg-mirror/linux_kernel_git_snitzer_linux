@@ -21,6 +21,7 @@
 #include <linux/module.h>
 #include <linux/kthread.h>
 #include <linux/slab.h>
+#include <kunit/visibility.h>
 
 #include <linux/sunrpc/types.h>
 #include <linux/sunrpc/xdr.h>
@@ -1422,6 +1423,7 @@ __be32 svc_proc_lookup(const struct svc_program *progp, u32 version,
 	*procpp = &versp->vs_proc[procedure];
 	return rpc_success;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_proc_lookup);
 
 __be32
 svc_generic_init_request(struct svc_rqst *rqstp,

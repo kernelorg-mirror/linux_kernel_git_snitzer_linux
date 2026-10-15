@@ -39,6 +39,7 @@
 #include <linux/kthread.h>
 #include <linux/namei.h>
 #include <linux/pagemap.h>
+#include <kunit/visibility.h>
 
 #include <linux/sunrpc/addr.h>
 #include <linux/nfsd_ssc.h>
@@ -1461,7 +1462,7 @@ static void nfsd4_file_mark_deleg_written(struct nfs4_file *fi)
  * operations whose decoded arguments are plain values are known not to;
  * any other later operation keeps the payload.
  */
-static bool nfsd4_payload_shared(struct svc_rqst *rqstp)
+VISIBLE_IF_KUNIT bool nfsd4_payload_shared(struct svc_rqst *rqstp)
 {
 	struct nfsd4_compoundargs *args = rqstp->rq_argp;
 	struct nfsd4_compoundres *resp = rqstp->rq_resp;
@@ -1481,6 +1482,7 @@ static bool nfsd4_payload_shared(struct svc_rqst *rqstp)
 	}
 	return false;
 }
+EXPORT_SYMBOL_IF_KUNIT(nfsd4_payload_shared);
 
 static __be32
 nfsd4_write(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
@@ -4414,6 +4416,17 @@ static const struct svc_procedure nfsd_procedures4[2] = {
 		.pc_name = "COMPOUND",
 	},
 };
+
+#if IS_ENABLED(CONFIG_KUNIT)
+const struct svc_procedure *
+nfsd4_procedure(unsigned int procedure)
+{
+	if (procedure >= ARRAY_SIZE(nfsd_procedures4))
+		return NULL;
+	return &nfsd_procedures4[procedure];
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd4_procedure);
+#endif
 
 const struct svc_version nfsd_version4 = {
 	.vs_vers		= 4,

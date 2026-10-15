@@ -10,6 +10,7 @@
 #include <linux/namei.h>
 #include <linux/nfs3.h>
 #include <linux/sunrpc/svc_xprt.h>
+#include <kunit/visibility.h>
 
 #include "nfsd.h"
 #include "xdr3.h"
@@ -577,6 +578,7 @@ nfs3svc_decode_writeargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 
 	return xdr_stream_subsegment(xdr, &args->payload, args->count);
 }
+EXPORT_SYMBOL_IF_KUNIT(nfs3svc_decode_writeargs);
 
 bool
 nfs3svc_decode_createargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
