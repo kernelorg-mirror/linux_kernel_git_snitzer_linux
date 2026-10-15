@@ -1,0 +1,189 @@
+From 99c4413a06444e06e4773a278240a3881a137c2a Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Fri, 9 Oct 2026 16:20:48 -0600
+Subject: [PATCH] SUNRPC: Allow more than one thread pool per NUMA node
+
+A pooled service has one thread pool per NUMA node, so on a single-node
+server every thread shares one queue of ready transports, and every
+dequeue takes that queue's lock.  With 512 nfsd threads on a 64-CPU,
+single-node server and 64 busy connections, perf lock reported several
+seconds of waiting on that lock in __lwq_dequeue() per ten seconds of
+run time.
+
+Add a pools_per_node module parameter (1 to 64, default 1).  Each node
+gets that many pools, and svc_xprt_enqueue() queues a transport on one
+of its node's pools selected by a hash of the transport, so a given
+connection is always served by the same pool and each queue lock is
+shared by a fraction of the threads and transports.  Threads are
+spread across the pools as they are across nodes, and on a single-node
+system their CPU affinity is left alone, as it is today.
+
+svc_pool_for_cpu() becomes svc_pool_for_xprt(), since its only caller
+has the transport in hand.  The parameter is read when the first pooled
+service is created.
+
+Assisted-by: LLM
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ include/linux/sunrpc/svc.h |  2 +-
+ net/sunrpc/svc.c           | 53 +++++++++++++++++++++++++++++---------
+ net/sunrpc/svc_xprt.c      |  2 +-
+ 3 files changed, 43 insertions(+), 14 deletions(-)
+
+diff --git a/include/linux/sunrpc/svc.h b/include/linux/sunrpc/svc.h
+index 02fa69f8b81d..0e9675d83765 100644
+--- a/include/linux/sunrpc/svc.h
++++ b/include/linux/sunrpc/svc.h
+@@ -483,7 +483,7 @@ int		   svc_register(struct svc_serv *serv, struct net *net,
+ void		   svc_wake_up(struct svc_serv *);
+ void		   svc_reserve(struct svc_rqst *rqstp, int space);
+ void		   svc_pool_wake_idle_thread(struct svc_pool *pool);
+-struct svc_pool   *svc_pool_for_cpu(struct svc_serv *serv);
++struct svc_pool   *svc_pool_for_xprt(struct svc_xprt *xprt);
+ unsigned int	   svc_serv_nrpools(const struct svc_serv *serv);
+ char *		   svc_print_addr(struct svc_rqst *, char *, size_t);
+ const char *	   svc_proc_name(const struct svc_rqst *rqstp);
+diff --git a/net/sunrpc/svc.c b/net/sunrpc/svc.c
+index 7e23af94a719..75cd967b5e56 100644
+--- a/net/sunrpc/svc.c
++++ b/net/sunrpc/svc.c
+@@ -21,6 +21,7 @@
+ #include <linux/module.h>
+ #include <linux/kthread.h>
+ #include <linux/slab.h>
++#include <linux/hash.h>
+ 
+ #include <linux/sunrpc/types.h>
+ #include <linux/sunrpc/xdr.h>
+@@ -46,8 +47,9 @@ static void svc_unregister(const struct svc_serv *serv, struct net *net);
+ struct svc_pool_map {
+ 	int count;			/* How many svc_servs use us */
+ 	unsigned int npools;
++	unsigned int per_node;		/* pools for each node */
+ 	unsigned int *pool_to;		/* maps pool id to node */
+-	unsigned int *to_pool;		/* maps node to pool id */
++	unsigned int *to_pool;		/* maps node to its first pool id */
+ };
+ 
+ static struct svc_pool_map svc_pool_map;
+@@ -102,6 +104,21 @@ param_get_pool_mode(char *buf, const struct kernel_param *kp)
+ module_param_call(pool_mode, param_set_pool_mode, param_get_pool_mode,
+ 		  NULL, 0644);
+ 
++/*
++ * A node's threads share one queue of ready transports and one list of
++ * idle threads, and with hundreds of threads and tens of busy transports
++ * that queue's lock is contended.  pools_per_node gives each node that many
++ * pools; a transport is always queued on the same one of them, so each
++ * connection is served by one pool's threads.  The threads are still held
++ * to the node's CPUs, and are spread across the pools as across nodes.
++ * Read when the first pooled service is created.
++ */
++#define SVC_POOLS_PER_NODE_MAX	64
++static unsigned int svc_pools_per_node = 1;
++module_param_named(pools_per_node, svc_pools_per_node, uint, 0644);
++MODULE_PARM_DESC(pools_per_node,
++		 "Thread pools for each NUMA node (1 to 64, default 1); takes effect when the first pooled service starts");
++
+ /*
+  * Allocate the to_pool[] and pool_to[] arrays.
+  * Returns 0 on success or an errno.
+@@ -126,27 +143,30 @@ svc_pool_map_alloc_arrays(struct svc_pool_map *m, unsigned int maxpools)
+ }
+ 
+ /*
+- * Initialise the pool map for one pool per NUMA node.
++ * Initialise the pool map for pools_per_node pools per NUMA node.
+  * Returns number of pools or <0 on error.
+  */
+ static int
+ svc_pool_map_init_pernode(struct svc_pool_map *m)
+ {
+-	unsigned int maxpools = nr_node_ids;
++	unsigned int per_node = clamp(READ_ONCE(svc_pools_per_node), 1U,
++				      SVC_POOLS_PER_NODE_MAX);
++	unsigned int maxpools = nr_node_ids * per_node;
+ 	unsigned int pidx = 0;
+-	unsigned int node;
++	unsigned int node, i;
+ 	int err;
+ 
+ 	err = svc_pool_map_alloc_arrays(m, maxpools);
+ 	if (err)
+ 		return err;
+ 
++	m->per_node = per_node;
+ 	for_each_node_with_cpus(node) {
+ 		/* some architectures (e.g. SN2) have cpuless nodes */
+-		BUG_ON(pidx > maxpools);
++		BUG_ON(pidx + per_node > maxpools);
+ 		m->to_pool[node] = pidx;
+-		m->pool_to[pidx] = node;
+-		pidx++;
++		for (i = 0; i < per_node; i++)
++			m->pool_to[pidx++] = node;
+ 	}
+ 	/* nodes brought online later all get mapped to pool0, sorry */
+ 
+@@ -229,6 +249,10 @@ svc_pool_map_set_cpumask(struct task_struct *task, unsigned int pidx)
+ 	if (m->count == 0)
+ 		return;
+ 
++	/* One node's pools: as with one pool, leave the thread where it is. */
++	if (m->npools <= m->per_node)
++		return;
++
+ 	set_cpus_allowed_ptr(task, cpumask_of_node(node));
+ }
+ 
+@@ -251,17 +275,20 @@ unsigned int svc_serv_nrpools(const struct svc_serv *serv)
+ EXPORT_SYMBOL_GPL(svc_serv_nrpools);
+ 
+ /**
+- * svc_pool_for_cpu - Select pool to run a thread on this cpu
+- * @serv: An RPC service
++ * svc_pool_for_xprt - Select the pool that serves a transport
++ * @xprt: A transport with work to do
+  *
+- * Use the active CPU and the svc_pool_map to select the svc thread
+- * pool to use. Once initialized, the svc_pool_map does not change.
++ * Use the active CPU's node and the svc_pool_map to select the svc thread
++ * pool to use; where a node has several pools, the transport picks one of
++ * them and always the same one. Once initialized, the svc_pool_map does
++ * not change.
+  *
+  * Return value:
+  *   A pointer to an svc_pool
+  */
+-struct svc_pool *svc_pool_for_cpu(struct svc_serv *serv)
++struct svc_pool *svc_pool_for_xprt(struct svc_xprt *xprt)
+ {
++	struct svc_serv *serv = xprt->xpt_server;
+ 	unsigned int nrpools = svc_serv_nrpools(serv);
+ 	struct svc_pool_map *m = &svc_pool_map;
+ 	unsigned int pidx, i;
+@@ -281,6 +308,8 @@ struct svc_pool *svc_pool_for_cpu(struct svc_serv *serv)
+ 	 * transport is serviced.
+ 	 */
+ 	pidx = m->to_pool[cpu_to_node(raw_smp_processor_id())];
++	if (m->per_node > 1)
++		pidx += hash_ptr(xprt, 32) % m->per_node;
+ 	for (i = 0; i < nrpools; i++) {
+ 		struct svc_pool *pool = &serv->sv_pools[pidx];
+ 
+diff --git a/net/sunrpc/svc_xprt.c b/net/sunrpc/svc_xprt.c
+index dd6a57e40d51..9c8cc5432fe8 100644
+--- a/net/sunrpc/svc_xprt.c
++++ b/net/sunrpc/svc_xprt.c
+@@ -522,7 +522,7 @@ void svc_xprt_enqueue(struct svc_xprt *xprt)
+ 	if (test_and_set_bit(XPT_BUSY, &xprt->xpt_flags))
+ 		return;
+ 
+-	pool = svc_pool_for_cpu(xprt->xpt_server);
++	pool = svc_pool_for_xprt(xprt);
+ 
+ 	percpu_counter_inc(&pool->sp_sockets_queued);
+ 	xprt->xpt_qtime = ktime_get();
+-- 
+2.52.0
+
