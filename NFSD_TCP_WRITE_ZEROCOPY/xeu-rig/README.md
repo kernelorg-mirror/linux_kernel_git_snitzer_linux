@@ -55,7 +55,8 @@ Recognise it: `uname -r` names a build after 473, and
    with no failure and no skip; the tests did not change in the rework,
    so the same is expected. Both the tip with KUnit and without it were
    built clean with `CONFIG_WERROR=y` on 14 October
-   (`/hs/nvme3/kbuild-logs/`), but nothing was run.
+   (`/var/tmp/zc-run-logs/walk-73rebase/kbuild-tip-result.txt`), but
+   nothing was run.
 4. **No regression against build 473**, at the setting and with the
    commands under "Where it stands" and "The loan on 7.3":
    two ports (`RCVBUF=393216 ENTRIES=128 LINGER=0 LOWAT=0 ./twoport.sh
@@ -84,11 +85,12 @@ twelve commits. Do not act on these unasked.
 
 ## Left over from 14 October
 
-- Worktrees on nvme3, a data drive kept out of the measurements: the
-  walk's tree `/hs/nvme3/walk` (logs `/hs/nvme3/walk-logs/`, the walk
-  script `walk.sh` there, `run14-73rebase8` the last clean walk) and
-  `/hs/nvme3/kbuild`. Remove them with `git worktree remove` before
-  nvme3 is measured again.
+- The walk and the builds ran in worktrees on nvme3, removed again
+  that night: nvme3 holds only the harness's `zcbudget` and was
+  trimmed. What is kept of them is in
+  `/var/tmp/zc-run-logs/walk-73rebase/`: `walk.sh` (to walk again, give
+  it a tree and its paths), its configuration, and every walk's
+  summary (`run14-73rebase8.summary.txt` the last, 38 of 38 clean).
 - The rework's working worktree was in a session scratch directory
   under `/tmp`; if a reboot removed it, `git worktree prune`. Its
   branches stay: `…-code.73rebase1` to `.73rebase8` are the stages
