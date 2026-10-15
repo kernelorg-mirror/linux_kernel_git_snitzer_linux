@@ -255,10 +255,14 @@ stepped down`) before believing its figure. `xeu-rig/drvchar.py` is
 the local probe; the account is "What a drive takes" in
 `NFSD_TCP_WRITE_ZEROCOPY/XEU_CONVERGENCE.md`.
 
-**From the evening of 2026-10-13, on tardis1 start at the first
-section of
+**After the reboot into the build of the reworked tree (pushed
+2026-10-14 at `32cf5556bd2e`), on tardis1 start at the first section
+of
 [`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md),
-"13 October, evening: read this first".** It is the handoff: where
+"15 October: the boot into the reworked tree — read this first"**: the
+first checks on that kernel (the settled setting, the KUnit suites, no
+regression against build 473) and what is still Mike's to decide. The
+section after it, "13 October, evening", is the handoff before that. It is the handoff: where
 copy mode stands (60.41 GB/s on two ports, 47.39 on one, the limit
 on two ports being memory with the DIMMs fully populated), the two
 pinned command lines, the rules for a run, what was decided that day
