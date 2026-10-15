@@ -1614,9 +1614,10 @@ measured alone; that is step 6 of the README and waits for Mike.
     `svcsock_rx_spare_kept_test` (no bound: kept and counted, taken
     back by a save, freed at close, the count back where it was).
   - **What has been run:** built at 16 KiB with `CONFIG_WERROR`, W=1
-    and sparse, with no new warnings. The one sparse warning in
-    `svcsock_kunit.c`, a cast to `netmem_ref` without `__force` in
-    `svcsock_rx_page_pool_recycle_test`, was there before. Checkpatch
+    and sparse, with no new warnings. The one sparse warning
+    `svcsock_kunit.c` had before, a cast to `netmem_ref` without
+    `__force` in `svcsock_rx_page_pool_recycle_test`, is fixed in its
+    own KUnit-tests commit, so the file is sparse-clean. Checkpatch
     is clean on all three commits. The suite has not run: svcsock
     should now be 46 tests. Nothing has run on tardis1.
   - **To read on tardis1:** whether the copy rate holds at the
