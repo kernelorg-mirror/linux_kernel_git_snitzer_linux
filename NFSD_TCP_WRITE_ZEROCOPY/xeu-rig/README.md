@@ -191,13 +191,143 @@ and the host was left at it.
   `include/trace/events/sunrpc_base.h`, which 7.3 does not have; the
   build is not affected.
 
+## 15 October, afternoon: the tip's sunrpc on build 474, and the series cut
+
+The branch moved on that afternoon: six commits from Mike (the
+spare-page bound, its KUnit interface and tests, a sparse fix), then
+several thread pools per NUMA node dropped and the bound folded into
+the page swap it fixes (`../CODE-SERIES.md`, step 6, "What was done").
+Everything below ran on build 474 with sunrpc built from the branch
+(`build-sunrpc.sh`, the window clamp put back to the socket option for
+the build only, since 474 has no `tcp_sock_set_window_clamp()`) and
+swapped in (`swap-sunrpc.sh`, its own KUnit modules installed beside
+it in `updates/`). The drivers and logs are in `$L/b474lw/`,
+`$L/b474sp/` and `$L/b474cov/`.
+
+**The drives are tired**: in these runs one or more stepped down in
+14 of 19 copy runs, as early as 18 s into a 30 s run after 120 s of
+rest. Only the runs no drive stepped down in are read for rate below.
+
+### `->set_rcvlowat` (step 5): it does what the write to `sk_rcvlowat` did
+
+Two ports at the two-port setting, by turns, `$L/b474lw/ab.log`:
+
+| mark | sunrpc | runs no drive stepped down in | GB/s | threads woken a WRITE |
+|---|---|---|---|---|
+| 131072 | 474's own | old-1, old-5 | 56.53, 54.87 | 7.67, 7.69 |
+| 131072 | `->set_rcvlowat` | new-3 | 57.09 | 7.79 |
+| 0 | the tip's (with `->set_rcvlowat` and the bound) | `$L/b474sp`, four runs | 59.41 to 59.81 | 10.0 to 12.8 |
+
+The mark set through TCP's interface halves wakeups as before and
+costs the rate it cost on 13 October; with the mark off the call is
+never made (the mark stays 1). Nothing changes in the pinned setting:
+`svc_tcp_rx_lowat=0`. The other three runs with the mark on, and both
+of the new module with it off in this A/B, had drives stepping down.
+
+### The spare-page bound: it holds, costs no rate, and saves nfsd's CPU
+
+`$L/b474sp/queue.sh`, log `queue.log`. The rig learned the knob first:
+`settled.sh` holds `svc_tcp_spare_bytes_max` at 64 MiB (reported, not
+failed, on a sunrpc without it), `twoport.sh` and `sweep.sh` take
+`SPARE=`, and `spare-count.py` reads the count of kept pages from the
+live kernel with drgn.
+
+- **KUnit on the tip's sunrpc: 7, 48, 6 and 10 cases**, no failure or
+  skip, `svcsock_rx_spare_none_test` and `svcsock_rx_spare_kept_test`
+  among them. The bound adds a field to `struct svc_sock`, so the 14
+  exports that take one change version; all are exported only for the
+  KUnit suites and imported only by `svcsock_kunit`, so the swap is
+  safe with the suite built beside it (`build-sunrpc.sh`'s "with
+  another version" line is not 0 for this build, and that is why).
+- **The bound held in every load**: at the default two ports kept at
+  most 2,080 pages (32.5 MiB), one port 1,040 and the loan cell 1,035,
+  all under 64 MiB, so the default never bites here; at 4 MiB the count
+  stopped at exactly 256 pages, three times; at 0 nothing was kept; with
+  the bound changed every 2 s under load (0, 1 MiB, 4 MiB, 64 MiB)
+  nothing was left over. After every run, the clients gone, the count
+  was 0, and no WARNING was raised.
+- **Rate**: two ports, the runs no drive stepped down in: 59.57 (0),
+  59.49 and 59.81 (4 MiB), 59.41 (474's own, every page kept). The loan
+  cell: 11.47, 11.62 and 11.84 GB/s at the default, 0 and 4 MiB, no
+  overrun, every loaned WRITE direct.
+- **nfsd's CPU** (`nfsd_busy`, the same runs): 60% at 0, 58 to 59% at
+  4 MiB, 49 to 51% on 474's own. The page swap saves about 10 points of
+  nfsd's CPUs and the bound keeps that; the rate is the memory's on two
+  ports either way.
+
+### What runs in practice: the call counts
+
+`$L/b474cov/coverage.txt`: calls to 91 functions the code commits add
+or change, over one port, two ports and a loan cell. The reading is
+step 6 of `../CODE-SERIES.md`: copy mode runs none of the loan's own
+functions; some of the loan's edges run in no load; "Release a
+WRITE's receive loan once the data is in the page cache" runs nowhere
+here, since nfsd writes direct.
+
+### Several thread pools per NUMA node: dropped
+
+Mike, 15 October: Chuck Lever has called it a dead end. Out of the
+branch; the patch and what dropping it took are in
+`../patches/dropped/`. **tardis1 runs one pool from 15:45 that day**:
+`pools_per_node=4` is out of `/etc/modprobe.d/sunrpc.conf` and
+`settled.sh` holds 512 threads in one pool. Every figure before that
+was measured with four.
+
+## The next kernel: what is still to be tested
+
+For the session that boots the first kernel built from the branch
+after 15 October (the folded tip, or later). Recognise it:
+`modinfo -p sunrpc` lists `svc_tcp_spare_bytes_max` and no
+`pools_per_node`, and `grep -w tcp_sock_set_window_clamp
+/proc/kallsyms` finds it.
+
+1. **The boot**, as under "First, in this order" above: the drives
+   mounted, `./bringup.sh 32768 256`, `./port-setup.sh enp164s0f0 56`,
+   `./settled.sh apply` ending in "the settled setting" (one pool of
+   512 threads, `svc_tcp_spare_bytes_max` 67108864), loans `Y`.
+2. **The KUnit suites from the RPM**, `../run-kunit.sh`: 7, 48, 6 and
+   10 cases, no failure, no skip. On 474 the 48 ran only from a swapped
+   module.
+3. **`tcp_sock_set_window_clamp()`, the one change no swap could
+   try**: it is in vmlinux. The held buffer's clamp now goes through
+   it rather than the `TCP_WINDOW_CLAMP` socket option, under the same
+   lock to the same `tcp_set_window_clamp()`, so nothing is expected
+   to change. Check it: no "svc: TCP receive window clamp failed" in
+   `dmesg` after a run, and the `svcsock_tcp_rx_hold` trace event
+   giving the same clamp for each held transport as on 474 (a 384 KiB
+   buffer on two ports, 1 MiB on one); then the rates below.
+4. **The new baseline, one pool and everything built in**: two ports
+   at the two-port setting and one port on eight drives, three runs
+   each, with `memcost-log.sh` beside them, as the build 474 battery
+   (`$L/b474/battery.sh`, step 4a). 474's figures with four pools:
+   59.18 to 59.76 on two ports, 46.0 to 47.6 on one, about 2.2 and 1.4
+   bytes through memory for each byte. These runs are also the
+   comparison with four pools; a difference is the pools' or the
+   build's, not to be put right by bringing the pools back.
+5. **The bound built in**: `drgn spare-count.py 300 0.5` beside one
+   two-port run; at most about 2,080 pages, 0 once the clients are
+   gone.
+6. **The loan plans**, `16k-42` to `16k-44` through `sweep.sh`, as on
+   473 and 474, if the copy runs show anything moved.
+
+Read `drives.txt` of every run. If the drives step down as they did on
+15 October, trim them, or run without nvme2 and nvme3, before reading a
+rate.
+
+Still Mike's to decide, after these: the A/Bs proposed in step 6 of
+`../CODE-SERIES.md` for the two settings in use that were never
+measured on their own, `svc_tcp_rx_keep` and the 50 us linger on one
+port.
+
 ## Still Mike's to decide
 
-Dropping the first three code commits (the stacking device's DMA
-alignment, several thread pools per NUMA node, veth's `rx_ip_align`)
-and the last ("SUNRPC: Optionally copy TCP record data outside the
-socket lock"; the case is in `../CODE-SERIES.md`, step 4); the
-page_pool region's future upstream. Do not act on these unasked.
+Dropping the stacking device's DMA alignment, veth's `rx_ip_align`
+and the last code commit ("SUNRPC: Optionally copy TCP record data
+outside the socket lock"; the case is in `../CODE-SERIES.md`, step 4);
+the page_pool region's future upstream. Do not act on these unasked,
+nor on anything step 6 of `../CODE-SERIES.md` lists: it is a survey,
+not a decision. (Several thread pools per NUMA node was dropped on 15
+October, on Mike's word.)
 Ronaldo's author address is settled: his twelve commits carry
 `ronaldo@slipstream-io.com` since 15 October.
 

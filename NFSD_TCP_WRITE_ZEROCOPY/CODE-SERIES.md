@@ -523,9 +523,11 @@ defaults and intent. This step sorts the 39 code commits on the branch
 exchange with threads") by what runs, first by reading the code and
 the rig, then (pending) by counting calls on tardis1.
 
-The numbers are the commits' order in the code group today
-(`git log --reverse v7.3-3..` without the KUnit and docs commits; 39 is
-the spare bound).
+The numbers are the commits' order in the code group as it was when
+this step was written (`git log --reverse v7.3-3..` without the KUnit
+and docs commits; 39 is the spare bound). Later the same day 2 was
+dropped and 39 folded into 32 ("What was done", below), so from 3 on a
+commit is one place earlier in the code group now.
 
 **What the rig runs**, checked on tardis1 on build 474 and against
 `xeu-rig/settled.sh`:
@@ -594,10 +596,11 @@ configured.
 
 ### What follows from it
 
-- **To drop, Mike's to decide** (the open question in `AGENTS.md`):
-  37 and 38, off by default and measured to carry nothing; 3, for the
-  rig only and not used on the card; and 1 unless Hammerspace's
-  product stacks MD or device-mapper over its drives.
+- **Candidates, for Mike to consider; nothing is decided by this
+  survey**: 37 and 38, off by default and measured to carry nothing; 3,
+  for the rig only and not used on the card; and 1 unless Hammerspace's
+  product stacks MD or device-mapper over its drives. Mike's open
+  question in `AGENTS.md` names 1, 3 and 38.
 - **In use but never shown to earn their place on their own**:
   `pools_per_node=4` (2; "written, not shown to work" in
   `XEU_CONVERGENCE.md`), `svc_tcp_rx_keep=Y` (36; pinned on 12 October
@@ -609,23 +612,96 @@ configured.
 - **Fixes to mainline that this rig does not exercise** (4, 9, 10):
   not dead; they can go upstream on their own, apart from the series.
 
-### The counts (pending)
+### The counts (15 October, 15:30 to 15:43)
 
-`/var/tmp/zc-run-logs/b474cov/cov.sh`, queued on tardis1 after the
-spare-bound runs: the tip's sunrpc (`sunrpc-474-spare`, built
-against build 474) swapped in, and bpftrace counting calls to 91
-functions (`b474cov/funcs.txt`, each with its commit): every probeable
-function a code commit adds, and a few existing ones a commit changes
-(`nfs_dio_split`, `nfsd_cache_lookup`, `nfsd_cache_csum`,
-`nfsd_file_get_dio_attrs`, the statx ones, `blk_set_stacking_limits`,
-`svc_tcp_restore_pages` and `svc_tcp_save_pages`). Three loads at the
-settled setting: one port with the linger, two ports, and the loan cell
-of rings 128, a 256 KiB held buffer and 8 WRITEs. The table is
-`b474cov/coverage.txt`. A count says a function was called, not that
-the commit's new branch inside it was taken; for the commits that
-change existing functions behind a knob, the knob's setting above
-decides. Inlined functions cannot be counted (44 of those the
-commits add, among them `svc_tcp_spare_release()`).
+`/var/tmp/zc-run-logs/b474cov/cov.sh` on tardis1, after the spare-bound
+runs: the tip's sunrpc (`sunrpc-474-spare`, built against build 474)
+swapped in, and bpftrace counting calls to 91 functions
+(`b474cov/funcs.txt`, each with its commit): every probeable function a
+code commit adds, and a few existing ones a commit changes. Three loads
+at the settled setting, rates not read: one port on eight drives with
+the linger, two ports, and the loan cell of rings 128, a 256 KiB held
+buffer and 8 WRITEs (NFSv3 throughout). The table is
+`b474cov/coverage.txt`.
+
+A count says a function was called, not that the commit's new branch
+inside it was taken; a function the compiler inlined everywhere shows
+0 however often its body runs (44 of the functions the commits add
+could not be probed at all). So a 0 settles a commit only when the
+function is out of line and is the commit's own way in. What the
+counts settle:
+
+- **Copy mode runs none of the loan's own functions.** In both copy
+  loads `svc_tcp_rx_append()`, `svc_tcp_rx_borrow_segment()`,
+  `svc_tcp_rx_walk_skb()`, `svc_tcp_rx_validate_mixed()`,
+  `svc_tcp_rx_get_borrowed()`, the credit functions
+  (`svc_tcp_rx_credit_admit()`, `_charge()`, `_wait_locked()`,
+  `_wake_locked()`) and the bvec XDR decoders of 12
+  (`xdr_set_bvec()`, `xdr_copy_from_bvecs()`, ...) are 0; in the loan
+  cell they run millions of times. What copy mode does run of 20 and
+  30 is the receive state machine they share with it
+  (`svc_tcp_rx_copy_skb()`, `_publish()`, `_materialize()`,
+  `_release_refs()`, `_classify()`, `svc_tcp_rx_budget_copy()`, which
+  sends a record to the copy at a budget of 0) and the held buffer
+  (`svc_tcp_rx_hold_buffer()`, once a connection).
+- **Some of the loan's paths run in no load at all**, the loan cell
+  included: `svc_tcp_rx_copy_to_arena()`, `svc_tcp_rx_append_arena()`,
+  `svc_tcp_rx_copy_segment()` and `svc_tcp_rx_materialize_fallback()`
+  (20, the arena copy and its fallback), `svc_tcp_rx_retract_last()`
+  (24, the merge of a locked head), `svc_tcp_rx_put_borrowed()` (25),
+  and `svc_tcp_rx_credit_orphan()` and `svc_tcp_rx_credit_release()`
+  (30). They are the edges of the loan: only the KUnit suites reach
+  them.
+- **31 runs nowhere on this rig, loans included.** "NFSD: Release a
+  WRITE's receive loan once the data is in the page cache":
+  `svc_rqst_release_payload()`, `svc_tcp_release_payload()` and
+  `svc_tcp_rx_release_payload()` are 0 in the loan cell too, because
+  nfsd writes direct (`io_cache_write=2`, every loaned WRITE
+  `wr_direct`), so there is never a page-cache copy to release the loan
+  after; `nfsd4_payload_shared()` is NFSv4.
+- **1 runs in the loan harness.** `blk_set_stacking_limits()` was
+  called once in the loan load: `run-budget.sh` stacks dm-delay over
+  the stand-in's null_blk. Not in copy mode, which has no stacked
+  device.
+- **The segment boundary is read and checked on every direct write**
+  (`nfs_dio_split()` once per WRITE in every load, 5 to 8 through
+  `xfs_vn_getattr()` and `cp_statx()`, `nfsd_file_get_dio_attrs()` once
+  per file); whether a write was split is not counted.
+- **The reply cache**: `nfsd_cache_lookup()` runs for every call;
+  `nfsd_cache_csum()`, which 15 changes, shows 0, inlined into it.
+- **The page swap and its bound run on every record received in
+  pieces**: `svc_tcp_restore_pages()` 5 to 38 million times a load,
+  `svc_tcp_save_pages()` and `svc_tcp_spare_release()` 1.5 to 35
+  million, in copy and loan alike.
+- The functions of 34 (`svc_tcp_rx_linger()`), 36
+  (`svc_xprt_received_keep()`) and 38 (`svc_tcp_rx_copy_claims()`) are
+  called on every short read whatever their knobs, and return at once
+  when the knob is off: the counts say nothing about them, and their
+  settings above do.
+
+### What was done (15 October)
+
+- **2, "SUNRPC: Allow more than one thread pool per NUMA node", is
+  dropped** (Mike: Chuck Lever has called several pools per node a dead
+  end). The patch and why are in `patches/dropped/`. The tip before the
+  drop is kept as
+  `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-drop-pools`. tardis1
+  runs one pool from 15:45 that day: `pools_per_node=4` is out of
+  `/etc/modprobe.d/sunrpc.conf` (the file as it was is
+  `/root/sunrpc.conf.pre-drop-pools`), and `xeu-rig/settled.sh` holds
+  512 threads in one pool.
+- **The spare bound is folded into what it fixes**: the code into 32,
+  "SUNRPC: Swap pages with the socket when a partial record changes
+  hands", whose message now says why the swap needs a bound and how it
+  is kept; its KUnit interface into "SUNRPC/nfsd: expose the receive
+  internals for the KUnit suites"; the `__force` cast into David's
+  "SUNRPC: test page-pool loan recycling in the svcsock KUnit suite",
+  through its `[snitzer: ...]` note. The two spare tests stay a KUnit
+  test commit of their own, as each feature's tests are (folding them
+  into Ronaldo's "exhaustively test" commit would have put his name on
+  them). The tip before the fold is kept as
+  `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-fold-spare`.
+- The code group is 37 commits.
 
 ## Next steps
 

@@ -1561,7 +1561,8 @@ measured alone; that is step 6 of the README and waits for Mike.
   keeps up to the pages of its largest parked record until it closes;
   nothing bounds that yet.
 - **sunrpc, the pages a socket keeps after the page swap: bounded
-  (15 October, `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`), not run.** Since "SUNRPC: Trade pages with the socket when a partial
+  (15 October, `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`), run on
+  tardis1 the same day.** Since "SUNRPC: Trade pages with the socket when a partial
   record changes hands" (`47f13c685c5b5`), when a thread takes a parked
   record back (`svc_tcp_restore_pages()`), it swaps its own pages into
   the socket's `sk_pages[]` where it used to free them. They stay there
@@ -1618,16 +1619,33 @@ measured alone; that is step 6 of the README and waits for Mike.
     `svcsock_kunit.c` had before, a cast to `netmem_ref` without
     `__force` in `svcsock_rx_page_pool_recycle_test`, is fixed in its
     own KUnit-tests commit, so the file is sparse-clean. Checkpatch
-    is clean on all three commits. The suite has not run: svcsock
-    should now be 46 tests. Nothing has run on tardis1.
-  - **To read on tardis1:** whether the copy rate holds at the
-    default bound (sixteen connections keep about 16 MiB, well under
-    64 MiB), and with `svc_tcp_spare_bytes_max=0`, which is the cost
-    the swap saved. With the linger on, a record changes hands about
-    twice a WRITE, so the difference is expected to be small.
+    is clean on all three commits.
+  - **Run on tardis1 (15 October, build 474 with sunrpc from the tip
+    swapped in; `xeu-rig/README.md`, "15 October, afternoon").** The
+    svcsock suite is 48 tests, not the 46 written above (474 already
+    ran 46), and passes with both new ones. The bound held in every
+    load: two ports keep 2,080 pages (32.5 MiB) at the default, one port
+    1,040 and the loan cell 1,035, all under 64 MiB, so the default
+    never bites on this rig; at 4 MiB the count stopped at exactly 256
+    pages, at 0 nothing was kept, and with the bound changed every 2 s
+    under load nothing was left over. After every run, with the clients
+    gone, the count was 0, and no WARNING was raised. The copy rate is
+    the same at 0, 4 MiB, the default and on 474's unbounded swap (59.41
+    to 59.81 GB/s on two ports, the runs no drive stepped down in); what
+    the kept pages save is nfsd's CPU, about 60% busy at 0 against 49 to
+    53% with every page kept.
+  - **Folded (15 October):** the bound is now part of "SUNRPC: Swap
+    pages with the socket when a partial record changes hands", its
+    KUnit interface part of "SUNRPC/nfsd: expose the receive internals
+    for the KUnit suites", and the `__force` cast part of "SUNRPC: test
+    page-pool loan recycling in the svcsock KUnit suite"; the two tests
+    stay a KUnit test commit of their own (`../CODE-SERIES.md`, step 6).
   - **Left for later:** 3, a shrinker; and whether 64 MiB, or a size
     that scales with memory, is the right default upstream.
-- **nfsd, several thread pools (T6): written, not shown to work.** "SUNRPC:
+- **nfsd, several thread pools (T6): written, not shown to work; dropped
+  from the series on 15 October** (Mike: Chuck Lever has called it a
+  dead end; the patch and why are in `patches/dropped/`, and tardis1
+  runs one pool from then). "SUNRPC:
   Let a NUMA node have several thread pools" (`72766c5ac54ae`) adds
   `pools_per_node`; build 462 ran with 4. T6's contention was at 64
   connections and build 462 ran sixteen, where `__lwq_dequeue` is not
