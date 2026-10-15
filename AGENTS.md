@@ -17,7 +17,7 @@ the branches in step and about where development is done.
 
 - **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` is the branch to work on**:
   the series on the public `kernel-7.3/main`, rebased 2026-10-14 onto
-  **`v7.3-3`** (after `v7.3-rc7`): 442 commits, laid out as code, then KUnit interface, then
+  **`v7.3-3`** (after `v7.3-rc7`), laid out as code, then KUnit interface, then
   KUnit tests, then docs. `v7.3-3` already carries 15 of the series'
   commits (the TLS control-record and alert fixes, the nfsd session-slot
   fixes, receiving RPC records with `->read_sock`, and the two `bug/kunit`
@@ -30,6 +30,30 @@ the branches in step and about where development is done.
   rebase, the same as the 7.1.13 branch's, is kept as
   `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-rebase-v7.3-3`. Commit at
   its tip.
+
+  **Reworked for upstream on the night of 2026-10-14** (the account is
+  steps 3 to 5 of `NFSD_TCP_WRITE_ZEROCOPY/CODE-SERIES.md`, the review
+  behind it in `NFSD_TCP_WRITE_ZEROCOPY/code-review/`): 458 commits, 38
+  of them code, 44 KUnit interface and tests, 376 docs. The code group
+  was reviewed as Chuck Lever, Christoph Hellwig and netdev would read
+  it, then folded and split until no `Fixes:` points inside the series
+  (each fix is in what it fixes), moved so that every commit builds,
+  and given upstream messages (no lab, product, KUnit or downstream
+  text; `NFSD:` and `SUNRPC:` subjects in Chuck's style). Every commit
+  was built in turn at 16 KiB with `CONFIG_WERROR=y` and sparse; the
+  stages are kept as `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-code.73rebase1`
+  to `.73rebase8` (code only; `.73rebase8` is the finished code group),
+  and the tip before the rework as
+  `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-73rebase`. Two changes
+  in behaviour came with it: **TCP receive page loans are off by default**
+  (`sunrpc.svc_tcp_rx_loan_pages=N`; `xeu-rig/settled.sh` sets `Y` for
+  the rig), and an NFSv4 COMPOUND with a tag keeps its loan until the
+  reply is encoded. Still open (Mike): whether to drop the first three
+  code commits (the stacking device's DMA alignment, several thread
+  pools per NUMA node, veth's `rx_ip_align`) and the last ("SUNRPC:
+  Optionally copy TCP record data outside the socket lock"), the page_pool
+  region's future upstream, and Ronaldo's author address (a Tailscale
+  host name, not a mail address) on the twelve commits he wrote.
 - **`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`** is the same series on
   7.1.13, as regrouped and force-pushed on 2026-10-14 (`ea18d80f8bda`).
   Build 464, which tardis1 runs until a 7.3 kernel is booted, was built
@@ -289,9 +313,11 @@ a test host must pass `transplant/check-grouping.sh` (code, then KUnit, then
 docs) before the work is handed back; regroup until it does.
 
 **That rule is suspended on every test host (Mike, 2026-10-07): do not
-worry about regrouping until he asks.** The tip is known not to be grouped.
-Commit at the tip and stop: do not run `check-grouping.sh`, report its
-result or offer a regroup. Claude's memory on the test hosts does not
+worry about regrouping until he asks.** The branch was regrouped on
+2026-10-14 and `check-grouping.sh v7.3-3` passed then; a code or KUnit
+commit at the tip from here on breaks that, which is expected until
+Mike asks for the next regroup. Commit at the tip and stop: do not
+offer a regroup. Claude's memory on the test hosts does not
 persist, so this is the only place a new session will find it.
 
 Start with the README before touching the series; it explains why each of the
