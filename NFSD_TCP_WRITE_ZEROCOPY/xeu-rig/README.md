@@ -1477,11 +1477,16 @@ thread gave it in exchange for a parked record. That is up to the
 largest record that changed hands on it, about 1 MiB for nfsd, and it
 keeps them until it closes. 16 MiB for this rig, about 16 GiB for a
 thousand nconnect=16 clients. They are freed at close, so nothing
-leaks, but nothing bounds the total. The details and three ways to
-bound it are under "sunrpc, the pages a socket keeps after the page
-swap" in `../XEU_CONVERGENCE.md`'s "Since then". It does not affect
-this rig's measurements. It has to be bounded before the page swap
-goes to production or upstream.
+leaks, but nothing bounded the total.
+
+**Bounded on 15 October**, on `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`,
+in three commits: code, KUnit interface, KUnit tests. The pages kept
+across all sockets are held to `svc_tcp_spare_bytes_max` (64 MiB;
+0 keeps none), and past it a restore frees as it did before the swap.
+The suite gains two tests (svcsock 46), which have not run. The
+details, why freeing on a quiet connection would not have worked, and
+what to read on tardis1 are under "sunrpc, the pages a socket keeps
+after the page swap" in `../XEU_CONVERGENCE.md`'s "Since then".
 
 ## The page-pool work items: what was done (2026-10-09, evening)
 
