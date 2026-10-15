@@ -107,8 +107,9 @@ Dropping the first three code commits (the stacking device's DMA
 alignment, several thread pools per NUMA node, veth's `rx_ip_align`)
 and the last ("SUNRPC: Optionally copy TCP record data outside the
 socket lock"; the case is in `../CODE-SERIES.md`, step 4); the
-page_pool region's future upstream; Ronaldo's author address on his
-twelve commits. Do not act on these unasked.
+page_pool region's future upstream. Do not act on these unasked.
+Ronaldo's author address is settled: his twelve commits carry
+`ronaldo@slipstream-io.com` since 15 October.
 
 ## Left over from 14 October
 

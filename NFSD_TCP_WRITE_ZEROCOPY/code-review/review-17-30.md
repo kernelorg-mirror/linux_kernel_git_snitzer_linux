@@ -174,7 +174,8 @@ Proposed messages are in new-17.txt .. new-30.txt.
   `ronaldo@ronaldo-mbp.tail83ec88.ts.net` is a machine hostname on a
   private tailnet. Upstream requires a real, reachable address for DCO; get
   the author's proper address before posting (the same applies to 11 and
-  12).
+  12). *Done 2026-10-15: all twelve of his commits now carry
+  `ronaldo@slipstream-io.com`.*
 
 ## 24 f5426ad04d24 SUNRPC: add a runtime switch to disable TCP receive page loans
 

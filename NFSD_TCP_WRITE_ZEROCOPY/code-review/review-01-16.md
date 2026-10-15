@@ -66,7 +66,8 @@ new-16.txt.
    deliverable mail address.  A DCO sign-off with it will not be accepted.
    It is kept verbatim in the proposed messages as instructed, but it must
    be replaced with a real address by its owner before posting (11, 12, and
-   23 later).
+   23 later).  *Done 2026-10-15: all twelve of his commits now carry
+   `ronaldo@slipstream-io.com`.*
 
 8. **Size and style of 09 and 12.**  9 is ~470 lines in xdr.c, 12 is
    ~1000 lines in svcsock.c plus 140 lines of trace events.  Chuck will ask

@@ -52,9 +52,11 @@ the branches in step and about where development is done.
   reply is encoded. Still open (Mike): whether to drop the first three
   code commits (the stacking device's DMA alignment, several thread
   pools per NUMA node, veth's `rx_ip_align`) and the last ("SUNRPC:
-  Optionally copy TCP record data outside the socket lock"), the page_pool
-  region's future upstream, and Ronaldo's author address (a Tailscale
-  host name, not a mail address) on the twelve commits he wrote.
+  Optionally copy TCP record data outside the socket lock") and the
+  page_pool region's future upstream. Ronaldo's twelve commits carry
+  his mail address, `ronaldo@slipstream-io.com`, as author and in his
+  Signed-off-by since 2026-10-15 (Mike); the tips before that are kept
+  with the suffix `.pre-ronaldo-addr`.
 - **`kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`** is the same series on
   7.1.13, as regrouped and force-pushed on 2026-10-14 (`ea18d80f8bda`).
   Build 464, which tardis1 runs until a 7.3 kernel is booted, was built
