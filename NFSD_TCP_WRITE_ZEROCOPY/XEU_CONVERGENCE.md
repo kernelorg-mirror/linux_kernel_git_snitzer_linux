@@ -1560,8 +1560,8 @@ measured alone; that is step 6 of the README and waits for Mike.
   `free_unref_folios` are gone from the profile (S3). A socket now
   keeps up to the pages of its largest parked record until it closes;
   nothing bounds that yet.
-- **sunrpc, the pages a socket keeps after the page swap: new, not
-  done.** Since "SUNRPC: Trade pages with the socket when a partial
+- **sunrpc, the pages a socket keeps after the page swap: bounded
+  (15 October, `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`), not run.** Since "SUNRPC: Trade pages with the socket when a partial
   record changes hands" (`47f13c685c5b5`), when a thread takes a parked
   record back (`svc_tcp_restore_pages()`), it swaps its own pages into
   the socket's `sk_pages[]` where it used to free them. They stay there
@@ -1582,18 +1582,50 @@ measured alone; that is step 6 of the README and waits for Mike.
     rig's sixteen connections. With nconnect=16 from a thousand
     clients it is about 16 GiB that comes back only as clients
     disconnect. The total has no bound.
-  - **Ways to bound it, none written:**
+  - **Ways to bound it** (as listed on 9 October):
     1. Free the kept pages when the connection goes quiet: a read
-       that finds no data and no record under way. That keeps the
-       swap inside a burst of WRITEs, which is where it pays.
+       that finds no data and no record under way.
     2. A cap on pages kept across all sockets, as a module parameter.
        Over the cap a restore frees, as before the patch.
     3. A shrinker over the kept pages.
 
-    1 does most of it, and 2 is a cheap backstop. The linger makes a
-    record change hands less often (2 calls for a WRITE where it was
-    6), so with it on there is less for the swap to save, but the
-    pages are kept all the same once a record has changed hands.
+    The 9 October note recommended 1. **That was wrong:** an idle
+    connection is never read. Its transport is queued only when data
+    arrives, so the quiet read never happens on the connections that
+    hold pages for nothing.
+  - **What was done: 2.** "SUNRPC: Bound the pages TCP sockets keep for
+    exchange with threads" counts the pages kept this way across all
+    sockets, in `sk_spare_pages` for each socket and one global count.
+    It holds them to `svc_tcp_spare_bytes_max`, 64 MiB by default and
+    writable at run time; 0 keeps none.
+    - A restore keeps as many of the thread's pages as there is room
+      for and frees the rest through the thread's folio batch, as
+      before the swap.
+    - A save that takes kept pages back, and the close of a socket,
+      give their room back.
+    - The count is touched once for each restore and save, not for
+      each page. Restores that race can each keep less than there is
+      room for, never more.
+
+    The KUnit interface commit ("SUNRPC: Set and read the spare page
+    bound for the KUnit suites") lets the suite set the bound and read
+    the count. The tests are `svcsock_rx_spare_none_test` (bound 0:
+    the thread's page is freed, nothing kept) and
+    `svcsock_rx_spare_kept_test` (no bound: kept and counted, taken
+    back by a save, freed at close, the count back where it was).
+  - **What has been run:** built at 16 KiB with `CONFIG_WERROR`, W=1
+    and sparse, with no new warnings. The one sparse warning in
+    `svcsock_kunit.c`, a cast to `netmem_ref` without `__force` in
+    `svcsock_rx_page_pool_recycle_test`, was there before. Checkpatch
+    is clean on all three commits. The suite has not run: svcsock
+    should now be 46 tests. Nothing has run on tardis1.
+  - **To read on tardis1:** whether the copy rate holds at the
+    default bound (sixteen connections keep about 16 MiB, well under
+    64 MiB), and with `svc_tcp_spare_bytes_max=0`, which is the cost
+    the swap saved. With the linger on, a record changes hands about
+    twice a WRITE, so the difference is expected to be small.
+  - **Left for later:** 3, a shrinker; and whether 64 MiB, or a size
+    that scales with memory, is the right default upstream.
 - **nfsd, several thread pools (T6): written, not shown to work.** "SUNRPC:
   Let a NUMA node have several thread pools" (`72766c5ac54ae`) adds
   `pools_per_node`; build 462 ran with 4. T6's contention was at 64
