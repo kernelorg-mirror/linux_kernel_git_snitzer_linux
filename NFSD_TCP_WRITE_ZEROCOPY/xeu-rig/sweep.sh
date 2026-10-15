@@ -17,6 +17,8 @@
 # kernel CPU time, the client's busy CPU time, and the ring tail drops.
 # PERF=1 adds cycles and instructions; PROFILE=1 adds a 30 s flat profile by
 # function (it sits inside the CPU window and costs a little).
+# SPARE=<bytes> sets svc_tcp_spare_bytes_max for the whole sweep (each cell is
+# audited at it) and puts it back before the sweep's last audit.
 . "$(dirname "$0")/common.sh"
 "$(dirname "$0")/drive-cache.sh" > /dev/null || { echo "drive-cache.sh failed"; exit 1; }	# no cache flush to the drives (AGENTS.md)
 # PRP_DIR and SGL_BACKING say where the two storages are: the export
@@ -42,7 +44,12 @@ CHARGE=$(( ( (1048716 + PS - 1) / PS * F9 + 99 ) / 100 + 2 ))
 echo "$G" > $OUT/geometry.txt
 # The host has to be at the settled setting before the sweep changes anything.
 audit_or_die rest $OUT/audit-start.txt
-echo "storage: prp $PRP_DIR, sgl $SGL_BACKING; nfsd threads $(cat /proc/fs/nfsd/threads); STEP_JOBS=${STEP_JOBS:-} STEP_BS=${STEP_BS:-} EXPORT_SYNC=${EXPORT_SYNC:-} MODE=${MODE:-} SKB_DEFER_MAX=${SKB_DEFER_MAX:-128} STEP_RATE=${STEP_RATE:-} RX_LINGER_US=${RX_LINGER_US:-0} BALANCE=${BALANCE:-} PLACE=${PLACE:-} mtu $(cat /sys/class/net/$D/mtu) rx_buf_size $(cat /sys/module/xeu/parameters/rx_buf_size 2>/dev/null)" | tee -a $OUT/geometry.txt
+SPARE0=$(cat /sys/module/sunrpc/parameters/svc_tcp_spare_bytes_max 2>/dev/null)
+if [ -n "${SPARE:-}" ]; then
+	[ -n "$SPARE0" ] || { echo "no svc_tcp_spare_bytes_max in this sunrpc"; exit 1; }
+	echo $SPARE > /sys/module/sunrpc/parameters/svc_tcp_spare_bytes_max
+fi
+echo "storage: prp $PRP_DIR, sgl $SGL_BACKING; nfsd threads $(cat /proc/fs/nfsd/threads); STEP_JOBS=${STEP_JOBS:-} STEP_BS=${STEP_BS:-} EXPORT_SYNC=${EXPORT_SYNC:-} MODE=${MODE:-} SKB_DEFER_MAX=${SKB_DEFER_MAX:-128} STEP_RATE=${STEP_RATE:-} RX_LINGER_US=${RX_LINGER_US:-0} BALANCE=${BALANCE:-} PLACE=${PLACE:-} SPARE=${SPARE:-} mtu $(cat /sys/class/net/$D/mtu) rx_buf_size $(cat /sys/module/xeu/parameters/rx_buf_size 2>/dev/null)" | tee -a $OUT/geometry.txt
 echo "page $PS factor $F9 reserve $RESERVE charge-per-1MiB-WRITE $CHARGE region $(reg pages) retry-patch $(has_retry_patch && echo yes || echo no)" | tee -a $OUT/geometry.txt
 
 stat1() { head -1 /proc/stat; }
@@ -108,7 +115,7 @@ while read -r entries rb writes st cells <&3; do
 		sleep 15
 		# The cell's load is running: the live state against its line.
 		res=0; [ "$writes" -gt 0 ] && res=$RESERVE
-		if ! EXP_ENTRIES_A=$entries EXP_RCVBUF=$rb EXP_BUDGET=$budget EXP_BUDGET_RESERVE=$res \
+		if ! EXP_ENTRIES_A=$entries EXP_RCVBUF=$rb EXP_BUDGET=$budget EXP_BUDGET_RESERVE=$res EXP_SPARE=${SPARE:-} \
 		     EXP_LINGER=${RX_LINGER_US:-0} "$RIG/settled.sh" audit cell > $o.$c.audit.txt 2>&1; then
 			grep -E 'BAD|FAILED' $o.$c.audit.txt | tee -a $OUT/log
 			kill $HP; wait $HP; exit 1
@@ -165,5 +172,6 @@ echo "== sweep over: $n lines run; rings 4 x $(rx_entries); $(grep -E '^free|all
 # Back to the settled setting: the rings at rest (set_ring places the layout
 # again), and a record of the host as the sweep leaves it.
 set_ring 256 || echo "rings not put back to 256" | tee -a $OUT/log
+[ -n "${SPARE:-}" ] && echo $SPARE0 > /sys/module/sunrpc/parameters/svc_tcp_spare_bytes_max
 "$RIG/settled.sh" audit rest > $OUT/audit-end.txt 2>&1 || { echo "the host is not at the settled setting after the sweep:"; grep -E 'BAD|FAILED' $OUT/audit-end.txt; } | tee -a $OUT/log
 echo SWEEPDONE
