@@ -42,7 +42,8 @@ the branches in step and about where development is done.
   text; `NFSD:` and `SUNRPC:` subjects in Chuck's style). Every commit
   was built in turn at 16 KiB with `CONFIG_WERROR=y` and sparse; the
   stages are kept as `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-code.73rebase1`
-  to `.73rebase8` (code only; `.73rebase8` is the finished code group),
+  to `.73rebase9` (code only; `.73rebase9` is the finished code group,
+  with its calls into TCP through TCP's own interfaces),
   and the tip before the rework as
   `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-73rebase`. Two changes
   in behaviour came with it: **TCP receive page loans are off by default**

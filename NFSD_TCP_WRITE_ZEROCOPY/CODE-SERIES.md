@@ -490,7 +490,8 @@ On from `.73rebase4`, each stage again kept as a branch:
 | `…-code.73rebase5` | `40758310a924` | the tcp commit (`tcp_sock_set_scaling_ratio_max()`) moved next to its only user, the region budget |
 | `…-code.73rebase6` | `fbf4c9cbc99e` | the three commits proposed for dropping (the stacking device's DMA alignment, several thread pools per NUMA node, veth's `rx_ip_align`) moved to the front, so they can go without touching the rest |
 | `…-code.73rebase7` | `7470262a5041` | every message rewritten for upstream (no lab, product, KUnit or downstream text; the folded commits described as they now are), NFSD and SUNRPC subjects in Chuck Lever's style |
-| `…-code.comments` | `61e3ae890a5a` | the code's own comments cleaned: the Xsight E1 figures and the KUnit remarks out of svcsock.c, and the KUnit-only `svc_tcp_rx_fixed_factor()` out of the code group (`.73rebase8` once its walk is clean) |
+| `…-code.comments` | `61e3ae890a5a` | the code's own comments cleaned: the Xsight E1 figures and the KUnit remarks out of svcsock.c, and the KUnit-only `svc_tcp_rx_fixed_factor()` out of the code group (`.73rebase8`) |
+| `…-code.73rebase9` | `00aa24575141` | the window clamp set with a new `tcp_sock_set_window_clamp()` (in the tcp commit) instead of the `TCP_WINDOW_CLAMP` socket option, and the low-water mark through the socket's `->set_rcvlowat` instead of a write to `sk_rcvlowat`, TLS transports told apart by `XPT_TLS_SESSION` |
 
 The code group is 38 commits with no `Fixes:` inside it; the two that
 remain point into mainline (the loop fix on `6c8dec275ccc`, the

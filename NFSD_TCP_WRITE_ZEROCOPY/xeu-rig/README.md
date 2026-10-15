@@ -35,6 +35,23 @@ kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-code.73rebase8`, 6 files):
   alternating on seven drives, `$L/b473/ab4.log`); two ports were not
   settled.
 
+**The branch has moved on since that build** (later on 14 October,
+`.73rebase9`): two calls into TCP now go through TCP's own interfaces,
+and that build has neither.
+
+- The region budget clamps a held transport's window with a new
+  `tcp_sock_set_window_clamp()` (added in the tcp commit beside
+  `tcp_sock_set_scaling_ratio_max()`) instead of the `TCP_WINDOW_CLAMP`
+  socket option. The same `tcp_set_window_clamp()` under the same lock,
+  so no change in behaviour; but it is built into vmlinux, so it needs
+  the next full kernel build to run.
+- `svc_tcp_rx_lowat` sets the mark through the socket's
+  `->set_rcvlowat` (TCP's `tcp_set_rcvlowat()`, as `SO_RCVLOWAT` does)
+  instead of writing `sk_rcvlowat`, and leaves TLS transports alone by
+  `XPT_TLS_SESSION`. Only with `svc_tcp_rx_lowat` set does it change
+  anything: TCP caps the mark at half the receive buffer and wakes the
+  transport at once if enough is queued.
+
 Recognise it: `uname -r` names a build after 473, and
 `modinfo -p sunrpc | grep loan_pages` says "(default: N)".
 
@@ -64,6 +81,16 @@ Recognise it: `uname -r` names a build after 473, and
    45.98 to 47.76), and the three loan plans through `sweep.sh` (473's
    table below). Same code as 473 but for the six changes, so the same
    figures are expected.
+5. **The `->set_rcvlowat` change, without a reboot**: confined to
+   sunrpc, so `./build-sunrpc.sh` builds `sunrpc.ko` from the branch
+   against this kernel's `kernel-devel` and `./swap-sunrpc.sh` puts it
+   in (nfsd stopped, mounts down: Mike's to do, as for the locked and
+   unlocked comparison on 14 October). Build it with the window clamp
+   call put back to the socket option (a local edit, not committed),
+   or the module will not load: this kernel has no
+   `tcp_sock_set_window_clamp()`. Compare with this kernel's own sunrpc
+   with `svc_tcp_rx_lowat=131072 svc_tcp_rx_keep=1`, the setting that
+   halved thread wakeups on 13 October.
 
 **The drives first.** On 14 October they were tired: after 13 minutes
 idle nvme2 stepped down at 341 GB (a fresh drive takes about 625) and
@@ -90,13 +117,15 @@ twelve commits. Do not act on these unasked.
   trimmed. What is kept of them is in
   `/var/tmp/zc-run-logs/walk-73rebase/`: `walk.sh` (to walk again, give
   it a tree and its paths), its configuration, and every walk's
-  summary (`run14-73rebase8.summary.txt` the last, 38 of 38 clean).
+  summary (`run15-73rebase9.summary.txt` the last, 38 of 38 clean,
+  and `kbuild-tip-result.txt` for the tip with and without KUnit).
 - The rework's working worktree was in a session scratch directory
   under `/tmp`; if a reboot removed it, `git worktree prune`. Its
-  branches stay: `…-code.73rebase1` to `.73rebase8` are the stages
+  branches stay: `…-code.73rebase1` to `.73rebase9` are the stages
   worth keeping; `…-code` and the `…-code.pre-*`, `.restructure*`,
-  `.splits*`, `.msgs`, `.comments`, `.bvecmove-1`, `-reorder-1*` and
-  `-reorder-2` branches are working copies Mike may delete.
+  `.splits*`, `.msgs`, `.comments`, `.tcpif`, `.bvecmove-1`,
+  `-reorder-1*`, `-reorder-2` and `-tcpif` branches are working copies
+  Mike may delete.
 - `sparse` v0.6.5-rc1 from git master is in `/usr/local/bin` (EPEL's
   0.6.4 fails the kernel's checker probe).
 
