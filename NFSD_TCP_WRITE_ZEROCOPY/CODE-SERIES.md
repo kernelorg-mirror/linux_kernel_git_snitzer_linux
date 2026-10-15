@@ -447,7 +447,9 @@ netdev would likely refuse in this form (a memory provider bound to
 receive queues is the shape they would want); about a dozen module
 parameters and three sysctls, several of them overlapping or off by
 default; and Ronaldo's author address, a Tailscale host name that
-fails the DCO, on three commits.
+fails the DCO, on three commits. (Settled 2026-10-15: on Mike's word
+all twelve of Ronaldo's commits, on the branch and on `.73rebase9`,
+carry `ronaldo@slipstream-io.com` as author and in his Signed-off-by.)
 
 ### The claim-and-copy commit (32 in `.73rebase3`): split or drop
 
