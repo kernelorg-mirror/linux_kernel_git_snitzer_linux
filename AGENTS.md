@@ -53,15 +53,18 @@ the branches in step and about where development is done.
   (`pools_per_node`) was dropped (Mike: Chuck Lever has called it a
   dead end; the patch is in `NFSD_TCP_WRITE_ZEROCOPY/patches/dropped/`,
   tardis1 runs one pool), and the spare-page bound was folded into the
-  page-swap commit it fixes**, so the code group is 37 commits; the
-  tips before are kept as `.pre-drop-pools` and `.pre-fold-spare`.
+  page-swap commit it fixes**; the tips before are kept as
+  `.pre-drop-pools` and `.pre-fold-spare`. **The same day the copy
+  outside the socket lock (`svc_tcp_rx_copy_threads`) and the
+  SO_RCVLOWAT mark (`svc_tcp_rx_lowat`) were dropped too (Mike): neither
+  showed a gain in practice, and both ran at 0 on the rig**; their
+  patches are in `patches/dropped/` as well, and the tip before is kept
+  as `.pre-drop-claim-lowat`. The code group is 35 commits.
   What of the code group runs in practice is step 6 of
   `NFSD_TCP_WRITE_ZEROCOPY/CODE-SERIES.md` (a survey, not a decision:
   nothing else is to be dropped unless Mike says so). Still open
-  (Mike): whether to drop the stacking device's DMA alignment, veth's
-  `rx_ip_align` and the last code commit ("SUNRPC: Optionally copy TCP
-  record data outside the socket lock"), and the page_pool region's
-  future upstream. Ronaldo's twelve commits carry
+  (Mike): whether to drop the stacking device's DMA alignment and
+  veth's `rx_ip_align`, and the page_pool region's future upstream. Ronaldo's twelve commits carry
   his mail address, `ronaldo@slipstream-io.com`, as author and in his
   Signed-off-by since 2026-10-15 (Mike); the tips before that are kept
   with the suffix `.pre-ronaldo-addr`.
