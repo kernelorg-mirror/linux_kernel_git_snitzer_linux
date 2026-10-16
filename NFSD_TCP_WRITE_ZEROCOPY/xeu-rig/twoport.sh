@@ -42,6 +42,8 @@
 #   LINGER=<us>      svc_tcp_rx_linger_us
 #   THREADS=<n>      svc_tcp_rx_copy_threads
 #   LOWAT=<bytes>    svc_tcp_rx_lowat, the mark a short WRITE's thread is woken at (0: off)
+#   KEEP=Y|N         svc_tcp_rx_keep, whether a thread that finds a WRITE short leaves
+#                    the transport unqueued for data already there
 #   SPARE=<bytes>    svc_tcp_spare_bytes_max, the pages sockets keep for exchange (0: none)
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
@@ -104,7 +106,7 @@ cretr() { cl "awk '/^Tcp:/ && !h {for (i = 1; i <= NF; i++) if (\$i == \"Retrans
 SP=/sys/module/sunrpc/parameters
 declare -A SAVE
 # copy_threads and lowat are not in kernels after build 474 (dropped 15 October)
-for k in rcvbuf linger_us copy_threads lowat; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k 2>/dev/null); done
+for k in rcvbuf linger_us copy_threads lowat keep; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k 2>/dev/null); done
 SAVE[spare]=$(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null)
 declare -A CDEV=([a]=ens3np0 [b]=ens6np0)
 setq() {	# setq <client dev> <codel|fq|fqNN>
@@ -116,7 +118,7 @@ setq() {	# setq <client dev> <codel|fq|fqNN>
 	esac
 }
 cleanup() {
-	for k in rcvbuf linger_us copy_threads lowat; do [ -e $SP/svc_tcp_rx_$k ] && echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
+	for k in rcvbuf linger_us copy_threads lowat keep; do [ -e $SP/svc_tcp_rx_$k ] && echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
 	[ -n "${SAVE[spare]}" ] && echo ${SAVE[spare]} > $SP/svc_tcp_spare_bytes_max
 	[ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} codel; done
 	# The RSS table may name rings that are going: spread it over four first.
@@ -147,6 +149,7 @@ setp() {	# setp <value> <parameter>: set it, or stop if this kernel has none
 }
 setp "${THREADS:-}" copy_threads
 setp "${LOWAT:-}" lowat
+setp "${KEEP:-}" keep
 [ -n "${SPARE:-}" ] && { echo $SPARE > $SP/svc_tcp_spare_bytes_max || { echo "no svc_tcp_spare_bytes_max in this sunrpc"; exit 1; }; }
 [ -n "${NFSD_CPUS:-}" ] && { for t in $(pgrep -x nfsd); do taskset -cp $NFSD_CPUS $t > /dev/null 2>&1; done; echo "nfsd on CPUs $NFSD_CPUS for this run" | tee -a geometry.txt; }
 [ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} $QDISC || { echo "qdisc not set"; exit 1; }; done
@@ -251,7 +254,7 @@ if [ "$RW" != write ]; then	# a run that reads: every file written whole first, 
 fi
 # Just before the load: the live state, all of it, against the setting this
 # run is at; anything the run set on purpose is held to what it set.
-EXPENV="EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-}"
+EXPENV="EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}" ] && EXPENV="$EXPENV EXP_LAYOUT=RINGS=${RINGS:-4},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-}"
 case "${QDISC:-}" in fq*) EXPENV="$EXPENV EXP_QDISC=fq" ;; codel) EXPENV="$EXPENV EXP_QDISC=fq_codel" ;; esac
@@ -391,10 +394,10 @@ print("client CPUs busy: %.0f%%" % busy('cli-mpstat.txt', range(0, 48)))
 EOF
 echo "region pages in use at most: $(( $(reg pages) - $(reg min_free) ))" | tee -a summary.txt
 if [ -n "${TSV:-}" ] && [ "$RW" = write ]; then
-	[ -s $TSV ] || echo "tag which total_GBps a_GBps b_GBps fifo_a fifo_b ringdrop_a ringdrop_b cli_retrans region_pages nfsd_busy ringcpu_a ringcpu_b rcvbuf linger threads entries qdisc nconn jobs drvbusy_a drvbusy_b warm lowat writes_ps woken_ps ctxsw_ps" > $TSV
+	[ -s $TSV ] || echo "tag which total_GBps a_GBps b_GBps fifo_a fifo_b ringdrop_a ringdrop_b cli_retrans region_pages nfsd_busy ringcpu_a ringcpu_b rcvbuf linger threads entries qdisc nconn jobs drvbusy_a drvbusy_b warm lowat writes_ps woken_ps ctxsw_ps keep" > $TSV
 	g() { awk -v p=$1 -v c=$2 '$1 == p {print $c; f = 1} END {if (!f) print "-"}' window.txt; }	# "-" for a port not run, so the columns stay put
 	db() { awk -v p=$1 '$3 == p {for (i = 1; i <= NF; i++) if ($i == "busiest") {sub(/%/, "", $(i+1)); print $(i+1); f = 1}} END {if (!f) print "-"}' drives.txt; }
 	fb() { python3 -c "import json;print('%.2f' % (json.load(open('fio-$1.json'))['jobs'][0]['write']['bw_bytes']/1e9))" 2> /dev/null || echo -; }
 	cb=$(awk '$1 == "Average:" && $2 ~ /^[0-9]+$/ {b = 100 - $NF - $6; c = $2 + 0; if (c < 8) a += b; else if (c >= 56) z += b; else n += b} END {printf "%.0f %.0f %.0f", n / 48, a / 8, z / 8}' srv-mpstat.txt)
-	echo "${TAG:-$(basename $OUT)} $WHICH $(cat total.txt) $(fb a) $(fb b) $(g a 5) $(g b 5) $(g a 6) $(g b 6) $(awk '/^client retransmits/{print $NF}' window.txt) $(( $(reg pages) - $(reg min_free) )) $cb $(cat $SP/svc_tcp_rx_rcvbuf) $(cat $SP/svc_tcp_rx_linger_us) $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) ${ENTRIES:-256} ${QDISC:-codel} $NCONN $JOBS $(db a) $(db b) $WARM $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) $(awk '/^nfsd in the window/{gsub(",", ""); print $8, $11, $14}' window.txt)" | sed 's/  */ /g' >> $TSV
+	echo "${TAG:-$(basename $OUT)} $WHICH $(cat total.txt) $(fb a) $(fb b) $(g a 5) $(g b 5) $(g a 6) $(g b 6) $(awk '/^client retransmits/{print $NF}' window.txt) $(( $(reg pages) - $(reg min_free) )) $cb $(cat $SP/svc_tcp_rx_rcvbuf) $(cat $SP/svc_tcp_rx_linger_us) $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) ${ENTRIES:-256} ${QDISC:-codel} $NCONN $JOBS $(db a) $(db b) $WARM $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) $(awk '/^nfsd in the window/{gsub(",", ""); print $8, $11, $14}' window.txt) $(cat $SP/svc_tcp_rx_keep)" | sed 's/  */ /g' >> $TSV
 fi

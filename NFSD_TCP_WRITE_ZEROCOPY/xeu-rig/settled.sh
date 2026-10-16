@@ -278,6 +278,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_LINGER:-}" ] && EXPECT[svc_tcp_rx_linger_us]=$EXP_LINGER
 	[ -n "${EXP_LOWAT:-}" ] && EXPECT[svc_tcp_rx_lowat]=$EXP_LOWAT
 	[ -n "${EXP_COPY_THREADS:-}" ] && EXPECT[svc_tcp_rx_copy_threads]=$EXP_COPY_THREADS
+	[ -n "${EXP_KEEP:-}" ] && EXPECT[svc_tcp_rx_keep]=$EXP_KEEP
 	[ -n "${EXP_SPARE:-}" ] && EXPECT[svc_tcp_spare_bytes_max]=$EXP_SPARE
 	[ -n "${EXP_BUDGET:-}" ] && EXPECT[svc_tcp_rx_budget_pages]=$EXP_BUDGET
 	[ -n "${EXP_BUDGET_RESERVE:-}" ] && EXPECT[svc_tcp_rx_budget_reserve]=$EXP_BUDGET_RESERVE
