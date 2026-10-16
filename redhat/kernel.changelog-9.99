@@ -1,3 +1,27 @@
+* Fri Oct 16 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-6]
+- NFSD: update nfsd-testing-canary-dontcache: an end of a split WRITE that is
+  already DIO-aligned gets no buffered segment, and only a misaligned end is
+  cut back to a page boundary, so where the page is larger than the DIO
+  alignment a DIO-aligned WRITE smaller than a page can be issued as direct
+  I/O; direct_misaligned_min_pages is replaced by direct_misaligned_min_bytes,
+  default 8192, so the smallest direct middle worth a split no longer grows
+  with the page size
+- Move "NFSD: Enable return of an updated stable_how to NFS clients" and
+  "NFSD: add io_cache_write modes that persist each direct-mode WRITE" out of
+  nfsd-testing-canary-dontcache and into the Hammerspace private patches
+- Rebuild nfsd-testing-canary-dontcache-LOCALIO on it: LOCALIO direct writes
+  are split the same way, and new "NFS/localio: complete a direct write that
+  shares a page before it returns", so a LOCALIO direct write whose end is
+  DIO-aligned but not on a page boundary is completed before it returns
+  rather than asynchronously, and a buffered write beside it can no longer
+  dirty the shared page before its page cache invalidation, which failed it
+  and made the file's next fsync return -EIO
+- Reword commit messages in nfsd-testing-canary-dontcache and
+  nfsd-testing-canary-dontcache-LOCALIO, shorten the comment on the
+  IOCB_DONTCACHE of nfs_dio_split()'s direct middle, and credit LLM
+  assistance in both as "Assisted-by: LLM", directly above the author's
+  Signed-off-by
+
 * Tue Oct 06 2026 Mike Snitzer <snitzer@kernel.org> [6.12.111-5]
 - block: add "dm-delay: do not round a short delay up to the next timer tick" to
   block-DIO-alignment-fixes, so a delay under 50 ms on an HZ=100 kernel is no
