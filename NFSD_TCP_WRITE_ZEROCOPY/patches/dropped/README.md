@@ -43,3 +43,20 @@ What dropping it took, on 15 October:
   settled setting.
 - The figures: every run from build 462 to build 474 was measured with
   four pools; from 15:45 on 15 October tardis1 runs one.
+
+## 0002-SUNRPC-Optionally-copy-TCP-record-data-outside-the-s.patch
+
+From `778e7e2f1f62` on `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`, the
+last commit of the code group. It adds `sunrpc.svc_tcp_rx_copy_threads`
+(default 0, no change): at 1 the actor claims each payload skb by
+cloning it and the thread copies it after `->read_sock()` returns, with
+the socket unlocked; at 2 or more a thread whose claim completes a
+record also releases the transport before copying, so that more than
+one thread copies for a connection. It is the fold of the claim commit
+(63 in `../../CODE-SERIES.md`) with the copy outside the lock (62, 66).
+
+**Saved here (Mike, 15 October); the commit is still on the
+branch.** It was tried and not adopted: more threads copying a
+connection did not move two ports off 60 GB/s ("NFSD Receive Region
+Budget", 13 October), and the rig runs it at 0 (`xeu-rig/settled.sh`).
+It is one of the commits Mike has an open question on (AGENTS.md).
