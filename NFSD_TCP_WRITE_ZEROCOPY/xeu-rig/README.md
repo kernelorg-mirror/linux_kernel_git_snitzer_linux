@@ -311,6 +311,13 @@ triple, and with it nfsd's CPU is about 7 points busier (some 3 of its
 48 CPUs, busy-waiting); the rate at 0 was the lowest of its round twice
 in three, about 1% under, which three runs a setting do not establish.
 
+**Both are dropped from the series (Mike, that evening)**, their patches
+in `../patches/dropped/` (0005, 0006). The settled setting is now linger
+0 and keep N where the kernel still has them (build 474), and
+`/etc/modprobe.d/sunrpc.conf` sets neither (the file before is
+`/root/sunrpc.conf.pre-drop-linger-keep`). Every one-port figure before
+was measured at a 50 us linger, every figure with keep Y.
+
 ## The next kernel: what is still to be tested
 
 For the session that boots the first kernel built from the branch
@@ -322,7 +329,9 @@ day also lists no `svc_tcp_rx_lowat` and no `svc_tcp_rx_copy_threads`
 (both were 0 on the rig; `settled.sh` reports them as "not in this
 kernel", and `/etc/modprobe.d/sunrpc.conf` no longer sets the mark, the
 file before being `/root/sunrpc.conf.pre-drop-lowat`); the kernel built
-from the push before it still has both, at 0.
+from the push before it still has both, at 0. A kernel built after the
+drop of the linger and keep has no `svc_tcp_rx_linger_us` and no `svc_tcp_rx_keep`;
+before it they are held at 0 and N.
 
 1. **The boot**, as under "First, in this order" above: the drives
    mounted, `./bringup.sh 32768 256`, `./port-setup.sh enp164s0f0 56`,
