@@ -1,17 +1,22 @@
 To: <Xsight engineering contact>
-Subject: xeu on E1: frames dropped at the port's RX FIFO and counted nowhere (with two-port results and six smaller questions)
+Subject: xeu on E1: frames dropped at the port's RX FIFO, which the driver does not count; and three driver questions
 
 Hi <name>,
 
-We are now carrying 44.6 GB/s of NFS writes into one E1 port at best
-(runs of the same setting are between 43.4 and 44.6), which is 92% of
-what the wire carries with no NFS at all. Thank you for the guidance
-that got us there. Looking at what holds the last few percent, we
-found that the port's RX FIFO, ahead of the rings, drops frames, and
-that nothing `ethtool -S` shows for the port counts them. That is
-the main reason for this note. What we see with both ports loaded
-follows it (58.5 GB/s of NFS writes, and 99.4 GB/s of plain TCP),
-then six smaller questions.
+We now carry 47.8 GB/s of NFS writes into one E1 port at best (46.0 to
+47.8 across runs), 96% of the 49.8 GB/s the wire carries into that port
+with no NFS at all, and 60.4 GB/s into both ports together (59.2 to
+60.4), where the two ports carry 98 to 99.6 GB/s of plain TCP. Thank
+you for the guidance that got us there. On two ports the limit is our
+host's memory, not the card: each copied byte costs about 2.2 bytes of
+DRAM traffic, so 60 GB/s is about 131 GB/s of the 166 our four DIMMs can
+carry, which is also where a bare memory-to-memory copy tops out here
+(62 to 68 GB/s). The way past that for us is not to copy.
+
+This note is about three things we found on the way that belong to the
+driver or the card: frames the port's RX FIFO drops and `ethtool -S`
+does not show (section 1), and two driver behaviours (section 3). Our
+two-port results are in section 2 for information.
 
 
 1. Frames dropped at the port's RX FIFO, and not counted
@@ -19,20 +24,22 @@ then six smaller questions.
 The setup: one E1 port (xeu 2.0.1 with our local patches, including
 rx_buf_size=8192) on an arm64 server with 16 KiB pages, 4 RX rings of
 256 entries, MTU 7792. The client is an x86 machine with a 400G mlx5
-port, cabled to the E1 port, writing over NFS on 16 TCP connections.
+port, cabled to the E1 port, writing over NFS on 16 TCP connections,
+each with a 1 MiB receive buffer on the server.
 
-What we found. `ethtool -S` on the port lists what each ring was
-handed and what was dropped at the ring, and nothing for the port
-itself. The SDK built into the module has
-xsl_rm_eu_rx_port_counters_get(), which returns the port's RX FIFO
-counters (struct rm_rx_port_ctr: tc_drop_packets and tc_drop_bytes,
-tc_curr_lines and tc_curr_packets for each traffic class, and
-fc_curr_lines). xeu does not call it. We wrote a patch that reads it
-with the rest of the statistics and lists those counters in
-`ethtool -S`. The first read after boot returned 12,015,394 frames
-dropped in traffic class 0.
+What we found. `ethtool -S` on the port lists what each ring was handed
+and what was dropped at the ring, and nothing for the port itself. The
+SDK built into the module has xsl_rm_eu_rx_port_counters_get(), which
+returns the port's RX FIFO counters (struct rm_rx_port_ctr:
+tc_drop_packets and tc_drop_bytes, tc_curr_lines and tc_curr_packets
+for each traffic class, and fc_curr_lines). xeu does not call it. We
+wrote a patch that reads it with the rest of the statistics and lists
+those counters in `ethtool -S`. The first read after boot returned
+12,015,394 frames dropped in traffic class 0.
 
-With the patch, every frame of a run is accounted for:
+With the patch, every frame of a run is accounted for. Two 120-second
+runs at 44 GB/s, at an earlier setting of ours that lost more than
+today's:
 
                               run 1           run 2
   client transmitted          719,376,635     694,859,522
@@ -43,213 +50,128 @@ With the patch, every frame of a run is accounted for:
   ring tail drops                   1,462           7,501
   TCP retransmits (client)         16,326         244,687
 
-Each run is 120 seconds at about 44 GB/s. We took the counters at
-both ends with the link idle, ran the test, and took them again with
-the link idle; the two ends agree to within about 100 packets while
-idle. The frame counts cover the test's short warm-up as well as its
-120 seconds (the rings dropped 100 and 261 frames in the 120 seconds
-themselves); the retransmits are of the 120 seconds. The ring
-counters had been zeroed by taking the port down and up. On the
-client we used the port's physical transmit count (mlx5
-tx_packets_phy). rx_hw_mru_exceed_packets, rx_hw_other_packets and
-rx_sw_dropped were 0 throughout.
+Counters were taken at both ends with the link idle before and after;
+the ends agree to within about 100 frames while idle. On the client we
+used the port's physical transmit count (mlx5 tx_packets_phy);
+rx_hw_mru_exceed_packets, rx_hw_other_packets and rx_sw_dropped were 0
+throughout. Nothing else loses these frames: rx_packets is the
+hardware's count of frames forwarded to the ring (fwd_packets from
+xsl_rm_eu_rx_ring_stats_get()), the server's stack drops nothing
+(receive queue, backlog, out-of-order and zero-window drop counters 0,
+no checksum errors), the client's retransmissions fill real holes (8
+DSACKs in a run), the client's port shows no transmit drops, and
+`xsllink get --fec-hist` shows no uncorrectable codeword on either E1
+port.
 
-The two runs carry the same data at the same rate and differ in one
-setting of our NFS server. In run 2 the server returns TCP receive
-window to the client sooner, so it sends about 65% more ACKs (51
-million in the run against 31 million), and the client's 16
-connections spend less time waiting for window and send closer
-together.
+At today's setting the loss is small but still there: 4,334 and 4,717
+FIFO drops in a 30-second window at 46.2 and 46.5 GB/s, about one frame
+in 100,000; the rings dropped 0 and 5, and the client retransmitted
+4,341 and 4,761.
 
-Nothing else loses these frames:
-
-- rx_packets is not counted by the driver's poll loop. It is the
-  hardware's count of frames forwarded to the ring (fwd_packets from
-  xsl_rm_eu_rx_ring_stats_get()), so a frame missing from it never
-  reached a ring.
-- The server's network stack does not drop them. The TCP receive
-  queue, backlog, out-of-order and zero-window drop counters are all
-  0, there are no checksum errors, and a trace of every skb freed
-  with a drop reason shows a few hundred a run, the same in both.
-- The client's retransmissions fill real holes: the server reports
-  almost none of them as duplicates (8 DSACKs in a run).
-- The client's port shows no transmit drops or discards, and
-  `xsllink get --fec-hist` shows no uncorrectable codeword on either
-  E1 port (NCCW 0).
-
-How the FIFO behaves. It holds 2 MiB for this port's one traffic
-class, as eu_rx_fifos_init() sizes it and as we measured: read 175
-times a second, its fill reached 16327 lines of 16384. That is some
-268 of our frames, 46 microseconds of traffic at this rate. It was
-under a sixteenth full in 72% of those readings and over three
-quarters full in 2%. So it is nearly empty most of the time and
-overflows in bursts.
-
-It gets worse whenever the sender is less held back. With a larger
-TCP receive window on the server (and the setting of run 1) the FIFO
-dropped 611 thousand frames in a run and the rings 261 thousand, for
-967 thousand retransmits.
-
-The FIFO is where our loss is, but it is not the whole of what holds
-the rate. When we pace the client's transmit (the fq qdisc) the
-FIFO's drops fall to between an eightieth and a fifth, at the same
-rate or a little less. And when we also hold each of the 16
-connections to 23 Gbit/s, so that together they cannot offer more
-than 368 Gbit/s, the FIFO is never used (one line at most, no drop)
-and the rate falls from 44 GB/s to 38.7, with the rings tail-dropping
-42 thousand frames. So with the bursts gone the frames are lost at
-the rings and not at the FIFO: our host does not empty the rings fast
-enough, and what it carries that way, 38.7 GB/s, is less than the 44
-it carries when the traffic arrives in bursts.
+How the FIFO behaves. It holds 2 MiB for this port's one traffic class
+(16384 lines of 128 bytes, as eu_rx_fifos_init() sizes it and as its
+fill count shows): some 268 of our frames, 46 microseconds of traffic
+at this rate. Its fill, read once a second through 57 seconds of load,
+was 0 in more than half of the readings and under 1,100 lines in 90%
+of them, with peaks of 10,915 and 14,269. So it is nearly empty most
+of the time and overflows in bursts. The bursts are the sender's: when
+the client paces each connection (fq, maxrate 23 Gbit/s a flow, so the
+sixteen together cannot offer more than 368 Gbit/s) the FIFO never
+holds more than one line and nothing is dropped anywhere, at 37 to
+38 GB/s, with the client's connections limited by the receive window
+86 to 91% of the time.
 
 Our questions:
 
-a. Is our reading right: the frames are dropped at the port's RX
-   FIFO because the packet processor does not move them to the rings
-   as fast as they arrive in a burst? What rate can it sustain from
-   that FIFO to four rings, and what would raise it?
-b. Is 2 MiB the size of the FIFO's memory, or can it be made larger
-   for an E-unit with one port and one traffic class?
-c. Is xsl_rm_eu_rx_port_counters_get() safe to call from the driver's
-   statistics path while traffic is flowing? Outside NIC mode it
-   flushes the packet processor's counter cache and waits for it.
-   From the source we take the FIFO's drop counters and the
-   non-promiscuous drop counter to clear on read, and the fill counts
-   and the multicast filter's count not to; is that right?
-d. `xsllink get --fec-hist` shows no uncorrectable codewords on
-   either port (NCCW 0), so we take the link itself to be clean. Are
-   there MAC receive counters as well (frames received, FCS errors)
-   that the driver could list?
-e. We could not get the port to send pause frames. Pause is off at
-   both ends in everything above. With `ethtool -A <port> tx on`
-   (which xeu passes to xsl_rm_eu_fc_set() with xoff at 12288 lines
-   and xon at 10240) and the client set to obey pause, the FIFO's
-   fill passed xoff as before, it went on dropping, and the client's
-   port counted no pause frame received in four runs. With
-   `rx on tx on` and the port taken down and up, the rings stopped
-   tail-dropping and the FIFO dropped everything instead (1.36
-   million frames in a run), still with no pause frame on the wire.
-   What else has to be set for the port to send pause, and would you
-   expect it to help here?
-
-One limit on what we know: the table is one run of each kind. A pair
-of runs before we had the FIFO's counters showed the same shortfall
-at the rings (5,153 and 234,702 frames), and the retransmit counts,
-which track the loss, repeat across about twenty runs (10 to 16
-thousand a run for the first setting, 146 to 248 thousand for the
-second).
+a. Is our reading right: the frames are dropped at the port's RX FIFO
+   when a burst from the 16 connections exceeds what the packet
+   processor moves to the rings in the time the 2 MiB lasts? What rate
+   can it sustain from that FIFO to four rings, and is 2 MiB the whole
+   of the buffering ahead of the rings for a port with one traffic
+   class?
+b. We could not get the port to send pause frames. With
+   `ethtool -A <port> tx on` (which xeu passes to xsl_rm_eu_fc_set()
+   with xoff at 12288 lines and xon at 10240) and the client set to
+   obey pause, the FIFO's fill passed xoff as before, it went on
+   dropping, and the client's port counted no pause frame received in
+   four runs. With `rx on tx on` and the port taken down and up, the
+   rings stopped tail-dropping and the FIFO dropped everything instead
+   (1.36 million frames in a run), still with no pause frame on the
+   wire. What else has to be set for the port to send pause?
 
 
-2. Both ports at once
+2. Both ports at once (for information)
 
-We have since loaded both E1 ports together, each from its own 400G
-mlx5 port on the same client, 16 TCP connections to each. The short
-version: the card carries both ports at line rate, and what limits
-NFS on two ports is our host, not the card.
+Each port is fed from its own 400G mlx5 port on the same client, 16
+TCP connections to each. The card carries both at line rate; what
+limits NFS on two ports is our host.
 
                                           one port    both ports
   plain TCP, receivers discard
-    without copying                       49.8 GB/s   99.4 GB/s
+    without copying                       49.8 GB/s   98.0 to 99.6 GB/s
   plain TCP, receivers copy into a
-    small buffer                          49.8 GB/s   89.9 GB/s
+    small buffer                          49.8 GB/s   83 to 90 GB/s
   NFS writes, copied once and written
-    to NVMe drives                        44.6 GB/s   58.5 GB/s
+    to NVMe drives                        47.8 GB/s   60.4 GB/s
 
-Each figure is the best run of its kind. Plain TCP is measured from
-the rings' byte counts; NFS is the client's write rate. In the
-99.4 GB/s run the two ports' RX FIFOs dropped nothing.
-
-For NFS the limit with both ports loaded is the copy our server makes
-of each write: this host copies memory to memory at 62 to 68 GB/s
-however many CPUs do it, and 58.5 GB/s is about 90% of that. Getting
-there took different settings from one port's. With one port's
-settings on both ports (a 1 MiB TCP receive buffer for each
-connection, rings of 256) the two ports carried 43 GB/s between them
-and each port's RX FIFO dropped about 870 thousand frames in 70
-seconds. With a 384 KiB receive buffer, rings of 128 and the client
-pacing its transmit (the fq qdisc), they carry 58.5 GB/s and neither
-FIFO drops a frame: 29.0 and 29.4 GB/s on the two ports, 92 frames
-dropped at the rings and 96 TCP retransmits in 70 seconds.
-
-So on two ports the FIFO of section 1 is not what holds us, and we
-have no question for you about it there. We mention it because it
-bears on how the FIFO behaves: the same sender filling two ports
-overflows both FIFOs with a large window, and neither with a small
-one and pacing.
+Each figure is the best run of its kind; plain TCP is measured from
+the rings' byte counts, NFS is the client's write rate. In the
+two-port NFS runs neither port's RX FIFO drops a frame (0 in 50 runs
+on two kernels). That took a different setting from one port's: with
+one port's settings on both (a 1 MiB receive buffer per connection,
+rings of 256) the two ports carried 43 GB/s between them and each
+port's FIFO dropped about 870 thousand frames in 70 seconds, at
+21.6 GB/s a port; with a 384 KiB receive buffer and rings of 128 they
+carry 60 GB/s with no FIFO drop. That is the same burst behaviour as
+section 1, seen from the other side: smaller windows, no bursts, no
+loss.
 
 
-3. Smaller questions
-
-These do not hold us up today. Answers when convenient would help.
+3. Two driver behaviours
 
 a. Deferring interrupts stops the port. With the kernel's per-device
-   napi_defer_hard_irqs set to 2 and gro_flush_timeout to 50000 ns,
-   the port carried a mount and a few seconds of load and then
-   received nothing more: the rings' packet counts stood still and
-   the client's pings went unanswered. Writing 0 to both did not
-   bring it back. Taking the port down and up did. Nothing was
-   logged. Is xeu expected to work with these, and if not, what does
-   the card offer to hold interrupts back? In our profiles,
-   re-enabling the interrupt at the end of each RX poll is about 6%
-   of samples.
+   napi_defer_hard_irqs set to 2 and gro_flush_timeout to 50000 ns on
+   the port under load, the rings' frame counts stop within two
+   seconds (from 3 million frames a second to a handful) and the
+   client cannot reach the server over the port. Writing 0 to both
+   does not bring it back; taking the port down and up does. Nothing
+   is logged. Reproduced twice, on two kernels (7.1.13 and 7.3-rc7).
+   Is xeu expected to work with the kernel's interrupt deferral, and
+   if not, what does the card offer to hold interrupts back?
 
-b. Interrupt moderation. xeu has no `ethtool -C`. Can moderation be
-   set, and per ring?
+b. Every port's ring interrupts go on the same CPUs. In
+   xeu_setup_rings_irq() the Rx ring i gets CPU (2i) % num_online_cpus
+   and the Tx ring i gets CPU (2i + 1) % num_online_cpus, whichever
+   port it is, and irq_set_affinity_hint() on current kernels sets the
+   affinity as well as the hint. So with four rings both ports'
+   interrupts land on CPUs 0 to 7, and return there each time a port is
+   opened: after a down and up, and after `ethtool -G <port> rx <n>`.
+   We move the second port's to eight other CPUs and have to do it
+   again after each. With both ports' interrupts on 0 to 7 the two
+   ports carried 65 GB/s of plain TCP, where they carry 83 to 90 with
+   them apart. Could xeu spread ports over different CPUs (by NUMA node
+   and port, as cpumask_local_spread() does), and set only the hint
+   (irq_update_affinity_hint()) so that a placement survives?
 
 c. The Toeplitz hash. We have exposed the RSS table, key and hash
    function through ethtool, on top of xsl_rm_reta_set/get,
-   xsl_rm_rss_hash_set/get and xsl_rm_rss_hash_type_set(), and we now
-   place each connection on a ring by pointing its table entry there.
-   That works well: four rings each carry a quarter to within half a
-   percent. To place a flow we read its hash from a received packet,
-   because we cannot compute it. With Toeplitz selected the hashes
-   change, and a key that repeats every 16 bits gives hashes that
-   repeat every 16 bits, but they are not the standard Toeplitz over
-   the IPv4 addresses and TCP ports with the key shown, in any field
-   order we tried. Which bytes of the 68-byte seed are used for
-   IPv4 TCP, over which fields and in what order?
+   xsl_rm_rss_hash_set/get and xsl_rm_rss_hash_type_set(), and place
+   each connection on a ring by pointing its table entry there; four
+   rings then each carry a quarter to within half a percent. To place
+   a flow we read its hash from a received packet, because we cannot
+   compute it: with Toeplitz selected the hashes change, and a key
+   that repeats every 16 bits gives hashes that repeat every 16 bits,
+   but they are not the standard Toeplitz over the IPv4 addresses and
+   TCP ports with the key shown, in any field order we tried. Which
+   bytes of the 68-byte seed are used for IPv4 TCP, over which fields
+   and in what order?
 
-d. A flow filter that targets a ring. ntuple takes one rule, at
-   location 0, and its target can only be a VF. Can a rule target an
-   RX ring, and can there be more than one? The RSS table cannot
-   separate two busy flows that share an entry; a filter could.
-
-e. Receive coalescing. The port has no hardware coalescing and no
-   header-data split (LRO and rx-gro-hw are off and fixed, TCP data
-   split is n/a), so all merging of received frames is the kernel's
-   software GRO, on the one CPU that serves each ring. It does a lot
-   here: in a run the four rings received 581 million frames and TCP
-   saw 93 million segments, about six frames merged into each. We
-   suspect that is why evenly paced traffic is carried worse than
-   bursts, as in the 38.7 GB/s run above: frames of 16 connections
-   arriving interleaved leave less of one connection together to
-   merge, and the per-packet work lands on those four CPUs. We have
-   not measured that yet. Can the card coalesce received TCP segments
-   of a flow, or split headers from payload so that payload can be
-   coalesced? It would take that sensitivity away, and it is the
-   same capability we asked about when we first spoke.
-
-f. Every port's ring interrupts on the same CPUs. In
-   xeu_setup_rings_irq() the Rx ring i gets CPU (2i) % num_online_cpus
-   and the Tx ring i gets CPU (2i + 1) % num_online_cpus, whichever
-   port it is, and irq_set_affinity_hint() on current kernels sets
-   the affinity as well as the hint. So with four rings both ports'
-   interrupts land on CPUs 0 to 7, and they return there each time
-   the port is opened: after a down and up, and after
-   `ethtool -G <port> rx <n>`. We move the second port's to eight
-   other CPUs by writing smp_affinity, and have to do it again after
-   each. With both ports' interrupts on 0 to 7 the two ports carried
-   65 GB/s of plain TCP, where they carry 83 to 90 with them apart.
-   Could xeu spread ports over different CPUs (by NUMA node and port,
-   as cpumask_local_spread() does), and set only the hint
-   (irq_update_affinity_hint()) so that a placement survives?
-
-We carry six small patches to xeu 2.0.1 that came out of this work:
-rx_ip_align (received data on a 4-byte boundary), a retry so that a
-ring that ran empty refills, rx_refill_thresh, rx_buf_size (receive
-buffers smaller than a page), the RSS table, key and hash function
-through ethtool, and the port's RX counters in `ethtool -S`. We would
-be glad to send them if they are of use to you.
+We carry six small patches to xeu 2.0.1 from this work: rx_ip_align
+(received data on a 4-byte boundary), a retry so that a ring that ran
+empty refills, rx_refill_thresh, rx_buf_size (receive buffers smaller
+than a page), the RSS table, key and hash function through ethtool,
+and the port's RX counters in `ethtool -S`. We would be glad to send
+them if they are of use to you.
 
 Thanks,
 Mike Snitzer
