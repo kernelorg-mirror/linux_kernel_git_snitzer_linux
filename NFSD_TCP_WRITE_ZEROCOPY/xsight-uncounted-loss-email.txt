@@ -33,15 +33,14 @@ against on two ports: each copied byte is about 2.2 bytes of DRAM
 traffic, so 60 GB/s of NFS is about 131 GB/s of memory traffic, close to
 what a bare memory-to-memory copy reaches on this system (62 to
 68 GB/s). Our way past it is to stop copying, which is the receive-page
-loan we have discussed with you. In the two-port NFS runs neither port's
-RX FIFO drops a frame (0 in 50 runs on two kernels). That took a
-different setting from one port's: with one port's settings on both (a
-1 MiB receive buffer per connection, rings of 256) the two ports carried
-43 GB/s between them and each port's FIFO dropped about 870 thousand
-frames in 70 seconds, at 21.6 GB/s a port; with a 384 KiB receive buffer
-and rings of 128 they carry 60 GB/s with no FIFO drop. That is the burst
-behaviour of section 2, seen from the other side: smaller windows, no
-bursts, no loss.
+loan we have discussed with you. Two ports needed smaller receive
+buffers and rings than one port. With the one-port setting on both (a
+1 MiB receive buffer per connection, rings of 256), the two together
+carried only 43 GB/s, and each port's FIFO dropped about 870 thousand
+frames in 70 seconds at 21.6 GB/s a port. With 384 KiB receive buffers
+and rings of 128 they carry 60 GB/s and neither FIFO drops a frame
+(0 drops in 50 runs on two kernels). That is the burst behaviour of
+section 2 again: smaller windows, smaller bursts, no loss.
 
 
 2. Frames dropped at the port's RX FIFO, and not counted
