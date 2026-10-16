@@ -1,0 +1,156 @@
+From 20c69dd7613f7b765343a165581a15f8e996842a Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 12 Oct 2026 15:27:17 -0600
+Subject: [PATCH] SUNRPC: Optionally avoid waking a thread after a short TCP
+ receive
+
+When a thread finds a TCP record incomplete, it releases the transport
+with svc_xprt_received() and returns to svc_recv().  If more data
+arrived while it was reading, svc_xprt_received() re-queues the
+transport and wakes an idle thread, and the two threads then race for
+it.  Under a heavy WRITE load this hand-off accounts for a large share
+of all nfsd thread wakeups, several per 1 MiB WRITE.
+
+Add svc_xprt_received_keep(), which re-queues the transport without
+waking another thread, for a caller that is about to look for work
+itself.  With the new svc_tcp_rx_keep module parameter set,
+svc_tcp_recvfrom() uses it after a short receive; a thread that has a
+complete record still wakes another for the transport.  This reduced
+thread wakeups and context switches by about a quarter at the same
+throughput.
+
+The parameter defaults to off.
+
+Assisted-by: LLM
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ include/linux/sunrpc/svc_xprt.h |  1 +
+ net/sunrpc/svc_xprt.c           | 38 +++++++++++++++++++++++++++++----
+ net/sunrpc/svcsock.c            | 17 ++++++++++++++-
+ 3 files changed, 51 insertions(+), 5 deletions(-)
+
+diff --git a/include/linux/sunrpc/svc_xprt.h b/include/linux/sunrpc/svc_xprt.h
+index 464b602ad716..fe71ea0fac68 100644
+--- a/include/linux/sunrpc/svc_xprt.h
++++ b/include/linux/sunrpc/svc_xprt.h
+@@ -175,6 +175,7 @@ int	svc_xprt_create(struct svc_serv *serv, const char *xprt_name,
+ void	svc_xprt_destroy_all(struct svc_serv *serv, struct net *net,
+ 			     bool unregister);
+ void	svc_xprt_received(struct svc_xprt *xprt);
++void	svc_xprt_received_keep(struct svc_xprt *xprt);
+ void	svc_xprt_enqueue(struct svc_xprt *xprt);
+ void	svc_xprt_put(struct svc_xprt *xprt);
+ void	svc_xprt_copy_addrs(struct svc_rqst *rqstp, struct svc_xprt *xprt);
+diff --git a/net/sunrpc/svc_xprt.c b/net/sunrpc/svc_xprt.c
+index dd6a57e40d51..481a2c9b6779 100644
+--- a/net/sunrpc/svc_xprt.c
++++ b/net/sunrpc/svc_xprt.c
+@@ -224,7 +224,9 @@ EXPORT_SYMBOL_GPL(svc_xprt_init);
+  * leave the bit set until a read attempt finds no (or insufficient)
+  * data, or clear it as soon as it consumes the last queued receive.
+  */
+-void svc_xprt_received(struct svc_xprt *xprt)
++static void svc_xprt_do_enqueue(struct svc_xprt *xprt, bool wake);
++
++static void __svc_xprt_received(struct svc_xprt *xprt, bool wake)
+ {
+ 	if (!test_bit(XPT_BUSY, &xprt->xpt_flags)) {
+ 		WARN_ONCE(1, "xprt=0x%p already busy!", xprt);
+@@ -248,12 +250,34 @@ void svc_xprt_received(struct svc_xprt *xprt)
+ 	if (READ_ONCE(xprt->xpt_flags) &
+ 	    (BIT(XPT_CONN) | BIT(XPT_CLOSE) | BIT(XPT_HANDSHAKE) |
+ 	     BIT(XPT_DATA) | BIT(XPT_DEFERRED)))
+-		svc_xprt_enqueue(xprt);
++		svc_xprt_do_enqueue(xprt, wake);
+ 
+ 	svc_xprt_put(xprt);
+ }
++
++void svc_xprt_received(struct svc_xprt *xprt)
++{
++	__svc_xprt_received(xprt, true);
++}
+ EXPORT_SYMBOL_GPL(svc_xprt_received);
+ 
++/**
++ * svc_xprt_received_keep - Give a transport back without waking a thread
++ * @xprt: a transport the calling service thread has finished with
++ *
++ * As svc_xprt_received(), for a service thread that is about to return to
++ * svc_recv() with nothing to process. If the transport has more for a
++ * thread to do it is queued, and no idle thread is woken for it: the
++ * caller finds it when it looks for work, which it is about to do. A
++ * thread that sleeps or goes on to process a request must use
++ * svc_xprt_received().
++ */
++void svc_xprt_received_keep(struct svc_xprt *xprt)
++{
++	__svc_xprt_received(xprt, false);
++}
++EXPORT_SYMBOL_GPL(svc_xprt_received_keep);
++
+ void svc_add_new_perm_xprt(struct svc_serv *serv, struct svc_xprt *new)
+ {
+ 	clear_bit(XPT_TEMP, &new->xpt_flags);
+@@ -507,7 +531,7 @@ static bool svc_xprt_ready(struct svc_xprt *xprt)
+  * @xprt: transport with data pending
+  *
+  */
+-void svc_xprt_enqueue(struct svc_xprt *xprt)
++static void svc_xprt_do_enqueue(struct svc_xprt *xprt, bool wake)
+ {
+ 	struct svc_pool *pool;
+ 
+@@ -528,7 +552,13 @@ void svc_xprt_enqueue(struct svc_xprt *xprt)
+ 	xprt->xpt_qtime = ktime_get();
+ 	lwq_enqueue(&xprt->xpt_ready, &pool->sp_xprts);
+ 
+-	svc_pool_wake_idle_thread(pool);
++	if (wake)
++		svc_pool_wake_idle_thread(pool);
++}
++
++void svc_xprt_enqueue(struct svc_xprt *xprt)
++{
++	svc_xprt_do_enqueue(xprt, true);
+ }
+ EXPORT_SYMBOL_GPL(svc_xprt_enqueue);
+ 
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index e256faf38e84..00533c653432 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -251,6 +251,18 @@ MODULE_PARM_DESC(svc_tcp_rx_rcvbuf,
+  * and goes back to the pool.  0: it does not wait.
+  */
+ #define SVC_TCP_RX_LINGER_MAX_US	1000
++/*
++ * A thread that finds a record short gives the transport up and looks for
++ * work. If more of the record arrived while it read, giving the transport
++ * up queues it and wakes an idle thread to carry on, and the two then race
++ * for it. With svc_tcp_rx_keep the thread queues the transport without
++ * waking anyone and takes it up again itself.
++ */
++static bool svc_tcp_rx_keep;
++module_param(svc_tcp_rx_keep, bool, 0644);
++MODULE_PARM_DESC(svc_tcp_rx_keep,
++		 "After a short TCP receive, do not wake another thread for data that has already arrived (default: N)");
++
+ /*
+  * A thread that takes a partly received record back from a socket leaves
+  * its own pages in the socket's sk_pages[], for the next thread that parks
+@@ -3867,7 +3879,10 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
+ 	trace_svcsock_tcp_recv_err(&svsk->sk_xprt, len);
+ 	svc_xprt_deferred_close(&svsk->sk_xprt);
+ err_noclose:
+-	svc_xprt_received(rqstp->rq_xprt);
++	if (READ_ONCE(svc_tcp_rx_keep))
++		svc_xprt_received_keep(rqstp->rq_xprt);
++	else
++		svc_xprt_received(rqstp->rq_xprt);
+ 	return 0;	/* record not complete */
+ }
+ 
+-- 
+2.52.0
+

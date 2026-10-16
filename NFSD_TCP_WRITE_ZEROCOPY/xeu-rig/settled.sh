@@ -19,7 +19,7 @@
 #   two    a two-port run at the two-port setting: rings of 128 on both
 #          ports, a 384 KiB held buffer, no linger
 #   one    a one-port run at the one-port setting: rings of 256, a 1 MiB
-#          held buffer, a linger of 50 us
+#          held buffer (no linger since 15 October, when it was dropped)
 #   cell   a loan sweep's cell on port a: its plan line sets the rings, the
 #          held buffer and the budget, passed as EXP_ENTRIES_A, EXP_RCVBUF,
 #          EXP_BUDGET, EXP_BUDGET_RESERVE and EXP_LINGER
@@ -124,8 +124,8 @@ REGION_PAGES=32768
 # rest.  A mode changes some of them (mode_expect below).
 declare -A REST=(
 	[svc_tcp_rx_rcvbuf]=1048576
-	[svc_tcp_rx_linger_us]=50
-	[svc_tcp_rx_keep]=Y
+	[svc_tcp_rx_linger_us]=0
+	[svc_tcp_rx_keep]=N
 	[svc_tcp_rx_lowat]=0
 	[svc_tcp_rx_copy_threads]=0
 	[svc_tcp_rx_budget_pages]=0
@@ -145,8 +145,12 @@ declare -A REST=(
 # svc_tcp_rx_copy_threads is 1 or more.  svc_tcp_rx_lowat and
 # svc_tcp_rx_copy_threads were dropped from the series on 15 October
 # (patches/dropped/ 0002 and 0003): builds 474 and before have them, at 0.
+# svc_tcp_rx_linger_us and svc_tcp_rx_keep followed that evening (0005 and
+# 0006), after an A/B on build 474 ("15 October, evening" in README.md): on
+# 474 and before they are held at 0 and N, what a kernel without them does;
+# every figure before was measured at 50 us on one port and keep Y.
 declare -A GONE_LATER=([svc_tcp_rx_copy_unlocked]=1 [svc_tcp_rx_lowat]=1
-	[svc_tcp_rx_copy_threads]=1)
+	[svc_tcp_rx_copy_threads]=1 [svc_tcp_rx_linger_us]=1 [svc_tcp_rx_keep]=1)
 # Settings an earlier kernel does not have yet: held where the kernel has
 # them, and reported, not failed, where it does not.  svc_tcp_spare_bytes_max
 # came after build 474 ("SUNRPC: Bound the pages TCP sockets keep for

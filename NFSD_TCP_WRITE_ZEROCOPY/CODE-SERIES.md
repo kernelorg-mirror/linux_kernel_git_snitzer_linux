@@ -713,8 +713,19 @@ counts settle:
   the card and not part of what the series needs. The tip before is
   kept as `.pre-drop-veth`; `run-budget.sh` and `transplant/preflight.sh`
   point at the saved patch where veth lacks the parameter.
-- The patches of all four are in `patches/dropped/`, each with why. The
-  code group is 34 commits.
+- **34, "SUNRPC: Optionally wait for the rest of a partially received
+  TCP record", and 36, "SUNRPC: Optionally avoid waking a thread after a
+  short TCP receive", are dropped** (Mike), after an A/B of each on and
+  off at the settled setting on build 474 ("15 October, evening: keep and
+  the linger, each on and off" in `xeu-rig/README.md`): keep saved
+  wakeups but no CPU, context switches or rate; the linger saved wakeups
+  on one port for about 3 CPUs of busy wait and a rate gain of about 1%
+  that three runs did not establish. The tip before is kept as
+  `.pre-drop-linger-keep`; the settled setting is now linger 0 and keep N
+  on kernels that have them, and `/etc/modprobe.d/sunrpc.conf` sets
+  neither (the file before is `/root/sunrpc.conf.pre-drop-linger-keep`).
+- The patches of all six are in `patches/dropped/`, each with why. The
+  code group is 32 commits.
 
 ## Next steps
 

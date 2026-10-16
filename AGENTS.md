@@ -61,8 +61,12 @@ the branches in step and about where development is done.
   patches are in `patches/dropped/` as well, and the tip before is kept
   as `.pre-drop-claim-lowat`. **veth's `rx_ip_align` followed (Mike),
   a test aid for the VM rigs that the card does not use; the patch is in
-  `patches/dropped/` and the tip before is `.pre-drop-veth`.** The code
-  group is 34 commits.
+  `patches/dropped/` and the tip before is `.pre-drop-veth`.** **Then
+  the linger (`svc_tcp_rx_linger_us`) and keep (`svc_tcp_rx_keep`), after
+  an A/B on build 474 showed neither worth its place (Mike); the tip
+  before is `.pre-drop-linger-keep`, and the rig runs without them (linger
+  0 and keep N on kernels that still have them).** The code group is 32
+  commits.
   What of the code group runs in practice is step 6 of
   `NFSD_TCP_WRITE_ZEROCOPY/CODE-SERIES.md` (a survey, not a decision:
   nothing else is to be dropped unless Mike says so). Still open

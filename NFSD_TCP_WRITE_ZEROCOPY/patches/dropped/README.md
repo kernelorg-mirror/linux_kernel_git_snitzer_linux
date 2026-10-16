@@ -102,3 +102,53 @@ kernel without it, `run-budget.sh` runs at 0 and says so, and
 `transplant/preflight.sh` notes it; both name this patch. To run the
 NVMe/TCP stages with loans written direct, apply it to the kernel
 first.
+
+## 0005-SUNRPC-Optionally-wait-for-the-rest-of-a-partially-r.patch
+
+From `f2ec94287c3a` on `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`. It
+adds `sunrpc.svc_tcp_rx_linger_us` (default 0): when a read leaves a
+record incomplete and the socket empty, the thread busy-waits up to that
+long (at most 1000 us) for the rest, instead of saving the record on the
+socket and giving the transport up, with the `svcsock_tcp_rx_linger`
+tracepoint for each wait. It also rewrote the control-record branch of
+`svc_tcp_recvfrom()` into an equivalent form, which goes with it.
+
+**Dropped (Mike, 15 October), with 0006.** At the settled setting it ran
+at 50 us on one port and 0 on two. On and off by turns on build 474,
+one port on eight drives, three runs each with no drive slowed: without
+it the threads woken a WRITE tripled (2.5 to 8) but nfsd's CPU was about
+7 points less busy (some 3 of 48 CPUs spent busy-waiting with it), and
+its rate at 0 was 46.58, 47.07 and 46.12 GB/s against 46.29, 47.69 and
+47.57, about 1% under, which three runs do not establish. The account
+is "15 October, evening: keep and the linger, each on and off" in
+`xeu-rig/README.md`.
+
+## 0006-SUNRPC-Optionally-avoid-waking-a-thread-after-a-shor.patch
+
+From `20c69dd7613f` on `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`. It
+adds `sunrpc.svc_tcp_rx_keep` (default N) and
+`svc_xprt_received_keep()`: a thread that reads part of a record and
+finds the socket empty releases the transport without queueing it again
+for data that was already there when it read.
+
+**Dropped (Mike, 15 October), with 0005.** It was pinned on 12 October
+together with the SO_RCVLOWAT mark (0003) and never measured apart from
+it. On and off by turns on build 474: on two ports it woke about a
+quarter fewer threads a WRITE (11.7 to 14.0 against 16.6 to 16.8), but
+the context switches a WRITE were within 3%, nfsd's CPU within a point
+or two, and the rate the same (58.22 and 57.35 GB/s against 58.16 in
+the runs no drive slowed); on one port, where the linger already waits,
+it changed nothing.
+
+Dropping both changed nothing else in the code: no KUnit test refers to
+either, and the lines the tree lost and gained are exactly the two
+patches' reversed. Two conflicts were context only: the hold tracepoint
+of "SUNRPC: Learn the region costs of loans and held receive buffers"
+sits where the linger tracepoint was, and the KUnit interface commit's
+spare helpers where its parameter was. `xeu-rig/settled.sh` holds
+`svc_tcp_rx_linger_us=0` and `svc_tcp_rx_keep=N` on kernels that have
+them and reports them gone on those that do not, `/etc/modprobe.d/sunrpc.conf`
+on tardis1 sets neither (the file before is
+`/root/sunrpc.conf.pre-drop-linger-keep`), and `xeu-rig/twoport.sh`
+accepts `LINGER=0` and `KEEP=N` on a kernel without them and refuses
+anything else there.
