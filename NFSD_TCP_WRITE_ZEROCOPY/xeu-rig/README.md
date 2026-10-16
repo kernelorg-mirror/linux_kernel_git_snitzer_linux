@@ -273,6 +273,44 @@ branch; the patch and what dropping it took are in
 `settled.sh` holds 512 threads in one pool. Every figure before that
 was measured with four.
 
+## 15 October, evening: keep and the linger, each on and off
+
+Commits 35, "SUNRPC: Optionally avoid waking a thread after a short TCP
+receive" (`svc_tcp_rx_keep`, Y at the settled setting), and 33,
+"SUNRPC: Optionally wait for the rest of a partially received TCP
+record" (`svc_tcp_rx_linger_us`, 50 on one port, 0 on two), had been
+pinned without a measure of their own (keep together with the
+low-water mark on 12 October). Build 474 with its own sunrpc,
+everything else at the settled setting, runs of 10 s + 30 s after
+120 s of rest, the settings by turns (`$L/b474kl/ab.sh`, results
+`$L/b474kl/results-474kl.tsv`; `twoport.sh` gained `KEEP=` for it).
+
+**Two ports, keep Y against N** (8 runs; a drive stepped down in 5):
+
+| keep | GB/s, no drive slowed | GB/s, a drive slowed | woken a WRITE | context switches a WRITE | nfsd busy |
+|---|---|---|---|---|---|
+| Y | 58.22, 57.35 | 55.18, 57.86 | 14.0, 11.7, 11.9, 11.9 | 10.8 to 11.2 | 55 to 57% |
+| N | 58.16 | 57.01, 57.33, 50.54 | 16.7, 16.8, 16.6 | 11.1 to 11.4 | 56 to 59% |
+
+(The 50.54 run had two drives slow and a quarter fewer WRITEs; it is
+left out of the per-WRITE figures.) Keep wakes about a quarter fewer
+threads, but the context switches a WRITE are within 3% and nfsd's
+CPU within a point or two, and the rate shows no difference.
+
+**One port on all eight drives** (9 runs; no drive stepped down):
+
+| setting | GB/s | woken a WRITE | context switches a WRITE | nfsd busy |
+|---|---|---|---|---|
+| linger 50, keep Y (settled) | 46.29, 47.69, 47.57 | 2.5 to 2.6 | 10.4 to 10.9 | 31 to 32% |
+| linger 0, keep Y | 46.58, 47.07, 46.12 | 7.7 to 8.1 | 12.7 to 13.0 | 24 to 25% |
+| linger 50, keep N | 47.43, 47.77, 47.77 | 2.5 | 10.7 to 10.9 | 31 to 32% |
+
+Keep changes nothing on one port: with the linger a thread already
+waits for the rest of a WRITE. Without the linger the wakeups
+triple, and with it nfsd's CPU is about 7 points busier (some 3 of its
+48 CPUs, busy-waiting); the rate at 0 was the lowest of its round twice
+in three, about 1% under, which three runs a setting do not establish.
+
 ## The next kernel: what is still to be tested
 
 For the session that boots the first kernel built from the branch
