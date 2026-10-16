@@ -82,3 +82,23 @@ build 474 (15 October); the claim in its message, "at the same
 throughput", was read from runs the drives were limiting. The rig ran it
 at 0; `svc_tcp_rx_lowat=0` is out of `/etc/modprobe.d/sunrpc.conf` on
 tardis1 (the file before is `/root/sunrpc.conf.pre-drop-lowat`).
+
+## 0004-veth-add-rx_ip_align-extra-headroom-for-frames-copie.patch
+
+From `3c5f1798714e` on `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`, the
+second commit of the code group. It adds `veth.rx_ip_align` (0 to 3,
+default 0): extra headroom for the frames veth copies into page-pool
+pages for XDP, so that at 2 a TCP payload starts on a 4-byte boundary,
+as xeu's own `rx_ip_align=2` places it on the Xsight card. It let the
+VM rigs' NVMe/TCP budget stages (`run-budget.sh STORAGE=sgl`) write
+loaned WRITEs direct without the card.
+
+**Dropped (Mike, 15 October).** Its own message calls it a test aid,
+not a general interface; nothing in the series depends on it, it never
+runs on tardis1 ("Run nothing on veth"), and netdev would not take it.
+The tree after the drop has `drivers/net/veth.c` as in `v7.3-3` and
+differs from the tree before (`.pre-drop-veth`) in nothing else. On a
+kernel without it, `run-budget.sh` runs at 0 and says so, and
+`transplant/preflight.sh` notes it; both name this patch. To run the
+NVMe/TCP stages with loans written direct, apply it to the kernel
+first.

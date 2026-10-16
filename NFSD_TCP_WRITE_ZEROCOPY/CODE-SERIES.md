@@ -701,7 +701,20 @@ counts settle:
   into Ronaldo's "exhaustively test" commit would have put his name on
   them). The tip before the fold is kept as
   `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-fold-spare`.
-- The code group is 37 commits.
+- **38, "SUNRPC: Optionally copy TCP record data outside the socket
+  lock", and 37, "SUNRPC: Optionally raise SO_RCVLOWAT while a TCP
+  record is incomplete", are dropped** (Mike): neither showed a gain in
+  practice, and both ran at 0 on the rig. The tip before is kept as
+  `.pre-drop-claim-lowat`; `svc_tcp_rx_lowat=0` is out of
+  `/etc/modprobe.d/sunrpc.conf` (the file before is
+  `/root/sunrpc.conf.pre-drop-lowat`).
+- **3, "veth: add rx_ip_align, extra headroom for frames copied for
+  XDP", is dropped** (Mike): a test aid for the VM rigs, not used on
+  the card and not part of what the series needs. The tip before is
+  kept as `.pre-drop-veth`; `run-budget.sh` and `transplant/preflight.sh`
+  point at the saved patch where veth lacks the parameter.
+- The patches of all four are in `patches/dropped/`, each with why. The
+  code group is 34 commits.
 
 ## Next steps
 

@@ -59,12 +59,16 @@ the branches in step and about where development is done.
   SO_RCVLOWAT mark (`svc_tcp_rx_lowat`) were dropped too (Mike): neither
   showed a gain in practice, and both ran at 0 on the rig**; their
   patches are in `patches/dropped/` as well, and the tip before is kept
-  as `.pre-drop-claim-lowat`. The code group is 35 commits.
+  as `.pre-drop-claim-lowat`. **veth's `rx_ip_align` followed (Mike),
+  a test aid for the VM rigs that the card does not use; the patch is in
+  `patches/dropped/` and the tip before is `.pre-drop-veth`.** The code
+  group is 34 commits.
   What of the code group runs in practice is step 6 of
   `NFSD_TCP_WRITE_ZEROCOPY/CODE-SERIES.md` (a survey, not a decision:
   nothing else is to be dropped unless Mike says so). Still open
-  (Mike): whether to drop the stacking device's DMA alignment and
-  veth's `rx_ip_align`, and the page_pool region's future upstream. Ronaldo's twelve commits carry
+  (Mike): whether to drop the stacking device's DMA alignment (the
+  loan harness's dm-delay needs it), and the page_pool region's future
+  upstream. Ronaldo's twelve commits carry
   his mail address, `ronaldo@slipstream-io.com`, as author and in his
   Signed-off-by since 2026-10-15 (Mike); the tips before that are kept
   with the suffix `.pre-ronaldo-addr`.
