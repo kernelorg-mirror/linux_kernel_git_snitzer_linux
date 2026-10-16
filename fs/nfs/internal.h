@@ -245,6 +245,41 @@ int nfs_init_server_rpcclient(struct nfs_server *, const struct rpc_timeout *t,
 struct nfs_server *nfs_alloc_server(void);
 void nfs_server_copy_userdata(struct nfs_server *, struct nfs_server *);
 
+/*
+ * Tell the VFS whether this server can make one directory entry of two names
+ * that differ as byte strings.  NFS installs no ->d_hash or ->d_compare, so
+ * the dcache compares names byte for byte, while a server that is
+ * case-insensitive, or does not preserve case, makes "foo" and "FOO" one
+ * entry.  On such a server SB_I_NAMES_COLLIDE keeps the parent of an O_CREAT
+ * open locked exclusive; see atomic_open_create_shared() in fs/namei.c.
+ *
+ * server->caps is derived again on every probe of the server: at mount, at
+ * remount, on migration, and when a later mount reuses this superblock
+ * (nfs4_proc_get_root()).  So this is called wherever the case bits of
+ * server->caps are written, once they have their final value, and when the
+ * superblock is set up, because the first probe runs before it exists.  The
+ * value is what the probed file handle reported, normally the mount root's;
+ * the homogeneous attribute is not fetched, so a server whose answer differs
+ * below the root is described by the root.  Migration runs the probe from
+ * the state manager without ->s_umount, so the update is atomic, and it is
+ * made only when the value changes.  Two probes of one server at once can
+ * leave the bit as the earlier of them derived it; that needs the server's
+ * answer to change between them, and server->caps has the same race.
+ */
+static inline void nfs_server_publish_name_caps(struct nfs_server *server)
+{
+	struct super_block *sb = server->super;
+	unsigned long bits = 0;
+
+	if (!sb)
+		return;
+	if (READ_ONCE(server->caps) & (NFS_CAP_CASE_INSENSITIVE |
+				       NFS_CAP_CASE_NONPRESERVING))
+		bits = SB_I_NAMES_COLLIDE;
+	if ((READ_ONCE(sb->s_iflags) & SB_I_NAMES_COLLIDE) != bits)
+		set_mask_bits(&sb->s_iflags, SB_I_NAMES_COLLIDE, bits);
+}
+
 extern void nfs_put_client(struct nfs_client *);
 extern void nfs_free_client(struct nfs_client *);
 void nfs_cb_idr_remove(struct nfs_client *clp);
