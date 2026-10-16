@@ -320,13 +320,14 @@ audit_sysctl() {
 
 audit_client() {	# read only: nothing on the client is changed from here
 	local out k p
-	out=$($SSHC "for k in ${!CLI_SYSCTL[*]}; do echo \"\$k \$(sysctl -n \$k | tr -s ' \\t' '  ')\"; done; for d in ${CLI_DEV[*]}; do echo \"qdisc_\$d \$(tc qdisc show dev \$d | awk '\$1 == \"qdisc\" && \$2 != \"mq\" {print \$2}' | sort -u | paste -sd,)\"; done" 2>/dev/null) ||
+	out=$($SSHC "for k in ${!CLI_SYSCTL[*]}; do echo \"\$k \$(sysctl -n \$k | tr -s ' \\t' '  ')\"; done; for d in ${CLI_DEV[*]}; do echo \"qdisc_\$d \$(tc qdisc show dev \$d | awk '\$1 == \"qdisc\" && \$2 != \"mq\" {print \$2}' | sort -u | paste -sd,)\"; echo \"pause_\$d \$(ethtool -a \$d | awk '/^RX:/ {r = \$2} /^TX:/ {t = \$2} END {print r \"/\" t}')\"; done" 2>/dev/null) ||
 		{ bad "client reachable at $CLIMGMT" no yes; return; }
 	for k in $(printf '%s\n' "${!CLI_SYSCTL[@]}" | sort); do
 		want "client sysctl $k" "$(awk -v k=$k '$1 == k {$1 = ""; sub(/^ /, ""); print}' <<< "$out")" "${CLI_SYSCTL[$k]}"
 	done
 	for p in a b; do
 		want "client ${CLI_DEV[$p]} qdisc" "$(awk -v k=qdisc_${CLI_DEV[$p]} '$1 == k {print $2}' <<< "$out")" "${EXP_QDISC:-fq_codel}"
+		want "client ${CLI_DEV[$p]} pause rx/tx" "$(awk -v k=pause_${CLI_DEV[$p]} '$1 == k {print $2}' <<< "$out")" off/off
 	done
 }
 
@@ -344,6 +345,10 @@ audit_port() {	# audit_port <a|b>
 	want "$d rings" "$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')" $RINGS
 	want "$d ring depth" "$(ethtool -g $d | awk '/^RX:/ {v = $2} END {print v}')" "${ENTRIES[$p]}"
 	want "$d threaded NAPI" "$(cat /sys/class/net/$d/threaded)" 0
+	# Pause is off at both ends: it was left tx on from 11 October's pause
+	# experiment until 15 October unseen (no pause frame ever reached the
+	# client, so nothing measured changed, but the setting is off).
+	want "$d pause rx/tx" "$(ethtool -a $d | awk '/^RX:/ {r = $2} /^TX:/ {t = $2} END {print r "/" t}')" off/off
 	for q in /sys/class/net/$d/queues/rx-*; do
 		want "$d $(basename $q) RPS" "$(xps_cpu $q/rps_cpus)" none
 	done
@@ -434,6 +439,7 @@ place() {	# place [a] [b]: the CPU layout of nfsd and of the ports named (both)
 		# irq_tuning.service set this until it was masked (below); a reload
 		# of xeu puts it back to the card's 256.
 		set_mrrs $(pci_of /sys/class/net/$d/device) $MRRS
+		ethtool -A $d rx off tx off 2> /dev/null
 	done
 }
 
