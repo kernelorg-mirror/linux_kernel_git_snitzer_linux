@@ -716,7 +716,7 @@ nfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 {
 	struct inode *inode = d_inode(dentry);
 	struct nfs_fattr *fattr;
-	loff_t oldsize = i_size_read(inode);
+	loff_t oldsize;
 	int error = 0;
 	kuid_t task_uid = current_fsuid();
 	kuid_t owner_uid = inode->i_uid;
@@ -727,6 +727,10 @@ nfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 	if (attr->ia_valid & (ATTR_KILL_SUID | ATTR_KILL_SGID))
 		attr->ia_valid &= ~ATTR_MODE;
 
+	if (S_ISREG(inode->i_mode))
+		nfs_file_block_o_direct(NFS_I(inode));
+
+	oldsize = i_size_read(inode);
 	if (attr->ia_valid & ATTR_SIZE) {
 		BUG_ON(!S_ISREG(inode->i_mode));
 
@@ -754,14 +758,7 @@ nfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 	} else if (nfs_have_delegated_atime(inode) &&
 		   attr->ia_valid & ATTR_ATIME &&
 		   !(attr->ia_valid & ATTR_MTIME)) {
-		if (attr->ia_valid & ATTR_ATIME_SET) {
-			if (uid_eq(task_uid, owner_uid)) {
-				spin_lock(&inode->i_lock);
-				nfs_set_timestamps_to_ts(inode, attr);
-				spin_unlock(&inode->i_lock);
-				attr->ia_valid &= ~(ATTR_ATIME|ATTR_ATIME_SET);
-			}
-		} else {
+		if (!(attr->ia_valid & ATTR_ATIME_SET)) {
 			nfs_update_delegated_atime(inode);
 			attr->ia_valid &= ~ATTR_ATIME;
 		}
@@ -774,10 +771,8 @@ nfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 	trace_nfs_setattr_enter(inode);
 
 	/* Write all dirty data */
-	if (S_ISREG(inode->i_mode)) {
-		nfs_file_block_o_direct(NFS_I(inode));
+	if (S_ISREG(inode->i_mode))
 		nfs_sync_inode(inode);
-	}
 
 	fattr = nfs_alloc_fattr_with_label(NFS_SERVER(inode));
 	if (fattr == NULL) {
@@ -1241,13 +1236,11 @@ struct nfs_open_context *get_nfs_open_context(struct nfs_open_context *ctx)
 }
 EXPORT_SYMBOL_GPL(get_nfs_open_context);
 
-static void __put_nfs_open_context(struct nfs_open_context *ctx, int is_sync)
+static void nfs_free_open_context(struct nfs_open_context *ctx, int is_sync)
 {
 	struct inode *inode = d_inode(ctx->dentry);
 	struct super_block *sb = ctx->dentry->d_sb;
 
-	if (!refcount_dec_and_test(&ctx->lock_context.count))
-		return;
 	if (!list_empty(&ctx->list)) {
 		spin_lock(&inode->i_lock);
 		list_del_rcu(&ctx->list);
@@ -1264,11 +1257,44 @@ static void __put_nfs_open_context(struct nfs_open_context *ctx, int is_sync)
 	kfree_rcu(ctx, rcu_head);
 }
 
+static void __put_nfs_open_context(struct nfs_open_context *ctx, int is_sync)
+{
+	if (refcount_dec_and_test(&ctx->lock_context.count))
+		nfs_free_open_context(ctx, is_sync);
+}
+
 void put_nfs_open_context(struct nfs_open_context *ctx)
 {
 	__put_nfs_open_context(ctx, 0);
 }
 EXPORT_SYMBOL_GPL(put_nfs_open_context);
+
+static void nfs_free_open_context_work(struct work_struct *work)
+{
+	struct nfs_open_context *ctx =
+		container_of(work, struct nfs_open_context, free_work);
+
+	nfs_free_open_context(ctx, 0);
+}
+
+/**
+ * put_nfs_open_context_async - drop a reference from a caller that must not
+ *				release the open context itself
+ * @ctx: open context to drop
+ *
+ * Releasing an open context closes NFSv4 state and drops what may be the
+ * last reference to the dentry, the inode and the superblock. None of that
+ * is allowed in writeback, which holds sb->s_umount and has set I_SYNC on
+ * the inode. If this is the last reference, release the context from nfsiod,
+ * which is where the completion of a write releases it.
+ */
+void put_nfs_open_context_async(struct nfs_open_context *ctx)
+{
+	if (!refcount_dec_and_test(&ctx->lock_context.count))
+		return;
+	INIT_WORK(&ctx->free_work, nfs_free_open_context_work);
+	queue_work(nfsiod_workqueue, &ctx->free_work);
+}
 
 static void put_nfs_open_context_sync(struct nfs_open_context *ctx)
 {

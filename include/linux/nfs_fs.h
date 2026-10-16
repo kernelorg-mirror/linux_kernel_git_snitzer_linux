@@ -26,6 +26,7 @@
 #include <linux/refcount.h>
 #include <linux/rwsem.h>
 #include <linux/wait.h>
+#include <linux/workqueue.h>
 
 #include <linux/sunrpc/debug.h>
 #include <linux/sunrpc/auth.h>
@@ -109,10 +110,12 @@ struct nfs_open_context {
 #define NFS_CONTEXT_BAD			(2)
 #define NFS_CONTEXT_UNLOCK	(3)
 #define NFS_CONTEXT_FILE_OPEN		(4)
+#define NFS_CONTEXT_WRITE_SYNC		(5)
 
 	struct nfs4_threshold	*mdsthreshold;
 	struct list_head list;
 	struct rcu_head	rcu_head;
+	struct work_struct free_work;
 	struct nfs_file_localio nfl;
 };
 
