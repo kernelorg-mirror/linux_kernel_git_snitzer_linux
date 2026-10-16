@@ -318,6 +318,47 @@ in `../patches/dropped/` (0005, 0006). The settled setting is now linger
 `/root/sunrpc.conf.pre-drop-linger-keep`). Every one-port figure before
 was measured at a 50 us linger, every figure with keep Y.
 
+## 15 October, late: the note to Xsight checked against today's setting
+
+The draft `../xsight-uncounted-loss-email.txt` (11 and 12 October) was
+re-read claim by claim and rewritten against the settled setting on
+build 474 (`$L/b474xs/`, scripts `runs.sh`, `runs2.sh`, `defer.sh`).
+One port on all eight drives, 10 s + 30 s after 120 s of rest, the
+port's FIFO fill and drops, the rings' frames and TCP's segments
+sampled once a second beside each run:
+
+| cell | GB/s | FIFO drops in the window | ring drops | retransmits | frames a segment (GRO) | FIFO fill: median, 90th, max of 16384 |
+|---|---|---|---|---|---|---|
+| settled, `fq_codel` (`codel-1`, `-3`) | 46.16, 46.45 | 4,334, 4,717 | 0, 5 | 4,341, 4,761 | 5.94, 5.99 | 0, 700 to 1,000, 10,915 and 14,269 |
+| client paced, `fq maxrate 23gbit` a flow (`fq23-2`, `-4`) | 36.95, 37.82 | 0, 0 | 0, 0 | 9, 6 | 7.20, 7.20 | 0, 1, 1 |
+
+- **The FIFO still drops at today's setting, about one frame in
+  100,000**, two orders of magnitude under the 11 October figures,
+  which were at the 2 MiB and `copy_threads` settings. Bursty as
+  before: fill 0 in more than half the readings.
+- **Paced, nothing is lost anywhere and the rate is 37 to 38 GB/s**,
+  the client's connections limited by the receive window 86 to 91% of
+  the time (`client-ss.txt`). The 11 October paced run also tail-dropped
+  42 thousand frames at the rings; today none. GRO merges **more**
+  frames a segment when paced (7.2 against 6.0) with the rings' CPUs
+  equally busy (47% against 46%), so the note's suspicion that paced
+  traffic merges worse is wrong, and its question on coalescing was
+  dropped with it.
+- **Deferring interrupts stops the port, reproduced** (`defer.sh`,
+  `$L/b474xs-defer`): `napi_defer_hard_irqs=2` and `gro_flush_timeout=
+  50000` set under load, the rings' frames fell from 3 million a second
+  to a handful within 2 s, the client was unreachable over the port,
+  writing 0 to both did not revive it, down and up did; nothing logged.
+  The client's fio hung on its mount until the port came back.
+- `codel-1` ran with the server's tx pause still on, `codel-3` with it
+  off (the setting that was found and fixed at 22:11, "settled.sh
+  holds pause off at both ends"); no difference between them.
+
+What the rewrite kept, cut and why is in the note's own history
+(`git log -- ../xsight-uncounted-loss-email.txt`). Every question left
+in it rests on one of these measurements, the 11 October accounting, or
+the driver's source.
+
 ## The next kernel: what is still to be tested
 
 For the session that boots the first kernel built from the branch
