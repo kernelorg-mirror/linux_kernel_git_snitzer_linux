@@ -14,7 +14,8 @@ that `ethtool -S` does not show. Section 3 is three driver questions.
 
 Each E1 port is fed from its own 400G mlx5 port on the same x86
 client, 16 TCP connections to each, over NFS or plain TCP. The card
-carries both at line rate; what limits NFS on two ports is our host.
+carries both at line rate; what holds NFS below that on two ports is
+the copy our server makes of each write.
 
                                           one port    both ports
   plain TCP, receivers discard
@@ -26,11 +27,13 @@ carries both at line rate; what limits NFS on two ports is our host.
 
 Each figure is the best run of its kind (NFS on one port is 46.0 to
 47.8 across runs, on two 59.2 to 60.4); plain TCP is measured from the
-rings' byte counts, NFS is the client's write rate. On two ports the
-limit is our host's memory: each copied byte costs about 2.2 bytes of
-DRAM traffic, so 60 GB/s is about 131 GB/s of the 166 our four DIMMs
-can carry, which is also where a bare memory-to-memory copy tops out
-here (62 to 68 GB/s). The way past that for us is not to copy. In the
+rings' byte counts, NFS is the client's write rate. Our NFS server
+copies each write out of the receive buffers once, and that copy is
+what we are up against on two ports: each copied byte is about 2.2
+bytes of DRAM traffic, so 60 GB/s of NFS is about 131 GB/s of memory
+traffic, close to what a bare memory-to-memory copy reaches on this
+system (62 to 68 GB/s). Our way past it is to stop copying, which is
+the receive-page loan we have discussed with you. In the
 two-port NFS runs neither port's RX FIFO drops a frame (0 in 50 runs
 on two kernels). That took a different setting from one port's: with
 one port's settings on both (a 1 MiB receive buffer per connection,
