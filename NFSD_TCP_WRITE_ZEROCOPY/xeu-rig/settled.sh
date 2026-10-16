@@ -296,6 +296,8 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
 	[ -n "${EXP_LAYOUT:-}" ] && OFF="$OFF layout=$EXP_LAYOUT"
 	[ -n "${EXP_QDISC:-}" ] && [ "$EXP_QDISC" != fq_codel ] && OFF="$OFF client_qdisc=$EXP_QDISC"
+	[ -n "${EXP_QDISC_A:-}" ] && [ "$EXP_QDISC_A" != fq_codel ] && OFF="$OFF client_qdisc_a=$EXP_QDISC_A"
+	[ -n "${EXP_QDISC_B:-}" ] && [ "$EXP_QDISC_B" != fq_codel ] && OFF="$OFF client_qdisc_b=$EXP_QDISC_B"
 	return 0
 }
 
@@ -326,7 +328,8 @@ audit_client() {	# read only: nothing on the client is changed from here
 		want "client sysctl $k" "$(awk -v k=$k '$1 == k {$1 = ""; sub(/^ /, ""); print}' <<< "$out")" "${CLI_SYSCTL[$k]}"
 	done
 	for p in a b; do
-		want "client ${CLI_DEV[$p]} qdisc" "$(awk -v k=qdisc_${CLI_DEV[$p]} '$1 == k {print $2}' <<< "$out")" "${EXP_QDISC:-fq_codel}"
+		local eq=EXP_QDISC_$(tr a-z A-Z <<< $p)
+		want "client ${CLI_DEV[$p]} qdisc" "$(awk -v k=qdisc_${CLI_DEV[$p]} '$1 == k {print $2}' <<< "$out")" "${!eq:-${EXP_QDISC:-fq_codel}}"
 		want "client ${CLI_DEV[$p]} pause rx/tx" "$(awk -v k=pause_${CLI_DEV[$p]} '$1 == k {print $2}' <<< "$out")" off/off
 	done
 }
