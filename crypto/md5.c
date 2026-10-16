@@ -126,7 +126,7 @@ static inline void md5_transform_helper(struct md5_state *ctx)
 	md5_transform(ctx->hash, ctx->block);
 }
 
-static int md5_init(struct shash_desc *desc)
+static int crypto_md5_init(struct shash_desc *desc)
 {
 	struct md5_state *mctx = shash_desc_ctx(desc);
 
@@ -139,7 +139,7 @@ static int md5_init(struct shash_desc *desc)
 	return 0;
 }
 
-static int md5_update(struct shash_desc *desc, const u8 *data, unsigned int len)
+static int crypto_md5_update(struct shash_desc *desc, const u8 *data, unsigned int len)
 {
 	struct md5_state *mctx = shash_desc_ctx(desc);
 	const u32 avail = sizeof(mctx->block) - (mctx->byte_count & 0x3f);
@@ -171,7 +171,7 @@ static int md5_update(struct shash_desc *desc, const u8 *data, unsigned int len)
 	return 0;
 }
 
-static int md5_final(struct shash_desc *desc, u8 *out)
+static int crypto_md5_final(struct shash_desc *desc, u8 *out)
 {
 	struct md5_state *mctx = shash_desc_ctx(desc);
 	const unsigned int offset = mctx->byte_count & 0x3f;
@@ -217,9 +217,9 @@ static int md5_import(struct shash_desc *desc, const void *in)
 
 static struct shash_alg alg = {
 	.digestsize	=	MD5_DIGEST_SIZE,
-	.init		=	md5_init,
-	.update		=	md5_update,
-	.final		=	md5_final,
+	.init	=	crypto_md5_init,
+	.update	=	crypto_md5_update,
+	.final	=	crypto_md5_final,
 	.export		=	md5_export,
 	.import		=	md5_import,
 	.descsize	=	sizeof(struct md5_state),
