@@ -25,23 +25,23 @@ the copy our server makes of each write.
   NFS writes, copied once and written
     to NVMe drives                        47.8 GB/s   60.4 GB/s
 
-Each figure is the best run of its kind (NFS on one port is 46.0 to
-47.8 across runs, on two 59.2 to 60.4); plain TCP is measured from the
-rings' byte counts, NFS is the client's write rate. Our NFS server
-copies each write out of the receive buffers once, and that copy is
-what we are up against on two ports: each copied byte is about 2.2
-bytes of DRAM traffic, so 60 GB/s of NFS is about 131 GB/s of memory
-traffic, close to what a bare memory-to-memory copy reaches on this
-system (62 to 68 GB/s). Our way past it is to stop copying, which is
-the receive-page loan we have discussed with you. In the
-two-port NFS runs neither port's RX FIFO drops a frame (0 in 50 runs
-on two kernels). That took a different setting from one port's: with
-one port's settings on both (a 1 MiB receive buffer per connection,
-rings of 256) the two ports carried 43 GB/s between them and each
-port's FIFO dropped about 870 thousand frames in 70 seconds, at
-21.6 GB/s a port; with a 384 KiB receive buffer and rings of 128 they
-carry 60 GB/s with no FIFO drop. That is the burst behaviour of section
-2, seen from the other side: smaller windows, no bursts, no loss.
+Each figure is the best run of its kind (NFS on one port is 46.0 to 47.8
+across runs, on two 59.2 to 60.4); plain TCP is measured from the rings'
+byte counts, NFS is the client's write rate. Our NFS server copies each
+write out of the receive buffers once, and that copy is what we are up
+against on two ports: each copied byte is about 2.2 bytes of DRAM
+traffic, so 60 GB/s of NFS is about 131 GB/s of memory traffic, close to
+what a bare memory-to-memory copy reaches on this system (62 to
+68 GB/s). Our way past it is to stop copying, which is the receive-page
+loan we have discussed with you. In the two-port NFS runs neither port's
+RX FIFO drops a frame (0 in 50 runs on two kernels). That took a
+different setting from one port's: with one port's settings on both (a
+1 MiB receive buffer per connection, rings of 256) the two ports carried
+43 GB/s between them and each port's FIFO dropped about 870 thousand
+frames in 70 seconds, at 21.6 GB/s a port; with a 384 KiB receive buffer
+and rings of 128 they carry 60 GB/s with no FIFO drop. That is the burst
+behaviour of section 2, seen from the other side: smaller windows, no
+bursts, no loss.
 
 
 2. Frames dropped at the port's RX FIFO, and not counted
