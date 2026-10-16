@@ -1,7 +1,7 @@
-To: <Xsight engineering contact>
-Subject: xeu on E1: frames dropped at the port's RX FIFO, which the driver does not count; and three driver questions
+To: Ian Wigmore <ianw@xsightlabs.com>, Neil O’Rourke <neilo@xsightlabs.com>
+Subject: xeu: driver not counting frames dropped at the port's RX FIFO; and three other driver questions
 
-Hi <name>,
+Hi Ian and Neil,
 
 Thank you for the guidance on the receive path: an E1 port now takes
 47.8 GB/s of NFS writes from one client, 96% of what the wire carries
@@ -166,9 +166,14 @@ We carry six small patches to xeu 2.0.1 from this work: rx_ip_align
 (received data on a 4-byte boundary), a retry so that a ring that ran
 empty refills, rx_refill_thresh, rx_buf_size (receive buffers smaller
 than a page), the RSS table, key and hash function through ethtool,
-and the port's RX counters in `ethtool -S`. We would be glad to send
-them if they are of use to you.
+and the port's RX counters in `ethtool -S`. I've attached each patch:
+
+  xeu-add-rx_ip_align-to-4-byte-align-received-IP-head.patch
+  xeu-retry-an-RX-refill-that-came-up-short.patch
+  xeu-make-the-RX-refill-threshold-a-module-parameter.patch
+  xeu-expose-the-RSS-redirection-table-hash-key-and-function-to-ethtool.patch
+  xeu-cut-RX-buffers-smaller-than-a-page-with-rx_buf_size.patch
+  xeu-list-the-port-s-RX-FIFO-and-filter-counters-in-ethtool-S.patch
 
 Thanks,
-Mike Snitzer
-Hammerspace
+Mike
