@@ -4071,6 +4071,7 @@ static int _nfs4_server_capabilities(struct nfs_server *server, struct nfs_fh *f
 		if (nfs4_server_delegtime_capable(&res))
 			caps |= NFS_CAP_DELEGTIME;
 		WRITE_ONCE(server->caps, caps);
+		nfs_server_publish_name_caps(server);
 
 		memcpy(server->cache_consistency_bitmask, res.attr_bitmask, sizeof(server->cache_consistency_bitmask));
 		server->cache_consistency_bitmask[0] &= FATTR4_WORD0_CHANGE|FATTR4_WORD0_SIZE;

@@ -1083,6 +1083,8 @@ static void nfs_fill_super(struct super_block *sb, struct nfs_fs_context *ctx)
 			sb->s_export_op = &nfs_export_ops;
 		break;
 	}
+	/* The first probe of the caps ran before this superblock existed */
+	nfs_server_publish_name_caps(server);
 
 	sb->s_magic = NFS_SUPER_MAGIC;
 

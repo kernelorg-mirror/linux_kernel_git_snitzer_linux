@@ -976,6 +976,7 @@ static int nfs_probe_fsinfo(struct nfs_server *server, struct nfs_fh *mntfh, str
 			server->caps &= ~(NFS_CAP_CASE_INSENSITIVE |
 					  NFS_CAP_CASE_NONPRESERVING);
 		}
+		nfs_server_publish_name_caps(server);
 	}
 
 	if (clp->rpc_ops->discover_trunking != NULL &&
