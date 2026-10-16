@@ -60,3 +60,20 @@ branch.** It was tried and not adopted: more threads copying a
 connection did not move two ports off 60 GB/s ("NFSD Receive Region
 Budget", 13 October), and the rig runs it at 0 (`xeu-rig/settled.sh`).
 It is one of the commits Mike has an open question on (AGENTS.md).
+
+## 0003-SUNRPC-Optionally-raise-SO_RCVLOWAT-while-a-TCP-reco.patch
+
+From `d3da9e964208` on `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`, the
+36th commit of the code group. It adds `sunrpc.svc_tcp_rx_lowat`
+(default 0, the mark left alone): while a record is incomplete and the
+read drained the socket, the socket's receive low-water mark is raised,
+through `->set_rcvlowat`, to the smaller of what the record still lacks
+and `svc_tcp_rx_lowat`, so that a WRITE arriving in pieces wakes fewer
+threads.
+
+**Saved here (Mike, 15 October); the commit is still on the
+branch.** The mark saves wakeups and costs rate. At 131072 it halves
+the threads woken a WRITE on two ports, and costs 2 to 3 GB/s there
+(13 October, build 464) and about 3 GB/s on build 474 (15 October);
+the claim in its message, "at the same throughput", was read from runs
+the drives were limiting. The rig runs it at 0 (`xeu-rig/settled.sh`).
