@@ -1214,10 +1214,14 @@ static int ff_layout_async_handle_error_v4(struct rpc_task *task,
 
 	switch (task->tk_status) {
 	/* RPC connection errors */
+	case -ENETDOWN:
+	case -ENETUNREACH:
+		if (test_bit(NFS_CS_NETUNREACH_FATAL, &clp->cl_flags))
+			return -NFS4ERR_FATAL_IOERROR;
+		fallthrough;
 	case -ECONNREFUSED:
 	case -EHOSTDOWN:
 	case -EHOSTUNREACH:
-	case -ENETUNREACH:
 	case -EIO:
 	case -ETIMEDOUT:
 	case -EPIPE:
@@ -1290,6 +1294,11 @@ static int ff_layout_async_handle_error_v3(struct rpc_task *task,
 	case -EJUKEBOX:
 		nfs_inc_stats(lseg->pls_layout->plh_inode, NFSIOS_DELAY);
 		goto out_retry;
+	case -ENETDOWN:
+	case -ENETUNREACH:
+		if (test_bit(NFS_CS_NETUNREACH_FATAL, &clp->cl_flags))
+			return -NFS4ERR_FATAL_IOERROR;
+		fallthrough;
 	default:
 		dprintk("%s DS connection error %d\n", __func__,
 			task->tk_status);
@@ -1413,7 +1422,7 @@ static int ff_layout_read_done_cb(struct rpc_task *task,
 					    hdr->args.offset, hdr->args.count,
 					    &hdr->res.op_status, OP_READ,
 					    task->tk_status);
-		trace_ff_layout_read_error(hdr);
+		trace_ff_layout_read_error(hdr, task->tk_status);
 	}
 
 	err = ff_layout_async_handle_error(task, hdr->res.op_status,
@@ -1433,6 +1442,9 @@ static int ff_layout_read_done_cb(struct rpc_task *task,
 		return task->tk_status;
 	case -EAGAIN:
 		goto out_eagain;
+	case -NFS4ERR_FATAL_IOERROR:
+		task->tk_status = -EIO;
+		return 0;
 	}
 
 	return 0;
@@ -1584,7 +1596,7 @@ static int ff_layout_write_done_cb(struct rpc_task *task,
 					    hdr->args.offset, hdr->args.count,
 					    &hdr->res.op_status, OP_WRITE,
 					    task->tk_status);
-		trace_ff_layout_write_error(hdr);
+		trace_ff_layout_write_error(hdr, task->tk_status);
 	}
 
 	err = ff_layout_async_handle_error(task, hdr->res.op_status,
@@ -1604,6 +1616,9 @@ static int ff_layout_write_done_cb(struct rpc_task *task,
 		return task->tk_status;
 	case -EAGAIN:
 		return -EAGAIN;
+	case -NFS4ERR_FATAL_IOERROR:
+		task->tk_status = -EIO;
+		return 0;
 	}
 
 	if (hdr->res.verf->committed == NFS_FILE_SYNC ||
@@ -1631,7 +1646,7 @@ static int ff_layout_commit_done_cb(struct rpc_task *task,
 					    data->args.offset, data->args.count,
 					    &data->res.op_status, OP_COMMIT,
 					    task->tk_status);
-		trace_ff_layout_commit_error(data);
+		trace_ff_layout_commit_error(data, task->tk_status);
 	}
 
 	err = ff_layout_async_handle_error(task, data->res.op_status,
@@ -1649,6 +1664,9 @@ static int ff_layout_commit_done_cb(struct rpc_task *task,
 	case -EAGAIN:
 		rpc_restart_call_prepare(task);
 		return -EAGAIN;
+	case -NFS4ERR_FATAL_IOERROR:
+		task->tk_status = -EIO;
+		return 0;
 	}
 
 	ff_layout_set_layoutcommit(data->inode, data->lseg, data->lwb);
