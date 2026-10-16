@@ -3935,6 +3935,7 @@ static bool nfs4_server_delegtime_capable(struct nfs4_server_caps_res *res)
 
 static int _nfs4_server_capabilities(struct nfs_server *server, struct nfs_fh *fhandle)
 {
+	unsigned int caps;
 	u32 minorversion = server->nfs_client->cl_minorversion;
 	u32 bitmask[3] = {
 		[0] = FATTR4_WORD0_SUPPORTED_ATTRS,
@@ -3992,7 +3993,13 @@ static int _nfs4_server_capabilities(struct nfs_server *server, struct nfs_fh *f
 				     res.attr_bitmask[2];
 		}
 		memcpy(server->attr_bitmask, res.attr_bitmask, sizeof(server->attr_bitmask));
-		server->caps &=
+		/*
+		 * Build the new set in a local and store it once: a reader of
+		 * server->caps during the probe, such as a remount or migration
+		 * of a mounted filesystem, must not see these capabilities
+		 * cleared and then set again one by one.
+		 */
+		caps = server->caps &
 			~(NFS_CAP_ACLS | NFS_CAP_HARDLINKS | NFS_CAP_SYMLINKS |
 			  NFS_CAP_SECURITY_LABEL | NFS_CAP_FS_LOCATIONS |
 			  NFS_CAP_OPEN_XOR | NFS_CAP_DELEGTIME |
@@ -4000,22 +4007,22 @@ static int _nfs4_server_capabilities(struct nfs_server *server, struct nfs_fh *f
 		server->fattr_valid = NFS_ATTR_FATTR_V4;
 		if (res.attr_bitmask[0] & FATTR4_WORD0_ACL &&
 				res.acl_bitmask & ACL4_SUPPORT_ALLOW_ACL)
-			server->caps |= NFS_CAP_ACLS;
+			caps |= NFS_CAP_ACLS;
 		if (res.has_links != 0)
-			server->caps |= NFS_CAP_HARDLINKS;
+			caps |= NFS_CAP_HARDLINKS;
 		if (res.has_symlinks != 0)
-			server->caps |= NFS_CAP_SYMLINKS;
+			caps |= NFS_CAP_SYMLINKS;
 		if (res.case_insensitive)
-			server->caps |= NFS_CAP_CASE_INSENSITIVE;
+			caps |= NFS_CAP_CASE_INSENSITIVE;
 		if ((res.attr_bitmask[0] & FATTR4_WORD0_CASE_PRESERVING) &&
 		    !res.case_preserving)
-			server->caps |= NFS_CAP_CASE_NONPRESERVING;
+			caps |= NFS_CAP_CASE_NONPRESERVING;
 #ifdef CONFIG_NFS_V4_SECURITY_LABEL
 		if (res.attr_bitmask[2] & FATTR4_WORD2_SECURITY_LABEL)
-			server->caps |= NFS_CAP_SECURITY_LABEL;
+			caps |= NFS_CAP_SECURITY_LABEL;
 #endif
 		if (res.attr_bitmask[0] & FATTR4_WORD0_FS_LOCATIONS)
-			server->caps |= NFS_CAP_FS_LOCATIONS;
+			caps |= NFS_CAP_FS_LOCATIONS;
 		if (!(res.attr_bitmask[0] & FATTR4_WORD0_ARCHIVE))
 			server->fattr_valid &= ~NFS_ATTR_FATTR_ARCHIVE;
 		if (!(res.attr_bitmask[0] & FATTR4_WORD0_FILEID))
@@ -4060,9 +4067,10 @@ static int _nfs4_server_capabilities(struct nfs_server *server, struct nfs_fh *f
 
 		if (res.open_caps.oa_share_access_want[0] &
 		    NFS4_SHARE_WANT_OPEN_XOR_DELEGATION)
-			server->caps |= NFS_CAP_OPEN_XOR;
+			caps |= NFS_CAP_OPEN_XOR;
 		if (nfs4_server_delegtime_capable(&res))
-			server->caps |= NFS_CAP_DELEGTIME;
+			caps |= NFS_CAP_DELEGTIME;
+		WRITE_ONCE(server->caps, caps);
 
 		memcpy(server->cache_consistency_bitmask, res.attr_bitmask, sizeof(server->cache_consistency_bitmask));
 		server->cache_consistency_bitmask[0] &= FATTR4_WORD0_CHANGE|FATTR4_WORD0_SIZE;
