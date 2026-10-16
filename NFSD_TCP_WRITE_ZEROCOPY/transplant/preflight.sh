@@ -102,7 +102,7 @@ fi
 if modinfo -p veth 2>/dev/null | grep -q '^rx_ip_align:'; then
 	ok "veth has rx_ip_align (the NVMe/TCP budget stages can place the payload)"
 else
-	note "veth has no rx_ip_align: on the NVMe/TCP budget stages loaned WRITEs will not be written direct"
+	note "veth has no rx_ip_align: on the NVMe/TCP budget stages loaned WRITEs will not be written direct; apply patches/dropped/0004-veth-*.patch for them (out of the series since 15 October)"
 fi
 
 echo "== host"

@@ -531,7 +531,7 @@ veth_align() {	# veth_align <align>: make veth run with it, or say why not
 	local want=$1 cur
 	[ -d /sys/module/veth ] || veth_load "$want" 2>/dev/null || modprobe -q veth || true
 	if [ ! -r $VETH_ALIGN ]; then
-		[ "$want" = 0 ] || echo "!! this veth has no rx_ip_align: running at 0, not $want" >&2
+		[ "$want" = 0 ] || echo "!! this veth has no rx_ip_align: running at 0, not $want (the parameter is NFSD_TCP_WRITE_ZEROCOPY/patches/dropped/0004-veth-*.patch, out of the series since 15 October)" >&2
 		RX_IP_ALIGN=0; return 0
 	fi
 	cur=$(cat $VETH_ALIGN)

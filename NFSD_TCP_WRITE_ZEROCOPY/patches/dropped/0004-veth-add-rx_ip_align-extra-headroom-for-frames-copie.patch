@@ -1,0 +1,82 @@
+From 3c5f1798714e9c9865d7ef9e66e3cf0573a3f99e Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 5 Oct 2026 08:04:38 -0400
+Subject: [PATCH] veth: add rx_ip_align, extra headroom for frames copied for
+ XDP
+
+With an XDP program attached, veth copies each received frame into a
+page-pool page at a headroom of XDP_PACKET_HEADROOM.  After the 14-byte
+Ethernet header, that leaves the IP header and the TCP payload 2 bytes
+off a 4-byte boundary, as on any NIC that posts receive buffers at a
+headroom that is a multiple of 4.
+
+A consumer that hands received pages to block storage as they are, such
+as NFSD lending a WRITE's receive pages to the file system, needs the
+payload to meet the device's DMA alignment, which for NVMe is 4 bytes.
+With the default headroom every such WRITE fails that check.
+
+Add a load-time parameter, rx_ip_align (0 to 3, default 0), of extra
+headroom bytes for frames copied for XDP, and reduce the XDP MTU limit
+by the same amount.  With rx_ip_align=2 the payload of a plain
+Ethernet TCP frame starts on a 4-byte boundary.  Nothing changes at the
+default.
+
+This is a test aid, to exercise that alignment without a NIC that
+offers it; it is not a general interface for requesting payload
+placement from a network device.
+
+Assisted-by: LLM
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ drivers/net/veth.c | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/veth.c b/drivers/net/veth.c
+index 643b97dc5245..fe5142a850aa 100644
+--- a/drivers/net/veth.c
++++ b/drivers/net/veth.c
+@@ -37,6 +37,22 @@
+ #define VETH_RING_SIZE		256
+ #define VETH_XDP_HEADROOM	(XDP_PACKET_HEADROOM + NET_IP_ALIGN)
+ 
++/*
++ * Extra headroom, in bytes, for frames copied into page-pool pages when an
++ * XDP program is attached.  A test aid: 2 puts the IP header and the TCP
++ * payload of a plain Ethernet frame on a 4-byte boundary, as a NIC that
++ * posts its receive buffers that way does.
++ */
++static unsigned int rx_ip_align;
++module_param(rx_ip_align, uint, 0444);
++MODULE_PARM_DESC(rx_ip_align,
++		 "Extra headroom (0-3 bytes) for frames copied for XDP (test aid, default 0)");
++
++static unsigned int veth_xdp_headroom(void)
++{
++	return XDP_PACKET_HEADROOM + (rx_ip_align & 3);
++}
++
+ #define VETH_XDP_TX_BULK_SIZE	16
+ #define VETH_XDP_BATCH		16
+ 
+@@ -759,7 +775,7 @@ static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
+ 	if (skb_shared(skb) || skb_head_is_locked(skb) ||
+ 	    skb_is_nonlinear(skb) ||
+ 	    skb_headroom(skb) < XDP_PACKET_HEADROOM) {
+-		if (skb_pp_cow_data(rq->page_pool, pskb, XDP_PACKET_HEADROOM))
++		if (skb_pp_cow_data(rq->page_pool, pskb, veth_xdp_headroom()))
+ 			goto drop;
+ 
+ 		skb = *pskb;
+@@ -1594,7 +1610,8 @@ static int veth_xdp_set(struct net_device *dev, struct bpf_prog *prog,
+ 			goto err;
+ 		}
+ 
+-		max_mtu = SKB_WITH_OVERHEAD(PAGE_SIZE - VETH_XDP_HEADROOM) -
++		max_mtu = SKB_WITH_OVERHEAD(PAGE_SIZE - VETH_XDP_HEADROOM -
++					    (rx_ip_align & 3)) -
+ 			  peer->hard_header_len;
+ 		/* Allow increasing the max_mtu if the program supports
+ 		 * XDP fragments.
+-- 
+2.52.0
+
