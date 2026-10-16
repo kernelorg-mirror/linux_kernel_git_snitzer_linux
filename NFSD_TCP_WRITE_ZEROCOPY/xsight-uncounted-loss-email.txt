@@ -3,29 +3,50 @@ Subject: xeu on E1: frames dropped at the port's RX FIFO, which the driver does 
 
 Hi <name>,
 
-We now carry 47.8 GB/s of NFS writes into one E1 port at best (46.0 to
-47.8 across runs), 96% of the 49.8 GB/s the wire carries into that port
-with no NFS at all, and 60.4 GB/s into both ports together (59.2 to
-60.4), where the two ports carry 98 to 99.6 GB/s of plain TCP. Thank
-you for the guidance that got us there. On two ports the limit is our
-host's memory, not the card: each copied byte costs about 2.2 bytes of
-DRAM traffic, so 60 GB/s is about 131 GB/s of the 166 our four DIMMs can
-carry, which is also where a bare memory-to-memory copy tops out here
-(62 to 68 GB/s). The way past that for us is not to copy.
+Thank you for the guidance on the receive path: an E1 port now takes
+47.8 GB/s of NFS writes from one client, 96% of what the wire carries
+into it with no NFS at all, and both ports take 60.4 GB/s together.
+Section 1 has the results. Section 2 is the one thing we found that we
+cannot account for from the driver: frames the port's RX FIFO drops
+that `ethtool -S` does not show. Section 3 is three driver questions.
 
-This note is about three things we found on the way that belong to the
-driver or the card: frames the port's RX FIFO drops and `ethtool -S`
-does not show (section 1), and two driver behaviours (section 3). Our
-two-port results are in section 2 for information.
+1. Where the two ports stand
+
+Each E1 port is fed from its own 400G mlx5 port on the same x86
+client, 16 TCP connections to each, over NFS or plain TCP. The card
+carries both at line rate; what limits NFS on two ports is our host.
+
+                                          one port    both ports
+  plain TCP, receivers discard
+    without copying                       49.8 GB/s   98.0 to 99.6 GB/s
+  plain TCP, receivers copy into a
+    small buffer                          49.8 GB/s   83 to 90 GB/s
+  NFS writes, copied once and written
+    to NVMe drives                        47.8 GB/s   60.4 GB/s
+
+Each figure is the best run of its kind (NFS on one port is 46.0 to
+47.8 across runs, on two 59.2 to 60.4); plain TCP is measured from the
+rings' byte counts, NFS is the client's write rate. On two ports the
+limit is our host's memory: each copied byte costs about 2.2 bytes of
+DRAM traffic, so 60 GB/s is about 131 GB/s of the 166 our four DIMMs
+can carry, which is also where a bare memory-to-memory copy tops out
+here (62 to 68 GB/s). The way past that for us is not to copy. In the
+two-port NFS runs neither port's RX FIFO drops a frame (0 in 50 runs
+on two kernels). That took a different setting from one port's: with
+one port's settings on both (a 1 MiB receive buffer per connection,
+rings of 256) the two ports carried 43 GB/s between them and each
+port's FIFO dropped about 870 thousand frames in 70 seconds, at
+21.6 GB/s a port; with a 384 KiB receive buffer and rings of 128 they
+carry 60 GB/s with no FIFO drop. That is the burst behaviour of section
+2, seen from the other side: smaller windows, no bursts, no loss.
 
 
-1. Frames dropped at the port's RX FIFO, and not counted
+2. Frames dropped at the port's RX FIFO, and not counted
 
 The setup: one E1 port (xeu 2.0.1 with our local patches, including
 rx_buf_size=8192) on an arm64 server with 16 KiB pages, 4 RX rings of
-256 entries, MTU 7792. The client is an x86 machine with a 400G mlx5
-port, cabled to the E1 port, writing over NFS on 16 TCP connections,
-each with a 1 MiB receive buffer on the server.
+256 entries, MTU 7792; the client as above, writing over NFS on 16 TCP
+connections, each with a 1 MiB receive buffer on the server.
 
 What we found. `ethtool -S` on the port lists what each ring was handed
 and what was dropped at the ring, and nothing for the port itself. The
@@ -100,34 +121,7 @@ b. We could not get the port to send pause frames. With
    wire. What else has to be set for the port to send pause?
 
 
-2. Both ports at once (for information)
-
-Each port is fed from its own 400G mlx5 port on the same client, 16
-TCP connections to each. The card carries both at line rate; what
-limits NFS on two ports is our host.
-
-                                          one port    both ports
-  plain TCP, receivers discard
-    without copying                       49.8 GB/s   98.0 to 99.6 GB/s
-  plain TCP, receivers copy into a
-    small buffer                          49.8 GB/s   83 to 90 GB/s
-  NFS writes, copied once and written
-    to NVMe drives                        47.8 GB/s   60.4 GB/s
-
-Each figure is the best run of its kind; plain TCP is measured from
-the rings' byte counts, NFS is the client's write rate. In the
-two-port NFS runs neither port's RX FIFO drops a frame (0 in 50 runs
-on two kernels). That took a different setting from one port's: with
-one port's settings on both (a 1 MiB receive buffer per connection,
-rings of 256) the two ports carried 43 GB/s between them and each
-port's FIFO dropped about 870 thousand frames in 70 seconds, at
-21.6 GB/s a port; with a 384 KiB receive buffer and rings of 128 they
-carry 60 GB/s with no FIFO drop. That is the same burst behaviour as
-section 1, seen from the other side: smaller windows, no bursts, no
-loss.
-
-
-3. Two driver behaviours
+3. Three driver questions
 
 a. Deferring interrupts stops the port. With the kernel's per-device
    napi_defer_hard_irqs set to 2 and gro_flush_timeout to 50000 ns on
