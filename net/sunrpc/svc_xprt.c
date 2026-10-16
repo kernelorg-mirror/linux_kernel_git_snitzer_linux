@@ -1300,6 +1300,7 @@ static struct cache_deferred_req *svc_defer(struct cache_req *req)
 		memcpy(&dr->addr, &rqstp->rq_addr, rqstp->rq_addrlen);
 		dr->addrlen = rqstp->rq_addrlen;
 		dr->daddr = rqstp->rq_daddr;
+		dr->secure = test_bit(RQ_SECURE, &rqstp->rq_flags);
 		dr->argslen = rqstp->rq_arg.len >> 2;
 
 		/* back up head to the start of the buffer and copy */
@@ -1340,6 +1341,12 @@ static noinline int svc_deferred_recv(struct svc_rqst *rqstp)
 	/* Save off transport header len in case we get deferred again */
 	rqstp->rq_daddr       = dr->daddr;
 	rqstp->rq_xprt_ctxt   = dr->xprt_ctxt;
+	/*
+	 * ->xpo_recvfrom() is bypassed for a deferred request, so the
+	 * replaying thread's RQ_SECURE is stale from whatever request
+	 * it handled last. Restore the value computed at receive time.
+	 */
+	assign_bit(RQ_SECURE, &rqstp->rq_flags, dr->secure);
 
 	dr->xprt_ctxt = NULL;
 	svc_xprt_received(rqstp->rq_xprt);
