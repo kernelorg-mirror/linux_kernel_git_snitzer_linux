@@ -1,3 +1,9 @@
+* Fri Oct 16 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-1]
+- Rebase all branches on kernel-6.12.113-0; no topic commit landed in
+  6.12.112 or 6.12.113, and none needed changing
+- redhat/configs: enable CONFIG_ARM64_ERRATUM_3821522, new in 6.12.113, as
+  every other arm64 erratum workaround is
+
 * Fri Oct 16 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-0]
 - Linux v6.12.113
 
