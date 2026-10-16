@@ -142,8 +142,11 @@ declare -A REST=(
 # removed after build 473 ("SUNRPC: Copy with the socket unlocked only when
 # records are claimed"): on 473 and before it is Y, as every figure there was
 # measured; without it a copy is made under the socket lock unless
-# svc_tcp_rx_copy_threads is 1 or more.
-declare -A GONE_LATER=([svc_tcp_rx_copy_unlocked]=1)
+# svc_tcp_rx_copy_threads is 1 or more.  svc_tcp_rx_lowat and
+# svc_tcp_rx_copy_threads were dropped from the series on 15 October
+# (patches/dropped/ 0002 and 0003): builds 474 and before have them, at 0.
+declare -A GONE_LATER=([svc_tcp_rx_copy_unlocked]=1 [svc_tcp_rx_lowat]=1
+	[svc_tcp_rx_copy_threads]=1)
 # Settings an earlier kernel does not have yet: held where the kernel has
 # them, and reported, not failed, where it does not.  svc_tcp_spare_bytes_max
 # came after build 474 ("SUNRPC: Bound the pages TCP sockets keep for

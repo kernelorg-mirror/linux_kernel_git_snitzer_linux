@@ -103,7 +103,8 @@ cretr() { cl "awk '/^Tcp:/ && !h {for (i = 1; i <= NF; i++) if (\$i == \"Retrans
 
 SP=/sys/module/sunrpc/parameters
 declare -A SAVE
-for k in rcvbuf linger_us copy_threads lowat; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k); done
+# copy_threads and lowat are not in kernels after build 474 (dropped 15 October)
+for k in rcvbuf linger_us copy_threads lowat; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k 2>/dev/null); done
 SAVE[spare]=$(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null)
 declare -A CDEV=([a]=ens3np0 [b]=ens6np0)
 setq() {	# setq <client dev> <codel|fq|fqNN>
@@ -115,7 +116,7 @@ setq() {	# setq <client dev> <codel|fq|fqNN>
 	esac
 }
 cleanup() {
-	for k in rcvbuf linger_us copy_threads lowat; do echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
+	for k in rcvbuf linger_us copy_threads lowat; do [ -e $SP/svc_tcp_rx_$k ] && echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
 	[ -n "${SAVE[spare]}" ] && echo ${SAVE[spare]} > $SP/svc_tcp_spare_bytes_max
 	[ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} codel; done
 	# The RSS table may name rings that are going: spread it over four first.
@@ -135,16 +136,21 @@ cleanup() {
 trap cleanup EXIT
 
 echo "twoport $WHICH: kernel $(uname -r), xeu $(cat /sys/module/xeu/srcversion), sunrpc $(cat /sys/module/sunrpc/srcversion)" | tee geometry.txt
-echo "rcvbuf $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_rcvbuf) linger $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_linger_us) copy_threads $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_copy_threads) io_cache_write $(cat /sys/kernel/debug/nfsd/io_cache_write) nfsd threads $(cat /proc/fs/nfsd/threads) rx_refill_thresh $(cat /sys/module/xeu/parameters/rx_refill_thresh) region dev $(cat $PP/rx_region_dev)" | tee -a geometry.txt
+echo "rcvbuf $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_rcvbuf) linger $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_linger_us) copy_threads $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_copy_threads 2>/dev/null || echo -) io_cache_write $(cat /sys/kernel/debug/nfsd/io_cache_write) nfsd threads $(cat /proc/fs/nfsd/threads) rx_refill_thresh $(cat /sys/module/xeu/parameters/rx_refill_thresh) region dev $(cat $PP/rx_region_dev)" | tee -a geometry.txt
 echo Y > /sys/module/xeu/parameters/rx_port_stats
 [ -n "${RCVBUF:-}" ] && echo $RCVBUF > $SP/svc_tcp_rx_rcvbuf
 [ -n "${LINGER:-}" ] && echo $LINGER > $SP/svc_tcp_rx_linger_us
-[ -n "${THREADS:-}" ] && echo $THREADS > $SP/svc_tcp_rx_copy_threads
-[ -n "${LOWAT:-}" ] && echo $LOWAT > $SP/svc_tcp_rx_lowat
+setp() {	# setp <value> <parameter>: set it, or stop if this kernel has none
+	[ -n "$1" ] || return 0
+	[ -e $SP/svc_tcp_rx_$2 ] || { echo "svc_tcp_rx_$2 is not in this kernel"; exit 2; }
+	echo $1 > $SP/svc_tcp_rx_$2
+}
+setp "${THREADS:-}" copy_threads
+setp "${LOWAT:-}" lowat
 [ -n "${SPARE:-}" ] && { echo $SPARE > $SP/svc_tcp_spare_bytes_max || { echo "no svc_tcp_spare_bytes_max in this sunrpc"; exit 1; }; }
 [ -n "${NFSD_CPUS:-}" ] && { for t in $(pgrep -x nfsd); do taskset -cp $NFSD_CPUS $t > /dev/null 2>&1; done; echo "nfsd on CPUs $NFSD_CPUS for this run" | tee -a geometry.txt; }
 [ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} $QDISC || { echo "qdisc not set"; exit 1; }; done
-echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us) copy_threads $(cat $SP/svc_tcp_rx_copy_threads) lowat $(cat $SP/svc_tcp_rx_lowat) keep $(cat $SP/svc_tcp_rx_keep) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read)" | tee -a geometry.txt
+echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read)" | tee -a geometry.txt
 
 for p in $PORTS; do
 	d=${DEV[$p]}
@@ -390,5 +396,5 @@ if [ -n "${TSV:-}" ] && [ "$RW" = write ]; then
 	db() { awk -v p=$1 '$3 == p {for (i = 1; i <= NF; i++) if ($i == "busiest") {sub(/%/, "", $(i+1)); print $(i+1); f = 1}} END {if (!f) print "-"}' drives.txt; }
 	fb() { python3 -c "import json;print('%.2f' % (json.load(open('fio-$1.json'))['jobs'][0]['write']['bw_bytes']/1e9))" 2> /dev/null || echo -; }
 	cb=$(awk '$1 == "Average:" && $2 ~ /^[0-9]+$/ {b = 100 - $NF - $6; c = $2 + 0; if (c < 8) a += b; else if (c >= 56) z += b; else n += b} END {printf "%.0f %.0f %.0f", n / 48, a / 8, z / 8}' srv-mpstat.txt)
-	echo "${TAG:-$(basename $OUT)} $WHICH $(cat total.txt) $(fb a) $(fb b) $(g a 5) $(g b 5) $(g a 6) $(g b 6) $(awk '/^client retransmits/{print $NF}' window.txt) $(( $(reg pages) - $(reg min_free) )) $cb $(cat $SP/svc_tcp_rx_rcvbuf) $(cat $SP/svc_tcp_rx_linger_us) $(cat $SP/svc_tcp_rx_copy_threads) ${ENTRIES:-256} ${QDISC:-codel} $NCONN $JOBS $(db a) $(db b) $WARM $(cat $SP/svc_tcp_rx_lowat) $(awk '/^nfsd in the window/{gsub(",", ""); print $8, $11, $14}' window.txt)" | sed 's/  */ /g' >> $TSV
+	echo "${TAG:-$(basename $OUT)} $WHICH $(cat total.txt) $(fb a) $(fb b) $(g a 5) $(g b 5) $(g a 6) $(g b 6) $(awk '/^client retransmits/{print $NF}' window.txt) $(( $(reg pages) - $(reg min_free) )) $cb $(cat $SP/svc_tcp_rx_rcvbuf) $(cat $SP/svc_tcp_rx_linger_us) $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) ${ENTRIES:-256} ${QDISC:-codel} $NCONN $JOBS $(db a) $(db b) $WARM $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) $(awk '/^nfsd in the window/{gsub(",", ""); print $8, $11, $14}' window.txt)" | sed 's/  */ /g' >> $TSV
 fi

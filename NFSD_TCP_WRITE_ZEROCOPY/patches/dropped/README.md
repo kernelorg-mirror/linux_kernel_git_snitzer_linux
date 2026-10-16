@@ -55,11 +55,15 @@ record also releases the transport before copying, so that more than
 one thread copies for a connection. It is the fold of the claim commit
 (63 in `../../CODE-SERIES.md`) with the copy outside the lock (62, 66).
 
-**Saved here (Mike, 15 October); the commit is still on the
-branch.** It was tried and not adopted: more threads copying a
-connection did not move two ports off 60 GB/s ("NFSD Receive Region
-Budget", 13 October), and the rig runs it at 0 (`xeu-rig/settled.sh`).
-It is one of the commits Mike has an open question on (AGENTS.md).
+**Dropped (Mike, 15 October).** It was tried and not adopted: more
+threads copying a connection did not move two ports off 60 GB/s ("NFSD
+Receive Region Budget", 13 October), and the rig ran it at 0
+(`xeu-rig/settled.sh`). Dropping it, with 0003, changed nothing else in
+the code: no KUnit test or interface refers to either, and the tree
+after differs from the tree before (`.pre-drop-claim-lowat`) by exactly
+the two patches. `xeu-rig/settled.sh` reports both settings as "not in
+this kernel" where they are gone, and `xeu-rig/twoport.sh` refuses
+`THREADS=` and `LOWAT=` there.
 
 ## 0003-SUNRPC-Optionally-raise-SO_RCVLOWAT-while-a-TCP-reco.patch
 
@@ -71,9 +75,10 @@ through `->set_rcvlowat`, to the smaller of what the record still lacks
 and `svc_tcp_rx_lowat`, so that a WRITE arriving in pieces wakes fewer
 threads.
 
-**Saved here (Mike, 15 October); the commit is still on the
-branch.** The mark saves wakeups and costs rate. At 131072 it halves
-the threads woken a WRITE on two ports, and costs 2 to 3 GB/s there
-(13 October, build 464) and about 3 GB/s on build 474 (15 October);
-the claim in its message, "at the same throughput", was read from runs
-the drives were limiting. The rig runs it at 0 (`xeu-rig/settled.sh`).
+**Dropped (Mike, 15 October), with 0002.** The mark saves wakeups and
+costs rate. At 131072 it halves the threads woken a WRITE on two ports,
+and costs 2 to 3 GB/s there (13 October, build 464) and about 3 GB/s on
+build 474 (15 October); the claim in its message, "at the same
+throughput", was read from runs the drives were limiting. The rig ran it
+at 0; `svc_tcp_rx_lowat=0` is out of `/etc/modprobe.d/sunrpc.conf` on
+tardis1 (the file before is `/root/sunrpc.conf.pre-drop-lowat`).

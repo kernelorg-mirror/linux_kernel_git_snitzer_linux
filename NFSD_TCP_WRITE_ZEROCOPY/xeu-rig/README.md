@@ -279,7 +279,12 @@ For the session that boots the first kernel built from the branch
 after 15 October (the folded tip, or later). Recognise it:
 `modinfo -p sunrpc` lists `svc_tcp_spare_bytes_max` and no
 `pools_per_node`, and `grep -w tcp_sock_set_window_clamp
-/proc/kallsyms` finds it.
+/proc/kallsyms` finds it. A kernel built after the second drop that
+day also lists no `svc_tcp_rx_lowat` and no `svc_tcp_rx_copy_threads`
+(both were 0 on the rig; `settled.sh` reports them as "not in this
+kernel", and `/etc/modprobe.d/sunrpc.conf` no longer sets the mark, the
+file before being `/root/sunrpc.conf.pre-drop-lowat`); the kernel built
+from the push before it still has both, at 0.
 
 1. **The boot**, as under "First, in this order" above: the drives
    mounted, `./bringup.sh 32768 256`, `./port-setup.sh enp164s0f0 56`,
