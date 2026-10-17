@@ -67,14 +67,14 @@ DP800s alone, `FS_A="/hs/nvme4 /hs/nvme5" WARM=10 RUNTIME=25`; twoport.sh's
 `WRITES=<n>` sets a loan budget as sweep.sh's cells do, and every run now
 counts how nfsd issued its WRITEs):
 
-| | loan, 16 WRITEs (2150 pages) | 32 (4166) | 64 (8198) | copy |
-|---|---|---|---|---|
-| fio, GB/s | 5.73 | 5.76 | 5.77 | 5.77 |
-| WRITE segments direct / dontcache / buffered | 190976 / 0 / 0 | 191816 / 0 / 0 | 192184 / 0 / 0 | 192352 / 0 / 0 |
-| loans admitted / denied / paused | 190976 / 393378 / 0 | 191816 / 405536 / 6 | 192184 / 405934 / 5 | - |
-| threads woken, context switches a second | 44810, 107628 | 35480, 90975 | 35504, 91485 | 2833, 25627 |
-| client retransmits in the 10 s window | 875 | 311 | 61 | 101 |
-| region pages in use at most | 3515 | 5425 | 8958 | 1568 |
+| | loan, 16 WRITEs (2150 pages) | 32 (4166) | 64 (8198) | 128 (16262) | copy |
+|---|---|---|---|---|---|
+| fio, GB/s | 5.73 | 5.76 | 5.77 | 5.76 | 5.77 |
+| WRITE segments direct / dontcache / buffered | 190976 / 0 / 0 | 191816 / 0 / 0 | 192184 / 0 / 0 | 192272 / 0 / 0 | 192352 / 0 / 0 |
+| loans admitted / denied / paused | 190976 / 393378 / 0 | 191816 / 405536 / 6 | 192184 / 405934 / 5 | 192272 / 401979 / 2 | - |
+| threads woken, context switches a second | 44810, 107628 | 35480, 90975 | 35504, 91485 | 35483, 91542 | 2833, 25627 |
+| client retransmits in the 10 s window | 875 | 311 | 61 | 65 | 101 |
+| region pages in use at most | 3515 | 5425 | 8958 | 15836 | 1568 |
 
 Every WRITE was loaned and every loan was written direct at each
 budget: the DP800s take the loaned pieces as they are, with nothing
@@ -85,15 +85,16 @@ falling back to dontcache, which nvme-loop and the WD_BLACKs
 A denied record is not copied: `svc_tcp_rx_credit_admit()` puts its
 socket in the budget's FIFO and it is admitted when credit returns;
 `denied` counts each refusal. It stays at 2.1 a WRITE from 16 WRITEs
-to 64, and the region's pages in use follow the budget up (3515, 5425,
-8958), so the budget is full at every size: with storage slower than
+to 128, and the region's pages in use follow the budget up (3515, 5425,
+8958, 15836, half the region at 128), so the budget is full at every size: with storage slower than
 the wire and the client keeping 2 GiB in flight, the WRITEs wait at
 the budget whatever its size, and more budget only holds more of them
 in memory. What a larger budget did change is the client's
-retransmits (875, 311, 61, against the copy's 101) and, from 16 to 32
-only, the wakeups; at 32 and 64 the loan still woke twelve times the
+retransmits (875, 311, 61, against the copy's 101; 65 at 128, so
+nothing more past 64) and, from 16 to 32 only, the wakeups; from 32 to
+128 the loan still woke twelve times the
 threads of the copy, the cost of the wait and wake through the FIFO.
-Logs in `/var/tmp/zc-run-logs/tardis2-sgl-{loan16,loan32,loan64,copy}`.
+Logs in `/var/tmp/zc-run-logs/tardis2-sgl-{loan16,loan32,loan64,loan128,copy}`.
 
 **A loan over drives of both kinds** (17 October, port a onto all six,
 `WRITES=64`, `WARM=10 RUNTIME=25`). The loan is decided as the record
