@@ -493,6 +493,9 @@ the driver's source.
 
 ## The next kernel: what is still to be tested
 
+Build 479 is that kernel, and steps 1, 2, 4 and 5 are done on it
+(16 October): see "Build 479" after this list.
+
 For the session that boots the first kernel built from the branch
 after 15 October (the folded tip, or later). Recognise it:
 `modinfo -p sunrpc` lists `svc_tcp_spare_bytes_max` and no
@@ -543,6 +546,74 @@ Still Mike's to decide, after these: the A/Bs proposed in step 6 of
 `../CODE-SERIES.md` for the two settings in use that were never
 measured on their own, `svc_tcp_rx_keep` and the 50 us linger on one
 port.
+
+## Build 479: the next kernel, one pool and everything built in (16 October)
+
+Build 479 (`7.3.0-0.rc7.3.hs.479.loanpages_pool.el9.aarch64+16k`) is
+the first kernel built from the branch after 15 October: `modinfo -p
+sunrpc` lists `svc_tcp_spare_bytes_max` and none of `pools_per_node`,
+`svc_tcp_rx_lowat`, `svc_tcp_rx_copy_threads`, `svc_tcp_rx_linger_us`
+and `svc_tcp_rx_keep`, and `tcp_sock_set_window_clamp` is in
+`/proc/kallsyms`. The runs are in `$L/b479/` (drivers `battery.sh`,
+`after.sh`, `trim-ab.sh`, `trim-one.sh` and their `-slow` copies, each
+with its `.log`) and `$L/b479-<tag>`, their lines in
+`$L/b479/results-twoport-479.tsv`. Every audit came back at the
+settled setting, and the host was left at it.
+
+- **Step 1, the boot**: as written; `settled.sh apply` ended in "the
+  settled setting" with loans `Y`, one pool of 512 threads and
+  `svc_tcp_spare_bytes_max` 67108864.
+- **Step 2: the KUnit suites from the RPM pass**, 7, 48, 6 and 10
+  cases with no failure and no skip (`$L/kunit-479.log`). The 48 now
+  run from the installed modules.
+- **Step 3, in part**: no "svc: TCP receive window clamp failed" and
+  no WARNING or BUG in `dmesg` after all the runs. The
+  `svcsock_tcp_rx_hold` clamps were not compared with 474's.
+- **Step 5: the bound holds built in.** `spare-count.py 300 0.5` beside
+  a two-port run: at most 2,080 pages against a bound of 4,096 (64 MiB),
+  0 before the run and 0 once the clients were gone, as on 474.
+- **Step 6, the loan plans: not run.**
+
+**Step 4: copy mode.** The battery's commands from 474 (two ports at
+the two-port setting, one port a and b on all eight drives,
+`memcost-log.sh` beside each) were run three ways: with the harness's
+rest (`REST=30`), with all eight drives trimmed first, and trimmed with
+`WARM=10 RUNTIME=30 REST=120`. Only the third gave runs no drive
+stepped down in. Memory is given as in the 474 table: bytes through
+memory for each byte of payload, the two-port figure halved from the
+log's.
+
+| | GB/s, no drive stepped down | GB/s, a drive stepped down | bytes through memory | build 474 |
+|---|---|---|---|---|
+| two ports | 58.04 (rest 30); **58.58** (rest 120) | 50.09, 51.87; trimmed 57.54, 57.86, 44.21; rest 120 46.14, 51.58 | 2.19, 2.23 (no drive stepped down) | 59.18 to 59.76; 2.17 to 2.23 |
+| one port a, eight drives | **45.88, 47.42** (rest 120) | 46.51, 45.33, 46.81; trimmed 43.55, 46.77, 45.82; rest 120 40.77 | 1.43 to 1.47 | 47.62 clean; 1.38 to 1.44 |
+| one port b, eight drives | **47.79, 46.34, 47.80** (rest 120) | 47.13, 45.88, 45.87; trimmed 44.66, 44.69, 46.26 | 1.46 to 1.50 | 47.18 clean; 1.42 |
+
+- **One port has not regressed**: five clean runs at 45.88 to 47.80
+  GB/s, the wire at 46.3 to 48.3 in the read window, 474's range.
+- **Two ports: one clean run of 58.58**, 1 to 2% under 474's 59.18 to
+  59.76; so was 58.04 with the shorter rest. One run each; the 1 to 2%
+  is not established.
+- **The memory for each byte is about 3% higher than 474's** on one
+  port (1.43 to 1.50 against 1.38 to 1.44); on two ports 2.23 against
+  2.17 to 2.23. Not looked into.
+- **The drives**: a drive stepped down in every run but one with
+  `REST=30`, trimmed or not, as early as 19 s; trimmed, abt-2's
+  drives wrote 491 to 548 GB with one stepping down at 58 s, and after
+  30 s of rest nvme0 and nvme1 stepped down at 19 s in abt-3. With
+  `REST=120` and 30 s runs, five of six one-port runs and one of three
+  two-port runs were clean. A trim takes about 1 s a drive (`fstrim -v
+  /hs/nvmeN`). For a rate on this host, use `WARM=10 RUNTIME=30
+  REST=120` after a trim.
+- **abs-2 stalled on port a, not on its drives**: port a 12.14 GB/s
+  and port b 34.00; port a's drives 38% busy, its wire 10.5 GB/s in
+  the window, the 99th percentile of a write 4.8 s (121 ms on b), 11
+  ring drops and 168 client retransmits. Once; not traced.
+- **The client is shared.** At 13:51 another user's sweep
+  (`/root/lp_sweep.sh`, `logperf` on the client's two ScaleFlux drives)
+  was running on it, and the audit's ssh to 10.20.12.106 timed out, so
+  the run refused (`$L/b479/trim-ab.refused.log`). Check the client
+  is idle (`uptime`, no `logperf` or `fio`) before a battery.
 
 ## Still Mike's to decide
 
