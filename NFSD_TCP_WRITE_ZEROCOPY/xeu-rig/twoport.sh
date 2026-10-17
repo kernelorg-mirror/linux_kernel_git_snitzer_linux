@@ -70,6 +70,12 @@
 #                    writes every file whole once (8 MiB direct writes) and rests 20 s
 #   RWMIX=<n>        the share of reads in a mixed run, percent (fio's 50)
 #   IODEPTH=<n> (16), SIZE=<fio size> (512M): each writer's queue and file
+#   WRITES=<n>       loan: a budget that lets <n> 1 MiB WRITEs hold loaned pages at
+#                    once, worked out as sweep.sh does from run-budget.sh's geometry
+#                    (charge per WRITE, reserve); unset or 0 copies, as settled
+# Every run reports how nfsd issued its WRITEs (segments direct, dontcache and
+# buffered, from the nfsd_write_* tracepoints) and, with WRITES, what the
+# budget admitted, denied and paused.
 # TSV=<file>: append a line of the run's figures (TAG=<label> names it); a write
 # run's only.  RWTSV=<file>: the same for any run, reads and writes apart.
 . "$(dirname "$0")/common.sh"
@@ -116,6 +122,20 @@ declare -A SAVE
 # (dropped 15 October)
 for k in rcvbuf linger_us copy_threads lowat keep; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k 2>/dev/null); done
 SAVE[spare]=$(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null)
+SAVE[budget]=$(cat $SP/svc_tcp_rx_budget_pages); SAVE[reserve]=$(cat $SP/svc_tcp_rx_budget_reserve)
+# The loan's budget, from the same geometry and charge as sweep.sh's cells.
+BUDGET=; RESERVE=
+if [ "${WRITES:-0}" -gt 0 ]; then
+	G=$(cd $H && GEOMETRY=1 NETDEV=${DEV[${PORTS%% *}]} CLIENT=root@$CLIMGMT CLIENT_ADDR=${CLI[${PORTS%% *}]} ./run-budget.sh /dev/null 2>/dev/null | grep '^geometry')
+	F9=$(sed -n 's/.*factor \([0-9]*\) (MTU 9000).*/\1/p' <<< "$G")
+	RESERVE=$(sed -n 's/.*reserve \([0-9]*\) \/.*/\1/p' <<< "$G")
+	[ -n "$F9" ] && [ -n "$RESERVE" ] || { echo "cannot read the geometry: $G"; exit 1; }
+	CHARGE=$(( ( (1048716 + PS - 1) / PS * F9 + 99 ) / 100 + 2 ))
+	BUDGET=$(( WRITES * CHARGE + RESERVE + 4 ))
+fi
+T=/sys/kernel/tracing; WREV="nfsd_write_direct nfsd_write_dontcache nfsd_write_vector"
+wr_hits() { local e; for e in $WREV; do awk '/^ *Hits:/ {print $2; f = 1} END {if (!f) print 0}' $T/events/nfsd/$e/hist 2>/dev/null || echo 0; done | paste -sd ' '; }
+bstat() { tr ' ' '\n' < $SP/svc_tcp_rx_budget_stats | awk -v k=$1 'p == k {print; exit} {p = $0}'; }
 declare -A CDEV=([a]=ens3np0 [b]=ens6np0)
 setq() {	# setq <client dev> <codel|fq|fqNN>
 	case $2 in
@@ -128,6 +148,8 @@ setq() {	# setq <client dev> <codel|fq|fqNN>
 cleanup() {
 	for k in rcvbuf linger_us copy_threads lowat keep; do [ -e $SP/svc_tcp_rx_$k ] && echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
 	[ -n "${SAVE[spare]}" ] && echo ${SAVE[spare]} > $SP/svc_tcp_spare_bytes_max
+	echo 0 > $SP/svc_tcp_rx_budget_pages; echo ${SAVE[reserve]} > $SP/svc_tcp_rx_budget_reserve; echo ${SAVE[budget]} > $SP/svc_tcp_rx_budget_pages
+	for e in $WREV; do echo '!hist:keys=common_type' > $T/events/nfsd/$e/trigger 2>/dev/null; done
 	[ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} codel; done
 	# The RSS table may name rings that are going: spread it over four first.
 	[ -n "${RINGS:-}" ] && { for p in $PORTS; do ethtool -X ${DEV[$p]} equal 4 2>/dev/null; ip link set ${DEV[$p]} down; sleep 1; ethtool -L ${DEV[$p]} combined 4; ip link set ${DEV[$p]} up; done; sleep 7; }
@@ -164,6 +186,11 @@ setp "${LINGER:-}" linger_us 0
 setp "${THREADS:-}" copy_threads 0
 setp "${LOWAT:-}" lowat 0
 setp "${KEEP:-}" keep N
+if [ -n "$BUDGET" ]; then	# reserve first, as run-budget.sh sets them
+	echo 0 > $SP/svc_tcp_rx_budget_pages; echo $RESERVE > $SP/svc_tcp_rx_budget_reserve; echo $BUDGET > $SP/svc_tcp_rx_budget_pages
+	echo "loan: $G; charge $CHARGE pages a 1 MiB WRITE, budget $BUDGET pages for $WRITES WRITEs, reserve $RESERVE" | tee -a geometry.txt
+fi
+for e in $WREV; do grep -q '^hist:' $T/events/nfsd/$e/trigger 2>/dev/null || echo 'hist:keys=common_type' > $T/events/nfsd/$e/trigger; done
 [ -n "${SPARE:-}" ] && { echo $SPARE > $SP/svc_tcp_spare_bytes_max || { echo "no svc_tcp_spare_bytes_max in this sunrpc"; exit 1; }; }
 [ -n "${NFSD_CPUS:-}" ] && { for t in $(pgrep -x nfsd); do taskset -cp $NFSD_CPUS $t > /dev/null 2>&1; done; echo "nfsd on CPUs $NFSD_CPUS for this run" | tee -a geometry.txt; }
 [ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} $QDISC || { echo "qdisc not set"; exit 1; }; done
@@ -268,7 +295,7 @@ if [ "$RW" != write ]; then	# a run that reads: every file written whole first, 
 fi
 # Just before the load: the live state, all of it, against the setting this
 # run is at; anything the run set on purpose is held to what it set.
-EXPENV="EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-}"
+EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}" ] && EXPENV="$EXPENV EXP_LAYOUT=RINGS=${RINGS:-4},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-}"
 # the client's qdisc is set only on the ports of this run
@@ -276,6 +303,7 @@ for p in $PORTS; do case "${QDISC:-}" in fq*) EXPENV="$EXPENV EXP_QDISC_$(tr a-z
 env $EXPENV "$RIG/settled.sh" audit $MODE_SET > audit.txt 2>&1 || { grep -E 'BAD|FAILED' audit.txt; exit 1; }
 tail -1 audit.txt | tee -a geometry.txt
 echo 1 > $RG	# the region's low-water mark starts again from here
+WH0=$(wr_hits); declare -A BS0; for k in admitted denied paused overrun; do BS0[$k]=$(bstat $k); done
 DRIVES="$(data_drives)" "$RIG/drvsample.py" drives-sec.tsv $(( WARM + RUNTIME + 3 )) &	# every drive, each second of the load
 for p in $PORTS; do
 	cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio; rm -f /mnt/rxr-$p[0-9]*/f-*" &
@@ -346,6 +374,9 @@ R1=$(cretr)
 echo "client retransmits in the window: $(( R1 - R0 ))" >> window.txt
 echo "$N0 $N1" | awk -v w=$(echo "$TN1 - $TN0" | bc) '{printf "nfsd in the window, a second: WRITEs %d, threads woken %d, context switches %d\n", ($4 - $1) / w, ($5 - $2) / w, ($6 - $3) / w}' >> window.txt
 wait
+WH1=$(wr_hits)
+echo "$WH0 $WH1" | awk '{printf "nfsd issued WRITE segments in the run: direct %d, dontcache %d, buffered %d\n", $4 - $1, $5 - $2, $6 - $3}' >> window.txt
+[ -n "$BUDGET" ] && echo "loans: budget $BUDGET pages ($WRITES WRITEs), in the run admitted $(( $(bstat admitted) - ${BS0[admitted]} )), denied $(( $(bstat denied) - ${BS0[denied]} )), paused $(( $(bstat paused) - ${BS0[paused]} )), overrun $(( $(bstat overrun) - ${BS0[overrun]} ))" >> window.txt
 wrote > wrote.1
 paste wrote.0 wrote.1 | awk -v lim=${DRIVE_GB:-600} '{g = ($4 - $2) * 512 / 1e9; printf "%s%s %.0f", (NR > 1 ? ", " : "written in the run, GB: "), $1, g; if (g > lim) o = o " " $1} END {printf "%s\n", (o ? " -- PAST THE FAST REGION:" o : "")}' >> drives.txt
 # A drive that fell under 65% of the busiest drive's median for five
@@ -394,7 +425,7 @@ if os.environ.get('RWTSV'):
         s('read', 0), s('write', 0), s('read', 1), s('write', 1), m('read', 2), m('read', 3), m('write', 2), m('write', 3)))
 open('total.txt', 'w').write("%.2f\n" % tot)
 for l in open('window.txt'):
-    if l.startswith(('client', 'nfsd')) or l.startswith('sent:'): print(l.strip())
+    if l.startswith(('client', 'nfsd', 'loans:')) or l.startswith('sent:'): print(l.strip())
 print(open('drives.txt').read().strip())
 # A CPU waiting on I/O is not in use: busy is what is neither idle nor iowait.
 def busy(path, cpus):
