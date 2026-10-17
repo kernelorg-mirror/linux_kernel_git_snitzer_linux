@@ -28,18 +28,39 @@ kernel (build 481), and the same client (plsm121c-06, reached at
   xeu's and sunrpc's settings in `/etc/modprobe.d/{xeu,sunrpc}.conf`,
   port a's MTU 7792 in NetworkManager ("Wired connection 2"), and the
   WD_BLACKs' write-through in `/etc/udev/rules.d/99-zc-write-through.rules`.
-- `perf` is not from dnf: Hammerspace's package needs a libLLVM no repo
-  has, and Rocky's is 6.12. `sparse` is in no enabled repo.
+- `perf` (7.3, as the kernel) was installed by Mike: Hammerspace's
+  package needs a libLLVM no repo has, and Rocky's is 6.12. `sparse` is
+  in no enabled repo.
+- **The scripts follow the host** through `common.sh`: each port's
+  addresses (`SRVP`, `CLIP`), its default filesystems (`PFS`; FS_A and
+  FS_B still override), the default ports (`DEFWHICH`: `a` here, `ab` on
+  tardis1), the data drives (`data_drives`, which `drvsample.py` and
+  `nfsd-stacks.sh` take too), and `which_ok`, which refuses port b here
+  (and `rwbase.sh`'s two-port runs). `rcv.py` and `snd.py` take the
+  addresses as arguments; `stall-watch-client.sh <secs> 213` watches for
+  tardis2.
+- **The client is shared with tardis1.** A run unmounts the client's
+  `/mnt/rxr-*` and kills its fio, iperf3 and senders, which would end the
+  other server's run, so `twoport.sh`, `iperf2port.sh`, `ringsize.sh` and
+  `wirebuf.sh` first call `client_free`: it refuses while the client has
+  NFS mounted from another server or one of those tools running.
 - What was on nvme0 (thayne's `hke.git` and `ofe-*` files) is in
   `/root/nvme0-backup-2026-10-17`; the root filesystem has about 8 GB
   free after it.
 
 After a boot: `for n in 0 1 2 3 4 5; do mount -o noatime /dev/nvme${n}n1
 /hs/nvme$n; done`, then `./bringup.sh 32768 256`, then `./settled.sh
-apply`, which ended in "the settled setting" on 17 October. The
-scripts that name tardis1's addresses outright (`twoport.sh`,
-`iperf2port.sh`, `stall-watch-*.sh`) are not yet made to follow the
-host.
+apply`, which ended in "the settled setting" on 17 October.
+
+**The first runs** (17 October, copy mode at the one-port setting, all
+six drives, `WARM=5 RUNTIME=15`, so short and only a check of the rig):
+44.12 and 46.35 GB/s on port a (`/var/tmp/zc-run-logs/tardis2-first-twoport*`),
+against tardis1's 47.39 on eight drives. The DP800s write at most about
+2.9 GB/s each and are 100% busy at it, the WD_BLACKs about 9.5 at 80%:
+with the writers divided evenly they wrote 103 GB each to the WD_BLACKs'
+350, and twoport.sh marks them DRIVE-LIMITED and, in the second run,
+"stepped down" at 9 s (its test was made for drives that fall from
+11 GB/s, so for the DP800s it may say only that they are at their rate).
 
 # 15 October: the boot into the reworked tree — read this first
 

@@ -1,12 +1,14 @@
 #!/bin/bash
 # on the server: when a port that was carrying load receives under 2 GB/s for 3 s, dump its counters, connections and nfsd's stacks
 o=$1; rm -rf $o; mkdir -p $o
-declare -A P LOW HOT DUMPED ADDR=([enp161s0f0]=192.168.1.211 [enp164s0f0]=192.168.0.211)
+. "$(dirname "$0")/common.sh"	# the host's ports and their addresses
+declare -A P LOW HOT DUMPED ADDR
+DEVS=""; for p in $PORTS; do ADDR[${PDEVS[$p]}]=${SRVP[$p]}; DEVS="$DEVS ${PDEVS[$p]}"; done
 rx() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_rx_bytes:$/{s+=$2} END{print s+0}'; }
-for d in enp161s0f0 enp164s0f0; do P[$d]=$(rx $d); LOW[$d]=0; HOT[$d]=0; DUMPED[$d]=0; done
+for d in $DEVS; do P[$d]=$(rx $d); LOW[$d]=0; HOT[$d]=0; DUMPED[$d]=0; done
 start=$(date +%s); end=$(( start + ${2:-240} ))
 while [ $(date +%s) -lt $end ]; do
-  for d in enp161s0f0 enp164s0f0; do
+  for d in $DEVS; do
     c=$(rx $d); r=$(( (c - ${P[$d]}) / 1000000 )); P[$d]=$c
     echo "$(date +%s.%N | cut -c1-14) $d MB/s $r" >> $o/rate.txt
     [ $r -gt 15000 ] && HOT[$d]=$(( ${HOT[$d]} + 1 ))

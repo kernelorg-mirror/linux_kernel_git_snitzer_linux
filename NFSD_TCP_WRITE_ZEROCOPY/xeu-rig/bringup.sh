@@ -14,7 +14,8 @@ PCI=$(basename "$(readlink -f /sys/class/net/$D/device)")
 [ "$(cat /sys/module/xeu/parameters/rx_ip_align)" = 2 ] || echo "WARNING: rx_ip_align is not 2: loans will not be written direct on NVMe/TCP"
 $SSHC true || { echo "client $CLIMGMT does not answer"; exit 1; }
 echo "page size $PS, kernel $(uname -r), xeu $(cat /sys/module/xeu/srcversion), retry patch: $(has_retry_patch && echo present || echo ABSENT)"
-# This session must not arrive over the port (it should be on xemi0).
+# This session must not arrive over the port (it should be on the management
+# interface: xemi0 on tardis1, enaxsl1i0 on tardis2).
 ip route get "${SSH_CONNECTION%% *}" 2>/dev/null | grep -q "dev $D" && { echo "this session arrives on $D"; exit 1; }
 # Deadman: put the port back if this script dies with it down.
 ( sleep 300; ip link set $D up ) > /dev/null 2>&1 & DM=$!
