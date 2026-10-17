@@ -18,6 +18,11 @@
 #   a   enp161s0f0  192.168.1.211  /hs/nvme0 to /hs/nvme3  client ens3np0
 #   b   enp164s0f0  192.168.0.211  /hs/nvme4 to /hs/nvme7  client ens6np0
 #
+# That is tardis1.  The ports' addresses and filesystems are common.sh's for
+# the host: on tardis2 port a is 192.168.1.213 onto all six drives (/hs/nvme0
+# to /hs/nvme5; FS_A="/hs/nvme4 /hs/nvme5" for the two with SGLs), port b is
+# not cabled, and the ports default to the host's (a there, ab on tardis1).
+#
 # A port's drives each carry a filesystem of their own (no MD since
 # 2026-10-12): each is exported and mounted, /mnt/rxr-<port><n> on the
 # client, and the port's writers are divided evenly among them.  The
@@ -69,7 +74,8 @@
 # run's only.  RWTSV=<file>: the same for any run, reads and writes apart.
 . "$(dirname "$0")/common.sh"
 "$(dirname "$0")/drive-cache.sh" > /dev/null || { echo "drive-cache.sh failed"; exit 1; }	# no cache flush to the drives (AGENTS.md)
-OUT=${1:?out dir}; WHICH=${2:-ab}
+OUT=${1:?out dir}; WHICH=${2:-$DEFWHICH}
+which_ok "$WHICH" || exit 1
 # A run on both ports is at the two-port setting and one on one port at the
 # one-port setting, unless it asks otherwise (settled.sh, README.md "Where
 # it stands").
@@ -81,8 +87,8 @@ fi
 RUNTIME=${RUNTIME:-45}; WARM=${WARM:-15}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
 RW=${RW:-write}; IODEPTH=${IODEPTH:-16}; SIZE=${SIZE:-512M}
 YNL="$H/../tools/net/ynl/pyynl/cli.py --no-schema --spec $H/../Documentation/netlink/specs/ethtool.yaml"
-declare -A DEV=([a]=enp161s0f0 [b]=enp164s0f0) SRV=([a]=192.168.1.211 [b]=192.168.0.211)
-declare -A CLI=([a]=192.168.1.106 [b]=192.168.0.106) FS=([a]="${FS_A:-/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3}" [b]="${FS_B:-/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7}")
+declare -A DEV=([a]=${PDEVS[a]} [b]=${PDEVS[b]}) SRV=([a]=${SRVP[a]} [b]=${SRVP[b]})
+declare -A CLI=([a]=${CLIP[a]} [b]=${CLIP[b]}) FS=([a]="${FS_A:-${PFS[a]}}" [b]="${FS_B:-${PFS[b]}}")
 declare -A IRQ0=([a]=0 [b]=56) FSID=([a]=7701 [b]=7702) TXIRQ=([a]=${TXIRQ_A:-} [b]=${TXIRQ_B:-})
 declare -A NFS	# how many filesystems each port has
 declare -A CPUS=([a]=0-23 [b]=24-47)	# the client's CPUs on each port's NUMA node, for PIN=1
@@ -92,6 +98,7 @@ cl() { $SSHC "$@" < /dev/null; }
 clput() { $SSHC "cat > $1"; }	# stdin to a file on the client
 
 [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ] || { echo "NFS connections are up: not ours to disturb"; exit 1; }
+client_free || exit 1	# the client is shared with the other server
 mkdir -p $OUT; cd $OUT || exit 1
 # The host has to be at the settled setting before the run changes anything.
 audit_or_die rest audit-start.txt
@@ -269,7 +276,7 @@ for p in $PORTS; do case "${QDISC:-}" in fq*) EXPENV="$EXPENV EXP_QDISC_$(tr a-z
 env $EXPENV "$RIG/settled.sh" audit $MODE_SET > audit.txt 2>&1 || { grep -E 'BAD|FAILED' audit.txt; exit 1; }
 tail -1 audit.txt | tee -a geometry.txt
 echo 1 > $RG	# the region's low-water mark starts again from here
-"$RIG/drvsample.py" drives-sec.tsv $(( WARM + RUNTIME + 3 )) &	# every drive, each second of the load
+DRIVES="$(data_drives)" "$RIG/drvsample.py" drives-sec.tsv $(( WARM + RUNTIME + 3 )) &	# every drive, each second of the load
 for p in $PORTS; do
 	cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio; rm -f /mnt/rxr-$p[0-9]*/f-*" &
 done

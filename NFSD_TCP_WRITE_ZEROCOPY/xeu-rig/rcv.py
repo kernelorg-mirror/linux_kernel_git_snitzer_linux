@@ -1,8 +1,9 @@
 import socket, sys, threading, time
 rcvbuf, n, secs = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
+addr = sys.argv[4] if len(sys.argv) > 4 else "192.168.1.211"	# the server's address on the port
 ls = socket.socket(); ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 if rcvbuf: ls.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf // 2)
-ls.bind(("192.168.1.211", 5202)); ls.listen(64)
+ls.bind((addr, 5202)); ls.listen(64)
 tot = [0] * n
 def rx(i, c):
     b = bytearray(1 << 20)
