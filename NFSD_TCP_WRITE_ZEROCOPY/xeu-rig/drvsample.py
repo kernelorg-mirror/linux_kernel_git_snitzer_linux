@@ -4,7 +4,7 @@
 # in drvchar.py's columns.  Runs until killed, or for the seconds given.
 # Every fifth second each drive's two temperature sensors go to
 # <out file>.temp (composite/sensor 1, C).
-import subprocess, sys, time
+import os, subprocess, sys, time
 
 def temp(k):
     v = {}
@@ -21,7 +21,9 @@ def stats():
             s[f[2]] = (int(f[9]), int(f[12]), int(f[7]))
     return s
 
-names = ['nvme%dn1' % n for n in range(8)]
+# The host's data drives (DRIVES, from common.sh's data_drives), tardis1's eight
+# by default.
+names = os.environ.get('DRIVES', '').split() or ['nvme%dn1' % n for n in range(8)]
 n = int(sys.argv[2]) if len(sys.argv) > 2 else 1 << 30
 o = open(sys.argv[1], 'w')
 t = open(sys.argv[1] + '.temp', 'w')

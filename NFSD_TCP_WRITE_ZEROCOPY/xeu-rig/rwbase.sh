@@ -16,6 +16,7 @@ cd "$(dirname "$0")" || exit 1
 B=${1:?build}; N=${2:-2}; R0=${3:-1}; T=$L/rwbase-$B.tsv
 two() {	# two <tag> <env...>
 	local tag=$1; shift
+	which_ok ab || exit 1	# not on a host with one port (tardis2)
 	env RCVBUF=393216 ENTRIES=128 LINGER=0 LOWAT=0 RWTSV=$T TAG=$tag "$@" ./twoport.sh $L/rwbase-$B-$tag > $L/rwbase-$B-$tag.log 2>&1
 	local rc=$?
 	echo "$(date +%T) $tag rc=$rc $(grep '^total' $L/rwbase-$B-$tag.log)"
@@ -23,7 +24,7 @@ two() {	# two <tag> <env...>
 }
 one() {
 	local tag=$1; shift
-	env FS_A="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3 /hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7" FS_B= RUNTIME=60 LOWAT=0 RWTSV=$T TAG=$tag "$@" ./twoport.sh $L/rwbase-$B-$tag a > $L/rwbase-$B-$tag.log 2>&1
+	env FS_A="$ALL_FS" FS_B= RUNTIME=60 LOWAT=0 RWTSV=$T TAG=$tag "$@" ./twoport.sh $L/rwbase-$B-$tag a > $L/rwbase-$B-$tag.log 2>&1
 	local rc=$?
 	echo "$(date +%T) $tag rc=$rc $(grep '^total' $L/rwbase-$B-$tag.log)"
 	[ $rc = 0 ] || { echo "stopped: $(grep -E 'BAD|FAILED' $L/rwbase-$B-$tag.log | head -5)"; exit 1; }
