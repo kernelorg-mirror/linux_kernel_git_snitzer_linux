@@ -104,14 +104,14 @@ dontcache write (`NFS_DIO_MEM_MISALIGNED` in `nfs_dio_split()`), a copy
 into the page cache. That is not copy mode for them, and no setting
 gives loan to some exports and copy to others.
 
-| | loan 64, six drives | copy, six drives | loan 64, the four WD_BLACKs |
-|---|---|---|---|
-| fio, GB/s | **19.72** | 44.93 | 38.30 |
-| WRITE segments direct / dontcache | 191408 / 466624 | 1503240 / 0 | 0 / 1277064 |
-| loans admitted / denied | 658032 / 1252655 | - | 1277064 / 2476 |
-| GB/s a drive, WD_BLACK / DP800 | 3.5 / 2.9 | 9.9 / 2.9 | 9.5 / - |
-| nfsd CPUs busy (8-55) | 9% | 24% | 59% |
-| ring drops, client retransmits | 19, 21 | 3, 3654 | 24324, 26307 |
+| | loan 64, six drives | copy, six drives | loan 64, the four WD_BLACKs | copy, the four WD_BLACKs |
+|---|---|---|---|---|
+| fio, GB/s | **19.72** | 44.93 | 38.30 | 45.53 |
+| WRITE segments direct / dontcache | 191408 / 466624 | 1503240 / 0 | 0 / 1277064 | 1518144 / 0 |
+| loans admitted / denied | 658032 / 1252655 | - | 1277064 / 2476 | - |
+| GB/s a drive, WD_BLACK / DP800 | 3.5 / 2.9 | 9.9 / 2.9 | 9.5 (86% busy) / - | 11.3 (99% busy) / - |
+| nfsd CPUs busy (8-55) | 9% | 24% | 59% | 26% |
+| ring drops, client retransmits | 19, 21 | 3, 3654 | 24324, 26307 | 4, 4711 |
 
 Mixed, the loan carries less than half the copy, and the reason is the
 budget, not dontcache: the WD_BLACKs alone take loaned WRITEs as
@@ -122,9 +122,12 @@ every record after it behind it, so all six drives go at about the
 DP800s' pace (178 GB to each WD_BLACK, 146 to each DP800). Dontcache is
 not free either: on the WD_BLACKs alone it took 59% of nfsd's CPUs to
 the copy's 24% over six, with ring drops and retransmits the copy does
-not have. A loan for some storage beside a copy for the rest would need
+not have. On the same four drives the copy carries 45.53 GB/s, the
+drives' 11.3 each (566 GB, inside the fast region): where storage needs
+whole pages, a loan that ends as dontcache costs 16% of the rate and
+more than twice nfsd's CPU against copying on receipt. A loan for some storage beside a copy for the rest would need
 the choice made per export, or a budget that one slow device cannot
-fill for all. Logs in `/var/tmp/zc-run-logs/tardis2-{six-loan64,six-copy,wd-loan64}`.
+fill for all. Logs in `/var/tmp/zc-run-logs/tardis2-{six-loan64,six-copy,wd-loan64,wd-copy}`.
 
 # 15 October: the boot into the reworked tree — read this first
 
