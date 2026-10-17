@@ -4,10 +4,33 @@
 # here is enp161s0f0; D, SRVIP and CLIIP name the other); check that no
 # NFS client is connected before a port is reconfigured.
 D=${D:-enp161s0f0}
-SRVIP=${SRVIP:-192.168.1.211}
+# What differs between the two servers that share the client (2026-10-17).
+# tardis1: the card, eight data drives nvme0 to nvme7, .211 on each port.
+# tardis2: the same card and CPUs, six data drives (nvme0 to nvme3 WD_BLACK
+# SN8100 without SGLs, nvme4 and nvme5 DapuStor DP800 with SGLs; nvme6 is
+# its boot drive), .213 on each port, and port b not cabled.
+HOST=$(hostname -s)
+case $HOST in
+tardis2) SRVHOST=213; DATA_DRIVES="0 1 2 3 4 5"; PORTS=${PORTS:-a} ;;
+*)       SRVHOST=211; DATA_DRIVES="0 1 2 3 4 5 6 7"; PORTS=${PORTS:-a b} ;;
+esac
+# data_drives: the data drives' block devices, refusing any that holds a
+# mounted system filesystem (a drive renamed at boot must not be taken for
+# a data drive)
+data_drives() {
+	local n
+	for n in $DATA_DRIVES; do
+		findmnt -rno TARGET -S /dev/nvme${n}n1 2>/dev/null | grep -qvx "/hs/nvme$n" &&
+			{ echo "nvme${n}n1 is mounted outside /hs: not a data drive" >&2; return 1; }
+		lsblk -nro MOUNTPOINT /dev/nvme${n}n1 2>/dev/null | grep -qE '^/(boot.*)?$' &&
+			{ echo "nvme${n}n1 holds a system filesystem: not a data drive" >&2; return 1; }
+		echo nvme${n}n1
+	done
+}
+SRVIP=${SRVIP:-192.168.1.$SRVHOST}
 CLIIP=${CLIIP:-192.168.1.106}
-# The client's management address (its ens8f0; the server's is 10.20.12.211
-# on xemi0).  Every script's ssh and scp to the client goes here, so that the
+# The client's management address (its ens8f0; tardis1's is 10.20.12.211
+# on xemi0, tardis2's 10.20.12.213 on enaxsl1i0).  Every script's ssh and scp to the client goes here, so that the
 # harness's own traffic is not on a port under test (2026-10-13).  CLIIP stays
 # the client's address on the port: what is mounted from and pinged.
 CLIMGMT=${CLIMGMT:-10.20.12.106}
