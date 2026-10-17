@@ -62,6 +62,30 @@ with the writers divided evenly they wrote 103 GB each to the WD_BLACKs'
 "stepped down" at 9 s (its test was made for drives that fall from
 11 GB/s, so for the DP800s it may say only that they are at their rate).
 
+**The first loan onto real SGL drives** (17 October, port a onto the two
+DP800s alone, `FS_A="/hs/nvme4 /hs/nvme5" WARM=10 RUNTIME=25`; twoport.sh's
+`WRITES=<n>` sets a loan budget as sweep.sh's cells do, and every run now
+counts how nfsd issued its WRITEs):
+
+| | loan, 16 WRITEs (2150 pages) | copy |
+|---|---|---|
+| fio | 5.73 GB/s | 5.77 GB/s |
+| WRITE segments direct / dontcache / buffered | 190976 / 0 / 0 | 192352 / 0 / 0 |
+| loans admitted / denied / paused | 190976 / 393378 / 0 | - |
+| threads woken, context switches a second | 44810, 107628 | 2833, 25627 |
+| client retransmits in the 10 s window | 875 | 101 |
+| region pages in use at most | 3515 | 1568 |
+
+Every WRITE was loaned and every loan was written direct: the DP800s
+take the loaned pieces as they are, with nothing falling back to
+dontcache, which nvme-loop and the WD_BLACKs (`virt_boundary_mask`
+4095) cannot do. Both runs are the drives' (2.9 GB/s each, 94 to 100%
+busy), so they say nothing of rate or CPU. What differs is the
+budget's: 16 WRITEs at once against 16 writers of 8 MiB was refused
+twice for every admission, and the loan woke sixteen times the threads
+of the copy and had nine times its retransmits. Logs in
+`/var/tmp/zc-run-logs/tardis2-sgl-{loan16,copy}`.
+
 # 15 October: the boot into the reworked tree — read this first
 
 Written late on 14 October, after Mike pushed
