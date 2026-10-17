@@ -1,13 +1,21 @@
 #!/bin/bash
-# settled.sh - the settled setting of the rig on tardis1, in one place, and
-# the audit every test runs against it (Mike, 14 October: "lock it down
-# hard").  Nothing here is to be left to boot order, a service's default or
-# the last run.
+# settled.sh - the settled setting of the rig on tardis1 and tardis2, in one
+# place, and the audit every test runs against it (Mike, 14 October: "lock it
+# down hard").  Nothing here is to be left to boot order, a service's default
+# or the last run.
+#
+# tardis2 (from 17 October) has the same card, CPUs and client, and is held
+# to the same setting except where common.sh's host block says otherwise:
+# its six data drives (nvme0 to nvme5; nvme6 is its boot drive), port a only
+# (port b is not cabled), its own addresses, no tuned (the sysctls below are
+# held by apply and by /etc/sysctl.d/90-zc-settled.conf) and none of
+# Hammerspace's services (nfsd's 512 threads come from /etc/nfs.conf and are
+# pinned by place).
 #
 #   settled.sh audit <mode>  check the live state; print every item, and
 #                            exit 1 if any differs from what <mode> expects
 #   settled.sh place [a] [b] put the CPU layout in place, for nfsd and the
-#                            ports named (both): after anything that opens a
+#                            ports named (the host's ports): after anything that opens a
 #                            port, and safe while a run is under way
 #   settled.sh apply         place, put the resting module settings in
 #                            place, then audit "rest"
@@ -165,6 +173,7 @@ declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
 # one page.  tcp_wmem's 4194304 caps each NFS connection's send buffer at
 # 4 MiB, which is what holds the 1 MiB random READ (14 October).
 TUNED=hs-e1
+[ $HOST = tardis2 ] && TUNED=	# no tuned: the sysctls are held by apply
 declare -A SYSCTL=(
 	[net.ipv4.tcp_wmem]="16384 16384 4194304"
 	[net.ipv4.tcp_rmem]="16384 131072 33554432"
@@ -314,7 +323,8 @@ audit_nfsd() {
 
 audit_sysctl() {
 	local k
-	want "tuned profile" "$(tuned-adm active 2>/dev/null | sed -n 's/^Current active profile: //p')" $TUNED
+	local t; t=$(tuned-adm active 2>/dev/null | sed -n 's/^Current active profile: //p')
+	want "tuned profile" "${t:-none}" "${TUNED:-none}"
 	for k in $(printf '%s\n' "${!SYSCTL[@]}" | sort); do
 		want "sysctl $k" "$(sysctl -n $k 2>/dev/null | tr -s ' \t' '  ')" "${SYSCTL[$k]}"
 	done
@@ -327,7 +337,7 @@ audit_client() {	# read only: nothing on the client is changed from here
 	for k in $(printf '%s\n' "${!CLI_SYSCTL[@]}" | sort); do
 		want "client sysctl $k" "$(awk -v k=$k '$1 == k {$1 = ""; sub(/^ /, ""); print}' <<< "$out")" "${CLI_SYSCTL[$k]}"
 	done
-	for p in a b; do
+	for p in $PORTS; do
 		local eq=EXP_QDISC_$(tr a-z A-Z <<< $p)
 		want "client ${CLI_DEV[$p]} qdisc" "$(awk -v k=qdisc_${CLI_DEV[$p]} '$1 == k {print $2}' <<< "$out")" "${!eq:-${EXP_QDISC:-fq_codel}}"
 		want "client ${CLI_DEV[$p]} pause rx/tx" "$(awk -v k=pause_${CLI_DEV[$p]} '$1 == k {print $2}' <<< "$out")" off/off
@@ -380,8 +390,7 @@ audit() {
 	audit_irqbalance
 	audit_sysctl
 	audit_client
-	audit_port a
-	audit_port b
+	for k in $PORTS; do audit_port $k; done
 	for k in $(printf '%s\n' "${!EXPECT[@]}" | sort); do
 		if [ ! -e $SUNRPC/$k ] && [ -n "${GONE_LATER[$k]:-}${NEW_LATER[$k]:-}" ]; then
 			printf '  --   %-34s %s\n' "sunrpc $k" "not in this kernel"
@@ -394,12 +403,13 @@ audit() {
 	done
 	want "receive region pages" "$(cat $PP/rx_region_pages)" $REGION_PAGES
 	want "receive region devices" "$(tr ',' '\n' < $PP/rx_region_dev | grep . | sort | paste -sd ' ')" \
-		"$(for p in a b; do basename "$(readlink -f /sys/class/net/${PDEV[$p]}/device)"; done | sort | paste -sd ' ')"
-	for k in 0 1 2 3 4 5 6 7; do
-		want "nvme${k}n1 cache" "$(cat /sys/block/nvme${k}n1/queue/write_cache)" "write through"
-		want "nvme${k}n1 PCIe MaxReadReq" "$(mrrs $(pci_of /sys/block/nvme${k}n1/device/device))" $MRRS
+		"$(for p in $PORTS; do basename "$(readlink -f /sys/class/net/${PDEV[$p]}/device)"; done | sort | paste -sd ' ')"
+	local drv; drv=$(data_drives) || bad "data drives" "$drv" "$DATA_DRIVES"
+	for k in $drv; do
+		want "$k cache" "$(cat /sys/block/$k/queue/write_cache)" "write through"
+		want "$k PCIe MaxReadReq" "$(mrrs $(pci_of /sys/block/$k/device/device))" $MRRS
 	done
-	for k in a b; do
+	for k in $PORTS; do
 		want "${PDEV[$k]} PCIe MaxReadReq" "$(mrrs $(pci_of /sys/class/net/${PDEV[$k]}/device))" $MRRS
 	done
 	[ $mode = rest ] && want "NFS connections" "$(ss -Htn state established '( sport = :2049 )' | wc -l)" 0
@@ -418,9 +428,14 @@ audit() {
 place() {	# place [a] [b]: the CPU layout of nfsd and of the ports named (both)
 	local n p d c0 irq name q i m
 	n=$(pgrep -x nfsd | wc -l)
-	[ "$n" = $NFSD_THREADS ] || { echo "nfsd has $n threads, not $NFSD_THREADS: systemctl restart hammerspace-nfsd-tuning"; return 1; }
+	# Without hammerspace-nfsd-tuning (tardis2) the count is /etc/nfs.conf's,
+	# and is put back here; the pinning below is the same either way.
+	if [ "$n" != $NFSD_THREADS ] && [ "$n" != 0 ] && ! systemctl cat hammerspace-nfsd-tuning.service > /dev/null 2>&1; then
+		echo $NFSD_THREADS > /proc/fs/nfsd/threads; sleep 1; n=$(pgrep -x nfsd | wc -l)
+	fi
+	[ "$n" = $NFSD_THREADS ] || { echo "nfsd has $n threads, not $NFSD_THREADS: $(systemctl cat hammerspace-nfsd-tuning.service > /dev/null 2>&1 && echo systemctl restart hammerspace-nfsd-tuning || echo systemctl start nfs-server)"; return 1; }
 	for t in $(pgrep -x nfsd); do taskset -pc $NFSD_CPUSET $t > /dev/null; done
-	for p in ${*:-a b}; do
+	for p in ${*:-$PORTS}; do
 		d=${PDEV[$p]:?port a or b}; c0=${PCPU[$p]}
 		[ "$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')" = $RINGS ] ||
 			{ echo "$d does not have $RINGS rings: port-setup.sh (bringup.sh for port a on a fresh boot)"; return 1; }
@@ -456,6 +471,9 @@ apply() {	# the CPU layout, the resting module settings, and the audit
 		for k in "${!REST[@]}"; do
 			[ -w $SUNRPC/$k ] && [ "$(cat $SUNRPC/$k)" != "${REST[$k]}" ] && echo "${REST[$k]}" > $SUNRPC/$k
 		done
+		for k in "${!NFSD_DBG[@]}"; do
+			[ "$(cat /sys/kernel/debug/nfsd/$k 2>/dev/null)" = "${NFSD_DBG[$k]}" ] || echo "${NFSD_DBG[$k]}" > /sys/kernel/debug/nfsd/$k
+		done
 	else
 		echo "NFS connections are up: the sunrpc settings are left as they are"
 	fi
@@ -471,5 +489,5 @@ audit) audit "${2:?mode: rest, two, one or cell}" ;;
 apply) apply ;;
 place) shift; place "$@" ;;
 show)  show "${2:-rest}" ;;
-*)     sed -n '2,30p' "$0"; exit 2 ;;
+*)     sed -n '2,36p' "$0"; exit 2 ;;
 esac

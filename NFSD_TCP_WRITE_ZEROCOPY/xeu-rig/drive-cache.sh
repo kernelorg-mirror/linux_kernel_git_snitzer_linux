@@ -11,11 +11,15 @@
 #
 # Either way the data drives' autonomous power states are turned off, so
 # an idle drive does not go into a non-operational state between runs
-# (the same udev rule file does it at boot).
+# (the same udev rule file does it at boot).  The drives are common.sh's
+# data drives for this host, never its boot drive (nvme6 on tardis2).
+. "$(dirname "$0")/common.sh"
+DRV=$(data_drives) || exit 1
 case ${1:-through} in through) V="write through" ;; back) V="write back" ;; *) echo "usage: $0 [through|back]"; exit 1 ;; esac
-for d in nvme{0..7}n1 md0 md1; do
+for d in $DRV md0 md1; do
 	[ -e /sys/block/$d ] || continue	# the stripes, when there are any
 	echo "$V" > /sys/block/$d/queue/write_cache || exit 1
 done
-for c in nvme{0..7}; do echo 0 > /sys/class/nvme/$c/power/pm_qos_latency_tolerance_us; done
-for d in nvme{0..7}n1 md0 md1; do [ -e /sys/block/$d ] || continue; echo "$d: $(cat /sys/block/$d/queue/write_cache)$(case $d in nvme*) echo ", drive cache $(nvme get-feature /dev/${d%n1} -f 6 2>/dev/null | awk '{print $NF}'), autonomous power states $(nvme get-feature /dev/${d%n1} -f 0x0c 2>/dev/null | awk 'NR == 1 {print $NF}')";; esac)"; done
+# A drive without autonomous power states (DP800s, apsta 0) has no such control.
+for d in $DRV; do f=/sys/class/nvme/${d%n1}/power/pm_qos_latency_tolerance_us; [ -e $f ] && echo 0 > $f; done
+for d in $DRV md0 md1; do [ -e /sys/block/$d ] || continue; echo "$d: $(cat /sys/block/$d/queue/write_cache)$(case $d in nvme*) echo ", drive cache $(nvme get-feature /dev/${d%n1} -f 6 2>/dev/null | awk '{print $NF}'), autonomous power states $(nvme get-feature /dev/${d%n1} -f 0x0c 2>/dev/null | awk 'NR == 1 {print $NF}')";; esac)"; done

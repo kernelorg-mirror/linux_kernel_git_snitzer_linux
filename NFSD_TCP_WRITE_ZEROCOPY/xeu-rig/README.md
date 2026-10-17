@@ -1,3 +1,46 @@
+# tardis2: the second server, with SGL drives (17 October)
+
+tardis2 (`tardis2.perf.hammer.space`) is tardis1's twin: the same E1
+card (`enp161s0f0`, `enp164s0f0`), 64 Neoverse-N2 CPUs, a 16 KiB
+kernel (build 481), and the same client (plsm121c-06, reached at
+10.20.12.106 with `/root/.ssh/id_ed25519_snitzer2`). What differs:
+
+- **The drives.** Six data drives, each with its own XFS on `/hs/nvme0`
+  to `/hs/nvme5`: nvme0 to nvme3 are WD_BLACK SN8100 2 TB (no SGLs,
+  `virt_boundary_mask` 4095, 1 MiB transfers), and **nvme4 and nvme5
+  are DapuStor DP800 1.9 TB with SGLs** (dword alignment,
+  `virt_boundary_mask` 0, 256 KiB transfers of up to 65 segments, no
+  volatile write cache and no autonomous power states). nvme6 is the
+  boot drive and is never a data drive: `common.sh`'s `data_drives`
+  refuses one that holds a system filesystem, and the udev rule matches
+  by model. The `nvme` driver builds an SGL only for an average segment
+  of `sgl_threshold` (32768) or more.
+- **The addresses.** Port a is 192.168.1.213 (`common.sh` picks it by
+  host); management is `enaxsl1i0` (driver `xemi`) at 10.20.12.213.
+- **Port b is not cabled**: `PORTS=a` in `common.sh`'s host block, and
+  `settled.sh` audits and places port a only.
+- **No tuned and none of Hammerspace's services.** The sysctls are in
+  `/etc/sysctl.d/90-zc-settled.conf` (made from `settled.sh`'s table),
+  nfsd's 512 threads in `/etc/nfs.conf` (pinned by `settled.sh place`),
+  its 1 MiB `max_block_size` in the drop-in
+  `nfs-server.service.d/zc-max-block-size.conf`, irqbalance's
+  `--banmod=xeu` and banned CPUs 8-55 in `/etc/sysconfig/irqbalance`,
+  xeu's and sunrpc's settings in `/etc/modprobe.d/{xeu,sunrpc}.conf`,
+  port a's MTU 7792 in NetworkManager ("Wired connection 2"), and the
+  WD_BLACKs' write-through in `/etc/udev/rules.d/99-zc-write-through.rules`.
+- `perf` is not from dnf: Hammerspace's package needs a libLLVM no repo
+  has, and Rocky's is 6.12. `sparse` is in no enabled repo.
+- What was on nvme0 (thayne's `hke.git` and `ofe-*` files) is in
+  `/root/nvme0-backup-2026-10-17`; the root filesystem has about 8 GB
+  free after it.
+
+After a boot: `for n in 0 1 2 3 4 5; do mount -o noatime /dev/nvme${n}n1
+/hs/nvme$n; done`, then `./bringup.sh 32768 256`, then `./settled.sh
+apply`, which ended in "the settled setting" on 17 October. The
+scripts that name tardis1's addresses outright (`twoport.sh`,
+`iperf2port.sh`, `stall-watch-*.sh`) are not yet made to follow the
+host.
+
 # 15 October: the boot into the reworked tree — read this first
 
 Written late on 14 October, after Mike pushed
