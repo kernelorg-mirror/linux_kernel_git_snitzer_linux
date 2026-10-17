@@ -95,6 +95,37 @@ only, the wakeups; at 32 and 64 the loan still woke twelve times the
 threads of the copy, the cost of the wait and wake through the FIFO.
 Logs in `/var/tmp/zc-run-logs/tardis2-sgl-{loan16,loan32,loan64,copy}`.
 
+**A loan over drives of both kinds** (17 October, port a onto all six,
+`WRITES=64`, `WARM=10 RUNTIME=25`). The loan is decided as the record
+arrives, before nfsd knows its file, so every WRITE is loaned and each
+drive takes it as it can: the DP800s direct, the WD_BLACKs, whose
+`virt_boundary_mask` the loaned pieces do not meet, as one buffered
+dontcache write (`NFS_DIO_MEM_MISALIGNED` in `nfs_dio_split()`), a copy
+into the page cache. That is not copy mode for them, and no setting
+gives loan to some exports and copy to others.
+
+| | loan 64, six drives | copy, six drives | loan 64, the four WD_BLACKs |
+|---|---|---|---|
+| fio, GB/s | **19.72** | 44.93 | 38.30 |
+| WRITE segments direct / dontcache | 191408 / 466624 | 1503240 / 0 | 0 / 1277064 |
+| loans admitted / denied | 658032 / 1252655 | - | 1277064 / 2476 |
+| GB/s a drive, WD_BLACK / DP800 | 3.5 / 2.9 | 9.9 / 2.9 | 9.5 / - |
+| nfsd CPUs busy (8-55) | 9% | 24% | 59% |
+| ring drops, client retransmits | 19, 21 | 3, 3654 | 24324, 26307 |
+
+Mixed, the loan carries less than half the copy, and the reason is the
+budget, not dontcache: the WD_BLACKs alone take loaned WRITEs as
+dontcache at 9.5 GB/s each, but beside the DP800s they write 3.5. The
+budget and its FIFO are one for every connection; a loan bound for a
+DP800 holds its credit until the slow drive has it, and the FIFO puts
+every record after it behind it, so all six drives go at about the
+DP800s' pace (178 GB to each WD_BLACK, 146 to each DP800). Dontcache is
+not free either: on the WD_BLACKs alone it took 59% of nfsd's CPUs to
+the copy's 24% over six, with ring drops and retransmits the copy does
+not have. A loan for some storage beside a copy for the rest would need
+the choice made per export, or a budget that one slow device cannot
+fill for all. Logs in `/var/tmp/zc-run-logs/tardis2-{six-loan64,six-copy,wd-loan64}`.
+
 # 15 October: the boot into the reworked tree — read this first
 
 Written late on 14 October, after Mike pushed
