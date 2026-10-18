@@ -638,8 +638,23 @@ struct folio *iomap_get_folio(struct iomap_iter *iter, loff_t pos, size_t len)
 
 	if (iter->flags & IOMAP_NOWAIT)
 		fgp |= FGP_NOWAIT;
-	if (iter->flags & IOMAP_DONTCACHE)
+	if (iter->flags & IOMAP_DONTCACHE) {
+		size_t unit = mapping_min_folio_nrpages(iter->inode->i_mapping) <<
+			      PAGE_SHIFT;
+		size_t off = pos & (unit - 1);
+
 		fgp |= FGP_DONTCACHE;
+		/*
+		 * The smallest folio the mapping allows, a page or a block
+		 * where the block is larger, that this write covers only
+		 * partly is shared with a neighbouring write: get it as just
+		 * that, which is kept until the write that completes it.
+		 */
+		if (off || len < unit) {
+			fgp |= FGP_DONTCACHE_EDGE;
+			len = min_t(size_t, len, unit - off);
+		}
+	}
 	fgp |= fgf_set_order(len);
 
 	return __filemap_get_folio(iter->inode->i_mapping, pos >> PAGE_SHIFT,
