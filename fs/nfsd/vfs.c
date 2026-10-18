@@ -1395,9 +1395,7 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	 * flag so a direct overwrite can complete with FUA instead of a cache
 	 * flush.
 	 */
-	sync_flags = kiocb->ki_flags & (IOCB_DSYNC | IOCB_SYNC);
-	if (nsegs == 1)
-		sync_flags = 0;
+	sync_flags = nfs_dio_sync_flags(&split, kiocb->ki_flags);
 
 	*cnt = 0;
 	for (i = 0; i < nsegs; i++) {
