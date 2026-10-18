@@ -8,6 +8,7 @@
 #define _LINUX_NFS_DIO_H
 
 #include <linux/types.h>
+#include <linux/fs.h>
 #include <linux/uio.h>
 
 struct bio_vec;
@@ -75,6 +76,29 @@ struct nfs_dio_seg_hold {
 	size_t	first_len;	/* the segment's bytes in its first unit */
 	bool	complete_first, complete_last;
 };
+
+/**
+ * nfs_dio_sync_flags - the stability flags to persist a split write with once
+ * @split: how the write was split
+ * @iocb_flags: the write's kiocb flags
+ *
+ * A synchronous write that was split is persisted once, after all of its
+ * segments, rather than by each one: the caller strips the returned flags
+ * from every segment and syncs the bytes written afterwards.  An unsplit
+ * write keeps its flags: its one segment, direct or buffered, is persisted
+ * exactly once by the write itself, and a direct one can still complete a
+ * DATA_SYNC overwrite with FUA writes.
+ *
+ * Return: IOCB_DSYNC and IOCB_SYNC as set in @iocb_flags for a split write,
+ * 0 for an unsplit one.
+ */
+static inline int nfs_dio_sync_flags(const struct nfs_dio_split *split,
+				     int iocb_flags)
+{
+	if (split->nsegs == 1)
+		return 0;
+	return iocb_flags & (IOCB_DSYNC | IOCB_SYNC);
+}
 
 void nfs_dio_split(struct file *file, const struct nfs_dio_policy *policy,
 		   unsigned int direction, struct bio_vec *bvec,
