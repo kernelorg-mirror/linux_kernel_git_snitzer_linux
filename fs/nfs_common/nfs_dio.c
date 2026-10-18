@@ -8,7 +8,8 @@
  * misaligned start and end are buffered.  Those buffered pages may be marked
  * DONTCACHE so they are dropped once written back, but each is shared with
  * the neighbouring write and must not be dropped before both have written
- * it.  This is that logic, once, for both callers.
+ * it.  The page cache keeps it for the write that completes it; that write
+ * marks it here once complete.  This is that logic, once, for both callers.
  */
 #include <linux/module.h>
 #include <linux/fs.h>
@@ -63,104 +64,33 @@ nfs_dio_iter_aligned(const struct iov_iter *iter, u32 mem_align, u32 len_align)
 }
 
 /**
- * nfs_dio_boundary_claim - claim the page a boundary segment shares
- * @file: the file being written
- * @pos: any byte offset within the page
- *
- * The page holding a misaligned prefix or suffix is shared by exactly two
- * writes, the one ending in it and the one starting in it, which may arrive
- * in either order, from different clients, at the same time.  Put an empty
- * folio there if there is not one already: it is inserted unmarked, so
- * neither writer's DONTCACHE write marks it (a DONTCACHE write only marks a
- * folio it allocated itself) and it never enters WB_DONTCACHE_DIRTY, which
- * is what would otherwise arm the DONTCACHE writeback kick and have the
- * flusher write the page back, and drop it, between the two writes.
- *
- * The add is atomic, so of two concurrent partners exactly one gets the
- * folio.  If it cannot be allocated, or the mapping's folios are larger than
- * a page and so hold more than the shared page, the segment is an ordinary
- * DONTCACHE write and the page is dropped after writeback as before.
- *
- * Return: true if this write is the second of the two and must call
- * nfs_dio_boundary_complete() once its segment has been written.
- */
-bool nfs_dio_boundary_claim(struct file *file, loff_t pos)
-{
-	struct address_space *mapping = file->f_mapping;
-	pgoff_t index = pos >> PAGE_SHIFT;
-	gfp_t gfp = mapping_gfp_mask(mapping);
-	struct folio *folio;
-	int err;
-
-	if (mapping_min_folio_order(mapping))
-		return false;
-	if (mapping_can_writeback(mapping))
-		gfp |= __GFP_WRITE;
-	folio = filemap_alloc_folio(gfp, 0, NULL);
-	if (!folio)
-		return false;
-	err = filemap_add_folio(mapping, folio, index, gfp);
-	if (!err) {
-		/* First writer: the page is in place, waiting for the partner. */
-		folio_unlock(folio);
-		folio_put(folio);
-		return false;
-	}
-	folio_put(folio);
-	return err == -EEXIST;
-}
-EXPORT_SYMBOL_GPL(nfs_dio_boundary_claim);
-
-/**
- * nfs_dio_boundary_complete - mark a shared page both writers have written
- * @file: the file being written
- * @pos: any byte offset within the page
- *
- * The second writer's data is in the page: mark it so that the writeback
- * that cleans it drops it, the write's own sync if it has one, otherwise the
- * flusher or a later COMMIT.  The mark must follow the write: set while the
- * first writer's data is still dirty or under writeback, it would have that
- * writeback drop the folio before the second writer's data is in it.
- * folio_mark_dropbehind() accounts a dirty folio in WB_DONTCACHE_DIRTY, so
- * the clean that subtracts it leaves the counter balanced.
- */
-void nfs_dio_boundary_complete(struct file *file, loff_t pos)
-{
-	struct address_space *mapping = file->f_mapping;
-	struct folio *folio;
-
-	folio = __filemap_get_folio(mapping, pos >> PAGE_SHIFT,
-				    FGP_LOCK | FGP_DONTCACHE, 0);
-	if (IS_ERR(folio))
-		return;
-	folio_mark_dropbehind(folio);
-	folio_unlock(folio);
-	/* Already written back: drop it now, as its writeback would have. */
-	folio_end_dropbehind(folio);
-	folio_put(folio);
-}
-EXPORT_SYMBOL_GPL(nfs_dio_boundary_complete);
-
-/**
- * nfs_dio_seg_hold - claim the pages a segment shares, right before writing it
+ * nfs_dio_seg_hold - note the pages a segment shares, right before writing it
  * @file: the file being written
  * @seg: the segment about to be written
  * @pos: file offset the segment starts at
  * @len: bytes the segment will write
  * @hold: filled in for nfs_dio_seg_release()
  *
- * Claim the boundary page immediately before writing it, not when the write
- * is split.  Nothing is held across the write: the claim leaves the page in
- * the page cache unmarked, and claiming it earlier would give the partner
- * write the time a direct middle takes to complete the page and have it
- * dropped before this segment writes it.  A segment shares its first page
- * with the previous write if it does not start on a page boundary, and its
- * last page with the next one if it does not end on one; a page it covers
- * entirely is its own.  A segment within one page may share it with both.
+ * A segment shares its first page with the previous write if it does not
+ * start on a page boundary, and its last page with the next one if it does
+ * not end on one; a page it covers entirely is its own.  A segment within one
+ * page may share it with both.  Such a page is shared by exactly two writes,
+ * which may arrive in either order, from different clients, at the same time.
+ * The page cache keeps it, unmarked, for the write that completes it; the
+ * segment is issued IOCB_DONTCACHE_DEFER so that this write, not the page
+ * cache, marks it, and only once the whole write, its sync included, is
+ * complete (nfs_dio_seg_release()).
+ *
+ * Ask whether the neighbour has written its part immediately before writing
+ * the page, not when the write is split: asking earlier would give the
+ * neighbour the time a direct middle takes to write its part and find this
+ * write's part missing.  Nothing is held across the write.
  */
 void nfs_dio_seg_hold(struct file *file, const struct nfs_dio_seg *seg,
 		      loff_t pos, size_t len, struct nfs_dio_seg_hold *hold)
 {
+	struct address_space *mapping = file->f_mapping;
+
 	hold->first = pos;
 	hold->last = pos + len - 1;
 	hold->complete_first = false;
@@ -173,10 +103,10 @@ void nfs_dio_seg_hold(struct file *file, const struct nfs_dio_seg *seg,
 
 		if (head || (one_page && tail))
 			hold->complete_first =
-				nfs_dio_boundary_claim(file, hold->first);
+				filemap_dontcache_edge_completes(mapping, hold->first);
 		if (!one_page && tail)
 			hold->complete_last =
-				nfs_dio_boundary_claim(file, hold->last);
+				filemap_dontcache_edge_completes(mapping, hold->last);
 	}
 }
 EXPORT_SYMBOL_GPL(nfs_dio_seg_hold);
@@ -196,10 +126,12 @@ EXPORT_SYMBOL_GPL(nfs_dio_seg_hold);
 void nfs_dio_seg_release(struct file *file, const struct nfs_dio_seg_hold *hold,
 			 size_t written)
 {
+	struct address_space *mapping = file->f_mapping;
+
 	if (hold->complete_first && written)
-		nfs_dio_boundary_complete(file, hold->first);
+		filemap_dontcache_edge_complete(mapping, hold->first);
 	if (hold->complete_last && written == hold->last - hold->first + 1)
-		nfs_dio_boundary_complete(file, hold->last);
+		filemap_dontcache_edge_complete(mapping, hold->last);
 }
 EXPORT_SYMBOL_GPL(nfs_dio_seg_release);
 
@@ -248,9 +180,13 @@ void nfs_dio_split(struct file *file, const struct nfs_dio_policy *policy,
 	if (direction == ITER_SOURCE &&
 	    file->f_op->fop_flags & FOP_DONTCACHE)
 		dontcache_flags = IOCB_DONTCACHE;
-	/* Buffered segments follow the policy; the direct middle does not. */
-	if (policy->dontcache)
-		buffered_flags = dontcache_flags;
+	/*
+	 * Buffered segments follow the policy; the direct middle does not.
+	 * Their shared pages are completed here (IOCB_DONTCACHE_DEFER), after
+	 * the write's sync, rather than by the page cache while still dirty.
+	 */
+	if (policy->dontcache && dontcache_flags)
+		buffered_flags = dontcache_flags | IOCB_DONTCACHE_DEFER;
 
 	/*
 	 * If the file system doesn't advertise any alignment requirements,

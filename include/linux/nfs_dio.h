@@ -94,8 +94,6 @@ void nfs_dio_split(struct file *file, const struct nfs_dio_policy *policy,
 		   unsigned int direction, struct bio_vec *bvec,
 		   unsigned int nvecs, loff_t pos, unsigned long total,
 		   int iocb_flags, struct nfs_dio_split *split);
-bool nfs_dio_boundary_claim(struct file *file, loff_t pos);
-void nfs_dio_boundary_complete(struct file *file, loff_t pos);
 void nfs_dio_seg_hold(struct file *file, const struct nfs_dio_seg *seg,
 		      loff_t pos, size_t len, struct nfs_dio_seg_hold *hold);
 void nfs_dio_seg_release(struct file *file, const struct nfs_dio_seg_hold *hold,
