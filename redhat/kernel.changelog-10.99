@@ -1,3 +1,9 @@
+* Sun Oct 18 2026 Mike Snitzer <snitzer@kernel.org> [7.3-6]
+- Rebase all branches on Linux v7.3
+- Drop Pavankumar Kondeti's "workqueue: Fix NULL current_pwq deref in
+  mem-reclaim helper" from snitzer-nfs-fixes-canary: v7.3 has it, as
+  Tejun Heo took it upstream
+
 * Sun Oct 18 2026 Mike Snitzer <snitzer@kernel.org> [7.3-5]
 - Update nfsd-testing with the 6 NFSD direct-mode patches Chuck Lever
   applied to cel/nfsd-testing from the v4 posting, each cherry-picked
