@@ -47,10 +47,10 @@
 static const struct vm_operations_struct nfs_file_vm_ops;
 
 /* Sampled at open: an open file keeps the FMODE_NOWAIT it was given. */
-static bool nfs_nowait_writable = true;
+static bool nfs_nowait_writable = false;
 module_param_named(nowait_writable, nfs_nowait_writable, bool, 0644);
 MODULE_PARM_DESC(nowait_writable,
-		 "Allow io_uring NOWAIT direct writes on writable NFSv3 files (applies to new opens)");
+		 "Allow io_uring NOWAIT direct writes on writable NFSv3 files (default N; applies to new opens)");
 
 int nfs_check_flags(int flags)
 {
