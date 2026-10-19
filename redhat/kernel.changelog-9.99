@@ -1,3 +1,26 @@
+* Sun Oct 18 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-2]
+- NFSD: in nfsd-testing-canary-dontcache, replace this topic's copies of
+  v4 1/10-6/10 of the NFSD direct-mode series with the 6 patches Chuck
+  Lever applied to cel/nfsd-testing, each cherry-picked with -x from his
+  commit, right above the 6.12 prerequisites.  His versions compute a
+  misaligned WRITE's cut once with IS_ALIGNED(), so a WRITE ending at
+  OFFSET_MAX cannot wrap, and let every unsplit WRITE keep IOCB_DSYNC
+- Rebase the rest of nfsd-testing-canary-dontcache on them as v5 of the
+  series: the page cache now keeps the page an uncached write covers only
+  partly until the write that completes it ("mm, iomap: keep a partly
+  covered page until an uncached write completes it"), and lets a writer
+  that syncs its own write complete those pages after the sync ("mm,
+  iomap: let an uncached writer complete its shared pages itself").
+  "NFSD: drop a shared boundary page only once both WRITEs have written
+  it" replaces v4's 9/10: NFSD no longer inserts a folio of its own, which
+  also closes the window in which two WRITEs arriving together could have
+  the shared page dropped before the second had written it
+- Rebuild nfsd-testing-canary-dontcache-LOCALIO on it: nfs_common now
+  carries Chuck's version of the split, completes shared pages through the
+  page cache helpers, and shares the persist-once rule with NFSD as
+  nfs_dio_sync_flags(), so an unsplit LOCALIO write now keeps its
+  stability flags as NFSD's does
+
 * Fri Oct 16 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-1]
 - Rebase all branches on kernel-6.12.113-0; no topic commit landed in
   6.12.112 or 6.12.113, and none needed changing
