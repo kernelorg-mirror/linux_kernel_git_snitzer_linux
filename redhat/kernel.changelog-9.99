@@ -1,3 +1,25 @@
+* Tue Oct 20 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-3]
+- Add nfsd-testing, built on nfsd-next as on the 7.3 line: Chuck Lever's
+  cel/nfsd-testing commits, each cherry-picked with -x. "nfsd: use direct
+  I/O only for the last operation in a COMPOUND" and "SUNRPC: preserve
+  RQ_SECURE across request deferral" move there from nfsd-testing-canary,
+  and his NFSD direct-mode patches from nfsd-testing-canary-dontcache,
+  with the three cel/nfsd-next commits they need. nfsd-testing-canary
+  keeps the 4 svcrdma send context commits and builds on nfsd-testing
+- In nfsd-testing, "NFSD: add tracing for how direct-mode READ and WRITE
+  are serviced" is the copy Chuck Lever applied from the v6 posting: the
+  per-I/O events test the kiocb flags in TP_CONDITION(), only while
+  enabled (Jeff Layton), and one event per direct-mode READ and WRITE
+  decision (nfsd_read_dio_* and nfsd_write_dio_*) replaces
+  nfsd_write_dio_split, its disposition and dontcache fields; the WRITE
+  events now fire in every io_cache_write mode, and the memory offset
+  reported is the one the alignment test checks (Chuck Lever); with Jeff
+  Layton's Reviewed-by
+- Rebase nfsd-testing-canary-dontcache on nfsd-testing-canary
+- Rebase nfsd-testing-canary-dontcache-LOCALIO on it: nfsd reports
+  nfs_dio_split()'s decision with the per-outcome events, and
+  nfs_dio_split() records the memory offset it tested
+
 * Sun Oct 18 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-2]
 - NFSD: in nfsd-testing-canary-dontcache, replace this topic's copies of
   v4 1/10-6/10 of the NFSD direct-mode series with the 6 patches Chuck
