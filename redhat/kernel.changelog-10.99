@@ -1,3 +1,21 @@
+* Tue Oct 20 2026 Mike Snitzer <snitzer@kernel.org> [7.3-7]
+- Update nfsd-testing with "NFSD: add tracing for how direct-mode READ
+  and WRITE are serviced", which Chuck Lever applied to cel/nfsd-testing
+  from the v6 posting, cherry-picked with -x from his commit, in place of
+  nfsd-testing-canary-dontcache's copy: the per-I/O events test the kiocb
+  flags in TP_CONDITION(), only while enabled (Jeff Layton), and one
+  event per direct-mode READ and WRITE decision (nfsd_read_dio_* and
+  nfsd_write_dio_*) replaces nfsd_write_dio_split, its disposition and
+  dontcache fields; the WRITE events now fire in every io_cache_write
+  mode, and the memory offset reported is the one the alignment test
+  checks (Chuck Lever); with Jeff Layton's Reviewed-by
+- Rebase nfsd-testing-canary-dontcache on it
+- Rebase nfsd-testing-canary-dontcache-LOCALIO on it: nfsd reports
+  nfs_dio_split()'s decision with the per-outcome events, and
+  nfs_dio_split() records the memory offset it tested
+- Redo the reduce-i_lock-contention-LOCALIO merge on the rebased LOCALIO
+  topic
+
 * Sun Oct 18 2026 Mike Snitzer <snitzer@kernel.org> [7.3-6]
 - Rebase all branches on Linux v7.3
 - Drop Pavankumar Kondeti's "workqueue: Fix NULL current_pwq deref in
