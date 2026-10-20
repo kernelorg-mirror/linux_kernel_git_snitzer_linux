@@ -1,3 +1,29 @@
+* Thu Oct 22 2026 Mike Snitzer <snitzer@kernel.org> [7.3-8]
+- Rename nfsd-next to nfsd-7.4: it carries all of Chuck Lever's
+  nfsd-7.4 tag, his v7.4 merge window pull, that the baseline lacks
+- Point the -x references of "nfsd: use direct I/O only for the last
+  operation in a COMPOUND" and "SUNRPC: preserve RQ_SECURE across
+  request deferral" in nfsd-testing at the commits cel/nfsd-testing now
+  carries; no code change
+- Update nfsd-testing-canary-dontcache to v8 of the series
+  (https://lore.kernel.org/linux-nfs/20261023024548.71123-1-snitzer@kernel.org/):
+  "NFSD: cut a misaligned direct-mode WRITE at the mapping's smallest
+  folio" is new, so where the smallest folio is a block larger than a
+  page the direct middle and a buffered end no longer share a block;
+  so is "mm: take a folio off WB_DONTCACHE_DIRTY only if it was counted
+  there"; folio_mark_dropbehind() tests the dirty tag rather than
+  PG_dirty, so a folio marked as it is dirtied is not counted twice; the
+  edge kept for the write that completes it is the smallest folio the
+  mapping allows, both in iomap's test and in what is marked, and an
+  edge already clean is dropped before the folio lock is released; and
+  "mm: expose WB_DONTCACHE_DIRTY in bdi debugfs stats" has Jeff Layton's
+  Reviewed-by
+- Rebase nfsd-testing-canary-dontcache-LOCALIO on it: nfs_dio_split()
+  cuts a misaligned write at the mapping's smallest folio, as NFSD does,
+  so LOCALIO direct writes get the same cut
+- Redo the reduce-i_lock-contention-LOCALIO merge on the rebased LOCALIO
+  topic
+
 * Tue Oct 20 2026 Mike Snitzer <snitzer@kernel.org> [7.3-7]
 - Update nfsd-testing with "NFSD: add tracing for how direct-mode READ
   and WRITE are serviced", which Chuck Lever applied to cel/nfsd-testing
