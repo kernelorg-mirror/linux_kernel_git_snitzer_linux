@@ -16,7 +16,10 @@ says so. This overrides what the two entries below say about keeping
 the branches in step and about where development is done.
 
 - **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` is the branch to work on**:
-  the series on the public `kernel-7.3/main`, rebased 2026-10-14 onto
+  the series on the public `kernel-7.3/main`, rebased 2026-10-20 onto
+  **`v7.3-7`** (`git rebase --onto v7.3-7 v7.3-3`, two conflicts resolved
+  by hand, see `NFSD_TCP_WRITE_ZEROCOPY/README.md`; the tip before is
+  `.pre-rebase-v7.3-7`), and before that 2026-10-14 onto
   **`v7.3-3`** (after `v7.3-rc7`), laid out as code, then KUnit interface, then
   KUnit tests, then docs. `v7.3-3` already carries 15 of the series'
   commits (the TLS control-record and alert fixes, the nfsd session-slot
