@@ -19,6 +19,50 @@ reproduction instructions for the "page-loan" patch series.
 > collapse geometry itself could not be forced on loopback, so an end-to-end
 > reproduction on a real NIC is still outstanding.
 >
+> **Branch state (2026-10-20):** rebased onto **`v7.3-7`**
+> (`git rebase --onto v7.3-7 v7.3-3`: `kernel-7.3/main` is rebuilt each
+> release, so `v7.3-3` is not an ancestor of `v7.3-7`). All 488 commits
+> replayed in place, still code, KUnit interface, KUnit tests, docs
+> (`transplant/check-grouping.sh v7.3-7` passes); `git cherry` finds none
+> of them in `v7.3-7`. Two conflicts were resolved by hand, both against
+> the NFSD DIRECT tracing and stable-write changes `v7.3-7` carries:
+> "nfs_common: require interior payload gaps to be logical-block aligned"
+> keeps the base's `mem_offset` for the trace event beside the renamed
+> `nfs_dio_iter_aligned_and_splittable()`; "NFSD: Release a WRITE's
+> receive loan once the data is in the page cache" sits on the base's
+> by-value `iocb_flags` (`wr_how_written` is now set before
+> `nfsd_vfs_write()`), and its sync handling comes after the base's
+> buffered/DONTCACHE trace events, so they still show the flags the
+> client asked for. `git range-diff` shows two more commits with
+> context-only changes ("SUNRPC: Lend TCP receive pages to eligible RPC
+> calls", "nfs_common: test direct I/O payload gaps against the segment
+> boundary"); every other commit is unchanged. One semantic conflict
+> showed only in the build: `v7.3-7`'s `fs/nfsd/trace.h` no longer
+> includes `<linux/nfs_dio.h>` (the base's shared-helpers commit dropped
+> it), so "NFSD: Split direct writes by the device's segment boundary",
+> whose `nfsd_file_get_dio_attrs` calls `nfs_dio_joint_boundary()`, now
+> adds that include itself. The series' tracepoints follow the base's
+> per-outcome `nfsd_write_dio_*` events, with one more (Mike): "nfs_common:
+> require interior payload gaps to be logical-block aligned" now reports a
+> payload refused for an interior gap off an `offset_align` multiple as its
+> own disposition, `NFS_DIO_GAP_MISALIGNED`, traced as
+> `nfsd_write_dio_gap_misaligned` (it was `nfsd_write_dio_mem_misaligned`,
+> with an aligned `mem_offset`), and LOCALIO reports it through
+> `nfs_local_dio_misaligned`; "nfsd: test the disposition of a refused
+> direct write in the receive-bvec KUnit suite", at the end of the KUnit
+> tests, checks it. Every code and KUnit commit (78)
+> was built in turn at 16 KiB with `CONFIG_WERROR=y` and sparse
+> (`fs/nfsd/ fs/nfs_common/ net/sunrpc/ net/core/ net/ipv4/ block/
+> fs/xfs/ drivers/block/ fs/`), and the tip in full: no failure, and no
+> sparse warning on a line the series adds (commits 12 to 21 again,
+> with `fs/nfs/`, after the gap disposition was folded into 12). Not yet
+> run on `v7.3-7`: KUnit (no KVM on this host; the new test's five cases
+> were checked against the helper compiled in userspace at 4, 16 and
+> 64 KiB pages) and the runtime harness. The tip before the rebase
+> is kept as `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-rebase-v7.3-7`
+> (= `hs-gitlab` `26c5cdcd549a`); the stale local branch of 15 October as
+> `….local-20261015`.
+>
 > **Branch state (2026-10-14):** the series is on
 > **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`**, rebased onto **`v7.3-3`**
 > (`kernel-7.3/main`, after 7.3-rc7) with `git cherry` dropping the 15
