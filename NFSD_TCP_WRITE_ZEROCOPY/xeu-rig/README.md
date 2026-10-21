@@ -145,7 +145,12 @@ from the sections after it, it is right. The rebase itself is told in
 `v7.3-3` on hs-gitlab (build 479 came from it). Fetch, and
 commit at the tip of `…-v7.3-7`; `../transplant/check-grouping.sh
 hs-gitlab/kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-v7.3-7` before
-handing back.
+handing back. The remote's name is the tree's: on tardis1 hs-gitlab is
+`origin` (gitlab refused root's key there on 20 October), and
+`check-grouping.sh v7.3-7` takes the tag, which the `snitzer` remote
+carries. The `….pre-rebase-v7.3-7` branch is only in the tree the
+rebase was done in; on tardis1 the same commit is
+`origin/kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`.
 
 ## What changed since build 479
 
@@ -201,14 +206,22 @@ none of the dropped ones).
    reads on this host: trim the eight drives first (`fstrim -v
    /hs/nvmeN`, about 1 s each), `WARM=10 RUNTIME=30 REST=120`, and the
    client idle (`uptime`; no `logperf` or `fio` on 10.20.12.106).
-   479's clean runs: two ports **58.58** GB/s, one port a 45.88 and
-   47.42, one port b 46.34 to 47.80; 2.19 to 2.23 and 1.43 to 1.50
-   bytes through memory for each byte. Read `drives.txt` of every run
-   and leave out a run a drive stepped down in.
+   479's clean runs: two ports **56.86 to 58.58** GB/s (58.04, 58.58,
+   58.27, 56.86), one port a 45.88 and 47.42, one port b 46.34 to
+   47.80; 2.19 to 2.28 and 1.43 to 1.50 bytes through memory for each
+   byte. Read `drives.txt` of every run and leave out a run a drive
+   stepped down in. Even after a trim, the third two-port run in a row
+   had drives step down in all three trimmed sets on 479 (abt-3,
+   abs-3, abh-3): count on two clean runs a trim.
 5. **The outcomes, counted**: with `bpftrace -e
    'tracepoint:nfsd:nfsd_write_dio_* { @[probe] = count(); }'` beside
-   one copy run of step 4 and one loan run (a cell of `16k-42` through
-   `sweep.sh`, as on 473 and 474), each loaded at idle first. Copy
+   one copy run of step 4 and one loan run, each loaded at idle first.
+   The loan run is a `prp` cell through `sweep.sh` (`256 1048576 8 prp
+   step-on-n16`, onto nvme0's export), with the same environment as the
+   `16k-42` runs on 473 and 474: every cell of `16k-42` is `sgl`, onto
+   the NVMe/TCP target, which takes arbitrary pieces, so its loans are
+   written direct and show neither refusal. One `sgl` cell beside it is
+   the control. `$L/b491/battery.sh` runs both. Copy
    mode receives each record into contiguous pages, so it should show
    no `gap_misaligned`. A loaned WRITE's fragments end where its
    frames did, and these drives are PRP-only (`virt_boundary_mask`
@@ -639,10 +652,9 @@ Read `drives.txt` of every run. If the drives step down as they did on
 15 October, trim them, or run without nvme2 and nvme3, before reading a
 rate.
 
-Still Mike's to decide, after these: the A/Bs proposed in step 6 of
-`../CODE-SERIES.md` for the two settings in use that were never
-measured on their own, `svc_tcp_rx_keep` and the 50 us linger on one
-port.
+The A/Bs once proposed here for `svc_tcp_rx_keep` and the 50 us linger
+were run on the evening of 15 October, and both were dropped from the
+series ("15 October, evening: keep and the linger, each on and off").
 
 ## Build 479: the next kernel, one pool and everything built in (16 October)
 
@@ -712,15 +724,36 @@ log's.
   the run refused (`$L/b479/trim-ab.refused.log`). Check the client
   is idle (`uptime`, no `logperf` or `fio`) before a battery.
 
+**The harness after the tardis2 changes** (`b63b4018afd1`: the scripts
+follow the host, `client_free`, the WRITE segment counts, `WRITES=`),
+re-checked on 479 on tardis1, `$L/b479/harness-ab.sh` and its `.log`:
+the drives trimmed, then three two-port runs at `WARM=10 RUNTIME=30
+REST=120`, then the KUnit suites.
+
+- **The harness works here**: `client_free` passed before each run,
+  every audit came back at the run's setting, and after each run the
+  loan budget was back at 0 and the nfsd tracepoint histograms were
+  gone. Every WRITE segment was written direct (abh-1 2,221,424,
+  abh-2 2,213,096; none dontcache or buffered).
+- **Two ports**: 58.27 and 56.86 GB/s with no drive stepped down
+  (ports 29.58 + 28.69 and 28.26 + 28.60; 2.23 and 2.28 bytes through
+  memory for each byte), then 42.92 in abh-3 with three of port b's
+  drives stepping down at 30 to 34 s. With 58.04 and 58.58 before,
+  479 has four clean two-port runs, 56.86 to 58.58: about 2% under
+  474's 59.18 to 59.76, steadily, though not established.
+- **KUnit**: 7, 48, 6 and 10 cases, no failure, no skip
+  (`$L/kunit-479-harness.log`); the server and the settled setting
+  put back.
+
 ## Still Mike's to decide
 
-Dropping the stacking device's DMA alignment, veth's `rx_ip_align`
-and the last code commit ("SUNRPC: Optionally copy TCP record data
-outside the socket lock"; the case is in `../CODE-SERIES.md`, step 4);
-the page_pool region's future upstream. Do not act on these unasked,
-nor on anything step 6 of `../CODE-SERIES.md` lists: it is a survey,
-not a decision. (Several thread pools per NUMA node was dropped on 15
-October, on Mike's word.)
+Dropping the stacking device's DMA alignment (the loan harness's
+dm-delay needs it), and the page_pool region's future upstream. Do not
+act on these unasked, nor on anything step 6 of `../CODE-SERIES.md`
+lists: it is a survey, not a decision. On 15 October, on Mike's word,
+six were dropped: several thread pools per NUMA node, the copy outside
+the socket lock, the SO_RCVLOWAT mark, veth's `rx_ip_align`, the
+linger and keep (`../patches/dropped/`).
 Ronaldo's author address is settled: his twelve commits carry
 `ronaldo@slipstream-io.com` since 15 October.
 
