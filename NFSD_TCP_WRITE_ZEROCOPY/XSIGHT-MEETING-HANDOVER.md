@@ -130,3 +130,17 @@ direct (280,416 and 280,000, none refused); nfsd's CPUs 12% against 1
 to 2%. The rate is the drives' either way. This is the evidence that
 the patch is about the storage DMA, which Xsight rejected as a CPU
 matter.
+
+## Done: the summary (21 October)
+
+**"E1 Receive Path Review"**, https://claude.ai/artifact/6vKBdarieHfEMB8kid3w2x,
+source `artifacts/e1-receive-review.html`. Private: Mike shares it. One
+page in the two artifacts' style: the card at line rate and the
+server's copy as the two-port limit (the DRAM correction), the loan in
+outline, X3 as the strongest result, then the seven points with their
+evidence (receive pad, FIFO and memory, pause, deferral, hash,
+interrupt placement, refill threshold), what Xsight agreed to, and the
+seven patches and two scripts. No host names, build numbers, paths,
+links or branding; Xsight's people only as they know themselves (Don).
+The "v7.3-7 Not Upstream" inventory was not refreshed for it: the page
+does not quote it.

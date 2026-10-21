@@ -1,0 +1,337 @@
+<title>E1 Receive Path Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@85,500..750&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root {
+    --ground: #eef1f4; --surface: #ffffff; --surface-2: #f6f8fa;
+    --ink: #16202a; --ink-soft: #33434f; --muted: #5a6b78;
+    --hair: #dce3e9;
+    --accent: #1f5c8b; --accent-soft: #e4eef5;
+    --cost: #b6431f; --cost-soft: #f7e6df;
+    --gain: #12735d; --gain-soft: #dcefe8;
+    --shadow: 0 1px 2px rgba(22,32,42,.05), 0 8px 24px -12px rgba(22,32,42,.14);
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --disp: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground: #0b1218; --surface: #121c24; --surface-2: #0e1720;
+      --ink: #e7eef4; --ink-soft: #c3d0da; --muted: #90a1ae;
+      --hair: #24333f;
+      --accent: #5ba3d6; --accent-soft: #16303f;
+      --cost: #e08a63; --cost-soft: #3a2015;
+      --gain: #4bbb9a; --gain-soft: #10302a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #0b1218; --surface: #121c24; --surface-2: #0e1720;
+    --ink: #e7eef4; --ink-soft: #c3d0da; --muted: #90a1ae;
+    --hair: #24333f;
+    --accent: #5ba3d6; --accent-soft: #16303f;
+    --cost: #e08a63; --cost-soft: #3a2015;
+    --gain: #4bbb9a; --gain-soft: #10302a;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--sans); font-size: 17px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; padding-inline: 24px; }
+  @media (max-width: 480px) { .wrap { padding-inline: 16px; } }
+  header { padding-block: 52px 34px; }
+  section { padding-block: 36px; border-top: 1px solid var(--hair); }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 14px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: currentColor; flex: 0 0 auto; }
+  .eyebrow.ok { color: var(--gain); }
+  .eyebrow.hot { color: var(--cost); }
+  h1 {
+    font-family: var(--disp); font-weight: 720; font-stretch: 85%;
+    font-size: clamp(30px, 6vw, 46px); line-height: 1.05;
+    letter-spacing: -.015em; text-wrap: balance; margin: 0 0 18px;
+  }
+  h1 .ok { color: var(--gain); display: block; }
+  h2 {
+    font-family: var(--disp); font-weight: 680; font-stretch: 87%;
+    font-size: clamp(22px, 4vw, 28px); line-height: 1.14;
+    letter-spacing: -.01em; text-wrap: balance; margin: 0 0 14px;
+  }
+  h3 { font-family: var(--disp); font-weight: 650; font-stretch: 90%; font-size: 18.5px; margin: 0 0 6px; text-wrap: balance; }
+  p { margin: 0 0 14px; color: var(--ink-soft); }
+  p:last-child { margin-bottom: 0; }
+  strong { color: var(--ink); font-weight: 640; }
+  code {
+    font-family: var(--mono); font-size: .84em; background: var(--surface-2);
+    border: 1px solid var(--hair); padding: .06em .36em; border-radius: 4px;
+    color: var(--ink); overflow-wrap: anywhere;
+  }
+  .lede { font-size: 19.5px; line-height: 1.5; color: var(--ink); }
+  .note { font-size: 14.5px; color: var(--muted); }
+
+  .metrics {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    background: var(--hair); border: 1px solid var(--hair);
+    border-radius: 10px; overflow: hidden; margin-top: 26px;
+  }
+  .metric { background: var(--surface); padding: 16px 15px; }
+  .metric .n {
+    font-family: var(--mono); font-size: clamp(19px, 4vw, 25px); font-weight: 600;
+    letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  .metric .n.gain { color: var(--gain); }
+  .metric .n.cost { color: var(--cost); }
+  .metric .l {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted); margin-top: 9px; line-height: 1.4;
+  }
+  @media (max-width: 600px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--hair); border-radius: 10px; margin: 8px 0 14px; background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; min-width: 520px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--hair); vertical-align: top; }
+  thead th { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); font-weight: 600; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; color: var(--ink); }
+  td.g { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; color: var(--gain); font-weight: 600; }
+  td.x { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; color: var(--cost); font-weight: 600; }
+  td.sub { padding-left: 28px; color: var(--muted); }
+
+  .verdict {
+    background: var(--surface); border: 1px solid var(--hair);
+    border-left: 4px solid var(--accent); border-radius: 10px;
+    padding: 22px 24px; box-shadow: var(--shadow); margin: 6px 0 18px;
+  }
+  .verdict.gain { border-left-color: var(--gain); }
+  @media (max-width: 480px) { .verdict { padding: 18px 16px; } }
+  .verdict .big {
+    font-family: var(--disp); font-weight: 700; font-stretch: 87%;
+    font-size: clamp(18.5px, 3.2vw, 22px); line-height: 1.3; color: var(--ink);
+    margin: 0 0 10px; text-wrap: balance;
+  }
+
+  .ask { padding-block: 22px; border-top: 1px solid var(--hair); }
+  .ask:first-of-type { border-top: none; padding-top: 6px; }
+  .ask .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 8px; }
+  .ask .head h3 { margin: 0; }
+  .q {
+    background: var(--accent-soft); border-radius: 8px; padding: 12px 15px;
+    color: var(--ink); font-size: 15.5px; margin: 10px 0 0;
+  }
+  .q b { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 3px; font-weight: 600; }
+  .pill {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .05em;
+    text-transform: uppercase; padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid currentColor;
+  }
+  .pill.need { color: var(--cost); background: var(--cost-soft); }
+  .pill.offer { color: var(--gain); background: var(--gain-soft); }
+  .pill.info { color: var(--accent); background: var(--accent-soft); }
+
+  .list { display: grid; gap: 1px; background: var(--hair); border: 1px solid var(--hair); border-radius: 10px; overflow: hidden; margin: 8px 0 14px; }
+  .row { display: grid; grid-template-columns: 1fr auto; gap: 14px; background: var(--surface); padding: 12px 16px; align-items: center; font-size: 15.5px; color: var(--ink-soft); }
+  .row strong { display: block; }
+  @media (max-width: 520px) { .row { grid-template-columns: 1fr; gap: 6px; } }
+
+  .path { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 10px 0 16px; }
+  @media (max-width: 640px) { .path { grid-template-columns: 1fr; } }
+  .kind { background: var(--surface); border: 1px solid var(--hair); border-top: 3px solid var(--cost); border-radius: 10px; padding: 16px 18px; min-width: 0; }
+  .kind.b { border-top-color: var(--gain); }
+  .kind .who { font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+  .kind ol { margin: 0; padding-left: 1.2em; font-size: 15.5px; color: var(--ink-soft); }
+  .kind ol li { margin-bottom: 4px; }
+  .kind .cost { font-family: var(--mono); font-size: 12.5px; color: var(--ink); background: var(--surface-2); border: 1px solid var(--hair); border-radius: 7px; padding: 8px 10px; margin-top: 10px; }
+
+  ul.files { margin: 6px 0 0; padding-left: 1.1em; color: var(--ink-soft); font-size: 15.5px; }
+  ul.files li { margin-bottom: 4px; }
+  footer { padding-block: 30px 56px; border-top: 1px solid var(--hair); font-family: var(--mono); font-size: 12px; color: var(--muted); line-height: 1.7; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">E1 receive path &middot; NFS writes on an arm64 server &middot; 21 October 2026</p>
+    <h1>The card carries line rate on both ports.<span class="ok">What holds NFS back is the server's copy, and the loan removes it.</span></h1>
+    <p class="lede">An NFS server on an E1 takes 47.8 GB/s of durable writes from one client on one port and 60.4 GB/s on two, copying each write once on arrival. The card itself carries both ports at line rate when nothing is copied. This page sets out what we measured since your two replies, what we would like from you, and what we can give back.</p>
+    <div class="metrics">
+      <div class="metric"><div class="n gain">49.8</div><div class="l">GB/s plain TCP, one port, no copy</div></div>
+      <div class="metric"><div class="n gain">98&ndash;99.6</div><div class="l">GB/s plain TCP, both ports, no copy</div></div>
+      <div class="metric"><div class="n">60.4</div><div class="l">GB/s NFS writes, both ports, copied once</div></div>
+      <div class="metric"><div class="n cost">2.2</div><div class="l">bytes of server DRAM traffic for each byte copied</div></div>
+    </div>
+  </header>
+
+  <section>
+    <p class="eyebrow">Where the two ports stand</p>
+    <h2>The two-port limit is the server's memory, not the card</h2>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Load, 16 TCP connections a port from one client</th><th>One port</th><th>Both ports</th></tr></thead>
+      <tbody>
+        <tr><td>Plain TCP, receivers discard without copying</td><td class="g">49.8 GB/s</td><td class="g">98.0&ndash;99.6 GB/s</td></tr>
+        <tr><td>Plain TCP, receivers copy into a small buffer</td><td class="n">49.8 GB/s</td><td class="n">83&ndash;90 GB/s</td></tr>
+        <tr><td>NFS writes, copied once, written to NVMe</td><td class="n">47.8 GB/s</td><td class="x">60.4 GB/s</td></tr>
+      </tbody>
+    </table></div>
+    <p>Our server copies each write out of the receive buffers once. Each copied byte costs about 2.2 bytes of traffic to the server's DRAM, so 60 GB/s of NFS is about 131 GB/s of memory traffic. That is close to what a bare memory-to-memory copy reaches on this server (62 to 68 GB/s). <strong>This is the server's DRAM, not the E1's</strong>; there is nothing to look for on the card here.</p>
+    <p>The way past it is not to copy. That is the receive-page loan: the server hands the received pages themselves to the storage.</p>
+    <div class="path">
+      <div class="kind">
+        <p class="who">Copy</p>
+        <ol>
+          <li>The card writes frames into receive pages.</li>
+          <li>The server copies the write's data out.</li>
+          <li>The receive pages go back to the card.</li>
+          <li>The copy is written to the drives.</li>
+        </ol>
+        <div class="cost">about 2.2 bytes of DRAM traffic for each byte</div>
+      </div>
+      <div class="kind b">
+        <p class="who">Loan</p>
+        <ol>
+          <li>The card writes frames into receive pages.</li>
+          <li>The server hands those pages to the drives.</li>
+          <li>The drives write them as they arrived.</li>
+          <li>Only then do the pages go back to the card.</li>
+        </ol>
+        <div class="cost">no copy; about 0.1 bytes for each byte still in cache</div>
+      </div>
+    </div>
+    <p>A loaned page can go to an NVMe drive directly only if each piece of it meets the drive's DMA alignment, 4 bytes. Where the payload lands in the receive buffer decides that, which is the first item below.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow ok">The strongest result</p>
+    <h2>Payload alignment decides whether a loaned write goes to the drive</h2>
+    <p>xeu posts each receive buffer at <code>NET_SKB_PAD</code> (64 bytes) and a frame's headers take 54, so every TCP payload starts at 2 mod 4. <code>NET_IP_ALIGN</code> is 0 on arm64 for good reason, the CPU's unaligned loads of the IP header are cheap, and our patch is not about that. It is about the payload, for the storage DMA. Our patch's subject led with the IP header, which invited the misreading.</p>
+    <p>Measured on a server whose drives take scatter-gather lists with dword alignment and no other boundary, so the payload's alignment is the only thing that decides. NFS writes onto two of those drives, each write's received pages handed to the drive without a copy, two runs at each setting:</p>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th></th><th>rx_ip_align = 0</th><th>rx_ip_align = 2</th></tr></thead>
+      <tbody>
+        <tr><td>Writes sent to the drive directly</td><td class="x">0</td><td class="g">280,416 &middot; 280,000</td></tr>
+        <tr><td>Writes refused, payload misaligned</td><td class="x">281,600 &middot; 281,920</td><td class="g">0</td></tr>
+        <tr><td>NFS server CPU busy</td><td class="x">12%</td><td class="g">1&ndash;2%</td></tr>
+        <tr><td>Client retransmits in 10 s</td><td class="n">1,111 &middot; 539</td><td class="n">72 &middot; 79</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">The rate, 5.8 GB/s, is the two drives' at either setting. What changes is the cost: at 0 every write is copied into the page cache instead.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow hot">What we would like from you</p>
+    <h2>Seven points, each with what it rests on</h2>
+
+    <div class="ask">
+      <div class="head"><h3>1. Align the payload, and continuation buffers too</h3><span class="pill need">ask</span></div>
+      <p>The table above is the case for reconsidering rx_ip_align. A driver can shift the first buffer of a frame, but with receive buffers smaller than a frame the payload in each continuation buffer is misaligned by the same 2 bytes, and only the card can fix that.</p>
+      <p class="q"><b>Question</b>Can the E1 shift only a frame's first buffer, with a receive pad or by splitting headers from data, so that every buffer of a frame is aligned?</p>
+    </div>
+
+    <div class="ask">
+      <div class="head"><h3>2. RX FIFO drops come from memory stalls</h3><span class="pill info">confirms Don's second explanation</span></div>
+      <p>One port, plain TCP (no NFS, no drives), 16 connections, 20 s, with a copy loop loading memory on CPUs the rings and receivers do not use. FIFO counters as listed by our statistics patch:</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Receivers</th><th>GB/s</th><th>FIFO drops</th><th>FIFO fill, most lines</th></tr></thead>
+        <tbody>
+          <tr><td>Discard</td><td class="g">49.7&ndash;49.8</td><td class="g">0</td><td class="n">1</td></tr>
+          <tr><td class="sub">+ memory loaded, 2 threads</td><td class="n">49.56</td><td class="g">0</td><td class="n">1</td></tr>
+          <tr><td class="sub">+ memory loaded, 4 threads</td><td class="n">49.65</td><td class="g">0</td><td class="n">1</td></tr>
+          <tr><td class="sub">+ memory loaded, 8 threads</td><td class="x">45.22 &middot; 45.15</td><td class="x">520,618 &middot; 599,969</td><td class="n">9,924 &middot; 15,410</td></tr>
+          <tr><td>Copy into a small buffer</td><td class="n">49.2&ndash;49.9</td><td class="n">4,471&ndash;16,000</td><td class="n">4,084&ndash;14,078</td></tr>
+          <tr><td class="sub">+ memory loaded, 8 threads</td><td class="x">40.36</td><td class="x">302,880</td><td class="n">15,034</td></tr>
+        </tbody>
+      </table></div>
+      <p>With the receivers discarding, at line rate and about 6 Mpps, the FIFO never fills: two XDMA engines carry a port at line rate when memory is free. With about 65 GB/s of copying elsewhere on the host, the FIFO drops half a million frames in 20 s although the receive path copies nothing.</p>
+      <p class="q"><b>Questions</b>How long can the XDMA engines wait on memory before the 2 MiB FIFO (about 40 &micro;s at this rate) overflows? Is there a setting that gives the port's DMA priority, or more FIFO, on a host whose memory is busy?</p>
+    </div>
+
+    <div class="ask">
+      <div class="head"><h3>3. Pause frames never reach the wire</h3><span class="pill need">ask</span></div>
+      <p>With the client set to obey pause and memory loaded so that the FIFO overflows: with <code>ethtool -A tx on</code> the FIFO passes xoff (15,638 lines against 12,288) and drops 419,218 frames, and the client receives no pause frame. With <code>rx on tx on</code> the rings drop nothing, the FIFO holds at 12,113 lines, just under xoff, and drops 1,458,125 frames; still no pause on the wire. The port appears to act on xoff by dropping.</p>
+      <p class="q"><b>Question</b>Is there a setting for the MAC to send pause?</p>
+    </div>
+
+    <div class="ask">
+      <div class="head"><h3>4. Interrupt deferral stops the port</h3><span class="pill need">ask</span></div>
+      <p>Under load the port takes 6.3 million frames and about 250,000 Rx interrupts a second. With <code>napi_defer_hard_irqs=2</code> and <code>gro_flush_timeout=50000</code> written to the port, Rx interrupts fall to 0 in the first second and stay there. Frames keep arriving for about 5 s without an interrupt (4.3, then 2.2 million a second), then stop. Writing both back to 0 does not recover the port; only a down and up does. Nothing is logged. Reproduced on two kernels.</p>
+      <p class="q"><b>Lead</b>The interrupts stop at once while NAPI still runs for a few seconds. A script reproduces it with plain TCP, no NFS.</p>
+    </div>
+
+    <div class="ask">
+      <div class="head"><h3>5. The RSS hash</h3><span class="pill need">ask</span></div>
+      <p>Thank you for the input fields. We tried them on ten TCP flows into one port with Toeplitz selected, each from a known client port, hashes read from received packets; the key is the standard 40-byte one followed by 28 zero bytes. Neither the 13-byte input (source address, destination address, source port, destination port, protocol) nor the standard 12-byte one reproduces all ten hashes, at any of the key's 68 starting bytes, with either byte order for the fields or the result.</p>
+      <p>Confirmed: bits 13 to 19 of the hash pick the entry of a 128-entry redirection table, for every flow. Also: selecting Toeplitz with the <code>ethtool</code> command fails because the default function has no ethtool name; setting it over netlink works.</p>
+      <p class="q"><b>Question</b>The exact computation: which bytes of the key, in what order, and anything applied to the result.</p>
+    </div>
+
+    <div class="ask">
+      <div class="head"><h3>6. Keep an interrupt placement across a close and open</h3><span class="pill offer">patch offered</span></div>
+      <p>We agree that spreading across ports is for the host. What the host cannot do is keep a placement: <code>xeu_close()</code> frees the interrupts and disables MSI-X, which resets their affinity, so every open puts them back on CPUs 0 to 7. That includes the async ring, which has no hint, so changing only the hint call would not be enough. Our patch records each interrupt's affinity at close, restores it at open, and sets xeu's spread only as the hint (<code>irq_update_affinity_hint()</code>, as mlx5, bnxt and i40e do).</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Port b's interrupts placed on CPUs 56&ndash;63, then</th><th>xeu 2.0.1</th><th>With the patch</th></tr></thead>
+        <tbody>
+          <tr><td><code>ip link</code> down and up</td><td class="x">back on 0&ndash;7; async on 0&ndash;63</td><td class="g">still on 56&ndash;63; async on 57</td></tr>
+          <tr><td><code>ethtool -G rx 128</code></td><td class="x">back on 0&ndash;7</td><td class="g">still on 56&ndash;63</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">With the patch the port then carried 49.5 GB/s of plain TCP with the load on its own CPUs. <code>ethtool -L</code> goes through the same close and open; not yet tried.</p>
+    </div>
+
+    <div class="ask">
+      <div class="head"><h3>7. rx_refill_thresh: derive it from the ring size</h3><span class="pill offer">our answer to your question</span></div>
+      <p>You asked whether the threshold should vary with the use case. It should vary with the ring size, and the driver can work that out itself. NFS writes in copy mode, 32 against 8 by turns, three runs each, over 10 s:</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th></th><th>Threshold 32</th><th>Threshold 8</th></tr></thead>
+        <tbody>
+          <tr><td>Two ports, rings of 128: ring drops a port</td><td class="x">2,845&ndash;5,317</td><td class="g">1&ndash;15</td></tr>
+          <tr><td>Two ports, rings of 128: client retransmits</td><td class="x">8,304&ndash;11,299</td><td class="g">34&ndash;224</td></tr>
+          <tr><td>One port, rings of 256: ring drops</td><td class="n">7&ndash;22</td><td class="n">0</td></tr>
+          <tr><td>One port, rings of 256: rate</td><td class="n">45.4&ndash;46.4 GB/s</td><td class="n">45.8&ndash;46.6 GB/s</td></tr>
+        </tbody>
+      </table></div>
+      <p>On rings of 128, 32 leaves a quarter of the ring empty before a refill and the rings drop; on rings of 256 it is an eighth and makes no difference. Something like <code>min(32, ring size / 8)</code> keeps your default where it works, needs no parameter, and we would drop our patch.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow ok">Already agreed</p>
+    <h2>What you said you will do</h2>
+    <div class="list">
+      <div class="row"><div><strong>Port RX FIFO counters</strong>The counters that made every number in point 2 possible</div><span class="pill offer">will add</span></div>
+      <div class="row"><div><strong>Refill when the RX ring ran empty</strong>Fixed by returning budget so NAPI keeps polling</div><span class="pill offer">will fix</span></div>
+      <div class="row"><div><strong>Receive buffers smaller than a page</strong>As page frags, for 16 KiB and 64 KiB pages</div><span class="pill offer">will add</span></div>
+      <div class="row"><div><strong>RSS redirection table through ethtool</strong>Placing flows depends on it; the key and hash function with it, if possible</div><span class="pill offer">will expose</span></div>
+      <div class="row"><div><strong>Pause frames, interrupt deferral</strong>Points 3 and 4 above give each a script</div><span class="pill info">investigating</span></div>
+    </div>
+    <p class="note">On ring count and size: eight rings were tried three times and did not help, with the rings' CPUs 58 to 70% idle; two ports did best with rings of 128. Our frames are 7,792 bytes, well above the small-packet case.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">What we hand over</p>
+    <h2>Patches and reproducers</h2>
+    <p>Patches to xeu 2.0.1 from this work, each small and on its own:</p>
+    <ul class="files">
+      <li><code>rx_ip_align</code>: payload on a 4-byte boundary (point 1)</li>
+      <li>Retry an RX refill that came up short</li>
+      <li><code>rx_refill_thresh</code> as a module parameter (point 7, to be replaced)</li>
+      <li>RSS redirection table, key and hash function through ethtool</li>
+      <li><code>rx_buf_size</code>: receive buffers smaller than a page</li>
+      <li>Port RX FIFO and filter counters in <code>ethtool -S</code></li>
+      <li>Keep a ring interrupt's affinity across a close and open (point 6)</li>
+    </ul>
+    <p style="margin-top:14px">Two scripts, plain TCP into one port, no NFS and no drives, each recording once a second: one for interrupt deferral (point 4) and one for pause (point 3).</p>
+  </section>
+
+  <footer>
+    Measured on an arm64 server with 16 KiB pages and one E1, xeu 2.0.1 with the patches above, Linux 7.3, one x86 client with a 400G port feeding each E1 port. Rates are the client's write rate for NFS and the rings' byte counts for plain TCP. Prepared for discussion, 21 October 2026.
+  </footer>
+</div>
