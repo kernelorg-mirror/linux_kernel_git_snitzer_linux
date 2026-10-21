@@ -8,7 +8,7 @@
     --hair: #dce3e9;
     --accent: #1f5c8b; --accent-soft: #e4eef5;
     --cost: #b6431f; --cost-soft: #f7e6df;
-    --gain: #12735d; --gain-soft: #dcefe8;
+    --gain: #12735d; --gain-soft: #dcefe8; --two: #2a6fe8;
     --shadow: 0 1px 2px rgba(22,32,42,.05), 0 8px 24px -12px rgba(22,32,42,.14);
     --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -22,7 +22,7 @@
       --hair: #24333f;
       --accent: #5ba3d6; --accent-soft: #16303f;
       --cost: #e08a63; --cost-soft: #3a2015;
-      --gain: #4bbb9a; --gain-soft: #10302a;
+      --gain: #4bbb9a; --gain-soft: #10302a; --two: #5b9dff;
       --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
     }
   }
@@ -33,7 +33,7 @@
     --hair: #24333f;
     --accent: #5ba3d6; --accent-soft: #16303f;
     --cost: #e08a63; --cost-soft: #3a2015;
-    --gain: #4bbb9a; --gain-soft: #10302a;
+    --gain: #4bbb9a; --gain-soft: #10302a; --two: #5b9dff;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
   }
   * { box-sizing: border-box; }
@@ -77,6 +77,23 @@
   }
   .lede { font-size: 19.5px; line-height: 1.5; color: var(--ink); }
   .note { font-size: 14.5px; color: var(--muted); }
+  .lede .hl { color: var(--gain); font-weight: 600; }
+  .lede .hc { color: var(--cost); font-weight: 600; }
+  .prov { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--hair); display: grid; gap: 10px; }
+  .prov .pl { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0; }
+  dl.runs { margin: 0; display: grid; grid-template-columns: 9.5em 1fr; column-gap: 16px; row-gap: 8px; font-size: 14.5px; line-height: 1.5; }
+  dl.runs dt { font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; padding-top: 2px; }
+  dl.runs dd { margin: 0; color: var(--ink-soft); min-width: 0; }
+  dl.runs dd code { font-size: .8em; }
+  @media (max-width: 560px) { dl.runs { grid-template-columns: 1fr; row-gap: 2px; } dl.runs dd { margin-bottom: 8px; } }
+  .pk { display: flex; align-items: center; gap: 12px; margin-top: 7px; }
+  .pktrack { flex: 1 1 auto; height: 8px; background: var(--hair); border-radius: 4px; overflow: hidden; min-width: 0; }
+  .pkbar { display: block; height: 100%; background: var(--gain); border-radius: 4px 0 0 4px; }
+  .pkbar.p2 { background: var(--two); }
+  .pkn { flex: 0 0 auto; font-family: var(--mono); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; min-width: 6.4em; text-align: right; }
+  .pkl { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); min-width: 5.6em; }
+  .key { display: inline-block; width: 18px; height: 8px; border-radius: 2px; background: var(--gain); vertical-align: baseline; margin-right: 5px; }
+  .key.p2 { background: var(--two); }
 
   .metrics {
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
@@ -162,12 +179,35 @@
   <header>
     <p class="eyebrow">E1 receive path &middot; NFS writes on an arm64 server &middot; 21 October 2026</p>
     <h1>The card carries line rate on both ports.<span class="ok">What holds NFS back is the server's copy, and the loan removes it.</span></h1>
-    <p class="lede">An NFS server on an E1 takes 47.8 GB/s of durable writes from one client on one port and 60.4 GB/s on two, copying each write once on arrival. The card itself carries both ports at line rate when nothing is copied. This page sets out what we measured since your two replies, what we would like from you, and what we can give back.</p>
+    <p class="lede"><span class="hl">An NFS server on the E1 takes 60.4 GB/s of durable WRITEs from one client over both ports of the card, and 47.8 GB/s over one</span>: sixteen connections a port, copied once on arrival and written direct to eight NVMe drives, each with its own file system. One port is at 96% of what the wire carries to a receiver that stores nothing (49.8 GB/s), and six days earlier the same copy carried 25.4. Two ports are at about what this machine can copy from memory to memory by any method. The receive memory in use stays inside the CPU's 32 MiB cache. Three settings do it together: the card's receive buffers cut to 8192 bytes with the MTU lowered so that each frame fills one, each connection's receive buffer held at 1 MiB, and every connection placed on a receive ring so that each ring carries a quarter. <span class="hc">Both are the best run of their setting: one port gave 46.0 to 47.8 in six runs on Linux 7.3 (46.5 to 47.4 in four on 7.1), and two ports 60.0 to 60.4 in seven on 7.1.</span></p>
+    <p>This page sets out what we measured since your two replies, what we would like from you, and what we can give back.</p>
+
     <div class="metrics">
-      <div class="metric"><div class="n gain">49.8</div><div class="l">GB/s plain TCP, one port, no copy</div></div>
-      <div class="metric"><div class="n gain">98&ndash;99.6</div><div class="l">GB/s plain TCP, both ports, no copy</div></div>
-      <div class="metric"><div class="n">60.4</div><div class="l">GB/s NFS writes, both ports, copied once</div></div>
-      <div class="metric"><div class="n cost">2.2</div><div class="l">bytes of server DRAM traffic for each byte copied</div></div>
+      <div class="metric"><div class="n gain">47.8 GB/s</div><div class="l">durable NFS WRITEs on one port, the best run;<br>46.0 to 47.8 in six runs</div></div>
+      <div class="metric"><div class="n gain">8 drives</div><div class="l">a file system on each,<br>about 59% busy</div></div>
+      <div class="metric"><div class="n gain">96%</div><div class="l">of the 49.8 GB/s the wire<br>carries with no NFS</div></div>
+      <div class="metric"><div class="n">25.4 &rarr; 47.8</div><div class="l">GB/s, the same copy,<br>8 to 14 October</div></div>
+    </div>
+    <div class="metrics" style="margin-top:12px">
+      <div class="metric"><div class="n gain">60.4 GB/s</div><div class="l">durable NFS WRITEs on two ports, the best run;<br>60.0 to 60.4 in seven runs</div></div>
+      <div class="metric"><div class="n gain">19 MiB</div><div class="l">receive memory used by both ports,<br>of 32 MiB L3 cache</div></div>
+      <div class="metric"><div class="n gain">61%</div><div class="l">of the 99 GB/s the two ports<br>carry with no NFS</div></div>
+      <div class="metric"><div class="n">43.3 &rarr; 60.4</div><div class="l">GB/s, both ports,<br>11 to 13 October</div></div>
+    </div>
+
+    <div class="prov">
+      <p class="pl">The runs, and the best rate measured on each day</p>
+      <dl class="runs">
+        <dt>14 Oct &middot; 16 KiB</dt><dd><strong>The series rebased onto Linux 7.3</strong>, every run checked against the settled setting before it started. One port on all eight drives carried <strong>47.76 GB/s at 1.48 bytes through memory for each byte of payload, the best one-port run on either kernel</strong>; the six one-port runs were 45.98 to 47.76. Two ports carried 59.27 and 59.36, about 1.5% under 7.1's 59.96 to 60.41, both with the client on its default <code>fq_codel</code>.<div class="pk"><span class="pkl">1 port</span><div class="pktrack"><span class="pkbar" style="width:99.5%"></span></div><span class="pkn">47.76 GB/s</span></div><div class="pk"><span class="pkl">2 ports</span><div class="pktrack"><span class="pkbar p2" style="width:61.8%"></span></div><span class="pkn">59.36 GB/s</span></div></dd>
+        <dt>13 Oct &middot; 16 KiB</dt><dd><strong>Linux 7.1, runs kept inside the drives' fast region</strong>: eight drives with a file system each, the 128 KiB wakeup mark off. One port is on all eight drives, two ports on four each.<div class="pk"><span class="pkl">1 port</span><div class="pktrack"><span class="pkbar" style="width:98.8%"></span></div><span class="pkn">47.4 GB/s</span></div><div class="pk"><span class="pkl">2 ports</span><div class="pktrack"><span class="pkbar p2" style="width:62.9%"></span></div><span class="pkn">60.4 GB/s</span></div></dd>
+        <dt>12 Oct &middot; 16 KiB</dt><dd><strong>Both ports</strong>, each onto its own stripe of four drives, with no cache flush sent to them. One port alone was limited by its four drives that day and has no bar.<div class="pk"><span class="pkl">2 ports</span><div class="pktrack"><span class="pkbar p2" style="width:60.9%"></span></div><span class="pkn">58.5 GB/s</span></div></dd>
+        <dt>11 Oct &middot; 16 KiB</dt><dd><strong>The same card, drives and client</strong>, with the receive window measured by the kernel and all 512 nfsd threads kept off the rings' CPUs. Both ports were first loaded that evening, with one port's settings on each.<div class="pk"><span class="pkl">1 port</span><div class="pktrack"><span class="pkbar" style="width:92.9%"></span></div><span class="pkn">44.6 GB/s</span></div><div class="pk"><span class="pkl">2 ports</span><div class="pktrack"><span class="pkbar p2" style="width:45.1%"></span></div><span class="pkn">43.3 GB/s</span></div></dd>
+        <dt>10 Oct &middot; 16 KiB</dt><dd><strong>Receive buffers a frame fills</strong>, and every connection placed on a ring.<div class="pk"><span class="pkl">1 port</span><div class="pktrack"><span class="pkbar" style="width:90.2%"></span></div><span class="pkn">43.3 GB/s</span></div></dd>
+        <dt>9 Oct &middot; 16 KiB</dt><dd><strong>Five kernel changes and the driver's refill threshold</strong>, loaded together.<div class="pk"><span class="pkl">1 port</span><div class="pktrack"><span class="pkbar" style="width:79.8%"></span></div><span class="pkn">38.3 GB/s</span></div></dd>
+        <dt>9 Oct &middot; 16 KiB</dt><dd><strong>The stripe written direct</strong> (27.7), then each connection's receive buffer held at 1 MiB.<div class="pk"><span class="pkl">1 port</span><div class="pktrack"><span class="pkbar" style="width:74.8%"></span></div><span class="pkn">35.9 GB/s</span></div></dd>
+        <dt>8 Oct &middot; 16 KiB</dt><dd><strong>The first runs at 16 KiB on the card</strong> and six striped NVMe drives, copied twice through the page cache.<div class="pk"><span class="pkl">1 port</span><div class="pktrack"><span class="pkbar" style="width:52.9%"></span></div><span class="pkn">25.4 GB/s</span></div></dd>
+      </dl>
+      <p class="note" style="margin:2px 0 0"><span class="key"></span>One port, on a scale that ends at the 48 GB/s one port's wire carries with no NFS. <span class="key p2" style="margin-left:10px"></span>Both ports, on a scale that ends at the 96 GB/s of two. Each bar is the best durable NFS write rate from one client on that day, in copy mode, sixteen connections a port, so a bar's length is its share of the wire. Every bar is the single best run, not an average: 14 October's six one-port runs were 45.98 to 47.76, 13 October's four were 46.5 to 47.4, 11 October's were between 43.4 and 44.6, and 9 October's three with the refill threshold were 36.7 to 38.3.</p>
     </div>
   </header>
 
