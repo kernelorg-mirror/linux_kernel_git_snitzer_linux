@@ -13,15 +13,19 @@ it to **answered** (the question is closed by what they said),
 (a reply came but did not take it up). Their words go under "Xsight
 said", quoted with the date, and our weighing under "Our read".
 
+**Weighed on 20 October, after the two replies Mike had then** (Ian
+Wigmore's, and Don Wallwork's through him). A later reply reopens
+what it touches.
+
 | # | item | status |
 |---|---|---|
-| 1 | The RX FIFO drop counters: xeu should read and list them | open |
-| 2a | Is our reading of the FIFO drops right; the FIFO-to-ring rate; is 2 MiB the whole buffer | open |
-| 2b | The port does not send pause frames | open |
-| 3a | Interrupt deferral stops the port | open |
-| 3b | Every port's ring interrupts on the same CPUs | open |
-| 3c | The Toeplitz hash: seed bytes, fields, order | open |
-| 4 | The six patches: will they take them, or their equivalent | open |
+| 1 | The RX FIFO drop counters: xeu should read and list them | **answered** (they will add them) |
+| 2a | Is our reading of the FIFO drops right; the FIFO-to-ring rate; is 2 MiB the whole buffer | **partial** (mechanism and buffer yes; xeu's DMA capacity not given) |
+| 2b | The port does not send pause frames | **not addressed** (to investigate) |
+| 3a | Interrupt deferral stops the port | **not addressed** (to investigate) |
+| 3b | Every port's ring interrupts on the same CPUs | **partial** (declined; fair for cross-port spread, not for the hint) |
+| 3c | The Toeplitz hash: seed bytes, fields, order | **partial** (fields and order given; key bytes not; to confirm on tardis1) |
+| 4 | The six patches: will they take them, or their equivalent | **partial** (four taken, one questioned, rx_ip_align rejected on a misreading) |
 
 ## 1. The RX FIFO drop counters
 
@@ -47,6 +51,8 @@ Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 
 > Adding port Rx FIFO stats. Yes, you are correct. xeu is missing these counters. We will add them.
 
 **Our read.**
+
+**Answered.** A plain yes; nothing more is needed from them but the release that has it. Until then our patch stays.
 
 ## 2a. The FIFO drops: is our reading right
 
@@ -83,6 +89,28 @@ Reply 2 (Don Wallwork, through Ian):
 
 **Our read.**
 
+**Partial.** The mechanism (a non-zero FIFO drop count is a rate
+mismatch) and the buffer (16k lines for one port per EUnit, the
+FIFO divided evenly among an EUnit's ports, nothing more to give) are
+answered. The rate is answered for the hardware pipeline (200 Mpps,
+400 Gbit/s per EUnit), which we are far under in packets (about 6
+Mpps of 7792-byte frames) and just under in bits (47.8 GB/s is about
+382 Gbit/s). The new fact is xeu's: **only two XDMA engines per port,
+for an IOB interrupt restriction**, less DMA capacity than their DPDK
+PMD has. That is the likeliest limit between the FIFO and the rings,
+and its figure is what to ask for: what two XDMA engines sustain into
+host memory, and whether a burst can outrun them for 46 us. Don's
+other idea, the XDMA engines stalled on memory bandwidth, fits our
+data only in part: one port drops about one frame in 100,000 using
+roughly 67 of the DIMMs' 166 GB/s, two ports at 60 GB/s and about
+131 GB/s drop none at the smaller setting, and paced runs drop none.
+Bursts fit all three; memory latency during a burst is still possible.
+
+Separately, Ian's covering note restates our two-port finding as "the
+limits of E1's DRAM bandwidth". It is the server's DRAM, the copy's
+second pass through it; the card carried line rate. Worth correcting,
+so that they do not look for a fault on the card.
+
 ## 2b. No pause frames
 
 **Asked.** What else has to be set for the port to send pause?
@@ -105,6 +133,8 @@ Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 
 > Pause frames - we will investigate the issue.
 
 **Our read.**
+
+**Not addressed:** "we will investigate". Nothing to weigh yet; ask again with the next round.
 
 ## 3a. Interrupt deferral stops the port
 
@@ -130,6 +160,12 @@ Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 
 
 **Our read.**
 
+**Not addressed:** "we will investigate", with the claim that xeu
+already supports deferral "by the way the NAPI handler is
+implemented". That does not square with the port hanging until a
+down and up, reproduced three times on three kernels. Ask for the
+outcome, and for the card's own interrupt moderation meanwhile.
+
 ## 3b. Ring interrupts of every port on the same CPUs
 
 **Asked.** Could xeu spread ports over different CPUs (by NUMA node and
@@ -152,6 +188,19 @@ Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 
 > IRQ affinity. This is the way most drivers implement it. Our performance test uses the simple script to set the required affinity through /proc/irq/<IRQn>/smp_affinity_list
 
 **Our read.**
+
+**Partial: declined, in part fairly.** "The way most drivers
+implement it", with a script to set `/proc/irq/<n>/smp_affinity_list`.
+Checked against mainline (20 October): mlx5, bnxt and i40e all start
+from `cpumask_local_spread()` by NUMA node, and none spreads across
+ports either (each device's index starts at 0), so on that half of the
+ask they are right, and irqbalance or a script is the usual answer.
+On the other half they are not: those drivers set only the hint
+(`irq_update_affinity_hint()`), so a placement made through
+`smp_affinity_list` survives the port being opened again; xeu's
+`irq_set_affinity_hint()` sets the affinity on every open (down and
+up, `ethtool -G`), so their own script has to be re-run after each.
+Ask for that one change.
 
 ## 3c. The Toeplitz hash
 
@@ -184,6 +233,14 @@ Reply 2 (Don Wallwork, through Ian):
 
 **Our read.**
 
+**Partial.** The input is 13 bytes, the IPv4 source and destination,
+the TCP source and destination ports, then the 8-bit protocol, in
+that order. Standard RSS hashes 12 bytes with no protocol byte, which
+likely explains why none of our field orders matched. Not said: which
+bytes of the 68-byte key, and the byte order. Both can be tested on
+tardis1 against hashes read from received packets (as the placement
+already does); closed once a computed hash matches a received one.
+
 ## 4. The six patches
 
 **Asked.** Not a question in the note; it attaches them:
@@ -215,6 +272,28 @@ said for the key and hash function. Item 4 asks us a question back.)
 
 **Our read.**
 
+**Partial.** Taken: the refill retry (a real bug; they will fix it by
+returning the budget so NAPI keeps polling), receive buffers smaller
+than a page (as page frags), the RX FIFO counters, and the RSS table
+(the key and hash function not mentioned). Questioned: the refill
+threshold as a parameter ("do you think the threshold value should vary
+depending on the use case?"), ours to answer.
+
+**rx_ip_align: rejected on a misreading.** They answered it as the CPU
+alignment of the IP header, which `NET_IP_ALIGN` being 0 on arm64
+decides on purpose (unaligned loads are cheap there, aligned DMA is
+not). The patch is about the device, not the CPU: with buffers posted
+at `NET_SKB_PAD + NET_IP_ALIGN`, every TCP payload lands at 2 mod 4,
+and a loaned payload page can go to NVMe as direct I/O only if every
+fragment is 4-byte aligned for the drive's DMA, so at 2 mod 4 every
+loaned WRITE falls back to a copy. The patch's own message says so;
+its subject ("4-byte align received IP headers and TCP payload") led
+with the header, which invited the answer. The reply should lead with
+the payload and the storage DMA, not the header, and ask the real
+question behind the patch: can the E1 shift only a frame's first
+buffer (a receive pad), so that continuation buffers are aligned too,
+which a driver cannot do alone.
+
 ## Not asked: advice in the replies
 
 Reply 2 (Don Wallwork, through Ian):
@@ -230,3 +309,19 @@ drops; 8 x 256 at 39.6 and 39.3 against 4 x 512's 41.8 and 40.7, the
 region past the L3; `XEU_CONVERGENCE.md` N10 for the copy), with the
 rings' CPUs 58 to 70% idle. Our frames are 7792 bytes, not under 512.
 Two ports settled on rings of 128, smaller, not larger.
+
+## For the reply to them
+
+1. rx_ip_align, restated around the payload and storage DMA (item 4),
+   and the receive-pad question.
+2. The DRAM: the server's, not the E1's (item 2a).
+3. What two XDMA engines per port sustain into host memory, and
+   whether the IOB interrupt restriction can be lifted (item 2a).
+4. `irq_update_affinity_hint()` in place of `irq_set_affinity_hint()`,
+   as mlx5, bnxt and i40e do (item 3b).
+5. Our answer on `rx_refill_thresh` (item 4), from the measurements
+   that set it on tardis1.
+6. The key bytes and byte order of the hash, unless tardis1 settles
+   them first (item 3c).
+7. Pause frames and interrupt deferral: what the investigations found
+   (items 2b, 3a).
