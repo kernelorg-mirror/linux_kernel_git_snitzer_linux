@@ -505,11 +505,11 @@
         <tr><td>Receive region</td><td class="c">32768 pages, bound to the port</td><td>where the pages come from; 1517 to 1658 were in use at peak</td></tr>
         <tr><td>Budget</td><td class="c">0</td><td>copy mode: nfsd copies on arrival and the pages go straight back</td></tr>
         <tr><td>Held receive buffer, per connection</td><td class="r">1 MiB</td><td>deep enough that a connection does not wait for data; 685 KiB gave up about 1.7 GB/s on 5440-byte buffers</td></tr>
-        <tr><td>nfsd threads &middot; thread pools</td><td class="c">512 &middot; 4 (<code>pools_per_node</code>)</td><td>four queues of ready connections where the threads shared one; <strong>dropped since</strong>, one pool</td></tr>
-        <tr><td>Linger, <code>svc_tcp_rx_linger_us</code></td><td class="c">50</td><td>a thread waits for the rest of a WRITE: 2 reads to receive one, where it took 6 to 17; <strong>dropped since</strong></td></tr>
+        <tr><td>nfsd threads &middot; thread pools</td><td class="c">512 &middot; 4 (<code>pools_per_node</code>) <strong>(since dropped)</strong></td><td>four queues of ready connections where the threads shared one</td></tr>
+        <tr><td>Linger, <code>svc_tcp_rx_linger_us</code></td><td class="c">50 <strong>(since dropped)</strong></td><td>a thread waits for the rest of a WRITE: 2 reads to receive one, where it took 6 to 17</td></tr>
         <tr><td>Deferred skb frees, <code>net.core.skb_defer_max</code></td><td class="c">128 (on)</td><td>half of the pages return by the page pool's fast path</td></tr>
         <tr><td>Client</td><td class="c">nconnect 16, 8 MiB writes</td><td>eight WRITEs and one COMMIT, so nfsd does not sync every megabyte</td></tr>
-        <tr><td>Storage</td><td class="c">six NVMe drives, MD raid0, XFS</td><td>1 MiB chunk, trimmed before each run</td></tr>
+        <tr><td>Storage</td><td class="c">six NVMe drives, MD raid0 <strong>(since dropped)</strong>, XFS</td><td>1 MiB chunk, trimmed before each run</td></tr>
         <tr><td>Flow placement</td><td class="r" style="white-space:normal">each connection's RSS table entry set, four connections to a ring</td><td>each ring carries a quarter; before 10 October afternoon the runs mounted again until no ring had over 35%</td></tr>
       </tbody>
     </table></div>
