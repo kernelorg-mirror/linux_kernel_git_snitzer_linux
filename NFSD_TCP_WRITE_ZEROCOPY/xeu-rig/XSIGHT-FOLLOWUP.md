@@ -170,6 +170,44 @@ measure" says how).
 - Neither: the drops come with NFS's own burstiness (as the paced
   runs suggest), and the reply says so.
 
+**Done, 20 October, build 491: the second case, memory.** Driver
+`$L/xsight-x2/x2.sh` (and `rerun.sh`), log `x2.log`, `rerun.log`.
+Port a alone, `iperf2port.sh a 16 20` at the settled setting, the
+FIFO sampled once a second, `memcost-log.sh` beside each run;
+`copybench stp <n> 56 34` on port b's ring CPUs (56-63, idle with only
+port a in use). Requests to memory as `memcost-read.py` gives them,
+1e9/s.
+
+| run | GB/s | FIFO drops | ring drops | FIFO fill, max lines | copybench | requests to memory |
+|---|---|---|---|---|---|---|
+| discard, three runs | 49.71 to 49.82 | **0** | 118,610 to 286,679 | 1 | none | 0.01 |
+| copy, three runs | 49.24 to 49.85 | 4,471 to 16,000 | 101,069 to 405,061 | 4,084 to 14,078 | none | 0.27 to 0.32 |
+| discard | 49.56 | **0** | 561,044 | 1 | 2 threads, 27.4 GB/s | 0.92 |
+| copy | 46.18 | 100,156 | 185,582 | 11,921 | 2 threads, 26.4 GB/s | 1.03 |
+| discard | 49.65 | **0** | 422,937 | 1 | 4 threads, 47.3 GB/s | 1.58 |
+| copy | 46.49 (and 47.03) | 100,999 (and 218,713) | 140,121 | 16,229 | 4 threads, 45.1 GB/s | 1.60 |
+| discard | **45.22, 45.15** | **520,618, 599,969** | 303,409, 272,890 | 9,924, 15,410 | 8 threads, 64.7 and 64.8 GB/s | 2.27, 2.28 |
+| copy | 40.36 | 302,880 | 115,886 | 15,034 | 8 threads, 62.4 GB/s | 2.12 |
+
+- **Discarding, at line rate and about 6 Mpps, the FIFO never drops
+  and never fills** (one line at most), with or without memory loaded
+  up to four copybench threads. So the two XDMA engines carry a port at
+  line rate when memory is free: it is not the card's side.
+- **With the memory loaded harder, the FIFO drops with no host copy at
+  all**: eight copybench threads (65 GB/s of copying, 2.3e9 requests a
+  second) and the receivers discarding gave 520,618 and 599,969 FIFO
+  drops and 45 GB/s, twice. Copying, the drops start with the copy
+  alone and rise with the load. That is Don's case: the engines stall
+  on memory. The question back is what latency the engines tolerate,
+  and how much a FIFO of 2 MiB covers at 50 GB/s (about 40 us).
+- **The rings tail-drop in every run** (101 to 561 thousand in 20 s),
+  the FIFO dropping or not: a separate loss, on the host's side of the
+  DMA, not asked about here.
+- The first copy-cb4 (47.03 GB/s, 218,713 drops) ran beside a module
+  build (X4's), so it was repeated: 46.49 and 100,999.
+- `settled.sh apply` at the end of `x2.sh` found the client briefly
+  unreachable; the audit after was the settled setting.
+
 ### X3. rx_ip_align: the evidence for the reply (tardis2, then tardis1)
 
 **Why.** The rejection rests on a misreading; the reply needs the
