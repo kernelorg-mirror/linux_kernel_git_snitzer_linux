@@ -9,7 +9,8 @@ results first, then each point with what it rests on, and a few short
 questions at the end.
 
   - rx_ip_align is about where the payload lands for the storage DMA,
-    not the CPU's header loads. [X3: the loan outcomes at 0 and 2]
+    not the CPU's header loads. Without it no received page can be
+    written to NVMe directly; with it every one is.
   - The RX FIFO drops with no copy at all once the host's memory is
     loaded hard enough, and never when it is not: Don's memory stall,
     not the two XDMA engines' capacity.
@@ -47,9 +48,21 @@ which for NVMe is 4 bytes. xeu posts its buffers at NET_SKB_PAD (64)
 and the frame's headers are 54 bytes, so every TCP payload lands at
 2 mod 4. With rx_ip_align=2 the payload lands at 0 mod 4.
 
-[X3: on drives that take scatter-gather lists, at rx_ip_align 0 and 2,
-the outcomes: direct, refused for memory alignment, refused for the
-gap; and the rate.]
+Measured on a server whose drives take scatter-gather lists, with
+dword alignment and no other boundary, so that the payload's alignment
+is the only thing that decides. NFS writes onto two of those drives,
+each write's received pages handed to the drive without a copy, two
+runs at each setting:
+
+                                rx_ip_align=0      rx_ip_align=2
+  written to the drive direct         0          280,416 and 280,000
+  refused, payload misaligned  281,600 and 281,920        0
+  NFS server CPU busy                12%              1 to 2%
+  client retransmits, 10 s      1,111 and 539        72 and 79
+
+At 0 every write is refused and copied into the page cache instead; at
+2 every write goes to the drive as it arrived. (The rate, 5.8 GB/s,
+is the two drives' at either setting; what changes is the cost.)
 
 The question behind the patch: can the E1 shift only the first buffer
 of a frame, with a receive pad or by splitting the headers from the
