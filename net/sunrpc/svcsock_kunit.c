@@ -1782,6 +1782,52 @@ static void svcsock_rx_credit_reconfigure_wakes_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
 }
 
+/*
+ * Budget 20, no reserve, factor 100: records of 5 and 10 pages cost 6 and
+ * 11, so with both in flight 3 is left and a third 10-page record is
+ * refused, asking for 11.  The 5-page record's release leaves 9 while the
+ * other is still in flight: the waiter is not woken, since it would only be
+ * refused again.  The last release wakes it, and it is admitted.
+ */
+static void svcsock_rx_credit_wake_need_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *c = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock_forget(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock_forget(test);
+	struct svc_sock *sc = svcsock_rx_credit_sock_forget(test);
+	const u32 len = 10 * PAGE_SIZE;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(20, 0, 100);
+	/* From here wakes are real. */
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_kunit_set(20), 0);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, 5 * PAGE_SIZE));
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_avail(), 3L);
+	KUNIT_ASSERT_FALSE(test, svc_tcp_rx_credit_admit(sc, c, len));
+	KUNIT_EXPECT_EQ(test, sc->sk_credit_need, 11U);
+	KUNIT_ASSERT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
+
+	/* Short of what it asked for, with a record in flight: not woken. */
+	svc_tcp_rx_credit_release(a);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 9L);
+	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
+	KUNIT_EXPECT_FALSE(test, list_empty(&sc->sk_credit_wait));
+
+	/* Nothing in flight: woken, and admitted. */
+	svc_tcp_rx_credit_release(b);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 20L);
+	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
+	KUNIT_EXPECT_EQ(test, kref_read(&sc->sk_xprt.xpt_ref), 1U);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sc, c, len));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
+	KUNIT_EXPECT_EQ(test, sc->sk_credit_need, 0U);
+	svc_tcp_rx_credit_release(c);
+}
+
 static void svcsock_rx_noop_data_ready(struct sock *sk)
 {
 }
@@ -3259,6 +3305,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_credit_orphan_test),
 	KUNIT_CASE(svcsock_rx_credit_reconfigure_inflight_test),
 	KUNIT_CASE(svcsock_rx_credit_reconfigure_wakes_test),
+	KUNIT_CASE(svcsock_rx_credit_wake_need_test),
 	KUNIT_CASE(svcsock_rx_credit_copy_unwaits_test),
 	KUNIT_CASE(svcsock_rx_credit_collapsed_unwaits_test),
 	KUNIT_CASE(svcsock_rx_credit_copy_no_budget_test),
