@@ -234,6 +234,10 @@ none of the dropped ones).
 6. **The bound**: `drgn spare-count.py 300 0.5` beside one two-port
    run; at most about 2,080 pages, 0 once the clients are gone.
 
+After these, the follow-up of Xsight's replies:
+`XSIGHT-FOLLOWUP.md` here, items X1 to X7 (what they answered and our
+reading of it are in `../xsight-email-checklist.md`).
+
 Write it up as "Build <N>: the first v7.3-7 kernel" after this
 section, as the 479 section was: what each step showed, the table
 against 479, the runs in `$L/b<N>/` and their lines in
