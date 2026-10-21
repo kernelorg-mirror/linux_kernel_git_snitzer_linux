@@ -50,6 +50,8 @@
 #   KEEP=Y|N         svc_tcp_rx_keep, whether a thread that finds a WRITE short leaves
 #                    the transport unqueued for data already there
 #   SPARE=<bytes>    svc_tcp_spare_bytes_max, the pages sockets keep for exchange (0: none)
+#   REFILL=<n>       xeu's rx_refill_thresh, the empty RX slots at which a poll refills
+#                    a ring (settled: 8; the driver's default 32); read every poll
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
 #   TXIRQ_A=<cpu> TXIRQ_B=<cpu>  a port's Tx rings on two CPUs from <cpu>, and
@@ -122,6 +124,7 @@ declare -A SAVE
 # (dropped 15 October)
 for k in rcvbuf linger_us copy_threads lowat keep; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k 2>/dev/null); done
 SAVE[spare]=$(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null)
+SAVE[refill]=$(cat /sys/module/xeu/parameters/rx_refill_thresh)
 SAVE[budget]=$(cat $SP/svc_tcp_rx_budget_pages); SAVE[reserve]=$(cat $SP/svc_tcp_rx_budget_reserve)
 # The loan's budget, from the same geometry and charge as sweep.sh's cells.
 BUDGET=; RESERVE=
@@ -148,6 +151,7 @@ setq() {	# setq <client dev> <codel|fq|fqNN>
 cleanup() {
 	for k in rcvbuf linger_us copy_threads lowat keep; do [ -e $SP/svc_tcp_rx_$k ] && echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
 	[ -n "${SAVE[spare]}" ] && echo ${SAVE[spare]} > $SP/svc_tcp_spare_bytes_max
+	echo ${SAVE[refill]} > /sys/module/xeu/parameters/rx_refill_thresh
 	echo 0 > $SP/svc_tcp_rx_budget_pages; echo ${SAVE[reserve]} > $SP/svc_tcp_rx_budget_reserve; echo ${SAVE[budget]} > $SP/svc_tcp_rx_budget_pages
 	for e in $WREV; do echo '!hist:keys=common_type' > $T/events/nfsd/$e/trigger 2>/dev/null; done
 	[ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} codel; done
@@ -171,6 +175,7 @@ echo "twoport $WHICH: kernel $(uname -r), xeu $(cat /sys/module/xeu/srcversion),
 echo "rcvbuf $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_rcvbuf) linger $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_copy_threads 2>/dev/null || echo -) io_cache_write $(cat /sys/kernel/debug/nfsd/io_cache_write) nfsd threads $(cat /proc/fs/nfsd/threads) rx_refill_thresh $(cat /sys/module/xeu/parameters/rx_refill_thresh) region dev $(cat $PP/rx_region_dev)" | tee -a geometry.txt
 echo Y > /sys/module/xeu/parameters/rx_port_stats
 [ -n "${RCVBUF:-}" ] && echo $RCVBUF > $SP/svc_tcp_rx_rcvbuf
+[ -n "${REFILL:-}" ] && echo $REFILL > /sys/module/xeu/parameters/rx_refill_thresh
 # setp <value> <parameter> <off>: set it.  Parameters dropped from the
 # series (copy_threads, lowat, linger_us, keep) are not in later kernels: there
 # asking for the off value is what the kernel does, and anything else stops.
@@ -295,7 +300,7 @@ if [ "$RW" != write ]; then	# a run that reads: every file written whole first, 
 fi
 # Just before the load: the live state, all of it, against the setting this
 # run is at; anything the run set on purpose is held to what it set.
-EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-}"
+EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}" ] && EXPENV="$EXPENV EXP_LAYOUT=RINGS=${RINGS:-4},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-}"
 # the client's qdisc is set only on the ports of this run
