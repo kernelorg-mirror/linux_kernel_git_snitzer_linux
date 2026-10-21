@@ -12,7 +12,7 @@ WHICH=${1:?a|b|ab}; N=${2:-16}; SECS=${3:-20}
 which_ok "$WHICH" || exit 1
 declare -A DEV=([a]=${PDEVS[a]} [b]=${PDEVS[b]}) SRV=([a]=${SRVP[a]} [b]=${SRVP[b]}) CLI=([a]=${CLIP[a]} [b]=${CLIP[b]})
 PORTS=$(sed 's/./& /g' <<< "$WHICH")
-SSHC="ssh -o BatchMode=yes -o ConnectTimeout=30 -i $KEY root@$CLIMGMT"
+SSHC="ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -i $KEY root@$CLIMGMT"
 fifo() { ethtool -S $1 | awk '/port_rx_fifo_tc[0-9]_drop_packets/{s+=$2} END{print s+0}'; }
 ringdrop() { ethtool -S $1 | awk '/rx_hw_tail_drop_packets/{s+=$2} END{print s+0}'; }
 rxbytes() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_rx_bytes:$/{s+=$2} END{print s+0}'; }
