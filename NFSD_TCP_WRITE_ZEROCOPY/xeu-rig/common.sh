@@ -55,7 +55,7 @@ CLIIP=${CLIIP:-${CLIP[a]}}
 CLIMGMT=${CLIMGMT:-10.20.12.106}
 KEY=${KEY:-/root/.ssh/id_ed25519_snitzer2}
 export SSH_OPTS="-i $KEY"
-SSHC="ssh -o BatchMode=yes -o ConnectTimeout=30 -i $KEY root@$CLIMGMT"
+SSHC="ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -i $KEY root@$CLIMGMT"
 RG=/sys/kernel/debug/page_pool_rx_region
 PP=/sys/module/page_pool/parameters
 L=${L:-/var/tmp/zc-run-logs}
