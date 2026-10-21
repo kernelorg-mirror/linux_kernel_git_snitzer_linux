@@ -19,7 +19,12 @@ reproduction instructions for the "page-loan" patch series.
 > collapse geometry itself could not be forced on loopback, so an end-to-end
 > reproduction on a real NIC is still outstanding.
 >
-> **Branch state (2026-10-20):** rebased onto **`v7.3-7`**
+> **Branch state (2026-10-20):** pushed by Mike as the new branch
+> **`hs-gitlab/kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-v7.3-7`**
+> (`5a0e2aeaf190`; the old name stays the `v7.3-3` series), and a
+> pipeline kernel is being built from it; tardis1's first testing of
+> that kernel is "20 October: tardis1's boot into the v7.3-7 kernel" in
+> `xeu-rig/README.md`. Rebased onto **`v7.3-7`**
 > (`git rebase --onto v7.3-7 v7.3-3`: `kernel-7.3/main` is rebuilt each
 > release, so `v7.3-3` is not an ancestor of `v7.3-7`). All 488 commits
 > replayed in place, still code, KUnit interface, KUnit tests, docs

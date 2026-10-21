@@ -130,7 +130,104 @@ more than twice nfsd's CPU against copying on receipt. A loan for some storage b
 the choice made per export, or a budget that one slow device cannot
 fill for all. Logs in `/var/tmp/zc-run-logs/tardis2-{six-loan64,six-copy,wd-loan64,wd-copy}`.
 
-# 15 October: the boot into the reworked tree — read this first
+# 20 October: tardis1's boot into the v7.3-7 kernel — read this first
+
+Written on 20 October, after Mike pushed the series rebased onto
+`v7.3-7` as a **new** branch,
+`hs-gitlab/kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-v7.3-7` at
+`5a0e2aeaf190` (491 commits), and started a pipeline build of it, for
+the session after he reboots tardis1 into that build. Where it differs
+from the sections after it, it is right. The rebase itself is told in
+`../README.md`, "Branch state (2026-10-20)".
+
+**The branch to work on is `…-v7.3-7`.** The old name,
+`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY`, is still `26c5cdcd549a` on
+`v7.3-3` on hs-gitlab (build 479 came from it). Fetch, and
+commit at the tip of `…-v7.3-7`; `../transplant/check-grouping.sh
+hs-gitlab/kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-v7.3-7` before
+handing back.
+
+## What changed since build 479
+
+- **The base.** `v7.3-7` is on `v7.3` itself (479's `v7.3-3` was on
+  rc7), and carries the NFSD DIRECT changes made since: the per-outcome
+  `nfsd_write_dio_*` and `nfsd_read_dio_*` tracepoints that replaced
+  `nfsd_write_dio_split`; a synchronous direct-mode WRITE persisted
+  once, after all of its segments; and the shared boundary page of a
+  split WRITE dropped only once both WRITEs have written it, with the
+  mm and iomap side of that (`WB_DONTCACHE_DIRTY`,
+  `folio_mark_dropbehind()`, a partly covered page kept until an
+  uncached write completes it). The rig runs NFSD DIRECT
+  (`io_cache_write` 2), so a split WRITE's buffered ends go through
+  that new code: a change in rate against 479 belongs to the base
+  first.
+- **The series' code is 479's** but for two things. "nfs_common:
+  require interior payload gaps to be logical-block aligned" now
+  reports a payload refused for an interior gap off an `offset_align`
+  multiple as its own outcome, `nfsd_write_dio_gap_misaligned`; until
+  now it was counted as `mem_misaligned`. And "NFSD: Release a WRITE's
+  receive loan once the data is in the page cache" sits on the base's
+  new `nfsd_vfs_write()` (the stable flags passed by value), its own
+  lines unchanged. `git range-diff` shows nothing else but context.
+- **A new KUnit case**, `nfsd_bvec_dio_disposition_test` in
+  `nfsd-receive-bvec`: never run anywhere (the host the rebase was
+  done on has no KVM).
+- `../run-sgl-nfsd-cmp.sh` and `../run-sgl-localio-ab.sh` count the
+  per-outcome events; no script in this directory used the old one.
+
+Recognise the kernel: `uname -r` names `7.3.0` with no `rc7` and a
+build after 481; `ls /sys/kernel/tracing/events/nfsd | grep
+write_dio` lists `direct`, `gap_misaligned`, `mem_misaligned`,
+`no_alignment`, `no_middle` and `too_small`, and no `split`; `modinfo
+-p sunrpc` lists the same parameters as 479's (`svc_tcp_spare_bytes_max`,
+none of the dropped ones).
+
+## In this order
+
+1. **The boot**, as for 479: the drives mounted, `./bringup.sh 32768
+   256`, `./port-setup.sh enp164s0f0 56`, `./settled.sh apply` ending
+   in "the settled setting" (loans `Y`, one pool of 512 threads,
+   `svc_tcp_spare_bytes_max` 67108864, `io_cache_write` 2). Never get
+   past a BAD item by hand.
+2. **The KUnit suites from the RPM**, `../run-kunit.sh` with
+   nfs-server stopped, into `$L/kunit-<build>.log`: **7, 48, 7 and 10
+   cases** (479: 7, 48, 6 and 10; the one more is the new disposition
+   case), no failure, no skip. The first run of the series' suites on
+   `v7.3-7`.
+3. **`dmesg`**: no WARNING, BUG or "svc: TCP receive window clamp
+   failed", after the boot and again after the runs.
+4. **Copy mode against 479**, the 479 battery (`$L/b479/battery.sh`
+   and its `-slow` copies) into `$L/b<build>/`, at what 479 found
+   reads on this host: trim the eight drives first (`fstrim -v
+   /hs/nvmeN`, about 1 s each), `WARM=10 RUNTIME=30 REST=120`, and the
+   client idle (`uptime`; no `logperf` or `fio` on 10.20.12.106).
+   479's clean runs: two ports **58.58** GB/s, one port a 45.88 and
+   47.42, one port b 46.34 to 47.80; 2.19 to 2.23 and 1.43 to 1.50
+   bytes through memory for each byte. Read `drives.txt` of every run
+   and leave out a run a drive stepped down in.
+5. **The outcomes, counted**: with `bpftrace -e
+   'tracepoint:nfsd:nfsd_write_dio_* { @[probe] = count(); }'` beside
+   one copy run of step 4 and one loan run (a cell of `16k-42` through
+   `sweep.sh`, as on 473 and 474), each loaded at idle first. Copy
+   mode receives each record into contiguous pages, so it should show
+   no `gap_misaligned`. A loaned WRITE's fragments end where its
+   frames did, and these drives are PRP-only (`virt_boundary_mask`
+   4095), so its gaps count: a loan that is refused direct I/O is now
+   `mem_misaligned` only for a fragment off the memory alignment (where
+   the frame landed in its buffer) and `gap_misaligned` for one whose
+   gap falls off an `offset_align` multiple. Earlier builds counted
+   both as `mem_misaligned`; how a loan run divides between the two is
+   the new information. Record the counts, do not predict them.
+6. **The bound**: `drgn spare-count.py 300 0.5` beside one two-port
+   run; at most about 2,080 pages, 0 once the clients are gone.
+
+Write it up as "Build <N>: the first v7.3-7 kernel" after this
+section, as the 479 section was: what each step showed, the table
+against 479, the runs in `$L/b<N>/` and their lines in
+`$L/b<N>/results-twoport-<N>.tsv`. Then the README's branch state if
+anything there changes; docs commits only, and the grouping check.
+
+# 15 October: the boot into the reworked tree
 
 Written late on 14 October, after Mike pushed
 `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` at `32cf5556bd2e` (459
