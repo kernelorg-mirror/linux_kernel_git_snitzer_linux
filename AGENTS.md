@@ -210,7 +210,9 @@ twin or decided.
 
 **tardis1's next boot is into the first kernel built from the `v7.3-7`
 branch: start at "20 October: tardis1's boot into the v7.3-7 kernel" in
-[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md).**
+[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md),
+then the follow-up of Xsight's replies in
+[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/XSIGHT-FOLLOWUP.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/XSIGHT-FOLLOWUP.md).**
 
 **Converging on the Xsight driver** (tardis1, from 2026-10-07).
 **Mike is rebooting tardis1 into a 16 KiB kernel on 2026-10-08. If
