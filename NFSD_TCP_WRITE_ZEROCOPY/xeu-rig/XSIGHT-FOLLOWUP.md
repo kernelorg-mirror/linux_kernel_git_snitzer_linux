@@ -239,6 +239,26 @@ frame's first buffer (a receive pad, or header split)**, so that a
 frame's continuation buffers are aligned too? A driver cannot do that
 alone (see `../xeu-hds-experiment/` for what was tried in software).
 
+**Not run yet (21 October): tardis2 is in use.** tardis2 came back on
+build 491 (`.el10`) and was prepared: the six drives mounted, a
+detached worktree of this branch at `/var/tmp/x3-tree` (the clone's
+own checkout untouched; gitlab refuses root's key there too, so the
+commits went over as a bundle), the region bound by `bringup.sh`,
+`nfs-server` started (it was not after the boot). The driver is
+`$L/xsight-x3/x3.sh` on tardis2: two loan runs onto nvme4 and nvme5
+(`FS_A="/hs/nvme4 /hs/nvme5" WRITES=64 WARM=10 RUNTIME=25`) at
+`rx_ip_align` 2, xeu reloaded at 0 with the region kept, two more,
+xeu reloaded at the setting; bpftrace counts each `nfsd_write_dio_*`
+outcome beside each run, and `settled.sh`'s new `EXP_XEU_<parameter>`
+holds the audit to 0 for those runs. It stopped at the first audit:
+**nvme0 is also mounted at `/mnt/nvme0`, where someone's root shell
+(from 05:58 on tardis2's clock, two `serviceadmin` logins from
+192.168.254.185) is working in `hke.git`**, and `data_drives` refuses
+a drive mounted outside `/hs`. X3 needs only nvme4 and nvme5, but
+running past a BAD item is Mike's to allow, and not beside someone
+else's work unasked. To run it: once `/mnt/nvme0` is gone, `nohup
+setsid $L/xsight-x3/x3.sh > $L/xsight-x3/x3.log 2>&1 &` on tardis2.
+
 ### X4. The affinity hint: a patch and its test (Mike reloads)
 
 **Why.** Their answer was the script; the script's placement does not
@@ -306,6 +326,64 @@ smaller than a page, the answer is a threshold derived from the ring
 size (and buffer size), not a parameter; if it makes no difference on
 this kernel, say so and drop the patch.
 
+**Done, 20 and 21 October, build 491: it is the ring's size.** Driver
+`$L/xsight-x5/x5.sh`, log `x5.log`, results `results-x5.tsv`; runs
+`$L/x5-*`. Copy mode, xeu Release 8, `twoport.sh REFILL=` (new for
+this: `REFILL=<n>` sets `rx_refill_thresh` for the run, which xeu reads
+every poll, and the audit holds it there through `EXP_REFILL`), 32 and
+8 by turns, the eight drives trimmed before each pair, `WARM=10
+RUNTIME=30 REST=120`. Ring drops, FIFO drops and retransmits are the
+10 s window's.
+
+**What set 8.** It came with build 462 (`xeu.conf`, 9 October) in the
+same runs as the page pool's LIFO stack and deferred frees, which cut
+`rx_pp_alloc_empty` from 1,077 to 11 in 10 s; `../XEU_CONVERGENCE.md`
+says that cannot be put down to any one of them. The only isolated
+measure was eight rings of 64 at threshold 2 (13 October): ring drops
+104 and 59 down to 12 and 37, the rate level. So this is the first
+measure of 8 against 32 alone.
+
+| two ports, rings of 128 | GB/s | drives | ring drops a / b | FIFO drops | client retransmits |
+|---|---|---|---|---|---|
+| 32 | 57.48 | clean | 3,997 / 4,147 | 0 | 9,593 |
+| 32 | 53.02 | two stepped down | 2,845 / 3,479 | 0 | 8,304 |
+| 32 | 56.83 | clean | 5,317 / 5,312 | 0 | 11,299 |
+| 8 | 50.55 | two stepped down | 1 / 4 | 0 | 224 |
+| 8 | 58.13 | clean | 6 / 15 | 0 | 37 |
+| 8 | 52.40 | clean | 6 / 5 | 0 | 34 |
+
+| one port a, eight drives, rings of 256 | GB/s | ring drops | FIFO drops | client retransmits |
+|---|---|---|---|---|
+| 32 | 45.53, 46.35, 45.42 | 7, 22, 12 | 1,929, 5,072, 4,581 | 1,978, 5,186, 4,773 |
+| 8 | 45.79, 46.63, 46.11 | 0, 0, 0 | 3,043, 2,748, 1,157 | 3,251, 2,970, 1,747 |
+
+- **On rings of 128, 32 drops at the rings and 8 does not**: 2,845 to
+  5,317 frames a port in 10 s against 1 to 15, in all three pairs, and
+  the client retransmits 8,304 to 11,299 against 34 to 224. 32 is a
+  quarter of a 128-entry ring left empty before a refill.
+- **On rings of 256 it makes no difference**: the rate level (45.4 to
+  46.6), the rings dropping 0 to 22 either way; the loss there is the
+  FIFO's, and the retransmits follow it.
+- **The rate on two ports does not separate**: 57.48 and 56.83 clean
+  at 32, 58.13 and 52.40 clean at 8. Fewer ring drops, not more rate.
+- **The answer to Xsight**: not a parameter by use case, a threshold
+  derived from the ring's size. A quarter of the ring drops; an eighth
+  (32 of 256) and a sixteenth (8 of 128) do not. Something like
+  `min(32, size / 8)` keeps the driver's 32 for rings of 256 and up.
+- The tail-drop and page-pool counters were sampled once a second (a
+  port open zeroes them, and `twoport.sh` opens the ports at the start
+  and in its cleanup); summed over a whole run they include the
+  warm-up and are in `x5.log`. A first attempt that read them before
+  and after a run gave negative counts and was stopped
+  (`aborted/`).
+- **Three stops on the client, not the runs**: ssh to the client timed
+  out at 10 s twice (the audit before ab32-2, a mount in a32-1), and in
+  a32-2 an ssh's connection died after it was made and the run waited
+  ten minutes. The client was idle each time a few minutes later. The
+  rig's ssh now waits 30 s to connect and ends a dead connection after
+  30 s (`ServerAliveInterval`), and `x5.sh` skips a run it already
+  has.
+
 ### X6. Interrupt deferral and pause: a reproducer they can run
 
 **Why.** Both are "we will investigate". Make that cheap for them.
@@ -319,6 +397,33 @@ run. For pause, the commands of the note's 2b in one script, with the
 FIFO fill and the client's pause counters sampled.
 
 **Decides.** Nothing on our side; attach them to the reply.
+
+**Done, 21 October, build 491, tardis1 port a, xeu Release 8: both
+reproduce.** The scripts are `defer-repro.sh` and `pause-repro.sh`
+here; their records are in `$L/xsight-x6/defer/` and
+`$L/xsight-x6/pause/`. Each ended at the settled setting.
+
+- **Deferral** (`defer.txt`): the load at 6.3 million frames a second
+  and about 250,000 Rx interrupts a second; with
+  `napi_defer_hard_irqs` 2 and `gro_flush_timeout` 50000 (ynl shows
+  both on every NAPI) **the Rx interrupts fell to 0 in the first
+  second and stayed there**, while frames went on for about 5 s with
+  no interrupt (4.3 million a second, then 2.2), then stopped (120,646,
+  then single digits). Both written back to 0: still nothing, and the
+  client did not answer a ping over the port. A down and up brought it
+  back. Nothing logged. New against the note: the interrupts stop at
+  once; what carries the frames for those seconds is presumably the
+  GRO flush timer.
+- **Pause** (`pause.txt`, `*.samples`): plain TCP copying with eight
+  copybench threads, the client's port obeying pause. `tx on` with the
+  port open: 42.60 GB/s, the FIFO to 15,638 lines (xoff is 12,288),
+  419,218 FIFO drops and 619,080 ring drops, **0 pause frames at the
+  client**. Opened with `rx on tx on`: 42.00 GB/s, **0 ring drops and
+  1,458,125 FIFO drops**, the FIFO at most 12,113 lines, just under
+  xoff, and **0 pause frames**. As on 11 October; new is the FIFO held
+  at xoff with pause on, as if the port acted on xoff by dropping
+  rather than by sending pause. `port_rx_fifo_fc_lines` follows the
+  fill, and read 32767 once in the second case.
 
 ### X7. The reply
 
