@@ -31,7 +31,9 @@
 #   cell   a loan sweep's cell on port a: its plan line sets the rings, the
 #          held buffer and the budget, passed as EXP_ENTRIES_A, EXP_RCVBUF,
 #          EXP_BUDGET, EXP_BUDGET_RESERVE and EXP_LINGER
-# EXP_REFILL holds xeu's rx_refill_thresh to a run's REFILL= instead of 8.
+# EXP_REFILL holds xeu's rx_refill_thresh to a run's REFILL= instead of 8,
+# and EXP_XEU_<parameter> (exported) holds any xeu parameter to a value, for
+# a host whose xeu was loaded off the setting on purpose (rx_ip_align=0).
 # A run that sets something on purpose (twoport.sh's RCVBUF= and the like)
 # passes it as EXP_<NAME>: the audit then holds the live state to that and
 # says the run is off the settled setting and where.
@@ -305,6 +307,11 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "${ENTRIES[b]}" = "${SETTLED[entries_b]}" ] || OFF="$OFF rings_b=${ENTRIES[b]}"
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
+	local xk xv
+	for xk in "${!XEU[@]}"; do
+		xv=EXP_XEU_$xk
+		[ -n "${!xv:-}" ] && [ "${!xv}" != "${XEU[$xk]}" ] && OFF="$OFF $xk=${!xv}"
+	done
 	[ -n "${EXP_LAYOUT:-}" ] && OFF="$OFF layout=$EXP_LAYOUT"
 	[ -n "${EXP_QDISC:-}" ] && [ "$EXP_QDISC" != fq_codel ] && OFF="$OFF client_qdisc=$EXP_QDISC"
 	[ -n "${EXP_QDISC_A:-}" ] && [ "$EXP_QDISC_A" != fq_codel ] && OFF="$OFF client_qdisc_a=$EXP_QDISC_A"
@@ -402,6 +409,7 @@ audit() {
 	done
 	for k in $(printf '%s\n' "${!XEU[@]}" | sort); do
 		w=${XEU[$k]}; [ $k = rx_refill_thresh ] && w=${EXP_REFILL:-$w}
+		v=EXP_XEU_$k; w=${!v:-$w}
 		want "xeu $k" "$(cat /sys/module/xeu/parameters/$k 2>/dev/null)" "$w"
 	done
 	want "receive region pages" "$(cat $PP/rx_region_pages)" $REGION_PAGES
