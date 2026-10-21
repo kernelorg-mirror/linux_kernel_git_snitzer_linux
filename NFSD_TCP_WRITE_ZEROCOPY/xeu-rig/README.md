@@ -244,6 +244,59 @@ against 479, the runs in `$L/b<N>/` and their lines in
 `$L/b<N>/results-twoport-<N>.tsv`. Then the README's branch state if
 anything there changes; docs commits only, and the grouping check.
 
+## Build 491: the first v7.3-7 kernel (20 and 21 October)
+
+Build 491 (`7.3.0-7.hs.491.loanpages_pool.el9.aarch64+16k`) on
+tardis1: `uname -r` names 7.3.0 and no rc, the `write_dio` events are
+the six of the section above and no `split`, and `modinfo -p sunrpc`
+has `svc_tcp_spare_bytes_max` and none of the dropped parameters. The
+battery is `$L/b491/battery.sh` (written before the boot) and
+`battery-from4.sh` (its copy without step 2); logs in `$L/b491/`.
+
+- **Step 1, the boot: as written.** The eight drives, `bringup.sh 32768
+  256`, `port-setup.sh enp164s0f0 56`, `settled.sh apply`: the settled
+  setting, loans `Y`, one pool of 512 threads on 8-55, spare 67108864,
+  `io_cache_write` 2 (`$L/b491/boot.log`).
+- **Step 2, KUnit: one case failed, a test the rebase did not adapt.**
+  7, 48, 7 and 10 cases, but `nfsd_bvec_dio_segments_test` failed in
+  its seven DONTCACHE cases with a buffered segment: base flags 0x1000002
+  against 0x2 (`$L/kunit-491.log`). v7.3-7's "nfs_common: share direct
+  I/O write split and boundary-page helpers" issues a buffered
+  DONTCACHE segment with `IOCB_DONTCACHE_DEFER` (1 << 24), and the test
+  expected only `IOCB_DSYNC`. Fixed by `b783bf8ec202` (Mike's ask), the
+  bit expected on exactly those segments. With that module built
+  against the kernel's -devel and loaded in place of the installed one:
+  7, 48, 7 and 10, no failure, no skip (`$L/kunit-491-fix.log`). The
+  installed 491 RPM still carries the old test.
+- **Step 3, `dmesg`**: no WARNING, BUG or window clamp failure after
+  the boot or the runs. One WRITE timeout on nvme8 (the root drive) at
+  852 s, before bringup, outside the rig.
+- **Step 4, copy mode: ab-1 only** (Mike stopped the battery after it):
+  48.14 GB/s, a 23.24 and b 24.90, with nvme0, nvme3 and nvme7 stepping
+  down at 25 to 31 s, so not comparable with 479's clean 56.86 to
+  58.58. No FIFO or ring drops in the window; every segment written
+  direct (1,937,744); the outcome counter saw only
+  `nfsd_write_dio_direct` (2,814,984), as copy mode should. The clean
+  two-port runs of X5 (`XSIGHT-FOLLOWUP.md`) are the better reading of
+  491: 57.48 and 56.83 GB/s at `rx_refill_thresh` 32, 58.13 at 8, all
+  in 479's range.
+- **Steps 5 and 6: not run** (the loan outcomes and the spare-page
+  bound), at Mike's word.
+- **The devel package came in damaged**: `kernel-16k-devel` for 491
+  had 17,915 of its 21,820 files at 0 bytes (installed 20:55, before
+  the reboot), so no module could be built against it. It was
+  reinstalled from dnf's cache (`rpm -K` digests OK). That reinstall
+  was made with `rpm -Uvh --replacepkgs`, which **removed 479's and
+  474's `kernel-16k-devel`**; Mike chose not to restore them. Use
+  `rpm -i --replacepkgs` for a kernel package.
+- **xeu is Release 8 now** (X4: a ring interrupt keeps its affinity
+  across a close and open; kernel-rpmtree `787354a`, pushed), installed
+  with `rpm -ivh --force` and Release 7 dropped from the rpm database
+  only, so the 462 and 463 kmods stay.
+- **The client is slow to answer ssh right after a run** (three runs
+  of X5 stopped on it); the rig's ssh now waits 30 s to connect and
+  ends a dead connection after 30 s.
+
 # 15 October: the boot into the reworked tree
 
 Written late on 14 October, after Mike pushed
