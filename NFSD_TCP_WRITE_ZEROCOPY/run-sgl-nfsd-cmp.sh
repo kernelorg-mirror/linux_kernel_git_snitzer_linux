@@ -16,7 +16,10 @@ echo N > /sys/module/nfs/parameters/localio_enabled
 mkdir -p $M
 echo Y > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages
 echo 0 > $T/tracing_on; echo > $T/trace
-for e in nfsd/nfsd_write_dio_split nfsd/nfsd_write_direct nfsd/nfsd_write_vector sunrpc/svcsock_tcp_rx_lifetime nfsd/nfsd_file_get_dio_attrs; do echo 1 > $T/events/$e/enable; done
+# one nfsd_write_dio_<outcome> event per split decision (direct, no_alignment,
+# too_small, no_middle, mem_misaligned, gap_misaligned)
+DIOEV=$(cd $T/events && ls -d nfsd/nfsd_write_dio_*)
+for e in $DIOEV nfsd/nfsd_write_direct nfsd/nfsd_write_vector sunrpc/svcsock_tcp_rx_lifetime nfsd/nfsd_file_get_dio_attrs; do echo 1 > $T/events/$e/enable; done
 echo 1 > $T/tracing_on
 fails=0; mism=0
 for i in $(seq $N); do
@@ -26,8 +29,8 @@ for i in $(seq $N); do
 	cmp -s $SRC $E/f$i || mism=$((mism+1))
 done
 echo 0 > $T/tracing_on
-for e in nfsd/nfsd_write_dio_split nfsd/nfsd_write_direct nfsd/nfsd_write_vector sunrpc/svcsock_tcp_rx_lifetime nfsd/nfsd_file_get_dio_attrs; do echo 0 > $T/events/$e/enable; done
+for e in $DIOEV nfsd/nfsd_write_direct nfsd/nfsd_write_vector sunrpc/svcsock_tcp_rx_lifetime nfsd/nfsd_file_get_dio_attrs; do echo 0 > $T/events/$e/enable; done
 echo "rig=$R dev=$D conns=$N dd_fails=$fails cmp_mismatches=$mism"
 grep nfsd_file_get_dio_attrs $T/trace | grep -oE 'mem_align=[0-9]+|seg_boundary=-?[0-9]+|joint_boundary=[0-9]+' | sort | uniq -c | tr '\n' ' '; echo
-echo "dispositions: $(grep -oE 'disposition=[a-z_]+' $T/trace | sort | uniq -c | tr '\n' ' ')  direct=$(grep -c nfsd_write_direct: $T/trace) vector=$(grep -c nfsd_write_vector: $T/trace)"
+echo "dispositions: $(grep -oE 'nfsd_write_dio_[a-z_]+:' $T/trace | sed 's/nfsd_write_dio_//; s/:$//' | sort | uniq -c | tr '\n' ' ')  direct=$(grep -c nfsd_write_direct: $T/trace) vector=$(grep -c nfsd_write_vector: $T/trace)"
 echo "loans: $(grep 'action=publish' $T/trace | awk '{for(i=1;i<=NF;i++) if($i~/^(borrowed|copied)=/){split($i,a,"=");s[a[1]]+=a[2]}} END{printf "borrowed=%d copied=%d", s["borrowed"], s["copied"]}') publishes=$(grep -c 'action=publish' $T/trace) reasons: $(grep 'action=publish' $T/trace | grep -oE 'reason=[a-z-]+' | sort | uniq -c | tr '\n' ' ')"

@@ -50,7 +50,13 @@ reproduction instructions for the "page-loan" patch series.
 > with an aligned `mem_offset`), and LOCALIO reports it through
 > `nfs_local_dio_misaligned`; "nfsd: test the disposition of a refused
 > direct write in the receive-bvec KUnit suite", at the end of the KUnit
-> tests, checks it. Every code and KUnit commit (78)
+> tests, checks it. `run-sgl-nfsd-cmp.sh` and `run-sgl-localio-ab.sh`
+> enabled the single `nfsd_write_dio_split` event, which `v7.3-7` no
+> longer has, and counted its `disposition=` field: they now enable every
+> `nfsd_write_dio_*` event and count them by name (on an older kernel the
+> glob finds `nfsd_write_dio_split` alone, so only the totals still read).
+> No other script uses the old event; the `nfsd_write_direct` and
+> `nfsd_write_vector` counts the rig takes are unchanged. Every code and KUnit commit (78)
 > was built in turn at 16 KiB with `CONFIG_WERROR=y` and sparse
 > (`fs/nfsd/ fs/nfs_common/ net/sunrpc/ net/core/ net/ipv4/ block/
 > fs/xfs/ drivers/block/ fs/`), and the tip in full: no failure, and no
