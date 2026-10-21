@@ -103,6 +103,43 @@ assumes: that bits 13 and up of the hash pick the table entry.
 No match: the question back to them names the 13-byte input we tried
 and the key offsets and byte orders it failed in.
 
+**Done, 20 October, build 491: no match; the table bits confirmed.**
+Logs in `$L/xsight-x1/`.
+
+- **Selecting Toeplitz.** `ethtool -X enp161s0f0 hfunc toeplitz`
+  fails with `EINVAL`, as `../XEU_CONVERGENCE.md` recorded on 7.1:
+  the port reports no function while Spooky is set, so the CLI's
+  request changes nothing and the core refuses it before `xeu` is
+  called. `ynl` sets it (the tree's, `--no-schema`: tardis1 has no
+  `jsonschema`):
+
+      python3 tools/net/ynl/pyynl/cli.py --no-schema \
+          --spec Documentation/netlink/specs/ethtool.yaml \
+          --do rss-set --json '{"header": {"dev-name": "enp161s0f0"}, "hfunc": 1}'
+
+  `ethtool -x` then shows `toeplitz: on`. Port a stays on Toeplitz
+  until `xeu` is reloaded; `settled.sh` does not audit the function.
+- **The key**: the 40-byte Microsoft key, `6d:5a:56:da:…:01:fa`, then
+  28 zero bytes. `toeplitz-check.py` reads every hex digit in its
+  KEY file, so give it the key line alone (`key-line.txt`), not
+  `ethtool -x`'s whole output: the table's numbers break it.
+- **Ten flows**, one iperf3 connection at a time from 192.168.1.106
+  to 192.168.1.211:5201, client ports 40001 to 40008, 40101 and 41000,
+  each a single flow of 13 to 29 GB in `xeu-rx.bt`'s `@flow`
+  (`flows.txt`). The first captures of 40004 and 41000 recorded no
+  flow on port a although iperf3 ran; repeated with a 15 s trace
+  (`rx2-*.txt`) they did. Not explained. The same eight ports under
+  Spooky are in `spooky/`.
+- **`toeplitz-check.py`: no combination matches every flow**
+  (`check.txt`): neither the 13-byte input (addresses, ports, the
+  protocol byte) nor the 12-byte one, with the key from any of its 68
+  starting bytes, each field in either byte order, the hash as
+  computed or byte-swapped. So the question back names exactly that.
+- **`rss-place.py`'s assumption holds**: for all ten flows the table
+  entry `(hash >> 13) & 127` names the ring the flow was on, and 13 is
+  the only shift that does (the low seven bits do not). A flow can be
+  placed from its first packet's hash, as now; not before it connects.
+
 ### X2. The FIFO without NFS: is it the card's DMA or the host (an hour)
 
 **Why.** Don gave two causes for FIFO drops beside bursts: xeu's two
