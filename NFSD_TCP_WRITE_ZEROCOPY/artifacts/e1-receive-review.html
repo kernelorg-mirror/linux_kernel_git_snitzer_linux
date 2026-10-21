@@ -524,41 +524,16 @@
     <h3 style="margin-top:26px">The Linux changes it took</h3>
     <div class="delta">
       <div class="mark gain">1</div>
-      <div class="body"><h3>A stacked device takes its drives' memory alignment<span class="tag base">block</span></h3>
-      <p>MD raid0 asked for memory aligned to 512 bytes where each drive under it asks for 4, so nfsd's copy could not be written direct on the stripe and went through the page cache: a second copy. With the change every copied WRITE is direct. Worth 25.4 to 27.7 GB/s by itself.</p></div>
-    </div>
-    <div class="delta">
-      <div class="mark gain">2</div>
       <div class="body"><h3>nfsd trades pages with the socket when a part-received WRITE changes hands<span class="tag base">sunrpc</span></h3>
       <p>A WRITE that one thread began receiving and another finished had its pages freed and allocated again at each handover. They are now swapped. The page allocator left the profile.</p></div>
     </div>
     <div class="delta">
-      <div class="mark gain">3</div>
-      <div class="body"><h3>A thread waits briefly for the rest of a WRITE<span class="tag base">sunrpc</span><span class="tag new">dropped since</span></h3>
-      <p>A 1 MiB WRITE arrives as about 118 jumbo frames, which the network stack hands up a burst at a time. nfsd read whatever had arrived and, if the WRITE was not complete, parked it on the connection and went on to other work; the next burst woke some thread to read the next piece.</p>
-      <div class="tbl-wrap"><table class="q" style="min-width:0">
-        <thead><tr><th>One 1 MiB WRITE, sixteen connections</th><th>Reads to receive it</th></tr></thead>
-        <tbody>
-          <tr><td>256 KiB receive buffer</td><td class="x">17, nine in ten by a different thread from the one before</td></tr>
-          <tr><td>1 MiB receive buffer </td><td class="c">6 to 7</td></tr>
-          <tr><td>1 MiB receive buffer, and a thread that waits up to 50 &micro;s for the next piece (with the other changes)</td><td class="r">2, by the same thread</td></tr>
-        </tbody>
-      </table></div>
-      <p><strong>What the pieces cost.</strong> Every extra read is a thread woken and a WRITE handed over. In between, the rest of the WRITE sits unread in the connection's receive queue, in pages that came off the rings, and those pages cannot go back to the pool until some thread gets to them. So the receive memory in use is larger, the rings are refilled with pages that have been idle longer, and the connection's window stays shut to the client. With the 256 KiB buffer a connection was being read for only 44% of the time: for 38% it was waiting for data and for 18% for a thread. A piece is about 13 &micro;s in coming, so a wait far shorter than a wake-up keeps one thread on the WRITE until it is whole.</p>
-      <p>With the wait and the other changes loaded together, frames dropped at the rings fell from 251 thousand to about 3 thousand in the same run on rings of 4 x 256; how much of that is the wait alone has not been measured. It is a busy wait and costs about a fifth more server CPU per GB (0.52 against 0.43 CPU-seconds), and how short it can be is not settled.</p></div>
-    </div>
-    <div class="delta">
-      <div class="mark gain">4</div>
-      <div class="body"><h3>Several nfsd thread pools on one NUMA node<span class="tag base">sunrpc</span><span class="tag new">dropped since</span></h3>
-      <p>All 512 threads took ready connections from one queue. Four pools give four queues. Its own worth has not been measured: the load that showed the contention had 64 connections.</p></div>
-    </div>
-    <div class="delta">
-      <div class="mark gain">5</div>
+      <div class="mark gain">2</div>
       <div class="body"><h3>The page pool reuses a region's pages last in, first out<span class="tag base">page_pool</span></h3>
       <p>A pool bound to the region recycled through a first-in, first-out ring, so the page handed to the card next was the one idle longest and least likely to be in cache. It is now a stack. The count of pages turned away from a full ring went to 0 with the smaller buffers.</p></div>
     </div>
     <div class="delta">
-      <div class="mark">6</div>
+      <div class="mark">3</div>
       <div class="body"><h3>The region can be resized, and loaned pages return in batches<span class="tag rework">page_pool &middot; sunrpc</span></h3>
       <p>A 32768-page region replaced the 6144-page one, which left no room for deeper rings. Loaned pages are returned to their pool a batch at a time. Neither is on the copy's path. The first version of the batching had a fault, since fixed with a unit test and a build-time check.</p></div>
     </div>
