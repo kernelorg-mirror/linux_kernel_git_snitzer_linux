@@ -950,6 +950,78 @@ static void nfsd_bvec_dio_seg_boundary_test(struct kunit *test)
 			(u32)(2 * PAGE_SIZE));
 }
 
+/*
+ * Which of its dispositions the split reports for a payload refused direct
+ * I/O, as the nfsd_write_dio_* tracepoints show it: a fragment that breaks
+ * the memory alignment is NFS_DIO_MEM_MISALIGNED, an interior gap at an
+ * offset that is not an offset_align multiple is NFS_DIO_GAP_MISALIGNED, on
+ * a device whose segment boundary makes it a gap at all.
+ */
+static void nfsd_bvec_dio_disposition_test(struct kunit *test)
+{
+	static const struct {
+		const char	*name;
+		u32		seg_boundary;
+		unsigned int	nvecs;
+		unsigned int	lengths[3];
+		enum nfs_dio_disposition expected;
+	} cases[] = {
+		{ "contiguous", 0, 2, { PAGE_SIZE, PAGE_SIZE },
+		  NFS_DIO_DIRECT },
+		{ "fragment-off-mem-align", 0, 3,
+		  { PAGE_SIZE, PAGE_SIZE - 100, 100 }, NFS_DIO_MEM_MISALIGNED },
+		{ "gap-off-offset-align", 0, 3,
+		  { PAGE_SIZE, 512, PAGE_SIZE - 512 }, NFS_DIO_GAP_MISALIGNED },
+		{ "gap-on-offset-align", 0, 3,
+		  { PAGE_SIZE, 1024, PAGE_SIZE - 1024 }, NFS_DIO_DIRECT },
+		{ "gap-off-offset-align-no-boundary", NFS_DIO_SEG_BOUNDARY_NONE,
+		  3, { PAGE_SIZE, 512, PAGE_SIZE - 512 }, NFS_DIO_DIRECT },
+	};
+	static const struct file_operations fake_fops;
+	static struct inode fake_inode = {
+		.i_size = MAX_LFS_FILESIZE,
+	};
+	struct file fake_file = {
+		.f_inode = &fake_inode,
+		.f_op = &fake_fops,
+	};
+	unsigned int case_index;
+
+	for (case_index = 0; case_index < ARRAY_SIZE(cases); case_index++) {
+		const struct nfs_dio_policy policy = {
+			.mem_align = 512,
+			.offset_align = 1024,
+			.seg_boundary = cases[case_index].seg_boundary,
+		};
+		struct nfs_dio_split split = {};
+		struct bio_vec bvec[3] = {};
+		unsigned int vector_index;
+		bool direct;
+
+		kunit_info(test, "%s", cases[case_index].name);
+		for (vector_index = 0; vector_index < cases[case_index].nvecs;
+		     vector_index++) {
+			struct page *page = nfsd_bvec_alloc_page(test);
+
+			KUNIT_ASSERT_NOT_NULL(test, page);
+			bvec_set_page(&bvec[vector_index], page,
+				      cases[case_index].lengths[vector_index], 0);
+		}
+
+		nfs_dio_split(&fake_file, &policy, ITER_SOURCE, bvec,
+			      cases[case_index].nvecs, 0, 2 * PAGE_SIZE, 0,
+			      &split);
+		KUNIT_EXPECT_EQ(test, split.disposition,
+				cases[case_index].expected);
+		KUNIT_ASSERT_EQ(test, split.nsegs, 1U);
+		direct = split.segs[0].flags & IOCB_DIRECT;
+		KUNIT_EXPECT_EQ(test, direct,
+				cases[case_index].expected == NFS_DIO_DIRECT);
+		KUNIT_EXPECT_EQ(test, iov_iter_count(&split.segs[0].iter),
+				2 * PAGE_SIZE);
+	}
+}
+
 static void nfsd_bvec_proc_dispatch_parity_test(struct kunit *test)
 {
 	static const struct svc_procedure procedures[2] = {
@@ -1063,6 +1135,7 @@ static struct kunit_case nfsd_bvec_test_cases[] = {
 	KUNIT_CASE(nfsd_bvec_decode_error_test),
 	KUNIT_CASE(nfsd_bvec_dio_segments_test),
 	KUNIT_CASE(nfsd_bvec_dio_seg_boundary_test),
+	KUNIT_CASE(nfsd_bvec_dio_disposition_test),
 	KUNIT_CASE(nfsd_bvec_proc_dispatch_parity_test),
 	KUNIT_CASE(nfsd_bvec_nfs3_capability_test),
 	{}
