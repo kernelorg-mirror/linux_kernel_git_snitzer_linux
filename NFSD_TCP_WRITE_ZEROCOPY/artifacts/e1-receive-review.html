@@ -77,6 +77,34 @@
   }
   .lede { font-size: 19.5px; line-height: 1.5; color: var(--ink); }
   .note { font-size: 14.5px; color: var(--muted); }
+  table.q { width: 100%; border-collapse: collapse; font-size: 14.5px; min-width: 540px; }
+  table.q td.r { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--gain); font-weight: 600; font-size: 13px; }
+  table.q td.x { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--cost); font-weight: 600; font-size: 13px; }
+  table.q td.c { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; white-space: nowrap; color: var(--ink); }
+  table.q td.m { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; white-space: nowrap; color: var(--muted); }
+  table.q td code { white-space: nowrap; }
+  .verdict.acc { border-left-color: var(--accent); }
+  .verdict .big em { font-style: normal; color: var(--cost); }
+  .verdict.gain .big em { color: var(--gain); }
+  .delta { display: flex; gap: 16px; padding: 20px 0; border-top: 1px solid var(--hair); }
+  .delta .mark { flex: 0 0 auto; font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--surface); background: var(--accent); width: 30px; height: 30px; border-radius: 7px; display: flex; align-items: center; justify-content: center; }
+  .delta .mark.gain { background: var(--gain); }
+  .delta .body { flex: 1 1 auto; min-width: 0; }
+  .delta .body p { margin: 0; font-size: 15.5px; }
+  .delta .body p + p, .delta .body .tbl-wrap + p { margin-top: 10px; }
+  .delta .body .tbl-wrap { margin: 10px 0 0; }
+  .delta .body h3 { margin-bottom: 4px; }
+  .tag { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; margin-left: 8px; vertical-align: middle; white-space: nowrap; font-stretch: 100%; }
+  .tag.base { background: var(--gain-soft); color: var(--gain); }
+  .tag.rework { background: var(--accent-soft); color: var(--accent); }
+  .tag.new { background: var(--cost-soft); color: var(--cost); }
+  .matrix { display: grid; grid-template-columns: 1fr auto; gap: 1px; background: var(--hair); border: 1px solid var(--hair); border-radius: 10px; overflow: hidden; margin: 4px 0 8px; }
+  .matrix .cell { background: var(--surface); padding: 12px 16px; align-content: center; font-size: 15px; }
+  .matrix .cell.k { color: var(--ink-soft); }
+  .matrix .cell.v { display: flex; align-items: center; justify-content: flex-end; }
+  .pill.yes { color: var(--gain); background: var(--gain-soft); }
+  .pill.no { color: var(--cost); background: var(--cost-soft); }
+  .pill.pend { color: var(--accent); background: var(--accent-soft); }
   .lede .hl { color: var(--gain); font-weight: 600; }
   .lede .hc { color: var(--cost); font-weight: 600; }
   .prov { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--hair); display: grid; gap: 10px; }
@@ -140,11 +168,11 @@
   .ask:first-of-type { border-top: none; padding-top: 6px; }
   .ask .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 8px; }
   .ask .head h3 { margin: 0; }
-  .q {
+  .ask-q {
     background: var(--accent-soft); border-radius: 8px; padding: 12px 15px;
     color: var(--ink); font-size: 15.5px; margin: 10px 0 0;
   }
-  .q b { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 3px; font-weight: 600; }
+  .ask-q b { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 3px; font-weight: 600; }
   .pill {
     font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .05em;
     text-transform: uppercase; padding: 3px 9px; border-radius: 999px; white-space: nowrap;
@@ -211,6 +239,277 @@
     </div>
   </header>
 
+  <section id="xeu463">
+    <p class="eyebrow ok"><span>What it took to get here &middot; 16 KiB &middot; one port, six striped NVMe drives<br>10 October</span></p>
+    <h2>43.3 GB/s copied and written direct, in 24 to 26 MiB of the 32 MiB cache</h2>
+    <p class="note">The account as of 10 October. Since then two of its settings were dropped as not worth their cost: several thread pools per NUMA node and the thread that waits for the rest of a WRITE (marked below). The 47.8 and 60.4 GB/s at the top of this page came after it.</p>
+    <div class="verdict gain" id="depth">
+      <p class="big">10 October: 8192-byte receive buffers with the MTU at 7792, a 1 MiB held buffer and every connection placed on a ring. <em>43.2 and 43.3 GB/s</em>, in 24 to 26 MiB of the 32 MiB cache.</p>
+      <p><strong>The gain is in how densely a frame sits in receive memory.</strong> The <code>xeu</code> driver gave every 9000-byte frame a whole 16 KiB page, so more than 7 KiB of each was never written. A new driver setting, <code>rx_buf_size</code>, cuts each page into smaller buffers. At 5440 bytes a page holds three and a frame takes two. At 8192 bytes a page holds two, and with the server's MTU lowered to 7792 a frame fills exactly one.</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:600px">
+        <thead><tr><th>16 connections, copy mode</th><th>A whole page<br>MTU 9000</th><th>5440-byte buffers<br>MTU 9000</th><th>8192-byte buffers<br>MTU 7792</th></tr></thead>
+        <tbody>
+          <tr><td>GB/s, durable</td><td class="c">41.4 &middot; 38.3</td><td class="c">41.8 &middot; 40.7 &middot; 41.1 &middot; 41.6</td><td class="r">43.2 &middot; 43.3</td></tr>
+          <tr><td>Receive memory in use (of 32 MiB L3)</td><td class="x">34 to 37 MiB</td><td class="c">27 to 30 MiB</td><td class="r">24 to 26 MiB</td></tr>
+          <tr><td>Buffer bytes for each byte of payload</td><td class="x">1.86</td><td class="c">1.24</td><td class="r">1.09</td></tr>
+          <tr><td>Buffers to a frame</td><td class="c">1</td><td class="c">2</td><td class="r">1</td></tr>
+          <tr><td>Frames dropped at the ring</td><td class="x">3557 &middot; 127,510</td><td class="r">0 to 213</td><td class="r">9 &middot; 7</td></tr>
+          <tr><td>Server CPU-seconds per GB</td><td class="c">0.48 &middot; 0.52</td><td class="c">0.49 to 0.50</td><td class="r">0.46 &middot; 0.46</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>Denser buffers keep more data in the cache.</strong> The same rings and the same held buffer hold more payload in less memory, so the copy finds its data in cache more often: its share of the server's cycles is 25% at 8192 bytes against 29% at 5440. It is the one change that raised the rate and lowered the memory together. A fifth more frames arrive for the same data, and the rings took them with 9 and 7 dropped.</p>
+      <p><strong>One buffer to a frame also matters for what comes next.</strong> With two buffers to a frame the second is not placed on a 4-byte boundary, which a direct write of loaned pages needs. With one, every piece is placed. Only the server's MTU is lowered; the client's stays at 9000.</p>
+      <p><strong>Around the buffers, three settings.</strong> A 1 MiB held receive buffer is worth about 1.7 GB/s over 685 KiB: more of a WRITE has arrived when a thread reads it. Rings of 256 frames drop next to nothing where rings of 128 dropped a hundred thousand to nine hundred thousand frames a run. And placing every connection on a ring made runs repeat: two runs of a setting are within about 1 GB/s, where the same setting had given 41.0 and 36.6.</p>
+      <p class="note">Two traced runs of 120 seconds for each figure pair, four for the middle column. The whole-page runs are from before connections were placed. Every WRITE in every column was written direct.</p>
+    </div>
+
+    <h3 style="margin-top:26px" id="needs">What the peak depends on</h3>
+    <p>Four things have to hold at once. Take any one away and the rate falls or stops repeating.</p>
+    <div class="delta">
+      <div class="mark gain">1</div>
+      <div class="body"><h3>One copy, written direct</h3>
+      <p>nfsd copies a WRITE out of the receive pages once and the file system sends that buffer to the drives as it is. A second copy through the page cache held the same load to 25 GB/s.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark gain">2</div>
+      <div class="body"><h3>A connection that never waits for data</h3>
+      <p>A receive buffer deep enough to hold a whole WRITE, and one thread that stays with the WRITE until it is all in. With a shallow buffer each connection sat idle for more than half the time.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark gain">3</div>
+      <div class="body"><h3>Receive memory that stays inside the L3 cache</h3>
+      <p>Receive buffers a frame fills (8192 bytes at an MTU of 7792), rings sized in frames, and pages reused last in, first out. Copying a WRITE takes 60% longer when the memory in use grows from 24 MiB to 48 MiB; the best setting uses 24 to 26.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark gain">4</div>
+      <div class="body"><h3>Every flow placed, so each ring carries a quarter</h3>
+      <p>Each ring is served by one CPU, so the busiest ring is the first thing to run out. Left to the card's hash, sixteen connections have put 36% to 42% of the traffic on one ring and as little as 6% on another, differently at every mount. In an earlier set of three like runs the slowest was the one with a ring at twice its share. The harness now reads each connection's hash and sets the card's RSS table so that four connections land on each ring. Under NFS the rings went from 23, 21, 36 and 20% to 25.0, 25.0, 25.4 and 24.6% (<a href="#steer">below</a>), and two runs of one setting now come within about 1 GB/s of each other where they differed by more than 4.</p></div>
+    </div>
+
+    <h3 style="margin-top:26px" id="call">The call with Xsight on 9 October, and what came of it</h3>
+    <div class="metrics" style="margin-top:14px">
+      <div class="metric"><div class="n">27.7 GB/s</div><div class="l">the direct copy at the<br>time of the call</div></div>
+      <div class="metric"><div class="n gain">35.9</div><div class="l">the same afternoon,<br>after tracing</div></div>
+      <div class="metric"><div class="n gain">38.0</div><div class="l">that evening, with the<br>changes loaded</div></div>
+      <div class="metric"><div class="n gain">43.3</div><div class="l">the next day,<br>inside the L3 cache</div></div>
+    </div>
+    <p style="margin-top:18px"><strong>What we brought to it.</strong> By 9 October there had been a week of runs on the card, and so the call could be about how a buffer lives and not about which features the card lacks. The measurements already said that the wire carries line rate when nothing has to be stored, that the copy stopped near 25 to 28 GB/s, that the client spent its time waiting on the server, that the receive memory was being held inside the 32 MiB cache with back pressure to the sender, and that the page pool's locking was one of the costs. Earlier requests to Xsight had been for features other cards have, such as header-data split and coalescing of received frames. With those figures in hand the question put to them was a better one: how does a buffer have to move for this hardware to perform?</p>
+    <p><strong>What Xsight said.</strong> A buffer has to be used again while it is still in the cache, so its whole life, from the ring to the copy and back to the pool, must fit in the cache's footprint. The buffer freed last should be the one allocated next, as DPDK does. One burst of delay can push the buffers out of cache into a slower state that does not recover, so try a load paced at the source and raised in steps. Flows reach the rings by the hash of their addresses and ports, so an even spread needs many more flows than rings, and is read from the per-ring counters as differences. More rings, or deeper ones, is more memory posted.</p>
+    <p>Each point was checked against the running system the same afternoon, and each one that held became a change:</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:680px">
+      <thead><tr><th>Xsight's point</th><th>What tracing then showed here</th><th>What was built</th><th>What it gave</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Last freed, first allocated</strong></td><td>The page pool handed pages back through a first-in, first-out ring, and nearly every page went that way. The test harness had also switched off the kernel's deferred frees, which feed the pool's fast path</td><td>A last-in, first-out stack for pools bound to the region. Deferred frees switched on. A driver setting to refill a ring sooner</td><td class="r">Pages turned away from a full pool in 10 s: 17,278 before, 52 to 1434 after, and 0 with the smaller buffers</td></tr>
+        <tr><td><strong>A buffer's life must fit in the cache</strong></td><td>The copy of a 1 MiB WRITE took 224 &micro;s with 24 MiB of the region in use and 357 &micro;s with 48 MiB. A WRITE was received in 17 reads, by a different thread nine times in ten, and its connection was idle for more than half the time</td><td>Receive buffers smaller than a page (<code>rx_buf_size</code>). A deeper held receive buffer. A thread that waits for the rest of a WRITE. Pages traded, not freed, when a WRITE changes hands</td><td class="r">The region in use fell from 34 to 37 MiB to 24 to 26, at a higher rate. Reads for one WRITE fell from 17 to 2. The page allocator left the profile</td></tr>
+        <tr><td><strong>Many more flows than rings; read the per-ring counters</strong></td><td>Sixteen flows on four rings took 25%, 6%, 31% and 37%. The slowest of three like runs had one ring at 19.9 GB/s and 440 thousand dropped frames. Sixty-four flows came out even, as Xsight said they would</td><td>A per-ring reading in every run. The card's RSS table exposed through <code>ethtool</code>. A harness that places every connection on a ring before it measures</td><td class="r">Under NFS, four connections on each ring and every ring within half a percent of a quarter of the traffic</td></tr>
+        <tr><td><strong>More rings is more memory</strong></td><td>Four rings of 512 dropped nothing and were slower than four of 256, because the region in use left the cache</td><td>Four rings kept. Ring depth counted in frames, so 512 entries of 5440 bytes hold what 256 pages did</td><td class="r">No frame dropped at 256 frames a ring</td></tr>
+        <tr><td><strong>Pace the load at the source and step it up</strong></td><td class="m">not yet looked at</td><td>The harness can now offer a set rate and raise it in steps</td><td class="m">written, not run</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">Not every gain was Xsight's suggestion. The stripe's direct write and the 1 MiB held buffer came from our own tracing, and the held buffer was found on the afternoon of the call. What the call supplied was the context for reading those traces: a change is measured by how soon a buffer is back in the pool while it is still in cache. The 5440-byte buffers follow from that. They take the receive memory from 34 to 37 MiB, which is more than the L3 cache, down to 21 MiB inside it. Buffers of 8192 bytes that a frame exactly fills are denser still, and carry 43.3 GB/s in 24 to 26 MiB. About 4.7 GB/s remain to the 48 the wire carries.</p>
+
+    <h3 style="margin-top:26px">How the copy got here</h3>
+    <div class="tbl-wrap"><table class="q" style="min-width:0">
+      <thead><tr><th>Day</th><th>What changed</th><th>Copy, GB/s</th></tr></thead>
+      <tbody>
+        <tr><td class="m">8 Oct</td><td>Six drives striped. The copy went through the page cache: two copies</td><td class="c">25.4</td></tr>
+        <tr><td class="m">9 Oct</td><td>The stripe reports its drives' memory alignment, so the copy is written direct</td><td class="c">27.7</td></tr>
+        <tr><td class="m">9 Oct</td><td>Receive buffer held at 1 MiB, not 256 KiB</td><td class="c">35.9</td></tr>
+        <tr><td class="m">9 Oct</td><td>Five kernel changes and the driver's refill threshold, loaded together</td><td class="c">38.0 (36.7 to 38.3)</td></tr>
+        <tr><td class="m">10 Oct</td><td>The same stack built in, flows kept off one busy ring before each run</td><td class="r">41.4 &middot; 38.3</td></tr>
+        <tr><td class="m">10 Oct</td><td>5440-byte receive buffers</td><td class="r" style="white-space:normal">41.0 &middot; 36.6, in 21 MiB</td></tr>
+        <tr><td class="m">10 Oct</td><td>The same, with every connection placed: four to a ring</td><td class="r" style="white-space:normal">39.4 &middot; 39.6 &middot; 39.9, in 21 to 24 MiB</td></tr>
+        <tr><td class="m">10 Oct</td><td>Placed, with the receive buffer held at 1 MiB</td><td class="r" style="white-space:normal">41.8 &middot; 40.7, in 30 MiB</td></tr>
+        <tr><td class="m">10 Oct</td><td>8192-byte buffers and an MTU of 7792: one buffer to a frame</td><td class="r" style="white-space:normal">43.2 &middot; 43.3, in 24 to 26 MiB</td></tr>
+        <tr><td class="m">For scale</td><td class="m" style="white-space:normal">The wire with no NFS, sixteen TCP streams &middot; the loan at its best then</td><td class="m">48 &middot; 30.3</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">Sixteen connections throughout. The 9 October evening row is the median and range of three traced runs; the 10 October rows are two traced runs each. A change is judged as one of many here, not by its own effect on the rate: what each is worth alone has not been measured.</p>
+
+    <h3 style="margin-top:26px">The configuration behind 43.3 GB/s</h3>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Setting</th><th>Value</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Receive buffer size, <code>xeu</code> <code>rx_buf_size</code></td><td class="r">8192</td><td>two buffers to a 16 KiB page; each holds 7806 bytes of a frame</td></tr>
+        <tr><td>MTU on the server's port</td><td class="r">7792</td><td>a frame with its Ethernet header is 7806 bytes: exactly one buffer. The client's MTU stays 9000</td></tr>
+        <tr><td>Receive rings</td><td class="c">4 rings of 256</td><td>256 frames to a ring</td></tr>
+        <tr><td>Refill threshold, <code>xeu</code> <code>rx_refill_thresh</code></td><td class="c">8 (default 32)</td><td>a ring is refilled sooner, so fewer buffers sit idle</td></tr>
+        <tr><td>IP header placement, <code>xeu</code> <code>rx_ip_align</code></td><td class="c">2</td><td>data on a 4-byte boundary, which a direct write needs</td></tr>
+        <tr><td>RSS table, <code>xeu</code> <code>rss_indir_size</code></td><td class="c">128</td><td>which ring a flow lands on can be read and set</td></tr>
+        <tr><td>Receive region</td><td class="c">32768 pages, bound to the port</td><td>where the pages come from; 1517 to 1658 were in use at peak</td></tr>
+        <tr><td>Budget</td><td class="c">0</td><td>copy mode: nfsd copies on arrival and the pages go straight back</td></tr>
+        <tr><td>Held receive buffer, per connection</td><td class="r">1 MiB</td><td>deep enough that a connection does not wait for data; 685 KiB gave up about 1.7 GB/s on 5440-byte buffers</td></tr>
+        <tr><td>nfsd threads &middot; thread pools</td><td class="c">512 &middot; 4 (<code>pools_per_node</code>)</td><td>four queues of ready connections where the threads shared one; <strong>dropped since</strong>, one pool</td></tr>
+        <tr><td>Linger, <code>svc_tcp_rx_linger_us</code></td><td class="c">50</td><td>a thread waits for the rest of a WRITE: 2 reads to receive one, where it took 6 to 17; <strong>dropped since</strong></td></tr>
+        <tr><td>Deferred skb frees, <code>net.core.skb_defer_max</code></td><td class="c">128 (on)</td><td>half of the pages return by the page pool's fast path</td></tr>
+        <tr><td>Client</td><td class="c">nconnect 16, 8 MiB writes</td><td>eight WRITEs and one COMMIT, so nfsd does not sync every megabyte</td></tr>
+        <tr><td>Storage</td><td class="c">six NVMe drives, MD raid0, XFS</td><td>1 MiB chunk, trimmed before each run</td></tr>
+        <tr><td>Flow placement</td><td class="r" style="white-space:normal">each connection's RSS table entry set, four connections to a ring</td><td>each ring carries a quarter; before 10 October afternoon the runs mounted again until no ring had over 35%</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">One port of the card, a separate client machine, Linux 7.1 and xeu 2.0.1 with the patches below.</p>
+    <div class="verdict acc" style="margin-top:18px">
+      <p class="big">Only the server's MTU is lowered. The client keeps 9000, and nothing on the client changes.</p>
+      <p><strong>Why that works.</strong> When a TCP connection opens, each end tells the other the largest segment it will accept, worked out from its own MTU. The server now says 7752 bytes. A sender never exceeds what the receiver asked for, so the client cuts its data into segments the server's buffers hold, whatever its own MTU is. Measured on the client during a run: its connections to the server use a segment size of 7740 bytes (7752 less the 12 bytes of TCP timestamps) while its own port still reports an MTU of 9000.</p>
+      <p><strong>Why it is safe.</strong> The limit is agreed for each connection, by the two ends, before any data moves, so there is nothing to fragment and nothing to discover along the path. In the other direction the server sends frames of at most 7792 bytes, which a 9000-byte port accepts. Nothing between the two hosts needs changing, and the client's other traffic, to other servers, still uses 9000.</p>
+      <p><strong>The one limit.</strong> This protects TCP only. A single packet larger than 7792 bytes that is not TCP, such as a large ping or a large UDP datagram, has no such agreement and does not get through: an 8500-byte ping from the client to the server goes unanswered, where a 7792-byte one is answered. NFS here runs over TCP, including the mount, so it is not affected.</p>
+    </div>
+
+    <h3 style="margin-top:26px">The Linux changes it took</h3>
+    <div class="delta">
+      <div class="mark gain">1</div>
+      <div class="body"><h3>A stacked device takes its drives' memory alignment<span class="tag base">block</span></h3>
+      <p>MD raid0 asked for memory aligned to 512 bytes where each drive under it asks for 4, so nfsd's copy could not be written direct on the stripe and went through the page cache: a second copy. With the change every copied WRITE is direct. Worth 25.4 to 27.7 GB/s by itself.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark gain">2</div>
+      <div class="body"><h3>nfsd trades pages with the socket when a part-received WRITE changes hands<span class="tag base">sunrpc</span></h3>
+      <p>A WRITE that one thread began receiving and another finished had its pages freed and allocated again at each handover. They are now swapped. The page allocator left the profile.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark gain">3</div>
+      <div class="body"><h3>A thread waits briefly for the rest of a WRITE<span class="tag base">sunrpc</span><span class="tag new">dropped since</span></h3>
+      <p>A 1 MiB WRITE arrives as about 118 jumbo frames, which the network stack hands up a burst at a time. nfsd read whatever had arrived and, if the WRITE was not complete, parked it on the connection and went on to other work; the next burst woke some thread to read the next piece.</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:0">
+        <thead><tr><th>One 1 MiB WRITE, sixteen connections</th><th>Reads to receive it</th></tr></thead>
+        <tbody>
+          <tr><td>256 KiB receive buffer</td><td class="x">17, nine in ten by a different thread from the one before</td></tr>
+          <tr><td>1 MiB receive buffer </td><td class="c">6 to 7</td></tr>
+          <tr><td>1 MiB receive buffer, and a thread that waits up to 50 &micro;s for the next piece (with the other changes)</td><td class="r">2, by the same thread</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>What the pieces cost.</strong> Every extra read is a thread woken and a WRITE handed over. In between, the rest of the WRITE sits unread in the connection's receive queue, in pages that came off the rings, and those pages cannot go back to the pool until some thread gets to them. So the receive memory in use is larger, the rings are refilled with pages that have been idle longer, and the connection's window stays shut to the client. With the 256 KiB buffer a connection was being read for only 44% of the time: for 38% it was waiting for data and for 18% for a thread. A piece is about 13 &micro;s in coming, so a wait far shorter than a wake-up keeps one thread on the WRITE until it is whole.</p>
+      <p>With the wait and the other changes loaded together, frames dropped at the rings fell from 251 thousand to about 3 thousand in the same run on rings of 4 x 256; how much of that is the wait alone has not been measured. It is a busy wait and costs about a fifth more server CPU per GB (0.52 against 0.43 CPU-seconds), and how short it can be is not settled.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark gain">4</div>
+      <div class="body"><h3>Several nfsd thread pools on one NUMA node<span class="tag base">sunrpc</span><span class="tag new">dropped since</span></h3>
+      <p>All 512 threads took ready connections from one queue. Four pools give four queues. Its own worth has not been measured: the load that showed the contention had 64 connections.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark gain">5</div>
+      <div class="body"><h3>The page pool reuses a region's pages last in, first out<span class="tag base">page_pool</span></h3>
+      <p>A pool bound to the region recycled through a first-in, first-out ring, so the page handed to the card next was the one idle longest and least likely to be in cache. It is now a stack. The count of pages turned away from a full ring went to 0 with the smaller buffers.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark">6</div>
+      <div class="body"><h3>The region can be resized, and loaned pages return in batches<span class="tag rework">page_pool &middot; sunrpc</span></h3>
+      <p>A 32768-page region replaced the 6144-page one, which left no room for deeper rings. Loaned pages are returned to their pool a batch at a time. Neither is on the copy's path. The first version of the batching had a fault, since fixed with a unit test and a build-time check.</p></div>
+    </div>
+
+    <h3 style="margin-top:26px">The driver changes it took</h3>
+    <p>All are patches to the <code>xeu</code> driver, carried in our packaging of it. The first two date from runs on 64 KiB pages.</p>
+    <div class="tbl-wrap"><table class="q">
+      <thead><tr><th>Change</th><th>What it does</th><th>State</th></tr></thead>
+      <tbody>
+        <tr><td><code>rx_ip_align</code></td><td>puts received data on a 4-byte boundary</td><td class="r">in use since 7 Oct</td></tr>
+        <tr><td>Refill retry</td><td>a ring that ran empty fills again by a timer; it used to stay empty until the port was taken down and up</td><td class="r">in use since 8 Oct</td></tr>
+        <tr><td><code>rx_refill_thresh</code></td><td>how many empty slots a ring may have before it is refilled</td><td class="r">in use since 9 Oct</td></tr>
+        <tr><td><code>rx_buf_size</code></td><td>receive buffers smaller than a page, cut from the page pool's pages</td><td class="r">run 10 Oct: the table above</td></tr>
+        <tr><td>RSS table, key and hash function through <code>ethtool</code></td><td>shows and sets which ring each flow lands on</td><td class="r">run 10 Oct: below</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3 style="margin-top:26px" id="steer">Placing flows on rings</h3>
+    <p>How sixteen connections fall onto four rings has been the largest source of difference between two runs of one setting. Left to the card's hash, one ring can carry two fifths of the traffic and another next to none. The driver exposed nothing to change that. It now exposes the card's RSS table, and on 10 October the table was shown to work.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:560px">
+      <thead><tr><th>Sixteen TCP streams, eight rings</th><th>Flows on each ring</th></tr></thead>
+      <tbody>
+        <tr><td>As the card's hash places them</td><td class="x">1 &middot; 4 &middot; 1 &middot; 3 &middot; 3 &middot; 2 &middot; 0 &middot; 2</td></tr>
+        <tr><td><code>ethtool -X</code> with all the weight on ring 0</td><td class="c">16 &middot; 0 &middot; 0 &middot; 0 &middot; 0 &middot; 0 &middot; 0 &middot; 0</td></tr>
+        <tr><td>All the weight on rings 6 and 7</td><td class="c">0 &middot; 0 &middot; 0 &middot; 0 &middot; 0 &middot; 0 &middot; 7 &middot; 9</td></tr>
+        <tr><td>Each flow's table entry given a ring in turn</td><td class="r">2 &middot; 2 &middot; 2 &middot; 2 &middot; 2 &middot; 2 &middot; 3 &middot; 1</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>A flow can be placed.</strong> The card's table has 128 entries, and bits 13 to 19 of a flow's hash pick its entry. The hash is visible on every received packet, so a flow's entry is known and can be pointed at any ring. The last row is that, done for all sixteen flows at once; two of them shared an entry.</p>
+    <p><strong>Under NFS it makes the rings even.</strong> The test harness now does this before every measured run: it mounts, starts the load for a few seconds, reads each connection's hash and how much it carries, and points each connection's entry at a ring so that the rings carry the same. The mount is kept, so the connections measured are the ones placed.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:560px">
+      <thead><tr><th>Sixteen NFS connections, four rings, 5440-byte buffers</th><th>Ring 0</th><th>Ring 1</th><th>Ring 2</th><th>Ring 3</th></tr></thead>
+      <tbody>
+        <tr><td>As the connections fell at the mount</td><td class="c">23%</td><td class="c">21%</td><td class="x">36%</td><td class="c">20%</td></tr>
+        <tr><td>After the table was set</td><td class="r">25%</td><td class="r">25%</td><td class="r">25%</td><td class="r">25%</td></tr>
+        <tr><td>During the measured run</td><td class="r">25.0%</td><td class="r">25.0%</td><td class="r">25.4%</td><td class="r">24.6%</td></tr>
+      </tbody>
+    </table></div>
+    <p>That run carried 39.9 GB/s of durable WRITEs in 21 MiB of receive memory with no frame dropped. It is one run. The two runs of the same setting before placement, which only mounted again until no ring had more than 35%, carried 41.0 and 36.6: a spread of more than 4 GB/s from nothing but how the connections fell. Placement takes that out of chance. The repeats are in: placed, the same setting gave 39.4, 39.6 and 39.9, and across four settings no two runs of one differed by more than 1.1 GB/s (<a href="#depth">the table above</a>).</p>
+    <p class="note">A ring's share matters more as the rate rises. At 41 GB/s an even ring carries about 10 GB/s and one with 36% carries nearly 15; in an earlier set of three like runs the slowest was the one with a ring far over its share, and it dropped 440 thousand frames against about 3 thousand in the other two.</p>
+    <p><strong>Two faults in the first version of the patch, found on the card and fixed.</strong> Setting a hash key stopped the hashing altogether: every flow hashed to 0 and landed on one ring until the driver was reloaded. The patch had written back the card's own report of which packet fields it hashes, and that report names no fields. And the card's table could not be read before one had been set, because the card returns ring handles in a different form from the driver's. Both are fixed, and the fixed driver ran the last two rows of the first table.</p>
+
+  </section>
+
+  <section id="loan">
+    <p class="eyebrow ok"><span>The loan, for NVMe drives with SGLs &middot; 16 KiB<br>10 October</span></p>
+    <h2>Ready for SGL drives: every loaned WRITE is written direct, at less than half the CPU of a copy</h2>
+    <p>Everything above is copy mode, which is the right answer for drives that need whole pages. NVMe drives that support SGLs, and those can take a WRITE's network pages as they arrived, with no copy at all. NVMe over TCP was their stand-in on 10 October, so that the whole path was in place before such drives were on hand; the alignment result near the top of this page is on real SGL drives.</p>
+    <div class="verdict gain">
+      <p class="big">On 8192-byte buffers with the MTU at 7792, <em>all 2.5 million loaned WRITEs of a run were written direct</em>. None fell back to the page cache.</p>
+      <p><strong>What a direct write of loaned pages needs.</strong> Each piece of a WRITE handed to the storage must start on a 4-byte boundary. nfsd checks every piece, and one that fails sends the whole WRITE through the page cache: the copy comes back, later. The card places a frame's data on a boundary in the first buffer it uses and not in a second. So the setting that carries the most in copy mode is also the one a loan needs: one buffer to a frame.</p>
+      <div class="tbl-wrap"><table class="q" style="min-width:560px">
+        <thead><tr><th>Receive buffers</th><th>Buffers to a frame</th><th>A loaned WRITE is written</th><th>Receive memory, copy mode</th></tr></thead>
+        <tbody>
+          <tr><td>A whole page, MTU 9000</td><td class="c">1</td><td class="r">direct</td><td class="x">34 to 37 MiB</td></tr>
+          <tr><td>5440 bytes, MTU 9000</td><td class="c">2</td><td class="x">through the page cache, every one</td><td class="c">27 to 30 MiB</td></tr>
+          <tr><td>8192 bytes, MTU 7792</td><td class="c">1</td><td class="r">direct, every one</td><td class="r">24 to 26 MiB</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">The middle row is from reading nfsd's check against where the card puts a frame's second buffer; no loan was run on it. The other two were run.</p>
+    </div>
+
+    <h3 style="margin-top:26px">The loan against its copy, on the stand-in</h3>
+    <div class="tbl-wrap"><table class="q" style="min-width:520px">
+      <thead><tr><th>16 connections, NVMe/TCP storage</th><th>Loan</th><th>Copy</th></tr></thead>
+      <tbody>
+        <tr><td>GB/s, durable</td><td class="c">20.6 to 22.7 (five runs)</td><td class="c">25.4</td></tr>
+        <tr><td>How the WRITEs were issued</td><td class="r">direct, all of them</td><td class="r">direct, all of them</td></tr>
+        <tr><td>Server CPU-seconds per GB</td><td class="r">0.59 to 0.68</td><td class="x">1.43</td></tr>
+        <tr><td>Server idle</td><td class="r">64% to 72%</td><td class="x">31%</td></tr>
+        <tr><td>Receive memory in use at peak</td><td class="x">45 to 50 MiB</td><td class="r">24 MiB</td></tr>
+        <tr><td>WRITEs that held more than they were charged</td><td class="r">0</td><td class="m">n/a</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Read the CPU, not the rate.</strong> NVMe/TCP on the same host copies the data once more on its way to the file and uses the same CPUs to do it, so neither rate is what a real SGL drive will give. The loan's rate did not move when its budget was changed, which says the stand-in's storage is its limit. What does carry over is the cost: a loan takes 0.6 CPU-seconds for each GB where a copy takes 1.4, and leaves the server two thirds idle. The price is the one a loan always pays: it holds receive memory until the storage has finished the write, 45 to 50 MiB here, past the 32 MiB cache.</p>
+    <p></p>
+
+    <h3 style="margin-top:26px">The charge for a loan: the kernel now learns it</h3>
+    <p>A budget limits how much receive memory loans may hold. Each WRITE is charged, when it starts, for the pages it is expected to hold, and that estimate was a setting someone had to get right: <code>svc_tcp_rx_credit_factor</code>. The right value depends on how the card cuts its pages into buffers and on how the frames of different connections fall into them. With two buffers to a page, a 1 MiB WRITE holds 68 pages if its frames pair up and up to 136 if each shares its page with another connection's.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:560px">
+      <thead><tr><th>How the charge was set</th><th>Pages charged for each 100 of WRITE</th><th>WRITEs stopped part-way for more</th><th>WRITEs over their charge</th></tr></thead>
+      <tbody>
+        <tr><td>By hand, for a whole page to a frame</td><td class="c">190</td><td class="r">0</td><td class="r">0</td></tr>
+        <tr><td>By hand, the kernel's old default</td><td class="c">150</td><td class="c">284</td><td class="r">0</td></tr>
+        <tr><td>By hand, for frames that pair up</td><td class="c">110</td><td class="x">157,399</td><td class="r">0</td></tr>
+        <tr><td><strong>Learned by the kernel</strong></td><td class="r">164</td><td class="r">53</td><td class="r">0</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Too high wastes the budget; too low stalls WRITEs half received.</strong> The figure for a whole page to a frame was stale once the buffers changed and admitted about nine WRITEs where sixteen were meant. The neat figure was too low, because frames do share pages. A new kernel change removes the guess: each budget watches what its own WRITEs actually held and charges the next ones by the most any of the last one to two thousand did. Left to itself on this card it settled at 164 and stalled fewer WRITEs than any value set by hand that was not over-charging.</p>
+    <p class="note">One run of 120 seconds for each row, the same loan cell. These runs still had the setting, left at 0 so that the kernel learned. It has since been removed altogether (next).</p>
+
+    <h3 style="margin-top:26px" id="nofactor">The setting is removed: the receive window is measured too</h3>
+    <p>The same setting did a second job, and that one reached copy mode. It told the kernel how much memory a connection's packets take up for each byte of data, which decides how much receive window a held buffer can offer. It had been set to 190 by hand, right for a whole page to a frame; on 8192-byte buffers the true figure is 107. The kernel now measures it on each connection, from the packets it reads, and <code>svc_tcp_rx_credit_factor</code> no longer exists.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:520px">
+      <thead><tr><th>Copy mode, the 43.3 GB/s configuration, one night</th><th>Memory for each 100 of data</th><th>GB/s</th></tr></thead>
+      <tbody>
+        <tr><td>The old code, from the kernel package</td><td class="c">190, set by hand</td><td class="c">42.4</td></tr>
+        <tr><td>The old code, built on the host</td><td class="c">190, set by hand</td><td class="c">42.0</td></tr>
+        <tr><td><strong>No setting</strong></td><td class="r">107, measured</td><td class="r">42.5 &middot; 42.7</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Level with the old code, with nothing to set.</strong> The work also showed why the old value had worked: 190 was, by accident, offering about half of each held buffer as window. Offering all of it dropped 742 thousand frames in a run, so half is now the rule in the code. A loan run on the final code gave 20.2 GB/s with every WRITE written direct, none stalled and none over its charge.</p>
+    <p class="note">One run of 120 seconds for each figure, late on 10 October. Every run that night, the old code included, came in about 1 GB/s under the 43.2 and 43.3 measured three hours earlier; the cause has not been found. Rings twice as deep were also tried on the new code and did not help: 39.8 and 40.9 GB/s, with receive memory at 30 and 35 MiB.</p>
+
+    <h3 style="margin-top:26px">Before the SGL drives arrive</h3>
+    <div class="matrix">
+      <div class="cell k">A loaned WRITE written direct on this card, with receive buffers small enough to keep the footprint down</div><div class="cell v"><span class="pill yes">shown</span></div>
+      <div class="cell k">The budget holds: no WRITE held more than it was charged, in any loan run</div><div class="cell v"><span class="pill yes">shown</span></div>
+      <div class="cell k">Neither the charge nor the receive window needs a setting for the card, the MTU or the buffer size</div><div class="cell v"><span class="pill yes">in the kernel</span></div>
+      <div class="cell k">What a loan carries when the storage is a real SGL drive and not a stand-in that copies</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
+      <div class="cell k">The loan's footprint. It holds 45 to 50 MiB, past the cache. Whether a smaller budget or a smaller held buffer brings it inside without costing rate depends on how fast the real drives finish a write</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
+      <div class="cell k">4-byte placement in every buffer of a frame. It would let a loan use the smallest buffers at an MTU of 9000. Until then it is one buffer to a frame (point 1 below)</div><div class="cell v"><span class="pill pend">asked</span></div>
+    </div>
+    <p style="margin-top:14px" class="note">Rings of 4 x 256, a 1 MiB held buffer, a budget sized for 16 WRITEs, every connection placed on a ring. NVMe/TCP in front of a file on the six-drive stripe.</p>
+  </section>
+
+
   <section>
     <p class="eyebrow">Where the two ports stand</p>
     <h2>The two-port limit is the server's memory, not the card</h2>
@@ -273,7 +572,7 @@
     <div class="ask">
       <div class="head"><h3>1. Align the payload, and continuation buffers too</h3><span class="pill need">ask</span></div>
       <p>The table above is the case for reconsidering rx_ip_align. A driver can shift the first buffer of a frame, but with receive buffers smaller than a frame the payload in each continuation buffer is misaligned by the same 2 bytes, and only the card can fix that.</p>
-      <p class="q"><b>Question</b>Can the E1 shift only a frame's first buffer, with a receive pad or by splitting headers from data, so that every buffer of a frame is aligned?</p>
+      <p class="ask-q"><b>Question</b>Can the E1 shift only a frame's first buffer, with a receive pad or by splitting headers from data, so that every buffer of a frame is aligned?</p>
     </div>
 
     <div class="ask">
@@ -291,26 +590,26 @@
         </tbody>
       </table></div>
       <p>With the receivers discarding, at line rate and about 6 Mpps, the FIFO never fills: two XDMA engines carry a port at line rate when memory is free. With about 65 GB/s of copying elsewhere on the host, the FIFO drops half a million frames in 20 s although the receive path copies nothing.</p>
-      <p class="q"><b>Questions</b>How long can the XDMA engines wait on memory before the 2 MiB FIFO (about 40 &micro;s at this rate) overflows? Is there a setting that gives the port's DMA priority, or more FIFO, on a host whose memory is busy?</p>
+      <p class="ask-q"><b>Questions</b>How long can the XDMA engines wait on memory before the 2 MiB FIFO (about 40 &micro;s at this rate) overflows? Is there a setting that gives the port's DMA priority, or more FIFO, on a host whose memory is busy?</p>
     </div>
 
     <div class="ask">
       <div class="head"><h3>3. Pause frames never reach the wire</h3><span class="pill need">ask</span></div>
       <p>With the client set to obey pause and memory loaded so that the FIFO overflows: with <code>ethtool -A tx on</code> the FIFO passes xoff (15,638 lines against 12,288) and drops 419,218 frames, and the client receives no pause frame. With <code>rx on tx on</code> the rings drop nothing, the FIFO holds at 12,113 lines, just under xoff, and drops 1,458,125 frames; still no pause on the wire. The port appears to act on xoff by dropping.</p>
-      <p class="q"><b>Question</b>Is there a setting for the MAC to send pause?</p>
+      <p class="ask-q"><b>Question</b>Is there a setting for the MAC to send pause?</p>
     </div>
 
     <div class="ask">
       <div class="head"><h3>4. Interrupt deferral stops the port</h3><span class="pill need">ask</span></div>
       <p>Under load the port takes 6.3 million frames and about 250,000 Rx interrupts a second. With <code>napi_defer_hard_irqs=2</code> and <code>gro_flush_timeout=50000</code> written to the port, Rx interrupts fall to 0 in the first second and stay there. Frames keep arriving for about 5 s without an interrupt (4.3, then 2.2 million a second), then stop. Writing both back to 0 does not recover the port; only a down and up does. Nothing is logged. Reproduced on two kernels.</p>
-      <p class="q"><b>Lead</b>The interrupts stop at once while NAPI still runs for a few seconds. A script reproduces it with plain TCP, no NFS.</p>
+      <p class="ask-q"><b>Lead</b>The interrupts stop at once while NAPI still runs for a few seconds. A script reproduces it with plain TCP, no NFS.</p>
     </div>
 
     <div class="ask">
       <div class="head"><h3>5. The RSS hash</h3><span class="pill need">ask</span></div>
       <p>Thank you for the input fields. We tried them on ten TCP flows into one port with Toeplitz selected, each from a known client port, hashes read from received packets; the key is the standard 40-byte one followed by 28 zero bytes. Neither the 13-byte input (source address, destination address, source port, destination port, protocol) nor the standard 12-byte one reproduces all ten hashes, at any of the key's 68 starting bytes, with either byte order for the fields or the result.</p>
       <p>Confirmed: bits 13 to 19 of the hash pick the entry of a 128-entry redirection table, for every flow. Also: selecting Toeplitz with the <code>ethtool</code> command fails because the default function has no ethtool name; setting it over netlink works.</p>
-      <p class="q"><b>Question</b>The exact computation: which bytes of the key, in what order, and anything applied to the result.</p>
+      <p class="ask-q"><b>Question</b>The exact computation: which bytes of the key, in what order, and anything applied to the result.</p>
     </div>
 
     <div class="ask">
