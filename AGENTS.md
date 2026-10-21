@@ -15,7 +15,11 @@ full private Hammerspace kernel is not this work's concern until Mike
 says so. This overrides what the two entries below say about keeping
 the branches in step and about where development is done.
 
-- **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` is the branch to work on**:
+- **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-v7.3-7` is the branch to
+  work on** (pushed by Mike 2026-10-20 at `5a0e2aeaf190`, a new name: on
+  hs-gitlab `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` is still the
+  `v7.3-3` series, `26c5cdcd549a`; in the tree it was rebased in, the
+  local branch of that old name holds the new series):
   the series on the public `kernel-7.3/main`, rebased 2026-10-20 onto
   **`v7.3-7`** (`git rebase --onto v7.3-7 v7.3-3`, two conflicts resolved
   by hand, see `NFSD_TCP_WRITE_ZEROCOPY/README.md`; the tip before is
@@ -203,6 +207,10 @@ read
 first** (and `tardis1-boot1-testing.md` for builds 454 and 455): it says
 which commits at the tip are still to be regrouped, carried to the HS
 twin or decided.
+
+**tardis1's next boot is into the first kernel built from the `v7.3-7`
+branch: start at "20 October: tardis1's boot into the v7.3-7 kernel" in
+[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md).**
 
 **Converging on the Xsight driver** (tardis1, from 2026-10-07).
 **Mike is rebooting tardis1 into a 16 KiB kernel on 2026-10-08. If
