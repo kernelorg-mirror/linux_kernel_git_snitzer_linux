@@ -256,6 +256,38 @@ stay. `settled.sh audit` should no longer need to put it back.
 
 **Decides.** Attach it to the reply, with the before and after.
 
+**Done, 20 October, build 491: the placement holds.** Logs in
+`$L/xsight-x4/`. The patch is Patch8 of `xsight.spec`, Release 8
+(`kernel-rpmtree` `xsight-affinity` branch, not pushed).
+
+- **Before**, Release 7 (`before.txt`): port b's IRQs, placed on
+  56-63 by `settled.sh`, went back to the driver's 0-7 after a down and
+  up and after `ethtool -G rx 128`, under the same IRQ numbers. **The
+  async ring's IRQ went from 57 to 0-63 as well, though xeu gives it no
+  hint**: closing frees the IRQs and disables MSI-X, and that resets the
+  affinity whatever the hint. So `irq_update_affinity_hint()` alone, the
+  one call this item proposed, would not have kept a placement.
+- **The patch** records each IRQ's affinity (rx, tx and async) when
+  `xeu_close()` frees it, sets it again when `xeu_open()` requests it,
+  and sets the driver's spread only as the hint.
+- **After**, Release 8 (`after.txt`): every IRQ of port b, the async
+  one included, stayed on 56-63 through a down and up, `ethtool -G rx
+  128` and `-G rx 256`; the hints still name 0-7. Then plain TCP into
+  port b (`MODE=trunc iperf2port.sh b 16 20`): 49.53 GB/s, its ring
+  CPUs 50% busy and port a's 1% (`after-load-b.txt`).
+- **The reload** (`reload.txt`): `rpm -ivh --force` of Release 8 and
+  `rpm -e --justdb` of Release 7, so the 462 and 463 kmods stay; `rmmod
+  xeu; modprobe xeu`; `port-setup.sh` for each port (`bringup.sh`
+  refuses while the region exists); `settled.sh apply`. On 7.3 the
+  region outlives the pools, so it was left bound and the reloaded
+  ports found it again (same `phys_base`, 32768 pages, none escaped);
+  do not unbind it first, as the 7.1 note in `../XEU_CONVERGENCE.md`
+  did. The reload left `min_free` 0 and `alloc_fail` 4 (0 before): the
+  region ran dry once while the ports came up, likely the two ports'
+  default eight rings before `port-setup.sh` cut them to four. Not
+  checked.
+- Not tested: `ethtool -L`, which goes through the same close and open.
+
 ### X5. rx_refill_thresh: our answer to their question (two runs)
 
 **Why.** They asked whether the threshold should vary by use case. A
