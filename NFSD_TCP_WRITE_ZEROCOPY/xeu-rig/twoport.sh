@@ -101,7 +101,7 @@ declare -A IRQ0=([a]=0 [b]=56) FSID=([a]=7701 [b]=7702) TXIRQ=([a]=${TXIRQ_A:-} 
 declare -A NFS	# how many filesystems each port has
 declare -A CPUS=([a]=0-23 [b]=24-47)	# the client's CPUs on each port's NUMA node, for PIN=1
 PORTS=$(sed 's/./& /g' <<< "$WHICH")
-SSHC="ssh -o BatchMode=yes -o ConnectTimeout=30 -i $KEY root@$CLIMGMT"	# not over a port under test
+SSHC="ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -i $KEY root@$CLIMGMT"	# not over a port under test
 cl() { $SSHC "$@" < /dev/null; }
 clput() { $SSHC "cat > $1"; }	# stdin to a file on the client
 
