@@ -239,25 +239,36 @@ frame's first buffer (a receive pad, or header split)**, so that a
 frame's continuation buffers are aligned too? A driver cannot do that
 alone (see `../xeu-hds-experiment/` for what was tried in software).
 
-**Not run yet (21 October): tardis2 is in use.** tardis2 came back on
-build 491 (`.el10`) and was prepared: the six drives mounted, a
-detached worktree of this branch at `/var/tmp/x3-tree` (the clone's
-own checkout untouched; gitlab refuses root's key there too, so the
-commits went over as a bundle), the region bound by `bringup.sh`,
-`nfs-server` started (it was not after the boot). The driver is
-`$L/xsight-x3/x3.sh` on tardis2: two loan runs onto nvme4 and nvme5
-(`FS_A="/hs/nvme4 /hs/nvme5" WRITES=64 WARM=10 RUNTIME=25`) at
-`rx_ip_align` 2, xeu reloaded at 0 with the region kept, two more,
-xeu reloaded at the setting; bpftrace counts each `nfsd_write_dio_*`
-outcome beside each run, and `settled.sh`'s new `EXP_XEU_<parameter>`
-holds the audit to 0 for those runs. It stopped at the first audit:
-**nvme0 is also mounted at `/mnt/nvme0`, where someone's root shell
-(from 05:58 on tardis2's clock, two `serviceadmin` logins from
-192.168.254.185) is working in `hke.git`**, and `data_drives` refuses
-a drive mounted outside `/hs`. X3 needs only nvme4 and nvme5, but
-running past a BAD item is Mike's to allow, and not beside someone
-else's work unasked. To run it: once `/mnt/nvme0` is gone, `nohup
-setsid $L/xsight-x3/x3.sh > $L/xsight-x3/x3.log 2>&1 &` on tardis2.
+**Done, 21 October, build 491 on tardis2: at 0 every loaned WRITE is
+refused, at 2 every one goes direct.** Driver `$L/xsight-x3/x3.sh` on
+tardis2, log `x3.log`, runs `$L/x3-align{2,0}-{1,2}` there. A detached
+worktree of this branch at `/var/tmp/x3-tree` on tardis2 (its clone's
+checkout untouched; gitlab refuses root's key there too, so the
+commits went over as a bundle). Port a onto the two DP800s alone,
+loan at 64 WRITEs (`FS_A="/hs/nvme4 /hs/nvme5" WRITES=64 WARM=10
+RUNTIME=25`), two runs at `rx_ip_align` 2, xeu reloaded at 0 with the
+region kept (same `phys_base`, none escaped), two runs, xeu reloaded
+at 2; bpftrace counted every `nfsd_write_dio_*` outcome beside each,
+and `settled.sh`'s `EXP_XEU_rx_ip_align=0` held the audit to 0 ("off
+the settled setting in: rx_ip_align=0").
+
+| `rx_ip_align` | written direct | `mem_misaligned` | written as | nfsd CPUs | ring drops | client retransmits | GB/s |
+|---|---|---|---|---|---|---|---|
+| 2 | 280,416, 280,000 | 0 | direct | 1-2% | 0, 0 | 72, 79 | 5.77, 5.77 |
+| 0 | 0 | 281,600, 281,920 | dontcache (a copy into the page cache) | 12% | 1,069, 502 | 1,111, 539 | 5.78, 5.83 |
+
+- **The A/B is the whole of it**: every loaned WRITE was refused direct
+  I/O for memory alignment at 0, and none at 2; no `gap_misaligned`
+  either way, as the DP800s have no virtual boundary. The payload at 2
+  mod 4 is the only thing in the way.
+- **The rate does not move** (5.77 to 5.83 GB/s): the two DP800s are
+  the limit at either setting. What moves is the cost: nfsd's CPUs 12%
+  against 1 to 2%, and the client retransmitting ten times as much.
+- **Getting it run**: the first attempt stopped at the audit, nvme0
+  being mounted also at `/mnt/nvme0` for someone else's work on
+  tardis2; Mike rebooted tardis2 and it ran after. nfs-server does not
+  start at boot there: `systemctl start nfs-server` before
+  `settled.sh apply`.
 
 ### X4. The affinity hint: a patch and its test (Mike reloads)
 
