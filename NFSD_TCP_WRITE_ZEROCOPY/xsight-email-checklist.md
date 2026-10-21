@@ -75,6 +75,12 @@ Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 
 
 Nothing on the mechanism, the FIFO-to-ring rate or the 2 MiB. The covering note says: "The explanation of the two-port host NFS write performance dropoff to ~60GB/s rather than the expected ~95GB/s due to the extra memcpy pushing the limits of E1's DRAM bandwidth capability was really well explained." (Ours was the server's DRAM, not the E1's.)
 
+Reply 2 (Don Wallwork, through Ian):
+
+> If the RX FIFO drop counters are non-zero, then yes, the RX FIFOs dropped due to a rate mismatch.  The EUnit hardware pipeline is designed to support sustained 200Mpps/400Gbps operation per-EUnit.  Currently RX FIFO resources are divided evenly among the ports per EUnit with just one traffic class, so for example with 1x400G port per EUnit, that port will have an RX FIFO sized at 16k lines (2MB).
+>
+> A couple of things to keep in mind are that for XEU, we can only use up to two XDMA engines per port due to IOB interrupt restrictions, so we have less DMA capacity when in 1x400G per eunit mode with the XEU driver than the DPDK PMD.  Also, it could be possible that memory bandwidth could be the constraint which would mean that the XDMA engines could be stalled by memory and that could result in RX FIFO drops.
+
 **Our read.**
 
 ## 2b. No pause frames
@@ -172,6 +178,10 @@ Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 
 
 (Passed to two colleagues; no answer yet.)
 
+Reply 2 (Don Wallwork, through Ian):
+
+> For IPv4/TCP, the RSS hash is computed over a 5-tuple of: 32 bit ipv4 src addr, 32 bit ipv4 dst addr, 16 bit tcp src, 16 bit tcp dst, 8 bit ipv4 protocol, in that order.
+
 **Our read.**
 
 ## 4. The six patches
@@ -204,3 +214,19 @@ Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 
 said for the key and hash function. Item 4 asks us a question back.)
 
 **Our read.**
+
+## Not asked: advice in the replies
+
+Reply 2 (Don Wallwork, through Ian):
+
+> 4 rx queues may not be sufficient to get the best performance.  FWIW, on DPDK line rate performance with packets < 512B generally needs 8 RX queues.
+>
+> RX ring sizes of 256 may not be large enough to handle instantaneous burstiness.  This is a tradeoff because the reduced cache footprint of small rings should help with performance, but larger rings (512 or 1024) may be necessary to absorb short term bursts.  Keep in mind that if any RX ring is chronically overloaded, there is no amount of ring size that will help.  Ideally, if the traffic is evenly distributed across enough RX rings, none of the RX rings will see any tail drops because the driver and network stack will be able to keep up with the offered load.
+
+What we measured already, for weighing it: eight rings were tried
+three times and did not help (`xeu-rig/README.md`: 8 x 128 at 42.2
+and 41.9 against four rings' 43.0 and 42.5, with fifty times the ring
+drops; 8 x 256 at 39.6 and 39.3 against 4 x 512's 41.8 and 40.7, the
+region past the L3; `XEU_CONVERGENCE.md` N10 for the copy), with the
+rings' CPUs 58 to 70% idle. Our frames are 7792 bytes, not under 512.
+Two ports settled on rings of 128, smaller, not larger.
