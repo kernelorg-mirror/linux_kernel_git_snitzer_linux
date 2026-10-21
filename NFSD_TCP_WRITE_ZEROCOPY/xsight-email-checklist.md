@@ -42,6 +42,10 @@ theirs), or a reason it must not.
 
 **Xsight said.**
 
+Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 20 October):
+
+> Adding port Rx FIFO stats. Yes, you are correct. xeu is missing these counters. We will add them.
+
 **Our read.**
 
 ## 2a. The FIFO drops: is our reading right
@@ -67,6 +71,10 @@ lines, other classes' lines, a setting) and how to use it.
 
 **Xsight said.**
 
+Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 20 October):
+
+Nothing on the mechanism, the FIFO-to-ring rate or the 2 MiB. The covering note says: "The explanation of the two-port host NFS write performance dropoff to ~60GB/s rather than the expected ~95GB/s due to the extra memcpy pushing the limits of E1's DRAM bandwidth capability was really well explained." (Ours was the server's DRAM, not the E1's.)
+
 **Our read.**
 
 ## 2b. No pause frames
@@ -85,6 +93,10 @@ driver), or a statement that the E1 cannot send pause in this
 configuration.
 
 **Xsight said.**
+
+Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 20 October):
+
+> Pause frames - we will investigate the issue.
 
 **Our read.**
 
@@ -106,6 +118,10 @@ moderation, if deferral is not supported.
 
 **Xsight said.**
 
+Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 20 October):
+
+> Deferring interrupts stops the port. xeu supports this by the way the NAPI handler is implemented. We will investigate the issue.
+
 **Our read.**
 
 ## 3b. Ring interrupts of every port on the same CPUs
@@ -124,6 +140,10 @@ plain TCP against 83 to 90 apart.
 or a reason for the current placement.
 
 **Xsight said.**
+
+Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 20 October):
+
+> IRQ affinity. This is the way most drivers implement it. Our performance test uses the simple script to set the required affinity through /proc/irq/<IRQn>/smp_affinity_list
 
 **Our read.**
 
@@ -146,6 +166,12 @@ connects.
 
 **Xsight said.**
 
+Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 20 October):
+
+> The Toeplitz hash - @Yoav Galon , @Guy Tzalik, please help with this
+
+(Passed to two colleagues; no answer yet.)
+
 **Our read.**
 
 ## 4. The six patches
@@ -164,5 +190,17 @@ form, or declined with a reason. Until then each is ours to carry on
 every xeu release.
 
 **Xsight said.**
+
+Reply 1 (Ian Wigmore, "initial responses from the XSL SW dev team", received by 20 October):
+
+> 1. Adding IP alignment. xeu use the kernel defined NET_IP_ALIGN. For arm64 it is set to 0 https://elixir.bootlin.com/linux/v7.3/source/arch/arm64/include/asm/processor.h#L11. And there is a clear explanation of why. +Rejected.
+> 2. Adding retry in case the Rx SB ring is empty and allocation is failed. This is a good catch. We need to handle this situation. But some drivers handle it by returning budget, so NAPI keeps polling. Will fix the +issue.
+> 3. Using page frags on Rx path. I understand the motivation to add this when 16KB and 64KB pages are used. We will add this feature.
+> 4. Rx refill threshold as module parameter. It will not be easy to justify this parameter while upstreaming the driver. Do you think the threshold value should vary depending on the use case?
+> 5. Adding port Rx FIFO stats. Yes, you are correct. xeu is missing these counters. We will add them.
+> 6. Expose RSS RETA. We can expose it.
+
+(Their 3 is our rx_buf_size patch; their 6 covers the RSS table, not
+said for the key and hash function. Item 4 asks us a question back.)
 
 **Our read.**
