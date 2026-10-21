@@ -1,0 +1,208 @@
+To: Ian Wigmore <ianw@xsightlabs.com>, Neil O’Rourke <neilo@xsightlabs.com>
+Cc: Don Wallwork
+Subject: Re: xeu: driver not counting frames dropped at the port's RX FIFO; and three other driver questions
+
+Hi Ian, Don and Neil,
+
+Thank you for both replies. We have measured what they raised; the
+results first, then each point with what it rests on, and a few short
+questions at the end.
+
+  - rx_ip_align is about where the payload lands for the storage DMA,
+    not the CPU's header loads. [X3: the loan outcomes at 0 and 2]
+  - The RX FIFO drops with no copy at all once the host's memory is
+    loaded hard enough, and never when it is not: Don's memory stall,
+    not the two XDMA engines' capacity.
+  - We have a patch that keeps a hand placement of the ring interrupts
+    across a down and up and ethtool -G, with before and after.
+  - rx_refill_thresh: our answer is a threshold derived from the ring
+    size, not a parameter. A quarter of a ring empty before a refill
+    drops frames at the rings; an eighth does not.
+  - The hash: we tried the 13-byte input Don gave, and it does not
+    reproduce the card's hashes. The details are below.
+  - Pause and interrupt deferral: two scripts that reproduce each on
+    plain TCP, with no NFS, and what they show today.
+
+One correction first. Ian's covering note puts the two-port limit at
+~60 GB/s in "E1's DRAM bandwidth". It is the server's DRAM: our NFS
+server copies each write once, every copied byte is about 2.2 bytes of
+traffic to the server's memory, and at 60 GB/s that is close to what a
+bare memory-to-memory copy reaches on that machine. The card carried
+both ports at line rate with no copy (98 to 99.6 GB/s). Nothing to look
+for on the card there.
+
+
+1. rx_ip_align: the payload, for the storage DMA
+
+We understand the answer about NET_IP_ALIGN, and agree it is 0 on
+arm64 for good reason: the CPU's unaligned loads of the IP header are
+cheap. The patch is not about that, and its subject, which led with the
+header, invited the misreading.
+
+What it is about is the payload. Our server writes received NFS data
+to NVMe straight from the receive pages, without copying it (the
+receive-page loan we have discussed). A page can go to a drive as
+direct I/O only if each piece of it is aligned for the drive's DMA,
+which for NVMe is 4 bytes. xeu posts its buffers at NET_SKB_PAD (64)
+and the frame's headers are 54 bytes, so every TCP payload lands at
+2 mod 4. With rx_ip_align=2 the payload lands at 0 mod 4.
+
+[X3: on drives that take scatter-gather lists, at rx_ip_align 0 and 2,
+the outcomes: direct, refused for memory alignment, refused for the
+gap; and the rate.]
+
+The question behind the patch: can the E1 shift only the first buffer
+of a frame, with a receive pad or by splitting the headers from the
+data, so that a frame's continuation buffers are aligned too? With
+buffers smaller than a frame (rx_buf_size), the payload after the first
+buffer is misaligned by the same 2 bytes and a driver cannot fix that
+alone.
+
+
+2. The RX FIFO drops: memory, not the XDMA engines
+
+One port, plain TCP (no NFS, no drives), 16 connections, 20 s, with the
+receivers either discarding or copying into a small buffer, and with a
+copy loop loading memory on CPUs the rings and receivers do not use.
+FIFO drops and fill come from the counters our patch lists:
+
+                                     GB/s     FIFO drops   FIFO fill, most lines
+  receivers discard                  49.7-49.8         0         1
+    + memory loaded, 2 threads          49.56          0         1
+    + memory loaded, 4 threads          49.65          0         1
+    + memory loaded, 8 threads   45.22, 45.15  520,618, 599,969   9,924, 15,410
+  receivers copy                     49.2-49.9   4,471-16,000   4,084-14,078
+    + memory loaded, 2 threads          46.18     100,156     11,921
+    + memory loaded, 4 threads          46.49     100,999     16,229
+    + memory loaded, 8 threads          40.36     302,880     15,034
+
+With the receivers discarding, at line rate and about 6 Mpps, the FIFO
+never fills: two XDMA engines carry a port at line rate when memory is
+free. With eight copy threads (about 65 GB/s of copying) the FIFO drops
+half a million frames in 20 s although the host copies nothing. That is
+Don's second explanation: the engines stall on the server's memory. Two
+questions follow: how long can the XDMA engines wait on memory before
+the FIFO, at 2 MiB, about 40 us at this rate, overflows; and is there a
+setting that gives the port's DMA priority, or more FIFO, on a host
+whose memory is busy?
+
+
+3. The ring interrupts' placement
+
+Thank you for the script. We agree that spreading across ports is for
+the host to do. What we cannot do from the host is keep a placement:
+every open of the port puts the interrupts back on CPUs 0 to 7, so a
+script has to run again after each down and up, ethtool -G and -L.
+
+It is not only the hint. xeu_open() enables MSI-X and requests the
+interrupts, and xeu_close() frees them and disables MSI-X, which resets
+the affinity: the async ring's interrupt, which xeu gives no hint, went
+from CPU 57 back to 0-63 just the same. So irq_update_affinity_hint()
+alone would not keep a placement either.
+
+The attached patch records each interrupt's affinity when xeu_close()
+frees it and sets it again when xeu_open() requests it, and sets xeu's
+own spread only as the hint (irq_update_affinity_hint(), as mlx5, bnxt
+and i40e do). Before and after, port b's interrupts placed on CPUs 56
+to 63:
+
+                                  xeu 2.0.1 as is       with the patch
+  after ip link down and up       back on 0-7, async    still on 56-63,
+                                  on 0-63               async on 57
+  after ethtool -G rx 128         back on 0-7           still on 56-63
+
+and with the patch the port then carried 49.5 GB/s of plain TCP with
+the load on its own CPUs. ethtool -L goes through the same close and
+open; we have not tried it.
+
+
+4. rx_refill_thresh
+
+You asked whether the threshold should vary with the use case. From
+what we measured, it should vary with the ring's size, and the driver
+can work that out itself. NFS writes in copy mode, the driver's 32
+against our 8 by turns, three runs of each; ring drops and the
+client's retransmits over 10 s:
+
+                                    32                  8
+  two ports, rings of 128
+    ring drops, a port          2,845 to 5,317       1 to 15
+    client retransmits          8,304 to 11,299      34 to 224
+  one port, rings of 256
+    ring drops                  7 to 22              0
+    rate                        45.4 to 46.4 GB/s    45.8 to 46.6 GB/s
+
+On rings of 128, 32 slots is a quarter of the ring left empty before a
+refill, and the rings drop frames; at 8 they hardly do. On rings of
+256, 32 is an eighth and makes no difference. (The rate on two ports
+did not separate; the gain is the loss and the retransmits.) So
+something like min(32, ring size / 8) would keep your default where it
+works and serve small rings, with no parameter. We would drop our
+patch for that.
+
+
+5. The hash
+
+Thank you, Don, for the input. We tried it on received packets: ten
+TCP flows into one port with Toeplitz selected, each from a known
+client port, their hashes read from the packets as xeu hands them to
+the stack. The key is the standard 40-byte one followed by 28 zero
+bytes. None of these reproduces all ten hashes:
+
+  - the 13-byte input you gave (source address, destination address,
+    source port, destination port, protocol) and the standard 12-byte
+    one without the protocol;
+  - the key taken from each of its 68 starting bytes;
+  - each field in network or host byte order, and the hash as computed
+    or byte-swapped.
+
+So something else differs, and we would need the exact computation:
+which bytes of the key, in what order, and anything applied to the
+result. One thing we did confirm: bits 13 to 19 of the hash pick the
+entry of a 128-entry redirection table, for every flow, so placing a
+flow by its first packet works. (One detail on our side: selecting
+Toeplitz with the ethtool command fails, because Spooky has no ethtool
+name and the command then sends a request the kernel takes as no
+change; setting it over netlink works.)
+
+
+6. Pause frames and interrupt deferral
+
+To make these quick to look at, the two attached scripts reproduce
+each with plain TCP into one port, no NFS and no drives, and record
+what happens once a second. Today's results, xeu 2.0.1 with our
+patches, kernel 7.3:
+
+Interrupt deferral (defer-repro.sh). Under load the port takes 6.3
+million frames and about 250,000 Rx interrupts a second. With
+napi_defer_hard_irqs 2 and gro_flush_timeout 50000 written to the
+port, the Rx interrupts fall to 0 in the first second and stay there.
+Frames keep arriving for about 5 s without an interrupt (4.3, then 2.2
+million a second), and then stop. Writing both back to 0 does not
+bring the port back, and the client cannot reach it; a down and up
+does. Nothing is logged. The interrupts stopping at once, while NAPI
+still runs for a few seconds, may help find it.
+
+Pause (pause-repro.sh). The client's port is set to obey pause, and a
+copy loop loads memory so that the FIFO overflows. With ethtool -A
+tx on and the port open, the FIFO passes xoff (15,638 lines against
+12,288), drops 419,218 frames, and the client receives no pause frame.
+With rx on tx on and the port opened that way, the rings drop nothing
+and the FIFO drops 1,458,125 frames, its fill held at 12,113 lines,
+just under xoff, and still no pause frame reaches the client. It looks
+as if the port acts on xoff by dropping rather than by sending pause.
+Is there a setting for the MAC to send it?
+
+
+Attached:
+
+  xeu-keep-a-ring-interrupt-s-affinity-across-a-close-and-open.patch
+  defer-repro.sh
+  pause-repro.sh
+
+The scripts use our test rig's helpers (iperf2port.sh and settled.sh,
+for the load and the host's settings); the measurement in each is a
+few lines and easy to lift out.
+
+Thanks,
+Mike
