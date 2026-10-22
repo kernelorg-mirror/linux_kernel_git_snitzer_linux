@@ -53,6 +53,7 @@
 #define _NET_PAGE_POOL_HELPERS_H
 
 #include <linux/dma-mapping.h>
+#include <linux/jump_label.h>
 
 #include <net/page_pool/types.h>
 #include <net/net_debug.h>
@@ -330,10 +331,29 @@ static inline bool page_pool_unref_and_test(netmem_ref netmem)
 
 #ifdef CONFIG_PAGE_POOL
 unsigned long page_pool_rx_region_size(void);
+
+DECLARE_STATIC_KEY_FALSE(page_pool_rx_region_key);
+
+/**
+ * page_pool_rx_region_exists() - does the fixed receive region exist
+ *
+ * No page is a region page unless it does, so a caller that looks for
+ * region pages can skip the search when it does not, at the cost of a
+ * patched-out branch.
+ */
+static inline bool page_pool_rx_region_exists(void)
+{
+	return static_branch_unlikely(&page_pool_rx_region_key);
+}
 #else
 static inline unsigned long page_pool_rx_region_size(void)
 {
 	return 0;
+}
+
+static inline bool page_pool_rx_region_exists(void)
+{
+	return false;
 }
 #endif
 
