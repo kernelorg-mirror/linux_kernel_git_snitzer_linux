@@ -160,8 +160,14 @@ declare -A REST=(
 # 0006), after an A/B on build 474 ("15 October, evening" in README.md): on
 # 474 and before they are held at 0 and N, what a kernel without them does;
 # every figure before was measured at 50 us on one port and keep Y.
+# svc_tcp_rx_loan_pages was removed on 22 October ("SUNRPC: let the region
+# budget alone turn TCP receive loans on"): a budget above 0 is now what
+# loans, so at rest, every budget 0, nothing is loaned.  On build 491 and
+# before it is held at Y, as every figure there was measured; with the
+# budgets at 0 a record carrying region pages was copied either way.
 declare -A GONE_LATER=([svc_tcp_rx_copy_unlocked]=1 [svc_tcp_rx_lowat]=1
-	[svc_tcp_rx_copy_threads]=1 [svc_tcp_rx_linger_us]=1 [svc_tcp_rx_keep]=1)
+	[svc_tcp_rx_copy_threads]=1 [svc_tcp_rx_linger_us]=1 [svc_tcp_rx_keep]=1
+	[svc_tcp_rx_loan_pages]=1)
 # Settings an earlier kernel does not have yet: held where the kernel has
 # them, and reported, not failed, where it does not.  svc_tcp_spare_bytes_max
 # came after build 474 ("SUNRPC: Bound the pages TCP sockets keep for

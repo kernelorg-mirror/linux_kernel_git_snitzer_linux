@@ -54,8 +54,13 @@ the branches in step and about where development is done.
   and the tip before the rework as
   `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY.pre-73rebase`. Two changes
   in behaviour came with it: **TCP receive page loans are off by default**
-  (`sunrpc.svc_tcp_rx_loan_pages=N`; `xeu-rig/settled.sh` sets `Y` for
-  the rig), and an NFSv4 COMPOUND with a tag keeps its loan until the
+  (then `sunrpc.svc_tcp_rx_loan_pages=N`; **since 22 October there is no
+  switch** (Mike): a budget above 0 is what loans, and with every budget
+  at 0, the default and the rig's setting at rest, nothing is loaned,
+  behind a static key that makes it free; see "What a server that never
+  loans pays" in `NFSD_TCP_WRITE_ZEROCOPY/UPSTREAM_DEFENSE.md`.
+  `xeu-rig/settled.sh` still holds the switch at `Y` on build 491 and
+  before), and an NFSv4 COMPOUND with a tag keeps its loan until the
   reply is encoded. **On 15 October several thread pools per NUMA node
   (`pools_per_node`) was dropped (Mike: Chuck Lever has called it a
   dead end; the patch is in `NFSD_TCP_WRITE_ZEROCOPY/patches/dropped/`,
