@@ -134,7 +134,7 @@ REGION_PAGES=32768
 # The sunrpc module's settings that a run may change, and their values at
 # rest.  A mode changes some of them (mode_expect below).
 declare -A REST=(
-	[svc_tcp_rx_rcvbuf]=1048576
+	[svc_tcp_rx_rcvbuf]=768000	# 750 KiB from 22 October (was 1 MiB): README.md, "750 KiB on one port"
 	[svc_tcp_rx_linger_us]=0
 	[svc_tcp_rx_keep]=N
 	[svc_tcp_rx_lowat]=0
