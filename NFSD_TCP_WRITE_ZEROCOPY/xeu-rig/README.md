@@ -1,4 +1,101 @@
-# 22 October, afternoon: the loan switch removed, copy mode as before — read this first
+# The boot into the kernel built from the tip — read this first
+
+Written on 22 October 2026, before Mike pushed the branch, built a kernel
+from it on GitLab and installed it on tardis1. Everything here is for the
+first session on that kernel. The section after this one, "22 October,
+afternoon", is the handoff before it: what was run on build 491 with the
+tip's sunrpc swapped in.
+
+**What the kernel carries that has never run** (the code commits since
+build 491; the docs commits are between them). The first five ran on
+build 491 as a swapped-in sunrpc; the rest have only been built:
+
+| commit | what | run? |
+|---|---|---|
+| `f84c0ee96abf` | `svc_tcp_rx_loan_pages` removed: a budget above 0 is what loans, the lookup behind the static key `svc_tcp_rx_loans` | KUnit and copy mode on 491 |
+| `d8697f698379`, `69ae778de1e0`, `af1bf767005c` | the KUnit interface and tests for it | KUnit on 491, 7/7 and 50/50 |
+| `ec0b3c51f93c` | page_pool: `page_pool_rx_region_key`, on while the region exists | built only |
+| `75ab5ec32723` | sunrpc: no skb walk for region pages without a region | built only |
+| `78a1538d27bd` | KUnit: the fake region holds the key on | built only |
+| `c8c25e8b6b76` | page_pool: the region's and stack's branches behind the key | built only |
+| `428a1051e6cb` | sunrpc: the budget's `lock` on its own cache line | built only |
+| `fb352b960445` | sunrpc: one budget lookup at a loaned record's first region skb | built only |
+| `979433fb2055` | KUnit interface: the copy check and admission by transport | built only |
+
+The "built only" ones were compiled at each commit with W=1,
+`CONFIG_WERROR=y` and sparse, with and without `CONFIG_KUNIT`
+(`$L/build-regionkey`, `$L/build-nokunit`). Why each exists is "What a
+server that never loans pays" in `../UPSTREAM_DEFENSE.md`, items 1, 2,
+3, 8 and 9.
+
+**The first ten minutes.**
+
+1. **The kernel.** `uname -r` is the new build, not
+   `7.3.0-7.hs.491.loanpages_pool`.
+2. **Its own sunrpc, with no swap.** `updates/` is per kernel, so the new
+   one has none; build 491's `updates/sunrpc.ko` (the tip's sunrpc
+   before the region key, `807985F…`) stays with 491.
+   - `cat /sys/module/sunrpc/srcversion` must equal
+     `modinfo -F srcversion sunrpc`.
+   - `/etc/dracut.conf.d/zc-no-nfs.conf` and
+     `/usr/lib/dracut/modules.d/99zc-no-nfs/` keep the NFS stack out of
+     the initrd that the kernel's install builds. If the srcversion is
+     not the kernel's, the initrd loaded sunrpc: see "22 October:
+     tardis1's reboot for its management link" below.
+3. **It is a kernel from the tip.**
+   - There is no `/sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages`.
+   - `grep -w page_pool_rx_region_key /proc/kallsyms` finds it
+     (build 491 has none), and so does
+     `grep -w svc_tcp_rx_loans /proc/kallsyms`.
+4. **The packages beside it**, for `run-kunit.sh` and `build-sunrpc.sh`:
+   the new build's `kernel-16k-modules-internal` (the KUnit modules) and
+   `kernel-16k-devel`. On 491 both were installed.
+5. **`modprobe arm_cmn`.** It was not loaded at 491's boot, and without it
+   `memcost-log.sh` counts nothing.
+6. **The bring-up**, as before:
+   - `for n in 0 1 2 3 4 5 6 7; do mount -o noatime /dev/nvme${n}n1 /hs/nvme$n; done`
+     (nvme8 is the root);
+   - `./bringup.sh 32768 256`, then `./port-setup.sh enp164s0f0 56`;
+   - `systemctl start nfs-server` (if it is not running), then
+     `./settled.sh apply`, which must end in "the settled setting".
+     `svc_tcp_rx_loan_pages` shows as "not in this kernel", not as BAD.
+7. **The KUnit suites, from the package now**: `../run-kunit.sh` with
+   nfs-server stopped. It puts the server and the settled setting back.
+   - Expected: `sunrpc-xdr-bvec` 7, `sunrpc-svcsock-rx` 50,
+     `nfsd-receive-bvec` 7, `nfsd4-receive-bvec` 10. No failure, and on
+     16 KiB pages no skip. On 491 they were 7, 48, 7 and 10; the svcsock
+     suite gained two cases with the tip.
+   - The region key's tests are in `sunrpc-svcsock-rx`: the fake region
+     must hold the key on, or every region-page test sees none.
+   - Then `./settled.sh apply` again.
+
+**Then the runs: `$L/t1-tipkernel/run24.sh`** (about 35 min; in the
+background, `> $L/t1-tipkernel/run24.log 2>&1`). It refuses to start
+unless steps 2, 3 and 5 hold and the host is settled.
+- **Copy mode, two rounds**, the same shapes as `run22.sh` and
+  `run23.sh` on 491:
+  - one port onto all eight drives at 750 KiB, with memcost, and the
+    budgets' `admitted` unchanged across each run;
+  - two ports at 384 KiB.
+- **Then one loan run**: one port, `WRITES=64`. It must admit records:
+  items 2 and 3 change the loan path, and nothing has run them yet.
+- Against 491: one port 45.08 to 45.20 GB/s at 1.34 to 1.35 bytes
+  through memory a byte, two ports 57.68. Read every run's `drives.txt`
+  before its figure. nvme7 stepped down in each run of 491's first two
+  rounds and wrote the least each time.
+- The loan run has no figure on this boot to compare with, so it is a
+  check that loans still work, not a measurement. tardis1's WD_BLACKs need
+  whole pages: expect loaned WRITEs to go dontcache where a piece does not
+  fill a page.
+
+**Still open, not for this boot:**
+- **The A/B of "What a server that never loans pays"**: `v7.3-7` against
+  the tip at upstream's defaults, on an ordinary NIC with no region. It
+  gives items 5 to 8 their numbers. Not tardis1, whose card has a region.
+- **The rig scripts on `../loan-budget.sh`** have not run on a test host.
+- **The regroup**, when Mike asks.
+
+# 22 October, afternoon: the loan switch removed, copy mode as before
 
 The tip's sunrpc on tardis1, build 491, after the reboot that followed
 the svcsock KUnit crash (`$L/sunrpc-491-loankey-tip`, srcversion
@@ -148,7 +245,7 @@ one port's:
 **What is left of the handover below**: steps 1 and 2 are done (this
 section); keep is Mike's to decide; then the regroup.
 
-# 22 October: tardis1's reboot for its management link — read this first
+# 22 October: tardis1's reboot for its management link
 
 Written on 22 October, before Mike rebooted tardis1 to try to clear its
 management link, for the session after. The work since the Xsight
