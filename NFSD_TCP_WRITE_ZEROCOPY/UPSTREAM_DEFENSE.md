@@ -229,6 +229,19 @@ kernel without the series?**
    `svc_tcp_rx_credit_admit()`. The second check is needed, because a
    budget can be turned off between the two points. The first lookup's
    result could be kept in the record's state.
+   - **Done 22 October** (Mike), differently from the note above. The
+     second and third lookups are back to back at the same skb, so they
+     are now one: "SUNRPC: look a loaned record's budget up once at its
+     first region skb" looks the budget up once there and passes it to
+     `svc_tcp_rx_budget_copy_from()` and `svc_tcp_rx_credit_admit_to()`.
+     Both decisions then see one configuration. Keeping classify's
+     result instead would be stale: a budget may change between a
+     record's classification and its first region skb, which is what
+     that check is for. So two lookups a loaned record is the floor.
+     The suites keep calling `svc_tcp_rx_budget_copy()` and
+     `svc_tcp_rx_credit_admit()` by transport: wrappers under
+     `CONFIG_KUNIT` ("... for the KUnit suites"), since nothing else
+     calls them now.
 3. **A shared cache line in `struct svc_tcp_rx_budget`.** `net` (offset
    0) is on the same 64-byte line as `lock` and `avail` (offsets about
    40 to 56), which every credit admit and release writes. Each time
@@ -237,6 +250,16 @@ kernel without the series?**
    being made, not at a budget of 0, but it is the kind of thing netdev
    reviewers notice. The fix: the fields that never change (`net`,
    `cfg_*`) and the hot ones (`lock`, `avail`, ...) on separate lines.
+   - **Done 22 October** (Mike): "SUNRPC: keep a region budget's
+     configuration off the credit's cache line" starts `lock` on a
+     cache line of its own (`____cacheline_aligned_in_smp`). `net`,
+     `cfg_pages`, `cfg_reserve`, `node` and `sysctl` (40 bytes) are
+     alone on the first line; the default budget is now 256 bytes.
+   - Items 2 and 3 were built at each of their three commits with W=1,
+     `CONFIG_WERROR=y` and sparse, with and without `CONFIG_KUNIT`
+     (`/var/tmp/zc-run-logs/build-regionkey`, `build-nokunit`). **Not
+     yet run**: like items 8 and 9's key, they wait for a kernel built
+     from the tip.
 4. **The kill-switch's promise is gone.** The checklist item above said
    the switch's off state is "byte-identical to the pre-loan receive".
    With the budget as the switch, that is no longer so in form: a
