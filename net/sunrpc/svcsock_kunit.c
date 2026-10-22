@@ -2942,10 +2942,11 @@ static void svcsock_rx_credit_collapsed_unwaits_test(struct kunit *test)
 /*
  * A record's first skb has a locked head, so its bytes past the prefix are
  * copied into a merge page that sits in the table as a loan while its bytes
- * are counted as copied.  The next skb carries a region page and there is
- * no budget, so the record is materialized with the merge page in its
- * table: the merge page's bytes must come off the borrowed count once, and
- * be counted as copied once.
+ * are counted as copied.  The budget is turned off before the next skb,
+ * which carries a region page, so the record is materialized with the merge
+ * page in its table: the merge page's bytes must come off the borrowed count
+ * once, and be counted as copied once.  (With no budget when it is
+ * classified, a record is copied from its start and has no merge page.)
  */
 static void svcsock_rx_merge_then_materialize_test(struct kunit *test)
 {
@@ -2971,7 +2972,6 @@ static void svcsock_rx_merge_then_materialize_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
 			svcsock_rx_budget_default_off, NULL), 0);
 	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
-	svc_tcp_rx_budget_kunit_default(0, 0);
 
 	svcsock_rx_fill_record(record, BODY_LEN, true, RPC_CALL, RPC_AUTH_UNIX);
 	locked_skb = svcsock_rx_build_linear_skb(test, record,
@@ -2999,6 +2999,7 @@ static void svcsock_rx_merge_then_materialize_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, state->copied_bytes, (u32)MERGE_LEN);
 
 	/* A region page and no budget: the record is copied, merge page too. */
+	svc_tcp_rx_budget_kunit_default(0, 0);
 	desc.count = TAIL_LEN;
 	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, region_skb,
 				   0, region_skb->len);
