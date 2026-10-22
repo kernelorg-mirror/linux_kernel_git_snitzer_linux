@@ -50,7 +50,9 @@ and needs none of it. The initrd was rebuilt with `dracut -f
 /efi/rocky/$K/initrd $K`, and the one before is beside it as
 `initrd.pre-zc-no-nfs`. After the next boot the srcversion should read
 `3F8D84…` without a swap; if not, boot from that copy by renaming it
-back. Then as on 20 October: the eight
+back. The same day `nfsd4_bvec_kunit` was taken out of `nfs.conf`
+(Mike), so a boot no longer runs that suite; the file before is
+`/root/nfs.conf.pre-zc-2026-10-22`. Then as on 20 October: the eight
 drives mounted, `./bringup.sh 32768 256`, `./port-setup.sh enp164s0f0
 56`, `systemctl start nfs-server`, `./settled.sh apply` ending in "the
 settled setting". The sunrpc KUnit suites of that build passed on
