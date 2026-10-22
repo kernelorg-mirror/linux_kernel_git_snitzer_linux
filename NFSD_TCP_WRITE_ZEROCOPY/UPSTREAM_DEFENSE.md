@@ -98,6 +98,11 @@ to be a blocker.
 ## Pre-submission checklist
 
 - [x] **Add a transport-level loan kill-switch (chicken bit).**
+  **Superseded 22 October 2026:** the switch is removed, and the budget
+  is the chicken bit: every budget at 0, the default, copies every record
+  (reason `no_budget`), behind a static key. What off promises now is
+  item 4 of "What a server that never loans pays", below. The rest of
+  this entry is the record of the switch.
   **Done (2026-09-06)** as the incremental pair "SUNRPC: add a runtime
   switch to disable TCP receive page loans" + "SUNRPC: cover the loan
   kill-switch in the svcsock KUnit suite" (placement footnotes in both
@@ -232,16 +237,38 @@ kernel without the series?**
    being made, not at a budget of 0, but it is the kind of thing netdev
    reviewers notice. The fix: the fields that never change (`net`,
    `cfg_*`) and the hot ones (`lock`, `avail`, ...) on separate lines.
-4. **The kill-switch's promise is gone.** The checklist item above says
+4. **The kill-switch's promise is gone.** The checklist item above said
    the switch's off state is "byte-identical to the pre-loan receive".
    With the budget as the switch, that is no longer so in form: a
    record still goes through the series' receive state machine and
    comes out `no_budget`. The no-budget check also comes before the TLS,
    direction and small-record checks, so in copy mode every record
    reports `no_budget`, and no trace says why it would not have been
-   loaned anyway. The record should be updated here once the removal is
-   committed, and whether off is still "today's receive" established
-   again (item 5).
+   loaned anyway.
+   - **Done 22 October (code read).** What off promises now:
+     - **The request nfsd gets is the one mainline builds.** A copied
+       record is published by `svc_tcp_rx_publish()`'s `SVC_TCP_RX_COPY`
+       branch: `rq_arg` is the head plus `rq_pages` as
+       `XDRBUF_PAGE_ARRAY`, no bvecs (`bvec` NULL, `bvec_count` 0), no
+       page references held (`borrowed_count` 0 and every reference
+       released, checked with a `WARN_ON_ONCE` before publishing), and
+       `rq_xprt_ctxt` NULL. That the bytes are the same is what
+       `run-killswitch.sh` checks with `cmp` while off; with the budget
+       as the switch it has not yet been run on a test host.
+     - **The path the bytes take is not mainline's.** Mainline (since
+       `v7.3-3`) also receives through `->read_sock` and an actor, but
+       the series' actor runs its receive state machine for every
+       record, loaned or not. That is item 5, and its cost is item 5's
+       number. "Byte-identical" is not to be claimed for the path; the
+       cover letter says "the same request, through the series'
+       receive" and gives item 5's figure.
+     - **The order of the checks is kept**: `no_budget` first. With
+       loans off, the checks after it would run on every record only to
+       label a record that is copied either way. With loans on,
+       every reason shows as before. What is lost is a copy-mode trace
+       saying which records could never be loaned; nothing reads that
+       today. (Mike's to overturn.)
+     - The checklist entry above is marked superseded.
 5. **Copy mode runs the series' receive state machine, not mainline's.**
    Step 6 of `CODE-SERIES.md` counted it: with loans off, every record
    still goes through `svc_tcp_rx_classify()`, `_copy_skb()`,
@@ -281,6 +308,40 @@ kernel without the series?**
    end of a record on transports that receive region pages. Confirm
    that a transport with no region pages never reaches the learning or
    the held buffer, so that only the E1 pays for it.
+   - **Confirmed 22 October (code read).**
+     - **The cost factor** is learned only in
+       `svc_tcp_rx_credit_release()`, which returns at once unless the
+       record holds credit (`credit_linked`). Credit is taken only in
+       `svc_tcp_rx_credit_admit()`, from the walk of a record classified
+       for a loan (`SVC_TCP_RX_MIXED`) at a skb that carries region pages.
+       With loans off a record is never classified for a loan, and
+       without a region no skb carries a region page: neither reaches
+       it.
+     - **The held buffer and its factor**
+       (`svc_tcp_rx_hold_buffer()`, `_hold_factor()`, `_hold_stale()`,
+       `_geometry_account()`) are reached only while `sk_rx_held` or
+       `sk_rx_hold_pending` is set. `sk_rx_hold_pending` is set in
+       `svc_tcp_recv_skb()` only when `svc_tcp_rx_rcvbuf` is not 0 and
+       the skb carries a region page. `svc_tcp_rx_rcvbuf` defaults to 0,
+       so at upstream's defaults the gate stops before the region test,
+       and without a region the test is never true.
+     - **What remains at defaults is the gate itself**, on every skb:
+       loads of `sk_rx_held` (twice), `sk_rx_hold_pending` and
+       `svc_tcp_rx_rcvbuf` in `svc_tcp_recv_skb()`, `sk_rx_held ||
+       sk_rx_hold_pending` again in `svc_tcp_recv_actor()`, and
+       `sk_rx_hold_pending` once a read in `svc_tcp_recvfrom()`. These
+       are a few loads of the transport's own fields, with no lookup.
+       They are for item 5's A/B to count; if they show, the region's
+       existence can be a static key, as the budget's is.
+     - **A cost found on the way, outside upstream's defaults:** with
+       `svc_tcp_rx_rcvbuf` set but no region, the gate walks every
+       skb's head and fragments and reads each fragment page's
+       `pp_magic` (`svc_tcp_rx_skb_region_pages()`,
+       `page_pool_page_in_rx_region()`). It never finds one, so the
+       transport is never held and the walk repeats on every skb for
+       the life of the connection. A one-line guard would end it:
+       `page_pool_rx_region_size()` (or a static key for the region)
+       before the walk. Not made yet.
 
 ### What closes the task
 
