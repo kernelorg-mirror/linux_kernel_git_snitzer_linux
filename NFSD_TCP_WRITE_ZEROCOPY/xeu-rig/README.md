@@ -18,7 +18,7 @@ noatime /dev/nvme${n}n1 /hs/nvme$n; done`, `./bringup.sh 32768 256`,
 threads), then `./settled.sh apply`. Every run below is `WARM=10 RUNTIME=30` after
 an fstrim of its drives and 120 s of rest, one run per row unless it
 says otherwise; drivers and logs in `/var/tmp/zc-run-logs/t2-dprp5/` on
-tardis2 (`run.sh` to `run15.sh`).
+tardis2 (`run.sh` to `run19.sh`).
 
 **One port onto four drives of each kind.** The window is each
 connection's receive window, 340 KiB on the first run of a mode after a
@@ -251,10 +251,64 @@ October, nothing that meets the bar for taking it back. (`k-loan64-N1`,
 at 340 KiB, 15.11, is left out; its fio total, 31.84 GB/s, has a stall
 outside the window.)
 
-tardis2 is left running the tip's sunrpc, the gating and `de65c0117021`
-(`updates/sunrpc.ko` from `$L/sunrpc-491-rehold`, srcversion
-`3F8D843450D4E5907693FC2`); both budgets have learned `hold_factor 107`.
-To go back to the
+**Keep and the linger again, at 750 KiB and on `de65c0117021`.** With
+every window now from the learned factor, the runs above at two windows
+no longer have to be told apart, so both dropped features were run once
+more on one module load: the dropped 0005 (`svc_tcp_rx_linger_us`: a
+thread that has read part of a record waits on the socket for the rest
+instead of giving the transport back) rebased onto the tip, keeping both
+its trace events and the tip's, with 0006 on it as above, and a third
+form of the linger new here, `svc_tcp_rx_linger_sleep`: instead of
+spinning, the thread sleeps on the socket's wait queue
+(`schedule_hrtimeout()`) until data arrives, the transport closes or
+the linger's time is up. Built in `/var/tmp/keep-tree` on tardis2 (not
+committed; the diff is `$L/sunrpc-491-lingerkeep/lingerkeep.patch`),
+KUnit 7/7 and 50/50 from the build. Five settings by turns, copy and
+loan at 64 WRITEs, two rounds, every run at `svc_tcp_rx_rcvbuf` 768,000
+(`run18.sh 768000`, `lk-*`), a WRITE at a time:
+
+| port a onto the DPRP5s | setting | GB/s | woken | context switches | nfsd CPUs busy |
+|---|---|---|---|---|---|
+| copy | neither | 40.81, 40.82 | 10.36, 10.66 | 13.73, 13.74 | 26, 27% |
+| | keep | 40.75, 40.81 | 6.72, 6.73 | 11.85, 11.96 | 24, 26% |
+| | linger 50 us, spinning | 40.79, 40.80 | 2.40, 2.48 | 9.57, 9.66 | 33, 33% |
+| | linger 50 us, sleeping | 40.80, 40.80 | 2.36, 2.51 | 15.43, 15.76 | 25, 26% |
+| | keep and the sleeping linger | 40.81, 40.81 | 2.48, 2.54 | 16.02, 16.89 | 24, 25% |
+| loan, 64 WRITEs | neither | 40.40, 40.42 | 14.90, 15.11 | 15.83, 15.88 | 13, 14% |
+| | keep | 40.34, 40.40 | 12.30, 12.70 | 14.79, 15.01 | 13, 13% |
+| | linger 50 us, spinning | 40.41, 40.48 | 3.85, 4.05 | 9.56, 9.81 | 21, 23% |
+| | linger 50 us, sleeping | 40.30, 40.44 | 4.00, 4.02 | 25.67, 27.00 | 12, 13% |
+| | keep and the sleeping linger | 40.32, 40.39 | 3.84, 3.89 | 25.86, 26.06 | 12, 12% |
+
+Every window was about 349 KiB (`rcv_ssthresh` 350,106 to 357,000); no
+FIFO or ring drops and 0 to 11 client retransmits in every run but
+`lk-copy-keepsleep-1` (342 ring drops, 349 retransmits; its second
+round had none).
+
+- **None changes the rate.**
+- **Keep**: a third fewer wakes in copy mode and a sixth fewer for
+  loans, an eighth and a twentieth fewer context switches, nfsd's CPU
+  the same or a point or two lower. The same as at 476 KiB above.
+- **The spinning linger** cuts context switches by 30 to 40%, and wakes
+  by three quarters, for 6 to 9 more points of nfsd's CPU: the cost it
+  was dropped for on 15 October, measured again.
+- **The sleeping linger is not a cheaper spin.** The pool's wakes fall
+  as with the spin, since the transport is not given back, but the
+  thread now sleeps and is woken by the socket's own callback, which
+  "threads woken" (`svc_pool_thread_wake`) does not count: context
+  switches rise by 15% in copy mode and 65% for loans, more than the
+  wakes it saved, for no CPU saved (within a point). Keep on top of it
+  adds nothing.
+- So, by 15 October's bar (rate or nfsd's CPU), neither feature earns
+  its place back; keep is the only one with nothing against it, and
+  whether fewer wakes alone are worth its code is Mike's to decide.
+
+tardis2 is left running the linger and keep build (`updates/sunrpc.ko`
+from `$L/sunrpc-491-lingerkeep`, srcversion `8BB73DEC24E9BBB107B00FC`)
+with keep `N`, the linger 0 and `svc_tcp_rx_linger_sleep` `N`, so it
+runs as the tip's sunrpc does (`$L/sunrpc-491-rehold`, srcversion
+`3F8D843450D4E5907693FC2`: the gating and `de65c0117021`). To go back
+to the tip's: `./swap-sunrpc.sh $L/sunrpc-491-rehold`. To go back to the
 installed sunrpc: `rm /lib/modules/$(uname -r)/updates/sunrpc.ko`,
 `depmod -a`, `SUNRPC_KO=none ./swap-sunrpc.sh`, `systemctl start
 nfs-server`, `./settled.sh apply`.
