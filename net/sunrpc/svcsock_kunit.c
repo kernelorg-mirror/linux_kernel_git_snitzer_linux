@@ -2737,13 +2737,25 @@ static void svcsock_rx_arena_bound_test(struct kunit *test)
  */
 static int svcsock_rx_fake_region;
 
-static void svcsock_rx_unbind_region(void *pool)
+/*
+ * A pool bound to the fake region holds page_pool_rx_region_key on, as a
+ * real region does, so that region pages are looked for; unbinding twice
+ * (by hand, then as the test's cleanup) lets it go once.
+ */
+static void svcsock_rx_unbind_region(void *data)
 {
-	((struct page_pool *)pool)->rx_region = NULL;
+	struct page_pool *pool = data;
+
+	if (!pool->rx_region)
+		return;
+	pool->rx_region = NULL;
+	static_branch_dec(&page_pool_rx_region_key);
 }
 
 static void svcsock_rx_bind_region(struct kunit *test, struct page_pool *pool)
 {
+	if (!pool->rx_region)
+		static_branch_inc(&page_pool_rx_region_key);
 	pool->rx_region = (struct page_pool_rx_region *)&svcsock_rx_fake_region;
 	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
 			svcsock_rx_unbind_region, pool), 0);
