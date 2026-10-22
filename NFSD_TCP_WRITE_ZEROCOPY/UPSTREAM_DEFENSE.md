@@ -339,9 +339,27 @@ kernel without the series?**
        `pp_magic` (`svc_tcp_rx_skb_region_pages()`,
        `page_pool_page_in_rx_region()`). It never finds one, so the
        transport is never held and the walk repeats on every skb for
-       the life of the connection. A one-line guard would end it:
-       `page_pool_rx_region_size()` (or a static key for the region)
-       before the walk. Not made yet.
+       the life of the connection. The same walk runs on every skb of
+       a loaned record, region or not.
+       - **Fixed 22 October** (Mike). `page_pool_rx_region_size()` could
+         not guard it: it takes `rx_region_mutex`. "page_pool: add a
+         static key for whether the fixed receive region exists" adds
+         `page_pool_rx_region_key`, counted on when the region is made
+         and off when it is given back (no page is a region page outside
+         that), and `page_pool_rx_region_exists()`. "SUNRPC: look for
+         region pages in an skb only while the region exists" tests it
+         first in `svc_tcp_rx_skb_region_pages_after()`, so without a
+         region the walk is a patched-out branch at each of its four call
+         sites. The KUnit fixture that binds a pool to its fake region
+         holds the key on. Built with W=1, `CONFIG_WERROR=y` and sparse
+         against the running config
+         (`/var/tmp/zc-run-logs/build-regionkey`), and the jump-table
+         entries checked. **Not yet run**: page_pool is built into the
+         kernel, so it needs a kernel build, not a sunrpc swap. A sunrpc
+         from this tree will not load on build 491, which has no such
+         symbol.
+       - The same key could guard page_pool's own region branches in
+         its recycle path (item 8).
 
 ### What closes the task
 
