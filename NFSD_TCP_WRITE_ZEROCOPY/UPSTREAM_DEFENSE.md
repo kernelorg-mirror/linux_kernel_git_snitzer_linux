@@ -198,11 +198,18 @@ kernel without the series?**
    That is five to eight loads of rarely written data, once per record.
    It is small, but it is not free, and it is paid by every record on
    every server.
-   - *Option:* a static key, enabled while any budget is above 0, so
-     that classify costs one patched-out branch while loans are off.
-     The same key could guard the rest of the loan's per-record work.
-     This is the answer Chuck will want to hear, and it is cheap to add
-     before posting.
+   - **Done 22 October** (Mike): "SUNRPC: let the region budget alone
+     turn TCP receive loans on" removes the switch and adds the static
+     key `svc_tcp_rx_loans`. The key is on while any budget is above 0,
+     and it is set under `svc_rx_budget_cfg_lock` wherever a budget's
+     pages change and when a namespace's budget goes away. With loans
+     off, the check in `svc_tcp_rx_classify()` compiles to a `nop`
+     followed by the `no_budget` return. The lookup is reached only
+     when the key is on: checked in the disassembly of the build
+     against build 491, `/var/tmp/zc-run-logs/sunrpc-491-loankey`.
+     It has not yet been run on tardis1 or under the KUnit suites.
+     The key guards only the budget lookup; the rest of the per-record
+     work (item 5) is not under it.
 2. **The same lookup three times on a loaned record.** On the loan
    path the budget is looked up in classify, again in
    `svc_tcp_rx_budget_copy()` at the first region skb, and again in
