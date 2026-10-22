@@ -34,8 +34,23 @@ ends:
 
 **tardis1 after the boot.** Its sunrpc is the tip's, from
 `/lib/modules/$(uname -r)/updates/sunrpc.ko` (`$L/sunrpc-491-rehold`,
-srcversion `3F8D843450D4E5907693FC2`), so a boot keeps it: check
-`cat /sys/module/sunrpc/srcversion`. Then as on 20 October: the eight
+srcversion `3F8D843450D4E5907693FC2`): check
+`cat /sys/module/sunrpc/srcversion`. **The boot on 22 October did not
+keep it**: it came up on `2CC4824FD68A32C33B9C5F4`, the kernel's own.
+systemd-boot reads its initrd from the ESP (`/efi/rocky/$(uname
+-r)/initrd`, not `/boot`), and dracut had copied Hammerspace's
+`/etc/modules-load.d/nfs.conf` into it with every module it names, so
+the initrd loaded sunrpc before the real root and `updates/` was never
+reached. `swap-sunrpc.sh` put the tip's back (no client was connected).
+Since then `/etc/dracut.conf.d/zc-no-nfs.conf` (`omit_drivers` for the
+NFS stack) and the dracut module
+`/usr/lib/dracut/modules.d/99zc-no-nfs/` (drops the initrd's copy of
+`nfs.conf`) keep the NFS stack out of the initrd; the root is local XFS
+and needs none of it. The initrd was rebuilt with `dracut -f
+/efi/rocky/$K/initrd $K`, and the one before is beside it as
+`initrd.pre-zc-no-nfs`. After the next boot the srcversion should read
+`3F8D84…` without a swap; if not, boot from that copy by renaming it
+back. Then as on 20 October: the eight
 drives mounted, `./bringup.sh 32768 256`, `./port-setup.sh enp164s0f0
 56`, `systemctl start nfs-server`, `./settled.sh apply` ending in "the
 settled setting". The sunrpc KUnit suites of that build passed on
