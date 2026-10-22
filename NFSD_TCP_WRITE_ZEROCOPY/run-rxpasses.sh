@@ -25,7 +25,10 @@
 #
 # Usage:
 #   run-rxpasses.sh [seconds]          observe the current loan setting
-#   run-rxpasses.sh [seconds] --ab     observe loans Y, then N, then restore
+#   run-rxpasses.sh [seconds] --ab     observe loans on, then off, then restore
+#
+# Loans are on when the budget a transport draws on is above 0; --ab sets
+# and clears one (loan-budget.sh) and puts the host's budgets back.
 #
 # Needs bpftrace and a kernel carrying the page-loan series.  Safe on a
 # production server: kprobes plus one sched tracepoint, no load, no knob
@@ -34,7 +37,7 @@
 set -u
 SECS=${1:-30}
 MODE=${2:-}
-SW=/sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages
+. "$(cd "$(dirname "$0")" && pwd)/loan-budget.sh"
 
 command -v bpftrace >/dev/null || { echo "run-rxpasses: bpftrace required" >&2; exit 1; }
 [ -r /proc/net/rpc/nfsd ] || { echo "run-rxpasses: nfsd not running" >&2; exit 1; }
@@ -137,18 +140,20 @@ sample() {   # $1 = label
 }
 
 if [ "$MODE" = "--ab" ]; then
-	[ -w "$SW" ] || { echo "run-rxpasses: cannot write $SW for --ab" >&2; exit 1; }
-	ORIG=$(cat "$SW")
-	restore() { echo "$ORIG" > "$SW" 2>/dev/null; rm -f "$BT" "$OUT" "$SUM"; }
+	[ -w "$LB_SP/svc_tcp_rx_budget_default_pages" ] ||
+		{ echo "run-rxpasses: cannot write the budgets for --ab" >&2; exit 1; }
+	loans_save
+	restore() { loans_restore 2>/dev/null; rm -f "$BT" "$OUT" "$SUM"; }
 	trap restore EXIT
 	echo "run-rxpasses: A/B over $((SECS * 2 + 6))s plus settle; keep offered load constant"
 	echo
-	echo Y > "$SW"; sleep 2
+	loans_on || { echo "run-rxpasses: could not set a budget" >&2; exit 1; }
+	sleep 2
 	sample "loans ON"
-	echo N > "$SW"; sleep 2
-	sample "loans OFF (pre-loan receive)"
-	echo "$ORIG" > "$SW"
-	echo "loan switch restored to $ORIG"
+	loans_off; sleep 2
+	sample "loans OFF (no budget: copy)"
+	loans_restore
+	echo "budgets restored: loans $(loans_state)"
 	echo
 	awk -F'|' 'BEGIN {
 		printf "%-26s %9s %14s %10s %14s\n", "window", "MiB/s", "passes/record", "us/pass", "wakeups/MiB"

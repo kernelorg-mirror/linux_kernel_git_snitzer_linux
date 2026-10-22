@@ -1,12 +1,16 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0
-# Loan kill-switch validation (sunrpc.svc_tcp_rx_loan_pages).
+# Loan on/off validation: the region budget as the loans' switch.
 #
-# Proves the three properties the switch claims:
-#   1. OFF: every WRITE receive classifies mode=copy reason=disabled,
-#      borrowed=0 — and the data is byte-correct (the pre-loan receive).
-#   2. Flipping to ON takes effect on the same transport's later records
+# There is no loan switch since 22 October 2026: a record is loaned only
+# when the budget its transport draws on is above 0 (loan-budget.sh says
+# how).  Proves the two properties that turning loans on and off by the
+# budget claims:
+#   1. OFF (every budget 0): every WRITE receive classifies mode=copy
+#      reason=no_budget, borrowed=0 -- and the data is byte-correct.
+#   2. Setting a budget takes effect on the same transport's later records
 #      (per-record consultation), and those receives publish loans again.
+# The host's budgets are put back at the end.
 # Optional KUnit execution is diagnostic here.  Required KUnit-profile rows
 # own KUnit coverage; this production oracle claims only runtime properties.
 #
@@ -15,13 +19,10 @@ set -u
 TRACE=/sys/kernel/tracing
 CFG=/sys/kernel/config/nvmet
 SRC=/dev/shm/ks-src-16m
-PARAM=/sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/loan-budget.sh"
 FAILS=0
 fail() { echo "FAIL: $*"; FAILS=$((FAILS+1)); }
-
-require_default_on() {
-    [ -r "$1" ] && [ "$(cat "$1")" = Y ]
-}
 
 # Correlate classification and publication for each large RPC record.  A
 # common mount is not transport identity: xprt+sequence is the record key.
@@ -63,10 +64,10 @@ check_trace() {
                 bad = 1
             }
             sequence = v["sequence"] + 0
-            if (class_mode[key] == "copy" && class_reason[key] == "disabled") {
-                if (v["mode"] != "copy" || v["reason"] != "disabled" ||
+            if (class_mode[key] == "copy" && class_reason[key] == "no_budget") {
+                if (v["mode"] != "copy" || v["reason"] != "no_budget" ||
                     v["borrowed"] + 0 != 0) {
-                    print "invalid disabled publish for " v["xprt"] "/" v["sequence"] > "/dev/stderr"
+                    print "invalid no-budget publish for " v["xprt"] "/" v["sequence"] > "/dev/stderr"
                     bad = 1
                 }
                 disabled++
@@ -90,16 +91,16 @@ check_trace() {
         }
         END {
             if (disabled != 16 || enabled != 16) {
-                print "expected 16 disabled and 16 enabled correlated records, saw " \
+                print "expected 16 no-budget and 16 loaned correlated records, saw " \
                       disabled + 0 " and " enabled + 0 > "/dev/stderr"
                 bad = 1
             }
             if (!last_disabled || !first_enabled || last_disabled >= first_enabled) {
-                print "disabled records do not precede enabled records on one transport" > "/dev/stderr"
+                print "no-budget records do not precede loaned records on one transport" > "/dev/stderr"
                 bad = 1
             }
             if (!bad)
-                print "correlated disabled=" disabled " enabled=" enabled \
+                print "correlated no_budget=" disabled " loaned=" enabled \
                       " xprt=" only_xprt " sequence=" last_disabled "<" first_enabled
             exit bad
         }' "$1"
@@ -110,17 +111,10 @@ if [ "${1:-}" = --check-trace ]; then
     check_trace "$2"
     exit $?
 fi
-if [ "${1:-}" = --check-default ]; then
-    [ "$#" = 2 ] || { echo "usage: $0 --check-default PARAM" >&2; exit 2; }
-    require_default_on "$2"
-    exit $?
-fi
-
-[ -w $PARAM ] || { echo "FAIL: $PARAM missing or not writable"; exit 1; }
-require_default_on "$PARAM" || {
-    echo "FAIL: $PARAM must be Y before production validation"
-    exit 1
-}
+[ -w $LB_SP/svc_tcp_rx_budget_default_pages ] ||
+    { echo "FAIL: $LB_SP/svc_tcp_rx_budget_default_pages missing or not writable"; exit 1; }
+loans_save
+trap loans_restore EXIT
 
 # --- rig up (idempotent) ---
 modprobe brd rd_nr=1 rd_size=4194304
@@ -165,11 +159,11 @@ done
 # --- phase 1+2: OFF then ON across one connection ---
 echo > $TRACE/trace
 echo 1 > $TRACE/tracing_on
-echo N > $PARAM
+loans_off || fail "could not set every budget to 0"
 mount -t nfs -o vers=4.2,proto=tcp,sec=sys 127.0.0.1:/export/zc /mnt/zc
 dd if=$SRC of=/mnt/zc/ks-off bs=1M count=16 oflag=direct conv=fsync \
    status=none || fail "off-state dd"
-echo Y > $PARAM      # flip mid-connection: same mount, same TCP connection
+loans_on || fail "could not set a budget"      # mid-connection: same mount, same TCP connection
 dd if=$SRC of=/mnt/zc/ks-on bs=1M count=16 oflag=direct conv=fsync \
    status=none || fail "on-state dd"
 umount /mnt/zc
@@ -189,22 +183,21 @@ if modinfo svcsock_kunit >/dev/null 2>&1; then
     modprobe -r svcsock_kunit 2>/dev/null || true
     modprobe -r kunit 2>/dev/null || true
     modprobe kunit enable=1
-    echo N > $PARAM
+    loans_off
     dmesg -C
     modprobe svcsock_kunit; sleep 1
     totals=$(dmesg | grep -E '# sunrpc-svcsock-rx: pass' | tail -1)
-    echo "== KUnit (switch off): ${totals:-NO RESULT}"
-    echo "$totals" | grep -q 'fail:0' || fail "svcsock suite not green with switch off"
-    [ "$(cat $PARAM)" = N ] || fail "suite did not restore the host's switch setting"
+    echo "== KUnit (loans off): ${totals:-NO RESULT}"
+    echo "$totals" | grep -q 'fail:0' || fail "svcsock suite not green with loans off"
+    [ "$(loans_state)" = off ] || fail "suite did not restore the host's budgets ($(loans_state))"
     KUNIT=pass
-    echo Y > $PARAM
     modprobe -r svcsock_kunit 2>/dev/null || true
 else
     echo "(KUnit phase skipped: svcsock_kunit not installed)"
-    echo Y > $PARAM
 fi
 
 echo Y > /sys/module/nfs/parameters/localio_enabled
-echo "== RESULT: fails=$FAILS (switch restored to Y; optional-kunit=$KUNIT)"
-[ $FAILS = 0 ] && echo "== KILL-SWITCH VALIDATED: correlated off copies and later on loans on one transport"
+loans_restore
+echo "== RESULT: fails=$FAILS (budgets restored: loans $(loans_state); optional-kunit=$KUNIT)"
+[ $FAILS = 0 ] && echo "== LOAN ON/OFF VALIDATED: correlated no-budget copies and later loans on one transport"
 exit $FAILS
