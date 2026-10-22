@@ -207,7 +207,15 @@ kernel without the series?**
      followed by the `no_budget` return. The lookup is reached only
      when the key is on: checked in the disassembly of the build
      against build 491, `/var/tmp/zc-run-logs/sunrpc-491-loankey`.
-     It has not yet been run on tardis1 or under the KUnit suites.
+     On tardis1 the same day, the tip's sunrpc (srcversion
+     `807985F30E385B5AF1149B9`) was swapped in with `swap-sunrpc.sh`, and
+     the suites built beside it were run by hand:
+     `sunrpc-xdr-bvec` 7/7 and `sunrpc-svcsock-rx` 50/50, with no failure,
+     skip or warning (`/var/tmp/zc-run-logs/sunrpc-491-loankey-tip2/kunit.txt`).
+     The live parameters were as before afterwards. That needed
+     `svcsock_rx_merge_then_materialize_test` to classify its record with
+     a budget and turn the budget off mid-record: with no budget at
+     classification a record is now copied from its start.
      The key guards only the budget lookup; the rest of the per-record
      work (item 5) is not under it.
 2. **The same lookup three times on a loaned record.** On the loan
