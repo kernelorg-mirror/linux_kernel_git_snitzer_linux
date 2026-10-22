@@ -14,7 +14,9 @@ echo 2 > /sys/kernel/debug/nfsd/io_cache_write
 modprobe nfs   # fresh boot: nfs.ko (and its localio param) may not exist yet
 echo N > /sys/module/nfs/parameters/localio_enabled
 mkdir -p $M
-echo Y > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages
+. "$(cd "$(dirname "$0")" && pwd)/loan-budget.sh"
+loans_save; trap loans_restore EXIT
+loans_on || { echo "could not set a budget: loans would not be on"; exit 1; }
 echo 0 > $T/tracing_on; echo > $T/trace
 # one nfsd_write_dio_<outcome> event per split decision (direct, no_alignment,
 # too_small, no_middle, mem_misaligned, gap_misaligned)

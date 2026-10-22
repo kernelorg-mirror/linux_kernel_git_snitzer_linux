@@ -71,8 +71,7 @@ done
 
 echo "== series interfaces"
 modprobe sunrpc 2>/dev/null; modprobe nfsd 2>/dev/null; modprobe nfs 2>/dev/null
-for p in /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages \
-	 /sys/module/sunrpc/parameters/svc_tcp_rx_budget_pages \
+for p in /sys/module/sunrpc/parameters/svc_tcp_rx_budget_pages \
 	 /sys/module/sunrpc/parameters/svc_tcp_rx_budget_default_pages \
 	 /sys/module/sunrpc/parameters/svc_tcp_rx_budget_reserve \
 	 /sys/module/sunrpc/parameters/svc_tcp_rx_credit_factor \
@@ -91,7 +90,14 @@ if [ -e /sys/kernel/debug/page_pool_rx_region ]; then
 else
 	ok "fresh boot: no receive region yet (budget phases B and D can run)"
 fi
-[ "$(cat /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages 2>/dev/null)" = Y ] && ok "page loans on by default" || bad "svc_tcp_rx_loan_pages is not Y"
+# No loan switch since 22 October 2026: a budget above 0 is what loans, and
+# the rig scripts set one for their runs (../loan-budget.sh).
+if [ -e /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages ]; then
+	bad "sunrpc still has svc_tcp_rx_loan_pages: a kernel from before the budget turned loans on; the rig scripts expect the budget to"
+else
+	. "$HERE/../loan-budget.sh"
+	ok "loans by the budget (loans $(loans_state) at rest; the rig scripts set a budget for their runs)"
+fi
 [ -e /sys/kernel/tracing/events/nfsd/nfsd_write_direct/hist ] && ok "histogram triggers (run-budget.sh counts how WRITEs were issued)" ||
 	bad "no histogram triggers (CONFIG_HIST_TRIGGERS): cells.tsv's wr_direct, wr_dontcache and wr_buffered would all read 0"
 if [ -r "/lib/modules/$(uname -r)/build/Module.symvers" ]; then

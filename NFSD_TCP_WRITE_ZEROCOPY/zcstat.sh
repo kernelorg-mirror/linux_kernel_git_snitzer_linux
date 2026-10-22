@@ -20,12 +20,16 @@
 #
 # nfsdC is the CPU consumed by the nfsd kernel threads in cores-equivalent
 # (1.00 = one core saturated) -- the number the receive loan actually
-# improves.  For the cleanest experiment, flip the loan kill-switch
-# mid-run and watch pubrx/cprx and nfsdC respond at identical offered
-# load:
+# improves.  For the cleanest experiment, turn loans off and on by the
+# budget mid-run and watch pubrx/cprx and nfsdC respond at identical
+# offered load (a record is loaned only with a budget above 0; with no
+# region any value turns loans on):
 #
-#     echo N > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages
-#     echo Y > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages
+#     echo 0 > /sys/module/sunrpc/parameters/svc_tcp_rx_budget_default_pages
+#     echo 1 > /sys/module/sunrpc/parameters/svc_tcp_rx_budget_default_pages
+#
+# The sw column is Y while the initial namespace's or the default budget is
+# above 0, N while both are 0.
 #
 # drop counts trace-buffer overruns in the interval.  It must stay 0 for
 # a row to be trustworthy: a non-zero drop means events were lost and
@@ -233,7 +237,9 @@ while :; do
 	up=$(uptime_s)
 	elapsed=$(gawk -v a="$prev_up" -v b="$up" 'BEGIN{d=b-a; print (d>0)?d:1}')
 	prev_up=$up
-	sw=$(knob /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages)
+	sw=N
+	[ "$(knob /sys/module/sunrpc/parameters/svc_tcp_rx_budget_pages)" != 0 ] && sw=Y
+	[ "$(knob /sys/module/sunrpc/parameters/svc_tcp_rx_budget_default_pages)" != 0 ] && sw=Y
 	iocw=$(knob /sys/kernel/debug/nfsd/io_cache_write)
 
 	cp -f "$STATE" "$SNAP" 2>/dev/null || : > "$SNAP"
