@@ -2098,6 +2098,66 @@ static void svcsock_rx_hold_buffer_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, tp->scaling_ratio_max, ratio);
 }
 
+/*
+ * A transport held before its budget learned its factor (150) and held
+ * again at the factor it measured (107, svc_tcp_rx_hold_stale()) gets the
+ * window of one held at 107 from the start: the ratio rises to the new
+ * ceiling, and rcv_ssthresh, which had grown to the old clamp, by what the
+ * clamp rose.  Without that TCP keeps both where the first hold left them.
+ */
+static void svcsock_rx_hold_again_test(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
+	const int rcvbuf = 128 * 1024;
+	struct socket *sock;
+	struct tcp_sock *tp;
+
+	KUNIT_ASSERT_EQ(test, sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
+					       IPPROTO_TCP, &sock), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_sock_release, sock), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svsk->sk_sock = sock;
+	svsk->sk_sk = sock->sk;
+	tp = tcp_sk(sock->sk);
+	svc_tcp_rx_budget_kunit_rcvbuf(rcvbuf);
+
+	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
+	svc_tcp_rx_budget_kunit_rcvbuf(rcvbuf);
+	svc_tcp_rx_hold_buffer(svsk);
+	KUNIT_ASSERT_TRUE(test, svsk->sk_rx_held);
+	KUNIT_ASSERT_EQ(test, tp->scaling_ratio, svc_tcp_rx_scaling_ratio(150));
+	KUNIT_ASSERT_EQ(test, tp->window_clamp,
+			(u32)svc_tcp_rx_window_clamp(rcvbuf, 150));
+	/* The window has grown to the clamp, as it does under load. */
+	tp->rcv_ssthresh = tp->window_clamp;
+
+	/* Measured at 107: stale, and held again. */
+	svc_tcp_rx_budget_kunit_configure(0, 0, 107);
+	svc_tcp_rx_budget_kunit_rcvbuf(rcvbuf);
+	svsk->sk_rx_held = false;
+	svc_tcp_rx_hold_buffer(svsk);
+	KUNIT_EXPECT_TRUE(test, svsk->sk_rx_held);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_hold_factor, 107U);
+	KUNIT_EXPECT_EQ(test, tp->scaling_ratio_max,
+			svc_tcp_rx_scaling_ratio(107));
+	KUNIT_EXPECT_EQ(test, tp->scaling_ratio, svc_tcp_rx_scaling_ratio(107));
+	KUNIT_EXPECT_EQ(test, tp->window_clamp,
+			(u32)svc_tcp_rx_window_clamp(rcvbuf, 107));
+	KUNIT_EXPECT_EQ(test, tp->rcv_ssthresh, tp->window_clamp);
+
+	/* Measured at 150 again: the window shrinks as TCP shrinks it. */
+	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
+	svc_tcp_rx_budget_kunit_rcvbuf(rcvbuf);
+	svsk->sk_rx_held = false;
+	svc_tcp_rx_hold_buffer(svsk);
+	KUNIT_EXPECT_EQ(test, tp->scaling_ratio, svc_tcp_rx_scaling_ratio(150));
+	KUNIT_EXPECT_LE(test, tp->window_clamp,
+			(u32)svc_tcp_rx_window_clamp(rcvbuf, 150));
+	KUNIT_EXPECT_LE(test, tp->rcv_ssthresh, tp->window_clamp);
+}
+
 static void svcsock_rx_capacity_plus_one_test(struct kunit *test)
 {
 	enum { FRAG_LEN = 8 };
@@ -3299,6 +3359,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_credit_reserve_oldest_test),
 	KUNIT_CASE(svcsock_rx_window_clamp_test),
 	KUNIT_CASE(svcsock_rx_hold_buffer_test),
+	KUNIT_CASE(svcsock_rx_hold_again_test),
 	KUNIT_CASE(svcsock_rx_credit_rcvbuf_floor_test),
 	KUNIT_CASE(svcsock_rx_credit_disable_waiters_test),
 	KUNIT_CASE(svcsock_rx_credit_invalid_reset_test),
