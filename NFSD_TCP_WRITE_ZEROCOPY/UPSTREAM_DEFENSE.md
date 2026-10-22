@@ -157,6 +157,131 @@ to be a blocker.
   reasons live (needs krb5 or `xprtsec=tls`); tardis1 performance
   numbers for the cover letter (the series makes no throughput claim,
   but the 41%-memmove motivation reads better with a measured delta).
+- [ ] **Account for, and where it can be done remove, what the series
+  costs a server that never loans.** Open since 22 October 2026 (Mike);
+  the task is the next section.
+
+## What a server that never loans pays (task, opened 22 October 2026)
+
+**Why this is a task.** Chuck Lever will read the series as a set of
+features that only a bespoke embedded server needs: one that has to
+keep its receive buffers in the L3 cache and avoid a memcpy at any
+cost (the E1). Every other nfsd runs with loans off and no region.
+Chuck's first question will not be "is the loan correct" but "what
+does my server pay for it": cycles per RPC, cache lines touched,
+branches taken, and code in the receive path that he has to maintain
+and that his server never needs. Today we cannot answer with a number.
+The items below are the costs known so far. Some were found in passing
+and nowhere written down; others are from the survey in step 6 of
+`CODE-SERIES.md`. Do not lose sight of them: before the code group is
+posted, each item is either measured to cost nothing, made to cost
+nothing when loans are off, or named in the cover letter.
+
+The question for every item is the same. **At upstream's defaults
+(every budget 0, `rx_region_pages=0`), on an ordinary NIC with no
+region, what does the item add to each RPC, compared with the same
+kernel without the series?**
+
+### Known items
+
+1. **The budget lookup on every record (22 October).** When the
+   `svc_tcp_rx_loan_pages` switch is removed, the budget becomes the
+   only thing that turns loans on. `svc_tcp_rx_classify()` then asks
+   `svc_tcp_rx_budget_none()` on every RPC record, where it used to
+   load one `__read_mostly` bool. The new check:
+   - reads `svsk->sk_budget`;
+   - if that is NULL, takes `net_generic()` (an RCU read of `net->gen`
+     and an index) and reads the namespace's budget `c->net`;
+   - compares that with `&init_net` and reads the module parameter;
+   - if that is 0, also reads the default budget's parameter.
+
+   That is five to eight loads of rarely written data, once per record.
+   It is small, but it is not free, and it is paid by every record on
+   every server.
+   - *Option:* a static key, enabled while any budget is above 0, so
+     that classify costs one patched-out branch while loans are off.
+     The same key could guard the rest of the loan's per-record work.
+     This is the answer Chuck will want to hear, and it is cheap to add
+     before posting.
+2. **The same lookup three times on a loaned record.** On the loan
+   path the budget is looked up in classify, again in
+   `svc_tcp_rx_budget_copy()` at the first region skb, and again in
+   `svc_tcp_rx_credit_admit()`. The second check is needed, because a
+   budget can be turned off between the two points. The first lookup's
+   result could be kept in the record's state.
+3. **A shared cache line in `struct svc_tcp_rx_budget`.** `net` (offset
+   0) is on the same 64-byte line as `lock` and `avail` (offsets about
+   40 to 56), which every credit admit and release writes. Each time
+   the budget is looked up, `c->net` is read, which can pull a line
+   that another CPU has just dirtied. This costs only while loans are
+   being made, not at a budget of 0, but it is the kind of thing netdev
+   reviewers notice. The fix: the fields that never change (`net`,
+   `cfg_*`) and the hot ones (`lock`, `avail`, ...) on separate lines.
+4. **The kill-switch's promise is gone.** The checklist item above says
+   the switch's off state is "byte-identical to the pre-loan receive".
+   With the budget as the switch, that is no longer so in form: a
+   record still goes through the series' receive state machine and
+   comes out `no_budget`. The no-budget check also comes before the TLS,
+   direction and small-record checks, so in copy mode every record
+   reports `no_budget`, and no trace says why it would not have been
+   loaned anyway. The record should be updated here once the removal is
+   committed, and whether off is still "today's receive" established
+   again (item 5).
+5. **Copy mode runs the series' receive state machine, not mainline's.**
+   Step 6 of `CODE-SERIES.md` counted it: with loans off, every record
+   still goes through `svc_tcp_rx_classify()`, `_copy_skb()`,
+   `_publish()`, `_materialize()` and `_release_refs()` (from "SUNRPC:
+   Lend TCP receive pages to eligible RPC calls" and "SUNRPC: Bound TCP
+   receive loans with a region page budget"). What that costs against
+   mainline's `svc_tcp_recvfrom()` has never been measured. This is the
+   largest of the items, and it is the one that most needs a number.
+6. **The page swap and its bound run on every record received in
+   pieces** ("SUNRPC: Swap pages with the socket when a partial record
+   changes hands"). On tardis1 that was 5 to 38 million calls to
+   `svc_tcp_restore_pages()` per load, in copy mode too. Its message
+   should say what it saves a server that never loans; if it saves
+   nothing there, it has to be justified as part of the loan.
+7. **Work at defaults outside sunrpc**, from step 6:
+   - the direct I/O segment boundary, queried on each file open and
+     checked on each direct write (the `STATX_DIO_SEG_BOUNDARY`
+     commits, `nfs_dio_split()`);
+   - the interior-gap check on every direct write ("nfs_common: require
+     interior payload gaps to be logical-block aligned"), which a
+     copied payload never needs;
+   - the reply cache checksum through the XDR reader ("NFSD: Checksum
+     a cached call's header through the XDR reader"), on every call
+     that reaches the reply cache.
+
+   Each should be shown to cost nothing, or be justified as correct
+   without the loan.
+8. **The page_pool region in the core recycle path** ("page_pool: add a
+   fixed receive-buffer region ...", "... recycle a region-bound pool's
+   pages last in, first out"). These are branches in page_pool's fast
+   path that every driver's pool goes through, region or not. netdev
+   will ask for the same number Chuck does, per page rather than per
+   RPC. Mike's open question about the region's future upstream
+   (`AGENTS.md`) stands beside this item.
+9. **The learned cost and held-buffer factors** ("SUNRPC: Learn the
+   region costs of loans and held receive buffers"). They run at the
+   end of a record on transports that receive region pages. Confirm
+   that a transport with no region pages never reaches the learning or
+   the held buffer, so that only the E1 pays for it.
+
+### What closes the task
+
+- **A/B at upstream's defaults on an ordinary NIC, not the E1:**
+  `v7.3-7` against the branch's tip, the same kernel config,
+  NFSv3 and NFSv4.2 WRITE and small-RPC loads (GETATTR, SEQUENCE).
+  Report `perf stat` cycles and instructions per RPC, and the rate.
+  The figure the cover letter needs is "within noise", or the size of
+  the difference and where it comes from (`perf record` on the
+  receive path).
+- **For each item above:** measured as nothing; or made zero-cost when
+  loans are off (a static key, state kept per record, fields moved
+  apart); or named in the cover letter with what it costs and why.
+- **Rule from here on:** a change made for the E1 that adds work to a
+  record, a page or a call at upstream's defaults is entered here when
+  it is made, with what it costs a server that never loans.
 
 ## Longer answer
 
