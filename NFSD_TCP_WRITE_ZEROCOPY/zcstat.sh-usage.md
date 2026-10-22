@@ -38,7 +38,7 @@ sw iocw |  pubrx   cprx    brwMB   cpdKB  pp%   mat |  lgrx  avbv  mxbv |   dirW
 
 | Column | Meaning |
 |---|---|
-| `sw` | `sunrpc.svc_tcp_rx_loan_pages` — `Y` loans are enabled, `N` every receive copies. Read fresh each interval, so a mid-run flip is visible in place. |
+| `sw` | `Y` while the initial namespace's or the default region budget is above 0 (loans on), `N` while both are 0 (every receive copies). Read fresh each interval, so a mid-run change is visible in place. There is no loan switch since 22 October 2026; the budget turns loans on. |
 | `iocw` | `/sys/kernel/debug/nfsd/io_cache_write` — `0` buffered, `2` direct. The loan's second half is inert unless this is ≥ 2. |
 
 **Did the loan engage?** (one `action=publish` event per completed receive)
@@ -76,7 +76,7 @@ small ones, and the split by volume is what maps to DRAM traffic.
 |---|---|
 | `nfsdC` | CPU consumed by all `nfsd` kernel threads, in **cores-equivalent** — `1.00` is one core saturated, `12.40` is twelve. Computed over actual elapsed time, not the nominal interval. This is the number the receive loan improves. |
 | `drop` | Trace events the kernel discarded this interval (per-CPU ring overruns). **Must be 0.** Anything else means events were lost and every count in the row is an undercount — raise `BUFKB`. |
-| `fallback-reasons` | Named copy reasons for the interval, e.g. `auth=1,locked-head=1,disabled=34,capacity=12`. Also carries two diagnostics: `[EVENTS LOST - counts are low]` and `[no publish events: rerun with NOFILTER=1]`. |
+| `fallback-reasons` | Named copy reasons for the interval, e.g. `auth=1,locked-head=1,no_budget=34,capacity=12`. Also carries two diagnostics: `[EVENTS LOST - counts are low]` and `[no publish events: rerun with NOFILTER=1]`. |
 
 ## Fallback reasons you will actually see
 
@@ -84,11 +84,11 @@ small ones, and the split by volume is what maps to DRAM traffic.
 |---|---|
 | `auth` | First RPC on a fresh connection is an AUTH_NONE ping — always copies. Normal. |
 | `locked-head` | Bytes overlapping a locked skb linear head; the transport merges them into one whole page. Designed behavior. |
-| `disabled` | The kill-switch is `N`. |
+| `no_budget` | The budget the transport draws on is 0: loans are off (every budget 0, the default), or a budget was turned off with the record in flight. Before 22 October this was `disabled`, the switch at `N`. |
 | `capacity` | The payload needed more bvecs than the receive state can hold. **On a no-HDS NIC this is the expected failure mode** — hundreds of per-frame fragments exhaust the budget and the receive copies instead. |
 | `tls`, `gss`, `reply`, `unreadable` | Structurally ineligible receives. |
 
-## The kill-switch A/B — the cleanest experiment
+## Loans off and on — the cleanest experiment
 
 The loan's benefit is **CPU, not throughput**. At a wire- or
 storage-bound operating point throughput will not move, and only `nfsdC`
@@ -98,13 +98,16 @@ on one kernel, with no reboot:
 ```sh
 zcstat.sh 5 &                 # keep it running across the flip
 # ... drive steady-state write load ...
-echo N > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages   # loans off
+echo 0 > /sys/module/sunrpc/parameters/svc_tcp_rx_budget_pages           # loans off:
+echo 0 > /sys/module/sunrpc/parameters/svc_tcp_rx_budget_default_pages   #   every budget 0
 # ... same load, same duration ...
-echo Y > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages   # loans on
+echo 1 > /sys/module/sunrpc/parameters/svc_tcp_rx_budget_default_pages   # loans on
 ```
 
-Expect `sw` to follow the flip, `pubrx`→`cprx` with `reason=disabled`
-while off, and `brwMB`→`cpdKB` to swap. Any difference in `nfsdC` at
+With no region any budget above 0 turns loans on; with a region, give the
+default budget the region's pages (`loans_on` in `loan-budget.sh` does
+either), or loaned WRITEs wait for credit. Expect `sw` to follow,
+`pubrx`→`cprx` with `reason=no_budget` while off, and `brwMB`→`cpdKB` to swap. Any difference in `nfsdC` at
 equal load is the loan's contribution.
 
 For the copy elimination itself, run `perf` alongside — `memmove` share

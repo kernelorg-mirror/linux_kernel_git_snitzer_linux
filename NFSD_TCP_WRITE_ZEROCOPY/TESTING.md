@@ -68,7 +68,9 @@ name the code they drive -- never the other way around:
   exchange, materialization, capacity release, duplicate cleanup,
   valid/invalid partial exchange, published-request/socket-partial
   independence, max-capacity count-zero cleanup, provenance reuse,
-  locked-head merging, and the `svc_tcp_rx_loan_pages` kill-switch.
+  locked-head merging, and loans turned on and off by the budget (the
+  `no-budget` exclusion case; the switch it replaced,
+  `svc_tcp_rx_loan_pages`, was removed on 22 October 2026).
 - **`nfsd-receive-bvec`** (`CONFIG_NFSD_BVEC_KUNIT_TEST`) — the NFSv3
   WRITE receive-bvec consumer: page-array vs authoritative-bvec decode
   parity, duplicate-reply-cache checksum gathering, and DIO segment
@@ -1183,29 +1185,100 @@ so TLS is not currently reachable there); retransmit/packet-loss
 injection for dup-cache coverage; run the suite on real hardware
 alongside the tardis1 performance comparison.
 
-## The loan kill-switch (`sunrpc.svc_tcp_rx_loan_pages`)
+## Turning loans on and off: the budget
 
-Added 2026-09-06 (UPSTREAM_DEFENSE.md checklist item 1): a writable
-module parameter, default Y, read once per RPC record at classification
-time. Clear it and every receive classifies `mode=copy reason=disabled`
-— the pre-loan receive, byte-identical. Toggle at runtime:
+**There is no loan switch since 22 October 2026** ("SUNRPC: let the
+region budget alone turn TCP receive loans on"). The region budget is the
+only setting: a record is loaned only when the budget its transport draws
+on is above 0. A transport in the initial namespace draws on
+`svc_tcp_rx_budget_pages` when that is above 0, else on
+`svc_tcp_rx_budget_default_pages`; one in another namespace draws on its
+`net.sunrpc.region_budget_pages` when that is above 0, else on the default.
+With every budget at 0, the default, nothing is loaned: every receive
+classifies `mode=copy reason=no_budget` and is copied into `rq_pages`.
+
+A static key, `svc_tcp_rx_loans`, is on while any budget is above 0. With
+loans off, classification costs one patched-out branch rather than a
+lookup of the budget (`UPSTREAM_DEFENSE.md`, "What a server that never
+loans pays", item 1).
+
+Pages from outside the region draw no credit, so on a rig with no region
+(loopback, brd, nvme-loop, veth without a bound region) the budget's size
+does not matter: any value above 0 turns loans on. With a region it limits
+how much of the region loaned WRITEs may hold. Toggle at runtime:
 
 ```sh
-echo N > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages   # loans off (default)
-echo Y > /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages   # loans on
+echo 0 > /sys/module/sunrpc/parameters/svc_tcp_rx_budget_pages           # loans off:
+echo 0 > /sys/module/sunrpc/parameters/svc_tcp_rx_budget_default_pages   #   both at 0
+echo 1 > /sys/module/sunrpc/parameters/svc_tcp_rx_budget_default_pages   # loans on (no region)
 ```
 
-Because the switch is consulted per record (not per connection), a flip
-takes effect on the next RPC of an already-open connection; records
-already classified complete under their original mode.
+With a region the budgets together may not exceed the region's pages, and
+a write that would is refused (`-ENOSPC`). The rig scripts do this through
+`loan-budget.sh` (`loans_save`, `loans_on`, `loans_off`, `loans_restore`,
+`loans_state`): `loans_on` sets the default budget to the region's size,
+or 1 with no region, and every script that needs loans puts the host's
+budgets back when it exits.
 
-Test hooks: the svcsock KUnit suite forces the switch on for every test
-(suite init/exit, host setting restored), and the exclusion table
-carries a `disabled` case proving an otherwise fully eligible AUTH_SYS
-call copies with the named reason when the switch is clear. When
-validating the off state live, expect `borrowed=0` on every WRITE
+**How it differs from the switch.**
+- The budget is consulted per record, as the switch was. A change takes
+  effect on the next RPC of an open connection, and records already
+  classified finish in their own mode.
+- **Before, the budget limited only region pages.** With the switch at Y,
+  every budget at 0 copied a record only at its first region skb, and a
+  record with no region pages was loaned. Now a budget of 0 copies every
+  record from the start. A test that gave loans a budget of 0 on a rig
+  without a region (`run-budget.sh`'s `NOREGION=1`, before 22 October)
+  now needs a budget above 0.
+- **A budget turned off with a record in flight** sends that record to
+  the copy at its next region skb (reason `no_budget`), materializing what
+  it had borrowed. This is the mid-record path the switch never took.
+- Off is not the pre-series receive in form: a record still goes through
+  the series' receive state machine, only as a copy (items 4 and 5 of
+  "What a server that never loans pays" in `UPSTREAM_DEFENSE.md`).
+
+**Test hooks.**
+- The svcsock KUnit suite starts every test with a default budget of
+  1024 pages, so that its records loan. The suite's save and restore put
+  the host's budgets back, and set the key again.
+- The exclusion table's `no-budget` case sets every budget to 0 and
+  expects an otherwise eligible AUTH_SYS call to copy with
+  `SVC_TCP_RX_REASON_NO_BUDGET`.
+- `svcsock_rx_merge_then_materialize_test` classifies with a budget and
+  turns it off before the region skb: the mid-record path above.
+- `run-killswitch.sh` proves the two properties with the budget as the
+  switch:
+  1. With every budget at 0, 16 of 16 1 MiB receives are `mode=copy
+     reason=no_budget` with `borrowed=0`, and the data is `cmp`-clean.
+  2. A budget set partway through the connection loans the very next
+     writes on the same connection (16 of 16 published).
+
+  Its optional KUnit step checks that the suite leaves the budgets as it
+  found them.
+
+When validating the off state live, expect `borrowed=0` on every WRITE
 receive, `nfsd_write_direct` still possible (the copied arena feeds the
-same DIO gate as before the series), and data `cmp`-clean.
+same DIO gate), and data `cmp`-clean.
+
+**What has been run of it (22 October 2026, tardis1, build 491 with the
+tip's sunrpc swapped in):**
+- `sunrpc-xdr-bvec` 7/7 and `sunrpc-svcsock-rx` 50/50, run by hand from
+  the build (`xeu-rig/README.md`, "22 October, afternoon").
+- Copy mode at the settled setting with every budget at 0: no
+  regression, and no record admitted for a loan.
+- `run-killswitch.sh`'s trace checker, on made-up traces. The script
+  itself, and the other rig scripts on `loan-budget.sh`, have not been
+  run on a test host yet.
+
+### The switch it replaced (`sunrpc.svc_tcp_rx_loan_pages`, 6 September to 22 October 2026)
+
+Added 2026-09-06 (UPSTREAM_DEFENSE.md checklist item 1): a writable
+module parameter, default Y (N from 14 October), read once per RPC record
+at classification time. Clear, every receive classified `mode=copy
+reason=disabled`. It was removed on 22 October because it said nothing
+the budget does not: with the switch at Y and every budget at 0, records
+with no region pages were loaned without bound. The record of its
+qualification follows; the reason it names, `disabled`, no longer exists.
 
 **Qualified (2026-09-06, 4K host, module-only in-place reload):** the
 tip was rebuilt on the production config (same release string,
@@ -1236,18 +1309,18 @@ receives (`pubrx`/`cprx`), bytes borrowed vs copied, fallback reasons,
 **bvecs per ≥512K receive** (`avbv`/`mxbv` — ~257/MiB means page-tiled;
 many hundreds means per-frame partial-page frags from a no-HDS NIC like
 xeu), `nfsd_write_direct` vs `nfsd_write_vector`, the live
-`io_cache_write` and loan-switch values, and the summed nfsd-thread
+`io_cache_write` value, whether a budget turns loans on, and the summed nfsd-thread
 CPU%. Self-contained (tracefs + gawk, private tracing instance), so it
 can be dropped onto any host running a page-loan kernel — e.g. tardis1
-— and read live while flipping `svc_tcp_rx_loan_pages` for an
-A/B at identical offered load:
+— and read live while turning loans off and on by the budget for
+an A/B at identical offered load:
 
 ```sh
 ./zcstat.sh 5            # 5s interval, until ^C
 ./zcstat.sh 5 60         # 5s interval, 60 rows
 ```
 
-Column semantics, the kill-switch A/B recipe, the two things it cannot
+Column semantics, the loans-off-and-on A/B recipe, the two things it cannot
 tell you, and the LOCALIO trap are documented in
 [`zcstat.sh-usage.md`](zcstat.sh-usage.md). Its tracepoint dependencies
 are identical on the `-3` and `-5` branches (verified by diffing the
