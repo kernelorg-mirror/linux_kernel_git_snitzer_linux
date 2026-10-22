@@ -739,3 +739,8 @@ counts settle:
    build and bisect instructions say.
 4. `transplant/check-grouping.sh` on the result, and the 7.1.13 branch
    left as it is.
+5. Before posting: what the code group costs a server that never loans
+   (upstream's defaults, an ordinary NIC), item by item, is the open
+   task "What a server that never loans pays" in `UPSTREAM_DEFENSE.md`
+   (opened 22 October). Step 6 above says what runs; that task says
+   what it costs.
