@@ -1,3 +1,211 @@
+# tardis2's four DPRP5s: loan against copy at 40 GB/s (21 October)
+
+Build 491 (`7.3.0-7.hs.491.loanpages_pool.el10.aarch64+16k`), xeu at
+rx_ip_align 2, the settled setting, port a. Where this differs from the
+17 October section below, it is right.
+
+**The drives changed.** Mike replaced the two DP800s and two of the six
+WD_BLACKs with four **DapuStor DPRP5 15.36 TB** drives (PCIe 5 x4, SGLs,
+dword alignment, `virt_boundary_mask` 0, 256 KiB transfers of up to 65
+segments, 4 KiB logical blocks, no volatile write cache). The kernel's
+names changed with them: **nvme0 to nvme3 are the WD_BLACKs, nvme4 to
+nvme7 the DPRP5s, nvme8 the boot drive** (the Micron). Each DPRP5 got
+its own XFS (`mkfs.xfs -f`, default options; they held only an empty
+GPT), and `common.sh` now gives tardis2 eight data drives
+(`0ecb9764c066`). After a boot: `for n in 0 1 2 3 4 5 6 7; do mount -o
+noatime /dev/nvme${n}n1 /hs/nvme$n; done`, `./bringup.sh 32768 256`,
+`systemctl start nfs-server` (`settled.sh` refuses an nfsd with no
+threads), then `./settled.sh apply`. Every run below is `WARM=10 RUNTIME=30` after
+an fstrim of its drives and 120 s of rest, one run per row unless it
+says otherwise; drivers and logs in `/var/tmp/zc-run-logs/t2-dprp5/` on
+tardis2 (`run.sh` to `run15.sh`).
+
+**One port onto four drives of each kind.** The window is each
+connection's receive window, 340 KiB on the first run of a mode after a
+sunrpc load and 476 KiB after it (see "The receive window" below):
+
+| port a | window | GB/s | each drive | nfsd CPUs busy | FIFO drops, ring drops, client retransmits | region in use at most |
+|---|---|---|---|---|---|---|
+| loan, 64 WRITEs, the DPRP5s | 340 KiB | 40.43 | 10.0 to 10.1, 99% busy | 14% | 0, 0, 5 | 6,437 pages |
+| loan, 64 WRITEs, the DPRP5s | 476 KiB | 40.48 | 10.1, 100% busy | 12% | 0, 77, 91 | 6,316 |
+| copy, the DPRP5s | 340 KiB | 40.81 | 10.2, 100% busy | 27% | 0, 0, 0 | 1,216 |
+| copy, the DPRP5s | 476 KiB | 40.79 | 10.2, 99% busy | 29% | 534, 6, 567 | 1,424 |
+| copy, the WD_BLACKs | 340 KiB | 44.82 | 11.2 to 11.3, 97% busy | 24% | 11, 0, 17 | 1,168 |
+
+All five are the drives'. Every WRITE, loaned or copied, went to its
+drive direct, none to dontcache: the DPRP5s take loaned pieces as the
+DP800s did, and SGLs decide whether a loaned page can go direct, not the
+rate. On the same drives and window the loan carries the copy's rate
+with half nfsd's CPU. Losses come with the 476 KiB window: none at
+340 KiB in either mode; at 476 KiB the loan's are ring drops and the
+copy's FIFO drops, the copy adding its memory traffic to the deeper
+window's bursts (as X2: the FIFO drops when memory is busy). The
+WD_BLACKs' copy wrote 622 to 623 GB a drive, at the edge of their fast
+region (twoport.sh: "PAST THE FAST REGION"), with none stepping down.
+
+**The loan wakes more nfsd threads a WRITE than the copy, on the same
+drives**: 11.1 to 12.0 against 6.3 to 7.7, at the same receive window
+(476 KiB; see "The receive window" below, which also explains the first
+pair's 16.0), context switches 14.4 to 14.8 a WRITE against 10.9 to
+11.7, for half the CPU. A kernel stack at every
+`svc_pool_thread_wake` (`stacks.bt`, one traced pair, about 2.4 million
+records each; `s-dprp5-{loan64,copy}-stacks.txt`), a record at a time:
+
+| what woke the thread | loan | copy |
+|---|---|---|
+| a thread that took work saw more queued (`svc_recv`, `svc_thread_wake_next`) | 3.48 | 2.27 |
+| data arrived on a transport no thread held (`svc_data_ready` from `tcp_data_queue`) | 2.86 | 1.45 |
+| a thread gave the transport back after a short visit with data waiting (`svc_tcp_recvfrom`'s `err_noclose`) | 2.31 | 2.65 |
+| a thread gave the transport back after a whole record (`svc_tcp_recvfrom`'s complete path) | 0.78 | 0.78 |
+| the credit chain after an admission (`svc_tcp_rx_credit_admit`) | 0.64 | - |
+| the credit chain after a release, as the reply is sent (`svc_tcp_sendto` ... `svc_tcp_rx_credit_release`) | 0.39 | - |
+| all | 10.50 | 7.17 |
+
+With the drives the limit, the budget is full: each loaned WRITE was
+refused credit 1.65 times on average (2.55 to 2.72 million refusals for
+1.43 to 1.54 million admissions a run). The refusals show in what each
+visit took (`svcsock_tcp_recv`'s length): 0.81 visits a record took
+only a record's first 32 to 63 bytes and were refused (a new record
+behind waiters, `head != svsk`, or short of its 126-page cost), and
+0.82 a record took nothing (0.05 in copy mode), mostly waiters the
+credit chain woke too early. `svc_tcp_rx_credit_wake_locked()` woke the
+oldest waiter whenever `avail + reserve > 0`, while admission needs
+`avail` to cover the record's whole cost while anything is in flight.
+**`6745782e0794`** (code) makes the wake wait for that, and
+**`9f922b3ce97b`** (KUnit) tests it; measured below. The
+first-bytes visit is not addressed: a record is only known to be a loan
+once its first region skb is read, and not waking for data while others
+wait would hold small RPCs behind the loans. The larger "woke another"
+and "data arrived" counts follow transports being parked and resumed;
+the chain from that to each wake was not traced. (`origins.bt`, which
+tried the split with per-CPU flags, lost kretprobes and put every wake
+on `svc_data_ready`: not a result. Nor is `t-wd-copy`, which ran after
+run3.sh was stopped, without its rest.)
+
+**The region against the 32 MiB system cache.** `memcost-log.sh` beside
+each run, `memcost-read.py` after; the region in use is at the middle
+of the counted stretch, 16 KiB pages:
+
+| port a onto the DPRP5s | GB/s | each drive | region in use | bytes through memory for each byte of payload | to memory | nfsd CPUs busy |
+|---|---|---|---|---|---|---|
+| loan, 16 WRITEs (2150 pages) | 34.04 | 8.5 | 38 MiB | 0.71 | 24 GB/s | 8% |
+| loan, 24 (3158) | 37.58 | 9.4 | 44 MiB | 1.08 | 41 GB/s | 9% |
+| loan, 32 (4166) | 38.98 | 9.7 | 51 MiB | 1.37 | 54 GB/s | 11% |
+| loan, 48 (6182) | 40.08 | 10.0 | 68 MiB | 1.74 | 70 GB/s | 11% |
+| loan, 64 (8198) | 40.48 | 10.1 | 84 MiB | 1.92 | 78 GB/s | 12% |
+| copy | 40.79 | 10.2 | 22 MiB | 3.12 | 127 GB/s | 28% |
+
+- **Here the budget sets the rate.** A loaned WRITE holds its pages
+  until the drive has them, so the budget is the depth queued at the
+  drives; fewer WRITEs in flight, slower drives (88% busy at 16 WRITEs,
+  95 to 100% from 24, so "busy" is not the drives' limit). On the DP800s (2.9 GB/s a drive) 16 to 128 WRITEs gave the
+  same rate.
+- **What the loan holds is the data in flight**, about the drives'
+  rate times their latency: some 22 MiB of the region is in use in copy
+  mode too (the rings), so the loans hold about 16, 22, 29, 46 and
+  62 MiB. The copy holds the same data in flight in nfsd's pages, which
+  the CPU writes and memory takes: 3.12 bytes a byte here, against
+  tardis1's 2.2 (not looked into).
+- **No budget keeps the rate inside the cache**: traffic and rate rise
+  together, with no knee. At 64 WRITEs nearly every loaned line goes to
+  memory before the drive reads it (1.92: written back, then read), and
+  still 38% under the copy. 48 WRITEs gives 99% of the rate for 1.74;
+  24 gives 93% for 1.08.
+- Client retransmits: 89, 27, 472, 117 and 91 at 16 to 64 WRITEs; the
+  472 came with 461 ring drops in that run.
+
+**The receive window: why runs differ in wakes.** Runs of one mode on
+the same drives woke threads at two levels (copy about 10 or about 6.5 a
+WRITE, loan about 15 or about 11), with the same rate and nfsd CPU. Each
+run's `ss-server.txt` shows why: every connection's window
+(`rcv_ssthresh`, `rcv_wnd`) was either **340 KiB** (348,160) or
+**476 KiB** (483,328 to 487,424). `svc_tcp_rx_hold_buffer()` holds a
+connection's receive buffer to `svc_tcp_rx_rcvbuf` (1 MiB) and clamps its
+window from a hold factor, the memory its skbs take for each 100 bytes of
+payload. A freshly loaded sunrpc has measured none and uses
+`SVC_TCP_RX_CREDIT_FACTOR_UNLEARNED` (150): 340 KiB. Connections measure
+it as they read (107 on this card) and store it in their budget
+(`svc_tcp_rx_budget_default_stats` for copy mode, `..._stats` for
+loans), where it stays while the module is loaded; every later
+connection is held at 107 from the start: 476 KiB. So the first run of
+each mode after a sunrpc load (boot or swap) is at 340 KiB and every
+later one at 476 KiB; restarting nfs-server alone changes nothing
+(`run15.sh`). A connection held at 150 measures 107 and is held again
+(`svc_tcp_rx_hold_stale()`), but its window stays at 340 KiB to the
+end: **early connections never pick up the learned value mid-life**.
+Raising the clamp lifts `rcv_ssthresh` only to the current window, as
+far as TCP's code reads (not traced).
+
+- **What the window changes**: with 476 KiB, more of a record waits in
+  the socket when a thread gets to it (about 205 KiB at each
+  `svc_data_ready()`, against mostly 64 to 128 KiB), so a record takes
+  fewer visits (6.2 to 6.4 against 8.3 in copy mode), and wakes follow
+  visits (1.13 a visit in every run; `groups.bt`, `gr-copy-{1,2,3}`).
+  The 16 connections can also have 7.4 MiB in flight against 5.4, and
+  the 476 KiB runs carry the FIFO and ring drops and client retransmits
+  (tens to hundreds in the window, against 0 to 8). Rate and nfsd CPU
+  are the same. Not the losses: second by second (`persec2.bt`,
+  `run14.sh`), a run opens with a burst of losses during which wakes are
+  11 to 20 a record and sockets shallow, then settles; reordering is
+  rare (at most one out-of-order arrival in a hundred records).
+- **Open**: whether an early connection should pick up the learned
+  value mid-life (re-held so its window can rise, or the budget seeded
+  at load), and which window is wanted, since the deeper one
+  brought the drops. Comparisons on tardis1 that spanned a sunrpc load
+  may have met the same split; not checked.
+- **To compare runs**: only at the same window, read from `ss-server.txt`;
+  or reload sunrpc before every run.
+
+**The credit wake gating on tardis2.** `6745782e0794` and `9f922b3ce97b`
+built on tardis2 (`/var/tmp/zc-run-logs/sunrpc-491-wakeneed/`; gcc
+14.3.1 against the kernel's 14.4.1; 14 exports change version, all
+KUnit-only, so nfsd loads against it unchanged), swapped in with
+`swap-sunrpc.sh`. `sunrpc-xdr-bvec` 7/7 and `sunrpc-svcsock-rx` 49/49
+with the new `svcsock_rx_credit_wake_need_test`, run by hand from the
+built modules (`run-kunit.sh` loads the installed ones). Loans at 64
+WRITEs onto the DPRP5s (`run9.sh`, and `run10.sh`'s keep N runs, the
+same code), against the installed sunrpc, a WRITE at a time:
+
+| sunrpc | window | GB/s | refused a loaned WRITE | woken | context switches | nfsd CPUs busy |
+|---|---|---|---|---|---|---|
+| installed | 476 KiB | 40.45 to 40.48 | 1.51 to 1.75 | 11.10 to 11.96 | 14.35 to 14.81 | 12 to 16% |
+| gating | 476 KiB | 40.14 to 40.45 | 0.95 to 1.04 | 10.80 to 11.56 | 14.19 to 14.59 | 12 to 14% |
+| installed | 340 KiB | 40.43 | 1.22 | 16.0 | 16.24 | 14% |
+| gating | 340 KiB | 40.50 | 0.92 | 14.81, 15.11 | 15.81, 16.09 | 14% |
+
+The traced run (`stacks.bt`, `g-dprp5-loan64-s`) against the installed
+one, a record at a time: visits that took nothing 0.33 against 0.82,
+credit chain wakes 0.61 against 1.03 (0.14 after an admission against
+0.64), all wakes 10.14 against 10.50. A small saving, about 0.4 a WRITE,
+with the rate and CPU unchanged; kept in the series.
+
+**`svc_tcp_rx_keep` again, on top of the gating.** The dropped 0006,
+rebased (its `svcsock.c` hunk had the linger's context) and built in a
+worktree of its own on tardis2 (`/var/tmp/keep-tree`,
+`/var/tmp/zc-run-logs/sunrpc-491-wakeneed-keep`; not on the branch).
+Keep N and Y by turns on one module load (`run10.sh`), and keep N's
+copy from `run12.sh` on the same load, all at 476 KiB:
+
+| run | keep | woken a WRITE | context switches a WRITE | nfsd CPUs busy |
+|---|---|---|---|---|
+| loan 64 | N | 10.86 | 14.23 | 12% |
+| | Y | 8.34, 8.54 | 12.75, 12.99 | 11 to 12% |
+| copy | N (gr-copy-2, -3) | 7.37, 7.67 | 12.66, 12.84 | 29 to 30% |
+| | Y | 4.86 | 10.65 | 28% |
+
+About a fifth to a third fewer wakes and a tenth to a sixth fewer
+context switches, nfsd CPU and rate unchanged: as on tardis1 on 15
+October, nothing that meets the bar for taking it back. (`k-loan64-N1`,
+at 340 KiB, 15.11, is left out; its fio total, 31.84 GB/s, has a stall
+outside the window.)
+
+tardis2 is left running the gating+keep sunrpc (`updates/sunrpc.ko`,
+srcversion `D8A2801559773E8377DE3C2`, keep N, so the gating alone); its
+default budget has learned `hold_factor 107`. To go back to the
+installed sunrpc: `rm /lib/modules/$(uname -r)/updates/sunrpc.ko`,
+`depmod -a`, `SUNRPC_KO=none ./swap-sunrpc.sh`, `systemctl start
+nfs-server`, `./settled.sh apply`.
+
 # tardis2: the second server, with SGL drives (17 October)
 
 tardis2 (`tardis2.perf.hammer.space`) is tardis1's twin: the same E1
@@ -5,8 +213,9 @@ card (`enp161s0f0`, `enp164s0f0`), 64 Neoverse-N2 CPUs, a 16 KiB
 kernel (build 481), and the same client (plsm121c-06, reached at
 10.20.12.106 with `/root/.ssh/id_ed25519_snitzer2`). What differs:
 
-- **The drives.** Six data drives, each with its own XFS on `/hs/nvme0`
-  to `/hs/nvme5`: nvme0 to nvme3 are WD_BLACK SN8100 2 TB (no SGLs,
+- **The drives** (until 21 October; now four WD_BLACKs and four
+  DPRP5s, nvme0 to nvme7, in the section above). Six data drives, each
+  with its own XFS on `/hs/nvme0` to `/hs/nvme5`: nvme0 to nvme3 are WD_BLACK SN8100 2 TB (no SGLs,
   `virt_boundary_mask` 4095, 1 MiB transfers), and **nvme4 and nvme5
   are DapuStor DP800 1.9 TB with SGLs** (dword alignment,
   `virt_boundary_mask` 0, 256 KiB transfers of up to 65 segments, no
