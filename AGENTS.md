@@ -15,11 +15,13 @@ full private Hammerspace kernel is not this work's concern until Mike
 says so. This overrides what the two entries below say about keeping
 the branches in step and about where development is done.
 
-- **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-v7.3-7` is the branch to
-  work on** (pushed by Mike 2026-10-20 at `5a0e2aeaf190`, a new name: on
-  hs-gitlab `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` is still the
-  `v7.3-3` series, `26c5cdcd549a`; in the tree it was rebased in, the
-  local branch of that old name holds the new series):
+- **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` is the branch to work
+  on**, on hs-gitlab again since 2026-10-22: the `v7.3-7` series was
+  pushed first, on 2026-10-20, under the new name
+  `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-v7.3-7` (left at
+  `eb1ca139fcb5`, behind it; do not commit there), then Mike pushed it
+  over the old name, whose `v7.3-3` series (`26c5cdcd549a`) is kept as
+  `….pre-rebase-v7.3-7`:
   the series on the public `kernel-7.3/main`, rebased 2026-10-20 onto
   **`v7.3-7`** (`git rebase --onto v7.3-7 v7.3-3`, two conflicts resolved
   by hand, see `NFSD_TCP_WRITE_ZEROCOPY/README.md`; the tip before is
