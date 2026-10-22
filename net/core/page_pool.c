@@ -94,6 +94,14 @@ struct page_pool_rx_region {
 static struct page_pool_rx_region *rx_region;
 static DEFINE_MUTEX(rx_region_mutex);
 
+/*
+ * On from when the region is made until it is given back: no page is a
+ * region page outside that.  Counted, so that a test that binds a pool to a
+ * region of its own can hold it on too.
+ */
+DEFINE_STATIC_KEY_FALSE(page_pool_rx_region_key);
+EXPORT_SYMBOL_GPL(page_pool_rx_region_key);
+
 static int rx_region_show(struct seq_file *m, void *v)
 {
 	struct page_pool_rx_region *r = m->private;
@@ -175,6 +183,7 @@ static void page_pool_rx_region_reap(void)
 	kvfree(r->free);
 	kfree(r);
 	rx_region = NULL;
+	static_branch_dec(&page_pool_rx_region_key);
 }
 
 /* @pool is being destroyed: every page it took is back or has escaped. */
@@ -254,6 +263,7 @@ page_pool_rx_region_get(const struct page_pool *pool)
 	r->min_free = nr;
 	strscpy(r->dev, rx_region_dev, RX_REGION_DEV_LEN);
 	strim(r->dev);
+	static_branch_inc(&page_pool_rx_region_key);
 	rx_region = r;
 	r->debugfs = debugfs_create_file("page_pool_rx_region", 0600, NULL, r,
 					 &rx_region_fops);
@@ -660,6 +670,16 @@ static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem);
  * it.  The producer lock covers both ends; the consumer takes it once for
  * each refill of the alloc cache.
  */
+/*
+ * Every pool goes through the stack's and the region's branches; while
+ * there is no region, no pool is bound to one or has a stack, and each is
+ * a patched-out jump.
+ */
+static bool page_pool_has_rx_stack(const struct page_pool *pool)
+{
+	return page_pool_rx_region_exists() && pool->rx_stack;
+}
+
 static bool page_pool_rx_stack_push(struct page_pool *pool, netmem_ref netmem)
 {
 	lockdep_assert_held(&pool->ring.producer_lock);
@@ -706,7 +726,7 @@ static noinline netmem_ref page_pool_refill_alloc_cache(struct page_pool *pool)
 	netmem_ref netmem;
 	int pref_nid; /* preferred NUMA node */
 
-	if (pool->rx_stack)
+	if (page_pool_has_rx_stack(pool))
 		return page_pool_rx_stack_refill(pool);
 
 	/* Quicker fallback, avoid locks when ring is empty */
@@ -1052,7 +1072,7 @@ netmem_ref page_pool_alloc_netmems(struct page_pool *pool, gfp_t gfp)
 	/* Slow-path: cache empty, do real allocation */
 	if (static_branch_unlikely(&page_pool_mem_providers) && pool->mp_ops)
 		netmem = pool->mp_ops->alloc_netmems(pool, gfp);
-	else if (unlikely(pool->rx_region))
+	else if (page_pool_rx_region_exists() && pool->rx_region)
 		netmem = page_pool_rx_region_alloc(pool, gfp);
 	else
 		netmem = __page_pool_alloc_netmems_slow(pool, gfp);
@@ -1135,7 +1155,9 @@ static __always_inline void __page_pool_release_netmem_dma(struct page_pool *poo
  */
 static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem)
 {
-	struct page_pool_rx_region *region = pool->rx_region;
+	/* Read before the release count: the pool may go once it is up. */
+	struct page_pool_rx_region *region =
+		page_pool_rx_region_exists() ? pool->rx_region : NULL;
 	int count;
 	bool put;
 
@@ -1169,7 +1191,7 @@ static bool page_pool_recycle_in_ring(struct page_pool *pool, netmem_ref netmem)
 
 	/* BH protection not needed if current is softirq */
 	in_softirq = page_pool_producer_lock(pool);
-	if (pool->rx_stack)
+	if (page_pool_has_rx_stack(pool))
 		ret = page_pool_rx_stack_push(pool, netmem);
 	else
 		ret = !__ptr_ring_produce(&pool->ring, (__force void *)netmem);
@@ -1320,7 +1342,7 @@ static void page_pool_recycle_ring_bulk(struct page_pool *pool,
 	in_softirq = page_pool_producer_lock(pool);
 
 	for (i = 0; i < bulk_len; i++) {
-		if (pool->rx_stack ?
+		if (page_pool_has_rx_stack(pool) ?
 		    !page_pool_rx_stack_push(pool, bulk[i]) :
 		    __ptr_ring_produce(&pool->ring, (__force void *)bulk[i])) {
 			/* ring full */
@@ -1500,7 +1522,7 @@ static void page_pool_empty_ring(struct page_pool *pool)
 	netmem_ref netmem;
 
 	/* Empty the stack of a pool bound to the fixed receive region */
-	for (;;) {
+	while (page_pool_has_rx_stack(pool)) {
 		bool in_softirq = page_pool_producer_lock(pool);
 
 		netmem = pool->rx_stack_n ?
