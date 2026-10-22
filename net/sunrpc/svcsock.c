@@ -1215,6 +1215,9 @@ static u32 svc_tcp_rx_skb_region_pages_after(const struct sk_buff *skb,
 	u32 cursor = base, pages = 0, lo, hi;
 	unsigned int index;
 
+	/* Without the region there is nothing to find: walk no skb. */
+	if (!page_pool_rx_region_exists())
+		return 0;
 	if (max(first, base) >= min(last, base + skb->len))
 		return 0;
 	if (skb_headlen(skb)) {
