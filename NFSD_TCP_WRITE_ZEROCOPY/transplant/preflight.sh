@@ -74,7 +74,8 @@ modprobe sunrpc 2>/dev/null; modprobe nfsd 2>/dev/null; modprobe nfs 2>/dev/null
 for p in /sys/module/sunrpc/parameters/svc_tcp_rx_budget_pages \
 	 /sys/module/sunrpc/parameters/svc_tcp_rx_budget_default_pages \
 	 /sys/module/sunrpc/parameters/svc_tcp_rx_budget_reserve \
-	 /sys/module/sunrpc/parameters/svc_tcp_rx_credit_factor \
+	 /sys/module/sunrpc/parameters/svc_tcp_rx_budget_stats \
+	 /sys/module/sunrpc/parameters/svc_tcp_rx_budget_default_stats \
 	 /sys/module/sunrpc/parameters/svc_tcp_rx_rcvbuf \
 	 /sys/module/page_pool/parameters/rx_region_dev \
 	 /sys/module/page_pool/parameters/rx_region_pages \
@@ -85,6 +86,12 @@ for p in /sys/module/sunrpc/parameters/svc_tcp_rx_budget_pages \
 	 /sys/kernel/tracing/events/nfsd/nfsd_write_direct; do
 	[ -e "$p" ] && ok "$p" || bad "missing $p"
 done
+# svc_tcp_rx_credit_factor became a learned factor ("SUNRPC: Learn the
+# region costs of loans and held receive buffers"): cost_factor and
+# hold_factor in the budgets' stats above.  run-budget.sh sets the old
+# parameter only where a kernel still has it.
+[ -e /sys/module/sunrpc/parameters/svc_tcp_rx_credit_factor ] &&
+	note "sunrpc has svc_tcp_rx_credit_factor: a kernel from before the factor was learned"
 if [ -e /sys/kernel/debug/page_pool_rx_region ]; then
 	note "a receive region exists this boot ($(awk '$1=="pages"||$1=="dev"{printf "%s %s ", $1, $2}' /sys/kernel/debug/page_pool_rx_region)): not fresh, budget phases B and D need a reboot first"
 else
