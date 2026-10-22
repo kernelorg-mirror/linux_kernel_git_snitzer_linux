@@ -1,3 +1,80 @@
+# 22 October: 750 KiB on one port, 384 KiB on two — read this first
+
+tardis1's cross-check of tardis2's receive buffer result (step 1 of the
+handover below), after the reboot. Build 491, the tip's sunrpc
+(`$L/sunrpc-491-rehold`, srcversion `3F8D843450D4E5907693FC2`: the credit
+wake gating and `de65c0117021`), the settled setting, copy mode, each run
+after an fstrim of all eight drives and 120 s of rest
+(`$L/t1-rcvbuf/run20b.sh`, its log `run20b.log`, the runs in
+`results.tsv`).
+
+**The one-port setting is now 750 KiB** (Mike, 22 October):
+`svc_tcp_rx_rcvbuf` 768,000, in `settled.sh`'s values at rest and in
+tardis1's `/etc/modprobe.d/sunrpc.conf` (the file before is
+`/root/sunrpc.conf.pre-750k-2026-10-22`). Two ports keep 384 KiB
+(393,216), which `twoport.sh` sets for a run on both. tardis2 runs one
+port only, so the one-port setting is its setting too: `settled.sh apply`
+sets it live there, but its `/etc/modprobe.d/sunrpc.conf` still says
+1 MiB, so after a boot it starts at 1 MiB until `apply` is run. The
+settled figures before (47.39 GB/s on one port, 60.41 on two) were at
+1 MiB and 384 KiB.
+
+**One port onto all eight drives** (`RUNTIME=60`, `memcost-log.sh`
+beside each), 1 MiB and 750 KiB by turns, two rounds:
+
+| run | buffer | window (`rcv_ssthresh`) | GB/s | FIFO drops, ring drops, client retransmits | woken, context switches a WRITE | nfsd CPUs busy | region in use, at most | bytes through memory for each byte of payload | cache fills a line |
+|---|---|---|---|---|---|---|---|---|---|
+| one-1m-1 | 1 MiB | 487,424 (13), 483,328 (3) | 43.81 | 3,942, 3, 3,952 | 12.79, 14.79 | 23% | 2,064 pages | 1.34 | 2.25 |
+| one-750k-1 | 750 KiB | 357,000 | 43.86 | 0, 0, 7 | 14.11, 15.28 | 24% | 1,792 | 1.32 | 2.26 |
+| one-1m-2 | 1 MiB | 487,424 | 42.89 | 2,421, 0, 2,429 | 12.03, 14.74 | 23% | 2,077 | 1.37 | 2.27 |
+| one-750k-2 | 750 KiB | 357,000 | 41.41 | 0, 0, 6 | 9.86, 12.48 | 16% | 1,808 | 1.27 | 2.26 |
+
+`one-750k-2` was limited by a drive (one of the eight wrote 1.6 GB/s, the
+busiest was 98% busy; the wire carried 34.70 GB/s in the window): its
+rate, wakes and CPU are the drives', not the buffer's. No drive stepped
+down in the other three.
+
+- **The same rate, without the losses**, here where the storage keeps up
+  with the wire, as on tardis2 where it does not: 43.86 against 42.89
+  and 43.81 GB/s, and no FIFO or ring drops with 6 or 7 retransmits,
+  against 2,400 to 3,900 at 1 MiB.
+- **Wakes**: about 13% more threads woken and 3% more context switches a
+  WRITE (tardis2: 40% and 11 to 15%), nfsd's CPU the same.
+- **Memory**: about 4 MiB less of the region in use (1,792 pages against
+  2,064 to 2,077), but the traffic barely moves: 1.32 bytes through
+  memory a byte against 1.34 and 1.37, and the same cache fills a line.
+  tardis1's copy is already near the floor, so the window's share of the
+  32 MiB system cache buys little here; tardis2's copy, at 3.19, gained
+  6%.
+
+**Two ports, four drives each** (`WARM=10 RUNTIME=30`), 384 KiB, 750 KiB
+and 1 MiB by turns; stopped after the second 384 KiB run (Mike), since
+two ports were settled at 384 KiB on 14 October and the question was
+one port's:
+
+| run | buffer | window | GB/s (a, b) | FIFO drops a + b | ring drops a + b | client retransmits | woken, context switches a WRITE | nfsd CPUs busy | region in use, at most |
+|---|---|---|---|---|---|---|---|---|---|
+| two-384k-1 | 384 KiB | 182,784 | 57.06 (28.74, 28.32) | 0 | 21 | 26 | 16.67, 11.18 | 56% | 1,296 pages |
+| two-750k-1 | 750 KiB | 357,000 | 55.49 (27.41, 28.08) | 1,738 | 145,735 | 154,829 | 12.40, 11.13 | 58% | 1,646 |
+| two-1m-1 | 1 MiB | 487,424 | 54.09 (26.99, 27.10) | 38,797 | 182,443 | 233,171 | 12.51, 11.38 | 58% | 1,710 |
+| two-384k-2 | 384 KiB | 182,784 (30), 178,857 (2) | 55.67 (27.85, 27.82) | 0 | 46 | 52 | 16.63, 10.93 | 59% | 1,328 |
+
+- **On two ports a larger window loses**: the rings run out of buffers
+  (ring drops) and the client retransmits as many, more with each step
+  up, and the rate falls 3% at 750 KiB and 5% at 1 MiB. 384 KiB stays
+  the two-port setting; one buffer for both is not to be had.
+- **Below the settled figure**: both 384 KiB runs, 57.06 and 55.67 GB/s,
+  are under the 60.41 measured on 13 October (an earlier kernel, and
+  `RUNTIME=45` against 30 here). Not looked into: a two-port run of its
+  own on this kernel, at the settled length, is to say whether the
+  figure still holds.
+- No memcost was taken on two ports. `memcost-log.sh` and
+  `memcost-read.py` take two ports now (`a,b`; `cdb19b22d270`), and
+  `$L/t1-rcvbuf/run21.sh` is the pair written for it, never run.
+
+**What is left of the handover below**: steps 1 and 2 are done (this
+section); keep is Mike's to decide; then the regroup.
+
 # 22 October: tardis1's reboot for its management link — read this first
 
 Written on 22 October, before Mike rebooted tardis1 to try to clear its
@@ -58,7 +135,7 @@ drives mounted, `./bringup.sh 32768 256`, `./port-setup.sh enp164s0f0
 settled setting". The sunrpc KUnit suites of that build passed on
 tardis1 at 21:46 on 21 October (`$L/t1-rcvbuf/kunit.txt`).
 
-**Then, in this order:**
+**Then, in this order** (1 and 2 done on 22 October: the section above):
 
 1. **tardis1's cross-check of 750 KiB**: `$L/t1-rcvbuf/run20b.sh >
    $L/t1-rcvbuf/run20b.log 2>&1` in the background, about 1 h 50 min:
