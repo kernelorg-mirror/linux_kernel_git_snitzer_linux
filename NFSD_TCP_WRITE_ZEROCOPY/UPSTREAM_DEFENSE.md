@@ -303,6 +303,25 @@ kernel without the series?**
    will ask for the same number Chuck does, per page rather than per
    RPC. Mike's open question about the region's future upstream
    (`AGENTS.md`) stands beside this item.
+   - **Made zero-cost without a region, 22 October** (Mike): "page_pool:
+     test the region's branches only while the region exists" puts
+     `page_pool_rx_region_key` (item 9) in front of every test of a
+     pool's region or stack:
+     - the allocation past the cache (`page_pool_alloc_netmems()`);
+     - the refill from the ring (`page_pool_refill_alloc_cache()`);
+     - the recycle through the ring (`page_pool_recycle_in_ring()`,
+       inlined into `page_pool_put_unrefed_netmem()`) and in bulk
+       (`page_pool_recycle_ring_bulk()`);
+     - the return of a page (`page_pool_return_netmem()`);
+     - teardown (`page_pool_empty_ring()`, where a pool without a stack
+       also took the producer lock once).
+
+     With no region, no pool is bound or has a stack, so each is a
+     patched-out branch, and behavior is unchanged where a region
+     exists. Built with W=1, `CONFIG_WERROR=y` and sparse; the key's
+     jump-table entries are in all six functions. **Not yet run**: it
+     needs a kernel build. What remains of this item for netdev is the
+     region's code itself, and Mike's question of its future upstream.
 9. **The learned cost and held-buffer factors** ("SUNRPC: Learn the
    region costs of loans and held receive buffers"). They run at the
    end of a record on transports that receive region pages. Confirm
