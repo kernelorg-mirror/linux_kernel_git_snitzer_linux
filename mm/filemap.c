@@ -1927,6 +1927,48 @@ out:
 	return folio;
 }
 
+/*
+ * Clear the uncached flag of a folio a cached lookup found, and take the
+ * folio off WB_DONTCACHE_DIRTY if it is counted there.
+ *
+ * folio_account_dirtied() counts a dropbehind folio under the i_pages lock,
+ * in the section that sets its dirty tag, after PG_dirty has been set
+ * without the folio lock.  Every path that uncounts a dirty folio holds the
+ * folio lock.  So with the folio locked and the i_pages lock held, the folio
+ * is counted when both PG_dirty and the dirty tag are set.  PG_dirty alone
+ * is not enough: a dirtier past folio_test_set_dirty() but not yet counting
+ * finds the flag clear and does not count the folio.  The tag alone is not
+ * enough either: __folio_cancel_dirty() uncounts a folio and clears
+ * PG_dirty, but leaves the tag until writeback or truncation clears it.  A
+ * folio another task has locked keeps the flag, as it would have had this
+ * lookup not run.
+ */
+static void filemap_clear_dropbehind(struct address_space *mapping,
+				     struct folio *folio, bool locked)
+{
+	unsigned long flags;
+
+	if (!locked) {
+		if (!folio_trylock(folio))
+			return;
+		if (unlikely(folio->mapping != mapping))
+			goto out;
+	}
+	if (!mapping_can_writeback(mapping)) {
+		folio_clear_dropbehind(folio);
+		goto out;
+	}
+	xa_lock_irqsave(&mapping->i_pages, flags);
+	if (folio_test_clear_dropbehind(folio) && folio_test_dirty(folio) &&
+	    xa_get_mark(&mapping->i_pages, folio->index, PAGECACHE_TAG_DIRTY))
+		wb_stat_mod(inode_to_wb(mapping->host), WB_DONTCACHE_DIRTY,
+			    -folio_nr_pages(folio));
+	xa_unlock_irqrestore(&mapping->i_pages, flags);
+out:
+	if (!locked)
+		folio_unlock(folio);
+}
+
 /**
  * __filemap_get_folio_mpol - Find and get a reference to a folio.
  * @mapping: The address_space to search.
@@ -2058,19 +2100,8 @@ no_page:
 	if (!folio)
 		return ERR_PTR(-ENOENT);
 	/* not an uncached lookup, clear uncached if set */
-	if (!(fgp_flags & FGP_DONTCACHE) && folio_test_clear_dropbehind(folio)) {
-		if (folio_test_dirty(folio) &&
-		    mapping_can_writeback(mapping)) {
-			struct inode *inode = mapping->host;
-			struct bdi_writeback *wb;
-			struct wb_lock_cookie cookie = {};
-			long nr = folio_nr_pages(folio);
-
-			wb = unlocked_inode_to_wb_begin(inode, &cookie);
-			wb_stat_mod(wb, WB_DONTCACHE_DIRTY, -nr);
-			unlocked_inode_to_wb_end(inode, &cookie);
-		}
-	}
+	if (!(fgp_flags & FGP_DONTCACHE) && folio_test_dropbehind(folio))
+		filemap_clear_dropbehind(mapping, folio, fgp_flags & FGP_LOCK);
 	return folio;
 }
 EXPORT_SYMBOL(__filemap_get_folio_mpol);
