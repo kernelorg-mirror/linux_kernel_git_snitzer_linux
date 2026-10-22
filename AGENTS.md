@@ -213,11 +213,16 @@ first** (and `tardis1-boot1-testing.md` for builds 454 and 455): it says
 which commits at the tip are still to be regrouped, carried to the HS
 twin or decided.
 
-**tardis1's next boot is into the first kernel built from the `v7.3-7`
-branch: start at "20 October: tardis1's boot into the v7.3-7 kernel" in
-[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md),
-then the follow-up of Xsight's replies in
-[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/XSIGHT-FOLLOWUP.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/XSIGHT-FOLLOWUP.md).**
+**tardis1's next boot is into a kernel built from the tip of 22 October
+(`77f82c816493` or later): start at "The boot into the kernel built from
+the tip" in
+[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md).**
+It carries code that has only been built (the region key in page_pool
+and sunrpc, one budget lookup at a loaned record's first region skb,
+the budget's lock on its own cache line): the first ten minutes there
+check that it is that kernel, then the KUnit suites, then
+`$L/t1-tipkernel/run24.sh`. The follow-up of Xsight's replies is still
+[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/XSIGHT-FOLLOWUP.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/XSIGHT-FOLLOWUP.md).
 
 **Converging on the Xsight driver** (tardis1, from 2026-10-07).
 **Mike is rebooting tardis1 into a 16 KiB kernel on 2026-10-08. If
