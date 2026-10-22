@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-# memcost-read.py <prefix> <port> [<GB/s that counts as a cell: 4>]
+# memcost-read.py <prefix> <port>[,<port>] [<GB/s that counts as a cell: 4>]
 #
 # From what memcost-log.sh took: each stretch in which the port carried
 # load (a cell), and over its steady part the bytes that went through
 # memory for each byte of payload: the mesh's requests to the memory
 # controller, taken as 64 bytes each, over the payload carried.  Payload
 # is the port's bytes less each frame's headers (7740 of 7806 at the rig's
-# MTU of 7792).  The region figure is its pages less its free ones, which
-# includes what was there idle: the sweep's log has what a cell took.
+# MTU of 7792); for two ports, given as a,b, their bytes summed.  The region
+# figure is its pages less its free ones, which includes what was there
+# idle: the sweep's log has what a cell took.
 import statistics as st, sys
 
 P, port = sys.argv[1], sys.argv[2]
@@ -27,7 +28,7 @@ rx = []
 for l in open(P + '.srv.txt'):
     p = l.split()
     d = dict(kv.split('=', 1) for kv in p[1:] if '=' in kv)
-    rx.append((float(p[0]), int(d[port + '.rx_bytes'])))
+    rx.append((float(p[0]), sum(int(d[q + '.rx_bytes']) for q in port.split(','))))
 drv = [tuple(float(x) for x in l.split()) for l in open(P + '.drv.txt') if len(l.split()) == 3]
 near = lambda s, t, i=1: min(s, key=lambda r: abs(r[0] - t))[i]
 rows = []
