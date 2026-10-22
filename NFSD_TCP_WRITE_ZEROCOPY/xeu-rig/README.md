@@ -1,3 +1,77 @@
+# 22 October: tardis1's reboot for its management link — read this first
+
+Written on 22 October, before Mike rebooted tardis1 to try to clear its
+management link, for the session after. The work since the Xsight
+handover is in the next section ("tardis2's four DPRP5s"); this is only
+where it stands.
+
+**Why the reboot.** tardis1's `xemi0` (`xemi` 1.0.2, 1 Gb/s, the
+management link the client and tardis2 are reached over) drops about
+40% of the frames it receives, at idle: 1,178,171 dropped of 2,297,769
+by 14:05, with `ring_0_rx_rx_eop_ec_err_smdc_se` (980,207), `..._runt`
+(143,182) and `..._pcs_dec` (54,826) still climbing. tardis2's
+`enaxsl1i0` dropped 455 since its boot and none while watched. ssh from
+tardis1 to the client times out now and then, which stopped the
+cross-check below twice before its first run. First, after the boot:
+`ip -s link show xemi0` twice, 30 s apart, and `ethtool -S xemi0 |
+grep -E 'smdc_se|runt|pcs_dec'`. If they still climb, the cable, the
+switch port or the PHY is next; the cross-check is not worth running
+over it.
+
+**The branch.** `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` in the linux
+clone, nine commits on `origin/…-v7.3-7` (`eb1ca139fcb5`), **not
+pushed**, all at the tip to be regrouped when this round of testing
+ends:
+
+- code: `6745782e0794` (wake a region credit waiter only when it can be
+  admitted) and `de65c0117021` (a transport held again takes its new
+  factor's window; at the regroup its TCP part moves into the TCP
+  helpers, `tcp_sock_set_scaling_ratio_max()` and
+  `tcp_sock_set_window_clamp()`, as its message says);
+- KUnit: `9f922b3ce97b` and `407550bba4ea`, one for each;
+- docs: `0ecb9764c066`, `478ab27f1cbd`, `c42e910d1151`, `e0c1729bab83`
+  and this handover.
+
+**tardis1 after the boot.** Its sunrpc is the tip's, from
+`/lib/modules/$(uname -r)/updates/sunrpc.ko` (`$L/sunrpc-491-rehold`,
+srcversion `3F8D843450D4E5907693FC2`), so a boot keeps it: check
+`cat /sys/module/sunrpc/srcversion`. Then as on 20 October: the eight
+drives mounted, `./bringup.sh 32768 256`, `./port-setup.sh enp164s0f0
+56`, `systemctl start nfs-server`, `./settled.sh apply` ending in "the
+settled setting". The sunrpc KUnit suites of that build passed on
+tardis1 at 21:46 on 21 October (`$L/t1-rcvbuf/kunit.txt`).
+
+**Then, in this order:**
+
+1. **tardis1's cross-check of 750 KiB**: `$L/t1-rcvbuf/run20b.sh >
+   $L/t1-rcvbuf/run20b.log 2>&1` in the background, about 1 h 50 min:
+   one port onto all eight drives, `RUNTIME=60`, `svc_tcp_rx_rcvbuf`
+   1 MiB and 750 KiB by turns with `memcost-log.sh` beside each; then
+   two ports, 384 KiB (two ports' settled value), 750 KiB and 1 MiB by
+   turns; two rounds of each. It stops at the first failure.
+   `one-1m-1` there now is the failed first try (the client did not
+   answer): run20b.sh writes over it. The client is shared with
+   tardis2: nothing may run there meanwhile.
+2. **Write it up and commit**, then **settle the default**: on tardis2
+   750 KiB lost nothing measured and ended the losses (next section,
+   "The receive buffer"). To make it `svc_tcp_rx_rcvbuf`'s default it
+   should also hold where storage keeps up with the wire (tardis1's
+   eight drives, run20b's one-port runs), on two ports, with fewer
+   connections than 16 (a window a round trip is all one connection
+   can carry) and over a longer round trip. In copy mode it also
+   leaves about 4 MiB more of the 32 MiB system cache free and takes
+   6% less memory traffic a byte; for loans the budget sets that.
+3. **Keep and the linger**: done on tardis2 (next section, "Keep and the
+   linger again"). Neither changes the rate or saves nfsd's CPU; keep
+   saves wakes at no cost, the linger costs CPU spinning and context
+   switches sleeping. Keep is Mike's to decide; the linger stays
+   dropped.
+4. **The regroup** of the commits, then `../transplant/check-grouping.sh`.
+
+**tardis2** (10.20.12.213, the client's ssh key) runs the linger and
+keep build with both off, the same as the tip's sunrpc (next section,
+at its end); nothing is running there.
+
 # tardis2's four DPRP5s: loan against copy at 40 GB/s (21 October)
 
 Build 491 (`7.3.0-7.hs.491.loanpages_pool.el10.aarch64+16k`), xeu at
