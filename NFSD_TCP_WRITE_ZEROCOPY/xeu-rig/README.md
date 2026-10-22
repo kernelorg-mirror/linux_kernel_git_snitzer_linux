@@ -131,10 +131,15 @@ connection is held at 107 from the start: 476 KiB. So the first run of
 each mode after a sunrpc load (boot or swap) is at 340 KiB and every
 later one at 476 KiB; restarting nfs-server alone changes nothing
 (`run15.sh`). A connection held at 150 measures 107 and is held again
-(`svc_tcp_rx_hold_stale()`), but its window stays at 340 KiB to the
-end: **early connections never pick up the learned value mid-life**.
-Raising the clamp lifts `rcv_ssthresh` only to the current window, as
-far as TCP's code reads (not traced).
+(`svc_tcp_rx_hold_stale()`), but before `de65c0117021` its window
+stayed at 340 KiB to the end: **early connections never picked up the
+learned value mid-life**. Raising the clamp lifts `rcv_ssthresh` only to
+the current window, and TCP raises its ratio to a higher ceiling only
+when it next measures a segment of a new size. `de65c0117021` lifts both
+on a re-hold (`407550bba4ea` tests it); with it, on a fresh load, the
+first runs of each mode had 20 holds at 150 then 16 at 107, and every
+connection ended at 476 KiB (`run16.sh`, `rh-*`). From then on a mode's
+window no longer depends on when its connections started.
 
 - **What the window changes**: with 476 KiB, more of a record waits in
   the socket when a thread gets to it (about 205 KiB at each
@@ -148,13 +153,60 @@ far as TCP's code reads (not traced).
   `run14.sh`), a run opens with a burst of losses during which wakes are
   11 to 20 a record and sockets shallow, then settles; reordering is
   rare (at most one out-of-order arrival in a hundred records).
-- **Open**: whether an early connection should pick up the learned
-  value mid-life (re-held so its window can rise, or the budget seeded
-  at load), and which window is wanted, since the deeper one
-  brought the drops. Comparisons on tardis1 that spanned a sunrpc load
-  may have met the same split; not checked.
-- **To compare runs**: only at the same window, read from `ss-server.txt`;
-  or reload sunrpc before every run.
+- **Is the factor right?** TCP's own count agrees: memory over unread
+  bytes (`skmem r` over `Recv-Q` in `ss-server.txt`, sockets with 64 KiB
+  or more unread) has a median of 1.061 in copy mode (224 sockets, 99th
+  percentile 1.92) and 1.142 in loan mode (121, 99th 2.05), so the loan
+  budget's learned 107 is about 7% low there (not looked into). The
+  window is half of what the buffer holds at the factor, so a socket can
+  cost up to about 2.1 bytes a byte before its buffer is full; TCP pruned
+  or collapsed nothing all day (`nstat`: `PruneCalled`, `RcvPruned`,
+  `OfoPruned`, `TCPRcvCollapsed`, `TCPRcvQDrop` all 0). Both budgets
+  learned 107 each time they started from nothing.
+- **Before `de65c0117021`, compare runs only at the same window**, read
+  from `ss-server.txt`: the first run of a mode after a sunrpc load was
+  at 340 KiB. Comparisons on tardis1 that spanned a sunrpc load may have
+  met the same split; not checked.
+
+**The receive buffer: 750 KiB against 1 MiB.** If the losses come with
+the 476 KiB window, a smaller buffer should give the 340 KiB window on
+purpose, at the learned factor. `svc_tcp_rx_rcvbuf` 768,000 (750 KiB)
+gives about 349 KiB (`rcv_ssthresh` 357,000). On the gating and
+`de65c0117021`, by turns with the settled 1 MiB (`run17.sh`, two rounds;
+`run19.sh` with `memcost-log.sh` beside it), a WRITE at a time:
+
+| port a onto the DPRP5s | buffer | GB/s | woken | context switches | nfsd CPUs busy | FIFO drops, ring drops, client retransmits | 99.9th percentile completion (round 1) |
+|---|---|---|---|---|---|---|---|
+| copy | 1 MiB | 40.79 to 40.80 | 6.25 to 7.67 | 10.91 to 12.25 | 28 to 29% | 94 to 443, 22 to 105, 118 to 674 | 86.5 ms |
+| copy | 750 KiB | 40.80 to 40.81 | 10.06 to 10.52 | 13.29 to 13.60 | 26 to 27% | 0, 0, 2 to 7 | 89.7 ms |
+| loan, 64 WRITEs | 1 MiB | 40.42 to 40.48 | 10.48 to 10.80 | 14.05 to 14.23 | 12% | 0, 22 to 40, 25 to 44 | 97.0 ms |
+| loan, 64 WRITEs | 750 KiB | 40.30 to 40.41 | 14.32 to 15.90 | 15.64 to 16.35 | 13 to 14% | 0, 0, 5 to 9 | 97.0 ms |
+
+| port a onto the DPRP5s | buffer | region in use, mid-run | bytes through memory for each byte of payload |
+|---|---|---|---|
+| copy | 1 MiB | 22 MiB | 3.19 |
+| copy | 750 KiB | 18 MiB | 2.99 |
+| loan, 64 WRITEs | 1 MiB (`m-dprp5-loan64`, the stock sunrpc) | 84 MiB | 1.92 |
+| loan, 64 WRITEs | 750 KiB | 76 MiB | 1.89 |
+
+- **750 KiB has no losses**: no FIFO or ring drops in any of its six
+  runs and 2 to 9 retransmits, against tens to hundreds at 1 MiB. Rate
+  and the tail of fio's completions (the drives' queues set them) are
+  the same.
+- **It costs wakes**: about 40% more threads woken and 11 to 15% more
+  context switches a WRITE, some 120,000 more wakes a second, a quarter
+  to half a CPU of scheduling at a few microseconds each: below what
+  nfsd's CPU shows (within 2 points either way, 26 to 29% copy, 12 to
+  14% loan).
+- **The system cache**: in copy mode about 4 MiB less receive memory is
+  in use, room in the 32 MiB cache, and memory takes 6% less for each
+  byte; in loan mode the budget, not the window, sets the memory, and
+  nothing changes.
+- **On tardis2, 750 KiB is the better setting**: nothing measured is
+  worse, the losses go, and the copy's memory traffic falls. As a
+  default, `svc_tcp_rx_rcvbuf` also bounds what one connection can carry
+  (a window a round trip), so it is still to be checked where storage
+  keeps up with the wire, on two ports, and with fewer connections.
 
 **The credit wake gating on tardis2.** `6745782e0794` and `9f922b3ce97b`
 built on tardis2 (`/var/tmp/zc-run-logs/sunrpc-491-wakeneed/`; gcc
@@ -199,9 +251,10 @@ October, nothing that meets the bar for taking it back. (`k-loan64-N1`,
 at 340 KiB, 15.11, is left out; its fio total, 31.84 GB/s, has a stall
 outside the window.)
 
-tardis2 is left running the gating+keep sunrpc (`updates/sunrpc.ko`,
-srcversion `D8A2801559773E8377DE3C2`, keep N, so the gating alone); its
-default budget has learned `hold_factor 107`. To go back to the
+tardis2 is left running the tip's sunrpc, the gating and `de65c0117021`
+(`updates/sunrpc.ko` from `$L/sunrpc-491-rehold`, srcversion
+`3F8D843450D4E5907693FC2`); both budgets have learned `hold_factor 107`.
+To go back to the
 installed sunrpc: `rm /lib/modules/$(uname -r)/updates/sunrpc.ko`,
 `depmod -a`, `SUNRPC_KO=none ./swap-sunrpc.sh`, `systemctl start
 nfs-server`, `./settled.sh apply`.
