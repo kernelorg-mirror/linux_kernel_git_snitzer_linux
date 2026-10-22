@@ -13,9 +13,12 @@ after an fstrim of all eight drives and 120 s of rest
 tardis1's `/etc/modprobe.d/sunrpc.conf` (the file before is
 `/root/sunrpc.conf.pre-750k-2026-10-22`). Two ports keep 384 KiB
 (393,216), which `twoport.sh` sets for a run on both. tardis2 runs one
-port only, so the one-port setting is its setting too: `settled.sh apply`
-sets it live there, but its `/etc/modprobe.d/sunrpc.conf` still says
-1 MiB, so after a boot it starts at 1 MiB until `apply` is run. The
+port only, so the one-port setting is its setting too: its
+`/etc/modprobe.d/sunrpc.conf` says 768,000 as well from 22 October
+(beside `svc_tcp_rx_loan_pages=Y`, which it keeps; the file before is
+`/root/sunrpc.conf.pre-750k-2026-10-22` there). Its live value stays
+1 MiB until sunrpc is next loaded or `settled.sh apply` is run there
+from this branch. The
 settled figures before (47.39 GB/s on one port, 60.41 on two) were at
 1 MiB and 384 KiB.
 
