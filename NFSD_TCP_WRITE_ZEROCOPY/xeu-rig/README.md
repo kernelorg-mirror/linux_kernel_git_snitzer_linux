@@ -1,4 +1,74 @@
-# 22 October: 750 KiB on one port, 384 KiB on two — read this first
+# 22 October, afternoon: the loan switch removed, copy mode as before — read this first
+
+The tip's sunrpc on tardis1, build 491, after the reboot that followed
+the svcsock KUnit crash (`$L/sunrpc-491-loankey-tip`, srcversion
+`807985F30E385B5AF1149B9`). The commits at the tip since the section
+below are:
+
+- `f84c0ee96abf` (code): removes `svc_tcp_rx_loan_pages`, so a budget
+  above 0 is what loans. With every budget at 0, the default and the
+  rig's setting at rest, a record goes straight to the copy behind the
+  static key `svc_tcp_rx_loans`.
+- `d8697f698379` (KUnit interface) and `69ae778de1e0` and
+  `af1bf767005c` (KUnit tests).
+- `bfa4d5f0d3bc` (`settled.sh`: the switch is "not in this kernel").
+
+The crash: the suite's shared fixture had no `xpt_net`, and
+classification now looks the budget up through it. What a server that
+never loans pays is now a task, in `../UPSTREAM_DEFENSE.md`.
+
+**The bring-up.** sunrpc was not loaded after the crash, and `updates/`
+held the build from before it. `swap-sunrpc.sh` installed the tip's
+build. The suites were run by hand from the build directory:
+`sunrpc-xdr-bvec` 7/7 and `sunrpc-svcsock-rx` 50/50
+(`$L/sunrpc-491-loankey-tip2/kunit.txt`). Then the eight drives were
+mounted, and `./bringup.sh 32768 256`, `./port-setup.sh enp164s0f0 56`
+and `./settled.sh apply` were run, ending in "the settled setting". On
+this boot `arm_cmn` must be loaded by hand (`modprobe arm_cmn`) before
+`memcost-log.sh` can count anything.
+
+`run-kunit.sh` will fail on this sunrpc. It loads the suites installed
+with the kernel, built against the old sunrpc: 14 of the exported
+functions the suites use changed version, and one they use is gone.
+Until the suites are installed beside this sunrpc, run them from
+`$L/sunrpc-491-loankey-tip2/sunrpc/` by hand.
+
+**Copy mode, against the same day's runs on `sunrpc-491-rehold`**
+(`$L/t1-rcvbuf`, the first section below). The same shapes, each after
+an fstrim of all eight drives and 120 s of rest. The drivers are
+`$L/t1-loankey/run22.sh` (rounds 1 and 2, without `arm_cmn`, so no
+memory figures) and `run23.sh` (one port, rounds 3 and 4, with
+`arm_cmn`, and both budgets' `admitted` read before and after each
+run):
+
+| run | GB/s | drives | FIFO drops, ring drops, client retransmits | nfsd CPUs busy | bytes through memory for each byte of payload |
+|---|---|---|---|---|---|
+| one-750k-1 | 45.20 | nvme7 stepped down at 60 s | 28, 0, 29 | 23% | - |
+| one-750k-2 | 44.83 | drive-limited, nvme7 at 42 s | 0, 0, 7 | 23% | - |
+| one-750k-3 | 45.08 | drive-limited, nvme4 and nvme6 at 38 s | 16, 0, 19 | 24% | 1.35 |
+| one-750k-4 | 40.94 (wire 44.57) | five stepped down at 27 to 28 s | 29, 0, 32 | 22% | 1.34 |
+| **reference**, one port | 43.86, 41.41 (drive-limited) | | 0, 0, 7 and 6 | 24%, 16% | 1.32, 1.27 |
+| two-384k-1 | 39.56: **not valid**, nvme4 to nvme6 stepped down at 17 to 18 s | | 0, 29, 120 | 41% | - |
+| two-384k-2 | 57.68 (29.17, 28.51) | nvme7 at 30 s, the run's end | 0, 27, 46 | 58% | - |
+| **reference**, two ports | 57.06, 55.67 | | 0, 21 and 46, 26 and 52 | 56%, 59% | - |
+
+- **No regression.** One port carries 45 GB/s, as before or a little
+  above. Two ports carry 57.68 against 57.06 and 55.67. Losses, nfsd's
+  CPU and the windows (357,000 on one port, 182,784 on two; hold
+  factor 108) are as before. The memory traffic is 1.34 to 1.35 bytes
+  a byte against 1.27 to 1.32: the reference's 1.27 was a drive-limited
+  run at a lower wire rate. The region in use is the same, 27 to
+  28 MiB, and so are the cache fills, 2.26 a line.
+- **Nothing was loaned.** `admitted` stayed at 6,192 (initial
+  namespace) and 4 (default) through rounds 3 and 4. Those counts are
+  the KUnit suites', which ran on this module. With every budget at 0
+  the key is off, so the credit path cannot be reached.
+- **The drives decided most of these runs.** Read `drives.txt` before
+  any figure. nvme7 stepped down in each of rounds 1 and 2 and wrote
+  the least each time (335 to 442 GB, against 400 to 510); in rounds 3
+  and 4 it did not stand out. Not looked into.
+
+# 22 October: 750 KiB on one port, 384 KiB on two
 
 tardis1's cross-check of tardis2's receive buffer result (step 1 of the
 handover below), after the reboot. Build 491, the tip's sunrpc
