@@ -55,6 +55,10 @@ exportfs -o rw,no_root_squash,insecure,fsid=77 '*:/export/zc'
 echo 2 > /sys/kernel/debug/nfsd/io_cache_write
 modprobe nfs
 echo N > /sys/module/nfs/parameters/localio_enabled
+# Loans need a budget above 0 (loan-budget.sh); the host's are put back.
+. "$(cd "$(dirname "$0")" && pwd)/loan-budget.sh"
+loans_save; trap loans_restore EXIT
+loans_on || { echo "FAIL: could not set a budget: loans would not be on"; exit 1; }
 head -c 16777216 /dev/urandom > $SRC
 
 echo 0 > $TRACE/tracing_on

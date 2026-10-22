@@ -21,7 +21,7 @@ mkdir -p "$O"
 	echo "xeu module:     $(modinfo -F filename xeu 2>/dev/null)"
 	echo "xeu package:    $(rpm -qf "$(modinfo -F filename xeu 2>/dev/null)" 2>/dev/null)"
 	echo "rx_ip_align:    $(cat /sys/module/xeu/parameters/rx_ip_align 2>/dev/null || echo 'absent (stock xeu)')"
-	echo "loan pages:     $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_loan_pages 2>/dev/null)"
+	echo "loan budgets:   initial $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_budget_pages 2>/dev/null), default $(cat /sys/module/sunrpc/parameters/svc_tcp_rx_budget_default_pages 2>/dev/null) (loans only above 0)"
 	echo "io_cache_write: $(cat /sys/kernel/debug/nfsd/io_cache_write 2>/dev/null)"
 	echo "mtu:"
 	ip -o link show | awk '{print "  " $2, $4, $5}'

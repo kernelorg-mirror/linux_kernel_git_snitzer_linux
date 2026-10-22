@@ -1125,8 +1125,10 @@ xcell() {
 	return 0
 }
 xrun() { ( export "$@"; xcell "$CELL" ) || echo "CELL aborted rc=$? ($*)"; }
+# Without a region nothing draws on the budget, but a record is loaned only
+# when its budget is above 0: 1 turns the loan cells' loans on.
 budget() {
-	[ -n "${NOREGION:-}" ] && { echo "${FORCE_BUDGET:-0}"; return; }
+	[ -n "${NOREGION:-}" ] && { echo "${FORCE_BUDGET:-1}"; return; }
 	echo ${FORCE_BUDGET:-$(( SIZE - PARKED - $1 * $2 - 64 ))}
 }
 
