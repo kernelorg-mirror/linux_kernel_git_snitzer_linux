@@ -1377,13 +1377,15 @@ nfsd_write_dio_iters_init(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	/*
 	 * The direct middle invalidates the page cache over its range, so it
-	 * must not share a page with a buffered end.  An aligned end needs no
-	 * buffered segment; a misaligned one is cut on a page boundary even
-	 * where the offset alignment is finer than a page.  A WRITE may end
-	 * at OFFSET_MAX, so the prefix is sized as a distance rather than
-	 * by rounding @offset up, which could wrap.
+	 * must not share a folio with a buffered end.  An aligned end needs no
+	 * buffered segment; a misaligned one is cut on a boundary of the
+	 * smallest folio the mapping allows, a page or, where the block is
+	 * larger, a block, even where the offset alignment is finer.  A WRITE
+	 * may end at OFFSET_MAX, so the prefix is sized as a distance rather
+	 * than by rounding @offset up, which could wrap.
 	 */
-	cut = max_t(u32, offset_align, PAGE_SIZE);
+	cut = max3(offset_align, PAGE_SIZE,
+		   mapping_min_folio_nrbytes(nf->nf_file->f_mapping));
 	prefix_end = offset;
 	if (!IS_ALIGNED(offset, offset_align))
 		prefix_end += min_t(loff_t, cut - (offset & (cut - 1)), total);
