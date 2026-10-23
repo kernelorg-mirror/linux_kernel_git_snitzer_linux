@@ -200,18 +200,12 @@ at a time:
   without sleeping. Every dequeued transport was read: 59 of
   26,948,604 found no slot.
 
-  - **A counted wake is mostly not a sleep ended.** `threads-woken` is
-    3 times the times nfsd went to sleep. `svc_pool_wake_idle_thread()`
-    counts a wake whenever the first thread on the idle list is not
-    running. A thread is on that list, in `TASK_IDLE`, from its
-    `llist_add()` until `schedule()` and again until
-    `llist_del_first_this()`. A thread that finishes a request puts
-    itself there before it looks for work, so a waker nearly always
-    finds a thread to count, whether or not it was about to sleep.
-    About 12 of the 18 wakes a WRITE land on a thread before it sleeps.
-    So the "about 5 us a wake" above is the rings' extra time divided by
-    counted wakes, not the price of a context switch. What a wake costs
-    the softirq that makes it is not measured.
+  - **A counted wake is often not a sleep ended.** `threads-woken` is
+    3 times the sleeps the wakee probes saw, and twice nfsd's voluntary
+    context switches. Why is the next bullet: about half the counted
+    wakes are of a thread whose wake is already in flight. (Written
+    first as wakes landing on threads before they sleep; that is only
+    0.9 a WRITE.)
   - **Most threads that find nothing never slept.**
     `svc_thread_should_sleep()` saw a transport on the pool's queue,
     so the thread skipped sleeping, and another thread dequeued it
@@ -222,8 +216,75 @@ at a time:
     dequeue for 96% (`qtime_us`).
 
   So the wakes that find no connection are not where the rings' time
-  goes. What remains to measure is what the softirq pays for each wake,
-  whether it ends a sleep or not, and that needs a probe on the rings.
+  goes.
+
+- **What a wake costs the rings, and why half the counted wakes do
+  nothing** (`run10.sh`, `run11.sh`, `run13.sh`, `run14.sh`;
+  `probe4.bt`, `probe5.bt`, `probe7.bt`). `svc_pool_wake_idle_thread()`
+  is timed from entry to exit, by where it runs: the ring CPUs (0 to 7,
+  the softirq of `svc_data_ready()`) or nfsd's (8 to 55). Each call is
+  classed by the target's state at `wake_up_process()`:
+  - off its runqueue and asleep: a sleep ended;
+  - off its runqueue in `TASK_WAKING`: another waker's wake is in
+    flight;
+  - still on its runqueue;
+  - no call: the first idle thread was running, or there was none.
+
+  These probes run on the rings and push a run to the saturated end
+  (rings at 96 to 98%, 36.8 to 37.3 GB/s), so the times are an upper
+  bound. Two runs without them anchor the counts:
+  - an untraced run, cs-loan64-1 (40.21 GB/s, rings at 90.4%): 17.64
+    counted wakes a WRITE, 8.35 voluntary context switches of nfsd's
+    threads (from `/proc/<pid>/status`);
+  - the light run p6-loan64-1, whose only probe on the rings is one
+    count (39.99 GB/s, rings at 93.3%).
+
+  From p7-loan64-1, per WRITE (1,746,392 WRITEs; the three classes that
+  wake add up to `pool_stats`' 32,136,582, 18.40 a WRITE):
+
+  | the wake | from the rings | from nfsd | time a call, rings / nfsd |
+  |---|---|---|---|
+  | ends a sleep | 3.50 | 4.52 | 1.64 / 1.96 us |
+  | of a thread already being woken | 3.18 | 6.30 | 1.18 / 1.35 us |
+  | of a thread still on its runqueue | 0.42 | 0.48 | 1.72 / 1.94 us |
+  | no wake made (counted by neither) | 1.80 | 3.31 | 0.67 / 0.76 us |
+
+  - **The wakes that end a sleep match the sleeps:** 14.00M of them
+    against 14,524,666 voluntary context switches of nfsd's threads
+    over the same span. It is 8.0 a WRITE here, and 8.22 to 8.35 in
+    p5-loan64-2 and the untraced run, at rings from 90 to 97%. How
+    often nfsd sleeps does not move with the curve.
+  - **9.5 counted wakes a WRITE are duplicates.** `try_to_wake_up()`
+    puts a sleeping thread in `TASK_WAKING` while the wake goes to the
+    thread's CPU. `svc_pool_wake_idle_thread()` takes "not running" as
+    idle. The woken thread stays first on `sp_idle_threads` until it
+    runs and takes itself off. So every enqueue and every
+    `svc_thread_wake_next()` in that window picks the same thread,
+    calls `wake_up_process()` on it and counts a wake. Each costs a
+    `pi_lock` on a task that another CPU is waking, and wakes nobody.
+    Two thirds of the duplicates come from nfsd's own
+    `svc_thread_wake_next()` and `svc_xprt_received()`, a third from
+    the rings. The untraced run's 17.64 counted against 8.35 switches
+    says it is as large there.
+  - **Only half of all wakes come from the rings:** 8.9 counted a
+    WRITE, of which 3.5 end a sleep.
+  - **What the rings pay:** 20.0 s of the rings' time over the trace,
+    11.4 us a WRITE, against the 109.7 us a WRITE the four ring CPUs
+    spend in softirq (96.2% of four CPUs at 35,065 WRITEs a second).
+    That is 10% with the probes' cost in it. The "no wake" class,
+    0.67 us for a function that reads one pointer, is mostly the probe
+    pair, and taking it off each call leaves about 4%, of which the
+    duplicates are a quarter. **So wakes are not where most of the
+    rings' time goes, and the "about 5 us a wake" in the bullet above
+    does not hold.** That figure divided the extra ring time between
+    runs by counted wakes. A ring wake that ends a sleep costs under 1
+    us net, and what makes the rings busier at the high end is the
+    rest of the softirq.
+
+  The duplicates are nfsd's to fix, not the loan's: a wake that marks
+  the thread taken (or takes it off the idle list) before it calls
+  `wake_up_process()` would make them none. That is code in
+  `svc_pool_wake_idle_thread()`, and Mike's to decide.
 
   Not yet done: a test of the loop itself, by giving the rings room
   (more rings, or the dropped `svc_tcp_rx_keep`, which cut wakes). The
