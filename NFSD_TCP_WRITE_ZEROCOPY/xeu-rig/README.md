@@ -47,10 +47,42 @@ at a time:
   suites' 2 and 3096 across each copy run.
 - **The loan path admits:** 1,542,640 and 1,528,448 records with 0
   overrun. The region in use was at most 6,497 and 6,513 pages.
-- **loan64-2 differs from loan64-1:** refusals fell to 0.17 a loaned
-  WRITE against 0.96 (0.92 to 1.04 with the gating on 491), but wakes
-  rose to 18.1 against 14.4, with the rate 1% lower and nfsd 2 points
-  higher. Not looked into. It is one run.
+- **loan64-1 is the odd run, not loan64-2** (`run2.sh`, `run3.sh`).
+  Every later loan run on this load looks like loan64-2:
+
+  | run | GB/s | refused a loaned WRITE | woken a WRITE | rings of a busy | unread on a socket (`ss`, mean) |
+  |---|---|---|---|---|---|
+  | loan64-1, the first after the load | 40.48 | 0.96 | 14.39 | 41% | 188 KiB |
+  | loan64-2 | 40.08 | 0.17 | 18.08 | 57% | 29 KiB |
+  | loan64-3 | 40.03 | 0.15 | 18.27 | 53% | 34 KiB |
+  | loan64-4 | 40.15 | 0.20 | 17.81 | 50% | 21 KiB |
+  | loan56-1 (budget 7190) | 39.87 | 0.25 | 17.75 | 53% | 9 KiB |
+  | 491, 750 KiB (three runs) | 40.30 to 40.41 | 0.69 to 0.97 | 14.32 to 15.90 | 40 to 42% | |
+
+  loan60-1 is not valid (15,475 ring drops, 16,029 client retransmits).
+  On 491 every loan run at 750 KiB looked like loan64-1; on 494 only
+  the first did. Where records wait for credit, sockets stay deep and a
+  record takes few visits. Where they do not, sockets drain, records
+  take more visits, and wakes follow visits (21 October, "The receive
+  window"). The ring CPUs carry the extra wakes, since `svc_data_ready()`
+  wakes from softirq. What was ruled out:
+  - **Another user's podman build** (`bootc-image-builder`, 03:54:14
+    to 03:58:35) ran beside loan64-2. loan64-3 and loan64-4 ran with no
+    load beside them and look the same.
+  - **The budget binding at 64 WRITEs**: at 56 sockets stay shallow and
+    refusals low.
+  - **The code since 491's sunrpc** (`f84c0ee96abf`, `fb352b960445`,
+    `428a1051e6cb`): reading the diffs, none changes admission, the
+    charge or the learning while a budget is above 0.
+
+  The learned `cost_factor` is not steady. Sampled each second
+  (`loan60-1-bstats.txt`, `loan56-1-bstats.txt`), it moves between 168
+  and 205 within a run, and it was 191 between runs. Before loan64-1 it
+  was 0, so its first records were charged their whole capacity. The
+  next step is a fresh sunrpc load (`SUNRPC_KO=none ./swap-sunrpc.sh`,
+  Mike's to ask for), then loan64 twice with the sampler. If the first
+  run again looks like 491's and the second like loan64-2, the
+  difference lies in what the budget learns.
 - At the end the hold factors are 107 (default) and 108 (loans).
 
 # Build 494: the kernel from the tip, no regression (22 October, evening) — read this first
