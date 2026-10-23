@@ -436,6 +436,52 @@ here; their records are in `$L/xsight-x6/defer/` and
   rather than by sending pause. `port_rx_fifo_fc_lines` follows the
   fill, and read 32767 once in the second case.
 
+### X8. The receive loop: two costs only the driver can remove (from FLAMEGRAPH, 23 October)
+
+Both were found by profiling the one-port loan run on tardis2 (build
+494, kmod-16k-xsight `-8`; `../FLAMEGRAPH/`, rounds 01 and 02). The
+rings spend 83 us a 1 MiB WRITE, and these two are 15% of it. We have
+no source for the `-8` driver on tardis2 (the copy under
+`~/rpmbuild/xsight/BUILD` is July's and has no `rx_buf_size`), so they
+are for Xsight, with the numbers:
+
+- **The first read of each frame is a cache miss, 6.2 to 6.8 us a WRITE
+  (7.3% of the rings).**
+  - 85% of `eth_type_trans` is one stall: the load of the Ethernet
+    destination at `eth_type_trans+0x64` (`ldr x1, [x3, x1]`), the first
+    touch of a line the card wrote. That is about 42 ns a frame, at
+    about 135 frames a WRITE.
+  - xeu builds the skb (`napi_build_skb`) and calls `eth_type_trans`
+    with no prefetch.
+  - mlx5, ice and others prefetch a frame's first lines
+    (`net_prefetch()`) when its completion is seen, or a frame or two
+    ahead. That puts the miss under the work on the frames before it.
+  - With `rx_ip_align=2` the Ethernet, IP and TCP headers span two
+    64-byte lines, so the second miss is likely part of
+    `inet_gro_receive` and `tcp_gro_receive`'s 5.3 us of self time.
+- **Re-arming the receive interrupt through the irq core costs about 2.4 us
+  each time, 6.5 us a WRITE (7.85% of the rings).**
+  - `xeu_rx_poll` calls `enable_irq()` after each poll (99.9% of
+    `enable_irq`'s cost).
+  - There are 2.72 receive interrupts a WRITE: 5,825,996 over the
+    2,139,688 WRITEs of run r3-3, counted from `/proc/interrupts`, which
+    starts again when the port opens.
+  - The interrupts are `ITS-PCI-MSIX`. So each unmask writes the MSI-X
+    vector control word in the BAR, and updates the LPI's configuration
+    with an ITS `INV` command and a wait, all under the descriptor's lock
+    with interrupts off. Perf without pseudo-NMI books 97% of it on
+    `_raw_spin_unlock_irqrestore`.
+  - mlx5, ice and bnxt leave the vector unmasked and re-arm through the
+    device (an interrupt doorbell or mask register in the BAR), one
+    posted write a poll.
+  - The question for Xsight: does the E1 have such a register, and can
+    xeu use it?
+
+**Decides.** Nothing on our side until there is source or a build to
+try. With the source each is a few lines, and a test is an xeu reload
+(Mike's to authorize). For the reply (X7), the two numbers, with the
+flamegraphs of `../FLAMEGRAPH/02-refs-valid/`.
+
 ### X7. The reply
 
 Once X1 to X5 have results: draft `../xsight-reply-2.txt` from the
