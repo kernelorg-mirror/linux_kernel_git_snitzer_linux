@@ -244,6 +244,15 @@ declare -A CLI_SYSCTL=(
 	[net.ipv4.tcp_ecn]=2
 )
 declare -A CLI_DEV=([a]=ens3np0 [b]=ens6np0)	# the client's end of each port
+# NFS is kept out of conntrack (FLAMEGRAPH round 01, 23 October): a table
+# that needs conntrack puts it on every packet.  On tardis2's one-port loan
+# run, deleting the table and loading zc-notrack.nft took the rings from 92.6
+# to 78.7 us a WRITE and nfsd from 14.5% to 13.4% busy.  podman's netavark leaves its inet netavark table
+# (NAT chains) behind after a container's network goes, until a reboot; apply
+# deletes it while no container runs, and zc-notrack.nft keeps port 2049's
+# packets untracked when a container brings it back.
+NOTRACK=$(dirname "$(readlink -f "$0")")/zc-notrack.nft
+containers() { command -v podman > /dev/null && podman ps -q 2> /dev/null | wc -l || echo 0; }
 SUNRPC=/sys/module/sunrpc/parameters
 
 pci_of() { basename "$(readlink -f $1)"; }	# pci_of <sysfs device link>
@@ -359,6 +368,16 @@ audit_client() {	# read only: nothing on the client is changed from here
 	done
 }
 
+audit_netfilter() {
+	local c; c=$(containers)
+	want "NFS untracked (zc_notrack)" "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" 4
+	if [ $c = 0 ]; then
+		want "podman's leftover netavark table" "$(nft list table inet netavark > /dev/null 2>&1 && echo present || echo none)" none
+	else
+		ok "podman's netavark table" "kept: $c container(s) running"
+	fi
+}
+
 audit_irqbalance() {
 	local p; p=$(pidof irqbalance)
 	want "irqbalance running" "${p:+yes}" yes
@@ -403,6 +422,7 @@ audit() {
 	echo "settled.sh audit $mode: kernel $(uname -r), $(date '+%F %T')"
 	audit_nfsd
 	audit_irqbalance
+	audit_netfilter
 	audit_sysctl
 	audit_client
 	for k in $PORTS; do audit_port $k; done
@@ -484,6 +504,8 @@ apply() {	# the CPU layout, the resting module settings, and the audit
 	for k in "${!SYSCTL[@]}"; do
 		[ "$(sysctl -n $k | tr -s ' \t' '  ')" = "${SYSCTL[$k]}" ] || sysctl -qw "$k=${SYSCTL[$k]}"
 	done
+	[ "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" = 4 ] || nft -f "$NOTRACK"
+	[ "$(containers)" = 0 ] && nft list table inet netavark > /dev/null 2>&1 && nft delete table inet netavark
 	if [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ]; then
 		for k in "${!REST[@]}"; do
 			[ -w $SUNRPC/$k ] && [ "$(cat $SUNRPC/$k)" != "${REST[$k]}" ] && echo "${REST[$k]}" > $SUNRPC/$k
