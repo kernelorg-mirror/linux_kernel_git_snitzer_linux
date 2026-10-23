@@ -54,18 +54,17 @@
 /* We only care about NFSD_MAY_READ/WRITE for this cache */
 #define NFSD_FILE_MAY_MASK	(NFSD_MAY_READ|NFSD_MAY_WRITE|NFSD_MAY_LOCALIO)
 
-/*
- * Serialize callers of nfsd_file_dispose_list_delayed() against per-net
- * shutdown.
- */
-static DEFINE_SPINLOCK(nfsd_gc_lock);
-
 static DEFINE_PER_CPU(unsigned long, nfsd_file_cache_hits);
 static DEFINE_PER_CPU(unsigned long, nfsd_file_acquisitions);
 static DEFINE_PER_CPU(unsigned long, nfsd_file_allocations);
 static DEFINE_PER_CPU(unsigned long, nfsd_file_releases);
 static DEFINE_PER_CPU(unsigned long, nfsd_file_total_age);
 static DEFINE_PER_CPU(unsigned long, nfsd_file_evictions);
+
+struct nfsd_fcache_disposal {
+	spinlock_t lock;
+	struct list_head freeme;
+};
 
 static struct kmem_cache		*nfsd_file_slab;
 static struct kmem_cache		*nfsd_file_mark_slab;
@@ -432,31 +431,25 @@ nfsd_file_dispose_list(struct list_head *dispose)
 }
 
 /**
- * nfsd_file_dispose_list_delayed - queue dead files for nfsd thread disposal
+ * nfsd_file_dispose_list_delayed - move list of dead files to net's freeme list
  * @dispose: list of nfsd_files to be disposed
  *
- * Transfers each file to the dispose list in its nfsd_net and wakes an nfsd
- * thread to do the actual close.  This keeps the cost of fput() in the nfsd
- * threads rather than in the shrinker or GC worker.
- *
- * All callers must hold nfsd_gc_lock, so that nfsd_file_cache_shutdown_net()
- * can synchronize against them before draining the per-net dispose list.
- * This guarantees nf_net is still live when we call net_generic().
+ * Transfers each file to the "freeme" list for its nfsd_net, to eventually
+ * be disposed of by the per-net garbage collector.
  */
 static void
 nfsd_file_dispose_list_delayed(struct list_head *dispose)
 {
-	lockdep_assert_held(&nfsd_gc_lock);
-
-	while (!list_empty(dispose)) {
+	while(!list_empty(dispose)) {
 		struct nfsd_file *nf = list_first_entry(dispose,
 						struct nfsd_file, nf_gc);
 		struct nfsd_net *nn = net_generic(nf->nf_net, nfsd_net_id);
+		struct nfsd_fcache_disposal *l = nn->fcache_disposal;
 		struct svc_serv *serv;
 
-		spin_lock(&nn->fcache_dispose_lock);
-		list_move_tail(&nf->nf_gc, &nn->fcache_dispose_list);
-		spin_unlock(&nn->fcache_dispose_lock);
+		spin_lock(&l->lock);
+		list_move_tail(&nf->nf_gc, &l->freeme);
+		spin_unlock(&l->lock);
 
 		/*
 		 * The filecache laundrette is shut down after the
@@ -480,15 +473,17 @@ nfsd_file_dispose_list_delayed(struct list_head *dispose)
  */
 void nfsd_file_net_dispose(struct nfsd_net *nn)
 {
-	if (!list_empty(&nn->fcache_dispose_list)) {
+	struct nfsd_fcache_disposal *l = nn->fcache_disposal;
+
+	if (!list_empty(&l->freeme)) {
 		LIST_HEAD(dispose);
 		int i;
 
-		spin_lock(&nn->fcache_dispose_lock);
-		for (i = 0; i < 8 && !list_empty(&nn->fcache_dispose_list); i++)
-			list_move(nn->fcache_dispose_list.next, &dispose);
-		spin_unlock(&nn->fcache_dispose_lock);
-		if (!list_empty(&nn->fcache_dispose_list)) {
+		spin_lock(&l->lock);
+		for (i = 0; i < 8 && !list_empty(&l->freeme); i++)
+			list_move(l->freeme.next, &dispose);
+		spin_unlock(&l->lock);
+		if (!list_empty(&l->freeme)) {
 			/*
 			 * Wake up another thread to share the work
 			 * *before* doing any actual disposing.
@@ -570,12 +565,10 @@ nfsd_file_gc(void)
 	LIST_HEAD(dispose);
 	unsigned long ret;
 
-	spin_lock(&nfsd_gc_lock);
 	ret = list_lru_walk(&nfsd_file_lru, nfsd_file_lru_cb,
 			    &dispose, list_lru_count(&nfsd_file_lru));
-	nfsd_file_dispose_list_delayed(&dispose);
-	spin_unlock(&nfsd_gc_lock);
 	trace_nfsd_file_gc_removed(ret, list_lru_count(&nfsd_file_lru));
+	nfsd_file_dispose_list_delayed(&dispose);
 }
 
 static void
@@ -598,14 +591,10 @@ nfsd_file_lru_scan(struct shrinker *s, struct shrink_control *sc)
 	LIST_HEAD(dispose);
 	unsigned long ret;
 
-	if (!spin_trylock(&nfsd_gc_lock))
-		return SHRINK_STOP;
-
 	ret = list_lru_shrink_walk(&nfsd_file_lru, sc,
 				   nfsd_file_lru_cb, &dispose);
-	nfsd_file_dispose_list_delayed(&dispose);
-	spin_unlock(&nfsd_gc_lock);
 	trace_nfsd_file_shrinker_removed(ret, list_lru_count(&nfsd_file_lru));
+	nfsd_file_dispose_list_delayed(&dispose);
 	return ret;
 }
 
@@ -678,11 +667,11 @@ nfsd_file_queue_for_close(struct inode *inode, struct list_head *dispose)
 }
 
 /**
- * nfsd_file_close_inode - attempt a deferred close of a nfsd_file
+ * nfsd_file_close_inode - attempt a delayed close of a nfsd_file
  * @inode: inode of the file to attempt to remove
  *
  * Close out any open nfsd_files that can be reaped for @inode. The
- * actual freeing is deferred to the nfsd service threads.
+ * actual freeing is deferred to the dispose_list_delayed infrastructure.
  *
  * This is used by the fsnotify callbacks and setlease notifier.
  */
@@ -691,10 +680,8 @@ nfsd_file_close_inode(struct inode *inode)
 {
 	LIST_HEAD(dispose);
 
-	spin_lock(&nfsd_gc_lock);
 	nfsd_file_queue_for_close(inode, &dispose);
 	nfsd_file_dispose_list_delayed(&dispose);
-	spin_unlock(&nfsd_gc_lock);
 }
 
 /**
@@ -885,14 +872,42 @@ __nfsd_file_cache_purge(struct net *net)
 	nfsd_file_dispose_list(&dispose);
 }
 
+static struct nfsd_fcache_disposal *
+nfsd_alloc_fcache_disposal(void)
+{
+	struct nfsd_fcache_disposal *l;
+
+	l = kmalloc(sizeof(*l), GFP_KERNEL);
+	if (!l)
+		return NULL;
+	spin_lock_init(&l->lock);
+	INIT_LIST_HEAD(&l->freeme);
+	return l;
+}
+
+static void
+nfsd_free_fcache_disposal(struct nfsd_fcache_disposal *l)
+{
+	nfsd_file_dispose_list(&l->freeme);
+	kfree(l);
+}
+
+static void
+nfsd_free_fcache_disposal_net(struct net *net)
+{
+	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+	struct nfsd_fcache_disposal *l = nn->fcache_disposal;
+
+	nfsd_free_fcache_disposal(l);
+}
+
 int
 nfsd_file_cache_start_net(struct net *net)
 {
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 
-	spin_lock_init(&nn->fcache_dispose_lock);
-	INIT_LIST_HEAD(&nn->fcache_dispose_list);
-	return 0;
+	nn->fcache_disposal = nfsd_alloc_fcache_disposal();
+	return nn->fcache_disposal ? 0 : -ENOMEM;
 }
 
 /**
@@ -911,18 +926,8 @@ nfsd_file_cache_purge(struct net *net)
 void
 nfsd_file_cache_shutdown_net(struct net *net)
 {
-	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
-
 	nfsd_file_cache_purge(net);
-	/*
-	 * Ensure any in-progress shrinker, GC, or fsnotify/lease callback
-	 * (all of which hold nfsd_gc_lock while calling
-	 * nfsd_file_dispose_list_delayed()) has fully completed before
-	 * draining the per-net dispose list.
-	 */
-	spin_lock(&nfsd_gc_lock);
-	spin_unlock(&nfsd_gc_lock);
-	nfsd_file_dispose_list(&nn->fcache_dispose_list);
+	nfsd_free_fcache_disposal_net(net);
 }
 
 void
