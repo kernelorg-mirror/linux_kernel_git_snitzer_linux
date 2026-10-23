@@ -1,6 +1,91 @@
 * Fri Oct 23 2026 Mike Snitzer <snitzer@kernel.org> [6.12.114-0]
 - Linux v6.12.114
 
+* Fri Oct 23 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-5]
+- Update nfsd-testing-canary-dontcache to v9 of the series: a folio is
+  counted in, or taken off, WB_DONTCACHE_DIRTY only when both PG_dirty
+  and its dirty tag are set, since __folio_cancel_dirty() uncounts a
+  folio and clears PG_dirty but leaves the tag; NFSD's shared edge is the
+  smallest folio the mapping allows, a page or a block, and a short write
+  that stopped inside a segment's first unit no longer completes that
+  edge
+- Rebase nfsd-testing-canary-dontcache-LOCALIO on it: nfs_dio_seg_hold()
+  and nfs_dio_seg_release() take the same unit and the same short-write
+  rule, so LOCALIO's shared edges match NFSD's
+
+* Thu Oct 22 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-4]
+- Point the -x references of "nfsd: use direct I/O only for the last
+  operation in a COMPOUND", "SUNRPC: preserve RQ_SECURE across request
+  deferral" and the three cel/nfsd-next commits in nfsd-testing at the
+  commits Chuck Lever's trees now carry; no code change
+- Update nfsd-testing-canary-dontcache to v8 of the series
+  (https://lore.kernel.org/linux-nfs/20261023024548.71123-1-snitzer@kernel.org/):
+  "NFSD: cut a misaligned direct-mode WRITE at the mapping's smallest
+  folio" is new, so where the smallest folio is a block larger than a
+  page the direct middle and a buffered end no longer share a block;
+  so is "mm: take a folio off WB_DONTCACHE_DIRTY only if it was counted
+  there", above the mm DONTCACHE writeback tracking it fixes;
+  folio_mark_dropbehind() tests the dirty tag rather than PG_dirty, so a
+  folio marked as it is dirtied is not counted twice; the edge kept for
+  the write that completes it is the smallest folio the mapping allows,
+  both in iomap's test and in what is marked, and an edge already clean
+  is dropped before the folio lock is released; and "mm: expose
+  WB_DONTCACHE_DIRTY in bdi debugfs stats" has Jeff Layton's Reviewed-by
+- Rebase nfsd-testing-canary-dontcache-LOCALIO on it: nfs_dio_split()
+  cuts a misaligned write at the mapping's smallest folio, as NFSD does,
+  so LOCALIO direct writes get the same cut
+
+* Tue Oct 20 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-3]
+- Add nfsd-testing, built on nfsd-next as on the 7.3 line: Chuck Lever's
+  cel/nfsd-testing commits, each cherry-picked with -x. "nfsd: use direct
+  I/O only for the last operation in a COMPOUND" and "SUNRPC: preserve
+  RQ_SECURE across request deferral" move there from nfsd-testing-canary,
+  and his NFSD direct-mode patches from nfsd-testing-canary-dontcache,
+  with the three cel/nfsd-next commits they need. nfsd-testing-canary
+  keeps the 4 svcrdma send context commits and builds on nfsd-testing
+- In nfsd-testing, "NFSD: add tracing for how direct-mode READ and WRITE
+  are serviced" is the copy Chuck Lever applied from the v6 posting: the
+  per-I/O events test the kiocb flags in TP_CONDITION(), only while
+  enabled (Jeff Layton), and one event per direct-mode READ and WRITE
+  decision (nfsd_read_dio_* and nfsd_write_dio_*) replaces
+  nfsd_write_dio_split, its disposition and dontcache fields; the WRITE
+  events now fire in every io_cache_write mode, and the memory offset
+  reported is the one the alignment test checks (Chuck Lever); with Jeff
+  Layton's Reviewed-by
+- Rebase nfsd-testing-canary-dontcache on nfsd-testing-canary
+- Rebase nfsd-testing-canary-dontcache-LOCALIO on it: nfsd reports
+  nfs_dio_split()'s decision with the per-outcome events, and
+  nfs_dio_split() records the memory offset it tested
+
+* Sun Oct 18 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-2]
+- NFSD: in nfsd-testing-canary-dontcache, replace this topic's copies of
+  v4 1/10-6/10 of the NFSD direct-mode series with the 6 patches Chuck
+  Lever applied to cel/nfsd-testing, each cherry-picked with -x from his
+  commit, right above the 6.12 prerequisites.  His versions compute a
+  misaligned WRITE's cut once with IS_ALIGNED(), so a WRITE ending at
+  OFFSET_MAX cannot wrap, and let every unsplit WRITE keep IOCB_DSYNC
+- Rebase the rest of nfsd-testing-canary-dontcache on them as v5 of the
+  series: the page cache now keeps the page an uncached write covers only
+  partly until the write that completes it ("mm, iomap: keep a partly
+  covered page until an uncached write completes it"), and lets a writer
+  that syncs its own write complete those pages after the sync ("mm,
+  iomap: let an uncached writer complete its shared pages itself").
+  "NFSD: drop a shared boundary page only once both WRITEs have written
+  it" replaces v4's 9/10: NFSD no longer inserts a folio of its own, which
+  also closes the window in which two WRITEs arriving together could have
+  the shared page dropped before the second had written it
+- Rebuild nfsd-testing-canary-dontcache-LOCALIO on it: nfs_common now
+  carries Chuck's version of the split, completes shared pages through the
+  page cache helpers, and shares the persist-once rule with NFSD as
+  nfs_dio_sync_flags(), so an unsplit LOCALIO write now keeps its
+  stability flags as NFSD's does
+
+* Fri Oct 16 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-1]
+- Rebase all branches on kernel-6.12.113-0; no topic commit landed in
+  6.12.112 or 6.12.113, and none needed changing
+- redhat/configs: enable CONFIG_ARM64_ERRATUM_3821522, new in 6.12.113, as
+  every other arm64 erratum workaround is
+
 * Fri Oct 16 2026 Mike Snitzer <snitzer@kernel.org> [6.12.113-0]
 - Linux v6.12.113
 
