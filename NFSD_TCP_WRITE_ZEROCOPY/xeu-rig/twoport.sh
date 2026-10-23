@@ -53,7 +53,7 @@
 #   SPARE=<bytes>    svc_tcp_spare_bytes_max, the pages sockets keep for exchange (0: none)
 #   REFILL=<n>       xeu's rx_refill_thresh, the empty RX slots at which a poll refills
 #                    a ring (settled: 8; the driver's default 32); read every poll
-#   SKB_DEFER_MAX=<n> net.core.skb_defer_max for the run (settled: 128; 0 frees a
+#   SKB_DEFER_MAX=<n> net.core.skb_defer_max for the run (settled: 0 since 23 October; 0 frees a
 #                    consumed skb where it was consumed, not on its ring's CPU)
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
