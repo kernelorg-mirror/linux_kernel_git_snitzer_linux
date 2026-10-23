@@ -31,6 +31,7 @@
 #   cell   a loan sweep's cell on port a: its plan line sets the rings, the
 #          held buffer and the budget, passed as EXP_ENTRIES_A, EXP_RCVBUF,
 #          EXP_BUDGET, EXP_BUDGET_RESERVE and EXP_LINGER
+# EXP_SKB_DEFER_MAX holds net.core.skb_defer_max to a run's SKB_DEFER_MAX=.
 # EXP_REFILL holds xeu's rx_refill_thresh to a run's REFILL= instead of 8,
 # and EXP_XEU_<parameter> (exported) holds any xeu parameter to a value, for
 # a host whose xeu was loaded off the setting on purpose (rx_ip_align=0).
@@ -322,6 +323,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "${ENTRIES[b]}" = "${SETTLED[entries_b]}" ] || OFF="$OFF rings_b=${ENTRIES[b]}"
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
+	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
 	local xk xv
 	for xk in "${!XEU[@]}"; do
 		xv=EXP_XEU_$xk
@@ -346,11 +348,12 @@ audit_nfsd() {
 }
 
 audit_sysctl() {
-	local k
+	local k w
 	local t; t=$(tuned-adm active 2>/dev/null | sed -n 's/^Current active profile: //p')
 	want "tuned profile" "${t:-none}" "${TUNED:-none}"
 	for k in $(printf '%s\n' "${!SYSCTL[@]}" | sort); do
-		want "sysctl $k" "$(sysctl -n $k 2>/dev/null | tr -s ' \t' '  ')" "${SYSCTL[$k]}"
+		w=${SYSCTL[$k]}; [ $k = net.core.skb_defer_max ] && w=${EXP_SKB_DEFER_MAX:-$w}
+		want "sysctl $k" "$(sysctl -n $k 2>/dev/null | tr -s ' \t' '  ')" "$w"
 	done
 }
 
