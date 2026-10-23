@@ -26,6 +26,7 @@
 #include <linux/xattr.h>
 #include <linux/jhash.h>
 #include <linux/pagemap.h>
+#include <linux/nfs_dio.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/exportfs.h>
@@ -1278,225 +1279,65 @@ static int wait_for_concurrent_writes(struct file *file)
 	return err;
 }
 
-struct nfsd_write_dio_seg {
-	struct iov_iter			iter;
-	int				flags;
-	bool				claim;		/* completes shared pages */
-};
-
-static unsigned long
-iov_iter_bvec_offset(const struct iov_iter *iter)
+/* Report nfs_dio_split()'s decision on a WRITE: one event per outcome */
+static void nfsd_trace_write_dio(struct svc_rqst *rqstp, struct svc_fh *fhp,
+				 loff_t offset, unsigned long total,
+				 const struct nfs_dio_policy *policy,
+				 const struct nfs_dio_split *split)
 {
-	return (unsigned long)(iter->bvec->bv_offset + iter->iov_offset);
-}
+	u32 oa = policy->offset_align, ma = policy->mem_align;
 
-static void
-nfsd_write_dio_seg_init(struct nfsd_write_dio_seg *segment,
-			struct bio_vec *bvec, unsigned int nvecs,
-			unsigned long total, size_t start, size_t len,
-			struct kiocb *iocb)
-{
-	iov_iter_bvec(&segment->iter, ITER_SOURCE, bvec, nvecs, total);
-	if (start)
-		iov_iter_advance(&segment->iter, start);
-	iov_iter_truncate(&segment->iter, len);
-	segment->flags = iocb->ki_flags;
-	segment->claim = false;
-}
-
-/* The shared pages a segment completes, and how much of it was written. */
-struct nfsd_write_dio_hold {
-	loff_t	first, last;
-	size_t	first_len;	/* the segment's bytes in its first unit */
-	bool	complete_first, complete_last;
-	size_t	written;
-};
-
-/*
- * A page that a buffered DONTCACHE segment covers only partly is shared with
- * the neighbouring WRITE.  The page cache keeps it, unmarked, for the write
- * that completes it; the segment is issued IOCB_DONTCACHE_DEFER so that this
- * WRITE, not the page cache, marks it, once the whole WRITE, its fsync
- * included, is complete.  Ask whether the neighbour has already written its
- * part immediately before writing @seg: asking earlier gives the neighbour
- * time to write its part and find this WRITE's part missing.
- */
-static void
-nfsd_write_dio_seg_hold(struct file *file, const struct nfsd_write_dio_seg *seg,
-			loff_t pos, size_t len, struct nfsd_write_dio_hold *hold)
-{
-	struct address_space *mapping = file->f_mapping;
-
-	hold->first = pos;
-	hold->last = pos + len - 1;
-	hold->complete_first = false;
-	hold->complete_last = false;
-	hold->written = 0;
-	if (seg->claim && len) {
-		/*
-		 * The unit two writes share is the smallest folio the mapping
-		 * allows: a page, or a block where the block is larger.  Only
-		 * a unit the segment covers partly is shared.
-		 */
-		size_t unit = mapping_min_folio_nrpages(mapping) << PAGE_SHIFT;
-		loff_t mask = ~(loff_t)(unit - 1);
-		bool one_unit = (hold->first & mask) == (hold->last & mask);
-		bool head = hold->first & (unit - 1);
-		bool tail = (hold->last + 1) & (unit - 1);
-
-		hold->first_len = min_t(size_t, len,
-					unit - (hold->first & (unit - 1)));
-		if (head || (one_unit && tail))
-			hold->complete_first =
-				filemap_dontcache_edge_completes(mapping, hold->first);
-		if (!one_unit && tail)
-			hold->complete_last =
-				filemap_dontcache_edge_completes(mapping, hold->last);
+	switch (split->disposition) {
+	case NFS_DIO_DIRECT:
+		trace_nfsd_write_dio_direct(rqstp, fhp, offset, total, oa, ma,
+					    split->mem_offset, split->prefix,
+					    split->middle, split->suffix);
+		break;
+	case NFS_DIO_NO_ALIGNMENT:
+		trace_nfsd_write_dio_no_alignment(rqstp, fhp, offset, total,
+						  oa, ma, split->mem_offset,
+						  split->prefix, split->middle,
+						  split->suffix);
+		break;
+	case NFS_DIO_TOO_SMALL:
+		trace_nfsd_write_dio_too_small(rqstp, fhp, offset, total, oa,
+					       ma, split->mem_offset,
+					       split->prefix, split->middle,
+					       split->suffix);
+		break;
+	case NFS_DIO_NO_MIDDLE:
+		trace_nfsd_write_dio_no_middle(rqstp, fhp, offset, total, oa,
+					       ma, split->mem_offset,
+					       split->prefix, split->middle,
+					       split->suffix);
+		break;
+	case NFS_DIO_MEM_MISALIGNED:
+		trace_nfsd_write_dio_mem_misaligned(rqstp, fhp, offset, total,
+						    oa, ma, split->mem_offset,
+						    split->prefix,
+						    split->middle,
+						    split->suffix);
+		break;
 	}
-}
-
-/* Drop the shared pages this WRITE was the second of two to write. */
-static void
-nfsd_write_dio_seg_release(struct file *file,
-			   const struct nfsd_write_dio_hold *hold)
-{
-	struct address_space *mapping = file->f_mapping;
-
-	/* A short write may have stopped inside the first unit. */
-	if (hold->complete_first && hold->written >= hold->first_len)
-		filemap_dontcache_edge_complete(mapping, hold->first);
-	/* A short write did not reach the last unit. */
-	if (hold->complete_last &&
-	    hold->written == hold->last - hold->first + 1)
-		filemap_dontcache_edge_complete(mapping, hold->last);
 }
 
 static unsigned int
 nfsd_write_dio_iters_init(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			  struct nfsd_file *nf, struct bio_vec *bvec,
 			  unsigned int nvecs, struct kiocb *iocb,
-			  unsigned long total,
-			  struct nfsd_write_dio_seg segments[3])
+			  unsigned long total, struct nfs_dio_split *split)
 {
-	u32 offset_align = nf->nf_dio_offset_align;
-	loff_t prefix_end, orig_end, middle_end;
-	u32 mem_align = nf->nf_dio_mem_align;
-	u32 mem_offset = nvecs ? bvec->bv_offset : 0;
-	size_t prefix, middle, suffix;
-	loff_t offset = iocb->ki_pos;
-	unsigned int dontcache_flags = 0;
-	unsigned int buffered_flags;
-	unsigned int nsegs = 0;
-	u32 cut;
+	struct nfs_dio_policy policy = {
+		.mem_align = nf->nf_dio_mem_align,
+		.offset_align = nf->nf_dio_offset_align,
+		.min_middle_bytes = nfsd_direct_misaligned_min_bytes,
+		.dontcache = nfsd_direct_misaligned_dontcache,
+	};
 
-	if (nf->nf_file->f_op->fop_flags & FOP_DONTCACHE)
-		dontcache_flags = IOCB_DONTCACHE;
-	/* NFSD marks their shared pages itself, see nfsd_write_dio_seg_hold() */
-	buffered_flags = nfsd_direct_misaligned_dontcache && dontcache_flags ?
-			 dontcache_flags | IOCB_DONTCACHE_DEFER : 0;
-
-	/*
-	 * Check if direct I/O is feasible for this write request.
-	 * If alignments are not available, the write is too small,
-	 * or no alignment can be found, fall back to buffered I/O.
-	 */
-	if (unlikely(!mem_align || !offset_align)) {
-		trace_nfsd_write_dio_no_alignment(rqstp, fhp, offset, total,
-						  offset_align, mem_align,
-						  mem_offset, 0, 0, 0);
-		goto no_dio;
-	}
-	if (unlikely(total < max(offset_align, mem_align))) {
-		trace_nfsd_write_dio_too_small(rqstp, fhp, offset, total,
-					       offset_align, mem_align,
-					       mem_offset, 0, 0, 0);
-		goto no_dio;
-	}
-
-	orig_end = offset + total;
-
-	/*
-	 * The direct middle invalidates the page cache over its range, so it
-	 * must not share a folio with a buffered end.  An aligned end needs no
-	 * buffered segment; a misaligned one is cut on a boundary of the
-	 * smallest folio the mapping allows, a page or, where the block is
-	 * larger, a block, even where the offset alignment is finer.  A WRITE
-	 * may end at OFFSET_MAX, so the prefix is sized as a distance rather
-	 * than by rounding @offset up, which could wrap.
-	 */
-	cut = max3(offset_align, PAGE_SIZE,
-		   (mapping_min_folio_nrpages(nf->nf_file->f_mapping) <<
-		    PAGE_SHIFT));
-	prefix_end = offset;
-	if (!IS_ALIGNED(offset, offset_align))
-		prefix_end += min_t(loff_t, cut - (offset & (cut - 1)), total);
-	middle_end = orig_end;
-	if (!IS_ALIGNED(orig_end, offset_align))
-		middle_end = max(round_down(orig_end, cut), prefix_end);
-
-	prefix = prefix_end - offset;
-	middle = middle_end - prefix_end;
-	suffix = orig_end - middle_end;
-
-	if (!middle ||
-	    ((prefix || suffix) &&
-	     middle < nfsd_direct_misaligned_min_bytes)) {
-		trace_nfsd_write_dio_no_middle(rqstp, fhp, offset, total,
-					       offset_align, mem_align,
-					       mem_offset, prefix, middle,
-					       suffix);
-		goto no_dio;
-	}
-
-	if (prefix) {
-		nfsd_write_dio_seg_init(&segments[nsegs], bvec,
-					nvecs, total, 0, prefix, iocb);
-		segments[nsegs].flags |= buffered_flags;
-		segments[nsegs++].claim = !!buffered_flags;
-	}
-
-	nfsd_write_dio_seg_init(&segments[nsegs], bvec, nvecs,
-				total, prefix, middle, iocb);
-
-	/*
-	 * Check if the bvec iterator is aligned for direct I/O.
-	 *
-	 * bvecs generated from RPC receive buffers are contiguous: After
-	 * the first bvec, all subsequent bvecs start at bv_offset zero
-	 * (page-aligned). Therefore, only the first bvec is checked.
-	 */
-	mem_offset = iov_iter_bvec_offset(&segments[nsegs].iter);
-	if (mem_offset & (mem_align - 1)) {
-		trace_nfsd_write_dio_mem_misaligned(rqstp, fhp, offset, total,
-						    offset_align, mem_align,
-						    mem_offset, prefix, middle,
-						    suffix);
-		goto no_dio;
-	}
-	/*
-	 * IOCB_DONTCACHE matters only if the file system falls back to
-	 * buffered I/O (-ENOTBLK).
-	 */
-	segments[nsegs++].flags |= IOCB_DIRECT | dontcache_flags;
-	trace_nfsd_write_dio_direct(rqstp, fhp, offset, total, offset_align,
-				    mem_align, mem_offset, prefix, middle,
-				    suffix);
-
-	if (suffix) {
-		nfsd_write_dio_seg_init(&segments[nsegs], bvec, nvecs, total,
-					prefix + middle, suffix, iocb);
-		segments[nsegs].flags |= buffered_flags;
-		segments[nsegs++].claim = !!buffered_flags;
-	}
-	return nsegs;
-
-no_dio:
-	/* Issue the whole WRITE as a single buffered segment. */
-	nfsd_write_dio_seg_init(&segments[0], bvec, nvecs, total, 0,
-				total, iocb);
-	segments[0].flags |= buffered_flags;
-	segments[0].claim = !!buffered_flags;
-	return 1;
+	nfs_dio_split(nf->nf_file, &policy, ITER_SOURCE, bvec, nvecs,
+		      iocb->ki_pos, total, iocb->ki_flags, split);
+	nfsd_trace_write_dio(rqstp, fhp, iocb->ki_pos, total, &policy, split);
+	return split->nsegs;
 }
 
 static noinline_for_stack int
@@ -1504,47 +1345,45 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		  struct nfsd_file *nf, unsigned int nvecs,
 		  unsigned long *cnt, struct kiocb *kiocb)
 {
-	struct nfsd_write_dio_hold holds[3];
-	struct nfsd_write_dio_seg segments[3];
+	struct nfs_dio_seg_hold holds[NFS_DIO_MAX_SEGS];
+	size_t written[NFS_DIO_MAX_SEGS];
+	struct nfs_dio_split split;
 	struct file *file = nf->nf_file;
 	loff_t start = kiocb->ki_pos;
 	unsigned int nsegs, nheld = 0, i;
-	ssize_t host_err = 0;
 	int sync_flags;
+	ssize_t host_err = 0;
 	size_t expected;
 
 	nsegs = nfsd_write_dio_iters_init(rqstp, fhp, nf, rqstp->rq_bvec,
-					  nvecs, kiocb, *cnt, segments);
+					  nvecs, kiocb, *cnt, &split);
 
 	/*
 	 * Persist a split synchronous WRITE once, after all of its
 	 * segments. An unsplit WRITE keeps IOCB_DSYNC: its one segment,
 	 * direct or buffered, is already persisted exactly once.
 	 */
-	sync_flags = kiocb->ki_flags & (IOCB_DSYNC | IOCB_SYNC);
-	if (nsegs == 1)
-		sync_flags = 0;
+	sync_flags = nfs_dio_sync_flags(&split, kiocb->ki_flags);
 
 	*cnt = 0;
 	for (i = 0; i < nsegs; i++) {
-		kiocb->ki_flags = segments[i].flags & ~sync_flags;
-		trace_nfsd_write_direct(rqstp, fhp, kiocb->ki_pos,
-					segments[i].iter.count,
-					kiocb->ki_flags);
-		trace_nfsd_write_dontcache(rqstp, fhp, kiocb->ki_pos,
-					   segments[i].iter.count,
-					   kiocb->ki_flags);
-		trace_nfsd_write_vector(rqstp, fhp, kiocb->ki_pos,
-					segments[i].iter.count,
-					kiocb->ki_flags);
+		struct nfs_dio_seg *seg = &split.segs[i];
 
-		expected = iov_iter_count(&segments[i].iter);
-		nfsd_write_dio_seg_hold(file, &segments[i], kiocb->ki_pos,
-					expected, &holds[nheld]);
-		host_err = vfs_iocb_iter_write(file, kiocb, &segments[i].iter);
+		kiocb->ki_flags = seg->flags & ~sync_flags;
+		trace_nfsd_write_direct(rqstp, fhp, kiocb->ki_pos,
+					seg->iter.count, kiocb->ki_flags);
+		trace_nfsd_write_dontcache(rqstp, fhp, kiocb->ki_pos,
+					   seg->iter.count, kiocb->ki_flags);
+		trace_nfsd_write_vector(rqstp, fhp, kiocb->ki_pos,
+					seg->iter.count, kiocb->ki_flags);
+
+		expected = iov_iter_count(&seg->iter);
+		nfs_dio_seg_hold(file, seg, kiocb->ki_pos, expected,
+				 &holds[nheld]);
+		host_err = vfs_iocb_iter_write(file, kiocb, &seg->iter);
 		if (host_err < 0)
 			break;
-		holds[nheld++].written = host_err;
+		written[nheld++] = host_err;
 		*cnt += host_err;
 		if (host_err < (ssize_t)expected)
 			break;	/* partial write */
@@ -1562,7 +1401,7 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	 * simply dropped.
 	 */
 	for (i = 0; i < nheld; i++)
-		nfsd_write_dio_seg_release(file, &holds[i]);
+		nfs_dio_seg_release(file, &holds[i], written[i]);
 
 	return host_err < 0 ? host_err : 0;
 }
