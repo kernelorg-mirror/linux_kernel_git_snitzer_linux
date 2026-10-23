@@ -101,7 +101,7 @@ The A/B is `run18.sh`, in `/var/tmp/zc-run-logs/t2-tipkernel/`.
 - No fit was needed: every B run had more refusals than every A run (0.89-0.93 against 0.46-0.59). Refusals raise the rings' cost, so the fit could only make the gain larger.
 - Why B refuses more is not known. A guess: rings that empty sooner put more records on the connections at once, against the same 64-WRITE budget.
 
-**Copy mode** (one pair): the rings went from 67.9 to 63.4 µs a WRITE (-4.5 µs, -7%), and nfsd from 28.4% to 25.5% busy.
+**Copy mode** (one pair, run before the target was made loan mode alone): the rings went from 67.9 to 63.4 µs a WRITE (-4.5 µs, -7%), and nfsd from 28.4% to 25.5% busy.
 
 **The setting.** It is in `xeu-rig/settled.sh`:
 - apply loads `zc-notrack.nft` and deletes the leftover table while `podman ps -q` is empty;
@@ -115,5 +115,5 @@ tardis1 takes it at its next `./settled.sh apply`.
 ## The next rounds (Mike)
 
 - **02:** `svc_tcp_rx_refs_valid` checks only the counts in `svc_tcp_rx_exchange`. That needs a sunrpc reload.
-- **03:** `net.core.skb_defer_max` 0 against 128, for item 3 and page_pool's put on the ring.
+- **03:** `net.core.skb_defer_max` 0 against 128, for item 3 and page_pool's put on the ring, on the loan run alone.
 - **04:** measure how often a region-bound pool's ptr_ring is full when a page comes back. Only if that justifies it, add a knob for its size, which needs a kernel build and a boot.
