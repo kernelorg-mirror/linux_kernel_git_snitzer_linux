@@ -281,10 +281,21 @@ at a time:
     us net, and what makes the rings busier at the high end is the
     rest of the softirq.
 
-  The duplicates are nfsd's to fix, not the loan's: a wake that marks
-  the thread taken (or takes it off the idle list) before it calls
-  `wake_up_process()` would make them none. That is code in
-  `svc_pool_wake_idle_thread()`, and Mike's to decide.
+  The duplicates are nfsd's to fix, not the loan's. **Fixed at the tip
+  in `05583cdee426` "SUNRPC: Wake an idle service thread only once"
+  (Mike asked for it).** An `RQ_WAKING` bit, taken by
+  `test_and_set_bit()` before `wake_up_process()`, lets one caller wake
+  the thread. The others treat it as running. The thread clears the bit
+  when it goes idle and each time it goes back to sleep still on the
+  list. The bit is last in the `RQ_` enum, so nfsd's values do not move
+  and the fix goes in with sunrpc.ko alone. `build-sunrpc.sh` builds it
+  for build 494, clean, with no export changed. It has not yet run: it
+  needs `swap-sunrpc.sh`, which drops every client's connections.
+
+  To show it works, run one untraced loan run beside the 17.64 wakes and
+  8.35 voluntary switches a WRITE of cs-loan64-1 (`run12.sh`). Counted
+  wakes should fall to about the switches, and the run should pass
+  `run-kunit.sh` and `settled.sh`.
 
   Not yet done: a test of the loop itself, by giving the rings room
   (more rings, or the dropped `svc_tcp_rx_keep`, which cut wakes). The
