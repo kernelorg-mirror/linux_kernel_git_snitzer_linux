@@ -1,3 +1,17 @@
+* Fri Oct 23 2026 Mike Snitzer <snitzer@kernel.org> [7.3-9]
+- Update nfsd-testing-canary-dontcache to v9 of the series: a folio is
+  counted in, or taken off, WB_DONTCACHE_DIRTY only when both PG_dirty
+  and its dirty tag are set, since __folio_cancel_dirty() uncounts a
+  folio and clears PG_dirty but leaves the tag; NFSD's shared edge is the
+  smallest folio the mapping allows, a page or a block, and a short write
+  that stopped inside a segment's first unit no longer completes that
+  edge
+- Rebase nfsd-testing-canary-dontcache-LOCALIO on it: nfs_dio_seg_hold()
+  and nfs_dio_seg_release() take the same unit and the same short-write
+  rule, so LOCALIO's shared edges match NFSD's
+- Redo the reduce-i_lock-contention-LOCALIO merge on the rebased LOCALIO
+  topic
+
 * Thu Oct 22 2026 Mike Snitzer <snitzer@kernel.org> [7.3-8]
 - Rename nfsd-next to nfsd-7.4: it carries all of Chuck Lever's
   nfsd-7.4 tag, his v7.4 merge window pull, that the baseline lacks
