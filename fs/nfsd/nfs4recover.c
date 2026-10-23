@@ -229,7 +229,7 @@ out_put:
 out_unlock:
 	inode_unlock(d_inode(dir));
 	if (status == 0) {
-		if (test_bit(NFSD_NET_IN_GRACE, &nn->flags))
+		if (nn->in_grace)
 			__nfsd4_create_reclaim_record_grace(clp, dname, nn);
 		vfs_fsync(nn->rec_file, 0);
 	} else {
@@ -391,7 +391,7 @@ nfsd4_remove_clid_dir(struct nfs4_client *clp)
 	nfs4_reset_creds(original_cred);
 	if (status == 0) {
 		vfs_fsync(nn->rec_file, 0);
-		if (test_bit(NFSD_NET_IN_GRACE, &nn->flags))
+		if (nn->in_grace)
 			__nfsd4_remove_reclaim_record_grace(dname,
 					HEXDIR_LEN, nn);
 	}
@@ -449,7 +449,7 @@ nfsd4_recdir_purge_old(struct nfsd_net *nn)
 {
 	int status;
 
-	clear_bit(NFSD_NET_IN_GRACE, &nn->flags);
+	nn->in_grace = false;
 	if (!nn->rec_file)
 		return;
 	status = mnt_want_write_file(nn->rec_file);
@@ -531,7 +531,7 @@ nfsd4_init_recdir(struct net *net)
 
 	nfs4_reset_creds(original_cred);
 	if (!status)
-		set_bit(NFSD_NET_IN_GRACE, &nn->flags);
+		nn->in_grace = true;
 	return status;
 }
 
@@ -1510,7 +1510,7 @@ nfs4_cld_state_init(struct net *net)
 		INIT_LIST_HEAD(&nn->reclaim_str_hashtbl[i]);
 	nn->reclaim_str_hashtbl_size = 0;
 	init_rwsem(&nn->reclaim_str_hashtbl_lock);
-	set_bit(NFSD_NET_TRACK_RECLAIM_COMPLETES, &nn->flags);
+	nn->track_reclaim_completes = true;
 	atomic_set(&nn->nr_reclaim_complete, 0);
 
 	return 0;
@@ -1521,7 +1521,7 @@ nfs4_cld_state_shutdown(struct net *net)
 {
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 
-	clear_bit(NFSD_NET_TRACK_RECLAIM_COMPLETES, &nn->flags);
+	nn->track_reclaim_completes = false;
 	kfree(nn->reclaim_str_hashtbl);
 }
 
