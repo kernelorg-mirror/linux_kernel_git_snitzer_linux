@@ -33,8 +33,9 @@ if [ "$n" -gt 0 ] && [ -z "${DROP_CLIENTS:-}" ]; then
 	echo "$n NFS connections are up; DROP_CLIENTS=1 to drop them"; exit 1
 fi
 
-was=$(for u in $UNITS; do systemctl is-active -q $u && echo $u; done)
-echo "running sunrpc: $(cat /sys/module/sunrpc/srcversion); active: "$was
+# one line, spaces between: start() matches " $u " in it
+was=$(for u in $UNITS; do systemctl is-active -q $u && echo $u; done | paste -sd ' ')
+echo "running sunrpc: $(cat /sys/module/sunrpc/srcversion); active: $was"
 
 start() {
 	systemctl start proc-fs-nfsd.mount var-lib-nfs-rpc_pipefs.mount
