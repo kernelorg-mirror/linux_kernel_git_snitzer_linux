@@ -126,52 +126,57 @@ at a time:
 - **The lighter trace leaves the rings where an untraced run has them,
   and still gives no pair** (`run6.sh`, `light.bt`, both in
   `$L/t2-tipkernel/`). Every probe fires in an nfsd thread: the visit's
-  entry, with what the socket holds then, the visit and short-read
-  tracepoints, the credit's admissions and waits, and nfsd's WRITEs.
-  Wakes come from `pool_stats` as in an untraced run, and no probe fired
-  on CPUs 0 to 7. Six runs landed in the middle of the curve, where
-  loan64-5 and -6 are, none at either end:
+  entry, the visit and short-read tracepoints, the credit's admissions
+  and waits, and nfsd's WRITEs. Wakes come from `pool_stats` as in an
+  untraced run, and no probe fired on CPUs 0 to 7. Six runs landed in
+  the middle of the curve, where loan64-5 and -6 are, none at either
+  end:
 
-  | run | rings' softirq | woken a WRITE | refused a loaned WRITE | credit waits a WRITE | visits a WRITE | calls that find the socket empty, a WRITE | GB/s |
-  |---|---|---|---|---|---|---|---|
-  | lt-loan64-1 | 89.6% | 16.00 | 0.48 | 0.47 | 13.40 | 13.90 | 40.29 |
-  | lt-loan64-4 | 89.5% | 16.03 | 0.44 | 0.36 | 13.66 | 14.17 | 40.17 |
-  | lt-loan64-3 | 89.6% | 16.20 | 0.43 | 0.38 | 13.57 | 14.09 | 40.28 |
-  | lt-loan64-6 | 87.9% | 16.27 | 0.27 | 0.24 | 13.72 | 14.25 | 40.19 |
-  | lt-loan64-5 | 88.9% | 16.60 | 0.26 | 0.25 | 13.97 | 14.49 | 40.19 |
-  | lt-loan64-2 | 90.6% | 17.08 | 0.09 | 0.09 | 14.29 | 14.84 | 39.90 |
+  | run | rings' softirq | woken a WRITE | refused a loaned WRITE | credit waits a WRITE | visits a WRITE | GB/s |
+  |---|---|---|---|---|---|---|
+  | lt-loan64-1 | 89.6% | 16.00 | 0.48 | 0.47 | 13.40 | 40.29 |
+  | lt-loan64-4 | 89.5% | 16.03 | 0.44 | 0.36 | 13.66 | 40.17 |
+  | lt-loan64-3 | 89.6% | 16.20 | 0.43 | 0.38 | 13.57 | 40.28 |
+  | lt-loan64-6 | 87.9% | 16.27 | 0.27 | 0.24 | 13.72 | 40.19 |
+  | lt-loan64-5 | 88.9% | 16.60 | 0.26 | 0.25 | 13.97 | 40.19 |
+  | lt-loan64-2 | 90.6% | 17.08 | 0.09 | 0.09 | 14.29 | 39.90 |
 
-  Two things come of it:
+  **Within this band, wakes follow the credit, not the rings.** The six
+  runs' softirq lies within 3 points and does not order them, but credit
+  waits do, without exception. Fewer waits give more visits, as the
+  bullet above has it. lt-loan64-2, with almost no waits, is nearly at
+  the saturated end's wakes at 90.6%. So the rings may be where the cost
+  shows rather than what sets it. What sets how often a run waits for
+  credit is still open.
 
-  - **Within this band, wakes follow the credit, not the rings.** The
-    six runs' softirq lies within 3 points and does not order them, but
-    credit waits do, without exception. Fewer waits give more visits, as
-    the bullet above has it. lt-loan64-2, with almost no waits, is
-    nearly at the saturated end's wakes at 90.6%. So the rings may be
-    where the cost shows rather than what sets it. What sets how often
-    a run waits for credit is still open.
-  - **About half of nfsd's reads find the socket empty.** At the
-    entry of `svc_tcp_recvfrom()` the socket's `sk_rmem_alloc` is 0 in
-    52% of calls in every run: 13.9 to 14.8 a WRITE, against 16 to 17
-    wakes. Those calls do not fire `svcsock_tcp_recv`, which is why the
-    calls (26.8 to 28.6 a WRITE) are about twice the visits. The rest
-    find mostly 64 to 128 KiB, the same as at `svc_data_ready()` in
-    `pair.bt`, and a visit takes 32 to 64 KiB most often. A thread that
-    finds nothing was most likely woken for data that the thread before
-    it had already read, before it put the transport back: XPT_DATA is
-    set again by every skb that arrives during a visit. Nearly one wake
-    in every two is spent this way. That is the cost to cut, whatever
-    decides where a run lands.
+- **The empty reads `light.bt` showed were the probe's, not nfsd's.**
+  `light.bt` put a kprobe and a kretprobe on `svc_tcp_recvfrom()`. Its
+  entry fired about twice per call (56.5M against 28.2M
+  `svcsock_tcp_recv`), and the extra half read `sk_rmem_alloc` as 0,
+  most likely a failed read. The kretprobe recorded nothing, here and
+  in `pair.bt`. `probe.bt` (`run7.sh`, pr-loan64-1, 15 s, 40.21 GB/s,
+  rings at 88.2%) counts the function with a kprobe, an fentry and an
+  fexit together, and all three agree with the tracepoint: 18,435,645
+  calls, every one from `svc_recv()`. Per WRITE:
 
-  `light.bt`'s visit time (a kretprobe on `svc_tcp_recvfrom()`)
-  recorded nothing, as in `pair.bt`, so there is no hold time.
+  | measure | per WRITE |
+  |---|---|
+  | calls (visits) | 13.88 |
+  | that return with no record (short) | 12.76 |
+  | that find the socket empty at entry | 0.57 (4.1% of calls) |
+  | threads woken (`pool_stats`, twoport.sh's window) | 15.63 |
+
+  A visit that finds nothing is rare. What the wakes buy is the short
+  visits: a thread takes the 32 to 64 KiB that has come and gives the
+  transport back. That is 12 to 13 handoffs for a 1 MiB record. About
+  1.7 wakes a WRITE more than calls suggests some woken threads find no
+  transport at all, but the wakes are counted over twoport.sh's window
+  and the calls over the whole trace, so that gap is an estimate. To
+  trace a visit's length, use an fexit, not a kretprobe.
 
   Not yet done: a test of the loop itself, by giving the rings room
   (more rings, or the dropped `svc_tcp_rx_keep`, which cut wakes). The
-  rings are the settled setting's, so it is Mike's to decide. The empty
-  reads are now the more direct thing to look at: a wake that finds a
-  transport's data already read could be skipped, if the transport
-  were not woken again for data that came in while it was being read.
+  rings are the settled setting's, so it is Mike's to decide.
 - At the end the hold factors are 107 (default) and 108 (loans).
 
 # Build 494: the kernel from the tip, no regression (22 October, evening) — read this first
