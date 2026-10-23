@@ -1,3 +1,58 @@
+# Build 494 on tardis2: no regression on the DPRP5s (23 October)
+
+tardis2 booted `7.3.0-7.hs.494.loanpage_pool.el10.aarch64+16k`, the same
+tree as tardis1's build 494 below. Logs, the driver (`run1.sh`) and
+`results.tsv` are in `$L/t2-tipkernel/` on tardis2.
+
+**The first checks passed:** the kernel's own sunrpc (srcversion
+`C78A9E1FDAC3084874BA63F`, as on tardis1), nothing in `updates/`,
+`page_pool_rx_region_key` and `svc_tcp_rx_loans` in kallsyms, the 494
+`modules-internal` and `devel` packages, `arm_cmn` loaded at boot. No
+NFS client was connected. The drives as on 21 October (nvme0 to nvme3
+the WD_BLACKs, nvme4 to nvme7 the DPRP5s). `bringup.sh 32768 256`:
+`alloc_fail` 0. `settled.sh apply` ended in "the settled setting" before
+and after the suites and the runs.
+
+- **tardis2's `/etc/modprobe.d/sunrpc.conf` no longer sets
+  `svc_tcp_rx_loan_pages=Y`.** The boot logged "unknown parameter
+  ... ignored". The file before is `/root/sunrpc.conf.pre-494-2026-10-23`.
+- **Another user's VM runs off `/hs/nvme0`** (qemu-kvm with an
+  `ofe-6.0.0` image from `hke.git`, started about 9 minutes after boot).
+  It was left alone, and the runs used only the DPRP5s. It sat idle during them.
+  Because of it, nvme0 has two mounts (the boot's, `relatime`, and
+  `noatime` on top).
+
+**KUnit, from the package:** `sunrpc-xdr-bvec` 7, `sunrpc-svcsock-rx`
+50, `nfsd-receive-bvec` 7, `nfsd4-receive-bvec` 10. No failure, no
+skip. (`run-kunit.sh` put the server back stopped, as it was found, so
+its last check failed. The fix was `systemctl start nfs-server` and
+`settled.sh apply`.)
+
+**Copy and loan at 64 WRITEs, two rounds** (port a onto the four
+DPRP5s, `WARM=10 RUNTIME=30`, each run after an fstrim and 120 s of
+rest, `memcost-log.sh` beside each, 750 KiB, every window about
+349 KiB), against 491's `run17.sh` and `run19.sh` at 750 KiB, a WRITE
+at a time:
+
+| run | GB/s | woken | context switches | nfsd CPUs busy | FIFO drops, ring drops, client retransmits | bytes through memory a byte | 491 at 750 KiB |
+|---|---|---|---|---|---|---|---|
+| copy-1 | 40.81 | 9.91 | 12.78 | 25% | 0, 0, 5 | 2.82 | 40.80 to 40.81, woken 10.06 to 10.52, 26 to 27%, 2.99 |
+| copy-2 | 40.81 | 11.38 | 14.18 | 27% | 0, 0, 2 | 2.91 | |
+| loan64-1 | 40.48 | 14.39 | 15.75 | 13% | 0, 0, 6 | 1.92 | 40.30 to 40.41, woken 14.32 to 15.90, 13 to 14%, 1.89 |
+| loan64-2 | 40.08 | 18.08 | 18.26 | 15% | 0, 0, 11 | 1.84 | |
+
+- **No regression.** Every run is the drives' (10.0 to 10.2 GB/s each,
+  99 to 100% busy, none stepped down), and every WRITE went direct.
+- **Copy mode loaned nothing:** both budgets' `admitted` stayed at the
+  suites' 2 and 3096 across each copy run.
+- **The loan path admits:** 1,542,640 and 1,528,448 records with 0
+  overrun. The region in use was at most 6,497 and 6,513 pages.
+- **loan64-2 differs from loan64-1:** refusals fell to 0.17 a loaned
+  WRITE against 0.96 (0.92 to 1.04 with the gating on 491), but wakes
+  rose to 18.1 against 14.4, with the rate 1% lower and nfsd 2 points
+  higher. Not looked into. It is one run.
+- At the end the hold factors are 107 (default) and 108 (loans).
+
 # Build 494: the kernel from the tip, no regression (22 October, evening) — read this first
 
 tardis1 booted `7.3.0-7.hs.494.loanpage_pool.el9.aarch64+16k`, built
