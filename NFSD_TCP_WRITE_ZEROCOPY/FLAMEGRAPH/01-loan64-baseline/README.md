@@ -36,7 +36,7 @@ What can be named and changed, most costly first:
 | 1 | page_pool's put and get of the region's pages | 13.8 | 15.0 | the loan (page_pool region) | `napi_pp_put_page` 7.35 self, `page_pool_alloc_frag` 6.48 with what it calls; 126 pages a WRITE |
 | 2 | netfilter: conntrack on every packet | 9.0 | 9.8 | the host | podman's `netavark` NAT table (below) |
 | 3 | deferred skb frees flushed on the ring | 9.1 | 9.9 | the stack | `skb_defer_free_flush`: skbs nfsd consumed come back to their ring CPU to be freed (`net.core.skb_defer_max=128`, settled) |
-| 4 | transmit completions | 7.9 | 8.6 | the stack, the driver | `napi_consume_skb` under `xeu_tx_poll`: the replies and ACKs |
+| 4 | ~~transmit completions~~ part of item 3 | (7.9) | (8.6) | | **Corrected in round 05:** `napi_consume_skb` is called 99.9% from `skb_defer_free_flush`, so it is item 3 counted again. Transmit completions run on CPUs 1, 3, 5 and 7, outside this ranking |
 | 5 | `svc_data_ready` | 7.7 | 8.4 | sunrpc | `svc_xprt_enqueue` 5.5, of which `svc_pool_wake_idle_thread` 3.3 |
 | 6 | `eth_type_trans` | 6.8 | 7.3 | the stack | the first read of each frame's header, so a cache miss on what the card wrote |
 | 7 | `enable_irq` | 4.8 | 5.2 | the xeu driver | the driver re-arms its interrupt after each poll through the irq core: the descriptor lock (`mtree_load`, `__irq_get_desc_lock`) and the GIC |

@@ -449,8 +449,10 @@ are for Xsight, with the numbers:
   (7.3% of the rings).**
   - 85% of `eth_type_trans` is one stall: the load of the Ethernet
     destination at `eth_type_trans+0x64` (`ldr x1, [x3, x1]`), the first
-    touch of a line the card wrote. That is about 42 ns a frame, at
-    about 135 frames a WRITE.
+    touch of a line the card wrote. The cost is given a WRITE, not a
+    frame: xeu's `rx_packets` counts 41.7 a 1 MiB WRITE, more bytes than
+    a frame at MTU 7792 holds, so how many frames a WRITE takes is not
+    known from it.
   - xeu builds the skb (`napi_build_skb`) and calls `eth_type_trans`
     with no prefetch.
   - mlx5, ice and others prefetch a frame's first lines

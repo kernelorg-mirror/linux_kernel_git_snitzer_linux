@@ -19,8 +19,12 @@ Each round is a directory here, numbered in order:
 | [01-loan64-baseline](01-loan64-baseline/README.md) | one-port loan64, with the one-wake fix: rings 92.0 us a WRITE, nfsd 184.1 | page_pool's put and get of the region's pages (13.8 us); conntrack from podman's unused netavark table (9.0 on the rings, 9.4 on nfsd) | conntrack: the leftover table deleted and port 2049 untracked, in settled.sh | kept: rings 92.6 to 78.7 us a loaned WRITE (-15%), copy 67.9 to 63.4 (-7%) |
 | [02-refs-valid](02-refs-valid/README.md) | the same, with round 01 | `svc_tcp_rx_refs_valid` walked the record on each of 22 hand-offs a WRITE (7.05 us on nfsd) | `49f0fc4564ec`: the exchange checks only counts | kept on the profile: refs_valid 7.05 to 0.90, the exchange 7.52 to 3.10 us on nfsd; the A/B (mpstat) cannot resolve it |
 | [03-skb-defer](03-skb-defer/README.md) | the same, with round 02 | deferred skb frees on the ring (8.85 us), `napi_pp_put_page` a remote line | `net.core.skb_defer_max` 0, in settled.sh | kept: rings 80.0 to 68.0 us a loaned WRITE (-15%), nfsd 167.5 to 159.8 |
-| 04 | | the region pools' 256-page stack overflows: 7% of pages back to the region, about 5 us a WRITE | a knob for its size (a kernel build and a boot) | |
-| 05 | | `svc_data_ready`: the `xpt_flags` line, two timestamps | read `XPT_DATA` before setting it; stamp only while tracing | |
+| 04 | | the region pools' 256-page stack overflows: 7% of pages back to the region, about 5 us a WRITE | `dc23eac70f34`: `page_pool.rx_region_stack` | waits for the next kernel build (Mike) |
+| [05-data-ready](05-data-ready/README.md) | the same, with round 03 | `svc_data_ready`: the `xpt_flags` line, two clock reads, a store into another thread's `svc_rqst` | `eff5f16d4f30`, `0f0ed4159a12` | kept: rings 68.4 to 65.0 us a loaned WRITE (-5%), nfsd 159.7 to 156.4 |
+| 06 | | a WRITE taken up 12 times: wakes, hand-offs, ACKs (about 50 us on nfsd) | `c8cf27841351`: a low-water mark while a loaned record is incomplete | |
+| 07 | | half of each ACK and reply is the qdisc (fq_codel, its lock) | the server's qdisc `pfifo_fast` | |
+| 08 | | the `zc_notrack` chains cost 3-4 us a WRITE with no conntrack to skip | load `zc_notrack` only while a table needs conntrack | |
+| 09 | | per-skb costs at about 19 GRO skbs a WRITE | BIG TCP: `gro_ipv4_max_size` 256 KB | |
 
 ## Why CPU a WRITE, not GB/s
 
@@ -103,6 +107,13 @@ tardis1's included: that is Mike's to ask for, each time.
   buildid-list -i perf.data`); a later reload leaves a different
   `sunrpc.ko` in `updates/`. The kernel's own text is in `/proc/kcore`
   (no vmlinux with symbols on tardis2).
+- A function under two parents is counted once: read its callers before
+  adding it to a ranking (round 01 counted `napi_consume_skb` under
+  `skb_defer_free_flush` as a second item).
+- A driver's counters are not wire frames until shown to be: count with
+  TCP's own (`nstat TcpInSegs TcpOutSegs`).
+- Per-run counters of the port (interrupts, page_pool) start again when
+  the port opens: read them after the run, not as a difference.
 - Name the change by what it saves a WRITE, measured, and say what it did
   not change (the rate, nfsd's sleeps).
 
