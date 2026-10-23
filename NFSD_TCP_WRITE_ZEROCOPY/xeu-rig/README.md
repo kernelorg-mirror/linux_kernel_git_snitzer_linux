@@ -47,8 +47,8 @@ at a time:
   suites' 2 and 3096 across each copy run.
 - **The loan path admits:** 1,542,640 and 1,528,448 records with 0
   overrun. The region in use was at most 6,497 and 6,513 pages.
-- **loan64-1 is the odd run, not loan64-2** (`run2.sh`, `run3.sh`).
-  Every later loan run on this load looks like loan64-2:
+- **Loan runs spread from run to run in wakes a WRITE** (`run2.sh` to
+  `run4.sh`). loan64-1 and loan64-2 are the two ends of the spread:
 
   | run | GB/s | refused a loaned WRITE | woken a WRITE | rings of a busy | unread on a socket (`ss`, mean) |
   |---|---|---|---|---|---|
@@ -57,11 +57,12 @@ at a time:
   | loan64-3 | 40.03 | 0.15 | 18.27 | 53% | 34 KiB |
   | loan64-4 | 40.15 | 0.20 | 17.81 | 50% | 21 KiB |
   | loan56-1 (budget 7190) | 39.87 | 0.25 | 17.75 | 53% | 9 KiB |
+  | loan64-5, the first after a fresh sunrpc load | 40.35 | 0.62 | 16.47 | 49% | 97 KiB |
+  | loan64-6 | 40.34 | 0.56 | 16.59 | 51% | 55 KiB |
   | 491, 750 KiB (three runs) | 40.30 to 40.41 | 0.69 to 0.97 | 14.32 to 15.90 | 40 to 42% | |
 
   loan60-1 is not valid (15,475 ring drops, 16,029 client retransmits).
-  On 491 every loan run at 750 KiB looked like loan64-1; on 494 only
-  the first did. Where records wait for credit, sockets stay deep and a
+  Where records wait for credit, sockets stay deep and a
   record takes few visits. Where they do not, sockets drain, records
   take more visits, and wakes follow visits (21 October, "The receive
   window"). The ring CPUs carry the extra wakes, since `svc_data_ready()`
@@ -74,15 +75,23 @@ at a time:
   - **The code since 491's sunrpc** (`f84c0ee96abf`, `fb352b960445`,
     `428a1051e6cb`): reading the diffs, none changes admission, the
     charge or the learning while a budget is above 0.
+  - **The first loan run after a load** (`run4.sh`: `SUNRPC_KO=none
+    ./swap-sunrpc.sh`, every counter and factor at 0, then loan64
+    twice): loan64-5 and loan64-6 match each other and sit between
+    loan64-1 and loan64-2. A run's place in the spread does not follow
+    from what the budget has learned. Both learned the same factors,
+    `cost_factor` 182 to 194 (sampled each second, `<tag>-bstats.txt`;
+    it moves between 168 and 205 within a run) and `hold_factor` 107.
+  - **The flows' placement**: every run got 4 flows on each ring
+    (`place-a.txt`), and the expected shares do not follow the wakes
+    (loan64-3, at 26/26/24/24%, woke 18.3; 491's `mb-loan64-750k`, at
+    25/26/25/24%, woke 15.9).
 
-  The learned `cost_factor` is not steady. Sampled each second
-  (`loan60-1-bstats.txt`, `loan56-1-bstats.txt`), it moves between 168
-  and 205 within a run, and it was 191 between runs. Before loan64-1 it
-  was 0, so its first records were charged their whole capacity. The
-  next step is a fresh sunrpc load (`SUNRPC_KO=none ./swap-sunrpc.sh`,
-  Mike's to ask for), then loan64 twice with the sampler. If the first
-  run again looks like 491's and the second like loan64-2, the
-  difference lies in what the budget learns.
+  So far it is a spread from run to run: 14.4 to 18.3 wakes a WRITE on
+  494 over eight runs, and 14.3 to 15.9 on 491 over three. Whether 494
+  sits higher is not settled by three runs on 491. A traced pair,
+  `groups.bt` and `stacks.bt` on a run at each end, would show where the
+  visits differ.
 - At the end the hold factors are 107 (default) and 108 (loans).
 
 # Build 494: the kernel from the tip, no regression (22 October, evening) — read this first
