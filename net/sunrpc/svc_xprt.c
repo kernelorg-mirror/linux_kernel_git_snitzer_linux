@@ -797,6 +797,10 @@ static bool svc_thread_wait_for_work(struct svc_rqst *rqstp, long timeo)
 
 	if (svc_thread_should_sleep(rqstp)) {
 		set_current_state(TASK_IDLE | TASK_FREEZABLE);
+		/* Ordered before the llist_add() that makes this thread
+		 * visible to svc_pool_wake_idle_thread().
+		 */
+		clear_bit(RQ_WAKING, &rqstp->rq_flags);
 		llist_add(&rqstp->rq_idle, &pool->sp_idle_threads);
 		if (likely(svc_thread_should_sleep(rqstp)))
 			did_timeout = svc_schedule_timeout(timeo);
@@ -813,6 +817,13 @@ static bool svc_thread_wait_for_work(struct svc_rqst *rqstp, long timeo)
 			 */
 			did_timeout = svc_schedule_timeout(timeo);
 			set_current_state(TASK_IDLE | TASK_FREEZABLE);
+			/* Still on the list: let the next wake through.
+			 * A waker that sees the bit still set saw this
+			 * thread first, so the llist_del_first_this()
+			 * below either succeeds or fails to a thread that
+			 * queued itself later and took the work.
+			 */
+			clear_bit(RQ_WAKING, &rqstp->rq_flags);
 		}
 		__set_current_state(TASK_RUNNING);
 	} else {
