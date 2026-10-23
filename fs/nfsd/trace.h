@@ -13,7 +13,6 @@
 #include <linux/sunrpc/xprt.h>
 #include <trace/misc/fs.h>
 #include <trace/misc/fsnotify.h>
-#include <trace/misc/nfs.h>
 #include <trace/misc/sunrpc.h>
 
 #include "export.h"
@@ -501,18 +500,167 @@ DEFINE_EVENT(nfsd_io_class, nfsd_##name,	\
 
 DEFINE_NFSD_IO_EVENT(read_start);
 DEFINE_NFSD_IO_EVENT(read_splice);
-DEFINE_NFSD_IO_EVENT(read_vector);
 DEFINE_NFSD_IO_EVENT(read_direct);
 DEFINE_NFSD_IO_EVENT(read_io_done);
 DEFINE_NFSD_IO_EVENT(read_done);
 DEFINE_NFSD_IO_EVENT(write_start);
 DEFINE_NFSD_IO_EVENT(write_opened);
-DEFINE_NFSD_IO_EVENT(write_direct);
-DEFINE_NFSD_IO_EVENT(write_vector);
 DEFINE_NFSD_IO_EVENT(write_io_done);
 DEFINE_NFSD_IO_EVENT(write_done);
+
+DECLARE_EVENT_CLASS(nfsd_io_kiocb_class,
+	TP_PROTO(struct svc_rqst *rqstp,
+		 struct svc_fh	*fhp,
+		 u64		offset,
+		 u32		len,
+		 int		ki_flags),
+	TP_ARGS(rqstp, fhp, offset, len, ki_flags),
+	TP_STRUCT__entry(
+		__field(u32, xid)
+		__field(u32, fh_hash)
+		__field(u64, offset)
+		__field(u32, len)
+	),
+	TP_fast_assign(
+		__entry->xid = be32_to_cpu(rqstp->rq_xid);
+		__entry->fh_hash = knfsd_fh_hash(&fhp->fh_handle);
+		__entry->offset = offset;
+		__entry->len = len;
+	),
+	TP_printk("xid=0x%08x fh_hash=0x%08x offset=%llu len=%u",
+		  __entry->xid, __entry->fh_hash,
+		  __entry->offset, __entry->len)
+)
+
+#define DEFINE_NFSD_IO_KIOCB_EVENT(name, cond)			\
+DEFINE_EVENT_CONDITION(nfsd_io_kiocb_class, nfsd_##name,	\
+	TP_PROTO(struct svc_rqst *rqstp,			\
+		 struct svc_fh	*fhp,				\
+		 u64		offset,				\
+		 u32		len,				\
+		 int		ki_flags),			\
+	TP_ARGS(rqstp, fhp, offset, len, ki_flags),		\
+	TP_CONDITION(cond))
+
+DEFINE_NFSD_IO_KIOCB_EVENT(read_vector, !(ki_flags & IOCB_DONTCACHE));
+DEFINE_NFSD_IO_KIOCB_EVENT(read_dontcache, ki_flags & IOCB_DONTCACHE);
+DEFINE_NFSD_IO_KIOCB_EVENT(write_direct, ki_flags & IOCB_DIRECT);
+DEFINE_NFSD_IO_KIOCB_EVENT(write_dontcache,
+			   (ki_flags & (IOCB_DIRECT | IOCB_DONTCACHE)) ==
+			   IOCB_DONTCACHE);
+DEFINE_NFSD_IO_KIOCB_EVENT(write_vector,
+			   !(ki_flags & (IOCB_DIRECT | IOCB_DONTCACHE)));
 DEFINE_NFSD_IO_EVENT(commit_start);
 DEFINE_NFSD_IO_EVENT(commit_done);
+
+DECLARE_EVENT_CLASS(nfsd_write_dio_class,
+	TP_PROTO(struct svc_rqst *rqstp,
+		 struct svc_fh *fhp,
+		 u64 offset,
+		 u32 len,
+		 u32 offset_align,
+		 u32 mem_align,
+		 u32 mem_offset,
+		 u32 start,
+		 u32 middle,
+		 u32 end),
+	TP_ARGS(rqstp, fhp, offset, len, offset_align, mem_align, mem_offset,
+		start, middle, end),
+	TP_STRUCT__entry(
+		__field(u32, xid)
+		__field(u32, fh_hash)
+		__field(u64, offset)
+		__field(u32, len)
+		__field(u32, offset_align)
+		__field(u32, mem_align)
+		__field(u32, mem_offset)
+		__field(u32, start)
+		__field(u32, middle)
+		__field(u32, end)
+	),
+	TP_fast_assign(
+		__entry->xid = be32_to_cpu(rqstp->rq_xid);
+		__entry->fh_hash = knfsd_fh_hash(&fhp->fh_handle);
+		__entry->offset = offset;
+		__entry->len = len;
+		__entry->offset_align = offset_align;
+		__entry->mem_align = mem_align;
+		__entry->mem_offset = mem_offset;
+		__entry->start = start;
+		__entry->middle = middle;
+		__entry->end = end;
+	),
+	TP_printk("xid=0x%08x fh_hash=0x%08x offset=%llu len=%u "
+		  "offset_align=%u mem_align=%u mem_offset=%u "
+		  "start=%u middle=%u end=%u",
+		  __entry->xid, __entry->fh_hash,
+		  __entry->offset, __entry->len,
+		  __entry->offset_align, __entry->mem_align,
+		  __entry->mem_offset,
+		  __entry->start, __entry->middle, __entry->end)
+);
+
+#define DEFINE_NFSD_WRITE_DIO_EVENT(name)				\
+DEFINE_EVENT(nfsd_write_dio_class, nfsd_write_dio_##name,		\
+	TP_PROTO(struct svc_rqst *rqstp,				\
+		 struct svc_fh *fhp,					\
+		 u64 offset,						\
+		 u32 len,						\
+		 u32 offset_align,					\
+		 u32 mem_align,						\
+		 u32 mem_offset,					\
+		 u32 start,						\
+		 u32 middle,						\
+		 u32 end),						\
+	TP_ARGS(rqstp, fhp, offset, len, offset_align, mem_align,	\
+		mem_offset, start, middle, end))
+
+DEFINE_NFSD_WRITE_DIO_EVENT(direct);
+DEFINE_NFSD_WRITE_DIO_EVENT(no_alignment);
+DEFINE_NFSD_WRITE_DIO_EVENT(too_small);
+DEFINE_NFSD_WRITE_DIO_EVENT(no_middle);
+DEFINE_NFSD_WRITE_DIO_EVENT(mem_misaligned);
+
+DECLARE_EVENT_CLASS(nfsd_read_dio_class,
+	TP_PROTO(struct svc_rqst *rqstp,
+		 struct svc_fh *fhp,
+		 u64 offset,
+		 u32 len,
+		 u32 offset_align),
+	TP_ARGS(rqstp, fhp, offset, len, offset_align),
+	TP_STRUCT__entry(
+		__field(u32, xid)
+		__field(u32, fh_hash)
+		__field(u64, offset)
+		__field(u32, len)
+		__field(u32, offset_align)
+	),
+	TP_fast_assign(
+		__entry->xid = be32_to_cpu(rqstp->rq_xid);
+		__entry->fh_hash = knfsd_fh_hash(&fhp->fh_handle);
+		__entry->offset = offset;
+		__entry->len = len;
+		__entry->offset_align = offset_align;
+	),
+	TP_printk("xid=0x%08x fh_hash=0x%08x offset=%llu len=%u "
+		  "offset_align=%u",
+		  __entry->xid, __entry->fh_hash,
+		  __entry->offset, __entry->len, __entry->offset_align)
+);
+
+#define DEFINE_NFSD_READ_DIO_EVENT(name)				\
+DEFINE_EVENT(nfsd_read_dio_class, nfsd_read_dio_##name,		\
+	TP_PROTO(struct svc_rqst *rqstp,				\
+		 struct svc_fh *fhp,					\
+		 u64 offset,						\
+		 u32 len,						\
+		 u32 offset_align),					\
+	TP_ARGS(rqstp, fhp, offset, len, offset_align))
+
+DEFINE_NFSD_READ_DIO_EVENT(no_alignment);
+DEFINE_NFSD_READ_DIO_EVENT(too_small);
+DEFINE_NFSD_READ_DIO_EVENT(pages_in_use);
+DEFINE_NFSD_READ_DIO_EVENT(not_last_op);
 
 DECLARE_EVENT_CLASS(nfsd_err_class,
 	TP_PROTO(struct svc_rqst *rqstp,
@@ -789,6 +937,20 @@ TRACE_EVENT(nfsd_stateowner_replay,
 	TP_printk("opnum=%u status=%lu",
 		__entry->opnum, __entry->status)
 );
+
+#define show_nfs4_seq4_status(x) \
+	__print_flags(x, "|", \
+		{ SEQ4_STATUS_CB_PATH_DOWN,		"CB_PATH_DOWN" }, \
+		{ SEQ4_STATUS_CB_GSS_CONTEXTS_EXPIRING,	"CB_GSS_CONTEXTS_EXPIRING" }, \
+		{ SEQ4_STATUS_CB_GSS_CONTEXTS_EXPIRED,	"CB_GSS_CONTEXTS_EXPIRED" }, \
+		{ SEQ4_STATUS_EXPIRED_ALL_STATE_REVOKED, "EXPIRED_ALL_STATE_REVOKED" }, \
+		{ SEQ4_STATUS_EXPIRED_SOME_STATE_REVOKED, "EXPIRED_SOME_STATE_REVOKED" }, \
+		{ SEQ4_STATUS_ADMIN_STATE_REVOKED,	"ADMIN_STATE_REVOKED" }, \
+		{ SEQ4_STATUS_RECALLABLE_STATE_REVOKED,	"RECALLABLE_STATE_REVOKED" }, \
+		{ SEQ4_STATUS_LEASE_MOVED,		"LEASE_MOVED" }, \
+		{ SEQ4_STATUS_RESTART_RECLAIM_NEEDED,	"RESTART_RECLAIM_NEEDED" }, \
+		{ SEQ4_STATUS_CB_PATH_DOWN_SESSION,	"CB_PATH_DOWN_SESSION" }, \
+		{ SEQ4_STATUS_BACKCHANNEL_FAULT,	"BACKCHANNEL_FAULT" })
 
 TRACE_EVENT_CONDITION(nfsd_seq4_status,
 	TP_PROTO(
@@ -1694,6 +1856,14 @@ TRACE_EVENT(nfsd_cb_setup_err,
 /* Not a real opcode, but there is no 0 operation. */
 #define _CB_NULL	0
 
+TRACE_DEFINE_ENUM(OP_CB_GETATTR);
+TRACE_DEFINE_ENUM(OP_CB_RECALL);
+TRACE_DEFINE_ENUM(OP_CB_LAYOUTRECALL);
+TRACE_DEFINE_ENUM(OP_CB_RECALL_ANY);
+TRACE_DEFINE_ENUM(OP_CB_NOTIFY);
+TRACE_DEFINE_ENUM(OP_CB_NOTIFY_LOCK);
+TRACE_DEFINE_ENUM(OP_CB_OFFLOAD);
+
 #define show_nfsd_cb_opcode(val)					\
 	__print_symbolic(val,						\
 		{ _CB_NULL,			"CB_NULL" },		\
@@ -1917,6 +2087,28 @@ TRACE_EVENT(nfsd_cb_offload,
 		__entry->si_id, __entry->si_generation,
 		__entry->fh_hash, __entry->count, __entry->status)
 );
+
+TRACE_DEFINE_ENUM(RCA4_TYPE_MASK_RDATA_DLG);
+TRACE_DEFINE_ENUM(RCA4_TYPE_MASK_WDATA_DLG);
+TRACE_DEFINE_ENUM(RCA4_TYPE_MASK_DIR_DLG);
+TRACE_DEFINE_ENUM(RCA4_TYPE_MASK_FILE_LAYOUT);
+TRACE_DEFINE_ENUM(RCA4_TYPE_MASK_BLK_LAYOUT);
+TRACE_DEFINE_ENUM(RCA4_TYPE_MASK_OBJ_LAYOUT_MIN);
+TRACE_DEFINE_ENUM(RCA4_TYPE_MASK_OBJ_LAYOUT_MAX);
+TRACE_DEFINE_ENUM(RCA4_TYPE_MASK_OTHER_LAYOUT_MIN);
+TRACE_DEFINE_ENUM(RCA4_TYPE_MASK_OTHER_LAYOUT_MAX);
+
+#define show_rca_mask(x) \
+	__print_flags(x, "|", \
+		{ BIT(RCA4_TYPE_MASK_RDATA_DLG),	"RDATA_DLG" }, \
+		{ BIT(RCA4_TYPE_MASK_WDATA_DLG),	"WDATA_DLG" }, \
+		{ BIT(RCA4_TYPE_MASK_DIR_DLG),		"DIR_DLG" }, \
+		{ BIT(RCA4_TYPE_MASK_FILE_LAYOUT),	"FILE_LAYOUT" }, \
+		{ BIT(RCA4_TYPE_MASK_BLK_LAYOUT),	"BLK_LAYOUT" }, \
+		{ BIT(RCA4_TYPE_MASK_OBJ_LAYOUT_MIN),	"OBJ_LAYOUT_MIN" }, \
+		{ BIT(RCA4_TYPE_MASK_OBJ_LAYOUT_MAX),	"OBJ_LAYOUT_MAX" }, \
+		{ BIT(RCA4_TYPE_MASK_OTHER_LAYOUT_MIN),	"OTHER_LAYOUT_MIN" }, \
+		{ BIT(RCA4_TYPE_MASK_OTHER_LAYOUT_MAX),	"OTHER_LAYOUT_MAX" })
 
 TRACE_EVENT(nfsd_cb_recall_any,
 	TP_PROTO(
