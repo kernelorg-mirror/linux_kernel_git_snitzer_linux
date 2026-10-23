@@ -174,6 +174,57 @@ at a time:
   and the calls over the whole trace, so that gap is an estimate. To
   trace a visit's length, use an fexit, not a kretprobe.
 
+- **Threads that find no connection, and what a counted wake is**
+  (`run8.sh` with `probe2.bt`, `run9.sh` with `probe3.bt`, one loan run
+  each at 39.96 and 40.16 GB/s). Every probe fires in an nfsd thread,
+  except a `sched_switch` filtered to nfsd going to sleep inside
+  `svc_thread_wait_for_work()`. `pool_stats` and nfsd's WRITEs are read
+  when the trace attaches and before it stops, so all of it is over one
+  span. The WRITEs from `/proc/net/rpc/nfsd` match the trace's exactly.
+  From p3-loan64-1, per WRITE:
+
+  | measure | per WRITE |
+  |---|---|
+  | threads woken (`pool_stats`) | 17.81 |
+  | transports enqueued (`pool_stats`) = dequeued (tracepoint) | 14.43 |
+  | passes through `svc_recv()` | 17.61 |
+  | ... that slept first | 4.60 |
+  | ... that did not sleep | 13.01 |
+  | times nfsd went to sleep (`sched_switch`) | 6.04 |
+  | passes that found no transport | 3.18 (18% of passes) |
+  | ... without sleeping | 2.18 |
+  | ... after sleeping | 1.01 |
+
+  `probe2.bt` gave the same with a 2 us wait standing in for a sleep:
+  14.12 dequeued, 17.99 passes, 3.87 (21.5%) empty, 2.76 of them
+  without sleeping. Every dequeued transport was read: 59 of
+  26,948,604 found no slot.
+
+  - **A counted wake is mostly not a sleep ended.** `threads-woken` is
+    3 times the times nfsd went to sleep. `svc_pool_wake_idle_thread()`
+    counts a wake whenever the first thread on the idle list is not
+    running. A thread is on that list, in `TASK_IDLE`, from its
+    `llist_add()` until `schedule()` and again until
+    `llist_del_first_this()`. A thread that finishes a request puts
+    itself there before it looks for work, so a waker nearly always
+    finds a thread to count, whether or not it was about to sleep.
+    About 12 of the 18 wakes a WRITE land on a thread before it sleeps.
+    So the "about 5 us a wake" above is the rings' extra time divided by
+    counted wakes, not the price of a context switch. What a wake costs
+    the softirq that makes it is not measured.
+  - **Most threads that find nothing never slept.**
+    `svc_thread_should_sleep()` saw a transport on the pool's queue,
+    so the thread skipped sleeping, and another thread dequeued it
+    first: 2.18 a WRITE. Only 1.01 a WRITE (one sleep in six) was a
+    thread woken from sleep for a transport that another had taken.
+    Either costs about a microsecond of nfsd's time, not the rings'.
+  - **A transport waits little in the queue**: under 8 us from enqueue to
+    dequeue for 96% (`qtime_us`).
+
+  So the wakes that find no connection are not where the rings' time
+  goes. What remains to measure is what the softirq pays for each wake,
+  whether it ends a sleep or not, and that needs a probe on the rings.
+
   Not yet done: a test of the loop itself, by giving the rings room
   (more rings, or the dropped `svc_tcp_rx_keep`, which cut wakes). The
   rings are the settled setting's, so it is Mike's to decide.
