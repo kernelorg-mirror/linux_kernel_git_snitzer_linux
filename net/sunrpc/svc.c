@@ -701,7 +701,14 @@ void svc_pool_wake_idle_thread(struct svc_pool *pool)
 	if (ln) {
 		rqstp = llist_entry(ln, struct svc_rqst, rq_idle);
 		WRITE_ONCE(rqstp->rq_qtime, ktime_get());
-		if (!task_is_running(rqstp->rq_task)) {
+		/* A woken thread stays first on the idle list until it
+		 * runs, and while its wake is in flight it is not yet
+		 * running. RQ_WAKING lets one caller wake it; the others
+		 * leave it to that wake, as they would a running thread.
+		 * The thread clears the bit each time it goes idle.
+		 */
+		if (!task_is_running(rqstp->rq_task) &&
+		    !test_and_set_bit(RQ_WAKING, &rqstp->rq_flags)) {
 			wake_up_process(rqstp->rq_task);
 			trace_svc_pool_thread_wake(pool, rqstp->rq_task->pid);
 			percpu_counter_inc(&pool->sp_threads_woken);

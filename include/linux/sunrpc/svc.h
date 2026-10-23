@@ -311,6 +311,7 @@ enum {
 	RQ_VICTIM,		/* Have agreed to shut down */
 	RQ_DATA,		/* request has data */
 	RQ_PAYLOAD_SHARED,	/* a later operation still reads the payload */
+	RQ_WAKING,		/* a wake of this idle thread is in flight */
 };
 
 #define SVC_NET(rqst) (rqst->rq_xprt ? rqst->rq_xprt->xpt_net : rqst->rq_bc_net)
