@@ -6,6 +6,12 @@ service thread only once" (`2fc9cd2e839b`) cut nfsd's wakes 2.6 times and
 took 1 to 2.5% off the rings. Mike: "every win helps! Remember sometimes it
 takes 5 or 20 things to come together to realize full performance".
 
+**The target is loan mode (Mike, 2026-10-23: "I want to squeeze out all
+lost performance for loan mode").** Every round profiles, ranks and tests
+the loan run, and a change is judged by what it saves a loaned WRITE. Copy
+mode is not profiled or run beside it. AGENTS.md's rule runs one way: copy
+mode is not to be made faster at the loan's expense, not the reverse.
+
 Each round is a directory here, numbered in order:
 
 | round | what was profiled | the most costly thing found | the change | outcome |
@@ -53,9 +59,6 @@ against 91.9 of softirq alone from the same run.
    compares two rounds), and ranks each group's frames, self and with what
    they call (`top-rings.txt`, `top-nfsd.txt`). `flame.sh report DIR` makes
    the reports again from a round's `perf.data`.
-   Run copy mode (`WRITES=0`) beside it once a round, so a gain for the loan is
-   not a loss for copy mode or the other way round ("Do not optimize copy mode
-   at the loan's expense", AGENTS.md).
 2. **Rank by share of each group's busy cycles**, as microseconds a WRITE
    (`top-*.txt`). Read the self cost (where the
    cycles are spent) and the inclusive cost (what a function and what it calls
@@ -90,7 +93,7 @@ tardis1's included: that is Mike's to ask for, each time.
   `_raw_spin_unlock_irqrestore` or `handle_softirqs` self cost belongs to
   what ran before it. Read its callers before ranking it.
 - Name the change by what it saves a WRITE, measured, and say what it did
-  not change (the rate, nfsd's sleeps, copy mode).
+  not change (the rate, nfsd's sleeps).
 
 ## A round's directory
 
