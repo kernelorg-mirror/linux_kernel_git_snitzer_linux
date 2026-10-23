@@ -1,0 +1,16 @@
+# NFS kept out of conntrack: whatever table needs conntrack (podman's
+# netavark NAT), port 2049's packets are not tracked.
+table inet zc_notrack
+delete table inet zc_notrack
+table inet zc_notrack {
+	chain prerouting {
+		type filter hook prerouting priority raw; policy accept;
+		tcp dport 2049 notrack
+		tcp sport 2049 notrack
+	}
+	chain output {
+		type filter hook output priority raw; policy accept;
+		tcp dport 2049 notrack
+		tcp sport 2049 notrack
+	}
+}
