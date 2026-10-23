@@ -1,0 +1,41 @@
+#!/usr/bin/bpftrace
+/*
+ * lat.bt - where one WRITE's time goes on the server, for lat.sh's low-depth
+ * run (FLAMEGRAPH/README.md): histograms in microseconds of
+ *   wakeup  from a thread being asked to wake to it taking the transport
+ *   qtime   from the transport being queued to a thread taking it
+ *           (both from svc_xprt_dequeue, which stamps them only while enabled)
+ *   process svc_process(): the call, the write into the file system included
+ *   write   nfsd_vfs_write(): the write into the file system
+ *   reply   svc_tcp_sendto(): the loan given back, then the reply sent
+ */
+config = { missing_probes = "warn" }
+
+tracepoint:sunrpc:svc_xprt_dequeue
+{
+	@wakeup_us = hist(args->wakeup);
+	@qtime_us = hist(args->qtime);
+}
+
+fentry:sunrpc:svc_process { @t_p[tid] = nsecs; }
+fexit:sunrpc:svc_process /@t_p[tid]/
+{
+	@process_us = hist((nsecs - @t_p[tid]) / 1000);
+	delete(@t_p, tid);
+}
+
+fentry:nfsd:nfsd_vfs_write { @t_w[tid] = nsecs; }
+fexit:nfsd:nfsd_vfs_write /@t_w[tid]/
+{
+	@write_us = hist((nsecs - @t_w[tid]) / 1000);
+	delete(@t_w, tid);
+}
+
+fentry:sunrpc:svc_tcp_sendto { @t_s[tid] = nsecs; }
+fexit:sunrpc:svc_tcp_sendto /@t_s[tid]/
+{
+	@reply_us = hist((nsecs - @t_s[tid]) / 1000);
+	delete(@t_s, tid);
+}
+
+END { clear(@t_p); clear(@t_w); clear(@t_s); }

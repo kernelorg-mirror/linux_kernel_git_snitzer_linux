@@ -25,6 +25,7 @@ Each round is a directory here, numbered in order:
 | 07 | | half of each ACK and reply is the qdisc (fq_codel, its lock) | the server's qdisc `pfifo_fast` | |
 | 08 | | the `zc_notrack` chains cost 3-4 us a WRITE with no conntrack to skip | load `zc_notrack` only while a table needs conntrack | |
 | 09 | | per-skb costs at about 19 GRO skbs a WRITE | BIG TCP: `gro_ipv4_max_size` 256 KB | |
+| L0 | | latency baseline at low depth, after round 06 | `xeu-rig/lat.sh` | |
 
 ## Why CPU a WRITE, not GB/s
 
@@ -52,6 +53,18 @@ no interrupt on it), and turns a frame's share of what is left into
 microseconds a WRITE with mpstat's busy time (100 - idle - iowait) for the
 same CPUs over the run's window. On the rings that gives 92.0 us a WRITE,
 against 91.9 of softirq alone from the same run.
+
+## Two yardsticks: CPU a WRITE, and latency (Mike, 2026-10-23: "latency is going to matter a lot on a per IO level")
+
+- **CPU a WRITE at saturation:** the one-port loan64 run, as above.
+- **Latency at low depth:** `xeu-rig/lat.sh OUTDIR TAG`. It runs 4 writers, one a drive, at iodepth 1 with 1 MiB writes, so the drives are far from saturation and what is measured is the server's own time an I/O.
+  - The untraced run gives fio's completion p50, p90, p99, p99.9 and mean.
+  - A run with `lat.bt` gives the server's split: the wait for a thread (`svc_xprt_dequeue`'s wakeup and qtime), `svc_process`, the write into the file system, and the reply (`svc_tcp_sendto`).
+- **Why they differ:** at saturation, latency is the drives' queue (Little's law), so CPU savings cannot show in it.
+  - A saving on the critical path is both a CPU saving and a latency saving.
+  - Work moved off the critical path, or reordered, changes latency alone. For example, the loan is given back before the reply is sent, so every reply waits for it.
+  - Waiting (for a thread, for the rest of a record, for credit) costs latency and no CPU.
+- **Each round reports both yardsticks.**
 
 ## The method
 
