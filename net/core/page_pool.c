@@ -76,6 +76,10 @@ static unsigned int rx_region_pages;
 module_param(rx_region_pages, uint, 0644);
 MODULE_PARM_DESC(rx_region_pages,
 		 "Pages in the fixed receive region, allocated with the device's first page pool; a change takes effect once no pool is bound to the region");
+static unsigned int rx_region_stack;
+module_param(rx_region_stack, uint, 0644);
+MODULE_PARM_DESC(rx_region_stack,
+		 "Pages a pool bound to the fixed receive region keeps for reuse (0: the pool's size); read when a pool is created");
 
 struct page_pool_rx_region {
 	spinlock_t lock;
@@ -577,14 +581,21 @@ static int page_pool_init(struct page_pool *pool,
 		err = -EINVAL;
 		goto free_ptr_ring;
 	} else {
+		unsigned int stack = READ_ONCE(rx_region_stack) ?: ring_qsize;
+
 		pool->rx_region = page_pool_rx_region_get(pool);
-		/* Without the stack the pool recycles through the ring. */
+		/*
+		 * Without the stack the pool recycles through the ring.  A
+		 * page that finds the stack full goes back to the region, to
+		 * be mapped again when the pool next takes it, so the stack
+		 * can be made larger than the pool's ring.
+		 */
 		if (pool->rx_region)
-			pool->rx_stack = kvcalloc(ring_qsize,
+			pool->rx_stack = kvcalloc(stack,
 						  sizeof(*pool->rx_stack),
 						  GFP_KERNEL);
 		if (pool->rx_stack)
-			pool->rx_stack_size = ring_qsize;
+			pool->rx_stack_size = stack;
 	}
 
 	return 0;
