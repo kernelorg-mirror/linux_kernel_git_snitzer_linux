@@ -215,19 +215,10 @@ svc_rdma_write_info_alloc(struct svcxprt_rdma *rdma,
 	return info;
 }
 
-static void svc_rdma_write_info_free_async(struct work_struct *work)
-{
-	struct svc_rdma_write_info *info;
-
-	info = container_of(work, struct svc_rdma_write_info, wi_work);
-	svc_rdma_cc_release(info->wi_rdma, &info->wi_cc, DMA_TO_DEVICE);
-	kfree(info);
-}
-
 static void svc_rdma_write_info_free(struct svc_rdma_write_info *info)
 {
-	INIT_WORK(&info->wi_work, svc_rdma_write_info_free_async);
-	queue_work(svcrdma_wq, &info->wi_work);
+	svc_rdma_cc_release(info->wi_rdma, &info->wi_cc, DMA_TO_DEVICE);
+	kfree(info);
 }
 
 /**
@@ -292,7 +283,7 @@ static void svc_rdma_reply_done(struct ib_cq *cq, struct ib_wc *wc)
 		trace_svcrdma_wc_reply_err(wc, &cc->cc_cid);
 	}
 
-	svc_xprt_deferred_close(&rdma->sc_xprt);
+	svc_rdma_xprt_deferred_close(rdma);
 }
 
 /**
@@ -324,7 +315,7 @@ static void svc_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 	 * some of the outgoing RPC message. Signal the loss
 	 * to the client by closing the connection.
 	 */
-	svc_xprt_deferred_close(&rdma->sc_xprt);
+	svc_rdma_xprt_deferred_close(rdma);
 }
 
 /**
@@ -369,7 +360,7 @@ static void svc_rdma_wc_read_done(struct ib_cq *cq, struct ib_wc *wc)
 	 */
 	svc_rdma_cc_release(rdma, cc, DMA_FROM_DEVICE);
 	svc_rdma_recv_ctxt_put(rdma, ctxt);
-	svc_xprt_deferred_close(&rdma->sc_xprt);
+	svc_rdma_xprt_deferred_close(rdma);
 }
 
 /*
