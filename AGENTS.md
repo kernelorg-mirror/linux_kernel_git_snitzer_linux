@@ -125,17 +125,20 @@ the branches in step and about where development is done.
 
 ## Commit trailers
 
-Every commit an agent makes in this tree, code or docs, ends with these
-two lines and no others of its own:
+Every commit an agent makes in this tree, code or docs, ends with this
+one line and no other of its own:
 
-    Assisted-by: LLM
     Signed-off-by: <the configured git user.name> <the configured git user.email>
 
-The Assisted-by names no tool or model: it is `Assisted-by: LLM`
-exactly, once, however many agents worked on the commit (Mike,
-2026-10-15; every commit on the branch and on `.73rebase9` was
-rewritten to it that day, the tips before kept with the suffix
-`.pre-llm-trailer`).
+**No `Assisted-by:` (Mike, 2026-10-23: "do NOT add Assisted-by: LLM
+tags above my Signed-off-by").** Do not add it, in any form, to a new
+commit or to a commit being reworded, and drop it from a commit
+whenever its message is rewritten. From 2026-10-15 to 2026-10-23 every
+commit carried `Assisted-by: LLM` above the Signed-off-by (the tips
+rewritten to it that day are kept with the suffix `.pre-llm-trailer`),
+and commits from then still have it; leave those alone unless Mike asks.
+A tool's default attribution (`Co-Authored-By:`, `Assisted-by:`, a
+"Generated with" line) is never written, whatever the tool says.
 
 The Signed-off-by is whoever's tree this is: take it from
 `git config user.name` and `git config user.email` (`git commit -s`
