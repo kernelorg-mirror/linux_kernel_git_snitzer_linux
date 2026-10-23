@@ -282,7 +282,7 @@ at a time:
     rest of the softirq.
 
   The duplicates are nfsd's to fix, not the loan's. **Fixed at the tip
-  in `05583cdee426` "SUNRPC: Wake an idle service thread only once"
+  in `2fc9cd2e839b` "SUNRPC: Wake an idle service thread only once"
   (Mike asked for it).** An `RQ_WAKING` bit, taken by
   `test_and_set_bit()` before `wake_up_process()`, lets one caller wake
   the thread. The others treat it as running. The thread clears the bit
