@@ -72,12 +72,48 @@ nfsd has room, so its ranking is for later rounds:
 
 The first takes all of the cost. The second keeps a hook on each packet, but leaves podman alone.
 
-**Not done yet.** The auto-mode classifier refused the change to tardis2's firewall, and changing it is Mike's to decide. The table is saved as `/var/tmp/zc-run-logs/t2-tipkernel/netavark-table.nft` so it can be put back with `nft -f`. Once it is decided:
-1. run an A/B, table present against table gone, three runs each, plus one copy-mode pair;
-2. if the A/B keeps it, make the change in `settled.sh`.
+**Both were done (Mike: "do both, why not do both?").** The table is deleted while no container runs, so its hooks go, and `xeu-rig/zc-notrack.nft` keeps port 2049 untracked whenever a container brings the table back.
 
-Whether tardis1 has the same table is not yet known: its host key refused a login from tardis2.
+## Outcome: kept. The rings 15% cheaper a loaned WRITE, copy mode 7%
 
-## Outcome
+The A/B is `run18.sh`, in `/var/tmp/zc-run-logs/t2-tipkernel/`.
+- A is the host as it was: the netavark table, 10 conntrack hooks.
+- B is the table deleted and `zc_notrack` loaded: no conntrack hook.
+- Each run's `-netfilter.txt` records which it was.
+- Untracked loan runs alternated, then a copy-mode pair.
+- Every run was settled and DRIVE-LIMITED, with no drive stepped down.
 
-Pending the A/B.
+| run | GB/s | ring softirq | ring µs a WRITE | nfsd busy | refusals a loaned WRITE |
+|---|---|---|---|---|---|
+| nf1-loan64-A | 40.32 | 88.3% | 91.9 | 14.2% | 0.57 |
+| nf2-loan64-B | 40.45 | 76.7% | 79.5 | 13.3% | 0.93 |
+| nf3-loan64-A | 40.32 | 90.0% | 93.8 | 14.8% | 0.46 |
+| nf4-loan64-B | 40.43 | 75.6% | 78.4 | 13.6% | 0.89 |
+| nf5-loan64-A | 40.32 | 88.1% | 92.0 | 14.4% | 0.59 |
+| nf6-loan64-B | 40.39 | 75.3% | 78.2 | 13.3% | 0.93 |
+| nf7-copy-A | 40.81 | 66.0% | 67.9 | 28.4% | - |
+| nf8-copy-B | 40.81 | 61.6% | 63.4 | 25.5% | - |
+
+**Loan.**
+- The rings went from 92.6 to 78.7 µs a WRITE (-13.9 µs, -15%), with no overlap between the two sets.
+- nfsd went from 14.5% to 13.4% busy, about 13.7 µs a WRITE over its 48 CPUs.
+- The rings saved more than the 9.0 µs the profile put under `nf_hook_slow`. The rest is hooks it did not count (`nf_confirm`, defrag) and conntrack's cache footprint.
+- No fit was needed: every B run had more refusals than every A run (0.89-0.93 against 0.46-0.59). Refusals raise the rings' cost, so the fit could only make the gain larger.
+- Why B refuses more is not known. A guess: rings that empty sooner put more records on the connections at once, against the same 64-WRITE budget.
+
+**Copy mode** (one pair): the rings went from 67.9 to 63.4 µs a WRITE (-4.5 µs, -7%), and nfsd from 28.4% to 25.5% busy.
+
+**The setting.** It is in `xeu-rig/settled.sh`:
+- apply loads `zc-notrack.nft` and deletes the leftover table while `podman ps -q` is empty;
+- the audit marks either one BAD;
+- both directions were checked on tardis2.
+
+tardis1 takes it at its next `./settled.sh apply`.
+
+**What this A/B did not separate:** with the table gone there was no conntrack to skip. So `notrack`'s own worth, with a container's table present, is not measured.
+
+## The next rounds (Mike)
+
+- **02:** `svc_tcp_rx_refs_valid` checks only the counts in `svc_tcp_rx_exchange`. That needs a sunrpc reload.
+- **03:** `net.core.skb_defer_max` 0 against 128, for item 3 and page_pool's put on the ring.
+- **04:** measure how often a region-bound pool's ptr_ring is full when a page comes back. Only if that justifies it, add a knob for its size, which needs a kernel build and a boot.
