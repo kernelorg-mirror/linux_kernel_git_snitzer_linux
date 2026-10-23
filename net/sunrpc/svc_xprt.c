@@ -525,7 +525,9 @@ void svc_xprt_enqueue(struct svc_xprt *xprt)
 	pool = svc_pool_for_cpu(xprt->xpt_server);
 
 	percpu_counter_inc(&pool->sp_sockets_queued);
-	xprt->xpt_qtime = ktime_get();
+	/* Only trace_svc_xprt_dequeue() reads the enqueue time. */
+	if (trace_svc_xprt_dequeue_enabled())
+		xprt->xpt_qtime = ktime_get();
 	lwq_enqueue(&xprt->xpt_ready, &pool->sp_xprts);
 
 	svc_pool_wake_idle_thread(pool);
