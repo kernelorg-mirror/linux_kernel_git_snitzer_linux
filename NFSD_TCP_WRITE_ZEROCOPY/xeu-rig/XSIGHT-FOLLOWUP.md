@@ -458,9 +458,11 @@ are for Xsight, with the numbers:
   - mlx5, ice and others prefetch a frame's first lines
     (`net_prefetch()`) when its completion is seen, or a frame or two
     ahead. That puts the miss under the work on the frames before it.
-  - With `rx_ip_align=2` the Ethernet, IP and TCP headers span two
-    64-byte lines, so the second miss is likely part of
-    `inet_gro_receive` and `tcp_gro_receive`'s 5.3 us of self time.
+  - With `rx_ip_align=2` the Ethernet, IP and TCP headers with
+    timestamps run from byte 2 to byte 68, so they span two 64-byte
+    lines. The second miss is likely in `tcp_gro_receive`'s own time,
+    2.07 us a WRITE in round 05 (GRO's merging is 11.6 us a WRITE in
+    all). A prefetch of both lines would hide that one too.
 - **Re-arming the receive interrupt through the irq core costs about 2.4 us
   each time, 6.5 us a WRITE (7.85% of the rings).**
   - `xeu_rx_poll` calls `enable_irq()` after each poll (99.9% of
