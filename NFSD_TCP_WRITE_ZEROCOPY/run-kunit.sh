@@ -10,10 +10,12 @@
 # (nfsd's versions file is busy while it runs).  Leaves the suites unloaded
 # and the server as it found it: every writable sunrpc parameter is saved
 # before the suites and written back after them (the svcsock suite once left
-# svc_tcp_rx_rcvbuf at 0), and where hammerspace-nfsd-tuning is installed it
-# is restarted, which starts nfs-server again with its threads, settings and
-# CPUs; on tardis1 xeu-rig/settled.sh then puts the settled setting back and
-# audits it, and the run fails if the host is not at it.
+# svc_tcp_rx_rcvbuf at 0), and nfs-server is started again: where
+# hammerspace-nfsd-tuning is installed by restarting it, which starts
+# nfs-server with its threads, settings and CPUs, and elsewhere (tardis2) by
+# starting nfs-server itself.  On a host with the xeu card xeu-rig/settled.sh
+# then puts the settled setting back and audits it, and the run fails if the
+# host is not at it.
 #
 # Expected: no failures.  Skips: on 4 KiB pages exactly one,
 # svcsock_rx_arena_bound_test (table and arena are the same size); on 16 and
@@ -87,8 +89,10 @@ while read -r f v; do
 done <<< "$SAVED"
 if systemctl cat hammerspace-nfsd-tuning.service > /dev/null 2>&1; then
 	systemctl restart hammerspace-nfsd-tuning || { echo "FAIL: restart hammerspace-nfsd-tuning"; fail=1; }
-	echo "nfs-server $(systemctl is-active nfs-server), nfsd threads $(cat /proc/fs/nfsd/threads)"
+else
+	systemctl start nfs-server || { echo "FAIL: start nfs-server"; fail=1; }
 fi
+echo "nfs-server $(systemctl is-active nfs-server), nfsd threads $(cat /proc/fs/nfsd/threads)"
 S=$(dirname "$(readlink -f "$0")")/xeu-rig/settled.sh
 if [ -x "$S" ] && [ -e /sys/class/net/enp161s0f0 ]; then
 	"$S" apply > ${OUT%.log}.settled.txt 2>&1 || { grep -E 'BAD|FAILED|not have|nfsd has' ${OUT%.log}.settled.txt; echo "FAIL: the host is not at the settled setting"; fail=1; }
