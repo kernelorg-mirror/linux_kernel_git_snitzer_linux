@@ -21,6 +21,8 @@
 #include <uapi/linux/nfsd_netlink.h>
 
 #include "nfsd.h"
+#include "nfserr.h"
+#include "nfs4ctl.h"
 #include "nfsfh.h"
 #include "netns.h"
 #include "pnfs.h"
@@ -246,13 +248,7 @@ static struct cache_head *expkey_alloc(void)
 
 static void expkey_flush(void)
 {
-	/*
-	 * Take the nfsd_mutex here to ensure that the file cache is not
-	 * destroyed while we're in the middle of flushing.
-	 */
-	mutex_lock(&nfsd_mutex);
 	nfsd_file_cache_purge(current->nsproxy->net_ns);
-	mutex_unlock(&nfsd_mutex);
 }
 
 static int expkey_notify(struct cache_detail *cd, struct cache_head *h)
@@ -344,7 +340,7 @@ int nfsd_nl_expkey_get_reqs_dumpit(struct sk_buff *skb,
 
 	nn = net_generic(sock_net(skb->sk), nfsd_net_id);
 
-	mutex_lock(&nfsd_mutex);
+	mutex_lock(&nn->nfsd_mutex);
 
 	cd = nn->svc_expkey_cache;
 	if (!cd) {
@@ -423,7 +419,7 @@ out_alloc:
 	kfree(seqnos);
 	kfree(items);
 out_unlock:
-	mutex_unlock(&nfsd_mutex);
+	mutex_unlock(&nn->nfsd_mutex);
 	return ret;
 }
 
@@ -558,7 +554,7 @@ int nfsd_nl_expkey_set_reqs_doit(struct sk_buff *skb,
 
 	nn = net_generic(genl_info_net(info), nfsd_net_id);
 
-	mutex_lock(&nfsd_mutex);
+	mutex_lock(&nn->nfsd_mutex);
 
 	cd = nn->svc_expkey_cache;
 	if (!cd) {
@@ -574,7 +570,7 @@ int nfsd_nl_expkey_set_reqs_doit(struct sk_buff *skb,
 	}
 
 out_unlock:
-	mutex_unlock(&nfsd_mutex);
+	mutex_unlock(&nn->nfsd_mutex);
 	return ret;
 }
 
@@ -598,28 +594,198 @@ static void nfsd4_fslocs_free(struct nfsd4_fs_locations *fsloc)
 	fsloc->locations = NULL;
 }
 
-static int export_stats_init(struct export_stats *stats)
+/* Drop export_stats that no export cache entry has used for this long */
+#define EXPORT_STATS_IDLE_SECS	3600
+
+static u64 export_stats_key(dev_t dev, u64 ino)
 {
-	stats->start_time = ktime_get_seconds();
-	return percpu_counter_init_many(stats->counter, 0, GFP_KERNEL,
-					EXP_STATS_COUNTERS_NUM);
+	return ((u64)dev << 32) ^ ino;
 }
 
-static void export_stats_reset(struct export_stats *stats)
+static bool export_stats_expired(const struct export_stats *stats,
+				 time64_t now)
 {
-	if (stats) {
-		int i;
+	return !stats->es_users &&
+	       now - stats->es_idle_since > EXPORT_STATS_IDLE_SECS;
+}
 
-		for (i = 0; i < EXP_STATS_COUNTERS_NUM; i++)
-			percpu_counter_set(&stats->counter[i], 0);
+/*
+ * Expired statistics never match: once the filesystem is gone, its
+ * dev_t can be reused by a different one.
+ */
+static struct export_stats *export_stats_find(struct nfsd_net *nn, dev_t dev,
+					      u64 ino, u32 gen,
+					      const char *client, time64_t now)
+{
+	struct export_stats *stats;
+
+	hash_for_each_possible(nn->export_stats_hash, stats, es_node,
+			       export_stats_key(dev, ino))
+		if (stats->es_dev == dev && stats->es_ino == ino &&
+		    stats->es_gen == gen && !strcmp(stats->es_client, client) &&
+		    !export_stats_expired(stats, now))
+			return stats;
+	return NULL;
+}
+
+static void export_stats_free(struct export_stats *stats)
+{
+	percpu_counter_destroy_many(stats->counter, EXP_STATS_COUNTERS_NUM);
+	kfree(stats->es_client);
+	kfree(stats);
+}
+
+static void export_stats_queue_reap(struct nfsd_net *nn)
+{
+	queue_delayed_work(system_dfl_wq, &nn->export_stats_reaper,
+			   (EXPORT_STATS_IDLE_SECS + 1) * HZ);
+}
+
+/*
+ * Free expired statistics. Re-arm while idle ones remain, because
+ * export_stats_put() does not queue the work while it is pending.
+ */
+static void export_stats_reap(struct work_struct *work)
+{
+	struct nfsd_net *nn = container_of(to_delayed_work(work),
+					   struct nfsd_net,
+					   export_stats_reaper);
+	time64_t now = ktime_get_seconds();
+	struct export_stats *stats;
+	struct hlist_node *tmp;
+	HLIST_HEAD(expired);
+	bool idle = false;
+	int bkt;
+
+	spin_lock_bh(&nn->export_stats_lock);
+	hash_for_each_safe(nn->export_stats_hash, bkt, tmp, stats, es_node) {
+		if (export_stats_expired(stats, now)) {
+			hash_del(&stats->es_node);
+			hlist_add_head(&stats->es_node, &expired);
+		} else if (!stats->es_users) {
+			idle = true;
+		}
+	}
+	if (idle)
+		export_stats_queue_reap(nn);
+	spin_unlock_bh(&nn->export_stats_lock);
+
+	hlist_for_each_entry_safe(stats, tmp, &expired, es_node) {
+		hlist_del(&stats->es_node);
+		export_stats_free(stats);
 	}
 }
 
-static void export_stats_destroy(struct export_stats *stats)
+/*
+ * Return the statistics of the export root and client of @exp, with a
+ * reference. Keying them on the root inode rather than on ex_path keeps
+ * an unused export_stats from pinning the exported mount. Returns NULL
+ * if getattr or memory allocation fails.
+ */
+static struct export_stats *export_stats_get(struct svc_export *exp)
 {
+	struct nfsd_net *nn = net_generic(exp->cd->net, nfsd_net_id);
+	struct inode *inode = d_inode(exp->ex_path.dentry);
+	const char *client = exp->ex_client->name;
+	time64_t now = ktime_get_seconds();
+	u32 gen = inode->i_generation;
+	struct export_stats *stats, *new;
+	struct kstat stat;
+	dev_t dev;
+	u64 ino;
+
+	/*
+	 * btrfs subvolumes share i_sb->s_dev, and a snapshot's root has the
+	 * inode number and generation of its source. getattr reports a
+	 * separate st_dev for each subvolume. The key is never shown to
+	 * anyone, so skip the LSM check.
+	 */
+	if (vfs_getattr_nosec(&exp->ex_path, &stat, STATX_INO,
+			      AT_STATX_DONT_SYNC))
+		return NULL;
+	dev = stat.dev;
+	ino = stat.ino;
+
+	spin_lock_bh(&nn->export_stats_lock);
+	stats = export_stats_find(nn, dev, ino, gen, client, now);
 	if (stats)
-		percpu_counter_destroy_many(stats->counter,
-					    EXP_STATS_COUNTERS_NUM);
+		stats->es_users++;
+	spin_unlock_bh(&nn->export_stats_lock);
+	if (stats)
+		return stats;
+
+	new = kzalloc_obj(*new);
+	if (!new)
+		return NULL;
+	new->es_client = kstrdup(client, GFP_KERNEL);
+	if (!new->es_client ||
+	    percpu_counter_init_many(new->counter, 0, GFP_KERNEL,
+				     EXP_STATS_COUNTERS_NUM)) {
+		kfree(new->es_client);
+		kfree(new);
+		return NULL;
+	}
+	new->es_nn = nn;
+	new->es_users = 1;
+	new->es_dev = dev;
+	new->es_ino = ino;
+	new->es_gen = gen;
+	new->start_time = now;
+
+	spin_lock_bh(&nn->export_stats_lock);
+	stats = export_stats_find(nn, dev, ino, gen, client, now);
+	if (stats) {
+		stats->es_users++;
+	} else {
+		hash_add(nn->export_stats_hash, &new->es_node,
+			 export_stats_key(dev, ino));
+		stats = new;
+		new = NULL;
+	}
+	spin_unlock_bh(&nn->export_stats_lock);
+
+	if (new)
+		export_stats_free(new);
+	return stats;
+}
+
+/* Called from an RCU callback */
+static void export_stats_put(struct export_stats *stats)
+{
+	struct nfsd_net *nn;
+
+	if (!stats)
+		return;
+	nn = stats->es_nn;
+	spin_lock_bh(&nn->export_stats_lock);
+	if (!--stats->es_users) {
+		stats->es_idle_since = ktime_get_seconds();
+		export_stats_queue_reap(nn);
+	}
+	spin_unlock_bh(&nn->export_stats_lock);
+}
+
+static s64 export_stats_sum(struct export_stats *stats, int counter)
+{
+	return stats ? percpu_counter_sum_positive(&stats->counter[counter]) : 0;
+}
+
+static void export_stats_shutdown(struct nfsd_net *nn)
+{
+	struct export_stats *stats;
+	struct hlist_node *tmp;
+	int bkt;
+
+	/* Wait for svc_export_release() to drop its references */
+	rcu_barrier();
+	/* Only now, as those last puts can queue the reaper */
+	cancel_delayed_work_sync(&nn->export_stats_reaper);
+	hash_for_each_safe(nn->export_stats_hash, bkt, tmp, stats, es_node) {
+		hash_del(&stats->es_node);
+		if (WARN_ON_ONCE(stats->es_users))
+			continue;
+		export_stats_free(stats);
+	}
 }
 
 static void svc_export_release(struct rcu_head *rcu_head)
@@ -628,8 +794,7 @@ static void svc_export_release(struct rcu_head *rcu_head)
 			ex_rcu);
 
 	nfsd4_fslocs_free(&exp->ex_fslocs);
-	export_stats_destroy(exp->ex_stats);
-	kfree(exp->ex_stats);
+	export_stats_put(exp->ex_stats);
 	kfree(exp->ex_uuid);
 	kfree(exp);
 }
@@ -671,7 +836,7 @@ int nfsd_nl_svc_export_get_reqs_dumpit(struct sk_buff *skb,
 
 	nn = net_generic(sock_net(skb->sk), nfsd_net_id);
 
-	mutex_lock(&nfsd_mutex);
+	mutex_lock(&nn->nfsd_mutex);
 
 	cd = nn->svc_export_cache;
 	if (!cd) {
@@ -755,7 +920,7 @@ out_alloc:
 	kfree(seqnos);
 	kfree(items);
 out_unlock:
-	mutex_unlock(&nfsd_mutex);
+	mutex_unlock(&nn->nfsd_mutex);
 	return ret;
 }
 
@@ -842,14 +1007,14 @@ static int check_export(const struct path *path, int *flags,
 static int nfsd_nl_parse_one_export(struct cache_detail *cd,
 				    struct nlattr *attr)
 {
-	struct nlattr *tb[NFSD_A_SVC_EXPORT_FSID + 1];
+	struct nlattr *tb[NFSD_A_SVC_EXPORT_WRITE_IO + 1];
 	struct auth_domain *dom = NULL;
 	struct svc_export exp = {}, *expp;
 	struct nlattr *secinfo_attr;
 	struct timespec64 boot;
 	int err, rem;
 
-	err = nla_parse_nested(tb, NFSD_A_SVC_EXPORT_FSID, attr,
+	err = nla_parse_nested(tb, NFSD_A_SVC_EXPORT_WRITE_IO, attr,
 			       nfsd_svc_export_nl_policy, NULL);
 	if (err)
 		return err;
@@ -877,6 +1042,8 @@ static int nfsd_nl_parse_one_export(struct cache_detail *cd,
 	exp.cd = cd;
 	exp.ex_devid_map = NULL;
 	exp.ex_xprtsec_modes = NFSEXP_XPRTSEC_ALL;
+	exp.ex_read_io = NFSD_IO_DEFAULT;
+	exp.ex_write_io = NFSD_IO_DEFAULT;
 
 	/* expiry (required, wallclock seconds) */
 	if (!tb[NFSD_A_SVC_EXPORT_EXPIRY]) {
@@ -990,6 +1157,12 @@ static int nfsd_nl_parse_one_export(struct cache_detail *cd,
 			}
 		}
 
+		/* read-io / write-io (optional u32) */
+		if (tb[NFSD_A_SVC_EXPORT_READ_IO])
+			exp.ex_read_io = nla_get_u32(tb[NFSD_A_SVC_EXPORT_READ_IO]);
+		if (tb[NFSD_A_SVC_EXPORT_WRITE_IO])
+			exp.ex_write_io = nla_get_u32(tb[NFSD_A_SVC_EXPORT_WRITE_IO]);
+
 		err = check_export(&exp.ex_path, &exp.ex_flags,
 				   exp.ex_uuid);
 		if (err)
@@ -1054,7 +1227,7 @@ int nfsd_nl_svc_export_set_reqs_doit(struct sk_buff *skb,
 
 	nn = net_generic(genl_info_net(info), nfsd_net_id);
 
-	mutex_lock(&nfsd_mutex);
+	mutex_lock(&nn->nfsd_mutex);
 
 	cd = nn->svc_export_cache;
 	if (!cd) {
@@ -1070,7 +1243,7 @@ int nfsd_nl_svc_export_set_reqs_doit(struct sk_buff *skb,
 	}
 
 out_unlock:
-	mutex_unlock(&nfsd_mutex);
+	mutex_unlock(&nn->nfsd_mutex);
 	return ret;
 }
 
@@ -1346,6 +1519,8 @@ static int svc_export_parse(struct cache_detail *cd, char *mesg, int mlen)
 	exp.cd = cd;
 	exp.ex_devid_map = NULL;
 	exp.ex_xprtsec_modes = NFSEXP_XPRTSEC_ALL;
+	exp.ex_read_io = NFSD_IO_DEFAULT;
+	exp.ex_write_io = NFSD_IO_DEFAULT;
 
 	/* expiry */
 	err = get_expiry(&mesg, &exp.h.expiry_time);
@@ -1466,6 +1641,12 @@ static int is_export_stats_file(struct seq_file *m)
 	return !strcmp(m->file->f_path.dentry->d_name.name, "export_stats");
 }
 
+static const char * const nfsd_io_mode_names[] = {
+	[NFSD_IO_BUFFERED]	= "buffered",
+	[NFSD_IO_DONTCACHE]	= "dontcache",
+	[NFSD_IO_DIRECT]	= "direct",
+};
+
 static int svc_export_show(struct seq_file *m,
 			   struct cache_detail *cd,
 			   struct cache_head *h)
@@ -1485,15 +1666,19 @@ static int svc_export_show(struct seq_file *m,
 	seq_putc(m, '\t');
 	seq_escape(m, exp->ex_client->name, " \t\n\\");
 	if (export_stats) {
-		struct percpu_counter *counter = exp->ex_stats->counter;
+		struct export_stats *stats = exp->ex_stats;
 
-		seq_printf(m, "\t%lld\n", exp->ex_stats->start_time);
+		seq_printf(m, "\t%lld\n", stats ? stats->start_time : 0);
 		seq_printf(m, "\tfh_stale: %lld\n",
-			   percpu_counter_sum_positive(&counter[EXP_STATS_FH_STALE]));
+			   export_stats_sum(stats, EXP_STATS_FH_STALE));
 		seq_printf(m, "\tio_read: %lld\n",
-			   percpu_counter_sum_positive(&counter[EXP_STATS_IO_READ]));
+			   export_stats_sum(stats, EXP_STATS_IO_READ));
 		seq_printf(m, "\tio_write: %lld\n",
-			   percpu_counter_sum_positive(&counter[EXP_STATS_IO_WRITE]));
+			   export_stats_sum(stats, EXP_STATS_IO_WRITE));
+		if (IS_ENABLED(CONFIG_TASK_IO_ACCOUNTING))
+			seq_printf(m, "\tio_read_storage: %lld\n",
+				   export_stats_sum(stats,
+						    EXP_STATS_IO_READ_STORAGE));
 		seq_putc(m, '\n');
 		return 0;
 	}
@@ -1502,6 +1687,12 @@ static int svc_export_show(struct seq_file *m,
 	    !test_bit(CACHE_NEGATIVE, &h->flags)) {
 		exp_flags(m, exp->ex_flags, exp->ex_fsid,
 			  exp->ex_anon_uid, exp->ex_anon_gid, &exp->ex_fslocs);
+		if (exp->ex_read_io != NFSD_IO_DEFAULT)
+			seq_printf(m, ",read_io=%s",
+				   nfsd_io_mode_names[exp->ex_read_io]);
+		if (exp->ex_write_io != NFSD_IO_DEFAULT)
+			seq_printf(m, ",write_io=%s",
+				   nfsd_io_mode_names[exp->ex_write_io]);
 		if (exp->ex_uuid) {
 			int i;
 			seq_puts(m, ",uuid=");
@@ -1539,7 +1730,7 @@ static void svc_export_init(struct cache_head *cnew, struct cache_head *citem)
 	new->ex_layout_types = 0;
 	new->ex_uuid = NULL;
 	new->cd = item->cd;
-	export_stats_reset(new->ex_stats);
+	new->ex_stats = export_stats_get(new);
 }
 
 static void export_update(struct cache_head *cnew, struct cache_head *citem)
@@ -1568,6 +1759,8 @@ static void export_update(struct cache_head *cnew, struct cache_head *citem)
 		new->ex_flavors[i] = item->ex_flavors[i];
 	}
 	new->ex_xprtsec_modes = item->ex_xprtsec_modes;
+	new->ex_read_io = item->ex_read_io;
+	new->ex_write_io = item->ex_write_io;
 }
 
 static struct cache_head *svc_export_alloc(void)
@@ -1576,18 +1769,8 @@ static struct cache_head *svc_export_alloc(void)
 	if (!i)
 		return NULL;
 
-	i->ex_stats = kmalloc_obj(*(i->ex_stats));
-	if (!i->ex_stats) {
-		kfree(i);
-		return NULL;
-	}
-
-	if (export_stats_init(i->ex_stats)) {
-		kfree(i->ex_stats);
-		kfree(i);
-		return NULL;
-	}
-
+	/* svc_export_init() attaches the shared statistics */
+	i->ex_stats = NULL;
 	return &i->h;
 }
 
@@ -1890,21 +2073,19 @@ __be32 check_security_flavor(struct svc_export *exp, struct svc_rqst *rqstp,
  * check_nfsd_access - check if access to export is allowed.
  * @exp: svc_export that is being accessed.
  * @rqstp: svc_rqst attempting to access @exp.
- * @may_bypass_gss: reduce strictness of authorization check
  *
  * Return values:
  *   %nfs_ok if access is granted, or
  *   %nfserr_wrongsec if access is denied
  */
-__be32 check_nfsd_access(struct svc_export *exp, struct svc_rqst *rqstp,
-			 bool may_bypass_gss)
+__be32 check_nfsd_access(struct svc_export *exp, struct svc_rqst *rqstp)
 {
 	__be32 status;
 
 	status = check_xprtsec_policy(exp, rqstp);
 	if (status != nfs_ok)
 		return status;
-	return check_security_flavor(exp, rqstp, may_bypass_gss);
+	return check_security_flavor(exp, rqstp, false);
 }
 
 /*
@@ -2172,6 +2353,14 @@ static int e_show(struct seq_file *m, void *p)
 
 	if (cache_check_rcu(cd, &exp->h, NULL))
 		return 0;
+	/*
+	 * sunrpc_cache_update() leaves a replaced entry hashed, with an
+	 * expiry_time of zero, until cache_clean() removes it. It shares
+	 * export_stats with its replacement, so showing it would count the
+	 * same traffic twice.
+	 */
+	if (export_stats && !exp->h.expiry_time)
+		return 0;
 
 	return svc_export_show(m, cd, cp);
 }
@@ -2193,6 +2382,10 @@ nfsd_export_init(struct net *net)
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 
 	dprintk("nfsd: initializing export module (net: %x).\n", net->ns.inum);
+
+	spin_lock_init(&nn->export_stats_lock);
+	hash_init(nn->export_stats_hash);
+	INIT_DELAYED_WORK(&nn->export_stats_reaper, export_stats_reap);
 
 	nn->svc_export_cache = cache_create_net(&svc_export_cache_template, net);
 	if (IS_ERR(nn->svc_export_cache))
@@ -2217,6 +2410,8 @@ unregister_export_cache:
 	cache_unregister_net(nn->svc_export_cache, net);
 destroy_export_cache:
 	cache_destroy_net(nn->svc_export_cache, net);
+	/* Entries purged above drop their export_stats from an RCU callback */
+	export_stats_shutdown(nn);
 	return rv;
 }
 
@@ -2246,6 +2441,7 @@ nfsd_export_shutdown(struct net *net)
 	cache_unregister_net(nn->svc_export_cache, net);
 	cache_destroy_net(nn->svc_expkey_cache, net);
 	cache_destroy_net(nn->svc_export_cache, net);
+	export_stats_shutdown(nn);
 	svcauth_unix_purge(net);
 
 	dprintk("nfsd: export shutdown complete (net: %x).\n", net->ns.inum);

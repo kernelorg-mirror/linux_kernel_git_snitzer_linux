@@ -37,6 +37,7 @@
 #include <linux/sunrpc/svc_xprt.h>
 #include <linux/slab.h>
 #include "nfsd.h"
+#include "nfserr.h"
 #include "state.h"
 #include "netns.h"
 #include "stats.h"
@@ -1529,12 +1530,14 @@ out:
 
 /**
  * nfsd41_cb_destroy_referring_call_list - release referring call info
- * @cb: context of a callback that has completed
+ * @cb: context of callback to release referring calls from
  *
  * Callers who allocate referring calls using nfsd41_cb_referring_call() must
  * release those resources by calling nfsd41_cb_destroy_referring_call_list.
  *
- * Caller serializes access to @cb.
+ * Caller serializes access to @cb. No CB_COMPOUND for @cb may be in
+ * flight, because encode_cb_sequence4args() walks this list as it
+ * encodes.
  */
 void nfsd41_cb_destroy_referring_call_list(struct nfsd4_callback *cb)
 {
@@ -1556,6 +1559,7 @@ void nfsd41_cb_destroy_referring_call_list(struct nfsd4_callback *cb)
 		list_del(&rcl->__list);
 		kfree(rcl);
 	}
+	cb->cb_nr_referring_call_list = 0;
 }
 
 static void nfsd4_cb_prepare(struct rpc_task *task, void *calldata)
@@ -1796,6 +1800,7 @@ static void nfsd4_process_cb_update(struct nfsd4_callback *cb)
 	struct nfs4_client *clp = cb->cb_clp;
 	struct nfsd4_session *ses = NULL;
 	struct nfsd4_conn *c;
+	struct svc_xprt *cb_xprt = NULL;
 	int err;
 
 	trace_nfsd_cb_bc_update(clp, cb);
@@ -1829,8 +1834,9 @@ static void nfsd4_process_cb_update(struct nfsd4_callback *cb)
 	memcpy(&conn, &cb->cb_clp->cl_cb_conn, sizeof(struct nfs4_cb_conn));
 	c = __nfsd4_find_backchannel(clp);
 	if (c) {
-		svc_xprt_get(c->cn_xprt);
-		conn.cb_xprt = c->cn_xprt;
+		cb_xprt = c->cn_xprt;
+		svc_xprt_get(cb_xprt);
+		conn.cb_xprt = cb_xprt;
 		ses = c->cn_session;
 	}
 	spin_unlock(&clp->cl_lock);
@@ -1838,8 +1844,8 @@ static void nfsd4_process_cb_update(struct nfsd4_callback *cb)
 	err = setup_callback_client(clp, &conn, ses);
 	if (err) {
 		nfsd4_mark_cb_down(clp);
-		if (c)
-			svc_xprt_put(c->cn_xprt);
+		if (cb_xprt)
+			svc_xprt_put(cb_xprt);
 		rcu_assign_pointer(clp->cl_cb_session, ses);
 		return;
 	}

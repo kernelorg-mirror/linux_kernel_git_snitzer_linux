@@ -540,6 +540,13 @@ static int unix_gid_parse(struct cache_detail *cd,
 	if (ugp) {
 		struct cache_head *ch;
 		ug.h.flags = 0;
+		/*
+		 * mountd sends at least the user's primary group on
+		 * success, so an empty list can only mean the lookup
+		 * failed. Keep the credential's own groups instead.
+		 */
+		if (gids == 0)
+			set_bit(CACHE_NEGATIVE, &ug.h.flags);
 		ug.h.expiry_time = expiry;
 		ch = sunrpc_cache_update(cd,
 					 &ug.h, &ugp->h,
@@ -730,6 +737,8 @@ static int sunrpc_nl_parse_one_unix_gid(struct cache_detail *cd,
 			   boot.tv_sec;
 
 	if (tb[SUNRPC_A_UNIX_GID_NEGATIVE]) {
+		/* failed lookup: keep the credential's own groups */
+		set_bit(CACHE_NEGATIVE, &ug.h.flags);
 		ug.gi = groups_alloc(0);
 		if (!ug.gi)
 			return -ENOMEM;
@@ -1129,6 +1138,12 @@ svcauth_tls_accept(struct svc_rqst *rqstp)
 		return SVC_DENIED;
 	}
 
+	/* AUTH_TLS is not valid on backchannel (rq_xprt is NULL) */
+	if (!xprt) {
+		rqstp->rq_auth_stat = rpc_autherr_badcred;
+		return SVC_DENIED;
+	}
+
 	/* Signal that mapping to nobody uid/gid is required */
 	cred->cr_uid = INVALID_UID;
 	cred->cr_gid = INVALID_GID;
@@ -1136,7 +1151,7 @@ svcauth_tls_accept(struct svc_rqst *rqstp)
 	if (cred->cr_group_info == NULL)
 		return SVC_CLOSE;
 
-	if (xprt->xpt_ops->xpo_handshake) {
+	if (xprt->xpt_ops->xpo_handshake && rqstp->rq_server->sv_tls) {
 		p = xdr_reserve_space(&rqstp->rq_res_stream, XDR_UNIT * 2 + 8);
 		if (!p)
 			return SVC_CLOSE;

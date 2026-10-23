@@ -26,6 +26,7 @@
 #include <linux/xattr.h>
 #include <linux/jhash.h>
 #include <linux/pagemap.h>
+#include <linux/nfs_dio.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/exportfs.h>
@@ -34,15 +35,14 @@
 #include <linux/sunrpc/xdr.h>
 #include <linux/fileattr.h>
 
-#include "xdr3.h"
-
 #ifdef CONFIG_NFSD_V4
 #include "acl.h"
 #include "idmap.h"
-#include "xdr4.h"
 #endif /* CONFIG_NFSD_V4 */
 
 #include "nfsd.h"
+#include "nfserr.h"
+#include "nfs4ctl.h"
 #include "netns.h"
 #include "stats.h"
 #include "vfs.h"
@@ -54,6 +54,8 @@
 bool nfsd_disable_splice_read __read_mostly;
 u64 nfsd_io_cache_read __read_mostly = NFSD_IO_BUFFERED;
 u64 nfsd_io_cache_write __read_mostly = NFSD_IO_BUFFERED;
+u32 nfsd_direct_misaligned_min_bytes __read_mostly = 8192;
+bool nfsd_direct_misaligned_dontcache __read_mostly = true;
 
 /**
  * nfserrno - Map Linux errnos to NFS errnos
@@ -63,7 +65,7 @@ u64 nfsd_io_cache_write __read_mostly = NFSD_IO_BUFFERED;
  * it's an error we don't expect, log it once and return nfserr_io.
  */
 __be32
-nfserrno (int errno)
+nfserrno(int errno)
 {
 	static struct {
 		__be32	nfserr;
@@ -107,6 +109,8 @@ nfserrno (int errno)
 		{ nfserr_perm, -ENOKEY },
 		{ nfserr_no_grace, -ENOGRACE},
 		{ nfserr_io, -EBADMSG },
+		{ nfserr_symlink, -ELOOP },
+		{ nfserr_wrong_type, -EFTYPE },
 	};
 	int	i;
 
@@ -118,15 +122,15 @@ nfserrno (int errno)
 	return nfserr_io;
 }
 
-/* 
- * Called from nfsd_lookup and encode_dirent. Check if we have crossed 
+/*
+ * Called from nfsd_lookup and encode_dirent. Check if we have crossed
  * a mount point.
- * Returns -EAGAIN or -ETIMEDOUT leaving *dpp and *expp unchanged,
+ * Returns an nfs error leaving *dpp and *expp unchanged,
  *  or nfs_ok having possibly changed *dpp and *expp
  */
-int
-nfsd_cross_mnt(struct svc_rqst *rqstp, struct dentry **dpp, 
-		        struct svc_export **expp)
+__be32
+nfsd_cross_mnt(struct svc_rqst *rqstp, struct dentry **dpp,
+	       struct svc_export **expp)
 {
 	struct svc_export *exp = *expp, *exp2 = NULL;
 	struct dentry *dentry = *dpp;
@@ -134,6 +138,7 @@ nfsd_cross_mnt(struct svc_rqst *rqstp, struct dentry **dpp,
 			    .dentry = dget(dentry)};
 	unsigned int follow_flags = 0;
 	int err = 0;
+	__be32 nfserr = nfs_ok;
 
 	if (exp->ex_flags & NFSEXP_CROSSMOUNT)
 		follow_flags = LOOKUP_AUTOMOUNT;
@@ -163,23 +168,28 @@ nfsd_cross_mnt(struct svc_rqst *rqstp, struct dentry **dpp,
 			err = 0;
 	} else if (nfsd_v4client(rqstp) ||
 		(exp->ex_flags & NFSEXP_CROSSMOUNT) || EX_NOHIDE(exp2)) {
-		/* successfully crossed mount point */
-		/*
-		 * This is subtle: path.dentry is *not* on path.mnt
-		 * at this point.  The only reason we are safe is that
-		 * original mnt is pinned down by exp, so we should
-		 * put path *before* putting exp
-		 */
-		*dpp = path.dentry;
-		path.dentry = dentry;
-		*expp = exp2;
-		exp2 = exp;
+		nfserr = check_nfsd_access(exp, rqstp);
+		if (nfserr == nfs_ok) {
+			/* successfully crossed mount point */
+			/*
+			 * This is subtle: path.dentry is *not* on path.mnt
+			 * at this point.  The only reason we are safe is that
+			 * original mnt is pinned down by exp, so we should
+			 * put path *before* putting exp
+			 */
+			*dpp = path.dentry;
+			path.dentry = dentry;
+			*expp = exp2;
+			exp2 = exp;
+		}
 	}
 out:
 	path_put(&path);
 	if (exp2)
 		exp_put(exp2);
-	return err;
+	if (nfserr)
+		return nfserr;
+	return nfserrno(err);
 }
 
 static void follow_to_parent(struct path *path)
@@ -277,10 +287,12 @@ nfsd_lookup_dentry(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		if (IS_ERR(dentry))
 			goto out_nfserr;
 		if (nfsd_mountpoint(dentry, exp)) {
-			host_err = nfsd_cross_mnt(rqstp, &dentry, &exp);
-			if (host_err) {
+			__be32 nfserr = nfsd_cross_mnt(rqstp, &dentry, &exp);
+
+			if (nfserr) {
 				dput(dentry);
-				goto out_nfserr;
+				exp_put(exp);
+				return nfserr;
 			}
 		}
 	}
@@ -327,9 +339,6 @@ nfsd_lookup(struct svc_rqst *rqstp, struct svc_fh *fhp, const char *name,
 	err = nfsd_lookup_dentry(rqstp, fhp, name, len, &exp, &dentry);
 	if (err)
 		return err;
-	err = check_nfsd_access(exp, rqstp, false);
-	if (err)
-		goto out;
 	/*
 	 * Note: we compose the file handle now, but as the
 	 * dentry may be negative, it may need to be updated.
@@ -337,15 +346,26 @@ nfsd_lookup(struct svc_rqst *rqstp, struct svc_fh *fhp, const char *name,
 	err = fh_compose(resfh, exp, dentry, fhp);
 	if (!err && d_really_is_negative(dentry))
 		err = nfserr_noent;
-out:
+
 	dput(dentry);
 	exp_put(exp);
 	return err;
 }
 
-static void
-commit_reset_write_verifier(struct nfsd_net *nn, struct svc_rqst *rqstp,
-			    int err)
+/**
+ * nfsd_maybe_reset_write_verifier - Reset the write verifier after an I/O error
+ * @nn: nfsd namespace holding the write verifier
+ * @rqstp: RPC transaction context
+ * @err: errno reported by the failed operation
+ *
+ * A write verifier reset tells clients that unstable data the server has
+ * already acknowledged might have been lost. Client response is to resend
+ * in-flight dirty data.
+ *
+ * Context: Process context.
+ */
+void nfsd_maybe_reset_write_verifier(struct nfsd_net *nn,
+				     struct svc_rqst *rqstp, int err)
 {
 	switch (err) {
 	case -EAGAIN:
@@ -682,56 +702,67 @@ int nfsd4_is_junction(struct dentry *dentry)
 	return 1;
 }
 
-static struct nfsd4_compound_state *nfsd4_get_cstate(struct svc_rqst *rqstp)
+/**
+ * nfsd_clone_file_range - Clone a range of one file into another
+ * @src: file the range is cloned from
+ * @src_pos: offset in @src where the source range begins
+ * @dst: file the range is cloned into
+ * @dst_pos: offset in @dst where the destination range begins
+ * @count: length of the range, or zero to clone through end-of-file
+ * @since: receives @dst's writeback error state, sampled before the clone
+ *
+ * A caller that has to place the cloned data on durable storage passes
+ * @since to nfsd_clone_sync_range() once this call succeeds. Sampling
+ * happens here because a writeback error raised by the clone's own
+ * dirty pages has to fall inside the sampled interval.
+ *
+ * Context: Process context.
+ * Return: zero on success, or a negative errno
+ */
+int nfsd_clone_file_range(struct file *src, u64 src_pos, struct file *dst,
+			  u64 dst_pos, u64 count, errseq_t *since)
 {
-	return &((struct nfsd4_compoundres *)rqstp->rq_resp)->cstate;
+	loff_t cloned;
+
+	*since = READ_ONCE(dst->f_wb_err);
+	cloned = vfs_clone_file_range(src, src_pos, dst, dst_pos, count, 0);
+	if (cloned < 0)
+		return cloned;
+	if (count && cloned != count)
+		return -EINVAL;
+	return 0;
 }
 
-__be32 nfsd4_clone_file_range(struct svc_rqst *rqstp,
-		struct nfsd_file *nf_src, u64 src_pos,
-		struct nfsd_file *nf_dst, u64 dst_pos,
-		u64 count, bool sync)
+/**
+ * nfsd_clone_sync_range - Commit a cloned range to durable storage
+ * @src: file the range was cloned from, whose metadata is committed too
+ * @dst: file the range was cloned into
+ * @dst_pos: offset in @dst where the cloned range begins
+ * @count: length of the range, or zero if the clone ran to end-of-file
+ * @since: @dst's writeback error state as sampled by
+ *	   nfsd_clone_file_range()
+ *
+ * Context: Process context.
+ * Return: zero on success, or a negative errno
+ */
+int nfsd_clone_sync_range(struct file *src, struct file *dst, u64 dst_pos,
+			  u64 count, errseq_t since)
 {
-	struct file *src = nf_src->nf_file;
-	struct file *dst = nf_dst->nf_file;
-	errseq_t since;
-	loff_t cloned;
-	__be32 ret = 0;
+	loff_t dst_end = count ? dst_pos + count - 1 : LLONG_MAX;
+	int status;
 
-	since = READ_ONCE(dst->f_wb_err);
-	cloned = vfs_clone_file_range(src, src_pos, dst, dst_pos, count, 0);
-	if (cloned < 0) {
-		ret = nfserrno(cloned);
-		goto out_err;
+	status = vfs_fsync_range(dst, dst_pos, dst_end, 0);
+	if (!status)
+		status = filemap_check_wb_err(dst->f_mapping, since);
+	if (!status) {
+		/*
+		 * A reflink marks extents shared in the source inode too,
+		 * so the source's metadata has to reach durable storage
+		 * even though its data is untouched.
+		 */
+		status = commit_inode_metadata(file_inode(src));
 	}
-	if (count && cloned != count) {
-		ret = nfserrno(-EINVAL);
-		goto out_err;
-	}
-	if (sync) {
-		loff_t dst_end = count ? dst_pos + count - 1 : LLONG_MAX;
-		int status = vfs_fsync_range(dst, dst_pos, dst_end, 0);
-
-		if (!status)
-			status = filemap_check_wb_err(dst->f_mapping, since);
-		if (!status)
-			status = commit_inode_metadata(file_inode(src));
-		if (status < 0) {
-			struct nfsd_net *nn = net_generic(nf_dst->nf_net,
-							  nfsd_net_id);
-
-			trace_nfsd_clone_file_range_err(rqstp,
-					&nfsd4_get_cstate(rqstp)->save_fh,
-					src_pos,
-					&nfsd4_get_cstate(rqstp)->current_fh,
-					dst_pos,
-					count, status);
-			commit_reset_write_verifier(nn, rqstp, status);
-			ret = nfserrno(status);
-		}
-	}
-out_err:
-	return ret;
+	return status;
 }
 
 ssize_t nfsd_copy_file_range(struct file *src, u64 src_pos, struct file *dst,
@@ -773,64 +804,21 @@ __be32 nfsd4_vfs_fallocate(struct svc_rqst *rqstp, struct svc_fh *fhp,
 }
 #endif /* defined(CONFIG_NFSD_V4) */
 
-/*
- * Check server access rights to a file system object
+/**
+ * nfsd_access - Check caller's access rights to a file system object
+ * @rqstp: RPC transaction context
+ * @fhp: target NFS filehandle
+ * @maps: tables mapping on-the-wire access bits to NFSD_MAY flags
+ * @access: requested access bits on entry, permitted bits on return
+ * @supported: optional output of the access bits the server supports
+ *
+ * Return: nfs_ok on success, otherwise an nfserr status code
  */
-struct accessmap {
-	u32		access;
-	int		how;
-};
-static struct accessmap	nfs3_regaccess[] = {
-    {	NFS3_ACCESS_READ,	NFSD_MAY_READ			},
-    {	NFS3_ACCESS_EXECUTE,	NFSD_MAY_EXEC			},
-    {	NFS3_ACCESS_MODIFY,	NFSD_MAY_WRITE|NFSD_MAY_TRUNC	},
-    {	NFS3_ACCESS_EXTEND,	NFSD_MAY_WRITE			},
-
-#ifdef CONFIG_NFSD_V4
-    {	NFS4_ACCESS_XAREAD,	NFSD_MAY_READ			},
-    {	NFS4_ACCESS_XAWRITE,	NFSD_MAY_WRITE			},
-    {	NFS4_ACCESS_XALIST,	NFSD_MAY_READ			},
-#endif
-
-    {	0,			0				}
-};
-
-static struct accessmap	nfs3_diraccess[] = {
-    {	NFS3_ACCESS_READ,	NFSD_MAY_READ			},
-    {	NFS3_ACCESS_LOOKUP,	NFSD_MAY_EXEC			},
-    {	NFS3_ACCESS_MODIFY,	NFSD_MAY_EXEC|NFSD_MAY_WRITE|NFSD_MAY_TRUNC},
-    {	NFS3_ACCESS_EXTEND,	NFSD_MAY_EXEC|NFSD_MAY_WRITE	},
-    {	NFS3_ACCESS_DELETE,	NFSD_MAY_REMOVE			},
-
-#ifdef CONFIG_NFSD_V4
-    {	NFS4_ACCESS_XAREAD,	NFSD_MAY_READ			},
-    {	NFS4_ACCESS_XAWRITE,	NFSD_MAY_WRITE			},
-    {	NFS4_ACCESS_XALIST,	NFSD_MAY_READ			},
-#endif
-
-    {	0,			0				}
-};
-
-static struct accessmap	nfs3_anyaccess[] = {
-	/* Some clients - Solaris 2.6 at least, make an access call
-	 * to the server to check for access for things like /dev/null
-	 * (which really, the server doesn't care about).  So
-	 * We provide simple access checking for them, looking
-	 * mainly at mode bits, and we make sure to ignore read-only
-	 * filesystem checks
-	 */
-    {	NFS3_ACCESS_READ,	NFSD_MAY_READ			},
-    {	NFS3_ACCESS_EXECUTE,	NFSD_MAY_EXEC			},
-    {	NFS3_ACCESS_MODIFY,	NFSD_MAY_WRITE|NFSD_MAY_LOCAL_ACCESS	},
-    {	NFS3_ACCESS_EXTEND,	NFSD_MAY_WRITE|NFSD_MAY_LOCAL_ACCESS	},
-
-    {	0,			0				}
-};
-
-__be32
-nfsd_access(struct svc_rqst *rqstp, struct svc_fh *fhp, u32 *access, u32 *supported)
+__be32 nfsd_access(struct svc_rqst *rqstp, struct svc_fh *fhp,
+		   const struct nfsd_access_maps *maps,
+		   u32 *access, u32 *supported)
 {
-	struct accessmap	*map;
+	const struct nfsd_access_map *map;
 	struct svc_export	*export;
 	struct dentry		*dentry;
 	u32			query, result = 0, sresult = 0;
@@ -844,12 +832,11 @@ nfsd_access(struct svc_rqst *rqstp, struct svc_fh *fhp, u32 *access, u32 *suppor
 	dentry = fhp->fh_dentry;
 
 	if (d_is_reg(dentry))
-		map = nfs3_regaccess;
+		map = maps->regular;
 	else if (d_is_dir(dentry))
-		map = nfs3_diraccess;
+		map = maps->directory;
 	else
-		map = nfs3_anyaccess;
-
+		map = maps->other;
 
 	query = *access;
 	for  (; map->access; map++) {
@@ -859,7 +846,7 @@ nfsd_access(struct svc_rqst *rqstp, struct svc_fh *fhp, u32 *access, u32 *suppor
 			sresult |= map->access;
 
 			err2 = nfsd_permission(&rqstp->rq_cred, export,
-					       dentry, map->how);
+					       dentry, map->may);
 			switch (err2) {
 			case nfs_ok:
 				result |= map->access;
@@ -1054,15 +1041,17 @@ static u32 nfsd_eof_on_read(struct file *file, loff_t offset, ssize_t len,
 
 static __be32 nfsd_finish_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			       struct file *file, loff_t offset,
-			       unsigned long *count, u32 *eof, ssize_t host_err)
+			       unsigned long *count, u32 *eof, ssize_t host_err,
+			       u64 storage_start)
 {
+	nfsd_stats_io_read_storage_add(fhp->fh_export,
+				       nfsd_storage_read_bytes() - storage_start);
 	if (host_err >= 0) {
 		struct nfsd_net *nn = net_generic(SVC_NET(rqstp), nfsd_net_id);
 
 		nfsd_stats_io_read_add(nn, fhp->fh_export, host_err);
 		*eof = nfsd_eof_on_read(file, offset, host_err, *count);
 		*count = host_err;
-		fsnotify_access(file);
 		trace_nfsd_read_io_done(rqstp, fhp, offset, *count);
 		return 0;
 	} else {
@@ -1087,20 +1076,14 @@ __be32 nfsd_splice_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			struct file *file, loff_t offset, unsigned long *count,
 			u32 *eof)
 {
-	struct splice_desc sd = {
-		.len		= 0,
-		.total_len	= *count,
-		.pos		= offset,
-		.u.data		= rqstp,
-	};
+	u64 storage_start = nfsd_storage_read_bytes();
 	ssize_t host_err;
 
 	trace_nfsd_read_splice(rqstp, fhp, offset, *count);
-	host_err = rw_verify_area(READ, file, &offset, *count);
-	if (!host_err)
-		host_err = splice_direct_to_actor(file, &sd,
-						  nfsd_direct_splice_actor);
-	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err);
+	host_err = vfs_splice_to_actor(file, offset, *count,
+				       nfsd_direct_splice_actor, rqstp);
+	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err,
+				storage_start);
 }
 
 /*
@@ -1112,14 +1095,13 @@ __be32 nfsd_splice_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
  *
  * Note that a direct read can be done only when the xdr_buf containing
  * the NFS READ reply does not already have contents in its .pages array.
- * This is due to potentially restrictive alignment requirements on the
- * read buffer. When .page_len and @base are zero, the .pages array is
- * guaranteed to be page-aligned.
+ * Direct I/O alignment can be restrictive, and with .page_len zero the
+ * read buffer starts on a page boundary.
  */
 static noinline_for_stack __be32
 nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		 struct nfsd_file *nf, loff_t offset, unsigned long *count,
-		 u32 *eof)
+		 struct page **page, u32 *eof, u64 storage_start)
 {
 	u64 dio_start, dio_end;
 	unsigned long v, total;
@@ -1139,16 +1121,15 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	v = 0;
 	total = dio_end - dio_start;
-	while (total && v < rqstp->rq_maxpages &&
-	       rqstp->rq_next_page < rqstp->rq_page_end) {
+	while (total && v < rqstp->rq_maxpages && page < rqstp->rq_page_end) {
 		len = min_t(size_t, total, PAGE_SIZE);
-		bvec_set_page(&rqstp->rq_bvec[v], *rqstp->rq_next_page,
-			      len, 0);
+		bvec_set_page(&rqstp->rq_bvec[v], *page, len, 0);
 
 		total -= len;
-		++rqstp->rq_next_page;
+		++page;
 		++v;
 	}
+	rqstp->rq_next_page = page;
 
 	trace_nfsd_read_direct(rqstp, fhp, offset, *count - total);
 	iov_iter_bvec(&iter, ITER_DEST, rqstp->rq_bvec, v,
@@ -1158,9 +1139,6 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (host_err >= 0) {
 		unsigned int pad = offset - dio_start;
 
-		/* The returned payload starts after the pad */
-		rqstp->rq_res.page_base = pad;
-
 		/* Compute the count of bytes to be returned */
 		if (host_err > pad + *count)
 			host_err = *count;
@@ -1168,6 +1146,10 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			host_err -= pad;
 		else
 			host_err = 0;
+
+		/* The returned payload starts after the pad */
+		if (host_err)
+			rqstp->rq_res.page_base = pad;
 	} else if (unlikely(host_err == -EINVAL)) {
 		struct inode *inode = d_inode(fhp->fh_dentry);
 
@@ -1177,7 +1159,77 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	}
 
 	return nfsd_finish_read(rqstp, fhp, nf->nf_file, offset, count,
-				eof, host_err);
+				eof, host_err, storage_start);
+}
+
+static bool nfsd_direct_read_ok(struct svc_rqst *rqstp, struct svc_fh *fhp,
+				struct nfsd_file *nf, loff_t offset,
+				unsigned long count, struct page **page,
+				bool dio_ok)
+{
+	u32 offset_align = nf->nf_dio_read_offset_align;
+	u64 dio_len;
+
+	/* When dio_read_offset_align is zero, dio is not supported */
+	if (!offset_align) {
+		trace_nfsd_read_dio_no_alignment(rqstp, fhp, offset, count,
+						 offset_align);
+		return false;
+	}
+	/* Not worth rounding a READ this small out to whole alignment units */
+	if (count < offset_align) {
+		trace_nfsd_read_dio_too_small(rqstp, fhp, offset, count,
+					      offset_align);
+		return false;
+	}
+	if (rqstp->rq_res.page_len) {
+		trace_nfsd_read_dio_pages_in_use(rqstp, fhp, offset, count,
+						 offset_align);
+		return false;
+	}
+	if (!dio_ok)
+		return false;
+	/* An alignment above PAGE_SIZE can round the range past rq_page_end */
+	dio_len = round_up((u64)offset + count, offset_align) -
+		  round_down(offset, offset_align);
+	if ((s64)dio_len > (s64)PAGE_SIZE * (rqstp->rq_page_end - page)) {
+		trace_nfsd_read_dio_range_too_large(rqstp, fhp, offset, count,
+						    offset_align);
+		return false;
+	}
+	return true;
+}
+
+/**
+ * nfsd_read_io_mode - effective NFS READ I/O mode for an export
+ * @exp: export being accessed
+ *
+ * An export without an explicit read_io= setting follows the global
+ * nfsd_io_cache_read knob.
+ *
+ * Returns one of NFSD_IO_BUFFERED, NFSD_IO_DONTCACHE, or NFSD_IO_DIRECT.
+ */
+int nfsd_read_io_mode(struct svc_export *exp)
+{
+	if (exp->ex_read_io == NFSD_IO_DEFAULT)
+		return nfsd_io_cache_read;
+	return exp->ex_read_io;
+}
+
+/**
+ * nfsd_write_io_mode - effective NFS WRITE I/O mode for an export
+ * @exp: export being accessed
+ *
+ * An export without an explicit write_io= setting follows the global
+ * nfsd_io_cache_write knob.
+ *
+ * Returns one of NFSD_IO_BUFFERED, NFSD_IO_DONTCACHE, or NFSD_IO_DIRECT.
+ */
+int nfsd_write_io_mode(struct svc_export *exp)
+{
+	if (exp->ex_write_io == NFSD_IO_DEFAULT)
+		return nfsd_io_cache_write;
+	return exp->ex_write_io;
 }
 
 /**
@@ -1187,20 +1239,33 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
  * @nf: opened struct nfsd_file of file to be read
  * @offset: starting byte offset
  * @count: IN: requested number of bytes; OUT: number of bytes read
- * @base: offset in first page of read buffer
  * @eof: OUT: set non-zero if operation reached the end of the file
+ * @dio_ok: false forces a buffered read even when the export selects
+ *	    direct I/O
  *
  * Some filesystems or situations cannot use nfsd_splice_read. This
  * function is the slightly less-performant fallback for those cases.
+ * File data lands in @rqstp->rq_res.pages at the offset .page_len
+ * records. On return, @rqstp->rq_next_page points past the last page
+ * offered to the read.
+ *
+ * A direct read leaves its alignment pad at the front of the pages and
+ * records the pad length in @rqstp->rq_res.page_base. The xdr_stream
+ * encoder does not account for page_base, so pass @dio_ok false when
+ * more XDR items follow the payload in the pages.
  *
  * Returns nfs_ok on success, otherwise an nfserr stat value is
  * returned.
  */
 __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		      struct nfsd_file *nf, loff_t offset, unsigned long *count,
-		      unsigned int base, u32 *eof)
+		      u32 *eof, bool dio_ok)
 {
+	struct xdr_buf *buf = &rqstp->rq_res;
+	struct page **page = buf->pages + (buf->page_len >> PAGE_SHIFT);
+	unsigned int base = buf->page_len & ~PAGE_MASK;
 	struct file *file = nf->nf_file;
+	u64 storage_start = nfsd_storage_read_bytes();
 	unsigned long v, total;
 	struct iov_iter iter;
 	struct kiocb kiocb;
@@ -1209,14 +1274,15 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	init_sync_kiocb(&kiocb, file);
 
-	switch (nfsd_io_cache_read) {
+	switch (nfsd_read_io_mode(fhp->fh_export)) {
 	case NFSD_IO_BUFFERED:
 		break;
 	case NFSD_IO_DIRECT:
-		/* When dio_read_offset_align is zero, dio is not supported */
-		if (nf->nf_dio_read_offset_align && !rqstp->rq_res.page_len)
+		if (nfsd_direct_read_ok(rqstp, fhp, nf, offset, *count,
+					page, dio_ok))
 			return nfsd_direct_read(rqstp, fhp, nf, offset,
-						count, eof);
+						count, page, eof,
+						storage_start);
 		fallthrough;
 	case NFSD_IO_DONTCACHE:
 		if (file->f_op->fop_flags & FOP_DONTCACHE)
@@ -1228,22 +1294,25 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	v = 0;
 	total = *count;
-	while (total && v < rqstp->rq_maxpages &&
-	       rqstp->rq_next_page < rqstp->rq_page_end) {
+	while (total && v < rqstp->rq_maxpages && page < rqstp->rq_page_end) {
 		len = min_t(size_t, total, PAGE_SIZE - base);
-		bvec_set_page(&rqstp->rq_bvec[v], *rqstp->rq_next_page,
-			      len, base);
+		bvec_set_page(&rqstp->rq_bvec[v], *page, len, base);
 
 		total -= len;
-		++rqstp->rq_next_page;
+		++page;
 		++v;
 		base = 0;
 	}
+	rqstp->rq_next_page = page;
 
-	trace_nfsd_read_vector(rqstp, fhp, offset, *count - total);
+	trace_nfsd_read_vector(rqstp, fhp, offset, *count - total,
+			       kiocb.ki_flags);
+	trace_nfsd_read_dontcache(rqstp, fhp, offset, *count - total,
+				  kiocb.ki_flags);
 	iov_iter_bvec(&iter, ITER_DEST, rqstp->rq_bvec, v, *count - total);
 	host_err = vfs_iocb_iter_read(file, &kiocb, &iter);
-	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err);
+	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err,
+				storage_start);
 }
 
 /*
@@ -1283,93 +1352,65 @@ static int wait_for_concurrent_writes(struct file *file)
 	return err;
 }
 
-struct nfsd_write_dio_seg {
-	struct iov_iter			iter;
-	int				flags;
-};
-
-static unsigned long
-iov_iter_bvec_offset(const struct iov_iter *iter)
+/* Report nfs_dio_split()'s decision on a WRITE: one event per outcome */
+static void nfsd_trace_write_dio(struct svc_rqst *rqstp, struct svc_fh *fhp,
+				 loff_t offset, unsigned long total,
+				 const struct nfs_dio_policy *policy,
+				 const struct nfs_dio_split *split)
 {
-	return (unsigned long)(iter->bvec->bv_offset + iter->iov_offset);
-}
+	u32 oa = policy->offset_align, ma = policy->mem_align;
 
-static void
-nfsd_write_dio_seg_init(struct nfsd_write_dio_seg *segment,
-			struct bio_vec *bvec, unsigned int nvecs,
-			unsigned long total, size_t start, size_t len,
-			struct kiocb *iocb)
-{
-	iov_iter_bvec(&segment->iter, ITER_SOURCE, bvec, nvecs, total);
-	if (start)
-		iov_iter_advance(&segment->iter, start);
-	iov_iter_truncate(&segment->iter, len);
-	segment->flags = iocb->ki_flags;
+	switch (split->disposition) {
+	case NFS_DIO_DIRECT:
+		trace_nfsd_write_dio_direct(rqstp, fhp, offset, total, oa, ma,
+					    split->mem_offset, split->prefix,
+					    split->middle, split->suffix);
+		break;
+	case NFS_DIO_NO_ALIGNMENT:
+		trace_nfsd_write_dio_no_alignment(rqstp, fhp, offset, total,
+						  oa, ma, split->mem_offset,
+						  split->prefix, split->middle,
+						  split->suffix);
+		break;
+	case NFS_DIO_TOO_SMALL:
+		trace_nfsd_write_dio_too_small(rqstp, fhp, offset, total, oa,
+					       ma, split->mem_offset,
+					       split->prefix, split->middle,
+					       split->suffix);
+		break;
+	case NFS_DIO_NO_MIDDLE:
+		trace_nfsd_write_dio_no_middle(rqstp, fhp, offset, total, oa,
+					       ma, split->mem_offset,
+					       split->prefix, split->middle,
+					       split->suffix);
+		break;
+	case NFS_DIO_MEM_MISALIGNED:
+		trace_nfsd_write_dio_mem_misaligned(rqstp, fhp, offset, total,
+						    oa, ma, split->mem_offset,
+						    split->prefix,
+						    split->middle,
+						    split->suffix);
+		break;
+	}
 }
 
 static unsigned int
-nfsd_write_dio_iters_init(struct nfsd_file *nf, struct bio_vec *bvec,
+nfsd_write_dio_iters_init(struct svc_rqst *rqstp, struct svc_fh *fhp,
+			  struct nfsd_file *nf, struct bio_vec *bvec,
 			  unsigned int nvecs, struct kiocb *iocb,
-			  unsigned long total,
-			  struct nfsd_write_dio_seg segments[3])
+			  unsigned long total, struct nfs_dio_split *split)
 {
-	u32 offset_align = nf->nf_dio_offset_align;
-	loff_t prefix_end, orig_end, middle_end;
-	u32 mem_align = nf->nf_dio_mem_align;
-	size_t prefix, middle, suffix;
-	loff_t offset = iocb->ki_pos;
-	unsigned int nsegs = 0;
+	struct nfs_dio_policy policy = {
+		.mem_align = nf->nf_dio_mem_align,
+		.offset_align = nf->nf_dio_offset_align,
+		.min_middle_bytes = nfsd_direct_misaligned_min_bytes,
+		.dontcache = nfsd_direct_misaligned_dontcache,
+	};
 
-	/*
-	 * Check if direct I/O is feasible for this write request.
-	 * If alignments are not available, the write is too small,
-	 * or no alignment can be found, fall back to buffered I/O.
-	 */
-	if (unlikely(!mem_align || !offset_align) ||
-	    unlikely(total < max(offset_align, mem_align)))
-		goto no_dio;
-
-	prefix_end = round_up(offset, offset_align);
-	orig_end = offset + total;
-	middle_end = round_down(orig_end, offset_align);
-
-	prefix = prefix_end - offset;
-	middle = middle_end - prefix_end;
-	suffix = orig_end - middle_end;
-
-	if (!middle)
-		goto no_dio;
-
-	if (prefix)
-		nfsd_write_dio_seg_init(&segments[nsegs++], bvec,
-					nvecs, total, 0, prefix, iocb);
-
-	nfsd_write_dio_seg_init(&segments[nsegs], bvec, nvecs,
-				total, prefix, middle, iocb);
-
-	/*
-	 * Check if the bvec iterator is aligned for direct I/O.
-	 *
-	 * bvecs generated from RPC receive buffers are contiguous: After
-	 * the first bvec, all subsequent bvecs start at bv_offset zero
-	 * (page-aligned). Therefore, only the first bvec is checked.
-	 */
-	if (iov_iter_bvec_offset(&segments[nsegs].iter) & (mem_align - 1))
-		goto no_dio;
-	segments[nsegs].flags |= IOCB_DIRECT;
-	nsegs++;
-
-	if (suffix)
-		nfsd_write_dio_seg_init(&segments[nsegs++], bvec, nvecs, total,
-					prefix + middle, suffix, iocb);
-
-	return nsegs;
-
-no_dio:
-	/* No DIO alignment possible - pack into single non-DIO segment. */
-	nfsd_write_dio_seg_init(&segments[0], bvec, nvecs, total, 0,
-				total, iocb);
-	return 1;
+	nfs_dio_split(nf->nf_file, &policy, ITER_SOURCE, bvec, nvecs,
+		      iocb->ki_pos, total, iocb->ki_flags, split);
+	nfsd_trace_write_dio(rqstp, fhp, iocb->ki_pos, total, &policy, split);
+	return split->nsegs;
 }
 
 static noinline_for_stack int
@@ -1377,43 +1418,60 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		  struct nfsd_file *nf, unsigned int nvecs,
 		  unsigned long *cnt, struct kiocb *kiocb)
 {
-	struct nfsd_write_dio_seg segments[3];
+	struct nfs_dio_seg_hold holds[NFS_DIO_MAX_SEGS];
+	size_t written[NFS_DIO_MAX_SEGS];
+	struct nfs_dio_split split;
 	struct file *file = nf->nf_file;
-	unsigned int nsegs, i;
-	ssize_t host_err;
+	loff_t start = kiocb->ki_pos;
+	unsigned int nsegs, nheld = 0, i;
+	int sync_flags;
+	ssize_t host_err = 0;
 	size_t expected;
 
-	nsegs = nfsd_write_dio_iters_init(nf, rqstp->rq_bvec, nvecs,
-					  kiocb, *cnt, segments);
+	nsegs = nfsd_write_dio_iters_init(rqstp, fhp, nf, rqstp->rq_bvec,
+					  nvecs, kiocb, *cnt, &split);
+
+	/*
+	 * Sync a split WRITE once, after its last segment, instead of after
+	 * each segment that carries IOCB_DSYNC. A single segment keeps the
+	 * flag so a direct overwrite can complete with FUA instead of a cache
+	 * flush.
+	 */
+	sync_flags = nfs_dio_sync_flags(&split, kiocb->ki_flags);
 
 	*cnt = 0;
 	for (i = 0; i < nsegs; i++) {
-		kiocb->ki_flags = segments[i].flags;
-		if (kiocb->ki_flags & IOCB_DIRECT)
-			trace_nfsd_write_direct(rqstp, fhp, kiocb->ki_pos,
-						segments[i].iter.count);
-		else {
-			trace_nfsd_write_vector(rqstp, fhp, kiocb->ki_pos,
-						segments[i].iter.count);
-			/*
-			 * Mark the I/O buffer as evict-able to reduce
-			 * memory contention.
-			 */
-			if (nf->nf_file->f_op->fop_flags & FOP_DONTCACHE)
-				kiocb->ki_flags |= IOCB_DONTCACHE;
-		}
+		struct nfs_dio_seg *seg = &split.segs[i];
 
-		expected = iov_iter_count(&segments[i].iter);
+		kiocb->ki_flags = seg->flags & ~sync_flags;
+		trace_nfsd_write_direct(rqstp, fhp, kiocb->ki_pos,
+					seg->iter.count, kiocb->ki_flags);
+		trace_nfsd_write_dontcache(rqstp, fhp, kiocb->ki_pos,
+					   seg->iter.count, kiocb->ki_flags);
+		trace_nfsd_write_vector(rqstp, fhp, kiocb->ki_pos,
+					seg->iter.count, kiocb->ki_flags);
 
-		host_err = vfs_iocb_iter_write(file, kiocb, &segments[i].iter);
+		expected = iov_iter_count(&seg->iter);
+		nfs_dio_seg_hold(file, seg, kiocb->ki_pos, expected,
+				 &holds[nheld]);
+		host_err = vfs_iocb_iter_write(file, kiocb, &seg->iter);
 		if (host_err < 0)
-			return host_err;
+			break;
+		written[nheld++] = host_err;
 		*cnt += host_err;
 		if (host_err < (ssize_t)expected)
 			break;	/* partial write */
 	}
 
-	return 0;
+	if (host_err >= 0 && sync_flags && *cnt)
+		host_err = vfs_fsync_range(file, start, start + *cnt - 1,
+					   !(sync_flags & IOCB_SYNC));
+
+	/* Complete the shared units once the WRITE and its fsync are done. */
+	for (i = 0; i < nheld; i++)
+		nfs_dio_seg_release(file, &holds[i], written[i]);
+
+	return host_err < 0 ? host_err : 0;
 }
 
 /**
@@ -1424,7 +1482,7 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
  * @offset: Byte offset of start
  * @payload: xdr_buf containing the write payload
  * @cnt: IN: number of bytes to write, OUT: number of bytes actually written
- * @stable: An NFS stable_how value
+ * @iocb_flags: VFS IOCB_* flags expressing the requested write stability
  * @verf: NFS WRITE verifier
  *
  * Upon return, caller must invoke fh_put on @fhp.
@@ -1436,7 +1494,7 @@ __be32
 nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	       struct nfsd_file *nf, loff_t offset,
 	       const struct xdr_buf *payload, unsigned long *cnt,
-	       int stable, __be32 *verf)
+	       int iocb_flags, __be32 *verf)
 {
 	struct nfsd_net		*nn = net_generic(SVC_NET(rqstp), nfsd_net_id);
 	struct file		*file = nf->nf_file;
@@ -1473,21 +1531,11 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	exp = fhp->fh_export;
 
 	if (!EX_ISSYNC(exp))
-		stable = NFS_UNSTABLE;
+		iocb_flags = 0;
 	init_sync_kiocb(&kiocb, file);
 	kiocb.ki_pos = offset;
-	if (likely(!fhp->fh_use_wgather)) {
-		switch (stable) {
-		case NFS_FILE_SYNC:
-			/* persist data and timestamps */
-			kiocb.ki_flags |= IOCB_DSYNC | IOCB_SYNC;
-			break;
-		case NFS_DATA_SYNC:
-			/* persist data only */
-			kiocb.ki_flags |= IOCB_DSYNC;
-			break;
-		}
-	}
+	if (likely(!fhp->fh_use_wgather))
+		kiocb.ki_flags |= iocb_flags;
 
 	nvecs = xdr_buf_to_bvec(rqstp->rq_bvec, rqstp->rq_maxpages, payload);
 	if (nvecs < 0) {
@@ -1499,7 +1547,7 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (verf)
 		nfsd_copy_write_verifier(verf, nn);
 
-	switch (nfsd_io_cache_write) {
+	switch (nfsd_write_io_mode(exp)) {
 	case NFSD_IO_DIRECT:
 		host_err = nfsd_direct_write(rqstp, fhp, nf, nvecs,
 					     cnt, &kiocb);
@@ -1509,6 +1557,10 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			kiocb.ki_flags |= IOCB_DONTCACHE;
 		fallthrough;
 	case NFSD_IO_BUFFERED:
+		trace_nfsd_write_dontcache(rqstp, fhp, offset, *cnt,
+					   kiocb.ki_flags);
+		trace_nfsd_write_vector(rqstp, fhp, offset, *cnt,
+					kiocb.ki_flags);
 		iov_iter_bvec(&iter, ITER_SOURCE, rqstp->rq_bvec, nvecs, *cnt);
 		host_err = vfs_iocb_iter_write(file, &kiocb, &iter);
 		if (host_err < 0)
@@ -1517,21 +1569,21 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		break;
 	}
 	if (host_err < 0) {
-		commit_reset_write_verifier(nn, rqstp, host_err);
+		nfsd_maybe_reset_write_verifier(nn, rqstp, host_err);
 		goto out_nfserr;
 	}
 	nfsd_stats_io_write_add(nn, exp, *cnt);
 	fsnotify_modify(file);
 	host_err = filemap_check_wb_err(file->f_mapping, since);
 	if (host_err < 0) {
-		commit_reset_write_verifier(nn, rqstp, host_err);
+		nfsd_maybe_reset_write_verifier(nn, rqstp, host_err);
 		goto out_nfserr;
 	}
 
-	if (stable && fhp->fh_use_wgather) {
+	if (iocb_flags && fhp->fh_use_wgather) {
 		host_err = wait_for_concurrent_writes(file);
 		if (host_err < 0)
-			commit_reset_write_verifier(nn, rqstp, host_err);
+			nfsd_maybe_reset_write_verifier(nn, rqstp, host_err);
 	}
 
 out_nfserr:
@@ -1602,10 +1654,12 @@ __be32 nfsd_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		return err;
 
 	file = nf->nf_file;
-	if (file->f_op->splice_read && nfsd_read_splice_ok(rqstp))
+	if (file->f_op->splice_read && nfsd_read_splice_ok(rqstp) &&
+	    nfsd_read_io_mode(fhp->fh_export) == NFSD_IO_BUFFERED)
 		err = nfsd_splice_read(rqstp, fhp, file, offset, count, eof);
 	else
-		err = nfsd_iter_read(rqstp, fhp, nf, offset, count, 0, eof);
+		err = nfsd_iter_read(rqstp, fhp, nf, offset, count, eof,
+				     true);
 
 	nfsd_file_put(nf);
 	trace_nfsd_read_done(rqstp, fhp, offset, *count);
@@ -1619,7 +1673,7 @@ __be32 nfsd_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
  * @offset: Byte offset of start
  * @payload: xdr_buf containing the write payload
  * @cnt: IN: number of bytes to write, OUT: number of bytes actually written
- * @stable: An NFS stable_how value
+ * @iocb_flags: VFS IOCB_* flags expressing the requested write stability
  * @verf: NFS WRITE verifier
  *
  * Upon return, caller must invoke fh_put on @fhp.
@@ -1629,8 +1683,8 @@ __be32 nfsd_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
  */
 __be32
 nfsd_write(struct svc_rqst *rqstp, struct svc_fh *fhp, loff_t offset,
-	   const struct xdr_buf *payload, unsigned long *cnt, int stable,
-	   __be32 *verf)
+	   const struct xdr_buf *payload, unsigned long *cnt,
+	   int iocb_flags, __be32 *verf)
 {
 	struct nfsd_file *nf;
 	__be32 err;
@@ -1642,7 +1696,7 @@ nfsd_write(struct svc_rqst *rqstp, struct svc_fh *fhp, loff_t offset,
 		goto out;
 
 	err = nfsd_vfs_write(rqstp, fhp, nf, offset, payload, cnt,
-			     stable, verf);
+			     iocb_flags, verf);
 	nfsd_file_put(nf);
 out:
 	trace_nfsd_write_done(rqstp, fhp, offset, *cnt);
@@ -1707,14 +1761,14 @@ nfsd_commit(struct svc_rqst *rqstp, struct svc_fh *fhp, struct nfsd_file *nf,
 			err2 = filemap_check_wb_err(nf->nf_file->f_mapping,
 						    since);
 			if (err2 < 0)
-				commit_reset_write_verifier(nn, rqstp, err2);
+				nfsd_maybe_reset_write_verifier(nn, rqstp, err2);
 			err = nfserrno(err2);
 			break;
 		case -EINVAL:
 			err = nfserr_notsupp;
 			break;
 		default:
-			commit_reset_write_verifier(nn, rqstp, err2);
+			nfsd_maybe_reset_write_verifier(nn, rqstp, err2);
 			err = nfserrno(err2);
 		}
 	} else
@@ -2377,33 +2431,18 @@ out:
  *
  * This is based heavily on the implementation of same in XFS.
  */
-struct buffered_dirent {
-	u64		ino;
-	loff_t		offset;
-	int		namlen;
-	unsigned int	d_type;
-	char		name[];
-};
-
-struct readdir_data {
-	struct dir_context ctx;
-	char		*dirent;
-	size_t		used;
-	int		full;
-};
-
 static bool nfsd_buffered_filldir(struct dir_context *ctx, const char *name,
 				 int namlen, loff_t offset, u64 ino,
 				 unsigned int d_type)
 {
-	struct readdir_data *buf =
-		container_of(ctx, struct readdir_data, ctx);
-	struct buffered_dirent *de = (void *)(buf->dirent + buf->used);
+	struct nfsd_readdir_iter *iter =
+		container_of(ctx, struct nfsd_readdir_iter, ctx);
+	struct buffered_dirent *de = (void *)(iter->page + iter->used);
 	unsigned int reclen;
 
 	reclen = ALIGN(sizeof(struct buffered_dirent) + namlen, sizeof(u64));
-	if (buf->used + reclen > PAGE_SIZE) {
-		buf->full = 1;
+	if (iter->used + reclen > PAGE_SIZE) {
+		iter->full = 1;
 		return false;
 	}
 
@@ -2412,79 +2451,152 @@ static bool nfsd_buffered_filldir(struct dir_context *ctx, const char *name,
 	de->ino = ino;
 	de->d_type = d_type;
 	memcpy(de->name, name, namlen);
-	buf->used += reclen;
+	iter->used += reclen;
 
 	return true;
 }
 
-static __be32 nfsd_buffered_readdir(struct file *file, struct svc_fh *fhp,
-				    nfsd_filldir_t func, struct readdir_cd *cdp,
-				    loff_t *offsetp)
+/*
+ * Read the next batch of entries.  Returns false at end of directory
+ * (@iter->eof set) or on a filesystem error (@iter->host_err set).
+ */
+static bool nfsd_readdir_fill(struct nfsd_readdir_iter *iter)
 {
-	struct buffered_dirent *de;
-	int host_err;
-	int size;
-	loff_t offset;
-	struct readdir_data buf = {
-		.ctx.actor = nfsd_buffered_filldir,
-		.dirent = kmalloc(PAGE_SIZE, GFP_KERNEL)
-	};
+	/* Between batches the resume cookie advances past the last. */
+	if (iter->batched)
+		iter->offset = vfs_llseek(iter->file, 0, SEEK_CUR);
 
-	if (!buf.dirent)
-		return nfserrno(-ENOMEM);
+	iter->used = 0;
+	iter->full = 0;
+	iter->host_err = iterate_dir(iter->file, &iter->ctx);
+	if (iter->full)
+		iter->host_err = 0;
+	if (iter->host_err < 0)
+		return false;
+	if (!iter->used) {
+		iter->eof = true;
+		return false;
+	}
+	iter->batched = true;
+	iter->pos = iter->page;
+	iter->remaining = iter->used;
+	return true;
+}
 
-	offset = *offsetp;
+/**
+ * nfsd_readdir_open - open a directory for streaming readdir
+ * @rqstp: RPC transaction context
+ * @fhp: NFS file handle of directory to be read
+ * @offsetp: seek offset at which to resume reading
+ * @iter: OUT: directory reader to initialize
+ *
+ * On success the directory is open and positioned at @offsetp, the
+ * first batch of entries has been read, and @iter is ready for
+ * nfsd_readdir_next().  The caller must release @iter with
+ * nfsd_readdir_close() once done, including on error paths that
+ * follow a successful open.
+ *
+ * Return: nfs_ok on success, otherwise an nfsstat code, including the
+ * error from reading the first batch.  On error @iter is left safe to
+ * pass to nfsd_readdir_close().
+ */
+__be32 nfsd_readdir_open(struct svc_rqst *rqstp, struct svc_fh *fhp,
+			 loff_t *offsetp, struct nfsd_readdir_iter *iter)
+{
+	struct file *file;
+	loff_t offset = *offsetp;
+	__be32 err;
 
-	while (1) {
-		unsigned int reclen;
+	memset(iter, 0, sizeof(*iter));
+	iter->ctx.actor = nfsd_buffered_filldir;
 
-		cdp->err = nfserr_eof; /* will be cleared on successful read */
-		buf.used = 0;
-		buf.full = 0;
+	err = nfsd_open(rqstp, fhp, S_IFDIR, NFSD_MAY_READ, &file);
+	if (err)
+		return err;
 
-		host_err = iterate_dir(file, &buf.ctx);
-		if (buf.full)
-			host_err = 0;
+	if (fhp->fh_64bit_cookies)
+		file->f_mode |= FMODE_64BITHASH;
+	else
+		file->f_mode |= FMODE_32BITHASH;
 
-		if (host_err < 0)
-			break;
-
-		size = buf.used;
-
-		if (!size)
-			break;
-
-		de = (struct buffered_dirent *)buf.dirent;
-		while (size > 0) {
-			offset = de->offset;
-
-			if (func(cdp, de->name, de->namlen, de->offset,
-				 de->ino, de->d_type))
-				break;
-
-			if (cdp->err != nfs_ok)
-				break;
-
-			trace_nfsd_dirent(fhp, de->ino, de->name, de->namlen);
-
-			reclen = ALIGN(sizeof(*de) + de->namlen,
-				       sizeof(u64));
-			size -= reclen;
-			de = (struct buffered_dirent *)((char *)de + reclen);
-		}
-		if (size > 0) /* We bailed out early */
-			break;
-
-		offset = vfs_llseek(file, 0, SEEK_CUR);
+	offset = vfs_llseek(file, offset, SEEK_SET);
+	if (offset < 0) {
+		err = nfserrno((int)offset);
+		goto out_close;
 	}
 
-	kfree((buf.dirent));
+	iter->page = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!iter->page) {
+		err = nfserrno(-ENOMEM);
+		goto out_close;
+	}
 
-	if (host_err)
-		return nfserrno(host_err);
+	iter->file = file;
+	iter->fhp = fhp;
+	iter->offset = offset;
 
-	*offsetp = offset;
-	return cdp->err;
+	/*
+	 * The first batch is read here so a filesystem error surfaces
+	 * in the reply status.  Once the encoder has committed nfs_ok,
+	 * an error can only be reported as a short list.
+	 */
+	if (!nfsd_readdir_fill(iter) && iter->host_err) {
+		err = nfserrno(iter->host_err);
+		nfsd_readdir_close(iter);
+		return err;
+	}
+	return nfs_ok;
+
+out_close:
+	nfsd_filp_close(file);
+	return err;
+}
+
+/**
+ * nfsd_readdir_next - yield the next buffered directory entry
+ * @iter: directory reader initialized by nfsd_readdir_open()
+ *
+ * Refill from the filesystem as needed and return the next entry.  The
+ * returned pointer is valid until the following nfsd_readdir_next() or
+ * nfsd_readdir_close() call.
+ *
+ * Return: the next entry, or NULL at end of directory or on a host
+ * error.  On NULL, @iter->eof marks a clean end and @iter->host_err a
+ * filesystem error; @iter->offset holds the resume cookie either way.
+ */
+struct buffered_dirent *nfsd_readdir_next(struct nfsd_readdir_iter *iter)
+{
+	struct buffered_dirent *de;
+	unsigned int reclen;
+
+	if (iter->eof || iter->host_err)
+		return NULL;
+	if (iter->remaining <= 0 && !nfsd_readdir_fill(iter))
+		return NULL;
+
+	de = (struct buffered_dirent *)iter->pos;
+	iter->offset = de->offset;
+	reclen = ALIGN(sizeof(*de) + de->namlen, sizeof(u64));
+	iter->pos += reclen;
+	iter->remaining -= reclen;
+	return de;
+}
+
+/**
+ * nfsd_readdir_close - release a directory reader
+ * @iter: directory reader to release
+ *
+ * Safe to call on an @iter that nfsd_readdir_open() left initialized,
+ * whether the open succeeded or failed, and safe to call more than once.
+ */
+void nfsd_readdir_close(struct nfsd_readdir_iter *iter)
+{
+	if (iter->file) {
+		nfsd_filp_close(iter->file);
+		iter->file = NULL;
+	}
+	kfree(iter->page);
+	iter->page = NULL;
 }
 
 /**
@@ -2506,37 +2618,36 @@ static __be32 nfsd_buffered_readdir(struct file *file, struct svc_fh *fhp,
  * returned.
  */
 __be32
-nfsd_readdir(struct svc_rqst *rqstp, struct svc_fh *fhp, loff_t *offsetp, 
+nfsd_readdir(struct svc_rqst *rqstp, struct svc_fh *fhp, loff_t *offsetp,
 	     struct readdir_cd *cdp, nfsd_filldir_t func)
 {
-	__be32		err;
-	struct file	*file;
-	loff_t		offset = *offsetp;
-	int             may_flags = NFSD_MAY_READ;
+	struct nfsd_readdir_iter iter;
+	struct buffered_dirent *de;
+	__be32 err;
 
-	err = nfsd_open(rqstp, fhp, S_IFDIR, may_flags, &file);
+	err = nfsd_readdir_open(rqstp, fhp, offsetp, &iter);
 	if (err)
-		goto out;
+		return err;
 
-	if (fhp->fh_64bit_cookies)
-		file->f_mode |= FMODE_64BITHASH;
-	else
-		file->f_mode |= FMODE_32BITHASH;
-
-	offset = vfs_llseek(file, offset, SEEK_SET);
-	if (offset < 0) {
-		err = nfserrno((int)offset);
-		goto out_close;
+	while ((de = nfsd_readdir_next(&iter)) != NULL) {
+		if (func(cdp, de->name, de->namlen, de->offset, de->ino,
+			 de->d_type))
+			break;
+		if (cdp->err != nfs_ok)
+			break;
+		trace_nfsd_dirent(fhp, de->ino, de->name, de->namlen);
 	}
+	if (!de)
+		cdp->err = nfserr_eof; /* clean end, or reported in host_err */
+	*offsetp = iter.offset;
 
-	err = nfsd_buffered_readdir(file, fhp, func, cdp, offsetp);
+	nfsd_readdir_close(&iter);
 
-	if (err == nfserr_eof || err == nfserr_toosmall)
-		err = nfs_ok; /* can still be found in ->err */
-out_close:
-	nfsd_filp_close(file);
-out:
-	return err;
+	if (iter.host_err)
+		return nfserrno(iter.host_err);
+	if (cdp->err == nfserr_eof || cdp->err == nfserr_toosmall)
+		return nfs_ok; /* can still be found in ->err */
+	return cdp->err;
 }
 
 /**
