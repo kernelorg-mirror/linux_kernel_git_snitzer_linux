@@ -700,7 +700,13 @@ void svc_pool_wake_idle_thread(struct svc_pool *pool)
 	ln = READ_ONCE(pool->sp_idle_threads.first);
 	if (ln) {
 		rqstp = llist_entry(ln, struct svc_rqst, rq_idle);
-		WRITE_ONCE(rqstp->rq_qtime, ktime_get());
+		/*
+		 * Only trace_svc_xprt_dequeue() reads this. The store is to
+		 * another thread's svc_rqst, made even when that thread is
+		 * already running, so it is skipped unless the event is on.
+		 */
+		if (trace_svc_xprt_dequeue_enabled())
+			WRITE_ONCE(rqstp->rq_qtime, ktime_get());
 		/* A woken thread stays first on the idle list until it
 		 * runs, and while its wake is in flight it is not yet
 		 * running. RQ_WAKING lets one caller wake it; the others
