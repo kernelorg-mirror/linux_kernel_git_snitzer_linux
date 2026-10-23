@@ -1,4 +1,69 @@
-# The boot into the kernel built from the tip — read this first
+# Build 494: the kernel from the tip, no regression (22 October, evening) — read this first
+
+tardis1 booted `7.3.0-7.hs.494.loanpage_pool.el9.aarch64+16k`, built
+from the tip on GitLab. The tree has no code commit after
+`77f82c816493`, so it carries every commit the section below lists as
+"built only"; they have now run. Logs are in `$L/t1-tipkernel/`, and
+the figures are in its `results.tsv`.
+
+**The first ten minutes passed as written below.** The kernel's own
+sunrpc (srcversion `C78A9E1FDAC3084874BA63F`, the same from `modinfo`),
+no `svc_tcp_rx_loan_pages`, `page_pool_rx_region_key` and
+`svc_tcp_rx_loans` in kallsyms, the 494 `modules-internal` and `devel`
+packages, `arm_cmn` already loaded at boot. No NFS client was connected
+before the bring-up. Region 32768 pages, `alloc_fail` 0. `settled.sh
+apply` ended in "the settled setting" before and after the KUnit suites.
+
+**KUnit, from the package:** `sunrpc-xdr-bvec` 7, `sunrpc-svcsock-rx`
+50, `nfsd-receive-bvec` 7, `nfsd4-receive-bvec` 10. No failure, no
+skip. The region key's tests pass, so the fake region holds the key on.
+
+**`run24.sh`, 19:58 to 20:21** (each run after an fstrim of all eight
+drives and 120 s of rest):
+
+| run | total GB/s | wire in the window | bytes through memory a byte | drives |
+|---|---|---|---|---|
+| `one-750k-1` | 40.13 | 46.37 | 1.34 | six stepped down, nvme7 at 46 s, the rest at 60 to 63 s |
+| `two-384k-1` | 58.47 (29.78 + 28.69) | 30.06 + 29.03 | — | none stepped down |
+| `one-750k-2` | 43.44 | 45.80 | 1.36 | seven stepped down, four at 27 to 33 s |
+| `two-384k-2` | 57.89 (29.14 + 28.74) | 29.58 + 29.16 | — | nvme7 at 14 s |
+| `loan64-1` | 38.67 | 39.01 | 3.51 | none stepped down |
+
+- **Copy mode on two ports matches 491:** 58.47 and 57.89 against
+  57.68.
+- **Copy mode on one port:** both fio totals are below 491's 45.08 to
+  45.20, but most drives stepped down in each run. The wire in the
+  10 s window, 45.80 to 46.37 GB/s, is at or above 491's 45.32 to
+  45.50. nfsd's WRITEs a second (43.3k to 43.9k against 42.1k to
+  43.0k) and the rings' CPU (44% against 42 to 44%) are as on 491.
+  Memory is 1.34 to 1.36 bytes a byte, against 1.34 to 1.35. 491's
+  `one-750k-4` had the same shape: 40.94, with wire 44.57.
+  **Not a regression, but not yet a clean one-port figure.** The
+  drives decided both runs. To get that figure, one port needs a run
+  inside the drives' fast region (`WARM=10 RUNTIME=25`), not
+  `RUNTIME=60` onto eight drives.
+- **Copy mode loaned nothing:** both budgets' `admitted` stayed at
+  3096 and 2 across every copy run. Those counts are what the svcsock
+  suite leaves behind; 491's 6192 and 4 were two passes of it.
+- **The loan path (items 2 and 3) runs:** budget 8198 pages (64
+  WRITEs). In the run 2,765,248 records were admitted, with 0 denied,
+  0 paused and 0 overrun (3,329,504 in the budget's stats across the
+  warm-up and the run).
+  Every WRITE was issued `dontcache` (direct 0, buffered 0), as
+  expected on the WD_BLACKs, which need whole pages. FIFO drops were
+  349 and client retransmits 364, against 0 to 16 and 7 to 51 in
+  copy mode. The rings were 54% busy and nfsd 59%. That checks that
+  loans work; it is not a measurement.
+- **At the end** `settled.sh apply` gave "the settled setting". The
+  default budget's `hold_factor` is 107.
+
+**Still open:** the same three items as in the list below (the A/B of
+"What a server that never loans pays" on an ordinary NIC, the rig
+scripts on `../loan-budget.sh`, the regroup when Mike asks). Also a
+one-port copy run inside the drives' fast region, if a clean figure
+against 491 is wanted.
+
+# The boot into the kernel built from the tip (the handoff before build 494)
 
 Written on 22 October 2026, before Mike pushed the branch, built a kernel
 from it on GitLab and installed it on tardis1. Everything here is for the

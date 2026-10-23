@@ -215,15 +215,16 @@ first** (and `tardis1-boot1-testing.md` for builds 454 and 455): it says
 which commits at the tip are still to be regrouped, carried to the HS
 twin or decided.
 
-**tardis1's next boot is into a kernel built from the tip of 22 October
-(`77f82c816493` or later): start at "The boot into the kernel built from
-the tip" in
+**tardis1 runs build 494, the kernel built from the tip of 22 October
+(`77f82c816493`; booted that evening): start at "Build 494: the kernel
+from the tip" in
 [`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md).**
-It carries code that has only been built (the region key in page_pool
-and sunrpc, one budget lookup at a loaned record's first region skb,
-the budget's lock on its own cache line): the first ten minutes there
-check that it is that kernel, then the KUnit suites, then
-`$L/t1-tipkernel/run24.sh`. The follow-up of Xsight's replies is still
+The code that had only been built (the region key in page_pool and
+sunrpc, one budget lookup at a loaned record's first region skb, the
+budget's lock on its own cache line) has run: KUnit 7, 50, 7 and 10,
+copy mode at 491's rate on two ports (58.47 and 57.89 GB/s) and on the
+wire on one, and loans admitted with none denied. The follow-up of
+Xsight's replies is still
 [`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/XSIGHT-FOLLOWUP.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/XSIGHT-FOLLOWUP.md).
 
 **Converging on the Xsight driver** (tardis1, from 2026-10-07).
