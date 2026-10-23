@@ -17,6 +17,10 @@ Each round is a directory here, numbered in order:
 | round | what was profiled | the most costly thing found | the change | outcome |
 |---|---|---|---|---|
 | [01-loan64-baseline](01-loan64-baseline/README.md) | one-port loan64, with the one-wake fix: rings 92.0 us a WRITE, nfsd 184.1 | page_pool's put and get of the region's pages (13.8 us); conntrack from podman's unused netavark table (9.0 on the rings, 9.4 on nfsd) | conntrack: the leftover table deleted and port 2049 untracked, in settled.sh | kept: rings 92.6 to 78.7 us a loaned WRITE (-15%), copy 67.9 to 63.4 (-7%) |
+| [02-refs-valid](02-refs-valid/README.md) | the same, with round 01 | `svc_tcp_rx_refs_valid` walked the record on each of 22 hand-offs a WRITE (7.05 us on nfsd) | `49f0fc4564ec`: the exchange checks only counts | kept on the profile: refs_valid 7.05 to 0.90, the exchange 7.52 to 3.10 us on nfsd; the A/B (mpstat) cannot resolve it |
+| 03 | | deferred skb frees on the ring (8.85 us) | `net.core.skb_defer_max` 0 against 128 | |
+| 04 | | page_pool's ptr_ring full on 1% of returns | measure first; a knob for its size only if justified | |
+| 05 | | `svc_data_ready`: the `xpt_flags` line, two timestamps | read `XPT_DATA` before setting it; stamp only while tracing | |
 
 ## Why CPU a WRITE, not GB/s
 
@@ -92,6 +96,13 @@ tardis1's included: that is Mike's to ask for, each time.
   interrupts off lands where they are turned on again: a wide
   `_raw_spin_unlock_irqrestore` or `handle_softirqs` self cost belongs to
   what ran before it. Read its callers before ranking it.
+- A change of a few us a WRITE on nfsd is below what mpstat resolves over
+  48 CPUs: compare the function's cost in the profiles before and after,
+  and use the A/B to show nothing else moved (round 02).
+- Annotate a module against the build that was profiled (`perf
+  buildid-list -i perf.data`); a later reload leaves a different
+  `sunrpc.ko` in `updates/`. The kernel's own text is in `/proc/kcore`
+  (no vmlinux with symbols on tardis2).
 - Name the change by what it saves a WRITE, measured, and say what it did
   not change (the rate, nfsd's sleeps).
 
