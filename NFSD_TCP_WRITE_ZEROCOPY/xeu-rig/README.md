@@ -87,11 +87,47 @@ at a time:
     (loan64-3, at 26/26/24/24%, woke 18.3; 491's `mb-loan64-750k`, at
     25/26/25/24%, woke 15.9).
 
-  So far it is a spread from run to run: 14.4 to 18.3 wakes a WRITE on
-  494 over eight runs, and 14.3 to 15.9 on 491 over three. Whether 494
-  sits higher is not settled by three runs on 491. A traced pair,
-  `groups.bt` and `stacks.bt` on a run at each end, would show where the
-  visits differ.
+- **What the spread follows: how busy the four ring CPUs are** (0, 2,
+  4 and 6, the mean of their softirq in twoport.sh's window). Every loan
+  run of both builds is on one curve, and so is the copy:
+
+  | run | rings' softirq | woken a WRITE | refused a loaned WRITE | GB/s |
+  |---|---|---|---|---|
+  | copy-1, copy-2 (494) | 66%, 72% | 9.91, 11.38 | - | 40.81 |
+  | rb-loan64-1m-1, -2 (491, 1 MiB) | 71% | 10.48 to 10.80 | 1.08 | 40.42 to 40.48 |
+  | rb-loan64-750k-2 (491) | 76% | 14.32 | 0.97 | 40.41 |
+  | loan64-1 (494) | 76% | 14.39 | 0.96 | 40.48 |
+  | mb-loan64-750k, rb-loan64-750k-1 (491) | 79% | 15.33 to 15.90 | 0.69 to 0.83 | 40.30 to 40.39 |
+  | loan64-5, -6 (494) | 89 to 90% | 16.47 to 16.59 | 0.56 to 0.62 | 40.34 to 40.35 |
+  | loan56-1, loan64-2 to -4 (494) | 92 to 94% | 17.75 to 18.27 | 0.15 to 0.25 | 39.87 to 40.15 |
+  | tr-loan64-1 to -5 (494, `pair.bt` beside) | 97 to 98% | 17.83 to 18.19 | 0.03 | 38.46 to 38.64 |
+
+  **494 is not off 491's curve**: loan64-1 sits among 491's runs. 491's
+  three runs at 750 KiB happened to land low, and 494's eight landed
+  across the curve. Why a run lands where it does is open.
+
+- **The traced pair could not be had** (`run5.sh`, `pair.bt`: groups.bt
+  and stacks.bt in one). The probes run in the rings' softirq and put
+  every run at the saturated end: five runs at 17.8 to 18.2 wakes, none
+  at the low end, at 38.5 GB/s with the drives at 96% (no longer quite
+  the drives'). What the saturated end does, from `tr-loan64-1-pair.txt`,
+  a WRITE at a time: 19.0 skbs queued, `svc_data_ready()` 19.2, threads
+  woken 17.96, visits 14.82 of which 13.69 short, credit waits 0.03.
+  Nearly every skb wakes a thread, which takes what has come and gives
+  the transport back, and the sockets hold mostly 64 to 128 KiB when
+  data arrives. At the low end more records wait for credit. A transport
+  that waits for credit is not woken for data, so its socket fills
+  (188 KiB in loan64-1) and its record is read in fewer visits.
+  The two feed each other. A wake is paid in the rings' softirq: loan64-3
+  over loan64-1 has some 150,000 more wakes a second for 18 more points
+  of four CPUs, about 5 us a wake. Busier rings leave shallower sockets
+  and so more wakes.
+
+  Not yet done: a lighter trace with nothing in the softirq path, to get a
+  low-end run beside a high-end one, and a test of the loop itself, by
+  giving the rings room (more rings, or the dropped `svc_tcp_rx_keep`,
+  which cut wakes). The rings are the settled setting's, so either is
+  Mike's to decide.
 - At the end the hold factors are 107 (default) and 108 (loans).
 
 # Build 494: the kernel from the tip, no regression (22 October, evening) — read this first
