@@ -1,3 +1,27 @@
+* Fri Oct 23 2026 Mike Snitzer <snitzer@kernel.org> [6.12.114-1]
+- Rebase all branches on kernel-6.12.114-0, every topic commit unchanged.
+  The topic branches now live in kernel-6.12/, which a roll to a later
+  6.12 stable release moves forward rather than replacing with a new
+  namespace
+- baseline-reverts: revert the ten stable backports that collide with the
+  topics, written against 6.12 code the topics replace with later upstream
+  code: "nfsd: convert nfsd_net boolean flags to unsigned long flags
+  word", "NFS: Return a delegation the client fails to record",
+  "NFSv4/flexfiles: fix NULL dereference for NFSv4.0 data servers",
+  "nfsd: restore rq_status_counter to even on all nfsd_dispatch() exit
+  paths", "nfsd: fix fcache_disposal UAF by inlining dispose state into
+  nfsd_net", "svcrdma: Clear sc_cm_id when ADDR_CHANGE replacement fails",
+  "svcrdma: wake sq waiters when the transport closes", "NFS/localio:
+  prevent direct reclaim recursion into NFS via nfs_writepages", "xfs:
+  remove unused trace event xfs_dqreclaim_dirty" and "xfs: avoid dquot
+  buffer pin deadlock"
+- Carry the upstream versions of the fixes the topics lacked: the
+  delegation and flexfiles fixes in a new nfs-fixes-from-stable-baseline,
+  built on nfs-for-7.2-fixes; the rq_status_counter and sc_cm_id fixes in
+  nfsd-fixes-from-stable-baseline; the two xfs commits in xfs
+- Drop "svcrdma: Add Write chunk WRs to the RPC's Send WR chain" from
+  nfsd-7.1-2; 6.12.114 carries the same patch
+
 * Fri Oct 23 2026 Mike Snitzer <snitzer@kernel.org> [6.12.114-0]
 - Linux v6.12.114
 
