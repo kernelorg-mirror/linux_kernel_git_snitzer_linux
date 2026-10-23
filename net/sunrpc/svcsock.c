@@ -2047,7 +2047,16 @@ static void svc_data_ready(struct sock *sk)
 			return;
 		if (svc_tcp_rx_credit_waiting(svsk))
 			return;
-		if (!test_and_set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags))
+		/*
+		 * Data usually arrives while XPT_DATA is still set, and the
+		 * atomic would take the flags' cache line from the thread
+		 * that clears it. The receiver clears XPT_DATA before it
+		 * takes the lock this data was queued under, so a plain read
+		 * that still sees the bit set is followed by a read that
+		 * finds this data.
+		 */
+		if (!test_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags) &&
+		    !test_and_set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags))
 			svc_xprt_enqueue(&svsk->sk_xprt);
 	}
 }
