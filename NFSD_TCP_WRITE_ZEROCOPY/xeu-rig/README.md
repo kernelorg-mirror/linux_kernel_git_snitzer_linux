@@ -289,13 +289,32 @@ at a time:
   when it goes idle and each time it goes back to sleep still on the
   list. The bit is last in the `RQ_` enum, so nfsd's values do not move
   and the fix goes in with sunrpc.ko alone. `build-sunrpc.sh` builds it
-  for build 494, clean, with no export changed. It has not yet run: it
-  needs `swap-sunrpc.sh`, which drops every client's connections.
+  for build 494, clean, with no export changed.
 
-  To show it works, run one untraced loan run beside the 17.64 wakes and
-  8.35 voluntary switches a WRITE of cs-loan64-1 (`run12.sh`). Counted
-  wakes should fall to about the switches, and the run should pass
-  `run-kunit.sh` and `settled.sh`.
+  **It has run** (Mike asked for the reload). `swap-sunrpc.sh` put it
+  in place (srcversion `82ACAC76B5F85A2645B58A4`, the log in
+  `$L/t2-tipkernel/reload2.txt`) and started every service again by
+  itself, the first real test of its fix. The four suites pass, 7, 50,
+  7 and 10, with no failure and no skip (`kunit2.txt`). Its own final
+  check failed only because nfs-server had been stopped for it, as on
+  the first run that day; `settled.sh` is at the settled setting.
+  `run15.sh`, fx-loan64-1, untraced, against cs-loan64-1 before the
+  fix:
+
+  | run | threads woken a WRITE | nfsd's voluntary switches a WRITE | rings' softirq | refused a loaned WRITE | GB/s |
+  |---|---|---|---|---|---|
+  | cs-loan64-1 (before) | 17.64 | 8.35 | 90.4% | 0.31 | 40.21 |
+  | fx-loan64-1 (fix) | 6.68 | 8.24 | 88.1% | 0.57 | 40.37 |
+
+  Counted wakes fall 2.6 times, to 6.7 a WRITE, about the 6.1 to 6.5
+  sleeps in `svc_thread_wait_for_work()` the wakee probes saw. The rest
+  of nfsd's voluntary switches are its other sleeps, which are not
+  woken through the pool. How often nfsd sleeps is the same, as it
+  should be: the fix removes calls that woke nobody, not wakes. The run
+  is drive-limited with no drive stepped down. The rings are 2.3 points
+  lower, but one run lands anywhere from 88 to 94% on this curve, and
+  this one refused as often as loan64-5 and -6 at 89 to 90%. So the
+  rings' gain, about 1% on the estimate above, is not shown by one run.
 
   Not yet done: a test of the loop itself, by giving the rings room
   (more rings, or the dropped `svc_tcp_rx_keep`, which cut wakes). The
