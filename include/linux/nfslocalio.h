@@ -13,8 +13,18 @@
 #include <linux/uuid.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/svcauth.h>
-#include <linux/nfs.h>
+#include <linux/nfs_fh.h>
+#include <linux/nfs_dio.h>
+
 #include <net/net_namespace.h>
+
+/*
+ * The LOCALIO program is entirely private to Linux and is NOT part of
+ * the uapi.
+ */
+#define NFS_LOCALIO_PROGRAM		400122
+#define LOCALIOPROC_NULL		0
+#define LOCALIOPROC_UUID_IS_LOCAL	1
 
 struct nfs_client;
 struct nfs_file_localio;
@@ -64,8 +74,9 @@ struct nfsd_localio_operations {
 						const fmode_t);
 	struct net *(*nfsd_file_put_local)(struct nfsd_file __rcu **);
 	struct file *(*nfsd_file_file)(struct nfsd_file *);
-	void (*nfsd_file_dio_alignment)(struct nfsd_file *,
-					u32 *, u32 *, u32 *);
+	void (*nfsd_file_dio_policy)(struct nfsd_file *nf,
+				     unsigned int direction,
+				     struct nfs_dio_policy *policy);
 } ____cacheline_aligned;
 
 extern void nfsd_localio_ops_init(void);

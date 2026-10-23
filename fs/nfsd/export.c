@@ -21,6 +21,8 @@
 #include <uapi/linux/nfsd_netlink.h>
 
 #include "nfsd.h"
+#include "nfserr.h"
+#include "nfs4ctl.h"
 #include "nfsfh.h"
 #include "netns.h"
 #include "pnfs.h"
@@ -246,13 +248,7 @@ static struct cache_head *expkey_alloc(void)
 
 static void expkey_flush(void)
 {
-	/*
-	 * Take the nfsd_mutex here to ensure that the file cache is not
-	 * destroyed while we're in the middle of flushing.
-	 */
-	mutex_lock(&nfsd_mutex);
 	nfsd_file_cache_purge(current->nsproxy->net_ns);
-	mutex_unlock(&nfsd_mutex);
 }
 
 static int expkey_notify(struct cache_detail *cd, struct cache_head *h)
@@ -344,7 +340,7 @@ int nfsd_nl_expkey_get_reqs_dumpit(struct sk_buff *skb,
 
 	nn = net_generic(sock_net(skb->sk), nfsd_net_id);
 
-	mutex_lock(&nfsd_mutex);
+	mutex_lock(&nn->nfsd_mutex);
 
 	cd = nn->svc_expkey_cache;
 	if (!cd) {
@@ -423,7 +419,7 @@ out_alloc:
 	kfree(seqnos);
 	kfree(items);
 out_unlock:
-	mutex_unlock(&nfsd_mutex);
+	mutex_unlock(&nn->nfsd_mutex);
 	return ret;
 }
 
@@ -558,7 +554,7 @@ int nfsd_nl_expkey_set_reqs_doit(struct sk_buff *skb,
 
 	nn = net_generic(genl_info_net(info), nfsd_net_id);
 
-	mutex_lock(&nfsd_mutex);
+	mutex_lock(&nn->nfsd_mutex);
 
 	cd = nn->svc_expkey_cache;
 	if (!cd) {
@@ -574,7 +570,7 @@ int nfsd_nl_expkey_set_reqs_doit(struct sk_buff *skb,
 	}
 
 out_unlock:
-	mutex_unlock(&nfsd_mutex);
+	mutex_unlock(&nn->nfsd_mutex);
 	return ret;
 }
 
@@ -671,7 +667,7 @@ int nfsd_nl_svc_export_get_reqs_dumpit(struct sk_buff *skb,
 
 	nn = net_generic(sock_net(skb->sk), nfsd_net_id);
 
-	mutex_lock(&nfsd_mutex);
+	mutex_lock(&nn->nfsd_mutex);
 
 	cd = nn->svc_export_cache;
 	if (!cd) {
@@ -755,7 +751,7 @@ out_alloc:
 	kfree(seqnos);
 	kfree(items);
 out_unlock:
-	mutex_unlock(&nfsd_mutex);
+	mutex_unlock(&nn->nfsd_mutex);
 	return ret;
 }
 
@@ -1054,7 +1050,7 @@ int nfsd_nl_svc_export_set_reqs_doit(struct sk_buff *skb,
 
 	nn = net_generic(genl_info_net(info), nfsd_net_id);
 
-	mutex_lock(&nfsd_mutex);
+	mutex_lock(&nn->nfsd_mutex);
 
 	cd = nn->svc_export_cache;
 	if (!cd) {
@@ -1070,7 +1066,7 @@ int nfsd_nl_svc_export_set_reqs_doit(struct sk_buff *skb,
 	}
 
 out_unlock:
-	mutex_unlock(&nfsd_mutex);
+	mutex_unlock(&nn->nfsd_mutex);
 	return ret;
 }
 
@@ -1890,21 +1886,19 @@ __be32 check_security_flavor(struct svc_export *exp, struct svc_rqst *rqstp,
  * check_nfsd_access - check if access to export is allowed.
  * @exp: svc_export that is being accessed.
  * @rqstp: svc_rqst attempting to access @exp.
- * @may_bypass_gss: reduce strictness of authorization check
  *
  * Return values:
  *   %nfs_ok if access is granted, or
  *   %nfserr_wrongsec if access is denied
  */
-__be32 check_nfsd_access(struct svc_export *exp, struct svc_rqst *rqstp,
-			 bool may_bypass_gss)
+__be32 check_nfsd_access(struct svc_export *exp, struct svc_rqst *rqstp)
 {
 	__be32 status;
 
 	status = check_xprtsec_policy(exp, rqstp);
 	if (status != nfs_ok)
 		return status;
-	return check_security_flavor(exp, rqstp, may_bypass_gss);
+	return check_security_flavor(exp, rqstp, false);
 }
 
 /*

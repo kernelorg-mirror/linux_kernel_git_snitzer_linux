@@ -137,7 +137,6 @@ struct nfsd_net {
 	/* protects blocked_locks_lru */
 	spinlock_t blocked_locks_lock;
 
-	struct file *rec_file;
 	const struct nfsd4_client_tracking_ops *client_tracking_ops;
 
 	time64_t nfsd4_lease;
@@ -154,9 +153,25 @@ struct nfsd_net {
 	 */
 	unsigned int min_threads;
 
+	/*
+	 * Maximum size of an NFS READ or WRITE payload.  Zero until the
+	 * first server start in this namespace picks a default.
+	 */
+	unsigned int max_blksize;
+
 	u32 clientid_base;
 	u32 clientid_counter;
 	u32 clverifier_counter;
+
+	/*
+	 * Serializes this namespace's control plane: ->nfsd_serv and the
+	 * svc_serv members that hang off it (->sv_permsocks,
+	 * ->sv_temp_socks, thread counts), the NFSD_NET_* flags, and the
+	 * settables above that may only change while the server is down.
+	 *
+	 * Nests outside nfsd_global_mutex.
+	 */
+	struct mutex nfsd_mutex;
 
 	struct svc_info nfsd_info;
 #define nfsd_serv nfsd_info.serv
@@ -238,8 +253,21 @@ struct nfsd_net {
 	int			nfs4_max_clients;
 
 	atomic_t		nfsd_courtesy_clients;
-	struct shrinker		*nfsd_client_shrinker;
-	struct work_struct	nfsd_shrinker_work;
+	/* per-namespace; num_delegations in nfs4state.c is host-wide */
+	atomic_long_t		nfsd_delegations;
+	struct shrinker		*nfsd_courtesy_shrinker;
+	struct shrinker		*nfsd_deleg_shrinker;
+	struct work_struct	nfsd_courtesy_work;
+	struct work_struct	nfsd_deleg_work;
+
+	/* courtesy scan requests the reaper has not retired yet */
+	atomic_long_t		nfsd_shrink_backlog;
+
+	/* delegation scan requests the reaper has not retired yet */
+	atomic_long_t		nfsd_deleg_backlog;
+
+	/* when deleg_reaper() last swept the client list */
+	time64_t		nfsd_last_recall_any;
 
 	/* last time an admin-revoke happened for NFSv4.0 */
 	time64_t		nfs40_last_revoke;
