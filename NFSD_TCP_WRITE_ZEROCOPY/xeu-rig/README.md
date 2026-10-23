@@ -316,6 +316,52 @@ at a time:
   this one refused as often as loan64-5 and -6 at 89 to 90%. So the
   rings' gain, about 1% on the estimate above, is not shown by one run.
 
+  **The A/B against the kernel's own sunrpc** (`run16.sh`: fx-loan64-2
+  to -6, the fix; `run17.sh`: ab1-A to ab6-B, alternating A, the
+  kernel's own, srcversion `C78A9E1FDAC3084874BA63F`, and B, the fix,
+  `fix-sunrpc.ko`, `82ACAC76B5F85A2645B58A4`). Each A/B run comes after
+  a reload by `swap-sunrpc.sh`, a check of the loaded srcversion and
+  `settled.sh apply`, then a trim and 120 s of rest. All are untraced
+  loan runs at 64 WRITEs, `WARM=10 RUNTIME=30`, drive-limited at 40.0 to
+  40.4 GB/s, and no drive stepped down. Wakes and sleeps from
+  `pool_stats` and `/proc/<pid>/status` around each run:
+
+  | run | ring us a WRITE | rings' softirq | refused a loaned WRITE | woken a WRITE | nfsd's voluntary switches a WRITE |
+  |---|---|---|---|---|---|
+  | ab1-A | 93.4 | 89.0% | 0.20 | 17.96 | 8.50 |
+  | ab2-B | 91.1 | 87.5% | 0.70 | 6.55 | 8.14 |
+  | ab3-A | 94.2 | 90.4% | 0.48 | 17.30 | 8.34 |
+  | ab4-B | 90.3 | 86.9% | 0.65 | 6.61 | 8.21 |
+  | ab5-A | 92.3 | 88.8% | 0.68 | 16.87 | 8.27 |
+  | ab6-B | 93.3 | 89.2% | 0.38 | 6.73 | 8.27 |
+  | fx-loan64-1 to -6 (B) | 88.3 to 93.2 | 85.0 to 88.9% | 0.18 to 0.92 | 6.38 to 6.90 | 7.98 to 8.45 |
+
+  **The wakes are settled:** every A run counts 16.9 to 18.0 wakes a
+  WRITE and every B run 6.4 to 6.9, with nfsd sleeping as often either
+  way, 8.0 to 8.5 times a WRITE.
+
+  **The rings gain 1 to 2.5%, about 1.2 to 2.3 us a WRITE.** That is
+  the size of the scatter between runs, so it shows only on the curve.
+  The fit is ring us a WRITE against refusals a loaned WRITE, with one
+  slope for both and a term for the fix:
+  - the interleaved A/B alone (6 runs): -1.23 us (standard error 0.96),
+    -1.3%;
+  - all 18 untraced runs on this boot without loan64-1 (A: loan64-2 to
+    -6, cs-loan64-1, ab1, ab3, ab5; B: fx-loan64-1 to -6, ab2, ab4,
+    ab6): -2.32 us (0.62), -2.5%;
+  - the same in points of the rings' softirq: -1.26 (0.94) and -2.20
+    (0.59).
+
+  loan64-1 is left out because it is the odd run of 23 October, the
+  first after the boot, with the rings at 76%. Its 78.8 us at 0.96
+  refused lies far off the line the others make. With it in, the fit is
+  that one point's: -0.37 us (1.26). The other B run that refused
+  nearly as often, fx-loan64-4 at 0.92, took 88.3 us, so loan64-1's low
+  cost is not where every run goes at that rate. The throughput does
+  not move, as the drives decide it. The fix stays a bookkeeping and
+  efficiency change (no wake was ever lost), with a small saving on the
+  rings, about what the probe estimate gave.
+
   Not yet done: a test of the loop itself, by giving the rings room
   (more rings, or the dropped `svc_tcp_rx_keep`, which cut wakes). The
   rings are the settled setting's, so it is Mike's to decide.
