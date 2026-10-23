@@ -3673,10 +3673,10 @@ wrote about 90 TB to the stripe, 15 TB a drive.
 it (build 461). A session has no memory of the days before it:
 everything known is in these files and in
 `/var/tmp/zc-run-logs/` (which is on the root file system and
-survives).** Commits here end with `Assisted-by:` and a `Signed-off-by:`
-of the configured git identity (`git commit -s`), never
-`Co-Authored-By` (AGENTS.md, "Commit trailers"). Mike corrected that
-once already.
+survives).** Commits here end with a `Signed-off-by:` of the
+configured git identity (`git commit -s`) and nothing else: no
+`Assisted-by:` since 2026-10-23, never `Co-Authored-By` (AGENTS.md,
+"Commit trailers"). Mike corrected that once already.
 
 ## The state of tardis1 now (build 461, 2026-10-09 13:30)
 

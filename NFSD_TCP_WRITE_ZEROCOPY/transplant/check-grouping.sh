@@ -14,8 +14,8 @@
 #   every Fixes: tag names a commit that is on the branch (after a fold or
 #   regroup the SHAs move and the tags must be re-pointed), or, for a
 #   backport that keeps its upstream tag, quotes the subject of one;
-#   every commit carries Assisted-by: or no AI trailer, and never
-#   Co-Authored-By:.
+#   no commit carries Co-Authored-By: (Assisted-by: is no longer written
+#   since 2026-10-23, but older commits keep theirs and pass).
 #
 # Classes, by the files a commit touches:
 #   docs  -- only NFSD_TCP_WRITE_ZEROCOPY/ and AGENTS.md
