@@ -1,0 +1,3 @@
+WRITEs a second in the profile: 38651
+rings (CPUs 0,2,4,6): busy 61.71 us a WRITE
+nfsd (CPUs 8-55): busy 118.44 us a WRITE
