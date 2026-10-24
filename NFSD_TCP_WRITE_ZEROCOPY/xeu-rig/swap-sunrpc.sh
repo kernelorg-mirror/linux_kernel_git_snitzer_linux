@@ -16,6 +16,9 @@ O=${1:-$L/sunrpc-$(uname -r)}
 KO=${SUNRPC_KO:-$O/sunrpc/sunrpc.ko}
 # NFSD_KO=path also puts that nfsd.ko in updates/, NFSD_KO=none takes it out
 NKO=${NFSD_KO:-}
+# STACK=dir puts every .ko in dir in updates/ (build-svcstack.sh's set, with
+# SUNRPC_KO=none), STACK=none takes the last such set out first
+STK=${STACK:-}
 UPD=/lib/modules/$(uname -r)/updates
 UNITS="nfs-server nfs-mountd nfs-idmapd nfsdcld rpc-statd rpc-gssd gssproxy"
 # oneshot units that stay "active" once run, so they are restarted by name:
@@ -72,6 +75,11 @@ if [ -d /sys/module/sunrpc ]; then
 	exit 1
 fi
 
+case "$STK" in
+"") ;;
+none) [ -e $UPD/.svcstack ] && (cd $UPD && xargs rm -f < .svcstack) && rm -f $UPD/.svcstack ;;
+*) mkdir -p $UPD; (cd "$STK" && ls *.ko) > $UPD/.svcstack; cp "$STK"/*.ko $UPD/ ;;
+esac
 if [ "$KO" != none ]; then
 	mkdir -p $UPD
 	cp $KO $UPD/sunrpc.ko
