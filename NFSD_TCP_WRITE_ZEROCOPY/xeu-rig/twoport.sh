@@ -56,6 +56,7 @@
 #   SKB_DEFER_MAX=<n> net.core.skb_defer_max for the run (settled: 0 since 23 October; 0 frees a
 #                    consumed skb where it was consumed, not on its ring's CPU)
 #   SRV_QDISC=<q>    the qdisc on each of the server port's transmit queues (settled: fq_codel)
+#   NOTRACK=absent   no zc_notrack table for the run (settled: loaded)
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
 #   TXIRQ_A=<cpu> TXIRQ_B=<cpu>  a port's Tx rings on two CPUs from <cpu>, and
@@ -168,6 +169,7 @@ cleanup() {
 	done
 	echo N > /sys/module/xeu/parameters/rx_port_stats
 	[ -n "${SRV_QDISC:-}" ] && for p in $PORTS; do "$RIG/settled.sh" srvq ${DEV[$p]}; done	# the settled qdisc back
+	[ "${NOTRACK:-}" = absent ] && nft -f "$RIG/zc-notrack.nft"	# the settled table back
 	# An open of a port put its interrupts back on CPUs 0-7, and NFSD_CPUS=
 	# moved nfsd: the settled CPU layout back, and the host as the run left it.
 	"$RIG/settled.sh" place $PORTS
@@ -182,6 +184,7 @@ echo Y > /sys/module/xeu/parameters/rx_port_stats
 [ -n "${RCVBUF:-}" ] && echo $RCVBUF > $SP/svc_tcp_rx_rcvbuf
 [ -n "${REFILL:-}" ] && echo $REFILL > /sys/module/xeu/parameters/rx_refill_thresh
 [ -n "${SKB_DEFER_MAX:-}" ] && sysctl -qw net.core.skb_defer_max=$SKB_DEFER_MAX	# settled.sh apply puts it back
+[ "${NOTRACK:-}" = absent ] && { nft delete table inet zc_notrack 2> /dev/null; echo "zc_notrack: absent for this run" | tee -a geometry.txt; }
 # setp <value> <parameter> <off>: set it.  Parameters dropped from the
 # series (copy_threads, lowat, linger_us, keep) are not in later kernels: there
 # asking for the off value is what the kernel does, and anything else stops.
@@ -310,7 +313,7 @@ if [ "$RW" != write ]; then	# a run that reads: every file written whole first, 
 fi
 # Just before the load: the live state, all of it, against the setting this
 # run is at; anything the run set on purpose is held to what it set.
-EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-}"
+EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}" ] && EXPENV="$EXPENV EXP_LAYOUT=RINGS=${RINGS:-4},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-}"
 # the client's qdisc is set only on the ports of this run
