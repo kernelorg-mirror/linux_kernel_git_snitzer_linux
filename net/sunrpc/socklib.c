@@ -173,11 +173,17 @@ static int xprt_send_kvec(struct socket *sock, struct msghdr *msg,
 }
 
 static int xprt_send_pagedata(struct socket *sock, struct msghdr *msg,
-			      struct xdr_buf *xdr, size_t base)
+			      struct xdr_buf *xdr, size_t base,
+			      unsigned int splice)
 {
+	int ret;
+
 	iov_iter_bvec(&msg->msg_iter, ITER_SOURCE, xdr->bvec, xdr_buf_pagecount(xdr),
 		      xdr->page_len + xdr->page_base);
-	return xprt_sendmsg(sock, msg, base + xdr->page_base);
+	msg->msg_flags |= splice;
+	ret = xprt_sendmsg(sock, msg, base + xdr->page_base);
+	msg->msg_flags &= ~MSG_SPLICE_PAGES;
+	return ret;
 }
 
 /* Common case:
@@ -207,6 +213,12 @@ static int xprt_send_rm_and_kvec(struct socket *sock, struct msghdr *msg,
  * @sock: open socket to send on
  * @msg: socket message metadata
  * @xdr: xdr_buf containing this request
+ *
+ * With %MSG_SPLICE_PAGES set in @msg->msg_flags, the pages of @xdr are
+ * spliced into the socket rather than copied, and the caller must leave
+ * them unchanged until the socket has sent them.  The head and the tail
+ * are always copied.
+ *
  * @base: starting position in the buffer
  * @marker: stream record marker field
  * @sent_p: return the total number of bytes successfully queued for sending
@@ -221,6 +233,7 @@ int xprt_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 {
 	unsigned int rmsize = marker ? sizeof(marker) : 0;
 	unsigned int remainder = rmsize + xdr->len - base;
+	unsigned int splice = msg->msg_flags & MSG_SPLICE_PAGES;
 	unsigned int want;
 	int err = 0;
 
@@ -229,6 +242,10 @@ int xprt_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 	if (unlikely(!sock))
 		return -ENOTSOCK;
 
+	/* The head and tail are kvecs over memory the socket may not
+	 * hold a reference to, so only the page array is spliced.
+	 */
+	msg->msg_flags &= ~MSG_SPLICE_PAGES;
 	msg->msg_flags |= MSG_MORE;
 	want = xdr->head[0].iov_len + rmsize;
 	if (base < want) {
@@ -256,7 +273,7 @@ int xprt_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 		remainder -= len;
 		if (remainder == 0)
 			msg->msg_flags &= ~MSG_MORE;
-		err = xprt_send_pagedata(sock, msg, xdr, base);
+		err = xprt_send_pagedata(sock, msg, xdr, base, splice);
 		if (remainder == 0 || err != len)
 			goto out;
 		*sent_p += err;
@@ -266,10 +283,11 @@ int xprt_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 	}
 
 	if (base >= xdr->tail[0].iov_len)
-		return 0;
+		goto out;
 	msg->msg_flags &= ~MSG_MORE;
 	err = xprt_send_kvec(sock, msg, &xdr->tail[0], base);
 out:
+	msg->msg_flags |= splice;
 	if (err > 0) {
 		*sent_p += err;
 		err = 0;
