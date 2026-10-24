@@ -1020,6 +1020,41 @@ out:
 	return ret;
 }
 
+/*
+ * A buffered write the caller marked IOCB_NOSERIAL can take the IOLOCK shared
+ * when no exclusion beyond the folio lock is needed: it changes nothing but
+ * the data of one folio.  So it lies within one folio, which the folio lock
+ * keeps atomic against other writes, and within EOF, so it neither moves
+ * i_size nor zeroes up to it.  The file has an extent size hint, so the
+ * write is mapped the way a direct write is, with no delalloc reservation to
+ * punch out again after a short write.  Reflink, DAX, atomic and appending
+ * writes keep the exclusive lock.  Reads of the folio are not serialised
+ * against the copy.
+ */
+static bool
+xfs_buffered_write_noserial(
+	struct kiocb		*iocb,
+	struct iov_iter		*from)
+{
+	struct inode		*inode = iocb->ki_filp->f_mapping->host;
+	struct xfs_inode	*ip = XFS_I(inode);
+	size_t			unit = mapping_min_folio_nrbytes(inode->i_mapping);
+	size_t			count = iov_iter_count(from);
+	loff_t			pos = iocb->ki_pos;
+
+	if (!(iocb->ki_flags & IOCB_NOSERIAL) || !count)
+		return false;
+	if (iocb->ki_flags & (IOCB_APPEND | IOCB_ATOMIC))
+		return false;
+	if (IS_DAX(inode) || xfs_is_cow_inode(ip) || !xfs_get_extsz_hint(ip))
+		return false;
+	/* within one folio: folios are naturally aligned and at least unit */
+	if ((pos & ~(loff_t)(unit - 1)) !=
+	    ((pos + count - 1) & ~(loff_t)(unit - 1)))
+		return false;
+	return pos + count <= i_size_read(inode);
+}
+
 STATIC ssize_t
 xfs_file_buffered_write(
 	struct kiocb		*iocb,
@@ -1032,10 +1067,24 @@ xfs_file_buffered_write(
 	unsigned int		iolock;
 
 write_retry:
-	iolock = XFS_IOLOCK_EXCL;
+	iolock = xfs_buffered_write_noserial(iocb, from) ?
+			XFS_IOLOCK_SHARED : XFS_IOLOCK_EXCL;
 	ret = xfs_ilock_iocb(iocb, iolock);
 	if (ret)
 		return ret;
+
+	/*
+	 * Truncate takes the IOLOCK exclusive, so with it held shared i_size
+	 * can only grow; but it may have shrunk before the lock was taken.
+	 */
+	if (iolock == XFS_IOLOCK_SHARED &&
+	    iocb->ki_pos + iov_iter_count(from) > i_size_read(inode)) {
+		xfs_iunlock(ip, iolock);
+		iolock = XFS_IOLOCK_EXCL;
+		ret = xfs_ilock_iocb(iocb, iolock);
+		if (ret)
+			return ret;
+	}
 
 	ret = xfs_file_write_checks(iocb, from, &iolock, NULL);
 	if (ret)

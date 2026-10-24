@@ -1371,6 +1371,51 @@ nfsd_write_dio_iters_init(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	return split->nsegs;
 }
 
+/*
+ * XFS holds the IOLOCK across a synchronous direct write, device time
+ * included, and the buffered ends of the WRITEs around it wait for that lock
+ * exclusively.  Issued as an async kiocb, the middle lets go of the lock once
+ * it is submitted; nfsd then waits for its completion outside the file
+ * system.  The WRITE's segments still run one after the other.
+ */
+struct nfsd_dio_wait {
+	struct kiocb		iocb;
+	struct completion	done;
+	long			res;
+};
+
+static void nfsd_dio_wait_complete(struct kiocb *iocb, long res)
+{
+	struct nfsd_dio_wait *w = container_of(iocb, struct nfsd_dio_wait, iocb);
+
+	/* vfs_iocb_iter_write() leaves this to completion when queued */
+	kiocb_end_write(iocb);
+	w->res = res;
+	complete(&w->done);
+}
+
+static ssize_t nfsd_dio_write_async(struct file *file, struct kiocb *kiocb,
+				    struct iov_iter *iter)
+{
+	struct nfsd_dio_wait w;
+	ssize_t ret;
+
+	w.iocb = *kiocb;
+	w.iocb.ki_complete = nfsd_dio_wait_complete;
+	init_completion(&w.done);
+	ret = vfs_iocb_iter_write(file, &w.iocb, iter);
+	if (ret == -EIOCBQUEUED) {
+		wait_for_completion(&w.done);
+		ret = w.res;
+		/* vfs_iocb_iter_write() notifies only a write it completed */
+		if (ret > 0)
+			fsnotify_modify(file);
+	}
+	/* the file system advanced w.iocb.ki_pos by what it wrote */
+	kiocb->ki_pos = w.iocb.ki_pos;
+	return ret;
+}
+
 static noinline_for_stack int
 nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		  struct nfsd_file *nf, unsigned int nvecs,
@@ -1411,7 +1456,17 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		expected = iov_iter_count(&seg->iter);
 		nfs_dio_seg_hold(file, seg, kiocb->ki_pos, expected,
 				 &holds[nheld]);
-		host_err = vfs_iocb_iter_write(file, kiocb, &seg->iter);
+		/*
+		 * Issue direct segments async so that XFS drops its IOLOCK
+		 * while the I/O is in flight.  A segment that starts or ends
+		 * mid-page stays synchronous, which keeps a buffered write to
+		 * that page out until the I/O completes.
+		 */
+		if ((kiocb->ki_flags & IOCB_DIRECT) &&
+		    !nfs_dio_write_shares_page(kiocb->ki_pos, expected))
+			host_err = nfsd_dio_write_async(file, kiocb, &seg->iter);
+		else
+			host_err = vfs_iocb_iter_write(file, kiocb, &seg->iter);
 		if (host_err < 0)
 			break;
 		written[nheld++] = host_err;

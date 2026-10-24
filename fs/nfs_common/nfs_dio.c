@@ -180,6 +180,7 @@ void nfs_dio_split(struct file *file, const struct nfs_dio_policy *policy,
 	size_t prefix = 0, middle = 0, suffix = 0;
 	unsigned int dontcache_flags = 0;
 	unsigned int buffered_flags = 0;
+	unsigned int edge_flags;
 	u32 mem_offset = nvecs ? bvec->bv_offset : 0;
 	enum nfs_dio_disposition disposition;
 	unsigned int nsegs = 0;
@@ -195,6 +196,14 @@ void nfs_dio_split(struct file *file, const struct nfs_dio_policy *policy,
 	 */
 	if (policy->dontcache && dontcache_flags)
 		buffered_flags = dontcache_flags | IOCB_DONTCACHE_DEFER;
+	/*
+	 * A misaligned end of a write needs no serialisation beyond the folio
+	 * lock: a file system may write it under a shared inode lock where it
+	 * can, e.g. where it fits in one folio (IOCB_NOSERIAL).
+	 */
+	edge_flags = buffered_flags;
+	if (direction == ITER_SOURCE)
+		edge_flags |= IOCB_NOSERIAL;
 
 	/*
 	 * If the file system doesn't advertise any alignment requirements,
@@ -264,7 +273,7 @@ void nfs_dio_split(struct file *file, const struct nfs_dio_policy *policy,
 	if (prefix) {
 		nfs_dio_seg_init(&split->segs[nsegs], direction, bvec, nvecs,
 				 total, 0, prefix, iocb_flags);
-		split->segs[nsegs].flags |= buffered_flags;
+		split->segs[nsegs].flags |= edge_flags;
 		split->segs[nsegs++].claim = !!buffered_flags;
 	}
 
@@ -293,7 +302,7 @@ void nfs_dio_split(struct file *file, const struct nfs_dio_policy *policy,
 	if (suffix) {
 		nfs_dio_seg_init(&split->segs[nsegs], direction, bvec, nvecs,
 				 total, prefix + middle, suffix, iocb_flags);
-		split->segs[nsegs].flags |= buffered_flags;
+		split->segs[nsegs].flags |= edge_flags;
 		split->segs[nsegs++].claim = !!buffered_flags;
 	}
 	goto out;

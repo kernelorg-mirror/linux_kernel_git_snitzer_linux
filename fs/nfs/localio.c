@@ -862,6 +862,50 @@ static void nfs_local_write_aio_complete(struct kiocb *kiocb, long ret)
 		   &iocb->work);
 }
 
+/*
+ * A direct segment that is not the last of its write must complete before the
+ * next segment is issued, so that the segments go out in file offset order.
+ * Issuing it synchronously would do that, but a file system may hold a lock
+ * across a synchronous direct write, device time included: XFS holds its
+ * IOLOCK shared, and the buffered ends of the writes around it wait for that
+ * lock exclusively.  So issue it as an async kiocb, which lets go of the lock
+ * once the I/O is queued, and wait for its completion here.
+ */
+struct nfs_local_dio_wait {
+	struct kiocb		iocb;
+	struct completion	done;
+	long			res;
+};
+
+static void nfs_local_dio_wait_complete(struct kiocb *kiocb, long res)
+{
+	struct nfs_local_dio_wait *w =
+		container_of(kiocb, struct nfs_local_dio_wait, iocb);
+
+	w->res = res;
+	complete(&w->done);
+}
+
+static ssize_t nfs_local_dio_write_wait(struct file *filp, struct kiocb *kiocb,
+					struct iov_iter *iter)
+{
+	struct nfs_local_dio_wait w;
+	ssize_t ret;
+
+	w.iocb = *kiocb;
+	w.iocb.ki_complete = nfs_local_dio_wait_complete;
+	init_completion(&w.done);
+	scoped_with_creds(filp->f_cred)
+		ret = filp->f_op->write_iter(&w.iocb, iter);
+	if (ret == -EIOCBQUEUED) {
+		wait_for_completion(&w.done);
+		ret = w.res;
+	}
+	/* the file system advanced w.iocb.ki_pos by what it wrote */
+	kiocb->ki_pos = w.iocb.ki_pos;
+	return ret;
+}
+
 static void nfs_local_call_write(struct work_struct *work)
 {
 	struct nfs_local_kiocb *iocb =
@@ -889,6 +933,7 @@ static void nfs_local_call_write(struct work_struct *work)
 	for (int i = 0; i < n_iters ; i++) {
 		struct nfs_dio_seg *seg = &iocb->split.segs[i];
 		struct nfs_dio_seg_hold hold;
+		bool wait_async = false;
 		size_t expected;
 
 		iocb->kiocb.ki_flags = seg->flags & ~(IOCB_DSYNC | IOCB_SYNC);
@@ -905,6 +950,16 @@ static void nfs_local_call_write(struct work_struct *work)
 		    !nfs_dio_write_shares_page(iocb->kiocb.ki_pos, expected)) {
 			iocb->kiocb.ki_complete = nfs_local_write_aio_complete;
 			iocb->aio_complete_work = nfs_local_write_aio_complete_work;
+		} else if ((seg->flags & IOCB_DIRECT) &&
+			   !nfs_dio_write_shares_page(iocb->kiocb.ki_pos, expected)) {
+			/*
+			 * Issue a direct segment that is not last async so that
+			 * XFS drops its IOLOCK while the I/O is in flight.  One
+			 * that starts or ends mid-page stays synchronous, which
+			 * keeps a buffered write to that page out until the I/O
+			 * completes.
+			 */
+			wait_async = true;
 		}
 
 		/*
@@ -914,8 +969,13 @@ static void nfs_local_call_write(struct work_struct *work)
 		 * direct segment completes through AIO, and it holds nothing.
 		 */
 		nfs_dio_seg_hold(filp, seg, iocb->kiocb.ki_pos, expected, &hold);
-		scoped_with_creds(filp->f_cred)
-			status = filp->f_op->write_iter(&iocb->kiocb, &seg->iter);
+		if (wait_async)
+			status = nfs_local_dio_write_wait(filp, &iocb->kiocb,
+							  &seg->iter);
+		else
+			scoped_with_creds(filp->f_cred)
+				status = filp->f_op->write_iter(&iocb->kiocb,
+								&seg->iter);
 
 		if (status == -EIOCBQUEUED)
 			continue;
