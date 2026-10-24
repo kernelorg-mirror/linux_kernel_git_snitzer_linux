@@ -3,6 +3,8 @@
  * lat.bt - where one WRITE's time goes on the server, for lat.sh's low-depth
  * run (FLAMEGRAPH/README.md): histograms in microseconds of
  *   wakeup  from a thread being asked to wake to it taking the transport
+ *           (stale for a thread that found work without sleeping: use
+ *           wake_to_run for the wake itself)
  *   qtime   from the transport being queued to a thread taking it
  *           (both from svc_xprt_dequeue, which stamps them only while enabled)
  *   process svc_process(): the call, the write into the file system included
@@ -15,6 +17,18 @@ tracepoint:sunrpc:svc_xprt_dequeue
 {
 	@wakeup_us = hist(args->wakeup);
 	@qtime_us = hist(args->qtime);
+}
+
+/*
+ * The wake as the scheduler sees it: an nfsd thread made runnable to the
+ * switch that runs it.  svc_xprt_dequeue's wakeup above also counts a
+ * thread that found work without sleeping, against a stale stamp.
+ */
+tracepoint:sched:sched_wakeup /args->comm == "nfsd"/ { @t_k[args->pid] = nsecs; }
+tracepoint:sched:sched_switch /@t_k[args->next_pid]/
+{
+	@wake_to_run_us = hist((uint64)(nsecs - @t_k[args->next_pid]) / 1000);
+	delete(@t_k, args->next_pid);
 }
 
 fentry:sunrpc:svc_process { @t_p[tid] = nsecs; }
@@ -38,4 +52,4 @@ fexit:sunrpc:svc_tcp_sendto /@t_s[tid]/
 	delete(@t_s, tid);
 }
 
-END { clear(@t_p); clear(@t_w); clear(@t_s); }
+END { clear(@t_p); clear(@t_w); clear(@t_s); clear(@t_k); }

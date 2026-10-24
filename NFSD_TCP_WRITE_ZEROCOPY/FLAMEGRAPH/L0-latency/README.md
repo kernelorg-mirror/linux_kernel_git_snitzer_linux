@@ -31,6 +31,8 @@ The traced run came out faster than the untraced one, so two runs on the same se
   - About 0.02 ms is the reply.
   - The rest is the record's arrival and the client's own time.
   - The record arrives over about 12 passes (round 02), so its receive is spread over the transfer and is not one probe here. A next probe for the split: from a record's first byte to its last, on the server.
-- **The wake has a tail.** 2.5% of wakes take 128-512 µs.
-  - Some of those wakes are for the passes over a record, not for a whole WRITE. So how many WRITEs it delays is not known from this.
-  - It is the first thing to look at for latency: what a thread is doing when a wake takes that long (an idle CPU's exit from a deep state, or the CPU busy with something else).
+- **The "wake tail" is the tracepoint's, not the wake's (found after L0).**
+  - `svc_xprt_dequeue` reports `now - rq_qtime`. `rq_qtime` is stamped only when a thread is first on the idle list at a wake attempt.
+  - A thread that finishes an RPC and finds a transport queued dequeues it without sleeping, with its stamp from before that RPC.
+  - The 128-512 µs mode is one whole WRITE's processing (`svc_process` 128-256, plus the reply); the 8-32 µs mode is one partial pass over a record. Only the 0-8 µs buckets are wakes.
+  - Real wake latency is to be measured from the scheduler: from `sched_wakeup` of an nfsd thread to the `sched_switch` that runs it (next in `lat.bt`).
