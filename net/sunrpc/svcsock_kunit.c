@@ -1890,14 +1890,15 @@ static struct sock *svcsock_rx_want_sk(struct kunit *test,
 
 /*
  * A drained read of a loaned 1 MiB record with 256 KiB of it in: the rest
- * is wanted, capped at half the receive buffer.  Not drained, no credit,
- * complete, or TLS: nothing is wanted.
+ * is wanted, capped at half the receive window still open.  Not drained,
+ * no credit, complete, or TLS: nothing is wanted.
  */
 static void svcsock_rx_set_want_test(struct kunit *test)
 {
 	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 64);
 	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
-	struct sock *sk = svcsock_rx_want_sk(test, svsk, 0, 1 << 20);
+	struct sock *sk = svcsock_rx_want_sk(test, svsk, 0, 2 << 20);
+	struct tcp_sock *tp = tcp_sk(sk);
 	const u32 reclen = 1 << 20;
 
 	svsk->sk_marker = cpu_to_be32(RPC_LAST_STREAM_FRAGMENT | reclen);
@@ -1909,9 +1910,17 @@ static void svcsock_rx_set_want_test(struct kunit *test)
 	svc_tcp_rx_set_want(svsk, state, false);
 	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
 
-	sk->sk_rcvbuf = 1 << 20;
+	tp->rcv_wnd = 1 << 20;
 	svc_tcp_rx_set_want(svsk, state, true);
 	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 512U << 10);
+	/* What the peer may still send is the window less what it sent. */
+	tp->rcv_nxt = tp->rcv_wup + (768U << 10);
+	svc_tcp_rx_set_want(svsk, state, true);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 128U << 10);
+	tp->rcv_nxt = tp->rcv_wup + (2U << 20);
+	svc_tcp_rx_set_want(svsk, state, true);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
+	tp->rcv_nxt = tp->rcv_wup;
 	svc_tcp_rx_set_want(svsk, NULL, true);
 	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
 
