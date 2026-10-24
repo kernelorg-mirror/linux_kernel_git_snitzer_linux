@@ -21,7 +21,8 @@ Each round is a directory here, numbered in order:
 | [03-skb-defer](03-skb-defer/README.md) | the same, with round 02 | deferred skb frees on the ring (8.85 us), `napi_pp_put_page` a remote line | `net.core.skb_defer_max` 0, in settled.sh | kept: rings 80.0 to 68.0 us a loaned WRITE (-15%), nfsd 167.5 to 159.8 |
 | 04 | | the region pools' 256-page stack overflows: 7% of pages back to the region, about 5 us a WRITE | `dc23eac70f34`: `page_pool.rx_region_stack` | waits for the next kernel build (Mike) |
 | [05-data-ready](05-data-ready/README.md) | the same, with round 03 | `svc_data_ready`: the `xpt_flags` line, two clock reads, a store into another thread's `svc_rqst` | `eff5f16d4f30`, `0f0ed4159a12` | kept: rings 68.4 to 65.0 us a loaned WRITE (-5%), nfsd 159.7 to 156.4 |
-| 06 | | a WRITE taken up 12 times: wakes, hand-offs, ACKs (about 50 us on nfsd) | `c8cf27841351`: a low-water mark while a loaned record is incomplete | |
+| [06-loan-lowat](06-loan-lowat/README.md) | the same, with round 05 | a WRITE taken up 12 times: wakes, hand-offs, ACKs (about 50 us on nfsd) | `c8cf27841351`: a low-water mark while a loaned record is incomplete | not kept, reverted (`b8c9ee7c6d2a`): nfsd 154.5 to 121.0 us a WRITE, but TCP ACKs every skb below the mark, so the rings 67.0 to 85.0 |
+| 06b | | the same churn | `svc_data_ready` holds `XPT_DATA` back for a short loaned record; `sk_rcvlowat` stays 1 | Mike to decide |
 | 07 | | half of each ACK and reply is the qdisc (fq_codel, its lock) | the server's qdisc `pfifo_fast` | |
 | 08 | | the `zc_notrack` chains cost 3-4 us a WRITE with no conntrack to skip | load `zc_notrack` only while a table needs conntrack | |
 | 09 | | per-skb costs at about 19 GRO skbs a WRITE | BIG TCP: `gro_ipv4_max_size` 256 KB | |
@@ -127,6 +128,9 @@ tardis1's included: that is Mike's to ask for, each time.
   TCP's own (`nstat TcpInSegs TcpOutSegs`).
 - Per-run counters of the port (interrupts, page_pool) start again when
   the port opens: read them after the run, not as a difference.
+- A change that holds pages longer or returns them later also reports
+  the region's peak pages in use (Mike: keep the L3 hot; a buffer's
+  reuse is LIFO, so returning it later makes the ring reuse colder ones).
 - Name the change by what it saves a WRITE, measured, and say what it did
   not change (the rate, nfsd's sleeps).
 
