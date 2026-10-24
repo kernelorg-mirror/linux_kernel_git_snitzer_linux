@@ -1,3 +1,12 @@
+* Sat Oct 24 2026 Mike Snitzer <snitzer@kernel.org> [7.3-10]
+- Add nfsd-testing-canary-nfs_common-XFS-IOLOCK-and-async-DIO-middle,
+  built on nfsd-testing-canary-dontcache-LOCALIO: NFSD issues the direct
+  middle of a split WRITE as an async kiocb, LOCALIO lets a direct
+  segment that is not last release the IOLOCK while in flight, and the
+  new IOCB_NOSERIAL lets XFS take the IOLOCK shared for a buffered write
+  within one folio, with nfs_common marking a split write's misaligned
+  ends IOCB_NOSERIAL
+
 * Fri Oct 23 2026 Mike Snitzer <snitzer@kernel.org> [7.3-9]
 - Update nfsd-testing-canary-dontcache to v9 of the series: a folio is
   counted in, or taken off, WB_DONTCACHE_DIRTY only when both PG_dirty
