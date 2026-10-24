@@ -141,6 +141,12 @@ struct svc_sock {
 	u32			sk_credit_need;
 	/* the budget whose waiters @sk_credit_wait is on */
 	struct svc_tcp_rx_budget *sk_budget;
+	/*
+	 * What an incomplete loaned record still lacks after a read that
+	 * drained the socket, or 0: svc_data_ready() wakes no thread for
+	 * less (svc_tcp_rx_set_want())
+	 */
+	u32			sk_rx_want;
 	/* region pages seen: hold the receive buffer (set by the actor) */
 	bool			sk_rx_hold_pending;
 	/* receive buffer, window clamp and scaling ratio held */
