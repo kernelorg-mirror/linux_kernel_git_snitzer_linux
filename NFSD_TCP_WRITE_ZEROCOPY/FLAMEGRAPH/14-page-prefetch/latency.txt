@@ -1,0 +1,387 @@
+L14-B1 untraced: write 7.60 GB/s, 7248 IOPS; completion ms: p50 0.473, p90 0.545, p99 0.594, p99.9 0.651, mean 0.472, max 0.795
+L14-B1 traced:   write 8.16 GB/s, 7784 IOPS; completion ms: p50 0.424, p90 0.502, p99 0.561, p99.9 0.635, mean 0.438, max 0.853
+L14-A1 untraced: write 7.79 GB/s, 7429 IOPS; completion ms: p50 0.461, p90 0.545, p99 0.602, p99.9 0.659, mean 0.473, max 3.603
+L14-A1 traced:   write 8.34 GB/s, 7954 IOPS; completion ms: p50 0.432, p90 0.481, p99 0.561, p99.9 0.635, mean 0.439, max 0.749
+L14-B2 untraced: write 7.80 GB/s, 7442 IOPS; completion ms: p50 0.461, p90 0.522, p99 0.578, p99.9 0.635, mean 0.455, max 0.794
+L14-B2 traced:   write 8.07 GB/s, 7700 IOPS; completion ms: p50 0.436, p90 0.510, p99 0.578, p99.9 0.643, mean 0.448, max 0.793
+L14-A2 untraced: write 7.96 GB/s, 7590 IOPS; completion ms: p50 0.449, p90 0.528, p99 0.586, p99.9 0.635, mean 0.462, max 0.772
+L14-A2 traced:   write 8.33 GB/s, 7944 IOPS; completion ms: p50 0.428, p90 0.477, p99 0.553, p99.9 0.635, mean 0.438, max 0.799
+
+== L14-B1, lat.bt
+lat.bt:30:34-39: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @wake_to_run_us = hist((uint64)(nsecs - @t_k[args->next_pid]) / 1000);
+                                    ~~~~~
+lat.bt:30:42-62: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @wake_to_run_us = hist((uint64)(nsecs - @t_k[args->next_pid]) / 1000);
+                                            ~~~~~~~~~~~~~~~~~~~~
+lat.bt:37:30-35: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @process_us = hist((uint64)(nsecs - @t_p[tid]) / 1000);
+                                ~~~~~
+lat.bt:37:38-47: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @process_us = hist((uint64)(nsecs - @t_p[tid]) / 1000);
+                                        ~~~~~~~~~
+lat.bt:44:28-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @write_us = hist((uint64)(nsecs - @t_w[tid]) / 1000);
+                              ~~~~~
+lat.bt:44:36-45: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @write_us = hist((uint64)(nsecs - @t_w[tid]) / 1000);
+                                      ~~~~~~~~~
+lat.bt:51:28-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @reply_us = hist((uint64)(nsecs - @t_s[tid]) / 1000);
+                              ~~~~~
+lat.bt:51:36-45: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @reply_us = hist((uint64)(nsecs - @t_s[tid]) / 1000);
+                                      ~~~~~~~~~
+lat.bt:31:2-30: WARNING: Return value discarded.
+    delete(@t_k, args->next_pid);
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+lat.bt:38:2-19: WARNING: Return value discarded.
+    delete(@t_p, tid);
+    ~~~~~~~~~~~~~~~~~
+lat.bt:45:2-19: WARNING: Return value discarded.
+    delete(@t_w, tid);
+    ~~~~~~~~~~~~~~~~~
+lat.bt:52:2-19: WARNING: Return value discarded.
+    delete(@t_s, tid);
+    ~~~~~~~~~~~~~~~~~
+Attached 10 probes
+
+
+@process_us:
+[4, 8)                21 |                                                    |
+[8, 16)               43 |                                                    |
+[16, 32)              18 |                                                    |
+[32, 64)              15 |                                                    |
+[64, 128)             15 |                                                    |
+[128, 256)        432118 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)           639 |                                                    |
+
+@qtime_us:
+[0]                64421 |@                                                   |
+[1]               359891 |@@@@@@@@@@                                          |
+[2, 4)           1735784 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)            829643 |@@@@@@@@@@@@@@@@@@@@@@@@                            |
+[8, 16)             9700 |                                                    |
+[16, 32)              79 |                                                    |
+[32, 64)               8 |                                                    |
+[64, 128)              2 |                                                    |
+
+@reply_us:
+[2, 4)                39 |                                                    |
+[4, 8)                58 |                                                    |
+[8, 16)           356141 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[16, 32)           76619 |@@@@@@@@@@@                                         |
+[32, 64)              12 |                                                    |
+
+@wake_to_run_us:
+[0]              2901854 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1]              1297691 |@@@@@@@@@@@@@@@@@@@@@@@                             |
+[2, 4)             27838 |                                                    |
+[4, 8)              3206 |                                                    |
+[8, 16)             3515 |                                                    |
+[16, 32)            5053 |                                                    |
+[32, 64)            4658 |                                                    |
+[64, 128)            581 |                                                    |
+[128, 256)             2 |                                                    |
+
+@wakeup_us:
+[0]                17846 |                                                    |
+[1]                78942 |@@                                                  |
+[2, 4)           1932324 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)            454448 |@@@@@@@@@@@@                                        |
+[8, 16)           371919 |@@@@@@@@@@                                          |
+[16, 32)           60587 |@                                                   |
+[32, 64)             144 |                                                    |
+[64, 128)              0 |                                                    |
+[128, 256)         79254 |@@                                                  |
+[256, 512)          3982 |                                                    |
+[512, 1K)             82 |                                                    |
+
+@write_us:
+[128, 256)        432742 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)            12 |                                                    |
+
+
+== L14-A1, lat.bt
+lat.bt:30:34-39: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @wake_to_run_us = hist((uint64)(nsecs - @t_k[args->next_pid]) / 1000);
+                                    ~~~~~
+lat.bt:30:42-62: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @wake_to_run_us = hist((uint64)(nsecs - @t_k[args->next_pid]) / 1000);
+                                            ~~~~~~~~~~~~~~~~~~~~
+lat.bt:37:30-35: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @process_us = hist((uint64)(nsecs - @t_p[tid]) / 1000);
+                                ~~~~~
+lat.bt:37:38-47: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @process_us = hist((uint64)(nsecs - @t_p[tid]) / 1000);
+                                        ~~~~~~~~~
+lat.bt:44:28-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @write_us = hist((uint64)(nsecs - @t_w[tid]) / 1000);
+                              ~~~~~
+lat.bt:44:36-45: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @write_us = hist((uint64)(nsecs - @t_w[tid]) / 1000);
+                                      ~~~~~~~~~
+lat.bt:51:28-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @reply_us = hist((uint64)(nsecs - @t_s[tid]) / 1000);
+                              ~~~~~
+lat.bt:51:36-45: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @reply_us = hist((uint64)(nsecs - @t_s[tid]) / 1000);
+                                      ~~~~~~~~~
+lat.bt:31:2-30: WARNING: Return value discarded.
+    delete(@t_k, args->next_pid);
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+lat.bt:38:2-19: WARNING: Return value discarded.
+    delete(@t_p, tid);
+    ~~~~~~~~~~~~~~~~~
+lat.bt:45:2-19: WARNING: Return value discarded.
+    delete(@t_w, tid);
+    ~~~~~~~~~~~~~~~~~
+lat.bt:52:2-19: WARNING: Return value discarded.
+    delete(@t_s, tid);
+    ~~~~~~~~~~~~~~~~~
+Attached 10 probes
+
+
+@process_us:
+[4, 8)                10 |                                                    |
+[8, 16)               50 |                                                    |
+[16, 32)              23 |                                                    |
+[32, 64)              11 |                                                    |
+[64, 128)             18 |                                                    |
+[128, 256)        424025 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)          1166 |                                                    |
+
+@qtime_us:
+[0]                58677 |@                                                   |
+[1]               367954 |@@@@@@@@@@@                                         |
+[2, 4)           1664023 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)            850556 |@@@@@@@@@@@@@@@@@@@@@@@@@@                          |
+[8, 16)             9737 |                                                    |
+[16, 32)              81 |                                                    |
+[32, 64)               8 |                                                    |
+[64, 128)              2 |                                                    |
+
+@reply_us:
+[2, 4)                19 |                                                    |
+[4, 8)                64 |                                                    |
+[8, 16)           180514 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@              |
+[16, 32)          244624 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[32, 64)              82 |                                                    |
+
+@wake_to_run_us:
+[0]              2788957 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1]              1254644 |@@@@@@@@@@@@@@@@@@@@@@@                             |
+[2, 4)            112239 |@@                                                  |
+[4, 8)              3060 |                                                    |
+[8, 16)             3458 |                                                    |
+[16, 32)            5114 |                                                    |
+[32, 64)            4717 |                                                    |
+[64, 128)            374 |                                                    |
+[128, 256)             0 |                                                    |
+[256, 512)             0 |                                                    |
+[512, 1K)              1 |                                                    |
+
+@wakeup_us:
+[0]                16135 |                                                    |
+[1]                71335 |@                                                   |
+[2, 4)           1864350 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)            470172 |@@@@@@@@@@@@@                                       |
+[8, 16)           326983 |@@@@@@@@@                                           |
+[16, 32)          110890 |@@@                                                 |
+[32, 64)             715 |                                                    |
+[64, 128)              3 |                                                    |
+[128, 256)         76937 |@@                                                  |
+[256, 512)         13216 |                                                    |
+[512, 1K)            302 |                                                    |
+
+@write_us:
+[128, 256)        425177 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)            11 |                                                    |
+
+
+== L14-B2, lat.bt
+lat.bt:30:34-39: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @wake_to_run_us = hist((uint64)(nsecs - @t_k[args->next_pid]) / 1000);
+                                    ~~~~~
+lat.bt:30:42-62: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @wake_to_run_us = hist((uint64)(nsecs - @t_k[args->next_pid]) / 1000);
+                                            ~~~~~~~~~~~~~~~~~~~~
+lat.bt:37:30-35: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @process_us = hist((uint64)(nsecs - @t_p[tid]) / 1000);
+                                ~~~~~
+lat.bt:37:38-47: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @process_us = hist((uint64)(nsecs - @t_p[tid]) / 1000);
+                                        ~~~~~~~~~
+lat.bt:44:28-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @write_us = hist((uint64)(nsecs - @t_w[tid]) / 1000);
+                              ~~~~~
+lat.bt:44:36-45: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @write_us = hist((uint64)(nsecs - @t_w[tid]) / 1000);
+                                      ~~~~~~~~~
+lat.bt:51:28-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @reply_us = hist((uint64)(nsecs - @t_s[tid]) / 1000);
+                              ~~~~~
+lat.bt:51:36-45: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @reply_us = hist((uint64)(nsecs - @t_s[tid]) / 1000);
+                                      ~~~~~~~~~
+lat.bt:31:2-30: WARNING: Return value discarded.
+    delete(@t_k, args->next_pid);
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+lat.bt:38:2-19: WARNING: Return value discarded.
+    delete(@t_p, tid);
+    ~~~~~~~~~~~~~~~~~
+lat.bt:45:2-19: WARNING: Return value discarded.
+    delete(@t_w, tid);
+    ~~~~~~~~~~~~~~~~~
+lat.bt:52:2-19: WARNING: Return value discarded.
+    delete(@t_s, tid);
+    ~~~~~~~~~~~~~~~~~
+Attached 10 probes
+
+
+@process_us:
+[4, 8)                20 |                                                    |
+[8, 16)               51 |                                                    |
+[16, 32)              13 |                                                    |
+[32, 64)              15 |                                                    |
+[64, 128)             14 |                                                    |
+[128, 256)        435521 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)            67 |                                                    |
+
+@qtime_us:
+[0]                64349 |@@                                                  |
+[1]               374193 |@@@@@@@@@@@                                         |
+[2, 4)           1663357 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)            922342 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@                        |
+[8, 16)            10780 |                                                    |
+[16, 32)              94 |                                                    |
+[32, 64)               8 |                                                    |
+[64, 128)              2 |                                                    |
+
+@reply_us:
+[2, 4)                41 |                                                    |
+[4, 8)                55 |                                                    |
+[8, 16)           364951 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[16, 32)           70645 |@@@@@@@@@@                                          |
+[32, 64)               9 |                                                    |
+
+@wake_to_run_us:
+[0]              2896496 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1]              1358404 |@@@@@@@@@@@@@@@@@@@@@@@@                            |
+[2, 4)             16436 |                                                    |
+[4, 8)              3748 |                                                    |
+[8, 16)             3907 |                                                    |
+[16, 32)            4095 |                                                    |
+[32, 64)            2089 |                                                    |
+[64, 128)             36 |                                                    |
+
+@wakeup_us:
+[0]                18084 |                                                    |
+[1]                82085 |@@                                                  |
+[2, 4)           1921123 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)            478250 |@@@@@@@@@@@@                                        |
+[8, 16)           388963 |@@@@@@@@@@                                          |
+[16, 32)           61851 |@                                                   |
+[32, 64)             169 |                                                    |
+[64, 128)              1 |                                                    |
+[128, 256)         81535 |@@                                                  |
+[256, 512)          3032 |                                                    |
+[512, 1K)             32 |                                                    |
+
+@write_us:
+[128, 256)        435578 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)             8 |                                                    |
+
+
+== L14-A2, lat.bt
+lat.bt:30:34-39: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @wake_to_run_us = hist((uint64)(nsecs - @t_k[args->next_pid]) / 1000);
+                                    ~~~~~
+lat.bt:30:42-62: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @wake_to_run_us = hist((uint64)(nsecs - @t_k[args->next_pid]) / 1000);
+                                            ~~~~~~~~~~~~~~~~~~~~
+lat.bt:37:30-35: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @process_us = hist((uint64)(nsecs - @t_p[tid]) / 1000);
+                                ~~~~~
+lat.bt:37:38-47: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @process_us = hist((uint64)(nsecs - @t_p[tid]) / 1000);
+                                        ~~~~~~~~~
+lat.bt:44:28-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @write_us = hist((uint64)(nsecs - @t_w[tid]) / 1000);
+                              ~~~~~
+lat.bt:44:36-45: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @write_us = hist((uint64)(nsecs - @t_w[tid]) / 1000);
+                                      ~~~~~~~~~
+lat.bt:51:28-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @reply_us = hist((uint64)(nsecs - @t_s[tid]) / 1000);
+                              ~~~~~
+lat.bt:51:36-45: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @reply_us = hist((uint64)(nsecs - @t_s[tid]) / 1000);
+                                      ~~~~~~~~~
+lat.bt:31:2-30: WARNING: Return value discarded.
+    delete(@t_k, args->next_pid);
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+lat.bt:38:2-19: WARNING: Return value discarded.
+    delete(@t_p, tid);
+    ~~~~~~~~~~~~~~~~~
+lat.bt:45:2-19: WARNING: Return value discarded.
+    delete(@t_w, tid);
+    ~~~~~~~~~~~~~~~~~
+lat.bt:52:2-19: WARNING: Return value discarded.
+    delete(@t_s, tid);
+    ~~~~~~~~~~~~~~~~~
+Attached 10 probes
+
+
+@process_us:
+[4, 8)                10 |                                                    |
+[8, 16)               52 |                                                    |
+[16, 32)              19 |                                                    |
+[32, 64)              15 |                                                    |
+[64, 128)             16 |                                                    |
+[128, 256)        427080 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)           406 |                                                    |
+
+@qtime_us:
+[0]                60826 |@@                                                  |
+[1]               372072 |@@@@@@@@@@@@                                        |
+[2, 4)           1539669 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)            984310 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                   |
+[8, 16)            11502 |                                                    |
+[16, 32)              92 |                                                    |
+[32, 64)               9 |                                                    |
+
+@reply_us:
+[2, 4)                19 |                                                    |
+[4, 8)                68 |                                                    |
+[8, 16)           264648 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[16, 32)          162812 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                     |
+[32, 64)              51 |                                                    |
+
+@wake_to_run_us:
+[0]              2783510 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1]              1330167 |@@@@@@@@@@@@@@@@@@@@@@@@                            |
+[2, 4)             62088 |@                                                   |
+[4, 8)              3212 |                                                    |
+[8, 16)             3445 |                                                    |
+[16, 32)            5204 |                                                    |
+[32, 64)            4495 |                                                    |
+[64, 128)            443 |                                                    |
+
+@wakeup_us:
+[0]                17313 |                                                    |
+[1]                73933 |@@                                                  |
+[2, 4)           1815270 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)            522482 |@@@@@@@@@@@@@@                                      |
+[8, 16)           345663 |@@@@@@@@@                                           |
+[16, 32)          104056 |@@                                                  |
+[32, 64)             592 |                                                    |
+[64, 128)              1 |                                                    |
+[128, 256)         80364 |@@                                                  |
+[256, 512)          8597 |                                                    |
+[512, 1K)            209 |                                                    |
+
+@write_us:
+[128, 256)        427471 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)            12 |                                                    |
+
