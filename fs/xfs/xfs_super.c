@@ -790,6 +790,8 @@ xfs_fs_inode_init_once(
 	atomic_set(&ip->i_pincount, 0);
 	spin_lock_init(&ip->i_flags_lock);
 	init_rwsem(&ip->i_lock);
+	mutex_init(&ip->i_noserial_lock);
+	atomic_set(&ip->i_noserial_dio, 0);
 }
 
 /*
