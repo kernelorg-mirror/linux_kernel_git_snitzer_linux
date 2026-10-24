@@ -1,0 +1,42 @@
+#!/usr/bin/bpftrace
+/*
+ * pagetouch.bt: for each page a loaned record borrows, who touched its
+ * struct page last before the borrow, and how long before: the ring's
+ * frag allocation, another nfsd's skb free, the same CPU's prefetch walk.
+ * FLAMEGRAPH round 14's follow-up.  Diagnostic: it slows the server (40.5
+ * GB/s to 36.7 on tardis2).  Start it once twoport.sh has begun its
+ * measured window (srv-mpstat.txt exists), as flame.sh does.
+ */
+config = { missing_probes = "warn"; max_map_keys = 262144 }
+
+fexit:vmlinux:page_pool_alloc_frag_netmem /retval/
+{
+	$p = (uint64)retval; @calls["alloc"] = count();
+	@who[$p] = 1; @cpu[$p] = cpu; @t[$p] = nsecs;
+}
+kprobe:napi_pp_put_page
+{
+	$p = (uint64)arg0; @calls["free"] = count();
+	@who[$p] = 2; @cpu[$p] = cpu; @t[$p] = nsecs;
+}
+fentry:sunrpc:svc_tcp_rx_prefetch_pages { @inpf[tid] = nsecs; }
+fentry:sunrpc:svc_tcp_rx_borrow_segment
+{
+	$p = (uint64)args->page + ((uint64)args->offset >> 14) * 64; @calls["borrow"] = count();
+	@off_pages = lhist(args->offset >> 14, 0, 8, 1);
+	if (@t[$p]) {
+		$age = (nsecs - @t[$p]) / 1000;
+		if (@cpu[$p] == cpu) {
+			@last[@who[$p] == 3 ? "this cpu, borrow" : (@who[$p] == 1 ? "this cpu, ring alloc" : "this cpu, skb free")] = count();
+		} else {
+			@last[@who[$p] == 1 ? "other cpu, ring alloc" : (@who[$p] == 2 ? "other cpu, skb free" : "other cpu, borrow")] = count();
+			@remote_age_us[@who[$p]] = hist($age);
+		}
+	} else {
+		@last["unseen"] = count();
+	}
+	@since_prefetch_us = hist((nsecs - @inpf[tid]) / 1000);
+	@who[$p] = 3; @cpu[$p] = cpu; @t[$p] = nsecs;
+}
+interval:s:8 { exit(); }
+END { printf("END\n"); clear(@who); clear(@cpu); clear(@t); clear(@inpf); }

@@ -50,6 +50,21 @@ The same.
 
 **Since the start of the rounds:** a loaned WRITE costs nfsd about 115 µs (184 in round 01's profile) and the rings about 59 (92.6).
 
+## What the borrow still pays
+
+`perf annotate` of fl14: half of the borrow's 3.2 µs self is one load, `compound_head(span_page)` for `page_pool_page_is_pp()`. Its reference atomic (`svc_tcp_rx_get_borrowed`, 0.1 µs) then finds the line held, so that load is what brings the line in.
+
+`xeu-rig/pagetouch.bt` ([pagetouch.txt](pagetouch.txt)) recorded, for 8 s of a loan64 run on round 14, who touched each borrowed page's `struct page` last before the borrow:
+
+| last touch | borrows | how long before |
+|---|---|---|
+| the ring's frag allocation, on its CPU | 14.3 million (50%) | 256-512 µs |
+| this CPU's borrow of the page's other 8 KiB buffer | 12.6 million (44%) | just before |
+| another nfsd CPU (skb free or borrow) | 1.4 million (5%) | 8-128 µs |
+
+- So a page's line crosses from the ring once, at its first borrow, as expected; other nfsd threads seldom take it.
+- The borrows come 8-16 µs after their skb's prefetch walk. What the load still pays, about 25 ns a page, is the cost of a nearer cache level, not of a remote fetch. A prefetch nearer the borrow, or no load there at all, could win at most about 1.6 µs a WRITE.
+
 **Left as it is:**
-- What the borrow pays after the prefetch (3.2 µs self) is the next step of the plan: reuse the page-pool answer, then one reference a page a skb.
+- The rest of round 14's plan (reuse the page-pool answer, one reference a page a skb) is worth at most that 1.6 µs, and waits behind larger items.
 - tardis2's base for the next rounds is round 14's sunrpc with round 13's nfsd.
