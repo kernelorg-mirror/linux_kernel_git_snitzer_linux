@@ -20,21 +20,21 @@ tracepoint:sunrpc:svc_xprt_dequeue
 fentry:sunrpc:svc_process { @t_p[tid] = nsecs; }
 fexit:sunrpc:svc_process /@t_p[tid]/
 {
-	@process_us = hist((nsecs - @t_p[tid]) / 1000);
+	@process_us = hist((uint64)(nsecs - @t_p[tid]) / 1000);
 	delete(@t_p, tid);
 }
 
 fentry:nfsd:nfsd_vfs_write { @t_w[tid] = nsecs; }
 fexit:nfsd:nfsd_vfs_write /@t_w[tid]/
 {
-	@write_us = hist((nsecs - @t_w[tid]) / 1000);
+	@write_us = hist((uint64)(nsecs - @t_w[tid]) / 1000);
 	delete(@t_w, tid);
 }
 
 fentry:sunrpc:svc_tcp_sendto { @t_s[tid] = nsecs; }
 fexit:sunrpc:svc_tcp_sendto /@t_s[tid]/
 {
-	@reply_us = hist((nsecs - @t_s[tid]) / 1000);
+	@reply_us = hist((uint64)(nsecs - @t_s[tid]) / 1000);
 	delete(@t_s, tid);
 }
 

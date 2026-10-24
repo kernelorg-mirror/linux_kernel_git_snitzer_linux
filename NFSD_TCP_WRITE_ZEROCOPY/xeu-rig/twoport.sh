@@ -55,6 +55,7 @@
 #                    a ring (settled: 8; the driver's default 32); read every poll
 #   SKB_DEFER_MAX=<n> net.core.skb_defer_max for the run (settled: 0 since 23 October; 0 frees a
 #                    consumed skb where it was consumed, not on its ring's CPU)
+#   SRV_QDISC=<q>    the qdisc on each of the server port's transmit queues (settled: fq_codel)
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
 #   TXIRQ_A=<cpu> TXIRQ_B=<cpu>  a port's Tx rings on two CPUs from <cpu>, and
@@ -213,6 +214,10 @@ for p in $PORTS; do
 done
 sleep 7
 [ -n "${ENTRIES:-}" ] && { for p in $PORTS; do ethtool -G ${DEV[$p]} rx $ENTRIES; done; sleep 7; }
+[ -n "${SRV_QDISC:-}" ] && for p in $PORTS; do
+	"$RIG/settled.sh" srvq ${DEV[$p]} $SRV_QDISC || { echo "server qdisc not set"; exit 1; }
+	echo "${DEV[$p]}: qdisc $SRV_QDISC for this run" | tee -a geometry.txt
+done
 for p in $PORTS; do
 	d=${DEV[$p]}
 	if [ -n "${RINGS:-}${TXIRQ[$p]}" ]; then
@@ -304,7 +309,7 @@ if [ "$RW" != write ]; then	# a run that reads: every file written whole first, 
 fi
 # Just before the load: the live state, all of it, against the setting this
 # run is at; anything the run set on purpose is held to what it set.
-EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-}"
+EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}" ] && EXPENV="$EXPENV EXP_LAYOUT=RINGS=${RINGS:-4},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-}"
 # the client's qdisc is set only on the ports of this run
