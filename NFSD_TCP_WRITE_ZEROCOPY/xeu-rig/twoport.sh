@@ -56,6 +56,7 @@
 #   SKB_DEFER_MAX=<n> net.core.skb_defer_max for the run (settled: 0 since 23 October; 0 frees a
 #                    consumed skb where it was consumed, not on its ring's CPU)
 #   SRV_QDISC=<q>    the qdisc on each of the server port's transmit queues (settled: fq_codel)
+#   GRO_MAX=<bytes>  the server port's gro_max_size and gro_ipv4_max_size (settled: 65536; above it, BIG TCP)
 #   NOTRACK=absent   no zc_notrack table for the run (settled: loaded while conntrack is on)
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
@@ -169,6 +170,7 @@ cleanup() {
 	done
 	echo N > /sys/module/xeu/parameters/rx_port_stats
 	[ -n "${SRV_QDISC:-}" ] && for p in $PORTS; do "$RIG/settled.sh" srvq ${DEV[$p]}; done	# the settled qdisc back
+	[ -n "${GRO_MAX:-}" ] && for p in $PORTS; do "$RIG/settled.sh" gro ${DEV[$p]}; done	# the settled GRO sizes back
 	[ "${NOTRACK:-}" = absent ] && [ "$(nft list hooks 2> /dev/null | grep -c conntrack)" != 0 ] && nft -f "$RIG/zc-notrack.nft"	# the settled table back, if conntrack is on
 	# An open of a port put its interrupts back on CPUs 0-7, and NFSD_CPUS=
 	# moved nfsd: the settled CPU layout back, and the host as the run left it.
@@ -218,6 +220,10 @@ for p in $PORTS; do
 done
 sleep 7
 [ -n "${ENTRIES:-}" ] && { for p in $PORTS; do ethtool -G ${DEV[$p]} rx $ENTRIES; done; sleep 7; }
+[ -n "${GRO_MAX:-}" ] && for p in $PORTS; do
+	"$RIG/settled.sh" gro ${DEV[$p]} $GRO_MAX || { echo "GRO max size not set"; exit 1; }
+	echo "${DEV[$p]}: gro_max_size and gro_ipv4_max_size $GRO_MAX for this run" | tee -a geometry.txt
+done
 [ -n "${SRV_QDISC:-}" ] && for p in $PORTS; do
 	"$RIG/settled.sh" srvq ${DEV[$p]} $SRV_QDISC || { echo "server qdisc not set"; exit 1; }
 	echo "${DEV[$p]}: qdisc $SRV_QDISC for this run" | tee -a geometry.txt
@@ -313,7 +319,7 @@ if [ "$RW" != write ]; then	# a run that reads: every file written whole first, 
 fi
 # Just before the load: the live state, all of it, against the setting this
 # run is at; anything the run set on purpose is held to what it set.
-EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-}"
+EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-} EXP_GRO_MAX=${GRO_MAX:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}" ] && EXPENV="$EXPENV EXP_LAYOUT=RINGS=${RINGS:-4},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-}"
 # the client's qdisc is set only on the ports of this run

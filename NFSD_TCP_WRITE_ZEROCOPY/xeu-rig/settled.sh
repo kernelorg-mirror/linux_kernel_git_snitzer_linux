@@ -34,6 +34,7 @@
 # EXP_SKB_DEFER_MAX holds net.core.skb_defer_max to a run's SKB_DEFER_MAX=.
 # EXP_SRV_QDISC holds the server ports' qdisc to a run's SRV_QDISC=.
 # EXP_NOTRACK=absent holds a run to no zc_notrack table (twoport.sh's NOTRACK=absent).
+# EXP_GRO_MAX holds the server ports' GRO max sizes to a run's GRO_MAX=.
 # EXP_REFILL holds xeu's rx_refill_thresh to a run's REFILL= instead of 8,
 # and EXP_XEU_<parameter> (exported) holds any xeu parameter to a value, for
 # a host whose xeu was loaded off the setting on purpose (rx_ip_align=0).
@@ -248,6 +249,9 @@ declare -A CLI_SYSCTL=(
 )
 declare -A CLI_DEV=([a]=ens3np0 [b]=ens6np0)	# the client's end of each port
 SRV_QDISC=fq_codel	# under the mq of each server port; apply puts it back (round 07 tries pfifo_fast)
+GRO_MAX=65536	# each server port's gro_max_size and gro_ipv4_max_size (round 09 tries BIG TCP)
+gro_max() { ip -d link show $1 | grep -oE 'gro_(ipv4_)?max_size [0-9]+' | awk '{print $2}' | sort -u | paste -sd,; }
+set_gro_max() { ip link set dev $1 gro_max_size $2 gro_ipv4_max_size $2; }
 # NFS is kept out of conntrack (FLAMEGRAPH round 01, 23 October): a table
 # that needs conntrack puts it on every packet.  On tardis2's one-port loan
 # run, deleting the table and loading zc-notrack.nft took the rings from 92.6
@@ -330,6 +334,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
 	[ "${EXP_NOTRACK:-}" = absent ] && OFF="$OFF zc_notrack=absent"
+	[ -n "${EXP_GRO_MAX:-}" ] && [ "$EXP_GRO_MAX" != "$GRO_MAX" ] && OFF="$OFF gro_max=$EXP_GRO_MAX"
 	[ -n "${EXP_SRV_QDISC:-}" ] && [ "$EXP_SRV_QDISC" != "$SRV_QDISC" ] && OFF="$OFF srv_qdisc=$EXP_SRV_QDISC"
 	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
 	local xk xv
@@ -416,6 +421,7 @@ audit_port() {	# audit_port <a|b>
 	local p=$1 d=${PDEV[$1]} c0=${PCPU[$1]} irq name i want_cpu q
 	want "$d mtu" "$(cat /sys/class/net/$d/mtu)" $MTU
 	want "$d qdisc" "$(srv_qdisc $d)" "${EXP_SRV_QDISC:-$SRV_QDISC}"
+	want "$d GRO max size" "$(gro_max $d)" "${EXP_GRO_MAX:-$GRO_MAX}"
 	want "$d rings" "$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')" $RINGS
 	want "$d ring depth" "$(ethtool -g $d | awk '/^RX:/ {v = $2} END {print v}')" "${ENTRIES[$p]}"
 	want "$d threaded NAPI" "$(cat /sys/class/net/$d/threaded)" 0
@@ -532,6 +538,7 @@ apply() {	# the CPU layout, the resting module settings, and the audit
 		[ "$(sysctl -n $k | tr -s ' \t' '  ')" = "${SYSCTL[$k]}" ] || sysctl -qw "$k=${SYSCTL[$k]}"
 	done
 	for k in $PORTS; do [ "$(srv_qdisc ${PDEV[$k]})" = "$SRV_QDISC" ] || set_srv_qdisc ${PDEV[$k]} $SRV_QDISC; done
+	for k in $PORTS; do [ "$(gro_max ${PDEV[$k]})" = "$GRO_MAX" ] || set_gro_max ${PDEV[$k]} $GRO_MAX; done
 	[ "$(containers)" = 0 ] && nft list table inet netavark > /dev/null 2>&1 && nft delete table inet netavark
 	if [ "$(conntrack_hooks)" != 0 ]; then
 		[ "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" = 4 ] || nft -f "$NOTRACK"
@@ -559,6 +566,7 @@ case "${1:-}" in
 audit) audit "${2:?mode: rest, two, one or cell}" ;;
 apply) apply ;;
 place) shift; place "$@" ;;
+gro)   set_gro_max "${2:?dev}" "${3:-$GRO_MAX}" ;;	# no size: the settled one
 srvq)  set_srv_qdisc "${2:?dev}" "${3:-$SRV_QDISC}" ;;	# no qdisc: the settled one
 show)  show "${2:-rest}" ;;
 *)     sed -n '2,36p' "$0"; exit 2 ;;
