@@ -1,0 +1,16 @@
+L10-A1 untraced: write 7.81 GB/s, 7444 IOPS; completion ms: p50 0.453, p90 0.561, p99 0.659, p99.9 0.717, mean 0.472, max 1.003
+L10-A1 traced:   write 7.81 GB/s, 7445 IOPS; completion ms: p50 0.457, p90 0.561, p99 0.643, p99.9 0.709, mean 0.474, max 0.817
+L10-B1 untraced: write 3.74 GB/s, 3570 IOPS; completion ms: p50 0.477, p90 4.293, p99 5.341, p99.9 5.472, mean 1.038, max 5.578
+L10-B1 traced:   write 3.35 GB/s, 3192 IOPS; completion ms: p50 0.457, p90 4.620, p99 5.407, p99.9 5.472, mean 1.188, max 5.578
+L10-A2 untraced: write 7.20 GB/s, 6870 IOPS; completion ms: p50 0.498, p90 0.569, p99 0.668, p99.9 0.733, mean 0.497, max 0.877
+L10-A2 traced:   write 7.13 GB/s, 6804 IOPS; completion ms: p50 0.502, p90 0.578, p99 0.676, p99.9 0.758, mean 0.501, max 1.076
+L10-B2 untraced: write 3.77 GB/s, 3600 IOPS; completion ms: p50 0.432, p90 4.358, p99 5.407, p99.9 5.472, mean 1.049, max 5.564
+L10-B2 traced:   write 3.46 GB/s, 3301 IOPS; completion ms: p50 0.453, p90 4.489, p99 5.407, p99.9 5.472, mean 1.146, max 5.668
+L10w-A1 untraced: write 6.67 GB/s, 6363 IOPS; completion ms: p50 0.528, p90 0.594, p99 0.692, p99.9 0.774, mean 0.531, max 0.882
+L10w-A1 traced:   write 7.23 GB/s, 6893 IOPS; completion ms: p50 0.498, p90 0.578, p99 0.668, p99.9 0.741, mean 0.499, max 1.153
+L10w-B1 untraced: write 7.99 GB/s, 7615 IOPS; completion ms: p50 0.444, p90 0.537, p99 0.635, p99.9 0.717, mean 0.459, max 1.222
+L10w-B1 traced:   write 8.01 GB/s, 7642 IOPS; completion ms: p50 0.449, p90 0.518, p99 0.627, p99.9 0.709, mean 0.459, max 1.014
+L10w-A2 untraced: write 7.72 GB/s, 7362 IOPS; completion ms: p50 0.461, p90 0.569, p99 0.643, p99.9 0.709, mean 0.477, max 0.843
+L10w-A2 traced:   write 7.62 GB/s, 7266 IOPS; completion ms: p50 0.469, p90 0.578, p99 0.659, p99.9 0.725, mean 0.486, max 1.144
+L10w-B2 untraced: write 7.75 GB/s, 7395 IOPS; completion ms: p50 0.461, p90 0.537, p99 0.602, p99.9 0.684, mean 0.469, max 1.186
+L10w-B2 traced:   write 8.25 GB/s, 7866 IOPS; completion ms: p50 0.436, p90 0.498, p99 0.578, p99.9 0.651, mean 0.445, max 0.800
