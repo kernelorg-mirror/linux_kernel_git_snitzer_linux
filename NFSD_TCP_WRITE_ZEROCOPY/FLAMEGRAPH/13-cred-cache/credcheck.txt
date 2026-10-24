@@ -1,0 +1,100 @@
+nrs r1 0 0 262144
+nrs r10 0 0 262144
+nrs r11 0 0 262144
+nrs r12 0 0 262144
+nrs r13 0 0 262144
+nrs r14 0 0 262144
+nrs r15 0 0 262144
+nrs r16 0 0 262144
+nrs r17 0 0 262144
+nrs r18 0 0 262144
+nrs r19 0 0 262144
+nrs r2 0 0 262144
+nrs r20 0 0 262144
+nrs r3 0 0 262144
+nrs r4 0 0 262144
+nrs r5 0 0 262144
+nrs r6 0 0 262144
+nrs r7 0 0 262144
+nrs r8 0 0 262144
+nrs r9 0 0 262144
+nrs u1 1000 1000 262144
+nrs u10 1000 1000 262144
+nrs u11 1000 1000 262144
+nrs u12 1000 1000 262144
+nrs u13 1000 1000 262144
+nrs u14 1000 1000 262144
+nrs u15 1000 1000 262144
+nrs u16 1000 1000 262144
+nrs u17 1000 1000 262144
+nrs u18 1000 1000 262144
+nrs u19 1000 1000 262144
+nrs u2 1000 1000 262144
+nrs u20 1000 1000 262144
+nrs u3 1000 1000 262144
+nrs u4 1000 1000 262144
+nrs u5 1000 1000 262144
+nrs u6 1000 1000 262144
+nrs u7 1000 1000 262144
+nrs u8 1000 1000 262144
+nrs u9 1000 1000 262144
+rs r1 65534 65534 0
+rs r10 65534 65534 0
+rs r11 65534 65534 0
+rs r12 65534 65534 0
+rs r13 65534 65534 0
+rs r14 65534 65534 0
+rs r15 65534 65534 0
+rs r16 65534 65534 0
+rs r17 65534 65534 0
+rs r18 65534 65534 0
+rs r19 65534 65534 0
+rs r2 65534 65534 0
+rs r20 65534 65534 0
+rs r3 65534 65534 0
+rs r4 65534 65534 0
+rs r5 65534 65534 0
+rs r6 65534 65534 0
+rs r7 65534 65534 0
+rs r8 65534 65534 0
+rs r9 65534 65534 0
+rs u1 1000 1000 262144
+rs u10 1000 1000 262144
+rs u11 1000 1000 262144
+rs u12 1000 1000 262144
+rs u13 1000 1000 262144
+rs u14 1000 1000 262144
+rs u15 1000 1000 262144
+rs u16 1000 1000 262144
+rs u17 1000 1000 262144
+rs u18 1000 1000 262144
+rs u19 1000 1000 262144
+rs u2 1000 1000 262144
+rs u20 1000 1000 262144
+rs u3 1000 1000 262144
+rs u4 1000 1000 262144
+rs u5 1000 1000 262144
+rs u6 1000 1000 262144
+rs u7 1000 1000 262144
+rs u8 1000 1000 262144
+rs u9 1000 1000 262144
+root rs 1: open failed: Permission denied
+root rs 2: open failed: Permission denied
+root rs 3: open failed: Permission denied
+root rs 4: open failed: Permission denied
+root rs 5: open failed: Permission denied
+root rs 6: open failed: Permission denied
+root rs 7: open failed: Permission denied
+root rs 8: open failed: Permission denied
+root rs 9: open failed: Permission denied
+root rs 10: open failed: Permission denied
+root rs 11: open failed: Permission denied
+root rs 12: open failed: Permission denied
+root rs 13: open failed: Permission denied
+root rs 14: open failed: Permission denied
+root rs 15: open failed: Permission denied
+root rs 16: open failed: Permission denied
+root rs 17: open failed: Permission denied
+root rs 18: open failed: Permission denied
+root rs 19: open failed: Permission denied
+root rs 20: open failed: Permission denied
