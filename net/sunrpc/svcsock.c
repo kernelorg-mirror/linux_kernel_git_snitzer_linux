@@ -1253,6 +1253,44 @@ static u32 svc_tcp_rx_skb_region_pages_after(const struct sk_buff *skb,
 }
 
 /*
+ * Fetch, for writing, the struct page of each page that bytes [first,
+ * last) of @skb lie in.  A loaned record examines each page's struct page
+ * (is it the region's, a page pool's), takes a reference on it, and drops
+ * the skb's when the skb is freed: those are this CPU's first touches of
+ * lines the ring's CPU wrote last.  Fetched together they overlap, and
+ * fetched for writing the reference count's atomics then find the line
+ * here.
+ */
+static void svc_tcp_rx_prefetch_pages(const struct sk_buff *skb, u32 base,
+				      u32 first, u32 last)
+{
+	const struct sk_buff *frag_skb;
+	u32 cursor = base;
+	unsigned int index;
+
+	if (max(first, base) >= min(last, base + skb->len))
+		return;
+	if (skb_headlen(skb)) {
+		if (max(first, cursor) < min(last, cursor + skb_headlen(skb)))
+			prefetchw(virt_to_page(skb->data));
+		cursor += skb_headlen(skb);
+	}
+	for (index = 0; index < skb_shinfo(skb)->nr_frags; index++) {
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[index];
+		struct page *page = skb_frag_page(frag);
+
+		if (page && max(first, cursor) <
+			    min(last, cursor + skb_frag_size(frag)))
+			prefetchw(page + (skb_frag_off(frag) >> PAGE_SHIFT));
+		cursor += skb_frag_size(frag);
+	}
+	skb_walk_frags(skb, frag_skb) {
+		svc_tcp_rx_prefetch_pages(frag_skb, cursor, first, last);
+		cursor += frag_skb->len;
+	}
+}
+
+/*
  * Upper bound on the region pages bytes [first, last) of @skb can add:
  * only pages from a pool bound to the fixed receive region count, and a
  * page counts once however many consecutive fragments lie in it.
@@ -3643,11 +3681,15 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 		 */
 		if (remaining && state->mode == SVC_TCP_RX_MIXED) {
 			struct page *prev = state->region_last;
-			u32 need = svc_tcp_rx_skb_region_pages_after(skb, 0,
+			struct svc_tcp_rx_budget *c = NULL;
+			u32 need;
+
+			svc_tcp_rx_prefetch_pages(skb, 0, body_offset,
+						  body_offset + remaining);
+			need = svc_tcp_rx_skb_region_pages_after(skb, 0,
 						body_offset,
 						body_offset + remaining,
 						&prev);
-			struct svc_tcp_rx_budget *c = NULL;
 
 			/* One lookup for the copy check and the admission. */
 			if (need && !state->credit_linked)
