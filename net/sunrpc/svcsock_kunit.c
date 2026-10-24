@@ -1863,6 +1863,120 @@ static void svcsock_rx_credit_data_ready_test(struct kunit *test)
 	svc_tcp_rx_credit_release(a);
 }
 
+/*
+ * A TCP socket for svc_data_ready(): @queued bytes past the last read, a
+ * receive window of @wnd from that read, a 4 MiB receive buffer.
+ */
+static struct sock *svcsock_rx_want_sk(struct kunit *test,
+				       struct svc_sock *svsk, u32 queued,
+				       u32 wnd)
+{
+	struct tcp_sock *tp = kunit_kzalloc(test, sizeof(*tp), GFP_KERNEL);
+	struct sock *sk;
+
+	KUNIT_ASSERT_NOT_NULL(test, tp);
+	sk = (struct sock *)tp;
+	sk->sk_rcvbuf = 4 << 20;
+	tp->copied_seq = 1000;
+	tp->rcv_wup = 1000;
+	tp->rcv_nxt = 1000 + queued;
+	tp->rcv_wnd = wnd;
+	inet_csk(sk)->icsk_ack.rcv_mss = 7740;
+	sk->sk_user_data = svsk;
+	svsk->sk_sk = sk;
+	svsk->sk_odata = svcsock_rx_noop_data_ready;
+	return sk;
+}
+
+/*
+ * A drained read of a loaned 1 MiB record with 256 KiB of it in: the rest
+ * is wanted, capped at half the receive buffer.  Not drained, no credit,
+ * complete, or TLS: nothing is wanted.
+ */
+static void svcsock_rx_set_want_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
+	struct sock *sk = svcsock_rx_want_sk(test, svsk, 0, 1 << 20);
+	const u32 reclen = 1 << 20;
+
+	svsk->sk_marker = cpu_to_be32(RPC_LAST_STREAM_FRAGMENT | reclen);
+	svsk->sk_tcplen = sizeof(rpc_fraghdr) + reclen / 4;
+	state->credit = 65;
+
+	svc_tcp_rx_set_want(svsk, state, true);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, reclen - reclen / 4);
+	svc_tcp_rx_set_want(svsk, state, false);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
+
+	sk->sk_rcvbuf = 1 << 20;
+	svc_tcp_rx_set_want(svsk, state, true);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 512U << 10);
+	svc_tcp_rx_set_want(svsk, NULL, true);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
+
+	state->credit = 0;
+	svc_tcp_rx_set_want(svsk, state, true);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
+
+	state->credit = 65;
+	svsk->sk_tcplen = sizeof(rpc_fraghdr) + reclen;
+	svc_tcp_rx_set_want(svsk, state, true);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
+
+	svsk->sk_tcplen = sizeof(rpc_fraghdr) - 1;
+	svc_tcp_rx_set_want(svsk, state, true);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
+
+	svsk->sk_tcplen = sizeof(rpc_fraghdr) + reclen / 4;
+	set_bit(XPT_TLS_SESSION, &svsk->sk_xprt.xpt_flags);
+	svc_tcp_rx_set_want(svsk, state, true);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
+}
+
+/*
+ * 64 KiB wanted, 16 KiB queued: arriving data marks nothing.  It does once
+ * the 64 KiB is queued, under receive memory pressure, with the receive
+ * window nearly closed, after a FIN, or with nothing wanted.
+ */
+static void svcsock_rx_want_data_ready_test(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
+	struct sock *sk = svcsock_rx_want_sk(test, svsk, 16 << 10, 1 << 20);
+	struct tcp_sock *tp = tcp_sk(sk);
+	unsigned long *flags = &svsk->sk_xprt.xpt_flags;
+
+	svsk->sk_rx_want = 64 << 10;
+	svc_data_ready(sk);
+	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, flags));
+
+	tp->rcv_nxt = 1000 + (64 << 10);
+	svc_data_ready(sk);
+	KUNIT_EXPECT_TRUE(test, test_and_clear_bit(XPT_DATA, flags));
+
+	tp->rcv_nxt = 1000 + (16 << 10);
+	atomic_set(&sk->sk_rmem_alloc, sk->sk_rcvbuf);
+	svc_data_ready(sk);
+	KUNIT_EXPECT_TRUE(test, test_and_clear_bit(XPT_DATA, flags));
+	atomic_set(&sk->sk_rmem_alloc, 0);
+
+	tp->rcv_wnd = (16 << 10) + 7740;
+	svc_data_ready(sk);
+	KUNIT_EXPECT_TRUE(test, test_and_clear_bit(XPT_DATA, flags));
+	tp->rcv_wnd = 1 << 20;
+
+	svc_data_ready(sk);
+	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, flags));
+	sock_set_flag(sk, SOCK_DONE);
+	svc_data_ready(sk);
+	KUNIT_EXPECT_TRUE(test, test_and_clear_bit(XPT_DATA, flags));
+	sock_reset_flag(sk, SOCK_DONE);
+
+	svsk->sk_rx_want = 0;
+	svc_data_ready(sk);
+	KUNIT_EXPECT_TRUE(test, test_and_clear_bit(XPT_DATA, flags));
+}
+
 static void svcsock_rx_budget_default_off(void *unused)
 {
 	svc_tcp_rx_budget_kunit_default(0, 0);
@@ -3384,6 +3498,8 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_credit_collapsed_unwaits_test),
 	KUNIT_CASE(svcsock_rx_credit_copy_no_budget_test),
 	KUNIT_CASE(svcsock_rx_credit_data_ready_test),
+	KUNIT_CASE(svcsock_rx_set_want_test),
+	KUNIT_CASE(svcsock_rx_want_data_ready_test),
 	KUNIT_CASE(svcsock_rx_credit_default_budget_test),
 	KUNIT_CASE(svcsock_rx_credit_factor_bounds_test),
 	KUNIT_CASE(svcsock_rx_capacity_plus_one_test),
