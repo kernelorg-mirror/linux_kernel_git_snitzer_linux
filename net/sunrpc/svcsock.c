@@ -2030,6 +2030,21 @@ static bool svc_tcp_rx_credit_waiting(struct svc_sock *svsk)
 }
 
 /*
+ * An incomplete loaned record waits for its rest: what TCP has queued since
+ * the last read is less than the record lacks.  TCP's own readiness test
+ * also reports the socket readable under memory pressure or with the
+ * receive window nearly closed, so a record that cannot arrive whole is
+ * still read.  The mark stays out of sk_rcvlowat, which would stop TCP
+ * delaying its ACKs.
+ */
+static bool svc_tcp_rx_wait_rest(struct svc_sock *svsk, struct sock *sk)
+{
+	u32 want = READ_ONCE(svsk->sk_rx_want);
+
+	return want && !sock_flag(sk, SOCK_DONE) && !tcp_epollin_ready(sk, want);
+}
+
+/*
  * INET callback when data has been received on the socket.
  */
 static void svc_data_ready(struct sock *sk)
@@ -2046,6 +2061,8 @@ static void svc_data_ready(struct sock *sk)
 		if (test_bit(XPT_HANDSHAKE, &svsk->sk_xprt.xpt_flags))
 			return;
 		if (svc_tcp_rx_credit_waiting(svsk))
+			return;
+		if (svc_tcp_rx_wait_rest(svsk, sk))
 			return;
 		/*
 		 * Data usually arrives while XPT_DATA is still set, and the
@@ -3729,6 +3746,40 @@ static bool svc_tcp_at_urg_mark(struct sock *sk)
 	return tp->urg_data && tp->urg_seq == tp->copied_seq;
 }
 
+/*
+ * Called after a read, with the socket locked.  A record that is being
+ * loaned costs no copy to take up in pieces, only a pass for each: a wake,
+ * hand-offs of the record and an ACK.  While such a record is incomplete
+ * and the read took all that was queued, svc_data_ready() wakes no thread
+ * until what the record lacks has arrived, or half of the receive window
+ * still open, whichever is less; otherwise it wakes one for any data.  The
+ * peer can send no more than that window before the next read opens it
+ * again: waiting for more would leave it idle until the window had all
+ * but closed, and taking up half keeps the other half arriving meanwhile.
+ * Segments that arrived during the read are on the backlog and meet the
+ * new mark when the lock is released.  A TLS transport is left alone: its
+ * records are not the bytes TCP counts.
+ */
+static void svc_tcp_rx_set_want(struct svc_sock *svsk,
+				const struct svc_tcp_rx_state *state,
+				bool drained)
+{
+	u32 want = 0;
+
+	if (drained && state && state->credit &&
+	    svsk->sk_tcplen >= sizeof(rpc_fraghdr) &&
+	    !test_bit(XPT_TLS_SESSION, &svsk->sk_xprt.xpt_flags)) {
+		u32 got = svsk->sk_tcplen - sizeof(rpc_fraghdr);
+		u32 reclen = svc_sock_reclen(svsk);
+
+		if (reclen > got)
+			want = min_t(u32, reclen - got,
+				     tcp_receive_window(tcp_sk(svsk->sk_sk)) >> 1);
+	}
+	if (READ_ONCE(svsk->sk_rx_want) != want)
+		WRITE_ONCE(svsk->sk_rx_want, want);
+}
+
 static void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
 
 /**
@@ -3784,6 +3835,8 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 	 */
 	if (!ctx.complete && svc_tcp_at_urg_mark(sock->sk))
 		desc.error = -EPROTO;
+	svc_tcp_rx_set_want(svsk, rqstp->rq_tcp_rx,
+			    !ctx.complete && !desc.error && desc.count);
 	release_sock(sock->sk);
 	if (svsk->sk_rx_hold_pending)
 		svc_tcp_rx_hold_buffer(svsk);
