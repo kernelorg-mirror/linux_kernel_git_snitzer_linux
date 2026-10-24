@@ -16,7 +16,8 @@ struct svc_rqst;
  * Set the current process's fsuid/fsgid etc to those of the NFS
  * client user
  */
-int nfsd_setuser(struct svc_cred *cred, struct svc_export *exp);
+int nfsd_setuser(struct svc_rqst *rqstp, struct svc_cred *cred,
+		 struct svc_export *exp);
 
 struct user_namespace *nfsd_user_namespace(const struct svc_rqst *rqstp);
 
