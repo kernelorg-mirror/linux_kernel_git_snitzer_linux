@@ -1,0 +1,51 @@
+L9-A1 untraced: write 7.74 GB/s, 7384 IOPS; completion ms: p50 0.457, p90 0.553, p99 0.635, p99.9 0.709, mean 0.469, max 0.848
+L9-A1 traced:   write 7.36 GB/s, 7023 IOPS; completion ms: p50 0.489, p90 0.569, p99 0.651, p99.9 0.725, mean 0.492, max 2.170
+L9-B1 untraced: write 7.94 GB/s, 7573 IOPS; completion ms: p50 0.449, p90 0.553, p99 0.618, p99.9 0.700, mean 0.463, max 0.836
+L9-B1 traced:   write 7.72 GB/s, 7367 IOPS; completion ms: p50 0.461, p90 0.569, p99 0.618, p99.9 0.692, mean 0.475, max 0.833
+L9-A2 untraced: write 7.88 GB/s, 7518 IOPS; completion ms: p50 0.449, p90 0.553, p99 0.651, p99.9 0.717, mean 0.466, max 1.882
+L9-A2 traced:   write 7.82 GB/s, 7462 IOPS; completion ms: p50 0.453, p90 0.561, p99 0.618, p99.9 0.692, mean 0.471, max 0.796
+L9-B2 untraced: write 7.72 GB/s, 7362 IOPS; completion ms: p50 0.457, p90 0.561, p99 0.659, p99.9 0.733, mean 0.472, max 1.093
+L9-B2 traced:   write 7.22 GB/s, 6881 IOPS; completion ms: p50 0.498, p90 0.578, p99 0.668, p99.9 0.741, mean 0.500, max 0.818
+== L9-A1 wake_to_run_us (sched_wakeup of an nfsd thread to the switch that runs it)
+[0]              4285170 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1]              1409595 |@@@@@@@@@@@@@@@@@                                   |
+[2, 4)             72016 |                                                    |
+[4, 8)              4628 |                                                    |
+[8, 16)             4322 |                                                    |
+[16, 32)            2792 |                                                    |
+[32, 64)            1261 |                                                    |
+[64, 128)            835 |                                                    |
+[128, 256)            40 |                                                    |
+[256, 512)             1 |                                                    |
+== L9-B1 wake_to_run_us (sched_wakeup of an nfsd thread to the switch that runs it)
+[0]              4285034 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1]              1583101 |@@@@@@@@@@@@@@@@@@@                                 |
+[2, 4)             72242 |                                                    |
+[4, 8)              4839 |                                                    |
+[8, 16)             4171 |                                                    |
+[16, 32)            2668 |                                                    |
+[32, 64)            1209 |                                                    |
+[64, 128)           1031 |                                                    |
+[128, 256)            50 |                                                    |
+== L9-A2 wake_to_run_us (sched_wakeup of an nfsd thread to the switch that runs it)
+[0]              4464671 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1]              1557522 |@@@@@@@@@@@@@@@@@@                                  |
+[2, 4)             48972 |                                                    |
+[4, 8)              4653 |                                                    |
+[8, 16)             4176 |                                                    |
+[16, 32)            2453 |                                                    |
+[32, 64)            1049 |                                                    |
+[64, 128)            939 |                                                    |
+[128, 256)            58 |                                                    |
+== L9-B2 wake_to_run_us (sched_wakeup of an nfsd thread to the switch that runs it)
+[0]              4399136 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1]              1405306 |@@@@@@@@@@@@@@@@                                    |
+[2, 4)             52725 |                                                    |
+[4, 8)              4900 |                                                    |
+[8, 16)             4338 |                                                    |
+[16, 32)            2486 |                                                    |
+[32, 64)            1022 |                                                    |
+[64, 128)            989 |                                                    |
+[128, 256)           125 |                                                    |
+[256, 512)             0 |                                                    |
+[512, 1K)              1 |                                                    |

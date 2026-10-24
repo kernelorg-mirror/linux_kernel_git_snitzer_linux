@@ -1,0 +1,8 @@
+// grolen.bt: the size of what GRO hands TCP (bytes, IP header included) and its segment count
+fentry:vmlinux:tcp_v4_rcv
+{
+	@len = hist(args->skb->len);
+	$sh = (struct skb_shared_info *)(args->skb->head + args->skb->end);
+	@segs = lhist($sh->gso_segs, 0, 64, 2);
+	@n = count(); @bytes = sum(args->skb->len);
+}
