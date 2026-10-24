@@ -34,6 +34,32 @@ Each round is a directory here, numbered in order:
 | [09-big-tcp](09-big-tcp/README.md) | round 08's state | per-skb costs at about 20 GRO skbs a WRITE | BIG TCP: the server's `gro_max_size` and `gro_ipv4_max_size` 256 KB | not kept: no change (rings 63.3 against 63.4, latency the same); aggregates end at the client's 64 KB TSO bursts, so it needs the client's `gso_ipv4_max_size` too (Mike); the wake itself measured, 98.5% under 2 us |
 | [L0-latency](L0-latency/README.md) | round 05's state, 4 in flight | p50 0.46-0.52 ms; about 0.2 ms is the drive, 0.02 the reply; the apparent wake tail is the tracepoint's stale stamp | `xeu-rig/lat.sh` | the baseline; runs differ by about 10%, so several a side |
 
+## Where the kept rounds stand (2026-10-24)
+
+What a loaned WRITE costs after each kept round, from that round's B
+runs (the profile where the A/B cannot resolve it):
+
+| after | rings us/W | nfsd us/W | what was kept |
+|---|---|---|---|
+| 01 base | 92.6 | 184.1 (profile) | |
+| 01 | 78.7 | | podman's leftover conntrack table deleted, port 2049 untracked (settled.sh) |
+| 02 | | refs_valid 7.05 to 0.90 | `49f0fc4564ec`: the hand-off checks only counts, not the whole record |
+| 03 | 68.0 | 159.8 | `skb_defer_max` 0: no deferred skb frees (settled.sh) |
+| 05 | 65.0 | 156.4 | `eff5f16d4f30`, `0f0ed4159a12`: a cheaper `svc_data_ready` |
+| 08 | 65.1 | 154.2 | `zc_notrack` only while a table registers conntrack (settled.sh) |
+| 10b | 61.2 | 127.5 | `c0995ea94798`, `dd4fef2000a0`: no wake for a partial loaned record, held back at most half the open window |
+| 13 | | 118.3 | `916c11a2d1fc`: each nfsd thread reuses its last credentials |
+| 14 | about 59 | 114.9 | `02a445664e23`: `prefetchw()` of the loaned pages' `struct page` |
+
+- **Since round 01:** the rings 92.6 to about 59 us a WRITE (-36%),
+  nfsd 184 to about 114 (-38%).
+- The rate stayed at the drives' 40.5 GB/s throughout. Latency at
+  iodepth 1 is the same or a little better.
+- Each round's A/B had its own A, and A drifts a couple of us between
+  sessions. The totals hold to about 2 us.
+- Rounds 04, 12 and 15 are built but wait for the next kernel
+  (`run33.sh`).
+
 ## Why CPU a WRITE, not GB/s
 
 On one port the four drives under it (`/hs/nvme4`-`7`) hold every run at
