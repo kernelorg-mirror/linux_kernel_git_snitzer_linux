@@ -3862,6 +3862,7 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 	if (len < 0)
 		goto err_nuts;
 
+again:
 	lock_sock(sock->sk);
 	len = sock->ops->read_sock(sock->sk, &desc, svc_tcp_recv_actor);
 	/* ->read_sock stops at urgent data and consumes none of it.
@@ -3902,6 +3903,15 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 				set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags);
 			goto err_incomplete;
 		}
+		/* A loaned record waits for its rest with XPT_DATA clear,
+		 * and svc_data_ready() sets it again only once enough has
+		 * arrived. If that happened by the time the socket lock
+		 * was released, read on here rather than park the record
+		 * and wake another thread to take it up.
+		 */
+		if (len >= 0 && READ_ONCE(svsk->sk_rx_want) &&
+		    test_and_clear_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags))
+			goto again;
 		/* A zero return leaves no record at the head to classify.
 		 * -EINVAL means a control record sits there. Screen the
 		 * other errors out first, because a probe calls
