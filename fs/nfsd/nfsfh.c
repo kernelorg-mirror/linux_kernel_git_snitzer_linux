@@ -118,7 +118,40 @@ static __be32 nfsd_setuser_and_check_port(struct svc_rqst *rqstp,
 	}
 
 	/* Set user creds for this exportpoint */
-	return nfserrno(nfsd_setuser(cred, exp));
+	return nfserrno(nfsd_setuser(rqstp, cred, exp));
+}
+
+/*
+ * Raise the nfsd capabilities of the current cred, for decoding a
+ * filehandle.  An nfsd thread keeps the raised copy, and the cred it was
+ * copied from: nfsd_setuser() installs the same cred again for the same
+ * user, so the next decode installs the same copy instead of building
+ * another.
+ */
+static int nfsd_raise_fh_creds(struct svc_rqst *rqstp)
+{
+	struct nfsd_thread_local_info *ntli = rqstp ? rqstp->rq_private : NULL;
+	const struct cred *base = current_cred();
+	struct cred *new;
+
+	if (ntli && ntli->ntli_fh_cred && ntli->ntli_fh_base == base) {
+		put_cred(override_creds(get_cred(ntli->ntli_fh_cred)));
+		return 0;
+	}
+	new = prepare_creds();
+	if (!new)
+		return -ENOMEM;
+	new->cap_effective = cap_raise_nfsd_set(new->cap_effective,
+						new->cap_permitted);
+	if (ntli) {
+		get_cred(base);
+		put_cred(ntli->ntli_fh_base);
+		put_cred(ntli->ntli_fh_cred);
+		ntli->ntli_fh_base = base;
+		ntli->ntli_fh_cred = get_cred(new);
+	}
+	put_cred(override_creds(new));
+	return 0;
 }
 
 static inline __be32 check_pseudo_root(struct dentry *dentry,
@@ -271,15 +304,10 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 		 * access control settings being in effect, we cannot
 		 * fix that case easily.
 		 */
-		struct cred *new = prepare_creds();
-		if (!new) {
+		if (nfsd_raise_fh_creds(rqstp)) {
 			error =  nfserrno(-ENOMEM);
 			goto out;
 		}
-		new->cap_effective =
-			cap_raise_nfsd_set(new->cap_effective,
-					   new->cap_permitted);
-		put_cred(override_creds(new));
 	} else {
 		error = nfsd_setuser_and_check_port(rqstp, cred, exp);
 		if (error)

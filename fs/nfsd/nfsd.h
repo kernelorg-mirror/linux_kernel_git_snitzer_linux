@@ -54,6 +54,11 @@ extern const struct seq_operations nfs_exports_op;
 struct nfsd_thread_local_info {
 	struct nfs4_client	**ntli_lease_breaker;
 	int			ntli_cachetype;
+	/* the last cred nfsd_setuser() built, to install again */
+	const struct cred	*ntli_user_cred;
+	/* the decode's raised copy of ntli_fh_base (nfsd_set_fh_dentry()) */
+	const struct cred	*ntli_fh_base;
+	const struct cred	*ntli_fh_cred;
 };
 
 /*
