@@ -26,7 +26,7 @@ Each round is a directory here, numbered in order:
 | 07 | | half of each ACK and reply is the qdisc (fq_codel, its lock) | the server's qdisc `pfifo_fast` | |
 | 08 | | the `zc_notrack` chains cost 3-4 us a WRITE with no conntrack to skip | load `zc_notrack` only while a table needs conntrack | |
 | 09 | | per-skb costs at about 19 GRO skbs a WRITE | BIG TCP: `gro_ipv4_max_size` 256 KB | |
-| [L0-latency](L0-latency/README.md) | round 05's state, 4 in flight | p50 0.46-0.52 ms; about 0.2 ms is the drive, 0.02 the reply; 2.5% of wakes take 128-512 us | `xeu-rig/lat.sh` | the baseline; runs differ by about 10%, so several a side |
+| [L0-latency](L0-latency/README.md) | round 05's state, 4 in flight | p50 0.46-0.52 ms; about 0.2 ms is the drive, 0.02 the reply; the apparent wake tail is the tracepoint's stale stamp | `xeu-rig/lat.sh` | the baseline; runs differ by about 10%, so several a side |
 
 ## Why CPU a WRITE, not GB/s
 
