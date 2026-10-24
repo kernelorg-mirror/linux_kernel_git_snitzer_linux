@@ -10,10 +10,12 @@
 # will not unload the services are started again on the old one.
 #
 # To go back: rm updates/sunrpc.ko, depmod -a, and run
-# this again with SUNRPC_KO=none.
+# this again with SUNRPC_KO=none (and NFSD_KO=none for an nfsd.ko put there).
 . "$(dirname "$0")/common.sh"
 O=${1:-$L/sunrpc-$(uname -r)}
 KO=${SUNRPC_KO:-$O/sunrpc/sunrpc.ko}
+# NFSD_KO=path also puts that nfsd.ko in updates/, NFSD_KO=none takes it out
+NKO=${NFSD_KO:-}
 UPD=/lib/modules/$(uname -r)/updates
 UNITS="nfs-server nfs-mountd nfs-idmapd nfsdcld rpc-statd rpc-gssd gssproxy"
 # oneshot units that stay "active" once run, so they are restarted by name:
@@ -74,12 +76,17 @@ if [ "$KO" != none ]; then
 	mkdir -p $UPD
 	cp $KO $UPD/sunrpc.ko
 fi
+case "$NKO" in
+"") ;;
+none) rm -f $UPD/nfsd.ko ;;
+*) mkdir -p $UPD; cp $NKO $UPD/nfsd.ko ;;
+esac
 depmod -a
 echo "modprobe will load: $(modinfo -n sunrpc)"
 modprobe sunrpc || { echo "the new sunrpc did not load"; exit 1; }
 start
 
-echo "running sunrpc: $(cat /sys/module/sunrpc/srcversion)"
+echo "running sunrpc: $(cat /sys/module/sunrpc/srcversion), nfsd: $(cat /sys/module/nfsd/srcversion 2> /dev/null)"
 for p in svc_tcp_rx_linger_us; do
 	[ -e /sys/module/sunrpc/parameters/$p ] && echo "$p $(cat /sys/module/sunrpc/parameters/$p)"
 done
