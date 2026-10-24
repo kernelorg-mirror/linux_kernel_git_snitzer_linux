@@ -33,6 +33,7 @@
 #          EXP_BUDGET, EXP_BUDGET_RESERVE and EXP_LINGER
 # EXP_SKB_DEFER_MAX holds net.core.skb_defer_max to a run's SKB_DEFER_MAX=.
 # EXP_SRV_QDISC holds the server ports' qdisc to a run's SRV_QDISC=.
+# EXP_NOTRACK=absent holds a run to no zc_notrack table (twoport.sh's NOTRACK=absent).
 # EXP_REFILL holds xeu's rx_refill_thresh to a run's REFILL= instead of 8,
 # and EXP_XEU_<parameter> (exported) holds any xeu parameter to a value, for
 # a host whose xeu was loaded off the setting on purpose (rx_ip_align=0).
@@ -325,6 +326,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "${ENTRIES[b]}" = "${SETTLED[entries_b]}" ] || OFF="$OFF rings_b=${ENTRIES[b]}"
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
+	[ "${EXP_NOTRACK:-}" = absent ] && OFF="$OFF zc_notrack=absent"
 	[ -n "${EXP_SRV_QDISC:-}" ] && [ "$EXP_SRV_QDISC" != "$SRV_QDISC" ] && OFF="$OFF srv_qdisc=$EXP_SRV_QDISC"
 	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
 	local xk xv
@@ -376,7 +378,11 @@ audit_client() {	# read only: nothing on the client is changed from here
 
 audit_netfilter() {
 	local c; c=$(containers)
-	want "NFS untracked (zc_notrack)" "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" 4
+	if [ "${EXP_NOTRACK:-}" = absent ]; then
+		want "NFS untracked (zc_notrack)" "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" 0
+	else
+		want "NFS untracked (zc_notrack)" "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" 4
+	fi
 	if [ $c = 0 ]; then
 		want "podman's leftover netavark table" "$(nft list table inet netavark > /dev/null 2>&1 && echo present || echo none)" none
 	else
