@@ -547,7 +547,7 @@ case "${1:-}" in
 audit) audit "${2:?mode: rest, two, one or cell}" ;;
 apply) apply ;;
 place) shift; place "$@" ;;
-srvq)  set_srv_qdisc "${2:?dev}" "${3:?qdisc}" ;;
+srvq)  set_srv_qdisc "${2:?dev}" "${3:-$SRV_QDISC}" ;;	# no qdisc: the settled one
 show)  show "${2:-rest}" ;;
 *)     sed -n '2,36p' "$0"; exit 2 ;;
 esac
