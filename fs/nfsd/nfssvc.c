@@ -1036,6 +1036,10 @@ nfsd(void *vrqstp)
 
 	atomic_dec(&nfsd_th_cnt);
 
+	put_cred(ntli.ntli_user_cred);
+	put_cred(ntli.ntli_fh_base);
+	put_cred(ntli.ntli_fh_cred);
+
 	/* Release the thread */
 	svc_exit_thread(rqstp);
 	if (have_mutex)
