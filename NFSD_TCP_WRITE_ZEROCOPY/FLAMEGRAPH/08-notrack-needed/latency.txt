@@ -1,0 +1,8 @@
+L8-A1 untraced: write 7.94 GB/s, 7575 IOPS; completion ms: p50 0.449, p90 0.553, p99 0.610, p99.9 0.684, mean 0.464, max 0.813
+L8-A1 traced:   write 7.78 GB/s, 7419 IOPS; completion ms: p50 0.461, p90 0.569, p99 0.618, p99.9 0.692, mean 0.474, max 1.014
+L8-B1 untraced: write 7.07 GB/s, 6739 IOPS; completion ms: p50 0.506, p90 0.578, p99 0.659, p99.9 0.725, mean 0.505, max 0.839
+L8-B1 traced:   write 7.89 GB/s, 7520 IOPS; completion ms: p50 0.449, p90 0.561, p99 0.610, p99.9 0.692, mean 0.466, max 0.859
+L8-A2 untraced: write 7.23 GB/s, 6895 IOPS; completion ms: p50 0.494, p90 0.569, p99 0.676, p99.9 0.758, mean 0.494, max 0.902
+L8-A2 traced:   write 7.50 GB/s, 7153 IOPS; completion ms: p50 0.477, p90 0.594, p99 0.684, p99.9 0.750, mean 0.495, max 1.049
+L8-B2 untraced: write 7.47 GB/s, 7120 IOPS; completion ms: p50 0.477, p90 0.561, p99 0.643, p99.9 0.733, mean 0.482, max 0.866
+L8-B2 traced:   write 7.82 GB/s, 7457 IOPS; completion ms: p50 0.453, p90 0.561, p99 0.643, p99.9 0.725, mean 0.470, max 0.965

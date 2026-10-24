@@ -254,8 +254,11 @@ SRV_QDISC=fq_codel	# under the mq of each server port; apply puts it back (round
 # to 78.7 us a WRITE and nfsd from 14.5% to 13.4% busy.  podman's netavark leaves its inet netavark table
 # (NAT chains) behind after a container's network goes, until a reboot; apply
 # deletes it while no container runs, and zc-notrack.nft keeps port 2049's
-# packets untracked when a container brings it back.
+# packets untracked when a container brings it back: loaded only while some
+# table registers conntrack hooks, since its own chains cost the rings 2.5 us
+# a loaned WRITE when there is nothing to skip (round 08, 24 October).
 NOTRACK=$(dirname "$(readlink -f "$0")")/zc-notrack.nft
+conntrack_hooks() { nft list hooks 2> /dev/null | grep -c conntrack; }
 containers() { command -v podman > /dev/null && podman ps -q 2> /dev/null | wc -l || echo 0; }
 SUNRPC=/sys/module/sunrpc/parameters
 
@@ -378,11 +381,10 @@ audit_client() {	# read only: nothing on the client is changed from here
 
 audit_netfilter() {
 	local c; c=$(containers)
-	if [ "${EXP_NOTRACK:-}" = absent ]; then
-		want "NFS untracked (zc_notrack)" "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" 0
-	else
-		want "NFS untracked (zc_notrack)" "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" 4
-	fi
+	# zc_notrack only while some table registers conntrack (round 08):
+	# with none, its chains cost every packet for nothing.
+	local w=0; [ "$(conntrack_hooks)" != 0 ] && [ "${EXP_NOTRACK:-}" != absent ] && w=4
+	want "NFS untracked while conntrack is on" "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" $w
 	if [ $c = 0 ]; then
 		want "podman's leftover netavark table" "$(nft list table inet netavark > /dev/null 2>&1 && echo present || echo none)" none
 	else
@@ -529,9 +531,13 @@ apply() {	# the CPU layout, the resting module settings, and the audit
 	for k in "${!SYSCTL[@]}"; do
 		[ "$(sysctl -n $k | tr -s ' \t' '  ')" = "${SYSCTL[$k]}" ] || sysctl -qw "$k=${SYSCTL[$k]}"
 	done
-	[ "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" = 4 ] || nft -f "$NOTRACK"
 	for k in $PORTS; do [ "$(srv_qdisc ${PDEV[$k]})" = "$SRV_QDISC" ] || set_srv_qdisc ${PDEV[$k]} $SRV_QDISC; done
 	[ "$(containers)" = 0 ] && nft list table inet netavark > /dev/null 2>&1 && nft delete table inet netavark
+	if [ "$(conntrack_hooks)" != 0 ]; then
+		[ "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" = 4 ] || nft -f "$NOTRACK"
+	else
+		nft delete table inet zc_notrack 2> /dev/null
+	fi
 	if [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ]; then
 		for k in "${!REST[@]}"; do
 			[ -w $SUNRPC/$k ] && [ "$(cat $SUNRPC/$k)" != "${REST[$k]}" ] && echo "${REST[$k]}" > $SUNRPC/$k
