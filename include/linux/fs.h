@@ -362,6 +362,12 @@ struct readahead_control;
  * partly itself, see filemap_dontcache_edge_complete().
  */
 #define IOCB_DONTCACHE_DEFER	(1 << 24)
+/*
+ * The caller does not need this write serialised against other writes and
+ * reads of the file beyond what the folio lock gives: the file system may
+ * take its inode lock shared where it can.
+ */
+#define IOCB_NOSERIAL		(1 << 25)
 
 /* for use in trace events */
 #define TRACE_IOCB_STRINGS \
@@ -380,7 +386,8 @@ struct readahead_control;
 	{ IOCB_ALLOC_CACHE,	"ALLOC_CACHE" }, \
 	{ IOCB_AIO_RW,		"AIO_RW" }, \
 	{ IOCB_HAS_METADATA,	"AIO_HAS_METADATA" }, \
-	{ IOCB_DONTCACHE_DEFER,	"DONTCACHE_DEFER" }
+	{ IOCB_DONTCACHE_DEFER,	"DONTCACHE_DEFER" }, \
+	{ IOCB_NOSERIAL,	"NOSERIAL" }
 
 struct kiocb {
 	struct file		*ki_filp;
