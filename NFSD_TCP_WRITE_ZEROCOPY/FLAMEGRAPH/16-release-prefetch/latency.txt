@@ -1,0 +1,8 @@
+L16-B1 untraced: write 7.36 GB/s, 7017 IOPS; completion ms: p50 0.494, p90 0.553, p99 0.610, p99.9 0.668, mean 0.490, max 0.903
+L16-B1 traced:   write 8.21 GB/s, 7833 IOPS; completion ms: p50 0.432, p90 0.498, p99 0.569, p99.9 0.651, mean 0.442, max 1.166
+L16-A1 untraced: write 7.51 GB/s, 7164 IOPS; completion ms: p50 0.477, p90 0.537, p99 0.594, p99.9 0.684, mean 0.470, max 0.841
+L16-A1 traced:   write 6.77 GB/s, 6456 IOPS; completion ms: p50 0.461, p90 0.518, p99 0.586, p99.9 0.651, mean 0.535, max 4831.180
+L16-B2 untraced: write 7.88 GB/s, 7510 IOPS; completion ms: p50 0.453, p90 0.528, p99 0.594, p99.9 0.684, mean 0.456, max 0.805
+L16-B2 traced:   write 7.87 GB/s, 7505 IOPS; completion ms: p50 0.440, p90 0.522, p99 0.594, p99.9 0.676, mean 0.454, max 0.779
+L16-A2 untraced: write 7.88 GB/s, 7514 IOPS; completion ms: p50 0.444, p90 0.522, p99 0.586, p99.9 0.659, mean 0.452, max 1.137
+L16-A2 traced:   write 7.71 GB/s, 7354 IOPS; completion ms: p50 0.461, p90 0.528, p99 0.602, p99.9 0.684, mean 0.465, max 0.809
