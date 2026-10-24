@@ -56,7 +56,7 @@
 #   SKB_DEFER_MAX=<n> net.core.skb_defer_max for the run (settled: 0 since 23 October; 0 frees a
 #                    consumed skb where it was consumed, not on its ring's CPU)
 #   SRV_QDISC=<q>    the qdisc on each of the server port's transmit queues (settled: fq_codel)
-#   NOTRACK=absent   no zc_notrack table for the run (settled: loaded)
+#   NOTRACK=absent   no zc_notrack table for the run (settled: loaded while conntrack is on)
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
 #   TXIRQ_A=<cpu> TXIRQ_B=<cpu>  a port's Tx rings on two CPUs from <cpu>, and
@@ -169,7 +169,7 @@ cleanup() {
 	done
 	echo N > /sys/module/xeu/parameters/rx_port_stats
 	[ -n "${SRV_QDISC:-}" ] && for p in $PORTS; do "$RIG/settled.sh" srvq ${DEV[$p]}; done	# the settled qdisc back
-	[ "${NOTRACK:-}" = absent ] && nft -f "$RIG/zc-notrack.nft"	# the settled table back
+	[ "${NOTRACK:-}" = absent ] && [ "$(nft list hooks 2> /dev/null | grep -c conntrack)" != 0 ] && nft -f "$RIG/zc-notrack.nft"	# the settled table back, if conntrack is on
 	# An open of a port put its interrupts back on CPUs 0-7, and NFSD_CPUS=
 	# moved nfsd: the settled CPU layout back, and the host as the run left it.
 	"$RIG/settled.sh" place $PORTS
