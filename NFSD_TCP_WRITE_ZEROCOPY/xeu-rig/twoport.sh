@@ -167,6 +167,7 @@ cleanup() {
 		for fs in ${FS[$p]}; do exportfs -u "${CLI[$p]}:$fs/zcbudget" 2>/dev/null; done
 	done
 	echo N > /sys/module/xeu/parameters/rx_port_stats
+	[ -n "${SRV_QDISC:-}" ] && for p in $PORTS; do "$RIG/settled.sh" srvq ${DEV[$p]}; done	# the settled qdisc back
 	# An open of a port put its interrupts back on CPUs 0-7, and NFSD_CPUS=
 	# moved nfsd: the settled CPU layout back, and the host as the run left it.
 	"$RIG/settled.sh" place $PORTS
