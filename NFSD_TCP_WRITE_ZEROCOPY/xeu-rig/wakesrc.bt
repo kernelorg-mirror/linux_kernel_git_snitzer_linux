@@ -1,0 +1,66 @@
+// wakesrc.bt: where nfsd's wakes come from after round 10b, and what each
+// does.  A call of svc_pool_wake_idle_thread() ends in one of three
+// tracepoints (a thread woken, the first idle one already running or its
+// wake in flight, no idle thread); each is classed by its source:
+//   ring       on CPUs 0-7, svc_data_ready() in the ring's softirq
+//   rcv-done   svc_tcp_recvfrom()'s hand-back after a complete record
+//   rcv-part   its hand-back after a partial one
+//   dready-nfsd svc_data_ready() on an nfsd thread (the backlog at release_sock)
+//   credit     svc_tcp_rx_credit_wake(), credit returned
+//   next       svc_recv()'s svc_thread_wake_next(), more queued
+//   other      anything else on nfsd's CPUs
+// Passes through svc_recv() as probe3.bt, plus: a pass whose transport is
+// the one this thread just handed back after a partial read (it took its
+// own transport back), and partial hand-backs that found XPT_DATA set.
+config = { max_map_keys = 65536 }
+
+fentry:sunrpc:svc_recv { @recv = count(); @t0[tid] = 1; @deq[tid] = 0; @sl[tid] = 0; }
+fentry:sunrpc:svc_thread_wait_for_work { @in_wait[tid] = 1; }
+fexit:sunrpc:svc_thread_wait_for_work { delete(@in_wait[tid]); }
+tracepoint:sched:sched_switch /args.prev_state != 0 && @in_wait[args.prev_pid]/ { @sl[args.prev_pid] = 1; @sleeps = count(); }
+tracepoint:sunrpc:svc_xprt_dequeue { @deq[tid] = 1; @dequeue = count(); }
+fexit:sunrpc:svc_recv /@t0[tid]/ {
+	if (@sl[tid]) { @slept = count(); if (!@deq[tid]) { @empty_slept = count(); } }
+	else { @no_sleep = count(); if (!@deq[tid]) { @empty_no_sleep = count(); } }
+	delete(@t0[tid]); delete(@deq[tid]); delete(@sl[tid]);
+}
+
+fentry:sunrpc:svc_handle_xprt {
+	if (@lastpart[tid] == (uint64)args.xprt) { @own_back = count(); }
+	else if (@lastpart[tid]) { @other_after_part = count(); }
+	delete(@lastpart[tid]);
+}
+
+tracepoint:sunrpc:svcsock_tcp_recv_short { @part[tid] = 1; @short = count(); }
+tracepoint:sunrpc:svcsock_tcp_recv_eagain { @part[tid] = 1; @eagain = count(); }
+fentry:sunrpc:svc_xprt_received {
+	if (@part[tid]) {
+		@src[tid] = 2; @lastpart[tid] = (uint64)args.xprt;
+		if (args.xprt->xpt_flags & (1 << 3)) { @part_data_set = count(); }
+		@part_received = count();
+	} else { @src[tid] = 1; @done_received = count(); }
+	delete(@part[tid]);
+}
+fexit:sunrpc:svc_xprt_received { delete(@src[tid]); }
+fentry:sunrpc:svc_tcp_rx_credit_wake { @cw[tid] = 1; }
+fentry:sunrpc:svc_data_ready /cpu >= 8/ { @dr[tid] = 1; @dready_nfsd = count(); }
+fexit:sunrpc:svc_data_ready /cpu >= 8/ { delete(@dr[tid]); }
+fentry:sunrpc:svc_data_ready /cpu < 8/ { @dready_ring = count(); }
+fexit:sunrpc:svc_tcp_rx_credit_wake { delete(@cw[tid]); }
+
+tracepoint:sunrpc:svc_pool_thread_wake,
+tracepoint:sunrpc:svc_pool_thread_running,
+tracepoint:sunrpc:svc_pool_thread_noidle {
+	$o = probe == "tracepoint:sunrpc:svc_pool_thread_wake" ? "woken" :
+	     (probe == "tracepoint:sunrpc:svc_pool_thread_running" ? "running" : "noidle");
+	if (cpu < 8) { @w["ring", $o] = count(); }
+	else if (@dr[tid]) { @w["dready-nfsd", $o] = count(); }
+	else if (@src[tid] == 1) { @w["rcv-done", $o] = count(); }
+	else if (@src[tid] == 2) { @w["rcv-part", $o] = count(); }
+	else if (@cw[tid]) { @w["credit", $o] = count(); }
+	else if (@t0[tid]) { @w["next", $o] = count(); }
+	else { @w["other", $o] = count(); }
+}
+tracepoint:nfsd:nfsd_write_start { @writes = count(); }
+interval:s:8 { exit(); }
+END { clear(@t0); clear(@deq); clear(@sl); clear(@in_wait); clear(@part); clear(@src); clear(@cw); clear(@lastpart); clear(@dr); }

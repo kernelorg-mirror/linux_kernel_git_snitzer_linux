@@ -1,0 +1,65 @@
+== round 14's sunrpc (FBEBC68D6628C0CE72E3E00), p8-loan64, 40.51 GB/s
+@dequeue: 1994561
+@done_received: 1427297
+@dready_nfsd: 1748298
+@dready_ring: 8211853
+@eagain: 11
+@empty_no_sleep: 1845496
+@empty_slept: 278343
+@no_sleep: 3015790
+@other_after_part: 1610054
+@own_back: 117376
+@part_data_set: 266404
+@part_received: 1727960
+@recv: 4212495
+@short: 1731184
+@sleeps: 1273753
+@slept: 1095888
+@w[other, woken]: 2386
+@w[other, running]: 2469
+@w[dready-nfsd, woken]: 13494
+@w[dready-nfsd, running]: 16257
+@w[rcv-part, woken]: 129703
+@w[rcv-part, running]: 142322
+@w[credit, woken]: 203970
+@w[credit, running]: 208506
+@w[rcv-done, woken]: 232303
+@w[rcv-done, running]: 280601
+@w[next, woken]: 520479
+@w[ring, woken]: 601704
+@w[next, running]: 628579
+@w[ring, running]: 653327
+@writes: 484182
+
+== round 17's sunrpc (821534936DB054AC699BF52), p8r17-loan64, 40.47 GB/s
+@dequeue: 1742884
+@done_received: 1321039
+@dready_nfsd: 1756810
+@dready_ring: 8097511
+@eagain: 10
+@empty_no_sleep: 1630732
+@empty_slept: 265504
+@no_sleep: 2587023
+@other_after_part: 1405389
+@own_back: 61741
+@part_data_set: 28148
+@part_received: 1467530
+@recv: 3714190
+@short: 1470096
+@sleeps: 1196165
+@slept: 1046583
+@w[other, running]: 1676
+@w[other, woken]: 1975
+@w[dready-nfsd, woken]: 14412
+@w[dready-nfsd, running]: 16036
+@w[rcv-part, running]: 16217
+@w[rcv-part, woken]: 16403
+@w[credit, running]: 189562
+@w[credit, woken]: 210022
+@w[rcv-done, woken]: 225135
+@w[rcv-done, running]: 247680
+@w[next, woken]: 482304
+@w[next, running]: 486796
+@w[ring, running]: 627599
+@w[ring, woken]: 643323
+@writes: 482275

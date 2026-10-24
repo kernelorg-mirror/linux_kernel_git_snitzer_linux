@@ -1,0 +1,8 @@
+L17-B1 untraced: write 8.35 GB/s, 7962 IOPS; completion ms: p50 0.424, p90 0.502, p99 0.578, p99.9 0.659, mean 0.437, max 0.759
+L17-B1 traced:   write 7.93 GB/s, 7560 IOPS; completion ms: p50 0.449, p90 0.518, p99 0.578, p99.9 0.643, mean 0.455, max 0.829
+L17-A1 untraced: write 8.16 GB/s, 7782 IOPS; completion ms: p50 0.428, p90 0.502, p99 0.569, p99.9 0.643, mean 0.438, max 1.068
+L17-A1 traced:   write 8.26 GB/s, 7879 IOPS; completion ms: p50 0.424, p90 0.498, p99 0.594, p99.9 0.684, mean 0.438, max 1.160
+L17-B2 untraced: write 8.23 GB/s, 7850 IOPS; completion ms: p50 0.432, p90 0.514, p99 0.618, p99.9 0.709, mean 0.444, max 0.879
+L17-B2 traced:   write 7.58 GB/s, 7226 IOPS; completion ms: p50 0.477, p90 0.537, p99 0.602, p99.9 0.684, mean 0.470, max 1.116
+L17-A2 untraced: write 8.34 GB/s, 7957 IOPS; completion ms: p50 0.428, p90 0.502, p99 0.569, p99.9 0.643, mean 0.437, max 1.102
+L17-A2 traced:   write 8.38 GB/s, 7988 IOPS; completion ms: p50 0.428, p90 0.485, p99 0.569, p99.9 0.643, mean 0.438, max 1.098

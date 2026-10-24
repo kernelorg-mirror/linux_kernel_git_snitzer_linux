@@ -29,6 +29,7 @@ Each round is a directory here, numbered in order:
 | [14-page-prefetch](14-page-prefetch/README.md) | round 13's profile | each borrowed page's `struct page` missed on nfsd up to three times: `svc_tcp_rx_region_span` (2.7 us a WRITE on its `pp_magic` load), `svc_tcp_rx_borrow_segment` (3.4 of its 4.7 us self on `page_pool_page_is_pp()`), `napi_pp_put_page` (2.7) | `02a445664e23`: `prefetchw()` the `struct page` of each page a loaned skb's record bytes lie in, before they are examined; reusing the page-pool answer and one ref a page a skb not done | **kept**: nfsd 117.2 to 114.9 us a WRITE (-2%); `region_span` 3.2 to 1.0, the borrow 4.6 to 3.2, the walk 1.9; latency the same |
 | 15 | | `svc_tcp_rx_append`'s region check reads `pool->rx_region` (offset 864) on the line with `rx_stack` and `rx_stack_n`, which the ring writes for every region page it takes or returns: about 0.6 us a WRITE of false sharing on nfsd | `085734569d9d`: `rx_region` moved to the struct's last line, written only at registration | in the next kernel build, with round 04 (Mike) |
 | [16-release-prefetch](16-release-prefetch/README.md) | round 14's profile | `page_pool_put_netmem_bulk` 5.5 us a WRITE, 85% one load of each page's `compound_head` behind the pool's ordered atomics, before the reply | `e5e84a05b686`: `prefetchw()` each borrowed page's `struct page` before the references are dropped | not kept: the release 1.6 us cheaper in the profile, nfsd 114.2 against 113.8 us a WRITE, inside the scatter; reverted (`a081854bc12c`). A 14.5 s stall in one B run, with the server's replies unacknowledged, cause not found |
+| [17-read-on](17-read-on/README.md) | round 14's profile, and `xeu-rig/wakesrc.bt` | the wake path: 7.5 wake calls and 3.5 wakes a WRITE, about 1 us each to the waker; 4.4 of 8.7 passes through `svc_recv` find nothing; one partial hand-back in seven finds `XPT_DATA` set again | `5fde85ef4076`: a thread whose read left a loaned record incomplete reads on if `XPT_DATA` is set again when the socket lock is released | **kept**: 6.0 to 5.4 enqueues a WRITE, 4.56 to 4.34 wakes; nfsd 115.5 to 113.2 us a WRITE (-2%); latency the same |
 | [07-srv-qdisc](07-srv-qdisc/README.md) | round 05's state | half of each ACK and reply is `__dev_xmit_skb` | the server's qdisc `pfifo_fast` | not kept: no change (rings 66.9 against 66.1, latency inside L0's scatter); the cost is the transmit path's lock with 48 CPUs on 4 queues, not the qdisc |
 | [08-notrack-needed](08-notrack-needed/README.md) | round 05's state | the `zc_notrack` chains run with no conntrack to skip | `zc_notrack` only while a table registers conntrack, in settled.sh | kept: rings 67.6 to 65.1 us a loaned WRITE (-3.7%), nfsd 160.6 to 154.2; latency unchanged |
 | [09-big-tcp](09-big-tcp/README.md) | round 08's state | per-skb costs at about 20 GRO skbs a WRITE | BIG TCP: the server's `gro_max_size` and `gro_ipv4_max_size` 256 KB | not kept: no change (rings 63.3 against 63.4, latency the same); aggregates end at the client's 64 KB TSO bursts, so it needs the client's `gso_ipv4_max_size` too (Mike); the wake itself measured, 98.5% under 2 us |
@@ -50,9 +51,10 @@ runs (the profile where the A/B cannot resolve it):
 | 10b | 61.2 | 127.5 | `c0995ea94798`, `dd4fef2000a0`: no wake for a partial loaned record, held back at most half the open window |
 | 13 | | 118.3 | `916c11a2d1fc`: each nfsd thread reuses its last credentials |
 | 14 | about 59 | 114.9 | `02a445664e23`: `prefetchw()` of the loaned pages' `struct page` |
+| 17 | 58.2 | 113.2 | `5fde85ef4076`: a thread reads on when a loaned record's rest arrives during its read |
 
-- **Since round 01:** the rings 92.6 to about 59 us a WRITE (-36%),
-  nfsd 184 to about 114 (-38%).
+- **Since round 01:** the rings 92.6 to about 58 us a WRITE (-37%),
+  nfsd 184 to about 113 (-39%).
 - The rate stayed at the drives' 40.5 GB/s throughout. Latency at
   iodepth 1 is the same or a little better.
 - Each round's A/B had its own A, and A drifts a couple of us between
