@@ -47,8 +47,8 @@ static unsigned long nfsd_reply_cache_scan(struct shrinker *shrink,
 					   struct shrink_control *sc);
 
 /*
- * Put a cap on the size of the DRC based on the amount of available
- * low memory in the machine.
+ * Unless drc_max_entries says otherwise, put a cap on the size of the
+ * DRC based on the amount of available low memory in the machine.
  *
  *  64MB:    8192
  * 128MB:   11585
@@ -67,12 +67,19 @@ static unsigned long nfsd_reply_cache_scan(struct shrinker *shrink,
  * XXX: these limits are per-container, so memory used will increase
  * linearly with number of containers.  Maybe that's OK.
  */
+static unsigned int nfsd_drc_max_entries;
+module_param_named(drc_max_entries, nfsd_drc_max_entries, uint, 0644);
+MODULE_PARM_DESC(drc_max_entries,
+		 "Most entries the duplicate reply cache of each net namespace holds (0: from memory size); read when the server starts");
+
 static unsigned int
 nfsd_cache_size_limit(void)
 {
-	unsigned int limit;
+	unsigned int limit = READ_ONCE(nfsd_drc_max_entries);
 	unsigned long low_pages = totalram_pages() - totalhigh_pages();
 
+	if (limit)
+		return clamp(limit, TARGET_BUCKET_SIZE, 256 * 1024);
 	limit = (16 * int_sqrt(low_pages)) << (PAGE_SHIFT-10);
 	return min_t(unsigned int, limit, 256*1024);
 }
