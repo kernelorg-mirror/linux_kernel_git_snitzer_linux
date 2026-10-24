@@ -32,6 +32,7 @@
 #          held buffer and the budget, passed as EXP_ENTRIES_A, EXP_RCVBUF,
 #          EXP_BUDGET, EXP_BUDGET_RESERVE and EXP_LINGER
 # EXP_SKB_DEFER_MAX holds net.core.skb_defer_max to a run's SKB_DEFER_MAX=.
+# EXP_SRV_QDISC holds the server ports' qdisc to a run's SRV_QDISC=.
 # EXP_REFILL holds xeu's rx_refill_thresh to a run's REFILL= instead of 8,
 # and EXP_XEU_<parameter> (exported) holds any xeu parameter to a value, for
 # a host whose xeu was loaded off the setting on purpose (rx_ip_align=0).
@@ -245,6 +246,7 @@ declare -A CLI_SYSCTL=(
 	[net.ipv4.tcp_ecn]=2
 )
 declare -A CLI_DEV=([a]=ens3np0 [b]=ens6np0)	# the client's end of each port
+SRV_QDISC=fq_codel	# under the mq of each server port; apply puts it back (round 07 tries pfifo_fast)
 # NFS is kept out of conntrack (FLAMEGRAPH round 01, 23 October): a table
 # that needs conntrack puts it on every packet.  On tardis2's one-port loan
 # run, deleting the table and loading zc-notrack.nft took the rings from 92.6
@@ -323,6 +325,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "${ENTRIES[b]}" = "${SETTLED[entries_b]}" ] || OFF="$OFF rings_b=${ENTRIES[b]}"
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
+	[ -n "${EXP_SRV_QDISC:-}" ] && [ "$EXP_SRV_QDISC" != "$SRV_QDISC" ] && OFF="$OFF srv_qdisc=$EXP_SRV_QDISC"
 	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
 	local xk xv
 	for xk in "${!XEU[@]}"; do
@@ -389,9 +392,22 @@ audit_irqbalance() {
 	want "irqbalance kept off nfsd's CPUs" "$(tr '\0' '\n' < /proc/$p/environ | sed -n 's/^IRQBALANCE_BANNED_CPULIST=//p')" "$NFSD_CPUSET"
 }
 
+srv_qdisc() {	# srv_qdisc <dev>: the qdiscs under the port's mq, one name if all alike
+	tc qdisc show dev $1 | awk '$1 == "qdisc" && $2 != "mq" {print $2}' | sort -u | paste -sd,
+}
+set_srv_qdisc() {	# set_srv_qdisc <dev> <qdisc>: that qdisc on each of the port's transmit queues
+	local c
+	# A root of handle 0: cannot be named as a parent: give the mq one.
+	tc qdisc replace dev $1 root handle 100: mq || return 1
+	for c in $(tc qdisc show dev $1 | awk '$1 == "qdisc" && $2 != "mq" {sub(/^100:/, "", $5); print $5}'); do
+		tc qdisc replace dev $1 parent 100:$c $2 || return 1
+	done
+}
+
 audit_port() {	# audit_port <a|b>
 	local p=$1 d=${PDEV[$1]} c0=${PCPU[$1]} irq name i want_cpu q
 	want "$d mtu" "$(cat /sys/class/net/$d/mtu)" $MTU
+	want "$d qdisc" "$(srv_qdisc $d)" "${EXP_SRV_QDISC:-$SRV_QDISC}"
 	want "$d rings" "$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')" $RINGS
 	want "$d ring depth" "$(ethtool -g $d | awk '/^RX:/ {v = $2} END {print v}')" "${ENTRIES[$p]}"
 	want "$d threaded NAPI" "$(cat /sys/class/net/$d/threaded)" 0
@@ -508,6 +524,7 @@ apply() {	# the CPU layout, the resting module settings, and the audit
 		[ "$(sysctl -n $k | tr -s ' \t' '  ')" = "${SYSCTL[$k]}" ] || sysctl -qw "$k=${SYSCTL[$k]}"
 	done
 	[ "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" = 4 ] || nft -f "$NOTRACK"
+	for k in $PORTS; do [ "$(srv_qdisc ${PDEV[$k]})" = "$SRV_QDISC" ] || set_srv_qdisc ${PDEV[$k]} $SRV_QDISC; done
 	[ "$(containers)" = 0 ] && nft list table inet netavark > /dev/null 2>&1 && nft delete table inet netavark
 	if [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ]; then
 		for k in "${!REST[@]}"; do
@@ -530,6 +547,7 @@ case "${1:-}" in
 audit) audit "${2:?mode: rest, two, one or cell}" ;;
 apply) apply ;;
 place) shift; place "$@" ;;
+srvq)  set_srv_qdisc "${2:?dev}" "${3:?qdisc}" ;;
 show)  show "${2:-rest}" ;;
 *)     sed -n '2,36p' "$0"; exit 2 ;;
 esac
