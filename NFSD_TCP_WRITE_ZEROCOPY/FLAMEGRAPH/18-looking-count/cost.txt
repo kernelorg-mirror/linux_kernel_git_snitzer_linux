@@ -1,0 +1,54 @@
+== r18: A round 17, B the change
+r18-1-loan64-A ring 60.3 nfsd 115.6 us/W | enq 5.55 woken 4.42 vcsw 5.92 /W
+r18-2-loan64-B ring 57.9 nfsd 105.5 us/W | enq 4.91 woken 1.41 vcsw 2.90 /W
+r18-3-loan64-A ring 57.2 nfsd 110.2 us/W | enq 5.35 woken 4.31 vcsw 5.81 /W
+r18-4-loan64-B ring 55.8 nfsd 105.4 us/W | enq 5.04 woken 1.47 vcsw 2.96 /W
+r18-5-loan64-A ring 61.6 nfsd 110.3 us/W | enq 5.37 woken 4.32 vcsw 5.82 /W
+r18-6-loan64-B ring 57.7 nfsd 104.5 us/W | enq 4.98 woken 1.44 vcsw 2.92 /W
+r18-1-loan64-A max completion 128 ms
+r18-2-loan64-B max completion 116 ms
+r18-3-loan64-A max completion 119 ms
+r18-4-loan64-B max completion 123 ms
+r18-5-loan64-A max completion 113 ms
+r18-6-loan64-B max completion 128 ms
+profile fl18-loan64:
+WRITEs a second in the profile: 38617
+rings (CPUs 0,2,4,6): busy 59.90 us a WRITE
+nfsd (CPUs 8-55): busy 109.12 us a WRITE
+
+== r18b: A round 17, B the change
+r18b-1-loan64-A ring 57.8 nfsd 111.0 us/W | enq 5.39 woken 4.34 vcsw 5.85 /W
+r18b-2-loan64-B ring 60.8 nfsd 113.3 us/W | enq 5.45 woken 4.17 vcsw 5.68 /W
+r18b-3-loan64-A ring 57.6 nfsd 115.0 us/W | enq 5.40 woken 4.31 vcsw 5.81 /W
+r18b-4-loan64-B ring 60.2 nfsd 112.4 us/W | enq 5.38 woken 4.10 vcsw 5.61 /W
+r18b-5-loan64-A ring 60.4 nfsd 113.4 us/W | enq 5.57 woken 4.44 vcsw 5.94 /W
+r18b-6-loan64-B ring 58.5 nfsd 110.1 us/W | enq 5.44 woken 4.13 vcsw 5.64 /W
+r18b-1-loan64-A max completion 111 ms
+r18b-2-loan64-B max completion 109 ms
+r18b-3-loan64-A max completion 118 ms
+r18b-4-loan64-B max completion 113 ms
+r18b-5-loan64-A max completion 119 ms
+r18b-6-loan64-B max completion 118 ms
+profile fl18b-loan64:
+WRITEs a second in the profile: 38542
+rings (CPUs 0,2,4,6): busy 59.88 us a WRITE
+nfsd (CPUs 8-55): busy 120.69 us a WRITE
+
+== r18c: A round 17, B the change
+r18c-1-loan64-A ring 58.9 nfsd 117.0 us/W | enq 5.41 woken 4.34 vcsw 5.84 /W
+r18c-2-loan64-B ring 57.2 nfsd 111.9 us/W | enq 5.31 woken 2.98 vcsw 4.48 /W
+r18c-3-loan64-A ring 58.7 nfsd 112.1 us/W | enq 5.38 woken 4.32 vcsw 5.82 /W
+r18c-4-loan64-B ring 56.0 nfsd 110.5 us/W | enq 5.26 woken 2.94 vcsw 4.45 /W
+r18c-5-loan64-A ring 61.2 nfsd 114.2 us/W | enq 5.44 woken 4.37 vcsw 5.87 /W
+r18c-6-loan64-B ring 58.9 nfsd 111.4 us/W | enq 5.30 woken 2.99 vcsw 4.50 /W
+r18c-1-loan64-A max completion 124 ms
+r18c-2-loan64-B max completion 130 ms
+r18c-3-loan64-A max completion 120 ms
+r18c-4-loan64-B max completion 111 ms
+r18c-5-loan64-A max completion 116 ms
+r18c-6-loan64-B max completion 112 ms
+profile fl18c-loan64:
+WRITEs a second in the profile: 38549
+rings (CPUs 0,2,4,6): busy 56.79 us a WRITE
+nfsd (CPUs 8-55): busy 116.88 us a WRITE
+

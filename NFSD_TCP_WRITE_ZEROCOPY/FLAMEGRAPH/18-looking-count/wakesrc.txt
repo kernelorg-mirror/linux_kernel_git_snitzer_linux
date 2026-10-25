@@ -1,0 +1,190 @@
+xeu-rig/wakesrc.bt per WRITE (saturation, loan64): round 17 (p8r17), 18, 18b, 18c
+probe8-r17    passes 7.70 dequeue 3.61 empty-no-sleep 3.38 empty-slept 0.55 sleeps 2.48 wake-calls 6.59 woken 3.30
+probe8-r18    passes 5.63 dequeue 3.23 empty-no-sleep 2.26 empty-slept 0.02 sleeps 0.39 wake-calls 0.92 woken 0.54
+probe8-r18b   passes 7.29 dequeue 3.58 empty-no-sleep 3.12 empty-slept 0.44 sleeps 2.14 wake-calls 5.09 woken 2.87
+probe8-r18c   passes 6.42 dequeue 3.48 empty-no-sleep 2.65 empty-slept 0.15 sleeps 1.06 wake-calls 2.99 woken 1.45
+
+== probe8-r18.txt
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:19:41-62: WARNING: Return value discarded.
+fexit:sunrpc:svc_thread_wait_for_work { delete(@in_wait[tid]); }
+                                        ~~~~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:25:2-19: WARNING: Return value discarded.
+    delete(@t0[tid]); delete(@deq[tid]); delete(@sl[tid]);
+    ~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:25:20-38: WARNING: Return value discarded.
+    delete(@t0[tid]); delete(@deq[tid]); delete(@sl[tid]);
+                      ~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:25:39-55: WARNING: Return value discarded.
+    delete(@t0[tid]); delete(@deq[tid]); delete(@sl[tid]);
+                                         ~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:31:2-24: WARNING: Return value discarded.
+    delete(@lastpart[tid]);
+    ~~~~~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:42:2-20: WARNING: Return value discarded.
+    delete(@part[tid]);
+    ~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:44:34-51: WARNING: Return value discarded.
+fexit:sunrpc:svc_xprt_received { delete(@src[tid]); }
+                                 ~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:47:42-58: WARNING: Return value discarded.
+fexit:sunrpc:svc_data_ready /cpu >= 8/ { delete(@dr[tid]); }
+                                         ~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:49:39-55: WARNING: Return value discarded.
+fexit:sunrpc:svc_tcp_rx_credit_wake { delete(@cw[tid]); }
+                                      ~~~~~~~~~~~~~~~~
+Attached 22 probes
+
+
+@dequeue: 1591536
+@done_received: 1227439
+@dready_nfsd: 1123519
+@dready_ring: 9093733
+@eagain: 7
+@empty_no_sleep: 1113739
+@empty_slept: 10728
+@no_sleep: 2523694
+@other_after_part: 1277072
+@own_back: 16062
+@part_data_set: 23804
+@part_received: 1293458
+@recv: 2774507
+@short: 1295636
+@sleeps: 190873
+@slept: 187488
+@w[dready-nfsd, woken]: 67
+@w[other, running]: 353
+@w[other, woken]: 718
+@w[dready-nfsd, running]: 1312
+@w[credit, woken]: 3294
+@w[ring, woken]: 12566
+@w[credit, running]: 16964
+@w[ring, running]: 66127
+@w[next, running]: 102009
+@w[next, woken]: 249720
+@writes: 492719
+
+== probe8-r18b.txt
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:19:41-62: WARNING: Return value discarded.
+fexit:sunrpc:svc_thread_wait_for_work { delete(@in_wait[tid]); }
+                                        ~~~~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:25:2-19: WARNING: Return value discarded.
+    delete(@t0[tid]); delete(@deq[tid]); delete(@sl[tid]);
+    ~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:25:20-38: WARNING: Return value discarded.
+    delete(@t0[tid]); delete(@deq[tid]); delete(@sl[tid]);
+                      ~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:25:39-55: WARNING: Return value discarded.
+    delete(@t0[tid]); delete(@deq[tid]); delete(@sl[tid]);
+                                         ~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:31:2-24: WARNING: Return value discarded.
+    delete(@lastpart[tid]);
+    ~~~~~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:42:2-20: WARNING: Return value discarded.
+    delete(@part[tid]);
+    ~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:44:34-51: WARNING: Return value discarded.
+fexit:sunrpc:svc_xprt_received { delete(@src[tid]); }
+                                 ~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:47:42-58: WARNING: Return value discarded.
+fexit:sunrpc:svc_data_ready /cpu >= 8/ { delete(@dr[tid]); }
+                                         ~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:49:39-55: WARNING: Return value discarded.
+fexit:sunrpc:svc_tcp_rx_credit_wake { delete(@cw[tid]); }
+                                      ~~~~~~~~~~~~~~~~
+Attached 22 probes
+
+
+@dequeue: 1741153
+@done_received: 1284449
+@dready_nfsd: 1718407
+@dready_ring: 8246563
+@eagain: 5
+@empty_no_sleep: 1517487
+@empty_slept: 213418
+@no_sleep: 2504621
+@other_after_part: 1386910
+@own_back: 65885
+@part_data_set: 29753
+@part_received: 1453197
+@recv: 3544536
+@short: 1455714
+@sleeps: 1040981
+@slept: 962035
+@w[other, running]: 1175
+@w[other, woken]: 1960
+@w[dready-nfsd, woken]: 10984
+@w[dready-nfsd, running]: 11604
+@w[rcv-part, running]: 13283
+@w[rcv-part, woken]: 14374
+@w[credit, running]: 151706
+@w[credit, woken]: 182586
+@w[rcv-done, woken]: 189307
+@w[rcv-done, running]: 194582
+@w[next, running]: 246750
+@w[ring, running]: 459834
+@w[next, woken]: 490105
+@w[ring, woken]: 508980
+@writes: 486450
+
+== probe8-r18c.txt
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:19:41-62: WARNING: Return value discarded.
+fexit:sunrpc:svc_thread_wait_for_work { delete(@in_wait[tid]); }
+                                        ~~~~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:25:2-19: WARNING: Return value discarded.
+    delete(@t0[tid]); delete(@deq[tid]); delete(@sl[tid]);
+    ~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:25:20-38: WARNING: Return value discarded.
+    delete(@t0[tid]); delete(@deq[tid]); delete(@sl[tid]);
+                      ~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:25:39-55: WARNING: Return value discarded.
+    delete(@t0[tid]); delete(@deq[tid]); delete(@sl[tid]);
+                                         ~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:31:2-24: WARNING: Return value discarded.
+    delete(@lastpart[tid]);
+    ~~~~~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:42:2-20: WARNING: Return value discarded.
+    delete(@part[tid]);
+    ~~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:44:34-51: WARNING: Return value discarded.
+fexit:sunrpc:svc_xprt_received { delete(@src[tid]); }
+                                 ~~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:47:42-58: WARNING: Return value discarded.
+fexit:sunrpc:svc_data_ready /cpu >= 8/ { delete(@dr[tid]); }
+                                         ~~~~~~~~~~~~~~~~
+/var/tmp/zc-run-logs/t2-tipkernel/probe8.bt:49:39-55: WARNING: Return value discarded.
+fexit:sunrpc:svc_tcp_rx_credit_wake { delete(@cw[tid]); }
+                                      ~~~~~~~~~~~~~~~~
+Attached 22 probes
+
+
+@dequeue: 1677954
+@done_received: 1245015
+@dready_nfsd: 1488492
+@dready_ring: 8442411
+@eagain: 6
+@empty_no_sleep: 1280301
+@empty_slept: 72332
+@no_sleep: 2541398
+@other_after_part: 1352791
+@own_back: 37392
+@part_data_set: 24152
+@part_received: 1390567
+@recv: 3097629
+@short: 1392964
+@sleeps: 511272
+@slept: 483976
+@w[rcv-part, woken]: 765
+@w[dready-nfsd, woken]: 1303
+@w[other, running]: 1509
+@w[other, woken]: 1560
+@w[rcv-part, running]: 1852
+@w[dready-nfsd, running]: 3381
+@w[rcv-done, woken]: 11931
+@w[rcv-done, running]: 30515
+@w[credit, woken]: 34360
+@w[credit, running]: 55107
+@w[ring, woken]: 114472
+@w[ring, running]: 195929
+@w[next, running]: 456600
+@w[next, woken]: 533366
+@writes: 482404

@@ -1,0 +1,50 @@
+== 18 (331bd9a8d93a): B is the change, A round 17 (821534936DB054AC699BF52)
+L18-B1 untraced (client 4.8% busy): write 7.77 GB/s, 7412 IOPS; completion ms: p50 0.465, p90 0.528, p99 0.594, p99.9 0.668, mean 0.462, max 0.775
+L18-B1 traced: write 7.18 GB/s, 6844 IOPS; completion ms: p50 0.510, p90 0.553, p99 0.618, p99.9 0.692, mean 0.500, max 0.972
+L18-A1 untraced (client 4.16% busy): write 8.22 GB/s, 7841 IOPS; completion ms: p50 0.436, p90 0.506, p99 0.578, p99.9 0.627, mean 0.447, max 0.746
+L18-A1 traced: write 7.19 GB/s, 6853 IOPS; completion ms: p50 0.506, p90 0.561, p99 0.651, p99.9 0.741, mean 0.499, max 0.876
+L18-B2 untraced (client 5.21% busy): write 6.96 GB/s, 6636 IOPS; completion ms: p50 0.498, p90 0.553, p99 0.610, p99.9 0.692, mean 0.501, max 0.902
+L18-B2 traced: write 8.06 GB/s, 7691 IOPS; completion ms: p50 0.444, p90 0.506, p99 0.594, p99.9 0.668, mean 0.452, max 0.769
+L18-A2 untraced (client 4.3% busy): write 8.45 GB/s, 8062 IOPS; completion ms: p50 0.420, p90 0.494, p99 0.561, p99.9 0.635, mean 0.432, max 1.019
+L18-A2 traced: write 8.18 GB/s, 7802 IOPS; completion ms: p50 0.432, p90 0.502, p99 0.561, p99.9 0.618, mean 0.442, max 1.066
+
+== 18b (05bb553779e2): B is the change, A round 17 (821534936DB054AC699BF52)
+L18b-B1 untraced (client 4.36% busy): write 8.29 GB/s, 7905 IOPS; completion ms: p50 0.428, p90 0.498, p99 0.561, p99.9 0.627, mean 0.436, max 0.955
+L18b-B1 traced: write 7.74 GB/s, 7384 IOPS; completion ms: p50 0.465, p90 0.522, p99 0.594, p99.9 0.684, mean 0.460, max 10.562
+L18b-A1 untraced (client 4.93% busy): write 7.53 GB/s, 7182 IOPS; completion ms: p50 0.477, p90 0.545, p99 0.610, p99.9 0.684, mean 0.474, max 0.845
+L18b-A1 traced: write 7.78 GB/s, 7421 IOPS; completion ms: p50 0.457, p90 0.522, p99 0.594, p99.9 0.684, mean 0.458, max 4.731
+L18b-B2 untraced (client 4.45% busy): write 8.49 GB/s, 8094 IOPS; completion ms: p50 0.420, p90 0.485, p99 0.553, p99.9 0.627, mean 0.429, max 1.105
+L18b-B2 traced: write 7.92 GB/s, 7556 IOPS; completion ms: p50 0.440, p90 0.514, p99 0.578, p99.9 0.635, mean 0.450, max 0.797
+L18b-A2 untraced (client 6.38% busy): write 8.22 GB/s, 7843 IOPS; completion ms: p50 0.432, p90 0.514, p99 0.610, p99.9 0.700, mean 0.444, max 0.904
+L18b-A2 traced: write 7.85 GB/s, 7486 IOPS; completion ms: p50 0.457, p90 0.514, p99 0.578, p99.9 0.643, mean 0.466, max 5.392
+
+== 18c (0fae825c58f7), first set: B is the change, A round 17 (821534936DB054AC699BF52)
+L18c-B1 untraced (client 68.74% busy): write 7.21 GB/s, 6876 IOPS; completion ms: p50 0.465, p90 0.618, p99 1.004, p99.9 1.548, mean 0.496, max 3.635
+L18c-B1 traced: write 6.13 GB/s, 5849 IOPS; completion ms: p50 0.528, p90 0.741, p99 1.237, p99.9 2.540, mean 0.545, max 4.890
+L18c-A1 untraced (client 95.66% busy): write 5.27 GB/s, 5028 IOPS; completion ms: p50 0.537, p90 1.073, p99 2.441, p99.9 3.686, mean 0.634, max 6.656
+L18c-A1 traced: write 8.06 GB/s, 7689 IOPS; completion ms: p50 0.432, p90 0.510, p99 0.569, p99.9 0.618, mean 0.445, max 0.746
+L18c-B2 untraced (client 27.54% busy): write 8.20 GB/s, 7824 IOPS; completion ms: p50 0.424, p90 0.506, p99 0.725, p99.9 1.270, mean 0.442, max 2.546
+L18c-B2 traced: write 8.50 GB/s, 8105 IOPS; completion ms: p50 0.420, p90 0.469, p99 0.545, p99.9 0.635, mean 0.428, max 0.765
+L18c-A2 untraced (client 4.56% busy): write 8.33 GB/s, 7945 IOPS; completion ms: p50 0.424, p90 0.498, p99 0.561, p99.9 0.618, mean 0.435, max 0.932
+L18c-A2 traced: write 8.29 GB/s, 7905 IOPS; completion ms: p50 0.428, p90 0.485, p99 0.594, p99.9 0.684, mean 0.436, max 0.889
+
+== 18c, clean-client rerun: B is the change, A round 17 (821534936DB054AC699BF52)
+L18c2-B1 untraced (client 4.82% busy): write 7.60 GB/s, 7248 IOPS; completion ms: p50 0.473, p90 0.537, p99 0.594, p99.9 0.668, mean 0.469, max 0.813
+L18c2-B1 traced: write 7.11 GB/s, 6785 IOPS; completion ms: p50 0.514, p90 0.561, p99 0.618, p99.9 0.692, mean 0.503, max 0.879
+L18c2-A1 untraced (client 4.46% busy): write 8.19 GB/s, 7814 IOPS; completion ms: p50 0.436, p90 0.510, p99 0.594, p99.9 0.659, mean 0.448, max 1.061
+L18c2-A1 traced: write 7.87 GB/s, 7502 IOPS; completion ms: p50 0.453, p90 0.528, p99 0.602, p99.9 0.684, mean 0.462, max 0.819
+L18c2-B2 untraced (client 4.75% busy): write 7.98 GB/s, 7609 IOPS; completion ms: p50 0.440, p90 0.518, p99 0.586, p99.9 0.643, mean 0.450, max 0.775
+L18c2-B2 traced: write 7.07 GB/s, 6744 IOPS; completion ms: p50 0.506, p90 0.561, p99 0.618, p99.9 0.700, mean 0.502, max 0.831
+L18c2-A2 untraced (client 65.17% busy): write 6.91 GB/s, 6589 IOPS; completion ms: p50 0.461, p90 0.692, p99 1.171, p99.9 2.212, mean 0.502, max 5.364
+L18c2-A2 traced: write 6.05 GB/s, 5769 IOPS; completion ms: p50 0.537, p90 0.741, p99 1.221, p99.9 2.834, mean 0.528, max 4.009
+
+== 18c, two more clean pairs: B is the change, A round 17 (821534936DB054AC699BF52)
+L18c3-B1 untraced (client 4.4% busy): write 8.42 GB/s, 8029 IOPS; completion ms: p50 0.420, p90 0.489, p99 0.553, p99.9 0.610, mean 0.429, max 1.068
+L18c3-B1 traced: write 8.38 GB/s, 7996 IOPS; completion ms: p50 0.428, p90 0.485, p99 0.594, p99.9 0.684, mean 0.436, max 0.878
+L18c3-A1 untraced (client 4.38% busy): write 8.28 GB/s, 7901 IOPS; completion ms: p50 0.432, p90 0.502, p99 0.578, p99.9 0.651, mean 0.440, max 0.954
+L18c3-A1 traced: write 8.50 GB/s, 8106 IOPS; completion ms: p50 0.420, p90 0.473, p99 0.553, p99.9 0.643, mean 0.429, max 0.752
+L18c3-B2 untraced (client 4.95% busy): write 7.48 GB/s, 7134 IOPS; completion ms: p50 0.481, p90 0.545, p99 0.651, p99.9 0.750, mean 0.474, max 3.646
+L18c3-B2 traced: write 8.34 GB/s, 7949 IOPS; completion ms: p50 0.424, p90 0.489, p99 0.561, p99.9 0.643, mean 0.435, max 1.148
+L18c3-A2 untraced (client 4.5% busy): write 8.33 GB/s, 7939 IOPS; completion ms: p50 0.428, p90 0.494, p99 0.553, p99.9 0.586, mean 0.435, max 0.731
+L18c3-A2 traced: write 7.46 GB/s, 7115 IOPS; completion ms: p50 0.485, p90 0.537, p99 0.610, p99.9 0.700, mean 0.476, max 0.802
+
