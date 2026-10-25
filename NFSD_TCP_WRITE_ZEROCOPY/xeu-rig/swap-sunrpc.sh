@@ -55,6 +55,22 @@ systemctl stop $UNITS
 umount /proc/fs/nfsd 2>/dev/null
 umount /var/lib/nfs/rpc_pipefs 2>/dev/null
 
+# A service with a private mount namespace (systemd-hostnamed, among
+# others) keeps the nfsd and rpc_pipefs mounts it started with, and those
+# hold nfsd and sunrpc.  Stop the bus-activated ones, which come back on
+# demand; name anything else.
+ns=$(readlink /proc/self/ns/mnt)
+for f in $(grep -l -e ' - nfsd ' -e ' - rpc_pipefs ' /proc/[0-9]*/mountinfo 2>/dev/null); do
+	p=${f#/proc/}; p=${p%%/*}
+	[ "$(readlink /proc/$p/ns/mnt 2>/dev/null)" = "$ns" ] && continue
+	u=$(sed -n 's#.*/\([^/]*\.service\)$#\1#p' /proc/$p/cgroup 2>/dev/null | head -1)
+	case "$u" in
+	systemd-hostnamed.service|systemd-timedated.service|systemd-localed.service)
+		echo "stopping $u: its mount namespace holds nfsd"; systemctl stop $u ;;
+	*) echo "pid $p ($(cat /proc/$p/comm 2>/dev/null)${u:+, $u}) has nfsd or rpc_pipefs mounted" ;;
+	esac
+done
+
 # unload whatever holds sunrpc, leaves first, until nothing does
 for pass in 1 2 3 4 5 6 7 8; do
 	[ -d /sys/module/sunrpc ] || break
