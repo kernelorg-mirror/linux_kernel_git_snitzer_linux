@@ -1,0 +1,10 @@
+== r41: A build 499's own sunrpc (EFD53C53F61C1F0CDF37D89), B r21-sunrpc.ko (1D9C18007E10E362F8EFD03, c1b4326c9b99); sunrpc swapped before each run
+== rxirq/txirq here are not valid: twoport.sh opens the port after the first snapshot, which restarts the counts
+r41-1-loan64-A ring 48.5 nfsd 110.1 us/W | rxirq 4.64 txirq 4.50 | enq 5.37 woken 4.31 vcsw 5.80 /W | pp/W: recycle_cached -0.00 recycle_ring_full 0.70 alloc_slow 0.29 | region peak 6645 | maxentries:4096,numentries:4097,cachehits:0,
+r41-2-loan64-B ring 50.8 nfsd 110.9 us/W | rxirq 0.35 txirq -0.34 | enq 5.47 woken 4.37 vcsw 5.87 /W | pp/W: recycle_cached -0.00 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 6577 | maxentries:4096,numentries:4097,cachehits:0,
+r41-3-loan64-A ring 48.8 nfsd 110.2 us/W | rxirq -0.22 txirq 0.30 | enq 5.37 woken 4.29 vcsw 5.79 /W | pp/W: recycle_cached -0.00 recycle_ring_full 0.01 alloc_slow 0.00 | region peak 6485 | maxentries:4096,numentries:4097,cachehits:0,
+r41-4-loan64-B ring 48.5 nfsd 106.9 us/W | rxirq -0.08 txirq -0.51 | enq 5.38 woken 4.35 vcsw 5.84 /W | pp/W: recycle_cached -0.00 recycle_ring_full -0.01 alloc_slow -0.00 | region peak 6484 | maxentries:4096,numentries:4097,cachehits:0,
+r41-5-loan64-A ring 48.7 nfsd 109.6 us/W | rxirq 0.32 txirq 0.39 | enq 5.48 woken 4.36 vcsw 5.86 /W | pp/W: recycle_cached -0.00 recycle_ring_full -0.00 alloc_slow -0.00 | region peak 6486 | maxentries:4096,numentries:4097,cachehits:0,
+r41-6-loan64-B ring 49.5 nfsd 110.7 us/W | rxirq -0.06 txirq -0.01 | enq 5.37 woken 4.33 vcsw 5.82 /W | pp/W: recycle_cached -0.00 recycle_ring_full 0.01 alloc_slow 0.01 | region peak 6510 | maxentries:4096,numentries:4097,cachehits:0,
+r41-7-loan64-A ring 48.4 nfsd 108.8 us/W | rxirq -0.03 txirq 0.06 | enq 5.36 woken 4.30 vcsw 5.79 /W | pp/W: recycle_cached -0.00 recycle_ring_full -0.00 alloc_slow -0.00 | region peak 6560 | maxentries:4096,numentries:4097,cachehits:0,
+r41-8-loan64-B ring 47.5 nfsd 109.7 us/W | rxirq 0.01 txirq -0.46 | enq 5.42 woken 4.35 vcsw 5.85 /W | pp/W: recycle_cached -0.00 recycle_ring_full 0.01 alloc_slow 0.01 | region peak 6492 | maxentries:4096,numentries:4097,cachehits:0,
