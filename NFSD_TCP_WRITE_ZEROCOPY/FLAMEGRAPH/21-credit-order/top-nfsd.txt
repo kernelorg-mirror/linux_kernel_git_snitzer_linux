@@ -1,0 +1,145 @@
+== fl40-loan64 (A, the kernel's own sunrpc; t2-r40, round 20's B, the same settled setting)
+busy: 112.4 us a WRITE
+
+self                                      %     us/WRITE
+page_pool_put_netmem_bulk                 5.09    5.72
+_raw_spin_unlock_irqrestore               4.36    4.90
+finish_task_switch.isra.0                 3.28    3.69
+svc_tcp_rx_borrow_segment                 2.90    3.26
+svc_tcp_rx_append                         2.56    2.88
+_raw_spin_lock                            2.29    2.57
+napi_pp_put_page                          2.15    2.42
+svc_tcp_rx_credit_admit_to                1.91    2.15
+svc_tcp_rx_prefetch_pages                 1.64    1.85
+blk_map_iter_next                         1.41    1.58
+xdr_buf_validate_page_mode                1.03    1.16
+_raw_spin_lock_bh                         0.98    1.10
+__dev_xmit_skb                            0.95    1.07
+dma_direct_map_phys                       0.88    0.99
+_raw_spin_unlock_irq                      0.88    0.99
+__tcp_transmit_skb                        0.88    0.98
+svc_tcp_restore_pages                     0.87    0.98
+xdr_stream_subsegment                     0.83    0.94
+svc_tcp_rx_release_refs                   0.82    0.92
+svc_recv                                  0.82    0.92
+svc_tcp_rx_walk_skb                       0.81    0.92
+percpu_counter_add_batch                  0.78    0.87
+bio_split_io_at                           0.76    0.86
+svc_tcp_rx_region_span                    0.73    0.82
+nfsd_cache_insert                         0.73    0.82
+svc_tcp_recvfrom                          0.68    0.77
+svc_thread_should_sleep                   0.66    0.75
+svc_tcp_rx_refs_valid                     0.64    0.72
+dma_map_phys                              0.64    0.72
+tcp_recv_skb                              0.63    0.71
+__pi_memcpy_generic                       0.60    0.67
+svc_tcp_rx_skb_region_pages_after.part.0  0.59    0.66
+queued_spin_lock_slowpath                 0.59    0.66
+kmem_cache_alloc_node_noprof              0.57    0.64
+xas_load                                  0.56    0.63
+blk_rq_dma_map_iter_next                  0.53    0.60
+_raw_spin_unlock                          0.53    0.59
+
+== fl41-loan64 (B)
+busy: 112.2 us a WRITE
+
+self                                      %     us/WRITE
+page_pool_put_netmem_bulk                 5.19    5.83
+_raw_spin_unlock_irqrestore               4.51    5.06
+finish_task_switch.isra.0                 3.32    3.73
+svc_tcp_rx_borrow_segment                 3.06    3.43
+svc_tcp_rx_append                         2.43    2.73
+_raw_spin_lock                            2.26    2.54
+napi_pp_put_page                          2.13    2.39
+svc_tcp_rx_prefetch_pages                 1.76    1.97
+blk_map_iter_next                         1.50    1.69
+xdr_buf_validate_page_mode                1.07    1.20
+_raw_spin_lock_bh                         1.01    1.14
+svc_tcp_restore_pages                     0.93    1.04
+_raw_spin_unlock_irq                      0.93    1.05
+__dev_xmit_skb                            0.91    1.02
+svc_tcp_rx_release_refs                   0.88    0.98
+__tcp_transmit_skb                        0.86    0.97
+svc_recv                                  0.85    0.96
+svc_tcp_rx_walk_skb                       0.82    0.92
+dma_direct_map_phys                       0.82    0.92
+bio_split_io_at                           0.79    0.88
+percpu_counter_add_batch                  0.76    0.85
+xdr_stream_subsegment                     0.74    0.83
+svc_tcp_recvfrom                          0.74    0.83
+svc_tcp_rx_region_span                    0.69    0.77
+svc_thread_should_sleep                   0.68    0.76
+__pi_memcpy_generic                       0.66    0.74
+xas_load                                  0.63    0.70
+tcp_recv_skb                              0.62    0.70
+nfsd_cache_insert                         0.62    0.69
+dma_map_phys                              0.62    0.70
+svc_tcp_rx_refs_valid                     0.57    0.64
+svc_tcp_rx_skb_region_pages_after.part.0  0.56    0.63
+blk_rq_dma_map_iter_next                  0.56    0.63
+kmem_cache_alloc_noprof                   0.55    0.61
+kmem_cache_alloc_node_noprof              0.55    0.61
+_raw_spin_unlock                          0.55    0.62
+lock_sock_nested                          0.53    0.60
+
+== self time, fl41 - fl40, us a WRITE (frames in either top list)
+svc_tcp_rx_credit_admit_to                      2.15   0.00  -2.15
+__tcp_read_sock                                 0.46   0.00  -0.46
+queued_spin_lock_slowpath                       0.66   0.51  -0.15
+svc_tcp_rx_append                               2.88   2.73  -0.15
+nfsd_cache_insert                               0.82   0.69  -0.13
+xdr_stream_subsegment                           0.94   0.83  -0.11
+svc_tcp_rx_refs_valid                           0.72   0.64  -0.08
+dma_direct_map_phys                             0.99   0.92  -0.07
+__dev_xmit_skb                                  1.07   1.02  -0.05
+svc_tcp_rx_region_span                          0.82   0.77  -0.05
+_raw_spin_lock                                  2.57   2.54  -0.03
+kmem_cache_alloc_node_noprof                    0.64   0.61  -0.03
+napi_pp_put_page                                2.42   2.39  -0.03
+svc_tcp_recv_skb                                0.57   0.54  -0.03
+svc_tcp_rx_skb_region_pages_after.part.0        0.66   0.63  -0.03
+xdr_buf_to_bvec                                 0.57   0.54  -0.03
+arch_counter_get_cntpct                         0.58   0.56  -0.02
+dma_map_phys                                    0.72   0.70  -0.02
+percpu_counter_add_batch                        0.87   0.85  -0.02
+__memcg_slab_free_hook                          0.58   0.57  -0.01
+__tcp_transmit_skb                              0.98   0.97  -0.01
+tcp_recv_skb                                    0.71   0.70  -0.01
+__sk_mem_reduce_allocated                       0.51   0.51  +0.00
+blk_mq_submit_bio                               0.55   0.55  +0.00
+kfree                                           0.50   0.50  +0.00
+llist_del_first_this                            0.49   0.49  +0.00
+page_pool_recycle_ring_bulk                     0.53   0.53  +0.00
+svc_tcp_rx_walk_skb                             0.92   0.92  +0.00
+xfs_iext_lookup_extent                          0.55   0.55  +0.00
+svc_thread_should_sleep                         0.75   0.76  +0.01
+svc_xprt_received                               0.57   0.58  +0.01
+bio_split_io_at                                 0.86   0.88  +0.02
+kmem_cache_free                                 0.46   0.48  +0.02
+sunrpc_cache_find_rcu                           0.53   0.55  +0.02
+_raw_spin_unlock                                0.59   0.62  +0.03
+blk_rq_dma_map_iter_next                        0.60   0.63  +0.03
+kmem_cache_alloc_noprof                         0.58   0.61  +0.03
+lock_sock_nested                                0.57   0.60  +0.03
+nfs_dio_split                                   0.47   0.50  +0.03
+xeu_tx.isra.0                                   0.46   0.49  +0.03
+__ip_queue_xmit                                 0.47   0.51  +0.04
+__local_bh_enable_ip                            0.51   0.55  +0.04
+_raw_spin_lock_bh                               1.10   1.14  +0.04
+finish_task_switch.isra.0                       3.69   3.73  +0.04
+svc_recv                                        0.92   0.96  +0.04
+xdr_buf_validate_page_mode                      1.16   1.20  +0.04
+_raw_spin_unlock_irq                            0.99   1.05  +0.06
+svc_tcp_recvfrom                                0.77   0.83  +0.06
+svc_tcp_restore_pages                           0.98   1.04  +0.06
+svc_tcp_rx_release_refs                         0.92   0.98  +0.06
+__pi_memcpy_generic                             0.67   0.74  +0.07
+xas_load                                        0.63   0.70  +0.07
+svc_tcp_rx_validate_mixed                       0.47   0.56  +0.09
+blk_map_iter_next                               1.58   1.69  +0.11
+page_pool_put_netmem_bulk                       5.72   5.83  +0.11
+svc_tcp_rx_prefetch_pages                       1.85   1.97  +0.12
+_raw_spin_unlock_irqrestore                     4.90   5.06  +0.16
+svc_tcp_rx_borrow_segment                       3.26   3.43  +0.17
+ip_finish_output2                               0.00   0.46  +0.46
+svc_pool_wake_idle_thread                       0.00   0.50  +0.50
