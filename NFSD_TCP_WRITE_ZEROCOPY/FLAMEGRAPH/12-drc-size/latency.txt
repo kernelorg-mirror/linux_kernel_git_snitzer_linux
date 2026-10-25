@@ -1,0 +1,8 @@
+L12-B1 untraced: write 8.17 GB/s, 7788 IOPS; completion ms: p50 0.436, p90 0.506, p99 0.569, p99.9 0.627, mean 0.443, max 0.824
+L12-B1 traced:   write 8.58 GB/s, 8185 IOPS; completion ms: p50 0.412, p90 0.465, p99 0.553, p99.9 0.643, mean 0.423, max 0.772
+L12-A1 untraced: write 7.76 GB/s, 7400 IOPS; completion ms: p50 0.465, p90 0.518, p99 0.569, p99.9 0.635, mean 0.456, max 0.783
+L12-A1 traced:   write 7.53 GB/s, 7181 IOPS; completion ms: p50 0.473, p90 0.545, p99 0.610, p99.9 0.684, mean 0.476, max 2.287
+L12-B2 untraced: write 8.27 GB/s, 7889 IOPS; completion ms: p50 0.424, p90 0.498, p99 0.561, p99.9 0.618, mean 0.434, max 0.854
+L12-B2 traced:   write 8.17 GB/s, 7790 IOPS; completion ms: p50 0.440, p90 0.494, p99 0.569, p99.9 0.643, mean 0.449, max 0.756
+L12-A2 untraced: write 8.40 GB/s, 8012 IOPS; completion ms: p50 0.420, p90 0.498, p99 0.586, p99.9 0.668, mean 0.434, max 0.908
+L12-A2 traced:   write 7.35 GB/s, 7006 IOPS; completion ms: p50 0.494, p90 0.545, p99 0.610, p99.9 0.684, mean 0.486, max 0.793

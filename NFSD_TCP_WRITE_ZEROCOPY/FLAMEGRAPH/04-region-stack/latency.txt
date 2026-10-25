@@ -1,0 +1,8 @@
+L4-B1 untraced: write 7.79 GB/s, 7429 IOPS; completion ms: p50 0.461, p90 0.522, p99 0.578, p99.9 0.659, mean 0.456, max 10.542
+L4-B1 traced:   write 7.37 GB/s, 7030 IOPS; completion ms: p50 0.489, p90 0.545, p99 0.618, p99.9 0.709, mean 0.484, max 0.913
+L4-A1 untraced: write 7.62 GB/s, 7272 IOPS; completion ms: p50 0.465, p90 0.528, p99 0.610, p99.9 0.692, mean 0.464, max 0.808
+L4-A1 traced:   write 8.44 GB/s, 8048 IOPS; completion ms: p50 0.420, p90 0.477, p99 0.569, p99.9 0.659, mean 0.432, max 0.774
+L4-B2 untraced: write 7.24 GB/s, 6903 IOPS; completion ms: p50 0.489, p90 0.561, p99 0.668, p99.9 0.774, mean 0.488, max 0.959
+L4-B2 traced:   write 8.47 GB/s, 8081 IOPS; completion ms: p50 0.420, p90 0.469, p99 0.545, p99.9 0.627, mean 0.428, max 0.771
+L4-A2 untraced: write 8.32 GB/s, 7930 IOPS; completion ms: p50 0.420, p90 0.494, p99 0.553, p99.9 0.610, mean 0.431, max 0.811
+L4-A2 traced:   write 7.56 GB/s, 7208 IOPS; completion ms: p50 0.481, p90 0.537, p99 0.594, p99.9 0.676, mean 0.470, max 0.860
