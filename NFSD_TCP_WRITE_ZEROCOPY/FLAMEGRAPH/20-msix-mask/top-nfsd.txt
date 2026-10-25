@@ -1,0 +1,51 @@
+== fl20-loan64 (A, N)
+busy: 113.7 us a WRITE
+
+self                                      %     us/WRITE
+page_pool_put_netmem_bulk                 4.98    5.67
+_raw_spin_unlock_irqrestore               4.58    5.20
+finish_task_switch.isra.0                 3.31    3.76
+svc_tcp_rx_borrow_segment                 2.81    3.19
+svc_tcp_rx_append                         2.42    2.75
+_raw_spin_lock                            2.35    2.67
+napi_pp_put_page                          2.14    2.43
+svc_tcp_rx_credit_admit_to                1.85    2.10
+svc_tcp_rx_prefetch_pages                 1.78    2.02
+blk_map_iter_next                         1.45    1.64
+xdr_buf_validate_page_mode                1.06    1.20
+__dev_xmit_skb                            0.99    1.12
+_raw_spin_lock_bh                         0.95    1.07
+svc_tcp_restore_pages                     0.91    1.04
+_raw_spin_unlock_irq                      0.90    1.02
+svc_tcp_rx_walk_skb                       0.83    0.94
+svc_recv                                  0.83    0.94
+dma_direct_map_phys                       0.83    0.94
+__tcp_transmit_skb                        0.83    0.94
+xdr_stream_subsegment                     0.80    0.91
+svc_tcp_rx_release_refs                   0.80    0.91
+
+== fl40-loan64 (B, Y)
+busy: 112.4 us a WRITE
+
+self                                      %     us/WRITE
+page_pool_put_netmem_bulk                 5.09    5.72
+_raw_spin_unlock_irqrestore               4.36    4.90
+finish_task_switch.isra.0                 3.28    3.69
+svc_tcp_rx_borrow_segment                 2.90    3.26
+svc_tcp_rx_append                         2.56    2.88
+_raw_spin_lock                            2.29    2.57
+napi_pp_put_page                          2.15    2.42
+svc_tcp_rx_credit_admit_to                1.91    2.15
+svc_tcp_rx_prefetch_pages                 1.64    1.85
+blk_map_iter_next                         1.41    1.58
+xdr_buf_validate_page_mode                1.03    1.16
+_raw_spin_lock_bh                         0.98    1.10
+__dev_xmit_skb                            0.95    1.07
+dma_direct_map_phys                       0.88    0.99
+_raw_spin_unlock_irq                      0.88    0.99
+__tcp_transmit_skb                        0.88    0.98
+svc_tcp_restore_pages                     0.87    0.98
+xdr_stream_subsegment                     0.83    0.94
+svc_tcp_rx_release_refs                   0.82    0.92
+svc_recv                                  0.82    0.92
+svc_tcp_rx_walk_skb                       0.81    0.92

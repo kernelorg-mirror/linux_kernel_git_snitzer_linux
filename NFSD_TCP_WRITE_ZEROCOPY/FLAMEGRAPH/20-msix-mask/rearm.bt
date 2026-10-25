@@ -1,0 +1,11 @@
+// rearm.bt IRQ0 IRQ1 IRQ2 IRQ3: what re-arming port a's Rx interrupts costs.
+// Counts, for the four Rx vectors only, each hard interrupt xeu takes, each
+// mask and unmask the ITS does, each resend of an interrupt that came while
+// the line was disabled, and how long enable_irq() takes.
+kprobe:its_mask_irq   /((struct irq_data *)arg0)->irq == $1 || ((struct irq_data *)arg0)->irq == $2 || ((struct irq_data *)arg0)->irq == $3 || ((struct irq_data *)arg0)->irq == $4/ { @its_mask = count(); }
+kprobe:its_unmask_irq /((struct irq_data *)arg0)->irq == $1 || ((struct irq_data *)arg0)->irq == $2 || ((struct irq_data *)arg0)->irq == $3 || ((struct irq_data *)arg0)->irq == $4/ { @its_unmask = count(); }
+kprobe:its_irq_retrigger /((struct irq_data *)arg0)->irq == $1 || ((struct irq_data *)arg0)->irq == $2 || ((struct irq_data *)arg0)->irq == $3 || ((struct irq_data *)arg0)->irq == $4/ { @its_retrigger = count(); }
+kprobe:handle_fasteoi_irq /((struct irq_desc *)arg0)->irq_data.irq == $1 || ((struct irq_desc *)arg0)->irq_data.irq == $2 || ((struct irq_desc *)arg0)->irq_data.irq == $3 || ((struct irq_desc *)arg0)->irq_data.irq == $4/ { @hardirq = count(); }
+kprobe:xeu_napi_intr { @xeu_handler = count(); }
+kprobe:enable_irq /arg0 == $1 || arg0 == $2 || arg0 == $3 || arg0 == $4/ { @enable = count(); @t[cpu] = nsecs; }
+kretprobe:enable_irq /@t[cpu]/ { @enable_ns = hist(nsecs - @t[cpu]); @enable_ns_sum = sum(nsecs - @t[cpu]); delete(@t[cpu]); }

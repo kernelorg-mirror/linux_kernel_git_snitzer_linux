@@ -20,7 +20,7 @@ case $REL in
 esac
 KV=${REL%+*}				# rpm's kversion has no +64k / +16k
 T=${T:-/var/tmp/zc-run-logs/kmod-xsight-${PG:-4k}-build}
-which rpmbuild > /dev/null || { echo "no rpmbuild: dnf install rpm-build"; exit 1; }
+command -v rpmbuild > /dev/null || { echo "no rpmbuild: dnf install rpm-build"; exit 1; }
 rpm -q kernel${PG:+-$PG}-devel-$KV kernel${PG:+-$PG}-modules-core-$KV || { echo "the running kernel's -devel and -modules-core must be installed"; exit 1; }
 git -C $RPMTREE log --oneline -1 -- xsight
 grep -E '^(Release|Patch)' $RPMTREE/xsight/xsight.spec | head -8
