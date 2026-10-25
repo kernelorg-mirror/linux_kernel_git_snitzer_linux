@@ -1,0 +1,15 @@
+svc_tcp_rx_append, the load of pool->rx_region and the branch on it (the branch takes the load's skid)
+
+fl17-loan64 (build 494, round 17's sunrpc; rx_region at offset 864), self 2.84 us a WRITE:
+    0.44 :   36a80:  ldr     x0, [x0, #16]
+         : 347   return page_pool_page_is_pp(page) &&
+    3.68 :   36a84:  ldr     x0, [x0, #864]
+    7.36 :   36a88:  cbz     x0, 369e4 <svc_tcp_rx_append+0x27c>
+         : 350   if (page_pool && page_pool_page_in_rx_region(page) &&
+
+fl15-loan64 (build 499; rx_region at offset 968), self 2.72 us a WRITE:
+    0.95 :   ffff9fe04a86aa7c:       and     x0, x24, #0xfffffffffffffffe
+    0.31 :   ffff9fe04a86aa80:       ldr     x0, [x0, #16]
+    5.10 :   ffff9fe04a86aa84:       ldr     x0, [x0, #968]
+    3.53 :   ffff9fe04a86aa88:       cbz     x0, 0xffff9fe04a86a9e4
+    1.47 :   ffff9fe04a86aa8c:       ldr     x0, [x19, #136]

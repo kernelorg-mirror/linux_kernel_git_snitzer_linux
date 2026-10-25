@@ -1,0 +1,16 @@
+== r12: drc_max_entries 0 (262144), 32768, 4096; nfsd restarted before each
+r12-1-loan64-drc0 ring 59.3 nfsd 112.7 us/W| drc numentries:262145,cachehits:0,cachemisses:26003692,longestchainlen:6,
+r12-2-loan64-drc32768 ring 60.1 nfsd 113.6 us/W| drc numentries:32769,cachehits:0,cachemisses:28152388,longestchainlen:7,
+r12-3-loan64-drc4096 ring 60.3 nfsd 108.8 us/W| drc numentries:4097,cachehits:0,cachemisses:30302340,longestchainlen:8,
+r12-4-loan64-drc0 ring 60.6 nfsd 110.5 us/W| drc numentries:262145,cachehits:0,cachemisses:32452500,longestchainlen:8,
+r12-5-loan64-drc32768 ring 59.3 nfsd 109.3 us/W| drc numentries:32769,cachehits:0,cachemisses:34593252,longestchainlen:8,
+r12-6-loan64-drc4096 ring 61.4 nfsd 107.4 us/W| drc numentries:4097,cachehits:0,cachemisses:36740100,longestchainlen:8,
+
+profile fl15-loan64 (drc 262144):
+WRITEs a second in the profile: 38616
+rings (CPUs 0,2,4,6): busy 59.21 us a WRITE
+nfsd (CPUs 8-55): busy 111.82 us a WRITE
+profile fl12-loan64 (drc 4096):
+WRITEs a second in the profile: 38480
+rings (CPUs 0,2,4,6): busy 63.33 us a WRITE
+nfsd (CPUs 8-55): busy 110.15 us a WRITE
