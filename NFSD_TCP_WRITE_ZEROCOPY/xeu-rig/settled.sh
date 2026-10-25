@@ -194,7 +194,10 @@ declare -A GONE_LATER=([svc_tcp_rx_copy_unlocked]=1 [svc_tcp_rx_lowat]=1
 # exchange with threads"); at rest it is its default, 64 MiB.
 declare -A NEW_LATER=([svc_tcp_spare_bytes_max]=1)
 # The xeu module's, set by /etc/modprobe.d/xeu.conf at load.
-declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128)
+# irq_msix_mask (kmod-xsight 2.0.1-9, FLAMEGRAPH round 20): a ring masks
+# its MSI-X entry in the card while it polls instead of going through the
+# irq core; read when the port opens.  N until round 20's A/B decides.
+declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=N)
 declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
 # The server's network sysctls, as every figure here was measured with them.
 # netdev_max_backlog and netdev_budget come from Hammerspace's tuned profile
@@ -282,6 +285,7 @@ conntrack_hooks() { nft list hooks 2> /dev/null | grep -c conntrack; }
 containers() { command -v podman > /dev/null && podman ps -q 2> /dev/null | wc -l || echo 0; }
 SUNRPC=/sys/module/sunrpc/parameters
 DRC=/sys/module/nfsd/parameters/drc_max_entries
+XM=/sys/module/xeu/parameters/irq_msix_mask
 
 pci_of() { basename "$(readlink -f $1)"; }	# pci_of <sysfs device link>
 mrrs() {	# mrrs <pci address>: its PCIe MaxReadReq in bytes, from DevCtl bits 14:12
@@ -565,9 +569,11 @@ place() {	# place [a] [b]: the CPU layout of nfsd and of the ports named (both)
 
 drc_live() { awk -F: '/^max entries/ {print $2 + 0}' /proc/fs/nfsd/reply_cache_stats 2>/dev/null; }
 
-# The two sizes read only when nfsd starts and when a pool is made: put in
-# place by restarting nfs-server and opening the ports again, so only with
-# nothing connected.  Before place, which both undo.
+# The two sizes read only when nfsd starts and when a pool is made, and
+# xeu's irq_msix_mask, read when a port opens: put in place by restarting
+# nfs-server and opening the ports again, so only with nothing connected.
+# Before place, which both undo.  A value written to irq_msix_mask by hand
+# without an open is not what the rings run; the audit cannot tell.
 sizes() {
 	local drc=${EXP_DRC_MAX_ENTRIES:-$DRC_MAX_ENTRIES} stk=${EXP_RX_REGION_STACK:-$RX_REGION_STACK} p
 	local idle; [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ] && idle=1
@@ -580,16 +586,20 @@ sizes() {
 			echo "NFS connections are up: nfsd's reply cache is left as it is"
 		fi
 	fi
-	if [ -e $PP/rx_region_stack ] && [ "$(cat $PP/rx_region_stack)" != "$stk" ]; then
+	local msx=${EXP_XEU_irq_msix_mask:-${XEU[irq_msix_mask]}} why=
+	[ -e $PP/rx_region_stack ] && [ "$(cat $PP/rx_region_stack)" != "$stk" ] && why="rx_region_stack $stk"
+	[ -e $XM ] && [ "$(cat $XM)" != "$msx" ] && why="${why:+$why, }xeu irq_msix_mask $msx"
+	if [ -n "$why" ]; then
 		if [ -n "${idle:-}" ]; then
-			echo "$stk" > $PP/rx_region_stack
+			[ -e $PP/rx_region_stack ] && echo "$stk" > $PP/rx_region_stack
+			[ -e $XM ] && echo "$msx" > $XM
 			for p in $PORTS; do
-				echo "rx_region_stack $stk: opening ${PDEV[$p]} again"
+				echo "$why: opening ${PDEV[$p]} again"
 				ip link set ${PDEV[$p]} down && sleep 2 && ip link set ${PDEV[$p]} up || return 1
 			done
 			sleep 10
 		else
-			echo "NFS connections are up: rx_region_stack is left as it is"
+			echo "NFS connections are up: $why left as it is"
 		fi
 	fi
 }
