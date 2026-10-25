@@ -1,0 +1,29 @@
+== r4: A rx_region_stack 0 (the ring's 256), B 1024; each run after the port opened again
+r4-1-loan64-A ring 61.5 nfsd 111.0 us/W | pp/W: recycle_cached 0.0 recycle_ring_full 0.7 alloc_slow 0.3
+r4-2-loan64-B ring 56.6 nfsd 108.0 us/W | pp/W: recycle_cached -0.0 recycle_ring_full 0.0 alloc_slow 0.0
+r4-3-loan64-A ring 58.8 nfsd 110.5 us/W | pp/W: recycle_cached 0.0 recycle_ring_full 0.7 alloc_slow 0.3
+r4-4-loan64-B ring 56.2 nfsd 105.7 us/W | pp/W: recycle_cached -0.0 recycle_ring_full 0.0 alloc_slow 0.0
+r4-5-loan64-A ring 58.8 nfsd 113.1 us/W | pp/W: recycle_cached 0.0 recycle_ring_full 0.7 alloc_slow 0.3
+r4-6-loan64-B ring 56.6 nfsd 108.8 us/W | pp/W: recycle_cached 0.0 recycle_ring_full 0.0 alloc_slow 0.0
+r4-1-loan64-A region peak in use 6497 of 32768 pages
+r4-2-loan64-B region peak in use 7327 of 32768 pages
+r4-3-loan64-A region peak in use 6454 of 32768 pages
+r4-4-loan64-B region peak in use 7464 of 32768 pages
+r4-5-loan64-A region peak in use 6425 of 32768 pages
+r4-6-loan64-B region peak in use 7253 of 32768 pages
+
+== stack 0 with no open just before (round 12's runs, the reply cache's size varying)
+r12-2-loan64-drc32768 ring 60.1 nfsd 113.6 us/W | pp/W: recycle_cached -0.0 recycle_ring_full 0.0 alloc_slow 0.0
+r12-3-loan64-drc4096 ring 60.3 nfsd 108.8 us/W | pp/W: recycle_cached -0.0 recycle_ring_full 0.0 alloc_slow 0.0
+r12-4-loan64-drc0 ring 60.6 nfsd 110.5 us/W | pp/W: recycle_cached -0.0 recycle_ring_full 0.0 alloc_slow 0.0
+r12-5-loan64-drc32768 ring 59.3 nfsd 109.3 us/W | pp/W: recycle_cached -0.0 recycle_ring_full -0.0 alloc_slow -0.0
+r12-6-loan64-drc4096 ring 61.4 nfsd 107.4 us/W | pp/W: recycle_cached -0.0 recycle_ring_full 0.0 alloc_slow 0.0
+
+profile fl15-loan64 (stack 0):
+WRITEs a second in the profile: 38616
+rings (CPUs 0,2,4,6): busy 59.21 us a WRITE
+nfsd (CPUs 8-55): busy 111.82 us a WRITE
+profile fl4-loan64 (stack 1024):
+WRITEs a second in the profile: 38602
+rings (CPUs 0,2,4,6): busy 58.80 us a WRITE
+nfsd (CPUs 8-55): busy 110.95 us a WRITE
