@@ -53,7 +53,8 @@ fl12-loan64 at 4096, against fl15-loan64 at 262144 (round 15's profile, the same
 
 - No difference: each WRITE misses the cache once at either size.
 
-## For Mike
+## Decision: kept at 4096 (Mike, 25 October)
 
-- Keeping it is `nfsd.drc_max_entries` 4096 in `settled.sh`: 3.4 µs a WRITE off nfsd, with nothing else moved.
+- `settled.sh` holds `nfsd.drc_max_entries` at 4096, and `apply` restarts nfs-server when the live size differs: 3.4 µs a WRITE off nfsd, with nothing else moved and no region pages.
+- Run with round 04 in [round 19](../19-stack-and-drc/README.md), nfsd saved 3.95 for both together, so the two overlap on nfsd.
 - The cache never hits on this rig: the client retransmits nothing. Whether 4096 entries covers what flexfiles data servers retransmit is not tested here.

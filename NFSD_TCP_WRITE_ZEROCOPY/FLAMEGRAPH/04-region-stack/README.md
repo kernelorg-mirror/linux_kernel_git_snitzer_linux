@@ -59,7 +59,8 @@ fl4-loan64 at stack 1024, against fl15-loan64 at stack 0 (round 15's profile, th
 
 - No difference: B averages p50 0.475, A 0.443, and each side's runs differ by as much. B1 had one completion of 10.5 ms.
 
-## For Mike
+## Decision: not kept (Mike, 25 October)
 
-- Keeping it is `rx_region_stack` 1024 in `settled.sh`: 3.5 µs a WRITE off the rings and 4.0 off nfsd, for 14 MiB more of the region in use at peak.
-- A depth between 256 and 1024 may keep the saving for fewer pages. Not run: since the overflow is not the cause, how the saving scales with depth is not known.
+- Run with round 12 in [round 19](../19-stack-and-drc/README.md), the deeper stack again saved the rings about 3 µs a WRITE, and again held about 940 more of the region's pages at peak.
+- Mike: "we cannot afford to increase the region ... we need to avoid blowing out the L3 cache". `settled.sh` holds `rx_region_stack` at 0, the ring's 256.
+- A depth between 256 and 1024 would hold fewer pages but not none, so it falls under the same rule. Since the overflow is not the cause, where the saving comes from is still to be found; that could give it without more pages.

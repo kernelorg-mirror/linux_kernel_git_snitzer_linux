@@ -344,6 +344,19 @@ buffer, pages returned last in, first out, all inside the region.
 The account is "The 4%" in
 `NFSD_TCP_WRITE_ZEROCOPY/TRACING-NFSD-AND-XEU-MEMCPY-TIME.md`.
 
+**Do not grow the region's footprint (Mike, 2026-10-25: "we cannot
+afford to increase the region ... we need to avoid blowing out the L3
+cache").** A change that saves CPU by holding more of the receive
+region's pages in use is not kept, however much it saves: the pages
+the ring and nfsd touch have to stay in the L3. Every change that
+holds pages longer, returns them later or keeps more of them reports
+the region's peak pages in use beside its saving, and one that raises
+it is turned down or reworked to not. FLAMEGRAPH round 04 is the case:
+`page_pool.rx_region_stack` 1024 saved the rings about 3 us a loaned
+WRITE, for about 940 more pages (15 MiB) at peak, and was not kept;
+`settled.sh` holds it at 0. The account is
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/19-stack-and-drc/README.md`.
+
 **The primary focus from the evening of 2026-10-08 (Mike): NFS writes
 from the remote client as fast as they will go, near line rate.** On
 tardis1 start at the first section of

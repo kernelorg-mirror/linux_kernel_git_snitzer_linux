@@ -19,24 +19,25 @@ Each round is a directory here, numbered in order:
 | [01-loan64-baseline](01-loan64-baseline/README.md) | one-port loan64, with the one-wake fix: rings 92.0 us a WRITE, nfsd 184.1 | page_pool's put and get of the region's pages (13.8 us); conntrack from podman's unused netavark table (9.0 on the rings, 9.4 on nfsd) | conntrack: the leftover table deleted and port 2049 untracked, in settled.sh | kept: rings 92.6 to 78.7 us a loaned WRITE (-15%), copy 67.9 to 63.4 (-7%) |
 | [02-refs-valid](02-refs-valid/README.md) | the same, with round 01 | `svc_tcp_rx_refs_valid` walked the record on each of 22 hand-offs a WRITE (7.05 us on nfsd) | `49f0fc4564ec`: the exchange checks only counts | kept on the profile: refs_valid 7.05 to 0.90, the exchange 7.52 to 3.10 us on nfsd; the A/B (mpstat) cannot resolve it |
 | [03-skb-defer](03-skb-defer/README.md) | the same, with round 02 | deferred skb frees on the ring (8.85 us), `napi_pp_put_page` a remote line | `net.core.skb_defer_max` 0, in settled.sh | kept: rings 80.0 to 68.0 us a loaned WRITE (-15%), nfsd 167.5 to 159.8 |
-| [04-region-stack](04-region-stack/README.md) | build 499, one-port loan64 | the region pools' 256-page stack overflows: 7% of pages back to the region, about 5 us a WRITE | `dc23eac70f34`: `page_pool.rx_region_stack` 1024 | **saves**: rings 60.0 to 56.5 us a WRITE (-6%), nfsd 111.5 to 107.5; region peak +890 pages (14 MiB); latency the same. Not through the overflow, which happens only in the first run after the port opens and costs nothing measured. In settled.sh if Mike keeps it |
+| [04-region-stack](04-region-stack/README.md) | build 499, one-port loan64 | the region pools' 256-page stack overflows: 7% of pages back to the region, about 5 us a WRITE | `dc23eac70f34`: `page_pool.rx_region_stack` 1024 | **not kept** (Mike, round 19): rings 60.0 to 56.5 us a WRITE (-6%), nfsd 111.5 to 107.5, but the region's peak +890 pages (14 MiB), against the L3. Not through the overflow, which happens only in the first run after the port opens. settled.sh holds 0 |
 | [05-data-ready](05-data-ready/README.md) | the same, with round 03 | `svc_data_ready`: the `xpt_flags` line, two clock reads, a store into another thread's `svc_rqst` | `eff5f16d4f30`, `0f0ed4159a12` | kept: rings 68.4 to 65.0 us a loaned WRITE (-5%), nfsd 159.7 to 156.4 |
 | [06-loan-lowat](06-loan-lowat/README.md) | the same, with round 05 | a WRITE taken up 12 times: wakes, hand-offs, ACKs (about 50 us on nfsd) | `c8cf27841351`: a low-water mark while a loaned record is incomplete | not kept, reverted (`b8c9ee7c6d2a`): nfsd 154.5 to 121.0 us a WRITE, but TCP ACKs every skb below the mark, so the rings 67.0 to 85.0 |
 | [10-wait-rest](10-wait-rest/README.md) | round 05's state | the same churn (06b) | `c0995ea94798`: `svc_data_ready` holds `XPT_DATA` back for a short loaned record, `sk_rcvlowat` stays 1; `dd4fef2000a0` (10b): at most half the open window | 10 not kept: the rate fell to 36-38 GB/s and p90 to 4.3 ms, since what was wanted outgrew the window. 10b kept: nfsd 153.8 to 127.5 us a WRITE (-17%), rings 63.1 to 61.2, half the segments out, p90 0.537 against 0.569-0.594 |
 | [11-socket-hold](11-socket-hold/README.md) | round 10b's profile | TCP's receive in the ring's softirq (`tcp_v4_do_rcv`, 11.05 us a WRITE) | hold the socket across a loaned record's arrival, so the backlog is processed on nfsd | not pursued, no run: it moves CPU without saving any, the rings are not the limit at 40.4 GB/s, a thread owning the socket is not woken by the backlog, and TCP removed its prequeue, the same idea, in 2017 |
-| [12-drc-size](12-drc-size/README.md) | build 499, one-port loan64 | the v3 duplicate reply cache: 63 MB, full, 0 hits, about 4.5 us a WRITE of cold misses | `635e44bf37bf`: `nfsd.drc_max_entries`, an nfsd restart for each size; v3 stays, for flexfiles data servers | **saves at 4096**: nfsd 111.5 to 108.1 us a WRITE (-3%); 32768 saves nothing; rings, rate and latency the same; two runs a size. In settled.sh if Mike keeps it |
+| [12-drc-size](12-drc-size/README.md) | build 499, one-port loan64 | the v3 duplicate reply cache: 63 MB, full, 0 hits, about 4.5 us a WRITE of cold misses | `635e44bf37bf`: `nfsd.drc_max_entries`, an nfsd restart for each size; v3 stays, for flexfiles data servers | **kept at 4096** (settled.sh, after round 19): nfsd 111.5 to 108.1 us a WRITE (-3%); 32768 saves nothing; rings, rate and latency the same |
 | [13-cred-cache](13-cred-cache/README.md) | round 10b's profile | `fh_verify` on every WRITE and COMMIT: handle decode, a new cred, two export lookups (5.7 us) | `916c11a2d1fc`: each nfsd thread installs its last cred again for the same user, and the decode's raised copy with it | **kept**: nfsd 126.5 to 118.3 us a WRITE (-6.5%); `prepare_creds` and `rcu_core` gone from the profile; latency the same |
 | [14-page-prefetch](14-page-prefetch/README.md) | round 13's profile | each borrowed page's `struct page` missed on nfsd up to three times: `svc_tcp_rx_region_span` (2.7 us a WRITE on its `pp_magic` load), `svc_tcp_rx_borrow_segment` (3.4 of its 4.7 us self on `page_pool_page_is_pp()`), `napi_pp_put_page` (2.7) | `02a445664e23`: `prefetchw()` the `struct page` of each page a loaned skb's record bytes lie in, before they are examined; reusing the page-pool answer and one ref a page a skb not done | **kept**: nfsd 117.2 to 114.9 us a WRITE (-2%); `region_span` 3.2 to 1.0, the borrow 4.6 to 3.2, the walk 1.9; latency the same |
 | [15-region-line](15-region-line/README.md) | build 499, one-port loan64 (fl15) | `svc_tcp_rx_append`'s region check reads `pool->rx_region` (offset 864) on the line with `rx_stack` and `rx_stack_n`, which the ring writes for every region page it takes or returns: about 0.6 us a WRITE of false sharing on nfsd | `085734569d9d`: `rx_region` moved to the struct's last line, written only at registration | in the kernel, no switch: the load 0.31 to 0.23 us a WRITE (fl17 against fl15), about 0.1, not 0.6 |
 | [16-release-prefetch](16-release-prefetch/README.md) | round 14's profile | `page_pool_put_netmem_bulk` 5.5 us a WRITE, 85% one load of each page's `compound_head` behind the pool's ordered atomics, before the reply | `e5e84a05b686`: `prefetchw()` each borrowed page's `struct page` before the references are dropped | not kept: the release 1.6 us cheaper in the profile, nfsd 114.2 against 113.8 us a WRITE, inside the scatter; reverted (`a081854bc12c`). A 14.5 s stall in one B run, with the server's replies unacknowledged, cause not found |
 | [17-read-on](17-read-on/README.md) | round 14's profile, and `xeu-rig/wakesrc.bt` | the wake path: 7.5 wake calls and 3.5 wakes a WRITE, about 1 us each to the waker; 4.4 of 8.7 passes through `svc_recv` find nothing; one partial hand-back in seven finds `XPT_DATA` set again | `5fde85ef4076`: a thread whose read left a loaned record incomplete reads on if `XPT_DATA` is set again when the socket lock is released | **kept**: 6.0 to 5.4 enqueues a WRITE, 4.56 to 4.34 wakes; nfsd 115.5 to 113.2 us a WRITE (-2%); latency the same |
 | [18-looking-count](18-looking-count/README.md) | round 17's wake trace | wakes of idle threads for work a running thread takes anyway: 0.55 empty passes a WRITE that slept and were woken | `331bd9a8d93a` (18): no wake while a thread looking for work is counted; `05bb553779e2` (18b): counted only until it dequeues; `0fae825c58f7` (18c): no wake only while two are counted | not kept, all three reverted: 18 nfsd -6.9 us a WRITE at saturation but p50 at iodepth 1 0.465-0.498 against 0.42-0.44; 18b no gain; 18c nfsd -3.1 and rings -2.2, but 2 of 4 clean latency runs slow (+11 us mean) |
+| [19-stack-and-drc](19-stack-and-drc/README.md) | build 499, rounds 04 and 12 together | | both at once, A both 0, B 1024 and 4096, 4 runs a side | rings -3.15 ± 0.75 us a WRITE, nfsd -3.95 ± 1.10 (not the -7.4 of the two apart), region +940 pages; latency the same. Mike keeps the reply cache, not the stack: "we cannot afford to increase the region" |
 | [07-srv-qdisc](07-srv-qdisc/README.md) | round 05's state | half of each ACK and reply is `__dev_xmit_skb` | the server's qdisc `pfifo_fast` | not kept: no change (rings 66.9 against 66.1, latency inside L0's scatter); the cost is the transmit path's lock with 48 CPUs on 4 queues, not the qdisc |
 | [08-notrack-needed](08-notrack-needed/README.md) | round 05's state | the `zc_notrack` chains run with no conntrack to skip | `zc_notrack` only while a table registers conntrack, in settled.sh | kept: rings 67.6 to 65.1 us a loaned WRITE (-3.7%), nfsd 160.6 to 154.2; latency unchanged |
 | [09-big-tcp](09-big-tcp/README.md) | round 08's state | per-skb costs at about 20 GRO skbs a WRITE | BIG TCP: the server's `gro_max_size` and `gro_ipv4_max_size` 256 KB | not kept: no change (rings 63.3 against 63.4, latency the same); aggregates end at the client's 64 KB TSO bursts, so it needs the client's `gso_ipv4_max_size` too (Mike); the wake itself measured, 98.5% under 2 us |
 | [L0-latency](L0-latency/README.md) | round 05's state, 4 in flight | p50 0.46-0.52 ms; about 0.2 ms is the drive, 0.02 the reply; the apparent wake tail is the tracepoint's stale stamp | `xeu-rig/lat.sh` | the baseline; runs differ by about 10%, so several a side |
 
-## Where the kept rounds stand (2026-10-24)
+## Where the kept rounds stand (2026-10-25)
 
 What a loaned WRITE costs after each kept round, from that round's B
 runs (the profile where the A/B cannot resolve it):
@@ -53,17 +54,19 @@ runs (the profile where the A/B cannot resolve it):
 | 13 | | 118.3 | `916c11a2d1fc`: each nfsd thread reuses its last credentials |
 | 14 | about 59 | 114.9 | `02a445664e23`: `prefetchw()` of the loaned pages' `struct page` |
 | 17 | 58.2 | 113.2 | `5fde85ef4076`: a thread reads on when a loaned record's rest arrives during its read |
+| 12 | | 111.5 to 108.1 on build 499 | `drc_max_entries` 4096: a reply cache small enough to stay hot (settled.sh) |
 
 - **Since round 01:** the rings 92.6 to about 58 us a WRITE (-37%),
-  nfsd 184 to about 113 (-39%).
+  nfsd 184 to about 113 (-39%), and to about 108 on build 499 with the
+  smaller reply cache (-41%).
 - The rate stayed at the drives' 40.5 GB/s throughout. Latency at
   iodepth 1 is the same or a little better.
 - Each round's A/B had its own A, and A drifts a couple of us between
   sessions. The totals hold to about 2 us.
-- Rounds 04, 12 and 15 ran on build 499 on 25 October (`run33.sh`):
-  `rx_region_stack` 1024 saves the rings 3.5 us a WRITE and nfsd 4.0,
-  `drc_max_entries` 4096 saves nfsd 3.4, both settings for Mike to keep
-  or not; the `rx_region` move saves about 0.1.
+- Rounds 04, 12 and 15 ran on build 499 on 25 October (`run33.sh`), and
+  04 and 12 together in round 19: `drc_max_entries` 4096 is kept (nfsd
+  -3.4 us a WRITE); `rx_region_stack` 1024 is not, as it holds 940 more
+  of the region's pages (Mike); the `rx_region` move saves about 0.1.
 
 ## Why CPU a WRITE, not GB/s
 
@@ -168,6 +171,11 @@ tardis1's included: that is Mike's to ask for, each time.
 - A change that holds pages longer or returns them later also reports
   the region's peak pages in use (Mike: keep the L3 hot; a buffer's
   reuse is LIFO, so returning it later makes the ring reuse colder ones).
+- **Do not grow the region's footprint (Mike, 25 October: "we cannot
+  afford to increase the region").** A change that raises the region's
+  peak pages in use is not kept, whatever it saves; round 04's deeper
+  stack (rings -3 us a WRITE for 940 more pages) is the case. AGENTS.md
+  has the rule.
 - Name the change by what it saves a WRITE, measured, and say what it did
   not change (the rate, nfsd's sleeps).
 
