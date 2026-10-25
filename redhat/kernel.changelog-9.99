@@ -1,3 +1,25 @@
+* Sun Oct 25 2026 Mike Snitzer <snitzer@kernel.org> [6.12.114-2]
+- Update nfsd-testing-canary-dontcache to a revised v9 of the series:
+  where the file system tracks uptodate per block, as iomap does for
+  blocks smaller than the folio, a shared edge counts as written by the
+  neighbouring write once every block this write does not cover in full
+  is uptodate (folio_dontcache_edge_written()), so 4 KiB blocks on 16 or
+  64 KiB pages keep the edge too; filemap_dontcache_edge_complete()
+  waits for writeback in flight, marks a dirty edge and wakes the
+  DONTCACHE writeback kick, and drops a clean, unmapped edge at once;
+  NFSD and LOCALIO's nfs_dio_seg_hold() pass the range they cover in
+  each edge
+- Fix the earlier NFSD commit Chuck Lever had already staged in
+  cel/nfsd-testing, rather than carry a fix for it: nfsd-testing's
+  "NFSD: cut a misaligned direct-mode WRITE at folio boundaries" cuts a
+  misaligned end at the smallest folio the mapping allows, and
+  nfsd-testing-canary-dontcache no longer carries a separate fix;
+  nfsd-testing-canary-dontcache-LOCALIO is rebased on it
+- Add nfs-testing-canary-localio-reprobe, built on nfs-testing-canary:
+  an asynchronous LOCALIO probe holds a reference on its client, and
+  setting localio_enabled to Y probes again every client that does not
+  use LOCALIO, so a client that probed while it was N uses LOCALIO
+
 * Fri Oct 23 2026 Mike Snitzer <snitzer@kernel.org> [6.12.114-1]
 - Rebase all branches on kernel-6.12.114-0, every topic commit unchanged.
   The topic branches now live in kernel-6.12/, which a roll to a later
