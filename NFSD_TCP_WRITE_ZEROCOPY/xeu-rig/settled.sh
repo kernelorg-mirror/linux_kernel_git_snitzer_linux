@@ -194,10 +194,12 @@ declare -A GONE_LATER=([svc_tcp_rx_copy_unlocked]=1 [svc_tcp_rx_lowat]=1
 # exchange with threads"); at rest it is its default, 64 MiB.
 declare -A NEW_LATER=([svc_tcp_spare_bytes_max]=1)
 # The xeu module's, set by /etc/modprobe.d/xeu.conf at load.
-# irq_msix_mask (kmod-xsight 2.0.1-9, FLAMEGRAPH round 20): a ring masks
-# its MSI-X entry in the card while it polls instead of going through the
-# irq core; read when the port opens.  N until round 20's A/B decides.
-declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=N)
+# irq_msix_mask (kmod-xsight 2.0.1-9): a ring masks its MSI-X entry in the
+# card while it polls instead of going through the irq core and the ITS;
+# read when a port opens, so apply opens the ports again to put it in
+# place.  Y since FLAMEGRAPH round 20 (Mike, 25 October): the rings 10 us a
+# loaned WRITE cheaper, nothing else moved.  A kmod without it audits BAD.
+declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=Y)
 declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
 # The server's network sysctls, as every figure here was measured with them.
 # netdev_max_backlog and netdev_budget come from Hammerspace's tuned profile

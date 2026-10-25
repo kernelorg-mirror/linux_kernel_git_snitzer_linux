@@ -78,6 +78,7 @@ fl40-loan64 with Y, against fl20-loan64 with N (the same kernel and setting, kmo
 - Copy mode on two ports with Y. tardis2 runs one port; Y's saving is per poll, so it should not be lost in copy mode, but that is not measured.
 - Whether `irq_msix_mask` should become xeu's only way (and the parameter go) is for Xsight, with this round as the case.
 
-## Decision
+## Decision: kept at Y (Mike, 25 October)
 
-- Mike's to make: whether `settled.sh` holds `irq_msix_mask` at Y.
+- `settled.sh` holds `xeu.irq_msix_mask` at Y, and `apply` opens the ports again when the live value differs. After a boot or a reload of xeu the parameter is N (it is not in `/etc/modprobe.d/xeu.conf`), and the first `apply` puts it in place.
+- It needs kmod-xsight 2.0.1-9 or later; with an older xeu the audit is BAD.
