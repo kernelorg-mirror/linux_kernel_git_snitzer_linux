@@ -1,0 +1,14 @@
+== r39: A rx_region_stack 0 and drc_max_entries 0 (262144), B 1024 and 4096; nfsd restarted and the port opened again before each run
+r39-1-loan64-A ring 60.9 nfsd 112.2 us/W | enq 5.60 woken 4.44 vcsw 5.93 /W | pp/W: recycle_cached 0.00 recycle_ring_full 0.70 alloc_slow 0.29 | region peak 6250 | maxentries:262144,numentries:262145,cachehits:0,
+r39-2-loan64-B ring 59.1 nfsd 106.1 us/W | enq 5.47 woken 4.38 vcsw 5.87 /W | pp/W: recycle_cached 0.00 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 7302 | maxentries:4096,numentries:4097,cachehits:0,
+r39-3-loan64-A ring 62.0 nfsd 111.4 us/W | enq 5.46 woken 4.36 vcsw 5.85 /W | pp/W: recycle_cached 0.00 recycle_ring_full 0.70 alloc_slow 0.29 | region peak 6508 | maxentries:262144,numentries:262145,cachehits:0,
+r39-4-loan64-B ring 59.3 nfsd 110.3 us/W | enq 5.52 woken 4.41 vcsw 5.90 /W | pp/W: recycle_cached 0.00 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 7209 | maxentries:4096,numentries:4097,cachehits:0,
+r39-5-loan64-A ring 61.0 nfsd 111.3 us/W | enq 5.42 woken 4.33 vcsw 5.83 /W | pp/W: recycle_cached 0.00 recycle_ring_full 0.71 alloc_slow 0.30 | region peak 6521 | maxentries:262144,numentries:262145,cachehits:0,
+r39-6-loan64-B ring 56.9 nfsd 106.7 us/W | enq 5.39 woken 4.32 vcsw 5.82 /W | pp/W: recycle_cached 0.00 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 7492 | maxentries:4096,numentries:4097,cachehits:0,
+r39-7-loan64-A ring 60.7 nfsd 110.1 us/W | enq 5.51 woken 4.40 vcsw 5.89 /W | pp/W: recycle_cached 0.00 recycle_ring_full 0.71 alloc_slow 0.30 | region peak 6355 | maxentries:262144,numentries:262145,cachehits:0,
+r39-8-loan64-B ring 56.7 nfsd 106.1 us/W | enq 5.47 woken 4.37 vcsw 5.85 /W | pp/W: recycle_cached 0.00 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 7403 | maxentries:4096,numentries:4097,cachehits:0,
+
+profile fl39-loan64 (B):
+WRITEs a second in the profile: 38583
+rings (CPUs 0,2,4,6): busy 56.60 us a WRITE
+nfsd (CPUs 8-55): busy 108.93 us a WRITE

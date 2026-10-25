@@ -136,19 +136,21 @@ MTU=7792
 MRRS=512	# PCIe MaxReadReq, bytes, of the card's two functions and the eight drives
 REGION_PAGES=32768
 # The depth of a region pool's stack of returned pages (page_pool's, built
-# in): FLAMEGRAPH round 04 (25 October), the rings -3.5 us a loaned WRITE and
-# nfsd -4.0, for about 890 more of the region's pages in use at peak.  0 is
-# the ring's size, 256.  It is read when a pool is made, so apply opens the
-# ports again when it changes it; set by hand, it waits for the next open.
-# EXP_RX_REGION_STACK holds a run to another depth.
-RX_REGION_STACK=1024
+# in), held at 0, the ring's size of 256 (Mike, 25 October: "we cannot afford
+# to increase the region").  FLAMEGRAPH round 04 found 1024 saves the rings
+# about 3 us a loaned WRITE, for about 940 more of the region's pages in use
+# at peak (15 MiB); not kept, as it grows what the L3 has to hold.  It is
+# read when a pool is made, so apply opens the ports again when it changes
+# it; set by hand, it waits for the next open.  EXP_RX_REGION_STACK holds a
+# run to another depth.
+RX_REGION_STACK=0
 # The NFSv3 duplicate reply cache's entries (nfsd's drc_max_entries):
 # FLAMEGRAPH round 12 (25 October), nfsd -3.4 us a loaned WRITE against the
-# 262144 nfsd sizes itself to here; it never hits on this rig.  Read when
-# nfsd starts, so apply restarts nfs-server when the live size differs.
+# 262144 nfsd sizes itself to here, and the latency the same; it never hits
+# on this rig.  Kept after the combined A/B of rounds 04 and 12 (Mike).  Read
+# when nfsd starts, so apply restarts nfs-server when the live size differs.
 # EXP_DRC_MAX_ENTRIES holds a run to another size (0: nfsd's own).
 DRC_MAX_ENTRIES=4096
-# Both are on trial until the combined A/B of 25 October decides (Mike).
 # The sunrpc module's settings that a run may change, and their values at
 # rest.  A mode changes some of them (mode_expect below).
 declare -A REST=(
