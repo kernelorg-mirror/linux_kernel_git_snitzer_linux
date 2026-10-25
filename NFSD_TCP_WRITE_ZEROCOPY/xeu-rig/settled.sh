@@ -135,6 +135,20 @@ RINGS=4
 MTU=7792
 MRRS=512	# PCIe MaxReadReq, bytes, of the card's two functions and the eight drives
 REGION_PAGES=32768
+# The depth of a region pool's stack of returned pages (page_pool's, built
+# in): FLAMEGRAPH round 04 (25 October), the rings -3.5 us a loaned WRITE and
+# nfsd -4.0, for about 890 more of the region's pages in use at peak.  0 is
+# the ring's size, 256.  It is read when a pool is made, so apply opens the
+# ports again when it changes it; set by hand, it waits for the next open.
+# EXP_RX_REGION_STACK holds a run to another depth.
+RX_REGION_STACK=1024
+# The NFSv3 duplicate reply cache's entries (nfsd's drc_max_entries):
+# FLAMEGRAPH round 12 (25 October), nfsd -3.4 us a loaned WRITE against the
+# 262144 nfsd sizes itself to here; it never hits on this rig.  Read when
+# nfsd starts, so apply restarts nfs-server when the live size differs.
+# EXP_DRC_MAX_ENTRIES holds a run to another size (0: nfsd's own).
+DRC_MAX_ENTRIES=4096
+# Both are on trial until the combined A/B of 25 October decides (Mike).
 # The sunrpc module's settings that a run may change, and their values at
 # rest.  A mode changes some of them (mode_expect below).
 declare -A REST=(
@@ -265,6 +279,7 @@ NOTRACK=$(dirname "$(readlink -f "$0")")/zc-notrack.nft
 conntrack_hooks() { nft list hooks 2> /dev/null | grep -c conntrack; }
 containers() { command -v podman > /dev/null && podman ps -q 2> /dev/null | wc -l || echo 0; }
 SUNRPC=/sys/module/sunrpc/parameters
+DRC=/sys/module/nfsd/parameters/drc_max_entries
 
 pci_of() { basename "$(readlink -f $1)"; }	# pci_of <sysfs device link>
 mrrs() {	# mrrs <pci address>: its PCIe MaxReadReq in bytes, from DevCtl bits 14:12
@@ -337,6 +352,8 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_GRO_MAX:-}" ] && [ "$EXP_GRO_MAX" != "$GRO_MAX" ] && OFF="$OFF gro_max=$EXP_GRO_MAX"
 	[ -n "${EXP_SRV_QDISC:-}" ] && [ "$EXP_SRV_QDISC" != "$SRV_QDISC" ] && OFF="$OFF srv_qdisc=$EXP_SRV_QDISC"
 	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
+	[ -n "${EXP_RX_REGION_STACK:-}" ] && [ "$EXP_RX_REGION_STACK" != "$RX_REGION_STACK" ] && OFF="$OFF rx_region_stack=$EXP_RX_REGION_STACK"
+	[ -n "${EXP_DRC_MAX_ENTRIES:-}" ] && [ "$EXP_DRC_MAX_ENTRIES" != "$DRC_MAX_ENTRIES" ] && OFF="$OFF drc_max_entries=$EXP_DRC_MAX_ENTRIES"
 	local xk xv
 	for xk in "${!XEU[@]}"; do
 		xv=EXP_XEU_$xk
@@ -358,6 +375,14 @@ audit_nfsd() {
 		want "nfsd $k" "$(cat /sys/kernel/debug/nfsd/$k 2>/dev/null)" "${NFSD_DBG[$k]}"
 	done
 	want "nfsd max_block_size" "$(cat /proc/fs/nfsd/max_block_size 2>/dev/null)" 1048576
+	local drc=${EXP_DRC_MAX_ENTRIES:-$DRC_MAX_ENTRIES}
+	if [ -e $DRC ]; then
+		want "nfsd drc_max_entries" "$(cat $DRC)" "$drc"
+		# the size nfsd started with, which a change of the parameter waits on
+		[ "$drc" = 0 ] || want "nfsd reply cache entries" "$(drc_live)" "$drc"
+	else
+		printf '  --   %-34s %s\n' "nfsd drc_max_entries" "not in this kernel"
+	fi
 }
 
 audit_sysctl() {
@@ -472,6 +497,11 @@ audit() {
 		want "xeu $k" "$(cat /sys/module/xeu/parameters/$k 2>/dev/null)" "$w"
 	done
 	want "receive region pages" "$(cat $PP/rx_region_pages)" $REGION_PAGES
+	if [ -e $PP/rx_region_stack ]; then
+		want "receive region stack" "$(cat $PP/rx_region_stack)" "${EXP_RX_REGION_STACK:-$RX_REGION_STACK}"
+	else
+		printf '  --   %-34s %s\n' "receive region stack" "not in this kernel"
+	fi
 	want "receive region devices" "$(tr ',' '\n' < $PP/rx_region_dev | grep . | sort | paste -sd ' ')" \
 		"$(for p in $PORTS; do basename "$(readlink -f /sys/class/net/${PDEV[$p]}/device)"; done | sort | paste -sd ' ')"
 	local drv; drv=$(data_drives) || bad "data drives" "$drv" "$DATA_DRIVES"
@@ -531,8 +561,40 @@ place() {	# place [a] [b]: the CPU layout of nfsd and of the ports named (both)
 	done
 }
 
-apply() {	# the CPU layout, the resting module settings, and the audit
+drc_live() { awk -F: '/^max entries/ {print $2 + 0}' /proc/fs/nfsd/reply_cache_stats 2>/dev/null; }
+
+# The two sizes read only when nfsd starts and when a pool is made: put in
+# place by restarting nfs-server and opening the ports again, so only with
+# nothing connected.  Before place, which both undo.
+sizes() {
+	local drc=${EXP_DRC_MAX_ENTRIES:-$DRC_MAX_ENTRIES} stk=${EXP_RX_REGION_STACK:-$RX_REGION_STACK} p
+	local idle; [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ] && idle=1
+	if [ -e $DRC ] && { [ "$(cat $DRC)" != "$drc" ] || { [ "$drc" != 0 ] && [ "$(drc_live)" != "$drc" ]; }; }; then
+		if [ -n "${idle:-}" ]; then
+			echo "$drc" > $DRC
+			echo "nfsd drc_max_entries $drc: restarting nfs-server"
+			systemctl restart nfs-server || return 1
+		else
+			echo "NFS connections are up: nfsd's reply cache is left as it is"
+		fi
+	fi
+	if [ -e $PP/rx_region_stack ] && [ "$(cat $PP/rx_region_stack)" != "$stk" ]; then
+		if [ -n "${idle:-}" ]; then
+			echo "$stk" > $PP/rx_region_stack
+			for p in $PORTS; do
+				echo "rx_region_stack $stk: opening ${PDEV[$p]} again"
+				ip link set ${PDEV[$p]} down && sleep 2 && ip link set ${PDEV[$p]} up || return 1
+			done
+			sleep 10
+		else
+			echo "NFS connections are up: rx_region_stack is left as it is"
+		fi
+	fi
+}
+
+apply() {	# the sizes, the CPU layout, the resting module settings, and the audit
 	local k
+	sizes || return 1
 	place || return 1
 	for k in "${!SYSCTL[@]}"; do
 		[ "$(sysctl -n $k | tr -s ' \t' '  ')" = "${SYSCTL[$k]}" ] || sysctl -qw "$k=${SYSCTL[$k]}"
