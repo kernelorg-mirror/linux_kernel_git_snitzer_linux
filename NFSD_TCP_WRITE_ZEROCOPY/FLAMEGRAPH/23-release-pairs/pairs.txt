@@ -1,0 +1,30 @@
+== pairs.bt: in each batch the loan's release hands page_pool_put_netmem_bulk, each entry's page's pp_ref_count, split by whether its page is the entry's before it; 10 s from 5 s after nfsd passes 10,000 WRITEs a second
+-- p1-loan64, the first look (build 499's own sunrpc, 40.47 GB/s)
+@entries: 49439986
+@new_page_count[5]: 30
+@new_page_count[4]: 15668
+@new_page_count[3]: 364996
+@new_page_count[1]: 6180897
+@new_page_count[2]: 24378470
+@same_as_prev_count[5]: 18
+@same_as_prev_count[4]: 14377
+@same_as_prev_count[3]: 142997
+@same_as_prev_count[2]: 18342533
+-- refs-B-loan64 (B, 40.56 GB/s)
+@entries: 29090829
+@new_page_count[5]: 2
+@new_page_count[4]: 630
+@new_page_count[3]: 219232
+@new_page_count[2]: 4715309
+@new_page_count[1]: 24155656
+-- refs-A-loan64 (A, 40.52 GB/s)
+@entries: 48938961
+@new_page_count[5]: 24
+@new_page_count[4]: 14364
+@new_page_count[3]: 360437
+@new_page_count[1]: 6113607
+@new_page_count[2]: 24133006
+@same_as_prev_count[5]: 12
+@same_as_prev_count[4]: 13157
+@same_as_prev_count[3]: 141119
+@same_as_prev_count[2]: 18163235

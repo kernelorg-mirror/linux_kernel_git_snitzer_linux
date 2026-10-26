@@ -1,0 +1,29 @@
+#!/usr/bin/bpftrace
+/*
+ * pairs.bt - in each batch the loan's release hands page_pool, how often an
+ * entry's page is the one before it (both of a page's 8 KiB buffers in the
+ * same record, side by side), and the page's pp_ref_count then: 2 means the
+ * two entries hold every reference to it, so one read could drop both.
+ * pp_ref_count is struct page + 0x28 on this build.
+ */
+kprobe:page_pool_put_netmem_bulk /comm == "nfsd"/
+{
+	$d = (uint64 *)arg0;
+	$n = (uint32)arg1;
+	$i = (uint32)0;
+	$prev = (uint64)0;
+	@batch_len[$n] = count();
+	while ($i < $n && $i < 16) {
+		$p = *($d + $i) & 0xfffffffffffffffe;
+		$c = *(int64 *)($p + 0x28);
+		@entries = count();
+		if ($p == $prev) {
+			@same_as_prev_count[$c] = count();
+		} else {
+			@new_page_count[$c] = count();
+		}
+		$prev = $p;
+		$i++;
+	}
+}
+interval:s:10 { exit(); }
