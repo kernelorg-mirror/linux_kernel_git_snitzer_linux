@@ -2693,9 +2693,14 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_reset);
 
-static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
-			     struct page *page, unsigned int offset,
-			     unsigned int len, bool borrowed, bool page_pool)
+/*
+ * Append bytes to @state.  A new borrowed entry takes a reference on its
+ * page unless @take_ref is false: then it holds one the caller hands it.
+ */
+static int svc_tcp_rx_append_ref(struct svc_tcp_rx_state *state,
+				 struct page *page, unsigned int offset,
+				 unsigned int len, bool borrowed,
+				 bool page_pool, bool take_ref)
 {
 	if (WARN_ON_ONCE(state->mode != SVC_TCP_RX_MIXED || state->terminal) ||
 	    !rx_loan_table_append_ok(&state->lt, page, offset, len, borrowed,
@@ -2706,8 +2711,16 @@ static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
 	    svc_tcp_rx_kunit_should_fail(SVC_TCP_RX_KUNIT_FAULT_APPEND, state))
 		return -EIO;
 #endif
-	return __rx_loan_table_append(&state->lt, page, offset, len, borrowed,
-				      page_pool);
+	return __rx_loan_table_append_ref(&state->lt, page, offset, len,
+					  borrowed, page_pool, take_ref);
+}
+
+static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
+			     struct page *page, unsigned int offset,
+			     unsigned int len, bool borrowed, bool page_pool)
+{
+	return svc_tcp_rx_append_ref(state, page, offset, len, borrowed,
+				     page_pool, true);
 }
 
 VISIBLE_IF_KUNIT int
@@ -5450,6 +5463,25 @@ static int svc_tcp_rx_finish_classify(struct svc_sock *svsk,
 	return reason == SVC_TCP_RX_REASON_INVARIANT ? -EINVAL : 0;
 }
 
+/*
+ * The page-pool references a loan takes over from the skb being read
+ * instead of taking its own.  A page's reference count shares its line
+ * with the other frames cut from the page, which other records loan, so
+ * each atomic on it is a miss; a reference taken that the skb's free drops
+ * a moment later is two of them for nothing.  An entry that takes over a
+ * frag holds that frag's reference once svc_tcp_rx_takeover_end() has
+ * handed the frag over.  Until then, every path of the walk that can drop
+ * entries settles them first: each takes its own reference after all.
+ */
+struct svc_tcp_rx_takeover {
+	int			frag;	/* the frag being borrowed, or -1 */
+	unsigned int		nr;
+	struct {
+		u32		entry;
+		u32		frag;
+	}			pages[MAX_SKB_FRAGS];
+};
+
 struct svc_tcp_rx_walk {
 	struct svc_sock		*svsk;
 	struct svc_rqst		*rqstp;
@@ -5458,7 +5490,19 @@ struct svc_tcp_rx_walk {
 	u32			last;
 	u32			body_base;
 	bool			pp_recycle;	/* current skb holds page-pool refs */
+	/* NULL unless the read takes the root to its end */
+	struct svc_tcp_rx_takeover *takeover;
 };
+
+static void svc_tcp_rx_takeover_settle(struct svc_tcp_rx_state *state,
+				       struct svc_tcp_rx_takeover *t)
+{
+	if (!t)
+		return;
+	while (t->nr)
+		rx_loan_get_borrowed(state->lt.bvec[t->pages[--t->nr].entry].bv_page,
+				     true);
+}
 
 static int svc_tcp_rx_materialize_fallback(struct svc_tcp_rx_walk *walk,
 					   enum svc_tcp_rx_reason reason)
@@ -5466,6 +5510,7 @@ static int svc_tcp_rx_materialize_fallback(struct svc_tcp_rx_walk *walk,
 	struct svc_tcp_rx_state *state = walk->rqstp->rq_tcp_rx;
 	int ret;
 
+	svc_tcp_rx_takeover_settle(state, walk->takeover);
 	if (state->mode == SVC_TCP_RX_COPY)
 		return 0;
 	if (WARN_ON_ONCE(state->mode != SVC_TCP_RX_MIXED))
@@ -5486,6 +5531,8 @@ static int svc_tcp_rx_copy_segment(struct svc_tcp_rx_walk *walk,
 	struct svc_tcp_rx_state *state = walk->rqstp->rq_tcp_rx;
 	u32 expected = walk->body_base + start - walk->first;
 
+	/* A copy can materialize the record. */
+	svc_tcp_rx_takeover_settle(state, walk->takeover);
 	if (WARN_ON_ONCE(state->lt.body_bytes != expected))
 		return -EINVAL;
 	if (state->mode == SVC_TCP_RX_MIXED &&
@@ -5518,8 +5565,28 @@ static int svc_tcp_rx_borrow_segment(struct svc_tcp_rx_walk *walk,
 			return svc_tcp_rx_copy_segment(walk, start + consumed,
 						       len - consumed,
 						       SVC_TCP_RX_REASON_CAPACITY);
-		ret = svc_tcp_rx_append_borrowed(state, span_page, page_offset,
-						 take, page_pool);
+		if (page_pool && walk->takeover && walk->takeover->frag >= 0) {
+			struct svc_tcp_rx_takeover *t = walk->takeover;
+			u32 count = state->lt.count;
+
+			ret = svc_tcp_rx_append_ref(state, span_page,
+						    page_offset, take, true,
+						    true, false);
+			/*
+			 * Run on into the last entry, the bytes take no
+			 * reference: the skb's free drops the frag's.
+			 */
+			if (!ret && state->lt.count > count) {
+				t->pages[t->nr].entry = count;
+				t->pages[t->nr].frag = t->frag;
+				t->nr++;
+			}
+			t->frag = -1;
+		} else {
+			ret = svc_tcp_rx_append_borrowed(state, span_page,
+							 page_offset, take,
+							 page_pool);
+		}
 		if (ret == -ENOSPC) {
 			ret = svc_tcp_rx_materialize_fallback(walk,
 						  SVC_TCP_RX_REASON_CAPACITY);
@@ -5635,6 +5702,11 @@ static int svc_tcp_rx_walk_skb(struct svc_tcp_rx_walk *walk,
 				state->reason = SVC_TCP_RX_REASON_NULL_PAGE;
 				return -EFAULT;
 			}
+			/* All of a frag of the root, in one page. */
+			if (walk->takeover && skb == walk->root &&
+			    lo == cursor && hi == frag_end &&
+			    skb_frag_off(frag) + skb_frag_size(frag) <= PAGE_SIZE)
+				walk->takeover->frag = index;
 			skb_frag_foreach_page(frag,
 					      skb_frag_off(frag) + lo - cursor,
 					      hi - lo, page, page_offset,
@@ -5646,6 +5718,8 @@ static int svc_tcp_rx_walk_skb(struct svc_tcp_rx_walk *walk,
 				if (ret)
 					return ret;
 			}
+			if (walk->takeover)
+				walk->takeover->frag = -1;
 		}
 		cursor = frag_end;
 	}
@@ -5662,9 +5736,48 @@ static int svc_tcp_rx_walk_skb(struct svc_tcp_rx_walk *walk,
 	return 0;
 }
 
+/*
+ * Take over the references of the frags the loan borrows whole if this read
+ * takes @skb to its @end: ->read_sock frees it then, and unless it is cloned
+ * or shared, the skb is the frags' only other holder.
+ */
+static struct svc_tcp_rx_takeover *
+svc_tcp_rx_takeover_begin(struct svc_tcp_rx_takeover *t,
+			  const struct sk_buff *skb, u32 end)
+{
+	if (end != skb->len || !skb->pp_recycle || skb_cloned(skb) ||
+	    skb_shared(skb))
+		return NULL;
+	t->frag = -1;
+	t->nr = 0;
+	return t;
+}
+
+/*
+ * After the read of @skb: if it took @skb to its end, the frags taken over
+ * that end it are handed over, so that its free leaves their references to
+ * the loan.  Any other entry that was to take over a frag takes its own.
+ */
+static void svc_tcp_rx_takeover_end(struct svc_tcp_rx_state *state,
+				    struct svc_tcp_rx_takeover *t,
+				    struct sk_buff *skb, bool read_all)
+{
+	unsigned int nr_frags;
+
+	if (!t)
+		return;
+	nr_frags = skb_shinfo(skb)->nr_frags;
+	while (read_all && t->nr && t->pages[t->nr - 1].frag == nr_frags - 1) {
+		t->nr--;
+		nr_frags--;
+	}
+	skb_frags_hand_over(skb, nr_frags);
+	svc_tcp_rx_takeover_settle(state, t);
+}
+
 static int svc_tcp_rx_walk(struct svc_sock *svsk, struct svc_rqst *rqstp,
 			   struct sk_buff *skb, unsigned int offset,
-			   unsigned int len)
+			   unsigned int len, struct svc_tcp_rx_takeover *t)
 {
 	struct svc_tcp_rx_walk walk = {
 		.svsk = svsk,
@@ -5673,6 +5786,7 @@ static int svc_tcp_rx_walk(struct svc_sock *svsk, struct svc_rqst *rqstp,
 		.first = offset,
 		.last = offset + len,
 		.body_base = rqstp->rq_tcp_rx->lt.body_bytes,
+		.takeover = t,
 	};
 	int ret;
 
@@ -5803,6 +5917,7 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 	struct svc_rqst *rqstp = ctx->rqstp;
 	struct svc_sock *svsk =
 		container_of(rqstp->rq_xprt, struct svc_sock, sk_xprt);
+	struct svc_tcp_rx_takeover takeover, *t = NULL;
 	size_t reclen, received, want, take, n;
 	size_t consumed = 0;
 	bool paused = false;
@@ -5940,12 +6055,17 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 		if (!paused && svc_tcp_rx_credit_waiting(svsk))
 			svc_tcp_rx_credit_forget(svsk);
 		if (remaining) {
-			if (state->mode == SVC_TCP_RX_COPY)
+			if (state->mode == SVC_TCP_RX_COPY) {
 				error = svc_tcp_rx_copy_skb(svsk, rqstp, skb,
 							    body_offset, remaining);
-			else
+			} else {
+				t = svc_tcp_rx_takeover_begin(&takeover, skb,
+							      body_offset +
+							      remaining);
 				error = svc_tcp_rx_walk(svsk, rqstp, skb,
-							body_offset, remaining);
+							body_offset, remaining,
+							t);
+			}
 			if (error)
 				goto fault;
 		}
@@ -5954,6 +6074,8 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 			error = -EINVAL;
 			goto fault;
 		}
+		svc_tcp_rx_takeover_end(state, t, skb, true);
+		t = NULL;
 		svsk->sk_datalen += take;
 		svsk->sk_tcplen += take;
 		consumed += take;
@@ -5979,6 +6101,7 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 	return consumed;
 
 fault:
+	svc_tcp_rx_takeover_end(rqstp->rq_tcp_rx, t, skb, false);
 	desc->error = error;
 	desc->count = 0;
 	return consumed;
