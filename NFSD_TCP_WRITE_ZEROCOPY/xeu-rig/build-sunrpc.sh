@@ -21,6 +21,10 @@ KB=/lib/modules/$(uname -r)/build
 rm -rf $O; mkdir -p $O/inc/linux
 cp -a $TREE/net/sunrpc $O/sunrpc
 cp -a $TREE/include/linux/sunrpc $O/inc/linux/
+# The skb reference helpers too: since FLAMEGRAPH round 22 sunrpc uses
+# skb_frags_hand_over(), which the tree adds there.  Nothing else in it may
+# differ from the running kernel's.
+cp -a $TREE/include/linux/skbuff_ref.h $O/inc/linux/
 mkdir -p $O/inc/trace/events
 cp -a $TREE/include/trace/events/sunrpc.h $TREE/include/trace/events/sunrpc_base.h $O/inc/trace/events/
 git -C $TREE log --oneline -1 -- net/sunrpc include/linux/sunrpc
