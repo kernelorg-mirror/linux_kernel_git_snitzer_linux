@@ -49,7 +49,7 @@
 #   THREADS=<n>      svc_tcp_rx_copy_threads
 #   LOWAT=<bytes>    svc_tcp_rx_lowat, the mark a short WRITE's thread is woken at (0: off)
 #   WANT_EIGHTHS=<n> svc_tcp_rx_want_eighths, the eighths of the open window an incomplete
-#                    loaned record waits for before a thread takes it up again (settled: 4)
+#                    loaned record waits for before a thread takes it up again (settled: 6)
 #   KEEP=Y|N         svc_tcp_rx_keep, whether a thread that finds a WRITE short leaves
 #                    the transport unqueued for data already there
 #   SPARE=<bytes>    svc_tcp_spare_bytes_max, the pages sockets keep for exchange (0: none)
