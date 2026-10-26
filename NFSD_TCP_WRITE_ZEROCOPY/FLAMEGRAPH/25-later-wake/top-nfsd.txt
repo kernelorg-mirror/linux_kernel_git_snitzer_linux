@@ -1,0 +1,32 @@
+== fl48-loan64 (svc_tcp_rx_want_eighths 6; t2-r47) against fl46-loan64 (round 24's B, the same code at 4; t2-r45), the settled setting
+== us a WRITE on nfsd (CPUs 8-55), the folded stacks scaled to each profile's busy time
+busy 106.36 -> 100.67
+
+frame                           self fl46  fl48  incl fl46  fl48
+svc_recv                          0.92    0.80  102.76   95.30
+svc_tcp_recvfrom                  0.82    0.67   34.89   31.09
+tcp_read_sock                     0.02    0.01   24.86   22.62
+__tcp_cleanup_rbuf                0.11    0.10    8.38    6.87
+tcp_send_ack                      0.01    0.01    7.98    6.55
+__dev_xmit_skb                    1.02    0.89    4.87    4.33
+svc_pool_wake_idle_thread         0.46    0.38    2.72    2.53
+schedule                          0.16    0.14    4.11    3.78
+svc_tcp_rx_release_refs           1.75    1.63    6.48    6.33
+svc_process                       0.14    0.16   57.75   55.53
+nfsd_vfs_write                    0.14    0.13   24.01   22.94
+
+== fl48-loan64 top self frames, us a WRITE (fl46 beside)
+_raw_spin_unlock_irqrestore                4.81   (A  5.08)
+finish_task_switch.isra.0                  3.35   (A  3.66)
+svc_tcp_rx_append_ref                      2.57   (A  2.86)
+_raw_spin_lock                             2.24   (A  2.60)
+svc_tcp_rx_borrow_segment                  2.01   (A  2.02)
+svc_tcp_rx_prefetch_pages                  1.78   (A  1.78)
+blk_map_iter_next                          1.63   (A  1.69)
+svc_tcp_rx_release_refs                    1.63   (A  1.75)
+[perf-1817.map]                            1.32   (A  0.00)
+svc_tcp_rx_walk_skb                        1.32   (A  1.19)
+xdr_buf_validate_page_mode                 1.10   (A  1.18)
+page_pool_put_netmem_bulk                  1.05   (A  1.12)
+napi_pp_put_page                           1.01   (A  1.16)
+_raw_spin_unlock_irq                       0.97   (A  1.05)

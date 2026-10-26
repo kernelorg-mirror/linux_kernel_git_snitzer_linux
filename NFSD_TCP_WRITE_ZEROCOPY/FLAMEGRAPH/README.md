@@ -37,6 +37,7 @@ Each round is a directory here, numbered in order:
 | [22-ref-takeover](22-ref-takeover/README.md) | round 21's state | the page references: each page's `pp_ref_count` written by up to two frames' loans and skbs on several CPUs (two buffers to a page), so `napi_pp_put_page` 2.5, the borrow 3.5 and the release 6.0 us a WRITE are mostly one missed atomic each | `5ea50b07c428` (`skb_frags_hand_over()`), `5c004783a05d`: a frag borrowed whole inherits the skb's reference, 4 runs a side with sunrpc swapped | **kept**: nfsd -3.18 ± 1.57 us a WRITE (-3%), skb frees of a page 0.99 to 0.12 a release; rings, rate, region and latency the same. One 4.6 s WRITE stall in a B run, cause not found |
 | [23-release-pairs](23-release-pairs/README.md) | round 22's state | the release, 10.1 us a WRITE: 37% of the pages it returns are the page of the entry before, both references the record's, and the first of each pair took the atomic | `3e95efcd28c0`: a run of entries on one page dropped with one `page_pool_unref_netmem()`, a read when the record holds them all; 4 runs a side with sunrpc swapped | **kept**: the bulk put's atomics 24.5 to 4.9 M in 10 s, but the miss moved to the read (release self 0.92 to 4.37); nfsd -1.33 ± 0.88 us a WRITE; rings, rate, region and latency the same |
 | [24-release-prefetch](24-release-prefetch/README.md) | round 23's state | the release's own frame, 4.37 us a WRITE: each page's `struct page` miss, about 68 ns, taken one after another | `57f883cc3294`: `prefetchw()` each entry's `struct page` a batch (16 entries) ahead of its drop; 4 runs a side with sunrpc swapped | **kept**: the release 9.28 to 6.48 us a WRITE inclusive; nfsd -3.23 ± 1.14 (some of it A's drift); rings, rate, region and latency the same |
+| [25-later-wake](25-later-wake/README.md) | round 24's state | the transmit path, 4.87 us a WRITE on nfsd, uncontended: 3.58 of it ACKs nfsd's read sends, about 4.8 a WRITE (7.98 in all), a 1 MiB loaned record taken up in about four passes | `2a75926c1458`: `svc_tcp_rx_want_eighths`, the share of the open window an incomplete loaned record waits for (4, round 10b's half); 4 against 6 on one sunrpc, 4 runs a side | **6 kept and settled** (settled.sh): nfsd -5.30 ± 0.89 us a WRITE (-5%), rings -2.2, one ACK a WRITE fewer; rate, region and latency the same. 7 held WRITEs at iodepth 1 until the delayed-ACK timer |
 | [07-srv-qdisc](07-srv-qdisc/README.md) | round 05's state | half of each ACK and reply is `__dev_xmit_skb` | the server's qdisc `pfifo_fast` | not kept: no change (rings 66.9 against 66.1, latency inside L0's scatter); the cost is the transmit path's lock with 48 CPUs on 4 queues, not the qdisc |
 | [08-notrack-needed](08-notrack-needed/README.md) | round 05's state | the `zc_notrack` chains run with no conntrack to skip | `zc_notrack` only while a table registers conntrack, in settled.sh | kept: rings 67.6 to 65.1 us a loaned WRITE (-3.7%), nfsd 160.6 to 154.2; latency unchanged |
 | [09-big-tcp](09-big-tcp/README.md) | round 08's state | per-skb costs at about 20 GRO skbs a WRITE | BIG TCP: the server's `gro_max_size` and `gro_ipv4_max_size` 256 KB | not kept: no change (rings 63.3 against 63.4, latency the same); aggregates end at the client's 64 KB TSO bursts, so it needs the client's `gso_ipv4_max_size` too (Mike); the wake itself measured, 98.5% under 2 us |
@@ -64,13 +65,15 @@ runs (the profile where the A/B cannot resolve it):
 | 22 | | 108.3 to 105.1 on build 499 | `5ea50b07c428`, `5c004783a05d`: a loaned frag inherits the skb's page-pool reference, two atomics a frame fewer on each page's count |
 | 23 | | 106.1 to 104.8 on build 499 | `3e95efcd28c0`: a page's neighbouring loaned buffers returned with one read of its count, not an atomic |
 | 24 | | 104.8 to 101.6 on build 499 | `57f883cc3294`: the release prefetches each `struct page` a batch ahead, so its misses overlap |
+| 25 | 51.1 to 48.8 on build 499 | 103.1 to 97.8 on build 499 | `svc_tcp_rx_want_eighths` 6 (`2a75926c1458`, settled.sh): an incomplete loaned record taken up at three quarters of the open window, one ACK a WRITE fewer |
 
 - **Since round 01:** the rings 92.6 to about 58 us a WRITE (-37%),
   and to about 50 on build 499 with the interrupt held off at the card
   (-46%); nfsd 184 to about 113 (-39%), to about 108 on build 499
   with the smaller reply cache (-41%), to about 105 with round 22's
-  reference takeover and round 23's paired release (-43%), and to about
-  102 with round 24's prefetch in the release (-45%).
+  reference takeover and round 23's paired release (-43%), to about
+  102 with round 24's prefetch in the release (-45%), and to about 98
+  with round 25's later wake (-47%); the rings to about 49 (-47%).
 - The rate stayed at the drives' 40.5 GB/s throughout. Latency at
   iodepth 1 is the same or a little better.
 - Each round's A/B had its own A, and A drifts a couple of us between

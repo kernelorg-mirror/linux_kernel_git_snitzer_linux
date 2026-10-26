@@ -1,0 +1,119 @@
+== acks.bt (p1, p2) and small.bt (p4), one loan64 run each on build 499's own sunrpc, 10 s from 5 s after nfsd passes 10,000 WRITEs a second
+-- p1-loan64, acks.bt (40.53 GB/s)
+@acks[drained]: 13
+@acks[window]: 39742
+@acks[unacked]: 1779240
+@reads: 2001006
+@open_window:
+[0]                  130 |                                                    |
+[1]                    0 |                                                    |
+[2, 4)                 0 |                                                    |
+[4, 8)                 0 |                                                    |
+[8, 16)             1195 |                                                    |
+[16, 32)               0 |                                                    |
+[32, 64)             955 |                                                    |
+[64, 128)           2328 |                                                    |
+[128, 256)           437 |                                                    |
+[256, 512)          1912 |                                                    |
+[512, 1K)           1348 |                                                    |
+[1K, 2K)           26501 |@                                                   |
+[2K, 4K)           98528 |@@@@@                                               |
+[4K, 8K)           72460 |@@@@                                                |
+[8K, 16K)          13225 |                                                    |
+[16K, 32K)         33415 |@@                                                  |
+[32K, 64K)        136820 |@@@@@@@@                                            |
+[64K, 128K)       426877 |@@@@@@@@@@@@@@@@@@@@@@@@@                           |
+[128K, 256K)      867482 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256K, 512K)      135382 |@@@@@@@@                                            |
+@read_copied:
+[4, 8)                14 |                                                    |
+[8, 16)               48 |                                                    |
+[16, 32)              71 |                                                    |
+[32, 64)          337217 |@@@@@@@@@@@@@@@@@@@@                                |
+[64, 128)            171 |                                                    |
+[128, 256)         42920 |@@                                                  |
+[256, 512)           500 |                                                    |
+[512, 1K)            881 |                                                    |
+[1K, 2K)            1959 |                                                    |
+[2K, 4K)            3646 |                                                    |
+[4K, 8K)            8939 |                                                    |
+[8K, 16K)          16113 |                                                    |
+[16K, 32K)         32196 |@                                                   |
+[32K, 64K)         94750 |@@@@@                                               |
+[64K, 128K)       152851 |@@@@@@@@@                                           |
+[128K, 256K)      863883 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256K, 512K)      425327 |@@@@@@@@@@@@@@@@@@@@@@@@@                           |
+[512K, 1M)         19520 |@                                                   |
+@reads: 2001006
+@unacked_bytes:
+[0]                39285 |@                                                   |
+[1]                    0 |                                                    |
+[2, 4)                 0 |                                                    |
+[4, 8)                 0 |                                                    |
+[8, 16)                0 |                                                    |
+[16, 32)               0 |                                                    |
+[32, 64)               0 |                                                    |
+[64, 128)              0 |                                                    |
+[128, 256)             0 |                                                    |
+[256, 512)            12 |                                                    |
+[512, 1K)              1 |                                                    |
+[1K, 2K)               0 |                                                    |
+[2K, 4K)               0 |                                                    |
+[4K, 8K)             460 |                                                    |
+[8K, 16K)          13695 |                                                    |
+[16K, 32K)         22443 |@                                                   |
+[32K, 64K)        202479 |@@@@@@@@@@                                          |
+[64K, 128K)       281110 |@@@@@@@@@@@@@@                                      |
+[128K, 256K)     1024109 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256K, 512K)      235401 |@@@@@@@@@@@                                         |
+-- p2-loan64, acks.bt with each ACK's read size (40.43 GB/s)
+@ack_read_tiny[read under 4 KiB]: 224438
+@ack_read_tiny[read of 4 KiB or more]: 1630529
+@acks[drained]: 8
+@acks[window]: 30878
+@acks[unacked]: 1824081
+@reads: 2062783
+-- p4-loan64, small.bt (40.53 GB/s); p3, with a kretprobe, recorded nothing
+@big[completed, no ACK]: 1529
+@big[incomplete, no ACK]: 28344
+@big[completed, ACK]: 350417
+@big[incomplete, ACK]: 1047640
+@entered: 1843830
+@nothing_read: 18071
+@passes: 1843830
+@small[began at a record's start, record incomplete, ACK]: 4
+@small[began inside a record, waits for credit, ACK]: 12
+@small[began inside a record, waits for credit, no ACK]: 21
+@small[began at a record's start, record incomplete, no ACK]: 110
+@small[began inside a record, completed it, no ACK]: 154
+@small[began inside a record, record incomplete, no ACK]: 410
+@small[began inside a record, completed it, ACK]: 2380
+@small[began at a record's start, completed it, no ACK]: 16104
+@small[began at a record's start, completed it, ACK]: 28343
+@small[began at a record's start, waits for credit, no ACK]: 131748
+@small[began at a record's start, waits for credit, ACK]: 218543
+@small_copied:
+[0, 16)               41 |                                                    |
+[16, 32)              53 |                                                    |
+[32, 48)          350327 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[48, 64)              13 |                                                    |
+[64, 80)              18 |                                                    |
+[96, 112)             21 |                                                    |
+[112, 128)            33 |                                                    |
+[128, 144)         44440 |@@@@@@                                              |
+[176, 192)            13 |                                                    |
+[192, 208)            13 |                                                    |
+[272, 288)            11 |                                                    |
+[288, 304)            10 |                                                    |
+[320, 336)            14 |                                                    |
+[336, 352)            18 |                                                    |
+[352, 368)            13 |                                                    |
+[368, 384)            14 |                                                    |
+[384, 400)            18 |                                                    |
+[416, 432)            10 |                                                    |
+[432, 448)            12 |                                                    |
+[448, 464)            11 |                                                    |
+[464, 480)            12 |                                                    |
+[480, 496)            18 |                                                    |
+[496, 512)            10 |                                                    |
+[512, ...)          2614 |                                                    |

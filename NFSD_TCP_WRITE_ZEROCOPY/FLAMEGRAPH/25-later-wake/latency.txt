@@ -1,0 +1,11 @@
+L48-1-w6 untraced: write 7.86 GB/s, 7492 IOPS; completion ms: p50 0.453, p90 0.510, p99 0.569, p99.9 0.627, mean 0.456, max 0.770
+L48-1-w6 traced:   write 7.92 GB/s, 7550 IOPS; completion ms: p50 0.440, p90 0.506, p99 0.578, p99.9 0.668, mean 0.449, max 1.218
+L48-2-w4 untraced: write 7.46 GB/s, 7117 IOPS; completion ms: p50 0.436, p90 0.510, p99 0.578, p99.9 0.668, mean 0.444, max 51.176
+L48-2-w4 traced:   write 8.38 GB/s, 7990 IOPS; completion ms: p50 0.416, p90 0.489, p99 0.553, p99.9 0.610, mean 0.429, max 1.267
+L48-3-w7 untraced: write 3.88 GB/s, 3696 IOPS; completion ms: p50 0.465, p90 4.178, p99 5.276, p99.9 5.472, mean 0.997, max 5.607
+L48-3-w7 traced:   write 3.79 GB/s, 3616 IOPS; completion ms: p50 0.485, p90 4.145, p99 5.341, p99.9 5.472, mean 1.013, max 5.617
+L48-4-w6 untraced: write 8.11 GB/s, 7734 IOPS; completion ms: p50 0.436, p90 0.502, p99 0.569, p99.9 0.651, mean 0.445, max 0.770
+L48-4-w6 traced:   write 8.06 GB/s, 7686 IOPS; completion ms: p50 0.436, p90 0.506, p99 0.561, p99.9 0.618, mean 0.446, max 1.069
+L48-5-w4 untraced: write 7.85 GB/s, 7489 IOPS; completion ms: p50 0.453, p90 0.522, p99 0.578, p99.9 0.610, mean 0.453, max 1.118
+L48-5-w4 traced:   write 7.53 GB/s, 7179 IOPS; completion ms: p50 0.481, p90 0.537, p99 0.610, p99.9 0.692, mean 0.472, max 0.818
+== run48.sh was stopped after L48-3-w7 (Mike: 7 dropped); L48-4 and L48-5 are run48b.sh's
