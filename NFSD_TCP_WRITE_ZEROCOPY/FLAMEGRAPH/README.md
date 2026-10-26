@@ -35,6 +35,7 @@ Each round is a directory here, numbered in order:
 | [20-msix-mask](20-msix-mask/README.md) | build 499 at the settled setting | `enable_irq` on the rings, 10.4 us a WRITE: an ITS mask, unmask and resend for most polls | xeu `irq_msix_mask` (kmod-xsight 2.0.1-9): the ring masks its own MSI-X entry in the card, 4 runs a side | rings -9.97 ± 0.74 us a WRITE (-17%), nfsd, rate, region and latency the same; twice the Rx interrupts, each cheap. Kept at Y (settled.sh) |
 | [21-credit-order](21-credit-order/README.md) | round 20's state | `svc_tcp_rx_credit_admit_to` 2.15 us a WRITE, nine tenths of it the walk over the records in flight | `c1b4326c9b99`: the credit lists walked from their newest end, 4 runs a side with sunrpc swapped | the walk gone from the profile (2.60 to 0.36 inclusive), but nfsd -0.13 ± 0.85: the misses moved, not saved. Kept: the walk out from under the lock |
 | [22-ref-takeover](22-ref-takeover/README.md) | round 21's state | the page references: each page's `pp_ref_count` written by up to two frames' loans and skbs on several CPUs (two buffers to a page), so `napi_pp_put_page` 2.5, the borrow 3.5 and the release 6.0 us a WRITE are mostly one missed atomic each | `5ea50b07c428` (`skb_frags_hand_over()`), `5c004783a05d`: a frag borrowed whole inherits the skb's reference, 4 runs a side with sunrpc swapped | **kept**: nfsd -3.18 ± 1.57 us a WRITE (-3%), skb frees of a page 0.99 to 0.12 a release; rings, rate, region and latency the same. One 4.6 s WRITE stall in a B run, cause not found |
+| [23-release-pairs](23-release-pairs/README.md) | round 22's state | the release, 10.1 us a WRITE: 37% of the pages it returns are the page of the entry before, both references the record's, and the first of each pair took the atomic | `3e95efcd28c0`: a run of entries on one page dropped with one `page_pool_unref_netmem()`, a read when the record holds them all; 4 runs a side with sunrpc swapped | **kept**: the bulk put's atomics 24.5 to 4.9 M in 10 s, but the miss moved to the read (release self 0.92 to 4.37); nfsd -1.33 ± 0.88 us a WRITE; rings, rate, region and latency the same |
 | [07-srv-qdisc](07-srv-qdisc/README.md) | round 05's state | half of each ACK and reply is `__dev_xmit_skb` | the server's qdisc `pfifo_fast` | not kept: no change (rings 66.9 against 66.1, latency inside L0's scatter); the cost is the transmit path's lock with 48 CPUs on 4 queues, not the qdisc |
 | [08-notrack-needed](08-notrack-needed/README.md) | round 05's state | the `zc_notrack` chains run with no conntrack to skip | `zc_notrack` only while a table registers conntrack, in settled.sh | kept: rings 67.6 to 65.1 us a loaned WRITE (-3.7%), nfsd 160.6 to 154.2; latency unchanged |
 | [09-big-tcp](09-big-tcp/README.md) | round 08's state | per-skb costs at about 20 GRO skbs a WRITE | BIG TCP: the server's `gro_max_size` and `gro_ipv4_max_size` 256 KB | not kept: no change (rings 63.3 against 63.4, latency the same); aggregates end at the client's 64 KB TSO bursts, so it needs the client's `gso_ipv4_max_size` too (Mike); the wake itself measured, 98.5% under 2 us |
@@ -60,12 +61,13 @@ runs (the profile where the A/B cannot resolve it):
 | 12 | | 111.5 to 108.1 on build 499 | `drc_max_entries` 4096: a reply cache small enough to stay hot (settled.sh) |
 | 20 | 59.95 to 49.98 on build 499 | | xeu `irq_msix_mask` Y (kmod-xsight 2.0.1-9): a ring's interrupt held off at the card, not through the ITS (settled.sh) |
 | 22 | | 108.3 to 105.1 on build 499 | `5ea50b07c428`, `5c004783a05d`: a loaned frag inherits the skb's page-pool reference, two atomics a frame fewer on each page's count |
+| 23 | | 106.1 to 104.8 on build 499 | `3e95efcd28c0`: a page's neighbouring loaned buffers returned with one read of its count, not an atomic |
 
 - **Since round 01:** the rings 92.6 to about 58 us a WRITE (-37%),
   and to about 50 on build 499 with the interrupt held off at the card
   (-46%); nfsd 184 to about 113 (-39%), to about 108 on build 499
   with the smaller reply cache (-41%), and to about 105 with round 22's
-  reference takeover (-43%).
+  reference takeover and round 23's paired release (-43%).
 - The rate stayed at the drives' 40.5 GB/s throughout. Latency at
   iodepth 1 is the same or a little better.
 - Each round's A/B had its own A, and A drifts a couple of us between
