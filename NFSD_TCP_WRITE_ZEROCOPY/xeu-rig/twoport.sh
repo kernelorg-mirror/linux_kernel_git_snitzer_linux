@@ -48,6 +48,8 @@
 #   LINGER=<us>      svc_tcp_rx_linger_us
 #   THREADS=<n>      svc_tcp_rx_copy_threads
 #   LOWAT=<bytes>    svc_tcp_rx_lowat, the mark a short WRITE's thread is woken at (0: off)
+#   WANT_EIGHTHS=<n> svc_tcp_rx_want_eighths, the eighths of the open window an incomplete
+#                    loaned record waits for before a thread takes it up again (settled: 4)
 #   KEEP=Y|N         svc_tcp_rx_keep, whether a thread that finds a WRITE short leaves
 #                    the transport unqueued for data already there
 #   SPARE=<bytes>    svc_tcp_spare_bytes_max, the pages sockets keep for exchange (0: none)
@@ -128,7 +130,7 @@ SP=/sys/module/sunrpc/parameters
 declare -A SAVE
 # copy_threads, lowat, linger_us and keep are not in kernels after build 474
 # (dropped 15 October)
-for k in rcvbuf linger_us copy_threads lowat keep; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k 2>/dev/null); done
+for k in rcvbuf linger_us copy_threads lowat keep want_eighths; do SAVE[$k]=$(cat $SP/svc_tcp_rx_$k 2>/dev/null); done
 SAVE[spare]=$(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null)
 SAVE[refill]=$(cat /sys/module/xeu/parameters/rx_refill_thresh)
 SAVE[budget]=$(cat $SP/svc_tcp_rx_budget_pages); SAVE[reserve]=$(cat $SP/svc_tcp_rx_budget_reserve)
@@ -155,7 +157,7 @@ setq() {	# setq <client dev> <codel|fq|fqNN>
 	esac
 }
 cleanup() {
-	for k in rcvbuf linger_us copy_threads lowat keep; do [ -e $SP/svc_tcp_rx_$k ] && echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
+	for k in rcvbuf linger_us copy_threads lowat keep want_eighths; do [ -e $SP/svc_tcp_rx_$k ] && echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
 	[ -n "${SAVE[spare]}" ] && echo ${SAVE[spare]} > $SP/svc_tcp_spare_bytes_max
 	echo ${SAVE[refill]} > /sys/module/xeu/parameters/rx_refill_thresh
 	echo 0 > $SP/svc_tcp_rx_budget_pages; echo ${SAVE[reserve]} > $SP/svc_tcp_rx_budget_reserve; echo ${SAVE[budget]} > $SP/svc_tcp_rx_budget_pages
@@ -202,6 +204,7 @@ setp "${LINGER:-}" linger_us 0
 setp "${THREADS:-}" copy_threads 0
 setp "${LOWAT:-}" lowat 0
 setp "${KEEP:-}" keep N
+setp "${WANT_EIGHTHS:-}" want_eighths 4
 if [ -n "$BUDGET" ]; then	# reserve first, as run-budget.sh sets them
 	echo 0 > $SP/svc_tcp_rx_budget_pages; echo $RESERVE > $SP/svc_tcp_rx_budget_reserve; echo $BUDGET > $SP/svc_tcp_rx_budget_pages
 	echo "loan: $G; charge $CHARGE pages a 1 MiB WRITE, budget $BUDGET pages for $WRITES WRITEs, reserve $RESERVE" | tee -a geometry.txt
@@ -210,7 +213,7 @@ for e in $WREV; do grep -q '^hist:' $T/events/nfsd/$e/trigger 2>/dev/null || ech
 [ -n "${SPARE:-}" ] && { echo $SPARE > $SP/svc_tcp_spare_bytes_max || { echo "no svc_tcp_spare_bytes_max in this sunrpc"; exit 1; }; }
 [ -n "${NFSD_CPUS:-}" ] && { for t in $(pgrep -x nfsd); do taskset -cp $NFSD_CPUS $t > /dev/null 2>&1; done; echo "nfsd on CPUs $NFSD_CPUS for this run" | tee -a geometry.txt; }
 [ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} $QDISC || { echo "qdisc not set"; exit 1; }; done
-echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read)" | tee -a geometry.txt
+echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) want_eighths $(cat $SP/svc_tcp_rx_want_eighths 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read)" | tee -a geometry.txt
 
 for p in $PORTS; do
 	d=${DEV[$p]}
@@ -319,7 +322,7 @@ if [ "$RW" != write ]; then	# a run that reads: every file written whole first, 
 fi
 # Just before the load: the live state, all of it, against the setting this
 # run is at; anything the run set on purpose is held to what it set.
-EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-} EXP_GRO_MAX=${GRO_MAX:-}"
+EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_WANT_EIGHTHS=${WANT_EIGHTHS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-} EXP_GRO_MAX=${GRO_MAX:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}" ] && EXPENV="$EXPENV EXP_LAYOUT=RINGS=${RINGS:-4},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-}"
 # the client's qdisc is set only on the ports of this run
