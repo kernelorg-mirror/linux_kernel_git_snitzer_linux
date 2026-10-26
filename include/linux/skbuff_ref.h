@@ -71,4 +71,26 @@ static __always_inline void skb_frag_unref(struct sk_buff *skb, int f)
 		__skb_frag_unref(&shinfo->frags[f], skb->pp_recycle);
 }
 
+/**
+ * skb_frags_hand_over - hand the last paged fragments of an skb to the caller
+ * @skb: the buffer, which its owner frees next
+ * @first: the offset of the first fragment handed over
+ *
+ * Fragments @first to the last of @skb leave it with their references: the
+ * caller now holds each as @skb held it (a page_pool reference if
+ * @skb->pp_recycle is set) and releases it itself, and freeing @skb no
+ * longer does.  Nothing else in @skb changes, so @skb->len still counts the
+ * fragments' bytes: it may only be freed, as ->read_sock frees an skb once
+ * its actor has read it to its end.  @skb must hold its fragments' references
+ * alone: not cloned, and its fragments not managed.
+ */
+static inline void skb_frags_hand_over(struct sk_buff *skb, unsigned int first)
+{
+	struct skb_shared_info *shinfo = skb_shinfo(skb);
+
+	DEBUG_NET_WARN_ON_ONCE(skb_cloned(skb) || skb_zcopy_managed(skb) ||
+			       first > shinfo->nr_frags);
+	shinfo->nr_frags = first;
+}
+
 #endif	/* _LINUX_SKBUFF_REF_H */
