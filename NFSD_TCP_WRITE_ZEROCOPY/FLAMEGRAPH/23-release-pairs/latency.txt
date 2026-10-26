@@ -1,0 +1,8 @@
+L44-B1 untraced: write 8.37 GB/s, 7982 IOPS; completion ms: p50 0.424, p90 0.502, p99 0.618, p99.9 0.700, mean 0.436, max 0.910
+L44-B1 traced:   write 8.40 GB/s, 8015 IOPS; completion ms: p50 0.424, p90 0.481, p99 0.553, p99.9 0.635, mean 0.433, max 2.652
+L44-A1 untraced: write 8.35 GB/s, 7960 IOPS; completion ms: p50 0.420, p90 0.494, p99 0.545, p99.9 0.578, mean 0.431, max 0.836
+L44-A1 traced:   write 8.35 GB/s, 7967 IOPS; completion ms: p50 0.428, p90 0.489, p99 0.561, p99.9 0.635, mean 0.437, max 0.748
+L44-B2 untraced: write 8.64 GB/s, 8236 IOPS; completion ms: p50 0.408, p90 0.477, p99 0.545, p99.9 0.627, mean 0.419, max 1.053
+L44-B2 traced:   write 8.56 GB/s, 8163 IOPS; completion ms: p50 0.416, p90 0.465, p99 0.537, p99.9 0.610, mean 0.425, max 2.412
+L44-A2 untraced: write 8.56 GB/s, 8164 IOPS; completion ms: p50 0.416, p90 0.477, p99 0.545, p99.9 0.610, mean 0.425, max 3.239
+L44-A2 traced:   write 8.48 GB/s, 8091 IOPS; completion ms: p50 0.420, p90 0.485, p99 0.578, p99.9 0.651, mean 0.429, max 0.813
