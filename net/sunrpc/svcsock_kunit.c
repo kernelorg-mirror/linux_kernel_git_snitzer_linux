@@ -2003,8 +2003,9 @@ static struct sock *svcsock_rx_want_sk(struct kunit *test,
 
 /*
  * A drained read of a loaned 1 MiB record with 256 KiB of it in: the rest
- * is wanted, capped at half the receive window still open.  Not drained,
- * no credit, complete, or TLS: nothing is wanted.
+ * is wanted, capped at half the receive window still open, or at the share
+ * svc_tcp_rx_want_eighths gives.  Not drained, no credit, complete, or
+ * TLS: nothing is wanted.
  */
 static void svcsock_rx_set_want_test(struct kunit *test)
 {
@@ -2013,6 +2014,8 @@ static void svcsock_rx_set_want_test(struct kunit *test)
 	struct sock *sk = svcsock_rx_want_sk(test, svsk, 0, 2 << 20);
 	struct tcp_sock *tp = tcp_sk(sk);
 	const u32 reclen = 1 << 20;
+	/* The default, half; the running kernel may have been given another. */
+	unsigned int eighths = svc_tcp_rx_kunit_want_eighths(4);
 
 	svsk->sk_marker = cpu_to_be32(RPC_LAST_STREAM_FRAGMENT | reclen);
 	svsk->sk_tcplen = sizeof(rpc_fraghdr) + reclen / 4;
@@ -2026,6 +2029,16 @@ static void svcsock_rx_set_want_test(struct kunit *test)
 	tp->rcv_wnd = 1 << 20;
 	svc_tcp_rx_set_want(svsk, state, true);
 	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 512U << 10);
+	/* Another share; out of range, it is clamped to the whole window. */
+	tp->rcv_wnd = 512U << 10;
+	svc_tcp_rx_kunit_want_eighths(6);
+	svc_tcp_rx_set_want(svsk, state, true);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 384U << 10);
+	svc_tcp_rx_kunit_want_eighths(9);
+	svc_tcp_rx_set_want(svsk, state, true);
+	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 512U << 10);
+	svc_tcp_rx_kunit_want_eighths(4);
+	tp->rcv_wnd = 1 << 20;
 	/* What the peer may still send is the window less what it sent. */
 	tp->rcv_nxt = tp->rcv_wup + (768U << 10);
 	svc_tcp_rx_set_want(svsk, state, true);
@@ -2054,6 +2067,8 @@ static void svcsock_rx_set_want_test(struct kunit *test)
 	set_bit(XPT_TLS_SESSION, &svsk->sk_xprt.xpt_flags);
 	svc_tcp_rx_set_want(svsk, state, true);
 	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
+
+	svc_tcp_rx_kunit_want_eighths(eighths);
 }
 
 /*
