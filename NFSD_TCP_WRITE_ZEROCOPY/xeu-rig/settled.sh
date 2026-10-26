@@ -167,7 +167,7 @@ declare -A REST=(
 	[svc_tcp_rx_copy_unlocked]=Y
 	[svc_tcp_rx_copy_below]=1024
 	[svc_tcp_spare_bytes_max]=67108864
-	[svc_tcp_rx_want_eighths]=4
+	[svc_tcp_rx_want_eighths]=6	# FLAMEGRAPH round 25 (26 October): three quarters of the open window
 )
 # Settings a later kernel no longer has: held where the kernel has them, and
 # reported, not failed, where it does not.  svc_tcp_rx_copy_unlocked was
@@ -195,9 +195,13 @@ declare -A GONE_LATER=([svc_tcp_rx_copy_unlocked]=1 [svc_tcp_rx_lowat]=1
 # exchange with threads"); at rest it is its default, 64 MiB.
 # svc_tcp_rx_want_eighths came with FLAMEGRAPH round 25 ("SUNRPC: Make the
 # share of the window a loaned record waits for tunable"): the eighths of
-# the open receive window an incomplete loaned record waits for; at rest its
-# default, 4, the half every earlier kernel waits for.  EXP_WANT_EIGHTHS holds
-# a run to another share.
+# the open receive window an incomplete loaned record waits for.  Held at 6
+# since round 25 (Mike, 26 October): against the default's 4, the half every
+# earlier kernel waits for, nfsd -5.30 +- 0.89 us a loaned WRITE, the rings
+# -2.2, one ACK a WRITE fewer, and the rate, region and latency the same; 7
+# held a WRITE at iodepth 1 up to 5 ms, until the delayed-ACK timer.  Not in
+# /etc/modprobe.d/sunrpc.conf, which would name a parameter build 499's own
+# sunrpc does not know at every load of it: apply writes it.  EXP_WANT_EIGHTHS holds a run to another share.
 declare -A NEW_LATER=([svc_tcp_spare_bytes_max]=1 [svc_tcp_rx_want_eighths]=1)
 # The xeu module's, set by /etc/modprobe.d/xeu.conf at load.
 # irq_msix_mask (kmod-xsight 2.0.1-9): a ring masks its MSI-X entry in the
