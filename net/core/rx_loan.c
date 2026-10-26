@@ -206,6 +206,28 @@ EXPORT_SYMBOL_GPL(rx_loan_table_refs_valid);
 #define RX_LOAN_PUT_BATCH	XDP_BULK_QUEUE_SIZE
 
 /*
+ * Return @refs references to page-pool @netmem, held by entries side by
+ * side.  A driver that cuts a page into several receive buffers puts them
+ * in an skb in turn, so a record often holds two or more of one page's
+ * buffers next to each other, and often every reference to the page.
+ * Then page_pool_unref_netmem() drops them all with a read of the page's
+ * count, where one at a time the first drops took an atomic on a line
+ * other CPUs write.  Its last user holds the page at a count of 1, and
+ * the batch returns it by dropping that.
+ */
+static void rx_loan_put_run(netmem_ref *batch, unsigned int *nr,
+			    netmem_ref netmem, long refs)
+{
+	if (refs > 1 && page_pool_unref_netmem(netmem, refs))
+		return;
+	batch[(*nr)++] = netmem;
+	if (*nr == RX_LOAN_PUT_BATCH) {
+		page_pool_put_netmem_bulk(batch, *nr);
+		*nr = 0;
+	}
+}
+
+/*
  * Return every borrowed entry of @t, whose references the caller checked
  * with rx_loan_table_refs_valid(): its bytes stay counted.  -EINVAL if
  * the table does not come out empty.
@@ -214,6 +236,8 @@ int rx_loan_table_release(struct rx_loan_table *t)
 {
 	netmem_ref batch[RX_LOAN_PUT_BATCH];
 	unsigned int index, nr = 0;
+	netmem_ref run = 0;
+	long run_refs = 0;
 
 	/* page_pool_put_netmem_bulk() does not check its array's bound. */
 	BUILD_BUG_ON(RX_LOAN_PUT_BATCH > XDP_BULK_QUEUE_SIZE);
@@ -231,10 +255,18 @@ int rx_loan_table_release(struct rx_loan_table *t)
 		 */
 		if (IS_ENABLED(CONFIG_PAGE_POOL) &&
 		    test_bit(index, t->page_pool)) {
-			batch[nr++] = page_to_netmem(t->bvec[index].bv_page);
-			if (nr == ARRAY_SIZE(batch)) {
-				page_pool_put_netmem_bulk(batch, nr);
-				nr = 0;
+			struct page *page = t->bvec[index].bv_page;
+			netmem_ref netmem;
+
+			netmem = netmem_compound_head(page_to_netmem(page));
+			if (run_refs && netmem == run) {
+				run_refs++;
+			} else {
+				if (run_refs)
+					rx_loan_put_run(batch, &nr, run,
+							run_refs);
+				run = netmem;
+				run_refs = 1;
 			}
 		} else {
 			rx_loan_put_borrowed(t->bvec[index].bv_page, false);
@@ -244,6 +276,8 @@ int rx_loan_table_release(struct rx_loan_table *t)
 		t->refs_released++;
 		t->borrowed_count--;
 	}
+	if (run_refs)
+		rx_loan_put_run(batch, &nr, run, run_refs);
 	if (nr)
 		page_pool_put_netmem_bulk(batch, nr);
 	if (WARN_ON_ONCE(t->borrowed_count ||
