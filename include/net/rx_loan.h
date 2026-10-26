@@ -231,12 +231,16 @@ static inline bool rx_loan_table_append_ok(const struct rx_loan_table *t,
 	       !check_add_overflow(t->body_bytes, len, &body_bytes);
 }
 
-/* Append, once rx_loan_table_append_ok() said it may. */
-static inline int __rx_loan_table_append(struct rx_loan_table *t,
-					 struct page *page,
-					 unsigned int offset,
-					 unsigned int len, bool borrowed,
-					 bool page_pool)
+/*
+ * Append, once rx_loan_table_append_ok() said it may.  A new borrowed entry
+ * takes a reference on its page unless @take_ref is false: then it holds
+ * one the caller hands it.
+ */
+static inline int __rx_loan_table_append_ref(struct rx_loan_table *t,
+					     struct page *page,
+					     unsigned int offset,
+					     unsigned int len, bool borrowed,
+					     bool page_pool, bool take_ref)
 {
 	struct bio_vec *bvec;
 
@@ -247,7 +251,7 @@ static inline int __rx_loan_table_append(struct rx_loan_table *t,
 		if (t->count == t->capacity)
 			return -ENOSPC;
 		bvec = &t->bvec[t->count];
-		if (borrowed)
+		if (borrowed && take_ref)
 			rx_loan_get_borrowed(page, page_pool);
 		bvec_set_page(bvec, page, len, offset);
 		if (borrowed) {
@@ -273,6 +277,16 @@ static inline int __rx_loan_table_append(struct rx_loan_table *t,
 		t->copied_bytes += len;
 	}
 	return 0;
+}
+
+static inline int __rx_loan_table_append(struct rx_loan_table *t,
+					 struct page *page,
+					 unsigned int offset,
+					 unsigned int len, bool borrowed,
+					 bool page_pool)
+{
+	return __rx_loan_table_append_ref(t, page, offset, len, borrowed,
+					  page_pool, true);
 }
 
 static inline int rx_loan_table_append(struct rx_loan_table *t,
