@@ -1,0 +1,42 @@
+#!/usr/bin/bpftrace
+/*
+ * small.bt - each pass of svc_tcp_recvfrom() on a TCP transport: what its
+ * ->read_sock consumed (the copied of __tcp_cleanup_rbuf, which ACKs), where
+ * in the record it started (sk_tcplen), whether it completed the record
+ * (a positive return), and whether it left the transport waiting for loan
+ * credit (sk_credit_need).  fentry/fexit, as a kretprobe misses the calls of
+ * the hundreds of threads that sleep on the socket lock in it.  Passes that read under 4 KiB are broken down.
+ */
+fentry:sunrpc:svc_tcp_recvfrom
+{
+	@entered = count();
+	/* sk_xprt is struct svc_sock's first member */
+	$s = (struct svc_sock *)args.rqstp->rq_xprt;
+	@svsk[tid] = (uint64)$s;
+	@start[tid] = $s->sk_tcplen;
+	@cop[tid] = 0;
+	@acked[tid] = 0;
+}
+kprobe:__tcp_cleanup_rbuf /@svsk[tid]/ { @cop[tid] += arg1; }
+kprobe:tcp_send_ack /@svsk[tid]/ { @acked[tid] = 1; }
+fexit:sunrpc:svc_tcp_recvfrom /@svsk[tid]/
+{
+	$s = (struct svc_sock *)@svsk[tid];
+	$c = @cop[tid];
+	@passes = count();
+	if ($c > 0 && $c < 4096) {
+		@small[@start[tid] == 0 ? "began at a record's start" : "began inside a record",
+		       (int64)retval > 0 ? "completed it" : ($s->sk_credit_need ? "waits for credit" : "record incomplete"),
+		       @acked[tid] ? "ACK" : "no ACK"] = count();
+		@small_copied = lhist($c, 0, 512, 16);
+		@small_start = hist(@start[tid]);
+		@small_ret = hist((int64)retval);
+	} else if ($c == 0) {
+		@nothing_read = count();
+	} else {
+		@big[(int64)retval > 0 ? "completed" : ($s->sk_credit_need ? "waits for credit" : "incomplete"),
+		     @acked[tid] ? "ACK" : "no ACK"] = count();
+	}
+	delete(@svsk[tid]); delete(@start[tid]); delete(@cop[tid]); delete(@acked[tid]);
+}
+interval:s:10 { clear(@svsk); clear(@start); clear(@cop); clear(@acked); exit(); }

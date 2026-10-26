@@ -1,0 +1,45 @@
+#!/usr/bin/bpftrace
+/*
+ * acks.bt - the ACKs nfsd's read sends from __tcp_cleanup_rbuf() on port
+ * 2049, classified by the rule that sent each, and what the read had done:
+ *   unacked  more than one rcv_mss received since the last ACK (rcv_wup)
+ *   drained  a pushed segment and the receive queue now empty
+ *   window   neither: the read freed enough to double the open window
+ * The read's size is kept for each ACK (@ack_read_copied).
+ * (the first two need an ACK scheduled; the classes are checked in that order,
+ * as __tcp_cleanup_rbuf() does).
+ */
+kprobe:__tcp_cleanup_rbuf
+{
+	$sk = (struct sock *)arg0;
+	if ($sk->__sk_common.skc_num == 2049) {
+		@reads = count();
+		@read_copied = hist(arg1);
+		@in_rbuf[tid] = arg0;
+		@copied[tid] = arg1;
+	}
+}
+kretprobe:__tcp_cleanup_rbuf { delete(@in_rbuf[tid]); delete(@copied[tid]); }
+kprobe:tcp_send_ack /@in_rbuf[tid] == arg0/
+{
+	$sk = (struct sock *)arg0;
+	$tp = (struct tcp_sock *)arg0;
+	$ic = (struct inet_connection_sock *)arg0;
+	$sched = $ic->icsk_ack.pending & 1;
+	$unacked = (uint32)($tp->rcv_nxt - $tp->rcv_wup);
+	$pushed = $ic->icsk_ack.pending & 0x18;
+	if ($sched && $unacked > $ic->icsk_ack.rcv_mss) {
+		@acks["unacked"] = count();
+	} else if ($sched && $pushed) {
+		@acks["drained"] = count();
+	} else {
+		@acks["window"] = count();
+	}
+	@ack_read_copied = hist(@copied[tid]);
+	@ack_read_tiny[@copied[tid] < 4096 ? "read under 4 KiB" : "read of 4 KiB or more"] = count();
+	@unacked_bytes = hist($unacked);
+	@open_window = hist((uint32)($tp->rcv_wup + $tp->rcv_wnd - $tp->rcv_nxt));
+	@rcv_mss = lhist($ic->icsk_ack.rcv_mss, 0, 9000, 1000);
+	@window_clamp = lhist($tp->window_clamp >> 20, 0, 64, 4);
+}
+interval:s:10 { exit(); }
