@@ -1,0 +1,35 @@
+== fl50-loan64 (B, no idle timer; t2-r49) against fl48-loan64 (round 25 at 6; t2-r47), us a WRITE on nfsd (CPUs 8-55)
+busy 100.67 -> 102.49 (one profiled run each, a session apart)
+
+frame                                                        fl48   fl50
+svc_thread_wait_for_work                                     3.04   2.73
+schedule_timeout under svc_thread_wait_for_work              2.62   2.33
+schedule under svc_thread_wait_for_work                      2.08   2.32
+add_timer under svc_thread_wait_for_work                     0.30   0.00
+timer_delete_sync under svc_thread_wait_for_work             0.20   0.00
+add_timer                                                    0.44   0.21
+timer_delete_sync                                            0.31   0.12
+wake_up_process                                              2.06   2.13
+__schedule                                                   3.60   3.84
+svc_tcp_recvfrom                                            31.09  32.35
+svc_process                                                 55.53  58.00
+
+== the wake look, fl48-loan64: callers of the two top self frames
+-- _raw_spin_unlock_irqrestore self 4.81
+   1.10  svc_xprt_enqueue.part.0;svc_pool_wake_idle_thread;wake_up_process
+   0.89  svc_recv;svc_pool_wake_idle_thread;wake_up_process
+   0.86  nvme_prep_rq.part.0;nvme_map_data;nvme_pci_setup_data_sgl
+   0.24  schedule_timeout;timer_delete_sync;__timer_delete_sync
+   0.24  svc_thread_wait_for_work;schedule_timeout;add_timer
+   0.20  xlog_state_do_callback;xlog_state_do_iclog_callbacks;xlog_state_clean_iclog
+   0.17  get_page_from_freelist;rmqueue.isra.0;__rmqueue_pcplist
+   0.17  page_pool_put_netmem_bulk;page_pool_recycle_ring_bulk;page_pool_return_netmem
+-- finish_task_switch.isra.0 self 3.35
+   2.83  schedule_timeout;schedule;__schedule
+   0.18  worker_thread;schedule;__schedule
+   0.17  xlog_wait_on_iclog;schedule;__schedule
+   0.09  __lock_sock;schedule;__schedule
+   0.06  xlog_wait;schedule;__schedule
+   0.01  schedule_preempt_disabled;schedule;__schedule
+   0.01  schedule_hrtimeout_range_clock;schedule;__schedule
+   0.00  io_schedule_timeout;schedule_timeout;schedule

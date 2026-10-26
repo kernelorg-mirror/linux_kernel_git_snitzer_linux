@@ -1,0 +1,72 @@
+#!/usr/bin/bpftrace
+/*
+ * refused.bt - FLAMEGRAPH round 26's look at a loaned record refused region
+ * credit at its first region skb (svc_tcp_rx_credit_admit_to() false).
+ * For each refusal: why (avail short of the cost, or a waiter ahead), the
+ * cost it asked, avail, the records in flight, and what TCP had queued for
+ * the transport.  For each record admitted after a refusal: how long it
+ * waited and how many times it was refused.  For each svc_tcp_recvfrom()
+ * pass: refused, admitted after a wait, or other; its time, what it
+ * consumed and whether it sent an ACK.  fentry/fexit, as small.bt.
+ */
+fentry:sunrpc:svc_tcp_recvfrom
+{
+	$s = (struct svc_sock *)args.rqstp->rq_xprt;
+	@svsk[tid] = (uint64)$s;
+	@t0[tid] = nsecs;
+	@den[tid] = 0; @adm[tid] = 0; @acked[tid] = 0; @cop[tid] = 0;
+}
+kprobe:__tcp_cleanup_rbuf /@svsk[tid]/ { @cop[tid] += arg1; }
+kprobe:tcp_send_ack /@svsk[tid]/ { @acked[tid] += 1; }
+fexit:sunrpc:svc_tcp_rx_credit_admit_to
+{
+	$s = args.svsk;
+	$c = args.c;
+	$tp = (struct tcp_sock *)$s->sk_sk;
+	if (!retval) {
+		@den[tid] = 1;
+		@refusals = count();
+		$need = (int64)$s->sk_credit_need;
+		@why[$c->avail >= $need ? "a waiter ahead" : "avail short"] = count();
+		@ref_need = hist($need);
+		@ref_avail = hist($c->avail > 0 ? $c->avail : 0);
+		@ref_avail_neg[$c->avail < 0 ? "avail < 0" : "avail >= 0"] = count();
+		@ref_inflight = lhist($c->inflight_count, 0, 128, 8);
+		@ref_queued = hist((uint32)($tp->rcv_nxt - $tp->copied_seq));
+		@ref_reclen = hist(args.reclen);
+		@nref[(uint64)$s] += 1;
+		if (@first_ref[(uint64)$s] == 0) { @first_ref[(uint64)$s] = nsecs; }
+		@last_ref[(uint64)$s] = nsecs;
+	} else {
+		@admits = count();
+		if (@first_ref[(uint64)$s]) {
+			@adm[tid] = 1;
+			@admitted_after_refusal = count();
+			@wait_us = hist((nsecs - @first_ref[(uint64)$s]) / 1000);
+			@wait_since_last_us = hist((nsecs - @last_ref[(uint64)$s]) / 1000);
+			@refused_times = lhist(@nref[(uint64)$s], 0, 16, 1);
+			@adm_queued = hist((uint32)($tp->rcv_nxt - $tp->copied_seq));
+			delete(@first_ref[(uint64)$s]); delete(@last_ref[(uint64)$s]); delete(@nref[(uint64)$s]);
+		} else {
+			@admitted_first_try = count();
+		}
+	}
+}
+fentry:sunrpc:svc_tcp_rx_credit_wake /args.svsk/ { @credit_wakes = count(); }
+fexit:sunrpc:svc_tcp_recvfrom /@svsk[tid]/
+{
+	$k = @den[tid] ? "refused" : (@adm[tid] ? "admitted after a refusal" : "other");
+	@passes[$k] = count();
+	@pass_ns[$k] = avg(nsecs - @t0[tid]);
+	@pass_us_hist[$k] = hist((nsecs - @t0[tid]) / 1000);
+	@pass_acks[$k] = sum(@acked[tid]);
+	@pass_copied[$k] = avg(@cop[tid]);
+	if (@den[tid]) { @ref_copied = lhist(@cop[tid], 0, 256, 16); }
+	delete(@svsk[tid]); delete(@t0[tid]); delete(@den[tid]); delete(@adm[tid]); delete(@acked[tid]); delete(@cop[tid]);
+}
+interval:s:10
+{
+	clear(@svsk); clear(@t0); clear(@den); clear(@adm); clear(@acked); clear(@cop);
+	clear(@first_ref); clear(@last_ref); clear(@nref);
+	exit();
+}
