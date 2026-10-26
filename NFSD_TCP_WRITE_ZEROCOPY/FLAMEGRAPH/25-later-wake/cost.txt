@@ -1,0 +1,19 @@
+== r48: one sunrpc for every run (r25-sunrpc.ko, FD78696DEDB1901026A0DAD, 2a75926c1458), svc_tcp_rx_want_eighths set by twoport.sh WANT_EIGHTHS= for each run
+== rxirq/txirq here are not valid: twoport.sh opens the port after the first snapshot, which restarts the counts; outsegs is the server's TCP segments sent a WRITE
+r48-1-loan64-w4 ring 52.1 nfsd 104.1 us/W | rxirq 4.86 txirq 4.51 | enq 5.55 woken 4.43 vcsw 5.91 /W | pp/W: recycle_cached -0.00 outsegs 6.61 recycle_ring_full 0.46 alloc_slow 0.30 | region peak 6404 | maxentries:4096,numentries:4097,cachehits:0,
+r48-2-loan64-w6 ring 47.0 nfsd 97.7 us/W | rxirq -0.28 txirq -0.75 | enq 4.75 woken 3.96 vcsw 5.44 /W | pp/W: recycle_cached -0.00 outsegs 5.53 recycle_ring_full -0.00 alloc_slow 0.00 | region peak 6477 | maxentries:4096,numentries:4097,cachehits:0,
+r48-3-loan64-w4 ring 51.5 nfsd 102.1 us/W | rxirq 0.31 txirq 0.75 | enq 5.41 woken 4.35 vcsw 5.83 /W | pp/W: recycle_cached -0.00 outsegs 6.51 recycle_ring_full 0.01 alloc_slow 0.00 | region peak 6460 | maxentries:4096,numentries:4097,cachehits:0,
+r48-4-loan64-w6 ring 49.2 nfsd 99.5 us/W | rxirq -0.44 txirq -0.72 | enq 4.81 woken 4.00 vcsw 5.47 /W | pp/W: recycle_cached -0.00 outsegs 5.60 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 6297 | maxentries:4096,numentries:4097,cachehits:0,
+r48-5-loan64-w4 ring 49.9 nfsd 104.2 us/W | rxirq 0.01 txirq 0.71 | enq 5.46 woken 4.38 vcsw 5.86 /W | pp/W: recycle_cached -0.00 outsegs 6.57 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 6407 | maxentries:4096,numentries:4097,cachehits:0,
+r48-6-loan64-w6 ring 50.6 nfsd 97.5 us/W | rxirq 0.19 txirq -0.77 | enq 4.85 woken 4.03 vcsw 5.49 /W | pp/W: recycle_cached -0.00 outsegs 5.64 recycle_ring_full -0.01 alloc_slow -0.00 | region peak 6198 | maxentries:4096,numentries:4097,cachehits:0,
+r48-7-loan64-w4 ring 50.7 nfsd 101.9 us/W | rxirq -0.07 txirq 0.76 | enq 5.42 woken 4.36 vcsw 5.85 /W | pp/W: recycle_cached -0.00 outsegs 6.54 recycle_ring_full -0.01 alloc_slow -0.01 | region peak 6587 | maxentries:4096,numentries:4097,cachehits:0,
+r48-8-loan64-w6 ring 48.5 nfsd 96.4 us/W | rxirq 0.14 txirq -0.72 | enq 4.76 woken 3.98 vcsw 5.45 /W | pp/W: recycle_cached -0.00 outsegs 5.54 recycle_ring_full 0.01 alloc_slow 0.01 | region peak 6488 | maxentries:4096,numentries:4097,cachehits:0,
+== the fio maximum completion of each run, ms
+r48-1-loan64-w4 111.1
+r48-2-loan64-w6 117.4
+r48-3-loan64-w4 115.5
+r48-4-loan64-w6 108.7
+r48-5-loan64-w4 119.8
+r48-6-loan64-w6 112.5
+r48-7-loan64-w4 121.9
+r48-8-loan64-w6 115.4
