@@ -6218,6 +6218,15 @@ module_param(svc_tcp_rx_want_eighths, uint, 0644);
 MODULE_PARM_DESC(svc_tcp_rx_want_eighths,
 		 "Eighths of the open receive window an incomplete loaned record waits for before a thread takes it up again (1 to 8)");
 
+#if IS_ENABLED(CONFIG_KUNIT)
+/* Set the share of the window waited for; returns the one it replaces. */
+unsigned int svc_tcp_rx_kunit_want_eighths(unsigned int eighths)
+{
+	return xchg(&svc_tcp_rx_want_eighths, eighths);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_want_eighths);
+#endif
+
 VISIBLE_IF_KUNIT void svc_tcp_rx_set_want(struct svc_sock *svsk,
 					  const struct svc_tcp_rx_state *state,
 					  bool drained)

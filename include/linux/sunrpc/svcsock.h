@@ -355,6 +355,7 @@ bool svc_rx_region_send_bvec(const struct svc_rqst *rqstp, unsigned int nvecs,
 			     unsigned int k);
 u8 svc_tcp_rx_scaling_ratio(unsigned int factor);
 void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
+unsigned int svc_tcp_rx_kunit_want_eighths(unsigned int eighths);
 void svc_tcp_rx_set_want(struct svc_sock *svsk,
 			 const struct svc_tcp_rx_state *state, bool drained);
 #endif
