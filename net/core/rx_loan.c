@@ -246,7 +246,18 @@ int rx_loan_table_release(struct rx_loan_table *t)
 		     offsetofend(struct rx_loan_budget, stock) >
 		     offsetof(struct rx_loan_budget, lock));
 
+	/*
+	 * Each borrowed page's struct page has left this CPU's caches while
+	 * the record was written out, and is read and written again to drop
+	 * its references.  Fetch each a batch of entries ahead of its drop,
+	 * so that a batch's misses are in flight together and not taken one
+	 * page after another.
+	 */
+	for (index = 0; index < min(t->count, RX_LOAN_PUT_BATCH); index++)
+		prefetchw(t->bvec[index].bv_page);
 	for (index = 0; index < t->count; index++) {
+		if (index + RX_LOAN_PUT_BATCH < t->count)
+			prefetchw(t->bvec[index + RX_LOAN_PUT_BATCH].bv_page);
 		if (!test_bit(index, t->borrowed))
 			continue;
 		/*
