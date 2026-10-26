@@ -3154,6 +3154,15 @@ static bool svc_rtc_thread_steal_cycle(struct svc_rqst *thr,
 	return pool && svc_rtc_thread_run_from(thr, pool);
 }
 
+/*
+ * An idle thread may exit only while its pool has more threads than its
+ * minimum, and a pool without a minimum keeps every thread.
+ */
+static bool svc_pool_can_shrink(const struct svc_pool *pool)
+{
+	return pool->sp_nrthrmin && pool->sp_nrthreads > pool->sp_nrthrmin;
+}
+
 /**
  * svc_recv - Receive and process the next request on any transport
  * @rqstp: an idle RPC service thread
@@ -3163,7 +3172,9 @@ static bool svc_rtc_thread_steal_cycle(struct svc_rqst *thr,
  * the shared svc_serv structure, only cachelines in the local
  * svc_pool.
  *
- * If the timeout is 0, then the sleep will never time out.
+ * If the timeout is 0, then the sleep will never time out.  Nor does it
+ * while the pool could not lose this thread, as the timeout is only there
+ * to let it go.
  *
  * Returns -ETIMEDOUT if idle for an extended period
  *         -EBUSY if there is more work to do than available threads
@@ -3180,10 +3191,20 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
 	if (!svc_alloc_arg(rqstp))
 		return ret;
 
-	did_timeout = svc_thread_wait_for_work(rqstp, timeo, &cyc);
+	/*
+	 * A busy server's threads go idle and are woken many times a
+	 * millisecond, and a timed sleep arms a timer and deletes it each
+	 * time.  A thread its pool could not lose sleeps without one.  The
+	 * pool grows past its minimum only when svc_recv() finds no thread
+	 * idle, so no thread is still asleep from before.  A thread asleep
+	 * when the minimum is lowered may go from its next idle sleep.
+	 */
+	did_timeout = svc_thread_wait_for_work(rqstp,
+					       svc_pool_can_shrink(pool) ?
+					       timeo : 0, &cyc);
 
 	if (did_timeout && svc_thread_should_sleep(rqstp) &&
-	    pool->sp_nrthrmin && pool->sp_nrthreads > pool->sp_nrthrmin)
+	    svc_pool_can_shrink(pool))
 		ret = -ETIMEDOUT;
 
 	clear_bit(SP_TASK_PENDING, &pool->sp_flags);
