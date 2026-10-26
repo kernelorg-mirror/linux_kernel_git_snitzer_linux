@@ -6169,7 +6169,16 @@ static bool svc_tcp_at_urg_mark(struct sock *sk)
  * Segments that arrived during the read are on the backlog and meet the
  * new mark when the lock is released.  A TLS transport is left alone: its
  * records are not the bytes TCP counts.
+ *
+ * The share of the window waited for is svc_tcp_rx_want_eighths eighths:
+ * each pass ends in an ACK, so waiting for more takes a record up in fewer
+ * passes, and leaves less of the window arriving while a thread wakes.
  */
+static unsigned int svc_tcp_rx_want_eighths __read_mostly = 4;
+module_param(svc_tcp_rx_want_eighths, uint, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_want_eighths,
+		 "Eighths of the open receive window an incomplete loaned record waits for before a thread takes it up again (1 to 8)");
+
 VISIBLE_IF_KUNIT void svc_tcp_rx_set_want(struct svc_sock *svsk,
 					  const struct svc_tcp_rx_state *state,
 					  bool drained)
@@ -6182,9 +6191,14 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_set_want(struct svc_sock *svsk,
 		u32 got = svsk->sk_tcplen - sizeof(rpc_fraghdr);
 		u32 reclen = svc_sock_reclen(svsk);
 
-		if (reclen > got)
-			want = min_t(u32, reclen - got,
-				     tcp_receive_window(tcp_sk(svsk->sk_sk)) >> 1);
+		if (reclen > got) {
+			u32 eighths = clamp_val(READ_ONCE(svc_tcp_rx_want_eighths),
+						1, 8);
+
+			want = min_t(u64, reclen - got,
+				     (u64)tcp_receive_window(tcp_sk(svsk->sk_sk)) *
+				     eighths / 8);
+		}
 	}
 	if (READ_ONCE(svsk->sk_rx_want) != want)
 		WRITE_ONCE(svsk->sk_rx_want, want);
