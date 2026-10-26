@@ -1,0 +1,8 @@
+L46-B1 untraced: write 8.59 GB/s, 8195 IOPS; completion ms: p50 0.408, p90 0.477, p99 0.553, p99.9 0.635, mean 0.419, max 0.824
+L46-B1 traced:   write 8.22 GB/s, 7840 IOPS; completion ms: p50 0.428, p90 0.494, p99 0.586, p99.9 0.659, mean 0.437, max 0.767
+L46-A1 untraced: write 8.61 GB/s, 8215 IOPS; completion ms: p50 0.408, p90 0.489, p99 0.594, p99.9 0.684, mean 0.422, max 0.829
+L46-A1 traced:   write 8.20 GB/s, 7819 IOPS; completion ms: p50 0.420, p90 0.494, p99 0.553, p99.9 0.610, mean 0.435, max 0.981
+L46-B2 untraced: write 8.21 GB/s, 7833 IOPS; completion ms: p50 0.428, p90 0.498, p99 0.569, p99.9 0.659, mean 0.435, max 1.276
+L46-B2 traced:   write 7.50 GB/s, 7149 IOPS; completion ms: p50 0.473, p90 0.537, p99 0.618, p99.9 0.700, mean 0.478, max 0.924
+L46-A2 untraced: write 8.14 GB/s, 7766 IOPS; completion ms: p50 0.436, p90 0.514, p99 0.586, p99.9 0.659, mean 0.449, max 1.205
+L46-A2 traced:   write 7.67 GB/s, 7314 IOPS; completion ms: p50 0.457, p90 0.537, p99 0.610, p99.9 0.676, mean 0.470, max 0.807
