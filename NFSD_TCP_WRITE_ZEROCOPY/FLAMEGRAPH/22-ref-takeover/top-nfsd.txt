@@ -1,0 +1,46 @@
+== fl42-loan64 (B, the takeover; t2-r42) against fl41-loan64 (round 21's B, the same code as A here; t2-r41), the settled setting
+== us a WRITE on nfsd (CPUs 8-55), the folded stacks scaled to each profile's busy time
+busy 112.2 -> 106.2
+
+frame                          self fl41 fl42 incl fl41 fl42
+svc_tcp_recvfrom                 0.86   1.01   38.21  34.49
+tcp_read_sock                    0.02   0.02   27.75  24.52
+svc_tcp_rx_walk_skb              0.95   1.26    7.22   5.83
+svc_tcp_rx_borrow_segment        3.53   2.04    6.27   4.54
+svc_tcp_rx_append (_ref in fl42)   2.80   2.70    2.81   2.70
+napi_pp_put_page                 2.46   1.11    2.48   1.13
+svc_tcp_rx_prefetch_pages        2.03   1.82    2.03   1.82
+svc_tcp_rx_release_refs          1.01   0.95   10.71  10.43
+page_pool_put_netmem_bulk        5.99   5.86    8.80   8.61
+
+== fl42-loan64 top self frames
+self                                      %     us/WRITE
+page_pool_put_netmem_bulk                 5.36    5.70
+_raw_spin_unlock_irqrestore               4.79    5.08
+finish_task_switch.isra.0                 3.33    3.53
+svc_tcp_rx_append_ref                     2.47    2.62
+_raw_spin_lock                            2.40    2.55
+svc_tcp_rx_borrow_segment                 1.87    1.98
+svc_tcp_rx_prefetch_pages                 1.67    1.77
+blk_map_iter_next                         1.58    1.68
+svc_tcp_rx_walk_skb                       1.16    1.23
+xdr_buf_validate_page_mode                1.09    1.15
+napi_pp_put_page                          1.02    1.08
+_raw_spin_lock_bh                         1.01    1.07
+_raw_spin_unlock_irq                      0.99    1.05
+__dev_xmit_skb                            0.99    1.05
+svc_tcp_restore_pages                     0.96    1.02
+svc_tcp_recvfrom                          0.93    0.98
+svc_recv                                  0.89    0.95
+svc_tcp_rx_release_refs                   0.87    0.92
+dma_direct_map_phys                       0.87    0.92
+xdr_stream_subsegment                     0.85    0.90
+__tcp_transmit_skb                        0.85    0.91
+percpu_counter_add_batch                  0.80    0.85
+svc_tcp_rx_region_span                    0.76    0.81
+bio_split_io_at                           0.75    0.80
+svc_tcp_recv_skb                          0.74    0.79
+svc_thread_should_sleep                   0.71    0.75
+dma_map_phys                              0.67    0.71
+__pi_memcpy_generic                       0.67    0.71
+xas_load                                  0.63    0.67

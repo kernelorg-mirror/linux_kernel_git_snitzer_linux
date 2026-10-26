@@ -1,0 +1,23 @@
+#!/usr/bin/bpftrace
+/*
+ * refs.bt - each page's pp_ref_count as the loan's release and the skb's
+ * free drop their references (struct page + 0x28 on this build, as the
+ * ldaddal in both shows), and the skb free's caller.
+ */
+kprobe:page_pool_put_netmem_bulk /comm == "nfsd"/
+{
+	$d = (uint64 *)arg0;
+	$n = (uint32)arg1;
+	$i = (uint32)0;
+	while ($i < $n && $i < 16) {
+		$p = *($d + $i) & 0xfffffffffffffffe;
+		@release_count[*(int64 *)($p + 0x28)] = count();
+		$i++;
+	}
+}
+kprobe:napi_pp_put_page /comm == "nfsd"/
+{
+	$p = (uint64)arg0 & 0xfffffffffffffffe;
+	@skbfree_count[*(int64 *)($p + 0x28)] = count();
+}
+interval:s:10 { exit(); }

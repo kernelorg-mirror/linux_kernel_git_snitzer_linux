@@ -1,0 +1,19 @@
+== r42: A the tip before (a-sunrpc.ko, 1D9C18007E10E362F8EFD03, c1b4326c9b99), B r22-sunrpc.ko (4BC3A057D06EC2EA1655F73, the takeover as first committed, the same machine code as 5c004783a05d); sunrpc swapped before each run
+== rxirq/txirq here are not valid: twoport.sh opens the port after the first snapshot, which restarts the counts
+r42-1-loan64-A ring 50.1 nfsd 107.9 us/W | rxirq 4.64 txirq 4.38 | enq 5.38 woken 4.33 vcsw 5.83 /W | pp/W: recycle_cached -0.00 recycle_ring_full 0.71 alloc_slow 0.30 | region peak 6469 | maxentries:4096,numentries:4097,cachehits:0,
+r42-2-loan64-B ring 49.1 nfsd 107.9 us/W | rxirq 0.05 txirq 0.04 | enq 5.47 woken 4.37 vcsw 5.86 /W | pp/W: recycle_cached -0.00 recycle_ring_full 0.01 alloc_slow 0.00 | region peak 6372 | maxentries:4096,numentries:4097,cachehits:0,
+r42-3-loan64-A ring 49.6 nfsd 110.9 us/W | rxirq -0.01 txirq -0.07 | enq 5.40 woken 4.32 vcsw 5.82 /W | pp/W: recycle_cached -0.00 recycle_ring_full -0.02 alloc_slow -0.01 | region peak 6540 | maxentries:4096,numentries:4097,cachehits:0,
+r42-4-loan64-B ring 49.4 nfsd 104.1 us/W | rxirq 0.19 txirq 0.02 | enq 5.35 woken 4.31 vcsw 5.79 /W | pp/W: recycle_cached -0.00 recycle_ring_full 0.01 alloc_slow 0.00 | region peak 6491 | maxentries:4096,numentries:4097,cachehits:0,
+r42-5-loan64-A ring 49.2 nfsd 106.1 us/W | rxirq -0.32 txirq -0.03 | enq 5.44 woken 4.34 vcsw 5.84 /W | pp/W: recycle_cached -0.00 recycle_ring_full 0.01 alloc_slow 0.00 | region peak 6388 | maxentries:4096,numentries:4097,cachehits:0,
+r42-6-loan64-B ring 48.6 nfsd 106.1 us/W | rxirq 0.19 txirq -0.71 | enq 5.34 woken 4.37 vcsw 5.85 /W | pp/W: recycle_cached -0.00 recycle_ring_full -0.01 alloc_slow -0.01 | region peak 7551 | maxentries:4096,numentries:4097,cachehits:0,
+r42-7-loan64-A ring 49.4 nfsd 108.2 us/W | rxirq 0.19 txirq 0.78 | enq 5.38 woken 4.33 vcsw 5.83 /W | pp/W: recycle_cached -0.00 recycle_ring_full -0.00 alloc_slow 0.01 | region peak 6459 | maxentries:4096,numentries:4097,cachehits:0,
+r42-8-loan64-B ring 49.0 nfsd 102.3 us/W | rxirq -0.35 txirq -0.12 | enq 5.38 woken 4.34 vcsw 5.83 /W | pp/W: recycle_cached -0.00 recycle_ring_full 0.01 alloc_slow 0.00 | region peak 6430 | maxentries:4096,numentries:4097,cachehits:0,
+== the fio maximum completion of each run, ms (r42-6's 4575.6 is one WRITE stalled, see the README)
+r42-1-loan64-A 116.5
+r42-2-loan64-B 114.9
+r42-3-loan64-A 138.4
+r42-4-loan64-B 120.0
+r42-5-loan64-A 118.6
+r42-6-loan64-B 4575.6
+r42-7-loan64-A 110.9
+r42-8-loan64-B 118.9

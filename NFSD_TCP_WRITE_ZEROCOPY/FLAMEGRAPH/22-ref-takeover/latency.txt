@@ -1,0 +1,8 @@
+L42-B1 untraced: write 7.88 GB/s, 7517 IOPS; completion ms: p50 0.453, p90 0.528, p99 0.594, p99.9 0.659, mean 0.463, max 0.853
+L42-B1 traced:   write 7.90 GB/s, 7530 IOPS; completion ms: p50 0.453, p90 0.522, p99 0.602, p99.9 0.676, mean 0.461, max 0.800
+L42-A1 untraced: write 7.77 GB/s, 7406 IOPS; completion ms: p50 0.457, p90 0.537, p99 0.610, p99.9 0.684, mean 0.464, max 0.814
+L42-A1 traced:   write 8.25 GB/s, 7869 IOPS; completion ms: p50 0.424, p90 0.498, p99 0.569, p99.9 0.651, mean 0.437, max 0.887
+L42-B2 untraced: write 8.24 GB/s, 7855 IOPS; completion ms: p50 0.432, p90 0.502, p99 0.569, p99.9 0.643, mean 0.442, max 1.969
+L42-B2 traced:   write 7.97 GB/s, 7605 IOPS; completion ms: p50 0.453, p90 0.510, p99 0.578, p99.9 0.659, mean 0.462, max 2.273
+L42-A2 untraced: write 8.14 GB/s, 7760 IOPS; completion ms: p50 0.440, p90 0.514, p99 0.578, p99.9 0.643, mean 0.451, max 0.835
+L42-A2 traced:   write 8.41 GB/s, 8016 IOPS; completion ms: p50 0.420, p90 0.485, p99 0.553, p99.9 0.610, mean 0.431, max 2.247

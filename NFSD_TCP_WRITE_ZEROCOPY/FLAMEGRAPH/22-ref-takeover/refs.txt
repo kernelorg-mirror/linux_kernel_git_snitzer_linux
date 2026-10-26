@@ -1,0 +1,38 @@
+== refs.bt: each page's pp_ref_count just before a reference is dropped, 10 s from 5 s after nfsd passes 10,000 WRITEs a second
+== loan release: page_pool_put_netmem_bulk from svc_tcp_rx_release_refs; skb free: napi_pp_put_page from the skb's free in tcp_read_sock
+-- refs-B-loan64 (40.42 GB/s)
+@release_count[1]: 5642558
+@release_count[2]: 39177790
+@release_count[3]: 467129
+@release_count[4]: 33508
+@release_count[5]: 110
+@skbfree_count[1]: 16539
+@skbfree_count[2]: 24463
+@skbfree_count[3]: 4214300
+@skbfree_count[4]: 1130704
+@skbfree_count[5]: 124702
+@skbfree_count[6]: 23
+-- refs-A-loan64 (40.53 GB/s)
+@release_count[1]: 6222711
+@release_count[2]: 42031717
+@release_count[3]: 499257
+@release_count[4]: 31099
+@release_count[5]: 164
+@skbfree_count[1]: 15322
+@skbfree_count[2]: 30157
+@skbfree_count[3]: 28973474
+@skbfree_count[4]: 19139563
+@skbfree_count[5]: 266373
+@skbfree_count[6]: 27
+-- p1-loan64, the first look (build 499's own sunrpc, before round 22)
+@release_count[1]: 6351500
+@release_count[2]: 41558598
+@release_count[3]: 493079
+@release_count[4]: 26104
+@release_count[5]: 170
+@skbfree_count[1]: 12812
+@skbfree_count[2]: 25542
+@skbfree_count[3]: 28920041
+@skbfree_count[4]: 18853203
+@skbfree_count[5]: 261808
+@skbfree_count[6]: 16
