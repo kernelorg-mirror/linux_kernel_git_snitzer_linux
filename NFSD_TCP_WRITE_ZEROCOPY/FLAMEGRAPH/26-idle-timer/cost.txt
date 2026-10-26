@@ -1,0 +1,19 @@
+== r50: A round 25's sunrpc (FD78696DEDB1901026A0DAD), B with 6c6dc284fed0 (A06FE478658242A10E100FF); the settled setting, svc_tcp_rx_want_eighths 6
+== rxirq/txirq here are not valid: twoport.sh opens the port after the first snapshot; outsegs is the server's TCP segments sent a WRITE
+r50-1-loan64-A ring 47.0 nfsd 99.0 us/W | rxirq 4.52 txirq 4.01 | enq 4.81 woken 3.99 vcsw 5.46 /W | pp/W: recycle_cached -0.00 outsegs 5.59 recycle_ring_full 0.46 alloc_slow 0.30 | region peak 6505 | maxentries:4096,numentries:4097,cachehits:0,
+r50-2-loan64-B ring 48.4 nfsd 98.4 us/W | rxirq -0.22 txirq -0.00 | enq 4.76 woken 3.97 vcsw 5.44 /W | pp/W: recycle_cached -0.00 outsegs 5.54 recycle_ring_full -0.00 alloc_slow -0.00 | region peak 6412 | maxentries:4096,numentries:4097,cachehits:0,
+r50-3-loan64-A ring 46.9 nfsd 98.6 us/W | rxirq 0.55 txirq 0.01 | enq 4.68 woken 3.91 vcsw 5.39 /W | pp/W: recycle_cached -0.00 outsegs 5.46 recycle_ring_full -0.01 alloc_slow -0.01 | region peak 6503 | maxentries:4096,numentries:4097,cachehits:0,
+r50-4-loan64-B ring 46.6 nfsd 97.2 us/W | rxirq -0.32 txirq -0.05 | enq 4.73 woken 3.96 vcsw 5.44 /W | pp/W: recycle_cached -0.00 outsegs 5.52 recycle_ring_full 0.02 alloc_slow 0.01 | region peak 6348 | maxentries:4096,numentries:4097,cachehits:0,
+r50-5-loan64-A ring 45.5 nfsd 96.8 us/W | rxirq 0.01 txirq 0.03 | enq 4.70 woken 3.92 vcsw 5.40 /W | pp/W: recycle_cached -0.00 outsegs 5.48 recycle_ring_full -0.01 alloc_slow -0.01 | region peak 6537 | maxentries:4096,numentries:4097,cachehits:0,
+r50-6-loan64-B ring 48.6 nfsd 95.4 us/W | rxirq 0.08 txirq 0.01 | enq 4.76 woken 3.97 vcsw 5.45 /W | pp/W: recycle_cached -0.00 outsegs 5.54 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 6467 | maxentries:4096,numentries:4097,cachehits:0,
+r50-7-loan64-A ring 46.4 nfsd 94.4 us/W | rxirq 0.01 txirq -0.25 | enq 4.75 woken 3.97 vcsw 5.45 /W | pp/W: recycle_cached -0.00 outsegs 5.53 recycle_ring_full -0.01 alloc_slow -0.00 | region peak 6425 | maxentries:4096,numentries:4097,cachehits:0,
+r50-8-loan64-B ring 48.1 nfsd 95.1 us/W | rxirq -0.12 txirq 0.11 | enq 4.70 woken 3.94 vcsw 5.42 /W | pp/W: recycle_cached -0.00 outsegs 5.48 recycle_ring_full -0.00 alloc_slow -0.00 | region peak 6526 | maxentries:4096,numentries:4097,cachehits:0,
+== the fio maximum completion of each run, ms
+r50-1-loan64-A 114.4
+r50-2-loan64-B 114.1
+r50-3-loan64-A 116.9
+r50-4-loan64-B 112.3
+r50-5-loan64-A 109.7
+r50-6-loan64-B 116.9
+r50-7-loan64-A 113.4
+r50-8-loan64-B 126.3
