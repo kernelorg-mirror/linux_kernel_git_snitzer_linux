@@ -811,6 +811,16 @@ static void nfs_local_pgio_restart(struct nfs_local_kiocb *iocb,
 	}
 }
 
+static void nfs_local_pgio_restart_work(struct work_struct *work)
+{
+	struct nfs_local_kiocb *iocb =
+		container_of(work, struct nfs_local_kiocb, work);
+	unsigned int nofs_flags = memalloc_nofs_save();
+
+	nfs_local_pgio_restart(iocb, iocb->hdr);
+	memalloc_nofs_restore(nofs_flags);
+}
+
 static void nfs_local_pgio_release(struct nfs_local_kiocb *iocb)
 {
 	struct nfs_pgio_header *hdr = iocb->hdr;
@@ -822,8 +832,22 @@ static void nfs_local_pgio_release(struct nfs_local_kiocb *iocb)
 	if (task->tk_action == NULL) {
 		nfs_local_iocb_release(iocb);
 		task->tk_ops->rpc_release(hdr);
-	} else
-		nfs_local_pgio_restart(iocb, hdr);
+		return;
+	}
+
+	/*
+	 * A restarted call (a short read or write, an NFSv4 stateid retry, the
+	 * READ_PLUS to READ fallback) is re-issued.  Re-issuing it from here
+	 * would nest another submission and completion beneath this frame for
+	 * each restart, and a backing file that transfers a page per call then
+	 * overflows the stack.  Re-issue from the LOCALIO workqueue: the depth
+	 * stays constant and the remainder still starts only once the prefix
+	 * has completed.  The caller may be running iocb->work; it is reused
+	 * here because no caller touches the iocb after its release, and
+	 * nothing else can queue iocb->work until the restarted I/O completes.
+	 */
+	INIT_WORK(&iocb->work, nfs_local_pgio_restart_work);
+	queue_work(nfslocaliod_workqueue, &iocb->work);
 }
 
 static void nfs_local_pgio_complete(struct nfs_local_kiocb *iocb)
