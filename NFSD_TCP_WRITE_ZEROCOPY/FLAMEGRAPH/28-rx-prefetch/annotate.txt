@@ -1,0 +1,54 @@
+== the hot instructions on the rings (CPUs 0, 2, 4, 6), % of each function's samples; fl55a rx_prefetch N, fl55b rx_prefetch Y
+
+== eth_type_trans, fl55a (perf annotate)
+   83.05 :   ffff9fe050f0a098:       eor     x0, x1, x0
+
+== eth_type_trans, fl55b (perf annotate)
+    6.53 :   ffff9fe050f0a048:       mov     x19, x0
+   14.89 :   ffff9fe050f0a094:       ldr     x1, [x3, x1]
+   28.59 :   ffff9fe050f0a098:       eor     x0, x1, x0
+   13.74 :   ffff9fe050f0a0a4:       ldrh    w0, [x2, #12]
+    5.17 :   ffff9fe050f0a0c0:       ret
+
+== napi_build_skb, fl55a (perf annotate)
+   36.64 :   ffff9fe050e5b498:       sub     x2, x1, #0x1
+    6.45 :   ffff9fe050e5b49c:       tst     x1, #0x1
+   15.08 :   ffff9fe050e5b4a8:       tbz     w1, #1, 0xffff9fe050e5b4b4
+   13.53 :   ffff9fe050e5b510:       b       0xffff9fe050e5b438
+
+== napi_build_skb, fl55b (perf annotate)
+    6.40 :   ffff9fe050e5b434:       cbnz    w1, 0xffff9fe050e5b500
+    4.84 :   ffff9fe050e5b46c:       cbz     w22, 0xffff9fe050e5b4b4
+    9.07 :   ffff9fe050e5b498:       sub     x2, x1, #0x1
+   25.87 :   ffff9fe050e5b4a8:       tbz     w1, #1, 0xffff9fe050e5b4b4
+    4.73 :   ffff9fe050e5b4b4:       mov     x0, x21
+   17.33 :   ffff9fe050e5b510:       b       0xffff9fe050e5b438
+
+== __build_skb_around, fl55a (perf annotate)
+   65.98 :   ffff9fe050e58f90:       stp     xzr, xzr, [x0, #16]
+    5.55 :   ffff9fe050e58fa8:       ret
+
+== __build_skb_around, fl55b (perf annotate)
+   12.39 :   ffff9fe050e58f34:       stp     x29, x30, [sp, #-48]!
+   10.27 :   ffff9fe050e58f88:       strh    w2, [x19, #136]
+   15.38 :   ffff9fe050e58f90:       stp     xzr, xzr, [x0, #16]
+    8.46 :   ffff9fe050e58fa0:       ldp     x29, x30, [sp], #48
+    8.11 :   ffff9fe050e58fa4:       autiasp
+   14.34 :   ffff9fe050e58fa8:       ret
+
+== xeu_rx_poll, fl55a (mapped on r28-xeu.ko; netdevice.h:2706 is net_prefetch(), after the first prefetch of the next frame's header, whose address waits on the next descriptor's entry)
+ 26.62  +0x0b0  and	w0, w0, #0x1                         xeu_drv.c:1053 (discriminator 2)
+ 12.34  +0x0c0  ldrh	w0, [x28, #12]                      xeu_drv.c:1059
+  4.05  +0x0dc  ldrh	w19, [x25, #2]                      xeu_drv.c:1062 (discriminator 2)
+  3.17  +0x0bc  dmb	oshld                                xeu_drv.c:1057
+  3.12  +0x220  mov	x1, #0x40000000            	// #1073 mm.h:3111
+shown 49.3%
+
+== xeu_rx_poll, fl55b (mapped on r28-xeu.ko; netdevice.h:2706 is net_prefetch(), after the first prefetch of the next frame's header, whose address waits on the next descriptor's entry)
+ 15.49  +0x1ac  add	x0, x0, #0x40                        netdevice.h:2706
+ 12.56  +0x0b0  and	w0, w0, #0x1                         xeu_drv.c:1053 (discriminator 2)
+  7.39  +0x0c0  ldrh	w0, [x28, #12]                      xeu_drv.c:1059
+  5.66  +0x140  and	w0, w0, #0x1                         xeu_drv.c:1017 (discriminator 2)
+  5.06  +0x170  ldr	w3, [x23, #4]                        xeu_drv.c:91 (discriminator 14)
+  3.47  +0x0dc  ldrh	w19, [x25, #2]                      xeu_drv.c:1062 (discriminator 2)
+shown 49.6%
