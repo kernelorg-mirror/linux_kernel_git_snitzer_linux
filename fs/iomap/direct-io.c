@@ -219,8 +219,7 @@ static inline bool should_report_dio_fserror(int error)
 
 static ssize_t iomap_dio_result(struct kiocb *iocb, ssize_t error)
 {
-	if (error == -EDIOALIGN &&
-	    (!(iocb->ki_flags & IOCB_DIO_GEOMETRY) || !is_sync_kiocb(iocb)))
+	if (error == -EDIOALIGN && !(iocb->ki_flags & IOCB_DIO_GEOMETRY))
 		return -EINVAL;
 	return error;
 }

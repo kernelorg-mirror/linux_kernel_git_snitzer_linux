@@ -365,7 +365,7 @@ struct readahead_control;
  * take its inode lock shared where it can.
  */
 #define IOCB_NOSERIAL		(1 << 25)
-/* Cooperating synchronous kernel caller accepts an internal geometry result. */
+/* Cooperating kernel caller accepts an internal geometry result. */
 #define IOCB_DIO_GEOMETRY	(1 << 26)
 
 /* for use in trace events */
