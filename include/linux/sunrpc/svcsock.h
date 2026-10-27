@@ -152,6 +152,12 @@ struct svc_sock {
 	 * less (svc_tcp_rx_set_want())
 	 */
 	u32			sk_rx_want;
+	/* region pages held by this connection's confined READ replies */
+	atomic_t		sk_rx_region_inflight;
+	bool			sk_rx_region_stalled;	/* at its share */
+	/* READs parked until the connection's share has room */
+	spinlock_t		sk_rx_region_lock;
+	struct list_head	sk_rx_region_waiters;
 	/* region pages seen: hold the receive buffer (set by the actor) */
 	bool			sk_rx_hold_pending;
 	/* receive buffer, window clamp and scaling ratio held */
@@ -287,6 +293,26 @@ int svc_tcp_rx_window_clamp(int rcvbuf, unsigned int factor);
 void svc_tcp_rx_geometry_account(struct svc_sock *svsk, unsigned int truesize,
 				 unsigned int skb_len, unsigned int used);
 unsigned int svc_tcp_rx_hold_factor(struct svc_sock *svsk);
+struct svc_rx_region_park;
+struct ubuf_info;
+int svc_tcp_rx_region_read(struct svc_rqst *rqstp, unsigned int pages);
+void svc_tcp_rx_region_unconfine(struct svc_rqst *rqstp);
+void svc_tcp_rx_region_park_free(struct svc_rx_region_park *park);
+void svc_tcp_rx_region_unconfine_op(struct svc_rqst *rqstp, bool served);
+void svc_rx_region_share_stall(struct svc_sock *svsk, unsigned int share,
+			       unsigned int held, __be32 xid);
+void svc_tcp_rx_region_kunit_read_region(struct page **pages, unsigned int n);
+unsigned int svc_tcp_rx_region_kunit_read_free(void);
+struct ubuf_info *svc_tcp_rx_region_kunit_send(struct svc_rqst *rqstp,
+					       unsigned int skbs);
+void svc_tcp_rx_region_kunit_flush(void);
+void svc_tcp_rx_region_kunit_reads(bool on);
+int svc_tcp_rx_region_kunit_has_wspace(struct svc_sock *svsk);
+void svc_tcp_rx_region_kunit_conn_drain(struct svc_sock *svsk);
+void svc_tcp_rx_region_kunit_age(struct ubuf_info *ubuf);
+void svc_tcp_rx_region_kunit_drain_waiters(void);
+bool svc_rx_region_send_bvec(const struct svc_rqst *rqstp, unsigned int nvecs,
+			     unsigned int k);
 u8 svc_tcp_rx_scaling_ratio(unsigned int factor);
 void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
 void svc_tcp_rx_set_want(struct svc_sock *svsk,

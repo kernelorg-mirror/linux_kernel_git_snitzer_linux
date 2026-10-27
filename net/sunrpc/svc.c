@@ -616,6 +616,9 @@ svc_rqst_free(struct svc_rqst *rqstp)
 	folio_batch_release(&rqstp->rq_fbatch);
 	svc_tcp_rx_state_free(rqstp->rq_tcp_rx);
 	kfree(rqstp->rq_bvec);
+	kfree(rqstp->rq_rx_region_pages);
+	kfree(rqstp->rq_rx_region_saved);
+	bitmap_free(rqstp->rq_rx_region_map);
 	svc_release_buffer(rqstp);
 	if (rqstp->rq_scratch_folio)
 		folio_put(rqstp->rq_scratch_folio);
@@ -665,6 +668,18 @@ svc_prepare_thread(struct svc_serv *serv, struct svc_pool *pool, int node)
 							  rqstp->rq_maxpages,
 							  GFP_KERNEL, node);
 	if (!rqstp->rq_tcp_rx)
+		goto out_enomem;
+
+	rqstp->rq_rx_region_pages = kcalloc_node(rqstp->rq_maxpages,
+						 sizeof(struct page *),
+						 GFP_KERNEL, node);
+	rqstp->rq_rx_region_saved = kcalloc_node(rqstp->rq_maxpages,
+						 sizeof(struct page *),
+						 GFP_KERNEL, node);
+	rqstp->rq_rx_region_map = bitmap_zalloc_node(rqstp->rq_maxpages,
+						     GFP_KERNEL, node);
+	if (!rqstp->rq_rx_region_pages || !rqstp->rq_rx_region_saved ||
+	    !rqstp->rq_rx_region_map)
 		goto out_enomem;
 
 	rqstp->rq_err = -EAGAIN; /* No error yet */
@@ -1071,6 +1086,118 @@ void svc_rqst_bounce_done(struct svc_rqst *rqstp, struct bio_vec *bvec,
 		xprt->xpt_ops->xpo_bounce_done(rqstp, bvec, nvecs);
 }
 EXPORT_SYMBOL_GPL(svc_rqst_bounce_done);
+
+/**
+ * svc_rqst_rx_region_read - Confine a READ payload to region pages
+ * @rqstp: RPC transaction context, its call decoded
+ * @pages: payload pages the reply will carry
+ *
+ * Called before the duplicate-reply cache and before any operation runs.
+ * The transport either installs region pages as the reply's payload pages
+ * (svc_rqst_rx_region_held()), leaves the request unconfined, or parks it
+ * until pages are free.
+ *
+ * Return values:
+ *   %0: process the request
+ *   %-EAGAIN: parked; do not process or reply, the transport replays it
+ */
+int svc_rqst_rx_region_read(struct svc_rqst *rqstp, unsigned int pages)
+{
+	struct svc_xprt *xprt = rqstp->rq_xprt;
+
+	if (!pages || !xprt || !xprt->xpt_ops->xpo_rx_region_read)
+		return 0;
+	return xprt->xpt_ops->xpo_rx_region_read(rqstp, pages);
+}
+EXPORT_SYMBOL_GPL(svc_rqst_rx_region_read);
+
+/**
+ * svc_rqst_rx_region_unconfine - Serve a confined READ from ordinary pages
+ * @rqstp: RPC transaction context
+ * @served: the READ is served from ordinary pages (counted as unconfined);
+ *	false for a reply that is never sent
+ *
+ * Returns the region pages and credit before they are used (for example
+ * a file without direct I/O) and puts the request's own pages back.
+ */
+void svc_rqst_rx_region_unconfine(struct svc_rqst *rqstp, bool served)
+{
+	struct svc_xprt *xprt = rqstp->rq_xprt;
+
+	if (svc_rqst_rx_region_held(rqstp) &&
+	    xprt->xpt_ops->xpo_rx_region_unconfine)
+		xprt->xpt_ops->xpo_rx_region_unconfine(rqstp, served);
+}
+EXPORT_SYMBOL_GPL(svc_rqst_rx_region_unconfine);
+
+/**
+ * svc_rqst_rx_region_fill - Read a READ's payload into region pages
+ * @rqstp: RPC transaction context holding region pages
+ * @n: pages the READ consumes from rq_next_page on
+ *
+ * Swaps the next @n reply page slots for region pages, saving the pages
+ * they held.  Each READ fills its own slots when it runs, so slots other
+ * operations already encoded into are never touched.
+ *
+ * Return: false when too few region pages are left; the READ then uses
+ * the request's own pages.
+ */
+bool svc_rqst_rx_region_fill(struct svc_rqst *rqstp, unsigned int n)
+{
+	unsigned int slot = rqstp->rq_next_page - rqstp->rq_respages;
+	unsigned int i;
+
+	if (!svc_rqst_rx_region_held(rqstp) ||
+	    rqstp->rq_rx_region_used + n > rqstp->rq_rx_region_count ||
+	    n > rqstp->rq_page_end - rqstp->rq_next_page)
+		return false;
+	for (i = 0; i < n; i++, slot++) {
+		rqstp->rq_rx_region_saved[slot] = rqstp->rq_respages[slot];
+		rqstp->rq_respages[slot] =
+			rqstp->rq_rx_region_pages[rqstp->rq_rx_region_used++];
+		__set_bit(slot, rqstp->rq_rx_region_map);
+	}
+	return true;
+}
+EXPORT_SYMBOL_GPL(svc_rqst_rx_region_fill);
+
+/**
+ * svc_rqst_rx_region_uninstall - Empty the reply slots holding region pages
+ * @rqstp: RPC transaction context
+ * @restore: put the saved pages back now (else after the reply is released)
+ */
+void svc_rqst_rx_region_uninstall(struct svc_rqst *rqstp, bool restore)
+{
+	unsigned int slot;
+
+	for_each_set_bit(slot, rqstp->rq_rx_region_map, rqstp->rq_maxpages)
+		rqstp->rq_respages[slot] = NULL;
+	if (restore)
+		svc_rqst_rx_region_restore(rqstp);
+}
+EXPORT_SYMBOL_GPL(svc_rqst_rx_region_uninstall);
+
+/**
+ * svc_rqst_rx_region_restore - Put displaced reply pages back after a send
+ * @rqstp: RPC transaction context
+ *
+ * The send handed the region pages to TCP and left their slots empty;
+ * refilling them with the pages they displaced spares the allocator.
+ */
+void svc_rqst_rx_region_restore(struct svc_rqst *rqstp)
+{
+	unsigned int slot;
+
+	for_each_set_bit(slot, rqstp->rq_rx_region_map, rqstp->rq_maxpages) {
+		if (rqstp->rq_respages[slot])
+			put_page(rqstp->rq_rx_region_saved[slot]);
+		else
+			rqstp->rq_respages[slot] =
+				rqstp->rq_rx_region_saved[slot];
+	}
+	bitmap_zero(rqstp->rq_rx_region_map, rqstp->rq_maxpages);
+}
+EXPORT_SYMBOL_GPL(svc_rqst_rx_region_restore);
 
 /**
  * svc_exit_thread - finalise the termination of a sunrpc server thread
