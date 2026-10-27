@@ -1749,31 +1749,12 @@ static loff_t nfs_get_lwb(struct list_head *head)
 /*
  * Set up the argument/result storage required for the RPC call.
  */
-void nfs_init_commit(struct nfs_commit_data *data,
-		     struct list_head *head,
-		     struct pnfs_layout_segment *lseg,
-		     struct nfs_commit_info *cinfo)
+static void nfs_init_commit_context(struct nfs_commit_data *data,
+				    struct nfs_open_context *ctx,
+				    struct nfs_commit_info *cinfo)
 {
-	struct nfs_page *first;
-	struct nfs_open_context *ctx;
-	struct inode *inode;
-
-	/* Set up the RPC argument and reply structs
-	 * NB: take care not to mess about with data->commit et al. */
-
-	if (head)
-		list_splice_init(head, &data->pages);
-
-	first = nfs_list_entry(data->pages.next);
-	ctx = nfs_req_openctx(first);
-	inode = d_inode(ctx->dentry);
-
-	data->inode	  = inode;
+	data->inode	  = d_inode(ctx->dentry);
 	data->cred	  = ctx->cred;
-	data->lseg	  = lseg; /* reference transferred */
-	/* only set lwb for pnfs commit */
-	if (lseg)
-		data->lwb = nfs_get_lwb(&data->pages);
 	data->mds_ops     = &nfs_commit_ops;
 	data->completion_ops = cinfo->completion_ops;
 	data->dreq	  = cinfo->dreq;
@@ -1787,6 +1768,23 @@ void nfs_init_commit(struct nfs_commit_data *data,
 	data->res.verf    = &data->verf;
 	nfs_fattr_init(&data->fattr);
 	nfs_commit_begin(cinfo->mds);
+}
+
+void nfs_init_commit(struct nfs_commit_data *data,
+		     struct list_head *head,
+		     struct pnfs_layout_segment *lseg,
+		     struct nfs_commit_info *cinfo)
+{
+	struct nfs_page *first;
+
+	if (head)
+		list_splice_init(head, &data->pages);
+	first = nfs_list_entry(data->pages.next);
+	data->lseg = lseg; /* reference transferred */
+	/* only set lwb for pnfs commit */
+	if (lseg)
+		data->lwb = nfs_get_lwb(&data->pages);
+	nfs_init_commit_context(data, nfs_req_openctx(first), cinfo);
 }
 EXPORT_SYMBOL_GPL(nfs_init_commit);
 
@@ -1815,16 +1813,31 @@ static void nfs_commit_resched_write(struct nfs_commit_info *cinfo,
 	filemap_dirty_folio(folio_mapping(folio), folio);
 }
 
+static int nfs_submit_commit(struct nfs_commit_data *data, int how)
+{
+	struct inode *inode = data->inode;
+	struct nfsd_file *localio;
+	unsigned short task_flags = 0;
+
+	if (NFS_SERVER(inode)->nfs_client->cl_minorversion)
+		task_flags = RPC_TASK_MOVEABLE;
+
+	localio = nfs_local_open_fh(NFS_SERVER(inode)->nfs_client, data->cred,
+				    data->args.fh, &data->context->nfl,
+				    data->context->mode);
+	return nfs_initiate_commit(NFS_CLIENT(inode), data, NFS_PROTO(inode),
+				   data->mds_ops, how,
+				   RPC_TASK_CRED_NOREF | task_flags, localio);
+}
+
 /*
  * Commit dirty pages
  */
 static int
-nfs_commit_list(struct inode *inode, struct list_head *head, int how,
+nfs_commit_list(struct list_head *head, int how,
 		struct nfs_commit_info *cinfo)
 {
-	struct nfs_commit_data	*data;
-	struct nfsd_file *localio;
-	unsigned short task_flags = 0;
+	struct nfs_commit_data *data;
 
 	/* another commit raced with us */
 	if (list_empty(head))
@@ -1836,17 +1849,31 @@ nfs_commit_list(struct inode *inode, struct list_head *head, int how,
 		return -ENOMEM;
 	}
 
-	/* Set up the argument struct */
 	nfs_init_commit(data, head, NULL, cinfo);
-	if (NFS_SERVER(inode)->nfs_client->cl_minorversion)
-		task_flags = RPC_TASK_MOVEABLE;
+	return nfs_submit_commit(data, how);
+}
 
-	localio = nfs_local_open_fh(NFS_SERVER(inode)->nfs_client, data->cred,
-				    data->args.fh, &data->context->nfl,
-				    data->context->mode);
-	return nfs_initiate_commit(NFS_CLIENT(inode), data, NFS_PROTO(inode),
-				   data->mds_ops, how,
-				   RPC_TASK_CRED_NOREF | task_flags, localio);
+/* DATA_SYNC direct writes leave no pages to drive a later metadata COMMIT. */
+int nfs_commit_file(struct file *file)
+{
+	struct inode *inode = file_inode(file);
+	struct nfs_commit_info cinfo;
+	struct nfs_commit_data *data;
+	int ret;
+
+	/* NFSv2 writes are FILE_SYNC and its COMMIT callbacks are invalid. */
+	if (NFS_PROTO(inode)->version == 2)
+		return 0;
+	data = nfs_commitdata_alloc();
+	if (!data)
+		return -ENOMEM;
+	nfs_init_cinfo_from_inode(&cinfo, inode);
+	nfs_init_commit_context(data, nfs_file_open_context(file), &cinfo);
+	ret = nfs_submit_commit(data, 0);
+	/* Dispatch may already have freed data; wait only on the inode counter. */
+	if (ret)
+		return ret;
+	return wait_on_commit(cinfo.mds);
 }
 
 /*
@@ -1869,6 +1896,8 @@ static void nfs_commit_release_pages(struct nfs_commit_data *data)
 	struct nfs_commit_info cinfo;
 	struct folio *folio;
 
+	if (status < 0 && list_empty(&data->pages))
+		mapping_set_error(data->inode->i_mapping, status);
 	while (!list_empty(&data->pages)) {
 		req = nfs_list_entry(data->pages.next);
 		nfs_list_remove_request(req);
@@ -1942,7 +1971,7 @@ int nfs_generic_commit_list(struct inode *inode, struct list_head *head,
 
 	status = pnfs_commit_list(inode, head, how, cinfo);
 	if (status == PNFS_NOT_ATTEMPTED)
-		status = nfs_commit_list(inode, head, how, cinfo);
+		status = nfs_commit_list(head, how, cinfo);
 	return status;
 }
 

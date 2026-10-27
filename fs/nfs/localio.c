@@ -102,6 +102,39 @@ module_param_cb(localio_timeout, &localio_timeout_ops, &localio_timeout, 0644);
 MODULE_PARM_DESC(localio_timeout,
 		 "LOCALIO probe timeout in seconds (default 10), 0 to use the mount's default");
 
+enum nfs_local_direct_write_policy {
+	NFS_LOCAL_DIRECT_WRITE_SYNC = 0,
+	NFS_LOCAL_DIRECT_WRITE_DSYNC = 1,
+	NFS_LOCAL_DIRECT_WRITE_UNSTABLE = 2,
+};
+
+static unsigned int localio_direct_write_policy __read_mostly =
+	NFS_LOCAL_DIRECT_WRITE_DSYNC;
+
+static int param_set_localio_direct_write_policy(const char *val,
+						 const struct kernel_param *kp)
+{
+	unsigned int policy;
+	int ret;
+
+	ret = kstrtouint(val, 0, &policy);
+	if (ret)
+		return ret;
+	if (policy > NFS_LOCAL_DIRECT_WRITE_UNSTABLE)
+		return -EINVAL;
+	*(unsigned int *)kp->arg = policy;
+	return 0;
+}
+
+static const struct kernel_param_ops localio_direct_write_policy_ops = {
+	.set = param_set_localio_direct_write_policy,
+	.get = param_get_uint,
+};
+module_param_cb(localio_direct_write_policy, &localio_direct_write_policy_ops,
+		&localio_direct_write_policy, 0444);
+MODULE_PARM_DESC(localio_direct_write_policy,
+		 "LOCALIO direct write stability: 0=sync, 1=dsync (default), 2=unstable plus COMMIT");
+
 static void nfs_local_do_read(struct nfs_local_kiocb *iocb,
 			      const struct rpc_call_ops *call_ops);
 static void nfs_local_do_write(struct nfs_local_kiocb *iocb,
@@ -117,6 +150,22 @@ bool nfs_server_is_local(const struct nfs_client *clp)
 	return nfs_client_is_local(clp) && localio_enabled;
 }
 EXPORT_SYMBOL_GPL(nfs_server_is_local);
+
+bool nfs_local_dsync_enabled(void)
+{
+	return localio_direct_write_policy == NFS_LOCAL_DIRECT_WRITE_DSYNC;
+}
+
+int nfs_local_direct_write_flush(struct kiocb *iocb)
+{
+	if (localio_direct_write_policy == NFS_LOCAL_DIRECT_WRITE_SYNC ||
+	    !nfs_server_is_local(NFS_SERVER(file_inode(iocb->ki_filp))->nfs_client))
+		return FLUSH_COND_STABLE;
+	if (nfs_local_dsync_enabled() && (iocb->ki_flags & IOCB_SYNC))
+		return FLUSH_STABLE;
+	/* DSYNC is selected at dispatch; unstable requests commit on completion. */
+	return 0;
+}
 
 /*
  * UUID_IS_LOCAL XDR functions
@@ -532,7 +581,8 @@ nfs_local_iters_init(struct nfs_local_kiocb *iocb, int rw)
 			 */
 			iocb->end_iter_index = iocb->split.nsegs - 1;
 			/* Ensure DIO WRITE's IO on stable storage upon completion */
-			if (rw == ITER_SOURCE)
+			if (rw == ITER_SOURCE &&
+			    localio_direct_write_policy == NFS_LOCAL_DIRECT_WRITE_SYNC)
 				iocb->kiocb.ki_flags |= IOCB_DSYNC|IOCB_SYNC;
 		}
 		atomic_set(&iocb->n_iters, iocb->split.nsegs);
@@ -1125,6 +1175,10 @@ static void nfs_local_do_write(struct nfs_local_kiocb *iocb,
 	if (test_bit(NFS_CONTEXT_WRITE_SYNC,
 		     &hdr->req->wb_lock_context->open_context->flags))
 		hdr->args.stable = NFS_FILE_SYNC;
+	if (nfs_local_dsync_enabled() &&
+	    test_bit(NFS_IOHDR_ODIRECT, &hdr->flags) &&
+	    hdr->args.stable == NFS_UNSTABLE)
+		hdr->args.stable = NFS_DATA_SYNC;
 	switch (hdr->args.stable) {
 	default:
 		break;
