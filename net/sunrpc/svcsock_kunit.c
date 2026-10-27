@@ -148,9 +148,9 @@ static long svcsock_rx_pp_refs(struct page *page)
 }
 
 static struct svc_rqst *
-svcsock_rx_alloc_request(struct kunit *test,
-			 struct svcsock_rx_fixture *fixture,
-			 unsigned int capacity)
+svcsock_rx_alloc_request_sized(struct kunit *test,
+			       struct svcsock_rx_fixture *fixture,
+			       unsigned int entries, unsigned int capacity)
 {
 	struct svc_rqst *rqstp;
 	unsigned int i;
@@ -159,7 +159,7 @@ svcsock_rx_alloc_request(struct kunit *test,
 	KUNIT_ASSERT_NOT_NULL(test, rqstp);
 	rqstp->rq_pages = kunit_kcalloc(test, capacity,
 					sizeof(*rqstp->rq_pages), GFP_KERNEL);
-	rqstp->rq_bvec = kunit_kcalloc(test, capacity,
+	rqstp->rq_bvec = kunit_kcalloc(test, entries,
 				       sizeof(*rqstp->rq_bvec), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, rqstp->rq_pages);
 	KUNIT_ASSERT_NOT_NULL(test, rqstp->rq_bvec);
@@ -168,8 +168,9 @@ svcsock_rx_alloc_request(struct kunit *test,
 		KUNIT_ASSERT_NOT_NULL(test, rqstp->rq_pages[i]);
 	}
 
-	rqstp->rq_tcp_rx = svc_tcp_rx_state_alloc(capacity, GFP_KERNEL,
-						  NUMA_NO_NODE);
+	rqstp->rq_tcp_rx = svc_tcp_rx_state_alloc_entries(entries, capacity,
+							  GFP_KERNEL,
+							  NUMA_NO_NODE);
 	KUNIT_ASSERT_NOT_NULL(test, rqstp->rq_tcp_rx);
 	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
 							svcsock_rx_free_state,
@@ -177,14 +178,26 @@ svcsock_rx_alloc_request(struct kunit *test,
 	rqstp->rq_xprt = &fixture->svsk->sk_xprt;
 	rqstp->rq_server = fixture->svsk->sk_xprt.xpt_server;
 	rqstp->rq_maxpages = capacity;
+	rqstp->rq_maxbvecs = entries;
 	rqstp->rq_arg.head[0].iov_base = page_address(rqstp->rq_pages[0]);
 	rqstp->rq_arg.head[0].iov_len = PAGE_SIZE;
 	rqstp->rq_arg.pages = rqstp->rq_pages;
 	return rqstp;
 }
 
+static struct svc_rqst *
+svcsock_rx_alloc_request(struct kunit *test,
+			 struct svcsock_rx_fixture *fixture,
+			 unsigned int capacity)
+{
+	return svcsock_rx_alloc_request_sized(test, fixture,
+					      svc_pages_to_bvecs(capacity),
+					      capacity);
+}
+
 static struct svcsock_rx_fixture *
-svcsock_rx_alloc_fixture(struct kunit *test, unsigned int capacity)
+svcsock_rx_alloc_fixture_sized(struct kunit *test, unsigned int entries,
+			       unsigned int capacity)
 {
 	struct svcsock_rx_fixture *fixture;
 	struct svc_serv *serv;
@@ -200,8 +213,9 @@ svcsock_rx_alloc_fixture(struct kunit *test, unsigned int capacity)
 	KUNIT_ASSERT_NOT_NULL(test, fixture->svsk);
 	KUNIT_ASSERT_NOT_NULL(test, serv);
 
-	fixture->svsk->sk_rx = svc_tcp_rx_state_alloc(capacity, GFP_KERNEL,
-						      NUMA_NO_NODE);
+	fixture->svsk->sk_rx = svc_tcp_rx_state_alloc_entries(entries, capacity,
+							      GFP_KERNEL,
+							      NUMA_NO_NODE);
 	KUNIT_ASSERT_NOT_NULL(test, fixture->svsk->sk_rx);
 	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
 							svcsock_rx_free_state,
@@ -214,8 +228,16 @@ svcsock_rx_alloc_fixture(struct kunit *test, unsigned int capacity)
 	fixture->svsk->sk_xprt.xpt_server = serv;
 	/* Classification looks up the budget of the transport's namespace. */
 	fixture->svsk->sk_xprt.xpt_net = &init_net;
-	fixture->rqstp = svcsock_rx_alloc_request(test, fixture, capacity);
+	fixture->rqstp = svcsock_rx_alloc_request_sized(test, fixture, entries,
+							capacity);
 	return fixture;
+}
+
+static struct svcsock_rx_fixture *
+svcsock_rx_alloc_fixture(struct kunit *test, unsigned int capacity)
+{
+	return svcsock_rx_alloc_fixture_sized(test, svc_pages_to_bvecs(capacity),
+					      capacity);
 }
 
 static void svcsock_rx_fill_body(u8 *body, unsigned int len, u32 direction,
@@ -1431,8 +1453,8 @@ static void svcsock_rx_credit_fifo_test(struct kunit *test)
  */
 static void svcsock_rx_credit_learn_test(struct kunit *test)
 {
-	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
-	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 256);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 256);
 	struct svc_sock *sa = svcsock_rx_credit_sock(test);
 	struct svc_sock *sb = svcsock_rx_credit_sock(test);
 	const u32 len = 10 * PAGE_SIZE;
@@ -1445,8 +1467,9 @@ static void svcsock_rx_credit_learn_test(struct kunit *test)
 
 	/*
 	 * Nothing learned: all the record could hold, which is more than
-	 * the budget, so the oldest record takes the whole of it and its
-	 * reserve.
+	 * the budget (256 entries on every page size; 64 pages are 64
+	 * entries on 4 KiB pages, less than the budget), so the oldest
+	 * record takes the whole of it and its reserve.
 	 */
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
 	KUNIT_EXPECT_EQ(test, a->credit, 200U);
@@ -4593,6 +4616,148 @@ static void svcsock_rx_wrong_partial_owner_test(struct kunit *test)
 	}
 }
 
+/*
+ * The loan tables and rq_bvec are sized for a maximum message in 9000-byte
+ * MTU frames, in one slab object each: never a larger object than the
+ * page-based sizing takes (260, 272 and 320 entries for 1 MiB on 4 KiB,
+ * 16 KiB and 64 KiB pages). The sizes are logged for the record.
+ */
+static void svcsock_rx_loan_table_fit_test(struct kunit *test)
+{
+	struct svc_serv serv = { .sv_max_mesg = SZ_1M + PAGE_SIZE };
+	unsigned long frames = DIV_ROUND_UP(serv.sv_max_mesg, 8948) + 1;
+	unsigned long pages = svc_serv_maxpages(&serv);
+	unsigned long entries = svc_serv_maxbvecs(&serv);
+	unsigned long by_pages = svc_pages_to_bvecs(pages);
+	struct bio_vec *fit, *old;
+	struct svc_tcp_rx_state *state;
+	size_t fit_obj, old_obj;
+
+	/* Every frame split at every page it can span, plus head and tail. */
+	KUNIT_EXPECT_GE(test, entries,
+			frames * (DIV_ROUND_UP(8948, PAGE_SIZE) + 1) + 2);
+	KUNIT_EXPECT_GE(test, entries, pages);
+	if (PAGE_SIZE == SZ_4K)
+		KUNIT_EXPECT_EQ(test, entries, 479UL);
+	if (PAGE_SIZE == SZ_16K)
+		KUNIT_EXPECT_EQ(test, entries, 245UL);
+	if (PAGE_SIZE == SZ_64K)
+		KUNIT_EXPECT_EQ(test, entries, 255UL);
+
+	fit = kcalloc(entries, sizeof(*fit), GFP_KERNEL);
+	old = kcalloc(by_pages, sizeof(*old), GFP_KERNEL);
+	state = svc_tcp_rx_state_alloc_entries(entries, pages, GFP_KERNEL,
+					       NUMA_NO_NODE);
+	KUNIT_ASSERT_NOT_NULL(test, fit);
+	KUNIT_ASSERT_NOT_NULL(test, old);
+	KUNIT_ASSERT_NOT_NULL(test, state);
+	fit_obj = ksize(fit);
+	old_obj = ksize(old);
+	KUNIT_EXPECT_EQ(test, (unsigned long)state->capacity, entries);
+	KUNIT_EXPECT_EQ(test, (unsigned long)state->arena_pages, pages);
+	KUNIT_EXPECT_EQ(test, ksize(state->bvec), fit_obj);
+	/* One slab object: 8 KiB on 4 KiB pages, 4 KiB on larger ones. */
+	KUNIT_EXPECT_LE(test, fit_obj,
+			PAGE_SIZE == SZ_4K ? (size_t)SZ_8K : (size_t)SZ_4K);
+	KUNIT_EXPECT_LE(test, fit_obj, old_obj);
+	kunit_info(test, "P3SIZES page=%lu max_mesg=%u maxpages=%lu fit_entries=%lu fit_bytes=%zu fit_obj=%zu pages_entries=%lu pages_bytes=%zu pages_obj=%zu bitmap_obj=%zu state_obj=%zu",
+		   (unsigned long)PAGE_SIZE, serv.sv_max_mesg, pages, entries,
+		   entries * sizeof(*fit), fit_obj, by_pages,
+		   by_pages * sizeof(*old), old_obj, ksize(state->borrowed),
+		   ksize(state));
+	svc_tcp_rx_state_free(state);
+	kfree(old);
+	kfree(fit);
+}
+
+static void svcsock_rx_vfree(void *data)
+{
+	vfree(data);
+}
+
+/*
+ * A 1 MiB WRITE at a 9000-byte MTU, at production table sizes: each frame
+ * arrives as its own skb, its 8948 payload bytes in page fragments filled
+ * from the worst in-page offset, so every frame splits at every page it
+ * can span. The record completes as a loan: no capacity fallback, every
+ * byte in place.
+ */
+static void svcsock_rx_loan_1m_mtu9000_test(struct kunit *test)
+{
+	enum { FRAME = 8948, FIRST_LEN = 596 };
+	struct svc_serv serv = { .sv_max_mesg = SZ_1M + PAGE_SIZE };
+	const unsigned int body_len = 7 * XDR_UNIT + SZ_1M;
+	const unsigned int record_len = sizeof(rpc_fraghdr) + body_len;
+	const unsigned int head_len = sizeof(rpc_fraghdr) + 7 * XDR_UNIT;
+	struct svcsock_rx_fixture *fixture =
+		svcsock_rx_alloc_fixture_sized(test, svc_serv_maxbvecs(&serv),
+					       svc_serv_maxpages(&serv));
+	struct svc_rqst *rqstp = fixture->rqstp;
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = record_len };
+	unsigned int at, frags = 0, index, cursor;
+	struct sk_buff *skb;
+	u8 *record;
+	int ret;
+
+	record = vmalloc(record_len);
+	KUNIT_ASSERT_NOT_NULL(test, record);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test, svcsock_rx_vfree,
+							record), 0);
+	svcsock_rx_fill_record(record, body_len, true, RPC_CALL, RPC_AUTH_UNIX);
+	skb = svcsock_rx_build_linear_skb(test, record, head_len);
+	ret = svcsock_rx_run_actor(rqstp, &actor, &desc, skb, 0, skb->len);
+	KUNIT_ASSERT_EQ(test, ret, (int)head_len);
+	for (at = head_len; at < record_len; ) {
+		unsigned int frame = min_t(unsigned int, FRAME, record_len - at);
+		unsigned int offset = PAGE_SIZE - FIRST_LEN, slot = 0, refs;
+
+		skb = svcsock_rx_build_linear_skb(test, record, 0);
+		while (frame) {
+			unsigned int len = min_t(unsigned int, frame,
+						 PAGE_SIZE - offset);
+
+			svcsock_rx_add_frag(test, skb, slot++, record + at, len,
+					    offset, &refs);
+			at += len;
+			frame -= len;
+			offset = 0;
+		}
+		frags += slot;
+		ret = svcsock_rx_run_actor(rqstp, &actor, &desc, skb, 0,
+					   skb->len);
+		KUNIT_ASSERT_EQ(test, ret, (int)skb->len);
+	}
+	KUNIT_ASSERT_TRUE(test, actor.complete);
+	kunit_info(test, "P3COVER page=%lu frags=%u capacity=%u arena_pages=%u mode=%u(MIXED=2,COPY=3) reason=%u(NONE=0,CAPACITY=12) materialized_bytes=%u count=%u LOAN=%d",
+		   (unsigned long)PAGE_SIZE, frags, state->capacity,
+		   state->arena_pages, state->mode, state->reason,
+		   state->materialized_bytes, state->count,
+		   state->mode == SVC_TCP_RX_MIXED &&
+		   state->reason == SVC_TCP_RX_REASON_NONE &&
+		   !state->materialized_bytes && state->count == frags);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
+	KUNIT_EXPECT_EQ(test, state->reason, (u8)SVC_TCP_RX_REASON_NONE);
+	KUNIT_EXPECT_EQ(test, state->materialized_bytes, 0U);
+	KUNIT_EXPECT_EQ(test, state->count, frags);
+	KUNIT_EXPECT_LE(test, state->count, state->capacity);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, rqstp), 0);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_PUBLISHED);
+	for (index = 0, cursor = head_len; index < state->count; index++) {
+		const struct bio_vec *bvec = &state->bvec[index];
+
+		KUNIT_ASSERT_TRUE(test, test_bit(index, state->borrowed));
+		KUNIT_ASSERT_EQ(test, memcmp(page_address(bvec->bv_page) +
+					     bvec->bv_offset,
+					     record + cursor, bvec->bv_len), 0);
+		cursor += bvec->bv_len;
+	}
+	KUNIT_EXPECT_EQ(test, cursor, record_len);
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
+}
+
 static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE_PARAM(svcsock_rx_actor_split_test,
 			 svcsock_rx_split_gen_params),
@@ -4659,6 +4824,8 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_materialize_test),
 	KUNIT_CASE(svcsock_rx_locked_head_then_materialize_test),
 	KUNIT_CASE(svcsock_rx_capacity_release_test),
+	KUNIT_CASE(svcsock_rx_loan_table_fit_test),
+	KUNIT_CASE(svcsock_rx_loan_1m_mtu9000_test),
 	KUNIT_CASE(svcsock_rx_capacity_sizing_test),
 	KUNIT_CASE(svcsock_rx_arena_bound_test),
 	KUNIT_CASE(svcsock_rx_page_pool_recycle_test),
