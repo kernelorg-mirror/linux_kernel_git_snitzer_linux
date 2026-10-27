@@ -1733,17 +1733,28 @@ static bool svc_tcp_rx_is_empty(const struct svc_tcp_rx_state *state)
  * svc_pages_to_bvecs() rather than by the page count: on a 64 KiB
  * kernel a table of one entry per page fills after a few segments of
  * a large WRITE and forces the whole record to be copied.
+ *
+ * svc_tcp_rx_state_alloc_entries() takes the table size itself:
+ * svc_serv_maxbvecs() for a server, which fits the table to a maximum
+ * message in 9000-byte MTU frames.
  */
 struct svc_tcp_rx_state *svc_tcp_rx_state_alloc(unsigned long capacity,
 						gfp_t gfp, int node)
 {
-	struct svc_tcp_rx_state *state;
-	unsigned long entries;
-
 	if (!capacity || capacity > U32_MAX)
 		return NULL;
-	entries = svc_pages_to_bvecs(capacity);
-	if (entries > U32_MAX)
+	return svc_tcp_rx_state_alloc_entries(svc_pages_to_bvecs(capacity),
+					      capacity, gfp, node);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_state_alloc);
+
+struct svc_tcp_rx_state *svc_tcp_rx_state_alloc_entries(unsigned long entries,
+							unsigned long capacity,
+							gfp_t gfp, int node)
+{
+	struct svc_tcp_rx_state *state;
+
+	if (!capacity || capacity > U32_MAX || !entries || entries > U32_MAX)
 		return NULL;
 	state = kzalloc_node(sizeof(*state), gfp, node);
 	if (!state)
@@ -1769,7 +1780,7 @@ out_free_state:
 	kfree(state);
 	return NULL;
 }
-EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_state_alloc);
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_state_alloc_entries);
 
 VISIBLE_IF_KUNIT void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
 {
@@ -4965,8 +4976,9 @@ static struct svc_sock *svc_setup_socket(struct svc_serv *serv,
 
 	inet = sock->sk;
 	if (sock->type == SOCK_STREAM && inet->sk_state != TCP_LISTEN) {
-		svsk->sk_rx = svc_tcp_rx_state_alloc(pages, GFP_KERNEL,
-						     NUMA_NO_NODE);
+		svsk->sk_rx = svc_tcp_rx_state_alloc_entries(svc_serv_maxbvecs(serv),
+							     pages, GFP_KERNEL,
+							     NUMA_NO_NODE);
 		if (!svsk->sk_rx) {
 			kfree(svsk->sk_bvec);
 			kfree(svsk);
