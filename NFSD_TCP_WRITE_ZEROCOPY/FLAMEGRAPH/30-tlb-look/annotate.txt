@@ -1,0 +1,41 @@
+== the ring CPUs' samples of dtlb_walk (every 200) and l1d_cache_refill_rd (every 500), k57-loan64 (t2-r54); xeu_rx_poll mapped on r28-xeu.ko
+
+== refill, xeu_rx_poll
+ 12.58  +0x0c0  ldrh	w0, [x28, #12]                      xeu_drv.c:1059
+ 10.63  +0x0b0  and	w0, w0, #0x1                         xeu_drv.c:1053 (discriminator 2)
+ 10.55  +0x1ac  add	x0, x0, #0x40                        netdevice.h:2706
+  7.71  +0x0dc  ldrh	w19, [x25, #2]                      xeu_drv.c:1062 (discriminator 2)
+  4.00  +0x604  cmp	w0, #0xa                             xeu_drv.c:1188
+  3.79  +0x170  ldr	w3, [x23, #4]                        xeu_drv.c:91 (discriminator 14)
+  2.86  +0x140  and	w0, w0, #0x1                         xeu_drv.c:1017 (discriminator 2)
+  2.67  +0x0bc  dmb	oshld                                xeu_drv.c:1057
+  2.61  +0x60c  cmp	w0, #0x8                             xeu_drv.c:1188
+  2.59  +0x16c  prfm	pldl1keep, [x0]                     arch/arm64/include/asm/processor.h:398
+shown 60.0%
+
+== walk, xeu_rx_poll
+ 12.77  +0x1ac  add	x0, x0, #0x40                        netdevice.h:2706
+  6.30  +0x0c0  ldrh	w0, [x28, #12]                      xeu_drv.c:1059
+  6.20  +0x604  cmp	w0, #0xa                             xeu_drv.c:1188
+  3.45  +0x140  and	w0, w0, #0x1                         xeu_drv.c:1017 (discriminator 2)
+  3.39  +0x0b0  and	w0, w0, #0x1                         xeu_drv.c:1053 (discriminator 2)
+  3.18  +0x348  mov	w21, #0x0                   	// #0   xeu_drv.c:1115
+  3.07  +0x60c  cmp	w0, #0x8                             xeu_drv.c:1188
+  3.02  +0x170  ldr	w3, [x23, #4]                        xeu_drv.c:91 (discriminator 14)
+  2.91  +0x5e0  strh	w0, [x24, #180]                     xeu_drv.c:1181 (discriminator 1)
+  2.80  +0x0dc  ldrh	w19, [x25, #2]                      xeu_drv.c:1062 (discriminator 2)
+shown 47.1%
+
+== walk, gro_list_prepare
+   11.52 :   ffff9fe050ecdfb0:       ldrb    w0, [x0, #1]
+   20.55 :   ffff9fe050ece010:       ldr     x2, [x19, #128]
+    6.82 :   ffff9fe050ece120:       cmp     w25, #0xe
+    6.68 :   ffff9fe050ece158:       ldp     x21, x22, [sp, #32]
+
+== walk, eth_type_trans
+    7.53 :   ffff9fe050f0a048:       mov     x19, x0
+    5.37 :   ffff9fe050f0a094:       ldr     x1, [x3, x1]
+   67.42 :   ffff9fe050f0a098:       eor     x0, x1, x0
+    5.58 :   ffff9fe050f0a0a4:       ldrh    w0, [x2, #12]
+
+== walk, inet_gro_receive
