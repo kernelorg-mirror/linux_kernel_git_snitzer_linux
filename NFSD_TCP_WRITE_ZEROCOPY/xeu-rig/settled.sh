@@ -209,7 +209,13 @@ declare -A NEW_LATER=([svc_tcp_spare_bytes_max]=1 [svc_tcp_rx_want_eighths]=1)
 # read when a port opens, so apply opens the ports again to put it in
 # place.  Y since FLAMEGRAPH round 20 (Mike, 25 October): the rings 10 us a
 # loaned WRITE cheaper, nothing else moved.  A kmod without it audits BAD.
-declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=Y)
+# rx_prefetch (kmod-xsight 2.0.1-10): the receive poll prefetches the next
+# frame's headers, skb_shared_info and struct page while it builds the
+# current one; read at each frame, so apply writes it.  Y since FLAMEGRAPH
+# round 28 (Mike, 27 October): the rings -2.45 +- 0.56 us a loaned WRITE,
+# nothing else moved.  A kmod without it audits BAD.
+declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=Y [rx_prefetch]=Y)
+XP=/sys/module/xeu/parameters/rx_prefetch
 declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
 # The server's network sysctls, as every figure here was measured with them.
 # netdev_max_backlog and netdev_budget come from Hammerspace's tuned profile
@@ -626,6 +632,8 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 	done
 	for k in $PORTS; do [ "$(srv_qdisc ${PDEV[$k]})" = "$SRV_QDISC" ] || set_srv_qdisc ${PDEV[$k]} $SRV_QDISC; done
 	for k in $PORTS; do [ "$(gro_max ${PDEV[$k]})" = "$GRO_MAX" ] || set_gro_max ${PDEV[$k]} $GRO_MAX; done
+	k=${EXP_XEU_rx_prefetch:-${XEU[rx_prefetch]}}
+	[ -w $XP ] && [ "$(cat $XP)" != "$k" ] && echo "$k" > $XP
 	[ "$(containers)" = 0 ] && nft list table inet netavark > /dev/null 2>&1 && nft delete table inet netavark
 	if [ "$(conntrack_hooks)" != 0 ]; then
 		[ "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" = 4 ] || nft -f "$NOTRACK"
