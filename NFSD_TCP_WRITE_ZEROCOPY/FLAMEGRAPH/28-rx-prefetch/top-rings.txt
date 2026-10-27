@@ -1,0 +1,18 @@
+== fl55a-loan64 (rx_prefetch N) against fl55b-loan64 (rx_prefetch Y), one xeu, the settled setting (t2-r52)
+== us a WRITE on the rings (CPUs 0, 2, 4, 6), the folded stacks scaled to each profile's busy time
+busy 49.47 -> 48.88
+
+frame                              self A      B    B-A   incl A      B
+eth_type_trans                       4.17   1.09  -3.07     4.17   1.09
+napi_build_skb                       1.88   1.25  -0.62     3.32   1.96
+__build_skb_around                   1.38   0.79  -0.59     1.38   0.79
+skb_gro_receive                      2.38   1.59  -0.79     2.38   1.59
+gro_list_prepare                     0.69   1.45  +0.76     0.69   1.45
+xeu_rx_poll                          3.23   5.08  +1.85    44.75  43.63
+page_pool_alloc_frag_netmem          3.77   3.86  +0.09     4.73   4.96
+xeu_rx_refill.isra.0                 1.31   1.50  +0.19     6.20   6.62
+inet_gro_receive                     2.17   2.05  -0.12     7.52   6.41
+tcp_gro_receive                      1.54   1.35  -0.20     3.83   2.81
+dev_gro_receive                      1.32   1.36  +0.04    21.16  21.25
+gro_receive_skb                      0.38   0.51  +0.14    22.20  22.53
+tcp_v4_rcv                           0.88   0.94  +0.07    10.84  11.47

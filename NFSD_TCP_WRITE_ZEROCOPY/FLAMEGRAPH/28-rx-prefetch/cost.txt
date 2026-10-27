@@ -1,0 +1,20 @@
+== r55: one xeu (kmod-xsight 2.0.1-9 with the prefetch, 2C05DF674C9D013185FDB34); A rx_prefetch N, B rx_prefetch Y; sunrpc and nfsd build 499's own; the settled setting
+== rxirq/txirq here are not valid: twoport.sh opens the port after the first snapshot; outsegs is the server's TCP segments sent a WRITE
+r55-1-loan64-A ring 52.1 nfsd 111.4 us/W | rxirq 4.26 txirq 4.60 | enq 5.64 woken 4.46 vcsw 5.96 /W | pp/W: recycle_cached -0.00 outsegs 6.78 recycle_ring_full 0.70 alloc_slow 0.30 | region peak 6508 | maxentries:4096,numentries:4097,cachehits:0,
+r55-2-loan64-B ring 48.7 nfsd 110.7 us/W | rxirq 0.74 txirq -0.28 | enq 5.49 woken 4.36 vcsw 5.86 /W | pp/W: recycle_cached -0.00 outsegs 6.61 recycle_ring_full 0.01 alloc_slow 0.00 | region peak 6476 | maxentries:4096,numentries:4097,cachehits:0,
+r55-3-loan64-A ring 50.5 nfsd 112.1 us/W | rxirq -0.26 txirq 0.12 | enq 5.44 woken 4.34 vcsw 5.84 /W | pp/W: recycle_cached -0.00 outsegs 6.57 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 6381 | maxentries:4096,numentries:4097,cachehits:0,
+r55-4-loan64-B ring 47.6 nfsd 111.1 us/W | rxirq 0.61 txirq 0.08 | enq 5.37 woken 4.30 vcsw 5.79 /W | pp/W: recycle_cached -0.00 outsegs 6.51 recycle_ring_full -0.01 alloc_slow -0.00 | region peak 6364 | maxentries:4096,numentries:4097,cachehits:0,
+r55-5-loan64-A ring 51.2 nfsd 111.5 us/W | rxirq -0.99 txirq 0.04 | enq 5.45 woken 4.35 vcsw 5.85 /W | pp/W: recycle_cached -0.00 outsegs 6.58 recycle_ring_full -0.01 alloc_slow -0.00 | region peak 6311 | maxentries:4096,numentries:4097,cachehits:0,
+r55-6-loan64-B ring 48.8 nfsd 113.6 us/W | rxirq 0.63 txirq 0.09 | enq 5.53 woken 4.39 vcsw 5.89 /W | pp/W: recycle_cached -0.00 outsegs 6.69 recycle_ring_full 0.03 alloc_slow 0.01 | region peak 6289 | maxentries:4096,numentries:4097,cachehits:0,
+r55-7-loan64-A ring 49.9 nfsd 112.8 us/W | rxirq -0.44 txirq -0.20 | enq 5.45 woken 4.34 vcsw 5.84 /W | pp/W: recycle_cached -0.00 outsegs 6.57 recycle_ring_full -0.02 alloc_slow -0.01 | region peak 6463 | maxentries:4096,numentries:4097,cachehits:0,
+r55-8-loan64-B ring 48.8 nfsd 112.7 us/W | rxirq 0.60 txirq -0.03 | enq 5.52 woken 4.39 vcsw 5.89 /W | pp/W: recycle_cached -0.00 outsegs 6.64 recycle_ring_full 0.00 alloc_slow -0.00 | region peak 7718 | maxentries:4096,numentries:4097,cachehits:0,
+== the fio maximum completion of each run, ms
+r55-1-loan64-A 122.5
+r55-2-loan64-B 122.3
+r55-3-loan64-A 121.4
+r55-4-loan64-B 115.0
+r55-5-loan64-A 112.7
+r55-6-loan64-B 136.5
+r55-7-loan64-A 120.2
+r55-8-loan64-B 1385.6
+== r55-8-loan64-B: ring 2 tail-dropped 2226 frames at the card (ethtool -S after the run: ring_2_rx_hw_tail_drop_packets); the client retransmitted

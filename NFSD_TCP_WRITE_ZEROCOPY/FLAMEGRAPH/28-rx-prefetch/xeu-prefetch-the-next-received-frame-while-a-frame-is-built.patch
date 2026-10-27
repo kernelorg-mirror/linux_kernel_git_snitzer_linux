@@ -1,0 +1,96 @@
+Subject: [PATCH] xeu: prefetch the next received frame while a frame is built
+
+xeu's receive poll builds each frame's skb straight from the buffer the
+card has just written.  napi_build_skb() reads the buffer's struct page
+and clears the skb_shared_info at the buffer's end, and eth_type_trans()
+then reads the Ethernet header.  Nothing has touched the buffer since
+the card wrote it, so each of the three is a cache miss, and the poll
+waits for them one frame at a time.
+
+On an arm64 NFS server receiving 1 MiB WRITEs at 40 GB/s on one port,
+the receive rings spend 4.2 us of every WRITE's 49 us of CPU time in
+eth_type_trans(), 82% of it on the first load of the header, 1.8 us in
+napi_build_skb(), about half of it on the struct page, and 1.3 us in
+__build_skb_around(), 67% of it on the store that clears the
+skb_shared_info.
+
+Add rx_prefetch, default N.  With it set, the poll prefetches the next
+frame's headers (two cache lines from the same headroom the skb is
+reserved, so with rx_ip_align as well), the skb_shared_info for writing
+and the struct page, once that frame's completion is valid, while it
+builds and hands on the current frame.  The next frame's first
+descriptor follows the current frame's last; a completion found
+anywhere else is reported once.
+
+On the same server, four runs a side, the rings take 2.45 +- 0.56 us
+less CPU time a WRITE with it set, 5% of what they spend; the nfsd
+threads, the rate and latency are the same, and no buffer is held
+longer.
+---
+--- xeu-esdk-v2.0.1.orig/xeu_drv.c
++++ xeu-esdk-v2.0.1/xeu_drv.c
+@@ -180,6 +180,20 @@
+ MODULE_PARM_DESC(irq_msix_mask,
+ 		 "hold a ring's interrupt off while it polls by masking its MSI-X entry in the card, not through the irq core (default N; read when the port opens)");
+ 
++/*
++ * The first thing the poll reads of a received frame is its Ethernet
++ * header, in eth_type_trans(), and before that napi_build_skb() reads the
++ * buffer's struct page and clears the skb_shared_info at the buffer's
++ * end.  The card has just written the frame and nothing has touched the
++ * page, so each of the three misses.  With this set, the poll prefetches
++ * them for the next frame of the ring while it builds and hands on the
++ * current one.
++ */
++static bool rx_prefetch;
++module_param(rx_prefetch, bool, 0644);
++MODULE_PARM_DESC(rx_prefetch,
++		 "prefetch the next received frame's headers, skb_shared_info and struct page while a frame is processed (default N)");
++
+ static bool rx_port_stats;
+ module_param(rx_port_stats, bool, 0644);
+ MODULE_PARM_DESC(rx_port_stats,
+@@ -977,6 +991,27 @@
+ }
+ 
+ 
++/*
++ * The next frame's first descriptor follows the current frame's last, and
++ * its buffer is the card's once its completion is valid.
++ */
++static inline void xeu_rx_prefetch_next(struct xeu_ring *ring, u8 num_desc)
++{
++	u16 next_cr = ring->cr_cons_idx + 1;
++	struct xeu_sw_rx_desc *next;
++	void *va;
++
++	if (!RX_CMPL_VALID(ring, next_cr))
++		return;
++
++	next = &ring->rx_sw[(ring->sr_cons_idx + num_desc) & ring->mask];
++	prefetch(next->page);
++	va = page_address(next->page) + next->offset;
++	net_prefetch(va + xeu_rx_headroom());
++	prefetchw(va + xeu_rx_buf_size() -
++		  SKB_DATA_ALIGN(sizeof(struct skb_shared_info)));
++}
++
+ /**
+  * xeu_rx_poll - NAPI poll function for RX completion processing
+  * @napi: NAPI structure
+@@ -1041,6 +1076,15 @@
+ 			goto update_index;
+ 		}
+ 
++		if (READ_ONCE(rx_prefetch)) {
++			if (unlikely(desc_index !=
++				     (ring->sr_cons_idx & ring->mask)))
++				pr_warn_once("xeu: ring %u: completion at descriptor %u, expected %u; rx_prefetch fetches the wrong buffer\n",
++					     ring->sw_ring_idx, desc_index,
++					     ring->sr_cons_idx & ring->mask);
++			xeu_rx_prefetch_next(ring, num_desc);
++		}
++
+ 		sub_idx = desc_index;
+ 		sw_rx_desc = &ring->rx_sw[sub_idx];
+ 
