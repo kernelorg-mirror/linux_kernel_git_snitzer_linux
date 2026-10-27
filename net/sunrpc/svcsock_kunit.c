@@ -26,6 +26,24 @@
 /* The default budget each test starts with, so that its records loan. */
 #define SVCSOCK_RX_LOAN_BUDGET	1024
 
+/*
+ * A WARN_ON_ONCE() site is spent at its first hit, and on an architecture
+ * without a bug table (no __WARN_FLAGS, e.g. UML) DO_ONCE_LITE_IF() spends it
+ * even when the warning is suppressed, so an earlier test that reached the
+ * same site leaves nothing to count.  With a bug table, report_bug() checks
+ * suppression before the once flag and the site stays armed.  Count exactly
+ * one warning where the site cannot already be spent, and at most one
+ * elsewhere; callers assert the result and state of the warning path either
+ * way.
+ */
+#ifdef __WARN_FLAGS
+#define SVCSOCK_EXPECT_ONCE_WARNING(test) \
+	KUNIT_EXPECT_SUPPRESSED_WARNING_COUNT(test, 1)
+#else
+#define SVCSOCK_EXPECT_ONCE_WARNING(test) \
+	KUNIT_EXPECT_LE(test, KUNIT_SUPPRESSED_WARNING_COUNT(), 1)
+#endif
+
 struct svcsock_rx_fixture {
 	struct svc_sock *svsk;
 	struct svc_rqst *rqstp;
@@ -2099,6 +2117,343 @@ static void svcsock_rx_credit_copy_no_budget_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_budget_copy(svsk));
 }
 
+static void svcsock_rx_region_off(void *unused)
+{
+	svc_tcp_rx_budget_kunit_region(0, 0);
+	svc_tcp_rx_budget_kunit_init();
+}
+
+static void svcsock_rx_expect_stats(struct kunit *test,
+				    struct svc_tcp_rx_budget *c,
+				    const char *prefix)
+{
+	char buf[256];
+
+	svc_tcp_rx_budget_kunit_stats(c, buf, sizeof(buf));
+	KUNIT_EXPECT_TRUE_MSG(test, str_has_prefix(buf, prefix), "%s", buf);
+}
+
+/*
+ * A split region's read partition has its own pool: its budget is the
+ * partition, its reserve 0 (no reserve), and neither the receive clamp nor
+ * receive admission on a transport moves it.  Unsplit, it holds what the
+ * configured budgets leave of the region, a READ on a budgeted transport
+ * draws on the budget its receive draws on, and a READ on a transport
+ * whose budget is 0 draws on the read pool.
+ */
+static void svcsock_rx_read_pool_test(struct kunit *test)
+{
+	struct svc_tcp_rx_budget *read = svc_tcp_rx_budget_kunit_read();
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *svsk = svcsock_rx_credit_sock_forget(test);
+	const u32 len = 5 * PAGE_SIZE;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_default_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_region_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	svc_tcp_rx_budget_kunit_default(0, 0);
+	/* A clamp below the floor turns receive budgets off, not this one. */
+	svc_tcp_rx_budget_kunit_rcvbuf(0);
+	svc_tcp_rx_budget_kunit_region(100, 30);
+	svc_tcp_rx_budget_kunit_init();
+	svcsock_rx_expect_stats(test, read,
+		"budget 30 reserve_size 0 avail 30 reserve 0 inflight 0 waiters 0");
+	KUNIT_EXPECT_PTR_EQ(test, svc_tcp_rx_budget_read_for(svsk), read);
+
+	svc_tcp_rx_budget_kunit_configure(10, 0, 100);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(svsk, a, len));
+	KUNIT_ASSERT_TRUE(test, a->credit_linked);
+	KUNIT_EXPECT_PTR_NE(test, a->credit_budget, read);
+	svcsock_rx_expect_stats(test, read,
+		"budget 30 reserve_size 0 avail 30 reserve 0 inflight 0");
+	svc_tcp_rx_credit_release(a);
+
+	/* The configured total (10) comes from svc_tcp_rx_budget_set(). */
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_kunit_set(10), 0);
+	svc_tcp_rx_budget_kunit_region(100, 0);
+	svc_tcp_rx_budget_kunit_init();
+	svcsock_rx_expect_stats(test, read,
+		"budget 90 reserve_size 0 avail 90 reserve 0 inflight 0");
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(svsk, a, len));
+	KUNIT_ASSERT_TRUE(test, a->credit_linked);
+	KUNIT_EXPECT_PTR_EQ(test, svc_tcp_rx_budget_read_for(svsk),
+			    a->credit_budget);
+	svc_tcp_rx_credit_release(a);
+
+	/* A transport whose budget is 0 sends its READs to the read pool. */
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	KUNIT_EXPECT_PTR_EQ(test, svc_tcp_rx_budget_read_for(svsk), read);
+}
+
+/*
+ * The read pool needs neither the receive clamp nor an explicit apply: with
+ * svc_tcp_rx_rcvbuf at its default 0 it is on as soon as the region is
+ * split, and transport class registration (svc_init_xprt_sock()) configures
+ * it.
+ */
+static void svcsock_rx_read_pool_init_test(struct kunit *test)
+{
+	struct svc_tcp_rx_budget *read = svc_tcp_rx_budget_kunit_read();
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_default_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_region_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	svc_tcp_rx_budget_kunit_default(0, 0);
+	svc_tcp_rx_budget_kunit_rcvbuf(0);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_kunit_set(0), 0);
+	svc_tcp_rx_budget_kunit_region(0, 0);
+	svc_tcp_rx_budget_kunit_init();
+	svcsock_rx_expect_stats(test, read, "budget 0 ");
+
+	svc_tcp_rx_budget_kunit_region(100, 30);
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_budget_on(read));
+	svc_tcp_rx_budget_kunit_init();
+	svcsock_rx_expect_stats(test, read,
+		"budget 30 reserve_size 0 avail 30 reserve 0 inflight 0 waiters 0");
+}
+
+#if IS_ENABLED(CONFIG_PAGE_POOL)
+/* A fixture region: pages the test owns, published as the rx region. */
+#define SVCSOCK_RX_REGION_ORDER	4
+#define SVCSOCK_RX_REGION_PAGES	(1UL << SVCSOCK_RX_REGION_ORDER)
+
+struct svcsock_rx_region_fixture {
+	struct page *base;
+	unsigned long pfn;
+	unsigned long freed;	/* pages the test already freed */
+};
+
+static void svcsock_rx_region_fixture_free(struct svcsock_rx_region_fixture *f)
+{
+	unsigned long i;
+
+	for (i = 0; i < SVCSOCK_RX_REGION_PAGES; i++)
+		if (!test_bit(i, &f->freed))
+			__free_page(f->base + i);
+}
+
+static void svcsock_rx_region_fixture_remove(void *data)
+{
+	page_pool_rx_region_kunit_remove(false);
+	svcsock_rx_region_fixture_free(data);
+}
+
+static struct svcsock_rx_region_fixture *
+svcsock_rx_region_fixture(struct kunit *test, unsigned long nr_read)
+{
+	struct svcsock_rx_region_fixture *f;
+	int ret;
+
+	f = kunit_kzalloc(test, sizeof(*f), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, f);
+	f->base = alloc_pages(GFP_KERNEL, SVCSOCK_RX_REGION_ORDER);
+	KUNIT_ASSERT_NOT_NULL(test, f->base);
+	/* Every region page has its own reference, as alloc_contig gives. */
+	split_page(f->base, SVCSOCK_RX_REGION_ORDER);
+	f->pfn = page_to_pfn(f->base);
+	ret = page_pool_rx_region_kunit_install(f->base,
+						SVCSOCK_RX_REGION_PAGES,
+						nr_read);
+	if (ret)
+		svcsock_rx_region_fixture_free(f);
+	if (ret == -EBUSY)
+		kunit_skip(test, "a fixed rx region already exists");
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_region_fixture_remove, f), 0);
+	return f;
+}
+
+static void svcsock_rx_region_expect_part(struct kunit *test, bool read,
+					  unsigned long nfree,
+					  unsigned long min_free,
+					  unsigned long escaped)
+{
+	unsigned long st[4];
+
+	page_pool_rx_region_kunit_part(read, st);
+	KUNIT_EXPECT_EQ(test, st[0], nfree);
+	KUNIT_EXPECT_EQ(test, st[1], min_free);
+	KUNIT_EXPECT_EQ(test, st[2], 0UL);	/* take never counts alloc_fail */
+	KUNIT_EXPECT_EQ(test, st[3], escaped);
+}
+
+/*
+ * A split region's partitions, taken and given outside the pools: span,
+ * all or nothing, most recently freed first, min_free, a page returning to
+ * the partition its address lies in, escape and a page from elsewhere.
+ */
+static void svcsock_rx_region_take_give_test(struct kunit *test)
+{
+	struct svcsock_rx_region_fixture *f = svcsock_rx_region_fixture(test, 4);
+	struct page *pages[SVCSOCK_RX_REGION_PAGES], *stray;
+	unsigned long pfn = 0;
+
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_size(), 16UL);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_read_pages(), 4UL);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(false, &pfn), 12UL);
+	KUNIT_EXPECT_EQ(test, pfn, f->pfn);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(true, &pfn), 4UL);
+	KUNIT_EXPECT_EQ(test, pfn, f->pfn + 12);
+
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_take_pages(true, pages, 5), 0U);
+	svcsock_rx_region_expect_part(test, true, 4, 4, 0);
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 4), 4U);
+	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[0]), f->pfn + 15);
+	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[3]), f->pfn + 12);
+	KUNIT_EXPECT_EQ(test, page_ref_count(pages[0]), 1);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_take_pages(true, pages + 4, 1),
+			0U);
+	svcsock_rx_region_expect_part(test, true, 0, 0, 0);
+	svcsock_rx_region_expect_part(test, false, 12, 12, 0);
+
+	/* One call gives back pages of both partitions, each to its own. */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(false, pages + 4, 2),
+			2U);
+	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[5]), f->pfn + 10);
+	page_pool_rx_region_give_pages(pages, 6);
+	svcsock_rx_region_expect_part(test, true, 4, 0, 0);
+	svcsock_rx_region_expect_part(test, false, 12, 10, 0);
+
+	/* The page given last comes back first. */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 1), 1U);
+	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[0]), f->pfn + 12);
+
+	/*
+	 * Allocate it before the escaped page is freed, or the allocator may
+	 * hand that region page straight back.
+	 */
+	stray = alloc_page(GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, stray);
+
+	/* Still referenced when given: it escapes, and this reference goes. */
+	get_page(pages[0]);
+	page_pool_rx_region_give_pages(pages, 1);
+	svcsock_rx_region_expect_part(test, true, 3, 0, 1);
+	KUNIT_EXPECT_EQ(test, page_ref_count(pages[0]), 1);
+	__set_bit(page_to_pfn(pages[0]) - f->pfn, &f->freed);
+	put_page(pages[0]);
+
+	/* A page from outside the region warns, is put and counts nowhere. */
+	kunit_warning_suppress(test) {
+		page_pool_rx_region_give_pages(&stray, 1);
+		SVCSOCK_EXPECT_ONCE_WARNING(test);
+	}
+	svcsock_rx_region_expect_part(test, true, 3, 0, 1);
+	svcsock_rx_region_expect_part(test, false, 12, 10, 0);
+}
+
+/*
+ * Unsplit, a read consumer draws on the one shared partition, and a request
+ * larger than the partition is refused outright.
+ */
+static void svcsock_rx_region_unsplit_test(struct kunit *test)
+{
+	struct svcsock_rx_region_fixture *f = svcsock_rx_region_fixture(test, 0);
+	struct page *pages[SVCSOCK_RX_REGION_PAGES + 1];
+	unsigned long pfn = 0;
+
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_read_pages(), 0UL);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(true, &pfn), 16UL);
+	KUNIT_EXPECT_EQ(test, pfn, f->pfn);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_take_pages(true, pages, 17), 0U);
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 16),
+			16U);
+	svcsock_rx_region_expect_part(test, false, 0, 0, 0);
+	page_pool_rx_region_give_pages(pages, 16);
+	svcsock_rx_region_expect_part(test, false, 16, 0, 0);
+}
+
+static void svcsock_rx_region_bind_off(void *unused)
+{
+	page_pool_rx_region_kunit_remove(true);
+	page_pool_rx_region_kunit_config(0, 0, false);
+}
+
+/*
+ * The read split's floor, and bind_reads() with no device listed: nothing
+ * without a size, never retried after a failed allocation, else it
+ * allocates the region itself.
+ */
+static void svcsock_rx_region_bind_reads_test(struct kunit *test)
+{
+	struct page *pages[SVCSOCK_RX_REGION_PAGES];
+	unsigned long pfn = 0;
+	char val[24];
+
+	if (page_pool_rx_region_span(false, &pfn))
+		kunit_skip(test, "a fixed rx region already exists");
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_region_bind_off, NULL), 0);
+
+	page_pool_rx_region_kunit_config(0, 0, false);
+	KUNIT_EXPECT_FALSE(test, page_pool_rx_region_bind_reads());
+
+	/* A split must hold one maximum READ: -EINVAL, unchanged. */
+	page_pool_rx_region_kunit_config(2 * PAGE_POOL_RX_REGION_READ_MIN, 0,
+					 false);
+	snprintf(val, sizeof(val), "%lu", PAGE_POOL_RX_REGION_READ_MIN - 1);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_read_param(val), -EINVAL);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_read_pages(), 0UL);
+	snprintf(val, sizeof(val), "%lu", PAGE_POOL_RX_REGION_READ_MIN);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_read_param(val), 0);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_read_pages(),
+			PAGE_POOL_RX_REGION_READ_MIN);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_read_param("0"), 0);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_read_pages(), 0UL);
+
+	page_pool_rx_region_kunit_config(SVCSOCK_RX_REGION_PAGES, 0, true);
+	KUNIT_EXPECT_FALSE(test, page_pool_rx_region_bind_reads());
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(false, &pfn), 0UL);
+
+	page_pool_rx_region_kunit_config(SVCSOCK_RX_REGION_PAGES, 0, false);
+	KUNIT_ASSERT_TRUE(test, page_pool_rx_region_bind_reads());
+	KUNIT_EXPECT_TRUE(test, page_pool_rx_region_bind_reads());
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_size(), SVCSOCK_RX_REGION_PAGES);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(true, &pfn),
+			SVCSOCK_RX_REGION_PAGES);
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 16),
+			16U);
+	page_pool_rx_region_give_pages(pages, 16);
+	svcsock_rx_region_expect_part(test, false, 16, 0, 0);
+}
+#endif
+
+/*
+ * The namespace budgets and the default together may not exceed the write
+ * partition, so the read partition never takes receive pressure; unsplit,
+ * the whole region is the write partition.
+ */
+static void svcsock_rx_budget_write_partition_test(struct kunit *test)
+{
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_default_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_region_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	svc_tcp_rx_budget_kunit_default(0, 0);
+	svc_tcp_rx_budget_kunit_region(100, 30);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_set(70), 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_set(71), -ENOSPC);
+	svc_tcp_rx_budget_kunit_default(20, 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_set(51), -ENOSPC);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_set(50), 0);
+
+	svc_tcp_rx_budget_kunit_region(100, 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_set(81), -ENOSPC);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_set(80), 0);
+}
+
 static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
 {
 	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 64);
@@ -2115,7 +2470,7 @@ static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
 	state->terminal = false;
 	kunit_warning_suppress(test) {
 		svc_tcp_rx_reset(state);
-		KUNIT_EXPECT_SUPPRESSED_WARNING_COUNT(test, 1);
+		SVCSOCK_EXPECT_ONCE_WARNING(test);
 	}
 	KUNIT_EXPECT_TRUE(test, state->credit_linked);
 	KUNIT_EXPECT_EQ(test, state->credit, credit);
@@ -3295,7 +3650,7 @@ static void svcsock_rx_duplicate_cleanup_test(struct kunit *test)
 	kunit_warning_suppress(test) {
 		KUNIT_EXPECT_EQ(test, svc_tcp_rx_release_refs(release_state),
 				-EINVAL);
-		KUNIT_EXPECT_SUPPRESSED_WARNING_COUNT(test, 1);
+		SVCSOCK_EXPECT_ONCE_WARNING(test);
 	}
 
 	KUNIT_ASSERT_EQ(test,
@@ -3307,7 +3662,7 @@ static void svcsock_rx_duplicate_cleanup_test(struct kunit *test)
 						 SVC_TCP_RX_ABORT,
 						 SVC_TCP_RX_REASON_NONE),
 				-EINVAL);
-		KUNIT_EXPECT_SUPPRESSED_WARNING_COUNT(test, 1);
+		SVCSOCK_EXPECT_ONCE_WARNING(test);
 	}
 }
 
@@ -3363,7 +3718,7 @@ static void svcsock_rx_concurrent_release_test(struct kunit *test)
 
 	kunit_warning_suppress(test) {
 		svc_tcp_release_ctxt(&svsk->sk_xprt, request_state);
-		KUNIT_EXPECT_SUPPRESSED_WARNING_COUNT(test, 1);
+		SVCSOCK_EXPECT_ONCE_WARNING(test);
 	}
 	KUNIT_EXPECT_EQ(test, page_ref_count(request_page), request_refs);
 	KUNIT_EXPECT_MEMEQ(test, socket_state, &socket_snapshot,
@@ -3510,6 +3865,14 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_set_want_test),
 	KUNIT_CASE(svcsock_rx_want_data_ready_test),
 	KUNIT_CASE(svcsock_rx_credit_default_budget_test),
+	KUNIT_CASE(svcsock_rx_read_pool_test),
+	KUNIT_CASE(svcsock_rx_read_pool_init_test),
+#if IS_ENABLED(CONFIG_PAGE_POOL)
+	KUNIT_CASE(svcsock_rx_region_take_give_test),
+	KUNIT_CASE(svcsock_rx_region_unsplit_test),
+	KUNIT_CASE(svcsock_rx_region_bind_reads_test),
+#endif
+	KUNIT_CASE(svcsock_rx_budget_write_partition_test),
 	KUNIT_CASE(svcsock_rx_credit_factor_bounds_test),
 	KUNIT_CASE(svcsock_rx_capacity_plus_one_test),
 	KUNIT_CASE(svcsock_rx_partial_save_restore_test),
