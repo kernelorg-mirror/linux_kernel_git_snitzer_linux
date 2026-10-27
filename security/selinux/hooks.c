@@ -3280,7 +3280,7 @@ static int selinux_inode_permission(struct inode *inode, int requested)
 	isec = inode_security_rcu(inode, requested & MAY_NOT_BLOCK);
 	if (IS_ERR(isec))
 		return PTR_ERR(isec);
-	perms = file_mask_to_av(inode->i_mode, mask);
+	perms = file_mask_to_av(READ_ONCE(inode->i_mode), mask);
 
 	rc = task_avdcache_search(tsec, isec, &avdc);
 	if (likely(!rc)) {

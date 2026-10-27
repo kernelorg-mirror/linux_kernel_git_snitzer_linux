@@ -1287,7 +1287,7 @@ void __blk_flush_plug(struct blk_plug *plug, bool from_schedule)
 		blk_mq_free_plug_rqs(plug);
 
 	plug->cur_ktime = 0;
-	current->flags &= ~PF_BLOCK_TS;
+	WRITE_ONCE(current->flags, READ_ONCE(current->flags) & ~PF_BLOCK_TS);
 }
 
 /**

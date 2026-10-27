@@ -513,8 +513,12 @@ static inline unsigned int timer_get_idx(struct timer_list *timer)
 
 static inline void timer_set_idx(struct timer_list *timer, unsigned int idx)
 {
-	timer->flags = (timer->flags & ~TIMER_ARRAYMASK) |
-			idx << TIMER_ARRAYSHIFT;
+	u32 flags;
+
+	/* lock_timer_base() samples flags before it knows which base to lock. */
+	flags = READ_ONCE(timer->flags);
+	WRITE_ONCE(timer->flags, (flags & ~TIMER_ARRAYMASK) |
+				idx << TIMER_ARRAYSHIFT);
 }
 
 /*

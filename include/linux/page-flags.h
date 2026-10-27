@@ -223,7 +223,8 @@ static __always_inline bool compound_info_has_mask(void)
 
 static __always_inline unsigned long _compound_head(const struct page *page)
 {
-	unsigned long info = READ_ONCE(page->compound_info);
+	/* Head-page LRU pointers alias this word but must keep bit 0 clear. */
+	unsigned long info = data_race(READ_ONCE(page->compound_info));
 	unsigned long mask;
 
 	if (!compound_info_has_mask()) {

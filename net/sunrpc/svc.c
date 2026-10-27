@@ -1630,7 +1630,8 @@ svc_process_common(struct svc_rqst *rqstp)
 
 	/* Syntactic check complete */
 	if (serv->sv_stats)
-		serv->sv_stats->rpccnt++;
+		/* data_race: best-effort aggregate statistics counter. */
+		data_race(serv->sv_stats->rpccnt++);
 	trace_svc_process(rqstp, progp->pg_name);
 
 	aoffset = xdr_stream_pos(xdr);
