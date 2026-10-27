@@ -1239,6 +1239,9 @@ EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_config);
 /*
  * Publish a region over @nr pages the test owns at @base (each with
  * refcount 1), @nr_read of them split off for reads; -EBUSY if one exists.
+ * The test holds it as a bound pool would (one count in r->pools), so the
+ * unbind of the last test pool never reaps pages the test owns; only
+ * page_pool_rx_region_kunit_remove() lets it go.
  */
 int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
 				      unsigned long nr_read)
@@ -1253,9 +1256,11 @@ int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
 	mutex_lock(&rx_region_mutex);
 	if (!ret && rx_region)
 		ret = -EBUSY;
-	if (!ret)
+	if (!ret) {
 		rx_region_publish(r, free, pcp, page_to_pfn(base), nr, nr_read,
 				  "kunit");
+		r->pools = 1;
+	}
 	mutex_unlock(&rx_region_mutex);
 	if (ret) {
 		free_percpu(pcp[RX_REGION_WRITE]);
@@ -1321,8 +1326,147 @@ void page_pool_rx_region_kunit_part(bool read, unsigned long out[4])
 }
 EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_part);
 
+/*
+ * With @i >= 0, the free pages in shard @i of a partition: its capacity in
+ * @cap, how many it holds that another shard owns in @foreign.  With @i < 0,
+ * the partition's: shards plus caches, the cached pages in @cached, the
+ * fullest CPU cache in @maxcache.  Either way the shard count in @nshards
+ * (0 for a partition of no pages; then everything is 0).
+ */
+unsigned long page_pool_rx_region_kunit_shards(bool read, int i,
+					       unsigned long *cap,
+					       unsigned int *foreign,
+					       unsigned long *cached,
+					       unsigned int *maxcache,
+					       unsigned int *nshards)
+{
+	struct page_pool_rx_region *r = rx_region_published();
+	struct page_pool_rx_region_part *p;
+	unsigned long n, flags;
+	int cpu;
+
+	*cap = 0;
+	*foreign = 0;
+	*cached = 0;
+	*maxcache = 0;
+	*nshards = 0;
+	if (!r)
+		return 0;
+	p = &r->part[read ? RX_REGION_READ : RX_REGION_WRITE];
+	*nshards = p->nshards;
+	if (i >= (int)p->nshards)
+		return 0;
+	if (i >= 0) {
+		struct rx_region_shard *sh = &p->shard[i];
+		unsigned long k;
+
+		spin_lock_irqsave(&sh->lock, flags);
+		*cap = sh->cap;
+		for (k = 0; k < sh->nfree; k++)
+			if ((page_to_pfn(sh->free[k]) - p->first_pfn) /
+			    p->shard_pages != (unsigned long)i)
+				(*foreign)++;
+		n = sh->nfree;
+		spin_unlock_irqrestore(&sh->lock, flags);
+		return n;
+	}
+	if (p->pcp)
+		for_each_possible_cpu(cpu) {
+			unsigned int c = READ_ONCE(per_cpu_ptr(p->pcp, cpu)->count);
+
+			*cached += c;
+			*maxcache = max(*maxcache, c);
+		}
+	return rx_region_shards_free(p) + *cached;
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_shards);
+
+/*
+ * Take @n pages as take_pages() does (@exact), or as a device refill does
+ * (not @exact: as many as are free, draining at most once a jiffy).
+ */
+unsigned int page_pool_rx_region_kunit_take(bool read, struct page **pages,
+					    unsigned int n, bool exact)
+{
+	struct page_pool_rx_region *r = rx_region_published();
+
+	if (!r || !n)
+		return 0;
+	return rx_region_get(rx_region_part(r, read), pages, n, exact);
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_take);
+
+/* Drain every CPU's cache of a partition into its shards. */
+void page_pool_rx_region_kunit_drain(bool read)
+{
+	struct page_pool_rx_region *r = rx_region_published();
+	struct page_pool_rx_region_part *p;
+
+	if (!r)
+		return;
+	p = &r->part[read ? RX_REGION_READ : RX_REGION_WRITE];
+	if (p->pcp)
+		rx_region_drain(p);
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_drain);
+
+/* Restart the low-water marks, as a write to the debugfs file does. */
+void page_pool_rx_region_kunit_reset_min_free(void)
+{
+	struct page_pool_rx_region *r = rx_region_published();
+
+	if (r)
+		rx_region_reset_min_free(r);
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_reset_min_free);
+
+/*
+ * A pool bound to the published region as a listed device's pool is, but
+ * with no device and no DMA mapping; ERR_PTR(-ENODEV) without a region.
+ * The caller destroys it with page_pool_destroy() before the region goes.
+ */
+struct page_pool *page_pool_rx_region_kunit_pool(void)
+{
+	struct page_pool_params params = {
+		.order = 0,
+		.pool_size = 1024,
+		.nid = NUMA_NO_NODE,
+	};
+	struct page_pool_rx_region *r = rx_region_published();
+	struct page_pool *pool;
+
+	if (!r)
+		return ERR_PTR(-ENODEV);
+	pool = page_pool_create(&params);
+	if (IS_ERR(pool))
+		return pool;
+	/* Counted as page_pool_rx_region_get() counts it; unbind uncounts. */
+	mutex_lock(&rx_region_mutex);
+	r->pools++;
+	mutex_unlock(&rx_region_mutex);
+	page_pool_rx_region_bind(pool, r, pool->p.pool_size);
+	return pool;
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_pool);
+
 static bool page_pool_recycle_in_cache(netmem_ref netmem,
 				       struct page_pool *pool);
+
+/*
+ * Recycle @page (one of @pool's, refcount 1) straight into the pool's alloc
+ * cache, as a direct (NAPI) return does; false, page untouched, when full.
+ */
+bool page_pool_rx_region_kunit_recycle(struct page_pool *pool,
+				       struct page *page)
+{
+	bool ok;
+
+	local_bh_disable();
+	ok = page_pool_recycle_in_cache(page_to_netmem(page), pool);
+	local_bh_enable();
+	return ok;
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_recycle);
 #endif
 
 

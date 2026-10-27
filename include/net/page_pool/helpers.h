@@ -370,6 +370,19 @@ int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
 				      unsigned long nr_read);
 void page_pool_rx_region_kunit_remove(bool contig);
 void page_pool_rx_region_kunit_part(bool read, unsigned long out[4]);
+unsigned long page_pool_rx_region_kunit_shards(bool read, int i,
+					       unsigned long *cap,
+					       unsigned int *foreign,
+					       unsigned long *cached,
+					       unsigned int *maxcache,
+					       unsigned int *nshards);
+unsigned int page_pool_rx_region_kunit_take(bool read, struct page **pages,
+					    unsigned int n, bool exact);
+void page_pool_rx_region_kunit_drain(bool read);
+void page_pool_rx_region_kunit_reset_min_free(void);
+struct page_pool *page_pool_rx_region_kunit_pool(void);
+bool page_pool_rx_region_kunit_recycle(struct page_pool *pool,
+				       struct page *page);
 #endif
 #else
 static inline unsigned long page_pool_rx_region_size(void)

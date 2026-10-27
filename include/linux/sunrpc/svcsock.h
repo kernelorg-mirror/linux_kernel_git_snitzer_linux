@@ -277,7 +277,18 @@ void svc_tcp_rx_budget_kunit_init(void);
 bool svc_tcp_rx_budget_on(struct svc_tcp_rx_budget *c);
 int svc_tcp_rx_budget_kunit_stats(struct svc_tcp_rx_budget *c, char *buf,
 				  size_t size);
+enum svc_tcp_rx_kunit_stock_op {
+	SVC_TCP_RX_KUNIT_STOCK_FILL, SVC_TCP_RX_KUNIT_STOCK_TAKE,
+	SVC_TCP_RX_KUNIT_STOCK_PUT, SVC_TCP_RX_KUNIT_STOCK_DRAIN,
+	SVC_TCP_RX_KUNIT_STOCK_STOCKED, SVC_TCP_RX_KUNIT_STOCK_CONTENDED,
+	SVC_TCP_RX_KUNIT_STOCK_APPLY,
+};
+long svc_tcp_rx_budget_kunit_stock(struct svc_tcp_rx_budget *c,
+				   enum svc_tcp_rx_kunit_stock_op op, long n);
+struct svc_tcp_rx_budget *svc_tcp_rx_budget_kunit_alloc(void);
+void svc_tcp_rx_budget_kunit_free(struct svc_tcp_rx_budget *c);
 long svc_tcp_rx_budget_default_avail(void);
+long svc_tcp_rx_budget_kunit_default_avail(void);
 bool svc_tcp_rx_credit_admit(struct svc_sock *svsk,
 			     struct svc_tcp_rx_state *state, u32 reclen);
 bool svc_tcp_rx_credit_charge(struct svc_sock *svsk,
@@ -287,6 +298,7 @@ void svc_tcp_rx_credit_forget(struct svc_sock *svsk);
 bool svc_tcp_rx_budget_copy(struct svc_sock *svsk);
 long svc_tcp_rx_budget_avail(void);
 unsigned int svc_tcp_rx_budget_cost_factor(void);
+long svc_tcp_rx_budget_kunit_avail(void);
 long svc_tcp_rx_budget_reserve_avail(void);
 void svc_tcp_rx_release_payload(struct svc_sock *svsk, struct svc_rqst *rqstp);
 int svc_tcp_rx_bounce(struct svc_sock *svsk, struct svc_rqst *rqstp,
