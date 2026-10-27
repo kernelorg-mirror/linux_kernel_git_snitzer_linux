@@ -8,9 +8,17 @@ takes 5 or 20 things to come together to realize full performance".
 
 **The target is loan mode (Mike, 2026-10-23: "I want to squeeze out all
 lost performance for loan mode").** Every round profiles, ranks and tests
-the loan run, and a change is judged by what it saves a loaned WRITE. Copy
-mode is not profiled or run beside it. AGENTS.md's rule runs one way: copy
-mode is not to be made faster at the loan's expense, not the reverse.
+the loan run, and a change is judged by what it saves a loaned WRITE.
+AGENTS.md's rule runs one way: copy mode is not to be made faster at the
+loan's expense, not the reverse.
+
+**No copy runs (Mike, 2026-10-27: "copy is not important at this
+time").** Do not run copy mode in a round, its A/B, a look, the checks
+after a boot, or the measure of a host change (a boot setting, a module, a
+kernel). Do not profile it and do not put it in a driver beside the loan
+runs. This holds even where a round's text, a handoff or an older plan
+asks for "copy and loan": run the loan side only, and say in the round
+that copy was not run. Copy comes back only when Mike asks for it.
 
 Each round is a directory here, numbered in order:
 
