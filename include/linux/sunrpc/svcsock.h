@@ -58,6 +58,11 @@ enum svc_tcp_rx_reason {
 
 /* Records a budget learns its charge over: see svc_tcp_rx_cost_learn_locked(). */
 #define SVC_TCP_RX_COST_WINDOW	1024
+/*
+ * Records a budget releases under its lock, learning their cost, before
+ * admission takes its per-CPU stocks: one stock's worth of pages.
+ */
+#define SVC_TCP_RX_COST_WARMUP	64
 
 /*
  * Receive descriptors and their page references move together by exchanging
@@ -99,6 +104,8 @@ struct svc_tcp_rx_state {
 	u32			region_count;
 	struct page		*region_last;
 	bool			credit_linked;
+	/* admitted from a CPU's stock: off the budget's in-flight list */
+	bool			credit_stocked;
 	struct list_head	credit_node;
 	/* the budget this record's credit came from, while linked */
 	struct svc_tcp_rx_budget *credit_budget;
@@ -110,6 +117,8 @@ struct svc_tcp_rx_state {
 	u32			bounce_pages;
 	u32			bounce_credit;
 	u32			bounce_reserve;
+	/* lent from a stocked record: done returns it to a CPU's stock */
+	bool			bounce_stocked;
 } ____cacheline_aligned;
 
 /*

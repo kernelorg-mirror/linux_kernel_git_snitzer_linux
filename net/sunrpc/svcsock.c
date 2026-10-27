@@ -81,9 +81,17 @@ module_param(svc_tcp_rx_copy_below, uint, 0644);
 MODULE_PARM_DESC(svc_tcp_rx_copy_below,
 		 "Copy, rather than loan, whole RPC records of at most this many bytes (0: loan all)");
 
+/*
+ * Asked once the marker is in.  The record is whole in this fragment when
+ * every body octet received so far is this fragment's: sk_datalen also
+ * counts the octets earlier actor calls took of it (a prefix split across
+ * skbs), so it alone would loan a small call, and a loaned call's READ
+ * cannot be confined.
+ */
 static bool svc_tcp_rx_small_record(struct svc_sock *svsk)
 {
-	return svc_sock_final_rec(svsk) && !svsk->sk_datalen &&
+	return svc_sock_final_rec(svsk) &&
+	       svsk->sk_datalen + sizeof(rpc_fraghdr) == svsk->sk_tcplen &&
 	       svc_sock_reclen(svsk) <= READ_ONCE(svc_tcp_rx_copy_below);
 }
 
@@ -424,6 +432,37 @@ MODULE_PARM_DESC(svc_tcp_rx_region_user_timeout,
 		 "TCP_USER_TIMEOUT in ms for connections accepted while READs are confined: the server resets a connection silent for this long (default: 10000, i.e. 10 s; 0: none, the stock behaviour)");
 
 /*
+ * Credit a CPU keeps while its budget has no waiters, so admitting a record
+ * or a READ and returning its credit rarely take the budget's lock.
+ * Stocked credit is still the budget's own: the stats count it as
+ * available, and the first waiter or a change of configuration drains every
+ * stock back under the lock.  Holders are counted per CPU, before they take
+ * stocked credit and until it is back, so the budget's "anything in
+ * flight" tests see them.  Credit always goes back to the budget it came
+ * from (state->credit_budget, a READ's budget), never across namespaces.
+ */
+#define SVC_TCP_RX_STOCK_MAX	64
+#define SVC_TCP_RX_STOCK_BATCH	32
+
+struct svc_tcp_rx_stock {
+	atomic_long_t		pages;
+	/* receive records admitted from a stock: off the in-flight list */
+	long			records;
+	long			read_inflight;	/* READs admitted less returned here */
+	long			lent;	/* stocked records' credit lent to bounces */
+	u64			admitted;	/* records admitted from the stock */
+	u64			read_admitted;
+	u64			read_completed;	/* credit returned, however it ended */
+	/*
+	 * Cost samples of records released to this stock without the lock:
+	 * the count in the high 32 bits, the highest sample in the low 32.
+	 * Folded into the budget's estimate under its lock at the next
+	 * refill, drain or spill (svc_tcp_rx_cost_fold_cpu_locked()).
+	 */
+	atomic64_t		cost_sample;
+};
+
+/*
  * Every record's lookup of its budget reads net and cfg_pages, which change
  * only with the configuration; admission and release write lock, avail and
  * what follows for every loaned record.  They are kept on separate cache
@@ -463,6 +502,12 @@ struct svc_tcp_rx_budget {
 	unsigned int		cost_peak;	/* of this window */
 	unsigned int		cost_last_peak;	/* of the window before */
 	unsigned int		cost_records;	/* in this window */
+	/*
+	 * Records released under the lock since nothing was learned, to
+	 * SVC_TCP_RX_COST_WARMUP: until then admission takes no stock, so
+	 * the first records teach the estimate on the locked path.
+	 */
+	unsigned int		cost_warm;
 	struct list_head	inflight;	/* admitted records, oldest first */
 	struct list_head	waiters;	/* transports, oldest ticket first */
 	u64			admitted;
@@ -475,20 +520,24 @@ struct svc_tcp_rx_budget {
 	atomic64_t		bounce_refused;
 	/* confined NFSD READs (svc_tcp_rx_region_read) */
 	struct list_head	read_waiters;	/* parked READs, oldest ticket first */
-	unsigned int		read_inflight;	/* READ replies holding credit */
-	u64			read_admitted;
+	/* READs in flight, admitted and completed: per CPU, in @stock */
 	u64			read_parked;
 	u64			read_granted;
-	u64			read_completed;	/* credit returned, however it ended */
 	atomic64_t		read_unconfined;
 	atomic64_t		read_short;
 	atomic64_t		share_stalls;
 	struct work_struct	read_kick_work;	/* dropped-park kick; flushed at net_exit */
+	bool			contended;	/* waiters or a drain: no stocking */
+	struct svc_tcp_rx_stock __percpu *stock;
 };
 
 static void svc_tcp_rx_budget_read_kick_fn(struct work_struct *work);
 
+static DEFINE_PER_CPU(struct svc_tcp_rx_stock, svc_rx_stock_default);
+static DEFINE_PER_CPU(struct svc_tcp_rx_stock, svc_rx_stock_read);
+
 static struct svc_tcp_rx_budget svc_rx_budget_default = {
+	.stock		= &svc_rx_stock_default,
 	.lock		= __SPIN_LOCK_UNLOCKED(svc_rx_budget_default.lock),
 	.next_ticket	= 1,
 	.node		= LIST_HEAD_INIT(svc_rx_budget_default.node),
@@ -504,6 +553,7 @@ static struct svc_tcp_rx_budget svc_rx_budget_default = {
  * configured budgets leave of the region.
  */
 static struct svc_tcp_rx_budget svc_rx_budget_read = {
+	.stock		= &svc_rx_stock_read,
 	.lock		= __SPIN_LOCK_UNLOCKED(svc_rx_budget_read.lock),
 	.read		= true,
 	.next_ticket	= 1,
@@ -514,6 +564,155 @@ static struct svc_tcp_rx_budget svc_rx_budget_read = {
 	.read_kick_work	= __WORK_INITIALIZER(svc_rx_budget_read.read_kick_work,
 					     svc_tcp_rx_budget_read_kick_fn),
 };
+
+/* @c's per-CPU stocks summed; exact only under c->lock with @c contended. */
+struct svc_tcp_rx_stock_sum {
+	long	pages, records, read_inflight, lent;
+	u64	admitted, read_admitted, read_completed;
+};
+
+static void svc_tcp_rx_stock_sum(struct svc_tcp_rx_budget *c,
+				 struct svc_tcp_rx_stock_sum *sum)
+{
+	int cpu;
+
+	memset(sum, 0, sizeof(*sum));
+	for_each_possible_cpu(cpu) {
+		struct svc_tcp_rx_stock *st = per_cpu_ptr(c->stock, cpu);
+
+		sum->pages += atomic_long_read(&st->pages);
+		sum->records += READ_ONCE(st->records);
+		sum->read_inflight += READ_ONCE(st->read_inflight);
+		sum->lent += READ_ONCE(st->lent);
+		sum->admitted += READ_ONCE(st->admitted);
+		sum->read_admitted += READ_ONCE(st->read_admitted);
+		sum->read_completed += READ_ONCE(st->read_completed);
+	}
+}
+
+/* READs holding @c's credit. */
+static long svc_tcp_rx_read_inflight(struct svc_tcp_rx_budget *c)
+{
+	long n = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		n += READ_ONCE(per_cpu_ptr(c->stock, cpu)->read_inflight);
+	return n;
+}
+
+/* Receive records holding credit from @c's stocks. */
+static long svc_tcp_rx_stocked_records(struct svc_tcp_rx_budget *c)
+{
+	long n = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		n += READ_ONCE(per_cpu_ptr(c->stock, cpu)->records);
+	return n;
+}
+
+static void svc_tcp_rx_cost_fold_locked(struct svc_tcp_rx_budget *c,
+					unsigned int peak, unsigned int nrec);
+
+/*
+ * Fold the samples of records released to @st without the lock into
+ * @c's estimate, c->lock held.  The estimate is the highest sample, so
+ * a batch's highest sample and its count are all it needs.
+ */
+static void svc_tcp_rx_cost_fold_cpu_locked(struct svc_tcp_rx_budget *c,
+					    struct svc_tcp_rx_stock *st)
+{
+	u64 v = atomic64_xchg(&st->cost_sample, 0);
+
+	if (v)
+		svc_tcp_rx_cost_fold_locked(c, (u32)v, v >> 32);
+}
+
+/*
+ * Stop stocking and return every CPU's stocked credit to @c's avail,
+ * c->lock held.  Pairs with svc_tcp_rx_stock_put(): a put either sees
+ * contended set or has added its credit before this drain takes it.
+ * Stocking resumes at a kick that finds no waiter.  A stocked record's
+ * credit lent to a WRITE bounce is not in a stock: its record stays
+ * counted until svc_tcp_rx_bounce_done() returns it.
+ */
+static void svc_tcp_rx_stock_drain_locked(struct svc_tcp_rx_budget *c)
+{
+	int cpu;
+
+	WRITE_ONCE(c->contended, true);
+	smp_mb();
+	for_each_possible_cpu(cpu) {
+		struct svc_tcp_rx_stock *st = per_cpu_ptr(c->stock, cpu);
+
+		c->avail += atomic_long_xchg(&st->pages, 0);
+		svc_tcp_rx_cost_fold_cpu_locked(c, st);
+	}
+}
+
+/*
+ * Take @n pages of credit from this CPU's stock, with no lock.  The caller
+ * has counted itself as a holder (records or read_inflight) first.
+ */
+static bool svc_tcp_rx_stock_take(struct svc_tcp_rx_budget *c, long n)
+{
+	atomic_long_t *pages = &raw_cpu_ptr(c->stock)->pages;
+	long v;
+
+	if (READ_ONCE(c->contended))
+		return false;
+	v = atomic_long_read(pages);
+	do {
+		if (v < n)
+			return false;
+	} while (!atomic_long_try_cmpxchg(pages, &v, v - n));
+	return true;
+}
+
+/*
+ * Return @n pages of credit to this CPU's stock.  Returns what must go to
+ * @c's avail under its lock instead: all of it while @c is contended, else
+ * what a full stock spills (all but a batch).
+ */
+static long svc_tcp_rx_stock_put(struct svc_tcp_rx_budget *c, long n)
+{
+	atomic_long_t *pages = &raw_cpu_ptr(c->stock)->pages;
+	long v, keep;
+
+	if (READ_ONCE(c->contended))
+		return n;
+	v = atomic_long_add_return(n, pages);
+	smp_mb__after_atomic();
+	keep = READ_ONCE(c->contended) ? 0 : SVC_TCP_RX_STOCK_BATCH;
+	if (!keep || v > SVC_TCP_RX_STOCK_MAX) {
+		v = atomic_long_read(pages);
+		do {
+			if (v <= keep)
+				return 0;
+		} while (!atomic_long_try_cmpxchg(pages, &v, keep));
+		return v - keep;
+	}
+	return 0;
+}
+
+/*
+ * Stock this CPU with a batch while credit is plentiful and nobody waits,
+ * c->lock held.  The reserve is never stocked.  Returns the credit stocked.
+ */
+static long svc_tcp_rx_stock_refill_locked(struct svc_tcp_rx_budget *c)
+{
+	atomic_long_t *pages = &raw_cpu_ptr(c->stock)->pages;
+
+	svc_tcp_rx_cost_fold_cpu_locked(c, raw_cpu_ptr(c->stock));
+	if (c->contended || !c->budget ||
+	    c->avail < 2 * SVC_TCP_RX_STOCK_BATCH + (long)c->reserve_size ||
+	    atomic_long_read(pages) >= SVC_TCP_RX_STOCK_BATCH)
+		return 0;
+	c->avail -= SVC_TCP_RX_STOCK_BATCH;
+	atomic_long_add(SVC_TCP_RX_STOCK_BATCH, pages);
+	return SVC_TCP_RX_STOCK_BATCH;
+}
 
 /* Namespace budgets, the initial one included. */
 static LIST_HEAD(svc_rx_budget_pools);
@@ -707,6 +906,7 @@ static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 				    size_t size)
 {
 	unsigned int waiters = 0, read_waiters = 0;
+	struct svc_tcp_rx_stock_sum sum;
 	struct list_head *park;
 	struct svc_sock *pos;
 	int len;
@@ -718,18 +918,22 @@ static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 		waiters++;
 	list_for_each(park, &c->read_waiters)
 		read_waiters++;
+	/* Stocked credit is available; stocked records are in flight. */
+	svc_tcp_rx_stock_sum(c, &sum);
 	/* Q-B: READ fields appended to every budget's line */
 	len = scnprintf(buf, size,
-			"budget %u reserve_size %u avail %ld reserve %ld inflight %u waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu cost_factor %u hold_factor %u lent %u bounced %llu bounce_refused %llu"
-			" read_inflight %u read_waiters %u read_admitted %llu read_parked %llu read_granted %llu read_completed %llu read_unconfined %llu read_short %llu share_stalls %llu\n",
-			c->budget, c->reserve_size, c->avail, c->reserve,
-			c->inflight_count, waiters, c->admitted, c->denied,
+			"budget %u reserve_size %u avail %ld reserve %ld inflight %ld waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu cost_factor %u hold_factor %u lent %u bounced %llu bounce_refused %llu"
+			" read_inflight %ld read_waiters %u read_admitted %llu read_parked %llu read_granted %llu read_completed %llu read_unconfined %llu read_short %llu share_stalls %llu\n",
+			c->budget, c->reserve_size, c->avail + sum.pages,
+			c->reserve, (long)c->inflight_count + sum.records,
+			waiters, c->admitted + sum.admitted, c->denied,
 			c->paused, c->overrun, c->orphaned, c->cost_factor,
-			READ_ONCE(c->hold_factor), c->lent,
+			READ_ONCE(c->hold_factor),
+			c->lent + (unsigned int)sum.lent,
 			(u64)atomic64_read(&c->bounced),
 			(u64)atomic64_read(&c->bounce_refused),
-			c->read_inflight, read_waiters, c->read_admitted,
-			c->read_parked, c->read_granted, c->read_completed,
+			sum.read_inflight, read_waiters, sum.read_admitted,
+			c->read_parked, c->read_granted, sum.read_completed,
 			(u64)atomic64_read(&c->read_unconfined),
 			(u64)atomic64_read(&c->read_short),
 			(u64)atomic64_read(&c->share_stalls));
@@ -824,16 +1028,21 @@ static const struct ctl_table svc_tcp_rx_budget_sysctl_table[] = {
 	},
 };
 
-int svc_tcp_rx_budget_net_init(struct net *net)
+/*
+ * A namespace's budget, with its per-CPU stock (allocated whatever the
+ * budget, even 0, so a reconfiguration never allocates).
+ */
+static struct svc_tcp_rx_budget *svc_tcp_rx_budget_alloc(struct net *net)
 {
-	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
-	struct svc_tcp_rx_budget *c;
-	struct ctl_table *table;
-	unsigned int i;
+	struct svc_tcp_rx_budget *c = kzalloc(sizeof(*c), GFP_KERNEL);
 
-	c = kzalloc(sizeof(*c), GFP_KERNEL);
 	if (!c)
-		return -ENOMEM;
+		return NULL;
+	c->stock = alloc_percpu(struct svc_tcp_rx_stock);
+	if (!c->stock) {
+		kfree(c);
+		return NULL;
+	}
 	c->net = net;
 	spin_lock_init(&c->lock);
 	c->next_ticket = 1;
@@ -841,6 +1050,39 @@ int svc_tcp_rx_budget_net_init(struct net *net)
 	INIT_LIST_HEAD(&c->waiters);
 	INIT_LIST_HEAD(&c->read_waiters);
 	INIT_WORK(&c->read_kick_work, svc_tcp_rx_budget_read_kick_fn);
+	return c;
+}
+
+/*
+ * Free a budget nothing uses any more.  Its transports, and so their
+ * records, READ replies and parked READs, are gone; a dropped park's kick
+ * may still be queued.  Stocked credit goes back before the check, and no
+ * stocked holder may remain.
+ */
+static void svc_tcp_rx_budget_free(struct svc_tcp_rx_budget *c)
+{
+	flush_work(&c->read_kick_work);
+	spin_lock_bh(&c->lock);
+	svc_tcp_rx_stock_drain_locked(c);
+	spin_unlock_bh(&c->lock);
+	WARN_ON_ONCE(c->inflight_count || c->lent || !list_empty(&c->waiters) ||
+		     svc_tcp_rx_read_inflight(c) ||
+		     svc_tcp_rx_stocked_records(c) ||
+		     !list_empty(&c->read_waiters));
+	free_percpu(c->stock);
+	kfree(c);
+}
+
+int svc_tcp_rx_budget_net_init(struct net *net)
+{
+	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
+	struct svc_tcp_rx_budget *c;
+	struct ctl_table *table;
+	unsigned int i;
+
+	c = svc_tcp_rx_budget_alloc(net);
+	if (!c)
+		return -ENOMEM;
 	table = kmemdup(svc_tcp_rx_budget_sysctl_table,
 			sizeof(svc_tcp_rx_budget_sysctl_table), GFP_KERNEL);
 	if (!table)
@@ -862,6 +1104,7 @@ int svc_tcp_rx_budget_net_init(struct net *net)
 out_table:
 	kfree(table);
 out_free:
+	free_percpu(c->stock);
 	kfree(c);
 	return -ENOMEM;
 }
@@ -889,16 +1132,8 @@ void svc_tcp_rx_budget_net_exit(struct net *net)
 	svc_tcp_rx_loans_update_locked();
 	mutex_unlock(&svc_rx_budget_cfg_lock);
 	svc_tcp_rx_budget_apply(&svc_rx_budget_read);
-	/*
-	 * The namespace's transports, and so their records, bounces, READ
-	 * replies and parked READs, are gone; a dropped park's kick may still
-	 * be queued.
-	 */
-	flush_work(&c->read_kick_work);
-	WARN_ON_ONCE(c->inflight_count || c->lent || !list_empty(&c->waiters) ||
-		     c->read_inflight || !list_empty(&c->read_waiters));
 	sn->rx_budget = NULL;
-	kfree(c);
+	svc_tcp_rx_budget_free(c);
 }
 
 #if IS_ENABLED(CONFIG_KUNIT)
@@ -906,12 +1141,17 @@ static bool svc_tcp_rx_budget_kunit_nowake;
 
 static void svc_tcp_rx_cost_forget(struct svc_tcp_rx_budget *c)
 {
+	int cpu;
+
 	spin_lock_bh(&c->lock);
 	WRITE_ONCE(c->cost_factor, 0);
 	WRITE_ONCE(c->hold_factor, 0);
 	c->cost_peak = 0;
 	c->cost_last_peak = 0;
 	c->cost_records = 0;
+	c->cost_warm = 0;
+	for_each_possible_cpu(cpu)
+		atomic64_set(&per_cpu_ptr(c->stock, cpu)->cost_sample, 0);
 	spin_unlock_bh(&c->lock);
 }
 
@@ -1059,7 +1299,14 @@ static bool svc_tcp_rx_budget_configure_locked(struct svc_tcp_rx_budget *c)
 
 	if (budget == c->budget && reserve == c->reserve_size)
 		return false;
-	if (c->inflight_count || c->lent || c->read_inflight) {
+	/*
+	 * Stocks hold the old configuration's credit: back to avail first.
+	 * Holders of stocked credit count as in flight, or a reset would
+	 * forget credit they return later and over-credit the budget.
+	 */
+	svc_tcp_rx_stock_drain_locked(c);
+	if (c->inflight_count || c->lent || svc_tcp_rx_read_inflight(c) ||
+	    svc_tcp_rx_stocked_records(c)) {
 		c->avail += (long)(budget - reserve) -
 			    (long)(c->budget - c->reserve_size);
 		c->reserve += (long)reserve - (long)c->reserve_size;
@@ -1112,28 +1359,88 @@ static u32 svc_tcp_rx_credit_cost(const struct svc_tcp_rx_budget *c,
  * shows fewer pages than a loaned one and cannot lower it either while
  * loaned ones are still ending.
  */
-static void svc_tcp_rx_cost_learn_locked(struct svc_tcp_rx_budget *c,
-					 const struct svc_tcp_rx_state *state)
+static unsigned int svc_tcp_rx_cost_sample(const struct svc_tcp_rx_state *state)
 {
 	u32 pages = DIV_ROUND_UP((u64)state->fixed_bytes + state->body_bytes,
 				 PAGE_SIZE);
-	unsigned int sample, factor = c->cost_factor;
+	unsigned int sample;
 
 	if (!state->region_count || !pages)
-		return;
+		return 0;
 	sample = min_t(u64, DIV_ROUND_UP_ULL((u64)(state->region_count - 1) *
 					     100, pages),
 		       SVC_TCP_RX_CREDIT_FACTOR_MAX);
-	sample = max(sample, 100U);
-	c->cost_peak = max(c->cost_peak, sample);
-	factor = max(factor, sample);
-	if (++c->cost_records >= SVC_TCP_RX_COST_WINDOW) {
+	return max(sample, 100U);
+}
+
+/*
+ * Learn @nrec records whose highest sample was @peak, c->lock held.  The
+ * records released without the lock arrive here in batches: the estimate
+ * is a maximum, so a batch teaches it what its records one by one would
+ * have.  Every window boundary a batch crosses still ends a window, at the
+ * same record count as one by one; where the batch's records run on past
+ * a boundary, its peak is counted in the window they run on into, so a
+ * boundary within a batch can keep the estimate up longer, never bring it
+ * down sooner.
+ */
+static void svc_tcp_rx_cost_fold_locked(struct svc_tcp_rx_budget *c,
+					unsigned int peak, unsigned int nrec)
+{
+	unsigned int factor = c->cost_factor;
+
+	if (!peak || !nrec)
+		return;
+	c->cost_peak = max(c->cost_peak, peak);
+	factor = max(factor, peak);
+	c->cost_records += nrec;
+	while (c->cost_records >= SVC_TCP_RX_COST_WINDOW) {
 		factor = max(c->cost_peak, c->cost_last_peak);
 		c->cost_last_peak = c->cost_peak;
-		c->cost_peak = 0;
-		c->cost_records = 0;
+		c->cost_records -= SVC_TCP_RX_COST_WINDOW;
+		c->cost_peak = c->cost_records ? peak : 0;
 	}
 	WRITE_ONCE(c->cost_factor, factor);
+}
+
+static void svc_tcp_rx_cost_learn_locked(struct svc_tcp_rx_budget *c,
+					 const struct svc_tcp_rx_state *state)
+{
+	if (c->cost_warm < SVC_TCP_RX_COST_WARMUP)
+		WRITE_ONCE(c->cost_warm, c->cost_warm + 1);
+	svc_tcp_rx_cost_fold_locked(c, svc_tcp_rx_cost_sample(state), 1);
+}
+
+/*
+ * A record admitted from a stock has ended and its credit went back to the
+ * stock without the lock: keep its sample on this CPU for the next fold.
+ */
+static void svc_tcp_rx_cost_stash(struct svc_tcp_rx_budget *c,
+				  const struct svc_tcp_rx_state *state)
+{
+	atomic64_t *acc = &raw_cpu_ptr(c->stock)->cost_sample;
+	unsigned int sample = svc_tcp_rx_cost_sample(state);
+	u64 v, n;
+
+	if (!sample)
+		return;
+	v = atomic64_read(acc);
+	do {
+		n = ((v >> 32) + 1) << 32 | max_t(u32, (u32)v, sample);
+		if ((v >> 32) == U32_MAX)
+			n = v | max_t(u32, (u32)v, sample);
+	} while (!atomic64_try_cmpxchg(acc, &v, n));
+}
+
+/*
+ * Admission takes stocked credit only once @c has learned from
+ * SVC_TCP_RX_COST_WARMUP records on the locked path, a stock's worth: the
+ * stock then charges what those records showed, not all a record can hold,
+ * and its own records keep teaching the estimate through the fold.
+ */
+static bool svc_tcp_rx_cost_warm(const struct svc_tcp_rx_budget *c)
+{
+	return svc_tcp_rx_fixed_factor() ||
+	       READ_ONCE(c->cost_warm) >= SVC_TCP_RX_COST_WARMUP;
 }
 
 static struct svc_sock *svc_tcp_rx_credit_head(struct svc_tcp_rx_budget *c)
@@ -1269,10 +1576,13 @@ static int svc_tcp_rx_budget_read_credit_locked(struct svc_tcp_rx_budget *c,
 {
 	long n = w->count, from_avail = n, from_reserve = 0, over = 0;
 
+	if (c->budget && c->avail < n && !c->contended)
+		svc_tcp_rx_stock_drain_locked(c);	/* stocked credit first */
 	if (!c->budget) {
 		from_avail = 0;
 	} else if (c->avail < n) {
-		if (!list_empty(&c->inflight) || c->read_inflight)
+		if (!list_empty(&c->inflight) || svc_tcp_rx_read_inflight(c) ||
+		    svc_tcp_rx_stocked_records(c))
 			return -EAGAIN;
 		from_avail = max(c->avail, 0L);
 		from_reserve = min(n - from_avail, max(c->reserve, 0L));
@@ -1286,7 +1596,8 @@ static int svc_tcp_rx_budget_read_credit_locked(struct svc_tcp_rx_budget *c,
 	w->reserve = from_reserve;
 	w->over = over;
 	w->budget = c;
-	c->read_inflight++;
+	this_cpu_inc(c->stock->read_inflight);
+	svc_tcp_rx_stock_refill_locked(c);
 	return 0;
 }
 
@@ -1318,6 +1629,9 @@ svc_tcp_rx_credit_kick_other_locked(struct svc_tcp_rx_budget *c,
 		park->granted = true;
 		list_move_tail(&park->node, granted);
 	}
+	/* Nobody waits (and any change is applied): stock again. */
+	if (list_empty(&c->read_waiters) && list_empty(&c->waiters))
+		WRITE_ONCE(c->contended, false);
 	if (running && svc_tcp_rx_credit_head(c) == running)
 		return NULL;
 	return svc_tcp_rx_credit_wake_locked(c);
@@ -1355,11 +1669,20 @@ svc_tcp_rx_budget_read_return(struct svc_tcp_rx_budget *c, long credit,
 	struct svc_sock *wake;
 	LIST_HEAD(granted);
 
+	this_cpu_inc(c->stock->read_completed);
+	/* Credit from avail goes to this CPU's stock while nobody waits. */
+	if (!reserve && credit) {
+		credit = svc_tcp_rx_stock_put(c, credit);
+		if (!credit) {
+			/* Uncounted only once the credit is back: see admit. */
+			this_cpu_dec(c->stock->read_inflight);
+			return;
+		}
+	}
 	spin_lock_bh(&c->lock);
 	c->avail += credit;
 	c->reserve += reserve;
-	c->read_inflight--;
-	c->read_completed++;
+	this_cpu_dec(c->stock->read_inflight);
 	svc_tcp_rx_budget_configure_locked(c);
 	wake = svc_tcp_rx_credit_kick_locked(c, &granted);
 	spin_unlock_bh(&c->lock);
@@ -1380,9 +1703,9 @@ svc_tcp_rx_budget_read_drop(struct svc_tcp_rx_budget *c, long credit,
 	spin_lock_bh(&c->lock);
 	c->avail += credit;
 	c->reserve += reserve;
-	c->read_inflight--;
-	c->read_completed++;
+	this_cpu_dec(c->stock->read_inflight);
 	spin_unlock_bh(&c->lock);
+	this_cpu_inc(c->stock->read_completed);
 	schedule_work(&c->read_kick_work);
 }
 
@@ -1558,24 +1881,56 @@ static bool svc_tcp_rx_credit_admit_to(struct svc_sock *svsk,
 				       struct svc_tcp_rx_state *state,
 				       u32 reclen)
 {
-	struct svc_sock *head, *wake = NULL;
+	struct svc_sock *head, *wake = NULL, *undo_wake = NULL;
 	u32 pages = DIV_ROUND_UP(reclen, PAGE_SIZE);
 	u32 cost, from_avail, from_reserve;
+	bool changed, tried = false;
 	LIST_HEAD(granted);
-	bool changed;
 
 	if (!svc_tcp_rx_budget_on(c) && list_empty(&svsk->sk_credit_wait))
 		return true;
 	if (WARN_ON_ONCE(state->credit_linked))
 		return true;
-	spin_lock_bh(&c->lock);
 	cost = svc_tcp_rx_credit_cost(c, state, pages);
+	/*
+	 * A holder is counted before it takes stocked credit and uncounted
+	 * only once the credit is back, so a change of configuration that
+	 * finds no holders (svc_tcp_rx_budget_configure_locked) misses none.
+	 */
+	if (cost <= SVC_TCP_RX_STOCK_MAX && READ_ONCE(c->budget) &&
+	    !READ_ONCE(c->contended) && list_empty(&svsk->sk_credit_wait) &&
+	    svc_tcp_rx_cost_warm(c)) {
+		tried = true;
+		this_cpu_inc(c->stock->records);
+		if (svc_tcp_rx_stock_take(c, cost)) {
+			/* This CPU's stock: nobody waits, no order to keep. */
+			state->credit = cost;
+			state->credit_reserve = 0;
+			state->credit_over = 0;
+			state->credit_ticket = 0;
+			state->credit_budget = c;
+			state->credit_stocked = true;
+			state->credit_linked = true;
+			this_cpu_inc(c->stock->admitted);
+			return true;
+		}
+	}
+	spin_lock_bh(&c->lock);
+	if (tried) {
+		/*
+		 * The count held while trying may have kept the oldest waiter
+		 * off the reserve: uncount under the lock and let it retry.
+		 */
+		this_cpu_dec(c->stock->records);
+		undo_wake = svc_tcp_rx_credit_kick_locked(c, &granted);
+	}
 	changed = svc_tcp_rx_budget_configure_locked(c);
 	if (!c->budget) {
 		/* Disable drains existing waiters through the same FIFO wake chain. */
 		svc_tcp_rx_credit_unwait_locked(svsk);
 		wake = svc_tcp_rx_credit_kick_locked(c, &granted);
 		spin_unlock_bh(&c->lock);
+		svc_tcp_rx_credit_wake(undo_wake);
 		svc_tcp_rx_credit_wake(wake);
 		svc_tcp_rx_budget_read_revisit(&granted);
 		return true;
@@ -1584,7 +1939,9 @@ static bool svc_tcp_rx_credit_admit_to(struct svc_sock *svsk,
 	if ((head && head != svsk) ||
 	    svc_tcp_rx_budget_read_older_locked(c, svsk->sk_credit_ticket))
 		goto deny;
-	if (list_empty(&c->inflight)) {
+	if (c->avail < cost && !c->contended)
+		svc_tcp_rx_stock_drain_locked(c);	/* stocked credit first */
+	if (list_empty(&c->inflight) && !svc_tcp_rx_stocked_records(c)) {
 		/* The oldest record may use the reserve: it always starts. */
 		from_avail = min_t(long, cost, max(c->avail, 0L));
 		from_reserve = min_t(long, cost - from_avail,
@@ -1601,11 +1958,15 @@ static bool svc_tcp_rx_credit_admit_to(struct svc_sock *svsk,
 	state->credit_reserve = from_reserve;
 	state->credit_over = 0;
 	state->credit_ticket = svsk->sk_credit_ticket ?: c->next_ticket++;
+	state->credit_stocked = false;
 	svc_tcp_rx_credit_unwait_locked(svsk);
 	svc_tcp_rx_credit_link_locked(c, state);
 	c->admitted++;
+	if (!from_reserve)
+		svc_tcp_rx_stock_refill_locked(c);
 	wake = svc_tcp_rx_credit_kick_locked(c, &granted);
 	spin_unlock_bh(&c->lock);
+	svc_tcp_rx_credit_wake(undo_wake);
 	svc_tcp_rx_credit_wake(wake);
 	svc_tcp_rx_budget_read_revisit(&granted);
 	return true;
@@ -1618,6 +1979,7 @@ deny:
 	if (changed)
 		wake = svc_tcp_rx_credit_kick_other_locked(c, svsk, &granted);
 	spin_unlock_bh(&c->lock);
+	svc_tcp_rx_credit_wake(undo_wake);
 	svc_tcp_rx_credit_wake(wake);
 	svc_tcp_rx_budget_read_revisit(&granted);
 	return false;
@@ -1659,7 +2021,18 @@ VISIBLE_IF_KUNIT bool svc_tcp_rx_credit_charge(struct svc_sock *svsk,
 	if (!state->credit_linked || held <= state->credit)
 		return true;
 	want = held - state->credit;
+	if (state->credit_stocked && svc_tcp_rx_stock_take(c, want)) {
+		state->credit += want;
+		return true;
+	}
 	spin_lock_bh(&c->lock);
+	if (state->credit_stocked) {
+		/* Out of stock: an ordinary record from now on, the youngest. */
+		state->credit_ticket = c->next_ticket++;
+		state->credit_stocked = false;
+		svc_tcp_rx_credit_link_locked(c, state);
+		this_cpu_dec(c->stock->records);
+	}
 	changed = svc_tcp_rx_budget_configure_locked(c);
 	if (!c->budget) {
 		/* Admission was turned off: records in flight finish unthrottled. */
@@ -1667,6 +2040,8 @@ VISIBLE_IF_KUNIT bool svc_tcp_rx_credit_charge(struct svc_sock *svsk,
 		state->credit_over += want;
 		want = 0;
 	}
+	if (want && c->avail < want && !c->contended)
+		svc_tcp_rx_stock_drain_locked(c);	/* stocked credit first */
 	oldest = list_first_entry(&c->inflight, struct svc_tcp_rx_state,
 				  credit_node) == state;
 	take = min(want, max(c->avail, 0L));
@@ -1718,6 +2093,41 @@ static void svc_tcp_rx_credit_return(struct svc_tcp_rx_state *state, u32 lend)
 	if (!state || !state->credit_linked)
 		return;
 	c = state->credit_budget;
+	if (state->credit_stocked) {
+		/*
+		 * To this CPU's stock of the budget it came from, but for
+		 * @lend: a stocked record's credit is all ordinary.  The
+		 * record stays counted while a bounce holds its credit.
+		 */
+		long back;
+
+		WARN_ON_ONCE(lend > state->credit);
+		svc_tcp_rx_cost_stash(c, state);
+		back = svc_tcp_rx_stock_put(c, state->credit - lend);
+		if (lend) {
+			this_cpu_add(c->stock->lent, lend);
+			state->bounce_budget = c;
+			state->bounce_credit = lend;
+			state->bounce_reserve = 0;
+			state->bounce_stocked = true;
+		}
+		state->credit = 0;
+		state->credit_linked = false;
+		state->credit_stocked = false;
+		state->credit_budget = NULL;
+		if (!back) {
+			/* Uncounted only once the credit is back: see admit. */
+			if (!lend)
+				this_cpu_dec(c->stock->records);
+			return;
+		}
+		spin_lock_bh(&c->lock);
+		c->avail += back;
+		svc_tcp_rx_cost_fold_cpu_locked(c, raw_cpu_ptr(c->stock));
+		if (!lend)
+			this_cpu_dec(c->stock->records);
+		goto returned;
+	}
 	spin_lock_bh(&c->lock);
 	if (lend) {
 		u32 normal = min(lend, state->credit - state->credit_reserve -
@@ -1742,6 +2152,7 @@ static void svc_tcp_rx_credit_return(struct svc_tcp_rx_state *state, u32 lend)
 	state->credit_over = 0;
 	state->credit_linked = false;
 	state->credit_budget = NULL;
+returned:
 	svc_tcp_rx_budget_configure_locked(c);
 	wake = svc_tcp_rx_credit_kick_locked(c, &granted);
 	spin_unlock_bh(&c->lock);
@@ -1771,8 +2182,14 @@ static void svc_tcp_rx_credit_orphan(struct svc_tcp_rx_state *state)
 		return;
 	c = state->credit_budget;
 	spin_lock_bh(&c->lock);
-	list_del(&state->credit_node);
-	c->inflight_count--;
+	if (state->credit_stocked) {
+		/* Not on the in-flight list: only its holder count goes. */
+		this_cpu_dec(c->stock->records);
+		state->credit_stocked = false;
+	} else {
+		list_del(&state->credit_node);
+		c->inflight_count--;
+	}
 	c->orphaned += state->credit - state->credit_over;
 	state->credit = 0;
 	state->credit_reserve = 0;
@@ -1806,13 +2223,31 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_credit_forget);
 #if IS_ENABLED(CONFIG_KUNIT)
 long svc_tcp_rx_budget_avail(void)
 {
-	return READ_ONCE(svc_tcp_rx_budget_initial()->avail);
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
+	long n = READ_ONCE(c->avail);
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		n += atomic_long_read(&per_cpu_ptr(c->stock, cpu)->pages);
+	return n;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_avail);
 
+/*
+ * The estimate with every ended record learned: the samples of records
+ * released to a stock are folded in first, as the next refill or drain
+ * would fold them.
+ */
 unsigned int svc_tcp_rx_budget_cost_factor(void)
 {
-	return READ_ONCE(svc_tcp_rx_budget_initial()->cost_factor);
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
+	int cpu;
+
+	spin_lock_bh(&c->lock);
+	for_each_possible_cpu(cpu)
+		svc_tcp_rx_cost_fold_cpu_locked(c, per_cpu_ptr(c->stock, cpu));
+	spin_unlock_bh(&c->lock);
+	return READ_ONCE(c->cost_factor);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_cost_factor);
 
@@ -2720,7 +3155,24 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_bounce_done(struct svc_rqst *rqstp,
 	svc_tcp_rx_bounce_give(bvec, state->bounce_pages);
 	c = state->bounce_budget;
 	lent = state->bounce_credit + state->bounce_reserve;
-	if (c && lent) {
+	if (c && lent && state->bounce_stocked) {
+		/* To this CPU's stock; the record is uncounted once it is back. */
+		long back = svc_tcp_rx_stock_put(c, lent);
+
+		this_cpu_sub(c->stock->lent, lent);
+		if (back) {
+			spin_lock_bh(&c->lock);
+			c->avail += back;
+			this_cpu_dec(c->stock->records);
+			svc_tcp_rx_budget_configure_locked(c);
+			wake = svc_tcp_rx_credit_kick_locked(c, &granted);
+			spin_unlock_bh(&c->lock);
+			svc_tcp_rx_credit_wake(wake);
+			svc_tcp_rx_budget_read_revisit(&granted);
+		} else {
+			this_cpu_dec(c->stock->records);
+		}
+	} else if (c && lent) {
 		spin_lock_bh(&c->lock);
 		c->avail += state->bounce_credit;
 		c->reserve += state->bounce_reserve;
@@ -2735,6 +3187,7 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_bounce_done(struct svc_rqst *rqstp,
 	state->bounce_pages = 0;
 	state->bounce_credit = 0;
 	state->bounce_reserve = 0;
+	state->bounce_stocked = false;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_bounce_done);
 
@@ -2986,7 +3439,11 @@ static struct page *svc_rx_region_page(u32 idx)
 	return pfn_to_page(svc_rx_region_txs_pfn + idx);
 }
 
-#define SVC_RX_REGION_BATCH	16
+/*
+ * Pages given back per call: a batch of 32 or more goes straight to the
+ * region's shards, so a large READ's completion skips the CPU caches.
+ */
+#define SVC_RX_REGION_BATCH	64
 
 /* Return @n pages chained from @idx; each link is read before its page goes. */
 static void svc_rx_region_chain_give(u32 idx, unsigned int n)
@@ -3302,20 +3759,28 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_region_park_free(struct svc_rx_region_park *par
 		svc_rx_region_share_put(park->svsk, park->count, park->share);
 }
 
-/* Confinement needs a plain TCP stream the CPU never touches. */
-static bool svc_rx_region_read_eligible(struct svc_rqst *rqstp,
-					unsigned int pages)
+/*
+ * Confinement needs a plain TCP stream the CPU never touches: why a READ
+ * cannot have it, or NULL.
+ */
+static const char *svc_rx_region_read_ineligible(struct svc_rqst *rqstp,
+						 unsigned int pages)
 {
 	switch (svc_auth_flavor(rqstp)) {
 	case RPC_AUTH_GSS_KRB5:
 	case RPC_AUTH_GSS_KRB5I:
 	case RPC_AUTH_GSS_KRB5P:
-		return false;
+		return "gss";
 	}
+	if (test_bit(XPT_TLS_SESSION, &rqstp->rq_xprt->xpt_flags))
+		return "tls";
 	/* Parking saves head-only calls: a loaned WRITE payload stays out. */
-	return !test_bit(XPT_TLS_SESSION, &rqstp->rq_xprt->xpt_flags) &&
-	       !rqstp->rq_arg.page_len && pages <= U16_MAX &&
-	       pages < rqstp->rq_page_end - rqstp->rq_next_page;
+	if (rqstp->rq_arg.page_len)
+		return "arg-pages";
+	if (pages > U16_MAX ||
+	    pages >= rqstp->rq_page_end - rqstp->rq_next_page)
+		return "reply-pages";
+	return NULL;
 }
 
 /* Park @rqstp until its connection's share has room for it. */
@@ -3446,9 +3911,10 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_region_read(struct svc_rqst *rqstp,
 	struct svc_rx_region_park want = {
 		.svsk = svsk, .xid = rqstp->rq_xid, .count = pages,
 	};
-	struct svc_sock *wake = NULL;
+	struct svc_sock *wake = NULL, *undo_wake = NULL;
+	bool changed, tried = false;
 	LIST_HEAD(granted);
-	bool changed;
+	const char *why;
 	int ret;
 
 	if (!READ_ONCE(svc_tcp_rx_region_reads))
@@ -3468,52 +3934,85 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_region_read(struct svc_rqst *rqstp,
 				svc_rx_region_share_put(svsk, park->count,
 							park->share);
 			}
+			why = "short";
 			goto unconfined;
 		}
 		/* It waited for its connection's share: admit it afresh. */
 	}
+	why = svc_rx_region_read_ineligible(rqstp, pages);
+	if (!why && !svc_rx_region_bind_reads())
+		why = "unbound";
 	/* A READ larger than the partition could never be confined (1b). */
-	if (!svc_rx_region_read_eligible(rqstp, pages) ||
-	    !svc_rx_region_bind_reads() || pages > svc_rx_region_read_span())
+	if (!why && pages > svc_rx_region_read_span())
+		why = "span";
+	if (why)
 		goto unconfined;
 	want.share = svc_rx_region_share(svsk);
 	if (!svc_rx_region_share_get(svsk, pages, want.share, rqstp->rq_xid)) {
 		ret = svc_rx_region_conn_park(rqstp, svsk, pages);
 		if (ret == -EAGAIN)
 			return ret;
+		why = "no-defer";
 		goto unconfined;
 	}
 	want.shared = true;
+	if (pages <= SVC_TCP_RX_STOCK_MAX && READ_ONCE(c->budget) &&
+	    !READ_ONCE(c->contended)) {
+		tried = true;
+		/* Counted first: see svc_tcp_rx_credit_admit(). */
+		this_cpu_inc(c->stock->read_inflight);
+		if (svc_tcp_rx_stock_take(c, pages)) {
+			/* This CPU's stock: no waiters, no FIFO to respect. */
+			want.credit = pages;
+			want.reserve = 0;
+			want.over = 0;
+			want.budget = c;
+			this_cpu_inc(c->stock->read_admitted);
+			ret = 0;
+			goto admitted;
+		}
+	}
 	spin_lock_bh(&c->lock);
+	if (tried) {
+		this_cpu_dec(c->stock->read_inflight);
+		undo_wake = svc_tcp_rx_credit_kick_locked(c, &granted);
+	}
 	changed = svc_tcp_rx_budget_configure_locked(c);
 	if (svc_tcp_rx_credit_head(c) || svc_tcp_rx_budget_read_older_locked(c, 0))
 		ret = -EAGAIN;
 	else
 		ret = svc_tcp_rx_budget_read_credit_locked(c, &want);
 	if (!ret)
-		c->read_admitted++;
+		this_cpu_inc(c->stock->read_admitted);
 	if (changed)
 		wake = svc_tcp_rx_credit_kick_locked(c, &granted);
 	spin_unlock_bh(&c->lock);
+	svc_tcp_rx_credit_wake(undo_wake);
 	svc_tcp_rx_credit_wake(wake);
 	svc_tcp_rx_budget_read_revisit(&granted);
 
+admitted:
 	switch (ret) {
 	case 0:
 		if (svc_rx_region_read_pages(rqstp, &want, "admit"))
 			return 0;
+		why = "short";
 		break;
 	case -EAGAIN:
 		ret = svc_rx_region_read_park(rqstp, c, &want);
 		if (ret == -EAGAIN)
 			return ret;
+		why = "no-defer";
+		break;
+	default:
+		why = "over-budget";
 		break;
 	}
 	svc_rx_region_share_put(svsk, pages, want.share);
 unconfined:
 	atomic64_inc(&c->read_unconfined);
 	trace_svcsock_tcp_rx_region_read(&svsk->sk_xprt, rqstp->rq_xid, pages,
-					 "unconfined", "-");
+					 "unconfined", why);
 	return 0;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_read);
