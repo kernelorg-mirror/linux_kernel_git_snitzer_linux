@@ -65,4 +65,4 @@
 
 - **A look; the descriptor-entry prefetch is not built.**
 - **Next (Mike):** decide on `rodata=noalias` for tardis2. It is a reboot and a security trade-off, so it is for Hammerspace's product too.
-- **Its measure:** an A/B across a reboot, copy and loan at the settled setting on the current kernel, against the same with `rodata=noalias`.
+- **Its measure:** an A/B across a reboot, loan runs at the settled setting on the current kernel, against the same with `rodata=noalias`. No copy runs (see "No copy runs" in [the FLAMEGRAPH README](../README.md)).
