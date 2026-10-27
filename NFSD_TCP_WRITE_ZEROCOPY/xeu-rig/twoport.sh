@@ -378,6 +378,10 @@ R0=$(cretr)
 for p in $PORTS; do d=${DEV[$p]}; F0[$p]=$(fifo $d); T0[$p]=$(ringdrop $d); B0[$p]=$(rxbytes $d); X0[$p]=$(txbytes $d); TB0[$p]=$(now); S0[$p]=$(ringshare $d); done
 N0=$(nfsdc); TN0=$(now)
 mpstat -P ALL $W 1 > srv-mpstat.txt 2>&1 &
+# Over the same window, each CPU's cycles and instructions, counted (not
+# sampled): mpstat's %soft comes from the 100 Hz tick (no IRQ time
+# accounting in this kernel), and cost.sh gives cycles a WRITE from this.
+perf stat -a -A -x, -e cycles,instructions -o perf-stat-window.txt -- sleep $W > /dev/null 2>&1 &
 if [ -n "${PROFILE:-}" ]; then
 	# 23 s from the start of the window, so RUNTIME=55 at least.  Counters for the
 	# rings' CPUs and for the rest apart, then where the cycles go, then where the

@@ -1,0 +1,129 @@
+--- xeu-esdk-v2.0.1.orig/xeu_drv.c
++++ xeu-esdk-v2.0.1/xeu_drv.c
+@@ -194,6 +194,72 @@
+ MODULE_PARM_DESC(rx_prefetch,
+ 		 "prefetch the next received frame's headers, skb_shared_info and struct page while a frame is processed (default N)");
+ 
++/*
++ * DIAGNOSTIC (FLAMEGRAPH round 35, not for keeping), per CPU, timed by
++ * the 1 GHz counter read after ISB: 0 the refill's load of a page's
++ * dma_addr alone (DSB LD before and after); 1 its writes of the RX
++ * descriptor the card reads, drained (DSB ST before and after); 2 the
++ * same writes to a line of the CPU's own, drained, as the control.
++ * /sys/module/xeu/parameters/refill_lat prints them; a write clears.
++ */
++struct xeu_lat {
++	u64 n[3], sum[3], h[3][16];
++	struct rx_sr_bd own[16] __aligned(64);
++	unsigned int own_i;
++};
++static DEFINE_PER_CPU(struct xeu_lat, xeu_lat);
++
++static __always_inline u64 xeu_lat_t(void)
++{
++	isb();
++	return read_sysreg(cntvct_el0);
++}
++
++static __always_inline void xeu_lat_add(int k, u64 ns)
++{
++	struct xeu_lat *l = this_cpu_ptr(&xeu_lat);
++
++	l->n[k]++;
++	l->sum[k] += ns;
++	l->h[k][min_t(int, ilog2(ns | 1), 15)]++;
++}
++
++static int xeu_lat_get(char *buf, const struct kernel_param *kp)
++{
++	static const char * const kn[] = { "dma_addr", "sr_write", "own_write" };
++	int cpu, k, b, len = 0;
++
++	for_each_possible_cpu(cpu) {
++		struct xeu_lat *l = per_cpu_ptr(&xeu_lat, cpu);
++
++		for (k = 0; k < 3; k++) {
++			if (!l->n[k])
++				continue;
++			len += sysfs_emit_at(buf, len, "cpu%d %s n %llu sum_ns %llu h",
++					     cpu, kn[k], l->n[k], l->sum[k]);
++			for (b = 0; b < 16; b++)
++				len += sysfs_emit_at(buf, len, " %llu", l->h[k][b]);
++			len += sysfs_emit_at(buf, len, "\n");
++		}
++	}
++	return len;
++}
++
++static int xeu_lat_set(const char *val, const struct kernel_param *kp)
++{
++	int cpu;
++
++	for_each_possible_cpu(cpu)
++		memset(per_cpu_ptr(&xeu_lat, cpu), 0, sizeof(struct xeu_lat));
++	return 0;
++}
++
++static const struct kernel_param_ops xeu_lat_ops = {
++	.get = xeu_lat_get,
++	.set = xeu_lat_set,
++};
++module_param_cb(refill_lat, &xeu_lat_ops, NULL, 0644);
++
+ static bool rx_port_stats;
+ module_param(rx_port_stats, bool, 0644);
+ MODULE_PARM_DESC(rx_port_stats,
+@@ -695,6 +761,8 @@
+ 	u16 i;
+ 
+ 	for (i = 0; i < n; i++) {
++		u64 t0;
++
+ 		/* Allocate a page, or a piece of one, from the page pool */
+ 		if (rxr->split_left) {
+ 			/* A piece of the page cut last, counted already */
+@@ -732,7 +800,26 @@
+ 		}
+ 
+ 		/* Get DMA address - already mapped by page pool */
++		dsb(ld);
++		t0 = xeu_lat_t();
+ 		dma_addr = page_pool_get_dma_addr(rx_page);
++		asm volatile("" : "+r" (dma_addr));
++		dsb(ld);
++		xeu_lat_add(0, xeu_lat_t() - t0);
++		{
++			struct xeu_lat *l = this_cpu_ptr(&xeu_lat);
++			struct rx_sr_bd *o = &l->own[l->own_i++ & 15];
++
++			dsb(st);
++			t0 = xeu_lat_t();
++			memset(o, 0, sizeof(*o));
++			WRITE_ONCE(o->ring_profile, ring->dma_profile);
++			WRITE_ONCE(o->ctrl, RX_SR_BD_EOF);
++			WRITE_ONCE(o->dst_addr, dma_addr + offset);
++			WRITE_ONCE(o->len_rid_sid, xeu_rx_data_size());
++			dsb(st);
++			xeu_lat_add(2, xeu_lat_t() - t0);
++		}
+ 
+ 		idx = ring->sr_prod_idx & ring->mask;
+ 		sw_rx_desc = &ring->rx_sw[idx];
+@@ -740,6 +827,8 @@
+ 		sw_rx_desc->offset = offset;
+ 
+ 		/* Fill the Rx Sub BD */
++		dsb(st);
++		t0 = xeu_lat_t();
+ 		memset(&ring->rx_sr[idx], 0, sizeof(struct rx_sr_bd));
+ 		WRITE_ONCE(ring->rx_sr[idx].ring_profile, ring->dma_profile);
+ #ifdef XEU_POLL
+@@ -750,6 +839,8 @@
+ 		WRITE_ONCE(ring->rx_sr[idx].dst_addr,
+ 			   dma_addr + offset + xeu_rx_headroom());
+ 		WRITE_ONCE(ring->rx_sr[idx].len_rid_sid, xeu_rx_data_size());
++		dsb(st);
++		xeu_lat_add(1, xeu_lat_t() - t0);
+ 
+ 		/* Increment the tail */
+ 		ring->sr_prod_idx++;
