@@ -2338,6 +2338,7 @@ TRACE_DEFINE_ENUM(SVC_TCP_RX_ERROR);
 TRACE_DEFINE_ENUM(SVC_TCP_RX_RELEASE);
 TRACE_DEFINE_ENUM(SVC_TCP_RX_ABORT);
 TRACE_DEFINE_ENUM(SVC_TCP_RX_PAYLOAD_RELEASE);
+TRACE_DEFINE_ENUM(SVC_TCP_RX_BOUNCE);
 
 #define show_svc_tcp_rx_action(action) \
 	__print_symbolic(action, \
@@ -2347,7 +2348,8 @@ TRACE_DEFINE_ENUM(SVC_TCP_RX_PAYLOAD_RELEASE);
 		{ SVC_TCP_RX_ERROR, "error" }, \
 		{ SVC_TCP_RX_RELEASE, "release" }, \
 		{ SVC_TCP_RX_ABORT, "abort" }, \
-		{ SVC_TCP_RX_PAYLOAD_RELEASE, "payload-release" })
+		{ SVC_TCP_RX_PAYLOAD_RELEASE, "payload-release" }, \
+		{ SVC_TCP_RX_BOUNCE, "bounce" })
 
 TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_NONE);
 TRACE_DEFINE_ENUM(SVC_TCP_RX_REASON_SHORT_PREFIX);
@@ -2498,6 +2500,35 @@ TRACE_EVENT(svcsock_tcp_rx_hold,
 	TP_printk("addr=%s factor=%u rcvbuf=%d window_clamp=%d",
 		__get_str(addr), __entry->factor, __entry->rcvbuf,
 		__entry->clamp
+	)
+);
+
+TRACE_EVENT(svcsock_tcp_rx_bounce_refused,
+	TP_PROTO(
+		const struct svc_xprt *xprt,
+		const struct svc_tcp_rx_state *state,
+		const char *why
+	),
+
+	TP_ARGS(xprt, state, why),
+
+	TP_STRUCT__entry(
+		__field(u32, xid)
+		__field(u32, credit)
+		__string(addr, xprt->xpt_remotebuf)
+		__string(why, why)
+	),
+
+	TP_fast_assign(
+		__entry->xid = state->xid;
+		__entry->credit = state->credit;
+		__assign_str(addr);
+		__assign_str(why);
+	),
+
+	TP_printk("addr=%s xid=0x%08x credit=%u why=%s",
+		__get_str(addr), __entry->xid, __entry->credit,
+		__get_str(why)
 	)
 );
 

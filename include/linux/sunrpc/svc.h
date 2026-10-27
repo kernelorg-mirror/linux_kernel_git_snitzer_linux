@@ -501,6 +501,15 @@ bool		   svc_rqst_replace_page(struct svc_rqst *rqstp,
 					 struct page *page);
 void		   svc_rqst_release_pages(struct svc_rqst *rqstp);
 void		   svc_rqst_release_payload(struct svc_rqst *rqstp);
+int		   svc_rqst_bounce_payload(struct svc_rqst *rqstp,
+					   const struct xdr_buf *payload,
+					   unsigned int align,
+					   unsigned int mem_align,
+					   struct bio_vec *bvec,
+					   unsigned int bvec_size);
+void		   svc_rqst_bounce_done(struct svc_rqst *rqstp,
+					struct bio_vec *bvec,
+					unsigned int nvecs);
 int		   svc_new_thread(struct svc_serv *serv, struct svc_pool *pool);
 void		   svc_exit_thread(struct svc_rqst *);
 struct svc_serv *  svc_create_pooled(struct svc_program *prog,

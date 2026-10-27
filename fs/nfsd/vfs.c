@@ -1430,8 +1430,8 @@ static ssize_t nfsd_dio_write_async(struct file *file, struct kiocb *kiocb,
 
 static noinline_for_stack int
 nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
-		  struct nfsd_file *nf, unsigned int nvecs,
-		  unsigned long *cnt, struct kiocb *kiocb,
+		  struct nfsd_file *nf, const struct xdr_buf *payload,
+		  unsigned int nvecs, unsigned long *cnt, struct kiocb *kiocb,
 #if IS_ENABLED(CONFIG_KUNIT)
 		  errseq_t since, const struct nfsd_dio_kunit_hooks *hooks)
 #else
@@ -1447,9 +1447,37 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	int sync_flags;
 	ssize_t host_err = 0;
 	size_t expected;
+	int bounced = 0;
 
 	nsegs = nfsd_write_dio_iters_init(rqstp, fhp, nf, rqstp->rq_bvec,
 					  nvecs, kiocb, *cnt, &split);
+	/*
+	 * Loaned payload fragments the device cannot take are laid out
+	 * page-tiled once (in the fixed receive region when the record holds
+	 * its credit) and written direct, rather than the whole WRITE going
+	 * buffered.  The layout is held to the alignment its joints need
+	 * (nfsd_write_dio_bounce_align()).  The bounce never waits; a
+	 * refusal leaves the payload as it was and the original split.
+	 */
+	if (payload &&
+	    nfsd_write_dio_bounce_helps(split.disposition,
+					nf->nf_dio_mem_align,
+					nf->nf_dio_offset_align,
+					nf->nf_dio_seg_boundary)) {
+		bounced = svc_rqst_bounce_payload(rqstp, payload,
+				offset_in_page(kiocb->ki_pos),
+				nfsd_write_dio_bounce_align(nf->nf_dio_mem_align,
+							    nf->nf_dio_offset_align,
+							    nf->nf_dio_seg_boundary),
+				rqstp->rq_bvec, rqstp->rq_maxbvecs);
+		if (bounced > 0)
+			nsegs = nfsd_write_dio_iters_init(rqstp, fhp, nf,
+							  rqstp->rq_bvec,
+							  bounced, kiocb,
+							  *cnt, &split);
+		else
+			bounced = 0;
+	}
 
 	/*
 	 * Sync a split WRITE once, after its last segment, instead of after
@@ -1543,6 +1571,13 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			break;	/* partial write */
 	}
 
+	/*
+	 * Every segment was written synchronously, so the device (or the page
+	 * cache) has the data: return the bounce before the fsync.
+	 */
+	if (bounced)
+		svc_rqst_bounce_done(rqstp, rqstp->rq_bvec, bounced);
+
 	if (host_err >= 0 && sync_flags && *cnt)
 		host_err = vfs_fsync_range(file, start, start + *cnt - 1,
 					   !(sync_flags & IOCB_SYNC));
@@ -1556,12 +1591,13 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 #if IS_ENABLED(CONFIG_KUNIT)
 int nfsd_direct_write_kunit(struct svc_rqst *rqstp, struct svc_fh *fhp,
-			    struct nfsd_file *nf, unsigned int nvecs,
+			    struct nfsd_file *nf, const struct xdr_buf *payload,
+			    unsigned int nvecs,
 			    unsigned long *cnt, struct kiocb *kiocb, errseq_t since,
 			    const struct nfsd_dio_kunit_hooks *hooks)
 {
-	return nfsd_direct_write(rqstp, fhp, nf, nvecs, cnt, kiocb, since,
-				 hooks);
+	return nfsd_direct_write(rqstp, fhp, nf, payload, nvecs, cnt, kiocb,
+				 since, hooks);
 }
 EXPORT_SYMBOL_IF_KUNIT(nfsd_direct_write_kunit);
 #endif
@@ -1642,7 +1678,8 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	switch (nfsd_io_cache_write) {
 	case NFSD_IO_DIRECT:
-		host_err = nfsd_direct_write(rqstp, fhp, nf, nvecs, cnt, &kiocb,
+		host_err = nfsd_direct_write(rqstp, fhp, nf, payload, nvecs,
+					     cnt, &kiocb,
 #if IS_ENABLED(CONFIG_KUNIT)
 					     since, NULL);
 #else

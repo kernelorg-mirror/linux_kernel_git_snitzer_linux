@@ -8,6 +8,7 @@
 
 #include <linux/fs.h>
 #include <linux/posix_acl.h>
+#include <linux/nfs_dio.h>
 #include "nfsfh.h"
 
 /*
@@ -231,6 +232,57 @@ __be32		nfsd_permission(struct svc_cred *cred, struct svc_export *exp,
 
 void		nfsd_filp_close(struct file *fp);
 
+/*
+ * Would bouncing a payload the split found memory-misaligned, or with a
+ * discontinuous joint off an offset-alignment multiple, let it go direct?
+ * The bounce lays the payload out page-tiled from the file
+ * position's in-page offset, so the aligned middle starts and ends
+ * offset-aligned in memory and has no joint inside a page (its page joints
+ * are no gap under a joint boundary of at most PAGE_SIZE); that meets the
+ * memory alignment whenever it is no larger than the offset alignment.  Every
+ * interior page is whole, so a memory alignment above PAGE_SIZE is never met,
+ * and neither is a joint boundary above PAGE_SIZE unless the offset alignment
+ * is at most PAGE_SIZE: the copy would be split again as misaligned and
+ * written buffered, after a wasted copy.  @seg_boundary is the policy's.
+ */
+static inline bool nfsd_write_dio_bounce_helps(enum nfs_dio_disposition disposition,
+					       u32 mem_align, u32 offset_align,
+					       u32 seg_boundary)
+{
+	u32 joint = nfs_dio_joint_boundary(seg_boundary);
+
+	return (disposition == NFS_DIO_MEM_MISALIGNED ||
+		disposition == NFS_DIO_GAP_MISALIGNED) &&
+	       mem_align && offset_align && mem_align <= offset_align &&
+	       mem_align <= PAGE_SIZE &&
+	       (offset_align <= PAGE_SIZE || joint <= PAGE_SIZE);
+}
+
+/*
+ * The alignment, against the file position, that the bounce's layout must
+ * meet in memory.  A copy laid out page-tiled from the file position's
+ * in-page offset meets either; a transport that fills the loan's holes in
+ * place keeps the record's body offsets and refuses a layout that misses
+ * it.  Under a joint boundary above PAGE_SIZE every page joint of the copy
+ * is a discontinuity, which goes direct only at an offset-alignment multiple
+ * of the file position: asking for the offset alignment (at most PAGE_SIZE,
+ * by nfsd_write_dio_bounce_helps()) holds the copy's start and every page
+ * joint to it, so no copy is made that would split GAP_MISALIGNED again.
+ * An in-place copy within one page has no joint but is held to it all the
+ * same; that WRITE goes buffered, as it would without the bounce.
+ *
+ * Only queue limits decide this.  An NVMe controller using PRPs has a 4 KiB
+ * virt_boundary, the page-sized boundary here on 4 KiB pages, which the
+ * page-tiled copy meets at every joint; one using SGLs reports no boundary
+ * (NFS_DIO_SEG_BOUNDARY_NONE), so a mid-page joint never reaches the bounce.
+ */
+static inline u32 nfsd_write_dio_bounce_align(u32 mem_align, u32 offset_align,
+					      u32 seg_boundary)
+{
+	return nfs_dio_joint_boundary(seg_boundary) > PAGE_SIZE ?
+	       offset_align : mem_align;
+}
+
 #if IS_ENABLED(CONFIG_KUNIT)
 struct nfsd_dio_kunit_hooks {
 	void (*before_reissue)(struct kiocb *kiocb,
@@ -239,7 +291,8 @@ struct nfsd_dio_kunit_hooks {
 };
 
 int nfsd_direct_write_kunit(struct svc_rqst *rqstp, struct svc_fh *fhp,
-			    struct nfsd_file *nf, unsigned int nvecs,
+			    struct nfsd_file *nf, const struct xdr_buf *payload,
+			    unsigned int nvecs,
 			    unsigned long *cnt, struct kiocb *kiocb, errseq_t since,
 			    const struct nfsd_dio_kunit_hooks *hooks);
 #endif
