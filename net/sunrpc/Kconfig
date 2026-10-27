@@ -75,6 +75,7 @@ config SUNRPC_XDR_KUNIT_TEST
 config SUNRPC_SVCSOCK_KUNIT_TEST
 	tristate "KUnit tests for SUNRPC TCP receive ownership" if !KUNIT_ALL_TESTS
 	depends on KUNIT && SUNRPC
+	select PAGE_POOL
 	default KUNIT_ALL_TESTS
 	help
 	  Build focused tests for SUNRPC TCP receive descriptor ownership,
