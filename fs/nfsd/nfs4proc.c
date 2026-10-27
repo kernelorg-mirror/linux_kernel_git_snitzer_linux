@@ -497,6 +497,9 @@ nfsd4_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (!want_write_err) {
 		status = nfsd_create_setattr(rqstp, fhp,
 					     resfhp, &attrs);
+		/* the parent was unlocked by do_lookup_open() */
+		if (status == nfs_ok)
+			status = nfsd_create_commit(fhp, resfhp);
 		fh_drop_write(fhp);
 	} else if (nfsd_attrs_valid(&attrs)) {
 		/* Needed write access */

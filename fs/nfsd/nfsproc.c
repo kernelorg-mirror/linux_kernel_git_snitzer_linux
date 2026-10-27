@@ -823,8 +823,11 @@ nfsd_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		 * open(..., O_CREAT|O_TRUNC|O_WRONLY).
 		 */
 		attr->ia_valid &= ATTR_SIZE;
+		/* resfhp pins the file; truncate and commit unlocked */
+		end_creating(dchild);
 		if (attr->ia_valid)
 			status = nfsd_setattr(rqstp, resfhp, &attrs, NULL);
+		goto out_drop_write;
 	}
 
 out:

@@ -462,6 +462,10 @@ nfsd3_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 set_attr:
 	status = nfsd_create_setattr(rqstp, fhp, resfhp, &attrs);
+	end_creating(child);
+	if (status == nfs_ok)
+		status = nfsd_create_commit(fhp, resfhp);
+	goto out_write;
 
 out:
 	end_creating(child);
