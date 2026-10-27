@@ -1,0 +1,4 @@
+L58-1-u write 8.23 GB/s, 7846 IOPS; completion ms: p50 0.432, p90 0.506, p99 0.578, p99.9 0.651, mean 0.442, max 1.112
+L58-1-t write 7.71 GB/s, 7349 IOPS; completion ms: p50 0.461, p90 0.528, p99 0.594, p99.9 0.643, mean 0.466, max 0.795
+L58-2-u write 7.77 GB/s, 7410 IOPS; completion ms: p50 0.461, p90 0.537, p99 0.586, p99.9 0.635, mean 0.463, max 0.902
+L58-2-t write 8.40 GB/s, 8014 IOPS; completion ms: p50 0.420, p90 0.485, p99 0.553, p99.9 0.618, mean 0.430, max 0.752
