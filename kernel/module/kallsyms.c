@@ -347,8 +347,10 @@ int module_address_lookup(unsigned long addr,
 
 		sym = find_kallsyms_symbol(mod, addr, size, offset);
 
-		if (sym)
-			ret = strscpy(namebuf, sym, KSYM_NAME_LEN);
+		if (sym) {
+			strscpy(namebuf, sym, KSYM_NAME_LEN);
+			ret = strlen(namebuf);
+		}
 	}
 	return ret;
 }
