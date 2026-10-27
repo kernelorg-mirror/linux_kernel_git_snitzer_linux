@@ -95,6 +95,8 @@ struct nfs_pgio_mirror {
 	size_t			pg_bsize;
 	unsigned int		pg_base;
 	unsigned char		pg_recoalesce : 1;
+	unsigned char		pg_fragmented : 1;	/* see nfs_page_frag_joinable() */
+	unsigned int		pg_nreqs;	/* requests in pg_list */
 };
 
 struct nfs_pageio_descriptor {
@@ -121,6 +123,7 @@ struct nfs_pageio_descriptor {
 	unsigned short		pg_maxretrans;
 	unsigned char		pg_moreio : 1;
 	bool			pg_nowait;
+	bool			pg_bvec_frags;	/* may join kernel bvec fragments */
 };
 
 /* arbitrarily selected limit to number of mirrors */

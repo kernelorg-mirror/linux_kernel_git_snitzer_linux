@@ -810,6 +810,20 @@ static void nfs_pgio_prepare(struct rpc_task *task, void *calldata)
 		rpc_exit(task, err);
 }
 
+/*
+ * Whether a header goes to LOCALIO rather than an RPC: when the local file
+ * was opened, or for a NOWAIT I/O, which may not open it, when the server
+ * is or was local.
+ */
+static bool nfs_pgio_goes_local(const struct nfs_client *clp,
+				struct nfs_open_context *ctx, bool nowait,
+				const struct nfsd_file *localio)
+{
+	return localio || (nowait && (nfs_server_is_local(clp) ||
+				      (IS_ENABLED(CONFIG_NFS_LOCALIO) &&
+				       rcu_access_pointer(ctx->nfl.nfs_uuid))));
+}
+
 int nfs_initiate_pgio(struct rpc_clnt *clnt, struct nfs_pgio_header *hdr,
 		      const struct cred *cred, const struct nfs_rpc_ops *rpc_ops,
 		      const struct rpc_call_ops *call_ops, int how, int flags,
@@ -843,12 +857,26 @@ int nfs_initiate_pgio(struct rpc_clnt *clnt, struct nfs_pgio_header *hdr,
 		hdr->args.count,
 		(unsigned long long)hdr->args.offset);
 
-	if (localio || (test_bit(NFS_IOHDR_NOWAIT, &hdr->flags) &&
-		       (nfs_server_is_local(NFS_SERVER(hdr->inode)->nfs_client) ||
-			(IS_ENABLED(CONFIG_NFS_LOCALIO) &&
-			 rcu_access_pointer(hdr->args.context->nfl.nfs_uuid)))))
+	if (nfs_pgio_goes_local(NFS_SERVER(hdr->inode)->nfs_client,
+				hdr->args.context,
+				test_bit(NFS_IOHDR_NOWAIT, &hdr->flags), localio))
 		return nfs_local_doio(NFS_SERVER(hdr->inode)->nfs_client,
 				      localio, hdr, call_ops);
+
+	/*
+	 * A fragmented header's page array cannot describe its payload to an
+	 * RPC.  nfs_generic_pg_pgios() unjoins one that will not go local, and
+	 * a NOWAIT write is never fragmented (nfs_direct_nowait_multi_request()),
+	 * but a local test made twice could still disagree: fail the I/O rather
+	 * than send the wrong bytes.
+	 */
+	if (WARN_ON_ONCE(test_bit(NFS_IOHDR_FRAGMENTED, &hdr->flags))) {
+		bool nowait = test_bit(NFS_IOHDR_NOWAIT, &hdr->flags);
+
+		nfs_set_pgio_error(hdr, nowait ? -EAGAIN : -EIO, hdr->io_start);
+		hdr->completion_ops->completion(hdr);
+		return nowait ? -EAGAIN : 0;
+	}
 
 	task = rpc_run_task(&task_setup_data);
 	if (IS_ERR(task)) {
@@ -893,6 +921,8 @@ static void nfs_pageio_mirror_init(struct nfs_pgio_mirror *mirror,
 	mirror->pg_bsize = bsize;
 	mirror->pg_base = 0;
 	mirror->pg_recoalesce = 0;
+	mirror->pg_fragmented = 0;
+	mirror->pg_nreqs = 0;
 }
 
 /**
@@ -915,6 +945,7 @@ void nfs_pageio_init(struct nfs_pageio_descriptor *desc,
 {
 	desc->pg_moreio = 0;
 	desc->pg_nowait = false;
+	desc->pg_bvec_frags = false;
 	desc->pg_inode = inode;
 	desc->pg_ops = pg_ops;
 	desc->pg_completion_ops = compl_ops;
@@ -977,7 +1008,12 @@ int nfs_generic_pgio(struct nfs_pageio_descriptor *desc,
 	unsigned int pg_base = offset_in_page(mirror->pg_base);
 	gfp_t gfp_flags = desc->pg_nowait ? GFP_NOWAIT : nfs_io_gfp_mask();
 
-	pagecount = nfs_page_array_len(pg_base, mirror->pg_count);
+	if (mirror->pg_fragmented) {
+		/* One page per request: each lies within its own page */
+		pagecount = list_count_nodes(head);
+		set_bit(NFS_IOHDR_FRAGMENTED, &hdr->flags);
+	} else
+		pagecount = nfs_page_array_len(pg_base, mirror->pg_count);
 	pg_array->npages = pagecount;
 
 	if (pagecount <= ARRAY_SIZE(pg_array->page_array))
@@ -1004,6 +1040,12 @@ int nfs_generic_pgio(struct nfs_pageio_descriptor *desc,
 		req = nfs_list_entry(head->next);
 		nfs_list_move_request(req, &hdr->pages);
 
+		if (mirror->pg_fragmented) {
+			if (++pageused > pagecount)
+				goto full;
+			*pages++ = req->wb_page;
+			continue;
+		}
 		if (req->wb_pgbase == 0)
 			last_page = NULL;
 
@@ -1036,30 +1078,35 @@ full:
 }
 EXPORT_SYMBOL_GPL(nfs_generic_pgio);
 
-static int nfs_generic_pg_pgios(struct nfs_pageio_descriptor *desc)
+static void nfs_pgio_release_localio(struct nfs_client *clp,
+				     struct nfsd_file *localio)
 {
+#if IS_ENABLED(CONFIG_NFS_LOCALIO)
+	if (localio)
+		nfs_release_local_fh(&clp->cl_uuid);
+#endif
+}
+
+static int nfs_generic_pg_pgios_one(struct nfs_pageio_descriptor *desc,
+				    struct nfsd_file *localio)
+{
+	struct nfs_client *clp = NFS_SERVER(desc->pg_inode)->nfs_client;
 	struct nfs_pgio_header *hdr;
 	int ret;
 	unsigned short task_flags = 0;
 
 	hdr = nfs_pgio_header_alloc(desc);
 	if (!hdr) {
+		nfs_pgio_release_localio(clp, localio);
 		desc->pg_error = desc->pg_nowait ? -EAGAIN : -ENOMEM;
 		return desc->pg_error;
 	}
 	nfs_pgheader_init(desc, hdr, nfs_pgio_header_free);
 	ret = nfs_generic_pgio(desc, hdr);
+	if (ret)
+		nfs_pgio_release_localio(clp, localio);
 	if (ret == 0) {
-		struct nfs_client *clp = NFS_SERVER(hdr->inode)->nfs_client;
-
-		struct nfsd_file *localio = NULL;
-
-		if (!desc->pg_nowait)
-			localio = nfs_local_open_fh(clp, hdr->cred, hdr->args.fh,
-					  &hdr->args.context->nfl,
-					  hdr->args.context->mode);
-
-		if (NFS_SERVER(hdr->inode)->nfs_client->cl_minorversion)
+		if (clp->cl_minorversion)
 			task_flags = RPC_TASK_MOVEABLE;
 		ret = nfs_initiate_pgio(NFS_CLIENT(hdr->inode),
 					hdr,
@@ -1072,6 +1119,57 @@ static int nfs_generic_pg_pgios(struct nfs_pageio_descriptor *desc)
 
 	}
 	return ret;
+}
+
+/*
+ * The fragments were joined for LOCALIO (see nfs_page_frag_joinable()), but
+ * the header goes to an RPC after all: the server stopped being local in
+ * between.  An RPC carries a page array and one base offset, which cannot
+ * describe the fragments, so issue each page-contiguous run of requests as
+ * its own header, as if they had never been joined.
+ */
+static int nfs_generic_pg_pgios_runs(struct nfs_pageio_descriptor *desc)
+{
+	struct nfs_pgio_mirror *mirror = nfs_pgio_current_mirror(desc);
+	size_t total = mirror->pg_count;
+	LIST_HEAD(rest);
+	int ret = 0;
+
+	while (!ret && !list_empty(&mirror->pg_list)) {
+		/* pg_list keeps the leading run; the requests after it wait */
+		mirror->pg_count = nfs_pgio_cut_run(&mirror->pg_list, &rest);
+		mirror->pg_base = nfs_list_entry(mirror->pg_list.next)->wb_pgbase;
+		mirror->pg_fragmented = 0;
+		ret = nfs_generic_pg_pgios_one(desc, NULL);
+		/*
+		 * On error, the caller's cleanup finds them back on pg_list,
+		 * which is then still fragmented.
+		 */
+		if (ret && !list_empty(&rest))
+			mirror->pg_fragmented = 1;
+		list_splice_tail_init(&rest, &mirror->pg_list);
+	}
+	mirror->pg_count = total;
+	return ret;
+}
+
+static int nfs_generic_pg_pgios(struct nfs_pageio_descriptor *desc)
+{
+	struct nfs_pgio_mirror *mirror = nfs_pgio_current_mirror(desc);
+	struct nfs_client *clp = NFS_SERVER(desc->pg_inode)->nfs_client;
+	struct nfs_open_context *ctx;
+	struct nfsd_file *localio = NULL;
+
+	/* The header's credential and open context are its first request's. */
+	ctx = nfs_req_openctx(nfs_list_entry(mirror->pg_list.next));
+	if (!desc->pg_nowait)
+		localio = nfs_local_open_fh(clp, ctx->cred,
+					    NFS_FH(desc->pg_inode),
+					    &ctx->nfl, ctx->mode);
+	if (mirror->pg_fragmented &&
+	    !nfs_pgio_goes_local(clp, ctx, desc->pg_nowait, localio))
+		return nfs_generic_pg_pgios_runs(desc);
+	return nfs_generic_pg_pgios_one(desc, localio);
 }
 
 static struct nfs_pgio_mirror *
@@ -1137,22 +1235,21 @@ static bool nfs_match_lock_context(const struct nfs_lock_context *l1,
 	return l1->lockowner == l2->lockowner;
 }
 
-static bool nfs_page_is_contiguous(const struct nfs_page *prev,
-				   const struct nfs_page *req)
+/*
+ * A direct write of kernel bvecs, such as loaned receive pages, is a run of
+ * fragments that may end mid-page or start at a non-zero offset.  Kept to
+ * nfs_page_is_contiguous(), each such fragment becomes its own header, too
+ * small for LOCALIO to write direct.  When the header will go to LOCALIO,
+ * requests adjacent in the file may share it though not adjacent in memory:
+ * LOCALIO hands their geometry to nfs_dio_split(), which takes them direct
+ * when every fragment and joint meets the backing file's policy and counts
+ * the copy otherwise.  Only page-based requests on the MDS path qualify
+ * (see nfs_pgio_frag_admit()); nfs_generic_pg_pgios() unjoins them if the
+ * header goes to an RPC after all.
+ */
+static bool nfs_page_frag_joinable(const struct nfs_pageio_descriptor *desc)
 {
-	size_t prev_end = prev->wb_pgbase + prev->wb_bytes;
-
-	if (req_offset(req) != req_offset(prev) + prev->wb_bytes)
-		return false;
-	if (req->wb_pgbase == 0)
-		return prev_end == nfs_page_max_length(prev);
-	if (req->wb_pgbase == prev_end) {
-		struct folio *folio = nfs_page_to_folio(req);
-		if (folio)
-			return folio == nfs_page_to_folio(prev);
-		return req->wb_page == prev->wb_page;
-	}
-	return false;
+	return desc->pg_bvec_frags && desc->pg_ops == &nfs_pgio_rw_ops;
 }
 
 /**
@@ -1160,17 +1257,21 @@ static bool nfs_page_is_contiguous(const struct nfs_page *prev,
  * @prev: pointer to nfs_page
  * @req: pointer to nfs_page
  * @pgio: pointer to nfs_pagio_descriptor
+ * @fragment: set if 'req' joins 'prev' as a fragment
  *
  * The nfs_page structures 'prev' and 'req' are compared to ensure that the
- * page data area they describe is contiguous, and that their RPC
- * credentials, NFSv4 open state, and lockowners are the same.
+ * page data area they describe is contiguous, or that 'req' may join as a
+ * fragment, and that their RPC credentials, NFSv4 open state, and
+ * lockowners are the same.
  *
  * Returns size of the request that can be coalesced
  */
 static unsigned int nfs_coalesce_size(struct nfs_page *prev,
 				      struct nfs_page *req,
-				      struct nfs_pageio_descriptor *pgio)
+				      struct nfs_pageio_descriptor *pgio,
+				      bool *fragment)
 {
+	struct nfs_pgio_mirror *mirror = nfs_pgio_current_mirror(pgio);
 	struct file_lock_context *flctx;
 
 	if (prev) {
@@ -1183,7 +1284,10 @@ static unsigned int nfs_coalesce_size(struct nfs_page *prev,
 		    !nfs_match_lock_context(req->wb_lock_context,
 					    prev->wb_lock_context))
 			return 0;
-		if (!nfs_page_is_contiguous(prev, req))
+		/* Before pg_test: a full header refuses the whole request */
+		if (!nfs_pgio_frag_admit(prev, req, nfs_page_frag_joinable(pgio),
+					 mirror->pg_fragmented, mirror->pg_nreqs,
+					 fragment))
 			return 0;
 	}
 	return pgio->pg_ops->pg_test(pgio, prev, req);
@@ -1203,6 +1307,7 @@ nfs_pageio_do_add_request(struct nfs_pageio_descriptor *desc,
 {
 	struct nfs_pgio_mirror *mirror = nfs_pgio_current_mirror(desc);
 	struct nfs_page *prev = NULL;
+	bool fragment = false;
 	unsigned int size;
 
 	if (list_empty(&mirror->pg_list)) {
@@ -1213,6 +1318,8 @@ nfs_pageio_do_add_request(struct nfs_pageio_descriptor *desc,
 		mirror->pg_base = req->wb_pgbase;
 		mirror->pg_count = 0;
 		mirror->pg_recoalesce = 0;
+		mirror->pg_fragmented = 0;
+		mirror->pg_nreqs = 0;
 	} else
 		prev = nfs_list_entry(mirror->pg_list.prev);
 
@@ -1224,11 +1331,14 @@ nfs_pageio_do_add_request(struct nfs_pageio_descriptor *desc,
 		return 0;
 	}
 
-	size = nfs_coalesce_size(prev, req, desc);
+	size = nfs_coalesce_size(prev, req, desc, &fragment);
 	if (size < req->wb_bytes)
 		return size;
+	if (fragment)
+		mirror->pg_fragmented = 1;
 	nfs_list_move_request(req, &mirror->pg_list);
 	mirror->pg_count += req->wb_bytes;
+	mirror->pg_nreqs++;
 	return req->wb_bytes;
 }
 

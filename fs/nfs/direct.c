@@ -1269,6 +1269,13 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 			      &nfs_direct_write_completion_ops);
 	desc.pg_nowait = nowait;
 	desc.pg_dreq = dreq;
+	/*
+	 * Kernel bvec fragments, such as loaned receive pages, may share a
+	 * header bound for LOCALIO, which writes them direct where they meet
+	 * the backing file's policy; see nfs_page_frag_joinable().
+	 */
+	desc.pg_bvec_frags = iov_iter_is_bvec(iter) &&
+			     nfs_server_is_local(NFS_SERVER(inode)->nfs_client);
 	get_dreq(dreq);
 	/* A lockless nfs_start_io_direct() already took our i_dio_count ref */
 	if (!dio_ref_held)
@@ -1578,6 +1585,7 @@ out:
 /**
  * nfs_init_directcache - create a slab cache for nfs_direct_req structures
  *
+ * Also creates the LOCALIO direct I/O copy counters' debugfs file.
  */
 int __init nfs_init_directcache(void)
 {
@@ -1588,14 +1596,17 @@ int __init nfs_init_directcache(void)
 	if (nfs_direct_cachep == NULL)
 		return -ENOMEM;
 
+	nfs_local_copies_init();
 	return 0;
 }
 
 /**
  * nfs_destroy_directcache - destroy the slab cache for nfs_direct_req structures
  *
+ * Also removes the LOCALIO direct I/O copy counters' debugfs file.
  */
 void nfs_destroy_directcache(void)
 {
+	nfs_local_copies_exit();
 	kmem_cache_destroy(nfs_direct_cachep);
 }
