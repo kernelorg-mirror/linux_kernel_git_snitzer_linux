@@ -116,7 +116,8 @@ rate. What a change can move is what a WRITE costs the CPUs that carry it:
 
 Every figure is a cost per 1 MiB WRITE: ring softirq microseconds a WRITE
 (`4 x soft% / WRITEs a second`, from the run's `srv-mpstat.txt` and
-`window.txt`), a frame's microseconds a WRITE from the profile (`top-*.txt`),
+`window.txt`; `xeu-rig/cost.sh RUNDIR...` gives it and nfsd's busy
+microseconds a WRITE), a frame's microseconds a WRITE from the profile (`top-*.txt`),
 and nfsd's wakes and voluntary context switches a WRITE (`pool_stats` and
 `/proc/<pid>/status` read around the run).
 
