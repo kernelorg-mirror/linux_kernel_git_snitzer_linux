@@ -100,6 +100,7 @@ struct nfsd_attrs {
 	struct xdr_netobj	*na_seclabel;	/* input */
 	struct posix_acl	*na_pacl;	/* input */
 	struct posix_acl	*na_dpacl;	/* input */
+	bool			na_nocommit;	/* input */
 
 	int			na_labelerr;	/* output */
 	int			na_dpaclerr;	/* output */
@@ -157,6 +158,7 @@ __be32		nfsd_access(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				u32 *access, u32 *supported);
 __be32		nfsd_create_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				struct svc_fh *resfhp, struct nfsd_attrs *iap);
+__be32		nfsd_create_commit(struct svc_fh *fhp, struct svc_fh *resfhp);
 __be32		nfsd_commit(struct svc_rqst *rqst, struct svc_fh *fhp,
 				struct nfsd_file *nf, u64 offset, u32 count,
 				__be32 *verf);
