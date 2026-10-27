@@ -1,0 +1,13 @@
+== r58: build 499 booted with rodata=noalias; xeu 2C05DF674C9D013185FDB34 (rx_prefetch Y), sunrpc and nfsd build 499's own; the settled setting. As round 28's cost.txt: rxirq/txirq not valid
+r58-1-loan64 ring 49.1 nfsd 105.8 us/W | rxirq 5.47 txirq 4.56 | enq 5.53 woken 4.45 vcsw 5.93 /W | pp/W: recycle_cached -0.00 outsegs 6.62 recycle_ring_full 0.71 alloc_slow 0.30 | region peak 6228 | maxentries:4096,numentries:4097,cachehits:0,
+r58-2-loan64 ring 47.4 nfsd 107.9 us/W | rxirq -0.06 txirq -0.14 | enq 5.36 woken 4.36 vcsw 5.84 /W | pp/W: recycle_cached -0.00 outsegs 6.49 recycle_ring_full 0.00 alloc_slow -0.00 | region peak 6478 | maxentries:4096,numentries:4097,cachehits:0,
+r58-3-loan64 ring 49.9 nfsd 106.3 us/W | rxirq 0.40 txirq -0.19 | enq 5.49 woken 4.42 vcsw 5.90 /W | pp/W: recycle_cached -0.00 outsegs 6.60 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 6373 | maxentries:4096,numentries:4097,cachehits:0,
+r58-4-loan64 ring 48.3 nfsd 107.2 us/W | rxirq -0.24 txirq 0.04 | enq 5.54 woken 4.46 vcsw 5.94 /W | pp/W: recycle_cached -0.00 outsegs 6.63 recycle_ring_full -0.01 alloc_slow -0.01 | region peak 6341 | maxentries:4096,numentries:4097,cachehits:0,
+r58-look-loan64 ring 49.5 nfsd 109.3 us/W | rxirq 0.16 txirq 0.20 | enq 5.46 woken 4.42 vcsw 5.90 /W | pp/W: recycle_cached -0.00 outsegs 6.57 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 6226 | maxentries:4096,numentries:4097,cachehits:0,
+== the fio maximum completion of each run, ms
+r58-1-loan64 118.7
+r58-2-loan64 117.7
+r58-3-loan64 130.7
+r58-4-loan64 123.2
+r58-look-loan64 123.0
+== every run: FIFO drops 0, ring drops 0, DRIVE-LIMITED, no drive stepped down, overrun 0; no new WARNING

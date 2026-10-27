@@ -61,8 +61,59 @@
 - **The receive path's memory stalls are largely TLB walks,** made by a linear map in 16 KiB pages. That cost is on every CPU that touches skbs and buffers, nfsd's included; only the rings were measured.
 - **The completion entry the card writes** is the poll's largest refill. Prefetching it further ahead is a possible xeu change, with an uncertain gain, since the card writes it just before the poll reads it.
 
+## The A/B: `rodata=noalias`
+
+**Run 2026-10-27 on tardis2** after Mike rebooted it with `rodata=noalias` (driver [run58.sh](run58.sh), the runs `/var/tmp/zc-run-logs/t2-r58/`):
+- **A** is `rodata=full`, before the reboot: round 28's four B runs (r55-2, -4, -6, -8) and this round's look above.
+- **B** is `rodata=noalias`. Everything else is the same as A: build 499's own sunrpc (`EFD53C53F61C1F0CDF37D89`) and nfsd (`3F0C341E86E266D5FDF2ADF`), xeu `2C05DF674C9D013185FDB34` with `rx_prefetch` Y, and the settled setting.
+- **The runs:** `lat.sh` twice, four untraced loan64 runs, then one loan64 run with this round's look, plus `perf stat` on nfsd's CPUs (8 to 55) beside the rings. Each run came after `settled.sh apply`, an fstrim and 120 s of rest.
+- **No copy runs** (see "No copy runs" in [the FLAMEGRAPH README](../README.md)).
+- **The boot's xeu:** it loaded the initrd's xeu, older than release 9, so xeu was reloaded once (no NFS client connected) before `bringup.sh 32768 256`. The initrd was rebuilt afterwards (round 28's README).
+- **The linear map** ([pagewalk-noalias.txt](pagewalk-noalias.txt)): this boot's region (phys `0x8200000000`) and the address found in 16 KiB pages above are each mapped by a block at level 2, 32 MiB.
+- **KUnit:** 7, 52, 7 and 10, no failure and no skip.
+- No run raised a WARNING, and none had FIFO drops, ring drops or overruns. Every run was DRIVE-LIMITED, with no drive stepped down ([cost-noalias.txt](cost-noalias.txt)).
+
+| run | GB/s | ring µs a WRITE | nfsd µs a WRITE | segments sent a WRITE | region peak in use, pages | slowest WRITE, ms |
+|---|---|---|---|---|---|---|
+| r58-1-loan64 | 40.47 | 49.1 | 105.8 | 6.62 | 6228 | 118.7 |
+| r58-2-loan64 | 40.51 | 47.4 | 107.9 | 6.49 | 6478 | 117.7 |
+| r58-3-loan64 | 40.45 | 49.9 | 106.3 | 6.60 | 6373 | 130.7 |
+| r58-4-loan64 | 40.48 | 48.3 | 107.2 | 6.63 | 6341 | 123.2 |
+| r58-look-loan64 (perf beside) | 40.50 | 49.5 | 109.3 | 6.57 | 6226 | 123.0 |
+
+| per loaned WRITE | A, `rodata=full` | B, `rodata=noalias` | B − A |
+|---|---|---|---|
+| rings, µs | 48.48 ± 0.59 | 48.68 ± 1.07 | +0.20 ± 0.61 |
+| nfsd, µs | 112.03 ± 1.36 | 106.80 ± 0.94 | **−5.23 ± 0.83 (−4.7%)** |
+| segments sent | 6.61 | 6.59 | −0.02 |
+| enqueues · wakes · switches | 5.48 · 4.36 · 5.86 | 5.48 · 4.42 · 5.90 | about 0 |
+
+- **nfsd:** about 6.3 standard errors. Every B run (105.8 to 107.9) is below every A run (110.7 to 113.6).
+- **The rings:** unchanged.
+- **Unchanged:** the rate, segments, enqueues, wakes and switches, and the region's peak (B 6228 to 6478, against A's 6289 to 6476 without r55-8's stall).
+- **Across a reboot:** A and B differ by the boot as well as by `rodata`. The pages the region and slab got, and the drives' state, are not the same, so the A/B cannot exclude a part of the 5.2 µs that is the boot's. The counters below say where the change is.
+
+**The look with `rodata=noalias`**, run as above, from 06:39:57 at 36,359 WRITEs a second, over 158,777 WRITEs ([stat-rings-noalias.txt](stat-rings-noalias.txt), [stat-nfsd-noalias.txt](stat-nfsd-noalias.txt)). Per loaned WRITE:
+
+| event | rings, A | rings, B | nfsd's CPUs, B |
+|---|---|---|---|
+| cycles | 147.7k | 146.0k | 327.6k |
+| page-table walks (`dtlb_walk`) | 69 | **0.50** | 4.96 |
+| L1 TLB misses (`dtlb-load-misses`) | 1,171 | **191** | 333 |
+| L1D read refills | 555 | 544 | 1,794 |
+| L2 read refills | 985 | 939 | 4,332 |
+| last-level cache read misses | 1,036 | 956 | 2,500 |
+| backend memory stall cycles | 31.2k (21%) | 29.6k (20%) | 112.6k (34%) |
+
+- **The walks are gone from the rings,** 69 to 0.5 a WRITE, and the L1 TLB misses fall to a sixth. What walks are left ([walk-top-noalias.txt](walk-top-noalias.txt), 344 samples) are still mostly in `gro_list_prepare` (22%), then `page_pool_alloc_frag_netmem` (12%) and `xeu_rx_refill` (8%).
+- **They were not the rings' stall.** The rings' cycles fall 1%, and the untraced runs' rings are unchanged. Round 30 took the walks to be most of the receive path's memory stall. Most of the stall is cache misses, which `rodata` does not change: the backend memory stall is still 20% of the rings' cycles.
+- **nfsd's CPUs were not measured on A,** so the B column cannot be set against a before. The 5.2 µs a WRITE that nfsd saves is about 15.6k cycles at 3 GHz. Walks saved there, at round 30's rate on the rings, would account for it, but this A/B does not show that they do.
+
+**Latency** ([latency-noalias.txt](latency-noalias.txt), at iodepth 1): untraced, p50 0.432 and 0.461 ms, mean 0.442 and 0.463, against round 28's B at p50 0.444 and 0.416, mean 0.446 and 0.429. The same. The first latency run overlapped a 12 s rebuild of the initrd, on CPUs 56 to 63 at idle priority, and does not differ from the second.
+
 ## Decision
 
 - **A look; the descriptor-entry prefetch is not built.**
-- **Next (Mike):** decide on `rodata=noalias` for tardis2. It is a reboot and a security trade-off, so it is for Hammerspace's product too.
-- **Its measure:** an A/B across a reboot, loan runs at the settled setting on the current kernel, against the same with `rodata=noalias`. No copy runs (see "No copy runs" in [the FLAMEGRAPH README](../README.md)).
+- **`rodata=noalias`:** nfsd 5.23 ± 0.83 µs a WRITE cheaper (−4.7%), with the rings, rate, region and latency the same. The rings' 69 page-table walks a WRITE are gone, but they were not the rings' cost.
+- **Next (Mike):** whether tardis2 keeps `rodata=noalias`. It costs the linear map's read-only aliases of the kernel's text and read-only data, so it is a security trade-off for Hammerspace's product too.
+- **What would settle the nfsd figure:** the look on nfsd's CPUs on a `rodata=full` boot, the A this A/B lacks.
