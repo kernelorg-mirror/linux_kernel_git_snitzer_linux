@@ -203,6 +203,15 @@ declare -A GONE_LATER=([svc_tcp_rx_copy_unlocked]=1 [svc_tcp_rx_lowat]=1
 # /etc/modprobe.d/sunrpc.conf, which would name a parameter build 499's own
 # sunrpc does not know at every load of it: apply writes it.  EXP_WANT_EIGHTHS holds a run to another share.
 declare -A NEW_LATER=([svc_tcp_spare_bytes_max]=1 [svc_tcp_rx_want_eighths]=1)
+# The kernel's command line: rodata=noalias, so the linear map is in 32 MiB
+# blocks, not 16 KiB pages (rodata=full, the default, maps it with pages on
+# a CPU without BBML3, and the Neoverse N2 has none).  Since FLAMEGRAPH
+# round 30 (Mike, 27 October): nfsd -5.23 +- 0.83 us a loaned WRITE, the
+# rings' page-table walks 69 to 0.5 a WRITE, the rings, rate, region and
+# latency the same.  A boot setting, so apply cannot put it in place: add
+# it to the boot entry's options and reboot.  EXP_RODATA holds a run to
+# another value (default, for a boot without rodata= on the command line).
+RODATA=noalias
 # The xeu module's, set by /etc/modprobe.d/xeu.conf at load.
 # irq_msix_mask (kmod-xsight 2.0.1-9): a ring masks its MSI-X entry in the
 # card while it polls instead of going through the irq core and the ITS;
@@ -377,6 +386,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_GRO_MAX:-}" ] && [ "$EXP_GRO_MAX" != "$GRO_MAX" ] && OFF="$OFF gro_max=$EXP_GRO_MAX"
 	[ -n "${EXP_SRV_QDISC:-}" ] && [ "$EXP_SRV_QDISC" != "$SRV_QDISC" ] && OFF="$OFF srv_qdisc=$EXP_SRV_QDISC"
 	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
+	[ -n "${EXP_RODATA:-}" ] && [ "$EXP_RODATA" != "$RODATA" ] && OFF="$OFF rodata=$EXP_RODATA"
 	[ -n "${EXP_RX_REGION_STACK:-}" ] && [ "$EXP_RX_REGION_STACK" != "$RX_REGION_STACK" ] && OFF="$OFF rx_region_stack=$EXP_RX_REGION_STACK"
 	[ -n "${EXP_DRC_MAX_ENTRIES:-}" ] && [ "$EXP_DRC_MAX_ENTRIES" != "$DRC_MAX_ENTRIES" ] && OFF="$OFF drc_max_entries=$EXP_DRC_MAX_ENTRIES"
 	local xk xv
@@ -503,6 +513,7 @@ audit() {
 	local mode=$1 k
 	mode_expect $mode
 	echo "settled.sh audit $mode: kernel $(uname -r), $(date '+%F %T')"
+	want "kernel rodata" "$(grep -oE '(^| )rodata=[^ ]*' /proc/cmdline | tail -1 | sed 's/.*=//' | grep . || echo default)" "${EXP_RODATA:-$RODATA}"
 	audit_nfsd
 	audit_irqbalance
 	audit_netfilter
