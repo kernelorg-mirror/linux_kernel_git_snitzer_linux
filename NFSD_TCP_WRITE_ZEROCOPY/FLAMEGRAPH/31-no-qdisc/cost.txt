@@ -1,0 +1,28 @@
+== r63: A fq_codel under the mq (settled), B noqueue as the root; the tip's sunrpc (A06FE478658242A10E100FF), rodata=noalias, xeu 2C05DF674C9D013185FDB34 rx_prefetch Y; the settled setting. rxirq/txirq not valid
+r63-1-loan64-A ring 46.4 nfsd 93.0 us/W | rxirq 5.40 txirq 3.96 | enq 4.82 woken 4.04 vcsw 5.51 /W | pp/W: recycle_cached -0.00 outsegs 5.60 txdrop 0.00 recycle_ring_full 0.47 alloc_slow 0.31 | region peak 6292 | maxentries:4096,numentries:4097,cachehits:0,
+r63-2-loan64-B ring 45.2 nfsd 88.0 us/W | rxirq -0.23 txirq -0.17 | enq 4.76 woken 4.01 vcsw 5.47 /W | pp/W: recycle_cached -0.00 outsegs 5.54 txdrop 0.00 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 6399 | maxentries:4096,numentries:4097,cachehits:0,
+r63-3-loan64-A ring 46.4 nfsd 94.4 us/W | rxirq -0.29 txirq -0.16 | enq 4.80 woken 4.04 vcsw 5.51 /W | pp/W: recycle_cached -0.00 outsegs 5.58 txdrop 0.00 recycle_ring_full -0.01 alloc_slow -0.01 | region peak 6466 | maxentries:4096,numentries:4097,cachehits:0,
+r63-4-loan64-B ring 46.2 nfsd 91.4 us/W | rxirq 0.47 txirq 0.32 | enq 4.82 woken 4.05 vcsw 5.50 /W | pp/W: recycle_cached -0.00 outsegs 5.60 txdrop 0.00 recycle_ring_full 0.02 alloc_slow 0.01 | region peak 6348 | maxentries:4096,numentries:4097,cachehits:0,
+r63-5-loan64-A ring 42.1 nfsd 93.2 us/W | rxirq -0.77 txirq -0.17 | enq 4.75 woken 4.01 vcsw 5.48 /W | pp/W: recycle_cached -0.00 outsegs 5.54 txdrop 0.00 recycle_ring_full -0.02 alloc_slow -0.01 | region peak 6315 | maxentries:4096,numentries:4097,cachehits:0,
+r63-6-loan64-B ring 46.1 nfsd 90.5 us/W | rxirq 0.49 txirq 0.13 | enq 4.77 woken 4.02 vcsw 5.47 /W | pp/W: recycle_cached -0.00 outsegs 5.54 txdrop 0.00 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 6336 | maxentries:4096,numentries:4097,cachehits:0,
+r63-7-loan64-A ring 45.6 nfsd 88.7 us/W | rxirq -0.10 txirq -0.07 | enq 4.73 woken 3.99 vcsw 5.45 /W | pp/W: recycle_cached -0.00 outsegs 5.50 txdrop 0.00 recycle_ring_full -0.01 alloc_slow -0.00 | region peak 6340 | maxentries:4096,numentries:4097,cachehits:0,
+r63-8-loan64-B ring 45.8 nfsd 89.1 us/W | rxirq -0.10 txirq -0.05 | enq 4.75 woken 4.01 vcsw 5.46 /W | pp/W: recycle_cached -0.00 outsegs 5.52 txdrop 0.00 recycle_ring_full 0.01 alloc_slow 0.01 | region peak 6339 | maxentries:4096,numentries:4097,cachehits:0,
+== the port's tx_dropped and the kernel's 'asks to queue packet' messages, each run, and the run's slowest WRITE and client retransmits
+L63-B | qdisc noqueue | untraced write 8.29 GB/s, 7906 IOPS; completion ms: p50 0.432, p90 0.481, p99 0.545, p99.9 0.627, mean 0.439, max 0.737 | before: tx_dropped 0, queue messages 0, after: tx_dropped 1, queue messages 1
+L63-A | qdisc fq_codel | untraced write 8.12 GB/s, 7747 IOPS; completion ms: p50 0.444, p90 0.494, p99 0.553, p99.9 0.635, mean 0.453, max 1.084 | before: tx_dropped 1, queue messages 1, after: tx_dropped 1, queue messages 1
+r63-1-loan64-A | qdisc fq_codel | before: tx_dropped 1, queue messages 1, after: tx_dropped 1, queue messages 1
+r63-2-loan64-B | qdisc noqueue | before: tx_dropped 1, queue messages 1, after: tx_dropped 582, queue messages 90
+r63-3-loan64-A | qdisc fq_codel | before: tx_dropped 582, queue messages 90, after: tx_dropped 582, queue messages 90
+r63-4-loan64-B | qdisc noqueue | before: tx_dropped 582, queue messages 90, after: tx_dropped 1301, queue messages 187
+r63-5-loan64-A | qdisc fq_codel | before: tx_dropped 1301, queue messages 187, after: tx_dropped 1301, queue messages 187
+r63-6-loan64-B | qdisc noqueue | before: tx_dropped 1301, queue messages 187, after: tx_dropped 1402, queue messages 256
+r63-7-loan64-A | qdisc fq_codel | before: tx_dropped 1402, queue messages 256, after: tx_dropped 1402, queue messages 256
+r63-8-loan64-B | qdisc noqueue | before: tx_dropped 1402, queue messages 256, after: tx_dropped 1883, queue messages 342
+r63-1-loan64-A client retransmits in the window: 5 | slowest WRITE 110.1 ms
+r63-2-loan64-B client retransmits in the window: 17 | slowest WRITE 299.9 ms
+r63-3-loan64-A client retransmits in the window: 4 | slowest WRITE 128.7 ms
+r63-4-loan64-B client retransmits in the window: 12 | slowest WRITE 309.5 ms
+r63-5-loan64-A client retransmits in the window: 6 | slowest WRITE 117.7 ms
+r63-6-loan64-B client retransmits in the window: 5 | slowest WRITE 118.2 ms
+r63-7-loan64-A client retransmits in the window: 5 | slowest WRITE 117.5 ms
+r63-8-loan64-B client retransmits in the window: 12 | slowest WRITE 304.7 ms
