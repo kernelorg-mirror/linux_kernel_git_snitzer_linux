@@ -37,15 +37,20 @@ which_ok() {
 }
 # data_drives: the data drives' block devices, refusing any that holds a
 # mounted system filesystem (a drive renamed at boot must not be taken for
-# a data drive)
+# a data drive).  The drive of /hs/nvmeN is the one mounted there, which
+# after a boot that renamed the drives is not nvmeNn1 (tardis2 on 27
+# October: the Micron came up as nvme7, the fourth DPRP5 as nvme8);
+# nvmeNn1 only while nothing is mounted there.
 data_drives() {
-	local n
+	local n d
 	for n in $DATA_DRIVES; do
-		findmnt -rno TARGET -S /dev/nvme${n}n1 2>/dev/null | grep -qvx "/hs/nvme$n" &&
-			{ echo "nvme${n}n1 is mounted outside /hs: not a data drive" >&2; return 1; }
-		lsblk -nro MOUNTPOINT /dev/nvme${n}n1 2>/dev/null | grep -qE '^/(boot.*)?$' &&
-			{ echo "nvme${n}n1 holds a system filesystem: not a data drive" >&2; return 1; }
-		echo nvme${n}n1
+		d=$(findmnt -rno SOURCE -M /hs/nvme$n 2>/dev/null | head -1)
+		d=${d:-/dev/nvme${n}n1}; d=${d#/dev/}
+		findmnt -rno TARGET -S /dev/$d 2>/dev/null | grep -qvx "/hs/nvme$n" &&
+			{ echo "$d is mounted outside /hs/nvme$n: not a data drive" >&2; return 1; }
+		lsblk -nro MOUNTPOINT /dev/$d 2>/dev/null | grep -qE '^/(boot.*)?$' &&
+			{ echo "$d holds a system filesystem: not a data drive" >&2; return 1; }
+		echo $d
 	done
 }
 SRVIP=${SRVIP:-${SRVP[a]}}
