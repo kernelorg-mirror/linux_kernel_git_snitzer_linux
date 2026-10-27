@@ -1060,6 +1060,15 @@ int nfsd_dispatch(struct svc_rqst *rqstp)
 	 */
 	smp_store_release(&rqstp->rq_status_counter, rqstp->rq_status_counter | 1);
 
+	/*
+	 * Confine the READ payload to region pages before the duplicate-reply
+	 * cache and before any operation runs; a READ without pages parks
+	 * off-thread and is replayed holding them.
+	 */
+	if (proc->pc_read_pages &&
+	    svc_rqst_rx_region_read(rqstp, proc->pc_read_pages(rqstp)) == -EAGAIN)
+		goto out_dropit;
+
 	rp = NULL;
 	switch (nfsd_cache_lookup(rqstp, start, len, &rp)) {
 	case RC_DOIT:

@@ -34,6 +34,11 @@ struct svc_xprt_ops {
 	void		(*xpo_bounce_done)(struct svc_rqst *rqstp,
 					   struct bio_vec *bvec,
 					   unsigned int nvecs);
+	int		(*xpo_rx_region_read)(struct svc_rqst *rqstp,
+					      unsigned int pages);
+	void		(*xpo_rx_region_unconfine)(struct svc_rqst *rqstp,
+						   bool served);
+	void		(*xpo_rx_region_park_free)(struct svc_rx_region_park *park);
 	void		(*xpo_detach)(struct svc_xprt *);
 	void		(*xpo_free)(struct svc_xprt *);
 	void		(*xpo_kill_temp_xprt)(struct svc_xprt *);
@@ -199,6 +204,8 @@ int	svc_xprt_names(struct svc_serv *serv, char *buf, const int buflen);
 void	svc_add_new_perm_xprt(struct svc_serv *serv, struct svc_xprt *xprt);
 void	svc_age_temp_xprts_now(struct svc_serv *, struct sockaddr *);
 void	svc_xprt_deferred_close(struct svc_xprt *xprt);
+struct svc_deferred_req *svc_defer_rx_region(struct svc_rqst *rqstp);
+void	svc_revisit_rx_region(struct svc_deferred_req *dr);
 
 static inline void svc_xprt_get(struct svc_xprt *xprt)
 {

@@ -1129,6 +1129,19 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	kiocb.ki_pos = dio_start;
 
+	/*
+	 * A confined READ reads into region pages, in its own reply slots.
+	 * If they cannot hold the aligned span (an alignment larger than a
+	 * page), it reads into ordinary pages, unconfined and counted.
+	 */
+	if (svc_rqst_rx_region_held(rqstp) &&
+	    !svc_rqst_rx_region_fill(rqstp,
+				     min_t(unsigned long,
+					   DIV_ROUND_UP(dio_end - dio_start, PAGE_SIZE),
+					   rqstp->rq_page_end - rqstp->rq_next_page)) &&
+	    !svc_rqst_rx_region_used(rqstp))
+		svc_rqst_rx_region_unconfine(rqstp, true);
+
 	v = 0;
 	total = dio_end - dio_start;
 	while (total && v < rqstp->rq_maxpages &&
@@ -1209,6 +1222,31 @@ static bool nfsd_direct_read_ok(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	return true;
 }
 
+/* Filesystems without direct I/O, already warned about, by device. */
+static DEFINE_XARRAY(nfsd_rx_region_warned);
+
+/*
+ * A confined READ that cannot be read direct into its region pages (a file
+ * without direct I/O, a READ smaller than the direct-I/O alignment, Q-F) is
+ * served from ordinary pages, as an unconfined READ is; its region pages
+ * go back if no READ used them yet.  A file without direct I/O is warned
+ * about once per filesystem.
+ */
+static void nfsd_rx_region_read_unconfined(struct svc_rqst *rqstp,
+					   struct svc_fh *fhp,
+					   struct nfsd_file *nf)
+{
+	unsigned long key = fhp->fh_dentry->d_sb->s_dev;
+
+	if (!svc_rqst_rx_region_used(rqstp))
+		svc_rqst_rx_region_unconfine(rqstp, true);
+	if (!nf->nf_dio_read_offset_align &&
+	    !xa_load(&nfsd_rx_region_warned, key) &&
+	    !xa_insert(&nfsd_rx_region_warned, key, xa_mk_value(1), GFP_KERNEL))
+		pr_warn("nfsd: %s: no direct I/O, READs are served unconfined\n",
+			fhp->fh_dentry->d_sb->s_id);
+}
+
 /**
  * nfsd_iter_read - Perform a VFS read using an iterator
  * @rqstp: RPC transaction context
@@ -1237,6 +1275,19 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	size_t len;
 
 	init_sync_kiocb(&kiocb, file);
+
+	/*
+	 * A READ confined to region pages is served by direct I/O whatever
+	 * nfsd_io_cache_read says (D6), wherever nfsd_direct_read_ok() allows
+	 * it: not below the alignment (Q-F), not after earlier page data, and
+	 * for NFSv4 only as the COMPOUND's last op.
+	 */
+	if (svc_rqst_rx_region_held(rqstp)) {
+		if (nfsd_direct_read_ok(rqstp, fhp, nf, offset, *count))
+			return nfsd_direct_read(rqstp, fhp, nf, offset,
+						count, eof);
+		nfsd_rx_region_read_unconfined(rqstp, fhp, nf);
+	}
 
 	switch (nfsd_io_cache_read) {
 	case NFSD_IO_BUFFERED:
@@ -1801,7 +1852,8 @@ __be32 nfsd_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		return err;
 
 	file = nf->nf_file;
-	if (file->f_op->splice_read && nfsd_read_splice_ok(rqstp))
+	if (file->f_op->splice_read && nfsd_read_splice_ok(rqstp) &&
+	    !svc_rqst_rx_region_held(rqstp))
 		err = nfsd_splice_read(rqstp, fhp, file, offset, count, eof);
 	else
 		err = nfsd_iter_read(rqstp, fhp, nf, offset, count, 0, eof);

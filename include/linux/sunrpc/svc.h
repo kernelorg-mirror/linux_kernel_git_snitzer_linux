@@ -236,6 +236,29 @@ static inline unsigned long svc_serv_maxbvecs(const struct svc_serv *serv)
 }
 
 struct svc_tcp_rx_state;
+struct svc_tcp_rx_budget;
+struct svc_rx_region_tx;
+struct svc_sock;
+
+/*
+ * A READ parked by svc_defer_rx_region() (svcsock.c): for region credit,
+ * oldest ticket first, or for room in its connection's share.
+ */
+struct svc_rx_region_park {
+	struct list_head	node;
+	u64			ticket;
+	struct svc_sock		*svsk;
+	__be32			xid;
+	unsigned int		count;	/* region pages */
+	unsigned int		share;	/* the connection's, at admission */
+	unsigned int		credit;	/* granted: from the budget's avail */
+	unsigned int		reserve;	/* granted: from its reserve */
+	unsigned int		over;	/* granted: beyond the budget (overrun) */
+	struct svc_tcp_rx_budget *budget;	/* granted by this budget */
+	bool			parked;
+	bool			shared;	/* @count reserved in the share */
+	bool			granted;
+};
 
 /*
  * The context of a single thread, including the request currently being
@@ -280,6 +303,13 @@ struct svc_rqst {
 	struct bio_vec		*rq_bvec;
 	unsigned long		rq_maxbvecs;	/* entries in rq_bvec */
 	struct svc_tcp_rx_state	*rq_tcp_rx;
+	/* READ payload confined to region pages (svc_rqst_rx_region_read) */
+	struct svc_rx_region_tx	*rq_rx_region_tx;
+	struct page		**rq_rx_region_pages; /* region pages held, in order */
+	unsigned int		rq_rx_region_count;
+	unsigned int		rq_rx_region_used;    /* installed so far */
+	unsigned long		*rq_rx_region_map;    /* rq_respages slots holding them */
+	struct page		**rq_rx_region_saved; /* displaced, by slot */
 
 	__be32			rq_xid;		/* transmission id */
 	u32			rq_prog;	/* program number */
@@ -423,6 +453,7 @@ struct svc_deferred_req {
 	size_t			daddrlen;
 	void			*xprt_ctxt;
 	struct cache_deferred_req handle;
+	struct svc_rx_region_park rx_region;	/* parked for region pages */
 	int			argslen;
 	__be32			args[];
 };
@@ -502,6 +533,8 @@ struct svc_procedure {
 	unsigned int		pc_xdrressize;	/* maximum size of XDR reply */
 	bool			pc_xdr_bvec;	/* decodes a call described by bvecs */
 	const char *		pc_name;	/* for display */
+	/* READ payload pages the decoded call will return, for confinement */
+	unsigned int		(*pc_read_pages)(struct svc_rqst *rqstp);
 };
 
 static inline bool
@@ -534,6 +567,27 @@ int		   svc_rqst_bounce_payload(struct svc_rqst *rqstp,
 void		   svc_rqst_bounce_done(struct svc_rqst *rqstp,
 					struct bio_vec *bvec,
 					unsigned int nvecs);
+int		   svc_rqst_rx_region_read(struct svc_rqst *rqstp,
+					   unsigned int pages);
+void		   svc_rqst_rx_region_unconfine(struct svc_rqst *rqstp,
+						bool served);
+bool		   svc_rqst_rx_region_fill(struct svc_rqst *rqstp,
+					   unsigned int n);
+void		   svc_rqst_rx_region_uninstall(struct svc_rqst *rqstp,
+						bool restore);
+void		   svc_rqst_rx_region_restore(struct svc_rqst *rqstp);
+
+/* Does @rqstp hold region pages for its READ payload? */
+static inline bool svc_rqst_rx_region_held(const struct svc_rqst *rqstp)
+{
+	return rqstp->rq_rx_region_tx;
+}
+
+/* Has any READ of @rqstp been read into its region pages yet? */
+static inline bool svc_rqst_rx_region_used(const struct svc_rqst *rqstp)
+{
+	return rqstp->rq_rx_region_used;
+}
 int		   svc_new_thread(struct svc_serv *serv, struct svc_pool *pool);
 void		   svc_exit_thread(struct svc_rqst *);
 struct svc_serv *  svc_create_pooled(struct svc_program *prog,
