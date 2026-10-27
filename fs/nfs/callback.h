@@ -134,6 +134,7 @@ struct cb_layoutrecallargs {
 		struct {
 			struct nfs_fh		cbl_fh;
 			struct pnfs_layout_range cbl_range;
+			struct nfs4_deviceid	cbl_dev_id;
 			nfs4_stateid		cbl_stateid;
 		};
 		struct nfs_fsid		cbl_fsid;

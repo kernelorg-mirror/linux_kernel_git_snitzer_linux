@@ -49,11 +49,6 @@
 
 /* #define NFS_DEBUG_VERBOSE 1 */
 
-static int nfs_opendir(struct inode *, struct file *);
-static int nfs_closedir(struct inode *, struct file *);
-static int nfs_readdir(struct file *, struct dir_context *);
-static int nfs_fsync_dir(struct file *, loff_t, loff_t, int);
-static loff_t nfs_llseek_dir(struct file *, loff_t, int);
 static void nfs_readdir_clear_array(struct folio *);
 static int nfs_do_create(struct inode *dir, struct dentry *dentry,
 			 umode_t mode, int open_flags);
@@ -66,6 +61,7 @@ const struct file_operations nfs_dir_operations = {
 	.release	= nfs_closedir,
 	.fsync		= nfs_fsync_dir,
 };
+EXPORT_SYMBOL_GPL(nfs_dir_operations);
 
 const struct address_space_operations nfs_dir_aops = {
 	.free_folio = nfs_readdir_clear_array,
@@ -108,8 +104,7 @@ static void put_nfs_open_dir_context(struct inode *dir, struct nfs_open_dir_cont
 /*
  * Open file
  */
-static int
-nfs_opendir(struct inode *inode, struct file *filp)
+int nfs_opendir(struct inode *inode, struct file *filp)
 {
 	int res = 0;
 	struct nfs_open_dir_context *ctx;
@@ -127,13 +122,14 @@ nfs_opendir(struct inode *inode, struct file *filp)
 out:
 	return res;
 }
+EXPORT_SYMBOL_GPL(nfs_opendir);
 
-static int
-nfs_closedir(struct inode *inode, struct file *filp)
+int nfs_closedir(struct inode *inode, struct file *filp)
 {
 	put_nfs_open_dir_context(file_inode(filp), filp->private_data);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(nfs_closedir);
 
 struct nfs_cache_array_entry {
 	u64 cookie;
@@ -1227,7 +1223,7 @@ static bool nfs_readdir_handle_cache_misses(struct inode *inode,
    last cookie cache takes care of the common case of reading the
    whole directory.
  */
-static int nfs_readdir(struct file *file, struct dir_context *ctx)
+int nfs_readdir(struct file *file, struct dir_context *ctx)
 {
 	struct dentry	*dentry = file_dentry(file);
 	struct inode	*inode = d_inode(dentry);
@@ -1335,8 +1331,9 @@ out:
 	dfprintk(FILE, "NFS: readdir(%pD2) returns %d\n", file, res);
 	return res;
 }
+EXPORT_SYMBOL_GPL(nfs_readdir);
 
-static loff_t nfs_llseek_dir(struct file *filp, loff_t offset, int whence)
+loff_t nfs_llseek_dir(struct file *filp, loff_t offset, int whence)
 {
 	struct nfs_open_dir_context *dir_ctx = filp->private_data;
 
@@ -1376,19 +1373,20 @@ static loff_t nfs_llseek_dir(struct file *filp, loff_t offset, int whence)
 	spin_unlock(&filp->f_lock);
 	return offset;
 }
+EXPORT_SYMBOL_GPL(nfs_llseek_dir);
 
 /*
  * All directory operations under NFS are synchronous, so fsync()
  * is a dummy operation.
  */
-static int nfs_fsync_dir(struct file *filp, loff_t start, loff_t end,
-			 int datasync)
+int nfs_fsync_dir(struct file *filp, loff_t start, loff_t end, int datasync)
 {
 	dfprintk(FILE, "NFS: fsync dir(%pD2) datasync %d\n", filp, datasync);
 
 	nfs_inc_stats(file_inode(filp), NFSIOS_VFSFSYNC);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(nfs_fsync_dir);
 
 /**
  * nfs_force_lookup_revalidate - Mark the directory as having changed
@@ -2157,7 +2155,7 @@ int nfs_atomic_open(struct inode *dir, struct dentry *dentry,
 	if (dentry->d_name.len > NFS_SERVER(dir)->namelen)
 		return -ENAMETOOLONG;
 
-	if (open_flags & O_CREAT) {
+	if ((open_flags & O_CREAT) && !(open_flags & O_NOMODE)) {
 		struct nfs_server *server = NFS_SERVER(dir);
 
 		if (!(server->attr_bitmask[2] & FATTR4_WORD2_MODE_UMASK))
@@ -2490,17 +2488,21 @@ EXPORT_SYMBOL_GPL(nfs_mknod);
 /*
  * See comments for nfs_proc_create regarding failed operations.
  */
-struct dentry *nfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
-			 struct dentry *dentry, umode_t mode)
+struct dentry *nfs_mkdir2(struct mnt_idmap *idmap, struct inode *dir,
+			  struct dentry *dentry, umode_t mode, unsigned int flags)
 {
-	struct iattr attr;
+	struct iattr attr = {
+		.ia_valid = 0,
+	};
 	struct dentry *ret;
 
 	dfprintk(VFS, "NFS: mkdir(%s/%llu), %pd\n",
 			dir->i_sb->s_id, dir->i_ino, dentry);
 
-	attr.ia_valid = ATTR_MODE;
-	attr.ia_mode = mode;
+	if (!(flags & MKDIR_NOMODE)) {
+		attr.ia_valid |= ATTR_MODE;
+		attr.ia_mode = mode;
+	}
 
 	trace_nfs_mkdir_enter(dir, dentry);
 	ret = NFS_PROTO(dir)->mkdir(dir, dentry, &attr);
@@ -2508,6 +2510,13 @@ struct dentry *nfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 	if (IS_ERR(ret))
 		d_drop(dentry);
 	return ret;
+}
+EXPORT_SYMBOL_GPL(nfs_mkdir2);
+
+struct dentry *nfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+			 struct dentry *dentry, umode_t mode)
+{
+	return nfs_mkdir2(idmap, dir, dentry, mode, 0);
 }
 EXPORT_SYMBOL_GPL(nfs_mkdir);
 
@@ -3320,6 +3329,45 @@ void nfs_access_set_mask(struct nfs_access_entry *entry, u32 access_result)
 }
 EXPORT_SYMBOL_GPL(nfs_access_set_mask);
 
+int nfs_get_access(struct inode *inode, const struct cred *cred,
+		   struct nfs_access_entry *cache, bool may_block)
+{
+	int status;
+
+	trace_nfs_access_enter(inode);
+
+	status = nfs_access_get_cached(inode, cred, &cache->mask, may_block);
+	if (status == 0)
+		return 0;
+
+	if (!may_block)
+		return -ECHILD;
+
+	/*
+	 * Determine which access bits we want to ask for...
+	 */
+	cache->mask = NFS_ACCESS_READ | NFS_ACCESS_MODIFY | NFS_ACCESS_EXTEND |
+		      NFS_ACCESS_DELETE |
+		      nfs_access_xattr_mask(NFS_SERVER(inode));
+	if (S_ISDIR(inode->i_mode))
+		cache->mask |= NFS_ACCESS_LOOKUP;
+	else
+		cache->mask |= NFS_ACCESS_EXECUTE;
+	status = NFS_PROTO(inode)->access(inode, cache, cred);
+	if (status != 0) {
+		if (status == -ESTALE) {
+			if (!S_ISDIR(inode->i_mode))
+				nfs_set_inode_stale(inode);
+			else
+				nfs_zap_caches(inode);
+		}
+		return status;
+	}
+	nfs_access_add_cache(inode, cache, cred);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(nfs_get_access);
+
 static int nfs_do_access(struct inode *inode, const struct cred *cred, int mask)
 {
 	struct nfs_access_entry cache;
@@ -3329,35 +3377,9 @@ static int nfs_do_access(struct inode *inode, const struct cred *cred, int mask)
 
 	trace_nfs_access_enter(inode);
 
-	status = nfs_access_get_cached(inode, cred, &cache.mask, may_block);
-	if (status == 0)
-		goto out_cached;
-
-	status = -ECHILD;
-	if (!may_block)
+	status = nfs_get_access(inode, cred, &cache, may_block);
+	if (status < 0)
 		goto out;
-
-	/*
-	 * Determine which access bits we want to ask for...
-	 */
-	cache.mask = NFS_ACCESS_READ | NFS_ACCESS_MODIFY | NFS_ACCESS_EXTEND |
-		     nfs_access_xattr_mask(NFS_SERVER(inode));
-	if (S_ISDIR(inode->i_mode))
-		cache.mask |= NFS_ACCESS_DELETE | NFS_ACCESS_LOOKUP;
-	else
-		cache.mask |= NFS_ACCESS_EXECUTE;
-	status = NFS_PROTO(inode)->access(inode, &cache, cred);
-	if (status != 0) {
-		if (status == -ESTALE) {
-			if (!S_ISDIR(inode->i_mode))
-				nfs_set_inode_stale(inode);
-			else
-				nfs_zap_caches(inode);
-		}
-		goto out;
-	}
-	nfs_access_add_cache(inode, &cache, cred);
-out_cached:
 	cache_mask = nfs_access_calc_mask(cache.mask, inode->i_mode);
 	if ((mask & ~cache_mask & (MAY_READ | MAY_WRITE | MAY_EXEC)) != 0)
 		status = -EACCES;

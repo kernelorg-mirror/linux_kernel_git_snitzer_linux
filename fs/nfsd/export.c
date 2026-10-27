@@ -256,6 +256,14 @@ static int expkey_notify(struct cache_detail *cd, struct cache_head *h)
 	return nfsd_cache_notify(cd, h, NFSD_CACHE_TYPE_EXPKEY);
 }
 
+static void
+warn_no_mountd(struct cache_detail *detail, int has_died)
+{
+	printk("nfsd: nfs export resolution failing. "
+	       "Has the mountd daemon %s?\n",
+	       has_died ? "died" : "not been started");
+}
+
 static const struct cache_detail svc_expkey_cache_template = {
 	.owner		= THIS_MODULE,
 	.hash_size	= EXPKEY_HASHMAX,
@@ -266,6 +274,7 @@ static const struct cache_detail svc_expkey_cache_template = {
 	.cache_request	= expkey_request,
 	.cache_parse	= expkey_parse,
 	.cache_show	= expkey_show,
+	.warn_no_listener = warn_no_mountd,
 	.match		= expkey_match,
 	.init		= expkey_init,
 	.update       	= expkey_update,
@@ -1597,6 +1606,7 @@ static const struct cache_detail svc_export_cache_template = {
 	.cache_request	= svc_export_request,
 	.cache_parse	= svc_export_parse,
 	.cache_show	= svc_export_show,
+	.warn_no_listener = warn_no_mountd,
 	.match		= svc_export_match,
 	.init		= svc_export_init,
 	.update		= export_update,

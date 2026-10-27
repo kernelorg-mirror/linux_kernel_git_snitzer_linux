@@ -618,6 +618,13 @@ static ssize_t __write_versions(struct file *file, char *buf, size_t size)
 				if (*minorp == '.') {
 					if (nfsd_minorversion(nn, minor, cmd) < 0)
 						return -EINVAL;
+					/*
+					 * Disable NFS v4.0 when v4.2 is enabled
+					 * for compatibility with RHEL7
+					 */
+					if (minor == 2 && cmd == NFSD_SET &&
+					    nfsd_minorversion(nn, 0, NFSD_CLEAR) < 0)
+						return -EINVAL;
 				} else if ((cmd == NFSD_SET) != nfsd_vers(nn, num, NFSD_TEST)) {
 					/*
 					 * Either we have +4 and no minors are enabled,
@@ -727,6 +734,16 @@ static ssize_t __write_ports_names(char *buf, struct net *net)
 	return svc_xprt_names(nn->nfsd_serv, buf, SIMPLE_TRANSACTION_LIMIT);
 }
 
+static bool nfsd_rpcbind_error_fatal = false;
+module_param(nfsd_rpcbind_error_fatal, bool, 0644);
+MODULE_PARM_DESC(nfsd_rpcbind_error_fatal,
+		 "rpcbind errors are fatal when starting nfsd.");
+
+static bool nfsd_rpcbind_error_is_fatal(void)
+{
+	return nfsd_rpcbind_error_fatal;
+}
+
 /*
  * A single 'fd' number was written, in which case it must be for
  * a socket of a supported family/protocol, and we use it as an
@@ -737,6 +754,7 @@ static ssize_t __write_ports_addfd(char *buf, struct net *net, const struct cred
 	char *mesg = buf;
 	int fd, err;
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+	int flags = SVC_SOCK_DEFAULTS;
 	struct svc_serv *serv;
 
 	err = get_int(&mesg, &fd);
@@ -756,8 +774,10 @@ static ssize_t __write_ports_addfd(char *buf, struct net *net, const struct cred
 		return err;
 
 	serv = nn->nfsd_serv;
-	err = svc_addsock(serv, net, fd, buf, SIMPLE_TRANSACTION_LIMIT, cred);
-
+	if (!nfsd_rpcbind_error_is_fatal())
+		flags |= SVC_SOCK_RPCBIND_NOERR;
+	err = svc_addsock(serv, net, fd, buf, SIMPLE_TRANSACTION_LIMIT,
+			  flags, cred);
 	if (!serv->sv_nrthreads && list_empty(&nn->nfsd_serv->sv_permsocks))
 		nfsd_destroy_serv(net);
 

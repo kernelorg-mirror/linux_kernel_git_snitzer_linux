@@ -11,6 +11,8 @@ struct inode;
 struct super_block;
 struct vfsmount;
 struct nfs4_acl;
+struct path;
+struct kstat;
 
 /* limit the handle size to NFSv4 handle size now */
 #define MAX_HANDLE_SZ 128
@@ -309,6 +311,7 @@ struct export_operations {
 #ifdef CONFIG_EXPORTFS_BLOCK_OPS
 	const struct exportfs_block_ops *block_ops;
 #endif
+	int (*getattr)(struct path *, struct kstat *, u32, bool);
 };
 
 /**

@@ -14,5 +14,6 @@
 #include <linux/nfs_fh.h>
 
 #include <uapi/linux/nfs.h>
+#include <linux/nfs3.h>
 
 #endif /* _LINUX_NFS_H */

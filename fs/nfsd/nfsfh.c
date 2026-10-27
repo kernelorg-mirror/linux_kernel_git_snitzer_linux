@@ -797,6 +797,12 @@ out_negative:
  */
 __be32 fh_getattr(const struct svc_fh *fhp, struct kstat *stat)
 {
+	return  __fh_getattr(fhp, stat, true);
+}
+
+__be32 __fh_getattr(const struct svc_fh *fhp, struct kstat *stat,
+		    bool force)
+{
 	struct path p = {
 		.mnt		= fhp->fh_export->ex_path.mnt,
 		.dentry		= fhp->fh_dentry,
@@ -811,8 +817,7 @@ __be32 fh_getattr(const struct svc_fh *fhp, struct kstat *stat)
 	if (fhp->fh_maxsize == NFS4_FHSIZE)
 		request_mask |= (STATX_BTIME | STATX_CHANGE_COOKIE);
 
-	return nfserrno(vfs_getattr(&p, stat, request_mask,
-				    AT_STATX_SYNC_AS_STAT));
+	return nfsd_getattr(&p, stat, request_mask, force);
 }
 
 static __be32 __must_check __fh_fill_pre_attrs(struct svc_fh *fhp)

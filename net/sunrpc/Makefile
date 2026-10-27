@@ -6,6 +6,7 @@
 
 obj-$(CONFIG_SUNRPC) += sunrpc.o
 obj-$(CONFIG_SUNRPC_GSS) += auth_gss/
+obj-$(CONFIG_SUNRPC_NAME) += auth_name.o
 obj-$(CONFIG_SUNRPC_XPRT_RDMA) += xprtrdma/
 
 # KUnit suites are built as standalone modules (not linked into sunrpc.o) so the

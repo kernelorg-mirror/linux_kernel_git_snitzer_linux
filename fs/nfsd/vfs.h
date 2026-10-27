@@ -231,6 +231,8 @@ __be32		nfsd_permission(struct svc_cred *cred, struct svc_export *exp,
 
 void		nfsd_filp_close(struct file *fp);
 
+__be32		nfsd_getattr(struct path *, struct kstat *, u32, bool);
+
 /*
  * Would bouncing a payload the split found memory-misaligned, or with a
  * discontinuous joint off an offset-alignment multiple, let it go direct?

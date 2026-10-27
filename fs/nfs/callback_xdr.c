@@ -246,6 +246,11 @@ static __be32 decode_layoutrecall_args(struct svc_rqst *rqstp,
 			return htonl(NFS4ERR_BADXDR);
 		p = xdr_decode_hyper(p, &args->cbl_fsid.major);
 		p = xdr_decode_hyper(p, &args->cbl_fsid.minor);
+	} else if (args->cbl_recall_type == RETURN_DEVICEID) {
+		p = xdr_inline_decode(xdr, NFS4_DEVICEID4_SIZE);
+		if (unlikely(p == NULL))
+			return htonl(NFS4ERR_BADXDR);
+		memcpy(args->cbl_dev_id.data, p, NFS4_DEVICEID4_SIZE);
 	} else if (args->cbl_recall_type != RETURN_ALL)
 		return htonl(NFS4ERR_BADXDR);
 	return 0;

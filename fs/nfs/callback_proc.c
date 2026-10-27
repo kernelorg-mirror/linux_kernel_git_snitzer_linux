@@ -330,6 +330,9 @@ static u32 initiate_bulk_draining(struct nfs_client *clp,
 	if (args->cbl_recall_type == RETURN_FSID)
 		stat = pnfs_layout_destroy_byfsid(clp, &args->cbl_fsid,
 						  PNFS_LAYOUT_BULK_RETURN);
+	else if (args->cbl_recall_type == RETURN_DEVICEID)
+		stat = pnfs_layout_destroy_bydevid(clp, &args->cbl_dev_id,
+						   PNFS_LAYOUT_BULK_RETURN);
 	else
 		stat = pnfs_layout_destroy_byclid(clp, PNFS_LAYOUT_BULK_RETURN);
 	if (stat != 0)

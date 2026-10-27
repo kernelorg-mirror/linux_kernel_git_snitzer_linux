@@ -1172,10 +1172,17 @@ static int __init fcntl_init(void)
 	 * Exceptions: O_NONBLOCK is a two bit define on parisc; O_NDELAY
 	 * is defined as O_NONBLOCK on some platforms and not on others.
 	 */
-	BUILD_BUG_ON(22 - 1 /* for O_RDONLY being 0 */ !=
+	BUILD_BUG_ON(23 - 1 /* for O_RDONLY being 0 */ !=
 		HWEIGHT32(
 			(VALID_OPEN_FLAGS & ~(O_NONBLOCK | O_NDELAY)) |
 			__FMODE_EXEC | __O_REGULAR));
+
+	/*
+	 * __O_REGULAR is a kernel-internal carrier: it must never alias
+	 * O_NOMODE or any other user-visible open flag.
+	 */
+	BUILD_BUG_ON(__O_REGULAR == O_NOMODE);
+	BUILD_BUG_ON(__O_REGULAR & (VALID_OPEN_FLAGS | __FMODE_EXEC));
 
 	fasync_cache = kmem_cache_create("fasync_cache",
 					 sizeof(struct fasync_struct), 0,

@@ -5357,6 +5357,10 @@ SYSCALL_DEFINE3(mknod, const char __user *, filename, umode_t, mode, unsigned, d
 	return filename_mknodat(AT_FDCWD, name, mode, dev);
 }
 
+/* Exclusively used by Hammerspace specific mkdirat2 to inherit ACL */
+#define S_IFIACL        S_IFREG
+#define S_ISIACL(m)	(((m) & S_IFMT) == S_IFIACL)
+
 /**
  * vfs_mkdir - create directory returning correct dentry if possible
  * @idmap:		idmap of the mount the inode was found from
@@ -5385,6 +5389,7 @@ struct dentry *vfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 {
 	int error;
 	unsigned max_links = dir->i_sb->s_max_links;
+	unsigned int flags = 0;
 	struct dentry *de;
 
 	error = may_create_dentry(idmap, dir, dentry);
@@ -5394,6 +5399,13 @@ struct dentry *vfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 	error = -EPERM;
 	if (!dir->i_op->mkdir)
 		goto err;
+
+	if (S_ISIACL(mode)) {
+		if (!dir->i_op->mkdir2)
+			goto err;
+		mode &= ~S_IFIACL;
+		flags = MKDIR_NOMODE;
+	}
 
 	mode = vfs_prepare_mode(idmap, dir, mode, S_IRWXUGO | S_ISVTX, S_IFDIR);
 	error = security_inode_mkdir(dir, dentry, mode);
@@ -5408,7 +5420,10 @@ struct dentry *vfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 	if (error)
 		goto err;
 
-	de = dir->i_op->mkdir(idmap, dir, dentry, mode);
+	if (flags == MKDIR_NOMODE)
+		de = dir->i_op->mkdir2(idmap, dir, dentry, mode, flags);
+	else
+		de = dir->i_op->mkdir(idmap, dir, dentry, mode);
 	error = PTR_ERR(de);
 	if (IS_ERR(de))
 		goto err;
@@ -5462,7 +5477,19 @@ retry:
 SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, umode_t, mode)
 {
 	CLASS(filename, name)(pathname);
+	/* ensure S_IFIACL (aka S_IFREG) is (ab)used exclusively by mkdirat2 */
+	if (S_ISIACL(mode))
+		mode &= ~S_IFIACL;
 	return filename_mkdirat(dfd, name, mode);
+}
+
+SYSCALL_DEFINE4(mkdirat2, int, dfd, const char __user *, pathname, umode_t, mode, unsigned int, flags)
+{
+	CLASS(filename, name)(pathname);
+	if (!(flags & MKDIR_NOMODE))
+		return -EOPNOTSUPP;
+	/* (ab)use a umode_t bit (S_IFIACL aka S_IFREG) that isn't used for mkdirat */
+	return filename_mkdirat(dfd, name, mode | S_IFIACL);
 }
 
 SYSCALL_DEFINE2(mkdir, const char __user *, pathname, umode_t, mode)

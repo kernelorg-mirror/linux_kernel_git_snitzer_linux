@@ -88,6 +88,7 @@ struct nfsd_localio_operations {
 						const fmode_t);
 	struct net *(*nfsd_file_put_local)(struct nfsd_file __rcu **);
 	struct file *(*nfsd_file_file)(struct nfsd_file *);
+	void (*nfsd_file_dio_alignment)(struct nfsd_file *, u32 *, u32 *, u32 *);
 	void (*nfsd_file_dio_policy)(struct nfsd_file *nf,
 				     unsigned int direction,
 				     struct nfs_dio_policy *policy);

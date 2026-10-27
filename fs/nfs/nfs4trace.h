@@ -35,7 +35,12 @@
 		{ NFS_ATTR_FATTR_GROUP_NAME, "GROUP_NAME" }, \
 		{ NFS_ATTR_FATTR_BTIME, "BTIME" }, \
 		{ NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA, "UNCACHEABLE_FILE_DATA" }, \
-		{ NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA, "UNCACHEABLE_DIRENT_METADATA" })
+		{ NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA, "UNCACHEABLE_DIRENT_METADATA" }, \
+		{ NFS_ATTR_FATTR_HIDDEN, "HIDDEN" }, \
+		{ NFS_ATTR_FATTR_SYSTEM, "SYSTEM" }, \
+		{ NFS_ATTR_FATTR_ARCHIVE, "ARCHIVE" }, \
+		{ NFS_ATTR_FATTR_TIME_BACKUP, "TIME_BACKUP" }, \
+		{ NFS_ATTR_FATTR_OFFLINE, "OFFLINE" })
 
 DECLARE_EVENT_CLASS(nfs4_clientid_event,
 		TP_PROTO(
@@ -1665,52 +1670,6 @@ DECLARE_EVENT_CLASS(nfs4_match_stateid_event,
 			TP_ARGS(s1, s2))
 DEFINE_NFS4_MATCH_STATEID_EVENT(nfs41_match_stateid);
 DEFINE_NFS4_MATCH_STATEID_EVENT(nfs4_match_stateid);
-
-DECLARE_EVENT_CLASS(nfs4_idmap_event,
-		TP_PROTO(
-			const char *name,
-			int len,
-			u32 id,
-			int error
-		),
-
-		TP_ARGS(name, len, id, error),
-
-		TP_STRUCT__entry(
-			__field(unsigned long, error)
-			__field(u32, id)
-			__dynamic_array(char, name, len > 0 ? len + 1 : 1)
-		),
-
-		TP_fast_assign(
-			if (len < 0)
-				len = 0;
-			__entry->error = error < 0 ? error : 0;
-			__entry->id = id;
-			memcpy(__get_str(name), name, len);
-			__get_str(name)[len] = 0;
-		),
-
-		TP_printk(
-			"error=%ld (%s) id=%u name=%s",
-			-__entry->error, show_nfs4_status(__entry->error),
-			__entry->id,
-			__get_str(name)
-		)
-);
-#define DEFINE_NFS4_IDMAP_EVENT(name) \
-	DEFINE_EVENT(nfs4_idmap_event, name, \
-			TP_PROTO( \
-				const char *name, \
-				int len, \
-				u32 id, \
-				int error \
-			), \
-			TP_ARGS(name, len, id, error))
-DEFINE_NFS4_IDMAP_EVENT(nfs4_map_name_to_uid);
-DEFINE_NFS4_IDMAP_EVENT(nfs4_map_group_to_gid);
-DEFINE_NFS4_IDMAP_EVENT(nfs4_map_uid_to_name);
-DEFINE_NFS4_IDMAP_EVENT(nfs4_map_gid_to_group);
 
 #define NFS4_LSEG_LAYOUT_STATEID_HASH(lseg) \
 	(lseg ? nfs_stateid_hash(&lseg->pls_layout->plh_stateid) : 0)

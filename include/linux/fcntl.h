@@ -11,7 +11,7 @@
 	(O_RDONLY | O_WRONLY | O_RDWR | O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC | \
 	 O_APPEND | O_NDELAY | O_NONBLOCK | __O_SYNC | O_DSYNC | \
 	 FASYNC	| O_DIRECT | O_LARGEFILE | O_DIRECTORY | O_NOFOLLOW | \
-	 O_NOATIME | O_CLOEXEC | O_PATH | __O_TMPFILE | O_EMPTYPATH)
+	 O_NOATIME | O_CLOEXEC | O_PATH | __O_TMPFILE | O_EMPTYPATH | O_NOMODE)
 
 /* List of all valid flags for openat2(2)'s how->flags argument. */
 #define VALID_OPENAT2_FLAGS	(VALID_OPEN_FLAGS | OPENAT2_REGULAR)
@@ -24,11 +24,11 @@
  * do_dentry_open() strips it so userspace cannot observe it via
  * fcntl(F_GETFL).
  *
- * Bit 30 is not claimed by any O_* flag on any architecture and stays clear
- * of the sign bit of the int op->open_flag. fcntl_init() enforces that it
- * never aliases an open-flag bit.
+ * Bit 29 is not claimed by any O_* flag on any architecture and stays clear
+ * of the sign bit of the int op->open_flag. Bit 30 is O_NOMODE.
+ * fcntl_init() enforces that it never aliases an open-flag bit.
  */
-#define __O_REGULAR		(1 << 30)
+#define __O_REGULAR		(1 << 29)
 
 /* List of all valid flags for the how->resolve argument: */
 #define VALID_RESOLVE_FLAGS \
