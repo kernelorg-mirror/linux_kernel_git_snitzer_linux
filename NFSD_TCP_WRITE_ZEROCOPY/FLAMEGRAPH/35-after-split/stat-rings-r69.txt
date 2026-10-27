@@ -1,0 +1,15 @@
+# started on Tue Oct 27 22:00:28 2026
+
+
+ Performance counter stats for 'CPU(s) 0,2,4,6':
+
+       21603340986      cycles                                                                
+        4026646361      stall_backend_mem                                                     
+          83159087      l1d_cache_refill_rd                                                   
+         140885803      l2d_cache_refill_rd                                                   
+         147903326      ll_cache_miss_rd                                                      
+             58326      dtlb_walk                                                             
+
+       4.003022135 seconds time elapsed
+
+WRITEs in the stat: 156214

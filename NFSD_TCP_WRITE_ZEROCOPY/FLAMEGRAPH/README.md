@@ -54,7 +54,8 @@ Each round is a directory here, numbered in order:
 | [31-no-qdisc](31-no-qdisc/README.md) | the current state: the tip's sunrpc, `rodata=noalias`, `rx_prefetch` Y (fl60) | sending, 14.9 us a WRITE on nfsd, 6.4 of it the ACKs its reads send; under every send `__dev_xmit_skb` 4.24, the qdisc's root lock 1.10 and its code 0.86 | `noqueue` as the port's root qdisc (`cd909d9ae8e2` lets settled.sh set it); 4 runs a side | **not kept**: nfsd −2.58 ± 1.46 us a WRITE, suggestive; but every `noqueue` run dropped 101 to 719 sends at a stopped transmit queue, three of four had a ~300 ms WRITE |
 | [32-tx-queues](32-tx-queues/README.md) | the current state | nfsd's 48 CPUs on port a's 4 transmit queues, 44 of them by the flow's hash (rounds 07 and 31) | `XPS=spread` (12 CPUs a queue), and 8 rings with frames to 4 only (`RX_RINGS=4`, 8 queues, 6 CPUs a queue), against the settled setting; 4 loan runs a side | **not kept** (Mike): neither saves anything (nfsd +0.80 ± 1.17 and +1.17 ± 1.33 µs a WRITE), and 8 rings hold about 400 more region pages at peak. The settled setting measured again: rings 44.50, nfsd 90.30 |
 | [33-cr-prefetch](33-cr-prefetch/README.md) | the current state | the completion entry, 31% of `xeu_rx_poll`'s L1 refills (round 30), for a prefetch several entries ahead | none: `napi:napi_poll` counted on port a's receive and transmit polls apart | **a look**: 94% of frames arrive in polls of 4 or more and 32% in polls at the budget, so inside a poll round 28's prefetch already has the next entry; what is left is about one miss a poll, where the card has not written the entry yet. Not built |
-| [34-ring-stall](34-ring-stall/README.md) | the current state | the rings' memory stall, located by sampled stall cycles and refills on the ring CPUs; then xeu cutting its 8 KiB buffers from whole pages counted once (`rx_page_split`), without `page_pool_alloc_frag()`'s drain atomic | none | the look: the drain's atomic on `pp_ref_count` is the largest single stall, 20% of the rings' memory stall and about 1.5 µs a WRITE by its share. The A/B, four runs a side: rings −1.60 ± 1.63, −0.17 without a pair that flow placement put off, nfsd +0.93 ± 1.46, the region's peak the same. Not kept, to be decided by Mike |
+| [34-ring-stall](34-ring-stall/README.md) | the current state | the rings' memory stall, located by sampled stall cycles and refills on the ring CPUs; then xeu cutting `rx_buf_size`'s 8 KiB buffers from whole pages it counts once, without `page_pool_alloc_frag()`'s drain atomic | none | the look: the drain's atomic on `pp_ref_count` is the largest single stall, 20% of the rings' memory stall. The A/B, four runs a side: rings −1.60 ± 1.63, −0.17 without a pair that flow placement put off, nfsd +0.93 ± 1.46, the region's peak the same. **Kept** (Mike): the step `rx_buf_size` below a page should take, with no parameter; round 35 traces where the drain's wait went and what in the rings comes after it |
+| [35-after-split](35-after-split/README.md) | the current state, xeu round 34's | where round 34's wait went, then the refill's loop: `xeu_rx_refill_lean()`, what does not change worked out once a refill, the ring's state in registers, each descriptor two eight-byte stores | r69 sampled; r70 to r72 diagnostic xeus timing the refill's loads, stores, the drain at its start and its loop | traced: the `dma_addr` load and the descriptor writes are near, nothing is inherited, the loop is 49 ns (98 cycles) a buffer. The A/B, counted (three pairs): ring cycles −2.7k a WRITE (−1.9%), instructions −6.9k, nfsd the same; the region's peak about +40 pages in five pairs of six. Also found: `cost.sh`'s µs are tick-sampled and read low. To be decided by Mike |
 | [07-srv-qdisc](07-srv-qdisc/README.md) | round 05's state | half of each ACK and reply is `__dev_xmit_skb` | the server's qdisc `pfifo_fast` | not kept: no change (rings 66.9 against 66.1, latency inside L0's scatter); the cost is the transmit path's lock with 48 CPUs on 4 queues, not the qdisc |
 | [08-notrack-needed](08-notrack-needed/README.md) | round 05's state | the `zc_notrack` chains run with no conntrack to skip | `zc_notrack` only while a table registers conntrack, in settled.sh | kept: rings 67.6 to 65.1 us a loaned WRITE (-3.7%), nfsd 160.6 to 154.2; latency unchanged |
 | [09-big-tcp](09-big-tcp/README.md) | round 08's state | per-skb costs at about 20 GRO skbs a WRITE | BIG TCP: the server's `gro_max_size` and `gro_ipv4_max_size` 256 KB | not kept: no change (rings 63.3 against 63.4, latency the same); aggregates end at the client's 64 KB TSO bursts, so it needs the client's `gso_ipv4_max_size` too (Mike); the wake itself measured, 98.5% under 2 us |
@@ -70,9 +71,14 @@ decided.
 2. **Round 33: prefetch the completion entry further ahead.** A look, not
    built ([33-cr-prefetch](33-cr-prefetch/README.md)).
 3. **Round 34: the rings' memory stall.** Located; its largest single
-   place, page_pool's frag drain, taken out of xeu's refill and not kept
-   ([34-ring-stall](34-ring-stall/README.md)).
-4. **nfsd's own loan frames.**
+   place, page_pool's frag drain, taken out of xeu's refill. Kept, with no
+   saving of its own that shows ([34-ring-stall](34-ring-stall/README.md)).
+4. **Round 35: xeu's rings after round 34** (Mike: keep chasing the
+   rings' wins in xeu that build on it). Traced: no single access in the
+   refill waits far and nothing is inherited; the loop is long. A lean
+   refill loop, the rings 2.7k cycles a WRITE cheaper; to be decided
+   ([35-after-split](35-after-split/README.md)).
+5. **nfsd's own loan frames.**
    - append 2.4, borrow 2.1 and release 1.7 µs a WRITE (round 31's
      profile).
    - Round 31 found the append to be about 128 loads of 19 ns a WRITE,
@@ -104,6 +110,7 @@ runs (the profile where the A/B cannot resolve it):
 | 26 | | about 0.5 by the profile (A/B 97.2 to 96.5, inside the drift) | `6c6dc284fed0`: an nfsd thread its pool could not lose sleeps without the 5 s timer |
 | 28 | 50.9 to 48.5 on build 499's own sunrpc | | xeu `rx_prefetch` Y (kmod-xsight 2.0.1-10, settled.sh): the next received frame's headers, shared info and `struct page` prefetched while a frame is built |
 | 30 | 47.6 to 44.6 on the tip's sunrpc | 100.5 to 91.7 on the tip's sunrpc | `rodata=noalias` on the kernel's command line (settled.sh): the linear map in 32 MiB blocks, page-table walks 108 to 2 a WRITE on nfsd's CPUs and 61 to 0.3 on the rings |
+| 34 | 44.55 to 42.95, inside the spread (−0.17 without a pair put off) | | xeu (`DC23D10E104D370F14FB06E`, on 2.0.1-10): `rx_buf_size`'s buffers cut by the ring from whole pages counted once, no frag drain atomic |
 
 - **Since round 01:** the rings 92.6 to about 58 us a WRITE (-37%),
   and to about 50 on build 499 with the interrupt held off at the card
@@ -143,6 +150,17 @@ Every figure is a cost per 1 MiB WRITE: ring softirq microseconds a WRITE
 microseconds a WRITE), a frame's microseconds a WRITE from the profile (`top-*.txt`),
 and nfsd's wakes and voluntary context switches a WRITE (`pool_stats` and
 `/proc/<pid>/status` read around the run).
+
+**Those microseconds are the 100 Hz tick's samples, and read low (round
+35).** This kernel has no `CONFIG_IRQ_TIME_ACCOUNTING`, so `/proc/stat`'s
+busy time, and mpstat's from it, is what the tick happened to land on:
+under load the ring CPUs' counted cycles say 67 to 74% busy where the
+tick says 40 to 63%, about 43 µs a WRITE on the rings where the cycles
+say about 70, and the figure moves 2 to 4 µs between runs. From round
+35 `twoport.sh` counts every CPU's cycles and instructions over its
+window and `cost.sh` gives them a WRITE beside the µs; rounds are judged
+on the counted cycles (the cores run at 2.0 GHz). The µs columns of the
+earlier rounds stand as they were measured, comparable with each other.
 
 **How a profile becomes microseconds.** The cycle counter does not stop in
 an idle CPU on this machine (CPU 1, 95% idle, has as many samples as CPU 0

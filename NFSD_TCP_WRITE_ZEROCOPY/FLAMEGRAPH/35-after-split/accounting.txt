@@ -1,0 +1,21 @@
+tardis2, 27 October, 23:2x, during run74.sh's run 2-A (192,177 WRITEs in 5.04 s).
+/proc/stat's jiffies for 5 s against perf stat's counted cycles on the same CPUs
+over the same 5 s (HZ=100, CONFIG_IRQ_TIME_ACCOUNTING not set, no nohz_full=;
+the cores run at 2.0 GHz and their cycle counter stops in WFI).
+
+cpu0  jiffies 505 of 504 (100%): user 0 sys 0 idle 186 iowait 0 irq 0 softirq 319
+cpu2  jiffies 505 of 504 (100%): user 0 sys 0 idle 260 iowait 0 irq 0 softirq 245
+cpu4  jiffies 510 of 504 (101%): user 0 sys 0 idle 307 iowait 0 irq 0 softirq 203
+cpu6  jiffies 506 of 504 (100%): user 0 sys 1 idle 268 iowait 0 irq 0 softirq 237
+CPU0 cycles 1.47G a second: busy 74% of 2.0 GHz
+CPU2 cycles 1.48G a second: busy 74% of 2.0 GHz
+CPU4 cycles 1.35G a second: busy 67% of 2.0 GHz
+CPU6 cycles 1.43G a second: busy 71% of 2.0 GHz
+
+The same 5 s under load (run73.sh's 3-A), /proc/softirqs and /proc/interrupts on CPU 0 2 4 6:
+NET_RX           407851    413224    418823    412902
+ring interrupt   529392    538694    547108    538192
+SCHED               504        42        40        34
+IPI function call   609        16        23         0
+and in r73-2-A the four rings received 24.8, 25.0, 24.4 and 25.4% of the bytes
+(place-a.txt), four connections each.

@@ -1,0 +1,110 @@
+--- xeu-esdk-v2.0.1.orig/xeu_drv.c
++++ xeu-esdk-v2.0.1/xeu_drv.c
+@@ -194,6 +194,81 @@
+ MODULE_PARM_DESC(rx_prefetch,
+ 		 "prefetch the next received frame's headers, skb_shared_info and struct page while a frame is processed (default N)");
+ 
++/*
++ * DIAGNOSTIC (FLAMEGRAPH round 35, not for keeping), per CPU, timed by
++ * the 1 GHz counter read after ISB.  Every other refill first drains the
++ * memory work still outstanding when it starts (DSB SY): slot 0 is that
++ * drain, slot 1 the refill's loop after it, slot 2 the loop of the other
++ * refills, run as the driver runs it.  The loop is timed from its start
++ * to before the doorbell, with no barrier inside; each slot also counts
++ * the buffers its loops posted.  /sys/module/xeu/parameters/refill_lat
++ * prints them; a write clears.
++ */
++struct xeu_lat_slot {
++	u64 n, sum, bufs, h[16];
++} __aligned(64);
++
++struct xeu_lat {
++	struct xeu_lat_slot s[3];
++	u64 calls;
++};
++static DEFINE_PER_CPU(struct xeu_lat, xeu_lat);
++
++static __always_inline u64 xeu_lat_t(void)
++{
++	isb();
++	return read_sysreg(cntvct_el0);
++}
++
++static __always_inline void xeu_lat_add(struct xeu_lat *l, int k, u64 ns,
++					unsigned int bufs)
++{
++	struct xeu_lat_slot *s = &l->s[k];
++
++	s->n++;
++	s->sum += ns;
++	s->bufs += bufs;
++	s->h[min_t(int, ilog2(ns | 1), 15)]++;
++}
++
++static int xeu_lat_get(char *buf, const struct kernel_param *kp)
++{
++	static const char * const kn[] = { "drain", "loop_drained", "loop" };
++	int cpu, k, b, len = 0;
++
++	for_each_possible_cpu(cpu) {
++		struct xeu_lat *l = per_cpu_ptr(&xeu_lat, cpu);
++
++		for (k = 0; k < 3; k++) {
++			struct xeu_lat_slot *s = &l->s[k];
++
++			if (!s->n)
++				continue;
++			len += sysfs_emit_at(buf, len, "cpu%d %s n %llu sum_ns %llu bufs %llu h",
++					     cpu, kn[k], s->n, s->sum, s->bufs);
++			for (b = 0; b < 16; b++)
++				len += sysfs_emit_at(buf, len, " %llu", s->h[b]);
++			len += sysfs_emit_at(buf, len, "\n");
++		}
++	}
++	return len;
++}
++
++static int xeu_lat_set(const char *val, const struct kernel_param *kp)
++{
++	int cpu;
++
++	for_each_possible_cpu(cpu)
++		memset(per_cpu_ptr(&xeu_lat, cpu), 0, sizeof(struct xeu_lat));
++	return 0;
++}
++
++static const struct kernel_param_ops xeu_lat_ops = {
++	.get = xeu_lat_get,
++	.set = xeu_lat_set,
++};
++module_param_cb(refill_lat, &xeu_lat_ops, NULL, 0644);
++
+ static bool rx_port_stats;
+ module_param(rx_port_stats, bool, 0644);
+ MODULE_PARM_DESC(rx_port_stats,
+@@ -693,6 +768,16 @@
+ 	dma_addr_t dma_addr;
+ 	u32 idx;
+ 	u16 i;
++	struct xeu_lat *l = raw_cpu_ptr(&xeu_lat);
++	bool drained = in_softirq() && !(l->calls++ & 1);
++	u64 t0;
++
++	if (drained) {
++		t0 = xeu_lat_t();
++		dsb(sy);
++		xeu_lat_add(l, 0, xeu_lat_t() - t0, 0);
++	}
++	t0 = xeu_lat_t();
+ 
+ 	for (i = 0; i < n; i++) {
+ 		/* Allocate a page, or a piece of one, from the page pool */
+@@ -756,6 +841,8 @@
+ 	}
+ 
+ finish_fill:
++	if (in_softirq())
++		xeu_lat_add(l, drained ? 1 : 2, xeu_lat_t() - t0, i);
+ 	if (likely(i))
+ 		xeu_ring_db(ring, ring->sr_prod_idx);
+ 	return i;
