@@ -118,17 +118,69 @@ module_param_cb(rx_region_read_pages, &rx_region_read_pages_ops,
 MODULE_PARM_DESC(rx_region_read_pages,
 		 "Pages of the fixed receive region split off for reads, set at boot (0: reads and writes share it; else at least one maximum READ)");
 
-/* One partition of the region: its own free list, lock and statistics. */
-struct page_pool_rx_region_part {
+/*
+ * Each CPU caches a few of a partition's free pages, so taking and
+ * returning pages rarely touches the shared free lists and their locks.  A
+ * cache's own lock is uncontended except when a taker short of pages drains
+ * every cache into the shards, so no free page is ever out of reach.  Lock
+ * order: a CPU's cache, then one shard at a time.
+ */
+#define RX_REGION_PCP_MAX	64
+#define RX_REGION_PCP_BATCH	32
+
+struct rx_region_pcp {
 	spinlock_t lock;
-	unsigned long first_pfn;
-	unsigned long nr;
+	unsigned int count;
+	struct page *pages[RX_REGION_PCP_MAX];
+};
+
+/*
+ * Behind the CPU caches a partition's free list is split into shards, each
+ * with its own lock, so bulk transfers (a 1 MiB READ's 257 pages) from many
+ * CPUs do not meet on one lock.  Each shard owns a contiguous pfn range and
+ * a page always goes back to its owner, which therefore has room unless the
+ * page is given back twice; a taker starts at its CPU's home shard and moves
+ * on while it is short.
+ */
+#define RX_REGION_SHARDS_MAX	16
+#define RX_REGION_SHARD_MIN	1024	/* pages: smaller partitions shard less */
+
+/*
+ * Every device queue's pool parks region pages in its ring and its alloc
+ * cache, so with many queues full-size rings and caches would hold most of
+ * the region.  A pool bound to the region keeps a ring of 64 entries,
+ * refills 16 pages at a time and caches at most twice that; recycling
+ * beyond these bounds returns pages to the region.
+ */
+#define RX_REGION_POOL_RING	64
+#define RX_REGION_POOL_REFILL	(PP_ALLOC_CACHE_REFILL < 16 ? \
+				 PP_ALLOC_CACHE_REFILL : 16)
+#define RX_REGION_POOL_CACHE	(2 * RX_REGION_POOL_REFILL)
+
+struct rx_region_shard {
+	spinlock_t lock;
 	unsigned long nfree;
-	unsigned long min_free;
-	unsigned long alloc_fail;
-	unsigned long escaped;
+	unsigned long cap;
+	unsigned long min_free;		/* low-water mark */
 	struct page **free;
 } ____cacheline_aligned_in_smp;
+
+/*
+ * One partition of the region: per-CPU caches, pfn-range shards and
+ * statistics.  A partition of no pages (the read partition of an unsplit
+ * region) has no shards and no caches.
+ */
+struct page_pool_rx_region_part {
+	unsigned long first_pfn;
+	unsigned long nr;
+	unsigned int nshards;
+	unsigned long shard_pages;	/* pfns per shard (the last may own fewer) */
+	unsigned long drained;		/* jiffies of the last drain for a refill */
+	atomic_long_t alloc_fail;
+	atomic_long_t escaped;
+	struct rx_region_pcp __percpu *pcp;
+	struct rx_region_shard shard[RX_REGION_SHARDS_MAX];
+};
 
 enum { RX_REGION_WRITE, RX_REGION_READ, RX_REGION_PARTS };
 
@@ -150,16 +202,56 @@ static DEFINE_MUTEX(rx_region_mutex);
  */
 static bool rx_region_reads_bound;
 
+/* Pages free in @p's CPU caches; lockless. */
+static unsigned long rx_region_cached(const struct page_pool_rx_region_part *p)
+{
+	unsigned long cached = 0;
+	int cpu;
+
+	if (!p->pcp)
+		return 0;
+	for_each_possible_cpu(cpu)
+		cached += READ_ONCE(per_cpu_ptr(p->pcp, cpu)->count);
+	return cached;
+}
+
+/* Pages free in @p's shards; lockless. */
+static unsigned long rx_region_shards_free(const struct page_pool_rx_region_part *p)
+{
+	unsigned long nfree = 0;
+	unsigned int i;
+
+	for (i = 0; i < p->nshards; i++)
+		nfree += READ_ONCE(p->shard[i].nfree);
+	return nfree;
+}
+
+/* The sum of @p's shards' low-water marks; lockless. */
+static unsigned long rx_region_min_free(const struct page_pool_rx_region_part *p)
+{
+	unsigned long min_free = 0;
+	unsigned int i;
+
+	for (i = 0; i < p->nshards; i++)
+		min_free += READ_ONCE(p->shard[i].min_free);
+	return min_free;
+}
+
+/*
+ * free counts the shards and the CPU caches; min_free sums the shards'
+ * low-water marks (pages a cache holds count as taken from its shard).
+ */
 static void rx_region_part_show(struct seq_file *m, const char *prefix,
 				struct page_pool_rx_region_part *p)
 {
-	unsigned long flags;
+	unsigned long cached = rx_region_cached(p);
 
-	spin_lock_irqsave(&p->lock, flags);
-	seq_printf(m, "%sfree %lu\n%smin_free %lu\n%salloc_fail %lu\n%sescaped %lu\n",
-		   prefix, p->nfree, prefix, p->min_free, prefix, p->alloc_fail,
-		   prefix, p->escaped);
-	spin_unlock_irqrestore(&p->lock, flags);
+	seq_printf(m, "%sfree %lu\n%smin_free %lu\n%salloc_fail %lu\n%sescaped %lu\n%scached %lu\n%sshards %u\n",
+		   prefix, rx_region_shards_free(p) + cached,
+		   prefix, rx_region_min_free(p),
+		   prefix, atomic_long_read(&p->alloc_fail),
+		   prefix, atomic_long_read(&p->escaped),
+		   prefix, cached, prefix, p->nshards);
 }
 
 /*
@@ -188,21 +280,30 @@ static int rx_region_open(struct inode *inode, struct file *file)
 	return single_open(file, rx_region_show, inode->i_private);
 }
 
-/* Any write restarts each partition's low-water mark at its free count. */
-static ssize_t rx_region_write(struct file *file, const char __user *buf,
-			       size_t len, loff_t *ppos)
+/* Restart each shard's low-water mark at its free count. */
+static void rx_region_reset_min_free(struct page_pool_rx_region *r)
 {
-	struct page_pool_rx_region *r = file_inode(file)->i_private;
 	unsigned long flags;
-	int i;
+	unsigned int i, j;
 
 	for (i = 0; i < RX_REGION_PARTS; i++) {
 		struct page_pool_rx_region_part *p = &r->part[i];
 
-		spin_lock_irqsave(&p->lock, flags);
-		p->min_free = p->nfree;
-		spin_unlock_irqrestore(&p->lock, flags);
+		for (j = 0; j < p->nshards; j++) {
+			struct rx_region_shard *sh = &p->shard[j];
+
+			spin_lock_irqsave(&sh->lock, flags);
+			WRITE_ONCE(sh->min_free, sh->nfree);
+			spin_unlock_irqrestore(&sh->lock, flags);
+		}
 	}
+}
+
+/* Any write restarts each partition's low-water marks at its free counts. */
+static ssize_t rx_region_write(struct file *file, const char __user *buf,
+			       size_t len, loff_t *ppos)
+{
+	rx_region_reset_min_free(file_inode(file)->i_private);
 	return len;
 }
 
@@ -229,16 +330,55 @@ static bool page_pool_rx_region_listed(const char *dev)
 	return false;
 }
 
+static struct lock_class_key rx_region_shard_keys[RX_REGION_SHARDS_MAX];
+
+/*
+ * Lay @p out over the @nr pages at @first_pfn: up to RX_REGION_SHARDS_MAX
+ * shards (at most one per CPU, each of at least RX_REGION_SHARD_MIN pages
+ * unless there is only one), each owning a slice of @free, and @pcp (NULL,
+ * and unused, when @nr is 0) as the CPU caches, all empty.
+ */
 static void rx_region_part_init(struct page_pool_rx_region_part *p,
 				unsigned long first_pfn, unsigned long nr,
-				struct page **free)
+				struct page **free,
+				struct rx_region_pcp __percpu *pcp)
 {
-	unsigned long i;
+	unsigned long i, cap;
+	int cpu;
 
-	spin_lock_init(&p->lock);
 	p->first_pfn = first_pfn;
 	p->nr = nr;
-	p->free = free;
+	atomic_long_set(&p->alloc_fail, 0);
+	atomic_long_set(&p->escaped, 0);
+	p->drained = jiffies - 1;
+	if (!nr) {
+		p->nshards = 0;
+		p->pcp = NULL;
+		return;
+	}
+	p->pcp = pcp;
+	for_each_possible_cpu(cpu) {
+		struct rx_region_pcp *c = per_cpu_ptr(pcp, cpu);
+
+		spin_lock_init(&c->lock);
+		c->count = 0;
+	}
+	p->nshards = clamp_t(unsigned long, nr / RX_REGION_SHARD_MIN, 1,
+			     min_t(unsigned int, RX_REGION_SHARDS_MAX,
+				   nr_cpu_ids));
+	cap = DIV_ROUND_UP(nr, p->nshards);
+	p->shard_pages = cap;
+	for (i = 0; i < p->nshards; i++) {
+		struct rx_region_shard *sh = &p->shard[i];
+
+		spin_lock_init(&sh->lock);
+		/* rx_region_pop_exact() may hold several, in index order */
+		lockdep_set_class(&sh->lock, &rx_region_shard_keys[i]);
+		sh->free = free + i * cap;
+		sh->cap = min(cap, nr - min(nr, i * cap));
+		sh->nfree = sh->cap;	/* filled below, in pfn order */
+		sh->min_free = sh->cap;
+	}
 	for (i = 0; i < nr; i++) {
 		struct page *page = pfn_to_page(first_pfn + i);
 
@@ -251,8 +391,6 @@ static void rx_region_part_init(struct page_pool_rx_region_part *p,
 		page->pp_magic = 0;
 		free[i] = page;
 	}
-	p->nfree = nr;
-	p->min_free = nr;
 }
 
 /* The read split requested for a region of @nr pages; 0 if it leaves none. */
@@ -281,20 +419,23 @@ static bool rx_region_failed;
 
 /*
  * Lay the region @r out over the @nr pages at @base_pfn, @nr_read of them
- * split off for reads, and publish it; under rx_region_mutex.
+ * split off for reads, with @pcp[RX_REGION_WRITE] and @pcp[RX_REGION_READ]
+ * as the partitions' CPU caches (a read partition of no pages does not use
+ * its own, which may be NULL), and publish it; under rx_region_mutex.
  */
 static void rx_region_publish(struct page_pool_rx_region *r,
-			      struct page **free, unsigned long base_pfn,
-			      unsigned long nr, unsigned long nr_read,
-			      const char *who)
+			      struct page **free,
+			      struct rx_region_pcp __percpu *pcp[RX_REGION_PARTS],
+			      unsigned long base_pfn, unsigned long nr,
+			      unsigned long nr_read, const char *who)
 {
 	lockdep_assert_held(&rx_region_mutex);
 	r->base_pfn = base_pfn;
 	r->nr = nr;
 	rx_region_part_init(&r->part[RX_REGION_WRITE], base_pfn, nr - nr_read,
-			    free);
+			    free, pcp[RX_REGION_WRITE]);
 	rx_region_part_init(&r->part[RX_REGION_READ], base_pfn + nr - nr_read,
-			    nr_read, free + nr - nr_read);
+			    nr_read, free + nr - nr_read, pcp[RX_REGION_READ]);
 	strscpy(r->dev, rx_region_dev, RX_REGION_DEV_LEN);
 	strim(r->dev);
 	/* On before the region is seen; off once it is given back. */
@@ -307,10 +448,31 @@ static void rx_region_publish(struct page_pool_rx_region *r,
 		who, nr, nr_read, (u64)base_pfn << PAGE_SHIFT);
 }
 
+/*
+ * The partitions' CPU caches: always the write partition's, the read
+ * partition's only when @nr_read splits one off.  False (none left
+ * allocated) on failure.
+ */
+static bool rx_region_pcp_alloc(struct rx_region_pcp __percpu *pcp[RX_REGION_PARTS],
+				unsigned long nr_read)
+{
+	pcp[RX_REGION_WRITE] = alloc_percpu(struct rx_region_pcp);
+	pcp[RX_REGION_READ] = nr_read ? alloc_percpu(struct rx_region_pcp) :
+					NULL;
+	if (pcp[RX_REGION_WRITE] && (!nr_read || pcp[RX_REGION_READ]))
+		return true;
+	free_percpu(pcp[RX_REGION_WRITE]);
+	free_percpu(pcp[RX_REGION_READ]);
+	pcp[RX_REGION_WRITE] = NULL;
+	pcp[RX_REGION_READ] = NULL;
+	return false;
+}
+
 /* Allocate the region of @nr pages on @nid; under rx_region_mutex. */
 static struct page_pool_rx_region *rx_region_create(unsigned long nr, int nid,
 						    const char *who)
 {
+	struct rx_region_pcp __percpu *pcp[RX_REGION_PARTS] = {};
 	unsigned long nr_read = rx_region_read_split(nr);
 	struct page_pool_rx_region *r;
 	struct page *base = NULL;
@@ -324,18 +486,21 @@ static struct page_pool_rx_region *rx_region_create(unsigned long nr, int nid,
 	if (!r)
 		goto fail;
 	free = kvmalloc_array(nr, sizeof(*free), GFP_KERNEL);
+	if (free && rx_region_pcp_alloc(pcp, nr_read)) {
 #ifdef CONFIG_CONTIG_ALLOC
-	if (free)
 		base = alloc_contig_pages(nr, GFP_KERNEL, nid, NULL);
 #endif
+	}
 	if (!base) {
 		pr_warn("page_pool: no %lu-page fixed rx region for %s\n",
 			nr, who);
+		free_percpu(pcp[RX_REGION_WRITE]);
+		free_percpu(pcp[RX_REGION_READ]);
 		kvfree(free);
 		kfree(r);
 		goto fail;
 	}
-	rx_region_publish(r, free, page_to_pfn(base), nr, nr_read, who);
+	rx_region_publish(r, free, pcp, page_to_pfn(base), nr, nr_read, who);
 	return r;
 fail:
 	/* Pairs with READ_ONCE() in page_pool_rx_region_bind_reads(). */
@@ -353,30 +518,48 @@ fail:
 static void page_pool_rx_region_reap(void)
 {
 	struct page_pool_rx_region *r = rx_region;
-	unsigned long i, held = 0;
-	int k;
+	unsigned long i, held = 0, escaped = 0;
+	unsigned int s;
+	int k, cpu;
 
 	lockdep_assert_held(&rx_region_mutex);
 	if (!r || r->pools || rx_region_reads_bound)
 		return;
 	if (rx_region_dev[0] && READ_ONCE(rx_region_pages) == r->nr)
 		return;
-	for (k = 0; k < RX_REGION_PARTS; k++)
-		held += r->part[k].nfree + r->part[k].escaped;
+	for (k = 0; k < RX_REGION_PARTS; k++) {
+		escaped += atomic_long_read(&r->part[k].escaped);
+		held += rx_region_shards_free(&r->part[k]) +
+			rx_region_cached(&r->part[k]);
+	}
+	held += escaped;
 	/* No pool, so no page can be out: keep the memory if that is wrong. */
 	if (WARN_ON_ONCE(held != r->nr))
 		return;
 	WRITE_ONCE(rx_region, NULL);
 	debugfs_remove(r->debugfs);
 	synchronize_rcu();
-	for (k = 0; k < RX_REGION_PARTS; k++)
-		for (i = 0; i < r->part[k].nfree; i++)
-			__free_page(r->part[k].free[i]);
+	/* Free pages are in the shards and in the CPU caches. */
+	for (k = 0; k < RX_REGION_PARTS; k++) {
+		struct page_pool_rx_region_part *p = &r->part[k];
+
+		for (s = 0; s < p->nshards; s++)
+			for (i = 0; i < p->shard[s].nfree; i++)
+				__free_page(p->shard[s].free[i]);
+		if (!p->pcp)
+			continue;
+		for_each_possible_cpu(cpu) {
+			struct rx_region_pcp *c = per_cpu_ptr(p->pcp, cpu);
+
+			for (i = 0; i < c->count; i++)
+				__free_page(c->pages[i]);
+		}
+	}
 	pr_info("page_pool: fixed rx region for %s freed: %lu pages at 0x%llx, %lu escaped\n",
-		r->dev, r->nr, (u64)r->base_pfn << PAGE_SHIFT,
-		r->part[RX_REGION_WRITE].escaped +
-		r->part[RX_REGION_READ].escaped);
-	kvfree(r->part[RX_REGION_WRITE].free);
+		r->dev, r->nr, (u64)r->base_pfn << PAGE_SHIFT, escaped);
+	free_percpu(r->part[RX_REGION_WRITE].pcp);
+	free_percpu(r->part[RX_REGION_READ].pcp);
+	kvfree(r->part[RX_REGION_WRITE].shard[0].free);
 	kfree(r);
 	static_branch_dec(&page_pool_rx_region_key);
 }
@@ -425,6 +608,39 @@ page_pool_rx_region_get(const struct page_pool *pool)
 		r->pools++;
 	mutex_unlock(&rx_region_mutex);
 	return r;
+}
+
+/*
+ * Bind @pool to region @r (if any).  A bound pool recycles remotely released
+ * pages through a stack in place of its ring: rx_region_stack entries when
+ * set, else at most RX_REGION_POOL_RING.  Without the stack it keeps the
+ * ring, shortened to RX_REGION_POOL_RING.
+ */
+static void page_pool_rx_region_bind(struct page_pool *pool,
+				     struct page_pool_rx_region *r,
+				     unsigned int ring_qsize)
+{
+	/*
+	 * Without the stack the pool recycles through the ring.  A page that
+	 * finds the stack full goes back to the region, to be mapped again
+	 * when the pool next takes it, so rx_region_stack can make the stack
+	 * larger than the pool's ring.
+	 */
+	unsigned int size = READ_ONCE(rx_region_stack) ?:
+			    min_t(unsigned int, ring_qsize, RX_REGION_POOL_RING);
+
+	pool->rx_region = r;
+	if (!r)
+		return;
+	pool->rx_stack = kvcalloc(size, sizeof(*pool->rx_stack), GFP_KERNEL);
+	if (pool->rx_stack) {
+		pool->rx_stack_size = size;
+		return;
+	}
+	if (pool->ring.size > RX_REGION_POOL_RING &&
+	    ptr_ring_resize(&pool->ring, RX_REGION_POOL_RING, GFP_KERNEL,
+			    NULL))
+		pr_warn_once("page_pool: rx region pool keeps its full ring\n");
 }
 
 /**
@@ -518,25 +734,326 @@ unsigned long page_pool_rx_region_read_pages(void)
 }
 EXPORT_SYMBOL_GPL(page_pool_rx_region_read_pages);
 
+/* The shard this CPU takes from first. */
+static unsigned int rx_region_home(const struct page_pool_rx_region_part *p)
+{
+	return (raw_smp_processor_id() * p->nshards) / nr_cpu_ids;
+}
 
-/* Return a partition's page; false when it is not ours or another holder has it. */
+/*
+ * Push @n pages of @pages, each onto the shard that owns its pfn: in array
+ * order, so the last ends on top, or with @reverse last to first (undoing a
+ * pop).  Pages from one shard in a row share one lock hold.  A page whose
+ * owner is already full was given back twice: it warns and is counted
+ * escaped, and is neither stored nor put (P1's double-give rule).
+ */
+static void rx_region_push(struct page_pool_rx_region_part *p,
+			   struct page **pages, unsigned int n, bool reverse)
+{
+	struct rx_region_shard *held = NULL;
+	unsigned long flags = 0;
+	unsigned int k;
+
+	for (k = 0; k < n; k++) {
+		struct page *page = pages[reverse ? n - 1 - k : k];
+		struct rx_region_shard *sh =
+			&p->shard[(page_to_pfn(page) - p->first_pfn) /
+				  p->shard_pages];
+
+		if (sh != held) {
+			if (held)
+				spin_unlock_irqrestore(&held->lock, flags);
+			spin_lock_irqsave(&sh->lock, flags);
+			held = sh;
+		}
+		if (WARN_ON_ONCE(sh->nfree >= sh->cap)) {
+			atomic_long_inc(&p->escaped);
+			continue;
+		}
+		sh->free[sh->nfree] = page;
+		WRITE_ONCE(sh->nfree, sh->nfree + 1);
+	}
+	if (held)
+		spin_unlock_irqrestore(&held->lock, flags);
+}
+
+/* This CPU's home shard is down to an eighth of its pages. */
+static bool rx_region_home_low(const struct page_pool_rx_region_part *p)
+{
+	const struct rx_region_shard *sh = &p->shard[rx_region_home(p)];
+
+	return READ_ONCE(sh->nfree) < sh->cap / 8;
+}
+
+/* Plenty free in the shards: worth refilling a CPU cache from them. */
+static bool rx_region_plenty(const struct page_pool_rx_region_part *p)
+{
+	return rx_region_shards_free(p) > p->nr / 8;
+}
+
+/*
+ * Pop pages into @dst[@at..@n), home shard first, then round robin; return
+ * the new @at.  Each shard's low-water mark follows its pops, except that an
+ * all-or-nothing take (@exact) marks the shards it empties only once it has
+ * all it wants, so a take that fails and is undone leaves no false low.
+ */
+static unsigned int rx_region_pop(struct page_pool_rx_region_part *p,
+				  struct page **dst, unsigned int at,
+				  unsigned int n, bool exact)
+{
+	unsigned int s = rx_region_home(p), tries;
+	unsigned long flags, emptied = 0;
+
+	for (tries = 0; at < n && tries < p->nshards; tries++) {
+		struct rx_region_shard *sh = &p->shard[s];
+
+		if (READ_ONCE(sh->nfree)) {
+			unsigned long nfree;
+
+			spin_lock_irqsave(&sh->lock, flags);
+			nfree = sh->nfree;
+			while (at < n && nfree)
+				dst[at++] = sh->free[--nfree];
+			WRITE_ONCE(sh->nfree, nfree);
+			if (exact && at < n)
+				__set_bit(s, &emptied);
+			else if (nfree < sh->min_free)
+				WRITE_ONCE(sh->min_free, nfree);
+			spin_unlock_irqrestore(&sh->lock, flags);
+		}
+		s = s + 1 == p->nshards ? 0 : s + 1;
+	}
+	if (at == n)
+		for_each_set_bit(s, &emptied, RX_REGION_SHARDS_MAX)
+			WRITE_ONCE(p->shard[s].min_free, 0);
+	return at;
+}
+
+/*
+ * Return a partition's page to this CPU's cache, spilling a batch to the
+ * shards when the cache is full, or everything when the home shard is low;
+ * false when it is not ours or another holder has it (it then escapes the
+ * region, counted here, and the caller puts it).
+ */
 static bool page_pool_rx_region_put(struct page_pool_rx_region_part *p,
 				    struct page *page)
 {
 	unsigned long pfn = page_to_pfn(page), flags;
-	bool kept = false;
+	struct rx_region_pcp *c;
 
 	if (pfn - p->first_pfn >= p->nr)
 		return false;
-	spin_lock_irqsave(&p->lock, flags);
-	if (page_ref_count(page) == 1) {
-		p->free[p->nfree++] = page;
-		kept = true;
-	} else {
-		WRITE_ONCE(p->escaped, p->escaped + 1);
+	if (page_ref_count(page) != 1) {
+		atomic_long_inc(&p->escaped);
+		return false;
 	}
-	spin_unlock_irqrestore(&p->lock, flags);
-	return kept;
+	migrate_disable();
+	c = this_cpu_ptr(p->pcp);
+	spin_lock_irqsave(&c->lock, flags);
+	if (c->count == RX_REGION_PCP_MAX) {
+		unsigned int keep = rx_region_home_low(p) ? 0 :
+				    RX_REGION_PCP_MAX - RX_REGION_PCP_BATCH;
+
+		rx_region_push(p, c->pages + keep, c->count - keep, false);
+		WRITE_ONCE(c->count, keep);
+	}
+	c->pages[c->count] = page;
+	WRITE_ONCE(c->count, c->count + 1);
+	spin_unlock_irqrestore(&c->lock, flags);
+	migrate_enable();
+	return true;
+}
+
+/*
+ * Move every CPU's cached pages to their shards: a taker is short.  A cache
+ * found empty is skipped unlocked; a page put there meanwhile is a page
+ * freed after the shortage began.
+ */
+static void rx_region_drain(struct page_pool_rx_region_part *p)
+{
+	unsigned long flags;
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct rx_region_pcp *c = per_cpu_ptr(p->pcp, cpu);
+
+		if (!READ_ONCE(c->count))
+			continue;
+		spin_lock_irqsave(&c->lock, flags);
+		rx_region_push(p, c->pages, c->count, false);
+		WRITE_ONCE(c->count, 0);
+		spin_unlock_irqrestore(&c->lock, flags);
+	}
+}
+
+/* Pages @p can still lend: its size less its escaped pages. */
+static unsigned long rx_region_part_capacity(struct page_pool_rx_region_part *p)
+{
+	unsigned long escaped = atomic_long_read(&p->escaped);
+
+	return escaped < p->nr ? p->nr - escaped : 0;
+}
+
+/* Pop up to @n - @at of @sh's free pages into @dst[@at..), @sh->lock held. */
+static unsigned int rx_region_pop_locked(struct rx_region_shard *sh,
+					 struct page **dst, unsigned int at,
+					 unsigned int n)
+{
+	unsigned long nfree = sh->nfree;
+
+	while (at < n && nfree)
+		dst[at++] = sh->free[--nfree];
+	WRITE_ONCE(sh->nfree, nfree);
+	if (nfree < sh->min_free)
+		WRITE_ONCE(sh->min_free, nfree);
+	return at;
+}
+
+/*
+ * All @n pages, more than a batch, straight from the shards into @dst, or
+ * none with @dst untouched: from this CPU's home shard alone when it holds
+ * @n, else from the shards in index order once those locked hold @n
+ * between them.  Each shard lock has its own lockdep class, so holding
+ * several, always in index order, is not reported as recursion.
+ */
+static bool rx_region_pop_exact(struct page_pool_rx_region_part *p,
+				struct page **dst, unsigned int n)
+{
+	struct rx_region_shard *sh = &p->shard[rx_region_home(p)];
+	unsigned int locked, k, at = 0;
+	unsigned long flags, have = 0;
+
+	if (READ_ONCE(sh->nfree) >= n) {
+		spin_lock_irqsave(&sh->lock, flags);
+		if (sh->nfree >= n) {
+			rx_region_pop_locked(sh, dst, 0, n);
+			spin_unlock_irqrestore(&sh->lock, flags);
+			return true;
+		}
+		spin_unlock_irqrestore(&sh->lock, flags);
+	}
+	local_irq_save(flags);
+	for (locked = 0; locked < p->nshards && have < n; locked++) {
+		spin_lock(&p->shard[locked].lock);
+		have += p->shard[locked].nfree;
+	}
+	if (have >= n)
+		for (k = 0; k < locked; k++)
+			at = rx_region_pop_locked(&p->shard[k], dst, at, n);
+	for (k = locked; k-- > 0;)
+		spin_unlock(&p->shard[k].lock);
+	local_irq_restore(flags);
+	return have >= n;
+}
+
+/*
+ * One attempt at @n pages: a batch or less from this CPU's cache, then the
+ * shards (refilling the cache by a batch while the shards have plenty),
+ * more than a batch from the shards alone.  @exact takes all or none and
+ * writes @dst only with what it takes: a batch or less is staged on the
+ * stack, more is popped only when the shards hold it.
+ */
+static unsigned int rx_region_get_once(struct page_pool_rx_region_part *p,
+				       struct page **dst, unsigned int n,
+				       bool exact)
+{
+	struct page *stage[RX_REGION_PCP_BATCH], **out = dst;
+	struct rx_region_pcp *c;
+	unsigned long flags;
+	unsigned int i = 0;
+
+	if (n > RX_REGION_PCP_BATCH) {
+		if (exact)
+			return rx_region_pop_exact(p, dst, n) ? n : 0;
+		i = rx_region_pop(p, dst, 0, n, false);
+	} else {
+		if (exact)
+			out = stage;
+		migrate_disable();
+		c = this_cpu_ptr(p->pcp);
+		spin_lock_irqsave(&c->lock, flags);
+		while (i < n && c->count) {
+			out[i++] = c->pages[c->count - 1];
+			WRITE_ONCE(c->count, c->count - 1);
+		}
+		if (i < n) {
+			i = rx_region_pop(p, out, i, n, exact);
+			/*
+			 * Not when pages run low: cached pages are free yet
+			 * out of other takers' reach until a drain.
+			 */
+			if (i == n && rx_region_plenty(p))
+				WRITE_ONCE(c->count,
+					   rx_region_pop(p, c->pages, 0,
+							 RX_REGION_PCP_BATCH,
+							 false));
+		}
+		spin_unlock_irqrestore(&c->lock, flags);
+		migrate_enable();
+		if (exact && i < n) {
+			rx_region_push(p, stage, i, true);
+			return 0;
+		}
+		if (exact)
+			memcpy(dst, stage, n * sizeof(*dst));
+	}
+	return i;
+}
+
+/*
+ * Take up to @n pages into @dst: @exact, all or none; else as many as are
+ * free.  A taker that comes up short drains every CPU's cache into the
+ * shards and tries once more, so no free page is out of its reach; a
+ * device refill (not @exact) that finds nothing drains at most once a
+ * jiffy, or at exhaustion every poll would lock every CPU's cache.
+ */
+static unsigned int rx_region_get(struct page_pool_rx_region_part *p,
+				  struct page **dst, unsigned int n,
+				  bool exact)
+{
+	unsigned long now;
+	unsigned int got;
+
+	if (exact && n > rx_region_part_capacity(p))
+		return 0;
+	got = rx_region_get_once(p, dst, n, exact);
+	if (got == n || (got && !exact))
+		return got;
+	if (!exact) {
+		now = jiffies;
+		if (READ_ONCE(p->drained) == now)
+			return got;
+		WRITE_ONCE(p->drained, now);
+	}
+	rx_region_drain(p);
+	return rx_region_get_once(p, dst, n, exact);
+}
+
+/*
+ * Return @n pages of @p: fewer than a batch through this CPU's cache, a
+ * batch or more straight to their shards.  A page another holder still
+ * references escapes: counted and put.  @pages is not modified.
+ */
+static void rx_region_give(struct page_pool_rx_region_part *p,
+			   struct page **pages, unsigned int n)
+{
+	unsigned int i, start = 0;
+
+	if (n < RX_REGION_PCP_BATCH) {
+		for (i = 0; i < n; i++)
+			if (!page_pool_rx_region_put(p, pages[i]))
+				put_page(pages[i]);
+		return;
+	}
+	for (i = 0; i < n; i++) {
+		if (likely(page_ref_count(pages[i]) == 1))
+			continue;
+		rx_region_push(p, pages + start, i - start, false);
+		atomic_long_inc(&p->escaped);
+		put_page(pages[i]);
+		start = i + 1;
+	}
+	rx_region_push(p, pages + start, n - start, false);
 }
 
 /* The partition a consumer outside the pools draws on. */
@@ -554,9 +1071,15 @@ rx_region_part(struct page_pool_rx_region *r, bool read)
  * @pages: filled with the pages taken
  * @n: pages wanted
  *
- * All or nothing, most recently freed first.  Each page has refcount 1 and
- * pp_magic 0.  Too few free pages is not an allocation failure here, so
- * alloc_fail is not counted.  What a failed take means depends on @n:
+ * All or nothing: on failure @pages is untouched, so a caller may take
+ * into an array that still describes something else.  Up to
+ * RX_REGION_PCP_BATCH (32) pages come from this CPU's cache, most recently
+ * freed first, then from the shards; more come from the shards alone: this
+ * CPU's home shard when it holds them all, else the shards in index order.
+ * A take short of pages drains every CPU's cache and tries once more
+ * before it fails.
+ * Each page has refcount 1 and pp_magic 0.  Too few free pages is not an
+ * allocation failure here, so alloc_fail is not counted.  What a failed take means depends on @n:
  * within page_pool_rx_region_capacity(), the pages are lent out and the
  * caller may wait for earlier takes to be given back; beyond it (a request
  * larger than the partition, or one that escaped pages have put out of
@@ -573,24 +1096,10 @@ unsigned int page_pool_rx_region_take_pages(bool read, struct page **pages,
 					    unsigned int n)
 {
 	struct page_pool_rx_region *r = rx_region_published();
-	struct page_pool_rx_region_part *p;
-	unsigned long flags;
-	unsigned int i;
 
 	if (!r || !n)
 		return 0;
-	p = rx_region_part(r, read);
-	spin_lock_irqsave(&p->lock, flags);
-	if (p->nfree < n) {
-		spin_unlock_irqrestore(&p->lock, flags);
-		return 0;
-	}
-	for (i = 0; i < n; i++)
-		pages[i] = p->free[--p->nfree];
-	if (p->nfree < p->min_free)
-		p->min_free = p->nfree;
-	spin_unlock_irqrestore(&p->lock, flags);
-	return n;
+	return rx_region_get(rx_region_part(r, read), pages, n, true);
 }
 EXPORT_SYMBOL_GPL(page_pool_rx_region_take_pages);
 
@@ -600,7 +1109,9 @@ EXPORT_SYMBOL_GPL(page_pool_rx_region_take_pages);
  * @n: how many
  *
  * Each page goes back to the partition its address lies in, whichever
- * partition it was taken from.  Give a page back only once every other
+ * partition it was taken from, and there to the shard that owns it: a run
+ * of RX_REGION_PCP_BATCH (32) or more pages of one partition directly, a
+ * shorter run through this CPU's cache.  Give a page back only once every other
  * reference is gone: a page sent with MSG_SPLICE_PAGES stays referenced by
  * its skbs until the data is acknowledged, so a sender gives it back on TX
  * completion, not when the send call returns.  A page another holder still
@@ -610,48 +1121,40 @@ EXPORT_SYMBOL_GPL(page_pool_rx_region_take_pages);
  * is one page smaller from then on, page_pool_rx_region_capacity() says so,
  * and a take beyond it fails for good, so the caller serves that request
  * from ordinary pages (see page_pool_rx_region_take_pages()).  A page given
- * back twice, found with the partition already full, warns and is counted
- * escaped without being put again.  A page from outside the region warns
+ * back twice is found when it reaches its owner shard already full (at once
+ * in a bulk run, else when its CPU cache spills or is drained): it warns and
+ * is counted escaped without being put again.  A page from outside the region warns
  * and is put.  Process or BH context.
  */
 void page_pool_rx_region_give_pages(struct page **pages, unsigned int n)
 {
 	struct page_pool_rx_region *r = rx_region_published();
 	struct page_pool_rx_region_part *p = NULL, *q;
-	unsigned long flags = 0;
-	unsigned int i;
+	unsigned int i, start = 0;
 
+	/* Each run of pages from one partition goes back in one call. */
 	for (i = 0; i < n; i++) {
-		struct page *page = pages[i];
 		unsigned long off;
 
-		off = r ? page_to_pfn(page) - r->base_pfn : ULONG_MAX;
+		off = r ? page_to_pfn(pages[i]) - r->base_pfn : ULONG_MAX;
 		if (WARN_ON_ONCE(!r || off >= r->nr)) {
-			put_page(page);
+			if (p)
+				rx_region_give(p, pages + start, i - start);
+			p = NULL;
+			put_page(pages[i]);
 			continue;
 		}
 		q = &r->part[off < r->part[RX_REGION_WRITE].nr ?
 			     RX_REGION_WRITE : RX_REGION_READ];
 		if (q != p) {
 			if (p)
-				spin_unlock_irqrestore(&p->lock, flags);
+				rx_region_give(p, pages + start, i - start);
 			p = q;
-			spin_lock_irqsave(&p->lock, flags);
+			start = i;
 		}
-		if (likely(page_ref_count(page) == 1)) {
-			/* A double give: the page is already free here. */
-			if (WARN_ON_ONCE(p->nfree >= p->nr)) {
-				WRITE_ONCE(p->escaped, p->escaped + 1);
-				continue;
-			}
-			p->free[p->nfree++] = page;
-			continue;
-		}
-		WRITE_ONCE(p->escaped, p->escaped + 1);
-		put_page(page);
 	}
 	if (p)
-		spin_unlock_irqrestore(&p->lock, flags);
+		rx_region_give(p, pages + start, n - start);
 }
 EXPORT_SYMBOL_GPL(page_pool_rx_region_give_pages);
 
@@ -692,14 +1195,10 @@ EXPORT_SYMBOL_GPL(page_pool_rx_region_span);
 unsigned long page_pool_rx_region_capacity(bool read)
 {
 	struct page_pool_rx_region *r = rx_region_published();
-	struct page_pool_rx_region_part *p;
-	unsigned long escaped;
 
 	if (!r)
 		return 0;
-	p = rx_region_part(r, read);
-	escaped = READ_ONCE(p->escaped);
-	return escaped < p->nr ? p->nr - escaped : 0;
+	return rx_region_part_capacity(rx_region_part(r, read));
 }
 EXPORT_SYMBOL_GPL(page_pool_rx_region_capacity);
 
@@ -746,16 +1245,21 @@ int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
 {
 	struct page_pool_rx_region *r = kzalloc(sizeof(*r), GFP_KERNEL);
 	struct page **free = kvmalloc_array(nr, sizeof(*free), GFP_KERNEL);
+	struct rx_region_pcp __percpu *pcp[RX_REGION_PARTS] = {};
 	int ret = !r || !free ? -ENOMEM : nr_read < nr ? 0 : -EINVAL;
 
+	if (!ret && !rx_region_pcp_alloc(pcp, nr_read))
+		ret = -ENOMEM;
 	mutex_lock(&rx_region_mutex);
-	if (rx_region)
+	if (!ret && rx_region)
 		ret = -EBUSY;
 	if (!ret)
-		rx_region_publish(r, free, page_to_pfn(base), nr, nr_read,
+		rx_region_publish(r, free, pcp, page_to_pfn(base), nr, nr_read,
 				  "kunit");
 	mutex_unlock(&rx_region_mutex);
 	if (ret) {
+		free_percpu(pcp[RX_REGION_WRITE]);
+		free_percpu(pcp[RX_REGION_READ]);
 		kvfree(free);
 		kfree(r);
 	}
@@ -784,18 +1288,22 @@ void page_pool_rx_region_kunit_remove(bool contig)
 	if (contig)
 		free_contig_range(r->base_pfn, r->nr);
 #endif
-	kvfree(r->part[RX_REGION_WRITE].free);
+	free_percpu(r->part[RX_REGION_WRITE].pcp);
+	free_percpu(r->part[RX_REGION_READ].pcp);
+	kvfree(r->part[RX_REGION_WRITE].shard[0].free);
 	kfree(r);
 	static_branch_dec(&page_pool_rx_region_key);
 }
 EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_remove);
 
-/* A partition's free, min_free, alloc_fail and escaped counts. */
+/*
+ * A partition's free (shards and caches), min_free (the sum of the shards'
+ * low-water marks), alloc_fail and escaped counts, as debugfs shows them.
+ */
 void page_pool_rx_region_kunit_part(bool read, unsigned long out[4])
 {
 	struct page_pool_rx_region *r;
 	struct page_pool_rx_region_part *p;
-	unsigned long flags;
 
 	memset(out, 0, 4 * sizeof(*out));
 	rcu_read_lock();
@@ -805,15 +1313,16 @@ void page_pool_rx_region_kunit_part(bool read, unsigned long out[4])
 		return;
 	}
 	p = &r->part[read ? RX_REGION_READ : RX_REGION_WRITE];
-	spin_lock_irqsave(&p->lock, flags);
-	out[0] = p->nfree;
-	out[1] = p->min_free;
-	out[2] = p->alloc_fail;
-	out[3] = p->escaped;
-	spin_unlock_irqrestore(&p->lock, flags);
+	out[0] = rx_region_shards_free(p) + rx_region_cached(p);
+	out[1] = rx_region_min_free(p);
+	out[2] = atomic_long_read(&p->alloc_fail);
+	out[3] = atomic_long_read(&p->escaped);
 	rcu_read_unlock();
 }
 EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_part);
+
+static bool page_pool_recycle_in_cache(netmem_ref netmem,
+				       struct page_pool *pool);
 #endif
 
 
@@ -1081,21 +1590,8 @@ static int page_pool_init(struct page_pool *pool,
 		err = -EINVAL;
 		goto free_ptr_ring;
 	} else {
-		unsigned int stack = READ_ONCE(rx_region_stack) ?: ring_qsize;
-
-		pool->rx_region = page_pool_rx_region_get(pool);
-		/*
-		 * Without the stack the pool recycles through the ring.  A
-		 * page that finds the stack full goes back to the region, to
-		 * be mapped again when the pool next takes it, so the stack
-		 * can be made larger than the pool's ring.
-		 */
-		if (pool->rx_region)
-			pool->rx_stack = kvcalloc(stack,
-						  sizeof(*pool->rx_stack),
-						  GFP_KERNEL);
-		if (pool->rx_stack)
-			pool->rx_stack_size = stack;
+		page_pool_rx_region_bind(pool, page_pool_rx_region_get(pool),
+					 ring_qsize);
 	}
 
 	return 0;
@@ -1213,8 +1709,10 @@ static noinline netmem_ref page_pool_rx_stack_refill(struct page_pool *pool)
 	}
 
 	in_softirq = page_pool_producer_lock(pool);
+	/* Only region-bound pools have a stack: refill by their bound. */
 	n = min_t(unsigned int, pool->rx_stack_n,
-		  PP_ALLOC_CACHE_REFILL - pool->alloc.count);
+		  pool->alloc.count < RX_REGION_POOL_REFILL ?
+		  RX_REGION_POOL_REFILL - pool->alloc.count : 0);
 	/* In stack order, so the alloc cache hands out the newest first. */
 	memcpy(&pool->alloc.cache[pool->alloc.count],
 	       &pool->rx_stack[pool->rx_stack_n - n],
@@ -1470,23 +1968,16 @@ static noinline netmem_ref page_pool_rx_region_alloc(struct page_pool *pool,
 	/* Every listed device's pools draw on the write partition. */
 	struct page_pool_rx_region_part *r =
 		&pool->rx_region->part[RX_REGION_WRITE];
-	struct page *pages[PP_ALLOC_CACHE_REFILL];
-	unsigned long flags;
+	struct page *pages[RX_REGION_POOL_REFILL];
 	netmem_ref netmem;
 	int i, n;
 
 	if (unlikely(pool->alloc.count > 0))
 		return pool->alloc.cache[--pool->alloc.count];
 
-	spin_lock_irqsave(&r->lock, flags);
-	n = min_t(unsigned long, r->nfree, PP_ALLOC_CACHE_REFILL);
-	for (i = 0; i < n; i++)
-		pages[i] = r->free[--r->nfree];
-	if (r->nfree < r->min_free)
-		r->min_free = r->nfree;
+	n = rx_region_get(r, pages, RX_REGION_POOL_REFILL, false);
 	if (!n)
-		r->alloc_fail++;
-	spin_unlock_irqrestore(&r->lock, flags);
+		atomic_long_inc(&r->alloc_fail);
 
 	for (i = 0; i < n; i++) {
 		netmem = page_to_netmem(pages[i]);
@@ -1724,7 +2215,9 @@ static bool page_pool_recycle_in_ring(struct page_pool *pool, netmem_ref netmem)
 static bool page_pool_recycle_in_cache(netmem_ref netmem,
 				       struct page_pool *pool)
 {
-	if (unlikely(pool->alloc.count == PP_ALLOC_CACHE_SIZE)) {
+	if (unlikely(pool->alloc.count == PP_ALLOC_CACHE_SIZE ||
+		     (pool->rx_region &&
+		      pool->alloc.count >= RX_REGION_POOL_CACHE))) {
 		recycle_stat_inc(pool, cache_full);
 		return false;
 	}
