@@ -2789,6 +2789,7 @@ static struct page **svc_rx_region_kunit_free, **svc_rx_region_kunit_all;
 static struct svc_rx_region_tx *svc_rx_region_kunit_txs;
 static u32 *svc_rx_region_kunit_links;
 static unsigned int svc_rx_region_kunit_nfree, svc_rx_region_kunit_capacity;
+static unsigned int svc_rx_region_kunit_escaped;
 static DEFINE_SPINLOCK(svc_rx_region_kunit_lock);
 
 void svc_tcp_rx_region_kunit_read_region(struct page **pages, unsigned int n)
@@ -2815,6 +2816,7 @@ void svc_tcp_rx_region_kunit_read_region(struct page **pages, unsigned int n)
 	svc_rx_region_kunit_free = pages;
 	svc_rx_region_kunit_nfree = n;
 	svc_rx_region_kunit_capacity = n;
+	svc_rx_region_kunit_escaped = 0;
 	spin_unlock_bh(&svc_rx_region_kunit_lock);
 	kfree(all);
 	kfree(txs);
@@ -2827,6 +2829,13 @@ unsigned int svc_tcp_rx_region_kunit_read_free(void)
 	return READ_ONCE(svc_rx_region_kunit_nfree);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_read_free);
+
+/* @n stand-in pages escape, as page_pool_rx_region_capacity() counts them. */
+void svc_tcp_rx_region_kunit_escape(unsigned int n)
+{
+	WRITE_ONCE(svc_rx_region_kunit_escaped, n);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_escape);
 #endif
 
 static unsigned int svc_rx_region_take_pages(struct page **pages,
@@ -2878,7 +2887,9 @@ static unsigned long svc_rx_region_read_span(void)
 {
 #if IS_ENABLED(CONFIG_KUNIT)
 	if (svc_rx_region_kunit_free)
-		return svc_rx_region_kunit_capacity;
+		return svc_rx_region_kunit_capacity -
+		       min(READ_ONCE(svc_rx_region_kunit_escaped),
+			   svc_rx_region_kunit_capacity);
 #endif
 	if (!READ_ONCE(svc_rx_region_txs_nr))
 		return 0;
@@ -3642,6 +3653,28 @@ void svc_tcp_rx_region_kunit_drain_waiters(void)
 	mutex_unlock(&svc_rx_budget_cfg_lock);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_drain_waiters);
+
+/*
+ * The budget @which names, for svc_tcp_rx_budget_kunit_stats(): the one
+ * READs on @svsk draw on (svc_tcp_rx_budget_read_for()), the initial
+ * namespace's, the default, or the read pool.
+ */
+struct svc_tcp_rx_budget *
+svc_tcp_rx_region_kunit_budget(struct svc_sock *svsk,
+			       enum svc_tcp_rx_kunit_stats which)
+{
+	switch (which) {
+	case SVC_TCP_RX_STATS_INIT:
+		return svc_tcp_rx_budget_initial();
+	case SVC_TCP_RX_STATS_DEFAULT:
+		return &svc_rx_budget_default;
+	case SVC_TCP_RX_STATS_POOL:
+		return svc_tcp_rx_budget_kunit_read();
+	default:
+		return svc_tcp_rx_budget_read_for(svsk);
+	}
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_budget);
 
 /* Make a sent reply's next busy check its last. */
 void svc_tcp_rx_region_kunit_age(struct ubuf_info *ubuf)
