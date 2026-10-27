@@ -2429,16 +2429,16 @@ DECLARE_EVENT_CLASS(svcsock_tcp_rx_lifetime_class,
 		__entry->rqstp = rqstp;
 		__entry->sequence = state->record_seq;
 		__entry->xid = state->xid;
-		__entry->body_bytes = state->body_bytes;
+		__entry->body_bytes = state->lt.body_bytes;
 		__entry->fixed_bytes = state->fixed_bytes;
-		__entry->borrowed_bytes = state->borrowed_bytes;
-		__entry->copied_bytes = state->copied_bytes;
+		__entry->borrowed_bytes = state->lt.borrowed_bytes;
+		__entry->copied_bytes = state->lt.copied_bytes;
 		__entry->materialized_bytes = state->materialized_bytes;
-		__entry->page_pool_bytes = state->page_pool_bytes;
-		__entry->bvec_count = state->count;
-		__entry->refs_acquired = state->refs_acquired;
-		__entry->refs_released = state->refs_released;
-		__entry->credit = state->credit;
+		__entry->page_pool_bytes = state->lt.page_pool_bytes;
+		__entry->bvec_count = state->lt.count;
+		__entry->refs_acquired = state->lt.refs_acquired;
+		__entry->refs_released = state->lt.refs_released;
+		__entry->credit = state->cr.credit;
 		__entry->action = action;
 		__entry->mode = state->mode;
 		__entry->reason = state->reason;
@@ -2521,7 +2521,7 @@ TRACE_EVENT(svcsock_tcp_rx_bounce_refused,
 
 	TP_fast_assign(
 		__entry->xid = state->xid;
-		__entry->credit = state->credit;
+		__entry->credit = state->cr.credit;
 		__assign_str(addr);
 		__assign_str(why);
 	),

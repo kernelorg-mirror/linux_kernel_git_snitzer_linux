@@ -12,6 +12,7 @@
 
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/svc_xprt.h>
+#include <net/rx_loan.h>
 
 struct svc_tcp_rx_budget;
 
@@ -56,35 +57,16 @@ enum svc_tcp_rx_reason {
 	SVC_TCP_RX_REASON_NO_BUDGET,
 };
 
-/* Records a budget learns its charge over: see svc_tcp_rx_cost_learn_locked(). */
-#define SVC_TCP_RX_COST_WINDOW	1024
-/*
- * Records a budget releases under its lock, learning their cost, before
- * admission takes its per-CPU stocks: one stock's worth of pages.
- */
-#define SVC_TCP_RX_COST_WARMUP	64
-
 /*
  * Receive descriptors and their page references move together by exchanging
  * this preallocated object between a request and a connected TCP socket.
  */
 struct svc_tcp_rx_state {
-	struct bio_vec		*bvec;
-	unsigned long		*borrowed;
-	unsigned long		*page_pool;
+	/* the record's loaned and copied pages: first, see svc_tcp_rx_reset() */
+	struct rx_loan_table	lt;
 	struct svc_rqst		*rqstp;
-	u32			capacity;
-	u32			count;
-	u32			body_bytes;
 	u32			fixed_bytes;
-	u32			borrowed_bytes;
-	u32			copied_bytes;
-
 	u32			materialized_bytes;
-	u32			page_pool_bytes;
-	u32			refs_acquired;
-	u32			refs_released;
-	u32			borrowed_count;
 	u32			xid;
 	u64			record_seq;
 	u8			mode;
@@ -93,22 +75,7 @@ struct svc_tcp_rx_state {
 	/* pages in the copy arena (rq_pages); @capacity counts bvecs */
 	u32			arena_pages;
 	/* region credit held by this record (svc_tcp_rx_credit_*) */
-	u64			credit_ticket;
-	u32			credit;
-	u32			credit_reserve;
-	u32			credit_over;
-	/*
-	 * region pages loaned, an upper bound on those held: a page counts
-	 * again only after a loan of another one (@region_last is the last)
-	 */
-	u32			region_count;
-	struct page		*region_last;
-	bool			credit_linked;
-	/* admitted from a CPU's stock: off the budget's in-flight list */
-	bool			credit_stocked;
-	struct list_head	credit_node;
-	/* the budget this record's credit came from, while linked */
-	struct svc_tcp_rx_budget *credit_budget;
+	struct rx_loan_credit	cr;
 	/*
 	 * region pages and credit lent to a WRITE bounce
 	 * (svc_rqst_bounce_payload), and the budget the credit returns to
@@ -148,13 +115,8 @@ struct svc_sock {
 	u32			sk_datalen;
 	u64			sk_rx_sequence;
 	struct svc_tcp_rx_state	*sk_rx;
-	/* waiting for region credit, ordered by sk_credit_ticket */
-	struct list_head	sk_credit_wait;
-	u64			sk_credit_ticket;
-	/* credit a refused admission asked for; 0 while paused in a charge */
-	u32			sk_credit_need;
-	/* the budget whose waiters @sk_credit_wait is on */
-	struct svc_tcp_rx_budget *sk_budget;
+	/* waiting for region credit on its budget's FIFO */
+	struct rx_loan_waiter	sk_rx_wait;
 	/*
 	 * What an incomplete loaned record still lacks after a read that
 	 * drained the socket, or 0: svc_data_ready() wakes no thread for
@@ -295,6 +257,7 @@ bool svc_tcp_rx_credit_charge(struct svc_sock *svsk,
 			      struct svc_tcp_rx_state *state, u32 need);
 void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state);
 void svc_tcp_rx_credit_forget(struct svc_sock *svsk);
+void svc_tcp_rx_wait_init(struct svc_sock *svsk);
 bool svc_tcp_rx_budget_copy(struct svc_sock *svsk);
 long svc_tcp_rx_budget_avail(void);
 unsigned int svc_tcp_rx_budget_cost_factor(void);

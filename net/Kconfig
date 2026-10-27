@@ -91,6 +91,25 @@ source "net/smc/Kconfig"
 source "drivers/dibs/Kconfig"
 source "net/xdp/Kconfig"
 
+config RX_LOAN
+	bool
+	help
+	  The receive page-loan helper: a table of the pages of received
+	  skbs a record holds, and the walk that counts the fixed receive
+	  region's pages among them.  Selected by its consumers.
+
+config RX_LOAN_KUNIT_TEST
+	tristate "KUnit tests for the rx page-loan helper" if !KUNIT_ALL_TESTS
+	depends on KUNIT && RX_LOAN
+	default KUNIT_ALL_TESTS
+	help
+	  This builds the KUnit tests for the receive page-loan helper.
+
+	  KUnit tests run during boot and output the results to the debug
+	  log in TAP format. Only useful for
+	  kernel devs running KUnit test harness and are not for inclusion
+	  into a production build.
+
 config NET_HANDSHAKE
 	bool
 	depends on SUNRPC || NVME_TARGET_TCP || NVME_TCP
