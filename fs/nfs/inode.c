@@ -16,6 +16,7 @@
 
 #include <linux/module.h>
 #include <linux/init.h>
+#include <linux/rcupdate.h>
 #include <linux/sched/signal.h>
 #include <linux/time.h>
 #include <linux/kernel.h>
@@ -1404,11 +1405,12 @@ static void nfs_free_open_context(struct nfs_open_context *ctx, int is_sync)
 		NFS_PROTO(inode)->close_context(ctx, is_sync);
 	put_cred(ctx->cred);
 	dput(ctx->dentry);
-	nfs_sb_deactive(sb);
 	put_rpccred(rcu_dereference_protected(ctx->ll_cred, 1));
 	kfree(ctx->mdsthreshold);
 	nfs_close_local_fh(&ctx->nfl);
 	kfree_rcu(ctx, rcu_head);
+	/* Keep client ownership through all potentially sleeping cleanup. */
+	nfs_sb_deactive(sb);
 }
 
 static void __put_nfs_open_context(struct nfs_open_context *ctx, int is_sync)
@@ -3075,6 +3077,9 @@ err_sysfs:
 
 static void __exit exit_nfs_fs(void)
 {
+	/* LOCALIO callbacks may still be returning after their last client put. */
+	if (IS_ENABLED(CONFIG_NFS_LOCALIO))
+		synchronize_rcu_tasks();
 	nfs_destroy_directcache();
 	nfs_destroy_writepagecache();
 	nfs_destroy_readpagecache();

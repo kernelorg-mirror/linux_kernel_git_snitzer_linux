@@ -396,6 +396,7 @@ config NFS_LOCALIO
 	depends on NFSD && NFS_FS
 	select NFS_COMMON_LOCALIO_SUPPORT
 	select NFS_COMMON_DIO
+	select NEED_TASKS_RCU if MODULE_UNLOAD && NFS_FS=m
 	default n
 	help
 	  Some NFS servers support an auxiliary NFS LOCALIO protocol

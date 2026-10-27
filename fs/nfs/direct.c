@@ -48,6 +48,10 @@
 #include <linux/slab.h>
 #include <linux/task_io_accounting_ops.h>
 #include <linux/module.h>
+#include <linux/preempt.h>
+#include <linux/rcupdate.h>
+#include <linux/sched/signal.h>
+#include <linux/task_work.h>
 
 #include <linux/nfs_fs.h>
 #include <linux/nfs_dio.h>
@@ -330,19 +334,73 @@ ssize_t nfs_dreq_bytes_left(struct nfs_direct_req *dreq, loff_t offset)
 }
 EXPORT_SYMBOL_GPL(nfs_dreq_bytes_left);
 
+/* Serialize IRQ producers with the synchronous waiter's unregister. */
+bool nfs_direct_queue_task_work(struct nfs_direct_req *dreq,
+				struct callback_head *work)
+{
+	struct task_struct *task;
+	unsigned long flags;
+	bool queued = false;
+
+	raw_spin_lock_irqsave(&dreq->completion.wait.lock, flags);
+	task = dreq->completion_task;
+	if (task && !task_work_add(task, work, TWA_NONE)) {
+		wake_up_process(task);
+		queued = true;
+	}
+	raw_spin_unlock_irqrestore(&dreq->completion.wait.lock, flags);
+	return queued;
+}
+
 /*
  * Collects and returns the final error value/byte-count.
  */
 static ssize_t nfs_direct_wait(struct nfs_direct_req *dreq)
 {
+	DECLARE_SWAITQUEUE(wait);
 	ssize_t result = -EIOCBQUEUED;
 
 	/* Async requests don't wait here */
 	if (dreq->iocb)
 		goto out;
 
-	result = wait_for_completion_killable(&dreq->completion);
+	/* Preserve the original wait when optimized completion is disabled. */
+	if (!nfs_localio_optimized_completion_enabled() ||
+	    (current->flags & PF_EXITING)) {
+		result = wait_for_completion_killable(&dreq->completion);
+		goto out_result;
+	}
 
+	raw_spin_lock_irq(&dreq->completion.wait.lock);
+	dreq->completion_task = current;
+	raw_spin_unlock_irq(&dreq->completion.wait.lock);
+
+	result = 0;
+	for (;;) {
+		prepare_to_swait_exclusive(&dreq->completion.wait, &wait,
+					   TASK_KILLABLE);
+		if (try_wait_for_completion(&dreq->completion))
+			break;
+		if (fatal_signal_pending(current)) {
+			result = -ERESTARTSYS;
+			break;
+		}
+		if (!task_work_pending(current)) {
+			schedule();
+			continue;
+		}
+		finish_swait(&dreq->completion.wait, &wait);
+		task_work_run();
+	}
+	finish_swait(&dreq->completion.wait, &wait);
+
+	/* Drain every callback accepted before unregister, even on SIGKILL. */
+	raw_spin_lock_irq(&dreq->completion.wait.lock);
+	dreq->completion_task = NULL;
+	raw_spin_unlock_irq(&dreq->completion.wait.lock);
+	task_work_run();
+
+out_result:
 	if (!result) {
 		result = dreq->count;
 		WARN_ON_ONCE(dreq->count < 0);
@@ -997,13 +1055,17 @@ static void nfs_direct_write_schedule_work(struct work_struct *work)
  * only needs what the O_DIRECT read path already does inline from the
  * same contexts (inode_dio_end, ki_complete, complete(), dreq release)
  * plus nfs_zap_mapping() (inode->i_lock), so finish it right here and
- * save a trip through the nfsiod workqueue.  There are no concurrent
+ * save a trip through the nfsiod workqueue.  With optimized LOCALIO
+ * completion enabled, inline finalization additionally requires a
+ * sleepable task context. There are no concurrent
  * users of dreq->flags or the commit lists once the last I/O reference
  * has been dropped; nfs_direct_complete() drops the I/O side's kref
  * exactly as the nfsiod path did.
  */
 static void nfs_direct_write_complete(struct nfs_direct_req *dreq)
 {
+	bool optimized = nfs_localio_optimized_completion_enabled();
+
 	trace_nfs_direct_write_complete(dreq);
 	switch (dreq->flags) {
 	case NFS_ODIRECT_DO_COMMIT:
@@ -1011,9 +1073,13 @@ static void nfs_direct_write_complete(struct nfs_direct_req *dreq)
 		break;
 	default:
 		if (!atomic_long_read(&dreq->mds_cinfo.ncommit)) {
-			dreq->flags = 0;
-			nfs_direct_write_finish(dreq);
-			return;
+			if (!optimized || (!IS_ENABLED(CONFIG_PREEMPT_RT) &&
+			    preemptible() && !rcu_preempt_depth() &&
+			    task_is_running(current) && !is_idle_task(current))) {
+				dreq->flags = 0;
+				nfs_direct_write_finish(dreq);
+				return;
+			}
 		}
 	}
 	queue_work(nfsiod_workqueue, &dreq->work); /* Calls nfs_direct_write_schedule_work */
