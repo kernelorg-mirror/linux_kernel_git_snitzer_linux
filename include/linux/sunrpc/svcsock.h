@@ -308,9 +308,19 @@ struct ubuf_info *svc_tcp_rx_region_kunit_send(struct svc_rqst *rqstp,
 void svc_tcp_rx_region_kunit_flush(void);
 void svc_tcp_rx_region_kunit_reads(bool on);
 int svc_tcp_rx_region_kunit_has_wspace(struct svc_sock *svsk);
+void svc_tcp_rx_region_kunit_escape(unsigned int n);
 void svc_tcp_rx_region_kunit_conn_drain(struct svc_sock *svsk);
 void svc_tcp_rx_region_kunit_age(struct ubuf_info *ubuf);
 void svc_tcp_rx_region_kunit_drain_waiters(void);
+enum svc_tcp_rx_kunit_stats {
+	SVC_TCP_RX_STATS_READ,		/* the budget READs on a transport draw on */
+	SVC_TCP_RX_STATS_INIT,		/* the initial namespace's */
+	SVC_TCP_RX_STATS_DEFAULT,
+	SVC_TCP_RX_STATS_POOL,		/* the global read pool */
+};
+struct svc_tcp_rx_budget *
+svc_tcp_rx_region_kunit_budget(struct svc_sock *svsk,
+			       enum svc_tcp_rx_kunit_stats which);
 bool svc_rx_region_send_bvec(const struct svc_rqst *rqstp, unsigned int nvecs,
 			     unsigned int k);
 u8 svc_tcp_rx_scaling_ratio(unsigned int factor);
