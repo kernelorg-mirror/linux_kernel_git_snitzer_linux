@@ -928,6 +928,18 @@ out:
 #define pAT (1+AT)	/* post attributes - conditional */
 #define WC (7+pAT)	/* WCC attributes */
 
+/*
+ * Payload pages a decoded READ returns, for region confinement: one more
+ * than the count, for the direct-I/O alignment pad.
+ */
+static unsigned int nfsd3_read_pages(struct svc_rqst *rqstp)
+{
+	struct nfsd3_readargs *argp = rqstp->rq_argp;
+	u32 count = min_t(u32, argp->count, svc_max_payload(rqstp));
+
+	return count ? DIV_ROUND_UP(count, PAGE_SIZE) + 1 : 0;
+}
+
 static const struct svc_procedure nfsd_procedures3[22] = {
 	[NFS3PROC_NULL] = {
 		.pc_func = nfsd3_proc_null,
@@ -1001,6 +1013,7 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name = "READLINK",
 	},
 	[NFS3PROC_READ] = {
+		.pc_read_pages = nfsd3_read_pages,
 		.pc_func = nfsd3_proc_read,
 		.pc_decode = nfs3svc_decode_readargs,
 		.pc_encode = nfs3svc_encode_readres,

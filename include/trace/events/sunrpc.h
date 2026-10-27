@@ -2532,6 +2532,44 @@ TRACE_EVENT(svcsock_tcp_rx_bounce_refused,
 	)
 );
 
+/*
+ * NFSD READ confinement: admit, park, conn-park, grant, complete,
+ * share-stall, unconfined
+ * why: the reason an unconfined READ could not be confined, else "-"
+ */
+TRACE_EVENT(svcsock_tcp_rx_region_read,
+	TP_PROTO(
+		const struct svc_xprt *xprt,
+		__be32 xid,
+		unsigned int pages,
+		const char *action,
+		const char *why
+	),
+
+	TP_ARGS(xprt, xid, pages, action, why),
+
+	TP_STRUCT__entry(
+		__field(u32, xid)
+		__field(unsigned int, pages)
+		__string(addr, xprt->xpt_remotebuf)
+		__string(action, action)
+		__string(why, why)
+	),
+
+	TP_fast_assign(
+		__entry->xid = be32_to_cpu(xid);
+		__entry->pages = pages;
+		__assign_str(addr);
+		__assign_str(action);
+		__assign_str(why);
+	),
+
+	TP_printk("addr=%s xid=0x%08x pages=%u action=%s why=%s",
+		__get_str(addr), __entry->xid, __entry->pages,
+		__get_str(action), __get_str(why)
+	)
+);
+
 TRACE_EVENT(svcsock_tcp_recv_short,
 	TP_PROTO(
 		const struct svc_xprt *xprt,

@@ -238,6 +238,13 @@ void svc_xprt_received(struct svc_xprt *xprt)
 	svc_xprt_get(xprt);
 	smp_mb__before_atomic();
 	clear_bit(XPT_BUSY, &xprt->xpt_flags);
+	/*
+	 * Order the clear before the readiness checks below.  A waker that
+	 * changes a condition xpo_has_wspace() reads, then (after a full
+	 * barrier, e.g. the xchg() in svc_rx_region_share_unstall()) finds
+	 * XPT_BUSY set and does not enqueue, relies on this enqueue.
+	 */
+	smp_mb__after_atomic();
 
 	/*
 	 * Skip the enqueue when no actionable flags are set.
@@ -585,6 +592,8 @@ static void free_deferred(struct svc_xprt *xprt, struct svc_deferred_req *dr)
 		return;
 
 	xprt->xpt_ops->xpo_release_ctxt(xprt, dr->xprt_ctxt);
+	if (dr->rx_region.parked && xprt->xpt_ops->xpo_rx_region_park_free)
+		xprt->xpt_ops->xpo_rx_region_park_free(&dr->rx_region);
 	kfree(dr);
 }
 
@@ -598,7 +607,10 @@ static void svc_xprt_release(struct svc_rqst *rqstp)
 	free_deferred(xprt, rqstp->rq_deferred);
 	rqstp->rq_deferred = NULL;
 
+	/* An unsent confined reply returns its pages; a sent one left NULLs. */
+	svc_rqst_rx_region_unconfine(rqstp, false);
 	svc_rqst_release_pages(rqstp);
+	svc_rqst_rx_region_restore(rqstp);
 	rqstp->rq_res.page_len = 0;
 	rqstp->rq_res.page_base = 0;
 
@@ -1312,6 +1324,15 @@ static void svc_revisit(struct cache_deferred_req *dreq, int too_many)
 	trace_svc_defer_queue(dr);
 	list_add(&dr->handle.recent, &xprt->xpt_deferred);
 	spin_unlock(&xprt->xpt_lock);
+	/*
+	 * Order the list_add() above before the XPT_BUSY load in
+	 * svc_xprt_enqueue().  spin_unlock() is only a release and does not
+	 * order a later load.  svc_tcp_has_wspace() reads xpt_deferred
+	 * locklessly; this pairs with the smp_mb__after_atomic() in
+	 * svc_xprt_received(), so either that path sees the list entry or
+	 * this waker sees XPT_BUSY clear and enqueues.
+	 */
+	smp_mb();
 	svc_xprt_enqueue(xprt);
 	svc_xprt_put(xprt);
 }
@@ -1320,12 +1341,53 @@ static void svc_revisit(struct cache_deferred_req *dreq, int too_many)
  * Save the request off for later processing. Only a Call that fits
  * entirely in rq_arg.head[0] can be deferred.
  */
+static struct svc_deferred_req *__svc_defer(struct svc_rqst *rqstp);
+
 static struct cache_deferred_req *svc_defer(struct cache_req *req)
 {
 	struct svc_rqst *rqstp = container_of(req, struct svc_rqst, rq_chandle);
 	struct svc_deferred_req *dr;
 
-	if (rqstp->rq_arg.page_len || !test_bit(RQ_USEDEFERRAL, &rqstp->rq_flags))
+	if (!test_bit(RQ_USEDEFERRAL, &rqstp->rq_flags))
+		return NULL;
+	dr = __svc_defer(rqstp);
+	return dr ? &dr->handle : NULL;
+}
+
+/**
+ * svc_defer_rx_region - Park a request until region pages are free
+ * @rqstp: RPC transaction context, its call decoded and nothing run yet
+ *
+ * Unlike cache deferral this ignores RQ_USEDEFERRAL, which NFSv4 decoding
+ * clears: no operation has run, so replaying the call is safe.  The parked
+ * request is never dropped as "too many".  Its RQ_SECURE is saved at the
+ * first park and restored on every replay.  On success the request is
+ * marked RQ_DROPME and the caller sends no reply; svc_revisit_rx_region()
+ * replays it.
+ *
+ * Return: the parked request, or NULL if it cannot be parked.
+ */
+struct svc_deferred_req *svc_defer_rx_region(struct svc_rqst *rqstp)
+{
+	return __svc_defer(rqstp);
+}
+EXPORT_SYMBOL_GPL(svc_defer_rx_region);
+
+/**
+ * svc_revisit_rx_region - Replay a request parked by svc_defer_rx_region()
+ * @dr: the parked request
+ */
+void svc_revisit_rx_region(struct svc_deferred_req *dr)
+{
+	svc_revisit(&dr->handle, 0);
+}
+EXPORT_SYMBOL_GPL(svc_revisit_rx_region);
+
+static struct svc_deferred_req *__svc_defer(struct svc_rqst *rqstp)
+{
+	struct svc_deferred_req *dr;
+
+	if (rqstp->rq_arg.page_len)
 		return NULL; /* if more than a page, give up FIXME */
 	if (rqstp->rq_deferred) {
 		dr = rqstp->rq_deferred;
@@ -1342,6 +1404,7 @@ static struct cache_deferred_req *svc_defer(struct cache_req *req)
 		if (dr == NULL)
 			return NULL;
 
+		dr->rx_region.parked = false;
 		dr->handle.owner = rqstp->rq_server;
 		dr->prot = rqstp->rq_prot;
 		memcpy(&dr->addr, &rqstp->rq_addr, rqstp->rq_addrlen);
@@ -1362,7 +1425,7 @@ static struct cache_deferred_req *svc_defer(struct cache_req *req)
 	set_bit(RQ_DROPME, &rqstp->rq_flags);
 
 	dr->handle.revisit = svc_revisit;
-	return &dr->handle;
+	return dr;
 }
 
 /*

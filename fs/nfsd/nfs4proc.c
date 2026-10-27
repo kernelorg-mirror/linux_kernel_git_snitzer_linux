@@ -1145,9 +1145,10 @@ nfsd4_read(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	 * To ensure proper ordering, we therefore turn off zero copy if
 	 * the client wants us to do more in this compound:
 	 */
-	if (!nfsd4_last_compound_op(rqstp)) {
+	if (!nfsd4_last_compound_op(rqstp) || svc_rqst_rx_region_held(rqstp)) {
 		struct nfsd4_compoundargs *argp = rqstp->rq_argp;
 
+		/* Region pages are read into, not spliced from the cache. */
 		argp->splice_ok = false;
 	}
 
@@ -4393,6 +4394,36 @@ static const char *nfsd4_op_name(unsigned opnum)
 	return "unknown_operation";
 }
 
+/*
+ * Payload pages a decoded COMPOUND's READ returns, for region confinement:
+ * the READ or READ_PLUS count plus one page for the direct-I/O alignment
+ * pad.  Only a READ that is the COMPOUND's last op may be read direct (see
+ * nfsd_direct_read_ok()), and only the first READ could use the pages, so
+ * a COMPOUND is confined only when its last op is its one READ or
+ * READ_PLUS: SEQUENCE, PUTFH, READ is; PUTFH, READ, GETATTR is not.
+ * nfsd4_last_compound_op() is valid only while ops run, hence the index
+ * test.  (Linux NFSv4.2 clients read with READ_PLUS.)
+ */
+static unsigned int nfsd4_read_pages(struct svc_rqst *rqstp)
+{
+	struct nfsd4_compoundargs *argp = rqstp->rq_argp;
+	struct nfsd4_op *last;
+	unsigned int i;
+	u32 count;
+
+	if (!argp->opcnt)
+		return 0;
+	last = &argp->ops[argp->opcnt - 1];
+	if (last->opnum != OP_READ && last->opnum != OP_READ_PLUS)
+		return 0;
+	for (i = 0; i < argp->opcnt - 1; i++)
+		if (argp->ops[i].opnum == OP_READ ||
+		    argp->ops[i].opnum == OP_READ_PLUS)
+			return 0;
+	count = min_t(u32, last->u.read.rd_length, svc_max_payload(rqstp));
+	return count ? DIV_ROUND_UP(count, PAGE_SIZE) + 1 : 0;
+}
+
 static const struct svc_procedure nfsd_procedures4[2] = {
 	[NFSPROC4_NULL] = {
 		.pc_func = nfsd4_proc_null,
@@ -4406,6 +4437,7 @@ static const struct svc_procedure nfsd_procedures4[2] = {
 		.pc_name = "NULL",
 	},
 	[NFSPROC4_COMPOUND] = {
+		.pc_read_pages = nfsd4_read_pages,
 		.pc_func = nfsd4_proc_compound,
 		.pc_decode = nfs4svc_decode_compoundargs,
 		.pc_encode = nfs4svc_encode_compoundres,
