@@ -8182,7 +8182,8 @@ ftrace_func_address_lookup(struct ftrace_mod_map *mod_map,
 			*size = found_func->size;
 		if (off)
 			*off = addr - found_func->ip;
-		return strscpy(sym, found_func->name, KSYM_NAME_LEN);
+		strscpy(sym, found_func->name, KSYM_NAME_LEN);
+		return strlen(sym);
 	}
 
 	return 0;
