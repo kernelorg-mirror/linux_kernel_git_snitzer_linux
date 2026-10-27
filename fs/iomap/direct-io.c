@@ -1332,7 +1332,8 @@ ssize_t __iomap_dio_read_simple(struct kiocb *iocb, struct iov_iter *iter,
 	}
 	bio->bi_end_io = iomap_dio_simple_end_io;
 	submit_bio(bio);
-	trace_iomap_dio_rw_queued(iomi->inode, iocb->ki_pos, iomi->len);
+	/* Completion may advance iocb->ki_pos as soon as the bio is submitted. */
+	trace_iomap_dio_rw_queued(iomi->inode, iomi->pos, iomi->len);
 	return -EIOCBQUEUED;
 
 out_bio_release_pages:
