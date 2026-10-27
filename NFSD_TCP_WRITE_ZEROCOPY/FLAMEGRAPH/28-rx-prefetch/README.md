@@ -105,4 +105,5 @@ fl55a-loan64 (N) against fl55b-loan64 (Y), one profiled run each, annotated on t
   - kmod-xsight 2.0.1-10 is committed in kernel-rpmtree (`6d37e4d`, not pushed);
   - `settled.sh` holds `rx_prefetch` Y (`7aca1030c33d`).
 - **Until a 2.0.1-10 rpm is installed,** tardis2 runs the measured module from `/lib/modules/7.3.0-7.hs.499.el10.aarch64+16k/updates/xeu.ko`, which takes precedence over the rpm's `extra/xsight/xeu.ko`.
+- **The initrd loads xeu at boot.** Until 27 October it carried an xeu older than release 9, with neither `irq_msix_mask` nor `rx_prefetch`, so every boot needed a reload of xeu before `settled.sh` would pass. It was rebuilt that morning with `dracut -f /boot/ofp-rocky/$K/initrd.new $K` and swapped in; it now carries `updates/xeu.ko` (`2C05DF674C9D013185FDB34`). The one before is beside it as `initrd.pre-xeu-r28-2026-10-27`. Rebuild it again whenever the module in `updates/` changes or a new kmod-xsight rpm is installed.
 - It changes nothing for sunrpc or nfsd, so it stands beside the loan series, not in it.
