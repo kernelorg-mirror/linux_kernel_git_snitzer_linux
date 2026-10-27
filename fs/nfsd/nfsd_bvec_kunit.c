@@ -2,12 +2,25 @@
 
 #include <kunit/test.h>
 
+#include <linux/bio.h>
+#include <linux/blkdev.h>
+#include <linux/completion.h>
+#include <linux/errseq.h>
+#include <linux/file.h>
+#include <linux/iomap.h>
+#include <linux/jiffies.h>
+#include <linux/kthread.h>
+#include <linux/magic.h>
+#include <linux/mount.h>
+#include <linux/pseudo_fs.h>
 #include <linux/bvec.h>
 #include <linux/highmem.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/nfs3.h>
 #include <linux/nfs_dio.h>
+#include <linux/pagemap.h>
+#include <linux/sched/task.h>
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/svc_xprt.h>
 #include <linux/sunrpc/xdr.h>
@@ -1138,6 +1151,748 @@ static void nfsd_bvec_nfs3_capability_test(struct kunit *test)
 	KUNIT_EXPECT_PTR_EQ(test, nfsd3_procedure(NFS3PROC_COMMIT + 1), NULL);
 }
 
+/* These tests call the real block owners, not an eligibility/error model. */
+static void nfsd_dio_geometry_status_test(struct kunit *test)
+{
+	static const struct {
+		int error;
+		blk_status_t status;
+	} ordinary[] = {
+		{ 0, BLK_STS_OK },
+		{ -EINVAL, BLK_STS_INVAL },
+		{ -EIO, BLK_STS_IOERR },
+		{ -ENOSPC, BLK_STS_NOSPC },
+		{ -EAGAIN, BLK_STS_AGAIN },
+	};
+	unsigned int i;
+
+	KUNIT_EXPECT_EQ(test, EDIOALIGN, 532);
+	KUNIT_EXPECT_EQ(test, (__force unsigned int)BLK_STS_DIOALIGN, 20U);
+	KUNIT_EXPECT_EQ(test, errno_to_blk_status(-EDIOALIGN),
+			BLK_STS_DIOALIGN);
+	KUNIT_EXPECT_EQ(test, blk_status_to_errno_raw(BLK_STS_DIOALIGN),
+			-EDIOALIGN);
+	KUNIT_EXPECT_EQ(test, blk_status_to_errno(BLK_STS_DIOALIGN), -EINVAL);
+	KUNIT_EXPECT_FALSE(test, blk_path_error(BLK_STS_DIOALIGN));
+	for (i = 0; i < ARRAY_SIZE(ordinary); i++) {
+		KUNIT_EXPECT_EQ(test, errno_to_blk_status(ordinary[i].error),
+				ordinary[i].status);
+		KUNIT_EXPECT_EQ(test, blk_status_to_errno(ordinary[i].status),
+				ordinary[i].error);
+		KUNIT_EXPECT_EQ(test, blk_status_to_errno_raw(ordinary[i].status),
+				ordinary[i].error);
+	}
+}
+
+static void nfsd_dio_geometry_split_test(struct kunit *test)
+{
+	struct queue_limits limits = {
+		.max_segments = 256,
+		.max_hw_sectors = 256,
+		.max_sectors = 256,
+		.max_segment_size = UINT_MAX,
+		.max_fast_segment_size = UINT_MAX,
+		.seg_boundary_mask = ULONG_MAX,
+		.virt_boundary_mask = 4095,
+		.dma_alignment = 3,
+		.logical_block_size = 512,
+		.physical_block_size = 512,
+	};
+	static const struct {
+		blk_opf_t op;
+		int expected;
+	} refusals[] = {
+		{ REQ_OP_WRITE, -EDIOALIGN },
+		{ REQ_OP_READ, -EDIOALIGN },
+		{ REQ_OP_WRITE | REQ_ATOMIC, -EINVAL },
+		{ REQ_OP_WRITE | REQ_NOWAIT, -EAGAIN },
+		{ REQ_OP_ZONE_APPEND, -EINVAL },
+	};
+	struct bio_vec vectors[3];
+	struct bio bio;
+	unsigned int segments = 0;
+	unsigned int i;
+	int ret;
+
+	for (i = 0; i < ARRAY_SIZE(vectors); i++) {
+		struct page *page = nfsd_bvec_alloc_page(test);
+
+		KUNIT_ASSERT_NOT_NULL(test, page);
+		bvec_set_page(&vectors[i], page, 0, 0);
+	}
+	/* PRP-compatible joints; 3996 and 100 need not be sector multiples. */
+	vectors[0].bv_offset = 100;
+	vectors[0].bv_len = 3996;
+	vectors[1].bv_len = 4096;
+	vectors[2].bv_len = 100;
+	bio_init(&bio, NULL, vectors, ARRAY_SIZE(vectors), REQ_OP_WRITE);
+	bio.bi_vcnt = ARRAY_SIZE(vectors);
+	bio.bi_iter.bi_size = 8192;
+	ret = bio_split_io_at(&bio, &limits, &segments, 8192, 3);
+	KUNIT_EXPECT_EQ(test, ret, 0);
+	KUNIT_EXPECT_EQ(test, segments, 3U);
+	KUNIT_EXPECT_EQ(test, bio.bi_iter.bi_size, 8192U);
+	bio_uninit(&bio);
+
+	/* Historical remainder: 104 bytes before a mid-page successor. */
+	vectors[0].bv_offset = 3992;
+	vectors[0].bv_len = 104;
+	vectors[1].bv_offset = 64;
+	vectors[1].bv_len = 408;
+	for (i = 0; i < ARRAY_SIZE(refusals); i++) {
+		bio_init(&bio, NULL, vectors, 2, refusals[i].op);
+		bio.bi_vcnt = 2;
+		bio.bi_iter.bi_size = 512;
+		ret = bio_split_io_at(&bio, &limits, &segments, 512, 3);
+		KUNIT_EXPECT_EQ_MSG(test, ret, refusals[i].expected,
+				    "op=%#x", refusals[i].op);
+		ret = bio_split_rw_at(&bio, &limits, &segments, 512);
+		KUNIT_EXPECT_EQ(test, ret, refusals[i].expected == -EDIOALIGN ?
+				-EINVAL : refusals[i].expected);
+		bio_uninit(&bio);
+	}
+
+	/* The other emitter is the actual per-vector DMA/length mask check. */
+	vectors[0].bv_offset = 2;
+	vectors[0].bv_len = 512;
+	bio_init(&bio, NULL, vectors, 1, REQ_OP_WRITE);
+	bio.bi_vcnt = 1;
+	bio.bi_iter.bi_size = 512;
+	ret = bio_split_io_at(&bio, &limits, &segments, 512, 3);
+	KUNIT_EXPECT_EQ(test, ret, -EDIOALIGN);
+	bio_uninit(&bio);
+
+	/* Segment exhaustion can also leave less than one legal block. */
+	limits.virt_boundary_mask = 0;
+	limits.max_segments = 1;
+	vectors[0].bv_offset = 0;
+	vectors[0].bv_len = 104;
+	vectors[1].bv_offset = 0;
+	vectors[1].bv_len = 408;
+	bio_init(&bio, NULL, vectors, 2, REQ_OP_WRITE);
+	bio.bi_vcnt = 2;
+	bio.bi_iter.bi_size = 512;
+	ret = bio_split_io_at(&bio, &limits, &segments, 512, 3);
+	KUNIT_EXPECT_EQ(test, ret, -EDIOALIGN);
+	bio_uninit(&bio);
+	vectors[0].bv_offset = 0;
+	vectors[0].bv_len = 510;
+	vectors[1].bv_offset = 0;
+	vectors[1].bv_len = 2;
+	bio_init(&bio, NULL, vectors, 2, REQ_OP_WRITE);
+	bio.bi_vcnt = 2;
+	bio.bi_iter.bi_size = 512;
+	ret = bio_split_io_at(&bio, &limits, &segments, 512, 3);
+	KUNIT_EXPECT_EQ(test, ret, -EDIOALIGN);
+	bio_uninit(&bio);
+}
+
+struct nfsd_dio_chain_result {
+	unsigned int calls;
+	blk_status_t status;
+};
+
+static void nfsd_dio_chain_complete(struct bio *bio)
+{
+	struct nfsd_dio_chain_result *result = bio->bi_private;
+
+	result->calls++;
+	result->status = bio->bi_status;
+}
+
+static void nfsd_dio_geometry_chain_test(struct kunit *test)
+{
+	static const blk_status_t real[] = {
+		BLK_STS_INVAL, BLK_STS_IOERR, BLK_STS_NOSPC,
+	};
+	unsigned int i, order;
+
+	for (i = 0; i < ARRAY_SIZE(real); i++) {
+		for (order = 0; order < 2; order++) {
+			struct nfsd_dio_chain_result result = {};
+			struct bio *parent, *geometry, *failure;
+
+			parent = bio_alloc(NULL, 0, REQ_OP_WRITE, GFP_KERNEL);
+			KUNIT_ASSERT_NOT_NULL(test, parent);
+			geometry = bio_alloc(NULL, 0, REQ_OP_WRITE, GFP_KERNEL);
+			if (!geometry) {
+				bio_put(parent);
+				KUNIT_FAIL(test, "geometry child allocation failed");
+				return;
+			}
+			failure = bio_alloc(NULL, 0, REQ_OP_WRITE, GFP_KERNEL);
+			if (!failure) {
+				bio_put(geometry);
+				bio_put(parent);
+				KUNIT_FAIL(test, "real-error child allocation failed");
+				return;
+			}
+			parent->bi_private = &result;
+			parent->bi_end_io = nfsd_dio_chain_complete;
+			geometry->bi_status = BLK_STS_DIOALIGN;
+			failure->bi_status = real[i];
+			bio_chain(geometry, parent);
+			bio_chain(failure, parent);
+			bio_endio(order ? failure : geometry);
+			KUNIT_EXPECT_EQ(test, result.calls, 0U);
+			bio_endio(order ? geometry : failure);
+			KUNIT_EXPECT_EQ(test, result.calls, 0U);
+			bio_endio(parent);
+			KUNIT_EXPECT_EQ(test, result.calls, 1U);
+			KUNIT_EXPECT_EQ(test, result.status, real[i]);
+			bio_put(parent);
+		}
+	}
+}
+
+static void nfsd_dio_geometry_parent_status_test(struct kunit *test)
+{
+	static const blk_status_t real[] = {
+		BLK_STS_INVAL, BLK_STS_IOERR, BLK_STS_NOSPC,
+	};
+	unsigned int i, role, order;
+
+	for (i = 0; i < ARRAY_SIZE(real); i++) {
+		for (role = 0; role < 2; role++) {
+			for (order = 0; order < 2; order++) {
+				struct nfsd_dio_chain_result result = {};
+				blk_status_t own = BLK_STS_DIOALIGN;
+				blk_status_t child_status = real[i];
+				struct bio *parent, *child;
+
+				parent = bio_alloc(NULL, 0, REQ_OP_WRITE, GFP_KERNEL);
+				KUNIT_ASSERT_NOT_NULL(test, parent);
+				child = bio_alloc(NULL, 0, REQ_OP_WRITE, GFP_KERNEL);
+				if (!child) {
+					bio_put(parent);
+					KUNIT_FAIL(test, "parent-status child allocation failed");
+					return;
+				}
+				parent->bi_private = &result;
+				parent->bi_end_io = nfsd_dio_chain_complete;
+				if (role) {
+					own = real[i];
+					child_status = BLK_STS_DIOALIGN;
+				}
+				bio_chain(child, parent);
+				if (order)
+					bio_endio_status(child, child_status);
+				else
+					bio_endio_status(parent, own);
+				KUNIT_EXPECT_EQ(test, result.calls, 0U);
+				if (order)
+					bio_endio_status(parent, own);
+				else
+					bio_endio_status(child, child_status);
+				KUNIT_EXPECT_EQ(test, result.calls, 1U);
+				KUNIT_EXPECT_EQ(test, result.status, real[i]);
+				bio_put(parent);
+			}
+		}
+	}
+}
+
+struct nfsd_dio_iomap_thread {
+	struct iomap_dio *dio;
+	struct completion *start;
+	struct completion done;
+	int error;
+};
+
+static int nfsd_dio_iomap_error_thread(void *data)
+{
+	struct nfsd_dio_iomap_thread *thread = data;
+
+	wait_for_completion(thread->start);
+	iomap_dio_kunit_set_error(thread->dio, thread->error);
+	complete(&thread->done);
+	return 0;
+}
+
+static void nfsd_dio_normalizer_complete(struct kiocb *iocb, long result)
+{
+	unsigned int *calls = iocb->private;
+
+	(*calls)++;
+	(void)result;
+}
+
+static void nfsd_dio_geometry_iomap_test(struct kunit *test)
+{
+	static const int real[] = { -EINVAL, -EIO, -ENOSPC };
+	struct kiocb iocb = { .ki_flags = IOCB_DIRECT | IOCB_DIO_GEOMETRY };
+	unsigned int completions = 0;
+	unsigned int i, order;
+
+	KUNIT_EXPECT_EQ(test, IOCB_DIO_GEOMETRY, 1 << 25);
+	KUNIT_EXPECT_EQ(test, iomap_dio_kunit_result(&iocb, -EDIOALIGN),
+			-EDIOALIGN);
+	KUNIT_EXPECT_EQ(test, iomap_dio_kunit_result(&iocb, LONG_MAX),
+			(ssize_t)LONG_MAX);
+	iocb.ki_complete = nfsd_dio_normalizer_complete;
+	iocb.private = &completions;
+	KUNIT_EXPECT_EQ(test, iomap_dio_kunit_result(&iocb, -EDIOALIGN), -EINVAL);
+	KUNIT_EXPECT_EQ(test, iomap_dio_kunit_result(&iocb, LONG_MAX),
+			(ssize_t)LONG_MAX);
+	KUNIT_EXPECT_EQ(test, completions, 0U);
+	iocb.ki_complete = NULL;
+	iocb.private = NULL;
+	iocb.ki_flags &= ~IOCB_DIO_GEOMETRY;
+	KUNIT_EXPECT_EQ(test, iomap_dio_kunit_result(&iocb, -EDIOALIGN),
+			-EINVAL);
+	for (i = 0; i < ARRAY_SIZE(real); i++) {
+		KUNIT_EXPECT_EQ(test, iomap_dio_kunit_result(&iocb, real[i]),
+				real[i]);
+		for (order = 0; order < 2; order++) {
+			struct iomap_dio *dio = iomap_dio_kunit_alloc(&iocb, true);
+
+			KUNIT_ASSERT_NOT_NULL(test, dio);
+			iomap_dio_kunit_set_error(dio, order ? real[i] : -EDIOALIGN);
+			iomap_dio_kunit_set_error(dio, order ? -EDIOALIGN : real[i]);
+			iomap_dio_kunit_set_error(dio, 0);
+			KUNIT_EXPECT_EQ(test, iomap_dio_kunit_read_error(dio), real[i]);
+			iomap_dio_kunit_free(dio);
+		}
+	}
+	/* Geometry must not replace the existing NOWAIT admission outcomes. */
+	iocb.ki_flags |= IOCB_NOWAIT;
+	for (i = 0; i < 2; i++) {
+		int admission = i ? -EOPNOTSUPP : -EAGAIN;
+		struct iomap_dio *dio = iomap_dio_kunit_alloc(&iocb, true);
+
+		KUNIT_ASSERT_NOT_NULL(test, dio);
+		iomap_dio_kunit_set_error(dio, admission);
+		iomap_dio_kunit_set_error(dio, -EDIOALIGN);
+		KUNIT_EXPECT_EQ(test, iomap_dio_kunit_read_error(dio), admission);
+		iomap_dio_kunit_set_error(dio, -EIO);
+		KUNIT_EXPECT_EQ(test, iomap_dio_kunit_read_error(dio), -EIO);
+		iomap_dio_kunit_free(dio);
+	}
+}
+
+static void nfsd_dio_geometry_iomap_race_test(struct kunit *test)
+{
+	struct kiocb iocb = {};
+	struct completion start;
+	struct nfsd_dio_iomap_thread arguments[2];
+	struct task_struct *tasks[2];
+	struct iomap_dio *dio;
+	unsigned int count = 0, i;
+
+	dio = iomap_dio_kunit_alloc(&iocb, true);
+	KUNIT_ASSERT_NOT_NULL(test, dio);
+	init_completion(&start);
+	for (i = 0; i < ARRAY_SIZE(arguments); i++) {
+		arguments[i].dio = dio;
+		arguments[i].start = &start;
+		arguments[i].error = i ? -EIO : -EDIOALIGN;
+		init_completion(&arguments[i].done);
+		tasks[i] = kthread_run(nfsd_dio_iomap_error_thread,
+				       &arguments[i], "nfsd-dio-error-%u", i);
+		if (IS_ERR(tasks[i])) {
+			KUNIT_FAIL(test, "error worker %u failed: %ld", i,
+				   PTR_ERR(tasks[i]));
+			break;
+		}
+		get_task_struct(tasks[i]);
+		count++;
+	}
+	complete_all(&start);
+	for (i = 0; i < count; i++) {
+		KUNIT_EXPECT_NE(test,
+				wait_for_completion_timeout(&arguments[i].done, 5 * HZ), 0UL);
+		kthread_stop(tasks[i]);
+		put_task_struct(tasks[i]);
+	}
+	if (count == ARRAY_SIZE(arguments))
+		KUNIT_EXPECT_EQ(test, iomap_dio_kunit_read_error(dio), -EIO);
+	iomap_dio_kunit_free(dio);
+}
+
+#if IS_REACHABLE(CONFIG_BTRFS_FS)
+/* CONFIG_KUNIT accessors invoke btrfs_bio_end_io and actual clone cleanup. */
+extern void *btrfs_split_kunit_alloc(void (*complete)(blk_status_t, void *),
+				     void *data);
+extern void btrfs_split_kunit_end_io(void *opaque, bool is_clone,
+				     blk_status_t status);
+extern void btrfs_split_kunit_free(void *opaque);
+
+static void nfsd_dio_btrfs_complete(blk_status_t status, void *data)
+{
+	struct nfsd_dio_chain_result *result = data;
+
+	result->calls++;
+	result->status = status;
+}
+
+static void nfsd_dio_geometry_btrfs_test(struct kunit *test)
+{
+	static const struct {
+		blk_status_t original;
+		blk_status_t clone;
+		blk_status_t expected;
+	} cases[] = {
+		{ BLK_STS_DIOALIGN, BLK_STS_IOERR, BLK_STS_IOERR },
+		{ BLK_STS_IOERR, BLK_STS_DIOALIGN, BLK_STS_IOERR },
+		{ BLK_STS_DIOALIGN, BLK_STS_INVAL, BLK_STS_INVAL },
+		{ BLK_STS_INVAL, BLK_STS_DIOALIGN, BLK_STS_INVAL },
+		{ BLK_STS_DIOALIGN, BLK_STS_NOSPC, BLK_STS_NOSPC },
+		{ BLK_STS_NOSPC, BLK_STS_DIOALIGN, BLK_STS_NOSPC },
+		{ BLK_STS_OK, BLK_STS_IOERR, BLK_STS_IOERR },
+		{ BLK_STS_IOERR, BLK_STS_NOSPC, BLK_STS_IOERR },
+		{ BLK_STS_DIOALIGN, BLK_STS_OK, BLK_STS_DIOALIGN },
+		{ BLK_STS_OK, BLK_STS_DIOALIGN, BLK_STS_DIOALIGN },
+		{ BLK_STS_DIOALIGN, BLK_STS_DIOALIGN, BLK_STS_DIOALIGN },
+		{ BLK_STS_OK, BLK_STS_OK, BLK_STS_OK },
+	};
+	unsigned int i, order;
+
+	for (i = 0; i < ARRAY_SIZE(cases); i++) {
+		for (order = 0; order < 2; order++) {
+			struct nfsd_dio_chain_result result = {};
+			blk_status_t first = cases[i].original;
+			blk_status_t second = cases[i].clone;
+			void *fixture = btrfs_split_kunit_alloc(nfsd_dio_btrfs_complete,
+							       &result);
+
+			KUNIT_ASSERT_NOT_NULL(test, fixture);
+			if (order) {
+				first = cases[i].clone;
+				second = cases[i].original;
+			}
+			btrfs_split_kunit_end_io(fixture, order, first);
+			KUNIT_EXPECT_EQ(test, result.calls, 0U);
+			btrfs_split_kunit_end_io(fixture, !order, second);
+			KUNIT_EXPECT_EQ(test, result.calls, 1U);
+			KUNIT_EXPECT_EQ_MSG(test, result.status, cases[i].expected,
+					    "case=%u order=%u", i, order);
+			btrfs_split_kunit_free(fixture);
+		}
+	}
+}
+#endif
+
+struct nfsd_dio_replay_case {
+	const char *name;
+	ssize_t responses[4];
+	unsigned int calls;
+	unsigned long count;
+	loff_t position;
+	int error;
+	int fsync_error;
+	bool split;
+	bool wb_before;
+	bool wb_after;
+	bool reissue;
+	bool fsync;
+};
+
+struct nfsd_dio_replay {
+	struct kunit *test;
+	const struct nfsd_dio_replay_case *scenario;
+	struct file *file;
+	u8 *source;
+	u8 *actual;
+	u8 *scratch;
+	unsigned long total;
+	loff_t start;
+	errseq_t since;
+	unsigned int calls;
+	unsigned int reissues;
+	unsigned int fsyncs;
+	unsigned long synced;
+	int *requested_flags;
+	int flags[4];
+	loff_t positions[4];
+	size_t counts[4];
+};
+
+/*
+ * Controlled leaf returns exercise actual NFSD/VFS decisions. These bytes
+ * model leaf progress; they are not a physical-I/O or drain proof.
+ */
+static ssize_t nfsd_dio_replay_write(struct kiocb *iocb, struct iov_iter *iter)
+{
+	struct nfsd_dio_replay *fixture = iocb->ki_filp->private_data;
+	unsigned int call = fixture->calls++;
+	size_t count = iov_iter_count(iter), copied = 0;
+	ssize_t result;
+	loff_t offset = iocb->ki_pos - fixture->start;
+
+	if (call >= ARRAY_SIZE(fixture->flags)) {
+		KUNIT_FAIL(fixture->test, "unexpected extra write attempt");
+		return -EIO;
+	}
+	fixture->flags[call] = iocb->ki_flags;
+	fixture->positions[call] = iocb->ki_pos;
+	fixture->counts[call] = count;
+	result = fixture->scenario->responses[call];
+	if (result == LONG_MAX)
+		result = count;
+	if (result == -EDIOALIGN)
+		copied = min_t(size_t, count, 4096);
+	else if (result > 0)
+		copied = result;
+	if (offset < 0 || (u64)offset > fixture->total ||
+	    copied > count || copied > fixture->total - offset) {
+		KUNIT_FAIL(fixture->test, "invalid controlled write bounds");
+		return -EIO;
+	}
+	if (copied && copy_from_iter(fixture->actual + offset, copied, iter) != copied) {
+		KUNIT_FAIL(fixture->test, "controlled payload capture was short");
+		return -EFAULT;
+	}
+	if (result > 0) {
+		iocb->ki_pos += result;
+		/* Like a file system, persist a stable write before returning. */
+		if (iocb->ki_flags & IOCB_DSYNC) {
+			fixture->synced = iocb->ki_pos - fixture->start;
+			result = generic_write_sync(iocb, result);
+		}
+	}
+	if (result == -EDIOALIGN && fixture->scenario->wb_before)
+		mapping_set_error(iocb->ki_filp->f_mapping, -EIO);
+	return result;
+}
+
+static int nfsd_dio_replay_fsync(struct file *file, loff_t start, loff_t end,
+				 int datasync)
+{
+	struct nfsd_dio_replay *fixture = file->private_data;
+
+	fixture->fsyncs++;
+	KUNIT_EXPECT_EQ(fixture->test, start, fixture->start);
+	KUNIT_EXPECT_EQ(fixture->test, end,
+			fixture->start + fixture->synced - 1);
+	KUNIT_EXPECT_EQ(fixture->test, datasync,
+			!(*fixture->requested_flags & IOCB_SYNC));
+	if (fixture->scenario->fsync_error)
+		return fixture->scenario->fsync_error;
+	return filemap_check_wb_err(file->f_mapping, fixture->since);
+}
+
+static const struct file_operations nfsd_dio_replay_ops = {
+	.write_iter = nfsd_dio_replay_write,
+	.fsync = nfsd_dio_replay_fsync,
+};
+
+static int nfsd_dio_replay_init_fs_context(struct fs_context *fc)
+{
+	return init_pseudo(fc, ANON_INODE_FS_MAGIC) ? 0 : -ENOMEM;
+}
+
+/* The superblock pins this module until the last fixture file is released. */
+static struct file_system_type nfsd_dio_replay_fs_type = {
+	.owner = THIS_MODULE,
+	.name = "nfsd_dio_kunit",
+	.init_fs_context = nfsd_dio_replay_init_fs_context,
+	.kill_sb = kill_anon_super,
+};
+
+static void nfsd_dio_replay_unmount(void *mnt)
+{
+	kern_unmount(mnt);
+}
+
+/*
+ * Give each case its own anonymous inode, and so its own writeback-error
+ * cursor, on an internal mount. Unlike anon_inode_create_getfile(), this
+ * S_PRIVATE inode leaves creation and access independent of host LSM policy.
+ */
+static struct file *nfsd_dio_replay_open(struct vfsmount *mnt, void *data)
+{
+	struct inode *inode = alloc_anon_inode(mnt->mnt_sb);
+	struct file *file;
+
+	if (IS_ERR(inode))
+		return ERR_CAST(inode);
+	file = alloc_file_pseudo(inode, mnt, "nfsd-dio-kunit", O_RDWR,
+				 &nfsd_dio_replay_ops);
+	if (IS_ERR(file)) {
+		iput(inode);
+		return file;
+	}
+	file->private_data = data;
+	return file;
+}
+
+static void nfsd_dio_replay_fput(void *file)
+{
+	fput(file);
+}
+
+static void nfsd_dio_replay_before(struct kiocb *iocb,
+				   const struct iov_iter *saved, void *data)
+{
+	struct nfsd_dio_replay *fixture = data;
+	struct iov_iter copy = *saved;
+	size_t count = fixture->scenario->split ? 2 * PAGE_SIZE : fixture->total;
+	unsigned int prefix = fixture->scenario->split ? PAGE_SIZE - 128 : 0;
+
+	fixture->reissues++;
+	KUNIT_EXPECT_EQ(fixture->test, iocb->ki_pos, fixture->start + prefix);
+	KUNIT_EXPECT_EQ(fixture->test, iov_iter_count(saved), count);
+	KUNIT_EXPECT_TRUE(fixture->test, iocb->ki_flags & IOCB_DIRECT);
+	KUNIT_EXPECT_TRUE(fixture->test, iocb->ki_flags & IOCB_DIO_GEOMETRY);
+	KUNIT_EXPECT_EQ(fixture->test, copy_from_iter(fixture->scratch, count, &copy),
+			count);
+	KUNIT_EXPECT_MEMEQ(fixture->test, fixture->scratch,
+			   fixture->source + prefix, count);
+	if (fixture->scenario->wb_after)
+		mapping_set_error(iocb->ki_filp->f_mapping, -EIO);
+}
+
+static void nfsd_dio_geometry_replay_test(struct kunit *test)
+{
+	static const struct nfsd_dio_replay_case cases[] = {
+		{ .name = "real-einval-no-replay", .responses = { -EINVAL },
+		  .calls = 1, .error = -EINVAL },
+		{ .name = "real-eio-no-replay", .responses = { -EIO },
+		  .calls = 1, .error = -EIO },
+		{ .name = "real-enospc-no-replay", .responses = { -ENOSPC },
+		  .calls = 1, .error = -ENOSPC },
+		{ .name = "geometry-identical-full-replay",
+		  .responses = { -EDIOALIGN, LONG_MAX }, .calls = 2,
+		  .count = 8192, .position = 8192, .reissue = true, .fsync = true },
+		{ .name = "positive-short-no-replay", .responses = { 4096 },
+		  .calls = 1, .count = 4096, .position = 4096, .fsync = true },
+		{ .name = "geometry-buffered-short-once",
+		  .responses = { -EDIOALIGN, 4096 }, .calls = 2,
+		  .count = 4096, .position = 4096, .reissue = true, .fsync = true },
+		{ .name = "geometry-then-real-error-once",
+		  .responses = { -EDIOALIGN, -EIO }, .calls = 2,
+		  .error = -EIO, .reissue = true },
+		/* A WRITE issued whole as direct I/O is persisted by its own write. */
+		{ .name = "full-data-fsync-error-no-replay", .responses = { LONG_MAX },
+		  .calls = 1, .count = 0, .position = 8192,
+		  .error = -EIO, .fsync_error = -EIO, .fsync = true },
+		/* A misaligned WRITE is cut at page boundaries. */
+		{ .name = "prefix-wb-error-before-replay-decision",
+		  .responses = { LONG_MAX, -EDIOALIGN }, .calls = 2,
+		  .count = PAGE_SIZE - 128, .position = PAGE_SIZE, .error = -EIO,
+		  .split = true, .wb_before = true },
+		{ .name = "prefix-wb-error-after-replay-decision",
+		  .responses = { LONG_MAX, -EDIOALIGN, LONG_MAX, LONG_MAX },
+		  .calls = 4, .count = 3 * PAGE_SIZE,
+		  .position = 3 * PAGE_SIZE + 128, .error = -EIO,
+		  .split = true, .wb_after = true, .reissue = true, .fsync = true },
+	};
+	struct vfsmount *mnt;
+	unsigned int i;
+
+	mnt = kern_mount(&nfsd_dio_replay_fs_type);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(mnt));
+	if (kunit_add_action_or_reset(test, nfsd_dio_replay_unmount, mnt))
+		return;
+	for (i = 0; i < ARRAY_SIZE(cases); i++) {
+		const struct nfsd_dio_replay_case *scenario = &cases[i];
+		struct nfsd_dio_replay *fixture;
+		struct svc_rqst *request;
+		struct svc_fh *handle;
+		struct nfsd_file *nf;
+		struct bio_vec vectors[4];
+		struct kiocb iocb;
+		struct nfsd_dio_kunit_hooks hooks;
+		unsigned long count, consumed = 0;
+		unsigned int nvecs, v;
+		int flags = IOCB_DSYNC;
+		int ret;
+
+		kunit_info(test, "%s", scenario->name);
+		fixture = kunit_kzalloc(test, sizeof(*fixture), GFP_KERNEL);
+		request = kunit_kzalloc(test, sizeof(*request), GFP_KERNEL);
+		handle = kunit_kzalloc(test, sizeof(*handle), GFP_KERNEL);
+		nf = kunit_kzalloc(test, sizeof(*nf), GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, fixture);
+		KUNIT_ASSERT_NOT_NULL(test, request);
+		KUNIT_ASSERT_NOT_NULL(test, handle);
+		KUNIT_ASSERT_NOT_NULL(test, nf);
+		fixture->test = test;
+		fixture->scenario = scenario;
+		/* The split's direct middle is 2 pages, at least min_middle_bytes. */
+		fixture->total = scenario->split ? 3 * PAGE_SIZE : 8192;
+		fixture->start = scenario->split ? 128 : 0;
+		fixture->source = kunit_kmalloc(test, fixture->total, GFP_KERNEL);
+		fixture->actual = kunit_kzalloc(test, fixture->total, GFP_KERNEL);
+		fixture->scratch = kunit_kmalloc(test, fixture->total, GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, fixture->source);
+		KUNIT_ASSERT_NOT_NULL(test, fixture->actual);
+		KUNIT_ASSERT_NOT_NULL(test, fixture->scratch);
+		for (v = 0; v < fixture->total; v++)
+			fixture->source[v] = (u8)(v * 17U + 3U);
+		fixture->file = nfsd_dio_replay_open(mnt, fixture);
+		KUNIT_ASSERT_FALSE(test, IS_ERR(fixture->file));
+		if (kunit_add_action_or_reset(test, nfsd_dio_replay_fput, fixture->file))
+			return;
+		fixture->since = READ_ONCE(fixture->file->f_wb_err);
+		fixture->synced = scenario->count;
+		count = fixture->total;
+		nvecs = scenario->split ? 4 : DIV_ROUND_UP(count, PAGE_SIZE);
+		for (v = 0; v < nvecs; v++) {
+			struct page *page = nfsd_bvec_alloc_page(test);
+			size_t length;
+
+			KUNIT_ASSERT_NOT_NULL(test, page);
+			if (scenario->split)
+				length = v == 0 ? 1000 : v < 3 ? PAGE_SIZE : PAGE_SIZE - 1000;
+			else
+				length = min_t(size_t, count - consumed, PAGE_SIZE);
+			bvec_set_page(&vectors[v], page, length, 0);
+			nfsd_bvec_write(page, 0, fixture->source + consumed, length);
+			consumed += length;
+		}
+		KUNIT_ASSERT_EQ(test, consumed, count);
+		request->rq_bvec = vectors;
+		handle->fh_dentry = fixture->file->f_path.dentry;
+		nf->nf_file = fixture->file;
+		nf->nf_inode = file_inode(fixture->file);
+		nf->nf_dio_mem_align = 4;
+		nf->nf_dio_offset_align = 512;
+		nf->nf_dio_seg_boundary = NFS_DIO_SEG_BOUNDARY_NONE;
+		init_sync_kiocb(&iocb, fixture->file);
+		iocb.ki_pos = fixture->start;
+		iocb.ki_flags |= flags;
+		fixture->requested_flags = &flags;
+		hooks.before_reissue = nfsd_dio_replay_before;
+		hooks.data = fixture;
+		ret = nfsd_direct_write_kunit(request, handle, nf, nvecs, &count,
+					      &iocb, fixture->since, &hooks);
+		KUNIT_EXPECT_EQ(test, ret, scenario->error);
+		KUNIT_EXPECT_EQ(test, count, scenario->count);
+		KUNIT_EXPECT_EQ(test, iocb.ki_pos, scenario->position);
+		KUNIT_EXPECT_EQ(test, fixture->calls, scenario->calls);
+		KUNIT_EXPECT_EQ(test, fixture->reissues, (unsigned int)scenario->reissue);
+		KUNIT_EXPECT_EQ(test, fixture->fsyncs, (unsigned int)scenario->fsync);
+		for (v = 0; v < fixture->calls && v < ARRAY_SIZE(fixture->flags); v++) {
+			bool direct = scenario->split ? v == 1 : v == 0;
+
+			KUNIT_EXPECT_EQ(test, !!(fixture->flags[v] & IOCB_DIRECT), direct);
+			KUNIT_EXPECT_EQ(test, !!(fixture->flags[v] & IOCB_DIO_GEOMETRY), direct);
+		}
+		if (scenario->reissue) {
+			unsigned int direct = scenario->split ? 1 : 0;
+
+			KUNIT_EXPECT_EQ(test, fixture->positions[direct],
+					fixture->positions[direct + 1]);
+			KUNIT_EXPECT_EQ(test, fixture->counts[direct],
+					fixture->counts[direct + 1]);
+		}
+		if (!scenario->error)
+			KUNIT_EXPECT_MEMEQ(test, fixture->actual, fixture->source, count);
+		{
+			struct iov_iter original;
+
+			iov_iter_bvec(&original, ITER_SOURCE, vectors, nvecs, fixture->total);
+			KUNIT_EXPECT_EQ(test,
+					copy_from_iter(fixture->scratch, fixture->total, &original),
+					(size_t)fixture->total);
+			KUNIT_EXPECT_MEMEQ(test, fixture->scratch, fixture->source, fixture->total);
+		}
+		for (v = 0; v < nvecs; v++)
+			KUNIT_EXPECT_EQ(test, page_count(vectors[v].bv_page), 1);
+	}
+}
+
 static struct kunit_case nfsd_bvec_test_cases[] = {
 	KUNIT_CASE(nfsd_bvec_decode_checksum_parity_test),
 	KUNIT_CASE(nfsd_bvec_decode_error_test),
@@ -1146,6 +1901,16 @@ static struct kunit_case nfsd_bvec_test_cases[] = {
 	KUNIT_CASE(nfsd_bvec_dio_disposition_test),
 	KUNIT_CASE(nfsd_bvec_proc_dispatch_parity_test),
 	KUNIT_CASE(nfsd_bvec_nfs3_capability_test),
+	KUNIT_CASE(nfsd_dio_geometry_status_test),
+	KUNIT_CASE(nfsd_dio_geometry_split_test),
+	KUNIT_CASE(nfsd_dio_geometry_chain_test),
+	KUNIT_CASE(nfsd_dio_geometry_parent_status_test),
+	KUNIT_CASE(nfsd_dio_geometry_iomap_test),
+	KUNIT_CASE(nfsd_dio_geometry_iomap_race_test),
+	KUNIT_CASE(nfsd_dio_geometry_replay_test),
+#if IS_REACHABLE(CONFIG_BTRFS_FS)
+	KUNIT_CASE(nfsd_dio_geometry_btrfs_test),
+#endif
 	{}
 };
 
