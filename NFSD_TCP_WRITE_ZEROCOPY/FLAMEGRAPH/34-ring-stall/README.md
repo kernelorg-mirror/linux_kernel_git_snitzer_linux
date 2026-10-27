@@ -50,6 +50,8 @@
 
 **Installed** in `updates/xeu.ko` (round 28's is beside it as `xeu.ko.r28-2C05DF674C9D013185FDB34`); xeu was reloaded with no client connected, for the A/B's module and again for the kept one, and each time port a was set up again with `port-setup.sh enp161s0f0 0` and settled.
 
+**The initrd carries it** from 27 October, 23:52: rebuilt as round 28's was (`dracut -f /boot/ofp-rocky/$K/initrd.new $K`) and swapped in, with the one before beside it as `initrd.pre-xeu-r34-2026-10-27`. It also carries the tip's sunrpc (`A06FE478658242A10E100FF`) from `updates/`, uncompressed, where the one before carried the kernel's; both are what runs. Rebuild it again whenever a module in `updates/` changes.
+
 ## The A/B
 
 **Run 2026-10-27 on tardis2** (driver [run68.sh](run68.sh), run `/var/tmp/zc-run-logs/t2-r68/`): the A/B's xeu, A `rx_page_split` N (round 28's refill), B Y (the change), four untraced loan64 runs a side, A B A B A B A B, at the current state. Every run had no drive stepping down, dmesg had no WARNING, and the end was the settled setting.
