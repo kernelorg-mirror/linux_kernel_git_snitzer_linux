@@ -10,6 +10,8 @@
 
 #include <linux/module.h>
 #include <linux/list.h>
+#include <linux/completion.h>
+#include <linux/percpu-refcount.h>
 #include <linux/uuid.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/svcauth.h>
@@ -46,6 +48,12 @@ typedef struct {
 	struct auth_domain *dom; /* auth_domain for localio */
 	/* Local files to close when net is shut down or exports change */
 	struct list_head files;
+	/* Admitted I/O borrows cached files until its final use. */
+	struct percpu_ref io_ref;
+	struct completion io_drained;
+	bool io_ref_initialized;
+	bool draining;
+	bool probing;
 } nfs_uuid_t;
 
 void nfs_uuid_init(nfs_uuid_t *);
@@ -56,11 +64,15 @@ void nfs_uuid_is_local(const uuid_t *, struct list_head *, spinlock_t *,
 
 void nfs_localio_enable_client(struct nfs_client *clp);
 void nfs_localio_disable_client(struct nfs_client *clp);
+void nfs_localio_destroy_client(struct nfs_client *clp);
 void nfs_localio_invalidate_clients(struct list_head *nn_local_clients,
 				    spinlock_t *nn_local_clients_lock);
 
 /* localio needs to map filehandle -> struct nfsd_file */
 void nfs_close_local_fh(struct nfs_file_localio *);
+int nfs_uuid_add_file_locked(nfs_uuid_t *nfs_uuid, struct nfs_file_localio *nfl,
+			     struct net *net);
+void nfs_release_local_fh(nfs_uuid_t *nfs_uuid);
 
 struct nfsd_localio_operations {
 	bool (*nfsd_net_try_get)(struct net *);
@@ -70,6 +82,8 @@ struct nfsd_localio_operations {
 						struct rpc_clnt *,
 						const struct cred *,
 						const struct nfs_fh *,
+						nfs_uuid_t *,
+						struct nfs_file_localio *,
 						struct nfsd_file __rcu **pnf,
 						const fmode_t);
 	struct net *(*nfsd_file_put_local)(struct nfsd_file __rcu **);
@@ -126,6 +140,10 @@ static inline void nfsd_localio_ops_init(void)
 }
 struct nfs_client;
 static inline void nfs_localio_disable_client(struct nfs_client *clp)
+{
+}
+
+static inline void nfs_localio_destroy_client(struct nfs_client *clp)
 {
 }
 

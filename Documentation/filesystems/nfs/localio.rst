@@ -225,10 +225,31 @@ to interlock nfsd_shutdown_net() and nfsd_open_local_fh(), to ensure
 each net-ns is not destroyed while in use by nfsd_open_local_fh(), and
 warrants a more detailed explanation:
 
-    nfsd_open_local_fh() uses nfsd_net_try_get() before opening its
-    nfsd_file handle and then the caller (NFS client) must drop the
-    reference for the nfsd_file and associated net-ns using
-    nfsd_file_put_local() once it has completed its IO.
+    nfs_open_local_fh() admits the operation through the client's per-CPU
+    UUID reference and takes one nfsd_net_ref before calling NFSD. A
+    successful call borrows the cached nfsd_file; it does not increment
+    the shared file reference for each IO. The open context or flexfiles
+    layout retains the cache, whose installed file and net references
+    are released together on close or invalidation. The cache is linked
+    into the UUID's file list before its file pointer is published.
+
+    Each admitted operation holds its UUID and net references through
+    its last file use. Read and write completion also wait for submission
+    to finish, including write-freeze accounting, before releasing these
+    references. Commit's fsync worker owns them until its final release,
+    even when a synchronous caller has already been awakened.
+
+    Invalidation stops UUID admission and drains existing operations
+    before closing cached files. The module, domain and session remain
+    alive during the drain. After clearing the published net, an RCU
+    grace period excludes observers of the old session before admission
+    can be reinitialized. Concurrent probes, closes, export invalidation
+    and client destruction share the existing UUID and server-list
+    serialization. This also allows a later handshake after NFSD restarts.
+
+    The UUID reference is allocated when the NFS client is constructed
+    and freed by its final destructor. If that allocation fails, this
+    client uses ordinary RPC without enabling LOCALIO.
 
     This interlock working relies heavily on nfsd_open_local_fh() being
     afforded the ability to safely deal with the possibility that the
@@ -271,6 +292,15 @@ done by the nfs server). As such, for these operations, the NFS client
 is issuing IO to the underlying local filesystem that it is sharing with
 the NFS server. See: fs/nfs/localio.c:nfs_local_doio() and
 fs/nfs/localio.c:nfs_local_commit().
+
+LOCALIO establishes task-local reclaim scopes instead of changing an active
+server inode's mapping allocation mask. Read submission and process-context
+completion use memalloc_nofs_save()/memalloc_nofs_restore(); write submission
+and fsync retain their existing PF_MEMALLOC_NOIO scope. These scopes prevent
+synchronous page-cache allocation from recursing through filesystem reclaim
+into NFS. They include buffered fallback and terminal processing. Separate
+lower-filesystem workers retain responsibility for their own allocation
+context; a submitter's task flags are not inherited by arbitrary workers.
 
 With normal NFS that makes use of RPC to issue IO to the server, if an
 application uses O_DIRECT the NFS client will bypass the pagecache but
