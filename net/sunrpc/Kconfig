@@ -2,6 +2,7 @@
 config SUNRPC
 	tristate
 	depends on MULTIUSER
+	select RX_LOAN if NET
 
 config SUNRPC_GSS
 	tristate

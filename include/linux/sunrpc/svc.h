@@ -23,6 +23,7 @@
 #include <linux/sizes.h>
 #include <linux/folio_batch.h>
 #include <linux/kthread.h>
+#include <net/rx_loan.h>
 
 /*
  *
@@ -245,16 +246,13 @@ struct svc_sock;
  * oldest ticket first, or for room in its connection's share.
  */
 struct svc_rx_region_park {
-	struct list_head	node;
-	u64			ticket;
+	struct list_head	node;	/* on its connection's share waiters */
+	/* on the budget's FIFO: its ticket, and once granted, its credit */
+	struct rx_loan_waiter	w;
 	struct svc_sock		*svsk;
 	__be32			xid;
 	unsigned int		count;	/* region pages */
 	unsigned int		share;	/* the connection's, at admission */
-	unsigned int		credit;	/* granted: from the budget's avail */
-	unsigned int		reserve;	/* granted: from its reserve */
-	unsigned int		over;	/* granted: beyond the budget (overrun) */
-	struct svc_tcp_rx_budget *budget;	/* granted by this budget */
 	bool			parked;
 	bool			shared;	/* @count reserved in the share */
 	bool			granted;
