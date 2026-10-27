@@ -908,8 +908,10 @@ static int nfs3_read_done(struct rpc_task *task, struct nfs_pgio_header *hdr)
 		return -EAGAIN;
 
 	if (task->tk_status >= 0) {
-		if (!server->read_hdrsize)
-			cmpxchg(&server->read_hdrsize, 0, hdr->res.replen);
+		unsigned int replen = hdr->res.replen;
+
+		if (replen && !READ_ONCE(server->read_hdrsize))
+			cmpxchg(&server->read_hdrsize, 0, replen);
 		nfs3_localio_probe(server);
 	}
 
