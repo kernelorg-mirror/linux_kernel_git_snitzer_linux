@@ -11,6 +11,7 @@
 #include <linux/sunrpc/addr.h>
 #include <linux/nfs_page.h>
 #include <linux/nfslocalio.h>
+#include <linux/nfs_dio.h>
 #include <linux/wait_bit.h>
 
 #define NFS_SB_MASK (SB_RDONLY|SB_NOSUID|SB_NODEV|SB_NOEXEC|SB_SYNCHRONOUS)
@@ -473,6 +474,104 @@ int nfs_fileattr_get(struct dentry *dentry, struct file_kattr *fa);
 struct file_kattr;
 int nfs_fileattr_get(struct dentry *dentry, struct file_kattr *fa);
 
+/* pagelist.c: requests of a direct write, see nfs_page_frag_joinable() */
+static inline bool nfs_page_is_contiguous(const struct nfs_page *prev,
+					  const struct nfs_page *req)
+{
+	size_t prev_end = prev->wb_pgbase + prev->wb_bytes;
+
+	if (req_offset(req) != req_offset(prev) + prev->wb_bytes)
+		return false;
+	if (req->wb_pgbase == 0)
+		return prev_end == nfs_page_max_length(prev);
+	if (req->wb_pgbase == prev_end) {
+		struct folio *folio = nfs_page_to_folio(req);
+
+		if (folio)
+			return folio == nfs_page_to_folio(prev);
+		return req->wb_page == prev->wb_page;
+	}
+	return false;
+}
+
+/* Page-based requests adjacent in the file, wherever their memory lies. */
+static inline bool nfs_page_frag_adjacent(const struct nfs_page *prev,
+					  const struct nfs_page *req)
+{
+	return !nfs_page_to_folio(prev) && !nfs_page_to_folio(req) &&
+	       req_offset(req) == req_offset(prev) + prev->wb_bytes;
+}
+
+/*
+ * A fragmented header's page array, and the bvec LOCALIO builds for it, have
+ * one entry per request.  Bound them as nfs_generic_pg_test() bounds an
+ * ordinary header's page array: to a page of pointers.
+ */
+#define NFS_PGIO_FRAG_MAX_REQS	(PAGE_SIZE / sizeof(struct page *))
+
+/**
+ * nfs_pgio_frag_may_add - may one more request join a header?
+ * @fragmented: the header is, or would become, fragmented
+ * @nreqs: requests already in the header
+ */
+static inline bool nfs_pgio_frag_may_add(bool fragmented, unsigned int nreqs)
+{
+	return !fragmented || nreqs < NFS_PGIO_FRAG_MAX_REQS;
+}
+
+/**
+ * nfs_pgio_frag_admit - may @req join the header ending in @prev?
+ * @prev: the header's last request
+ * @req: the request to add
+ * @may_join: the descriptor lets file-adjacent fragments join
+ * @fragmented: the header is fragmented already
+ * @nreqs: requests in the header
+ * @fragment: set if @req would join as a fragment
+ *
+ * Decides for the whole of @req ahead of pg_test, so that a partial pg_test
+ * result never makes a subrequest that the request cap then refuses.
+ */
+static inline bool nfs_pgio_frag_admit(const struct nfs_page *prev,
+				       const struct nfs_page *req,
+				       bool may_join, bool fragmented,
+				       unsigned int nreqs, bool *fragment)
+{
+	if (!nfs_page_is_contiguous(prev, req)) {
+		if (!may_join || !nfs_page_frag_adjacent(prev, req))
+			return false;
+		*fragment = true;
+	}
+	return nfs_pgio_frag_may_add(*fragment || fragmented, nreqs);
+}
+
+/**
+ * nfs_pgio_cut_run - split off a list's leading page-contiguous run
+ * @list: requests in file order; keeps its leading run
+ * @rest: empty; receives the requests after the run, in order
+ *
+ * Return: the bytes of the run left on @list.
+ */
+static inline size_t nfs_pgio_cut_run(struct list_head *list,
+				      struct list_head *rest)
+{
+	struct nfs_page *req, *prev = NULL;
+	size_t bytes = 0;
+
+	list_for_each_entry(req, list, wb_list) {
+		if (prev && !nfs_page_is_contiguous(prev, req)) {
+			LIST_HEAD(run);
+
+			list_cut_position(&run, list, &prev->wb_list);
+			list_splice_init(list, rest);
+			list_splice(&run, list);
+			break;
+		}
+		bytes += req->wb_bytes;
+		prev = req;
+	}
+	return bytes;
+}
+
 #if IS_ENABLED(CONFIG_NFS_LOCALIO)
 /* localio.c */
 struct nfs_local_dio {
@@ -503,8 +602,133 @@ extern int nfs_local_commit(struct nfsd_file *,
 extern bool nfs_server_is_local(const struct nfs_client *clp);
 int nfs_local_direct_write_flush(struct kiocb *iocb);
 bool nfs_local_dsync_enabled(void);
+void __init nfs_local_copies_init(void);
+void nfs_local_copies_exit(void);
+
+/*
+ * Why a segment of a LOCALIO O_DIRECT I/O copied data, as reported by
+ * /sys/kernel/debug/nfs_localio_copies.
+ */
+enum nfs_local_copy_cause {
+	NFS_LOCAL_COPY_NONE,		/* a direct segment: nothing copied */
+	NFS_LOCAL_COPY_MERGE_TAIL,	/* buffered prefix/suffix of a direct split */
+	NFS_LOCAL_COPY_SMALL,		/* NFS_DIO_TOO_SMALL */
+	NFS_LOCAL_COPY_PRP_GAP,		/* NFS_DIO_GAP_MISALIGNED */
+	NFS_LOCAL_COPY_MEM_MISALIGNED,	/* NFS_DIO_MEM_MISALIGNED */
+	NFS_LOCAL_COPY_NO_MIDDLE,	/* NFS_DIO_NO_MIDDLE */
+	NFS_LOCAL_COPY_NO_ALIGNMENT,	/* NFS_DIO_NO_ALIGNMENT */
+	NFS_LOCAL_COPY_STABLE_WRITES,	/* direct, but the backing fs bounces it */
+	NFS_LOCAL_COPY_NR,
+};
+
+/**
+ * nfs_local_seg_copy_cause - why a segment of a split I/O copies its bytes
+ * @split: how nfs_dio_split() split the I/O
+ * @seg: one of @split's segments
+ * @stable_writes: the backing mapping has mapping_stable_writes(), so the
+ *	file system bounces direct I/O through a copy
+ *
+ * A direct segment copies only if @stable_writes.  That matches XFS, the
+ * product's backing file system; btrfs bounces checksummed direct writes
+ * regardless of the mapping (reported as direct), and ext4 does not bounce
+ * on a stable-writes device (reported as copied).  A buffered segment of a
+ * direct split is its prefix or suffix; any other split is one buffered
+ * segment, copied for the reason the split gives.
+ *
+ * Return: the cause of the segment's copy, or %NFS_LOCAL_COPY_NONE if it
+ * copies nothing.
+ */
+static inline enum nfs_local_copy_cause
+nfs_local_seg_copy_cause(const struct nfs_dio_split *split,
+			 const struct nfs_dio_seg *seg, bool stable_writes)
+{
+	if (seg->flags & IOCB_DIRECT)
+		return stable_writes ? NFS_LOCAL_COPY_STABLE_WRITES :
+				       NFS_LOCAL_COPY_NONE;
+	switch (split->disposition) {
+	case NFS_DIO_DIRECT:
+		return NFS_LOCAL_COPY_MERGE_TAIL;
+	case NFS_DIO_TOO_SMALL:
+		return NFS_LOCAL_COPY_SMALL;
+	case NFS_DIO_GAP_MISALIGNED:
+		return NFS_LOCAL_COPY_PRP_GAP;
+	case NFS_DIO_MEM_MISALIGNED:
+		return NFS_LOCAL_COPY_MEM_MISALIGNED;
+	case NFS_DIO_NO_MIDDLE:
+		return NFS_LOCAL_COPY_NO_MIDDLE;
+	case NFS_DIO_NO_ALIGNMENT:
+		return NFS_LOCAL_COPY_NO_ALIGNMENT;
+	}
+	WARN_ON_ONCE(1);
+	return NFS_LOCAL_COPY_NO_ALIGNMENT;
+}
+
+/**
+ * nfs_local_bvec_from_reqs - describe a fragmented header's payload as a bvec
+ * @bvec: filled in, one entry per discontiguous memory fragment
+ * @maxvecs: entries in @bvec
+ * @reqs: the header's requests, in file order, each within one page
+ * @skip: bytes of the payload already transferred, for a restarted I/O
+ * @count: in, the bytes to describe; out, the bytes described
+ *
+ * The requests of an NFS_IOHDR_FRAGMENTED header do not tile their pages
+ * contiguously: a fragment may end mid-page, or its successor start at a
+ * non-zero offset, as kernel bvecs from loaned receive pages do.  Its page
+ * array and base offset cannot describe that, so each request's own page,
+ * offset and length become a bvec, merged into the previous one where the
+ * two are adjacent in the same page.  nfs_dio_split() then sees the real
+ * fragments and judges each, and each joint, by the backing file's policy.
+ *
+ * Return: the number of entries used.
+ */
+static inline unsigned int
+nfs_local_bvec_from_reqs(struct bio_vec *bvec, unsigned int maxvecs,
+			 const struct list_head *reqs, size_t skip,
+			 size_t *count)
+{
+	const struct nfs_page *req;
+	size_t left = *count;
+	unsigned int v = 0;
+
+	list_for_each_entry(req, reqs, wb_list) {
+		unsigned int off = req->wb_pgbase;
+		size_t len = req->wb_bytes;
+
+		if (!left)
+			break;
+		if (skip >= len) {
+			skip -= len;
+			continue;
+		}
+		off += skip;
+		len = min(len - skip, left);
+		skip = 0;
+		if (v && bvec[v - 1].bv_page == req->wb_page &&
+		    bvec[v - 1].bv_offset + bvec[v - 1].bv_len == off) {
+			bvec[v - 1].bv_len += len;
+		} else {
+			if (WARN_ON_ONCE(v == maxvecs))
+				break;
+			bvec_set_page(&bvec[v++], req->wb_page, len, off);
+		}
+		left -= len;
+	}
+	*count -= left;
+	return v;
+}
+
+/*
+ * The bytes of a fragmented header already transferred: a restarted write
+ * advances args.offset past its first request.
+ */
+static inline size_t nfs_local_frag_skip(const struct nfs_pgio_header *hdr)
+{
+	return hdr->args.offset - req_offset(hdr->req);
+}
 
 #else /* CONFIG_NFS_LOCALIO */
+static inline void nfs_local_copies_init(void) {}
+static inline void nfs_local_copies_exit(void) {}
 static inline void nfs_local_probe(struct nfs_client *clp) {}
 static inline void nfs_local_probe_async(struct nfs_client *clp) {}
 static inline void nfs_local_open_prepare(struct file *file) {}

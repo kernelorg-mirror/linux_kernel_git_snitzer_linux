@@ -1667,6 +1667,7 @@ enum {
 	NFS_IOHDR_ODIRECT,
 	NFS_IOHDR_NOWAIT,
 	NFS_IOHDR_LOCAL_PAGES,
+	NFS_IOHDR_FRAGMENTED,	/* requests are not page-contiguous; LOCALIO only */
 };
 
 struct nfs_io_completion;
