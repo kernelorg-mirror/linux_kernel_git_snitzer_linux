@@ -412,6 +412,87 @@ LOCALIO every N (nfs3_localio_probe_throttle) IOs, defaults to 0
 (disabled). Must be power-of-2, admin keeps all the pieces if they
 misconfigure (too low a value or non-power-of-2).
 
+Optimized completion policy
+===========================
+
+LOCALIO optimized completion is enabled by default.
+The NFS client boolean ``localio_optimized_completion`` selects completion
+execution and CPU placement. It is independent of ``localio_enabled`` and
+``localio_direct_write_policy``: it does not enable LOCALIO, change write
+durability, change inline submission or reclaim deferral, or detect unsafe
+filesystem compositions.
+
+For modular NFS, opt out when loading the client::
+
+    modprobe nfs localio_optimized_completion=0
+
+For persistent modprobe configuration, use::
+
+    options nfs localio_optimized_completion=0
+
+For built-in NFS, use ``nfs.localio_optimized_completion=0`` on the kernel
+command line. Omitting the option is equivalent to specifying ``1``.
+The standard kernel boolean parser is used; an invalid boolean is rejected.
+The effective value is readable as ``Y`` or ``N`` at
+``/sys/module/nfs/parameters/localio_optimized_completion``. Its permission
+is 0444: it cannot be changed after load. To select another value, fully drain
+I/O, unmount client users, and normally reload the complete matching client
+module set. Built-in NFS requires a reboot. Do not force module unload.
+When ``CONFIG_NFS_LOCALIO`` is disabled, this parameter is absent and the
+completion policy is disabled.
+
+With the option off, callback-owned LOCALIO finalization queues to the existing
+``nfsiod`` workqueue before considering a waiter or a backing completion CPU.
+Synchronous direct I/O uses the original killable completion wait, without
+registering or draining a completion task. The existing direct-write
+path still finishes stable terminal writes inline; COMMIT and resubmission
+continue on ``nfsiod``.
+
+With the option on, callback-owned finalization first tries a registered
+synchronous waiter. Otherwise, a non-RT request with a backing DIO queue uses
+the existing finite scan of its origin's NUMA node, restricted to online
+workqueue and domain housekeeping CPUs. Reads and writes start after the
+origin and try it last. With per-CPU block queues the origin is usually the
+submitter's CPU, and finishing there can preempt the submitter. Retained
+measurements rejected same-CPU placement for the large asynchronous write
+tail, and reads use the same rule. Missing or ineligible targets use
+``nfsiod``. Terminal direct writes finish directly only in a permitted task
+context with no COMMIT or resubmission remaining; other cases stay queued.
+This terminal direct-write gate also applies to ordinary NFS direct writes,
+with their existing result and durability semantics.
+
+Both settings retain submission references that prevent early completion from
+releasing a request before its VFS call and write tail return. A submitter that
+owns finalization after an early callback can therefore finish directly even
+with this option off. Both settings also retain final backing-file protection,
+client-context cleanup ordering, and module-exit synchronization. The option
+controls placement, not these lifetime fixes.
+
+Inherited LOCALIO/XFS/MM lock-order risk
+--------------------------------------
+
+Disabling optimized completion does **not** remove the inherited
+LOCALIO/XFS/MM lock-order risk. A native XFS operation using an NFS-mapped user
+buffer can fault while holding XFS IOLOCK and wait for a LOCALIO read that
+needs that same lock. A real recursive wait remains possible. There is no
+automatic detector or escape path. Queuing completion alone does not repair
+this dependency, and the option does not reject otherwise valid file-backed
+user buffers.
+
+With or without optimized completion, lockdep can record a dependency between
+NFS ``mapping.invalidate_lock#3``, XFS IOLOCK, ``mmap_lock`` and ``vm_lock``.
+Optimized completion, on by default, leaves this known inherited
+warning in place. It is neither a correctness repair nor a general lockdep
+exemption. New warnings, data errors, hangs, lifetime failures and invalid
+completion contexts remain failures. Once the known warning disables
+lockdep, later silence does not establish locking correctness.
+
+To avoid this LOCALIO path, disable LOCALIO itself with ``localio_enabled=N``
+(or ``nfs.localio_enabled=N`` for built-in NFS) and verify the intended RPC
+path. This is operational avoidance, not a repair of the inherited cycle.
+Optimized completion is on by default. Its performance improvements are
+not a guarantee for every workload.
+
 Testing
 =======
 

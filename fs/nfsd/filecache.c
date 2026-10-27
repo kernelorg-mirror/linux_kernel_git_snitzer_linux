@@ -402,8 +402,12 @@ nfsd_file_put_local(struct nfsd_file __rcu **pnf)
 
 	nf = unrcu_pointer(xchg(pnf, NULL));
 	if (nf) {
+		struct file *file = get_file(nf->nf_file);
+
 		net = nf->nf_net;
+		/* Defer final backing-file close off its own DIO workqueue. */
 		nfsd_file_put(nf);
+		fput(file);
 	}
 	return net;
 }

@@ -839,6 +839,22 @@ nfs_async_rename(struct inode *old_dir, struct inode *new_dir,
 extern int nfs_sillyrename(struct inode *dir, struct dentry *dentry);
 
 /* direct.c */
+#ifdef CONFIG_NFS_LOCALIO
+extern bool nfs_localio_optimized_completion;
+
+static inline bool nfs_localio_optimized_completion_enabled(void)
+{
+	return nfs_localio_optimized_completion;
+}
+#else
+static inline bool nfs_localio_optimized_completion_enabled(void)
+{
+	return false;
+}
+#endif
+
+bool nfs_direct_queue_task_work(struct nfs_direct_req *dreq,
+				struct callback_head *work);
 void nfs_init_cinfo_from_dreq(struct nfs_commit_info *cinfo,
 			      struct nfs_direct_req *dreq);
 extern ssize_t nfs_dreq_bytes_left(struct nfs_direct_req *dreq, loff_t offset);
@@ -1104,6 +1120,8 @@ struct nfs_direct_req {
 				max_good_end,	/* NOWAIT write success before prefix clamp */
 				error;		/* any reported error */
 	struct completion	completion;	/* wait for i/o completion */
+	/* Protected by completion.wait.lock; non-NULL only inside the wait. */
+	struct task_struct	*completion_task;
 
 	/* commit state */
 	struct nfs_mds_commit_info mds_cinfo;	/* Storage for cinfo */
