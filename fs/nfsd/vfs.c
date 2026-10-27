@@ -1896,8 +1896,8 @@ nfsd_commit(struct svc_rqst *rqstp, struct svc_fh *fhp, struct nfsd_file *nf,
  * @resfhp: NFS filehandle of new object
  * @attrs: requested attributes of new object
  *
- * Called with the parent directory locked. Nothing is committed to
- * stable storage here; the caller must call nfsd_create_commit() after
+ * Usually called with the parent directory locked. Nothing is committed
+ * to stable storage here; the caller must call nfsd_create_commit() after
  * dropping the parent directory lock.
  *
  * Returns nfs_ok on success, or an nfsstat in network byte order.
