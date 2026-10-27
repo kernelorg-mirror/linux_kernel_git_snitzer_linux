@@ -420,7 +420,10 @@ nfsd3_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			if (!d_is_reg(child))
 				break;
 			iap->ia_valid &= ATTR_SIZE;
-			goto set_attr;
+			/* resfhp pins the file; truncate and commit unlocked */
+			end_creating(child);
+			status = nfsd_create_setattr(rqstp, fhp, resfhp, &attrs);
+			goto commit;
 		case NFS3_CREATE_GUARDED:
 			status = nfserr_exist;
 			break;
@@ -460,9 +463,9 @@ nfsd3_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		iap->ia_atime.tv_nsec = 0;
 	}
 
-set_attr:
 	status = nfsd_create_setattr(rqstp, fhp, resfhp, &attrs);
 	end_creating(child);
+commit:
 	if (status == nfs_ok)
 		status = nfsd_create_commit(fhp, resfhp);
 	goto out_write;
