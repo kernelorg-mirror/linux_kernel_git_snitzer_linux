@@ -255,6 +255,12 @@ nfs_file_fsync_commit(struct file *file, int datasync)
 	ret2 = file_check_and_advance_wb_err(file);
 	if (ret2 < 0)
 		return ret2;
+	if (!ret && !datasync && nfs_local_dsync_enabled()) {
+		ret = nfs_commit_file(file);
+		ret2 = file_check_and_advance_wb_err(file);
+		if (ret2 < 0)
+			return ret2;
+	}
 	return ret;
 }
 
