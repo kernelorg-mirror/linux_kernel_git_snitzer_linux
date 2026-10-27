@@ -6,7 +6,10 @@
  */
 
 #include <kunit/test.h>
+#include <linux/completion.h>
 #include <linux/gfp.h>
+#include <linux/kthread.h>
+#include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/sched.h>
@@ -232,7 +235,7 @@ static struct rx_loan_budget *rx_loan_kunit_budget(struct kunit *test,
 
 	KUNIT_ASSERT_NOT_NULL(test, lb);
 	lb->stock = alloc_percpu(struct rx_loan_stock);
-	KUNIT_ASSERT_NOT_NULL(test, lb->stock);
+	KUNIT_ASSERT_TRUE(test, lb->stock != NULL);
 	ret = kunit_add_action_or_reset(test, rx_loan_kunit_budget_free, lb);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	spin_lock_init(&lb->lock);
@@ -379,11 +382,11 @@ static void rx_loan_fifo_test(struct kunit *test)
 	rx_loan_kunit_waiter_init(&a, false, 0);
 	rx_loan_kunit_waiter_init(&b, false, 0);
 	rx_loan_kunit_waiter_init(&p, true, 1);
-	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, &a.w, &a.cr, 12, false));
-	KUNIT_ASSERT_FALSE(test, rx_loan_admit(lb, &b.w, &b.cr, 8, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &a.w, &a.cr, 12, false));
+	KUNIT_ASSERT_FALSE(test, rx_loan_admit(lb, NULL, &b.w, &b.cr, 8, false));
 	KUNIT_EXPECT_TRUE(test, rx_loan_waiting(&b.w));
-	KUNIT_EXPECT_EQ(test, rx_loan_grant(lb, &p.w), -EAGAIN);
-	rx_loan_park(lb, &p.w);
+	KUNIT_EXPECT_EQ(test, rx_loan_grant(lb, NULL, &p.w), -EAGAIN);
+	rx_loan_park(lb, NULL, &p.w);
 	KUNIT_EXPECT_EQ(test, lb->read_parked, 1ULL);
 	KUNIT_EXPECT_GT(test, p.w.ticket, b.w.ticket);
 	KUNIT_EXPECT_EQ(test, b.woken + p.woken, 0);
@@ -394,7 +397,7 @@ static void rx_loan_fifo_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, p.woken, 0);
 
 	/* The transport's admission passes the head on to the READ. */
-	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, &b.w, &b.cr, 8, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &b.w, &b.cr, 8, false));
 	KUNIT_EXPECT_FALSE(test, rx_loan_waiting(&b.w));
 	KUNIT_EXPECT_EQ(test, p.pinned, 1);
 	KUNIT_EXPECT_EQ(test, p.woken, 1);
@@ -403,7 +406,7 @@ static void rx_loan_fifo_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, lb->read_granted, 1ULL);
 	KUNIT_EXPECT_TRUE(test, list_empty(&lb->waiters));
 
-	rx_loan_grant_return(lb, p.w.credit, p.w.reserve);
+	rx_loan_grant_return(lb, NULL, p.w.credit, p.w.reserve);
 	rx_loan_kunit_return(&b);
 	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 16L);
 	KUNIT_EXPECT_EQ(test, lb->inflight_count, 0U);
@@ -417,11 +420,11 @@ static void rx_loan_reserve_oldest_test(struct kunit *test)
 
 	rx_loan_kunit_waiter_init(&a, false, 0);
 	rx_loan_kunit_waiter_init(&b, false, 0);
-	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, &a.w, &a.cr, 14, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &a.w, &a.cr, 14, false));
 	KUNIT_EXPECT_EQ(test, a.cr.credit, 14U);
 	KUNIT_EXPECT_EQ(test, a.cr.reserve, 2U);
 	KUNIT_EXPECT_EQ(test, lb->reserve, 2L);
-	KUNIT_ASSERT_FALSE(test, rx_loan_admit(lb, &b.w, &b.cr, 1, false));
+	KUNIT_ASSERT_FALSE(test, rx_loan_admit(lb, NULL, &b.w, &b.cr, 1, false));
 
 	/* The oldest grows from the reserve, then past the budget. */
 	KUNIT_EXPECT_TRUE(test, rx_loan_charge(&a.w, &a.cr, 16));
@@ -433,7 +436,7 @@ static void rx_loan_reserve_oldest_test(struct kunit *test)
 	rx_loan_kunit_return(&a);
 	KUNIT_EXPECT_EQ(test, b.woken, 1);
 	KUNIT_EXPECT_EQ(test, lb->reserve, 4L);
-	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, &b.w, &b.cr, 1, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &b.w, &b.cr, 1, false));
 	KUNIT_EXPECT_EQ(test, b.cr.reserve, 0U);
 	rx_loan_kunit_return(&b);
 	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 12L);
@@ -448,9 +451,9 @@ static void rx_loan_wake_need_test(struct kunit *test)
 	rx_loan_kunit_waiter_init(&a, false, 0);
 	rx_loan_kunit_waiter_init(&b, false, 0);
 	rx_loan_kunit_waiter_init(&c, false, 0);
-	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, &a.w, &a.cr, 10, false));
-	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, &c.w, &c.cr, 4, false));
-	KUNIT_ASSERT_FALSE(test, rx_loan_admit(lb, &b.w, &b.cr, 7, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &a.w, &a.cr, 10, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &c.w, &c.cr, 4, false));
+	KUNIT_ASSERT_FALSE(test, rx_loan_admit(lb, NULL, &b.w, &b.cr, 7, false));
 	KUNIT_EXPECT_EQ(test, b.w.need, 7U);
 
 	rx_loan_kunit_return(&c);	/* avail 6 < 7 */
@@ -464,6 +467,92 @@ static void rx_loan_wake_need_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 16L);
 }
 
+/*
+ * Only credit charged while a region was in place can hold its pages: a
+ * record charged before the region is carved and grown after it keeps only
+ * the growth spent when it is abandoned.  The rest goes back to its
+ * consumer's share and to the region's total, here below the stand-in's
+ * nothing: it was charged before it.
+ */
+static void rx_loan_orphan_carved_test(struct kunit *test)
+{
+	long out = rx_loan_region_out(), orphaned = rx_loan_region_orphaned();
+	struct rx_loan_consumer *c;
+	struct rx_loan_budget *lb;
+	struct rx_loan_kunit_waiter a;
+	long base;
+
+	if (page_pool_rx_region_exists() || rx_loan_region_size())
+		kunit_skip(test, "a region or a region size already exists");
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	c = rx_loan_kunit_consumer(test, "c");
+	rx_loan_kunit_waiter_init(&a, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, c, &a.w, &a.cr, 12, false));
+	KUNIT_EXPECT_EQ(test, a.cr.region, 0U);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out + 12);
+
+	rx_loan_kunit_standin(test, 1024, 0);
+	base = rx_loan_region_out();
+	KUNIT_EXPECT_TRUE(test, rx_loan_charge(&a.w, &a.cr, 20));
+	KUNIT_EXPECT_EQ(test, a.cr.credit, 20U);
+	KUNIT_EXPECT_EQ(test, a.cr.region, 8U);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base + 8);
+	rx_loan_orphan(&a.cr, U32_MAX);
+	KUNIT_EXPECT_FALSE(test, a.cr.linked);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&c->out_write), 8L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 8L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base - 4);
+	KUNIT_EXPECT_EQ(test, lb->orphaned, 20ULL);
+	rx_loan_consumer_unregister(c);
+	rx_loan_kunit_region(0, 0);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), orphaned);
+}
+
+/*
+ * A region configured but not yet carved, or whose carve failed, has a size
+ * that caps charges but no pages: a record charged then holds none of its
+ * pages, so an orphan gives all its credit back to its consumer's share and
+ * to the region's total.
+ */
+static void rx_loan_orphan_uncarved_test(struct kunit *test)
+{
+	long out = rx_loan_region_out(), orphaned = rx_loan_region_orphaned();
+	unsigned int pages, read_pages;
+	struct rx_loan_consumer *c;
+	struct rx_loan_kunit_waiter a;
+	struct rx_loan_budget *lb;
+	bool failed;
+	int i;
+
+	if (page_pool_rx_region_exists() || rx_loan_region_size())
+		kunit_skip(test, "a region or a region size already exists");
+	page_pool_rx_region_kunit_params(&pages, &read_pages, &failed);
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	c = rx_loan_kunit_consumer(test, "c");
+	for (i = 0; i < 2; i++) {
+		/* Configured, then configured with its carve failed. */
+		page_pool_rx_region_kunit_config(1024, 0, i);
+		KUNIT_EXPECT_NE(test, rx_loan_region_size(), 0UL);
+		rx_loan_kunit_waiter_init(&a, false, 0);
+		KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, c, &a.w, &a.cr, 12,
+						      false));
+		KUNIT_EXPECT_TRUE(test, rx_loan_charge(&a.w, &a.cr, 20));
+		KUNIT_EXPECT_EQ(test, a.cr.credit, 20U);
+		KUNIT_EXPECT_EQ(test, a.cr.region, 0U);
+		KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out + 20);
+		rx_loan_orphan(&a.cr, U32_MAX);
+		KUNIT_EXPECT_FALSE(test, a.cr.linked);
+		KUNIT_EXPECT_EQ(test, atomic_long_read(&c->out_write), 0L);
+		KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
+		KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), orphaned);
+	}
+	KUNIT_EXPECT_FALSE(test, page_pool_rx_region_exists());
+	KUNIT_EXPECT_EQ(test, lb->orphaned, 40ULL);
+	rx_loan_consumer_unregister(c);
+	page_pool_rx_region_kunit_config(pages, read_pages, failed);
+}
+
 /* An orphan stays spent but leaves the in-flight order. */
 static void rx_loan_orphan_test(struct kunit *test)
 {
@@ -472,16 +561,16 @@ static void rx_loan_orphan_test(struct kunit *test)
 
 	rx_loan_kunit_waiter_init(&a, false, 0);
 	rx_loan_kunit_waiter_init(&b, false, 0);
-	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, &a.w, &a.cr, 12, false));
-	KUNIT_ASSERT_FALSE(test, rx_loan_admit(lb, &b.w, &b.cr, 1, false));
-	rx_loan_orphan(&a.cr);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &a.w, &a.cr, 12, false));
+	KUNIT_ASSERT_FALSE(test, rx_loan_admit(lb, NULL, &b.w, &b.cr, 1, false));
+	rx_loan_orphan(&a.cr, U32_MAX);
 	KUNIT_EXPECT_FALSE(test, a.cr.linked);
 	KUNIT_EXPECT_EQ(test, lb->orphaned, 12ULL);
 	KUNIT_EXPECT_EQ(test, lb->inflight_count, 0U);
 	KUNIT_EXPECT_EQ(test, b.woken, 1);
 
 	/* Nothing in flight: the next record is the oldest, on the reserve. */
-	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, &b.w, &b.cr, 1, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &b.w, &b.cr, 1, false));
 	KUNIT_EXPECT_EQ(test, b.cr.reserve, 1U);
 	rx_loan_kunit_return(&b);
 	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 0L);
@@ -496,18 +585,18 @@ static void rx_loan_grant_drop_test(struct kunit *test)
 
 	rx_loan_kunit_waiter_init(&g, true, 16);
 	rx_loan_kunit_waiter_init(&p, true, 1);
-	KUNIT_ASSERT_EQ(test, rx_loan_grant(lb, &g.w), 0);
+	KUNIT_ASSERT_EQ(test, rx_loan_grant(lb, NULL, &g.w), 0);
 	KUNIT_EXPECT_EQ(test, g.w.credit, 16U);
-	KUNIT_EXPECT_EQ(test, rx_loan_grant(lb, &p.w), -EAGAIN);
-	rx_loan_park(lb, &p.w);
+	KUNIT_EXPECT_EQ(test, rx_loan_grant(lb, NULL, &p.w), -EAGAIN);
+	rx_loan_park(lb, NULL, &p.w);
 	KUNIT_EXPECT_EQ(test, p.woken, 0);
 
-	rx_loan_grant_drop(lb, g.w.credit, g.w.reserve);
+	rx_loan_grant_drop(lb, NULL, g.w.credit, g.w.reserve);
 	flush_work(&lb->kick_work);
 	KUNIT_EXPECT_EQ(test, p.woken, 1);
 	KUNIT_EXPECT_EQ(test, p.w.credit, 1U);
 	KUNIT_EXPECT_EQ(test, lb->read_granted, 1ULL);
-	rx_loan_grant_return(lb, p.w.credit, p.w.reserve);
+	rx_loan_grant_return(lb, NULL, p.w.credit, p.w.reserve);
 	KUNIT_EXPECT_EQ(test, rx_loan_read_inflight(lb), 0L);
 	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 16L);
 }
@@ -520,8 +609,8 @@ static void rx_loan_reconfigure_test(struct kunit *test)
 
 	rx_loan_kunit_waiter_init(&a, false, 0);
 	rx_loan_kunit_waiter_init(&b, false, 0);
-	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, &a.w, &a.cr, 10, false));
-	KUNIT_ASSERT_FALSE(test, rx_loan_admit(lb, &b.w, &b.cr, 20, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &a.w, &a.cr, 10, false));
+	KUNIT_ASSERT_FALSE(test, rx_loan_admit(lb, NULL, &b.w, &b.cr, 20, false));
 
 	/* Requested, not applied: the kick's locked op applies it. */
 	spin_lock_bh(&lb->lock);
@@ -534,7 +623,7 @@ static void rx_loan_reconfigure_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, lb->avail, 22L);
 	KUNIT_EXPECT_EQ(test, b.woken, 1);
 
-	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, &b.w, &b.cr, 20, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &b.w, &b.cr, 20, false));
 	rx_loan_kunit_return(&a);
 	rx_loan_kunit_return(&b);
 	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 32L);
@@ -635,7 +724,7 @@ static void rx_loan_region_read_pickup_test(struct kunit *test)
 	/* Resized with no request: admission's locked op applies it. */
 	rx_loan_kunit_region(64, 24);
 	rx_loan_kunit_waiter_init(&a, false, 0);
-	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, &a.w, &a.cr, 4, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &a.w, &a.cr, 4, false));
 	KUNIT_EXPECT_EQ(test, lb->budget, 24U);
 	KUNIT_EXPECT_EQ(test, lb->avail, 20L);
 	rx_loan_kunit_return(&a);
@@ -646,7 +735,654 @@ static void rx_loan_region_read_pickup_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, rx_loan_read_pool_pages(48), 0U);
 }
 
+/*
+ * The computed size on the qualified shapes: kNFSd's floor is two
+ * double-buffered records of one maximum payload (1 MiB) per thread,
+ * nrthreads * 4 * (payload pages + 1).
+ */
+static void rx_loan_region_size_for_test(struct kunit *test)
+{
+	unsigned long big = 1UL << 30;	/* pages: no memory cap */
+	unsigned long payload = (1UL << 20) >> PAGE_SHIFT;
+
+	/* Nothing asks: no region. */
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_size_for(0, 0, big), 0UL);
+	/* A READ server whose NIC has no page_pool, 192 threads. */
+	if (PAGE_SIZE == 4096)
+		KUNIT_EXPECT_EQ(test,
+				page_pool_rx_region_kunit_size_for(0,
+					192 * 4 * (payload + 1), big),
+				262144UL);
+	/* veth rig: one queue of 256 and 8 threads. */
+	KUNIT_EXPECT_EQ(test,
+			page_pool_rx_region_kunit_size_for(256,
+				8 * 4 * (payload + 1), big),
+			roundup_pow_of_two(256 + 8 * 4 * (payload + 1)));
+	/* At least one maximum READ. */
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_size_for(1, 0, big),
+			roundup_pow_of_two(PAGE_POOL_RX_REGION_READ_MIN));
+	/* At most a power of two within a 64th of memory. */
+	KUNIT_EXPECT_EQ(test,
+			page_pool_rx_region_kunit_size_for(0, 1UL << 20,
+							   3000 * 64),
+			2048UL);
+	/* None where that is less than one maximum READ. */
+	KUNIT_EXPECT_EQ(test,
+			page_pool_rx_region_kunit_size_for(0, 1UL << 20,
+							   100 * 64),
+			0UL);
+}
+
+/*
+ * Shares split the region that exists among every consumer, @o others
+ * among them; a late consumer gets its part.
+ */
+static void rx_loan_consumer_share_test(struct kunit *test)
+{
+	struct rx_loan_consumer *a, *b;
+	unsigned long o;
+
+	rx_loan_kunit_standin(test, 1024, 0);
+	o = rx_loan_kunit_others(test, 1024);
+	/* Floors of 0: the stand-in region is the one shared. */
+	a = rx_loan_kunit_consumer(test, "a");
+	KUNIT_EXPECT_EQ(test, rx_loan_consumer_share(a), 1024 / (o + 1));
+	b = rx_loan_kunit_consumer(test, "b");
+	KUNIT_EXPECT_EQ(test, rx_loan_consumer_share(a), 1024 / (o + 2));
+	KUNIT_EXPECT_EQ(test, rx_loan_consumer_share(b), 1024 / (o + 2));
+	rx_loan_consumer_unregister(a);
+	KUNIT_EXPECT_EQ(test, rx_loan_consumer_share(a), 0UL);
+	KUNIT_EXPECT_EQ(test, rx_loan_consumer_share(b), 1024 / (o + 1));
+	rx_loan_consumer_unregister(b);
+	rx_loan_kunit_region(0, 0);
+}
+
+/*
+ * What the region holds out past @base, what it had out when the test
+ * began: all of @lb's credit not in its avail or its stocks (stocked
+ * credit is charged as a record takes it).
+ */
+static void rx_loan_kunit_expect_out(struct kunit *test,
+				     struct rx_loan_budget *lb, long size,
+				     long base)
+{
+	long avail;
+	int cpu;
+
+	spin_lock_bh(&lb->lock);
+	avail = lb->avail + lb->reserve;
+	for_each_possible_cpu(cpu)
+		avail += atomic_long_read(&per_cpu_ptr(lb->stock, cpu)->pages);
+	spin_unlock_bh(&lb->lock);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out() - base, size - avail);
+}
+
+struct rx_loan_kunit_racer {
+	struct rx_loan_budget *lb;
+	struct rx_loan_consumer *c, *other;
+	unsigned long region;
+	atomic_t *bad;
+	struct completion done;
+	u32 seed;
+};
+
+static int rx_loan_kunit_race_fn(void *data)
+{
+	struct rx_loan_kunit_racer *r = data;
+	unsigned long share = rx_loan_consumer_share(r->c);
+	struct rx_loan_kunit_waiter kw;
+	int i;
+
+	for (i = 0; i < 3000; i++) {
+		u32 cost;
+
+		r->seed = r->seed * 1103515245 + 12345;
+		cost = 1 + (r->seed >> 16) % 32;
+		rx_loan_kunit_waiter_init(&kw, false, 0);
+		if (rx_loan_admit(r->lb, r->c, &kw.w, &kw.cr, cost, true)) {
+			struct rx_loan_lend out = {};
+
+			if (rx_loan_region_out() > (long)r->region ||
+			    atomic_long_read(&r->c->out_write) > (long)share)
+				atomic_inc(r->bad);
+			rx_loan_return(&kw.cr, 0, 0, &out);
+		} else {
+			rx_loan_unwait(&kw.w);
+		}
+		if (rx_loan_region_out() > (long)r->region ||
+		    atomic_long_read(&r->c->out_write) +
+		    atomic_long_read(&r->other->out_write) >
+		    (long)r->region)
+			atomic_inc(r->bad);
+		cond_resched();
+	}
+	complete(&r->done);
+	return 0;
+}
+
+/*
+ * Two consumers (a sunrpc-like one and an nvmet stand-in) admitting at
+ * once from two threads: the region's total and each share hold after
+ * every operation.
+ */
+static void rx_loan_region_total_concurrent_test(struct kunit *test)
+{
+	struct rx_loan_budget *lb;
+	struct rx_loan_consumer *a, *b;
+	struct rx_loan_kunit_racer r[2];
+	struct task_struct *t;
+	atomic_t bad = ATOMIC_INIT(0);
+	long base;
+	int i;
+
+	rx_loan_kunit_standin(test, 256, 0);
+	base = rx_loan_region_out();
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	a = rx_loan_kunit_consumer(test, "sunrpc");
+	b = rx_loan_kunit_consumer(test, "nvmet");
+	for (i = 0; i < 2; i++) {
+		r[i].lb = lb;
+		r[i].c = i ? b : a;
+		r[i].other = i ? a : b;
+		r[i].region = 256;
+		r[i].bad = &bad;
+		r[i].seed = 7 + i;
+		init_completion(&r[i].done);
+		t = kthread_run(rx_loan_kunit_race_fn, &r[i], "rx_loan_race%d",
+				i);
+		KUNIT_ASSERT_FALSE(test, IS_ERR(t));
+	}
+	for (i = 0; i < 2; i++)
+		wait_for_completion(&r[i].done);
+	KUNIT_EXPECT_EQ(test, atomic_read(&bad), 0);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), 0L);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&b->out_write), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 256L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base);
+	rx_loan_consumer_unregister(b);
+	rx_loan_consumer_unregister(a);
+	rx_loan_kunit_region(0, 0);
+}
+
+#define RX_LOAN_KUNIT_HELD	16	/* records and grants a racer holds */
+#define RX_LOAN_KUNIT_COST	8	/* the most one asks: stockable */
+
+struct rx_loan_kunit_binder {
+	struct rx_loan_budget *lb[2];	/* admits from [0], grants from [1] */
+	struct rx_loan_consumer *c[2];	/* [0] is this racer's */
+	long region;
+	long max_region;		/* the most seen out of the region */
+	long max_out[2];		/* and of each consumer, as c[] */
+	atomic_t *bad;
+	struct completion done;
+	u32 seed;
+	struct rx_loan_kunit_waiter rec[RX_LOAN_KUNIT_HELD];
+	struct rx_loan_kunit_waiter grant[RX_LOAN_KUNIT_HELD];
+};
+
+/*
+ * The region's total, and each consumer within its share but for one
+ * oldest overrun on each budget it draws on.
+ */
+static void rx_loan_kunit_bind_check(struct rx_loan_kunit_binder *r)
+{
+	long v = rx_loan_region_out();
+	int i;
+
+	r->max_region = max(r->max_region, v);
+	if (v > r->region)
+		atomic_inc(r->bad);
+	for (i = 0; i < 2; i++) {
+		v = atomic_long_read(&r->c[i]->out_write);
+		r->max_out[i] = max(r->max_out[i], v);
+		if (v > (long)rx_loan_consumer_share(r->c[i]) +
+		    2 * RX_LOAN_KUNIT_COST)
+			atomic_inc(r->bad);
+	}
+}
+
+/*
+ * A racer's waiters decline every wake: their slots are reused at once,
+ * and a wake from the other racer must not land in a reused one.  The
+ * racer retries on its own.
+ */
+static bool rx_loan_kunit_bind_pin(struct rx_loan_waiter *w)
+{
+	return false;
+}
+
+static const struct rx_loan_waiter_ops rx_loan_kunit_bind_ops = {
+	.pin	= rx_loan_kunit_bind_pin,
+	.wake	= rx_loan_kunit_wake,
+};
+
+static int rx_loan_kunit_bind_fn(void *data)
+{
+	struct rx_loan_kunit_binder *r = data;
+	struct rx_loan_consumer *c = r->c[0];
+	int i;
+
+	for (i = 0; i < 4000; i++) {
+		int slot = i % RX_LOAN_KUNIT_HELD;
+		struct rx_loan_kunit_waiter *kr = &r->rec[slot];
+		struct rx_loan_kunit_waiter *kg = &r->grant[slot];
+		struct rx_loan_lend out = {};
+		u32 cost;
+
+		r->seed = r->seed * 1103515245 + 12345;
+		cost = 1 + (r->seed >> 16) % RX_LOAN_KUNIT_COST;
+		/* A stocked admit, or the return of the record in its slot. */
+		if (kr->cr.linked) {
+			rx_loan_return(&kr->cr, 0, 0, &out);
+		} else {
+			rx_loan_kunit_waiter_init(kr, false, 0);
+			kr->w.ops = &rx_loan_kunit_bind_ops;
+			if (!rx_loan_admit(r->lb[0], c, &kr->w, &kr->cr, cost,
+					   true))
+				rx_loan_unwait(&kr->w);
+		}
+		rx_loan_kunit_bind_check(r);
+		/* A grant, or the return of the grant in its slot. */
+		if (kg->w.budget) {
+			rx_loan_grant_return(r->lb[1], c, kg->w.credit,
+					     kg->w.reserve);
+			kg->w.budget = NULL;
+		} else {
+			rx_loan_kunit_waiter_init(kg, true, cost);
+			kg->w.ops = &rx_loan_kunit_bind_ops;
+			if (rx_loan_grant(r->lb[1], c, &kg->w))
+				kg->w.budget = NULL;
+		}
+		rx_loan_kunit_bind_check(r);
+		cond_resched();
+	}
+	for (i = 0; i < RX_LOAN_KUNIT_HELD; i++) {
+		struct rx_loan_lend out = {};
+
+		if (r->rec[i].cr.linked)
+			rx_loan_return(&r->rec[i].cr, 0, 0, &out);
+		if (r->grant[i].w.budget)
+			rx_loan_grant_return(r->lb[1], c, r->grant[i].w.credit,
+					     r->grant[i].w.reserve);
+		rx_loan_kunit_bind_check(r);
+	}
+	complete(&r->done);
+	return 0;
+}
+
+/*
+ * Two consumers on two threads, each taking stocked admits from one budget
+ * and grants from another.  The region is a share of 64 for each consumer,
+ * the @o others too, so 128 for the two alone.  Each racer would hold up
+ * to 256 pages, twice that and four times its share, and the two budgets
+ * (1.5 times the region each) together are three times the region, so the
+ * region binds and refuses: its total and each consumer's share hold after
+ * every operation, and everything comes back.
+ */
+static void rx_loan_region_binds_concurrent_test(struct kunit *test)
+{
+	struct rx_loan_consumer *a, *b;
+	struct rx_loan_kunit_binder *r;
+	struct rx_loan_budget *lb[2];
+	atomic_t bad = ATOMIC_INIT(0);
+	struct task_struct *t;
+	long denied, share, region, base;
+	unsigned long o;
+	int i;
+
+	r = kunit_kcalloc(test, 2, sizeof(*r), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, r);
+	rx_loan_kunit_standin(test, 128, 0);
+	o = rx_loan_kunit_others(test, 128);
+	region = 64 * (o + 2);
+	rx_loan_kunit_region(region, 0);
+	base = rx_loan_region_out();
+	denied = rx_loan_kunit_region_denied();
+	lb[0] = rx_loan_kunit_budget(test, region * 3 / 2, 0);
+	lb[1] = rx_loan_kunit_budget(test, region * 3 / 2, 0);
+	a = rx_loan_kunit_consumer(test, "sunrpc");
+	b = rx_loan_kunit_consumer(test, "nvmet");
+	share = rx_loan_consumer_share(a);
+	KUNIT_ASSERT_EQ(test, share, 64L);
+	/*
+	 * The shares sum to the region, so only the oldest's overrun passes
+	 * it: A's oldest record takes all but 28 pages of it (past its
+	 * share), and B's grant of 40, within B's share, must be refused by
+	 * the region.
+	 */
+	rx_loan_kunit_waiter_init(&r[0].rec[0], false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb[0], a, &r[0].rec[0].w,
+					      &r[0].rec[0].cr,
+					      region - base - 28, false));
+	rx_loan_kunit_waiter_init(&r[1].grant[0], true, 40);
+	KUNIT_EXPECT_EQ(test, rx_loan_grant(lb[1], b, &r[1].grant[0].w),
+			-EAGAIN);
+	KUNIT_EXPECT_GT(test, rx_loan_kunit_region_denied(), denied);
+	KUNIT_EXPECT_LE(test, rx_loan_region_out(), region);
+	{
+		struct rx_loan_lend out = {};
+
+		rx_loan_return(&r[0].rec[0].cr, 0, 0, &out);
+	}
+	KUNIT_ASSERT_EQ(test, rx_loan_region_out(), base);
+	memset(r, 0, 2 * sizeof(*r));
+	for (i = 0; i < 2; i++) {
+		r[i].lb[0] = lb[0];
+		r[i].lb[1] = lb[1];
+		r[i].c[0] = i ? b : a;
+		r[i].c[1] = i ? a : b;
+		r[i].region = region;
+		r[i].bad = &bad;
+		r[i].seed = 11 + i;
+		init_completion(&r[i].done);
+		t = kthread_run(rx_loan_kunit_bind_fn, &r[i], "rx_loan_bind%d",
+				i);
+		KUNIT_ASSERT_FALSE(test, IS_ERR(t));
+	}
+	for (i = 0; i < 2; i++)
+		wait_for_completion(&r[i].done);
+	flush_work(&lb[0]->kick_work);
+	flush_work(&lb[1]->kick_work);
+	KUNIT_EXPECT_EQ(test, atomic_read(&bad), 0);
+	/* The region was asked for more than it had, and said no. */
+	KUNIT_EXPECT_GT(test, rx_loan_kunit_region_denied(), denied);
+	/* Its total and each share held throughout, as each racer saw. */
+	for (i = 0; i < 2; i++) {
+		KUNIT_EXPECT_LE(test, r[i].max_region, region);
+		KUNIT_EXPECT_LE(test, r[i].max_out[0],
+				share + 2 * RX_LOAN_KUNIT_COST);
+		KUNIT_EXPECT_LE(test, r[i].max_out[1],
+				share + 2 * RX_LOAN_KUNIT_COST);
+	}
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), 0L);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&b->out_write), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb[0]), region * 3 / 2);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb[1]), region * 3 / 2);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base);
+	rx_loan_consumer_unregister(b);
+	rx_loan_consumer_unregister(a);
+	rx_loan_kunit_region(0, 0);
+}
+
+/*
+ * A late consumer gets its share; the first's credit is not revoked.  The
+ * region is a share of 32 for each consumer, the @o others too; alone, A
+ * takes as many records of 12 as its larger share holds, up to four, which
+ * passes 32, and the budget is 16 more than that.
+ */
+static void rx_loan_late_consumer_test(struct kunit *test)
+{
+	struct rx_loan_budget *lb;
+	struct rx_loan_consumer *a, *b;
+	struct rx_loan_kunit_waiter ka[5], kb[2];
+	long region, budget, base;
+	unsigned long o;
+	int i, n;
+
+	rx_loan_kunit_standin(test, 64, 0);
+	o = rx_loan_kunit_others(test, 64);
+	region = 32 * (o + 2);
+	rx_loan_kunit_region(region, 0);
+	base = rx_loan_region_out();
+	a = rx_loan_kunit_consumer(test, "a");
+	n = min_t(unsigned long, 4, rx_loan_consumer_share(a) / 12);
+	KUNIT_ASSERT_GT(test, 12 * n, 32);
+	budget = 12 * n + 16;
+	lb = rx_loan_kunit_budget(test, budget, 0);
+	for (i = 0; i < n; i++) {
+		rx_loan_kunit_waiter_init(&ka[i], false, 0);
+		KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, a, &ka[i].w,
+						      &ka[i].cr, 12, false));
+	}
+	b = rx_loan_kunit_consumer(test, "b");
+	KUNIT_EXPECT_EQ(test, rx_loan_consumer_share(a), 32UL);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), 12L * n);
+	/* Past its new share, not the oldest: refused, nothing revoked. */
+	rx_loan_kunit_waiter_init(&ka[4], false, 0);
+	KUNIT_EXPECT_FALSE(test, rx_loan_admit(lb, a, &ka[4].w, &ka[4].cr,
+					       12, false));
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->share_denied), 1L);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), 12L * n);
+	/*
+	 * B gets its share of what the budget has left: A's refused record
+	 * waits for A, queued, without heading the FIFO in B's way.
+	 */
+	rx_loan_kunit_waiter_init(&kb[0], false, 0);
+	KUNIT_EXPECT_TRUE(test, rx_loan_admit(lb, b, &kb[0].w, &kb[0].cr,
+					      12, false));
+	KUNIT_EXPECT_TRUE(test, rx_loan_waiting(&ka[4].w));
+	rx_loan_kunit_waiter_init(&kb[1], false, 0);
+	KUNIT_EXPECT_FALSE(test, rx_loan_admit(lb, b, &kb[1].w, &kb[1].cr,
+					       12, false));
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&b->share_denied), 0L);
+	KUNIT_EXPECT_LE(test, rx_loan_region_out(), region);
+	rx_loan_unwait(&kb[1].w);
+	rx_loan_kunit_return(&kb[0]);
+	/* B's return does not bring A under its share: A's record waits. */
+	KUNIT_EXPECT_TRUE(test, rx_loan_waiting(&ka[4].w));
+	KUNIT_EXPECT_EQ(test, ka[4].woken, 0);
+	for (i = 0; i < n; i++)
+		rx_loan_kunit_return(&ka[i]);
+	/* A's own returns do. */
+	KUNIT_EXPECT_GT(test, ka[4].woken, 0);
+	rx_loan_unwait(&ka[4].w);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), budget);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base);
+	rx_loan_consumer_unregister(b);
+	rx_loan_consumer_unregister(a);
+	rx_loan_kunit_region(0, 0);
+}
+
+/* A stocked take charges the region; its return refunds it, exactly. */
+static void rx_loan_stock_region_charge_test(struct kunit *test)
+{
+	struct rx_loan_budget *lb;
+	struct rx_loan_kunit_waiter kw;
+	long base;
+
+	rx_loan_kunit_standin(test, 1024, 0);
+	base = rx_loan_region_out();
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	rx_loan_kunit_waiter_init(&kw, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &kw.w, &kw.cr, 4,
+					      true));
+	rx_loan_kunit_expect_out(test, lb, 256, base);
+	rx_loan_kunit_return(&kw);
+	rx_loan_kunit_expect_out(test, lb, 256, base);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 256L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base);
+	rx_loan_kunit_region(0, 0);
+}
+
+/*
+ * A record orphaned under a region keeps spent only what its pages still
+ * out can hold: what came back with its pages returns to its consumer's
+ * share, the budget and the region, as a return would.
+ */
+static void rx_loan_orphan_region_refund_test(struct kunit *test)
+{
+	struct rx_loan_consumer *c;
+	struct rx_loan_budget *lb;
+	struct rx_loan_kunit_waiter a, s;
+	long base, orphaned;
+
+	rx_loan_kunit_standin(test, 1024, 0);
+	base = rx_loan_region_out();
+	orphaned = rx_loan_region_orphaned();
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	c = rx_loan_kunit_consumer(test, "c");
+	rx_loan_kunit_waiter_init(&a, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, c, &a.w, &a.cr, 12, false));
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&c->out_write), 12L);
+
+	/* Four pages still out: those four stay spent, eight come back. */
+	rx_loan_orphan(&a.cr, 4);
+	KUNIT_EXPECT_FALSE(test, a.cr.linked);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&c->out_write), 4L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), orphaned + 4);
+	KUNIT_EXPECT_EQ(test, lb->orphaned, 4ULL);
+	KUNIT_EXPECT_EQ(test, lb->inflight_count, 0U);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 252L);
+	rx_loan_kunit_expect_out(test, lb, 256, base);
+
+	/* A stocked record whose pages all came back keeps nothing. */
+	rx_loan_kunit_waiter_init(&s, false, 0);
+	migrate_disable();
+	spin_lock_bh(&lb->lock);
+	/* Nobody waits: stock again, as a kick would. */
+	lb->contended = false;
+	KUNIT_EXPECT_EQ(test, rx_loan_stock_refill_locked(lb),
+			(long)RX_LOAN_STOCK_BATCH);
+	spin_unlock_bh(&lb->lock);
+	KUNIT_EXPECT_TRUE(test, rx_loan_admit(lb, c, &s.w, &s.cr, 4, true));
+	KUNIT_EXPECT_TRUE(test, s.cr.stocked);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&c->out_write), 8L);
+	rx_loan_orphan(&s.cr, 0);
+	migrate_enable();
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&c->out_write), 4L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), orphaned + 4);
+	KUNIT_EXPECT_EQ(test, lb->orphaned, 4ULL);
+	KUNIT_EXPECT_EQ(test, rx_loan_stocked_records(lb), 0L);
+	rx_loan_kunit_expect_out(test, lb, 256, base);
+	rx_loan_consumer_unregister(c);
+	rx_loan_kunit_region(0, 0);
+}
+
+/* Grants, parked grants and their returns are charged and refunded. */
+static void rx_loan_grant_region_test(struct kunit *test)
+{
+	struct rx_loan_budget *lb;
+	struct rx_loan_kunit_waiter g, p;
+	long base;
+
+	rx_loan_kunit_standin(test, 1024, 0);
+	base = rx_loan_region_out();
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	rx_loan_kunit_waiter_init(&g, true, 16);
+	KUNIT_ASSERT_EQ(test, rx_loan_grant(lb, NULL, &g.w), 0);
+	rx_loan_kunit_expect_out(test, lb, 256, base);
+	rx_loan_kunit_waiter_init(&p, true, 24);
+	rx_loan_park(lb, NULL, &p.w);
+	KUNIT_EXPECT_EQ(test, p.woken, 1);
+	KUNIT_EXPECT_EQ(test, p.w.credit, 24L);
+	rx_loan_kunit_expect_out(test, lb, 256, base);
+	rx_loan_grant_return(lb, NULL, g.w.credit, g.w.reserve);
+	rx_loan_kunit_expect_out(test, lb, 256, base);
+	rx_loan_grant_drop(lb, NULL, p.w.credit, p.w.reserve);
+	flush_work(&lb->kick_work);
+	rx_loan_kunit_expect_out(test, lb, 256, base);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 256L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base);
+	rx_loan_kunit_region(0, 0);
+}
+
+/*
+ * Progress: the oldest record may pass its share, never the region; it
+ * pauses on the region and resumes when another consumer returns.  Each
+ * one's first record is its oldest, so other consumers' smaller shares
+ * change none of this.
+ */
+static void rx_loan_progress_region_test(struct kunit *test)
+{
+	struct rx_loan_budget *lb;
+	struct rx_loan_consumer *a, *b;
+	struct rx_loan_kunit_waiter ka, kb;
+	long base;
+
+	rx_loan_kunit_standin(test, 24, 0);
+	base = rx_loan_region_out();
+	lb = rx_loan_kunit_budget(test, 32, 0);
+	a = rx_loan_kunit_consumer(test, "a");
+	b = rx_loan_kunit_consumer(test, "b");
+	rx_loan_kunit_waiter_init(&ka, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, a, &ka.w, &ka.cr, 16,
+					      false));
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->overrun_share), 1L);
+	rx_loan_kunit_waiter_init(&kb, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, b, &kb.w, &kb.cr, 6,
+					      false));
+	KUNIT_EXPECT_FALSE(test, rx_loan_charge(&ka.w, &ka.cr, 20));
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base + 22);
+	rx_loan_kunit_return(&kb);
+	KUNIT_EXPECT_EQ(test, ka.woken, 1);
+	KUNIT_EXPECT_TRUE(test, rx_loan_charge(&ka.w, &ka.cr, 20));
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base + 20);
+	rx_loan_kunit_return(&ka);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base);
+	rx_loan_consumer_unregister(b);
+	rx_loan_consumer_unregister(a);
+	rx_loan_kunit_region(0, 0);
+}
+
+/*
+ * Two namespaces' budgets share one region total: one refused for the
+ * region is kicked when the other's credit returns.
+ */
+static void rx_loan_netns_budget_test(struct kunit *test)
+{
+	struct rx_loan_net *n1, *n2;
+	struct rx_loan_kunit_waiter k1, k2;
+	long base;
+
+	rx_loan_kunit_standin(test, 64, 0);
+	base = rx_loan_region_out();
+	n1 = rx_loan_kunit_net(test);
+	n2 = rx_loan_kunit_net(test);
+	rx_loan_net_write_request(n1, 48, 0, false);
+	rx_loan_net_write_request(n2, 48, 0, false);
+	rx_loan_kunit_waiter_init(&k1, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(&n1->write, NULL, &k1.w,
+					      &k1.cr, 40, false));
+	rx_loan_kunit_waiter_init(&k2, false, 0);
+	KUNIT_EXPECT_FALSE(test, rx_loan_admit(&n2->write, NULL, &k2.w,
+					       &k2.cr, 40, false));
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base + 40);
+	rx_loan_kunit_return(&k1);
+	flush_work(&n2->write.kick_work);
+	KUNIT_EXPECT_EQ(test, k2.woken, 1);
+	KUNIT_EXPECT_TRUE(test, rx_loan_admit(&n2->write, NULL, &k2.w,
+					      &k2.cr, 40, false));
+	rx_loan_kunit_return(&k2);
+	rx_loan_net_state_exit(n2);
+	rx_loan_net_state_exit(n1);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base);
+	rx_loan_kunit_region(0, 0);
+}
+
+/*
+ * The region's cases with another consumer registered first, as a running
+ * server's is when the suite loads after nfsd starts: shares are over
+ * every consumer, and each case cleans up what it registers whether it
+ * passes or not.
+ */
+static void rx_loan_other_consumer_test(struct kunit *test)
+{
+	unsigned long o;
+
+	rx_loan_kunit_standin(test, 1024, 0);
+	o = rx_loan_kunit_others(test, 1024);
+	rx_loan_kunit_consumer(test, "live");
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_others(test, 1024), o + 1);
+	rx_loan_kunit_region(0, 0);
+	rx_loan_consumer_share_test(test);
+	rx_loan_region_binds_concurrent_test(test);
+	rx_loan_late_consumer_test(test);
+	rx_loan_progress_region_test(test);
+	rx_loan_netns_budget_test(test);
+}
+
 static struct kunit_case rx_loan_test_cases[] = {
+	KUNIT_CASE(rx_loan_region_size_for_test),
+	KUNIT_CASE(rx_loan_consumer_share_test),
+	KUNIT_CASE(rx_loan_other_consumer_test),
+	KUNIT_CASE(rx_loan_region_total_concurrent_test),
+	KUNIT_CASE(rx_loan_region_binds_concurrent_test),
+	KUNIT_CASE(rx_loan_late_consumer_test),
+	KUNIT_CASE(rx_loan_stock_region_charge_test),
+	KUNIT_CASE(rx_loan_orphan_region_refund_test),
+	KUNIT_CASE(rx_loan_grant_region_test),
+	KUNIT_CASE(rx_loan_progress_region_test),
+	KUNIT_CASE(rx_loan_netns_budget_test),
 	KUNIT_CASE(rx_loan_table_alloc_test),
 	KUNIT_CASE(rx_loan_table_append_test),
 	KUNIT_CASE(rx_loan_table_release_test),
@@ -656,6 +1392,8 @@ static struct kunit_case rx_loan_test_cases[] = {
 	KUNIT_CASE(rx_loan_reserve_oldest_test),
 	KUNIT_CASE(rx_loan_wake_need_test),
 	KUNIT_CASE(rx_loan_orphan_test),
+	KUNIT_CASE(rx_loan_orphan_carved_test),
+	KUNIT_CASE(rx_loan_orphan_uncarved_test),
 	KUNIT_CASE(rx_loan_grant_drop_test),
 	KUNIT_CASE(rx_loan_reconfigure_test),
 	KUNIT_CASE(rx_loan_stock_test),

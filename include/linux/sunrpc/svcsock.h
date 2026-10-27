@@ -15,6 +15,10 @@
 #include <net/rx_loan.h>
 
 struct svc_tcp_rx_budget;
+struct svc_serv;
+void svc_tcp_rx_serv_threads(struct svc_serv *serv);
+void svc_tcp_rx_consumer_start(struct net *net, struct svc_serv *serv);
+void svc_tcp_rx_consumer_stop(struct net *net);
 
 enum svc_tcp_rx_mode {
 	SVC_TCP_RX_EMPTY,
@@ -81,6 +85,8 @@ struct svc_tcp_rx_state {
 	 * (svc_rqst_bounce_payload), and the budget the credit returns to
 	 */
 	struct svc_tcp_rx_budget *bounce_budget;
+	/* the consumer the lent credit stays charged to until done */
+	struct rx_loan_consumer	*bounce_consumer;
 	u32			bounce_pages;
 	u32			bounce_credit;
 	u32			bounce_reserve;
@@ -228,6 +234,25 @@ void svc_tcp_rx_budget_kunit_configure(unsigned int pages,
 void svc_tcp_rx_budget_kunit_rcvbuf(unsigned int bytes);
 void svc_tcp_rx_budget_kunit_default(unsigned int pages, unsigned int reserve);
 int svc_tcp_rx_budget_kunit_set(unsigned int pages);
+struct rx_loan_consumer;
+struct rx_loan_waiter;
+unsigned long svc_tcp_rx_consumer_floor(unsigned int nrthreads,
+					unsigned int max_payload);
+struct rx_loan_consumer *svc_tcp_rx_kunit_consumer(unsigned int nrthreads,
+						   unsigned int max_payload);
+int svc_tcp_rx_budget_kunit_grant(struct svc_tcp_rx_budget *c,
+				  struct rx_loan_consumer *rc,
+				  struct rx_loan_waiter *w, long pages);
+void svc_tcp_rx_budget_kunit_grant_return(struct svc_tcp_rx_budget *c,
+					  struct rx_loan_waiter *w);
+void svc_tcp_rx_kunit_threads(unsigned int nrthreads, unsigned int max_payload);
+void svc_tcp_rx_kunit_consumer_stop(void);
+struct rx_loan_budget;
+unsigned long svc_tcp_rx_kunit_computed_default(bool on,
+						struct rx_loan_budget **lb);
+void svc_tcp_rx_kunit_netns_alias(bool on);
+long svc_tcp_rx_kunit_netns_free(bool read, bool *aliased);
+unsigned int svc_tcp_rx_kunit_rcvbuf_ungiven(void);
 void svc_tcp_rx_kunit_save(void);
 void svc_tcp_rx_kunit_restore(void);
 unsigned long svc_tcp_spare_kunit_set_max(unsigned long bytes);
