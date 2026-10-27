@@ -108,6 +108,8 @@ void nfs_pgheader_init(struct nfs_pageio_descriptor *desc,
 	hdr->dreq = desc->pg_dreq;
 	if (desc->pg_nowait)
 		set_bit(NFS_IOHDR_NOWAIT, &hdr->flags);
+	if (desc->pg_nowait_rpc)
+		set_bit(NFS_IOHDR_NOWAIT_RPC, &hdr->flags);
 	nfs_netfs_set_pgio_header(hdr, desc);
 	hdr->release = release;
 	hdr->completion_ops = desc->pg_completion_ops;
@@ -678,10 +680,19 @@ size_t nfs_generic_pg_test(struct nfs_pageio_descriptor *desc,
 }
 EXPORT_SYMBOL_GPL(nfs_generic_pg_test);
 
+/*
+ * A NOWAIT I/O allocates without sleeping, unless it is issued from task
+ * context after its submitter has accepted it (pg_nowait_rpc).
+ */
+static bool nfs_pgio_alloc_nowait(const struct nfs_pageio_descriptor *desc)
+{
+	return desc->pg_nowait && !desc->pg_nowait_rpc;
+}
+
 struct nfs_pgio_header *nfs_pgio_header_alloc(struct nfs_pageio_descriptor *desc)
 {
 	const struct nfs_rw_ops *ops = desc->pg_rw_ops;
-	gfp_t gfp = desc->pg_nowait ? GFP_NOWAIT : GFP_KERNEL;
+	gfp_t gfp = nfs_pgio_alloc_nowait(desc) ? GFP_NOWAIT : GFP_KERNEL;
 	struct nfs_pgio_header *hdr = ops->rw_alloc_header(gfp);
 
 	if (hdr) {
@@ -813,7 +824,8 @@ static void nfs_pgio_prepare(struct rpc_task *task, void *calldata)
 /*
  * Whether a header goes to LOCALIO rather than an RPC: when the local file
  * was opened, or for a NOWAIT I/O, which may not open it, when the server
- * is or was local.
+ * is or was local.  @nowait is false for a NOWAIT I/O whose submitter
+ * already routed it to RPC (NFS_IOHDR_NOWAIT_RPC): that is not re-decided.
  */
 static bool nfs_pgio_goes_local(const struct nfs_client *clp,
 				struct nfs_open_context *ctx, bool nowait,
@@ -859,7 +871,9 @@ int nfs_initiate_pgio(struct rpc_clnt *clnt, struct nfs_pgio_header *hdr,
 
 	if (nfs_pgio_goes_local(NFS_SERVER(hdr->inode)->nfs_client,
 				hdr->args.context,
-				test_bit(NFS_IOHDR_NOWAIT, &hdr->flags), localio))
+				test_bit(NFS_IOHDR_NOWAIT, &hdr->flags) &&
+				!test_bit(NFS_IOHDR_NOWAIT_RPC, &hdr->flags),
+				localio))
 		return nfs_local_doio(NFS_SERVER(hdr->inode)->nfs_client,
 				      localio, hdr, call_ops);
 
@@ -945,6 +959,7 @@ void nfs_pageio_init(struct nfs_pageio_descriptor *desc,
 {
 	desc->pg_moreio = 0;
 	desc->pg_nowait = false;
+	desc->pg_nowait_rpc = false;
 	desc->pg_bvec_frags = false;
 	desc->pg_inode = inode;
 	desc->pg_ops = pg_ops;
@@ -1006,7 +1021,8 @@ int nfs_generic_pgio(struct nfs_pageio_descriptor *desc,
 	struct nfs_page_array *pg_array = &hdr->page_array;
 	unsigned int pagecount, pageused;
 	unsigned int pg_base = offset_in_page(mirror->pg_base);
-	gfp_t gfp_flags = desc->pg_nowait ? GFP_NOWAIT : nfs_io_gfp_mask();
+	gfp_t gfp_flags = nfs_pgio_alloc_nowait(desc) ? GFP_NOWAIT :
+						      nfs_io_gfp_mask();
 
 	if (mirror->pg_fragmented) {
 		/* One page per request: each lies within its own page */
@@ -1167,7 +1183,9 @@ static int nfs_generic_pg_pgios(struct nfs_pageio_descriptor *desc)
 					    NFS_FH(desc->pg_inode),
 					    &ctx->nfl, ctx->mode);
 	if (mirror->pg_fragmented &&
-	    !nfs_pgio_goes_local(clp, ctx, desc->pg_nowait, localio))
+	    !nfs_pgio_goes_local(clp, ctx,
+				 desc->pg_nowait && !desc->pg_nowait_rpc,
+				 localio))
 		return nfs_generic_pg_pgios_runs(desc);
 	return nfs_generic_pg_pgios_one(desc, localio);
 }

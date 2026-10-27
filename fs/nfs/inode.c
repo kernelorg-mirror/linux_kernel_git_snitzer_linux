@@ -2884,6 +2884,7 @@ static void nfs_destroy_inodecache(void)
 struct workqueue_struct *nfslocaliod_workqueue;
 struct workqueue_struct *nfsiod_workqueue;
 EXPORT_SYMBOL_GPL(nfsiod_workqueue);
+struct workqueue_struct *nfsiod_nowait_workqueue;
 
 /*
  * Destroy the nfsiod workqueues
@@ -2892,6 +2893,12 @@ static void nfsiod_stop(void)
 {
 	struct workqueue_struct *wq;
 
+	/* Its work items queue RPCs whose release runs on nfsiod: first */
+	wq = nfsiod_nowait_workqueue;
+	if (wq) {
+		nfsiod_nowait_workqueue = NULL;
+		destroy_workqueue(wq);
+	}
 	wq = nfsiod_workqueue;
 	if (wq != NULL) {
 		nfsiod_workqueue = NULL;
@@ -2915,6 +2922,19 @@ static int nfsiod_start(void)
 	nfsiod_workqueue = alloc_workqueue("nfsiod", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
 	if (nfsiod_workqueue == NULL)
 		return -ENOMEM;
+	/*
+	 * The issue of a NOWAIT direct write over RPC (see
+	 * nfs_direct_write_nowait_issue()) may wait for a page cache folio
+	 * that only an nfsiod work item (an RPC's release) unlocks, so it
+	 * needs a workqueue, and a rescuer, of its own.
+	 */
+	nfsiod_nowait_workqueue = alloc_workqueue("nfsiod_nowait",
+						  WQ_MEM_RECLAIM | WQ_UNBOUND,
+						  0);
+	if (!nfsiod_nowait_workqueue) {
+		nfsiod_stop();
+		return -ENOMEM;
+	}
 #if IS_ENABLED(CONFIG_NFS_LOCALIO)
 	/*
 	 * localio writes need to use a normal (non-memreclaim) workqueue.

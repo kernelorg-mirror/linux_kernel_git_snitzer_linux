@@ -1668,6 +1668,7 @@ enum {
 	NFS_IOHDR_NOWAIT,
 	NFS_IOHDR_LOCAL_PAGES,
 	NFS_IOHDR_FRAGMENTED,	/* requests are not page-contiguous; LOCALIO only */
+	NFS_IOHDR_NOWAIT_RPC,	/* NOWAIT I/O its submitter routed to RPC */
 };
 
 struct nfs_io_completion;

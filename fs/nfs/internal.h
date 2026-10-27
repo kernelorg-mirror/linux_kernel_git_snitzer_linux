@@ -454,6 +454,7 @@ void nfs_truncate_last_folio(struct address_space *mapping, loff_t from,
 
 /* inode.c */
 extern struct workqueue_struct *nfsiod_workqueue;
+extern struct workqueue_struct *nfsiod_nowait_workqueue;
 extern struct workqueue_struct *nfslocaliod_workqueue;
 extern struct inode *nfs_alloc_inode(struct super_block *sb);
 extern void nfs_free_inode(struct inode *);
@@ -1367,6 +1368,13 @@ struct nfs_direct_req {
 	struct pnfs_ds_commit_info ds_cinfo;	/* Storage for cinfo */
 	struct work_struct	work;
 	int			flags;
+	/*
+	 * NOWAIT write the submitter routed to RPC: the requests it built,
+	 * which nfsiod_nowait_workqueue issues.
+	 */
+	bool			nowait_rpc;
+	struct list_head	nowait_reqs;
+	struct work_struct	nowait_work;
 	/* for write */
 #define NFS_ODIRECT_DO_COMMIT		(1)	/* an unstable reply was received */
 #define NFS_ODIRECT_RESCHED_WRITES	(2)	/* write verification failed */
