@@ -10,6 +10,8 @@
 #include <linux/workqueue.h>
 #include <linux/sched.h>
 #include <linux/net.h>
+#include <linux/netdevice.h>
+#include <linux/rtnetlink.h>
 #include <net/sock.h>
 #include <linux/percpu_counter.h>
 #include <linux/skbuff.h>
@@ -4109,6 +4111,102 @@ static void svcsock_rx_hold_again_test(struct kunit *test)
 	KUNIT_EXPECT_LE(test, tp->rcv_ssthresh, tp->window_clamp);
 }
 
+static void svcsock_rx_loopback_down(void *dev)
+{
+	rtnl_lock();
+	dev_close(dev);
+	rtnl_unlock();
+}
+
+/* A built-in KUnit run starts before anything brings up lo. */
+static void svcsock_rx_loopback_up(struct kunit *test)
+{
+	struct net_device *lo = init_net.loopback_dev;
+	int err = 0;
+
+	if (netif_running(lo))
+		return;
+	rtnl_lock();
+	err = dev_open(lo, NULL);
+	rtnl_unlock();
+	KUNIT_ASSERT_EQ(test, err, 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_loopback_down, lo), 0);
+}
+
+/*
+ * TCP sizes a connection's first window from its listener and never
+ * shrinks it. From a listener with a large buffer the window is already
+ * above what the region clamp allows when the accepted socket is held;
+ * from a held listener it opens within the clamp.
+ */
+static void svcsock_rx_listener_window_test(struct kunit *test)
+{
+	int want = svc_tcp_rx_window_clamp(SZ_256K, 150);
+	u8 ratio = svc_tcp_rx_scaling_ratio(150);
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+	};
+	struct socket *lsock, *csock, *ssock;
+	struct svc_sock *svsk;
+	struct tcp_sock *tp;
+	int held;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svcsock_rx_loopback_up(test);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
+	svc_tcp_rx_budget_kunit_rcvbuf(SZ_256K);
+
+	for (held = 0; held < 2; held++) {
+		KUNIT_ASSERT_EQ(test, sock_create_kern(&init_net, AF_INET,
+				SOCK_STREAM, IPPROTO_TCP, &lsock), 0);
+		KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+				svcsock_rx_sock_release, lsock), 0);
+		/* A large default receive buffer (tcp_rmem). */
+		sock_set_rcvbuf(lsock->sk, SZ_2M);
+		addr.sin_port = 0;
+		KUNIT_ASSERT_EQ(test, kernel_bind(lsock,
+				(struct sockaddr_unsized *)&addr, sizeof(addr)), 0);
+		KUNIT_ASSERT_EQ(test, kernel_listen(lsock, 1), 0);
+		if (held) {
+			svsk = svcsock_rx_credit_sock(test);
+			svsk->sk_sock = lsock;
+			svsk->sk_sk = lsock->sk;
+			svc_tcp_rx_hold_buffer(svsk);
+			KUNIT_ASSERT_TRUE(test, svsk->sk_rx_held);
+			KUNIT_EXPECT_EQ(test, READ_ONCE(tcp_sk(lsock->sk)->window_clamp),
+					(u32)want);
+			KUNIT_EXPECT_EQ(test, tcp_sk(lsock->sk)->scaling_ratio_max,
+					ratio);
+		}
+		KUNIT_ASSERT_EQ(test, kernel_getsockname(lsock,
+				(struct sockaddr *)&addr), (int)sizeof(addr));
+		KUNIT_ASSERT_EQ(test, sock_create_kern(&init_net, AF_INET,
+				SOCK_STREAM, IPPROTO_TCP, &csock), 0);
+		KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+				svcsock_rx_sock_release, csock), 0);
+		KUNIT_ASSERT_EQ(test, kernel_connect(csock,
+				(struct sockaddr_unsized *)&addr, sizeof(addr), 0), 0);
+		KUNIT_ASSERT_EQ(test, kernel_accept(lsock, &ssock, 0), 0);
+		KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+				svcsock_rx_sock_release, ssock), 0);
+		tp = tcp_sk(ssock->sk);
+
+		if (!held) {
+			KUNIT_EXPECT_GT(test, READ_ONCE(tp->rcv_wnd), (u32)want);
+			continue;
+		}
+		KUNIT_EXPECT_EQ(test, READ_ONCE(ssock->sk->sk_rcvbuf), SZ_256K);
+		KUNIT_EXPECT_TRUE(test, ssock->sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+		/* tcp_init_buffer_space() may trim it to the full space. */
+		KUNIT_EXPECT_LE(test, READ_ONCE(tp->window_clamp), (u32)want);
+		KUNIT_EXPECT_LE(test, READ_ONCE(tp->rcv_wnd), (u32)want);
+		KUNIT_EXPECT_LE(test, tp->scaling_ratio, ratio);
+	}
+}
+
 static void svcsock_rx_capacity_plus_one_test(struct kunit *test)
 {
 	enum { FRAG_LEN = 8 };
@@ -7249,6 +7347,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_geometry_test),
 	KUNIT_CASE(svcsock_rx_credit_reserve_oldest_test),
 	KUNIT_CASE(svcsock_rx_window_clamp_test),
+	KUNIT_CASE(svcsock_rx_listener_window_test),
 	KUNIT_CASE(svcsock_rx_hold_buffer_test),
 	KUNIT_CASE(svcsock_rx_hold_again_test),
 	KUNIT_CASE(svcsock_rx_credit_rcvbuf_floor_test),

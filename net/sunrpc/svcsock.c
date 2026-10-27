@@ -6751,8 +6751,12 @@ static bool svc_tcp_rx_hold_stale(struct svc_sock *svsk)
  * into window with at the region's geometry, and clamp the window, so its
  * unread data stays its share of the region.  The ceiling also keeps TCP
  * from raising the clamp again when it re-learns its ratio.  Transports
- * that never receive a region page keep TCP's own buffer.  Called with the
- * socket unlocked: each call takes the socket lock itself.
+ * that never receive a region page keep TCP's own buffer.  TCP sizes a
+ * connection's first window from its listener when the SYN arrives and
+ * never shrinks a window it has offered, so listeners are held too: a
+ * connection that opened with the listener's larger window would overflow
+ * the buffer it is held to with its first burst.  Called with the socket
+ * unlocked: each call takes the socket lock itself.
  */
 VISIBLE_IF_KUNIT void svc_tcp_rx_hold_buffer(struct svc_sock *svsk)
 {
@@ -6807,6 +6811,8 @@ static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 		set_bit(XPT_RPCB_UNREG, &svsk->sk_xprt.xpt_flags);
 		sk->sk_data_ready = svc_tcp_listen_data_ready;
 		set_bit(XPT_CONN, &svsk->sk_xprt.xpt_flags);
+		/* Connections take their first window from the listener. */
+		svc_tcp_rx_hold_buffer(svsk);
 	} else {
 		sk->sk_state_change = svc_tcp_state_change;
 		sk->sk_data_ready = svc_data_ready;
