@@ -320,7 +320,7 @@ TEST_F(openat2, flag_validation)
 
 /* Kernel-internal carrier for OPENAT2_REGULAR (see __O_REGULAR in fcntl.h). */
 #ifndef __O_REGULAR
-#define __O_REGULAR (1 << 30)
+#define __O_REGULAR (1 << 29)
 #endif
 
 /* Verify that OPENAT2_REGULAR rejects non-regular files with EFTYPE. */

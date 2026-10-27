@@ -2048,6 +2048,8 @@ struct inode_operations {
 			    struct dentry *dentry, struct file_kattr *fa);
 	int (*fileattr_get)(struct dentry *dentry, struct file_kattr *fa);
 	struct offset_ctx *(*get_offset_ctx)(struct inode *inode);
+	struct dentry *(*mkdir2) (struct mnt_idmap *, struct inode *,
+				  struct dentry *, umode_t, unsigned int);
 } ____cacheline_aligned;
 
 /* Did the driver provide valid mmap hook configuration? */

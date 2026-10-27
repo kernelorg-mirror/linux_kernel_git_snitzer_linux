@@ -50,10 +50,17 @@
 
 #include "internal.h"
 #include "netns.h"
-#include "nfs4idmap.h"
-#include "nfs4trace.h"
+#include <linux/nfs4idmap.h>
+#include "idmaptrace.h"
 
 #define NFS_UINT_MAXLEN 11
+
+/* Default cache timeout is 10 minutes */
+unsigned int nfs_idmap_cache_timeout = 600;
+EXPORT_SYMBOL_GPL(nfs_idmap_cache_timeout);
+module_param(nfs_idmap_cache_timeout, int, 0644);
+
+MODULE_LICENSE("GPL");
 
 static const struct cred *id_resolver_cache;
 static struct key_type key_type_id_resolver_legacy;
@@ -93,6 +100,7 @@ void nfs_fattr_init_names(struct nfs_fattr *fattr,
 	fattr->owner_name = owner_name;
 	fattr->group_name = group_name;
 }
+EXPORT_SYMBOL_GPL(nfs_fattr_init_names);
 
 static void nfs_fattr_free_owner_name(struct nfs_fattr *fattr)
 {
@@ -145,6 +153,7 @@ void nfs_fattr_free_names(struct nfs_fattr *fattr)
 	if (fattr->valid & NFS_ATTR_FATTR_GROUP_NAME)
 		nfs_fattr_free_group_name(fattr);
 }
+EXPORT_SYMBOL_GPL(nfs_fattr_free_names);
 
 /**
  * nfs_fattr_map_and_free_names - map owner/group strings into uid/gid and free
@@ -161,6 +170,7 @@ void nfs_fattr_map_and_free_names(struct nfs_server *server, struct nfs_fattr *f
 	if (nfs_fattr_map_group_name(server, fattr))
 		nfs_fattr_free_group_name(fattr);
 }
+EXPORT_SYMBOL_GPL(nfs_fattr_map_and_free_names);
 
 int nfs_map_string_to_numeric(const char *name, size_t namelen, __u32 *res)
 {
@@ -239,6 +249,7 @@ failed_put_cred:
 	put_cred(cred);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(nfs_idmap_init);
 
 void nfs_idmap_quit(void)
 {
@@ -247,6 +258,7 @@ void nfs_idmap_quit(void)
 	unregister_key_type(&key_type_id_resolver_legacy);
 	put_cred(id_resolver_cache);
 }
+EXPORT_SYMBOL_GPL(nfs_idmap_quit);
 
 /*
  * Assemble the description to pass to request_key()
@@ -439,7 +451,7 @@ static const struct rpc_pipe_dir_object_ops nfs_idmap_pipe_dir_object_ops = {
 };
 
 int
-nfs_idmap_new(struct nfs_client *clp)
+sunrpc_idmap_new(struct rpc_clnt *clnt)
 {
 	struct idmap *idmap;
 	struct rpc_pipe *pipe;
@@ -450,7 +462,7 @@ nfs_idmap_new(struct nfs_client *clp)
 		return -ENOMEM;
 
 	mutex_init(&idmap->idmap_mutex);
-	idmap->user_ns = get_user_ns(clp->cl_rpcclient->cl_cred->user_ns);
+	idmap->user_ns = get_user_ns(clnt->cl_cred->user_ns);
 
 	rpc_init_pipe_dir_object(&idmap->idmap_pdo,
 			&nfs_idmap_pipe_dir_object_ops,
@@ -463,13 +475,13 @@ nfs_idmap_new(struct nfs_client *clp)
 	}
 	idmap->idmap_pipe = pipe;
 
-	error = rpc_add_pipe_dir_object(clp->cl_net,
-			&clp->cl_rpcclient->cl_pipedir_objects,
+	error = rpc_add_pipe_dir_object(rpc_net_ns(clnt),
+			&clnt->cl_pipedir_objects,
 			&idmap->idmap_pdo);
 	if (error)
 		goto err_destroy_pipe;
 
-	clp->cl_idmap = idmap;
+	clnt->cl_idmap = idmap;
 	return 0;
 err_destroy_pipe:
 	rpc_destroy_pipe_data(idmap->idmap_pipe);
@@ -478,22 +490,24 @@ err:
 	kfree(idmap);
 	return error;
 }
+EXPORT_SYMBOL_GPL(sunrpc_idmap_new);
 
 void
-nfs_idmap_delete(struct nfs_client *clp)
+sunrpc_idmap_delete(struct rpc_clnt *clnt)
 {
-	struct idmap *idmap = clp->cl_idmap;
+	struct idmap *idmap = clnt->cl_idmap;
 
 	if (!idmap)
 		return;
-	clp->cl_idmap = NULL;
-	rpc_remove_pipe_dir_object(clp->cl_net,
-			&clp->cl_rpcclient->cl_pipedir_objects,
+	clnt->cl_idmap = NULL;
+	rpc_remove_pipe_dir_object(rpc_net_ns(clnt),
+			&clnt->cl_pipedir_objects,
 			&idmap->idmap_pdo);
 	rpc_destroy_pipe_data(idmap->idmap_pipe);
 	put_user_ns(idmap->user_ns);
 	kfree(idmap);
 }
+EXPORT_SYMBOL_GPL(sunrpc_idmap_delete);
 
 static int nfs_idmap_prepare_message(char *desc, struct idmap *idmap,
 				     struct idmap_msg *im,
@@ -729,9 +743,9 @@ idmap_release_pipe(struct inode *inode)
 		nfs_idmap_complete_pipe_upcall(data, -EPIPE);
 }
 
-int nfs_map_name_to_uid(const struct nfs_server *server, const char *name, size_t namelen, kuid_t *uid)
+int sunrpc_map_name_to_uid(const struct rpc_clnt *clnt, const char *name, size_t namelen, kuid_t *uid)
 {
-	struct idmap *idmap = server->nfs_client->cl_idmap;
+	struct idmap *idmap = clnt->cl_idmap;
 	__u32 id = -1;
 	int ret = 0;
 
@@ -745,10 +759,11 @@ int nfs_map_name_to_uid(const struct nfs_server *server, const char *name, size_
 	trace_nfs4_map_name_to_uid(name, namelen, id, ret);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(sunrpc_map_name_to_uid);
 
-int nfs_map_group_to_gid(const struct nfs_server *server, const char *name, size_t namelen, kgid_t *gid)
+int sunrpc_map_group_to_gid(const struct rpc_clnt *clnt, const char *name, size_t namelen, kgid_t *gid)
 {
-	struct idmap *idmap = server->nfs_client->cl_idmap;
+	struct idmap *idmap = clnt->cl_idmap;
 	__u32 id = -1;
 	int ret = 0;
 
@@ -762,32 +777,83 @@ int nfs_map_group_to_gid(const struct nfs_server *server, const char *name, size
 	trace_nfs4_map_group_to_gid(name, namelen, id, ret);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(sunrpc_map_group_to_gid);
 
-int nfs_map_uid_to_name(const struct nfs_server *server, kuid_t uid, char *buf, size_t buflen)
+int sunrpc_map_uid_to_name(const struct rpc_clnt *clnt, kuid_t uid, char *buf, size_t buflen, bool nomap)
 {
-	struct idmap *idmap = server->nfs_client->cl_idmap;
+	struct idmap *idmap = clnt->cl_idmap;
 	int ret = -EINVAL;
 	__u32 id;
 
 	id = from_kuid_munged(idmap_userns(idmap), uid);
-	if (!(server->caps & NFS_CAP_UIDGID_NOMAP))
+	if (!nomap)
 		ret = nfs_idmap_lookup_name(id, "user", buf, buflen, idmap);
 	if (ret < 0)
 		ret = nfs_map_numeric_to_string(id, buf, buflen);
 	trace_nfs4_map_uid_to_name(buf, ret, id, ret);
 	return ret;
 }
-int nfs_map_gid_to_group(const struct nfs_server *server, kgid_t gid, char *buf, size_t buflen)
+EXPORT_SYMBOL_GPL(sunrpc_map_uid_to_name);
+
+int sunrpc_map_gid_to_group(const struct rpc_clnt *clnt, kgid_t gid, char *buf, size_t buflen, bool nomap)
 {
-	struct idmap *idmap = server->nfs_client->cl_idmap;
+	struct idmap *idmap = clnt->cl_idmap;
 	int ret = -EINVAL;
 	__u32 id;
 
 	id = from_kgid_munged(idmap_userns(idmap), gid);
-	if (!(server->caps & NFS_CAP_UIDGID_NOMAP))
+	if (!nomap)
 		ret = nfs_idmap_lookup_name(id, "group", buf, buflen, idmap);
 	if (ret < 0)
 		ret = nfs_map_numeric_to_string(id, buf, buflen);
 	trace_nfs4_map_gid_to_group(buf, ret, id, ret);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(sunrpc_map_gid_to_group);
+
+int
+nfs_idmap_new(struct nfs_client *clp)
+{
+	return sunrpc_idmap_new(clp->cl_rpcclient);
+}
+EXPORT_SYMBOL_GPL(nfs_idmap_new);
+
+void
+nfs_idmap_delete(struct nfs_client *clp)
+{
+	sunrpc_idmap_delete(clp->cl_rpcclient);
+}
+EXPORT_SYMBOL_GPL(nfs_idmap_delete);
+
+int nfs_map_name_to_uid(const struct nfs_server *server, const char *name, size_t namelen, kuid_t *uid)
+{
+	return sunrpc_map_name_to_uid(server->nfs_client->cl_rpcclient,
+				      name, namelen, uid);
+}
+EXPORT_SYMBOL_GPL(nfs_map_name_to_uid);
+
+int nfs_map_group_to_gid(const struct nfs_server *server, const char *name, size_t namelen, kgid_t *gid)
+{
+	return sunrpc_map_group_to_gid(server->nfs_client->cl_rpcclient,
+				       name, namelen, gid);
+}
+EXPORT_SYMBOL_GPL(nfs_map_group_to_gid);
+
+int nfs_map_uid_to_name(const struct nfs_server *server, kuid_t uid, char *buf, size_t buflen)
+{
+	return sunrpc_map_uid_to_name(server->nfs_client->cl_rpcclient,
+				      uid, buf, buflen,
+				      server->caps & NFS_CAP_UIDGID_NOMAP);
+}
+EXPORT_SYMBOL_GPL(nfs_map_uid_to_name);
+
+int nfs_map_gid_to_group(const struct nfs_server *server, kgid_t gid, char *buf, size_t buflen)
+{
+	return sunrpc_map_gid_to_group(server->nfs_client->cl_rpcclient,
+				       gid, buf, buflen,
+				       server->caps & NFS_CAP_UIDGID_NOMAP);
+}
+EXPORT_SYMBOL_GPL(nfs_map_gid_to_group);
+
+MODULE_DESCRIPTION("UID and GID to name mapper for NFS");
+MODULE_LICENSE("GPL");

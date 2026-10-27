@@ -200,6 +200,13 @@ nfs4_deviceid_bump_change_epoch(struct nfs_client *clp)
 #define NFS4_DEVICEID_FETCH_RETRIES	3
 
 struct nfs4_deviceid_node *
+nfs4_find_deviceid(struct nfs_server *server, const struct nfs4_deviceid *id) {
+	long hash = nfs4_deviceid_hash(id);
+	return __nfs4_find_get_deviceid(server, id, hash);
+
+}
+
+struct nfs4_deviceid_node *
 nfs4_find_get_deviceid(struct nfs_server *server,
 		const struct nfs4_deviceid *id, const struct cred *cred,
 		gfp_t gfp_mask)

@@ -174,9 +174,14 @@ struct nfs_inode {
 	 */
 
 	struct timespec64	btime;
+	struct timespec64	timebackup;
 
 	bool			uncacheable_file_data : 1;
 	bool			uncacheable_dirent_metadata : 1;
+	bool			archive : 1;
+	bool			hidden : 1;
+	bool			system : 1;
+	bool			offline : 1;
 
 	/*
 	 * read_cache_jiffies is when we started read-caching this inode.
@@ -336,6 +341,7 @@ struct nfs4_copy_state {
 #define NFS_INO_INVALID_MODE	BIT(17)		/* cached mode is invalid */
 #define NFS_INO_INVALID_BTIME	BIT(18)		/* cached btime is invalid */
 #define NFS_INO_INVALID_UNCACHEABLE_FILE_DATA	BIT(19)		/* cached uncacheable_file_data is invalid */
+#define NFS_INO_INVALID_WINATTR	BIT(20)		/* cached windows attr is invalid */
 
 #define NFS_INO_INVALID_ATTR	(NFS_INO_INVALID_CHANGE \
 		| NFS_INO_INVALID_CTIME \
@@ -544,6 +550,7 @@ extern __be32 root_nfs_parse_addr(char *name); /*__init*/
 extern const struct file_operations nfs_file_operations;
 #if IS_ENABLED(CONFIG_NFS_V4)
 extern const struct file_operations nfs4_file_operations;
+extern const struct file_operations nfs4_dir_operations;
 #endif /* CONFIG_NFS_V4 */
 extern const struct address_space_operations nfs_file_aops;
 extern const struct address_space_operations nfs_dir_aops;

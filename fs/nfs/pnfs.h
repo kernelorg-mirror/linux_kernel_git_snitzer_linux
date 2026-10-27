@@ -322,6 +322,9 @@ void pnfs_destroy_layout_final(struct nfs_inode *);
 void pnfs_destroy_all_layouts(struct nfs_client *);
 int pnfs_layout_destroy_byfsid(struct nfs_client *clp, struct nfs_fsid *fsid,
 			       enum pnfs_layout_destroy_mode mode);
+int pnfs_layout_destroy_bydevid(struct nfs_client *clp,
+				struct nfs4_deviceid *dev_id,
+				enum pnfs_layout_destroy_mode mode);
 int pnfs_layout_destroy_byclid(struct nfs_client *clp,
 			       enum pnfs_layout_destroy_mode mode);
 bool nfs4_layout_refresh_old_stateid(nfs4_stateid *dst,
@@ -474,6 +477,8 @@ struct nfs4_deviceid_put {
 	struct nfs4_deviceid_node	*dev;
 };
 
+struct nfs4_deviceid_node *
+nfs4_find_deviceid(struct nfs_server *server, const struct nfs4_deviceid *id);
 struct nfs4_deviceid_node *
 nfs4_find_get_deviceid(struct nfs_server *server,
 		const struct nfs4_deviceid *id, const struct cred *cred,

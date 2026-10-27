@@ -29,6 +29,7 @@
 #include <net/ipv6.h>
 #include <linux/sunrpc/xprtmultipath.h>
 
+struct idmap;
 struct rpc_inode;
 struct rpc_sysfs_client {
 	struct kobject kobject;
@@ -96,6 +97,9 @@ struct rpc_clnt {
 	unsigned int		cl_max_connect; /* max number of transports not to the same IP */
 	struct super_block *pipefs_sb;
 	atomic_t		cl_task_count;
+
+	/* idmapper */
+	struct idmap *		cl_idmap;
 };
 
 /*

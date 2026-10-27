@@ -55,6 +55,7 @@
 #include <linux/utsname.h>
 #include <linux/freezer.h>
 #include <linux/iversion.h>
+#include <uapi/linux/nfs_ioctl.h>
 
 #include "nfs4_fs.h"
 #include "delegation.h"
@@ -64,7 +65,7 @@
 #include "pnfs.h"
 #include "netns.h"
 #include "sysfs.h"
-#include "nfs4idmap.h"
+#include <linux/nfs4idmap.h>
 #include "nfs4session.h"
 #include "fscache.h"
 #include "nfs40.h"
@@ -213,19 +214,24 @@ const u32 nfs4_fattr_bitmap[3] = {
 	| FATTR4_WORD0_CHANGE
 	| FATTR4_WORD0_SIZE
 	| FATTR4_WORD0_FSID
-	| FATTR4_WORD0_FILEID,
+	| FATTR4_WORD0_ARCHIVE
+	| FATTR4_WORD0_FILEID
+	| FATTR4_WORD0_HIDDEN,
 	FATTR4_WORD1_MODE
 	| FATTR4_WORD1_NUMLINKS
 	| FATTR4_WORD1_OWNER
 	| FATTR4_WORD1_OWNER_GROUP
 	| FATTR4_WORD1_RAWDEV
 	| FATTR4_WORD1_SPACE_USED
+	| FATTR4_WORD1_SYSTEM
 	| FATTR4_WORD1_TIME_ACCESS
+	| FATTR4_WORD1_TIME_BACKUP
 	| FATTR4_WORD1_TIME_CREATE
 	| FATTR4_WORD1_TIME_METADATA
 	| FATTR4_WORD1_TIME_MODIFY
 	| FATTR4_WORD1_MOUNTED_ON_FILEID,
 	FATTR4_WORD2_UNCACHEABLE_FILE_DATA
+	| FATTR4_WORD2_OFFLINE
 #ifdef CONFIG_NFS_V4_SECURITY_LABEL
 	| FATTR4_WORD2_SECURITY_LABEL
 #endif
@@ -236,14 +242,18 @@ static const u32 nfs4_pnfs_open_bitmap[3] = {
 	| FATTR4_WORD0_CHANGE
 	| FATTR4_WORD0_SIZE
 	| FATTR4_WORD0_FSID
-	| FATTR4_WORD0_FILEID,
+	| FATTR4_WORD0_ARCHIVE
+	| FATTR4_WORD0_FILEID
+	| FATTR4_WORD0_HIDDEN,
 	FATTR4_WORD1_MODE
 	| FATTR4_WORD1_NUMLINKS
 	| FATTR4_WORD1_OWNER
 	| FATTR4_WORD1_OWNER_GROUP
 	| FATTR4_WORD1_RAWDEV
 	| FATTR4_WORD1_SPACE_USED
+	| FATTR4_WORD1_SYSTEM
 	| FATTR4_WORD1_TIME_ACCESS
+	| FATTR4_WORD1_TIME_BACKUP
 	| FATTR4_WORD1_TIME_CREATE
 	| FATTR4_WORD1_TIME_METADATA
 	| FATTR4_WORD1_TIME_MODIFY,
@@ -252,6 +262,7 @@ static const u32 nfs4_pnfs_open_bitmap[3] = {
 	| FATTR4_WORD2_SECURITY_LABEL
 #endif
 	| FATTR4_WORD2_UNCACHEABLE_FILE_DATA
+	| FATTR4_WORD2_OFFLINE
 };
 
 static const u32 nfs4_open_noattr_bitmap[3] = {
@@ -353,6 +364,12 @@ static void nfs4_bitmap_copy_adjust(__u32 *dst, const __u32 *src,
 
 	if (!(cache_validity & NFS_INO_INVALID_UNCACHEABLE_FILE_DATA))
 		dst[2] &= ~FATTR4_WORD2_UNCACHEABLE_FILE_DATA;
+
+	if (!(cache_validity & NFS_INO_INVALID_WINATTR)) {
+		dst[0] &= ~(FATTR4_WORD0_ARCHIVE | FATTR4_WORD0_HIDDEN);
+		dst[1] &= ~(FATTR4_WORD1_SYSTEM | FATTR4_WORD1_TIME_BACKUP);
+		dst[2] &= ~FATTR4_WORD2_OFFLINE;
+	}
 
 	if (nfs_have_delegated_mtime(inode)) {
 		if (!(cache_validity & NFS_INO_INVALID_ATIME))
@@ -1265,7 +1282,7 @@ nfs4_update_changeattr_locked(struct inode *inode,
 				NFS_INO_INVALID_SIZE | NFS_INO_INVALID_OTHER |
 				NFS_INO_INVALID_BLOCKS | NFS_INO_INVALID_NLINK |
 				NFS_INO_INVALID_MODE | NFS_INO_INVALID_BTIME |
-				NFS_INO_INVALID_XATTR;
+				NFS_INO_INVALID_XATTR | NFS_INO_INVALID_WINATTR;
 		nfsi->attrtimeo = NFS_MINATTRTIMEO(inode);
 	}
 	nfsi->attrtimeo_timestamp = jiffies;
@@ -4000,8 +4017,12 @@ static int _nfs4_server_capabilities(struct nfs_server *server, struct nfs_fh *f
 #endif
 		if (res.attr_bitmask[0] & FATTR4_WORD0_FS_LOCATIONS)
 			server->caps |= NFS_CAP_FS_LOCATIONS;
+		if (!(res.attr_bitmask[0] & FATTR4_WORD0_ARCHIVE))
+			server->fattr_valid &= ~NFS_ATTR_FATTR_ARCHIVE;
 		if (!(res.attr_bitmask[0] & FATTR4_WORD0_FILEID))
 			server->fattr_valid &= ~NFS_ATTR_FATTR_FILEID;
+		if (!(res.attr_bitmask[0] & FATTR4_WORD0_HIDDEN))
+			server->fattr_valid &= ~NFS_ATTR_FATTR_HIDDEN;
 		if (!(res.attr_bitmask[1] & FATTR4_WORD1_MODE))
 			server->fattr_valid &= ~NFS_ATTR_FATTR_MODE;
 		if (!(res.attr_bitmask[1] & FATTR4_WORD1_NUMLINKS))
@@ -4022,8 +4043,12 @@ static int _nfs4_server_capabilities(struct nfs_server *server, struct nfs_fh *f
 			server->fattr_valid &= ~NFS_ATTR_FATTR_MTIME;
 		if (!(res.attr_bitmask[1] & FATTR4_WORD1_TIME_MODIFY))
 			server->fattr_valid &= ~NFS_ATTR_FATTR_MTIME;
+		if (!(res.attr_bitmask[1] & FATTR4_WORD1_TIME_BACKUP))
+			server->fattr_valid &= ~NFS_ATTR_FATTR_TIME_BACKUP;
 		if (!(res.attr_bitmask[1] & FATTR4_WORD1_TIME_CREATE))
 			server->fattr_valid &= ~NFS_ATTR_FATTR_BTIME;
+		if (!(res.attr_bitmask[1] & FATTR4_WORD1_SYSTEM))
+			server->fattr_valid &= ~NFS_ATTR_FATTR_SYSTEM;
 		memcpy(server->attr_bitmask_nl, res.attr_bitmask,
 				sizeof(server->attr_bitmask));
 		server->attr_bitmask_nl[2] &= ~FATTR4_WORD2_SECURITY_LABEL;
@@ -4031,6 +4056,8 @@ static int _nfs4_server_capabilities(struct nfs_server *server, struct nfs_fh *f
 			server->fattr_valid &= ~NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA;
 		if (!(res.attr_bitmask[2] & FATTR4_WORD2_UNCACHEABLE_DIRENT_METADATA))
 			server->fattr_valid &= ~NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA;
+		if (!(res.attr_bitmask[2] & FATTR4_WORD2_OFFLINE))
+			server->fattr_valid &= ~NFS_ATTR_FATTR_OFFLINE;
 
 		if (res.open_caps.oa_share_access_want[0] &
 		    NFS4_SHARE_WANT_OPEN_XOR_DELEGATION)
@@ -5893,6 +5920,11 @@ void nfs4_bitmask_set(__u32 bitmask[], const __u32 src[],
 	if ((cache_validity & NFS_INO_INVALID_UNCACHEABLE_FILE_DATA) &&
 	    S_ISREG(inode->i_mode))
 		bitmask[2] |= FATTR4_WORD2_UNCACHEABLE_FILE_DATA;
+	if (cache_validity & NFS_INO_INVALID_WINATTR) {
+		bitmask[0] |= FATTR4_WORD0_ARCHIVE | FATTR4_WORD0_HIDDEN;
+		bitmask[1] |= FATTR4_WORD1_SYSTEM | FATTR4_WORD1_TIME_BACKUP;
+		bitmask[2] |= FATTR4_WORD2_OFFLINE;
+	}
 
 	if (cache_validity & NFS_INO_INVALID_SIZE)
 		bitmask[0] |= FATTR4_WORD0_SIZE;
@@ -8309,6 +8341,145 @@ static int _nfs41_proc_get_locations(struct nfs_server *server,
 	return status;
 }
 
+static int _nfs4_set_nfs4_statx(struct inode *inode,
+		struct nfs4_statx *statx,
+		struct nfs_fattr *fattr)
+{
+	const __u64 statx_win = NFS_FA_VALID_TIME_CREATE |
+				NFS_FA_VALID_TIME_BACKUP |
+				NFS_FA_VALID_ARCHIVE | NFS_FA_VALID_HIDDEN |
+				NFS_FA_VALID_SYSTEM | NFS_FA_VALID_UNCACHEABLE;
+	struct iattr sattr = {0};
+	struct nfs_server *server = NFS_SERVER(inode);
+	__u32 bitmask[3];
+	struct nfs_setattrargs arg = {
+		.fh             = NFS_FH(inode),
+		.iap            = &sattr,
+		.server		= server,
+		.bitmask	= bitmask,
+		.statx		= statx,
+	};
+	struct nfs_setattrres res = {
+		.fattr		= fattr,
+		.server		= server,
+	};
+	struct rpc_message msg = {
+		.rpc_proc       = &nfs4_procedures[NFSPROC4_CLNT_SETATTR],
+		.rpc_argp       = &arg,
+		.rpc_resp       = &res,
+	};
+	int status;
+
+	nfs4_bitmap_copy_adjust(
+		bitmask, server->attr_bitmask, inode,
+		NFS_INO_INVALID_CHANGE | NFS_INO_INVALID_CTIME |
+			NFS_INO_INVALID_SIZE | NFS_INO_INVALID_OTHER |
+			NFS_INO_INVALID_BTIME | NFS_INO_INVALID_WINATTR);
+	/* Use the iattr structure to set atime and mtime since handling already
+	 * exists for them using the iattr struct in the encode_attrs()
+	 * (xdr encoding) routine.
+	 */
+	if (statx && (statx->fa_valid[0] & NFS_FA_VALID_MTIME)) {
+		sattr.ia_valid |= ATTR_MTIME_SET;
+		sattr.ia_mtime.tv_sec = statx->fa_mtime.tv_sec;
+		sattr.ia_mtime.tv_nsec = statx->fa_mtime.tv_nsec;
+	}
+
+	if (statx && (statx->fa_valid[0] & NFS_FA_VALID_ATIME)) {
+		sattr.ia_valid |= ATTR_ATIME_SET;
+		sattr.ia_atime.tv_sec = statx->fa_atime.tv_sec;
+		sattr.ia_atime.tv_nsec = statx->fa_atime.tv_nsec;
+	}
+
+	if (statx && (statx->fa_valid[0] & NFS_FA_VALID_OWNER)) {
+		sattr.ia_valid |= ATTR_UID;
+		sattr.ia_uid = statx->fa_owner_uid;
+	}
+
+	if (statx && (statx->fa_valid[0] & NFS_FA_VALID_OWNER_GROUP)) {
+		sattr.ia_valid |= ATTR_GID;
+		sattr.ia_gid = statx->fa_group_gid;
+	}
+
+	if (statx && (statx->fa_valid[0] & NFS_FA_VALID_SIZE)) {
+		sattr.ia_valid |= ATTR_SIZE;
+		sattr.ia_size = statx->fa_size;
+	}
+
+	nfs4_stateid_copy(&arg.stateid, &zero_stateid);
+
+	status = nfs4_call_sync(server->client, server, &msg, &arg.seq_args, &res.seq_res, 1);
+	if (!status) {
+		if (statx->fa_valid[0] & statx_win) {
+			struct nfs_inode *nfsi = NFS_I(inode);
+
+			spin_lock(&inode->i_lock);
+			if (statx->fa_valid[0] & NFS_FA_VALID_TIME_CREATE)
+				nfsi->btime = statx->fa_btime;
+			if (statx->fa_valid[0] & NFS_FA_VALID_TIME_BACKUP)
+				nfsi->timebackup = statx->fa_time_backup;
+			if (statx->fa_valid[0] & NFS_FA_VALID_ARCHIVE)
+				nfsi->archive = (statx->fa_flags &
+						 NFS_FA_FLAG_ARCHIVE) != 0;
+			if (statx->fa_valid[0] & NFS_FA_VALID_SYSTEM)
+				nfsi->system = (statx->fa_flags &
+						NFS_FA_FLAG_SYSTEM) != 0;
+			if (statx->fa_valid[0] & NFS_FA_VALID_HIDDEN)
+				nfsi->hidden = (statx->fa_flags &
+						NFS_FA_FLAG_HIDDEN) != 0;
+			if (statx->fa_valid[0] & NFS_FA_VALID_OFFLINE)
+				nfsi->offline = (statx->fa_flags &
+						 NFS_FA_FLAG_OFFLINE) != 0;
+			if (statx->fa_valid[0] & NFS_FA_VALID_UNCACHEABLE) {
+				bool uncacheable = (statx->fa_flags &
+					NFS_FA_FLAG_UNCACHEABLE) != 0;
+
+				/*
+				 * Type-exclusive: a regular file carries
+				 * uncacheable_file_data (attr 87), a directory
+				 * uncacheable_dirent_metadata (attr 88).
+				 */
+				if (S_ISDIR(inode->i_mode))
+					nfsi->uncacheable_dirent_metadata =
+						uncacheable;
+				else
+					nfsi->uncacheable_file_data =
+						uncacheable;
+			}
+
+			nfsi->cache_validity &= ~NFS_INO_INVALID_CTIME;
+			if (fattr->valid & NFS_ATTR_FATTR_CTIME)
+				inode_set_ctime_to_ts(inode, fattr->ctime);
+			else
+				nfs_set_cache_invalid(
+					inode, NFS_INO_INVALID_CHANGE |
+						   NFS_INO_INVALID_CTIME);
+			spin_unlock(&inode->i_lock);
+		}
+
+		nfs_setattr_update_inode(inode, &sattr, fattr);
+	} else
+		dprintk("%s failed: %d\n", __func__, status);
+
+	return status;
+}
+
+int nfs4_set_nfs4_statx(struct inode *inode,
+		struct nfs4_statx *statx,
+		struct nfs_fattr *fattr)
+{
+	struct nfs4_exception exception = { };
+	struct nfs_server *server = NFS_SERVER(inode);
+	int err;
+
+	do {
+		err = nfs4_handle_exception(server,
+				_nfs4_set_nfs4_statx(inode, statx, fattr),
+				&exception);
+	} while (exception.retry);
+	return err;
+}
+
 /**
  * nfs4_proc_get_locations - discover locations for a migrated FSID
  * @server: pointer to nfs_server to process
@@ -8830,8 +9001,8 @@ static const struct rpc_call_ops nfs4_exchange_id_call_ops = {
  * Wrapper for EXCHANGE_ID operation.
  */
 static struct rpc_task *
-nfs4_run_exchange_id(struct nfs_client *clp, const struct cred *cred,
-			u32 sp4_how, struct rpc_xprt *xprt)
+_nfs4_run_exchange_id(struct nfs_client *clp, const struct cred *cred,
+			u32 sp4_how, struct rpc_xprt *xprt, u32 extra_flags)
 {
 	struct rpc_message msg = {
 		.rpc_proc = &nfs4_procedures[NFSPROC4_CLNT_EXCHANGE_ID],
@@ -8898,7 +9069,7 @@ nfs4_run_exchange_id(struct nfs_client *clp, const struct cred *cred,
 	}
 	calldata->args.client = clp;
 	calldata->args.flags = EXCHGID4_FLAG_SUPP_MOVED_REFER |
-	EXCHGID4_FLAG_BIND_PRINC_STATEID;
+	EXCHGID4_FLAG_BIND_PRINC_STATEID | extra_flags;
 #ifdef CONFIG_NFS_V4_1_MIGRATION
 	calldata->args.flags |= EXCHGID4_FLAG_SUPP_MOVED_MIGR;
 #endif
@@ -8921,6 +9092,23 @@ out_calldata:
 out:
 	nfs_put_client(clp);
 	return ERR_PTR(status);
+}
+
+static struct rpc_task *
+nfs4_run_exchange_id(struct nfs_client *clp, const struct cred *cred,
+			u32 sp4_how, struct rpc_xprt *xprt) {
+#ifdef CONFIG_NFS_V4_2
+	if (clp->cl_minorversion >= 2) {
+		struct rpc_task *task;
+
+		task = _nfs4_run_exchange_id(clp, cred, sp4_how, xprt,
+				EXCHGID4_FLAG_SUPP_RECALL_DEVICEID);
+		if (IS_ERR_OR_NULL(task) || task->tk_status != -EINVAL)
+			return task;
+		rpc_put_task(task);
+	}
+#endif /* CONFIG_NFS_V4_2 */
+	return _nfs4_run_exchange_id(clp, cred, sp4_how, xprt, 0);
 }
 
 /*
@@ -10938,6 +11126,7 @@ static const struct inode_operations nfs4_dir_inode_operations = {
 	.setattr	= nfs_setattr,
 	.listxattr	= nfs4_listxattr,
 	.fileattr_get	= nfs_fileattr_get,
+	.mkdir2		= nfs_mkdir2,
 };
 
 static const struct inode_operations nfs4_file_inode_operations = {
@@ -10977,6 +11166,7 @@ const struct nfs_rpc_ops nfs_v4_clientops = {
 	.dir_inode_ops	= &nfs4_dir_inode_operations,
 	.file_inode_ops	= &nfs4_file_inode_operations,
 	.file_ops	= &nfs4_file_operations,
+	.dir_ops	= &nfs4_dir_operations,
 	.getroot	= nfs4_proc_get_root,
 	.submount	= nfs4_submount,
 	.try_get_tree	= nfs4_try_get_tree,

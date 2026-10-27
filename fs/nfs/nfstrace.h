@@ -34,7 +34,8 @@
 			{ NFS_INO_INVALID_NLINK, "INVALID_NLINK" }, \
 			{ NFS_INO_INVALID_MODE, "INVALID_MODE" }, \
 			{ NFS_INO_INVALID_BTIME, "INVALID_BTIME" }, \
-			{ NFS_INO_INVALID_UNCACHEABLE_FILE_DATA, "INVALID_UNCACHEABLE_FILE_DATA" })
+			{ NFS_INO_INVALID_UNCACHEABLE_FILE_DATA, "INVALID_UNCACHEABLE_FILE_DATA" }, \
+			{ NFS_INO_INVALID_WINATTR, "INVALID_WINATTR" })
 
 #define nfs_show_nfsi_flags(v) \
 	__print_flags(v, "|", \
@@ -184,6 +185,10 @@ DEFINE_NFS_INODE_EVENT(nfs_readdir_force_readdirplus);
 DEFINE_NFS_INODE_EVENT(nfs_readdir_uncacheable_directory);
 DEFINE_NFS_INODE_EVENT_DONE(nfs_readdir_cache_fill_done);
 DEFINE_NFS_INODE_EVENT_DONE(nfs_readdir_uncached_done);
+DEFINE_NFS_INODE_EVENT(nfs_ioctl_file_statx_get_enter);
+DEFINE_NFS_INODE_EVENT_DONE(nfs_ioctl_file_statx_get_exit);
+DEFINE_NFS_INODE_EVENT(nfs_ioctl_file_statx_set_enter);
+DEFINE_NFS_INODE_EVENT_DONE(nfs_ioctl_file_statx_set_exit);
 
 TRACE_EVENT(nfs_access_exit,
 		TP_PROTO(

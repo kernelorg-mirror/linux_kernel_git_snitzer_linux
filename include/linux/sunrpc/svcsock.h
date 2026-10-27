@@ -209,7 +209,7 @@ int		svc_recv(struct svc_rqst *rqstp, long timeo);
 void		svc_send(struct svc_rqst *rqstp);
 int		svc_addsock(struct svc_serv *serv, struct net *net,
 			    const int fd, char *name_return, const size_t len,
-			    const struct cred *cred);
+			    int flags, const struct cred *cred);
 void		svc_init_xprt_sock(void);
 void		svc_cleanup_xprt_sock(void);
 struct svc_tcp_rx_state *svc_tcp_rx_state_alloc(unsigned long capacity,
@@ -356,5 +356,6 @@ void svc_tcp_rx_set_want(struct svc_sock *svsk,
 #define SVC_SOCK_DEFAULTS	(0U)
 #define SVC_SOCK_ANONYMOUS	(1U << 0)	/* don't register with pmap */
 #define SVC_SOCK_TEMPORARY	(1U << 1)	/* flag socket as temporary */
+#define SVC_SOCK_RPCBIND_NOERR	(1U << 2)	/* Ignore pmap errors */
 
 #endif /* SUNRPC_SVCSOCK_H */

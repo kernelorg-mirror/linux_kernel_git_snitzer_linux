@@ -4224,9 +4224,9 @@ nfsd4_encode_fattr4(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 			goto out;
 	}
 
-	err = vfs_getattr(&path, &args.stat,
-			  STATX_BASIC_STATS | STATX_BTIME | STATX_CHANGE_COOKIE,
-			  AT_STATX_SYNC_AS_STAT);
+	status = nfsd_getattr(&path, &args.stat,
+			      STATX_BASIC_STATS | STATX_BTIME | STATX_CHANGE_COOKIE,
+			      true);
 	if (dp) {
 		struct nfs4_cb_fattr *ncf = &dp->dl_cb_fattr;
 
@@ -4246,8 +4246,8 @@ nfsd4_encode_fattr4(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 		args.change_attr = nfsd4_change_attribute(&args.stat);
 	}
 
-	if (err)
-		goto out_nfserr;
+	if (status)
+		goto out;
 
 	if (!(args.stat.result_mask & STATX_BTIME))
 		/* underlying FS does not offer btime so we can't share it */
@@ -4799,16 +4799,32 @@ nfsd4_encode_entry4_fattr(struct nfsd4_readdir *cd, const char *name,
 			  int namlen)
 {
 	struct svc_export *exp = cd->rd_fhp->fh_export;
-	struct dentry *dentry;
+	struct dentry *dentry, *dparent = cd->rd_fhp->fh_dentry;
+	struct inode *dir = d_inode(dparent);
 	__be32 nfserr;
 	int ignore_crossmnt = 0;
 	bool crossed = false;
 
-	dentry = lookup_one_positive_unlocked(&nop_mnt_idmap,
-					      &QSTR_LEN(name, namlen),
-					      cd->rd_fhp->fh_dentry);
-	if (IS_ERR(dentry))
-		return nfserrno(PTR_ERR(dentry));
+	if (dparent->d_sb->s_export_op->flags & EXPORT_OP_REMOTE_FS &&
+	    dir) {
+		inode_lock(dir);
+		dentry = try_lookup_noperm(&QSTR_LEN(name, namlen), dparent);
+		inode_unlock(dir);
+		if (dentry == NULL)
+			return nfserr_jukebox;
+		if (IS_ERR(dentry))
+			return nfserrno(PTR_ERR(dentry));
+		if (d_flags_negative(smp_load_acquire(&dentry->d_flags))) {
+			dput(dentry);
+			return nfserr_jukebox;
+		}
+	} else {
+		dentry = lookup_one_positive_unlocked(&nop_mnt_idmap,
+						      &QSTR_LEN(name, namlen),
+						      cd->rd_fhp->fh_dentry);
+		if (IS_ERR(dentry))
+			return nfserrno(PTR_ERR(dentry));
+	}
 
 	exp_get(exp);
 	/*

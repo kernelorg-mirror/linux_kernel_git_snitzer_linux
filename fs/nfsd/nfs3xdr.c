@@ -417,6 +417,35 @@ svcxdr_encode_pre_op_attr(struct xdr_stream *xdr, const struct svc_fh *fhp)
 	return svcxdr_encode_wcc_attr(xdr, fhp);
 }
 
+static bool
+__svcxdr_encode_post_op_attr(struct svc_rqst *rqstp, struct xdr_stream *xdr,
+			     const struct svc_fh *fhp, bool force)
+{
+	struct dentry *dentry = fhp->fh_dentry;
+	struct kstat stat;
+
+	/*
+	 * The inode may be NULL if the call failed because of a
+	 * stale file handle. In this case, no attributes are
+	 * returned.
+	 */
+	if (!dentry || !d_really_is_positive(dentry))
+		goto no_post_op_attrs;
+	if (__fh_getattr(fhp, &stat, force) != nfs_ok)
+		goto no_post_op_attrs;
+
+	if (xdr_stream_encode_item_present(xdr) < 0)
+		return false;
+	lease_get_mtime(d_inode(dentry), &stat.mtime);
+	if (!svcxdr_encode_fattr3(rqstp, xdr, fhp, &stat))
+		return false;
+
+	return true;
+
+no_post_op_attrs:
+	return xdr_stream_encode_item_absent(xdr) > 0;
+}
+
 /**
  * svcxdr_encode_post_op_attr - Encode NFSv3 post-op attributes
  * @rqstp: Context of a completed RPC transaction
@@ -431,28 +460,24 @@ bool
 svcxdr_encode_post_op_attr(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 			   const struct svc_fh *fhp)
 {
-	struct dentry *dentry = fhp->fh_dentry;
-	struct kstat stat;
+	return __svcxdr_encode_post_op_attr(rqstp, xdr, fhp, true);
+}
 
-	/*
-	 * The inode may be NULL if the call failed because of a
-	 * stale file handle. In this case, no attributes are
-	 * returned.
-	 */
-	if (fhp->fh_no_wcc || !dentry || !d_really_is_positive(dentry))
-		goto no_post_op_attrs;
-	if (fh_getattr(fhp, &stat) != nfs_ok)
-		goto no_post_op_attrs;
+static bool
+svcxdr_encode_post_op_attr_opportunistic(struct svc_rqst *rqstp,
+					 struct xdr_stream *xdr,
+					 const struct svc_fh *fhp)
+{
+	return __svcxdr_encode_post_op_attr(rqstp, xdr, fhp, !fhp->fh_no_wcc);
+}
 
-	if (xdr_stream_encode_item_present(xdr) < 0)
-		return false;
-	lease_get_mtime(d_inode(dentry), &stat.mtime);
-	if (!svcxdr_encode_fattr3(rqstp, xdr, fhp, &stat))
-		return false;
-
-	return true;
-
-no_post_op_attrs:
+static bool
+svcxdr_encode_post_op_attr_unless_nowcc(struct svc_rqst *rqstp,
+					struct xdr_stream *xdr,
+					const struct svc_fh *fhp)
+{
+	if (!fhp->fh_no_wcc)
+		return svcxdr_encode_post_op_attr(rqstp, xdr, fhp);
 	return xdr_stream_encode_item_absent(xdr) > 0;
 }
 
@@ -483,7 +508,7 @@ svcxdr_encode_wcc_data(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 neither:
 	if (xdr_stream_encode_item_absent(xdr) < 0)
 		return false;
-	if (!svcxdr_encode_post_op_attr(rqstp, xdr, fhp))
+	if (!svcxdr_encode_post_op_attr_opportunistic(rqstp, xdr, fhp))
 		return false;
 
 	return true;
@@ -784,11 +809,13 @@ nfs3svc_encode_lookupres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 			return false;
 		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
 			return false;
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->dirfh))
+		if (!svcxdr_encode_post_op_attr_opportunistic(rqstp, xdr,
+							      &resp->dirfh))
 			return false;
 		break;
 	default:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->dirfh))
+		if (!svcxdr_encode_post_op_attr_opportunistic(rqstp, xdr,
+							      &resp->dirfh))
 			return false;
 	}
 
@@ -805,13 +832,15 @@ nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 		return false;
 	switch (resp->status) {
 	case nfs_ok:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
+		if (!svcxdr_encode_post_op_attr_opportunistic(rqstp, xdr,
+							      &resp->fh))
 			return false;
 		if (xdr_stream_encode_u32(xdr, resp->access) < 0)
 			return false;
 		break;
 	default:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
+		if (!svcxdr_encode_post_op_attr_opportunistic(rqstp, xdr,
+							      &resp->fh))
 			return false;
 	}
 
@@ -829,7 +858,8 @@ nfs3svc_encode_readlinkres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 		return false;
 	switch (resp->status) {
 	case nfs_ok:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
+		if (!svcxdr_encode_post_op_attr_opportunistic(rqstp, xdr,
+							      &resp->fh))
 			return false;
 		if (xdr_stream_encode_u32(xdr, resp->len) < 0)
 			return false;
@@ -839,7 +869,8 @@ nfs3svc_encode_readlinkres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 			return false;
 		break;
 	default:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
+		if (!svcxdr_encode_post_op_attr_opportunistic(rqstp, xdr,
+							      &resp->fh))
 			return false;
 	}
 
@@ -855,10 +886,9 @@ nfs3svc_encode_readres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 
 	if (!svcxdr_encode_nfsstat3(xdr, resp->status))
 		return false;
-	switch (resp->status) {
-	case nfs_ok:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
-			return false;
+	if (!svcxdr_encode_post_op_attr_unless_nowcc(rqstp, xdr, &resp->fh))
+		return false;
+	if (resp->status == nfs_ok) {
 		if (xdr_stream_encode_u32(xdr, resp->count) < 0)
 			return false;
 		if (xdr_stream_encode_bool(xdr, resp->eof) < 0)
@@ -869,10 +899,6 @@ nfs3svc_encode_readres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 					   rqstp->rq_res.page_base,
 					   resp->count);
 		if (svc_encode_result_payload(rqstp, head->iov_len, resp->count) < 0)
-			return false;
-		break;
-	default:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
 			return false;
 	}
 
@@ -964,7 +990,8 @@ nfs3svc_encode_readdirres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 		return false;
 	switch (resp->status) {
 	case nfs_ok:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
+		if (!svcxdr_encode_post_op_attr_opportunistic(rqstp, xdr,
+							      &resp->fh))
 			return false;
 		if (!svcxdr_encode_cookieverf3(xdr, resp->verf))
 			return false;
@@ -977,7 +1004,8 @@ nfs3svc_encode_readdirres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 			return false;
 		break;
 	default:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
+		if (!svcxdr_encode_post_op_attr_opportunistic(rqstp, xdr,
+							      &resp->fh))
 			return false;
 	}
 
@@ -990,10 +1018,12 @@ compose_entry_fh(struct nfsd3_readdirres *cd, struct svc_fh *fhp,
 {
 	struct svc_export	*exp;
 	struct dentry		*dparent, *dchild;
+	struct inode *dir;
 	__be32 rv = nfserr_noent;
 
 	dparent = cd->fh.fh_dentry;
 	exp  = cd->fh.fh_export;
+	dir = d_inode(dparent);
 
 	if (name_is_dot_dotdot(name, namlen)) {
 		if (namlen == 2) {
@@ -1008,12 +1038,22 @@ compose_entry_fh(struct nfsd3_readdirres *cd, struct svc_fh *fhp,
 				goto out;
 		} else
 			dchild = dget(dparent);
-	} else
+	} else if (dparent->d_sb->s_export_op->flags & EXPORT_OP_REMOTE_FS &&
+		   dir) {
+		inode_lock(dir);
+		dchild = try_lookup_noperm(&QSTR_LEN(name, namlen), dparent);
+		inode_unlock(dir);
+		if (IS_ERR_OR_NULL(dchild))
+			return rv;
+		if (d_flags_negative(smp_load_acquire(&dchild->d_flags)))
+			goto out;
+	} else {
 		dchild = lookup_one_positive_unlocked(&nop_mnt_idmap,
 						      &QSTR_LEN(name, namlen),
 						      dparent);
-	if (IS_ERR(dchild))
-		return rv;
+		if (IS_ERR(dchild))
+			return rv;
+	}
 	if (d_mountpoint(dchild))
 		goto out;
 	if (dchild->d_inode->i_ino != ino)
@@ -1123,7 +1163,7 @@ svcxdr_encode_entry3_plus(struct nfsd3_readdirres *resp, const char *name,
 	if (compose_entry_fh(resp, fhp, name, namlen, ino) != nfs_ok)
 		goto out_noattrs;
 
-	if (!svcxdr_encode_post_op_attr(resp->rqstp, xdr, fhp))
+	if (!svcxdr_encode_post_op_attr_opportunistic(resp->rqstp, xdr, fhp))
 		goto out;
 	if (!svcxdr_encode_post_op_fh3(xdr, fhp))
 		goto out;

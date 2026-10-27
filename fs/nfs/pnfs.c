@@ -954,6 +954,35 @@ restart:
 	return pnfs_layout_free_bulk_destroy_list(&layout_list, mode);
 }
 
+int pnfs_layout_destroy_bydevid(struct nfs_client *clp,
+				struct nfs4_deviceid *dev_id,
+				enum pnfs_layout_destroy_mode mode)
+	__must_hold(RCU)
+{
+	struct nfs_server *server;
+	struct nfs4_deviceid_node *d;
+	LIST_HEAD(layout_list);
+
+	spin_lock(&clp->cl_lock);
+	rcu_read_lock();
+
+restart:
+	list_for_each_entry_rcu(server, &clp->cl_superblocks, client_link) {
+		d = nfs4_find_deviceid(server, dev_id);
+		if (!d)
+			continue;
+
+		nfs4_put_deviceid_node(d);
+		if (pnfs_layout_bulk_destroy_byserver_locked(clp, server,
+							     &layout_list) != 0)
+			goto restart;
+	}
+	rcu_read_unlock();
+	spin_unlock(&clp->cl_lock);
+
+	return pnfs_layout_free_bulk_destroy_list(&layout_list, mode);
+}
+
 static void pnfs_layout_build_destroy_list_byclient(struct nfs_client *clp,
 						    struct list_head *list)
 {

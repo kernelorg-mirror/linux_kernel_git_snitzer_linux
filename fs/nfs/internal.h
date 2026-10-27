@@ -389,6 +389,12 @@ extern struct nfs_client *nfs_init_client(struct nfs_client *clp,
 			   const struct nfs_client_initdata *);
 
 /* dir.c */
+int nfs_opendir(struct inode *inode, struct file *filp);
+int nfs_closedir(struct inode *inode, struct file *filp);
+int nfs_readdir(struct file *file, struct dir_context *ctx);
+int nfs_fsync_dir(struct file *file, loff_t start, loff_t end, int datasync);
+loff_t nfs_llseek_dir(struct file *filp, loff_t offset, int whence);
+
 extern void nfs_readdir_record_entry_cache_hit(struct inode *dir);
 extern void nfs_readdir_record_entry_cache_miss(struct inode *dir);
 extern unsigned long nfs_access_cache_count(struct shrinker *shrink,
@@ -402,6 +408,8 @@ int nfs_create(struct mnt_idmap *, struct inode *, struct dentry *,
 	       umode_t);
 struct dentry *nfs_mkdir(struct mnt_idmap *, struct inode *, struct dentry *,
 			 umode_t);
+struct dentry *nfs_mkdir2(struct mnt_idmap *, struct inode *, struct dentry *,
+			  umode_t, unsigned int);
 int nfs_rmdir(struct inode *, struct dentry *);
 int nfs_unlink(struct inode *, struct dentry *);
 int nfs_symlink(struct mnt_idmap *, struct inode *, struct dentry *,
@@ -411,6 +419,8 @@ int nfs_mknod(struct mnt_idmap *, struct inode *, struct dentry *, umode_t,
 	      dev_t);
 int nfs_rename(struct mnt_idmap *, struct inode *, struct dentry *,
 	       struct inode *, struct dentry *, unsigned int);
+int nfs_get_access(struct inode *inode, const struct cred *cred,
+		   struct nfs_access_entry *cache, bool may_block);
 
 #ifdef CONFIG_NFS_V4_2
 static inline __u32 nfs_access_xattr_mask(const struct nfs_server *server)
@@ -454,6 +464,11 @@ extern void nfs_zap_acl_cache(struct inode *inode);
 extern void nfs_set_cache_invalid(struct inode *inode, unsigned long flags);
 extern bool nfs_check_cache_invalid(struct inode *, unsigned long);
 extern int nfs_wait_bit_killable(struct wait_bit_key *key, int mode);
+extern int nfs_getattr_revalidate(const struct path *path, unsigned long flags,
+				  unsigned int query_flags);
+
+struct file_kattr;
+int nfs_fileattr_get(struct dentry *dentry, struct file_kattr *fa);
 
 struct file_kattr;
 int nfs_fileattr_get(struct dentry *dentry, struct file_kattr *fa);

@@ -1360,6 +1360,14 @@ static noinline __be32 *xdr_get_next_encode_buffer(struct xdr_stream *xdr,
 	 */
 	xdr_set_scratch_buffer(xdr, xdr->p, frag1bytes);
 
+	if (!*xdr->page_ptr) {
+		if (!(xdr->buf->flags & XDRBUF_SPARSE_PAGES))
+			return NULL;
+		*xdr->page_ptr = alloc_page(GFP_NOFS);
+		if (!*xdr->page_ptr)
+			return NULL;
+	}
+
 	/*
 	 * xdr->p is where the next encode will start after
 	 * xdr_commit_encode() has shifted this one back:

@@ -20,6 +20,10 @@
 /* aux_flags in nfs_fattr */
 #define NFS_AUX_UNCACHEABLE_FILE_DATA	BIT(0)
 #define NFS_AUX_UNCACHEABLE_DIRENT_METADATA	BIT(1)
+#define NFS_AUX_HIDDEN		BIT(2)
+#define NFS_AUX_SYSTEM		BIT(3)
+#define NFS_AUX_ARCHIVE		BIT(4)
+#define NFS_AUX_OFFLINE		BIT(5)
 
 struct nfs4_string {
 	unsigned int len;
@@ -72,6 +76,7 @@ struct nfs_fattr {
 	struct timespec64	mtime;
 	struct timespec64	ctime;
 	struct timespec64	btime;
+	struct timespec64	time_backup;
 	__u32			aux_flags;	/* NFSv4 auxiliary flags bitfield */
 	__u64			change_attr;	/* NFSv4 change attribute */
 	__u64			pre_change_attr;/* pre-op NFSv4 change attribute */
@@ -115,6 +120,11 @@ struct nfs_fattr {
 #define NFS_ATTR_FATTR_BTIME		BIT_ULL(26)
 #define NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA	BIT_ULL(27)
 #define NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA	BIT_ULL(28)
+#define NFS_ATTR_FATTR_HIDDEN           BIT_ULL(29)
+#define NFS_ATTR_FATTR_SYSTEM           BIT_ULL(30)
+#define NFS_ATTR_FATTR_ARCHIVE          BIT_ULL(31)
+#define NFS_ATTR_FATTR_TIME_BACKUP      BIT_ULL(32)
+#define NFS_ATTR_FATTR_OFFLINE          BIT_ULL(33)
 
 #define NFS_ATTR_FATTR (NFS_ATTR_FATTR_TYPE \
 		| NFS_ATTR_FATTR_MODE \
@@ -138,7 +148,12 @@ struct nfs_fattr {
 		| NFS_ATTR_FATTR_BTIME \
 		| NFS_ATTR_FATTR_V4_SECURITY_LABEL \
 		| NFS_ATTR_FATTR_UNCACHEABLE_FILE_DATA \
-		| NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA)
+		| NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA \
+		| NFS_ATTR_FATTR_HIDDEN \
+		| NFS_ATTR_FATTR_SYSTEM \
+		| NFS_ATTR_FATTR_ARCHIVE \
+		| NFS_ATTR_FATTR_TIME_BACKUP \
+		| NFS_ATTR_FATTR_OFFLINE)
 
 /*
  * Maximal number of supported layout drivers.
@@ -772,7 +787,7 @@ struct nfs_renameres {
 };
 
 /* parsed sec= options */
-#define NFS_AUTH_INFO_MAX_FLAVORS 12 /* see fs/nfs/super.c */
+#define NFS_AUTH_INFO_MAX_FLAVORS 13 /* see fs/nfs/super.c */
 struct nfs_auth_info {
 	unsigned int            flavor_len;
 	rpc_authflavor_t        flavors[NFS_AUTH_INFO_MAX_FLAVORS];
@@ -828,6 +843,7 @@ struct nfs_createargs {
 	struct iattr *		sattr;
 };
 
+struct nfs4_statx;
 struct nfs_setattrargs {
 	struct nfs4_sequence_args 	seq_args;
 	struct nfs_fh *                 fh;
@@ -836,6 +852,7 @@ struct nfs_setattrargs {
 	const struct nfs_server *	server; /* Needed for name mapping */
 	const u32 *			bitmask;
 	const struct nfs4_label		*label;
+	const struct nfs4_statx		*statx;
 };
 
 struct nfs_setaclargs {
@@ -1791,6 +1808,7 @@ struct nfs_rpc_ops {
 	const struct inode_operations *dir_inode_ops;
 	const struct inode_operations *file_inode_ops;
 	const struct file_operations *file_ops;
+	const struct file_operations *dir_ops;
 	const struct nlmclnt_operations *nlmclnt_ops;
 
 	int	(*getroot) (struct nfs_server *, struct nfs_fh *,

@@ -124,6 +124,16 @@ nfsd_open_local_fh(struct net *net, struct auth_domain *dom,
  * what puts a LOCALIO I/O on the direct path; io_cache_write is not
  * consulted.
  */
+static void nfsd_file_dio_alignment(struct nfsd_file *nf,
+				    u32 *nf_dio_mem_align,
+				    u32 *nf_dio_offset_align,
+				    u32 *nf_dio_read_offset_align)
+{
+	*nf_dio_mem_align = nf->nf_dio_mem_align;
+	*nf_dio_offset_align = nf->nf_dio_offset_align;
+	*nf_dio_read_offset_align = nf->nf_dio_read_offset_align;
+}
+
 static void nfsd_file_dio_policy(struct nfsd_file *nf, unsigned int direction,
 				 struct nfs_dio_policy *policy)
 {
@@ -146,6 +156,7 @@ static const struct nfsd_localio_operations nfsd_localio_ops = {
 	.nfsd_open_local_fh = nfsd_open_local_fh,
 	.nfsd_file_put_local = nfsd_file_put_local,
 	.nfsd_file_file = nfsd_file_file,
+	.nfsd_file_dio_alignment = nfsd_file_dio_alignment,
 	.nfsd_file_dio_policy = nfsd_file_dio_policy,
 };
 

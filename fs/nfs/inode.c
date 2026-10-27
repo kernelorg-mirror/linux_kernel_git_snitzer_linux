@@ -192,6 +192,7 @@ void nfs_set_cache_invalid(struct inode *inode, unsigned long flags)
 			flags &= ~(NFS_INO_INVALID_MODE |
 				   NFS_INO_INVALID_OTHER |
 				   NFS_INO_INVALID_BTIME |
+				   NFS_INO_INVALID_WINATTR |
 				   NFS_INO_INVALID_XATTR);
 		flags &= ~(NFS_INO_INVALID_CHANGE | NFS_INO_INVALID_SIZE);
 	}
@@ -529,7 +530,7 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 			mapping_set_large_folios(inode->i_mapping);
 		} else if (S_ISDIR(inode->i_mode)) {
 			inode->i_op = NFS_SB(sb)->nfs_client->rpc_ops->dir_inode_ops;
-			inode->i_fop = &nfs_dir_operations;
+			inode->i_fop = NFS_SB(sb)->nfs_client->rpc_ops->dir_ops;
 			inode->i_data.a_ops = &nfs_dir_aops;
 			nfs_inode_init_dir(nfsi);
 			/* Deal with crossing mountpoints */
@@ -552,6 +553,7 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 		inode_set_mtime(inode, 0, 0);
 		inode_set_ctime(inode, 0, 0);
 		memset(&nfsi->btime, 0, sizeof(nfsi->btime));
+		memset(&nfsi->timebackup, 0, sizeof(nfsi->timebackup));
 		inode_set_iversion_raw(inode, 0);
 		inode->i_size = 0;
 		clear_nlink(inode);
@@ -562,6 +564,10 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 		nfsi->read_io = 0;
 		nfsi->uncacheable_file_data = false;
 		nfsi->uncacheable_dirent_metadata = false;
+		nfsi->archive = false;
+		nfsi->hidden = false;
+		nfsi->system = false;
+		nfsi->offline = false;
 
 		nfsi->read_cache_jiffies = fattr->time_start;
 		nfsi->attr_gencount = fattr->gencount;
@@ -581,6 +587,22 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 			nfsi->btime = fattr->btime;
 		else if (fattr_supported & NFS_ATTR_FATTR_BTIME)
 			nfs_set_cache_invalid(inode, NFS_INO_INVALID_BTIME);
+		if (fattr->valid & NFS_ATTR_FATTR_TIME_BACKUP)
+			nfsi->timebackup = fattr->time_backup;
+		else if (fattr_supported & NFS_ATTR_FATTR_TIME_BACKUP)
+			nfs_set_cache_invalid(inode, NFS_INO_INVALID_WINATTR);
+		if (fattr->valid & NFS_ATTR_FATTR_ARCHIVE)
+			nfsi->archive = fattr->aux_flags & NFS_AUX_ARCHIVE;
+		else if (fattr_supported & NFS_ATTR_FATTR_ARCHIVE)
+			nfs_set_cache_invalid(inode, NFS_INO_INVALID_WINATTR);
+		if (fattr->valid & NFS_ATTR_FATTR_HIDDEN)
+			nfsi->hidden = fattr->aux_flags & NFS_AUX_HIDDEN;
+		else if (fattr_supported & NFS_ATTR_FATTR_HIDDEN)
+			nfs_set_cache_invalid(inode, NFS_INO_INVALID_WINATTR);
+		if (fattr->valid & NFS_ATTR_FATTR_SYSTEM)
+			nfsi->system = fattr->aux_flags & NFS_AUX_SYSTEM;
+		else if (fattr_supported & NFS_ATTR_FATTR_SYSTEM)
+			nfs_set_cache_invalid(inode, NFS_INO_INVALID_WINATTR);
 		if (fattr->valid & NFS_ATTR_FATTR_CHANGE)
 			inode_set_iversion_raw(inode, fattr->change_attr);
 		else
@@ -632,6 +654,10 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 		if (fattr->valid & NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA)
 			nfsi->uncacheable_dirent_metadata =
 				fattr->aux_flags & NFS_AUX_UNCACHEABLE_DIRENT_METADATA;
+		if (fattr->valid & NFS_ATTR_FATTR_OFFLINE)
+			nfsi->offline = fattr->aux_flags & NFS_AUX_OFFLINE;
+		else if (fattr_supported & NFS_ATTR_FATTR_OFFLINE)
+			nfs_set_cache_invalid(inode, NFS_INO_INVALID_WINATTR);
 
 		nfs_setsecurity(inode, fattr);
 
@@ -1076,6 +1102,44 @@ static u32 nfs_get_valid_attrmask(struct inode *inode)
 		reply_mask |= STATX_CHANGE_COOKIE;
 	return reply_mask;
 }
+
+static int nfs_getattr_revalidate_force(struct dentry *dentry)
+{
+	struct inode *inode = d_inode(dentry);
+	struct nfs_server *server = NFS_SERVER(inode);
+
+	if (!(server->flags & NFS_MOUNT_NOAC))
+		nfs_readdirplus_parent_cache_miss(dentry);
+	else
+		nfs_readdirplus_parent_cache_hit(dentry);
+	return __nfs_revalidate_inode(server, inode);
+}
+
+static int nfs_getattr_revalidate_none(struct dentry *dentry)
+{
+	nfs_readdirplus_parent_cache_hit(dentry);
+	return NFS_STALE(d_inode(dentry)) ? -ESTALE : 0;
+}
+
+static int nfs_getattr_revalidate_maybe(struct dentry *dentry,
+					unsigned long flags)
+{
+	if (nfs_check_cache_invalid(d_inode(dentry), flags))
+		return nfs_getattr_revalidate_force(dentry);
+	return nfs_getattr_revalidate_none(dentry);
+}
+
+int nfs_getattr_revalidate(const struct path *path,
+			   unsigned long flags,
+			   unsigned int query_flags)
+{
+	if (query_flags & AT_STATX_FORCE_SYNC)
+		return nfs_getattr_revalidate_force(path->dentry);
+	if (!(query_flags & AT_STATX_DONT_SYNC))
+		return nfs_getattr_revalidate_maybe(path->dentry, flags);
+	return nfs_getattr_revalidate_none(path->dentry);
+}
+EXPORT_SYMBOL_GPL(nfs_getattr_revalidate);
 
 int nfs_getattr(struct mnt_idmap *idmap, const struct path *path,
 		struct kstat *stat, u32 request_mask, unsigned int query_flags)
@@ -2173,7 +2237,8 @@ static int nfs_inode_finish_partial_attr_update(const struct nfs_fattr *fattr,
 		NFS_INO_INVALID_MTIME | NFS_INO_INVALID_SIZE |
 		NFS_INO_INVALID_BLOCKS | NFS_INO_INVALID_OTHER |
 		NFS_INO_INVALID_NLINK | NFS_INO_INVALID_BTIME |
-		NFS_INO_INVALID_UNCACHEABLE_FILE_DATA;
+		NFS_INO_INVALID_UNCACHEABLE_FILE_DATA |
+		NFS_INO_INVALID_WINATTR;
 	unsigned long cache_validity = NFS_I(inode)->cache_validity;
 	enum nfs4_change_attr_type ctype = NFS_SERVER(inode)->change_attr_type;
 
@@ -2496,7 +2561,8 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 			| NFS_INO_INVALID_ATIME
 			| NFS_INO_REVAL_FORCED
 			| NFS_INO_INVALID_BLOCKS
-			| NFS_INO_INVALID_UNCACHEABLE_FILE_DATA);
+			| NFS_INO_INVALID_UNCACHEABLE_FILE_DATA
+			| NFS_INO_INVALID_WINATTR);
 
 	/* Do atomic weak cache consistency updates */
 	nfs_wcc_update_inode(inode, fattr);
@@ -2537,7 +2603,8 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 					| NFS_INO_INVALID_MODE
 					| NFS_INO_INVALID_OTHER
 					| NFS_INO_INVALID_BTIME
-					| NFS_INO_INVALID_UNCACHEABLE_FILE_DATA;
+					| NFS_INO_INVALID_UNCACHEABLE_FILE_DATA
+					| NFS_INO_INVALID_WINATTR;
 				if (S_ISDIR(inode->i_mode))
 					nfs_force_lookup_revalidate(inode);
 				attr_changed = true;
@@ -2576,6 +2643,30 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 	else if (fattr_supported & NFS_ATTR_FATTR_BTIME)
 		nfsi->cache_validity |=
 			save_cache_validity & NFS_INO_INVALID_BTIME;
+
+	if (fattr->valid & NFS_ATTR_FATTR_TIME_BACKUP)
+		nfsi->timebackup = fattr->time_backup;
+	else if (fattr_supported & NFS_ATTR_FATTR_TIME_BACKUP)
+		nfsi->cache_validity |=
+			save_cache_validity & NFS_INO_INVALID_WINATTR;
+
+	if (fattr->valid & NFS_ATTR_FATTR_ARCHIVE)
+		nfsi->archive = fattr->aux_flags & NFS_AUX_ARCHIVE;
+	else if (fattr_supported & NFS_ATTR_FATTR_ARCHIVE)
+		nfsi->cache_validity |=
+			save_cache_validity & NFS_INO_INVALID_WINATTR;
+
+	if (fattr->valid & NFS_ATTR_FATTR_HIDDEN)
+		nfsi->hidden = fattr->aux_flags & NFS_AUX_HIDDEN;
+	else if (fattr_supported & NFS_ATTR_FATTR_HIDDEN)
+		nfsi->cache_validity |=
+			save_cache_validity & NFS_INO_INVALID_WINATTR;
+
+	if (fattr->valid & NFS_ATTR_FATTR_SYSTEM)
+		nfsi->system = fattr->aux_flags & NFS_AUX_SYSTEM;
+	else if (fattr_supported & NFS_ATTR_FATTR_SYSTEM)
+		nfsi->cache_validity |=
+			save_cache_validity & NFS_INO_INVALID_WINATTR;
 
 	/* Check if our cached file size is stale */
 	if (fattr->valid & NFS_ATTR_FATTR_SIZE) {
@@ -2672,6 +2763,12 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 	if (fattr->valid & NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA)
 		nfsi->uncacheable_dirent_metadata =
 				fattr->aux_flags & NFS_AUX_UNCACHEABLE_DIRENT_METADATA;
+
+	if (fattr->valid & NFS_ATTR_FATTR_OFFLINE)
+		nfsi->offline = fattr->aux_flags & NFS_AUX_OFFLINE;
+	else if (fattr_supported & NFS_ATTR_FATTR_OFFLINE)
+		nfsi->cache_validity |=
+			save_cache_validity & NFS_INO_INVALID_WINATTR;
 
 	/* Update attrtimeo value if we're out of the unstable period */
 	if (attr_changed) {
