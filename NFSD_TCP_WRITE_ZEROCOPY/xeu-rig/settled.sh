@@ -230,8 +230,13 @@ RODATA=noalias
 # current one; read at each frame, so apply writes it.  Y since FLAMEGRAPH
 # round 28 (Mike, 27 October): the rings -2.45 +- 0.56 us a loaned WRITE,
 # nothing else moved.  A kmod without it audits BAD.
-declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=Y [rx_prefetch]=Y)
+# rx_page_split (FLAMEGRAPH round 34): the ring cuts its 8 KiB buffers from
+# whole pages counted once, not through page_pool_alloc_frag() and its drain
+# atomic; read at each refill, so apply writes it.  N until round 34's A/B
+# is decided.  A kmod without it audits BAD.
+declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=Y [rx_prefetch]=Y [rx_page_split]=N)
 XP=/sys/module/xeu/parameters/rx_prefetch
+XS=/sys/module/xeu/parameters/rx_page_split
 declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
 # The server's network sysctls, as every figure here was measured with them.
 # netdev_max_backlog and netdev_budget come from Hammerspace's tuned profile
@@ -659,6 +664,8 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 	for k in $PORTS; do [ "$(gro_max ${PDEV[$k]})" = "$GRO_MAX" ] || set_gro_max ${PDEV[$k]} $GRO_MAX; done
 	k=${EXP_XEU_rx_prefetch:-${XEU[rx_prefetch]}}
 	[ -w $XP ] && [ "$(cat $XP)" != "$k" ] && echo "$k" > $XP
+	k=${EXP_XEU_rx_page_split:-${XEU[rx_page_split]}}
+	[ -w $XS ] && [ "$(cat $XS)" != "$k" ] && echo "$k" > $XS
 	[ "$(containers)" = 0 ] && nft list table inet netavark > /dev/null 2>&1 && nft delete table inet netavark
 	if [ "$(conntrack_hooks)" != 0 ]; then
 		[ "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" = 4 ] || nft -f "$NOTRACK"
