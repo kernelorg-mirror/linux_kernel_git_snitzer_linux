@@ -212,7 +212,7 @@ svcsock_rx_alloc_fixture_sized(struct kunit *test, unsigned int entries,
 				      struct_size(fixture->svsk, sk_pages, capacity),
 			GFP_KERNEL);
 	if (fixture->svsk)
-		INIT_LIST_HEAD(&fixture->svsk->sk_credit_wait);
+		svc_tcp_rx_wait_init(fixture->svsk);
 	serv = kunit_kzalloc(test, sizeof(*serv), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, fixture->svsk);
 	KUNIT_ASSERT_NOT_NULL(test, serv);
@@ -385,8 +385,8 @@ static void svcsock_rx_expect_bvec_bytes(struct kunit *test,
 {
 	unsigned int index, cursor = 0;
 
-	for (index = 0; index < state->count; index++) {
-		const struct bio_vec *bvec = &state->bvec[index];
+	for (index = 0; index < state->lt.count; index++) {
+		const struct bio_vec *bvec = &state->lt.bvec[index];
 		void *address;
 
 		KUNIT_ASSERT_LE(test, cursor + bvec->bv_len, len);
@@ -636,10 +636,10 @@ static void svcsock_rx_actor_split_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, ret, (int)first_len);
 	KUNIT_EXPECT_FALSE(test, actor.complete);
 	KUNIT_EXPECT_EQ(test, desc.error, 0);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 0U);
 	svcsock_rx_expect_unpublished(test, fixture->rqstp);
 	if (param->kind == SVCSOCK_RX_SPLIT_CLASSIFIER) {
-		KUNIT_EXPECT_EQ(test, state->body_bytes, (u32)param->split);
+		KUNIT_EXPECT_EQ(test, state->lt.body_bytes, (u32)param->split);
 		KUNIT_EXPECT_EQ(test, state->fixed_bytes, (u32)param->split);
 	} else {
 		KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
@@ -655,9 +655,9 @@ static void svcsock_rx_actor_split_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, desc.error, 0);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
 	KUNIT_EXPECT_EQ(test, state->reason, (u8)SVC_TCP_RX_REASON_NONE);
-	KUNIT_EXPECT_EQ(test, state->body_bytes, (u32)BODY_LEN);
+	KUNIT_EXPECT_EQ(test, state->lt.body_bytes, (u32)BODY_LEN);
 	KUNIT_EXPECT_EQ(test, state->fixed_bytes, 7U * XDR_UNIT);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, 1U);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 1U);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs + 1);
 	svcsock_rx_expect_unpublished(test, fixture->rqstp);
 
@@ -699,7 +699,7 @@ static void svcsock_rx_small_record_copied_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, actor.complete);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_COPY);
 	KUNIT_EXPECT_EQ(test, state->reason, (u8)SVC_TCP_RX_REASON_SMALL);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 0U);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
 	kunit_kfree_skb(test, skb);
 }
@@ -740,7 +740,7 @@ static void svcsock_rx_small_record_split_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, actor.complete);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_COPY);
 	KUNIT_EXPECT_EQ(test, state->reason, (u8)SVC_TCP_RX_REASON_SMALL);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 0U);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
 
 	KUNIT_ASSERT_EQ(test,
@@ -776,7 +776,7 @@ static void svcsock_rx_release_payload_test(struct kunit *test)
 				   sizeof(record));
 	KUNIT_ASSERT_EQ(test, ret, (int)sizeof(record));
 	KUNIT_ASSERT_TRUE(test, actor.complete);
-	KUNIT_ASSERT_EQ(test, state->refs_acquired, 1U);
+	KUNIT_ASSERT_EQ(test, state->lt.refs_acquired, 1U);
 	KUNIT_ASSERT_EQ(test,
 			svc_tcp_rx_publish(fixture->svsk, fixture->rqstp), 0);
 	kunit_kfree_skb(test, skb);
@@ -784,7 +784,7 @@ static void svcsock_rx_release_payload_test(struct kunit *test)
 
 	svc_tcp_rx_release_payload(fixture->svsk, fixture->rqstp);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
-	KUNIT_EXPECT_EQ(test, state->refs_released, 1U);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_released, 1U);
 	KUNIT_EXPECT_TRUE(test, state->terminal);
 	KUNIT_EXPECT_EQ(test, fixture->rqstp->rq_arg.page_len, 0U);
 	/* A second early release is a no-op. */
@@ -838,8 +838,8 @@ static void svcsock_rx_multifragment_fresh_request_test(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, first_actor.complete);
 	KUNIT_EXPECT_EQ(test, first_actor.frags, 1U);
 	KUNIT_EXPECT_EQ(test, active->mode, (u8)SVC_TCP_RX_MIXED);
-	KUNIT_EXPECT_EQ(test, active->body_bytes, (u32)FIRST_FRAGMENT_LEN);
-	KUNIT_EXPECT_EQ(test, active->refs_acquired, 1U);
+	KUNIT_EXPECT_EQ(test, active->lt.body_bytes, (u32)FIRST_FRAGMENT_LEN);
+	KUNIT_EXPECT_EQ(test, active->lt.refs_acquired, 1U);
 	svcsock_rx_expect_unpublished(test, first_rqstp);
 	KUNIT_EXPECT_EQ(test, page_ref_count(first_page), first_refs + 1);
 
@@ -855,15 +855,15 @@ static void svcsock_rx_multifragment_fresh_request_test(struct kunit *test)
 	ret = svc_tcp_restore_pages(fixture->svsk, fresh_rqstp);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	KUNIT_EXPECT_PTR_EQ(test, fresh_rqstp->rq_tcp_rx, active);
-	KUNIT_EXPECT_EQ(test, active->body_bytes, (u32)FIRST_FRAGMENT_LEN);
+	KUNIT_EXPECT_EQ(test, active->lt.body_bytes, (u32)FIRST_FRAGMENT_LEN);
 	svcsock_rx_expect_unpublished(test, fresh_rqstp);
 
 	ret = svcsock_rx_run_actor(fresh_rqstp, &second_actor, &second_desc,
 				   second_skb, 0, second_skb->len);
 	KUNIT_ASSERT_EQ(test, ret, (int)second_skb->len);
 	KUNIT_EXPECT_TRUE(test, second_actor.complete);
-	KUNIT_EXPECT_EQ(test, active->body_bytes, (u32)BODY_LEN);
-	KUNIT_EXPECT_EQ(test, active->refs_acquired, 2U);
+	KUNIT_EXPECT_EQ(test, active->lt.body_bytes, (u32)BODY_LEN);
+	KUNIT_EXPECT_EQ(test, active->lt.refs_acquired, 2U);
 	KUNIT_EXPECT_EQ(test, page_ref_count(second_page), second_refs + 1);
 	svcsock_rx_expect_unpublished(test, fresh_rqstp);
 	ret = svc_tcp_rx_publish(fixture->svsk, fresh_rqstp);
@@ -921,7 +921,7 @@ static void svcsock_rx_two_records_one_skb_test(struct kunit *test)
 					skb, 0, skb->len);
 	KUNIT_ASSERT_EQ(test, consumed, (int)FIRST_RECORD_LEN);
 	KUNIT_EXPECT_TRUE(test, first_actor.complete);
-	KUNIT_EXPECT_EQ(test, first_rqstp->rq_tcp_rx->refs_acquired, 1U);
+	KUNIT_EXPECT_EQ(test, first_rqstp->rq_tcp_rx->lt.refs_acquired, 1U);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs + 1);
 	KUNIT_ASSERT_EQ(test,
 			svc_tcp_rx_publish(fixture->svsk, first_rqstp), 0);
@@ -940,7 +940,7 @@ static void svcsock_rx_two_records_one_skb_test(struct kunit *test)
 					SECOND_RECORD_LEN);
 	KUNIT_ASSERT_EQ(test, consumed, (int)SECOND_RECORD_LEN);
 	KUNIT_EXPECT_TRUE(test, second_actor.complete);
-	KUNIT_EXPECT_EQ(test, second_rqstp->rq_tcp_rx->refs_acquired, 1U);
+	KUNIT_EXPECT_EQ(test, second_rqstp->rq_tcp_rx->lt.refs_acquired, 1U);
 	KUNIT_EXPECT_EQ(test, fixture->svsk->sk_rx_sequence, 2ULL);
 	KUNIT_ASSERT_EQ(test,
 			svc_tcp_rx_publish(fixture->svsk, second_rqstp), 0);
@@ -990,8 +990,8 @@ static void svcsock_rx_prefix_only_then_loan_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, consumed, (int)FIRST_RECORD_LEN);
 	KUNIT_ASSERT_TRUE(test, actor.complete);
 	KUNIT_ASSERT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
-	KUNIT_EXPECT_EQ(test, state->count, 0U);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.count, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 0U);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, rqstp), 0);
 	KUNIT_EXPECT_EQ(test, rqstp->rq_arg.page_mode, XDRBUF_PAGE_ARRAY);
 	KUNIT_EXPECT_EQ(test, rqstp->rq_arg.page_len, 0U);
@@ -1008,7 +1008,7 @@ static void svcsock_rx_prefix_only_then_loan_test(struct kunit *test)
 					 FIRST_RECORD_LEN, SECOND_RECORD_LEN);
 	KUNIT_ASSERT_EQ(test, consumed, (int)SECOND_RECORD_LEN);
 	KUNIT_ASSERT_TRUE(test, actor.complete);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, 1U);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 1U);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, rqstp), 0);
 	KUNIT_EXPECT_PTR_EQ(test, rqstp->rq_xprt_ctxt, state);
 	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
@@ -1065,7 +1065,7 @@ static void svcsock_rx_socket_owned_clear_test(struct kunit *test)
 				   skb->len);
 	KUNIT_ASSERT_EQ(test, ret, (int)skb->len);
 	KUNIT_EXPECT_FALSE(test, actor.complete);
-	KUNIT_EXPECT_EQ(test, active->refs_acquired, 1U);
+	KUNIT_EXPECT_EQ(test, active->lt.refs_acquired, 1U);
 	svcsock_rx_expect_unpublished(test, fixture->rqstp);
 	ret = svc_tcp_save_pages(fixture->svsk, fixture->rqstp);
 	KUNIT_ASSERT_EQ(test, ret, 0);
@@ -1173,7 +1173,7 @@ static void svcsock_rx_materialize_fault_outer_close_test(struct kunit *test)
 		svcsock_rx_alloc_fixture(test,
 					 DIV_ROUND_UP(3, PAGE_SIZE / SZ_4K));
 	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
-	unsigned int nfrags = state->capacity + 1;
+	unsigned int nfrags = state->lt.capacity + 1;
 	unsigned int body_len = 7 * XDR_UNIT + nfrags * FRAG_LEN;
 	struct page **pages;
 	unsigned int *refs;
@@ -1214,10 +1214,10 @@ static void svcsock_rx_materialize_fault_outer_close_test(struct kunit *test)
 	ret = svc_tcp_recvfrom(fixture->rqstp);
 	KUNIT_EXPECT_EQ(test, ret, 0);
 	svc_tcp_rx_kunit_fault_observed(&acquired, &released);
-	KUNIT_EXPECT_EQ(test, acquired, state->capacity);
+	KUNIT_EXPECT_EQ(test, acquired, state->lt.capacity);
 	KUNIT_EXPECT_EQ(test, released, (u32)param->fail_after);
 	KUNIT_EXPECT_EQ(test, acquired - released,
-			state->capacity - (u32)param->fail_after);
+			state->lt.capacity - (u32)param->fail_after);
 	svcsock_rx_expect_outer_close(test, fixture, pool);
 	KUNIT_EXPECT_EQ(test, fixture->rqstp->rq_tcp_rx->mode,
 			(u8)SVC_TCP_RX_EMPTY);
@@ -1291,17 +1291,17 @@ static void svcsock_rx_mixed_geometry_lifetime_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, desc.error, 0);
 	KUNIT_EXPECT_TRUE(test, actor.complete);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
-	KUNIT_EXPECT_EQ(test, state->body_bytes, (u32)BODY_LEN);
+	KUNIT_EXPECT_EQ(test, state->lt.body_bytes, (u32)BODY_LEN);
 	KUNIT_EXPECT_EQ(test, state->fixed_bytes, 7U * XDR_UNIT);
 	/*
 	 * Only the locked (cloned) head's suffix is copied; the frags
 	 * after it are loaned as they are, each bvec holding a reference
 	 * (the compound frag straddles a subpage, so it is two bvecs).
 	 */
-	KUNIT_EXPECT_EQ(test, state->copied_bytes, (u32)HEAD_SUFFIX);
-	KUNIT_EXPECT_EQ(test, state->borrowed_bytes,
+	KUNIT_EXPECT_EQ(test, state->lt.copied_bytes, (u32)HEAD_SUFFIX);
+	KUNIT_EXPECT_EQ(test, state->lt.borrowed_bytes,
 			(u32)(COMPOUND_LEN + CHILD_LEN + GRANDCHILD_LEN));
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, 4U);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 4U);
 	KUNIT_EXPECT_EQ(test, page_ref_count(root_page), root_refs);
 	KUNIT_EXPECT_EQ(test, page_ref_count(compound_page), compound_refs + 2);
 	KUNIT_EXPECT_EQ(test, page_ref_count(child_page), child_refs + 1);
@@ -1382,11 +1382,12 @@ static void svcsock_rx_back_to_back_locked_heads_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, desc.error, 0);
 	KUNIT_EXPECT_TRUE(test, actor.complete);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
-	KUNIT_EXPECT_EQ(test, state->body_bytes, (u32)BODY_LEN);
+	KUNIT_EXPECT_EQ(test, state->lt.body_bytes, (u32)BODY_LEN);
 	/* the arena copy of both heads, then the loan */
-	KUNIT_EXPECT_EQ(test, state->count, 2U);
-	KUNIT_EXPECT_EQ(test, state->copied_bytes, (u32)(FIRST_LEN + SECOND_LEN));
-	KUNIT_EXPECT_EQ(test, state->borrowed_bytes, (u32)BORROWED_LEN);
+	KUNIT_EXPECT_EQ(test, state->lt.count, 2U);
+	KUNIT_EXPECT_EQ(test, state->lt.copied_bytes,
+			(u32)(FIRST_LEN + SECOND_LEN));
+	KUNIT_EXPECT_EQ(test, state->lt.borrowed_bytes, (u32)BORROWED_LEN);
 	KUNIT_EXPECT_EQ(test, page_ref_count(borrowed_page), borrowed_refs + 1);
 
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, fixture->rqstp), 0);
@@ -1408,7 +1409,7 @@ static struct svc_sock *svcsock_rx_credit_sock(struct kunit *test)
 	struct svc_sock *svsk = kunit_kzalloc(test, sizeof(*svsk), GFP_KERNEL);
 
 	KUNIT_ASSERT_NOT_NULL(test, svsk);
-	INIT_LIST_HEAD(&svsk->sk_credit_wait);
+	svc_tcp_rx_wait_init(svsk);
 	kref_init(&svsk->sk_xprt.xpt_ref);
 	svsk->sk_xprt.xpt_net = &init_net;
 	svsk->sk_xprt.xpt_locallen = sizeof(struct sockaddr_in);
@@ -1471,7 +1472,7 @@ static void svcsock_rx_credit_fifo_test(struct kunit *test)
 			svcsock_rx_budget_off, NULL), 0);
 	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 11U);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 8L);
 	/* 8 < 11: c waits, then d queues behind it even if credit appears. */
@@ -1481,8 +1482,8 @@ static void svcsock_rx_credit_fifo_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 19L);
 	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sd, d, len));
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(sc, c, len));
-	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
-	KUNIT_EXPECT_FALSE(test, list_empty(&sd->sk_credit_wait));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_rx_wait.node));
+	KUNIT_EXPECT_FALSE(test, list_empty(&sd->sk_rx_wait.node));
 	/* Reserve is untouched by ordinary admission. */
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 10L);
 	svc_tcp_rx_credit_forget(sd);
@@ -1490,7 +1491,7 @@ static void svcsock_rx_credit_fifo_test(struct kunit *test)
 	svc_tcp_rx_credit_release(c);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 30L);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 10L);
-	KUNIT_EXPECT_FALSE(test, a->credit_linked);
+	KUNIT_EXPECT_FALSE(test, a->cr.linked);
 	svc_tcp_rx_credit_release(a);	/* exactly once: a second call is a no-op */
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 30L);
 }
@@ -1524,55 +1525,55 @@ static void svcsock_rx_credit_learn_test(struct kunit *test)
 	 * record takes the whole of it and its reserve.
 	 */
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_EQ(test, a->credit, 200U);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 200U);
 	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sb, b, len));
 	svc_tcp_rx_credit_forget(sb);
 	a->fixed_bytes = 0;
-	a->body_bytes = len;
+	a->lt.body_bytes = len;
 	b->fixed_bytes = 0;
-	b->body_bytes = len;
+	b->lt.body_bytes = len;
 
 	/* 16 pages for 10 of record: 150 covers it with the page added. */
-	a->region_count = 16;
+	a->lt.region_count = 16;
 	svc_tcp_rx_credit_release(a);
 	ended++;
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 150U);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 190L);
 
 	/* Charged by what that one held. */
-	a->region_count = 0;
+	a->lt.region_count = 0;
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_EQ(test, a->credit, 16U);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 16U);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
-	KUNIT_EXPECT_EQ(test, b->credit, 16U);
+	KUNIT_EXPECT_EQ(test, b->cr.credit, 16U);
 
 	/* More than was charged for: taken at once. */
-	a->region_count = 21;
+	a->lt.region_count = 21;
 	svc_tcp_rx_credit_release(a);
 	ended++;
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 200U);
 
 	/* Fewer does not lower it. */
-	b->region_count = 11;
+	b->lt.region_count = 11;
 	svc_tcp_rx_credit_release(b);
 	ended++;
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 200U);
 
 	/* A record that was lent no region page teaches nothing. */
-	a->region_count = 0;
+	a->lt.region_count = 0;
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_EQ(test, a->credit, 21U);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 21U);
 	svc_tcp_rx_credit_release(a);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 200U);
 
 	/* A record cut short is measured by what it received: 6 for 2. */
-	a->body_bytes = 2 * PAGE_SIZE;
-	a->region_count = 6;
+	a->lt.body_bytes = 2 * PAGE_SIZE;
+	a->lt.region_count = 6;
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
 	svc_tcp_rx_credit_release(a);
 	ended++;
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 250U);
-	a->body_bytes = len;
+	a->lt.body_bytes = len;
 
 	/*
 	 * The window that saw 250 ends and the next passes without it: it
@@ -1580,13 +1581,13 @@ static void svcsock_rx_credit_learn_test(struct kunit *test)
 	 * under it does the estimate come down, and never under one region
 	 * page to a page of record.
 	 */
-	a->region_count = 2;
-	for (; ended < 2 * SVC_TCP_RX_COST_WINDOW; ended++) {
+	a->lt.region_count = 2;
+	for (; ended < 2 * RX_LOAN_COST_WINDOW; ended++) {
 		KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
 		svc_tcp_rx_credit_release(a);
 	}
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 250U);
-	for (; ended < 3 * SVC_TCP_RX_COST_WINDOW; ended++) {
+	for (; ended < 3 * RX_LOAN_COST_WINDOW; ended++) {
 		KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
 		svc_tcp_rx_credit_release(a);
 	}
@@ -1595,9 +1596,9 @@ static void svcsock_rx_credit_learn_test(struct kunit *test)
 
 	/* A fixed factor is used as it is, whatever was learned. */
 	svc_tcp_rx_budget_kunit_configure(200, 10, 100);
-	a->region_count = 0;
+	a->lt.region_count = 0;
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 11U);
 	svc_tcp_rx_credit_release(a);
 }
 
@@ -1691,22 +1692,22 @@ static void svcsock_rx_credit_reserve_oldest_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 2L);
 	/* The young record needs 14 > 11 + 2: it takes 2 and pauses. */
 	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_charge(sy, young, 14));
-	KUNIT_EXPECT_EQ(test, young->credit, 13U);
-	KUNIT_EXPECT_FALSE(test, list_empty(&sy->sk_credit_wait));
+	KUNIT_EXPECT_EQ(test, young->cr.credit, 13U);
+	KUNIT_EXPECT_FALSE(test, list_empty(&sy->sk_rx_wait.node));
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 6L);
 	/* The oldest may take the whole reserve and then run past the budget. */
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(so, old, 20));
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
-	KUNIT_EXPECT_EQ(test, old->credit, 20U);
-	KUNIT_EXPECT_EQ(test, old->credit_reserve, 6U);
-	KUNIT_EXPECT_EQ(test, old->credit_over, 3U);
+	KUNIT_EXPECT_EQ(test, old->cr.credit, 20U);
+	KUNIT_EXPECT_EQ(test, old->cr.reserve, 6U);
+	KUNIT_EXPECT_EQ(test, old->cr.over, 3U);
 	/* Release: the reserve refills, overrun is not returned to the pool. */
 	svc_tcp_rx_credit_release(old);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 6L);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 11L);
 	/* Now oldest, the paused record completes on the reserve if needed. */
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sy, young, 14));
-	KUNIT_EXPECT_TRUE(test, list_empty(&sy->sk_credit_wait));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sy->sk_rx_wait.node));
 	svc_tcp_rx_credit_release(young);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 24L);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 6L);
@@ -1739,15 +1740,15 @@ static void svcsock_rx_credit_disable_waiters_test(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
 	KUNIT_EXPECT_EQ(test, kref_read(&sb->sk_xprt.xpt_ref), 1U);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
-	KUNIT_EXPECT_TRUE(test, list_empty(&sb->sk_credit_wait));
-	KUNIT_EXPECT_EQ(test, sb->sk_credit_ticket, 0ULL);
-	KUNIT_EXPECT_FALSE(test, b->credit_linked);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sb->sk_rx_wait.node));
+	KUNIT_EXPECT_EQ(test, sb->sk_rx_wait.ticket, 0ULL);
+	KUNIT_EXPECT_FALSE(test, b->cr.linked);
 	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
 	KUNIT_EXPECT_EQ(test, kref_read(&sc->sk_xprt.xpt_ref), 1U);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sc, c, len));
-	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
-	KUNIT_EXPECT_EQ(test, sc->sk_credit_ticket, 0ULL);
-	KUNIT_EXPECT_FALSE(test, c->credit_linked);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_rx_wait.node));
+	KUNIT_EXPECT_EQ(test, sc->sk_rx_wait.ticket, 0ULL);
+	KUNIT_EXPECT_FALSE(test, c->cr.linked);
 }
 
 /*
@@ -1768,21 +1769,21 @@ static void svcsock_rx_credit_orphan_test(struct kunit *test)
 			svcsock_rx_budget_off, NULL), 0);
 	svc_tcp_rx_budget_kunit_configure(10, 10, 100);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_EQ(test, a->credit, 10U);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 10U);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
 	/* A reference with no loan behind it fails the invariants. */
-	a->refs_acquired = 1;
+	a->lt.refs_acquired = 1;
 	kunit_warning_suppress(test) {
 		KUNIT_EXPECT_EQ(test, svc_tcp_rx_release_refs(a), -EINVAL);
 	}
-	a->refs_acquired = 0;
-	KUNIT_EXPECT_FALSE(test, a->credit_linked);
+	a->lt.refs_acquired = 0;
+	KUNIT_EXPECT_FALSE(test, a->cr.linked);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 0L);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
-	KUNIT_EXPECT_TRUE(test, b->credit_linked);
+	KUNIT_EXPECT_TRUE(test, b->cr.linked);
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sb, b, 5));
-	KUNIT_EXPECT_EQ(test, b->credit_over, 5U);
+	KUNIT_EXPECT_EQ(test, b->cr.over, 5U);
 	svc_tcp_rx_credit_release(b);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
 	svc_tcp_rx_credit_release(a);	/* abandoned: nothing to return */
@@ -1819,9 +1820,9 @@ static void svcsock_rx_credit_reconfigure_inflight_test(struct kunit *test)
 	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
 	/* Off: no wait for credit, whatever the record needs. */
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sa, a, 100));
-	KUNIT_EXPECT_TRUE(test, list_empty(&sa->sk_credit_wait));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sa->sk_rx_wait.node));
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
-	KUNIT_EXPECT_FALSE(test, b->credit_linked);
+	KUNIT_EXPECT_FALSE(test, b->cr.linked);
 	svc_tcp_rx_credit_release(a);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 0L);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
@@ -1857,7 +1858,7 @@ static void svcsock_rx_credit_reconfigure_wakes_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sb->sk_xprt.xpt_flags));
 	KUNIT_EXPECT_EQ(test, kref_read(&sb->sk_xprt.xpt_ref), 1U);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
-	KUNIT_EXPECT_TRUE(test, b->credit_linked);
+	KUNIT_EXPECT_TRUE(test, b->cr.linked);
 
 	/* Strand the next waiter the same way, then turn admission off. */
 	svc_tcp_rx_budget_kunit_configure(20, 0, 100);
@@ -1868,8 +1869,8 @@ static void svcsock_rx_credit_reconfigure_wakes_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
 	KUNIT_EXPECT_EQ(test, kref_read(&sc->sk_xprt.xpt_ref), 1U);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sc, c, len));
-	KUNIT_EXPECT_FALSE(test, c->credit_linked);
-	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
+	KUNIT_EXPECT_FALSE(test, c->cr.linked);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_rx_wait.node));
 }
 
 /*
@@ -1898,14 +1899,14 @@ static void svcsock_rx_credit_wake_need_test(struct kunit *test)
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_avail(), 3L);
 	KUNIT_ASSERT_FALSE(test, svc_tcp_rx_credit_admit(sc, c, len));
-	KUNIT_EXPECT_EQ(test, sc->sk_credit_need, 11U);
+	KUNIT_EXPECT_EQ(test, sc->sk_rx_wait.need, 11U);
 	KUNIT_ASSERT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
 
 	/* Short of what it asked for, with a record in flight: not woken. */
 	svc_tcp_rx_credit_release(a);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 9L);
 	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
-	KUNIT_EXPECT_FALSE(test, list_empty(&sc->sk_credit_wait));
+	KUNIT_EXPECT_FALSE(test, list_empty(&sc->sk_rx_wait.node));
 
 	/* Nothing in flight: woken, and admitted. */
 	svc_tcp_rx_credit_release(b);
@@ -1913,8 +1914,8 @@ static void svcsock_rx_credit_wake_need_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
 	KUNIT_EXPECT_EQ(test, kref_read(&sc->sk_xprt.xpt_ref), 1U);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sc, c, len));
-	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
-	KUNIT_EXPECT_EQ(test, sc->sk_credit_need, 0U);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_rx_wait.node));
+	KUNIT_EXPECT_EQ(test, sc->sk_rx_wait.need, 0U);
 	svc_tcp_rx_credit_release(c);
 }
 
@@ -1993,7 +1994,7 @@ static void svcsock_rx_set_want_test(struct kunit *test)
 
 	svsk->sk_marker = cpu_to_be32(RPC_LAST_STREAM_FRAGMENT | reclen);
 	svsk->sk_tcplen = sizeof(rpc_fraghdr) + reclen / 4;
-	state->credit = 65;
+	state->cr.credit = 65;
 
 	svc_tcp_rx_set_want(svsk, state, true);
 	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, reclen - reclen / 4);
@@ -2014,11 +2015,11 @@ static void svcsock_rx_set_want_test(struct kunit *test)
 	svc_tcp_rx_set_want(svsk, NULL, true);
 	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
 
-	state->credit = 0;
+	state->cr.credit = 0;
 	svc_tcp_rx_set_want(svsk, state, true);
 	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
 
-	state->credit = 65;
+	state->cr.credit = 65;
 	svsk->sk_tcplen = sizeof(rpc_fraghdr) + reclen;
 	svc_tcp_rx_set_want(svsk, state, true);
 	KUNIT_EXPECT_EQ(test, svsk->sk_rx_want, 0U);
@@ -2106,8 +2107,8 @@ static void svcsock_rx_credit_default_budget_test(struct kunit *test)
 	/* Whatever an earlier user left in force there, nothing changes it. */
 	init_avail = svc_tcp_rx_budget_kunit_avail();
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_TRUE(test, a->credit_linked);
-	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	KUNIT_EXPECT_TRUE(test, a->cr.linked);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 11U);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_default_avail(), 9L);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), init_avail);
 	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sb, b, len));
@@ -2152,12 +2153,12 @@ static void svcsock_rx_credit_copy_unwaits_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sb->sk_xprt.xpt_flags));
 	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_budget_copy(sb));
-	KUNIT_EXPECT_TRUE(test, list_empty(&sb->sk_credit_wait));
-	KUNIT_EXPECT_NULL(test, sb->sk_budget);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sb->sk_rx_wait.node));
+	KUNIT_EXPECT_NULL(test, sb->sk_rx_wait.budget);
 	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
 	KUNIT_EXPECT_EQ(test, kref_read(&sc->sk_xprt.xpt_ref), 1U);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_budget_copy(sc));
-	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_rx_wait.node));
 }
 
 /*
@@ -2238,8 +2239,8 @@ static void svcsock_rx_read_pool_test(struct kunit *test)
 
 	svc_tcp_rx_budget_kunit_configure(10, 0, 100);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(svsk, a, len));
-	KUNIT_ASSERT_TRUE(test, a->credit_linked);
-	KUNIT_EXPECT_PTR_NE(test, a->credit_budget, read);
+	KUNIT_ASSERT_TRUE(test, a->cr.linked);
+	KUNIT_EXPECT_PTR_NE(test, (void *)a->cr.budget, read);
 	svcsock_rx_expect_stats(test, read,
 		"budget 30 reserve_size 0 avail 30 reserve 0 inflight 0");
 	svc_tcp_rx_credit_release(a);
@@ -2251,9 +2252,9 @@ static void svcsock_rx_read_pool_test(struct kunit *test)
 	svcsock_rx_expect_stats(test, read,
 		"budget 90 reserve_size 0 avail 90 reserve 0 inflight 0");
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(svsk, a, len));
-	KUNIT_ASSERT_TRUE(test, a->credit_linked);
+	KUNIT_ASSERT_TRUE(test, a->cr.linked);
 	KUNIT_EXPECT_PTR_EQ(test, svc_tcp_rx_budget_read_for(svsk),
-			    a->credit_budget);
+			    (void *)a->cr.budget);
 	svc_tcp_rx_credit_release(a);
 
 	/* A transport whose budget is 0 sends its READs to the read pool. */
@@ -2327,7 +2328,7 @@ static void svcsock_rx_payload_view(struct xdr_buf *payload,
 {
 	memset(payload, 0, sizeof(*payload));
 	payload->page_mode = XDRBUF_PAGE_BVECS;
-	payload->bvec = state->bvec;
+	payload->bvec = state->lt.bvec;
 	payload->bvec_count = 1;
 	payload->bvec_offset = offset;
 	payload->page_len = len;
@@ -2355,7 +2356,7 @@ static void svcsock_rx_bounce_arena_test(struct kunit *test)
 
 	page = svcsock_rx_publish_loan(test, fixture, record, BODY_LEN, &refs);
 	KUNIT_ASSERT_EQ(test, page_ref_count(page), refs);
-	KUNIT_ASSERT_FALSE(test, state->credit_linked);
+	KUNIT_ASSERT_FALSE(test, state->cr.linked);
 	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
 	/* Memory offset 36 cannot meet a 512-byte alignment at offset 0. */
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp,
@@ -2390,7 +2391,7 @@ static void svcsock_rx_bounce_arena_test(struct kunit *test)
 			   record + sizeof(rpc_fraghdr) + 7 * XDR_UNIT + OFFSET,
 			   LEN);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
-	KUNIT_EXPECT_EQ(test, state->refs_released, state->refs_acquired);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_released, state->lt.refs_acquired);
 	KUNIT_EXPECT_TRUE(test, state->terminal);
 	KUNIT_EXPECT_EQ(test, state->bounce_pages, 0U);
 	KUNIT_EXPECT_EQ(test, fixture->rqstp->rq_arg.page_len, 0U);
@@ -2694,8 +2695,9 @@ svcsock_rx_bounce_admit(struct kunit *test, struct svcsock_rx_fixture *fixture,
 
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(fixture->svsk, state,
 							reclen));
-	KUNIT_ASSERT_TRUE(test, state->credit_linked);
-	return state->credit_budget;
+	KUNIT_ASSERT_TRUE(test, state->cr.linked);
+	/* the shared budget is the first member of sunrpc's */
+	return (void *)state->cr.budget;
 }
 
 /* @c's stats value for @key, or LONG_MIN when absent. */
@@ -2754,7 +2756,7 @@ static void svcsock_rx_bounce_region_credit_test(struct kunit *test)
 	f = svcsock_rx_region_fixture(test, 0);
 	page = svcsock_rx_publish_loan(test, fixture, record, BODY_LEN, &refs);
 	c = svcsock_rx_bounce_admit(test, fixture, sizeof(record));
-	KUNIT_ASSERT_EQ(test, state->credit, 2U);
+	KUNIT_ASSERT_EQ(test, state->cr.credit, 2U);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), 28L);
 	bounced = svcsock_rx_budget_stat(c, "bounced");
 	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
@@ -2771,7 +2773,7 @@ static void svcsock_rx_bounce_region_credit_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
 	KUNIT_EXPECT_EQ(test, state->bounce_pages, 1U);
 	KUNIT_EXPECT_EQ(test, state->bounce_credit, 1U);
-	KUNIT_EXPECT_FALSE(test, state->credit_linked);
+	KUNIT_EXPECT_FALSE(test, state->cr.linked);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), 29L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 1L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "bounced"), bounced + 1);
@@ -2841,14 +2843,14 @@ static void svcsock_rx_bounce_region_multi_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, fixture->rqstp),
 			0);
 	kunit_kfree_skb(test, skb);
-	KUNIT_ASSERT_EQ(test, state->count, 3U);
+	KUNIT_ASSERT_EQ(test, state->lt.count, 3U);
 	c = svcsock_rx_bounce_admit(test, fixture, RECORD_LEN);
-	KUNIT_ASSERT_EQ(test, state->credit, 3U);
+	KUNIT_ASSERT_EQ(test, state->cr.credit, 3U);
 	avail = svcsock_rx_budget_stat(c, "avail");
 	bounced = svcsock_rx_budget_stat(c, "bounced");
 
 	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
-	payload.bvec_count = state->count;
+	payload.bvec_count = state->lt.count;
 	n = svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp, &payload, ALIGN,
 			      512, out, ARRAY_SIZE(out));
 	KUNIT_ASSERT_EQ(test, n, 3);
@@ -2871,7 +2873,7 @@ static void svcsock_rx_bounce_region_multi_test(struct kunit *test)
 			   LEN);
 	for (i = 0; i < 3; i++)
 		KUNIT_EXPECT_EQ(test, page_ref_count(pages[i]), refs[i] - 1);
-	KUNIT_EXPECT_EQ(test, state->refs_released, state->refs_acquired);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_released, state->lt.refs_acquired);
 	KUNIT_EXPECT_TRUE(test, state->terminal);
 	KUNIT_EXPECT_NE(test, state->reason, (u8)SVC_TCP_RX_REASON_INVARIANT);
 	KUNIT_EXPECT_EQ(test, state->bounce_pages, 3U);
@@ -2918,7 +2920,7 @@ static void svcsock_rx_bounce_credit_short_test(struct kunit *test)
 	svcsock_rx_region_fixture(test, 0);
 	page = svcsock_rx_publish_loan(test, fixture, record, BODY_LEN, &refs);
 	c = svcsock_rx_bounce_admit(test, fixture, sizeof(record));
-	KUNIT_ASSERT_EQ(test, state->credit, 1U);
+	KUNIT_ASSERT_EQ(test, state->cr.credit, 1U);
 	avail = svcsock_rx_budget_stat(c, "avail");
 	refused = svcsock_rx_budget_stat(c, "bounce_refused");
 	for (i = 0; i < ARRAY_SIZE(out); i++)
@@ -2932,7 +2934,7 @@ static void svcsock_rx_bounce_credit_short_test(struct kunit *test)
 		KUNIT_EXPECT_PTR_EQ(test, out[i].bv_page, marker);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
 	KUNIT_EXPECT_FALSE(test, state->terminal);
-	KUNIT_EXPECT_EQ(test, state->credit, 1U);
+	KUNIT_EXPECT_EQ(test, state->cr.credit, 1U);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "bounce_refused"),
@@ -2974,7 +2976,7 @@ static void svcsock_rx_bounce_region_short_test(struct kunit *test)
 			(unsigned int)HELD);
 	page = svcsock_rx_publish_loan(test, fixture, record, BODY_LEN, &refs);
 	c = svcsock_rx_bounce_admit(test, fixture, sizeof(record));
-	KUNIT_ASSERT_EQ(test, state->credit, 2U);
+	KUNIT_ASSERT_EQ(test, state->cr.credit, 2U);
 	avail = svcsock_rx_budget_stat(c, "avail");
 	refused = svcsock_rx_budget_stat(c, "bounce_refused");
 	for (i = 0; i < ARRAY_SIZE(out); i++)
@@ -2988,8 +2990,8 @@ static void svcsock_rx_bounce_region_short_test(struct kunit *test)
 	for (i = 0; i < ARRAY_SIZE(out); i++)
 		KUNIT_EXPECT_PTR_EQ(test, out[i].bv_page, marker);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
-	KUNIT_EXPECT_EQ(test, state->credit, 2U);
-	KUNIT_EXPECT_TRUE(test, state->credit_linked);
+	KUNIT_EXPECT_EQ(test, state->cr.credit, 2U);
+	KUNIT_EXPECT_TRUE(test, state->cr.linked);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "bounce_refused"),
@@ -3048,18 +3050,18 @@ static void svcsock_rx_bounce_locked_head_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, fixture->rqstp),
 			0);
 	KUNIT_ASSERT_EQ(test, state->mode, (u8)SVC_TCP_RX_PUBLISHED);
-	KUNIT_ASSERT_GT(test, state->count, 0U);
+	KUNIT_ASSERT_GT(test, state->lt.count, 0U);
 	/* Loan, the locked head's sliver in the arena, loan. */
-	KUNIT_ASSERT_EQ(test, state->count, 3U);
-	KUNIT_ASSERT_EQ(test, state->copied_bytes, (u32)LOCKED);
-	KUNIT_ASSERT_EQ(test, state->borrowed_bytes, (u32)(HEAD + TAIL));
-	KUNIT_ASSERT_EQ(test, state->borrowed_count, 2U);
+	KUNIT_ASSERT_EQ(test, state->lt.count, 3U);
+	KUNIT_ASSERT_EQ(test, state->lt.copied_bytes, (u32)LOCKED);
+	KUNIT_ASSERT_EQ(test, state->lt.borrowed_bytes, (u32)(HEAD + TAIL));
+	KUNIT_ASSERT_EQ(test, state->lt.borrowed_count, 2U);
 	kunit_kfree_skb(test, root);
 	c = svcsock_rx_bounce_admit(test, fixture, RECORD_LEN);
 
 	payload = (struct xdr_buf){
-		.page_mode = XDRBUF_PAGE_BVECS, .bvec = state->bvec,
-		.bvec_count = state->count, .page_len = HEAD + LOCKED + TAIL,
+		.page_mode = XDRBUF_PAGE_BVECS, .bvec = state->lt.bvec,
+		.bvec_count = state->lt.count, .page_len = HEAD + LOCKED + TAIL,
 		.len = HEAD + LOCKED + TAIL,
 	};
 	n = svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp, &payload, 0, 512,
@@ -3073,8 +3075,8 @@ static void svcsock_rx_bounce_locked_head_test(struct kunit *test)
 			   record + sizeof(rpc_fraghdr) + 7 * XDR_UNIT,
 			   HEAD + LOCKED + TAIL);
 	KUNIT_EXPECT_TRUE(test, state->terminal);
-	KUNIT_EXPECT_EQ(test, state->refs_released, state->refs_acquired);
-	KUNIT_EXPECT_EQ(test, state->borrowed_count, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_released, state->lt.refs_acquired);
+	KUNIT_EXPECT_EQ(test, state->lt.borrowed_count, 0U);
 	KUNIT_EXPECT_NE(test, state->reason, (u8)SVC_TCP_RX_REASON_INVARIANT);
 	KUNIT_EXPECT_EQ(test, page_ref_count(root_page), root_refs - 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(tail_page), tail_refs - 1);
@@ -3115,8 +3117,8 @@ static void svcsock_rx_bounce_reserve_test(struct kunit *test)
 	svcsock_rx_region_fixture(test, 0);
 	svcsock_rx_publish_loan(test, fixture, record, BODY_LEN, &refs);
 	c = svcsock_rx_bounce_admit(test, fixture, sizeof(record));
-	KUNIT_ASSERT_EQ(test, state->credit, 2U);
-	KUNIT_ASSERT_EQ(test, state->credit_reserve, 1U);
+	KUNIT_ASSERT_EQ(test, state->cr.credit, 2U);
+	KUNIT_ASSERT_EQ(test, state->cr.reserve, 1U);
 	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
 	n = svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp, &payload, ALIGN, 4,
 			      out, ARRAY_SIZE(out));
@@ -3209,8 +3211,8 @@ static void svcsock_rx_bounce_capacity_test(struct kunit *test)
 			refused + 1);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "avail"), avail);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "lent"), 0L);
-	KUNIT_EXPECT_EQ(test, env->state->credit, 2U);
-	KUNIT_EXPECT_TRUE(test, env->state->credit_linked);
+	KUNIT_EXPECT_EQ(test, env->state->cr.credit, 2U);
+	KUNIT_EXPECT_TRUE(test, env->state->cr.linked);
 	KUNIT_EXPECT_EQ(test, page_ref_count(env->page), env->refs);
 	svcsock_rx_region_expect_part(test, false, 16, 16, 0);
 	svcsock_rx_bounce_env_end(env);
@@ -3246,8 +3248,8 @@ static void svcsock_rx_bounce_unsupported_test(struct kunit *test)
 			refused);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "bounced"), bounced);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "lent"), 0L);
-	KUNIT_EXPECT_EQ(test, env->state->credit, 2U);
-	KUNIT_EXPECT_TRUE(test, env->state->credit_linked);
+	KUNIT_EXPECT_EQ(test, env->state->cr.credit, 2U);
+	KUNIT_EXPECT_TRUE(test, env->state->cr.linked);
 	KUNIT_EXPECT_EQ(test, env->state->bounce_pages, 0U);
 	KUNIT_EXPECT_EQ(test, page_ref_count(env->page), env->refs);
 	svcsock_rx_bounce_env_end(env);
@@ -3265,13 +3267,13 @@ static void svcsock_rx_bounce_credit_over_short_test(struct kunit *test)
 	struct bio_vec out[4];
 	long refused = svcsock_rx_budget_stat(env->c, "bounce_refused");
 
-	KUNIT_ASSERT_EQ(test, env->state->credit, 1U);
+	KUNIT_ASSERT_EQ(test, env->state->cr.credit, 1U);
 	/* Admission off: further charges finish unthrottled, as credit_over. */
 	svc_tcp_rx_budget_kunit_configure(0, 0, 0);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_charge(env->fixture->svsk,
 							 env->state, 6));
-	KUNIT_ASSERT_EQ(test, env->state->credit, 6U);
-	KUNIT_ASSERT_EQ(test, env->state->credit_over, 5U);
+	KUNIT_ASSERT_EQ(test, env->state->cr.credit, 6U);
+	KUNIT_ASSERT_EQ(test, env->state->cr.over, 5U);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_bounce(env->fixture->svsk,
 						env->fixture->rqstp,
 						&env->payload, BOUNCE_ALIGN2, 4,
@@ -3279,9 +3281,9 @@ static void svcsock_rx_bounce_credit_over_short_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "bounce_refused"),
 			refused + 1);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "lent"), 0L);
-	KUNIT_EXPECT_EQ(test, env->state->credit, 6U);
-	KUNIT_EXPECT_EQ(test, env->state->credit_over, 5U);
-	KUNIT_EXPECT_TRUE(test, env->state->credit_linked);
+	KUNIT_EXPECT_EQ(test, env->state->cr.credit, 6U);
+	KUNIT_EXPECT_EQ(test, env->state->cr.over, 5U);
+	KUNIT_EXPECT_TRUE(test, env->state->cr.linked);
 	svcsock_rx_region_expect_part(test, false, 16, 16, 0);
 	svcsock_rx_bounce_env_end(env);
 }
@@ -3298,11 +3300,11 @@ static void svcsock_rx_bounce_credit_over_test(struct kunit *test)
 	long avail;
 	int n;
 
-	KUNIT_ASSERT_EQ(test, env->state->credit, 2U);
+	KUNIT_ASSERT_EQ(test, env->state->cr.credit, 2U);
 	svc_tcp_rx_budget_kunit_configure(0, 0, 0);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_charge(env->fixture->svsk,
 							 env->state, 5));
-	KUNIT_ASSERT_EQ(test, env->state->credit_over, 3U);
+	KUNIT_ASSERT_EQ(test, env->state->cr.over, 3U);
 	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
 	n = svc_tcp_rx_bounce(env->fixture->svsk, env->fixture->rqstp,
 			      &env->payload, BOUNCE_ALIGN2, 4, out,
@@ -3940,15 +3942,15 @@ static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
 			svcsock_rx_budget_off, NULL), 0);
 	svc_tcp_rx_budget_kunit_configure(10, 0, 100);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(svsk, state, 10 * PAGE_SIZE));
-	credit = state->credit;
+	credit = state->cr.credit;
 	avail = svc_tcp_rx_budget_kunit_avail();
 	state->terminal = false;
 	kunit_warning_suppress(test) {
 		svc_tcp_rx_reset(state);
 		SVCSOCK_EXPECT_ONCE_WARNING(test);
 	}
-	KUNIT_EXPECT_TRUE(test, state->credit_linked);
-	KUNIT_EXPECT_EQ(test, state->credit, credit);
+	KUNIT_EXPECT_TRUE(test, state->cr.linked);
+	KUNIT_EXPECT_EQ(test, state->cr.credit, credit);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), avail);
 	svc_tcp_rx_credit_release(state);
 	state->terminal = true;
@@ -3975,12 +3977,12 @@ static void svcsock_rx_credit_rcvbuf_floor_test(struct kunit *test)
 	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
 	svc_tcp_rx_budget_kunit_rcvbuf(64 * 1024);
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(svsk, state, len));
-	KUNIT_EXPECT_EQ(test, state->credit, 0U);
+	KUNIT_EXPECT_EQ(test, state->cr.credit, 0U);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 0L);
 	svc_tcp_rx_credit_release(state);
 	svc_tcp_rx_budget_kunit_rcvbuf(128 * 1024);
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(svsk, state, len));
-	KUNIT_EXPECT_EQ(test, state->credit, 11U);
+	KUNIT_EXPECT_EQ(test, state->cr.credit, 11U);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 19L);
 	svc_tcp_rx_credit_release(state);
 }
@@ -4218,7 +4220,7 @@ static void svcsock_rx_capacity_plus_one_test(struct kunit *test)
 	 * pages) the record continues in further skbs and the table fills in
 	 * a later one, with the loans of the earlier ones already taken.
 	 */
-	unsigned int nfrags = state->capacity + 1;
+	unsigned int nfrags = state->lt.capacity + 1;
 	unsigned int nskbs = DIV_ROUND_UP(nfrags, MAX_SKB_FRAGS);
 	unsigned int body_len = 7 * XDR_UNIT + nfrags * FRAG_LEN;
 	struct svcsock_rx_actor_state actor = {};
@@ -4264,11 +4266,11 @@ static void svcsock_rx_capacity_plus_one_test(struct kunit *test)
 	}
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_COPY);
 	KUNIT_EXPECT_EQ(test, state->reason, (u8)SVC_TCP_RX_REASON_CAPACITY);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, nfrags - 1);
-	KUNIT_EXPECT_EQ(test, state->refs_released, nfrags - 1);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, nfrags - 1);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_released, nfrags - 1);
 	KUNIT_EXPECT_EQ(test, state->materialized_bytes,
 			(nfrags - 1) * FRAG_LEN);
-	KUNIT_EXPECT_EQ(test, state->count, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.count, 0U);
 	KUNIT_EXPECT_MEMEQ(test, page_address(fixture->rqstp->rq_pages[0]),
 			   record + sizeof(rpc_fraghdr), body_len);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, fixture->rqstp), 0);
@@ -4299,7 +4301,7 @@ static void svcsock_rx_partial_save_restore_test(struct kunit *test)
 				   skb->len);
 	KUNIT_ASSERT_EQ(test, ret, (int)skb->len);
 	KUNIT_EXPECT_FALSE(test, actor.complete);
-	KUNIT_EXPECT_EQ(test, request_state->refs_acquired, 1U);
+	KUNIT_EXPECT_EQ(test, request_state->lt.refs_acquired, 1U);
 	ret = svc_tcp_save_pages(fixture->svsk, fixture->rqstp);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	KUNIT_EXPECT_PTR_EQ(test, fixture->svsk->sk_rx, request_state);
@@ -4538,7 +4540,7 @@ static void svcsock_rx_exclusion_table_test(struct kunit *test)
 			KUNIT_EXPECT_EQ(test, ret, (int)sizeof(rpc_fraghdr));
 			KUNIT_EXPECT_EQ(test, desc.error, -EFAULT);
 			KUNIT_EXPECT_FALSE(test, actor.complete);
-			KUNIT_EXPECT_EQ(test, state->refs_acquired, 0U);
+			KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 0U);
 			KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
 			KUNIT_EXPECT_EQ(test, state->reason, cases[i].reason);
 			ret = svc_tcp_rx_abort(fixture->svsk, fixture->rqstp,
@@ -4556,7 +4558,7 @@ static void svcsock_rx_exclusion_table_test(struct kunit *test)
 		KUNIT_EXPECT_EQ(test, state->mode, cases[i].mode);
 		KUNIT_EXPECT_EQ(test, state->reason, cases[i].reason);
 		if (cases[i].mode == SVC_TCP_RX_MIXED) {
-			KUNIT_EXPECT_EQ(test, state->refs_acquired, 1U);
+			KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 1U);
 			ret = svc_tcp_rx_publish(fixture->svsk, fixture->rqstp);
 			KUNIT_ASSERT_EQ(test, ret, 0);
 			kunit_kfree_skb(test, skb);
@@ -4565,7 +4567,7 @@ static void svcsock_rx_exclusion_table_test(struct kunit *test)
 				BODY_LEN - 7 * XDR_UNIT);
 			svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
 		} else {
-			KUNIT_EXPECT_EQ(test, state->refs_acquired, 0U);
+			KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 0U);
 			KUNIT_EXPECT_MEMEQ(test,
 					   page_address(fixture->rqstp->rq_pages[0]),
 				record + sizeof(rpc_fraghdr), BODY_LEN);
@@ -4601,7 +4603,7 @@ svcsock_rx_alloc_state(struct kunit *test, unsigned int capacity)
 		return NULL;
 	state->mode = SVC_TCP_RX_MIXED;
 	state->fixed_bytes = 28;
-	state->body_bytes = 28;
+	state->lt.body_bytes = 28;
 	return state;
 }
 
@@ -4640,24 +4642,26 @@ static void svcsock_rx_materialize_test(struct kunit *test)
 			svc_tcp_rx_append_borrowed(state, source, 7, 8, false), 0);
 	KUNIT_ASSERT_EQ(test,
 			svc_tcp_rx_append_borrowed(state, source, 15, 4, false), 0);
-	KUNIT_EXPECT_EQ(test, state->count, 1U);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, 1U);
+	KUNIT_EXPECT_EQ(test, state->lt.count, 1U);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 1U);
 	KUNIT_EXPECT_EQ(test, page_ref_count(source), source_refs + 1);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_append_copied(state, arena, 40,
 						       sizeof(copied)), 0);
 
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_materialize(state, pages), 0);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_COPY);
-	KUNIT_EXPECT_EQ(test, state->count, 0U);
-	KUNIT_EXPECT_EQ(test, state->borrowed_bytes, 0U);
-	KUNIT_EXPECT_EQ(test, state->copied_bytes,
+	KUNIT_EXPECT_EQ(test, state->lt.count, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.borrowed_bytes, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.copied_bytes,
 			(u32)(sizeof(borrowed) + sizeof(copied)));
 	KUNIT_EXPECT_EQ(test, state->materialized_bytes,
 			(u32)sizeof(borrowed));
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, state->refs_released);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, state->lt.refs_released);
 	KUNIT_EXPECT_EQ(test, page_ref_count(source), source_refs);
-	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->borrowed, state->capacity));
-	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->page_pool, state->capacity));
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->lt.borrowed,
+					     state->lt.capacity));
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->lt.page_pool,
+					     state->lt.capacity));
 
 	address = kmap_local_page(arena);
 	KUNIT_EXPECT_MEMEQ(test, address + 28, borrowed, sizeof(borrowed));
@@ -4682,7 +4686,7 @@ static void svcsock_rx_capacity_release_test(struct kunit *test)
 	second_refs = page_ref_count(second);
 
 	/* fill the table; gaps keep each fragment its own entry */
-	for (i = 0; i < state->capacity; i++)
+	for (i = 0; i < state->lt.capacity; i++)
 		KUNIT_ASSERT_EQ(test,
 				svc_tcp_rx_append_borrowed(state, first,
 							   1 + i * 8, 3, true),
@@ -4692,14 +4696,14 @@ static void svcsock_rx_capacity_release_test(struct kunit *test)
 			-ENOSPC);
 	KUNIT_EXPECT_EQ(test, page_ref_count(first), first_refs);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_pp_refs(first),
-			first_pp_refs + state->capacity);
+			first_pp_refs + state->lt.capacity);
 	KUNIT_EXPECT_EQ(test, page_ref_count(second), second_refs);
-	KUNIT_EXPECT_TRUE(test, test_bit(0, state->page_pool));
+	KUNIT_EXPECT_TRUE(test, test_bit(0, state->lt.page_pool));
 
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
 	KUNIT_EXPECT_EQ(test, page_ref_count(first), first_refs);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_pp_refs(first), first_pp_refs);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, state->refs_released);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, state->lt.refs_released);
 }
 
 /*
@@ -4715,20 +4719,21 @@ static void svcsock_rx_capacity_sizing_test(struct kunit *test)
 
 	KUNIT_ASSERT_NOT_NULL(test, state);
 	KUNIT_ASSERT_NOT_NULL(test, page);
-	KUNIT_EXPECT_EQ(test, (unsigned long)state->capacity,
+	KUNIT_EXPECT_EQ(test, (unsigned long)state->lt.capacity,
 			svc_pages_to_bvecs(2));
 	KUNIT_EXPECT_EQ(test, state->arena_pages, 2U);
 	refs = page_ref_count(page);
 
-	for (i = 0; i < state->capacity; i++)
+	for (i = 0; i < state->lt.capacity; i++)
 		KUNIT_ASSERT_EQ(test,
 				svc_tcp_rx_append_borrowed(state, page,
 							   i * 8, 4, false),
 				0);
-	KUNIT_EXPECT_EQ(test, state->count, state->capacity);
+	KUNIT_EXPECT_EQ(test, state->lt.count, state->lt.capacity);
 	KUNIT_EXPECT_EQ(test,
 			svc_tcp_rx_append_borrowed(state, page,
-						   state->capacity * 8, 4, false),
+						   state->lt.capacity * 8, 4,
+						   false),
 			-ENOSPC);
 
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
@@ -4882,19 +4887,19 @@ static void svcsock_rx_region_count_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test,
 			svc_tcp_rx_append_borrowed(state, plain_page, 0, 8, true),
 			0);
-	KUNIT_EXPECT_EQ(test, state->region_count, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.region_count, 0U);
 	svcsock_rx_bind_region(test, region_pp->pool);
 	KUNIT_ASSERT_EQ(test,
 			svc_tcp_rx_append_borrowed(state, region_page, 0, 8, true),
 			0);
-	KUNIT_EXPECT_EQ(test, state->region_count, 1U);
-	KUNIT_EXPECT_EQ(test, state->borrowed_count, 2U);
+	KUNIT_EXPECT_EQ(test, state->lt.region_count, 1U);
+	KUNIT_EXPECT_EQ(test, state->lt.borrowed_count, 2U);
 	/* Another fragment of the same region page is one more loan, no more pages. */
 	KUNIT_ASSERT_EQ(test,
 			svc_tcp_rx_append_borrowed(state, region_page, 64, 8, true),
 			0);
-	KUNIT_EXPECT_EQ(test, state->region_count, 1U);
-	KUNIT_EXPECT_EQ(test, state->borrowed_count, 3U);
+	KUNIT_EXPECT_EQ(test, state->lt.region_count, 1U);
+	KUNIT_EXPECT_EQ(test, state->lt.borrowed_count, 3U);
 	svcsock_rx_unbind_region(region_pp->pool);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
 }
@@ -4963,14 +4968,14 @@ static void svcsock_rx_credit_collapsed_unwaits_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, ret, (int)HEAD_LEN);
 	KUNIT_ASSERT_FALSE(test, actor.complete);
 	KUNIT_ASSERT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
-	KUNIT_ASSERT_FALSE(test, state->credit_linked);
-	KUNIT_ASSERT_FALSE(test, list_empty(&sb->sk_credit_wait));
+	KUNIT_ASSERT_FALSE(test, state->cr.linked);
+	KUNIT_ASSERT_FALSE(test, list_empty(&sb->sk_rx_wait.node));
 	KUNIT_ASSERT_FALSE(test, svc_tcp_rx_credit_admit(sc, c, len));
 
 	/* The record in flight ends unseen; from here wakes are real. */
 	svc_tcp_rx_credit_release(a);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_kunit_set(10), 0);
-	KUNIT_ASSERT_FALSE(test, list_empty(&sb->sk_credit_wait));
+	KUNIT_ASSERT_FALSE(test, list_empty(&sb->sk_rx_wait.node));
 	KUNIT_ASSERT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
 
 	/* The same bytes, no longer in the region. */
@@ -4982,15 +4987,15 @@ static void svcsock_rx_credit_collapsed_unwaits_test(struct kunit *test)
 				   HEAD_LEN, sizeof(record) - HEAD_LEN);
 	KUNIT_ASSERT_EQ(test, ret, (int)(sizeof(record) - HEAD_LEN));
 	KUNIT_EXPECT_TRUE(test, actor.complete);
-	KUNIT_EXPECT_FALSE(test, state->credit_linked);
+	KUNIT_EXPECT_FALSE(test, state->cr.linked);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 10L);
-	KUNIT_EXPECT_TRUE(test, list_empty(&sb->sk_credit_wait));
-	KUNIT_EXPECT_EQ(test, sb->sk_credit_ticket, 0ULL);
-	KUNIT_EXPECT_NULL(test, sb->sk_budget);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sb->sk_rx_wait.node));
+	KUNIT_EXPECT_EQ(test, sb->sk_rx_wait.ticket, 0ULL);
+	KUNIT_EXPECT_NULL(test, sb->sk_rx_wait.budget);
 	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
 	KUNIT_EXPECT_EQ(test, kref_read(&sc->sk_xprt.xpt_ref), 1U);
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(sc, c, len));
-	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_rx_wait.node));
 	svc_tcp_rx_credit_release(c);
 
 	KUNIT_ASSERT_EQ(test,
@@ -5050,10 +5055,10 @@ static void svcsock_rx_locked_head_then_materialize_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, ret, (int)(HEAD_LEN + MERGE_LEN));
 	KUNIT_ASSERT_FALSE(test, actor.complete);
 	KUNIT_ASSERT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
-	KUNIT_ASSERT_EQ(test, state->count, 1U);
-	KUNIT_ASSERT_EQ(test, state->borrowed_count, 0U);
-	KUNIT_ASSERT_EQ(test, state->borrowed_bytes, 0U);
-	KUNIT_ASSERT_EQ(test, state->copied_bytes, (u32)MERGE_LEN);
+	KUNIT_ASSERT_EQ(test, state->lt.count, 1U);
+	KUNIT_ASSERT_EQ(test, state->lt.borrowed_count, 0U);
+	KUNIT_ASSERT_EQ(test, state->lt.borrowed_bytes, 0U);
+	KUNIT_ASSERT_EQ(test, state->lt.copied_bytes, (u32)MERGE_LEN);
 
 	/* A region page and no budget: the record is copied. */
 	svc_tcp_rx_budget_kunit_default(0, 0);
@@ -5066,11 +5071,11 @@ static void svcsock_rx_locked_head_then_materialize_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_COPY);
 	KUNIT_EXPECT_EQ(test, state->reason,
 			(u8)SVC_TCP_RX_REASON_NO_BUDGET);
-	KUNIT_EXPECT_EQ(test, state->borrowed_count, 0U);
-	KUNIT_EXPECT_EQ(test, state->borrowed_bytes, 0U);
-	KUNIT_EXPECT_EQ(test, state->copied_bytes,
+	KUNIT_EXPECT_EQ(test, state->lt.borrowed_count, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.borrowed_bytes, 0U);
+	KUNIT_EXPECT_EQ(test, state->lt.copied_bytes,
 			(u32)(MERGE_LEN + TAIL_LEN));
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, state->refs_released);
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, state->lt.refs_released);
 	KUNIT_EXPECT_MEMEQ(test, page_address(fixture->rqstp->rq_pages[0]),
 			   record + sizeof(rpc_fraghdr), BODY_LEN);
 
@@ -5088,7 +5093,7 @@ static void svcsock_rx_page_pool_recycle_test(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, state);
 	state->mode = SVC_TCP_RX_MIXED;
 	state->fixed_bytes = 28;
-	state->body_bytes = 28;
+	state->lt.body_bytes = 28;
 	KUNIT_ASSERT_EQ(test,
 			svc_tcp_rx_append_borrowed(state, page, 1, 3, true), 0);
 
@@ -5168,7 +5173,7 @@ static void svcsock_rx_page_pool_bulk_release_test(struct kunit *test)
 				svc_tcp_rx_append_borrowed(state, page, 1, 3,
 							   true), 0);
 	}
-	KUNIT_EXPECT_EQ(test, state->count, SVCSOCK_RX_TEST_BULK_PAGES);
+	KUNIT_EXPECT_EQ(test, state->lt.count, SVCSOCK_RX_TEST_BULK_PAGES);
 	refs = page_ref_count(set->pages[0]);
 
 	/* The record now holds each page's last reference. */
@@ -5178,10 +5183,12 @@ static void svcsock_rx_page_pool_bulk_release_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, ptr_ring_empty(&set->pool->ring));
 
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, state->refs_released);
-	KUNIT_EXPECT_EQ(test, state->borrowed_count, 0U);
-	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->borrowed, state->capacity));
-	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->page_pool, state->capacity));
+	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, state->lt.refs_released);
+	KUNIT_EXPECT_EQ(test, state->lt.borrowed_count, 0U);
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->lt.borrowed,
+					     state->lt.capacity));
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->lt.page_pool,
+					     state->lt.capacity));
 
 	/* Every page went back to the pool, none to the page allocator. */
 	while (set->held < SVCSOCK_RX_TEST_BULK_PAGES &&
@@ -5267,8 +5274,8 @@ static void svcsock_rx_concurrent_release_test(struct kunit *test)
 	request->rq_tcp_rx = request_state;
 	request->rq_xprt_ctxt = request_state;
 	request->rq_arg.page_mode = XDRBUF_PAGE_BVECS;
-	request->rq_arg.bvec = request_state->bvec;
-	request->rq_arg.bvec_count = request_state->count;
+	request->rq_arg.bvec = request_state->lt.bvec;
+	request->rq_arg.bvec_count = request_state->lt.count;
 	svsk->sk_rx = socket_state;
 	socket_snapshot = *socket_state;
 
@@ -5335,16 +5342,20 @@ static void svcsock_rx_max_capacity_reset_test(struct kunit *test)
 	state->mode = SVC_TCP_RX_COPY;
 
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
-	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->borrowed, state->capacity));
-	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->page_pool, state->capacity));
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->lt.borrowed,
+					     state->lt.capacity));
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->lt.page_pool,
+					     state->lt.capacity));
 	svc_tcp_rx_reset(state);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
-	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->borrowed, state->capacity));
-	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->page_pool, state->capacity));
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->lt.borrowed,
+					     state->lt.capacity));
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->lt.page_pool,
+					     state->lt.capacity));
 
 	state->mode = SVC_TCP_RX_MIXED;
 	state->fixed_bytes = 28;
-	state->body_bytes = 28;
+	state->lt.body_bytes = 28;
 	pp_page = svcsock_rx_alloc_pp_page(test, NULL);
 	pp_refs = svcsock_rx_pp_refs(pp_page);
 	KUNIT_ASSERT_EQ(test,
@@ -5352,17 +5363,19 @@ static void svcsock_rx_max_capacity_reset_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svcsock_rx_pp_refs(pp_page), pp_refs + 1);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_pp_refs(pp_page), pp_refs);
-	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->borrowed, state->capacity));
-	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->page_pool, state->capacity));
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->lt.borrowed,
+					     state->lt.capacity));
+	KUNIT_EXPECT_TRUE(test, bitmap_empty(state->lt.page_pool,
+					     state->lt.capacity));
 	svc_tcp_rx_reset(state);
 
 	state->mode = SVC_TCP_RX_MIXED;
 	state->fixed_bytes = 28;
-	state->body_bytes = 28;
+	state->lt.body_bytes = 28;
 	KUNIT_ASSERT_EQ(test,
 			svc_tcp_rx_append_borrowed(state, page, 5, 7, false), 0);
-	KUNIT_EXPECT_TRUE(test, test_bit(0, state->borrowed));
-	KUNIT_EXPECT_FALSE(test, test_bit(0, state->page_pool));
+	KUNIT_EXPECT_TRUE(test, test_bit(0, state->lt.borrowed));
+	KUNIT_EXPECT_FALSE(test, test_bit(0, state->lt.page_pool));
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_release_refs(state), 0);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
 }
@@ -5432,9 +5445,9 @@ static void svcsock_rx_loan_table_fit_test(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, state);
 	fit_obj = ksize(fit);
 	old_obj = ksize(old);
-	KUNIT_EXPECT_EQ(test, (unsigned long)state->capacity, entries);
+	KUNIT_EXPECT_EQ(test, (unsigned long)state->lt.capacity, entries);
 	KUNIT_EXPECT_EQ(test, (unsigned long)state->arena_pages, pages);
-	KUNIT_EXPECT_EQ(test, ksize(state->bvec), fit_obj);
+	KUNIT_EXPECT_EQ(test, ksize(state->lt.bvec), fit_obj);
 	/* One slab object: 8 KiB on 4 KiB pages, 4 KiB on larger ones. */
 	KUNIT_EXPECT_LE(test, fit_obj,
 			PAGE_SIZE == SZ_4K ? (size_t)SZ_8K : (size_t)SZ_4K);
@@ -5442,7 +5455,7 @@ static void svcsock_rx_loan_table_fit_test(struct kunit *test)
 	kunit_info(test, "P3SIZES page=%lu max_mesg=%u maxpages=%lu fit_entries=%lu fit_bytes=%zu fit_obj=%zu pages_entries=%lu pages_bytes=%zu pages_obj=%zu bitmap_obj=%zu state_obj=%zu",
 		   (unsigned long)PAGE_SIZE, serv.sv_max_mesg, pages, entries,
 		   entries * sizeof(*fit), fit_obj, by_pages,
-		   by_pages * sizeof(*old), old_obj, ksize(state->borrowed),
+		   by_pages * sizeof(*old), old_obj, ksize(state->lt.borrowed),
 		   ksize(state));
 	svc_tcp_rx_state_free(state);
 	kfree(old);
@@ -5510,23 +5523,23 @@ static void svcsock_rx_loan_1m_mtu9000_test(struct kunit *test)
 	}
 	KUNIT_ASSERT_TRUE(test, actor.complete);
 	kunit_info(test, "P3COVER page=%lu frags=%u capacity=%u arena_pages=%u mode=%u(MIXED=2,COPY=3) reason=%u(NONE=0,CAPACITY=12) materialized_bytes=%u count=%u LOAN=%d",
-		   (unsigned long)PAGE_SIZE, frags, state->capacity,
+		   (unsigned long)PAGE_SIZE, frags, state->lt.capacity,
 		   state->arena_pages, state->mode, state->reason,
-		   state->materialized_bytes, state->count,
+		   state->materialized_bytes, state->lt.count,
 		   state->mode == SVC_TCP_RX_MIXED &&
 		   state->reason == SVC_TCP_RX_REASON_NONE &&
-		   !state->materialized_bytes && state->count == frags);
+		   !state->materialized_bytes && state->lt.count == frags);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
 	KUNIT_EXPECT_EQ(test, state->reason, (u8)SVC_TCP_RX_REASON_NONE);
 	KUNIT_EXPECT_EQ(test, state->materialized_bytes, 0U);
-	KUNIT_EXPECT_EQ(test, state->count, frags);
-	KUNIT_EXPECT_LE(test, state->count, state->capacity);
+	KUNIT_EXPECT_EQ(test, state->lt.count, frags);
+	KUNIT_EXPECT_LE(test, state->lt.count, state->lt.capacity);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, rqstp), 0);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_PUBLISHED);
-	for (index = 0, cursor = head_len; index < state->count; index++) {
-		const struct bio_vec *bvec = &state->bvec[index];
+	for (index = 0, cursor = head_len; index < state->lt.count; index++) {
+		const struct bio_vec *bvec = &state->lt.bvec[index];
 
-		KUNIT_ASSERT_TRUE(test, test_bit(index, state->borrowed));
+		KUNIT_ASSERT_TRUE(test, test_bit(index, state->lt.borrowed));
 		KUNIT_ASSERT_EQ(test, memcmp(page_address(bvec->bv_page) +
 					     bvec->bv_offset,
 					     record + cursor, bvec->bv_len), 0);
@@ -6157,7 +6170,7 @@ static void svcsock_region_park_at_share(struct kunit *test,
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_kunit_set(12), 0);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sr, s1, 7 * PAGE_SIZE));
 	KUNIT_ASSERT_FALSE(test, svc_tcp_rx_credit_admit(sr, s2, 7 * PAGE_SIZE));
-	KUNIT_ASSERT_FALSE(test, list_empty(&sr->sk_credit_wait));
+	KUNIT_ASSERT_FALSE(test, list_empty(&sr->sk_rx_wait.node));
 
 	for (i = 0; i < n; i++) {
 		KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, sizes[i]),
@@ -6705,8 +6718,8 @@ static void svcsock_rx_region_recv_behind_read_test(struct kunit *test)
 
 	/* The record would fit (cost 2, 3 free) but the READ is older. */
 	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sr, st, PAGE_SIZE));
-	KUNIT_EXPECT_FALSE(test, list_empty(&sr->sk_credit_wait));
-	KUNIT_EXPECT_FALSE(test, st->credit_linked);
+	KUNIT_EXPECT_FALSE(test, list_empty(&sr->sk_rx_wait.node));
+	KUNIT_EXPECT_FALSE(test, st->cr.linked);
 	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sr->sk_xprt.xpt_flags));
 
 	/* A's credit returns: the READ is granted, and the transport woken. */
@@ -6722,7 +6735,7 @@ static void svcsock_rx_region_recv_behind_read_test(struct kunit *test)
 	svcsock_region_free_dr(r, dr);
 
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(sr, st, PAGE_SIZE));
-	KUNIT_EXPECT_TRUE(test, st->credit_linked);
+	KUNIT_EXPECT_TRUE(test, st->cr.linked);
 	svc_tcp_rx_credit_release(st);
 	KUNIT_EXPECT_EQ(test, svcsock_region_credit(test, r), 6);
 }
@@ -6923,16 +6936,16 @@ static void svcsock_rx_credit_stock_record_test(struct kunit *test)
 	/* Stocking off: b is admitted in order, onto the in-flight list. */
 	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_DRAIN, 0);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
-	KUNIT_EXPECT_FALSE(test, b->credit_stocked);
-	KUNIT_EXPECT_GT(test, b->credit_ticket, 0ULL);
+	KUNIT_EXPECT_FALSE(test, b->cr.stocked);
+	KUNIT_EXPECT_GT(test, b->cr.ticket, 0ULL);
 
 	/* Its admission turned stocking back on: a comes from the stock. */
 	KUNIT_ASSERT_EQ(test, svcsock_rx_stock(c,
 				SVC_TCP_RX_KUNIT_STOCK_FILL, 0), 32L);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_TRUE(test, a->credit_stocked);
-	KUNIT_EXPECT_TRUE(test, a->credit_linked);
-	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	KUNIT_EXPECT_TRUE(test, a->cr.stocked);
+	KUNIT_EXPECT_TRUE(test, a->cr.linked);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 11U);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(c,
 				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 21L);
 	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 2);
@@ -6943,14 +6956,14 @@ static void svcsock_rx_credit_stock_record_test(struct kunit *test)
 
 	/* A charge the stock still covers stays lockless. */
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sa, a, 20));
-	KUNIT_EXPECT_TRUE(test, a->credit_stocked);
-	KUNIT_EXPECT_EQ(test, a->credit, 20U);
+	KUNIT_EXPECT_TRUE(test, a->cr.stocked);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 20U);
 	/* Beyond it: an ordinary record, the youngest. */
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sa, a, 50));
-	KUNIT_EXPECT_FALSE(test, a->credit_stocked);
-	KUNIT_EXPECT_TRUE(test, a->credit_linked);
-	KUNIT_EXPECT_EQ(test, a->credit, 50U);
-	KUNIT_EXPECT_GT(test, a->credit_ticket, b->credit_ticket);
+	KUNIT_EXPECT_FALSE(test, a->cr.stocked);
+	KUNIT_EXPECT_TRUE(test, a->cr.linked);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 50U);
+	KUNIT_EXPECT_GT(test, a->cr.ticket, b->cr.ticket);
 	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 2);
 	svc_tcp_rx_credit_release(a);
 	svc_tcp_rx_credit_release(b);
@@ -6964,10 +6977,10 @@ static void svcsock_rx_credit_stock_record_test(struct kunit *test)
 	 */
 	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_ASSERT_TRUE(test, a->credit_stocked);
+	KUNIT_ASSERT_TRUE(test, a->cr.stocked);
 	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sc, big,
 							 250 * PAGE_SIZE));
-	KUNIT_EXPECT_FALSE(test, list_empty(&sc->sk_credit_wait));
+	KUNIT_EXPECT_FALSE(test, list_empty(&sc->sk_rx_wait.node));
 	/* The waiter drained every stock and turned stocking off. */
 	KUNIT_EXPECT_TRUE(test, svcsock_rx_stock(c,
 				SVC_TCP_RX_KUNIT_STOCK_CONTENDED, 0));
@@ -6977,9 +6990,9 @@ static void svcsock_rx_credit_stock_record_test(struct kunit *test)
 	svc_tcp_rx_credit_release(a);
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(sc, big,
 							250 * PAGE_SIZE));
-	KUNIT_EXPECT_TRUE(test, big->credit_linked);
-	KUNIT_EXPECT_GT(test, big->credit_reserve, 0U);
-	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
+	KUNIT_EXPECT_TRUE(test, big->cr.linked);
+	KUNIT_EXPECT_GT(test, big->cr.reserve, 0U);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_rx_wait.node));
 	svc_tcp_rx_credit_release(big);
 	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail") +
 			svcsock_budget_stat(test, c, "reserve"), 256);
@@ -6988,15 +7001,15 @@ static void svcsock_rx_credit_stock_record_test(struct kunit *test)
 	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
 	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
-	KUNIT_ASSERT_TRUE(test, b->credit_stocked);
+	KUNIT_ASSERT_TRUE(test, b->cr.stocked);
 	orphaned = svcsock_budget_stat(test, c, "orphaned");
-	b->refs_acquired = 1;
+	b->lt.refs_acquired = 1;
 	kunit_warning_suppress(test) {
 		KUNIT_EXPECT_EQ(test, svc_tcp_rx_release_refs(b), -EINVAL);
 	}
-	b->refs_acquired = 0;
-	KUNIT_EXPECT_FALSE(test, b->credit_linked);
-	KUNIT_EXPECT_FALSE(test, b->credit_stocked);
+	b->lt.refs_acquired = 0;
+	KUNIT_EXPECT_FALSE(test, b->cr.linked);
+	KUNIT_EXPECT_FALSE(test, b->cr.stocked);
 	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "orphaned"),
 			orphaned + 11);
 	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 0);
@@ -7005,14 +7018,14 @@ static void svcsock_rx_credit_stock_record_test(struct kunit *test)
 	/* The list is intact: an ordinary record still links and returns. */
 	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_DRAIN, 0);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_FALSE(test, a->credit_stocked);
+	KUNIT_EXPECT_FALSE(test, a->cr.stocked);
 	svc_tcp_rx_credit_release(a);
 	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 0);
 }
 
 /*
  * 7.3 port of the stocks: the cost estimate is learned, not a fixed factor.
- * Until SVC_TCP_RX_COST_WARMUP records have ended on the locked path no
+ * Until RX_LOAN_COST_WARMUP records have ended on the locked path no
  * record takes stocked credit, even where the stock would cover it.  Once
  * warm, a record released to its stock without the lock leaves its sample
  * on the CPU, and the next refill folds it in under the lock.
@@ -7044,29 +7057,29 @@ static void svcsock_rx_credit_stock_learn_test(struct kunit *test)
 		svcsock_budget_stat(test, c, "reserve");
 
 	/* Each record held 11 region pages for 10 pages: sample 100. */
-	for (i = 0; i < SVC_TCP_RX_COST_WARMUP; i++) {
+	for (i = 0; i < RX_LOAN_COST_WARMUP; i++) {
 		svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
 		KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-		KUNIT_EXPECT_FALSE(test, a->credit_stocked);
+		KUNIT_EXPECT_FALSE(test, a->cr.stocked);
 		a->fixed_bytes = 0;
-		a->body_bytes = len;
-		a->region_count = 11;
+		a->lt.body_bytes = len;
+		a->lt.region_count = 11;
 		svc_tcp_rx_credit_release(a);
-		a->region_count = 0;
+		a->lt.region_count = 0;
 	}
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 100U);
 
 	/* Warm: the stock covers the learned cost, 10 + 1. */
 	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_TRUE(test, a->credit_stocked);
-	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	KUNIT_EXPECT_TRUE(test, a->cr.stocked);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 11U);
 	/* It held 31 pages: sample 300, kept on this CPU, not yet learned. */
 	a->fixed_bytes = 0;
-	a->body_bytes = len;
-	a->region_count = 31;
+	a->lt.body_bytes = len;
+	a->lt.region_count = 31;
 	svc_tcp_rx_credit_release(a);
-	a->region_count = 0;
+	a->lt.region_count = 0;
 	/*
 	 * Admission still charges 100 (it reads the estimate as last folded,
 	 * svc_tcp_rx_credit_cost()); svc_tcp_rx_budget_cost_factor() would
@@ -7074,16 +7087,16 @@ static void svcsock_rx_credit_stock_learn_test(struct kunit *test)
 	 */
 	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "cost_factor"), 100);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_TRUE(test, a->credit_stocked);
-	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	KUNIT_EXPECT_TRUE(test, a->cr.stocked);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 11U);
 	svc_tcp_rx_credit_release(a);		/* no region page: no sample */
 	/* The refill takes the lock and folds it in: now 30 + 1. */
 	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
 	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "cost_factor"), 300);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 300U);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_TRUE(test, a->credit_stocked);
-	KUNIT_EXPECT_EQ(test, a->credit, 31U);
+	KUNIT_EXPECT_TRUE(test, a->cr.stocked);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 31U);
 	svc_tcp_rx_credit_release(a);
 	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 0);
 	/*
@@ -7131,8 +7144,8 @@ static void svcsock_rx_bounce_stocked_test(struct kunit *test)
 	avail = svcsock_rx_budget_stat(c, "avail");
 	KUNIT_ASSERT_PTR_EQ(test, svcsock_rx_bounce_admit(test, fixture,
 							  sizeof(record)), c);
-	KUNIT_ASSERT_TRUE(test, state->credit_stocked);
-	KUNIT_ASSERT_EQ(test, state->credit, 2U);
+	KUNIT_ASSERT_TRUE(test, state->cr.stocked);
+	KUNIT_ASSERT_EQ(test, state->cr.credit, 2U);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail - 2);
 
 	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
@@ -7141,7 +7154,7 @@ static void svcsock_rx_bounce_stocked_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, n, 1);
 	KUNIT_EXPECT_TRUE(test, state->bounce_stocked);
 	KUNIT_EXPECT_EQ(test, state->bounce_credit, 1U);
-	KUNIT_EXPECT_FALSE(test, state->credit_linked);
+	KUNIT_EXPECT_FALSE(test, state->cr.linked);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail - 1);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 1L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "inflight"), 1L);
@@ -7187,7 +7200,7 @@ static void svcsock_rx_credit_stock_live_change_test(struct kunit *test)
 				SVC_TCP_RX_KUNIT_STOCK_FILL, 0), 32L);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
-	KUNIT_ASSERT_TRUE(test, a->credit_stocked && b->credit_stocked);
+	KUNIT_ASSERT_TRUE(test, a->cr.stocked && b->cr.stocked);
 	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail"), 248 - 22);
 
 	/* Up by 44 with stocked holders only: a delta, not a reset. */
@@ -7273,7 +7286,7 @@ static void svcsock_rx_credit_stock_netns_test(struct kunit *test)
 
 	/* The record draws on its namespace's stock only. */
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_ASSERT_TRUE(test, a->credit_stocked);
+	KUNIT_ASSERT_TRUE(test, a->cr.stocked);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(ci,
 				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 21L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(cd,
@@ -7287,7 +7300,7 @@ static void svcsock_rx_credit_stock_netns_test(struct kunit *test)
 		svc_tcp_rx_credit_release(a);
 		kunit_mark_skipped(test, "one CPU: no release elsewhere");
 	}
-	KUNIT_EXPECT_FALSE(test, a->credit_linked);
+	KUNIT_EXPECT_FALSE(test, a->cr.linked);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(ci,
 				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 32L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(cd,
