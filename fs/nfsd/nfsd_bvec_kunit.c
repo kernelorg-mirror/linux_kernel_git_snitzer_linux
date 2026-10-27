@@ -13,6 +13,7 @@
 #include <linux/magic.h>
 #include <linux/mount.h>
 #include <linux/pseudo_fs.h>
+#include <linux/sizes.h>
 #include <linux/bvec.h>
 #include <linux/highmem.h>
 #include <linux/mm.h>
@@ -817,6 +818,27 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 			.expected_dontcache_mask = BIT(0),
 			.expected_counts = { PAGE_SIZE },
 		},
+		{
+			/*
+			 * The layout a direct-write bounce produces: page-tiled
+			 * from the file position's in-page offset.  Under a
+			 * 4096-byte boundary (PRP) and 512-byte memory alignment
+			 * the misaligned start is cut at the page boundary and
+			 * the whole-page middle goes direct.
+			 */
+			.name = "bounce-layout-direct",
+			.position = 3000,
+			.total = 3 * PAGE_SIZE - 3000,
+			.mem_align = 512,
+			.offset_align = 512,
+			.seg_boundary = 4096,
+			.nvecs = 3,
+			.offsets = { 3000, 0, 0 },
+			.lengths = { PAGE_SIZE - 3000, PAGE_SIZE, PAGE_SIZE },
+			.expected_nsegs = 2,
+			.expected_direct_mask = BIT(1),
+			.expected_counts = { PAGE_SIZE - 3000, 2 * PAGE_SIZE },
+		},
 	};
 	unsigned int case_index;
 
@@ -950,6 +972,80 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 		}
 		KUNIT_EXPECT_EQ(test, consumed, test_case->total);
 	}
+}
+
+/* Only a misaligned split that a page-tiled copy can fix bounces. */
+static void nfsd_bvec_dio_bounce_trigger_test(struct kunit *test)
+{
+	KUNIT_EXPECT_TRUE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_MEM_MISALIGNED, 512, 512, 0));
+	KUNIT_EXPECT_TRUE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_MEM_MISALIGNED, 4, 512,
+				NFS_DIO_SEG_BOUNDARY_NONE));
+	KUNIT_EXPECT_TRUE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_MEM_MISALIGNED, 512, PAGE_SIZE,
+				PAGE_SIZE));
+	/* Aligned payloads and the other exits stay as they are. */
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_DIRECT, 512, 512, 0));
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_NO_ALIGNMENT, 512, 512, 0));
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_TOO_SMALL, 512, 512, 0));
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_NO_MIDDLE, 512, 512, 0));
+	/* No alignment advertised, or one a page-tiled copy cannot meet. */
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_MEM_MISALIGNED, 0, 512, 0));
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_MEM_MISALIGNED, 512, 0, 0));
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_MEM_MISALIGNED, 4096, 512, 0));
+	/* A memory alignment above PAGE_SIZE is never met by whole pages. */
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_MEM_MISALIGNED, 2 * PAGE_SIZE,
+				2 * PAGE_SIZE, 0));
+	/* Nor a joint boundary above PAGE_SIZE with a larger offset alignment. */
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_MEM_MISALIGNED, 512, 2 * PAGE_SIZE,
+				2 * PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_MEM_MISALIGNED, 512, 2 * PAGE_SIZE,
+				NFS_DIO_SEG_BOUNDARY_NONE));
+	/* A joint off an offset_align multiple: the page-tiled copy has none. */
+	KUNIT_EXPECT_TRUE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_GAP_MISALIGNED, 512, 512, PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_GAP_MISALIGNED, 4, 512, PAGE_SIZE));
+	/* The same guards as for a memory-misaligned split. */
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_GAP_MISALIGNED, 0, 512, PAGE_SIZE));
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_GAP_MISALIGNED, 4096, 512, PAGE_SIZE));
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_GAP_MISALIGNED, 512, 2 * PAGE_SIZE,
+				2 * PAGE_SIZE));
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_GAP_MISALIGNED, 512, 0, PAGE_SIZE));
+	KUNIT_EXPECT_FALSE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_GAP_MISALIGNED, 2 * PAGE_SIZE,
+				2 * PAGE_SIZE, PAGE_SIZE));
+	/* Page joints off an offset_align multiple are no gap at this boundary. */
+	KUNIT_EXPECT_TRUE(test, nfsd_write_dio_bounce_helps(
+				NFS_DIO_GAP_MISALIGNED, 512, 2 * PAGE_SIZE,
+				PAGE_SIZE));
+	/*
+	 * The alignment the layout is held to: the offset alignment when
+	 * every page joint is a discontinuity, else the memory alignment.
+	 */
+	KUNIT_EXPECT_EQ(test, nfsd_write_dio_bounce_align(4, 512, 2 * PAGE_SIZE),
+			512U);
+	KUNIT_EXPECT_EQ(test, nfsd_write_dio_bounce_align(512, 512,
+							  2 * PAGE_SIZE), 512U);
+	KUNIT_EXPECT_EQ(test, nfsd_write_dio_bounce_align(4, 512, PAGE_SIZE), 4U);
+	KUNIT_EXPECT_EQ(test, nfsd_write_dio_bounce_align(4, 512, 0), 4U);
+	KUNIT_EXPECT_EQ(test, nfsd_write_dio_bounce_align(4, 512,
+				NFS_DIO_SEG_BOUNDARY_NONE), 4U);
 }
 
 static void nfsd_bvec_dio_seg_boundary_test(struct kunit *test)
@@ -1855,7 +1951,7 @@ static void nfsd_dio_geometry_replay_test(struct kunit *test)
 		fixture->requested_flags = &flags;
 		hooks.before_reissue = nfsd_dio_replay_before;
 		hooks.data = fixture;
-		ret = nfsd_direct_write_kunit(request, handle, nf, nvecs, &count,
+		ret = nfsd_direct_write_kunit(request, handle, nf, NULL, nvecs, &count,
 					      &iocb, fixture->since, &hooks);
 		KUNIT_EXPECT_EQ(test, ret, scenario->error);
 		KUNIT_EXPECT_EQ(test, count, scenario->count);
@@ -1893,10 +1989,382 @@ static void nfsd_dio_geometry_replay_test(struct kunit *test)
 	}
 }
 
+/*
+ * A stand-in transport for the bounce ops: it lays the payload out
+ * page-tiled in test pages, or refuses, and records when done is called
+ * against the writes and the fsync the fixture saw.
+ */
+struct nfsd_bounce_stub {
+	struct svc_xprt xprt;
+	struct svc_xprt_ops ops;
+	struct nfsd_dio_replay *fixture;
+	struct kunit *test;
+	struct bio_vec *vectors;
+	bool refuse;
+	unsigned int bounce_calls, done_calls;
+	unsigned int tiled, done_nvecs, align, mem_align;
+	unsigned int calls_at_done, fsyncs_at_done;
+	bool done_bvec_ok;
+};
+
+static int nfsd_bounce_stub_payload(struct svc_rqst *rqstp,
+				    const struct xdr_buf *payload,
+				    unsigned int align, unsigned int mem_align,
+				    struct bio_vec *bvec, unsigned int bvec_size)
+{
+	struct nfsd_bounce_stub *stub = container_of(rqstp->rq_xprt,
+						     struct nfsd_bounce_stub, xprt);
+	struct nfsd_dio_replay *fixture = stub->fixture;
+	unsigned long done = 0;
+	unsigned int n, i;
+
+	stub->bounce_calls++;
+	stub->align = align;
+	KUNIT_EXPECT_PTR_EQ(stub->test, bvec, stub->vectors);
+	KUNIT_EXPECT_EQ(stub->test, mem_align, stub->mem_align);
+	KUNIT_EXPECT_NOT_NULL(stub->test, payload);
+	if (stub->refuse)
+		return -ENOSPC;
+	n = DIV_ROUND_UP(align + fixture->total, PAGE_SIZE);
+	KUNIT_ASSERT_LE(stub->test, n, bvec_size);
+	for (i = 0; i < n; i++) {
+		struct page *page = nfsd_bvec_alloc_page(stub->test);
+		unsigned int off = i ? 0 : align;
+		unsigned int len = min_t(unsigned long, PAGE_SIZE - off,
+					 fixture->total - done);
+
+		KUNIT_ASSERT_NOT_NULL(stub->test, page);
+		nfsd_bvec_write(page, off, fixture->source + done, len);
+		bvec_set_page(&bvec[i], page, len, off);
+		done += len;
+	}
+	stub->tiled = n;
+	return n;
+}
+
+static void nfsd_bounce_stub_done(struct svc_rqst *rqstp, struct bio_vec *bvec,
+				  unsigned int nvecs)
+{
+	struct nfsd_bounce_stub *stub = container_of(rqstp->rq_xprt,
+						     struct nfsd_bounce_stub, xprt);
+
+	stub->done_calls++;
+	stub->done_nvecs = nvecs;
+	stub->done_bvec_ok = bvec == stub->vectors;
+	stub->calls_at_done = stub->fixture->calls;
+	stub->fsyncs_at_done = stub->fixture->fsyncs;
+}
+
+/*
+ * nfsd_direct_write() hands a payload the device cannot take to the
+ * transport's bounce and must return it exactly once, after every segment
+ * is written and before the fsync, on every exit; a refusal leaves the
+ * original split.  The payload starts at a 128 byte file offset and is
+ * four fragments, the first of which breaks the 512 byte memory alignment.
+ * The joint cases have a 4 byte memory alignment and an 8 KiB joint
+ * boundary: the first joint is a gap off a 512 byte multiple, and the
+ * bounce is asked for the 512 byte offset alignment, which every page
+ * joint of its layout must meet.  Refused, the WRITE goes buffered as one
+ * segment with the bytes intact.
+ */
+static void nfsd_dio_bounce_wiring_test(struct kunit *test)
+{
+	static const struct nfsd_dio_replay_case cases[] = {
+		{ .name = "bounce-success", .responses = { LONG_MAX, LONG_MAX, LONG_MAX },
+		  .calls = 3, .count = 3 * PAGE_SIZE,
+		  .position = 3 * PAGE_SIZE + 128, .split = true, .fsync = true },
+		{ .name = "bounce-write-error", .responses = { LONG_MAX, -EIO },
+		  .calls = 2, .count = PAGE_SIZE - 128, .position = PAGE_SIZE,
+		  .error = -EIO, .split = true },
+		{ .name = "bounce-short-write", .responses = { LONG_MAX, PAGE_SIZE },
+		  .calls = 2, .count = 2 * PAGE_SIZE - 128,
+		  .position = 2 * PAGE_SIZE, .split = true, .fsync = true },
+		{ .name = "bounce-refused", .responses = { LONG_MAX },
+		  .calls = 1, .count = 3 * PAGE_SIZE,
+		  .position = 3 * PAGE_SIZE + 128, .split = true, .fsync = true },
+		{ .name = "joint-bounce", .responses = { LONG_MAX, LONG_MAX, LONG_MAX },
+		  .calls = 3, .count = 3 * PAGE_SIZE,
+		  .position = 3 * PAGE_SIZE + 128, .split = true, .fsync = true },
+		{ .name = "joint-refused", .responses = { LONG_MAX },
+		  .calls = 1, .count = 3 * PAGE_SIZE,
+		  .position = 3 * PAGE_SIZE + 128, .split = true, .fsync = true },
+	};
+	struct vfsmount *mnt;
+	unsigned int i;
+
+	mnt = kern_mount(&nfsd_dio_replay_fs_type);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(mnt));
+	if (kunit_add_action_or_reset(test, nfsd_dio_replay_unmount, mnt))
+		return;
+	for (i = 0; i < ARRAY_SIZE(cases); i++) {
+		const struct nfsd_dio_replay_case *scenario = &cases[i];
+		bool joint = !strncmp(scenario->name, "joint-", 6);
+		bool refuse = !strcmp(scenario->name, "bounce-refused") ||
+			      !strcmp(scenario->name, "joint-refused");
+		const unsigned int lens[4] = { 1000, PAGE_SIZE, PAGE_SIZE,
+					       PAGE_SIZE - 1000 };
+		struct nfsd_bounce_stub *stub;
+		struct nfsd_dio_replay *fixture;
+		struct svc_rqst *request;
+		struct svc_fh *handle;
+		struct nfsd_file *nf;
+		struct bio_vec vectors[4];
+		struct nfsd_dio_kunit_hooks hooks;
+		struct xdr_buf payload = {};
+		unsigned long count, consumed = 0;
+		struct kiocb iocb;
+		unsigned int v;
+		int flags = IOCB_DSYNC;
+		int ret;
+
+		kunit_info(test, "%s", scenario->name);
+		stub = kunit_kzalloc(test, sizeof(*stub), GFP_KERNEL);
+		fixture = kunit_kzalloc(test, sizeof(*fixture), GFP_KERNEL);
+		request = kunit_kzalloc(test, sizeof(*request), GFP_KERNEL);
+		handle = kunit_kzalloc(test, sizeof(*handle), GFP_KERNEL);
+		nf = kunit_kzalloc(test, sizeof(*nf), GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, stub);
+		KUNIT_ASSERT_NOT_NULL(test, fixture);
+		KUNIT_ASSERT_NOT_NULL(test, request);
+		KUNIT_ASSERT_NOT_NULL(test, handle);
+		KUNIT_ASSERT_NOT_NULL(test, nf);
+		fixture->test = test;
+		fixture->scenario = scenario;
+		fixture->total = 3 * PAGE_SIZE;
+		fixture->start = 128;
+		fixture->source = kunit_kmalloc(test, fixture->total, GFP_KERNEL);
+		fixture->actual = kunit_kzalloc(test, fixture->total, GFP_KERNEL);
+		fixture->scratch = kunit_kmalloc(test, fixture->total, GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, fixture->source);
+		KUNIT_ASSERT_NOT_NULL(test, fixture->actual);
+		KUNIT_ASSERT_NOT_NULL(test, fixture->scratch);
+		for (v = 0; v < fixture->total; v++)
+			fixture->source[v] = (u8)(v * 17U + 3U);
+		fixture->file = nfsd_dio_replay_open(mnt, fixture);
+		KUNIT_ASSERT_FALSE(test, IS_ERR(fixture->file));
+		if (kunit_add_action_or_reset(test, nfsd_dio_replay_fput, fixture->file))
+			return;
+		fixture->since = READ_ONCE(fixture->file->f_wb_err);
+		fixture->synced = scenario->count;
+		for (v = 0; v < 4; v++) {
+			struct page *page = nfsd_bvec_alloc_page(test);
+
+			KUNIT_ASSERT_NOT_NULL(test, page);
+			bvec_set_page(&vectors[v], page, lens[v], 0);
+			nfsd_bvec_write(page, 0, fixture->source + consumed, lens[v]);
+			consumed += lens[v];
+		}
+		stub->test = test;
+		stub->fixture = fixture;
+		stub->vectors = vectors;
+		stub->refuse = refuse;
+		stub->mem_align = 512;
+		stub->ops.xpo_bounce_payload = nfsd_bounce_stub_payload;
+		stub->ops.xpo_bounce_done = nfsd_bounce_stub_done;
+		stub->xprt.xpt_ops = &stub->ops;
+		request->rq_xprt = &stub->xprt;
+		request->rq_bvec = vectors;
+		request->rq_maxbvecs = ARRAY_SIZE(vectors);
+		handle->fh_dentry = fixture->file->f_path.dentry;
+		nf->nf_file = fixture->file;
+		nf->nf_inode = file_inode(fixture->file);
+		nf->nf_dio_mem_align = joint ? 4 : 512;
+		nf->nf_dio_offset_align = 512;
+		nf->nf_dio_seg_boundary = joint ? 2 * PAGE_SIZE :
+					  NFS_DIO_SEG_BOUNDARY_NONE;
+		count = fixture->total;
+		init_sync_kiocb(&iocb, fixture->file);
+		iocb.ki_pos = fixture->start;
+		iocb.ki_flags |= flags;
+		fixture->requested_flags = &flags;
+		hooks.before_reissue = nfsd_dio_replay_before;
+		hooks.data = fixture;
+		ret = nfsd_direct_write_kunit(request, handle, nf, &payload,
+					      ARRAY_SIZE(vectors), &count, &iocb,
+					      fixture->since, &hooks);
+		KUNIT_EXPECT_EQ(test, ret, scenario->error);
+		KUNIT_EXPECT_EQ(test, count, scenario->count);
+		KUNIT_EXPECT_EQ(test, iocb.ki_pos, scenario->position);
+		KUNIT_EXPECT_EQ(test, fixture->calls, scenario->calls);
+		KUNIT_EXPECT_EQ(test, fixture->fsyncs, (unsigned int)scenario->fsync);
+		KUNIT_EXPECT_EQ(test, stub->bounce_calls, 1U);
+		KUNIT_EXPECT_EQ(test, stub->align, 128U);
+		if (refuse) {
+			/* Never bounced: no done, the original split, buffered. */
+			KUNIT_EXPECT_EQ(test, stub->done_calls, 0U);
+			KUNIT_EXPECT_FALSE(test, fixture->flags[0] & IOCB_DIRECT);
+			KUNIT_EXPECT_PTR_EQ(test, request->rq_bvec, &vectors[0]);
+			KUNIT_EXPECT_EQ(test, vectors[0].bv_len, 1000U);
+		} else {
+			/*
+			 * Returned once with the count it was given, after all
+			 * the segments and before the fsync; the page-tiled
+			 * copy re-split makes the middle direct.
+			 */
+			KUNIT_EXPECT_EQ(test, stub->done_calls, 1U);
+			KUNIT_EXPECT_EQ(test, stub->done_nvecs, stub->tiled);
+			KUNIT_EXPECT_TRUE(test, stub->done_bvec_ok);
+			KUNIT_EXPECT_EQ(test, stub->calls_at_done, scenario->calls);
+			KUNIT_EXPECT_EQ(test, stub->fsyncs_at_done, 0U);
+			KUNIT_EXPECT_TRUE(test, fixture->flags[1] & IOCB_DIRECT);
+		}
+		if (!scenario->error)
+			KUNIT_EXPECT_MEMEQ(test, fixture->actual, fixture->source,
+					   count);
+	}
+}
+
+/*
+ * DIO admission is the device's queue limits' call, never a memory page
+ * joint's.  The payload is a loaned half page, a 100 byte locked-head
+ * sliver copied into the arena, a loaned page and a loaned remainder: two
+ * pages at file offset 0, with joints in the middle of a page.  With a
+ * 4 byte memory alignment and a 512 byte offset alignment:
+ *  - sgl-sliver: no segment boundary (an SGL device) takes the payload in
+ *    place, DIRECT and unsplit; it must never be refused or bounced.
+ *  - prp-sliver: a 4 KiB boundary (a PRP device's virt_boundary) cannot
+ *    take a mid-page joint; the payload is bounced page-tiled once and
+ *    then goes direct.
+ *  - prp-page-joints: whole pages meet a 4 KiB boundary at every joint and
+ *    go direct with no bounce.
+ * Every case is byte-exact.
+ */
+static void nfsd_dio_queue_limit_admission_test(struct kunit *test)
+{
+	static const struct nfsd_dio_replay_case cases[] = {
+		{ .name = "sgl-sliver", .responses = { LONG_MAX },
+		  .calls = 1, .count = 2 * PAGE_SIZE, .position = 2 * PAGE_SIZE },
+		{ .name = "prp-sliver", .responses = { LONG_MAX },
+		  .calls = 1, .count = 2 * PAGE_SIZE, .position = 2 * PAGE_SIZE },
+		{ .name = "prp-page-joints", .responses = { LONG_MAX },
+		  .calls = 1, .count = 2 * PAGE_SIZE, .position = 2 * PAGE_SIZE },
+	};
+	struct vfsmount *mnt;
+	unsigned int i;
+
+	mnt = kern_mount(&nfsd_dio_replay_fs_type);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(mnt));
+	if (kunit_add_action_or_reset(test, nfsd_dio_replay_unmount, mnt))
+		return;
+	for (i = 0; i < ARRAY_SIZE(cases); i++) {
+		const struct nfsd_dio_replay_case *scenario = &cases[i];
+		bool sgl = !strcmp(scenario->name, "sgl-sliver");
+		bool pages = !strcmp(scenario->name, "prp-page-joints");
+		const unsigned int sliver_lens[4] = { PAGE_SIZE / 2, 100, PAGE_SIZE,
+						      PAGE_SIZE / 2 - 100 };
+		const unsigned int sliver_offs[4] = { 0, PAGE_SIZE / 2, 0, 0 };
+		const unsigned int page_lens[2] = { PAGE_SIZE, PAGE_SIZE };
+		const unsigned int page_offs[2] = { 0, 0 };
+		const unsigned int *lens = pages ? page_lens : sliver_lens;
+		const unsigned int *offs = pages ? page_offs : sliver_offs;
+		unsigned int nvecs = pages ? 2 : 4;
+		struct nfsd_bounce_stub *stub;
+		struct nfsd_dio_replay *fixture;
+		struct svc_rqst *request;
+		struct svc_fh *handle;
+		struct nfsd_file *nf;
+		struct bio_vec vectors[4];
+		struct nfsd_dio_kunit_hooks hooks;
+		struct xdr_buf payload = {};
+		unsigned long count, consumed = 0;
+		struct kiocb iocb;
+		unsigned int v;
+		int flags = IOCB_DSYNC;
+		int ret;
+
+		kunit_info(test, "%s", scenario->name);
+		stub = kunit_kzalloc(test, sizeof(*stub), GFP_KERNEL);
+		fixture = kunit_kzalloc(test, sizeof(*fixture), GFP_KERNEL);
+		request = kunit_kzalloc(test, sizeof(*request), GFP_KERNEL);
+		handle = kunit_kzalloc(test, sizeof(*handle), GFP_KERNEL);
+		nf = kunit_kzalloc(test, sizeof(*nf), GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, stub);
+		KUNIT_ASSERT_NOT_NULL(test, fixture);
+		KUNIT_ASSERT_NOT_NULL(test, request);
+		KUNIT_ASSERT_NOT_NULL(test, handle);
+		KUNIT_ASSERT_NOT_NULL(test, nf);
+		fixture->test = test;
+		fixture->scenario = scenario;
+		fixture->total = 2 * PAGE_SIZE;
+		fixture->start = 0;
+		fixture->source = kunit_kmalloc(test, fixture->total, GFP_KERNEL);
+		fixture->actual = kunit_kzalloc(test, fixture->total, GFP_KERNEL);
+		fixture->scratch = kunit_kmalloc(test, fixture->total, GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, fixture->source);
+		KUNIT_ASSERT_NOT_NULL(test, fixture->actual);
+		KUNIT_ASSERT_NOT_NULL(test, fixture->scratch);
+		for (v = 0; v < fixture->total; v++)
+			fixture->source[v] = (u8)(v * 13U + 5U);
+		fixture->file = nfsd_dio_replay_open(mnt, fixture);
+		KUNIT_ASSERT_FALSE(test, IS_ERR(fixture->file));
+		if (kunit_add_action_or_reset(test, nfsd_dio_replay_fput, fixture->file))
+			return;
+		fixture->since = READ_ONCE(fixture->file->f_wb_err);
+		fixture->synced = scenario->count;
+		for (v = 0; v < nvecs; v++) {
+			struct page *page = nfsd_bvec_alloc_page(test);
+
+			KUNIT_ASSERT_NOT_NULL(test, page);
+			bvec_set_page(&vectors[v], page, lens[v], offs[v]);
+			nfsd_bvec_write(page, offs[v], fixture->source + consumed,
+					lens[v]);
+			consumed += lens[v];
+		}
+		KUNIT_ASSERT_EQ(test, consumed, fixture->total);
+		stub->test = test;
+		stub->fixture = fixture;
+		stub->vectors = vectors;
+		stub->mem_align = 4;
+		stub->ops.xpo_bounce_payload = nfsd_bounce_stub_payload;
+		stub->ops.xpo_bounce_done = nfsd_bounce_stub_done;
+		stub->xprt.xpt_ops = &stub->ops;
+		request->rq_xprt = &stub->xprt;
+		request->rq_bvec = vectors;
+		request->rq_maxbvecs = ARRAY_SIZE(vectors);
+		handle->fh_dentry = fixture->file->f_path.dentry;
+		nf->nf_file = fixture->file;
+		nf->nf_inode = file_inode(fixture->file);
+		nf->nf_dio_mem_align = 4;
+		nf->nf_dio_offset_align = 512;
+		nf->nf_dio_seg_boundary = sgl ? NFS_DIO_SEG_BOUNDARY_NONE : SZ_4K;
+		count = fixture->total;
+		init_sync_kiocb(&iocb, fixture->file);
+		iocb.ki_pos = fixture->start;
+		iocb.ki_flags |= flags;
+		fixture->requested_flags = &flags;
+		hooks.before_reissue = nfsd_dio_replay_before;
+		hooks.data = fixture;
+		ret = nfsd_direct_write_kunit(request, handle, nf, &payload, nvecs,
+					      &count, &iocb, fixture->since,
+					      &hooks);
+		KUNIT_EXPECT_EQ(test, ret, 0);
+		KUNIT_EXPECT_EQ(test, count, scenario->count);
+		KUNIT_EXPECT_EQ(test, iocb.ki_pos, scenario->position);
+		KUNIT_EXPECT_EQ(test, fixture->calls, scenario->calls);
+		KUNIT_EXPECT_TRUE(test, fixture->flags[0] & IOCB_DIRECT);
+		KUNIT_EXPECT_EQ(test, fixture->counts[0], (size_t)fixture->total);
+		if (sgl || pages) {
+			/* The queue takes it as it is: no copy, no refusal. */
+			KUNIT_EXPECT_EQ(test, stub->bounce_calls, 0U);
+			KUNIT_EXPECT_EQ(test, stub->done_calls, 0U);
+		} else {
+			/* Page-tiled once from offset 0, returned once. */
+			KUNIT_EXPECT_EQ(test, stub->bounce_calls, 1U);
+			KUNIT_EXPECT_EQ(test, stub->align, 0U);
+			KUNIT_EXPECT_EQ(test, stub->tiled, 2U);
+			KUNIT_EXPECT_EQ(test, stub->done_calls, 1U);
+			KUNIT_EXPECT_EQ(test, stub->done_nvecs, stub->tiled);
+		}
+		KUNIT_EXPECT_MEMEQ(test, fixture->actual, fixture->source,
+				   fixture->total);
+	}
+}
+
 static struct kunit_case nfsd_bvec_test_cases[] = {
 	KUNIT_CASE(nfsd_bvec_decode_checksum_parity_test),
 	KUNIT_CASE(nfsd_bvec_decode_error_test),
 	KUNIT_CASE(nfsd_bvec_dio_segments_test),
+	KUNIT_CASE(nfsd_bvec_dio_bounce_trigger_test),
 	KUNIT_CASE(nfsd_bvec_dio_seg_boundary_test),
 	KUNIT_CASE(nfsd_bvec_dio_disposition_test),
 	KUNIT_CASE(nfsd_bvec_proc_dispatch_parity_test),
@@ -1908,6 +2376,8 @@ static struct kunit_case nfsd_bvec_test_cases[] = {
 	KUNIT_CASE(nfsd_dio_geometry_iomap_test),
 	KUNIT_CASE(nfsd_dio_geometry_iomap_race_test),
 	KUNIT_CASE(nfsd_dio_geometry_replay_test),
+	KUNIT_CASE(nfsd_dio_bounce_wiring_test),
+	KUNIT_CASE(nfsd_dio_queue_limit_admission_test),
 #if IS_REACHABLE(CONFIG_BTRFS_FS)
 	KUNIT_CASE(nfsd_dio_geometry_btrfs_test),
 #endif

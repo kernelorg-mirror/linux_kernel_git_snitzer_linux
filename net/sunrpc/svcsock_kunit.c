@@ -2217,6 +2217,120 @@ static void svcsock_rx_read_pool_init_test(struct kunit *test)
 		"budget 30 reserve_size 0 avail 30 reserve 0 inflight 0 waiters 0");
 }
 
+/* Publish one loaned record of @body_len bytes; returns its loaned page. */
+static struct page *svcsock_rx_publish_loan(struct kunit *test,
+					    struct svcsock_rx_fixture *fixture,
+					    u8 *record, unsigned int body_len,
+					    unsigned int *refs)
+{
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = sizeof(rpc_fraghdr) + body_len };
+	struct sk_buff *skb;
+	struct page *page;
+	int ret;
+
+	/* The bounce looks up the transport's budget. */
+	fixture->svsk->sk_xprt.xpt_net = &init_net;
+	svcsock_rx_fill_record(record, body_len, true, RPC_CALL, RPC_AUTH_UNIX);
+	skb = svcsock_rx_build_page_skb(test, record,
+					sizeof(rpc_fraghdr) + body_len, &page,
+					refs);
+	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, skb, 0,
+				   sizeof(rpc_fraghdr) + body_len);
+	KUNIT_ASSERT_EQ(test, ret, (int)(sizeof(rpc_fraghdr) + body_len));
+	KUNIT_ASSERT_TRUE(test, actor.complete);
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_publish(fixture->svsk, fixture->rqstp), 0);
+	kunit_kfree_skb(test, skb);
+	return page;
+}
+
+/* The WRITE payload view nfsd holds: @len bytes at @offset into the loan. */
+static void svcsock_rx_payload_view(struct xdr_buf *payload,
+				    struct svc_tcp_rx_state *state,
+				    unsigned int offset, unsigned int len)
+{
+	memset(payload, 0, sizeof(*payload));
+	payload->page_mode = XDRBUF_PAGE_BVECS;
+	payload->bvec = state->bvec;
+	payload->bvec_count = 1;
+	payload->bvec_offset = offset;
+	payload->page_len = len;
+	payload->len = len;
+}
+
+/*
+ * A loan that holds no region credit has its hole filled in the request's
+ * own arena at its record-body offset, returns the loaned page once, and
+ * detaches the argument pages; there is nothing to give back afterwards.
+ * When that layout cannot meet the alignment nfsd asks for it copies
+ * nothing and leaves the loan as it was.
+ */
+static void svcsock_rx_bounce_arena_test(struct kunit *test)
+{
+	enum { BODY_LEN = 7 * XDR_UNIT + 300, OFFSET = 8, LEN = 200 };
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct bio_vec out[4];
+	struct xdr_buf payload;
+	unsigned int refs;
+	struct page *page;
+	int n;
+
+	page = svcsock_rx_publish_loan(test, fixture, record, BODY_LEN, &refs);
+	KUNIT_ASSERT_EQ(test, page_ref_count(page), refs);
+	KUNIT_ASSERT_FALSE(test, state->credit_linked);
+	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
+	/* Memory offset 36 cannot meet a 512-byte alignment at offset 0. */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp,
+						&payload, 0, 512, out,
+						ARRAY_SIZE(out)),
+			-EOPNOTSUPP);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+	KUNIT_EXPECT_FALSE(test, state->terminal);
+	/*
+	 * At file in-page offset 4, body offset 36 meets a 4-byte memory
+	 * alignment but not the 512-byte offset alignment nfsd asks for under
+	 * a joint boundary above PAGE_SIZE.  The copy's start is checked; a
+	 * page-tiled layout puts every later page joint at the same residue.
+	 */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp,
+						&payload, 4, 512, out,
+						ARRAY_SIZE(out)),
+			-EOPNOTSUPP);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+	KUNIT_EXPECT_FALSE(test, state->terminal);
+	/*
+	 * At file in-page offset 36 the same layout lines up with the file
+	 * position and meets the 512-byte alignment.
+	 */
+	n = svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp, &payload,
+			      36, 512, out, ARRAY_SIZE(out));
+	KUNIT_ASSERT_EQ(test, n, 1);
+	KUNIT_EXPECT_PTR_EQ(test, out[0].bv_page, fixture->rqstp->rq_pages[0]);
+	KUNIT_EXPECT_EQ(test, out[0].bv_offset, 7U * XDR_UNIT + OFFSET);
+	KUNIT_EXPECT_EQ(test, out[0].bv_len, (unsigned int)LEN);
+	KUNIT_EXPECT_MEMEQ(test, page_address(out[0].bv_page) + out[0].bv_offset,
+			   record + sizeof(rpc_fraghdr) + 7 * XDR_UNIT + OFFSET,
+			   LEN);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
+	KUNIT_EXPECT_EQ(test, state->refs_released, state->refs_acquired);
+	KUNIT_EXPECT_TRUE(test, state->terminal);
+	KUNIT_EXPECT_EQ(test, state->bounce_pages, 0U);
+	KUNIT_EXPECT_EQ(test, fixture->rqstp->rq_arg.page_len, 0U);
+	/* A second bounce, and early release, find nothing left to do. */
+	KUNIT_EXPECT_LT(test, svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp,
+						&payload, 0, 1, out,
+						ARRAY_SIZE(out)),
+			0);
+	svc_tcp_rx_release_payload(fixture->svsk, fixture->rqstp);
+	svc_tcp_rx_bounce_done(fixture->rqstp, out, n);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
+}
+
 #if IS_ENABLED(CONFIG_PAGE_POOL)
 /* A fixture region: pages the test owns, published as the rx region. */
 #define SVCSOCK_RX_REGION_ORDER	4
@@ -2421,6 +2535,664 @@ static void svcsock_rx_region_bind_reads_test(struct kunit *test)
 			16U);
 	page_pool_rx_region_give_pages(pages, 16);
 	svcsock_rx_region_expect_part(test, false, 16, 0, 0);
+}
+
+/* Link region credit to a published record, as receive does for region pages. */
+static struct svc_tcp_rx_budget *
+svcsock_rx_bounce_admit(struct kunit *test, struct svcsock_rx_fixture *fixture,
+			u32 reclen)
+{
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(fixture->svsk, state,
+							reclen));
+	KUNIT_ASSERT_TRUE(test, state->credit_linked);
+	return state->credit_budget;
+}
+
+/* @c's stats value for @key, or LONG_MIN when absent. */
+static long svcsock_rx_budget_stat(struct svc_tcp_rx_budget *c,
+				   const char *key)
+{
+	char buf[384], needle[32], *at;
+	long value;
+
+	if (svc_tcp_rx_budget_kunit_stats(c, buf, sizeof(buf)) <= 0)
+		return LONG_MIN;
+	snprintf(needle, sizeof(needle), " %s ", key);
+	if (!strncmp(buf, needle + 1, strlen(needle + 1))) {
+		at = buf + strlen(needle + 1);
+	} else {
+		at = strstr(buf, needle);
+		if (at)
+			at += strlen(needle);
+	}
+	if (!at || sscanf(at, "%ld", &value) != 1)
+		return LONG_MIN;
+	return value;
+}
+
+/* Is @page one of the fixture region's? */
+static bool svcsock_rx_in_fixture(const struct svcsock_rx_region_fixture *f,
+				  const struct page *page)
+{
+	return page_to_pfn(page) - f->pfn < SVCSOCK_RX_REGION_PAGES;
+}
+
+/*
+ * A record holding region credit is copied into a region page and its
+ * credit is converted to cover it: one unit is lent until the device has
+ * the data, the rest returns with the loan, and bounce_done gives back the
+ * page and the lent unit.
+ */
+static void svcsock_rx_bounce_region_credit_test(struct kunit *test)
+{
+	enum { BODY_LEN = 7 * XDR_UNIT + 300, OFFSET = 8, LEN = 200, ALIGN = 512 };
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	struct svcsock_rx_region_fixture *f;
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct svc_tcp_rx_budget *c;
+	struct bio_vec out[4];
+	struct xdr_buf payload;
+	long bounced;
+	unsigned int refs;
+	struct page *page;
+	int n;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
+	f = svcsock_rx_region_fixture(test, 0);
+	page = svcsock_rx_publish_loan(test, fixture, record, BODY_LEN, &refs);
+	c = svcsock_rx_bounce_admit(test, fixture, sizeof(record));
+	KUNIT_ASSERT_EQ(test, state->credit, 2U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), 28L);
+	bounced = svcsock_rx_budget_stat(c, "bounced");
+	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
+	/* The region copy starts at the file position's in-page offset. */
+	n = svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp, &payload, ALIGN,
+			      512, out, ARRAY_SIZE(out));
+	KUNIT_ASSERT_EQ(test, n, 1);
+	KUNIT_EXPECT_TRUE(test, svcsock_rx_in_fixture(f, out[0].bv_page));
+	KUNIT_EXPECT_EQ(test, out[0].bv_offset, (unsigned int)ALIGN);
+	KUNIT_EXPECT_EQ(test, out[0].bv_len, (unsigned int)LEN);
+	KUNIT_EXPECT_MEMEQ(test, page_address(out[0].bv_page) + ALIGN,
+			   record + sizeof(rpc_fraghdr) + 7 * XDR_UNIT + OFFSET,
+			   LEN);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
+	KUNIT_EXPECT_EQ(test, state->bounce_pages, 1U);
+	KUNIT_EXPECT_EQ(test, state->bounce_credit, 1U);
+	KUNIT_EXPECT_FALSE(test, state->credit_linked);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), 29L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 1L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "bounced"), bounced + 1);
+	svcsock_rx_region_expect_part(test, false, 15, 15, 0);
+	svc_tcp_rx_bounce_done(fixture->rqstp, out, n);
+	KUNIT_EXPECT_EQ(test, state->bounce_pages, 0U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), 30L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
+	svcsock_rx_region_expect_part(test, false, 16, 15, 0);
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
+}
+
+/*
+ * A three-entry loan (head page and two frags) whose payload starts inside
+ * the first entry and ends inside the last, bounced at an in-page offset
+ * (3500 on 4 KiB pages; every size scales with the page) so it spans three
+ * region pages: every byte lands in order, the two consumed loaned pages
+ * return during the copy and the straddling one with the rest of the loan,
+ * the record's three credits are lent and come back on done.
+ */
+static void svcsock_rx_bounce_region_multi_test(struct kunit *test)
+{
+	enum {
+		S = PAGE_SIZE / SZ_4K,
+		HEAD = 1000 * S, FRAG0 = 3000 * S, FRAG1 = 2000 * S,
+		BODY_LEN = 7 * XDR_UNIT + HEAD + FRAG0 + FRAG1,
+		RECORD_LEN = sizeof(rpc_fraghdr) + BODY_LEN,
+		OFFSET = 200 * S, LEN = HEAD - OFFSET + FRAG0 + 1000 * S,
+		ALIGN = 3500 * S,
+	};
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 8);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	u8 *record = kunit_kzalloc(test, RECORD_LEN, GFP_KERNEL);
+	u8 *copy = kunit_kzalloc(test, LEN, GFP_KERNEL);
+	const unsigned int head_len = sizeof(rpc_fraghdr) + 7 * XDR_UNIT + HEAD;
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = RECORD_LEN };
+	unsigned int refs[3], i, cursor = 0;
+	struct svcsock_rx_region_fixture *f;
+	struct svc_tcp_rx_budget *c;
+	struct page *pages[3];
+	struct bio_vec out[8];
+	struct xdr_buf payload;
+	struct sk_buff *skb;
+	long avail, bounced;
+	int n, ret;
+
+	KUNIT_ASSERT_NOT_NULL(test, record);
+	KUNIT_ASSERT_NOT_NULL(test, copy);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
+	f = svcsock_rx_region_fixture(test, 0);
+	fixture->svsk->sk_xprt.xpt_net = &init_net;
+	svcsock_rx_fill_record(record, BODY_LEN, true, RPC_CALL, RPC_AUTH_UNIX);
+	skb = svcsock_rx_build_page_skb(test, record, head_len, &pages[0],
+					&refs[0]);
+	pages[1] = svcsock_rx_add_frag(test, skb, 0, record + head_len, FRAG0,
+				       0, &refs[1]);
+	pages[2] = svcsock_rx_add_frag(test, skb, 1, record + head_len + FRAG0,
+				       FRAG1, 0, &refs[2]);
+	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, skb, 0,
+				   RECORD_LEN);
+	KUNIT_ASSERT_EQ(test, ret, (int)RECORD_LEN);
+	KUNIT_ASSERT_TRUE(test, actor.complete);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, fixture->rqstp),
+			0);
+	kunit_kfree_skb(test, skb);
+	KUNIT_ASSERT_EQ(test, state->count, 3U);
+	c = svcsock_rx_bounce_admit(test, fixture, RECORD_LEN);
+	KUNIT_ASSERT_EQ(test, state->credit, 3U);
+	avail = svcsock_rx_budget_stat(c, "avail");
+	bounced = svcsock_rx_budget_stat(c, "bounced");
+
+	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
+	payload.bvec_count = state->count;
+	n = svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp, &payload, ALIGN,
+			      512, out, ARRAY_SIZE(out));
+	KUNIT_ASSERT_EQ(test, n, 3);
+	for (i = 0; i < 3; i++)
+		KUNIT_EXPECT_TRUE(test, svcsock_rx_in_fixture(f, out[i].bv_page));
+	KUNIT_EXPECT_EQ(test, out[0].bv_offset, (unsigned int)ALIGN);
+	KUNIT_EXPECT_EQ(test, out[0].bv_len, (unsigned int)(PAGE_SIZE - ALIGN));
+	KUNIT_EXPECT_EQ(test, out[1].bv_offset, 0U);
+	KUNIT_EXPECT_EQ(test, out[1].bv_len, (unsigned int)PAGE_SIZE);
+	KUNIT_EXPECT_EQ(test, out[2].bv_len,
+			(unsigned int)(ALIGN + LEN - 2 * PAGE_SIZE));
+	for (i = 0; i < 3; i++) {
+		memcpy_from_page(copy + cursor, out[i].bv_page,
+				 out[i].bv_offset, out[i].bv_len);
+		cursor += out[i].bv_len;
+	}
+	KUNIT_EXPECT_EQ(test, cursor, (unsigned int)LEN);
+	KUNIT_EXPECT_MEMEQ(test, copy,
+			   record + sizeof(rpc_fraghdr) + 7 * XDR_UNIT + OFFSET,
+			   LEN);
+	for (i = 0; i < 3; i++)
+		KUNIT_EXPECT_EQ(test, page_ref_count(pages[i]), refs[i] - 1);
+	KUNIT_EXPECT_EQ(test, state->refs_released, state->refs_acquired);
+	KUNIT_EXPECT_TRUE(test, state->terminal);
+	KUNIT_EXPECT_NE(test, state->reason, (u8)SVC_TCP_RX_REASON_INVARIANT);
+	KUNIT_EXPECT_EQ(test, state->bounce_pages, 3U);
+	KUNIT_EXPECT_EQ(test, state->bounce_credit, 3U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 3L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "bounced"), bounced + 1);
+	svcsock_rx_region_expect_part(test, false, 13, 13, 0);
+	svc_tcp_rx_bounce_done(fixture->rqstp, out, n);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail + 3);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
+	svcsock_rx_region_expect_part(test, false, 16, 13, 0);
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
+}
+
+/*
+ * A record whose credit cannot cover the bounce (a one-page budget with no
+ * reserve gives the oldest record one credit: with nothing learned it is
+ * charged all it could hold, cut to what the budget has; an in-page offset
+ * of PAGE_SIZE - 96 puts the 200 bytes on two pages) refuses without
+ * touching @out, the loan, the region or the credit.
+ */
+static void svcsock_rx_bounce_credit_short_test(struct kunit *test)
+{
+	enum {
+		BODY_LEN = 7 * XDR_UNIT + 300, OFFSET = 8, LEN = 200,
+		ALIGN = PAGE_SIZE - 96,
+	};
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct page *marker = fixture->rqstp->rq_pages[3];
+	struct svc_tcp_rx_budget *c;
+	struct bio_vec out[4];
+	struct xdr_buf payload;
+	unsigned int refs, i;
+	struct page *page;
+	long avail, refused;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(1, 0, 0);
+	svcsock_rx_region_fixture(test, 0);
+	page = svcsock_rx_publish_loan(test, fixture, record, BODY_LEN, &refs);
+	c = svcsock_rx_bounce_admit(test, fixture, sizeof(record));
+	KUNIT_ASSERT_EQ(test, state->credit, 1U);
+	avail = svcsock_rx_budget_stat(c, "avail");
+	refused = svcsock_rx_budget_stat(c, "bounce_refused");
+	for (i = 0; i < ARRAY_SIZE(out); i++)
+		bvec_set_page(&out[i], marker, 1, 0);
+	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp,
+						&payload, ALIGN, 4, out,
+						ARRAY_SIZE(out)),
+			-ENOSPC);
+	for (i = 0; i < ARRAY_SIZE(out); i++)
+		KUNIT_EXPECT_PTR_EQ(test, out[i].bv_page, marker);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+	KUNIT_EXPECT_FALSE(test, state->terminal);
+	KUNIT_EXPECT_EQ(test, state->credit, 1U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "bounce_refused"),
+			refused + 1);
+	svcsock_rx_region_expect_part(test, false, 16, 16, 0);
+	svc_tcp_rx_release_payload(fixture->svsk, fixture->rqstp);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+}
+
+/*
+ * A write partition short of pages (one left, for a bounce straddling two)
+ * refuses before any credit is converted: nothing changes.
+ */
+static void svcsock_rx_bounce_region_short_test(struct kunit *test)
+{
+	enum {
+		BODY_LEN = 7 * XDR_UNIT + 300, OFFSET = 8, LEN = 200,
+		ALIGN = PAGE_SIZE - 96,
+		HELD = SVCSOCK_RX_REGION_PAGES - 1,
+	};
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct page *marker = fixture->rqstp->rq_pages[3];
+	struct page *held[SVCSOCK_RX_REGION_PAGES];
+	struct svc_tcp_rx_budget *c;
+	struct bio_vec out[4];
+	struct xdr_buf payload;
+	unsigned int refs, i;
+	struct page *page;
+	long avail, refused;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
+	svcsock_rx_region_fixture(test, 0);
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(false, held, HELD),
+			(unsigned int)HELD);
+	page = svcsock_rx_publish_loan(test, fixture, record, BODY_LEN, &refs);
+	c = svcsock_rx_bounce_admit(test, fixture, sizeof(record));
+	KUNIT_ASSERT_EQ(test, state->credit, 2U);
+	avail = svcsock_rx_budget_stat(c, "avail");
+	refused = svcsock_rx_budget_stat(c, "bounce_refused");
+	for (i = 0; i < ARRAY_SIZE(out); i++)
+		bvec_set_page(&out[i], marker, 1, 0);
+	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp,
+						&payload, ALIGN, 4, out,
+						ARRAY_SIZE(out)),
+			-ENOSPC);
+	/* take_pages() wrote nothing on failure */
+	for (i = 0; i < ARRAY_SIZE(out); i++)
+		KUNIT_EXPECT_PTR_EQ(test, out[i].bv_page, marker);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+	KUNIT_EXPECT_EQ(test, state->credit, 2U);
+	KUNIT_EXPECT_TRUE(test, state->credit_linked);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "bounce_refused"),
+			refused + 1);
+	svcsock_rx_region_expect_part(test, false, 1, 1, 0);
+	page_pool_rx_region_give_pages(held, HELD);
+	svc_tcp_rx_release_payload(fixture->svsk, fixture->rqstp);
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+}
+
+/*
+ * A locked skb head between two loaned pages is copied as its own arena
+ * bvec (the sliver), and only its bytes count as copied.  Bouncing over the
+ * loan, sliver, loan table must leave the bookkeeping valid: everything
+ * released, nothing flagged.
+ */
+static void svcsock_rx_bounce_locked_head_test(struct kunit *test)
+{
+	enum {
+		HEAD = 200, LOCKED = 100, TAIL = 300,
+		BODY_LEN = 7 * XDR_UNIT + HEAD + LOCKED + TAIL,
+		RECORD_LEN = sizeof(rpc_fraghdr) + BODY_LEN,
+	};
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 8);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	const unsigned int head_len = sizeof(rpc_fraghdr) + 7 * XDR_UNIT + HEAD;
+	u8 record[RECORD_LEN];
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = RECORD_LEN };
+	struct sk_buff *root, *locked, *tail;
+	struct page *root_page, *tail_page;
+	unsigned int root_refs, tail_refs;
+	struct svcsock_rx_region_fixture *f;
+	struct svc_tcp_rx_budget *c;
+	struct bio_vec out[8];
+	struct xdr_buf payload;
+	int n, ret;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
+	f = svcsock_rx_region_fixture(test, 0);
+	fixture->svsk->sk_xprt.xpt_net = &init_net;
+	svcsock_rx_fill_record(record, BODY_LEN, true, RPC_CALL, RPC_AUTH_UNIX);
+	root = svcsock_rx_build_page_skb(test, record, head_len, &root_page,
+					 &root_refs);
+	locked = svcsock_rx_build_linear_skb(test, record + head_len, LOCKED);
+	tail = svcsock_rx_build_page_skb(test, record + head_len + LOCKED, TAIL,
+					 &tail_page, &tail_refs);
+	svcsock_rx_attach_frag_list(test, locked, tail);
+	svcsock_rx_attach_frag_list(test, root, locked);
+	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, root, 0,
+				   RECORD_LEN);
+	KUNIT_ASSERT_EQ(test, ret, (int)RECORD_LEN);
+	KUNIT_ASSERT_TRUE(test, actor.complete);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, fixture->rqstp),
+			0);
+	KUNIT_ASSERT_EQ(test, state->mode, (u8)SVC_TCP_RX_PUBLISHED);
+	KUNIT_ASSERT_GT(test, state->count, 0U);
+	/* Loan, the locked head's sliver in the arena, loan. */
+	KUNIT_ASSERT_EQ(test, state->count, 3U);
+	KUNIT_ASSERT_EQ(test, state->copied_bytes, (u32)LOCKED);
+	KUNIT_ASSERT_EQ(test, state->borrowed_bytes, (u32)(HEAD + TAIL));
+	KUNIT_ASSERT_EQ(test, state->borrowed_count, 2U);
+	kunit_kfree_skb(test, root);
+	c = svcsock_rx_bounce_admit(test, fixture, RECORD_LEN);
+
+	payload = (struct xdr_buf){
+		.page_mode = XDRBUF_PAGE_BVECS, .bvec = state->bvec,
+		.bvec_count = state->count, .page_len = HEAD + LOCKED + TAIL,
+		.len = HEAD + LOCKED + TAIL,
+	};
+	n = svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp, &payload, 0, 512,
+			      out, ARRAY_SIZE(out));
+	KUNIT_ASSERT_EQ(test, n, 1);
+	KUNIT_EXPECT_TRUE(test, svcsock_rx_in_fixture(f, out[0].bv_page));
+	KUNIT_EXPECT_EQ(test, out[0].bv_offset, 0U);
+	KUNIT_EXPECT_EQ(test, out[0].bv_len, (unsigned int)(HEAD + LOCKED + TAIL));
+	KUNIT_EXPECT_EQ(test, state->bounce_pages, 1U);
+	KUNIT_EXPECT_MEMEQ(test, page_address(out[0].bv_page),
+			   record + sizeof(rpc_fraghdr) + 7 * XDR_UNIT,
+			   HEAD + LOCKED + TAIL);
+	KUNIT_EXPECT_TRUE(test, state->terminal);
+	KUNIT_EXPECT_EQ(test, state->refs_released, state->refs_acquired);
+	KUNIT_EXPECT_EQ(test, state->borrowed_count, 0U);
+	KUNIT_EXPECT_NE(test, state->reason, (u8)SVC_TCP_RX_REASON_INVARIANT);
+	KUNIT_EXPECT_EQ(test, page_ref_count(root_page), root_refs - 1);
+	KUNIT_EXPECT_EQ(test, page_ref_count(tail_page), tail_refs - 1);
+	svc_tcp_rx_bounce_done(fixture->rqstp, out, n);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
+	svcsock_rx_region_expect_part(test, false, 16, 15, 0);
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
+}
+
+/*
+ * The oldest record admitted partly from the reserve converts reserve credit
+ * too, and gives it back to the reserve.  A budget changed while a bounce
+ * holds credit, with no record in flight, applies at once by the change, as
+ * a live reconfiguration does for records in flight, and the
+ * budget is whole once the bounce is done.
+ */
+static void svcsock_rx_bounce_reserve_test(struct kunit *test)
+{
+	/* The bounce straddles two pages at any page size. */
+	enum {
+		BODY_LEN = 7 * XDR_UNIT + 300, OFFSET = 8, LEN = 200,
+		ALIGN = PAGE_SIZE - 96,
+	};
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	struct svcsock_rx_fixture *other = svcsock_rx_alloc_fixture(test, 4);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct svc_tcp_rx_budget *c;
+	struct bio_vec out[4];
+	struct xdr_buf payload;
+	unsigned int refs;
+	int n;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(3, 2, 100);
+	svcsock_rx_region_fixture(test, 0);
+	svcsock_rx_publish_loan(test, fixture, record, BODY_LEN, &refs);
+	c = svcsock_rx_bounce_admit(test, fixture, sizeof(record));
+	KUNIT_ASSERT_EQ(test, state->credit, 2U);
+	KUNIT_ASSERT_EQ(test, state->credit_reserve, 1U);
+	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
+	n = svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp, &payload, ALIGN, 4,
+			      out, ARRAY_SIZE(out));
+	KUNIT_ASSERT_EQ(test, n, 2);
+	KUNIT_EXPECT_EQ(test, state->bounce_credit, 1U);
+	KUNIT_EXPECT_EQ(test, state->bounce_reserve, 1U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "reserve"), 1L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 2L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "inflight"), 0L);
+
+	/* A new budget and a new admission while the bounce holds credit. */
+	svc_tcp_rx_budget_kunit_configure(5, 2, 100);
+	svcsock_rx_publish_loan(test, other, record, BODY_LEN, &refs);
+	svcsock_rx_bounce_admit(test, other, sizeof(record));
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "budget"), 5L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), 0L);
+	svc_tcp_rx_release_payload(other->svsk, other->rqstp);
+	svc_tcp_release_ctxt(&other->svsk->sk_xprt, other->rqstp->rq_tcp_rx);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "inflight"), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), 2L);
+
+	svc_tcp_rx_bounce_done(fixture->rqstp, out, n);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "budget"), 5L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), 3L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "reserve"), 2L);
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+}
+
+/* Common set-up of the refusal and credit cases: one loan, credit admitted. */
+struct svcsock_rx_bounce_env {
+	struct svcsock_rx_fixture *fixture;
+	struct svc_tcp_rx_state *state;
+	struct svc_tcp_rx_budget *c;
+	struct xdr_buf payload;
+	struct page *page;
+	unsigned int refs;
+	u8 record[sizeof(rpc_fraghdr) + 7 * XDR_UNIT + 300];
+};
+
+enum { BOUNCE_BODY = 7 * XDR_UNIT + 300, BOUNCE_OFFSET = 8, BOUNCE_LEN = 200,
+       BOUNCE_ALIGN2 = PAGE_SIZE - 96 };
+
+static struct svcsock_rx_bounce_env *
+svcsock_rx_bounce_env(struct kunit *test, long budget, long reserve, long factor)
+{
+	struct svcsock_rx_bounce_env *env = kunit_kzalloc(test, sizeof(*env),
+							  GFP_KERNEL);
+
+	KUNIT_ASSERT_NOT_NULL(test, env);
+	env->fixture = svcsock_rx_alloc_fixture(test, 4);
+	env->state = env->fixture->rqstp->rq_tcp_rx;
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(budget, reserve, factor);
+	svcsock_rx_region_fixture(test, 0);
+	env->page = svcsock_rx_publish_loan(test, env->fixture, env->record,
+					    BOUNCE_BODY, &env->refs);
+	env->c = svcsock_rx_bounce_admit(test, env->fixture,
+					 sizeof(env->record));
+	svcsock_rx_payload_view(&env->payload, env->state, BOUNCE_OFFSET,
+				BOUNCE_LEN);
+	return env;
+}
+
+static void svcsock_rx_bounce_env_end(struct svcsock_rx_bounce_env *env)
+{
+	svc_tcp_rx_release_payload(env->fixture->svsk, env->fixture->rqstp);
+	svc_tcp_release_ctxt(&env->fixture->svsk->sk_xprt, env->state);
+}
+
+/*
+ * More pages than @out holds: a capacity refusal, counted, with the loan,
+ * the region and the credit untouched.
+ */
+static void svcsock_rx_bounce_capacity_test(struct kunit *test)
+{
+	struct svcsock_rx_bounce_env *env = svcsock_rx_bounce_env(test, 40, 10, 100);
+	struct bio_vec out[1];
+	long avail = svcsock_rx_budget_stat(env->c, "avail");
+	long refused = svcsock_rx_budget_stat(env->c, "bounce_refused");
+
+	/* Two pages are needed at this in-page offset. */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_bounce(env->fixture->svsk,
+						env->fixture->rqstp,
+						&env->payload, BOUNCE_ALIGN2, 4,
+						out, ARRAY_SIZE(out)), -ENOSPC);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "bounce_refused"),
+			refused + 1);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "avail"), avail);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "lent"), 0L);
+	KUNIT_EXPECT_EQ(test, env->state->credit, 2U);
+	KUNIT_EXPECT_TRUE(test, env->state->credit_linked);
+	KUNIT_EXPECT_EQ(test, page_ref_count(env->page), env->refs);
+	svcsock_rx_region_expect_part(test, false, 16, 16, 0);
+	svcsock_rx_bounce_env_end(env);
+}
+
+/*
+ * A payload a later COMPOUND operation may still read, and a deferred
+ * request, are not bounced: -EOPNOTSUPP, the loan, the credit and the
+ * counters untouched.
+ */
+static void svcsock_rx_bounce_unsupported_test(struct kunit *test)
+{
+	struct svcsock_rx_bounce_env *env = svcsock_rx_bounce_env(test, 40, 10, 100);
+	struct svc_rqst *rqstp = env->fixture->rqstp;
+	struct svc_deferred_req *deferred = kunit_kzalloc(test, sizeof(*deferred),
+							  GFP_KERNEL);
+	struct bio_vec out[4];
+	long refused = svcsock_rx_budget_stat(env->c, "bounce_refused");
+	long bounced = svcsock_rx_budget_stat(env->c, "bounced");
+
+	KUNIT_ASSERT_NOT_NULL(test, deferred);
+	set_bit(RQ_PAYLOAD_SHARED, &rqstp->rq_flags);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_bounce(env->fixture->svsk, rqstp,
+						&env->payload, 512, 512, out,
+						ARRAY_SIZE(out)), -EOPNOTSUPP);
+	clear_bit(RQ_PAYLOAD_SHARED, &rqstp->rq_flags);
+	rqstp->rq_deferred = deferred;
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_bounce(env->fixture->svsk, rqstp,
+						&env->payload, 512, 512, out,
+						ARRAY_SIZE(out)), -EOPNOTSUPP);
+	rqstp->rq_deferred = NULL;
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "bounce_refused"),
+			refused);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "bounced"), bounced);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "lent"), 0L);
+	KUNIT_EXPECT_EQ(test, env->state->credit, 2U);
+	KUNIT_EXPECT_TRUE(test, env->state->credit_linked);
+	KUNIT_EXPECT_EQ(test, env->state->bounce_pages, 0U);
+	KUNIT_EXPECT_EQ(test, page_ref_count(env->page), env->refs);
+	svcsock_rx_bounce_env_end(env);
+}
+
+/*
+ * Credit drawn past the budget (credit_over) is not credit: with one real
+ * unit and five past the budget the record holds six, but a two-page
+ * bounce refuses "credit" and changes nothing.
+ */
+static void svcsock_rx_bounce_credit_over_short_test(struct kunit *test)
+{
+	/* One-page budget, no reserve: the oldest record holds one unit. */
+	struct svcsock_rx_bounce_env *env = svcsock_rx_bounce_env(test, 1, 0, 0);
+	struct bio_vec out[4];
+	long refused = svcsock_rx_budget_stat(env->c, "bounce_refused");
+
+	KUNIT_ASSERT_EQ(test, env->state->credit, 1U);
+	/* Admission off: further charges finish unthrottled, as credit_over. */
+	svc_tcp_rx_budget_kunit_configure(0, 0, 0);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_charge(env->fixture->svsk,
+							 env->state, 6));
+	KUNIT_ASSERT_EQ(test, env->state->credit, 6U);
+	KUNIT_ASSERT_EQ(test, env->state->credit_over, 5U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_bounce(env->fixture->svsk,
+						env->fixture->rqstp,
+						&env->payload, BOUNCE_ALIGN2, 4,
+						out, ARRAY_SIZE(out)), -ENOSPC);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "bounce_refused"),
+			refused + 1);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "lent"), 0L);
+	KUNIT_EXPECT_EQ(test, env->state->credit, 6U);
+	KUNIT_EXPECT_EQ(test, env->state->credit_over, 5U);
+	KUNIT_EXPECT_TRUE(test, env->state->credit_linked);
+	svcsock_rx_region_expect_part(test, false, 16, 16, 0);
+	svcsock_rx_bounce_env_end(env);
+}
+
+/*
+ * A record with credit past the budget converts only its real credit
+ * (here the record's two units), and the credit past the budget is never
+ * returned to the budget: done returns exactly the two lent units.
+ */
+static void svcsock_rx_bounce_credit_over_test(struct kunit *test)
+{
+	struct svcsock_rx_bounce_env *env = svcsock_rx_bounce_env(test, 40, 10, 100);
+	struct bio_vec out[4];
+	long avail;
+	int n;
+
+	KUNIT_ASSERT_EQ(test, env->state->credit, 2U);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 0);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_charge(env->fixture->svsk,
+							 env->state, 5));
+	KUNIT_ASSERT_EQ(test, env->state->credit_over, 3U);
+	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
+	n = svc_tcp_rx_bounce(env->fixture->svsk, env->fixture->rqstp,
+			      &env->payload, BOUNCE_ALIGN2, 4, out,
+			      ARRAY_SIZE(out));
+	KUNIT_ASSERT_EQ(test, n, 2);
+	KUNIT_EXPECT_EQ(test, env->state->bounce_credit +
+			      env->state->bounce_reserve, 2U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "lent"), 2L);
+	avail = svcsock_rx_budget_stat(env->c, "avail");
+	svc_tcp_rx_bounce_done(env->fixture->rqstp, out, n);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "lent"), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "avail"),
+			avail + 2);
+	svc_tcp_release_ctxt(&env->fixture->svsk->sk_xprt, env->state);
+}
+
+/*
+ * A budget turned off while credit is lent: done brings the lent credit to
+ * zero and leaves nothing available, the budget being off.
+ */
+static void svcsock_rx_bounce_budget_off_test(struct kunit *test)
+{
+	struct svcsock_rx_bounce_env *env = svcsock_rx_bounce_env(test, 40, 10, 100);
+	struct bio_vec out[4];
+	int n;
+
+	n = svc_tcp_rx_bounce(env->fixture->svsk, env->fixture->rqstp,
+			      &env->payload, BOUNCE_ALIGN2, 4, out,
+			      ARRAY_SIZE(out));
+	KUNIT_ASSERT_EQ(test, n, 2);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "lent"), 2L);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 0);
+	svc_tcp_rx_bounce_done(env->fixture->rqstp, out, n);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "lent"), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "avail"), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "budget"), 0L);
+	svcsock_rx_region_expect_part(test, false, 16, 14, 0);
+	svc_tcp_release_ctxt(&env->fixture->svsk->sk_xprt, env->state);
 }
 #endif
 
@@ -3864,7 +4636,19 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_region_take_give_test),
 	KUNIT_CASE(svcsock_rx_region_unsplit_test),
 	KUNIT_CASE(svcsock_rx_region_bind_reads_test),
+	KUNIT_CASE(svcsock_rx_bounce_region_credit_test),
+	KUNIT_CASE(svcsock_rx_bounce_region_multi_test),
+	KUNIT_CASE(svcsock_rx_bounce_credit_short_test),
+	KUNIT_CASE(svcsock_rx_bounce_region_short_test),
+	KUNIT_CASE(svcsock_rx_bounce_locked_head_test),
+	KUNIT_CASE(svcsock_rx_bounce_reserve_test),
+	KUNIT_CASE(svcsock_rx_bounce_capacity_test),
+	KUNIT_CASE(svcsock_rx_bounce_unsupported_test),
+	KUNIT_CASE(svcsock_rx_bounce_credit_over_short_test),
+	KUNIT_CASE(svcsock_rx_bounce_credit_over_test),
+	KUNIT_CASE(svcsock_rx_bounce_budget_off_test),
 #endif
+	KUNIT_CASE(svcsock_rx_bounce_arena_test),
 	KUNIT_CASE(svcsock_rx_budget_write_partition_test),
 	KUNIT_CASE(svcsock_rx_credit_factor_bounds_test),
 	KUNIT_CASE(svcsock_rx_capacity_plus_one_test),
