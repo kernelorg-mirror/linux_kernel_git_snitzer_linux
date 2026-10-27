@@ -1171,7 +1171,8 @@ static void move_linked_works(struct work_struct *work, struct list_head *head,
 	 */
 	list_for_each_entry_safe_from(work, n, NULL, entry) {
 		list_move_tail(&work->entry, head);
-		if (!(*work_data_bits(work) & WORK_STRUCT_LINKED))
+		/* PENDING may change atomically; only LINKED is sampled here. */
+		if (!data_race(*work_data_bits(work) & WORK_STRUCT_LINKED))
 			break;
 	}
 

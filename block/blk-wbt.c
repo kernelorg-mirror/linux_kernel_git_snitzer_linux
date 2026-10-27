@@ -251,15 +251,15 @@ static void wbt_done(struct rq_qos *rqos, struct request *rq)
 
 	if (!wbt_is_tracked(rq)) {
 		if (wbt_is_read(rq)) {
-			if (rwb->sync_cookie == rq) {
-				rwb->sync_issue = 0;
-				rwb->sync_cookie = NULL;
+			if (READ_ONCE(rwb->sync_cookie) == rq) {
+				WRITE_ONCE(rwb->sync_issue, 0);
+				WRITE_ONCE(rwb->sync_cookie, NULL);
 			}
 
 			wb_timestamp(rwb, &rwb->last_comp);
 		}
 	} else {
-		WARN_ON_ONCE(rq == rwb->sync_cookie);
+		WARN_ON_ONCE(rq == READ_ONCE(rwb->sync_cookie));
 		__wbt_done(rqos, wbt_flags(rq));
 	}
 	wbt_clear_state(rq);
@@ -281,7 +281,7 @@ static u64 rwb_sync_issue_lat(struct rq_wb *rwb)
 {
 	u64 issue = READ_ONCE(rwb->sync_issue);
 
-	if (!issue || !rwb->sync_cookie)
+	if (!issue || !READ_ONCE(rwb->sync_cookie))
 		return 0;
 
 	return blk_time_get_ns() - issue;
@@ -663,9 +663,9 @@ static void wbt_issue(struct rq_qos *rqos, struct request *rq)
 	 * so it's important we never dereference it. We only use the address to
 	 * compare with, which is why we store the sync_issue time locally.
 	 */
-	if (wbt_is_read(rq) && !rwb->sync_issue) {
-		rwb->sync_cookie = rq;
-		rwb->sync_issue = rq->io_start_time_ns;
+	if (wbt_is_read(rq) && !READ_ONCE(rwb->sync_issue)) {
+		WRITE_ONCE(rwb->sync_cookie, rq);
+		WRITE_ONCE(rwb->sync_issue, rq->io_start_time_ns);
 	}
 }
 
@@ -674,9 +674,9 @@ static void wbt_requeue(struct rq_qos *rqos, struct request *rq)
 	struct rq_wb *rwb = RQWB(rqos);
 	if (!rwb_enabled(rwb))
 		return;
-	if (rq == rwb->sync_cookie) {
-		rwb->sync_issue = 0;
-		rwb->sync_cookie = NULL;
+	if (rq == READ_ONCE(rwb->sync_cookie)) {
+		WRITE_ONCE(rwb->sync_issue, 0);
+		WRITE_ONCE(rwb->sync_cookie, NULL);
 	}
 }
 

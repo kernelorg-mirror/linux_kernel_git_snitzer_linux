@@ -621,11 +621,11 @@ static int kernfs_fop_open(struct inode *inode, struct file *file)
 	/* see the flag definition for details */
 	if (root->flags & KERNFS_ROOT_EXTRA_OPEN_PERM_CHECK) {
 		if ((file->f_mode & FMODE_WRITE) &&
-		    (!(inode->i_mode & S_IWUGO) || !has_write))
+		    (!(READ_ONCE(inode->i_mode) & S_IWUGO) || !has_write))
 			goto err_out;
 
 		if ((file->f_mode & FMODE_READ) &&
-		    (!(inode->i_mode & S_IRUGO) || !has_read))
+		    (!(READ_ONCE(inode->i_mode) & S_IRUGO) || !has_read))
 			goto err_out;
 	}
 

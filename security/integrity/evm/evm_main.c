@@ -1132,7 +1132,7 @@ static void evm_file_release(struct file *file)
 	struct evm_iint_cache *iint = evm_iint_inode(inode);
 	fmode_t mode = file->f_mode;
 
-	if (!S_ISREG(inode->i_mode) || !(mode & FMODE_WRITE))
+	if (!S_ISREG(READ_ONCE(inode->i_mode)) || !(mode & FMODE_WRITE))
 		return;
 
 	if (iint && iint->flags & EVM_NEW_FILE &&

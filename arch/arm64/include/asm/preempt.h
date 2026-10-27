@@ -26,19 +26,20 @@ static inline void preempt_count_set(u64 pc)
 	task_thread_info(p)->preempt_count = PREEMPT_DISABLED; \
 } while (0)
 
+/* IRQ-side requests overlap the combined preemption-word readers. */
 static inline void set_preempt_need_resched(void)
 {
-	current_thread_info()->preempt.need_resched = 0;
+	WRITE_ONCE(current_thread_info()->preempt.need_resched, 0);
 }
 
 static inline void clear_preempt_need_resched(void)
 {
-	current_thread_info()->preempt.need_resched = 1;
+	WRITE_ONCE(current_thread_info()->preempt.need_resched, 1);
 }
 
 static inline bool test_preempt_need_resched(void)
 {
-	return !current_thread_info()->preempt.need_resched;
+	return !READ_ONCE(current_thread_info()->preempt.need_resched);
 }
 
 static inline void __preempt_count_add(int val)

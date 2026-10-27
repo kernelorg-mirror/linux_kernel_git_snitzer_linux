@@ -20,7 +20,7 @@ struct kthread;
  */
 static inline struct kthread *tsk_is_kthread(struct task_struct *p)
 {
-	if (p->flags & PF_KTHREAD)
+	if (READ_ONCE(p->flags) & PF_KTHREAD)
 		return p->worker_private;
 	return NULL;
 }

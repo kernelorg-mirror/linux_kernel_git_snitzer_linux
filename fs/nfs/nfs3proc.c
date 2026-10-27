@@ -924,7 +924,7 @@ static void nfs3_proc_read_setup(struct nfs_pgio_header *hdr,
 				 struct rpc_message *msg)
 {
 	msg->rpc_proc = &nfs3_procedures[NFS3PROC_READ];
-	hdr->args.replen = NFS_SERVER(hdr->inode)->read_hdrsize;
+	hdr->args.replen = READ_ONCE(NFS_SERVER(hdr->inode)->read_hdrsize);
 }
 
 static int nfs3_proc_pgio_rpc_prepare(struct rpc_task *task,

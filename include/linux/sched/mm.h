@@ -328,17 +328,21 @@ static inline void might_alloc(gfp_t gfp_mask)
  *
  * This allows PF_* flags to be conveniently added, irrespective of current
  * value, and then the old version restored with memalloc_flags_restore().
+ *
+ * Task flags permit readonly observers. Mark accesses for those observers;
+ * paired mask updates still rely on current owning its flags.
  */
 static inline unsigned memalloc_flags_save(unsigned flags)
 {
-	unsigned oldflags = ~current->flags & flags;
-	current->flags |= flags;
-	return oldflags;
+	unsigned oldflags = READ_ONCE(current->flags);
+
+	WRITE_ONCE(current->flags, oldflags | flags);
+	return ~oldflags & flags;
 }
 
 static inline void memalloc_flags_restore(unsigned flags)
 {
-	current->flags &= ~flags;
+	WRITE_ONCE(current->flags, READ_ONCE(current->flags) & ~flags);
 }
 
 /**

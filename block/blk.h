@@ -735,7 +735,8 @@ static inline u64 blk_time_get_ns(void)
 		WRITE_ONCE(plug->cur_ktime, now);
 		/* Ensure PF_BLOCK_TS is set after cur_ktime. */
 		barrier();
-		current->flags |= PF_BLOCK_TS;
+		/* Current owns writes; other contexts may observe the flags word. */
+		WRITE_ONCE(current->flags, READ_ONCE(current->flags) | PF_BLOCK_TS);
 	}
 	return now;
 }

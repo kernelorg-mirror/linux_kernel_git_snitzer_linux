@@ -1507,7 +1507,7 @@ static int ep_poll_callback(wait_queue_entry_t *wait, unsigned mode, int sync, v
 	 * EPOLLONESHOT bit that disables the descriptor when an event is received,
 	 * until the next EPOLL_CTL_MOD will be issued.
 	 */
-	if (!(epi->event.events & ~EP_PRIVATE_BITS))
+	if (!(READ_ONCE(epi->event.events) & ~EP_PRIVATE_BITS))
 		goto out_unlock;
 
 	/*
@@ -1516,7 +1516,7 @@ static int ep_poll_callback(wait_queue_entry_t *wait, unsigned mode, int sync, v
 	 * callback. We need to be able to handle both cases here, hence the
 	 * test for "key" != NULL before the event match test.
 	 */
-	if (pollflags && !(pollflags & epi->event.events))
+	if (pollflags && !(pollflags & READ_ONCE(epi->event.events)))
 		goto out_unlock;
 
 	/*
@@ -1542,15 +1542,15 @@ static int ep_poll_callback(wait_queue_entry_t *wait, unsigned mode, int sync, v
 	 * wait list.
 	 */
 	if (waitqueue_active(&ep->wq)) {
-		if ((epi->event.events & EPOLLEXCLUSIVE) &&
+		if ((READ_ONCE(epi->event.events) & EPOLLEXCLUSIVE) &&
 					!(pollflags & POLLFREE)) {
 			switch (pollflags & EPOLLINOUT_BITS) {
 			case EPOLLIN:
-				if (epi->event.events & EPOLLIN)
+				if (READ_ONCE(epi->event.events) & EPOLLIN)
 					ewake = 1;
 				break;
 			case EPOLLOUT:
-				if (epi->event.events & EPOLLOUT)
+				if (READ_ONCE(epi->event.events) & EPOLLOUT)
 					ewake = 1;
 				break;
 			case 0:
@@ -1573,7 +1573,7 @@ out_unlock:
 	if (pwake)
 		ep_poll_safewake(ep, epi, pollflags & EPOLL_URING_WAKE);
 
-	if (!(epi->event.events & EPOLLEXCLUSIVE))
+	if (!(READ_ONCE(epi->event.events) & EPOLLEXCLUSIVE))
 		ewake = 1;
 
 	if (pollflags & POLLFREE) {
@@ -1992,7 +1992,7 @@ static int ep_modify(struct eventpoll *ep, struct epitem *epi,
 	 * otherwise we might miss an event that happens between the
 	 * f_op->poll() call and the new event set registering.
 	 */
-	epi->event.events = event->events; /* need barrier below */
+	WRITE_ONCE(epi->event.events, event->events); /* need barrier below */
 	epi->event.data = event->data; /* protected by mtx */
 	if (epi->event.events & EPOLLWAKEUP) {
 		if (!ep_has_wakeup_source(epi))
@@ -2110,7 +2110,8 @@ static int ep_deliver_event(struct eventpoll *ep, struct epitem *epi,
 	*uevents = next;
 
 	if (epi->event.events & EPOLLONESHOT) {
-		epi->event.events &= EP_PRIVATE_BITS;
+		WRITE_ONCE(epi->event.events,
+			   READ_ONCE(epi->event.events) & EP_PRIVATE_BITS);
 	} else if (!(epi->event.events & EPOLLET)) {
 		/*
 		 * Level-triggered: re-queue so the next epoll_wait()

@@ -681,7 +681,7 @@ retry_deleg:
 	error = security_path_chmod(path, mode);
 	if (error)
 		goto out_unlock;
-	newattrs.ia_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
+	newattrs.ia_mode = (mode & S_IALLUGO) | (READ_ONCE(inode->i_mode) & ~S_IALLUGO);
 	newattrs.ia_valid = ATTR_MODE | ATTR_CTIME;
 	error = notify_change(mnt_idmap(path->mnt), path->dentry,
 			      &newattrs, &delegated_inode);
@@ -813,7 +813,7 @@ retry_deleg:
 	error = inode_lock_killable(inode);
 	if (error)
 		return error;
-	if (!S_ISDIR(inode->i_mode))
+	if (!S_ISDIR(READ_ONCE(inode->i_mode)))
 		newattrs.ia_valid |= ATTR_KILL_SUID | ATTR_KILL_PRIV |
 				     setattr_should_drop_sgid(idmap, inode);
 	/* Continue to send actual fs values, not the mount values. */

@@ -948,7 +948,9 @@ xfs_buf_lock(
 {
 	trace_xfs_buf_lock(bp, _RET_IP_);
 
-	if (atomic_read(&bp->b_pin_count) && (bp->b_flags & XBF_STALE))
+	if (atomic_read(&bp->b_pin_count) &&
+	    /* data_race: pre-b_sema sample only decides whether to push. */
+	    data_race(bp->b_flags & XBF_STALE))
 		xfs_log_force(bp->b_mount, 0);
 	down(&bp->b_sema);
 
