@@ -3078,6 +3078,17 @@ config LONGEST_SYM_KUNIT_TEST
 
 	  If unsure, say N.
 
+config OVERLONG_SYM_KUNIT_TEST
+	tristate "Test symbolizing a module symbol longer than KSYM_NAME_LEN" if !KUNIT_ALL_TESTS
+	depends on KUNIT && KALLSYMS && m
+	default KUNIT_ALL_TESTS
+	help
+	  Symbolizes an address inside a module function whose name is longer
+	  than KSYM_NAME_LEN and checks that the name is truncated and that
+	  nothing is written outside the KSYM_SYMBOL_LEN buffer.
+
+	  If unsure, say N.
+
 config HW_BREAKPOINT_KUNIT_TEST
 	bool "Test hw_breakpoint constraints accounting" if !KUNIT_ALL_TESTS
 	depends on HAVE_HW_BREAKPOINT
