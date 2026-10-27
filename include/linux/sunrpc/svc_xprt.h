@@ -25,6 +25,15 @@ struct svc_xprt_ops {
 					      unsigned int);
 	void		(*xpo_release_ctxt)(struct svc_xprt *xprt, void *ctxt);
 	void		(*xpo_release_payload)(struct svc_rqst *rqstp);
+	int		(*xpo_bounce_payload)(struct svc_rqst *rqstp,
+					      const struct xdr_buf *payload,
+					      unsigned int align,
+					      unsigned int mem_align,
+					      struct bio_vec *bvec,
+					      unsigned int bvec_size);
+	void		(*xpo_bounce_done)(struct svc_rqst *rqstp,
+					   struct bio_vec *bvec,
+					   unsigned int nvecs);
 	void		(*xpo_detach)(struct svc_xprt *);
 	void		(*xpo_free)(struct svc_xprt *);
 	void		(*xpo_kill_temp_xprt)(struct svc_xprt *);

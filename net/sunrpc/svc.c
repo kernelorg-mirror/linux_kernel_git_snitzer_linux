@@ -1023,6 +1023,55 @@ void svc_rqst_release_payload(struct svc_rqst *rqstp)
 EXPORT_SYMBOL_GPL(svc_rqst_release_payload);
 
 /**
+ * svc_rqst_bounce_payload - Lay a loaned payload out page-tiled
+ * @rqstp: RPC transaction context
+ * @payload: the argument payload, a view of the request's arguments
+ * @align: in-page offset for the first byte (the file position's), so a
+ *	   direct write's aligned middle starts memory-aligned
+ * @mem_align: the memory alignment, against the file position, that the
+ *	       copy's start and every page joint must meet
+ * @bvec: receives the page-tiled payload
+ * @bvec_size: entries in @bvec
+ *
+ * For a direct WRITE whose loaned fragments the device cannot take: the
+ * transport copies the payload once into whole pages (its fixed receive
+ * region when the record holds region credit), returns the loan, and
+ * describes the copy in @bvec.  Never waits.  Returns the number of
+ * entries, or a negative errno when the payload is not loaned or cannot be
+ * bounced; the payload is then untouched.  A positive return must be
+ * paired with svc_rqst_bounce_done() once the device has the data.
+ */
+int svc_rqst_bounce_payload(struct svc_rqst *rqstp,
+			    const struct xdr_buf *payload, unsigned int align,
+			    unsigned int mem_align, struct bio_vec *bvec,
+			    unsigned int bvec_size)
+{
+	struct svc_xprt *xprt = rqstp->rq_xprt;
+
+	if (!xprt || !xprt->xpt_ops->xpo_bounce_payload)
+		return -EOPNOTSUPP;
+	return xprt->xpt_ops->xpo_bounce_payload(rqstp, payload, align,
+						 mem_align, bvec, bvec_size);
+}
+EXPORT_SYMBOL_GPL(svc_rqst_bounce_payload);
+
+/**
+ * svc_rqst_bounce_done - Return a bounce once the device has the data
+ * @rqstp: RPC transaction context
+ * @bvec: the entries svc_rqst_bounce_payload() filled; clobbered
+ * @nvecs: its return value
+ */
+void svc_rqst_bounce_done(struct svc_rqst *rqstp, struct bio_vec *bvec,
+			  unsigned int nvecs)
+{
+	struct svc_xprt *xprt = rqstp->rq_xprt;
+
+	if (xprt && xprt->xpt_ops->xpo_bounce_done)
+		xprt->xpt_ops->xpo_bounce_done(rqstp, bvec, nvecs);
+}
+EXPORT_SYMBOL_GPL(svc_rqst_bounce_done);
+
+/**
  * svc_exit_thread - finalise the termination of a sunrpc server thread
  * @rqstp: the svc_rqst which represents the thread.
  *

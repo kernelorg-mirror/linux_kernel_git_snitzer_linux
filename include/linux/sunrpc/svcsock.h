@@ -31,6 +31,7 @@ enum svc_tcp_rx_action {
 	SVC_TCP_RX_RELEASE,
 	SVC_TCP_RX_ABORT,
 	SVC_TCP_RX_PAYLOAD_RELEASE,
+	SVC_TCP_RX_BOUNCE,
 };
 
 enum svc_tcp_rx_reason {
@@ -66,8 +67,6 @@ struct svc_tcp_rx_state {
 	struct bio_vec		*bvec;
 	unsigned long		*borrowed;
 	unsigned long		*page_pool;
-	/* borrowed entries that are merge pages: their bytes count as copied */
-	unsigned long		*merged;
 	struct svc_rqst		*rqstp;
 	u32			capacity;
 	u32			count;
@@ -86,8 +85,6 @@ struct svc_tcp_rx_state {
 	u8			mode;
 	u8			reason;
 	bool			terminal;
-	/* bytes still to copy into the locked-head merge page */
-	u32			merge_fill;
 	/* pages in the copy arena (rq_pages); @capacity counts bvecs */
 	u32			arena_pages;
 	/* region credit held by this record (svc_tcp_rx_credit_*) */
@@ -105,6 +102,14 @@ struct svc_tcp_rx_state {
 	struct list_head	credit_node;
 	/* the budget this record's credit came from, while linked */
 	struct svc_tcp_rx_budget *credit_budget;
+	/*
+	 * region pages and credit lent to a WRITE bounce
+	 * (svc_rqst_bounce_payload), and the budget the credit returns to
+	 */
+	struct svc_tcp_rx_budget *bounce_budget;
+	u32			bounce_pages;
+	u32			bounce_credit;
+	u32			bounce_reserve;
 } ____cacheline_aligned;
 
 /*
@@ -266,6 +271,12 @@ long svc_tcp_rx_budget_avail(void);
 unsigned int svc_tcp_rx_budget_cost_factor(void);
 long svc_tcp_rx_budget_reserve_avail(void);
 void svc_tcp_rx_release_payload(struct svc_sock *svsk, struct svc_rqst *rqstp);
+int svc_tcp_rx_bounce(struct svc_sock *svsk, struct svc_rqst *rqstp,
+		      const struct xdr_buf *payload, unsigned int align,
+		      unsigned int mem_align, struct bio_vec *out,
+		      unsigned int out_size);
+void svc_tcp_rx_bounce_done(struct svc_rqst *rqstp, struct bio_vec *bvec,
+			    unsigned int nvecs);
 void svc_data_ready(struct sock *sk);
 u32 svc_tcp_rx_skb_region_pages(const struct sk_buff *skb, u32 base,
 				u32 first, u32 last);

@@ -1220,29 +1220,29 @@ static void svcsock_rx_mixed_geometry_lifetime_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, state->body_bytes, (u32)BODY_LEN);
 	KUNIT_EXPECT_EQ(test, state->fixed_bytes, 7U * XDR_UNIT);
 	/*
-	 * The locked-head copy starts a merge page and every following
-	 * borrowable byte of this small record tops it up
-	 * (svc_tcp_rx_copy_segment_merged()): the whole body publishes
-	 * from one owned page -- all bytes accounted as copied, no
-	 * loan references taken on the frag pages.
+	 * Only the locked (cloned) head's suffix is copied; the frags
+	 * after it are loaned as they are, each bvec holding a reference
+	 * (the compound frag straddles a subpage, so it is two bvecs).
 	 */
-	KUNIT_EXPECT_EQ(test, state->copied_bytes,
-			(u32)(BODY_LEN - 7 * XDR_UNIT));
-	KUNIT_EXPECT_EQ(test, state->borrowed_bytes, 0U);
-	KUNIT_EXPECT_EQ(test, state->refs_acquired, 1U);
+	KUNIT_EXPECT_EQ(test, state->copied_bytes, (u32)HEAD_SUFFIX);
+	KUNIT_EXPECT_EQ(test, state->borrowed_bytes,
+			(u32)(COMPOUND_LEN + CHILD_LEN + GRANDCHILD_LEN));
+	KUNIT_EXPECT_EQ(test, state->refs_acquired, 4U);
 	KUNIT_EXPECT_EQ(test, page_ref_count(root_page), root_refs);
-	KUNIT_EXPECT_EQ(test, page_ref_count(compound_page), compound_refs);
-	KUNIT_EXPECT_EQ(test, page_ref_count(child_page), child_refs);
-	KUNIT_EXPECT_EQ(test, page_ref_count(grandchild_page), grandchild_refs);
+	KUNIT_EXPECT_EQ(test, page_ref_count(compound_page), compound_refs + 2);
+	KUNIT_EXPECT_EQ(test, page_ref_count(child_page), child_refs + 1);
+	KUNIT_EXPECT_EQ(test, page_ref_count(grandchild_page),
+			grandchild_refs + 1);
 
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, fixture->rqstp), 0);
 	KUNIT_ASSERT_EQ(test, state->mode, (u8)SVC_TCP_RX_PUBLISHED);
 	kunit_kfree_skb(test, clone);
 	kunit_kfree_skb(test, root);
+	/* The published loans keep the frag pages past the skbs. */
 	KUNIT_EXPECT_EQ(test, page_ref_count(root_page), root_refs - 1);
-	KUNIT_EXPECT_EQ(test, page_ref_count(compound_page), compound_refs - 1);
-	KUNIT_EXPECT_EQ(test, page_ref_count(child_page), child_refs - 1);
-	KUNIT_EXPECT_EQ(test, page_ref_count(grandchild_page), grandchild_refs - 1);
+	KUNIT_EXPECT_EQ(test, page_ref_count(compound_page), compound_refs + 1);
+	KUNIT_EXPECT_EQ(test, page_ref_count(child_page), child_refs);
+	KUNIT_EXPECT_EQ(test, page_ref_count(grandchild_page), grandchild_refs);
 	KUNIT_EXPECT_MEMEQ(test, page_address(fixture->rqstp->rq_pages[0]),
 			   record + sizeof(rpc_fraghdr), 7 * XDR_UNIT);
 	svcsock_rx_expect_bvec_bytes(test, state,
@@ -1258,11 +1258,9 @@ static void svcsock_rx_mixed_geometry_lifetime_test(struct kunit *test)
 
 /*
  * Two locked skb heads back to back, as TCP receive-queue collapse
- * produces, then borrowable data.  The first locked head starts a merge
- * page; the second cannot join it and lands in the rq_pages arena; the
- * borrowed bytes that follow must then be loaned, not copied into the
- * last bvec as though it were still the merge page -- that bvec is now an
- * arena page, and the copy would overwrite the bytes already there.
+ * produces, then borrowable data.  Both locked heads are copied into the
+ * rq_pages arena, one after the other, and the borrowed bytes that follow
+ * are loaned beside them, not copied over the arena bytes already there.
  */
 static void svcsock_rx_back_to_back_locked_heads_test(struct kunit *test)
 {
@@ -1311,9 +1309,8 @@ static void svcsock_rx_back_to_back_locked_heads_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, actor.complete);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
 	KUNIT_EXPECT_EQ(test, state->body_bytes, (u32)BODY_LEN);
-	KUNIT_EXPECT_EQ(test, state->merge_fill, 0U);
-	/* merge page, arena copy, loan */
-	KUNIT_EXPECT_EQ(test, state->count, 3U);
+	/* the arena copy of both heads, then the loan */
+	KUNIT_EXPECT_EQ(test, state->count, 2U);
 	KUNIT_EXPECT_EQ(test, state->copied_bytes, (u32)(FIRST_LEN + SECOND_LEN));
 	KUNIT_EXPECT_EQ(test, state->borrowed_bytes, (u32)BORROWED_LEN);
 	KUNIT_EXPECT_EQ(test, page_ref_count(borrowed_page), borrowed_refs + 1);
@@ -3431,14 +3428,12 @@ static void svcsock_rx_credit_collapsed_unwaits_test(struct kunit *test)
 
 /*
  * A record's first skb has a locked head, so its bytes past the prefix are
- * copied into a merge page that sits in the table as a loan while its bytes
- * are counted as copied.  The budget is turned off before the next skb,
- * which carries a region page, so the record is materialized with the merge
- * page in its table: the merge page's bytes must come off the borrowed count
- * once, and be counted as copied once.  (With no budget when it is
- * classified, a record is copied from its start and has no merge page.)
+ * copied into the arena.  The budget is turned off before the next skb,
+ * which carries a region page, so the record is materialized: the locked
+ * head's bytes are counted as copied once, and nothing stays borrowed.
+ * (With no budget when it is classified, a record is copied from its start.)
  */
-static void svcsock_rx_merge_then_materialize_test(struct kunit *test)
+static void svcsock_rx_locked_head_then_materialize_test(struct kunit *test)
 {
 	enum {
 		PREFIX_LEN = 7 * XDR_UNIT,
@@ -3475,20 +3470,18 @@ static void svcsock_rx_merge_then_materialize_test(struct kunit *test)
 	get_page(region_page);
 	skb_add_rx_frag(region_skb, 0, region_page, 0, TAIL_LEN, PAGE_SIZE);
 
-	/* The locked head's bytes past the prefix land in a merge page. */
+	/* The locked head's bytes past the prefix land in the arena. */
 	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, locked_skb,
 				   0, locked_skb->len);
 	KUNIT_ASSERT_EQ(test, ret, (int)(HEAD_LEN + MERGE_LEN));
 	KUNIT_ASSERT_FALSE(test, actor.complete);
 	KUNIT_ASSERT_EQ(test, state->mode, (u8)SVC_TCP_RX_MIXED);
 	KUNIT_ASSERT_EQ(test, state->count, 1U);
-	KUNIT_ASSERT_EQ(test, state->borrowed_count, 1U);
-	KUNIT_ASSERT_EQ(test, state->merge_fill,
-			(u32)(PAGE_SIZE - MERGE_LEN));
+	KUNIT_ASSERT_EQ(test, state->borrowed_count, 0U);
 	KUNIT_ASSERT_EQ(test, state->borrowed_bytes, 0U);
 	KUNIT_ASSERT_EQ(test, state->copied_bytes, (u32)MERGE_LEN);
 
-	/* A region page and no budget: the record is copied, merge page too. */
+	/* A region page and no budget: the record is copied. */
 	svc_tcp_rx_budget_kunit_default(0, 0);
 	desc.count = TAIL_LEN;
 	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, region_skb,
@@ -3880,7 +3873,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_spare_kept_test),
 	KUNIT_CASE(svcsock_rx_exclusion_table_test),
 	KUNIT_CASE(svcsock_rx_materialize_test),
-	KUNIT_CASE(svcsock_rx_merge_then_materialize_test),
+	KUNIT_CASE(svcsock_rx_locked_head_then_materialize_test),
 	KUNIT_CASE(svcsock_rx_capacity_release_test),
 	KUNIT_CASE(svcsock_rx_capacity_sizing_test),
 	KUNIT_CASE(svcsock_rx_arena_bound_test),
