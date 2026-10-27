@@ -86,6 +86,23 @@ fl55a-loan64 (N) against fl55b-loan64 (Y), one profiled run each, annotated on t
 - **The totals:** one profiled run a side cannot resolve 2.45 µs. The A/B measures it.
 - **Left:** loading the next descriptor's entry a frame earlier would take most of the 0.8, at the price of a second look-ahead.
 
+## Again on the tip's sunrpc, a spot check
+
+Rounds 21 to 26 changed sunrpc after build 499, so the A/B above, on build 499's own sunrpc, could not show the prefetch's value with them in. **Run 2026-10-27 on tardis2** (driver [run61.sh](run61.sh), the runs `/var/tmp/zc-run-logs/t2-r61/`, [cost-tip.txt](cost-tip.txt)):
+- the tip's sunrpc (round 26's build, `A06FE478658242A10E100FF`), nfsd the kernel's, `rodata=noalias` (round 30), the same xeu;
+- two untraced loan64 runs a side, N Y N Y. A spot check (Mike): more runs only if it looked off;
+- each A run held off the setting with `EXP_XEU_rx_prefetch=N`.
+
+| run | rx_prefetch | GB/s | ring µs a WRITE | nfsd µs a WRITE | region peak in use, pages |
+|---|---|---|---|---|---|
+| r61-1-loan64-A | N | 40.51 | 47.6 | 90.8 | 6501 |
+| r61-2-loan64-B | Y | 40.48 | 46.8 | 90.6 | 6327 |
+| r61-3-loan64-A | N | 40.50 | 48.7 | 94.0 | 6437 |
+| r61-4-loan64-B | Y | 40.51 | 44.4 | 89.9 | 6259 |
+
+- **The rings:** A 48.15, B 45.60, **−2.55 ± 1.32 µs a WRITE**, against −2.45 ± 0.56 on build 499's sunrpc. The same within the error, so the saving holds with rounds 21 to 26 in.
+- **Not changed:** nfsd (A 92.4, B 90.3: the drift between runs, as A's two runs differ by 3.2), the rate, enqueues, wakes and switches. The region's peak is not raised.
+
 ## Latency
 
 [latency.txt](latency.txt), untraced runs at iodepth 1:

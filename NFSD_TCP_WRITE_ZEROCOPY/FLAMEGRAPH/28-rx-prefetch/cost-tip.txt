@@ -1,0 +1,6 @@
+== r61: the tip's sunrpc (A06FE478658242A10E100FF), rodata=noalias, xeu 2C05DF674C9D013185FDB34; A rx_prefetch N, B Y; the settled setting. rxirq/txirq not valid, as above
+r61-1-loan64-A ring 47.6 nfsd 90.8 us/W | rxirq -0.73 txirq 0.15 | enq 4.80 woken 4.04 vcsw 5.50 /W | pp/W: recycle_cached -0.00 outsegs 5.59 recycle_ring_full 0.01 alloc_slow 0.01 | region peak 6501 | maxentries:4096,numentries:4097,cachehits:0,
+r61-2-loan64-B ring 46.8 nfsd 90.6 us/W | rxirq -0.15 txirq -0.14 | enq 4.79 woken 4.03 vcsw 5.49 /W | pp/W: recycle_cached -0.00 outsegs 5.58 recycle_ring_full -0.00 alloc_slow -0.00 | region peak 6327 | maxentries:4096,numentries:4097,cachehits:0,
+r61-3-loan64-A ring 48.7 nfsd 94.0 us/W | rxirq -0.31 txirq 0.16 | enq 4.75 woken 4.01 vcsw 5.47 /W | pp/W: recycle_cached -0.00 outsegs 5.53 recycle_ring_full -0.01 alloc_slow -0.01 | region peak 6437 | maxentries:4096,numentries:4097,cachehits:0,
+r61-4-loan64-B ring 44.4 nfsd 89.9 us/W | rxirq 1.05 txirq 0.05 | enq 4.78 woken 4.02 vcsw 5.48 /W | pp/W: recycle_cached -0.00 outsegs 5.57 recycle_ring_full 0.02 alloc_slow 0.01 | region peak 6259 | maxentries:4096,numentries:4097,cachehits:0,
+== every run: FIFO drops 0, ring drops 0, overrun 0, DRIVE-LIMITED, no drive stepped down; slowest WRITE 110 to 120 ms; no WARNING
