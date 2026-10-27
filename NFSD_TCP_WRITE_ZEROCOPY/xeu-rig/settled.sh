@@ -35,6 +35,7 @@
 # EXP_SRV_QDISC holds the server ports' qdisc to a run's SRV_QDISC=.
 # EXP_NOTRACK=absent holds a run to no zc_notrack table (twoport.sh's NOTRACK=absent).
 # EXP_GRO_MAX holds the server ports' GRO max sizes to a run's GRO_MAX=.
+# EXP_RINGS holds the ports' ring count to a run's RINGS= (with EXP_LAYOUT).
 # EXP_REFILL holds xeu's rx_refill_thresh to a run's REFILL= instead of 8,
 # and EXP_XEU_<parameter> (exported) holds any xeu parameter to a value, for
 # a host whose xeu was loaded off the setting on purpose (rx_ip_align=0).
@@ -490,7 +491,7 @@ audit_port() {	# audit_port <a|b>
 	want "$d mtu" "$(cat /sys/class/net/$d/mtu)" $MTU
 	want "$d qdisc" "$(srv_qdisc $d)" "${EXP_SRV_QDISC:-$SRV_QDISC}"
 	want "$d GRO max size" "$(gro_max $d)" "${EXP_GRO_MAX:-$GRO_MAX}"
-	want "$d rings" "$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')" $RINGS
+	want "$d rings" "$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')" ${EXP_RINGS:-$RINGS}
 	want "$d ring depth" "$(ethtool -g $d | awk '/^RX:/ {v = $2} END {print v}')" "${ENTRIES[$p]}"
 	want "$d threaded NAPI" "$(cat /sys/class/net/$d/threaded)" 0
 	# Pause is off at both ends: it was left tx on from 11 October's pause

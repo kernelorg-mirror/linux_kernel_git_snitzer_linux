@@ -65,6 +65,12 @@
 #   TXIRQ_A=<cpu> TXIRQ_B=<cpu>  a port's Tx rings on two CPUs from <cpu>, and
 #                    its Rx rings one to a CPU on the port's eight
 #   TXN=<n>          with TXIRQ_A/B: the Tx rings on <n> CPUs from <cpu>, not two
+#   RX_RINGS=<n>     with RINGS: frames only to rings 0 to <n>-1 (the RSS table and the
+#                    placement), and every ring's interrupts on the four-ring layout,
+#                    Rx-i on 2i and Tx-i on 2i+1 of the port's eight, two rings a CPU
+#                    over four: more transmit queues without more receiving rings
+#   XPS=spread       each transmit queue's XPS map a block of nfsd's CPUs (8-55), so
+#                    every sender has a queue of its own (settled: tx-i on 8+i only)
 #   NFSD_CPUS=<list> nfsd's threads on these CPUs for the run (8-55 after it), to
 #                    keep them off CPUs given to Tx rings
 #   QDISC=fq|fqnp|fqNN  fq on the client's ports (fqnp: fq with pacing off; fqNN: maxrate
@@ -218,7 +224,7 @@ echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_
 for p in $PORTS; do
 	d=${DEV[$p]}
 	ip link set $d down; sleep 1
-	[ -n "${RINGS:-}" ] && { ethtool -X $d equal $RINGS 2>/dev/null; ethtool -L $d combined $RINGS; }
+	[ -n "${RINGS:-}" ] && { ethtool -X $d equal ${RX_RINGS:-$RINGS} 2>/dev/null; ethtool -L $d combined $RINGS; }
 	ip link set $d up
 done
 sleep 7
@@ -234,9 +240,23 @@ done
 for p in $PORTS; do
 	d=${DEV[$p]}
 	if [ -n "${RINGS:-}${TXIRQ[$p]}" ]; then
-		"$RIG/ring-irqs.sh" $d ${IRQ0[$p]} ${TXIRQ[$p]} >> geometry.txt	# an experiment's layout
+		# The table is spread again after the open, which may reset it.
+		[ -n "${RX_RINGS:-}" ] && ethtool -X $d equal $RX_RINGS
+		PAIRED=${RX_RINGS:+1} "$RIG/ring-irqs.sh" $d ${IRQ0[$p]} ${TXIRQ[$p]} >> geometry.txt	# an experiment's layout
+		[ -n "${RX_RINGS:-}" ] && for irq in $(awk -v n=$d-async '$NF == n {sub(/:/, "", $1); print $1}' /proc/interrupts); do
+			echo $(( ${IRQ0[$p]} + 1 )) > /proc/irq/$irq/smp_affinity_list	# with Tx-0, as settled.sh places it
+		done
 	else
 		"$RIG/settled.sh" place $p || exit 1
+	fi
+	if [ "${XPS:-}" = spread ]; then
+		nq=$(ls -d /sys/class/net/$d/queues/tx-* | wc -l); per=$(( 48 / nq ))
+		for q in /sys/class/net/$d/queues/tx-*; do
+			i=${q##*-}; m=$(( ((1 << per) - 1) << (8 + i * per) ))
+			printf '%08x,%08x\n' $(( (m >> 32) & 0xffffffff )) $(( m & 0xffffffff )) > $q/xps_cpus
+			echo 0 > $q/xps_rxqs
+		done
+		echo "$p: XPS $(for q in /sys/class/net/$d/queues/tx-*; do echo -n "$(basename $q):$(cat $q/xps_cpus) "; done)" | tee -a geometry.txt
 	fi
 	echo "$p: $d mtu $(cat /sys/class/net/$d/mtu) rings $(ethtool -l $d | awk '/Combined/{v=$2} END{print v}') x $(ethtool -g $d | awk '/^RX:/{v=$2} END{print v}')" | tee -a geometry.txt
 	# Straight after the port is opened the client's entry for the server's
@@ -303,7 +323,7 @@ if [ "${PLACE:-1}" != 0 ]; then
 		timeout -s INT 3 bpftrace -e "tracepoint:net:napi_gro_receive_entry /str(args.name) == \"$d\"/ { @flow[args.hash, args.napi_id] = sum(args.len); }" > place-flows-$p.txt 2>&1 < /dev/null
 		nr=$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')
 		n=$($YNL --do rss-get --json "{\"header\": {\"dev-name\": \"$d\"}}" --output-json 2>/dev/null | python3 -c 'import json, sys; print(len(json.load(sys.stdin).get("indir", [])))')
-		if tbl=$("$RIG/rss-place.py" place-flows-$p.txt "$nr" "$n" 13 2> place-$p.txt) &&
+		if tbl=$("$RIG/rss-place.py" place-flows-$p.txt "${RX_RINGS:-$nr}" "$n" 13 2> place-$p.txt) &&
 		   $YNL --do rss-set --json "{\"header\": {\"dev-name\": \"$d\"}, \"indir\": $tbl}" >> place-$p.txt 2>&1; then
 			echo "$p: placed $(grep -c '^flow' place-$p.txt) flows" | tee -a geometry.txt
 		else
@@ -324,7 +344,7 @@ fi
 # run is at; anything the run set on purpose is held to what it set.
 EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_WANT_EIGHTHS=${WANT_EIGHTHS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-} EXP_GRO_MAX=${GRO_MAX:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
-[ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}" ] && EXPENV="$EXPENV EXP_LAYOUT=RINGS=${RINGS:-4},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-}"
+[ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}${XPS:-}" ] && EXPENV="$EXPENV EXP_RINGS=${RINGS:-} EXP_LAYOUT=RINGS=${RINGS:-4},RX_RINGS=${RX_RINGS:-},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-},XPS=${XPS:-}"
 # the client's qdisc is set only on the ports of this run
 for p in $PORTS; do case "${QDISC:-}" in fq*) EXPENV="$EXPENV EXP_QDISC_$(tr a-z A-Z <<< $p)=fq" ;; codel) EXPENV="$EXPENV EXP_QDISC_$(tr a-z A-Z <<< $p)=fq_codel" ;; esac; done
 env $EXPENV "$RIG/settled.sh" audit $MODE_SET > audit.txt 2>&1 || { grep -E 'BAD|FAILED' audit.txt; exit 1; }
