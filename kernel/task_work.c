@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+#include <linux/export.h>
 #include <linux/irq_work.h>
 #include <linux/spinlock.h>
 #include <linux/task_work.h>
@@ -102,6 +103,7 @@ int task_work_add(struct task_struct *task, struct callback_head *work,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(task_work_add);
 
 /**
  * task_work_cancel_match - cancel a pending work added by task_work_add()
@@ -236,3 +238,4 @@ void task_work_run(void)
 		} while (work);
 	}
 }
+EXPORT_SYMBOL_GPL(task_work_run);
