@@ -199,7 +199,9 @@ static void svc_reclassify_socket(struct socket *sock)
  * Each network namespace has a budget of pages of
  * the fixed receive region that its TCP receive loans may hold, and one
  * default budget covers namespaces without one of their own; the budgets
- * together may not exceed the region.  The initial namespace's budget is
+ * together may not exceed the region's write partition, so a read partition
+ * split off with page_pool.rx_region_read_pages never takes their pressure.
+ * The initial namespace's budget is
  * svc_tcp_rx_budget_pages and svc_tcp_rx_budget_reserve, the default's is
  * svc_tcp_rx_budget_default_pages and svc_tcp_rx_budget_default_reserve, and
  * any namespace's is net.sunrpc.region_budget_pages and _reserve.
@@ -232,11 +234,53 @@ static void svc_reclassify_socket(struct socket *sock)
  * receive the frames it still needs and none ever ends.  A copied record
  * holds region pages only while it is being copied, so reading always
  * returns them.
+ *
+ * Credit is direction-neutral.  A READ that places its payload in the region
+ * draws on one global read pool (svc_rx_budget_read, reported by
+ * svc_tcp_rx_budget_read_stats, with no parameters of its own) or on its
+ * transport's budget; svc_tcp_rx_budget_read_for() picks:
+ *  - split region: every READ draws on the read pool, whose budget is the
+ *    read partition; namespaces are then isolated for receive only;
+ *  - shared region, transport with a budget (its namespace's, else the
+ *    default): the READ draws on that budget, as receive does;
+ *  - shared region, transport whose budget is 0: the READ draws on the read
+ *    pool, whose budget is then what the configured budgets leave of the
+ *    region.
+ * The read pool has no reserve: as for every budget, a reserve of 0 means
+ * the oldest in-flight record overruns the budget rather than stall.  The
+ * receive clamp (svc_tcp_rx_rcvbuf) bounds unread receive data, which READs
+ * do not have, so it never gates the read pool.  The pool is configured when
+ * the TCP transport class registers and again whenever a budget changes.
  */
 static unsigned int svc_tcp_rx_budget_pages;
 static unsigned int svc_tcp_rx_budget_reserve;
 static unsigned int svc_tcp_rx_budget_default_pages;
 static unsigned int svc_tcp_rx_budget_default_reserve;
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/* Stand-ins for a region's geometry, so KUnit needs no device. */
+static unsigned long svc_tcp_rx_kunit_region_pages;
+static unsigned long svc_tcp_rx_kunit_region_read;
+#endif
+
+static unsigned long svc_tcp_rx_region_size(void)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (READ_ONCE(svc_tcp_rx_kunit_region_pages))
+		return READ_ONCE(svc_tcp_rx_kunit_region_pages);
+#endif
+	return page_pool_rx_region_size();
+}
+
+/* Lockless: called under a budget's spinlock. */
+static unsigned long svc_tcp_rx_region_read_pages(void)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (READ_ONCE(svc_tcp_rx_kunit_region_pages))
+		return READ_ONCE(svc_tcp_rx_kunit_region_read);
+#endif
+	return page_pool_rx_region_read_pages();
+}
 
 /*
  * Two estimates that used to be one setting are found out as the server
@@ -268,6 +312,7 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
 						  unsigned int truesize,
 						  unsigned int skb_len,
 						  unsigned int used);
+static void svc_tcp_rx_budget_init(void);
 
 /* A clamp below SVC_TCP_RX_RCVBUF_MIN turns every budget off. */
 static int svc_tcp_rx_rcvbuf_set(const char *val,
@@ -361,8 +406,10 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_spare_kunit_pages);
  * lines, so that a lookup does not take a line another CPU has just written.
  */
 struct svc_tcp_rx_budget {
-	/* NULL for the default budget */
+	/* NULL for the default budget and the read pool */
 	struct net		*net;
+	/* the read partition's pool, svc_rx_budget_read */
+	bool			read;
 	/* requested budget, for a namespace other than the initial one */
 	unsigned int		cfg_pages;
 	unsigned int		cfg_reserve;
@@ -409,10 +456,25 @@ static struct svc_tcp_rx_budget svc_rx_budget_default = {
 	.waiters	= LIST_HEAD_INIT(svc_rx_budget_default.waiters),
 };
 
+/*
+ * The global read pool: the read partition when split, else what the
+ * configured budgets leave of the region.
+ */
+static struct svc_tcp_rx_budget svc_rx_budget_read = {
+	.lock		= __SPIN_LOCK_UNLOCKED(svc_rx_budget_read.lock),
+	.read		= true,
+	.next_ticket	= 1,
+	.node		= LIST_HEAD_INIT(svc_rx_budget_read.node),
+	.inflight	= LIST_HEAD_INIT(svc_rx_budget_read.inflight),
+	.waiters	= LIST_HEAD_INIT(svc_rx_budget_read.waiters),
+};
+
 /* Namespace budgets, the initial one included. */
 static LIST_HEAD(svc_rx_budget_pools);
 static struct svc_tcp_rx_budget *svc_rx_budget_init;
 static DEFINE_MUTEX(svc_rx_budget_cfg_lock);
+/* Sum of the configured budgets; written under svc_rx_budget_cfg_lock. */
+static unsigned long svc_rx_budget_configured_total;
 
 static struct svc_tcp_rx_budget *svc_tcp_rx_budget_net(const struct net *net)
 {
@@ -424,7 +486,22 @@ static void svc_tcp_rx_budget_requested(const struct svc_tcp_rx_budget *c,
 					unsigned int *pages,
 					unsigned int *reserve)
 {
-	if (!c->net) {
+	if (c->read) {
+		*pages = svc_tcp_rx_region_read_pages();
+		/*
+		 * Shared region: what the configured budgets leave, for the
+		 * READs of transports whose budget is 0.
+		 */
+		if (!*pages) {
+			unsigned long region = svc_tcp_rx_region_size();
+			unsigned long used =
+				READ_ONCE(svc_rx_budget_configured_total);
+
+			*pages = region > used ? min(region - used,
+						     (unsigned long)UINT_MAX) : 0;
+		}
+		*reserve = 0;
+	} else if (!c->net) {
 		*pages = READ_ONCE(svc_tcp_rx_budget_default_pages);
 		*reserve = READ_ONCE(svc_tcp_rx_budget_default_reserve);
 	} else if (net_eq(c->net, &init_net)) {
@@ -479,13 +556,14 @@ static struct svc_tcp_rx_budget *svc_tcp_rx_budget_initial(void)
 
 /*
  * Set the budget of @target to @pages, unless the budgets together would
- * exceed the region.  @target is the default budget, a namespace's, or NULL
+ * exceed the region's write partition.  @target is the default budget, a namespace's, or NULL
  * for the initial namespace's before it exists (module parameters at load).
  */
 static int svc_tcp_rx_budget_set(struct svc_tcp_rx_budget *target,
 				 unsigned int pages)
 {
-	unsigned long region = page_pool_rx_region_size(), total = 0;
+	unsigned long region = svc_tcp_rx_region_size(), total = 0;
+	unsigned long write = region - svc_tcp_rx_region_read_pages();
 	bool init_target = !target || svc_tcp_rx_budget_is_init(target);
 	struct svc_tcp_rx_budget *pos;
 	unsigned int cur, reserve;
@@ -507,7 +585,7 @@ static int svc_tcp_rx_budget_set(struct svc_tcp_rx_budget *target,
 	}
 	if (!init_counted)
 		total += init_target ? pages : READ_ONCE(svc_tcp_rx_budget_pages);
-	if (region && total > region) {
+	if (region && total > write) {
 		mutex_unlock(&svc_rx_budget_cfg_lock);
 		return -ENOSPC;
 	}
@@ -517,10 +595,12 @@ static int svc_tcp_rx_budget_set(struct svc_tcp_rx_budget *target,
 		WRITE_ONCE(svc_tcp_rx_budget_pages, pages);
 	else
 		WRITE_ONCE(target->cfg_pages, pages);
+	WRITE_ONCE(svc_rx_budget_configured_total, total);
 	svc_tcp_rx_loans_update_locked();
 	mutex_unlock(&svc_rx_budget_cfg_lock);
 	svc_tcp_rx_budget_apply(init_target ? svc_tcp_rx_budget_initial() :
 				target);
+	svc_tcp_rx_budget_apply(&svc_rx_budget_read);
 	return 0;
 }
 
@@ -618,6 +698,10 @@ module_param_cb(svc_tcp_rx_budget_default_stats, &svc_tcp_rx_budget_stats_ops,
 		&svc_rx_budget_default, 0444);
 MODULE_PARM_DESC(svc_tcp_rx_budget_default_stats,
 		 "State of the default region budget");
+module_param_cb(svc_tcp_rx_budget_read_stats, &svc_tcp_rx_budget_stats_ops,
+		&svc_rx_budget_read, 0444);
+MODULE_PARM_DESC(svc_tcp_rx_budget_read_stats,
+		 "State of the global read pool (split: the read partition; shared: what the budgets leave of the region)");
 
 /* net.sunrpc.region_budget_pages and _reserve: a namespace's budget. */
 static int svc_tcp_rx_budget_sysctl(const struct ctl_table *table, int write,
@@ -737,8 +821,14 @@ void svc_tcp_rx_budget_net_exit(struct net *net)
 	list_del(&c->node);
 	if (svc_rx_budget_init == c)
 		svc_rx_budget_init = NULL;
+	else
+		WRITE_ONCE(svc_rx_budget_configured_total,
+			   svc_rx_budget_configured_total -
+			   min_t(unsigned long, READ_ONCE(c->cfg_pages),
+				 svc_rx_budget_configured_total));
 	svc_tcp_rx_loans_update_locked();
 	mutex_unlock(&svc_rx_budget_cfg_lock);
+	svc_tcp_rx_budget_apply(&svc_rx_budget_read);
 	/* The namespace's transports, and so their records, are gone. */
 	WARN_ON_ONCE(c->inflight_count || !list_empty(&c->waiters));
 	sn->rx_budget = NULL;
@@ -847,6 +937,39 @@ void svc_tcp_rx_kunit_restore(void)
 	svc_tcp_rx_budget_apply_all();
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_restore);
+
+/*
+ * Stand in for a region of @pages pages with @read_pages split off for
+ * reads (0, 0: the real region, if any).  Nothing is applied: the read pool
+ * picks it up lazily, or from svc_tcp_rx_budget_kunit_init().
+ */
+void svc_tcp_rx_budget_kunit_region(unsigned long pages,
+				    unsigned long read_pages)
+{
+	WRITE_ONCE(svc_tcp_rx_kunit_region_read, read_pages);
+	WRITE_ONCE(svc_tcp_rx_kunit_region_pages, pages);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_region);
+
+/* What svc_init_xprt_sock() does for the budgets. */
+void svc_tcp_rx_budget_kunit_init(void)
+{
+	svc_tcp_rx_budget_init();
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_init);
+
+struct svc_tcp_rx_budget *svc_tcp_rx_budget_kunit_read(void)
+{
+	return &svc_rx_budget_read;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_read);
+
+int svc_tcp_rx_budget_kunit_stats(struct svc_tcp_rx_budget *c, char *buf,
+				  size_t size)
+{
+	return svc_tcp_rx_budget_format(c, buf, size);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_stats);
 #endif
 
 /*
@@ -861,7 +984,9 @@ static bool svc_tcp_rx_budget_configure_locked(struct svc_tcp_rx_budget *c)
 	unsigned int budget, reserve;
 
 	svc_tcp_rx_budget_requested(c, &budget, &reserve);
-	if (budget && READ_ONCE(svc_tcp_rx_rcvbuf) < SVC_TCP_RX_RCVBUF_MIN)
+	/* The receive clamp bounds unread receive data; READs have none. */
+	if (budget && !c->read &&
+	    READ_ONCE(svc_tcp_rx_rcvbuf) < SVC_TCP_RX_RCVBUF_MIN)
 		budget = 0;
 	reserve = min(reserve, budget);
 
@@ -1076,31 +1201,46 @@ static void svc_tcp_rx_budget_apply(struct svc_tcp_rx_budget *c)
 	svc_tcp_rx_credit_wake(wake);
 }
 
+/*
+ * At TCP transport class registration: the read pool needs no rcvbuf, so
+ * configure it now, not first when the clamp is written.
+ */
+static void svc_tcp_rx_budget_init(void)
+{
+	static_assert(PAGE_POOL_RX_REGION_READ_MIN * PAGE_SIZE >=
+		      RPCSVC_MAXPAYLOAD + PAGE_SIZE);
+	svc_tcp_rx_budget_apply(&svc_rx_budget_read);
+}
+
 static void svc_tcp_rx_budget_apply_all(void)
 {
 	struct svc_tcp_rx_budget *pos;
 
 	svc_tcp_rx_budget_apply(&svc_rx_budget_default);
+	svc_tcp_rx_budget_apply(&svc_rx_budget_read);
 	mutex_lock(&svc_rx_budget_cfg_lock);
 	list_for_each_entry(pos, &svc_rx_budget_pools, node)
 		svc_tcp_rx_budget_apply(pos);
 	mutex_unlock(&svc_rx_budget_cfg_lock);
 }
 
-static bool svc_tcp_rx_budget_on(struct svc_tcp_rx_budget *c)
+VISIBLE_IF_KUNIT bool svc_tcp_rx_budget_on(struct svc_tcp_rx_budget *c)
 {
 	unsigned int pages, reserve;
 	bool configured;
 
 	svc_tcp_rx_budget_requested(c, &pages, &reserve);
 	configured = pages != 0;
-	if (configured && READ_ONCE(svc_tcp_rx_rcvbuf) < SVC_TCP_RX_RCVBUF_MIN) {
+	/* The receive clamp does not gate the read pool. */
+	if (configured && !c->read &&
+	    READ_ONCE(svc_tcp_rx_rcvbuf) < SVC_TCP_RX_RCVBUF_MIN) {
 		pr_warn_once("svc: a region budget needs svc_tcp_rx_rcvbuf >= %u; budgets off\n",
 			     SVC_TCP_RX_RCVBUF_MIN);
 		configured = false;
 	}
 	return configured || READ_ONCE(c->budget);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_on);
 
 /*
  * The budget @svsk draws on: the one it waits on, else its namespace's if
@@ -1143,6 +1283,29 @@ static bool svc_tcp_rx_budget_none(struct svc_sock *svsk)
 		return true;
 	return svc_tcp_rx_budget_zero(svc_tcp_rx_budget_for(svsk));
 }
+/**
+ * svc_tcp_rx_budget_read_for - the budget a READ on @svsk draws on
+ * @svsk: the transport the READ arrived on
+ *
+ * Return: the read partition's pool when the region is split, else the
+ * budget @svsk's receive draws on (its namespace's or the default), or the
+ * read pool when that budget is 0.
+ */
+struct svc_tcp_rx_budget *svc_tcp_rx_budget_read_for(struct svc_sock *svsk)
+{
+	struct svc_tcp_rx_budget *c;
+	unsigned int pages, reserve;
+
+	if (svc_tcp_rx_region_read_pages())
+		return &svc_rx_budget_read;
+	c = svc_tcp_rx_budget_for(svsk);
+	svc_tcp_rx_budget_requested(c, &pages, &reserve);
+	/* A transport whose budget is 0 draws on the global read pool. */
+	if (!pages)
+		return &svc_rx_budget_read;
+	return c;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_read_for);
 
 VISIBLE_IF_KUNIT void svc_tcp_rx_credit_forget(struct svc_sock *svsk);
 
@@ -4399,6 +4562,7 @@ static struct svc_xprt_class svc_tcp_class = {
 
 void svc_init_xprt_sock(void)
 {
+	svc_tcp_rx_budget_init();
 	svc_reg_xprt_class(&svc_tcp_class);
 	svc_reg_xprt_class(&svc_udp_class);
 }
