@@ -1,0 +1,10 @@
+== rodata=full
+L64-1-u write 8.36 GB/s, 7977 IOPS; completion ms: p50 0.420, p90 0.485, p99 0.545, p99.9 0.610, mean 0.431, max 0.859
+L64-1-t write 8.46 GB/s, 8068 IOPS; completion ms: p50 0.424, p90 0.465, p99 0.537, p99.9 0.627, mean 0.432, max 1.021
+L64-2-u write 8.40 GB/s, 8007 IOPS; completion ms: p50 0.424, p90 0.494, p99 0.561, p99.9 0.668, mean 0.434, max 0.946
+L64-2-t write 8.50 GB/s, 8107 IOPS; completion ms: p50 0.424, p90 0.461, p99 0.522, p99.9 0.561, mean 0.430, max 0.853
+== rodata=noalias
+L64-1-u write 8.46 GB/s, 8069 IOPS; completion ms: p50 0.420, p90 0.469, p99 0.528, p99.9 0.610, mean 0.425, max 0.722
+L64-1-t write 8.58 GB/s, 8185 IOPS; completion ms: p50 0.420, p90 0.457, p99 0.518, p99.9 0.545, mean 0.424, max 0.596
+L64-2-u write 8.54 GB/s, 8142 IOPS; completion ms: p50 0.420, p90 0.469, p99 0.528, p99.9 0.610, mean 0.426, max 0.739
+L64-2-t write 8.58 GB/s, 8184 IOPS; completion ms: p50 0.420, p90 0.453, p99 0.518, p99.9 0.561, mean 0.424, max 0.715

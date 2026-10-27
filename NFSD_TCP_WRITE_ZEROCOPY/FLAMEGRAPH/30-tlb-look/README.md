@@ -111,9 +111,53 @@
 
 **Latency** ([latency-noalias.txt](latency-noalias.txt), at iodepth 1): untraced, p50 0.432 and 0.461 ms, mean 0.442 and 0.463, against round 28's B at p50 0.444 and 0.416, mean 0.446 and 0.429. The same. The first latency run overlapped a 12 s rebuild of the initrd, on CPUs 56 to 63 at idle priority, and does not differ from the second.
 
+## The A/B again, with the look on nfsd's CPUs on both sides
+
+**Run 2026-10-27 on tardis2** (driver [run64.sh](run64.sh), the runs `/var/tmp/zc-run-logs/t2-r64-full/` and `t2-r64-noalias/`):
+- **A** booted with `rodata=full` (16:19 to 16:53), **B** with `rodata=noalias` (17:22 to 17:56), with a reboot between them.
+- **Both sides:** the tip's sunrpc (`A06FE478658242A10E100FF`), the kernel's nfsd (`3F0C341E86E266D5FDF2ADF`), xeu `2C05DF674C9D013185FDB34` with `rx_prefetch` Y, and the settled setting (A's audit differs only in `rodata`).
+- **The runs:** the same as run58.sh's, with one addition. The look runs `perf stat` and samples `dtlb_walk` on nfsd's CPUs (8 to 55) as well as on the rings, on both sides.
+- No run raised a WARNING or had an overrun. Every run was DRIVE-LIMITED, with no drive stepped down.
+- **A's r64-4:** its total for the whole run is 36.08 GB/s, with a third fewer loans admitted. Its measured window is like the others' (38,598 WRITEs a second, 40.74 GB/s on the wire), so it is kept.
+
+**Cost a loaned WRITE** ([cost-r64.txt](cost-r64.txt), the four untraced runs a side):
+
+| per loaned WRITE | A, `rodata=full` | B, `rodata=noalias` | B − A |
+|---|---|---|---|
+| rings, µs | 47.55 ± 0.56 | 44.60 ± 0.99 | **−2.95 ± 0.57 (−6.2%)** |
+| nfsd, µs | 100.50 ± 2.56 | 91.67 ± 1.43 | **−8.83 ± 1.47 (−8.8%)** |
+| region peak in use, pages | 6292 to 6877 | 6318 to 6597 | about the same |
+
+- **nfsd:** about 6.0 standard errors. Every B run (90.3 to 93.5) is below every A run (97.6 to 102.7).
+- **The rings:** about 5.2 standard errors. Every B run (43.5 to 45.7) is below every A run (47.0 to 49.0). Round 30's first A/B found no change on the rings; this one finds 3 µs.
+- **The base is different from the first A/B.** That one used build 499's own sunrpc. This one uses the tip's, which is why nfsd is at 100 µs here and was at 112 there.
+
+**The look, per loaned WRITE** ([stat-nfsd-r64-full.txt](stat-nfsd-r64-full.txt), [stat-nfsd-r64-noalias.txt](stat-nfsd-r64-noalias.txt), [stat-rings-r64-full.txt](stat-rings-r64-full.txt), [stat-rings-r64-noalias.txt](stat-rings-r64-noalias.txt); 157,396 and 157,877 WRITEs):
+
+| event | nfsd's CPUs, A | nfsd's CPUs, B | rings, A | rings, B |
+|---|---|---|---|---|
+| cycles | 312.7k | 293.0k | 143.6k | 141.7k |
+| page-table walks (`dtlb_walk`) | **108** | **2.1** | 60.6 | 0.29 |
+| L1 TLB misses (`dtlb-load-misses`) | 1,306 | 311 | 1,044 | 181 |
+| L1D read refills | 1,575 | 1,535 | 515 | 548 |
+| L2 read refills | 4,773 | 4,030 | 946 | 908 |
+| last-level cache read misses | 2,731 | 2,373 | 992 | 903 |
+| backend memory stall cycles | 101.0k (32%) | 92.8k (32%) | 29.2k (20%) | 28.0k (20%) |
+
+- **This is the before that the first A/B lacked.** On `rodata=full`, nfsd's CPUs walk page tables 108 times a WRITE. With the linear map in blocks that falls to 2.
+- **The cycles agree with the untraced runs.** nfsd's CPUs spend 19.7k fewer cycles a WRITE, about 6.6 µs at 3 GHz, against −8.8 µs untraced. The rings spend 1.9k fewer cycles, about 0.6 µs, against −3.0 µs.
+- **The memory stall falls with the cycles** (−8.2k cycles on nfsd's CPUs), as does the count of L2 refills. That fits walks that miss the cache: a walk's table loads are refills of their own.
+- **Where nfsd's CPUs walk on A** ([walk-top-nfsd-r64-full.txt](walk-top-nfsd-r64-full.txt)): about a twelfth of the samples are in `_raw_spin_unlock_irqrestore`, where interrupts and softirqs land. After that come `svc_tcp_rx_prefetch_pages` (4.4%), `__memcg_slab_free_hook` (4.1%), `__pi_memset_generic` and `kmem_cache_free`. These are the receive path's page and slab work.
+- **On B too few walks are left to place.** The B profile ([walk-top-nfsd-r64-noalias.txt](walk-top-nfsd-r64-noalias.txt)) includes process setup and teardown (`copy_present_ptes`, `zap_present_ptes`, `el0_da`). Those are most likely the look's own shell loop.
+
+**Latency** ([latency-r64.txt](latency-r64.txt), at iodepth 1): untraced, p50 0.420 and 0.424 ms on A against 0.420 and 0.420 on B; the mean 0.431 and 0.434 ms against 0.425 and 0.426. B's p90 is 0.02 ms lower and its p99 0.02 to 0.03 ms lower, a slight gain at most.
+
 ## Decision
 
 - **A look; the descriptor-entry prefetch is not built.**
 - **`rodata=noalias`:** nfsd 5.23 ± 0.83 µs a WRITE cheaper (−4.7%), with the rings, rate, region and latency the same. The rings' 69 page-table walks a WRITE are gone, but they were not the rings' cost.
 - **`rodata=noalias` kept (Mike, 27 October):** `settled.sh` holds the kernel's command line at it (`f20aad763e78`), and a boot without it audits BAD. It costs the linear map's read-only aliases of the kernel's text and read-only data, a security trade-off still to be weighed for Hammerspace's product.
-- **What would settle the nfsd figure:** the look on nfsd's CPUs on a `rodata=full` boot, the A this A/B lacks.
+- **The nfsd figure is settled** (run64.sh, both sides measured on the tip's sunrpc):
+  - nfsd is 8.83 ± 1.47 µs a WRITE cheaper (−8.8%), and the rings 2.95 ± 0.57 (−6.2%).
+  - On nfsd's CPUs, the page-table walks fall from 108 to 2 a WRITE, with 19.7k fewer cycles.
+  - The region and latency are the same. The saving is the TLB's.
