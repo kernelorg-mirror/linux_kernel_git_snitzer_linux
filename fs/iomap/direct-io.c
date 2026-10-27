@@ -11,6 +11,9 @@
 #include <linux/task_io_accounting_ops.h>
 #include <linux/fserror.h>
 #include <linux/init.h>
+#if IS_ENABLED(CONFIG_KUNIT)
+#include <kunit/visibility.h>
+#endif
 #include "internal.h"
 #include "trace.h"
 
@@ -330,6 +333,46 @@ static inline void iomap_dio_set_error(struct iomap_dio *dio, int ret)
 			return;
 	} while (!try_cmpxchg(&dio->error, &error, ret));
 }
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/* Error-field fixtures acquire no I/O references and never call complete(). */
+struct iomap_dio *iomap_dio_kunit_alloc(struct kiocb *iocb, bool is_write)
+{
+	struct iomap_dio *dio = kzalloc_obj(*dio, GFP_KERNEL);
+
+	if (dio) {
+		dio->iocb = iocb;
+		if (is_write)
+			dio->flags = IOMAP_DIO_WRITE;
+	}
+	return dio;
+}
+EXPORT_SYMBOL_IF_KUNIT(iomap_dio_kunit_alloc);
+
+void iomap_dio_kunit_set_error(struct iomap_dio *dio, int error)
+{
+	iomap_dio_set_error(dio, error);
+}
+EXPORT_SYMBOL_IF_KUNIT(iomap_dio_kunit_set_error);
+
+int iomap_dio_kunit_read_error(struct iomap_dio *dio)
+{
+	return READ_ONCE(dio->error);
+}
+EXPORT_SYMBOL_IF_KUNIT(iomap_dio_kunit_read_error);
+
+void iomap_dio_kunit_free(struct iomap_dio *dio)
+{
+	kfree(dio);
+}
+EXPORT_SYMBOL_IF_KUNIT(iomap_dio_kunit_free);
+
+ssize_t iomap_dio_kunit_result(struct kiocb *iocb, ssize_t result)
+{
+	return iomap_dio_result(iocb, result);
+}
+EXPORT_SYMBOL_IF_KUNIT(iomap_dio_kunit_result);
+#endif
 
 /*
  * Called when dio->ref reaches zero from an I/O completion.

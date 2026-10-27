@@ -6,6 +6,10 @@
 
 #include <linux/blk_types.h>
 #include <linux/bio.h>
+#if IS_ENABLED(CONFIG_KUNIT)
+#include <linux/export.h>
+#include <kunit/visibility.h>
+#endif
 #include "bio.h"
 #include "ctree.h"
 #include "volumes.h"
@@ -20,6 +24,84 @@ static struct bio_set btrfs_bioset;
 static struct bio_set btrfs_clone_bioset;
 static struct bio_set btrfs_repair_bioset;
 static mempool_t btrfs_failed_bio_pool;
+
+#if IS_ENABLED(CONFIG_KUNIT)
+void *btrfs_split_kunit_alloc(void (*complete)(blk_status_t status, void *data), void *data);
+void btrfs_split_kunit_end_io(void *opaque, bool is_clone, blk_status_t status);
+void btrfs_split_kunit_free(void *opaque);
+
+struct btrfs_split_kunit {
+	struct btrfs_bio *original;
+	struct btrfs_bio *clone;
+	void (*complete)(blk_status_t status, void *data);
+	void *data;
+};
+
+static void btrfs_split_kunit_complete(struct btrfs_bio *bbio)
+{
+	struct btrfs_split_kunit *fixture = bbio->private;
+
+	fixture->complete(bbio->bio.bi_status, fixture->data);
+}
+
+void *btrfs_split_kunit_alloc(void (*complete)(blk_status_t status, void *data), void *data)
+{
+	struct btrfs_split_kunit *fixture;
+	struct bio *bio;
+
+	fixture = kzalloc_obj(*fixture, GFP_KERNEL);
+	if (!fixture)
+		return NULL;
+	bio = bio_alloc_bioset(NULL, 0, REQ_OP_READ | REQ_META, GFP_KERNEL,
+			       &btrfs_bioset);
+	if (!bio)
+		goto out_free;
+	fixture->original = btrfs_bio(bio);
+	memset(fixture->original, 0, offsetof(struct btrfs_bio, bio));
+	fixture->original->end_io = btrfs_split_kunit_complete;
+	fixture->original->private = fixture;
+	atomic_set(&fixture->original->pending_ios, 2);
+	bio = bio_alloc_bioset(NULL, 0, REQ_OP_READ | REQ_META, GFP_KERNEL,
+			       &btrfs_clone_bioset);
+	if (!bio)
+		goto out_original;
+	fixture->clone = btrfs_bio(bio);
+	memset(fixture->clone, 0, offsetof(struct btrfs_bio, bio));
+	fixture->clone->private = fixture->original;
+	fixture->complete = complete;
+	fixture->data = data;
+	return fixture;
+out_original:
+	bio_put(&fixture->original->bio);
+out_free:
+	kfree(fixture);
+	return NULL;
+}
+EXPORT_SYMBOL_IF_KUNIT(btrfs_split_kunit_alloc);
+
+void btrfs_split_kunit_end_io(void *opaque, bool is_clone, blk_status_t status)
+{
+	struct btrfs_split_kunit *fixture = opaque;
+	struct btrfs_bio *bbio = is_clone ? fixture->clone : fixture->original;
+
+	/* The actual owner frees and rebinds a completed clone. */
+	if (is_clone)
+		fixture->clone = NULL;
+	btrfs_bio_end_io(bbio, status);
+}
+EXPORT_SYMBOL_IF_KUNIT(btrfs_split_kunit_end_io);
+
+void btrfs_split_kunit_free(void *opaque)
+{
+	struct btrfs_split_kunit *fixture = opaque;
+
+	if (fixture->clone)
+		bio_put(&fixture->clone->bio);
+	bio_put(&fixture->original->bio);
+	kfree(fixture);
+}
+EXPORT_SYMBOL_IF_KUNIT(btrfs_split_kunit_free);
+#endif
 
 struct btrfs_failed_bio {
 	struct btrfs_bio *bbio;
