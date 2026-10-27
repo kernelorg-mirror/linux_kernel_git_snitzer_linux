@@ -48,6 +48,10 @@
 #include "stats.h"
 #include "vfs.h"
 #include "filecache.h"
+#if IS_ENABLED(CONFIG_KUNIT)
+#include <linux/export.h>
+#include <kunit/visibility.h>
+#endif
 #include "trace.h"
 
 #define NFSDDBG_FACILITY		NFSDDBG_FILEOP
@@ -1430,7 +1434,12 @@ static ssize_t nfsd_dio_write_async(struct file *file, struct kiocb *kiocb,
 static noinline_for_stack int
 nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		  struct nfsd_file *nf, unsigned int nvecs,
-		  unsigned long *cnt, struct kiocb *kiocb, errseq_t since)
+		  unsigned long *cnt, struct kiocb *kiocb,
+#if IS_ENABLED(CONFIG_KUNIT)
+		  errseq_t since, const struct nfsd_dio_kunit_hooks *hooks)
+#else
+		  errseq_t since)
+#endif
 {
 	struct nfs_dio_seg_hold holds[NFS_DIO_MAX_SEGS];
 	size_t written[NFS_DIO_MAX_SEGS];
@@ -1508,6 +1517,10 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			host_err = filemap_check_wb_err(file->f_mapping, since);
 			if (host_err)
 				break;
+#if IS_ENABLED(CONFIG_KUNIT)
+			if (hooks && hooks->before_reissue)
+				hooks->before_reissue(kiocb, &saved_iter, hooks->data);
+#endif
 			seg->iter = saved_iter;
 			seg->claim = split.dontcache;
 			kiocb->ki_flags &= ~(IOCB_DIRECT | IOCB_DONTCACHE |
@@ -1543,6 +1556,18 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	return host_err < 0 ? host_err : 0;
 }
+
+#if IS_ENABLED(CONFIG_KUNIT)
+int nfsd_direct_write_kunit(struct svc_rqst *rqstp, struct svc_fh *fhp,
+			    struct nfsd_file *nf, unsigned int nvecs,
+			    unsigned long *cnt, struct kiocb *kiocb, errseq_t since,
+			    const struct nfsd_dio_kunit_hooks *hooks)
+{
+	return nfsd_direct_write(rqstp, fhp, nf, nvecs, cnt, kiocb, since,
+				 hooks);
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd_direct_write_kunit);
+#endif
 
 /**
  * nfsd_vfs_write - write data to an already-open file
@@ -1620,8 +1645,12 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	switch (nfsd_io_cache_write) {
 	case NFSD_IO_DIRECT:
-		host_err = nfsd_direct_write(rqstp, fhp, nf, nvecs,
-					     cnt, &kiocb, since);
+		host_err = nfsd_direct_write(rqstp, fhp, nf, nvecs, cnt, &kiocb,
+#if IS_ENABLED(CONFIG_KUNIT)
+					     since, NULL);
+#else
+					     since);
+#endif
 		break;
 	case NFSD_IO_DONTCACHE:
 		if (file->f_op->fop_flags & FOP_DONTCACHE)
