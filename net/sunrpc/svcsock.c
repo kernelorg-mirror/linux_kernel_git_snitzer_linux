@@ -43,7 +43,6 @@
 #include <net/rx_loan.h>
 #include <net/xdp.h>
 #include <net/netns/generic.h>
-#include <linux/sysctl.h>
 #include <net/tls_prot.h>
 #include <net/handshake.h>
 #include <linux/uaccess.h>
@@ -68,6 +67,7 @@
 #include "socklib.h"
 #include "sunrpc.h"
 #include "netns.h"
+#include <linux/debugfs.h>
 
 #define RPCDBG_FACILITY	RPCDBG_SVCXPRT
 
@@ -210,10 +210,11 @@ static void svc_reclassify_socket(struct socket *sock)
  * default budget covers namespaces without one of their own; the budgets
  * together may not exceed the region's write partition, so a read partition
  * split off with page_pool.rx_region_read_pages never takes their pressure.
- * The initial namespace's budget is
- * svc_tcp_rx_budget_pages and svc_tcp_rx_budget_reserve, the default's is
- * svc_tcp_rx_budget_default_pages and svc_tcp_rx_budget_default_reserve, and
- * any namespace's is net.sunrpc.region_budget_pages and _reserve.
+ * A namespace's budget is overridden in debugfs, rx_loan/<netns>/write/pages
+ * and reserve (the initial namespace's kept in svc_tcp_rx_budget_pages and
+ * svc_tcp_rx_budget_reserve); no module parameter or sysctl sets one.  The
+ * default budget is set by KUnit only: in service it stays 0, and a
+ * namespace without a budget copies its region records.
  *
  * A loaned record is admitted at its first skb that carries region pages,
  * against an estimated page cost, each later skb is charged the region loan
@@ -245,9 +246,11 @@ static void svc_reclassify_socket(struct socket *sock)
  * returns them.
  *
  * Credit is direction-neutral.  A READ that places its payload in the region
- * draws on one global read pool (svc_rx_budget_read, reported by
- * svc_tcp_rx_budget_read_stats, with no parameters of its own) or on its
- * transport's budget; svc_tcp_rx_budget_read_for() picks:
+ * draws on its namespace's READ budget (rx_loan_net()->read; for the
+ * initial namespace the read pool, svc_rx_budget_read), under the
+ * region-wide cap and with no parameters of its own, reported in
+ * debugfs rx_loan/<netns inum>/read/stats, or on its transport's budget;
+ * svc_tcp_rx_budget_read_for() picks:
  *  - split region: every READ draws on the read pool, whose budget is the
  *    read partition; namespaces are then isolated for receive only;
  *  - shared region, transport with a budget (its namespace's, else the
@@ -290,6 +293,10 @@ static unsigned int svc_tcp_rx_kunit_factor;
 #endif
 
 static unsigned int svc_tcp_rx_rcvbuf;
+/* svc_tcp_rx_rcvbuf was set (a parameter, or KUnit): it is what applies */
+static bool svc_tcp_rx_rcvbuf_given;
+/* a write budget, configured or computed, wants loans (loans_update) */
+static bool svc_tcp_rx_rcvbuf_wanted;
 static void svc_tcp_rx_budget_apply_all(void);
 static bool svc_tcp_rx_hold_stale(struct svc_sock *svsk);
 VISIBLE_IF_KUNIT void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
@@ -304,8 +311,10 @@ static int svc_tcp_rx_rcvbuf_set(const char *val,
 {
 	int ret = param_set_uint(val, kp);
 
-	if (!ret)
+	if (!ret) {
+		WRITE_ONCE(svc_tcp_rx_rcvbuf_given, true);
 		svc_tcp_rx_budget_apply_all();
+	}
 	return ret;
 }
 
@@ -382,6 +391,33 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_spare_kunit_pages);
  * overflows it, so budgets stay off below this.
  */
 #define SVC_TCP_RX_RCVBUF_MIN	(128 * 1024)
+/*
+ * The clamp with no svc_tcp_rx_rcvbuf given, while a write budget wants
+ * loans: what the qualified sizing ran with.
+ */
+#define SVC_TCP_RX_RCVBUF_DEFAULT	(256 * 1024)
+
+/*
+ * The receive clamp in force: svc_tcp_rx_rcvbuf if it was given; else
+ * SVC_TCP_RX_RCVBUF_DEFAULT while a write budget, configured or computed,
+ * wants loans and (@region) a region exists; else 0, stock autotuning.
+ * The budget gates pass @region false: a budget staged before the region
+ * is carved lends from it once it is, without a restage.
+ */
+static unsigned int __svc_tcp_rx_rcvbuf_effective(bool region)
+{
+	if (READ_ONCE(svc_tcp_rx_rcvbuf_given))
+		return READ_ONCE(svc_tcp_rx_rcvbuf);
+	if (!READ_ONCE(svc_tcp_rx_rcvbuf_wanted) ||
+	    (region && !rx_loan_region_write_default()))
+		return 0;
+	return SVC_TCP_RX_RCVBUF_DEFAULT;
+}
+
+static unsigned int svc_tcp_rx_rcvbuf_effective(void)
+{
+	return __svc_tcp_rx_rcvbuf_effective(true);
+}
 
 /*
  * NFSD READ confinement: direct READ payloads in rx region pages, sent
@@ -394,9 +430,7 @@ MODULE_PARM_DESC(svc_tcp_rx_region_reads,
 		 "Confine NFSD READ payloads to the rx region, served by direct I/O (default: N)");
 
 static unsigned int svc_tcp_rx_region_conn_share __read_mostly;
-module_param(svc_tcp_rx_region_conn_share, uint, 0644);
-MODULE_PARM_DESC(svc_tcp_rx_region_conn_share,
-		 "Most rx region pages one connection's READ replies may hold (0: twice the largest READ)");
+/* rx_loan/sunrpc/conn_share, one for all; 0: twice the largest READ */
 
 /*
  * Q-C (decided): 10 s by default, a deliberate deviation from stock NFSD,
@@ -415,11 +449,26 @@ MODULE_PARM_DESC(svc_tcp_rx_region_user_timeout,
  * admission and release write.
  */
 struct svc_tcp_rx_budget {
-	struct rx_loan_budget	lb;
+	/* only the default budget's and KUnit's: lb points here */
+	struct rx_loan_budget	own;
+	/*
+	 * The budget it lends from: for a namespace, rx_loan_net()'s write
+	 * budget (the read pool: the initial namespace's READ budget), which
+	 * every consumer in the namespace shares; else own.
+	 */
+	struct rx_loan_budget	*lb ____cacheline_aligned_in_smp;
 	/* NULL for the default budget and the read pool */
-	struct net		*net ____cacheline_aligned_in_smp;
+	struct net		*net;
+	/* the namespace's rx_loan budget lb points at (KUnit may swap in own) */
+	struct rx_loan_budget	*shared;
+	/* a namespace's READ budget (rx_loan_net()->read), or the read pool */
+	struct svc_tcp_rx_budget *read;
+	/* the server that registered the consumer (svc_tcp_rx_serv_threads()) */
+	struct svc_serv		*consumer_serv;
 	struct list_head	node;		/* svc_rx_budget_pools */
-	struct ctl_table_header	*sysctl;
+	struct dentry		*debugfs;	/* rx_loan/<netns>/ */
+	/* the namespace's server (nfsd), registered as it starts */
+	struct rx_loan_consumer	consumer;
 	atomic64_t		bounced ____cacheline_aligned_in_smp;
 	atomic64_t		bounce_refused;
 	/* confined NFSD READs (svc_tcp_rx_region_read) */
@@ -432,13 +481,15 @@ static DEFINE_PER_CPU(struct rx_loan_stock, svc_rx_stock_default);
 static DEFINE_PER_CPU(struct rx_loan_stock, svc_rx_stock_read);
 
 static struct svc_tcp_rx_budget svc_rx_budget_default = {
-	.lb.stock		= &svc_rx_stock_default,
-	.lb.lock		= __SPIN_LOCK_UNLOCKED(svc_rx_budget_default.lock),
-	.lb.next_ticket	= 1,
+	.lb		= &svc_rx_budget_default.own,
+	.own.owner	= &svc_rx_budget_default,
+	.own.stock		= &svc_rx_stock_default,
+	.own.lock		= __SPIN_LOCK_UNLOCKED(svc_rx_budget_default.lock),
+	.own.next_ticket	= 1,
 	.node		= LIST_HEAD_INIT(svc_rx_budget_default.node),
-	.lb.inflight	= LIST_HEAD_INIT(svc_rx_budget_default.lb.inflight),
-	.lb.waiters	= LIST_HEAD_INIT(svc_rx_budget_default.lb.waiters),
-	.lb.kick_work	= __WORK_INITIALIZER(svc_rx_budget_default.lb.kick_work,
+	.own.inflight	= LIST_HEAD_INIT(svc_rx_budget_default.own.inflight),
+	.own.waiters	= LIST_HEAD_INIT(svc_rx_budget_default.own.waiters),
+	.own.kick_work	= __WORK_INITIALIZER(svc_rx_budget_default.own.kick_work,
 					     rx_loan_kick_fn),
 };
 
@@ -447,14 +498,16 @@ static struct svc_tcp_rx_budget svc_rx_budget_default = {
  * configured budgets leave of the region.
  */
 static struct svc_tcp_rx_budget svc_rx_budget_read = {
-	.lb.stock		= &svc_rx_stock_read,
-	.lb.lock		= __SPIN_LOCK_UNLOCKED(svc_rx_budget_read.lock),
-	.lb.read		= true,
-	.lb.next_ticket	= 1,
+	.lb		= &svc_rx_budget_read.own,
+	.own.owner	= &svc_rx_budget_read,
+	.own.stock		= &svc_rx_stock_read,
+	.own.lock		= __SPIN_LOCK_UNLOCKED(svc_rx_budget_read.lock),
+	.own.read		= true,
+	.own.next_ticket	= 1,
 	.node		= LIST_HEAD_INIT(svc_rx_budget_read.node),
-	.lb.inflight	= LIST_HEAD_INIT(svc_rx_budget_read.lb.inflight),
-	.lb.waiters	= LIST_HEAD_INIT(svc_rx_budget_read.lb.waiters),
-	.lb.kick_work	= __WORK_INITIALIZER(svc_rx_budget_read.lb.kick_work,
+	.own.inflight	= LIST_HEAD_INIT(svc_rx_budget_read.own.inflight),
+	.own.waiters	= LIST_HEAD_INIT(svc_rx_budget_read.own.waiters),
+	.own.kick_work	= __WORK_INITIALIZER(svc_rx_budget_read.own.kick_work,
 					     rx_loan_kick_fn),
 };
 
@@ -471,7 +524,7 @@ static void svc_tcp_rx_stock_sum(struct svc_tcp_rx_budget *c,
 
 	memset(sum, 0, sizeof(*sum));
 	for_each_possible_cpu(cpu) {
-		struct rx_loan_stock *st = per_cpu_ptr(c->lb.stock, cpu);
+		struct rx_loan_stock *st = per_cpu_ptr(c->lb->stock, cpu);
 
 		sum->pages += atomic_long_read(&st->pages);
 		sum->records += READ_ONCE(st->records);
@@ -485,22 +538,22 @@ static void svc_tcp_rx_stock_sum(struct svc_tcp_rx_budget *c,
 
 static long svc_tcp_rx_read_inflight(struct svc_tcp_rx_budget *c)
 {
-	return rx_loan_read_inflight(&c->lb);
+	return rx_loan_read_inflight(c->lb);
 }
 
 static long svc_tcp_rx_stocked_records(struct svc_tcp_rx_budget *c)
 {
-	return rx_loan_stocked_records(&c->lb);
+	return rx_loan_stocked_records(c->lb);
 }
 
 static void svc_tcp_rx_stock_drain_locked(struct svc_tcp_rx_budget *c)
 {
-	rx_loan_stock_drain_locked(&c->lb);
+	rx_loan_stock_drain_locked(c->lb);
 }
 
 static long svc_tcp_rx_stock_put(struct svc_tcp_rx_budget *c, long n)
 {
-	return rx_loan_stock_put(&c->lb, n);
+	return rx_loan_stock_put(c->lb, n);
 }
 
 /* Namespace budgets, the initial one included. */
@@ -520,7 +573,7 @@ static void svc_tcp_rx_budget_requested(const struct svc_tcp_rx_budget *c,
 					unsigned int *pages,
 					unsigned int *reserve)
 {
-	if (c->lb.read) {
+	if (c->lb->read) {
 		*pages = rx_loan_read_pool_pages(READ_ONCE(svc_rx_budget_configured_total));
 		*reserve = 0;
 	} else if (!c->net) {
@@ -530,9 +583,25 @@ static void svc_tcp_rx_budget_requested(const struct svc_tcp_rx_budget *c,
 		*pages = READ_ONCE(svc_tcp_rx_budget_pages);
 		*reserve = READ_ONCE(svc_tcp_rx_budget_reserve);
 	} else {
-		*pages = READ_ONCE(c->lb.cfg_pages);
-		*reserve = READ_ONCE(c->lb.cfg_reserve);
+		*pages = READ_ONCE(c->lb->cfg_pages);
+		*reserve = READ_ONCE(c->lb->cfg_reserve);
 	}
+}
+
+/*
+ * The pages @c lends: what is requested of it, else, for a namespace's
+ * write budget nobody configured, the region's write share once a region
+ * exists (rx_loan_region_write_default()), so that kNFSd loans by default.
+ */
+static unsigned long svc_tcp_rx_budget_in_force(const struct svc_tcp_rx_budget *c)
+{
+	unsigned int pages, reserve;
+
+	svc_tcp_rx_budget_requested(c, &pages, &reserve);
+	if (pages || !c->net || c->lb->read || !READ_ONCE(c->lb->cfg_default) ||
+	    __svc_tcp_rx_rcvbuf_effective(false) < SVC_TCP_RX_RCVBUF_MIN)
+		return pages;
+	return rx_loan_region_write_default();
 }
 
 static bool svc_tcp_rx_budget_is_init(const struct svc_tcp_rx_budget *c)
@@ -561,7 +630,11 @@ static void svc_tcp_rx_loans_update_locked(void)
 	list_for_each_entry(pos, &svc_rx_budget_pools, node) {
 		svc_tcp_rx_budget_requested(pos, &pages, &reserve);
 		on |= pages != 0;
+		/* a server with the computed default: on, copying until carved */
+		on |= READ_ONCE(pos->consumer.registered) &&
+		      READ_ONCE(pos->lb->cfg_default);
 	}
+	WRITE_ONCE(svc_tcp_rx_rcvbuf_wanted, on);
 	if (on)
 		static_branch_enable(&svc_tcp_rx_loans);
 	else
@@ -586,7 +659,7 @@ static struct svc_tcp_rx_budget *svc_tcp_rx_budget_initial(void)
 /*
  * Set the budget of @target to @pages, unless the budgets together would
  * exceed the region's write partition.  @target is the default budget, a namespace's, or NULL
- * for the initial namespace's before it exists (module parameters at load).
+ * for the initial namespace's before it exists (set before it exists).
  */
 static int svc_tcp_rx_budget_set(struct svc_tcp_rx_budget *target,
 				 unsigned int pages)
@@ -624,9 +697,9 @@ static int svc_tcp_rx_budget_set(struct svc_tcp_rx_budget *target,
 		WRITE_ONCE(svc_tcp_rx_budget_pages, pages);
 	} else {
 		/* under the lock its stage writes back under */
-		spin_lock_bh(&target->lb.lock);
-		WRITE_ONCE(target->lb.cfg_pages, pages);
-		spin_unlock_bh(&target->lb.lock);
+		spin_lock_bh(&target->lb->lock);
+		WRITE_ONCE(target->lb->cfg_pages, pages);
+		spin_unlock_bh(&target->lb->lock);
 	}
 	WRITE_ONCE(svc_rx_budget_configured_total, total);
 	svc_tcp_rx_loans_update_locked();
@@ -637,58 +710,6 @@ static int svc_tcp_rx_budget_set(struct svc_tcp_rx_budget *target,
 	return 0;
 }
 
-static int svc_tcp_rx_budget_reserve_set(const char *val,
-					 const struct kernel_param *kp)
-{
-	int ret = param_set_uint(val, kp);
-
-	if (ret)
-		return ret;
-	svc_tcp_rx_budget_apply(kp->arg == &svc_tcp_rx_budget_default_reserve ?
-				&svc_rx_budget_default :
-				svc_tcp_rx_budget_initial());
-	return 0;
-}
-
-static int svc_tcp_rx_budget_pages_set(const char *val,
-				       const struct kernel_param *kp)
-{
-	unsigned int pages;
-	int ret = kstrtouint(val, 0, &pages);
-
-	if (ret)
-		return ret;
-	return svc_tcp_rx_budget_set(kp->arg == &svc_tcp_rx_budget_default_pages ?
-				     &svc_rx_budget_default :
-				     svc_tcp_rx_budget_initial(), pages);
-}
-
-static const struct kernel_param_ops svc_tcp_rx_budget_pages_ops = {
-	.set = svc_tcp_rx_budget_pages_set,
-	.get = param_get_uint,
-};
-module_param_cb(svc_tcp_rx_budget_pages, &svc_tcp_rx_budget_pages_ops,
-		&svc_tcp_rx_budget_pages, 0644);
-MODULE_PARM_DESC(svc_tcp_rx_budget_pages,
-		 "Region pages the initial namespace's TCP receive loans may hold (0: none)");
-
-static const struct kernel_param_ops svc_tcp_rx_budget_reserve_ops = {
-	.set = svc_tcp_rx_budget_reserve_set,
-	.get = param_get_uint,
-};
-module_param_cb(svc_tcp_rx_budget_reserve, &svc_tcp_rx_budget_reserve_ops,
-		&svc_tcp_rx_budget_reserve, 0644);
-MODULE_PARM_DESC(svc_tcp_rx_budget_reserve,
-		 "Pages of that budget only the oldest in-flight record may use");
-module_param_cb(svc_tcp_rx_budget_default_pages, &svc_tcp_rx_budget_pages_ops,
-		&svc_tcp_rx_budget_default_pages, 0644);
-MODULE_PARM_DESC(svc_tcp_rx_budget_default_pages,
-		 "Region pages loans in namespaces without a budget may hold (0: copy their region records)");
-module_param_cb(svc_tcp_rx_budget_default_reserve,
-		&svc_tcp_rx_budget_reserve_ops,
-		&svc_tcp_rx_budget_default_reserve, 0644);
-MODULE_PARM_DESC(svc_tcp_rx_budget_default_reserve,
-		 "Pages of the default budget only the oldest in-flight record may use");
 
 static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 				    size_t size)
@@ -702,8 +723,8 @@ static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 	if (!c)
 		return scnprintf(buf, size, "none\n");
 	rx_loan_copies_read(&copies, &copy_bytes);
-	spin_lock_bh(&c->lb.lock);
-	list_for_each_entry(pos, &c->lb.waiters, node) {
+	spin_lock_bh(&c->lb->lock);
+	list_for_each_entry(pos, &c->lb->waiters, node) {
 		if (pos->exact)
 			read_waiters++;
 		else
@@ -715,135 +736,340 @@ static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 	len = scnprintf(buf, size,
 			"budget %u reserve_size %u avail %ld reserve %ld inflight %ld waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu cost_factor %u hold_factor %u lent %u bounced %llu bounce_refused %llu"
 			" read_inflight %ld read_waiters %u read_admitted %llu read_parked %llu read_granted %llu read_completed %llu read_unconfined %llu read_short %llu share_stalls %llu copies %llu copy_bytes %llu\n",
-			c->lb.budget, c->lb.reserve_size, c->lb.avail + sum.pages,
-			c->lb.reserve, (long)c->lb.inflight_count + sum.records,
-			waiters, c->lb.admitted + sum.admitted, c->lb.denied,
-			c->lb.paused, c->lb.overrun, c->lb.orphaned, c->lb.cost_factor,
-			READ_ONCE(c->lb.hold_factor),
-			c->lb.lent + (unsigned int)sum.lent,
+			c->lb->budget, c->lb->reserve_size, c->lb->avail + sum.pages,
+			c->lb->reserve, (long)c->lb->inflight_count + sum.records,
+			waiters, c->lb->admitted + sum.admitted, c->lb->denied,
+			c->lb->paused, c->lb->overrun, c->lb->orphaned, c->lb->cost_factor,
+			READ_ONCE(c->lb->hold_factor),
+			c->lb->lent + (unsigned int)sum.lent,
 			(u64)atomic64_read(&c->bounced),
 			(u64)atomic64_read(&c->bounce_refused),
 			sum.read_inflight, read_waiters, sum.read_admitted,
-			c->lb.read_parked, c->lb.read_granted, sum.read_completed,
+			c->lb->read_parked, c->lb->read_granted, sum.read_completed,
 			(u64)atomic64_read(&c->read_unconfined),
 			(u64)atomic64_read(&c->read_short),
 			(u64)atomic64_read(&c->share_stalls), copies, copy_bytes);
-	spin_unlock_bh(&c->lb.lock);
+	spin_unlock_bh(&c->lb->lock);
 	return len;
 }
 
-static int svc_tcp_rx_budget_stats_get(char *buffer,
-				       const struct kernel_param *kp)
+
+/*
+ * rx_loan/<netns>/: the namespace's overrides and state, in debugfs (no
+ * module parameter or sysctl sizes the region or a budget any more).
+ * write/{pages,reserve} override the namespace's write budget;
+ * write/stats, read/stats and nfsd/stats show the budgets and the
+ * server's consumer as they stand.  rx_loan/sunrpc/conn_share, one
+ * connection's READ share, is one for every namespace.
+ */
+static struct dentry *svc_rx_debugfs_root;
+/* rx_loan/sunrpc/: knobs of every namespace's, while one exists */
+static struct dentry *svc_rx_debugfs_sunrpc;
+
+static ssize_t svc_rx_debugfs_out(char __user *ubuf, size_t count,
+				  loff_t *ppos, const char *buf, int len)
 {
-	return svc_tcp_rx_budget_format(kp->arg ? kp->arg :
-					svc_tcp_rx_budget_initial(),
-					buffer, PAGE_SIZE);
+	return simple_read_from_buffer(ubuf, count, ppos, buf,
+				       len < 0 ? 0 : len);
 }
 
-static const struct kernel_param_ops svc_tcp_rx_budget_stats_ops = {
-	.get = svc_tcp_rx_budget_stats_get,
-};
-module_param_cb(svc_tcp_rx_budget_stats, &svc_tcp_rx_budget_stats_ops,
-		NULL, 0444);
-MODULE_PARM_DESC(svc_tcp_rx_budget_stats,
-		 "State of the initial namespace's region budget");
-module_param_cb(svc_tcp_rx_budget_default_stats, &svc_tcp_rx_budget_stats_ops,
-		&svc_rx_budget_default, 0444);
-MODULE_PARM_DESC(svc_tcp_rx_budget_default_stats,
-		 "State of the default region budget");
-module_param_cb(svc_tcp_rx_budget_read_stats, &svc_tcp_rx_budget_stats_ops,
-		&svc_rx_budget_read, 0444);
-MODULE_PARM_DESC(svc_tcp_rx_budget_read_stats,
-		 "State of the global read pool (split: the read partition; shared: what the budgets leave of the region)");
-
-/* net.sunrpc.region_budget_pages and _reserve: a namespace's budget. */
-static int svc_tcp_rx_budget_sysctl(const struct ctl_table *table, int write,
-				    void *buffer, size_t *lenp, loff_t *ppos)
+static ssize_t svc_rx_debugfs_cfg_read(struct file *file, char __user *ubuf,
+				       size_t count, loff_t *ppos)
 {
-	struct svc_tcp_rx_budget *c = table->extra1;
-	bool is_reserve = table->extra2 != NULL;
-	unsigned int pages, reserve, val;
-	struct ctl_table tmp = *table;
-	int ret;
+	struct svc_tcp_rx_budget *c = file->private_data;
+	bool is_reserve = file_inode(file)->i_private != c;
+	unsigned int pages, reserve;
+	char buf[24];
 
 	svc_tcp_rx_budget_requested(c, &pages, &reserve);
-	val = is_reserve ? reserve : pages;
-	tmp.data = &val;
-	tmp.maxlen = sizeof(val);
-	ret = proc_douintvec(&tmp, write, buffer, lenp, ppos);
-	if (ret || !write)
+	return svc_rx_debugfs_out(ubuf, count, ppos, buf,
+				  scnprintf(buf, sizeof(buf), "%u\n",
+					    is_reserve ? reserve : pages));
+}
+
+static ssize_t svc_rx_debugfs_cfg_write(struct file *file,
+					const char __user *ubuf, size_t count,
+					loff_t *ppos)
+{
+	struct svc_tcp_rx_budget *c = file->private_data;
+	bool is_reserve = file_inode(file)->i_private != c;
+	unsigned int val;
+	int ret = kstrtouint_from_user(ubuf, count, 0, &val);
+
+	if (ret)
 		return ret;
-	if (!is_reserve)
-		return svc_tcp_rx_budget_set(c, val);
+	if (!is_reserve) {
+		ret = svc_tcp_rx_budget_set(c, val);
+		if (ret)
+			return ret;
+		/* configured: no computed default any more, even at 0 */
+		WRITE_ONCE(c->lb->cfg_default, false);
+		svc_tcp_rx_budget_apply(c);
+		return count;
+	}
 	if (svc_tcp_rx_budget_is_init(c)) {
 		WRITE_ONCE(svc_tcp_rx_budget_reserve, val);
 	} else {
 		/* under the lock its stage writes back under */
-		spin_lock_bh(&c->lb.lock);
-		WRITE_ONCE(c->lb.cfg_reserve, val);
-		spin_unlock_bh(&c->lb.lock);
+		spin_lock_bh(&c->lb->lock);
+		WRITE_ONCE(c->lb->cfg_reserve, val);
+		spin_unlock_bh(&c->lb->lock);
 	}
 	svc_tcp_rx_budget_apply(c);
-	return 0;
+	return count;
 }
 
-/* net.sunrpc.region_budget_stats: a namespace's budget, as it stands. */
-static int svc_tcp_rx_budget_stats_sysctl(const struct ctl_table *table,
-					  int write, void *buffer, size_t *lenp,
-					  loff_t *ppos)
+static int svc_rx_debugfs_cfg_open(struct inode *inode, struct file *file)
 {
-	struct ctl_table tmp = *table;
-	char buf[1024];	/* with the bounce and READ fields */
-
-	if (write)
-		return -EPERM;
-	svc_tcp_rx_budget_format(table->extra1, buf, sizeof(buf));
-	strim(buf);
-	tmp.data = buf;
-	tmp.maxlen = sizeof(buf);
-	return proc_dostring(&tmp, 0, buffer, lenp, ppos);
+	/* reserve's i_private is the budget's address plus one */
+	file->private_data = (void *)((unsigned long)inode->i_private & ~1UL);
+	return nonseekable_open(inode, file);
 }
 
-static const struct ctl_table svc_tcp_rx_budget_sysctl_table[] = {
-	{
-		.procname	= "region_budget_pages",
-		.mode		= 0644,
-		.proc_handler	= svc_tcp_rx_budget_sysctl,
-	},
-	{
-		.procname	= "region_budget_reserve",
-		.mode		= 0644,
-		.proc_handler	= svc_tcp_rx_budget_sysctl,
-		.extra2		= (void *)1,
-	},
-	{
-		.procname	= "region_budget_stats",
-		.mode		= 0444,
-		.proc_handler	= svc_tcp_rx_budget_stats_sysctl,
-	},
+static const struct file_operations svc_rx_debugfs_cfg_fops = {
+	.owner	= THIS_MODULE,
+	.open	= svc_rx_debugfs_cfg_open,
+	.read	= svc_rx_debugfs_cfg_read,
+	.write	= svc_rx_debugfs_cfg_write,
 };
 
+static ssize_t svc_rx_debugfs_stats_read(struct file *file, char __user *ubuf,
+					 size_t count, loff_t *ppos)
+{
+	char *buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	ssize_t ret;
+
+	if (!buf)
+		return -ENOMEM;
+	ret = svc_rx_debugfs_out(ubuf, count, ppos, buf,
+				 svc_tcp_rx_budget_format(file->private_data,
+							  buf, PAGE_SIZE));
+	kfree(buf);
+	return ret;
+}
+
+static const struct file_operations svc_rx_debugfs_stats_fops = {
+	.owner	= THIS_MODULE,
+	.open	= simple_open,
+	.read	= svc_rx_debugfs_stats_read,
+};
+
+static ssize_t svc_rx_debugfs_consumer_read(struct file *file,
+					    char __user *ubuf, size_t count,
+					    loff_t *ppos)
+{
+	struct rx_loan_consumer *rc = file->private_data;
+	char buf[256];
+
+	return svc_rx_debugfs_out(ubuf, count, ppos, buf,
+		scnprintf(buf, sizeof(buf),
+			  "registered %d floor %lu share %lu out_write %ld out_read %ld overrun_share %ld share_denied %ld\n",
+			  READ_ONCE(rc->registered), rc->floor,
+			  rx_loan_consumer_share(rc),
+			  atomic_long_read(&rc->out_write),
+			  atomic_long_read(&rc->out_read),
+			  atomic_long_read(&rc->overrun_share),
+			  atomic_long_read(&rc->share_denied)));
+}
+
+static const struct file_operations svc_rx_debugfs_consumer_fops = {
+	.owner	= THIS_MODULE,
+	.open	= simple_open,
+	.read	= svc_rx_debugfs_consumer_read,
+};
+
+static void svc_rx_debugfs_net_init(struct svc_tcp_rx_budget *c,
+				    struct net *net)
+{
+	struct dentry *w, *r, *nd;
+	char name[16];
+
+	if (!svc_rx_debugfs_root) {
+		struct dentry *d = debugfs_lookup("rx_loan", NULL);
+
+		/*
+		 * the directory stays while it holds anything: no reference.
+		 * Without debugfs both give an error, which every create
+		 * below passes through and debugfs_remove() ignores.
+		 */
+		if (IS_ERR_OR_NULL(d))
+			d = debugfs_create_dir("rx_loan", NULL);
+		else
+			dput(d);
+		svc_rx_debugfs_root = d;
+	}
+	if (!svc_rx_debugfs_sunrpc) {
+		/* one connection share for every namespace: one file */
+		svc_rx_debugfs_sunrpc = debugfs_create_dir("sunrpc",
+							   svc_rx_debugfs_root);
+		debugfs_create_u32("conn_share", 0644, svc_rx_debugfs_sunrpc,
+				   &svc_tcp_rx_region_conn_share);
+	}
+	snprintf(name, sizeof(name), "%u", net->ns.inum);
+	c->debugfs = debugfs_create_dir(name, svc_rx_debugfs_root);
+	w = debugfs_create_dir("write", c->debugfs);
+	debugfs_create_file("pages", 0644, w, c, &svc_rx_debugfs_cfg_fops);
+	debugfs_create_file("reserve", 0644, w, (void *)((unsigned long)c | 1),
+			    &svc_rx_debugfs_cfg_fops);
+	debugfs_create_file("stats", 0444, w, c, &svc_rx_debugfs_stats_fops);
+	r = debugfs_create_dir("read", c->debugfs);
+	debugfs_create_file("stats", 0444, r, c->read ?: &svc_rx_budget_read,
+			    &svc_rx_debugfs_stats_fops);
+	nd = debugfs_create_dir("nfsd", c->debugfs);
+	debugfs_create_file("stats", 0444, nd, &c->consumer,
+			    &svc_rx_debugfs_consumer_fops);
+}
+
 /*
- * A namespace's budget, with its per-CPU stock (allocated whatever the
- * budget, even 0, so a reconfiguration never allocates).
+ * The server's floor: every thread may hold up to four records of the
+ * largest payload, each with its alignment page.
  */
-static struct svc_tcp_rx_budget *svc_tcp_rx_budget_alloc(struct net *net)
+VISIBLE_IF_KUNIT unsigned long svc_tcp_rx_consumer_floor(unsigned int nrthreads,
+							 unsigned int max_payload)
+{
+	return (unsigned long)nrthreads * 4 *
+	       (DIV_ROUND_UP(max_payload, PAGE_SIZE) + 1);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_consumer_floor);
+
+/* @serv's threads: its pools' maxima, or the threads running if more. */
+static unsigned int svc_tcp_rx_serv_nthreads(struct svc_serv *serv)
+{
+	unsigned int i, threads = 0, nrpools = svc_serv_nrpools(serv);
+
+	for (i = 0; i < nrpools; i++)
+		threads += READ_ONCE(serv->sv_pools[i].sp_nrthrmax);
+	return max(threads, READ_ONCE(serv->sv_nrthreads));
+}
+
+/**
+ * svc_tcp_rx_consumer_start - a server starts lending from its namespace
+ * @net: the namespace whose region budgets it draws on
+ * @serv: the server: the consumer's floor follows its threads
+ *
+ * nfsd's server is its namespace's one consumer of region loans, and
+ * registers from nfsd_startup_net(); no other service (lockd, the NFSv4
+ * callback service) does.  A new server re-binds the consumer: its floor
+ * is then the new server's.  Before the threads start the floor is
+ * usually 0, svc_tcp_rx_serv_threads() sets it as they do, and nothing is
+ * carved here.
+ *
+ * Context: process context; takes mutexes.
+ */
+void svc_tcp_rx_consumer_start(struct net *net, struct svc_serv *serv)
+{
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_net(net);
+	unsigned long floor;
+
+	if (!c)
+		return;
+	floor = svc_tcp_rx_consumer_floor(svc_tcp_rx_serv_nthreads(serv),
+					  serv->sv_max_payload);
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	c->consumer_serv = serv;
+	if (c->consumer.registered) {
+		rx_loan_consumer_set_floor(&c->consumer, floor);
+	} else {
+		rx_loan_consumer_register(&c->consumer, rx_loan_net(net),
+					  "nfsd", floor);
+		svc_tcp_rx_loans_update_locked();
+	}
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+}
+EXPORT_SYMBOL_GPL(svc_tcp_rx_consumer_start);
+
+/**
+ * svc_tcp_rx_consumer_stop - @net's server stops lending
+ * @net: as started
+ *
+ * Called once the server's transports are destroyed (nfsd_destroy_serv()),
+ * so their records' credit is back.  Credit lent on past them (a WRITE
+ * bounce, a READ's transmit) returns to the consumer's counts as it lands:
+ * unregistering keeps them, and the consumer lives as long as @net.
+ *
+ * Context: process context; takes mutexes.
+ */
+void svc_tcp_rx_consumer_stop(struct net *net)
+{
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_net(net);
+
+	if (!c)
+		return;
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	c->consumer_serv = NULL;
+	if (c->consumer.registered) {
+		rx_loan_consumer_unregister(&c->consumer);
+		svc_tcp_rx_loans_update_locked();
+	}
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+}
+EXPORT_SYMBOL_GPL(svc_tcp_rx_consumer_stop);
+
+/**
+ * svc_tcp_rx_serv_threads - @serv's thread count is being set
+ * @serv: the server whose pool threads svc_set_pool_threads() sets
+ *
+ * The floor of the consumer @serv registered follows its threads (the
+ * pools' maxima, or the threads running if more), so that the region,
+ * carved at the first connection or READ, is sized for them.  Once carved
+ * the region does not change.  Control path: takes mutexes.
+ */
+void svc_tcp_rx_serv_threads(struct svc_serv *serv)
+{
+	unsigned int threads = svc_tcp_rx_serv_nthreads(serv);
+	struct svc_tcp_rx_budget *pos;
+
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	list_for_each_entry(pos, &svc_rx_budget_pools, node)
+		if (pos->consumer_serv == serv && pos->consumer.registered)
+			rx_loan_consumer_set_floor(&pos->consumer,
+				svc_tcp_rx_consumer_floor(threads,
+							  serv->sv_max_payload));
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+}
+
+/* @svsk's namespace's consumer, registered or not. */
+static struct rx_loan_consumer *svc_tcp_rx_net_consumer(struct svc_sock *svsk)
+{
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_net(svsk->sk_xprt.xpt_net);
+
+	return c ? &c->consumer : NULL;
+}
+
+/* The consumer @svsk's credit is counted against, or NULL before one. */
+static struct rx_loan_consumer *svc_tcp_rx_consumer(struct svc_sock *svsk)
+{
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_net(svsk->sk_xprt.xpt_net);
+
+	return c && READ_ONCE(c->consumer.registered) ? &c->consumer : NULL;
+}
+
+/*
+ * A namespace's budget: sunrpc's view of @shared, the namespace's
+ * rx_loan budget, or with @shared NULL its own budget with its per-CPU
+ * stock (allocated whatever the budget, even 0, so a reconfiguration never
+ * allocates; KUnit's).
+ */
+static struct svc_tcp_rx_budget *svc_tcp_rx_budget_alloc(struct net *net,
+						struct rx_loan_budget *shared)
 {
 	struct svc_tcp_rx_budget *c = kzalloc(sizeof(*c), GFP_KERNEL);
 
 	if (!c)
 		return NULL;
-	c->lb.stock = alloc_percpu(struct rx_loan_stock);
-	if (!c->lb.stock) {
-		kfree(c);
-		return NULL;
+	c->shared = shared;
+	if (shared) {
+		c->lb = shared;
+	} else {
+		/* on the region's list, so its frees kick this budget's waiters */
+		if (rx_loan_budget_init(&c->own, false)) {
+			kfree(c);
+			return NULL;
+		}
+		c->lb = &c->own;
 	}
+	WRITE_ONCE(c->lb->owner, c);
 	c->net = net;
-	spin_lock_init(&c->lb.lock);
-	c->lb.next_ticket = 1;
-	INIT_LIST_HEAD(&c->lb.inflight);
-	INIT_LIST_HEAD(&c->lb.waiters);
-	INIT_WORK(&c->lb.kick_work, rx_loan_kick_fn);
 	return c;
 }
 
@@ -855,38 +1081,42 @@ static struct svc_tcp_rx_budget *svc_tcp_rx_budget_alloc(struct net *net)
  */
 static void svc_tcp_rx_budget_free(struct svc_tcp_rx_budget *c)
 {
-	flush_work(&c->lb.kick_work);
-	spin_lock_bh(&c->lb.lock);
+	flush_work(&c->lb->kick_work);
+	spin_lock_bh(&c->lb->lock);
 	svc_tcp_rx_stock_drain_locked(c);
-	spin_unlock_bh(&c->lb.lock);
-	WARN_ON_ONCE(c->lb.inflight_count || c->lb.lent || !list_empty(&c->lb.waiters) ||
+	spin_unlock_bh(&c->lb->lock);
+	WARN_ON_ONCE(c->lb->inflight_count || c->lb->lent || !list_empty(&c->lb->waiters) ||
 		     svc_tcp_rx_read_inflight(c) ||
 		     svc_tcp_rx_stocked_records(c));
-	free_percpu(c->lb.stock);
+	if (c->lb == &c->own)
+		rx_loan_budget_destroy(&c->own);
+	else	/* the namespace's: rx_loan's pernet exit tears it down */
+		WRITE_ONCE(c->lb->owner, NULL);
 	kfree(c);
 }
 
 int svc_tcp_rx_budget_net_init(struct net *net)
 {
 	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
+	struct rx_loan_net *ln = rx_loan_net(net);
 	struct svc_tcp_rx_budget *c;
-	struct ctl_table *table;
-	unsigned int i;
 
-	c = svc_tcp_rx_budget_alloc(net);
+	/* admission and grants draw on the namespace's rx_loan budgets */
+	c = svc_tcp_rx_budget_alloc(net, &ln->write);
 	if (!c)
 		return -ENOMEM;
-	table = kmemdup(svc_tcp_rx_budget_sysctl_table,
-			sizeof(svc_tcp_rx_budget_sysctl_table), GFP_KERNEL);
-	if (!table)
-		goto out_free;
-	for (i = 0; i < ARRAY_SIZE(svc_tcp_rx_budget_sysctl_table); i++)
-		table[i].extra1 = c;
-	c->sysctl = register_net_sysctl_sz(net, "net/sunrpc", table,
-					   ARRAY_SIZE(svc_tcp_rx_budget_sysctl_table));
-	if (!c->sysctl)
-		goto out_table;
+	if (net_eq(net, &init_net)) {
+		c->read = &svc_rx_budget_read;
+	} else {
+		c->read = svc_tcp_rx_budget_alloc(net, &ln->read);
+		if (!c->read) {
+			svc_tcp_rx_budget_free(c);
+			return -ENOMEM;
+		}
+		svc_tcp_rx_budget_apply(c->read);
+	}
 	mutex_lock(&svc_rx_budget_cfg_lock);
+	svc_rx_debugfs_net_init(c, net);
 	list_add_tail(&c->node, &svc_rx_budget_pools);
 	if (net_eq(net, &init_net))
 		svc_rx_budget_init = c;
@@ -894,39 +1124,39 @@ int svc_tcp_rx_budget_net_init(struct net *net)
 	mutex_unlock(&svc_rx_budget_cfg_lock);
 	sn->rx_budget = c;
 	return 0;
-
-out_table:
-	kfree(table);
-out_free:
-	free_percpu(c->lb.stock);
-	kfree(c);
-	return -ENOMEM;
 }
 
 void svc_tcp_rx_budget_net_exit(struct net *net)
 {
 	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
 	struct svc_tcp_rx_budget *c = sn->rx_budget;
-	const struct ctl_table *table;
 
 	if (!c)
 		return;
-	table = c->sysctl->ctl_table_arg;
-	unregister_net_sysctl_table(c->sysctl);
-	kfree(table);
+	/* the namespace's transports, and so its credit, are gone */
+	if (c->consumer.registered)
+		rx_loan_consumer_unregister(&c->consumer);
 	mutex_lock(&svc_rx_budget_cfg_lock);
+	debugfs_remove(c->debugfs);
 	list_del(&c->node);
+	if (list_empty(&svc_rx_budget_pools)) {
+		/* the last namespace: sunrpc's knobs go with it */
+		debugfs_remove(svc_rx_debugfs_sunrpc);
+		svc_rx_debugfs_sunrpc = NULL;
+	}
 	if (svc_rx_budget_init == c)
 		svc_rx_budget_init = NULL;
 	else
 		WRITE_ONCE(svc_rx_budget_configured_total,
 			   svc_rx_budget_configured_total -
-			   min_t(unsigned long, READ_ONCE(c->lb.cfg_pages),
+			   min_t(unsigned long, READ_ONCE(c->lb->cfg_pages),
 				 svc_rx_budget_configured_total));
 	svc_tcp_rx_loans_update_locked();
 	mutex_unlock(&svc_rx_budget_cfg_lock);
 	svc_tcp_rx_budget_apply(&svc_rx_budget_read);
 	sn->rx_budget = NULL;
+	if (c->read != &svc_rx_budget_read)
+		svc_tcp_rx_budget_free(c->read);
 	svc_tcp_rx_budget_free(c);
 }
 
@@ -965,23 +1195,23 @@ static void svc_tcp_rx_cost_forget(struct svc_tcp_rx_budget *c)
 {
 	int cpu;
 
-	spin_lock_bh(&c->lb.lock);
-	WRITE_ONCE(c->lb.cost_factor, 0);
-	WRITE_ONCE(c->lb.hold_factor, 0);
-	c->lb.cost_peak = 0;
-	c->lb.cost_last_peak = 0;
-	c->lb.cost_records = 0;
-	c->lb.cost_warm = 0;
+	spin_lock_bh(&c->lb->lock);
+	WRITE_ONCE(c->lb->cost_factor, 0);
+	WRITE_ONCE(c->lb->hold_factor, 0);
+	c->lb->cost_peak = 0;
+	c->lb->cost_last_peak = 0;
+	c->lb->cost_records = 0;
+	c->lb->cost_warm = 0;
 	for_each_possible_cpu(cpu)
-		atomic64_set(&per_cpu_ptr(c->lb.stock, cpu)->cost_sample, 0);
-	spin_unlock_bh(&c->lb.lock);
+		atomic64_set(&per_cpu_ptr(c->lb->stock, cpu)->cost_sample, 0);
+	spin_unlock_bh(&c->lb->lock);
 }
 
 static void svc_tcp_rx_budget_kunit_drain(struct svc_tcp_rx_budget *c)
 {
-	spin_lock_bh(&c->lb.lock);
+	spin_lock_bh(&c->lb->lock);
 	svc_tcp_rx_stock_drain_locked(c);
-	spin_unlock_bh(&c->lb.lock);
+	spin_unlock_bh(&c->lb->lock);
 }
 
 /*
@@ -1009,6 +1239,7 @@ void svc_tcp_rx_budget_kunit_configure(unsigned int pages,
 	WRITE_ONCE(svc_tcp_rx_budget_reserve, reserve);
 	WRITE_ONCE(svc_tcp_rx_kunit_factor, factor);
 	WRITE_ONCE(svc_tcp_rx_rcvbuf, pages ? SVC_TCP_RX_RCVBUF_MIN : 0);
+	WRITE_ONCE(svc_tcp_rx_rcvbuf_given, true);
 	svc_tcp_rx_budget_kunit_nowake = pages != 0;
 	/* Each test starts with nothing learned. */
 	svc_tcp_rx_cost_forget(svc_tcp_rx_budget_initial());
@@ -1023,6 +1254,7 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_configure);
 void svc_tcp_rx_budget_kunit_rcvbuf(unsigned int bytes)
 {
 	WRITE_ONCE(svc_tcp_rx_rcvbuf, bytes);
+	WRITE_ONCE(svc_tcp_rx_rcvbuf_given, true);
 	svc_tcp_rx_budget_kunit_stage_all();
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_rcvbuf);
@@ -1060,11 +1292,73 @@ static struct {
 	unsigned int default_pages;
 	unsigned int default_reserve;
 	bool nowake;
+	bool cfg_default;
+	bool own_init, own_read;
+	bool rcvbuf_given;
 } svc_tcp_rx_kunit_saved;
+
+static bool svc_tcp_rx_budget_list(struct svc_tcp_rx_budget *c, bool read);
+
+/*
+ * The suites cast a record's rx_loan budget to sunrpc's, which holds only
+ * for a budget whose lb is its own (the first member).  For the suite the
+ * initial namespace's budget and the read pool lend from their own storage
+ * rather than from rx_loan_net()'s; they go back at restore.
+ */
+static void svc_tcp_rx_kunit_own(void)
+{
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
+
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	if (c && c->lb != &c->own && !rx_loan_budget_init(&c->own, false)) {
+		c->own.owner = c;
+		WRITE_ONCE(c->lb, &c->own);
+		svc_tcp_rx_kunit_saved.own_init = true;
+		svc_tcp_rx_budget_stage(c);
+	}
+	if (svc_rx_budget_read.lb != &svc_rx_budget_read.own) {
+		svc_rx_budget_read.lb = &svc_rx_budget_read.own;
+		svc_tcp_rx_kunit_saved.own_read =
+			svc_tcp_rx_budget_list(&svc_rx_budget_read, true);
+		svc_tcp_rx_budget_stage(&svc_rx_budget_read);
+	}
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+}
+
+static void svc_tcp_rx_kunit_shared(void)
+{
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
+
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	if (c && svc_tcp_rx_kunit_saved.own_init) {
+		WRITE_ONCE(c->lb, c->shared);
+		svc_tcp_rx_kunit_saved.own_init = false;
+		svc_tcp_rx_budget_stage(c);
+		mutex_unlock(&svc_rx_budget_cfg_lock);
+		flush_work(&c->own.kick_work);
+		rx_loan_budget_destroy(&c->own);
+		mutex_lock(&svc_rx_budget_cfg_lock);
+	}
+	if (svc_rx_budget_read.lb == &svc_rx_budget_read.own) {
+		svc_rx_budget_read.lb = &rx_loan_net(&init_net)->read;
+		svc_tcp_rx_budget_stage(&svc_rx_budget_read);
+		mutex_unlock(&svc_rx_budget_cfg_lock);
+		if (svc_tcp_rx_kunit_saved.own_read)
+			rx_loan_budget_destroy(&svc_rx_budget_read.own);
+		else
+			flush_work(&svc_rx_budget_read.own.kick_work);
+		svc_tcp_rx_kunit_saved.own_read = false;
+		mutex_lock(&svc_rx_budget_cfg_lock);
+	}
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+}
 
 void svc_tcp_rx_kunit_save(void)
 {
 	svc_tcp_rx_kunit_saved.rcvbuf = READ_ONCE(svc_tcp_rx_rcvbuf);
+	svc_tcp_rx_kunit_saved.rcvbuf_given = READ_ONCE(svc_tcp_rx_rcvbuf_given);
+	/* The suites' clamp is what they write: as given, even 0. */
+	WRITE_ONCE(svc_tcp_rx_rcvbuf_given, true);
 	svc_tcp_rx_kunit_saved.budget_pages = READ_ONCE(svc_tcp_rx_budget_pages);
 	svc_tcp_rx_kunit_saved.budget_reserve = READ_ONCE(svc_tcp_rx_budget_reserve);
 	svc_tcp_rx_kunit_saved.factor = READ_ONCE(svc_tcp_rx_kunit_factor);
@@ -1073,12 +1367,19 @@ void svc_tcp_rx_kunit_save(void)
 	svc_tcp_rx_kunit_saved.default_reserve =
 		READ_ONCE(svc_tcp_rx_budget_default_reserve);
 	svc_tcp_rx_kunit_saved.nowake = svc_tcp_rx_budget_kunit_nowake;
+	/* The suites' budgets are what they configure: no computed default. */
+	svc_tcp_rx_kunit_saved.cfg_default =
+		READ_ONCE(rx_loan_net(&init_net)->write.cfg_default);
+	WRITE_ONCE(rx_loan_net(&init_net)->write.cfg_default, false);
+	svc_tcp_rx_kunit_own();
+	svc_tcp_rx_budget_apply_all();
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_save);
 
 void svc_tcp_rx_kunit_restore(void)
 {
 	WRITE_ONCE(svc_tcp_rx_rcvbuf, svc_tcp_rx_kunit_saved.rcvbuf);
+	WRITE_ONCE(svc_tcp_rx_rcvbuf_given, svc_tcp_rx_kunit_saved.rcvbuf_given);
 	WRITE_ONCE(svc_tcp_rx_budget_pages, svc_tcp_rx_kunit_saved.budget_pages);
 	WRITE_ONCE(svc_tcp_rx_budget_reserve, svc_tcp_rx_kunit_saved.budget_reserve);
 	WRITE_ONCE(svc_tcp_rx_kunit_factor, svc_tcp_rx_kunit_saved.factor);
@@ -1087,6 +1388,9 @@ void svc_tcp_rx_kunit_restore(void)
 	WRITE_ONCE(svc_tcp_rx_budget_default_reserve,
 		   svc_tcp_rx_kunit_saved.default_reserve);
 	svc_tcp_rx_budget_kunit_nowake = svc_tcp_rx_kunit_saved.nowake;
+	svc_tcp_rx_kunit_shared();
+	WRITE_ONCE(rx_loan_net(&init_net)->write.cfg_default,
+		   svc_tcp_rx_kunit_saved.cfg_default);
 	mutex_lock(&svc_rx_budget_cfg_lock);
 	svc_tcp_rx_loans_update_locked();
 	mutex_unlock(&svc_rx_budget_cfg_lock);
@@ -1094,6 +1398,55 @@ void svc_tcp_rx_kunit_restore(void)
 	svc_tcp_rx_budget_apply_all();
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_restore);
+
+/*
+ * @on: the initial namespace's budget and the read pool lend through
+ * rx_loan_net(&init_net)'s write and READ budgets, as outside the suite;
+ * off: from their own storage again, as svc_tcp_rx_kunit_save() left them.
+ */
+void svc_tcp_rx_kunit_netns_alias(bool on)
+{
+	svc_tcp_rx_budget_kunit_unstock();
+	if (on)
+		svc_tcp_rx_kunit_shared();
+	else
+		svc_tcp_rx_kunit_own();
+	svc_tcp_rx_budget_apply_all();
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_netns_alias);
+
+/*
+ * The pages rx_loan_net(&init_net)'s write (or, @read, READ) budget has
+ * free, its avail and reserve with every stock drained, and whether a
+ * sunrpc budget lends through it.
+ */
+long svc_tcp_rx_kunit_netns_free(bool read, bool *aliased)
+{
+	struct rx_loan_net *ln = rx_loan_net(&init_net);
+	struct rx_loan_budget *lb = read ? &ln->read : &ln->write;
+	long free;
+
+	svc_tcp_rx_budget_kunit_unstock();
+	spin_lock_bh(&lb->lock);
+	free = lb->avail + lb->reserve;
+	spin_unlock_bh(&lb->lock);
+	*aliased = READ_ONCE(lb->owner) != NULL;
+	return free;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_netns_free);
+
+/* As if no svc_tcp_rx_rcvbuf was given: the clamp then in force. */
+unsigned int svc_tcp_rx_kunit_rcvbuf_ungiven(void)
+{
+	WRITE_ONCE(svc_tcp_rx_rcvbuf, 0);
+	WRITE_ONCE(svc_tcp_rx_rcvbuf_given, false);
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	svc_tcp_rx_loans_update_locked();
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+	svc_tcp_rx_budget_kunit_stage_all();
+	return svc_tcp_rx_rcvbuf_effective();
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_rcvbuf_ungiven);
 
 /*
  * Stand in for a region of @pages pages with @read_pages split off for
@@ -1131,7 +1484,7 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_stats);
 #endif
 
 /*
- * What @c's budget is to apply, from the parameters, the namespace's sysctls
+ * What @c's budget is to apply, from the namespace's debugfs overrides
  * and the receive clamp; a read pool takes what the configured budgets use.
  */
 static void svc_tcp_rx_budget_cfg(struct svc_tcp_rx_budget *c,
@@ -1140,7 +1493,7 @@ static void svc_tcp_rx_budget_cfg(struct svc_tcp_rx_budget *c,
 {
 	unsigned int budget;
 
-	if (c->lb.read) {
+	if (c->lb->read) {
 		*pages = READ_ONCE(svc_rx_budget_configured_total);
 		*reserve = 0;
 		*off = false;
@@ -1149,7 +1502,7 @@ static void svc_tcp_rx_budget_cfg(struct svc_tcp_rx_budget *c,
 	svc_tcp_rx_budget_requested(c, &budget, reserve);
 	*pages = budget;
 	/* The receive clamp bounds unread receive data; READs have none. */
-	*off = READ_ONCE(svc_tcp_rx_rcvbuf) < SVC_TCP_RX_RCVBUF_MIN;
+	*off = __svc_tcp_rx_rcvbuf_effective(false) < SVC_TCP_RX_RCVBUF_MIN;
 }
 
 /* Request @c's configuration, to apply at its next locked op. */
@@ -1162,10 +1515,10 @@ static void svc_tcp_rx_budget_stage(struct svc_tcp_rx_budget *c)
 	if (!c)
 		return;
 	/* derived under the lock: the last stage sees the last write */
-	spin_lock_bh(&c->lb.lock);
+	spin_lock_bh(&c->lb->lock);
 	svc_tcp_rx_budget_cfg(c, &pages, &reserve, &off);
-	rx_loan_budget_stage_locked(&c->lb, pages, reserve, off);
-	spin_unlock_bh(&c->lb.lock);
+	rx_loan_budget_stage_locked(c->lb, pages, reserve, off);
+	spin_unlock_bh(&c->lb->lock);
 }
 
 /*
@@ -1174,7 +1527,7 @@ static void svc_tcp_rx_budget_stage(struct svc_tcp_rx_budget *c)
  */
 static unsigned int svc_tcp_rx_cost_factor(const struct svc_tcp_rx_budget *c)
 {
-	return svc_tcp_rx_fixed_factor() ?: READ_ONCE(c->lb.cost_factor);
+	return svc_tcp_rx_fixed_factor() ?: READ_ONCE(c->lb->cost_factor);
 }
 
 static u32 svc_tcp_rx_credit_cost(const struct svc_tcp_rx_budget *c,
@@ -1225,12 +1578,12 @@ static unsigned int svc_tcp_rx_cost_sample(const struct svc_tcp_rx_state *state)
 /* A KUnit test's fixed factor needs no warm-up. */
 static bool svc_tcp_rx_cost_warm(const struct svc_tcp_rx_budget *c)
 {
-	return svc_tcp_rx_fixed_factor() || rx_loan_cost_warm(&c->lb);
+	return svc_tcp_rx_fixed_factor() || rx_loan_cost_warm(c->lb);
 }
 
 static struct svc_tcp_rx_budget *svc_tcp_rx_budget_of(struct rx_loan_budget *lb)
 {
-	return lb ? container_of(lb, struct svc_tcp_rx_budget, lb) : NULL;
+	return lb ? READ_ONCE(lb->owner) : NULL;
 }
 
 /* Take a reference on the oldest waiting transport, to wake it unlocked. */
@@ -1302,15 +1655,16 @@ static struct rx_loan_waiter *
 svc_tcp_rx_credit_kick_locked(struct svc_tcp_rx_budget *c,
 			      struct list_head *granted)
 {
-	return rx_loan_kick_locked(&c->lb, NULL, granted);
+	return rx_loan_kick_locked(c->lb, NULL, granted);
 }
 
 /* Return a READ's credit (not its overrun) and pass it on. */
 static void
-svc_tcp_rx_budget_read_return(struct svc_tcp_rx_budget *c, long credit,
+svc_tcp_rx_budget_read_return(struct svc_tcp_rx_budget *c,
+			      struct rx_loan_consumer *rc, long credit,
 			      long reserve)
 {
-	rx_loan_grant_return(&c->lb, credit, reserve);
+	rx_loan_grant_return(c->lb, rc, credit, reserve);
 }
 
 /*
@@ -1324,7 +1678,7 @@ static void svc_tcp_rx_budget_apply(struct svc_tcp_rx_budget *c)
 	if (!c)
 		return;
 	svc_tcp_rx_budget_stage(c);
-	rx_loan_budget_reconfigure(&c->lb);
+	rx_loan_budget_reconfigure(c->lb);
 }
 
 /*
@@ -1359,13 +1713,13 @@ VISIBLE_IF_KUNIT bool svc_tcp_rx_budget_on(struct svc_tcp_rx_budget *c)
 	svc_tcp_rx_budget_requested(c, &pages, &reserve);
 	configured = pages != 0;
 	/* The receive clamp does not gate the read pool. */
-	if (configured && !c->lb.read &&
-	    READ_ONCE(svc_tcp_rx_rcvbuf) < SVC_TCP_RX_RCVBUF_MIN) {
+	if (configured && !c->lb->read &&
+	    __svc_tcp_rx_rcvbuf_effective(false) < SVC_TCP_RX_RCVBUF_MIN) {
 		pr_warn_once("svc: a region budget needs svc_tcp_rx_rcvbuf >= %u; budgets off\n",
 			     SVC_TCP_RX_RCVBUF_MIN);
 		configured = false;
 	}
-	return configured || READ_ONCE(c->lb.budget);
+	return configured || READ_ONCE(c->lb->budget);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_on);
 
@@ -1380,28 +1734,21 @@ static struct svc_tcp_rx_budget *svc_tcp_rx_budget_for(struct svc_sock *svsk)
 {
 	struct svc_tcp_rx_budget *c =
 		svc_tcp_rx_budget_of(READ_ONCE(svsk->sk_rx_wait.budget));
-	unsigned int pages, reserve;
 
 	if (c)
 		return c;
 	c = svc_tcp_rx_budget_net(svsk->sk_xprt.xpt_net);
-	if (c) {
-		svc_tcp_rx_budget_requested(c, &pages, &reserve);
-		if (pages)
-			return c;
-	}
+	if (c && svc_tcp_rx_budget_in_force(c))
+		return c;
 	return &svc_rx_budget_default;
 }
 
 /* @c, the budget a transport would draw on, is 0. */
 static bool svc_tcp_rx_budget_zero(const struct svc_tcp_rx_budget *c)
 {
-	unsigned int pages, reserve;
-
 	if (!static_branch_unlikely(&svc_tcp_rx_loans))
 		return true;
-	svc_tcp_rx_budget_requested(c, &pages, &reserve);
-	return !pages;
+	return !svc_tcp_rx_budget_in_force(c);
 }
 
 /* The budget @svsk would draw on is 0, so its records are copied. */
@@ -1421,16 +1768,17 @@ static bool svc_tcp_rx_budget_none(struct svc_sock *svsk)
  */
 struct svc_tcp_rx_budget *svc_tcp_rx_budget_read_for(struct svc_sock *svsk)
 {
-	struct svc_tcp_rx_budget *c;
-	unsigned int pages, reserve;
+	struct svc_tcp_rx_budget *c, *n;
 
+	/* the namespace's READ budget; the initial one's is the read pool */
+	n = svc_tcp_rx_budget_net(svsk->sk_xprt.xpt_net);
+	n = n && n->read ? n->read : &svc_rx_budget_read;
 	if (rx_loan_region_read_pages())
-		return &svc_rx_budget_read;
+		return n;
 	c = svc_tcp_rx_budget_for(svsk);
-	svc_tcp_rx_budget_requested(c, &pages, &reserve);
-	/* A transport whose budget is 0 draws on the global read pool. */
-	if (!pages)
-		return &svc_rx_budget_read;
+	/* A transport whose budget is 0 draws on the READ budget. */
+	if (!svc_tcp_rx_budget_in_force(c))
+		return n;
 	return c;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_read_for);
@@ -1471,7 +1819,7 @@ static bool svc_tcp_rx_credit_admit_to(struct svc_sock *svsk,
 		return true;
 	if (WARN_ON_ONCE(state->cr.linked))
 		return true;
-	return rx_loan_admit(&c->lb, &svsk->sk_rx_wait, &state->cr,
+	return rx_loan_admit(c->lb, svc_tcp_rx_consumer(svsk), &svsk->sk_rx_wait, &state->cr,
 			     svc_tcp_rx_credit_cost(c, state, pages),
 			     svc_tcp_rx_cost_warm(c));
 }
@@ -1523,6 +1871,7 @@ static void svc_tcp_rx_credit_return(struct svc_tcp_rx_state *state, u32 lend)
 	rx_loan_return(&state->cr, svc_tcp_rx_cost_sample(state), lend, &out);
 	if (out.budget) {
 		state->bounce_budget = svc_tcp_rx_budget_of(out.budget);
+		state->bounce_consumer = out.consumer;
 		state->bounce_credit = out.credit;
 		state->bounce_reserve = out.reserve;
 		state->bounce_stocked = out.stocked;
@@ -1537,14 +1886,15 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state)
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_credit_release);
 
 /*
- * A record whose loaned pages could not be accounted for is abandoned, its
- * pages possibly still held: keep its credit spent, but take it out of the
- * in-flight order so the next record can be the oldest and draw the reserve.
+ * A record whose loaned pages could not be accounted for is abandoned, @held
+ * of its pages possibly still out: keep that much of its credit spent, but
+ * take it out of the in-flight order so the next record can be the oldest
+ * and draw the reserve (rx_loan_orphan()).
  */
-static void svc_tcp_rx_credit_orphan(struct svc_tcp_rx_state *state)
+static void svc_tcp_rx_credit_orphan(struct svc_tcp_rx_state *state, u32 held)
 {
 	if (state)
-		rx_loan_orphan(&state->cr);
+		rx_loan_orphan(&state->cr, held);
 }
 
 /* A transport going away stops waiting. */
@@ -1562,7 +1912,7 @@ static long svc_tcp_rx_stocked(struct svc_tcp_rx_budget *c)
 	int cpu;
 
 	for_each_possible_cpu(cpu)
-		n += atomic_long_read(&per_cpu_ptr(c->lb.stock, cpu)->pages);
+		n += atomic_long_read(&per_cpu_ptr(c->lb->stock, cpu)->pages);
 	return n;
 }
 
@@ -1576,26 +1926,26 @@ long svc_tcp_rx_budget_kunit_stock(struct svc_tcp_rx_budget *c,
 
 	switch (op) {
 	case SVC_TCP_RX_KUNIT_STOCK_APPLY:	/* configure and kick, as a return */
-		spin_lock_bh(&c->lb.lock);
-		rx_loan_budget_update_locked(&c->lb);
+		spin_lock_bh(&c->lb->lock);
+		rx_loan_budget_update_locked(c->lb);
 		wake = svc_tcp_rx_credit_kick_locked(c, &granted);
-		spin_unlock_bh(&c->lb.lock);
+		spin_unlock_bh(&c->lb->lock);
 		rx_loan_wake(wake);
 		rx_loan_wake_granted(&granted);
 		break;
 	case SVC_TCP_RX_KUNIT_STOCK_FILL:	/* what an admission refills */
-		spin_lock_bh(&c->lb.lock);
-		ret = rx_loan_stock_refill_locked(&c->lb);
-		spin_unlock_bh(&c->lb.lock);
+		spin_lock_bh(&c->lb->lock);
+		ret = rx_loan_stock_refill_locked(c->lb);
+		spin_unlock_bh(&c->lb->lock);
 		break;
 	case SVC_TCP_RX_KUNIT_STOCK_TAKE:
-		ret = rx_loan_stock_take(&c->lb, n);
+		ret = rx_loan_stock_take(c->lb, n);
 		break;
 	case SVC_TCP_RX_KUNIT_STOCK_PUT:	/* a spill goes to avail */
 		ret = svc_tcp_rx_stock_put(c, n);
-		spin_lock_bh(&c->lb.lock);
-		c->lb.avail += ret;
-		spin_unlock_bh(&c->lb.lock);
+		spin_lock_bh(&c->lb->lock);
+		c->lb->avail += ret;
+		spin_unlock_bh(&c->lb->lock);
 		break;
 	case SVC_TCP_RX_KUNIT_STOCK_DRAIN:	/* what the first waiter does */
 		svc_tcp_rx_budget_kunit_drain(c);
@@ -1604,7 +1954,7 @@ long svc_tcp_rx_budget_kunit_stock(struct svc_tcp_rx_budget *c,
 		ret = svc_tcp_rx_stocked(c);
 		break;
 	case SVC_TCP_RX_KUNIT_STOCK_CONTENDED:
-		ret = READ_ONCE(c->lb.contended);
+		ret = READ_ONCE(c->lb->contended);
 		break;
 	}
 	return ret;
@@ -1618,7 +1968,7 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_stock);
  */
 struct svc_tcp_rx_budget *svc_tcp_rx_budget_kunit_alloc(void)
 {
-	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_alloc(&init_net);
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_alloc(&init_net, NULL);
 
 	if (!c)
 		return NULL;
@@ -1629,6 +1979,7 @@ struct svc_tcp_rx_budget *svc_tcp_rx_budget_kunit_alloc(void)
 	return c;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_alloc);
+
 
 void svc_tcp_rx_budget_kunit_free(struct svc_tcp_rx_budget *c)
 {
@@ -1644,13 +1995,13 @@ long svc_tcp_rx_budget_kunit_avail(void)
 {
 	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
 
-	return READ_ONCE(c->lb.avail) + svc_tcp_rx_stocked(c);
+	return READ_ONCE(c->lb->avail) + svc_tcp_rx_stocked(c);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_avail);
 
 long svc_tcp_rx_budget_kunit_default_avail(void)
 {
-	return READ_ONCE(svc_rx_budget_default.lb.avail) +
+	return READ_ONCE(svc_rx_budget_default.lb->avail) +
 	       svc_tcp_rx_stocked(&svc_rx_budget_default);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_default_avail);
@@ -1658,11 +2009,11 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_default_avail);
 long svc_tcp_rx_budget_avail(void)
 {
 	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
-	long n = READ_ONCE(c->lb.avail);
+	long n = READ_ONCE(c->lb->avail);
 	int cpu;
 
 	for_each_possible_cpu(cpu)
-		n += atomic_long_read(&per_cpu_ptr(c->lb.stock, cpu)->pages);
+		n += atomic_long_read(&per_cpu_ptr(c->lb->stock, cpu)->pages);
 	return n;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_avail);
@@ -1677,25 +2028,120 @@ unsigned int svc_tcp_rx_budget_cost_factor(void)
 	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
 	int cpu;
 
-	spin_lock_bh(&c->lb.lock);
+	spin_lock_bh(&c->lb->lock);
 	for_each_possible_cpu(cpu)
-		rx_loan_cost_fold_cpu_locked(&c->lb, per_cpu_ptr(c->lb.stock, cpu));
-	spin_unlock_bh(&c->lb.lock);
-	return READ_ONCE(c->lb.cost_factor);
+		rx_loan_cost_fold_cpu_locked(c->lb, per_cpu_ptr(c->lb->stock, cpu));
+	spin_unlock_bh(&c->lb->lock);
+	return READ_ONCE(c->lb->cost_factor);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_cost_factor);
 
 long svc_tcp_rx_budget_reserve_avail(void)
 {
-	return READ_ONCE(svc_tcp_rx_budget_initial()->lb.reserve);
+	return READ_ONCE(svc_tcp_rx_budget_initial()->lb->reserve);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_reserve_avail);
 
 long svc_tcp_rx_budget_default_avail(void)
 {
-	return READ_ONCE(svc_rx_budget_default.lb.avail);
+	return READ_ONCE(svc_rx_budget_default.lb->avail);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_default_avail);
+
+/*
+ * The initial namespace's server consumer, as a server of @nrthreads
+ * starting would register (or re-bind) it.
+ */
+struct rx_loan_consumer *svc_tcp_rx_kunit_consumer(unsigned int nrthreads,
+						   unsigned int max_payload)
+{
+	/* unpooled: svc_serv_nrpools() is 1, so it needs its one pool */
+	struct svc_pool pool = { .sp_nrthrmax = nrthreads };
+	struct svc_serv serv = {
+		.sv_nrthreads	= nrthreads,
+		.sv_max_payload	= max_payload,
+		.sv_pools	= &pool,
+	};
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
+
+	if (!c)
+		return NULL;
+	svc_tcp_rx_consumer_start(&init_net, &serv);
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	c->consumer_serv = NULL;	/* @serv is this frame's */
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+	return &c->consumer;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_consumer);
+
+/* The initial namespace's server stops, as nfsd_destroy_serv() stops it. */
+void svc_tcp_rx_kunit_consumer_stop(void)
+{
+	svc_tcp_rx_consumer_stop(&init_net);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_consumer_stop);
+
+/* An exact grant of @pages from @c to @rc, as a READ's. */
+int svc_tcp_rx_budget_kunit_grant(struct svc_tcp_rx_budget *c,
+				  struct rx_loan_consumer *rc,
+				  struct rx_loan_waiter *w, long pages)
+{
+	memset(w, 0, sizeof(*w));
+	INIT_LIST_HEAD(&w->node);
+	w->need = pages;
+	return rx_loan_grant(c->lb, rc, w);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_grant);
+
+void svc_tcp_rx_budget_kunit_grant_return(struct svc_tcp_rx_budget *c,
+					  struct rx_loan_waiter *w)
+{
+	rx_loan_grant_return(c->lb, w->consumer, w->credit, w->reserve);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_grant_return);
+
+/* The initial namespace's server sets @nrthreads, as svc_set_pool_threads(). */
+void svc_tcp_rx_kunit_threads(unsigned int nrthreads, unsigned int max_payload)
+{
+	/* unpooled: svc_serv_nrpools() is 1, so it needs its one pool */
+	struct svc_pool pool = { .sp_nrthrmax = nrthreads };
+	struct svc_serv serv = {
+		.sv_nrthreads	= nrthreads,
+		.sv_max_payload	= max_payload,
+		.sv_pools	= &pool,
+	};
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
+	struct svc_serv *was;
+
+	if (!c)
+		return;
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	was = c->consumer_serv;
+	c->consumer_serv = &serv;
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+	svc_tcp_rx_serv_threads(&serv);
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	c->consumer_serv = was;
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_threads);
+
+/*
+ * Turn the initial namespace's computed default @on or off: the pages its
+ * write budget then lends, and the budget it shares with rx_loan_net().
+ */
+unsigned long svc_tcp_rx_kunit_computed_default(bool on,
+						struct rx_loan_budget **lb)
+{
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
+
+	if (!c)
+		return 0;
+	WRITE_ONCE(c->lb->cfg_default, on);
+	*lb = c->shared;
+	return svc_tcp_rx_budget_in_force(c);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_computed_default);
 #endif
 
 /*
@@ -1915,14 +2361,23 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 {
 	int ret;
 
+	/* None of its pages went back: all of them may still be out. */
 	if (WARN_ON_ONCE(!svc_tcp_rx_refs_valid(state))) {
-		svc_tcp_rx_credit_orphan(state);
+		svc_tcp_rx_credit_orphan(state, U32_MAX);
 		return -EINVAL;
 	}
 	ret = rx_loan_table_release(&state->lt);
 	state->terminal = true;
 	if (ret) {
-		svc_tcp_rx_credit_orphan(state);
+		u32 acquired = state->lt.refs_acquired;
+		u32 released = state->lt.refs_released;
+
+		/*
+		 * Every borrowed entry went back to its pool: only references
+		 * taken and never released can still hold a page.
+		 */
+		svc_tcp_rx_credit_orphan(state, acquired > released ?
+					 acquired - released : 0);
 		return ret;
 	}
 	return 0;
@@ -2314,35 +2769,40 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_bounce_done(struct svc_rqst *rqstp,
 	svc_tcp_rx_bounce_give(bvec, state->bounce_pages);
 	c = state->bounce_budget;
 	lent = state->bounce_credit + state->bounce_reserve;
+	/* The consumer first, so the kick below sees it under its share. */
+	if (c && lent)
+		rx_loan_consumer_put(state->bounce_consumer, c->lb->read, lent);
 	if (c && lent && state->bounce_stocked) {
 		/* To this CPU's stock; the record is uncounted once it is back. */
 		long back = svc_tcp_rx_stock_put(c, lent);
 
-		this_cpu_sub(c->lb.stock->lent, lent);
+		this_cpu_sub(c->lb->stock->lent, lent);
 		if (back) {
-			spin_lock_bh(&c->lb.lock);
-			c->lb.avail += back;
-			this_cpu_dec(c->lb.stock->records);
-			rx_loan_budget_update_locked(&c->lb);
+			spin_lock_bh(&c->lb->lock);
+			c->lb->avail += back;
+			this_cpu_dec(c->lb->stock->records);
+			rx_loan_budget_update_locked(c->lb);
 			wake = svc_tcp_rx_credit_kick_locked(c, &granted);
-			spin_unlock_bh(&c->lb.lock);
+			spin_unlock_bh(&c->lb->lock);
 			rx_loan_wake(wake);
 			rx_loan_wake_granted(&granted);
 		} else {
-			this_cpu_dec(c->lb.stock->records);
+			this_cpu_dec(c->lb->stock->records);
 		}
 	} else if (c && lent) {
-		spin_lock_bh(&c->lb.lock);
-		c->lb.avail += state->bounce_credit;
-		c->lb.reserve += state->bounce_reserve;
-		c->lb.lent -= lent;
-		rx_loan_budget_update_locked(&c->lb);
+		spin_lock_bh(&c->lb->lock);
+		c->lb->avail += state->bounce_credit;
+		c->lb->reserve += state->bounce_reserve;
+		c->lb->lent -= lent;
+		rx_loan_budget_update_locked(c->lb);
 		wake = svc_tcp_rx_credit_kick_locked(c, &granted);
-		spin_unlock_bh(&c->lb.lock);
+		spin_unlock_bh(&c->lb->lock);
+		rx_loan_region_put(lent);
 		rx_loan_wake(wake);
 		rx_loan_wake_granted(&granted);
 	}
 	state->bounce_budget = NULL;
+	state->bounce_consumer = NULL;
 	state->bounce_pages = 0;
 	state->bounce_credit = 0;
 	state->bounce_reserve = 0;
@@ -2382,6 +2842,12 @@ struct svc_rx_region_tx {
 	u32				share;	/* the connection's, at admission */
 	bool				shared;	/* counted in the connection share */
 	bool				sent;
+	/*
+	 * the credit is charged to the namespace's consumer (as granted:
+	 * it may have unregistered since).  A flag, not the pointer, keeps
+	 * the descriptor in one cacheline; the consumer is the namespace's.
+	 */
+	bool				charged;
 };
 static_assert(sizeof(struct svc_rx_region_tx) <= 64);
 
@@ -2652,6 +3118,7 @@ svc_rx_region_tx_make(struct svc_rx_region_park *w, struct page **pages)
 	tx->tries = 0;
 	tx->share = w->share;
 	tx->shared = w->shared;	/* the share goes with the pages */
+	tx->charged = w->w.consumer;
 	tx->sent = false;
 	w->shared = false;
 	return tx;
@@ -2847,13 +3314,16 @@ static void svc_rx_region_tx_release(struct svc_rx_region_tx *tx)
 	struct svc_sock *svsk = tx->svsk;
 	unsigned int count = tx->count, share = tx->share;
 	long credit = tx->credit, reserve = tx->reserve;
-	bool shared = tx->shared;
+	bool shared = tx->shared, charged = tx->charged;
 
 	if (tx->sent)
 		trace_svcsock_tcp_rx_region_read(&svsk->sk_xprt, tx->xid, count,
 						 "complete", "-");
 	svc_rx_region_chain_give(svc_rx_region_tx_index(tx), count);
-	svc_tcp_rx_budget_read_return(c, credit, reserve);
+	/* the consumer it was granted to, registered or not now */
+	svc_tcp_rx_budget_read_return(c, charged ?
+				      svc_tcp_rx_net_consumer(svsk) : NULL,
+				      credit, reserve);
 	if (shared)
 		svc_rx_region_share_put(svsk, count, share);
 	svc_xprt_put(&svsk->sk_xprt);
@@ -2912,8 +3382,8 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_region_park_free(struct svc_rx_region_park *par
 {
 	/* Granted while parked: its credit (never its overrun) goes back. */
 	if (park->granted)
-		rx_loan_grant_drop(park->w.budget, park->w.credit,
-				   park->w.reserve);
+		rx_loan_grant_drop(park->w.budget, park->w.consumer,
+				   park->w.credit, park->w.reserve);
 	if (park->shared)
 		svc_rx_region_share_put(park->svsk, park->count, park->share);
 }
@@ -3016,7 +3486,8 @@ static int svc_rx_region_read_park(struct svc_rqst *rqstp,
 	park->parked = true;
 	w->shared = false;	/* the park has the share now */
 	park->w.ops = &svc_rx_region_park_ops;
-	rx_loan_park(&c->lb, &park->w);
+	rx_loan_park(c->lb, svc_tcp_rx_consumer(container_of(xprt, struct svc_sock,
+							       sk_xprt)), &park->w);
 	trace_svcsock_tcp_rx_region_read(xprt, xid, pages, "park", "-");
 	return -EAGAIN;
 }
@@ -3036,7 +3507,8 @@ static bool svc_rx_region_read_pages(struct svc_rqst *rqstp,
 	if (svc_rx_region_take_pages(rqstp->rq_rx_region_pages, w->count) !=
 	    w->count) {
 		atomic64_inc(&c->read_short);
-		svc_tcp_rx_budget_read_return(c, w->w.credit, w->w.reserve);
+		svc_tcp_rx_budget_read_return(c, w->w.consumer, w->w.credit,
+					      w->w.reserve);
 		return false;
 	}
 	svc_rx_region_hold(rqstp, svc_rx_region_tx_make(w,
@@ -3105,7 +3577,7 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_region_read(struct svc_rqst *rqstp,
 	}
 	want.shared = true;
 	want.w.need = pages;
-	ret = rx_loan_grant(&c->lb, &want.w);
+	ret = rx_loan_grant(c->lb, svc_tcp_rx_consumer(svsk), &want.w);
 	switch (ret) {
 	case 0:
 		if (svc_rx_region_read_pages(rqstp, &want, "admit"))
@@ -3190,11 +3662,11 @@ static void svc_rx_region_kunit_flush_kicks(void)
 {
 	struct svc_tcp_rx_budget *pos;
 
-	flush_work(&svc_rx_budget_default.lb.kick_work);
-	flush_work(&svc_rx_budget_read.lb.kick_work);
+	flush_work(&svc_rx_budget_default.lb->kick_work);
+	flush_work(&svc_rx_budget_read.lb->kick_work);
 	mutex_lock(&svc_rx_budget_cfg_lock);
 	list_for_each_entry(pos, &svc_rx_budget_pools, node)
-		flush_work(&pos->lb.kick_work);
+		flush_work(&pos->lb->kick_work);
 	mutex_unlock(&svc_rx_budget_cfg_lock);
 }
 
@@ -3238,11 +3710,11 @@ static void svc_rx_region_kunit_drain_budget(struct svc_tcp_rx_budget *c)
 	struct rx_loan_waiter *w, *n;
 	LIST_HEAD(drain);
 
-	spin_lock_bh(&c->lb.lock);
-	list_for_each_entry_safe(w, n, &c->lb.waiters, node)
+	spin_lock_bh(&c->lb->lock);
+	list_for_each_entry_safe(w, n, &c->lb->waiters, node)
 		if (w->exact)
 			list_move_tail(&w->node, &drain);
-	spin_unlock_bh(&c->lb.lock);
+	spin_unlock_bh(&c->lb->lock);
 	list_for_each_entry_safe(park, next, &drain, w.node) {
 		struct svc_deferred_req *dr =
 			container_of(park, struct svc_deferred_req, rx_region);
@@ -4119,6 +4591,8 @@ static struct svc_xprt *svc_tcp_accept(struct svc_xprt *xprt)
 		return NULL;
 
 	clear_bit(XPT_CONN, &svsk->sk_xprt.xpt_flags);
+	/* Before a connection's first record: the region, sized for the threads. */
+	rx_loan_region_carve();
 	err = kernel_accept(sock, &newsock, O_NONBLOCK);
 	if (err < 0) {
 		if (err != -EAGAIN)
@@ -4932,7 +5406,7 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 	 * socket lock is released.
 	 */
 	if (!svsk->sk_rx_held && !svsk->sk_rx_hold_pending &&
-	    READ_ONCE(svc_tcp_rx_rcvbuf) &&
+	    svc_tcp_rx_rcvbuf_effective() &&
 	    svc_tcp_rx_skb_region_pages(skb, 0, offset, offset + len))
 		svsk->sk_rx_hold_pending = true;
 	else if (svsk->sk_rx_held && svc_tcp_rx_hold_stale(svsk)) {
@@ -5602,9 +6076,31 @@ static struct svc_xprt_class svc_tcp_class = {
 	.xcl_ident = XPRT_TRANSPORT_TCP,
 };
 
+/*
+ * The default budget and the read pool go on the region's list too, so a
+ * region free kicks their waiters; with no memory for that they keep their
+ * static stocks and are kicked only by their own returns.
+ */
+static bool svc_rx_budget_default_listed;
+
+static bool svc_tcp_rx_budget_list(struct svc_tcp_rx_budget *c, bool read)
+{
+	struct rx_loan_stock __percpu *stock = c->lb->stock;
+
+	if (!rx_loan_budget_init(c->lb, read))
+		return true;
+	c->lb->stock = stock;
+	return false;
+}
+
 void svc_init_xprt_sock(void)
 {
 	svc_rx_region_init();
+	svc_rx_budget_default_listed =
+		svc_tcp_rx_budget_list(&svc_rx_budget_default, false);
+	/* The read pool is the initial namespace's rx_loan READ budget. */
+	svc_rx_budget_read.lb = &rx_loan_net(&init_net)->read;
+	WRITE_ONCE(svc_rx_budget_read.lb->owner, &svc_rx_budget_read);
 	svc_tcp_rx_budget_init();
 	svc_reg_xprt_class(&svc_tcp_class);
 	svc_reg_xprt_class(&svc_udp_class);
@@ -5615,8 +6111,12 @@ void svc_cleanup_xprt_sock(void)
 	svc_unreg_xprt_class(&svc_tcp_class);
 	svc_unreg_xprt_class(&svc_udp_class);
 	/* Dropped-park kicks of the budgets that are not per namespace. */
-	flush_work(&svc_rx_budget_default.lb.kick_work);
-	flush_work(&svc_rx_budget_read.lb.kick_work);
+	if (svc_rx_budget_default_listed)
+		rx_loan_budget_destroy(svc_rx_budget_default.lb);
+	else
+		flush_work(&svc_rx_budget_default.lb->kick_work);
+	flush_work(&svc_rx_budget_read.lb->kick_work);
+	WRITE_ONCE(svc_rx_budget_read.lb->owner, NULL);
 	svc_rx_region_cleanup();
 }
 
@@ -5712,7 +6212,7 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
 					   svsk->sk_rx_geo_pay);
 	svsk->sk_rx_geo_mem = 0;
 	svsk->sk_rx_geo_pay = 0;
-	WRITE_ONCE(svc_tcp_rx_budget_for(svsk)->lb.hold_factor,
+	WRITE_ONCE(svc_tcp_rx_budget_for(svsk)->lb->hold_factor,
 		   max(svsk->sk_rx_geo_factor[0], svsk->sk_rx_geo_factor[1]));
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_geometry_account);
@@ -5733,7 +6233,7 @@ VISIBLE_IF_KUNIT unsigned int svc_tcp_rx_hold_factor(struct svc_sock *svsk)
 	factor = max(svsk->sk_rx_geo_factor[0], svsk->sk_rx_geo_factor[1]);
 	if (factor)
 		return factor;
-	return READ_ONCE(svc_tcp_rx_budget_for(svsk)->lb.hold_factor) ?:
+	return READ_ONCE(svc_tcp_rx_budget_for(svsk)->lb->hold_factor) ?:
 	       SVC_TCP_RX_CREDIT_FACTOR_UNLEARNED;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_hold_factor);
@@ -5765,7 +6265,7 @@ static bool svc_tcp_rx_hold_stale(struct svc_sock *svsk)
  */
 VISIBLE_IF_KUNIT void svc_tcp_rx_hold_buffer(struct svc_sock *svsk)
 {
-	unsigned int bytes = READ_ONCE(svc_tcp_rx_rcvbuf);
+	unsigned int bytes = svc_tcp_rx_rcvbuf_effective();
 	unsigned int factor = svc_tcp_rx_hold_factor(svsk);
 	struct sock *sk = svsk->sk_sk;
 	int rcvbuf, clamp;

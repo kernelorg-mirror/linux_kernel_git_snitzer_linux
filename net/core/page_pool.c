@@ -13,6 +13,7 @@
 #include <linux/device.h>
 #include <kunit/visibility.h>
 
+#include <net/hotdata.h>
 #include <net/netdev_lock.h>
 #include <net/netdev_rx_queue.h>
 #include <net/page_pool/helpers.h>
@@ -75,48 +76,32 @@ DEFINE_STATIC_KEY_FALSE(page_pool_mem_providers);
  * the region or escaped.
  */
 #define RX_REGION_DEV_LEN	256
-static char rx_region_dev[RX_REGION_DEV_LEN];
-module_param_string(rx_region_dev, rx_region_dev, RX_REGION_DEV_LEN, 0644);
-MODULE_PARM_DESC(rx_region_dev,
-		 "Network devices, comma-separated (parent bus device, else interface name), whose page pools share the fixed receive region");
-static unsigned int rx_region_pages;
-module_param(rx_region_pages, uint, 0644);
-MODULE_PARM_DESC(rx_region_pages,
-		 "Pages in the fixed receive region, allocated with the device's first page pool; a change takes effect once no pool is bound to the region");
-static unsigned int rx_region_stack;
-module_param(rx_region_stack, uint, 0644);
-MODULE_PARM_DESC(rx_region_stack,
-		 "Pages a pool bound to the fixed receive region keeps for reuse (0: the pool's size); read when a pool is created");
 /*
- * Boot or load time only (0444): receive budgets are checked against the
- * write partition this leaves, so it may not move under them.  A split
- * smaller than PAGE_POOL_RX_REGION_READ_MIN could never hold one maximum
- * READ and is refused.
+ * Test and tuning overrides, in debugfs (page_pool_rx_region_cfg/), never
+ * parameters: the region's size is computed when it is carved
+ * (rx_region_size_now()).  dev lists the network devices (comma-separated,
+ * parent bus device, else interface name) whose page pools take their pages
+ * from the region; pages, when set, replaces the computed size; stack is
+ * what a bound pool keeps for reuse (0: the pool's size).  read_pages
+ * splits a read partition off; it changes only while no region exists,
+ * since receive budgets are checked against the write partition it leaves,
+ * and a split smaller than PAGE_POOL_RX_REGION_READ_MIN could never hold
+ * one maximum READ and is refused.
  */
+static char rx_region_dev[RX_REGION_DEV_LEN];
+static unsigned int rx_region_pages;
+static unsigned int rx_region_stack;
 static unsigned int rx_region_read_pages;
-
-static int rx_region_read_pages_set(const char *val,
-				    const struct kernel_param *kp)
-{
-	unsigned int v;
-	int ret = kstrtouint(val, 0, &v);
-
-	if (ret)
-		return ret;
-	if (v && v < PAGE_POOL_RX_REGION_READ_MIN)
-		return -EINVAL;
-	*(unsigned int *)kp->arg = v;
-	return 0;
-}
-
-static const struct kernel_param_ops rx_region_read_pages_ops = {
-	.set = rx_region_read_pages_set,
-	.get = param_get_uint,
-};
-module_param_cb(rx_region_read_pages, &rx_region_read_pages_ops,
-		&rx_region_read_pages, 0444);
-MODULE_PARM_DESC(rx_region_read_pages,
-		 "Pages of the fixed receive region split off for reads, set at boot (0: reads and writes share it; else at least one maximum READ)");
+/*
+ * What the region is carved to hold, under rx_region_mutex: the pages the
+ * registered receive-loan consumers ask for (page_pool_rx_region_demand()),
+ * and the rings of the listed devices' pools that wait for it.
+ */
+static unsigned long rx_region_demand;
+static unsigned long rx_region_nic;
+static DEFINE_XARRAY(rx_region_waiting);
+/* Of memory, the most the region takes: 1/RX_REGION_RAM_DIV. */
+#define RX_REGION_RAM_DIV	64
 
 /*
  * Each CPU caches a few of a partition's free pages, so taking and
@@ -330,6 +315,45 @@ static bool page_pool_rx_region_listed(const char *dev)
 	return false;
 }
 
+/*
+ * The region's size for rings of @nic pages and consumers asking @demand,
+ * on a host of @ram pages: their sum rounded up to a power of two, at least
+ * one maximum READ, at most a power of two within 1/RX_REGION_RAM_DIV of
+ * memory.  0 while nothing asks for any.
+ */
+static unsigned long rx_region_size_for(unsigned long nic,
+					unsigned long demand,
+					unsigned long ram)
+{
+	unsigned long nr = nic + demand;
+	unsigned long cap = rounddown_pow_of_two(max(ram / RX_REGION_RAM_DIV,
+						     1UL));
+
+	/* No region at all rather than one too small for the read floor. */
+	if (!nr || cap < PAGE_POOL_RX_REGION_READ_MIN)
+		return 0;
+	nr = max(nr, (unsigned long)PAGE_POOL_RX_REGION_READ_MIN);
+	return min(roundup_pow_of_two(nr), cap);
+}
+
+/* The size a region carved now would have; lockless, may be stale. */
+static unsigned long rx_region_size_now(void)
+{
+	unsigned int pages = READ_ONCE(rx_region_pages);
+
+	if (pages)
+		return pages;
+	return rx_region_size_for(READ_ONCE(rx_region_nic),
+				  READ_ONCE(rx_region_demand),
+				  totalram_pages());
+}
+
+/* The ring a pool's pages recycle through: its share of the NIC term. */
+static unsigned long rx_region_pool_ring(const struct page_pool *pool)
+{
+	return pool->p.pool_size ?: 1024;
+}
+
 static struct lock_class_key rx_region_shard_keys[RX_REGION_SHARDS_MAX];
 
 /*
@@ -525,7 +549,8 @@ static void page_pool_rx_region_reap(void)
 	lockdep_assert_held(&rx_region_mutex);
 	if (!r || r->pools || rx_region_reads_bound)
 		return;
-	if (rx_region_dev[0] && READ_ONCE(rx_region_pages) == r->nr)
+	if (rx_region_demand ||
+	    (rx_region_dev[0] && rx_region_size_now() == r->nr))
 		return;
 	for (k = 0; k < RX_REGION_PARTS; k++) {
 		escaped += atomic_long_read(&r->part[k].escaped);
@@ -567,10 +592,21 @@ static void page_pool_rx_region_reap(void)
 /* @pool is being destroyed: every page it took is back or has escaped. */
 static void page_pool_rx_region_unbind(struct page_pool *pool)
 {
-	if (!pool->rx_region)
-		return;
+	/*
+	 * A carve attaches a waiting pool before it erases it, both under
+	 * the mutex: with none left waiting, the attach is seen.
+	 */
+	if (xa_empty(&rx_region_waiting)) {
+		smp_rmb();
+		if (!READ_ONCE(pool->rx_region))
+			return;
+	}
 	mutex_lock(&rx_region_mutex);
-	if (pool->rx_region == rx_region && !WARN_ON_ONCE(!rx_region->pools))
+	if (xa_erase(&rx_region_waiting, (unsigned long)pool))
+		WRITE_ONCE(rx_region_nic,
+			   rx_region_nic - rx_region_pool_ring(pool));
+	if (pool->rx_region && pool->rx_region == rx_region &&
+	    !WARN_ON_ONCE(!rx_region->pools))
 		rx_region->pools--;
 	pool->rx_region = NULL;
 	page_pool_rx_region_reap();
@@ -581,11 +617,10 @@ static struct page_pool_rx_region *
 page_pool_rx_region_get(const struct page_pool *pool)
 {
 	const struct net_device *netdev = pool->slow.netdev;
-	unsigned long nr = READ_ONCE(rx_region_pages);
 	struct page_pool_rx_region *r;
 	const char *dev;
 
-	if (!nr || pool->p.order || !rx_region_dev[0])
+	if (pool->p.order || !rx_region_dev[0])
 		return NULL;
 	if (netdev)
 		dev = netdev->dev.parent ? dev_name(netdev->dev.parent) :
@@ -599,16 +634,107 @@ page_pool_rx_region_get(const struct page_pool *pool)
 	mutex_lock(&rx_region_mutex);
 	/* A region left over from another size goes before a new one is made. */
 	page_pool_rx_region_reap();
-	/* Every listed device shares the one region's write partition. */
+	/*
+	 * Every listed device shares the one region's write partition.  Its
+	 * size is set (an override) or asked for (a registered consumer):
+	 * carve it now.  Else the pool waits, its ring counted in the size,
+	 * and the first consumer's carve attaches it.
+	 */
 	r = rx_region;
-	if (!r)
-		r = rx_region_create(nr, pool->p.nid == NUMA_NO_NODE ?
-					 numa_mem_id() : pool->p.nid, dev);
+	if (!r && (READ_ONCE(rx_region_pages) || rx_region_demand) &&
+	    !rx_region_failed)
+		r = rx_region_create(rx_region_size_now() ?: 1,
+				     pool->p.nid == NUMA_NO_NODE ?
+				     numa_mem_id() : pool->p.nid, dev);
 	if (r)
 		r->pools++;
+	else if (!xa_insert(&rx_region_waiting, (unsigned long)pool,
+			    (void *)pool, GFP_KERNEL))
+		WRITE_ONCE(rx_region_nic,
+			   rx_region_nic + rx_region_pool_ring(pool));
 	mutex_unlock(&rx_region_mutex);
 	return r;
 }
+
+/*
+ * Carve the region at its computed size and attach the listed devices'
+ * pools that wait for it; under rx_region_mutex.  Attaching is the one
+ * pointer store: the pool's next slow-path allocation (NAPI) takes region
+ * pages, and its return path gives back by pfn, so the pages it holds from
+ * before go to the page allocator.  An attached pool keeps its ring in
+ * place of the region's stack: the stack is the pool's recycling state and
+ * changes only while nothing recycles into it.
+ */
+static struct page_pool_rx_region *rx_region_carve_locked(int nid,
+							  const char *who)
+{
+	unsigned long nr = rx_region_size_now();
+	struct page_pool_rx_region *r;
+	struct page_pool *pool;
+	unsigned long idx;
+
+	lockdep_assert_held(&rx_region_mutex);
+	if (rx_region || rx_region_failed || !nr)
+		return rx_region;
+	r = rx_region_create(nr, nid, who);
+	if (!r)
+		return NULL;
+	xa_for_each(&rx_region_waiting, idx, pool) {
+		r->pools++;
+		/* Pairs with READ_ONCE() in the allocation and return paths. */
+		WRITE_ONCE(pool->rx_region, r);
+		xa_erase(&rx_region_waiting, idx);
+		WRITE_ONCE(rx_region_nic,
+			   rx_region_nic - rx_region_pool_ring(pool));
+	}
+	return r;
+}
+
+/**
+ * page_pool_rx_region_demand - a receive-loan consumer's floor comes or goes
+ * @delta: pages the consumer asks the region to hold (negative: gives up)
+ *
+ * Demand only counts toward the size: the region is carved later, by
+ * page_pool_rx_region_carve(), _bind_reads() or a listed device's pool,
+ * so that a floor set after registration is the one it is carved for.  It
+ * keeps that size until no consumer, pool or READ holds it.  A region that
+ * exists is not resized: a late consumer shares what is there.
+ *
+ * Context: process context; may sleep.
+ */
+void page_pool_rx_region_demand(long delta)
+{
+	might_sleep();
+	mutex_lock(&rx_region_mutex);
+	WRITE_ONCE(rx_region_demand, rx_region_demand + delta);
+	if (delta < 0)
+		page_pool_rx_region_reap();
+	mutex_unlock(&rx_region_mutex);
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_demand);
+
+/**
+ * page_pool_rx_region_carve - carve the region for the pools that wait
+ *
+ * When a consumer asks for region pages and a listed device's pool waits
+ * for the region, carve it at its computed size and attach the pools.
+ * Without a waiting pool nothing could take region pages for a receive, so
+ * nothing is carved (a READ carves through _bind_reads()).
+ *
+ * Context: process context; may sleep.
+ */
+void page_pool_rx_region_carve(void)
+{
+	if (!READ_ONCE(rx_region_demand) || !READ_ONCE(rx_region_nic) ||
+	    READ_ONCE(rx_region_failed))
+		return;
+	might_sleep();
+	mutex_lock(&rx_region_mutex);
+	if (rx_region_demand && !xa_empty(&rx_region_waiting))
+		rx_region_carve_locked(numa_mem_id(), "consumers");
+	mutex_unlock(&rx_region_mutex);
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_carve);
 
 /*
  * Bind @pool to region @r (if any).  A bound pool recycles remotely released
@@ -667,7 +793,7 @@ static void page_pool_rx_region_bind(struct page_pool *pool,
  */
 bool page_pool_rx_region_bind_reads(void)
 {
-	unsigned long nr = READ_ONCE(rx_region_pages);
+	unsigned long nr = rx_region_size_now();
 	bool bound;
 
 	/* Pairs with smp_store_release() below. */
@@ -677,8 +803,7 @@ bool page_pool_rx_region_bind_reads(void)
 		return false;
 	might_sleep();
 	mutex_lock(&rx_region_mutex);
-	if (!rx_region && !rx_region_failed)
-		rx_region_create(nr, numa_mem_id(), "reads");
+	rx_region_carve_locked(numa_mem_id(), "reads");
 	bound = rx_region;
 	if (bound)
 		smp_store_release(&rx_region_reads_bound, true);
@@ -704,7 +829,7 @@ unsigned long page_pool_rx_region_size(void)
 
 	rcu_read_lock();
 	r = rx_region_published();
-	nr = r ? r->nr : READ_ONCE(rx_region_pages);
+	nr = r ? r->nr : rx_region_size_now();
 	rcu_read_unlock();
 	return nr;
 }
@@ -1203,16 +1328,33 @@ unsigned long page_pool_rx_region_capacity(bool read)
 EXPORT_SYMBOL_GPL(page_pool_rx_region_capacity);
 
 #if IS_ENABLED(CONFIG_KUNIT)
-/* Set rx_region_read_pages as its boot parameter does. */
-int page_pool_rx_region_kunit_read_param(const char *val)
-{
-	const struct kernel_param kp = { .arg = &rx_region_read_pages };
+static int rx_region_read_pages_dbg_set(void *data, u64 val);
 
-	return rx_region_read_pages_set(val, &kp);
+/* Set rx_region_read_pages as its debugfs file read_pages does. */
+int page_pool_rx_region_kunit_read_param(u64 val)
+{
+	return rx_region_read_pages_dbg_set(NULL, val);
 }
 EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_read_param);
 
-/* The parameters and the failure flag, for a test to restore later. */
+/* The size formula, on inputs the test chooses. */
+unsigned long page_pool_rx_region_kunit_size_for(unsigned long nic,
+						 unsigned long demand,
+						 unsigned long ram)
+{
+	return rx_region_size_for(nic, demand, ram);
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_size_for);
+
+/* The size a carve now would compute, on a host of @ram pages. */
+unsigned long page_pool_rx_region_kunit_carve_size(unsigned long ram)
+{
+	return rx_region_size_for(READ_ONCE(rx_region_nic),
+				  READ_ONCE(rx_region_demand), ram);
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_carve_size);
+
+/* The overrides and the failure flag, for a test to restore later. */
 void page_pool_rx_region_kunit_params(unsigned int *pages,
 				      unsigned int *read_pages, bool *failed)
 {
@@ -1467,6 +1609,38 @@ bool page_pool_rx_region_kunit_recycle(struct page_pool *pool,
 	return ok;
 }
 EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_recycle);
+
+/*
+ * Free an skb holding @page (one of @pool's, refcount 1) as a receiver on
+ * another CPU frees it: onto the defer list of the CPU that "allocated" it,
+ * the first other online CPU, which no device feeds. False, page untouched,
+ * with no other CPU online.
+ */
+bool page_pool_rx_region_kunit_defer(struct page_pool *pool,
+				     struct page *page)
+{
+	struct sk_buff *skb;
+	int cpu, me;
+
+	skb = alloc_skb(0, GFP_KERNEL);
+	if (!skb)
+		return false;
+	local_bh_disable();
+	me = smp_processor_id();
+	cpu = cpumask_next_wrap(me, cpu_online_mask);
+	if (cpu == me || cpu >= nr_cpu_ids) {
+		local_bh_enable();
+		kfree_skb(skb);
+		return false;
+	}
+	skb_add_rx_frag(skb, 0, page, 0, PAGE_SIZE, PAGE_SIZE);
+	skb_mark_for_recycle(skb);
+	skb->alloc_cpu = cpu;
+	skb_attempt_defer_free(skb);
+	local_bh_enable();
+	return true;
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_defer);
 #endif
 
 
@@ -2111,7 +2285,7 @@ static noinline netmem_ref page_pool_rx_region_alloc(struct page_pool *pool,
 {
 	/* Every listed device's pools draw on the write partition. */
 	struct page_pool_rx_region_part *r =
-		&pool->rx_region->part[RX_REGION_WRITE];
+		&READ_ONCE(pool->rx_region)->part[RX_REGION_WRITE];
 	struct page *pages[RX_REGION_POOL_REFILL];
 	netmem_ref netmem;
 	int i, n;
@@ -2220,7 +2394,7 @@ netmem_ref page_pool_alloc_netmems(struct page_pool *pool, gfp_t gfp)
 	/* Slow-path: cache empty, do real allocation */
 	if (static_branch_unlikely(&page_pool_mem_providers) && pool->mp_ops)
 		netmem = pool->mp_ops->alloc_netmems(pool, gfp);
-	else if (page_pool_rx_region_exists() && pool->rx_region)
+	else if (page_pool_rx_region_exists() && READ_ONCE(pool->rx_region))
 		netmem = page_pool_rx_region_alloc(pool, gfp);
 	else
 		netmem = __page_pool_alloc_netmems_slow(pool, gfp);
@@ -2305,7 +2479,7 @@ static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem)
 {
 	/* Read before the release count: the pool may go once it is up. */
 	struct page_pool_rx_region *region =
-		page_pool_rx_region_exists() ? pool->rx_region : NULL;
+		page_pool_rx_region_exists() ? READ_ONCE(pool->rx_region) : NULL;
 	int count;
 	bool put;
 
@@ -2360,7 +2534,7 @@ static bool page_pool_recycle_in_cache(netmem_ref netmem,
 				       struct page_pool *pool)
 {
 	if (unlikely(pool->alloc.count == PP_ALLOC_CACHE_SIZE ||
-		     (pool->rx_region &&
+		     (READ_ONCE(pool->rx_region) &&
 		      pool->alloc.count >= RX_REGION_POOL_CACHE))) {
 		recycle_stat_inc(pool, cache_full);
 		return false;
@@ -2773,6 +2947,20 @@ static int page_pool_release(struct page_pool *pool)
 	return inflight;
 }
 
+/*
+ * Free the skbs every CPU deferred to every other: a list is otherwise
+ * freed only by its CPU's receive processing, or once half full.
+ */
+static void page_pool_skb_defer_flush(void)
+{
+	int cpu, node;
+
+	for_each_possible_cpu(cpu)
+		for_each_node(node)
+			skb_defer_node_flush(per_cpu_ptr(net_hotdata.skb_defer_nodes,
+							 cpu) + node);
+}
+
 static void page_pool_release_retry(struct work_struct *wq)
 {
 	struct delayed_work *dwq = to_delayed_work(wq);
@@ -2789,6 +2977,18 @@ static void page_pool_release_retry(struct work_struct *wq)
 	 */
 	if (inflight <= 0)
 		return;
+
+	/*
+	 * A region pool's pages can sit in skbs on the defer list of a CPU
+	 * that no longer receives (its device went away) and so never frees
+	 * them: free every such list here, then look again.
+	 */
+	if (READ_ONCE(pool->rx_region)) {
+		page_pool_skb_defer_flush();
+		inflight = page_pool_release(pool);
+		if (inflight <= 0)
+			return;
+	}
 
 	/* Periodic warning for page pools the user can't see */
 	netdev = READ_ONCE(pool->slow.netdev);
@@ -2926,3 +3126,87 @@ void net_mp_niov_clear_page_pool(struct net_iov *niov)
 
 	page_pool_clear_pp_info(netmem);
 }
+
+static ssize_t rx_region_dev_read(struct file *file, char __user *ubuf,
+				  size_t count, loff_t *ppos)
+{
+	char buf[RX_REGION_DEV_LEN + 1];
+	int len;
+
+	mutex_lock(&rx_region_mutex);
+	len = scnprintf(buf, sizeof(buf), "%s\n", rx_region_dev);
+	mutex_unlock(&rx_region_mutex);
+	return simple_read_from_buffer(ubuf, count, ppos, buf, len);
+}
+
+/* Read when a pool is created: lists the devices whose pools bind. */
+static ssize_t rx_region_dev_write(struct file *file, const char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	char buf[RX_REGION_DEV_LEN];
+
+	if (*ppos || count >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, count))
+		return -EFAULT;
+	buf[count] = 0;
+	mutex_lock(&rx_region_mutex);
+	strscpy(rx_region_dev, strim(buf), sizeof(rx_region_dev));
+	mutex_unlock(&rx_region_mutex);
+	return count;
+}
+
+static const struct file_operations rx_region_dev_fops = {
+	.read = rx_region_dev_read,
+	.write = rx_region_dev_write,
+	.llseek = default_llseek,
+};
+
+static int rx_region_read_pages_get(void *data, u64 *val)
+{
+	*val = READ_ONCE(rx_region_read_pages);
+	return 0;
+}
+
+/* Only while no region exists: budgets are checked against the split. */
+static int rx_region_read_pages_dbg_set(void *data, u64 val)
+{
+	int ret = 0;
+
+	if (val > UINT_MAX || (val && val < PAGE_POOL_RX_REGION_READ_MIN))
+		return -EINVAL;
+	mutex_lock(&rx_region_mutex);
+	if (rx_region)
+		ret = -EBUSY;
+	else
+		WRITE_ONCE(rx_region_read_pages, val);
+	mutex_unlock(&rx_region_mutex);
+	return ret;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(rx_region_read_pages_fops, rx_region_read_pages_get,
+			 rx_region_read_pages_dbg_set, "%llu\n");
+
+static int rx_region_size_get(void *data, u64 *val)
+{
+	*val = rx_region_size_now();
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(rx_region_size_fops, rx_region_size_get, NULL,
+			 "%llu\n");
+
+static int __init page_pool_rx_region_debugfs_init(void)
+{
+	struct dentry *d = debugfs_create_dir("page_pool_rx_region_cfg", NULL);
+
+	debugfs_create_file("dev", 0600, d, NULL, &rx_region_dev_fops);
+	debugfs_create_u32("pages", 0600, d, &rx_region_pages);
+	debugfs_create_u32("stack", 0600, d, &rx_region_stack);
+	debugfs_create_file_unsafe("read_pages", 0600, d, NULL,
+				   &rx_region_read_pages_fops);
+	debugfs_create_file_unsafe("size", 0400, d, NULL,
+				   &rx_region_size_fops);
+	debugfs_create_ulong("demand", 0400, d, &rx_region_demand);
+	debugfs_create_ulong("nic", 0400, d, &rx_region_nic);
+	return 0;
+}
+late_initcall(page_pool_rx_region_debugfs_init);

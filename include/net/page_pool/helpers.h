@@ -355,13 +355,19 @@ static inline bool page_pool_rx_region_exists(void)
 }
 unsigned long page_pool_rx_region_read_pages(void);
 bool page_pool_rx_region_bind_reads(void);
+void page_pool_rx_region_demand(long delta);
+void page_pool_rx_region_carve(void);
 unsigned int page_pool_rx_region_take_pages(bool read, struct page **pages,
 					    unsigned int n);
 void page_pool_rx_region_give_pages(struct page **pages, unsigned int n);
 unsigned long page_pool_rx_region_span(bool read, unsigned long *base_pfn);
 unsigned long page_pool_rx_region_capacity(bool read);
 #if IS_ENABLED(CONFIG_KUNIT)
-int page_pool_rx_region_kunit_read_param(const char *val);
+int page_pool_rx_region_kunit_read_param(u64 val);
+unsigned long page_pool_rx_region_kunit_size_for(unsigned long nic,
+						 unsigned long demand,
+						 unsigned long ram);
+unsigned long page_pool_rx_region_kunit_carve_size(unsigned long ram);
 void page_pool_rx_region_kunit_params(unsigned int *pages,
 				      unsigned int *read_pages, bool *failed);
 void page_pool_rx_region_kunit_config(unsigned int pages,
@@ -383,6 +389,8 @@ void page_pool_rx_region_kunit_reset_min_free(void);
 struct page_pool *page_pool_rx_region_kunit_pool(void);
 bool page_pool_rx_region_kunit_recycle(struct page_pool *pool,
 				       struct page *page);
+bool page_pool_rx_region_kunit_defer(struct page_pool *pool,
+				     struct page *page);
 #endif
 #else
 static inline unsigned long page_pool_rx_region_size(void)
@@ -397,6 +405,14 @@ static inline bool page_pool_rx_region_exists(void)
 static inline unsigned long page_pool_rx_region_read_pages(void)
 {
 	return 0;
+}
+
+static inline void page_pool_rx_region_demand(long delta)
+{
+}
+
+static inline void page_pool_rx_region_carve(void)
+{
 }
 
 static inline bool page_pool_rx_region_bind_reads(void)

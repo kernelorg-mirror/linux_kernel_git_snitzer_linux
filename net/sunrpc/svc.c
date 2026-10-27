@@ -858,6 +858,8 @@ svc_set_pool_threads(struct svc_serv *serv, struct svc_pool *pool,
 
 	pool->sp_nrthrmin = min_threads;
 	pool->sp_nrthrmax = max_threads;
+	/* the receive region's floor follows the threads */
+	svc_tcp_rx_serv_threads(serv);
 
 	/*
 	 * When min_threads is set, then only change the number of
