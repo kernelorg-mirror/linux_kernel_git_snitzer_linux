@@ -195,6 +195,7 @@ void		svc_cleanup_xprt_sock(void);
 struct svc_tcp_rx_state *svc_tcp_rx_state_alloc(unsigned long capacity,
 						gfp_t gfp, int node);
 void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state);
+struct svc_tcp_rx_budget *svc_tcp_rx_budget_read_for(struct svc_sock *svsk);
 
 #if IS_ENABLED(CONFIG_KUNIT)
 extern unsigned int svc_tcp_rx_copy_below;
@@ -246,6 +247,13 @@ void svc_tcp_rx_kunit_save(void);
 void svc_tcp_rx_kunit_restore(void);
 unsigned long svc_tcp_spare_kunit_set_max(unsigned long bytes);
 long svc_tcp_spare_kunit_pages(void);
+void svc_tcp_rx_budget_kunit_region(unsigned long pages,
+				    unsigned long read_pages);
+struct svc_tcp_rx_budget *svc_tcp_rx_budget_kunit_read(void);
+void svc_tcp_rx_budget_kunit_init(void);
+bool svc_tcp_rx_budget_on(struct svc_tcp_rx_budget *c);
+int svc_tcp_rx_budget_kunit_stats(struct svc_tcp_rx_budget *c, char *buf,
+				  size_t size);
 long svc_tcp_rx_budget_default_avail(void);
 bool svc_tcp_rx_credit_admit(struct svc_sock *svsk,
 			     struct svc_tcp_rx_state *state, u32 reclen);

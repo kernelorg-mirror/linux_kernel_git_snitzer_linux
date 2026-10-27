@@ -11,6 +11,7 @@
 #include <linux/slab.h>
 #include <linux/debugfs.h>
 #include <linux/device.h>
+#include <kunit/visibility.h>
 
 #include <net/netdev_lock.h>
 #include <net/netdev_rx_queue.h>
@@ -52,20 +53,26 @@ DEFINE_STATIC_KEY_FALSE(page_pool_mem_providers);
  * pool created for a listed device allocates only from one physically
  * contiguous region that all listed devices share, allocated when the first
  * such pool is created, and its pages return to the region instead of the
- * page allocator.  An empty region fails the allocation: that is the receive
- * stall.  A page another holder still references when its pool returns it
- * leaves the region for good and is counted as escaped; it is never replaced.
+ * page allocator.  rx_region_read_pages splits the last pages of the region
+ * off as a read partition for NFSD READ payloads; the listed devices' pools
+ * use the rest (the write partition).  Without a split both directions share
+ * the one partition.  Each partition has its own free list, lock and
+ * statistics.  An empty partition fails the allocation: that is the stall.
+ * A page another holder still references when it is returned leaves the
+ * region for good and is counted as escaped; it is never replaced.
  *
  * The region outlives its pools, so that taking a port down and up, or
  * resizing its rings, finds the same memory again and needs no second
- * contiguous allocation.  It is given back only once no pool is bound to it
- * and it no longer matches what is asked for: rx_region_pages has changed, or
- * rx_region_dev is empty.  That is checked when the last pool bound to it is
- * destroyed and again when the next pool of a listed device is created, so a
- * region is resized by taking every listed device's pools away (the ports
- * down), writing the new size, and bringing them back.  A pool is not
- * destroyed while any of its pages is still out, a loaned one included, so
- * by then every page is either back in the region or escaped.
+ * contiguous allocation.  It is given back only once no pool is bound to it,
+ * no READ consumer has bound it (page_pool_rx_region_bind_reads(), which
+ * holds it for good), and it no longer matches what is asked for:
+ * rx_region_pages has changed, or rx_region_dev is empty.  That is checked
+ * when the last pool bound to it is destroyed and again when the next pool
+ * of a listed device is created, so a region is resized by taking every
+ * listed device's pools away (the ports down), writing the new size, and
+ * bringing them back.  A pool is not destroyed while any of its pages is
+ * still out, a loaned one included, so by then every page is either back in
+ * the region or escaped.
  */
 #define RX_REGION_DEV_LEN	256
 static char rx_region_dev[RX_REGION_DEV_LEN];
@@ -80,23 +87,80 @@ static unsigned int rx_region_stack;
 module_param(rx_region_stack, uint, 0644);
 MODULE_PARM_DESC(rx_region_stack,
 		 "Pages a pool bound to the fixed receive region keeps for reuse (0: the pool's size); read when a pool is created");
+/*
+ * Boot or load time only (0444): receive budgets are checked against the
+ * write partition this leaves, so it may not move under them.  A split
+ * smaller than PAGE_POOL_RX_REGION_READ_MIN could never hold one maximum
+ * READ and is refused.
+ */
+static unsigned int rx_region_read_pages;
 
-struct page_pool_rx_region {
+static int rx_region_read_pages_set(const char *val,
+				    const struct kernel_param *kp)
+{
+	unsigned int v;
+	int ret = kstrtouint(val, 0, &v);
+
+	if (ret)
+		return ret;
+	if (v && v < PAGE_POOL_RX_REGION_READ_MIN)
+		return -EINVAL;
+	*(unsigned int *)kp->arg = v;
+	return 0;
+}
+
+static const struct kernel_param_ops rx_region_read_pages_ops = {
+	.set = rx_region_read_pages_set,
+	.get = param_get_uint,
+};
+module_param_cb(rx_region_read_pages, &rx_region_read_pages_ops,
+		&rx_region_read_pages, 0444);
+MODULE_PARM_DESC(rx_region_read_pages,
+		 "Pages of the fixed receive region split off for reads, set at boot (0: reads and writes share it; else at least one maximum READ)");
+
+/* One partition of the region: its own free list, lock and statistics. */
+struct page_pool_rx_region_part {
 	spinlock_t lock;
-	unsigned long base_pfn;
+	unsigned long first_pfn;
 	unsigned long nr;
 	unsigned long nfree;
 	unsigned long min_free;
 	unsigned long alloc_fail;
 	unsigned long escaped;
+	struct page **free;
+} ____cacheline_aligned_in_smp;
+
+enum { RX_REGION_WRITE, RX_REGION_READ, RX_REGION_PARTS };
+
+struct page_pool_rx_region {
+	struct page_pool_rx_region_part part[RX_REGION_PARTS];
+	unsigned long base_pfn;
+	unsigned long nr;
 	unsigned int pools;		/* bound to this region; rx_region_mutex */
 	struct dentry *debugfs;
-	struct page **free;
 	char dev[RX_REGION_DEV_LEN];
 };
 
 static struct page_pool_rx_region *rx_region;
 static DEFINE_MUTEX(rx_region_mutex);
+/*
+ * A READ consumer bound the region (page_pool_rx_region_bind_reads()): it is
+ * held from then on as a bound pool holds it, and never given back.  Written
+ * under rx_region_mutex; read locklessly once set.
+ */
+static bool rx_region_reads_bound;
+
+static void rx_region_part_show(struct seq_file *m, const char *prefix,
+				struct page_pool_rx_region_part *p)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&p->lock, flags);
+	seq_printf(m, "%sfree %lu\n%smin_free %lu\n%salloc_fail %lu\n%sescaped %lu\n",
+		   prefix, p->nfree, prefix, p->min_free, prefix, p->alloc_fail,
+		   prefix, p->escaped);
+	spin_unlock_irqrestore(&p->lock, flags);
+}
 
 /*
  * On from when the region is made until it is given back: no page is a
@@ -109,14 +173,13 @@ EXPORT_SYMBOL_GPL(page_pool_rx_region_key);
 static int rx_region_show(struct seq_file *m, void *v)
 {
 	struct page_pool_rx_region *r = m->private;
-	unsigned long flags;
 
-	spin_lock_irqsave(&r->lock, flags);
-	seq_printf(m, "dev %s\nphys_base 0x%llx\npages %lu\nfree %lu\n"
-		   "min_free %lu\nalloc_fail %lu\nescaped %lu\n", r->dev,
-		   (u64)r->base_pfn << PAGE_SHIFT, r->nr, r->nfree,
-		   r->min_free, r->alloc_fail, r->escaped);
-	spin_unlock_irqrestore(&r->lock, flags);
+	seq_printf(m, "dev %s\nphys_base 0x%llx\npages %lu\nread_pages %lu\n",
+		   r->dev, (u64)r->base_pfn << PAGE_SHIFT, r->nr,
+		   r->part[RX_REGION_READ].nr);
+	rx_region_part_show(m, "", &r->part[RX_REGION_WRITE]);
+	if (r->part[RX_REGION_READ].nr)
+		rx_region_part_show(m, "read_", &r->part[RX_REGION_READ]);
 	return 0;
 }
 
@@ -125,16 +188,21 @@ static int rx_region_open(struct inode *inode, struct file *file)
 	return single_open(file, rx_region_show, inode->i_private);
 }
 
-/* Any write restarts the low-water mark at the current free count. */
+/* Any write restarts each partition's low-water mark at its free count. */
 static ssize_t rx_region_write(struct file *file, const char __user *buf,
 			       size_t len, loff_t *ppos)
 {
 	struct page_pool_rx_region *r = file_inode(file)->i_private;
 	unsigned long flags;
+	int i;
 
-	spin_lock_irqsave(&r->lock, flags);
-	r->min_free = r->nfree;
-	spin_unlock_irqrestore(&r->lock, flags);
+	for (i = 0; i < RX_REGION_PARTS; i++) {
+		struct page_pool_rx_region_part *p = &r->part[i];
+
+		spin_lock_irqsave(&p->lock, flags);
+		p->min_free = p->nfree;
+		spin_unlock_irqrestore(&p->lock, flags);
+	}
 	return len;
 }
 
@@ -161,32 +229,155 @@ static bool page_pool_rx_region_listed(const char *dev)
 	return false;
 }
 
+static void rx_region_part_init(struct page_pool_rx_region_part *p,
+				unsigned long first_pfn, unsigned long nr,
+				struct page **free)
+{
+	unsigned long i;
+
+	spin_lock_init(&p->lock);
+	p->first_pfn = first_pfn;
+	p->nr = nr;
+	p->free = free;
+	for (i = 0; i < nr; i++) {
+		struct page *page = pfn_to_page(first_pfn + i);
+
+		/*
+		 * page_pool ORs its signature into pp_magic, which overlays
+		 * page->lru.next.  Pages from the page allocator carry list
+		 * poison there; a contiguous allocation may leave a live list
+		 * pointer, so start every region page as a released pool page.
+		 */
+		page->pp_magic = 0;
+		free[i] = page;
+	}
+	p->nfree = nr;
+	p->min_free = nr;
+}
+
+/* The read split requested for a region of @nr pages; 0 if it leaves none. */
+static unsigned long rx_region_read_split(unsigned long nr)
+{
+	unsigned long nr_read = READ_ONCE(rx_region_read_pages);
+
+	return nr_read < nr ? nr_read : 0;
+}
+
+/*
+ * The region once it exists, without rx_region_mutex: pairs with the
+ * smp_store_release() in rx_region_publish(), so its partitions are seen
+ * initialized.  A region no pool or READ consumer holds may be given back
+ * (page_pool_rx_region_reap()), so a caller that holds neither reads it
+ * under rcu_read_lock().
+ */
+static struct page_pool_rx_region *rx_region_published(void)
+{
+	/* pairs with smp_store_release() in rx_region_publish() */
+	return smp_load_acquire(&rx_region);
+}
+
+/* An earlier allocation failed: a device-less consumer does not retry. */
+static bool rx_region_failed;
+
+/*
+ * Lay the region @r out over the @nr pages at @base_pfn, @nr_read of them
+ * split off for reads, and publish it; under rx_region_mutex.
+ */
+static void rx_region_publish(struct page_pool_rx_region *r,
+			      struct page **free, unsigned long base_pfn,
+			      unsigned long nr, unsigned long nr_read,
+			      const char *who)
+{
+	lockdep_assert_held(&rx_region_mutex);
+	r->base_pfn = base_pfn;
+	r->nr = nr;
+	rx_region_part_init(&r->part[RX_REGION_WRITE], base_pfn, nr - nr_read,
+			    free);
+	rx_region_part_init(&r->part[RX_REGION_READ], base_pfn + nr - nr_read,
+			    nr_read, free + nr - nr_read);
+	strscpy(r->dev, rx_region_dev, RX_REGION_DEV_LEN);
+	strim(r->dev);
+	/* On before the region is seen; off once it is given back. */
+	static_branch_inc(&page_pool_rx_region_key);
+	/* Pairs with rx_region_published(). */
+	smp_store_release(&rx_region, r);
+	r->debugfs = debugfs_create_file("page_pool_rx_region", 0600, NULL, r,
+					 &rx_region_fops);
+	pr_info("page_pool: fixed rx region for %s: %lu pages (%lu read) at 0x%llx\n",
+		who, nr, nr_read, (u64)base_pfn << PAGE_SHIFT);
+}
+
+/* Allocate the region of @nr pages on @nid; under rx_region_mutex. */
+static struct page_pool_rx_region *rx_region_create(unsigned long nr, int nid,
+						    const char *who)
+{
+	unsigned long nr_read = rx_region_read_split(nr);
+	struct page_pool_rx_region *r;
+	struct page *base = NULL;
+	struct page **free;
+
+	lockdep_assert_held(&rx_region_mutex);
+	if (READ_ONCE(rx_region_read_pages) && !nr_read)
+		pr_warn("page_pool: rx_region_read_pages %u leaves no write partition of %lu pages; not split\n",
+			READ_ONCE(rx_region_read_pages), nr);
+	r = kzalloc(sizeof(*r), GFP_KERNEL);
+	if (!r)
+		goto fail;
+	free = kvmalloc_array(nr, sizeof(*free), GFP_KERNEL);
+#ifdef CONFIG_CONTIG_ALLOC
+	if (free)
+		base = alloc_contig_pages(nr, GFP_KERNEL, nid, NULL);
+#endif
+	if (!base) {
+		pr_warn("page_pool: no %lu-page fixed rx region for %s\n",
+			nr, who);
+		kvfree(free);
+		kfree(r);
+		goto fail;
+	}
+	rx_region_publish(r, free, page_to_pfn(base), nr, nr_read, who);
+	return r;
+fail:
+	/* Pairs with READ_ONCE() in page_pool_rx_region_bind_reads(). */
+	WRITE_ONCE(rx_region_failed, true);
+	return NULL;
+}
+
 /*
  * Give the region back if nothing is bound to it and it is not the one asked
- * for any more.  Only the pages on the free list are ours to free: an escaped
- * page went to the page allocator with its last reference.
+ * for any more.  Only the pages on the free lists are ours to free: an
+ * escaped page went to the page allocator with its last reference.  Lockless
+ * readers (page_pool_rx_region_size(), _read_pages()) hold rcu_read_lock(),
+ * so the region is unpublished and a grace period passes before it is freed.
  */
 static void page_pool_rx_region_reap(void)
 {
 	struct page_pool_rx_region *r = rx_region;
-	unsigned long i;
+	unsigned long i, held = 0;
+	int k;
 
 	lockdep_assert_held(&rx_region_mutex);
-	if (!r || r->pools)
+	if (!r || r->pools || rx_region_reads_bound)
 		return;
 	if (rx_region_dev[0] && READ_ONCE(rx_region_pages) == r->nr)
 		return;
+	for (k = 0; k < RX_REGION_PARTS; k++)
+		held += r->part[k].nfree + r->part[k].escaped;
 	/* No pool, so no page can be out: keep the memory if that is wrong. */
-	if (WARN_ON_ONCE(r->nfree + r->escaped != r->nr))
+	if (WARN_ON_ONCE(held != r->nr))
 		return;
+	WRITE_ONCE(rx_region, NULL);
 	debugfs_remove(r->debugfs);
-	for (i = 0; i < r->nfree; i++)
-		__free_page(r->free[i]);
+	synchronize_rcu();
+	for (k = 0; k < RX_REGION_PARTS; k++)
+		for (i = 0; i < r->part[k].nfree; i++)
+			__free_page(r->part[k].free[i]);
 	pr_info("page_pool: fixed rx region for %s freed: %lu pages at 0x%llx, %lu escaped\n",
-		r->dev, r->nr, (u64)r->base_pfn << PAGE_SHIFT, r->escaped);
-	kvfree(r->free);
+		r->dev, r->nr, (u64)r->base_pfn << PAGE_SHIFT,
+		r->part[RX_REGION_WRITE].escaped +
+		r->part[RX_REGION_READ].escaped);
+	kvfree(r->part[RX_REGION_WRITE].free);
 	kfree(r);
-	rx_region = NULL;
 	static_branch_dec(&page_pool_rx_region_key);
 }
 
@@ -207,9 +398,8 @@ static struct page_pool_rx_region *
 page_pool_rx_region_get(const struct page_pool *pool)
 {
 	const struct net_device *netdev = pool->slow.netdev;
-	unsigned long i, nr = READ_ONCE(rx_region_pages);
+	unsigned long nr = READ_ONCE(rx_region_pages);
 	struct page_pool_rx_region *r;
-	struct page *base = NULL;
 	const char *dev;
 
 	if (!nr || pool->p.order || !rx_region_dev[0])
@@ -226,54 +416,11 @@ page_pool_rx_region_get(const struct page_pool *pool)
 	mutex_lock(&rx_region_mutex);
 	/* A region left over from another size goes before a new one is made. */
 	page_pool_rx_region_reap();
-	/* Every listed device shares the one region. */
+	/* Every listed device shares the one region's write partition. */
 	r = rx_region;
-	if (r)
-		goto out;
-	r = kzalloc(sizeof(*r), GFP_KERNEL);
 	if (!r)
-		goto out;
-	r->free = kvmalloc_array(nr, sizeof(*r->free), GFP_KERNEL);
-#ifdef CONFIG_CONTIG_ALLOC
-	if (r->free)
-		base = alloc_contig_pages(nr, GFP_KERNEL,
-					  pool->p.nid == NUMA_NO_NODE ?
-					  numa_mem_id() : pool->p.nid, NULL);
-#endif
-	if (!base) {
-		pr_warn("page_pool: no %lu-page fixed rx region for %s\n",
-			nr, dev);
-		kvfree(r->free);
-		kfree(r);
-		r = NULL;
-		goto out;
-	}
-	spin_lock_init(&r->lock);
-	r->base_pfn = page_to_pfn(base);
-	r->nr = nr;
-	for (i = 0; i < nr; i++) {
-		struct page *page = pfn_to_page(r->base_pfn + i);
-
-		/*
-		 * page_pool ORs its signature into pp_magic, which overlays
-		 * page->lru.next.  Pages from the page allocator carry list
-		 * poison there; a contiguous allocation may leave a live list
-		 * pointer, so start every region page as a released pool page.
-		 */
-		page->pp_magic = 0;
-		r->free[i] = page;
-	}
-	r->nfree = nr;
-	r->min_free = nr;
-	strscpy(r->dev, rx_region_dev, RX_REGION_DEV_LEN);
-	strim(r->dev);
-	static_branch_inc(&page_pool_rx_region_key);
-	rx_region = r;
-	r->debugfs = debugfs_create_file("page_pool_rx_region", 0600, NULL, r,
-					 &rx_region_fops);
-	pr_info("page_pool: fixed rx region for %s: %lu pages at 0x%llx\n",
-		r->dev, nr, (u64)r->base_pfn << PAGE_SHIFT);
-out:
+		r = rx_region_create(nr, pool->p.nid == NUMA_NO_NODE ?
+					 numa_mem_id() : pool->p.nid, dev);
 	if (r)
 		r->pools++;
 	mutex_unlock(&rx_region_mutex);
@@ -281,41 +428,394 @@ out:
 }
 
 /**
+ * page_pool_rx_region_bind_reads - make sure the region exists for reads
+ *
+ * A READ consumer has no listed device, so it creates the region itself,
+ * when rx_region_pages is set and no earlier allocation failed (never
+ * retried).  Devices listed in rx_region_dev later bind to it.  The region
+ * is then placed on the calling thread's memory node (numa_mem_id()); a
+ * device on another node that binds later reaches it across nodes, so a
+ * READ consumer on a multi-node host should bind from a thread on the
+ * devices' node, or list the devices so that they create it first.
+ *
+ * Once bound for reads the region is held for good, as a bound pool holds
+ * it: it is never given back, so a change to rx_region_pages no longer
+ * takes effect, and take_pages(), give_pages() and span() may use it
+ * without a lock.
+ *
+ * Context: process context; may sleep (the first call allocates the region,
+ * which may migrate pages).  Once the region is bound, or once an
+ * allocation has failed, it returns without a lock.
+ *
+ * Return: true when a region exists.
+ */
+bool page_pool_rx_region_bind_reads(void)
+{
+	unsigned long nr = READ_ONCE(rx_region_pages);
+	bool bound;
+
+	/* Pairs with smp_store_release() below. */
+	if (smp_load_acquire(&rx_region_reads_bound))
+		return true;
+	if (!nr || READ_ONCE(rx_region_failed))
+		return false;
+	might_sleep();
+	mutex_lock(&rx_region_mutex);
+	if (!rx_region && !rx_region_failed)
+		rx_region_create(nr, numa_mem_id(), "reads");
+	bound = rx_region;
+	if (bound)
+		smp_store_release(&rx_region_reads_bound, true);
+	mutex_unlock(&rx_region_mutex);
+	return bound;
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_bind_reads);
+
+/**
  * page_pool_rx_region_size - pages in the fixed receive region
  *
+ * Lockless, so a credit pool may read it under its own spinlock.
+ *
  * Return: the region's size once it exists, else the size configured for it
- * (rx_region_pages); 0 when there is none.
+ * (rx_region_pages); 0 when there is none.  Both partitions are inside it;
+ * budgets for receive loans are checked against the write partition, the
+ * size less page_pool_rx_region_read_pages().
  */
 unsigned long page_pool_rx_region_size(void)
 {
+	struct page_pool_rx_region *r;
 	unsigned long nr;
 
-	mutex_lock(&rx_region_mutex);
-	nr = rx_region ? rx_region->nr : READ_ONCE(rx_region_pages);
-	mutex_unlock(&rx_region_mutex);
+	rcu_read_lock();
+	r = rx_region_published();
+	nr = r ? r->nr : READ_ONCE(rx_region_pages);
+	rcu_read_unlock();
 	return nr;
 }
 EXPORT_SYMBOL_GPL(page_pool_rx_region_size);
 
-/* Return a region page; false when it is not ours or another holder has it. */
-static bool page_pool_rx_region_put(struct page_pool_rx_region *r,
+/**
+ * page_pool_rx_region_read_pages - pages in the region's read partition
+ *
+ * Lockless, so a credit pool may read it under its own spinlock.
+ *
+ * Return: the read partition's size once the region exists, else the split
+ * configured for it (rx_region_read_pages, when it leaves a write
+ * partition); 0 when reads and writes share the region.  When not 0 it is
+ * at least PAGE_POOL_RX_REGION_READ_MIN.
+ */
+unsigned long page_pool_rx_region_read_pages(void)
+{
+	struct page_pool_rx_region *r;
+	unsigned long nr;
+
+	rcu_read_lock();
+	r = rx_region_published();
+	nr = r ? r->part[RX_REGION_READ].nr :
+		 rx_region_read_split(READ_ONCE(rx_region_pages));
+	rcu_read_unlock();
+	return nr;
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_read_pages);
+
+
+/* Return a partition's page; false when it is not ours or another holder has it. */
+static bool page_pool_rx_region_put(struct page_pool_rx_region_part *p,
 				    struct page *page)
 {
 	unsigned long pfn = page_to_pfn(page), flags;
 	bool kept = false;
 
-	if (pfn - r->base_pfn >= r->nr)
+	if (pfn - p->first_pfn >= p->nr)
 		return false;
-	spin_lock_irqsave(&r->lock, flags);
+	spin_lock_irqsave(&p->lock, flags);
 	if (page_ref_count(page) == 1) {
-		r->free[r->nfree++] = page;
+		p->free[p->nfree++] = page;
 		kept = true;
 	} else {
-		r->escaped++;
+		WRITE_ONCE(p->escaped, p->escaped + 1);
 	}
-	spin_unlock_irqrestore(&r->lock, flags);
+	spin_unlock_irqrestore(&p->lock, flags);
 	return kept;
 }
+
+/* The partition a consumer outside the pools draws on. */
+static struct page_pool_rx_region_part *
+rx_region_part(struct page_pool_rx_region *r, bool read)
+{
+	if (read && r->part[RX_REGION_READ].nr)
+		return &r->part[RX_REGION_READ];
+	return &r->part[RX_REGION_WRITE];
+}
+
+/**
+ * page_pool_rx_region_take_pages - take region pages outside the pools
+ * @read: from the read partition when the region is split
+ * @pages: filled with the pages taken
+ * @n: pages wanted
+ *
+ * All or nothing, most recently freed first.  Each page has refcount 1 and
+ * pp_magic 0.  Too few free pages is not an allocation failure here, so
+ * alloc_fail is not counted.  What a failed take means depends on @n:
+ * within page_pool_rx_region_capacity(), the pages are lent out and the
+ * caller may wait for earlier takes to be given back; beyond it (a request
+ * larger than the partition, or one that escaped pages have put out of
+ * reach) it can never succeed, and the caller serves the request from
+ * ordinary pages instead of waiting.  A split read partition is created
+ * holding one maximum READ (PAGE_POOL_RX_REGION_READ_MIN); only escaped
+ * pages can take that away.
+ *
+ * The caller has bound the region (page_pool_rx_region_bind_reads()).
+ *
+ * Return: @n, or 0 when there is no region or too few free pages.
+ */
+unsigned int page_pool_rx_region_take_pages(bool read, struct page **pages,
+					    unsigned int n)
+{
+	struct page_pool_rx_region *r = rx_region_published();
+	struct page_pool_rx_region_part *p;
+	unsigned long flags;
+	unsigned int i;
+
+	if (!r || !n)
+		return 0;
+	p = rx_region_part(r, read);
+	spin_lock_irqsave(&p->lock, flags);
+	if (p->nfree < n) {
+		spin_unlock_irqrestore(&p->lock, flags);
+		return 0;
+	}
+	for (i = 0; i < n; i++)
+		pages[i] = p->free[--p->nfree];
+	if (p->nfree < p->min_free)
+		p->min_free = p->nfree;
+	spin_unlock_irqrestore(&p->lock, flags);
+	return n;
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_take_pages);
+
+/**
+ * page_pool_rx_region_give_pages - return pages taken by take_pages
+ * @pages: the pages
+ * @n: how many
+ *
+ * Each page goes back to the partition its address lies in, whichever
+ * partition it was taken from.  Give a page back only once every other
+ * reference is gone: a page sent with MSG_SPLICE_PAGES stays referenced by
+ * its skbs until the data is acknowledged, so a sender gives it back on TX
+ * completion, not when the send call returns.  A page another holder still
+ * references leaves the region for good: it is counted escaped (per
+ * partition, in debugfs), this reference is put, and the holder's final put
+ * frees it to the page allocator.  Escape is the fault path: the partition
+ * is one page smaller from then on, page_pool_rx_region_capacity() says so,
+ * and a take beyond it fails for good, so the caller serves that request
+ * from ordinary pages (see page_pool_rx_region_take_pages()).  A page given
+ * back twice, found with the partition already full, warns and is counted
+ * escaped without being put again.  A page from outside the region warns
+ * and is put.  Process or BH context.
+ */
+void page_pool_rx_region_give_pages(struct page **pages, unsigned int n)
+{
+	struct page_pool_rx_region *r = rx_region_published();
+	struct page_pool_rx_region_part *p = NULL, *q;
+	unsigned long flags = 0;
+	unsigned int i;
+
+	for (i = 0; i < n; i++) {
+		struct page *page = pages[i];
+		unsigned long off;
+
+		off = r ? page_to_pfn(page) - r->base_pfn : ULONG_MAX;
+		if (WARN_ON_ONCE(!r || off >= r->nr)) {
+			put_page(page);
+			continue;
+		}
+		q = &r->part[off < r->part[RX_REGION_WRITE].nr ?
+			     RX_REGION_WRITE : RX_REGION_READ];
+		if (q != p) {
+			if (p)
+				spin_unlock_irqrestore(&p->lock, flags);
+			p = q;
+			spin_lock_irqsave(&p->lock, flags);
+		}
+		if (likely(page_ref_count(page) == 1)) {
+			/* A double give: the page is already free here. */
+			if (WARN_ON_ONCE(p->nfree >= p->nr)) {
+				WRITE_ONCE(p->escaped, p->escaped + 1);
+				continue;
+			}
+			p->free[p->nfree++] = page;
+			continue;
+		}
+		WRITE_ONCE(p->escaped, p->escaped + 1);
+		put_page(page);
+	}
+	if (p)
+		spin_unlock_irqrestore(&p->lock, flags);
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_give_pages);
+
+/**
+ * page_pool_rx_region_span - where a consumer's partition lies
+ * @read: as for page_pool_rx_region_take_pages()
+ * @base_pfn: set to the partition's first pfn when there is a region
+ *
+ * Return: the partition's size in pages, escaped ones included, so a
+ * consumer may index per-page state by pfn - @base_pfn; 0 (@base_pfn
+ * untouched) when there is no region.  page_pool_rx_region_capacity() is
+ * how many of them can still be taken.
+ */
+unsigned long page_pool_rx_region_span(bool read, unsigned long *base_pfn)
+{
+	struct page_pool_rx_region *r = rx_region_published();
+	struct page_pool_rx_region_part *p;
+
+	if (!r)
+		return 0;
+	p = rx_region_part(r, read);
+	*base_pfn = p->first_pfn;
+	return p->nr;
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_span);
+
+/**
+ * page_pool_rx_region_capacity - pages a consumer's partition can still lend
+ * @read: as for page_pool_rx_region_take_pages()
+ *
+ * The partition's size less its escaped pages: the largest take that can
+ * succeed once every earlier take is given back.  Lockless, so it may lag
+ * an escape in progress; a caller compares a request against it before
+ * deciding to wait for pages rather than serve the request unconfined.
+ *
+ * Return: the usable size in pages; 0 when there is no region.
+ */
+unsigned long page_pool_rx_region_capacity(bool read)
+{
+	struct page_pool_rx_region *r = rx_region_published();
+	struct page_pool_rx_region_part *p;
+	unsigned long escaped;
+
+	if (!r)
+		return 0;
+	p = rx_region_part(r, read);
+	escaped = READ_ONCE(p->escaped);
+	return escaped < p->nr ? p->nr - escaped : 0;
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_capacity);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/* Set rx_region_read_pages as its boot parameter does. */
+int page_pool_rx_region_kunit_read_param(const char *val)
+{
+	const struct kernel_param kp = { .arg = &rx_region_read_pages };
+
+	return rx_region_read_pages_set(val, &kp);
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_read_param);
+
+/* The parameters and the failure flag, for a test to restore later. */
+void page_pool_rx_region_kunit_params(unsigned int *pages,
+				      unsigned int *read_pages, bool *failed)
+{
+	mutex_lock(&rx_region_mutex);
+	*pages = READ_ONCE(rx_region_pages);
+	*read_pages = READ_ONCE(rx_region_read_pages);
+	*failed = READ_ONCE(rx_region_failed);
+	mutex_unlock(&rx_region_mutex);
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_params);
+
+/* Restore the parameters and the failure flag outright. */
+void page_pool_rx_region_kunit_config(unsigned int pages,
+				      unsigned int read_pages, bool failed)
+{
+	mutex_lock(&rx_region_mutex);
+	WRITE_ONCE(rx_region_pages, pages);
+	WRITE_ONCE(rx_region_read_pages, read_pages);
+	WRITE_ONCE(rx_region_failed, failed);
+	mutex_unlock(&rx_region_mutex);
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_config);
+
+/*
+ * Publish a region over @nr pages the test owns at @base (each with
+ * refcount 1), @nr_read of them split off for reads; -EBUSY if one exists.
+ */
+int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
+				      unsigned long nr_read)
+{
+	struct page_pool_rx_region *r = kzalloc(sizeof(*r), GFP_KERNEL);
+	struct page **free = kvmalloc_array(nr, sizeof(*free), GFP_KERNEL);
+	int ret = !r || !free ? -ENOMEM : nr_read < nr ? 0 : -EINVAL;
+
+	mutex_lock(&rx_region_mutex);
+	if (rx_region)
+		ret = -EBUSY;
+	if (!ret)
+		rx_region_publish(r, free, page_to_pfn(base), nr, nr_read,
+				  "kunit");
+	mutex_unlock(&rx_region_mutex);
+	if (ret) {
+		kvfree(free);
+		kfree(r);
+	}
+	return ret;
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_install);
+
+/*
+ * Unpublish the region; free its pages too when bind_reads() allocated them
+ * (@contig).  No pool or consumer may hold it.
+ */
+void page_pool_rx_region_kunit_remove(bool contig)
+{
+	struct page_pool_rx_region *r;
+
+	mutex_lock(&rx_region_mutex);
+	r = rx_region;
+	WRITE_ONCE(rx_region, NULL);
+	WRITE_ONCE(rx_region_reads_bound, false);
+	mutex_unlock(&rx_region_mutex);
+	if (!r)
+		return;
+	debugfs_remove(r->debugfs);
+	synchronize_rcu();
+#ifdef CONFIG_CONTIG_ALLOC
+	if (contig)
+		free_contig_range(r->base_pfn, r->nr);
+#endif
+	kvfree(r->part[RX_REGION_WRITE].free);
+	kfree(r);
+	static_branch_dec(&page_pool_rx_region_key);
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_remove);
+
+/* A partition's free, min_free, alloc_fail and escaped counts. */
+void page_pool_rx_region_kunit_part(bool read, unsigned long out[4])
+{
+	struct page_pool_rx_region *r;
+	struct page_pool_rx_region_part *p;
+	unsigned long flags;
+
+	memset(out, 0, 4 * sizeof(*out));
+	rcu_read_lock();
+	r = rx_region_published();
+	if (!r) {
+		rcu_read_unlock();
+		return;
+	}
+	p = &r->part[read ? RX_REGION_READ : RX_REGION_WRITE];
+	spin_lock_irqsave(&p->lock, flags);
+	out[0] = p->nfree;
+	out[1] = p->min_free;
+	out[2] = p->alloc_fail;
+	out[3] = p->escaped;
+	spin_unlock_irqrestore(&p->lock, flags);
+	rcu_read_unlock();
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_part);
+#endif
+
 
 #ifdef CONFIG_PAGE_POOL_STATS
 static DEFINE_PER_CPU(struct page_pool_recycle_stats, pp_system_recycle_stats);
@@ -967,7 +1467,9 @@ static struct page *__page_pool_alloc_page_order(struct page_pool *pool,
 static noinline netmem_ref page_pool_rx_region_alloc(struct page_pool *pool,
 						     gfp_t gfp)
 {
-	struct page_pool_rx_region *r = pool->rx_region;
+	/* Every listed device's pools draw on the write partition. */
+	struct page_pool_rx_region_part *r =
+		&pool->rx_region->part[RX_REGION_WRITE];
 	struct page *pages[PP_ALLOC_CACHE_REFILL];
 	unsigned long flags;
 	netmem_ref netmem;
@@ -1187,7 +1689,8 @@ static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem)
 	if (put) {
 		page_pool_clear_pp_info(netmem);
 		if (likely(!region) ||
-		    !page_pool_rx_region_put(region, netmem_to_page(netmem)))
+		    !page_pool_rx_region_put(&region->part[RX_REGION_WRITE],
+					     netmem_to_page(netmem)))
 			put_page(netmem_to_page(netmem));
 	}
 	/* An optimization would be to call __free_pages(page, pool->p.order)

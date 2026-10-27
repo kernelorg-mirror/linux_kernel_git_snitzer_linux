@@ -329,6 +329,14 @@ static inline bool page_pool_unref_and_test(netmem_ref netmem)
 	return page_pool_unref_netmem(netmem, 1) == 0;
 }
 
+/*
+ * Smallest read partition page_pool.rx_region_read_pages accepts: one
+ * maximum SUNRPC payload (RPCSVC_MAXPAYLOAD, 4 MiB, which svcsock.c
+ * asserts) starting anywhere in its first page, so a READ the server can
+ * send always fits.
+ */
+#define PAGE_POOL_RX_REGION_READ_MIN	(((4UL << 20) >> PAGE_SHIFT) + 1)
+
 #ifdef CONFIG_PAGE_POOL
 unsigned long page_pool_rx_region_size(void);
 
@@ -345,6 +353,24 @@ static inline bool page_pool_rx_region_exists(void)
 {
 	return static_branch_unlikely(&page_pool_rx_region_key);
 }
+unsigned long page_pool_rx_region_read_pages(void);
+bool page_pool_rx_region_bind_reads(void);
+unsigned int page_pool_rx_region_take_pages(bool read, struct page **pages,
+					    unsigned int n);
+void page_pool_rx_region_give_pages(struct page **pages, unsigned int n);
+unsigned long page_pool_rx_region_span(bool read, unsigned long *base_pfn);
+unsigned long page_pool_rx_region_capacity(bool read);
+#if IS_ENABLED(CONFIG_KUNIT)
+int page_pool_rx_region_kunit_read_param(const char *val);
+void page_pool_rx_region_kunit_params(unsigned int *pages,
+				      unsigned int *read_pages, bool *failed);
+void page_pool_rx_region_kunit_config(unsigned int pages,
+				      unsigned int read_pages, bool failed);
+int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
+				      unsigned long nr_read);
+void page_pool_rx_region_kunit_remove(bool contig);
+void page_pool_rx_region_kunit_part(bool read, unsigned long out[4]);
+#endif
 #else
 static inline unsigned long page_pool_rx_region_size(void)
 {
@@ -354,6 +380,38 @@ static inline unsigned long page_pool_rx_region_size(void)
 static inline bool page_pool_rx_region_exists(void)
 {
 	return false;
+}
+static inline unsigned long page_pool_rx_region_read_pages(void)
+{
+	return 0;
+}
+
+static inline bool page_pool_rx_region_bind_reads(void)
+{
+	return false;
+}
+
+static inline unsigned int page_pool_rx_region_take_pages(bool read,
+							  struct page **pages,
+							  unsigned int n)
+{
+	return 0;
+}
+
+static inline void page_pool_rx_region_give_pages(struct page **pages,
+						  unsigned int n)
+{
+}
+
+static inline unsigned long page_pool_rx_region_span(bool read,
+						     unsigned long *base_pfn)
+{
+	return 0;
+}
+
+static inline unsigned long page_pool_rx_region_capacity(bool read)
+{
+	return 0;
 }
 #endif
 
