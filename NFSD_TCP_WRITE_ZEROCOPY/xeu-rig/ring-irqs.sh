@@ -11,7 +11,9 @@ pci=$(basename "$(readlink -f /sys/class/net/$d/device)")
 nr=$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')
 # More than four rings: a ring's Rx and Tx share a CPU, Rx-i and Tx-i on
 # first + i, so that eight rings still keep to the eight CPUs.
-st=2; tx=1; [ "$nr" -gt 4 ] && { st=1; tx=0; }
+# PAIRED=1 keeps the four-ring layout for more rings, two to a CPU: Rx-i
+# on first + 2i and Tx-i on first + 2i + 1, modulo the eight.
+st=2; tx=1; [ "$nr" -gt 4 ] && [ "${PAIRED:-}" != 1 ] && { st=1; tx=0; }
 # A third argument, <first tx cpu>: the Rx rings have the eight CPUs to
 # themselves, Rx-i on first + i, and the Tx rings go on two CPUs from
 # <first tx cpu>, or on TXN CPUs from it.
