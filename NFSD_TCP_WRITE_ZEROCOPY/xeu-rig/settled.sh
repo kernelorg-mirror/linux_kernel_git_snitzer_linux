@@ -206,8 +206,9 @@ declare -A NEW_LATER=([svc_tcp_spare_bytes_max]=1 [svc_tcp_rx_want_eighths]=1)
 # The kernel's command line: rodata=noalias, so the linear map is in 32 MiB
 # blocks, not 16 KiB pages (rodata=full, the default, maps it with pages on
 # a CPU without BBML3, and the Neoverse N2 has none).  Since FLAMEGRAPH
-# round 30 (Mike, 27 October): nfsd -5.23 +- 0.83 us a loaned WRITE, the
-# rings' page-table walks 69 to 0.5 a WRITE, the rings, rate, region and
+# round 30 (Mike, 27 October): on the tip's sunrpc nfsd -8.83 +- 1.47 us a
+# loaned WRITE and the rings -2.95 +- 0.57, page-table walks 108 to 2 a
+# WRITE on nfsd's CPUs and 61 to 0.3 on the rings, the rate, region and
 # latency the same.  A boot setting, so apply cannot put it in place: add
 # it to the boot entry's options and reboot.  On tardis2 /etc/kernel/cmdline
 # carries it, so kernel-install writes it into each new kernel's boot
