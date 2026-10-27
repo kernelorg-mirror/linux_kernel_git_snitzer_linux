@@ -50,6 +50,7 @@ struct nfs_local_kiocb {
 	bool			sync;
 	bool			datasync;
 	bool			bvec_is_inline;
+	bool			write_hold;
 	/* Shared pages claimed per segment, marked once the write completes */
 	struct nfs_dio_seg_hold	holds[NFS_DIO_MAX_SEGS];
 	size_t			written[NFS_DIO_MAX_SEGS];
@@ -1059,6 +1060,11 @@ static inline void nfs_local_write_iocb_done(struct nfs_local_kiocb *iocb)
 		iocb->hdr->fattr.valid = 0;
 	else
 		nfs_local_vfs_getattr(iocb);
+	/* Hold write protection until async completion releases the request. */
+	if (iocb->write_hold) {
+		iocb->write_hold = false;
+		kiocb_end_write(&iocb->kiocb);
+	}
 	nfs_local_pgio_release(iocb);
 }
 
@@ -1152,10 +1158,14 @@ static void nfs_local_call_write(struct work_struct *work)
 		iocb->aio_complete_work = nfs_local_write_aio_complete_work;
 		status = -EAGAIN;
 		if (file_start_write_trylock(filp)) {
+			if (S_ISREG(file_inode(filp)->i_mode)) {
+				/* Completion inherits the hold through kiocb_end_write(). */
+				__sb_writers_release(file_inode(filp)->i_sb, SB_FREEZE_WRITE);
+				iocb->write_hold = true;
+			}
 			scoped_with_creds(filp->f_cred)
 				status = filp->f_op->write_iter(&iocb->kiocb,
 							     &iocb->split.segs[0].iter);
-			file_end_write(filp);
 		}
 		if (status != -EIOCBQUEUED &&
 		    nfs_local_pgio_done(iocb, status))
@@ -1165,7 +1175,10 @@ static void nfs_local_call_write(struct work_struct *work)
 
 	flags = memalloc_flags_save(PF_LOCAL_THROTTLE | PF_MEMALLOC_NOIO);
 
-	file_start_write(filp);
+	if (S_ISREG(file_inode(filp)->i_mode)) {
+		kiocb_start_write(&iocb->kiocb);
+		iocb->write_hold = true;
+	}
 	/*
 	 * A synchronous write (client FILE_SYNC/DATA_SYNC, or the stability a
 	 * direct write is given in nfs_local_iters_init()) that was split is
@@ -1255,8 +1268,6 @@ static void nfs_local_call_write(struct work_struct *work)
 			break;
 		}
 	}
-	file_end_write(filp);
-
 	if (atomic_dec_and_test(&iocb->n_iters)) {
 		if (queued)
 			nfs_local_pgio_aio_complete(iocb);
