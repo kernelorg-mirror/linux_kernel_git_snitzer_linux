@@ -1171,8 +1171,8 @@ ssize_t nfs_file_direct_write(struct kiocb *iocb, struct iov_iter *iter,
 		 * invalidates the page cache over the written range.
 		 */
 		requested = nfs_direct_write_schedule_iovec(dreq, iter, pos,
-							    FLUSH_COND_STABLE,
-							    true, lockless);
+						    nfs_local_direct_write_flush(iocb),
+						    true, lockless);
 
 		if (!lockless)
 			nfs_end_io_direct(inode);

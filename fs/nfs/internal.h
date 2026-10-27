@@ -485,6 +485,8 @@ extern int nfs_local_commit(struct nfsd_file *,
 			    struct nfs_commit_data *,
 			    const struct rpc_call_ops *);
 extern bool nfs_server_is_local(const struct nfs_client *clp);
+int nfs_local_direct_write_flush(struct kiocb *iocb);
+bool nfs_local_dsync_enabled(void);
 
 #else /* CONFIG_NFS_LOCALIO */
 static inline void nfs_local_probe(struct nfs_client *clp) {}
@@ -510,6 +512,16 @@ static inline int nfs_local_commit(struct nfsd_file *localio,
 	return -EINVAL;
 }
 static inline bool nfs_server_is_local(const struct nfs_client *clp)
+{
+	return false;
+}
+
+static inline int nfs_local_direct_write_flush(struct kiocb *iocb)
+{
+	return FLUSH_COND_STABLE;
+}
+
+static inline bool nfs_local_dsync_enabled(void)
 {
 	return false;
 }
@@ -679,6 +691,7 @@ int  nfs_show_stats(struct seq_file *, struct dentry *);
 int  nfs_reconfigure(struct fs_context *);
 
 /* write.c */
+int nfs_commit_file(struct file *file);
 extern void nfs_pageio_init_write(struct nfs_pageio_descriptor *pgio,
 			struct inode *inode, int ioflags, bool force_mds,
 			const struct nfs_pgio_completion_ops *compl_ops);

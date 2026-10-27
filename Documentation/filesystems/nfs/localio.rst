@@ -330,6 +330,52 @@ controls if O_DIRECT extends down to the underlying filesystem, defaults
 to N. Application IO must be logical blocksize aligned, otherwise
 O_DIRECT will fail.
 
+/sys/module/nfs/parameters/localio_direct_write_policy (uint, read-only)
+selects the stability policy for LOCALIO direct writes. Set it when loading
+``nfs``, for example ``modprobe nfs localio_direct_write_policy=2``, or use
+``nfs.localio_direct_write_policy=2`` on the kernel command line for a
+built-in client. The value cannot change while the module is loaded.
+
+- 0 (sync): preserves the existing conditional FILE_SYNC scheduling
+  and forces each DIO write segment to use full synchronous IO.
+- 1 (dsync, default): ordinary LOCALIO direct writes use NFS_DATA_SYNC and IOCB_DSYNC.
+  File data and metadata needed to retrieve it are stable at completion;
+  nonessential metadata such as timestamps can wait for a full fsync. Eligible
+  lower filesystems/devices can use FUA write-through without a full sync per
+  header. Application O_SYNC, swap, and recovery FILE_SYNC remain fully synced.
+- 2 (unstable): schedules ordinary LOCALIO direct writes as NFS_UNSTABLE and
+  honors each request's stability argument. The direct-write completion path
+  collects unstable headers after all of an application write's headers
+  finish. For ordinary writes through the metadata server, one existing
+  whole-file COMMIT performs a full fsync of the backing file before reporting
+  application completion. Existing pNFS COMMIT routing is unchanged.
+
+Other values are rejected. Buffered NFS writes, reads, and non-LOCALIO write
+scheduling are unchanged. Swap writes and
+recovery requiring FILE_SYNC continue to use full synchronous IO. Error
+handling and verifier-driven replay can require additional durability work.
+
+Under dsync, a successful full fsync issues a whole-file COMMIT even with no
+pending client pages. It uses the ordinary LOCALIO or RPC COMMIT path, so the
+metadata boundary survives close/reopen, inode eviction, disabling LOCALIO, or
+nfsd restart. Because the policy is global, this adds a COMMIT to full fsync
+on RPC-only mounts too. NFSv2 is excluded because all its writes are FILE_SYNC.
+The existing writeback-error reporting and killable COMMIT wait remain in use.
+Each successful full-fsync pass adds one COMMIT; existing writeback or protocol
+retries can add more. Synchronous O_SYNC direct writes may also call full fsync
+and incur this additional COMMIT. O_DSYNC and fdatasync do not request the extra
+metadata COMMIT. A crash after DATA_SYNC completion but before full fsync can
+lose timestamp changes, while completed data remains stable.
+
+All policies preserve data durability, including O_SYNC and O_DSYNC.
+The unstable policy does not provide the weaker durability of native unsynced
+O_DIRECT: an acknowledged write has already passed the full COMMIT. A crash
+before completion can lose uncommitted data; the client retains the requests
+until COMMIT or error recovery finishes. An explicit fsync after a successful
+unstable-policy write need not issue another device operation because the
+preceding COMMIT already made that write durable. One logical COMMIT can
+translate into multiple physical FLUSH or FUA commands in the filesystem.
+
 /sys/module/nfsv3/parameters/nfs3_localio_probe_throttle (uint)
 controls if NFSv3 read and write IOs will trigger (re)enabling of
 LOCALIO every N (nfs3_localio_probe_throttle) IOs, defaults to 0
