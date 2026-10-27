@@ -1,0 +1,4 @@
+L52-B1 untraced: write 8.37 GB/s, 7980 IOPS; completion ms: p50 0.424, p90 0.485, p99 0.561, p99.9 0.659, mean 0.433, max 0.889
+L52-A1 untraced: write 8.45 GB/s, 8060 IOPS; completion ms: p50 0.424, p90 0.473, p99 0.528, p99.9 0.602, mean 0.431, max 0.964
+L52-B2 untraced: write 8.42 GB/s, 8027 IOPS; completion ms: p50 0.428, p90 0.477, p99 0.537, p99.9 0.610, mean 0.433, max 0.743
+L52-A2 untraced: write 8.07 GB/s, 7692 IOPS; completion ms: p50 0.444, p90 0.489, p99 0.545, p99.9 0.569, mean 0.452, max 0.619

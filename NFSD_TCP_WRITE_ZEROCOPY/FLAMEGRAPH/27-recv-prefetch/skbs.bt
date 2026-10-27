@@ -1,0 +1,21 @@
+#!/usr/bin/bpftrace
+/*
+ * skbs.bt - for each svc_tcp_recvfrom() pass on a TCP transport: how many
+ * skbs its ->read_sock actor was called for, and of each skb its length,
+ * frags and how many of its frags lie in the same page as the frag before.
+ */
+fentry:sunrpc:svc_tcp_recvfrom { @n[tid] = 0; @in[tid] = 1; }
+fentry:sunrpc:svc_tcp_recv_skb /@in[tid]/
+{
+	@n[tid] += 1;
+	$sh = (struct skb_shared_info *)(args.skb->head + args.skb->end);
+	@skb_len = hist(args.skb->len);
+	@skb_frags = lhist($sh->nr_frags, 0, 18, 1);
+	@has_frag_list[$sh->frag_list != 0 ? "frag_list" : "none"] = count();
+}
+fexit:sunrpc:svc_tcp_recvfrom /@in[tid]/
+{
+	@skbs_per_pass = lhist(@n[tid], 0, 32, 1);
+	delete(@n[tid]); delete(@in[tid]);
+}
+interval:s:10 { clear(@n); clear(@in); exit(); }

@@ -1,0 +1,76 @@
+== the hot instructions of the receive pass, % of each function's nfsd samples (CPUs 8-55)
+== fl51: round 26 (t2-r49); fl52: round 27's B, the prefetch ahead (t2-r50); fl53: the diagnostic, the next skb's struct pages loaded, not prefetched (t2-r51)
+
+== svc_tcp_rx_prefetch_pages, fl51 (perf annotate as recorded; 0x...274 is the load of nr_frags)
+    3.69 :   ffff9fe04a86b248:        mov     x3, #0x1000000000000
+    2.70 :   ffff9fe04a86b264:        ldr     x6, [x0, #0xc8]
+   56.23 :   ffff9fe04a86b274:        cbz     w1, 0xffff9fe04a86b300
+    6.12 :   ffff9fe04a86b2bc:        add     x0, x6, x7
+    5.97 :   ffff9fe04a86b2c0:        add     w1, w1, #0x1
+    5.05 :   ffff9fe04a86b2d8:        add     x2, x0, w1, uxtw #4
+    2.20 :   ffff9fe04a86b2dc:        tbz     w5, #0x0, 0xffff9fe04a86b284
+
+== svc_tcp_rx_prefetch_pages, fl52
+    2.21 :   ffff9fe04a86b264:        ldr     x6, [x0, #0xc8]
+   33.12 :   ffff9fe04a86b274:        cbz     w1, 0xffff9fe04a86b300
+    2.20 :   ffff9fe04a86b284:        ldr     w0, [x2, #0x38]
+    3.99 :   ffff9fe04a86b2ac:        ldr     w0, [x2, #0x3c]
+   11.18 :   ffff9fe04a86b2bc:        add     x0, x6, x7
+    9.69 :   ffff9fe04a86b2c0:        add     w1, w1, #0x1
+    5.65 :   ffff9fe04a86b2dc:        tbz     w5, #0x0, 0xffff9fe04a86b284
+    2.79 :   ffff9fe04a86b304:        cbz     x22, 0xffff9fe04a86b32c
+
+== svc_tcp_rx_borrow_segment, fl51
+ 16.33  +0x0b0  mov	x4, #0x40                  	// #64   svcsock.c:3624 (discriminator 1)
+ 11.34  +0x0e8  ldr	x27, [x23, #40]                      svcsock.c:3666 (discriminator 1)
+ 10.86  +0x098  tst	x4, #0x1                             page-flags.h:232
+  5.45  +0x094  sub	x0, x4, #0x1                         page-flags.h:232
+  4.79  +0x230  cbnz	w0, 3db00 <svc_tcp_rx_borrow_segmen svcsock.c:3677
+  4.72  +0x1e8  ret                                      svcsock.c:3702
+shown 53.5%
+
+== svc_tcp_rx_borrow_segment, fl52
+ 17.04  +0x0b0  mov	x4, #0x40                  	// #64   svcsock.c:3653 (discriminator 1)
+ 12.20  +0x098  tst	x4, #0x1                             page-flags.h:232
+  9.28  +0x0e8  ldr	x27, [x23, #40]                      svcsock.c:3695 (discriminator 1)
+  5.68  +0x094  sub	x0, x4, #0x1                         page-flags.h:232
+  5.57  +0x230  cbnz	w0, 3d620 <svc_tcp_rx_borrow_segmen svcsock.c:3706
+  4.70  +0x1e8  ret                                      svcsock.c:3731
+shown 54.5%
+
+== svc_tcp_rx_borrow_segment, fl53
+ 16.74  +0x0b0  mov	x4, #0x40                  	// #64   svcsock.c:3670 (discriminator 1)
+ 14.79  +0x098  tst	x4, #0x1                             page-flags.h:232
+  8.29  +0x0e8  ldr	x27, [x23, #40]                      svcsock.c:3712 (discriminator 1)
+  7.82  +0x094  sub	x0, x4, #0x1                         page-flags.h:232
+  4.85  +0x230  cbnz	w0, 3d620 <svc_tcp_rx_borrow_segmen svcsock.c:3723
+  4.60  +0x1e8  ret                                      svcsock.c:3748
+shown 57.1%
+
+== svc_tcp_recv_skb, fl51
+ 12.65  +0x078  ldr	w26, [x19, #648]                     svcsock.c:4733
+  4.43  +0x298  mov	w1, w4                               svcsock.c:3861 (discriminator 2)
+  4.03  +0x284  str	w5, [x27, #4]                        svcsock.c:3862
+  3.83  +0x1d8  mov	w23, w3                              svcsock.c:3884 (discriminator 2)
+  3.58  +0x820  cmp	x0, x1                               list.h:457 (discriminator 1)
+  2.92  +0x218  ldr	x1, [x24, #1088]                     svcsock.c:3889
+  2.80  +0x758  ldr	x0, [x20, #200]                      skbuff.h:1725
+  2.71  +0x1a4  ldr	w3, [x20, #220]                      atomic/atomic-arch-fallback.h:457
+  2.59  +0x75c  and	w1, w4, #0xff                        skbuff_ref.h:93
+shown 39.5%
+
+== svc_tcp_recv_skb, fl52
+ 20.57  +0x7b0  cmp	x2, #0x0                             svcsock.c:1532
+ 17.18  +0x7c0  ldr	w2, [x2, #192]                       skbuff.h:1725
+  8.91  +0x7d0  add	x1, x1, #0x40                        svcsock.c:1535
+  7.47  +0x078  ldr	w26, [x19, #648]                     svcsock.c:4763
+shown 54.1%
+
+== svc_tcp_recv_skb, fl53
+ 21.26  +0x818  add	x0, x6, x9                           skbuff.h:1725
+ 15.84  +0x7b0  cmp	x2, #0x0                             svcsock.c:1549
+ 13.06  +0x7c0  ldr	w2, [x2, #192]                       skbuff.h:1725
+  6.40  +0x7d0  add	x0, x0, #0x40                        svcsock.c:1552
+  5.87  +0x078  ldr	w26, [x19, #648]                     svcsock.c:4780
+  3.73  +0x7ec  cbz	w1, 3e5f8 <svc_tcp_recv_skb+0x830>   svcsock.c:1527 (discriminator 1)
+shown 66.2%

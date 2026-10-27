@@ -1,0 +1,19 @@
+== r52: A round 26's sunrpc (A06FE478658242A10E100FF), B with 66bc91c765fa (6B753F0B9D05100AC7138C6); the settled setting
+== rxirq/txirq here are not valid: twoport.sh opens the port after the first snapshot; outsegs is the server's TCP segments sent a WRITE
+r52-1-loan64-A ring 47.0 nfsd 98.4 us/W | rxirq 4.32 txirq 3.89 | enq 4.77 woken 3.98 vcsw 5.45 /W | pp/W: recycle_cached -0.00 outsegs 5.57 recycle_ring_full 0.47 alloc_slow 0.31 | region peak 6539 | maxentries:4096,numentries:4097,cachehits:0,
+r52-2-loan64-B ring 48.0 nfsd 95.1 us/W | rxirq 0.05 txirq 0.13 | enq 4.75 woken 4.00 vcsw 5.47 /W | pp/W: recycle_cached -0.00 outsegs 5.54 recycle_ring_full -0.01 alloc_slow -0.00 | region peak 6348 | maxentries:4096,numentries:4097,cachehits:0,
+r52-3-loan64-A ring 48.8 nfsd 100.0 us/W | rxirq 0.33 txirq 0.04 | enq 4.83 woken 4.03 vcsw 5.50 /W | pp/W: recycle_cached -0.00 outsegs 5.61 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 6416 | maxentries:4096,numentries:4097,cachehits:0,
+r52-4-loan64-B ring 48.0 nfsd 96.6 us/W | rxirq -0.12 txirq -0.08 | enq 4.76 woken 4.01 vcsw 5.48 /W | pp/W: recycle_cached 0.00 outsegs 5.54 recycle_ring_full -0.00 alloc_slow -0.00 | region peak 6510 | maxentries:4096,numentries:4097,cachehits:0,
+r52-5-loan64-A ring 46.3 nfsd 96.6 us/W | rxirq -0.21 txirq 0.00 | enq 4.81 woken 4.01 vcsw 5.49 /W | pp/W: recycle_cached -0.00 outsegs 5.59 recycle_ring_full -0.00 alloc_slow -0.00 | region peak 6628 | maxentries:4096,numentries:4097,cachehits:0,
+r52-6-loan64-B ring 47.7 nfsd 97.4 us/W | rxirq -0.01 txirq 0.01 | enq 4.72 woken 3.96 vcsw 5.44 /W | pp/W: recycle_cached -0.00 outsegs 5.50 recycle_ring_full -0.00 alloc_slow -0.00 | region peak 6413 | maxentries:4096,numentries:4097,cachehits:0,
+r52-7-loan64-A ring 49.8 nfsd 96.7 us/W | rxirq -0.62 txirq -0.02 | enq 4.75 woken 3.99 vcsw 5.46 /W | pp/W: recycle_cached -0.00 outsegs 5.54 recycle_ring_full -0.00 alloc_slow -0.00 | region peak 6474 | maxentries:4096,numentries:4097,cachehits:0,
+r52-8-loan64-B ring 47.8 nfsd 95.0 us/W | rxirq 0.59 txirq 0.01 | enq 4.73 woken 3.98 vcsw 5.46 /W | pp/W: recycle_cached -0.00 outsegs 5.52 recycle_ring_full 0.00 alloc_slow 0.00 | region peak 6487 | maxentries:4096,numentries:4097,cachehits:0,
+== the fio maximum completion of each run, ms
+r52-1-loan64-A 115.0
+r52-2-loan64-B 120.9
+r52-3-loan64-A 115.6
+r52-4-loan64-B 112.7
+r52-5-loan64-A 123.6
+r52-6-loan64-B 118.4
+r52-7-loan64-A 105.9
+r52-8-loan64-B 116.6

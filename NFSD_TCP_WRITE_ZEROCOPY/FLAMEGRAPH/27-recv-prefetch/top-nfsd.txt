@@ -1,0 +1,15 @@
+== us a WRITE on nfsd (CPUs 8-55), the folded stacks scaled to each profile's busy time
+== fl51 round 26 (t2-r49); fl52 round 27's B, the prefetch ahead (t2-r50); fl53 the diagnostic, the next skb's struct pages loaded (t2-r51)
+busy fl51 102.29  fl52 101.86  fl53 104.17
+
+frame                          self fl51 fl52 fl53   incl fl51 fl52 fl53
+svc_recv                         1.12  1.12  1.08    98.45 98.16 100.29
+svc_tcp_recvfrom                 0.79  0.67  0.81    32.05 32.45 33.27
+tcp_read_sock                    0.01  0.02  0.02    23.30 23.60 24.32
+svc_tcp_recv_skb                 1.10  2.26  2.97    11.76 12.36 12.76
+svc_tcp_rx_walk_skb              1.17  1.21  1.24     5.62  5.60  5.80
+svc_tcp_rx_borrow_segment        2.01  2.02  2.10     4.45  4.36  4.53
+svc_tcp_rx_append_ref            2.63  2.55  2.64     2.63  2.56  2.64
+svc_tcp_rx_prefetch_pages        1.77  1.46  1.01     1.77  1.46  1.01
+svc_tcp_rx_release_refs          1.71  1.71  1.71     6.61  6.52  6.61
+svc_process                      0.15  0.13  0.17    58.00 57.17 58.44

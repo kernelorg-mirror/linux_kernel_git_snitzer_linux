@@ -1,0 +1,37 @@
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index adcc84599c6e..565735d421ac 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -1518,6 +1518,23 @@ static void svc_tcp_rx_prefetch_pages(const struct sk_buff *skb, u32 base,
+  * list and then each struct page miss in turn.  The socket is locked, so
+  * the receive queue does not change under the read.
+  */
++/* DIAGNOSTIC (round 27): load, not prefetch, each frag's struct page. */
++static void svc_tcp_rx_touch_pages(const struct sk_buff *skb)
++{
++	unsigned long sum = 0;
++	unsigned int index;
++
++	for (index = 0; index < skb_shinfo(skb)->nr_frags; index++) {
++		const skb_frag_t *frag = &skb_shinfo(skb)->frags[index];
++		struct page *page = skb_frag_page(frag);
++
++		if (page)
++			sum += READ_ONCE((page + (skb_frag_off(frag) >>
++						  PAGE_SHIFT))->compound_info);
++	}
++	OPTIMIZER_HIDE_VAR(sum);
++}
++
+ static void svc_tcp_rx_prefetch_ahead(struct sock *sk,
+ 				      const struct sk_buff *skb)
+ {
+@@ -1536,7 +1553,7 @@ static void svc_tcp_rx_prefetch_ahead(struct sock *sk,
+ 		     off += L1_CACHE_BYTES)
+ 			prefetchw(shinfo + off);
+ 	}
+-	svc_tcp_rx_prefetch_pages(next, 0, 0, next->len);
++	svc_tcp_rx_touch_pages(next);
+ }
+ 
+ /*
