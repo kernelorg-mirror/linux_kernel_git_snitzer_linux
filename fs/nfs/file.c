@@ -46,6 +46,12 @@
 
 static const struct vm_operations_struct nfs_file_vm_ops;
 
+/* Sampled at open: an open file keeps the FMODE_NOWAIT it was given. */
+static bool nfs_nowait_writable = true;
+module_param_named(nowait_writable, nfs_nowait_writable, bool, 0644);
+MODULE_PARM_DESC(nowait_writable,
+		 "Allow io_uring NOWAIT direct writes on writable NFSv3 files (applies to new opens)");
+
 int nfs_check_flags(int flags)
 {
 	if ((flags & (O_APPEND | O_DIRECT)) == (O_APPEND | O_DIRECT))
@@ -73,9 +79,14 @@ nfs_file_open(struct inode *inode, struct file *filp)
 	res = nfs_open(inode, filp);
 	if (res == 0) {
 		filp->f_mode |= FMODE_CAN_ODIRECT;
-		/* flag NOWAIT on read-only files only */
-		if (!(filp->f_mode & FMODE_WRITE))
+		if (!(filp->f_mode & FMODE_WRITE) ||
+		    (NFS_PROTO(inode)->version == 3 &&
+		     READ_ONCE(nfs_nowait_writable)))
 			filp->f_mode |= FMODE_NOWAIT;
+		if (NFS_PROTO(inode)->version == 3) {
+			nfs_ctx_key_to_expire(nfs_file_open_context(filp), inode);
+			nfs_local_open_prepare(filp);
+		}
 	}
 	return res;
 }
@@ -754,13 +765,13 @@ ssize_t nfs_file_write(struct kiocb *iocb, struct iov_iter *from)
 
 	trace_nfs_file_write(iocb, from);
 
-	/*
-	 * FMODE_NOWAIT is not set for writable files
-	 */
-	if (WARN_ON_ONCE(iocb->ki_flags & IOCB_NOWAIT))
-		return -EAGAIN;
-
-	result = nfs_key_timeout_notify(file, inode);
+	if (iocb->ki_flags & IOCB_NOWAIT) {
+		if (!(iocb->ki_flags & IOCB_DIRECT) || is_sync_kiocb(iocb))
+			return -EAGAIN;
+		result = nfs_key_timeout_notify_nowait(file);
+	} else {
+		result = nfs_key_timeout_notify(file, inode);
+	}
 	if (result)
 		return result;
 

@@ -571,7 +571,7 @@ static ssize_t afs_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 		return ret;
 	ret = afs_validate(vnode, af->key);
 	if (ret == 0)
-		ret = filemap_read(iocb, iter, 0);
+		ret = filemap_read(iocb, iter, 0, NULL);
 	netfs_end_io_read(inode);
 	return ret;
 }

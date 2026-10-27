@@ -2298,6 +2298,7 @@ bool atime_needs_update(const struct path *path, struct inode *inode)
 
 	return true;
 }
+EXPORT_SYMBOL_GPL(atime_needs_update);
 
 void touch_atime(const struct path *path)
 {
@@ -2354,6 +2355,7 @@ int dentry_needs_remove_privs(struct mnt_idmap *idmap,
 		mask |= ATTR_KILL_PRIV;
 	return mask;
 }
+EXPORT_SYMBOL_GPL(dentry_needs_remove_privs);
 
 static int __remove_privs(struct mnt_idmap *idmap,
 			  struct dentry *dentry, int kill)

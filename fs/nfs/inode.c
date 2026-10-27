@@ -1232,7 +1232,8 @@ static struct nfs_lock_context *__nfs_find_lock_context(struct nfs_open_context 
 	return NULL;
 }
 
-struct nfs_lock_context *nfs_get_lock_context(struct nfs_open_context *ctx)
+struct nfs_lock_context *nfs_get_lock_context_gfp(struct nfs_open_context *ctx,
+					      gfp_t gfp)
 {
 	struct nfs_lock_context *res, *new = NULL;
 	struct inode *inode;
@@ -1263,7 +1264,7 @@ struct nfs_lock_context *nfs_get_lock_context(struct nfs_open_context *ctx)
 	res = __nfs_find_lock_context(ctx);
 	rcu_read_unlock();
 	if (res == NULL) {
-		new = kmalloc_obj(*new, GFP_KERNEL_ACCOUNT);
+		new = kmalloc_obj(*new, gfp);
 		if (new == NULL)
 			return ERR_PTR(-ENOMEM);
 		nfs_init_lock_context(new);
@@ -1284,6 +1285,11 @@ struct nfs_lock_context *nfs_get_lock_context(struct nfs_open_context *ctx)
 		kfree(new);
 	}
 	return res;
+}
+
+struct nfs_lock_context *nfs_get_lock_context(struct nfs_open_context *ctx)
+{
+	return nfs_get_lock_context_gfp(ctx, GFP_KERNEL_ACCOUNT);
 }
 EXPORT_SYMBOL_GPL(nfs_get_lock_context);
 

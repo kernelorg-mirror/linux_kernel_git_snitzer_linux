@@ -78,7 +78,7 @@ struct nfs_pageio_ops {
 };
 
 struct nfs_rw_ops {
-	struct nfs_pgio_header *(*rw_alloc_header)(void);
+	struct nfs_pgio_header *(*rw_alloc_header)(gfp_t);
 	void (*rw_free_header)(struct nfs_pgio_header *);
 	int  (*rw_done)(struct rpc_task *, struct nfs_pgio_header *,
 			struct inode *);
@@ -120,17 +120,18 @@ struct nfs_pageio_descriptor {
 	u32			pg_mirror_idx;	/* current mirror */
 	unsigned short		pg_maxretrans;
 	unsigned char		pg_moreio : 1;
+	bool			pg_nowait;
 };
 
 /* arbitrarily selected limit to number of mirrors */
 #define NFS_PAGEIO_DESCRIPTOR_MIRROR_MAX 16
 
-extern struct nfs_page *nfs_page_create_from_page(struct nfs_open_context *ctx,
+extern struct nfs_page *nfs_page_create_from_page(struct nfs_lock_context *l_ctx,
 						  struct page *page,
 						  bool pinned,
 						  unsigned int pgbase,
 						  loff_t offset,
-						  unsigned int count);
+						  unsigned int count, gfp_t gfp);
 extern struct nfs_page *nfs_page_create_from_folio(struct nfs_open_context *ctx,
 						   struct folio *folio,
 						   bool pinned,
@@ -151,6 +152,7 @@ extern	int nfs_pageio_add_request(struct nfs_pageio_descriptor *,
 extern  int nfs_pageio_resend(struct nfs_pageio_descriptor *,
 			      struct nfs_pgio_header *);
 extern	void nfs_pageio_complete(struct nfs_pageio_descriptor *desc);
+extern	bool nfs_pageio_discard(struct nfs_pageio_descriptor *desc, int error);
 extern	void nfs_pageio_cond_complete(struct nfs_pageio_descriptor *, pgoff_t);
 extern size_t nfs_generic_pg_test(struct nfs_pageio_descriptor *desc,
 				struct nfs_page *prev,

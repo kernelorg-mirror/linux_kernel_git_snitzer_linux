@@ -451,7 +451,7 @@ static ssize_t erofs_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		return iomap_dio_rw(iocb, to, &erofs_iomap_ops,
 				    NULL, 0, &iter_ctx, 0);
 	}
-	return filemap_read(iocb, to, 0);
+	return filemap_read(iocb, to, 0, NULL);
 }
 
 /* for uncompressed (aligned) files and raw access for other files */

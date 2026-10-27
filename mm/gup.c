@@ -3317,6 +3317,27 @@ int pin_user_pages_fast(unsigned long start, int nr_pages,
 EXPORT_SYMBOL_GPL(pin_user_pages_fast);
 
 /**
+ * pin_user_pages_fast_only() - pin resident user pages without a slow walk
+ * @start: first user address
+ * @nr_pages: maximum number of pages
+ * @gup_flags: public pin flags, as for pin_user_pages_fast()
+ * @pages: caller-provided page array
+ *
+ * Return a leading pinned prefix, possibly zero, or a validation error.
+ * The caller owns every returned pin, including on a short result.
+ */
+int pin_user_pages_fast_only(unsigned long start, int nr_pages,
+		unsigned int gup_flags, struct page **pages)
+{
+	if (!is_valid_gup_args(pages, NULL, &gup_flags,
+			FOLL_PIN | FOLL_FAST_ONLY))
+		return -EINVAL;
+	return gup_fast_fallback(start, nr_pages, gup_flags, pages);
+}
+EXPORT_SYMBOL_GPL(pin_user_pages_fast_only);
+
+
+/**
  * pin_user_pages_remote() - pin pages of a remote process
  *
  * @mm:		mm_struct of target mm

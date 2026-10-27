@@ -37,9 +37,9 @@ static const struct nfs_rw_ops nfs_rw_read_ops;
 
 static struct kmem_cache *nfs_rdata_cachep;
 
-static struct nfs_pgio_header *nfs_readhdr_alloc(void)
+static struct nfs_pgio_header *nfs_readhdr_alloc(gfp_t gfp)
 {
-	struct nfs_pgio_header *p = kmem_cache_zalloc(nfs_rdata_cachep, GFP_KERNEL);
+	struct nfs_pgio_header *p = kmem_cache_zalloc(nfs_rdata_cachep, gfp);
 
 	if (p)
 		p->rw_mode = FMODE_READ;

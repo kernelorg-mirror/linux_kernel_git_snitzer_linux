@@ -365,6 +365,8 @@ struct readahead_control;
  * take its inode lock shared where it can.
  */
 #define IOCB_NOSERIAL		(1 << 25)
+/* Cooperating synchronous kernel caller accepts an internal geometry result. */
+#define IOCB_DIO_GEOMETRY	(1 << 26)
 
 /* for use in trace events */
 #define TRACE_IOCB_STRINGS \
@@ -2388,6 +2390,7 @@ extern int user_statfs(const char __user *, struct kstatfs *);
 extern int fd_statfs(int, struct kstatfs *);
 extern __printf(2, 3)
 int super_setup_bdi_name(struct super_block *sb, char *fmt, ...);
+int sb_init_dio_done_wq(struct super_block *sb);
 extern int super_setup_bdi(struct super_block *sb);
 
 static inline void super_set_uuid(struct super_block *sb, const u8 *uuid, unsigned len)
@@ -3060,6 +3063,7 @@ extern struct inode *new_inode(struct super_block *sb);
 extern void free_inode_nonrcu(struct inode *inode);
 extern int setattr_should_drop_suidgid(struct mnt_idmap *, struct inode *);
 extern int file_remove_privs(struct file *);
+int dentry_needs_remove_privs(struct mnt_idmap *, struct dentry *dentry);
 int setattr_should_drop_sgid(struct mnt_idmap *idmap,
 			     const struct inode *inode);
 
@@ -3095,7 +3099,7 @@ extern int generic_write_check_limits(struct file *file, loff_t pos,
 		loff_t *count);
 extern int generic_file_rw_checks(struct file *file_in, struct file *file_out);
 ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *to,
-		ssize_t already_read);
+		ssize_t already_read, struct iov_iter *prepared);
 extern ssize_t generic_file_read_iter(struct kiocb *, struct iov_iter *);
 extern ssize_t __generic_file_write_iter(struct kiocb *, struct iov_iter *);
 extern ssize_t generic_file_write_iter(struct kiocb *, struct iov_iter *);

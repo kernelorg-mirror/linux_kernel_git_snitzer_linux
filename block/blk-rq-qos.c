@@ -1,6 +1,35 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include "blk-rq-qos.h"
+#include "blk-cgroup.h"
+#include "blk-wbt.h"
+
+/* Refuse before merging or acquiring controller accounting state. */
+bool rq_qos_can_submit_nowait(struct request_queue *q, struct bio *bio)
+{
+	struct rq_qos *rqos;
+
+	if (!test_bit(QUEUE_FLAG_QOS_ENABLED, &q->queue_flags))
+		return true;
+	for (rqos = q->rq_qos; rqos; rqos = rqos->next) {
+		switch (rqos->id) {
+		case RQ_QOS_WBT:
+			if (wbt_should_throttle(bio))
+				return false;
+			break;
+#ifdef CONFIG_BLK_CGROUP
+		case RQ_QOS_LATENCY:
+		case RQ_QOS_COST:
+			if (bio->bi_blkg && bio->bi_blkg->parent)
+				return false;
+			break;
+#endif
+		default:
+			return false;
+		}
+	}
+	return true;
+}
 
 /*
  * Increment 'v', if 'v' is below 'below'. Returns true if we succeeded,

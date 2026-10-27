@@ -12,6 +12,7 @@
 #include <linux/errno.h>
 #include <linux/vfs.h>
 #include <linux/file.h>
+#include <linux/fs.h>
 #include <linux/inet.h>
 #include <linux/sunrpc/addr.h>
 #include <linux/inetdevice.h>
@@ -38,6 +39,7 @@ struct nfs_local_kiocb {
 	struct bio_vec		*bvec;
 	struct nfs_pgio_header	*hdr;
 	struct work_struct	work;
+	struct work_struct	submit_work;
 	void (*aio_complete_work)(struct work_struct *);
 	struct nfsd_file	*localio;
 	/* Begin mostly DIO-specific members */
@@ -47,6 +49,7 @@ struct nfs_local_kiocb {
 	/* A synchronous write is persisted once, after all its segments */
 	bool			sync;
 	bool			datasync;
+	bool			bvec_is_inline;
 	/* Shared pages claimed per segment, marked once the write completes */
 	struct nfs_dio_seg_hold	holds[NFS_DIO_MAX_SEGS];
 	size_t			written[NFS_DIO_MAX_SEGS];
@@ -437,36 +440,83 @@ nfs_local_open_fh(struct nfs_client *clp, const struct cred *cred,
 }
 EXPORT_SYMBOL_GPL(nfs_local_open_fh);
 
+/*
+ * Ensure all page cache allocations are done from GFP_NOFS context to
+ * prevent direct reclaim recursion back into NFS via nfs_writepages.
+ */
+static void
+nfs_local_mapping_set_gfp_nofs_context(struct address_space *m)
+{
+	gfp_t gfp_mask = mapping_gfp_mask(m);
+
+	mapping_set_gfp_mask(m, (gfp_mask & ~(__GFP_FS)));
+}
+
+void nfs_local_open_prepare(struct file *file)
+{
+	struct inode *inode = file_inode(file);
+	struct nfs_open_context *ctx = nfs_file_open_context(file);
+	struct nfsd_file *localio;
+
+	localio = nfs_local_open_fh(NFS_SERVER(inode)->nfs_client,
+				  ctx->cred, NFS_FH(inode), &ctx->nfl, ctx->mode);
+	if (localio) {
+		struct file *backing = nfs_to->nfsd_file_file(localio);
+
+		sb_init_dio_done_wq(file_inode(backing)->i_sb);
+		if (!WARN_ON_ONCE(ctx->nfl.nowait_file)) {
+			struct nfs_dio_policy policy;
+
+			nfs_to->nfsd_file_dio_policy(localio, ITER_SOURCE, &policy);
+			ctx->nfl.nowait_mem_align = policy.mem_align;
+			ctx->nfl.nowait_offset_align = policy.offset_align;
+			nfs_to->nfsd_file_dio_policy(localio, ITER_DEST, &policy);
+			ctx->nfl.nowait_read_offset_align = policy.offset_align;
+			nfs_local_mapping_set_gfp_nofs_context(backing->f_mapping);
+			get_file(backing);
+			/* Publish the alignment fields with the retained file. */
+			smp_store_release(&ctx->nfl.nowait_file, backing);
+		}
+		nfs_release_local_fh(&NFS_SERVER(inode)->nfs_client->cl_uuid);
+	}
+}
 static void
 nfs_local_iocb_free(struct nfs_local_kiocb *iocb)
 {
-	kfree(iocb->bvec);
+	if (!iocb->bvec_is_inline)
+		kfree(iocb->bvec);
 	kfree(iocb);
 }
 
 static struct nfs_local_kiocb *
 nfs_local_iocb_alloc(struct nfs_pgio_header *hdr,
-		     struct file *file, gfp_t flags)
+		     gfp_t flags)
 {
 	struct nfs_local_kiocb *iocb;
+	bool nowait = test_bit(NFS_IOHDR_NOWAIT, &hdr->flags);
+	size_t alloc_size;
 
-	iocb = kzalloc_obj(*iocb, flags);
+	alloc_size = sizeof(*iocb);
+	if (nowait && hdr->page_array.npages == 1)
+		alloc_size += sizeof(struct bio_vec);
+	iocb = kzalloc(alloc_size, flags);
 	if (iocb == NULL)
 		return NULL;
 
-	iocb->bvec = kmalloc_objs(struct bio_vec, hdr->page_array.npages, flags);
-	if (iocb->bvec == NULL) {
-		kfree(iocb);
-		return NULL;
+	if (nowait && hdr->page_array.npages == 1) {
+		iocb->bvec = (struct bio_vec *)(iocb + 1);
+		iocb->bvec_is_inline = true;
+	} else {
+		iocb->bvec = kmalloc_objs(struct bio_vec,
+					  hdr->page_array.npages, flags);
+		if (!iocb->bvec) {
+			kfree(iocb);
+			return NULL;
+		}
 	}
 
-	init_sync_kiocb(&iocb->kiocb, file);
-
 	iocb->hdr = hdr;
-	iocb->kiocb.ki_pos = hdr->args.offset;
-	iocb->kiocb.ki_flags &= ~IOCB_APPEND;
-	iocb->kiocb.ki_complete = NULL;
-	iocb->aio_complete_work = NULL;
+	iocb->end_iter_index = -1;
 
 	return iocb;
 }
@@ -542,9 +592,19 @@ nfs_local_iters_init(struct nfs_local_kiocb *iocb, int rw)
 	 */
 	iocb->end_iter_index = -1;
 	if (test_bit(NFS_IOHDR_ODIRECT, &hdr->flags)) {
-		struct nfs_dio_policy policy;
+		struct nfs_dio_policy policy = {};
+		bool nowait = test_bit(NFS_IOHDR_NOWAIT, &hdr->flags);
 
-		nfs_to->nfsd_file_dio_policy(iocb->localio, rw, &policy);
+		if (nowait) {
+			struct nfs_file_localio *nfl = &hdr->args.context->nfl;
+
+			policy.mem_align = READ_ONCE(nfl->nowait_mem_align);
+			policy.offset_align = rw == ITER_DEST ?
+				READ_ONCE(nfl->nowait_read_offset_align) :
+				READ_ONCE(nfl->nowait_offset_align);
+		} else {
+			nfs_to->nfsd_file_dio_policy(iocb->localio, rw, &policy);
+		}
 		nfs_dio_split(file, &policy, rw, iocb->bvec, v,
 			      hdr->args.offset, len, iocb->kiocb.ki_flags,
 			      &iocb->split);
@@ -556,12 +616,12 @@ nfs_local_iters_init(struct nfs_local_kiocb *iocb, int rw)
 			 */
 			iocb->end_iter_index = iocb->split.nsegs - 1;
 			/* Ensure DIO WRITE's IO on stable storage upon completion */
-			if (rw == ITER_SOURCE &&
+			if (!nowait && rw == ITER_SOURCE &&
 			    localio_direct_write_policy == NFS_LOCAL_DIRECT_WRITE_SYNC)
 				iocb->kiocb.ki_flags |= IOCB_DSYNC|IOCB_SYNC;
 		}
 		/* One additional token protects the submitter until its last file use. */
-		atomic_set(&iocb->n_iters, iocb->split.nsegs + 1);
+		atomic_set(&iocb->n_iters, iocb->split.nsegs + !nowait);
 		return;
 	}
 
@@ -570,7 +630,8 @@ nfs_local_iters_init(struct nfs_local_kiocb *iocb, int rw)
 	seg->flags = iocb->kiocb.ki_flags;
 	seg->claim = false;
 	iocb->split.nsegs = 1;
-	atomic_set(&iocb->n_iters, 2);
+	atomic_set(&iocb->n_iters,
+		   test_bit(NFS_IOHDR_NOWAIT, &hdr->flags) ? 1 : 2);
 }
 
 static void
@@ -612,10 +673,13 @@ static bool nfs_local_pgio_done(struct nfs_local_kiocb *iocb, long status)
 static void
 nfs_local_iocb_release(struct nfs_local_kiocb *iocb)
 {
-	struct nfs_pgio_header *hdr = iocb->hdr;
-	struct nfs_client *clp = hdr->ds_clp ?: NFS_SERVER(hdr->inode)->nfs_client;
+	if (iocb->localio) {
+		struct nfs_pgio_header *hdr = iocb->hdr;
+		struct nfs_client *clp = hdr->ds_clp ?:
+			NFS_SERVER(hdr->inode)->nfs_client;
 
-	nfs_release_local_fh(&clp->cl_uuid);
+		nfs_release_local_fh(&clp->cl_uuid);
+	}
 	nfs_local_iocb_free(iocb);
 }
 
@@ -626,7 +690,8 @@ static void nfs_local_pgio_restart(struct nfs_local_kiocb *iocb,
 
 	iocb->kiocb.ki_pos = hdr->args.offset;
 	iocb->kiocb.ki_flags &= ~(IOCB_DSYNC | IOCB_SYNC | IOCB_DIRECT |
-				  IOCB_DONTCACHE);
+				  IOCB_DONTCACHE | IOCB_NOWAIT);
+	clear_bit(NFS_IOHDR_NOWAIT, &hdr->flags);
 	iocb->kiocb.ki_complete = NULL;
 	iocb->aio_complete_work = NULL;
 	iocb->nheld = 0;
@@ -741,6 +806,18 @@ static void nfs_local_call_read(struct work_struct *work)
 	bool queued = false;
 	ssize_t status;
 	int n_iters;
+
+	if (iocb->kiocb.ki_flags & IOCB_NOWAIT) {
+		iocb->kiocb.ki_flags |= IOCB_DIRECT;
+		iocb->kiocb.ki_complete = nfs_local_read_aio_complete;
+		iocb->aio_complete_work = nfs_local_read_aio_complete_work;
+		scoped_with_creds(filp->f_cred)
+			status = filp->f_op->read_iter(&iocb->kiocb, &iocb->split.segs[0].iter);
+		if (status != -EIOCBQUEUED)
+			nfs_local_pgio_done(iocb, status);
+		memalloc_nofs_restore(nofs_flags);
+		return;
+	}
 
 	/* Capture the segment count before a callback can consume its token. */
 	n_iters = atomic_read(&iocb->n_iters) - 1;
@@ -950,7 +1027,10 @@ static void nfs_local_write_done(struct nfs_local_kiocb *iocb)
 		pr_info_ratelimited("nfs: Unexpected direct I/O write alignment failure\n");
 	}
 
-	if (status < 0)
+	/* A zero-byte NOWAIT refusal does not change the stability epoch. */
+	if (status < 0 &&
+	    !(test_bit(NFS_IOHDR_NOWAIT, &hdr->flags) &&
+	      status == -EAGAIN && hdr->res.count == 0))
 		nfs_reset_boot_verifier(hdr->inode);
 }
 
@@ -1059,12 +1139,29 @@ static ssize_t nfs_local_dio_write_wait(struct file *filp, struct kiocb *kiocb,
 static void nfs_local_call_write(struct work_struct *work)
 {
 	struct nfs_local_kiocb *iocb =
-		container_of(work, struct nfs_local_kiocb, work);
+		container_of(work, struct nfs_local_kiocb, submit_work);
 	struct file *filp = iocb->kiocb.ki_filp;
 	unsigned int flags;
 	bool queued = false;
 	ssize_t status;
 	int n_iters, stable;
+
+	if (iocb->kiocb.ki_flags & IOCB_NOWAIT) {
+		iocb->kiocb.ki_flags |= IOCB_DIRECT;
+		iocb->kiocb.ki_complete = nfs_local_write_aio_complete;
+		iocb->aio_complete_work = nfs_local_write_aio_complete_work;
+		status = -EAGAIN;
+		if (file_start_write_trylock(filp)) {
+			scoped_with_creds(filp->f_cred)
+				status = filp->f_op->write_iter(&iocb->kiocb,
+							     &iocb->split.segs[0].iter);
+			file_end_write(filp);
+		}
+		if (status != -EIOCBQUEUED &&
+		    nfs_local_pgio_done(iocb, status))
+			nfs_local_pgio_aio_complete(iocb);
+		return;
+	}
 
 	flags = memalloc_flags_save(PF_LOCAL_THROTTLE | PF_MEMALLOC_NOIO);
 
@@ -1212,40 +1309,74 @@ static void nfs_local_do_write(struct nfs_local_kiocb *iocb,
 
 	nfs_set_local_verifier(hdr->inode, hdr->res.verf, committed);
 
-	INIT_WORK(&iocb->work, nfs_local_call_write);
-	if (nfs_local_defer_io())
-		queue_work(nfslocaliod_workqueue, &iocb->work);
+	INIT_WORK(&iocb->submit_work, nfs_local_call_write);
+	if (test_bit(NFS_IOHDR_NOWAIT, &hdr->flags) ||
+	    nfs_local_defer_io())
+		queue_work(nfslocaliod_workqueue, &iocb->submit_work);
 	else
-		nfs_local_call_write(&iocb->work);
+		nfs_local_call_write(&iocb->submit_work);
 }
 
 static struct nfs_local_kiocb *
 nfs_local_iocb_init(struct nfs_pgio_header *hdr, struct nfsd_file *localio)
 {
-	struct file *file = nfs_to->nfsd_file_file(localio);
+	struct file *file;
 	struct nfs_local_kiocb *iocb;
 	gfp_t gfp_mask;
 	int rw;
+	bool nowait = test_bit(NFS_IOHDR_NOWAIT, &hdr->flags);
+
+	if (nowait && nfs_local_defer_io())
+		return ERR_PTR(-EAGAIN);
 
 	if (hdr->rw_mode & FMODE_READ) {
-		if (!file->f_op->read_iter)
-			return ERR_PTR(-EOPNOTSUPP);
 		gfp_mask = GFP_KERNEL;
 		rw = ITER_DEST;
 	} else {
-		if (!file->f_op->write_iter)
-			return ERR_PTR(-EOPNOTSUPP);
 		gfp_mask = GFP_NOIO;
 		rw = ITER_SOURCE;
 	}
 
-	iocb = nfs_local_iocb_alloc(hdr, file, gfp_mask);
+	if (!nowait) {
+		file = nfs_to->nfsd_file_file(localio);
+		if (rw == ITER_DEST ? !file->f_op->read_iter : !file->f_op->write_iter)
+			return ERR_PTR(-EOPNOTSUPP);
+	}
+	iocb = nfs_local_iocb_alloc(hdr, nowait ? GFP_NOWAIT : gfp_mask);
 	if (iocb == NULL)
-		return ERR_PTR(-ENOMEM);
-	iocb->hdr = hdr;
+		return ERR_PTR(nowait ? -EAGAIN : -ENOMEM);
+	if (nowait) {
+		/* Observe the alignment fields published with this file. */
+		file = smp_load_acquire(&hdr->args.context->nfl.nowait_file);
+		if (!file) {
+			nfs_local_iocb_free(iocb);
+			return ERR_PTR(-EAGAIN);
+		}
+	}
 	iocb->localio = localio;
+	if (!nowait)
+		nfs_local_mapping_set_gfp_nofs_context(file->f_mapping);
+	init_sync_kiocb(&iocb->kiocb, file);
+	iocb->kiocb.ki_pos = hdr->args.offset;
+	iocb->kiocb.ki_flags &= ~IOCB_APPEND;
+	if (nowait)
+		iocb->kiocb.ki_flags |= IOCB_NOWAIT;
+	iocb->kiocb.ki_complete = NULL;
+	iocb->aio_complete_work = NULL;
 
 	nfs_local_iters_init(iocb, rw);
+	/*
+	 * A NOWAIT write always completes asynchronously, so it must not
+	 * share a page with a buffered write; see nfs_dio_write_shares_page().
+	 */
+	if (nowait && (!(file->f_mode & FMODE_NOWAIT) ||
+		       (rw == ITER_DEST ? !file->f_op->read_iter : !file->f_op->write_iter) ||
+		       atomic_read(&iocb->n_iters) != 1 ||
+		       !(iocb->split.segs[0].flags & IOCB_DIRECT) ||
+		       (rw == ITER_SOURCE &&
+			nfs_dio_write_shares_page(hdr->args.offset,
+						  hdr->args.count))))
+		hdr->task.tk_status = -EAGAIN;
 
 	return iocb;
 }
@@ -1256,22 +1387,40 @@ int nfs_local_doio(struct nfs_client *clp, struct nfsd_file *localio,
 {
 	struct nfs_local_kiocb *iocb;
 	int status = 0;
+	bool nowait = test_bit(NFS_IOHDR_NOWAIT, &hdr->flags);
 
 	clp = hdr->ds_clp ?: NFS_SERVER(hdr->inode)->nfs_client;
 	if (!hdr->args.count) {
-		nfs_release_local_fh(&clp->cl_uuid);
+		if (!nowait)
+			nfs_release_local_fh(&clp->cl_uuid);
 		return 0;
 	}
 
 	iocb = nfs_local_iocb_init(hdr, localio);
 	if (IS_ERR(iocb)) {
 		status = PTR_ERR(iocb);
-		nfs_local_pgio_init(hdr, call_ops);
-		hdr->task.tk_status = status;
-		nfs_release_local_fh(&clp->cl_uuid);
-		nfs_local_hdr_release(hdr, call_ops);
+		if (nowait) {
+			nfs_set_pgio_error(hdr, status, hdr->io_start);
+			hdr->completion_ops->completion(hdr);
+		} else {
+			nfs_local_pgio_init(hdr, call_ops);
+			hdr->task.tk_status = status;
+			nfs_release_local_fh(&clp->cl_uuid);
+			nfs_local_hdr_release(hdr, call_ops);
+		}
 		return status;
 	}
+	if (nowait && hdr->task.tk_status < 0) {
+		nfs_local_pgio_init(hdr, call_ops);
+		iocb->aio_complete_work = hdr->rw_mode == FMODE_READ ?
+			nfs_local_read_aio_complete_work : nfs_local_write_aio_complete_work;
+		atomic_set(&iocb->n_iters,
+		   test_bit(NFS_IOHDR_NOWAIT, &hdr->flags) ? 1 : 2);
+		nfs_local_pgio_done(iocb, hdr->task.tk_status);
+		goto out_nowait;
+	}
+	if (nowait)
+		atomic_inc(&iocb->n_iters);
 
 	switch (hdr->rw_mode) {
 	case FMODE_READ:
@@ -1286,11 +1435,26 @@ int nfs_local_doio(struct nfs_client *clp, struct nfsd_file *localio,
 		status = -EOPNOTSUPP;
 	}
 
+	if (nowait) {
+		if (WARN_ON_ONCE(status != 0)) {
+			nfs_local_pgio_init(hdr, call_ops);
+			iocb->aio_complete_work = nfs_local_write_aio_complete_work;
+			nfs_local_pgio_done(iocb, status);
+		}
+		goto out_nowait;
+	}
 	if (unlikely(status != 0)) {
 		nfs_local_iocb_release(iocb);
 		hdr->task.tk_status = status;
 		nfs_local_hdr_release(hdr, call_ops);
 	}
+	return status;
+out_nowait:
+	/* The I/O decrement publishes tk_status before leaving only our ref. */
+	if (atomic_read_acquire(&iocb->n_iters) == 1)
+		status = hdr->task.tk_status;
+	if (atomic_dec_and_test(&iocb->n_iters))
+		nfs_local_pgio_aio_complete(iocb);
 	return status;
 }
 

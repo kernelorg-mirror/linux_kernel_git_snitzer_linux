@@ -169,6 +169,7 @@ typedef u16 blk_short_t;
  * Invalid size or alignment.
  */
 #define BLK_STS_INVAL	((__force blk_status_t)19)
+#define BLK_STS_DIOALIGN	((__force blk_status_t)20)
 
 /**
  * blk_path_error - returns true if error may be path related
@@ -191,6 +192,7 @@ static inline bool blk_path_error(blk_status_t error)
 	case BLK_STS_RESV_CONFLICT:
 	case BLK_STS_MEDIUM:
 	case BLK_STS_PROTECTION:
+	case BLK_STS_DIOALIGN:
 		return false;
 	}
 

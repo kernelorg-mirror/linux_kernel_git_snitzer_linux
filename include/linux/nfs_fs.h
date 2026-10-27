@@ -81,6 +81,10 @@ struct nfs_lock_context {
 struct nfs_file_localio {
 	struct nfsd_file __rcu *ro_file;
 	struct nfsd_file __rcu *rw_file;
+	struct file *nowait_file;
+	u32 nowait_mem_align;
+	u32 nowait_offset_align;
+	u32 nowait_read_offset_align;
 	struct list_head list;
 	void __rcu *nfs_uuid; /* opaque pointer to 'nfs_uuid_t' */
 };
@@ -90,6 +94,10 @@ static inline void nfs_localio_file_init(struct nfs_file_localio *nfl)
 #if IS_ENABLED(CONFIG_NFS_LOCALIO)
 	nfl->ro_file = NULL;
 	nfl->rw_file = NULL;
+	nfl->nowait_file = NULL;
+	nfl->nowait_mem_align = 0;
+	nfl->nowait_offset_align = 0;
+	nfl->nowait_read_offset_align = 0;
 	INIT_LIST_HEAD(&nfl->list);
 	nfl->nfs_uuid = NULL;
 #endif
@@ -464,6 +472,8 @@ extern void nfs_inode_attach_open_context(struct nfs_open_context *ctx);
 extern void nfs_file_set_open_context(struct file *filp, struct nfs_open_context *ctx);
 extern void nfs_file_clear_open_context(struct file *flip);
 extern struct nfs_lock_context *nfs_get_lock_context(struct nfs_open_context *ctx);
+extern struct nfs_lock_context *nfs_get_lock_context_gfp(
+		struct nfs_open_context *ctx, gfp_t gfp);
 extern void nfs_put_lock_context(struct nfs_lock_context *l_ctx);
 extern void nfs_fattr_init(struct nfs_fattr *fattr);
 extern void nfs_fattr_set_barrier(struct nfs_fattr *fattr);
