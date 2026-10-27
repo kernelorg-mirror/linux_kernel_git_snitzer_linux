@@ -213,7 +213,10 @@ declare -A NEW_LATER=([svc_tcp_spare_bytes_max]=1 [svc_tcp_rx_want_eighths]=1)
 # carries it, so kernel-install writes it into each new kernel's boot
 # entry.  EXP_RODATA holds a run to
 # another value (default, for a boot without rodata= on the command line).
+# Held on tardis2 only for now (Mike, 27 October): elsewhere the audit
+# prints the live value and does not hold it.
 RODATA=noalias
+[ $HOST = tardis2 ] || RODATA=
 # The xeu module's, set by /etc/modprobe.d/xeu.conf at load.
 # irq_msix_mask (kmod-xsight 2.0.1-9): a ring masks its MSI-X entry in the
 # card while it polls instead of going through the irq core and the ITS;
@@ -515,7 +518,12 @@ audit() {
 	local mode=$1 k
 	mode_expect $mode
 	echo "settled.sh audit $mode: kernel $(uname -r), $(date '+%F %T')"
-	want "kernel rodata" "$(grep -oE '(^| )rodata=[^ ]*' /proc/cmdline | tail -1 | sed 's/.*=//' | grep . || echo default)" "${EXP_RODATA:-$RODATA}"
+	k=$(grep -oE '(^| )rodata=[^ ]*' /proc/cmdline | tail -1 | sed 's/.*=//' | grep . || echo default)
+	if [ -n "${EXP_RODATA:-$RODATA}" ]; then
+		want "kernel rodata" "$k" "${EXP_RODATA:-$RODATA}"
+	else
+		printf '  --   %-34s %s\n' "kernel rodata" "$k (not held on $HOST)"
+	fi
 	audit_nfsd
 	audit_irqbalance
 	audit_netfilter
