@@ -475,6 +475,8 @@ srv_qdisc() {	# srv_qdisc <dev>: the qdiscs under the port's mq, one name if all
 }
 set_srv_qdisc() {	# set_srv_qdisc <dev> <qdisc>: that qdisc on each of the port's transmit queues
 	local c
+	# noqueue cannot be a class's: as the root it is every queue's (FLAMEGRAPH round 31).
+	if [ "$2" = noqueue ]; then tc qdisc replace dev $1 root noqueue; return; fi
 	# A root of handle 0: cannot be named as a parent: give the mq one.
 	tc qdisc replace dev $1 root handle 100: mq || return 1
 	for c in $(tc qdisc show dev $1 | awk '$1 == "qdisc" && $2 != "mq" {sub(/^100:/, "", $5); print $5}'); do
