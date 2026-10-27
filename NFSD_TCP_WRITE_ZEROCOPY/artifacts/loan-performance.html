@@ -249,9 +249,9 @@
 <div class="wrap">
 
   <header>
-    <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; builds 464 and 473 &middot; 13 and 14&nbsp;October&nbsp;2026 &middot; early findings</p>
+    <p class="eyebrow">NFSD on the Xsight E1 &middot; 16 KiB pages &middot; builds 464, 473 and 491 &middot; 13 to 21&nbsp;October&nbsp;2026 &middot; early findings</p>
     <h1>At 60.4 GB/s copy mode is at the limit of memory.<span class="ok" style="display:block">A loaned WRITE asks a fraction of it.</span></h1>
-    <p class="lede">An NFS server on the E1 takes <span class="hl">60.4 GB/s of durable WRITEs over two ports and 47.8 over one</span> by copying each WRITE once on arrival. That is as far as copying goes here: the machine's four DIMMs carry 166 GB/s in theory, a copy sends every byte through them twice, a bare copy benchmark reaches 62 to 68 GB/s, and two ports of NFS already ask of memory what that benchmark does. <span class="hc">The card can deliver 99 GB/s. The way to it is not to copy</span>, which is <a href="#model">the loan (how it differs from a copy is laid out below)</a>, and a loan can only be written straight to storage by NVMe drives with SGLs. Those drives are on their way. This page is what was measured ahead of them on 13 October: how many bytes have to pass through memory for each byte of payload a loan carries, and what decides it. <a href="#b473">On 14 October the same measurements were run again on the 7.3 kernel</a>, and they agree.</p>
+    <p class="lede">An NFS server on the E1 takes <span class="hl">60.4 GB/s of durable WRITEs over two ports and 47.8 over one</span> by copying each WRITE once on arrival. That is as far as copying goes here: the machine's four DIMMs carry 166 GB/s in theory, a copy sends every byte through them twice, a bare copy benchmark reaches 62 to 68 GB/s, and two ports of NFS already ask of memory what that benchmark does. <span class="hc">The card can deliver 99 GB/s. The way to it is not to copy</span>, which is <a href="#model">the loan (how it differs from a copy is laid out below)</a>, and a loan can only be written straight to storage by NVMe drives with SGLs. Those drives are on their way. This page is what was measured ahead of them on 13 October: how many bytes have to pass through memory for each byte of payload a loan carries, and what decides it. <a href="#b473">On 14 October the same measurements were run again on the 7.3 kernel</a>, and they agree. <a href="#t2">On 21 October the loan was measured in front of real SGL drives</a>, on tardis2.</p>
     <div class="metrics">
       <div class="metric"><div class="n">2.17</div><div class="l">bytes through memory for each byte of payload: copied, two ports</div></div>
       <div class="metric"><div class="n gain">0.1</div><div class="l">the same for a loaned byte still in the cache when a drive takes it</div></div>
@@ -263,7 +263,7 @@
       <dl class="runs">
         <dt>Copy mode</dt><dd>The full account of how copy mode reached 60.4 GB/s, and everything tried on the way, is <a href="https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g">NFSD Receive Region Budget</a>. This page takes up where its section on the memory limit leaves off.</dd>
         <dt>In the tree</dt><dd><code>NFSD_TCP_WRITE_ZEROCOPY/LOAN-PERFORMANCE.md</code>, with every table here and how to run each again</dd>
-        <dt>Status</dt><dd>Early. One port, a stand-in for the drives, one evening's runs on build 464. Run again on build 473, the series on the 7.3 kernel, on 14 October: the card and the drives alone, copy mode and all three loan plans, and they agree with build 464 (<a href="#b473">below</a>).</dd>
+        <dt>Status</dt><dd>Early. One port, a stand-in for the drives, one evening's runs on build 464. Run again on build 473, the series on the 7.3 kernel, on 14 October: the card and the drives alone, copy mode and all three loan plans, and they agree with build 464 (<a href="#b473">below</a>). On 21 October, tardis2 with four NVMe drives that have SGLs: the loan written straight to real drives at 40 GB/s, with its memory traffic (<a href="#t2">below</a>).</dd>
       </dl>
     </div>
   </header>
@@ -309,14 +309,57 @@
     <div class="verdict acc" id="tooslow" style="margin-top:26px">
       <p class="big">How slow is too slow for an SGL drive</p>
       <p><strong>Loaned data in flight is the write rate &times; the time each WRITE stays loaned &times; about 1.5.</strong> The time runs from the WRITE being fully received to the NVMe completion; 1.5 is the page overhead. To stay in the 32 MiB L3, which leaves about 5 to 10 MB of payload for loans after the rings and socket buffers, a WRITE's loan time must be under about 50 to 100 &micro;s at 96 GB/s (both ports at line rate), about 85 to 170 &micro;s at 60 GB/s (today's copy-mode rate), and about 100 to 200 &micro;s at 48 GB/s (one port). Take off about 20 to 30 &micro;s of software and the rest is the drive's completion budget for the WRITE's I/O under load.</p>
-      <p><strong>Past that it isn't a failure.</strong> Loaned data spills to DRAM at about 1.6 bytes of memory traffic for each byte, still cheaper than a copy's 2.17, until DRAM bandwidth runs out at around 80 to 100 GB/s.</p>
+      <p><strong>Past that it isn't a failure.</strong> Loaned data spills to DRAM at about 1.6 bytes of memory traffic for each byte, still cheaper than a copy's 2.17, until DRAM bandwidth runs out at around 80 to 100 GB/s. On tardis2's SGL drives it was measured at 1.92 for 84 MiB of the region in use (<a href="#t2">below</a>).</p>
       <p><strong>So what matters is</strong> sustained write bandwidth past the SLC cache &times; the number of drives, at least the target rate, and the completion latency of a 1 MiB write (or of a stripe's piece) at that load, not a 4K or 32K latency at queue depth 1. A drive of about 3 GB/s needs at least 350 &micro;s to absorb a whole 1 MiB write, which fits the cache only up to about 15 to 30 GB/s unless writes are striped across many drives.</p>
       <p class="note"><strong>To qualify a candidate:</strong> fio, 1 MiB and 128 KiB direct writes, queue depth 1 to 8, run long enough to get past the SLC cache, recording mean and 99th-percentile latency and bandwidth. Worked from these measurements and Little's law, not yet measured on an SGL drive; the working is in <code>LOAN-PERFORMANCE.md</code>, "How slow is too slow for an SGL drive".</p>
     </div>
   </section>
 
+  <section id="t2">
+    <p class="eyebrow ok"><span>Newest &middot; 21 October &middot; tardis2, build 491, NVMe drives with SGLs</span></p>
+    <h2>In front of real SGL drives, a loan at full rate holds more than the cache, and its data passes through DRAM</h2>
+    <p>tardis2 has the same CPU, card and 32 MiB cache as tardis1, and four DapuStor DPRP5 15.36&nbsp;TB drives (PCIe 5, with SGLs). One port wrote onto those four, each with its own XFS, on build 491 (<code class="kv">7.3.0-7.hs.491.loanpages_pool.el10.aarch64+16k</code>). Here the loan goes straight to the drives with nothing in between, so this is the figure the stand-in could only point at.</p>
+    <p><strong>Where the payload is when the drive reads it.</strong> The card's DMA writes each frame into the cache. The ring CPUs and nfsd read only the headers, and nfsd hands the payload's pages to the file system as they are. Each drive then DMA-reads the payload. A line still in the cache is served from the cache. A line pushed out before the drive gets to it has already been written to DRAM once, and the drive reads it back from there. So what decides the cost is how much loaned data is waiting for the drives, compared with the 32 MiB cache.</p>
+    <div class="tbl-wrap"><table class="q" style="min-width:640px">
+      <thead><tr><th>One port onto the four DPRP5s</th><th>GB/s</th><th>Each drive</th><th>Region in use</th><th>Bytes through memory, each byte of payload</th><th>To memory</th><th>nfsd CPUs busy</th></tr></thead>
+      <tbody>
+        <tr><td>Loan, 16 WRITEs let in (2,150 pages)</td><td class="c">34.04</td><td class="c">8.5</td><td class="c">38 MiB</td><td class="r">0.71</td><td class="c">24 GB/s</td><td class="c">8%</td></tr>
+        <tr><td>Loan, 24 (3,158)</td><td class="c">37.58</td><td class="c">9.4</td><td class="c">44 MiB</td><td class="r">1.08</td><td class="c">41 GB/s</td><td class="c">9%</td></tr>
+        <tr><td>Loan, 32 (4,166)</td><td class="c">38.98</td><td class="c">9.7</td><td class="c">51 MiB</td><td class="r">1.37</td><td class="c">54 GB/s</td><td class="c">11%</td></tr>
+        <tr><td>Loan, 48 (6,182)</td><td class="c">40.08</td><td class="c">10.0</td><td class="c">68 MiB</td><td class="r">1.74</td><td class="c">70 GB/s</td><td class="c">11%</td></tr>
+        <tr><td>Loan, 64 (8,198), the rig's setting</td><td class="c">40.48</td><td class="c">10.1</td><td class="c">84 MiB</td><td class="r">1.92</td><td class="c">78 GB/s</td><td class="c">12%</td></tr>
+        <tr><td class="m">Copy</td><td class="c">40.79</td><td class="c">10.2</td><td class="c">22 MiB</td><td class="x">3.12</td><td class="c">127 GB/s</td><td class="c">28%</td></tr>
+      </tbody>
+    </table></div>
+    <p class="legend"><span class="key"></span>loan <span class="key cp" style="margin-left:12px"></span>copy &nbsp;&middot;&nbsp; bytes through memory for each byte of payload, on a scale of 0 to 6</p>
+    <div class="mem">
+      <div class="lab">16 WRITEs let in<small>34.04 GB/s &middot; 38 MiB in use</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:11.8%"></span></div><span class="n">0.71</span></div></div>
+      <div class="lab">24<small>37.58 GB/s &middot; 44 MiB</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:18.0%"></span></div><span class="n">1.08</span></div></div>
+      <div class="lab">32<small>38.98 GB/s &middot; 51 MiB</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:22.8%"></span></div><span class="n">1.37</span></div></div>
+      <div class="lab">48<small>40.08 GB/s &middot; 68 MiB</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:29.0%"></span></div><span class="n">1.74</span></div></div>
+      <div class="lab">64, the rig's setting<small>40.48 GB/s &middot; 84 MiB</small></div><div class="bars"><div class="row"><div class="track"><span class="fill" style="width:32.0%"></span></div><span class="n">1.92</span></div></div>
+      <div class="lab">Copy<small>40.79 GB/s &middot; 22 MiB</small></div><div class="bars"><div class="row"><div class="track"><span class="fill cp" style="width:52.0%"></span></div><span class="n">3.12</span></div></div>
+    </div>
+    <div class="delta">
+      <div class="mark">1</div>
+      <div class="body"><h3>Here the budget sets the rate</h3>
+      <p>A loaned WRITE holds its pages until the drive has them, so the budget is the depth queued at the drives. With fewer WRITEs in flight the drives go slower: 88% busy at 16 WRITEs, 95 to 100% from 24.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark cost">2</div>
+      <div class="body"><h3>No budget keeps the full rate inside the cache</h3>
+      <p>What a loan holds is the data in flight, about the drives' rate times their latency. The rings take about 22 MiB of the region in copy mode too, so the loans themselves hold about 16, 22, 29, 46 and 62 MiB. Memory traffic and rate rise together, with no knee. At 64 WRITEs nearly every loaned line is written to DRAM before the drive reads it, and read back from there: 1.92. 48 WRITEs gives 99% of the rate for 1.74, and 24 gives 93% for 1.08.</p></div>
+    </div>
+    <div class="delta">
+      <div class="mark gain">3</div>
+      <div class="body"><h3>Even out of the cache, the loan uses 38% less memory than the copy</h3>
+      <p>The copy holds the same data in flight, in nfsd's own pages, which the CPU writes and the drives read from memory: 3.12 bytes through memory for each byte here, against tardis1's 2.2 (the difference is not looked into). It also costs nfsd more than twice the CPU, 28% busy against 12%.</p></div>
+    </div>
+    <p class="note" style="margin-top:14px">One run per row, each <code>WARM=10 RUNTIME=30</code> after an fstrim and 120 s of rest, with <code>memcost-log.sh</code> beside it; the region in use is read at the middle of the counted stretch, in 16 KiB pages. The account is <code>NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md</code>, "tardis2's four DPRP5s" and its "The region against the 32 MiB system cache"; the runs are <code>/var/tmp/zc-run-logs/t2-dprp5/</code> on tardis2.</p>
+  </section>
+
   <section id="b473">
-    <p class="eyebrow ok"><span>Newest &middot; 14 October &middot; build 473, the series on the 7.3 kernel</span></p>
+    <p class="eyebrow ok"><span>14 October &middot; build 473, the series on the 7.3 kernel</span></p>
     <h2>On the 7.3 kernel the measurements agree with build 464</h2>
     <p>The series is rebased onto <code>v7.3-3</code>, after 7.3-rc7, and tardis1 booted build 473 from it (<code>7.3.0-0.rc7.3.hs.473.loanpages_pool.el9.aarch64+16k</code>). The measurements of 13 October are being run again on it in the same order. Every run was first checked against the settled setting: where nfsd's threads and each port's interrupts sit, the receive and module settings, the network settings on both hosts and the drives' caches. A loan cell was checked again once its load was running, against the budget, rings and held buffer its plan sets.</p>
 
@@ -491,16 +534,16 @@
 
   <section id="limits">
     <p class="eyebrow">What this does and does not show</p>
-    <h2>The direction is measured. The figure for a real drive is not.</h2>
+    <h2>The direction is measured, and since 21 October so is a real drive</h2>
     <div class="matrix">
       <div class="cell k">Data the card delivers and data the drives take to store both pass through the cache, and use the DIMMs only when the cache overflows</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">A loan's cost in memory falls with its footprint: four runs, with the budget, the rings and the held buffer each varied</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">On the stand-in it levels off near 1.3 bytes through memory for each byte of payload, at a footprint of 17 to 18 MiB, inside the cache</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">A copy's cost does not fall the same way</div><div class="cell v"><span class="pill yes">shown</span></div>
       <div class="cell k">Loaned WRITEs are written direct on build 464 and stay within their charge</div><div class="cell v"><span class="pill yes">shown</span></div>
-      <div class="cell k">What a loaned byte costs in front of a drive that takes the pages itself. The stand-in adds a passage through TCP that a drive does not; the first finding puts the answer between 0.1 and 1.6, and a footprint inside the cache points at the low end</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
-      <div class="cell k">The rate a loan reaches. The stand-in is held to about 11.7 GB/s by the one drive behind it and by its own copy; nothing here is a measure of rate</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
-      <div class="cell k">The settings for real drives. The right budget is about how many WRITEs are in flight at once, the rate times how long storage takes to finish one. Drives that finish sooner and carry five times the rate pull that in opposite directions, so the stand-in's 8 is where to start looking</div><div class="cell v"><span class="pill pend">needs the drives</span></div>
+      <div class="cell k">What a loaned byte costs in front of a drive that takes the pages itself. On tardis2's four DPRP5s, one port: 0.71 at 16 WRITEs let in and 34 GB/s, up to 1.92 at 64 and 40.5 GB/s, where the loans hold more than the cache (<a href="#t2">above</a>)</div><div class="cell v"><span class="pill yes">measured</span></div>
+      <div class="cell k">The rate a loan reaches. The stand-in is held to about 11.7 GB/s by the one drive behind it and by its own copy. On tardis2 a loan carries 40.48 GB/s on one port to four drives, which are the limit</div><div class="cell v"><span class="pill yes">one port</span></div>
+      <div class="cell k">The settings for real drives. The right budget is about how many WRITEs are in flight at once, the rate times how long storage takes to finish one. Drives that finish sooner and carry five times the rate pull that in opposite directions, so the stand-in's 8 is where to start looking. On tardis2's four drives, one port: 48 WRITEs gives 99% of the rate for 1.74 bytes through memory a byte, 64 the last 1% for 1.92</div><div class="cell v"><span class="pill pend">one host</span></div>
       <div class="cell k">Two ports. The loan cells are one port; the harness that runs them does not do two</div><div class="cell v"><span class="pill pend">not run</span></div>
       <div class="cell k">The same figures on the 7.3 kernel (build 473), with one-port and two-port copy mode beside them to show no regression: the card and the drives alone, copy mode and all three loan plans agree with build 464; two-port copy mode is about 1.5% under it (<a href="#b473">above</a>)</div><div class="cell v"><span class="pill yes">run</span></div>
     </div>
@@ -508,7 +551,7 @@
   </section>
 
   <footer>
-    <span class="r">NFSD loan performance &middot; early findings on builds 464 and 473</span><br>
+    <span class="r">NFSD loan performance &middot; early findings on builds 464, 473 and 491</span><br>
     In-tree: <code>NFSD_TCP_WRITE_ZEROCOPY/LOAN-PERFORMANCE.md</code>, <code>TRACING-NFSD-AND-XEU-MEMCPY-TIME.md</code>, <code>xeu-rig/memcost-cal.sh</code>, <code>memcost-log.sh</code>, <code>memcost-read.py</code>, <code>plans/16k-42-loan-memcost.plan</code>, <code>16k-43-loan-memcost-small.plan</code>, <code>16k-44-loan-memcost-floor.plan</code><br>
     Copy mode: <a href="https://claude.ai/artifact/3UQkMVoWW8p9A5ZASPnm3g">NFSD Receive Region Budget</a><br>
     Series: David Flynn &middot; Mike Snitzer &middot; Hammerspace &middot; 2026-10-14
