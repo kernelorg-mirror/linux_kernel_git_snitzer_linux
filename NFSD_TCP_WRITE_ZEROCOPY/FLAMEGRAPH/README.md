@@ -57,6 +57,40 @@ Each round is a directory here, numbered in order:
 | [09-big-tcp](09-big-tcp/README.md) | round 08's state | per-skb costs at about 20 GRO skbs a WRITE | BIG TCP: the server's `gro_max_size` and `gro_ipv4_max_size` 256 KB | not kept: no change (rings 63.3 against 63.4, latency the same); aggregates end at the client's 64 KB TSO bursts, so it needs the client's `gso_ipv4_max_size` too (Mike); the wake itself measured, 98.5% under 2 us |
 | [L0-latency](L0-latency/README.md) | round 05's state, 4 in flight | p50 0.46-0.52 ms; about 0.2 ms is the drive, 0.02 the reply; the apparent wake tail is the tracepoint's stale stamp | `xeu-rig/lat.sh` | the baseline; runs differ by about 10%, so several a side |
 
+## The queue (Mike, 2026-10-27)
+
+The next rounds, in this order. Each starts when the one before it is
+decided.
+
+1. **Round 32: more transmit queues for nfsd's sends.**
+   - **The problem:** port a's 4 transmit queues carry every reply and
+     ACK from nfsd's 48 CPUs. XPS ties tx-0 to tx-3 to CPUs 8 to 11 only
+     (as `settled.sh` records), so the other 44 pick a queue by the
+     flow's hash.
+   - **What it costs:** round 07 put the transmit lock at about 2.6 µs of
+     nfsd's `__dev_xmit_skb` a WRITE, and round 31 put the qdisc layer at
+     about 2.6 a WRITE.
+   - **And the drops:** round 31 found that a send to a briefly stopped
+     queue (`xeu_maybe_stop_tx()`) is dropped without a qdisc.
+   - **The limit:** xeu pairs a transmit ring with each receive ring
+     (`num_rings`, at most 8 a port), so more transmit queues means a
+     change of the ring layout or of xeu.
+2. **Prefetch the completion entry the card writes further ahead in
+   `xeu_rx_poll`.** It is the poll's largest L1 refill, about 31% of
+   them ([30-tlb-look](30-tlb-look/README.md)). An xeu change. The gain
+   is uncertain, since the card writes the entry just before the poll
+   reads it.
+3. **The rings' memory stall.**
+   - It is 20% of the rings' cycles on `rodata=noalias`, and it is cache
+     misses, not TLB walks (round 30).
+   - It is to be located first, by sampled L1D and L2 refills on the ring
+     CPUs, before a change is chosen.
+4. **nfsd's own loan frames.**
+   - append 2.4, borrow 2.1 and release 1.7 µs a WRITE (round 31's
+     profile).
+   - Round 31 found the append to be about 128 loads of 19 ns a WRITE,
+     not one stall, so this round looks at the three together.
+
 ## Where the kept rounds stand (2026-10-27)
 
 What a loaned WRITE costs after each kept round, from that round's B
