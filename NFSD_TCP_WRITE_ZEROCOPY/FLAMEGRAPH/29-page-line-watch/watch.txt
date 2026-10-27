@@ -1,0 +1,129 @@
+== run56watch.sh, t2-r53: w56-loan64 total 40.48 GB/s, the tip's sunrpc (A06FE478658242A10E100FF), the settled setting (xeu rx_prefetch Y)
+watch from 05:15:14, 29604 WRITEs a second
+w1: page ffffff8040fb7a40 from 05:15:14.462229295
+w2: page ffffff8040fc78c0 from 05:15:20.177577574
+w3: page ffffff8040faebc0 from 05:15:25.343568093
+w4: page ffffff8040fa8200 from 05:15:30.342540911
+
+== watch-count.py: each page's accesses by field, side (ring CPUs 0,2,4,6 or nfsd 8-55), function and its caller (perf's symbols from kcore: do_perf_trace_* names are misresolved addresses inside the function after <)
+== w1 page ffffff8040fb7a40: 29409 hits in 2.77 s
+    5039  pp_magic           nfsd  do_perf_trace_svcsock_lifetime_class < svc_tcp_rx_borrow_segment
+    5025  pp_magic           ring  napi_build_skb                       < xeu_rx_poll
+    2623  pp_magic           nfsd  svc_tcp_rx_region_span               < __fortify_strlen
+    2556  pp_magic           nfsd  svc_tcp_rx_release_refs              < do_perf_trace_svc_pool_thread_event
+    2509  pp_ref_count       ring  page_pool_alloc_frag_netmem          < page_pool_alloc_frag
+    2201  pp_magic           nfsd  svc_tcp_rx_append_ref                < do_perf_trace_rpc_task_running
+    2125  pp_magic           ring  skb_gro_receive                      < tcp_gro_receive
+    1379  pp_magic           nfsd  page_pool_put_netmem_bulk            < svc_tcp_rx_put_run
+    1137  pp_magic           nfsd  __page_pool_page_can_be_recycled     < svc_tcp_rx_put_run
+     989  pp_ref_count       nfsd  svc_tcp_rx_put_run                   < svc_tcp_rx_release_refs
+     633  pp_magic           ring  skb_try_coalesce                     < tcp_try_coalesce
+     328  pp_magic           nfsd  napi_pp_put_page                     < skb_release_data
+     316  pp_magic           nfsd  svc_tcp_rx_get_borrowed              < __preempt_count_dec_and_test
+     316  pp_ref_count       nfsd  svc_tcp_rx_get_borrowed              < __preempt_count_dec_and_test
+     316  pp_magic           nfsd  svc_tcp_rx_append_ref                < __preempt_count_dec_and_test
+     287  pp_magic           nfsd  napi_pp_put_page                     < skb_attempt_defer_free
+     245  pp_ref_count       nfsd  page_pool_put_netmem_bulk            < svc_tcp_rx_put_run
+     165  pp_ref_count       nfsd  napi_pp_put_page                     < skb_release_data
+== w2 page ffffff8040fc78c0: 33521 hits in 3.01 s
+    5722  pp_magic           nfsd  svc_tcp_rx_borrow_segment            < svc_tcp_rx_walk_skb
+    5698  pp_magic           ring  napi_build_skb                       < xeu_rx_poll
+    3004  pp_magic           nfsd  svc_tcp_rx_region_span               < svc_tcp_recv_skb
+    2882  pp_magic           nfsd  svc_tcp_rx_release_refs              < svc_tcp_release_ctxt
+    2856  pp_magic           nfsd  svc_tcp_rx_append_ref                < svc_tcp_rx_borrow_segment
+    2847  pp_ref_count       ring  page_pool_alloc_frag_netmem          < page_pool_alloc_frag
+    2389  pp_magic           ring  skb_gro_receive                      < tcp_gro_receive
+    1583  pp_magic           nfsd  page_pool_put_netmem_bulk            < svc_tcp_rx_put_run
+    1307  pp_magic           nfsd  __page_pool_page_can_be_recycled     < svc_tcp_rx_put_run
+    1129  pp_ref_count       nfsd  svc_tcp_rx_put_run                   < svc_tcp_rx_release_refs
+     681  pp_magic           ring  skb_try_coalesce                     < tcp_try_coalesce
+     454  pp_magic           nfsd  napi_pp_put_page                     < skb_release_data
+     375  pp_magic           nfsd  svc_tcp_rx_get_borrowed              < svc_tcp_rx_borrow_segment
+     374  pp_ref_count       nfsd  svc_tcp_rx_get_borrowed              < svc_tcp_rx_borrow_segment
+     270  pp_ref_count       nfsd  page_pool_put_netmem_bulk            < svc_tcp_rx_put_run
+     268  pp_magic           nfsd  napi_pp_put_page                     < skb_attempt_defer_free
+     229  pp_ref_count       nfsd  napi_pp_put_page                     < skb_release_data
+     179  pp_magic           nfsd  page_pool_clear_pp_info              < page_pool_recycle_ring_bulk
+== w3 page ffffff8040faebc0: 14672 hits in 1.38 s
+    2498  pp_magic           nfsd  svc_tcp_rx_borrow_segment            < svc_tcp_rx_walk_skb
+    2458  pp_magic           ring  napi_build_skb                       < xeu_rx_poll
+    1311  pp_magic           nfsd  svc_tcp_rx_region_span               < svc_tcp_recv_skb
+    1257  pp_magic           nfsd  svc_tcp_rx_release_refs              < svc_tcp_release_ctxt
+    1249  pp_magic           nfsd  svc_tcp_rx_append_ref                < svc_tcp_rx_borrow_segment
+    1226  pp_ref_count       ring  page_pool_alloc_frag_netmem          < page_pool_alloc_frag
+    1034  pp_magic           ring  skb_gro_receive                      < tcp_gro_receive
+     654  pp_magic           nfsd  page_pool_put_netmem_bulk            < svc_tcp_rx_put_run
+     545  pp_magic           nfsd  __page_pool_page_can_be_recycled     < svc_tcp_rx_put_run
+     499  pp_ref_count       nfsd  svc_tcp_rx_put_run                   < svc_tcp_rx_release_refs
+     300  pp_magic           ring  skb_try_coalesce                     < tcp_try_coalesce
+     202  pp_magic           nfsd  svc_tcp_rx_get_borrowed              < svc_tcp_rx_borrow_segment
+     202  pp_ref_count       nfsd  svc_tcp_rx_get_borrowed              < svc_tcp_rx_borrow_segment
+     192  pp_magic           nfsd  napi_pp_put_page                     < skb_attempt_defer_free
+     180  pp_magic           nfsd  napi_pp_put_page                     < skb_release_data
+     109  pp_ref_count       nfsd  page_pool_put_netmem_bulk            < svc_tcp_rx_put_run
+      94  pp_ref_count       nfsd  napi_pp_put_page                     < skb_attempt_defer_free
+      90  pp_ref_count       nfsd  napi_pp_put_page                     < skb_release_data
+== w4 page ffffff8040fa8200: 31138 hits in 3.01 s
+    5349  pp_magic           nfsd  svc_tcp_rx_borrow_segment            < svc_tcp_rx_walk_skb
+    5309  pp_magic           ring  napi_build_skb                       < xeu_rx_poll
+    2809  pp_magic           nfsd  svc_tcp_rx_region_span               < svc_tcp_recv_skb
+    2695  pp_magic           nfsd  svc_tcp_rx_release_refs              < svc_tcp_release_ctxt
+    2678  pp_magic           nfsd  svc_tcp_rx_append_ref                < svc_tcp_rx_borrow_segment
+    2652  pp_ref_count       ring  page_pool_alloc_frag_netmem          < page_pool_alloc_frag
+    2266  pp_magic           ring  skb_gro_receive                      < tcp_gro_receive
+    1461  pp_magic           nfsd  page_pool_put_netmem_bulk            < svc_tcp_rx_put_run
+    1215  pp_magic           nfsd  __page_pool_page_can_be_recycled     < svc_tcp_rx_put_run
+    1063  pp_ref_count       nfsd  svc_tcp_rx_put_run                   < svc_tcp_rx_release_refs
+     548  pp_magic           ring  skb_try_coalesce                     < tcp_try_coalesce
+     393  pp_magic           nfsd  napi_pp_put_page                     < skb_release_data
+     360  pp_magic           nfsd  svc_tcp_rx_get_borrowed              < svc_tcp_rx_borrow_segment
+     360  pp_ref_count       nfsd  svc_tcp_rx_get_borrowed              < svc_tcp_rx_borrow_segment
+     284  pp_magic           nfsd  napi_pp_put_page                     < skb_attempt_defer_free
+     246  pp_ref_count       nfsd  page_pool_put_netmem_bulk            < svc_tcp_rx_put_run
+     195  pp_ref_count       nfsd  napi_pp_put_page                     < skb_release_data
+     139  pp_ref_count       nfsd  napi_pp_put_page                     < skb_attempt_defer_free
+
+== watch-before.py
+== the access just before each borrow_segment read of the line: count, median us before it
+    6717       1.0  same cpu magic svc_tcp_rx_borrow_segment
+    5562       2.0  same cpu magic svc_tcp_rx_region_span
+    3488       1.0  same cpu magic svc_tcp_rx_append_ref
+    2490       1.0  same cpu magic do_perf_trace_svcsock_lifetime_class
+     106       2.0  other nfsd magic svc_tcp_rx_region_span
+      90       2.0  other nfsd magic svc_tcp_rx_append_ref
+      73       1.0  other nfsd magic svc_tcp_rx_borrow_segment
+      31       1.0  other nfsd magic do_perf_trace_svcsock_lifetime_class
+      15       1.0  other nfsd magic svc_tcp_rx_get_borrowed
+       9       2.0  other nfsd ppref napi_pp_put_page
+       9       0.0  other nfsd ppref svc_tcp_rx_get_borrowed
+       7       3.0  other ring magic skb_try_coalesce
+== the last write before each borrow_segment read
+   17145     253.0  other ring ppref page_pool_alloc_frag_netmem
+     955       3.0  same cpu ppref svc_tcp_rx_get_borrowed
+     307     103.0  other nfsd ppref svc_tcp_rx_get_borrowed
+     163      78.0  other nfsd ppref napi_pp_put_page
+      14      51.0  same cpu ppref napi_pp_put_page
+       8      92.0  other nfsd ppref page_pool_put_netmem_bulk
+       6     301.0  other nfsd ppref svc_tcp_rx_put_run
+       4     140.0  other nfsd ppref page_pool_alloc_frag_netmem
+       2      62.0  other ring ppref napi_pp_put_page
+
+== watch-first.py
+== an nfsd CPU's first access to the line after another CPU's: count, median us after it
+    4653  1147.0  svc_tcp_rx_release_refs, after nfsd
+    4594    20.0  svc_tcp_rx_region_span, after ring
+    1171    67.0  svc_tcp_rx_region_span, after nfsd
+     326   191.0  napi_pp_put_page, after nfsd
+     247     1.0  svc_tcp_rx_borrow_segment, after nfsd
+     233   155.0  blk_dma_map_iter_start, after nfsd
+     110     1.0  svc_tcp_rx_append_ref, after nfsd
+      97     1.0  do_perf_trace_svcsock_lifetime_class < svc_tcp_rx_borrow_segment, after nfsd
+      73    12.0  check_heap_object, after nfsd
+      41     1.0  svc_tcp_rx_get_borrowed, after nfsd
+== what that CPU does to it next
+    2738  svc_tcp_rx_release_refs > svc_tcp_rx_release_refs > svc_tcp_rx_put_run > page_pool_put_netmem_bulk
+    2531  svc_tcp_rx_region_span > svc_tcp_rx_region_span > svc_tcp_rx_borrow_segment > svc_tcp_rx_borrow_segment
+    1094  svc_tcp_rx_region_span > svc_tcp_rx_borrow_segment > svc_tcp_rx_borrow_segment > svc_tcp_rx_append_ref
+     934  svc_tcp_rx_region_span > svc_tcp_rx_region_span > do_perf_trace_svcsock_lifetime_class > do_perf_trace_svcsock_lifetime_class
+     874  svc_tcp_rx_release_refs > page_pool_put_netmem_bulk > __page_pool_page_can_be_recycled
+     850  svc_tcp_rx_release_refs > page_pool_put_netmem_bulk > page_pool_put_netmem_bulk
