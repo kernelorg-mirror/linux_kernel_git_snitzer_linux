@@ -3646,7 +3646,7 @@ pnfs_generic_pg_writepages(struct nfs_pageio_descriptor *desc)
 	struct nfs_pgio_header *hdr;
 	int ret;
 
-	hdr = nfs_pgio_header_alloc(desc->pg_rw_ops);
+	hdr = nfs_pgio_header_alloc(desc);
 	if (!hdr) {
 		desc->pg_error = -ENOMEM;
 		return desc->pg_error;
@@ -3798,7 +3798,7 @@ pnfs_generic_pg_readpages(struct nfs_pageio_descriptor *desc)
 	struct nfs_pgio_header *hdr;
 	int ret;
 
-	hdr = nfs_pgio_header_alloc(desc->pg_rw_ops);
+	hdr = nfs_pgio_header_alloc(desc);
 	if (!hdr) {
 		desc->pg_error = -ENOMEM;
 		return desc->pg_error;

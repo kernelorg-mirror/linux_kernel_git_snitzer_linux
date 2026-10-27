@@ -329,8 +329,14 @@ static u32 iomap_finish_ioend(struct iomap_ioend *ioend, int error)
 		bio_put(bio);
 	}
 
-	if (error)
-		cmpxchg(&ioend->io_error, 0, error);
+	if (error) {
+		int old = READ_ONCE(ioend->io_error);
+
+		do {
+			if (old && (old != -EDIOALIGN || error == -EDIOALIGN))
+				break;
+		} while (!try_cmpxchg(&ioend->io_error, &old, error));
+	}
 
 	if (!atomic_dec_and_test(&ioend->io_remaining))
 		return 0;
@@ -483,7 +489,11 @@ struct iomap_ioend *iomap_split_ioend(struct iomap_ioend *ioend,
 		max_len = min(max_len,
 			      lim->max_zone_append_sectors << SECTOR_SHIFT);
 
-		sector_offset = bio_split_rw_at(bio, lim, &nr_segs, max_len);
+		if (ioend->io_flags & IOMAP_IOEND_DIRECT)
+			sector_offset = bio_split_io_at(bio, lim, &nr_segs,
+							max_len, lim->dma_alignment);
+		else
+			sector_offset = bio_split_rw_at(bio, lim, &nr_segs, max_len);
 		if (unlikely(sector_offset < 0))
 			return ERR_PTR(sector_offset);
 		if (!sector_offset)

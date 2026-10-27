@@ -178,6 +178,7 @@ static const struct {
 	/* Command duration limit device-side timeout */
 	ENT(DURATION_LIMIT,	-ETIME,		"duration limit exceeded"),
 	ENT(INVAL,		-EINVAL,	"invalid"),
+	ENT(DIOALIGN,		-EDIOALIGN,	"direct-I/O buffer geometry"),
 
 	/* everything else not covered above: */
 	ENT(IOERR,		-EIO,		"I/O"),
@@ -197,13 +198,21 @@ blk_status_t errno_to_blk_status(int errno)
 }
 EXPORT_SYMBOL_GPL(errno_to_blk_status);
 
-int blk_status_to_errno(blk_status_t status)
+int blk_status_to_errno_raw(blk_status_t status)
 {
 	int idx = (__force int)status;
 
 	if (WARN_ON_ONCE(idx >= ARRAY_SIZE(blk_errors)))
 		return -EIO;
 	return blk_errors[idx].errno;
+}
+EXPORT_SYMBOL_GPL(blk_status_to_errno_raw);
+
+int blk_status_to_errno(blk_status_t status)
+{
+	if (status == BLK_STS_DIOALIGN)
+		return -EINVAL;
+	return blk_status_to_errno_raw(status);
 }
 EXPORT_SYMBOL_GPL(blk_status_to_errno);
 
@@ -820,7 +829,7 @@ void submit_bio_noacct(struct bio *bio)
 	struct request_queue *q = bdev_get_queue(bdev);
 	blk_status_t status = BLK_STS_IOERR;
 
-	might_sleep();
+	might_sleep_if(!(bio->bi_opf & REQ_NOWAIT));
 
 	/*
 	 * For a REQ_NOWAIT based request, return -EOPNOTSUPP

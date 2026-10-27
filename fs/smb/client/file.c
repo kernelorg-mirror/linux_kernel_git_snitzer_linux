@@ -3189,7 +3189,7 @@ cifs_strict_readv(struct kiocb *iocb, struct iov_iter *to)
 			    cfile, iocb->ki_pos, iov_iter_count(to),
 			    tcon->ses->server->vals->shared_lock_type,
 			    0, NULL, CIFS_READ_OP))
-			rc = filemap_read(iocb, to, 0);
+			rc = filemap_read(iocb, to, 0, NULL);
 		up_read(&cinode->lock_sem);
 		netfs_end_io_read(inode);
 	}

@@ -77,8 +77,15 @@ static inline void dmz_bio_endio(struct bio *bio, blk_status_t status)
 	struct dmz_bioctx *bioctx =
 		dm_per_bio_data(bio, sizeof(struct dmz_bioctx));
 
-	if (status != BLK_STS_OK && bio->bi_status == BLK_STS_OK)
-		bio->bi_status = status;
+	if (status != BLK_STS_OK) {
+		blk_status_t old = READ_ONCE(bio->bi_status);
+
+		do {
+			if (old && (old != BLK_STS_DIOALIGN ||
+				    status == BLK_STS_DIOALIGN))
+				break;
+		} while (!try_cmpxchg(&bio->bi_status, &old, status));
+	}
 	if (bioctx->dev && bio->bi_status != BLK_STS_OK)
 		bioctx->dev->flags |= DMZ_CHECK_BDEV;
 

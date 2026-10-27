@@ -91,11 +91,12 @@ void nfs_commit_free(struct nfs_commit_data *p)
 }
 EXPORT_SYMBOL_GPL(nfs_commit_free);
 
-static struct nfs_pgio_header *nfs_writehdr_alloc(void)
+static struct nfs_pgio_header *nfs_writehdr_alloc(gfp_t gfp)
 {
 	struct nfs_pgio_header *p;
 
-	p = kmem_cache_zalloc(nfs_wdata_cachep, nfs_io_gfp_mask());
+	p = kmem_cache_zalloc(nfs_wdata_cachep,
+			      gfp == GFP_KERNEL ? nfs_io_gfp_mask() : gfp);
 	if (!p) {
 		p = mempool_alloc(nfs_wdata_mempool, GFP_NOWAIT);
 		if (!p)
@@ -1178,8 +1179,24 @@ nfs_key_timeout_notify(struct file *filp, struct inode *inode)
 }
 
 /*
- * Test if the open context credential key is marked to expire soon.
+ * Check the already published credential without lookup or refresh.
  */
+int nfs_key_timeout_notify_nowait(struct file *filp)
+{
+	struct nfs_open_context *ctx = nfs_file_open_context(filp);
+	struct rpc_cred *cred;
+	int ret = -EAGAIN;
+
+	rcu_read_lock();
+	cred = rcu_dereference(ctx->ll_cred);
+	if (cred && test_bit(RPCAUTH_CRED_UPTODATE, &cred->cr_flags) &&
+	    !(cred->cr_ops->crkey_timeout && cred->cr_ops->crkey_timeout(cred)))
+		ret = 0;
+	rcu_read_unlock();
+	return ret;
+}
+
+/* Test if the open context credential key is marked to expire soon. */
 bool nfs_ctx_key_to_expire(struct nfs_open_context *ctx, struct inode *inode)
 {
 	struct rpc_auth *auth = NFS_SERVER(inode)->client->cl_auth;

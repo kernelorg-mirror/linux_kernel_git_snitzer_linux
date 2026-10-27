@@ -106,6 +106,7 @@ xfs_bmbt_to_iomap(
 	u64			sequence_cookie)
 {
 	struct xfs_mount	*mp = ip->i_mount;
+	struct xfs_inode_log_item *iip;
 	struct xfs_buftarg	*target = xfs_inode_buftarg(ip);
 
 	if (unlikely(!xfs_valid_startblock(ip, imap->br_startblock))) {
@@ -156,9 +157,8 @@ xfs_bmbt_to_iomap(
 	 * If the inode is dirty for datasync purposes, let iomap know so it
 	 * doesn't elide the IO completion journal flushes on O_DSYNC IO.
 	 */
-	if (ip->i_itemp) {
-		struct xfs_inode_log_item *iip = ip->i_itemp;
-
+	iip = smp_load_acquire(&ip->i_itemp);
+	if (iip) {
 		spin_lock(&iip->ili_lock);
 		if (iip->ili_datasync_seq)
 			iomap->flags |= IOMAP_F_DIRTY;
@@ -939,7 +939,7 @@ relock:
 	needs_alloc = imap_needs_alloc(inode, flags, &imap, nimaps);
 
 	if (flags & IOMAP_ATOMIC) {
-		error = -ENOPROTOOPT;
+		error = (flags & IOMAP_NOWAIT) ? -EAGAIN : -ENOPROTOOPT;
 		/*
 		 * If we allocate less than what is required for the write
 		 * then we may end up with multiple extents, which means that

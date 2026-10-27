@@ -1588,8 +1588,16 @@ static void do_endio(struct dm_integrity_c *ic, struct bio *bio)
 	int r;
 
 	r = dm_integrity_failed(ic);
-	if (unlikely(r) && !bio->bi_status)
-		bio->bi_status = errno_to_blk_status(r);
+	if (unlikely(r)) {
+		blk_status_t status = errno_to_blk_status(r);
+		blk_status_t old = READ_ONCE(bio->bi_status);
+
+		do {
+			if (old && (old != BLK_STS_DIOALIGN ||
+				    status == BLK_STS_DIOALIGN))
+				break;
+		} while (!try_cmpxchg(&bio->bi_status, &old, status));
+	}
 	if (unlikely(ic->synchronous_mode) && bio_op(bio) == REQ_OP_WRITE) {
 		unsigned long flags;
 
@@ -1624,8 +1632,15 @@ static void dec_in_flight(struct dm_integrity_io *dio)
 			schedule_autocommit(ic);
 
 		bio = dm_bio_from_per_bio_data(dio, sizeof(struct dm_integrity_io));
-		if (unlikely(dio->bi_status) && !bio->bi_status)
-			bio->bi_status = dio->bi_status;
+		if (unlikely(dio->bi_status)) {
+			blk_status_t old = READ_ONCE(bio->bi_status);
+
+			do {
+				if (old && (old != BLK_STS_DIOALIGN ||
+					    dio->bi_status == BLK_STS_DIOALIGN))
+					break;
+			} while (!try_cmpxchg(&bio->bi_status, &old, dio->bi_status));
+		}
 		if (likely(!bio->bi_status) && unlikely(bio_sectors(bio) != dio->range.n_sectors)) {
 			dio->range.logical_sector += dio->range.n_sectors;
 			bio_advance(bio, dio->range.n_sectors << SECTOR_SHIFT);

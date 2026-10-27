@@ -274,7 +274,7 @@ static int bio_map_user_iov(struct request *rq, struct iov_iter *iter,
 	 * No alignment requirements on our part to support arbitrary
 	 * passthrough commands.
 	 */
-	ret = bio_iov_iter_get_pages(bio, iter, 0, 0);
+	ret = bio_iov_iter_get_pages(bio, iter, 0, 0, NULL, 0);
 	if (ret)
 		goto out_put;
 	ret = blk_rq_append_bio(rq, bio);
@@ -432,6 +432,8 @@ int blk_rq_append_bio(struct request *rq, struct bio *bio)
 
 	/* check that the data layout matches the hardware restrictions */
 	ret = bio_split_io_at(bio, lim, &nr_segs, max_bytes, 0);
+	if (ret == -EDIOALIGN)
+		ret = -EINVAL;
 	if (ret) {
 		/* if we would have to split the bio, copy instead */
 		if (ret > 0)

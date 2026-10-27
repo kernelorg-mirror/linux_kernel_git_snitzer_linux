@@ -598,24 +598,6 @@ static void __wbt_wait(struct rq_wb *rwb, enum wbt_flags wb_acct,
 	rq_qos_wait(rqw, &data, wbt_inflight_cb, wbt_cleanup_cb);
 }
 
-static inline bool wbt_should_throttle(struct bio *bio)
-{
-	switch (bio_op(bio)) {
-	case REQ_OP_WRITE:
-		/*
-		 * Don't throttle WRITE_ODIRECT
-		 */
-		if ((bio->bi_opf & (REQ_SYNC | REQ_IDLE)) ==
-		    (REQ_SYNC | REQ_IDLE))
-			return false;
-		fallthrough;
-	case REQ_OP_DISCARD:
-		return true;
-	default:
-		return false;
-	}
-}
-
 static enum wbt_flags bio_to_wbt_flags(struct rq_wb *rwb, struct bio *bio)
 {
 	enum wbt_flags flags = 0;

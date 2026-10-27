@@ -384,6 +384,8 @@ static inline void iov_iter_ubuf(struct iov_iter *i, unsigned int direction,
 /* Flags for iov_iter_get/extract_pages*() */
 /* Allow P2PDMA on the extracted pages */
 #define ITER_ALLOW_P2PDMA	((__force iov_iter_extraction_t)0x01)
+/* USER fast-only pins require caller-provided page scratch storage. */
+#define ITER_EXTRACT_FAST_ONLY	((__force iov_iter_extraction_t)0x02)
 
 ssize_t iov_iter_extract_pages(struct iov_iter *i, struct page ***pages,
 			       size_t maxsize, unsigned int maxpages,
@@ -399,7 +401,7 @@ ssize_t iov_iter_extract_pages(struct iov_iter *i, struct page ***pages,
 ssize_t iov_iter_extract_bvecs(struct iov_iter *iter, struct bio_vec *bv,
 		size_t max_size, unsigned short *nr_vecs,
 		unsigned short max_vecs, unsigned mem_align_mask,
-		iov_iter_extraction_t extraction_flags);
+		iov_iter_extraction_t extraction_flags, struct iov_iter *prepared);
 
 /**
  * iov_iter_extract_will_pin - Indicate how pages from the iterator will be retained

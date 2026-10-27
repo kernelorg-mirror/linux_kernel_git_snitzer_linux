@@ -20,6 +20,7 @@
  * Private flags for iomap_dio, must not overlap with the public ones in
  * iomap.h:
  */
+#define IOMAP_DIO_WAIT_FOR_COMP	(1U << 25)
 #define IOMAP_DIO_NO_INVALIDATE	(1U << 26)
 #define IOMAP_DIO_COMP_WORK	(1U << 27)
 #define IOMAP_DIO_WRITE_THROUGH	(1U << 28)
@@ -27,21 +28,32 @@
 #define IOMAP_DIO_WRITE		(1U << 30)
 #define IOMAP_DIO_USER_BACKED	(1U << 31)
 
+struct iomap_dio_prepared {
+	struct iov_iter		*iter;
+	unsigned long		nr_pins;
+	size_t			dirty_bytes;
+	unsigned int		nr_vecs;
+	struct bio_vec		vecs[];
+};
+
 struct iomap_dio {
 	struct kiocb		*iocb;
 	const struct iomap_dio_ops *dops;
 	loff_t			i_size;
 	loff_t			size;
 	atomic_t		ref;
+	atomic_t		write_bio_succeeded;
 	unsigned		flags;
 	int			error;
 	size_t			done_before;
-	bool			wait_for_completion;
+	struct iomap_dio_prepared *prepared;
 
 	union {
 		/* used during submission and for synchronous completion: */
 		struct {
 			struct iov_iter		*iter;
+			/* Borrowed WRITE source, used only before ref drop. */
+			struct iov_iter		*captured;
 			struct task_struct	*waiter;
 		} submit;
 
@@ -52,13 +64,115 @@ struct iomap_dio {
 	};
 };
 
+static void iomap_dio_release_prepared(struct iomap_dio *dio, bool dirty)
+{
+	struct iomap_dio_prepared *p = dio->prepared;
+	size_t left = p->dirty_bytes;
+	unsigned int i;
+
+	for (i = 0; i < p->nr_vecs; i++) {
+		struct bio_vec *bv = &p->vecs[i];
+		unsigned long nr = (bv->bv_offset + bv->bv_len - 1) /
+				PAGE_SIZE - bv->bv_offset / PAGE_SIZE + 1;
+
+		if (dirty && left)
+			folio_mark_dirty_lock(page_folio(bv->bv_page));
+		left -= min_t(size_t, left, bv->bv_len);
+		unpin_user_folio(page_folio(bv->bv_page), nr);
+	}
+	dio->prepared = NULL;
+}
+
+void iomap_dio_discard_prepared(struct iomap_dio *dio)
+{
+	iomap_dio_release_prepared(dio, false);
+	kvfree(dio);
+}
+EXPORT_SYMBOL_GPL(iomap_dio_discard_prepared);
+
+struct iomap_dio *iomap_dio_prepare_user(struct kiocb *iocb,
+		const struct iov_iter *request, struct iov_iter *prepared)
+{
+	struct iov_iter cursor = *request;
+	struct iomap_dio_prepared *p;
+	struct iomap_dio *dio;
+	unsigned int capacity = iov_iter_npages(request, INT_MAX);
+	iov_iter_extraction_t flags = ITER_ALLOW_P2PDMA;
+	bool nowait = iocb->ki_flags & IOCB_NOWAIT;
+	size_t count = 0;
+	ssize_t ret;
+
+	if (nowait)
+		flags |= ITER_EXTRACT_FAST_ONLY;
+	dio = kvmalloc(size_add(sizeof(*dio), struct_size(p, vecs, capacity)),
+			nowait ? GFP_NOWAIT : GFP_KERNEL);
+	if (!dio)
+		return ERR_PTR(nowait ? -EAGAIN : -ENOMEM);
+	p = (void *)(dio + 1);
+	*p = (struct iomap_dio_prepared) { .iter = prepared };
+	dio->prepared = p;
+
+	while (iov_iter_count(&cursor)) {
+		unsigned short nr = 0;
+		unsigned short max = min_t(unsigned int,
+				capacity - p->nr_vecs, USHRT_MAX);
+		unsigned int first = p->nr_vecs;
+
+		ret = iov_iter_extract_bvecs(&cursor, p->vecs + first,
+				iov_iter_count(&cursor), &nr, max, 0, flags, NULL);
+		p->nr_vecs += nr;
+		if (ret <= 0) {
+			if (ret == -EFAULT &&
+			    (!nowait || iov_iter_rw(request) == WRITE))
+				break;
+			goto out_discard;
+		}
+		count += ret;
+		while (first < p->nr_vecs) {
+			struct bio_vec *bv = &p->vecs[first++];
+
+			p->nr_pins += (bv->bv_offset + bv->bv_len - 1) /
+					PAGE_SIZE - bv->bv_offset / PAGE_SIZE + 1;
+			if (!nowait && iov_iter_rw(request) == READ)
+				folio_mark_dirty_lock(page_folio(bv->bv_page));
+		}
+	}
+	iov_iter_bvec(prepared, iov_iter_rw(request), p->vecs, p->nr_vecs,
+			count);
+	return dio;
+out_discard:
+	iomap_dio_discard_prepared(dio);
+	return ERR_PTR(ret);
+}
+EXPORT_SYMBOL_GPL(iomap_dio_prepare_user);
+
+/* Called only after first bounding the total number of held pin occurrences. */
+static bool iomap_dio_prepared_dirty(struct iomap_dio_prepared *p)
+{
+	size_t left = p->dirty_bytes;
+	unsigned int i;
+
+	for (i = 0; left && i < p->nr_vecs; i++) {
+		if (!folio_test_dirty(page_folio(p->vecs[i].bv_page)))
+			return false;
+		left -= min_t(size_t, left, p->vecs[i].bv_len);
+	}
+	return true;
+}
+
 static struct bio *iomap_dio_alloc_bio(const struct iomap_iter *iter,
 		struct iomap_dio *dio, unsigned short nr_vecs, blk_opf_t opf)
 {
+	gfp_t gfp = GFP_KERNEL;
+
+	if (dio->iocb->ki_flags & IOCB_NOWAIT) {
+		gfp = GFP_NOWAIT;
+		opf |= REQ_NOWAIT;
+	}
 	if (dio->dops && dio->dops->bio_set)
 		return bio_alloc_bioset(iter->iomap.bdev, nr_vecs, opf,
-					GFP_KERNEL, dio->dops->bio_set);
-	return bio_alloc(iter->iomap.bdev, nr_vecs, opf, GFP_KERNEL);
+					gfp, dio->dops->bio_set);
+	return bio_alloc(iter->iomap.bdev, nr_vecs, opf, gfp);
 }
 
 static void iomap_dio_submit_bio(const struct iomap_iter *iter,
@@ -95,11 +209,20 @@ static inline bool should_report_dio_fserror(int error)
 	case 0:
 	case -EAGAIN:
 	case -ENOTBLK:
+	case -EDIOALIGN:
 		/* don't send fsnotify for success or magic retry codes */
 		return false;
 	default:
 		return true;
 	}
+}
+
+static ssize_t iomap_dio_result(struct kiocb *iocb, ssize_t error)
+{
+	if (error == -EDIOALIGN &&
+	    (!(iocb->ki_flags & IOCB_DIO_GEOMETRY) || !is_sync_kiocb(iocb)))
+		return -EINVAL;
+	return error;
 }
 
 ssize_t iomap_dio_complete(struct iomap_dio *dio)
@@ -108,13 +231,26 @@ ssize_t iomap_dio_complete(struct iomap_dio *dio)
 	struct kiocb *iocb = dio->iocb;
 	loff_t offset = iocb->ki_pos;
 	ssize_t ret = dio->error;
+	int report_error;
+
+	if ((iocb->ki_flags & IOCB_NOWAIT) &&
+	    (dio->flags & IOMAP_DIO_WRITE) &&
+	    (ret == -EAGAIN || ret == -EOPNOTSUPP) &&
+	    atomic_read(&dio->write_bio_succeeded))
+		ret = dio->error = -EIO;
 
 	if (dops && dops->end_io)
 		ret = dops->end_io(iocb, dio->size, ret, dio->flags);
-	if (should_report_dio_fserror(dio->error))
+	/* Filesystem completion cannot erase an observed real error. */
+	if (dio->error && (!ret || ret == -EDIOALIGN))
+		ret = dio->error;
+	if (ret < 0 && dio->error == -EDIOALIGN)
+		dio->error = ret;
+	report_error = iomap_dio_result(iocb, dio->error);
+	if (should_report_dio_fserror(report_error))
 		fserror_report_io(file_inode(iocb->ki_filp),
 				  iomap_dio_err_type(dio), offset, dio->size,
-				  dio->error, GFP_NOFS);
+				  report_error, GFP_NOFS);
 
 	if (likely(!ret)) {
 		ret = dio->size;
@@ -141,6 +277,8 @@ ssize_t iomap_dio_complete(struct iomap_dio *dio)
 		kiocb_invalidate_post_direct_write(iocb, dio->size);
 
 	inode_dio_end(file_inode(iocb->ki_filp));
+	if (dio->prepared)
+		iomap_dio_release_prepared(dio, true);
 
 	if (ret > 0) {
 		iocb->ki_pos += ret;
@@ -155,7 +293,8 @@ ssize_t iomap_dio_complete(struct iomap_dio *dio)
 			ret += dio->done_before;
 	}
 	trace_iomap_dio_complete(iocb, dio->error, ret);
-	kfree(dio);
+	ret = iomap_dio_result(iocb, ret);
+	kvfree_atomic(dio);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(iomap_dio_complete);
@@ -175,17 +314,32 @@ static void iomap_dio_complete_work(struct work_struct *work)
  */
 static inline void iomap_dio_set_error(struct iomap_dio *dio, int ret)
 {
-	cmpxchg(&dio->error, 0, ret);
+	int error;
+
+	if (!ret)
+		return;
+	error = READ_ONCE(dio->error);
+
+	do {
+		if (ret == -EDIOALIGN && error)
+			return;
+		if (error && (!(dio->iocb->ki_flags & IOCB_NOWAIT) ||
+		    !(dio->flags & IOMAP_DIO_WRITE) ||
+		    (error != -EAGAIN && error != -EOPNOTSUPP) ||
+		    ret == -EAGAIN || ret == -EOPNOTSUPP) &&
+		    error != -EDIOALIGN)
+			return;
+	} while (!try_cmpxchg(&dio->error, &error, ret));
 }
 
 /*
  * Called when dio->ref reaches zero from an I/O completion.
  */
-static void iomap_dio_done(struct iomap_dio *dio)
+static void iomap_dio_done(struct iomap_dio *dio, bool inline_completion)
 {
 	struct kiocb *iocb = dio->iocb;
 
-	if (dio->wait_for_completion) {
+	if (dio->flags & IOMAP_DIO_WAIT_FOR_COMP) {
 		/*
 		 * Synchronous I/O, task itself will handle any completion work
 		 * that needs after IO. All we need to do is wake the task.
@@ -218,6 +372,15 @@ static void iomap_dio_done(struct iomap_dio *dio)
 			dio->flags |= IOMAP_DIO_COMP_WORK;
 		else
 			dio->flags |= IOMAP_DIO_NO_INVALIDATE;
+	}
+
+	if (dio->prepared && !(dio->flags & IOMAP_DIO_COMP_WORK) &&
+	    !inline_completion) {
+		if (dio->prepared->nr_pins > BIO_MAX_VECS ||
+		    !iomap_dio_prepared_dirty(dio->prepared))
+			dio->flags |= IOMAP_DIO_COMP_WORK;
+		else
+			iomap_dio_release_prepared(dio, false);
 	}
 
 	if (dio->flags & IOMAP_DIO_COMP_WORK) {
@@ -265,7 +428,7 @@ static void __iomap_dio_bio_end_io(struct bio *bio, bool inline_completion)
 		 */
 		if (inline_completion)
 			dio->flags &= ~IOMAP_DIO_COMP_WORK;
-		iomap_dio_done(dio);
+		iomap_dio_done(dio, inline_completion);
 	}
 }
 
@@ -273,8 +436,21 @@ void iomap_dio_bio_end_io(struct bio *bio)
 {
 	struct iomap_dio *dio = bio->bi_private;
 
-	if (bio->bi_status)
-		iomap_dio_set_error(dio, blk_status_to_errno(bio->bi_status));
+	if (bio->bi_status) {
+		int error = blk_status_to_errno_raw(bio->bi_status);
+
+		/* Only an untouched, unchained MQ bio proves pre-request refusal. */
+		if ((dio->iocb->ki_flags & IOCB_NOWAIT) &&
+		    (dio->flags & IOMAP_DIO_WRITE) &&
+		    (error == -EAGAIN || error == -EOPNOTSUPP) &&
+		    (atomic_read(&bio->__bi_remaining) != 1 ||
+		     !bio->bi_iter.bi_size))
+			error = -EIO;
+		iomap_dio_set_error(dio, error);
+	} else if ((dio->iocb->ki_flags & IOCB_NOWAIT) &&
+		   (dio->flags & IOMAP_DIO_WRITE)) {
+		atomic_set(&dio->write_bio_succeeded, 1);
+	}
 	__iomap_dio_bio_end_io(bio, false);
 }
 EXPORT_SYMBOL_GPL(iomap_dio_bio_end_io);
@@ -306,6 +482,8 @@ static int iomap_dio_zero(const struct iomap_iter *iter, struct iomap_dio *dio,
 
 	if (!len)
 		return 0;
+	if (dio->iocb->ki_flags & IOCB_NOWAIT)
+		return -EAGAIN;
 
 	/*
 	 * This limit shall never be reached as most filesystems have a
@@ -316,6 +494,8 @@ static int iomap_dio_zero(const struct iomap_iter *iter, struct iomap_dio *dio,
 
 	bio = iomap_dio_alloc_bio(iter, dio, nr_vecs,
 				  REQ_OP_WRITE | REQ_SYNC | REQ_IDLE);
+	if (!bio)
+		return -ENOMEM;
 	fscrypt_set_bio_crypt_ctx(bio, inode, pos, GFP_KERNEL);
 	bio->bi_iter.bi_sector = iomap_sector(&iter->iomap, pos);
 	bio->bi_private = dio;
@@ -346,6 +526,8 @@ static ssize_t iomap_dio_bio_iter_one(struct iomap_iter *iter,
 		nr_vecs = bio_iov_vecs_to_alloc(dio->submit.iter, BIO_MAX_VECS);
 
 	bio = iomap_dio_alloc_bio(iter, dio, nr_vecs, op);
+	if (!bio)
+		return (dio->iocb->ki_flags & IOCB_NOWAIT) ? -EAGAIN : -ENOMEM;
 	fscrypt_set_bio_crypt_ctx(bio, iter->inode, pos, GFP_KERNEL);
 	bio->bi_iter.bi_sector = iomap_sector(&iter->iomap, pos);
 	bio->bi_write_hint = iter->inode->i_write_hint;
@@ -356,11 +538,15 @@ static ssize_t iomap_dio_bio_iter_one(struct iomap_iter *iter,
 
 	if (dio->flags & IOMAP_DIO_BOUNCE)
 		ret = bio_iov_iter_bounce(bio, dio->submit.iter,
-				iomap_max_bio_size(&iter->iomap), alignment);
+				iomap_max_bio_size(&iter->iomap), alignment,
+				dio->prepared ? dio->prepared->iter :
+				dio->submit.captured);
 	else
 		ret = bio_iov_iter_get_pages(bio, dio->submit.iter,
 					     bdev_dma_alignment(bio->bi_bdev),
-					     alignment - 1);
+					     alignment - 1,
+					     dio->prepared ? dio->prepared->iter : NULL,
+					     0);
 	if (unlikely(ret))
 		goto out_put_bio;
 	ret = bio->bi_iter.bi_size;
@@ -435,6 +621,18 @@ static int iomap_dio_bio_iter(struct iomap_iter *iter, struct iomap_dio *dio)
 
 	if ((pos | length) & (alignment - 1))
 		return -EINVAL;
+	if (dio->iocb->ki_flags & IOCB_NOWAIT) {
+		if ((dio->flags & IOMAP_DIO_BOUNCE) || IS_ENCRYPTED(inode) ||
+		    (iomap->flags & IOMAP_F_INTEGRITY))
+			return -EAGAIN;
+		if ((dio->flags & IOMAP_DIO_WRITE) &&
+		    (iomap->type != IOMAP_MAPPED ||
+		     (iomap->flags & (IOMAP_F_NEW | IOMAP_F_SHARED)) ||
+		     pos + length > i_size_read(inode) ||
+		     (pos + length == i_size_read(inode) &&
+		      ((pos + length) & (fs_block_size - 1)))))
+			return -EAGAIN;
+	}
 
 	if (dio->flags & IOMAP_DIO_WRITE) {
 		bool need_completion_work = true;
@@ -595,8 +793,12 @@ out:
 
 static int iomap_dio_hole_iter(struct iomap_iter *iter, struct iomap_dio *dio)
 {
-	loff_t length = iov_iter_zero(iomap_length(iter), dio->submit.iter);
+	struct iov_iter *data = dio->prepared ? dio->prepared->iter :
+			dio->submit.iter;
+	loff_t length = iov_iter_zero(iomap_length(iter), data);
 
+	if (dio->prepared)
+		iov_iter_advance(dio->submit.iter, length);
 	dio->size += length;
 	if (!length)
 		return -EFAULT;
@@ -606,7 +808,8 @@ static int iomap_dio_hole_iter(struct iomap_iter *iter, struct iomap_dio *dio)
 static int iomap_dio_inline_iter(struct iomap_iter *iomi, struct iomap_dio *dio)
 {
 	const struct iomap *iomap = &iomi->iomap;
-	struct iov_iter *iter = dio->submit.iter;
+	struct iov_iter *iter = dio->prepared ? dio->prepared->iter :
+			dio->submit.iter;
 	void *inline_data = iomap_inline_data(iomap, iomi->pos);
 	loff_t length = iomap_length(iomi);
 	loff_t pos = iomi->pos;
@@ -629,6 +832,8 @@ static int iomap_dio_inline_iter(struct iomap_iter *iomi, struct iomap_dio *dio)
 	} else {
 		copied = copy_to_iter(inline_data, length, iter);
 	}
+	if (dio->prepared)
+		iov_iter_advance(dio->submit.iter, copied);
 	dio->size += copied;
 	if (!copied)
 		return -EFAULT;
@@ -637,6 +842,16 @@ static int iomap_dio_inline_iter(struct iomap_iter *iomi, struct iomap_dio *dio)
 
 static int iomap_dio_iter(struct iomap_iter *iter, struct iomap_dio *dio)
 {
+	/* Opaque submitters do not expose the zero-byte refusal proof above. */
+	if ((dio->iocb->ki_flags & IOCB_NOWAIT) &&
+	    (dio->flags & IOMAP_DIO_WRITE) &&
+	    ((dio->dops && dio->dops->submit_io) ||
+	     (iter->iomap.bdev &&
+	      bdev_test_flag(iter->iomap.bdev, BD_HAS_SUBMIT_BIO))))
+		return -EAGAIN;
+	if ((dio->iocb->ki_flags & IOCB_NOWAIT) &&
+	    (dio->flags & IOMAP_DIO_WRITE) && iter->iomap.type != IOMAP_MAPPED)
+		return -EAGAIN;
 	switch (iter->iomap.type) {
 	case IOMAP_HOLE:
 		if (WARN_ON_ONCE(dio->flags & IOMAP_DIO_WRITE))
@@ -689,8 +904,11 @@ static int iomap_dio_iter(struct iomap_iter *iter, struct iomap_dio *dio)
 struct iomap_dio *
 __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 		const struct iomap_ops *ops, const struct iomap_dio_ops *dops,
-		unsigned int dio_flags, void *private, size_t done_before)
+		unsigned int dio_flags, void *private, size_t done_before,
+		struct iomap_dio *dio, struct iov_iter *captured)
 {
+	struct iov_iter *public_iter = iter;
+	struct iov_iter user;
 	struct inode *inode = file_inode(iocb->ki_filp);
 	struct iomap_iter iomi = {
 		.inode		= inode,
@@ -702,28 +920,45 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 	bool wait_for_completion =
 		is_sync_kiocb(iocb) || (dio_flags & IOMAP_DIO_FORCE_WAIT);
 	struct blk_plug plug;
-	struct iomap_dio *dio;
 	loff_t ret = 0;
 
 	trace_iomap_dio_rw_begin(iocb, iter, dio_flags, done_before);
 
+	if (WARN_ON_ONCE(captured && (dio || !iov_iter_is_kvec(captured) ||
+		    iov_iter_rw(iter) != WRITE ||
+		    iov_iter_rw(captured) != WRITE ||
+		    !(dio_flags & IOMAP_DIO_BOUNCE))))
+		return ERR_PTR(-EINVAL);
 	if (!iomi.len)
 		return NULL;
 
-	dio = kmalloc_obj(*dio);
-	if (!dio)
-		return ERR_PTR(-ENOMEM);
+	if (!dio) {
+		dio = kmalloc_obj(*dio,
+				(iocb->ki_flags & IOCB_NOWAIT) ? GFP_NOWAIT : GFP_KERNEL);
+		if (!dio)
+			return ERR_PTR((iocb->ki_flags & IOCB_NOWAIT) ?
+					-EAGAIN : -ENOMEM);
+		dio->prepared = NULL;
+	} else {
+		user = *iter;
+		iter = &user;
+	}
 
 	dio->iocb = iocb;
 	atomic_set(&dio->ref, 1);
+	atomic_set(&dio->write_bio_succeeded, 0);
 	dio->size = 0;
 	dio->i_size = i_size_read(inode);
 	dio->dops = dops;
 	dio->error = 0;
-	dio->flags = dio_flags & (IOMAP_DIO_FSBLOCK_ALIGNED | IOMAP_DIO_BOUNCE);
+	dio->flags = dio_flags & (IOMAP_DIO_FSBLOCK_ALIGNED | IOMAP_DIO_BOUNCE |
+				 IOMAP_DIO_DEFER_COMP);
+	if (dio_flags & IOMAP_DIO_DEFER_COMP)
+		dio->flags |= IOMAP_DIO_COMP_WORK;
 	dio->done_before = done_before;
 
 	dio->submit.iter = iter;
+	dio->submit.captured = captured;
 	dio->submit.waiter = current;
 
 	if (iocb->ki_flags & IOCB_NOWAIT)
@@ -733,7 +968,7 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 		if (iomi.pos >= dio->i_size)
 			goto out_free_dio;
 
-		if (user_backed_iter(iter))
+		if (!dio->prepared && user_backed_iter(iter))
 			dio->flags |= IOMAP_DIO_USER_BACKED;
 
 		ret = kiocb_write_and_wait(iocb, iomi.len);
@@ -804,6 +1039,10 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 	}
 
 	if (!wait_for_completion && !inode->i_sb->s_dio_done_wq) {
+		if (iocb->ki_flags & IOCB_NOWAIT) {
+			ret = -EAGAIN;
+			goto out_free_dio;
+		}
 		ret = sb_init_dio_done_wq(inode->i_sb);
 		if (ret < 0)
 			goto out_free_dio;
@@ -842,6 +1081,9 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 		wait_for_completion = true;
 		ret = 0;
 	}
+	/* A later admission refusal must not retry an already submitted prefix. */
+	if (ret == -EAGAIN && dio->size && (iocb->ki_flags & IOCB_NOWAIT))
+		ret = 0;
 	if (ret < 0)
 		iomap_dio_set_error(dio, ret);
 
@@ -853,6 +1095,8 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 	 * Otherwise clear the inline completion flag if any sync work is
 	 * needed, as that needs to be performed from process context.
 	 */
+	if (dio->flags & IOMAP_DIO_DEFER_COMP)
+		dio->flags &= ~IOMAP_DIO_WRITE_THROUGH;
 	if (dio->flags & IOMAP_DIO_WRITE_THROUGH)
 		dio->flags &= ~IOMAP_DIO_NEED_SYNC;
 	else if (dio->flags & IOMAP_DIO_NEED_SYNC)
@@ -873,7 +1117,13 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 	 *	of the final reference, and we will complete and free it here
 	 *	after we got woken by the I/O completion handler.
 	 */
-	dio->wait_for_completion = wait_for_completion;
+	if (wait_for_completion)
+		dio->flags |= IOMAP_DIO_WAIT_FOR_COMP;
+	if (dio->prepared) {
+		dio->prepared->dirty_bytes =
+			(dio->flags & IOMAP_DIO_WRITE) ? 0 : dio->size;
+		*public_iter = *iter;
+	}
 	if (!atomic_dec_and_test(&dio->ref)) {
 		if (!wait_for_completion) {
 			trace_iomap_dio_rw_queued(inode, iomi.pos, iomi.len);
@@ -888,12 +1138,17 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 			blk_io_schedule();
 		}
 		__set_current_state(TASK_RUNNING);
+	} else if (!wait_for_completion && (iocb->ki_flags & IOCB_NOWAIT)) {
+		/* Metadata may need work even if the bio finished during submit. */
+		iomap_dio_done(dio, false);
+		return ERR_PTR(-EIOCBQUEUED);
 	}
 
 	return dio;
 
 out_free_dio:
-	kfree(dio);
+	if (!dio->prepared)
+		kfree(dio);
 	if (ret)
 		return ERR_PTR(ret);
 	return NULL;
@@ -908,7 +1163,7 @@ iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 	struct iomap_dio *dio;
 
 	dio = __iomap_dio_rw(iocb, iter, ops, dops, dio_flags, private,
-			     done_before);
+			     done_before, NULL, NULL);
 	if (IS_ERR_OR_NULL(dio))
 		return PTR_ERR_OR_ZERO(dio);
 	return iomap_dio_complete(dio);
@@ -990,7 +1245,7 @@ static void iomap_dio_simple_end_io(struct bio *bio)
 }
 
 ssize_t __iomap_dio_read_simple(struct kiocb *iocb, struct iov_iter *iter,
-		struct iomap_iter *iomi)
+		struct iomap_iter *iomi, iov_iter_extraction_t extraction_flags)
 {
 	gfp_t gfp = (iomi->flags & IOMAP_NOWAIT) ? GFP_NOWAIT : GFP_KERNEL;
 	struct iomap_dio_simple *sr;
@@ -1013,6 +1268,10 @@ ssize_t __iomap_dio_read_simple(struct kiocb *iocb, struct iov_iter *iter,
 
 	if (unlikely(!iomi->inode->i_sb->s_dio_done_wq &&
 			!is_sync_kiocb(iocb))) {
+		if (iocb->ki_flags & IOCB_NOWAIT) {
+			ret = -EAGAIN;
+			goto out_dio_end;
+		}
 		ret = sb_init_dio_done_wq(iomi->inode->i_sb);
 		if (ret < 0)
 			goto out_dio_end;
@@ -1034,9 +1293,15 @@ ssize_t __iomap_dio_read_simple(struct kiocb *iocb, struct iov_iter *iter,
 	bio->bi_iter.bi_sector = iomap_sector(&iomi->iomap, iomi->pos);
 	bio->bi_ioprio = iocb->ki_ioprio;
 
+	/*
+	 * A fast-only prefix shorter than one logical block is a clean miss,
+	 * not an input error.  Keep it intact for the full-length check below;
+	 * the complete request's alignment was already checked above.
+	 */
 	ret = bio_iov_iter_get_pages(bio, iter,
 				bdev_dma_alignment(bio->bi_bdev),
-				alignment - 1);
+				(extraction_flags & ITER_EXTRACT_FAST_ONLY) ?
+					0 : alignment - 1, NULL, extraction_flags);
 	if (unlikely(ret))
 		goto out_bio_put;
 
@@ -1048,7 +1313,8 @@ ssize_t __iomap_dio_read_simple(struct kiocb *iocb, struct iov_iter *iter,
 
 	sr->size = bio->bi_iter.bi_size;
 	if (user_backed_iter(iter)) {
-		bio_set_pages_dirty(bio);
+		if (!(extraction_flags & ITER_EXTRACT_FAST_ONLY))
+			bio_set_pages_dirty(bio);
 		sr->dio_flags |= IOMAP_DIO_USER_BACKED;
 	}
 

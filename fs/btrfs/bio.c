@@ -133,12 +133,20 @@ void btrfs_bio_end_io(struct btrfs_bio *bbio, blk_status_t status)
 	 * At this point, bbio always points to the original btrfs_bio. Save
 	 * the first error in it.
 	 */
-	if (status != BLK_STS_OK)
-		cmpxchg(&bbio->status, BLK_STS_OK, status);
+	if (status != BLK_STS_OK) {
+		blk_status_t old = READ_ONCE(bbio->status);
+
+		do {
+			if (old && (old != BLK_STS_DIOALIGN ||
+				    status == BLK_STS_DIOALIGN))
+				break;
+		} while (!try_cmpxchg(&bbio->status, &old, status));
+	}
 
 	if (atomic_dec_and_test(&bbio->pending_ios)) {
 		/* Load split bio's error which might be set above. */
-		if (status == BLK_STS_OK)
+		if (!bbio->bio.bi_status ||
+		    bbio->bio.bi_status == BLK_STS_DIOALIGN)
 			bbio->bio.bi_status = READ_ONCE(bbio->status);
 
 		if (bbio_has_ordered_extent(bbio)) {
@@ -731,24 +739,27 @@ static bool btrfs_wq_submit_bio(struct btrfs_bio *bbio,
 	return true;
 }
 
-static u64 btrfs_append_map_length(struct btrfs_bio *bbio, u64 map_length)
+static int btrfs_append_map_length(struct btrfs_bio *bbio, u64 *map_length)
 {
 	struct btrfs_fs_info *fs_info = bbio->inode->root->fs_info;
 	unsigned int nr_segs;
 	int sector_offset;
 
-	map_length = min(map_length, fs_info->max_zone_append_size);
+	*map_length = min(*map_length, fs_info->max_zone_append_size);
 	sector_offset = bio_split_rw_at(&bbio->bio, &fs_info->limits,
-					&nr_segs, map_length);
+						&nr_segs, *map_length);
+	if (sector_offset < 0)
+		return sector_offset;
 	if (sector_offset) {
 		/*
 		 * bio_split_rw_at() could split at a size smaller than our
 		 * sectorsize and thus cause unaligned I/Os.  Fix that by
 		 * always rounding down to the nearest boundary.
 		 */
-		return ALIGN_DOWN(sector_offset << SECTOR_SHIFT, fs_info->sectorsize);
+		*map_length = ALIGN_DOWN((u64)sector_offset << SECTOR_SHIFT,
+					 fs_info->sectorsize);
 	}
-	return map_length;
+	return 0;
 }
 
 static bool btrfs_submit_chunk(struct btrfs_bio *bbio, int mirror_num)
@@ -789,8 +800,15 @@ static bool btrfs_submit_chunk(struct btrfs_bio *bbio, int mirror_num)
 	bbio->can_use_append = btrfs_use_zone_append(bbio);
 
 	map_length = min(map_length, length);
-	if (bbio->can_use_append)
-		map_length = btrfs_append_map_length(bbio, map_length);
+	if (bbio->can_use_append) {
+		ret = btrfs_append_map_length(bbio, &map_length);
+		if (ret) {
+			status = errno_to_blk_status(ret);
+			btrfs_put_bioc(bioc);
+			btrfs_bio_counter_dec(fs_info);
+			goto end_bbio;
+		}
+	}
 
 	if (map_length < length) {
 		struct btrfs_bio *split;

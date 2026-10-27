@@ -43,6 +43,8 @@ struct xfs_inode_log_item {
 	 */
 	xfs_csn_t		ili_commit_seq;	   /* last transaction commit */
 	xfs_csn_t		ili_datasync_seq;  /* for datasync optimisation */
+	/* Serializes shared-ILOCK timestamp transactions and core snapshots. */
+	struct mutex		ili_trans_lock;
 };
 
 static inline int xfs_inode_clean(struct xfs_inode *ip)

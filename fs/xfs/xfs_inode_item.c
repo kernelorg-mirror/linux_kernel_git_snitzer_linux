@@ -109,6 +109,17 @@ xfs_inode_item_precommit(
 	struct inode		*inode = VFS_I(ip);
 	unsigned int		flags = iip->ili_dirty_flags;
 
+	if (iip->ili_lock_flags == XFS_ILOCK_SHARED) {
+		xfs_assert_ilocked(ip, XFS_ILOCK_SHARED);
+		lockdep_assert_held(&iip->ili_trans_lock);
+		ASSERT(mutex_is_locked(&iip->ili_trans_lock));
+		ASSERT(S_ISREG(inode->i_mode));
+		ASSERT(flags & XFS_ILOG_TIMESTAMP);
+		ASSERT(!(flags & ~(XFS_ILOG_TIMESTAMP | XFS_ILOG_IVERSION)));
+		ASSERT(!xfs_has_bigtime(mp) || xfs_inode_has_bigtime(ip));
+		ASSERT(!(ip->i_diflags & XFS_DIFLAG_RTINHERIT));
+	}
+
 	/*
 	 * Don't bother with i_lock for the I_DIRTY_TIME check here, as races
 	 * don't matter - we either will need an extra transaction in 24 hours
@@ -160,8 +171,8 @@ xfs_inode_item_precommit(
 		int		error;
 
 		/*
-		 * We hold the ILOCK here, so this inode is not going to be
-		 * flushed while we are here. Further, because there is no
+		 * We hold exclusive ILOCK or shared ILOCK with the item gate,
+		 * so this inode cannot be flushed here. Because there is no
 		 * buffer attached to the item, we know that there is no IO in
 		 * progress, so nothing will clear the ili_fields while we read
 		 * in the buffer. Hence we can safely drop the spin lock and
@@ -695,9 +706,16 @@ STATIC void
 xfs_inode_item_pin(
 	struct xfs_log_item	*lip)
 {
-	struct xfs_inode	*ip = INODE_ITEM(lip)->ili_inode;
+	struct xfs_inode_log_item *iip = INODE_ITEM(lip);
+	struct xfs_inode	*ip = iip->ili_inode;
 
-	xfs_assert_ilocked(ip, XFS_ILOCK_EXCL);
+	if (iip->ili_lock_flags == XFS_ILOCK_SHARED) {
+		xfs_assert_ilocked(ip, XFS_ILOCK_SHARED);
+		lockdep_assert_held(&iip->ili_trans_lock);
+		ASSERT(mutex_is_locked(&iip->ili_trans_lock));
+	} else {
+		xfs_assert_ilocked(ip, XFS_ILOCK_EXCL);
+	}
 	ASSERT(lip->li_buf);
 
 	trace_xfs_inode_pin(ip, _RET_IP_);
@@ -822,10 +840,18 @@ xfs_inode_item_release(
 	unsigned short		lock_flags;
 
 	ASSERT(ip->i_itemp != NULL);
-	xfs_assert_ilocked(ip, XFS_ILOCK_EXCL);
 
 	lock_flags = iip->ili_lock_flags;
+	if (lock_flags == XFS_ILOCK_SHARED) {
+		xfs_assert_ilocked(ip, XFS_ILOCK_SHARED);
+		lockdep_assert_held(&iip->ili_trans_lock);
+		ASSERT(mutex_is_locked(&iip->ili_trans_lock));
+	} else {
+		xfs_assert_ilocked(ip, XFS_ILOCK_EXCL);
+	}
 	iip->ili_lock_flags = 0;
+	if (lock_flags == XFS_ILOCK_SHARED)
+		mutex_unlock(&iip->ili_trans_lock);
 	if (lock_flags)
 		xfs_iunlock(ip, lock_flags);
 }
@@ -933,14 +959,16 @@ xfs_inode_item_init(
 {
 	struct xfs_inode_log_item *iip;
 
+	xfs_assert_ilocked(ip, XFS_ILOCK_EXCL);
 	ASSERT(ip->i_itemp == NULL);
-	iip = ip->i_itemp = kmem_cache_zalloc(xfs_ili_cache,
-					      GFP_KERNEL | __GFP_NOFAIL);
+	iip = kmem_cache_zalloc(xfs_ili_cache, GFP_NOFS | __GFP_NOFAIL);
 
 	iip->ili_inode = ip;
 	spin_lock_init(&iip->ili_lock);
+	mutex_init(&iip->ili_trans_lock);
 	xfs_log_item_init(mp, &iip->ili_item, XFS_LI_INODE,
 						&xfs_inode_item_ops);
+	smp_store_release(&ip->i_itemp, iip);
 }
 
 /*
@@ -953,8 +981,12 @@ xfs_inode_item_destroy(
 	struct xfs_inode_log_item *iip = ip->i_itemp;
 
 	ASSERT(iip->ili_item.li_buf == NULL);
+	ASSERT(list_empty(&iip->ili_item.li_trans));
+	ASSERT(iip->ili_lock_flags == 0);
+	ASSERT(!mutex_is_locked(&iip->ili_trans_lock));
 
 	ip->i_itemp = NULL;
+	mutex_destroy(&iip->ili_trans_lock);
 	kvfree(iip->ili_item.li_lv_shadow);
 	kmem_cache_free(xfs_ili_cache, iip);
 }

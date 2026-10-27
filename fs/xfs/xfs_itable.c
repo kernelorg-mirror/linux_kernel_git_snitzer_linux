@@ -20,6 +20,7 @@
 #include "xfs_icache.h"
 #include "xfs_health.h"
 #include "xfs_trans.h"
+#include "xfs_inode_item.h"
 
 /*
  * Bulk Stat
@@ -70,6 +71,7 @@ xfs_bulkstat_one_int(
 {
 	struct user_namespace	*sb_userns = mp->m_super->s_user_ns;
 	struct xfs_inode	*ip;		/* incore inode pointer */
+	struct xfs_inode_log_item *iip;
 	struct inode		*inode;
 	struct xfs_bulkstat	*buf = bc->buf;
 	xfs_extnum_t		nextents;
@@ -130,6 +132,10 @@ xfs_bulkstat_one_int(
 		goto out_advance;
 	}
 
+	iip = ip->i_itemp;
+	if (iip)
+		mutex_lock(&iip->ili_trans_lock);
+
 	/* xfs_iget returns the following without needing
 	 * further change.
 	 */
@@ -188,6 +194,8 @@ xfs_bulkstat_one_int(
 		buf->bs_blocks = ip->i_nblocks + ip->i_delayed_blks;
 		break;
 	}
+	if (iip)
+		mutex_unlock(&iip->ili_trans_lock);
 	xfs_iunlock(ip, XFS_ILOCK_SHARED);
 	xfs_irele(ip);
 

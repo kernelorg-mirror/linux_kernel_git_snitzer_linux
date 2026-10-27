@@ -812,7 +812,9 @@ xfs_zone_gc_split_write(
 
 	split_sectors = bio_split_rw_at(&chunk->bio, lim, &nsegs,
 			lim->max_zone_append_sectors << SECTOR_SHIFT);
-	if (split_sectors <= 0)
+	if (split_sectors < 0)
+		return ERR_PTR(split_sectors);
+	if (!split_sectors)
 		return NULL;
 
 	/* ensure the split chunk is still block size aligned */
@@ -822,6 +824,8 @@ xfs_zone_gc_split_write(
 
 	split = bio_split(&chunk->bio, split_sectors, GFP_NOFS,
 			&data->split_bio_set);
+	if (IS_ERR(split))
+		return ERR_CAST(split);
 	split_chunk = container_of(split, struct xfs_gc_bio, bio);
 	split_chunk->data = data;
 	ihold(VFS_I(chunk->ip));
@@ -875,8 +879,14 @@ xfs_zone_gc_write_chunk(
 	 */
 	bio_set_dev(&chunk->bio, mp->m_rtdev_targp->bt_bdev);
 	bio_reuse(&chunk->bio, REQ_OP_WRITE);
-	while ((split_chunk = xfs_zone_gc_split_write(data, chunk)))
+	while ((split_chunk = xfs_zone_gc_split_write(data, chunk))) {
+		if (IS_ERR(split_chunk)) {
+			bio_endio_status(&chunk->bio,
+					 errno_to_blk_status(PTR_ERR(split_chunk)));
+			return;
+		}
 		xfs_zone_gc_submit_write(data, split_chunk);
+	}
 	xfs_zone_gc_submit_write(data, chunk);
 }
 

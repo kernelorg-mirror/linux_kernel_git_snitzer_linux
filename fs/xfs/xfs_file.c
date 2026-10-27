@@ -37,6 +37,7 @@
 #include <linux/fadvise.h>
 #include <linux/mount.h>
 #include <linux/filelock.h>
+#include <linux/sched/mm.h>
 
 static const struct vm_operations_struct xfs_file_vm_ops;
 
@@ -104,8 +105,11 @@ xfs_fsync_flush_log(
 	bool			datasync,
 	int			*log_flushed)
 {
-	struct xfs_inode_log_item *iip = ip->i_itemp;
+	struct xfs_inode_log_item *iip = smp_load_acquire(&ip->i_itemp);
 	xfs_csn_t		seq = 0;
+
+	if (!iip)
+		return 0;
 
 	spin_lock(&iip->ili_lock);
 	if (datasync)
@@ -150,11 +154,9 @@ xfs_file_fsync(
 	 * before writing the log records unless it is a no-op because there are
 	 * no modifications to this inode that need to be pushed out.
 	 */
-	if (ip->i_itemp) {
-		error = xfs_fsync_flush_log(ip, datasync, &log_flushed);
-		if (error)
-			return error;
-	}
+	error = xfs_fsync_flush_log(ip, datasync, &log_flushed);
+	if (error)
+		return error;
 
 	/*
 	 * If the log force was a no-op, we may still need to flush the
@@ -232,12 +234,48 @@ static const struct iomap_dio_ops xfs_dio_read_bounce_ops = {
 	.bio_set	= &iomap_ioend_bioset,
 };
 
+static noinline ssize_t
+xfs_file_dio_read_prepared(
+	struct kiocb		*iocb,
+	struct iov_iter		*to)
+{
+	struct xfs_inode	*ip = XFS_I(file_inode(iocb->ki_filp));
+	struct iomap_dio		*prepared, *dio;
+	struct iov_iter		data;
+	unsigned int		flags = 0;
+	const struct iomap_dio_ops *dops = NULL;
+	ssize_t			ret;
+
+	prepared = iomap_dio_prepare_user(iocb, to, &data);
+	if (IS_ERR(prepared))
+		return PTR_ERR(prepared);
+	ret = xfs_ilock_iocb(iocb, XFS_IOLOCK_SHARED);
+	if (ret)
+		goto out_discard;
+	if (mapping_stable_writes(iocb->ki_filp->f_mapping)) {
+		flags = IOMAP_DIO_BOUNCE;
+		dops = &xfs_dio_read_bounce_ops;
+	}
+	dio = __iomap_dio_rw(iocb, to, &xfs_read_iomap_ops, dops,
+			flags, NULL, 0, prepared, NULL);
+	xfs_iunlock(ip, XFS_IOLOCK_SHARED);
+	if (!IS_ERR_OR_NULL(dio))
+		return iomap_dio_complete(dio);
+	ret = PTR_ERR_OR_ZERO(dio);
+	if (ret == -EIOCBQUEUED)
+		return ret;
+out_discard:
+	iomap_dio_discard_prepared(prepared);
+	return ret;
+}
+
 STATIC ssize_t
 xfs_file_dio_read(
 	struct kiocb		*iocb,
 	struct iov_iter		*to)
 {
 	struct xfs_inode	*ip = XFS_I(file_inode(iocb->ki_filp));
+	bool			user = user_backed_iter(to);
 	ssize_t			ret;
 
 	trace_xfs_file_direct_read(iocb, to);
@@ -245,23 +283,40 @@ xfs_file_dio_read(
 	if (!iov_iter_count(to))
 		return 0; /* skip atime */
 
-	file_accessed(iocb->ki_filp);
+	if (user && (iocb->ki_flags & IOCB_NOWAIT) && is_sync_kiocb(iocb))
+		return -EAGAIN;
+
+	if (iocb->ki_flags & IOCB_NOWAIT) {
+		if (atime_needs_update(&iocb->ki_filp->f_path, VFS_I(ip)))
+			return -EAGAIN;
+	} else {
+		file_accessed(iocb->ki_filp);
+	}
 
 	ret = xfs_ilock_iocb(iocb, XFS_IOLOCK_SHARED);
 	if (ret)
 		return ret;
-	if (mapping_stable_writes(iocb->ki_filp->f_mapping)) {
+	if (user && iocb->ki_pos >= i_size_read(VFS_I(ip))) {
+		ret = 0;
+	} else if (mapping_stable_writes(iocb->ki_filp->f_mapping)) {
+		if (user) {
+			ret = -ENOTBLK;
+			goto out_unlock;
+		}
 		ret = iomap_dio_rw(iocb, to, &xfs_read_iomap_ops,
 				&xfs_dio_read_bounce_ops, IOMAP_DIO_BOUNCE,
 				NULL, 0);
 	} else {
-		ret = iomap_dio_read_simple(iocb, to, xfs_read_iomap_begin);
-		if (ret == -ENOTBLK)
+		ret = iomap_dio_read_simple(iocb, to, xfs_read_iomap_begin,
+				user ? ITER_EXTRACT_FAST_ONLY : 0);
+		if (!user && ret == -ENOTBLK)
 			ret = iomap_dio_rw(iocb, to, &xfs_read_iomap_ops, NULL,
 					0, NULL, 0);
 	}
+out_unlock:
 	xfs_iunlock(ip, XFS_IOLOCK_SHARED);
-
+	if (user && (ret == -ENOTBLK || ret == -EAGAIN))
+		return xfs_file_dio_read_prepared(iocb, to);
 	return ret;
 }
 
@@ -288,22 +343,200 @@ xfs_file_dax_read(
 	return ret;
 }
 
+/* USER storage is owned by the caller through its last CPU copy. */
+struct xfs_io_buffer {
+	struct bio_vec		*bvecs;
+	void			*buffer;
+	size_t			count;
+	unsigned int		nr_vecs;
+	int			error;
+};
+
+static void
+xfs_io_buffer_release(
+	struct xfs_io_buffer	*input,
+	size_t			dirty_bytes)
+{
+	unsigned int		i;
+
+	for (i = 0; i < input->nr_vecs; i++) {
+		struct bio_vec *bv = &input->bvecs[i];
+		unsigned long nr = (bv->bv_offset + bv->bv_len - 1) /
+				PAGE_SIZE - bv->bv_offset / PAGE_SIZE + 1;
+
+		if (dirty_bytes)
+			folio_mark_dirty_lock(page_folio(bv->bv_page));
+		dirty_bytes -= min_t(size_t, dirty_bytes, bv->bv_len);
+		unpin_user_folio(page_folio(bv->bv_page), nr);
+	}
+	kvfree(input->bvecs);
+	kvfree(input->buffer);
+}
+
+/* Called only after extraction fails at a still-required user address. */
+static bool
+xfs_io_buffer_cpu_mapping(
+	struct iov_iter		*from)
+{
+	struct vm_area_struct	*vma;
+	unsigned long		addr;
+	bool			cpu_only;
+
+	iov_iter_advance(from, 0);
+	addr = untagged_addr((unsigned long)iter_iov_addr(from));
+	mmap_read_lock(current->mm);
+	vma = vma_lookup(current->mm, addr);
+	cpu_only = vma && (vma->vm_flags & (VM_IO | VM_PFNMAP));
+	mmap_read_unlock(current->mm);
+	return cpu_only;
+}
+
+/* Allocate and capture CPU-readable storage before taking IOLOCK. */
+static int
+xfs_io_buffer_capture(
+	struct iov_iter		*from,
+	size_t			count,
+	struct xfs_io_buffer	*input,
+	bool			nofault)
+{
+	struct iov_iter		cursor = *from;
+
+	if (!count)
+		return 0;
+	input->buffer = kvmalloc(count, GFP_KERNEL);
+	if (!input->buffer)
+		return -ENOMEM;
+	input->count = count;
+	input->error = 0;
+	if (iov_iter_rw(from) == WRITE) {
+		iov_iter_truncate(&cursor, count);
+		if (nofault)
+			pagefault_disable();
+		input->count = copy_from_iter(input->buffer, count, &cursor);
+		if (nofault)
+			pagefault_enable();
+		input->error = input->count == count ? 0 : -EFAULT;
+	}
+	return 0;
+}
+
+/* Prepare outside IOLOCK, without consuming the caller's iterator. */
+static int
+xfs_io_buffer_prepare(
+	struct iov_iter		*from,
+	size_t			count,
+	struct xfs_io_buffer	*input)
+{
+	struct iov_iter		cursor = *from;
+	unsigned int		capacity;
+	ssize_t			ret;
+
+	iov_iter_truncate(&cursor, count);
+	capacity = iov_iter_npages(&cursor, INT_MAX);
+	input->bvecs = kvmalloc_array(capacity, sizeof(*input->bvecs),
+			GFP_KERNEL);
+	if (!input->bvecs)
+		return -ENOMEM;
+
+	while (iov_iter_count(&cursor)) {
+		unsigned short nr = 0;
+		unsigned short max = min_t(unsigned int,
+				capacity - input->nr_vecs, USHRT_MAX);
+
+		ASSERT(max);
+		/* Each call starts a new group, including at pgmap boundaries. */
+		ret = iov_iter_extract_bvecs(&cursor,
+				input->bvecs + input->nr_vecs,
+				iov_iter_count(&cursor), &nr, max, 0, 0, NULL);
+		input->nr_vecs += nr;
+		if (ret > 0) {
+			input->count += ret;
+			continue;
+		}
+		if (ret != -EFAULT)
+			return ret;
+		input->error = ret;
+		if (!xfs_io_buffer_cpu_mapping(&cursor))
+			return 0;
+
+		/* CPU-only storage replaces the entire pinned representation. */
+		xfs_io_buffer_release(input, 0);
+		input->bvecs = NULL;
+		input->nr_vecs = 0;
+		return xfs_io_buffer_capture(from, count, input, false);
+	}
+	return 0;
+}
+
 STATIC ssize_t
 xfs_file_buffered_read(
 	struct kiocb		*iocb,
 	struct iov_iter		*to)
 {
 	struct xfs_inode	*ip = XFS_I(file_inode(iocb->ki_filp));
+	struct xfs_io_buffer	input = { };
+	struct iov_iter		logical, data;
+	struct kvec		kvec;
+	bool			prepare = user_backed_iter(to) &&
+					!(iocb->ki_flags & IOCB_NOWAIT);
+	size_t			dirty_bytes = 0;
 	ssize_t			ret;
 
 	trace_xfs_file_buffered_read(iocb, to);
 
+	if (prepare) {
+		size_t count = iov_iter_count(to);
+
+		/* Match generic_file_read_iter/filemap_read before touching USER. */
+		if (!count)
+			return 0;
+		if (iocb->ki_pos < 0)
+			return -EINVAL;
+		if (iocb->ki_pos >= ip->i_mount->m_super->s_maxbytes)
+			return 0;
+		count = min_t(loff_t, count,
+				ip->i_mount->m_super->s_maxbytes - iocb->ki_pos);
+		logical = *to;
+		ret = xfs_io_buffer_prepare(&logical, count, &input);
+		if (ret)
+			goto out_release;
+		if (input.buffer) {
+			kvec.iov_base = input.buffer;
+			kvec.iov_len = input.count;
+			iov_iter_kvec(&data, ITER_DEST, &kvec, 1, input.count);
+		} else {
+			iov_iter_bvec(&data, ITER_DEST, input.bvecs,
+					input.nr_vecs, input.count);
+		}
+	}
+
 	ret = xfs_ilock_iocb(iocb, XFS_IOLOCK_SHARED);
 	if (ret)
-		return ret;
-	ret = generic_file_read_iter(iocb, to);
+		goto out_release;
+	if (prepare)
+		ret = filemap_read(iocb, &logical, 0, &data);
+	else
+		ret = generic_file_read_iter(iocb, to);
 	xfs_iunlock(ip, XFS_IOLOCK_SHARED);
 
+	if (prepare) {
+		if (input.buffer && ret > 0) {
+			size_t captured = ret;
+			size_t delivered;
+
+			/* Rewind the checked shadow, preserving maxbytes truncation. */
+			iov_iter_revert(&logical, captured);
+			delivered = copy_to_iter(input.buffer, captured, &logical);
+			iocb->ki_pos -= captured - delivered;
+			ret = delivered ? delivered : -EFAULT;
+		} else if (ret > 0) {
+			dirty_bytes = ret;
+		}
+		*to = logical;
+	}
+out_release:
+	if (prepare)
+		xfs_io_buffer_release(&input, dirty_bytes);
 	return ret;
 }
 
@@ -447,7 +680,8 @@ xfs_file_write_checks(
 	struct kiocb		*iocb,
 	struct iov_iter		*from,
 	unsigned int		*iolock,
-	struct xfs_zone_alloc_ctx *ac)
+	struct xfs_zone_alloc_ctx *ac,
+	bool			*defer_cmtime)
 {
 	struct inode		*inode = iocb->ki_filp->f_mapping->host;
 	size_t			count = iov_iter_count(from);
@@ -469,6 +703,9 @@ restart:
 
 	if (error)
 		return error;
+
+	if (defer_cmtime && !IS_NOSEC(inode))
+		return -EAGAIN;
 
 	/*
 	 * For changing security info in file_remove_privs() we need i_rwsem
@@ -504,7 +741,12 @@ restart:
 			return error;
 	}
 
-	return kiocb_modified(iocb);
+	error = kiocb_modified(iocb);
+	if (defer_cmtime && error == -EAGAIN) {
+		*defer_cmtime = true;
+		return 0;
+	}
+	return error;
 }
 
 static ssize_t
@@ -634,16 +876,17 @@ xfs_dio_write_end_io(
 	if (xfs_is_shutdown(ip->i_mount))
 		return -EIO;
 
-	if (error)
+	if (error && !(flags & IOMAP_DIO_DEFER_COMP))
 		return error;
 	if (!size)
-		return 0;
+		return error;
 
 	/*
 	 * Capture amount written on completion as we can't reliably account
 	 * for it on submission.
 	 */
-	XFS_STATS_ADD(ip->i_mount, xs_write_bytes, size);
+	if (!error)
+		XFS_STATS_ADD(ip->i_mount, xs_write_bytes, size);
 
 	/*
 	 * We can allocate memory here while doing writeback on behalf of
@@ -651,6 +894,8 @@ xfs_dio_write_end_io(
 	 * task-wide nofs context for the following operations.
 	 */
 	nofs_flag = memalloc_nofs_save();
+	if (error)
+		goto out;
 
 	if (flags & IOMAP_DIO_COW) {
 		if (iocb->ki_flags & IOCB_ATOMIC)
@@ -681,6 +926,15 @@ xfs_dio_write_end_io(
 	error = xfs_dio_endio_set_isize(inode, offset, size);
 
 out:
+	if (flags & IOMAP_DIO_DEFER_COMP) {
+		int time_error = file_update_time(iocb->ki_filp);
+
+		/* Data was submitted; a metadata error must not request reissue. */
+		if (time_error == -EAGAIN || time_error == -EOPNOTSUPP)
+			time_error = -EIO;
+		if (!error || (error == -EDIOALIGN && time_error))
+			error = time_error;
+	}
 	memalloc_nofs_restore(nofs_flag);
 	return error;
 }
@@ -723,6 +977,82 @@ static const struct iomap_dio_ops xfs_dio_zoned_write_ops = {
 	.end_io		= xfs_zoned_dio_write_end_io,
 };
 
+/* Prepare only the checked USER source ceiling, never the pinned prefix. */
+static struct iomap_dio *
+xfs_file_dio_write_prepare(
+	struct kiocb		*iocb,
+	struct iov_iter		*from,
+	struct iov_iter		*data,
+	unsigned int		dio_flags,
+	struct xfs_io_buffer	*input,
+	struct kvec		*kvec)
+{
+	struct kiocb		check = {
+		.ki_filp = iocb->ki_filp,
+		.ki_flags = iocb->ki_flags,
+		.ki_pos = iocb->ki_pos,
+	};
+	struct iov_iter		request;
+	struct iomap_dio		*prepared;
+	loff_t			count = iov_iter_count(from);
+	int			ret;
+
+	if (!user_backed_iter(from) ||
+	    ((dio_flags & IOMAP_DIO_BOUNCE) &&
+	     (iocb->ki_flags & IOCB_NOWAIT)))
+		return NULL;
+	ret = generic_write_checks_count(&check, &count);
+	if (ret)
+		return ERR_PTR(ret);
+	if (dio_flags & IOMAP_DIO_BOUNCE) {
+		/* Keep the logical ceiling independent of a short CPU capture. */
+		ret = xfs_io_buffer_capture(from, count, input, from->nofault);
+		if (ret)
+			return ERR_PTR(ret);
+		kvec->iov_base = input->buffer;
+		kvec->iov_len = input->count;
+		iov_iter_kvec(data, ITER_SOURCE, kvec, 1, input->count);
+		iov_iter_truncate(from, count);
+		return NULL;
+	}
+	request = *from;
+	iov_iter_truncate(&request, count);
+	prepared = iomap_dio_prepare_user(iocb, &request, data);
+	if (!IS_ERR(prepared))
+		iov_iter_truncate(from, count);
+	return prepared;
+}
+
+/* Keep ordinary drained completion at the caller's existing locked site. */
+static ssize_t
+xfs_file_dio_write_submit(
+	struct kiocb		*iocb,
+	struct iov_iter		*from,
+	const struct iomap_ops	*ops,
+	const struct iomap_dio_ops *dops,
+	unsigned int		dio_flags,
+	void			*private,
+	struct iomap_dio		**prepared,
+	struct iov_iter		*captured,
+	bool			*submitted)
+{
+	struct iomap_dio		*dio;
+
+	dio = __iomap_dio_rw(iocb, from, ops, dops, dio_flags, private,
+			0, *prepared, captured);
+	if (IS_ERR_OR_NULL(dio)) {
+		if (PTR_ERR_OR_ZERO(dio) == -EIOCBQUEUED) {
+			*prepared = NULL;
+			*submitted = true;
+		}
+		return PTR_ERR_OR_ZERO(dio);
+	}
+	*prepared = NULL;
+	/* A drained completion error must not restore the prestart cursor. */
+	*submitted = true;
+	return iomap_dio_complete(dio);
+}
+
 /*
  * Handle block aligned direct I/O writes.
  */
@@ -737,6 +1067,14 @@ xfs_file_dio_write_aligned(
 {
 	unsigned int		iolock = XFS_IOLOCK_SHARED;
 	unsigned int		dio_flags = 0;
+	bool			defer_cmtime = false;
+	struct iomap_dio		*prepared;
+	struct iov_iter		data;
+	struct xfs_io_buffer	input;
+	struct kvec		kvec;
+	bool			submitted;
+	size_t			attempt_count;
+	loff_t			attempt_pos;
 	ssize_t			ret;
 
 	/*
@@ -747,12 +1085,44 @@ xfs_file_dio_write_aligned(
 	if (xfs_is_always_cow_inode(ip))
 		dio_flags |= IOMAP_DIO_FSBLOCK_ALIGNED;
 
+retry:
+	input = (struct xfs_io_buffer) { };
+	submitted = false;
+	attempt_count = iov_iter_count(from);
+	attempt_pos = iocb->ki_pos;
+	dio_flags &= ~(IOMAP_DIO_BOUNCE | IOMAP_DIO_DEFER_COMP);
+	defer_cmtime = false;
+	if (user_backed_iter(from) &&
+	    mapping_stable_writes(iocb->ki_filp->f_mapping))
+		dio_flags |= IOMAP_DIO_BOUNCE;
+	prepared = xfs_file_dio_write_prepare(iocb, from, &data, dio_flags,
+			&input, &kvec);
+	if (IS_ERR(prepared))
+		return PTR_ERR(prepared);
 	ret = xfs_ilock_iocb_for_write(iocb, &iolock);
 	if (ret)
-		return ret;
-	ret = xfs_file_write_checks(iocb, from, &iolock, ac);
+		goto out_discard;
+	ret = xfs_file_write_checks(iocb, from, &iolock, ac,
+			(iocb->ki_flags & IOCB_NOWAIT) && !is_sync_kiocb(iocb) &&
+			dops == &xfs_dio_write_ops ? &defer_cmtime : NULL);
 	if (ret)
 		goto out_unlock;
+
+	/* Write checks can drop IOLOCK; validate the mode under its final hold. */
+	if (user_backed_iter(from) &&
+	    !!(dio_flags & IOMAP_DIO_BOUNCE) !=
+	    mapping_stable_writes(iocb->ki_filp->f_mapping)) {
+		xfs_iunlock(ip, iolock);
+		if (prepared)
+			iomap_dio_discard_prepared(prepared);
+		if (input.buffer)
+			xfs_io_buffer_release(&input, 0);
+		iov_iter_reexpand(from, attempt_count);
+		iocb->ki_pos = attempt_pos;
+		if (iocb->ki_flags & IOCB_NOWAIT)
+			return -EAGAIN;
+		goto retry;
+	}
 
 	/*
 	 * We don't need to hold the IOLOCK exclusively across the IO, so demote
@@ -765,10 +1135,23 @@ xfs_file_dio_write_aligned(
 	}
 	if (mapping_stable_writes(iocb->ki_filp->f_mapping))
 		dio_flags |= IOMAP_DIO_BOUNCE;
+	if (defer_cmtime)
+		dio_flags |= IOMAP_DIO_DEFER_COMP;
 	trace_xfs_file_direct_write(iocb, from);
-	ret = iomap_dio_rw(iocb, from, ops, dops, dio_flags, ac, 0);
+	ret = xfs_file_dio_write_submit(iocb, from, ops, dops, dio_flags,
+			ac, &prepared, input.buffer ? &data : NULL, &submitted);
 out_unlock:
-	xfs_iunlock(ip, iolock);
+	if (iolock)
+		xfs_iunlock(ip, iolock);
+out_discard:
+	if (!submitted && (prepared || input.buffer) && ret == -EAGAIN) {
+		iov_iter_reexpand(from, attempt_count);
+		iocb->ki_pos = attempt_pos;
+	}
+	if (prepared)
+		iomap_dio_discard_prepared(prepared);
+	if (input.buffer)
+		xfs_io_buffer_release(&input, 0);
 	return ret;
 }
 
@@ -814,6 +1197,13 @@ xfs_file_dio_write_atomic(
 	ssize_t			ret, ocount = iov_iter_count(from);
 	unsigned int		dio_flags = 0;
 	const struct iomap_ops	*dops;
+	struct iomap_dio		*prepared;
+	struct iov_iter		data;
+	struct xfs_io_buffer	input;
+	struct kvec		kvec;
+	bool			submitted;
+	size_t			attempt_count;
+	loff_t			attempt_pos;
 
 	/*
 	 * HW offload should be faster, so try that first if it is already
@@ -825,13 +1215,41 @@ xfs_file_dio_write_atomic(
 		dops = &xfs_direct_write_iomap_ops;
 
 retry:
+	input = (struct xfs_io_buffer) { };
+	submitted = false;
+	attempt_count = iov_iter_count(from);
+	attempt_pos = iocb->ki_pos;
+	dio_flags = 0;
+	if (user_backed_iter(from) &&
+	    mapping_stable_writes(iocb->ki_filp->f_mapping))
+		dio_flags |= IOMAP_DIO_BOUNCE;
+	prepared = xfs_file_dio_write_prepare(iocb, from, &data, dio_flags,
+			&input, &kvec);
+	if (IS_ERR(prepared))
+		return PTR_ERR(prepared);
 	ret = xfs_ilock_iocb_for_write(iocb, &iolock);
 	if (ret)
-		return ret;
+		goto out_discard;
 
-	ret = xfs_file_write_checks(iocb, from, &iolock, NULL);
+	ret = xfs_file_write_checks(iocb, from, &iolock, NULL, NULL);
 	if (ret)
 		goto out_unlock;
+
+	/* Write checks can drop IOLOCK; validate the mode under its final hold. */
+	if (user_backed_iter(from) &&
+	    !!(dio_flags & IOMAP_DIO_BOUNCE) !=
+	    mapping_stable_writes(iocb->ki_filp->f_mapping)) {
+		xfs_iunlock(ip, iolock);
+		if (prepared)
+			iomap_dio_discard_prepared(prepared);
+		if (input.buffer)
+			xfs_io_buffer_release(&input, 0);
+		iov_iter_reexpand(from, attempt_count);
+		iocb->ki_pos = attempt_pos;
+		if (iocb->ki_flags & IOCB_NOWAIT)
+			return -EAGAIN;
+		goto retry;
+	}
 
 	/* Demote similar to xfs_file_dio_write_aligned() */
 	if (iolock == XFS_IOLOCK_EXCL) {
@@ -842,8 +1260,9 @@ retry:
 	trace_xfs_file_direct_write(iocb, from);
 	if (mapping_stable_writes(iocb->ki_filp->f_mapping))
 		dio_flags |= IOMAP_DIO_BOUNCE;
-	ret = iomap_dio_rw(iocb, from, dops, &xfs_dio_write_ops, dio_flags,
-			NULL, 0);
+	ret = xfs_file_dio_write_submit(iocb, from, dops, &xfs_dio_write_ops,
+			dio_flags, NULL, &prepared, input.buffer ? &data : NULL,
+			&submitted);
 
 	/*
 	 * The retry mechanism is based on the ->iomap_next method returning
@@ -853,6 +1272,10 @@ retry:
 	 */
 	if (ret == -ENOPROTOOPT && dops == &xfs_direct_write_iomap_ops) {
 		xfs_iunlock(ip, iolock);
+		if (prepared)
+			iomap_dio_discard_prepared(prepared);
+		if (input.buffer)
+			xfs_io_buffer_release(&input, 0);
 		dops = &xfs_atomic_write_cow_iomap_ops;
 		goto retry;
 	}
@@ -860,6 +1283,15 @@ retry:
 out_unlock:
 	if (iolock)
 		xfs_iunlock(ip, iolock);
+out_discard:
+	if (!submitted && (prepared || input.buffer) && ret == -EAGAIN) {
+		iov_iter_reexpand(from, attempt_count);
+		iocb->ki_pos = attempt_pos;
+	}
+	if (prepared)
+		iomap_dio_discard_prepared(prepared);
+	if (input.buffer)
+		xfs_io_buffer_release(&input, 0);
 	return ret;
 }
 
@@ -890,6 +1322,13 @@ xfs_file_dio_write_unaligned(
 	size_t			count = iov_iter_count(from);
 	unsigned int		iolock = XFS_IOLOCK_SHARED;
 	unsigned int		flags = IOMAP_DIO_OVERWRITE_ONLY;
+	struct iomap_dio		*prepared;
+	struct iov_iter		data;
+	struct xfs_io_buffer	input;
+	struct kvec		kvec;
+	bool			submitted;
+	size_t			attempt_count;
+	loff_t			attempt_pos;
 	ssize_t			ret;
 
 	/*
@@ -905,9 +1344,22 @@ retry_exclusive:
 		flags = IOMAP_DIO_FORCE_WAIT;
 	}
 
+retry:
+	input = (struct xfs_io_buffer) { };
+	submitted = false;
+	attempt_count = iov_iter_count(from);
+	attempt_pos = iocb->ki_pos;
+	flags &= ~IOMAP_DIO_BOUNCE;
+	if (user_backed_iter(from) &&
+	    mapping_stable_writes(iocb->ki_filp->f_mapping))
+		flags |= IOMAP_DIO_BOUNCE;
+	prepared = xfs_file_dio_write_prepare(iocb, from, &data, flags,
+			&input, &kvec);
+	if (IS_ERR(prepared))
+		return PTR_ERR(prepared);
 	ret = xfs_ilock_iocb_for_write(iocb, &iolock);
 	if (ret)
-		return ret;
+		goto out_discard;
 
 	/*
 	 * We can't properly handle unaligned direct I/O to reflink files yet,
@@ -919,9 +1371,25 @@ retry_exclusive:
 		goto out_unlock;
 	}
 
-	ret = xfs_file_write_checks(iocb, from, &iolock, NULL);
+	ret = xfs_file_write_checks(iocb, from, &iolock, NULL, NULL);
 	if (ret)
 		goto out_unlock;
+
+	/* Write checks can drop IOLOCK; validate the mode under its final hold. */
+	if (user_backed_iter(from) &&
+	    !!(flags & IOMAP_DIO_BOUNCE) !=
+	    mapping_stable_writes(iocb->ki_filp->f_mapping)) {
+		xfs_iunlock(ip, iolock);
+		if (prepared)
+			iomap_dio_discard_prepared(prepared);
+		if (input.buffer)
+			xfs_io_buffer_release(&input, 0);
+		iov_iter_reexpand(from, attempt_count);
+		iocb->ki_pos = attempt_pos;
+		if (iocb->ki_flags & IOCB_NOWAIT)
+			return -EAGAIN;
+		goto retry;
+	}
 
 	/*
 	 * If we are doing exclusive unaligned I/O, this must be the only I/O
@@ -936,8 +1404,9 @@ retry_exclusive:
 		flags |= IOMAP_DIO_BOUNCE;
 
 	trace_xfs_file_direct_write(iocb, from);
-	ret = iomap_dio_rw(iocb, from, &xfs_direct_write_iomap_ops,
-			   &xfs_dio_write_ops, flags, NULL, 0);
+	ret = xfs_file_dio_write_submit(iocb, from, &xfs_direct_write_iomap_ops,
+			&xfs_dio_write_ops, flags, NULL, &prepared,
+			input.buffer ? &data : NULL, &submitted);
 
 	/*
 	 * Retry unaligned I/O with exclusive blocking semantics if the DIO
@@ -947,12 +1416,25 @@ retry_exclusive:
 	if (ret == -EAGAIN && !(iocb->ki_flags & IOCB_NOWAIT)) {
 		ASSERT(flags & IOMAP_DIO_OVERWRITE_ONLY);
 		xfs_iunlock(ip, iolock);
+		if (prepared)
+			iomap_dio_discard_prepared(prepared);
+		if (input.buffer)
+			xfs_io_buffer_release(&input, 0);
 		goto retry_exclusive;
 	}
 
 out_unlock:
 	if (iolock)
 		xfs_iunlock(ip, iolock);
+out_discard:
+	if (!submitted && (prepared || input.buffer) && ret == -EAGAIN) {
+		iov_iter_reexpand(from, attempt_count);
+		iocb->ki_pos = attempt_pos;
+	}
+	if (prepared)
+		iomap_dio_discard_prepared(prepared);
+	if (input.buffer)
+		xfs_io_buffer_release(&input, 0);
 	return ret;
 }
 
@@ -966,6 +1448,10 @@ static ssize_t xfs_file_dio_write_dispatch(struct kiocb *iocb,
 	/* direct I/O must be aligned to device logical sector size */
 	if ((iocb->ki_pos | count) & target->bt_logical_sectormask)
 		return -EINVAL;
+
+	if (user_backed_iter(from) && (iocb->ki_flags & IOCB_NOWAIT) &&
+	    is_sync_kiocb(iocb))
+		return -EAGAIN;
 
 	if ((iocb->ki_pos | count) & ip->i_mount->m_blockmask)
 		return xfs_file_dio_write_unaligned(ip, iocb, from);
@@ -1019,7 +1505,7 @@ xfs_file_dax_write(
 	ret = xfs_ilock_iocb(iocb, iolock);
 	if (ret)
 		return ret;
-	ret = xfs_file_write_checks(iocb, from, &iolock, NULL);
+	ret = xfs_file_write_checks(iocb, from, &iolock, NULL, NULL);
 	if (ret)
 		goto out;
 
@@ -1079,10 +1565,46 @@ static bool xfs_buffered_write_noserial(struct kiocb *iocb,
 	return pos + count <= i_size_read(inode);
 }
 
+/*
+ * Full metadata checks have already selected the public limit in @from.
+ * Space retries have consumed no input: iomap reverts rejected copies and
+ * returns accepted bytes in preference to a later mapping error.
+ */
+static ssize_t
+xfs_file_buffered_write_data(
+	struct kiocb		*iocb,
+	struct iov_iter		*from,
+	struct xfs_io_buffer	*input,
+	struct xfs_zone_alloc_ctx *ac)
+{
+	struct iov_iter		data;
+	struct kvec		kvec;
+	size_t			count;
+	ssize_t			ret;
+
+	count = min(iov_iter_count(from), input->count);
+	if (!count)
+		return iov_iter_count(from) ? input->error : 0;
+	if (input->buffer) {
+		kvec.iov_base = input->buffer;
+		kvec.iov_len = count;
+		iov_iter_kvec(&data, ITER_SOURCE, &kvec, 1, count);
+	} else {
+		iov_iter_bvec(&data, ITER_SOURCE, input->bvecs,
+				input->nr_vecs, count);
+	}
+	ret = iomap_file_buffered_write(iocb, &data,
+			&xfs_buffered_write_iomap_ops, &xfs_iomap_write_ops, ac);
+	/* Count truncation is not data transfer, including on a later error. */
+	iov_iter_advance(from, count - iov_iter_count(&data));
+	return ret;
+}
+
 STATIC ssize_t
 xfs_file_buffered_write(
 	struct kiocb		*iocb,
-	struct iov_iter		*from)
+	struct iov_iter		*from,
+	struct xfs_io_buffer	*input)
 {
 	struct inode		*inode = iocb->ki_filp->f_mapping->host;
 	struct xfs_inode	*ip = XFS_I(inode);
@@ -1112,7 +1634,7 @@ write_retry:
 			return ret;
 	}
 
-	ret = xfs_file_write_checks(iocb, from, &iolock, NULL);
+	ret = xfs_file_write_checks(iocb, from, &iolock, NULL, NULL);
 	if (ret)
 		goto out;
 
@@ -1145,9 +1667,12 @@ write_retry:
 	}
 
 	trace_xfs_file_buffered_write(iocb, from);
-	ret = iomap_file_buffered_write(iocb, from,
-			&xfs_buffered_write_iomap_ops, &xfs_iomap_write_ops,
-			NULL);
+	if (input)
+		ret = xfs_file_buffered_write_data(iocb, from, input, NULL);
+	else
+		ret = iomap_file_buffered_write(iocb, from,
+				&xfs_buffered_write_iomap_ops,
+				&xfs_iomap_write_ops, NULL);
 	if (noserial)
 		mutex_unlock(&ip->i_noserial_lock);
 
@@ -1193,7 +1718,8 @@ out:
 STATIC ssize_t
 xfs_file_buffered_write_zoned(
 	struct kiocb		*iocb,
-	struct iov_iter		*from)
+	struct iov_iter		*from,
+	struct xfs_io_buffer	*input)
 {
 	struct xfs_inode	*ip = XFS_I(iocb->ki_filp->f_mapping->host);
 	struct xfs_mount	*mp = ip->i_mount;
@@ -1210,7 +1736,7 @@ xfs_file_buffered_write_zoned(
 	if (ret)
 		goto out_unreserve;
 
-	ret = xfs_file_write_checks(iocb, from, &iolock, &ac);
+	ret = xfs_file_write_checks(iocb, from, &iolock, &ac, NULL);
 	if (ret)
 		goto out_unlock;
 
@@ -1228,9 +1754,12 @@ xfs_file_buffered_write_zoned(
 
 retry:
 	trace_xfs_file_buffered_write(iocb, from);
-	ret = iomap_file_buffered_write(iocb, from,
-			&xfs_buffered_write_iomap_ops, &xfs_iomap_write_ops,
-			&ac);
+	if (input)
+		ret = xfs_file_buffered_write_data(iocb, from, input, &ac);
+	else
+		ret = iomap_file_buffered_write(iocb, from,
+				&xfs_buffered_write_iomap_ops,
+				&xfs_iomap_write_ops, &ac);
 	if (ret == -ENOSPC && !cleared_space) {
 		/*
 		 * Kick off writeback to convert delalloc space and release the
@@ -1249,6 +1778,39 @@ out_unreserve:
 		XFS_STATS_ADD(mp, xs_write_bytes, ret);
 		ret = generic_write_sync(iocb, ret);
 	}
+	return ret;
+}
+
+static noinline ssize_t
+xfs_file_buffered_write_user(
+	struct kiocb		*iocb,
+	struct iov_iter		*from)
+{
+	struct xfs_inode	*ip = XFS_I(file_inode(iocb->ki_filp));
+	struct kiocb		check = {
+		.ki_filp = iocb->ki_filp,
+		.ki_flags = iocb->ki_flags,
+		.ki_pos = iocb->ki_pos,
+	};
+	struct xfs_io_buffer	input = { };
+	loff_t			count = iov_iter_count(from);
+	ssize_t			ret;
+
+	ret = generic_write_checks_count(&check, &count);
+	if (ret || !count)
+		return ret;
+	ret = xfs_io_buffer_prepare(from, count, &input);
+	if (ret)
+		goto out;
+
+	/* Freeze this checked ceiling; final checks still place append writes. */
+	iov_iter_truncate(from, count);
+	if (xfs_is_zoned_inode(ip))
+		ret = xfs_file_buffered_write_zoned(iocb, from, &input);
+	else
+		ret = xfs_file_buffered_write(iocb, from, &input);
+out:
+	xfs_io_buffer_release(&input, 0);
 	return ret;
 }
 
@@ -1286,6 +1848,8 @@ xfs_file_write_iter(
 		return xfs_file_dax_write(iocb, from);
 
 	if (iocb->ki_flags & IOCB_DIRECT) {
+		loff_t pos = iocb->ki_pos;
+
 		/*
 		 * Allow a directio write to fall back to a buffered
 		 * write *only* in the case that we're doing a reflink
@@ -1295,11 +1859,20 @@ xfs_file_write_iter(
 		ret = xfs_file_dio_write(iocb, from);
 		if (ret != -ENOTBLK)
 			return ret;
+		if (iocb->ki_flags & IOCB_NOWAIT) {
+			/* Restore pre-write count/append adjustments before retry. */
+			iov_iter_reexpand(from, ocount);
+			iocb->ki_pos = pos;
+			return -EAGAIN;
+		}
 	}
 
+	if (!(iocb->ki_flags & IOCB_NOWAIT) &&
+	    (iter_is_ubuf(from) || iter_is_iovec(from)))
+		return xfs_file_buffered_write_user(iocb, from);
 	if (xfs_is_zoned_inode(ip))
-		return xfs_file_buffered_write_zoned(iocb, from);
-	return xfs_file_buffered_write(iocb, from);
+		return xfs_file_buffered_write_zoned(iocb, from, NULL);
+	return xfs_file_buffered_write(iocb, from, NULL);
 }
 
 /* Does this file, inode, or mount want synchronous writes? */
@@ -1878,12 +2451,32 @@ xfs_file_open(
 	struct inode	*inode,
 	struct file	*file)
 {
+	struct xfs_inode *ip = XFS_I(inode);
+	int		error;
+
 	if (xfs_is_shutdown(XFS_M(inode->i_sb)))
 		return -EIO;
 	file->f_mode |= FMODE_NOWAIT | FMODE_CAN_ODIRECT;
 	if (xfs_get_atomic_write_min(XFS_I(inode)) > 0)
 		file->f_mode |= FMODE_CAN_ATOMIC_WRITE;
-	return generic_file_open(inode, file);
+	error = generic_file_open(inode, file);
+	if (error || !(file->f_mode & FMODE_WRITE) || !S_ISREG(inode->i_mode))
+		return error;
+	xfs_ilock(ip, XFS_IOLOCK_EXCL);
+	xfs_ilock(ip, XFS_ILOCK_EXCL);
+	if (!ip->i_itemp)
+		xfs_inode_item_init(ip, ip->i_mount);
+	xfs_iunlock(ip, XFS_ILOCK_EXCL);
+
+	/* Cache only proven absence, serialized against chmod and security xattrs. */
+	if (!IS_NOSEC(inode) && !is_sxid(inode->i_mode) &&
+	    (inode->i_sb->s_flags & SB_NOSEC) &&
+	    __vfs_getxattr(file_dentry(file), inode, XATTR_NAME_CAPS, NULL, 0) ==
+			-ENODATA &&
+	    dentry_needs_remove_privs(file_mnt_idmap(file), file_dentry(file)) == 0)
+		inode_has_no_xattr(inode);
+	xfs_iunlock(ip, XFS_IOLOCK_EXCL);
+	return error;
 }
 
 STATIC int

@@ -892,7 +892,7 @@ ssize_t netfs_buffered_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 
 	ret = netfs_start_io_read(inode);
 	if (ret == 0) {
-		ret = filemap_read(iocb, iter, 0);
+		ret = filemap_read(iocb, iter, 0, NULL);
 		netfs_end_io_read(inode);
 	}
 	return ret;

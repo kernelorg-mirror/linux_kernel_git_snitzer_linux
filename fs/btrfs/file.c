@@ -3803,7 +3803,7 @@ static ssize_t btrfs_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 			return ret;
 	}
 
-	return filemap_read(iocb, to, ret);
+	return filemap_read(iocb, to, ret, NULL);
 }
 
 static ssize_t btrfs_file_splice_read(struct file *in, loff_t *ppos,

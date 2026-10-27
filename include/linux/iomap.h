@@ -674,12 +674,21 @@ struct iomap_dio_ops {
  */
 #define IOMAP_DIO_BOUNCE		(1 << 4)
 
+/* Complete asynchronous caller metadata in the existing DIO workqueue. */
+#define IOMAP_DIO_DEFER_COMP	(1 << 5)
+
 ssize_t iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 		const struct iomap_ops *ops, const struct iomap_dio_ops *dops,
 		unsigned int dio_flags, void *private, size_t done_before);
 struct iomap_dio *__iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 		const struct iomap_ops *ops, const struct iomap_dio_ops *dops,
-		unsigned int dio_flags, void *private, size_t done_before);
+		unsigned int dio_flags, void *private, size_t done_before,
+		struct iomap_dio *prepared, struct iov_iter *captured);
+/* Prepare USER storage outside filesystem I/O locks, preserving direction. */
+struct iomap_dio *iomap_dio_prepare_user(struct kiocb *iocb,
+		const struct iov_iter *request, struct iov_iter *prepared);
+/* A pre-start NULL/error return leaves preparation with its caller. */
+void iomap_dio_discard_prepared(struct iomap_dio *dio);
 ssize_t iomap_dio_complete(struct iomap_dio *dio);
 void iomap_dio_bio_end_io(struct bio *bio);
 
@@ -703,9 +712,10 @@ void iomap_dio_bio_end_io(struct bio *bio);
  * is never advanced.
  */
 ssize_t __iomap_dio_read_simple(struct kiocb *iocb, struct iov_iter *iter,
-		struct iomap_iter *iomi);
+		struct iomap_iter *iomi, iov_iter_extraction_t extraction_flags);
 static __always_inline ssize_t iomap_dio_read_simple(struct kiocb *iocb,
-		struct iov_iter *iter, iomap_iter_begin_fn begin)
+		struct iov_iter *iter, iomap_iter_begin_fn begin,
+		iov_iter_extraction_t extraction_flags)
 {
 	struct iomap_iter iomi = {
 		.inode		= file_inode(iocb->ki_filp),
@@ -745,7 +755,7 @@ static __always_inline ssize_t iomap_dio_read_simple(struct kiocb *iocb,
 		return ret;
 	}
 
-	return __iomap_dio_read_simple(iocb, iter, &iomi);
+	return __iomap_dio_read_simple(iocb, iter, &iomi, extraction_flags);
 }
 
 #ifdef CONFIG_SWAP
