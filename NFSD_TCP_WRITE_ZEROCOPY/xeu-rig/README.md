@@ -49,9 +49,10 @@ The loan runs use port a onto the four DPRP5s (`/hs/nvme4` to `7`).
 - **Measuring:** `cost.sh RUNDIR...` gives the ring and nfsd µs a WRITE
   of `twoport.sh` runs.
 
-**Where it stands:** a loaned WRITE costs the rings 44.6 µs and nfsd
-91.7, against 92.6 and 184.1 when the FLAMEGRAPH rounds began. The next
-round is not chosen.
+**Where it stands:** a loaned WRITE costs the rings 44.5 µs and nfsd
+90.3, against 92.6 and 184.1 when the FLAMEGRAPH rounds began (the
+settled side of round 32, four runs). Round 32, more transmit queues,
+was not kept. The next rounds are FLAMEGRAPH README's "The queue".
 
 # Build 494 on tardis2: no regression on the DPRP5s (23 October)
 

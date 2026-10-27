@@ -52,6 +52,7 @@ Each round is a directory here, numbered in order:
 | [29-page-line-watch](29-page-line-watch/README.md) | round 28's state, the tip's sunrpc | round 27's question: is a region page's `struct page` line taken by the other half's connection between one thread's first touch and its borrow? | none: hardware watchpoints (perf `mem:`) on four live region pages' lines for 3 s each in a loan run, 109k accesses with CPU, time and call chain | **a look**: one writer before nfsd, the ring's `page_pool_alloc_frag_netmem` (92% of the borrows' last writes, 253 us before); no other CPU between the first touch and the borrow; the other half released 1.1 ms later. No sharing, nothing in xeu's layout to change; why the borrow's read is charged a stall is left |
 | [30-tlb-look](30-tlb-look/README.md) | round 28's state | where round 28's prefetch waits: not on the next descriptor's entry (a few percent) but at the header's prefetch, a TLB walk; the rings walk page tables 69 times and miss the L1 TLB 1,171 times a WRITE, 37% of the walks in `gro_list_prepare`; the linear map is in 16 KiB pages (`rodata_full` on an N2, which has no BBML3) | none: `perf stat` and sampled `dtlb_walk` and `l1d_cache_refill_rd` on the ring CPUs, and a walk of `swapper_pg_dir`; then an A/B across a reboot into `rodata=noalias` (the linear map in 32 MiB blocks), 4 loan runs a side, no copy runs | **a look**: the descriptor prefetch not built. `rodata=noalias`: nfsd −5.23 ± 0.83 µs a WRITE (−4.7%); the rings' walks 69 to 0.5 a WRITE, but the rings' cost the same; rate, region and latency the same. **kept** (settled.sh). Again on the tip's sunrpc with the look on nfsd's CPUs on both sides (run64.sh): nfsd −8.83 ± 1.47 µs a WRITE (−8.8%), rings −2.95 ± 0.57 (−6.2%); nfsd's CPUs walk 108 to 2 times a WRITE |
 | [31-no-qdisc](31-no-qdisc/README.md) | the current state: the tip's sunrpc, `rodata=noalias`, `rx_prefetch` Y (fl60) | sending, 14.9 us a WRITE on nfsd, 6.4 of it the ACKs its reads send; under every send `__dev_xmit_skb` 4.24, the qdisc's root lock 1.10 and its code 0.86 | `noqueue` as the port's root qdisc (`cd909d9ae8e2` lets settled.sh set it); 4 runs a side | **not kept**: nfsd −2.58 ± 1.46 us a WRITE, suggestive; but every `noqueue` run dropped 101 to 719 sends at a stopped transmit queue, three of four had a ~300 ms WRITE |
+| [32-tx-queues](32-tx-queues/README.md) | the current state | nfsd's 48 CPUs on port a's 4 transmit queues, 44 of them by the flow's hash (rounds 07 and 31) | `XPS=spread` (12 CPUs a queue), and 8 rings with frames to 4 only (`RX_RINGS=4`, 8 queues, 6 CPUs a queue), against the settled setting; 4 loan runs a side | **not kept** (Mike): neither saves anything (nfsd +0.80 ± 1.17 and +1.17 ± 1.33 µs a WRITE), and 8 rings hold about 400 more region pages at peak. The settled setting measured again: rings 44.50, nfsd 90.30 |
 | [07-srv-qdisc](07-srv-qdisc/README.md) | round 05's state | half of each ACK and reply is `__dev_xmit_skb` | the server's qdisc `pfifo_fast` | not kept: no change (rings 66.9 against 66.1, latency inside L0's scatter); the cost is the transmit path's lock with 48 CPUs on 4 queues, not the qdisc |
 | [08-notrack-needed](08-notrack-needed/README.md) | round 05's state | the `zc_notrack` chains run with no conntrack to skip | `zc_notrack` only while a table registers conntrack, in settled.sh | kept: rings 67.6 to 65.1 us a loaned WRITE (-3.7%), nfsd 160.6 to 154.2; latency unchanged |
 | [09-big-tcp](09-big-tcp/README.md) | round 08's state | per-skb costs at about 20 GRO skbs a WRITE | BIG TCP: the server's `gro_max_size` and `gro_ipv4_max_size` 256 KB | not kept: no change (rings 63.3 against 63.4, latency the same); aggregates end at the client's 64 KB TSO bursts, so it needs the client's `gso_ipv4_max_size` too (Mike); the wake itself measured, 98.5% under 2 us |
@@ -62,19 +63,8 @@ Each round is a directory here, numbered in order:
 The next rounds, in this order. Each starts when the one before it is
 decided.
 
-1. **Round 32: more transmit queues for nfsd's sends.**
-   - **The problem:** port a's 4 transmit queues carry every reply and
-     ACK from nfsd's 48 CPUs. XPS ties tx-0 to tx-3 to CPUs 8 to 11 only
-     (as `settled.sh` records), so the other 44 pick a queue by the
-     flow's hash.
-   - **What it costs:** round 07 put the transmit lock at about 2.6 µs of
-     nfsd's `__dev_xmit_skb` a WRITE, and round 31 put the qdisc layer at
-     about 2.6 a WRITE.
-   - **And the drops:** round 31 found that a send to a briefly stopped
-     queue (`xeu_maybe_stop_tx()`) is dropped without a qdisc.
-   - **The limit:** xeu pairs a transmit ring with each receive ring
-     (`num_rings`, at most 8 a port), so more transmit queues means a
-     change of the ring layout or of xeu.
+1. **Round 32: more transmit queues for nfsd's sends.** Done, not kept
+   ([32-tx-queues](32-tx-queues/README.md)).
 2. **Prefetch the completion entry the card writes further ahead in
    `xeu_rx_poll`.** It is the poll's largest L1 refill, about 31% of
    them ([30-tlb-look](30-tlb-look/README.md)). An xeu change. The gain
