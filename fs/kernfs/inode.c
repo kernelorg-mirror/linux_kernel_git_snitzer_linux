@@ -155,8 +155,8 @@ static inline void set_default_inode_attr(struct inode *inode, umode_t mode)
 static inline void set_inode_attr(struct inode *inode,
 				  struct kernfs_iattrs *attrs)
 {
-	inode->i_uid = attrs->ia_uid;
-	inode->i_gid = attrs->ia_gid;
+	WRITE_ONCE(inode->i_uid, attrs->ia_uid);
+	WRITE_ONCE(inode->i_gid, attrs->ia_gid);
 	inode_set_atime_to_ts(inode, attrs->ia_atime);
 	inode_set_mtime_to_ts(inode, attrs->ia_mtime);
 	inode_set_ctime_to_ts(inode, attrs->ia_ctime);
@@ -166,7 +166,7 @@ static void kernfs_refresh_inode(struct kernfs_node *kn, struct inode *inode)
 {
 	struct kernfs_iattrs *attrs;
 
-	inode->i_mode = kn->mode;
+	WRITE_ONCE(inode->i_mode, kn->mode);
 	attrs = kernfs_iattrs_noalloc(kn);
 	if (attrs)
 		/*
@@ -175,8 +175,13 @@ static void kernfs_refresh_inode(struct kernfs_node *kn, struct inode *inode)
 		 */
 		set_inode_attr(inode, attrs);
 
-	if (kernfs_type(kn) == KERNFS_DIR && !(kn->flags & KERNFS_REMOVING))
-		set_nlink(inode, kn->dir.subdirs + 2);
+	if (kernfs_type(kn) == KERNFS_DIR && !(kn->flags & KERNFS_REMOVING)) {
+		/*
+		 * Refresh readers copy the same positive count under the iattr
+		 * lock. Removal marks the node before exclusively clearing it.
+		 */
+		data_race((set_nlink(inode, kn->dir.subdirs + 2), 0));
+	}
 }
 
 int kernfs_iop_getattr(struct mnt_idmap *idmap,

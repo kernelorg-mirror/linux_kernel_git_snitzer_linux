@@ -894,14 +894,14 @@ xfs_alloc_read_agfl(
 	return 0;
 }
 
-STATIC int
+STATIC __no_kcsan int
 xfs_alloc_update_counters(
 	struct xfs_trans	*tp,
 	struct xfs_buf		*agbp,
 	long			len)
 {
 	struct xfs_agf		*agf = agbp->b_addr;
-
+	/* AGF locking serializes writers; lockless readers are advisory. */
 	agbp->b_pag->pagf_freeblks += len;
 	be32_add_cpu(&agf->agf_freeblks, len);
 
@@ -2402,7 +2402,7 @@ xfs_alloc_compute_maxlevels(
  * 'reserved' parameter tells us how many blocks in this AG are reserved for
  * other callers.
  */
-xfs_extlen_t
+__no_kcsan xfs_extlen_t
 xfs_alloc_longest_free_extent(
 	struct xfs_perag	*pag,
 	xfs_extlen_t		need,
@@ -2418,9 +2418,9 @@ xfs_alloc_longest_free_extent(
 		delta = need - pag->pagf_flcount;
 
 	/*
-	 * If we cannot maintain others' reservations with space from the
-	 * not-longest freesp extents, we'll have to subtract /that/ from
-	 * the longest extent too.
+	 * The free block counters intentionally race with locked writers here.
+	 * AG selection is optimistic and rechecked after locking the AGF, so
+	 * sample each existing operand without adding ordering.
 	 */
 	if (pag->pagf_freeblks - pag->pagf_longest < reserved)
 		delta += reserved - (pag->pagf_freeblks - pag->pagf_longest);

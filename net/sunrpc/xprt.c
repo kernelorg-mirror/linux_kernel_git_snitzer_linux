@@ -847,7 +847,9 @@ xprt_schedule_autodisconnect(struct rpc_xprt *xprt)
 	__must_hold(&xprt->transport_lock)
 {
 	xprt->last_used = jiffies;
-	if (RB_EMPTY_ROOT(&xprt->recv_queue) && xprt_has_timer(xprt))
+	/* A racing enqueue cancels the timer after publishing the request. */
+	if (data_race(RB_EMPTY_ROOT(&xprt->recv_queue)) &&
+	    xprt_has_timer(xprt))
 		mod_timer(&xprt->timer, xprt->last_used + xprt->idle_timeout);
 }
 
@@ -1227,7 +1229,7 @@ void xprt_complete_rqst(struct rpc_task *task, int copied)
 	/* Ensure all writes are done before we update */
 	/* req->rq_reply_bytes_recvd */
 	smp_wmb();
-	req->rq_reply_bytes_recvd = copied;
+	WRITE_ONCE(req->rq_reply_bytes_recvd, copied);
 	xprt_request_dequeue_receive_locked(task);
 	rpc_wake_up_queued_task(&xprt->pending, task);
 }

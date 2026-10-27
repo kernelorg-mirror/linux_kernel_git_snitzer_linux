@@ -351,7 +351,7 @@ void setattr_copy(struct mnt_idmap *idmap, struct inode *inode,
 		if (!in_group_or_capable(idmap, inode,
 					 i_gid_into_vfsgid(idmap, inode)))
 			mode &= ~S_ISGID;
-		inode->i_mode = mode;
+		WRITE_ONCE(inode->i_mode, mode);
 	}
 
 	if (is_mgtime(inode))
@@ -428,7 +428,7 @@ int notify_change(struct mnt_idmap *idmap, struct dentry *dentry,
 		  struct iattr *attr, struct delegated_inode *delegated_inode)
 {
 	struct inode *inode = dentry->d_inode;
-	umode_t mode = inode->i_mode;
+	umode_t mode = READ_ONCE(inode->i_mode);
 	int error;
 	struct timespec64 now;
 	unsigned int ia_valid = attr->ia_valid;
@@ -454,7 +454,7 @@ int notify_change(struct mnt_idmap *idmap, struct dentry *dentry,
 		 * (3) To even do this in the first place one would have to use
 		 *     specific file descriptors and quite some effort.
 		 */
-		if (S_ISLNK(inode->i_mode))
+		if (S_ISLNK(READ_ONCE(inode->i_mode)))
 			return -EOPNOTSUPP;
 
 		/* Flag setting protected by i_rwsem */

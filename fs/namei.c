@@ -438,7 +438,7 @@ static inline bool no_acl_inode(struct inode *inode)
 static int acl_permission_check(struct mnt_idmap *idmap,
 				struct inode *inode, int mask)
 {
-	unsigned int mode = inode->i_mode;
+	unsigned int mode = READ_ONCE(inode->i_mode);
 	vfsuid_t vfsuid;
 
 	/*
@@ -530,7 +530,7 @@ int generic_permission(struct mnt_idmap *idmap, struct inode *inode,
 	if (ret != -EACCES)
 		return ret;
 
-	if (S_ISDIR(inode->i_mode)) {
+	if (S_ISDIR(READ_ONCE(inode->i_mode))) {
 		/* DACs are overridable for directories */
 		if (!(mask & MAY_WRITE))
 			if (capable_wrt_inode_uidgid(idmap, inode,
@@ -555,7 +555,7 @@ int generic_permission(struct mnt_idmap *idmap, struct inode *inode,
 	 * Executable DACs are overridable when there is
 	 * at least one exec bit set.
 	 */
-	if (!(mask & MAY_EXEC) || (inode->i_mode & S_IXUGO))
+	if (!(mask & MAY_EXEC) || (READ_ONCE(inode->i_mode) & S_IXUGO))
 		if (capable_wrt_inode_uidgid(idmap, inode,
 					     CAP_DAC_OVERRIDE))
 			return 0;
@@ -604,7 +604,7 @@ static inline int do_inode_permission(struct mnt_idmap *idmap,
 static int sb_permission(struct super_block *sb, struct inode *inode, int mask)
 {
 	if (mask & MAY_WRITE) {
-		umode_t mode = inode->i_mode;
+		umode_t mode = READ_ONCE(inode->i_mode);
 
 		/* Nobody gets write access to a read-only fs. */
 		if (sb_rdonly(sb) && (S_ISREG(mode) || S_ISDIR(mode) || S_ISLNK(mode)))
@@ -2644,7 +2644,7 @@ OK:
 			/* pathname or trailing symlink, done */
 			if (likely(!depth)) {
 				nd->dir_vfsuid = i_uid_into_vfsuid(idmap, nd->inode);
-				nd->dir_mode = nd->inode->i_mode;
+				nd->dir_mode = READ_ONCE(nd->inode->i_mode);
 				nd->flags &= ~LOOKUP_PARENT;
 				return 0;
 			}

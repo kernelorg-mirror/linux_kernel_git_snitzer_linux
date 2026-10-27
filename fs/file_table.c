@@ -510,7 +510,7 @@ static void __fput(struct file *file)
 	}
 	if (file->f_op->release)
 		file->f_op->release(inode, file);
-	if (unlikely(S_ISCHR(inode->i_mode) && inode->i_cdev != NULL &&
+	if (unlikely(S_ISCHR(READ_ONCE(inode->i_mode)) && inode->i_cdev != NULL &&
 		     !(mode & FMODE_PATH))) {
 		cdev_put(inode->i_cdev);
 	}
