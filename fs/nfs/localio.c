@@ -19,6 +19,7 @@
 #include <linux/nfs_common.h>
 #include <linux/nfslocalio.h>
 #include <linux/bvec.h>
+#include <linux/sched/mm.h>
 
 #include <linux/nfs.h>
 #include <linux/nfs_fs.h>
@@ -1065,11 +1066,11 @@ static void nfs_local_call_write(struct work_struct *work)
 	struct nfs_local_kiocb *iocb =
 		container_of(work, struct nfs_local_kiocb, work);
 	struct file *filp = iocb->kiocb.ki_filp;
-	unsigned long old_flags = current->flags;
+	unsigned int flags;
 	ssize_t status;
 	int n_iters, stable;
 
-	current->flags |= PF_LOCAL_THROTTLE | PF_MEMALLOC_NOIO;
+	flags = memalloc_flags_save(PF_LOCAL_THROTTLE | PF_MEMALLOC_NOIO);
 
 	file_start_write(filp);
 	/*
@@ -1159,7 +1160,7 @@ static void nfs_local_call_write(struct work_struct *work)
 	}
 	file_end_write(filp);
 
-	current->flags = old_flags;
+	memalloc_flags_restore(flags);
 }
 
 static void nfs_local_do_write(struct nfs_local_kiocb *iocb,
@@ -1365,20 +1366,20 @@ nfs_local_fsync_ctx_free(struct nfs_local_fsync_ctx *ctx)
 static void
 nfs_local_fsync_work(struct work_struct *work)
 {
-	unsigned long old_flags = current->flags;
+	unsigned int flags;
 	struct nfs_local_fsync_ctx *ctx;
 	int status;
 
 	ctx = container_of(work, struct nfs_local_fsync_ctx, work);
 
-	current->flags |= PF_LOCAL_THROTTLE | PF_MEMALLOC_NOIO;
+	flags = memalloc_flags_save(PF_LOCAL_THROTTLE | PF_MEMALLOC_NOIO);
 
 	status = nfs_local_run_commit(nfs_to->nfsd_file_file(ctx->localio),
 				      ctx->data);
 	nfs_local_commit_done(ctx->data, status);
 	nfs_local_fsync_ctx_free(ctx);
 
-	current->flags = old_flags;
+	memalloc_flags_restore(flags);
 }
 
 static struct nfs_local_fsync_ctx *
