@@ -82,7 +82,7 @@ runs (the profile where the A/B cannot resolve it):
 | 25 | 51.1 to 48.8 on build 499 | 103.1 to 97.8 on build 499 | `svc_tcp_rx_want_eighths` 6 (`2a75926c1458`, settled.sh): an incomplete loaned record taken up at three quarters of the open window, one ACK a WRITE fewer |
 | 26 | | about 0.5 by the profile (A/B 97.2 to 96.5, inside the drift) | `6c6dc284fed0`: an nfsd thread its pool could not lose sleeps without the 5 s timer |
 | 28 | 50.9 to 48.5 on build 499's own sunrpc | | xeu `rx_prefetch` Y (kmod-xsight 2.0.1-10, settled.sh): the next received frame's headers, shared info and `struct page` prefetched while a frame is built |
-| 30 | | 112.0 to 106.8 on build 499's own sunrpc | `rodata=noalias` on the kernel's command line (settled.sh): the linear map in 32 MiB blocks, the rings' page-table walks 69 to 0.5 a WRITE |
+| 30 | 47.6 to 44.6 on the tip's sunrpc | 100.5 to 91.7 on the tip's sunrpc | `rodata=noalias` on the kernel's command line (settled.sh): the linear map in 32 MiB blocks, page-table walks 108 to 2 a WRITE on nfsd's CPUs and 61 to 0.3 on the rings |
 
 - **Since round 01:** the rings 92.6 to about 58 us a WRITE (-37%),
   and to about 50 on build 499 with the interrupt held off at the card
@@ -92,7 +92,9 @@ runs (the profile where the A/B cannot resolve it):
   102 with round 24's prefetch in the release (-45%), and to about 98
   with round 25's later wake (-47%), with round 26's untimed idle
   sleep about 0.5 less; the rings to about 49 (-47%), and to about 46.5
-  with round 28's prefetch in xeu (-50%).
+  with round 28's prefetch in xeu (-50%). With round 30's `rodata=noalias`
+  on the tip's sunrpc, the rings are at 44.6 (-52%) and nfsd at 91.7
+  (-50%).
 - The rate stayed at the drives' 40.5 GB/s throughout. Latency at
   iodepth 1 is the same or a little better.
 - Each round's A/B had its own A, and A drifts a couple of us between
