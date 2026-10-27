@@ -1,3 +1,58 @@
+# tardis2 on 27 October: build 499 with `rodata=noalias` — read this first
+
+Since 23 October the work on tardis2 is the loan's CPU cost a WRITE,
+a round at a time, in [`../FLAMEGRAPH/`](../FLAMEGRAPH/README.md): its
+README has the rules (loan mode only, no copy runs) and every round's
+outcome. This section is where tardis2 stands after round 30.
+
+**What tardis2 runs** (the current state, which round 30's B measured):
+- **The kernel:** build 499 (`7.3.0-7.hs.499.el10.aarch64+16k`), booted
+  with `rodata=noalias`. `/etc/kernel/cmdline` carries it into each new
+  kernel's boot entry, and `settled.sh` audits a boot without it BAD.
+- **The modules:** the tip's sunrpc in `updates/` (round 26's build,
+  `A06FE478658242A10E100FF`), the kernel's own nfsd
+  (`3F0C341E86E266D5FDF2ADF`), and xeu in `updates/`
+  (`2C05DF674C9D013185FDB34`, with round 28's `rx_prefetch`). The
+  initrd carries this xeu, so a boot loads it.
+- **The settled setting:** `settled.sh` holds `rx_prefetch` Y,
+  `irq_msix_mask` Y, `svc_tcp_rx_want_eighths` 6 and `drc_max_entries`
+  4096. The server port's qdisc stays `fq_codel` under `mq` (round 31's
+  `noqueue` was not kept).
+
+**After a boot:** `for n in 0 1 2 3 4 5 6 7; do mount -o noatime
+/dev/nvme${n}n1 /hs/nvme$n; done`, `systemctl start nfs-server`,
+`./bringup.sh 32768 256`, then `./settled.sh apply`, which must end in
+"the settled setting". Check that no NFS client is connected first.
+The loan runs use port a onto the four DPRP5s (`/hs/nvme4` to `7`).
+
+**Round 30's result** ([`../FLAMEGRAPH/30-tlb-look/`](../FLAMEGRAPH/30-tlb-look/README.md)):
+- **What it found:** `rodata=full`, arm64's default, maps the linear map
+  in 16 KiB pages on a CPU without BBML3, and the Neoverse N2 has none.
+  `rodata=noalias` maps it in 32 MiB blocks.
+- **The A/B:** across a reboot, both sides on the tip's sunrpc, four
+  untraced loan64 runs a side and one with `perf stat` on the ring CPUs
+  and on nfsd's (`../FLAMEGRAPH/30-tlb-look/run64.sh`; the runs are
+  `$L/t2-r64-full/` and `$L/t2-r64-noalias/`).
+- **What a loaned WRITE costs:**
+
+  | per loaned WRITE | `rodata=full` | `rodata=noalias` | B − A |
+  |---|---|---|---|
+  | nfsd, µs | 100.50 ± 2.56 | 91.67 ± 1.43 | −8.83 ± 1.47 (−8.8%) |
+  | rings, µs | 47.55 ± 0.56 | 44.60 ± 0.99 | −2.95 ± 0.57 (−6.2%) |
+  | page-table walks, nfsd's CPUs · rings | 108 · 61 | 2.1 · 0.29 | |
+
+- **Unchanged:** the rate (40.4 to 40.5 GB/s, drive-limited), the
+  region's peak and latency at iodepth 1 (p50 0.420 ms).
+- **Kept (Mike, 27 October).** It costs the read-only protection of the
+  kernel's aliases in the linear map, a security trade-off still to be
+  weighed for Hammerspace's product. tardis1 does not have it.
+- **Measuring:** `cost.sh RUNDIR...` gives the ring and nfsd µs a WRITE
+  of `twoport.sh` runs.
+
+**Where it stands:** a loaned WRITE costs the rings 44.6 µs and nfsd
+91.7, against 92.6 and 184.1 when the FLAMEGRAPH rounds began. The next
+round is not chosen.
+
 # Build 494 on tardis2: no regression on the DPRP5s (23 October)
 
 tardis2 booted `7.3.0-7.hs.494.loanpage_pool.el10.aarch64+16k`, the same
