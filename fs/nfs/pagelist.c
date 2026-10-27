@@ -705,7 +705,7 @@ static void nfs_pgio_data_destroy(struct nfs_pgio_header *hdr)
 	if (hdr->args.context)
 		put_nfs_open_context(hdr->args.context);
 	if (hdr->page_array.pagevec != hdr->page_array.page_array)
-		kfree(hdr->page_array.pagevec);
+		kvfree(hdr->page_array.pagevec);
 }
 
 /*
@@ -763,6 +763,38 @@ static void nfs_pgio_rpcsetup(struct nfs_pgio_header *hdr, unsigned int pgbase,
 	hdr->res.verf    = &hdr->verf;
 	nfs_fattr_init(&hdr->fattr);
 }
+
+#if IS_ENABLED(CONFIG_NFS_LOCALIO)
+/* Transfer the pinned payload and one context request to a LOCALIO header. */
+struct nfs_pgio_header *
+nfs_pgio_header_from_pages(struct nfs_pageio_descriptor *desc,
+			   struct nfs_page *req, struct page **pages,
+			   unsigned int npages, unsigned int count)
+{
+	struct nfs_pgio_mirror *mirror = nfs_pgio_current_mirror(desc);
+	struct nfs_pgio_header *hdr;
+
+	/* The direct scheduler can switch from LOCALIO to RPC only once. */
+	if (WARN_ON_ONCE(!list_empty(&mirror->pg_list) || desc->pg_lseg ||
+			 desc->pg_mirror_count != 1))
+		return ERR_PTR(-EINVAL);
+	hdr = nfs_pgio_header_alloc(desc);
+	if (!hdr)
+		return ERR_PTR(-ENOMEM);
+
+	nfs_list_add_request(req, &mirror->pg_list);
+	mirror->pg_count = count;
+	nfs_pgheader_init(desc, hdr, nfs_pgio_header_free);
+	nfs_list_move_request(req, &hdr->pages);
+	mirror->pg_count = 0;
+	hdr->page_array.pagevec = pages;
+	hdr->page_array.npages = npages;
+	set_bit(NFS_IOHDR_LOCAL_PAGES, &hdr->flags);
+	nfs_pgio_rpcsetup(hdr, req->wb_pgbase, count, FLUSH_STABLE, NULL);
+	desc->pg_rpc_callops = &nfs_pgio_common_ops;
+	return hdr;
+}
+#endif
 
 /**
  * nfs_pgio_prepare - Prepare pageio hdr to go over the wire
@@ -1037,6 +1069,7 @@ static int nfs_generic_pg_pgios(struct nfs_pageio_descriptor *desc)
 					desc->pg_ioflags,
 					RPC_TASK_CRED_NOREF | task_flags,
 					localio);
+
 	}
 	return ret;
 }

@@ -4346,6 +4346,18 @@ Kernel parameters
 			[NFS] set the maximum lifetime for idmapper cache
 			entries.
 
+	nfs.localio_direct_request_batching=
+			[NFS] Enable experimental LOCALIO direct read and write
+			request batching. Boolean, defaults to false. Requires
+			CONFIG_NFS_LOCALIO. Preserves negotiated rsize/wsize
+			limits and stable writes. RPC and buffered I/O retain
+			their ordinary scheduling.
+			Set at boot for a built-in client, or load the module
+			with modprobe nfs localio_direct_request_batching=1.
+			Read-only runtime value is available at
+			/sys/module/nfs/parameters/localio_direct_request_batching.
+			Changing the setting requires module reload or reboot.
+
 	nfs.max_session_cb_slots=
 			[NFSv4.1] Sets the maximum number of session
 			slots the client will assign to the callback

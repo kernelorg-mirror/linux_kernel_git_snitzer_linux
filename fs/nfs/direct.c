@@ -401,6 +401,24 @@ static void nfs_direct_read_completion(struct nfs_pgio_header *hdr)
 
 	nfs_update_delegated_atime(dreq->inode);
 
+	if (test_bit(NFS_IOHDR_LOCAL_PAGES, &hdr->flags)) {
+		unsigned int i, base = hdr->req->wb_pgbase;
+
+		for (i = 0; i < hdr->page_array.npages; i++) {
+			struct page *page = hdr->page_array.pagevec[i];
+
+			if (!PageCompound(page) && bytes < hdr->good_bytes &&
+			    dreq->flags == NFS_ODIRECT_SHOULD_DIRTY)
+				set_page_dirty(page);
+			bytes += PAGE_SIZE - base;
+			base = 0;
+			put_page(page);
+		}
+		nfs_list_remove_request(hdr->req);
+		nfs_release_request(hdr->req);
+		goto out_put;
+	}
+
 	while (!list_empty(&hdr->pages)) {
 		struct nfs_page *req = nfs_list_entry(hdr->pages.next);
 		struct page *page = req->wb_page;
@@ -455,6 +473,9 @@ static ssize_t nfs_direct_read_schedule_iovec(struct nfs_direct_req *dreq,
 	LIST_HEAD(nfs_page_list);
 	bool nowait = NFS_PROTO(inode)->version == 3 && dreq->iocb &&
 		(dreq->iocb->ki_flags & IOCB_NOWAIT);
+	bool local = !nowait && IS_ENABLED(CONFIG_NFS_LOCALIO) &&
+		     localio_direct_request_batching &&
+		     nfs_server_is_local(NFS_SERVER(inode)->nfs_client);
 
 	nfs_pageio_init_read(&desc, dreq->inode, false,
 			     &nfs_direct_read_completion_ops);
@@ -466,6 +487,18 @@ static ssize_t nfs_direct_read_schedule_iovec(struct nfs_direct_req *dreq,
 		inode_dio_begin(inode);
 
 	while (iov_iter_count(iter)) {
+		if (local) {
+			result = nfs_local_direct_pgio(&desc, iter, pos);
+			if (result < 0)
+				break;
+			if (result > 0) {
+				requested_bytes += result;
+				pos += result;
+				continue;
+			}
+			local = false;
+		}
+
 		result = nfs_direct_extract_pages(dreq, iter, rsize, &pos, &nfs_page_list,
 						  nowait ? desc.pg_bsize : 0);
 		if (result < 0 && list_empty(&nfs_page_list))
@@ -1058,6 +1091,15 @@ static void nfs_direct_write_completion(struct nfs_pgio_header *hdr)
 		spin_unlock(&inode->i_lock);
 	}
 
+	if (test_bit(NFS_IOHDR_LOCAL_PAGES, &hdr->flags)) {
+		/* LOCALIO batches request FILE_SYNC and never need a commit list. */
+		/* nfs_local_direct_pgio() took FOLL_GET references, not pins. */
+		release_pages(hdr->page_array.pagevec, hdr->page_array.npages);
+		nfs_list_remove_request(hdr->req);
+		nfs_unlock_and_release_request(hdr->req);
+		goto out_put;
+	}
+
 	while (!list_empty(&hdr->pages)) {
 		struct nfs_page *req;
 
@@ -1151,6 +1193,9 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 	pgoff_t last = (pos + iov_iter_count(iter) - 1) >> PAGE_SHIFT;
 	bool defer = false;
 	bool nowait = dreq->iocb && (dreq->iocb->ki_flags & IOCB_NOWAIT);
+	bool local = !nowait && IS_ENABLED(CONFIG_NFS_LOCALIO) &&
+		     localio_direct_request_batching &&
+		     nfs_server_is_local(NFS_SERVER(inode)->nfs_client);
 
 	trace_nfs_direct_write_schedule_iovec(dreq);
 
@@ -1165,6 +1210,18 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 
 	nfs_account_write_io(inode, iov_iter_count(iter));
 	while (iov_iter_count(iter)) {
+		if (local) {
+			result = nfs_local_direct_pgio(&desc, iter, pos);
+			if (result < 0)
+				break;
+			if (result > 0) {
+				requested_bytes += result;
+				pos += result;
+				continue;
+			}
+			local = false;
+		}
+
 		result = nfs_direct_extract_pages(dreq, iter, wsize, &pos, &nfs_page_list,
 						  nowait ? desc.pg_bsize : 0);
 		if (result < 0 && list_empty(&nfs_page_list))
