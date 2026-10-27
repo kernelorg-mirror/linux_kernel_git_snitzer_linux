@@ -9,10 +9,14 @@
 #include <linux/bitmap.h>
 #include <linux/export.h>
 #include <linux/minmax.h>
+#include <linux/mutex.h>
 #include <linux/percpu.h>
 #include <linux/prefetch.h>
+#include <linux/rculist.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
+#include <net/net_namespace.h>
+#include <net/netns/generic.h>
 #include <net/page_pool/helpers.h>
 #include <net/rx_loan.h>
 #include <net/xdp.h>
@@ -297,6 +301,194 @@ void rx_loan_table_reset(struct rx_loan_table *t)
 }
 EXPORT_SYMBOL_GPL(rx_loan_table_reset);
 
+/*
+ * The region's credit outstanding across every budget of every namespace
+ * and every consumer, write and READ: the hard cap on them all together.
+ * A budget charges it when credit goes to a record or a READ, from its
+ * avail and reserve or from a CPU's stock (one atomic per record on the
+ * per-CPU fast path: rx_loan_stock_take()), and refunds it when the credit
+ * comes back.  Stocked credit is the budget's, not the region's, so a stock
+ * larger than what the region has left takes nothing past it; a refusal
+ * drains the stocks once (@draining) and every return after it kicks the
+ * budgets (@waiting).  With no region it counts, and refuses nothing.
+ */
+static struct {
+	atomic_long_t	out;
+	atomic_long_t	orphaned;	/* kept spent: abandoned records */
+	atomic_long_t	denied;
+	atomic_t	waiting;	/* refused since the last return */
+	atomic_t	draining;	/* stocks drained for a refusal */
+} rx_loan_region ____cacheline_aligned_in_smp;
+
+/*
+ * Registered consumers and the budgets a region return kicks: written on
+ * the control path only (a consumer's start and stop, a namespace's),
+ * never on admission, so a mutex.  The budgets are walked under RCU.
+ */
+static DEFINE_MUTEX(rx_loan_consumers_lock);
+static LIST_HEAD(rx_loan_consumers);
+static LIST_HEAD(rx_loan_budgets);
+static unsigned int rx_loan_nr_consumers;
+
+static void rx_loan_region_kick_all(void)
+{
+	struct rx_loan_budget *lb;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(lb, &rx_loan_budgets, region_node)
+		schedule_work(&lb->kick_work);
+	rcu_read_unlock();
+}
+
+/*
+ * Charge @n pages to the region: false, with nothing charged, if that
+ * would pass it, unless @force (a budget turned off: counted, not capped).
+ * With no region size the charge is counted, not capped.  @carved, if not
+ * NULL: whether a region was in place to charge, not only a size for one.
+ * No undo: a refusal never makes another admission see a total it passed.
+ */
+static bool rx_loan_region_carved(void);
+
+static bool rx_loan_region_get(long n, bool force, bool *carved)
+{
+	unsigned long size;
+	long v;
+
+	if (n <= 0)
+		return true;
+	size = rx_loan_region_size();
+	if (carved)
+		*carved = rx_loan_region_carved();
+	if (!size || force) {
+		atomic_long_add(n, &rx_loan_region.out);
+		return true;
+	}
+	v = atomic_long_read(&rx_loan_region.out);
+	do {
+		if (v + n > (long)size) {
+			/*
+			 * Pairs with rx_loan_region_put(): either it sees
+			 * waiting, or this sees what it returned.
+			 */
+			atomic_set(&rx_loan_region.waiting, 1);
+			smp_mb__after_atomic();
+			v = atomic_long_read(&rx_loan_region.out);
+			if (v + n <= (long)size)
+				continue;
+			atomic_long_inc(&rx_loan_region.denied);
+			/* Idle stocks may hold what is short: drain them once. */
+			if (!atomic_xchg(&rx_loan_region.draining, 1))
+				rx_loan_region_kick_all();
+			return false;
+		}
+	} while (!atomic_long_try_cmpxchg(&rx_loan_region.out, &v, v + n));
+	if (atomic_read(&rx_loan_region.draining))
+		atomic_set(&rx_loan_region.draining, 0);
+	return true;
+}
+
+/*
+ * Refund @pages to the region, any context.  After a refusal, kick every
+ * budget, whose waiters may be short of the region rather than their own
+ * credit.
+ */
+/* Charge @pages to the region for a stocked take; false if it has not got them. */
+bool rx_loan_region_take(long pages, bool *carved)
+{
+	return rx_loan_region_get(pages, false, carved);
+}
+EXPORT_SYMBOL_GPL(rx_loan_region_take);
+
+void rx_loan_region_put(long pages)
+{
+	if (pages <= 0)
+		return;
+	atomic_long_sub(pages, &rx_loan_region.out);
+	smp_mb__after_atomic();
+	if (atomic_read(&rx_loan_region.waiting) &&
+	    atomic_xchg(&rx_loan_region.waiting, 0))
+		rx_loan_region_kick_all();
+}
+EXPORT_SYMBOL_GPL(rx_loan_region_put);
+
+long rx_loan_region_out(void)
+{
+	return atomic_long_read(&rx_loan_region.out);
+}
+EXPORT_SYMBOL_GPL(rx_loan_region_out);
+
+long rx_loan_region_orphaned(void)
+{
+	return atomic_long_read(&rx_loan_region.orphaned);
+}
+EXPORT_SYMBOL_GPL(rx_loan_region_orphaned);
+
+/**
+ * rx_loan_consumer_share - the most of the region @c may hold
+ * @c: a consumer
+ *
+ * The region's pages over the consumers registered, region-wide; 0 (no
+ * cap) with no region, or for a consumer not registered.  Lockless.
+ */
+unsigned long rx_loan_consumer_share(const struct rx_loan_consumer *c)
+{
+	unsigned int n = READ_ONCE(rx_loan_nr_consumers);
+
+	if (!READ_ONCE(c->registered) || !n)
+		return 0;
+	return rx_loan_region_size() / n;
+}
+EXPORT_SYMBOL_GPL(rx_loan_consumer_share);
+
+/*
+ * Charge @n pages to @c's count of @read or write credit: false, with
+ * nothing charged, if that would pass its share, unless @force (the oldest
+ * record, which always starts; counted in overrun_share).
+ */
+static bool rx_loan_consumer_get(struct rx_loan_consumer *c, bool read,
+				 long n, bool force)
+{
+	atomic_long_t *out;
+	unsigned long share;
+	long v;
+
+	if (!c || n <= 0)
+		return true;
+	out = read ? &c->out_read : &c->out_write;
+	share = rx_loan_consumer_share(c);
+	v = atomic_long_read(out);
+	do {
+		if (share && v + n > (long)share) {
+			if (!force) {
+				atomic_long_inc(&c->share_denied);
+				return false;
+			}
+			atomic_long_inc(&c->overrun_share);
+			atomic_long_add(n, out);
+			return true;
+		}
+	} while (!atomic_long_try_cmpxchg(out, &v, v + n));
+	return true;
+}
+
+/**
+ * rx_loan_consumer_put - refund credit charged to a consumer's share
+ * @c: the consumer charged, or NULL
+ * @read: READ (exact) credit, else write
+ * @n: pages
+ *
+ * For credit returned outside rx_loan_return() and the grant returns:
+ * what a record lent on (struct rx_loan_lend) when its borrower is done.
+ * The caller then passes the credit on through the budget, whose kick
+ * brings back any request waiting for @c to come under its share.
+ */
+void rx_loan_consumer_put(struct rx_loan_consumer *c, bool read, long n)
+{
+	if (c && n > 0)
+		atomic_long_sub(n, read ? &c->out_read : &c->out_write);
+}
+EXPORT_SYMBOL_GPL(rx_loan_consumer_put);
+
 /* READs holding @lb's credit. */
 long rx_loan_read_inflight(struct rx_loan_budget *lb)
 {
@@ -376,6 +568,7 @@ EXPORT_SYMBOL_GPL(rx_loan_cost_fold_cpu_locked);
  */
 void rx_loan_stock_drain_locked(struct rx_loan_budget *lb)
 {
+	long back = 0;
 	int cpu;
 
 	WRITE_ONCE(lb->contended, true);
@@ -384,9 +577,10 @@ void rx_loan_stock_drain_locked(struct rx_loan_budget *lb)
 	for_each_possible_cpu(cpu) {
 		struct rx_loan_stock *st = per_cpu_ptr(lb->stock, cpu);
 
-		lb->avail += atomic_long_xchg(&st->pages, 0);
+		back += atomic_long_xchg(&st->pages, 0);
 		rx_loan_cost_fold_cpu_locked(lb, st);
 	}
+	lb->avail += back;
 }
 EXPORT_SYMBOL_GPL(rx_loan_stock_drain_locked);
 
@@ -403,6 +597,7 @@ long rx_loan_stock_refill_locked(struct rx_loan_budget *lb)
 	    lb->avail < 2 * RX_LOAN_STOCK_BATCH + (long)lb->reserve_size ||
 	    atomic_long_read(pages) >= RX_LOAN_STOCK_BATCH)
 		return 0;
+	/* Uncharged: the region is charged as a record takes it. */
 	lb->avail -= RX_LOAN_STOCK_BATCH;
 	atomic_long_add(RX_LOAN_STOCK_BATCH, pages);
 	return RX_LOAN_STOCK_BATCH;
@@ -459,17 +654,74 @@ static unsigned long rx_loan_kunit_region_pages;
 static unsigned long rx_loan_kunit_region_read;
 
 /*
+ * A test's region starts with nothing out or orphaned: what was before it
+ * is set aside while the region is in place (@aside), and is all there is
+ * again when it goes, whatever the test left spent, but for credit charged
+ * before the region and given back under it, which comes off what was set
+ * aside: the total, less what stays orphaned, is then below nothing.
+ */
+void rx_loan_kunit_region_set_aside(bool aside)
+{
+	static long real_out, real_orphaned;
+	long early;
+
+	if (aside) {
+		real_out = atomic_long_xchg(&rx_loan_region.out, 0);
+		real_orphaned = atomic_long_xchg(&rx_loan_region.orphaned, 0);
+	} else {
+		early = atomic_long_read(&rx_loan_region.out) -
+			atomic_long_read(&rx_loan_region.orphaned);
+		atomic_long_set(&rx_loan_region.out,
+				real_out + min(early, 0L));
+		atomic_long_set(&rx_loan_region.orphaned, real_orphaned);
+	}
+	atomic_set(&rx_loan_region.waiting, 0);
+	atomic_set(&rx_loan_region.draining, 0);
+}
+EXPORT_SYMBOL_IF_KUNIT(rx_loan_kunit_region_set_aside);
+
+/*
  * Stand in for a region of @pages pages with @read_pages split off for
  * reads (0, 0: the real region, if any).  Nothing is applied: a read pool
- * picks it up at its next locked op.
+ * picks it up at its next locked op.  Like a test's own region, a stand-in
+ * starts with nothing out (rx_loan_kunit_region_set_aside()).
  */
 void rx_loan_kunit_region(unsigned long pages, unsigned long read_pages)
 {
+	bool was = READ_ONCE(rx_loan_kunit_region_pages);
+
 	WRITE_ONCE(rx_loan_kunit_region_read, read_pages);
 	WRITE_ONCE(rx_loan_kunit_region_pages, pages);
+	if (!pages != !was) {
+		rx_loan_kunit_region_set_aside(pages);
+		return;
+	}
+	atomic_set(&rx_loan_region.waiting, 0);
+	atomic_set(&rx_loan_region.draining, 0);
 }
 EXPORT_SYMBOL_IF_KUNIT(rx_loan_kunit_region);
+
+/* How many times the region has refused a charge. */
+long rx_loan_kunit_region_denied(void)
+{
+	return atomic_long_read(&rx_loan_region.denied);
+}
+EXPORT_SYMBOL_IF_KUNIT(rx_loan_kunit_region_denied);
 #endif
+
+/*
+ * Whether the region is in place (or a test's stand-in for it).  Before it
+ * is carved, and after a carve failed, it has a size but no pages: what is
+ * charged then holds no region page.
+ */
+static bool rx_loan_region_carved(void)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (READ_ONCE(rx_loan_kunit_region_pages))
+		return true;
+#endif
+	return page_pool_rx_region_exists();
+}
 
 unsigned long rx_loan_region_size(void)
 {
@@ -480,6 +732,141 @@ unsigned long rx_loan_region_size(void)
 	return page_pool_rx_region_size();
 }
 EXPORT_SYMBOL_GPL(rx_loan_region_size);
+
+/**
+ * rx_loan_consumer_register - a consumer of region loans starts
+ * @c: the consumer's record, held until rx_loan_consumer_unregister()
+ * @ln: the namespace whose budgets it draws on, or NULL
+ * @name: for its statistics
+ * @floor: pages it asks the region to hold, when it is carved
+ *
+ * Registering only counts @floor in what the region is to hold: it is not
+ * carved here, as a server registers when it starts, before it starts the
+ * threads its floor follows (rx_loan_consumer_set_floor()).  It
+ * is carved at the first READ (page_pool_rx_region_bind_reads()), when a
+ * listed device's pool is attached, or at a consumer's first connection
+ * (rx_loan_region_carve()), whichever comes first.  Every consumer's share is then the region over the consumers: a late
+ * consumer gets its share of the region that exists, and the others'
+ * shrink to theirs; credit they hold beyond it is not taken back, they
+ * wait until it drains under their share.
+ *
+ * @c's counts of credit out start zeroed (the caller's to clear) and are
+ * not reset here: what it still had out when it last unregistered keeps
+ * returning to them.
+ *
+ * Context: process context; may sleep.
+ * Return: 0.
+ */
+int rx_loan_consumer_register(struct rx_loan_consumer *c,
+			      struct rx_loan_net *ln, const char *name,
+			      unsigned long floor)
+{
+	c->name = name;
+	c->floor = floor;
+	c->ln = ln;
+	atomic_long_set(&c->overrun_share, 0);
+	atomic_long_set(&c->share_denied, 0);
+	mutex_lock(&rx_loan_consumers_lock);
+	page_pool_rx_region_demand(floor);
+	list_add_tail(&c->node, &rx_loan_consumers);
+	if (ln)
+		ln->nr_consumers++;
+	WRITE_ONCE(rx_loan_nr_consumers, rx_loan_nr_consumers + 1);
+	WRITE_ONCE(c->registered, true);
+	mutex_unlock(&rx_loan_consumers_lock);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rx_loan_consumer_register);
+
+/**
+ * rx_loan_consumer_unregister - a consumer of region loans stops
+ * @c: as registered
+ *
+ * Its transports are gone, but credit they lent on (a bounce, a transmit)
+ * may still be out: it returns to @c's counts as it lands, so they are
+ * kept, and @c must outlive it.  Credit of records abandoned by
+ * rx_loan_orphan() under a region stays spent there, and was counted as
+ * orphaned then.
+ *
+ * Context: process context; may sleep.
+ */
+void rx_loan_consumer_unregister(struct rx_loan_consumer *c)
+{
+	mutex_lock(&rx_loan_consumers_lock);
+	list_del(&c->node);
+	if (c->ln)
+		c->ln->nr_consumers--;
+	WRITE_ONCE(rx_loan_nr_consumers, rx_loan_nr_consumers - 1);
+	WRITE_ONCE(c->registered, false);
+	page_pool_rx_region_demand(-(long)c->floor);
+	mutex_unlock(&rx_loan_consumers_lock);
+}
+EXPORT_SYMBOL_GPL(rx_loan_consumer_unregister);
+
+/**
+ * rx_loan_consumer_set_floor - a consumer's floor follows its size
+ * @c: a consumer, registered or not
+ * @floor: the pages it now asks the region to hold
+ *
+ * A server's floor follows its thread count, which it sets after it
+ * registers.  Before the region is carved the new floor is what it is
+ * carved for; once carved the region does not change, and the floor no
+ * longer matters to it (shares are the region over the consumers).
+ *
+ * Context: process context; may sleep.  Control path only.
+ */
+void rx_loan_consumer_set_floor(struct rx_loan_consumer *c,
+				unsigned long floor)
+{
+	long delta;
+
+	mutex_lock(&rx_loan_consumers_lock);
+	delta = (long)floor - (long)c->floor;
+	c->floor = floor;
+	if (c->registered && delta)
+		page_pool_rx_region_demand(delta);
+	mutex_unlock(&rx_loan_consumers_lock);
+}
+EXPORT_SYMBOL_GPL(rx_loan_consumer_set_floor);
+
+/**
+ * rx_loan_region_carve - carve the region for a consumer's first admission
+ *
+ * Called before a consumer admits its first region-backed record (sunrpc:
+ * a new connection): carves the region at the size the registered floors
+ * and the waiting devices' rings ask for, when a listed device's pool
+ * waits for it.  Lockless once the region exists or nothing waits.
+ *
+ * Context: process context; may sleep.
+ */
+void rx_loan_region_carve(void)
+{
+	if (page_pool_rx_region_exists())
+		return;
+	page_pool_rx_region_carve();
+}
+EXPORT_SYMBOL_GPL(rx_loan_region_carve);
+
+/**
+ * rx_loan_region_write_default - a namespace's write budget by default
+ *
+ * The region's write share, its pages less the read split, once a region
+ * exists; 0 before.  Lockless: called under a budget's spinlock.
+ */
+unsigned long rx_loan_region_write_default(void)
+{
+	unsigned long size, read;
+
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (!READ_ONCE(rx_loan_kunit_region_pages))
+#endif
+		if (!page_pool_rx_region_exists())
+			return 0;
+	size = rx_loan_region_size();
+	read = rx_loan_region_read_pages();
+	return size > read ? size - read : 0;
+}
+EXPORT_SYMBOL_GPL(rx_loan_region_write_default);
 
 /* Lockless: called under a budget's spinlock. */
 unsigned long rx_loan_region_read_pages(void)
@@ -525,6 +912,9 @@ static bool rx_loan_budget_configure_locked(struct rx_loan_budget *lb)
 		reserve = 0;
 	} else {
 		budget = pages;
+		if (!budget && READ_ONCE(lb->cfg_default))
+			budget = min_t(unsigned long,
+				       rx_loan_region_write_default(), UINT_MAX);
 		if (budget && READ_ONCE(lb->cfg_off))
 			budget = 0;
 	}
@@ -608,10 +998,95 @@ linked:
  * overrun (progress over accounting; it is never returned).  With no
  * budget a request is unmetered: the free pages alone bound it.
  */
+static bool rx_loan_budget_idle(struct rx_loan_budget *lb)
+{
+	return list_empty(&lb->inflight) && !rx_loan_read_inflight(lb) &&
+	       !rx_loan_stocked_records(lb);
+}
+
+/*
+ * @w's consumer is past its share for what @w asks, lb->lock held.  Such a
+ * request waits for its consumer, not for the namespace: it keeps its
+ * place in @lb's FIFO but never heads it, so other consumers are admitted
+ * past it, and its consumer's own returns (each of which kicks @lb) bring
+ * it back.  With nothing in flight on @lb it heads as any request does,
+ * and as the oldest may pass its share.
+ */
+static bool rx_loan_share_waits(struct rx_loan_budget *lb,
+				const struct rx_loan_waiter *w)
+{
+	const struct rx_loan_consumer *c = w->consumer;
+	unsigned long share;
+
+	/*
+	 * Only a waiter its share alone refused: one the region or the
+	 * budget refused waits for any return, whoever makes it, and the
+	 * oldest record, which may pass its share, is never refused by it.
+	 * Re-evaluated at every kick: within its share again, it heads.
+	 */
+	if (!c || !w->share)
+		return false;
+	share = rx_loan_consumer_share(c);
+	return share && atomic_long_read(lb->read ? &c->out_read :
+					 &c->out_write) + w->need > (long)share;
+}
+
+/* The oldest waiter whose consumer is within its share, lb->lock held. */
+static struct rx_loan_waiter *rx_loan_head_locked(struct rx_loan_budget *lb)
+{
+	struct rx_loan_waiter *pos;
+	bool idle;
+
+	if (list_empty(&lb->waiters))
+		return NULL;
+	idle = rx_loan_budget_idle(lb);
+	list_for_each_entry(pos, &lb->waiters, node)
+		if (idle || !rx_loan_share_waits(lb, pos))
+			return pos;
+	return NULL;
+}
+
+/*
+ * The consumer's share and the region's total, for exact credit of @n
+ * pages, @over of them past the budget, lb->lock held: 0, with @n less
+ * @over charged to both, or -EAGAIN.  The region must hold all @n, the
+ * overrun included; the overrun is not charged, as it is never returned.
+ * The share yields to a request with nothing else in flight (@idle).
+ */
+static int rx_loan_exact_limits_locked(struct rx_loan_budget *lb,
+				       struct rx_loan_waiter *w, long n,
+				       long over, bool idle)
+{
+	struct rx_loan_consumer *c = w->consumer;
+
+	if (!rx_loan_consumer_get(c, lb->read, n - over, false)) {
+		if (!idle && !rx_loan_budget_idle(lb)) {
+			w->share = true;
+			goto refuse;
+		}
+		rx_loan_consumer_get(c, lb->read, n - over, true);
+	}
+	if (!rx_loan_region_get(n, false, NULL)) {
+		rx_loan_consumer_put(c, lb->read, n - over);
+		goto refuse;
+	}
+	if (over)
+		atomic_long_sub(over, &rx_loan_region.out);
+	return 0;
+refuse:
+	/* Returns to stocks must kick now: stop stocking. */
+	if (!lb->contended)
+		rx_loan_stock_drain_locked(lb);
+	return -EAGAIN;
+}
+
 static int rx_loan_grant_locked(struct rx_loan_budget *lb,
 				struct rx_loan_waiter *w)
 {
 	long n = w->need, from_avail = n, from_reserve = 0, over = 0;
+	bool idle = false;
+
+	w->share = false;	/* unless the share refuses it below */
 
 	if (lb->budget && lb->avail < n && !lb->contended)
 		rx_loan_stock_drain_locked(lb);	/* stocked credit first */
@@ -621,12 +1096,16 @@ static int rx_loan_grant_locked(struct rx_loan_budget *lb,
 		if (!list_empty(&lb->inflight) || rx_loan_read_inflight(lb) ||
 		    rx_loan_stocked_records(lb))
 			return -EAGAIN;
+		idle = true;
 		from_avail = max(lb->avail, 0L);
 		from_reserve = min(n - from_avail, max(lb->reserve, 0L));
 		over = n - from_avail - from_reserve;
-		if (over)
-			lb->overrun++;
 	}
+	if (lb->budget &&
+	    rx_loan_exact_limits_locked(lb, w, n, over, idle))
+		return -EAGAIN;
+	if (over)
+		lb->overrun++;
 	lb->avail -= from_avail;
 	lb->reserve -= from_reserve;
 	w->credit = from_avail;
@@ -644,7 +1123,8 @@ static int rx_loan_grant_locked(struct rx_loan_budget *lb,
  * to wake with rx_loan_wake_granted() once lb->lock is dropped; then the
  * oldest transport, now the head, is pinned for rx_loan_wake(), unless it
  * is @running.  A request that cannot be granted yet blocks everything
- * younger.
+ * younger.  A request whose consumer is past its share is not a head
+ * (rx_loan_share_waits()): it is passed over until its consumer returns.
  *
  * While a record is in flight, admission takes only from avail, so a
  * waiter refused for want of credit is woken only when avail covers what
@@ -659,18 +1139,17 @@ struct rx_loan_waiter *rx_loan_kick_locked(struct rx_loan_budget *lb,
 {
 	struct rx_loan_waiter *head;
 
-	while ((head = list_first_entry_or_null(&lb->waiters,
-						struct rx_loan_waiter, node)) &&
-	       head->exact) {
+	while ((head = rx_loan_head_locked(lb)) && head->exact) {
 		if (rx_loan_grant_locked(lb, head))
 			return NULL;
 		lb->read_granted++;
 		head->ops->pin(head);
 		list_move_tail(&head->node, granted);
 	}
-	/* Nobody waits (and any change is applied): stock again. */
 	if (!head) {
-		WRITE_ONCE(lb->contended, false);
+		/* Nobody waits (and any change is applied): stock again. */
+		if (list_empty(&lb->waiters))
+			WRITE_ONCE(lb->contended, false);
 		return NULL;
 	}
 	if (head == running)
@@ -683,6 +1162,23 @@ struct rx_loan_waiter *rx_loan_kick_locked(struct rx_loan_budget *lb,
 	return head->ops->pin(head) ? head : NULL;
 }
 EXPORT_SYMBOL_GPL(rx_loan_kick_locked);
+
+/*
+ * Take @n pages of this CPU's stock of @lb for consumer @c, within its
+ * share; rx_loan_stock_take() charges them to the region (@carved: see
+ * rx_loan_region_get()).
+ */
+static bool rx_loan_stock_take_charged(struct rx_loan_budget *lb,
+				       struct rx_loan_consumer *c, long n,
+				       bool *carved)
+{
+	if (!rx_loan_consumer_get(c, lb->read, n, false))
+		return false;
+	if (__rx_loan_stock_take(lb, n, carved))
+		return true;
+	rx_loan_consumer_put(c, lb->read, n);
+	return false;
+}
 
 /* Wake the exact requests a kick granted; lb->lock not held. */
 void rx_loan_wake_granted(struct list_head *granted)
@@ -706,6 +1202,9 @@ void rx_loan_kick_fn(struct work_struct *work)
 	LIST_HEAD(granted);
 
 	spin_lock_bh(&lb->lock);
+	/* The region refused someone: idle stocks give back what they hold. */
+	if (atomic_read(&rx_loan_region.draining) && !lb->contended)
+		rx_loan_stock_drain_locked(lb);
 	rx_loan_budget_configure_locked(lb);
 	wake = rx_loan_kick_locked(lb, NULL, &granted);
 	spin_unlock_bh(&lb->lock);
@@ -716,20 +1215,26 @@ EXPORT_SYMBOL_GPL(rx_loan_kick_fn);
 
 /*
  * Admit a record whose credit @cr is to hold, at a charge of @cost, for the
- * transport whose waiter is @w.  @warm: admission may take stocked credit
- * (rx_loan_cost_warm(), or a fixed factor).  False: @w waits, and is woken,
- * oldest first, when credit returns.
+ * transport whose waiter is @w, of consumer @c (NULL: no share).  @warm:
+ * admission may take stocked credit (rx_loan_cost_warm(), or a fixed
+ * factor).  False: @w waits, and is woken, oldest first, when credit
+ * returns.  The credit is charged to @c's share and to the region's total,
+ * one atomic each per record; the oldest record may pass the share, never
+ * the region.
  */
-bool rx_loan_admit(struct rx_loan_budget *lb, struct rx_loan_waiter *w,
-		   struct rx_loan_credit *cr, u32 cost, bool warm)
+bool rx_loan_admit(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
+		   struct rx_loan_waiter *w, struct rx_loan_credit *cr,
+		   u32 cost, bool warm)
 {
 	struct rx_loan_waiter *head, *wake = NULL, *undo_wake = NULL;
 	u32 from_avail, from_reserve;
-	bool changed, tried = false;
+	bool changed, oldest, tried = false, share_only = false, carved = false;
 	LIST_HEAD(granted);
 
 	if (WARN_ON_ONCE(cr->linked))
 		return true;
+	cr->consumer = c;
+	w->consumer = c;	/* for rx_loan_share_waits() */
 	/*
 	 * A holder is counted before it takes stocked credit and uncounted
 	 * only once the credit is back, so a change of configuration that
@@ -739,9 +1244,10 @@ bool rx_loan_admit(struct rx_loan_budget *lb, struct rx_loan_waiter *w,
 	    !READ_ONCE(lb->contended) && list_empty(&w->node) && warm) {
 		tried = true;
 		this_cpu_inc(lb->stock->records);
-		if (rx_loan_stock_take(lb, cost)) {
+		if (rx_loan_stock_take_charged(lb, c, cost, &carved)) {
 			/* This CPU's stock: nobody waits, no order to keep. */
 			cr->credit = cost;
+			cr->region = carved ? cost : 0;
 			cr->reserve = 0;
 			cr->over = 0;
 			cr->ticket = 0;
@@ -768,13 +1274,13 @@ bool rx_loan_admit(struct rx_loan_budget *lb, struct rx_loan_waiter *w,
 		wake = rx_loan_kick_locked(lb, NULL, &granted);
 		goto out;
 	}
-	head = list_first_entry_or_null(&lb->waiters, struct rx_loan_waiter,
-					node);
+	head = rx_loan_head_locked(lb);
 	if (head && head != w)
 		goto deny;
 	if (lb->avail < cost && !lb->contended)
 		rx_loan_stock_drain_locked(lb);	/* stocked credit first */
-	if (list_empty(&lb->inflight) && !rx_loan_stocked_records(lb)) {
+	oldest = list_empty(&lb->inflight) && !rx_loan_stocked_records(lb);
+	if (oldest) {
 		/* The oldest record may use the reserve: it always starts. */
 		from_avail = min_t(long, cost, max(lb->avail, 0L));
 		from_reserve = min_t(long, cost - from_avail,
@@ -785,9 +1291,20 @@ bool rx_loan_admit(struct rx_loan_budget *lb, struct rx_loan_waiter *w,
 	} else {
 		goto deny;
 	}
+	/* The oldest may pass its share (progress), never the region. */
+	if (!rx_loan_consumer_get(c, lb->read, from_avail + from_reserve,
+				  oldest)) {
+		share_only = true;	/* never the oldest: it may pass */
+		goto deny_limit;
+	}
+	if (!rx_loan_region_get(from_avail + from_reserve, false, &carved)) {
+		rx_loan_consumer_put(c, lb->read, from_avail + from_reserve);
+		goto deny_limit;
+	}
 	lb->avail -= from_avail;
 	lb->reserve -= from_reserve;
 	cr->credit = from_avail + from_reserve;
+	cr->region = carved ? cr->credit : 0;
 	cr->reserve = from_reserve;
 	cr->over = 0;
 	cr->ticket = w->ticket ?: lb->next_ticket++;
@@ -805,7 +1322,12 @@ out:
 	rx_loan_wake_granted(&granted);
 	return true;
 
+deny_limit:
+	/* Returns to stocks must kick now: stop stocking. */
+	if (!lb->contended)
+		rx_loan_stock_drain_locked(lb);
 deny:
+	w->share = share_only;
 	rx_loan_wait_locked(lb, w, w->ticket ?: lb->next_ticket++, cost);
 	lb->denied++;
 	if (changed)
@@ -821,20 +1343,25 @@ EXPORT_SYMBOL_GPL(rx_loan_admit);
 /*
  * The slow path of rx_loan_charge(): an admitted record's credit @cr must
  * grow to @held pages.  False: pause the record; @w is woken when credit
- * returns.
+ * returns.  The growth is charged to the consumer's share (the oldest
+ * record may pass it) and to the region's total, which nothing passes.
  */
 bool __rx_loan_charge(struct rx_loan_waiter *w, struct rx_loan_credit *cr,
 		      u32 held)
 {
 	struct rx_loan_budget *lb = cr->budget;
+	struct rx_loan_consumer *c = cr->consumer;
 	struct rx_loan_waiter *wake = NULL;
 	LIST_HEAD(granted);
-	bool oldest, changed;
-	long want, take;
+	bool oldest, changed, limited = false, share_only = false;
+	bool carved = false;
+	long want, take, asked;
 
 	want = held - cr->credit;
-	if (cr->stocked && rx_loan_stock_take(lb, want)) {
+	if (cr->stocked && rx_loan_stock_take_charged(lb, c, want, &carved)) {
 		cr->credit += want;
+		if (carved)
+			cr->region += want;
 		return true;
 	}
 	spin_lock_bh(&lb->lock);
@@ -848,33 +1375,60 @@ bool __rx_loan_charge(struct rx_loan_waiter *w, struct rx_loan_credit *cr,
 	changed = rx_loan_budget_configure_locked(lb);
 	if (!lb->budget) {
 		/* Admission was turned off: records in flight finish unthrottled. */
+		rx_loan_consumer_get(c, lb->read, want, true);
+		rx_loan_region_get(want, true, &carved);
 		cr->credit += want;
 		cr->over += want;
+		if (carved)
+			cr->region += want;
 		want = 0;
 	}
 	if (want && lb->avail < want && !lb->contended)
 		rx_loan_stock_drain_locked(lb);	/* stocked credit first */
 	oldest = list_first_entry(&lb->inflight, struct rx_loan_credit,
 				  node) == cr;
-	take = min(want, max(lb->avail, 0L));
-	lb->avail -= take;
-	cr->credit += take;
-	want -= take;
-	if (want && oldest) {
-		take = min(want, max(lb->reserve, 0L));
-		lb->reserve -= take;
-		cr->credit += take;
-		cr->reserve += take;
-		want -= take;
-		if (want) {
-			/* Beyond the budget: progress over accounting. */
-			cr->credit += want;
-			cr->over += want;
-			lb->overrun++;
-			want = 0;
+	if (want) {
+		limited = !rx_loan_consumer_get(c, lb->read, want, oldest);
+		share_only = limited;	/* never the oldest: it may pass */
+		if (!limited && !rx_loan_region_get(want, false, &carved)) {
+			rx_loan_consumer_put(c, lb->read, want);
+			limited = true;
 		}
+		/* Returns to stocks must kick now: stop stocking. */
+		if (limited && !lb->contended)
+			rx_loan_stock_drain_locked(lb);
+	}
+	if (want && !limited) {
+		asked = want;
+		take = min(want, max(lb->avail, 0L));
+		lb->avail -= take;
+		cr->credit += take;
+		want -= take;
+		if (want && oldest) {
+			take = min(want, max(lb->reserve, 0L));
+			lb->reserve -= take;
+			cr->credit += take;
+			cr->reserve += take;
+			want -= take;
+			if (want) {
+				/* Beyond the budget: progress over accounting. */
+				cr->credit += want;
+				cr->over += want;
+				lb->overrun++;
+				want = 0;
+			}
+		}
+		if (want) {
+			/* Not taken: give back what was charged for it. */
+			rx_loan_consumer_put(c, lb->read, want);
+			rx_loan_region_put(want);
+		}
+		if (carved)
+			cr->region += asked - want;
 	}
 	if (want) {
+		w->consumer = c;
+		w->share = share_only;
 		rx_loan_wait_locked(lb, w, cr->ticket, 0);
 		lb->paused++;
 	} else {
@@ -896,18 +1450,26 @@ EXPORT_SYMBOL_GPL(__rx_loan_charge);
  * converted.  The conversion shares the section that returns the rest, so
  * a bounce costs the budget's lock no more than before.  The caller
  * checked that @lend is covered.  @sample is the record's cost sample
- * (rx_loan_cost_learn_locked()).
+ * (rx_loan_cost_learn_locked()).  The consumer's share gets all of it back
+ * at once, the lent part included; the region gets back what returns to
+ * the budget, and the lent part when the bounce returns it
+ * (rx_loan_region_put()).
  */
 void rx_loan_return(struct rx_loan_credit *cr, unsigned int sample, u32 lend,
 		    struct rx_loan_lend *out)
 {
+	struct rx_loan_consumer *c = cr->consumer;
 	struct rx_loan_budget *lb;
 	struct rx_loan_waiter *wake;
 	LIST_HEAD(granted);
+	long refund;
 
 	if (!cr->linked)
 		return;
 	lb = cr->budget;
+	/* The lent part stays charged until the borrower returns it. */
+	rx_loan_consumer_put(c, lb->read, (long)cr->credit - lend);
+	cr->consumer = NULL;
 	if (cr->stocked) {
 		/*
 		 * To this CPU's stock of the budget it came from, but for
@@ -922,11 +1484,13 @@ void rx_loan_return(struct rx_loan_credit *cr, unsigned int sample, u32 lend,
 		if (lend) {
 			this_cpu_add(lb->stock->lent, lend);
 			out->budget = lb;
+			out->consumer = c;
 			out->credit = lend;
 			out->reserve = 0;
 			out->stocked = true;
 		}
 		cr->credit = 0;
+		cr->region = 0;
 		cr->linked = false;
 		cr->stocked = false;
 		cr->budget = NULL;
@@ -938,6 +1502,7 @@ void rx_loan_return(struct rx_loan_credit *cr, unsigned int sample, u32 lend,
 		}
 		spin_lock_bh(&lb->lock);
 		lb->avail += back;
+		refund = 0;	/* rx_loan_stock_put() refunded it */
 		rx_loan_cost_fold_cpu_locked(lb, raw_cpu_ptr(lb->stock));
 		if (!lend)
 			this_cpu_dec(lb->stock->records);
@@ -953,6 +1518,7 @@ void rx_loan_return(struct rx_loan_credit *cr, unsigned int sample, u32 lend,
 		cr->reserve -= reserve;
 		lb->lent += normal + reserve;
 		out->budget = lb;
+		out->consumer = c;
 		out->credit = normal;
 		out->reserve = reserve;
 	}
@@ -960,8 +1526,10 @@ void rx_loan_return(struct rx_loan_credit *cr, unsigned int sample, u32 lend,
 	lb->inflight_count--;
 	lb->reserve += cr->reserve;
 	lb->avail += cr->credit - cr->reserve - cr->over;
+	refund = cr->credit;
 	rx_loan_cost_learn_locked(lb, sample);
 	cr->credit = 0;
+	cr->region = 0;
 	cr->reserve = 0;
 	cr->over = 0;
 	cr->linked = false;
@@ -970,42 +1538,74 @@ returned:
 	rx_loan_budget_configure_locked(lb);
 	wake = rx_loan_kick_locked(lb, NULL, &granted);
 	spin_unlock_bh(&lb->lock);
+	rx_loan_region_put(refund);
 	rx_loan_wake(wake);
 	rx_loan_wake_granted(&granted);
 }
 EXPORT_SYMBOL_GPL(rx_loan_return);
 
 /*
- * A record whose loaned pages could not be accounted for is abandoned, its
- * pages possibly still held: keep its credit spent, but take it out of the
- * in-flight order so the next record can be the oldest and draw the reserve.
+ * A record whose loaned pages could not be accounted for is abandoned, @held
+ * of its pages possibly still out: keep that much of its credit spent, but
+ * take it out of the in-flight order so the next record can be the oldest
+ * and draw the reserve.  The rest came back with its pages and is returned
+ * as rx_loan_return() would: over first, then reserve, then ordinary.  Of
+ * the kept part, only what was charged while a region was in place can hold
+ * region pages: that stays spent in its consumer's share and in the
+ * region's total too.  The rest, charged before the region was carved (or
+ * after its carve failed), holds no region page: it goes back to both, or
+ * the region, carved later, would keep it spent for good.  So does all of
+ * it if the region is no longer in place (only a test's stand-in is ever
+ * taken away).
  */
-void rx_loan_orphan(struct rx_loan_credit *cr)
+void rx_loan_orphan(struct rx_loan_credit *cr, u32 held)
 {
 	struct rx_loan_budget *lb;
 	struct rx_loan_waiter *wake;
+	u32 keep, back, over, reserve;
+	bool stocked = cr->stocked;
+	long kept, refund, spill = 0;
 	LIST_HEAD(granted);
 
 	if (!cr->linked)
 		return;
 	lb = cr->budget;
+	keep = min(held, cr->credit);
+	back = cr->credit - keep;
+	over = min(back, cr->over);
+	reserve = min(back - over, cr->reserve);
+	kept = rx_loan_region_carved() ? min_t(long, keep, cr->region) : 0;
+	refund = cr->credit - kept;
+	rx_loan_consumer_put(cr->consumer, lb->read, refund);
+	/* A stocked record's credit is all ordinary: to the stock, as returned. */
+	if (stocked && back) {
+		spill = rx_loan_stock_put(lb, back);
+		refund -= back;	/* rx_loan_stock_put() refunded it */
+	}
 	spin_lock_bh(&lb->lock);
-	if (cr->stocked) {
+	if (stocked) {
 		/* Not on the in-flight list: only its holder count goes. */
 		this_cpu_dec(lb->stock->records);
 		cr->stocked = false;
+		lb->avail += spill;
 	} else {
 		list_del(&cr->node);
 		lb->inflight_count--;
+		lb->reserve += reserve;
+		lb->avail += back - over - reserve;
 	}
-	lb->orphaned += cr->credit - cr->over;
+	lb->orphaned += keep - min(keep, cr->over - over);
+	atomic_long_add(kept, &rx_loan_region.orphaned);
 	cr->credit = 0;
+	cr->region = 0;
 	cr->reserve = 0;
 	cr->over = 0;
 	cr->linked = false;
 	cr->budget = NULL;
+	cr->consumer = NULL;
 	wake = rx_loan_kick_locked(lb, NULL, &granted);
 	spin_unlock_bh(&lb->lock);
+	rx_loan_region_put(refund);
 	rx_loan_wake(wake);
 	rx_loan_wake_granted(&granted);
 }
@@ -1030,23 +1630,26 @@ void rx_loan_unwait(struct rx_loan_waiter *w)
 EXPORT_SYMBOL_GPL(rx_loan_unwait);
 
 /*
- * Exact credit for @w->need pages now, from this CPU's stock or under the
- * lock: 0, recorded in @w, or -EAGAIN when credit is short or anyone
- * waits, for the caller to rx_loan_park() @w (or a copy of it).
+ * Exact credit for @w->need pages now, for consumer @c (NULL: no share),
+ * from this CPU's stock or under the lock: 0, recorded in @w, or -EAGAIN
+ * when credit, @c's share or the region is short or anyone waits, for the
+ * caller to rx_loan_park() @w (or a copy of it).
  */
-int rx_loan_grant(struct rx_loan_budget *lb, struct rx_loan_waiter *w)
+int rx_loan_grant(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
+		  struct rx_loan_waiter *w)
 {
 	struct rx_loan_waiter *wake = NULL, *undo_wake = NULL;
 	bool changed, tried = false;
 	LIST_HEAD(granted);
 	int ret;
 
+	w->consumer = c;
 	if (w->need <= RX_LOAN_STOCK_MAX && READ_ONCE(lb->budget) &&
 	    !READ_ONCE(lb->contended)) {
 		tried = true;
 		/* Counted first: see rx_loan_admit(). */
 		this_cpu_inc(lb->stock->read_inflight);
-		if (rx_loan_stock_take(lb, w->need)) {
+		if (rx_loan_stock_take_charged(lb, c, w->need, NULL)) {
 			/* This CPU's stock: no waiters, no FIFO to respect. */
 			w->credit = w->need;
 			w->reserve = 0;
@@ -1062,7 +1665,7 @@ int rx_loan_grant(struct rx_loan_budget *lb, struct rx_loan_waiter *w)
 		undo_wake = rx_loan_kick_locked(lb, NULL, &granted);
 	}
 	changed = rx_loan_budget_configure_locked(lb);
-	if (!list_empty(&lb->waiters))
+	if (rx_loan_head_locked(lb))
 		ret = -EAGAIN;
 	else
 		ret = rx_loan_grant_locked(lb, w);
@@ -1079,17 +1682,19 @@ int rx_loan_grant(struct rx_loan_budget *lb, struct rx_loan_waiter *w)
 EXPORT_SYMBOL_GPL(rx_loan_grant);
 
 /*
- * Park the exact request @w on @lb until it is granted: its pin and wake
- * run then.  It is linked under the same lock hold that re-checks credit,
- * so a return that raced the first attempt grants it at once.  @w may be
- * freed before this returns.
+ * Park the exact request @w of consumer @c on @lb until it is granted: its
+ * pin and wake run then.  It is linked under the same lock hold that
+ * re-checks credit, so a return that raced the first attempt grants it at
+ * once.  @w may be freed before this returns.
  */
-void rx_loan_park(struct rx_loan_budget *lb, struct rx_loan_waiter *w)
+void rx_loan_park(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
+		  struct rx_loan_waiter *w)
 {
 	struct rx_loan_waiter *wake;
 	LIST_HEAD(granted);
 
 	w->exact = true;
+	w->consumer = c;
 	spin_lock_bh(&lb->lock);
 	w->ticket = lb->next_ticket++;
 	list_add_tail(&w->node, &lb->waiters);
@@ -1101,16 +1706,23 @@ void rx_loan_park(struct rx_loan_budget *lb, struct rx_loan_waiter *w)
 }
 EXPORT_SYMBOL_GPL(rx_loan_park);
 
-/* Return an exact grant's credit (not its overrun) and pass it on. */
-void rx_loan_grant_return(struct rx_loan_budget *lb, long credit, long reserve)
+/*
+ * Return an exact grant's credit (not its overrun) and pass it on: to @c's
+ * share and, as it leaves the stock, to the region's total.
+ */
+void rx_loan_grant_return(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
+			  long credit, long reserve)
 {
 	struct rx_loan_waiter *wake;
 	LIST_HEAD(granted);
+	long refund = credit + reserve;
 
+	rx_loan_consumer_put(c, lb->read, credit + reserve);
 	this_cpu_inc(lb->stock->read_completed);
 	/* Credit from avail goes to this CPU's stock while nobody waits. */
 	if (!reserve && credit) {
 		credit = rx_loan_stock_put(lb, credit);
+		refund = 0;	/* rx_loan_stock_put() refunded it */
 		if (!credit) {
 			/* Uncounted only once the credit is back: see admit. */
 			this_cpu_dec(lb->stock->read_inflight);
@@ -1124,6 +1736,7 @@ void rx_loan_grant_return(struct rx_loan_budget *lb, long credit, long reserve)
 	rx_loan_budget_configure_locked(lb);
 	wake = rx_loan_kick_locked(lb, NULL, &granted);
 	spin_unlock_bh(&lb->lock);
+	rx_loan_region_put(refund);
 	rx_loan_wake(wake);
 	rx_loan_wake_granted(&granted);
 }
@@ -1135,13 +1748,17 @@ EXPORT_SYMBOL_GPL(rx_loan_grant_return);
  * transport's request), and passing credit on from there would recurse, so
  * the kick runs from @lb's kick_work, which the owner flushes.
  */
-void rx_loan_grant_drop(struct rx_loan_budget *lb, long credit, long reserve)
+void rx_loan_grant_drop(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
+			long credit, long reserve)
 {
+	rx_loan_consumer_put(c, lb->read, credit + reserve);
 	spin_lock_bh(&lb->lock);
 	lb->avail += credit;
 	lb->reserve += reserve;
 	this_cpu_dec(lb->stock->read_inflight);
 	spin_unlock_bh(&lb->lock);
+	/* No kick from the region here either: kick_work passes it on. */
+	atomic_long_sub(credit + reserve, &rx_loan_region.out);
 	this_cpu_inc(lb->stock->read_completed);
 	schedule_work(&lb->kick_work);
 }
@@ -1172,3 +1789,125 @@ void rx_loan_budget_request(struct rx_loan_budget *lb, unsigned long pages,
 	rx_loan_budget_reconfigure(lb);
 }
 EXPORT_SYMBOL_GPL(rx_loan_budget_request);
+
+/**
+ * rx_loan_budget_init - set up a budget the region's returns kick
+ * @lb: zeroed
+ * @read: the READ (exact) budget, sized to the full read pool
+ *
+ * Context: process context; may sleep.
+ * Return: 0 or -ENOMEM.
+ */
+int rx_loan_budget_init(struct rx_loan_budget *lb, bool read)
+{
+	lb->stock = alloc_percpu(struct rx_loan_stock);
+	if (!lb->stock)
+		return -ENOMEM;
+	lb->read = read;
+	spin_lock_init(&lb->lock);
+	lb->next_ticket = 1;
+	INIT_LIST_HEAD(&lb->inflight);
+	INIT_LIST_HEAD(&lb->waiters);
+	INIT_WORK(&lb->kick_work, rx_loan_kick_fn);
+	mutex_lock(&rx_loan_consumers_lock);
+	list_add_tail_rcu(&lb->region_node, &rx_loan_budgets);
+	mutex_unlock(&rx_loan_consumers_lock);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rx_loan_budget_init);
+
+/*
+ * Tear down @lb, nothing in flight: its stocks go back, and with them
+ * their charge to the region.
+ */
+void rx_loan_budget_destroy(struct rx_loan_budget *lb)
+{
+	if (!lb->stock)
+		return;
+	mutex_lock(&rx_loan_consumers_lock);
+	list_del_rcu(&lb->region_node);
+	mutex_unlock(&rx_loan_consumers_lock);
+	synchronize_rcu();
+	flush_work(&lb->kick_work);
+	spin_lock_bh(&lb->lock);
+	rx_loan_stock_drain_locked(lb);
+	spin_unlock_bh(&lb->lock);
+	free_percpu(lb->stock);
+	lb->stock = NULL;
+}
+EXPORT_SYMBOL_GPL(rx_loan_budget_destroy);
+
+/*
+ * Request @pages and @reserve of @ln's write budget (@off: turned off),
+ * and size its READ budget to what that leaves of the read pool.
+ */
+void rx_loan_net_write_request(struct rx_loan_net *ln, unsigned long pages,
+			       unsigned int reserve, bool off)
+{
+	rx_loan_budget_request(&ln->write, pages, reserve, off);
+	rx_loan_budget_request(&ln->read, off ? 0 : pages, 0, false);
+}
+EXPORT_SYMBOL_GPL(rx_loan_net_write_request);
+
+/* A namespace's budgets, or a stand-in's (KUnit). */
+int rx_loan_net_state_init(struct rx_loan_net *ln)
+{
+	int ret;
+
+	ret = rx_loan_budget_init(&ln->write, false);
+	if (ret)
+		return ret;
+	ret = rx_loan_budget_init(&ln->read, true);
+	if (ret) {
+		rx_loan_budget_destroy(&ln->write);
+		return ret;
+	}
+	rx_loan_net_write_request(ln, 0, 0, false);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rx_loan_net_state_init);
+
+void rx_loan_net_state_exit(struct rx_loan_net *ln)
+{
+	WARN_ON_ONCE(ln->nr_consumers);
+	rx_loan_budget_destroy(&ln->read);
+	rx_loan_budget_destroy(&ln->write);
+}
+EXPORT_SYMBOL_GPL(rx_loan_net_state_exit);
+
+static unsigned int rx_loan_net_id __read_mostly;
+
+struct rx_loan_net *rx_loan_net(const struct net *net)
+{
+	return net_generic(net, rx_loan_net_id);
+}
+EXPORT_SYMBOL_GPL(rx_loan_net);
+
+static int __net_init rx_loan_net_init(struct net *net)
+{
+	struct rx_loan_net *ln = rx_loan_net(net);
+	int ret = rx_loan_net_state_init(ln);
+
+	/* Until configured, the write budget is the region's write share. */
+	if (!ret)
+		WRITE_ONCE(ln->write.cfg_default, true);
+	return ret;
+}
+
+static void __net_exit rx_loan_net_exit(struct net *net)
+{
+	rx_loan_net_state_exit(rx_loan_net(net));
+}
+
+static struct pernet_operations rx_loan_net_ops = {
+	.init	= rx_loan_net_init,
+	.exit	= rx_loan_net_exit,
+	.id	= &rx_loan_net_id,
+	.size	= sizeof(struct rx_loan_net),
+};
+
+static int __init rx_loan_init(void)
+{
+	return register_pernet_subsys(&rx_loan_net_ops);
+}
+subsys_initcall(rx_loan_init);

@@ -404,6 +404,8 @@ static int nfsd_startup_net(struct net *net, const struct cred *cred)
 		ret = -EIO;
 		goto out_socks;
 	}
+	/* nfsd's server, alone, lends from the namespace's receive region. */
+	svc_tcp_rx_consumer_start(net, nn->nfsd_serv);
 
 	if (nfsd_needs_lockd(nn) && !test_bit(NFSD_NET_LOCKD_UP, &nn->flags)) {
 		ret = lockd_up(net, cred);
@@ -588,6 +590,8 @@ void nfsd_destroy_serv(struct net *net)
 	 * other initialization has been done except the rpcb information.
 	 */
 	svc_xprt_destroy_all(serv, net, true);
+	/* Its transports' credit is back: the consumer stops. */
+	svc_tcp_rx_consumer_stop(net);
 	nfsd_shutdown_net(net);
 	svc_destroy(&serv);
 }
