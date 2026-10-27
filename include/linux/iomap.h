@@ -802,4 +802,12 @@ static inline void iomap_bio_readahead(struct readahead_control *rac,
 }
 #endif /* CONFIG_BLOCK */
 
+#if IS_ENABLED(CONFIG_KUNIT)
+struct iomap_dio *iomap_dio_kunit_alloc(struct kiocb *iocb, bool is_write);
+void iomap_dio_kunit_set_error(struct iomap_dio *dio, int error);
+int iomap_dio_kunit_read_error(struct iomap_dio *dio);
+void iomap_dio_kunit_free(struct iomap_dio *dio);
+ssize_t iomap_dio_kunit_result(struct kiocb *iocb, ssize_t result);
+#endif
+
 #endif /* LINUX_IOMAP_H */

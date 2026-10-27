@@ -229,4 +229,17 @@ __be32		nfsd_permission(struct svc_cred *cred, struct svc_export *exp,
 
 void		nfsd_filp_close(struct file *fp);
 
+#if IS_ENABLED(CONFIG_KUNIT)
+struct nfsd_dio_kunit_hooks {
+	void (*before_reissue)(struct kiocb *kiocb,
+			       const struct iov_iter *saved_iter, void *data);
+	void *data;
+};
+
+int nfsd_direct_write_kunit(struct svc_rqst *rqstp, struct svc_fh *fhp,
+			    struct nfsd_file *nf, unsigned int nvecs,
+			    unsigned long *cnt, struct kiocb *kiocb, errseq_t since,
+			    const struct nfsd_dio_kunit_hooks *hooks);
+#endif
+
 #endif /* LINUX_NFSD_VFS_H */
