@@ -230,3 +230,15 @@ config NFS_V4_2_READ_PLUS
 	default y
 	help
 	 Choose Y here to enable use of the NFS v4.2 READ_PLUS operation.
+
+config NFS_LOCALIO_KUNIT_TEST
+	tristate "KUnit tests for the LOCALIO completion CPU choice" if !KUNIT_ALL_TESTS
+	depends on NFS_LOCALIO && KUNIT
+	default KUNIT_ALL_TESTS
+	help
+	  KUnit tests for the CPU that finishes an optimized LOCALIO
+	  completion: the next online workqueue and domain housekeeping
+	  CPU of the completing CPU's node, with the completing CPU only
+	  as the last choice.  These tests need no device or server.
+
+	  If unsure, say N.
