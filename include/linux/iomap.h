@@ -808,6 +808,8 @@ void iomap_dio_kunit_set_error(struct iomap_dio *dio, int error);
 int iomap_dio_kunit_read_error(struct iomap_dio *dio);
 void iomap_dio_kunit_free(struct iomap_dio *dio);
 ssize_t iomap_dio_kunit_result(struct kiocb *iocb, ssize_t result);
+bool iomap_dio_kunit_read_fits_one_request(const struct iomap_iter *iter,
+		bool is_write);
 #endif
 
 #endif /* LINUX_IOMAP_H */

@@ -23,6 +23,8 @@
  * Private flags for iomap_dio, must not overlap with the public ones in
  * iomap.h:
  */
+#define IOMAP_DIO_NOWAIT_CHECKED	(1U << 23)
+#define IOMAP_DIO_NOWAIT_BLOCKING	(1U << 24)
 #define IOMAP_DIO_WAIT_FOR_COMP	(1U << 25)
 #define IOMAP_DIO_NO_INVALIDATE	(1U << 26)
 #define IOMAP_DIO_COMP_WORK	(1U << 27)
@@ -163,6 +165,39 @@ static bool iomap_dio_prepared_dirty(struct iomap_dio_prepared *p)
 	return true;
 }
 
+/*
+ * The block layer never splits a REQ_NOWAIT bio: blk-mq ends one that needs a
+ * split with -EAGAIN, and a bio-based driver (dm, md) accounts a bio before
+ * splitting it into member requests, any of which can then fail it with
+ * -EAGAIN after the read was accounted.  Either way the read is reissued from
+ * io-wq.  Keep REQ_NOWAIT on a read only when the whole remaining read is one
+ * bio that fits one request: no longer than a request of its queue, not
+ * crossing its (stripe, RAID0 or device) chunk boundary and inside the current
+ * extent.  Writes are not affected.
+ */
+static bool iomap_dio_read_fits_one_request(const struct iomap_iter *iter,
+		bool is_write)
+{
+	struct block_device *bdev = iter->iomap.bdev;
+	struct request_queue *q;
+	unsigned int chunk, left;
+
+	if (is_write || !bdev)
+		return true;
+	if (iter->len > iomap_length(iter))
+		return false;
+	q = bdev_get_queue(bdev);
+	if (iter->len > queue_max_bytes(q))
+		return false;
+	/* chunk_sectors counts from the start of the disk, not the partition */
+	chunk = q->limits.chunk_sectors;
+	if (!chunk)
+		return true;
+	left = blk_boundary_sectors_left(get_start_sect(bdev) +
+			iomap_sector(&iter->iomap, iter->pos), chunk);
+	return iter->len <= ((u64)left << SECTOR_SHIFT);
+}
+
 static struct bio *iomap_dio_alloc_bio(const struct iomap_iter *iter,
 		struct iomap_dio *dio, unsigned short nr_vecs, blk_opf_t opf)
 {
@@ -170,7 +205,8 @@ static struct bio *iomap_dio_alloc_bio(const struct iomap_iter *iter,
 
 	if (dio->iocb->ki_flags & IOCB_NOWAIT) {
 		gfp = GFP_NOWAIT;
-		opf |= REQ_NOWAIT;
+		if (!(dio->flags & IOMAP_DIO_NOWAIT_BLOCKING))
+			opf |= REQ_NOWAIT;
 	}
 	if (dio->dops && dio->dops->bio_set)
 		return bio_alloc_bioset(iter->iomap.bdev, nr_vecs, opf,
@@ -372,6 +408,13 @@ ssize_t iomap_dio_kunit_result(struct kiocb *iocb, ssize_t result)
 	return iomap_dio_result(iocb, result);
 }
 EXPORT_SYMBOL_IF_KUNIT(iomap_dio_kunit_result);
+
+bool iomap_dio_kunit_read_fits_one_request(const struct iomap_iter *iter,
+		bool is_write)
+{
+	return iomap_dio_read_fits_one_request(iter, is_write);
+}
+EXPORT_SYMBOL_IF_KUNIT(iomap_dio_kunit_read_fits_one_request);
 #endif
 
 /*
@@ -667,6 +710,17 @@ static int iomap_dio_bio_iter(struct iomap_iter *iter, struct iomap_dio *dio)
 		if ((dio->flags & IOMAP_DIO_BOUNCE) || IS_ENCRYPTED(inode) ||
 		    (iomap->flags & IOMAP_F_INTEGRITY))
 			return -EAGAIN;
+		/*
+		 * Decide once, at the first bio and before any is submitted,
+		 * from the whole remaining read: a read that would be split or
+		 * fanned out is issued without REQ_NOWAIT, as on stock.
+		 */
+		if (!(dio->flags & IOMAP_DIO_NOWAIT_CHECKED)) {
+			dio->flags |= IOMAP_DIO_NOWAIT_CHECKED;
+			if (!iomap_dio_read_fits_one_request(iter,
+					dio->flags & IOMAP_DIO_WRITE))
+				dio->flags |= IOMAP_DIO_NOWAIT_BLOCKING;
+		}
 		if ((dio->flags & IOMAP_DIO_WRITE) &&
 		    (iomap->type != IOMAP_MAPPED ||
 		     (iomap->flags & (IOMAP_F_NEW | IOMAP_F_SHARED)) ||
