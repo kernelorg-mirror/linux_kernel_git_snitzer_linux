@@ -115,5 +115,5 @@
 
 - **A look; the descriptor-entry prefetch is not built.**
 - **`rodata=noalias`:** nfsd 5.23 ± 0.83 µs a WRITE cheaper (−4.7%), with the rings, rate, region and latency the same. The rings' 69 page-table walks a WRITE are gone, but they were not the rings' cost.
-- **Next (Mike):** whether tardis2 keeps `rodata=noalias`. It costs the linear map's read-only aliases of the kernel's text and read-only data, so it is a security trade-off for Hammerspace's product too.
+- **`rodata=noalias` kept (Mike, 27 October):** `settled.sh` holds the kernel's command line at it (`f20aad763e78`), and a boot without it audits BAD. It costs the linear map's read-only aliases of the kernel's text and read-only data, a security trade-off still to be weighed for Hammerspace's product.
 - **What would settle the nfsd figure:** the look on nfsd's CPUs on a `rodata=full` boot, the A this A/B lacks.
