@@ -28,6 +28,9 @@
 #include <linux/preempt.h>
 #include <linux/rcupdate.h>
 #include <linux/task_work.h>
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
+#include <linux/percpu.h>
 
 #include <linux/nfs.h>
 #include <linux/nfs_fs.h>
@@ -65,6 +68,9 @@ struct nfs_local_kiocb {
 	struct nfs_dio_seg_hold	holds[NFS_DIO_MAX_SEGS];
 	size_t			written[NFS_DIO_MAX_SEGS];
 	unsigned int		nheld;
+	/* For nfs_local_count_io(): bytes moved, and why any were copied */
+	bool			moved;
+	u8			copy_causes;
 	/* End mostly DIO-specific members */
 };
 
@@ -191,6 +197,232 @@ int nfs_local_direct_write_flush(struct kiocb *iocb)
 		return FLUSH_STABLE;
 	/* DSYNC is selected at dispatch; unstable requests commit on completion. */
 	return 0;
+}
+
+/*
+ * Data copies LOCALIO O_DIRECT I/O still makes, counted by the bytes each
+ * segment actually transferred, as it completes: a direct segment's bytes
+ * are direct_bytes, unless the backing mapping bounces direct I/O
+ * (mapping_stable_writes(), the stable_writes cause); a buffered one's are
+ * copied, under the cause nfs_local_seg_copy_cause() gives.  A restarted
+ * I/O (short transfer, stateid or READ_PLUS retry) adds the segments of its
+ * own re-split; a NOWAIT I/O that is refused, or that moves nothing,
+ * counts nothing.  ios and copied_ios are counted once per I/O (one
+ * nfs_pgio_header), at its final completion, if it moved any byte:
+ * copied_ios is the number of I/Os with any copied byte, and
+ * <cause>_ios the number with any byte copied for that cause, so one I/O
+ * can count under more than one cause.  bytes is what was transferred,
+ * not what was asked for: after a stateid or READ_PLUS retry it can exceed
+ * the requested size, since both attempts' transfers are counted.
+ *
+ * Known blind spot: a backing file system that falls back to buffered I/O
+ * inside ->write_iter() (-ENOTBLK, e.g. XFS for a reflinked inode or a
+ * failed page cache invalidation) copies bytes counted here as direct.
+ *
+ * The stable_writes classification matches XFS, the product's backing file
+ * system, which bounces direct I/O exactly when the mapping has stable
+ * writes.  Other file systems differ: btrfs bounces checksummed direct
+ * writes whatever the mapping says (counted here as direct), and ext4 does
+ * not bounce on a stable-writes device (counted here as copied).
+ *
+ * Scope: the LOCALIO client only.  NFSD's own nfs_dio_split() callers are
+ * not counted.
+ *
+ * The counters are per-CPU u64s, so counting costs a few local adds, with
+ * no lock, shared atomic or allocation.  /sys/kernel/debug/nfs_localio_copies
+ * sums them unsynchronised: a 32-bit kernel can read a torn value, and the
+ * reset done by a write to the file is not an exact cut.
+ */
+struct nfs_local_copy_stats {
+	u64	ios;
+	u64	bytes;
+	u64	direct_bytes;
+	u64	copied_ios;
+	u64	copy_ios[NFS_LOCAL_COPY_NR];
+	u64	copy_bytes[NFS_LOCAL_COPY_NR];
+};
+
+enum { NFS_LOCAL_COPY_WRITE, NFS_LOCAL_COPY_READ, NFS_LOCAL_COPY_DIRS };
+
+static DEFINE_PER_CPU(struct nfs_local_copy_stats,
+		      nfs_local_copy_stats[NFS_LOCAL_COPY_DIRS]);
+
+static const char * const nfs_local_copy_names[NFS_LOCAL_COPY_NR] = {
+	[NFS_LOCAL_COPY_MERGE_TAIL]	= "merge_tail",
+	[NFS_LOCAL_COPY_SMALL]		= "small",
+	[NFS_LOCAL_COPY_PRP_GAP]	= "prp_gap",
+	[NFS_LOCAL_COPY_MEM_MISALIGNED]	= "mem_misaligned",
+	[NFS_LOCAL_COPY_NO_MIDDLE]	= "no_middle",
+	[NFS_LOCAL_COPY_NO_ALIGNMENT]	= "no_alignment",
+	[NFS_LOCAL_COPY_STABLE_WRITES]	= "stable_writes",
+};
+
+static_assert(NFS_LOCAL_COPY_NR <= BITS_PER_BYTE);
+
+static struct dentry *nfs_local_copies_dentry;
+
+static inline int nfs_local_copy_dir(const struct nfs_pgio_header *hdr)
+{
+	return hdr->rw_mode & FMODE_READ ? NFS_LOCAL_COPY_READ :
+					   NFS_LOCAL_COPY_WRITE;
+}
+
+/**
+ * nfs_local_count_seg - account the bytes one O_DIRECT segment transferred
+ * @iocb: the I/O the segment belongs to
+ * @seg: the segment
+ * @status: what its ->read_iter() or ->write_iter() returned or completed
+ *	with: the bytes transferred, or a negative errno
+ */
+static void nfs_local_count_seg(struct nfs_local_kiocb *iocb,
+				const struct nfs_dio_seg *seg, long status)
+{
+	int dir = nfs_local_copy_dir(iocb->hdr);
+	enum nfs_local_copy_cause cause;
+	bool stable;
+
+	if (status <= 0 || !test_bit(NFS_IOHDR_ODIRECT, &iocb->hdr->flags))
+		return;
+	stable = (seg->flags & IOCB_DIRECT) &&
+		 mapping_stable_writes(iocb->kiocb.ki_filp->f_mapping);
+	cause = nfs_local_seg_copy_cause(&iocb->split, seg, stable);
+
+	iocb->moved = true;
+	this_cpu_add(nfs_local_copy_stats[dir].bytes, status);
+	if (cause == NFS_LOCAL_COPY_NONE) {
+		this_cpu_add(nfs_local_copy_stats[dir].direct_bytes, status);
+		return;
+	}
+	iocb->copy_causes |= BIT(cause);
+	this_cpu_add(nfs_local_copy_stats[dir].copy_bytes[cause], status);
+}
+
+/**
+ * nfs_local_count_io - account one O_DIRECT I/O at its final completion
+ * @iocb: the I/O
+ *
+ * Counts it once, if any of its segments, restarts included, moved data.
+ */
+static void nfs_local_count_io(const struct nfs_local_kiocb *iocb)
+{
+	int dir = nfs_local_copy_dir(iocb->hdr);
+	unsigned long causes = iocb->copy_causes;
+	unsigned int c;
+
+	if (!iocb->moved)
+		return;
+	this_cpu_inc(nfs_local_copy_stats[dir].ios);
+	if (!causes)
+		return;
+	this_cpu_inc(nfs_local_copy_stats[dir].copied_ios);
+	for_each_set_bit(c, &causes, NFS_LOCAL_COPY_NR)
+		this_cpu_inc(nfs_local_copy_stats[dir].copy_ios[c]);
+}
+
+static void nfs_local_copies_sum(int dir, struct nfs_local_copy_stats *sum)
+{
+	unsigned int cpu, c;
+
+	memset(sum, 0, sizeof(*sum));
+	for_each_possible_cpu(cpu) {
+		const struct nfs_local_copy_stats *s =
+			per_cpu_ptr(&nfs_local_copy_stats[dir], cpu);
+
+		sum->ios += READ_ONCE(s->ios);
+		sum->bytes += READ_ONCE(s->bytes);
+		sum->direct_bytes += READ_ONCE(s->direct_bytes);
+		sum->copied_ios += READ_ONCE(s->copied_ios);
+		for (c = 0; c < NFS_LOCAL_COPY_NR; c++) {
+			sum->copy_ios[c] += READ_ONCE(s->copy_ios[c]);
+			sum->copy_bytes[c] += READ_ONCE(s->copy_bytes[c]);
+		}
+	}
+}
+
+static int nfs_local_copies_show(struct seq_file *m, void *v)
+{
+	static const char * const prefix[NFS_LOCAL_COPY_DIRS] = {
+		[NFS_LOCAL_COPY_WRITE]	= "",
+		[NFS_LOCAL_COPY_READ]	= "read_",
+	};
+	struct nfs_local_copy_stats sum;
+	u64 copy_bytes;
+	int dir, c;
+
+	for (dir = 0; dir < NFS_LOCAL_COPY_DIRS; dir++) {
+		const char *p = prefix[dir];
+
+		nfs_local_copies_sum(dir, &sum);
+		copy_bytes = 0;
+		for (c = NFS_LOCAL_COPY_NONE + 1; c < NFS_LOCAL_COPY_NR; c++)
+			copy_bytes += sum.copy_bytes[c];
+		seq_printf(m, "%sios: %llu\n", p, sum.ios);
+		seq_printf(m, "%sbytes: %llu\n", p, sum.bytes);
+		seq_printf(m, "%sdirect_bytes: %llu\n", p, sum.direct_bytes);
+		seq_printf(m, "%scopied_ios: %llu\n", p, sum.copied_ios);
+		seq_printf(m, "%scopied_bytes: %llu\n", p, copy_bytes);
+		for (c = NFS_LOCAL_COPY_NONE + 1; c < NFS_LOCAL_COPY_NR; c++) {
+			seq_printf(m, "%s%s_ios: %llu\n", p,
+				   nfs_local_copy_names[c], sum.copy_ios[c]);
+			seq_printf(m, "%s%s_bytes: %llu\n", p,
+				   nfs_local_copy_names[c], sum.copy_bytes[c]);
+		}
+	}
+	return 0;
+}
+
+static int nfs_local_copies_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, nfs_local_copies_show, NULL);
+}
+
+/*
+ * Any write resets the counters.  An I/O counted concurrently may be lost
+ * or kept in part, or count its I/O without its bytes; the reset marks the
+ * start of a measurement, not an exact cut.
+ */
+static ssize_t nfs_local_copies_write(struct file *file,
+				      const char __user *buf, size_t count,
+				      loff_t *ppos)
+{
+	unsigned int cpu;
+	int dir;
+
+	for_each_possible_cpu(cpu)
+		for (dir = 0; dir < NFS_LOCAL_COPY_DIRS; dir++)
+			memset(per_cpu_ptr(&nfs_local_copy_stats[dir], cpu), 0,
+			       sizeof(struct nfs_local_copy_stats));
+	return count;
+}
+
+static const struct file_operations nfs_local_copies_fops = {
+	.owner		= THIS_MODULE,
+	.open		= nfs_local_copies_open,
+	.read		= seq_read,
+	.write		= nfs_local_copies_write,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+/**
+ * nfs_local_copies_init - create /sys/kernel/debug/nfs_localio_copies
+ *
+ * Without debugfs the counters still run but cannot be read.
+ */
+void __init nfs_local_copies_init(void)
+{
+	nfs_local_copies_dentry = debugfs_create_file("nfs_localio_copies",
+						      0600, NULL, NULL,
+						      &nfs_local_copies_fops);
+}
+
+/**
+ * nfs_local_copies_exit - remove /sys/kernel/debug/nfs_localio_copies
+ */
+void nfs_local_copies_exit(void)
+{
+	debugfs_remove(nfs_local_copies_dentry);
+	nfs_local_copies_dentry = NULL;
 }
 
 /*
@@ -664,6 +896,19 @@ nfs_local_iters_init(struct nfs_local_kiocb *iocb, int rw)
 	unsigned int base;
 	size_t len;
 
+	if (test_bit(NFS_IOHDR_FRAGMENTED, &hdr->flags)) {
+		/*
+		 * Kernel bvec fragments: the page array has one entry per
+		 * request, and the requests carry the geometry.
+		 */
+		len = hdr->args.count;
+		v = nfs_local_bvec_from_reqs(iocb->bvec,
+					     hdr->page_array.npages,
+					     &hdr->pages,
+					     nfs_local_frag_skip(hdr), &len);
+		goto split;
+	}
+
 	v = 0;
 	total = hdr->args.count;
 	base = hdr->args.pgbase;
@@ -678,7 +923,7 @@ nfs_local_iters_init(struct nfs_local_kiocb *iocb, int rw)
 		base = 0;
 	}
 	len = hdr->args.count - total;
-
+split:
 	/*
 	 * A direct I/O is split the way nfsd_vfs_write() splits one, by the
 	 * policy the server applies to this file: the aligned middle goes
@@ -834,6 +1079,7 @@ static void nfs_local_pgio_release(struct nfs_local_kiocb *iocb)
 	task->tk_ops->rpc_call_done(task, hdr);
 
 	if (task->tk_action == NULL) {
+		nfs_local_count_io(iocb);
 		nfs_local_iocb_release(iocb);
 		task->tk_ops->rpc_release(hdr);
 		return;
@@ -968,6 +1214,9 @@ static void nfs_local_read_aio_complete(struct kiocb *kiocb, long ret)
 	struct nfs_local_kiocb *iocb =
 		container_of(kiocb, struct nfs_local_kiocb, kiocb);
 
+	/* Only the last segment, a direct one, completes here. */
+	nfs_local_count_seg(iocb, &iocb->split.segs[iocb->end_iter_index], ret);
+
 	/* The submitter token also protects read_iter() from early completion. */
 	if (unlikely(!nfs_local_pgio_done(iocb, ret)))
 		return;
@@ -991,8 +1240,10 @@ static void nfs_local_call_read(struct work_struct *work)
 		iocb->aio_complete = nfs_local_read_iocb_done;
 		scoped_with_creds(filp->f_cred)
 			status = filp->f_op->read_iter(&iocb->kiocb, &iocb->split.segs[0].iter);
-		if (status != -EIOCBQUEUED)
+		if (status != -EIOCBQUEUED) {
+			nfs_local_count_seg(iocb, &iocb->split.segs[0], status);
 			nfs_local_pgio_done(iocb, status);
+		}
 		memalloc_nofs_restore(nofs_flags);
 		return;
 	}
@@ -1020,6 +1271,7 @@ static void nfs_local_call_read(struct work_struct *work)
 			queued = true;
 			break;
 		}
+		nfs_local_count_seg(iocb, seg, status);
 		/* The submitter token prevents synchronous terminal release. */
 		BUG_ON(nfs_local_pgio_done(iocb, status));
 		if (status < 0 || (size_t)status < expected) {
@@ -1250,6 +1502,9 @@ static void nfs_local_write_aio_complete(struct kiocb *kiocb, long ret)
 	struct nfs_local_kiocb *iocb =
 		container_of(kiocb, struct nfs_local_kiocb, kiocb);
 
+	/* Only the last segment, a direct one, completes here. */
+	nfs_local_count_seg(iocb, &iocb->split.segs[iocb->end_iter_index], ret);
+
 	/* The submitter token also protects write_iter() and write_hold. */
 	if (unlikely(!nfs_local_pgio_done(iocb, ret)))
 		return;
@@ -1326,9 +1581,11 @@ static void nfs_local_call_write(struct work_struct *work)
 				status = filp->f_op->write_iter(&iocb->kiocb,
 							     &iocb->split.segs[0].iter);
 		}
-		if (status != -EIOCBQUEUED &&
-		    nfs_local_pgio_done(iocb, status))
-			nfs_local_pgio_aio_complete(iocb);
+		if (status != -EIOCBQUEUED) {
+			nfs_local_count_seg(iocb, &iocb->split.segs[0], status);
+			if (nfs_local_pgio_done(iocb, status))
+				nfs_local_pgio_aio_complete(iocb);
+		}
 		return;
 	}
 
@@ -1408,6 +1665,7 @@ static void nfs_local_call_write(struct work_struct *work)
 			queued = true;
 			break;
 		}
+		nfs_local_count_seg(iocb, seg, status);
 		if (status >= 0 &&
 		    !WARN_ON_ONCE(iocb->nheld >= ARRAY_SIZE(iocb->holds))) {
 			iocb->holds[iocb->nheld] = hold;
