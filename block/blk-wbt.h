@@ -2,6 +2,26 @@
 #ifndef WB_THROTTLE_H
 #define WB_THROTTLE_H
 
+#include <linux/blk_types.h>
+
+static inline bool wbt_should_throttle(struct bio *bio)
+{
+	switch (bio_op(bio)) {
+	case REQ_OP_WRITE:
+		/*
+		 * Don't throttle WRITE_ODIRECT
+		 */
+		if ((bio->bi_opf & (REQ_SYNC | REQ_IDLE)) ==
+		    (REQ_SYNC | REQ_IDLE))
+			return false;
+		fallthrough;
+	case REQ_OP_DISCARD:
+		return true;
+	default:
+		return false;
+	}
+}
+
 #ifdef CONFIG_BLK_WBT
 
 void wbt_init_enable_default(struct gendisk *disk);

@@ -32,5 +32,6 @@
 #define EIOCBQUEUED	529	/* iocb queued, will get completion event */
 #define ERECALLCONFLICT	530	/* conflict with recalled state */
 #define ENOGRACE	531	/* NFS file lock reclaim refused */
+#define EDIOALIGN	532	/* Internal unsupported direct-I/O buffer geometry */
 
 #endif

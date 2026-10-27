@@ -119,10 +119,14 @@ static unsigned int bio_allowed_max_sectors(const struct queue_limits *lim)
 struct bio *bio_submit_split_bioset(struct bio *bio, unsigned int split_sectors,
 				    struct bio_set *bs)
 {
-	struct bio *split = bio_split(bio, split_sectors, GFP_NOIO, bs);
+	gfp_t gfp = bio->bi_opf & REQ_NOWAIT ? GFP_NOWAIT : GFP_NOIO;
+	struct bio *split = bio_split(bio, split_sectors, gfp, bs);
 
 	if (IS_ERR(split)) {
-		bio_endio_status(bio, errno_to_blk_status(PTR_ERR(split)));
+		if ((bio->bi_opf & REQ_NOWAIT) && PTR_ERR(split) == -ENOMEM)
+			bio_wouldblock_error(bio);
+		else
+			bio_endio_status(bio, errno_to_blk_status(PTR_ERR(split)));
 		return NULL;
 	}
 
@@ -319,6 +323,14 @@ static inline unsigned int bvec_seg_gap(struct bio_vec *bvprv,
 	return bv->bv_offset | (bvprv->bv_offset + bvprv->bv_len);
 }
 
+static int bio_geometry_error(struct bio *bio)
+{
+	if ((bio_op(bio) != REQ_OP_READ && bio_op(bio) != REQ_OP_WRITE) ||
+	    (bio->bi_opf & (REQ_ATOMIC | REQ_NOWAIT)) || bio_crypt_ctx(bio))
+		return -EINVAL;
+	return -EDIOALIGN;
+}
+
 /**
  * bio_split_io_at - check if and where to split a bio
  * @bio:  [in] bio to be split
@@ -349,7 +361,7 @@ int bio_split_io_at(struct bio *bio, const struct queue_limits *lim,
 	bio_for_each_bvec(bv, bio, iter) {
 		if (bv.bv_offset & start_align_mask ||
 		    bv.bv_len & len_align_mask)
-			return -EINVAL;
+			return bio_geometry_error(bio);
 
 		/*
 		 * If the queue doesn't support SG gaps and adding this
@@ -405,7 +417,7 @@ split:
 	 */
 	bytes = ALIGN_DOWN(bytes, bio_split_alignment(bio, lim));
 	if (!bytes)
-		return -EINVAL;
+		return bio_geometry_error(bio);
 
 	/*
 	 * Bio splitting may cause subtle trouble such as hang when doing sync
@@ -422,8 +434,9 @@ struct bio *bio_split_rw(struct bio *bio, const struct queue_limits *lim,
 		unsigned *nr_segs)
 {
 	return bio_submit_split(bio,
-		bio_split_rw_at(bio, lim, nr_segs,
-			get_max_io_size(bio, lim) << SECTOR_SHIFT));
+		bio_split_io_at(bio, lim, nr_segs,
+				get_max_io_size(bio, lim) << SECTOR_SHIFT,
+				lim->dma_alignment));
 }
 
 /*

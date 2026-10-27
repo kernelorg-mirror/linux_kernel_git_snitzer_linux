@@ -47,7 +47,7 @@ static inline int blkdev_iov_iter_get_pages(struct bio *bio,
 		struct iov_iter *iter, struct block_device *bdev)
 {
 	return bio_iov_iter_get_pages(bio, iter, bdev_dma_alignment(bdev),
-			bdev_logical_block_size(bdev) - 1);
+			bdev_logical_block_size(bdev) - 1, NULL, 0);
 }
 
 #define DIO_INLINE_BIO_VECS 4
@@ -834,7 +834,7 @@ static ssize_t blkdev_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	 * changing i_blkbits/folio order and punching out the pagecache.
 	 */
 	inode_lock_shared(bd_inode);
-	ret = filemap_read(iocb, to, ret);
+	ret = filemap_read(iocb, to, ret, NULL);
 	inode_unlock_shared(bd_inode);
 
 reexpand:

@@ -859,7 +859,7 @@ static struct iomap_dio *btrfs_dio_write(struct kiocb *iocb, struct iov_iter *it
 	}
 
 	return __iomap_dio_rw(iocb, iter, &btrfs_dio_iomap_ops, &btrfs_dio_ops,
-			      dio_flags, &data, done_before);
+			      dio_flags, &data, done_before, NULL, NULL);
 }
 
 static ssize_t check_direct_IO(struct btrfs_fs_info *fs_info,

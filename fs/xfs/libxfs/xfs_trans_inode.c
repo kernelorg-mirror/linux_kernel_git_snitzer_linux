@@ -31,9 +31,16 @@ xfs_trans_ijoin(
 {
 	struct xfs_inode_log_item *iip;
 
-	xfs_assert_ilocked(ip, XFS_ILOCK_EXCL);
-	if (ip->i_itemp == NULL)
-		xfs_inode_item_init(ip, ip->i_mount);
+	if (lock_flags == XFS_ILOCK_SHARED) {
+		ASSERT(ip->i_itemp != NULL);
+		xfs_assert_ilocked(ip, XFS_ILOCK_SHARED);
+		lockdep_assert_held(&ip->i_itemp->ili_trans_lock);
+		ASSERT(mutex_is_locked(&ip->i_itemp->ili_trans_lock));
+	} else {
+		xfs_assert_ilocked(ip, XFS_ILOCK_EXCL);
+		if (ip->i_itemp == NULL)
+			xfs_inode_item_init(ip, ip->i_mount);
+	}
 	iip = ip->i_itemp;
 
 	ASSERT(iip->ili_lock_flags == 0);
@@ -92,7 +99,15 @@ xfs_trans_log_inode(
 	struct inode		*inode = VFS_I(ip);
 
 	ASSERT(iip);
-	xfs_assert_ilocked(ip, XFS_ILOCK_EXCL);
+	if (iip->ili_lock_flags == XFS_ILOCK_SHARED) {
+		xfs_assert_ilocked(ip, XFS_ILOCK_SHARED);
+		lockdep_assert_held(&iip->ili_trans_lock);
+		ASSERT(mutex_is_locked(&iip->ili_trans_lock));
+		ASSERT(flags & XFS_ILOG_TIMESTAMP);
+		ASSERT(!(flags & ~(XFS_ILOG_TIMESTAMP | XFS_ILOG_IVERSION)));
+	} else {
+		xfs_assert_ilocked(ip, XFS_ILOCK_EXCL);
+	}
 	ASSERT(!xfs_iflags_test(ip, XFS_ISTALE));
 
 	tp->t_flags |= XFS_TRANS_DIRTY;

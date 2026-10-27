@@ -2857,6 +2857,9 @@ static int filemap_readahead(struct kiocb *iocb, struct file *file,
 
 	if (iocb->ki_flags & IOCB_NOIO)
 		return -EAGAIN;
+	/* Keep the resident marked folio usable without starting readahead. */
+	if (iocb->ki_flags & IOCB_NOWAIT)
+		return 0;
 	if (iocb->ki_flags & IOCB_DONTCACHE)
 		ractl.dropbehind = 1;
 	page_cache_async_ra(&ractl, folio, last_index - folio->index);
@@ -2871,7 +2874,6 @@ static int filemap_get_pages(struct kiocb *iocb, size_t count,
 	pgoff_t index = iocb->ki_pos >> PAGE_SHIFT;
 	pgoff_t last_index;
 	struct folio *folio;
-	unsigned int flags;
 	int err = 0;
 
 	/* "last_index" is the index of the folio beyond the end of the read */
@@ -2885,15 +2887,11 @@ retry:
 	if (!folio_batch_count(fbatch)) {
 		DEFINE_READAHEAD(ractl, filp, &filp->f_ra, mapping, index);
 
-		if (iocb->ki_flags & IOCB_NOIO)
+		if (iocb->ki_flags & (IOCB_NOIO | IOCB_NOWAIT))
 			return -EAGAIN;
-		if (iocb->ki_flags & IOCB_NOWAIT)
-			flags = memalloc_noio_save();
 		if (iocb->ki_flags & IOCB_DONTCACHE)
 			ractl.dropbehind = 1;
 		page_cache_sync_ra(&ractl, last_index - index);
-		if (iocb->ki_flags & IOCB_NOWAIT)
-			memalloc_noio_restore(flags);
 		filemap_get_read_batch(mapping, index, last_index - 1, fbatch);
 	}
 	if (!folio_batch_count(fbatch)) {
@@ -2954,8 +2952,9 @@ static void filemap_end_dropbehind_read(struct folio *folio)
 /**
  * filemap_read - Read data from the page cache.
  * @iocb: The iocb to read.
- * @iter: Destination for the data.
+ * @iter: Destination, or logical destination metadata when @prepared is set.
  * @already_read: Number of bytes already read by the caller.
+ * @prepared: Optional destination storage, never retained after this call.
  *
  * Copies data from the page cache.  If the data is not currently present,
  * uses the readahead and read_folio address_space operations to fetch it.
@@ -2965,7 +2964,7 @@ static void filemap_end_dropbehind_read(struct folio *folio)
  * a negative error number.
  */
 ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
-		ssize_t already_read)
+		ssize_t already_read, struct iov_iter *prepared)
 {
 	struct file *filp = iocb->ki_filp;
 	struct file_ra_state *ra = &filp->f_ra;
@@ -2974,6 +2973,8 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 	struct folio_batch fbatch;
 	int i, error = 0;
 	bool writably_mapped;
+	bool initial_nowait = iocb->ki_flags & IOCB_NOWAIT;
+	size_t original_count = iov_iter_count(iter);
 	loff_t isize, end_offset;
 	loff_t last_pos = ra->prev_pos;
 
@@ -2984,12 +2985,15 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 	if (unlikely(!iov_iter_count(iter)))
 		return 0;
 
+	/* Admit timestamp work before any NOWAIT data progress. */
+	if (initial_nowait && !(filp->f_flags & O_NOATIME) &&
+	    atime_needs_update(&filp->f_path, inode))
+		return already_read ? already_read : -EAGAIN;
+
 	iov_iter_truncate(iter, inode->i_sb->s_maxbytes - iocb->ki_pos);
 	folio_batch_init(&fbatch);
 
 	do {
-		cond_resched();
-
 		/*
 		 * If we've already successfully copied some data, then we
 		 * can no longer safely return -EIOCBQUEUED. Hence mark
@@ -2997,6 +3001,8 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 		 */
 		if ((iocb->ki_flags & IOCB_WAITQ) && already_read)
 			iocb->ki_flags |= IOCB_NOWAIT;
+		if (!(iocb->ki_flags & IOCB_NOWAIT))
+			cond_resched();
 
 		if (unlikely(iocb->ki_pos >= i_size_read(inode)))
 			break;
@@ -3039,6 +3045,8 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 			size_t bytes = min_t(loff_t, end_offset - iocb->ki_pos,
 					     fsize - offset);
 			size_t copied;
+			bool nofault = (iocb->ki_flags & IOCB_NOWAIT) &&
+				user_backed_iter(prepared ? prepared : iter);
 
 			if (end_offset < folio_pos(folio))
 				break;
@@ -3052,14 +3060,21 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 			if (writably_mapped)
 				flush_dcache_folio(folio);
 
-			copied = copy_folio_to_iter(folio, offset, bytes, iter);
+			if (nofault)
+				pagefault_disable();
+			copied = copy_folio_to_iter(folio, offset, bytes,
+					prepared ? prepared : iter);
+			if (nofault)
+				pagefault_enable();
+			if (prepared)
+				iov_iter_advance(iter, copied);
 
 			already_read += copied;
 			iocb->ki_pos += copied;
 			last_pos = iocb->ki_pos;
 
 			if (copied < bytes) {
-				error = -EFAULT;
+				error = nofault ? -EAGAIN : -EFAULT;
 				break;
 			}
 		}
@@ -3067,13 +3082,18 @@ put_folios:
 		for (i = 0; i < folio_batch_count(&fbatch); i++) {
 			struct folio *folio = fbatch.folios[i];
 
-			filemap_end_dropbehind_read(folio);
+			if (!(iocb->ki_flags & IOCB_NOWAIT))
+				filemap_end_dropbehind_read(folio);
 			folio_put(folio);
 		}
 		folio_batch_init(&fbatch);
 	} while (iov_iter_count(iter) && iocb->ki_pos < isize && !error);
 
-	file_accessed(filp);
+	/* WAITQ promotion does not cancel an ordinary call's atime update. */
+	if (!initial_nowait)
+		file_accessed(filp);
+	if (initial_nowait && !already_read && error == -EAGAIN)
+		iov_iter_reexpand(iter, original_count);
 	ra->prev_pos = last_pos;
 	return already_read ? already_read : error;
 }
@@ -3104,6 +3124,7 @@ int filemap_invalidate_pages(struct address_space *mapping,
 		/* we could block if there are any pages in the range */
 		if (filemap_range_has_page(mapping, pos, end))
 			return -EAGAIN;
+		return 0;
 	} else {
 		ret = filemap_write_and_wait_range(mapping, pos, end);
 		if (ret)
@@ -3193,7 +3214,7 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 			return retval;
 	}
 
-	return filemap_read(iocb, iter, retval);
+	return filemap_read(iocb, iter, retval, NULL);
 }
 EXPORT_SYMBOL(generic_file_read_iter);
 

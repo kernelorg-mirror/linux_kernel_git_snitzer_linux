@@ -2381,6 +2381,7 @@ xfs_iflush(
 	int			error;
 
 	xfs_assert_ilocked(ip, XFS_ILOCK_EXCL | XFS_ILOCK_SHARED);
+	lockdep_assert_held(&iip->ili_trans_lock);
 	ASSERT(xfs_iflags_test(ip, XFS_IFLUSHING));
 	ASSERT(ip->i_df.if_format != XFS_DINODE_FMT_BTREE ||
 	       ip->i_df.if_nextents > XFS_IFORK_MAXEXT(ip, XFS_DATA_FORK));
@@ -2590,13 +2591,18 @@ xfs_iflush_cluster(
 		}
 
 		/*
-		 * ILOCK will pin the inode against reclaim and prevent
-		 * concurrent transactions modifying the inode while we are
-		 * flushing the inode. If we get the lock, set the flushing
-		 * state before we drop the i_flags_lock.
+		 * ILOCK pins the inode and excludes structural transactions.
+		 * Try the item gate to exclude shared timestamp transactions
+		 * without waiting while holding the cluster buffer lock.
+		 * Set flushing before dropping i_flags_lock.
 		 */
 		if (!xfs_ilock_nowait(ip, XFS_ILOCK_SHARED)) {
 			spin_unlock(&ip->i_flags_lock);
+			continue;
+		}
+		if (!mutex_trylock(&iip->ili_trans_lock)) {
+			spin_unlock(&ip->i_flags_lock);
+			xfs_iunlock(ip, XFS_ILOCK_SHARED);
 			continue;
 		}
 		__xfs_iflags_set(ip, XFS_IFLUSHING);
@@ -2612,6 +2618,7 @@ xfs_iflush_cluster(
 		if (xlog_is_shutdown(mp->m_log)) {
 			xfs_iunpin_wait(ip);
 			xfs_iflush_abort(ip);
+			mutex_unlock(&iip->ili_trans_lock);
 			xfs_iunlock(ip, XFS_ILOCK_SHARED);
 			error = -EIO;
 			continue;
@@ -2620,6 +2627,7 @@ xfs_iflush_cluster(
 		/* don't block waiting on a log force to unpin dirty inodes */
 		if (xfs_ipincount(ip)) {
 			xfs_iflags_clear(ip, XFS_IFLUSHING);
+			mutex_unlock(&iip->ili_trans_lock);
 			xfs_iunlock(ip, XFS_ILOCK_SHARED);
 			continue;
 		}
@@ -2628,6 +2636,7 @@ xfs_iflush_cluster(
 			error = xfs_iflush(ip, bp);
 		else
 			xfs_iflags_clear(ip, XFS_IFLUSHING);
+		mutex_unlock(&iip->ili_trans_lock);
 		xfs_iunlock(ip, XFS_ILOCK_SHARED);
 		if (error)
 			break;
@@ -2675,7 +2684,7 @@ int
 xfs_log_force_inode(
 	struct xfs_inode	*ip)
 {
-	struct xfs_inode_log_item *iip = ip->i_itemp;
+	struct xfs_inode_log_item *iip = smp_load_acquire(&ip->i_itemp);
 	xfs_csn_t		seq = 0;
 
 	if (!iip)

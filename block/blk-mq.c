@@ -1001,7 +1001,7 @@ bool blk_update_request(struct request *req, blk_status_t error,
 		unsigned bio_bytes = min(bio->bi_iter.bi_size, nr_bytes);
 
 		if (unlikely(error))
-			bio->bi_status = error;
+			bio_set_error(bio, error);
 
 		if (bio_bytes == bio->bi_iter.bi_size) {
 			req->bio = bio->bi_next;
@@ -1011,7 +1011,7 @@ bool blk_update_request(struct request *req, blk_status_t error,
 			 * as the BIO fragments may end up not being written
 			 * sequentially.
 			 */
-			bio->bi_status = BLK_STS_IOERR;
+			bio_set_error(bio, BLK_STS_IOERR);
 		}
 
 		/* Completion has already been traced */
@@ -3151,6 +3151,11 @@ void blk_mq_submit_bio(struct bio *bio)
 
 	if ((bio->bi_opf & REQ_POLLED) && !blk_mq_can_poll(q)) {
 		bio_endio_status(bio, BLK_STS_NOTSUPP);
+		goto queue_exit;
+	}
+
+	if ((bio->bi_opf & REQ_NOWAIT) && !rq_qos_can_submit_nowait(q, bio)) {
+		bio_wouldblock_error(bio);
 		goto queue_exit;
 	}
 

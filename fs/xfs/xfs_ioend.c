@@ -71,7 +71,10 @@ xfs_end_ioend_write(
 	 * longer dirty. If we don't remove delalloc blocks here, they become
 	 * stale and can corrupt free space accounting on unmount.
 	 */
-	error = blk_status_to_errno(ioend->io_bio.bi_status);
+	if (ioend->io_flags & IOMAP_IOEND_DIRECT)
+		error = blk_status_to_errno_raw(ioend->io_bio.bi_status);
+	else
+		error = blk_status_to_errno(ioend->io_bio.bi_status);
 	if (unlikely(error)) {
 		/*
 		 * Zoned writes update the in-core open zone accounting before

@@ -1648,6 +1648,7 @@ enum {
 	NFS_IOHDR_RESEND_MDS,
 	NFS_IOHDR_UNSTABLE_WRITES,
 	NFS_IOHDR_ODIRECT,
+	NFS_IOHDR_NOWAIT,
 };
 
 struct nfs_io_completion;

@@ -130,7 +130,7 @@ static ssize_t erofs_ishare_file_read_iter(struct kiocb *iocb,
 	if (!iov_iter_count(to))
 		return 0;
 	kiocb_clone(&dedup_iocb, iocb, realfile);
-	nread = filemap_read(&dedup_iocb, to, 0);
+	nread = filemap_read(&dedup_iocb, to, 0, NULL);
 	iocb->ki_pos = dedup_iocb.ki_pos;
 	return nread;
 }

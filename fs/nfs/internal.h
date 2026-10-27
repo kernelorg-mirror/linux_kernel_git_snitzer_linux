@@ -308,7 +308,7 @@ void nfs_set_pgio_error(struct nfs_pgio_header *hdr, int error, loff_t pos);
 int nfs_iocounter_wait(struct nfs_lock_context *l_ctx);
 
 extern const struct nfs_pageio_ops nfs_pgio_rw_ops;
-struct nfs_pgio_header *nfs_pgio_header_alloc(const struct nfs_rw_ops *);
+struct nfs_pgio_header *nfs_pgio_header_alloc(struct nfs_pageio_descriptor *);
 void nfs_pgio_header_free(struct nfs_pgio_header *);
 int nfs_generic_pgio(struct nfs_pageio_descriptor *, struct nfs_pgio_header *);
 int nfs_initiate_pgio(struct rpc_clnt *clnt, struct nfs_pgio_header *hdr,
@@ -472,6 +472,7 @@ struct nfs_local_dio {
 
 extern void nfs_local_probe_async(struct nfs_client *);
 extern void nfs_local_probe_async_work(struct work_struct *);
+void nfs_local_open_prepare(struct file *file);
 extern struct nfsd_file *nfs_local_open_fh(struct nfs_client *,
 					   const struct cred *,
 					   struct nfs_fh *,
@@ -491,6 +492,7 @@ bool nfs_local_dsync_enabled(void);
 #else /* CONFIG_NFS_LOCALIO */
 static inline void nfs_local_probe(struct nfs_client *clp) {}
 static inline void nfs_local_probe_async(struct nfs_client *clp) {}
+static inline void nfs_local_open_prepare(struct file *file) {}
 static inline struct nfsd_file *
 nfs_local_open_fh(struct nfs_client *clp, const struct cred *cred,
 		  struct nfs_fh *fh, struct nfs_file_localio *nfl,
@@ -737,6 +739,7 @@ void nfs_init_cinfo(struct nfs_commit_info *cinfo,
 		    struct inode *inode,
 		    struct nfs_direct_req *dreq);
 int nfs_key_timeout_notify(struct file *filp, struct inode *inode);
+int nfs_key_timeout_notify_nowait(struct file *filp);
 bool nfs_ctx_key_to_expire(struct nfs_open_context *ctx, struct inode *inode);
 void nfs_pageio_stop_mirroring(struct nfs_pageio_descriptor *pgio);
 
@@ -839,6 +842,7 @@ extern int nfs_sillyrename(struct inode *dir, struct dentry *dentry);
 void nfs_init_cinfo_from_dreq(struct nfs_commit_info *cinfo,
 			      struct nfs_direct_req *dreq);
 extern ssize_t nfs_dreq_bytes_left(struct nfs_direct_req *dreq, loff_t offset);
+void nfs_direct_set_error(struct nfs_direct_req *dreq, int error, loff_t pos);
 
 /* nfs4proc.c */
 extern struct nfs_client *nfs4_init_client(struct nfs_client *clp,
@@ -1097,6 +1101,7 @@ struct nfs_direct_req {
 	loff_t			io_start;	/* Start offset for I/O */
 	ssize_t			count,		/* bytes actually processed */
 				max_count,	/* max expected count */
+				max_good_end,	/* NOWAIT write success before prefix clamp */
 				error;		/* any reported error */
 	struct completion	completion;	/* wait for i/o completion */
 

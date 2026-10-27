@@ -30,6 +30,7 @@
 #include "xfs_file.h"
 #include "xfs_bmap.h"
 #include "xfs_zone_alloc.h"
+#include "xfs_inode_item.h"
 
 #include <linux/posix_acl.h>
 #include <linux/security.h>
@@ -1172,6 +1173,7 @@ xfs_vn_update_time(
 	struct xfs_inode	*ip = XFS_I(inode);
 	struct xfs_mount	*mp = ip->i_mount;
 	int			log_flags = XFS_ILOG_TIMESTAMP;
+	unsigned int		lock_flags = XFS_ILOCK_EXCL;
 	struct xfs_trans	*tp;
 	int			error;
 
@@ -1199,12 +1201,25 @@ xfs_vn_update_time(
 	if (error)
 		return error;
 
-	xfs_ilock(ip, XFS_ILOCK_EXCL);
+	if (S_ISREG(inode->i_mode) && log_flags == XFS_ILOG_TIMESTAMP) {
+		xfs_ilock(ip, XFS_ILOCK_SHARED);
+		if (ip->i_itemp &&
+		    (!xfs_has_bigtime(mp) || xfs_inode_has_bigtime(ip)) &&
+		    !(ip->i_diflags & XFS_DIFLAG_RTINHERIT)) {
+			mutex_lock(&ip->i_itemp->ili_trans_lock);
+			lock_flags = XFS_ILOCK_SHARED;
+		} else {
+			xfs_iunlock(ip, XFS_ILOCK_SHARED);
+			xfs_ilock(ip, XFS_ILOCK_EXCL);
+		}
+	} else {
+		xfs_ilock(ip, XFS_ILOCK_EXCL);
+	}
 	if (type == FS_UPD_ATIME)
 		inode_set_atime_to_ts(inode, current_time(inode));
 	else
 		inode_set_mtime_to_ts(inode, inode_set_ctime_current(inode));
-	xfs_trans_ijoin(tp, ip, XFS_ILOCK_EXCL);
+	xfs_trans_ijoin(tp, ip, lock_flags);
 	xfs_trans_log_inode(tp, ip, log_flags);
 	return xfs_trans_commit(tp);
 }

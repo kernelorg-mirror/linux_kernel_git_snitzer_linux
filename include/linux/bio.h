@@ -409,16 +409,30 @@ static inline bool bio_complete_in_task(struct bio *bio)
 
 extern void bio_endio(struct bio *);
 
+/* Preserve a real error over geometry; retain last-error policy otherwise. */
+static inline void bio_set_error(struct bio *bio, blk_status_t status)
+{
+	blk_status_t old;
+
+	if (!status)
+		return;
+	old = READ_ONCE(bio->bi_status);
+	do {
+		if (old == status || (status == BLK_STS_DIOALIGN && old))
+			return;
+	} while (!try_cmpxchg(&bio->bi_status, &old, status));
+}
+
 /**
  * bio_endio_status - end I/O on a bio with a specific status
  * @bio:	bio
  * @status:	status to set
  *
- * Set @bio->bi_status to @status and call bio_endio().
+ * Preserve a real error over geometry and call bio_endio().
  **/
 static inline void bio_endio_status(struct bio *bio, blk_status_t status)
 {
-	bio->bi_status = status;
+	bio_set_error(bio, status);
 	bio_endio(bio);
 }
 
@@ -516,7 +530,8 @@ int bdev_rw_virt(struct block_device *bdev, sector_t sector, void *data,
 		size_t len, enum req_op op);
 
 int bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter,
-		unsigned mem_align_mask, unsigned len_align_mask);
+		unsigned int mem_align_mask, unsigned int len_align_mask,
+		struct iov_iter *prepared, iov_iter_extraction_t flags);
 
 bool bio_iov_iter_set(struct bio *bio, const struct iov_iter *iter);
 void __bio_release_pages(struct bio *bio, bool mark_dirty);
@@ -524,7 +539,7 @@ extern void bio_set_pages_dirty(struct bio *bio);
 extern void bio_check_pages_dirty(struct bio *bio);
 
 int bio_iov_iter_bounce(struct bio *bio, struct iov_iter *iter, size_t maxlen,
-		size_t minsize);
+		size_t minsize, struct iov_iter *prepared);
 void bio_iov_iter_unbounce(struct bio *bio, bool is_error, bool mark_dirty);
 
 extern void bio_copy_data(struct bio *dst, struct bio *src);

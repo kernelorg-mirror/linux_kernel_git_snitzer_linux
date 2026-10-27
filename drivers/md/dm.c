@@ -993,7 +993,7 @@ static void __dm_io_complete(struct dm_io *io, bool first_stage)
 	} else {
 		/* done with normal IO or empty flush */
 		if (io_error)
-			bio->bi_status = io_error;
+			bio_set_error(bio, io_error);
 		bio_endio(bio);
 	}
 }
@@ -1061,7 +1061,8 @@ static void dm_io_set_error(struct dm_io *io, blk_status_t error)
 	/* Push-back supersedes any I/O errors */
 	spin_lock_irqsave(&io->lock, flags);
 	if (!(io->status == BLK_STS_DM_REQUEUE &&
-	      __noflush_suspending(io->md))) {
+	      __noflush_suspending(io->md)) &&
+	    !(error == BLK_STS_DIOALIGN && io->status)) {
 		io->status = error;
 	}
 	spin_unlock_irqrestore(&io->lock, flags);

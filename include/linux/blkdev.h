@@ -1043,6 +1043,7 @@ extern void blk_sync_queue(struct request_queue *q);
 extern const char *blk_op_str(enum req_op op);
 
 int blk_status_to_errno(blk_status_t status);
+int blk_status_to_errno_raw(blk_status_t status);
 blk_status_t errno_to_blk_status(int errno);
 
 /* only poll the hardware once, don't continue until a completion was found */
@@ -1800,7 +1801,9 @@ static inline int bio_split_rw_at(struct bio *bio,
 		const struct queue_limits *lim,
 		unsigned *segs, unsigned max_bytes)
 {
-	return bio_split_io_at(bio, lim, segs, max_bytes, lim->dma_alignment);
+	int ret = bio_split_io_at(bio, lim, segs, max_bytes, lim->dma_alignment);
+
+	return ret == -EDIOALIGN ? -EINVAL : ret;
 }
 
 /*

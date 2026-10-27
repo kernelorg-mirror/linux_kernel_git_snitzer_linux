@@ -402,6 +402,11 @@ EXPORT_SYMBOL_GPL(nfs_release_local_fh);
 void nfs_close_local_fh(struct nfs_file_localio *nfl)
 {
 	nfs_uuid_t *nfs_uuid;
+	struct file *nowait_file;
+
+	nowait_file = xchg(&nfl->nowait_file, NULL);
+	if (nowait_file)
+		fput(nowait_file);
 
 	rcu_read_lock();
 	nfs_uuid = rcu_dereference(nfl->nfs_uuid);

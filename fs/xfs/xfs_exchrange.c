@@ -22,6 +22,7 @@
 #include "xfs_icache.h"
 #include "xfs_log.h"
 #include "xfs_rtbitmap.h"
+#include "xfs_inode_item.h"
 #include <linux/fsnotify.h>
 
 /* Lock (and optionally join) two inodes for a file range exchange. */
@@ -879,6 +880,7 @@ xfs_ioc_start_commit(
 	struct xfs_commit_range_fresh	__user *user_f;
 	struct inode			*inode2 = file_inode(file);
 	struct xfs_inode		*ip2 = XFS_I(inode2);
+	struct xfs_inode_log_item	*iip;
 	const unsigned int		lockflags = XFS_IOLOCK_SHARED |
 						    XFS_MMAPLOCK_SHARED |
 						    XFS_ILOCK_SHARED;
@@ -891,6 +893,9 @@ xfs_ioc_start_commit(
 	memcpy(&kern_f->fsid, ip2->i_mount->m_fixedfsid, sizeof(xfs_fsid_t));
 
 	xfs_ilock(ip2, lockflags);
+	iip = ip2->i_itemp;
+	if (iip)
+		mutex_lock(&iip->ili_trans_lock);
 	/* Force writing of a distinct ctime if any writes happen. */
 	fill_mg_cmtime(&kstat, STATX_CTIME | STATX_MTIME, inode2);
 	kern_f->file2_ctime		= kstat.ctime.tv_sec;
@@ -900,6 +905,8 @@ xfs_ioc_start_commit(
 	kern_f->file2_ino		= inode2->i_ino;
 	kern_f->file2_gen		= inode2->i_generation;
 	kern_f->magic			= XCR_FRESH_MAGIC;
+	if (iip)
+		mutex_unlock(&iip->ili_trans_lock);
 	xfs_iunlock(ip2, lockflags);
 
 	user_f = (struct xfs_commit_range_fresh __user *)&argp->file2_freshness;

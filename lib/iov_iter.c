@@ -1773,12 +1773,17 @@ static ssize_t iov_iter_extract_user_pages(struct iov_iter *i,
 	maxpages = want_pages_array(pages, maxsize, offset, maxpages);
 	if (!maxpages)
 		return -ENOMEM;
-	res = pin_user_pages_fast(addr, maxpages, gup_flags, *pages);
+	if (extraction_flags & ITER_EXTRACT_FAST_ONLY)
+		res = pin_user_pages_fast_only(addr, maxpages, gup_flags, *pages);
+	else
+		res = pin_user_pages_fast(addr, maxpages, gup_flags, *pages);
 	if (unlikely(res <= 0)) {
 		if (will_alloc) {
 			kvfree(*pages);
 			*pages = NULL;
 		}
+		if (!res && (extraction_flags & ITER_EXTRACT_FAST_ONLY))
+			return -EAGAIN;
 		return res;
 	}
 
@@ -1840,6 +1845,9 @@ ssize_t iov_iter_extract_pages(struct iov_iter *i,
 	maxsize = min_t(size_t, min_t(size_t, maxsize, i->count), MAX_RW_COUNT);
 	if (!maxsize)
 		return 0;
+
+	if ((extraction_flags & ITER_EXTRACT_FAST_ONLY) && !*pages)
+		return -ENOMEM;
 
 	if (likely(user_backed_iter(i)))
 		return iov_iter_extract_user_pages(i, pages, maxsize,
@@ -1908,6 +1916,7 @@ static unsigned int get_contig_folio_len(struct page **pages,
  * @mem_align_mask:	reject with -EINVAL if the source address or
  *		length is not aligned to this mask
  * @extraction_flags: flags to qualify request
+ * @prepared: optional pinned BVEC storage for the original USER metadata
  *
  * Like iov_iter_extract_pages(), but returns physically contiguous ranges
  * contained in a single folio as a single bvec instead of multiple entries.
@@ -1919,14 +1928,17 @@ static unsigned int get_contig_folio_len(struct page **pages,
 ssize_t iov_iter_extract_bvecs(struct iov_iter *iter, struct bio_vec *bv,
 		size_t max_size, unsigned short *nr_vecs,
 		unsigned short max_vecs, unsigned mem_align_mask,
-		iov_iter_extraction_t extraction_flags)
+		iov_iter_extraction_t extraction_flags, struct iov_iter *prepared)
 {
+	struct iov_iter *source = prepared ? prepared : iter;
 	unsigned short entries_left = max_vecs - *nr_vecs;
 	unsigned short nr_pages, i = 0;
 	size_t left, offset, len;
 	struct page **pages;
 	ssize_t size;
 
+	if (prepared)
+		iov_iter_advance(iter, 0);
 	/*
 	 * DMA engines typically have both memory address and length alignment
 	 * requirements, so check these against the alignment mask.  For UBUF,
@@ -1954,7 +1966,9 @@ ssize_t iov_iter_extract_bvecs(struct iov_iter *iter, struct bio_vec *bv,
 	pages = (struct page **)(bv + *nr_vecs) +
 		entries_left * (PAGE_PTRS_PER_BVEC - 1);
 
-	size = iov_iter_extract_pages(iter, &pages, max_size, entries_left,
+	if (prepared)
+		max_size = min3(max_size, iter_iov_len(iter), iov_iter_count(iter));
+	size = iov_iter_extract_pages(source, &pages, max_size, entries_left,
 			extraction_flags, &offset);
 	if (unlikely(size <= 0))
 		return size ? size : -EFAULT;
@@ -1963,6 +1977,9 @@ ssize_t iov_iter_extract_bvecs(struct iov_iter *iter, struct bio_vec *bv,
 	for (left = size; left > 0; left -= len) {
 		unsigned int nr_to_add;
 
+		if (prepared && !(extraction_flags & ITER_ALLOW_P2PDMA) &&
+		    is_pci_p2pdma_page(pages[i]))
+			break;
 		if (*nr_vecs > 0 &&
 		    !zone_device_pages_have_same_pgmap(bv[*nr_vecs - 1].bv_page,
 				pages[i]))
@@ -1975,11 +1992,17 @@ ssize_t iov_iter_extract_bvecs(struct iov_iter *iter, struct bio_vec *bv,
 		offset = 0;
 	}
 
-	iov_iter_revert(iter, left);
-	if (iov_iter_extract_will_pin(iter)) {
+	iov_iter_revert(source, left);
+	if (prepared)
+		iov_iter_advance(iter, size - left);
+	if (iov_iter_extract_will_pin(source)) {
 		while (i < nr_pages)
 			unpin_user_page(pages[i++]);
 	}
+	if (prepared && size == left &&
+	    !(extraction_flags & ITER_ALLOW_P2PDMA) &&
+	    is_pci_p2pdma_page(pages[0]))
+		return -EREMOTEIO;
 	return size - left;
 }
 EXPORT_SYMBOL_GPL(iov_iter_extract_bvecs);
