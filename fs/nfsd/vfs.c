@@ -1430,7 +1430,7 @@ static ssize_t nfsd_dio_write_async(struct file *file, struct kiocb *kiocb,
 static noinline_for_stack int
 nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		  struct nfsd_file *nf, unsigned int nvecs,
-		  unsigned long *cnt, struct kiocb *kiocb)
+		  unsigned long *cnt, struct kiocb *kiocb, errseq_t since)
 {
 	struct nfs_dio_seg_hold holds[NFS_DIO_MAX_SEGS];
 	size_t written[NFS_DIO_MAX_SEGS];
@@ -1456,8 +1456,13 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	*cnt = 0;
 	for (i = 0; i < nsegs; i++) {
 		struct nfs_dio_seg *seg = &split.segs[i];
+		struct iov_iter saved_iter = seg->iter;
 
 		kiocb->ki_flags = seg->flags & ~sync_flags;
+		if ((kiocb->ki_flags & IOCB_DIRECT) && is_sync_kiocb(kiocb) &&
+		    !(kiocb->ki_flags & (IOCB_APPEND | IOCB_ATOMIC | IOCB_NOWAIT)) &&
+		    !(file->f_flags & O_APPEND))
+			kiocb->ki_flags |= IOCB_DIO_GEOMETRY;
 		trace_nfsd_write_direct(rqstp, fhp, kiocb->ki_pos,
 					seg->iter.count, kiocb->ki_flags);
 		trace_nfsd_write_dontcache(rqstp, fhp, kiocb->ki_pos,
@@ -1482,6 +1487,44 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			host_err = nfsd_dio_write_async(file, kiocb, &seg->iter);
 		else
 			host_err = vfs_iocb_iter_write(file, kiocb, &seg->iter);
+		if (unlikely(host_err == -EDIOALIGN &&
+			     (kiocb->ki_flags & IOCB_DIO_GEOMETRY))) {
+			/*
+			 * The lower device rejected this segment's bvec
+			 * geometry: write it buffered instead.  A direct
+			 * segment claimed nothing, and its only edges inside
+			 * a page are the ends of the WRITE, so claiming them
+			 * now pairs it with the neighbouring WRITEs.  The
+			 * drained attempt may have written earlier split bios.
+			 */
+			if (WARN_ON_ONCE(kiocb->ki_pos != holds[nheld].first) ||
+			    !is_sync_kiocb(kiocb) ||
+			    !(kiocb->ki_flags & IOCB_DIRECT) ||
+			    (kiocb->ki_flags & (IOCB_APPEND | IOCB_ATOMIC | IOCB_NOWAIT)) ||
+			    (file->f_flags & O_APPEND)) {
+				host_err = -EINVAL;
+				break;
+			}
+			host_err = filemap_check_wb_err(file->f_mapping, since);
+			if (host_err)
+				break;
+			seg->iter = saved_iter;
+			seg->claim = split.dontcache;
+			kiocb->ki_flags &= ~(IOCB_DIRECT | IOCB_DONTCACHE |
+					     IOCB_DONTCACHE_DEFER | IOCB_DIO_GEOMETRY);
+			if (split.dontcache)
+				kiocb->ki_flags |= IOCB_DONTCACHE |
+						   IOCB_DONTCACHE_DEFER;
+			trace_nfsd_write_dontcache(rqstp, fhp, kiocb->ki_pos,
+						   expected, kiocb->ki_flags);
+			trace_nfsd_write_vector(rqstp, fhp, kiocb->ki_pos,
+						expected, kiocb->ki_flags);
+			nfs_dio_seg_hold(file, seg, kiocb->ki_pos, expected,
+					 &holds[nheld]);
+			host_err = vfs_iocb_iter_write(file, kiocb, &seg->iter);
+		}
+		if (host_err == -EDIOALIGN)
+			host_err = -EINVAL;
 		if (host_err < 0)
 			break;
 		written[nheld++] = host_err;
@@ -1578,7 +1621,7 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	switch (nfsd_io_cache_write) {
 	case NFSD_IO_DIRECT:
 		host_err = nfsd_direct_write(rqstp, fhp, nf, nvecs,
-					     cnt, &kiocb);
+					     cnt, &kiocb, since);
 		break;
 	case NFSD_IO_DONTCACHE:
 		if (file->f_op->fop_flags & FOP_DONTCACHE)
