@@ -18,6 +18,19 @@ config VALIDATE_FS_PARSER
 config FS_IOMAP
 	bool
 
+config IOMAP_DIO_NOWAIT_KUNIT_TEST
+	tristate "KUnit tests for REQ_NOWAIT on iomap direct-I/O bios" if !KUNIT_ALL_TESTS
+	depends on KUNIT && BLOCK && FS_IOMAP
+	default KUNIT_ALL_TESTS
+	help
+	  Test which IOCB_NOWAIT iomap direct reads keep REQ_NOWAIT: a
+	  read keeps it only when it is one bio that fits one request of
+	  its device or stacking member (queue limit, chunk boundary, one
+	  extent); other reads are issued blocking as on stock.  Writes
+	  are unchanged.
+
+	  If unsure, say N.
+
 # Stackable filesystems
 config FS_STACK
 	bool

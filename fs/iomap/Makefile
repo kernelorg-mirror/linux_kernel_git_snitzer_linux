@@ -17,3 +17,5 @@ iomap-$(CONFIG_BLOCK)		+= direct-io.o \
 				   seek.o \
 				   bio.o
 iomap-$(CONFIG_SWAP)		+= swapfile.o
+
+obj-$(CONFIG_IOMAP_DIO_NOWAIT_KUNIT_TEST) += dio_nowait_kunit.o
