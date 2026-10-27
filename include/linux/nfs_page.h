@@ -123,6 +123,7 @@ struct nfs_pageio_descriptor {
 	unsigned short		pg_maxretrans;
 	unsigned char		pg_moreio : 1;
 	bool			pg_nowait;
+	bool			pg_nowait_rpc;	/* NOWAIT routed to RPC, in a kworker */
 	bool			pg_bvec_frags;	/* may join kernel bvec fragments */
 };
 

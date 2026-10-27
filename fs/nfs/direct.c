@@ -1232,6 +1232,116 @@ static const struct nfs_pgio_completion_ops nfs_direct_write_completion_ops = {
 
 
 /*
+ * Issue, from nfsiod_nowait_workqueue, the NOWAIT direct write over RPC
+ * whose requests nfs_direct_write_nowait_queue() built.  This is the pageio
+ * of nfs_direct_write_schedule_iovec() for a NOWAIT write: one request, sent
+ * only by nfs_pageio_complete(), so an add failure leaves nothing issued
+ * and the whole write completes with that error.  pg_nowait_rpc keeps the
+ * submitter's route (RPC, not re-decided) and lets the header and page
+ * array allocations sleep: this is a kworker.
+ *
+ * The invalidation below may wait on a folio that an RPC's release, an
+ * nfsiod work item, unlocks or ends writeback on.  That is why this runs on
+ * its own WQ_MEM_RECLAIM workqueue and never on nfsiod: with nfsiod down to
+ * its rescuer, this item must not stand in front of that release.
+ */
+static void nfs_direct_write_nowait_issue(struct work_struct *work)
+{
+	struct nfs_direct_req *dreq = container_of(work, struct nfs_direct_req,
+						   nowait_work);
+	struct inode *inode = dreq->inode;
+	struct nfs_pageio_descriptor desc;
+	pgoff_t first = dreq->io_start >> PAGE_SHIFT;
+	pgoff_t last = (dreq->io_start + dreq->max_count - 1) >> PAGE_SHIFT;
+
+	trace_nfs_direct_write_schedule_iovec(dreq);
+	nfs_pageio_init_write(&desc, inode,
+			      nfs_local_direct_write_flush(dreq->iocb), false,
+			      &nfs_direct_write_completion_ops);
+	desc.pg_nowait = true;
+	desc.pg_nowait_rpc = true;
+	desc.pg_dreq = dreq;
+	while (!list_empty(&dreq->nowait_reqs)) {
+		struct nfs_page *req = nfs_list_entry(dreq->nowait_reqs.next);
+		int error;
+
+		nfs_list_remove_request(req);
+		nfs_lock_request(req);
+		if (nfs_pageio_add_request(&desc, req))
+			continue;
+		error = desc.pg_error;
+		nfs_unlock_and_release_request(req);
+		nfs_release_request_list(&dreq->nowait_reqs);
+		WARN_ON_ONCE(!nfs_pageio_discard(&desc, error));
+		nfs_direct_set_error(dreq, error, dreq->io_start);
+		break;
+	}
+	nfs_pageio_complete(&desc);
+
+	/* As nfs_direct_write_schedule_iovec(): still inside i_dio_count. */
+	if (inode->i_mapping->nrpages)
+		invalidate_inode_pages2_range(inode->i_mapping, first, last);
+
+	/* Not the submitter: no i_rwsem held and no iov_iter to outlive. */
+	if (put_dreq(dreq))
+		nfs_direct_write_complete(dreq);
+}
+
+/*
+ * A NOWAIT direct write the submitter routed to RPC is one request (see
+ * nfs_direct_write_nowait_refused()).  Do here, on the submitter, what needs
+ * its mm: pin every user page with fast-only GUP and create the write's
+ * nfs_page requests, which own the pins and need nothing of @iter or its
+ * iovec array afterwards.  If that fails, release them all and return the
+ * error (-EAGAIN for want of a page or memory) having issued nothing, as
+ * nfs_direct_write_schedule_iovec() does.  Otherwise queue the request
+ * build and the RPC issue to nfsiod_nowait_workqueue, so that a batch is not
+ * built and sent serially on the submitter, and return the count for the
+ * caller's -EIOCBQUEUED.  The i_dio_count and dreq I/O references taken
+ * here pass to nfs_direct_write_nowait_issue().
+ */
+static ssize_t nfs_direct_write_nowait_queue(struct nfs_direct_req *dreq,
+					     struct iov_iter *iter, loff_t pos,
+					     bool dio_ref_held)
+{
+	struct inode *inode = dreq->inode;
+	/* desc.pg_bsize of the issue: NOWAIT is NFSv3 only, so never pNFS */
+	unsigned int bsize = NFS_SERVER(inode)->wsize;
+	size_t wsize = max_t(size_t, bsize, PAGE_SIZE);
+	size_t count = iov_iter_count(iter);
+	ssize_t result;
+
+	INIT_LIST_HEAD(&dreq->nowait_reqs);
+	/* A lockless nfs_start_io_direct() already took our i_dio_count ref */
+	if (!dio_ref_held)
+		inode_dio_begin(inode);
+	while (iov_iter_count(iter)) {
+		result = nfs_direct_extract_pages(dreq, iter, wsize, &pos,
+						  &dreq->nowait_reqs, bsize);
+		if (result <= 0) {
+			nfs_release_request_list(&dreq->nowait_reqs);
+			inode_dio_end(inode);
+			nfs_direct_req_release(dreq);
+			return result == -ENOMEM || !result ? -EAGAIN : result;
+		}
+	}
+	nfs_account_write_io(inode, count);
+	get_dreq(dreq);
+	INIT_WORK(&dreq->nowait_work, nfs_direct_write_nowait_issue);
+	queue_work(nfsiod_nowait_workqueue, &dreq->nowait_work);
+	return count;
+}
+
+/* Whether a direct write to @server may go to LOCALIO. */
+static bool nfs_direct_write_may_go_local(struct nfs_open_context *ctx,
+					  struct nfs_server *server)
+{
+	return nfs_server_is_local(server->nfs_client) ||
+	       (IS_ENABLED(CONFIG_NFS_LOCALIO) &&
+		rcu_access_pointer(ctx->nfl.nfs_uuid));
+}
+
+/*
  * NB: Return the value of the first error return code.  Subsequent
  *     errors after the first one are ignored.
  */
@@ -1262,6 +1372,11 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 	bool local = !nowait && IS_ENABLED(CONFIG_NFS_LOCALIO) &&
 		     localio_direct_request_batching &&
 		     nfs_server_is_local(NFS_SERVER(inode)->nfs_client);
+
+	/* Routed at admission (nfs_direct_write_nowait_refused()) */
+	if (dreq->nowait_rpc)
+		return nfs_direct_write_nowait_queue(dreq, iter, pos,
+						     dio_ref_held);
 
 	trace_nfs_direct_write_schedule_iovec(dreq);
 
@@ -1442,11 +1557,14 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
  * nfs_direct_nowait_multi_request()), so refuse one that needs more than one
  * request.  For a write that would go to LOCALIO, also refuse one whose ends
  * LOCALIO would refuse: not aligned to the backing file's direct I/O offset
- * alignment, or inside a page (see nfs_dio_write_shares_page()).
+ * alignment, or inside a page (see nfs_dio_write_shares_page()).  Route the
+ * write here, once: set *@rpc when it goes over RPC, which the issue then
+ * follows without deciding again.
  */
 static bool nfs_direct_write_nowait_refused(struct kiocb *iocb,
 					    struct iov_iter *iter,
-					    struct inode *inode, size_t count)
+					    struct inode *inode, size_t count,
+					    bool *rpc)
 {
 	struct nfs_open_context *ctx = nfs_file_open_context(iocb->ki_filp);
 	struct nfs_server *server = NFS_SERVER(inode);
@@ -1454,9 +1572,8 @@ static bool nfs_direct_write_nowait_refused(struct kiocb *iocb,
 
 	if (nfs_direct_nowait_multi_request(iter, count, server->wsize))
 		return true;
-	if (!nfs_server_is_local(server->nfs_client) &&
-	    !(IS_ENABLED(CONFIG_NFS_LOCALIO) &&
-	      rcu_access_pointer(ctx->nfl.nfs_uuid)))
+	*rpc = !nfs_direct_write_may_go_local(ctx, server);
+	if (*rpc)
 		return false;
 	if (nfs_dio_write_shares_page(iocb->ki_pos, count))
 		return true;
@@ -1478,6 +1595,7 @@ ssize_t nfs_file_direct_write(struct kiocb *iocb, struct iov_iter *iter,
 	struct iov_iter nowait_iter;
 	loff_t pos;
 	bool nowait = iocb->ki_flags & IOCB_NOWAIT;
+	bool nowait_rpc = false;
 
 	if (nowait) {
 		if (is_sync_kiocb(iocb) || swap || NFS_PROTO(inode)->version != 3 ||
@@ -1498,7 +1616,8 @@ ssize_t nfs_file_direct_write(struct kiocb *iocb, struct iov_iter *iter,
 	if (result <= 0)
 		return result;
 	count = result;
-	if (nowait && nfs_direct_write_nowait_refused(iocb, iter, inode, count))
+	if (nowait && nfs_direct_write_nowait_refused(iocb, iter, inode, count,
+						      &nowait_rpc))
 		return -EAGAIN;
 	nfs_add_stats(mapping->host, NFSIOS_DIRECTWRITTENBYTES, count);
 
@@ -1516,6 +1635,7 @@ ssize_t nfs_file_direct_write(struct kiocb *iocb, struct iov_iter *iter,
 	dreq->io_start = pos;
 	if (nowait)
 		dreq->max_good_end = 0;
+	dreq->nowait_rpc = nowait_rpc;
 	dreq->ctx = get_nfs_open_context(nfs_file_open_context(iocb->ki_filp));
 	l_ctx = nfs_get_lock_context_gfp(dreq->ctx,
 			nowait ? GFP_NOWAIT | __GFP_ACCOUNT : GFP_KERNEL_ACCOUNT);
