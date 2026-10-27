@@ -233,7 +233,9 @@ RODATA=noalias
 # rx_buf_size below a page (FLAMEGRAPH round 34, kept, Mike, 27 October):
 # the ring cuts its buffers from whole pages it counts once, not through
 # page_pool_alloc_frag() and its drain atomic.  There is no parameter for
-# it: xeu DC23D10E104D370F14FB06E and later do it.
+# it: xeu DC23D10E104D370F14FB06E and later do it.  The refill's lean loop
+# (FLAMEGRAPH round 35, kept, Mike, 27 October; kmod-xsight 2.0.1-12) has
+# none either: xeu 63631721F8B149913C0DC19 and later.
 declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=Y [rx_prefetch]=Y)
 XP=/sys/module/xeu/parameters/rx_prefetch
 declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)

@@ -118,6 +118,7 @@ The kept loop's disassembly ([refill-kept.dis](refill-kept.dis)), a kept piece, 
 
 ## Decision
 
-- **To be decided by Mike:** the rings 2.7k cycles a WRITE cheaper (−1.9%) with nfsd and the rate the same, against a region peak about 40 pages higher in five pairs of six. Kept, it would lose its parameter and be staged in kernel-rpmtree as release 12, as round 34 was.
+- **Kept (Mike, 27 October):** the rings 2.7k cycles a WRITE cheaper (−1.9%) with nfsd and the rate the same, with the region's peak about 40 pages higher in five pairs of six reported beside it.
+- **With no parameter:** the lean loop is `xeu_rx_refill()` itself ([the patch](xeu-refill-RX-rings-in-a-lean-loop.patch), on round 34's source; xeu `63631721F8B149913C0DC19`, which compiles the refill to the A/B's lean loop instruction for instruction). Staged in kernel-rpmtree as kmod-xsight 2.0.1-12 (`Patch12`), after round 34's 2.0.1-11.
+- **Installed** in `updates/xeu.ko`, round 34's beside it as `xeu.ko.r34-DC23D10E104D370F14FB06E`; xeu reloaded with no client connected, port a set up again and settled. The initrd was rebuilt with it and swapped in, round 34's beside it as `initrd.pre-xeu-r35-2026-10-27`.
 - **Not done:** the A/B's last three runs (two pairs and r73's counted pair stand in).
-- The A/B's xeu was loaded from the scratchpad for its runs only; `updates/xeu.ko` is still round 34's.
