@@ -170,6 +170,24 @@ extern	int nfs_page_set_headlock(struct nfs_page *req);
 extern void nfs_page_clear_headlock(struct nfs_page *req);
 extern bool nfs_async_iocounter_wait(struct rpc_task *, struct nfs_lock_context *);
 
+extern bool localio_direct_request_batching;
+
+#if IS_ENABLED(CONFIG_NFS_LOCALIO)
+struct nfs_pgio_header *
+nfs_pgio_header_from_pages(struct nfs_pageio_descriptor *desc,
+			   struct nfs_page *req, struct page **pages,
+			   unsigned int npages, unsigned int count);
+ssize_t nfs_local_direct_pgio(struct nfs_pageio_descriptor *desc,
+			      struct iov_iter *iter, loff_t pos);
+#else
+static inline ssize_t
+nfs_local_direct_pgio(struct nfs_pageio_descriptor *desc,
+		      struct iov_iter *iter, loff_t pos)
+{
+	return 0;
+}
+#endif
+
 /**
  * nfs_page_to_folio - Retrieve a struct folio for the request
  * @req: pointer to a struct nfs_page
