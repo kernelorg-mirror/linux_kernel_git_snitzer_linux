@@ -1,0 +1,4 @@
+L55-B1 untraced: write 7.98 GB/s, 7613 IOPS; completion ms: p50 0.444, p90 0.514, p99 0.602, p99.9 0.700, mean 0.446, max 0.873
+L55-A1 untraced: write 7.97 GB/s, 7598 IOPS; completion ms: p50 0.440, p90 0.518, p99 0.594, p99.9 0.668, mean 0.451, max 0.808
+L55-B2 untraced: write 8.41 GB/s, 8024 IOPS; completion ms: p50 0.416, p90 0.494, p99 0.553, p99.9 0.627, mean 0.429, max 0.873
+L55-A2 untraced: write 8.34 GB/s, 7953 IOPS; completion ms: p50 0.424, p90 0.502, p99 0.586, p99.9 0.659, mean 0.436, max 0.785

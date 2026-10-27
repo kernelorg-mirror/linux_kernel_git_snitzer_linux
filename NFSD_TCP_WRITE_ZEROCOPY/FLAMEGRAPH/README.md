@@ -40,12 +40,13 @@ Each round is a directory here, numbered in order:
 | [25-later-wake](25-later-wake/README.md) | round 24's state | the transmit path, 4.87 us a WRITE on nfsd, uncontended: 3.58 of it ACKs nfsd's read sends, about 4.8 a WRITE (7.98 in all), a 1 MiB loaned record taken up in about four passes | `2a75926c1458`: `svc_tcp_rx_want_eighths`, the share of the open window an incomplete loaned record waits for (4, round 10b's half); 4 against 6 on one sunrpc, 4 runs a side | **6 kept and settled** (settled.sh): nfsd -5.30 ± 0.89 us a WRITE (-5%), rings -2.2, one ACK a WRITE fewer; rate, region and latency the same. 7 held WRITEs at iodepth 1 until the delayed-ACK timer |
 | [26-idle-timer](26-idle-timer/README.md) | round 25's state | the refused pass (about 1.05 a WRITE; a refusal paces every loaned WRITE: not pursued, Mike), then the wake: 2.0 us a WRITE thread wakes, the scheduler's, and the idle sleep's 5 s timer, about 0.5, which a pool without a minimum ignores | `6c6dc284fed0`: a thread its pool could not lose sleeps without a timer; A/B round 25 against it, 4 runs a side | **kept**: the timer's frames gone from the idle sleep (about 0.5 us a WRITE); the A/B nfsd -0.67 ± 1.31, inside the session's drift; rate, region and latency the same |
 | [27-recv-prefetch](27-recv-prefetch/README.md) | round 26's state | the receive pass's loan bookkeeping: the skb's frag list (`nr_frags`, about 0.95 us a WRITE) and each frag's `struct page` (about 0.7) miss | `66bc91c765fa`: the shared info of the skb two ahead and the pages of the one ahead prefetched; A/B round 26 against it, 4 runs a side; a diagnostic with the pages loaded; skbs a pass probed | **not kept**: the A/B nfsd -1.90 ± 1.00, but the profile shows the pass 0.6 dearer, the look-ahead's own `sk_buff` loads missing; the `struct page` stall unmoved even when loaded ahead (the two halves of a page likely on different connections); 56% of passes are two skbs, so a deeper prefetch is not warranted |
+| [28-rx-prefetch](28-rx-prefetch/README.md) | round 27's state | the rings' first touch of each received frame: `eth_type_trans` 4.16 us a WRITE (82% the header's load), `napi_build_skb` 1.81 (the `struct page`), `__build_skb_around` 1.28 (clearing the shared info) | kmod-xsight 2.0.1-10 (kernel-rpmtree `6d37e4d`): xeu's `rx_prefetch` prefetches the next frame's headers, shared info and `struct page`; A/B N against Y on one xeu, 4 runs a side | **kept** (`rx_prefetch` Y, settled.sh): rings -2.45 ± 0.56 us a WRITE (-5%); nfsd, rate, region and latency the same |
 | [07-srv-qdisc](07-srv-qdisc/README.md) | round 05's state | half of each ACK and reply is `__dev_xmit_skb` | the server's qdisc `pfifo_fast` | not kept: no change (rings 66.9 against 66.1, latency inside L0's scatter); the cost is the transmit path's lock with 48 CPUs on 4 queues, not the qdisc |
 | [08-notrack-needed](08-notrack-needed/README.md) | round 05's state | the `zc_notrack` chains run with no conntrack to skip | `zc_notrack` only while a table registers conntrack, in settled.sh | kept: rings 67.6 to 65.1 us a loaned WRITE (-3.7%), nfsd 160.6 to 154.2; latency unchanged |
 | [09-big-tcp](09-big-tcp/README.md) | round 08's state | per-skb costs at about 20 GRO skbs a WRITE | BIG TCP: the server's `gro_max_size` and `gro_ipv4_max_size` 256 KB | not kept: no change (rings 63.3 against 63.4, latency the same); aggregates end at the client's 64 KB TSO bursts, so it needs the client's `gso_ipv4_max_size` too (Mike); the wake itself measured, 98.5% under 2 us |
 | [L0-latency](L0-latency/README.md) | round 05's state, 4 in flight | p50 0.46-0.52 ms; about 0.2 ms is the drive, 0.02 the reply; the apparent wake tail is the tracepoint's stale stamp | `xeu-rig/lat.sh` | the baseline; runs differ by about 10%, so several a side |
 
-## Where the kept rounds stand (2026-10-26)
+## Where the kept rounds stand (2026-10-27)
 
 What a loaned WRITE costs after each kept round, from that round's B
 runs (the profile where the A/B cannot resolve it):
@@ -69,6 +70,7 @@ runs (the profile where the A/B cannot resolve it):
 | 24 | | 104.8 to 101.6 on build 499 | `57f883cc3294`: the release prefetches each `struct page` a batch ahead, so its misses overlap |
 | 25 | 51.1 to 48.8 on build 499 | 103.1 to 97.8 on build 499 | `svc_tcp_rx_want_eighths` 6 (`2a75926c1458`, settled.sh): an incomplete loaned record taken up at three quarters of the open window, one ACK a WRITE fewer |
 | 26 | | about 0.5 by the profile (A/B 97.2 to 96.5, inside the drift) | `6c6dc284fed0`: an nfsd thread its pool could not lose sleeps without the 5 s timer |
+| 28 | 50.9 to 48.5 on build 499's own sunrpc | | xeu `rx_prefetch` Y (kmod-xsight 2.0.1-10, settled.sh): the next received frame's headers, shared info and `struct page` prefetched while a frame is built |
 
 - **Since round 01:** the rings 92.6 to about 58 us a WRITE (-37%),
   and to about 50 on build 499 with the interrupt held off at the card
@@ -77,7 +79,8 @@ runs (the profile where the A/B cannot resolve it):
   reference takeover and round 23's paired release (-43%), to about
   102 with round 24's prefetch in the release (-45%), and to about 98
   with round 25's later wake (-47%), with round 26's untimed idle
-  sleep about 0.5 less; the rings to about 49 (-47%).
+  sleep about 0.5 less; the rings to about 49 (-47%), and to about 46.5
+  with round 28's prefetch in xeu (-50%).
 - The rate stayed at the drives' 40.5 GB/s throughout. Latency at
   iodepth 1 is the same or a little better.
 - Each round's A/B had its own A, and A drifts a couple of us between
