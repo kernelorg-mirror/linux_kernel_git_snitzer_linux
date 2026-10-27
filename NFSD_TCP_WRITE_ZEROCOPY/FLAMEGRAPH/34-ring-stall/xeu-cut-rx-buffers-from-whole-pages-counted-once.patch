@@ -1,0 +1,81 @@
+--- a/xeu-esdk-v2.0.1/xeu_drv.c	2026-10-27 20:52:44.896572922 +0000
++++ b/xeu-esdk-v2.0.1/xeu_drv.c	2026-10-27 20:53:02.096063877 +0000
+@@ -194,6 +194,22 @@
+ MODULE_PARM_DESC(rx_prefetch,
+ 		 "prefetch the next received frame's headers, skb_shared_info and struct page while a frame is processed (default N)");
+ 
++/*
++ * Buffers smaller than a page come from page_pool_alloc_frag(), which
++ * charges a new page a bias of BIAS_MAX references and, when it moves on
++ * to the next page, takes back the part not handed out with an atomic on
++ * the page's pp_ref_count whose result it has to wait for.  On a recycled
++ * page that atomic is a miss on a line another CPU released the page
++ * through, and it was the rings' largest memory stall.  The ring knows how
++ * many pieces a page gives, so with this set it takes whole pages, sets
++ * the count to that number at once (a store) and keeps the page's pieces
++ * not yet posted for the next refill.  Read at each refill.
++ */
++static bool rx_page_split;
++module_param(rx_page_split, bool, 0644);
++MODULE_PARM_DESC(rx_page_split,
++		 "cut RX buffers from whole pages counted once, not through page_pool_alloc_frag() (default N)");
++
+ static bool rx_port_stats;
+ module_param(rx_port_stats, bool, 0644);
+ MODULE_PARM_DESC(rx_port_stats,
+@@ -696,11 +712,27 @@
+ 
+ 	for (i = 0; i < n; i++) {
+ 		/* Allocate a page, or a piece of one, from the page pool */
+-		if (buf_size < PAGE_SIZE)
++		if (rxr->split_left) {
++			/* A piece of the page cut last, counted already */
++			rx_page = rxr->split_page;
++			offset = rxr->split_offset;
++			rxr->split_offset += buf_size;
++			rxr->split_left--;
++		} else if (buf_size < PAGE_SIZE && READ_ONCE(rx_page_split)) {
++			rx_page = page_pool_alloc_pages(rxr->page_pool, GFP_ATOMIC);
++			if (likely(rx_page)) {
++				page_pool_fragment_page(rx_page, PAGE_SIZE / buf_size);
++				offset = 0;
++				rxr->split_page = rx_page;
++				rxr->split_offset = buf_size;
++				rxr->split_left = PAGE_SIZE / buf_size - 1;
++			}
++		} else if (buf_size < PAGE_SIZE) {
+ 			rx_page = page_pool_alloc_frag(rxr->page_pool, &offset,
+ 						       buf_size, GFP_ATOMIC);
+-		else
++		} else {
+ 			rx_page = page_pool_alloc_pages(rxr->page_pool, GFP_ATOMIC);
++		}
+ 		if (unlikely(!rx_page)) {
+ 			if (net_ratelimit())
+ 				netdev_err(ring->dev, "Failed to allocate Rx page from pool\n");
+@@ -1520,6 +1552,12 @@
+ 				  ring->sr_cons_idx,
+ 				  ring->sr_prod_idx - ring->sr_cons_idx);
+ 
++	/* And the pieces of a cut page not yet posted, one reference each */
++	while (rxr->split_left) {
++		page_pool_put_page(rxr->page_pool, rxr->split_page, -1, false);
++		rxr->split_left--;
++	}
++
+ 	/* Destroy page pool */
+ 	xeu_rx_ring_page_pool_destroy(rxr);
+ 
+--- a/xeu-esdk-v2.0.1/xeu_ring.h	2026-10-27 20:52:44.896572922 +0000
++++ b/xeu-esdk-v2.0.1/xeu_ring.h	2026-10-27 20:53:02.096498039 +0000
+@@ -237,6 +237,10 @@
+ 	struct xeu_ring       base;
+ 	u64              pp_drops;
+ 	struct page_pool      *page_pool; /* Page pool for RX buffer management */
++	/* With rx_page_split: the page cut last and its pieces not yet posted */
++	struct page           *split_page;
++	unsigned int          split_offset;
++	unsigned int          split_left;
+ 	/* Runs the poll again when a refill left the ring short of buffers */
+ 	struct timer_list     refill_timer;
+ 
