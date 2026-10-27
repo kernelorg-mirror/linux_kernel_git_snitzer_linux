@@ -1,0 +1,9 @@
+Attached 3 probes
+
+
+@bulk_pages[nfsd]: 10532350
+@put[rings, napi_pp_put_page]: 1564
+@put[nfsd, page_pool_put_unrefed_netmem]: 5686
+@put[nfsd, page_pool_put_netmem_bulk]: 717897
+@put[nfsd, napi_pp_put_page]: 2381881
+WRITEs in the count: 206401

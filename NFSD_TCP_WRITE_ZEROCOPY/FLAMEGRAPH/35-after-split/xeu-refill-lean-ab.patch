@@ -1,0 +1,111 @@
+--- xeu-esdk-v2.0.1.orig/xeu_drv.c
++++ xeu-esdk-v2.0.1/xeu_drv.c
+@@ -194,6 +194,14 @@
+ MODULE_PARM_DESC(rx_prefetch,
+ 		 "prefetch the next received frame's headers, skb_shared_info and struct page while a frame is processed (default N)");
+ 
++/*
++ * FLAMEGRAPH round 35's A/B only: refill through xeu_rx_refill_lean().
++ * Read at each refill.
++ */
++static bool rx_refill_lean;
++module_param(rx_refill_lean, bool, 0644);
++MODULE_PARM_DESC(rx_refill_lean, "refill RX rings through the lean loop (A/B only; default N)");
++
+ static bool rx_port_stats;
+ module_param(rx_port_stats, bool, 0644);
+ MODULE_PARM_DESC(rx_port_stats,
+@@ -683,6 +691,83 @@
+  *
+  * Return: Number of pages actually allocated
+  */
++/*
++ * The refill's loop, with what does not change from one buffer to the
++ * next worked out once: the buffer's size, data size and headroom (each
++ * a call to cache_line_size() through dma_get_cache_alignment()), the
++ * descriptor's first eight bytes, and the ring's arrays, mask and
++ * producer index, kept in registers and written back at the end.  Each
++ * descriptor is written as two aligned eight-byte stores instead of a
++ * clear and four stores of its packed fields.  The engine reads the
++ * descriptors only after the doorbell, whose write is ordered after them.
++ */
++static int xeu_rx_refill_lean(struct xeu_rx_ring *rxr, u32 n)
++{
++	struct xeu_ring *ring = &rxr->base;
++	const unsigned int buf_size = xeu_rx_buf_size();
++	const unsigned int pieces = PAGE_SIZE / buf_size;
++	const unsigned int headroom = xeu_rx_headroom();
++#ifdef XEU_POLL
++	const u64 bd_ctrl = RX_SR_BD_EOF;
++#else
++	const u64 bd_ctrl = RX_SR_BD_EOF | RX_SR_BD_INTR_EN;
++#endif
++	/* ctrl, ring_profile, pasid 0 and len_rid_sid, little-endian */
++	const u64 bd0 = bd_ctrl | (u64)ring->dma_profile << 16 |
++			(u64)xeu_rx_data_size() << 32;
++	struct xeu_sw_rx_desc *rx_sw = ring->rx_sw;
++	u64 *rx_sr = (u64 *)ring->rx_sr;
++	struct page *split_page = rxr->split_page;
++	unsigned int split_offset = rxr->split_offset;
++	unsigned int split_left = rxr->split_left;
++	const u16 mask = ring->mask;
++	u16 prod = ring->sr_prod_idx;
++	unsigned int offset;
++	struct page *rx_page;
++	u32 i, idx;
++
++	BUILD_BUG_ON(sizeof(struct rx_sr_bd) != 2 * sizeof(u64));
++	for (i = 0; i < n; i++) {
++		if (split_left) {
++			/* A piece of the page cut last, counted already */
++			rx_page = split_page;
++			offset = split_offset;
++			split_offset += buf_size;
++			split_left--;
++		} else {
++			rx_page = page_pool_alloc_pages(rxr->page_pool, GFP_ATOMIC);
++			if (unlikely(!rx_page)) {
++				if (net_ratelimit())
++					netdev_err(ring->dev, "Failed to allocate Rx page from pool\n");
++				break;
++			}
++			offset = 0;
++			if (pieces > 1) {
++				page_pool_fragment_page(rx_page, pieces);
++				split_page = rx_page;
++				split_offset = buf_size;
++				split_left = pieces - 1;
++			}
++		}
++
++		idx = prod & mask;
++		rx_sw[idx].page = rx_page;
++		rx_sw[idx].offset = offset;
++		WRITE_ONCE(rx_sr[2 * idx], bd0);
++		WRITE_ONCE(rx_sr[2 * idx + 1],
++			   page_pool_get_dma_addr(rx_page) + offset + headroom);
++		prod++;
++	}
++
++	rxr->split_page = split_page;
++	rxr->split_offset = split_offset;
++	rxr->split_left = split_left;
++	ring->sr_prod_idx = prod;
++	if (likely(i))
++		xeu_ring_db(ring, prod);
++	return i;
++}
++
+ static int xeu_rx_refill(struct xeu_rx_ring *rxr, u32 n)
+ {
+ 	struct xeu_ring *ring = &rxr->base;
+@@ -694,6 +779,9 @@
+ 	u32 idx;
+ 	u16 i;
+ 
++	if (READ_ONCE(rx_refill_lean))
++		return xeu_rx_refill_lean(rxr, n);
++
+ 	for (i = 0; i < n; i++) {
+ 		/* Allocate a page, or a piece of one, from the page pool */
+ 		if (rxr->split_left) {

@@ -1,0 +1,182 @@
+0000000000010628 <xeu_rx_refill_lean.isra.0>:
+   10628:	nop
+   1062c:	nop
+   10630:	paciasp
+   10634:	stp	x29, x30, [sp, #-128]!
+   10638:	mov	x29, sp
+   1063c:	stp	x19, x20, [sp, #16]
+   10640:	adrp	x20, 0 <xsl_rm_ring_alloc-0x8>
+   10644:	ldr	w19, [x20]
+   10648:	stp	x21, x22, [sp, #32]
+   1064c:	add	x21, x20, #0x0
+   10650:	stp	x23, x24, [sp, #48]
+   10654:	mov	w24, w1
+   10658:	stp	x25, x26, [sp, #64]
+   1065c:	stp	x27, x28, [sp, #80]
+   10660:	mov	x27, x0
+   10664:	bl	0 <cache_line_size>
+   10668:	mov	w22, w0
+   1066c:	bl	0 <cache_line_size>
+   10670:	add	w19, w0, w19
+   10674:	bl	0 <cache_line_size>
+   10678:	sub	w19, w19, w22
+   1067c:	neg	w5, w0
+   10680:	and	w5, w5, w19
+   10684:	ldr	w1, [x21, #4]
+   10688:	mov	w0, #0x3fff                	// #16383
+   1068c:	cmp	w5, w0
+   10690:	b.hi	108a4 <xeu_rx_refill_lean.isra.0+0x27c>  // b.pmore
+   10694:	cmp	w1, #0x2
+   10698:	mov	w0, #0x580                 	// #1408
+   1069c:	mov	w2, #0x582                 	// #1410
+   106a0:	csel	w0, w0, w2, ne	// ne = any
+   106a4:	cmp	w5, w0
+   106a8:	b.cc	108a4 <xeu_rx_refill_lean.isra.0+0x27c>  // b.lo, b.ul, b.last
+   106ac:	mov	w19, #0x4000                	// #16384
+   106b0:	udiv	w0, w19, w5
+   106b4:	str	w0, [sp, #120]
+   106b8:	cmp	w1, #0x2
+   106bc:	ldr	w20, [x20]
+   106c0:	cset	w6, eq	// eq = none
+   106c4:	ldrb	w22, [x27, #68]
+   106c8:	str	w5, [sp, #96]
+   106cc:	lsl	w6, w6, #1
+   106d0:	add	w19, w6, #0x40
+   106d4:	lsl	x22, x22, #16
+   106d8:	bl	0 <cache_line_size>
+   106dc:	mov	w23, w0
+   106e0:	bl	0 <cache_line_size>
+   106e4:	add	w20, w0, w20
+   106e8:	sub	w20, w20, w23
+   106ec:	bl	0 <cache_line_size>
+   106f0:	neg	w0, w0
+   106f4:	mov	w1, #0x3fff                	// #16383
+   106f8:	and	w0, w0, w20
+   106fc:	ldr	w2, [x21, #4]
+   10700:	ldr	w5, [sp, #96]
+   10704:	cmp	w0, w1
+   10708:	b.hi	108d4 <xeu_rx_refill_lean.isra.0+0x2ac>  // b.pmore
+   1070c:	cmp	w2, #0x2
+   10710:	mov	w1, #0x580                 	// #1408
+   10714:	mov	w3, #0x582                 	// #1410
+   10718:	csel	w1, w1, w3, ne	// ne = any
+   1071c:	cmp	w0, w1
+   10720:	mov	w1, #0x4000                	// #16384
+   10724:	csel	w0, w0, w1, cs	// cs = hs, nlast
+   10728:	cmp	w2, #0x2
+   1072c:	mov	w1, #0xfffffe80            	// #-384
+   10730:	cset	w3, eq	// eq = none
+   10734:	ldrh	w28, [x27, #10]
+   10738:	ldr	x26, [x27, #24]
+   1073c:	sub	w3, w1, w3, lsl #1
+   10740:	ldr	w1, [sp, #120]
+   10744:	add	w3, w3, w0
+   10748:	add	w7, w28, w24
+   1074c:	mov	w0, w24
+   10750:	mov	w2, w1
+   10754:	sub	w1, w1, #0x1
+   10758:	str	x2, [sp, #112]
+   1075c:	orr	x3, x22, x3, lsl #32
+   10760:	str	w1, [sp, #124]
+   10764:	orr	x3, x3, #0xc
+   10768:	ldr	x25, [x27, #184]
+   1076c:	and	w7, w7, #0xffff
+   10770:	ldr	x20, [x27, #784]
+   10774:	mov	w24, #0x0                   	// #0
+   10778:	ldrh	w21, [x27, #16]
+   1077c:	ldr	w22, [x27, #792]
+   10780:	ldr	w23, [x27, #796]
+   10784:	cbz	w0, 10828 <xeu_rx_refill_lean.isra.0+0x200>
+   10788:	cbz	w23, 10848 <xeu_rx_refill_lean.isra.0+0x220>
+   1078c:	mov	w2, w22
+   10790:	mov	w15, w22
+   10794:	sub	w23, w23, #0x1
+   10798:	and	x12, x20, #0xfffffffffffffffe
+   1079c:	add	w22, w5, w22
+   107a0:	mov	x0, x20
+   107a4:	and	w1, w21, w28
+   107a8:	add	x2, x2, w19, uxtw
+   107ac:	add	w10, w28, #0x1
+   107b0:	add	w24, w24, #0x1
+   107b4:	ubfiz	x11, x1, #4, #16
+   107b8:	lsl	w1, w1, #1
+   107bc:	add	x14, x25, x11
+   107c0:	add	w1, w1, #0x1
+   107c4:	and	w28, w10, #0xffff
+   107c8:	str	x0, [x25, x11]
+   107cc:	ubfiz	x1, x1, #3, #18
+   107d0:	str	w15, [x14, #8]
+   107d4:	str	x3, [x26, x11]
+   107d8:	ldr	x0, [x12, #32]
+   107dc:	add	x2, x2, x0
+   107e0:	str	x2, [x26, x1]
+   107e4:	cmp	w7, w10, uxth
+   107e8:	b.ne	10788 <xeu_rx_refill_lean.isra.0+0x160>  // b.any
+   107ec:	strh	w28, [x27, #10]
+   107f0:	str	x20, [x27, #784]
+   107f4:	str	w22, [x27, #792]
+   107f8:	str	w23, [x27, #796]
+   107fc:	ldrb	w3, [x27, #69]
+   10800:	mov	x1, #0x0                   	// #0
+   10804:	mov	x0, #0x0                   	// #0
+   10808:	bfi	x0, x1, #32, #32
+   1080c:	ldrh	w1, [x27, #168]
+   10810:	ldr	x2, [x27, #32]
+   10814:	bfxil	x0, x3, #0, #16
+   10818:	and	w1, w28, w1
+   1081c:	bfi	x0, x1, #16, #16
+   10820:	dmb	oshst
+   10824:	str	x0, [x2]
+   10828:	ldp	x19, x20, [sp, #16]
+   1082c:	ldp	x21, x22, [sp, #32]
+   10830:	ldp	x23, x24, [sp, #48]
+   10834:	ldp	x25, x26, [sp, #64]
+   10838:	ldp	x27, x28, [sp, #80]
+   1083c:	ldp	x29, x30, [sp], #128
+   10840:	autiasp
+   10844:	ret
+   10848:	ldr	x0, [x27, #776]
+   1084c:	mov	w1, #0x820                 	// #2080
+   10850:	str	x3, [sp, #96]
+   10854:	stp	w5, w7, [sp, #104]
+   10858:	bl	0 <page_pool_alloc_pages>
+   1085c:	ldr	x3, [sp, #96]
+   10860:	ldp	w5, w7, [sp, #104]
+   10864:	cbz	x0, 108b4 <xeu_rx_refill_lean.isra.0+0x28c>
+   10868:	ldr	w1, [sp, #120]
+   1086c:	and	x12, x0, #0xfffffffffffffffe
+   10870:	cmp	w1, #0x1
+   10874:	b.eq	10898 <xeu_rx_refill_lean.isra.0+0x270>  // b.none
+   10878:	ldr	x1, [sp, #112]
+   1087c:	mov	w22, w5
+   10880:	ldr	w23, [sp, #124]
+   10884:	mov	x20, x0
+   10888:	mov	w15, #0x0                   	// #0
+   1088c:	mov	x2, #0x0                   	// #0
+   10890:	str	x1, [x12, #40]
+   10894:	b	107a4 <xeu_rx_refill_lean.isra.0+0x17c>
+   10898:	mov	w15, #0x0                   	// #0
+   1089c:	mov	x2, #0x0                   	// #0
+   108a0:	b	107a4 <xeu_rx_refill_lean.isra.0+0x17c>
+   108a4:	mov	w0, #0x1                   	// #1
+   108a8:	mov	w5, #0x4000                	// #16384
+   108ac:	str	w0, [sp, #120]
+   108b0:	b	106b8 <xeu_rx_refill_lean.isra.0+0x90>
+   108b4:	bl	0 <net_ratelimit>
+   108b8:	cbnz	w0, 108dc <xeu_rx_refill_lean.isra.0+0x2b4>
+   108bc:	strh	w28, [x27, #10]
+   108c0:	str	x20, [x27, #784]
+   108c4:	str	w22, [x27, #792]
+   108c8:	str	wzr, [x27, #796]
+   108cc:	cbnz	w24, 107fc <xeu_rx_refill_lean.isra.0+0x1d4>
+   108d0:	b	10828 <xeu_rx_refill_lean.isra.0+0x200>
+   108d4:	mov	w0, #0x4000                	// #16384
+   108d8:	b	10728 <xeu_rx_refill_lean.isra.0+0x100>
+   108dc:	ldr	x0, [x27, #136]
+   108e0:	adrp	x1, 0 <xsl_rm_ring_alloc-0x8>
+   108e4:	add	x1, x1, #0x0
+   108e8:	bl	0 <netdev_err>
+   108ec:	b	108bc <xeu_rx_refill_lean.isra.0+0x294>
+   108f0:	nop
+   108f4:	nop
+

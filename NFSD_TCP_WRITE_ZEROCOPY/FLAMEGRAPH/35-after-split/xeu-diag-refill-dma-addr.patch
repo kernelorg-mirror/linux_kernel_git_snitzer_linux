@@ -1,0 +1,109 @@
+--- xeu-esdk-v2.0.1.orig/xeu_drv.c
++++ xeu-esdk-v2.0.1/xeu_drv.c
+@@ -194,6 +194,70 @@
+ MODULE_PARM_DESC(rx_prefetch,
+ 		 "prefetch the next received frame's headers, skb_shared_info and struct page while a frame is processed (default N)");
+ 
++/*
++ * DIAGNOSTIC (FLAMEGRAPH round 35, not for keeping): the time of the
++ * refill's load of a page's dma_addr, alone (DSB LD before and after,
++ * the 1 GHz counter read after ISB), per CPU: 0 a page just taken from
++ * the pool, 1 the kept piece of the page cut last, 2 a load of the
++ * ring's own mask, a line the ring keeps hot, as the control.
++ * /sys/module/xeu/parameters/refill_lat prints them; a write clears.
++ */
++struct xeu_lat {
++	u64 n[3], sum[3], h[3][16];
++};
++static DEFINE_PER_CPU(struct xeu_lat, xeu_lat);
++
++static __always_inline u64 xeu_lat_t(void)
++{
++	isb();
++	return read_sysreg(cntvct_el0);
++}
++
++static __always_inline void xeu_lat_add(int k, u64 ns)
++{
++	struct xeu_lat *l = this_cpu_ptr(&xeu_lat);
++
++	l->n[k]++;
++	l->sum[k] += ns;
++	l->h[k][min_t(int, ilog2(ns | 1), 15)]++;
++}
++
++static int xeu_lat_get(char *buf, const struct kernel_param *kp)
++{
++	static const char * const kn[] = { "taken", "kept", "control" };
++	int cpu, k, b, len = 0;
++
++	for_each_possible_cpu(cpu) {
++		struct xeu_lat *l = per_cpu_ptr(&xeu_lat, cpu);
++
++		for (k = 0; k < 3; k++) {
++			if (!l->n[k])
++				continue;
++			len += sysfs_emit_at(buf, len, "cpu%d %s n %llu sum_ns %llu h",
++					     cpu, kn[k], l->n[k], l->sum[k]);
++			for (b = 0; b < 16; b++)
++				len += sysfs_emit_at(buf, len, " %llu", l->h[k][b]);
++			len += sysfs_emit_at(buf, len, "\n");
++		}
++	}
++	return len;
++}
++
++static int xeu_lat_set(const char *val, const struct kernel_param *kp)
++{
++	int cpu;
++
++	for_each_possible_cpu(cpu)
++		memset(per_cpu_ptr(&xeu_lat, cpu), 0, sizeof(struct xeu_lat));
++	return 0;
++}
++
++static const struct kernel_param_ops xeu_lat_ops = {
++	.get = xeu_lat_get,
++	.set = xeu_lat_set,
++};
++module_param_cb(refill_lat, &xeu_lat_ops, NULL, 0644);
++
+ static bool rx_port_stats;
+ module_param(rx_port_stats, bool, 0644);
+ MODULE_PARM_DESC(rx_port_stats,
+@@ -695,8 +759,12 @@
+ 	u16 i;
+ 
+ 	for (i = 0; i < n; i++) {
++		int lk = 0;
++		u64 t0;
++
+ 		/* Allocate a page, or a piece of one, from the page pool */
+ 		if (rxr->split_left) {
++			lk = 1;
+ 			/* A piece of the page cut last, counted already */
+ 			rx_page = rxr->split_page;
+ 			offset = rxr->split_offset;
+@@ -732,7 +800,22 @@
+ 		}
+ 
+ 		/* Get DMA address - already mapped by page pool */
++		dsb(ld);
++		t0 = xeu_lat_t();
+ 		dma_addr = page_pool_get_dma_addr(rx_page);
++		asm volatile("" : "+r" (dma_addr));
++		dsb(ld);
++		xeu_lat_add(lk, xeu_lat_t() - t0);
++		{
++			u32 m;
++
++			dsb(ld);
++			t0 = xeu_lat_t();
++			m = READ_ONCE(ring->mask);
++			asm volatile("" : "+r" (m));
++			dsb(ld);
++			xeu_lat_add(2, xeu_lat_t() - t0);
++		}
+ 
+ 		idx = ring->sr_prod_idx & ring->mask;
+ 		sw_rx_desc = &ring->rx_sw[idx];
