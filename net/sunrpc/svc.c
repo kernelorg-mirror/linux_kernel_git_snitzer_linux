@@ -661,8 +661,9 @@ svc_prepare_thread(struct svc_serv *serv, struct svc_pool *pool, int node)
 	if (!rqstp->rq_bvec)
 		goto out_enomem;
 
-	rqstp->rq_tcp_rx = svc_tcp_rx_state_alloc(rqstp->rq_maxpages, GFP_KERNEL,
-						    node);
+	rqstp->rq_tcp_rx = svc_tcp_rx_state_alloc_entries(rqstp->rq_maxbvecs,
+							  rqstp->rq_maxpages,
+							  GFP_KERNEL, node);
 	if (!rqstp->rq_tcp_rx)
 		goto out_enomem;
 
