@@ -204,13 +204,37 @@ static inline unsigned long svc_pages_to_bvecs(unsigned long pages)
 	return pages * (PAGE_SIZE / SZ_4K);
 }
 
+/*
+ * TCP payload of a 9000-byte IPv4 MTU frame (with timestamps): what loan
+ * tables are sized for.
+ */
+#define SVC_LOAN_FRAME		8948
+
 /**
  * svc_serv_maxbvecs - maximum count of bvecs needed for one RPC message
  * @serv: RPC service context
+ *
+ * A TCP receive loan takes one entry per received fragment. Size for a
+ * maximum message in 9000-byte MTU frames: one more frame than the message
+ * fills (a record can start inside one), each split at every page it can
+ * span, plus head and tail, and never fewer than the message's page count.
+ * This assumes a frame's payload arrives in page fragments with only
+ * headers in the skb head; smaller NIC buffers split frames further and
+ * those records fall back to a copy. For a 1 MiB block size (a message of
+ * 1 MiB plus a page) that is 479 entries on 4 KiB pages, 245 on 16 KiB
+ * pages and 255 on 64 KiB pages, so each table is one 8 KiB, 4 KiB or
+ * 4 KiB slab object where svc_pages_to_bvecs() takes 260, 272 and 320
+ * entries and the next larger object on 16 KiB and 64 KiB pages.
+ * rq_bvec, which a loaned payload passes through, and the loan tables use
+ * this size.
  */
 static inline unsigned long svc_serv_maxbvecs(const struct svc_serv *serv)
 {
-	return svc_pages_to_bvecs(svc_serv_maxpages(serv));
+	unsigned long frames = DIV_ROUND_UP(serv->sv_max_mesg, SVC_LOAN_FRAME) + 1;
+	unsigned long entries =
+		frames * (DIV_ROUND_UP(SVC_LOAN_FRAME, PAGE_SIZE) + 1) + 3;
+
+	return max(entries, svc_serv_maxpages(serv));
 }
 
 struct svc_tcp_rx_state;

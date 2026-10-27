@@ -199,6 +199,9 @@ void		svc_init_xprt_sock(void);
 void		svc_cleanup_xprt_sock(void);
 struct svc_tcp_rx_state *svc_tcp_rx_state_alloc(unsigned long capacity,
 						gfp_t gfp, int node);
+struct svc_tcp_rx_state *svc_tcp_rx_state_alloc_entries(unsigned long entries,
+							unsigned long capacity,
+							gfp_t gfp, int node);
 void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state);
 struct svc_tcp_rx_budget *svc_tcp_rx_budget_read_for(struct svc_sock *svsk);
 
