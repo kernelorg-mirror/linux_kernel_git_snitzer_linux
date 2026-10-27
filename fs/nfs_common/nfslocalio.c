@@ -35,6 +35,13 @@ static LIST_HEAD(nfs_uuids);
  * locks out of order.
  */
 
+static void nfs_uuid_io_drained(struct percpu_ref *ref)
+{
+	nfs_uuid_t *nfs_uuid = container_of(ref, nfs_uuid_t, io_ref);
+
+	complete(&nfs_uuid->io_drained);
+}
+
 void nfs_uuid_init(nfs_uuid_t *nfs_uuid)
 {
 	RCU_INIT_POINTER(nfs_uuid->net, NULL);
@@ -44,13 +51,22 @@ void nfs_uuid_init(nfs_uuid_t *nfs_uuid)
 	INIT_LIST_HEAD(&nfs_uuid->files);
 	spin_lock_init(&nfs_uuid->lock);
 	nfs_uuid->nfs3_localio_probe_count = 0;
+	nfs_uuid->draining = false;
+	nfs_uuid->probing = false;
+	init_completion(&nfs_uuid->io_drained);
+	/* Allocation failure leaves this client on ordinary RPC. */
+	nfs_uuid->io_ref_initialized =
+		!percpu_ref_init(&nfs_uuid->io_ref, nfs_uuid_io_drained,
+				 PERCPU_REF_INIT_DEAD, GFP_KERNEL);
 }
 EXPORT_SYMBOL_GPL(nfs_uuid_init);
 
 bool nfs_uuid_begin(nfs_uuid_t *nfs_uuid)
 {
 	spin_lock(&nfs_uuid->lock);
-	if (rcu_access_pointer(nfs_uuid->net)) {
+	if (!nfs_uuid->io_ref_initialized || nfs_uuid->draining ||
+	    nfs_uuid->probing || nfs_uuid->list_lock ||
+	    rcu_access_pointer(nfs_uuid->net)) {
 		/* This nfs_uuid is already in use */
 		spin_unlock(&nfs_uuid->lock);
 		return false;
@@ -63,10 +79,12 @@ bool nfs_uuid_begin(nfs_uuid_t *nfs_uuid)
 		spin_unlock(&nfs_uuid->lock);
 		return false;
 	}
+	nfs_uuid->probing = true;
+	/* The global lookup must never see a partly generated UUID. */
+	uuid_gen(&nfs_uuid->uuid);
 	list_add_tail(&nfs_uuid->list, &nfs_uuids);
 	spin_unlock(&nfs_uuids_lock);
 
-	uuid_gen(&nfs_uuid->uuid);
 	spin_unlock(&nfs_uuid->lock);
 
 	return true;
@@ -75,16 +93,17 @@ EXPORT_SYMBOL_GPL(nfs_uuid_begin);
 
 void nfs_uuid_end(nfs_uuid_t *nfs_uuid)
 {
-	if (!rcu_access_pointer(nfs_uuid->net)) {
-		spin_lock(&nfs_uuid->lock);
-		if (!rcu_access_pointer(nfs_uuid->net)) {
-			/* Not local, remove from nfs_uuids */
-			spin_lock(&nfs_uuids_lock);
-			list_del_init(&nfs_uuid->list);
-			spin_unlock(&nfs_uuids_lock);
-		}
-		spin_unlock(&nfs_uuid->lock);
-        }
+	spin_lock(&nfs_uuid->lock);
+	BUG_ON(!nfs_uuid->probing);
+	nfs_uuid->probing = false;
+	if (!nfs_uuid->draining && !nfs_uuid->list_lock &&
+	    !rcu_access_pointer(nfs_uuid->net)) {
+		/* Only this attempt's global negotiation can be unlinked. */
+		spin_lock(&nfs_uuids_lock);
+		list_del_init(&nfs_uuid->list);
+		spin_unlock(&nfs_uuids_lock);
+	}
+	spin_unlock(&nfs_uuid->lock);
 }
 EXPORT_SYMBOL_GPL(nfs_uuid_end);
 
@@ -107,34 +126,47 @@ void nfs_uuid_is_local(const uuid_t *uuid, struct list_head *list,
 {
 	nfs_uuid_t *nfs_uuid;
 
+	rcu_read_lock();
 	spin_lock(&nfs_uuids_lock);
 	nfs_uuid = nfs_uuid_lookup_locked(uuid);
-	if (!nfs_uuid) {
-		spin_unlock(&nfs_uuids_lock);
-		return;
-	}
+	spin_unlock(&nfs_uuids_lock);
+	if (!nfs_uuid)
+		goto out_rcu;
+
+	/* Drop global exclusion before taking the outer UUID lock. */
+	spin_lock(&nfs_uuid->lock);
+	spin_lock(&nfs_uuids_lock);
+	if (nfs_uuid_lookup_locked(uuid) != nfs_uuid ||
+	    !nfs_uuid->probing || nfs_uuid->draining || nfs_uuid->list_lock ||
+	    rcu_access_pointer(nfs_uuid->net))
+		goto out_unlock;
+
+	BUG_ON(!nfs_uuid->io_ref_initialized);
+	BUG_ON(!percpu_ref_is_dying(&nfs_uuid->io_ref));
+	BUG_ON(!percpu_ref_is_zero(&nfs_uuid->io_ref));
+	reinit_completion(&nfs_uuid->io_drained);
+	percpu_ref_reinit(&nfs_uuid->io_ref);
+	__module_get(mod);
+	/* Active UUID pins guarantee the same loaded NFSD module. */
+	WRITE_ONCE(nfsd_mod, mod);
+	kref_get(&dom->ref);
+	nfs_uuid->dom = dom;
+	nfs_uuid->list_lock = list_lock;
 
 	/*
-	 * We don't hold a ref on the net, but instead put
-	 * ourselves on @list (nn->local_clients) so the net
-	 * pointer can be invalidated.
+	 * Publish initialized session state and server membership together.
+	 * Membership, rather than a net reference, protects the idle session.
 	 */
 	spin_lock(list_lock); /* list_lock is nn->local_clients_lock */
 	list_move(&nfs_uuid->list, list);
+	rcu_assign_pointer(nfs_uuid->net, net);
 	spin_unlock(list_lock);
 
+out_unlock:
 	spin_unlock(&nfs_uuids_lock);
-	/* Once nfs_uuid is parented to @list, avoid global nfs_uuids_lock */
-	spin_lock(&nfs_uuid->lock);
-
-	__module_get(mod);
-	nfsd_mod = mod;
-
-	nfs_uuid->list_lock = list_lock;
-	kref_get(&dom->ref);
-	nfs_uuid->dom = dom;
-	rcu_assign_pointer(nfs_uuid->net, net);
 	spin_unlock(&nfs_uuid->lock);
+out_rcu:
+	rcu_read_unlock();
 }
 EXPORT_SYMBOL_GPL(nfs_uuid_is_local);
 
@@ -149,15 +181,25 @@ EXPORT_SYMBOL_GPL(nfs_localio_enable_client);
  * Cleanup the nfs_uuid_t embedded in an nfs_client.
  * This is the long-form of nfs_uuid_init().
  */
-static bool nfs_uuid_put(nfs_uuid_t *nfs_uuid)
+static void nfs_uuid_put(nfs_uuid_t *nfs_uuid)
 {
+	struct nfs_client *clp = container_of(nfs_uuid, struct nfs_client, cl_uuid);
 	struct nfs_file_localio *nfl;
 
 	spin_lock(&nfs_uuid->lock);
+	wait_var_event_spinlock(nfs_uuid, !nfs_uuid->draining,
+				&nfs_uuid->lock);
 	if (unlikely(!rcu_access_pointer(nfs_uuid->net))) {
 		spin_unlock(&nfs_uuid->lock);
-		return false;
+		return;
 	}
+	nfs_uuid->draining = true;
+	percpu_ref_kill(&nfs_uuid->io_ref);
+	spin_unlock(&nfs_uuid->lock);
+
+	/* Retain the session and cached files until every borrower finishes. */
+	wait_for_completion(&nfs_uuid->io_drained);
+	spin_lock(&nfs_uuid->lock);
 	RCU_INIT_POINTER(nfs_uuid->net, NULL);
 
 	if (nfs_uuid->dom) {
@@ -201,66 +243,115 @@ static bool nfs_uuid_put(nfs_uuid_t *nfs_uuid)
 		store_release_wake_up(&nfl->nfs_uuid, RCU_INITIALIZER(NULL));
 	}
 
+	spin_unlock(&nfs_uuid->lock);
+	/*
+	 * Quiesce observers of the removed net before another generation can
+	 * reinitialize admission, or the final client destructor can exit it.
+	 */
+	synchronize_rcu();
+	spin_lock(&nfs_uuid->lock);
+
 	/* Remove client from nn->local_clients */
 	if (nfs_uuid->list_lock) {
 		spin_lock(nfs_uuid->list_lock);
 		BUG_ON(list_empty(&nfs_uuid->list));
 		list_del_init(&nfs_uuid->list);
+		wake_up_var_locked(nfs_uuid->list_lock, nfs_uuid->list_lock);
 		spin_unlock(nfs_uuid->list_lock);
 		nfs_uuid->list_lock = NULL;
 	}
 
-	module_put(nfsd_mod);
+	module_put(READ_ONCE(nfsd_mod));
+	trace_nfs_localio_disable_client(clp);
+	nfs_uuid->draining = false;
+	wake_up_var_locked(nfs_uuid, &nfs_uuid->lock);
+	/* Waiters must retake this lock; this is our last client access. */
 	spin_unlock(&nfs_uuid->lock);
-
-	return true;
 }
 
 void nfs_localio_disable_client(struct nfs_client *clp)
 {
-	if (nfs_uuid_put(&clp->cl_uuid))
-		trace_nfs_localio_disable_client(clp);
+	nfs_uuid_put(&clp->cl_uuid);
 }
 EXPORT_SYMBOL_GPL(nfs_localio_disable_client);
+
+void nfs_localio_destroy_client(struct nfs_client *clp)
+{
+	nfs_uuid_t *nfs_uuid = &clp->cl_uuid;
+
+	BUG_ON(nfs_uuid->draining || nfs_uuid->probing || nfs_uuid->list_lock);
+	BUG_ON(rcu_access_pointer(nfs_uuid->net));
+	BUG_ON(!list_empty(&nfs_uuid->list) || !list_empty(&nfs_uuid->files));
+	if (nfs_uuid->io_ref_initialized) {
+		BUG_ON(!percpu_ref_is_dying(&nfs_uuid->io_ref));
+		BUG_ON(!percpu_ref_is_zero(&nfs_uuid->io_ref));
+		percpu_ref_exit(&nfs_uuid->io_ref);
+	}
+}
+EXPORT_SYMBOL_GPL(nfs_localio_destroy_client);
+
+/* Resolved only during invalidation to avoid a common -> NFS module cycle. */
+extern void nfs_put_client(struct nfs_client *clp);
 
 void nfs_localio_invalidate_clients(struct list_head *nn_local_clients,
 				    spinlock_t *nn_local_clients_lock)
 {
 	LIST_HEAD(local_clients);
-	nfs_uuid_t *nfs_uuid, *tmp;
+	void (*put_client)(struct nfs_client *clp);
+	nfs_uuid_t *nfs_uuid;
 	struct nfs_client *clp;
 
 	spin_lock(nn_local_clients_lock);
-	list_splice_init(nn_local_clients, &local_clients);
-	spin_unlock(nn_local_clients_lock);
-	list_for_each_entry_safe(nfs_uuid, tmp, &local_clients, list) {
-		if (WARN_ON(nfs_uuid->list_lock != nn_local_clients_lock))
-			break;
-		clp = container_of(nfs_uuid, struct nfs_client, cl_uuid);
-		nfs_localio_disable_client(clp);
+	if (list_empty(nn_local_clients)) {
+		spin_unlock(nn_local_clients_lock);
+		return;
 	}
+	put_client = symbol_get(nfs_put_client);
+	BUG_ON(!put_client);
+	list_splice_init(nn_local_clients, &local_clients);
+	while (!list_empty(&local_clients)) {
+		struct list_head *first = local_clients.next;
+
+		nfs_uuid = list_entry(first, nfs_uuid_t, list);
+		BUG_ON(nfs_uuid->list_lock != nn_local_clients_lock);
+		clp = container_of(nfs_uuid, struct nfs_client, cl_uuid);
+		if (!refcount_inc_not_zero(&clp->cl_count)) {
+			/* The destructor owns this node; retain only its value. */
+			wait_var_event_spinlock(nn_local_clients_lock,
+						local_clients.next != first,
+						nn_local_clients_lock);
+			continue;
+		}
+		spin_unlock(nn_local_clients_lock);
+		nfs_localio_disable_client(clp);
+		put_client(clp);
+		/* Never retain an unreferenced next node across the drain. */
+		spin_lock(nn_local_clients_lock);
+	}
+	spin_unlock(nn_local_clients_lock);
+	symbol_put(nfs_put_client);
 }
 EXPORT_SYMBOL_GPL(nfs_localio_invalidate_clients);
 
-static int nfs_uuid_add_file(nfs_uuid_t *nfs_uuid, struct nfs_file_localio *nfl)
+int nfs_uuid_add_file_locked(nfs_uuid_t *nfs_uuid,
+			     struct nfs_file_localio *nfl, struct net *net)
 {
-	int ret = 0;
-
-	/* Add nfl to nfs_uuid->files if it isn't already */
-	spin_lock(&nfs_uuid->lock);
-	if (rcu_access_pointer(nfs_uuid->net) == NULL) {
-		ret = -ENXIO;
-	} else if (list_empty(&nfl->list)) {
+	lockdep_assert_held(&nfs_uuid->lock);
+	if (nfs_uuid->draining || rcu_access_pointer(nfs_uuid->net) != net)
+		return -ENXIO;
+	if (list_empty(&nfl->list)) {
 		rcu_assign_pointer(nfl->nfs_uuid, nfs_uuid);
 		list_add_tail(&nfl->list, &nfs_uuid->files);
+	} else {
+		BUG_ON(rcu_access_pointer(nfl->nfs_uuid) != nfs_uuid);
 	}
-	spin_unlock(&nfs_uuid->lock);
-	return ret;
+	return 0;
 }
+EXPORT_SYMBOL_GPL(nfs_uuid_add_file_locked);
 
 /*
- * Caller is responsible for calling nfsd_net_put and
- * nfsd_file_put (via nfs_to_nfsd_file_put_local).
+ * The returned file is borrowed from the open-context/layout cache. Caller
+ * keeps that cache owner alive and releases admission with nfs_release_local_fh.
  */
 struct nfsd_file *nfs_open_local_fh(nfs_uuid_t *uuid,
 		   struct rpc_clnt *rpc_clnt, const struct cred *cred,
@@ -272,48 +363,41 @@ struct nfsd_file *nfs_open_local_fh(nfs_uuid_t *uuid,
 	struct nfsd_file *localio;
 
 	/*
-	 * Not running in nfsd context, so must safely get reference on nfsd_serv.
-	 * But the server may already be shutting down, if so disallow new localio.
-	 * uuid->net is NOT a counted reference, but rcu_read_lock() ensures that
-	 * if uuid->net is not NULL, then calling nfsd_net_try_get() is safe
-	 * and if it succeeds we will have an implied reference to the net.
-	 *
-	 * Otherwise NFS may not have ref on NFSD and therefore cannot safely
-	 * make 'nfs_to' calls.
+	 * RCU covers the net observation/admission interval, including rejected
+	 * observers during drain. Acquire observes the separately stored session
+	 * fields. Admission keeps those fields and NFSD's module alive until put.
 	 */
 	rcu_read_lock();
-	net = rcu_dereference(uuid->net);
-	if (!net || !nfs_to->nfsd_net_try_get(net)) {
+	/* Pairs with session publication in nfs_uuid_is_local(). */
+	net = unrcu_pointer(smp_load_acquire(&uuid->net));
+	if (!net || !percpu_ref_tryget_live(&uuid->io_ref)) {
+		rcu_read_unlock();
+		return ERR_PTR(-ENXIO);
+	}
+	if (!nfs_to->nfsd_net_try_get(net)) {
+		percpu_ref_put(&uuid->io_ref);
 		rcu_read_unlock();
 		return ERR_PTR(-ENXIO);
 	}
 	rcu_read_unlock();
-	/* We have an implied reference to net thanks to nfsd_net_try_get */
+	/* One per-I/O net reference accompanies the borrowed file. */
 	localio = nfs_to->nfsd_open_local_fh(net, uuid->dom, rpc_clnt, cred,
-					     nfs_fh, pnf, fmode);
-	if (!IS_ERR(localio) && nfs_uuid_add_file(uuid, nfl) < 0) {
-		/*
-		 * Delete the cached file when racing with nfs_uuid_put().
-		 * Since nfl->nfs_uuid was never published via
-		 * rcu_assign_pointer(), nfs_close_local_fh() will early-return
-		 * and cannot clean up after us.  Drop the slot's file ref and
-		 * its paired net ref, then drop the caller-owned nfsd_file ref
-		 * (+1) and the entry-time nfsd_net ref carried via nf->nf_net,
-		 * and return -ENXIO so the caller never dereferences the
-		 * now-cleared localio.
-		 */
-		struct nfsd_file __rcu *tmp =
-			(struct nfsd_file __force __rcu *)localio;
-
-		nfs_to_nfsd_file_put_local(pnf);
-		nfs_to_nfsd_file_put_local(&tmp);
-		localio = ERR_PTR(-ENXIO);
-	}
-	nfs_to_nfsd_net_put(net);
+					     nfs_fh, uuid, nfl, pnf, fmode);
+	if (IS_ERR(localio))
+		nfs_release_local_fh(uuid);
 
 	return localio;
 }
 EXPORT_SYMBOL_GPL(nfs_open_local_fh);
+
+void nfs_release_local_fh(nfs_uuid_t *nfs_uuid)
+{
+	/* The admitted operation keeps the published session stable until put. */
+	nfs_to_nfsd_net_put(rcu_access_pointer(nfs_uuid->net));
+	percpu_ref_put(&nfs_uuid->io_ref);
+	/* No session or client access is permitted after the admission put. */
+}
+EXPORT_SYMBOL_GPL(nfs_release_local_fh);
 
 void nfs_close_local_fh(struct nfs_file_localio *nfl)
 {
