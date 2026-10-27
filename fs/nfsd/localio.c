@@ -30,37 +30,37 @@
  * @rpc_clnt: rpc_clnt that the client established
  * @cred: cred that the client established
  * @nfs_fh: filehandle to lookup
- * @pnf: place to find the nfsd_file, or store it if it was non-NULL
+ * @uuid: admitted client session owning the cached files
+ * @nfl: open-context or layout cache to register before publication
+ * @pnf: place to find the nfsd_file, or store it if it was NULL
  * @fmode: fmode_t to use for open
  *
  * This function maps a local fh to a path on a local filesystem.
  * This is useful when the nfs client has the local server mounted - it can
  * avoid all the NFS overhead with reads, writes and commits.
  *
- * On successful return, returned nfsd_file will have its nf_net member
- * set. Caller (NFS client) is responsible for calling nfsd_net_put and
- * nfsd_file_put (via nfs_to_nfsd_file_put_local).
+ * The returned file is borrowed. The caller owns UUID admission and a net
+ * reference until its final use, and keeps the open-context/layout cache alive.
  */
 static struct nfsd_file *
 nfsd_open_local_fh(struct net *net, struct auth_domain *dom,
 		   struct rpc_clnt *rpc_clnt, const struct cred *cred,
-		   const struct nfs_fh *nfs_fh, struct nfsd_file __rcu **pnf,
+		   const struct nfs_fh *nfs_fh, nfs_uuid_t *uuid,
+		   struct nfs_file_localio *nfl, struct nfsd_file __rcu **pnf,
 		   const fmode_t fmode)
 {
 	int mayflags = NFSD_MAY_LOCALIO;
 	struct svc_cred rq_cred;
 	struct svc_fh fh;
-	struct nfsd_file *localio;
+	struct nfsd_file *localio, *new;
+	int status;
 	__be32 beres;
 
 	if (nfs_fh->size > NFS_MAXFHSIZE)
 		return ERR_PTR(-EINVAL);
 
-	if (!nfsd_net_try_get(net))
-		return ERR_PTR(-ENXIO);
-
 	rcu_read_lock();
-	localio = nfsd_file_get(rcu_dereference(*pnf));
+	localio = rcu_dereference(*pnf);
 	rcu_read_unlock();
 	if (localio)
 		return localio;
@@ -86,37 +86,33 @@ nfsd_open_local_fh(struct net *net, struct auth_domain *dom,
 	if (rq_cred.cr_group_info)
 		put_group_info(rq_cred.cr_group_info);
 
-	if (!IS_ERR(localio)) {
-		struct nfsd_file *new;
-		if (!nfsd_net_try_get(net)) {
-			nfsd_file_put(localio);
-			nfsd_net_put(net);
-			return ERR_PTR(-ENXIO);
-		}
-		nfsd_file_get(localio);
-	again:
-		rcu_read_lock();
+	if (IS_ERR(localio))
+		return localio;
+
+	/* This pair belongs to the cache slot if installation succeeds. */
+	rcu_read_lock();
+	if (!nfsd_net_try_get(net)) {
+		rcu_read_unlock();
+		nfsd_file_put(localio);
+		return ERR_PTR(-ENXIO);
+	}
+	rcu_read_unlock();
+
+	spin_lock(&uuid->lock);
+	status = nfs_uuid_add_file_locked(uuid, nfl, net);
+	if (status)
+		new = ERR_PTR(status);
+	else
 		new = unrcu_pointer(cmpxchg(pnf, NULL, RCU_INITIALIZER(localio)));
-		if (new) {
-			/* Some other thread installed an nfsd_file */
-			if (nfsd_file_get(new) == NULL) {
-				rcu_read_unlock();
-				goto again;
-			}
-			rcu_read_unlock();
-			/*
-			 * Drop the ref we were going to install (both file and
-			 * net) and the one we were going to return (only file).
-			 */
-			nfsd_file_put(localio);
-			nfsd_net_put(net);
-			nfsd_file_put(localio);
-			localio = new;
-		} else {
-			rcu_read_unlock();
-		}
-	} else
+	spin_unlock(&uuid->lock);
+	if (new) {
+		/* A published winner is already owned by this admitted cache. */
+		nfsd_file_put(localio);
+		rcu_read_lock();
 		nfsd_net_put(net);
+		rcu_read_unlock();
+		localio = new;
+	}
 
 	return localio;
 }
