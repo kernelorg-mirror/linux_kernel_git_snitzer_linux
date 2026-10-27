@@ -7,6 +7,8 @@
 #include <linux/highmem.h>
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/workqueue.h>
+#include <linux/sched.h>
 #include <linux/net.h>
 #include <net/sock.h>
 #include <linux/percpu_counter.h>
@@ -697,6 +699,54 @@ static void svcsock_rx_small_record_copied_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, state->reason, (u8)SVC_TCP_RX_REASON_SMALL);
 	KUNIT_EXPECT_EQ(test, state->refs_acquired, 0U);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+	kunit_kfree_skb(test, skb);
+}
+
+/*
+ * A small record is copied wherever its marker or call prefix splits across
+ * skbs: loaned, it would publish argument pages, and an NFSv4 READ with
+ * argument pages is served unconfined.
+ */
+static void svcsock_rx_small_record_split_test(struct kunit *test)
+{
+	const struct svcsock_rx_split_param *param = test->param_value;
+	enum { BODY_LEN = 7 * XDR_UNIT + 19 };
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = sizeof(record) };
+	struct page *page;
+	unsigned int refs;
+	struct sk_buff *skb;
+	unsigned int first_len;
+	int ret;
+
+	svc_tcp_rx_copy_below = BODY_LEN;
+	svcsock_rx_fill_record(record, BODY_LEN, true, RPC_CALL, param->auth);
+	skb = svcsock_rx_build_page_skb(test, record, sizeof(record), &page,
+					&refs);
+	first_len = param->kind == SVCSOCK_RX_SPLIT_CLASSIFIER ?
+			sizeof(rpc_fraghdr) + param->split : param->split;
+
+	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, skb, 0,
+				   first_len);
+	KUNIT_ASSERT_EQ(test, ret, (int)first_len);
+	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, skb,
+				   first_len, sizeof(record) - first_len);
+	KUNIT_ASSERT_EQ(test, ret, (int)(sizeof(record) - first_len));
+	KUNIT_EXPECT_TRUE(test, actor.complete);
+	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_COPY);
+	KUNIT_EXPECT_EQ(test, state->reason, (u8)SVC_TCP_RX_REASON_SMALL);
+	KUNIT_EXPECT_EQ(test, state->refs_acquired, 0U);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_publish(fixture->svsk, fixture->rqstp), 0);
+	KUNIT_EXPECT_EQ(test, fixture->rqstp->rq_arg.page_len, 0U);
+	KUNIT_EXPECT_EQ(test, fixture->rqstp->rq_arg.len, (u32)BODY_LEN);
+	KUNIT_EXPECT_MEMEQ(test, page_address(fixture->rqstp->rq_pages[0]),
+			   record + sizeof(rpc_fraghdr), BODY_LEN);
 	kunit_kfree_skb(test, skb);
 }
 
@@ -1421,12 +1471,12 @@ static void svcsock_rx_credit_fifo_test(struct kunit *test)
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
 	KUNIT_EXPECT_EQ(test, a->credit, 11U);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 8L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 8L);
 	/* 8 < 11: c waits, then d queues behind it even if credit appears. */
 	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sc, c, len));
 	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sd, d, len));
 	svc_tcp_rx_credit_release(a);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 19L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 19L);
 	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sd, d, len));
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(sc, c, len));
 	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
@@ -1436,11 +1486,11 @@ static void svcsock_rx_credit_fifo_test(struct kunit *test)
 	svc_tcp_rx_credit_forget(sd);
 	svc_tcp_rx_credit_release(b);
 	svc_tcp_rx_credit_release(c);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 30L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 30L);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 10L);
 	KUNIT_EXPECT_FALSE(test, a->credit_linked);
 	svc_tcp_rx_credit_release(a);	/* exactly once: a second call is a no-op */
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 30L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 30L);
 }
 
 /*
@@ -1636,7 +1686,7 @@ static void svcsock_rx_credit_reserve_oldest_test(struct kunit *test)
 	svc_tcp_rx_budget_kunit_configure(30, 6, 100);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(so, old, len));
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sy, young, len));
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 2L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 2L);
 	/* The young record needs 14 > 11 + 2: it takes 2 and pauses. */
 	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_charge(sy, young, 14));
 	KUNIT_EXPECT_EQ(test, young->credit, 13U);
@@ -1651,12 +1701,12 @@ static void svcsock_rx_credit_reserve_oldest_test(struct kunit *test)
 	/* Release: the reserve refills, overrun is not returned to the pool. */
 	svc_tcp_rx_credit_release(old);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 6L);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 11L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 11L);
 	/* Now oldest, the paused record completes on the reserve if needed. */
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sy, young, 14));
 	KUNIT_EXPECT_TRUE(test, list_empty(&sy->sk_credit_wait));
 	svc_tcp_rx_credit_release(young);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 24L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 24L);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 6L);
 }
 
@@ -1682,7 +1732,7 @@ static void svcsock_rx_credit_disable_waiters_test(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
 	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
 	svc_tcp_rx_credit_release(a);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 0L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 0L);
 	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &sb->sk_xprt.xpt_flags));
 	KUNIT_EXPECT_FALSE(test, test_bit(XPT_DATA, &sc->sk_xprt.xpt_flags));
 	KUNIT_EXPECT_EQ(test, kref_read(&sb->sk_xprt.xpt_ref), 1U);
@@ -1725,7 +1775,7 @@ static void svcsock_rx_credit_orphan_test(struct kunit *test)
 	}
 	a->refs_acquired = 0;
 	KUNIT_EXPECT_FALSE(test, a->credit_linked);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 0L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 0L);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
 	KUNIT_EXPECT_TRUE(test, b->credit_linked);
@@ -1754,13 +1804,13 @@ static void svcsock_rx_credit_reconfigure_inflight_test(struct kunit *test)
 			svcsock_rx_budget_off, NULL), 0);
 	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 19L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 19L);
 	svc_tcp_rx_budget_kunit_configure(80, 10, 100);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 48L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 48L);
 	svc_tcp_rx_credit_release(a);
 	svc_tcp_rx_credit_release(b);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 70L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 70L);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 10L);
 
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
@@ -1771,7 +1821,7 @@ static void svcsock_rx_credit_reconfigure_inflight_test(struct kunit *test)
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
 	KUNIT_EXPECT_FALSE(test, b->credit_linked);
 	svc_tcp_rx_credit_release(a);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 0L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 0L);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_reserve_avail(), 0L);
 }
 
@@ -2052,19 +2102,19 @@ static void svcsock_rx_credit_default_budget_test(struct kunit *test)
 	svc_tcp_rx_budget_kunit_rcvbuf(128 * 1024);
 	svc_tcp_rx_budget_kunit_default(20, 0);
 	/* Whatever an earlier user left in force there, nothing changes it. */
-	init_avail = svc_tcp_rx_budget_avail();
+	init_avail = svc_tcp_rx_budget_kunit_avail();
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
 	KUNIT_EXPECT_TRUE(test, a->credit_linked);
 	KUNIT_EXPECT_EQ(test, a->credit, 11U);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_default_avail(), 9L);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), init_avail);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_default_avail(), 9L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), init_avail);
 	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sb, b, len));
 	svc_tcp_rx_credit_release(a);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_default_avail(), 20L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_default_avail(), 20L);
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
 	svc_tcp_rx_credit_release(b);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_default_avail(), 20L);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), init_avail);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_default_avail(), 20L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), init_avail);
 }
 
 /*
@@ -2406,6 +2456,20 @@ svcsock_rx_region_fixture(struct kunit *test, unsigned long nr_read)
 	return f;
 }
 
+/*
+ * Keep the test on the CPU it runs on, so the region's per-CPU caches it
+ * fills are the ones it takes from.  Each case runs in its own kthread, so
+ * the affinity ends with the case.
+ */
+static int svcsock_rx_region_pin(struct kunit *test)
+{
+	int cpu = raw_smp_processor_id();
+
+	KUNIT_ASSERT_EQ(test, set_cpus_allowed_ptr(current, cpumask_of(cpu)),
+			0);
+	return raw_smp_processor_id();
+}
+
 static void svcsock_rx_region_expect_part(struct kunit *test, bool read,
 					  unsigned long nfree,
 					  unsigned long min_free,
@@ -2431,6 +2495,8 @@ static void svcsock_rx_region_take_give_test(struct kunit *test)
 	struct page *pages[SVCSOCK_RX_REGION_PAGES], *stray;
 	unsigned long pfn = 0;
 
+	svcsock_rx_region_pin(test);
+
 	KUNIT_EXPECT_EQ(test, page_pool_rx_region_size(), 16UL);
 	KUNIT_EXPECT_EQ(test, page_pool_rx_region_read_pages(), 4UL);
 	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(false, &pfn), 12UL);
@@ -2449,23 +2515,37 @@ static void svcsock_rx_region_take_give_test(struct kunit *test)
 	svcsock_rx_region_expect_part(test, true, 0, 0, 0);
 	svcsock_rx_region_expect_part(test, false, 12, 12, 0);
 
-	/* One call gives back pages of both partitions, each to its own. */
+	/*
+	 * One call gives back pages of both partitions, each to its own.  The
+	 * write take refilled this CPU's cache with the other ten pages, which
+	 * counts as taken from the shard: min_free 0.
+	 */
 	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(false, pages + 4, 2),
 			2U);
 	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[5]), f->pfn + 10);
 	page_pool_rx_region_give_pages(pages, 6);
 	svcsock_rx_region_expect_part(test, true, 4, 0, 0);
-	svcsock_rx_region_expect_part(test, false, 12, 10, 0);
+	svcsock_rx_region_expect_part(test, false, 12, 0, 0);
 
-	/* A double give into a full partition warns, is not stored or put. */
+	/*
+	 * A double give into a full partition warns, is not stored or put.
+	 * Fewer than 32 pages go back through this CPU's cache, so the second
+	 * give is caught when the cache drains into the full shard.
+	 */
+	page_pool_rx_region_kunit_drain(true);
+	page_pool_rx_region_kunit_drain(false);
 	kunit_warning_suppress(test) {
 		page_pool_rx_region_give_pages(pages, 1);
+		page_pool_rx_region_kunit_drain(true);
 		SVCSOCK_EXPECT_ONCE_WARNING(test);
 	}
 	svcsock_rx_region_expect_part(test, true, 4, 0, 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pages[0]), 1);
 
-	/* The page given last comes back first. */
+	/*
+	 * The page given last comes back first.  This take also refills the
+	 * cache with the other three, so they still count as free.
+	 */
 	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 1), 1U);
 	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[0]), f->pfn + 12);
 
@@ -2492,7 +2572,7 @@ static void svcsock_rx_region_take_give_test(struct kunit *test)
 		SVCSOCK_EXPECT_ONCE_WARNING(test);
 	}
 	svcsock_rx_region_expect_part(test, true, 3, 0, 2);
-	svcsock_rx_region_expect_part(test, false, 12, 10, 0);
+	svcsock_rx_region_expect_part(test, false, 12, 0, 0);
 }
 
 /*
@@ -2693,12 +2773,12 @@ static void svcsock_rx_bounce_region_credit_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), 29L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 1L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "bounced"), bounced + 1);
-	svcsock_rx_region_expect_part(test, false, 15, 15, 0);
+	svcsock_rx_region_expect_part(test, false, 15, 0, 0);
 	svc_tcp_rx_bounce_done(fixture->rqstp, out, n);
 	KUNIT_EXPECT_EQ(test, state->bounce_pages, 0U);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), 30L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
-	svcsock_rx_region_expect_part(test, false, 16, 15, 0);
+	svcsock_rx_region_expect_part(test, false, 16, 0, 0);
 	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
 }
@@ -2797,11 +2877,11 @@ static void svcsock_rx_bounce_region_multi_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 3L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "bounced"), bounced + 1);
-	svcsock_rx_region_expect_part(test, false, 13, 13, 0);
+	svcsock_rx_region_expect_part(test, false, 13, 0, 0);
 	svc_tcp_rx_bounce_done(fixture->rqstp, out, n);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail + 3);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
-	svcsock_rx_region_expect_part(test, false, 16, 13, 0);
+	svcsock_rx_region_expect_part(test, false, 16, 0, 0);
 	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
 }
@@ -2998,7 +3078,7 @@ static void svcsock_rx_bounce_locked_head_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, page_ref_count(tail_page), tail_refs - 1);
 	svc_tcp_rx_bounce_done(fixture->rqstp, out, n);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
-	svcsock_rx_region_expect_part(test, false, 16, 15, 0);
+	svcsock_rx_region_expect_part(test, false, 16, 0, 0);
 	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
 }
@@ -3257,8 +3337,566 @@ static void svcsock_rx_bounce_budget_off_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "lent"), 0L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "avail"), 0L);
 	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(env->c, "budget"), 0L);
-	svcsock_rx_region_expect_part(test, false, 16, 14, 0);
+	svcsock_rx_region_expect_part(test, false, 16, 0, 0);
 	svc_tcp_release_ctxt(&env->fixture->svsk->sk_xprt, env->state);
+}
+
+#ifdef CONFIG_CONTIG_ALLOC
+static void svcsock_rx_region_contig_off(void *data)
+{
+	page_pool_rx_region_kunit_remove(true);
+}
+#endif
+
+/*
+ * Publish a region over @nr contiguous pages of the page allocator, @nr_read
+ * of them split off for reads; removed (and the pages freed) when the case
+ * ends.  Return its first pfn.
+ */
+static unsigned long svcsock_rx_region_contig(struct kunit *test,
+					      unsigned long nr,
+					      unsigned long nr_read)
+{
+#ifdef CONFIG_CONTIG_ALLOC
+	unsigned long pfn = 0;
+	struct page *base;
+	int ret;
+
+	if (page_pool_rx_region_span(false, &pfn))
+		kunit_skip(test, "a fixed rx region already exists");
+	base = alloc_contig_pages(nr, GFP_KERNEL, numa_mem_id(), NULL);
+	if (!base)
+		kunit_skip(test, "no %lu contiguous pages", nr);
+	ret = page_pool_rx_region_kunit_install(base, nr, nr_read);
+	if (ret)
+		free_contig_range(page_to_pfn(base), nr);
+	if (ret == -EBUSY)
+		kunit_skip(test, "a fixed rx region already exists");
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_region_contig_off, NULL), 0);
+	return page_to_pfn(base);
+#else
+	kunit_skip(test, "needs CONFIG_CONTIG_ALLOC");
+	return 0;
+#endif
+}
+
+/* The shard count a partition of @nr pages gets. */
+static unsigned int svcsock_rx_region_nshards(unsigned long nr)
+{
+	return clamp_t(unsigned long, nr / 1024, 1,
+		       min_t(unsigned int, 16, nr_cpu_ids));
+}
+
+/* A partition's free pages (shards and caches); its cached pages in @cached. */
+static unsigned long svcsock_rx_region_free(bool read, unsigned long *cached,
+					    unsigned int *maxcache,
+					    unsigned int *nshards)
+{
+	unsigned long cap;
+	unsigned int foreign;
+
+	return page_pool_rx_region_kunit_shards(read, -1, &cap, &foreign,
+						cached, maxcache, nshards);
+}
+
+/* Every page in each shard is one the shard owns; @full: and none missing. */
+static void svcsock_rx_region_shards_own(struct kunit *test, bool read,
+					 bool full)
+{
+	unsigned long cap, cached, nfree;
+	unsigned int i, foreign, maxcache, nshards;
+
+	svcsock_rx_region_free(read, &cached, &maxcache, &nshards);
+	for (i = 0; i < nshards; i++) {
+		nfree = page_pool_rx_region_kunit_shards(read, i, &cap,
+							 &foreign, &cached,
+							 &maxcache, &nshards);
+		KUNIT_EXPECT_EQ(test, foreign, 0U);
+		if (full)
+			KUNIT_EXPECT_EQ(test, nfree, cap);
+	}
+}
+
+/* @n distinct pages, filling a pfn range of @n. */
+static bool svcsock_rx_region_distinct(struct page **pages, unsigned long n)
+{
+	unsigned long lo = ULONG_MAX, i, *seen;
+	bool ok = true;
+
+	for (i = 0; i < n; i++)
+		lo = min(lo, page_to_pfn(pages[i]));
+	seen = bitmap_zalloc(n, GFP_KERNEL);
+	if (!seen)
+		return false;
+	for (i = 0; i < n && ok; i++) {
+		unsigned long off = page_to_pfn(pages[i]) - lo;
+
+		ok = off < n && !test_and_set_bit(off, seen);
+	}
+	bitmap_free(seen);
+	return ok;
+}
+
+struct svcsock_rx_region_give {
+	struct page **pages;
+	unsigned int n;
+};
+
+/* Give pages back one at a time on another CPU, into its cache. */
+static long svcsock_rx_region_give_fn(void *arg)
+{
+	struct svcsock_rx_region_give *g = arg;
+	unsigned int i;
+
+	for (i = 0; i < g->n; i++)
+		page_pool_rx_region_give_pages(&g->pages[i], 1);
+	return 0;
+}
+
+#define SVCSOCK_RX_REGION_BIG	2048UL
+
+/*
+ * A partition's per-CPU caches: cached pages count as free, a cache refills
+ * by a batch of 32 and holds at most 64, spilling a batch when full (or
+ * everything when its home shard is below an eighth); it is not refilled
+ * when the shards are down to an eighth of the partition; a taker short of
+ * pages drains every CPU's cache before it fails, and a device refill (not
+ * exact) drains at most once a jiffy.
+ */
+static void svcsock_rx_region_cache_test(struct kunit *test)
+{
+	unsigned long nr = SVCSOCK_RX_REGION_BIG, cached, i;
+	unsigned int maxcache, nshards, got, tries;
+	struct svcsock_rx_region_give g;
+	struct page **pages;
+	int cpu;
+
+	svcsock_rx_region_contig(test, nr, 0);
+	cpu = svcsock_rx_region_pin(test);
+	pages = kunit_kcalloc(test, nr + 1, sizeof(*pages), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, pages);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), nr);
+	KUNIT_EXPECT_EQ(test, cached, 0UL);
+	KUNIT_EXPECT_EQ(test, nshards, svcsock_rx_region_nshards(nr));
+
+	/* Single pages come through this CPU's cache, refilled 32 at a time. */
+	for (i = 0; i < 100; i++)
+		KUNIT_ASSERT_EQ(test,
+				page_pool_rx_region_take_pages(true, &pages[i], 1),
+				1U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), nr - 100);
+	KUNIT_EXPECT_EQ(test, cached, 32UL);
+	for (i = 0; i < 100; i++)
+		page_pool_rx_region_give_pages(&pages[i], 1);
+	/* 32 + 100 given: spilled a batch at 64 three times. */
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), nr);
+	KUNIT_EXPECT_EQ(test, cached, 36UL);
+	KUNIT_EXPECT_LE(test, maxcache, 64U);
+
+	/* Beyond the partition: refused outright, nothing drained. */
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_take_pages(true, pages, nr + 1),
+			0U);
+	svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_EXPECT_EQ(test, cached, 36UL);
+
+	/* One page too many: none taken, none lost, and the caches drained. */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages,
+							     nr - 100),
+			(unsigned int)(nr - 100));
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_take_pages(true, pages + nr - 100,
+							     101), 0U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), 100UL);
+	KUNIT_EXPECT_EQ(test, cached, 0UL);
+	page_pool_rx_region_give_pages(pages, nr - 100);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), nr);
+	KUNIT_EXPECT_EQ(test, cached, 0UL);
+
+	/* Pages left in another CPU's cache: a taker short drains it. */
+	g.pages = pages;
+	g.n = 40;
+	if (cpumask_any_but(cpu_online_mask, cpu) < nr_cpu_ids) {
+		KUNIT_ASSERT_EQ(test,
+				page_pool_rx_region_take_pages(true, pages, 40),
+				40U);
+		work_on_cpu(cpumask_any_but(cpu_online_mask, cpu),
+			    svcsock_rx_region_give_fn, &g);
+		svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+		KUNIT_EXPECT_EQ(test, cached, 40UL);
+	} else {
+		kunit_mark_skipped(test, "one CPU: no other CPU's cache to drain");
+	}
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, nr),
+			(unsigned int)nr);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), 0UL);
+	KUNIT_EXPECT_TRUE(test, svcsock_rx_region_distinct(pages, nr));
+
+	/* Full with its home shard empty: the cache spills everything. */
+	for (i = 0; i < 64; i++)
+		page_pool_rx_region_give_pages(&pages[i], 1);
+	svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_EXPECT_EQ(test, cached, 64UL);
+	page_pool_rx_region_give_pages(&pages[64], 1);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), 65UL);
+	KUNIT_EXPECT_EQ(test, cached, 1UL);
+
+	/* With the shards refilled, a full cache spills one batch of 32. */
+	page_pool_rx_region_give_pages(&pages[65], nr - 64 - 65);
+	for (i = nr - 64; i < nr; i++)
+		page_pool_rx_region_give_pages(&pages[i], 1);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), nr);
+	KUNIT_EXPECT_EQ(test, cached, 33UL);
+	svcsock_rx_region_shards_own(test, false, false);
+	page_pool_rx_region_kunit_drain(false);
+	svcsock_rx_region_shards_own(test, false, true);
+
+	/* No refill once the shards are down to an eighth of the partition. */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages,
+							     nr - 200),
+			(unsigned int)(nr - 200));
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true,
+							     &pages[nr - 1], 1),
+			1U);
+	svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_EXPECT_EQ(test, cached, 0UL);
+	page_pool_rx_region_give_pages(pages, nr - 200);
+
+	/*
+	 * A device refill finding nothing drains once a jiffy.  Leave every
+	 * page taken but one, cached here; the first refill in a fresh jiffy
+	 * drains and finds it, a second in the same jiffy does not drain.
+	 */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, nr - 1),
+			(unsigned int)(nr - 1));
+	for (tries = 0; tries < 5; tries++) {
+		unsigned long j;
+
+		schedule_timeout_uninterruptible(1);
+		page_pool_rx_region_give_pages(&pages[nr - 1], 1);
+		j = jiffies;
+		got = page_pool_rx_region_kunit_take(true, &pages[nr - 1], 64,
+						     false);
+		KUNIT_ASSERT_EQ(test, got, 1U);
+		page_pool_rx_region_give_pages(&pages[nr - 1], 1);
+		got = page_pool_rx_region_kunit_take(true, &pages[nr - 1], 64,
+						     false);
+		if (!got)
+			break;
+		/* A tick passed between the two: try again. */
+		KUNIT_EXPECT_NE(test, jiffies, j);
+	}
+	KUNIT_EXPECT_LT(test, tries, 5U);
+	svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_EXPECT_EQ(test, cached, 1UL);
+	page_pool_rx_region_give_pages(pages, nr - 1);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), nr);
+}
+
+/* Shard @want's capacity in a partition of @nr pages over @nshards shards. */
+static unsigned long svcsock_rx_region_cap(unsigned long nr,
+					   unsigned int nshards,
+					   unsigned int want)
+{
+	unsigned long cap = DIV_ROUND_UP(nr, nshards);
+
+	return min(cap, nr - min(nr, want * cap));
+}
+
+/* Install @nr pages unsplit and check its shard count and capacities. */
+static void svcsock_rx_region_expect_layout(struct kunit *test,
+					    unsigned long nr)
+{
+	unsigned int i, foreign, maxcache, nshards, want;
+	unsigned long cap, cached;
+
+	svcsock_rx_region_contig(test, nr, 0);
+	want = svcsock_rx_region_nshards(nr);
+	svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_EXPECT_EQ(test, nshards, want);
+	for (i = 0; i < nshards; i++) {
+		KUNIT_EXPECT_EQ(test,
+				page_pool_rx_region_kunit_shards(false, i, &cap,
+								 &foreign,
+								 &cached,
+								 &maxcache,
+								 &nshards),
+				svcsock_rx_region_cap(nr, want, i));
+		KUNIT_EXPECT_EQ(test, cap, svcsock_rx_region_cap(nr, want, i));
+	}
+	page_pool_rx_region_kunit_remove(true);
+}
+
+/*
+ * pfn-range shards: how many (one per 1024 pages, at most 16 and one per
+ * CPU), the last one's remainder, home shard first and then round robin,
+ * large takes and gives bypassing the caches, every page back in its owner
+ * shard, and min_free as the sum of the shards' low-water marks.
+ */
+static void svcsock_rx_region_shard_test(struct kunit *test)
+{
+	unsigned long nr = SVCSOCK_RX_REGION_BIG, first, cap, cached, c, st[4];
+	unsigned int foreign, maxcache, nshards, home, next, i;
+	unsigned long home_cap;
+	struct page **pages;
+	int cpu;
+
+	svcsock_rx_region_expect_layout(test, 1023);
+	svcsock_rx_region_expect_layout(test, 3001);
+	first = svcsock_rx_region_contig(test, nr, 0);
+	cpu = svcsock_rx_region_pin(test);
+	pages = kunit_kcalloc(test, nr, sizeof(*pages), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, pages);
+	svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_ASSERT_EQ(test, nshards, svcsock_rx_region_nshards(nr));
+	home = (cpu * nshards) / nr_cpu_ids;
+	home_cap = svcsock_rx_region_cap(nr, nshards, home);
+
+	/* A bulk take comes from the home shard; min_free sums the shards. */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 100),
+			100U);
+	for (i = 0; i < nshards; i++)
+		KUNIT_EXPECT_EQ(test,
+				page_pool_rx_region_kunit_shards(false, i, &cap,
+								 &foreign,
+								 &cached,
+								 &maxcache,
+								 &nshards),
+				svcsock_rx_region_cap(nr, nshards, i) -
+				(i == home ? 100 : 0));
+	page_pool_rx_region_give_pages(pages, 100);
+	page_pool_rx_region_kunit_part(false, st);
+	KUNIT_EXPECT_EQ(test, st[0], nr);
+	KUNIT_EXPECT_EQ(test, st[1], nr - 100);
+	page_pool_rx_region_kunit_reset_min_free();
+	page_pool_rx_region_kunit_part(false, st);
+	KUNIT_EXPECT_EQ(test, st[1], nr);
+
+	/* The home shard emptied, the next one serves. */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages,
+							     home_cap),
+			(unsigned int)home_cap);
+	for (i = 0; i < home_cap; i++)
+		KUNIT_EXPECT_EQ(test, (page_to_pfn(pages[i]) - first) /
+				DIV_ROUND_UP(nr, nshards), (unsigned long)home);
+	if (nshards > 1) {
+		next = home + 1 == nshards ? 0 : home + 1;
+		KUNIT_ASSERT_EQ(test,
+				page_pool_rx_region_take_pages(true,
+							       pages + home_cap,
+							       40),
+				40U);
+		for (i = 0; i < 40; i++)
+			KUNIT_EXPECT_EQ(test,
+					(page_to_pfn(pages[home_cap + i]) -
+					 first) / DIV_ROUND_UP(nr, nshards),
+					(unsigned long)next);
+		page_pool_rx_region_give_pages(pages, home_cap + 40);
+	} else {
+		page_pool_rx_region_give_pages(pages, home_cap);
+	}
+	svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_EXPECT_EQ(test, cached, 0UL);
+	svcsock_rx_region_shards_own(test, false, true);
+
+	/* 257 pages (a 1 MiB READ) each way, and a give of 32: no cache. */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 257),
+			257U);
+	svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_EXPECT_EQ(test, cached, 0UL);
+	page_pool_rx_region_give_pages(pages, 257);
+	svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_EXPECT_EQ(test, cached, 0UL);
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 32),
+			32U);
+	svcsock_rx_region_free(false, &c, &maxcache, &nshards);
+	page_pool_rx_region_give_pages(pages, 32);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), nr);
+	KUNIT_EXPECT_EQ(test, cached, c);
+	page_pool_rx_region_kunit_drain(false);
+	svcsock_rx_region_shards_own(test, false, true);
+}
+
+/*
+ * A split region: each partition has its own caches and shards, a mixed
+ * give returns every page to its partition's owner shard, and an escape
+ * makes the read partition one page smaller.
+ */
+static void svcsock_rx_region_split_shards_test(struct kunit *test)
+{
+	unsigned long nr = 2 * SVCSOCK_RX_REGION_BIG, half = nr / 2, cached;
+	unsigned int maxcache, nshards, i;
+	struct page **pages, *mixed[40];
+	unsigned long st[4];
+
+	svcsock_rx_region_contig(test, nr, half);
+	svcsock_rx_region_pin(test);
+	pages = kunit_kcalloc(test, nr, sizeof(*pages), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, pages);
+
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(true, &cached, &maxcache,
+						     &nshards), half);
+	KUNIT_EXPECT_EQ(test, nshards, svcsock_rx_region_nshards(half));
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), half);
+	KUNIT_EXPECT_EQ(test, nshards, svcsock_rx_region_nshards(half));
+
+	/* A small read take fills the read cache only (read_cached). */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 1),
+			1U);
+	svcsock_rx_region_free(true, &cached, &maxcache, &nshards);
+	KUNIT_EXPECT_EQ(test, cached, 32UL);
+	svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_EXPECT_EQ(test, cached, 0UL);
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(false, pages + 1, 1),
+			1U);
+	svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_EXPECT_EQ(test, cached, 32UL);
+
+	/* Bulk runs of each partition in one give. */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages + 2, 40),
+			40U);
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(false, pages + 42,
+							     40),
+			40U);
+	page_pool_rx_region_give_pages(pages, 82);
+
+	/* Interleaved: runs of one, through the caches. */
+	for (i = 0; i < 20; i++) {
+		KUNIT_ASSERT_EQ(test,
+				page_pool_rx_region_take_pages(true,
+							       &mixed[2 * i], 1),
+				1U);
+		KUNIT_ASSERT_EQ(test,
+				page_pool_rx_region_take_pages(false,
+							       &mixed[2 * i + 1],
+							       1),
+				1U);
+	}
+	page_pool_rx_region_give_pages(mixed, 40);
+	page_pool_rx_region_kunit_drain(true);
+	page_pool_rx_region_kunit_drain(false);
+	svcsock_rx_region_shards_own(test, true, true);
+	svcsock_rx_region_shards_own(test, false, true);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(true, &cached, &maxcache,
+						     &nshards), half);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards), half);
+
+	/* An escaped read page: the read partition's capacity is one less. */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 1),
+			1U);
+	get_page(pages[0]);
+	page_pool_rx_region_give_pages(pages, 1);
+	KUNIT_EXPECT_EQ(test, page_ref_count(pages[0]), 1);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_capacity(true), half - 1);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_capacity(false), half);
+	page_pool_rx_region_kunit_part(true, st);
+	KUNIT_EXPECT_EQ(test, st[0], half - 1);
+	KUNIT_EXPECT_EQ(test, st[3], 1UL);
+	page_pool_rx_region_kunit_part(false, st);
+	KUNIT_EXPECT_EQ(test, st[3], 0UL);
+	/* The escaped page keeps refcount 1; removal frees it with the rest. */
+}
+
+/* page_pool.c's bounds on a pool bound to the region. */
+#define SVCSOCK_RX_POOL_RING	64
+#define SVCSOCK_RX_POOL_REFILL	min_t(unsigned int, PP_ALLOC_CACHE_REFILL, 16)
+#define SVCSOCK_RX_POOL_CACHE	(2 * SVCSOCK_RX_POOL_REFILL)
+#define SVCSOCK_RX_POOL_HELD	48	/* three refills at most */
+
+struct svcsock_rx_region_pool {
+	struct page_pool *pool;
+	struct page *pages[SVCSOCK_RX_POOL_HELD];
+	unsigned int n;
+};
+
+/* Give back the pages the case still holds, then destroy the pool. */
+static void svcsock_rx_region_pool_off(void *data)
+{
+	struct svcsock_rx_region_pool *rp = data;
+
+	while (rp->n)
+		page_pool_put_full_page(rp->pool, rp->pages[--rp->n], false);
+	page_pool_destroy(rp->pool);
+}
+
+/*
+ * A pool bound to the region, as every listed device's queue pool is, keeps
+ * at most 64 remotely released pages (in 7.3's recycle stack, or in a ring
+ * shortened to 64 where the stack could not be allocated), refills 16 pages
+ * at a time from the write partition and caches at most 32 (fewer on large
+ * pages, as PP_ALLOC_CACHE_REFILL is).
+ */
+static void svcsock_rx_region_pool_bounds_test(struct kunit *test)
+{
+	unsigned long nr = SVCSOCK_RX_REGION_BIG, cached, before;
+	unsigned int refill = SVCSOCK_RX_POOL_REFILL, maxcache, nshards, i;
+	struct svcsock_rx_region_pool *rp;
+	struct page *page;
+
+	svcsock_rx_region_contig(test, nr, 0);
+	svcsock_rx_region_pin(test);
+	rp = kunit_kzalloc(test, sizeof(*rp), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, rp);
+	rp->pool = page_pool_rx_region_kunit_pool();
+	KUNIT_ASSERT_FALSE(test, IS_ERR(rp->pool));
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_region_pool_off, rp), 0);
+	if (rp->pool->rx_stack)
+		KUNIT_EXPECT_EQ(test, rp->pool->rx_stack_size,
+				SVCSOCK_RX_POOL_RING);
+	else
+		KUNIT_EXPECT_EQ(test, rp->pool->ring.size,
+				SVCSOCK_RX_POOL_RING);
+
+	/* The first allocation refills the pool from the write partition. */
+	before = svcsock_rx_region_free(false, &cached, &maxcache, &nshards);
+	KUNIT_ASSERT_EQ(test, before, nr);
+	page = page_pool_alloc_pages(rp->pool, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, page);
+	rp->pages[rp->n++] = page;
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards),
+			before - refill);
+	KUNIT_EXPECT_EQ(test, rp->pool->alloc.count, refill - 1);
+
+	/* Two more refills; every page held, the pool's cache empty. */
+	while (rp->n < 3 * refill) {
+		page = page_pool_alloc_pages(rp->pool, GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, page);
+		rp->pages[rp->n++] = page;
+	}
+	KUNIT_EXPECT_EQ(test, rp->pool->alloc.count, 0U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards),
+			before - 3 * refill);
+
+	/* Direct recycling fills the pool's cache to 32 and refuses the 33rd. */
+	for (i = 0; i < SVCSOCK_RX_POOL_CACHE; i++)
+		KUNIT_EXPECT_TRUE(test, page_pool_rx_region_kunit_recycle(
+					rp->pool, rp->pages[--rp->n]));
+	KUNIT_EXPECT_EQ(test, rp->pool->alloc.count, SVCSOCK_RX_POOL_CACHE);
+	KUNIT_ASSERT_GT(test, rp->n, 0U);
+	KUNIT_EXPECT_FALSE(test, page_pool_rx_region_kunit_recycle(
+					rp->pool, rp->pages[rp->n - 1]));
+	KUNIT_EXPECT_EQ(test, rp->pool->alloc.count, SVCSOCK_RX_POOL_CACHE);
+
+	/* Destroying the pool returns every page to the write partition. */
+	kunit_release_action(test, svcsock_rx_region_pool_off, rp);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_region_free(false, &cached, &maxcache,
+						     &nshards),
+			nr);
 }
 #endif
 
@@ -3301,7 +3939,7 @@ static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
 	svc_tcp_rx_budget_kunit_configure(10, 0, 100);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(svsk, state, 10 * PAGE_SIZE));
 	credit = state->credit;
-	avail = svc_tcp_rx_budget_avail();
+	avail = svc_tcp_rx_budget_kunit_avail();
 	state->terminal = false;
 	kunit_warning_suppress(test) {
 		svc_tcp_rx_reset(state);
@@ -3309,7 +3947,7 @@ static void svcsock_rx_credit_invalid_reset_test(struct kunit *test)
 	}
 	KUNIT_EXPECT_TRUE(test, state->credit_linked);
 	KUNIT_EXPECT_EQ(test, state->credit, credit);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), avail);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), avail);
 	svc_tcp_rx_credit_release(state);
 	state->terminal = true;
 	svc_tcp_rx_reset(state);
@@ -3336,12 +3974,12 @@ static void svcsock_rx_credit_rcvbuf_floor_test(struct kunit *test)
 	svc_tcp_rx_budget_kunit_rcvbuf(64 * 1024);
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(svsk, state, len));
 	KUNIT_EXPECT_EQ(test, state->credit, 0U);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 0L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 0L);
 	svc_tcp_rx_credit_release(state);
 	svc_tcp_rx_budget_kunit_rcvbuf(128 * 1024);
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(svsk, state, len));
 	KUNIT_EXPECT_EQ(test, state->credit, 11U);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 19L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 19L);
 	svc_tcp_rx_credit_release(state);
 }
 
@@ -4219,7 +4857,7 @@ static void svcsock_rx_credit_collapsed_unwaits_test(struct kunit *test)
 
 	svc_tcp_rx_budget_kunit_configure(10, 0, 100);
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
-	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_avail(), 0L);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 0L);
 
 	/* Refused at the region page: only the prefix before it is taken. */
 	ret = svcsock_rx_run_actor(fixture->rqstp, &actor, &desc, region_skb,
@@ -4247,7 +4885,7 @@ static void svcsock_rx_credit_collapsed_unwaits_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, ret, (int)(sizeof(record) - HEAD_LEN));
 	KUNIT_EXPECT_TRUE(test, actor.complete);
 	KUNIT_EXPECT_FALSE(test, state->credit_linked);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_avail(), 10L);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 10L);
 	KUNIT_EXPECT_TRUE(test, list_empty(&sb->sk_credit_wait));
 	KUNIT_EXPECT_EQ(test, sb->sk_credit_ticket, 0ULL);
 	KUNIT_EXPECT_NULL(test, sb->sk_budget);
@@ -4924,10 +5562,9 @@ static struct svcsock_region *svcsock_region_alloc(struct kunit *test,
 	return r;
 }
 
-/* One field of a budget's stats line, as the module parameter prints it. */
-static long svcsock_region_stat_of(struct kunit *test, struct svc_sock *svsk,
-				   enum svc_tcp_rx_kunit_stats which,
-				   const char *name)
+/* One field of @c's stats line, as the module parameter prints it. */
+static long svcsock_budget_stat(struct kunit *test, struct svc_tcp_rx_budget *c,
+				const char *name)
 {
 	size_t n = strlen(name);
 	char buf[512];
@@ -4935,8 +5572,7 @@ static long svcsock_region_stat_of(struct kunit *test, struct svc_sock *svsk,
 	long v;
 
 	memset(buf, 0, sizeof(buf));
-	svc_tcp_rx_budget_kunit_stats(svc_tcp_rx_region_kunit_budget(svsk, which),
-				      buf, sizeof(buf));
+	svc_tcp_rx_budget_kunit_stats(c, buf, sizeof(buf));
 	while (p && *p) {
 		if (!strncmp(p, name, n) && p[n] == ' ') {
 			KUNIT_ASSERT_EQ(test, sscanf(p + n + 1, "%ld", &v), 1);
@@ -4948,6 +5584,16 @@ static long svcsock_region_stat_of(struct kunit *test, struct svc_sock *svsk,
 	}
 	KUNIT_FAIL(test, "no field %s in the budget stats", name);
 	return -1;
+}
+
+/* One field of a budget's stats line, as the module parameter prints it. */
+static long svcsock_region_stat_of(struct kunit *test, struct svc_sock *svsk,
+				   enum svc_tcp_rx_kunit_stats which,
+				   const char *name)
+{
+	return svcsock_budget_stat(test,
+				   svc_tcp_rx_region_kunit_budget(svsk, which),
+				   name);
 }
 
 /* A field of the budget READs on @r's transport draw on. */
@@ -6021,6 +6667,565 @@ static void svcsock_rx_region_read_short_test(struct kunit *test)
 			0);
 }
 
+/*
+ * Per-CPU credit stocks.  The cases pin themselves to the CPU they run on,
+ * so the stock they fill is the one they take from.
+ */
+static int svcsock_rx_stock_pin(struct kunit *test)
+{
+	int cpu = raw_smp_processor_id();
+
+	KUNIT_ASSERT_EQ(test, set_cpus_allowed_ptr(current, cpumask_of(cpu)),
+			0);
+	return raw_smp_processor_id();
+}
+
+/* Another online CPU than @cpu, or -1 with only one. */
+static int svcsock_rx_stock_other(int cpu)
+{
+	unsigned int other = cpumask_any_but(cpu_online_mask, cpu);
+
+	return other < nr_cpu_ids ? (int)other : -1;
+}
+
+static long svcsock_rx_stock(struct svc_tcp_rx_budget *c,
+			     enum svc_tcp_rx_kunit_stock_op op, long n)
+{
+	return svc_tcp_rx_budget_kunit_stock(c, op, n);
+}
+
+/*
+ * Port of the old stock case, on the budget READs on the fixture's
+ * transport draw on: a refill stocks a batch; takes and puts move credit
+ * without the lock; a put beyond 64 spills all but a batch.  The first
+ * waiter's drain returns every stock and stops stocking, so a READ takes
+ * the budget's ordered path, and its return with nobody waiting turns
+ * stocking back on.  The budget's credit (stocked included) never changes.
+ */
+static void svcsock_rx_credit_stock_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 8, 256);
+	struct svc_rqst *rqstp = r->fx->rqstp;
+	struct svc_tcp_rx_budget *c;
+	long full, v[8];
+
+	svcsock_rx_stock_pin(test);
+	c = svc_tcp_rx_region_kunit_budget(r->fx->svsk, SVC_TCP_RX_STATS_READ);
+	/* The first READ applies the configuration. */
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 1), 0);
+	svc_tcp_rx_region_unconfine(rqstp);
+	full = svcsock_region_credit(test, r);
+	KUNIT_ASSERT_EQ(test, full, 256);
+	/* Start from empty stocks with stocking on. */
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_DRAIN, 0);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	KUNIT_ASSERT_FALSE(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_CONTENDED, 0));
+
+	v[0] = svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0);
+	v[1] = svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
+	v[2] = svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_TAKE, 20);
+	v[3] = svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_TAKE, 20);
+	v[4] = svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_PUT, 20);
+	/* 60 held while refills top the stock up: returning them spills. */
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_TAKE, 30);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_TAKE, 30);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
+	v[5] = svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0);
+	v[6] = svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_PUT, 60);
+	v[7] = svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0);
+	KUNIT_EXPECT_EQ(test, v[0], 0L);
+	KUNIT_EXPECT_EQ(test, v[1], 32L);	/* a batch */
+	KUNIT_EXPECT_EQ(test, v[2], 1L);
+	KUNIT_EXPECT_EQ(test, v[3], 0L);	/* 12 left */
+	KUNIT_EXPECT_EQ(test, v[4], 0L);	/* back to 32, no spill */
+	KUNIT_EXPECT_EQ(test, v[5], 36L);	/* 2 + 32, less 30, + 32 */
+	KUNIT_EXPECT_EQ(test, v[6], 64L);	/* 96 spills all but a batch */
+	KUNIT_EXPECT_EQ(test, v[7], 32L);
+	KUNIT_EXPECT_EQ(test, svcsock_region_credit(test, r), full);
+
+	/* The first waiter's drain: every stock back, stocking off. */
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_DRAIN, 0);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 0L);
+	KUNIT_EXPECT_TRUE(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_CONTENDED, 0));
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_FILL, 0), 0L);
+	KUNIT_EXPECT_FALSE(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_TAKE, 1));
+	KUNIT_EXPECT_EQ(test, svcsock_region_credit(test, r), full);
+
+	/* A READ takes the ordered path; its return, nobody waiting, ends it. */
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 1), 0);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_inflight"), 1);
+	svc_tcp_rx_region_unconfine(rqstp);
+	KUNIT_EXPECT_FALSE(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_CONTENDED, 0));
+	KUNIT_EXPECT_EQ(test, svcsock_region_credit(test, r), full);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_inflight"), 0);
+
+	/* A READ from the stock: lockless, counted, and its credit back. */
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
+	v[0] = svcsock_region_stat(test, r, "read_admitted");
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 2), 0);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 30L);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_inflight"), 1);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_admitted"),
+			v[0] + 1);
+	svc_tcp_rx_region_unconfine(rqstp);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 32L);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_inflight"), 0);
+	KUNIT_EXPECT_EQ(test, svcsock_region_credit(test, r), full);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 8U);
+}
+
+static struct svc_tcp_rx_budget *svcsock_rx_stock_init_budget(void)
+{
+	return svc_tcp_rx_region_kunit_budget(NULL, SVC_TCP_RX_STATS_INIT);
+}
+
+/*
+ * A receive record admitted from a stock is off the in-flight list but
+ * counted in the inflight and admitted stats.  A charge beyond its stock
+ * links it as the youngest record.  While a stocked record holds credit no
+ * other record is the oldest, so the reserve is refused to a newer one
+ * until it returns.  An orphaned stocked record keeps its credit spent and
+ * leaves the in-flight list intact.
+ */
+static void svcsock_rx_credit_stock_record_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *big = svcsock_rx_alloc_state(test, 300);
+	struct svc_sock *sa = svcsock_rx_credit_sock_forget(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock_forget(test);
+	struct svc_sock *sc = svcsock_rx_credit_sock_forget(test);
+	const u32 len = 10 * PAGE_SIZE;		/* costs 11 */
+	struct svc_tcp_rx_budget *c;
+	long admitted, orphaned;
+
+	KUNIT_ASSERT_NOT_NULL(test, a);
+	KUNIT_ASSERT_NOT_NULL(test, b);
+	KUNIT_ASSERT_NOT_NULL(test, big);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svcsock_rx_stock_pin(test);
+	svc_tcp_rx_budget_kunit_configure(256, 16, 100);
+	c = svcsock_rx_stock_init_budget();
+	KUNIT_ASSERT_NOT_NULL(test, c);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	admitted = svcsock_budget_stat(test, c, "admitted");
+
+	/* Stocking off: b is admitted in order, onto the in-flight list. */
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_DRAIN, 0);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_EXPECT_FALSE(test, b->credit_stocked);
+	KUNIT_EXPECT_GT(test, b->credit_ticket, 0ULL);
+
+	/* Its admission turned stocking back on: a comes from the stock. */
+	KUNIT_ASSERT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_FILL, 0), 32L);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_TRUE(test, a->credit_stocked);
+	KUNIT_EXPECT_TRUE(test, a->credit_linked);
+	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 21L);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 2);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "admitted"),
+			admitted + 2);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail"),
+			256 - 16 - 22);
+
+	/* A charge the stock still covers stays lockless. */
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sa, a, 20));
+	KUNIT_EXPECT_TRUE(test, a->credit_stocked);
+	KUNIT_EXPECT_EQ(test, a->credit, 20U);
+	/* Beyond it: an ordinary record, the youngest. */
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sa, a, 50));
+	KUNIT_EXPECT_FALSE(test, a->credit_stocked);
+	KUNIT_EXPECT_TRUE(test, a->credit_linked);
+	KUNIT_EXPECT_EQ(test, a->credit, 50U);
+	KUNIT_EXPECT_GT(test, a->credit_ticket, b->credit_ticket);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 2);
+	svc_tcp_rx_credit_release(a);
+	svc_tcp_rx_credit_release(b);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 0);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail") +
+			svcsock_budget_stat(test, c, "reserve"), 256);
+
+	/*
+	 * A stocked record holds credit and the list is empty: a newer record
+	 * that avail does not cover is not the oldest and gets no reserve.
+	 */
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_ASSERT_TRUE(test, a->credit_stocked);
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_credit_admit(sc, big,
+							 250 * PAGE_SIZE));
+	KUNIT_EXPECT_FALSE(test, list_empty(&sc->sk_credit_wait));
+	/* The waiter drained every stock and turned stocking off. */
+	KUNIT_EXPECT_TRUE(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_CONTENDED, 0));
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 0L);
+	/* Once it returns, the waiter is the oldest and starts on the reserve. */
+	svc_tcp_rx_credit_release(a);
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(sc, big,
+							250 * PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test, big->credit_linked);
+	KUNIT_EXPECT_GT(test, big->credit_reserve, 0U);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sc->sk_credit_wait));
+	svc_tcp_rx_credit_release(big);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail") +
+			svcsock_budget_stat(test, c, "reserve"), 256);
+
+	/* An orphaned stocked record: credit kept spent, list untouched. */
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_ASSERT_TRUE(test, b->credit_stocked);
+	orphaned = svcsock_budget_stat(test, c, "orphaned");
+	b->refs_acquired = 1;
+	kunit_warning_suppress(test) {
+		KUNIT_EXPECT_EQ(test, svc_tcp_rx_release_refs(b), -EINVAL);
+	}
+	b->refs_acquired = 0;
+	KUNIT_EXPECT_FALSE(test, b->credit_linked);
+	KUNIT_EXPECT_FALSE(test, b->credit_stocked);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "orphaned"),
+			orphaned + 11);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 0);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail") +
+			svcsock_budget_stat(test, c, "reserve") + 11, 256);
+	/* The list is intact: an ordinary record still links and returns. */
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_DRAIN, 0);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_FALSE(test, a->credit_stocked);
+	svc_tcp_rx_credit_release(a);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 0);
+}
+
+/*
+ * 7.3 port of the stocks: the cost estimate is learned, not a fixed factor.
+ * Until SVC_TCP_RX_COST_WARMUP records have ended on the locked path no
+ * record takes stocked credit, even where the stock would cover it.  Once
+ * warm, a record released to its stock without the lock leaves its sample
+ * on the CPU, and the next refill folds it in under the lock.
+ */
+static void svcsock_rx_credit_stock_learn_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock_forget(test);
+	const u32 len = 10 * PAGE_SIZE;
+	struct svc_tcp_rx_budget *c;
+	unsigned int i;
+	long whole;
+
+	KUNIT_ASSERT_NOT_NULL(test, a);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svcsock_rx_stock_pin(test);
+	svc_tcp_rx_budget_kunit_configure(256, 16, 0);	/* learned cost */
+	c = svcsock_rx_stock_init_budget();
+	KUNIT_ASSERT_NOT_NULL(test, c);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 0U);
+	/*
+	 * Credit orphaned by earlier cases stays spent (credit_orphan), so
+	 * the budget need not be whole here: what is must be kept.
+	 */
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 0);
+	whole = svcsock_budget_stat(test, c, "avail") +
+		svcsock_budget_stat(test, c, "reserve");
+
+	/* Each record held 11 region pages for 10 pages: sample 100. */
+	for (i = 0; i < SVC_TCP_RX_COST_WARMUP; i++) {
+		svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
+		KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+		KUNIT_EXPECT_FALSE(test, a->credit_stocked);
+		a->fixed_bytes = 0;
+		a->body_bytes = len;
+		a->region_count = 11;
+		svc_tcp_rx_credit_release(a);
+		a->region_count = 0;
+	}
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 100U);
+
+	/* Warm: the stock covers the learned cost, 10 + 1. */
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_TRUE(test, a->credit_stocked);
+	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	/* It held 31 pages: sample 300, kept on this CPU, not yet learned. */
+	a->fixed_bytes = 0;
+	a->body_bytes = len;
+	a->region_count = 31;
+	svc_tcp_rx_credit_release(a);
+	a->region_count = 0;
+	/*
+	 * Admission still charges 100 (it reads the estimate as last folded,
+	 * svc_tcp_rx_credit_cost()); svc_tcp_rx_budget_cost_factor() would
+	 * fold first, so ask admission and the stats line instead.
+	 */
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "cost_factor"), 100);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_TRUE(test, a->credit_stocked);
+	KUNIT_EXPECT_EQ(test, a->credit, 11U);
+	svc_tcp_rx_credit_release(a);		/* no region page: no sample */
+	/* The refill takes the lock and folds it in: now 30 + 1. */
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_FILL, 0);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "cost_factor"), 300);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_cost_factor(), 300U);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_EXPECT_TRUE(test, a->credit_stocked);
+	KUNIT_EXPECT_EQ(test, a->credit, 31U);
+	svc_tcp_rx_credit_release(a);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 0);
+	/*
+	 * Nothing is lost: the line's avail already counts what is stocked
+	 * (svc_tcp_rx_budget_format()), so with nothing in flight it and the
+	 * reserve make up what they did before the first record, stocked
+	 * credit included once.
+	 */
+	KUNIT_EXPECT_GT(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail") +
+			svcsock_budget_stat(test, c, "reserve"), whole);
+}
+
+/*
+ * A record admitted from a stock bounces: what it does not lend goes back
+ * to the stock without the lock, the lent unit is counted in "lent" and the
+ * record stays counted in flight until bounce_done returns the unit to the
+ * stock.  The budget's credit (stocked included) never changes.
+ */
+static void svcsock_rx_bounce_stocked_test(struct kunit *test)
+{
+	enum { BODY_LEN = 7 * XDR_UNIT + 300, OFFSET = 8, LEN = 200, ALIGN = 512 };
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 4);
+	struct svc_tcp_rx_state *state = fixture->rqstp->rq_tcp_rx;
+	u8 record[sizeof(rpc_fraghdr) + BODY_LEN];
+	struct svc_tcp_rx_budget *c;
+	struct bio_vec out[4];
+	struct xdr_buf payload;
+	unsigned int refs;
+	long avail;
+	int n;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svcsock_rx_stock_pin(test);
+	svc_tcp_rx_budget_kunit_configure(256, 16, 100);
+	svcsock_rx_region_fixture(test, 0);
+	svcsock_rx_publish_loan(test, fixture, record, BODY_LEN, &refs);
+	c = svcsock_rx_stock_init_budget();
+	KUNIT_ASSERT_NOT_NULL(test, c);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	KUNIT_ASSERT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_FILL, 0), 32L);
+	avail = svcsock_rx_budget_stat(c, "avail");
+	KUNIT_ASSERT_PTR_EQ(test, svcsock_rx_bounce_admit(test, fixture,
+							  sizeof(record)), c);
+	KUNIT_ASSERT_TRUE(test, state->credit_stocked);
+	KUNIT_ASSERT_EQ(test, state->credit, 2U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail - 2);
+
+	svcsock_rx_payload_view(&payload, state, OFFSET, LEN);
+	n = svc_tcp_rx_bounce(fixture->svsk, fixture->rqstp, &payload, ALIGN,
+			      512, out, ARRAY_SIZE(out));
+	KUNIT_ASSERT_EQ(test, n, 1);
+	KUNIT_EXPECT_TRUE(test, state->bounce_stocked);
+	KUNIT_EXPECT_EQ(test, state->bounce_credit, 1U);
+	KUNIT_EXPECT_FALSE(test, state->credit_linked);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail - 1);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 1L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "inflight"), 1L);
+	/* Not lent from the lock's side: the stock got the rest back. */
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 31L);
+
+	svc_tcp_rx_bounce_done(fixture->rqstp, out, n);
+	KUNIT_EXPECT_FALSE(test, state->bounce_stocked);
+	KUNIT_EXPECT_EQ(test, state->bounce_pages, 0U);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "avail"), avail);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "lent"), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_budget_stat(c, "inflight"), 0L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 32L);
+	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
+}
+
+/*
+ * R1: a live change with stocked holders in flight drains the stocks and
+ * moves avail by the change rather than resetting it, so once every holder
+ * returns, avail plus the reserve is exactly the new budget.
+ */
+static void svcsock_rx_credit_stock_live_change_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_state *b = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock_forget(test);
+	struct svc_sock *sb = svcsock_rx_credit_sock_forget(test);
+	const u32 len = 10 * PAGE_SIZE;		/* costs 11 */
+	struct svc_tcp_rx_budget *c;
+
+	KUNIT_ASSERT_NOT_NULL(test, a);
+	KUNIT_ASSERT_NOT_NULL(test, b);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svcsock_rx_stock_pin(test);
+	svc_tcp_rx_budget_kunit_configure(256, 8, 100);
+	c = svcsock_rx_stock_init_budget();
+	KUNIT_ASSERT_NOT_NULL(test, c);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	KUNIT_ASSERT_EQ(test, svcsock_rx_stock(c,
+				SVC_TCP_RX_KUNIT_STOCK_FILL, 0), 32L);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
+	KUNIT_ASSERT_TRUE(test, a->credit_stocked && b->credit_stocked);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail"), 248 - 22);
+
+	/* Up by 44 with stocked holders only: a delta, not a reset. */
+	svc_tcp_rx_budget_kunit_configure(300, 8, 100);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "budget"), 300);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail"), 292 - 22);
+	svc_tcp_rx_credit_release(a);
+	/* Down by 100 with one left, its reserve moved too. */
+	svc_tcp_rx_budget_kunit_configure(200, 4, 100);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail"), 196 - 11);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "reserve"), 4);
+	svc_tcp_rx_credit_release(b);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "inflight"), 0);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail") +
+			svcsock_budget_stat(test, c, "reserve"), 200);
+	/* With nothing in flight a change resets: still exactly the budget. */
+	svc_tcp_rx_budget_kunit_configure(256, 0, 100);
+	svcsock_rx_stock(c, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, c, "avail"), 256);
+}
+
+struct svcsock_rx_stock_put {
+	struct svc_tcp_rx_budget *c;
+	struct svc_tcp_rx_state *state;
+	long n;
+};
+
+/* On another CPU: release a record, or put @n pages to @c's stock there. */
+static long svcsock_rx_stock_put_fn(void *data)
+{
+	struct svcsock_rx_stock_put *p = data;
+
+	if (p->state)
+		svc_tcp_rx_credit_release(p->state);
+	else
+		svc_tcp_rx_budget_kunit_stock(p->c, SVC_TCP_RX_KUNIT_STOCK_PUT,
+					      p->n);
+	return 0;
+}
+
+static void svcsock_rx_stock_free(void *c)
+{
+	svc_tcp_rx_budget_kunit_free(c);
+}
+
+/*
+ * Each budget stocks separately, and credit goes back to the budget it
+ * came from even when it returns on another CPU.  A namespace budget's
+ * teardown (net_exit's) finds no stocked holder and warns nothing.
+ */
+static void svcsock_rx_credit_stock_netns_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock_forget(test);
+	const u32 len = 10 * PAGE_SIZE;		/* costs 11 */
+	struct svc_tcp_rx_budget *ci, *cd, *cx;
+	struct svcsock_rx_stock_put put = {};
+	long avail_i, avail_d;
+	int cpu, other;
+
+	KUNIT_ASSERT_NOT_NULL(test, a);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_default_off, NULL), 0);
+	cpu = svcsock_rx_stock_pin(test);
+	other = svcsock_rx_stock_other(cpu);
+	svc_tcp_rx_budget_kunit_configure(256, 0, 100);
+	svc_tcp_rx_budget_kunit_default(256, 0);
+	ci = svcsock_rx_stock_init_budget();
+	cd = svc_tcp_rx_region_kunit_budget(NULL, SVC_TCP_RX_STATS_DEFAULT);
+	KUNIT_ASSERT_NOT_NULL(test, ci);
+	svcsock_rx_stock(ci, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	svcsock_rx_stock(cd, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	KUNIT_ASSERT_EQ(test, svcsock_rx_stock(ci,
+				SVC_TCP_RX_KUNIT_STOCK_FILL, 0), 32L);
+	KUNIT_ASSERT_EQ(test, svcsock_rx_stock(cd,
+				SVC_TCP_RX_KUNIT_STOCK_FILL, 0), 32L);
+	avail_i = svcsock_budget_stat(test, ci, "avail");
+	avail_d = svcsock_budget_stat(test, cd, "avail");
+
+	/* The record draws on its namespace's stock only. */
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
+	KUNIT_ASSERT_TRUE(test, a->credit_stocked);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(ci,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 21L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(cd,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 32L);
+
+	/* Released on another CPU: back to that CPU's stock of the same budget. */
+	if (other >= 0) {
+		put.state = a;
+		work_on_cpu(other, svcsock_rx_stock_put_fn, &put);
+	} else {
+		svc_tcp_rx_credit_release(a);
+		kunit_mark_skipped(test, "one CPU: no release elsewhere");
+	}
+	KUNIT_EXPECT_FALSE(test, a->credit_linked);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(ci,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 32L);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(cd,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 32L);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, ci, "avail"), avail_i);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, cd, "avail"), avail_d);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, ci, "inflight"), 0);
+
+	/* A namespace's budget, stocked on two CPUs, then torn down. */
+	cx = svc_tcp_rx_budget_kunit_alloc();
+	KUNIT_ASSERT_NOT_NULL(test, cx);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_stock_free, cx), 0);
+	svcsock_rx_stock(cx, SVC_TCP_RX_KUNIT_STOCK_APPLY, 0);
+	KUNIT_ASSERT_EQ(test, svcsock_rx_stock(cx,
+				SVC_TCP_RX_KUNIT_STOCK_FILL, 0), 32L);
+	KUNIT_ASSERT_TRUE(test, svcsock_rx_stock(cx,
+				SVC_TCP_RX_KUNIT_STOCK_TAKE, 20));
+	put.c = cx;
+	put.state = NULL;
+	put.n = 20;
+	if (other >= 0)
+		work_on_cpu(other, svcsock_rx_stock_put_fn, &put);
+	else
+		svcsock_rx_stock_put_fn(&put);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(cx,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 32L);
+	KUNIT_EXPECT_EQ(test, svcsock_budget_stat(test, cx, "avail"), 256);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_stock(ci,
+				SVC_TCP_RX_KUNIT_STOCK_STOCKED, 0), 32L);
+	kunit_warning_suppress(test) {
+		kunit_release_action(test, svcsock_rx_stock_free, cx);
+		KUNIT_EXPECT_SUPPRESSED_WARNING_COUNT(test, 0);
+	}
+}
+
 static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE_PARAM(svcsock_rx_actor_split_test,
 			 svcsock_rx_split_gen_params),
@@ -6037,6 +7242,8 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_back_to_back_locked_heads_test),
 	KUNIT_CASE(svcsock_rx_release_payload_test),
 	KUNIT_CASE(svcsock_rx_small_record_copied_test),
+	KUNIT_CASE_PARAM(svcsock_rx_small_record_split_test,
+			 svcsock_rx_split_gen_params),
 	KUNIT_CASE(svcsock_rx_credit_fifo_test),
 	KUNIT_CASE(svcsock_rx_credit_learn_test),
 	KUNIT_CASE(svcsock_rx_geometry_test),
@@ -6075,6 +7282,10 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_bounce_credit_over_short_test),
 	KUNIT_CASE(svcsock_rx_bounce_credit_over_test),
 	KUNIT_CASE(svcsock_rx_bounce_budget_off_test),
+	KUNIT_CASE(svcsock_rx_region_cache_test),
+	KUNIT_CASE(svcsock_rx_region_shard_test),
+	KUNIT_CASE(svcsock_rx_region_split_shards_test),
+	KUNIT_CASE(svcsock_rx_region_pool_bounds_test),
 #endif
 	KUNIT_CASE(svcsock_rx_bounce_arena_test),
 	KUNIT_CASE(svcsock_rx_budget_write_partition_test),
@@ -6121,6 +7332,12 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_region_read_short_test),
 	KUNIT_CASE(svcsock_rx_region_share_park_test),
 	KUNIT_CASE(svcsock_rx_region_escaped_capacity_test),
+	KUNIT_CASE(svcsock_rx_credit_stock_test),
+	KUNIT_CASE(svcsock_rx_credit_stock_record_test),
+	KUNIT_CASE(svcsock_rx_credit_stock_learn_test),
+	KUNIT_CASE(svcsock_rx_bounce_stocked_test),
+	KUNIT_CASE(svcsock_rx_credit_stock_live_change_test),
+	KUNIT_CASE(svcsock_rx_credit_stock_netns_test),
 	{}
 };
 

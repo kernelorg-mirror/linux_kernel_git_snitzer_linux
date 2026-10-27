@@ -1155,10 +1155,34 @@ static void svc_tcp_rx_cost_forget(struct svc_tcp_rx_budget *c)
 	spin_unlock_bh(&c->lock);
 }
 
+static void svc_tcp_rx_budget_kunit_drain(struct svc_tcp_rx_budget *c)
+{
+	spin_lock_bh(&c->lock);
+	svc_tcp_rx_stock_drain_locked(c);
+	spin_unlock_bh(&c->lock);
+}
+
+/*
+ * Tests change parameters between records and READs: no stock outlives
+ * them.  Stocking resumes at the next kick that finds no waiter.
+ */
+static void svc_tcp_rx_budget_kunit_unstock(void)
+{
+	struct svc_tcp_rx_budget *pos;
+
+	svc_tcp_rx_budget_kunit_drain(&svc_rx_budget_default);
+	svc_tcp_rx_budget_kunit_drain(&svc_rx_budget_read);
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	list_for_each_entry(pos, &svc_rx_budget_pools, node)
+		svc_tcp_rx_budget_kunit_drain(pos);
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+}
+
 void svc_tcp_rx_budget_kunit_configure(unsigned int pages,
 				       unsigned int reserve,
 				       unsigned int factor)
 {
+	svc_tcp_rx_budget_kunit_unstock();
 	WRITE_ONCE(svc_tcp_rx_budget_pages, pages);
 	WRITE_ONCE(svc_tcp_rx_budget_reserve, reserve);
 	WRITE_ONCE(svc_tcp_rx_kunit_factor, factor);
@@ -1181,6 +1205,7 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_rcvbuf);
 
 void svc_tcp_rx_budget_kunit_default(unsigned int pages, unsigned int reserve)
 {
+	svc_tcp_rx_budget_kunit_unstock();
 	WRITE_ONCE(svc_tcp_rx_budget_default_pages, pages);
 	WRITE_ONCE(svc_tcp_rx_budget_default_reserve, reserve);
 	mutex_lock(&svc_rx_budget_cfg_lock);
@@ -1193,6 +1218,7 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_default);
 int svc_tcp_rx_budget_kunit_set(unsigned int pages)
 {
 	svc_tcp_rx_budget_kunit_nowake = false;
+	svc_tcp_rx_budget_kunit_unstock();
 	return svc_tcp_rx_budget_set(svc_tcp_rx_budget_initial(), pages);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_set);
@@ -1252,6 +1278,7 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_restore);
 void svc_tcp_rx_budget_kunit_region(unsigned long pages,
 				    unsigned long read_pages)
 {
+	svc_tcp_rx_budget_kunit_unstock();
 	WRITE_ONCE(svc_tcp_rx_kunit_region_read, read_pages);
 	WRITE_ONCE(svc_tcp_rx_kunit_region_pages, pages);
 }
@@ -1260,6 +1287,7 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_region);
 /* What svc_init_xprt_sock() does for the budgets. */
 void svc_tcp_rx_budget_kunit_init(void)
 {
+	svc_tcp_rx_budget_kunit_unstock();
 	svc_tcp_rx_budget_init();
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_init);
@@ -2221,6 +2249,95 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_credit_forget(struct svc_sock *svsk)
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_credit_forget);
 
 #if IS_ENABLED(CONFIG_KUNIT)
+/* Credit in @c's stocks. */
+static long svc_tcp_rx_stocked(struct svc_tcp_rx_budget *c)
+{
+	long n = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		n += atomic_long_read(&per_cpu_ptr(c->stock, cpu)->pages);
+	return n;
+}
+
+/* The stock primitives on @c, on the running CPU (the caller pins it). */
+long svc_tcp_rx_budget_kunit_stock(struct svc_tcp_rx_budget *c,
+				   enum svc_tcp_rx_kunit_stock_op op, long n)
+{
+	struct svc_sock *wake;
+	LIST_HEAD(granted);
+	long ret = 0;
+
+	switch (op) {
+	case SVC_TCP_RX_KUNIT_STOCK_APPLY:	/* configure and kick, as a return */
+		spin_lock_bh(&c->lock);
+		svc_tcp_rx_budget_configure_locked(c);
+		wake = svc_tcp_rx_credit_kick_locked(c, &granted);
+		spin_unlock_bh(&c->lock);
+		svc_tcp_rx_credit_wake(wake);
+		svc_tcp_rx_budget_read_revisit(&granted);
+		break;
+	case SVC_TCP_RX_KUNIT_STOCK_FILL:	/* what an admission refills */
+		spin_lock_bh(&c->lock);
+		ret = svc_tcp_rx_stock_refill_locked(c);
+		spin_unlock_bh(&c->lock);
+		break;
+	case SVC_TCP_RX_KUNIT_STOCK_TAKE:
+		ret = svc_tcp_rx_stock_take(c, n);
+		break;
+	case SVC_TCP_RX_KUNIT_STOCK_PUT:	/* a spill goes to avail */
+		ret = svc_tcp_rx_stock_put(c, n);
+		spin_lock_bh(&c->lock);
+		c->avail += ret;
+		spin_unlock_bh(&c->lock);
+		break;
+	case SVC_TCP_RX_KUNIT_STOCK_DRAIN:	/* what the first waiter does */
+		svc_tcp_rx_budget_kunit_drain(c);
+		break;
+	case SVC_TCP_RX_KUNIT_STOCK_STOCKED:
+		ret = svc_tcp_rx_stocked(c);
+		break;
+	case SVC_TCP_RX_KUNIT_STOCK_CONTENDED:
+		ret = READ_ONCE(c->contended);
+		break;
+	}
+	return ret;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_stock);
+
+/*
+ * A budget as a namespace's is made (net_init), configured as the initial
+ * namespace's but on no list; svc_tcp_rx_budget_kunit_free() tears it down
+ * as net_exit does.
+ */
+struct svc_tcp_rx_budget *svc_tcp_rx_budget_kunit_alloc(void)
+{
+	return svc_tcp_rx_budget_alloc(&init_net);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_alloc);
+
+void svc_tcp_rx_budget_kunit_free(struct svc_tcp_rx_budget *c)
+{
+	svc_tcp_rx_budget_free(c);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_free);
+
+/* Stocked credit is available. */
+long svc_tcp_rx_budget_kunit_avail(void)
+{
+	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
+
+	return READ_ONCE(c->avail) + svc_tcp_rx_stocked(c);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_avail);
+
+long svc_tcp_rx_budget_kunit_default_avail(void)
+{
+	return READ_ONCE(svc_rx_budget_default.avail) +
+	       svc_tcp_rx_stocked(&svc_rx_budget_default);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_default_avail);
+
 long svc_tcp_rx_budget_avail(void)
 {
 	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_initial();
