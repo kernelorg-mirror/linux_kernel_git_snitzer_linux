@@ -25,6 +25,7 @@
 #include <linux/nfs.h>
 #include <linux/nfs_fs.h>
 #include <linux/nfs_xdr.h>
+#include <linux/nfs_page.h>
 
 #include "internal.h"
 #include "netns.h"
@@ -106,6 +107,11 @@ static const struct kernel_param_ops localio_timeout_ops = {
 module_param_cb(localio_timeout, &localio_timeout_ops, &localio_timeout, 0644);
 MODULE_PARM_DESC(localio_timeout,
 		 "LOCALIO probe timeout in seconds (default 10), 0 to use the mount's default");
+
+bool localio_direct_request_batching __read_mostly;
+module_param(localio_direct_request_batching, bool, 0444);
+MODULE_PARM_DESC(localio_direct_request_batching,
+		 "Enable experimental LOCALIO direct request batching (default off)");
 
 enum nfs_local_direct_write_policy {
 	NFS_LOCAL_DIRECT_WRITE_SYNC = 0,
@@ -440,6 +446,79 @@ nfs_local_open_fh(struct nfs_client *clp, const struct cred *cred,
 	return nf;
 }
 EXPORT_SYMBOL_GPL(nfs_local_open_fh);
+
+/*
+ * A zero return leaves the iterator untouched for the ordinary RPC scheduler.
+ * Once a header owns the pages, its normal direct completion owns accounting,
+ * including an immediate LOCALIO submission failure.
+ */
+ssize_t nfs_local_direct_pgio(struct nfs_pageio_descriptor *desc,
+			      struct iov_iter *iter, loff_t pos)
+{
+	struct nfs_direct_req *dreq = desc->pg_dreq;
+	struct inode *inode = desc->pg_inode;
+	struct nfs_client *clp = NFS_SERVER(inode)->nfs_client;
+	struct nfs_open_context *ctx = dreq->ctx;
+	struct nfs_pgio_header *hdr;
+	struct nfsd_file *localio;
+	struct nfs_page *req;
+	struct page **pages;
+	size_t pgbase, iosize;
+	ssize_t bytes, ret;
+	unsigned int npages, i;
+	bool write = iov_iter_rw(iter) == WRITE;
+
+	/* A local MDS does not authorize bypassing a selected pNFS layout. */
+	if (desc->pg_ops != &nfs_pgio_rw_ops)
+		return 0;
+
+	localio = nfs_local_open_fh(clp, ctx->cred, NFS_FH(inode),
+				    &ctx->nfl, ctx->mode);
+	if (!localio)
+		return 0;
+
+	/* Preserve the ordinary scheduler's EOF and short-I/O boundaries. */
+	iosize = max_t(size_t, write ? NFS_SERVER(inode)->wsize :
+				     NFS_SERVER(inode)->rsize, PAGE_SIZE);
+	bytes = iov_iter_get_pages_alloc2(iter, &pages, iosize, &pgbase);
+	if (bytes <= 0) {
+		ret = bytes ?: -EIO;
+		goto out_file;
+	}
+	npages = DIV_ROUND_UP(bytes + pgbase, PAGE_SIZE);
+	req = nfs_page_create_from_page(dreq->l_ctx, pages[0], false,
+					pgbase, pos,
+					min_t(size_t, bytes, PAGE_SIZE - pgbase),
+					nfs_io_gfp_mask());
+	if (IS_ERR(req)) {
+		ret = PTR_ERR(req);
+		goto out_pages;
+	}
+	if (write)
+		nfs_lock_request(req);
+	hdr = nfs_pgio_header_from_pages(desc, req, pages, npages, bytes);
+	if (IS_ERR(hdr)) {
+		ret = PTR_ERR(hdr);
+		if (write)
+			nfs_unlock_request(req);
+		nfs_release_request(req);
+		goto out_pages;
+	}
+
+	ret = nfs_initiate_pgio(NFS_CLIENT(inode), hdr, hdr->cred,
+				NFS_PROTO(inode), desc->pg_rpc_callops,
+				desc->pg_ioflags, RPC_TASK_CRED_NOREF, localio);
+	return ret < 0 ? ret : bytes;
+
+out_pages:
+	iov_iter_revert(iter, bytes);
+	for (i = 0; i < npages; i++)
+		put_page(pages[i]);
+	kvfree(pages);
+out_file:
+	nfs_release_local_fh(&clp->cl_uuid);
+	return ret;
+}
 
 /*
  * Ensure all page cache allocations are done from GFP_NOFS context to
