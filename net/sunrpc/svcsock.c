@@ -446,6 +446,9 @@ struct svc_tcp_rx_budget {
 	u64			paused;
 	u64			overrun;
 	u64			orphaned;	/* pages kept spent by abandoned records */
+	unsigned int		lent;		/* credit converted to WRITE bounces */
+	atomic64_t		bounced;
+	atomic64_t		bounce_refused;
 };
 
 static struct svc_tcp_rx_budget svc_rx_budget_default = {
@@ -670,11 +673,13 @@ static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 	list_for_each_entry(pos, &c->waiters, sk_credit_wait)
 		waiters++;
 	len = scnprintf(buf, size,
-			"budget %u reserve_size %u avail %ld reserve %ld inflight %u waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu cost_factor %u hold_factor %u\n",
+			"budget %u reserve_size %u avail %ld reserve %ld inflight %u waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu cost_factor %u hold_factor %u lent %u bounced %llu bounce_refused %llu\n",
 			c->budget, c->reserve_size, c->avail, c->reserve,
 			c->inflight_count, waiters, c->admitted, c->denied,
 			c->paused, c->overrun, c->orphaned, c->cost_factor,
-			READ_ONCE(c->hold_factor));
+			READ_ONCE(c->hold_factor), c->lent,
+			(u64)atomic64_read(&c->bounced),
+			(u64)atomic64_read(&c->bounce_refused));
 	spin_unlock_bh(&c->lock);
 	return len;
 }
@@ -736,7 +741,7 @@ static int svc_tcp_rx_budget_stats_sysctl(const struct ctl_table *table,
 					  loff_t *ppos)
 {
 	struct ctl_table tmp = *table;
-	char buf[256];
+	char buf[512];
 
 	if (write)
 		return -EPERM;
@@ -830,7 +835,7 @@ void svc_tcp_rx_budget_net_exit(struct net *net)
 	mutex_unlock(&svc_rx_budget_cfg_lock);
 	svc_tcp_rx_budget_apply(&svc_rx_budget_read);
 	/* The namespace's transports, and so their records, are gone. */
-	WARN_ON_ONCE(c->inflight_count || !list_empty(&c->waiters));
+	WARN_ON_ONCE(c->inflight_count || c->lent || !list_empty(&c->waiters));
 	sn->rx_budget = NULL;
 	kfree(c);
 }
@@ -973,11 +978,12 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_stats);
 #endif
 
 /*
- * Apply changed parameters at once.  Records in flight keep the credit they
- * hold and return it to the new configuration when they end, so with records
- * in flight the free counts move by the change (and may go negative until
- * those records end); with none, they are set outright.  True if anything
- * changed: the caller must then wake the oldest waiter, as nothing else may.
+ * Apply changed parameters at once.  Records in flight, and WRITE bounces
+ * holding credit (@lent), keep the credit they hold and return it to the new
+ * configuration when they end, so with either outstanding the free counts
+ * move by the change (and may go negative until they end); with none, they
+ * are set outright.  True if anything changed: the caller must then wake the
+ * oldest waiter, as nothing else may.
  */
 static bool svc_tcp_rx_budget_configure_locked(struct svc_tcp_rx_budget *c)
 {
@@ -992,7 +998,7 @@ static bool svc_tcp_rx_budget_configure_locked(struct svc_tcp_rx_budget *c)
 
 	if (budget == c->budget && reserve == c->reserve_size)
 		return false;
-	if (c->inflight_count) {
+	if (c->inflight_count || c->lent) {
 		c->avail += (long)(budget - reserve) -
 			    (long)(c->budget - c->reserve_size);
 		c->reserve += (long)reserve - (long)c->reserve_size;
@@ -1474,8 +1480,14 @@ VISIBLE_IF_KUNIT bool svc_tcp_rx_credit_charge(struct svc_sock *svsk,
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_credit_charge);
 
-/* Return a record's credit; exactly once, from every terminal path. */
-VISIBLE_IF_KUNIT void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state)
+/*
+ * Return a record's credit, keeping @lend units of it lent to a direct-write
+ * bounce (never new credit): its ordinary credit first, then its reserve;
+ * credit past the budget (credit_over) is not converted.  The conversion
+ * shares the section that returns the rest, so a bounce costs the budget's
+ * lock no more than before.  The caller checked that @lend is covered.
+ */
+static void svc_tcp_rx_credit_return(struct svc_tcp_rx_state *state, u32 lend)
 {
 	struct svc_tcp_rx_budget *c;
 	struct svc_sock *wake;
@@ -1484,6 +1496,19 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state)
 		return;
 	c = state->credit_budget;
 	spin_lock_bh(&c->lock);
+	if (lend) {
+		u32 normal = min(lend, state->credit - state->credit_reserve -
+				       state->credit_over);
+		u32 reserve = min(lend - normal, state->credit_reserve);
+
+		WARN_ON_ONCE(normal + reserve != lend);
+		state->credit -= normal + reserve;
+		state->credit_reserve -= reserve;
+		c->lent += normal + reserve;
+		state->bounce_budget = c;
+		state->bounce_credit = normal;
+		state->bounce_reserve = reserve;
+	}
 	list_del(&state->credit_node);
 	c->inflight_count--;
 	c->reserve += state->credit_reserve;
@@ -1498,6 +1523,12 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state)
 	wake = svc_tcp_rx_credit_wake_locked(c);
 	spin_unlock_bh(&c->lock);
 	svc_tcp_rx_credit_wake(wake);
+}
+
+/* Return a record's credit; exactly once, from every terminal path. */
+VISIBLE_IF_KUNIT void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state)
+{
+	svc_tcp_rx_credit_return(state, 0);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_credit_release);
 
@@ -1726,15 +1757,10 @@ struct svc_tcp_rx_state *svc_tcp_rx_state_alloc(unsigned long capacity,
 	state->page_pool = bitmap_zalloc_node(entries, gfp, node);
 	if (!state->page_pool)
 		goto out_free_borrowed;
-	state->merged = bitmap_zalloc_node(entries, gfp, node);
-	if (!state->merged)
-		goto out_free_page_pool;
 	state->capacity = entries;
 	state->arena_pages = capacity;
 	return state;
 
-out_free_page_pool:
-	bitmap_free(state->page_pool);
 out_free_borrowed:
 	bitmap_free(state->borrowed);
 out_free_bvec:
@@ -1752,10 +1778,10 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
 	struct bio_vec *bvec = state->bvec;
 	unsigned long *borrowed = state->borrowed;
 	unsigned long *page_pool = state->page_pool;
-	unsigned long *merged = state->merged;
 
 	if (WARN_ON_ONCE(!state->terminal || state->borrowed_count ||
-			 state->refs_acquired != state->refs_released))
+			 state->refs_acquired != state->refs_released ||
+			 state->bounce_pages))
 		return;
 	svc_tcp_rx_credit_release(state);
 	/* Append sets only [0, count); terminal owners clear it before reset. */
@@ -1765,7 +1791,6 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_reset(struct svc_tcp_rx_state *state)
 	state->bvec = bvec;
 	state->borrowed = borrowed;
 	state->page_pool = page_pool;
-	state->merged = merged;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_reset);
 
@@ -1814,6 +1839,18 @@ static void svc_tcp_rx_get_borrowed(struct page *page, bool page_pool)
 static void svc_tcp_rx_put_borrowed(struct page *page, bool page_pool)
 {
 	skb_page_unref(page_to_netmem(page), page_pool);
+}
+
+/* Return loan entry @index; its bytes stay counted, the record ends next. */
+static void svc_tcp_rx_return_entry(struct svc_tcp_rx_state *state,
+				    unsigned int index)
+{
+	svc_tcp_rx_put_borrowed(state->bvec[index].bv_page,
+				test_bit(index, state->page_pool));
+	__clear_bit(index, state->borrowed);
+	__clear_bit(index, state->page_pool);
+	state->refs_released++;
+	state->borrowed_count--;
 }
 
 static int svc_tcp_rx_append(struct svc_tcp_rx_state *state,
@@ -1949,15 +1986,9 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 			state->region_last = NULL;
 			state->refs_released++;
 			state->borrowed_count--;
-			/*
-			 * A merge page's bytes were counted as copied when
-			 * they were copied into it; only a loan's bytes move.
-			 */
-			if (!__test_and_clear_bit(index, state->merged)) {
-				state->borrowed_bytes -= bvec->bv_len;
-				state->copied_bytes += bvec->bv_len;
-				state->materialized_bytes += bvec->bv_len;
-			}
+			state->borrowed_bytes -= bvec->bv_len;
+			state->copied_bytes += bvec->bv_len;
+			state->materialized_bytes += bvec->bv_len;
 			if (test_bit(index, state->page_pool)) {
 				__clear_bit(index, state->page_pool);
 				state->page_pool_bytes -= bvec->bv_len;
@@ -1970,8 +2001,7 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_materialize(struct svc_tcp_rx_state *state,
 			 state->page_pool_bytes ||
 			 state->refs_acquired != state->refs_released ||
 			 !bitmap_empty(state->borrowed, state->count) ||
-			 !bitmap_empty(state->page_pool, state->count) ||
-			 !bitmap_empty(state->merged, state->count)))
+			 !bitmap_empty(state->page_pool, state->count)))
 		return -EINVAL;
 	state->count = 0;
 	state->mode = SVC_TCP_RX_COPY;
@@ -2002,8 +2032,7 @@ static bool svc_tcp_rx_refs_valid(const struct svc_tcp_rx_state *state)
 			!state->page_pool_bytes;
 	if (bitmap_weight(state->borrowed, state->count) !=
 		state->borrowed_count ||
-	    !bitmap_subset(state->page_pool, state->borrowed, state->count) ||
-	    !bitmap_subset(state->merged, state->borrowed, state->count))
+	    !bitmap_subset(state->page_pool, state->borrowed, state->count))
 		return false;
 	for (index = 0; index < state->count; index++)
 		if (test_bit(index, state->borrowed) &&
@@ -2048,7 +2077,6 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 		}
 		__clear_bit(index, state->borrowed);
 		__clear_bit(index, state->page_pool);
-		__clear_bit(index, state->merged);
 		state->refs_released++;
 		state->borrowed_count--;
 	}
@@ -2058,8 +2086,7 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 	if (WARN_ON_ONCE(state->borrowed_count ||
 			 (state->count &&
 			  (!bitmap_empty(state->borrowed, state->count) ||
-			   !bitmap_empty(state->page_pool, state->count) ||
-			   !bitmap_empty(state->merged, state->count))) ||
+			   !bitmap_empty(state->page_pool, state->count))) ||
 			 state->refs_released != state->refs_acquired)) {
 		svc_tcp_rx_credit_orphan(state);
 		return -EINVAL;
@@ -2102,7 +2129,6 @@ void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state)
 			return;
 		svc_tcp_rx_reset(state);
 	}
-	bitmap_free(state->merged);
 	bitmap_free(state->page_pool);
 	bitmap_free(state->borrowed);
 	kfree(state->bvec);
@@ -2238,6 +2264,247 @@ static void svc_tcp_release_payload(struct svc_rqst *rqstp)
 	svc_tcp_rx_release_payload(container_of(rqstp->rq_xprt,
 						struct svc_sock, sk_xprt),
 				   rqstp);
+}
+
+/* Copy @len bytes at @src to byte @dest_offset of @dest (or @region). */
+static void svc_tcp_rx_bounce_copy(struct page **dest,
+				   const struct bio_vec *region,
+				   u32 dest_offset, const struct bio_vec *src,
+				   u32 src_offset, u32 len)
+{
+	while (len) {
+		u32 index = dest_offset >> PAGE_SHIFT;
+		u32 in_page = offset_in_page(dest_offset);
+		u32 n = min_t(u32, len, PAGE_SIZE - in_page);
+		struct page *page = region ? region[index].bv_page : dest[index];
+
+		memcpy_page(page, in_page, src->bv_page,
+			    src->bv_offset + src_offset, n);
+		dest_offset += n;
+		src_offset += n;
+		len -= n;
+	}
+}
+
+/*
+ * Take @n pages of the region's write partition into @out[].bv_page, all or
+ * nothing, without a second array: page_pool_rx_region_take_pages() packs
+ * the page pointers at the start of @out, and they are spread out from the
+ * last, so no pointer is overwritten before it is read.
+ */
+static bool svc_tcp_rx_bounce_take(struct bio_vec *out, unsigned int n)
+{
+	struct page **pages = (struct page **)out;
+	unsigned int i;
+
+	BUILD_BUG_ON(sizeof(*pages) > sizeof(*out));
+	if (page_pool_rx_region_take_pages(false, pages, n) != n)
+		return false;
+	for (i = n; i-- > 0;)
+		out[i].bv_page = pages[i];
+	return true;
+}
+
+/* Give the bounce's pages back; packs them at the start of @bvec. */
+static void svc_tcp_rx_bounce_give(struct bio_vec *bvec, unsigned int n)
+{
+	struct page **pages = (struct page **)bvec;
+	unsigned int i;
+
+	for (i = 0; i < n; i++)
+		pages[i] = bvec[i].bv_page;
+	page_pool_rx_region_give_pages(pages, n);
+}
+
+static int svc_tcp_rx_bounce_refuse(struct svc_sock *svsk,
+				    struct svc_tcp_rx_state *state,
+				    struct svc_tcp_rx_budget *c,
+				    const char *why)
+{
+	trace_svcsock_tcp_rx_bounce_refused(&svsk->sk_xprt, state, why);
+	atomic64_inc(&c->bounce_refused);
+	return -ENOSPC;
+}
+
+/**
+ * svc_tcp_rx_bounce - lay a loaned WRITE payload out page-tiled
+ * @svsk: the transport that loaned it
+ * @rqstp: the request holding the loan
+ * @payload: the WRITE payload, a view into the loan
+ * @align: in-page offset for the first byte (the file position's)
+ * @mem_align: the memory alignment, against the file position, that the
+ *	       copy's start and every page joint must meet
+ * @out: receives the page-tiled payload
+ * @out_size: entries in @out
+ *
+ * Whole pages joined only at page boundaries, as direct I/O needs.  A record
+ * holding region credit is copied into pages from the region's write
+ * partition, starting at in-page offset @align, so the direct middle starts
+ * memory-aligned, and @span units of its credit are converted to cover them;
+ * a record short of credit or a partition short of pages refuses, and the
+ * payload never leaves the region.  Any other loan has its holes filled in
+ * the request's own arena at their record-body offsets, as a capacity
+ * fallback does, but only when that layout meets @mem_align for this file
+ * position.  Nothing waits.  A refusal changes nothing.  Each loaned page
+ * whose bytes the copy consumed is returned as it passes, then the rest of
+ * the loan as svc_tcp_rx_release_payload() does.
+ *
+ * Return: entries in @out, or a negative errno (nothing changed).
+ */
+VISIBLE_IF_KUNIT int svc_tcp_rx_bounce(struct svc_sock *svsk,
+				       struct svc_rqst *rqstp,
+				       const struct xdr_buf *payload,
+				       unsigned int align, unsigned int mem_align,
+				       struct bio_vec *out, unsigned int out_size)
+{
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+	u32 index, first, start, end, span, b, n;
+	struct svc_tcp_rx_budget *c;
+	struct bio_vec *region = NULL;
+
+	if (!state || state->mode != SVC_TCP_RX_PUBLISHED || state->terminal ||
+	    rqstp->rq_xprt_ctxt != state || rqstp->rq_deferred ||
+	    state->bounce_pages ||
+	    test_bit(RQ_PAYLOAD_SHARED, &rqstp->rq_flags) ||
+	    payload->page_mode != XDRBUF_PAGE_BVECS ||
+	    payload->head[0].iov_len || payload->tail[0].iov_len ||
+	    !payload->page_len || payload->bvec < state->bvec ||
+	    payload->bvec >= state->bvec + state->count || align >= PAGE_SIZE)
+		return -EOPNOTSUPP;
+	/* The copy returns loaned pages as it goes: the loan must be sound. */
+	if (!svc_tcp_rx_refs_valid(state))
+		return -EINVAL;
+	first = payload->bvec - state->bvec;
+	start = state->fixed_bytes + payload->bvec_offset;
+	for (index = 0; index < first; index++)
+		start += state->bvec[index].bv_len;
+	if (check_add_overflow(start, payload->page_len, &end) ||
+	    end > state->body_bytes)
+		return -EINVAL;
+
+	if (state->credit_linked) {
+		c = state->credit_budget;
+		span = DIV_ROUND_UP(align + payload->page_len, PAGE_SIZE);
+		if (span > out_size)
+			return svc_tcp_rx_bounce_refuse(svsk, state, c,
+							"capacity");
+		/*
+		 * Only the owning thread changes the record's credit once it
+		 * is published, so it can be checked unlocked; it converts
+		 * below, with the rest of the record's credit returned.
+		 */
+		if (state->credit - state->credit_over < span)
+			return svc_tcp_rx_bounce_refuse(svsk, state, c,
+							"credit");
+		if (!svc_tcp_rx_bounce_take(out, span))
+			return svc_tcp_rx_bounce_refuse(svsk, state, c,
+							"region");
+		region = out;
+	} else {
+		c = svc_tcp_rx_budget_for(svsk);
+		span = ((end - 1) >> PAGE_SHIFT) - (start >> PAGE_SHIFT) + 1;
+		/* The arena layout must fit @out and meet the device's alignment. */
+		if (span > out_size || ((start ^ align) & (max(mem_align, 1U) - 1)) ||
+		    (end - 1) >> PAGE_SHIFT >= state->arena_pages)
+			return -EOPNOTSUPP;
+		for (b = start >> PAGE_SHIFT; b <= (end - 1) >> PAGE_SHIFT; b++)
+			if (WARN_ON_ONCE(!rqstp->rq_pages[b]))
+				return -EOPNOTSUPP;
+	}
+
+	for (b = state->fixed_bytes, index = 0;
+	     index < state->count && b < end; index++) {
+		struct bio_vec *bvec = &state->bvec[index];
+		u32 lo = max(b, start), hi = min(b + bvec->bv_len, end);
+		bool borrowed = test_bit(index, state->borrowed);
+
+		if (lo < hi && (region || borrowed))
+			svc_tcp_rx_bounce_copy(rqstp->rq_pages, region,
+					       region ? lo - start + align : lo,
+					       bvec, lo - b, hi - lo);
+		/* Nothing reads a consumed loaned page again: return it now. */
+		if (borrowed && lo < hi && b + bvec->bv_len <= end)
+			svc_tcp_rx_return_entry(state, index);
+		b += bvec->bv_len;
+	}
+
+	/* @b walks the destination: region from @align, arena by body offset. */
+	for (b = region ? align : start, n = 0, end = b + payload->page_len;
+	     b < end; n++) {
+		u32 len = min_t(u32, end - b, PAGE_SIZE - offset_in_page(b));
+		struct page *page = region ? region[n].bv_page :
+					     rqstp->rq_pages[b >> PAGE_SHIFT];
+
+		bvec_set_page(&out[n], page, len, offset_in_page(b));
+		b += len;
+	}
+
+	/* @out is a complete copy whatever happens to the loan's bookkeeping. */
+	if (WARN_ON_ONCE(svc_tcp_rx_release_refs(state))) {
+		state->reason = SVC_TCP_RX_REASON_INVARIANT;
+		trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state,
+					      SVC_TCP_RX_ERROR);
+	}
+	svc_tcp_rx_credit_return(state, region ? span : 0);
+	state->bounce_pages = region ? n : 0;
+	atomic64_inc(&c->bounced);
+	trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state,
+				      SVC_TCP_RX_BOUNCE);
+	svc_tcp_rx_clear_xdr(rqstp);
+	return n;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_bounce);
+
+/**
+ * svc_tcp_rx_bounce_done - return a bounce's region pages and credit
+ * @rqstp: the request that bounced
+ * @bvec: what svc_tcp_rx_bounce() filled; clobbered
+ * @nvecs: its return value
+ *
+ * Call once the device has the data.  The converted credit returns to the
+ * budget it came from, which may wake that budget's oldest waiter.
+ */
+VISIBLE_IF_KUNIT void svc_tcp_rx_bounce_done(struct svc_rqst *rqstp,
+					     struct bio_vec *bvec,
+					     unsigned int nvecs)
+{
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+	struct svc_tcp_rx_budget *c;
+	struct svc_sock *wake;
+	u32 lent;
+
+	if (!state || !state->bounce_pages)
+		return;
+	WARN_ON_ONCE(nvecs != state->bounce_pages);
+	svc_tcp_rx_bounce_give(bvec, state->bounce_pages);
+	c = state->bounce_budget;
+	lent = state->bounce_credit + state->bounce_reserve;
+	if (c && lent) {
+		spin_lock_bh(&c->lock);
+		c->avail += state->bounce_credit;
+		c->reserve += state->bounce_reserve;
+		c->lent -= lent;
+		svc_tcp_rx_budget_configure_locked(c);
+		wake = svc_tcp_rx_credit_wake_locked(c);
+		spin_unlock_bh(&c->lock);
+		svc_tcp_rx_credit_wake(wake);
+	}
+	state->bounce_budget = NULL;
+	state->bounce_pages = 0;
+	state->bounce_credit = 0;
+	state->bounce_reserve = 0;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_bounce_done);
+
+static int svc_tcp_bounce_payload(struct svc_rqst *rqstp,
+				  const struct xdr_buf *payload,
+				  unsigned int align, unsigned int mem_align,
+				  struct bio_vec *bvec, unsigned int bvec_size)
+{
+	return svc_tcp_rx_bounce(container_of(rqstp->rq_xprt, struct svc_sock,
+					      sk_xprt),
+				 rqstp, payload, align, mem_align, bvec,
+				 bvec_size);
 }
 
 /**
@@ -3363,12 +3630,6 @@ static int svc_tcp_rx_append_arena(struct svc_rqst *rqstp,
 				   struct svc_tcp_rx_state *state,
 				   u32 body_offset, unsigned int len)
 {
-	/*
-	 * An arena copy ends any merge top-up: the last bvec is no longer
-	 * the merge page, so borrowed bytes must not be copied into it.
-	 */
-	state->merge_fill = 0;
-
 	while (len) {
 		unsigned int page_index = body_offset >> PAGE_SHIFT;
 		unsigned int offset = offset_in_page(body_offset);
@@ -3547,133 +3808,6 @@ static int svc_tcp_rx_copy_segment(struct svc_tcp_rx_walk *walk,
 				   start, len);
 }
 
-/* Undo the most recent append; the caller re-lands its bytes elsewhere. */
-static void svc_tcp_rx_retract_last(struct svc_tcp_rx_state *state)
-{
-	unsigned int index = --state->count;
-	struct bio_vec *bvec = &state->bvec[index];
-
-	state->body_bytes -= bvec->bv_len;
-	if (__test_and_clear_bit(index, state->borrowed)) {
-		bool page_pool = __test_and_clear_bit(index, state->page_pool);
-
-		if (__test_and_clear_bit(index, state->merged))
-			state->copied_bytes -= bvec->bv_len;
-		else
-			state->borrowed_bytes -= bvec->bv_len;
-		if (page_pool)
-			state->page_pool_bytes -= bvec->bv_len;
-		state->borrowed_count--;
-		state->refs_released++;
-		svc_tcp_rx_put_borrowed(bvec->bv_page, page_pool);
-		/* No longer held by this entry: a later loan of it counts. */
-		state->region_last = NULL;
-	} else {
-		state->copied_bytes -= bvec->bv_len;
-	}
-}
-
-/*
- * A small copied segment (the locked-skb-head case) that interrupts
- * borrowed flow splits a page's worth of the stream three ways --
- * partial borrowed tail, copied sliver at an unrelated arena offset,
- * partial borrowed resume -- and that geometry costs the whole WRITE
- * its direct path: the sub-page bvec lengths cannot satisfy the block
- * layer's split alignment no matter where the pieces sit.
- *
- * Instead, land the copied bytes phase-adjacent to the loaned run:
- * pull the trailing partial-page borrowed bytes back, copy them plus
- * the locked bytes into a fresh page, and let the following borrowed
- * bytes top the page up (state->merge_fill, consumed by
- * svc_tcp_rx_borrow_segment()) -- publishing one whole-page bvec in
- * place of the three-way split.  The page is appended as "borrowed"
- * so its lifetime and any later materialize fallback follow the
- * normal reference machinery, while the byte accounting records the
- * truth: these bytes were copied.
- */
-static int svc_tcp_rx_copy_segment_merged(struct svc_tcp_rx_walk *walk,
-					  u32 start, unsigned int len,
-					  enum svc_tcp_rx_reason reason)
-{
-	struct svc_tcp_rx_state *state = walk->rqstp->rq_tcp_rx;
-	struct bio_vec *last;
-	struct page *page;
-	unsigned int tail;
-	int ret;
-
-	if (WARN_ON_ONCE(state->body_bytes !=
-			 walk->body_base + start - walk->first))
-		return -EINVAL;
-	if (state->mode != SVC_TCP_RX_MIXED || state->merge_fill)
-		goto plain;
-	tail = 0;
-	last = NULL;
-	if (state->count) {
-		last = &state->bvec[state->count - 1];
-		if (test_bit(state->count - 1, state->borrowed) &&
-		    last->bv_offset + last->bv_len < PAGE_SIZE)
-			tail = last->bv_len;
-	}
-	if (tail + len >= PAGE_SIZE)
-		goto plain;
-
-	page = alloc_page(GFP_KERNEL | __GFP_NOWARN);
-	if (!page)
-		goto plain;
-
-	if (tail)
-		memcpy_page(page, 0, last->bv_page, last->bv_offset, tail);
-	if (skb_copy_bits(walk->root, start, page_address(page) + tail, len)) {
-		__free_page(page);
-		state->reason = SVC_TCP_RX_REASON_COPY_FAULT;
-		return -EFAULT;
-	}
-
-	if (tail)
-		svc_tcp_rx_retract_last(state);
-	ret = svc_tcp_rx_append(state, page, 0, tail + len, true, false);
-	if (ret) {
-		/*
-		 * Land the assembled bytes in the linear arena instead;
-		 * the merge page already holds them (the retracted tail
-		 * may span a previous skb, so it cannot be re-copied
-		 * from walk->root).
-		 */
-		struct iov_iter iter;
-		u32 body_offset = state->body_bytes;
-
-		svc_tcp_recv_iter_init(walk->rqstp, &iter, body_offset,
-				       tail + len);
-		if (copy_to_iter(page_address(page), tail + len, &iter) !=
-		    tail + len)
-			ret = -EFAULT;
-		else
-			ret = svc_tcp_rx_append_arena(walk->rqstp, state,
-						      body_offset, tail + len);
-		__free_page(page);
-		if (ret)
-			return ret;
-		if (state->reason == SVC_TCP_RX_REASON_NONE)
-			state->reason = reason;
-		return 0;
-	}
-	__free_page(page);	/* append took its own reference */
-	/*
-	 * the page holds copies; keep the byte accounting honest, and mark
-	 * the entry so that whatever takes it back out of the table knows
-	 */
-	__set_bit(state->count - 1, state->merged);
-	state->borrowed_bytes -= tail + len;
-	state->copied_bytes += tail + len;
-	state->merge_fill = PAGE_SIZE - (tail + len);
-	if (state->reason == SVC_TCP_RX_REASON_NONE)
-		state->reason = reason;
-	return 0;
-
-plain:
-	return svc_tcp_rx_copy_segment(walk, start, len, reason);
-}
-
 static int svc_tcp_rx_borrow_segment(struct svc_tcp_rx_walk *walk,
 				     u32 start, struct page *page,
 				     unsigned int offset, unsigned int len)
@@ -3697,39 +3831,6 @@ static int svc_tcp_rx_borrow_segment(struct svc_tcp_rx_walk *walk,
 			return svc_tcp_rx_copy_segment(walk, start + consumed,
 						       len - consumed,
 						       SVC_TCP_RX_REASON_CAPACITY);
-		if (state->merge_fill) {
-			/*
-			 * Top up the merge page started by
-			 * svc_tcp_rx_copy_segment_merged() so it publishes
-			 * as one whole-page bvec.
-			 */
-			struct page *mpage = state->bvec[state->count - 1].bv_page;
-			unsigned int fill_off = PAGE_SIZE - state->merge_fill;
-
-			take = min(take, state->merge_fill);
-			memcpy_page(mpage, fill_off, span_page, page_offset,
-				    take);
-			ret = svc_tcp_rx_append(state, mpage, fill_off, take,
-						true, false);
-			if (ret == -ENOSPC) {
-				state->merge_fill = 0;
-				ret = svc_tcp_rx_materialize_fallback(walk,
-						SVC_TCP_RX_REASON_CAPACITY);
-				if (ret)
-					return ret;
-				return svc_tcp_rx_copy_segment(walk,
-						start + consumed,
-						len - consumed,
-						SVC_TCP_RX_REASON_CAPACITY);
-			}
-			if (ret)
-				return ret;
-			state->borrowed_bytes -= take;
-			state->copied_bytes += take;
-			state->merge_fill -= take;
-			consumed += take;
-			continue;
-		}
 		ret = svc_tcp_rx_append_borrowed(state, span_page, page_offset,
 						 take, page_pool);
 		if (ret == -ENOSPC) {
@@ -3786,8 +3887,15 @@ static int svc_tcp_rx_walk_skb(struct svc_tcp_rx_walk *walk,
 			int ret;
 
 			if (skb_head_is_locked(skb)) {
-				ret = svc_tcp_rx_copy_segment_merged(
-					walk, lo, hi - lo,
+				/*
+				 * A locked head's bytes are copied into the
+				 * arena as their own bvec, beside the loans
+				 * around them.  Whether that geometry can go
+				 * to the device in place is the queue's call
+				 * (nfsd splits on its real segment boundary),
+				 * not a reason to copy the neighbouring loans.
+				 */
+				ret = svc_tcp_rx_copy_segment(walk, lo, hi - lo,
 					SVC_TCP_RX_REASON_LOCKED_HEAD);
 			} else {
 				unsigned char *data = skb->data + lo - cursor;
@@ -4544,6 +4652,8 @@ static const struct svc_xprt_ops svc_tcp_ops = {
 	.xpo_result_payload = svc_sock_result_payload,
 	.xpo_release_ctxt = svc_tcp_release_ctxt,
 	.xpo_release_payload = svc_tcp_release_payload,
+	.xpo_bounce_payload = svc_tcp_bounce_payload,
+	.xpo_bounce_done = svc_tcp_rx_bounce_done,
 	.xpo_detach = svc_tcp_sock_detach,
 	.xpo_free = svc_sock_free,
 	.xpo_has_wspace = svc_tcp_has_wspace,

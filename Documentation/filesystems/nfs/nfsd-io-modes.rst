@@ -199,6 +199,39 @@ Misaligned WRITE:
       to the block device's dma_alignment, so the middle cannot be
       issued as O_DIRECT.
 
+    The last case, and a WRITE whose payload has a gap the device must
+    split the I/O at, at an offset that is not a multiple of the offset
+    alignment (nfsd_write_dio_gap_misaligned below), have one exception.
+    When SUNRPC received the payload into loaned network buffers and
+    only their fragment layout is misaligned (a fragment's offset or
+    length, or a joint between fragments that is not on the device's
+    segment boundary), and the
+    device's memory alignment is no larger than its offset alignment and
+    than a page, and its segment boundary or its offset alignment is at
+    most a page,
+    NFSD has the transport copy the payload once into whole pages,
+    starting at the file position's offset within its page, and splits
+    the copy as above. The copy goes into pages of the fixed receive
+    region when the RPC holds region credit, which it converts rather
+    than taking more, and into the RPC's own receive pages otherwise,
+    there only when that layout meets the memory alignment or, when the
+    segment boundary is above a page, the offset alignment, at the copy's
+    start and at every page joint. Nothing
+    waits for credit or pages: when the copy cannot be made at once,
+    or a later operation in the same NFSv4 COMPOUND still reads the
+    payload, the WRITE is not split, as before.
+
+    DIO admission is decided by the device queue limits only: the
+    logical block size (the offset alignment), dma_alignment (the
+    memory alignment) and virt_boundary_mask (the segment boundary),
+    as the filesystem reports them through statx. A memory page joint
+    is never by itself a reason to copy or refuse a payload. A device
+    that takes scatter-gather lists has no segment boundary and takes a
+    loaned payload in place, a locked-head sliver copied beside its
+    loans included; only a device with a segment boundary, such as an
+    NVMe controller using PRPs (4 KiB), has a joint off that boundary
+    copied as described above.
+
     /sys/kernel/debug/nfsd/direct_misaligned_dontcache (default Y)
     controls the DONTCACHE marking of the buffered segments described
     above. Set it to N for a workload that reads back or rewrites what
@@ -258,7 +291,8 @@ Tracing:
       done
 
     In NFSD_IO_DIRECT mode, each WRITE emits one event, where NFSD
-    decides whether to split it, naming the outcome. Each records the
+    decides whether to split it, naming the outcome, and one more for
+    the copy of a payload copied as described above. Each records the
     alignments the filesystem advertised, the sizes of the start,
     middle and end segments (zero where not yet computed), and the
     offset within its page at which the middle segment starts, which is
