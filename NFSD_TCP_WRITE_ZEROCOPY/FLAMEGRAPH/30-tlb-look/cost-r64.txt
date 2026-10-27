@@ -1,0 +1,14 @@
+== rodata=full (/var/tmp/zc-run-logs/t2-r64-full/): ring = CPUs 0,2,4,6 soft%, nfsd = CPUs 8-55 usr+nice+sys+irq+soft, from srv-mpstat.txt's Average over window.txt's WRITEs a second
+r64-1-loan64 ring 47.0 nfsd 97.6 us/W (38575 WRITEs/s)
+r64-2-loan64 ring 48.3 nfsd 102.6 us/W (38544 WRITEs/s)
+r64-3-loan64 ring 47.6 nfsd 102.7 us/W (38592 WRITEs/s)
+r64-4-loan64 ring 47.3 nfsd 99.1 us/W (38598 WRITEs/s)
+r64-look-loan64 ring 49.0 nfsd 100.2 us/W (38612 WRITEs/s)
+region peak in use, pages: 6292 6439 6524 6877 6442 
+== rodata=noalias (/var/tmp/zc-run-logs/t2-r64-noalias/): ring = CPUs 0,2,4,6 soft%, nfsd = CPUs 8-55 usr+nice+sys+irq+soft, from srv-mpstat.txt's Average over window.txt's WRITEs a second
+r64-1-loan64 ring 45.7 nfsd 93.5 us/W (38540 WRITEs/s)
+r64-2-loan64 ring 43.5 nfsd 92.1 us/W (38558 WRITEs/s)
+r64-3-loan64 ring 44.1 nfsd 90.8 us/W (38570 WRITEs/s)
+r64-4-loan64 ring 45.1 nfsd 90.3 us/W (38477 WRITEs/s)
+r64-look-loan64 ring 44.6 nfsd 91.9 us/W (38650 WRITEs/s)
+region peak in use, pages: 6371 6341 6318 6356 6597 
