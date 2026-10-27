@@ -672,7 +672,7 @@ out_unlock:
 	if (size_change)
 		put_write_access(inode);
 out:
-	if (!host_err)
+	if (!host_err && !attr->na_nocommit)
 		host_err = commit_metadata(fhp);
 	return err != 0 ? err : nfserrno(host_err);
 }
@@ -1896,6 +1896,10 @@ nfsd_commit(struct svc_rqst *rqstp, struct svc_fh *fhp, struct nfsd_file *nf,
  * @resfhp: NFS filehandle of new object
  * @attrs: requested attributes of new object
  *
+ * Called with the parent directory locked. Nothing is committed to
+ * stable storage here; the caller must call nfsd_create_commit() after
+ * dropping the parent directory lock.
+ *
  * Returns nfs_ok on success, or an nfsstat in network byte order.
  */
 __be32
@@ -1903,7 +1907,6 @@ nfsd_create_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		    struct svc_fh *resfhp, struct nfsd_attrs *attrs)
 {
 	struct iattr *iap = attrs->na_iattr;
-	__be32 status;
 
 	/*
 	 * Mode has already been set by file creation.
@@ -1918,14 +1921,32 @@ nfsd_create_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (!uid_eq(current_fsuid(), GLOBAL_ROOT_UID))
 		iap->ia_valid &= ~(ATTR_UID|ATTR_GID);
 
+	if (!nfsd_attrs_valid(attrs))
+		return nfs_ok;
+	attrs->na_nocommit = true;
+	return nfsd_setattr(rqstp, resfhp, attrs, NULL);
+}
+
+/**
+ * nfsd_create_commit - Commit a created object and its parent directory
+ * @fhp: NFS filehandle of parent directory
+ * @resfhp: NFS filehandle of new object
+ *
+ * Called after the parent directory lock has been dropped, so that
+ * device I/O does not serialize other operations in that directory.
+ *
+ * Returns nfs_ok on success, or an nfsstat in network byte order.
+ */
+__be32
+nfsd_create_commit(struct svc_fh *fhp, struct svc_fh *resfhp)
+{
+	__be32 status;
+
 	/*
 	 * Callers expect new file metadata to be committed even
 	 * if the attributes have not changed.
 	 */
-	if (nfsd_attrs_valid(attrs))
-		status = nfsd_setattr(rqstp, resfhp, attrs, NULL);
-	else
-		status = nfserrno(commit_metadata(resfhp));
+	status = nfserrno(commit_metadata(resfhp));
 
 	/*
 	 * Transactional filesystems had a chance to commit changes
@@ -2027,6 +2048,8 @@ out:
 	if (!err)
 		fh_fill_post_attrs(fhp);
 	end_creating(dchild);
+	if (!err)
+		err = nfsd_create_commit(fhp, resfhp);
 	return err;
 
 out_nfserr:
@@ -2183,6 +2206,8 @@ nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	fh_fill_post_attrs(fhp);
 out_unlock:
 	end_creating(dnew);
+	if (!err && !cerr)
+		nfsd_create_commit(fhp, resfhp);
 	if (!err)
 		err = nfserrno(commit_metadata(fhp));
 	if (!err)
@@ -2396,11 +2421,14 @@ retry:
 			if (!nfsd_wait_for_delegreturn(rqstp, d_inode(rd.old_dentry)))
 				break;
 		}
-		if (!host_err) {
-			host_err = commit_metadata(tfhp);
-			if (!host_err)
-				host_err = commit_metadata(ffhp);
-		}
+	}
+	fh_fill_post_attrs(ffhp);
+	fh_fill_post_attrs(tfhp);
+	end_renaming(&rd);
+	if (!host_err) {
+		host_err = commit_metadata(tfhp);
+		if (!host_err)
+			host_err = commit_metadata(ffhp);
 	}
 	if (host_err == -EBUSY) {
 		/*
@@ -2414,11 +2442,8 @@ retry:
 	} else {
 		err = nfserrno(host_err);
 	}
+	goto out_want_write;
 
-	if (!close_cached) {
-		fh_fill_post_attrs(ffhp);
-		fh_fill_post_attrs(tfhp);
-	}
 out_unlock:
 	end_renaming(&rd);
 out_want_write:
