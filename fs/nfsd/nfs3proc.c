@@ -327,10 +327,21 @@ nfsd3_proc_write(struct svc_rqst *rqstp)
 
 	fh_copy(&resp->fh, &argp->fh);
 	resp->committed = argp->stable;
-	resp->status = nfsd_write(rqstp, &resp->fh, argp->offset,
-				  &argp->payload, &cnt,
-				  nfsd3_iocb_flags(resp->committed),
-				  resp->verf);
+	if (test_bit(RQ_RTC_TRY, &rqstp->rq_flags)) {
+		resp->status = nfsd_rtc_write(rqstp, &resp->fh, argp->offset,
+					      &argp->payload, &cnt,
+					      nfsd3_iocb_flags(resp->committed),
+					      resp->verf);
+		/* Finished by nfsd3_rtc_complete(), or rerun on a thread */
+		if (test_bit(RQ_RTC_ASYNC, &rqstp->rq_flags) ||
+		    test_bit(RQ_RTC_MISS, &rqstp->rq_flags))
+			return rpc_success;
+	} else {
+		resp->status = nfsd_write(rqstp, &resp->fh, argp->offset,
+					  &argp->payload, &cnt,
+					  nfsd3_iocb_flags(resp->committed),
+					  resp->verf);
+	}
 	resp->count = cnt;
 	resp->status = nfsd3_map_status(resp->status);
 	return rpc_success;
@@ -1248,7 +1259,8 @@ static bool nfsd3_rtc_want(struct svc_xprt *xprt)
 static bool nfsd3_rtc_want_call(struct svc_xprt *xprt, u32 prog, u32 vers,
 				u32 proc)
 {
-	return prog == NFS_PROGRAM && vers == 3 && proc == NFS3PROC_READ;
+	return prog == NFS_PROGRAM && vers == 3 &&
+	       (proc == NFS3PROC_READ || proc == NFS3PROC_WRITE);
 }
 
 /* A pool rqst gets the per-thread state nfsd() keeps on its stack. */
@@ -1286,17 +1298,41 @@ static void nfsd3_rtc_rqst_free(struct svc_rqst *rqstp)
 
 static void nfsd3_rtc_rqst_done(struct svc_rqst *rqstp)
 {
+	struct nfsd_rtc_ctx *c = rqstp->rq_rtc_priv;
+
+	/*
+	 * A WRITE attempt's DRC entry is kept only for its rerun (MISS set).
+	 * A rerun that stopped before nfsd_dispatch(), or a hand-off no
+	 * thread ran, drops it as nfsd_dispatch() drops an unanswered call.
+	 */
+	if (c && c->drc_rp && !test_bit(RQ_RTC_MISS, &rqstp->rq_flags)) {
+		nfsd_cache_update(rqstp, c->drc_rp, RC_NOCACHE, NULL);
+		c->drc_rp = NULL;
+	}
 	/* A shared kworker must not keep the client's credentials. */
 	put_cred(revert_creds(get_cred(current_real_cred())));
 	/* Disposal of unhashed files (fput, may sleep) stays on threads. */
 }
 
-/* The READ's I/O completed: encode its reply on the work item. */
+/* The READ's or WRITE's I/O completed: encode its reply on the work item. */
 static int nfsd3_rtc_complete(struct svc_rqst *rqstp)
 {
 	struct nfsd3_readres *resp = rqstp->rq_resp;
 	__be32 status;
 
+	if (rqstp->rq_proc == NFS3PROC_WRITE) {
+		struct nfsd3_writeres *wresp = rqstp->rq_resp;
+		unsigned long cnt = 0;
+
+		if (nfsd_rtc_write_finish(rqstp, &wresp->fh, &cnt,
+					  &status) == -EAGAIN) {
+			nfsd_rtc_dispatch_finish(rqstp, true);
+			return -EAGAIN;
+		}
+		wresp->count = cnt;
+		wresp->status = nfsd3_map_status(status);
+		return nfsd_rtc_dispatch_finish(rqstp, false);
+	}
 	if (nfsd_rtc_read_finish(rqstp, &resp->fh, &resp->count, &resp->eof,
 				 &status) == -EAGAIN) {
 		nfsd_rtc_dispatch_finish(rqstp, true);
