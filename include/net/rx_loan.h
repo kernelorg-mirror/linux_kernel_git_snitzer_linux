@@ -18,6 +18,7 @@
 #include <linux/gfp_types.h>
 #include <linux/mm.h>
 #include <linux/list.h>
+#include <linux/math.h>
 #include <linux/minmax.h>
 #include <linux/overflow.h>
 #include <linux/percpu.h>
@@ -29,7 +30,9 @@
 
 struct net;
 struct rx_loan_consumer;
+struct rx_loan_budget;
 struct sk_buff;
+struct sock;
 
 /*
  * The pages of one record: one bvec per received fragment, each either
@@ -68,7 +71,85 @@ void rx_loan_table_free(struct rx_loan_table *t);
 bool rx_loan_table_refs_valid(const struct rx_loan_table *t);
 int rx_loan_table_release(struct rx_loan_table *t);
 void rx_loan_table_reset(struct rx_loan_table *t);
+void rx_loan_table_reset_consumer(struct rx_loan_table *t,
+				  struct rx_loan_consumer *c);
 void rx_loan_copies_read(u64 *records, u64 *bytes);
+
+/* Units that copied bytes rather than lending them all, and those bytes. */
+struct rx_loan_copies {
+	u64	records;
+	u64	bytes;
+};
+
+/*
+ * Page-tiled copies of a loaned payload: whole pages joined only at page
+ * boundaries, as direct I/O needs, for a device that cannot take the
+ * loan's own layout (rx_loan_tile()).  The pages are the region's write
+ * partition's (rx_loan_tile_take()) or the consumer's own.
+ */
+bool rx_loan_tile_take(struct bio_vec *out, unsigned int n);
+void rx_loan_tile_give(struct bio_vec *bvec, unsigned int n);
+unsigned int rx_loan_tile(struct rx_loan_table *t, u32 base, u32 start,
+			  u32 len, struct page **arena,
+			  const struct bio_vec *region, u32 align,
+			  struct bio_vec *out, struct rx_loan_consumer *c);
+
+/*
+ * A connection's, or a listener's, receive buffer held to what its share of
+ * the region can take, once it receives region pages (rx_loan_hold_apply()).
+ * What it is held to follows a factor, the bytes its skbs occupy for each
+ * 100 of payload, measured as it reads (rx_loan_hold_account()).  Only the
+ * thread reading the socket changes it.
+ */
+struct rx_loan_hold {
+	/* region pages seen: hold the receive buffer when next unlocked */
+	bool			pending;
+	/* receive buffer, window clamp and scaling ratio held */
+	bool			held;
+	/* what they were held to (rx_loan_hold_factor()) */
+	unsigned int		factor;
+	/*
+	 * What the skbs read since the last sample occupy and carry, and
+	 * the last two samples, newest first, as bytes occupied for each
+	 * 100 of payload
+	 */
+	u32			geo_mem;
+	u32			geo_pay;
+	unsigned int		geo_factor[2];
+};
+
+/* Largest factor with a positive TCP_RMEM_TO_WIN_SCALE ratio. */
+#define RX_LOAN_HOLD_FACTOR_MAX		12800U
+/* What a receive buffer is held to before anything has been measured. */
+#define RX_LOAN_HOLD_FACTOR_UNLEARNED	150U
+
+u8 rx_loan_hold_scaling_ratio(unsigned int factor);
+int rx_loan_hold_window_clamp(int rcvbuf, unsigned int factor);
+bool rx_loan_hold_account(struct rx_loan_hold *h, unsigned int truesize,
+			  unsigned int skb_len, unsigned int used);
+unsigned int rx_loan_hold_factor(const struct rx_loan_hold *h,
+				 const struct rx_loan_budget *lb);
+#ifdef CONFIG_INET
+int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
+		       unsigned int bytes, unsigned int factor, int *rcvbuf,
+		       int *clamp);
+#endif
+
+/* The higher of @h's last two samples, or 0 before it has one. */
+static inline unsigned int rx_loan_hold_measured(const struct rx_loan_hold *h)
+{
+	return max(h->geo_factor[0], h->geo_factor[1]);
+}
+
+/*
+ * A socket whose buffer is held to one figure and has since measured
+ * another, @now, is held again, once the two are an eighth apart.
+ */
+static inline bool rx_loan_hold_stale(const struct rx_loan_hold *h,
+				      unsigned int now)
+{
+	return abs_diff(now, h->factor) * 8 > h->factor;
+}
 
 /* The table's counts agree; checks no entry. */
 static inline bool rx_loan_table_counts_valid(const struct rx_loan_table *t)
@@ -408,6 +489,12 @@ struct rx_loan_consumer {
 	atomic_long_t		out_read;
 	atomic_long_t		overrun_share;	/* oldest records past the share */
 	atomic_long_t		share_denied;
+	/*
+	 * Its own copies (rx_loan_table_reset_consumer(), rx_loan_tile()),
+	 * also counted in the host-wide total: allocated at its first
+	 * registration, kept until rx_loan_consumer_destroy().
+	 */
+	struct rx_loan_copies __percpu *copies;
 };
 
 /*
@@ -434,6 +521,9 @@ int rx_loan_consumer_register(struct rx_loan_consumer *c,
 			      struct rx_loan_net *ln, const char *name,
 			      unsigned long floor);
 void rx_loan_consumer_unregister(struct rx_loan_consumer *c);
+void rx_loan_consumer_destroy(struct rx_loan_consumer *c);
+void rx_loan_consumer_copies_read(const struct rx_loan_consumer *c,
+				  u64 *records, u64 *bytes);
 void rx_loan_consumer_set_floor(struct rx_loan_consumer *c,
 				unsigned long floor);
 void rx_loan_region_carve(void);
@@ -514,6 +604,15 @@ static inline bool rx_loan_charge(struct rx_loan_waiter *w,
 
 long rx_loan_read_inflight(struct rx_loan_budget *lb);
 long rx_loan_stocked_records(struct rx_loan_budget *lb);
+
+/* What @lb's per-CPU stocks hold and have counted (rx_loan_stock_sum()). */
+struct rx_loan_stock_sum {
+	long	pages, records, read_inflight, lent;
+	u64	admitted, read_admitted, read_completed;
+};
+
+void rx_loan_stock_sum(struct rx_loan_budget *lb,
+		       struct rx_loan_stock_sum *sum);
 void rx_loan_cost_fold_locked(struct rx_loan_budget *lb, unsigned int peak,
 			      unsigned int nrec);
 void rx_loan_cost_fold_cpu_locked(struct rx_loan_budget *lb,

@@ -309,6 +309,7 @@ static void rx_loan_kunit_consumer_stop(void *data)
 
 	if (READ_ONCE(c->registered))
 		rx_loan_consumer_unregister(c);
+	rx_loan_consumer_destroy(c);
 }
 
 /*
@@ -707,6 +708,233 @@ static void rx_loan_copies_test(struct kunit *test)
 	rx_loan_copies_read(&records2, &bytes2);
 	KUNIT_EXPECT_EQ(test, records2 - records, 1ULL);
 	KUNIT_EXPECT_EQ(test, bytes2 - bytes, 300ULL);
+}
+
+/* Each consumer counts its own copies; the host-wide total is their sum. */
+static void rx_loan_consumer_copies_test(struct kunit *test)
+{
+	struct rx_loan_consumer *a = rx_loan_kunit_consumer(test, "copies-a");
+	struct rx_loan_consumer *b = rx_loan_kunit_consumer(test, "copies-b");
+	struct rx_loan_table *t = kunit_kzalloc(test, sizeof(*t), GFP_KERNEL);
+	u64 records, bytes, records2, bytes2, ar, ab, br, bb;
+
+	KUNIT_ASSERT_NOT_NULL(test, t);
+	KUNIT_ASSERT_TRUE(test, a->copies != NULL);
+	KUNIT_ASSERT_TRUE(test, b->copies != NULL);
+	rx_loan_copies_read(&records, &bytes);
+	t->copied_bytes = 300;
+	rx_loan_table_reset_consumer(t, a);
+	t->copied_bytes = 500;
+	rx_loan_table_reset_consumer(t, b);
+	t->copied_bytes = 700;
+	rx_loan_table_reset_consumer(t, b);
+	t->borrowed_bytes = 4096;
+	rx_loan_table_reset_consumer(t, a);
+	rx_loan_copies_read(&records2, &bytes2);
+	rx_loan_consumer_copies_read(a, &ar, &ab);
+	rx_loan_consumer_copies_read(b, &br, &bb);
+	KUNIT_EXPECT_EQ(test, ar, 1ULL);
+	KUNIT_EXPECT_EQ(test, ab, 300ULL);
+	KUNIT_EXPECT_EQ(test, br, 2ULL);
+	KUNIT_EXPECT_EQ(test, bb, 1200ULL);
+	KUNIT_EXPECT_EQ(test, records2 - records, ar + br);
+	KUNIT_EXPECT_EQ(test, bytes2 - bytes, ab + bb);
+
+	/* Kept across registrations, until destroyed. */
+	rx_loan_consumer_unregister(a);
+	KUNIT_ASSERT_EQ(test, rx_loan_consumer_register(a, NULL, "copies-a", 0),
+			0);
+	rx_loan_consumer_copies_read(a, &ar, &ab);
+	KUNIT_EXPECT_EQ(test, ar, 1ULL);
+	rx_loan_consumer_unregister(a);
+	rx_loan_consumer_destroy(a);
+	KUNIT_EXPECT_TRUE(test, a->copies == NULL);
+	rx_loan_consumer_copies_read(a, &ar, &ab);
+	KUNIT_EXPECT_EQ(test, ar, 0ULL);
+}
+
+#define RX_LOAN_KUNIT_TILE_LEN	5000U
+
+/* Byte @off of the tile tests' record body: three pages' patterns. */
+static u8 rx_loan_kunit_tile_byte(u32 off)
+{
+	if (off < 1000)
+		return off * 7 + 1;
+	if (off < 4000)
+		return (off - 1000) * 11 + 2;
+	return (100 + off - 4000) * 13 + 3;
+}
+
+/*
+ * A record of 6000 body bytes: 1000 copied bytes of @p[0], 3000 borrowed
+ * of @p[1] and 2000 borrowed at offset 100 of @p[2].
+ */
+static struct rx_loan_table *rx_loan_kunit_tile_table(struct kunit *test,
+						      struct page **p)
+{
+	struct rx_loan_table *t = rx_loan_kunit_table(test, 4);
+	u32 i;
+
+	for (i = 0; i < 3; i++)
+		p[i] = rx_loan_kunit_page(test);
+	for (i = 0; i < PAGE_SIZE; i++) {
+		((u8 *)page_address(p[0]))[i] = i * 7 + 1;
+		((u8 *)page_address(p[1]))[i] = i * 11 + 2;
+		((u8 *)page_address(p[2]))[i] = i * 13 + 3;
+	}
+	KUNIT_ASSERT_EQ(test, rx_loan_table_append(t, p[0], 0, 1000, false,
+						   false), 0);
+	KUNIT_ASSERT_EQ(test, rx_loan_table_append(t, p[1], 0, 3000, true,
+						   false), 0);
+	KUNIT_ASSERT_EQ(test, rx_loan_table_append(t, p[2], 100, 2000, true,
+						   false), 0);
+	return t;
+}
+
+/*
+ * Tiling into region pages from an in-page offset copies every byte, joins
+ * pages only at page boundaries, returns each borrowed entry it consumed,
+ * and counts one copy of the payload's bytes to the consumer.
+ */
+static void rx_loan_tile_region_test(struct kunit *test)
+{
+	struct rx_loan_consumer *c = rx_loan_kunit_consumer(test, "tile");
+	struct bio_vec *region = kunit_kcalloc(test, 2, sizeof(*region),
+					       GFP_KERNEL);
+	struct bio_vec *out = kunit_kcalloc(test, 2, sizeof(*out), GFP_KERNEL);
+	u64 records, bytes, records2, bytes2, cr, cb;
+	struct rx_loan_table *t;
+	struct page *p[3];
+	unsigned int n, bad = 0;
+	int ref1, ref2;
+	u32 k;
+
+	KUNIT_ASSERT_NOT_NULL(test, region);
+	KUNIT_ASSERT_NOT_NULL(test, out);
+	t = rx_loan_kunit_tile_table(test, p);
+	ref1 = page_ref_count(p[1]);
+	ref2 = page_ref_count(p[2]);
+	region[0].bv_page = rx_loan_kunit_page(test);
+	region[1].bv_page = rx_loan_kunit_page(test);
+	rx_loan_copies_read(&records, &bytes);
+
+	n = rx_loan_tile(t, 0, 500, RX_LOAN_KUNIT_TILE_LEN, NULL, region, 100,
+			 out, c);
+	KUNIT_ASSERT_EQ(test, n, 2U);
+	KUNIT_EXPECT_PTR_EQ(test, out[0].bv_page, region[0].bv_page);
+	KUNIT_EXPECT_EQ(test, out[0].bv_offset, 100U);
+	KUNIT_EXPECT_EQ(test, out[0].bv_len, (u32)PAGE_SIZE - 100);
+	KUNIT_EXPECT_PTR_EQ(test, out[1].bv_page, region[1].bv_page);
+	KUNIT_EXPECT_EQ(test, out[1].bv_offset, 0U);
+	KUNIT_EXPECT_EQ(test, out[0].bv_len + out[1].bv_len,
+			RX_LOAN_KUNIT_TILE_LEN);
+	for (k = 0; k < RX_LOAN_KUNIT_TILE_LEN; k++) {
+		u32 d = 100 + k;
+		u8 *dst = page_address(region[d >> PAGE_SHIFT].bv_page);
+
+		bad += dst[offset_in_page(d)] != rx_loan_kunit_tile_byte(500 + k);
+	}
+	KUNIT_EXPECT_EQ(test, bad, 0U);
+
+	/* The middle entry was consumed whole, the last one only in part. */
+	KUNIT_EXPECT_EQ(test, page_ref_count(p[1]), ref1 - 1);
+	KUNIT_EXPECT_EQ(test, page_ref_count(p[2]), ref2);
+	KUNIT_EXPECT_EQ(test, t->borrowed_count, 1U);
+	KUNIT_EXPECT_EQ(test, t->body_bytes, 6000U);
+	KUNIT_ASSERT_TRUE(test, rx_loan_table_refs_valid(t));
+	KUNIT_EXPECT_EQ(test, rx_loan_table_release(t), 0);
+
+	rx_loan_copies_read(&records2, &bytes2);
+	rx_loan_consumer_copies_read(c, &cr, &cb);
+	KUNIT_EXPECT_EQ(test, cr, 1ULL);
+	KUNIT_EXPECT_EQ(test, cb, (u64)RX_LOAN_KUNIT_TILE_LEN);
+	KUNIT_EXPECT_EQ(test, records2 - records, 1ULL);
+	KUNIT_EXPECT_EQ(test, bytes2 - bytes, (u64)RX_LOAN_KUNIT_TILE_LEN);
+}
+
+/*
+ * Tiling into the consumer's own pages lays the payload out at its body
+ * offsets and copies only the borrowed bytes; with no consumer it is not
+ * counted.
+ */
+static void rx_loan_tile_arena_test(struct kunit *test)
+{
+	struct bio_vec *out = kunit_kcalloc(test, 2, sizeof(*out), GFP_KERNEL);
+	struct page *arena[2], *p[3];
+	u64 records, bytes, records2, bytes2;
+	struct rx_loan_table *t;
+	unsigned int n, bad = 0;
+	u32 k;
+
+	KUNIT_ASSERT_NOT_NULL(test, out);
+	t = rx_loan_kunit_tile_table(test, p);
+	arena[0] = rx_loan_kunit_page(test);
+	arena[1] = rx_loan_kunit_page(test);
+	rx_loan_copies_read(&records, &bytes);
+
+	n = rx_loan_tile(t, 0, 500, RX_LOAN_KUNIT_TILE_LEN, arena, NULL, 0,
+			 out, NULL);
+	KUNIT_ASSERT_EQ(test, n, 2U);
+	KUNIT_EXPECT_PTR_EQ(test, out[0].bv_page, arena[0]);
+	KUNIT_EXPECT_EQ(test, out[0].bv_offset, 500U);
+	KUNIT_EXPECT_EQ(test, out[0].bv_len, (u32)PAGE_SIZE - 500);
+	KUNIT_EXPECT_PTR_EQ(test, out[1].bv_page, arena[1]);
+	KUNIT_EXPECT_EQ(test, out[0].bv_len + out[1].bv_len,
+			RX_LOAN_KUNIT_TILE_LEN);
+	/* The borrowed bytes [1000, 5500) landed at their body offsets. */
+	for (k = 1000; k < 500 + RX_LOAN_KUNIT_TILE_LEN; k++) {
+		u8 *dst = page_address(arena[k >> PAGE_SHIFT]);
+
+		bad += dst[offset_in_page(k)] != rx_loan_kunit_tile_byte(k);
+	}
+	KUNIT_EXPECT_EQ(test, bad, 0U);
+	KUNIT_EXPECT_EQ(test, t->borrowed_count, 1U);
+	KUNIT_EXPECT_EQ(test, rx_loan_table_release(t), 0);
+	rx_loan_copies_read(&records2, &bytes2);
+	KUNIT_EXPECT_EQ(test, records2 - records, 0ULL);
+	KUNIT_EXPECT_EQ(test, bytes2 - bytes, 0ULL);
+}
+
+/*
+ * A hold measures its skbs a window at a time, takes the higher of its last
+ * two samples, falls back on its budget's figure and then the unlearned one,
+ * and is held again once a new figure is an eighth away.
+ */
+static void rx_loan_hold_test(struct kunit *test)
+{
+	struct rx_loan_budget *lb = rx_loan_kunit_budget(test, 0, 0);
+	struct rx_loan_hold h = {}, fresh = {};
+	unsigned int calls = 0;
+
+	KUNIT_EXPECT_EQ(test, rx_loan_hold_factor(&fresh, NULL),
+			RX_LOAN_HOLD_FACTOR_UNLEARNED);
+	WRITE_ONCE(lb->hold_factor, 186);
+	KUNIT_EXPECT_EQ(test, rx_loan_hold_factor(&fresh, lb), 186U);
+
+	/* Small or empty skbs are not measured. */
+	KUNIT_EXPECT_FALSE(test, rx_loan_hold_account(&h, 8448, 1023, 1023));
+	KUNIT_EXPECT_FALSE(test, rx_loan_hold_account(&h, 8448, 7740, 0));
+	KUNIT_EXPECT_EQ(test, h.geo_pay, 0U);
+
+	while (!rx_loan_hold_account(&h, 8448, 7740, 7740) && calls < 1000)
+		calls++;
+	KUNIT_EXPECT_EQ(test, calls, 541U);
+	KUNIT_EXPECT_EQ(test, h.geo_factor[0], 110U);
+	KUNIT_EXPECT_EQ(test, h.geo_pay, 0U);
+	KUNIT_EXPECT_EQ(test, rx_loan_hold_measured(&h), 110U);
+	/* Its own sample wins over the budget's. */
+	KUNIT_EXPECT_EQ(test, rx_loan_hold_factor(&h, lb), 110U);
+
+	h.factor = 110;
+	KUNIT_EXPECT_FALSE(test, rx_loan_hold_stale(&h, 120));
+	KUNIT_EXPECT_TRUE(test, rx_loan_hold_stale(&h, 124));
+	KUNIT_EXPECT_FALSE(test, rx_loan_hold_stale(&h, 97));
+	KUNIT_EXPECT_TRUE(test, rx_loan_hold_stale(&h, 96));
+
+	KUNIT_EXPECT_EQ(test, rx_loan_hold_scaling_ratio(150), 85);
+	KUNIT_EXPECT_EQ(test, rx_loan_hold_scaling_ratio(50), 128);
+	KUNIT_EXPECT_EQ(test, rx_loan_hold_window_clamp(262144, 150), 87040);
+	KUNIT_EXPECT_EQ(test, rx_loan_hold_window_clamp(65536, 280), 11520);
 }
 
 /* A read pool follows the region's read size at its next locked op. */
@@ -1543,6 +1771,10 @@ static struct kunit_case rx_loan_test_cases[] = {
 	KUNIT_CASE(rx_loan_stock_test),
 	KUNIT_CASE(rx_loan_cost_window_test),
 	KUNIT_CASE(rx_loan_copies_test),
+	KUNIT_CASE(rx_loan_consumer_copies_test),
+	KUNIT_CASE(rx_loan_tile_region_test),
+	KUNIT_CASE(rx_loan_tile_arena_test),
+	KUNIT_CASE(rx_loan_hold_test),
 	KUNIT_CASE(rx_loan_region_read_pickup_test),
 	{}
 };

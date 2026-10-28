@@ -7642,6 +7642,7 @@ static void svcsock_rx_second_consumer_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, atomic_long_read(&rc->out_read), 0L);
 	KUNIT_EXPECT_EQ(test, atomic_long_read(&other->out_read), 0L);
 	rx_loan_consumer_unregister(other);
+	rx_loan_consumer_destroy(other);
 	rx_loan_consumer_unregister(rc);
 }
 

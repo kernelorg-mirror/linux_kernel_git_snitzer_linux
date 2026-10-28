@@ -135,20 +135,22 @@ struct svc_sock {
 	/* READs parked until the connection's share has room */
 	spinlock_t		sk_rx_region_lock;
 	struct list_head	sk_rx_region_waiters;
-	/* region pages seen: hold the receive buffer (set by the actor) */
-	bool			sk_rx_hold_pending;
-	/* receive buffer, window clamp and scaling ratio held */
-	bool			sk_rx_held;
-	/* what they were held to (svc_tcp_rx_hold_factor()) */
-	unsigned int		sk_rx_hold_factor;
 	/*
-	 * What the skbs read since the last sample occupy and carry, and
-	 * the last two samples, newest first, as bytes occupied for each
-	 * 100 of payload (svc_tcp_rx_geometry_account())
+	 * The receive-buffer hold (rx_loan_hold_*()): pending is set by the
+	 * actor when region pages are seen.  The sk_rx_* names alias its
+	 * fields, member for member, for the KUnit suite that reads them.
 	 */
-	u32			sk_rx_geo_mem;
-	u32			sk_rx_geo_pay;
-	unsigned int		sk_rx_geo_factor[2];
+	union {
+		struct rx_loan_hold	sk_rx_hold;
+		struct {
+			bool		sk_rx_hold_pending;
+			bool		sk_rx_held;
+			unsigned int	sk_rx_hold_factor;
+			u32		sk_rx_geo_mem;
+			u32		sk_rx_geo_pay;
+			unsigned int	sk_rx_geo_factor[2];
+		};
+	};
 
 	struct page_frag_cache  sk_frag_cache;
 
