@@ -143,3 +143,5 @@ The held aggregate is the first in the frame's hash bucket, timed only when its 
 - **Frames that keep the built skb:** a frame with a VLAN to strip or NIS metadata.
 
 [run98.sh](run98.sh): load the A/B's xeu (refusing with an NFS client connected), eight loan64 runs, counted and untraced, `rx_gro_frags` N Y Y N N Y Y N, each line with the loans admitted and denied. Then the kept xeu again and the settled setting. Judged on the rings' counted cycles a WRITE, with nfsd's, the rate, the loans and the region's peak beside them.
+
+**[run99.sh](run99.sh)**, after run98: where the saved instructions went. One loan64 run on the A/B's xeu. From 10 s into the timed load, `rx_gro_frags` alternates N Y N Y N Y, with a 3 s `perf stat` on the ring CPUs in each setting: cycles, instructions, `stall_backend`, `stall_backend_mem`, and the WRITEs in each window. Then the kept xeu again.
