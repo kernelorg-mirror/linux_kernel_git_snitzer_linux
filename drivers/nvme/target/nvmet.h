@@ -116,11 +116,17 @@ struct nvmet_ns {
 	 * A transport may lend this namespace's I/O a bvec (see
 	 * nvmet_req_set_data_bvec()) whose segments are aligned so: their
 	 * offsets to @data_bvec_addr_mask, their lengths to
-	 * @data_bvec_len_mask, as direct I/O and our bio building need.
+	 * @data_bvec_len_mask, as direct I/O's memory alignment needs.
 	 */
 	bool			data_bvec_ok;
 	u32			data_bvec_addr_mask;
 	u32			data_bvec_len_mask;
+	/*
+	 * The queue whose bios carry them, if any: they must also be DMA
+	 * aligned to it and laid out so that it can split them on a logical
+	 * block boundary.
+	 */
+	const struct queue_limits *data_bvec_lim;
 	/* file: submit a direct read IOCB_NOWAIT first */
 	bool			file_nowait_read;
 #define NVMET_NS_IO_LIVE	0
