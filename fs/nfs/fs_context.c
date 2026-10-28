@@ -34,7 +34,7 @@
 #define NFS_DEFAULT_VERSION 2
 #endif
 
-#define NFS_MAX_CONNECTIONS 16
+#define NFS_MAX_CONNECTIONS 128
 
 enum nfs_param {
 	Opt_ac,
