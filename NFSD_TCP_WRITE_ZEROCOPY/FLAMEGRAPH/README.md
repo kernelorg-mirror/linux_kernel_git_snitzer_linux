@@ -97,7 +97,19 @@ decided.
    most about 2k cycles a WRITE; its prefetch distance and the order it
    gives pages back in. Round 37's profile puts `svc_tcp_rx_region_span`
    and `svc_tcp_rx_skb_region_pages_after` close behind the release in
-   nfsd's L3 misses.
+   nfsd's L3 misses. Done ([38-release-and-region](38-release-and-region/README.md)):
+   the deep pages' misses were prefetches the core drops. A second
+   request for each struct page is kept, "SUNRPC: Fetch a released page's
+   struct page a second time": on arm64 a PSTL2KEEP two batches ahead,
+   about 3.5k nfsd cycles a WRITE less with the rate, ring and peak
+   unchanged; elsewhere prefetchw again 4 ahead. The pfn range test for
+   the region count was not kept.
+8. **Round 39: the receive side's struct page misses** (Mike, 28
+   October): `svc_tcp_rx_region_span` and
+   `svc_tcp_rx_skb_region_pages_after`, whether
+   `svc_tcp_rx_prefetch_pages()`'s prefetches are dropped as the
+   release's were, from the tip counted and profiled again
+   ([39-receive-prefetch](39-receive-prefetch/README.md)).
 
 ## Where the kept rounds stand (2026-10-28)
 
