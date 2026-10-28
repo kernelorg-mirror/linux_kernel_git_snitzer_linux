@@ -109,7 +109,15 @@ decided.
    `svc_tcp_rx_skb_region_pages_after`, whether
    `svc_tcp_rx_prefetch_pages()`'s prefetches are dropped as the
    release's were, from the tip counted and profiled again
-   ([39-receive-prefetch](39-receive-prefetch/README.md)).
+   ([39-receive-prefetch](39-receive-prefetch/README.md)). The tip
+   counted at 297.1k nfsd cycles a WRITE; the receive side's prefetches
+   are not dropped (without them nfsd costs about 10k cycles a WRITE more);
+   a lead of one skb was not kept (Mike).
+9. **Round 40: the wake path** (Mike, 28 October): about 4 threads woken
+   and 11 context switches a WRITE, and `finish_task_switch` about a
+   tenth of nfsd's samples outside idle: where the wakes come from, what
+   each lands on, and changes judged on latency at iodepth 1 as well as
+   cycles ([40-wake-path](40-wake-path/README.md)).
 
 ## Where the kept rounds stand (2026-10-28)
 
