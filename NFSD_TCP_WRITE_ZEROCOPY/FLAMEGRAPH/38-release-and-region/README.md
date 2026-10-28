@@ -84,3 +84,23 @@ All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F
 - **A burst of prefetches loses its later ones.** At 64 and all-at-the-start, the pages prefetched more than about 16 to 32 deep in the burst before the loop miss 43 to 45% of the time. That is worse than with a lead of 16 in the loop. More than that many prefetches at once are not all served.
 - **The deep misses are not a matter of lead.** At 16, each timed entry spends at least one full drained load, so 16 entries ahead is far more than a DRAM miss. Still, a quarter of the pages past the 32nd miss, and 32 or 64 ahead moves that by only a few points. For those pages the prefetch does not take effect, or the line is taken away again before its use. Which of the two is not known.
 - **The untimed window at 32 is lost.** It counted 7,616 WRITEs and 6.6G cycles in 2 s, about a tenth and a third of every other window's. The drives wrote 40.1 to 40.9 GB/s in every second of the run, and the timed window that followed counted 77,777 WRITEs. Neither figure is used.
+
+## 5. The deep misses (r85, to run)
+
+[The diagnostic](sunrpc-diag-release-deep-misses.patch) (`F6C5E35DA846E86F2009A4C`, not for keeping) is r84's, with two additions to tell its two explanations apart: either the prefetch does not take effect, or the line is taken away before its use. The build is in `/var/tmp/zc-run-logs/t2-r38-deep`.
+
+- **`svc_tcp_rx_rel_ahead`** sets how a page is fetched the distance ahead:
+  - 0: prefetchw, the tip's;
+  - 1: a prefetch for reading;
+  - 2: a load of the struct page's first word, which cannot be dropped as a prefetch can.
+- **Each release's distinct pages are classified at its end**, when it has no more than 256 of them:
+  - by their place from the end of the release;
+  - by whether each is shared: its `pp_ref_count`, read just after the timed load, above this release's references to it;
+  - with a load ahead (2), by whether the load ahead and the load at use each took 64 ns or more.
+
+How to read it:
+- If the deep misses go with a load ahead, the prefetches were being dropped.
+- If they stay, the line was taken away between the load ahead and the use.
+- If those pages are also shared, the cause is another CPU writing the line, not an eviction.
+
+[run85.sh](run85.sh): one loan64 run at the distance of 16. For each way of fetching (0, 1, 2, 0 again) it waits 1 s, takes 3 s of `perf stat` on nfsd's CPUs with the timing off, then 3 s with the timing on.
