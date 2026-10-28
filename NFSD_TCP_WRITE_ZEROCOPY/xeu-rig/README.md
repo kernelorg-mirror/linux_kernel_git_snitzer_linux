@@ -9,11 +9,11 @@ outcome. This section is where tardis2 stands after round 30.
 - **The kernel:** build 499 (`7.3.0-7.hs.499.el10.aarch64+16k`), booted
   with `rodata=noalias`. `/etc/kernel/cmdline` carries it into each new
   kernel's boot entry, and `settled.sh` audits a boot without it BAD.
-- **The modules:** the tip's sunrpc in `updates/` (round 26's build,
-  `A06FE478658242A10E100FF`), the kernel's own nfsd
-  (`3F0C341E86E266D5FDF2ADF`), and xeu in `updates/`
-  (`2C05DF674C9D013185FDB34`, with round 28's `rx_prefetch`). The
-  initrd carries this xeu, so a boot loads it.
+- **The modules** (since 28 October): the tip's sunrpc in `updates/`
+  (FLAMEGRAPH round 36's build, `E80412A536ADD1E86B16F5A`), the
+  kernel's own nfsd (`3F0C341E86E266D5FDF2ADF`), and xeu in `updates/`
+  (round 35's, `63631721F8B149913C0DC19`, kmod-xsight 2.0.1-12). The
+  initrd carries this sunrpc and xeu, so a boot loads them.
 - **The settled setting:** `settled.sh` holds `rx_prefetch` Y,
   `irq_msix_mask` Y, `svc_tcp_rx_want_eighths` 6 and `drc_max_entries`
   4096. The server port's qdisc stays `fq_codel` under `mq` (round 31's

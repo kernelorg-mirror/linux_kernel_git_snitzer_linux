@@ -1,0 +1,328 @@
+ Percent |	Source code & Disassembly of sunrpc.ko for stall_backend_mem (227 samples, percent: local period)
+-----------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3     Disassembly of section .text:
+         :
+         : 5     000000000003d870 <svc_tcp_rx_borrow_segment>:
+         : 6     }
+         :
+         : 8     static int svc_tcp_rx_borrow_segment(struct svc_tcp_rx_walk *walk,
+         : 9     u32 start, struct page *page,
+         : 10    unsigned int offset, unsigned int len)
+         : 11    {
+    1.32 :   3d870:  nop
+    0.44 :   3d874:  nop
+    0.00 :   3d878:  paciasp
+    2.64 :   3d87c:  stp     x29, x30, [sp, #-112]!
+    0.44 :   3d880:  mov     x29, sp
+    0.88 :   3d884:  stp     x23, x24, [sp, #48]
+    0.44 :   3d888:  mov     x23, x0
+    0.44 :   3d88c:  stp     x27, x28, [sp, #80]
+         : 20    struct svc_tcp_rx_state *state = walk->rqstp->rq_tcp_rx;
+    0.00 :   3d890:  ldr     x0, [x0, #8]
+    0.00 :   3d894:  ldr     x28, [x0, #1088]
+         : 23    unsigned int consumed = 0;
+         : 24    int ret;
+         :
+         : 26    while (consumed < len) {
+    1.76 :   3d898:  cbz     w4, 3d9a0 <svc_tcp_rx_borrow_segment+0x130>
+    0.44 :   3d89c:  stp     x19, x20, [sp, #16]
+    0.44 :   3d8a0:  mov     w19, w1
+    0.00 :   3d8a4:  mov     x20, x2
+    0.44 :   3d8a8:  stp     x21, x22, [sp, #32]
+    0.00 :   3d8ac:  mov     w21, w3
+    0.00 :   3d8b0:  mov     w22, w4
+    0.44 :   3d8b4:  stp     x25, x26, [sp, #64]
+    0.00 :   3d8b8:  mov     w26, #0x0                       // #0
+         : 36    unsigned int page_offset = offset_in_page(offset + consumed);
+    0.44 :   3d8bc:  add     w6, w21, w26
+    0.44 :   3d8c0:  and     w2, w6, #0x3fff
+         : 39    unsigned int take = min_t(unsigned int, len - consumed,
+    0.00 :   3d8c4:  sub     w24, w22, w26
+    0.00 :   3d8c8:  mov     w0, #0x4000                     // #16384
+         : 42    PAGE_SIZE - page_offset);
+         : 43    struct page *span_page = page + ((offset + consumed) >> PAGE_SHIFT);
+         : 44    u32 expected = walk->body_base + start + consumed - walk->first;
+         : 45    bool page_pool = walk->pp_recycle &&
+    0.88 :   3d8cc:  ldrb    w5, [x23, #36]
+         : 47    unsigned int take = min_t(unsigned int, len - consumed,
+    0.00 :   3d8d0:  sub     w25, w0, w2
+         : 49    u32 expected = walk->body_base + start + consumed - walk->first;
+    0.00 :   3d8d4:  ldr     w3, [x23, #32]
+    0.44 :   3d8d8:  ldr     w0, [x23, #24]
+         : 52    unsigned int take = min_t(unsigned int, len - consumed,
+    0.00 :   3d8dc:  cmp     w25, w24
+         : 54    struct page *span_page = page + ((offset + consumed) >> PAGE_SHIFT);
+    0.44 :   3d8e0:  lsr     w6, w6, #14
+         : 56    u32 expected = walk->body_base + start + consumed - walk->first;
+    0.88 :   3d8e4:  add     w3, w19, w3
+    0.44 :   3d8e8:  sub     w0, w26, w0
+         : 59    unsigned int take = min_t(unsigned int, len - consumed,
+    0.00 :   3d8ec:  csel    w25, w25, w24, ls       // ls = plast
+         : 61    u32 expected = walk->body_base + start + consumed - walk->first;
+    0.00 :   3d8f0:  add     w3, w3, w0
+         : 63    struct page *span_page = page + ((offset + consumed) >> PAGE_SHIFT);
+    0.88 :   3d8f4:  add     x1, x20, x6, lsl #6
+         : 65    bool page_pool = walk->pp_recycle &&
+    0.00 :   3d8f8:  mov     w0, #0x0                        // #0
+    0.00 :   3d8fc:  tbz     w5, #0, 3d934 <svc_tcp_rx_borrow_segment+0xc4>
+         : 68    return is_power_of_2(sizeof(struct page));
+         : 69    }
+         :
+         : 71    static __always_inline unsigned long _compound_head(const struct page *page)
+         : 72    {
+         : 73    unsigned long info = READ_ONCE(page->compound_info);
+    0.00 :   3d900:  ldr     x4, [x1, #8]
+         : 75    unsigned long mask;
+         :
+         : 77    if (!compound_info_has_mask()) {
+         : 78    /* Bit 0 encodes PageTail() */
+         : 79    if (info & 1)
+         : 80    return info - 1;
+    6.61 :   3d904:  sub     x0, x4, #0x1
+    9.25 :   3d908:  tst     x4, #0x1
+         : 83    #define PP_MAGIC_MASK ~(PP_DMA_INDEX_MASK | 0x3UL)
+         :
+         : 85    #ifdef CONFIG_PAGE_POOL
+         : 86    static inline bool page_pool_page_is_pp(const struct page *page)
+         : 87    {
+         : 88    return (page->pp_magic & PP_MAGIC_MASK) == PP_SIGNATURE;
+    0.44 :   3d90c:  mov     x4, #0xffffff8000000000         // #-549755813888
+    0.00 :   3d910:  csel    x0, x0, x1, ne  // ne = any
+    0.00 :   3d914:  movk    x4, #0x7c
+    0.44 :   3d918:  ldr     x0, [x0, #8]
+    4.41 :   3d91c:  and     x0, x0, x4
+   12.78 :   3d920:  mov     x4, #0x40                       // #64
+    0.00 :   3d924:  movk    x4, #0xdead, lsl #48
+    0.44 :   3d928:  cmp     x0, x4
+    0.00 :   3d92c:  cset    w5, eq  // eq = none
+    0.44 :   3d930:  mov     w0, w5
+         : 99    page_pool_page_is_pp(compound_head(span_page));
+         :
+         : 101   if (WARN_ON_ONCE(state->body_bytes != expected))
+    0.44 :   3d934:  ldr     w4, [x28, #48]
+    0.88 :   3d938:  cmp     w4, w3
+    0.00 :   3d93c:  b.ne    3dad8 <svc_tcp_rx_borrow_segment+0x268>  // b.any
+         : 105   return -EINVAL;
+         : 106   if (state->mode == SVC_TCP_RX_COPY)
+    1.32 :   3d940:  ldrb    w3, [x28, #96]
+    0.88 :   3d944:  cmp     w3, #0x3
+    0.00 :   3d948:  b.eq    3db20 <svc_tcp_rx_borrow_segment+0x2b0>  // b.none
+         : 110   return svc_tcp_rx_copy_segment(walk, start + consumed,
+         : 111   len - consumed,
+         : 112   SVC_TCP_RX_REASON_CAPACITY);
+         : 113   if (state->merge_fill) {
+    0.00 :   3d94c:  ldr     w3, [x28, #100]
+    0.44 :   3d950:  cbnz    w3, 3d9a8 <svc_tcp_rx_borrow_segment+0x138>
+         : 116   state->copied_bytes += take;
+         : 117   state->merge_fill -= take;
+         : 118   consumed += take;
+         : 119   continue;
+         : 120   }
+         : 121   if (page_pool && walk->takeover && walk->takeover->frag >= 0) {
+    0.88 :   3d954:  cbz     w0, 3d968 <svc_tcp_rx_borrow_segment+0xf8>
+   10.13 :   3d958:  ldr     x27, [x23, #40]
+    0.00 :   3d95c:  cbz     x27, 3d968 <svc_tcp_rx_borrow_segment+0xf8>
+    0.00 :   3d960:  ldr     w0, [x27]
+    0.44 :   3d964:  tbz     w0, #31, 3da80 <svc_tcp_rx_borrow_segment+0x210>
+         : 127   return svc_tcp_rx_append_ref(state, page, offset, len, borrowed,
+    0.00 :   3d968:  mov     w6, #0x1                        // #1
+    0.00 :   3d96c:  mov     w3, w25
+    0.00 :   3d970:  mov     w4, w6
+    0.00 :   3d974:  mov     x0, x28
+    0.00 :   3d978:  bl      36988 <svc_tcp_rx_append_ref>
+         : 133   } else {
+         : 134   ret = svc_tcp_rx_append_borrowed(state, span_page,
+         : 135   page_offset, take,
+         : 136   page_pool);
+         : 137   }
+         : 138   if (ret == -ENOSPC) {
+    0.88 :   3d97c:  cmn     w0, #0x1c
+    0.88 :   3d980:  b.eq    3db10 <svc_tcp_rx_borrow_segment+0x2a0>  // b.none
+         : 141   return ret;
+         : 142   return svc_tcp_rx_copy_segment(walk, start + consumed,
+         : 143   len - consumed,
+         : 144   SVC_TCP_RX_REASON_CAPACITY);
+         : 145   }
+         : 146   if (ret)
+    0.00 :   3d984:  cbnz    w0, 3da3c <svc_tcp_rx_borrow_segment+0x1cc>
+         : 148   return ret;
+         : 149   consumed += take;
+    0.88 :   3d988:  add     w26, w26, w25
+         : 151   while (consumed < len) {
+    0.44 :   3d98c:  cmp     w22, w26
+    0.00 :   3d990:  b.hi    3d8bc <svc_tcp_rx_borrow_segment+0x4c>  // b.pmore
+    0.44 :   3d994:  ldp     x19, x20, [sp, #16]
+    0.44 :   3d998:  ldp     x21, x22, [sp, #32]
+    1.32 :   3d99c:  ldp     x25, x26, [sp, #64]
+         : 157   }
+         : 158   return 0;
+    0.44 :   3d9a0:  mov     w0, #0x0                        // #0
+    0.00 :   3d9a4:  b       3da48 <svc_tcp_rx_borrow_segment+0x1d8>
+         : 161   struct page *mpage = state->bvec[state->count - 1].bv_page;
+    0.00 :   3d9a8:  ldr     w0, [x28, #44]
+         : 163   return page_to_virt(page);
+    0.00 :   3d9ac:  mov     x4, #0x40000000                 // #1073741824
+    0.00 :   3d9b0:  ldr     x5, [x28]
+    0.00 :   3d9b4:  sub     w0, w0, #0x1
+    0.00 :   3d9b8:  movk    x4, #0x80, lsl #32
+    0.00 :   3d9bc:  add     x1, x1, x4
+    0.00 :   3d9c0:  lsl     x0, x0, #4
+    0.00 :   3d9c4:  mov     x10, #0xffff000000000000        // #-281474976710656
+    0.00 :   3d9c8:  lsr     x6, x1, #6
+         : 172   take = min(take, state->merge_fill);
+    0.00 :   3d9cc:  cmp     w3, w25
+         : 174   memcpy_page(mpage, fill_off, span_page, page_offset,
+    0.00 :   3d9d0:  mov     w1, w2
+         : 176   unsigned int fill_off = PAGE_SIZE - state->merge_fill;
+    0.00 :   3d9d4:  mov     w27, #0x4000                    // #16384
+         : 178   struct page *mpage = state->bvec[state->count - 1].bv_page;
+    0.00 :   3d9d8:  ldr     x5, [x5, x0]
+    0.00 :   3d9dc:  add     x6, x10, x6, lsl #14
+         : 181   memcpy_page(mpage, fill_off, span_page, page_offset,
+    0.00 :   3d9e0:  sub     w0, w27, w3
+    0.00 :   3d9e4:  csel    w2, w3, w25, ls // ls = plast
+    0.00 :   3d9e8:  add     x4, x5, x4
+         : 185   {
+         : 186   char *dst = kmap_local_page(dst_page);
+         : 187   char *src = kmap_local_page(src_page);
+         :
+         : 189   VM_BUG_ON(dst_off + len > PAGE_SIZE || src_off + len > PAGE_SIZE);
+         : 190   memcpy(dst + dst_off, src + src_off, len);
+    0.00 :   3d9ec:  add     x1, x6, x1
+         : 192   take = min(take, state->merge_fill);
+    0.00 :   3d9f0:  csel    w25, w3, w25, ls        // ls = plast
+         : 194   unsigned int fill_off = PAGE_SIZE - state->merge_fill;
+    0.00 :   3d9f4:  sub     w27, w27, w3
+    0.00 :   3d9f8:  lsr     x4, x4, #6
+    0.00 :   3d9fc:  str     x5, [sp, #104]
+    0.00 :   3da00:  add     x4, x10, x4, lsl #14
+    0.00 :   3da04:  add     x0, x4, x0
+    0.00 :   3da08:  bl      0 <memcpy>
+         : 201   return svc_tcp_rx_append_ref(state, page, offset, len, borrowed,
+    0.00 :   3da0c:  ldr     x5, [sp, #104]
+    0.00 :   3da10:  mov     w6, #0x1                        // #1
+    0.00 :   3da14:  mov     w2, w27
+    0.00 :   3da18:  mov     w3, w25
+    0.00 :   3da1c:  mov     x1, x5
+    0.00 :   3da20:  mov     x0, x28
+    0.00 :   3da24:  mov     w4, w6
+    0.00 :   3da28:  mov     w5, #0x0                        // #0
+    0.00 :   3da2c:  bl      36988 <svc_tcp_rx_append_ref>
+         : 211   if (ret == -ENOSPC) {
+    0.00 :   3da30:  cmn     w0, #0x1c
+    0.00 :   3da34:  b.eq    3db50 <svc_tcp_rx_borrow_segment+0x2e0>  // b.none
+         : 214   if (ret)
+    0.00 :   3da38:  cbz     w0, 3da5c <svc_tcp_rx_borrow_segment+0x1ec>
+    0.00 :   3da3c:  ldp     x19, x20, [sp, #16]
+    0.00 :   3da40:  ldp     x21, x22, [sp, #32]
+    0.00 :   3da44:  ldp     x25, x26, [sp, #64]
+         : 219   }
+    0.00 :   3da48:  ldp     x23, x24, [sp, #48]
+    0.00 :   3da4c:  ldp     x27, x28, [sp, #80]
+    0.44 :   3da50:  ldp     x29, x30, [sp], #112
+    0.88 :   3da54:  autiasp
+    4.41 :   3da58:  ret
+         : 225   state->copied_bytes += take;
+    0.00 :   3da5c:  ldp     w1, w2, [x28, #56]
+         : 227   consumed += take;
+    0.00 :   3da60:  add     w26, w26, w25
+         : 229   state->merge_fill -= take;
+    0.00 :   3da64:  ldr     w0, [x28, #100]
+         : 231   state->borrowed_bytes -= take;
+    0.00 :   3da68:  sub     w1, w1, w25
+         : 233   state->copied_bytes += take;
+    0.00 :   3da6c:  add     w2, w2, w25
+         : 235   state->merge_fill -= take;
+    0.00 :   3da70:  sub     w0, w0, w25
+         : 237   state->borrowed_bytes -= take;
+    0.00 :   3da74:  stp     w1, w2, [x28, #56]
+         : 239   state->merge_fill -= take;
+    0.00 :   3da78:  str     w0, [x28, #100]
+         : 241   continue;
+    0.00 :   3da7c:  b       3d98c <svc_tcp_rx_borrow_segment+0x11c>
+         : 243   u32 count = state->count;
+    1.76 :   3da80:  ldr     w3, [x28, #44]
+         : 245   ret = svc_tcp_rx_append_ref(state, span_page,
+    0.00 :   3da84:  mov     w5, #0x1                        // #1
+    0.00 :   3da88:  mov     x0, x28
+    0.44 :   3da8c:  mov     w4, w5
+    0.44 :   3da90:  mov     w6, #0x0                        // #0
+         : 250   u32 count = state->count;
+    0.00 :   3da94:  str     w3, [sp, #104]
+         : 252   ret = svc_tcp_rx_append_ref(state, span_page,
+    0.44 :   3da98:  mov     w3, w25
+    0.00 :   3da9c:  bl      36988 <svc_tcp_rx_append_ref>
+         : 255   if (!ret && state->count > count) {
+    6.17 :   3daa0:  cbnz    w0, 3db00 <svc_tcp_rx_borrow_segment+0x290>
+    0.88 :   3daa4:  ldr     w0, [x28, #44]
+    0.88 :   3daa8:  ldr     w3, [sp, #104]
+    1.32 :   3daac:  cmp     w0, w3
+    0.00 :   3dab0:  b.ls    3db44 <svc_tcp_rx_borrow_segment+0x2d4>  // b.plast
+         : 261   t->pages[t->nr].entry = count;
+    0.88 :   3dab4:  ldr     w0, [x27, #4]
+         : 263   t->frag = -1;
+    0.44 :   3dab8:  mov     w1, #0xffffffff                 // #-1
+         : 265   t->nr++;
+    0.00 :   3dabc:  add     w2, w0, #0x1
+    2.20 :   3dac0:  add     x0, x27, w0, uxtw #3
+         : 268   t->pages[t->nr].entry = count;
+    0.00 :   3dac4:  str     w3, [x0, #8]
+         : 270   t->pages[t->nr].frag = t->frag;
+    2.20 :   3dac8:  ldr     w3, [x27]
+    2.20 :   3dacc:  str     w3, [x0, #12]
+         : 273   t->frag = -1;
+    1.32 :   3dad0:  stp     w1, w2, [x27]
+         : 275   if (ret == -ENOSPC) {
+    1.76 :   3dad4:  b       3d988 <svc_tcp_rx_borrow_segment+0x118>
+         : 277   if (WARN_ON_ONCE(state->body_bytes != expected))
+    0.00 :   3dad8:  brk     #0x800
+         : 279   return -EINVAL;
+    0.00 :   3dadc:  mov     w0, #0xffffffea                 // #-22
+    0.00 :   3dae0:  ldp     x19, x20, [sp, #16]
+    0.00 :   3dae4:  ldp     x21, x22, [sp, #32]
+    0.00 :   3dae8:  ldp     x25, x26, [sp, #64]
+         : 284   }
+    0.00 :   3daec:  ldp     x23, x24, [sp, #48]
+    0.00 :   3daf0:  ldp     x27, x28, [sp, #80]
+    0.00 :   3daf4:  ldp     x29, x30, [sp], #112
+    0.00 :   3daf8:  autiasp
+    0.00 :   3dafc:  ret
+         : 290   t->frag = -1;
+    0.00 :   3db00:  mov     w1, #0xffffffff                 // #-1
+    0.00 :   3db04:  str     w1, [x27]
+         : 293   if (ret == -ENOSPC) {
+    0.00 :   3db08:  cmn     w0, #0x1c
+    0.00 :   3db0c:  b.ne    3da3c <svc_tcp_rx_borrow_segment+0x1cc>  // b.any
+         : 296   ret = svc_tcp_rx_materialize_fallback(walk,
+    0.00 :   3db10:  mov     x0, x23
+    0.00 :   3db14:  mov     w1, #0xb                        // #11
+    0.00 :   3db18:  bl      3b398 <svc_tcp_rx_materialize_fallback>
+         : 300   if (ret)
+    0.00 :   3db1c:  cbnz    w0, 3da3c <svc_tcp_rx_borrow_segment+0x1cc>
+         : 302   return svc_tcp_rx_copy_segment(walk, start + consumed,
+    0.00 :   3db20:  add     w1, w19, w26
+    0.00 :   3db24:  mov     w2, w24
+    0.00 :   3db28:  mov     x0, x23
+    0.00 :   3db2c:  mov     w3, #0xb                        // #11
+    0.00 :   3db30:  bl      3d7a8 <svc_tcp_rx_copy_segment>
+    0.00 :   3db34:  ldp     x19, x20, [sp, #16]
+    0.00 :   3db38:  ldp     x21, x22, [sp, #32]
+    0.00 :   3db3c:  ldp     x25, x26, [sp, #64]
+    0.00 :   3db40:  b       3da48 <svc_tcp_rx_borrow_segment+0x1d8>
+         : 312   t->frag = -1;
+    0.00 :   3db44:  mov     w0, #0xffffffff                 // #-1
+    0.00 :   3db48:  str     w0, [x27]
+         : 315   if (ret == -ENOSPC) {
+    0.00 :   3db4c:  b       3d988 <svc_tcp_rx_borrow_segment+0x118>
+         : 317   state->merge_fill = 0;
+    0.00 :   3db50:  str     wzr, [x28, #100]
+         : 319   ret = svc_tcp_rx_materialize_fallback(walk,
+    0.00 :   3db54:  mov     x0, x23
+    0.00 :   3db58:  mov     w1, #0xb                        // #11
+    0.00 :   3db5c:  bl      3b398 <svc_tcp_rx_materialize_fallback>
+         : 323   if (ret)
+    0.00 :   3db60:  cbnz    w0, 3da3c <svc_tcp_rx_borrow_segment+0x1cc>
+    0.00 :   3db64:  b       3db20 <svc_tcp_rx_borrow_segment+0x2b0>
