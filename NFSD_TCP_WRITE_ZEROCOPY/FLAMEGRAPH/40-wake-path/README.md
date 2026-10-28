@@ -110,3 +110,15 @@ It also records every switch on nfsd's CPUs by what goes out and what comes in (
 - **`lock_sock`**: 0.15 sleeps and wakes a WRITE spent waiting for the socket lock, a thread sending a reply or reading while another holds the socket.
 - **The drive wait (0.87) and the log forces (0.17)** are the WRITE's own. The log forces come from extents allocated anew after each run's trim, and an overwrite workload would have fewer.
 - **Wake-to-run latency**: whether 4 to 8 us is real untraced, and where it goes (IPI, WFI exit, the schedule).
+
+## 2. Which source's wakes find nothing (r93, to run)
+
+[`xeu-rig/wakeempty.bt`](../../xeu-rig/wakeempty.bt) tags each idle thread woken by `svc_pool_wake_idle_thread()` with the wake's source, classed as `wakesrc.bt` does it. `svc_pool_thread_wake` names the woken thread, so the tag can follow it. When that thread's `svc_recv()` pass returns, the pass is counted by:
+- the source;
+- whether the thread slept in it;
+- whether it dequeued a transport;
+- the time from the wake to the pass's end.
+
+An empty pass is followed one step further: did the thread sleep again, or go round once more and find work or nothing?
+
+[run93.sh](run93.sh): one traced loan64 run at the current state, with no module swapped. From 10 s into the timed load it runs 8 s of `wakeempty.bt`, then 8 s of `wakesrc.bt` for the same run's totals. About 5 minutes.
