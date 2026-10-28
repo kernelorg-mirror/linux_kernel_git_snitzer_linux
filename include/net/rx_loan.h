@@ -176,10 +176,10 @@ static inline bool rx_loan_table_can_coalesce(const struct rx_loan_table *t,
 		return false;
 	index = t->count - 1;
 	last = &t->bvec[index];
+	if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+		return false;
 	return test_bit(index, t->borrowed) == borrowed &&
-		test_bit(index, t->page_pool) == page_pool &&
-		last->bv_page == page &&
-		last->bv_offset + last->bv_len == offset;
+		test_bit(index, t->page_pool) == page_pool;
 }
 
 /*
@@ -258,8 +258,8 @@ static inline int __rx_loan_table_append_ref(struct rx_loan_table *t,
 			__set_bit(t->count, t->borrowed);
 			t->borrowed_count++;
 			t->refs_acquired++;
-			if (page_pool && page_pool_page_in_rx_region(page) &&
-			    page != t->region_last) {
+			if (page_pool && page != t->region_last &&
+			    page_pool_page_in_rx_region(page)) {
 				t->region_count++;
 				t->region_last = page;
 			}
