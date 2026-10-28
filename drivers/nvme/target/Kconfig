@@ -88,9 +88,20 @@ config NVME_TARGET_TCP
 	tristate "NVMe over Fabrics TCP target support"
 	depends on INET
 	depends on NVME_TARGET
+	select RX_LOAN
 	help
 	  This enables the NVMe TCP target support, which allows exporting NVMe
 	  devices over TCP.
+
+	  If unsure, say N.
+
+config NVME_TARGET_TCP_KUNIT_TEST
+	bool "KUnit tests for the NVMe TCP target's region receive" if !KUNIT_ALL_TESTS
+	depends on NVME_TARGET_TCP && KUNIT=y
+	default KUNIT_ALL_TESTS
+	help
+	  This builds the KUnit tests for the NVMe TCP target's receive of
+	  WRITE data into rx_loan region loans.
 
 	  If unsure, say N.
 
