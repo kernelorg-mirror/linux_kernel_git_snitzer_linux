@@ -143,7 +143,7 @@ Each woken thread's `svc_recv()` pass after the wake (`wakeempty.bt`, 433,463 WR
 
 **So:** the most a change to who is woken could save is about 1% of nfsd's cycles, and round 18 showed it can cost latency. The race is lost because the woken thread takes 4–8 us to arrive, if that figure holds untraced. A faster wake would cut the empty wakes and shorten each WRITE's path. A smaller wake would only cut the empty wakes.
 
-## 3. How long a woken thread takes to run (r94, to run)
+## 3. How long a woken thread takes to run (r94)
 
 Section 1's 4–8 us, from `sched_waking` to running, came from a trace with nine probes on every switch. `lat.bt` (L0) gave 0–2 us for a thread woken to running at iodepth 1, over a different span. This step measures the wake with as little tracing as possible, and in two parts.
 
@@ -158,3 +158,21 @@ Section 1's 4–8 us, from `sched_waking` to running, came from a trace with nin
 - **`r94-qd1`:** `lat.sh`'s load (4 writers, iodepth 1, 1 MiB).
 
 In each, from 10 s into the timed load, it runs 8 s of `rundelay.sh` untraced, then 8 s of `wakelat.bt` with `rundelay.sh` beside it. About 9 minutes.
+
+**run94** ([run94.out](run94.out), [wakelat-r94-load.txt](wakelat-r94-load.txt), [wakelat-r94-qd1.txt](wakelat-r94-qd1.txt)): both runs had their flows placed and no drive stepping down; the full-load run was at 40.47 GB/s. The iodepth-1 run's fio latency (p50 461 us, mean 469, p99 594) covers both its windows, the traced one included.
+
+| mean, ns | full load | iodepth 1 |
+|---|---|---|
+| runqueue wait, untraced (`run_delay`) | **67** | **165** |
+| runqueue wait, with `wakelat.bt` running | 125 | 368 |
+| `wakelat.bt`'s "schedule" | 1,465 | 1,182 |
+| `wakelat.bt`'s "deliver", by IPI, woken from an nfsd CPU | 3,835 | 3,223 |
+| `wakelat.bt`'s "deliver", queued by the waker itself, from an nfsd CPU | 3,464 | 2,420 |
+| `wakelat.bt`'s "deliver", by IPI, woken from a ring CPU | 4,351 | 3,668 |
+| `wakelat.bt`'s total, wake to running | 6,422 | 5,382 |
+
+- **The trace is most of what it measures.** For the part the kernel also counts, from enqueue to running, the untraced wait is 67 ns at full load and 165 at iodepth 1, against the trace's 1.2 to 1.5 us. Section 1's 4–8 us came from a heavier trace, and the same is true of it. Section 2's account of the empty wakes, a race lost during a 4–8 us trip, rests on it and is not shown.
+- **Delivery has no untraced measure here.** A wake the waker queues itself, with no IPI, reads 2.4 to 3.5 us by the trace, which `try_to_wake_up` alone does not take: that is the trace too. The difference between a wake by IPI and one queued by the waker, under the same probes, is 0.4 us at full load and 0.8 at iodepth 1. That is the best figure here for the IPI and the CPU's way out of WFI, and it is small.
+- **At iodepth 1 each WRITE wakes about 6.4 nfsd threads** (traced), against 3.2 at full load: with few WRITEs in flight, nearly every step of a WRITE is a wake. If each costs well under a microsecond in latency, the wakes are a few microseconds of a 461 us WRITE.
+
+**So:** the wake is fast. What it costs is the CPU of the switches on both sides (section 1), and at most about 1% of nfsd's for the empty ones (section 2). Neither a faster wake nor fewer wakes is likely to move latency at iodepth 1. Measuring delivery properly would take stamps in the scheduler (`try_to_wake_up` and the IPI's handler), which means a kernel build and a reboot, not a module.
