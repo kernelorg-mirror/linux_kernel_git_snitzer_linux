@@ -116,6 +116,10 @@ int nvmet_bdev_ns_enable(struct nvmet_ns *ns)
 	ns->bdev = file_bdev(ns->bdev_file);
 	ns->size = bdev_nr_bytes(ns->bdev);
 	ns->blksize_shift = blksize_bits(bdev_logical_block_size(ns->bdev));
+	ns->data_bvec_ok = true;
+	ns->data_bvec_addr_mask = bdev_dma_alignment(ns->bdev);
+	ns->data_bvec_len_mask = (bdev_logical_block_size(ns->bdev) - 1) |
+				 bdev_dma_alignment(ns->bdev);
 
 	ns->pi_type = 0;
 	ns->metadata_size = 0;
@@ -194,6 +198,7 @@ static void nvmet_bio_done(struct bio *bio)
 	blk_status_t blk_status = bio->bi_status;
 
 	nvmet_req_bio_put(req, bio);
+	nvmet_req_data_done(req);
 	nvmet_req_complete(req, blk_to_nvme_status(req, blk_status));
 }
 
@@ -250,9 +255,46 @@ static int nvmet_bdev_alloc_bip(struct nvmet_req *req, struct bio *bio,
 }
 #endif /* CONFIG_BLK_DEV_INTEGRITY */
 
+/*
+ * Add @len bytes of @page at @offset to *@biop, chaining a new bio when it
+ * is full.  False: the protection information could not be attached, and
+ * the bio chain has been failed.
+ */
+static bool nvmet_bdev_add_page(struct nvmet_req *req, struct bio **biop,
+		struct page *page, unsigned int len, unsigned int offset,
+		blk_opf_t opf, sector_t *sector, unsigned int segs,
+		struct sg_mapping_iter *prot_miter)
+{
+	struct bio *bio = *biop;
+	int rc;
+
+	while (bio_add_page(bio, page, len, offset) != len) {
+		struct bio *prev = bio;
+
+		if (req->metadata_len) {
+			rc = nvmet_bdev_alloc_bip(req, bio, prot_miter);
+			if (unlikely(rc)) {
+				bio_io_error(bio);
+				return false;
+			}
+		}
+
+		bio = bio_alloc(req->ns->bdev, bio_max_segs(segs), opf,
+				GFP_KERNEL);
+		bio->bi_iter.bi_sector = *sector;
+
+		bio_chain(bio, prev);
+		submit_bio(prev);
+	}
+	*biop = bio;
+	/* exact: lent segments are logical block multiples, as sgl ones are */
+	*sector += len >> SECTOR_SHIFT;
+	return true;
+}
+
 static void nvmet_bdev_execute_rw(struct nvmet_req *req)
 {
-	unsigned int sg_cnt = req->sg_cnt;
+	unsigned int sg_cnt = nvmet_req_data_segs(req);
 	struct bio *bio;
 	struct scatterlist *sg;
 	struct blk_plug plug;
@@ -266,7 +308,7 @@ static void nvmet_bdev_execute_rw(struct nvmet_req *req)
 	if (!nvmet_check_transfer_len(req, total_len))
 		return;
 
-	if (!req->sg_cnt) {
+	if (!sg_cnt) {
 		nvmet_req_complete(req, 0);
 		return;
 	}
@@ -284,7 +326,7 @@ static void nvmet_bdev_execute_rw(struct nvmet_req *req)
 	if (req->cmd->rw.control & cpu_to_le16(NVME_RW_LR))
 		opf |= REQ_FAILFAST_DEV;
 
-	if (is_pci_p2pdma_page(sg_page(req->sg)))
+	if (req->sg && is_pci_p2pdma_page(sg_page(req->sg)))
 		opf |= REQ_NOMERGE;
 
 	sector = nvmet_lba_to_sect(req->ns, req->cmd->rw.slba);
@@ -306,41 +348,34 @@ static void nvmet_bdev_execute_rw(struct nvmet_req *req)
 		sg_miter_start(&prot_miter, req->metadata_sg,
 			       req->metadata_sg_cnt, iter_flags);
 
-	for_each_sg(req->sg, sg, req->sg_cnt, i) {
-		while (bio_add_page(bio, sg_page(sg), sg->length, sg->offset)
-				!= sg->length) {
-			struct bio *prev = bio;
+	if (req->data_bvec) {
+		for (i = 0; i < req->data_bvec_cnt; i++) {
+			struct bio_vec *bv = &req->data_bvec[i];
 
-			if (req->metadata_len) {
-				rc = nvmet_bdev_alloc_bip(req, bio,
-							  &prot_miter);
-				if (unlikely(rc)) {
-					bio_io_error(bio);
-					return;
-				}
-			}
-
-			bio = bio_alloc(req->ns->bdev, bio_max_segs(sg_cnt),
-					opf, GFP_KERNEL);
-			bio->bi_iter.bi_sector = sector;
-
-			bio_chain(bio, prev);
-			submit_bio(prev);
+			if (!nvmet_bdev_add_page(req, &bio, bv->bv_page,
+					bv->bv_len, bv->bv_offset, opf,
+					&sector, sg_cnt--, &prot_miter))
+				goto out;
 		}
-
-		sector += sg->length >> 9;
-		sg_cnt--;
+	} else {
+		for_each_sg(req->sg, sg, req->sg_cnt, i) {
+			if (!nvmet_bdev_add_page(req, &bio, sg_page(sg),
+					sg->length, sg->offset, opf,
+					&sector, sg_cnt--, &prot_miter))
+				goto out;
+		}
 	}
 
 	if (req->metadata_len) {
 		rc = nvmet_bdev_alloc_bip(req, bio, &prot_miter);
 		if (unlikely(rc)) {
 			bio_io_error(bio);
-			return;
+			goto out;
 		}
 	}
 
 	submit_bio(bio);
+out:
 	blk_finish_plug(&plug);
 }
 
@@ -459,6 +494,7 @@ u16 nvmet_bdev_parse_io_cmd(struct nvmet_req *req)
 		req->execute = nvmet_bdev_execute_rw;
 		if (req->sq->ctrl->pi_support && nvmet_ns_has_pi(req->ns))
 			req->metadata_len = nvmet_rw_metadata_len(req);
+		req->data_bvec_ok = req->ns->data_bvec_ok && !req->metadata_len;
 		return 0;
 	case nvme_cmd_flush:
 		req->execute = nvmet_bdev_execute_flush;

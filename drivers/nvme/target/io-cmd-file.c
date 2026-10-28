@@ -9,6 +9,7 @@
 #include <linux/falloc.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/pagemap.h>
 #include "nvmet.h"
 
 #define NVMET_MIN_MPOOL_OBJ		16
@@ -30,6 +31,50 @@ void nvmet_file_ns_disable(struct nvmet_ns *ns)
 	}
 }
 
+/*
+ * Which lent bvecs (nvmet_req_set_data_bvec()) this file takes, and
+ * whether a direct read goes IOCB_NOWAIT first.  Buffered I/O copies, so
+ * it takes any bvec; direct I/O takes one whose segments meet the file
+ * system's direct I/O alignment (STATX_DIOALIGN; a segment's length to
+ * both its offset and its memory alignment), and none when it does not
+ * say.  A direct read goes IOCB_NOWAIT first only where the block device
+ * can refuse rather than block, and not where iomap always refuses one
+ * (stable-write bounce, encryption): there it would only cost a workqueue
+ * hop.  ext4 can still block a NOWAIT read updating atime.
+ */
+static void nvmet_file_ns_set_data_bvec(struct nvmet_ns *ns)
+{
+	struct inode *inode = file_inode(ns->file);
+	struct block_device *bdev = inode->i_sb->s_bdev;
+	struct kstat stat = {};
+
+	ns->data_bvec_ok = false;
+	ns->data_bvec_addr_mask = 0;
+	ns->data_bvec_len_mask = 0;
+	ns->file_nowait_read = false;
+
+	if (ns->buffered_io) {
+		ns->data_bvec_ok = true;
+		return;
+	}
+
+	if (!vfs_getattr_nosec(&ns->file->f_path, &stat, STATX_DIOALIGN,
+			       AT_STATX_SYNC_AS_STAT) &&
+	    (stat.result_mask & STATX_DIOALIGN) &&
+	    is_power_of_2(stat.dio_mem_align) &&
+	    is_power_of_2(stat.dio_offset_align)) {
+		ns->data_bvec_ok = true;
+		ns->data_bvec_addr_mask = stat.dio_mem_align - 1;
+		ns->data_bvec_len_mask = (stat.dio_offset_align - 1) |
+					 (stat.dio_mem_align - 1);
+	}
+
+	ns->file_nowait_read = (ns->file->f_mode & FMODE_NOWAIT) &&
+		bdev && bdev_nowait(bdev) &&
+		!mapping_stable_writes(ns->file->f_mapping) &&
+		!IS_ENCRYPTED(inode);
+}
+
 int nvmet_file_ns_enable(struct nvmet_ns *ns)
 {
 	int flags = O_RDWR | O_LARGEFILE;
@@ -48,6 +93,7 @@ int nvmet_file_ns_enable(struct nvmet_ns *ns)
 	}
 
 	nvmet_file_ns_revalidate(ns);
+	nvmet_file_ns_set_data_bvec(ns);
 
 	/*
 	 * i_blkbits can be greater than the universally accepted upper bound,
@@ -94,32 +140,58 @@ static ssize_t nvmet_file_submit_bvec(struct nvmet_req *req, loff_t pos,
 	iov_iter_bvec(&iter, rw, req->f.bvec, nr_segs, count);
 
 	iocb->ki_pos = pos;
-	iocb->ki_filp = req->ns->file;
 	iocb->ki_flags = ki_flags | iocb->ki_filp->f_iocb_flags;
 
 	return call_iter(iocb, &iter);
 }
+
+static void nvmet_file_submit_buffered_io(struct nvmet_req *req);
 
 static void nvmet_file_io_done(struct kiocb *iocb, long ret)
 {
 	struct nvmet_req *req = container_of(iocb, struct nvmet_req, f.iocb);
 	u16 status = NVME_SC_SUCCESS;
 
-	if (req->f.bvec != req->inline_bvec) {
+	/*
+	 * An I/O submitted IOCB_NOWAIT can be refused after it started: a
+	 * direct read's REQ_NOWAIT bio fails -EAGAIN (or -EOPNOTSUPP, from
+	 * submit_bio_noacct()), and a direct or buffered read, or a buffered
+	 * write, comes back short when a later part of its range would have
+	 * blocked.  Do it all again, on the same bvec, from the workqueue,
+	 * where it may block: rereading, or rewriting the same bytes through
+	 * the page cache, is safe, as far as any two overlapping writes in
+	 * flight are ordered at all.  (Direct writes are never submitted
+	 * IOCB_NOWAIT; see nvmet_file_execute_rw().)  The retry keeps
+	 * f.iocb.ki_filp, which a submitter may still read as it unwinds.
+	 */
+	if (unlikely(req->f.nowait) &&
+	    (ret == -EAGAIN || ret == -EOPNOTSUPP ||
+	     (ret >= 0 && ret < req->transfer_len))) {
+		req->f.nowait = false;
+		nvmet_file_submit_buffered_io(req);
+		return;
+	}
+
+	if (req->f.bvec != req->inline_bvec && req->f.bvec != req->data_bvec) {
 		if (likely(req->f.mpool_alloc == false))
 			kfree(req->f.bvec);
 		else
 			mempool_free(req->f.bvec, req->ns->bvec_pool);
 	}
 
-	if (unlikely(ret != req->transfer_len))
+	if (unlikely(ret != req->transfer_len)) {
+		/* short or nothing (the file shrank): never success */
+		if (ret >= 0)
+			ret = -EIO;
 		status = errno_to_nvme_status(req, ret);
+	}
+	nvmet_req_data_done(req);
 	nvmet_req_complete(req, status);
 }
 
 static bool nvmet_file_execute_io(struct nvmet_req *req, int ki_flags)
 {
-	ssize_t nr_bvec = req->sg_cnt;
+	ssize_t nr_bvec = nvmet_req_data_segs(req);
 	unsigned long bv_cnt = 0;
 	bool is_sync = false;
 	size_t len = 0, total_len = 0;
@@ -133,11 +205,26 @@ static bool nvmet_file_execute_io(struct nvmet_req *req, int ki_flags)
 
 	pos = le64_to_cpu(req->cmd->rw.slba) << req->ns->blksize_shift;
 	if (unlikely(pos + req->transfer_len > req->ns->size)) {
-		nvmet_req_complete(req, errno_to_nvme_status(req, -ENOSPC));
-		return true;
+		/* through nvmet_file_io_done(), which frees f.bvec */
+		ret = -ENOSPC;
+		goto complete;
 	}
 
-	memset(&req->f.iocb, 0, sizeof(struct kiocb));
+	/*
+	 * Clear all but ki_filp: on a retry (nvmet_file_io_done()) the
+	 * submitter of the refused I/O may still be reading it (ext4's
+	 * file_accessed()), and it is the same file anyway.
+	 */
+	BUILD_BUG_ON(offsetof(struct kiocb, ki_filp) != 0);
+	req->f.iocb.ki_filp = req->ns->file;
+	memset((char *)&req->f.iocb + sizeof(req->f.iocb.ki_filp), 0,
+	       sizeof(struct kiocb) - sizeof(req->f.iocb.ki_filp));
+	if (req->data_bvec) {
+		/* the transport's own bvec: no copy of it to make */
+		bv_cnt = req->data_bvec_cnt;
+		total_len = req->transfer_len;
+		goto submit;
+	}
 	for_each_sg(req->sg, sg, req->sg_cnt, i) {
 		bvec_set_page(&req->f.bvec[bv_cnt], sg_page(sg), sg->length,
 			      sg->offset);
@@ -150,8 +237,11 @@ static bool nvmet_file_execute_io(struct nvmet_req *req, int ki_flags)
 		if (unlikely(is_sync) &&
 		    (nr_bvec - 1 == 0 || bv_cnt == NVMET_MAX_MPOOL_BVEC)) {
 			ret = nvmet_file_submit_bvec(req, pos, bv_cnt, len, 0);
-			if (ret < 0)
+			if (ret != len) {
+				if (ret >= 0)
+					ret = -EIO;
 				goto complete;
+			}
 
 			pos += len;
 			bv_cnt = 0;
@@ -170,11 +260,13 @@ static bool nvmet_file_execute_io(struct nvmet_req *req, int ki_flags)
 		goto complete;
 	}
 
+submit:
 	/*
-	 * A NULL ki_complete ask for synchronous execution, which we want
-	 * for the IOCB_NOWAIT case.
+	 * A NULL ki_complete asks for synchronous execution, which we want
+	 * for the buffered IOCB_NOWAIT case.  A direct IOCB_NOWAIT is
+	 * asynchronous, like any direct I/O.
 	 */
-	if (!(ki_flags & IOCB_NOWAIT))
+	if (!(ki_flags & IOCB_NOWAIT) || !req->ns->buffered_io)
 		req->f.iocb.ki_complete = nvmet_file_io_done;
 
 	ret = nvmet_file_submit_bvec(req, pos, bv_cnt, total_len, ki_flags);
@@ -217,34 +309,61 @@ static void nvmet_file_submit_buffered_io(struct nvmet_req *req)
 
 static void nvmet_file_execute_rw(struct nvmet_req *req)
 {
-	ssize_t nr_bvec = req->sg_cnt;
+	ssize_t nr_bvec = nvmet_req_data_segs(req);
 
 	if (!nvmet_check_transfer_len(req, nvmet_rw_data_len(req)))
 		return;
 
-	if (!req->sg_cnt || !nr_bvec) {
+	if (!nr_bvec) {
 		nvmet_req_complete(req, 0);
 		return;
 	}
 
-	if (nr_bvec > NVMET_MAX_INLINE_BIOVEC)
+	req->f.nowait = false;
+	if (req->data_bvec)
+		req->f.bvec = req->data_bvec;
+	else if (nr_bvec > NVMET_MAX_INLINE_BIOVEC)
 		req->f.bvec = kmalloc_objs(struct bio_vec, nr_bvec);
 	else
 		req->f.bvec = req->inline_bvec;
 
 	if (unlikely(!req->f.bvec)) {
-		/* fallback under memory pressure */
+		/* fallback under memory pressure; never with data_bvec */
 		req->f.bvec = mempool_alloc(req->ns->bvec_pool, GFP_KERNEL);
 		req->f.mpool_alloc = true;
 	} else
 		req->f.mpool_alloc = false;
 
 	if (req->ns->buffered_io) {
+		/*
+		 * A buffered IOCB_NOWAIT write fails -EINVAL where the file
+		 * system does not take one (generic_write_checks_count()).
+		 */
+		req->f.nowait = true;
 		if (likely(!req->f.mpool_alloc) &&
 		    (req->ns->file->f_mode & FMODE_NOWAIT) &&
+		    (req->cmd->rw.opcode == nvme_cmd_read ||
+		     (req->ns->file->f_op->fop_flags & FOP_BUFFER_WASYNC)) &&
 		    nvmet_file_execute_io(req, IOCB_NOWAIT))
 			return;
+		req->f.nowait = false;
 		nvmet_file_submit_buffered_io(req);
+	} else if (likely(!req->f.mpool_alloc) &&
+		   req->cmd->rw.opcode == nvme_cmd_read &&
+		   req->ns->file_nowait_read) {
+		/*
+		 * A direct read that would block (a lock, a full queue) must
+		 * not block the transport's I/O context: submit it
+		 * IOCB_NOWAIT first and run what refuses from the workqueue.
+		 * Direct writes are submitted as before: one refused after a
+		 * part of it was written fails -EIO (iomap_dio_complete()), so
+		 * it cannot be retried.
+		 */
+		req->f.nowait = true;
+		if (!nvmet_file_execute_io(req, IOCB_NOWAIT)) {
+			req->f.nowait = false;
+			nvmet_file_submit_buffered_io(req);
+		}
 	} else
 		nvmet_file_execute_io(req, 0);
 }
@@ -365,6 +484,7 @@ u16 nvmet_file_parse_io_cmd(struct nvmet_req *req)
 	case nvme_cmd_read:
 	case nvme_cmd_write:
 		req->execute = nvmet_file_execute_rw;
+		req->data_bvec_ok = req->ns->data_bvec_ok;
 		return 0;
 	case nvme_cmd_flush:
 		req->execute = nvmet_file_execute_flush;

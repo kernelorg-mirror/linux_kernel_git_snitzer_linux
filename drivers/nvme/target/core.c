@@ -1184,6 +1184,9 @@ bool nvmet_req_init(struct nvmet_req *req, struct nvmet_sq *sq,
 	req->ops = ops;
 	req->sg = NULL;
 	req->metadata_sg = NULL;
+	req->data_bvec = NULL;
+	req->data_bvec_cnt = 0;
+	req->data_bvec_ok = false;
 	req->sg_cnt = 0;
 	req->metadata_sg_cnt = 0;
 	req->transfer_len = 0;
@@ -1255,6 +1258,67 @@ void nvmet_req_uninit(struct nvmet_req *req)
 		nvmet_put_namespace(req->ns);
 }
 EXPORT_SYMBOL_GPL(nvmet_req_uninit);
+
+/**
+ * nvmet_req_set_data_bvec - Lend a request's data pages as a bvec
+ * @req: a parsed read or write
+ * @bvec: the data, transfer_len bytes in all; the transport owns it
+ * @nr: entries in @bvec
+ *
+ * In place of an sgl the transport allocates (nvmet_req_alloc_sgls()):
+ * the backend does its I/O on these pages directly, with no copy.  For a
+ * write the transport may take the pages back as soon as
+ * nvmet_req_data_done() calls its ->data_done, else when it frees the
+ * request.
+ *
+ * Every segment's offset and length must be aligned as the namespace
+ * needs (&nvmet_ns.data_bvec_addr_mask, &nvmet_ns.data_bvec_len_mask: a
+ * logical block multiple for a block device or direct I/O), and no page
+ * may be PCI peer-to-peer memory.
+ *
+ * Return: true when the backend will use @bvec; false, lending nothing,
+ * when the command's backend takes only an sgl (passthru, zone append,
+ * protection information) or a segment is not aligned so.  The transport
+ * then uses an sgl.
+ */
+bool nvmet_req_set_data_bvec(struct nvmet_req *req, struct bio_vec *bvec,
+		unsigned int nr)
+{
+	size_t len = 0;
+	unsigned int i;
+
+	if (!req->data_bvec_ok || req->metadata_len || !nr || req->sg)
+		return false;
+	for (i = 0; i < nr; i++) {
+		if ((bvec[i].bv_offset & req->ns->data_bvec_addr_mask) ||
+		    (bvec[i].bv_len & req->ns->data_bvec_len_mask) ||
+		    is_pci_p2pdma_page(bvec[i].bv_page))
+			return false;
+		len += bvec[i].bv_len;
+	}
+	if (WARN_ON_ONCE(len != req->transfer_len))
+		return false;
+	req->data_bvec = bvec;
+	req->data_bvec_cnt = nr;
+	return true;
+}
+EXPORT_SYMBOL_GPL(nvmet_req_set_data_bvec);
+
+/**
+ * nvmet_req_data_done - The backend is done with a write's data
+ * @req: the request
+ *
+ * Called by a backend once it has a write's data (the device or the file
+ * system has it, or the I/O failed) and before it completes @req, so a
+ * transport that lent the data pages returns them now rather than when the
+ * response has gone out: the early write loan release kNFSd does with
+ * svc_rqst_release_payload().  Reads hold their pages until they are sent.
+ */
+void nvmet_req_data_done(struct nvmet_req *req)
+{
+	if (req->ops->data_done && req->cmd->common.opcode == nvme_cmd_write)
+		req->ops->data_done(req);
+}
 
 size_t nvmet_req_transfer_len(struct nvmet_req *req)
 {
