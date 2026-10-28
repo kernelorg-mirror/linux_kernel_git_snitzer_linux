@@ -1,0 +1,158 @@
+Attached 9 probes
+
+
+@asleep:
+[2K, 4K)           20638 |@@@                                                 |
+[4K, 8K)          287547 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[8K, 16K)         160595 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                       |
+[16K, 32K)        168733 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                      |
+[32K, 64K)        120520 |@@@@@@@@@@@@@@@@@@@@@                               |
+[64K, 128K)        64801 |@@@@@@@@@@@                                         |
+[128K, 256K)       38960 |@@@@@@@                                             |
+[256K, 512K)       53564 |@@@@@@@@@                                           |
+[512K, 1M)        107675 |@@@@@@@@@@@@@@@@@@@                                 |
+[1M, 2M)          171629 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                     |
+[2M, 4M)           42656 |@@@@@@@                                             |
+[4M, 8M)            4957 |                                                    |
+[8M, 16M)           1369 |                                                    |
+[16M, 32M)           454 |                                                    |
+[32M, 64M)           195 |                                                    |
+[64M, 128M)          136 |                                                    |
+[128M, 256M)          63 |                                                    |
+[256M, 512M)          38 |                                                    |
+[512M, 1G)            12 |                                                    |
+[1G, 2G)               5 |                                                    |
+[2G, 4G)               2 |                                                    |
+
+@land[ring, another CPU, was busy]: 4
+@land[nfsd, another CPU, was busy]: 308
+@land[ring, same CPU, was busy]: 357
+@land[ring, another CPU, was idle]: 1632
+@land[nfsd, same CPU, was busy]: 20818
+@land[nfsd, another CPU, was idle]: 35343
+@land[ring, same CPU, was idle]: 237894
+@land[nfsd, same CPU, was idle]: 948270
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        schedule+60
+        schedule_preempt_disabled+44
+        rwsem_down_write_slowpath+664
+]: 3
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        preempt_schedule_irq+92
+        raw_irqentry_exit_cond_resched+56
+        dynamic_irqentry_exit_cond_resched+32
+]: 6
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        schedule+60
+        xlog_cil_force_seq+448
+        xfs_log_force_seq+144
+]: 19
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        schedule+60
+        schedule_timeout+220
+        svc_thread_wait_for_work+220
+]: 123
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        schedule+60
+        schedule_timeout+220
+        svc_thread_wait_for_work+160
+]: 265
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        schedule+60
+        schedule_preempt_disabled+44
+        __mutex_lock.constprop.0+1512
+]: 589
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        schedule+60
+        schedule_preempt_disabled+44
+        rwsem_down_read_slowpath+572
+]: 1821
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        schedule+60
+        xlog_wait+112
+        xlog_force_lsn+652
+]: 23177
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        schedule+60
+        schedule_timeout+220
+        __wait_for_common+200
+]: 29921
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        schedule+60
+        xlog_wait_on_iclog+516
+        xlog_force_lsn+604
+]: 40782
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        schedule+60
+        __lock_sock+116
+        lock_sock_nested+176
+]: 57177
+@sleep_elsewhere[
+        perf_trace_sched_switch+40
+        perf_trace_sched_switch+40
+        __schedule+1116
+        schedule+60
+        schedule_timeout+148
+        io_schedule_timeout+80
+]: 337136
+@sw[nfsd, other, preempted]: 34
+@sw[nfsd, nfsd, preempted]: 35
+@sw[other, other, sleeps]: 150
+@sw[nfsd, nfsd, sleeps]: 1081
+@sw[nfsd, other, sleeps]: 1210
+@sw[other, nfsd, sleeps]: 22421
+@sw[other, idle, sleeps]: 30941
+@sw[idle, other, -]: 52117
+@sw[idle, nfsd, -]: 1357467
+@sw[nfsd, idle, sleeps]: 1378641
+@wake_run[ring]:
+[4K, 8K)          214695 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[8K, 16K)          23555 |@@@@@                                               |
+[16K, 32K)          1491 |                                                    |
+[32K, 64K)            84 |                                                    |
+[64K, 128K)           62 |                                                    |
+
+@wake_run[nfsd]:
+[2K, 4K)             996 |                                                    |
+[4K, 8K)          904892 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[8K, 16K)          95359 |@@@@@                                               |
+[16K, 32K)          2827 |                                                    |
+[32K, 64K)           504 |                                                    |
+[64K, 128K)          158 |                                                    |
+[128K, 256K)           2 |                                                    |
+[256K, 512K)           1 |                                                    |
+
+@writes: 386306

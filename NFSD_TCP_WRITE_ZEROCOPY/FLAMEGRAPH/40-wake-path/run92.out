@@ -1,0 +1,6 @@
+21:10:51 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu 63631721F8B149913C0DC19
+21:15:00 r92-1-loan64 | total 40.51 GB/s | 1 no-step | 1 placed | r92-1-loan64 ring 44.5 nfsd 91.6 us/W (38699 WRITEs/s) | ring 139.3k cycles 310.8k instructions, nfsd 297.4k cycles 303.4k instructions a WRITE | peak 6447 | nfsd in the window, a second: WRITEs 38699, threads woken 154112, context switches 435285
+21:19:54 r92-trace-loan64 | total 40.46 GB/s | 1 no-step | 1 placed | r92-trace-loan64 ring 43.2 nfsd 96.8 us/W (38650 WRITEs/s) | ring 139.5k cycles 311.1k instructions, nfsd 313.1k cycles 321.1k instructions a WRITE | peak 6345 | nfsd in the window, a second: WRITEs 38650, threads woken 143876, context switches 414971
+21:19:54 wakesrc from 21:18:54 wakeland from 21:19:11 end 21:19:24
+21:19:57 end: settled.sh audit rest: the settled setting; DONE
+
