@@ -61,7 +61,7 @@ The profile ([perf-lmiss-nfsd-r89.txt](perf-lmiss-nfsd-r89.txt), [perf-sym-nfsd-
 
 Round 38's change shows where it should: the release's misses fall by 40% and the pool's bulk put's by half, since the struct pages it reads are now in place. The region count's two frames are now nfsd's first two named frames by L3 misses after the spin lock (3.8% together), which is what step 2 looks at.
 
-## 2. The receive side's struct page loads (r90, to run)
+## 2. The receive side's struct page loads (r90)
 
 The fetch has no lead. In `svc_tcp_recv_skb()`, `svc_tcp_rx_prefetch_pages()` asks for every struct page of the skb's body and then `svc_tcp_rx_skb_region_pages_after()` reads the same pages at once, so the first page's miss has nothing ahead of it to hide in. The release's prefetch had a batch's lead. Here the question is first what the section costs and where, before whether a request is dropped.
 
@@ -79,3 +79,25 @@ The fetch has no lead. In `svc_tcp_recv_skb()`, `svc_tcp_rx_prefetch_pages()` as
 A drain before a timed load waits out the fetches before it, outside the timing. So the section's time (1) is the yardstick, and the loads' (2) say where the time goes. The counts are a per-CPU allocation, as round 38's r85 learned.
 
 [run90.sh](run90.sh): one loan64 run. Its windows start 10 s into the timed load (`timed_load`, the first look to use it). For each fetch in turn (0, 1, 2, 0 again) it waits 1 s, takes 2 s of `perf stat` on nfsd's CPUs untimed, then 2 s at timing 1 and 2 s at timing 2. The tip's sunrpc goes back in at the end.
+
+**run90** ([run90.out](run90.out), the readouts as `lat-*-r90.txt` and `stat-*-r90.txt`): the run at 40.45 GB/s, its flows placed, no drive stepping down, the look from 20:10:34 (10 s into the timed load). The script's summary line for the section's mean read the wrong line (`sections`, not `section n`) and printed nothing; fixed in run90.sh, and the readouts are whole. About 905k sections in each 2 s window, 11.7 a WRITE, 7.4 region pages each.
+
+| fetch before the count | section, timed whole (1) | nfsd cycles a WRITE, untimed | stall_backend_mem a WRITE |
+|---|---|---|---|
+| prefetchw (the tip's) | **419 ns** | 291.5k | 92.6k |
+| none | 620 ns (+201) | 301.6k (+10.1k) | 99.5k |
+| a load | 507 ns (+88) | 295.8k (+4.3k) | 96.5k |
+| prefetchw again | **417 ns** | 290.0k | 91.4k |
+
+Each page's `pp_magic` load, drained (2), mean ns, against the floor (a line of the CPU's own) of 33 ns:
+
+| fetch | 1st | 2nd | 3rd | 4th | 5th–8th | 9th–16th | pool's `rx_region` |
+|---|---|---|---|---|---|---|---|
+| prefetchw | 33 | 31 | 31 | 32 | 32 | 32 | 32 |
+| none | 63 | 78 | 77 | 79 | 78 | 76 | 32 |
+| a load | 33 | 31 | 31 | 31 | 32 | 32 | 32 |
+
+- **The receive side's prefetches are not dropped.** Unlike the release's, they do their work. Without them the section takes 48% longer and nfsd about 10k more cycles a WRITE. A load in their place is worse than the prefetch (+88 ns a section, +4.3k cycles a WRITE), since a load holds the core while it waits.
+- **The struct pages are not in DRAM.** Unfetched, a page's line costs 30 to 46 ns above the floor, mostly in the 64–127 ns bucket. That is a line the ring's CPU wrote, fetched from its cache, not a DRAM miss.
+- **The pool's `rx_region` line is a hit** (at the floor every time). It is out of step 3.
+- **What is left is the lead.** With the prefetch the section still takes 419 ns, 11.7 times a WRITE, about 4.9 us a WRITE. The struct pages are asked for just before they are read, and the skb's fragment array, which the prefetch walk reads first, is the ring CPU's line too. A request one skb earlier, for the next skb's fragment array and struct pages, could hide most of it without holding any page longer.
