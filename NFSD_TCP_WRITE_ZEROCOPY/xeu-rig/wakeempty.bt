@@ -1,0 +1,72 @@
+// wakeempty.bt: which source's wakes find nothing (FLAMEGRAPH round 40).
+// A wake of an idle nfsd thread (svc_pool_thread_wake, which names the
+// thread) is classed by its source as wakesrc.bt does it:
+//   ring       on CPUs 0-7, svc_data_ready() in the ring's softirq
+//   rcv-done   svc_tcp_recvfrom()'s hand-back after a complete record
+//   rcv-part   its hand-back after a partial one
+//   dready-nfsd svc_data_ready() on an nfsd thread (the backlog at release_sock)
+//   credit     svc_tcp_rx_credit_wake(), credit returned
+//   next       svc_recv()'s svc_thread_wake_next(), more queued
+//   other      anything else
+// and the source is kept on the woken thread until its svc_recv() pass
+// returns.  That pass is then counted by the wake's source, by whether the
+// thread had slept in it, and by whether it dequeued a transport (@after),
+// with the time from the wake to the pass's end (@wake_to_end).  An empty
+// pass is also counted by what the thread did next: it slept again, or went
+// round once more without sleeping (@empty_then).
+config = { max_map_keys = 65536 }
+
+fentry:sunrpc:svc_recv { @t0[tid] = 1; @deq[tid] = 0; @sl[tid] = 0; }
+fentry:sunrpc:svc_thread_wait_for_work { @in_wait[tid] = 1; }
+fexit:sunrpc:svc_thread_wait_for_work { delete(@in_wait[tid]); }
+tracepoint:sched:sched_switch /args.prev_state != 0 && @in_wait[args.prev_pid]/ {
+	@sl[args.prev_pid] = 1;
+	if (@emptyfrom[args.prev_pid] != "") {
+		@empty_then[@emptyfrom[args.prev_pid], "slept again"] = count();
+		delete(@emptyfrom[args.prev_pid]);
+	}
+}
+tracepoint:sunrpc:svc_xprt_dequeue { @deq[tid] = 1; }
+
+fexit:sunrpc:svc_recv /@t0[tid]/ {
+	if (@emptyfrom[tid] != "") {
+		@empty_then[@emptyfrom[tid], @deq[tid] ? "went round, found work" : "went round, found nothing"] = count();
+		delete(@emptyfrom[tid]);
+	}
+	if (@wsrc[tid] != "") {
+		$s = @wsrc[tid];
+		@after[$s, @sl[tid] ? "slept" : "had not slept", @deq[tid] ? "found work" : "empty"] = count();
+		@wake_to_end[$s, @deq[tid] ? "found work" : "empty"] = hist(nsecs - @wt[tid]);
+		if (!@deq[tid]) { @emptyfrom[tid] = $s; }
+		delete(@wsrc[tid]);
+		delete(@wt[tid]);
+	}
+	delete(@t0[tid]); delete(@deq[tid]); delete(@sl[tid]);
+}
+
+tracepoint:sunrpc:svcsock_tcp_recv_short { @part[tid] = 1; }
+tracepoint:sunrpc:svcsock_tcp_recv_eagain { @part[tid] = 1; }
+fentry:sunrpc:svc_xprt_received {
+	@src[tid] = @part[tid] ? 2 : 1;
+	delete(@part[tid]);
+}
+fexit:sunrpc:svc_xprt_received { delete(@src[tid]); }
+fentry:sunrpc:svc_tcp_rx_credit_wake { @cw[tid] = 1; }
+fexit:sunrpc:svc_tcp_rx_credit_wake { delete(@cw[tid]); }
+fentry:sunrpc:svc_data_ready /cpu >= 8/ { @dr[tid] = 1; }
+fexit:sunrpc:svc_data_ready /cpu >= 8/ { delete(@dr[tid]); }
+
+tracepoint:sunrpc:svc_pool_thread_wake {
+	$s = cpu < 8 ? "ring" :
+	     (@dr[tid] ? "dready-nfsd" :
+	     (@src[tid] == 1 ? "rcv-done" :
+	     (@src[tid] == 2 ? "rcv-part" :
+	     (@cw[tid] ? "credit" :
+	     (@t0[tid] ? "next" : "other")))));
+	@woken[$s] = count();
+	@wsrc[args.pid] = $s;
+	@wt[args.pid] = nsecs;
+}
+tracepoint:nfsd:nfsd_write_start { @writes = count(); }
+interval:s:8 { exit(); }
+END { clear(@t0); clear(@deq); clear(@sl); clear(@in_wait); clear(@part); clear(@src); clear(@cw); clear(@dr); clear(@wsrc); clear(@wt); clear(@emptyfrom); }
