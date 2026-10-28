@@ -951,6 +951,7 @@ svc_destroy(struct svc_serv **servp)
 		  "SVC: tempsocks remain for %s\n", serv->sv_programs->pg_name);
 
 	cache_clean_deferred(serv);
+	svc_rtc_serv_destroy(serv);
 
 	for (i = 0; i < svc_serv_nrpools(serv); i++) {
 		struct svc_pool *pool = &serv->sv_pools[i];
