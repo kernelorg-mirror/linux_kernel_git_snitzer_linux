@@ -163,3 +163,25 @@ The run went at 40.48 GB/s, with no drive stepping down and no WARNING. Readouts
 [The A/B's sunrpc](sunrpc-ab-release-two-stage.patch) (`C45C8709B1251E6570577DF`, built in `/var/tmp/zc-run-logs/t2-r38-two`) is the tip's with `svc_tcp_rx_rel_two_stage`. With it set, the release also prefetches each page into the L2 two batches ahead (PSTL2KEEP), with prefetchw a batch ahead as the tip does. It carries no timing and nothing else of the diagnostics.
 
 [run87.sh](run87.sh), as `run82.sh`: four untraced loan64 runs a side, A B A B A B A B, with A at N (the tip's) and B at Y. `cost.sh` gives each run's ring and nfsd cycles a WRITE, and each run reports the region's peak. A prefetch holds no page, so the peak should not move.
+
+## 8. The short window: the looks start before the timed load
+
+The window that counted few WRITEs (r84's third, r85's second, r86's third) is the gap between two loads, not a stall. Before its timed load, `twoport.sh` runs a placement job (`PLACE`, the default since 11 October). That is 16 s of the same fio job on the same mounts, while it sees where each flow lands and sets the RSS table. Then it audits and starts the timed load.
+
+The looks wait 20 s and then for more than 10,000 WRITEs a second, and the placement job already passes that. So every look started in the placement job, about 13 s before the timed load. Its first windows measured the placement job, the short one fell in the 2 to 4 s between the two jobs, and the rest measured the timed load.
+
+| run | look began | the timed load began (its drives' first second) | windows in the placement job |
+|---|---|---|---|
+| r81 | 07:19:10 | about 07:19:23 | the first samples |
+| r83 | 08:02:48 | about 08:03:00 | all: stat-off, w1, w2, w3 |
+| r84 | 15:19:30 | about 15:19:43 | 16, 0; 32's untimed in the gap |
+| r85 | 16:10:57 | about 16:11:10 | 0; prefetch for reading's in the gap |
+| r86 | 16:27:23 | about 16:27:36 | 0, 3; 4's untimed in the gap |
+
+The drives' per-second figures start with the timed load (`drvsample.py`), which is why they showed no dip. nfsd writes direct to them (`io_cache_write` 2), so a real stall would have shown.
+
+**Round 38's findings stand.** The placement job is the same load with its flows not yet placed, and the same setting measures alike in both. In r86 prefetchw measured 293.3k nfsd cycles a WRITE in the placement job and 294.0k in the timed load, with the same misses by position to a tenth of a ns. In r85 the two prefetchw windows were 296.0k and 296.9k. Comparisons within a run that cross the gap (r84's distance 0 and r86's PSTL2KEEP against windows in the timed load) still mix the two phases, which is one more reason for r87's A/B.
+
+**Earlier rounds:** the same trigger is in the looks of rounds 29 to 36 (`run56watch.sh` to `run77.sh`). r75 and r77, round 36's, also began 13 s before their timed loads, so their first windows were in the placement job too. Their counts a WRITE come from `cost.sh` over `twoport.sh`'s own window in the timed load and are not affected; only what their looks sampled is.
+
+**The fix:** a look should wait for the timed load itself, for its run's `drives-sec.tsv` to appear, and then its warm-up. This is to go into the next look's script and into `common.sh` once r87 is done, since `twoport.sh` reads `common.sh` at each run.
