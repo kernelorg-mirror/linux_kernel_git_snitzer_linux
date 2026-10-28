@@ -124,7 +124,11 @@ decided.
 10. **Round 41: the rings' GRO** (Mike, 28 October): about 20% of the
    rings' busy cycles, about 28k a WRITE, and 44% of their L3 misses:
    the shape of the aggregates, then where GRO's misses are, from a
-   diagnostic xeu ([41-rings-gro](41-rings-gro/README.md)).
+   diagnostic xeu ([41-rings-gro](41-rings-gro/README.md)). GRO's lines
+   are all in the cache (its misses are xeu's prefetches in flight), so it
+   costs instructions. Kept: xeu hands GRO page fragments
+   (`rx_gro_frags`, kmod-xsight 2.0.1-13), 6.5k ring instructions a WRITE
+   fewer, the rings' cycles the same.
 
 ## Where the kept rounds stand (2026-10-28)
 

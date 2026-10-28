@@ -1,0 +1,11 @@
+23:43:18 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu CA0931345E46C929B11D01F, settled.sh audit rest: the settled setting
+23:49:45 r99-stat-loan64 | total 40.56 GB/s | 1 no-step | 1 placed | peak 6590
+23:49:45 look from 23:48:55 end 23:49:19
+stat-1-N   WRITEs  117300 | a WRITE: cycles 163.9k instructions 326.0k stall_backend 70.2k stall_backend_mem 28.7k | IPC 1.99
+stat-2-Y   WRITEs  117751 | a WRITE: cycles 163.5k instructions 318.5k stall_backend 71.3k stall_backend_mem 30.9k | IPC 1.95
+stat-3-N   WRITEs  117451 | a WRITE: cycles 164.0k instructions 325.0k stall_backend 70.2k stall_backend_mem 28.8k | IPC 1.98
+stat-4-Y   WRITEs  117660 | a WRITE: cycles 163.6k instructions 318.7k stall_backend 71.9k stall_backend_mem 30.8k | IPC 1.95
+stat-5-N   WRITEs  117630 | a WRITE: cycles 163.5k instructions 325.2k stall_backend 68.2k stall_backend_mem 28.6k | IPC 1.99
+stat-6-Y   WRITEs  117287 | a WRITE: cycles 165.4k instructions 320.2k stall_backend 73.2k stall_backend_mem 31.9k | IPC 1.94
+23:50:20 end: xeu 63631721F8B149913C0DC19, settled.sh audit rest: the settled setting; DONE
+
