@@ -176,3 +176,19 @@ In each, from 10 s into the timed load, it runs 8 s of `rundelay.sh` untraced, t
 - **At iodepth 1 each WRITE wakes about 6.4 nfsd threads** (traced), against 3.2 at full load: with few WRITEs in flight, nearly every step of a WRITE is a wake. If each costs well under a microsecond in latency, the wakes are a few microseconds of a 461 us WRITE.
 
 **So:** the wake is fast. What it costs is the CPU of the switches on both sides (section 1), and at most about 1% of nfsd's for the empty ones (section 2). Neither a faster wake nor fewer wakes is likely to move latency at iodepth 1. Measuring delivery properly would take stamps in the scheduler (`try_to_wake_up` and the IPI's handler), which means a kernel build and a reboot, not a module.
+
+## 4. nfsd's sleeps for a socket another thread holds (r95)
+
+[`xeu-rig/locksock.bt`](../../xeu-rig/locksock.bt) probes only `lock_sock()`'s slow path, `__lock_sock()`, where a thread finds the socket owned and sleeps. It records the sleeping nfsd thread's stack, the stack of the task whose `release_sock()` woke it (the path that held the socket), and the wait. [run95.sh](run95.sh): one traced loan64 run at the current state, 8 s of the probe from 10 s into the timed load. The first launch did not start (the script was called from the wrong directory) and nothing ran; the second ran: 40.51 GB/s, flows placed, no drive stepping down, nfsd 297.1k cycles a WRITE, the probe costing nothing measurable ([run95.out](run95.out), [locksock-r95.txt](locksock-r95.txt)).
+
+In the window, 330,824 WRITEs and 68,244 sleeps, **0.21 a WRITE**, each waiting a mean of **11.9 us** (84% 8–16 us). Every holder was an nfsd thread.
+
+| the waiting thread | a WRITE | | the holder, whose release woke it | a WRITE |
+|---|---|---|---|---|
+| `svc_tcp_recvfrom()`: a thread come to read the socket | 0.134 | | `tcp_sendmsg()`: a reply being sent | **0.120** |
+| `svc_tcp_sendto()`: a reply to send | 0.072 | | `svc_tcp_recvfrom()`: a thread reading | 0.066 |
+
+- **The usual case is a reader held up by a reply.** A thread sending a WRITE's reply owns the socket through `tcp_sendmsg()`. Its `release_sock()` then processes the backlog, the segments that arrived for the socket while it was owned, before the waiter is woken. At 40 GB/s on the connection, that backlog is what most of the 12 us is: receive processing the softirq could not do while the socket was owned, done on the sender's CPU instead. That work is not lost; it moves.
+- **What the sleeps cost:** 0.21 sleeps and wakes a WRITE, at the rough 6k cycles a round trip from section 2, about 1.3k nfsd cycles a WRITE, under 0.5% of nfsd's. The 12 us the waiter spends asleep costs no CPU; at iodepth 1 a single connection rarely has a reply and a read at once.
+
+**So:** the socket lock is not where nfsd's cycles go, and nothing here is worth a change.

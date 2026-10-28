@@ -1,0 +1,5 @@
+22:16:04 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu 63631721F8B149913C0DC19
+22:20:34 r95-trace-loan64 | total 40.51 GB/s | 1 no-step | 1 placed | r95-trace-loan64 ring 44.8 nfsd 92.9 us/W (38625 WRITEs/s) | ring 139.7k cycles 311.7k instructions, nfsd 297.1k cycles 302.7k instructions a WRITE | peak 6423
+22:20:34 locksock from 22:19:34 end 22:19:45
+22:20:37 end: settled.sh audit rest: the settled setting; DONE
+
