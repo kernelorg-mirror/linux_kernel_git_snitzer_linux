@@ -34,6 +34,8 @@
 # EXP_SKB_DEFER_MAX holds net.core.skb_defer_max to a run's SKB_DEFER_MAX=.
 # EXP_SRV_QDISC holds the server ports' qdisc to a run's SRV_QDISC=.
 # EXP_NOTRACK=absent holds a run to no zc_notrack table (twoport.sh's NOTRACK=absent).
+# EXP_NETAVARK=present holds a run to podman's netavark table with no container
+# (FLAMEGRAPH round 37's replay of round 01, whose host had it).
 # EXP_GRO_MAX holds the server ports' GRO max sizes to a run's GRO_MAX=.
 # EXP_RINGS holds the ports' ring count to a run's RINGS= (with EXP_LAYOUT).
 # EXP_REFILL holds xeu's rx_refill_thresh to a run's REFILL= instead of 8,
@@ -398,6 +400,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
 	[ "${EXP_NOTRACK:-}" = absent ] && OFF="$OFF zc_notrack=absent"
+	[ "${EXP_NETAVARK:-}" = present ] && OFF="$OFF netavark=present"
 	[ -n "${EXP_GRO_MAX:-}" ] && [ "$EXP_GRO_MAX" != "$GRO_MAX" ] && OFF="$OFF gro_max=$EXP_GRO_MAX"
 	[ -n "${EXP_SRV_QDISC:-}" ] && [ "$EXP_SRV_QDISC" != "$SRV_QDISC" ] && OFF="$OFF srv_qdisc=$EXP_SRV_QDISC"
 	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
@@ -466,7 +469,7 @@ audit_netfilter() {
 	local w=0; [ "$(conntrack_hooks)" != 0 ] && [ "${EXP_NOTRACK:-}" != absent ] && w=4
 	want "NFS untracked while conntrack is on" "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" $w
 	if [ $c = 0 ]; then
-		want "podman's leftover netavark table" "$(nft list table inet netavark > /dev/null 2>&1 && echo present || echo none)" none
+		want "podman's leftover netavark table" "$(nft list table inet netavark > /dev/null 2>&1 && echo present || echo none)" ${EXP_NETAVARK:-none}
 	else
 		ok "podman's netavark table" "kept: $c container(s) running"
 	fi

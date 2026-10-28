@@ -24,7 +24,11 @@ KO=$L/t2-tipkernel/fix-sunrpc.ko
 NAV=$L/t2-tipkernel/netavark-table.nft
 export EXP_RODATA=default EXP_DRC_MAX_ENTRIES=0 EXP_XEU_irq_msix_mask=absent EXP_XEU_rx_prefetch=absent
 # skb_defer_max 128 and no zc_notrack come with twoport.sh's SKB_DEFER_MAX= and
-# NOTRACK=, which it passes to its own audits; apply puts the settled ones back.
+# NOTRACK=, which it passes to its audit before the load; apply puts the settled
+# ones back.  Its audit at rest, before it changes anything, sees only what is
+# exported: the netavark table and no zc_notrack are put in place before it, so
+# both are exported for it (and settled.sh apply is run without them).
+NETF="EXP_NOTRACK=absent EXP_NETAVARK=present"
 say() { echo "$(date +%T) $*"; }
 die() { say "STOPPED: $*"; exit 1; }
 tables() { echo "tables: $(nft list tables | awk '{print $3}' | paste -sd ' '); conntrack hooks: $(nft list hooks 2> /dev/null | grep -c conntrack)"; }
@@ -57,7 +61,7 @@ for i in 1 2 3 4; do
 	say "$tag | $(tables)"
 	for d in 4 5 6 7; do fstrim /hs/nvme$d; done; sleep 120
 	client_free || die "client not free"
-	env FS_A="$FS" FS_B= WARM=10 RUNTIME=30 TSV=$O/results.tsv TAG=$tag WRITES=64 SKB_DEFER_MAX=128 NOTRACK=absent ./twoport.sh $O/$tag a > $O/$tag.log 2>&1; rc=$?
+	env $NETF FS_A="$FS" FS_B= WARM=10 RUNTIME=30 TSV=$O/results.tsv TAG=$tag WRITES=64 SKB_DEFER_MAX=128 NOTRACK=absent ./twoport.sh $O/$tag a > $O/$tag.log 2>&1; rc=$?
 	[ $rc = 0 ] || die "$tag: $(grep -E 'BAD|FAILED|no answer|refuse|not free' $O/$tag.log | head -3)"
 	[ "$(dmesg | grep -c 'WARNING:')" = $W0 ] || die "$tag: a new WARNING in dmesg: $(dmesg | grep -A3 'WARNING:' | tail -4)"
 	say "$tag | $(grep '^total' $O/$tag.log) | $(grep -E '^loans' $O/$tag.log) | $(grep -c 'no drive stepped down' $O/$tag.log) no-step | $(./cost.sh $O/$tag) | peak $((32768 - $(sort -n $O/$tag/region-min-free.txt | head -1)))"
