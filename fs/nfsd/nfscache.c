@@ -96,8 +96,8 @@ nfsd_hashsize(unsigned int limit)
 }
 
 #if IS_ENABLED(CONFIG_NFSD_RTC_KUNIT_TEST)
-/* KUnit: fail the work item's GFP_NOWAIT DRC allocations. */
-bool nfsd_cache_kunit_no_mem;
+/* KUnit: fail the work item's GFP_NOWAIT DRC allocations (NFSD_CACHE_KUNIT_*). */
+unsigned int nfsd_cache_kunit_no_mem;
 EXPORT_SYMBOL_IF_KUNIT(nfsd_cache_kunit_no_mem);
 
 struct nfsd_net *nfsd_cache_kunit_nn(struct net *net)
@@ -105,11 +105,15 @@ struct nfsd_net *nfsd_cache_kunit_nn(struct net *net)
 	return net_generic(net, nfsd_net_id);
 }
 EXPORT_SYMBOL_IF_KUNIT(nfsd_cache_kunit_nn);
-#define nfsd_cache_inject_no_mem(gfp) \
-	(!gfpflags_allow_blocking(gfp) && READ_ONCE(nfsd_cache_kunit_no_mem))
+#define nfsd_cache_inject_no_mem(gfp, what) \
+	(!gfpflags_allow_blocking(gfp) && \
+	 (READ_ONCE(nfsd_cache_kunit_no_mem) & (what)))
 #else
-#define nfsd_cache_inject_no_mem(gfp)	false
+#define nfsd_cache_inject_no_mem(gfp, what)	false
 #endif
+
+/* The largest reply nfsd_cache_update() caches, in bytes. */
+#define NFSD_CACHE_REPLBUFF_MAX	256
 
 /*
  * An rtc attempt (RQ_RTC_TRY) runs on its connection's work item, which
@@ -128,11 +132,12 @@ nfsd_cacherep_alloc(struct svc_rqst *rqstp, __wsum csum,
 	gfp_t gfp = nfsd_cache_gfp(rqstp);
 	struct nfsd_cacherep *rp;
 
-	rp = nfsd_cache_inject_no_mem(gfp) ? NULL :
+	rp = nfsd_cache_inject_no_mem(gfp, NFSD_CACHE_KUNIT_NO_ENTRY) ? NULL :
 	     kmem_cache_alloc(drc_slab, gfp);
 	if (rp) {
 		rp->c_state = RC_UNUSED;
 		rp->c_type = RC_NOCACHE;
+		rp->c_prebuf = NULL;
 		RB_CLEAR_NODE(&rp->c_node);
 		INIT_LIST_HEAD(&rp->c_lru);
 
@@ -153,6 +158,7 @@ static void nfsd_cacherep_free(struct nfsd_cacherep *rp)
 {
 	if (rp->c_type == RC_REPLBUFF)
 		kfree(rp->c_replvec.iov_base);
+	kfree(rp->c_prebuf);
 	kmem_cache_free(drc_slab, rp);
 }
 
@@ -526,6 +532,25 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 		}
 		goto out;
 	}
+	/*
+	 * An rtc attempt allocates its reply buffer now, while a miss is
+	 * still free: nfsd_cache_update() runs after the call has executed,
+	 * when a failed allocation could only leave the reply uncached.
+	 * A cached reply is at most NFSD_CACHE_REPLBUFF_MAX bytes.
+	 */
+	if (type == RC_REPLBUFF && test_bit(RQ_RTC_TRY, &rqstp->rq_flags)) {
+		gfp_t gfp = nfsd_cache_gfp(rqstp);
+
+		rp->c_prebuf = nfsd_cache_inject_no_mem(gfp,
+					NFSD_CACHE_KUNIT_NO_REPLY) ? NULL :
+			       kmalloc(NFSD_CACHE_REPLBUFF_MAX, gfp);
+		if (!rp->c_prebuf) {
+			nfsd_cacherep_free(rp);
+			svc_rtc_miss(rqstp, SVC_RTC_FB_NO_MEM);
+			rtn = RC_DROPIT;
+			goto out;
+		}
+	}
 
 	b = nfsd_cache_bucket_find(rqstp->rq_xid, nn);
 	spin_lock(&b->cache_lock);
@@ -626,7 +651,8 @@ void nfsd_cache_update(struct svc_rqst *rqstp, struct nfsd_cacherep *rp,
 	len >>= 2;
 
 	/* Don't cache excessive amounts of data and XDR failures */
-	if (!statp || len > (256 >> 2)) {
+	BUILD_BUG_ON(NFSD_CACHE_REPLBUFF_MAX % sizeof(__be32));
+	if (!statp || len > (NFSD_CACHE_REPLBUFF_MAX >> 2)) {
 		nfsd_reply_cache_free(b, rp, nn);
 		return;
 	}
@@ -641,12 +667,17 @@ void nfsd_cache_update(struct svc_rqst *rqstp, struct nfsd_cacherep *rp,
 		cachv = &rp->c_replvec;
 		bufsize = len << 2;
 		/*
-		 * On an rtc work item (RQ_RTC_TRY) the call has run: a failed
-		 * GFP_NOWAIT allocation leaves the reply uncached, as a failed
-		 * GFP_KERNEL one does on a thread.
+		 * An entry from an rtc attempt carries the buffer it allocated
+		 * at lookup (bufsize <= NFSD_CACHE_REPLBUFF_MAX here), also
+		 * for its thread rerun; any other allocates as on a thread.
 		 */
-		cachv->iov_base = nfsd_cache_inject_no_mem(nfsd_cache_gfp(rqstp)) ?
-				  NULL : kmalloc(bufsize, nfsd_cache_gfp(rqstp));
+		if (rp->c_prebuf) {
+			cachv->iov_base = rp->c_prebuf;
+			rp->c_prebuf = NULL;
+		} else {
+			cachv->iov_base = kmalloc(bufsize,
+						  nfsd_cache_gfp(rqstp));
+		}
 		if (!cachv->iov_base) {
 			nfsd_reply_cache_free(b, rp, nn);
 			return;
