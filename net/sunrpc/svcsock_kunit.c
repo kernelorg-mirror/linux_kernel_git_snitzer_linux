@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <kunit/device.h>
 #include <kunit/test.h>
 #include <kunit/skbuff.h>
 
@@ -7745,6 +7746,63 @@ static void svcsock_rx_consumer_rebind_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_carve_size(ram), base);
 }
 
+static void svcsock_rx_pool_destroy(void *pool)
+{
+	page_pool_destroy(pool);
+}
+
+/*
+ * The region is off unless rx_region_dev is set or
+ * svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it
+ * does not enable one.  With neither set, a one-thread server's demand
+ * sizes a region (small enough to carve, so that a default that enabled
+ * it would show), yet a pool created on a device, the carve
+ * svc_tcp_accept() makes and a READ leave none carved.
+ */
+static void svcsock_rx_region_default_off_test(struct kunit *test)
+{
+	const unsigned long ram = 1UL << 30;	/* pages: no RAM cap */
+	struct page_pool_params params = {
+		.order = 0,
+		.pool_size = 16,
+		.nid = NUMA_NO_NODE,
+	};
+	struct svcsock_rx_fixture *fixture;
+	struct page_pool *pool;
+	char *buf;
+
+	svcsock_rx_skip_live_consumer(test);
+	buf = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, buf);
+	/* The defaults: no device listed, an auto size, READs unconfined. */
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("dev", NULL, buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, "\n");
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("pages", NULL, buf), 0);
+	KUNIT_EXPECT_NOT_NULL(test, strstr(buf, " (auto)"));
+	KUNIT_ASSERT_FALSE(test, svc_tcp_rx_region_kunit_reads_on());
+
+	svcsock_rx_own_consumer(test, 1, 1U << 20);
+	KUNIT_EXPECT_GT(test, page_pool_rx_region_kunit_carve_size(ram), 0UL);
+
+	params.dev = kunit_device_register(test, "rx-region-default-off");
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, params.dev);
+	pool = page_pool_create(&params);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pool);
+	KUNIT_ASSERT_EQ(test,
+			kunit_add_action_or_reset(test, svcsock_rx_pool_destroy,
+						  pool),
+			0);
+	KUNIT_EXPECT_FALSE(test, page_pool_rx_region_exists());
+
+	rx_loan_region_carve();
+	KUNIT_EXPECT_FALSE(test, page_pool_rx_region_exists());
+
+	fixture = svcsock_rx_alloc_fixture(test, 8);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_read(fixture->rqstp, 2), 0);
+	KUNIT_EXPECT_FALSE(test, svc_rqst_rx_region_held(fixture->rqstp));
+	KUNIT_EXPECT_FALSE(test, page_pool_rx_region_exists());
+}
+
 /*
  * The initial namespace's sunrpc budget is rx_loan_net()'s write budget,
  * and unconfigured it lends the region's write share.
@@ -8140,6 +8198,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_default_sizing_test),
 	KUNIT_CASE(svcsock_rx_floor_follows_threads_test),
 	KUNIT_CASE(svcsock_rx_consumer_rebind_test),
+	KUNIT_CASE(svcsock_rx_region_default_off_test),
 	KUNIT_CASE(svcsock_rx_computed_default_test),
 	KUNIT_CASE(svcsock_rx_netns_lend_test),
 	KUNIT_CASE(svcsock_rx_rcvbuf_default_test),

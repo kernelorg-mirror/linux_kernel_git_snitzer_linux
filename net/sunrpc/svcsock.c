@@ -436,7 +436,7 @@ static unsigned int svc_tcp_rx_rcvbuf_effective(void)
 static bool svc_tcp_rx_region_reads __read_mostly;
 module_param(svc_tcp_rx_region_reads, bool, 0644);
 MODULE_PARM_DESC(svc_tcp_rx_region_reads,
-		 "Confine NFSD READ payloads to the rx region, served by direct I/O (default: N)");
+		 "Confine NFSD READ payloads to the rx region, served by direct I/O (default: N; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one)");
 
 /*
  * svc_tcp_rx_region_conn_share and rx_loan/sunrpc/conn_share, one for all;
@@ -4149,6 +4149,12 @@ void svc_tcp_rx_region_kunit_reads(bool on)
 	WRITE_ONCE(svc_tcp_rx_region_reads, on);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_reads);
+
+bool svc_tcp_rx_region_kunit_reads_on(void)
+{
+	return READ_ONCE(svc_tcp_rx_region_reads);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_reads_on);
 
 static int svc_tcp_has_wspace(struct svc_xprt *xprt);
 
