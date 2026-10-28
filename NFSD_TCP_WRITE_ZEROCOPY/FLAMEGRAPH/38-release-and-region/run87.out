@@ -1,0 +1,19 @@
+17:27:36 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc C45C8709B1251E6570577DF, nfsd 3F0C341E86E266D5FDF2ADF, xeu 63631721F8B149913C0DC19
+17:31:49 r87-1-loan64-A | total 40.61 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1546312, denied 1630006, paused 19, overrun 0 | 1 no-step | r87-1-loan64-A ring 43.8 nfsd 96.7 us/W (38713 WRITEs/s) | ring 139.6k cycles 310.3k instructions, nfsd 308.0k cycles 308.7k instructions a WRITE | peak 6587
+17:31:49 r87-1-loan64-A | svc_tcp_rx_rel_two_stage N
+17:36:01 r87-1-loan64-B | total 40.51 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1544360, denied 1617113, paused 58, overrun 0 | 1 no-step | r87-1-loan64-B ring 41.9 nfsd 92.5 us/W (38582 WRITEs/s) | ring 139.7k cycles 311.0k instructions, nfsd 300.3k cycles 304.2k instructions a WRITE | peak 6481
+17:36:01 r87-1-loan64-B | svc_tcp_rx_rel_two_stage Y
+17:40:13 r87-2-loan64-A | total 40.45 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1541440, denied 1614251, paused 58, overrun 0 | 1 no-step | r87-2-loan64-A ring 42.1 nfsd 92.7 us/W (38566 WRITEs/s) | ring 139.3k cycles 310.3k instructions, nfsd 299.8k cycles 302.0k instructions a WRITE | peak 6318
+17:40:13 r87-2-loan64-A | svc_tcp_rx_rel_two_stage N
+17:44:26 r87-2-loan64-B | total 40.52 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1544376, denied 1621488, paused 71, overrun 0 | 1 no-step | r87-2-loan64-B ring 41.7 nfsd 92.0 us/W (38677 WRITEs/s) | ring 139.0k cycles 310.6k instructions, nfsd 299.3k cycles 302.6k instructions a WRITE | peak 6427
+17:44:26 r87-2-loan64-B | svc_tcp_rx_rel_two_stage Y
+17:48:40 r87-3-loan64-A | total 18.05 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 811944, denied 772308, paused 17, overrun 0 | 1 no-step | r87-3-loan64-A ring 41.3 nfsd 95.9 us/W (27863 WRITEs/s) | ring 140.4k cycles 312.5k instructions, nfsd 301.8k cycles 305.9k instructions a WRITE | peak 7635
+17:48:40 r87-3-loan64-A | svc_tcp_rx_rel_two_stage N
+17:52:52 r87-3-loan64-B | total 40.50 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1542112, denied 1610940, paused 43, overrun 0 | 1 no-step | r87-3-loan64-B ring 41.7 nfsd 91.4 us/W (38587 WRITEs/s) | ring 139.4k cycles 311.5k instructions, nfsd 299.5k cycles 304.5k instructions a WRITE | peak 6530
+17:52:52 r87-3-loan64-B | svc_tcp_rx_rel_two_stage Y
+17:57:04 r87-4-loan64-A | total 40.47 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1541408, denied 1611463, paused 65, overrun 0 | 1 no-step | r87-4-loan64-A ring 43.0 nfsd 91.2 us/W (38589 WRITEs/s) | ring 140.0k cycles 311.6k instructions, nfsd 300.9k cycles 302.6k instructions a WRITE | peak 6305
+17:57:04 r87-4-loan64-A | svc_tcp_rx_rel_two_stage N
+18:01:17 r87-4-loan64-B | total 40.52 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1543984, denied 1627359, paused 38, overrun 0 | 1 no-step | r87-4-loan64-B ring 42.5 nfsd 90.3 us/W (38604 WRITEs/s) | ring 139.0k cycles 310.4k instructions, nfsd 297.2k cycles 302.3k instructions a WRITE | peak 6480
+18:01:17 r87-4-loan64-B | svc_tcp_rx_rel_two_stage Y
+18:01:30 end: sunrpc E80412A536ADD1E86B16F5A, settled.sh audit rest: the settled setting; DONE
+
