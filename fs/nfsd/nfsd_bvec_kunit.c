@@ -2360,6 +2360,40 @@ static void nfsd_dio_queue_limit_admission_test(struct kunit *test)
 	}
 }
 
+/*
+ * nfsd_direct_read() rounds a READ out to the direct-I/O alignment.  A window
+ * whose end passes OFFSET_MAX, including one ending at exactly 2^63 (aligned,
+ * but rejected by rw_verify_area()), is refused so the READ goes buffered.
+ */
+static void nfsd_dio_read_window_past_max_test(struct kunit *test)
+{
+	const loff_t top = 0x7ffffffffffff000LL;	/* last 4 KiB page */
+
+	/* generic/525: one page read at the last page, clamped to 4095 */
+	KUNIT_EXPECT_FALSE(test, nfsd_direct_read_window_fits(top, 4095, 512));
+	KUNIT_EXPECT_FALSE(test, nfsd_direct_read_window_fits(top, 4095, 4096));
+	/* One byte just below OFFSET_MAX */
+	KUNIT_EXPECT_FALSE(test, nfsd_direct_read_window_fits(OFFSET_MAX - 1, 1, 512));
+	KUNIT_EXPECT_FALSE(test, nfsd_direct_read_window_fits(OFFSET_MAX - 1, 1, 4096));
+	/* An aligned window ending at exactly 2^63 */
+	KUNIT_EXPECT_FALSE(test, nfsd_direct_read_window_fits(top, 4096, 4096));
+	KUNIT_EXPECT_FALSE(test, nfsd_direct_read_window_fits(top, 3585, 512));
+	/* Windows ending at the last aligned boundary below OFFSET_MAX */
+	KUNIT_EXPECT_TRUE(test, nfsd_direct_read_window_fits(top, 3584, 512));
+	KUNIT_EXPECT_TRUE(test, nfsd_direct_read_window_fits(top - 4096, 4096, 4096));
+	KUNIT_EXPECT_TRUE(test, nfsd_direct_read_window_fits(top + 1, 3583, 512));
+	/* Rounding up to the same boundary at the larger alignment passes it */
+	KUNIT_EXPECT_FALSE(test, nfsd_direct_read_window_fits(top, 3584, 4096));
+	/* Ordinary READs are unaffected */
+	KUNIT_EXPECT_TRUE(test, nfsd_direct_read_window_fits(0, SZ_1M, 512));
+	KUNIT_EXPECT_TRUE(test, nfsd_direct_read_window_fits(0, SZ_1M, 4096));
+	KUNIT_EXPECT_TRUE(test, nfsd_direct_read_window_fits(12345, 65536, 512));
+	KUNIT_EXPECT_TRUE(test, nfsd_direct_read_window_fits(SZ_1G + 100, 4000, 4096));
+	/* Out-of-range input never overflows into a pass */
+	KUNIT_EXPECT_FALSE(test, nfsd_direct_read_window_fits(OFFSET_MAX, ULONG_MAX, 512));
+	KUNIT_EXPECT_FALSE(test, nfsd_direct_read_window_fits(-1, 1, 512));
+}
+
 static struct kunit_case nfsd_bvec_test_cases[] = {
 	KUNIT_CASE(nfsd_bvec_decode_checksum_parity_test),
 	KUNIT_CASE(nfsd_bvec_decode_error_test),
@@ -2378,6 +2412,7 @@ static struct kunit_case nfsd_bvec_test_cases[] = {
 	KUNIT_CASE(nfsd_dio_geometry_replay_test),
 	KUNIT_CASE(nfsd_dio_bounce_wiring_test),
 	KUNIT_CASE(nfsd_dio_queue_limit_admission_test),
+	KUNIT_CASE(nfsd_dio_read_window_past_max_test),
 #if IS_REACHABLE(CONFIG_BTRFS_FS)
 	KUNIT_CASE(nfsd_dio_geometry_btrfs_test),
 #endif
