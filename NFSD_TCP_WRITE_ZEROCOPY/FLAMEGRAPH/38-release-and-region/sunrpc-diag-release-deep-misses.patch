@@ -1,0 +1,341 @@
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index 8b060dea3250..21b914d6c1f7 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -1889,12 +1889,262 @@ static void svc_tcp_rx_put_run(netmem_ref *batch, unsigned int *nr,
+ 	}
+ }
+ 
++/*
++ * DIAGNOSTIC (FLAMEGRAPH round 38, not for keeping): where in the release's
++ * loop its struct page misses fall, at the prefetch distance
++ * svc_tcp_rx_rel_dist.  Timed by the 1 GHz counter read after
++ * ISB, each load drained (DSB LD) before and after, as round 36's:
++ *   - the first load of each page's first word, by the page's ordinal in
++ *     the release (the k-th distinct page): slots 0 to 15 one ordinal each,
++ *     16 the ordinals 16 to 31, 17 32 to 63, 18 64 and on;
++ *   - slot 19, the same timings again for the entries at or past
++ *     SVC_TCP_RX_PUT_BATCH (16), whatever the distance, as round 38's r83;
++ *   - slot 20, the load of the bvec entry the distance ahead whose page the
++ *     loop prefetches, when that entry starts a cache line;
++ *   - slot 21, a line of the CPU's own (the floor).
++ * And, for the deep misses, each release's distinct pages (runs of entries
++ * on one page; a page whose entries are apart counts twice) classified at
++ * its end, when the release has no more than SVC_TCP_RX_REL_MAX of them
++ * (those with more are counted in "over" and left out):
++ *   - slots 22 to 29, the same first loads by the page's place from the
++ *     release's end: the last, 2nd, 3rd, 4th, 5th to 8th, 9th to 16th,
++ *     17th to 32nd, and before;
++ *   - slots 30 to 35, by whether the page is shared, its count
++ *     (pp_ref_count, read just after the timed load) above this release's
++ *     references to it, for ordinals 0 to 15, 16 to 31 and 32 on; then the
++ *     same for the pages held by this release alone;
++ *   - with svc_tcp_rx_rel_ahead 2 (a load the distance ahead, which cannot
++ *     be dropped as a prefetch can), for the entries at or past the
++ *     distance: slots 36 to 39, the first load at use by whether the load
++ *     ahead and the load at use took 64 ns or more (hit/hit, hit/miss,
++ *     miss/hit, miss/miss); slot 40, every load ahead.
++ * Each release adds its entries and distinct pages to the counts.  Summed
++ * over CPUs when read, so nothing is cut at the parameter's page.
++ * svc_tcp_rx_diag_rel turns it on; svc_tcp_rx_rel_lat prints, a write
++ * clears.  The barriers add time to every entry, so later entries gain lead
++ * they would not have untimed; ordinal 0's lead is the loop's own.
++ */
++#define SVC_TCP_RX_REL_SLOTS	41
++#define SVC_TCP_RX_REL_MAX	256
++static bool svc_tcp_rx_diag_rel __read_mostly;
++module_param(svc_tcp_rx_diag_rel, bool, 0644);
++
++/*
++ * The release's prefetch distance, in entries: 0 none, -1 every entry's
++ * page before the loop, otherwise that many entries ahead (the tip's is
++ * SVC_TCP_RX_PUT_BATCH).  Read once a release, timed or not.
++ */
++static int svc_tcp_rx_rel_dist __read_mostly = SVC_TCP_RX_PUT_BATCH;
++module_param(svc_tcp_rx_rel_dist, int, 0644);
++
++/*
++ * How a page is fetched the distance ahead: 0 prefetchw (the tip's), 1 a
++ * prefetch for reading, 2 a load of the struct page's first word.
++ */
++static int svc_tcp_rx_rel_ahead __read_mostly;
++module_param(svc_tcp_rx_rel_ahead, int, 0644);
++
++struct svc_tcp_rx_rel_slot {
++	u64 n, sum, h[16];
++};
++
++struct svc_tcp_rx_rel_lat {
++	struct svc_tcp_rx_rel_slot s[SVC_TCP_RX_REL_SLOTS];
++	u64 releases, entries, pages, over;
++	/* this release's pages, by ordinal, and its loads ahead, by entry */
++	u16 use_ns[SVC_TCP_RX_REL_MAX];
++	u16 refs[SVC_TCP_RX_REL_MAX];
++	u16 entry[SVC_TCP_RX_REL_MAX];
++	u16 ahead_ns[SVC_TCP_RX_REL_MAX];
++	long count[SVC_TCP_RX_REL_MAX];
++	unsigned long own __aligned(64);
++} __aligned(64);
++static DEFINE_PER_CPU(struct svc_tcp_rx_rel_lat, svc_tcp_rx_rel_lat);
++
++static __always_inline u64 svc_tcp_rx_rel_t(void)
++{
++	isb();
++	return read_sysreg(cntvct_el0);
++}
++
++static __always_inline u64 svc_tcp_rx_rel_time(const void *p)
++{
++	u64 t0;
++
++	dsb(ld);
++	t0 = svc_tcp_rx_rel_t();
++	(void)READ_ONCE(*(const unsigned long *)p);
++	dsb(ld);
++	return svc_tcp_rx_rel_t() - t0;
++}
++
++static void svc_tcp_rx_rel_add(struct svc_tcp_rx_rel_lat *l, int k, u64 ns)
++{
++	struct svc_tcp_rx_rel_slot *s = &l->s[k];
++
++	s->n++;
++	s->sum += ns;
++	s->h[min_t(int, ilog2(ns | 1), 15)]++;
++}
++
++static int svc_tcp_rx_rel_ordinal_slot(unsigned int ord)
++{
++	if (ord < 16)
++		return ord;
++	if (ord < 32)
++		return 16;
++	return ord < 64 ? 17 : 18;
++}
++
++static int svc_tcp_rx_rel_end_slot(unsigned int from_end)
++{
++	if (from_end < 4)
++		return 22 + from_end;
++	if (from_end < 8)
++		return 26;
++	if (from_end < 16)
++		return 27;
++	return from_end < 32 ? 28 : 29;
++}
++
++static int svc_tcp_rx_rel_group(unsigned int ord)
++{
++	return ord < 16 ? 0 : ord < 32 ? 1 : 2;
++}
++
++/* Classify this release's pages, as the comment above says. */
++static void svc_tcp_rx_rel_classify(struct svc_tcp_rx_rel_lat *l,
++				    unsigned int pages, int ahead,
++				    unsigned int dist)
++{
++	unsigned int k;
++
++	if (pages > SVC_TCP_RX_REL_MAX) {
++		l->over++;
++		return;
++	}
++	for (k = 0; k < pages; k++) {
++		u64 ns = l->use_ns[k];
++		unsigned int e = l->entry[k];
++
++		svc_tcp_rx_rel_add(l, svc_tcp_rx_rel_end_slot(pages - 1 - k),
++				   ns);
++		svc_tcp_rx_rel_add(l, (l->count[k] > l->refs[k] ? 30 : 33) +
++				   svc_tcp_rx_rel_group(k), ns);
++		if (ahead == 2 && dist && e >= dist &&
++		    e < SVC_TCP_RX_REL_MAX)
++			svc_tcp_rx_rel_add(l, 36 + 2 * (l->ahead_ns[e] >= 64) +
++					   (ns >= 64), ns);
++	}
++}
++
++/* Fetch @index's page the distance ahead, as svc_tcp_rx_rel_ahead says. */
++static __always_inline void
++svc_tcp_rx_rel_fetch(struct svc_tcp_rx_rel_lat *l, struct page *page,
++		     unsigned int index, int ahead)
++{
++	u64 ns;
++
++	if (ahead == 1) {
++		prefetch(page);
++	} else if (ahead != 2) {
++		prefetchw(page);
++	} else if (!l) {
++		(void)READ_ONCE(*(const unsigned long *)page);
++	} else {
++		ns = svc_tcp_rx_rel_time(page);
++		if (index < SVC_TCP_RX_REL_MAX)
++			l->ahead_ns[index] = min_t(u64, ns, U16_MAX);
++		svc_tcp_rx_rel_add(l, 40, ns);
++	}
++}
++
++static int svc_tcp_rx_rel_lat_get(char *buf, const struct kernel_param *kp)
++{
++	static const char * const tail[] = {
++		"ord16-31", "ord32-63", "ord64+", "entry_past_batch",
++		"bvec_ahead", "own",
++		"end1", "end2", "end3", "end4", "end5-8", "end9-16",
++		"end17-32", "end33+",
++		"shared_ord0-15", "shared_ord16-31", "shared_ord32+",
++		"alone_ord0-15", "alone_ord16-31", "alone_ord32+",
++		"ahead_hit_use_hit", "ahead_hit_use_miss",
++		"ahead_miss_use_hit", "ahead_miss_use_miss", "ahead_load" };
++	u64 releases = 0, entries = 0, pages = 0, over = 0;
++	int cpu, k, b, len = 0;
++
++	BUILD_BUG_ON(ARRAY_SIZE(tail) != SVC_TCP_RX_REL_SLOTS - 16);
++	for_each_possible_cpu(cpu) {
++		struct svc_tcp_rx_rel_lat *l =
++			per_cpu_ptr(&svc_tcp_rx_rel_lat, cpu);
++
++		releases += l->releases;
++		entries += l->entries;
++		pages += l->pages;
++		over += l->over;
++	}
++	len += sysfs_emit_at(buf, len,
++			     "releases %llu entries %llu pages %llu over %llu\n",
++			     releases, entries, pages, over);
++	for (k = 0; k < SVC_TCP_RX_REL_SLOTS; k++) {
++		struct svc_tcp_rx_rel_slot t = {};
++
++		for_each_possible_cpu(cpu) {
++			struct svc_tcp_rx_rel_slot *s =
++				&per_cpu_ptr(&svc_tcp_rx_rel_lat, cpu)->s[k];
++
++			t.n += s->n;
++			t.sum += s->sum;
++			for (b = 0; b < 16; b++)
++				t.h[b] += s->h[b];
++		}
++		if (k < 16)
++			len += sysfs_emit_at(buf, len, "ord%d", k);
++		else
++			len += sysfs_emit_at(buf, len, "%s", tail[k - 16]);
++		len += sysfs_emit_at(buf, len, " n %llu sum_ns %llu h",
++				     t.n, t.sum);
++		for (b = 0; b < 16; b++)
++			len += sysfs_emit_at(buf, len, " %llu", t.h[b]);
++		len += sysfs_emit_at(buf, len, "\n");
++	}
++	return len;
++}
++
++static int svc_tcp_rx_rel_lat_set(const char *val,
++				  const struct kernel_param *kp)
++{
++	int cpu;
++
++	for_each_possible_cpu(cpu) {
++		struct svc_tcp_rx_rel_lat *l =
++			per_cpu_ptr(&svc_tcp_rx_rel_lat, cpu);
++
++		memset(l->s, 0, sizeof(l->s));
++		l->releases = l->entries = l->pages = l->over = 0;
++	}
++	return 0;
++}
++
++static const struct kernel_param_ops svc_tcp_rx_rel_lat_ops = {
++	.get = svc_tcp_rx_rel_lat_get,
++	.set = svc_tcp_rx_rel_lat_set,
++};
++module_param_cb(svc_tcp_rx_rel_lat, &svc_tcp_rx_rel_lat_ops, NULL, 0644);
++
+ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+ {
+ 	netmem_ref batch[SVC_TCP_RX_PUT_BATCH];
+ 	netmem_ref run = 0;
+ 	unsigned int index, nr = 0;
+ 	long run_refs = 0;
++	bool diag = READ_ONCE(svc_tcp_rx_diag_rel);
++	struct svc_tcp_rx_rel_lat *l = NULL;
++	struct page *timed = NULL;
++	unsigned int ord = 0;
++	int d = READ_ONCE(svc_tcp_rx_rel_dist);
++	unsigned int dist = d < 0 ? state->count : d;
++	int ahead = READ_ONCE(svc_tcp_rx_rel_ahead);
+ 
+ 	/* page_pool_put_netmem_bulk() does not check its array's bound. */
+ 	BUILD_BUG_ON(SVC_TCP_RX_PUT_BATCH > XDP_BULK_QUEUE_SIZE);
+@@ -1910,13 +2160,24 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+ 	 * so that a batch's misses are in flight together and not taken one
+ 	 * page after another.
+ 	 */
+-	for (index = 0; index < min(state->count, SVC_TCP_RX_PUT_BATCH);
+-	     index++)
+-		prefetchw(state->bvec[index].bv_page);
++	if (diag) {
++		l = get_cpu_ptr(&svc_tcp_rx_rel_lat);
++		l->releases++;
++		l->entries += state->count;
++	}
++	for (index = 0; index < min(state->count, dist); index++)
++		svc_tcp_rx_rel_fetch(l, state->bvec[index].bv_page, index,
++				     ahead);
+ 	for (index = 0; index < state->count; index++) {
+-		if (index + SVC_TCP_RX_PUT_BATCH < state->count)
+-			prefetchw(state->bvec[index +
+-					      SVC_TCP_RX_PUT_BATCH].bv_page);
++		if (dist && index + dist < state->count) {
++			if (diag && !((index + dist) %
++				      (L1_CACHE_BYTES / sizeof(struct bio_vec))))
++				svc_tcp_rx_rel_add(l, 20, svc_tcp_rx_rel_time(
++					&state->bvec[index + dist].bv_page));
++			svc_tcp_rx_rel_fetch(l,
++					     state->bvec[index + dist].bv_page,
++					     index + dist, ahead);
++		}
+ 		if (!test_bit(index, state->borrowed))
+ 			continue;
+ 		/*
+@@ -1928,6 +2189,30 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+ 			struct page *page = state->bvec[index].bv_page;
+ 			netmem_ref netmem;
+ 
++			if (diag && page != timed) {
++				u64 ns = svc_tcp_rx_rel_time(&page->compound_info);
++
++				timed = page;
++				if (ord < SVC_TCP_RX_REL_MAX) {
++					l->use_ns[ord] = min_t(u64, ns,
++							       U16_MAX);
++					l->count[ord] = atomic_long_read(
++						netmem_get_pp_ref_count_ref(
++						netmem_compound_head(
++						page_to_netmem(page))));
++					l->refs[ord] = 0;
++					l->entry[ord] = index;
++				}
++				svc_tcp_rx_rel_add(l,
++					svc_tcp_rx_rel_ordinal_slot(ord++), ns);
++				if (index >= SVC_TCP_RX_PUT_BATCH)
++					svc_tcp_rx_rel_add(l, 19, ns);
++				if (ord == 1)
++					svc_tcp_rx_rel_add(l, 21,
++						svc_tcp_rx_rel_time(&l->own));
++			}
++			if (diag && ord <= SVC_TCP_RX_REL_MAX)
++				l->refs[ord - 1]++;
+ 			netmem = netmem_compound_head(page_to_netmem(page));
+ 			if (run_refs && netmem == run) {
+ 				run_refs++;
+@@ -1952,6 +2237,11 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+ 		svc_tcp_rx_put_run(batch, &nr, run, run_refs);
+ 	if (nr)
+ 		page_pool_put_netmem_bulk(batch, nr);
++	if (diag) {
++		l->pages += ord;
++		svc_tcp_rx_rel_classify(l, ord, ahead, dist);
++		put_cpu_ptr(&svc_tcp_rx_rel_lat);
++	}
+ 	state->terminal = true;
+ 	if (WARN_ON_ONCE(state->borrowed_count ||
+ 			 (state->count &&
