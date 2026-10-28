@@ -54,7 +54,7 @@ In run89's profile (round 39), the ring CPUs' GRO frames:
 - An xeu swap reopens the port and drops the client's connections, so each one is Mike's to ask for. `settled.sh` puts the port's layout back after it.
 - Copy mode gains from anything here too, but is not measured.
 
-## 1. The shape (r96, to run)
+## 1. The shape (r96)
 
 [`xeu-rig/gro-shape.bt`](../../xeu-rig/gro-shape.bt) records, on the ring CPUs:
 - **each frame's outcome** in `dev_gro_receive()`: merged, held as a new aggregate, or passed up alone;
@@ -65,3 +65,31 @@ In run89's profile (round 39), the ring CPUs' GRO frames:
 Aggregates the flush completes after `xeu_rx_poll()` returns are counted in the next poll's figure.
 
 [run96.sh](run96.sh): one traced loan64 run at the current state, with no module swapped. From 10 s into the timed load it runs 8 s of `gro-shape.bt`, then about 8 s of round 09's `grolen.bt`.
+
+**Run 28 October** (traced, so its rate is not a result): 36.46 GB/s, flows placed, no drive stepping down, counted ring 139.5k and nfsd 298.0k cycles a WRITE (run89's 139.3k and 297.1k), peak 6617, settled at the end ([run96.out](run96.out), [gro-shape-r96.txt](gro-shape-r96.txt), [grolen-r96.txt](grolen-r96.txt)).
+
+**Each frame** (22.2 million in the 8 s):
+
+| outcome in `dev_gro_receive()` | frames | share |
+|---|---|---|
+| merged into a held aggregate, its skb freed | 19,009,391 | **85.5%** |
+| held as a new aggregate | 3,170,662 | 14.3% |
+| passed up alone | 51,622 | 0.2% |
+
+**What `gro_list_prepare()` walks:** the frame's bucket held one aggregate for 85% of frames, none for 14%, two for 0.3%. All eight buckets together held one for 82%, two for 4%, and never more than four. The list is short and is not the cost.
+
+**Why the 2.89 million aggregates of more than one frame ended:**
+
+| ended | aggregates | share | frames |
+|---|---|---|---|
+| by a frame carrying PSH, over 56 KB | 2,175,914 | **75%** | 8 |
+| by a frame carrying PSH, 56 KB or less | 468,269 | 16% | 2–7 |
+| by the poll's flush | 241,046 | 8% | 2–7, evenly |
+| by a frame without PSH (the size limit, or one that could not merge) | 3,323 | 0.1% | 8 |
+
+- **The client's PSH ends them.** 82% of the aggregates are 8 frames (61,920 bytes), ended by the last segment of the client's 64 KB TSO burst. The 64 KB GRO limit almost never decides (3.3k), as round 09 found.
+- **`grolen.bt` agrees:** 74% of what TCP receives is 32–64 KB, most of it 8–9 segments.
+- **The per-poll counts are missing:** the `kretprobe` on `xeu_rx_poll()` attached but never fired, so `@poll_frames` and `@poll_aggs` are empty. The flush figure above stands without them.
+- **The WRITE count in the window does not square with the frames:** 140,804 WRITEs against 22.2 million frames is 158 frames a WRITE, against about 136 for 1 MiB. The 9 probes slowed the window to about 21 GB/s. The shares above are taken from the frames alone and do not depend on it.
+
+**So: GRO's cost is per frame, not in the list or in the merge decisions.** 85% of frames take the merge path. Each has had a full skb built around its buffer by xeu (`napi_build_skb`) only to be freed once its page is moved into the aggregate. In run89's ring profile that build and free is about 7% of the samples beyond the GRO frames: `napi_build_skb`, `__build_skb_around` and `__pi_memset_generic` about 4.6%, and `kmem_cache_free`, `__memcg_slab_free_hook` and `napi_skb_cache_put` about 2.5%. A driver that hands GRO page fragments (`napi_get_frags()` and `napi_gro_frags()`) builds no skb for a frame that merges: an xeu change, a question for Xsight, and a candidate for step 3 beside what step 2 finds about GRO's misses.
