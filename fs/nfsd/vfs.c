@@ -48,9 +48,9 @@
 #include "stats.h"
 #include "vfs.h"
 #include "filecache.h"
+#include <kunit/visibility.h>
 #if IS_ENABLED(CONFIG_KUNIT)
 #include <linux/export.h>
-#include <kunit/visibility.h>
 #endif
 #include "trace.h"
 
@@ -1104,6 +1104,36 @@ __be32 nfsd_splice_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err);
 }
 
+/**
+ * nfsd_direct_read_window_fits - Whether a READ's direct-I/O window is legal
+ * @offset: starting byte offset of the READ
+ * @count: number of bytes requested
+ * @align: direct-I/O offset alignment, a power of two
+ *
+ * nfsd_direct_read() reads [round_down(@offset, @align),
+ * round_up(@offset + @count, @align)).  NFSD has already clamped
+ * @offset + @count to OFFSET_MAX, but rounding the end up can still pass
+ * it: a READ ending in the last alignment unit below 2^63 yields an end of
+ * exactly 2^63, which rw_verify_area() rejects with -EINVAL.  That window
+ * cannot be shortened either, because a clamped end is unaligned.
+ *
+ * Return: true when the aligned window ends at or below OFFSET_MAX.
+ */
+VISIBLE_IF_KUNIT bool nfsd_direct_read_window_fits(loff_t offset,
+						   unsigned long count,
+						   u32 align)
+{
+	u64 end;
+
+	if (offset < 0 || !align || !is_power_of_2(align))
+		return false;
+	if (check_add_overflow((u64)offset, (u64)count, &end))
+		return false;
+	/* round_up(end, align) <= OFFSET_MAX, computed without overflow */
+	return end <= round_down((u64)OFFSET_MAX, align);
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd_direct_read_window_fits);
+
 /*
  * The byte range of the client's READ request is expanded on both ends
  * until it meets the underlying file system's direct I/O alignment
@@ -1210,6 +1240,12 @@ static bool nfsd_direct_read_ok(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (count < offset_align) {
 		trace_nfsd_read_dio_too_small(rqstp, fhp, offset, count,
 					      offset_align);
+		return false;
+	}
+	/* The rounded-out window would end past OFFSET_MAX: read buffered */
+	if (!nfsd_direct_read_window_fits(offset, count, offset_align)) {
+		trace_nfsd_read_dio_past_max(rqstp, fhp, offset, count,
+					     offset_align);
 		return false;
 	}
 	if (rqstp->rq_res.page_len) {
