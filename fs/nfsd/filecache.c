@@ -47,6 +47,7 @@
 #include "nfsfh.h"
 #include "netns.h"
 #include "filecache.h"
+#include <kunit/visibility.h>
 #include "trace.h"
 
 #define NFSD_LAUNDRETTE_DELAY		     (2 * HZ)
@@ -1188,6 +1189,82 @@ nfsd_file_get_dio_attrs(const struct svc_fh *fhp, struct nfsd_file *nf)
 
 	return nfs_ok;
 }
+
+/**
+ * nfsd_file_lookup_cached - Find an open nfsd_file without opening one
+ * @rqstp: the RPC transaction being executed
+ * @fhp: the NFS filehandle of the file to be opened
+ * @may_flags: NFSD_MAY_ settings for the file
+ * @pnf: OUT: a referenced, constructed GC nfsd_file, or NULL
+ *
+ * The run-to-completion READ's nfsd_file_acquire_gc(): the hit path of
+ * nfsd_file_do_acquire() without allocating, opening or waiting for a file
+ * under construction.  A NULL @pnf with nfs_ok means "not cached".
+ */
+__be32 nfsd_file_lookup_cached(struct svc_rqst *rqstp, struct svc_fh *fhp,
+			       unsigned int may_flags, struct nfsd_file **pnf)
+{
+	unsigned char need = may_flags & NFSD_FILE_MAY_MASK;
+	struct net *net = SVC_NET(rqstp);
+	struct nfsd_file *nf;
+	struct inode *inode;
+	__be32 status;
+
+	*pnf = NULL;
+	status = fh_verify(rqstp, fhp, S_IFREG,
+			   may_flags|NFSD_MAY_OWNER_OVERRIDE);
+	if (status != nfs_ok)
+		return status;
+	inode = d_inode(fhp->fh_dentry);
+
+	rcu_read_lock();
+	nf = nfsd_file_lookup_locked(net, current_cred(), inode, need, true);
+	rcu_read_unlock();
+	if (!nf)
+		return nfs_ok;
+	if (test_bit(NFSD_FILE_PENDING, &nf->nf_flags) ||
+	    !test_bit(NFSD_FILE_HASHED, &nf->nf_flags) || !nf->nf_file ||
+	    nfsd_open_break_lease(file_inode(nf->nf_file), may_flags)) {
+		nfsd_file_put(nf);
+		return nfs_ok;
+	}
+	nfsd_file_check_write_error(nf);
+	*pnf = nf;
+	return nfs_ok;
+}
+
+/**
+ * nfsd_file_count_cached - Account a hit of nfsd_file_lookup_cached()
+ * @rqstp: the RPC transaction being executed
+ * @nf: the file it returned
+ * @may_flags: NFSD_MAY_ settings it was looked up with
+ *
+ * Called once the run-to-completion call is served, so a call handed to
+ * a thread (which acquires again) is counted and traced once.
+ */
+void nfsd_file_count_cached(struct svc_rqst *rqstp, struct nfsd_file *nf,
+			    unsigned int may_flags)
+{
+	this_cpu_inc(nfsd_file_cache_hits);
+	this_cpu_inc(nfsd_file_acquisitions);
+	trace_nfsd_file_acquire(rqstp, nf->nf_inode, may_flags, nf, nfs_ok);
+}
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/* Sum of the file cache's hit and acquisition counters, for KUnit. */
+void nfsd_file_kunit_counts(unsigned long *hits, unsigned long *acquisitions)
+{
+	int i;
+
+	*hits = 0;
+	*acquisitions = 0;
+	for_each_possible_cpu(i) {
+		*hits += per_cpu(nfsd_file_cache_hits, i);
+		*acquisitions += per_cpu(nfsd_file_acquisitions, i);
+	}
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd_file_kunit_counts);
+#endif
 
 static __be32
 nfsd_file_do_acquire(struct svc_rqst *rqstp, struct net *net,

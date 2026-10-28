@@ -301,4 +301,46 @@ int nfsd_direct_write_kunit(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			    const struct nfsd_dio_kunit_hooks *hooks);
 #endif
 
+/* Run-to-completion READ state, one per rtc pool rqst (rq_rtc_priv) */
+struct nfsd_cacherep;
+struct nfsd_file;
+struct nfsd_rtc_ctx {
+	struct kiocb		kiocb;
+	struct svc_rqst		*rqstp;
+	struct nfsd_file	*nf;
+	loff_t			offset;
+	u64			dio_start;
+	long			res;
+	/* nfsd_dispatch() state carried across the async completion */
+	struct nfsd_cacherep	*rp;
+	__be32			*nfs_reply;
+};
+
+void		nfsd_file_count_cached(struct svc_rqst *rqstp,
+				       struct nfsd_file *nf,
+				       unsigned int may_flags);
+__be32		nfsd_rtc_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
+			      loff_t offset, unsigned long *count, u32 *eof);
+int		nfsd_rtc_read_finish(struct svc_rqst *rqstp,
+				     struct svc_fh *fhp, unsigned long *count,
+				     u32 *eof, __be32 *status);
+int		nfsd_rtc_dispatch_finish(struct svc_rqst *rqstp, bool abandon);
+/* filecache.c (declared here: filecache.h is out of the rtc scope) */
+__be32		nfsd_file_lookup_cached(struct svc_rqst *rqstp,
+					struct svc_fh *fhp,
+					unsigned int may_flags,
+					struct nfsd_file **pnf);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+__be32		nfsd_rtc_read_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
+				   struct nfsd_file *nf, loff_t offset,
+				   unsigned long *count, u32 *eof);
+void		nfsd_file_kunit_counts(unsigned long *hits,
+				       unsigned long *acquisitions);
+#endif
+
+/* nfs3proc.c: run-to-completion NFSv3 READ hook */
+struct svc_rtc_ops;
+extern const struct svc_rtc_ops nfsd3_rtc_ops;
+
 #endif /* LINUX_NFSD_VFS_H */

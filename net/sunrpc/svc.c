@@ -389,6 +389,23 @@ static int svc_pool_map_get_node(unsigned int pidx)
 	return NUMA_NO_NODE;
 }
 
+/* The NUMA node of @pool's threads (NUMA_NO_NODE if not per-node). */
+int svc_pool_node(struct svc_serv *serv, struct svc_pool *pool)
+{
+	/* The pool map describes only pooled services. */
+	if (!serv->sv_is_pooled)
+		return NUMA_NO_NODE;
+	return svc_pool_map_get_node(pool->sp_id);
+}
+
+/* An rtc attempt that set RQ_RTC_COUNT ended on its work item: count it. */
+void svc_rtc_count_proc(struct svc_rqst *rqstp)
+{
+	if (test_and_clear_bit(RQ_RTC_COUNT, &rqstp->rq_flags))
+		this_cpu_inc(rqstp->rq_server->sv_stats->vs_count
+				[rqstp->rq_vers][rqstp->rq_proc]);
+}
+
 /*
  * Set the given thread's cpus_allowed mask so that it
  * will only run on cpus in the given pool.
@@ -848,6 +865,7 @@ __svc_create(struct svc_program *prog, int nprogs, struct svc_stat *stats,
 
 		pool->sp_id = i;
 		lwq_init(&pool->sp_xprts);
+		lwq_init(&pool->sp_rtc_rqsts);
 		INIT_LIST_HEAD(&pool->sp_all_threads);
 		init_llist_head(&pool->sp_idle_threads);
 
@@ -1029,7 +1047,11 @@ static void svc_rqst_free_rcu(struct rcu_head *head)
 	kfree(rqstp);
 }
 
-static void
+/**
+ * svc_rqst_free - Free an svc_rqst from svc_rqst_alloc()
+ * @rqstp: request to free
+ */
+void
 svc_rqst_free(struct svc_rqst *rqstp)
 {
 	folio_batch_release(&rqstp->rq_fbatch);
@@ -1044,9 +1066,19 @@ svc_rqst_free(struct svc_rqst *rqstp)
 	kfree(rqstp->rq_auth_data);
 	call_rcu(&rqstp->rq_rcu_head, svc_rqst_free_rcu);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_rqst_free);
 
-static struct svc_rqst *
-svc_prepare_thread(struct svc_serv *serv, struct svc_pool *pool, int node)
+/**
+ * svc_rqst_alloc - Allocate an svc_rqst and its buffers
+ * @serv: RPC service
+ * @pool: pool the request counts against
+ * @node: NUMA node for the allocations
+ *
+ * The request is not a thread: no thread accounting is done.  Free it
+ * with svc_rqst_free().
+ */
+struct svc_rqst *
+svc_rqst_alloc(struct svc_serv *serv, struct svc_pool *pool, int node)
 {
 	struct svc_rqst	*rqstp;
 
@@ -1102,6 +1134,22 @@ svc_prepare_thread(struct svc_serv *serv, struct svc_pool *pool, int node)
 		goto out_enomem;
 
 	rqstp->rq_err = -EAGAIN; /* No error yet */
+	return rqstp;
+
+out_enomem:
+	svc_rqst_free(rqstp);
+	return NULL;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rqst_alloc);
+
+static struct svc_rqst *
+svc_prepare_thread(struct svc_serv *serv, struct svc_pool *pool, int node)
+{
+	struct svc_rqst	*rqstp;
+
+	rqstp = svc_rqst_alloc(serv, pool, node);
+	if (!rqstp)
+		return NULL;
 
 	serv->sv_nrthreads += 1;
 	pool->sp_nrthreads += 1;
@@ -1112,10 +1160,6 @@ svc_prepare_thread(struct svc_serv *serv, struct svc_pool *pool, int node)
 	list_add_rcu(&rqstp->rq_all, &pool->sp_all_threads);
 
 	return rqstp;
-
-out_enomem:
-	svc_rqst_free(rqstp);
-	return NULL;
 }
 
 /**
@@ -1447,6 +1491,7 @@ svc_set_num_threads(struct svc_serv *serv, unsigned int min_threads,
 		if (err)
 			break;
 	}
+	svc_rtc_pool_resize(serv);
 	return err;
 }
 EXPORT_SYMBOL_GPL(svc_set_num_threads);
@@ -2152,9 +2197,14 @@ svc_generic_init_request(struct svc_rqst *rqstp,
 	if (rqstp->rq_server->sv_stats &&
 	    rqstp->rq_server->sv_stats->program == progp &&
 	    rqstp->rq_server->sv_stats->vs_count &&
-	    rqstp->rq_server->sv_stats->vs_count[rqstp->rq_vers])
-		this_cpu_inc(rqstp->rq_server->sv_stats->vs_count
-				[rqstp->rq_vers][rqstp->rq_proc]);
+	    rqstp->rq_server->sv_stats->vs_count[rqstp->rq_vers]) {
+		/* An rtc attempt may be handed to a thread: count at the end. */
+		if (test_bit(RQ_RTC_TRY, &rqstp->rq_flags))
+			set_bit(RQ_RTC_COUNT, &rqstp->rq_flags);
+		else
+			this_cpu_inc(rqstp->rq_server->sv_stats->vs_count
+					[rqstp->rq_vers][rqstp->rq_proc]);
+	}
 
 	ret->dispatch = versp->vs_dispatch;
 	return rpc_success;
@@ -2224,6 +2274,60 @@ EXPORT_SYMBOL_GPL(svc_stat_free_counts);
 /*
  * Common routine for processing the RPC request.
  */
+/*
+ * The part of svc_process_common() after the program's dispatch: shared
+ * with svc_rtc_process_resume(), which runs it after an async completion.
+ */
+static int svc_process_dispatched(struct svc_rqst *rqstp, int rc,
+				  unsigned int aoffset)
+{
+	const struct svc_procedure *procp = rqstp->rq_procinfo;
+	struct xdr_stream *xdr = &rqstp->rq_res_stream;
+	struct svc_serv *serv = rqstp->rq_server;
+
+	xdr_finish_decode(xdr);
+
+	/* rtc: a thread reruns the call; nothing may be sent for it. */
+	if (test_bit(RQ_RTC_MISS, &rqstp->rq_flags))
+		goto dropit;
+	if (!rc)
+		goto dropit;
+	if (rqstp->rq_auth_stat != rpc_auth_ok)
+		goto err_bad_auth;
+
+	if (*rqstp->rq_accept_statp != rpc_success)
+		xdr_truncate_encode(xdr, aoffset);
+
+	if (procp->pc_encode == NULL)
+		goto dropit;
+
+sendit:
+	if (svc_authorise(rqstp))
+		goto close_xprt;
+	return 1;		/* Caller can now send it */
+
+dropit:
+	svc_authorise(rqstp);	/* doesn't hurt to call this twice */
+	return 0;
+
+close_xprt:
+	if (test_bit(RQ_RTC_MISS, &rqstp->rq_flags))
+		return 0;
+	if (rqstp->rq_xprt && test_bit(XPT_TEMP, &rqstp->rq_xprt->xpt_flags))
+		svc_xprt_close(rqstp->rq_xprt);
+	return 0;
+
+err_bad_auth:
+	if (serv->sv_stats)
+		serv->sv_stats->rpcbadauth++;
+	/* Restore write pointer to location of reply status: */
+	xdr_truncate_encode(xdr, XDR_UNIT * 2);
+	xdr_stream_encode_u32(xdr, RPC_MSG_DENIED);
+	xdr_stream_encode_u32(xdr, RPC_AUTH_ERROR);
+	xdr_stream_encode_be32(xdr, rqstp->rq_auth_stat);
+	goto sendit;
+}
+
 static int
 svc_process_common(struct svc_rqst *rqstp)
 {
@@ -2330,18 +2434,12 @@ svc_process_common(struct svc_rqst *rqstp)
 
 	/* Call the function that processes the request. */
 	rc = process.dispatch(rqstp);
-	xdr_finish_decode(xdr);
-
-	if (!rc)
-		goto dropit;
-	if (rqstp->rq_auth_stat != rpc_auth_ok)
-		goto err_bad_auth;
-
-	if (*rqstp->rq_accept_statp != rpc_success)
-		xdr_truncate_encode(xdr, aoffset);
-
-	if (procp->pc_encode == NULL)
-		goto dropit;
+	if (test_bit(RQ_RTC_ASYNC, &rqstp->rq_flags)) {
+		/* svc_rtc_process_resume() finishes it after completion. */
+		rqstp->rq_rtc_aoffset = aoffset;
+		return 2;
+	}
+	return svc_process_dispatched(rqstp, rc, aoffset);
 
  sendit:
 	if (svc_authorise(rqstp))
@@ -2356,6 +2454,9 @@ svc_process_common(struct svc_rqst *rqstp)
  close:
 	svc_authorise(rqstp);
 close_xprt:
+	/* rtc: a lookup miss goes to a thread; it is no reason to close. */
+	if (test_bit(RQ_RTC_MISS, &rqstp->rq_flags))
+		return 0;
 	if (rqstp->rq_xprt && test_bit(XPT_TEMP, &rqstp->rq_xprt->xpt_flags))
 		svc_xprt_close(rqstp->rq_xprt);
 	dprintk("svc: svc_process close\n");
@@ -2484,9 +2585,12 @@ void svc_process(struct svc_rqst *rqstp)
 	if (unlikely(*p != rpc_call))
 		goto out_baddir;
 
-	if (!svc_process_common(rqstp)) {
+	switch (svc_process_common(rqstp)) {
+	case 0:
 		svc_release_rqst(rqstp);
 		goto out_drop;
+	case 2:
+		return;	/* rtc async: svc_rtc_process_resume() sends it */
 	}
 	svc_send(rqstp);
 	svc_release_rqst(rqstp);
@@ -2498,6 +2602,36 @@ out_baddir:
 	if (rqstp->rq_server->sv_stats)
 		rqstp->rq_server->sv_stats->rpcbadfmt++;
 out_drop:
+	svc_drop(rqstp);
+}
+
+/**
+ * svc_rtc_process_resume - Finish an RQ_RTC_ASYNC call after completion
+ * @rqstp: rqst whose svc_process() returned with RQ_RTC_ASYNC set
+ * @rc: the program's dispatch result once its completion ran
+ *
+ * Runs the part of svc_process() the async call skipped: the reply goes
+ * through svc_send() exactly as on the synchronous path.
+ */
+void svc_rtc_process_resume(struct svc_rqst *rqstp, int rc)
+{
+	clear_bit(RQ_RTC_ASYNC, &rqstp->rq_flags);
+	if (svc_process_dispatched(rqstp, rc, rqstp->rq_rtc_aoffset))
+		svc_send(rqstp);
+	else
+		svc_drop(rqstp);
+	svc_release_rqst(rqstp);
+}
+
+/**
+ * svc_rtc_process_abandon - Undo an RQ_RTC_ASYNC call for a thread rerun
+ * @rqstp: rqst whose svc_process() returned with RQ_RTC_ASYNC set
+ */
+void svc_rtc_process_abandon(struct svc_rqst *rqstp)
+{
+	clear_bit(RQ_RTC_ASYNC, &rqstp->rq_flags);
+	svc_authorise(rqstp);
+	svc_release_rqst(rqstp);
 	svc_drop(rqstp);
 }
 

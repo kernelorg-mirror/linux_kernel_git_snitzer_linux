@@ -590,6 +590,9 @@ void nfsd_destroy_serv(struct net *net)
 	 * other initialization has been done except the rpcb information.
 	 */
 	svc_xprt_destroy_all(serv, net, true);
+	/* Waits for the work items, which freed their rqst pools. */
+	if (rcu_access_pointer(serv->sv_rtc))
+		svc_rtc_unregister(serv);
 	/* Its transports' credit is back: the consumer stops. */
 	svc_tcp_rx_consumer_stop(net);
 	nfsd_shutdown_net(net);
@@ -698,6 +701,13 @@ int nfsd_create_serv(struct net *net, bool no_rpcbind)
 
 	/* svc_bind() reads this, so set it first. */
 	serv->sv_no_rpcbind = no_rpcbind;
+	/*
+	 * The NFSv3 READ fast path needs direct reads.  Without the hook
+	 * no connection gets a work item, so other configs keep today's
+	 * path.  Failing to register is not an error: threads serve all.
+	 */
+	if (READ_ONCE(nfsd_io_cache_read) == NFSD_IO_DIRECT)
+		svc_rtc_register(serv, &nfsd3_rtc_ops);
 
 	error = svc_bind(serv, net);
 	if (error < 0) {
@@ -1128,6 +1138,9 @@ int nfsd_dispatch(struct svc_rqst *rqstp)
 	if (proc->pc_read_pages &&
 	    svc_rqst_rx_region_read(rqstp, proc->pc_read_pages(rqstp)) == -EAGAIN)
 		goto out_dropit;
+	/* An rtc attempt whose payload region would park: a thread reruns. */
+	if (test_bit(RQ_RTC_MISS, &rqstp->rq_flags))
+		goto out_dropit;
 
 	rp = NULL;
 	switch (nfsd_cache_lookup(rqstp, start, len, &rp)) {
@@ -1141,7 +1154,17 @@ int nfsd_dispatch(struct svc_rqst *rqstp)
 
 	nfs_reply = xdr_inline_decode(&rqstp->rq_res_stream, 0);
 	*statp = proc->pc_func(rqstp);
-	if (test_bit(RQ_DROPME, &rqstp->rq_flags))
+	if (test_bit(RQ_RTC_ASYNC, &rqstp->rq_flags)) {
+		struct nfsd_rtc_ctx *c = rqstp->rq_rtc_priv;
+
+		/* nfsd_rtc_dispatch_finish() completes it. */
+		c->rp = rp;
+		c->nfs_reply = nfs_reply;
+		return 1;
+	}
+	/* An rtc miss reruns on a thread: no reply, no cache entry. */
+	if (test_bit(RQ_DROPME, &rqstp->rq_flags) ||
+	    test_bit(RQ_RTC_MISS, &rqstp->rq_flags))
 		goto out_update_drop;
 
 	if (!proc->pc_encode(rqstp, &rqstp->rq_res_stream))
@@ -1167,6 +1190,36 @@ out_encode_err:
 	trace_nfsd_cant_encode_err(rqstp);
 	nfsd_cache_update(rqstp, rp, RC_NOCACHE, NULL);
 	*statp = rpc_system_err;
+	nfsd_status_counter_set_idle(rqstp);
+	return 1;
+}
+
+/**
+ * nfsd_rtc_dispatch_finish - The rest of nfsd_dispatch() for an async call
+ * @rqstp: rtc pool rqst whose pc_func returned with RQ_RTC_ASYNC set
+ * @abandon: the call reruns on a thread
+ *
+ * Return values: as nfsd_dispatch().
+ */
+int nfsd_rtc_dispatch_finish(struct svc_rqst *rqstp, bool abandon)
+{
+	struct nfsd_thread_local_info *ntli = rqstp->rq_private;
+	const struct svc_procedure *proc = rqstp->rq_procinfo;
+	struct nfsd_rtc_ctx *c = rqstp->rq_rtc_priv;
+
+	if (abandon || test_bit(RQ_DROPME, &rqstp->rq_flags)) {
+		nfsd_cache_update(rqstp, c->rp, RC_NOCACHE, NULL);
+		nfsd_status_counter_set_idle(rqstp);
+		return 0;
+	}
+	if (!proc->pc_encode(rqstp, &rqstp->rq_res_stream)) {
+		trace_nfsd_cant_encode_err(rqstp);
+		nfsd_cache_update(rqstp, c->rp, RC_NOCACHE, NULL);
+		*rqstp->rq_accept_statp = rpc_system_err;
+		nfsd_status_counter_set_idle(rqstp);
+		return 1;
+	}
+	nfsd_cache_update(rqstp, c->rp, ntli->ntli_cachetype, c->nfs_reply);
 	nfsd_status_counter_set_idle(rqstp);
 	return 1;
 }
