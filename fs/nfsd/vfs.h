@@ -285,6 +285,9 @@ static inline u32 nfsd_write_dio_bounce_align(u32 mem_align, u32 offset_align,
 }
 
 #if IS_ENABLED(CONFIG_KUNIT)
+bool nfsd_direct_read_window_fits(loff_t offset, unsigned long count,
+				  u32 align);
+
 struct nfsd_dio_kunit_hooks {
 	void (*before_reissue)(struct kiocb *kiocb,
 			       const struct iov_iter *saved_iter, void *data);

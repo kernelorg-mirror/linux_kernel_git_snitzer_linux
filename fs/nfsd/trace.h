@@ -663,6 +663,7 @@ DEFINE_NFSD_READ_DIO_EVENT(no_alignment);
 DEFINE_NFSD_READ_DIO_EVENT(too_small);
 DEFINE_NFSD_READ_DIO_EVENT(pages_in_use);
 DEFINE_NFSD_READ_DIO_EVENT(not_last_op);
+DEFINE_NFSD_READ_DIO_EVENT(past_max);
 
 DECLARE_EVENT_CLASS(nfsd_err_class,
 	TP_PROTO(struct svc_rqst *rqstp,
