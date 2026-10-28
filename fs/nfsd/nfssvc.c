@@ -1055,6 +1055,7 @@ int nfsd_dispatch(struct svc_rqst *rqstp)
 {
 	struct nfsd_thread_local_info *ntli = rqstp->rq_private;
 	const struct svc_procedure *proc = rqstp->rq_procinfo;
+	struct nfsd_rtc_ctx *rtc = rqstp->rq_rtc_priv;
 	__be32 *statp = rqstp->rq_accept_statp;
 	struct nfsd_cacherep *rp;
 	unsigned int start, len;
@@ -1098,28 +1099,43 @@ int nfsd_dispatch(struct svc_rqst *rqstp)
 		goto out_dropit;
 
 	rp = NULL;
-	switch (nfsd_cache_lookup(rqstp, start, len, &rp)) {
-	case RC_DOIT:
-		break;
-	case RC_REPLY:
-		goto out_cached_reply;
-	case RC_DROPIT:
-		goto out_dropit;
+	if (rtc && rtc->drc_rp) {
+		/*
+		 * The thread rerun of an rtc WRITE attempt: that attempt's
+		 * lookup inserted this call's RC_INPROG entry, so a
+		 * retransmission meanwhile was dropped as for a thread.  A
+		 * second lookup would find that entry and drop the call.
+		 */
+		rp = rtc->drc_rp;
+		rtc->drc_rp = NULL;
+	} else {
+		switch (nfsd_cache_lookup(rqstp, start, len, &rp)) {
+		case RC_DOIT:
+			break;
+		case RC_REPLY:
+			goto out_cached_reply;
+		case RC_DROPIT:
+			goto out_dropit;
+		}
 	}
 
 	nfs_reply = xdr_inline_decode(&rqstp->rq_res_stream, 0);
 	*statp = proc->pc_func(rqstp);
 	if (test_bit(RQ_RTC_ASYNC, &rqstp->rq_flags)) {
-		struct nfsd_rtc_ctx *c = rqstp->rq_rtc_priv;
-
 		/* nfsd_rtc_dispatch_finish() completes it. */
-		c->rp = rp;
-		c->nfs_reply = nfs_reply;
+		rtc->rp = rp;
+		rtc->nfs_reply = nfs_reply;
 		return 1;
 	}
-	/* An rtc miss reruns on a thread: no reply, no cache entry. */
-	if (test_bit(RQ_DROPME, &rqstp->rq_flags) ||
-	    test_bit(RQ_RTC_MISS, &rqstp->rq_flags))
+	/*
+	 * An rtc miss reruns on a thread: no reply.  A cached call's
+	 * (WRITE's) in-progress entry stays for the rerun.
+	 */
+	if (test_bit(RQ_RTC_MISS, &rqstp->rq_flags)) {
+		rtc->drc_rp = rp;
+		goto out_dropit;
+	}
+	if (test_bit(RQ_DROPME, &rqstp->rq_flags))
 		goto out_update_drop;
 
 	if (!proc->pc_encode(rqstp, &rqstp->rq_res_stream))
@@ -1162,7 +1178,14 @@ int nfsd_rtc_dispatch_finish(struct svc_rqst *rqstp, bool abandon)
 	const struct svc_procedure *proc = rqstp->rq_procinfo;
 	struct nfsd_rtc_ctx *c = rqstp->rq_rtc_priv;
 
-	if (abandon || test_bit(RQ_DROPME, &rqstp->rq_flags)) {
+	if (abandon) {
+		/* The rerun on a thread keeps the in-progress DRC entry. */
+		c->drc_rp = c->rp;
+		c->rp = NULL;
+		nfsd_status_counter_set_idle(rqstp);
+		return 0;
+	}
+	if (test_bit(RQ_DROPME, &rqstp->rq_flags)) {
 		nfsd_cache_update(rqstp, c->rp, RC_NOCACHE, NULL);
 		nfsd_status_counter_set_idle(rqstp);
 		return 0;

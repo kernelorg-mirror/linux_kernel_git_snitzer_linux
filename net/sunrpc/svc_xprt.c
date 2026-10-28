@@ -1155,6 +1155,7 @@ void svc_rtc_stats_show(struct seq_file *m)
 		[SVC_RTC_FB_EAGAIN_SUBMIT] = "eagain_submit",
 		[SVC_RTC_FB_EAGAIN_COMPLETE] = "eagain_complete",
 		[SVC_RTC_FB_REGION_PARK] = "region_park",
+		[SVC_RTC_FB_WRITE_MODE] = "write_mode",
 	};
 	struct svc_rtc_stats s;
 	int i;
@@ -2270,8 +2271,16 @@ static void svc_rtc_handoff_drain(struct svc_serv *serv)
 		return;
 	for (i = 0; i < n; i++)
 		while ((r = lwq_dequeue(&serv->sv_pools[i].sp_rtc_rqsts,
-					struct svc_rtc_rqst, qnode)))
+					struct svc_rtc_rqst, qnode))) {
+			/*
+			 * Not rerun: let the hook drop what the attempt kept
+			 * for the rerun (nfsd: a WRITE's DRC entry).
+			 */
+			clear_bit(RQ_RTC_MISS, &r->rqstp->rq_flags);
+			if (serv->sv_rtc_pool && serv->sv_rtc_pool->ops->rqst_done)
+				serv->sv_rtc_pool->ops->rqst_done(r->rqstp);
 			svc_rtc_rqst_release(r);
+		}
 }
 
 /* After svc_process() or a completion on the work item. */

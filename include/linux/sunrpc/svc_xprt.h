@@ -143,6 +143,7 @@ enum svc_rtc_reason {
 	SVC_RTC_FB_EAGAIN_SUBMIT,	/* IOCB_NOWAIT submit said -EAGAIN */
 	SVC_RTC_FB_EAGAIN_COMPLETE,	/* async completion said -EAGAIN */
 	SVC_RTC_FB_REGION_PARK,		/* READ payload region would park */
+	SVC_RTC_FB_WRITE_MODE,		/* WRITE the thread path does differently */
 	SVC_RTC_NR_REASONS
 };
 
