@@ -8,6 +8,7 @@
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/clock.h>
+#include <kunit/visibility.h>
 #include <linux/errno.h>
 #include <linux/freezer.h>
 #include <linux/slab.h>
@@ -598,7 +599,7 @@ static bool svc_xprt_ready(struct svc_xprt *xprt)
  *
  * The caller then loads the queues it may take work from.
  */
-static void
+VISIBLE_IF_KUNIT void
 svc_pool_idle_add(struct svc_pool_ext *ext, struct svc_pool *pool,
 		  struct svc_rqst *rqstp)
 {
@@ -613,6 +614,7 @@ svc_pool_idle_add(struct svc_pool_ext *ext, struct svc_pool *pool,
 		smp_mb__after_atomic();
 	}
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_pool_idle_add);
 
 /**
  * svc_pool_idle_del - take an idle thread off its pool's idle list
@@ -624,7 +626,7 @@ svc_pool_idle_add(struct svc_pool_ext *ext, struct svc_pool *pool,
  *
  * Return: true if @rqstp was first and is now off the list.
  */
-static bool
+VISIBLE_IF_KUNIT bool
 svc_pool_idle_del(struct svc_pool_ext *ext, struct svc_pool *pool,
 		  struct svc_rqst *rqstp)
 {
@@ -645,6 +647,7 @@ svc_pool_idle_del(struct svc_pool_ext *ext, struct svc_pool *pool,
 		svc_pool_wake_idle_thread(pool);
 	return true;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_pool_idle_del);
 
 /*
  * Does @pool share its run with other pools, or reach other nodes?  An
@@ -694,8 +697,8 @@ static unsigned int svc_pool_next_far(const struct svc_pool_ext *ext,
  * the pool serving each place, so a window of threadless places still
  * reaches the threads that serve them.
  */
-static void svc_pool_far_window(unsigned int j, unsigned int n, unsigned int m,
-				 unsigned int *lo, unsigned int *hi)
+VISIBLE_IF_KUNIT void svc_pool_far_window(unsigned int j, unsigned int n, unsigned int m,
+					 unsigned int *lo, unsigned int *hi)
 {
 	unsigned long c, t, q;
 
@@ -714,6 +717,7 @@ static void svc_pool_far_window(unsigned int j, unsigned int n, unsigned int m,
 	q = (c + t - 1) / n;
 	*hi = min_t(unsigned long, (q - 1) / 2, m - 1);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_pool_far_window);
 
 /*
  * The places of another node's run of @fcount pools that the cross-node
@@ -845,7 +849,7 @@ static unsigned int svc_pool_idle_claim(struct svc_pool *pools,
  *
  * Returns the pool whose thread was claimed, or @self when none was.
  */
-static unsigned int
+VISIBLE_IF_KUNIT unsigned int
 svc_pool_wake_sibling(struct svc_pool *pools, struct svc_pool_ext *ext,
 		      unsigned int self)
 {
@@ -898,6 +902,7 @@ claimed:
 	percpu_counter_inc(&ext[self].sibling_wakes);
 	return peer;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_pool_wake_sibling);
 
 /* With @xprtp, dequeue a transport of @pool into it; else report work */
 static bool svc_pool_steal_one(struct svc_pool *pool, struct svc_xprt **xprtp)
@@ -981,12 +986,13 @@ svc_pool_steal_scan(struct svc_pool *pools, const struct svc_pool_ext *ext,
  *
  * Returns the nearest such pool with queued transports, or NULL.
  */
-static struct svc_pool *
+VISIBLE_IF_KUNIT struct svc_pool *
 svc_pool_steal_source(struct svc_pool *pools, const struct svc_pool_ext *ext,
 		      unsigned int self)
 {
 	return svc_pool_steal_scan(pools, ext, self, NULL, true);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_pool_steal_source);
 
 /**
  * svc_xprt_steal - take a transport from a sibling pool
@@ -997,7 +1003,7 @@ svc_pool_steal_source(struct svc_pool *pools, const struct svc_pool_ext *ext,
  *
  * Returns a referenced transport, or NULL.
  */
-static struct svc_xprt *
+VISIBLE_IF_KUNIT struct svc_xprt *
 svc_xprt_steal(struct svc_pool *pools, const struct svc_pool_ext *ext,
 	       unsigned int self, unsigned int *from)
 {
@@ -1009,14 +1015,15 @@ svc_xprt_steal(struct svc_pool *pools, const struct svc_pool_ext *ext,
 		*from = pool->sp_id;
 	return xprt;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_xprt_steal);
 
 /*
  * Queue @xprt on @pool, then claim an idle thread of @pool for it, or,
  * when that fails, an idle thread of a sibling pool, which steals it.
  */
-static void svc_pool_enqueue_xprt(struct svc_serv *serv,
-				  struct svc_pool *pool,
-				  struct svc_xprt *xprt)
+VISIBLE_IF_KUNIT void svc_pool_enqueue_xprt(struct svc_serv *serv,
+					    struct svc_pool *pool,
+					    struct svc_xprt *xprt)
 {
 	percpu_counter_inc(&pool->sp_sockets_queued);
 	/* Only trace_svc_xprt_dequeue() reads the enqueue time. */
@@ -1029,6 +1036,7 @@ static void svc_pool_enqueue_xprt(struct svc_serv *serv,
 		svc_pool_wake_sibling(serv->sv_pools, serv->sv_pool_ext,
 				      pool->sp_id);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_pool_enqueue_xprt);
 
 /**
  * svc_xprt_enqueue - Queue a transport on an idle nfsd thread
@@ -1396,8 +1404,8 @@ static bool svc_thread_may_sleep(struct svc_rqst *rqstp)
  * only the thread's own pool and its own RQ_WAKING bit; sibling queues
  * were checked once before the spin.  Returns true when work turned up.
  */
-static bool svc_thread_idle_spin(struct svc_rqst *rqstp,
-				 unsigned int max_us)
+VISIBLE_IF_KUNIT bool svc_thread_idle_spin(struct svc_rqst *rqstp,
+					   unsigned int max_us)
 {
 	unsigned int budget = svc_idle_spin_budget(rqstp->rq_spin_ns, max_us);
 	unsigned int cap = max_us * NSEC_PER_USEC;
@@ -1421,9 +1429,10 @@ static bool svc_thread_idle_spin(struct svc_rqst *rqstp,
 		rqstp->rq_spin_ns = svc_idle_spin_shrink(budget);
 	return false;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_thread_idle_spin);
 
 /* Claim another thread for the work a claim on this one stood for */
-static void svc_thread_pass_claim(struct svc_rqst *rqstp)
+VISIBLE_IF_KUNIT void svc_thread_pass_claim(struct svc_rqst *rqstp)
 {
 	struct svc_serv *serv = rqstp->rq_server;
 	struct svc_pool *pool = rqstp->rq_pool;
@@ -1433,6 +1442,7 @@ static void svc_thread_pass_claim(struct svc_rqst *rqstp)
 		svc_pool_wake_sibling(serv->sv_pools, serv->sv_pool_ext,
 				      pool->sp_id);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_thread_pass_claim);
 
 static bool svc_schedule_timeout(long timeo)
 {

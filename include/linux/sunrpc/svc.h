@@ -719,6 +719,42 @@ int		   svc_register(struct svc_serv *serv, struct net *net,
 void		   svc_wake_up(struct svc_serv *);
 void		   svc_reserve(struct svc_rqst *rqstp, int space);
 bool		   svc_pool_wake_idle_thread(struct svc_pool *pool);
+#if IS_ENABLED(CONFIG_KUNIT)
+unsigned int svc_pool_map_fill_percpu(unsigned int *to_pool,
+				      unsigned int *pool_to,
+				      const struct cpumask *cpus,
+				      const struct cpumask *possible,
+				      int (*node_of)(unsigned int cpu,
+						     const void *arg),
+				      const void *arg, unsigned int nr_nodes);
+void svc_pool_ext_layout(const struct svc_pool *pools,
+			 struct svc_pool_ext *ext, unsigned int npools);
+void svc_pool_split_init(struct svc_pool_split *s,
+			 const struct svc_pool_ext *ext, unsigned int npools,
+			 unsigned int total);
+unsigned int svc_pool_split_next(struct svc_pool_split *s,
+				 const struct svc_pool_ext *ext,
+				 unsigned int i);
+void svc_pool_far_window(unsigned int j, unsigned int n, unsigned int m,
+			 unsigned int *lo, unsigned int *hi);
+void svc_pool_idle_add(struct svc_pool_ext *ext, struct svc_pool *pool,
+		       struct svc_rqst *rqstp);
+bool svc_pool_idle_del(struct svc_pool_ext *ext, struct svc_pool *pool,
+		       struct svc_rqst *rqstp);
+unsigned int svc_pool_wake_sibling(struct svc_pool *pools,
+				   struct svc_pool_ext *ext,
+				   unsigned int self);
+struct svc_pool *svc_pool_steal_source(struct svc_pool *pools,
+				       const struct svc_pool_ext *ext,
+				       unsigned int self);
+struct svc_xprt *svc_xprt_steal(struct svc_pool *pools,
+				const struct svc_pool_ext *ext,
+				unsigned int self, unsigned int *from);
+bool svc_thread_idle_spin(struct svc_rqst *rqstp, unsigned int max_us);
+void svc_thread_pass_claim(struct svc_rqst *rqstp);
+void svc_pool_enqueue_xprt(struct svc_serv *serv, struct svc_pool *pool,
+			   struct svc_xprt *xprt);
+#endif
 struct svc_pool   *svc_pool_for_cpu(struct svc_serv *serv);
 unsigned int	   svc_serv_nrpools(const struct svc_serv *serv);
 char *		   svc_print_addr(struct svc_rqst *, char *, size_t);
