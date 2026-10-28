@@ -112,6 +112,17 @@ struct nvmet_ns {
 
 	bool			buffered_io;
 	bool			enabled;
+	/*
+	 * A transport may lend this namespace's I/O a bvec (see
+	 * nvmet_req_set_data_bvec()) whose segments are aligned so: their
+	 * offsets to @data_bvec_addr_mask, their lengths to
+	 * @data_bvec_len_mask, as direct I/O and our bio building need.
+	 */
+	bool			data_bvec_ok;
+	u32			data_bvec_addr_mask;
+	u32			data_bvec_len_mask;
+	/* file: submit a direct read IOCB_NOWAIT first */
+	bool			file_nowait_read;
 #define NVMET_NS_IO_LIVE	0
 	unsigned long		flags;
 	struct nvmet_subsys	*subsys;
@@ -433,6 +444,18 @@ struct nvmet_fabrics_ops {
 	void (*discovery_chg)(struct nvmet_port *port);
 	u8 (*get_mdts)(const struct nvmet_ctrl *ctrl);
 	u16 (*get_max_queue_size)(const struct nvmet_ctrl *ctrl);
+	/*
+	 * Optional: the backend has a write's data (nvmet_req_data_done()) and
+	 * will not read it again, so a transport that lent the data pages can
+	 * take them back before the response goes out.  The bdev and file
+	 * backends call it, lent or not, as they complete most writes, not
+	 * only those whose I/O was submitted; a transport must still take its
+	 * pages back when it frees a request it was not called for.  Called
+	 * at most once per request, from the backend's completion context,
+	 * which may be hard interrupt context (a bio's end_io): it must not
+	 * sleep.
+	 */
+	void (*data_done)(struct nvmet_req *req);
 
 	/* Operations mandatory for PCI target controllers */
 	u16 (*create_sq)(struct nvmet_ctrl *ctrl, u16 sqid, u16 cqid, u16 flags,
@@ -458,6 +481,15 @@ struct nvmet_req {
 	struct nvmet_ns		*ns;
 	struct scatterlist	*sg;
 	struct scatterlist	*metadata_sg;
+	/*
+	 * Data pages the transport lent in place of @sg (borrowed receive
+	 * pages, say): the backend does its I/O on them directly.  See
+	 * nvmet_req_set_data_bvec().
+	 */
+	struct bio_vec		*data_bvec;
+	unsigned int		data_bvec_cnt;
+	/* the parsed command's backend can take @data_bvec */
+	bool			data_bvec_ok;
 	struct bio_vec		inline_bvec[NVMET_MAX_INLINE_BIOVEC];
 	union {
 		struct {
@@ -465,6 +497,11 @@ struct nvmet_req {
 		} b;
 		struct {
 			bool			mpool_alloc;
+			/*
+			 * submitted IOCB_NOWAIT: a refused or short
+			 * completion retries it from the workqueue
+			 */
+			bool			nowait;
 			struct kiocb            iocb;
 			struct bio_vec          *bvec;
 			struct work_struct      work;
@@ -574,6 +611,9 @@ u32 nvmet_fabrics_io_cmd_data_len(struct nvmet_req *req);
 bool nvmet_req_init(struct nvmet_req *req, struct nvmet_sq *sq,
 		const struct nvmet_fabrics_ops *ops);
 void nvmet_req_uninit(struct nvmet_req *req);
+bool nvmet_req_set_data_bvec(struct nvmet_req *req, struct bio_vec *bvec,
+		unsigned int nr);
+void nvmet_req_data_done(struct nvmet_req *req);
 size_t nvmet_req_transfer_len(struct nvmet_req *req);
 bool nvmet_check_transfer_len(struct nvmet_req *req, size_t len);
 bool nvmet_check_data_len_lte(struct nvmet_req *req, size_t data_len);
@@ -884,10 +924,16 @@ static inline sector_t nvmet_lba_to_sect(struct nvmet_ns *ns, __le64 lba)
 	return le64_to_cpu(lba) << (ns->blksize_shift - SECTOR_SHIFT);
 }
 
+/* Data segments of @req: its lent bvecs, or else its sgl's entries. */
+static inline unsigned int nvmet_req_data_segs(struct nvmet_req *req)
+{
+	return req->data_bvec ? req->data_bvec_cnt : req->sg_cnt;
+}
+
 static inline bool nvmet_use_inline_bvec(struct nvmet_req *req)
 {
 	return req->transfer_len <= NVMET_MAX_INLINE_DATA_LEN &&
-	       req->sg_cnt <= NVMET_MAX_INLINE_BIOVEC;
+	       nvmet_req_data_segs(req) <= NVMET_MAX_INLINE_BIOVEC;
 }
 
 static inline void nvmet_req_bio_put(struct nvmet_req *req, struct bio *bio)
