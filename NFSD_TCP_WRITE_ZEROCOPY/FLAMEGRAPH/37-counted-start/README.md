@@ -38,7 +38,8 @@ Round 01 was profiled on 23 October ([01-loan64-baseline](../01-loan64-baseline/
 ## The runs
 
 - **Start** ([run78.sh](run78.sh), on build 494): four untraced loan64 runs at round 01's state. Each run is set up as every later round's runs are: one port, the four DPRP5s, `WARM=10 RUNTIME=30`, 64 WRITEs of budget, a trim and 120 s of rest first.
-- **Now** ([run79.sh](run79.sh), back on build 499): four runs at the current state, the same day, so the two ends are not separated by the drift between sessions.
+- **Now:** round 36's own counts at the current state (build 499, the same modules), not counted again. `run79.sh` was to count it a second time on the same day; it was stopped after its first run (Mike: round 36 already tested this state, and the drift between sessions is a couple of percent against the change).
+- **A profile** ([run80.sh](run80.sh), on build 499): one loan64 run with `twoport.sh`'s `PROFILE=1`, for round 38 to start from.
 - **Reported:** each run in the table the rounds use (GB/s, rings and nfsd µs tick-sampled, ring and nfsd cycles and instructions a WRITE, peak), the two ends set against each other, and round 01's tick-sampled µs (92.0 rings, 184.1 nfsd) against the replay's.
 
 ## The start, counted (build 494, 28 October)
@@ -56,7 +57,28 @@ Round 01 was profiled on 23 October ([01-loan64-baseline](../01-loan64-baseline/
 - **The replay is round 01's start.** Its tick-sampled µs (91.8 rings, 180.4 nfsd) are within the spread of round 01's own (92.0 and 184.1).
 - **The loans:** about 1.54M admitted a run and 0.85M to 1.06M denied, at 64 WRITEs of budget.
 - **The counted start:** 192.5k cycles a WRITE on the rings and 481.4k on nfsd. The cycles-per-instruction ratio is 0.57 on the rings and 1.06 on nfsd.
-- **For the other end:** round 36's four A runs on 499 counted about 137.6k ring cycles and 295k nfsd cycles a WRITE. Those runs are from another day, so `run79.sh` counts the current state again before the two ends are set against each other.
+- **For the other end:** round 36's four A runs on 499 counted about 137.6k ring cycles and 295k nfsd cycles a WRITE. They are the current state's figures, set against the start below.
+
+## Since round 01, counted (28 October)
+
+| cycles a WRITE | round 01's start (494) | now (499, round 36) | change |
+|---|---|---|---|
+| rings | 192.5k | 137.9k | −28% |
+| nfsd | 481.4k | 294.6k | −39% |
+
+- **Now** is round 36's counts: its A/B on 499 with the tip's sunrpc (`E80412A536ADD1E86B16F5A`), nfsd 499's own and xeu round 35's (round 35's B for the rings).
+- **`run79.sh`'s one run** (`$L/t2-r79/r79-1-loan64-now`, before it was stopped) agrees: 40.51 GB/s, rings 139.1k / 310.5k and nfsd 299.8k / 301.4k cycles / instructions a WRITE, 44.3 and 90.1 µs tick-sampled, no drive stepped down, peak 6438.
+- **The rate** is the drives' 40.3 to 40.5 GB/s at both ends. Both are loan64 on port a onto the four DPRP5s.
+
+## The profile for round 38 (run80, 28 October)
+
+[run80.sh](run80.sh), one loan64 run with `PROFILE=1` and `RUNTIME=55`: 40.44 GB/s, no drive stepped down, no WARNING, peak 6344, the settled setting at the end. Its counts over the window (rings 140.0k, nfsd 300.3k cycles a WRITE) are taken while perf runs and are not part of the table above. Runs are in `$L/t2-r80/`, perf data kept. Kept here: `perf-sym-*-r80.txt` (cycles by symbol, nfsd's CPUs 8-55 and the rings' 0-7,56-63), `perf-lmiss-*-r80.txt` (L3 read misses by symbol) and `perf-stat-*-r80.txt`.
+
+- **L3 read misses a WRITE:** about 7.3k on nfsd's CPUs and 2.9k on the rings' (8 s of `perf stat`, at 38.5k WRITEs a second).
+- **nfsd's misses, past idle and the scheduler:** `svc_tcp_rx_release_refs` 2.70%, `svc_tcp_rx_region_span` 1.99%, `svc_tcp_rx_skb_region_pages_after` 1.79%, `page_pool_put_netmem_bulk` 1.52%, `svc_tcp_rx_append_ref` 1.35%, `svc_tcp_rx_prefetch_pages` 1.14%. The release leads, as round 36 found. The region's span and pages-after tests are close behind and were not in round 38's scope.
+- **nfsd's cycles:** idle 28%, `finish_task_switch` 7.4%, `_raw_spin_unlock_irqrestore` 2.6%; the loan frames 1.1 to 1.6% each.
+- **The rings' misses** are GRO's (`inet_gro_receive`, `tcp_gro_receive`, `tcp4_gro_receive`, `__gro_receive_network_flush`, `gro_list_prepare`, `skb_gro_receive`, about 40% between them) and xeu's refill (7.65%) and poll (5.39%).
+- **For round 38:** the release's struct page misses stay first. Its scope could take in `svc_tcp_rx_region_span` and `svc_tcp_rx_skb_region_pages_after`, whose misses together are larger than the release's.
 
 ## The reboot
 
@@ -69,7 +91,7 @@ A reboot kills this Claude session. Its transcript is on the root file system, s
    - `for n in 0 1 2 3 4 5 6 7; do mount -o noatime /dev/nvme${n}n1 /hs/nvme$n; done` and `systemctl start nfs-server`;
    - in `xeu-rig/`: `./bringup.sh 32768 256`, then `EXP_RODATA=default EXP_DRC_MAX_ENTRIES=0 EXP_XEU_irq_msix_mask=absent EXP_XEU_rx_prefetch=absent ./settled.sh apply`. It must end in the settled setting with those named off. A BAD item stops the plan: it is looked at, not got past by hand.
    - then `../FLAMEGRAPH/37-counted-start/run78.sh`. It swaps in round 01's sunrpc and 494's own nfsd, and stops on anything off.
-4. **Back to 499:** `systemctl reboot`. Then the same mounts, `nfs-server`, `./bringup.sh 32768 256` and `./settled.sh apply`, which must end in "the settled setting"; then `run79.sh`.
+4. **Back to 499:** `systemctl reboot`. Then the same mounts, `nfs-server`, `./bringup.sh 32768 256` and `./settled.sh apply`, which must end in "the settled setting"; then `run80.sh`.
 
 **What 494 is left with:** its `updates/` holds round 01's sunrpc in place of round 17's, and no nfsd. Both of the earlier modules are kept in `t2-tipkernel/` (`r17-sunrpc.ko`, `821534936DB054AC699BF52`, and `r13b-nfsd.ko`). Nothing of 499's is changed.
 
