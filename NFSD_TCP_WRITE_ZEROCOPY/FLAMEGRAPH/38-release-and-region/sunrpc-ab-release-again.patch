@@ -1,0 +1,54 @@
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index 5daaefa9cf1d..cafa46002217 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -1914,8 +1914,30 @@ static __always_inline void svc_tcp_rx_prefetch_again(const void *p)
+ }
+ #endif
+ 
++/*
++ * FLAMEGRAPH round 38, A/B, not for keeping: the release's second request
++ * for a struct page.  0 none (prefetchw a batch ahead only, as before
++ * "SUNRPC: Fetch a released page's struct page a second time"), 1 as
++ * svc_tcp_rx_prefetch_again() is built (on arm64, PSTL2KEEP two batches
++ * ahead), 2 the build without CONFIG_ARM64's (prefetchw again 4 ahead).
++ */
++static int svc_tcp_rx_rel_again __read_mostly = 1;
++module_param(svc_tcp_rx_rel_again, int, 0644);
++
++static __always_inline void svc_tcp_rx_rel_again_fetch(const void *p,
++							int again)
++{
++	if (again == 2)
++		prefetchw(p);
++	else
++		svc_tcp_rx_prefetch_again(p);
++}
++
+ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+ {
++	int again = READ_ONCE(svc_tcp_rx_rel_again);
++	unsigned int far = again == 2 ? 4 :
++			   again ? SVC_TCP_RX_PREFETCH_AGAIN : 0;
+ 	netmem_ref batch[SVC_TCP_RX_PUT_BATCH];
+ 	netmem_ref run = 0;
+ 	unsigned int index, nr = 0;
+@@ -1938,12 +1960,13 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+ 	for (index = 0; index < min(state->count, SVC_TCP_RX_PUT_BATCH);
+ 	     index++)
+ 		prefetchw(state->bvec[index].bv_page);
+-	for (; index < min(state->count, SVC_TCP_RX_PREFETCH_AGAIN); index++)
+-		svc_tcp_rx_prefetch_again(state->bvec[index].bv_page);
++	for (; index < min(state->count, far); index++)
++		svc_tcp_rx_rel_again_fetch(state->bvec[index].bv_page, again);
+ 	for (index = 0; index < state->count; index++) {
+-		if (index + SVC_TCP_RX_PREFETCH_AGAIN < state->count)
+-			svc_tcp_rx_prefetch_again(state->bvec[index +
+-					SVC_TCP_RX_PREFETCH_AGAIN].bv_page);
++		if (far && index + far < state->count)
++			svc_tcp_rx_rel_again_fetch(state->bvec[index +
++							       far].bv_page,
++						   again);
+ 		if (index + SVC_TCP_RX_PUT_BATCH < state->count)
+ 			prefetchw(state->bvec[index +
+ 					      SVC_TCP_RX_PUT_BATCH].bv_page);
