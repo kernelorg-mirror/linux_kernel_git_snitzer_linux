@@ -32,12 +32,31 @@ Round 01 was profiled on 23 October ([01-loan64-baseline](../01-loan64-baseline/
   - `svc_tcp_rx_want_eighths` and the region stack are absent from 494's sunrpc and page_pool, which the audit already allows.
 - **`twoport.sh`** sets `SKB_DEFER_MAX=128` and `NOTRACK=absent` for each run, and passes them to its own audits.
 - **The driver** puts the netavark table back after each `settled.sh apply`, which deletes it.
+- **`EXP_NETAVARK=present`** (added on 494, 28 October) holds the audit to the netavark table with no container running. `twoport.sh` audits the host at rest before it changes anything, and that audit sees only what is exported, so the driver exports it and `EXP_NOTRACK=absent` to `twoport.sh`. The first launch, without them, was refused at that audit before any load (kept in `t2-r78/refused-1/`).
+- **`twoport.sh`'s audit after each run** reports `zc_notrack` back (its cleanup loads it while conntrack is on) and `skb_defer_max` 128 as BAD. Both are the run's own settings, reported after its window; the driver's next `settled.sh apply` puts them back.
 
 ## The runs
 
 - **Start** ([run78.sh](run78.sh), on build 494): four untraced loan64 runs at round 01's state. Each run is set up as every later round's runs are: one port, the four DPRP5s, `WARM=10 RUNTIME=30`, 64 WRITEs of budget, a trim and 120 s of rest first.
 - **Now** ([run79.sh](run79.sh), back on build 499): four runs at the current state, the same day, so the two ends are not separated by the drift between sessions.
 - **Reported:** each run in the table the rounds use (GB/s, rings and nfsd µs tick-sampled, ring and nfsd cycles and instructions a WRITE, peak), the two ends set against each other, and round 01's tick-sampled µs (92.0 rings, 184.1 nfsd) against the replay's.
+
+## The start, counted (build 494, 28 October)
+
+[run78.sh](run78.sh), four untraced loan64 runs at round 01's state, from 06:13 to 06:29. Runs are in `/var/tmp/zc-run-logs/t2-r78/`. Every run had no drive stepping down and no WARNING in dmesg. The end was the settled setting, with the four exceptions the driver names. All lines are in [cost-r78.txt](cost-r78.txt).
+
+| run | GB/s | rings µs (tick) | ring cycles / instructions a WRITE | nfsd µs (tick) | nfsd cycles / instructions | peak |
+|---|---|---|---|---|---|---|
+| r78-1 | 40.35 | 91.1 | 191.9k / 339.6k | 176.2 | 477.5k / 451.3k | 6372 |
+| r78-2 | 40.34 | 91.7 | 191.8k / 339.4k | 182.4 | 479.6k / 449.3k | 6542 |
+| r78-3 | 40.29 | 90.9 | 193.7k / 340.8k | 181.0 | 484.1k / 455.3k | 6527 |
+| r78-4 | 40.33 | 93.4 | 192.6k / 339.2k | 181.9 | 484.2k / 454.7k | 6591 |
+| **mean** | **40.33** | **91.8** | **192.5k / 339.8k** | **180.4** | **481.4k / 452.7k** | **6508** |
+
+- **The replay is round 01's start.** Its tick-sampled µs (91.8 rings, 180.4 nfsd) are within the spread of round 01's own (92.0 and 184.1).
+- **The loans:** about 1.54M admitted a run and 0.85M to 1.06M denied, at 64 WRITEs of budget.
+- **The counted start:** 192.5k cycles a WRITE on the rings and 481.4k on nfsd. The cycles-per-instruction ratio is 0.57 on the rings and 1.06 on nfsd.
+- **For the other end:** round 36's four A runs on 499 counted about 137.6k ring cycles and 295k nfsd cycles a WRITE. Those runs are from another day, so `run79.sh` counts the current state again before the two ends are set against each other.
 
 ## The reboot
 
