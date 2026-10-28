@@ -1,0 +1,17 @@
+01:00:52 r76-1-loan64-A | total 40.47 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1541832, denied 1612019, paused 27, overrun 0 | 1 no-step | r76-1-loan64-A ring 41.9 nfsd 89.6 us/W (38682 WRITEs/s) | ring 137.6k cycles 306.1k instructions, nfsd 295.8k cycles 307.5k instructions a WRITE | peak 6366
+01:00:52 r76-1-loan64-A | svc_tcp_rx_lean_append N
+01:05:04 r76-1-loan64-B | total 40.57 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1545432, denied 1630653, paused 18, overrun 0 | 1 no-step | r76-1-loan64-B ring 41.5 nfsd 89.3 us/W (38678 WRITEs/s) | ring 136.7k cycles 304.7k instructions, nfsd 294.1k cycles 303.5k instructions a WRITE | peak 6377
+01:05:04 r76-1-loan64-B | svc_tcp_rx_lean_append Y
+01:09:16 r76-2-loan64-A | total 40.48 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1542280, denied 1619397, paused 52, overrun 0 | 1 no-step | r76-2-loan64-A ring 42.1 nfsd 89.5 us/W (38666 WRITEs/s) | ring 137.4k cycles 306.3k instructions, nfsd 295.8k cycles 308.1k instructions a WRITE | peak 6589
+01:09:16 r76-2-loan64-A | svc_tcp_rx_lean_append N
+01:13:29 r76-2-loan64-B | total 40.45 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1541840, denied 1610246, paused 48, overrun 0 | 1 no-step | r76-2-loan64-B ring 43.9 nfsd 92.5 us/W (38551 WRITEs/s) | ring 137.9k cycles 305.6k instructions, nfsd 295.0k cycles 304.9k instructions a WRITE | peak 6324
+01:13:29 r76-2-loan64-B | svc_tcp_rx_lean_append Y
+01:17:41 r76-3-loan64-A | total 40.45 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1540864, denied 1612043, paused 46, overrun 0 | 1 no-step | r76-3-loan64-A ring 43.6 nfsd 89.3 us/W (38591 WRITEs/s) | ring 137.5k cycles 306.1k instructions, nfsd 294.9k cycles 307.2k instructions a WRITE | peak 6404
+01:17:41 r76-3-loan64-A | svc_tcp_rx_lean_append N
+01:21:53 r76-3-loan64-B | total 40.45 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1541192, denied 1616269, paused 64, overrun 0 | 1 no-step | r76-3-loan64-B ring 45.5 nfsd 92.1 us/W (38543 WRITEs/s) | ring 138.9k cycles 307.6k instructions, nfsd 293.8k cycles 304.9k instructions a WRITE | peak 6444
+01:21:53 r76-3-loan64-B | svc_tcp_rx_lean_append Y
+01:26:06 r76-4-loan64-A | total 40.56 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1545040, denied 1627227, paused 56, overrun 0 | 1 no-step | r76-4-loan64-A ring 42.3 nfsd 91.6 us/W (38662 WRITEs/s) | ring 137.7k cycles 306.6k instructions, nfsd 293.8k cycles 306.6k instructions a WRITE | peak 6461
+01:26:06 r76-4-loan64-A | svc_tcp_rx_lean_append N
+01:30:19 r76-4-loan64-B | total 40.50 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1543072, denied 1608858, paused 42, overrun 0 | 1 no-step | r76-4-loan64-B ring 44.6 nfsd 91.2 us/W (38634 WRITEs/s) | ring 137.6k cycles 306.0k instructions, nfsd 295.6k cycles 305.1k instructions a WRITE | peak 6264
+01:30:19 r76-4-loan64-B | svc_tcp_rx_lean_append Y
+01:30:32 end: sunrpc A06FE478658242A10E100FF, settled.sh audit rest: the settled setting; DONE

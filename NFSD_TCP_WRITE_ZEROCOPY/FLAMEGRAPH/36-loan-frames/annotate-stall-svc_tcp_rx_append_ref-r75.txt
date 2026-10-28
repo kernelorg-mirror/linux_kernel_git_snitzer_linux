@@ -1,0 +1,403 @@
+ Percent |	Source code & Disassembly of sunrpc.ko for stall_backend_mem (289 samples, percent: local period)
+-----------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3     Disassembly of section .text:
+         :
+         : 5     0000000000036988 <svc_tcp_rx_append_ref>:
+         : 6     */
+         : 7     static int svc_tcp_rx_append_ref(struct svc_tcp_rx_state *state,
+         : 8     struct page *page, unsigned int offset,
+         : 9     unsigned int len, bool borrowed,
+         : 10    bool page_pool, bool take_ref)
+         : 11    {
+    0.00 :   36988:  nop
+    0.00 :   3698c:  nop
+    0.00 :   36990:  paciasp
+    0.69 :   36994:  stp     x29, x30, [sp, #-96]!
+    0.69 :   36998:  mov     x29, sp
+    0.69 :   3699c:  stp     x19, x20, [sp, #16]
+    0.35 :   369a0:  mov     x19, x0
+         : 19    struct bio_vec *bvec;
+         : 20    u32 body_bytes;
+         :
+         : 22    if (WARN_ON_ONCE(state->mode != SVC_TCP_RX_MIXED || state->terminal) ||
+    0.00 :   369a4:  mov     w0, #0xff00ff                   // #16711935
+         : 24    {
+    0.00 :   369a8:  stp     x21, x22, [sp, #32]
+    0.00 :   369ac:  mov     w21, w2
+         : 27    if (WARN_ON_ONCE(state->mode != SVC_TCP_RX_MIXED || state->terminal) ||
+    0.00 :   369b0:  ldr     x2, [x19, #96]
+    0.35 :   369b4:  and     x2, x2, x0
+    0.00 :   369b8:  cmp     x2, #0x2
+    0.00 :   369bc:  b.ne    36c14 <svc_tcp_rx_append_ref+0x28c>  // b.any
+    0.35 :   369c0:  stp     x23, x24, [sp, #48]
+         : 33    !page || !len ||
+    0.00 :   369c4:  cmp     x1, #0x0
+    0.00 :   369c8:  mov     x24, x1
+    0.69 :   369cc:  mov     w20, w3
+    0.35 :   369d0:  ccmp    w3, #0x0, #0x4, ne      // ne = any
+    0.00 :   369d4:  b.eq    36d10 <svc_tcp_rx_append_ref+0x388>  // b.none
+    1.38 :   369d8:  and     w4, w4, #0xff
+         : 40    (page_pool && !borrowed) ||
+    0.00 :   369dc:  mov     w0, #0x3fff                     // #16383
+    0.00 :   369e0:  cmp     w21, w0
+    0.00 :   369e4:  eor     w3, w4, #0x1
+    0.00 :   369e8:  stp     x25, x26, [sp, #64]
+    0.35 :   369ec:  and     w25, w5, #0xff
+    0.00 :   369f0:  cset    w2, hi  // hi = pmore
+    1.04 :   369f4:  and     w3, w25, w3
+    0.35 :   369f8:  orr     w2, w2, w3
+    0.00 :   369fc:  tbnz    w2, #0, 36d00 <svc_tcp_rx_append_ref+0x378>
+         : 50    offset >= PAGE_SIZE || len > PAGE_SIZE - offset ||
+    0.35 :   36a00:  mov     x2, #0x4000                     // #16384
+    0.00 :   36a04:  sub     x2, x2, w21, uxtw
+    0.69 :   36a08:  cmp     x2, w20, uxtw
+    0.35 :   36a0c:  b.cc    36d00 <svc_tcp_rx_append_ref+0x378>  // b.lo, b.ul, b.last
+         : 55    check_add_overflow(state->body_bytes, len, &body_bytes))
+    2.77 :   36a10:  ldr     w2, [x19, #48]
+    0.35 :   36a14:  adds    w23, w2, w20
+    0.00 :   36a18:  b.cs    36d00 <svc_tcp_rx_append_ref+0x378>  // b.hs, b.nlast
+         : 59    return -EINVAL;
+         : 60    #if IS_ENABLED(CONFIG_KUNIT)
+         : 61    if (borrowed &&
+    0.35 :   36a1c:  and     w6, w6, #0xff
+    0.00 :   36a20:  and     w7, w4, #0x1
+    0.00 :   36a24:  tbnz    w4, #0, 36af4 <svc_tcp_rx_append_ref+0x16c>
+         : 65    if (!state->count)
+    1.04 :   36a28:  ldr     w2, [x19, #44]
+    0.00 :   36a2c:  cbz     w2, 36a5c <svc_tcp_rx_append_ref+0xd4>
+         : 68    last = &state->bvec[index];
+    0.00 :   36a30:  sub     w5, w2, #0x1
+         : 70    index = state->count - 1;
+    0.00 :   36a34:  sub     w1, w2, #0x1
+         : 72    /*
+         : 73    * Unlike the bitops with the '__' prefix above, this one *is* atomic,
+         : 74    * so `volatile` must always stay here with no cast-aways. See
+         : 75    * `Documentation/atomic_bitops.txt` for the details.
+         : 76    */
+         : 77    return 1UL & (addr[BIT_WORD(nr)] >> (nr & (BITS_PER_LONG-1)));
+    0.00 :   36a38:  ldr     x0, [x19, #8]
+    0.00 :   36a3c:  lsr     x3, x5, #6
+    0.00 :   36a40:  and     w8, w1, #0x3f
+    0.35 :   36a44:  lsl     x3, x3, #3
+    0.35 :   36a48:  ldr     x0, [x0, x3]
+    3.46 :   36a4c:  lsr     x0, x0, x1
+         : 84    last->bv_page == page && last->bv_offset + last->bv_len == offset;
+    2.08 :   36a50:  and     w0, w0, #0x1
+    0.35 :   36a54:  cmp     w4, w0
+    0.00 :   36a58:  b.eq    36b3c <svc_tcp_rx_append_ref+0x1b4>  // b.none
+         : 88    #endif
+         : 89    if (svc_tcp_rx_can_coalesce(state, page, offset, borrowed, page_pool)) {
+         : 90    bvec = &state->bvec[state->count - 1];
+         : 91    bvec->bv_len += len;
+         : 92    } else {
+         : 93    if (state->count == state->capacity)
+    0.35 :   36a5c:  ldr     w0, [x19, #40]
+    3.81 :   36a60:  cmp     w0, w2
+    0.00 :   36a64:  b.eq    36d1c <svc_tcp_rx_append_ref+0x394>  // b.none
+         : 97    return -ENOSPC;
+         : 98    bvec = &state->bvec[state->count];
+    0.35 :   36a68:  str     x27, [sp, #80]
+    0.00 :   36a6c:  ubfiz   x22, x2, #4, #32
+         : 101   if (borrowed && take_ref)
+    0.69 :   36a70:  cmp     w4, #0x0
+         : 103   bvec = &state->bvec[state->count];
+    0.35 :   36a74:  ldr     x26, [x19]
+         : 105   if (borrowed && take_ref)
+    0.00 :   36a78:  ccmp    w6, #0x0, #0x4, ne      // ne = any
+         : 107   bvec = &state->bvec[state->count];
+    0.00 :   36a7c:  add     x27, x26, x22
+         : 109   if (borrowed && take_ref)
+    0.00 :   36a80:  b.ne    36ba0 <svc_tcp_rx_append_ref+0x218>  // b.any
+         : 111   * @offset:      offset into the page
+         : 112   */
+         : 113   static inline void bvec_set_page(struct bio_vec *bv, struct page *page,
+         : 114   unsigned int len, unsigned int offset)
+         : 115   {
+         : 116   bv->bv_page = page;
+    0.00 :   36a84:  str     x24, [x26, x22]
+         : 118   bv->bv_len = len;
+    0.00 :   36a88:  stp     w20, w21, [x27, #8]
+         : 120   svc_tcp_rx_get_borrowed(page, page_pool);
+         : 121   bvec_set_page(bvec, page, len, offset);
+         : 122   if (borrowed) {
+    1.04 :   36a8c:  cbnz    w7, 36bb4 <svc_tcp_rx_append_ref+0x22c>
+         : 124   page != state->region_last) {
+         : 125   state->region_count++;
+         : 126   state->region_last = page;
+         : 127   }
+         : 128   }
+         : 129   if (page_pool)
+    0.00 :   36a90:  tbz     w25, #0, 36ab8 <svc_tcp_rx_append_ref+0x130>
+         : 131   __set_bit(state->count, state->page_pool);
+    0.00 :   36a94:  ldr     w1, [x19, #44]
+         : 133   unsigned long mask = BIT_MASK(nr);
+    0.00 :   36a98:  mov     x2, #0x1                        // #1
+         : 135   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.00 :   36a9c:  ldr     x3, [x19, #16]
+    0.00 :   36aa0:  lsr     w0, w1, #6
+         : 138   unsigned long mask = BIT_MASK(nr);
+    0.00 :   36aa4:  lsl     x2, x2, x1
+         : 140   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.00 :   36aa8:  lsl     x0, x0, #3
+         : 142   *p  |= mask;
+    0.00 :   36aac:  ldr     x1, [x3, x0]
+    0.00 :   36ab0:  orr     x1, x1, x2
+    0.00 :   36ab4:  str     x1, [x3, x0]
+         : 146   state->count++;
+    0.00 :   36ab8:  ldr     w0, [x19, #44]
+    0.00 :   36abc:  add     w0, w0, #0x1
+    0.00 :   36ac0:  stp     w0, w23, [x19, #44]
+         : 150   }
+         : 151   state->body_bytes = body_bytes;
+         : 152   if (borrowed) {
+    0.00 :   36ac4:  ldr     x27, [sp, #80]
+         : 154   state->borrowed_bytes += len;
+         : 155   if (page_pool)
+         : 156   state->page_pool_bytes += len;
+         : 157   } else {
+         : 158   state->copied_bytes += len;
+    0.00 :   36ac8:  ldr     w0, [x19, #60]
+    0.00 :   36acc:  add     w0, w0, w20
+    0.00 :   36ad0:  str     w0, [x19, #60]
+    0.35 :   36ad4:  ldp     x23, x24, [sp, #48]
+         : 163   }
+         : 164   return 0;
+    0.35 :   36ad8:  mov     w0, #0x0                        // #0
+    0.35 :   36adc:  ldp     x25, x26, [sp, #64]
+         : 167   }
+    1.38 :   36ae0:  ldp     x19, x20, [sp, #16]
+    2.08 :   36ae4:  ldp     x21, x22, [sp, #32]
+    1.04 :   36ae8:  ldp     x29, x30, [sp], #96
+    1.38 :   36aec:  autiasp
+    3.81 :   36af0:  ret
+         : 173   if (svc_tcp_rx_kunit_fault != fault)
+    0.00 :   36af4:  adrp    x1, 0 <rpc_default_callback-0x8>
+    0.00 :   36af8:  add     x2, x1, #0x0
+    0.00 :   36afc:  ldr     w0, [x1]
+    1.04 :   36b00:  cmp     w0, #0x1
+    0.00 :   36b04:  b.ne    36a28 <svc_tcp_rx_append_ref+0xa0>  // b.any
+         : 179   if (svc_tcp_rx_kunit_fault_skip) {
+    0.00 :   36b08:  ldr     w0, [x2, #4]
+    0.00 :   36b0c:  cbnz    w0, 36c9c <svc_tcp_rx_append_ref+0x314>
+    0.00 :   36b10:  ldp     w4, w3, [x19, #72]
+         : 183   svc_tcp_rx_kunit_fault = SVC_TCP_RX_KUNIT_FAULT_NONE;
+    0.00 :   36b14:  str     wzr, [x1]
+         : 185   svc_tcp_rx_kunit_fault_released = state->refs_released;
+    0.00 :   36b18:  stp     w4, w3, [x2, #8]
+         : 187   return -EIO;
+    0.00 :   36b1c:  mov     w0, #0xfffffffb                 // #-5
+    0.00 :   36b20:  ldp     x23, x24, [sp, #48]
+    0.00 :   36b24:  ldp     x25, x26, [sp, #64]
+         : 191   }
+    0.00 :   36b28:  ldp     x19, x20, [sp, #16]
+    0.00 :   36b2c:  ldp     x21, x22, [sp, #32]
+    0.00 :   36b30:  ldp     x29, x30, [sp], #96
+    0.00 :   36b34:  autiasp
+    0.00 :   36b38:  ret
+         : 197   return 1UL & (addr[BIT_WORD(nr)] >> (nr & (BITS_PER_LONG-1)));
+    3.11 :   36b3c:  ldr     x0, [x19, #16]
+    0.00 :   36b40:  ldr     x0, [x0, x3]
+    1.73 :   36b44:  lsr     x0, x0, x8
+         : 201   return test_bit(index, state->borrowed) == borrowed &&
+    0.69 :   36b48:  and     w0, w0, #0x1
+    0.35 :   36b4c:  cmp     w25, w0
+    0.35 :   36b50:  b.ne    36a5c <svc_tcp_rx_append_ref+0xd4>  // b.any
+         : 205   last = &state->bvec[index];
+    1.38 :   36b54:  ldr     x0, [x19]
+    0.00 :   36b58:  lsl     x1, x5, #4
+         : 208   test_bit(index, state->page_pool) == page_pool &&
+    0.35 :   36b5c:  ldr     x1, [x0, x1]
+         : 210   last = &state->bvec[index];
+    2.08 :   36b60:  add     x5, x0, x5, lsl #4
+         : 212   test_bit(index, state->page_pool) == page_pool &&
+    0.69 :   36b64:  cmp     x24, x1
+    0.00 :   36b68:  b.ne    36a5c <svc_tcp_rx_append_ref+0xd4>  // b.any
+         : 215   last->bv_page == page && last->bv_offset + last->bv_len == offset;
+    0.00 :   36b6c:  ldp     w0, w1, [x5, #8]
+    0.69 :   36b70:  add     w1, w0, w1
+    0.00 :   36b74:  cmp     w21, w1
+    0.00 :   36b78:  b.ne    36a5c <svc_tcp_rx_append_ref+0xd4>  // b.any
+         : 220   bvec->bv_len += len;
+    0.00 :   36b7c:  add     w0, w20, w0
+    0.00 :   36b80:  str     w0, [x5, #8]
+         : 223   state->body_bytes = body_bytes;
+    0.00 :   36b84:  str     w23, [x19, #48]
+         : 225   if (borrowed) {
+    0.00 :   36b88:  cbz     w7, 36ac8 <svc_tcp_rx_append_ref+0x140>
+         : 227   state->borrowed_bytes += len;
+    0.00 :   36b8c:  ldr     w0, [x19, #56]
+    0.00 :   36b90:  add     w0, w0, w20
+    0.00 :   36b94:  str     w0, [x19, #56]
+         : 231   if (page_pool)
+    0.00 :   36b98:  tbnz    w25, #0, 36c8c <svc_tcp_rx_append_ref+0x304>
+    0.00 :   36b9c:  b       36ad4 <svc_tcp_rx_append_ref+0x14c>
+         : 234   svc_tcp_rx_get_borrowed(page, page_pool);
+    0.35 :   36ba0:  mov     w1, w25
+    0.00 :   36ba4:  mov     x0, x24
+    0.00 :   36ba8:  bl      368c8 <svc_tcp_rx_get_borrowed>
+         : 238   bv->bv_page = page;
+    0.00 :   36bac:  str     x24, [x26, x22]
+         : 240   bv->bv_len = len;
+    0.00 :   36bb0:  stp     w20, w21, [x27, #8]
+         : 242   __set_bit(state->count, state->borrowed);
+    0.35 :   36bb4:  ldr     w1, [x19, #44]
+         : 244   unsigned long mask = BIT_MASK(nr);
+    0.35 :   36bb8:  mov     x4, #0x1                        // #1
+         : 246   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.35 :   36bbc:  ldr     x3, [x19, #8]
+    0.35 :   36bc0:  lsr     w0, w1, #6
+         : 249   unsigned long mask = BIT_MASK(nr);
+    0.00 :   36bc4:  lsl     x1, x4, x1
+         : 251   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.35 :   36bc8:  lsl     x0, x0, #3
+         : 253   *p  |= mask;
+    0.00 :   36bcc:  ldr     x2, [x3, x0]
+    7.96 :   36bd0:  orr     x1, x2, x1
+    0.69 :   36bd4:  str     x1, [x3, x0]
+         : 257   state->refs_acquired++;
+    0.35 :   36bd8:  ldr     w1, [x19, #72]
+         : 259   state->borrowed_count++;
+    0.00 :   36bdc:  ldr     w0, [x19, #80]
+         : 261   state->refs_acquired++;
+    0.00 :   36be0:  add     w1, w1, #0x1
+    0.00 :   36be4:  str     w1, [x19, #72]
+         : 264   state->borrowed_count++;
+    0.35 :   36be8:  add     w0, w0, #0x1
+    0.35 :   36bec:  str     w0, [x19, #80]
+         : 267   if (page_pool && page_pool_page_in_rx_region(page) &&
+    0.69 :   36bf0:  tbnz    w25, #0, 36c30 <svc_tcp_rx_append_ref+0x2a8>
+         : 269   state->count++;
+    0.00 :   36bf4:  ldr     w1, [x19, #44]
+         : 271   state->borrowed_bytes += len;
+    0.00 :   36bf8:  ldr     w0, [x19, #56]
+         : 273   state->count++;
+    0.00 :   36bfc:  add     w1, w1, #0x1
+    0.00 :   36c00:  stp     w1, w23, [x19, #44]
+         : 276   state->borrowed_bytes += len;
+    0.00 :   36c04:  add     w0, w0, w20
+    0.00 :   36c08:  str     w0, [x19, #56]
+         : 279   if (page_pool)
+    0.00 :   36c0c:  ldr     x27, [sp, #80]
+    0.00 :   36c10:  b       36ad4 <svc_tcp_rx_append_ref+0x14c>
+         : 282   if (WARN_ON_ONCE(state->mode != SVC_TCP_RX_MIXED || state->terminal) ||
+    0.00 :   36c14:  brk     #0x800
+         : 284   return -EINVAL;
+    0.00 :   36c18:  mov     w0, #0xffffffea                 // #-22
+         : 286   }
+    0.00 :   36c1c:  ldp     x19, x20, [sp, #16]
+    0.00 :   36c20:  ldp     x21, x22, [sp, #32]
+    0.00 :   36c24:  ldp     x29, x30, [sp], #96
+    0.00 :   36c28:  autiasp
+    0.00 :   36c2c:  ret
+         : 292   #define PP_MAGIC_MASK ~(PP_DMA_INDEX_MASK | 0x3UL)
+         :
+         : 294   #ifdef CONFIG_PAGE_POOL
+         : 295   static inline bool page_pool_page_is_pp(const struct page *page)
+         : 296   {
+         : 297   return (page->pp_magic & PP_MAGIC_MASK) == PP_SIGNATURE;
+    0.69 :   36c30:  ldr     x0, [x24, #8]
+         : 299   * a pool allocates only from the region, so its pages are region pages,
+         : 300   * wherever they are while the pool owns them (in a ring, an skb or a loan).
+         : 301   */
+         : 302   static inline bool page_pool_page_in_rx_region(struct page *page)
+         : 303   {
+         : 304   return page_pool_page_is_pp(page) &&
+    4.50 :   36c34:  mov     x1, #0x40                       // #64
+    2.77 :   36c38:  movk    x1, #0xdead, lsl #48
+    0.00 :   36c3c:  and     x0, x0, #0xfffffffffffffffc
+    1.04 :   36c40:  and     x0, x0, #0xffffff800000007f
+    0.35 :   36c44:  cmp     x0, x1
+    0.00 :   36c48:  b.eq    36ca8 <svc_tcp_rx_append_ref+0x320>  // b.none
+         : 311   __set_bit(state->count, state->page_pool);
+    0.35 :   36c4c:  ldr     w1, [x19, #44]
+         : 313   unsigned long mask = BIT_MASK(nr);
+    0.69 :   36c50:  mov     x2, #0x1                        // #1
+         : 315   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.35 :   36c54:  ldr     x3, [x19, #16]
+    0.35 :   36c58:  lsr     w0, w1, #6
+         : 318   unsigned long mask = BIT_MASK(nr);
+    0.00 :   36c5c:  lsl     x2, x2, x1
+         : 320   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.00 :   36c60:  lsl     x0, x0, #3
+         : 322   *p  |= mask;
+    0.00 :   36c64:  ldr     x1, [x3, x0]
+    0.00 :   36c68:  orr     x1, x1, x2
+    0.00 :   36c6c:  str     x1, [x3, x0]
+         : 326   state->count++;
+    0.00 :   36c70:  ldr     w0, [x19, #44]
+    0.35 :   36c74:  add     w0, w0, #0x1
+         : 329   state->borrowed_bytes += len;
+    0.35 :   36c78:  ldr     w1, [x19, #56]
+         : 331   state->count++;
+    0.69 :   36c7c:  stp     w0, w23, [x19, #44]
+         : 333   state->borrowed_bytes += len;
+    0.35 :   36c80:  add     w0, w1, w20
+    0.00 :   36c84:  str     w0, [x19, #56]
+         : 336   if (page_pool)
+    0.00 :   36c88:  ldr     x27, [sp, #80]
+         : 338   state->page_pool_bytes += len;
+    0.00 :   36c8c:  ldr     w0, [x19, #68]
+    1.04 :   36c90:  add     w0, w0, w20
+    1.04 :   36c94:  str     w0, [x19, #68]
+    0.69 :   36c98:  b       36ad4 <svc_tcp_rx_append_ref+0x14c>
+         : 343   svc_tcp_rx_kunit_fault_skip--;
+    0.00 :   36c9c:  sub     w0, w0, #0x1
+    0.00 :   36ca0:  str     w0, [x2, #4]
+         : 346   return false;
+    0.00 :   36ca4:  b       36a28 <svc_tcp_rx_append_ref+0xa0>
+         : 348   * Return: the pointer to struct netmem_desc * regardless of its
+         : 349   * underlying type.
+         : 350   */
+         : 351   static inline struct netmem_desc *netmem_to_nmdesc(netmem_ref netmem)
+         : 352   {
+         : 353   void *p = (void *)((__force unsigned long)netmem & ~NET_IOV);
+    2.42 :   36ca8:  and     x0, x24, #0xfffffffffffffffe
+         : 355   netmem_get_pp(page_to_netmem(page))->rx_region;
+    0.35 :   36cac:  ldr     x0, [x0, #16]
+         : 357   return page_pool_page_is_pp(page) &&
+    6.92 :   36cb0:  ldr     x0, [x0, #968]
+    2.77 :   36cb4:  cbz     x0, 36c4c <svc_tcp_rx_append_ref+0x2c4>
+         : 360   if (page_pool && page_pool_page_in_rx_region(page) &&
+    2.08 :   36cb8:  ldr     x0, [x19, #136]
+    1.38 :   36cbc:  cmp     x0, x24
+    0.00 :   36cc0:  b.eq    36c4c <svc_tcp_rx_append_ref+0x2c4>  // b.none
+         : 364   __set_bit(state->count, state->page_pool);
+    0.00 :   36cc4:  ldr     w3, [x19, #44]
+         : 366   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.35 :   36cc8:  ldr     x2, [x19, #16]
+         : 368   state->region_last = page;
+    0.00 :   36ccc:  str     x24, [x19, #136]
+    0.00 :   36cd0:  lsr     w0, w3, #6
+         : 371   state->region_count++;
+    0.35 :   36cd4:  ldr     w1, [x19, #132]
+         : 373   unsigned long mask = BIT_MASK(nr);
+    0.00 :   36cd8:  lsl     x4, x4, x3
+         : 375   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.00 :   36cdc:  lsl     x0, x0, #3
+    0.35 :   36ce0:  add     w1, w1, #0x1
+    0.35 :   36ce4:  str     w1, [x19, #132]
+         : 379   *p  |= mask;
+    0.35 :   36ce8:  ldr     x1, [x2, x0]
+    3.81 :   36cec:  orr     x1, x1, x4
+    0.35 :   36cf0:  str     x1, [x2, x0]
+         : 383   state->count++;
+    0.35 :   36cf4:  ldr     w0, [x19, #44]
+    0.35 :   36cf8:  add     w0, w0, #0x1
+         : 386   if (borrowed) {
+    0.00 :   36cfc:  b       36c78 <svc_tcp_rx_append_ref+0x2f0>
+    0.00 :   36d00:  ldp     x23, x24, [sp, #48]
+         : 389   return -EINVAL;
+    0.00 :   36d04:  mov     w0, #0xffffffea                 // #-22
+    0.00 :   36d08:  ldp     x25, x26, [sp, #64]
+    0.00 :   36d0c:  b       36c1c <svc_tcp_rx_append_ref+0x294>
+    0.00 :   36d10:  ldp     x23, x24, [sp, #48]
+    0.00 :   36d14:  mov     w0, #0xffffffea                 // #-22
+    0.00 :   36d18:  b       36c1c <svc_tcp_rx_append_ref+0x294>
+    0.00 :   36d1c:  ldp     x23, x24, [sp, #48]
+         : 397   return -ENOSPC;
+    0.00 :   36d20:  mov     w0, #0xffffffe4                 // #-28
+    0.00 :   36d24:  ldp     x25, x26, [sp, #64]
+    0.00 :   36d28:  b       36b28 <svc_tcp_rx_append_ref+0x1a0>

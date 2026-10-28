@@ -1,0 +1,3 @@
+cycles 197051
+stall_backend_mem 93430
+l1d_cache_refill_rd 235995
