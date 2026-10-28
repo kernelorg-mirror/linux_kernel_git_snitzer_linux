@@ -228,6 +228,31 @@ static void rx_loan_put_run(netmem_ref *batch, unsigned int *nr,
 }
 
 /*
+ * A prefetch is a hint the CPU may drop, and when the release's misses are
+ * many, it drops some: a page whose struct page is fetched only a batch
+ * ahead still misses at its drop.  So each is fetched a second time.  On
+ * arm64 the second request goes ahead of the first, into the L2 only and
+ * two batches ahead, and the prefetch a batch ahead finds it there.  Where
+ * there is no such prefetch, the page is prefetched again a few entries
+ * before its drop.
+ */
+#ifdef CONFIG_ARM64
+#define RX_LOAN_PREFETCH_AGAIN	(2 * RX_LOAN_PUT_BATCH)
+
+static __always_inline void rx_loan_prefetch_again(const void *p)
+{
+	asm volatile("prfm pstl2keep, %a0" : : "p" (p));
+}
+#else
+#define RX_LOAN_PREFETCH_AGAIN	4
+
+static __always_inline void rx_loan_prefetch_again(const void *p)
+{
+	prefetchw(p);
+}
+#endif
+
+/*
  * Return every borrowed entry of @t, whose references the caller checked
  * with rx_loan_table_refs_valid(): its bytes stay counted.  -EINVAL if
  * the table does not come out empty.
@@ -251,11 +276,16 @@ int rx_loan_table_release(struct rx_loan_table *t)
 	 * the record was written out, and is read and written again to drop
 	 * its references.  Fetch each a batch of entries ahead of its drop,
 	 * so that a batch's misses are in flight together and not taken one
-	 * page after another.
+	 * page after another, and again as rx_loan_prefetch_again() says.
 	 */
 	for (index = 0; index < min(t->count, RX_LOAN_PUT_BATCH); index++)
 		prefetchw(t->bvec[index].bv_page);
+	for (; index < min(t->count, RX_LOAN_PREFETCH_AGAIN); index++)
+		rx_loan_prefetch_again(t->bvec[index].bv_page);
 	for (index = 0; index < t->count; index++) {
+		if (index + RX_LOAN_PREFETCH_AGAIN < t->count)
+			rx_loan_prefetch_again(t->bvec[index +
+					RX_LOAN_PREFETCH_AGAIN].bv_page);
 		if (index + RX_LOAN_PUT_BATCH < t->count)
 			prefetchw(t->bvec[index + RX_LOAN_PUT_BATCH].bv_page);
 		if (!test_bit(index, t->borrowed))
