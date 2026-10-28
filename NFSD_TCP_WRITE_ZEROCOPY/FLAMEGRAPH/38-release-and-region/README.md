@@ -2,7 +2,7 @@
 
 **The plan (Mike, 28 October):** the release's struct page misses, which round 36 found (12% of its first touches at 64 ns or more despite round 24's prefetch a batch ahead), with the region count's two frames, `svc_tcp_rx_region_span` and `svc_tcp_rx_skb_region_pages_after`, which round 37's profile put close behind the release in nfsd's L3 misses.
 
-All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F0C341E86E266D5FDF2ADF`), xeu round 35's (`63631721F8B149913C0DC19`), the settled setting, one loan64 run a time on port a onto the four DPRP5s. The tip's sunrpc is `E80412A536ADD1E86B16F5A` (round 36's). Runs are in `/var/tmp/zc-run-logs/t2-r81/` to `t2-r87/`.
+All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F0C341E86E266D5FDF2ADF`), xeu round 35's (`63631721F8B149913C0DC19`), the settled setting, one loan64 run a time on port a onto the four DPRP5s. The tip's sunrpc is `E80412A536ADD1E86B16F5A` (round 36's). Runs are in `/var/tmp/zc-run-logs/t2-r81/` to `t2-r88/`.
 
 ## 1. The look (r81)
 
@@ -203,7 +203,7 @@ The drives' per-second figures start with the timed load (`drvsample.py`), which
 
 **The fix:** `timed_load` in `xeu-rig/common.sh`, put in after r87 (`twoport.sh` reads `common.sh` at each run). It waits for the run's `drives-sec.tsv`, which `twoport.sh` starts with the timed load (one older than the call belongs to another run), then the warm-up, 10 s by default. A look calls `timed_load $O/$t` in place of the wait for a WRITE rate. The scripts of r81 and r83 to r86 are left as they ran.
 
-## 9. The second request, committed, and the A/B of its fallback (r88, to run)
+## 9. The second request, committed, and the A/B of its fallback (r88)
 
 **"SUNRPC: Fetch a released page's struct page a second time"** (code, at the tip) has `svc_tcp_rx_release_refs()` ask for each struct page twice:
 - **With `CONFIG_ARM64`:** r86's and r87's two stages. A PSTL2KEEP two batches ahead (`SVC_TCP_RX_PREFETCH_AGAIN` 32), then the prefetchw a batch ahead finds the line in the L2.
@@ -227,3 +227,15 @@ It was built in `/dev/shm`, and only `sunrpc.ko` and `build.log` are kept, in `/
 **Decided (Mike, 28 October):** the arm64 branch of "SUNRPC: Fetch a released page's struct page a second time" is kept, on r87: about 3.5k nfsd cycles a WRITE less in all four pairs, with the rate, the ring and the region's peak unchanged. Its `#else` branch (prefetchw again 4 ahead) is decided after run88.
 
 **Decided (Mike, 28 October), the `#else` branch is kept as committed.** arm64 hardware cannot judge it: how readily a core drops prefetches, and what a second one costs, are the core's own, so run88's measure on Neoverse N2 says little about an x86 server. run88 runs to its end, so that the rig comes back to the tip's sunrpc and its settled setting, and its result is kept as a record, not as a decision.
+
+**run88, as a record** ([run88.out](run88.out)): eight runs, every one with its flows placed (25% a ring), no ring drops, no drive stepping down, and none in a puppet run (1-B waited 18 s for one). B is prefetchw again 4 ahead (the `#else` branch), A none.
+
+| B − A, four pairs | by pair | mean |
+|---|---|---|
+| nfsd cycles a WRITE | −0.3k, +0.3k, −0.8k, −0.2k | −0.25k ± 0.23 |
+| nfsd instructions a WRITE | +1.4k, +2.0k, −0.6k, +1.4k | +1.05k ± 0.57 |
+| ring cycles a WRITE | +0.3k, −0.2k, +0.4k, +0.1k | +0.15k ± 0.13 |
+| GB/s | −0.02, −0.04, +0.02, −0.02 | −0.01 |
+| region peak | −103, +47, −158, −144 | −90 ± 47 |
+
+On Neoverse N2, prefetching twice takes about 1k more instructions and saves nothing measurable. The two stages saved about 3.5k cycles in r87. This says nothing about the cores the `#else` branch is built for, as decided above.
