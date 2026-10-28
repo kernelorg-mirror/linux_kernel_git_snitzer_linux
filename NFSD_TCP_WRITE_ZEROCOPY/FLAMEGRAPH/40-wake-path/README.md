@@ -142,3 +142,19 @@ Each woken thread's `svc_recv()` pass after the wake (`wakeempty.bt`, 433,463 WR
 - **What they cost.** A sleep and a wake on an idle CPU is roughly 6k nfsd cycles, by the share of nfsd's busy cycles the profile gives the switch and the wake (about a tenth) over 3.6 round trips a WRITE: a rough estimate. At 0.49 a WRITE that is about 3k cycles a WRITE, about 1% of nfsd's. The passes that go round without sleeping cost a pass each, not a switch.
 
 **So:** the most a change to who is woken could save is about 1% of nfsd's cycles, and round 18 showed it can cost latency. The race is lost because the woken thread takes 4–8 us to arrive, if that figure holds untraced. A faster wake would cut the empty wakes and shorten each WRITE's path. A smaller wake would only cut the empty wakes.
+
+## 3. How long a woken thread takes to run (r94, to run)
+
+Section 1's 4–8 us, from `sched_waking` to running, came from a trace with nine probes on every switch. `lat.bt` (L0) gave 0–2 us for a thread woken to running at iodepth 1, over a different span. This step measures the wake with as little tracing as possible, and in two parts.
+
+- **[`xeu-rig/wakelat.bt`](../../xeu-rig/wakelat.bt)**, three tracepoints, filtered to nfsd:
+  - **deliver:** `sched_waking` on the waker's CPU to `sched_wakeup`, where the thread is put on its runqueue. When the thread's CPU is another, the wake is queued to it with an IPI, so this is the IPI and that CPU's way out of WFI ("by IPI"); otherwise the waker enqueues it itself ("by waker"). Split by whether a ring CPU or an nfsd CPU woke it.
+  - **schedule:** `sched_wakeup` to the switch that runs it.
+  - **total:** the two together, as a histogram and a mean.
+- **[`xeu-rig/rundelay.sh`](../../xeu-rig/rundelay.sh)**, untraced: every nfsd thread's `run_delay` and run count from `/proc/PID/schedstat` over a window, which gives the mean wait on a runqueue. A thread woken by IPI is enqueued only once the IPI is taken, so `run_delay` is wakelat's "schedule", not its "total". Run beside the trace, it shows what the trace adds to that part.
+
+[run94.sh](run94.sh): at the current state with no module swapped, two runs:
+- **`r94-load`:** loan64 at full load.
+- **`r94-qd1`:** `lat.sh`'s load (4 writers, iodepth 1, 1 MiB).
+
+In each, from 10 s into the timed load, it runs 8 s of `rundelay.sh` untraced, then 8 s of `wakelat.bt` with `rundelay.sh` beside it. About 9 minutes.

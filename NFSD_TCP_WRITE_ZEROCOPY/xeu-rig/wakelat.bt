@@ -1,0 +1,41 @@
+// wakelat.bt: how long a woken nfsd thread takes to run, in two parts
+// (FLAMEGRAPH round 40).  Three tracepoints only, filtered to nfsd:
+//   deliver  sched_waking (the waker's CPU) to sched_wakeup (where the
+//            thread is put on its runqueue).  When the thread's CPU is
+//            another, the wake is queued to it and an IPI sent, so this is
+//            the IPI and the target's way out of WFI ("by IPI"); when the
+//            waker enqueues it itself it is near nothing ("by waker").
+//   schedule sched_wakeup to the sched_switch that runs it: what the
+//            kernel's run_delay counts.
+//   total    the two together, sched_waking to running.
+// Each also as a mean (@*_avg, ns).  Run for 8 s.
+config = { max_map_keys = 65536 }
+
+tracepoint:sched:sched_waking /args.comm == "nfsd"/ {
+	@wk[args.pid] = nsecs;
+	@wcpu[args.pid] = cpu + 1;
+}
+
+tracepoint:sched:sched_wakeup /args.comm == "nfsd" && @wk[args.pid]/ {
+	$how = (@wcpu[args.pid] - 1 != cpu) ? "by IPI" : "by waker";
+	$d = (int64)(nsecs - @wk[args.pid]);
+	@deliver[$how, @wcpu[args.pid] <= 8 ? "ring" : "nfsd"] = hist($d);
+	@deliver_avg[$how, @wcpu[args.pid] <= 8 ? "ring" : "nfsd"] = avg($d);
+	@wu[args.pid] = nsecs;
+}
+
+tracepoint:sched:sched_switch /args.next_comm == "nfsd" && @wu[args.next_pid]/ {
+	$s = (int64)(nsecs - @wu[args.next_pid]);
+	$t = (int64)(nsecs - @wk[args.next_pid]);
+	@schedule = hist($s);
+	@schedule_avg = avg($s);
+	@total = hist($t);
+	@total_avg = avg($t);
+	delete(@wk, args.next_pid);
+	delete(@wcpu, args.next_pid);
+	delete(@wu, args.next_pid);
+}
+
+tracepoint:nfsd:nfsd_write_start { @writes = count(); }
+interval:s:8 { exit(); }
+END { clear(@wk); clear(@wcpu); clear(@wu); }
