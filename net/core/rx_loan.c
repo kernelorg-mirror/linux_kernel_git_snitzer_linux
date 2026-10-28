@@ -8,6 +8,8 @@
 #include <kunit/visibility.h>
 #include <linux/bitmap.h>
 #include <linux/export.h>
+#include <linux/highmem.h>
+#include <linux/math64.h>
 #include <linux/minmax.h>
 #include <linux/mutex.h>
 #include <linux/percpu.h>
@@ -19,6 +21,8 @@
 #include <net/netns/generic.h>
 #include <net/page_pool/helpers.h>
 #include <net/rx_loan.h>
+#include <net/sock.h>
+#include <net/tcp.h>
 #include <net/xdp.h>
 
 /*
@@ -252,54 +256,417 @@ int rx_loan_table_release(struct rx_loan_table *t)
 }
 EXPORT_SYMBOL_GPL(rx_loan_table_release);
 
-/* Units that copied bytes rather than lending them all, and those bytes. */
-struct rx_loan_copies {
-	u64	records;
-	u64	bytes;
-};
-
+/* Every consumer's copies, and those of units counted to none. */
 static DEFINE_PER_CPU(struct rx_loan_copies, rx_loan_copies);
 
-/* Sum the copies counter over every CPU. */
-void rx_loan_copies_read(u64 *records, u64 *bytes)
+static void rx_loan_copies_sum(const struct rx_loan_copies __percpu *pc,
+			       u64 *records, u64 *bytes)
 {
 	int cpu;
 
 	*records = 0;
 	*bytes = 0;
+	if (!pc)
+		return;
 	for_each_possible_cpu(cpu) {
-		const struct rx_loan_copies *c = per_cpu_ptr(&rx_loan_copies,
-							     cpu);
+		const struct rx_loan_copies *c = per_cpu_ptr(pc, cpu);
 
 		*records += READ_ONCE(c->records);
 		*bytes += READ_ONCE(c->bytes);
 	}
 }
+
+/* Sum the host-wide copies counter over every CPU. */
+void rx_loan_copies_read(u64 *records, u64 *bytes)
+{
+	rx_loan_copies_sum(&rx_loan_copies, records, bytes);
+}
 EXPORT_SYMBOL_GPL(rx_loan_copies_read);
+
+/* Sum @c's own copies over every CPU: 0 before it first registered. */
+void rx_loan_consumer_copies_read(const struct rx_loan_consumer *c,
+				  u64 *records, u64 *bytes)
+{
+	rx_loan_copies_sum(c->copies, records, bytes);
+}
+EXPORT_SYMBOL_GPL(rx_loan_consumer_copies_read);
+
+/* A unit copied @bytes: host-wide, and to @c's own counter if any. */
+static void rx_loan_copies_count(struct rx_loan_consumer *c, u32 bytes)
+{
+	struct rx_loan_copies __percpu *own = c ? READ_ONCE(c->copies) : NULL;
+
+	this_cpu_inc(rx_loan_copies.records);
+	this_cpu_add(rx_loan_copies.bytes, bytes);
+	if (own) {
+		this_cpu_inc(own->records);
+		this_cpu_add(own->bytes, bytes);
+	}
+}
 
 /*
  * Clear @t's counts for its next record and keep its arrays.  Append sets
  * only [0, count); terminal owners clear it before reset.  A unit that
- * copied bytes counts once in the copies counter here.
+ * copied bytes counts once in the copies counter here, and in @c's own if
+ * @c is not NULL.
  */
-void rx_loan_table_reset(struct rx_loan_table *t)
+void rx_loan_table_reset_consumer(struct rx_loan_table *t,
+				  struct rx_loan_consumer *c)
 {
 	unsigned int capacity = t->capacity;
 	struct bio_vec *bvec = t->bvec;
 	unsigned long *borrowed = t->borrowed;
 	unsigned long *page_pool = t->page_pool;
 
-	if (t->copied_bytes) {
-		this_cpu_inc(rx_loan_copies.records);
-		this_cpu_add(rx_loan_copies.bytes, t->copied_bytes);
-	}
+	if (t->copied_bytes)
+		rx_loan_copies_count(c, t->copied_bytes);
 	memset(t, 0, sizeof(*t));
 	t->capacity = capacity;
 	t->bvec = bvec;
 	t->borrowed = borrowed;
 	t->page_pool = page_pool;
 }
+EXPORT_SYMBOL_GPL(rx_loan_table_reset_consumer);
+
+/* As rx_loan_table_reset_consumer(), its copies counted to no consumer. */
+void rx_loan_table_reset(struct rx_loan_table *t)
+{
+	rx_loan_table_reset_consumer(t, NULL);
+}
 EXPORT_SYMBOL_GPL(rx_loan_table_reset);
+
+/* Copy @len bytes at @src to byte @dest_offset of @arena (or @region). */
+static void rx_loan_tile_copy(struct page **arena,
+			      const struct bio_vec *region, u32 dest_offset,
+			      const struct bio_vec *src, u32 src_offset,
+			      u32 len)
+{
+	while (len) {
+		u32 index = dest_offset >> PAGE_SHIFT;
+		u32 in_page = offset_in_page(dest_offset);
+		u32 n = min_t(u32, len, PAGE_SIZE - in_page);
+		struct page *page = region ? region[index].bv_page :
+					     arena[index];
+
+		memcpy_page(page, in_page, src->bv_page,
+			    src->bv_offset + src_offset, n);
+		dest_offset += n;
+		src_offset += n;
+		len -= n;
+	}
+}
+
+/**
+ * rx_loan_tile_take - take pages of the region's write partition to tile in
+ * @out: receives the pages, in @out[].bv_page
+ * @n: how many
+ *
+ * All or nothing, without a second array: page_pool_rx_region_take_pages()
+ * packs the page pointers at the start of @out, and they are spread out
+ * from the last, so no pointer is overwritten before it is read.  The
+ * caller holds the region credit they stand for.
+ *
+ * Return: true if @out has @n pages.
+ */
+bool rx_loan_tile_take(struct bio_vec *out, unsigned int n)
+{
+	struct page **pages = (struct page **)out;
+	unsigned int i;
+
+	BUILD_BUG_ON(sizeof(*pages) > sizeof(*out));
+	if (page_pool_rx_region_take_pages(false, pages, n) != n)
+		return false;
+	for (i = n; i-- > 0;)
+		out[i].bv_page = pages[i];
+	return true;
+}
+EXPORT_SYMBOL_GPL(rx_loan_tile_take);
+
+/**
+ * rx_loan_tile_give - give back what rx_loan_tile_take() took
+ * @bvec: the pages, in @bvec[].bv_page; clobbered (packs them at its start)
+ * @n: how many
+ */
+void rx_loan_tile_give(struct bio_vec *bvec, unsigned int n)
+{
+	struct page **pages = (struct page **)bvec;
+	unsigned int i;
+
+	for (i = 0; i < n; i++)
+		pages[i] = bvec[i].bv_page;
+	page_pool_rx_region_give_pages(pages, n);
+}
+EXPORT_SYMBOL_GPL(rx_loan_tile_give);
+
+/**
+ * rx_loan_tile - lay a loaned payload out page-tiled
+ * @t: the record's loan table, its references checked
+ *     (rx_loan_table_refs_valid())
+ * @base: the record-body offset of @t's first entry
+ * @start: the payload's record-body offset
+ * @len: the payload's length, not 0, within @t
+ * @arena: the consumer's pages by record-body offset, when @region is NULL
+ * @region: pages to tile into from in-page offset @align
+ *	    (rx_loan_tile_take()), or NULL
+ * @align: in-page offset of the payload's first byte in @region
+ * @out: receives the page-tiled payload, room for every page it spans
+ * @c: the consumer the copy counts to as one unit, or NULL: not counted
+ *
+ * Whole pages joined only at page boundaries, as direct I/O needs.  With
+ * @region, every byte of the payload is copied there, from @align.
+ * Without, the payload is laid out in @arena at its record-body offsets,
+ * where @t's copied entries already are, and only its borrowed bytes are
+ * copied.  The caller has checked that the layout fits @out and the pages.
+ * Each borrowed entry whose bytes the copy consumed is returned as it
+ * passes, its bytes still counted; the rest stay loaned.  Nothing waits.
+ *
+ * Return: entries in @out.
+ */
+unsigned int rx_loan_tile(struct rx_loan_table *t, u32 base, u32 start,
+			  u32 len, struct page **arena,
+			  const struct bio_vec *region, u32 align,
+			  struct bio_vec *out, struct rx_loan_consumer *c)
+{
+	u32 index, b, n, end = start + len, copied = 0;
+
+	for (b = base, index = 0; index < t->count && b < end; index++) {
+		struct bio_vec *bvec = &t->bvec[index];
+		u32 lo = max(b, start), hi = min(b + bvec->bv_len, end);
+		bool borrowed = test_bit(index, t->borrowed);
+
+		if (lo < hi && (region || borrowed)) {
+			rx_loan_tile_copy(arena, region,
+					  region ? lo - start + align : lo,
+					  bvec, lo - b, hi - lo);
+			copied += hi - lo;
+		}
+		/* Nothing reads a consumed loaned page again: return it now. */
+		if (borrowed && lo < hi && b + bvec->bv_len <= end)
+			rx_loan_table_return_entry(t, index);
+		b += bvec->bv_len;
+	}
+
+	/* @b walks the destination: region from @align, arena by body offset. */
+	for (b = region ? align : start, n = 0, end = b + len; b < end; n++) {
+		u32 seg = min_t(u32, end - b, PAGE_SIZE - offset_in_page(b));
+		struct page *page = region ? region[n].bv_page :
+					     arena[b >> PAGE_SHIFT];
+
+		bvec_set_page(&out[n], page, seg, offset_in_page(b));
+		b += seg;
+	}
+	if (c && copied)
+		rx_loan_copies_count(c, copied);
+	return n;
+}
+EXPORT_SYMBOL_GPL(rx_loan_tile);
+
+/*
+ * A socket's receive buffer is locked, and counted in the memory its skbs
+ * occupy, @factor bytes for each 100 of payload (rx_loan_hold_factor()).
+ * Half of the payload it can hold is the most its window is opened to.
+ *
+ * The window is what the peer may have on the way, and the other half is
+ * for what has arrived and not been read: a thread is still copying the
+ * record before, or waiting for credit.  With a window of all the buffer
+ * every byte not yet read comes off what the peer may send, and it is
+ * held up whenever the reader is a little behind; and all the sockets'
+ * windows together arrive as one burst that the device's rings have to
+ * take.
+ *
+ * TCP converts free receive memory into window at a payload/truesize ratio
+ * it learns from full-size segments only, and would open the window to all
+ * the buffer holds.  Cap the ratio at half of what the socket's skbs were
+ * measured to occupy, in TCP_RMEM_TO_WIN_SCALE units, so that the window
+ * also closes by half of what is left as the buffer fills.
+ */
+u8 rx_loan_hold_scaling_ratio(unsigned int factor)
+{
+	return div64_u64((u64)100 << TCP_RMEM_TO_WIN_SCALE,
+			 (u64)max(factor, 100U) * 2);
+}
+EXPORT_SYMBOL_GPL(rx_loan_hold_scaling_ratio);
+
+/*
+ * The most a socket's window is opened to: what TCP makes of the whole of
+ * @rcvbuf at rx_loan_hold_scaling_ratio(), so that the clamp is never more
+ * than TCP would offer of an empty buffer.
+ */
+int rx_loan_hold_window_clamp(int rcvbuf, unsigned int factor)
+{
+	return ((u64)rcvbuf * rx_loan_hold_scaling_ratio(factor)) >>
+	       TCP_RMEM_TO_WIN_SCALE;
+}
+EXPORT_SYMBOL_GPL(rx_loan_hold_window_clamp);
+
+/*
+ * Bytes of payload a socket reads between two samples of what its skbs
+ * occupy.  Long enough to hold several records, so that a record's short
+ * last segment, which takes a whole receive buffer, weighs in a sample as
+ * it does in the receive queue.
+ */
+#define RX_LOAN_HOLD_WINDOW	(4U << 20)
+/*
+ * An skb with less payload than this is not measured.  A call, a reply's
+ * acknowledgment or a small request has a receive buffer to itself, a
+ * hundred bytes in several thousand, and a socket that reads a few of
+ * those before any data would be held to a window of less than a segment,
+ * which TCP does not advertise at all: the first connection of a freshly
+ * loaded server stopped that way.  A record's short last segment is not
+ * lost by this, since GRO has it in an skb with the full ones before it.
+ */
+#define RX_LOAN_HOLD_MIN_SKB	1024U
+
+static unsigned int rx_loan_hold_sample(u32 mem, u32 pay)
+{
+	return clamp_t(u64, DIV_ROUND_UP_ULL((u64)mem * 100, pay), 100,
+		       RX_LOAN_HOLD_FACTOR_MAX);
+}
+
+/**
+ * rx_loan_hold_account - measure what a socket's skbs occupy
+ * @h: the socket's hold
+ * @truesize: what the skb occupies
+ * @skb_len: its payload
+ * @used: what of it was read
+ *
+ * TCP counts a receive buffer in truesize and a window in payload, and what
+ * one is to the other is a property of how the device cuts its pages into
+ * receive buffers and of the segments' sizes, so it is measured: the memory
+ * and the payload of everything the socket reads are summed, and every
+ * RX_LOAN_HOLD_WINDOW bytes their ratio is a sample.  The receive buffer
+ * is held to the higher of the last two (rx_loan_hold_measured()).  Only
+ * the thread reading the socket gets here.
+ *
+ * Return: true if a sample was taken, which the caller may publish as its
+ * budget's hold_factor.
+ */
+bool rx_loan_hold_account(struct rx_loan_hold *h, unsigned int truesize,
+			  unsigned int skb_len, unsigned int used)
+{
+	if (skb_len < RX_LOAN_HOLD_MIN_SKB || !used)
+		return false;
+	h->geo_mem += div_u64((u64)truesize * min(used, skb_len), skb_len);
+	h->geo_pay += used;
+	if (h->geo_pay < RX_LOAN_HOLD_WINDOW)
+		return false;
+	h->geo_factor[1] = h->geo_factor[0];
+	h->geo_factor[0] = rx_loan_hold_sample(h->geo_mem, h->geo_pay);
+	h->geo_mem = 0;
+	h->geo_pay = 0;
+	return true;
+}
+EXPORT_SYMBOL_GPL(rx_loan_hold_account);
+
+/**
+ * rx_loan_hold_factor - what a socket's receive buffer is held to
+ * @h: the socket's hold
+ * @lb: the budget it draws on, or NULL
+ *
+ * The bytes its skbs occupy for each 100 of payload: the higher of its last
+ * two samples, else, until it has one, what another socket of @lb measured
+ * (@lb->hold_factor), else RX_LOAN_HOLD_FACTOR_UNLEARNED.  What a socket
+ * has read of its first window is not used: a few skbs are not a sample.
+ */
+unsigned int rx_loan_hold_factor(const struct rx_loan_hold *h,
+				 const struct rx_loan_budget *lb)
+{
+	unsigned int factor = rx_loan_hold_measured(h);
+
+	if (factor)
+		return factor;
+	return (lb ? READ_ONCE(lb->hold_factor) : 0) ?:
+	       RX_LOAN_HOLD_FACTOR_UNLEARNED;
+}
+EXPORT_SYMBOL_GPL(rx_loan_hold_factor);
+
+#if IS_ENABLED(CONFIG_INET)
+/*
+ * A socket held again at a lower factor (rx_loan_hold_stale()) gets a
+ * higher ratio ceiling and window clamp, but neither lifts what the first
+ * hold held down: TCP lowers its ratio to a lower ceiling at once and
+ * raises it only when it next measures a segment of a new size, and a
+ * higher clamp raises rcv_ssthresh only as far as the window TCP already
+ * offers.  The window would stay where the first hold left it for the
+ * socket's life, so that a socket held before its budget had learned its
+ * factor never had the window of those held after.  Lift both: the ratio
+ * to the new ceiling where the old one held it, rcv_ssthresh by what the
+ * clamp rose.  TCP still offers no more window than the free buffer
+ * allows.
+ */
+static void rx_loan_hold_raise(struct sock *sk, u8 old_ratio, u32 old_clamp)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+
+	lock_sock(sk);
+	if (tp->scaling_ratio == old_ratio && tp->scaling_ratio_max > old_ratio)
+		tp->scaling_ratio = tp->scaling_ratio_max;
+	if (tp->window_clamp > old_clamp)
+		tp->rcv_ssthresh = min(tp->window_clamp, tp->rcv_ssthresh +
+				       (tp->window_clamp - old_clamp));
+	release_sock(sk);
+}
+
+/**
+ * rx_loan_hold_apply - hold a TCP socket's receive buffer
+ * @h: the socket's hold; its pending request is cleared
+ * @sk: the socket, unlocked: each step takes the socket lock itself
+ * @bytes: the receive buffer to hold it to, or 0: not held
+ * @factor: what its skbs occupy for each 100 of payload
+ *	    (rx_loan_hold_factor())
+ * @rcvbuf: receives the receive buffer it was held to
+ * @clamp: receives the window clamp
+ *
+ * Lock the receive buffer to @bytes, cap the payload/truesize ratio TCP
+ * turns free buffer into window with at @factor, and clamp the window, so
+ * its unread data stays its share of the region.  The ceiling also keeps
+ * TCP from raising the clamp again when it re-learns its ratio.  Sockets
+ * that never receive a region page keep TCP's own buffer.  TCP sizes a
+ * connection's first window from its listener when the SYN arrives and
+ * never shrinks a window it has offered, so listeners are held too: a
+ * connection that opened with the listener's larger window would overflow
+ * the buffer it is held to with its first burst.
+ *
+ * Return: 0 once held; -EALREADY, nothing done, when @bytes is 0 or @h is
+ * already held; else the window clamp's error, @h held all the same.
+ */
+int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
+		       unsigned int bytes, unsigned int factor, int *rcvbuf,
+		       int *clamp)
+{
+	u32 old_clamp;
+	u8 ratio, old_ratio;
+	bool again;
+	int err;
+
+	h->pending = false;
+	if (!bytes || h->held)
+		return -EALREADY;
+	again = h->factor != 0;
+	h->factor = factor;
+	*rcvbuf = max_t(int, bytes, SOCK_MIN_RCVBUF);
+	/*
+	 * Never under two segments: TCP advertises no window smaller than
+	 * one, and the sender then waits on a receiver that waits on it.
+	 */
+	*clamp = max_t(int, rx_loan_hold_window_clamp(*rcvbuf, factor),
+		       2 * READ_ONCE(tcp_sk(sk)->advmss));
+	ratio = rx_loan_hold_scaling_ratio(factor);
+
+	old_ratio = READ_ONCE(tcp_sk(sk)->scaling_ratio_max);
+	old_clamp = READ_ONCE(tcp_sk(sk)->window_clamp);
+
+	/* Unread data is this socket's share of the region. */
+	sock_set_rcvbuf(sk, *rcvbuf / 2);	/* doubled on the way in */
+	tcp_sock_set_scaling_ratio_max(sk, ratio);
+	err = tcp_sock_set_window_clamp(sk, *clamp);
+	if (!err && again)
+		rx_loan_hold_raise(sk, old_ratio, old_clamp);
+	h->held = true;
+	return err;
+}
+EXPORT_SYMBOL_GPL(rx_loan_hold_apply);
+#endif /* CONFIG_INET */
 
 /*
  * The region's credit outstanding across every budget of every namespace
@@ -512,6 +879,27 @@ long rx_loan_stocked_records(struct rx_loan_budget *lb)
 	return n;
 }
 EXPORT_SYMBOL_GPL(rx_loan_stocked_records);
+
+/* For stats: lockless, so a racing CPU's counts may be off by its last op. */
+void rx_loan_stock_sum(struct rx_loan_budget *lb,
+		       struct rx_loan_stock_sum *sum)
+{
+	int cpu;
+
+	memset(sum, 0, sizeof(*sum));
+	for_each_possible_cpu(cpu) {
+		struct rx_loan_stock *st = per_cpu_ptr(lb->stock, cpu);
+
+		sum->pages += atomic_long_read(&st->pages);
+		sum->records += READ_ONCE(st->records);
+		sum->read_inflight += READ_ONCE(st->read_inflight);
+		sum->lent += READ_ONCE(st->lent);
+		sum->admitted += READ_ONCE(st->admitted);
+		sum->read_admitted += READ_ONCE(st->read_admitted);
+		sum->read_completed += READ_ONCE(st->read_completed);
+	}
+}
+EXPORT_SYMBOL_GPL(rx_loan_stock_sum);
 
 /*
  * Learn @nrec records whose highest sample was @peak, lb->lock held.  The
@@ -752,7 +1140,8 @@ EXPORT_SYMBOL_GPL(rx_loan_region_size);
  *
  * @c's counts of credit out start zeroed (the caller's to clear) and are
  * not reset here: what it still had out when it last unregistered keeps
- * returning to them.
+ * returning to them.  Its copies counter is allocated at the first
+ * registration and freed by rx_loan_consumer_destroy().
  *
  * Context: process context; may sleep.
  * Return: 0.
@@ -761,6 +1150,12 @@ int rx_loan_consumer_register(struct rx_loan_consumer *c,
 			      struct rx_loan_net *ln, const char *name,
 			      unsigned long floor)
 {
+	/*
+	 * Its own copies counter, kept across registrations.  Without one
+	 * its copies count in the host-wide total only.
+	 */
+	if (!c->copies)
+		WRITE_ONCE(c->copies, alloc_percpu(struct rx_loan_copies));
 	c->name = name;
 	c->floor = floor;
 	c->ln = ln;
@@ -802,6 +1197,20 @@ void rx_loan_consumer_unregister(struct rx_loan_consumer *c)
 	mutex_unlock(&rx_loan_consumers_lock);
 }
 EXPORT_SYMBOL_GPL(rx_loan_consumer_unregister);
+
+/**
+ * rx_loan_consumer_destroy - free what registering @c allocated
+ * @c: unregistered, nothing left to count to it
+ *
+ * Context: process context.
+ */
+void rx_loan_consumer_destroy(struct rx_loan_consumer *c)
+{
+	WARN_ON_ONCE(READ_ONCE(c->registered));
+	free_percpu(c->copies);
+	c->copies = NULL;
+}
+EXPORT_SYMBOL_GPL(rx_loan_consumer_destroy);
 
 /**
  * rx_loan_consumer_set_floor - a consumer's floor follows its size
