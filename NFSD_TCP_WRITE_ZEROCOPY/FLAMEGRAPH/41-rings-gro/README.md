@@ -93,3 +93,22 @@ Aggregates the flush completes after `xeu_rx_poll()` returns are counted in the 
 - **The WRITE count in the window does not square with the frames:** 140,804 WRITEs against 22.2 million frames is 158 frames a WRITE, against about 136 for 1 MiB. The 9 probes slowed the window to about 21 GB/s. The shares above are taken from the frames alone and do not depend on it.
 
 **So: GRO's cost is per frame, not in the list or in the merge decisions.** 85% of frames take the merge path. Each has had a full skb built around its buffer by xeu (`napi_build_skb`) only to be freed once its page is moved into the aggregate. In run89's ring profile that build and free is about 7% of the samples beyond the GRO frames: `napi_build_skb`, `__build_skb_around` and `__pi_memset_generic` about 4.6%, and `kmem_cache_free`, `__memcg_slab_free_hook` and `napi_skb_cache_put` about 2.5%. A driver that hands GRO page fragments (`napi_get_frags()` and `napi_gro_frags()`) builds no skb for a frame that merges: an xeu change, a question for Xsight, and a candidate for step 3 beside what step 2 finds about GRO's misses.
+
+## 2. Where GRO's misses are (r97, to run)
+
+Every line of the new frame that xeu itself touches before GRO is already in the cache when GRO comes to it: the skb (zeroed by `napi_build_skb()`), its shared info (prefetched for writing and cleared), the first header line (read by `eth_type_trans()`). So the lines worth timing are the frame's second header line and the held aggregate's, which a merge reads and writes and which were last touched one or more frames earlier.
+
+[xeu-diag-gro-lines.patch](xeu-diag-gro-lines.patch), on round 35's kept xeu (`FD970ED52080A4FA32D33AE`), adds `gro_lat_every` (0, off, by default). On one frame in that many, just before `napi_gro_receive()`, it times one load from each line, with a DSB LD before and after and the 1 GHz counter read after an ISB, as rounds 35 and 38 did:
+
+| | the line | who reads it in GRO |
+|---|---|---|
+| `own` | a line of the CPU's own, just written | the floor |
+| `hdr2` | the frame's second header line: the end of the TCP options | `tcp_gro_receive()` comparing the options; xeu's `net_prefetch()` fetches it |
+| `agg_cb` | the held aggregate's `NAPI_GRO_CB` | `gro_list_prepare()`, `tcp_gro_receive()` |
+| `agg_hdr` | the aggregate's header line | `gro_list_prepare()`, `inet_gro_receive()`, `tcp_gro_receive()` |
+| `agg_shinfo` | the aggregate's shared info | `skb_gro_receive()` (`frag_list`, `gso_segs`) |
+| `last_shinfo` | the shared info of the aggregate's last skb, when it is not the head | `skb_gro_receive()` adds the frame there |
+
+The held aggregate is the first in the frame's hash bucket, timed only when its hash is the frame's (step 1: the bucket holds one aggregate for 85% of frames). A sampled frame's lines are warm for GRO after the timing, so the sampling is one frame in 16, and the run's counted cycles are not a result.
+
+[run97.sh](run97.sh): load the diagnostic xeu (refusing if an NFS client is connected), one loan64 run with sampling for 8 s from 10 s into the timed load, then the kept xeu again and the settled setting. If the aggregate's lines come in at the floor, GRO's misses are not on the lines it reads first, and its cost is in what the merge writes and frees. If they do not, they are the lines to prefetch or keep.
