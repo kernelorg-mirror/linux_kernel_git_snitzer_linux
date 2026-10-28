@@ -316,6 +316,16 @@ wrote() { for p in $PORTS; do for fs in ${FS[$p]}; do b=$(basename $(findmnt -no
 # first, which this does not count.
 echo "client's puppet agent: $(puppet_pause | head -1)" | tee -a geometry.txt
 PL=0; [ "${PLACE:-1}" != 0 ] && PL=36
+# Placing the flows reads and writes the RSS table with ynl, which needs
+# python3-pyyaml: on 28 October a removal of podman took that package with
+# it, and seven runs went on with their flows as they fell, unseen.  Refuse
+# a run that is to place its flows when the table cannot be read.
+if [ "${PLACE:-1}" != 0 ]; then
+	for p in $PORTS; do
+		$YNL --do rss-get --json "{\"header\": {\"dev-name\": \"${DEV[$p]}\"}}" --output-json > /dev/null 2> ynl-check-$p.txt ||
+			{ echo "FAILED: ynl cannot read ${DEV[$p]}'s RSS table, so the flows cannot be placed: $(tail -1 ynl-check-$p.txt)"; exit 1; }
+	done
+fi
 clear_of_puppet $(( PL + WARM + RUNTIME + 10 )) | tee -a geometry.txt
 wrote > wrote.0
 # Place every connection on a ring, as run-budget.sh's PLACE=1 does: a
