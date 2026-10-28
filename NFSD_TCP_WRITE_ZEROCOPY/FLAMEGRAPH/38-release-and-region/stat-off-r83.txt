@@ -1,0 +1,12 @@
+# started on Wed Oct 28 08:02:48 2026
+
+
+ Performance counter stats for 'CPU(s) 8-55':
+
+       34520079181      cycles                                                                
+       35010209654      instructions                                                          
+       11068322687      stall_backend_mem                                                     
+
+       3.004248283 seconds time elapsed
+
+WRITEs in the window: 117639

@@ -1,0 +1,42 @@
+ Percent |	Source code & Disassembly of kcore for l3d_cache_lmiss_rd (11528 samples, percent: local period)
+----------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3                Disassembly of section load0:
+         :
+         : 5                ffff9fe015ceeeb0 <load0>:
+    2.22 :   ffff9fe015ceeeb0:       mov     x9, x30
+    1.10 :   ffff9fe015ceeeb4:       nop
+    0.16 :   ffff9fe015ceeeb8:       mov     x5, x0
+    1.13 :   ffff9fe015ceeebc:       mov     x0, #0x40                       // #64
+    2.53 :   ffff9fe015ceeec0:       movk    x0, #0xdead, lsl #48
+    1.34 :   ffff9fe015ceeec4:       ldr     x4, [x5, #8]
+   18.76 :   ffff9fe015ceeec8:       and     x4, x4, #0xfffffffffffffffc
+   11.88 :   ffff9fe015ceeecc:       and     x4, x4, #0xffffff800000007f
+    1.22 :   ffff9fe015ceeed0:       cmp     x4, x0
+    0.03 :   ffff9fe015ceeed4:       b.eq    0xffff9fe015ceeee0  // b.none
+    0.00 :   ffff9fe015ceeed8:       mov     w0, #0x0                        // #0
+    0.00 :   ffff9fe015ceeedc:       ret
+    9.01 :   ffff9fe015ceeee0:       and     x4, x5, #0xfffffffffffffffe
+    0.25 :   ffff9fe015ceeee4:       mov     w0, #0x0                        // #0
+    1.28 :   ffff9fe015ceeee8:       ldr     x4, [x4, #16]
+    2.32 :   ffff9fe015ceeeec:       ldr     x4, [x4, #968]
+   25.43 :   ffff9fe015ceeef0:       cbz     x4, 0xffff9fe015ceeedc
+    7.23 :   ffff9fe015ceeef4:       mov     x0, #0x3fff                     // #16383
+    0.44 :   ffff9fe015ceeef8:       and     x4, x1, x0
+    0.99 :   ffff9fe015ceeefc:       add     x2, x0, w2, uxtw
+    1.86 :   ffff9fe015ceef00:       lsr     w1, w1, #14
+    1.25 :   ffff9fe015ceef04:       ldr     x6, [x3]
+    0.57 :   ffff9fe015ceef08:       add     x2, x4, x2
+    1.55 :   ffff9fe015ceef0c:       add     x1, x5, x1, lsl #6
+    0.62 :   ffff9fe015ceef10:       lsr     x0, x2, #14
+    0.89 :   ffff9fe015ceef14:       cmp     x6, x1
+    0.99 :   ffff9fe015ceef18:       cset    w2, eq  // eq = none
+    0.73 :   ffff9fe015ceef1c:       add     x1, x1, x0, lsl #6
+    1.34 :   ffff9fe015ceef20:       sub     w0, w0, w2
+    0.54 :   ffff9fe015ceef24:       sub     x1, x1, #0x40
+    1.17 :   ffff9fe015ceef28:       str     x1, [x3]
+    1.15 :   ffff9fe015ceef2c:       ret
+    0.00 :   ffff9fe015ceef30:       sub     w8, w11, #0x490
+    0.00 :   ffff9fe015ceef34:       .inst   0xffff9fe0 ; undefined
