@@ -102,7 +102,7 @@ Each page's `pp_magic` load, drained (2), mean ns, against the floor (a line of 
 - **The pool's `rx_region` line is a hit** (at the floor every time). It is out of step 3.
 - **What is left is the lead.** With the prefetch the section still takes 419 ns, 11.7 times a WRITE, about 4.9 us a WRITE. The struct pages are asked for just before they are read, and the skb's fragment array, which the prefetch walk reads first, is the ring CPU's line too. A request one skb earlier, for the next skb's fragment array and struct pages, could hide most of it without holding any page longer.
 
-## 3. A lead for the receive side's fetch (r91, to run)
+## 3. A lead for the receive side's fetch (r91): not kept
 
 Section 2 left the fetch's lack of lead: each loaned skb asks for its struct pages just before its region count reads them. A request one skb earlier holds no page longer, so it cannot raise the region's peak; the peak is reported beside it all the same.
 
@@ -115,3 +115,13 @@ Section 2 left the fetch's lack of lead: each loaned skb asks for its struct pag
 The next skb's own `struct sk_buff`, and in 2 the one after it, are still read on demand. It runs only on a plain TCP socket: there the actor's skb is on `sk_receive_queue`, which does not change under the socket lock. A TLS socket's is not. The fetch is inside the section that the diagnostic times, so a look counts its cost.
 
 [run91.sh](run91.sh): first a look as run90's, with each setting in turn (0, 1, 2, then 0 again): a 2 s `perf stat` untimed and a 2 s window with the section timed whole. Then the A/B, counted and untraced: twelve loan64 runs, four rounds of 0, 1 and 2 with the order rotated each round. The tip's sunrpc goes back in at the end. About 55 minutes.
+
+**run91, stopped after seven of its twelve counted runs (Mike: "stop the current run and just call it not kept")** ([run91.out](run91.out)). The look and every counted run had their flows placed and no drive stepping down. r91-3-n0 was stopped mid-load and is not counted. The client's mounts were taken down and the tip's sunrpc put back by hand, then `settled.sh apply` ran ("the settled setting").
+
+| `svc_tcp_rx_rcv_next` | section (look) | untimed nfsd cycles a WRITE (look) | counted nfsd cycles a WRITE | counted nfsd instructions a WRITE |
+|---|---|---|---|---|
+| 0 (the tip) | 422, 423 ns | 291.2k, 290.9k | 299.6k, 302.0k (300.8k) | 308.8k, 310.8k (309.8k) |
+| 1 | 499 ns | 293.0k | 302.8k, 302.1k (302.5k) | 313.6k, 313.5k (313.6k) |
+| 2 | 480 ns | 293.0k | 301.5k, 302.1k, 301.1k (301.6k) | 312.3k, 314.0k, 312.1k (312.8k) |
+
+The lead makes the section 60 to 80 ns slower, not faster, and costs about 1 to 2k cycles and 3 to 4k instructions a WRITE. Asking for the next skb's struct pages means reading its `struct sk_buff` and fragment array at once, lines the ring's CPU wrote too: the miss moves one skb earlier and is paid all the same. The rate and the peak did not move. **Not kept.** (The counted runs are about 3.5k cycles and 6.5k instructions a WRITE above run89's, for the diagnostic this module carries; the same in each arm.)
