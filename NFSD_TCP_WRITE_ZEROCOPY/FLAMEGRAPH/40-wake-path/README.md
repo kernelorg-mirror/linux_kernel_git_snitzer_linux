@@ -49,3 +49,12 @@ In run89's profile, the switch and the wake are nfsd's largest frames past idle,
    - **Warmer wakes.** If woken threads mostly land on a CPU other than their last, wake the most recently idle thread first, so it is likely still warm: a LIFO idle list in place of the first idle thread. Another way is fewer threads (`NFSD_THREADS` in `settled.sh`, a settled setting: a change there is Mike's, after a run that shows why).
    - **Fewer switches per wake.** Context switches run near 2.8 a wake. If step 1 finds switches that come with no wake (preemption, a lock or a mutex sleep), those are looked at first.
 3. **Every candidate is judged on latency as well as cycles** (Mike, 23 October: "latency is going to matter a lot on a per IO level"; round 18 is why). The A/B is counted nfsd and ring cycles a WRITE, with the rate and the region's peak beside it. Before a change is kept, `xeu-rig/lat.sh` runs at iodepth 1, several runs a side (L0's runs differ by about 10%).
+
+## 1. Where the wakes come from, and what each lands on (r92, to run)
+
+[run92.sh](run92.sh), at the current state with no module swapped, runs two loan64 runs. The first is untraced and counted. The second is traced: from 10 s into its timed load (`timed_load`) it runs 8 s of `xeu-rig/wakesrc.bt` (wakes by source and passes through `svc_recv`, as round 17's), then 8 s of the new `xeu-rig/wakeland.bt`. For each woken nfsd thread, by whether a ring CPU or an nfsd CPU woke it, `wakeland.bt` records:
+- whether it runs on the CPU it last ran on, and whether that CPU was idle;
+- the time from `sched_waking` to running;
+- how long it had been off a CPU.
+
+It also records every switch on nfsd's CPUs by what goes out and what comes in (nfsd, idle, other), sleep or preemption, and nfsd's sleeps outside `svc_thread_wait_for_work()` by kernel stack.

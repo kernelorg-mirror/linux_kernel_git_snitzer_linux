@@ -1,0 +1,51 @@
+// wakeland.bt: what a woken nfsd thread lands on (FLAMEGRAPH round 40).
+// For each wake of an nfsd thread, by where the waker runs (ring: CPUs 0-7,
+// nfsd: 8-55):
+//   @land     the CPU it then runs on against the one it last ran on (same,
+//             or another), and whether that CPU was idle (it switched from
+//             the idle task)
+//   @wake_run ns from sched_waking to its sched_switch in (log2)
+//   @asleep   ns it had been off a CPU, from its last switch out (log2)
+// And every switch on nfsd's CPUs, by what goes out and what comes in
+// (nfsd, idle, other) and, for one going out, whether it sleeps or is
+// preempted (@sw); nfsd's sleeps outside svc_thread_wait_for_work() by the
+// kernel stack (@sleep_elsewhere).
+config = { max_map_keys = 65536 }
+
+fentry:sunrpc:svc_thread_wait_for_work { @in_wait[tid] = 1; }
+fexit:sunrpc:svc_thread_wait_for_work { delete(@in_wait[tid]); }
+
+tracepoint:sched:sched_waking /args.comm == "nfsd"/ {
+	@woke[args.pid] = nsecs;
+	@waker[args.pid] = cpu < 8 ? 1 : 2;
+}
+
+tracepoint:sched:sched_switch /cpu >= 8 && cpu <= 55/ {
+	$p = args.prev_pid == 0 ? "idle" : (args.prev_comm == "nfsd" ? "nfsd" : "other");
+	$n = args.next_pid == 0 ? "idle" : (args.next_comm == "nfsd" ? "nfsd" : "other");
+	@sw[$p, $n, args.prev_pid == 0 ? "-" : (args.prev_state == 0 ? "preempted" : "sleeps")] = count();
+	if (args.prev_comm == "nfsd" && args.prev_state != 0 && !@in_wait[args.prev_pid]) {
+		@sleep_elsewhere[kstack(6)] = count();
+	}
+}
+
+tracepoint:sched:sched_switch /args.prev_comm == "nfsd"/ {
+	@last[args.prev_pid] = cpu;
+	@out[args.prev_pid] = nsecs;
+}
+
+tracepoint:sched:sched_switch /args.next_comm == "nfsd" && @woke[args.next_pid]/ {
+	$w = @waker[args.next_pid] == 1 ? "ring" : "nfsd";
+	$moved = @last[args.next_pid] == cpu ? "same CPU" : "another CPU";
+	@land[$w, $moved, args.prev_pid == 0 ? "was idle" : "was busy"] = count();
+	@wake_run[$w] = hist(nsecs - @woke[args.next_pid]);
+	if (@out[args.next_pid]) {
+		@asleep = hist(nsecs - @out[args.next_pid]);
+	}
+	delete(@woke[args.next_pid]);
+	delete(@waker[args.next_pid]);
+}
+
+tracepoint:nfsd:nfsd_write_start { @writes = count(); }
+interval:s:8 { exit(); }
+END { clear(@in_wait); clear(@woke); clear(@waker); clear(@last); clear(@out); }
