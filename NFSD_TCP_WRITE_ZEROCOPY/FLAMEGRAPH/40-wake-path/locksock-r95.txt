@@ -1,0 +1,104 @@
+Attached 6 probes
+
+
+@holder[
+        perf_trace_sched_wakeup_template+36
+        perf_trace_sched_wakeup_template+36
+        try_to_wake_up+1240
+        default_wake_function+40
+        autoremove_wake_function+32
+        __wake_up_common+144
+        __wake_up+76
+        release_sock+188
+        svc_tcp_recvfrom+408
+        svc_handle_xprt+1184
+]: 4349
+@holder[
+        perf_trace_sched_wakeup_template+36
+        perf_trace_sched_wakeup_template+36
+        try_to_wake_up+1240
+        default_wake_function+40
+        autoremove_wake_function+32
+        __wake_up_common+144
+        __wake_up+76
+        release_sock+188
+        svc_tcp_recvfrom+280
+        svc_handle_xprt+1184
+]: 17352
+@holder[
+        perf_trace_sched_wakeup_template+36
+        perf_trace_sched_wakeup_template+36
+        try_to_wake_up+1240
+        default_wake_function+40
+        autoremove_wake_function+32
+        __wake_up_common+144
+        __wake_up+76
+        release_sock+188
+        tcp_sendmsg+80
+        inet_sendmsg+76
+]: 39806
+@holder_comm[nfsd]: 61507
+@wait:
+[2K, 4K)               4 |                                                    |
+[4K, 8K)            7042 |@@@@@@                                              |
+[8K, 16K)          57277 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[16K, 32K)          3824 |@@@                                                 |
+[32K, 64K)            75 |                                                    |
+[64K, 128K)            3 |                                                    |
+
+@wait_avg: 11919
+@waiter[
+        0xffff8000812ae700
+        0xffff8000812ae700
+        0xffff8000812af9a4
+        __lock_sock+8
+        lock_sock_nested+176
+        tcp_sendmsg+48
+        inet_sendmsg+76
+        __sock_sendmsg+100
+        sock_sendmsg+128
+        svc_tcp_sendmsg+232
+        svc_tcp_sendto+156
+        svc_send+88
+]: 3
+@waiter[
+        0xffff8000812ae700
+        0xffff8000812ae700
+        0xffff8000812af9a4
+        __lock_sock+8
+        lock_sock_nested+176
+        svc_tcp_recvfrom+180
+        svc_handle_xprt+1184
+        svc_recv+388
+        nfsd+272
+        kthread+272
+        ret_from_fork+16
+]: 6
+@waiter[
+        0xffff8000812ae700
+        0xffff8000812ae700
+        0xffff8000812afb40
+        __lock_sock+8
+        lock_sock_nested+176
+        tcp_sendmsg+48
+        inet_sendmsg+76
+        __sock_sendmsg+100
+        sock_sendmsg+128
+        svc_tcp_sendmsg+232
+        svc_tcp_sendto+156
+        svc_send+88
+]: 23867
+@waiter[
+        0xffff8000812ae700
+        0xffff8000812ae700
+        0xffff8000812afb40
+        __lock_sock+8
+        lock_sock_nested+176
+        svc_tcp_recvfrom+180
+        svc_handle_xprt+1184
+        svc_recv+388
+        nfsd+272
+        kthread+272
+        ret_from_fork+16
+]: 44368
+@writes: 330824
