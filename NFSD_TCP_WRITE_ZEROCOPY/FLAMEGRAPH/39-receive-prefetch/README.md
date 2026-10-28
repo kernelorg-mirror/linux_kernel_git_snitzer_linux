@@ -33,6 +33,34 @@ In round 37's profile (run80), the frames where nfsd's L3 read misses land, past
 
 Every change that holds pages longer reports the region's peak beside its saving, and is not kept if the peak rises.
 
+## 1. The tip counted and profiled (r89)
+
+[run89.out](run89.out): the tip's sunrpc `DDE22984B5905541BB2CD35` went in at 19:45 and is the kept sunrpc from here. Five runs, every one with its flows placed, no drive stepping down, and none in a puppet run.
+
+| run | GB/s | nfsd cycles a WRITE | nfsd instructions | ring cycles | ring instructions | peak |
+|---|---|---|---|---|---|---|
+| r89-1 | 40.57 | 297.0k | 303.2k | 139.9k | 311.7k | 6315 |
+| r89-2 | 40.49 | 297.6k | 303.3k | 138.7k | 309.6k | 6494 |
+| r89-3 | 40.51 | 297.2k | 303.3k | 138.6k | 310.9k | 6500 |
+| r89-4 | 40.48 | 296.4k | 303.1k | 139.9k | 312.5k | 6561 |
+| mean | 40.51 | **297.1k** | 303.2k | 139.3k | 311.2k | 6468 |
+| profile (55 s) | 40.50 | 296.1k | 303.3k | 138.8k | 310.7k | 6448 |
+
+Against the same day's runs without the second request (run88's A side, 301.1k nfsd cycles), the tip is about 4k cycles a WRITE lower, as run87's A/B said. The ring, the rate and the peak are as they were.
+
+The profile ([perf-lmiss-nfsd-r89.txt](perf-lmiss-nfsd-r89.txt), [perf-sym-nfsd-r89.txt](perf-sym-nfsd-r89.txt), and the rings' beside them), against round 37's run80:
+
+| frame | nfsd's L3 miss samples, r80 → r89 | nfsd's cycles, r80 → r89 |
+|---|---|---|
+| `svc_tcp_rx_release_refs` | 2.70% → 1.59% | 1.14% → 1.04% |
+| `page_pool_put_netmem_bulk` | 1.52% → 0.77% | 0.75% → 0.60% |
+| `svc_tcp_rx_region_span` | 1.99% → **2.18%** | 0.55% → 0.57% |
+| `svc_tcp_rx_skb_region_pages_after` | 1.79% → **1.60%** | 0.51% → below the list |
+| `svc_tcp_rx_append_ref` | 1.35% → 1.30% | 1.57% → 1.45% |
+| `svc_tcp_rx_prefetch_pages` | 1.14% → 1.13% | 0.96% → 0.88% |
+
+Round 38's change shows where it should: the release's misses fall by 40% and the pool's bulk put's by half, since the struct pages it reads are now in place. The region count's two frames are now nfsd's first two named frames by L3 misses after the spin lock (3.8% together), which is what step 2 looks at.
+
 ## 2. The receive side's struct page loads (r90, to run)
 
 The fetch has no lead. In `svc_tcp_recv_skb()`, `svc_tcp_rx_prefetch_pages()` asks for every struct page of the skb's body and then `svc_tcp_rx_skb_region_pages_after()` reads the same pages at once, so the first page's miss has nothing ahead of it to hide in. The release's prefetch had a batch's lead. Here the question is first what the section costs and where, before whether a request is dropped.

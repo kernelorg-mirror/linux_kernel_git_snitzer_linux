@@ -1,0 +1,51 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 31K of event 'l3d_cache_lmiss_rd'
+# Event count (approx.): 624880000
+#
+# Overhead  Symbol                                     IPC   [IPC Coverage]
+# ........  .........................................  ....................
+#
+     9.77%  [k] inet_gro_receive                       -      -            
+     7.38%  [k] tcp_gro_receive                        -      -            
+     7.30%  [k] xeu_rx_refill.isra.0                   -      -            
+     6.63%  [k] tcp4_gro_receive                       -      -            
+     5.43%  [k] xeu_rx_poll                            -      -            
+     5.22%  [k] __gro_receive_network_flush            -      -            
+     4.88%  [k] gro_list_prepare                       -      -            
+     4.74%  [k] skb_gro_receive                        -      -            
+     3.74%  [k] dev_gro_receive                        -      -            
+     3.66%  [k] _raw_spin_unlock_irqrestore            -      -            
+     2.78%  [k] eth_type_trans                         -      -            
+     2.42%  [k] xeu_tx_poll                            -      -            
+     1.69%  [k] napi_build_skb                         -      -            
+     1.36%  [k] __sock_wfree                           -      -            
+     1.30%  [k] gro_receive_skb                        -      -            
+     1.16%  [k] tcp_v4_rcv                             -      -            
+     1.14%  [k] __build_skb_around                     -      -            
+     1.11%  [k] svc_data_ready                         -      -            
+     0.89%  [k] __pi_memset_generic                    -      -            
+     0.86%  [k] skb_release_data                       -      -            
+     0.82%  [k] __memcg_slab_free_hook                 -      -            
+     0.81%  [k] skb_put                                -      -            
+     0.78%  [k] default_idle_call                      -      -            
+     0.74%  [k] kmem_cache_free                        -      -            
+     0.72%  [k] arch_counter_get_cntpct                -      -            
+     0.71%  [k] _raw_spin_lock                         -      -            
+     0.65%  [k] napi_complete_done                     -      -            
+     0.63%  [k] __list_add_valid_or_report             -      -            
+     0.60%  [k] __inet_lookup_established              -      -            
+     0.58%  [k] netif_receive_skb_list_internal        -      -            
+     0.58%  [k] tcp_wfree                              -      -            
+     0.57%  [k] tcp_try_coalesce                       -      -            
+     0.56%  [k] __pi_memcpy_generic                    -      -            
+     0.56%  [k] inet_gro_complete                      -      -            
+     0.54%  [k] __list_del_entry_valid_or_report       -      -            
+     0.52%  [k] handle_softirqs                        -      -            
+     0.50%  [k] dql_completed                          -      -            
+#
+# (Tip: To not accumulate CPU time of children symbols add --no-children)
+#
