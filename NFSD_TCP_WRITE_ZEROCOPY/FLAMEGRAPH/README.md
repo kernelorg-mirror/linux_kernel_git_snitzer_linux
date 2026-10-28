@@ -88,13 +88,16 @@ decided.
 6. **Round 37: round 01's starting point, counted** (Mike, 28 October).
    The start replayed on build 494 with `rodata=full`, round 01's
    sunrpc, nfsd, xeu and settings, and set against the current state
-   counted on the same day, to give the progress in counted cycles
-   ([37-counted-start](37-counted-start/README.md)). Planned: it needs a
-   reboot into 494 and back.
+   set against round 36's counts, to give the progress in counted cycles
+   ([37-counted-start](37-counted-start/README.md)). Done: the rings
+   192.5k to 137.9k cycles a WRITE (−28%), nfsd 481.4k to 294.6k (−39%);
+   a fresh profile taken for round 38.
 7. **Round 38: the release's struct page misses:** 12% of its first touches of a
    page at 64 ns or more despite round 24's prefetch a batch ahead, at
    most about 2k cycles a WRITE; its prefetch distance and the order it
-   gives pages back in.
+   gives pages back in. Round 37's profile puts `svc_tcp_rx_region_span`
+   and `svc_tcp_rx_skb_region_pages_after` close behind the release in
+   nfsd's L3 misses.
 
 ## Where the kept rounds stand (2026-10-28)
 
