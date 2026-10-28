@@ -21,6 +21,7 @@
 #include <linux/wait.h>
 #include <linux/mm.h>
 #include <linux/sizes.h>
+#include <linux/math64.h>
 #include <linux/folio_batch.h>
 #include <linux/kthread.h>
 #include <net/rx_loan.h>
@@ -51,6 +52,112 @@ struct svc_pool {
 
 	unsigned long		sp_flags;
 } ____cacheline_aligned_in_smp;
+
+/*
+ * Per-pool state kept beside struct svc_pool rather than in it.  This is
+ * a choice of the 7.3 overlay only: nfsd.ko and other modules built
+ * against this kernel index sv_pools[] by sizeof(struct svc_pool), so the
+ * overlay leaves that struct alone.  Upstream, these fields belong in
+ * struct svc_pool and sv_pool_ext goes away.
+ *
+ * svc_pool_ext_layout() rewrites range, serve, prev, next, gap and far
+ * whenever a pool's thread count changes, and idle and place, which
+ * follow the node runs, when the pools' nodes are set; that happens
+ * before the service has threads.  Readers take no lock: each field is
+ * written whole, every value written is a valid pool id, and every walk
+ * over them is bounded, so a reader that sees a mix of old and new
+ * values can only pick a less suitable sibling.
+ */
+/*
+ * One cache line of a node's idle map (see svc_pool_idle_add()).  A
+ * service has one per pool, which is enough for any node layout, and
+ * each node's map starts on a line of its own.  The lines are allocated
+ * as one power-of-two block, which kmalloc aligns to its size.
+ */
+struct svc_pool_idle_line {
+	unsigned long		map[SMP_CACHE_BYTES / sizeof(unsigned long)];
+} ____cacheline_aligned_in_smp;
+
+#define SVC_POOL_IDLE_LINE_BITS	(SMP_CACHE_BYTES * BITS_PER_BYTE)
+
+struct svc_pool_ext {
+	int			node;		/* NUMA node of the pool's cpus */
+	unsigned int		range;		/* first pool << 16 | pools in run */
+	unsigned int		serve;		/* this pool, or nearest with threads */
+	unsigned int		prev;		/* previous pool with threads */
+	unsigned int		next;		/* next pool with threads */
+	unsigned int		gap;		/* served: before << 16 | after */
+	unsigned int		far;		/* next node's first pool, or this */
+	unsigned long		*idle;		/* idle map of the node's run */
+	unsigned int		place;		/* this pool's bit in it */
+	struct svc_pool_idle_line *lines;	/* the service's idle maps */
+	struct percpu_counter	sibling_wakes;	/* siblings woken for work here */
+	struct percpu_counter	steals;		/* taken from a sibling's queue */
+	struct percpu_counter	spin_hits;	/* idle spins that found work */
+} ____cacheline_aligned_in_smp;
+
+/*
+ * Pool @i's share of @total threads spread over @n pools: the shares sum
+ * to @total, differ by at most one, and the larger ones are spread
+ * evenly, so with fewer threads than pools every threaded pool has the
+ * same number of threadless pools around it.
+ */
+static inline unsigned int svc_pool_share(unsigned int total, unsigned int i,
+					  unsigned int n)
+{
+	return div_u64((u64)total * (i + 1), n) - div_u64((u64)total * i, n);
+}
+
+/* Cursor for svc_pool_split_init() and svc_pool_split_next() */
+struct svc_pool_split {
+	unsigned int		total;		/* threads to split */
+	unsigned int		npools;
+	unsigned int		rem;		/* nodes that get one more */
+	unsigned int		node;		/* nodes started so far */
+	unsigned int		first;		/* current node's first pool */
+	unsigned int		end;		/* and one past its last */
+	unsigned int		threads;	/* current node's threads */
+};
+
+/*
+ * Adaptive idle spin (SVC_IDLE_SPIN_US).  A thread's budget starts at
+ * zero, so a thread that has not yet seen work arrive soon after it went
+ * idle never spins.  A sleep that ends with work sooner than the maximum
+ * spin, or a spin that finds work, grows the budget (zero becomes
+ * SVC_IDLE_SPIN_START_NS, then it doubles, up to the maximum); a spin
+ * that finds nothing halves it, and below SVC_IDLE_SPIN_FLOOR_NS it is
+ * zero again.
+ */
+#define SVC_IDLE_SPIN_START_NS	1000U
+#define SVC_IDLE_SPIN_FLOOR_NS	250U
+#define SVC_IDLE_SPIN_US_MAX	50U
+/*
+ * The longest an idle thread polls for work before it sleeps, in us:
+ * fixed at 0, so the wait path does not spin.  There is no parameter.
+ */
+#define SVC_IDLE_SPIN_US	0U
+
+static inline unsigned int svc_idle_spin_grow(unsigned int cur_ns,
+					      unsigned int max_ns)
+{
+	unsigned int next = cur_ns ? cur_ns * 2 : SVC_IDLE_SPIN_START_NS;
+
+	return min(next, max_ns);
+}
+
+static inline unsigned int svc_idle_spin_shrink(unsigned int cur_ns)
+{
+	cur_ns /= 2;
+	return cur_ns < SVC_IDLE_SPIN_FLOOR_NS ? 0 : cur_ns;
+}
+
+static inline unsigned int svc_idle_spin_budget(unsigned int cur_ns,
+						unsigned int max_us)
+{
+	if (!max_us)
+		return 0;
+	return min(cur_ns, max_us * (unsigned int)NSEC_PER_USEC);
+}
 
 /* bits for sp_flags */
 enum {
@@ -100,6 +207,7 @@ struct svc_serv {
 						 * connection */
 	bool			sv_bc_enabled;	/* service uses backchannel */
 #endif /* CONFIG_SUNRPC_BACKCHANNEL */
+	struct svc_pool_ext *	sv_pool_ext;	/* per-pool, beside sv_pools */
 };
 
 /* This is used by pool_stats to find and lock an svc */
@@ -350,6 +458,7 @@ struct svc_rqst {
 	unsigned int		bc_to_retries;
 	unsigned int		rq_status_counter; /* RPC processing counter */
 	void			*rq_private;	/* For use by the service thread */
+	unsigned int		rq_spin_ns;	/* adaptive idle spin budget */
 };
 
 /* bits for rq_flags */
@@ -607,7 +716,7 @@ int		   svc_register(struct svc_serv *serv, struct net *net,
 
 void		   svc_wake_up(struct svc_serv *);
 void		   svc_reserve(struct svc_rqst *rqstp, int space);
-void		   svc_pool_wake_idle_thread(struct svc_pool *pool);
+bool		   svc_pool_wake_idle_thread(struct svc_pool *pool);
 struct svc_pool   *svc_pool_for_cpu(struct svc_serv *serv);
 unsigned int	   svc_serv_nrpools(const struct svc_serv *serv);
 char *		   svc_print_addr(struct svc_rqst *, char *, size_t);
