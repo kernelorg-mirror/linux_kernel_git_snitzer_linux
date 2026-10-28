@@ -130,3 +130,13 @@ The loads ahead themselves: 136 a WRITE, 68.1 ns on average, 36% at 64 ns or mor
 - **Pages that another holder shares miss more often with a prefetch** (26% against 15% past the 32nd), and so does the last page (22%). With a load, they hit like the rest. A shared page's line is more likely to be in another core's cache, but that a prefetch is dropped more often for such a line is a guess, not shown here.
 - **A load ahead is not the fix.** Untimed, it costs nfsd about 6k more cycles a WRITE than prefetchw (302.3k against 296.0k and 296.9k): 43 of the 71 loads a WRITE miss, and each holds back the instructions behind it, where a prefetch does not. What would make the prefetches stick, or take their place without stalling, is still to be found.
 - **The second window counted short again.** Like r84's, it counted 88,139 WRITEs untimed and 43,032 timed, against about 117,000 and 116,000 in the others. Its release count (48,083 against 130,000) fell with it, while the drives wrote 39.6 to 40.9 GB/s every second and the run's rate was the usual 40.48 GB/s. Its untimed cycles are not used. Its timed shares are per page, and they match prefetchw's. Why nfsd's counts fall in one window of a run is not known.
+
+## 6. Kinds of prefetch (r86, to run)
+
+[The diagnostic](sunrpc-diag-release-prefetch-kinds.patch) (`8F97DEB564CBBF076C97644`, not for keeping; built in `/var/tmp/zc-run-logs/t2-r38-kinds`) is r85's, with four more values of `svc_tcp_rx_rel_ahead`, each looking for a fetch that does not stall the way a load does:
+- 3: a prefetch for writing into the L2 only (PSTL2KEEP);
+- 4: a prefetch for reading into the L2 only (PLDL2KEEP);
+- 5: prefetchw twice per page, 16 entries ahead and again `svc_tcp_rx_rel_dist2` (4) ahead;
+- 6: two stages, PSTL2KEEP 32 entries ahead and prefetchw 16 ahead.
+
+[run86.sh](run86.sh): one loan64 run. For each of 0, 3, 4, 5, 6 and 0 again, it waits 1 s, takes 2 s of `perf stat` on nfsd's CPUs with the timing off, then 2 s with the timing on. It stamps each window's start and end, to tell whether a window that counts few WRITEs, as r84's third and r85's second did, is a short one.
