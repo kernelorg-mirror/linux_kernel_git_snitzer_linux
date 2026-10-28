@@ -7,6 +7,7 @@
 
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
+#include <linux/sched/clock.h>
 #include <linux/errno.h>
 #include <linux/freezer.h>
 #include <linux/slab.h>
@@ -510,6 +511,525 @@ static bool svc_xprt_ready(struct svc_xprt *xprt)
 	return false;
 }
 
+/*
+ * Sibling pools.  With one pool per cpu, receive steering can put the work
+ * of a few connections on a few pools while the threads of the other pools
+ * sleep.  svc_pool_ext_layout() chains the pools of a node that have
+ * threads into a ring; each pool without threads hangs off the nearest
+ * ring member, which serves it.  Two bounded mechanisms use it, both
+ * starting with the SVC_POOL_STEAL_SPAN ring members on either side of a
+ * pool:
+ *
+ *  - an enqueue that cannot claim an idle thread of its own pool (none is
+ *    idle, or the first idle one is already claimed for earlier work)
+ *    claims one of the nearest forward ring members that has one;
+ *  - a thread whose own pool is empty takes a transport from the pools it
+ *    serves, then from the nearest non-empty backward ring member.
+ *
+ * When the pool can reach other nodes (far), the wake goes on to its
+ * node's idle map (svc_pool_idle_add()), which names the pools whose
+ * idle list is not empty, and tries those nearest first; the steal walk
+ * goes on over the rest of its node's ring, at most once per idle period
+ * (svc_recv()).  Only when the node has no idle thread to claim, or no
+ * work, do they go to the other nodes, one node at a time along far.
+ * There they look at the pools serving the places near the relative
+ * places of their own block (svc_pool_far_ranges()); that relation is
+ * symmetric, so the walks still mirror on nodes of any size and with
+ * sparse threads, and a steal leaves a remote queue whose own pool has an idle
+ * thread.  So all pools with threads can serve arrivals that land on one
+ * node, while a transport crosses nodes only when its own node has no
+ * idle thread.
+ *
+ * The two walks mirror, so the thread a sibling wake claims looks at the
+ * queue that needed it; a claimed thread that finds nothing just goes
+ * idle again, and the transport stays queued for its own pool.  A
+ * transport is on one queue at a time (XPT_BUSY) and lwq_dequeue() hands
+ * it to one thread, so a steal can never process a transport twice.
+ * pernode pools of different nodes are never in one ring and have no far
+ * pool, so pernode behaves as before.
+ */
+#define SVC_POOL_STEAL_SPAN	8U
+
+/*
+ * The idle maps.  Each node's run of pools has a bitmap, from a cache
+ * line of its own, with one bit per pool (ext->place), set while that
+ * pool's idle list is not empty.  Only the list's transitions write it:
+ * svc_pool_idle_add() when it makes the list non-empty, and
+ * svc_pool_idle_del() when it leaves it empty.  An enqueue or a claim
+ * never writes it, so a saturated node, whose idle lists are empty, has
+ * a clean, empty map that its wakes read in place of every idle list.
+ *
+ * The map is a hint, and a stale bit costs work, never a transport.  A
+ * set bit whose pool has no idle thread to claim (the first one is
+ * claimed, or the list just emptied) costs the waker one failed
+ * svc_pool_wake_idle_thread(), which only reads that list, and perhaps a
+ * cross-node wake its node did not need.  A clear bit whose pool has an
+ * idle thread lets the waker pass that pool by as if its threads were
+ * busy.  Neither loses or doubles a transport: the transport stays on
+ * the queue it was put on, which that pool's own threads and the pools
+ * serving it look at before they sleep, and XPT_BUSY and lwq_dequeue()
+ * still give it to one thread.
+ *
+ * Nor does the map open a lost wakeup between a thread going idle and a
+ * racing enqueue.  The thread adds itself to the idle list (llist_add(),
+ * a full barrier), sets its bit if the list was empty, and orders that
+ * store before the queue loads of svc_thread_sibling_work() with
+ * smp_mb__after_atomic().  The enqueue stores its transport with
+ * lwq_enqueue() (a cmpxchg) before it loads the idle lists and the map.
+ * So either the waker sees the thread, on its list or in the map, or the
+ * thread's walk, which covers its whole node whenever the waker reads
+ * the map, sees the transport, as before the map.  A thread that joins a
+ * non-empty list relies on the bit its predecessor set.  The clearing
+ * side is the delicate one: svc_pool_idle_del() clears the bit only when
+ * its removal left the list empty, then, after smp_mb__after_atomic(),
+ * looks at the list again.  A thread added meanwhile is either seen
+ * there or saw the clear bit and set it itself.  When it is seen and the
+ * bit is still clear, a waker may have read the map between the clear
+ * and now, so svc_pool_idle_del() sets the bit and claims the first idle
+ * thread; that thread walks its node again (svc_recv()) and takes what
+ * the waker could not give it.
+ */
+
+/**
+ * svc_pool_idle_add - put an idle thread on its pool's idle list
+ * @ext: the pool's svc_pool_ext
+ * @pool: the thread's pool
+ * @rqstp: the thread
+ *
+ * The caller then loads the queues it may take work from.
+ */
+static void
+svc_pool_idle_add(struct svc_pool_ext *ext, struct svc_pool *pool,
+		  struct svc_rqst *rqstp)
+{
+	unsigned long *map;
+
+	if (!llist_add(&rqstp->rq_idle, &pool->sp_idle_threads))
+		return;
+	map = READ_ONCE(ext->idle);
+	if (map) {
+		set_bit(READ_ONCE(ext->place), map);
+		/* the bit before the caller's queue loads */
+		smp_mb__after_atomic();
+	}
+}
+
+/**
+ * svc_pool_idle_del - take an idle thread off its pool's idle list
+ * @ext: the pool's svc_pool_ext
+ * @pool: the thread's pool
+ * @rqstp: the thread
+ *
+ * Only the first thread on the list can leave it.
+ *
+ * Return: true if @rqstp was first and is now off the list.
+ */
+static bool
+svc_pool_idle_del(struct svc_pool_ext *ext, struct svc_pool *pool,
+		  struct svc_rqst *rqstp)
+{
+	unsigned long *map;
+	unsigned int place;
+
+	if (!llist_del_first_this(&pool->sp_idle_threads, &rqstp->rq_idle))
+		return false;
+	map = READ_ONCE(ext->idle);
+	if (!map || READ_ONCE(pool->sp_idle_threads.first))
+		return true;
+	place = READ_ONCE(ext->place);
+	clear_bit(place, map);
+	/* the clear before the second look at the list */
+	smp_mb__after_atomic();
+	if (READ_ONCE(pool->sp_idle_threads.first) &&
+	    !test_and_set_bit(place, map))
+		svc_pool_wake_idle_thread(pool);
+	return true;
+}
+
+/*
+ * Does @pool share its run with other pools, or reach other nodes?  An
+ * unpooled service has one pool; otherwise this reads only @pool's own
+ * ext, not the global map.
+ */
+static bool svc_pool_has_siblings(const struct svc_serv *serv,
+				  const struct svc_pool *pool)
+{
+	const struct svc_pool_ext *ext = &serv->sv_pool_ext[pool->sp_id];
+
+	return serv->sv_is_pooled &&
+	       ((READ_ONCE(ext->range) & 0xffff) > 1 ||
+		READ_ONCE(ext->far) != pool->sp_id);
+}
+
+/*
+ * The far pool of the node after @peer's, or UINT_MAX when that is back
+ * on @self's node (the run of @self).
+ */
+static unsigned int svc_pool_next_far(const struct svc_pool_ext *ext,
+				      unsigned int self, unsigned int peer)
+{
+	unsigned int far = READ_ONCE(ext[peer].far);
+
+	if (READ_ONCE(ext[far].range) == READ_ONCE(ext[self].range))
+		return UINT_MAX;
+	return far;
+}
+
+/**
+ * svc_pool_far_window - the places of another node a pool looks at
+ * @j: the pool's place in its own node's run
+ * @n: the number of pools in that run
+ * @m: the number of pools in the other node's run
+ * @lo: set to the first place in the other run
+ * @hi: set to the last place, below @lo when there is none
+ *
+ * Place i of the other run is in the window when the centres of places j
+ * and i, as fractions of their runs, are less than t / (2 * n * m) apart,
+ * with t = max(SVC_POOL_STEAL_SPAN * min(n, m), max(n, m) + 1).  That
+ * relation is the same with the two runs swapped, so a cross-node wake
+ * claims a thread only where that thread's steal walk looks back at the
+ * waking pool.  A window is never empty, and has at most
+ * SVC_POOL_STEAL_SPAN places while the runs differ in size by less than
+ * that factor (else about the ratio of their sizes).  The walks look at
+ * the pool serving each place, so a window of threadless places still
+ * reaches the threads that serve them.
+ */
+static void svc_pool_far_window(unsigned int j, unsigned int n, unsigned int m,
+				 unsigned int *lo, unsigned int *hi)
+{
+	unsigned long c, t, q;
+
+	/* (2 * j + 1) * m + t must not overflow */
+	BUILD_BUG_ON(BITS_PER_LONG < 64 && NR_CPUS > 0x7fff);
+
+	*lo = 1;
+	*hi = 0;
+	if (!n || !m || j >= n)
+		return;
+	c = (2UL * j + 1) * m;
+	t = max(SVC_POOL_STEAL_SPAN * min(n, m), max(n, m) + 1);
+	/* the first i with (2i + 1) n > c - t, the last with < c + t */
+	q = c + 1 > t + n ? (c - t + n) / n : 1;
+	*lo = q / 2;
+	q = (c + t - 1) / n;
+	*hi = min_t(unsigned long, (q - 1) / 2, m - 1);
+}
+
+/*
+ * The places of another node's run of @fcount pools that the cross-node
+ * walks of @self look at: the svc_pool_far_window() places of every
+ * place of @self's block (itself and the threadless pools it serves),
+ * as at most two ranges [lo, hi], two when the block wraps within its
+ * run.  The windows grow with the place, so a segment of the block gives
+ * one range.  A remote pool so takes part when one of its own block's
+ * places is in one of those windows; the place relation is symmetric,
+ * so this relation of pools is too, which the walks look at through
+ * serve: a pool whose wake can claim a remote thread is a pool that
+ * thread's steal walk looks at, also when threads are sparse.
+ */
+static unsigned int svc_pool_far_ranges(const struct svc_pool_ext *ext,
+					unsigned int self, unsigned int range,
+					unsigned int fcount, unsigned int *lo,
+					unsigned int *hi)
+{
+	unsigned int gap = READ_ONCE(ext[self].gap);
+	unsigned int count = range & 0xffff, s = self - (range >> 16);
+	unsigned int back = min(gap >> 16, count - 1);
+	unsigned int end = s + min(gap & 0xffff, count - 1);
+	unsigned int seg[2][2], nr, k, x;
+
+	if (back > s) {
+		seg[0][0] = s + count - back;
+		seg[0][1] = count - 1;
+		seg[1][0] = 0;
+		seg[1][1] = min(end, count - 1);
+		nr = 2;
+	} else if (end >= count) {
+		seg[0][0] = s - back;
+		seg[0][1] = count - 1;
+		seg[1][0] = 0;
+		seg[1][1] = end - count;
+		nr = 2;
+	} else {
+		seg[0][0] = s - back;
+		seg[0][1] = end;
+		nr = 1;
+	}
+	for (k = 0; k < nr; k++) {
+		svc_pool_far_window(seg[k][0], count, fcount, &lo[k], &x);
+		svc_pool_far_window(seg[k][1], count, fcount, &x, &hi[k]);
+	}
+	return nr;
+}
+/*
+ * How many ring members of its own node the steal walk of @self looks
+ * at: SVC_POOL_STEAL_SPAN, or with @full the whole run when @self
+ * reaches other nodes, so that nothing crosses nodes while its own node
+ * has work.
+ */
+static unsigned int svc_pool_local_span(const struct svc_pool_ext *ext,
+					unsigned int self, unsigned int range,
+					bool full)
+{
+	if (!full || READ_ONCE(ext[self].far) == self)
+		return SVC_POOL_STEAL_SPAN;
+	return range & 0xffff;
+}
+
+/* The next and previous pool of @i's run, wrapping within the run */
+static unsigned int svc_pool_run_next(const struct svc_pool_ext *ext,
+				      unsigned int i)
+{
+	unsigned int range = READ_ONCE(ext[i].range);
+	unsigned int first = range >> 16, count = range & 0xffff;
+
+	if (!count)
+		return i;
+	return i + 1 < first + count ? i + 1 : first;
+}
+
+static unsigned int svc_pool_run_prev(const struct svc_pool_ext *ext,
+				      unsigned int i)
+{
+	unsigned int range = READ_ONCE(ext[i].range);
+	unsigned int first = range >> 16, count = range & 0xffff;
+
+	if (!count)
+		return i;
+	return i > first ? i - 1 : first + count - 1;
+}
+
+/*
+ * Claim an idle thread of a pool that the idle map of @self's node names,
+ * nearest first going forward from @after and wrapping, each pool once.
+ * @first and @count are the node's run.  Reads the map, and only the
+ * idle lists of the pools it names.  Returns the pool claimed, or
+ * UINT_MAX.
+ */
+static unsigned int svc_pool_idle_claim(struct svc_pool *pools,
+					const struct svc_pool_ext *ext,
+					unsigned int self, unsigned int first,
+					unsigned int count, unsigned int after)
+{
+	const unsigned long *map = READ_ONCE(ext[self].idle);
+	unsigned int bit, start;
+
+	if (!map || !count)
+		return UINT_MAX;
+	start = (after - first + 1) % count;
+	for_each_set_bit_wrap(bit, map, count, start) {
+		if (first + bit == self)
+			continue;
+		if (svc_pool_wake_idle_thread(&pools[first + bit]))
+			return first + bit;
+	}
+	return UINT_MAX;
+}
+
+/**
+ * svc_pool_wake_sibling - claim an idle thread of a sibling pool
+ * @pools: the service's pools
+ * @ext: their per-pool state
+ * @self: the pool whose work needs a thread
+ *
+ * Called when svc_pool_wake_idle_thread(@self) claimed nothing.  Walks
+ * forward over up to SVC_POOL_STEAL_SPAN pools with threads in @self's
+ * run, nearest first.  When @self reaches other nodes, it then tries the
+ * pools its node's idle map names, nearest first from where the walk
+ * stopped (svc_pool_idle_claim()), and only when none of those gave a
+ * thread, each other node in turn: the pools serving the places that
+ * svc_pool_far_ranges() names, if that node's map names them.  A
+ * saturated node so reads eight idle lists and its map, as many lines as
+ * without the map.  The claimed thread finds the work through
+ * svc_xprt_steal().
+ *
+ * Returns the pool whose thread was claimed, or @self when none was.
+ */
+static unsigned int
+svc_pool_wake_sibling(struct svc_pool *pools, struct svc_pool_ext *ext,
+		      unsigned int self)
+{
+	unsigned int range = READ_ONCE(ext[self].range);
+	unsigned int first = range >> 16, count = range & 0xffff;
+	unsigned int peer = self, far = self;
+	unsigned int d, n, i, r, nr, lo[2], hi[2], frange, fbase, last;
+	const unsigned long *fmap;
+
+	for (d = 0; d < SVC_POOL_STEAL_SPAN; d++) {
+		peer = READ_ONCE(ext[peer].next);
+		if (peer == self)
+			break;
+		if (svc_pool_wake_idle_thread(&pools[peer]))
+			goto claimed;
+	}
+	if (READ_ONCE(ext[self].far) == self)
+		return self;
+	/* the rest of the node, by its idle map, unless the walk saw it all */
+	if (peer != self) {
+		peer = svc_pool_idle_claim(pools, ext, self, first, count, peer);
+		if (peer != UINT_MAX)
+			goto claimed;
+	}
+	/* no idle thread on this node: the other nodes, one at a time */
+	for (n = 0; n < MAX_NUMNODES; n++) {
+		far = svc_pool_next_far(ext, self, far);
+		if (far == UINT_MAX)
+			break;
+		frange = READ_ONCE(ext[far].range);
+		fbase = frange >> 16;
+		fmap = READ_ONCE(ext[far].idle);
+		nr = svc_pool_far_ranges(ext, self, range, frange & 0xffff,
+					 lo, hi);
+		for (r = 0; r < nr; r++) {
+			for (i = lo[r], last = UINT_MAX; i <= hi[r]; i++) {
+				peer = READ_ONCE(ext[fbase + i].serve);
+				if (peer == last)
+					continue;
+				last = peer;
+				if (fmap && !test_bit(peer - fbase, fmap))
+					continue;
+				if (svc_pool_wake_idle_thread(&pools[peer]))
+					goto claimed;
+			}
+		}
+	}
+	return self;
+claimed:
+	percpu_counter_inc(&ext[self].sibling_wakes);
+	return peer;
+}
+
+/* With @xprtp, dequeue a transport of @pool into it; else report work */
+static bool svc_pool_steal_one(struct svc_pool *pool, struct svc_xprt **xprtp)
+{
+	if (lwq_empty(&pool->sp_xprts))
+		return false;
+	if (!xprtp)
+		return true;
+	*xprtp = lwq_dequeue(&pool->sp_xprts, struct svc_xprt, xpt_ready);
+	if (!*xprtp)
+		return false;
+	svc_xprt_get(*xprtp);
+	return true;
+}
+
+/*
+ * Walk the pools a thread of @self may take work from: first the pools
+ * without threads that @self serves (its block, before and after it),
+ * then the pools with threads backward along the ring, nearest first: up
+ * to SVC_POOL_STEAL_SPAN of them.  With @full, the whole of its node's
+ * ring when @self reaches other nodes, and only then the pools serving
+ * the places of each other node in turn that svc_pool_far_ranges()
+ * names, leaving a pool whose idle map bit says its own idle thread
+ * serves it.  With @xprtp, dequeue the first transport found into it;
+ * without, only report a pool with work.
+ */
+static struct svc_pool *
+svc_pool_steal_scan(struct svc_pool *pools, const struct svc_pool_ext *ext,
+		    unsigned int self, struct svc_xprt **xprtp, bool full)
+{
+	unsigned int gap = READ_ONCE(ext[self].gap);
+	unsigned int back = gap >> 16, block = back + (gap & 0xffff);
+	unsigned int range = READ_ONCE(ext[self].range);
+	unsigned int span = svc_pool_local_span(ext, self, range, full);
+	unsigned int peer = self, far = self;
+	unsigned int k, n, i, r, nr, lo[2], hi[2], frange, fbase, last;
+	const unsigned long *fmap;
+
+	for (k = 0; k < block + span; k++) {
+		if (k < back)
+			peer = svc_pool_run_prev(ext, peer);
+		else if (k < block)
+			peer = svc_pool_run_next(ext, k == back ? self : peer);
+		else
+			peer = READ_ONCE(ext[k == block ? self : peer].prev);
+		if (peer == self)
+			break;
+		if (svc_pool_steal_one(&pools[peer], xprtp))
+			return &pools[peer];
+	}
+	for (n = 0; full && n < MAX_NUMNODES; n++) {
+		far = svc_pool_next_far(ext, self, far);
+		if (far == UINT_MAX)
+			break;
+		frange = READ_ONCE(ext[far].range);
+		fbase = frange >> 16;
+		fmap = READ_ONCE(ext[far].idle);
+		nr = svc_pool_far_ranges(ext, self, range, frange & 0xffff,
+					 lo, hi);
+		for (r = 0; r < nr; r++) {
+			for (i = lo[r], last = UINT_MAX; i <= hi[r]; i++) {
+				peer = READ_ONCE(ext[fbase + i].serve);
+				if (peer == last)
+					continue;
+				last = peer;
+				if (fmap && test_bit(peer - fbase, fmap))
+					continue;
+				if (svc_pool_steal_one(&pools[peer], xprtp))
+					return &pools[peer];
+			}
+		}
+	}
+	return NULL;
+}
+
+/**
+ * svc_pool_steal_source - find a pool with work a thread of @self may take
+ * @pools: the service's pools
+ * @ext: their per-pool state
+ * @self: the pool of the looking thread
+ *
+ * Returns the nearest such pool with queued transports, or NULL.
+ */
+static struct svc_pool *
+svc_pool_steal_source(struct svc_pool *pools, const struct svc_pool_ext *ext,
+		      unsigned int self)
+{
+	return svc_pool_steal_scan(pools, ext, self, NULL, true);
+}
+
+/**
+ * svc_xprt_steal - take a transport from a sibling pool
+ * @pools: the service's pools
+ * @ext: their per-pool state
+ * @self: the pool of the taking thread
+ * @from: set to the pool the transport came from
+ *
+ * Returns a referenced transport, or NULL.
+ */
+static struct svc_xprt *
+svc_xprt_steal(struct svc_pool *pools, const struct svc_pool_ext *ext,
+	       unsigned int self, unsigned int *from)
+{
+	struct svc_xprt *xprt = NULL;
+	struct svc_pool *pool;
+
+	pool = svc_pool_steal_scan(pools, ext, self, &xprt, true);
+	if (pool)
+		*from = pool->sp_id;
+	return xprt;
+}
+
+/*
+ * Queue @xprt on @pool, then claim an idle thread of @pool for it, or,
+ * when that fails, an idle thread of a sibling pool, which steals it.
+ */
+static void svc_pool_enqueue_xprt(struct svc_serv *serv,
+				  struct svc_pool *pool,
+				  struct svc_xprt *xprt)
+{
+	percpu_counter_inc(&pool->sp_sockets_queued);
+	/* Only trace_svc_xprt_dequeue() reads the enqueue time. */
+	if (trace_svc_xprt_dequeue_enabled())
+		xprt->xpt_qtime = ktime_get();
+	lwq_enqueue(&xprt->xpt_ready, &pool->sp_xprts);
+
+	if (!svc_pool_wake_idle_thread(pool) &&
+	    svc_pool_has_siblings(serv, pool))
+		svc_pool_wake_sibling(serv->sv_pools, serv->sv_pool_ext,
+				      pool->sp_id);
+}
+
 /**
  * svc_xprt_enqueue - Queue a transport on an idle nfsd thread
  * @xprt: transport with data pending
@@ -517,6 +1037,7 @@ static bool svc_xprt_ready(struct svc_xprt *xprt)
  */
 void svc_xprt_enqueue(struct svc_xprt *xprt)
 {
+	struct svc_serv *serv;
 	struct svc_pool *pool;
 
 	if (!svc_xprt_ready(xprt))
@@ -530,15 +1051,9 @@ void svc_xprt_enqueue(struct svc_xprt *xprt)
 	if (test_and_set_bit(XPT_BUSY, &xprt->xpt_flags))
 		return;
 
-	pool = svc_pool_for_cpu(xprt->xpt_server);
-
-	percpu_counter_inc(&pool->sp_sockets_queued);
-	/* Only trace_svc_xprt_dequeue() reads the enqueue time. */
-	if (trace_svc_xprt_dequeue_enabled())
-		xprt->xpt_qtime = ktime_get();
-	lwq_enqueue(&xprt->xpt_ready, &pool->sp_xprts);
-
-	svc_pool_wake_idle_thread(pool);
+	serv = xprt->xpt_server;
+	pool = svc_pool_for_cpu(serv);
+	svc_pool_enqueue_xprt(serv, pool, xprt);
 }
 EXPORT_SYMBOL_GPL(svc_xprt_enqueue);
 
@@ -638,12 +1153,15 @@ static void svc_xprt_release(struct svc_rqst *rqstp)
  * Some svc_serv's will have occasional work to do, even when a xprt is not
  * waiting to be serviced. This function is there to "kick" a task in one of
  * those services so that it can wake up and do that work. Note that we only
- * bother with pool 0 as we don't need to wake up more than one thread for
- * this purpose.
+ * bother with one pool as we don't need to wake up more than one thread for
+ * this purpose: pool 0, or the pool that serves it when pool 0 has no
+ * threads (see svc_pool_ext_layout()).
  */
 void svc_wake_up(struct svc_serv *serv)
 {
-	struct svc_pool *pool = &serv->sv_pools[0];
+	unsigned int pidx = serv->sv_is_pooled ?
+			    READ_ONCE(serv->sv_pool_ext[0].serve) : 0;
+	struct svc_pool *pool = &serv->sv_pools[pidx];
 
 	set_bit(SP_TASK_PENDING, &pool->sp_flags);
 	svc_pool_wake_idle_thread(pool);
@@ -773,6 +1291,64 @@ static bool svc_alloc_arg(struct svc_rqst *rqstp)
 	return true;
 }
 
+/*
+ * One idle period's steal walks.  The walk over the whole node runs at
+ * most once per period: before the thread sleeps (svc_thread_sibling_work()),
+ * or after it was claimed or slept, when the work may have come anywhere
+ * on the node; the walks after it in the same period try the pool it
+ * found, then only the SVC_POOL_STEAL_SPAN nearest ring members.
+ */
+struct svc_steal_cycle {
+	struct svc_pool		*found;		/* where the full walk saw work */
+	bool			walked;		/* the full walk has run */
+};
+
+/* Is there work this thread may take from a sibling pool? */
+static bool svc_thread_sibling_work(struct svc_rqst *rqstp,
+				    struct svc_steal_cycle *cyc)
+{
+	struct svc_serv *serv = rqstp->rq_server;
+
+	if (!svc_pool_has_siblings(serv, rqstp->rq_pool))
+		return false;
+	/* transports, in one pass */
+	cyc->walked = true;
+	cyc->found = svc_pool_steal_source(serv->sv_pools, serv->sv_pool_ext,
+					   rqstp->rq_pool->sp_id);
+	return cyc->found;
+}
+
+static struct svc_xprt *svc_thread_steal(struct svc_rqst *rqstp,
+					 struct svc_pool **from,
+					 struct svc_steal_cycle *cyc)
+{
+	struct svc_serv *serv = rqstp->rq_server;
+	unsigned int self = rqstp->rq_pool->sp_id;
+	struct svc_xprt *xprt = NULL;
+	struct svc_pool *pool = cyc->found;
+	unsigned int id;
+
+	if (!svc_pool_has_siblings(serv, rqstp->rq_pool))
+		return NULL;
+	if (!pool || !svc_pool_steal_one(pool, &xprt)) {
+		if (cyc->walked) {
+			pool = svc_pool_steal_scan(serv->sv_pools,
+						   serv->sv_pool_ext, self,
+						   &xprt, false);
+		} else {
+			xprt = svc_xprt_steal(serv->sv_pools, serv->sv_pool_ext,
+					      self, &id);
+			pool = xprt ? &serv->sv_pools[id] : NULL;
+		}
+	}
+	cyc->walked = true;
+	if (xprt) {
+		percpu_counter_inc(&serv->sv_pool_ext[self].steals);
+		*from = pool;
+	}
+	return xprt;
+}
+
 static bool
 svc_thread_should_sleep(struct svc_rqst *rqstp)
 {
@@ -800,45 +1376,152 @@ svc_thread_should_sleep(struct svc_rqst *rqstp)
 	return true;
 }
 
+/*
+ * As svc_thread_should_sleep(), and the thread was not claimed for work
+ * (RQ_WAKING), possibly a sibling pool's, since it went idle.
+ */
+static bool svc_thread_may_sleep(struct svc_rqst *rqstp)
+{
+	return svc_thread_should_sleep(rqstp) &&
+	       !test_bit(RQ_WAKING, &rqstp->rq_flags);
+}
+
+/**
+ * svc_thread_idle_spin - poll for work before sleeping
+ * @rqstp: an idle thread, already on its pool's idle list
+ * @max_us: the longest spin, SVC_IDLE_SPIN_US
+ *
+ * The thread stays running, so a waker that finds it first on the idle
+ * list claims it (RQ_WAKING) without waking it.  Each iteration checks
+ * only the thread's own pool and its own RQ_WAKING bit; sibling queues
+ * were checked once before the spin.  Returns true when work turned up.
+ */
+static bool svc_thread_idle_spin(struct svc_rqst *rqstp,
+				 unsigned int max_us)
+{
+	unsigned int budget = svc_idle_spin_budget(rqstp->rq_spin_ns, max_us);
+	unsigned int cap = max_us * NSEC_PER_USEC;
+	struct svc_pool *pool = rqstp->rq_pool;
+	struct svc_pool_ext *ext;
+	u64 start;
+
+	if (!budget)
+		return false;
+	start = local_clock();
+	do {
+		cpu_relax();
+		if (!svc_thread_may_sleep(rqstp)) {
+			ext = &rqstp->rq_server->sv_pool_ext[pool->sp_id];
+			rqstp->rq_spin_ns = svc_idle_spin_grow(budget, cap);
+			percpu_counter_inc(&ext->spin_hits);
+			return true;
+		}
+	} while (!need_resched() && local_clock() - start < budget);
+	if (!need_resched())
+		rqstp->rq_spin_ns = svc_idle_spin_shrink(budget);
+	return false;
+}
+
+/* Claim another thread for the work a claim on this one stood for */
+static void svc_thread_pass_claim(struct svc_rqst *rqstp)
+{
+	struct svc_serv *serv = rqstp->rq_server;
+	struct svc_pool *pool = rqstp->rq_pool;
+
+	if (!svc_pool_wake_idle_thread(pool) &&
+	    svc_pool_has_siblings(serv, pool))
+		svc_pool_wake_sibling(serv->sv_pools, serv->sv_pool_ext,
+				      pool->sp_id);
+}
+
 static bool svc_schedule_timeout(long timeo)
 {
 	return schedule_timeout(timeo ? timeo : MAX_SCHEDULE_TIMEOUT) == 0;
 }
 
-static bool svc_thread_wait_for_work(struct svc_rqst *rqstp, long timeo)
+static bool svc_thread_wait_for_work(struct svc_rqst *rqstp, long timeo,
+				     struct svc_steal_cycle *cyc)
 {
 	struct svc_pool *pool = rqstp->rq_pool;
+	struct svc_pool_ext *ext = &rqstp->rq_server->sv_pool_ext[pool->sp_id];
 	bool did_timeout = false;
 
 	if (svc_thread_should_sleep(rqstp)) {
-		set_current_state(TASK_IDLE | TASK_FREEZABLE);
+		const unsigned int spin_us = SVC_IDLE_SPIN_US;
+
+		/* Without a spin, the task state is set first, so that a
+		 * waker that claims this thread once it is on the idle list
+		 * either sees it sleeping or is seen by the checks below.
+		 */
+		if (likely(!spin_us))
+			set_current_state(TASK_IDLE | TASK_FREEZABLE);
 		/* Ordered before the llist_add() that makes this thread
-		 * visible to svc_pool_wake_idle_thread().
+		 * visible to svc_pool_wake_idle_thread(), the only setter.
 		 */
 		clear_bit(RQ_WAKING, &rqstp->rq_flags);
-		llist_add(&rqstp->rq_idle, &pool->sp_idle_threads);
-		if (likely(svc_thread_should_sleep(rqstp)))
-			did_timeout = svc_schedule_timeout(timeo);
+		svc_pool_idle_add(ext, pool, rqstp);
+		/* Once per idle period, after svc_pool_idle_add(): an
+		 * enqueue on a sibling pool either sees this thread on the
+		 * idle list or in the idle map and claims it, or its work
+		 * is seen here (see svc_pool_idle_add()).
+		 */
+		if (svc_thread_sibling_work(rqstp, cyc))
+			goto dequeue_self;
+		if (spin_us) {
+			/* On the idle list but running: a waker claims this
+			 * thread without waking it.  The set_current_state()
+			 * after the spin orders the state before the
+			 * recheck below, so a waker that saw this thread
+			 * running set RQ_WAKING where the recheck sees it.
+			 */
+			if (svc_thread_idle_spin(rqstp, spin_us))
+				goto dequeue_self;
+			set_current_state(TASK_IDLE | TASK_FREEZABLE);
+		}
+		if (likely(svc_thread_may_sleep(rqstp))) {
+			unsigned int cap = spin_us * NSEC_PER_USEC;
+			u64 slept = spin_us ? local_clock() : 0;
 
-		while (!llist_del_first_this(&pool->sp_idle_threads,
-					     &rqstp->rq_idle)) {
+			did_timeout = svc_schedule_timeout(timeo);
+			/* work that came while it slept may be anywhere */
+			cyc->walked = false;
+			cyc->found = NULL;
+			/* A spin of the full budget would have found the
+			 * work that ended this sleep.
+			 */
+			if (spin_us && !did_timeout &&
+			    local_clock() - slept <= cap)
+				rqstp->rq_spin_ns =
+					svc_idle_spin_grow(rqstp->rq_spin_ns, cap);
+		}
+dequeue_self:
+		/* a claim stands for work anywhere on the node */
+		if (test_bit(RQ_WAKING, &rqstp->rq_flags)) {
+			cyc->walked = false;
+			cyc->found = NULL;
+		}
+
+		while (!svc_pool_idle_del(ext, pool, rqstp)) {
 			/* Work just became available.  This thread can only
 			 * handle it after removing rqstp from the idle
 			 * list. If that attempt failed, some other thread
 			 * must have queued itself after finding no
 			 * work to do, so that thread has taken responsibly
-			 * for this new work.  This thread can safely sleep
-			 * until woken again.
+			 * for this new work.  A claim (RQ_WAKING) that
+			 * reached this thread while it was first on the
+			 * list is passed on, as no waker will look at this
+			 * thread again before it is first again.  Then this
+			 * thread can safely sleep until woken again; each
+			 * sleep follows set_current_state() and a test of
+			 * RQ_WAKING, so a later claim is not lost.
 			 */
-			did_timeout = svc_schedule_timeout(timeo);
+			if (test_and_clear_bit(RQ_WAKING, &rqstp->rq_flags))
+				svc_thread_pass_claim(rqstp);
+			else
+				did_timeout = svc_schedule_timeout(timeo);
+			cyc->walked = false;
+			cyc->found = NULL;
 			set_current_state(TASK_IDLE | TASK_FREEZABLE);
-			/* Still on the list: let the next wake through.
-			 * A waker that sees the bit still set saw this
-			 * thread first, so the llist_del_first_this()
-			 * below either succeeds or fails to a thread that
-			 * queued itself later and took the work.
-			 */
-			clear_bit(RQ_WAKING, &rqstp->rq_flags);
 		}
 		__set_current_state(TASK_RUNNING);
 	} else {
@@ -930,13 +1613,23 @@ out:
 	svc_xprt_release(rqstp);
 }
 
-static void svc_thread_wake_next(struct svc_rqst *rqstp)
+/*
+ * More work is pending in @pool after this thread dequeued some: claim
+ * another thread for it, in @pool or else in a sibling pool.  @pool is
+ * this thread's own pool, or the pool it stole from.
+ */
+static void svc_thread_wake_next(struct svc_rqst *rqstp,
+				 struct svc_pool *pool)
 {
-	if (!svc_thread_should_sleep(rqstp))
-		/* More work pending after I dequeued some,
-		 * wake another worker
-		 */
-		svc_pool_wake_idle_thread(rqstp->rq_pool);
+	struct svc_serv *serv = rqstp->rq_server;
+
+	if (pool == rqstp->rq_pool ? svc_thread_should_sleep(rqstp) :
+				     lwq_empty(&pool->sp_xprts))
+		return;
+	if (!svc_pool_wake_idle_thread(pool) &&
+	    svc_pool_has_siblings(serv, pool))
+		svc_pool_wake_sibling(serv->sv_pools, serv->sv_pool_ext,
+				      pool->sp_id);
 }
 
 /**
@@ -956,14 +1649,16 @@ static void svc_thread_wake_next(struct svc_rqst *rqstp)
  */
 int svc_recv(struct svc_rqst *rqstp, long timeo)
 {
+	struct svc_steal_cycle cyc = {};
 	struct svc_pool *pool = rqstp->rq_pool;
+	struct svc_pool *from;
 	bool did_timeout;
 	int ret = 0;
 
 	if (!svc_alloc_arg(rqstp))
 		return ret;
 
-	did_timeout = svc_thread_wait_for_work(rqstp, timeo);
+	did_timeout = svc_thread_wait_for_work(rqstp, timeo, &cyc);
 
 	if (did_timeout && svc_thread_should_sleep(rqstp) &&
 	    pool->sp_nrthrmin && pool->sp_nrthreads > pool->sp_nrthrmin)
@@ -972,15 +1667,19 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
 	clear_bit(SP_TASK_PENDING, &pool->sp_flags);
 
 	if (svc_thread_should_stop(rqstp)) {
-		svc_thread_wake_next(rqstp);
+		if (!svc_thread_should_sleep(rqstp))
+			svc_pool_wake_idle_thread(pool);
 		return ret;
 	}
 
+	from = pool;
 	rqstp->rq_xprt = svc_xprt_dequeue(pool);
+	if (!rqstp->rq_xprt)
+		rqstp->rq_xprt = svc_thread_steal(rqstp, &from, &cyc);
 	if (rqstp->rq_xprt) {
 		struct svc_xprt *xprt = rqstp->rq_xprt;
 
-		svc_thread_wake_next(rqstp);
+		svc_thread_wake_next(rqstp, from);
 		/* Normally we will wait up to 5 seconds for any required
 		 * cache information to be provided.  When there are no
 		 * idle threads, we reduce the wait time.
@@ -1014,7 +1713,7 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
 		req = lwq_dequeue(&serv->sv_cb_list,
 				  struct rpc_rqst, rq_bc_list);
 		if (req) {
-			svc_thread_wake_next(rqstp);
+			svc_thread_wake_next(rqstp, pool);
 			svc_process_bc(req, rqstp);
 		}
 	}
@@ -1666,18 +2365,24 @@ static void svc_pool_stats_stop(struct seq_file *m, void *p)
 
 static int svc_pool_stats_show(struct seq_file *m, void *p)
 {
+	struct svc_info *si = m->private;
 	struct svc_pool *pool = p;
+	struct svc_pool_ext *ext;
 
 	if (p == SEQ_START_TOKEN) {
-		seq_puts(m, "# pool packets-arrived sockets-enqueued threads-woken threads-timedout\n");
+		seq_puts(m, "# pool packets-arrived sockets-enqueued threads-woken threads-timedout sibling-wakes steals spin-hits\n");
 		return 0;
 	}
 
-	seq_printf(m, "%u %llu %llu %llu 0\n",
+	ext = &si->serv->sv_pool_ext[pool->sp_id];
+	seq_printf(m, "%u %llu %llu %llu 0 %llu %llu %llu\n",
 		   pool->sp_id,
 		   percpu_counter_sum_positive(&pool->sp_messages_arrived),
 		   percpu_counter_sum_positive(&pool->sp_sockets_queued),
-		   percpu_counter_sum_positive(&pool->sp_threads_woken));
+		   percpu_counter_sum_positive(&pool->sp_threads_woken),
+		   percpu_counter_sum_positive(&ext->sibling_wakes),
+		   percpu_counter_sum_positive(&ext->steals),
+		   percpu_counter_sum_positive(&ext->spin_hits));
 
 	return 0;
 }
