@@ -13,6 +13,7 @@ obj-$(CONFIG_SUNRPC_XPRT_RDMA) += xprtrdma/
 # production sunrpc module carries no dependency on kunit.
 obj-$(CONFIG_SUNRPC_XDR_KUNIT_TEST) += xdr_kunit.o
 obj-$(CONFIG_SUNRPC_SVCSOCK_KUNIT_TEST) += svcsock_kunit.o
+obj-$(CONFIG_SUNRPC_SVC_POOL_KUNIT_TEST) += svc_pool_kunit.o
 
 sunrpc-y := clnt.o xprt.o socklib.o xprtsock.o sched.o \
 	    auth.o auth_null.o auth_tls.o auth_unix.o \
