@@ -15,6 +15,8 @@
 #include <linux/sched.h>
 #include <linux/skbuff.h>
 #include <linux/workqueue.h>
+#include <net/page_pool/cfg.h>
+#include <net/page_pool/helpers.h>
 #include <net/rx_loan.h>
 
 static void rx_loan_kunit_table_free(void *data)
@@ -1371,7 +1373,149 @@ static void rx_loan_other_consumer_test(struct kunit *test)
 	rx_loan_netns_budget_test(test);
 }
 
+static void rx_loan_cfg_parse_expect(struct kunit *test, const char *val,
+				     unsigned int want, bool want_manual)
+{
+	unsigned int out = ~0U;
+	bool manual = !want_manual;
+
+	KUNIT_EXPECT_EQ_MSG(test, page_pool_cfg_parse(val, &out, &manual), 0,
+			    "%s", val);
+	KUNIT_EXPECT_EQ_MSG(test, out, want, "%s", val);
+	KUNIT_EXPECT_EQ_MSG(test, manual, want_manual, "%s", val);
+}
+
+/* The region's settings as a case found them, put back however it ends. */
+struct rx_loan_kunit_region_saved {
+	unsigned int pages, read_pages;
+	bool failed;
+	char *stack;
+};
+
+static void rx_loan_kunit_region_params_restore(void *data)
+{
+	struct rx_loan_kunit_region_saved *saved = data;
+
+	page_pool_rx_region_kunit_config(saved->pages, saved->read_pages,
+					 saved->failed);
+	page_pool_rx_region_kunit_param("stack", saved->stack, NULL);
+}
+
+#define RX_LOAN_KUNIT_CARVED_ORDER	4
+
+static void rx_loan_kunit_carved_free(struct page *base)
+{
+	unsigned long i;
+
+	for (i = 0; i < (1UL << RX_LOAN_KUNIT_CARVED_ORDER); i++)
+		__free_page(base + i);
+}
+
+/* A KUnit region over pages of its own, as a carve would publish. */
+static void rx_loan_kunit_carved_remove(void *data)
+{
+	page_pool_rx_region_kunit_remove(false);
+	rx_loan_kunit_carved_free(data);
+}
+
+/*
+ * The region's settings through the ops their module parameters and
+ * debugfs files share: 0 is auto (the computed size), N is manual N, and
+ * back to 0 is auto again; a line read back parses to what it says.
+ * read_pages cannot move once a region is carved, but writing back what
+ * it reads is no change and succeeds; pages then still reads the size the
+ * next carve uses.
+ */
+static void rx_loan_region_param_test(struct kunit *test)
+{
+	struct rx_loan_kunit_region_saved *saved;
+	char *buf = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
+	char *line = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
+	unsigned int out, read_pages;
+	struct page *base;
+	char want[48];
+	bool manual;
+	int ret;
+
+	saved = kunit_kzalloc(test, sizeof(*saved), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, saved);
+	saved->stack = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, saved->stack);
+	KUNIT_ASSERT_NOT_NULL(test, buf);
+	KUNIT_ASSERT_NOT_NULL(test, line);
+	page_pool_rx_region_kunit_params(&saved->pages, &saved->read_pages,
+					 &saved->failed);
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("stack", NULL,
+							      saved->stack), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			rx_loan_kunit_region_params_restore, saved), 0);
+
+	rx_loan_cfg_parse_expect(test, "0", 0, false);
+	rx_loan_cfg_parse_expect(test, "auto\n", 0, false);
+	rx_loan_cfg_parse_expect(test, "7", 7, true);
+	rx_loan_cfg_parse_expect(test, "12 (auto)\n", 0, false);
+	rx_loan_cfg_parse_expect(test, "12 (manual)\n", 12, true);
+	rx_loan_cfg_parse_expect(test, "0 (manual)", 0, true);
+	rx_loan_cfg_parse_expect(test, "off", 0, true);
+	KUNIT_EXPECT_EQ(test, page_pool_cfg_parse("7 (later)", &out, &manual),
+			-EINVAL);
+	KUNIT_EXPECT_NE(test, page_pool_cfg_parse("seven", &out, &manual), 0);
+
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("pages", "0", buf), 0);
+	snprintf(want, sizeof(want), "%lu (auto)\n",
+		 page_pool_rx_region_kunit_carve_size(totalram_pages()));
+	KUNIT_EXPECT_STREQ(test, buf, want);
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("pages", "4096", buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, "4096 (manual)\n");
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("pages", "0", buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, want);
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("pages", "4096 (manual)", buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, "4096 (manual)\n");
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("pages", "4096 (auto)", buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, want);
+
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("stack", "16", buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, "16 (manual)\n");
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("stack", "auto", buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, "0 (auto)\n");
+
+	/* a split too small for one maximum READ is refused */
+	snprintf(want, sizeof(want), "%lu", PAGE_POOL_RX_REGION_READ_MIN - 1);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_param("read_pages", want, NULL),
+			-EINVAL);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_param("nonesuch", "0", NULL),
+			-ENOENT);
+
+	/* a carved region: read_pages is fixed, a write-back is no change */
+	base = alloc_pages(GFP_KERNEL, RX_LOAN_KUNIT_CARVED_ORDER);
+	KUNIT_ASSERT_NOT_NULL(test, base);
+	split_page(base, RX_LOAN_KUNIT_CARVED_ORDER);
+	ret = page_pool_rx_region_kunit_install(base,
+			1UL << RX_LOAN_KUNIT_CARVED_ORDER, 0);
+	if (ret) {	/* -EBUSY: a region is carved already; use it */
+		rx_loan_kunit_carved_free(base);
+		KUNIT_ASSERT_EQ(test, ret, -EBUSY);
+	} else {
+		KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+				rx_loan_kunit_carved_remove, base), 0);
+	}
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("read_pages", NULL, line), 0);
+	KUNIT_EXPECT_GT(test, page_pool_rx_region_kunit_param("read_pages", line, buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, line);
+	page_pool_rx_region_kunit_params(&out, &read_pages, &manual);
+	snprintf(want, sizeof(want), "%lu",
+		 PAGE_POOL_RX_REGION_READ_MIN + (read_pages == PAGE_POOL_RX_REGION_READ_MIN));
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_param("read_pages", want, buf),
+			-EBUSY);
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("read_pages", NULL, buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, line);
+	/* the setting is the next carve's size, not the carved region's */
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("pages", "4096", buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, "4096 (manual)\n");
+}
+
 static struct kunit_case rx_loan_test_cases[] = {
+	KUNIT_CASE(rx_loan_region_param_test),
 	KUNIT_CASE(rx_loan_region_size_for_test),
 	KUNIT_CASE(rx_loan_consumer_share_test),
 	KUNIT_CASE(rx_loan_other_consumer_test),
