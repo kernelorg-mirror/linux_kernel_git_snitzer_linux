@@ -94,7 +94,7 @@ Aggregates the flush completes after `xeu_rx_poll()` returns are counted in the 
 
 **So: GRO's cost is per frame, not in the list or in the merge decisions.** 85% of frames take the merge path. Each has had a full skb built around its buffer by xeu (`napi_build_skb`) only to be freed once its page is moved into the aggregate. In run89's ring profile that build and free is about 7% of the samples beyond the GRO frames: `napi_build_skb`, `__build_skb_around` and `__pi_memset_generic` about 4.6%, and `kmem_cache_free`, `__memcg_slab_free_hook` and `napi_skb_cache_put` about 2.5%. A driver that hands GRO page fragments (`napi_get_frags()` and `napi_gro_frags()`) builds no skb for a frame that merges: an xeu change, a question for Xsight, and a candidate for step 3 beside what step 2 finds about GRO's misses.
 
-## 2. Where GRO's misses are (r97, to run)
+## 2. Where GRO's misses are (r97)
 
 Every line of the new frame that xeu itself touches before GRO is already in the cache when GRO comes to it: the skb (zeroed by `napi_build_skb()`), its shared info (prefetched for writing and cleared), the first header line (read by `eth_type_trans()`). So the lines worth timing are the frame's second header line and the held aggregate's, which a merge reads and writes and which were last touched one or more frames earlier.
 
@@ -112,3 +112,23 @@ Every line of the new frame that xeu itself touches before GRO is already in the
 The held aggregate is the first in the frame's hash bucket, timed only when its hash is the frame's (step 1: the bucket holds one aggregate for 85% of frames). A sampled frame's lines are warm for GRO after the timing, so the sampling is one frame in 16, and the run's counted cycles are not a result.
 
 [run97.sh](run97.sh): load the diagnostic xeu (refusing if an NFS client is connected), one loan64 run with sampling for 8 s from 10 s into the timed load, then the kept xeu again and the settled setting. If the aggregate's lines come in at the floor, GRO's misses are not on the lines it reads first, and its cost is in what the merge writes and frees. If they do not, they are the lines to prefetch or keep.
+
+**Run 28 October:** 40.53 GB/s, flows placed, no drive stepping down, counted ring 138.4k and nfsd 297.6k cycles a WRITE, peak 6491. The kept xeu was loaded again and settled at the end ([run97.out](run97.out), [gro-lat-r97.txt](gro-lat-r97.txt)). In the 8 s, 2.62 million frames were sampled (309,022 WRITEs). 437,783 had no aggregate held, and 38,781 had another flow's first in their bucket.
+
+| line | loads | mean | at 128 ns or more |
+|---|---|---|---|
+| `own` (the floor) | 2,616,017 | 32.4 ns | 0.0% |
+| `hdr2` | 2,616,017 | 32.4 ns | 0.0% (6,228 at 64–127 ns) |
+| `agg_cb` | 2,139,453 | 32.2 ns | 0.0% |
+| `agg_hdr` | 2,139,453 | 32.2 ns | 0.0% |
+| `agg_shinfo` | 2,139,453 | 32.2 ns | 0.0% |
+| `last_shinfo` | 0 | | |
+
+- **Every line GRO reads first is in the cache.** The new frame's second header line is in, from xeu's `net_prefetch()`. So are the held aggregate's cb, header line and shared info, from the merge of the frame before.
+- **`last_shinfo` was never taken:** the aggregate's last skb is always its head. A frame here is one linear buffer, and `skb_gro_receive()` moves its buffer into the head's `frags[]` as a page fragment and frees the frame's skb (`GRO_MERGED_FREE`, step 1's 85%). The aggregate never grows a `frag_list`.
+- **So the L3 misses the profile puts in GRO's frames are not GRO's loads.** The likeliest owner is xeu's prefetch of the next frame, issued just before the current frame goes to GRO (`xeu_rx_prefetch_next()`). Its misses are outstanding while GRO runs, and a miss counted then is sampled on the instruction GRO is running. They are a prefetch doing its job, not a stall of GRO's.
+
+**So: GRO costs the rings instructions, not memory.** About 210 cycles a frame go to the per-frame protocol work and the merge, and xeu builds an skb for each merged frame only for GRO to free it (about 7% of the rings' samples, step 1). What is left to cut is the number of frames, or the work done for each:
+- **No skb for a frame that merges:** xeu hands GRO page fragments (`napi_get_frags()` and `napi_gro_frags()`). An xeu change, for Xsight.
+- **Fewer frames a WRITE:** the MTU is 7792 because a frame has to fit an 8 KiB `rx_buf_size` buffer (round 34). A 9000 MTU would be about 14% fewer frames, but a frame then spans two buffers, which round 34 chose against.
+- **Hardware GRO** on the E1, a question for Xsight.

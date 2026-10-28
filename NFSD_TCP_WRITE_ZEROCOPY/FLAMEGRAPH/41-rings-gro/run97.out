@@ -1,0 +1,12 @@
+0
+22:48:06 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu FD970ED52080A4FA32D33AE, settled.sh audit rest: the settled setting
+22:52:22 r97-diag-loan64 | total 40.53 GB/s | 1 no-step | 1 placed | r97-diag-loan64 ring 42.8 nfsd 92.7 us/W (38780 WRITEs/s) | ring 138.4k cycles 310.8k instructions, nfsd 297.6k cycles 302.6k instructions a WRITE | peak 6491
+22:52:22 gro_lat from 22:51:32 end 22:51:40
+sampled 2616017, no aggregate held 437783, another flow's 38781
+own          n   2616017 mean   32.4 ns  >=128 ns   0.0%
+hdr2         n   2616017 mean   32.4 ns  >=128 ns   0.0%
+agg_cb       n   2139453 mean   32.2 ns  >=128 ns   0.0%
+agg_hdr      n   2139453 mean   32.2 ns  >=128 ns   0.0%
+agg_shinfo   n   2139453 mean   32.2 ns  >=128 ns   0.0%
+22:52:57 end: xeu 63631721F8B149913C0DC19, settled.sh audit rest: the settled setting; DONE
+
