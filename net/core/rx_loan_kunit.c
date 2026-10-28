@@ -966,6 +966,58 @@ static void rx_loan_region_read_pickup_test(struct kunit *test)
 }
 
 /*
+ * A write_capped budget (nvmet-tcp's) stops at the write partition of a
+ * split region, counting every write budget's credit, so the read
+ * partition is left for reads; a write budget without it (kNFSd's) is
+ * capped by the region total alone, as before.  A write charge the write
+ * cap passes and the total refuses leaves the write count as it was.
+ */
+static void rx_loan_region_write_cap_test(struct kunit *test)
+{
+	static const struct rx_loan_budget capped = { .write_capped = true };
+	static const struct rx_loan_budget plain = {};
+	static const struct rx_loan_budget rd = { .read = true };
+
+	rx_loan_kunit_standin(test, 64, 16);
+	KUNIT_EXPECT_TRUE(test, rx_loan_region_take(30, &capped, NULL));
+	KUNIT_EXPECT_TRUE(test, rx_loan_region_take(10, &plain, NULL));
+	KUNIT_EXPECT_TRUE(test, rx_loan_region_take(8, &capped, NULL));
+	KUNIT_EXPECT_FALSE(test, rx_loan_region_take(1, &capped, NULL));
+	KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), 48L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 48L);
+
+	KUNIT_EXPECT_TRUE(test, rx_loan_region_take(16, &rd, NULL));
+	KUNIT_EXPECT_FALSE(test, rx_loan_region_take(1, &rd, NULL));
+	KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), 48L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 64L);
+	rx_loan_region_put(16, true);
+	rx_loan_region_put(48, false);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
+
+	/* kNFSd's budget alone: the total, not the write partition. */
+	KUNIT_EXPECT_TRUE(test, rx_loan_region_take(60, &plain, NULL));
+	KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), 60L);
+	KUNIT_EXPECT_FALSE(test, rx_loan_region_take(1, &capped, NULL));
+	KUNIT_EXPECT_FALSE(test, rx_loan_region_take(5, &plain, NULL));
+	KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), 60L);
+	rx_loan_region_put(60, false);
+
+	/* Unsplit: the write cap passes, the total refuses, nothing kept. */
+	rx_loan_kunit_region(64, 0);
+	KUNIT_EXPECT_TRUE(test, rx_loan_region_take(32, &capped, NULL));
+	KUNIT_EXPECT_TRUE(test, rx_loan_region_take(32, &rd, NULL));
+	KUNIT_EXPECT_FALSE(test, rx_loan_region_take(1, &capped, NULL));
+	KUNIT_EXPECT_FALSE(test, rx_loan_region_take(1, &plain, NULL));
+	KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), 32L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 64L);
+	rx_loan_region_put(32, true);
+	rx_loan_region_put(32, false);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
+}
+
+/*
  * The computed size on the qualified shapes: kNFSd's floor is two
  * double-buffered records of one maximum payload (1 MiB) per thread,
  * nrthreads * 4 * (payload pages + 1).
@@ -1776,6 +1828,7 @@ static struct kunit_case rx_loan_test_cases[] = {
 	KUNIT_CASE(rx_loan_tile_arena_test),
 	KUNIT_CASE(rx_loan_hold_test),
 	KUNIT_CASE(rx_loan_region_read_pickup_test),
+	KUNIT_CASE(rx_loan_region_write_cap_test),
 	{}
 };
 

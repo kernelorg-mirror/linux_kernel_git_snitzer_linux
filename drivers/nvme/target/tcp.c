@@ -18,12 +18,38 @@
 #include <net/handshake.h>
 #include <linux/inet.h>
 #include <linux/llist.h>
+#include <linux/sizes.h>
+#include <net/page_pool/helpers.h>
+#include <net/rx_loan.h>
 #include <trace/events/sock.h>
 
 #include "nvmet.h"
 
 #define NVMET_TCP_DEF_INLINE_DATA_SIZE	(4 * PAGE_SIZE)
 #define NVMET_TCP_MAXH2CDATA		0x400000 /* 16M arbitrary limit */
+
+/* rx_loan region receive: loan entries per KiB, so 1448-byte frames fit */
+#define NVMET_TCP_RX_ENTRY_BYTES	1024
+/* cap on a cost sample, region pages per 100 pages (as kNFSd) */
+#define NVMET_TCP_RX_FACTOR_MAX		12800U
+/* region pages the transport asks to be set aside for it */
+#define NVMET_TCP_RX_FLOOR		(SZ_4M >> PAGE_SHIFT)
+/*
+ * The receive buffer a queue is held to once it receives region pages,
+ * and its port's listener with it (rx_loan_hold_apply()): kNFSd's default.
+ */
+#define NVMET_TCP_RX_RCVBUF		SZ_256K
+/*
+ * Loan entries per command at most: a write needing more is copied whole,
+ * and counted.  2048 bio_vecs are 32 KiB, past SLUB's kmalloc caches: an
+ * order-3 allocation from the page allocator; the two bitmaps are 256 bytes
+ * each.  That covers 2046 KiB: a Linux host's default max_sectors_kb (1280)
+ * is borrowed whole.  The table is also bounded by the region's size.
+ */
+#define NVMET_TCP_RX_TABLE_MAX		2048
+static_assert((NVMET_TCP_RX_TABLE_MAX - 2) * NVMET_TCP_RX_ENTRY_BYTES >=
+	      SZ_1M + SZ_256K);
+static_assert(NVMET_TCP_RX_TABLE_MAX * sizeof(struct bio_vec) <= SZ_32K);
 #define NVMET_TCP_BACKLOG 128
 
 static int param_store_val(const char *str, int *val, int min, int max)
@@ -104,6 +130,12 @@ enum nvmet_tcp_recv_state {
 enum {
 	NVMET_TCP_F_INIT_FAILED = (1 << 0),
 	NVMET_TCP_F_R2T_SENT	= (1 << 1),
+	/* WRITE data is received into cmd->lt (region loans) */
+	NVMET_TCP_F_RX_LOAN	= (1 << 2),
+	/* ->data_done ran in hard irq: return pending on queue->rx_done */
+	NVMET_TCP_F_RX_DEFER	= (1 << 3),
+	/* no memory to copy into: the solicited data is discarded */
+	NVMET_TCP_F_RX_SINK	= (1 << 4),
 };
 
 struct nvmet_tcp_cmd {
@@ -136,6 +168,12 @@ struct nvmet_tcp_cmd {
 
 	__le32				exp_ddgst;
 	__le32				recv_ddgst;
+
+	/* rx_loan region receive (NVMET_TCP_F_RX_LOAN) */
+	struct rx_loan_table		lt;
+	struct rx_loan_credit		cr;
+	u32				r2t_end;	/* end of the solicited unit */
+	struct llist_node		rx_done_node;
 };
 
 enum nvmet_tcp_queue_state {
@@ -197,6 +235,17 @@ struct nvmet_tcp_queue {
 	void (*data_ready)(struct sock *);
 	void (*state_change)(struct sock *);
 	void (*write_space)(struct sock *);
+
+	/* rx_loan region receive: io_work context unless noted */
+	bool			rx_region;
+	bool			rx_kicked;	/* set by nvmet_tcp_rx_wake() */
+	struct rx_loan_budget	*rx_budget;
+	struct nvmet_tcp_cmd	*rx_unit;	/* owns the unit until its data is in */
+	struct list_head	rx_withheld;	/* R2Ts waiting for the unit */
+	struct llist_head	rx_done;	/* deferred ->data_done returns */
+	struct rx_loan_waiter	rx_wait;
+	/* the receive-buffer hold; pending is set by the actor */
+	struct rx_loan_hold	rx_hold;
 };
 
 struct nvmet_tcp_port {
@@ -205,6 +254,8 @@ struct nvmet_tcp_port {
 	struct nvmet_port	*nport;
 	struct sockaddr_storage addr;
 	void (*data_ready)(struct sock *);
+	/* the listener's receive-buffer hold: accept_work only */
+	struct rx_loan_hold	rx_hold;
 };
 
 static DEFINE_IDA(nvmet_tcp_queue_ida);
@@ -341,9 +392,977 @@ static int nvmet_tcp_check_ddgst(struct nvmet_tcp_queue *queue, void *pdu)
 	return 0;
 }
 
+static void nvmet_tcp_release_queue(struct kref *kref);
+static void nvmet_tcp_queue_response(struct nvmet_req *req);
+
+/*
+ * rx_loan region receive.
+ *
+ * A queue receives WRITE data into region loans (struct rx_loan_table) when
+ * a fixed receive region exists and neither TLS nor a data digest is in
+ * use; every other queue, and every command whose backend cannot take a
+ * bvec, takes the stock path unchanged.  Only init_net: the transport
+ * registers one consumer, on init_net, at its first queue that could lend
+ * (so a loaded transport that never had one leaves every other consumer's
+ * share of the region as it was; once registered it stays until unload),
+ * and queues in other namespaces stay on the stock
+ * path.  Its queues draw on a write budget of their own
+ * (nvmet_tcp_rx_budget), the region's write share, which no sunrpc setting
+ * turns off; kNFSd's budgets are its own and unchanged by it.  The region
+ * caps every budget together at its size, and nvmet-tcp's admissions
+ * (write_capped) at its write partition with kNFSd's write credit counted,
+ * so nvmet-tcp never takes write credit past it; kNFSd's, uncapped as
+ * before, still can.
+ *
+ * Admission sits at R2T time.  One command owns the queue's unit
+ * (queue->rx_unit) from its first R2T until all its data is in, as kNFSd
+ * takes one record at a time per socket: its later R2Ts need no admission,
+ * so the oldest record on the queue always completes.  The R2Ts of other
+ * commands wait on queue->rx_withheld in arrival order, while the queue's
+ * one waiter holds its place on the budget's FIFO.  Each R2T solicits at
+ * most what the budget's current reserve covers (the reserve rule);
+ * maxh2cdata stays stock.  A record is admitted at its estimated cost and
+ * charged per skb as it is received; a charge that cannot be met stops
+ * reading the socket (backpressure, never a drop) until the waiter is
+ * woken.  The credit and the borrowed pages are returned when the backend
+ * is done with the data (->data_done), else when the command is freed.
+ */
+static struct rx_loan_consumer nvmet_tcp_rx_consumer;
+static struct rx_loan_budget nvmet_tcp_rx_budget;
+static DEFINE_MUTEX(nvmet_tcp_rx_consumer_lock);
+static bool nvmet_tcp_rx_consumer_on;
+
+/* Register the consumer, once, at the first queue that could lend. */
+static void nvmet_tcp_rx_consumer_start(void)
+{
+	mutex_lock(&nvmet_tcp_rx_consumer_lock);
+	if (!nvmet_tcp_rx_consumer_on) {
+		/* Region demand only: the region is carved at a queue's first use. */
+		rx_loan_consumer_register(&nvmet_tcp_rx_consumer,
+					  rx_loan_net(&init_net), "nvmet-tcp",
+					  NVMET_TCP_RX_FLOOR);
+		nvmet_tcp_rx_consumer_on = true;
+	}
+	mutex_unlock(&nvmet_tcp_rx_consumer_lock);
+}
+
+/*
+ * A write budget of the region's write share, its own, as no namespace's
+ * (rx_loan_region_write_default()).  @lb is zeroed: the default is set
+ * before rx_loan_budget_init() lists it for region kicks.
+ */
+static int nvmet_tcp_rx_budget_init(struct rx_loan_budget *lb)
+{
+	WRITE_ONCE(lb->cfg_default, true);
+	/* kNFSd's write budget is the write share too: share the partition. */
+	lb->write_capped = true;
+	return rx_loan_budget_init(lb, false);
+}
+
+static int nvmet_tcp_rx_budget_stats_get(char *buf,
+					 const struct kernel_param *kp)
+{
+	struct rx_loan_budget *lb = &nvmet_tcp_rx_budget;
+	struct rx_loan_stock_sum sum;
+	unsigned int waiters = 0;
+	struct rx_loan_waiter *pos;
+	int len;
+
+	/* Readable before init and after exit: the lock is set up first. */
+	if (!smp_load_acquire(&lb->stock))
+		return scnprintf(buf, PAGE_SIZE, "none\n");
+	spin_lock_bh(&lb->lock);
+	if (!lb->stock) {
+		spin_unlock_bh(&lb->lock);
+		return scnprintf(buf, PAGE_SIZE, "none\n");
+	}
+	list_for_each_entry(pos, &lb->waiters, node)
+		waiters++;
+	/* Stocked credit is available; stocked records are in flight. */
+	rx_loan_stock_sum(lb, &sum);
+	len = scnprintf(buf, PAGE_SIZE,
+			"budget %u reserve_size %u avail %ld reserve %ld inflight %ld waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu cost_factor %u hold_factor %u lent %u\n",
+			lb->budget, lb->reserve_size, lb->avail + sum.pages,
+			lb->reserve, (long)lb->inflight_count + sum.records,
+			waiters, lb->admitted + sum.admitted, lb->denied,
+			lb->paused, lb->overrun, lb->orphaned, lb->cost_factor,
+			READ_ONCE(lb->hold_factor),
+			lb->lent + (unsigned int)sum.lent);
+	spin_unlock_bh(&lb->lock);
+	return len;
+}
+
+static const struct kernel_param_ops nvmet_tcp_rx_budget_stats_ops = {
+	.get = nvmet_tcp_rx_budget_stats_get,
+};
+module_param_cb(rx_budget_stats, &nvmet_tcp_rx_budget_stats_ops, NULL, 0444);
+MODULE_PARM_DESC(rx_budget_stats,
+		 "State of nvmet-tcp's rx region write budget");
+
+enum {
+	NVMET_TCP_RX_GO,
+	NVMET_TCP_RX_WAIT,	/* a charge paused: the waiter is queued */
+	NVMET_TCP_RX_COPY,	/* not borrowable: copy, the stock way */
+};
+
+struct nvmet_tcp_rx_desc {
+	struct nvmet_tcp_cmd	*cmd;
+	int			stop;
+};
+
+static u32 nvmet_tcp_rx_entries(u32 bytes)
+{
+	/* DIV_ROUND_UP() would wrap for @bytes near U32_MAX. */
+	return bytes / NVMET_TCP_RX_ENTRY_BYTES +
+	       !!(bytes % NVMET_TCP_RX_ENTRY_BYTES) + 2;
+}
+
+/**
+ * nvmet_tcp_rx_unit_max() - bytes one R2T may solicit
+ * @reserve: the budget's reserve, in region pages
+ * @factor: learned region pages per 100 pages of data, 0 while unlearned
+ *
+ * The reserve rule: a unit is sized so that its admission cost never
+ * exceeds the reserve.  Only the oldest record may draw the reserve, and it
+ * always may, so a unit that fits the reserve always completes once it is
+ * the oldest, whatever else holds credit.  The reserve is shared and set
+ * by the budget's configuration, so nvmet sizes its units to fit it, from
+ * its current value at each R2T, rather than the other way round.
+ *
+ * Return: the unit, page aligned, within [PAGE_SIZE, NVMET_TCP_MAXH2CDATA].
+ */
+static u32 nvmet_tcp_rx_unit_max(unsigned int reserve, unsigned int factor)
+{
+	u64 bytes;
+
+	if (factor)
+		bytes = div_u64((u64)(reserve > 1 ? reserve - 1 : 0) * 100,
+				factor) << PAGE_SHIFT;
+	else
+		bytes = (u64)(reserve > 2 ? reserve - 2 : 0) *
+			NVMET_TCP_RX_ENTRY_BYTES;
+	bytes = round_down(bytes, PAGE_SIZE);
+	return clamp_t(u64, bytes, PAGE_SIZE, NVMET_TCP_MAXH2CDATA);
+}
+
+/* The unit the budget's reserve covers now. */
+static u32 nvmet_tcp_rx_unit(struct rx_loan_budget *lb)
+{
+	return nvmet_tcp_rx_unit_max(READ_ONCE(lb->reserve_size),
+				     READ_ONCE(lb->cost_factor));
+}
+
+/* A unit's admission cost, as kNFSd's, at most a table's @cap entries. */
+static u32 nvmet_tcp_rx_cost(u32 bytes, unsigned int factor, u32 cap)
+{
+	u64 cost = nvmet_tcp_rx_entries(bytes);
+
+	if (factor)
+		cost = min_t(u64, cost,
+			     DIV_ROUND_UP_ULL((u64)DIV_ROUND_UP(bytes, PAGE_SIZE) *
+					      factor, 100) + 1);
+	return min_t(u64, cost, cap);
+}
+
+/* The cost sample a returning record teaches the budget (as kNFSd's). */
+static unsigned int nvmet_tcp_rx_sample(const struct rx_loan_table *lt)
+{
+	u32 pages = DIV_ROUND_UP(lt->body_bytes, PAGE_SIZE);
+	unsigned int sample;
+
+	if (!lt->region_count || !pages)
+		return 0;
+	sample = min_t(u64, DIV_ROUND_UP_ULL((u64)(lt->region_count - 1) * 100,
+					     pages),
+		       NVMET_TCP_RX_FACTOR_MAX);
+	return max(sample, 100U);
+}
+
+/*
+ * Is the queue being released?  Then it admits nothing more: a refused
+ * admission would queue its waiter again after release took it off the
+ * budget's FIFO.
+ */
+static bool nvmet_tcp_rx_dying(struct nvmet_tcp_queue *queue)
+{
+	return READ_ONCE(queue->state) == NVMET_TCP_Q_DISCONNECTING ||
+	       READ_ONCE(queue->rcv_state) == NVMET_TCP_RECV_ERR;
+}
+
+static bool nvmet_tcp_rx_pin(struct rx_loan_waiter *w)
+{
+	struct nvmet_tcp_queue *queue =
+		container_of(w, struct nvmet_tcp_queue, rx_wait);
+
+	/* Declined once release has begun: it unwaits before freeing. */
+	return kref_get_unless_zero(&queue->kref);
+}
+
+static void nvmet_tcp_rx_wake(struct rx_loan_waiter *w)
+{
+	struct nvmet_tcp_queue *queue =
+		container_of(w, struct nvmet_tcp_queue, rx_wait);
+
+	/* queue_work_on() orders the store before io_work reads it. */
+	WRITE_ONCE(queue->rx_kicked, true);
+	queue_work_on(queue_cpu(queue), nvmet_tcp_wq, &queue->io_work);
+	kref_put(&queue->kref, nvmet_tcp_release_queue);
+}
+
+static const struct rx_loan_waiter_ops nvmet_tcp_rx_waiter_ops = {
+	.pin	= nvmet_tcp_rx_pin,
+	.wake	= nvmet_tcp_rx_wake,
+};
+
+/*
+ * May the queue retry admission or a charge?  Yes unless its waiter is
+ * queued and has not been woken since: retrying then only re-queues it.
+ */
+static bool nvmet_tcp_rx_retry(struct nvmet_tcp_queue *queue)
+{
+	if (!rx_loan_waiting(&queue->rx_wait))
+		return true;
+	if (!READ_ONCE(queue->rx_kicked))
+		return false;
+	WRITE_ONCE(queue->rx_kicked, false);
+	return true;
+}
+
+/* @cmd gives up the queue's unit: let the oldest withheld R2T try. */
+static void nvmet_tcp_rx_unit_free(struct nvmet_tcp_queue *queue,
+				   struct nvmet_tcp_cmd *cmd)
+{
+	if (queue->rx_unit != cmd)
+		return;
+	queue->rx_unit = NULL;
+	/* Not once release has begun: io_work must not run again. */
+	if (!list_empty(&queue->rx_withheld) && !nvmet_tcp_rx_dying(queue)) {
+		WRITE_ONCE(queue->rx_kicked, true);
+		queue_work_on(queue_cpu(queue), nvmet_tcp_wq, &queue->io_work);
+	}
+}
+
+/*
+ * Return @cmd's borrowed pages and its credit.  Idempotent: the table's
+ * borrowed bits and cr.linked say what is still held, so a later call (the
+ * free after ->data_done) returns nothing twice.
+ */
+static void nvmet_tcp_rx_return(struct nvmet_tcp_cmd *cmd)
+{
+	unsigned int sample = nvmet_tcp_rx_sample(&cmd->lt);
+	u32 held = cmd->lt.region_count;
+	struct rx_loan_lend out = {};
+
+	/*
+	 * Never put a page the table cannot account for: orphan the record,
+	 * its pages and credit stay out.
+	 */
+	if (!rx_loan_table_refs_valid(&cmd->lt) ||
+	    rx_loan_table_release(&cmd->lt)) {
+		if (cmd->cr.linked)
+			rx_loan_orphan(&cmd->cr, held);
+	} else if (cmd->cr.linked) {
+		rx_loan_return(&cmd->cr, sample, 0, &out);
+	}
+	rx_loan_table_reset_consumer(&cmd->lt, &nvmet_tcp_rx_consumer);
+}
+
+/* Return what @cmd holds, free its table: it is not loaned any more. */
+static void nvmet_tcp_rx_drop(struct nvmet_tcp_cmd *cmd)
+{
+	nvmet_tcp_rx_return(cmd);
+	rx_loan_table_free(&cmd->lt);
+	memset(&cmd->lt, 0, sizeof(cmd->lt));
+	cmd->flags &= ~NVMET_TCP_F_RX_LOAN;
+}
+
+/* Returns ->data_done deferred from hard irq; io_work or teardown. */
+static void nvmet_tcp_rx_drain_done(struct nvmet_tcp_queue *queue)
+{
+	struct llist_node *node = llist_del_all(&queue->rx_done);
+	struct nvmet_tcp_cmd *cmd, *tmp;
+
+	llist_for_each_entry_safe(cmd, tmp, node, rx_done_node) {
+		cmd->flags &= ~NVMET_TCP_F_RX_DEFER;
+		nvmet_tcp_rx_return(cmd);
+	}
+}
+
+/* The command is freed: return what it holds and free its table. */
+static void nvmet_tcp_rx_put(struct nvmet_tcp_cmd *cmd)
+{
+	struct nvmet_tcp_queue *queue = cmd->queue;
+
+	/*
+	 * A deferred return was queued before the command's response (the
+	 * llist_add() is a full barrier), so it is on rx_done by now.
+	 */
+	if (cmd->flags & NVMET_TCP_F_RX_DEFER)
+		nvmet_tcp_rx_drain_done(queue);
+	nvmet_tcp_rx_unit_free(queue, cmd);
+	nvmet_tcp_rx_drop(cmd);
+}
+
+/**
+ * nvmet_tcp_data_done() - the backend is done with a WRITE's data
+ * @req: the request whose data was lent (nvmet_req_set_data_bvec())
+ *
+ * Return the region loans and the credit of a command received into a
+ * loan table, once.  The backend's completion may run in hard irq (bio
+ * end_io), where the budget's lock (taken with bottom halves disabled)
+ * cannot be: there the return is handed to io_work.  Setting
+ * NVMET_TCP_F_RX_DEFER from hard irq is safe because io_work no longer
+ * writes cmd->flags once the command has been executed.
+ */
+static void nvmet_tcp_data_done(struct nvmet_req *req)
+{
+	struct nvmet_tcp_cmd *cmd = container_of(req, struct nvmet_tcp_cmd, req);
+	struct nvmet_tcp_queue *queue = cmd->queue;
+
+	if (!(cmd->flags & NVMET_TCP_F_RX_LOAN) ||
+	    (cmd->flags & NVMET_TCP_F_RX_DEFER))
+		return;
+	if (in_hardirq() || irqs_disabled()) {
+		cmd->flags |= NVMET_TCP_F_RX_DEFER;
+		llist_add(&cmd->rx_done_node, &queue->rx_done);
+		queue_work_on(queue_cpu(queue), nvmet_tcp_wq, &queue->io_work);
+		return;
+	}
+	nvmet_tcp_rx_return(cmd);
+}
+
+/*
+ * Copy fallback: move @cmd to the stock sgl and return its loans and
+ * credit.  What it has borrowed so far is laid out page-tiled in the sgl's
+ * pages by rx_loan_tile(), each loan returned as soon as it is consumed; a
+ * table whose references do not check is copied entry by entry and
+ * orphaned (nvmet_tcp_rx_return()).  Whether all its data is in or the
+ * stock path receives the rest, the command counts as one record that
+ * copied transfer_len bytes, to nvmet-tcp's copies and the host-wide total,
+ * at the table's reset.  The backend then takes the sgl: one that refused
+ * the loan's layout (nvmet_tcp_rx_finish()) takes it as stock does.  On
+ * failure @cmd is unchanged.
+ */
+static int nvmet_tcp_rx_to_sgl(struct nvmet_tcp_cmd *cmd)
+{
+	struct rx_loan_table *lt = &cmd->lt;
+	struct scatterlist *sg;
+	u32 skip = 0;
+	int i;
+
+	cmd->req.sg = sgl_alloc(cmd->req.transfer_len, GFP_KERNEL | __GFP_NOWARN,
+				&cmd->req.sg_cnt);
+	if (!cmd->req.sg)
+		return -ENOMEM;
+	cmd->iov = kmalloc_objs(*cmd->iov, cmd->req.sg_cnt,
+				GFP_KERNEL | __GFP_NOWARN);
+	if (!cmd->iov) {
+		sgl_free(cmd->req.sg);
+		cmd->req.sg = NULL;
+		return -ENOMEM;
+	}
+	if (lt->body_bytes && rx_loan_table_refs_valid(lt)) {
+		/*
+		 * sgl_alloc() gives whole pages in data order: tile into them
+		 * from offset 0.  cmd->iov is scratch until the receive of the
+		 * rest, if any, sets it again (nvmet_tcp_rx_sgl_iovec()).
+		 */
+		for_each_sg(cmd->req.sg, sg, cmd->req.sg_cnt, i)
+			cmd->iov[i].bv_page = sg_page(sg);
+		rx_loan_tile(lt, 0, 0, lt->body_bytes, NULL, cmd->iov, 0,
+			     cmd->iov, NULL);
+	} else {
+		for (i = 0; i < lt->count; i++) {
+			struct bio_vec *bv = &lt->bvec[i];
+			void *p = bvec_kmap_local(bv);
+
+			sg_pcopy_from_buffer(cmd->req.sg, cmd->req.sg_cnt, p,
+					     bv->bv_len, skip);
+			kunmap_local(p);
+			skip += bv->bv_len;
+		}
+	}
+	nvmet_tcp_rx_return(cmd);
+	/* One record: the bytes tiled and those the stock path receives. */
+	lt->copied_bytes = cmd->req.transfer_len;
+	nvmet_tcp_rx_drop(cmd);
+	return 0;
+}
+
+/* After a fallback mid-PDU: receive the PDU's rest into the sgl. */
+static int nvmet_tcp_rx_sgl_iovec(struct nvmet_tcp_cmd *cmd)
+{
+	u32 left = cmd->pdu_len - cmd->pdu_recv, skip = cmd->rbytes_done;
+	struct scatterlist *sg;
+	int i, nr = 0;
+
+	for_each_sg(cmd->req.sg, sg, cmd->req.sg_cnt, i) {
+		u32 take;
+
+		if (!left)
+			break;
+		if (skip >= sg->length) {
+			skip -= sg->length;
+			continue;
+		}
+		take = min(left, sg->length - skip);
+		bvec_set_page(&cmd->iov[nr++], sg_page(sg), take,
+			      sg->offset + skip);
+		left -= take;
+		skip = 0;
+	}
+	if (left)
+		return -EPROTO;
+	iov_iter_bvec(&cmd->recv_msg.msg_iter, ITER_DEST, cmd->iov, nr,
+		      cmd->pdu_len - cmd->pdu_recv);
+	return 0;
+}
+
+/*
+ * No memory for the copy fallback: return what @cmd holds and sink the
+ * rest of what was solicited from it (to r2t_end), then fail it alone
+ * (nvmet_tcp_rx_unit_done()).  The queue goes on.  No further R2T is sent
+ * for it; a later H2CData PDU for its ttag finds no buffers and errors
+ * the queue, as stock does for a host that sends unsolicited data.
+ */
+static void nvmet_tcp_rx_sink(struct nvmet_tcp_cmd *cmd)
+{
+	if (cmd->flags & NVMET_TCP_F_RX_LOAN)
+		nvmet_tcp_rx_drop(cmd);
+	cmd->flags |= NVMET_TCP_F_RX_SINK;
+	iov_iter_discard(&cmd->recv_msg.msg_iter, ITER_DEST,
+			 cmd->pdu_len - cmd->pdu_recv);
+}
+
+/* Mid-PDU: go on with the stock sgl, else sink. */
+static int nvmet_tcp_rx_fallback(struct nvmet_tcp_cmd *cmd)
+{
+	if (!nvmet_tcp_rx_to_sgl(cmd))
+		return nvmet_tcp_rx_sgl_iovec(cmd);
+	nvmet_tcp_rx_sink(cmd);
+	return 0;
+}
+
+/*
+ * Take the queue's unit for @cmd's next R2T, admitting it if it holds no
+ * credit yet.  0: the R2T may go out (loaned, or moved to the stock path
+ * because the budget was turned off); -EAGAIN: the waiter waits.
+ */
+static int nvmet_tcp_rx_take_unit(struct nvmet_tcp_cmd *cmd)
+{
+	struct nvmet_tcp_queue *queue = cmd->queue;
+	struct rx_loan_budget *lb = queue->rx_budget;
+	unsigned int factor;
+	u32 bytes;
+
+	if (unlikely(nvmet_tcp_rx_dying(queue))) {
+		/* Off the FIFO now: a dying queue's waiter would block it. */
+		rx_loan_unwait(&queue->rx_wait);
+		return -EAGAIN;
+	}
+	if (unlikely(!READ_ONCE(lb->budget))) {
+		rx_loan_unwait(&queue->rx_wait);
+		if (!nvmet_tcp_rx_to_sgl(cmd))
+			return 0;
+		/*
+		 * Earlier units are all in and the next R2T was never sent,
+		 * so nothing more can arrive for it: fail it alone.
+		 */
+		nvmet_tcp_rx_unit_free(queue, cmd);
+		nvmet_req_complete(&cmd->req, NVME_SC_INTERNAL);
+		return -ENOMEM;
+	}
+	factor = READ_ONCE(lb->cost_factor);
+	bytes = min(cmd->req.transfer_len - cmd->rbytes_done,
+		    nvmet_tcp_rx_unit_max(READ_ONCE(lb->reserve_size), factor));
+	if (!cmd->cr.linked &&
+	    !rx_loan_admit(lb, &nvmet_tcp_rx_consumer, &queue->rx_wait,
+			   &cmd->cr,
+			   nvmet_tcp_rx_cost(bytes, factor, cmd->lt.capacity),
+			   rx_loan_cost_warm(lb)))
+		return -EAGAIN;
+	cmd->r2t_end = cmd->rbytes_done + bytes;
+	queue->rx_unit = cmd;
+	return 0;
+}
+
+/*
+ * May @cmd's R2T go out now?  False: it was withheld (or failed and was
+ * completed) and the next response is tried.  The unit's owner always may;
+ * another command only when the unit is free and nothing older is
+ * withheld.
+ */
+static bool nvmet_tcp_rx_r2t_ok(struct nvmet_tcp_cmd *cmd)
+{
+	struct nvmet_tcp_queue *queue = cmd->queue;
+	int ret;
+
+	if (!(cmd->flags & NVMET_TCP_F_RX_LOAN))
+		return true;
+	if (queue->rx_unit == cmd ||
+	    (!queue->rx_unit && list_empty(&queue->rx_withheld))) {
+		ret = nvmet_tcp_rx_take_unit(cmd);
+		if (ret != -EAGAIN)
+			return !ret;
+	}
+	/*
+	 * Arrival order: the head is the one the waiter queued for.  (An
+	 * owner refused because the queue is dying stays here unserved.)
+	 */
+	list_add_tail(&cmd->entry, &queue->rx_withheld);
+	return false;
+}
+
+/* The oldest withheld R2T, once the unit is free and it is admitted. */
+static struct nvmet_tcp_cmd *
+nvmet_tcp_rx_next_withheld(struct nvmet_tcp_queue *queue)
+{
+	struct nvmet_tcp_cmd *cmd;
+	int ret;
+
+	if (unlikely(nvmet_tcp_rx_dying(queue))) {
+		rx_loan_unwait(&queue->rx_wait);
+		return NULL;
+	}
+	cmd = list_first_entry_or_null(&queue->rx_withheld,
+				       struct nvmet_tcp_cmd, entry);
+	if (!cmd || queue->rx_unit || !nvmet_tcp_rx_retry(queue))
+		return NULL;
+	ret = nvmet_tcp_rx_take_unit(cmd);
+	if (ret == -EAGAIN)
+		return NULL;
+	/* Taken, or failed and completed: it is withheld no longer. */
+	list_del_init(&cmd->entry);
+	return ret ? NULL : cmd;
+}
+
+/*
+ * A PDU of @cmd is in.  At the end of what was solicited, solicit more
+ * (the owner keeps the unit) or free the unit.  True: @cmd was sunk and is
+ * failed here, or is still sinking; it must not be executed.
+ */
+static bool nvmet_tcp_rx_unit_done(struct nvmet_tcp_cmd *cmd)
+{
+	struct nvmet_tcp_queue *queue = cmd->queue;
+
+	if (unlikely(cmd->flags & NVMET_TCP_F_RX_SINK)) {
+		if (cmd->rbytes_done < cmd->r2t_end)
+			return true;
+		cmd->flags &= ~NVMET_TCP_F_RX_SINK;
+		nvmet_tcp_rx_unit_free(queue, cmd);
+		nvmet_req_complete(&cmd->req, NVME_SC_INTERNAL);
+		return true;
+	}
+	if (queue->rx_unit != cmd || cmd->rbytes_done < cmd->r2t_end)
+		return false;
+	if (cmd->rbytes_done < cmd->req.transfer_len)
+		nvmet_tcp_queue_response(&cmd->req);
+	else
+		nvmet_tcp_rx_unit_free(queue, cmd);
+	return false;
+}
+
+/* Can bytes [@offset, @offset + @len) of @skb be borrowed in place? */
+static bool nvmet_tcp_rx_borrowable(struct sk_buff *skb, unsigned int offset,
+				    unsigned int len)
+{
+	unsigned int cursor = skb_headlen(skb), i;
+
+	if (skb_has_frag_list(skb) || skb_zcopy(skb) ||
+	    !skb_frags_readable(skb))
+		return false;
+	/* A kmalloc'ed or shared head cannot be lent. */
+	if (offset < cursor && skb_head_is_locked(skb))
+		return false;
+	for (i = 0; i < skb_shinfo(skb)->nr_frags && cursor < offset + len;
+	     i++) {
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
+
+		if (cursor + skb_frag_size(frag) > offset &&
+		    skb_frag_is_net_iov(frag))
+			return false;
+		cursor += skb_frag_size(frag);
+	}
+	return true;
+}
+
+/* Borrow @len bytes at @offset of @page, a page at a time. */
+static int nvmet_tcp_rx_borrow(struct rx_loan_table *lt, struct page *page,
+			       unsigned int offset, unsigned int len,
+			       bool pp_recycle, unsigned int *done)
+{
+	while (len) {
+		struct page *p = page + (offset >> PAGE_SHIFT);
+		unsigned int off = offset_in_page(offset);
+		unsigned int take = min_t(unsigned int, len, PAGE_SIZE - off);
+		int ret;
+
+		ret = rx_loan_table_append(lt, p, off, take, true, pp_recycle &&
+					   page_pool_page_is_pp(compound_head(p)));
+		if (ret)
+			return ret;
+		offset += take;
+		len -= take;
+		*done += take;
+	}
+	return 0;
+}
+
+/*
+ * Loan entries bytes [@offset, @offset + @len) of @skb take, at most: one
+ * per page piece, as nvmet_tcp_rx_borrow() appends them.
+ */
+static unsigned int nvmet_tcp_rx_span_entries(const struct sk_buff *skb,
+					      unsigned int offset,
+					      unsigned int len)
+{
+	unsigned int cursor = skb_headlen(skb), end = offset + len, n = 0, i;
+
+	if (offset < cursor)
+		n += DIV_ROUND_UP(offset_in_page(skb->data + offset) +
+				  min(end, cursor) - offset, PAGE_SIZE);
+	for (i = 0; i < skb_shinfo(skb)->nr_frags && cursor < end; i++) {
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
+		unsigned int size = skb_frag_size(frag), s, e;
+
+		if (cursor + size > offset) {
+			s = max(offset, cursor) - cursor;
+			e = min(end, cursor + size) - cursor;
+			n += DIV_ROUND_UP(offset_in_page(skb_frag_off(frag) + s) +
+					  e - s, PAGE_SIZE);
+		}
+		cursor += size;
+	}
+	return n;
+}
+
+/*
+ * Receive-buffer holds, as kNFSd's (rx_loan_hold_*()).  A queue that
+ * receives region pages holds its receive buffer to NVMET_TCP_RX_RCVBUF,
+ * at what its skbs were measured to occupy, so its unread data stays its
+ * share of the region.  The port's listener is held too, once the region
+ * is in use: TCP sizes a connection's first window from it (accept_work).
+ * A queue that will never lend gives its hold back and keeps TCP's own
+ * buffer (nvmet_tcp_rx_setup()).
+ */
+static void nvmet_tcp_rx_hold_apply(struct rx_loan_hold *h, struct sock *sk,
+				    struct rx_loan_budget *lb)
+{
+	int rcvbuf, clamp, err;
+
+	err = rx_loan_hold_apply(h, sk, NVMET_TCP_RX_RCVBUF,
+				 rx_loan_hold_factor(h, lb), &rcvbuf, &clamp);
+	if (err && err != -EALREADY)
+		pr_warn_once("receive window clamp failed\n");
+}
+
+/*
+ * The actor saw @skb's bytes: mark the hold to apply once region pages are
+ * seen (@region), or again once the factor it was held to is stale; and
+ * measure what the skb occupies for the @used bytes read.  Applied by
+ * nvmet_tcp_rx_recv() with the socket unlocked.
+ */
+static void nvmet_tcp_rx_hold_account(struct nvmet_tcp_queue *queue,
+				      struct sk_buff *skb, unsigned int used,
+				      bool region)
+{
+	struct rx_loan_hold *h = &queue->rx_hold;
+
+	if (!h->held && !h->pending && region) {
+		h->pending = true;
+	} else if (h->held &&
+		   rx_loan_hold_stale(h, rx_loan_hold_factor(h, queue->rx_budget))) {
+		h->held = false;
+		h->pending = true;
+	}
+	if (!used || !(h->held || h->pending))
+		return;
+	/* A new sample is where a queue of the budget that has none is held. */
+	if (rx_loan_hold_account(h, skb->truesize, skb->len, used))
+		WRITE_ONCE(queue->rx_budget->hold_factor,
+			   rx_loan_hold_measured(h));
+}
+
+/* read_sock actor: borrow the PDU's bytes of @skb into the loan table. */
+static int nvmet_tcp_rx_actor(read_descriptor_t *desc, struct sk_buff *skb,
+			      unsigned int offset, size_t len)
+{
+	struct nvmet_tcp_rx_desc *rd = desc->arg.data;
+	struct nvmet_tcp_cmd *cmd = rd->cmd;
+	struct rx_loan_table *lt = &cmd->lt;
+	struct page *prev = lt->region_last;
+	unsigned int want = min_t(size_t, len, desc->count);
+	struct rx_loan_waiter *w = &cmd->queue->rx_wait;
+	bool owner = cmd->queue->rx_unit == cmd;
+	unsigned int cursor, done = 0, i;
+	int ret = 0;
+	u32 need;
+
+	/* Charge only what the table has room for: past it, copy. */
+	if (!nvmet_tcp_rx_borrowable(skb, offset, want) ||
+	    lt->count + nvmet_tcp_rx_span_entries(skb, offset, want) >
+	    lt->capacity) {
+		rd->stop = NVMET_TCP_RX_COPY;
+		goto stop;
+	}
+	/*
+	 * The waiter queued holds another record's place (the owner's paused
+	 * charge, or a withheld R2T): a charge through it, failed or not,
+	 * would change that place.  Copy without charging.
+	 */
+	if (!owner && rx_loan_waiting(w)) {
+		rd->stop = NVMET_TCP_RX_COPY;
+		goto stop;
+	}
+	need = rx_loan_skb_region_pages(skb, 0, offset, offset + want, &prev);
+	if (!rx_loan_charge(w, &cmd->cr, lt->region_count + need)) {
+		/*
+		 * Only the unit's owner may wait: another record's data may
+		 * sit in front of the owner's, which the credit waits for.
+		 */
+		if (owner) {
+			rd->stop = NVMET_TCP_RX_WAIT;
+			goto stop;
+		}
+		rx_loan_unwait(w);
+		rd->stop = NVMET_TCP_RX_COPY;
+		goto stop;
+	}
+	cursor = skb_headlen(skb);
+	if (offset < cursor) {
+		const unsigned char *data = skb->data + offset;
+
+		ret = nvmet_tcp_rx_borrow(lt, virt_to_page(data),
+					  offset_in_page(data),
+					  min(want, cursor - offset),
+					  skb->pp_recycle, &done);
+	}
+	for (i = 0; !ret && done < want && i < skb_shinfo(skb)->nr_frags; i++) {
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
+		unsigned int size = skb_frag_size(frag);
+		unsigned int start = offset + done;
+
+		if (start < cursor + size)
+			ret = nvmet_tcp_rx_borrow(lt, skb_frag_page(frag),
+						  skb_frag_off(frag) + start - cursor,
+						  min(cursor + size - start,
+						      want - done),
+						  skb->pp_recycle, &done);
+		cursor += size;
+	}
+	/* -ENOSPC: the table is full; copy the rest. */
+	if (ret)
+		rd->stop = NVMET_TCP_RX_COPY;
+	nvmet_tcp_rx_hold_account(cmd->queue, skb, done, need);
+	cmd->pdu_recv += done;
+	cmd->rbytes_done += done;
+	desc->count = rd->stop ? 0 : desc->count - done;
+	return done;
+stop:
+	desc->count = 0;
+	return 0;
+}
+
+/*
+ * In-capsule data is admitted as it arrives.  It may wait for credit only
+ * when no command on this queue holds credit with data still to come,
+ * that is when no command owns the unit: then all this queue holds is
+ * received and will be returned.  Otherwise the owner's data may be queued
+ * behind this capsule's, so waiting could deadlock: admit at the table's
+ * whole cost now or copy.  It never goes through the queue's waiter while
+ * that is queued for a withheld R2T: admission would take its place.
+ * Return: 0 admitted, 1 moved off the loan path (iterator ready), else an
+ * error or -EAGAIN (waiting).
+ */
+static int nvmet_tcp_rx_admit_capsule(struct nvmet_tcp_cmd *cmd)
+{
+	struct nvmet_tcp_queue *queue = cmd->queue;
+	struct rx_loan_budget *lb = queue->rx_budget;
+	bool queued = rx_loan_waiting(&queue->rx_wait);
+	bool wait = !queue->rx_unit;
+	u32 cost = cmd->lt.capacity;
+	int ret;
+
+	cmd->r2t_end = cmd->pdu_len;
+	if (unlikely(nvmet_tcp_rx_dying(queue))) {
+		rx_loan_unwait(&queue->rx_wait);
+		return -EAGAIN;
+	}
+	if (!READ_ONCE(lb->budget)) {
+		rx_loan_unwait(&queue->rx_wait);
+		goto copy;
+	}
+	/*
+	 * The in-capsule reserve: data beyond one unit is copied, and counted
+	 * (nvmet_tcp_rx_want() refused it then; the unit may have shrunk).
+	 */
+	if (cmd->pdu_len > nvmet_tcp_rx_unit(lb))
+		goto copy;
+	if (!wait && queued)
+		goto copy;
+	if (wait)
+		cost = nvmet_tcp_rx_cost(cmd->pdu_len,
+					 READ_ONCE(lb->cost_factor), cost);
+	if (rx_loan_admit(lb, &nvmet_tcp_rx_consumer, &queue->rx_wait,
+			  &cmd->cr, cost, rx_loan_cost_warm(lb))) {
+		if (wait)
+			queue->rx_unit = cmd;
+		return 0;
+	}
+	if (wait)
+		return -EAGAIN;
+	rx_loan_unwait(&queue->rx_wait);
+copy:
+	ret = nvmet_tcp_rx_fallback(cmd);
+	return ret ?: 1;
+}
+
+/*
+ * Receive the current PDU of a loaned command.  0: the PDU is in, or the
+ * command moved off the loan path (its iterator set for the PDU's rest);
+ * -EAGAIN: no data, or waiting for credit (backpressure).
+ */
+static int nvmet_tcp_rx_recv(struct nvmet_tcp_queue *queue,
+			     struct nvmet_tcp_cmd *cmd)
+{
+	struct nvmet_tcp_rx_desc rd = { .cmd = cmd };
+	read_descriptor_t desc = { .arg.data = &rd };
+	struct sock *sk = queue->sock->sk;
+	int ret;
+
+	if (!cmd->cr.linked) {
+		/* The admit-or-copy path never waits: no gate for it. */
+		if (!queue->rx_unit && !nvmet_tcp_rx_retry(queue))
+			return -EAGAIN;
+		ret = nvmet_tcp_rx_admit_capsule(cmd);
+		if (ret)
+			return ret > 0 ? 0 : ret;
+	} else if (queue->rx_unit == cmd && !nvmet_tcp_rx_retry(queue)) {
+		/* Only the unit's owner can have paused on a charge. */
+		return -EAGAIN;
+	}
+	while (cmd->pdu_recv < cmd->pdu_len) {
+		rd.stop = NVMET_TCP_RX_GO;
+		desc.count = cmd->pdu_len - cmd->pdu_recv;
+		lock_sock(sk);
+		ret = queue->sock->ops->read_sock(sk, &desc, nvmet_tcp_rx_actor);
+		release_sock(sk);
+		if (queue->rx_hold.pending)
+			nvmet_tcp_rx_hold_apply(&queue->rx_hold, sk,
+						queue->rx_budget);
+		if (rd.stop == NVMET_TCP_RX_COPY)
+			return nvmet_tcp_rx_fallback(cmd);
+		if (ret < 0)
+			return ret;
+		if (rd.stop == NVMET_TCP_RX_WAIT || !ret)
+			return -EAGAIN;
+	}
+	return 0;
+}
+
+/*
+ * All of @cmd's data is in: lend the table to the request, or copy.
+ * Nonzero: no memory to copy; @cmd was failed alone, do not execute it.
+ */
+static int nvmet_tcp_rx_finish(struct nvmet_tcp_cmd *cmd)
+{
+	if (!(cmd->flags & NVMET_TCP_F_RX_LOAN))
+		return 0;
+	if (nvmet_req_set_data_bvec(&cmd->req, cmd->lt.bvec, cmd->lt.count))
+		return 0;
+	/*
+	 * The backend cannot take the loan's layout (an unaligned piece, or
+	 * an sgl-only command): tile the loans into the stock sgl, a counted
+	 * copy (nvmet_tcp_rx_to_sgl()).  The holds are applied as the data
+	 * arrives (nvmet_tcp_rx_recv()).
+	 */
+	if (!nvmet_tcp_rx_to_sgl(cmd))
+		return 0;
+	nvmet_tcp_rx_drop(cmd);
+	nvmet_req_complete(&cmd->req, NVME_SC_INTERNAL);
+	return -ENOMEM;
+}
+
+/* At ICReq: does this queue receive into region loans? */
+static void nvmet_tcp_rx_setup(struct nvmet_tcp_queue *queue)
+{
+	struct rx_loan_budget *lb = &nvmet_tcp_rx_budget;
+
+	/* TLS and the data digest need the bytes in buffers of their own. */
+	if (queue->data_digest || queue->tls_pskid ||
+	    !net_eq(sock_net(queue->sock->sk), &init_net))
+		goto stock;
+	/*
+	 * Process context, before the queue's first admission: carve the
+	 * region, then size the write budget from it.  The budget is only
+	 * sized on admission, which this queue would never reach at 0.
+	 */
+	nvmet_tcp_rx_consumer_start();
+	rx_loan_region_carve();
+	if (!rx_loan_region_size())
+		goto stock;
+	rx_loan_budget_reconfigure(lb);
+	if (!READ_ONCE(lb->budget))
+		goto stock;
+	queue->rx_budget = lb;
+	queue->rx_region = true;
+	return;
+stock:
+	/* Never lends: not held to its listener's hold either. */
+	rx_loan_hold_release(queue->sock->sk);
+}
+
+/*
+ * Count @len bytes that the stock path will copy, decided up front, to
+ * nvmet-tcp's copies and the host-wide total: as the reset of a table that
+ * copied them.
+ */
+static void nvmet_tcp_rx_count_copy(u32 len)
+{
+	struct rx_loan_table t = { .copied_bytes = len };
+
+	rx_loan_table_reset_consumer(&t, &nvmet_tcp_rx_consumer);
+}
+
+/* Receive @cmd's @len bytes of WRITE data into a loan table? */
+static bool nvmet_tcp_rx_want(struct nvmet_tcp_cmd *cmd, u32 len)
+{
+	struct nvmet_tcp_queue *queue = cmd->queue;
+	u32 entries, bound;
+
+	if (!queue->rx_region || !nvme_is_write(cmd->req.cmd) ||
+	    !cmd->req.data_bvec_ok || (cmd->flags & NVMET_TCP_F_INIT_FAILED) ||
+	    !READ_ONCE(queue->rx_budget->budget))
+		return false;
+	/*
+	 * A table for the whole write, bounded by NVMET_TCP_RX_TABLE_MAX and
+	 * by what the region could hold.  A write needing more, a capsule
+	 * larger than a unit, or a failed allocation is decided here: the
+	 * stock path copies it whole, and it is counted.  Nothing is borrowed
+	 * first.
+	 */
+	entries = nvmet_tcp_rx_entries(len);
+	bound = min_t(u64, (u64)rx_loan_region_size() *
+		      (PAGE_SIZE / NVMET_TCP_RX_ENTRY_BYTES) + 2,
+		      NVMET_TCP_RX_TABLE_MAX);
+	if (entries > bound ||
+	    cmd->pdu_len > nvmet_tcp_rx_unit(queue->rx_budget) ||
+	    rx_loan_table_alloc(&cmd->lt, entries,
+				GFP_KERNEL | __GFP_NOWARN, NUMA_NO_NODE)) {
+		nvmet_tcp_rx_count_copy(len);
+		return false;
+	}
+	cmd->flags |= NVMET_TCP_F_RX_LOAN;
+	return true;
+}
+
 /* If cmd buffers are NULL, no operation is performed */
 static void nvmet_tcp_free_cmd_buffers(struct nvmet_tcp_cmd *cmd)
 {
+	if (cmd->flags & NVMET_TCP_F_RX_LOAN)
+		nvmet_tcp_rx_put(cmd);
+	else
+		nvmet_tcp_rx_unit_free(cmd->queue, cmd);
 	kfree(cmd->iov);
 	sgl_free(cmd->req.sg);
 	cmd->iov = NULL;
@@ -447,6 +1466,9 @@ static int nvmet_tcp_map_data(struct nvmet_tcp_cmd *cmd)
 	}
 	cmd->req.transfer_len += len;
 
+	if (nvmet_tcp_rx_want(cmd, len))
+		return 0;
+
 	cmd->req.sg = sgl_alloc(len, GFP_KERNEL | __GFP_NOWARN,
 				&cmd->req.sg_cnt);
 	if (!cmd->req.sg)
@@ -535,7 +1557,10 @@ static void nvmet_setup_r2t_pdu(struct nvmet_tcp_cmd *cmd)
 
 	pdu->command_id = cmd->req.cmd->common.command_id;
 	pdu->ttag = nvmet_tcp_cmd_tag(cmd->queue, cmd);
-	pdu->r2t_length = cpu_to_le32(cmd->req.transfer_len - cmd->rbytes_done);
+	/* A loaned command solicits the unit it was admitted for. */
+	if (!(cmd->flags & NVMET_TCP_F_RX_LOAN))
+		cmd->r2t_end = cmd->req.transfer_len;
+	pdu->r2t_length = cpu_to_le32(cmd->r2t_end - cmd->rbytes_done);
 	pdu->r2t_offset = cpu_to_le32(cmd->rbytes_done);
 	if (cmd->queue->hdr_digest) {
 		pdu->hdr.flags |= NVME_TCP_F_HDGST;
@@ -576,6 +1601,14 @@ static void nvmet_tcp_process_resp_list(struct nvmet_tcp_queue *queue)
 
 static struct nvmet_tcp_cmd *nvmet_tcp_fetch_cmd(struct nvmet_tcp_queue *queue)
 {
+	struct nvmet_tcp_cmd *cmd = nvmet_tcp_rx_next_withheld(queue);
+
+	if (cmd) {
+		queue->snd_cmd = cmd;
+		nvmet_setup_r2t_pdu(cmd);
+		return cmd;
+	}
+again:
 	queue->snd_cmd = list_first_entry_or_null(&queue->resp_send_list,
 				struct nvmet_tcp_cmd, entry);
 	if (!queue->snd_cmd) {
@@ -592,10 +1625,15 @@ static struct nvmet_tcp_cmd *nvmet_tcp_fetch_cmd(struct nvmet_tcp_queue *queue)
 
 	if (nvmet_tcp_need_data_out(queue->snd_cmd))
 		nvmet_setup_c2h_data_pdu(queue->snd_cmd);
-	else if (nvmet_tcp_need_data_in(queue->snd_cmd))
+	else if (nvmet_tcp_need_data_in(queue->snd_cmd)) {
+		if (!nvmet_tcp_rx_r2t_ok(queue->snd_cmd)) {
+			queue->snd_cmd = NULL;
+			goto again;
+		}
 		nvmet_setup_r2t_pdu(queue->snd_cmd);
-	else
+	} else {
 		nvmet_setup_response_pdu(queue->snd_cmd);
+	}
 
 	return queue->snd_cmd;
 }
@@ -921,6 +1959,8 @@ static int nvmet_tcp_handle_icreq(struct nvmet_tcp_queue *queue)
 	queue->hdr_digest = !!(icreq->digest & NVME_TCP_HDR_DIGEST_ENABLE);
 	queue->data_digest = !!(icreq->digest & NVME_TCP_DATA_DIGEST_ENABLE);
 
+	nvmet_tcp_rx_setup(queue);
+
 	memset(icresp, 0, sizeof(*icresp));
 	icresp->hdr.type = nvme_tcp_icresp;
 	icresp->hdr.hlen = sizeof(*icresp);
@@ -979,6 +2019,8 @@ static int nvmet_tcp_handle_req_failure(struct nvmet_tcp_queue *queue,
 		return 0;
 	}
 
+	/* Set first: the stale data is sunk into a buffer, never loaned. */
+	cmd->flags |= NVMET_TCP_F_INIT_FAILED;
 	ret = nvmet_tcp_map_data(cmd);
 	if (unlikely(ret)) {
 		pr_err("queue %d: failed to map data\n", queue->idx);
@@ -986,7 +2028,6 @@ static int nvmet_tcp_handle_req_failure(struct nvmet_tcp_queue *queue,
 	}
 
 	queue->rcv_state = NVMET_TCP_RECV_DATA;
-	cmd->flags |= NVMET_TCP_F_INIT_FAILED;
 	ret = nvmet_tcp_build_pdu_iovec(cmd);
 	if (unlikely(ret))
 		pr_err("queue %d: failed to build PDU iovec\n", queue->idx);
@@ -1035,6 +2076,21 @@ static int nvmet_tcp_handle_h2c_data_pdu(struct nvmet_tcp_queue *queue)
 		     cmd->pdu_len > NVMET_TCP_MAXH2CDATA)) {
 		pr_err("H2CData PDU len %u is invalid\n", cmd->pdu_len);
 		goto err_proto;
+	}
+	if (cmd->flags & (NVMET_TCP_F_RX_LOAN | NVMET_TCP_F_RX_SINK)) {
+		if (unlikely(queue->rx_unit != cmd ||
+			     cmd->rbytes_done + cmd->pdu_len > cmd->r2t_end)) {
+			pr_err("queue %d: H2CData PDU outside its R2T (ttag %u)\n",
+			       queue->idx, data->ttag);
+			goto err_proto;
+		}
+		cmd->pdu_recv = 0;
+		if (cmd->flags & NVMET_TCP_F_RX_SINK)
+			iov_iter_discard(&cmd->recv_msg.msg_iter, ITER_DEST,
+					 cmd->pdu_len);
+		queue->cmd = cmd;
+		queue->rcv_state = NVMET_TCP_RECV_DATA;
+		return 0;
 	}
        /*
 	* Ensure command data structures are initialized. We must check both
@@ -1128,6 +2184,8 @@ static int nvmet_tcp_done_recv_pdu(struct nvmet_tcp_queue *queue)
 	if (nvmet_tcp_need_data_in(queue->cmd)) {
 		if (nvmet_tcp_has_inline_data(queue->cmd)) {
 			queue->rcv_state = NVMET_TCP_RECV_DATA;
+			if (queue->cmd->flags & NVMET_TCP_F_RX_LOAN)
+				return 0;
 			ret = nvmet_tcp_build_pdu_iovec(queue->cmd);
 			if (unlikely(ret))
 				pr_err("queue %d: failed to build PDU iovec\n",
@@ -1283,6 +2341,15 @@ static int nvmet_tcp_try_recv_data(struct nvmet_tcp_queue *queue)
 	struct nvmet_tcp_cmd  *cmd = queue->cmd;
 	int len, ret;
 
+	if (cmd->flags & NVMET_TCP_F_RX_LOAN) {
+		ret = nvmet_tcp_rx_recv(queue, cmd);
+		if (ret)
+			return ret;
+		/* Still loaned: the PDU is in; else the rest is copied below */
+		if (cmd->flags & NVMET_TCP_F_RX_LOAN)
+			goto done;
+	}
+
 	while (msg_data_left(&cmd->recv_msg)) {
 		len = sock_recvmsg(cmd->queue->sock, &cmd->recv_msg,
 			cmd->recv_msg.msg_flags);
@@ -1299,12 +2366,15 @@ static int nvmet_tcp_try_recv_data(struct nvmet_tcp_queue *queue)
 		cmd->rbytes_done += len;
 	}
 
+done:
 	if (queue->data_digest) {
 		nvmet_tcp_prep_recv_ddgst(cmd);
 		return 0;
 	}
 
-	if (cmd->rbytes_done == cmd->req.transfer_len)
+	if (!nvmet_tcp_rx_unit_done(cmd) &&
+	    cmd->rbytes_done == cmd->req.transfer_len &&
+	    !nvmet_tcp_rx_finish(cmd))
 		nvmet_tcp_execute_request(cmd);
 
 	nvmet_prepare_receive_pdu(queue);
@@ -1463,6 +2533,9 @@ static void nvmet_tcp_io_work(struct work_struct *w)
 		container_of(w, struct nvmet_tcp_queue, io_work);
 	bool pending;
 	int ret, ops = 0;
+
+	if (!llist_empty(&queue->rx_done))
+		nvmet_tcp_rx_drain_done(queue);
 
 	do {
 		pending = false;
@@ -1638,12 +2711,21 @@ static void nvmet_tcp_release_queue_work(struct work_struct *w)
 	cancel_work_sync(&queue->io_work);
 	/* stop accepting incoming data */
 	queue->rcv_state = NVMET_TCP_RECV_ERR;
+	/*
+	 * Off the budget's FIFO at once, not after nvmet_sq_destroy(): the
+	 * kref is at zero, so a kick could not pass a queued waiter on.
+	 * io_work admits nothing more (nvmet_tcp_rx_dying()).
+	 */
+	rx_loan_unwait(&queue->rx_wait);
 
 	nvmet_sq_put_tls_key(&queue->nvme_sq);
 	nvmet_tcp_uninit_data_in_cmds(queue);
 	nvmet_sq_destroy(&queue->nvme_sq);
 	nvmet_cq_put(&queue->nvme_cq);
 	cancel_work_sync(&queue->io_work);
+	nvmet_tcp_rx_drain_done(queue);
+	/* Backstop: io_work can run no more. */
+	rx_loan_unwait(&queue->rx_wait);
 	nvmet_tcp_free_cmd_data_in_buffers(queue);
 	/* ->sock will be released by fput() */
 	fput(queue->sock->file);
@@ -1750,6 +2832,15 @@ static int nvmet_tcp_set_queue_sock(struct nvmet_tcp_queue *queue)
 	/* Set socket type of service */
 	if (inet->rcv_tos > 0)
 		ip_sock_set_tos(sock->sk, inet->rcv_tos);
+
+	/*
+	 * Opened with the held listener's buffer, unlocked: hold it before the
+	 * first read, as a lending queue is held; nvmet_tcp_rx_setup() gives
+	 * it back if the queue never lends.
+	 */
+	if (READ_ONCE(queue->port->rx_hold.held))
+		nvmet_tcp_rx_hold_apply(&queue->rx_hold, sock->sk,
+					&nvmet_tcp_rx_budget);
 
 	ret = 0;
 	write_lock_bh(&sock->sk->sk_callback_lock);
@@ -1961,6 +3052,10 @@ static void nvmet_tcp_alloc_queue(struct nvmet_tcp_port *port,
 	INIT_LIST_HEAD(&queue->free_list);
 	init_llist_head(&queue->resp_list);
 	INIT_LIST_HEAD(&queue->resp_send_list);
+	INIT_LIST_HEAD(&queue->rx_withheld);
+	init_llist_head(&queue->rx_done);
+	INIT_LIST_HEAD(&queue->rx_wait.node);
+	queue->rx_wait.ops = &nvmet_tcp_rx_waiter_ops;
 
 	sock_file = sock_alloc_file(queue->sock, O_CLOEXEC, NULL);
 	if (IS_ERR(sock_file)) {
@@ -2046,8 +3141,31 @@ static void nvmet_tcp_accept_work(struct work_struct *w)
 {
 	struct nvmet_tcp_port *port =
 		container_of(w, struct nvmet_tcp_port, accept_work);
+	struct rx_loan_budget *lb = &nvmet_tcp_rx_budget;
 	struct socket *newsock;
+	bool lends;
 	int ret;
+
+	/*
+	 * Once a queue has carved the region (nvmet_tcp_rx_setup()), hold the
+	 * listener's first window (rx_loan_hold_listen(), which leaves the
+	 * window scale stock); each connection is then held before its first
+	 * read (nvmet_tcp_set_queue_sock()).  A port none of whose queues can
+	 * lend (TLS only, or the region or budget gone) keeps or gets back a
+	 * stock listener.
+	 */
+	lends = net_eq(sock_net(port->sock->sk), &init_net) &&
+		!nvmet_port_secure_channel_required(port->nport) &&
+		rx_loan_region_size() && READ_ONCE(lb->budget);
+	if (lends && !port->rx_hold.held) {
+		rx_loan_hold_listen(&port->rx_hold, port->sock->sk,
+				    NVMET_TCP_RX_RCVBUF,
+				    rx_loan_hold_factor(&port->rx_hold, lb));
+	} else if (!lends && port->rx_hold.held) {
+		rx_loan_hold_release(port->sock->sk);
+		WRITE_ONCE(port->rx_hold.held, false);
+		port->rx_hold.factor = 0;
+	}
 
 	while (true) {
 		ret = kernel_accept(port->sock, &newsock, O_NONBLOCK);
@@ -2260,6 +3378,7 @@ static const struct nvmet_fabrics_ops nvmet_tcp_ops = {
 	.add_port		= nvmet_tcp_add_port,
 	.remove_port		= nvmet_tcp_remove_port,
 	.queue_response		= nvmet_tcp_queue_response,
+	.data_done		= nvmet_tcp_data_done,
 	.delete_ctrl		= nvmet_tcp_delete_ctrl,
 	.install_queue		= nvmet_tcp_install_queue,
 	.disc_traddr		= nvmet_tcp_disc_port_addr,
@@ -2275,12 +3394,18 @@ static int __init nvmet_tcp_init(void)
 	if (!nvmet_tcp_wq)
 		return -ENOMEM;
 
+	ret = nvmet_tcp_rx_budget_init(&nvmet_tcp_rx_budget);
+	if (ret)
+		goto err_wq;
+
 	ret = nvmet_register_transport(&nvmet_tcp_ops);
 	if (ret)
 		goto err;
 
 	return 0;
 err:
+	rx_loan_budget_destroy(&nvmet_tcp_rx_budget);
+err_wq:
 	destroy_workqueue(nvmet_tcp_wq);
 	return ret;
 }
@@ -2297,6 +3422,14 @@ static void __exit nvmet_tcp_exit(void)
 		kernel_sock_shutdown(queue->sock, SHUT_RDWR);
 	mutex_unlock(&nvmet_tcp_queue_mutex);
 	flush_workqueue(nvmet_wq);
+	mutex_lock(&nvmet_tcp_rx_consumer_lock);
+	if (nvmet_tcp_rx_consumer_on)
+		rx_loan_consumer_unregister(&nvmet_tcp_rx_consumer);
+	nvmet_tcp_rx_consumer_on = false;
+	mutex_unlock(&nvmet_tcp_rx_consumer_lock);
+	/* its queues, and so the commands counting copies to it, are gone */
+	rx_loan_consumer_destroy(&nvmet_tcp_rx_consumer);
+	rx_loan_budget_destroy(&nvmet_tcp_rx_budget);
 
 	destroy_workqueue(nvmet_tcp_wq);
 	ida_destroy(&nvmet_tcp_queue_ida);
@@ -2308,3 +3441,7 @@ module_exit(nvmet_tcp_exit);
 MODULE_DESCRIPTION("NVMe target TCP transport driver");
 MODULE_LICENSE("GPL v2");
 MODULE_ALIAS("nvmet-transport-3"); /* 3 == NVMF_TRTYPE_TCP */
+
+#if IS_ENABLED(CONFIG_NVME_TARGET_TCP_KUNIT_TEST)
+#include "tcp_rx_loan_kunit.c"
+#endif

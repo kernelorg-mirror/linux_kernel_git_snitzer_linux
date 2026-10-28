@@ -621,7 +621,8 @@ static void rx_loan_hold_raise(struct sock *sk, u8 old_ratio, u32 old_clamp)
  * turns free buffer into window with at @factor, and clamp the window, so
  * its unread data stays its share of the region.  The ceiling also keeps
  * TCP from raising the clamp again when it re-learns its ratio.  Sockets
- * that never receive a region page keep TCP's own buffer.  TCP sizes a
+ * that never receive a region page keep TCP's own buffer
+ * (rx_loan_hold_release()).  TCP sizes a
  * connection's first window from its listener when the SYN arrives and
  * never shrinks a window it has offered, so listeners are held too: a
  * connection that opened with the listener's larger window would overflow
@@ -666,6 +667,92 @@ int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
 	return err;
 }
 EXPORT_SYMBOL_GPL(rx_loan_hold_apply);
+
+/**
+ * rx_loan_hold_listen - hold the first window of a listener's connections
+ * @h: the listener's hold
+ * @sk: the listener, unlocked
+ * @bytes: the receive buffer its connections open with, or 0: not held
+ * @factor: what skbs occupy for each 100 of payload (rx_loan_hold_factor())
+ *
+ * TCP sizes a connection's first window from its listener's receive
+ * buffer and ratio when the SYN arrives, and never shrinks a window it has
+ * offered.  Set only those two: a lock or a window clamp on the listener
+ * would also lower the window scale every connection negotiates, for its
+ * whole life, lending or not.  Connections inherit the buffer unlocked;
+ * hold each that may lend with rx_loan_hold_apply() before reading it, and
+ * give the rest back theirs with rx_loan_hold_release().
+ *
+ * Return: 0 once held; -EALREADY, nothing done, when @bytes is 0 or @h is
+ * already held.
+ */
+int rx_loan_hold_listen(struct rx_loan_hold *h, struct sock *sk,
+			unsigned int bytes, unsigned int factor)
+{
+	u8 ratio = rx_loan_hold_scaling_ratio(factor);
+
+	if (!bytes || h->held)
+		return -EALREADY;
+	lock_sock(sk);
+	WRITE_ONCE(sk->sk_rcvbuf, max_t(int, bytes, SOCK_MIN_RCVBUF));
+	if (ratio < tcp_sk(sk)->scaling_ratio)
+		tcp_sk(sk)->scaling_ratio = ratio;
+	release_sock(sk);
+	h->factor = factor;
+	/* callers may read a listener's hold locklessly */
+	WRITE_ONCE(h->held, true);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rx_loan_hold_listen);
+
+/**
+ * rx_loan_hold_release - give a socket back TCP's own receive buffer
+ * @sk: a connection that will never receive region pages, or a listener
+ *	whose connections no longer would; unlocked
+ *
+ * A connection that will not lend must not keep a hold, applied
+ * (rx_loan_hold_apply()) or inherited from a held listener
+ * (rx_loan_hold_listen()): unlock its buffer so TCP autotunes it again
+ * from at least tcp_rmem[1], drop the ratio ceiling, and let the window
+ * clamp follow the buffer.  A listener goes back to stock: tcp_rmem[1], the
+ * default ratio and no window clamp.  A connection neither locked nor
+ * under tcp_rmem[1] is left as it is.
+ */
+void rx_loan_hold_release(struct sock *sk)
+{
+	int rmem = READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_rmem[1]);
+	struct tcp_sock *tp = tcp_sk(sk);
+	u32 old_clamp;
+	u8 old_ratio;
+	int clamp;
+
+	lock_sock(sk);
+	if (sk->sk_state == TCP_LISTEN) {
+		/* tcp_set_window_clamp() refuses 0 but on a closed socket. */
+		sk->sk_userlocks &= ~SOCK_RCVBUF_LOCK;
+		WRITE_ONCE(sk->sk_rcvbuf, rmem);
+		WRITE_ONCE(tp->scaling_ratio_max, 0);
+		tcp_scaling_ratio_init(sk);
+		WRITE_ONCE(tp->window_clamp, 0);
+		release_sock(sk);
+		return;
+	}
+	if (!(sk->sk_userlocks & SOCK_RCVBUF_LOCK) && sk->sk_rcvbuf >= rmem) {
+		release_sock(sk);
+		return;
+	}
+	sk->sk_userlocks &= ~SOCK_RCVBUF_LOCK;
+	WRITE_ONCE(sk->sk_rcvbuf, max_t(int, sk->sk_rcvbuf, rmem));
+	old_ratio = tp->scaling_ratio_max;
+	old_clamp = tp->window_clamp;
+	tp->scaling_ratio_max = 0;
+	clamp = tcp_win_from_space(sk, sk->sk_rcvbuf);
+	release_sock(sk);
+
+	if ((u32)clamp > old_clamp && !tcp_sock_set_window_clamp(sk, clamp))
+		rx_loan_hold_raise(sk, old_ratio, old_clamp);
+}
+EXPORT_SYMBOL_GPL(rx_loan_hold_release);
 #endif /* CONFIG_INET */
 
 /*
@@ -678,9 +765,16 @@ EXPORT_SYMBOL_GPL(rx_loan_hold_apply);
  * larger than what the region has left takes nothing past it; a refusal
  * drains the stocks once (@draining) and every return after it kicks the
  * budgets (@waiting).  With no region it counts, and refuses nothing.
+ * Write credit, every budget's but the read pools', is also counted in
+ * @out_write, whatever namespace or consumer it belongs to.  A
+ * write_capped budget (nvmet-tcp's, sized to the write share beside
+ * kNFSd's) is refused past the write partition (the region less its read
+ * split) by that count, so it cannot take the read partition; kNFSd's
+ * budgets are capped by @out alone, as before there was a second.
  */
 static struct {
 	atomic_long_t	out;
+	atomic_long_t	out_write;	/* of @out, write budgets' credit */
 	atomic_long_t	orphaned;	/* kept spent: abandoned records */
 	atomic_long_t	denied;
 	atomic_t	waiting;	/* refused since the last return */
@@ -712,14 +806,43 @@ static void rx_loan_region_kick_all(void)
  * would pass it, unless @force (a budget turned off: counted, not capped).
  * With no region size the charge is counted, not capped.  @carved, if not
  * NULL: whether a region was in place to charge, not only a size for one.
- * No undo: a refusal never makes another admission see a total it passed.
+ * No undo of the total: a refusal never makes another admission see a
+ * total it passed.  A write_capped budget's write count is undone when the
+ * total refuses it, so another such admission may briefly see it.
  */
 static bool rx_loan_region_carved(void);
 
-static bool rx_loan_region_get(long n, bool force, bool *carved)
+/* Add @n to @ctr unless that passes @cap; see rx_loan_region_get(). */
+static bool rx_loan_region_add(atomic_long_t *ctr, long n, long cap)
 {
-	unsigned long size;
-	long v;
+	long v = atomic_long_read(ctr);
+
+	do {
+		if (v + n > cap) {
+			/*
+			 * Pairs with rx_loan_region_put(): either it sees
+			 * waiting, or this sees what it returned.
+			 */
+			atomic_set(&rx_loan_region.waiting, 1);
+			smp_mb__after_atomic();
+			v = atomic_long_read(ctr);
+			if (v + n <= cap)
+				continue;
+			atomic_long_inc(&rx_loan_region.denied);
+			/* Idle stocks may hold what is short: drain them once. */
+			if (!atomic_xchg(&rx_loan_region.draining, 1))
+				rx_loan_region_kick_all();
+			return false;
+		}
+	} while (!atomic_long_try_cmpxchg(ctr, &v, v + n));
+	return true;
+}
+
+static bool rx_loan_region_get(long n, const struct rx_loan_budget *lb,
+			       bool force, bool *carved)
+{
+	unsigned long size, read_pages;
+	bool read = lb->read;
 
 	if (n <= 0)
 		return true;
@@ -728,27 +851,29 @@ static bool rx_loan_region_get(long n, bool force, bool *carved)
 		*carved = rx_loan_region_carved();
 	if (!size || force) {
 		atomic_long_add(n, &rx_loan_region.out);
+		if (!read)
+			atomic_long_add(n, &rx_loan_region.out_write);
 		return true;
 	}
-	v = atomic_long_read(&rx_loan_region.out);
-	do {
-		if (v + n > (long)size) {
-			/*
-			 * Pairs with rx_loan_region_put(): either it sees
-			 * waiting, or this sees what it returned.
-			 */
-			atomic_set(&rx_loan_region.waiting, 1);
-			smp_mb__after_atomic();
-			v = atomic_long_read(&rx_loan_region.out);
-			if (v + n <= (long)size)
-				continue;
-			atomic_long_inc(&rx_loan_region.denied);
-			/* Idle stocks may hold what is short: drain them once. */
-			if (!atomic_xchg(&rx_loan_region.draining, 1))
-				rx_loan_region_kick_all();
+	if (lb->write_capped) {
+		read_pages = rx_loan_region_read_pages();
+		if (!rx_loan_region_add(&rx_loan_region.out_write, n,
+					size > read_pages ? size - read_pages : 0))
 			return false;
-		}
-	} while (!atomic_long_try_cmpxchg(&rx_loan_region.out, &v, v + n));
+	}
+	if (!rx_loan_region_add(&rx_loan_region.out, n, size)) {
+		/*
+		 * Back the write count off with no kick: nothing was
+		 * returned, and the refusal has just set @waiting for the
+		 * next real return to kick the budgets.
+		 */
+		if (lb->write_capped)
+			atomic_long_sub(n, &rx_loan_region.out_write);
+		return false;
+	}
+	/* Not capped (kNFSd's): counted once the total has passed it. */
+	if (!read && !lb->write_capped)
+		atomic_long_add(n, &rx_loan_region.out_write);
 	if (atomic_read(&rx_loan_region.draining))
 		atomic_set(&rx_loan_region.draining, 0);
 	return true;
@@ -759,22 +884,33 @@ static bool rx_loan_region_get(long n, bool force, bool *carved)
  * budget, whose waiters may be short of the region rather than their own
  * credit.
  */
-/* Charge @pages to the region for a stocked take; false if it has not got them. */
-bool rx_loan_region_take(long pages, bool *carved)
+/*
+ * Charge @pages to the region for a stocked take of @lb's credit; false if
+ * it has not got them.
+ */
+bool rx_loan_region_take(long pages, const struct rx_loan_budget *lb,
+			 bool *carved)
 {
-	return rx_loan_region_get(pages, false, carved);
+	return rx_loan_region_get(pages, lb, false, carved);
 }
 EXPORT_SYMBOL_GPL(rx_loan_region_take);
 
-void rx_loan_region_put(long pages)
+static void rx_loan_region_returned(void)
 {
-	if (pages <= 0)
-		return;
-	atomic_long_sub(pages, &rx_loan_region.out);
 	smp_mb__after_atomic();
 	if (atomic_read(&rx_loan_region.waiting) &&
 	    atomic_xchg(&rx_loan_region.waiting, 0))
 		rx_loan_region_kick_all();
+}
+
+void rx_loan_region_put(long pages, bool read)
+{
+	if (pages <= 0)
+		return;
+	if (!read)
+		atomic_long_sub(pages, &rx_loan_region.out_write);
+	atomic_long_sub(pages, &rx_loan_region.out);
+	rx_loan_region_returned();
 }
 EXPORT_SYMBOL_GPL(rx_loan_region_put);
 
@@ -783,6 +919,13 @@ long rx_loan_region_out(void)
 	return atomic_long_read(&rx_loan_region.out);
 }
 EXPORT_SYMBOL_GPL(rx_loan_region_out);
+
+/* Of rx_loan_region_out(), the write budgets' credit (for KUnit). */
+long rx_loan_region_write_out(void)
+{
+	return atomic_long_read(&rx_loan_region.out_write);
+}
+EXPORT_SYMBOL_IF_KUNIT(rx_loan_region_write_out);
 
 long rx_loan_region_orphaned(void)
 {
@@ -1050,17 +1193,23 @@ static unsigned long rx_loan_kunit_region_read;
  */
 void rx_loan_kunit_region_set_aside(bool aside)
 {
-	static long real_out, real_orphaned;
+	static long real_out, real_out_write, real_orphaned;
 	long early;
 
 	if (aside) {
 		real_out = atomic_long_xchg(&rx_loan_region.out, 0);
+		real_out_write = atomic_long_xchg(&rx_loan_region.out_write, 0);
 		real_orphaned = atomic_long_xchg(&rx_loan_region.orphaned, 0);
 	} else {
 		early = atomic_long_read(&rx_loan_region.out) -
 			atomic_long_read(&rx_loan_region.orphaned);
 		atomic_long_set(&rx_loan_region.out,
 				real_out + min(early, 0L));
+		/* Orphans are write records: the same holds of write credit. */
+		early = atomic_long_read(&rx_loan_region.out_write) -
+			atomic_long_read(&rx_loan_region.orphaned);
+		atomic_long_set(&rx_loan_region.out_write,
+				max(real_out_write + min(early, 0L), 0L));
 		atomic_long_set(&rx_loan_region.orphaned, real_orphaned);
 	}
 	atomic_set(&rx_loan_region.waiting, 0);
@@ -1475,12 +1624,15 @@ static int rx_loan_exact_limits_locked(struct rx_loan_budget *lb,
 		}
 		rx_loan_consumer_get(c, lb->read, n - over, true);
 	}
-	if (!rx_loan_region_get(n, false, NULL)) {
+	if (!rx_loan_region_get(n, lb, false, NULL)) {
 		rx_loan_consumer_put(c, lb->read, n - over);
 		goto refuse;
 	}
-	if (over)
+	if (over) {
+		if (!lb->read)
+			atomic_long_sub(over, &rx_loan_region.out_write);
 		atomic_long_sub(over, &rx_loan_region.out);
+	}
 	return 0;
 refuse:
 	/* Returns to stocks must kick now: stop stocking. */
@@ -1706,7 +1858,7 @@ bool rx_loan_admit(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
 		share_only = true;	/* never the oldest: it may pass */
 		goto deny_limit;
 	}
-	if (!rx_loan_region_get(from_avail + from_reserve, false, &carved)) {
+	if (!rx_loan_region_get(from_avail + from_reserve, lb, false, &carved)) {
 		rx_loan_consumer_put(c, lb->read, from_avail + from_reserve);
 		goto deny_limit;
 	}
@@ -1785,7 +1937,7 @@ bool __rx_loan_charge(struct rx_loan_waiter *w, struct rx_loan_credit *cr,
 	if (!lb->budget) {
 		/* Admission was turned off: records in flight finish unthrottled. */
 		rx_loan_consumer_get(c, lb->read, want, true);
-		rx_loan_region_get(want, true, &carved);
+		rx_loan_region_get(want, lb, true, &carved);
 		cr->credit += want;
 		cr->over += want;
 		if (carved)
@@ -1799,7 +1951,7 @@ bool __rx_loan_charge(struct rx_loan_waiter *w, struct rx_loan_credit *cr,
 	if (want) {
 		limited = !rx_loan_consumer_get(c, lb->read, want, oldest);
 		share_only = limited;	/* never the oldest: it may pass */
-		if (!limited && !rx_loan_region_get(want, false, &carved)) {
+		if (!limited && !rx_loan_region_get(want, lb, false, &carved)) {
 			rx_loan_consumer_put(c, lb->read, want);
 			limited = true;
 		}
@@ -1830,7 +1982,7 @@ bool __rx_loan_charge(struct rx_loan_waiter *w, struct rx_loan_credit *cr,
 		if (want) {
 			/* Not taken: give back what was charged for it. */
 			rx_loan_consumer_put(c, lb->read, want);
-			rx_loan_region_put(want);
+			rx_loan_region_put(want, lb->read);
 		}
 		if (carved)
 			cr->region += asked - want;
@@ -1947,7 +2099,7 @@ returned:
 	rx_loan_budget_configure_locked(lb);
 	wake = rx_loan_kick_locked(lb, NULL, &granted);
 	spin_unlock_bh(&lb->lock);
-	rx_loan_region_put(refund);
+	rx_loan_region_put(refund, lb->read);
 	rx_loan_wake(wake);
 	rx_loan_wake_granted(&granted);
 }
@@ -2014,7 +2166,7 @@ void rx_loan_orphan(struct rx_loan_credit *cr, u32 held)
 	cr->consumer = NULL;
 	wake = rx_loan_kick_locked(lb, NULL, &granted);
 	spin_unlock_bh(&lb->lock);
-	rx_loan_region_put(refund);
+	rx_loan_region_put(refund, lb->read);
 	rx_loan_wake(wake);
 	rx_loan_wake_granted(&granted);
 }
@@ -2145,7 +2297,7 @@ void rx_loan_grant_return(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
 	rx_loan_budget_configure_locked(lb);
 	wake = rx_loan_kick_locked(lb, NULL, &granted);
 	spin_unlock_bh(&lb->lock);
-	rx_loan_region_put(refund);
+	rx_loan_region_put(refund, lb->read);
 	rx_loan_wake(wake);
 	rx_loan_wake_granted(&granted);
 }
@@ -2167,6 +2319,8 @@ void rx_loan_grant_drop(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
 	this_cpu_dec(lb->stock->read_inflight);
 	spin_unlock_bh(&lb->lock);
 	/* No kick from the region here either: kick_work passes it on. */
+	if (!lb->read)
+		atomic_long_sub(credit + reserve, &rx_loan_region.out_write);
 	atomic_long_sub(credit + reserve, &rx_loan_region.out);
 	this_cpu_inc(lb->stock->read_completed);
 	schedule_work(&lb->kick_work);
@@ -2209,8 +2363,10 @@ EXPORT_SYMBOL_GPL(rx_loan_budget_request);
  */
 int rx_loan_budget_init(struct rx_loan_budget *lb, bool read)
 {
-	lb->stock = alloc_percpu(struct rx_loan_stock);
-	if (!lb->stock)
+	struct rx_loan_stock __percpu *stock;
+
+	stock = alloc_percpu(struct rx_loan_stock);
+	if (!stock)
 		return -ENOMEM;
 	lb->read = read;
 	spin_lock_init(&lb->lock);
@@ -2218,6 +2374,8 @@ int rx_loan_budget_init(struct rx_loan_budget *lb, bool read)
 	INIT_LIST_HEAD(&lb->inflight);
 	INIT_LIST_HEAD(&lb->waiters);
 	INIT_WORK(&lb->kick_work, rx_loan_kick_fn);
+	/* A reader that sees @stock may take the lock and walk the lists. */
+	smp_store_release(&lb->stock, stock);
 	mutex_lock(&rx_loan_consumers_lock);
 	list_add_tail_rcu(&lb->region_node, &rx_loan_budgets);
 	mutex_unlock(&rx_loan_consumers_lock);
@@ -2227,10 +2385,13 @@ EXPORT_SYMBOL_GPL(rx_loan_budget_init);
 
 /*
  * Tear down @lb, nothing in flight: its stocks go back, and with them
- * their charge to the region.
+ * their charge to the region.  @stock is cleared under the lock, so a
+ * reader that takes the lock and still sees it may sum it.
  */
 void rx_loan_budget_destroy(struct rx_loan_budget *lb)
 {
+	struct rx_loan_stock __percpu *stock;
+
 	if (!lb->stock)
 		return;
 	mutex_lock(&rx_loan_consumers_lock);
@@ -2239,10 +2400,13 @@ void rx_loan_budget_destroy(struct rx_loan_budget *lb)
 	synchronize_rcu();
 	flush_work(&lb->kick_work);
 	spin_lock_bh(&lb->lock);
+	WARN_ON_ONCE(!list_empty(&lb->inflight) ||
+		     !list_empty(&lb->waiters) || lb->lent);
 	rx_loan_stock_drain_locked(lb);
+	stock = lb->stock;
+	WRITE_ONCE(lb->stock, NULL);
 	spin_unlock_bh(&lb->lock);
-	free_percpu(lb->stock);
-	lb->stock = NULL;
+	free_percpu(stock);
 }
 EXPORT_SYMBOL_GPL(rx_loan_budget_destroy);
 

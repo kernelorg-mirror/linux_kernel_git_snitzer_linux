@@ -3188,7 +3188,7 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_bounce_done(struct svc_rqst *rqstp,
 		rx_loan_budget_update_locked(c->lb);
 		wake = svc_tcp_rx_credit_kick_locked(c, &granted);
 		spin_unlock_bh(&c->lb->lock);
-		rx_loan_region_put(lent);
+		rx_loan_region_put(lent, c->lb->read);
 		rx_loan_wake(wake);
 		rx_loan_wake_granted(&granted);
 	}

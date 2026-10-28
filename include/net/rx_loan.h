@@ -133,6 +133,9 @@ unsigned int rx_loan_hold_factor(const struct rx_loan_hold *h,
 int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
 		       unsigned int bytes, unsigned int factor, int *rcvbuf,
 		       int *clamp);
+int rx_loan_hold_listen(struct rx_loan_hold *h, struct sock *sk,
+			unsigned int bytes, unsigned int factor);
+void rx_loan_hold_release(struct sock *sk);
 #endif
 
 /* The higher of @h's last two samples, or 0 before it has one. */
@@ -338,6 +341,13 @@ struct rx_loan_budget {
 	 * once a region exists, rather than 0, which copies.
 	 */
 	bool			cfg_default;
+	/*
+	 * A write budget beside kNFSd's (nvmet-tcp's): its admissions are
+	 * also held to the region's write partition, with every write
+	 * budget's credit counted (rx_loan_region_write_out()).  kNFSd's
+	 * budgets leave it clear, and are capped only by the region total.
+	 */
+	bool			write_capped;
 	unsigned int		cfg_reserve;
 	unsigned long		cfg_pages;
 	/* the consumer's object this budget belongs to (read-mostly) */
@@ -477,7 +487,9 @@ long rx_loan_kunit_region_denied(void);
  * that would take either past the share waits, unless its record is the
  * budget's oldest (progress; counted in @overrun_share).  The region-wide
  * total (rx_loan_region_out()) is a hard cap on every budget of every
- * namespace together; nothing passes it.
+ * namespace together; nothing passes it.  A write_capped budget is also
+ * held to the write partition with all write credit
+ * (rx_loan_region_write_out()), of every write budget, counted.
  */
 struct rx_loan_consumer {
 	const char		*name;
@@ -531,6 +543,7 @@ unsigned long rx_loan_region_write_default(void);
 unsigned long rx_loan_consumer_share(const struct rx_loan_consumer *c);
 
 long rx_loan_region_out(void);
+long rx_loan_region_write_out(void);
 long rx_loan_region_orphaned(void);
 
 void rx_loan_budget_request(struct rx_loan_budget *lb, unsigned long pages,
@@ -620,8 +633,9 @@ void rx_loan_cost_fold_cpu_locked(struct rx_loan_budget *lb,
 void rx_loan_cost_learn_locked(struct rx_loan_budget *lb, unsigned int sample);
 void rx_loan_stock_drain_locked(struct rx_loan_budget *lb);
 long rx_loan_stock_refill_locked(struct rx_loan_budget *lb);
-bool rx_loan_region_take(long pages, bool *carved);
-void rx_loan_region_put(long pages);
+bool rx_loan_region_take(long pages, const struct rx_loan_budget *lb,
+			 bool *carved);
+void rx_loan_region_put(long pages, bool read);
 
 /*
  * Take @n pages of credit from this CPU's stock, with no lock.  The caller
@@ -644,7 +658,7 @@ static inline bool __rx_loan_stock_take(struct rx_loan_budget *lb, long n,
 		if (v < n)
 			return false;
 	} while (!atomic_long_try_cmpxchg(pages, &v, v - n));
-	if (likely(rx_loan_region_take(n, carved)))
+	if (likely(rx_loan_region_take(n, lb, carved)))
 		return true;
 	atomic_long_add(n, pages);
 	return false;
@@ -667,7 +681,7 @@ static inline long rx_loan_stock_put(struct rx_loan_budget *lb, long n)
 	atomic_long_t *pages = &raw_cpu_ptr(lb->stock)->pages;
 	long v, keep;
 
-	rx_loan_region_put(n);
+	rx_loan_region_put(n, lb->read);
 	if (READ_ONCE(lb->contended))
 		return n;
 	v = atomic_long_add_return(n, pages);
