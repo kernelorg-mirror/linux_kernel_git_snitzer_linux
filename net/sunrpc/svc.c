@@ -261,7 +261,7 @@ svc_pool_cpu_node(unsigned int cpu,
  *
  * Returns the number of pools.
  */
-static unsigned int
+VISIBLE_IF_KUNIT unsigned int
 svc_pool_map_fill_percpu(unsigned int *to_pool, unsigned int *pool_to,
 			 const struct cpumask *cpus,
 			 const struct cpumask *possible,
@@ -290,6 +290,7 @@ svc_pool_map_fill_percpu(unsigned int *to_pool, unsigned int *pool_to,
 	}
 	return pidx;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_pool_map_fill_percpu);
 
 static int svc_cpu_node(unsigned int cpu, const void *arg)
 {
@@ -719,9 +720,9 @@ static void svc_pool_ext_layout_run(const struct svc_pool *pools,
  * Called whenever a pool's thread count changes, under the caller's
  * service mutex.  It allocates nothing and takes no lock.
  */
-static void svc_pool_ext_layout(const struct svc_pool *pools,
-				struct svc_pool_ext *ext,
-				unsigned int npools)
+VISIBLE_IF_KUNIT void svc_pool_ext_layout(const struct svc_pool *pools,
+					  struct svc_pool_ext *ext,
+					  unsigned int npools)
 {
 	unsigned int first, end, next, j, line = 0;
 	bool whole = false, multi = false;
@@ -769,6 +770,7 @@ static void svc_pool_ext_layout(const struct svc_pool *pools,
 				   whole || !multi || next == first ? j : next);
 	}
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_pool_ext_layout);
 
 /*
  * Create an RPC service
@@ -1351,10 +1353,10 @@ static unsigned int svc_pool_node_base(unsigned int total, unsigned int count,
  * on the lowest nodes; svc_pool_split_next() spreads that evenly over
  * the node's pools.
  */
-static void svc_pool_split_init(struct svc_pool_split *s,
-				const struct svc_pool_ext *ext,
-				unsigned int npools,
-				unsigned int total)
+VISIBLE_IF_KUNIT void svc_pool_split_init(struct svc_pool_split *s,
+					  const struct svc_pool_ext *ext,
+					  unsigned int npools,
+					  unsigned int total)
 {
 	unsigned int first, end, sum = 0;
 
@@ -1366,6 +1368,7 @@ static void svc_pool_split_init(struct svc_pool_split *s,
 		.total = total, .npools = npools, .rem = total - sum,
 	};
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_pool_split_init);
 
 /**
  * svc_pool_split_next - the threads of the next pool
@@ -1375,7 +1378,7 @@ static void svc_pool_split_init(struct svc_pool_split *s,
  *
  * Returns pool @i's share of its node's threads.
  */
-static unsigned int
+VISIBLE_IF_KUNIT unsigned int
 svc_pool_split_next(struct svc_pool_split *s, const struct svc_pool_ext *ext,
 		    unsigned int i)
 {
@@ -1388,6 +1391,7 @@ svc_pool_split_next(struct svc_pool_split *s, const struct svc_pool_ext *ext,
 	}
 	return svc_pool_share(s->threads, i - s->first, s->end - s->first);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_pool_split_next);
 
 /**
  * svc_set_num_threads - adjust number of threads in serv
