@@ -23,6 +23,7 @@
 #include <linux/netdevice.h>
 #include <trace/events/sunrpc.h>
 #include <kunit/visibility.h>
+#include <linux/seq_file.h>
 
 #define RPCDBG_FACILITY	RPCDBG_SVCXPRT
 
@@ -913,10 +914,20 @@ claimed:
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_pool_wake_sibling);
 
-/* With @xprtp, dequeue a transport of @pool into it; else report work */
-static bool svc_pool_steal_one(struct svc_pool *pool, struct svc_xprt **xprtp)
+/* What a steal walk looks for */
+enum { SVC_STEAL_XPRT, SVC_STEAL_RTC, SVC_STEAL_ANY };
+
+/*
+ * With @xprtp, dequeue a transport of @pool into it; else report work.
+ * @what is SVC_STEAL_XPRT for transports, SVC_STEAL_RTC for rtc calls
+ * handed to a thread, or SVC_STEAL_ANY to report either in one pass.
+ */
+static bool svc_pool_steal_one(struct svc_pool *pool, struct svc_xprt **xprtp,
+			       unsigned int what)
 {
-	if (lwq_empty(&pool->sp_xprts))
+	if (what != SVC_STEAL_XPRT && !lwq_empty(&pool->sp_rtc_rqsts))
+		return true;
+	if (what == SVC_STEAL_RTC || lwq_empty(&pool->sp_xprts))
 		return false;
 	if (!xprtp)
 		return true;
@@ -936,11 +947,13 @@ static bool svc_pool_steal_one(struct svc_pool *pool, struct svc_xprt **xprtp)
  * the places of each other node in turn that svc_pool_far_ranges()
  * names, leaving a pool whose idle map bit says its own idle thread
  * serves it.  With @xprtp, dequeue the first transport found into it;
- * without, only report a pool with work.
+ * without, only report a pool with work.  @what selects
+ * transports, rtc calls or either (svc_pool_steal_one()).
  */
 static struct svc_pool *
 svc_pool_steal_scan(struct svc_pool *pools, const struct svc_pool_ext *ext,
-		    unsigned int self, struct svc_xprt **xprtp, bool full)
+		    unsigned int self, struct svc_xprt **xprtp, unsigned int what,
+		    bool full)
 {
 	unsigned int gap = READ_ONCE(ext[self].gap);
 	unsigned int back = gap >> 16, block = back + (gap & 0xffff);
@@ -959,7 +972,7 @@ svc_pool_steal_scan(struct svc_pool *pools, const struct svc_pool_ext *ext,
 			peer = READ_ONCE(ext[k == block ? self : peer].prev);
 		if (peer == self)
 			break;
-		if (svc_pool_steal_one(&pools[peer], xprtp))
+		if (svc_pool_steal_one(&pools[peer], xprtp, what))
 			return &pools[peer];
 	}
 	for (n = 0; full && n < MAX_NUMNODES; n++) {
@@ -979,7 +992,7 @@ svc_pool_steal_scan(struct svc_pool *pools, const struct svc_pool_ext *ext,
 				last = peer;
 				if (fmap && test_bit(peer - fbase, fmap))
 					continue;
-				if (svc_pool_steal_one(&pools[peer], xprtp))
+				if (svc_pool_steal_one(&pools[peer], xprtp, what))
 					return &pools[peer];
 			}
 		}
@@ -993,13 +1006,14 @@ svc_pool_steal_scan(struct svc_pool *pools, const struct svc_pool_ext *ext,
  * @ext: their per-pool state
  * @self: the pool of the looking thread
  *
- * Returns the nearest such pool with queued transports, or NULL.
+ * Returns the nearest such pool with queued transports or rtc calls
+ * handed to a thread, or NULL.
  */
 VISIBLE_IF_KUNIT struct svc_pool *
 svc_pool_steal_source(struct svc_pool *pools, const struct svc_pool_ext *ext,
 		      unsigned int self)
 {
-	return svc_pool_steal_scan(pools, ext, self, NULL, true);
+	return svc_pool_steal_scan(pools, ext, self, NULL, SVC_STEAL_ANY, true);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_pool_steal_source);
 
@@ -1019,7 +1033,7 @@ svc_xprt_steal(struct svc_pool *pools, const struct svc_pool_ext *ext,
 	struct svc_xprt *xprt = NULL;
 	struct svc_pool *pool;
 
-	pool = svc_pool_steal_scan(pools, ext, self, &xprt, true);
+	pool = svc_pool_steal_scan(pools, ext, self, &xprt, SVC_STEAL_XPRT, true);
 	if (pool)
 		*from = pool->sp_id;
 	return xprt;
@@ -1083,12 +1097,13 @@ static void svc_xprt_enqueue_thread(struct svc_xprt *xprt)
 /*
  * Run-to-completion work item (see struct svc_rtc_ops).
  *
- * The work item owns XPT_BUSY between svc_xprt_enqueue() and the
- * hook's verdict, and sends queued replies.  It never reads from the
- * transport: every transport it is given goes on to a thread exactly as
- * svc_xprt_enqueue() would have sent it, so with a declining hook the
- * thread path is unchanged, and with no hook registered no transport has
- * a work item at all.
+ * The work item owns XPT_BUSY between svc_xprt_enqueue() and the hook's
+ * verdict.  A transport the hook declines, or whose next call it does not
+ * serve (peeked, not received), goes on to a thread exactly as
+ * svc_xprt_enqueue() would have sent it.  A call it serves is received
+ * into a preallocated pool rqst and run lookup-only to an IOCB_NOWAIT
+ * submit; the work item never sleeps on anything but the non-blocking
+ * receive.  With no hook registered no transport has a work item at all.
  */
 static DEFINE_MUTEX(svc_rtc_mutex);
 static DEFINE_PER_CPU(struct svc_rtc_stats, svc_rtc_stats);
@@ -1102,22 +1117,60 @@ static DEFINE_PER_CPU(struct svc_rtc_stats, svc_rtc_stats);
  */
 void svc_rtc_stats_sum(struct svc_rtc_stats *sum)
 {
-	int cpu, i;
+	u64 *dst = (u64 *)sum;
+	unsigned int i;
+	int cpu;
 
+	BUILD_BUG_ON(sizeof(*sum) % sizeof(u64));
 	memset(sum, 0, sizeof(*sum));
 	for_each_possible_cpu(cpu) {
-		const struct svc_rtc_stats *s = per_cpu_ptr(&svc_rtc_stats, cpu);
+		const u64 *src = (const u64 *)per_cpu_ptr(&svc_rtc_stats, cpu);
 
-		sum->diverted += READ_ONCE(s->diverted);
-		sum->runs += READ_ONCE(s->runs);
-		sum->sends += READ_ONCE(s->sends);
-		sum->send_batches += READ_ONCE(s->send_batches);
-		sum->budget_exhausted += READ_ONCE(s->budget_exhausted);
-		for (i = 0; i < SVC_RTC_NR_REASONS; i++)
-			sum->fallback[i] += READ_ONCE(s->fallback[i]);
+		for (i = 0; i < sizeof(*sum) / sizeof(u64); i++)
+			dst[i] += READ_ONCE(src[i]);
 	}
 }
 EXPORT_SYMBOL_GPL(svc_rtc_stats_sum);
+
+/**
+ * svc_rtc_stats_show - Print the run-to-completion counters
+ * @m: seq_file to print to
+ */
+void svc_rtc_stats_show(struct seq_file *m)
+{
+	static const char * const reasons[SVC_RTC_NR_REASONS] = {
+		[SVC_RTC_FB_NO_HOOK]	= "no_hook",
+		[SVC_RTC_FB_XPRT_STATE]	= "xprt_state",
+		[SVC_RTC_FB_STOPPING]	= "stopping",
+		[SVC_RTC_FB_DECLINED]	= "declined",
+		[SVC_RTC_FB_NO_PEEK]	= "no_peek",
+		[SVC_RTC_FB_NOT_FAST]	= "not_fast",
+		[SVC_RTC_FB_POOL_EMPTY]	= "pool_empty",
+		[SVC_RTC_FB_NO_SLOT]	= "no_slot",
+		[SVC_RTC_FB_NO_MEM]	= "no_mem",
+		[SVC_RTC_FB_AUTH]	= "auth",
+		[SVC_RTC_FB_MISS]	= "miss",
+		[SVC_RTC_FB_FILE_MISS]	= "file_miss",
+		[SVC_RTC_FB_UNALIGNED]	= "unaligned",
+		[SVC_RTC_FB_EAGAIN_SUBMIT] = "eagain_submit",
+		[SVC_RTC_FB_EAGAIN_COMPLETE] = "eagain_complete",
+		[SVC_RTC_FB_REGION_PARK] = "region_park",
+	};
+	struct svc_rtc_stats s;
+	int i;
+
+	svc_rtc_stats_sum(&s);
+	seq_printf(m, "diverted %llu\nruns %llu\nsends %llu\n"
+		   "send_batches %llu\nbudget_exhausted %llu\n"
+		   "read_offered %llu\nfast_completed %llu\n"
+		   "async_submitted %llu\nrecv_empty %llu\n",
+		   s.diverted, s.runs, s.sends, s.send_batches,
+		   s.budget_exhausted, s.read_offered, s.fast_completed,
+		   s.async_submitted, s.recv_empty);
+	for (i = 0; i < SVC_RTC_NR_REASONS; i++)
+		seq_printf(m, "fallback_%s %llu\n", reasons[i], s.fallback[i]);
+}
+EXPORT_SYMBOL_GPL(svc_rtc_stats_show);
 
 static void svc_rtc_run_done(struct svc_xprt *xprt)
 {
@@ -1129,20 +1182,38 @@ static void svc_rtc_run_done(struct svc_xprt *xprt)
 }
 
 /* Queue @conn's work item on its CPU.  Each queued run holds an xprt ref. */
-static void svc_rtc_kick(struct svc_rtc_conn *conn)
+/*
+ * Pin @conn for one work pass: an xprt reference and sv_rtc_active, which
+ * svc_rtc_unregister() and svc_rtc_xprt_stop() wait on.  Callers that
+ * publish to conn->done or conn->sendq pin first, so a pass that consumes
+ * the entry and frees the rqst cannot let teardown free the conn under a
+ * completer that has not yet queued the work.
+ */
+static struct svc_xprt *svc_rtc_pin(struct svc_rtc_conn *conn)
 {
 	struct svc_xprt *xprt = conn->xprt;
-	int cpu = READ_ONCE(conn->cpu);
 
-	/* The first CPU to queue the work item keeps it: the receiving CPU. */
-	if (cpu < 0) {
-		cpu = raw_smp_processor_id();
-		cpu = cmpxchg(&conn->cpu, -1, cpu) < 0 ? cpu : READ_ONCE(conn->cpu);
-	}
 	svc_xprt_get(xprt);
 	atomic_inc(&xprt->xpt_server->sv_rtc_active);
+	return xprt;
+}
+
+/* Queue the pass that svc_rtc_pin() paid for; an already queued one wins. */
+static void svc_rtc_queue_pinned(struct svc_rtc_conn *conn,
+				 struct svc_xprt *xprt)
+{
+	int cpu = READ_ONCE(conn->cpu);
+
+	/* Receive kicks record their CPU; completions follow the latest. */
+	if (cpu < 0 || !cpu_online(cpu))
+		cpu = raw_smp_processor_id();
 	if (!queue_work_on(cpu, xprt->xpt_server->sv_rtc_wq, &conn->work))
 		svc_rtc_run_done(xprt);
+}
+
+static void svc_rtc_kick(struct svc_rtc_conn *conn)
+{
+	svc_rtc_queue_pinned(conn, svc_rtc_pin(conn));
 }
 
 /**
@@ -1177,6 +1248,8 @@ static bool svc_rtc_divert(struct svc_xprt *xprt)
 		return false;
 	conn = xprt->xpt_rtc;
 	svc_rtc_stat_inc(diverted);
+	/* Run on the CPU that took this receive, not the first one. */
+	WRITE_ONCE(conn->cpu, raw_smp_processor_id());
 	set_bit(SVC_RTC_RECV, &conn->flags);
 	svc_rtc_kick(conn);
 	return true;
@@ -1186,15 +1259,18 @@ static bool svc_rtc_divert(struct svc_xprt *xprt)
  * svc_rtc_recv_step - Decide what to do with a transport the work item owns
  * @xprt: transport; the work item holds its XPT_BUSY
  * @reason: OUT: why the transport is not served on the work item
+ * @opsp: OUT (may be NULL): the hook, when the verdict is %SVC_RTC_FAST
  *
  * Return: %SVC_RTC_THREAD to queue @xprt on a thread (XPT_BUSY passes to
  * it), or %SVC_RTC_IDLE when @xprt is dead (XPT_BUSY stays set, as on any
  * dead transport).
  */
 VISIBLE_IF_KUNIT enum svc_rtc_verdict
-svc_rtc_recv_step(struct svc_xprt *xprt, enum svc_rtc_reason *reason)
+svc_rtc_recv_step(struct svc_xprt *xprt, enum svc_rtc_reason *reason,
+		  const struct svc_rtc_ops **opsp)
 {
 	const struct svc_rtc_ops *ops;
+	u32 prog, vers, proc, flavor;
 	bool want = false;
 
 	if (test_bit(SVC_RTC_STOPPING, &xprt->xpt_rtc->flags) ||
@@ -1215,13 +1291,39 @@ svc_rtc_recv_step(struct svc_xprt *xprt, enum svc_rtc_reason *reason)
 		want = ops->want(xprt);
 	rcu_read_unlock();
 
-	if (!ops)
+	if (!ops) {
 		*reason = SVC_RTC_FB_NO_HOOK;
-	else if (!want)
+		return SVC_RTC_THREAD;
+	}
+	if (!want) {
 		*reason = SVC_RTC_FB_DECLINED;
-	else
-		*reason = SVC_RTC_FB_NO_RECEIVE;
-	return SVC_RTC_THREAD;
+		return SVC_RTC_THREAD;
+	}
+	/*
+	 * Classify the next call from its header, peeked without
+	 * consuming it: a call the hook does not serve goes to a thread
+	 * with nothing received, so the thread's receive is the only one.
+	 * @ops stays valid after rcu_read_unlock(): this run holds
+	 * sv_rtc_active, which svc_rtc_unregister() waits for.
+	 */
+	if (!xprt->xpt_ops || !xprt->xpt_ops->xpo_peek_call ||
+	    xprt->xpt_ops->xpo_peek_call(xprt, &prog, &vers, &proc, &flavor)) {
+		*reason = SVC_RTC_FB_NO_PEEK;
+		return SVC_RTC_THREAD;
+	}
+	if (!ops->want_call || !ops->want_call(xprt, prog, vers, proc)) {
+		*reason = SVC_RTC_FB_NOT_FAST;
+		return SVC_RTC_THREAD;
+	}
+	svc_rtc_stat_inc(read_offered);
+	/* Other flavors (GSS: upcalls, sequence windows) stay on threads. */
+	if (flavor != ops->flavor) {
+		*reason = SVC_RTC_FB_AUTH;
+		return SVC_RTC_THREAD;
+	}
+	if (opsp)
+		*opsp = ops;
+	return SVC_RTC_FAST;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_recv_step);
 
@@ -1273,6 +1375,15 @@ VISIBLE_IF_KUNIT unsigned int svc_rtc_drain_sends(struct svc_rtc_conn *conn,
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_drain_sends);
 
+static void svc_rtc_fast(struct svc_rtc_conn *conn);
+static void svc_rtc_run_completions(struct svc_rtc_conn *conn);
+static void svc_rtc_handoff_drain(struct svc_serv *serv);
+static void svc_rtc_pool_free(struct svc_rtc_pool *pool);
+
+/*
+ * One work item per connection: finish completed async calls (encode and
+ * queue their replies), take the next receive, then send the FIFO.
+ */
 static void svc_rtc_work(struct work_struct *work)
 {
 	struct svc_rtc_conn *conn = container_of(work, struct svc_rtc_conn,
@@ -1282,15 +1393,26 @@ static void svc_rtc_work(struct work_struct *work)
 	bool dead;
 
 	svc_rtc_stat_inc(runs);
+	svc_rtc_run_completions(conn);
+
+	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags)) {
+		switch (svc_rtc_recv_step(xprt, &reason, NULL)) {
+		case SVC_RTC_THREAD:
+			svc_rtc_stat_inc(fallback[reason]);
+			svc_xprt_enqueue_thread(xprt);
+			break;
+		case SVC_RTC_FAST:
+			svc_rtc_fast(conn);
+			break;
+		default:
+			svc_rtc_stat_inc(fallback[reason]);
+			break;
+		}
+	}
+
 	dead = test_bit(SVC_RTC_STOPPING, &conn->flags) ||
 	       test_bit(XPT_DEAD, &xprt->xpt_flags);
 	svc_rtc_drain_sends(conn, dead);
-
-	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags) &&
-	    svc_rtc_recv_step(xprt, &reason) == SVC_RTC_THREAD) {
-		svc_rtc_stat_inc(fallback[reason]);
-		svc_xprt_enqueue_thread(xprt);
-	}
 
 	/* Replies left over the send budget go out on the next pass. */
 	if (conn->pending) {
@@ -1316,6 +1438,7 @@ VISIBLE_IF_KUNIT int svc_rtc_xprt_attach(struct svc_xprt *xprt, gfp_t gfp)
 	conn->xprt = xprt;
 	conn->cpu = -1;
 	init_llist_head(&conn->sendq);
+	init_llist_head(&conn->done);
 	smp_store_release(&xprt->xpt_rtc, conn);
 	return 0;
 }
@@ -1353,7 +1476,9 @@ VISIBLE_IF_KUNIT void svc_rtc_xprt_detach(struct svc_xprt *xprt)
 
 	if (!conn)
 		return;
-	WARN_ON_ONCE(!llist_empty(&conn->sendq) || conn->pending);
+	/* Every pool rqst holds an xprt ref until its reply is released. */
+	WARN_ON_ONCE(!llist_empty(&conn->sendq) || conn->pending ||
+		     !llist_empty(&conn->done));
 	xprt->xpt_rtc = NULL;
 	kfree(conn);
 }
@@ -1372,8 +1497,9 @@ void svc_rtc_queue_send(struct svc_xprt *xprt, struct svc_rtc_send *send)
 		send->fn(xprt, send, true);
 		return;
 	}
+	xprt = svc_rtc_pin(conn);	/* before the send can be consumed */
 	llist_add(&send->node, &conn->sendq);
-	svc_rtc_kick(conn);
+	svc_rtc_queue_pinned(conn, xprt);
 }
 EXPORT_SYMBOL_GPL(svc_rtc_queue_send);
 
@@ -1400,6 +1526,9 @@ EXPORT_SYMBOL_IF_KUNIT(svc_rtc_serv_prepare);
  */
 void svc_rtc_serv_destroy(struct svc_serv *serv)
 {
+	/* An error path may destroy a serv its owner registered. */
+	if (rcu_access_pointer(serv->sv_rtc) || serv->sv_rtc_pool)
+		svc_rtc_unregister(serv);
 	if (serv->sv_rtc_wq) {
 		destroy_workqueue(serv->sv_rtc_wq);
 		serv->sv_rtc_wq = NULL;
@@ -1419,16 +1548,32 @@ EXPORT_SYMBOL_GPL(svc_rtc_serv_destroy);
  */
 int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 {
+	struct svc_rtc_pool *pool;
 	int ret;
+
+	pool = kzalloc(sizeof(*pool), GFP_KERNEL);
+	if (!pool)
+		return -ENOMEM;
+	pool->ops = ops;
+	lwq_init(&pool->free);
+	INIT_LIST_HEAD(&pool->all);
 
 	mutex_lock(&svc_rtc_mutex);
 	ret = svc_rtc_serv_prepare(serv);
-	if (!ret && rcu_access_pointer(serv->sv_rtc))
+	if (!ret && (rcu_access_pointer(serv->sv_rtc) || serv->sv_rtc_pool))
 		ret = -EBUSY;
-	if (!ret)
+	if (!ret) {
+		serv->sv_rtc_pool = pool;
 		rcu_assign_pointer(serv->sv_rtc, ops);
+	}
 	mutex_unlock(&svc_rtc_mutex);
-	return ret;
+	if (ret) {
+		kfree(pool);
+		return ret;
+	}
+	/* Sized from the thread count; svc_set_num_threads() resizes it. */
+	svc_rtc_pool_resize(serv);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(svc_rtc_register);
 
@@ -1441,12 +1586,29 @@ EXPORT_SYMBOL_GPL(svc_rtc_register);
  */
 void svc_rtc_unregister(struct svc_serv *serv)
 {
+	struct svc_rtc_pool *pool;
+
 	mutex_lock(&svc_rtc_mutex);
 	RCU_INIT_POINTER(serv->sv_rtc, NULL);
 	mutex_unlock(&svc_rtc_mutex);
 	synchronize_rcu();
-	wait_var_event(&serv->sv_rtc_active,
-		       !atomic_read(&serv->sv_rtc_active));
+	/*
+	 * Every pool rqst in use holds sv_rtc_active.  One handed to a
+	 * thread may find no thread left to run it: release it here (the
+	 * client retransmits, as for any call dropped at shutdown).
+	 */
+	do {
+		svc_rtc_handoff_drain(serv);
+	} while (!wait_var_event_timeout(&serv->sv_rtc_active,
+					 !atomic_read(&serv->sv_rtc_active),
+					 HZ / 10));
+	mutex_lock(&svc_rtc_mutex);
+	pool = serv->sv_rtc_pool;
+	serv->sv_rtc_pool = NULL;
+	WRITE_ONCE(serv->sv_rtc_nr, 0);
+	mutex_unlock(&svc_rtc_mutex);
+	if (pool)
+		svc_rtc_pool_free(pool);
 }
 EXPORT_SYMBOL_GPL(svc_rtc_unregister);
 
@@ -1624,12 +1786,20 @@ static bool svc_fill_pages(struct svc_rqst *rqstp, struct page **pages,
 {
 	unsigned long filled, ret;
 
+	/* A pool rqst fills on a work item, which must not reclaim. */
+	gfp_t gfp = test_bit(RQ_RTC, &rqstp->rq_flags) ? GFP_NOWAIT : GFP_KERNEL;
+
 	for (filled = 0; filled < npages; filled = ret) {
-		ret = alloc_pages_bulk(GFP_KERNEL, npages, pages);
+		ret = alloc_pages_bulk(gfp, npages, pages);
 		if (ret > filled)
 			/* Made progress, don't sleep yet */
 			continue;
 
+		/* A work item has no thread to stop and must not wait here. */
+		if (test_bit(RQ_RTC, &rqstp->rq_flags)) {
+			trace_svc_alloc_arg_err(npages, ret);
+			return false;
+		}
 		set_current_state(TASK_IDLE);
 		if (svc_thread_should_stop(rqstp)) {
 			set_current_state(TASK_RUNNING);
@@ -1704,7 +1874,7 @@ static bool svc_thread_sibling_work(struct svc_rqst *rqstp,
 
 	if (!svc_pool_has_siblings(serv, rqstp->rq_pool))
 		return false;
-	/* transports, in one pass */
+	/* transports and rtc calls, in one pass */
 	cyc->walked = true;
 	cyc->found = svc_pool_steal_source(serv->sv_pools, serv->sv_pool_ext,
 					   rqstp->rq_pool->sp_id);
@@ -1723,11 +1893,11 @@ static struct svc_xprt *svc_thread_steal(struct svc_rqst *rqstp,
 
 	if (!svc_pool_has_siblings(serv, rqstp->rq_pool))
 		return NULL;
-	if (!pool || !svc_pool_steal_one(pool, &xprt)) {
+	if (!pool || !svc_pool_steal_one(pool, &xprt, SVC_STEAL_XPRT)) {
 		if (cyc->walked) {
 			pool = svc_pool_steal_scan(serv->sv_pools,
 						   serv->sv_pool_ext, self,
-						   &xprt, false);
+						   &xprt, SVC_STEAL_XPRT, false);
 		} else {
 			xprt = svc_xprt_steal(serv->sv_pools, serv->sv_pool_ext,
 					      self, &id);
@@ -1753,6 +1923,10 @@ svc_thread_should_sleep(struct svc_rqst *rqstp)
 
 	/* was a socket queued? */
 	if (!lwq_empty(&pool->sp_xprts))
+		return false;
+
+	/* was a received rtc call handed to a thread? */
+	if (!lwq_empty(&pool->sp_rtc_rqsts))
 		return false;
 
 	/* are we shutting down? */
@@ -1942,10 +2116,47 @@ static void svc_add_new_temp_xprt(struct svc_serv *serv, struct svc_xprt *newxpt
 	svc_xprt_received(newxpt);
 }
 
+/*
+ * Receive one call on @xprt into @rqstp, which holds a request slot.
+ * Shared by threads and run-to-completion work items.  Returns the
+ * call's length, or <= 0 when there is nothing to process.
+ */
+static int svc_xprt_recv_call(struct svc_rqst *rqstp, struct svc_xprt *xprt)
+{
+	struct svc_serv *serv = rqstp->rq_server;
+	int len;
+
+	/* A work item never takes a deferred call: XPT_DEFERRED sends the
+	 * transport to a thread at the next enqueue.
+	 */
+	rqstp->rq_deferred = test_bit(RQ_RTC_TRY, &rqstp->rq_flags) ?
+			     NULL : svc_deferred_dequeue(xprt);
+	if (rqstp->rq_deferred)
+		len = svc_deferred_recv(rqstp);
+	else
+		len = xprt->xpt_ops->xpo_recvfrom(rqstp);
+	rqstp->rq_reserved = serv->sv_max_mesg;
+	if (xprt->xpt_class->xcl_flags & SVC_XPRT_FLAG_WSPACE_RESERVE)
+		atomic_add(rqstp->rq_reserved, &xprt->xpt_reserved);
+	if (len <= 0)
+		return len;
+
+	trace_svc_xdr_recvfrom(&rqstp->rq_arg);
+
+	clear_bit(XPT_OLD, &xprt->xpt_flags);
+
+	rqstp->rq_chandle.defer = svc_defer;
+
+	if (serv->sv_stats)
+		serv->sv_stats->netcnt++;
+	percpu_counter_inc(&rqstp->rq_pool->sp_messages_arrived);
+	rqstp->rq_stime = ktime_get();
+	return len;
+}
+
 static void svc_handle_xprt(struct svc_rqst *rqstp, struct svc_xprt *xprt)
 {
 	struct svc_serv *serv = rqstp->rq_server;
-	int len = 0;
 
 	if (test_bit(XPT_CLOSE, &xprt->xpt_flags)) {
 		if (test_and_clear_bit(XPT_KILL_TEMP, &xprt->xpt_flags))
@@ -1980,28 +2191,8 @@ static void svc_handle_xprt(struct svc_rqst *rqstp, struct svc_xprt *xprt)
 		svc_xprt_received(xprt);
 	} else if (svc_xprt_reserve_slot(rqstp, xprt)) {
 		/* XPT_DATA|XPT_DEFERRED case: */
-		rqstp->rq_deferred = svc_deferred_dequeue(xprt);
-		if (rqstp->rq_deferred)
-			len = svc_deferred_recv(rqstp);
-		else
-			len = xprt->xpt_ops->xpo_recvfrom(rqstp);
-		rqstp->rq_reserved = serv->sv_max_mesg;
-		if (xprt->xpt_class->xcl_flags & SVC_XPRT_FLAG_WSPACE_RESERVE)
-			atomic_add(rqstp->rq_reserved, &xprt->xpt_reserved);
-		if (len <= 0)
-			goto out;
-
-		trace_svc_xdr_recvfrom(&rqstp->rq_arg);
-
-		clear_bit(XPT_OLD, &xprt->xpt_flags);
-
-		rqstp->rq_chandle.defer = svc_defer;
-
-		if (serv->sv_stats)
-			serv->sv_stats->netcnt++;
-		percpu_counter_inc(&rqstp->rq_pool->sp_messages_arrived);
-		rqstp->rq_stime = ktime_get();
-		svc_process(rqstp);
+		if (svc_xprt_recv_call(rqstp, xprt) > 0)
+			svc_process(rqstp);
 	} else
 		svc_xprt_received(xprt);
 
@@ -2009,6 +2200,353 @@ out:
 	rqstp->rq_res.len = 0;
 	svc_xprt_release(rqstp);
 }
+
+/*
+ * Run-to-completion fast path.  The connection's work item owns XPT_BUSY,
+ * takes a preallocated rqst from the service's pool, receives the call as
+ * a thread does (svc_xprt_recv_call(), which releases XPT_BUSY) and runs
+ * svc_process() with RQ_RTC_TRY set: lookups are lookup-only (svc_defer()
+ * refuses, cache waits are zero) and the READ is submitted IOCB_NOWAIT.
+ * svc_send() then queues the reply on the connection's FIFO instead of
+ * sending it.  An RQ_RTC_ASYNC call returns at submit; its completion
+ * (svc_rtc_complete(), any context) queues it on conn->done and kicks the
+ * work item, which encodes and queues the reply.  An RQ_RTC_MISS call is
+ * handed, received, to a thread of the transport's pool, which reruns it
+ * from its first byte with svc_process().
+ */
+static void svc_rtc_pool_put(struct svc_rtc_rqst *r)
+{
+	struct svc_serv *serv = r->rqstp->rq_server;
+
+	r->conn = NULL;
+	lwq_enqueue(&r->qnode, &serv->sv_rtc_pool->free);
+	if (atomic_dec_and_test(&serv->sv_rtc_active))
+		wake_up_var(&serv->sv_rtc_active);
+}
+
+static void svc_rtc_rqst_release(struct svc_rtc_rqst *r)
+{
+	struct svc_rqst *rqstp = r->rqstp;
+
+	rqstp->rq_res.len = 0;
+	svc_rtc_count_proc(rqstp);	/* once, for the attempt that ended it */
+	clear_bit(RQ_RTC_TRY, &rqstp->rq_flags);
+	clear_bit(RQ_RTC_MISS, &rqstp->rq_flags);
+	clear_bit(RQ_RTC_ASYNC, &rqstp->rq_flags);
+	svc_xprt_release(rqstp);
+	svc_rtc_pool_put(r);
+}
+
+static void svc_rtc_handoff(struct svc_rtc_rqst *r)
+{
+	struct svc_rqst *rqstp = r->rqstp;
+	struct svc_serv *serv = rqstp->rq_server;
+	struct svc_pool *pool = svc_pool_for_cpu(serv);
+
+	svc_rtc_stat_inc(fallback[rqstp->rq_rtc_reason]);
+	/*
+	 * The rerun admits its READ payload pages afresh: return the region
+	 * share, the grant and the swapped reply pages taken by this attempt.
+	 * The thread counts the call, so this attempt's count is dropped.
+	 */
+	svc_rqst_rx_region_unconfine(rqstp, false);
+	svc_rqst_rx_region_restore(rqstp);
+	clear_bit(RQ_RTC_COUNT, &rqstp->rq_flags);
+	lwq_enqueue(&r->qnode, &pool->sp_rtc_rqsts);
+	/* as svc_pool_enqueue_xprt(): a sibling's thread steals the call */
+	if (!svc_pool_wake_idle_thread(pool) &&
+	    svc_pool_has_siblings(serv, pool))
+		svc_pool_wake_sibling(serv->sv_pools, serv->sv_pool_ext,
+				      pool->sp_id);
+}
+
+/* Release rqsts handed to threads that never ran them (unregister). */
+static void svc_rtc_handoff_drain(struct svc_serv *serv)
+{
+	unsigned int i, n = svc_serv_nrpools(serv);
+	struct svc_rtc_rqst *r;
+
+	if (!serv->sv_pools)
+		return;
+	for (i = 0; i < n; i++)
+		while ((r = lwq_dequeue(&serv->sv_pools[i].sp_rtc_rqsts,
+					struct svc_rtc_rqst, qnode)))
+			svc_rtc_rqst_release(r);
+}
+
+/* After svc_process() or a completion on the work item. */
+static void svc_rtc_after_process(struct svc_rtc_rqst *r)
+{
+	struct svc_rqst *rqstp = r->rqstp;
+	const struct svc_rtc_ops *ops = rqstp->rq_server->sv_rtc_pool->ops;
+
+	if (ops->rqst_done)
+		ops->rqst_done(rqstp);
+	if (test_bit(RQ_RTC_ASYNC, &rqstp->rq_flags)) {
+		svc_rtc_stat_inc(async_submitted);
+		return;
+	}
+	if (test_bit(RQ_RTC_MISS, &rqstp->rq_flags)) {
+		svc_rtc_handoff(r);
+		return;
+	}
+	if (!r->queued)
+		svc_rtc_rqst_release(r);	/* dropped: no reply */
+}
+
+/* Send one FIFO reply (xpt_mutex held unless @dead) and release it. */
+static void svc_rtc_send_reply(struct svc_xprt *xprt,
+			       struct svc_rtc_send *send, bool dead)
+{
+	struct svc_rtc_rqst *r = container_of(send, struct svc_rtc_rqst, send);
+	struct svc_rqst *rqstp = r->rqstp;
+	int status = -ENOTCONN;
+
+	if (!dead && !WARN_ON_ONCE(!xprt->xpt_ops->xpo_sendto_locked))
+		status = xprt->xpt_ops->xpo_sendto_locked(rqstp);
+	trace_svc_send(rqstp, status);
+	if (status >= 0)
+		svc_rtc_stat_inc(fast_completed);
+	r->queued = false;
+	svc_rtc_rqst_release(r);
+}
+
+/* svc_send() on a work item: the reply joins the connection's FIFO. */
+static void svc_rtc_queue_reply(struct svc_rqst *rqstp)
+{
+	struct svc_rtc_rqst *r = rqstp->rq_rtc;
+
+	r->queued = true;
+	r->send.fn = svc_rtc_send_reply;
+	/* The work item drains the FIFO after this call returns. */
+	llist_add(&r->send.node, &r->conn->sendq);
+}
+
+/**
+ * svc_rtc_complete - An RQ_RTC_ASYNC call's I/O finished
+ * @rqstp: pool rqst; may be called in any context, including IRQ
+ *
+ * Only queues @rqstp for its connection's work item, which finishes it.
+ */
+void svc_rtc_complete(struct svc_rqst *rqstp)
+{
+	struct svc_rtc_rqst *r = rqstp->rq_rtc;
+	struct svc_rtc_conn *conn = r->conn;
+	struct svc_xprt *xprt = svc_rtc_pin(conn);
+
+	/* Once published, a running pass may finish @r and reuse it. */
+	llist_add(&r->node, &conn->done);
+	svc_rtc_queue_pinned(conn, xprt);
+}
+EXPORT_SYMBOL_GPL(svc_rtc_complete);
+
+static void svc_rtc_run_completions(struct svc_rtc_conn *conn)
+{
+	struct svc_serv *serv = conn->xprt->xpt_server;
+	struct svc_rtc_rqst *r, *t;
+	struct llist_node *list;
+
+	if (llist_empty(&conn->done))
+		return;
+	list = llist_reverse_order(llist_del_all(&conn->done));
+	llist_for_each_entry_safe(r, t, list, node) {
+		struct svc_rqst *rqstp = r->rqstp;
+		/* An rqst in use holds sv_rtc_active: the pool stays. */
+		const struct svc_rtc_ops *ops = serv->sv_rtc_pool->ops;
+		int rc = ops->complete ? ops->complete(rqstp) : -EAGAIN;
+
+		if (rc == -EAGAIN) {
+			svc_rtc_process_abandon(rqstp);
+			svc_rtc_miss(rqstp, SVC_RTC_FB_EAGAIN_COMPLETE);
+		} else {
+			svc_rtc_process_resume(rqstp, rc);
+		}
+		svc_rtc_after_process(r);
+	}
+}
+
+#if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)
+bool svc_rtc_kunit_no_mem, svc_rtc_kunit_no_slot;
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_no_mem);
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_no_slot);
+#define svc_rtc_inject_no_mem()		READ_ONCE(svc_rtc_kunit_no_mem)
+#define svc_rtc_inject_no_slot()	READ_ONCE(svc_rtc_kunit_no_slot)
+#else
+#define svc_rtc_inject_no_mem()		false
+#define svc_rtc_inject_no_slot()	false
+#endif
+
+static void svc_rtc_fast(struct svc_rtc_conn *conn)
+{
+	struct svc_xprt *xprt = conn->xprt;
+	struct svc_serv *serv = xprt->xpt_server;
+	struct svc_rtc_pool *pool = serv->sv_rtc_pool;
+	enum svc_rtc_reason reason;
+	struct svc_rtc_rqst *r = NULL;
+	struct svc_rqst *rqstp;
+
+	if (pool)
+		r = lwq_dequeue(&pool->free, struct svc_rtc_rqst, qnode);
+	if (!r) {
+		reason = SVC_RTC_FB_POOL_EMPTY;
+		goto thread;
+	}
+	atomic_inc(&serv->sv_rtc_active);
+	r->conn = conn;
+	r->queued = false;
+	rqstp = r->rqstp;
+	if (svc_rtc_inject_no_mem() || !svc_alloc_arg(rqstp)) {
+		reason = SVC_RTC_FB_NO_MEM;
+		goto put;
+	}
+	if (svc_rtc_inject_no_slot() || !svc_xprt_reserve_slot(rqstp, xprt)) {
+		reason = SVC_RTC_FB_NO_SLOT;
+		goto put;
+	}
+	svc_xprt_get(xprt);
+	rqstp->rq_xprt = xprt;
+	/* Lookup-only: a cache miss never waits on the work item. */
+	rqstp->rq_chandle.thread_wait = 0;
+	rqstp->rq_rtc_reason = SVC_RTC_FB_MISS;
+	set_bit(RQ_RTC_TRY, &rqstp->rq_flags);
+	if (svc_xprt_recv_call(rqstp, xprt) <= 0) {
+		svc_rtc_stat_inc(recv_empty);
+		svc_rtc_rqst_release(r);
+		return;
+	}
+	svc_process(rqstp);
+	svc_rtc_after_process(r);
+	return;
+
+put:
+	svc_rtc_pool_put(r);
+thread:
+	svc_rtc_stat_inc(fallback[reason]);
+	svc_xprt_enqueue_thread(xprt);
+}
+
+/*
+ * Pool rqst @i is spread across the serv's pools and allocated on its
+ * pool's node; its per-pool counters land on that pool.
+ */
+static struct svc_rtc_rqst *svc_rtc_rqst_new(struct svc_serv *serv,
+					     const struct svc_rtc_ops *ops,
+					     unsigned int i)
+{
+	struct svc_pool *sp = &serv->sv_pools[i % svc_serv_nrpools(serv)];
+	int node = svc_pool_node(serv, sp);
+	struct svc_rtc_rqst *r = kzalloc_node(sizeof(*r), GFP_KERNEL, node);
+
+	if (!r)
+		return NULL;
+	r->rqstp = svc_rqst_alloc(serv, sp, node);
+	if (!r->rqstp)
+		goto out_free;
+	set_bit(RQ_RTC, &r->rqstp->rq_flags);
+	r->rqstp->rq_rtc = r;
+	if (ops->rqst_init && ops->rqst_init(r->rqstp))
+		goto out_rqst;
+	return r;
+
+out_rqst:
+	svc_rqst_free(r->rqstp);
+out_free:
+	kfree(r);
+	return NULL;
+}
+
+static void svc_rtc_rqst_destroy(const struct svc_rtc_ops *ops,
+				 struct svc_rtc_rqst *r)
+{
+	if (ops->rqst_free)
+		ops->rqst_free(r->rqstp);
+	svc_rqst_free(r->rqstp);
+	kfree(r);
+}
+
+static void svc_rtc_pool_free(struct svc_rtc_pool *pool)
+{
+	struct svc_rtc_rqst *r, *t;
+
+	list_for_each_entry_safe(r, t, &pool->all, all) {
+		list_del(&r->all);
+		svc_rtc_rqst_destroy(pool->ops, r);
+	}
+	kfree(pool);
+}
+
+/**
+ * svc_rtc_pool_set - Size the service's preallocated rtc rqsts
+ * @serv: service with a registered hook (otherwise a no-op)
+ * @nr: wanted rqsts, capped at %SVC_RTC_POOL_CAP
+ *
+ * Grows with GFP_KERNEL in process context; shrinks by freeing idle
+ * rqsts only (rqsts in use stay until a later resize).
+ */
+VISIBLE_IF_KUNIT int svc_rtc_pool_set(struct svc_serv *serv, unsigned int nr)
+{
+	struct svc_rtc_pool *pool;
+	struct svc_rtc_rqst *r;
+	int ret = 0;
+
+	nr = min_t(unsigned int, nr, SVC_RTC_POOL_CAP);
+	mutex_lock(&svc_rtc_mutex);
+	pool = serv->sv_rtc_pool;
+	if (!pool)
+		goto out;
+	while (pool->nr < nr) {
+		r = svc_rtc_rqst_new(serv, pool->ops, pool->nr);
+		if (!r) {
+			ret = -ENOMEM;
+			break;
+		}
+		list_add(&r->all, &pool->all);
+		pool->nr++;
+		lwq_enqueue(&r->qnode, &pool->free);
+	}
+	while (pool->nr > nr) {
+		r = lwq_dequeue(&pool->free, struct svc_rtc_rqst, qnode);
+		if (!r)
+			break;
+		list_del(&r->all);
+		pool->nr--;
+		svc_rtc_rqst_destroy(pool->ops, r);
+	}
+	WRITE_ONCE(serv->sv_rtc_nr, pool->nr);
+out:
+	mutex_unlock(&svc_rtc_mutex);
+	return ret;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_pool_set);
+
+/**
+ * svc_rtc_pool_resize - Follow the service's thread count
+ * @serv: service
+ *
+ * One pool rqst per nfsd thread, up to %SVC_RTC_POOL_CAP: the fast path
+ * never holds more calls than the thread path could.  Failure to grow
+ * only means more pool_empty fallbacks.
+ */
+void svc_rtc_pool_resize(struct svc_serv *serv)
+{
+	svc_rtc_pool_set(serv, READ_ONCE(serv->sv_nrthreads));
+}
+EXPORT_SYMBOL_GPL(svc_rtc_pool_resize);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/* Serve @xprt (XPT_BUSY held) as a thread would, for comparison tests. */
+VISIBLE_IF_KUNIT bool svc_rtc_thread_serve(struct svc_rqst *rqstp,
+					   struct svc_xprt *xprt)
+{
+	if (!svc_alloc_arg(rqstp))
+		return false;
+	svc_xprt_get(xprt);
+	rqstp->rq_xprt = xprt;
+	svc_handle_xprt(rqstp, xprt);
+	return true;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_thread_serve);
+#endif
 
 /*
  * More work is pending in @pool after this thread dequeued some: claim
@@ -2021,12 +2559,105 @@ static void svc_thread_wake_next(struct svc_rqst *rqstp,
 	struct svc_serv *serv = rqstp->rq_server;
 
 	if (pool == rqstp->rq_pool ? svc_thread_should_sleep(rqstp) :
-				     lwq_empty(&pool->sp_xprts))
+				     lwq_empty(&pool->sp_xprts) &&
+				     lwq_empty(&pool->sp_rtc_rqsts))
 		return;
 	if (!svc_pool_wake_idle_thread(pool) &&
 	    svc_pool_has_siblings(serv, pool))
 		svc_pool_wake_sibling(serv->sv_pools, serv->sv_pool_ext,
 				      pool->sp_id);
+}
+
+/* Run an rtc call handed to @pool on @thr; see svc_rtc_thread_run(). */
+static bool svc_rtc_thread_run_from(struct svc_rqst *thr,
+				    struct svc_pool *pool)
+{
+	struct svc_pool_ext *ext = thr->rq_server->sv_pool_ext;
+	const struct svc_rtc_ops *ops;
+	struct svc_rtc_rqst *r;
+	struct svc_rqst *rqstp;
+
+	if (likely(lwq_empty(&pool->sp_rtc_rqsts)))
+		return false;
+	r = lwq_dequeue(&pool->sp_rtc_rqsts, struct svc_rtc_rqst, qnode);
+	if (!r)
+		return false;
+	if (pool != thr->rq_pool)
+		percpu_counter_inc(&ext[thr->rq_pool->sp_id].steals);
+	svc_thread_wake_next(thr, pool);
+	rqstp = r->rqstp;
+	/* The thread path's adaptive cache wait (svc_recv()). */
+	rqstp->rq_chandle.thread_wait = thr->rq_pool->sp_idle_threads.first ?
+					5 * HZ : 1 * HZ;
+	clear_bit(RQ_RTC_TRY, &rqstp->rq_flags);
+	clear_bit(RQ_RTC_MISS, &rqstp->rq_flags);
+	svc_process(rqstp);
+	/* An rqst in use holds sv_rtc_active: the pool stays. */
+	ops = rqstp->rq_server->sv_rtc_pool->ops;
+	if (ops->rqst_done)
+		ops->rqst_done(rqstp);
+	svc_rtc_rqst_release(r);
+	return true;
+}
+
+/**
+ * svc_rtc_thread_run - Run an rtc call handed to this thread's pool
+ * @thr: an idle service thread
+ *
+ * The call was received on a work item and abandoned (lookup miss,
+ * -EAGAIN); it reruns here from its first byte with the thread's cache
+ * waits and deferral, and its reply goes out through svc_send() as any
+ * thread's does.
+ *
+ * Return: true if a call was run.
+ */
+VISIBLE_IF_KUNIT bool svc_rtc_thread_run(struct svc_rqst *thr)
+{
+	return svc_rtc_thread_run_from(thr, thr->rq_pool);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_thread_run);
+
+/**
+ * svc_rtc_thread_steal - Run an rtc call handed to a sibling pool
+ * @thr: an idle service thread that found no transport
+ *
+ * Takes a call from the pools svc_xprt_steal() takes transports from,
+ * so a call handed to a pool that has since lost its threads still runs.
+ *
+ * Return: true if a call was run.
+ */
+VISIBLE_IF_KUNIT bool svc_rtc_thread_steal(struct svc_rqst *thr)
+{
+	struct svc_serv *serv = thr->rq_server;
+	struct svc_pool *pool;
+
+	if (!svc_pool_has_siblings(serv, thr->rq_pool))
+		return false;
+	pool = svc_pool_steal_scan(serv->sv_pools, serv->sv_pool_ext,
+				   thr->rq_pool->sp_id, NULL, SVC_STEAL_RTC, true);
+	return pool && svc_rtc_thread_run_from(thr, pool);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_thread_steal);
+
+/* As svc_rtc_thread_steal(), within the idle period @cyc */
+static bool svc_rtc_thread_steal_cycle(struct svc_rqst *thr,
+				       struct svc_steal_cycle *cyc)
+{
+	struct svc_serv *serv = thr->rq_server;
+	struct svc_pool *pool = cyc->found;
+
+	if (!svc_pool_has_siblings(serv, thr->rq_pool))
+		return false;
+	if (pool && svc_pool_steal_one(pool, NULL, SVC_STEAL_RTC))
+		return svc_rtc_thread_run_from(thr, pool);
+	if (!cyc->walked) {
+		cyc->walked = true;
+		return svc_rtc_thread_steal(thr);
+	}
+	pool = svc_pool_steal_scan(serv->sv_pools, serv->sv_pool_ext,
+				   thr->rq_pool->sp_id, NULL, SVC_STEAL_RTC,
+				   false);
+	return pool && svc_rtc_thread_run_from(thr, pool);
 }
 
 /**
@@ -2064,10 +2695,13 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
 	clear_bit(SP_TASK_PENDING, &pool->sp_flags);
 
 	if (svc_thread_should_stop(rqstp)) {
-		if (!svc_thread_should_sleep(rqstp))
-			svc_pool_wake_idle_thread(pool);
+		/* a pool losing its last thread leaves its queues to siblings */
+		svc_thread_wake_next(rqstp, pool);
 		return ret;
 	}
+
+	if (svc_rtc_thread_run(rqstp))
+		return ret;
 
 	from = pool;
 	rqstp->rq_xprt = svc_xprt_dequeue(pool);
@@ -2100,6 +2734,8 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
 
 		trace_svc_xprt_dequeue(rqstp);
 		svc_handle_xprt(rqstp, xprt);
+	} else if (svc_rtc_thread_steal_cycle(rqstp, &cyc)) {
+		return ret;
 	}
 
 #if defined(CONFIG_SUNRPC_BACKCHANNEL)
@@ -2140,6 +2776,10 @@ void svc_send(struct svc_rqst *rqstp)
 	trace_svc_xdr_sendto(rqstp->rq_xid, xb);
 	trace_svc_stats_latency(rqstp);
 
+	if (test_bit(RQ_RTC_TRY, &rqstp->rq_flags)) {
+		svc_rtc_queue_reply(rqstp);
+		return;
+	}
 	status = xprt->xpt_ops->xpo_sendto(rqstp);
 
 	trace_svc_send(rqstp, status);
@@ -2443,6 +3083,11 @@ static struct cache_deferred_req *svc_defer(struct cache_req *req)
 	struct svc_rqst *rqstp = container_of(req, struct svc_rqst, rq_chandle);
 	struct svc_deferred_req *dr;
 
+	if (test_bit(RQ_RTC_TRY, &rqstp->rq_flags)) {
+		/* Lookup-only: the thread it is handed to defers or waits. */
+		svc_rtc_miss(rqstp, SVC_RTC_FB_MISS);
+		return NULL;
+	}
 	if (!test_bit(RQ_USEDEFERRAL, &rqstp->rq_flags))
 		return NULL;
 	dr = __svc_defer(rqstp);
@@ -2464,6 +3109,11 @@ static struct cache_deferred_req *svc_defer(struct cache_req *req)
  */
 struct svc_deferred_req *svc_defer_rx_region(struct svc_rqst *rqstp)
 {
+	/* A work item does not park (__svc_defer() allocates GFP_KERNEL). */
+	if (test_bit(RQ_RTC_TRY, &rqstp->rq_flags)) {
+		svc_rtc_miss(rqstp, SVC_RTC_FB_REGION_PARK);
+		return NULL;
+	}
 	return __svc_defer(rqstp);
 }
 EXPORT_SYMBOL_GPL(svc_defer_rx_region);

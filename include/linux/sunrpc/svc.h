@@ -36,12 +36,16 @@
  * have one pool per NUMA node.  This optimisation reduces cross-
  * node traffic on multi-node NUMA NFS servers.
  */
+struct svc_rtc_pool;
+struct svc_rtc_rqst;
+
 struct svc_pool {
 	unsigned int		sp_id;		/* pool id; also node id on NUMA */
 	unsigned int		sp_nrthreads;	/* # of threads currently running in pool */
 	unsigned int		sp_nrthrmin;	/* Min number of threads to run per pool */
 	unsigned int		sp_nrthrmax;	/* Max requested number of threads in pool */
 	struct lwq		sp_xprts;	/* pending transports */
+	struct lwq		sp_rtc_rqsts;	/* rtc rqsts handed to a thread */
 	struct list_head	sp_all_threads;	/* all server threads */
 	struct llist_head	sp_idle_threads; /* idle server threads */
 
@@ -200,8 +204,10 @@ struct svc_serv {
 	bool			sv_is_pooled;	/* is this a pooled service? */
 	/* Run-to-completion offer hook (svc_rtc_register()), RCU. */
 	const struct svc_rtc_ops __rcu *sv_rtc;
-	atomic_t		sv_rtc_active;
-	struct workqueue_struct	*sv_rtc_wq;	/* rtc work items; WQ_MEM_RECLAIM */	/* rtc work runs and requests in flight */
+	atomic_t		sv_rtc_active;	/* rtc runs and pool rqsts in use */
+	struct workqueue_struct	*sv_rtc_wq;	/* rtc work items; WQ_MEM_RECLAIM */
+	struct svc_rtc_pool	*sv_rtc_pool;	/* preallocated rtc rqsts */
+	unsigned int		sv_rtc_nr;	/* rqsts in sv_rtc_pool */
 	/* Caller registers with rpcbind itself. Set before svc_bind(). */
 	bool			sv_no_rpcbind;
 	struct svc_pool *	sv_pools;	/* array of thread pools */
@@ -463,6 +469,10 @@ struct svc_rqst {
 	unsigned long		bc_to_initval;
 	unsigned int		bc_to_retries;
 	unsigned int		rq_status_counter; /* RPC processing counter */
+	u8			rq_rtc_reason;	/* rtc: why the work item gave up */
+	unsigned int		rq_rtc_aoffset;	/* rtc: reply offset across async */
+	struct svc_rtc_rqst	*rq_rtc;	/* rtc: pool entry */
+	void			*rq_rtc_priv;	/* rtc: upper layer per-rqst state */
 	void			*rq_private;	/* For use by the service thread */
 	unsigned int		rq_spin_ns;	/* adaptive idle spin budget */
 };
@@ -475,6 +485,11 @@ enum {
 	RQ_DROPME,		/* drop current reply */
 	RQ_VICTIM,		/* Have agreed to shut down */
 	RQ_DATA,		/* request has data */
+	RQ_RTC,			/* run-to-completion rqst: no thread behind it */
+	RQ_RTC_TRY,		/* served on an rtc work item: lookup-only */
+	RQ_RTC_MISS,		/* rtc attempt abandoned: hand to a thread */
+	RQ_RTC_ASYNC,		/* rtc reply completes in svc_rtc_complete() */
+	RQ_RTC_COUNT,		/* rtc attempt owes its vs_count bump */
 	RQ_PAYLOAD_SHARED,	/* a later operation still reads the payload */
 	RQ_WAKING,		/* a wake of this idle thread is in flight */
 };
@@ -689,6 +704,8 @@ bool		   svc_rqst_rx_region_fill(struct svc_rqst *rqstp,
 void		   svc_rqst_rx_region_uninstall(struct svc_rqst *rqstp,
 						bool restore);
 void		   svc_rqst_rx_region_restore(struct svc_rqst *rqstp);
+void		   svc_rtc_count_proc(struct svc_rqst *rqstp);
+int		   svc_pool_node(struct svc_serv *serv, struct svc_pool *pool);
 
 /* Does @rqstp hold region pages for its READ payload? */
 static inline bool svc_rqst_rx_region_held(const struct svc_rqst *rqstp)
@@ -715,6 +732,8 @@ int		   svc_set_num_threads(struct svc_serv *serv, unsigned int min_threads,
 unsigned int	   svc_serv_maxthreads(const struct svc_serv *serv);
 int		   svc_pool_stats_open(struct svc_info *si, struct file *file);
 void		   svc_process(struct svc_rqst *rqstp);
+void		   svc_rtc_process_resume(struct svc_rqst *rqstp, int rc);
+void		   svc_rtc_process_abandon(struct svc_rqst *rqstp);
 void		   svc_process_bc(struct rpc_rqst *req, struct svc_rqst *rqstp);
 int		   svc_register(struct svc_serv *serv, struct net *net,
 				const int family, const unsigned short proto,
@@ -760,6 +779,9 @@ void svc_pool_enqueue_xprt(struct svc_serv *serv, struct svc_pool *pool,
 			   struct svc_xprt *xprt);
 #endif
 struct svc_pool   *svc_pool_for_cpu(struct svc_serv *serv);
+struct svc_rqst *svc_rqst_alloc(struct svc_serv *serv,
+				struct svc_pool *pool, int node);
+void		   svc_rqst_free(struct svc_rqst *rqstp);
 unsigned int	   svc_serv_nrpools(const struct svc_serv *serv);
 char *		   svc_print_addr(struct svc_rqst *, char *, size_t);
 const char *	   svc_proc_name(const struct svc_rqst *rqstp);

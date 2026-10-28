@@ -1273,14 +1273,18 @@ VISIBLE_IF_KUNIT unsigned long svc_tcp_rx_consumer_floor(unsigned int nrthreads,
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_consumer_floor);
 
-/* @serv's threads: its pools' maxima, or the threads running if more. */
+/*
+ * @serv's request contexts: its pools' maxima, or the threads running if
+ * more, plus the rtc pool rqsts, which receive into the same region.
+ */
 static unsigned int svc_tcp_rx_serv_nthreads(struct svc_serv *serv)
 {
 	unsigned int i, threads = 0, nrpools = svc_serv_nrpools(serv);
 
 	for (i = 0; i < nrpools; i++)
 		threads += READ_ONCE(serv->sv_pools[i].sp_nrthrmax);
-	return max(threads, READ_ONCE(serv->sv_nrthreads));
+	return max(threads, READ_ONCE(serv->sv_nrthreads)) +
+	       READ_ONCE(serv->sv_rtc_nr);
 }
 
 /**
@@ -6404,7 +6408,7 @@ out:
  *
  * Returns the number of bytes sent, or a negative errno.
  */
-static int svc_tcp_sendto(struct svc_rqst *rqstp)
+static int __svc_tcp_sendto(struct svc_rqst *rqstp)
 {
 	struct svc_xprt *xprt = rqstp->rq_xprt;
 	struct svc_sock	*svsk = container_of(xprt, struct svc_sock, sk_xprt);
@@ -6413,30 +6417,42 @@ static int svc_tcp_sendto(struct svc_rqst *rqstp)
 					 (u32)xdr->len);
 	int sent;
 
+	lockdep_assert_held(&xprt->xpt_mutex);
+	if (svc_xprt_is_dead(xprt))
+		return -ENOTCONN;
+	sent = svc_tcp_sendmsg(svsk, rqstp, marker);
+	trace_svcsock_tcp_send(xprt, sent);
+	if (sent < 0 || sent != (xdr->len + sizeof(marker))) {
+		pr_notice("rpc-srv/tcp: %s: %s %d when sending %zu bytes - shutting down socket\n",
+			  xprt->xpt_server->sv_name,
+			  (sent < 0) ? "got error" : "sent",
+			  sent, xdr->len + sizeof(marker));
+		svc_xprt_deferred_close(xprt);
+		return -EAGAIN;
+	}
+	return sent;
+}
+
+static int svc_tcp_sendto(struct svc_rqst *rqstp)
+{
+	struct svc_xprt *xprt = rqstp->rq_xprt;
+	int sent;
+
 	svc_tcp_release_ctxt(xprt, rqstp->rq_xprt_ctxt);
 	rqstp->rq_xprt_ctxt = NULL;
 
 	mutex_lock(&xprt->xpt_mutex);
-	if (svc_xprt_is_dead(xprt))
-		goto out_notconn;
-	sent = svc_tcp_sendmsg(svsk, rqstp, marker);
-	trace_svcsock_tcp_send(xprt, sent);
-	if (sent < 0 || sent != (xdr->len + sizeof(marker)))
-		goto out_close;
+	sent = __svc_tcp_sendto(rqstp);
 	mutex_unlock(&xprt->xpt_mutex);
 	return sent;
+}
 
-out_notconn:
-	mutex_unlock(&xprt->xpt_mutex);
-	return -ENOTCONN;
-out_close:
-	pr_notice("rpc-srv/tcp: %s: %s %d when sending %zu bytes - shutting down socket\n",
-		  xprt->xpt_server->sv_name,
-		  (sent < 0) ? "got error" : "sent",
-		  sent, xdr->len + sizeof(marker));
-	svc_xprt_deferred_close(xprt);
-	mutex_unlock(&xprt->xpt_mutex);
-	return -EAGAIN;
+/* svc_tcp_sendto() for the rtc send FIFO, which holds xpt_mutex. */
+static int svc_tcp_sendto_locked(struct svc_rqst *rqstp)
+{
+	svc_tcp_release_ctxt(rqstp->rq_xprt, rqstp->rq_xprt_ctxt);
+	rqstp->rq_xprt_ctxt = NULL;
+	return __svc_tcp_sendto(rqstp);
 }
 
 static struct svc_xprt *svc_tcp_create(struct svc_serv *serv,
@@ -6447,10 +6463,48 @@ static struct svc_xprt *svc_tcp_create(struct svc_serv *serv,
 	return svc_create_socket(serv, IPPROTO_TCP, net, sa, salen, flags);
 }
 
+/*
+ * Peek at the next call's header without consuming it.  Only a call that
+ * starts a fresh, single-fragment record with nothing buffered is peeked;
+ * anything else is left to the thread path's receive.
+ */
+static int svc_tcp_peek_call(struct svc_xprt *xprt, u32 *prog, u32 *vers,
+			     u32 *proc, u32 *flavor)
+{
+	struct svc_sock *svsk = container_of(xprt, struct svc_sock, sk_xprt);
+	/* record marker, xid, type, rpcvers, prog, vers, proc, cred flavor */
+	__be32 w[8];
+	struct kvec iov = { .iov_base = w, .iov_len = sizeof(w) };
+	struct msghdr msg = { .msg_flags = MSG_PEEK | MSG_DONTWAIT };
+	u32 marker;
+	int len;
+
+	if (svsk->sk_tcplen || svsk->sk_datalen || svsk->sk_rx_want ||
+	    test_bit(XPT_TLS_SESSION, &xprt->xpt_flags))
+		return -EAGAIN;
+	len = kernel_recvmsg(svsk->sk_sock, &msg, &iov, 1, sizeof(w),
+			     MSG_PEEK | MSG_DONTWAIT);
+	if (len != sizeof(w))
+		return -EAGAIN;
+	marker = be32_to_cpu(w[0]);
+	if (!(marker & RPC_LAST_STREAM_FRAGMENT) ||
+	    (marker & RPC_FRAGMENT_SIZE_MASK) < sizeof(w) - sizeof(w[0]))
+		return -EAGAIN;
+	if (w[2] != rpc_call || be32_to_cpu(w[3]) != RPC_VERSION)
+		return -EAGAIN;
+	*prog = be32_to_cpu(w[4]);
+	*vers = be32_to_cpu(w[5]);
+	*proc = be32_to_cpu(w[6]);
+	*flavor = be32_to_cpu(w[7]);
+	return 0;
+}
+
 static const struct svc_xprt_ops svc_tcp_ops = {
+	.xpo_peek_call = svc_tcp_peek_call,
 	.xpo_create = svc_tcp_create,
 	.xpo_recvfrom = svc_tcp_recvfrom,
 	.xpo_sendto = svc_tcp_sendto,
+	.xpo_sendto_locked = svc_tcp_sendto_locked,
 	.xpo_result_payload = svc_sock_result_payload,
 	.xpo_release_ctxt = svc_tcp_release_ctxt,
 	.xpo_release_payload = svc_tcp_release_payload,

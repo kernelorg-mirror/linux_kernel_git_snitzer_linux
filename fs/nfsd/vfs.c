@@ -30,6 +30,8 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/exportfs.h>
+#include <linux/sunrpc/svc_xprt.h>
+#include <kunit/visibility.h>
 #include <linux/writeback.h>
 #include <linux/security.h>
 #include <linux/sunrpc/xdr.h>
@@ -1147,26 +1149,23 @@ EXPORT_SYMBOL_IF_KUNIT(nfsd_direct_read_window_fits);
  * read buffer. When .page_len and @base are zero, the .pages array is
  * guaranteed to be page-aligned.
  */
-static noinline_for_stack __be32
-nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
-		 struct nfsd_file *nf, loff_t offset, unsigned long *count,
-		 u32 *eof)
+static u64 nfsd_direct_read_prep(struct svc_rqst *rqstp, struct svc_fh *fhp,
+				 struct nfsd_file *nf, loff_t offset,
+				 unsigned long count, struct kiocb *kiocb,
+				 struct iov_iter *iter)
 {
 	u64 dio_start, dio_end;
 	unsigned long v, total;
-	struct iov_iter iter;
-	struct kiocb kiocb;
-	ssize_t host_err;
 	size_t len;
 
-	init_sync_kiocb(&kiocb, nf->nf_file);
-	kiocb.ki_flags |= IOCB_DIRECT;
+	init_sync_kiocb(kiocb, nf->nf_file);
+	kiocb->ki_flags |= IOCB_DIRECT;
 
 	/* Read a properly-aligned region of bytes into rq_bvec */
 	dio_start = round_down(offset, nf->nf_dio_read_offset_align);
-	dio_end = round_up((u64)offset + *count, nf->nf_dio_read_offset_align);
+	dio_end = round_up((u64)offset + count, nf->nf_dio_read_offset_align);
 
-	kiocb.ki_pos = dio_start;
+	kiocb->ki_pos = dio_start;
 
 	/*
 	 * A confined READ reads into region pages, in its own reply slots.
@@ -1194,11 +1193,17 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		++v;
 	}
 
-	trace_nfsd_read_direct(rqstp, fhp, offset, *count - total);
-	iov_iter_bvec(&iter, ITER_DEST, rqstp->rq_bvec, v,
+	trace_nfsd_read_direct(rqstp, fhp, offset, count - total);
+	iov_iter_bvec(iter, ITER_DEST, rqstp->rq_bvec, v,
 		      dio_end - dio_start - total);
+	return dio_start;
+}
 
-	host_err = vfs_iocb_iter_read(nf->nf_file, &kiocb, &iter);
+static __be32 nfsd_direct_read_end(struct svc_rqst *rqstp, struct svc_fh *fhp,
+				   struct nfsd_file *nf, loff_t offset,
+				   u64 dio_start, unsigned long *count,
+				   u32 *eof, ssize_t host_err)
+{
 	if (host_err >= 0) {
 		unsigned int pad = offset - dio_start;
 
@@ -1222,6 +1227,23 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	return nfsd_finish_read(rqstp, fhp, nf->nf_file, offset, count,
 				eof, host_err);
+}
+
+static noinline_for_stack __be32
+nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
+		 struct nfsd_file *nf, loff_t offset, unsigned long *count,
+		 u32 *eof)
+{
+	struct iov_iter iter;
+	struct kiocb kiocb;
+	ssize_t host_err;
+	u64 dio_start;
+
+	dio_start = nfsd_direct_read_prep(rqstp, fhp, nf, offset, *count,
+					  &kiocb, &iter);
+	host_err = vfs_iocb_iter_read(nf->nf_file, &kiocb, &iter);
+	return nfsd_direct_read_end(rqstp, fhp, nf, offset, dio_start, count,
+				    eof, host_err);
 }
 
 static bool nfsd_direct_read_ok(struct svc_rqst *rqstp, struct svc_fh *fhp,
@@ -3402,4 +3424,146 @@ nfsd_getattr(struct path *p, struct kstat *stat, u32 request_mask, bool force)
 	else
 		err = vfs_getattr(p, stat, request_mask, AT_STATX_SYNC_AS_STAT);
 	return err ? nfserrno(err) : 0;
+}
+
+/*
+ * Run-to-completion NFSv3 READ.  On an rtc work item (RQ_RTC_TRY) the READ
+ * is the thread path's direct read (nfsd_read() -> nfsd_iter_read() ->
+ * nfsd_direct_read() with io_cache_read direct), split at the I/O: the
+ * file comes from the file cache by lookup only and the read is submitted
+ * IOCB_NOWAIT.  Anything the thread path would do differently, or that
+ * would block, is a miss: the received call reruns on a thread.
+ */
+#if !IS_ENABLED(CONFIG_KUNIT)
+static __be32 nfsd_rtc_read_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
+				 struct nfsd_file *nf, loff_t offset,
+				 unsigned long *count, u32 *eof);
+#endif
+
+static void nfsd_rtc_read_complete(struct kiocb *kiocb, long ret)
+{
+	struct nfsd_rtc_ctx *c = container_of(kiocb, struct nfsd_rtc_ctx,
+					      kiocb);
+
+	/* Any context (bio completion): record and queue only. */
+	c->res = ret;
+	svc_rtc_complete(c->rqstp);
+}
+
+/**
+ * nfsd_rtc_read - Start an NFS READ on an rtc work item
+ * @rqstp: pool rqst with RQ_RTC_TRY set
+ * @fhp: file handle of file to be read
+ * @offset: starting byte offset
+ * @count: IN: requested number of bytes; OUT: number of bytes read
+ * @eof: OUT: set non-zero if operation reached the end of the file
+ *
+ * Returns the READ status when the read finished at submit.  With
+ * RQ_RTC_ASYNC set the status comes from nfsd_rtc_read_finish(); with
+ * RQ_RTC_MISS set the return value is meaningless and a thread reruns
+ * the call.
+ */
+__be32 nfsd_rtc_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
+		     loff_t offset, unsigned long *count, u32 *eof)
+{
+	struct nfsd_file *nf;
+	__be32 err;
+
+	err = nfsd_file_lookup_cached(rqstp, fhp, NFSD_MAY_READ, &nf);
+	if (err != nfs_ok || !nf) {
+		/* Errors, and their logging, stay on the thread path. */
+		svc_rtc_miss(rqstp, SVC_RTC_FB_FILE_MISS);
+		return nfs_ok;
+	}
+	return nfsd_rtc_read_file(rqstp, fhp, nf, offset, count, eof);
+}
+
+/**
+ * nfsd_rtc_read_file - nfsd_rtc_read() once the file-cache lookup hit
+ * @rqstp: pool rqst with RQ_RTC_TRY set
+ * @fhp: verified file handle of file to be read
+ * @nf: referenced file from nfsd_file_lookup_cached(); consumed
+ * @offset: starting byte offset
+ * @count: IN: requested number of bytes; OUT: number of bytes read
+ * @eof: OUT: set non-zero if operation reached the end of the file
+ *
+ * Return values: as nfsd_rtc_read().
+ */
+VISIBLE_IF_KUNIT __be32 nfsd_rtc_read_file(struct svc_rqst *rqstp,
+					   struct svc_fh *fhp,
+					   struct nfsd_file *nf, loff_t offset,
+					   unsigned long *count, u32 *eof)
+{
+	struct nfsd_rtc_ctx *c = rqstp->rq_rtc_priv;
+	struct file *file = nf->nf_file;
+	struct iov_iter iter;
+	ssize_t host_err;
+	__be32 err;
+
+	if ((file->f_op->splice_read && nfsd_read_splice_ok(rqstp) &&
+	     !svc_rqst_rx_region_held(rqstp)) ||
+	    !(file->f_mode & FMODE_NOWAIT) ||
+	    !nfsd_direct_read_ok(rqstp, fhp, nf, offset, *count)) {
+		nfsd_file_put(nf);
+		svc_rtc_miss(rqstp, SVC_RTC_FB_UNALIGNED);
+		return nfs_ok;
+	}
+
+	c->nf = nf;
+	c->offset = offset;
+	c->dio_start = nfsd_direct_read_prep(rqstp, fhp, nf, offset, *count,
+					     &c->kiocb, &iter);
+	c->kiocb.ki_flags |= IOCB_NOWAIT;
+	c->kiocb.ki_complete = nfsd_rtc_read_complete;
+	/* Before submit: the completion may run before it returns. */
+	set_bit(RQ_RTC_ASYNC, &rqstp->rq_flags);
+	host_err = vfs_iocb_iter_read(file, &c->kiocb, &iter);
+	if (host_err == -EIOCBQUEUED)
+		return nfs_ok;
+	clear_bit(RQ_RTC_ASYNC, &rqstp->rq_flags);
+	c->nf = NULL;
+	if (host_err == -EAGAIN) {
+		nfsd_file_put(nf);
+		svc_rtc_miss(rqstp, SVC_RTC_FB_EAGAIN_SUBMIT);
+		return nfs_ok;
+	}
+	/* Served here: count and trace it once (a miss reruns on a thread). */
+	nfsd_file_count_cached(rqstp, nf, NFSD_MAY_READ);
+	trace_nfsd_read_start(rqstp, fhp, offset, *count);
+	err = nfsd_direct_read_end(rqstp, fhp, nf, offset, c->dio_start,
+				   count, eof, host_err);
+	nfsd_file_put(nf);
+	trace_nfsd_read_done(rqstp, fhp, offset, *count);
+	return err;
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd_rtc_read_file);
+
+/**
+ * nfsd_rtc_read_finish - Finish an RQ_RTC_ASYNC READ after its completion
+ * @rqstp: pool rqst, on its connection's work item
+ * @fhp: file handle of file read
+ * @count: IN: requested number of bytes; OUT: number of bytes read
+ * @eof: OUT: set non-zero if operation reached the end of the file
+ * @status: OUT: the READ status
+ *
+ * Returns -EAGAIN when the read must rerun on a thread, otherwise 0.
+ */
+int nfsd_rtc_read_finish(struct svc_rqst *rqstp, struct svc_fh *fhp,
+			 unsigned long *count, u32 *eof, __be32 *status)
+{
+	struct nfsd_rtc_ctx *c = rqstp->rq_rtc_priv;
+	struct nfsd_file *nf = c->nf;
+
+	c->nf = NULL;
+	if (c->res == -EAGAIN) {
+		nfsd_file_put(nf);
+		return -EAGAIN;
+	}
+	nfsd_file_count_cached(rqstp, nf, NFSD_MAY_READ);
+	trace_nfsd_read_start(rqstp, fhp, c->offset, *count);
+	*status = nfsd_direct_read_end(rqstp, fhp, nf, c->offset,
+				       c->dio_start, count, eof, c->res);
+	nfsd_file_put(nf);
+	trace_nfsd_read_done(rqstp, fhp, c->offset, *count);
+	return 0;
 }
