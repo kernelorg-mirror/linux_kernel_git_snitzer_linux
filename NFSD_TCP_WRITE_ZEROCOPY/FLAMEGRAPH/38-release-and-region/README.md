@@ -2,7 +2,7 @@
 
 **The plan (Mike, 28 October):** the release's struct page misses, which round 36 found (12% of its first touches at 64 ns or more despite round 24's prefetch a batch ahead), with the region count's two frames, `svc_tcp_rx_region_span` and `svc_tcp_rx_skb_region_pages_after`, which round 37's profile put close behind the release in nfsd's L3 misses.
 
-All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F0C341E86E266D5FDF2ADF`), xeu round 35's (`63631721F8B149913C0DC19`), the settled setting, one loan64 run a time on port a onto the four DPRP5s. The tip's sunrpc is `E80412A536ADD1E86B16F5A` (round 36's). Runs are in `/var/tmp/zc-run-logs/t2-r81/` to `t2-r86/`.
+All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F0C341E86E266D5FDF2ADF`), xeu round 35's (`63631721F8B149913C0DC19`), the settled setting, one loan64 run a time on port a onto the four DPRP5s. The tip's sunrpc is `E80412A536ADD1E86B16F5A` (round 36's). Runs are in `/var/tmp/zc-run-logs/t2-r81/` to `t2-r87/`.
 
 ## 1. The look (r81)
 
@@ -158,11 +158,26 @@ The run went at 40.48 GB/s, with no drive stepping down and no WARNING. Readouts
 - **Untimed, two stages took 290.0k nfsd cycles a WRITE, against 293.3k and 294.0k for the tip's:** about 3.6k cycles, or roughly 1.2 µs, a WRITE less. That is one window against two, which agreed to 0.7k. The L2 prefetch alone also measured 290.1k with no fewer timed misses, and prefetching twice measured 293.1k. One window each is not enough for a decision: an A/B of two stages against the tip's, with several untimed pairs, is what would say whether it is kept. A prefetch holds no page, so the region's peak should not move, but the A/B reports it.
 - **The short window again:** the untimed one at 4 counted 1,439 WRITEs and 4.5G cycles where the others counted about 79,000 and 23G. The stamps show it lasted its full 2.04 s, and the drives wrote 39.7 to 40.9 GB/s every second of the run. So nfsd's CPUs did a fifth of their work for those 2 s while the drives' writes did not fall. It has come about 10 to 13 s after the look began in each of r84, r85 and r86, about 30 s into the writes.
 
-## 7. The A/B of two stages (r87, to run)
+## 7. The A/B of two stages (r87)
 
 [The A/B's sunrpc](sunrpc-ab-release-two-stage.patch) (`C45C8709B1251E6570577DF`, built in `/var/tmp/zc-run-logs/t2-r38-two`) is the tip's with `svc_tcp_rx_rel_two_stage`. With it set, the release also prefetches each page into the L2 two batches ahead (PSTL2KEEP), with prefetchw a batch ahead as the tip does. It carries no timing and nothing else of the diagnostics.
 
 [run87.sh](run87.sh), as `run82.sh`: four untraced loan64 runs a side, A B A B A B A B, with A at N (the tip's) and B at Y. `cost.sh` gives each run's ring and nfsd cycles a WRITE, and each run reports the region's peak. A prefetch holds no page, so the peak should not move.
+
+Result ([run87.out](run87.out)): eight runs, no drive stepping down, no WARNING, the tip's sunrpc back and settled at the end. Run 3's A ran at 18.05 GB/s: the client's puppet run stalled its load (below), so pair 3 is set aside.
+
+| | pair 1 | pair 2 | pair 3 (stalled) | pair 4 | B − A, pairs 1, 2 and 4 |
+|---|---|---|---|---|---|
+| GB/s, A / B | 40.61 / 40.51 | 40.45 / 40.52 | 18.05 / 40.50 | 40.47 / 40.52 | +0.01 |
+| nfsd cycles a WRITE, A / B | 308.0k / 300.3k | 299.8k / 299.3k | 301.8k / 299.5k | 300.9k / 297.2k | −4.0k ± 2.1 |
+| nfsd instructions a WRITE, A / B | 308.7k / 304.2k | 302.0k / 302.6k | 305.9k / 304.5k | 302.6k / 302.3k | −1.4k ± 1.6 |
+| ring cycles a WRITE, A / B | 139.6k / 139.7k | 139.3k / 139.0k | 140.4k / 139.4k | 140.0k / 139.0k | −0.4k ± 0.3 |
+| region peak, A / B | 6587 / 6481 | 6318 / 6427 | 7635 / 6530 | 6305 / 6480 | +59 ± 85 |
+
+- **nfsd is cheaper with two stages in every pair,** pair 3 included: −7.7k, −0.5k, −2.3k and −3.7k cycles a WRITE. That is about −3.5k over all four, and −2.2k without pair 1, whose A (308.0k) is the highest of the eight. r86's single window measured −3.6k. About 1% of nfsd's cycles a WRITE.
+- **The ring and the rate are unchanged.** The **peak** moves −106, +109 and +175 over the three pairs, inside round 36's swing of +11 to −265 between pairs that changed nothing. A prefetch holds no page.
+
+**The client's puppet run stalls a load.** Puppet runs on the client every 30 minutes and finishes at :18:16 and :48:16. Run 3's A lost 20 s of its load from 17:47:55, with nothing on the server to explain it. Every whole-run stall of the kind in `/var/tmp/zc-run-logs` begins in the minute before puppet finishes: 00:17:52, 08:47:51, 09:17:52, 16:48:00 and 17:47:55. A run whose load spans :17:50 to :18:20, or :47:50 to :48:20, is not to be trusted. Its drives' seconds show it.
 
 ## 8. The short window: the looks start before the timed load
 
