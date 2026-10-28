@@ -117,7 +117,14 @@ decided.
    and 11 context switches a WRITE, and `finish_task_switch` about a
    tenth of nfsd's samples outside idle: where the wakes come from, what
    each lands on, and changes judged on latency at iodepth 1 as well as
-   cycles ([40-wake-path](40-wake-path/README.md)).
+   cycles ([40-wake-path](40-wake-path/README.md)). Done, nothing
+   changed: woken threads land warm (97% on their last CPU), the wake is
+   fast untraced, and the wakes woken for nothing (about 1%) and the
+   socket lock's sleeps (under 0.5%) are too small to change.
+10. **Round 41: the rings' GRO** (Mike, 28 October): about 20% of the
+   rings' busy cycles, about 28k a WRITE, and 44% of their L3 misses:
+   the shape of the aggregates, then where GRO's misses are, from a
+   diagnostic xeu ([41-rings-gro](41-rings-gro/README.md)).
 
 ## Where the kept rounds stand (2026-10-28)
 
