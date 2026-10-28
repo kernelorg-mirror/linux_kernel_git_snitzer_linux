@@ -133,7 +133,7 @@ The held aggregate is the first in the frame's hash bucket, timed only when its 
 - **Fewer frames a WRITE:** the MTU is 7792 because a frame has to fit an 8 KiB `rx_buf_size` buffer (round 34). A 9000 MTU would be about 14% fewer frames, but a frame then spans two buffers, which round 34 chose against.
 - **Hardware GRO** on the E1, a question for Xsight.
 
-## 3. The A/B: GRO handed page fragments (r98, to run)
+## 3. The A/B: GRO handed page fragments (r98, r99): kept
 
 [xeu-ab-gro-frags.patch](xeu-ab-gro-frags.patch), on round 35's kept xeu (`CA0931345E46C929B11D01F`), adds `rx_gro_frags` (N by default, switchable at run time). With it set, the poll does not build an skb around a frame's buffer. It adds the frame's descriptors as page fragments to the NAPI context's skb (`napi_get_frags()`), sets the checksum state and hash, and calls `napi_gro_frags()`. GRO reads the headers in place from the first fragment.
 - **A frame that merges** (step 1's 85%) gives its fragment to the aggregate, and the same skb is reused for the next frame (`napi_reuse_skb()`): no skb is allocated, cleared or freed for it.
@@ -145,3 +145,28 @@ The held aggregate is the first in the frame's hash bucket, timed only when its 
 [run98.sh](run98.sh): load the A/B's xeu (refusing with an NFS client connected), eight loan64 runs, counted and untraced, `rx_gro_frags` N Y Y N N Y Y N, each line with the loans admitted and denied. Then the kept xeu again and the settled setting. Judged on the rings' counted cycles a WRITE, with nfsd's, the rate, the loans and the region's peak beside them.
 
 **[run99.sh](run99.sh)**, after run98: where the saved instructions went. One loan64 run on the A/B's xeu. From 10 s into the timed load, `rx_gro_frags` alternates N Y N Y N Y, with a 3 s `perf stat` on the ring CPUs in each setting: cycles, instructions, `stall_backend`, `stall_backend_mem`, and the WRITEs in each window. Then the kept xeu again.
+
+**run98, 28 October** ([run98.out](run98.out)): eight runs, every one 40.47–40.53 GB/s, flows placed, no drive stepping down.
+
+| | off (4 runs) | on (4 runs) | |
+|---|---|---|---|
+| ring cycles a WRITE | 139.4k (138.8–140.4k) | 139.3k (138.2–140.6k) | the same |
+| ring instructions a WRITE | 313.0k (312.0–314.8k) | 306.5k (305.0–308.8k) | **−6.5k (−2.1%)**, every run on below every run off |
+| nfsd cycles a WRITE | 297.2k | 296.9k | the same |
+| region's peak | 6329–6639 | 6328–6612 | the same |
+| loans admitted | 1,542,504–1,544,064 | 1,541,328–1,544,096 | the same; none escaped the region |
+
+**run99** ([run99.out](run99.out)): the same xeu, one loan64 run, `rx_gro_frags` off and on in turn, a 3 s `perf stat` on the ring CPUs in each (system-wide on CPUs 0–7, so larger than `cost.sh`'s figure):
+
+| | cycles a WRITE | instructions | `stall_backend` | `stall_backend_mem` | IPC |
+|---|---|---|---|---|---|
+| off (3 windows) | 163.8k (163.5–164.0k) | 325.4k | 69.5k | 28.7k | 1.99 |
+| on (3 windows) | 164.2k (163.5–165.4k) | 319.1k | 72.1k | **31.2k** | 1.95 |
+
+- **The instructions go, the cycles stay.** With it on, the rings retire 6.3k fewer instructions a WRITE, and their backend memory stalls rise by 2.5k cycles: the rings wait on memory for about the time the removed instructions took. The rings' cycles are bounded by their memory waits (the refill, the completions, the frames the card writes), not by the instructions around them.
+- **Payload stays in the region.** The aggregate's head is now a small slab buffer holding only the headers (about 66 bytes, consumed by TCP before sunrpc reads), and the first frame's payload is `frags[0]` in the same region page it was in before. The loans admitted, none escaping, are the evidence.
+
+**Kept (Mike, 28 October)**, for the shorter path: 6.5k instructions a WRITE fewer that will count once the rings' memory waits are cut, and nothing worse.
+- **kernel-rpmtree** `b3cd3d5`: `xsight/xeu-hand-GRO-received-frames-as-page-fragments.patch`, Patch13, kmod-xsight 2.0.1-13; `rx_gro_frags` defaults to N. The release-12 source with it builds to the module measured, `CA0931345E46C929B11D01F`.
+- **`settled.sh`** holds `rx_gro_frags=Y` and writes it at apply; an xeu without it audits BAD.
+- **Installed** in `updates/xeu.ko`, round 35's beside it as `xeu.ko.r35-63631721F8B149913C0DC19`; xeu reloaded with no client connected, port a set up again and settled. The initrd was rebuilt with it and swapped in, the one before beside it as `initrd.pre-xeu-r41-2026-10-28`.
