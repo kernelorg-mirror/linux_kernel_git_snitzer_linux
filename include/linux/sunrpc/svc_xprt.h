@@ -9,6 +9,8 @@
 #define SUNRPC_SVC_XPRT_H
 
 #include <linux/sunrpc/svc.h>
+#include <linux/llist.h>
+#include <linux/workqueue.h>
 
 struct module;
 
@@ -97,7 +99,103 @@ struct svc_xprt {
 	const struct cred	*xpt_cred;
 	struct rpc_xprt		*xpt_bc_xprt;	/* NFSv4.1 backchannel */
 	struct rpc_xprt_switch	*xpt_bc_xps;	/* NFSv4.1 backchannel */
+	struct svc_rtc_conn	*xpt_rtc;	/* run-to-completion work item */
 };
+
+/*
+ * Run-to-completion (rtc) offer hook.
+ *
+ * An upper layer (nfsd) may register one hook per svc_serv.  While it is
+ * registered, each connected TCP transport gets a per-connection work item
+ * that runs on the CPU that received its data.  svc_xprt_enqueue() queues
+ * that work item instead of waking a thread; the work item offers the
+ * transport to the hook and, when the hook declines, hands the transport to
+ * a thread exactly as svc_xprt_enqueue() would have.  Replies the hook
+ * produces are queued with svc_rtc_queue_send() and sent by the work item,
+ * one xpt_mutex hold per batch.
+ */
+enum svc_rtc_reason {
+	SVC_RTC_FB_NO_HOOK,		/* no hook registered */
+	SVC_RTC_FB_XPRT_STATE,		/* close, conn, handshake, deferred */
+	SVC_RTC_FB_STOPPING,		/* transport being torn down */
+	SVC_RTC_FB_DECLINED,		/* hook declined the transport */
+	SVC_RTC_FB_NO_RECEIVE,		/* receive on the work item not built */
+	SVC_RTC_NR_REASONS
+};
+
+enum svc_rtc_verdict {
+	SVC_RTC_THREAD,			/* hand the transport to a thread */
+	SVC_RTC_IDLE,			/* nothing more to do */
+	SVC_RTC_REQUEUE,		/* budget used up: run again */
+};
+
+struct svc_rtc_ops {
+	/*
+	 * Called on the work item with XPT_BUSY held and nothing read from
+	 * the transport.  Returns true to take the next record on the fast
+	 * path.  Must not sleep and must have no side effect when it
+	 * returns false.
+	 */
+	bool	(*want)(struct svc_xprt *xprt);
+};
+
+struct svc_rtc_send;
+typedef void (*svc_rtc_send_fn)(struct svc_xprt *xprt,
+				struct svc_rtc_send *send, bool dead);
+
+/*
+ * One queued reply.  @fn sends it with xpt_mutex held, checking
+ * svc_xprt_is_dead() under the mutex as svc_tcp_sendto() does, or, when
+ * @dead is true, releases it without sending (no mutex held).
+ */
+struct svc_rtc_send {
+	struct llist_node	node;
+	svc_rtc_send_fn		fn;
+};
+
+#define SVC_RTC_SEND_BUDGET	8
+#define SVC_RTC_IO_WORK_BUDGET	64
+
+struct svc_rtc_conn {
+	struct work_struct	work;
+	struct svc_xprt		*xprt;
+	int			cpu;
+	unsigned long		flags;
+	struct llist_head	sendq;
+	/* FIFO replies taken from @sendq not yet sent; work item only */
+	struct llist_node	*pending;
+};
+
+/* svc_rtc_conn.flags */
+enum {
+	SVC_RTC_RECV,			/* work item owns XPT_BUSY */
+	SVC_RTC_STOPPING,		/* svc_rtc_xprt_stop() ran */
+};
+
+struct svc_rtc_stats {
+	u64	diverted;
+	u64	runs;
+	u64	sends;
+	u64	send_batches;
+	u64	budget_exhausted;
+	u64	fallback[SVC_RTC_NR_REASONS];
+};
+
+int	svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops);
+void	svc_rtc_unregister(struct svc_serv *serv);
+void	svc_rtc_queue_send(struct svc_xprt *xprt, struct svc_rtc_send *send);
+void	svc_rtc_stats_sum(struct svc_rtc_stats *sum);
+void	svc_rtc_serv_destroy(struct svc_serv *serv);
+#if IS_ENABLED(CONFIG_KUNIT)
+int	svc_rtc_serv_prepare(struct svc_serv *serv);
+int	svc_rtc_xprt_attach(struct svc_xprt *xprt, gfp_t gfp);
+void	svc_rtc_xprt_stop(struct svc_xprt *xprt);
+void	svc_rtc_xprt_detach(struct svc_xprt *xprt);
+bool	svc_rtc_should_divert(struct svc_xprt *xprt);
+enum svc_rtc_verdict svc_rtc_recv_step(struct svc_xprt *xprt,
+				       enum svc_rtc_reason *reason);
+unsigned int svc_rtc_drain_sends(struct svc_rtc_conn *conn, bool dead);
+#endif
 
 /* flag bits for xpt_flags */
 enum {

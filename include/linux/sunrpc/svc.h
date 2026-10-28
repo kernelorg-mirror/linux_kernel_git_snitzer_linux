@@ -178,6 +178,8 @@ enum {
  *
  * We currently do not support more than one RPC program per daemon.
  */
+struct svc_rtc_ops;
+
 struct svc_serv {
 	struct svc_program *	sv_programs;	/* RPC programs */
 	struct svc_stat *	sv_stats;	/* RPC statistics */
@@ -196,6 +198,10 @@ struct svc_serv {
 	char *			sv_name;	/* service name */
 
 	bool			sv_is_pooled;	/* is this a pooled service? */
+	/* Run-to-completion offer hook (svc_rtc_register()), RCU. */
+	const struct svc_rtc_ops __rcu *sv_rtc;
+	atomic_t		sv_rtc_active;
+	struct workqueue_struct	*sv_rtc_wq;	/* rtc work items; WQ_MEM_RECLAIM */	/* rtc work runs and requests in flight */
 	/* Caller registers with rpcbind itself. Set before svc_bind(). */
 	bool			sv_no_rpcbind;
 	struct svc_pool *	sv_pools;	/* array of thread pools */

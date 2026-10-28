@@ -22,6 +22,7 @@
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <trace/events/sunrpc.h>
+#include <kunit/visibility.h>
 
 #define RPCDBG_FACILITY	RPCDBG_SVCXPRT
 
@@ -34,6 +35,14 @@ static int svc_deferred_recv(struct svc_rqst *rqstp);
 static struct cache_deferred_req *svc_defer(struct cache_req *req);
 static void svc_age_temp_xprts(struct timer_list *t);
 static void svc_delete_xprt(struct svc_xprt *xprt);
+static void svc_xprt_enqueue_thread(struct svc_xprt *xprt);
+static bool svc_rtc_divert(struct svc_xprt *xprt);
+#if !IS_ENABLED(CONFIG_KUNIT)
+static int svc_rtc_xprt_attach(struct svc_xprt *xprt, gfp_t gfp);
+static void svc_rtc_xprt_stop(struct svc_xprt *xprt);
+static void svc_rtc_xprt_detach(struct svc_xprt *xprt);
+static int svc_rtc_serv_prepare(struct svc_serv *serv);
+#endif
 
 /* apparently the "standard" is that clients close
  * idle connections after 5 minutes, servers after
@@ -182,6 +191,7 @@ static void svc_xprt_free(struct kref *kref)
 	if (xprt->xpt_bc_xps)
 		xprt_switch_put(xprt->xpt_bc_xps);
 	trace_svc_xprt_free(xprt);
+	svc_rtc_xprt_detach(xprt);
 	xprt->xpt_ops->xpo_free(xprt);
 	module_put(owner);
 }
@@ -1044,9 +1054,6 @@ EXPORT_SYMBOL_IF_KUNIT(svc_pool_enqueue_xprt);
  */
 void svc_xprt_enqueue(struct svc_xprt *xprt)
 {
-	struct svc_serv *serv;
-	struct svc_pool *pool;
-
 	if (!svc_xprt_ready(xprt))
 		return;
 
@@ -1058,11 +1065,390 @@ void svc_xprt_enqueue(struct svc_xprt *xprt)
 	if (test_and_set_bit(XPT_BUSY, &xprt->xpt_flags))
 		return;
 
-	serv = xprt->xpt_server;
-	pool = svc_pool_for_cpu(serv);
-	svc_pool_enqueue_xprt(serv, pool, xprt);
+	if (svc_rtc_divert(xprt))
+		return;
+	svc_xprt_enqueue_thread(xprt);
 }
 EXPORT_SYMBOL_GPL(svc_xprt_enqueue);
+
+/* Queue a transport whose XPT_BUSY the caller holds on an idle thread. */
+static void svc_xprt_enqueue_thread(struct svc_xprt *xprt)
+{
+	struct svc_serv *serv = xprt->xpt_server;
+
+	/* Per-CPU pool; wakes a sibling pool when it has no idle thread. */
+	svc_pool_enqueue_xprt(serv, svc_pool_for_cpu(serv), xprt);
+}
+
+/*
+ * Run-to-completion work item (see struct svc_rtc_ops).
+ *
+ * The work item owns XPT_BUSY between svc_xprt_enqueue() and the
+ * hook's verdict, and sends queued replies.  It never reads from the
+ * transport: every transport it is given goes on to a thread exactly as
+ * svc_xprt_enqueue() would have sent it, so with a declining hook the
+ * thread path is unchanged, and with no hook registered no transport has
+ * a work item at all.
+ */
+static DEFINE_MUTEX(svc_rtc_mutex);
+static DEFINE_PER_CPU(struct svc_rtc_stats, svc_rtc_stats);
+
+#define svc_rtc_stat_inc(field)	this_cpu_inc(svc_rtc_stats.field)
+#define svc_rtc_stat_add(field, n) this_cpu_add(svc_rtc_stats.field, (n))
+
+/**
+ * svc_rtc_stats_sum - Sum the per-CPU run-to-completion counters
+ * @sum: OUT: totals over all possible CPUs
+ */
+void svc_rtc_stats_sum(struct svc_rtc_stats *sum)
+{
+	int cpu, i;
+
+	memset(sum, 0, sizeof(*sum));
+	for_each_possible_cpu(cpu) {
+		const struct svc_rtc_stats *s = per_cpu_ptr(&svc_rtc_stats, cpu);
+
+		sum->diverted += READ_ONCE(s->diverted);
+		sum->runs += READ_ONCE(s->runs);
+		sum->sends += READ_ONCE(s->sends);
+		sum->send_batches += READ_ONCE(s->send_batches);
+		sum->budget_exhausted += READ_ONCE(s->budget_exhausted);
+		for (i = 0; i < SVC_RTC_NR_REASONS; i++)
+			sum->fallback[i] += READ_ONCE(s->fallback[i]);
+	}
+}
+EXPORT_SYMBOL_GPL(svc_rtc_stats_sum);
+
+static void svc_rtc_run_done(struct svc_xprt *xprt)
+{
+	struct svc_serv *serv = xprt->xpt_server;
+
+	if (atomic_dec_and_test(&serv->sv_rtc_active))
+		wake_up_var(&serv->sv_rtc_active);
+	svc_xprt_put(xprt);
+}
+
+/* Queue @conn's work item on its CPU.  Each queued run holds an xprt ref. */
+static void svc_rtc_kick(struct svc_rtc_conn *conn)
+{
+	struct svc_xprt *xprt = conn->xprt;
+	int cpu = READ_ONCE(conn->cpu);
+
+	/* The first CPU to queue the work item keeps it: the receiving CPU. */
+	if (cpu < 0) {
+		cpu = raw_smp_processor_id();
+		cpu = cmpxchg(&conn->cpu, -1, cpu) < 0 ? cpu : READ_ONCE(conn->cpu);
+	}
+	svc_xprt_get(xprt);
+	atomic_inc(&xprt->xpt_server->sv_rtc_active);
+	if (!queue_work_on(cpu, xprt->xpt_server->sv_rtc_wq, &conn->work))
+		svc_rtc_run_done(xprt);
+}
+
+/**
+ * svc_rtc_should_divert - Should svc_xprt_enqueue() queue the work item
+ * @xprt: transport whose XPT_BUSY the caller just set
+ *
+ * Only a transport with a work item, a registered hook and data to read
+ * is diverted; connect, close, handshake and deferred-request work go to
+ * a thread directly.
+ */
+VISIBLE_IF_KUNIT bool svc_rtc_should_divert(struct svc_xprt *xprt)
+{
+	struct svc_rtc_conn *conn = smp_load_acquire(&xprt->xpt_rtc);
+
+	if (likely(!conn))
+		return false;
+	if (!rcu_access_pointer(xprt->xpt_server->sv_rtc))
+		return false;
+	if (READ_ONCE(xprt->xpt_flags) &
+	    (BIT(XPT_CONN) | BIT(XPT_CLOSE) | BIT(XPT_HANDSHAKE) |
+	     BIT(XPT_DEFERRED) | BIT(XPT_DEAD) | BIT(XPT_LISTENER)))
+		return false;
+	return !test_bit(SVC_RTC_STOPPING, &conn->flags);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_should_divert);
+
+static bool svc_rtc_divert(struct svc_xprt *xprt)
+{
+	struct svc_rtc_conn *conn;
+
+	if (!svc_rtc_should_divert(xprt))
+		return false;
+	conn = xprt->xpt_rtc;
+	svc_rtc_stat_inc(diverted);
+	set_bit(SVC_RTC_RECV, &conn->flags);
+	svc_rtc_kick(conn);
+	return true;
+}
+
+/**
+ * svc_rtc_recv_step - Decide what to do with a transport the work item owns
+ * @xprt: transport; the work item holds its XPT_BUSY
+ * @reason: OUT: why the transport is not served on the work item
+ *
+ * Return: %SVC_RTC_THREAD to queue @xprt on a thread (XPT_BUSY passes to
+ * it), or %SVC_RTC_IDLE when @xprt is dead (XPT_BUSY stays set, as on any
+ * dead transport).
+ */
+VISIBLE_IF_KUNIT enum svc_rtc_verdict
+svc_rtc_recv_step(struct svc_xprt *xprt, enum svc_rtc_reason *reason)
+{
+	const struct svc_rtc_ops *ops;
+	bool want = false;
+
+	if (test_bit(SVC_RTC_STOPPING, &xprt->xpt_rtc->flags) ||
+	    test_bit(XPT_DEAD, &xprt->xpt_flags)) {
+		*reason = SVC_RTC_FB_STOPPING;
+		return SVC_RTC_IDLE;
+	}
+	if (READ_ONCE(xprt->xpt_flags) &
+	    (BIT(XPT_CONN) | BIT(XPT_CLOSE) | BIT(XPT_HANDSHAKE) |
+	     BIT(XPT_DEFERRED))) {
+		*reason = SVC_RTC_FB_XPRT_STATE;
+		return SVC_RTC_THREAD;
+	}
+
+	rcu_read_lock();
+	ops = rcu_dereference(xprt->xpt_server->sv_rtc);
+	if (ops)
+		want = ops->want(xprt);
+	rcu_read_unlock();
+
+	if (!ops)
+		*reason = SVC_RTC_FB_NO_HOOK;
+	else if (!want)
+		*reason = SVC_RTC_FB_DECLINED;
+	else
+		*reason = SVC_RTC_FB_NO_RECEIVE;
+	return SVC_RTC_THREAD;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_recv_step);
+
+/* Take @conn's queued replies, oldest first, once the pending ones are sent. */
+static bool svc_rtc_refill(struct svc_rtc_conn *conn)
+{
+	if (!conn->pending)
+		conn->pending = llist_reverse_order(llist_del_all(&conn->sendq));
+	return conn->pending;
+}
+
+/**
+ * svc_rtc_drain_sends - Send (or, if @dead, release) queued replies
+ * @conn: the transport's work item; called from it or with it idle
+ * @dead: release every queued reply without sending
+ *
+ * Replies go out in the order they were queued.  A live drain sends at
+ * most %SVC_RTC_SEND_BUDGET replies under one hold of xpt_mutex and
+ * leaves the rest for the next pass; a dead drain releases them all.
+ *
+ * Return: the number of replies handled.
+ */
+VISIBLE_IF_KUNIT unsigned int svc_rtc_drain_sends(struct svc_rtc_conn *conn,
+						  bool dead)
+{
+	unsigned int budget = dead ? UINT_MAX : SVC_RTC_SEND_BUDGET;
+	struct svc_xprt *xprt = conn->xprt;
+	unsigned int n = 0;
+
+	if (!svc_rtc_refill(conn))
+		return 0;
+	if (!dead)
+		mutex_lock(&xprt->xpt_mutex);
+	while (n < budget && svc_rtc_refill(conn)) {
+		struct llist_node *node = conn->pending;
+		struct svc_rtc_send *send;
+
+		conn->pending = node->next;
+		send = llist_entry(node, struct svc_rtc_send, node);
+		send->fn(xprt, send, dead);
+		n++;
+	}
+	if (!dead)
+		mutex_unlock(&xprt->xpt_mutex);
+
+	svc_rtc_stat_add(sends, n);
+	svc_rtc_stat_inc(send_batches);
+	return n;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_drain_sends);
+
+static void svc_rtc_work(struct work_struct *work)
+{
+	struct svc_rtc_conn *conn = container_of(work, struct svc_rtc_conn,
+						 work);
+	struct svc_xprt *xprt = conn->xprt;
+	enum svc_rtc_reason reason;
+	bool dead;
+
+	svc_rtc_stat_inc(runs);
+	dead = test_bit(SVC_RTC_STOPPING, &conn->flags) ||
+	       test_bit(XPT_DEAD, &xprt->xpt_flags);
+	svc_rtc_drain_sends(conn, dead);
+
+	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags) &&
+	    svc_rtc_recv_step(xprt, &reason) == SVC_RTC_THREAD) {
+		svc_rtc_stat_inc(fallback[reason]);
+		svc_xprt_enqueue_thread(xprt);
+	}
+
+	/* Replies left over the send budget go out on the next pass. */
+	if (conn->pending) {
+		svc_rtc_stat_inc(budget_exhausted);
+		svc_rtc_kick(conn);
+	}
+	svc_rtc_run_done(xprt);
+}
+
+/**
+ * svc_rtc_xprt_attach - Give a connected transport a work item
+ * @xprt: new transport, not yet visible to svc_xprt_enqueue()
+ * @gfp: allocation flags
+ */
+VISIBLE_IF_KUNIT int svc_rtc_xprt_attach(struct svc_xprt *xprt, gfp_t gfp)
+{
+	struct svc_rtc_conn *conn;
+
+	conn = kzalloc(sizeof(*conn), gfp);
+	if (!conn)
+		return -ENOMEM;
+	INIT_WORK(&conn->work, svc_rtc_work);
+	conn->xprt = xprt;
+	conn->cpu = -1;
+	init_llist_head(&conn->sendq);
+	smp_store_release(&xprt->xpt_rtc, conn);
+	return 0;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_xprt_attach);
+
+/**
+ * svc_rtc_xprt_stop - Stop a dead transport's work item
+ * @xprt: transport marked XPT_DEAD
+ *
+ * Runs a final pass that releases every queued reply unsent and waits
+ * for it.  A reply queued later is released by the pass it queues, which
+ * holds its own xprt reference.
+ */
+VISIBLE_IF_KUNIT void svc_rtc_xprt_stop(struct svc_xprt *xprt)
+{
+	struct svc_rtc_conn *conn = xprt->xpt_rtc;
+
+	if (!conn)
+		return;
+	set_bit(SVC_RTC_STOPPING, &conn->flags);
+	smp_mb__after_atomic();
+	/*
+	 * Only the work item touches conn->pending: run one more pass,
+	 * which sees STOPPING and releases every queued reply unsent.
+	 */
+	svc_rtc_kick(conn);
+	flush_work(&conn->work);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_xprt_stop);
+
+/* Free the work item when the transport is freed: no run can be queued. */
+VISIBLE_IF_KUNIT void svc_rtc_xprt_detach(struct svc_xprt *xprt)
+{
+	struct svc_rtc_conn *conn = xprt->xpt_rtc;
+
+	if (!conn)
+		return;
+	WARN_ON_ONCE(!llist_empty(&conn->sendq) || conn->pending);
+	xprt->xpt_rtc = NULL;
+	kfree(conn);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_xprt_detach);
+
+/**
+ * svc_rtc_queue_send - Queue a reply for the transport's work item to send
+ * @xprt: transport; the caller holds a reference
+ * @send: reply; @send->fn is called exactly once
+ */
+void svc_rtc_queue_send(struct svc_xprt *xprt, struct svc_rtc_send *send)
+{
+	struct svc_rtc_conn *conn = READ_ONCE(xprt->xpt_rtc);
+
+	if (WARN_ON_ONCE(!conn)) {
+		send->fn(xprt, send, true);
+		return;
+	}
+	llist_add(&send->node, &conn->sendq);
+	svc_rtc_kick(conn);
+}
+EXPORT_SYMBOL_GPL(svc_rtc_queue_send);
+
+/*
+ * Give @serv its work-item queue: per-CPU, so a connection's work stays on
+ * the CPU that received it, and WQ_MEM_RECLAIM, because sending NFS
+ * replies can be what frees memory.  It outlives svc_rtc_unregister()
+ * (work items of live connections may still send) and is destroyed with
+ * the service, after every transport is gone.
+ */
+VISIBLE_IF_KUNIT int svc_rtc_serv_prepare(struct svc_serv *serv)
+{
+	if (serv->sv_rtc_wq)
+		return 0;
+	serv->sv_rtc_wq = alloc_workqueue("svc_rtc", WQ_MEM_RECLAIM | WQ_PERCPU,
+					  0);
+	return serv->sv_rtc_wq ? 0 : -ENOMEM;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_serv_prepare);
+
+/**
+ * svc_rtc_serv_destroy - Release a service's run-to-completion resources
+ * @serv: service with no transports left
+ */
+void svc_rtc_serv_destroy(struct svc_serv *serv)
+{
+	if (serv->sv_rtc_wq) {
+		destroy_workqueue(serv->sv_rtc_wq);
+		serv->sv_rtc_wq = NULL;
+	}
+}
+EXPORT_SYMBOL_GPL(svc_rtc_serv_destroy);
+
+/**
+ * svc_rtc_register - Register a run-to-completion offer hook
+ * @serv: service
+ * @ops: hook; must stay valid until svc_rtc_unregister() returns
+ *
+ * Transports accepted from now on get a work item.  Register before
+ * listeners are opened so every connection has one.
+ *
+ * Return: 0, or -EBUSY if a hook is already registered.
+ */
+int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
+{
+	int ret;
+
+	mutex_lock(&svc_rtc_mutex);
+	ret = svc_rtc_serv_prepare(serv);
+	if (!ret && rcu_access_pointer(serv->sv_rtc))
+		ret = -EBUSY;
+	if (!ret)
+		rcu_assign_pointer(serv->sv_rtc, ops);
+	mutex_unlock(&svc_rtc_mutex);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(svc_rtc_register);
+
+/**
+ * svc_rtc_unregister - Remove the offer hook and wait for its users
+ * @serv: service
+ *
+ * On return no work item runs the hook or holds a run for @serv; later
+ * svc_xprt_enqueue() calls go straight to threads.
+ */
+void svc_rtc_unregister(struct svc_serv *serv)
+{
+	mutex_lock(&svc_rtc_mutex);
+	RCU_INIT_POINTER(serv->sv_rtc, NULL);
+	mutex_unlock(&svc_rtc_mutex);
+	synchronize_rcu();
+	wait_var_event(&serv->sv_rtc_active,
+		       !atomic_read(&serv->sv_rtc_active));
+}
+EXPORT_SYMBOL_GPL(svc_rtc_unregister);
 
 /*
  * Dequeue the first transport, if there is one.
@@ -1579,6 +1965,10 @@ static void svc_handle_xprt(struct svc_rqst *rqstp, struct svc_xprt *xprt)
 		newxpt = xprt->xpt_ops->xpo_accept(xprt);
 		if (newxpt) {
 			newxpt->xpt_cred = get_cred(xprt->xpt_cred);
+			/* No work item is not an error: threads serve it. */
+			if (rcu_access_pointer(serv->sv_rtc) &&
+			    newxpt->xpt_class->xcl_ident == XPRT_TRANSPORT_TCP)
+				svc_rtc_xprt_attach(newxpt, GFP_KERNEL);
 			trace_svc_xprt_accept(newxpt, serv->sv_name);
 			svc_add_new_temp_xprt(serv, newxpt);
 		} else {
@@ -1891,6 +2281,7 @@ static void svc_delete_xprt(struct svc_xprt *xprt)
 		return;
 
 	trace_svc_xprt_detach(xprt);
+	svc_rtc_xprt_stop(xprt);
 	xprt->xpt_ops->xpo_detach(xprt);
 	if (xprt->xpt_bc_xprt)
 		xprt->xpt_bc_xprt->ops->close(xprt->xpt_bc_xprt);
