@@ -2,7 +2,7 @@
 
 **The plan (Mike, 28 October):** the release's struct page misses, which round 36 found (12% of its first touches at 64 ns or more despite round 24's prefetch a batch ahead), with the region count's two frames, `svc_tcp_rx_region_span` and `svc_tcp_rx_skb_region_pages_after`, which round 37's profile put close behind the release in nfsd's L3 misses.
 
-All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F0C341E86E266D5FDF2ADF`), xeu round 35's (`63631721F8B149913C0DC19`), the settled setting, one loan64 run a time on port a onto the four DPRP5s. The tip's sunrpc is `E80412A536ADD1E86B16F5A` (round 36's). Runs are in `/var/tmp/zc-run-logs/t2-r81/` to `t2-r85/`.
+All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F0C341E86E266D5FDF2ADF`), xeu round 35's (`63631721F8B149913C0DC19`), the settled setting, one loan64 run a time on port a onto the four DPRP5s. The tip's sunrpc is `E80412A536ADD1E86B16F5A` (round 36's). Runs are in `/var/tmp/zc-run-logs/t2-r81/` to `t2-r86/`.
 
 ## 1. The look (r81)
 
@@ -131,7 +131,7 @@ The loads ahead themselves: 136 a WRITE, 68.1 ns on average, 36% at 64 ns or mor
 - **A load ahead is not the fix.** Untimed, it costs nfsd about 6k more cycles a WRITE than prefetchw (302.3k against 296.0k and 296.9k): 43 of the 71 loads a WRITE miss, and each holds back the instructions behind it, where a prefetch does not. What would make the prefetches stick, or take their place without stalling, is still to be found.
 - **The second window counted short again.** Like r84's, it counted 88,139 WRITEs untimed and 43,032 timed, against about 117,000 and 116,000 in the others. Its release count (48,083 against 130,000) fell with it, while the drives wrote 39.6 to 40.9 GB/s every second and the run's rate was the usual 40.48 GB/s. Its untimed cycles are not used. Its timed shares are per page, and they match prefetchw's. Why nfsd's counts fall in one window of a run is not known.
 
-## 6. Kinds of prefetch (r86, to run)
+## 6. Kinds of prefetch (r86)
 
 [The diagnostic](sunrpc-diag-release-prefetch-kinds.patch) (`8F97DEB564CBBF076C97644`, not for keeping; built in `/var/tmp/zc-run-logs/t2-r38-kinds`) is r85's, with four more values of `svc_tcp_rx_rel_ahead`, each looking for a fetch that does not stall the way a load does:
 - 3: a prefetch for writing into the L2 only (PSTL2KEEP);
@@ -140,3 +140,20 @@ The loads ahead themselves: 136 a WRITE, 68.1 ns on average, 36% at 64 ns or mor
 - 6: two stages, PSTL2KEEP 32 entries ahead and prefetchw 16 ahead.
 
 [run86.sh](run86.sh): one loan64 run. For each of 0, 3, 4, 5, 6 and 0 again, it waits 1 s, takes 2 s of `perf stat` on nfsd's CPUs with the timing off, then 2 s with the timing on. It stamps each window's start and end, to tell whether a window that counts few WRITEs, as r84's third and r85's second did, is a short one.
+
+The run went at 40.48 GB/s, with no drive stepping down and no WARNING. Readouts: [lat-*-r86.txt](.), [stat-*-r86.txt](.). Each entry is a page's first load at use: the mean, and in brackets the share at 64 ns or more. This run's 2 s windows show fewer misses with prefetchw than r85's 3 s ones (9% against 16% for 32 to 63), so compare within the run.
+
+| fetched ahead by | 16 to 31 | 32 to 63 | 64 on | last page | shared, 32 on | excess a WRITE (timed) | nfsd cycles a WRITE (untimed) |
+|---|---|---|---|---|---|---|---|
+| 0, prefetchw at 16 (the tip's) | 36.8 (5.7%) | 40.3 (9.0%) | 41.5 (10.2%) | 48.8 (18.4%) | 50.8 (18.6%) | 0.55 µs | 293.3k |
+| 3, PSTL2KEEP at 16 | 36.6 (5.1%) | 41.2 (9.4%) | 42.7 (11.0%) | 49.9 (18.3%) | 52.3 (19.1%) | 0.60 µs | 290.1k |
+| 4, PLDL2KEEP at 16 | 36.3 (4.9%) | 40.7 (9.0%) | 42.4 (10.9%) | 49.0 (18.1%) | 51.3 (18.7%) | 0.57 µs | (lost, below) |
+| 5, prefetchw at 16 and at 4 | 32.7 (1.5%) | 33.6 (2.3%) | 33.4 (2.1%) | 33.6 (2.6%) | 36.7 (5.2%) | 0.12 µs | 293.1k |
+| 6, PSTL2KEEP at 32, prefetchw at 16 | 31.9 (0.7%) | 32.6 (1.3%) | 33.0 (1.9%) | 33.0 (1.9%) | 35.0 (3.6%) | 0.06 µs | 290.0k |
+| 0 again | 36.9 (5.7%) | 40.2 (8.8%) | 41.5 (10.2%) | 48.8 (18.4%) | 50.6 (18.5%) | 0.54 µs | 294.0k |
+
+- **Two stages take the misses away:** an L2 prefetch at 32 and prefetchw at 16 leave 1 to 2% of the deep pages at 64 ns or more (3.6% of the shared ones), against 9 to 18% with prefetchw alone. The timed excess falls from 0.55 µs to 0.06 µs a WRITE.
+- **Prefetching twice nearly does the same,** 2 to 5%. This and the two-stage result both say a page's second request is served when its first was dropped.
+- **An L2 prefetch alone misses as prefetchw does,** whether for writing or for reading. An L2 hit would take well under 64 ns, so those misses are prefetches dropped at the L2 too.
+- **Untimed, two stages took 290.0k nfsd cycles a WRITE, against 293.3k and 294.0k for the tip's:** about 3.6k cycles, or roughly 1.2 µs, a WRITE less. That is one window against two, which agreed to 0.7k. The L2 prefetch alone also measured 290.1k with no fewer timed misses, and prefetching twice measured 293.1k. One window each is not enough for a decision: an A/B of two stages against the tip's, with several untimed pairs, is what would say whether it is kept. A prefetch holds no page, so the region's peak should not move, but the A/B reports it.
+- **The short window again:** the untimed one at 4 counted 1,439 WRITEs and 4.5G cycles where the others counted about 79,000 and 23G. The stamps show it lasted its full 2.04 s, and the drives wrote 39.7 to 40.9 GB/s every second of the run. So nfsd's CPUs did a fifth of their work for those 2 s while the drives' writes did not fall. It has come about 10 to 13 s after the look began in each of r84, r85 and r86, about 30 s into the writes.
