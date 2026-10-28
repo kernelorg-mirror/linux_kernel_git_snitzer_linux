@@ -107,6 +107,42 @@ client_free() {
 	[ -z "$p" ] || { echo "the client is running load already: $p" >&2; return 1; }
 }
 has_retry_patch() { grep -q 'xeu_rx_refill_timer' /proc/kallsyms; }
+# The client's puppet agent runs every 30 minutes, ending at :18:16 and
+# :48:16, and each of its runs stalls a load for about 20 s from about
+# :17:51 (FLAMEGRAPH round 38, section 7).  twoport.sh disables the agent
+# for the length of a run and starts no load that would span one of its
+# runs, since a disable does not stop a run already under way.
+# puppet_pause: disable the agent, unless someone else already has (their
+# message is left as it is).  puppet_resume: enable it, only if this rig
+# disabled it.
+PUPPET_LOCK=/var/lib/puppet/state/agent_disabled.lock
+PUPPET_MSG="zc rig: a run from $HOST"
+puppet_pause() {
+	$SSHC "[ -e $PUPPET_LOCK ] || puppet agent --disable '$PUPPET_MSG'" < /dev/null > /dev/null 2>&1
+	$SSHC "cat $PUPPET_LOCK 2>/dev/null" < /dev/null
+}
+puppet_resume() {
+	$SSHC "grep -qF '$PUPPET_MSG' $PUPPET_LOCK 2>/dev/null && puppet agent --enable" < /dev/null > /dev/null 2>&1
+	return 0
+}
+# clear_of_puppet <seconds>: wait until the next <seconds> miss the minute
+# around a puppet run, :17:40 to :18:25 and :47:40 to :48:25; says when it
+# waits.
+clear_of_puppet() {
+	local need=$1 p d
+	while :; do
+		p=$(( $(date +%s) % 1800 ))	# :17:40 is 1060 s into a half hour of the epoch, :18:25 1105
+		if [ $p -ge 1060 ] && [ $p -lt 1105 ]; then
+			d=$(( 1105 - p ))
+		else
+			d=$(( (1060 - p + 1800) % 1800 ))
+			[ $need -le $d ] && return 0
+			d=$(( d + 45 ))
+		fi
+		echo "clear_of_puppet: waiting $d s, to keep the next $need s clear of the client's puppet run"
+		sleep $d
+	done
+}
 # timed_load <run dir> [seconds]: for a look beside a twoport.sh run, wait
 # for the run's timed load to start, which is when twoport.sh starts its
 # drives-sec.tsv (one older than the call is another run's), then the

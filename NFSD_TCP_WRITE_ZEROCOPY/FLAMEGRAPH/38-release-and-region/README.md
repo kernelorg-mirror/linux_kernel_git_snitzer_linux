@@ -179,6 +179,8 @@ Result ([run87.out](run87.out)): eight runs, no drive stepping down, no WARNING,
 
 **The client's puppet run stalls a load.** Puppet runs on the client every 30 minutes and finishes at :18:16 and :48:16. Run 3's A lost 20 s of its load from 17:47:55, with nothing on the server to explain it. Every whole-run stall of the kind in `/var/tmp/zc-run-logs` begins in the minute before puppet finishes: 00:17:52, 08:47:51, 09:17:52, 16:48:00 and 17:47:55. A run whose load spans :17:50 to :18:20, or :47:50 to :48:20, is not to be trusted. Its drives' seconds show it.
 
+Since r88, `twoport.sh` disables the client's puppet agent for the length of a run (`puppet_pause` and `puppet_resume` in `common.sh`; it leaves alone a disable that is not the rig's). A disable does not stop a puppet run already under way, so `twoport.sh` also starts no load that would span :17:40 to :18:25 or :47:40 to :48:25 (`clear_of_puppet`): it waits up to about 2 minutes, and `geometry.txt` says so when it does.
+
 ## 8. The short window: the looks start before the timed load
 
 The window that counted few WRITEs (r84's third, r85's second, r86's third) is the gap between two loads, not a stall. Before its timed load, `twoport.sh` runs a placement job (`PLACE`, the default since 11 October). That is 16 s of the same fio job on the same mounts, while it sees where each flow lands and sets the RSS table. Then it audits and starts the timed load.
