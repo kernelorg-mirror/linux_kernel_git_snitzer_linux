@@ -2,7 +2,7 @@
 
 **The plan (Mike, 28 October):** the release's struct page misses, which round 36 found (12% of its first touches at 64 ns or more despite round 24's prefetch a batch ahead), with the region count's two frames, `svc_tcp_rx_region_span` and `svc_tcp_rx_skb_region_pages_after`, which round 37's profile put close behind the release in nfsd's L3 misses.
 
-All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F0C341E86E266D5FDF2ADF`), xeu round 35's (`63631721F8B149913C0DC19`), the settled setting, one loan64 run a time on port a onto the four DPRP5s. The tip's sunrpc is `E80412A536ADD1E86B16F5A` (round 36's). Runs are in `/var/tmp/zc-run-logs/t2-r81/` to `t2-r84/`.
+All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F0C341E86E266D5FDF2ADF`), xeu round 35's (`63631721F8B149913C0DC19`), the settled setting, one loan64 run a time on port a onto the four DPRP5s. The tip's sunrpc is `E80412A536ADD1E86B16F5A` (round 36's). Runs are in `/var/tmp/zc-run-logs/t2-r81/` to `t2-r85/`.
 
 ## 1. The look (r81)
 
@@ -85,9 +85,9 @@ All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F
 - **The deep misses are not a matter of lead.** At 16, each timed entry spends at least one full drained load, so 16 entries ahead is far more than a DRAM miss. Still, a quarter of the pages past the 32nd miss, and 32 or 64 ahead moves that by only a few points. For those pages the prefetch does not take effect, or the line is taken away again before its use. Which of the two is not known.
 - **The untimed window at 32 is lost.** It counted 7,616 WRITEs and 6.6G cycles in 2 s, about a tenth and a third of every other window's. The drives wrote 40.1 to 40.9 GB/s in every second of the run, and the timed window that followed counted 77,777 WRITEs. Neither figure is used.
 
-## 5. The deep misses (r85, to run)
+## 5. The deep misses (r85)
 
-[The diagnostic](sunrpc-diag-release-deep-misses.patch) (`F6C5E35DA846E86F2009A4C`, not for keeping) is r84's, with two additions to tell its two explanations apart: either the prefetch does not take effect, or the line is taken away before its use. The build is in `/var/tmp/zc-run-logs/t2-r38-deep`.
+[The diagnostic](sunrpc-diag-release-deep-misses.patch) (`5EE406BEEF99F01E09A4620`, not for keeping) is r84's, with two additions to tell its two explanations apart: either the prefetch does not take effect, or the line is taken away before its use. The build is in `/var/tmp/zc-run-logs/t2-r38-deep`. Its counts are allocated per CPU when the timing is first turned on, and freed when sunrpc is unloaded. The first build kept them in static per-CPU data, 10,112 bytes, which the 8 KiB reserved for modules' per-CPU data could not hold: it failed to load (`Cannot allocate memory`), and the run's stop path put the tip's sunrpc back, settled.
 
 - **`svc_tcp_rx_rel_ahead`** sets how a page is fetched the distance ahead:
   - 0: prefetchw, the tip's;
@@ -104,3 +104,29 @@ How to read it:
 - If those pages are also shared, the cause is another CPU writing the line, not an eviction.
 
 [run85.sh](run85.sh): one loan64 run at the distance of 16. For each way of fetching (0, 1, 2, 0 again) it waits 1 s, takes 3 s of `perf stat` on nfsd's CPUs with the timing off, then 3 s with the timing on.
+
+The run went at 40.48 GB/s, with no drive stepping down, no WARNING and no release past 256 pages. Readouts: [lat-*-r85.txt](.), [stat-*-r85.txt](.). Each entry is a page's first load at use: the mean, and in brackets the share at 64 ns or more.
+
+| fetched ahead by | 16 to 31 | 32 to 63 | 64 on | last page | shared, 32 on | alone, 32 on | excess a WRITE (timed) | nfsd cycles a WRITE (untimed) |
+|---|---|---|---|---|---|---|---|---|
+| prefetchw (the tip's) | 38.5 (7.3%) | 48.4 (16.5%) | 50.4 (18.7%) | 52.3 (21.9%) | 58.9 (26.2%) | 46.7 (15.1%) | 0.99 µs | 296.0k |
+| prefetch for reading | 38.6 (7.5%) | 49.2 (17.2%) | 50.5 (18.9%) | 52.3 (21.8%) | 59.8 (27.1%) | 47.1 (15.5%) | 1.02 µs | (window short, below) |
+| a load | 31.5 (0.2%) | 31.4 (0.2%) | 31.4 (0.2%) | 31.4 (0.3%) | 31.4 (0.2%) | 31.4 (0.2%) | 0.00 µs | 302.3k |
+| prefetchw again | 38.5 (7.4%) | 48.3 (16.3%) | 50.1 (18.5%) | 52.0 (21.7%) | 58.5 (26.0%) | 46.6 (14.9%) | 0.98 µs | 296.9k |
+
+With a load ahead, sorted by whether the load ahead and the load at use each took 64 ns or more, a WRITE:
+
+| ahead → at use | pages | at use |
+|---|---|---|
+| hit → hit | 28.5 | 31.2 ns |
+| miss → hit | 42.9 | 31.2 ns |
+| hit → miss | 0.0 | — |
+| miss → miss | 0.1 | 162 ns |
+
+The loads ahead themselves: 136 a WRITE, 68.1 ns on average, 36% at 64 ns or more.
+
+- **The deep misses are dropped prefetches.** A load 16 entries ahead brings every page in: 0.2% miss at use, at every place in the release, shared or not. No line a load brought in is taken away before its use (0.1 of 71 pages a WRITE). With a prefetch the same pages miss 15 to 26% of the time, so those prefetches are not served.
+- **Asking for the line exclusive is not why.** A prefetch for reading misses the same as prefetchw.
+- **Pages that another holder shares miss more often with a prefetch** (26% against 15% past the 32nd), and so does the last page (22%). With a load, they hit like the rest. A shared page's line is more likely to be in another core's cache, but that a prefetch is dropped more often for such a line is a guess, not shown here.
+- **A load ahead is not the fix.** Untimed, it costs nfsd about 6k more cycles a WRITE than prefetchw (302.3k against 296.0k and 296.9k): 43 of the 71 loads a WRITE miss, and each holds back the instructions behind it, where a prefetch does not. What would make the prefetches stick, or take their place without stalling, is still to be found.
+- **The second window counted short again.** Like r84's, it counted 88,139 WRITEs untimed and 43,032 timed, against about 117,000 and 116,000 in the others. Its release count (48,083 against 130,000) fell with it, while the drives wrote 39.6 to 40.9 GB/s every second and the run's rate was the usual 40.48 GB/s. Its untimed cycles are not used. Its timed shares are per page, and they match prefetchw's. Why nfsd's counts fall in one window of a run is not known.

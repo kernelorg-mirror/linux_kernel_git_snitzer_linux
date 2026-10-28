@@ -1,6 +1,6 @@
 #!/bin/bash
 # run85.sh: round 38, the release's deep misses.  One diagnostic sunrpc,
-# F6C5E35DA846E86F2009A4C (the tip's E80412A536ADD1E86B16F5A with
+# 5EE406BEEF99F01E09A4620 (the tip's E80412A536ADD1E86B16F5A with
 # sunrpc-diag-release-deep-misses.patch, not for keeping), one loan64 run
 # at the current state (xeu 63631721F8B149913C0DC19, nfsd the kernel's,
 # rodata=noalias, the settled setting), at the tip's distance of 16.  From
@@ -14,7 +14,7 @@ cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit
 O=$L/t2-r85
 mkdir -p $O
 FS="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7"
-XB=63631721F8B149913C0DC19 N=3F0C341E86E266D5FDF2ADF K=F6C5E35DA846E86F2009A4C KT=E80412A536ADD1E86B16F5A
+XB=63631721F8B149913C0DC19 N=3F0C341E86E266D5FDF2ADF K=5EE406BEEF99F01E09A4620 KT=E80412A536ADD1E86B16F5A
 P=/sys/module/sunrpc/parameters
 say() { echo "$(date +%T) $*"; }
 swap() {	# swap DIR: put DIR's sunrpc in place, settle

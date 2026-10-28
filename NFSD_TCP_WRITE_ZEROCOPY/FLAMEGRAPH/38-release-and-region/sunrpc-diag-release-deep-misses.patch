@@ -1,8 +1,8 @@
 diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
-index 8b060dea3250..21b914d6c1f7 100644
+index 8b060dea3250..3ba7d7104eda 100644
 --- a/net/sunrpc/svcsock.c
 +++ b/net/sunrpc/svcsock.c
-@@ -1889,12 +1889,262 @@ static void svc_tcp_rx_put_run(netmem_ref *batch, unsigned int *nr,
+@@ -1889,12 +1889,302 @@ static void svc_tcp_rx_put_run(netmem_ref *batch, unsigned int *nr,
  	}
  }
  
@@ -37,14 +37,15 @@ index 8b060dea3250..21b914d6c1f7 100644
 + *     miss/hit, miss/miss); slot 40, every load ahead.
 + * Each release adds its entries and distinct pages to the counts.  Summed
 + * over CPUs when read, so nothing is cut at the parameter's page.
-+ * svc_tcp_rx_diag_rel turns it on; svc_tcp_rx_rel_lat prints, a write
++ * svc_tcp_rx_diag_rel turns it on, and its first Y allocates the per-CPU
++ * counts (too large for a module's static per-CPU data), freed when sunrpc
++ * is unloaded; svc_tcp_rx_rel_lat prints, a write
 + * clears.  The barriers add time to every entry, so later entries gain lead
 + * they would not have untimed; ordinal 0's lead is the loop's own.
 + */
 +#define SVC_TCP_RX_REL_SLOTS	41
 +#define SVC_TCP_RX_REL_MAX	256
 +static bool svc_tcp_rx_diag_rel __read_mostly;
-+module_param(svc_tcp_rx_diag_rel, bool, 0644);
 +
 +/*
 + * The release's prefetch distance, in entries: 0 none, -1 every entry's
@@ -76,7 +77,40 @@ index 8b060dea3250..21b914d6c1f7 100644
 +	long count[SVC_TCP_RX_REL_MAX];
 +	unsigned long own __aligned(64);
 +} __aligned(64);
-+static DEFINE_PER_CPU(struct svc_tcp_rx_rel_lat, svc_tcp_rx_rel_lat);
++static struct svc_tcp_rx_rel_lat __percpu *svc_tcp_rx_rel_pcpu;
++
++static int svc_tcp_rx_diag_rel_set(const char *val,
++				   const struct kernel_param *kp)
++{
++	struct svc_tcp_rx_rel_lat __percpu *p;
++	bool on;
++	int ret;
++
++	ret = kstrtobool(val, &on);
++	if (ret)
++		return ret;
++	if (on && !svc_tcp_rx_rel_pcpu) {
++		p = alloc_percpu(struct svc_tcp_rx_rel_lat);
++		if (!p)
++			return -ENOMEM;
++		/* the counts are in place before the release can see Y */
++		smp_store_release(&svc_tcp_rx_rel_pcpu, p);
++	}
++	WRITE_ONCE(svc_tcp_rx_diag_rel, on);
++	return 0;
++}
++
++static const struct kernel_param_ops svc_tcp_rx_diag_rel_ops = {
++	.get = param_get_bool,
++	.set = svc_tcp_rx_diag_rel_set,
++};
++module_param_cb(svc_tcp_rx_diag_rel, &svc_tcp_rx_diag_rel_ops,
++		&svc_tcp_rx_diag_rel, 0644);
++
++static void svc_tcp_rx_rel_free(void)
++{
++	free_percpu(svc_tcp_rx_rel_pcpu);
++}
 +
 +static __always_inline u64 svc_tcp_rx_rel_t(void)
 +{
@@ -191,9 +225,11 @@ index 8b060dea3250..21b914d6c1f7 100644
 +	int cpu, k, b, len = 0;
 +
 +	BUILD_BUG_ON(ARRAY_SIZE(tail) != SVC_TCP_RX_REL_SLOTS - 16);
++	if (!svc_tcp_rx_rel_pcpu)
++		return sysfs_emit(buf, "off\n");
 +	for_each_possible_cpu(cpu) {
 +		struct svc_tcp_rx_rel_lat *l =
-+			per_cpu_ptr(&svc_tcp_rx_rel_lat, cpu);
++			per_cpu_ptr(svc_tcp_rx_rel_pcpu, cpu);
 +
 +		releases += l->releases;
 +		entries += l->entries;
@@ -208,7 +244,7 @@ index 8b060dea3250..21b914d6c1f7 100644
 +
 +		for_each_possible_cpu(cpu) {
 +			struct svc_tcp_rx_rel_slot *s =
-+				&per_cpu_ptr(&svc_tcp_rx_rel_lat, cpu)->s[k];
++				&per_cpu_ptr(svc_tcp_rx_rel_pcpu, cpu)->s[k];
 +
 +			t.n += s->n;
 +			t.sum += s->sum;
@@ -233,9 +269,11 @@ index 8b060dea3250..21b914d6c1f7 100644
 +{
 +	int cpu;
 +
++	if (!svc_tcp_rx_rel_pcpu)
++		return 0;
 +	for_each_possible_cpu(cpu) {
 +		struct svc_tcp_rx_rel_lat *l =
-+			per_cpu_ptr(&svc_tcp_rx_rel_lat, cpu);
++			per_cpu_ptr(svc_tcp_rx_rel_pcpu, cpu);
 +
 +		memset(l->s, 0, sizeof(l->s));
 +		l->releases = l->entries = l->pages = l->over = 0;
@@ -255,7 +293,9 @@ index 8b060dea3250..21b914d6c1f7 100644
  	netmem_ref run = 0;
  	unsigned int index, nr = 0;
  	long run_refs = 0;
-+	bool diag = READ_ONCE(svc_tcp_rx_diag_rel);
++	struct svc_tcp_rx_rel_lat __percpu *pcpu =
++		smp_load_acquire(&svc_tcp_rx_rel_pcpu);
++	bool diag = READ_ONCE(svc_tcp_rx_diag_rel) && pcpu;
 +	struct svc_tcp_rx_rel_lat *l = NULL;
 +	struct page *timed = NULL;
 +	unsigned int ord = 0;
@@ -265,7 +305,7 @@ index 8b060dea3250..21b914d6c1f7 100644
  
  	/* page_pool_put_netmem_bulk() does not check its array's bound. */
  	BUILD_BUG_ON(SVC_TCP_RX_PUT_BATCH > XDP_BULK_QUEUE_SIZE);
-@@ -1910,13 +2160,24 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+@@ -1910,13 +2200,24 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
  	 * so that a batch's misses are in flight together and not taken one
  	 * page after another.
  	 */
@@ -273,7 +313,7 @@ index 8b060dea3250..21b914d6c1f7 100644
 -	     index++)
 -		prefetchw(state->bvec[index].bv_page);
 +	if (diag) {
-+		l = get_cpu_ptr(&svc_tcp_rx_rel_lat);
++		l = get_cpu_ptr(pcpu);
 +		l->releases++;
 +		l->entries += state->count;
 +	}
@@ -296,7 +336,7 @@ index 8b060dea3250..21b914d6c1f7 100644
  		if (!test_bit(index, state->borrowed))
  			continue;
  		/*
-@@ -1928,6 +2189,30 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+@@ -1928,6 +2229,30 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
  			struct page *page = state->bvec[index].bv_page;
  			netmem_ref netmem;
  
@@ -327,15 +367,23 @@ index 8b060dea3250..21b914d6c1f7 100644
  			netmem = netmem_compound_head(page_to_netmem(page));
  			if (run_refs && netmem == run) {
  				run_refs++;
-@@ -1952,6 +2237,11 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+@@ -1952,6 +2277,11 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
  		svc_tcp_rx_put_run(batch, &nr, run, run_refs);
  	if (nr)
  		page_pool_put_netmem_bulk(batch, nr);
 +	if (diag) {
 +		l->pages += ord;
 +		svc_tcp_rx_rel_classify(l, ord, ahead, dist);
-+		put_cpu_ptr(&svc_tcp_rx_rel_lat);
++		put_cpu_ptr(pcpu);
 +	}
  	state->terminal = true;
  	if (WARN_ON_ONCE(state->borrowed_count ||
  			 (state->count &&
+@@ -4623,6 +4953,7 @@ void svc_cleanup_xprt_sock(void)
+ {
+ 	svc_unreg_xprt_class(&svc_tcp_class);
+ 	svc_unreg_xprt_class(&svc_udp_class);
++	svc_tcp_rx_rel_free();
+ }
+ 
+ /*
