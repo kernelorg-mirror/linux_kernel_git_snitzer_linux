@@ -1,0 +1,365 @@
+diff --git a/include/linux/sunrpc/svc_xprt.h b/include/linux/sunrpc/svc_xprt.h
+index 464b602ad716..fe71ea0fac68 100644
+--- a/include/linux/sunrpc/svc_xprt.h
++++ b/include/linux/sunrpc/svc_xprt.h
+@@ -175,6 +175,7 @@ int	svc_xprt_create(struct svc_serv *serv, const char *xprt_name,
+ void	svc_xprt_destroy_all(struct svc_serv *serv, struct net *net,
+ 			     bool unregister);
+ void	svc_xprt_received(struct svc_xprt *xprt);
++void	svc_xprt_received_keep(struct svc_xprt *xprt);
+ void	svc_xprt_enqueue(struct svc_xprt *xprt);
+ void	svc_xprt_put(struct svc_xprt *xprt);
+ void	svc_xprt_copy_addrs(struct svc_rqst *rqstp, struct svc_xprt *xprt);
+diff --git a/include/linux/sunrpc/svcsock.h b/include/linux/sunrpc/svcsock.h
+index c24e7a73d0c7..232b53679ab6 100644
+--- a/include/linux/sunrpc/svcsock.h
++++ b/include/linux/sunrpc/svcsock.h
+@@ -33,6 +33,14 @@ enum svc_tcp_rx_action {
+ 	SVC_TCP_RX_PAYLOAD_RELEASE,
+ };
+ 
++/* Why a thread stopped waiting for the rest of a partly received record */
++enum svc_tcp_rx_linger_end {
++	SVC_TCP_RX_LINGER_DATA,
++	SVC_TCP_RX_LINGER_TIMEOUT,
++	SVC_TCP_RX_LINGER_CLOSE,
++	SVC_TCP_RX_LINGER_RESCHED,
++};
++
+ enum svc_tcp_rx_reason {
+ 	SVC_TCP_RX_REASON_NONE,
+ 	SVC_TCP_RX_REASON_SHORT_PREFIX,
+diff --git a/include/trace/events/sunrpc.h b/include/trace/events/sunrpc.h
+index 3aaf4eb9e967..eb5cde7243e6 100644
+--- a/include/trace/events/sunrpc.h
++++ b/include/trace/events/sunrpc.h
+@@ -2503,6 +2503,55 @@ TRACE_EVENT(svcsock_tcp_rx_hold,
+ 	)
+ );
+ 
++TRACE_DEFINE_ENUM(SVC_TCP_RX_LINGER_DATA);
++TRACE_DEFINE_ENUM(SVC_TCP_RX_LINGER_TIMEOUT);
++TRACE_DEFINE_ENUM(SVC_TCP_RX_LINGER_CLOSE);
++TRACE_DEFINE_ENUM(SVC_TCP_RX_LINGER_RESCHED);
++
++#define show_svc_tcp_rx_linger_end(end) \
++	__print_symbolic(end, \
++		{ SVC_TCP_RX_LINGER_DATA, "data" }, \
++		{ SVC_TCP_RX_LINGER_TIMEOUT, "timeout" }, \
++		{ SVC_TCP_RX_LINGER_CLOSE, "close" }, \
++		{ SVC_TCP_RX_LINGER_RESCHED, "resched" })
++
++TRACE_EVENT(svcsock_tcp_rx_linger,
++	TP_PROTO(
++		const struct svc_xprt *xprt,
++		u64 waited_ns,
++		unsigned int limit_us,
++		u32 received,
++		u32 reclen,
++		enum svc_tcp_rx_linger_end end
++	),
++
++	TP_ARGS(xprt, waited_ns, limit_us, received, reclen, end),
++
++	TP_STRUCT__entry(
++		__field(u64, waited_ns)
++		__field(unsigned int, limit_us)
++		__field(u32, received)
++		__field(u32, reclen)
++		__field(u8, end)
++		__string(addr, xprt->xpt_remotebuf)
++	),
++
++	TP_fast_assign(
++		__entry->waited_ns = waited_ns;
++		__entry->limit_us = limit_us;
++		__entry->received = received;
++		__entry->reclen = reclen;
++		__entry->end = end;
++		__assign_str(addr);
++	),
++
++	TP_printk("addr=%s end=%s waited_ns=%llu limit_us=%u received=%u reclen=%u",
++		__get_str(addr), show_svc_tcp_rx_linger_end(__entry->end),
++		__entry->waited_ns, __entry->limit_us,
++		__entry->received, __entry->reclen
++	)
++);
++
+ TRACE_EVENT(svcsock_tcp_recv_short,
+ 	TP_PROTO(
+ 		const struct svc_xprt *xprt,
+diff --git a/net/sunrpc/svc_xprt.c b/net/sunrpc/svc_xprt.c
+index dd6a57e40d51..481a2c9b6779 100644
+--- a/net/sunrpc/svc_xprt.c
++++ b/net/sunrpc/svc_xprt.c
+@@ -224,7 +224,9 @@ EXPORT_SYMBOL_GPL(svc_xprt_init);
+  * leave the bit set until a read attempt finds no (or insufficient)
+  * data, or clear it as soon as it consumes the last queued receive.
+  */
+-void svc_xprt_received(struct svc_xprt *xprt)
++static void svc_xprt_do_enqueue(struct svc_xprt *xprt, bool wake);
++
++static void __svc_xprt_received(struct svc_xprt *xprt, bool wake)
+ {
+ 	if (!test_bit(XPT_BUSY, &xprt->xpt_flags)) {
+ 		WARN_ONCE(1, "xprt=0x%p already busy!", xprt);
+@@ -248,12 +250,34 @@ void svc_xprt_received(struct svc_xprt *xprt)
+ 	if (READ_ONCE(xprt->xpt_flags) &
+ 	    (BIT(XPT_CONN) | BIT(XPT_CLOSE) | BIT(XPT_HANDSHAKE) |
+ 	     BIT(XPT_DATA) | BIT(XPT_DEFERRED)))
+-		svc_xprt_enqueue(xprt);
++		svc_xprt_do_enqueue(xprt, wake);
+ 
+ 	svc_xprt_put(xprt);
+ }
++
++void svc_xprt_received(struct svc_xprt *xprt)
++{
++	__svc_xprt_received(xprt, true);
++}
+ EXPORT_SYMBOL_GPL(svc_xprt_received);
+ 
++/**
++ * svc_xprt_received_keep - Give a transport back without waking a thread
++ * @xprt: a transport the calling service thread has finished with
++ *
++ * As svc_xprt_received(), for a service thread that is about to return to
++ * svc_recv() with nothing to process. If the transport has more for a
++ * thread to do it is queued, and no idle thread is woken for it: the
++ * caller finds it when it looks for work, which it is about to do. A
++ * thread that sleeps or goes on to process a request must use
++ * svc_xprt_received().
++ */
++void svc_xprt_received_keep(struct svc_xprt *xprt)
++{
++	__svc_xprt_received(xprt, false);
++}
++EXPORT_SYMBOL_GPL(svc_xprt_received_keep);
++
+ void svc_add_new_perm_xprt(struct svc_serv *serv, struct svc_xprt *new)
+ {
+ 	clear_bit(XPT_TEMP, &new->xpt_flags);
+@@ -507,7 +531,7 @@ static bool svc_xprt_ready(struct svc_xprt *xprt)
+  * @xprt: transport with data pending
+  *
+  */
+-void svc_xprt_enqueue(struct svc_xprt *xprt)
++static void svc_xprt_do_enqueue(struct svc_xprt *xprt, bool wake)
+ {
+ 	struct svc_pool *pool;
+ 
+@@ -528,7 +552,13 @@ void svc_xprt_enqueue(struct svc_xprt *xprt)
+ 	xprt->xpt_qtime = ktime_get();
+ 	lwq_enqueue(&xprt->xpt_ready, &pool->sp_xprts);
+ 
+-	svc_pool_wake_idle_thread(pool);
++	if (wake)
++		svc_pool_wake_idle_thread(pool);
++}
++
++void svc_xprt_enqueue(struct svc_xprt *xprt)
++{
++	svc_xprt_do_enqueue(xprt, true);
+ }
+ EXPORT_SYMBOL_GPL(svc_xprt_enqueue);
+ 
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index 15c3377fc236..77de99599168 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -296,6 +296,24 @@ module_param_cb(svc_tcp_rx_rcvbuf, &svc_tcp_rx_rcvbuf_ops,
+ MODULE_PARM_DESC(svc_tcp_rx_rcvbuf,
+ 		 "Receive buffer clamp in bytes for TCP transports set up afterwards (0: none)");
+ 
++/*
++ * A thread that finds a record short gives the transport up and looks for
++ * work. If more of the record arrived while it read, giving the transport
++ * up queues it and wakes an idle thread to carry on, and the two then race
++ * for it. With svc_tcp_rx_keep the thread queues the transport without
++ * waking anyone and takes it up again itself.
++ */
++static bool svc_tcp_rx_keep;
++module_param(svc_tcp_rx_keep, bool, 0644);
++MODULE_PARM_DESC(svc_tcp_rx_keep,
++		 "After a short TCP receive, do not wake another thread for data that has already arrived (default: N)");
++
++/*
++ * How long a thread stays with a transport whose record has not all
++ * arrived, waiting for the rest, before it parks the record on the socket
++ * and goes back to the pool.  0: it does not wait.
++ */
++#define SVC_TCP_RX_LINGER_MAX_US	1000
+ /*
+  * A thread that takes a partly received record back from a socket leaves
+  * its own pages in the socket's sk_pages[], for the next thread that parks
+@@ -354,6 +372,22 @@ long svc_tcp_spare_kunit_pages(void)
+ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_spare_kunit_pages);
+ #endif
+ 
++static unsigned int svc_tcp_rx_linger_us;
++module_param(svc_tcp_rx_linger_us, uint, 0644);
++MODULE_PARM_DESC(svc_tcp_rx_linger_us,
++		 "Microseconds a thread waits for the rest of a partly received TCP record before giving the transport up (0..1000, 0: none)");
++
++/*
++ * With svc_tcp_rx_linger_sleep the thread sleeps for the rest of the record
++ * instead of spinning: the socket's own data callback wakes it, or a timer
++ * at svc_tcp_rx_linger_us.  A sleep and a wake cost a few microseconds of
++ * CPU where a spin costs the whole wait.
++ */
++static bool svc_tcp_rx_linger_sleep;
++module_param(svc_tcp_rx_linger_sleep, bool, 0644);
++MODULE_PARM_DESC(svc_tcp_rx_linger_sleep,
++		 "Sleep, not spin, while waiting for the rest of a partly received TCP record (default: N)");
++
+ /*
+  * The region budget bounds loans; only svc_tcp_rx_rcvbuf bounds unread data. A
+  * smaller clamp holds so few page-pool segments that one short segment
+@@ -3912,6 +3946,106 @@ static bool svc_tcp_at_urg_mark(struct sock *sk)
+ 
+ VISIBLE_IF_KUNIT void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
+ 
++/*
++ * svc_tcp_rx_linger() asleep, until @end (ktime_get_ns()).  The socket's
++ * original data callback, which svc_data_ready() calls first, wakes the
++ * socket's waiters only after the skb is queued, but before XPT_DATA is
++ * set: so the receive queue is what says data has come.  Interruptible,
++ * because that callback wakes only interruptible sleepers.
++ */
++static enum svc_tcp_rx_linger_end svc_tcp_rx_linger_wait(struct svc_sock *svsk,
++							 u64 end)
++{
++	unsigned long *flags = &svsk->sk_xprt.xpt_flags;
++	struct sock *sk = svsk->sk_sk;
++	ktime_t expires = ns_to_ktime(end);
++	enum svc_tcp_rx_linger_end why;
++	DECLARE_WAITQUEUE(wait, current);
++
++	add_wait_queue(sk_sleep(sk), &wait);
++	for (;;) {
++		set_current_state(TASK_INTERRUPTIBLE);
++		if (!skb_queue_empty_lockless(&sk->sk_receive_queue) ||
++		    test_bit(XPT_DATA, flags)) {
++			why = SVC_TCP_RX_LINGER_DATA;
++			break;
++		}
++		if (test_bit(XPT_CLOSE, flags)) {
++			why = SVC_TCP_RX_LINGER_CLOSE;
++			break;
++		}
++		if (signal_pending(current)) {
++			why = SVC_TCP_RX_LINGER_RESCHED;
++			break;
++		}
++		if (!schedule_hrtimeout(&expires, HRTIMER_MODE_ABS)) {
++			why = SVC_TCP_RX_LINGER_TIMEOUT;
++			break;
++		}
++	}
++	__set_current_state(TASK_RUNNING);
++	remove_wait_queue(sk_sleep(sk), &wait);
++	return why;
++}
++
++/*
++ * A record has been read in part and the socket is empty.  The rest is
++ * usually a round trip away: the sender was waiting for the window this
++ * read has just opened.  Giving the transport up now costs the record a
++ * move to the socket and back, a thread woken on another CPU, and the
++ * connection the time that takes, for every piece of a large WRITE.  Wait
++ * here for the next piece instead, for svc_tcp_rx_linger_us at most.
++ *
++ * svc_data_ready() sets XPT_DATA when data arrives, and cannot queue the
++ * transport while this thread has it (XPT_BUSY).
++ *
++ * Return: true if there is more to read now.
++ */
++static bool svc_tcp_rx_linger(struct svc_sock *svsk)
++{
++	unsigned int us = min(READ_ONCE(svc_tcp_rx_linger_us),
++			      SVC_TCP_RX_LINGER_MAX_US);
++	unsigned long *flags = &svsk->sk_xprt.xpt_flags;
++	enum svc_tcp_rx_linger_end why;
++	u64 start, end;
++
++	if (!us || test_bit(XPT_TLS_SESSION, flags))
++		return false;
++	/* Only for a record under way: an idle connection is given up. */
++	if (svsk->sk_tcplen <= sizeof(rpc_fraghdr))
++		return false;
++
++	start = ktime_get_ns();
++	end = start + (u64)us * NSEC_PER_USEC;
++	if (READ_ONCE(svc_tcp_rx_linger_sleep))
++		why = svc_tcp_rx_linger_wait(svsk, end);
++	else for (;;) {
++		if (test_bit(XPT_DATA, flags)) {
++			why = SVC_TCP_RX_LINGER_DATA;
++			break;
++		}
++		if (test_bit(XPT_CLOSE, flags)) {
++			why = SVC_TCP_RX_LINGER_CLOSE;
++			break;
++		}
++		if (need_resched()) {
++			why = SVC_TCP_RX_LINGER_RESCHED;
++			break;
++		}
++		if (ktime_get_ns() >= end) {
++			why = SVC_TCP_RX_LINGER_TIMEOUT;
++			break;
++		}
++		cpu_relax();
++	}
++	if (trace_svcsock_tcp_rx_linger_enabled())
++		trace_svcsock_tcp_rx_linger(&svsk->sk_xprt,
++					    ktime_get_ns() - start, us,
++					    svsk->sk_tcplen - sizeof(rpc_fraghdr),
++					    svc_sock_reclen(svsk), why);
++	return why == SVC_TCP_RX_LINGER_DATA;
++}
++
+ /**
+  * svc_tcp_recvfrom - Receive data from a TCP socket
+  * @rqstp: request structure into which to receive an RPC Call
+@@ -3950,6 +4084,7 @@ VISIBLE_IF_KUNIT int svc_tcp_recvfrom(struct svc_rqst *rqstp)
+ 	if (len < 0)
+ 		goto err_nuts;
+ 
++again:
+ 	lock_sock(sock->sk);
+ 	len = sock->ops->read_sock(sock->sk, &desc, svc_tcp_recv_actor);
+ 	/* ->read_sock stops at urgent data and consumes none of it.
+@@ -3993,10 +4128,16 @@ VISIBLE_IF_KUNIT int svc_tcp_recvfrom(struct svc_rqst *rqstp)
+ 		 * other errors out first, because a probe calls
+ 		 * sock_error(), whose xchg clears sk->sk_err as it reads.
+ 		 */
+-		if (len <= 0 && len != -EINVAL)
+-			goto err_incomplete;
++		if (len > 0 || len == -EINVAL)
++			len = svc_tcp_recv_ctrl_record(svsk);
+ 
+-		len = svc_tcp_recv_ctrl_record(svsk);
++		/* Nothing wrong and nothing left to read: the rest of the
++		 * record may be about to arrive.
++		 */
++		if ((len == 0 || len == -EAGAIN) && svc_tcp_rx_linger(svsk)) {
++			clear_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags);
++			goto again;
++		}
+ 		goto err_incomplete;
+ 	}
+ 	if (svsk->sk_datalen < 8)
+@@ -4073,7 +4214,10 @@ VISIBLE_IF_KUNIT int svc_tcp_recvfrom(struct svc_rqst *rqstp)
+ 	trace_svcsock_tcp_recv_err(&svsk->sk_xprt, len);
+ 	svc_xprt_deferred_close(&svsk->sk_xprt);
+ err_noclose:
+-	svc_xprt_received(rqstp->rq_xprt);
++	if (READ_ONCE(svc_tcp_rx_keep))
++		svc_xprt_received_keep(rqstp->rq_xprt);
++	else
++		svc_xprt_received(rqstp->rq_xprt);
+ 	return 0;	/* record not complete */
+ }
+ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_recvfrom);

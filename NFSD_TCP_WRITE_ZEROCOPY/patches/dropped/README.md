@@ -152,3 +152,10 @@ on tardis1 sets neither (the file before is
 `/root/sunrpc.conf.pre-drop-linger-keep`), and `xeu-rig/twoport.sh`
 accepts `LINGER=0` and `KEEP=N` on a kernel without them and refuses
 anything else there.
+
+`0006-keep-on-c42e910d1151.diff` is 0006 as rebased onto
+`c42e910d1151` (its `svcsock.c` hunk had the linger's context), as an
+uncommitted diff against that commit: what the worktree
+`/var/tmp/keep-tree` on tardis2 held, for the runs of "`svc_tcp_rx_keep`
+again, on top of the gating" in `xeu-rig/README.md`. The worktree was
+removed on 28 October to free space, and this is what it kept.
