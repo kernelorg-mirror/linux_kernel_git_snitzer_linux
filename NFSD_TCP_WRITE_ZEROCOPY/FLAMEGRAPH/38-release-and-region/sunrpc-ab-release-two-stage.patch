@@ -1,0 +1,42 @@
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index 8b060dea3250..5993bc0766b4 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -1889,8 +1889,22 @@ static void svc_tcp_rx_put_run(netmem_ref *batch, unsigned int *nr,
+ 	}
+ }
+ 
++/*
++ * FLAMEGRAPH round 38, A/B, not for keeping: fetch the release's pages in
++ * two stages, into the L2 two batches ahead (PSTL2KEEP) and into the L1 a
++ * batch ahead (prefetchw), where the tip prefetches a batch ahead only.
++ */
++static bool svc_tcp_rx_rel_two_stage __read_mostly;
++module_param(svc_tcp_rx_rel_two_stage, bool, 0644);
++
++static __always_inline void svc_tcp_rx_prefetchw_l2(const void *p)
++{
++	asm volatile("prfm pstl2keep, %a0" : : "p" (p));
++}
++
+ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+ {
++	bool two = READ_ONCE(svc_tcp_rx_rel_two_stage);
+ 	netmem_ref batch[SVC_TCP_RX_PUT_BATCH];
+ 	netmem_ref run = 0;
+ 	unsigned int index, nr = 0;
+@@ -1913,7 +1927,14 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+ 	for (index = 0; index < min(state->count, SVC_TCP_RX_PUT_BATCH);
+ 	     index++)
+ 		prefetchw(state->bvec[index].bv_page);
++	if (two)
++		for (; index < min(state->count, 2 * SVC_TCP_RX_PUT_BATCH);
++		     index++)
++			svc_tcp_rx_prefetchw_l2(state->bvec[index].bv_page);
+ 	for (index = 0; index < state->count; index++) {
++		if (two && index + 2 * SVC_TCP_RX_PUT_BATCH < state->count)
++			svc_tcp_rx_prefetchw_l2(state->bvec[index +
++					2 * SVC_TCP_RX_PUT_BATCH].bv_page);
+ 		if (index + SVC_TCP_RX_PUT_BATCH < state->count)
+ 			prefetchw(state->bvec[index +
+ 					      SVC_TCP_RX_PUT_BATCH].bv_page);
