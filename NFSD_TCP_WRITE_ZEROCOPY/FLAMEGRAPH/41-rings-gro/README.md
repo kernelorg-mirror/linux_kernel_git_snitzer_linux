@@ -53,3 +53,15 @@ In run89's profile (round 39), the ring CPUs' GRO frames:
 - Loan mode only. A change is judged on the rings' counted cycles a WRITE, with nfsd's, the rate and the region's peak beside it. A change that raises the peak is not kept.
 - An xeu swap reopens the port and drops the client's connections, so each one is Mike's to ask for. `settled.sh` puts the port's layout back after it.
 - Copy mode gains from anything here too, but is not measured.
+
+## 1. The shape (r96, to run)
+
+[`xeu-rig/gro-shape.bt`](../../xeu-rig/gro-shape.bt) records, on the ring CPUs:
+- **each frame's outcome** in `dev_gro_receive()`: merged, held as a new aggregate, or passed up alone;
+- **what `gro_list_prepare()` walks:** the aggregates held in the frame's hash bucket, and in all eight;
+- **each aggregate of more than one frame at `tcp_gro_complete()`:** its frames, whether a frame ended it (inside `dev_gro_receive()`) or the poll's flush did (`__gro_flush()`), and whether it carries PSH and is over 56 KB;
+- **per call of `xeu_rx_poll()`:** frames, and the aggregates completed.
+
+Aggregates the flush completes after `xeu_rx_poll()` returns are counted in the next poll's figure.
+
+[run96.sh](run96.sh): one traced loan64 run at the current state, with no module swapped. From 10 s into the timed load it runs 8 s of `gro-shape.bt`, then about 8 s of round 09's `grolen.bt`.
