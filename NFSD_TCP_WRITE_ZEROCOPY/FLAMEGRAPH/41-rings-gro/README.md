@@ -132,3 +132,14 @@ The held aggregate is the first in the frame's hash bucket, timed only when its 
 - **No skb for a frame that merges:** xeu hands GRO page fragments (`napi_get_frags()` and `napi_gro_frags()`). An xeu change, for Xsight.
 - **Fewer frames a WRITE:** the MTU is 7792 because a frame has to fit an 8 KiB `rx_buf_size` buffer (round 34). A 9000 MTU would be about 14% fewer frames, but a frame then spans two buffers, which round 34 chose against.
 - **Hardware GRO** on the E1, a question for Xsight.
+
+## 3. The A/B: GRO handed page fragments (r98, to run)
+
+[xeu-ab-gro-frags.patch](xeu-ab-gro-frags.patch), on round 35's kept xeu (`CA0931345E46C929B11D01F`), adds `rx_gro_frags` (N by default, switchable at run time). With it set, the poll does not build an skb around a frame's buffer. It adds the frame's descriptors as page fragments to the NAPI context's skb (`napi_get_frags()`), sets the checksum state and hash, and calls `napi_gro_frags()`. GRO reads the headers in place from the first fragment.
+- **A frame that merges** (step 1's 85%) gives its fragment to the aggregate, and the same skb is reused for the next frame (`napi_reuse_skb()`): no skb is allocated, cleared or freed for it.
+- **A frame that starts an aggregate or is passed up** keeps the skb. GRO copies its headers, about 66 bytes, into the skb's small slab head, and the next frame gets a fresh one.
+- **The payload stays in the region's pages as before,** now always as fragments. The aggregate's head holds only headers, so for the loan every byte of a WRITE's data is in `frags[]`.
+- **The prefetch for writing of the shared info** at a buffer's end is skipped with the switch set, as nothing writes it.
+- **Frames that keep the built skb:** a frame with a VLAN to strip or NIS metadata.
+
+[run98.sh](run98.sh): load the A/B's xeu (refusing with an NFS client connected), eight loan64 runs, counted and untraced, `rx_gro_frags` N Y Y N N Y Y N, each line with the loans admitted and denied. Then the kept xeu again and the settled setting. Judged on the rings' counted cycles a WRITE, with nfsd's, the rate, the loans and the region's peak beside them.
