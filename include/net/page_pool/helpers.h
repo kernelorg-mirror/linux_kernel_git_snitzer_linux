@@ -364,6 +364,8 @@ unsigned long page_pool_rx_region_span(bool read, unsigned long *base_pfn);
 unsigned long page_pool_rx_region_capacity(bool read);
 #if IS_ENABLED(CONFIG_KUNIT)
 int page_pool_rx_region_kunit_read_param(u64 val);
+int page_pool_rx_region_kunit_param(const char *name, const char *val,
+				    char *buf);
 unsigned long page_pool_rx_region_kunit_size_for(unsigned long nic,
 						 unsigned long demand,
 						 unsigned long ram);

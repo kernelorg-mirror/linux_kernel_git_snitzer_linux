@@ -14,6 +14,7 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/module.h>
+#include <linux/sysctl.h>
 #include <linux/sysfs.h>
 #include <linux/math64.h>
 #include <linux/errno.h>
@@ -39,6 +40,7 @@
 #include <net/udp.h>
 #include <net/tcp.h>
 #include <net/tcp_states.h>
+#include <net/page_pool/cfg.h>
 #include <net/page_pool/helpers.h>
 #include <net/rx_loan.h>
 #include <net/xdp.h>
@@ -210,10 +212,15 @@ static void svc_reclassify_socket(struct socket *sock)
  * default budget covers namespaces without one of their own; the budgets
  * together may not exceed the region's write partition, so a read partition
  * split off with page_pool.rx_region_read_pages never takes their pressure.
- * A namespace's budget is overridden in debugfs, rx_loan/<netns>/write/pages
- * and reserve (the initial namespace's kept in svc_tcp_rx_budget_pages and
- * svc_tcp_rx_budget_reserve); no module parameter or sysctl sets one.  The
- * default budget is set by KUnit only: in service it stays 0, and a
+ * A namespace's budget is a supported tuning: the sysctls
+ * net.sunrpc.region_budget_pages and _reserve and debugfs
+ * rx_loan/<netns>/write/pages and reserve, and for the initial namespace
+ * also the module parameters svc_tcp_rx_budget_pages and _reserve (kept in
+ * svc_tcp_rx_budget_pages and svc_tcp_rx_budget_reserve).  Every path goes
+ * through the same kernel_param_ops, reads back "<pages> (auto)" or
+ * "<pages> (manual)", and a write of 0 returns the budget to auto, the
+ * computed default; "off" (or "0 (manual)") is a budget of 0.  The default
+ * budget (svc_tcp_rx_budget_default_pages and _reserve) is 0 unless set: a
  * namespace without a budget copies its region records.
  *
  * A loaned record is admitted at its first skb that carries region pages,
@@ -268,6 +275,8 @@ static unsigned int svc_tcp_rx_budget_pages;
 static unsigned int svc_tcp_rx_budget_reserve;
 static unsigned int svc_tcp_rx_budget_default_pages;
 static unsigned int svc_tcp_rx_budget_default_reserve;
+/* the initial namespace's budget was set to a manual 0 before it existed */
+static bool svc_tcp_rx_budget_init_off;
 
 /*
  * Two estimates that used to be one setting are found out as the server
@@ -429,8 +438,11 @@ module_param(svc_tcp_rx_region_reads, bool, 0644);
 MODULE_PARM_DESC(svc_tcp_rx_region_reads,
 		 "Confine NFSD READ payloads to the rx region, served by direct I/O (default: N)");
 
+/*
+ * svc_tcp_rx_region_conn_share and rx_loan/sunrpc/conn_share, one for all;
+ * 0: auto, twice the server's largest READ
+ */
 static unsigned int svc_tcp_rx_region_conn_share __read_mostly;
-/* rx_loan/sunrpc/conn_share, one for all; 0: twice the largest READ */
 
 /*
  * Q-C (decided): 10 s by default, a deliberate deviation from stock NFSD,
@@ -467,6 +479,7 @@ struct svc_tcp_rx_budget {
 	struct svc_serv		*consumer_serv;
 	struct list_head	node;		/* svc_rx_budget_pools */
 	struct dentry		*debugfs;	/* rx_loan/<netns>/ */
+	struct ctl_table_header	*sysctl;	/* net.sunrpc.region_budget_* */
 	/* the namespace's server (nfsd), registered as it starts */
 	struct rx_loan_consumer	consumer;
 	atomic64_t		bounced ____cacheline_aligned_in_smp;
@@ -657,21 +670,20 @@ static struct svc_tcp_rx_budget *svc_tcp_rx_budget_initial(void)
 }
 
 /*
- * Set the budget of @target to @pages, unless the budgets together would
- * exceed the region's write partition.  @target is the default budget, a namespace's, or NULL
- * for the initial namespace's before it exists (set before it exists).
+ * The sum of the configured budgets with @target's at @pages; @target is the
+ * default budget, a namespace's, or NULL for the initial namespace's.
  */
-static int svc_tcp_rx_budget_set(struct svc_tcp_rx_budget *target,
-				 unsigned int pages)
+static unsigned long
+svc_tcp_rx_budget_total_locked(const struct svc_tcp_rx_budget *target,
+			       unsigned int pages)
 {
-	unsigned long region = rx_loan_region_size(), total = 0;
-	unsigned long write = region - rx_loan_region_read_pages();
 	bool init_target = !target || svc_tcp_rx_budget_is_init(target);
 	struct svc_tcp_rx_budget *pos;
 	unsigned int cur, reserve;
 	bool init_counted = false;
+	unsigned long total = 0;
 
-	mutex_lock(&svc_rx_budget_cfg_lock);
+	lockdep_assert_held(&svc_rx_budget_cfg_lock);
 	svc_tcp_rx_budget_requested(&svc_rx_budget_default, &cur, &reserve);
 	total += target == &svc_rx_budget_default ? pages : cur;
 	list_for_each_entry(pos, &svc_rx_budget_pools, node) {
@@ -687,10 +699,29 @@ static int svc_tcp_rx_budget_set(struct svc_tcp_rx_budget *target,
 	}
 	if (!init_counted)
 		total += init_target ? pages : READ_ONCE(svc_tcp_rx_budget_pages);
-	if (region && total > write) {
-		mutex_unlock(&svc_rx_budget_cfg_lock);
+	return total;
+}
+
+/*
+ * Set the budget of @target to @pages, unless the budgets together would
+ * exceed the region's write partition (-ENOSPC, nothing changed).  @target
+ * is the default budget, a namespace's, or NULL for the initial
+ * namespace's before it exists.  @manual (a namespace's budget only; < 0
+ * leaves it) is set with the pages, in the same critical section, so that
+ * writes through different doors cannot mix one's pages with the other's
+ * mode.  Nothing is applied: svc_tcp_rx_budget_set() does that.
+ */
+static int svc_tcp_rx_budget_set_locked(struct svc_tcp_rx_budget *target,
+					unsigned int pages, int manual)
+{
+	unsigned long region = rx_loan_region_size(), total;
+	unsigned long write = region - rx_loan_region_read_pages();
+	bool init_target = !target || svc_tcp_rx_budget_is_init(target);
+
+	lockdep_assert_held(&svc_rx_budget_cfg_lock);
+	total = svc_tcp_rx_budget_total_locked(target, pages);
+	if (region && total > write)
 		return -ENOSPC;
-	}
 	if (target == &svc_rx_budget_default) {
 		WRITE_ONCE(svc_tcp_rx_budget_default_pages, pages);
 	} else if (init_target) {
@@ -701,15 +732,227 @@ static int svc_tcp_rx_budget_set(struct svc_tcp_rx_budget *target,
 		WRITE_ONCE(target->lb->cfg_pages, pages);
 		spin_unlock_bh(&target->lb->lock);
 	}
+	if (manual >= 0 && target != &svc_rx_budget_default) {
+		if (init_target)
+			WRITE_ONCE(svc_tcp_rx_budget_init_off, manual && !pages);
+		/* auto: the computed default again; manual, even 0: as set */
+		if (target)
+			WRITE_ONCE(target->lb->cfg_default, !manual);
+	}
 	WRITE_ONCE(svc_rx_budget_configured_total, total);
 	svc_tcp_rx_loans_update_locked();
+	return 0;
+}
+
+static int svc_tcp_rx_budget_set(struct svc_tcp_rx_budget *target,
+				 unsigned int pages, int manual)
+{
+	bool init_target = !target || svc_tcp_rx_budget_is_init(target);
+	int ret;
+
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	ret = svc_tcp_rx_budget_set_locked(target, pages, manual);
 	mutex_unlock(&svc_rx_budget_cfg_lock);
+	if (ret)
+		return ret;
 	svc_tcp_rx_budget_apply(init_target ? svc_tcp_rx_budget_initial() :
 				target);
 	svc_tcp_rx_budget_apply(&svc_rx_budget_read);
 	return 0;
 }
 
+/*
+ * The initial namespace's budget has just come to exist (@c): apply the
+ * budgets given before it did (kernel command line, modprobe line) as a
+ * write at run time is applied, so that the configured total, and with it
+ * the shared region's read pool, counts them and the write partition
+ * bounds them.  A staged budget the partition cannot hold is refused as a
+ * run-time write is (-ENOSPC); as there is no earlier value to keep, it
+ * stays auto, with a warning.  rx_loan's budget outlives a reload of
+ * sunrpc: what this load was given decides, a manual 0 being no computed
+ * default.
+ */
+static void svc_tcp_rx_budget_apply_staged_locked(struct svc_tcp_rx_budget *c)
+{
+	unsigned int def = READ_ONCE(svc_tcp_rx_budget_default_pages);
+	unsigned int pages = READ_ONCE(svc_tcp_rx_budget_pages);
+	bool manual = pages || READ_ONCE(svc_tcp_rx_budget_init_off);
+
+	lockdep_assert_held(&svc_rx_budget_cfg_lock);
+	WRITE_ONCE(svc_tcp_rx_budget_pages, 0);
+	WRITE_ONCE(svc_tcp_rx_budget_default_pages, 0);
+	if (svc_tcp_rx_budget_set_locked(&svc_rx_budget_default, def, -1))
+		pr_warn("svc: svc_tcp_rx_budget_default_pages=%u exceeds the receive region's write partition; auto\n",
+			def);
+	if (svc_tcp_rx_budget_set_locked(c, pages, manual)) {
+		pr_warn("svc: svc_tcp_rx_budget_pages=%u exceeds the receive region's write partition; auto\n",
+			pages);
+		WARN_ON_ONCE(svc_tcp_rx_budget_set_locked(c, 0, false));
+	}
+}
+
+/*
+ * The budget settings.  The module parameters (arg NULL: the initial
+ * namespace's; &svc_rx_budget_default: the default budget's), the sysctls
+ * and the debugfs files (arg: the namespace's budget) all use these ops, so
+ * every path writes the same state and reads back the same line.
+ */
+static bool svc_tcp_rx_budget_manual(const struct svc_tcp_rx_budget *c,
+				     unsigned int pages)
+{
+	if (pages)
+		return true;
+	if (!c)
+		return READ_ONCE(svc_tcp_rx_budget_init_off);
+	if (!c->net || c->lb->read)	/* 0 is all a default budget has */
+		return false;
+	return !READ_ONCE(c->lb->cfg_default);
+}
+
+static int svc_tcp_rx_budget_pages_param_set(const char *val,
+					     const struct kernel_param *kp)
+{
+	struct svc_tcp_rx_budget *c = kp->arg;
+	unsigned int pages;
+	bool manual;
+	int ret = page_pool_cfg_parse(val, &pages, &manual);
+
+	if (ret)
+		return ret;
+	if (!c || c == &svc_rx_budget_default) {
+		mutex_lock(&svc_rx_budget_cfg_lock);
+		if (!svc_rx_budget_init) {
+			/*
+			 * At load, before sunrpc's state: held, and applied
+			 * by svc_tcp_rx_budget_apply_staged_locked()
+			 */
+			if (c) {
+				WRITE_ONCE(svc_tcp_rx_budget_default_pages,
+					   pages);
+			} else {
+				WRITE_ONCE(svc_tcp_rx_budget_pages, pages);
+				WRITE_ONCE(svc_tcp_rx_budget_init_off,
+					   manual && !pages);
+			}
+			mutex_unlock(&svc_rx_budget_cfg_lock);
+			return 0;
+		}
+		if (!c)
+			c = svc_rx_budget_init;
+		mutex_unlock(&svc_rx_budget_cfg_lock);
+	}
+	return svc_tcp_rx_budget_set(c, pages, manual);
+}
+
+static int svc_tcp_rx_budget_pages_param_get(char *buffer,
+					     const struct kernel_param *kp)
+{
+	struct svc_tcp_rx_budget *c = kp->arg ?: svc_tcp_rx_budget_initial();
+	unsigned int pages, reserve;
+	unsigned long in_force;
+
+	if (!c) {
+		pages = READ_ONCE(svc_tcp_rx_budget_pages);
+		in_force = pages;
+	} else {
+		svc_tcp_rx_budget_requested(c, &pages, &reserve);
+		in_force = svc_tcp_rx_budget_in_force(c);
+	}
+	return page_pool_cfg_format(buffer, in_force,
+				    svc_tcp_rx_budget_manual(c, pages));
+}
+
+static const struct kernel_param_ops svc_tcp_rx_budget_pages_ops = {
+	.set = svc_tcp_rx_budget_pages_param_set,
+	.get = svc_tcp_rx_budget_pages_param_get,
+};
+module_param_cb(svc_tcp_rx_budget_pages, &svc_tcp_rx_budget_pages_ops,
+		NULL, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_budget_pages,
+		 "Region pages the initial namespace's TCP receive loans may hold (0: auto, the region's write share; off: none); reads \"<pages> (auto|manual)\"");
+module_param_cb(svc_tcp_rx_budget_default_pages, &svc_tcp_rx_budget_pages_ops,
+		&svc_rx_budget_default, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_budget_default_pages,
+		 "Region pages loans in namespaces without a budget may hold (0: auto, none: copy their region records)");
+
+static int svc_tcp_rx_budget_reserve_param_set(const char *val,
+					       const struct kernel_param *kp)
+{
+	struct svc_tcp_rx_budget *c = kp->arg ?: svc_tcp_rx_budget_initial();
+	bool live = svc_tcp_rx_budget_initial() != NULL;
+	unsigned int reserve;
+	bool manual;
+	int ret = page_pool_cfg_parse(val, &reserve, &manual);
+
+	if (ret)
+		return ret;
+	if (c == &svc_rx_budget_default) {
+		WRITE_ONCE(svc_tcp_rx_budget_default_reserve, reserve);
+	} else if (!c || svc_tcp_rx_budget_is_init(c)) {
+		WRITE_ONCE(svc_tcp_rx_budget_reserve, reserve);
+	} else {
+		/* under the lock its stage writes back under */
+		spin_lock_bh(&c->lb->lock);
+		WRITE_ONCE(c->lb->cfg_reserve, reserve);
+		spin_unlock_bh(&c->lb->lock);
+	}
+	if (live)
+		svc_tcp_rx_budget_apply(c);
+	return 0;
+}
+
+static int svc_tcp_rx_budget_reserve_param_get(char *buffer,
+					       const struct kernel_param *kp)
+{
+	struct svc_tcp_rx_budget *c = kp->arg ?: svc_tcp_rx_budget_initial();
+	unsigned int pages, reserve = READ_ONCE(svc_tcp_rx_budget_reserve);
+
+	if (c)
+		svc_tcp_rx_budget_requested(c, &pages, &reserve);
+	return page_pool_cfg_format(buffer, reserve, reserve != 0);
+}
+
+static const struct kernel_param_ops svc_tcp_rx_budget_reserve_ops = {
+	.set = svc_tcp_rx_budget_reserve_param_set,
+	.get = svc_tcp_rx_budget_reserve_param_get,
+};
+module_param_cb(svc_tcp_rx_budget_reserve, &svc_tcp_rx_budget_reserve_ops,
+		NULL, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_budget_reserve,
+		 "Pages of the initial namespace's budget only the oldest in-flight record may use (0: auto, none)");
+module_param_cb(svc_tcp_rx_budget_default_reserve,
+		&svc_tcp_rx_budget_reserve_ops, &svc_rx_budget_default, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_budget_default_reserve,
+		 "Pages of the default budget only the oldest in-flight record may use (0: auto, none)");
+
+static int svc_tcp_rx_conn_share_param_set(const char *val,
+					   const struct kernel_param *kp)
+{
+	unsigned int share;
+	bool manual;
+	int ret = page_pool_cfg_parse(val, &share, &manual);
+
+	if (!ret)
+		WRITE_ONCE(svc_tcp_rx_region_conn_share, share);
+	return ret;
+}
+
+static int svc_tcp_rx_conn_share_param_get(char *buffer,
+					   const struct kernel_param *kp)
+{
+	unsigned int share = READ_ONCE(svc_tcp_rx_region_conn_share);
+
+	return page_pool_cfg_format(buffer, share, share != 0);
+}
+
+static const struct kernel_param_ops svc_tcp_rx_conn_share_ops = {
+	.set = svc_tcp_rx_conn_share_param_set,
+	.get = svc_tcp_rx_conn_share_param_get,
+};
+module_param_cb(svc_tcp_rx_region_conn_share, &svc_tcp_rx_conn_share_ops,
+		NULL, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_region_conn_share,
+		 "Most rx region pages one connection's READ replies may hold (0: auto, twice the server's largest READ, read back as \"0 (auto)\")");
 
 static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 				    size_t size)
@@ -754,13 +997,129 @@ static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 }
 
 
+static int svc_tcp_rx_budget_stats_get(char *buffer,
+				       const struct kernel_param *kp)
+{
+	return svc_tcp_rx_budget_format(kp->arg ?: svc_tcp_rx_budget_initial(),
+					buffer, PAGE_SIZE);
+}
+
+static const struct kernel_param_ops svc_tcp_rx_budget_stats_ops = {
+	.get = svc_tcp_rx_budget_stats_get,
+};
+module_param_cb(svc_tcp_rx_budget_stats, &svc_tcp_rx_budget_stats_ops,
+		NULL, 0444);
+MODULE_PARM_DESC(svc_tcp_rx_budget_stats,
+		 "State of the initial namespace's region budget");
+module_param_cb(svc_tcp_rx_budget_default_stats, &svc_tcp_rx_budget_stats_ops,
+		&svc_rx_budget_default, 0444);
+MODULE_PARM_DESC(svc_tcp_rx_budget_default_stats,
+		 "State of the default region budget");
+module_param_cb(svc_tcp_rx_budget_read_stats, &svc_tcp_rx_budget_stats_ops,
+		&svc_rx_budget_read, 0444);
+MODULE_PARM_DESC(svc_tcp_rx_budget_read_stats,
+		 "State of the global read pool (split: the read partition; shared: what the budgets leave of the region)");
+
 /*
- * rx_loan/<netns>/: the namespace's overrides and state, in debugfs (no
- * module parameter or sysctl sizes the region or a budget any more).
- * write/{pages,reserve} override the namespace's write budget;
- * write/stats, read/stats and nfsd/stats show the budgets and the
- * server's consumer as they stand.  rx_loan/sunrpc/conn_share, one
- * connection's READ share, is one for every namespace.
+ * net.sunrpc.region_budget_{pages,reserve,stats}: a namespace's budget,
+ * through the ops (extra2) of the parameters, on its budget (extra1).
+ */
+static int svc_tcp_rx_budget_sysctl(const struct ctl_table *table, int write,
+				    void *buffer, size_t *lenp, loff_t *ppos)
+{
+	struct kernel_param kp = { .ops = table->extra2, .arg = table->extra1 };
+	struct ctl_table tmp = *table;
+	char *buf = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	int ret;
+
+	if (!buf)
+		return -ENOMEM;
+	tmp.data = buf;
+	tmp.maxlen = PAGE_SIZE;
+	if (write) {
+		/*
+		 * One region backs every namespace's budget, so the writer
+		 * needs CAP_NET_ADMIN over the host.  The handler has no file,
+		 * so this checks the task writing, not the opener.
+		 */
+		bool first = !*ppos;
+
+		ret = -EPERM;
+		if (kp.ops->set && capable(CAP_NET_ADMIN))
+			ret = proc_dostring(&tmp, 1, buffer, lenp, ppos);
+		if (!ret && first)
+			ret = kp.ops->set(buf, &kp);
+	} else {
+		ret = kp.ops->get(buf, &kp);
+		if (ret >= 0) {
+			strim(buf);
+			ret = proc_dostring(&tmp, 0, buffer, lenp, ppos);
+		}
+	}
+	kfree(buf);
+	return ret;
+}
+
+static const struct ctl_table svc_tcp_rx_budget_sysctl_table[] = {
+	{
+		.procname	= "region_budget_pages",
+		.mode		= 0644,
+		.proc_handler	= svc_tcp_rx_budget_sysctl,
+		.extra2		= (void *)&svc_tcp_rx_budget_pages_ops,
+	},
+	{
+		.procname	= "region_budget_reserve",
+		.mode		= 0644,
+		.proc_handler	= svc_tcp_rx_budget_sysctl,
+		.extra2		= (void *)&svc_tcp_rx_budget_reserve_ops,
+	},
+	{
+		.procname	= "region_budget_stats",
+		.mode		= 0444,
+		.proc_handler	= svc_tcp_rx_budget_sysctl,
+		.extra2		= (void *)&svc_tcp_rx_budget_stats_ops,
+	},
+};
+
+static struct ctl_table_header *
+svc_tcp_rx_budget_sysctl_register(struct net *net, struct svc_tcp_rx_budget *c)
+{
+	struct ctl_table_header *hdr;
+	struct ctl_table *table;
+	unsigned int i;
+
+	table = kmemdup(svc_tcp_rx_budget_sysctl_table,
+			sizeof(svc_tcp_rx_budget_sysctl_table), GFP_KERNEL);
+	if (!table)
+		return NULL;
+	for (i = 0; i < ARRAY_SIZE(svc_tcp_rx_budget_sysctl_table); i++)
+		table[i].extra1 = c;
+	hdr = register_net_sysctl_sz(net, "net/sunrpc", table,
+				     ARRAY_SIZE(svc_tcp_rx_budget_sysctl_table));
+	if (!hdr)
+		kfree(table);
+	return hdr;
+}
+
+static void svc_tcp_rx_budget_sysctl_unregister(struct ctl_table_header *hdr)
+{
+	const struct ctl_table *table;
+
+	if (!hdr)
+		return;
+	table = hdr->ctl_table_arg;
+	unregister_net_sysctl_table(hdr);
+	kfree(table);
+}
+
+/*
+ * rx_loan/<netns>/: the namespace's settings and state, in debugfs.
+ * write/{pages,reserve} are the namespace's write budget, the same setting
+ * as net.sunrpc.region_budget_{pages,reserve} (and, for the initial
+ * namespace, sunrpc.svc_tcp_rx_budget_{pages,reserve}); write/stats,
+ * read/stats and nfsd/stats show the budgets and the server's consumer as
+ * they stand.  rx_loan/sunrpc/conn_share, one connection's READ share, is
+ * one for every namespace (sunrpc.svc_tcp_rx_region_conn_share).
  */
 static struct dentry *svc_rx_debugfs_root;
 /* rx_loan/sunrpc/: knobs of every namespace's, while one exists */
@@ -773,62 +1132,66 @@ static ssize_t svc_rx_debugfs_out(char __user *ubuf, size_t count,
 				       len < 0 ? 0 : len);
 }
 
+/* A setting's file: i_private is its budget, low bits which setting. */
+#define SVC_RX_CFG_PAGES	0UL
+#define SVC_RX_CFG_RESERVE	1UL
+#define SVC_RX_CFG_CONN_SHARE	2UL
+
+static void svc_rx_debugfs_param(struct file *file, struct kernel_param *kp)
+{
+	unsigned long v = (unsigned long)file_inode(file)->i_private;
+
+	kp->arg = (void *)(v & ~3UL);
+	switch (v & 3) {
+	case SVC_RX_CFG_RESERVE:
+		kp->ops = &svc_tcp_rx_budget_reserve_ops;
+		break;
+	case SVC_RX_CFG_CONN_SHARE:
+		kp->ops = &svc_tcp_rx_conn_share_ops;
+		break;
+	default:
+		kp->ops = &svc_tcp_rx_budget_pages_ops;
+	}
+}
+
 static ssize_t svc_rx_debugfs_cfg_read(struct file *file, char __user *ubuf,
 				       size_t count, loff_t *ppos)
 {
-	struct svc_tcp_rx_budget *c = file->private_data;
-	bool is_reserve = file_inode(file)->i_private != c;
-	unsigned int pages, reserve;
-	char buf[24];
+	struct kernel_param kp = {};
+	char *buf = kmalloc(PAGE_SIZE, GFP_KERNEL);	/* as a get expects */
+	ssize_t ret;
 
-	svc_tcp_rx_budget_requested(c, &pages, &reserve);
-	return svc_rx_debugfs_out(ubuf, count, ppos, buf,
-				  scnprintf(buf, sizeof(buf), "%u\n",
-					    is_reserve ? reserve : pages));
+	if (!buf)
+		return -ENOMEM;
+	svc_rx_debugfs_param(file, &kp);
+	ret = kp.ops->get(buf, &kp);
+	if (ret >= 0)
+		ret = svc_rx_debugfs_out(ubuf, count, ppos, buf, ret);
+	kfree(buf);
+	return ret;
 }
 
 static ssize_t svc_rx_debugfs_cfg_write(struct file *file,
 					const char __user *ubuf, size_t count,
 					loff_t *ppos)
 {
-	struct svc_tcp_rx_budget *c = file->private_data;
-	bool is_reserve = file_inode(file)->i_private != c;
-	unsigned int val;
-	int ret = kstrtouint_from_user(ubuf, count, 0, &val);
+	struct kernel_param kp = {};
+	char buf[64];
+	int ret;
 
-	if (ret)
-		return ret;
-	if (!is_reserve) {
-		ret = svc_tcp_rx_budget_set(c, val);
-		if (ret)
-			return ret;
-		/* configured: no computed default any more, even at 0 */
-		WRITE_ONCE(c->lb->cfg_default, false);
-		svc_tcp_rx_budget_apply(c);
-		return count;
-	}
-	if (svc_tcp_rx_budget_is_init(c)) {
-		WRITE_ONCE(svc_tcp_rx_budget_reserve, val);
-	} else {
-		/* under the lock its stage writes back under */
-		spin_lock_bh(&c->lb->lock);
-		WRITE_ONCE(c->lb->cfg_reserve, val);
-		spin_unlock_bh(&c->lb->lock);
-	}
-	svc_tcp_rx_budget_apply(c);
-	return count;
-}
-
-static int svc_rx_debugfs_cfg_open(struct inode *inode, struct file *file)
-{
-	/* reserve's i_private is the budget's address plus one */
-	file->private_data = (void *)((unsigned long)inode->i_private & ~1UL);
-	return nonseekable_open(inode, file);
+	if (*ppos || count >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, count))
+		return -EFAULT;
+	buf[count] = 0;
+	svc_rx_debugfs_param(file, &kp);
+	ret = kp.ops->set(buf, &kp);
+	return ret ?: count;
 }
 
 static const struct file_operations svc_rx_debugfs_cfg_fops = {
 	.owner	= THIS_MODULE,
-	.open	= svc_rx_debugfs_cfg_open,
+	.open	= nonseekable_open,
 	.read	= svc_rx_debugfs_cfg_read,
 	.write	= svc_rx_debugfs_cfg_write,
 };
@@ -902,14 +1265,16 @@ static void svc_rx_debugfs_net_init(struct svc_tcp_rx_budget *c,
 		/* one connection share for every namespace: one file */
 		svc_rx_debugfs_sunrpc = debugfs_create_dir("sunrpc",
 							   svc_rx_debugfs_root);
-		debugfs_create_u32("conn_share", 0644, svc_rx_debugfs_sunrpc,
-				   &svc_tcp_rx_region_conn_share);
+		debugfs_create_file("conn_share", 0644, svc_rx_debugfs_sunrpc,
+				    (void *)SVC_RX_CFG_CONN_SHARE,
+				    &svc_rx_debugfs_cfg_fops);
 	}
 	snprintf(name, sizeof(name), "%u", net->ns.inum);
 	c->debugfs = debugfs_create_dir(name, svc_rx_debugfs_root);
 	w = debugfs_create_dir("write", c->debugfs);
 	debugfs_create_file("pages", 0644, w, c, &svc_rx_debugfs_cfg_fops);
-	debugfs_create_file("reserve", 0644, w, (void *)((unsigned long)c | 1),
+	debugfs_create_file("reserve", 0644, w,
+			    (void *)((unsigned long)c | SVC_RX_CFG_RESERVE),
 			    &svc_rx_debugfs_cfg_fops);
 	debugfs_create_file("stats", 0444, w, c, &svc_rx_debugfs_stats_fops);
 	r = debugfs_create_dir("read", c->debugfs);
@@ -1118,10 +1483,18 @@ int svc_tcp_rx_budget_net_init(struct net *net)
 	mutex_lock(&svc_rx_budget_cfg_lock);
 	svc_rx_debugfs_net_init(c, net);
 	list_add_tail(&c->node, &svc_rx_budget_pools);
-	if (net_eq(net, &init_net))
+	if (net_eq(net, &init_net)) {
 		svc_rx_budget_init = c;
-	svc_tcp_rx_budget_stage(c);
+		svc_tcp_rx_budget_apply_staged_locked(c);
+	}
+	/* in force now, not at the budget's next op */
+	svc_tcp_rx_budget_apply(c);
+	/* budgets set at load turn loans on from here */
+	svc_tcp_rx_loans_update_locked();
 	mutex_unlock(&svc_rx_budget_cfg_lock);
+	c->sysctl = svc_tcp_rx_budget_sysctl_register(net, c);
+	if (IS_ENABLED(CONFIG_SYSCTL) && !c->sysctl)
+		pr_warn("svc: no net.sunrpc.region_budget_* sysctls in this namespace\n");
 	sn->rx_budget = c;
 	return 0;
 }
@@ -1130,18 +1503,29 @@ void svc_tcp_rx_budget_net_exit(struct net *net)
 {
 	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
 	struct svc_tcp_rx_budget *c = sn->rx_budget;
+	struct dentry *dir, *sunrpc_dir = NULL;
 
 	if (!c)
 		return;
 	/* the namespace's transports, and so its credit, are gone */
+	svc_tcp_rx_budget_sysctl_unregister(c->sysctl);
 	if (c->consumer.registered)
 		rx_loan_consumer_unregister(&c->consumer);
+	/*
+	 * The dentries are only detached under the lock: debugfs_remove()
+	 * waits for the files' writers, which may be waiting for the lock.
+	 * The parameters outlive this (sysfs goes after the module's exit),
+	 * so the initial budget is unpublished under their lock too.
+	 */
+	if (net_eq(net, &init_net))
+		kernel_param_lock(THIS_MODULE);
 	mutex_lock(&svc_rx_budget_cfg_lock);
-	debugfs_remove(c->debugfs);
+	dir = c->debugfs;
+	c->debugfs = NULL;
 	list_del(&c->node);
 	if (list_empty(&svc_rx_budget_pools)) {
 		/* the last namespace: sunrpc's knobs go with it */
-		debugfs_remove(svc_rx_debugfs_sunrpc);
+		sunrpc_dir = svc_rx_debugfs_sunrpc;
 		svc_rx_debugfs_sunrpc = NULL;
 	}
 	if (svc_rx_budget_init == c)
@@ -1153,6 +1537,10 @@ void svc_tcp_rx_budget_net_exit(struct net *net)
 				 svc_rx_budget_configured_total));
 	svc_tcp_rx_loans_update_locked();
 	mutex_unlock(&svc_rx_budget_cfg_lock);
+	if (net_eq(net, &init_net))
+		kernel_param_unlock(THIS_MODULE);
+	debugfs_remove(dir);
+	debugfs_remove(sunrpc_dir);
 	svc_tcp_rx_budget_apply(&svc_rx_budget_read);
 	sn->rx_budget = NULL;
 	if (c->read != &svc_rx_budget_read)
@@ -1271,14 +1659,85 @@ void svc_tcp_rx_budget_kunit_default(unsigned int pages, unsigned int reserve)
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_default);
 
-/* Set the initial namespace's budget as its parameter does, waking freely. */
+/*
+ * Through the ops the parameters, sysctls and debugfs files use: set the
+ * initial namespace's @name ("pages", "reserve", "conn_share") to @val
+ * unless NULL, then read it back into @buf (PAGE_SIZE) unless NULL.
+ */
+int svc_tcp_rx_budget_kunit_param(const char *name, const char *val, char *buf)
+{
+	struct kernel_param kp = { .ops = &svc_tcp_rx_budget_pages_ops };
+	int ret;
+
+	if (!strcmp(name, "reserve"))
+		kp.ops = &svc_tcp_rx_budget_reserve_ops;
+	else if (!strcmp(name, "conn_share"))
+		kp.ops = &svc_tcp_rx_conn_share_ops;
+	else if (strcmp(name, "pages"))
+		return -ENOENT;
+	if (val) {
+		ret = kp.ops->set(val, &kp);
+		if (ret)
+			return ret;
+	}
+	return buf ? kp.ops->get(buf, &kp) : 0;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_param);
+
+/* The pages the initial namespace's write budget lends now. */
+unsigned long svc_tcp_rx_budget_kunit_in_force(void)
+{
+	return svc_tcp_rx_budget_in_force(svc_tcp_rx_budget_initial());
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_in_force);
+
 int svc_tcp_rx_budget_kunit_set(unsigned int pages)
 {
 	svc_tcp_rx_budget_kunit_nowake = false;
 	svc_tcp_rx_budget_kunit_unstock();
-	return svc_tcp_rx_budget_set(svc_tcp_rx_budget_initial(), pages);
+	return svc_tcp_rx_budget_set(svc_tcp_rx_budget_initial(), pages, -1);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_set);
+
+/*
+ * The initial namespace's budget set to @val (NULL: left) as on the kernel
+ * command line or the modprobe line, before the budget exists, then
+ * applied as svc_tcp_rx_budget_net_init() applies it.
+ */
+int svc_tcp_rx_budget_kunit_boot(const char *val)
+{
+	struct kernel_param kp = { .ops = &svc_tcp_rx_budget_pages_ops };
+	struct svc_tcp_rx_budget *c;
+	int ret = 0;
+
+	svc_tcp_rx_budget_kunit_unstock();
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	c = svc_rx_budget_init;
+	svc_rx_budget_init = NULL;
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+	if (!c)
+		return -ENODEV;
+	if (val)
+		ret = kp.ops->set(val, &kp);
+	mutex_lock(&svc_rx_budget_cfg_lock);
+	svc_rx_budget_init = c;
+	svc_tcp_rx_budget_apply_staged_locked(c);
+	mutex_unlock(&svc_rx_budget_cfg_lock);
+	svc_tcp_rx_budget_apply(c);
+	svc_tcp_rx_budget_apply(&svc_rx_budget_read);
+	return ret;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_boot);
+
+/* The configured budgets' sum, and the pages the read pool is asked for. */
+unsigned long svc_tcp_rx_budget_kunit_configured(unsigned int *read_pool)
+{
+	unsigned int reserve;
+
+	svc_tcp_rx_budget_requested(&svc_rx_budget_read, read_pool, &reserve);
+	return READ_ONCE(svc_rx_budget_configured_total);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_configured);
 
 /*
  * The suites run in a live kernel, whose nfsd serves from these settings:
@@ -1484,8 +1943,9 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_stats);
 #endif
 
 /*
- * What @c's budget is to apply, from the namespace's debugfs overrides
- * and the receive clamp; a read pool takes what the configured budgets use.
+ * What @c's budget is to apply, from its settings (module parameters,
+ * sysctls and debugfs files) and the receive clamp; a read pool takes
+ * what the configured budgets use.
  */
 static void svc_tcp_rx_budget_cfg(struct svc_tcp_rx_budget *c,
 				  unsigned long *pages, unsigned int *reserve,

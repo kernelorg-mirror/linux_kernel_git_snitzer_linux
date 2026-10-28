@@ -10,12 +10,14 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/debugfs.h>
+#include <linux/moduleparam.h>
 #include <linux/device.h>
 #include <kunit/visibility.h>
 
 #include <net/hotdata.h>
 #include <net/netdev_lock.h>
 #include <net/netdev_rx_queue.h>
+#include <net/page_pool/cfg.h>
 #include <net/page_pool/helpers.h>
 #include <net/page_pool/memory_provider.h>
 #include <net/xdp.h>
@@ -77,12 +79,19 @@ DEFINE_STATIC_KEY_FALSE(page_pool_mem_providers);
  */
 #define RX_REGION_DEV_LEN	256
 /*
- * Test and tuning overrides, in debugfs (page_pool_rx_region_cfg/), never
- * parameters: the region's size is computed when it is carved
- * (rx_region_size_now()).  dev lists the network devices (comma-separated,
- * parent bus device, else interface name) whose page pools take their pages
- * from the region; pages, when set, replaces the computed size; stack is
- * what a bound pool keeps for reuse (0: the pool's size).  read_pages
+ * Supported tunings: module parameters (page_pool.rx_region_* on the kernel
+ * command line, /sys/module/page_pool/parameters/ at run time) and the same
+ * settings in debugfs page_pool_rx_region_cfg/, both through one set of
+ * kernel_param_ops, so either reads back what the other wrote.  A size
+ * reads back as "<value> (auto)" or "<value> (manual)" and 0 returns it to
+ * auto (page_pool_cfg_parse()).  Unless pages is set, the region's size is
+ * computed when it is carved (rx_region_size_now()); pages reads back the
+ * size the next carve uses, and debugfs page_pool_rx_region the carved
+ * region, which never grows.  dev lists the network devices
+ * (comma-separated, parent bus device, else interface name) whose page
+ * pools take their pages from the region; pages, when set, replaces the
+ * computed size; stack is what a bound pool keeps for reuse (0: the pool's
+ * size).  read_pages
  * splits a read partition off; it changes only while no region exists,
  * since receive budgets are checked against the write partition it leaves,
  * and a split smaller than PAGE_POOL_RX_REGION_READ_MIN could never hold
@@ -3127,48 +3136,110 @@ void net_mp_niov_clear_page_pool(struct net_iov *niov)
 	page_pool_clear_pp_info(netmem);
 }
 
-static ssize_t rx_region_dev_read(struct file *file, char __user *ubuf,
-				  size_t count, loff_t *ppos)
-{
-	char buf[RX_REGION_DEV_LEN + 1];
-	int len;
-
-	mutex_lock(&rx_region_mutex);
-	len = scnprintf(buf, sizeof(buf), "%s\n", rx_region_dev);
-	mutex_unlock(&rx_region_mutex);
-	return simple_read_from_buffer(ubuf, count, ppos, buf, len);
-}
-
-/* Read when a pool is created: lists the devices whose pools bind. */
-static ssize_t rx_region_dev_write(struct file *file, const char __user *ubuf,
-				   size_t count, loff_t *ppos)
+/*
+ * The region's settings.  Each is a module parameter and a file in debugfs
+ * page_pool_rx_region_cfg/ driven by the same kernel_param_ops, so both
+ * paths change one variable and read back the same line.
+ */
+static int rx_region_dev_param_set(const char *val,
+				   const struct kernel_param *kp)
 {
 	char buf[RX_REGION_DEV_LEN];
 
-	if (*ppos || count >= sizeof(buf))
+	if (strscpy(buf, val, sizeof(buf)) < 0)
 		return -EINVAL;
-	if (copy_from_user(buf, ubuf, count))
-		return -EFAULT;
-	buf[count] = 0;
 	mutex_lock(&rx_region_mutex);
 	strscpy(rx_region_dev, strim(buf), sizeof(rx_region_dev));
 	mutex_unlock(&rx_region_mutex);
-	return count;
-}
-
-static const struct file_operations rx_region_dev_fops = {
-	.read = rx_region_dev_read,
-	.write = rx_region_dev_write,
-	.llseek = default_llseek,
-};
-
-static int rx_region_read_pages_get(void *data, u64 *val)
-{
-	*val = READ_ONCE(rx_region_read_pages);
 	return 0;
 }
 
-/* Only while no region exists: budgets are checked against the split. */
+static int rx_region_dev_param_get(char *buffer, const struct kernel_param *kp)
+{
+	int len;
+
+	mutex_lock(&rx_region_mutex);
+	len = scnprintf(buffer, PAGE_SIZE, "%s\n", rx_region_dev);
+	mutex_unlock(&rx_region_mutex);
+	return len;
+}
+
+static const struct kernel_param_ops rx_region_dev_ops = {
+	.set = rx_region_dev_param_set,
+	.get = rx_region_dev_param_get,
+};
+module_param_cb(rx_region_dev, &rx_region_dev_ops, NULL, 0644);
+MODULE_PARM_DESC(rx_region_dev,
+		 "Network devices, comma-separated (parent bus device, else interface name), whose page pools share the fixed receive region; read when a pool is created");
+
+/* 0 is auto: the size a carve computes (rx_region_size_now()). */
+static int rx_region_pages_param_set(const char *val,
+				     const struct kernel_param *kp)
+{
+	unsigned int pages;
+	bool manual;
+	int ret = page_pool_cfg_parse(val, &pages, &manual);
+
+	if (ret)
+		return ret;
+	mutex_lock(&rx_region_mutex);
+	WRITE_ONCE(rx_region_pages, pages);
+	mutex_unlock(&rx_region_mutex);
+	return 0;
+}
+
+/*
+ * The size the next carve uses (rx_region_size_now()), not the carved
+ * region's: a region is never resized, so a change applies at the next
+ * carve; debugfs page_pool_rx_region shows the carved region.
+ */
+static int rx_region_pages_param_get(char *buffer,
+				     const struct kernel_param *kp)
+{
+	return page_pool_cfg_format(buffer, rx_region_size_now(),
+				    READ_ONCE(rx_region_pages) != 0);
+}
+
+static const struct kernel_param_ops rx_region_pages_ops = {
+	.set = rx_region_pages_param_set,
+	.get = rx_region_pages_param_get,
+};
+module_param_cb(rx_region_pages, &rx_region_pages_ops, NULL, 0644);
+MODULE_PARM_DESC(rx_region_pages,
+		 "Pages in the fixed receive region (0: auto, computed when carved); reads \"<pages> (auto|manual)\": the size the next carve uses, while debugfs page_pool_rx_region shows the carved region; a change takes effect once no pool is bound to the region");
+
+static int rx_region_stack_param_set(const char *val,
+				     const struct kernel_param *kp)
+{
+	unsigned int stack;
+	bool manual;
+	int ret = page_pool_cfg_parse(val, &stack, &manual);
+
+	if (!ret)
+		WRITE_ONCE(rx_region_stack, stack);
+	return ret;
+}
+
+static int rx_region_stack_param_get(char *buffer,
+				     const struct kernel_param *kp)
+{
+	unsigned int stack = READ_ONCE(rx_region_stack);
+
+	return page_pool_cfg_format(buffer, stack, stack != 0);
+}
+
+static const struct kernel_param_ops rx_region_stack_ops = {
+	.set = rx_region_stack_param_set,
+	.get = rx_region_stack_param_get,
+};
+module_param_cb(rx_region_stack, &rx_region_stack_ops, NULL, 0644);
+MODULE_PARM_DESC(rx_region_stack,
+		 "Pages a pool bound to the fixed receive region keeps for reuse (0: auto, each pool's size, read back as \"0 (auto)\"); read when a pool is created");
+
+/*
+ * Only while no region exists: budgets are checked against the split.
+ * Setting the value already set is no change, and succeeds either way.
+ */
 static int rx_region_read_pages_dbg_set(void *data, u64 val)
 {
 	int ret = 0;
@@ -3177,14 +3248,88 @@ static int rx_region_read_pages_dbg_set(void *data, u64 val)
 		return -EINVAL;
 	mutex_lock(&rx_region_mutex);
 	if (rx_region)
-		ret = -EBUSY;
+		ret = val == READ_ONCE(rx_region_read_pages) ? 0 : -EBUSY;
 	else
 		WRITE_ONCE(rx_region_read_pages, val);
 	mutex_unlock(&rx_region_mutex);
 	return ret;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(rx_region_read_pages_fops, rx_region_read_pages_get,
-			 rx_region_read_pages_dbg_set, "%llu\n");
+
+static int rx_region_read_pages_param_set(const char *val,
+					  const struct kernel_param *kp)
+{
+	unsigned int pages;
+	bool manual;
+	int ret = page_pool_cfg_parse(val, &pages, &manual);
+
+	if (ret)
+		return ret;
+	/* the line read back from a carved region writes back as no change */
+	if (page_pool_rx_region_exists() &&
+	    pages == page_pool_rx_region_read_pages() &&
+	    manual == (READ_ONCE(rx_region_read_pages) != 0))
+		return 0;
+	return rx_region_read_pages_dbg_set(NULL, pages);
+}
+
+/* The read partition once carved, else the split requested. */
+static int rx_region_read_pages_param_get(char *buffer,
+					  const struct kernel_param *kp)
+{
+	unsigned long nr = page_pool_rx_region_exists() ?
+			   page_pool_rx_region_read_pages() :
+			   READ_ONCE(rx_region_read_pages);
+
+	return page_pool_cfg_format(buffer, nr,
+				    READ_ONCE(rx_region_read_pages) != 0);
+}
+
+static const struct kernel_param_ops rx_region_read_pages_ops = {
+	.set = rx_region_read_pages_param_set,
+	.get = rx_region_read_pages_param_get,
+};
+module_param_cb(rx_region_read_pages, &rx_region_read_pages_ops, NULL, 0644);
+MODULE_PARM_DESC(rx_region_read_pages,
+		 "Pages of the fixed receive region split off for reads (0: auto, reads and writes share it; else at least one maximum READ); -EBUSY while the region exists");
+
+static ssize_t rx_region_cfg_read(struct file *file, char __user *ubuf,
+				  size_t count, loff_t *ppos)
+{
+	struct kernel_param kp = { .ops = file->private_data };
+	char *buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	ssize_t ret;
+
+	if (!buf)
+		return -ENOMEM;
+	ret = kp.ops->get(buf, &kp);
+	if (ret >= 0)
+		ret = simple_read_from_buffer(ubuf, count, ppos, buf, ret);
+	kfree(buf);
+	return ret;
+}
+
+static ssize_t rx_region_cfg_write(struct file *file, const char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	struct kernel_param kp = { .ops = file->private_data };
+	char buf[RX_REGION_DEV_LEN];
+	int ret;
+
+	if (*ppos || count >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, count))
+		return -EFAULT;
+	buf[count] = 0;
+	ret = kp.ops->set(buf, &kp);
+	return ret ?: count;
+}
+
+static const struct file_operations rx_region_cfg_fops = {
+	.open = simple_open,
+	.read = rx_region_cfg_read,
+	.write = rx_region_cfg_write,
+	.llseek = default_llseek,
+};
 
 static int rx_region_size_get(void *data, u64 *val)
 {
@@ -3194,15 +3339,20 @@ static int rx_region_size_get(void *data, u64 *val)
 DEFINE_DEBUGFS_ATTRIBUTE(rx_region_size_fops, rx_region_size_get, NULL,
 			 "%llu\n");
 
+static void __init rx_region_cfg_file(const char *name, struct dentry *d,
+				      const struct kernel_param_ops *ops)
+{
+	debugfs_create_file(name, 0600, d, (void *)ops, &rx_region_cfg_fops);
+}
+
 static int __init page_pool_rx_region_debugfs_init(void)
 {
 	struct dentry *d = debugfs_create_dir("page_pool_rx_region_cfg", NULL);
 
-	debugfs_create_file("dev", 0600, d, NULL, &rx_region_dev_fops);
-	debugfs_create_u32("pages", 0600, d, &rx_region_pages);
-	debugfs_create_u32("stack", 0600, d, &rx_region_stack);
-	debugfs_create_file_unsafe("read_pages", 0600, d, NULL,
-				   &rx_region_read_pages_fops);
+	rx_region_cfg_file("dev", d, &rx_region_dev_ops);
+	rx_region_cfg_file("pages", d, &rx_region_pages_ops);
+	rx_region_cfg_file("stack", d, &rx_region_stack_ops);
+	rx_region_cfg_file("read_pages", d, &rx_region_read_pages_ops);
 	debugfs_create_file_unsafe("size", 0400, d, NULL,
 				   &rx_region_size_fops);
 	debugfs_create_ulong("demand", 0400, d, &rx_region_demand);
@@ -3210,3 +3360,34 @@ static int __init page_pool_rx_region_debugfs_init(void)
 	return 0;
 }
 late_initcall(page_pool_rx_region_debugfs_init);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/*
+ * Through the ops both the parameter and the debugfs file use: set @name
+ * to @val unless NULL, then read it back into @buf (PAGE_SIZE) unless NULL.
+ */
+int page_pool_rx_region_kunit_param(const char *name, const char *val,
+				    char *buf)
+{
+	struct kernel_param kp = {};
+	int ret;
+
+	if (!strcmp(name, "dev"))
+		kp.ops = &rx_region_dev_ops;
+	else if (!strcmp(name, "pages"))
+		kp.ops = &rx_region_pages_ops;
+	else if (!strcmp(name, "stack"))
+		kp.ops = &rx_region_stack_ops;
+	else if (!strcmp(name, "read_pages"))
+		kp.ops = &rx_region_read_pages_ops;
+	else
+		return -ENOENT;
+	if (val) {
+		ret = kp.ops->set(val, &kp);
+		if (ret)
+			return ret;
+	}
+	return buf ? kp.ops->get(buf, &kp) : 0;
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_param);
+#endif

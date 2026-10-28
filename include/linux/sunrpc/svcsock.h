@@ -234,6 +234,10 @@ void svc_tcp_rx_budget_kunit_configure(unsigned int pages,
 void svc_tcp_rx_budget_kunit_rcvbuf(unsigned int bytes);
 void svc_tcp_rx_budget_kunit_default(unsigned int pages, unsigned int reserve);
 int svc_tcp_rx_budget_kunit_set(unsigned int pages);
+int svc_tcp_rx_budget_kunit_param(const char *name, const char *val, char *buf);
+unsigned long svc_tcp_rx_budget_kunit_in_force(void);
+int svc_tcp_rx_budget_kunit_boot(const char *val);
+unsigned long svc_tcp_rx_budget_kunit_configured(unsigned int *read_pool);
 struct rx_loan_consumer;
 struct rx_loan_waiter;
 unsigned long svc_tcp_rx_consumer_floor(unsigned int nrthreads,

@@ -21,6 +21,7 @@
 #include <linux/unaligned.h>
 
 #include <net/net_namespace.h>
+#include <net/page_pool/cfg.h>
 #include <net/page_pool/helpers.h>
 #include <net/rx_loan.h>
 #include <net/tcp.h>
@@ -7882,7 +7883,144 @@ static void svcsock_rx_rcvbuf_default_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_kunit_rcvbuf_ungiven(), 0U);
 }
 
+/* A setting of the initial namespace's, put back however the case ends. */
+struct svcsock_rx_param_saved {
+	const char *name;
+	char *line;
+};
+
+static void svcsock_rx_param_restore(void *data)
+{
+	struct svcsock_rx_param_saved *saved = data;
+
+	svc_tcp_rx_budget_kunit_param(saved->name, saved->line, NULL);
+}
+
+static void svcsock_rx_param_save(struct kunit *test, const char *name)
+{
+	struct svcsock_rx_param_saved *saved;
+
+	saved = kunit_kzalloc(test, sizeof(*saved), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, saved);
+	saved->name = name;
+	saved->line = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, saved->line);
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param(name, NULL,
+							    saved->line), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_param_restore, saved), 0);
+}
+
+/* the stand-in region: 1000 pages beyond the other configured budgets */
+static unsigned long svcsock_rx_param_region;
+#define SVCSOCK_RX_PARAM_REGION	svcsock_rx_param_region
+
+/*
+ * The initial namespace's budget is @pages in force and read back as
+ * @line, and the configured budgets, which the shared region's read pool
+ * leaves to the budgets, are @base (the others') plus @counted.
+ */
+static void svcsock_rx_param_expect(struct kunit *test, char *buf,
+				    const char *line, unsigned long pages,
+				    unsigned long base, unsigned long counted)
+{
+	unsigned int read_pool;
+
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param("pages", NULL, buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, line);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_in_force(), pages);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_configured(&read_pool),
+			base + counted);
+	KUNIT_EXPECT_EQ(test, (unsigned long)read_pool,
+			SVCSOCK_RX_PARAM_REGION - base - counted);
+}
+
+/*
+ * The initial namespace's budget and the connection share, through the
+ * ops the module parameters, sysctls and debugfs files share: 0 is auto
+ * (the region's write share), N is manual N, "off" a manual 0, and back
+ * to 0 is auto again.  A budget given before the namespace's budget
+ * exists (kernel command line, modprobe line) is applied as a run-time
+ * write is: counted in the configured budgets, which the shared region's
+ * read pool leaves to them, and refused, staying auto, past the write
+ * partition.
+ */
+static void svcsock_rx_param_auto_manual_test(struct kunit *test)
+{
+	char *buf = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
+	char autoline[32], over[24];
+	unsigned int read_pool;
+	unsigned long base;
+
+	KUNIT_ASSERT_NOT_NULL(test, buf);
+	svcsock_rx_param_save(test, "pages");
+	svcsock_rx_param_save(test, "reserve");
+	svcsock_rx_param_save(test, "conn_share");
+	/* auto configures nothing: what is configured is the others' */
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param("pages", "0", buf), 0);
+	base = svc_tcp_rx_budget_kunit_configured(&read_pool);
+	svcsock_rx_param_region = base + 1000;
+	snprintf(autoline, sizeof(autoline), "%lu (auto)\n", SVCSOCK_RX_PARAM_REGION);
+	snprintf(over, sizeof(over), "%lu", SVCSOCK_RX_PARAM_REGION + 1);
+	/* a shared region of a known size, with a clamp that lets it lend */
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_region_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_rcvbuf(128 * 1024);
+	svc_tcp_rx_budget_kunit_region(SVCSOCK_RX_PARAM_REGION, 0);
+	svc_tcp_rx_budget_kunit_init();
+	/* auto lends the region's write share */
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param("pages", "0", buf), 0);
+	svcsock_rx_param_expect(test, buf, autoline,
+				SVCSOCK_RX_PARAM_REGION, base, 0);
+
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param("pages", "3", buf), 0);
+	svcsock_rx_param_expect(test, buf, "3 (manual)\n", 3, base, 3);
+
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param("pages", "0", buf), 0);
+	svcsock_rx_param_expect(test, buf, autoline,
+				SVCSOCK_RX_PARAM_REGION, base, 0);
+
+	/* a manual 0 is no budget: nothing lent */
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param("pages", "off", buf), 0);
+	svcsock_rx_param_expect(test, buf, "0 (manual)\n", 0, base, 0);
+
+	/* past the write partition: refused, the budget as it was */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_param("pages", over, NULL),
+			-ENOSPC);
+	svcsock_rx_param_expect(test, buf, "0 (manual)\n", 0, base, 0);
+
+	/* a line read back restores what it says */
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param("pages", "3 (auto)", buf), 0);
+	svcsock_rx_param_expect(test, buf, autoline,
+				SVCSOCK_RX_PARAM_REGION, base, 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_param("pages", "3 (later)", NULL), -EINVAL);
+
+	/* given at boot, before the budget exists: in force and counted */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_boot("300"), 0);
+	svcsock_rx_param_expect(test, buf, "300 (manual)\n", 300, base, 300);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_boot("off"), 0);
+	svcsock_rx_param_expect(test, buf, "0 (manual)\n", 0, base, 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_boot("auto"), 0);
+	svcsock_rx_param_expect(test, buf, autoline,
+				SVCSOCK_RX_PARAM_REGION, base, 0);
+	/* given at boot past the write partition: refused, so auto */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_boot(over), 0);
+	svcsock_rx_param_expect(test, buf, autoline,
+				SVCSOCK_RX_PARAM_REGION, base, 0);
+
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param("reserve", "5", buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, "5 (manual)\n");
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param("reserve", "0", buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, "0 (auto)\n");
+
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param("conn_share", "7", buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, "7 (manual)\n");
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_budget_kunit_param("conn_share", "0", buf), 0);
+	KUNIT_EXPECT_STREQ(test, buf, "0 (auto)\n");
+}
+
 static struct kunit_case svcsock_rx_test_cases[] = {
+	KUNIT_CASE(svcsock_rx_param_auto_manual_test),
 	KUNIT_CASE_PARAM(svcsock_rx_actor_split_test,
 			 svcsock_rx_split_gen_params),
 	KUNIT_CASE(svcsock_rx_multifragment_fresh_request_test),
