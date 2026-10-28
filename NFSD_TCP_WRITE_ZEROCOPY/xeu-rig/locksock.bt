@@ -1,0 +1,28 @@
+// locksock.bt: nfsd's sleeps for a socket another task holds (FLAMEGRAPH
+// round 40).  __lock_sock() is lock_sock()'s slow path: the socket is owned
+// by a task, and the caller sleeps until release_sock() wakes it.  Counted
+// only there, so the probes cost nothing on an uncontended lock_sock():
+//   @waiter     the sleeping nfsd thread's path, by kernel stack
+//   @holder     the task that woke it, by kernel stack at its sched_waking:
+//               release_sock() and the path that held the socket
+//   @holder_comm that task's command name
+//   @wait       ns from entering __lock_sock() to leaving it with the socket
+// Run for 8 s.
+config = { max_map_keys = 65536 }
+
+fentry:vmlinux:__lock_sock /comm == "nfsd"/ {
+	@t[tid] = nsecs;
+	@waiter[kstack(12)] = count();
+}
+fexit:vmlinux:__lock_sock /@t[tid]/ {
+	@wait = hist((int64)(nsecs - @t[tid]));
+	@wait_avg = avg((int64)(nsecs - @t[tid]));
+	delete(@t, tid);
+}
+tracepoint:sched:sched_waking /@t[args.pid]/ {
+	@holder[kstack(10)] = count();
+	@holder_comm[comm] = count();
+}
+tracepoint:nfsd:nfsd_write_start { @writes = count(); }
+interval:s:8 { exit(); }
+END { clear(@t); }
