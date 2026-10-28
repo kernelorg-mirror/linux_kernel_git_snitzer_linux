@@ -1,0 +1,5 @@
+22:29:50 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu 63631721F8B149913C0DC19
+22:34:19 r96-trace-loan64 | total 36.46 GB/s | 1 no-step | 1 placed | r96-trace-loan64 ring 41.4 nfsd 91.5 us/W (38592 WRITEs/s) | ring 139.5k cycles 311.3k instructions, nfsd 298.0k cycles 304.2k instructions a WRITE | peak 6617
+22:34:19 gro-shape from 22:33:20 grolen from 22:33:31 end 22:33:41
+22:34:22 end: settled.sh audit rest: the settled setting; DONE
+
