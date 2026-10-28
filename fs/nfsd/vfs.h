@@ -314,6 +314,15 @@ struct nfsd_rtc_ctx {
 	/* nfsd_dispatch() state carried across the async completion */
 	struct nfsd_cacherep	*rp;
 	__be32			*nfs_reply;
+	/* WRITE: the thread path's nfsd_vfs_write() state across the I/O */
+	unsigned long		cnt;
+	errseq_t		since;
+	struct nfs_dio_seg_hold	hold;
+	/*
+	 * A WRITE's in-progress DRC entry, kept from the rtc attempt for its
+	 * rerun on a thread, which uses it instead of a second lookup.
+	 */
+	struct nfsd_cacherep	*drc_rp;
 };
 
 void		nfsd_file_count_cached(struct svc_rqst *rqstp,
@@ -325,6 +334,13 @@ int		nfsd_rtc_read_finish(struct svc_rqst *rqstp,
 				     struct svc_fh *fhp, unsigned long *count,
 				     u32 *eof, __be32 *status);
 int		nfsd_rtc_dispatch_finish(struct svc_rqst *rqstp, bool abandon);
+__be32		nfsd_rtc_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
+			       loff_t offset, const struct xdr_buf *payload,
+			       unsigned long *cnt, int iocb_flags,
+			       __be32 *verf);
+int		nfsd_rtc_write_finish(struct svc_rqst *rqstp,
+				      struct svc_fh *fhp, unsigned long *cnt,
+				      __be32 *status);
 /* filecache.c (declared here: filecache.h is out of the rtc scope) */
 __be32		nfsd_file_lookup_cached(struct svc_rqst *rqstp,
 					struct svc_fh *fhp,
@@ -337,6 +353,11 @@ __be32		nfsd_rtc_read_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				   unsigned long *count, u32 *eof);
 void		nfsd_file_kunit_counts(unsigned long *hits,
 				       unsigned long *acquisitions);
+__be32		nfsd_rtc_write_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
+				    struct nfsd_file *nf, loff_t offset,
+				    const struct xdr_buf *payload,
+				    unsigned long *cnt, int iocb_flags,
+				    __be32 *verf);
 #endif
 
 /* nfs3proc.c: run-to-completion NFSv3 READ hook */
