@@ -258,6 +258,7 @@ void	svc_rtc_stats_sum(struct svc_rtc_stats *sum);
 void	svc_rtc_serv_destroy(struct svc_serv *serv);
 void	svc_rtc_complete(struct svc_rqst *rqstp);
 #if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)
+extern void (*svc_rtc_kunit_published)(struct svc_xprt *xprt);
 extern bool svc_rtc_kunit_no_mem;	/* KUnit: fail the receive pages */
 extern bool svc_rtc_kunit_no_slot;	/* KUnit: fail the request slot */
 #endif

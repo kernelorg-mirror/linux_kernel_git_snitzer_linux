@@ -1190,6 +1190,21 @@ static void svc_rtc_run_done(struct svc_xprt *xprt)
  * the entry and frees the rqst cannot let teardown free the conn under a
  * completer that has not yet queued the work.
  */
+#if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)
+/* KUnit: observe the refs held the instant an entry becomes consumable. */
+void (*svc_rtc_kunit_published)(struct svc_xprt *xprt);
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_published);
+static void svc_rtc_published(struct svc_xprt *xprt)
+{
+	void (*fn)(struct svc_xprt *xprt) = READ_ONCE(svc_rtc_kunit_published);
+
+	if (fn)
+		fn(xprt);
+}
+#else
+static inline void svc_rtc_published(struct svc_xprt *xprt) { }
+#endif
+
 static struct svc_xprt *svc_rtc_pin(struct svc_rtc_conn *conn)
 {
 	struct svc_xprt *xprt = conn->xprt;
@@ -1500,6 +1515,7 @@ void svc_rtc_queue_send(struct svc_xprt *xprt, struct svc_rtc_send *send)
 	}
 	xprt = svc_rtc_pin(conn);	/* before the send can be consumed */
 	llist_add(&send->node, &conn->sendq);
+	svc_rtc_published(conn->xprt);
 	svc_rtc_queue_pinned(conn, xprt);
 }
 EXPORT_SYMBOL_GPL(svc_rtc_queue_send);
@@ -2345,6 +2361,7 @@ void svc_rtc_complete(struct svc_rqst *rqstp)
 
 	/* Once published, a running pass may finish @r and reuse it. */
 	llist_add(&r->node, &conn->done);
+	svc_rtc_published(conn->xprt);
 	svc_rtc_queue_pinned(conn, xprt);
 }
 EXPORT_SYMBOL_GPL(svc_rtc_complete);
