@@ -1,0 +1,47 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 81K of event 'l3d_cache_lmiss_rd'
+# Event count (approx.): 1630300000
+#
+# Overhead  Symbol                                                 IPC   [IPC Coverage]
+# ........  .....................................................  ....................
+#
+     8.21%  [k] default_idle_call                                  -      -            
+     6.95%  [k] finish_task_switch.isra.0                          -      -            
+     3.78%  [k] _raw_spin_unlock_irqrestore                        -      -            
+     2.18%  [k] svc_tcp_rx_region_span                             -      -            
+     2.09%  [k] _raw_spin_lock                                     -      -            
+     1.60%  [k] svc_tcp_rx_skb_region_pages_after.part.0           -      -            
+     1.59%  [k] svc_tcp_rx_release_refs                            -      -            
+     1.30%  [k] svc_tcp_rx_append_ref                              -      -            
+     1.13%  [k] svc_tcp_rx_prefetch_pages                          -      -            
+     1.02%  [k] _raw_spin_unlock_irq                               -      -            
+     1.00%  [k] svc_tcp_rx_borrow_segment                          -      -            
+     0.99%  [k] napi_pp_put_page                                   -      -            
+     0.98%  [k] svc_recv                                           -      -            
+     0.89%  [k] __tcp_transmit_skb                                 -      -            
+     0.87%  [k] svc_tcp_recv_skb                                   -      -            
+     0.86%  [k] lock_sock_nested                                   -      -            
+     0.81%  [k] arch_counter_get_cntpct                            -      -            
+     0.79%  [k] blk_map_iter_next                                  -      -            
+     0.77%  [k] svc_tcp_rx_walk_skb                                -      -            
+     0.77%  [k] page_pool_put_netmem_bulk                          -      -            
+     0.76%  [k] __dev_xmit_skb                                     -      -            
+     0.74%  [k] tcp_recv_skb                                       -      -            
+     0.73%  [k] _raw_spin_lock_bh                                  -      -            
+     0.61%  [k] percpu_counter_add_batch                           -      -            
+     0.59%  [k] __memcg_slab_free_hook                             -      -            
+     0.59%  [k] kmem_cache_alloc_node_noprof                       -      -            
+     0.59%  [k] __pi_memcpy_generic                                -      -            
+     0.59%  [k] handle_softirqs                                    -      -            
+     0.57%  [k] svc_tcp_restore_pages                              -      -            
+     0.53%  [k] svc_xprt_received                                  -      -            
+     0.53%  [k] sunrpc_cache_find_rcu                              -      -            
+     0.51%  [k] kmem_cache_alloc_noprof                            -      -            
+     0.51%  [k] dma_direct_map_phys                                -      -            
+#
+# (Tip: To not accumulate CPU time of children symbols add --no-children)
+#

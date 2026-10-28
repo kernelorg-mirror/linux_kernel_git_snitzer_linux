@@ -1,0 +1,51 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 29K of event 'armv8_pmuv3_0/cycles/P'
+# Event count (approx.): 51892303519
+#
+# Overhead  Symbol                                       IPC   [IPC Coverage]
+# ........  ...........................................  ....................
+#
+    16.37%  [k] default_idle_call                        -      -            
+     8.72%  [k] handle_softirqs                          -      -            
+     7.16%  [k] xeu_rx_poll                              -      -            
+     3.65%  [k] xeu_rx_refill.isra.0                     -      -            
+     3.54%  [k] inet_gro_receive                         -      -            
+     2.88%  [k] skb_gro_receive                          -      -            
+     2.37%  [k] tcp_gro_receive                          -      -            
+     2.36%  [k] gro_list_prepare                         -      -            
+     2.34%  [k] dev_gro_receive                          -      -            
+     2.14%  [k] xeu_tx_poll                              -      -            
+     2.07%  [k] _raw_spin_unlock_irqrestore              -      -            
+     2.02%  [k] napi_build_skb                           -      -            
+     1.97%  [k] eth_type_trans                           -      -            
+     1.68%  [k] __inet_lookup_established                -      -            
+     1.67%  [k] tcp4_gro_receive                         -      -            
+     1.37%  [k] __build_skb_around                       -      -            
+     1.26%  [k] tcp_v4_rcv                               -      -            
+     1.25%  [k] svc_data_ready                           -      -            
+     1.23%  [k] _raw_spin_lock                           -      -            
+     1.21%  [k] __pi_memset_generic                      -      -            
+     1.14%  [k] __gro_receive_network_flush              -      -            
+     1.08%  [k] kmem_cache_free                          -      -            
+     1.05%  [k] arch_counter_get_cntpct                  -      -            
+     0.98%  [k] skb_put                                  -      -            
+     0.90%  [k] __list_del_entry_valid_or_report         -      -            
+     0.87%  [k] tcp_ack                                  -      -            
+     0.86%  [k] __sk_mem_raise_allocated                 -      -            
+     0.86%  [k] gro_receive_skb                          -      -            
+     0.83%  [k] __memcg_slab_free_hook                   -      -            
+     0.70%  [k] tcp_try_coalesce                         -      -            
+     0.69%  [k] skb_try_coalesce                         -      -            
+     0.65%  [k] skb_release_data                         -      -            
+     0.60%  [k] napi_skb_cache_put                       -      -            
+     0.60%  [k] cache_line_size                          -      -            
+     0.60%  [k] __netif_receive_skb_core.constprop.0     -      -            
+     0.57%  [k] ip_rcv_core                              -      -            
+     0.56%  [k] __sock_wfree                             -      -            
+#
+# (Tip: For a higher level overview, try: perf report --sort comm,dso)
+#
