@@ -1,0 +1,128 @@
+--- xeu-esdk-v2.0.1.orig/xeu_drv.c
++++ xeu-esdk-v2.0.1/xeu_drv.c
+@@ -194,6 +194,21 @@
+ MODULE_PARM_DESC(rx_prefetch,
+ 		 "prefetch the next received frame's headers, skb_shared_info and struct page while a frame is processed (default N)");
+ 
++/*
++ * A frame that GRO merges into a held aggregate gives up its buffer to the
++ * aggregate's frags[], and the skb built around it is freed at once: for
++ * nearly every frame of a bulk TCP flow, an skb is allocated, cleared and
++ * freed for nothing.  With this set, the poll hands GRO each frame's
++ * buffers as page fragments of the NAPI context's reusable skb
++ * (napi_get_frags() and napi_gro_frags()), and only a frame that starts an
++ * aggregate or is passed up keeps it.  A frame with a VLAN to strip or
++ * with NIS (IPsec, PSP) metadata takes the built skb as before.
++ */
++static bool rx_gro_frags;
++module_param(rx_gro_frags, bool, 0644);
++MODULE_PARM_DESC(rx_gro_frags,
++		 "hand GRO each received frame's buffers as page fragments rather than an skb built around them (default N)");
++
+ static bool rx_port_stats;
+ module_param(rx_port_stats, bool, 0644);
+ MODULE_PARM_DESC(rx_port_stats,
+@@ -1054,8 +1069,86 @@
+ 	prefetch(next->page);
+ 	va = page_address(next->page) + next->offset;
+ 	net_prefetch(va + xeu_rx_headroom());
+-	prefetchw(va + xeu_rx_buf_size() -
+-		  SKB_DATA_ALIGN(sizeof(struct skb_shared_info)));
++	if (!READ_ONCE(rx_gro_frags))
++		prefetchw(va + xeu_rx_buf_size() -
++			  SKB_DATA_ALIGN(sizeof(struct skb_shared_info)));
++}
++
++/*
++ * Hand GRO one frame as page fragments of the NAPI context's skb.  The
++ * frame's descriptors become the skb's frags; GRO pulls the headers it
++ * needs from the first.  Returns false if the frame was dropped.
++ */
++static bool xeu_rx_gro_frags(struct napi_struct *napi, struct xeu_ring *ring,
++			     struct rx_pp_cr_rx_desc *rx_cp, u16 desc_index,
++			     u8 num_desc, u16 error_status)
++{
++	struct xeu_rx_ring *rxr = container_of(ring, struct xeu_rx_ring, base);
++	struct net_device *net_dev = (struct net_device *)ring->dev;
++	struct xeu_dev *priv = netdev_priv(net_dev);
++	struct xeu_sw_rx_desc *sw_rx_desc;
++	u16 sub_idx = desc_index, hw_pkt_format;
++	u32 total_len, frag_len;
++	struct sk_buff *skb;
++	u8 i;
++
++	skb = napi_get_frags(napi);
++	if (unlikely(!skb)) {
++		xeu_rx_sub_unmap_and_free(rxr, desc_index, num_desc);
++		xeu_inc_stat_counter(&rxr->stats_rx.sw_dropped, &rxr->stats_rx_sync);
++		return false;
++	}
++
++	total_len = READ_ONCE(rx_cp->cmn.base.len) & RX_CR_LEN_MASK;
++	for (i = 0; i < num_desc; i++) {
++		sw_rx_desc = &ring->rx_sw[sub_idx];
++		frag_len = min_t(u32, total_len, xeu_rx_data_size());
++		skb_add_rx_frag(skb, i, sw_rx_desc->page,
++				sw_rx_desc->offset + xeu_rx_headroom(),
++				frag_len, xeu_rx_buf_size());
++		total_len -= frag_len;
++		sub_idx = (sub_idx + 1) & ring->mask;
++	}
++	skb_mark_for_recycle(skb);
++
++	if (likely(net_dev->features & NETIF_F_RXCSUM)) {
++		if (unlikely(error_status & PP_CC_ERR_MASK_IPV4_0_CSUM)) {
++			xeu_inc_stat_counter(&rxr->stats_rx.l3_csum_errors,
++					     &rxr->stats_rx_sync);
++		} else if (unlikely((error_status & PP_CC_ERR_MASK_TCP_0_CSUM) ||
++				    (error_status & PP_CC_ERR_MASK_UDP_0_CSUM))) {
++			xeu_inc_stat_counter(&rxr->stats_rx.l4_csum_errors,
++					     &rxr->stats_rx_sync);
++		} else {
++			skb->ip_summed = CHECKSUM_UNNECESSARY;
++			xeu_inc_stat_counter(&rxr->stats_rx.hw_csum_good,
++					     &rxr->stats_rx_sync);
++		}
++	}
++
++	/* The NAPI context's skb is reused: its last frame's hash goes */
++	skb_clear_hash(skb);
++	hw_pkt_format = (rx_cp->pre_hdr_prof_format_len_l0_l2 >> RX_CR_IN_PKT_FORMAT_SHIFT) &
++			RX_CR_IN_PKT_FORMAT_MASK;
++	if (likely(net_dev->features & NETIF_F_RXHASH)) {
++		switch (priv->hw_to_xsl_ptype[hw_pkt_format]) {
++		case XSL_PTYPE_IPV4:
++		case XSL_PTYPE_IPV6:
++			skb_set_hash(skb, rx_cp->flow_hash, PKT_HASH_TYPE_L3);
++			break;
++		case XSL_PTYPE_IPV4_TCP:
++		case XSL_PTYPE_IPV4_UDP:
++		case XSL_PTYPE_IPV6_TCP:
++		case XSL_PTYPE_IPV6_UDP:
++			skb_set_hash(skb, rx_cp->flow_hash, PKT_HASH_TYPE_L4);
++			break;
++		default:
++			break;
++		}
++	}
++
++	napi_gro_frags(napi);
++	return true;
+ }
+ 
+ static int xeu_rx_poll(struct napi_struct *napi, int budget)
+@@ -1118,6 +1211,14 @@
+ 			xeu_rx_prefetch_next(ring, num_desc);
+ 		}
+ 
++		if (READ_ONCE(rx_gro_frags) && !expected_vlan_id &&
++		    !(rx_cp->trans_type_flags_port_tc & RX_CR_IN_NIS_EN)) {
++			if (xeu_rx_gro_frags(napi, ring, rx_cp, desc_index,
++					     num_desc, error_status))
++				work_done++;
++			goto update_index;
++		}
++
+ 		sub_idx = desc_index;
+ 		sw_rx_desc = &ring->rx_sw[sub_idx];
+ 
