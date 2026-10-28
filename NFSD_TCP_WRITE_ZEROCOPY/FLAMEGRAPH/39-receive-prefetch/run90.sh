@@ -65,7 +65,7 @@ echo 0 > $P/svc_tcp_rx_diag_rcv; echo 0 > $P/svc_tcp_rx_rcv_ahead
 [ $rc = 0 ] || die "$t: $(grep -E 'BAD|FAILED|no answer|refuse|not free' $O/$t.log | head -3)"
 [ "$(dmesg | grep -c 'WARNING:')" = $W0 ] || say "a new WARNING in dmesg: $(dmesg | grep -A3 'WARNING:' | tail -4)"
 say "$t | $(grep '^total' $O/$t.log) | $(grep -c 'no drive stepped down' $O/$t.log) no-step | $(grep -c 'placed [0-9]* flows' $O/$t/geometry.txt) placed | $(cat $O/look.when)"
-for f in $O/lat-*-d1.txt; do say "$(basename $f .txt): $(head -1 $f) | $(grep '^WRITEs' $f) | $(grep '^section' $f | awk '{printf "section %.0f ns mean", $5 / $3}')"; done
+for f in $O/lat-*-d1.txt; do say "$(basename $f .txt): $(head -1 $f) | $(grep '^WRITEs' $f) | $(grep '^section n' $f | awk '{printf "section %.0f ns mean", $5 / $3}')"; done
 swap $L/t2-r39-tip || die "the tip's sunrpc not in place"
 [ "$(cat /sys/module/sunrpc/srcversion)" = $KT ] || die "sunrpc is $(cat /sys/module/sunrpc/srcversion), not $KT"
 say "end: sunrpc $(cat /sys/module/sunrpc/srcversion), $(tail -1 $O/apply-swap-t2-r39-tip.txt); DONE"
