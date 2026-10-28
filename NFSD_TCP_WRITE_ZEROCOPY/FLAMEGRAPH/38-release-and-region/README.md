@@ -157,3 +157,9 @@ The run went at 40.48 GB/s, with no drive stepping down and no WARNING. Readouts
 - **An L2 prefetch alone misses as prefetchw does,** whether for writing or for reading. An L2 hit would take well under 64 ns, so those misses are prefetches dropped at the L2 too.
 - **Untimed, two stages took 290.0k nfsd cycles a WRITE, against 293.3k and 294.0k for the tip's:** about 3.6k cycles, or roughly 1.2 µs, a WRITE less. That is one window against two, which agreed to 0.7k. The L2 prefetch alone also measured 290.1k with no fewer timed misses, and prefetching twice measured 293.1k. One window each is not enough for a decision: an A/B of two stages against the tip's, with several untimed pairs, is what would say whether it is kept. A prefetch holds no page, so the region's peak should not move, but the A/B reports it.
 - **The short window again:** the untimed one at 4 counted 1,439 WRITEs and 4.5G cycles where the others counted about 79,000 and 23G. The stamps show it lasted its full 2.04 s, and the drives wrote 39.7 to 40.9 GB/s every second of the run. So nfsd's CPUs did a fifth of their work for those 2 s while the drives' writes did not fall. It has come about 10 to 13 s after the look began in each of r84, r85 and r86, about 30 s into the writes.
+
+## 7. The A/B of two stages (r87, to run)
+
+[The A/B's sunrpc](sunrpc-ab-release-two-stage.patch) (`C45C8709B1251E6570577DF`, built in `/var/tmp/zc-run-logs/t2-r38-two`) is the tip's with `svc_tcp_rx_rel_two_stage`. With it set, the release also prefetches each page into the L2 two batches ahead (PSTL2KEEP), with prefetchw a batch ahead as the tip does. It carries no timing and nothing else of the diagnostics.
+
+[run87.sh](run87.sh), as `run82.sh`: four untraced loan64 runs a side, A B A B A B A B, with A at N (the tip's) and B at Y. `cost.sh` gives each run's ring and nfsd cycles a WRITE, and each run reports the region's peak. A prefetch holds no page, so the peak should not move.
