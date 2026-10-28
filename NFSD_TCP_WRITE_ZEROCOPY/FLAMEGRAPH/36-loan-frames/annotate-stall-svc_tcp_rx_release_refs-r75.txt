@@ -1,0 +1,325 @@
+ Percent |	Source code & Disassembly of sunrpc.ko for stall_backend_mem (565 samples, percent: local period)
+-----------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3     Disassembly of section .text:
+         :
+         : 5     0000000000038768 <svc_tcp_rx_release_refs>:
+         : 6     *nr = 0;
+         : 7     }
+         : 8     }
+         :
+         : 10    VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+         : 11    {
+    0.18 :   38768:  nop
+    0.00 :   3876c:  nop
+    0.00 :   38770:  paciasp
+    0.00 :   38774:  sub     sp, sp, #0xe0
+    0.00 :   38778:  mrs     x1, sp_el0
+         : 17    netmem_ref batch[SVC_TCP_RX_PUT_BATCH];
+    0.00 :   3877c:  mov     x2, #0x80                       // #128
+         : 19    {
+    0.00 :   38780:  stp     x29, x30, [sp, #144]
+    0.00 :   38784:  add     x29, sp, #0x90
+    0.00 :   38788:  stp     x21, x22, [sp, #176]
+    0.00 :   3878c:  mov     x21, x0
+    0.00 :   38790:  ldr     x0, [x1, #80]
+    0.00 :   38794:  str     x0, [sp, #136]
+    0.00 :   38798:  mov     x0, #0x0                        // #0
+         : 27    netmem_ref batch[SVC_TCP_RX_PUT_BATCH];
+    0.00 :   3879c:  mov     w1, #0x0                        // #0
+    0.00 :   387a0:  add     x0, sp, #0x8
+    0.00 :   387a4:  bl      0 <memset>
+         : 31    long run_refs = 0;
+         :
+         : 33    /* page_pool_put_netmem_bulk() does not check its array's bound. */
+         : 34    BUILD_BUG_ON(SVC_TCP_RX_PUT_BATCH > XDP_BULK_QUEUE_SIZE);
+         :
+         : 36    if (WARN_ON_ONCE(!svc_tcp_rx_refs_valid(state))) {
+    0.00 :   387a8:  mov     x0, x21
+         : 38    unsigned int index, nr = 0;
+    0.00 :   387ac:  str     wzr, [sp, #4]
+         : 40    if (WARN_ON_ONCE(!svc_tcp_rx_refs_valid(state))) {
+    0.00 :   387b0:  bl      35250 <svc_tcp_rx_refs_valid>
+    0.00 :   387b4:  tbz     w0, #0, 38a08 <svc_tcp_rx_release_refs+0x2a0>
+         : 43    * the record was written out, and is read and written again to drop
+         : 44    * its references.  Fetch each a batch of entries ahead of its drop,
+         : 45    * so that a batch's misses are in flight together and not taken one
+         : 46    * page after another.
+         : 47    */
+         : 48    for (index = 0; index < min(state->count, SVC_TCP_RX_PUT_BATCH);
+    0.00 :   387b8:  stp     x19, x20, [sp, #160]
+    0.00 :   387bc:  mov     w2, #0x10                       // #16
+    0.00 :   387c0:  ldr     w4, [x21, #44]
+    0.00 :   387c4:  cmp     w4, w2
+    0.00 :   387c8:  csel    w2, w4, w2, ls  // ls = plast
+    0.00 :   387cc:  cbz     w4, 38924 <svc_tcp_rx_release_refs+0x1bc>
+    0.00 :   387d0:  stp     x23, x24, [sp, #192]
+         : 56    index++)
+         : 57    prefetchw(state->bvec[index].bv_page);
+    0.00 :   387d4:  mov     x1, #0x0                        // #0
+    0.00 :   387d8:  stp     x25, x26, [sp, #208]
+    0.00 :   387dc:  ldr     x3, [x21]
+    0.00 :   387e0:  ubfiz   x0, x1, #4, #32
+         : 62    }
+         :
+         : 64    #define ARCH_HAS_PREFETCHW
+         : 65    static inline void prefetchw(const void *ptr)
+         : 66    {
+         : 67    asm volatile("prfm pstl1keep, %a0\n" : : "p" (ptr));
+    0.00 :   387e4:  ldr     x0, [x3, x0]
+    0.00 :   387e8:  prfm    pstl1keep, [x0]
+         : 70    for (index = 0; index < min(state->count, SVC_TCP_RX_PUT_BATCH);
+    0.00 :   387ec:  add     x1, x1, #0x1
+    0.00 :   387f0:  cmp     w2, w1
+    0.00 :   387f4:  b.hi    387e0 <svc_tcp_rx_release_refs+0x78>  // b.pmore
+    0.00 :   387f8:  mov     x22, #0x0                       // #0
+         : 75    long run_refs = 0;
+    0.00 :   387fc:  mov     x25, #0x0                       // #0
+         : 77    netmem_ref run = 0;
+    0.53 :   38800:  mov     x24, #0x0                       // #0
+         : 79    }
+         :
+         : 81    static __always_inline void
+         : 82    generic___clear_bit(unsigned long nr, volatile unsigned long *addr)
+         : 83    {
+         : 84    unsigned long mask = BIT_MASK(nr);
+    0.00 :   38804:  mov     x23, #0x1                       // #1
+    0.00 :   38808:  b       38864 <svc_tcp_rx_release_refs+0xfc>
+         : 87    struct page *page = state->bvec[index].bv_page;
+         : 88    netmem_ref netmem;
+         :
+         : 90    netmem = netmem_compound_head(page_to_netmem(page));
+         : 91    if (run_refs && netmem == run) {
+         : 92    run_refs++;
+    3.54 :   3880c:  add     x25, x25, #0x1
+         : 94    unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.71 :   38810:  ldr     x2, [x21, #8]
+         : 96    unsigned long mask = BIT_MASK(nr);
+    0.00 :   38814:  lsl     x1, x23, x20
+         :
+         : 99    *p &= ~mask;
+    1.77 :   38818:  ldr     x0, [x2, x19]
+    0.18 :   3881c:  bic     x0, x0, x1
+    1.24 :   38820:  str     x0, [x2, x19]
+         : 103   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    1.24 :   38824:  ldr     x2, [x21, #16]
+         : 105   *p &= ~mask;
+    0.71 :   38828:  ldr     x0, [x2, x19]
+    0.35 :   3882c:  bic     x0, x0, x1
+    1.06 :   38830:  str     x0, [x2, x19]
+         : 109   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.88 :   38834:  ldr     x0, [x21, #24]
+         : 111   *p &= ~mask;
+    0.53 :   38838:  ldr     x2, [x0, x19]
+    0.18 :   3883c:  bic     x1, x2, x1
+    2.83 :   38840:  str     x1, [x0, x19]
+         : 115   }
+         : 116   __clear_bit(index, state->borrowed);
+         : 117   __clear_bit(index, state->page_pool);
+         : 118   __clear_bit(index, state->merged);
+         : 119   state->refs_released++;
+         : 120   state->borrowed_count--;
+    0.18 :   38844:  ldp     w0, w1, [x21, #76]
+    1.06 :   38848:  ldr     w4, [x21, #44]
+         : 123   state->refs_released++;
+    0.00 :   3884c:  add     w0, w0, #0x1
+         : 125   state->borrowed_count--;
+    0.00 :   38850:  sub     w1, w1, #0x1
+         : 127   state->refs_released++;
+    0.18 :   38854:  stp     w0, w1, [x21, #76]
+         : 129   for (index = 0; index < state->count; index++) {
+    0.53 :   38858:  add     x22, x22, #0x1
+    0.71 :   3885c:  cmp     w4, w22
+    0.18 :   38860:  b.ls    388fc <svc_tcp_rx_release_refs+0x194>  // b.plast
+         : 133   if (index + SVC_TCP_RX_PUT_BATCH < state->count)
+    1.77 :   38864:  add     w0, w22, #0x10
+    0.18 :   38868:  mov     w5, w22
+    0.71 :   3886c:  cmp     w0, w4
+    0.00 :   38870:  b.cs    38884 <svc_tcp_rx_release_refs+0x11c>  // b.hs, b.nlast
+         : 138   SVC_TCP_RX_PUT_BATCH].bv_page);
+    0.18 :   38874:  ldr     x1, [x21]
+         : 140   prefetchw(state->bvec[index +
+    0.00 :   38878:  ubfiz   x0, x0, #4, #32
+    0.53 :   3887c:  ldr     x0, [x1, x0]
+    4.25 :   38880:  prfm    pstl1keep, [x0]
+         : 144   /*
+         : 145   * Unlike the bitops with the '__' prefix above, this one *is* atomic,
+         : 146   * so `volatile` must always stay here with no cast-aways. See
+         : 147   * `Documentation/atomic_bitops.txt` for the details.
+         : 148   */
+         : 149   return 1UL & (addr[BIT_WORD(nr)] >> (nr & (BITS_PER_LONG-1)));
+    1.06 :   38884:  ubfx    x19, x22, #6, #32
+    7.96 :   38888:  and     w20, w5, #0x3f
+    0.35 :   3888c:  ldr     x0, [x21, #8]
+    0.00 :   38890:  lsl     x19, x19, #3
+    0.18 :   38894:  ldr     x1, [x0, x19]
+    0.18 :   38898:  lsr     x1, x1, x5
+         : 156   if (!test_bit(index, state->borrowed))
+    1.59 :   3889c:  tbz     w1, #0, 38858 <svc_tcp_rx_release_refs+0xf0>
+    2.30 :   388a0:  ldr     x1, [x21, #16]
+         : 159   struct page *page = state->bvec[index].bv_page;
+    0.18 :   388a4:  lsl     x0, x22, #4
+    0.35 :   388a8:  ldr     x2, [x21]
+    0.35 :   388ac:  ldr     x1, [x1, x19]
+    1.42 :   388b0:  ldr     x0, [x2, x0]
+    0.00 :   388b4:  lsr     x1, x1, x20
+         : 165   if (IS_ENABLED(CONFIG_PAGE_POOL) &&
+    0.88 :   388b8:  tbz     w1, #0, 388f0 <svc_tcp_rx_release_refs+0x188>
+         : 167   netmem = netmem_compound_head(page_to_netmem(page));
+    1.24 :   388bc:  mov     x26, x0
+         : 169   }
+         :
+         : 171   static inline netmem_ref netmem_compound_head(netmem_ref netmem)
+         : 172   {
+         : 173   /* niov are never compounded */
+         : 174   if (netmem_is_net_iov(netmem))
+    0.35 :   388c0:  tbnz    w0, #0, 388d4 <svc_tcp_rx_release_refs+0x16c>
+         : 176   return is_power_of_2(sizeof(struct page));
+         : 177   }
+         :
+         : 179   static __always_inline unsigned long _compound_head(const struct page *page)
+         : 180   {
+         : 181   unsigned long info = READ_ONCE(page->compound_info);
+    0.88 :   388c4:  ldr     x1, [x0, #8]
+         : 183   unsigned long mask;
+         :
+         : 185   if (!compound_info_has_mask()) {
+         : 186   /* Bit 0 encodes PageTail() */
+         : 187   if (info & 1)
+         : 188   return info - 1;
+   12.04 :   388c8:  sub     x26, x1, #0x1
+   28.50 :   388cc:  tst     x1, #0x1
+    0.53 :   388d0:  csel    x26, x26, x0, ne        // ne = any
+         : 192   if (run_refs && netmem == run) {
+    0.18 :   388d4:  cmp     x25, #0x0
+    0.35 :   388d8:  ccmp    x24, x26, #0x0, ne      // ne = any
+    0.00 :   388dc:  b.eq    3880c <svc_tcp_rx_release_refs+0xa4>  // b.none
+         : 196   if (run_refs)
+    6.55 :   388e0:  cbnz    x25, 3897c <svc_tcp_rx_release_refs+0x214>
+         : 198   run = netmem;
+    0.00 :   388e4:  mov     x24, x26
+         : 200   run_refs = 1;
+    0.00 :   388e8:  mov     x25, #0x1                       // #1
+    0.18 :   388ec:  b       38810 <svc_tcp_rx_release_refs+0xa8>
+         : 203   svc_tcp_rx_put_borrowed(state->bvec[index].bv_page,
+    0.00 :   388f0:  mov     w1, #0x0                        // #0
+    0.00 :   388f4:  bl      38278 <svc_tcp_rx_put_borrowed>
+         : 206   __clear_bit(index, state->borrowed);
+    0.00 :   388f8:  b       38810 <svc_tcp_rx_release_refs+0xa8>
+         : 208   }
+         : 209   if (run_refs)
+    0.00 :   388fc:  cbz     x25, 38914 <svc_tcp_rx_release_refs+0x1ac>
+         : 211   svc_tcp_rx_put_run(batch, &nr, run, run_refs);
+    0.18 :   38900:  mov     x3, x25
+    0.00 :   38904:  mov     x2, x24
+    0.00 :   38908:  add     x1, sp, #0x4
+    0.00 :   3890c:  add     x0, sp, #0x8
+    0.00 :   38910:  bl      36470 <svc_tcp_rx_put_run>
+         : 217   if (nr)
+    0.00 :   38914:  ldr     w1, [sp, #4]
+    0.00 :   38918:  cbnz    w1, 389f4 <svc_tcp_rx_release_refs+0x28c>
+    0.00 :   3891c:  ldp     x23, x24, [sp, #192]
+    0.00 :   38920:  ldp     x25, x26, [sp, #208]
+         : 222   page_pool_put_netmem_bulk(batch, nr);
+         : 223   state->terminal = true;
+    0.18 :   38924:  mov     w1, #0x1                        // #1
+         : 225   if (WARN_ON_ONCE(state->borrowed_count ||
+    0.00 :   38928:  ldr     w0, [x21, #80]
+         : 227   state->terminal = true;
+    0.00 :   3892c:  strb    w1, [x21, #98]
+         : 229   if (WARN_ON_ONCE(state->borrowed_count ||
+    0.00 :   38930:  cbnz    w0, 389dc <svc_tcp_rx_release_refs+0x274>
+    0.00 :   38934:  ldr     w1, [x21, #44]
+    0.00 :   38938:  cbnz    w1, 38994 <svc_tcp_rx_release_refs+0x22c>
+    0.00 :   3893c:  ldp     w0, w1, [x21, #72]
+    0.00 :   38940:  cmp     w1, w0
+    0.00 :   38944:  b.ne    389dc <svc_tcp_rx_release_refs+0x274>  // b.any
+    0.00 :   38948:  ldp     x19, x20, [sp, #160]
+         : 237   !bitmap_empty(state->merged, state->count))) ||
+         : 238   state->refs_released != state->refs_acquired)) {
+         : 239   svc_tcp_rx_credit_orphan(state);
+         : 240   return -EINVAL;
+         : 241   }
+         : 242   return 0;
+    0.00 :   3894c:  mov     w0, #0x0                        // #0
+         : 244   }
+    0.00 :   38950:  mrs     x1, sp_el0
+    0.00 :   38954:  ldr     x3, [sp, #136]
+    0.00 :   38958:  ldr     x2, [x1, #80]
+    0.00 :   3895c:  subs    x3, x3, x2
+    0.00 :   38960:  mov     x2, #0x0                        // #0
+    0.00 :   38964:  b.ne    38a1c <svc_tcp_rx_release_refs+0x2b4>  // b.any
+    0.00 :   38968:  ldp     x29, x30, [sp, #144]
+    0.00 :   3896c:  ldp     x21, x22, [sp, #176]
+    0.00 :   38970:  add     sp, sp, #0xe0
+    0.00 :   38974:  autiasp
+    0.00 :   38978:  ret
+         : 256   svc_tcp_rx_put_run(batch, &nr, run,
+    1.06 :   3897c:  mov     x3, x25
+    1.24 :   38980:  mov     x2, x24
+    0.18 :   38984:  add     x1, sp, #0x4
+    0.18 :   38988:  add     x0, sp, #0x8
+    0.35 :   3898c:  bl      36470 <svc_tcp_rx_put_run>
+         : 262   __clear_bit(index, state->borrowed);
+    2.48 :   38990:  b       388e4 <svc_tcp_rx_release_refs+0x17c>
+         : 264   unsigned long val = *addr & GENMASK(size - 1, 0);
+         :
+         : 266   return val ? __ffs(val) : size;
+         : 267   }
+         :
+         : 269   return _find_first_bit(addr, size);
+    0.00 :   38994:  ldr     x0, [x21, #8]
+         : 271   bool bitmap_empty(const unsigned long *src, unsigned nbits)
+         : 272   {
+         : 273   if (small_const_nbits(nbits))
+         : 274   return ! (*src & BITMAP_LAST_WORD_MASK(nbits));
+         :
+         : 276   return find_first_bit(src, nbits) == nbits;
+    0.00 :   38998:  mov     w19, w1
+    0.00 :   3899c:  mov     x1, x19
+    0.00 :   389a0:  bl      0 <_find_first_bit>
+         : 280   if (WARN_ON_ONCE(state->borrowed_count ||
+    0.00 :   389a4:  cmp     x19, x0
+    0.00 :   389a8:  b.ne    389dc <svc_tcp_rx_release_refs+0x274>  // b.any
+    0.00 :   389ac:  ldr     x0, [x21, #16]
+    0.00 :   389b0:  ldr     w19, [x21, #44]
+    0.00 :   389b4:  mov     x1, x19
+    0.00 :   389b8:  bl      0 <_find_first_bit>
+    0.00 :   389bc:  cmp     x19, x0
+    0.00 :   389c0:  b.ne    389dc <svc_tcp_rx_release_refs+0x274>  // b.any
+    0.00 :   389c4:  ldr     x0, [x21, #24]
+    0.00 :   389c8:  ldr     w19, [x21, #44]
+    0.00 :   389cc:  mov     x1, x19
+    0.00 :   389d0:  bl      0 <_find_first_bit>
+    0.00 :   389d4:  cmp     x19, x0
+    0.00 :   389d8:  b.eq    3893c <svc_tcp_rx_release_refs+0x1d4>  // b.none
+    0.00 :   389dc:  brk     #0x800
+         : 296   svc_tcp_rx_credit_orphan(state);
+    0.00 :   389e0:  mov     x0, x21
+    0.00 :   389e4:  bl      37730 <svc_tcp_rx_credit_orphan>
+         : 299   return -EINVAL;
+    0.00 :   389e8:  mov     w0, #0xffffffea                 // #-22
+         : 301   svc_tcp_rx_credit_orphan(state);
+    0.00 :   389ec:  ldp     x19, x20, [sp, #160]
+    0.00 :   389f0:  b       38950 <svc_tcp_rx_release_refs+0x1e8>
+         : 304   page_pool_put_netmem_bulk(batch, nr);
+    0.18 :   389f4:  add     x0, sp, #0x8
+    0.00 :   389f8:  bl      0 <page_pool_put_netmem_bulk>
+    0.00 :   389fc:  ldp     x23, x24, [sp, #192]
+    0.00 :   38a00:  ldp     x25, x26, [sp, #208]
+    0.00 :   38a04:  b       38924 <svc_tcp_rx_release_refs+0x1bc>
+         : 310   if (WARN_ON_ONCE(!svc_tcp_rx_refs_valid(state))) {
+    0.00 :   38a08:  brk     #0x800
+         : 312   svc_tcp_rx_credit_orphan(state);
+    0.00 :   38a0c:  mov     x0, x21
+    0.00 :   38a10:  bl      37730 <svc_tcp_rx_credit_orphan>
+         : 315   return -EINVAL;
+    0.00 :   38a14:  mov     w0, #0xffffffea                 // #-22
+    0.00 :   38a18:  b       38950 <svc_tcp_rx_release_refs+0x1e8>
+    0.00 :   38a1c:  stp     x19, x20, [sp, #160]
+    0.00 :   38a20:  stp     x23, x24, [sp, #192]
+    0.00 :   38a24:  stp     x25, x26, [sp, #208]
+         : 321   }
+    0.00 :   38a28:  bl      0 <__stack_chk_fail>

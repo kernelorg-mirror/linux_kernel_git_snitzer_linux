@@ -56,6 +56,7 @@ Each round is a directory here, numbered in order:
 | [33-cr-prefetch](33-cr-prefetch/README.md) | the current state | the completion entry, 31% of `xeu_rx_poll`'s L1 refills (round 30), for a prefetch several entries ahead | none: `napi:napi_poll` counted on port a's receive and transmit polls apart | **a look**: 94% of frames arrive in polls of 4 or more and 32% in polls at the budget, so inside a poll round 28's prefetch already has the next entry; what is left is about one miss a poll, where the card has not written the entry yet. Not built |
 | [34-ring-stall](34-ring-stall/README.md) | the current state | the rings' memory stall, located by sampled stall cycles and refills on the ring CPUs; then xeu cutting `rx_buf_size`'s 8 KiB buffers from whole pages it counts once, without `page_pool_alloc_frag()`'s drain atomic | none | the look: the drain's atomic on `pp_ref_count` is the largest single stall, 20% of the rings' memory stall. The A/B, four runs a side: rings −1.60 ± 1.63, −0.17 without a pair that flow placement put off, nfsd +0.93 ± 1.46, the region's peak the same. **Kept** (Mike): the step `rx_buf_size` below a page should take, with no parameter; round 35 traces where the drain's wait went and what in the rings comes after it |
 | [35-after-split](35-after-split/README.md) | the current state, xeu round 34's | where round 34's wait went, then the refill's loop: `xeu_rx_refill_lean()`, what does not change worked out once a refill, the ring's state in registers, each descriptor two eight-byte stores | r69 sampled; r70 to r72 diagnostic xeus timing the refill's loads, stores, the drain at its start and its loop | traced: the `dma_addr` load and the descriptor writes are near, nothing is inherited, the loop is 49 ns (98 cycles) a buffer. The A/B, counted (three pairs): ring cycles −2.7k a WRITE (−1.9%), instructions −6.9k, nfsd the same; the region's peak about +40 pages in five pairs of six. Also found: `cost.sh`'s µs are tick-sampled and read low. **Kept** (Mike), with no parameter: kmod-xsight 2.0.1-12 |
+| [36-loan-frames](36-loan-frames/README.md) | the current state, xeu round 35's | nfsd's loan frames: append 3.7k, borrow 3.2k, release 2.6k cycles a WRITE (sampled), 7.8% of nfsd with the walk and prefetch; then the borrow's page-pool test from one load, the append's coalesce and region tests with their cheap conditions first | r75 sampled; r77 a diagnostic sunrpc timing the struct page loads, with the knob's two sides sampled in one run | the A/B, counted (four pairs): nfsd instructions −2.75k ± 0.54 a WRITE, cycles −0.45k ± 0.77, the peak not raised. Traced: the borrow's struct page loads are L1 hits (31.8 ns, the floor), so the look's stall was a chain of near loads; the borrow's own cycles fall 0.86k and the time goes to idle, the drives being the limit; the release's loads miss (12% at 64 ns or more). **Kept** (Mike): `eae183aaaff3` |
 | [07-srv-qdisc](07-srv-qdisc/README.md) | round 05's state | half of each ACK and reply is `__dev_xmit_skb` | the server's qdisc `pfifo_fast` | not kept: no change (rings 66.9 against 66.1, latency inside L0's scatter); the cost is the transmit path's lock with 48 CPUs on 4 queues, not the qdisc |
 | [08-notrack-needed](08-notrack-needed/README.md) | round 05's state | the `zc_notrack` chains run with no conntrack to skip | `zc_notrack` only while a table registers conntrack, in settled.sh | kept: rings 67.6 to 65.1 us a loaned WRITE (-3.7%), nfsd 160.6 to 154.2; latency unchanged |
 | [09-big-tcp](09-big-tcp/README.md) | round 08's state | per-skb costs at about 20 GRO skbs a WRITE | BIG TCP: the server's `gro_max_size` and `gro_ipv4_max_size` 256 KB | not kept: no change (rings 63.3 against 63.4, latency the same); aggregates end at the client's 64 KB TSO bursts, so it needs the client's `gso_ipv4_max_size` too (Mike); the wake itself measured, 98.5% under 2 us |
@@ -78,13 +79,18 @@ decided.
    refill waits far and nothing is inherited; the loop is long. A lean
    refill loop, the rings 2.7k cycles a WRITE cheaper; kept
    ([35-after-split](35-after-split/README.md)).
-5. **nfsd's own loan frames.**
-   - append 2.4, borrow 2.1 and release 1.7 µs a WRITE (round 31's
-     profile).
-   - Round 31 found the append to be about 128 loads of 19 ns a WRITE,
-     not one stall, so this round looks at the three together.
+5. **Round 36: nfsd's own loan frames.** The borrow's and append's
+   checks with their cheap conditions first and one load of the page's
+   word: nfsd 2.75k instructions a WRITE fewer, the borrow 0.86k cycles
+   cheaper, the time going to idle at the drives' limit. The borrow's
+   struct page loads are L1 hits; the release's miss. Kept
+   ([36-loan-frames](36-loan-frames/README.md)).
+6. **The release's struct page misses:** 12% of its first touches of a
+   page at 64 ns or more despite round 24's prefetch a batch ahead, at
+   most about 2k cycles a WRITE; its prefetch distance and the order it
+   gives pages back in.
 
-## Where the kept rounds stand (2026-10-27)
+## Where the kept rounds stand (2026-10-28)
 
 What a loaned WRITE costs after each kept round, from that round's B
 runs (the profile where the A/B cannot resolve it):
@@ -112,6 +118,7 @@ runs (the profile where the A/B cannot resolve it):
 | 30 | 47.6 to 44.6 on the tip's sunrpc | 100.5 to 91.7 on the tip's sunrpc | `rodata=noalias` on the kernel's command line (settled.sh): the linear map in 32 MiB blocks, page-table walks 108 to 2 a WRITE on nfsd's CPUs and 61 to 0.3 on the rings |
 | 34 | 44.55 to 42.95, inside the spread (−0.17 without a pair put off) | | xeu (`DC23D10E104D370F14FB06E`, on 2.0.1-10): `rx_buf_size`'s buffers cut by the ring from whole pages counted once, no frag drain atomic |
 | 35 | 140.6k to 137.9k cycles a WRITE, counted (−1.9%; tick-sampled µs could not see it) | the same | xeu (`63631721F8B149913C0DC19`, 2.0.1-12): the refill's lean loop, its state in registers, each descriptor two eight-byte stores |
+| 36 | the same | 307.4k to 304.6k instructions a WRITE, counted; cycles 295.1k to 294.6k, inside the spread (the borrow 0.86k cheaper, the time to idle) | `eae183aaaff3`: the borrow's page-pool test from one load, the append's coalesce and region tests with their cheap conditions first |
 
 - **Since round 01:** the rings 92.6 to about 58 us a WRITE (-37%),
   and to about 50 on build 499 with the interrupt held off at the card
