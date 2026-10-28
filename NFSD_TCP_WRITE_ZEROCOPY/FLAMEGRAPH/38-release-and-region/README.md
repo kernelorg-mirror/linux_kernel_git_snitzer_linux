@@ -2,7 +2,7 @@
 
 **The plan (Mike, 28 October):** the release's struct page misses, which round 36 found (12% of its first touches at 64 ns or more despite round 24's prefetch a batch ahead), with the region count's two frames, `svc_tcp_rx_region_span` and `svc_tcp_rx_skb_region_pages_after`, which round 37's profile put close behind the release in nfsd's L3 misses.
 
-All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F0C341E86E266D5FDF2ADF`), xeu round 35's (`63631721F8B149913C0DC19`), the settled setting, one loan64 run a time on port a onto the four DPRP5s. The tip's sunrpc is `E80412A536ADD1E86B16F5A` (round 36's). Runs are in `/var/tmp/zc-run-logs/t2-r81/` to `t2-r83/`.
+All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F0C341E86E266D5FDF2ADF`), xeu round 35's (`63631721F8B149913C0DC19`), the settled setting, one loan64 run a time on port a onto the four DPRP5s. The tip's sunrpc is `E80412A536ADD1E86B16F5A` (round 36's). Runs are in `/var/tmp/zc-run-logs/t2-r81/` to `t2-r84/`.
 
 ## 1. The look (r81)
 
@@ -60,3 +60,27 @@ All runs are on tardis2, build 499 with `rodata=noalias`, nfsd the kernel's (`3F
 - **The CPU's own line** (`own`, 44 ns) is no floor here: it is touched once a release and leaves the cache between. Ordinals 1 to 7 are the floor, as round 36's 31.8 ns.
 
 **Not explained yet:** why the first pages are already in place with no lead, and why the deep ones miss with a batch's. A diagnostic that sets the release's prefetch distance (none, 16, 32, 64, all at the start) for each window of one run would separate the two: with no prefetch, whether the head still hits; with a longer distance, whether the deep misses fall.
+
+## 4. The release's prefetch distance (r84)
+
+[The diagnostic](sunrpc-diag-release-prefetch-distance.patch) (`DD3375A439B4C7975DD39F9`, not for keeping) is r83's timing by position, plus `svc_tcp_rx_rel_dist`, the release's prefetch distance in entries:
+- 0: no prefetch;
+- −1: every entry's page prefetched before the loop;
+- otherwise, that many entries ahead, with the first that many prefetched before the loop. The tip's distance is 16.
+
+[run84.sh](run84.sh) does one loan64 run at 40.46 GB/s, with no drive stepping down and no WARNING. For each distance in turn (16, 0, 32, 64, −1, then 16 again), it waits 1 s, takes 2 s of `perf stat` on nfsd's CPUs with the timing off ([stat-*-r84.txt](.)), then 2 s with the timing on ([lat-*-r84.txt](.)). The figures are each page's first load, by its place in the release: the mean, and in brackets the share at 64 ns or more.
+
+| distance | 0 | 1 to 7 | 8 to 15 | 16 to 31 | 32 to 63 | 64 on | excess over 31.6 ns a WRITE (timed) | nfsd cycles a WRITE (untimed) |
+|---|---|---|---|---|---|---|---|---|
+| 16 (the tip's) | 35.2 (3.0%) | 31.6 (0.2%) | 34.3 (2.9%) | 39.0 (7.8%) | 54.8 (22.5%) | 60.0 (27.8%) | 1.40 µs | 291.4k |
+| 0, none | 74.6 (48.7%) | 99.8 (66.1%) | 98.3 (64.0%) | 94.1 (59.9%) | 90.7 (56.1%) | 86.0 (52.6%) | 4.94 µs | 295.9k |
+| 32 | 34.6 (2.4%) | 32.0 (0.6%) | 38.1 (6.4%) | 45.2 (13.6%) | 51.1 (18.8%) | 60.4 (27.9%) | 1.42 µs | (lost, below) |
+| 64 | 33.9 (1.7%) | 32.1 (0.7%) | 39.7 (7.8%) | 79.6 (45.4%) | 50.1 (17.9%) | 57.2 (25.0%) | 1.90 µs | 292.7k |
+| all at the start | 35.7 (3.2%) | 32.1 (0.7%) | 39.3 (7.5%) | 79.2 (45.3%) | 77.3 (43.2%) | 75.7 (42.7%) | 3.08 µs | 295.9k |
+| 16 again | 35.4 (3.1%) | 31.6 (0.2%) | 34.4 (2.9%) | 39.1 (7.9%) | 55.1 (22.7%) | 60.2 (28.0%) | 1.42 µs | 290.8k |
+
+- **The tip's distance of 16 is the best of those tried.** 32 ties it on the timed figure. 64 and all-at-the-start are worse, and no prefetch is worst: about 4.5k nfsd cycles a WRITE untimed, and 3.5 µs timed. Nothing in the distance is worth building. The two windows at 16 agree to 0.6k cycles and to a few tenths of a ns.
+- **The head is not cached before the release.** With no prefetch, pages 1 to 7 miss two times in three. They hit at 16 because the prefetch issued just before the loop brings them in. One possibility: the timing's DSB LD before the first load may also wait for those prefetches, which would make the head's hits partly the timing's own doing. That is a question, not a finding.
+- **A burst of prefetches loses its later ones.** At 64 and all-at-the-start, the pages prefetched more than about 16 to 32 deep in the burst before the loop miss 43 to 45% of the time. That is worse than with a lead of 16 in the loop. More than that many prefetches at once are not all served.
+- **The deep misses are not a matter of lead.** At 16, each timed entry spends at least one full drained load, so 16 entries ahead is far more than a DRAM miss. Still, a quarter of the pages past the 32nd miss, and 32 or 64 ahead moves that by only a few points. For those pages the prefetch does not take effect, or the line is taken away again before its use. Which of the two is not known.
+- **The untimed window at 32 is lost.** It counted 7,616 WRITEs and 6.6G cycles in 2 s, about a tenth and a third of every other window's. The drives wrote 40.1 to 40.9 GB/s in every second of the run, and the timed window that followed counted 77,777 WRITEs. Neither figure is used.
