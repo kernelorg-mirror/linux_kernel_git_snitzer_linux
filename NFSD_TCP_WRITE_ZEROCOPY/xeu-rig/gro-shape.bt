@@ -1,0 +1,57 @@
+// gro-shape.bt: the shape of the rings' software GRO (FLAMEGRAPH round 41).
+// On the ring CPUs (0-7) only:
+//   @ret          dev_gro_receive()'s result for each frame: merged into a
+//                 held aggregate, held as a new one, or passed up alone
+//   @held_bucket  aggregates held in the frame's hash bucket when it comes
+//                 (what gro_list_prepare() walks), and @held_all in all 8
+//   @segs[where]  frames in each aggregate of more than one frame, at
+//                 tcp_gro_complete(), by where it was completed: in
+//                 dev_gro_receive() (a frame that ended it: PSH, the size
+//                 limit, or one that could not merge) or in __gro_flush()
+//                 (the poll's end); @end[where, PSH, size] the same by
+//                 whether the aggregate carries PSH and how near 64 KB it is
+//   @poll_frames  frames a call of xeu_rx_poll(), @poll_aggs aggregates of
+//                 more than one frame it completed
+// Run for 8 s.
+config = { max_map_keys = 65536 }
+
+kprobe:xeu_rx_poll /cpu < 8/ { @in_poll[cpu] = 1; @aggs[cpu] = 0; }
+kretprobe:xeu_rx_poll /cpu < 8 && @in_poll[cpu]/ {
+	@poll_frames = lhist((int64)retval, 0, 256, 8);
+	@poll_aggs = lhist(@aggs[cpu], 0, 64, 2);
+	@polls = count();
+	delete(@in_poll, cpu);
+}
+
+fentry:vmlinux:dev_gro_receive /cpu < 8/ {
+	$b = args.skb->hash & 7;
+	@held_bucket = lhist(args.gro->hash[$b].count, 0, 9, 1);
+	@held_all = lhist(args.gro->hash[0].count + args.gro->hash[1].count +
+			  args.gro->hash[2].count + args.gro->hash[3].count +
+			  args.gro->hash[4].count + args.gro->hash[5].count +
+			  args.gro->hash[6].count + args.gro->hash[7].count, 0, 33, 1);
+	@in_dgr[cpu] = 1;
+}
+fexit:vmlinux:dev_gro_receive /cpu < 8/ {
+	@ret[retval == 0 ? "merged" : (retval == 1 ? "merged, frame freed" :
+	     (retval == 2 ? "held, a new aggregate" : (retval == 3 ? "passed up alone" : "consumed")))] = count();
+	@frames = count();
+	delete(@in_dgr, cpu);
+}
+fentry:vmlinux:__gro_flush /cpu < 8/ { @in_flush[cpu] = 1; }
+fexit:vmlinux:__gro_flush /cpu < 8/ { delete(@in_flush, cpu); }
+
+fentry:vmlinux:tcp_gro_complete /cpu < 8/ {
+	$cb = (struct napi_gro_cb *)args.skb->cb;
+	$where = @in_dgr[cpu] ? "ended by a frame" : (@in_flush[cpu] ? "the poll's flush" : "elsewhere");
+	$th = args.skb->head + args.skb->transport_header;
+	$psh = (*(uint8 *)($th + 13) & 0x08) ? "PSH" : "no PSH";
+	$len = args.skb->len;
+	@segs[$where] = lhist($cb->count, 0, 18, 1);
+	@end[$where, $psh, $len > 57344 ? "over 56 KB" : "56 KB or less"] = count();
+	@aggregates = count();
+	@aggs[cpu] = @aggs[cpu] + 1;
+}
+tracepoint:nfsd:nfsd_write_start { @writes = count(); }
+interval:s:8 { exit(); }
+END { clear(@in_poll); clear(@aggs); clear(@in_dgr); clear(@in_flush); }
