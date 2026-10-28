@@ -1,0 +1,41 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 150K of event 'armv8_pmuv3_0/cycles/P'
+# Event count (approx.): 94222832289
+#
+# Overhead  Symbol                                                 IPC   [IPC Coverage]
+# ........  .....................................................  ....................
+#
+    28.01%  [k] default_idle_call                                  -      -            
+     7.39%  [k] finish_task_switch.isra.0                          -      -            
+     2.59%  [k] _raw_spin_unlock_irqrestore                        -      -            
+     1.65%  [k] _raw_spin_lock                                     -      -            
+     1.57%  [k] svc_tcp_rx_append_ref                              -      -            
+     1.37%  [k] svc_tcp_rx_borrow_segment                          -      -            
+     1.16%  [k] blk_map_iter_next                                  -      -            
+     1.14%  [k] svc_tcp_rx_release_refs                            -      -            
+     0.96%  [k] svc_tcp_rx_prefetch_pages                          -      -            
+     0.93%  [k] svc_tcp_rx_walk_skb                                -      -            
+     0.86%  [k] napi_pp_put_page                                   -      -            
+     0.75%  [k] xdr_buf_validate_page_mode                         -      -            
+     0.75%  [k] page_pool_put_netmem_bulk                          -      -            
+     0.71%  [k] svc_recv                                           -      -            
+     0.69%  [k] svc_tcp_recv_skb                                   -      -            
+     0.67%  [k] _raw_spin_unlock_irq                               -      -            
+     0.65%  [k] dma_direct_map_phys                                -      -            
+     0.63%  [k] __tcp_transmit_skb                                 -      -            
+     0.62%  [k] _raw_spin_lock_bh                                  -      -            
+     0.62%  [k] xdr_stream_subsegment                              -      -            
+     0.57%  [k] __dev_xmit_skb                                     -      -            
+     0.56%  [k] bio_split_io_at                                    -      -            
+     0.56%  [k] svc_tcp_restore_pages                              -      -            
+     0.55%  [k] svc_tcp_rx_region_span                             -      -            
+     0.55%  [k] percpu_counter_add_batch                           -      -            
+     0.55%  [k] svc_tcp_rx_refs_valid                              -      -            
+     0.51%  [k] svc_tcp_rx_skb_region_pages_after.part.0           -      -            
+#
+# (Tip: To trace calls using Processor Trace use perf record -e intel_pt// ... ; perf script --call-trace. Then use perf script --time A-B --insn-trace to look at region of interest.)
+#
