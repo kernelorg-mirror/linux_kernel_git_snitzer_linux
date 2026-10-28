@@ -185,6 +185,7 @@ cleanup() {
 	"$RIG/settled.sh" place $PORTS
 	sleep 2
 	"$RIG/settled.sh" audit rest > $OUT/audit-end.txt 2>&1 || { echo "the host is not at the settled setting after the run:"; grep -E 'BAD|FAILED' $OUT/audit-end.txt; }
+	puppet_resume	# the client's puppet agent on again, if this run turned it off
 }
 trap cleanup EXIT
 
@@ -309,6 +310,13 @@ J
 # takes"): what each has written from here to the end says whether the run
 # stayed inside it.
 wrote() { for p in $PORTS; do for fs in ${FS[$p]}; do b=$(basename $(findmnt -no SOURCE $fs)); awk -v d=$b '$3 == d {print d, $10}' /proc/diskstats; done; done; }
+# The client's puppet agent off for the run, and no load that would span one
+# of its runs: the placement job, the audit, the warm-up and the run, with
+# room (common.sh, clear_of_puppet).  A run that reads writes its files
+# first, which this does not count.
+echo "client's puppet agent: $(puppet_pause | head -1)" | tee -a geometry.txt
+PL=0; [ "${PLACE:-1}" != 0 ] && PL=36
+clear_of_puppet $(( PL + WARM + RUNTIME + 10 )) | tee -a geometry.txt
 wrote > wrote.0
 # Place every connection on a ring, as run-budget.sh's PLACE=1 does: a
 # short load of the same writers, each flow's hash and bytes read from the
