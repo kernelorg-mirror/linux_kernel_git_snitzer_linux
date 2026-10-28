@@ -3685,6 +3685,7 @@ static ssize_t nfsd_rtc_iocb_iter_write(struct file *file, struct kiocb *iocb,
 					struct iov_iter *iter, bool *frozen)
 {
 	struct super_block *sb = file_inode(file)->i_sb;
+	size_t count = iov_iter_count(iter);
 	ssize_t ret;
 
 	*frozen = false;
@@ -3706,7 +3707,8 @@ static ssize_t nfsd_rtc_iocb_iter_write(struct file *file, struct kiocb *iocb,
 	ret = file->f_op->write_iter(iocb, iter);
 	if (ret != -EIOCBQUEUED)
 		kiocb_end_write(iocb);
-	if (ret > 0)
+	/* Only a whole write is served; a miss's thread rerun notifies. */
+	if (ret == count)
 		fsnotify_modify(file);
 	return ret;
 }

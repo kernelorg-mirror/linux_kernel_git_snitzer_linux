@@ -38,6 +38,7 @@ struct nfsd_cacherep {
 				c_type,		/* status, buffer */
 				c_secure : 1;	/* req came from port < 1024 */
 	unsigned long		c_timestamp;
+	void			*c_prebuf;	/* rtc: reply buffer from lookup */
 	union {
 		struct kvec	u_vec;
 		__be32		u_status;
@@ -93,7 +94,9 @@ __wsum	nfsd_cache_csum(struct xdr_buf *buf, unsigned int start,
 			unsigned int remaining, __be32 *scratch);
 #endif
 #if IS_ENABLED(CONFIG_NFSD_RTC_KUNIT_TEST)
-extern bool nfsd_cache_kunit_no_mem;
+extern unsigned int nfsd_cache_kunit_no_mem;
+#define NFSD_CACHE_KUNIT_NO_ENTRY	1
+#define NFSD_CACHE_KUNIT_NO_REPLY	2
 struct nfsd_net *nfsd_cache_kunit_nn(struct net *net);
 #endif
 
