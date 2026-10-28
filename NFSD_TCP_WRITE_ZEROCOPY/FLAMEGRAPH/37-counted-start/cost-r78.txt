@@ -1,0 +1,4 @@
+r78-1-loan64-start ring 91.1 nfsd 176.2 us/W (38423 WRITEs/s) | ring 191.9k cycles 339.6k instructions, nfsd 477.5k cycles 451.3k instructions a WRITE
+r78-2-loan64-start ring 91.7 nfsd 182.4 us/W (38455 WRITEs/s) | ring 191.8k cycles 339.4k instructions, nfsd 479.6k cycles 449.3k instructions a WRITE
+r78-3-loan64-start ring 90.9 nfsd 181.0 us/W (38336 WRITEs/s) | ring 193.7k cycles 340.8k instructions, nfsd 484.1k cycles 455.3k instructions a WRITE
+r78-4-loan64-start ring 93.4 nfsd 181.9 us/W (38478 WRITEs/s) | ring 192.6k cycles 339.2k instructions, nfsd 484.2k cycles 454.7k instructions a WRITE
