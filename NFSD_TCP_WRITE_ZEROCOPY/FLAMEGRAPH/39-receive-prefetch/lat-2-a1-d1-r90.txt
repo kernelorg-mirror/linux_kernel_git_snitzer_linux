@@ -1,0 +1,14 @@
+sections 911719 pages 6743959 spans 0
+ord0 n 0 sum_ns 0 h 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+ord1 n 0 sum_ns 0 h 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+ord2 n 0 sum_ns 0 h 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+ord3 n 0 sum_ns 0 h 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+ord4-7 n 0 sum_ns 0 h 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+ord8-15 n 0 sum_ns 0 h 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+ord16+ n 0 sum_ns 0 h 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+pool_rx_region n 0 sum_ns 0 h 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+own n 0 sum_ns 0 h 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+unused n 0 sum_ns 0 h 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+section n 911719 sum_ns 565299336 h 0 0 0 0 0 0 942 37809 228999 627842 15066 625 372 54 10 0
+WRITEs in the window: 77577
+window from 1793218244.623579686 to 1793218246.635683393

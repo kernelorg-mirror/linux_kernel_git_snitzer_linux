@@ -1,0 +1,7 @@
+20:07:05 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc D09FD368FE300634356470E, nfsd 3F0C341E86E266D5FDF2ADF, xeu 63631721F8B149913C0DC19
+20:11:34 r90-look-loan64 | total 40.45 GB/s | 1 no-step | 1 placed | look from 20:10:34
+20:11:34 lat-1-a0-d1: sections 905208 pages 6688633 spans 0 | WRITEs in the window: 77113 | 
+20:11:34 lat-2-a1-d1: sections 911719 pages 6743959 spans 0 | WRITEs in the window: 77577 | 
+20:11:34 lat-3-a2-d1: sections 909328 pages 6726360 spans 0 | WRITEs in the window: 77409 | 
+20:11:34 lat-4-a0-d1: sections 912034 pages 6739131 spans 0 | WRITEs in the window: 77557 | 
+20:11:47 end: sunrpc DDE22984B5905541BB2CD35, settled.sh audit rest: the settled setting; DONE
