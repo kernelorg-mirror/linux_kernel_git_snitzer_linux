@@ -32,3 +32,22 @@ In round 37's profile (run80), the frames where nfsd's L3 read misses land, past
 3. **Then, by what step 2 and the profile show:** the pool's `rx_region` line, which every page's region test reads, and `pages_after`'s fragment reads.
 
 Every change that holds pages longer reports the region's peak beside its saving, and is not kept if the peak rises.
+
+## 2. The receive side's struct page loads (r90, to run)
+
+The fetch has no lead. In `svc_tcp_recv_skb()`, `svc_tcp_rx_prefetch_pages()` asks for every struct page of the skb's body and then `svc_tcp_rx_skb_region_pages_after()` reads the same pages at once, so the first page's miss has nothing ahead of it to hide in. The release's prefetch had a batch's lead. Here the question is first what the section costs and where, before whether a request is dropped.
+
+[The diagnostic](sunrpc-diag-receive-prefetch.patch) (`D09FD368FE300634356470E`, on the tip's `DDE22984B5905541BB2CD35`, not for keeping; only `sunrpc.ko` and `build.log` kept, in `/var/tmp/zc-run-logs/t2-r39-rcv`) has two knobs.
+
+`svc_tcp_rx_rcv_ahead` sets the fetch before the count:
+- 0: prefetchw of each page, the tip's;
+- 1: none;
+- 2: a load of each page's first word.
+
+`svc_tcp_rx_diag_rcv` sets the timing:
+- 1: the section, fetch and count together, timed whole with nothing drained inside it, with its pages and calls counted;
+- 2: as 1, and in `svc_tcp_rx_region_span()` each page's `pp_magic` load (by its place in the section: 1st, 2nd, 3rd, 4th, 5th to 8th, 9th to 16th, and on), its pool's `rx_region` load, and a line of the CPU's own as the floor, each drained before and after.
+
+A drain before a timed load waits out the fetches before it, outside the timing. So the section's time (1) is the yardstick, and the loads' (2) say where the time goes. The counts are a per-CPU allocation, as round 38's r85 learned.
+
+[run90.sh](run90.sh): one loan64 run. Its windows start 10 s into the timed load (`timed_load`, the first look to use it). For each fetch in turn (0, 1, 2, 0 again) it waits 1 s, takes 2 s of `perf stat` on nfsd's CPUs untimed, then 2 s at timing 1 and 2 s at timing 2. The tip's sunrpc goes back in at the end.

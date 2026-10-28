@@ -1,0 +1,298 @@
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index 5daaefa9cf1d..5fea73560cce 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -1407,6 +1407,205 @@ long svc_tcp_rx_budget_default_avail(void)
+ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_default_avail);
+ #endif
+ 
++/*
++ * DIAGNOSTIC (FLAMEGRAPH round 39, not for keeping): what the receive
++ * side's struct page loads cost, around the region count of a loaned
++ * record's skb (svc_tcp_rx_prefetch_pages() and then
++ * svc_tcp_rx_skb_region_pages_after(), back to back).
++ * svc_tcp_rx_rcv_ahead sets what is done before the count: 0 prefetchw of
++ * each page (the tip's), 1 nothing, 2 a load of each page's first word in
++ * place of the prefetch.  svc_tcp_rx_diag_rcv sets the timing, by the 1 GHz
++ * counter read after ISB:
++ *   1: the section, the fetch and the count together, with nothing drained
++ *      inside it (slot 10), and the pages and calls counted;
++ *   2: as 1, and in svc_tcp_rx_region_span() the load of each page's
++ *      pp_magic, drained (DSB LD) before and after, by the page's ordinal in
++ *      the section's count (slots 0 to 3 one each, 4 the 5th to 8th, 5 the
++ *      9th to 16th, 6 on), and the load of its pool's rx_region (slot 7),
++ *      and a line of the CPU's own (slot 8, the floor).  A drain before a
++ *      timed load waits out the fetches before it, out of the timing: the
++ *      section's time (1) is the yardstick, the loads' (2) say where.
++ * The counts are allocated per CPU at the first nonzero
++ * svc_tcp_rx_diag_rcv and freed when sunrpc is unloaded;
++ * svc_tcp_rx_rcv_lat prints them summed over CPUs, a write clears.
++ */
++#define SVC_TCP_RX_RCV_SLOTS	11
++static int svc_tcp_rx_diag_rcv __read_mostly;
++static int svc_tcp_rx_rcv_ahead __read_mostly;
++module_param(svc_tcp_rx_rcv_ahead, int, 0644);
++
++struct svc_tcp_rx_rcv_slot {
++	u64 n, sum, h[16];
++};
++
++struct svc_tcp_rx_rcv_lat {
++	struct svc_tcp_rx_rcv_slot s[SVC_TCP_RX_RCV_SLOTS];
++	u64 sections, pages, spans;
++	/* the section being counted, with this CPU's preemption off */
++	struct page *timed;
++	unsigned int ord;
++	unsigned long own __aligned(64);
++} __aligned(64);
++static struct svc_tcp_rx_rcv_lat __percpu *svc_tcp_rx_rcv_pcpu;
++
++static int svc_tcp_rx_diag_rcv_set(const char *val,
++				   const struct kernel_param *kp)
++{
++	struct svc_tcp_rx_rcv_lat __percpu *p;
++	int v, ret;
++
++	ret = kstrtoint(val, 0, &v);
++	if (ret)
++		return ret;
++	if (v && !svc_tcp_rx_rcv_pcpu) {
++		p = alloc_percpu(struct svc_tcp_rx_rcv_lat);
++		if (!p)
++			return -ENOMEM;
++		/* the counts are in place before a section can see v */
++		smp_store_release(&svc_tcp_rx_rcv_pcpu, p);
++	}
++	WRITE_ONCE(svc_tcp_rx_diag_rcv, v);
++	return 0;
++}
++
++static const struct kernel_param_ops svc_tcp_rx_diag_rcv_ops = {
++	.get = param_get_int,
++	.set = svc_tcp_rx_diag_rcv_set,
++};
++module_param_cb(svc_tcp_rx_diag_rcv, &svc_tcp_rx_diag_rcv_ops,
++		&svc_tcp_rx_diag_rcv, 0644);
++
++static __always_inline u64 svc_tcp_rx_rcv_t(void)
++{
++	isb();
++	return read_sysreg(cntvct_el0);
++}
++
++static __always_inline u64 svc_tcp_rx_rcv_time(const void *p)
++{
++	u64 t0;
++
++	dsb(ld);
++	t0 = svc_tcp_rx_rcv_t();
++	(void)READ_ONCE(*(const unsigned long *)p);
++	dsb(ld);
++	return svc_tcp_rx_rcv_t() - t0;
++}
++
++static void svc_tcp_rx_rcv_add(struct svc_tcp_rx_rcv_lat *l, int k, u64 ns)
++{
++	struct svc_tcp_rx_rcv_slot *s = &l->s[k];
++
++	s->n++;
++	s->sum += ns;
++	s->h[min_t(int, ilog2(ns | 1), 15)]++;
++}
++
++static int svc_tcp_rx_rcv_ordinal_slot(unsigned int ord)
++{
++	if (ord < 4)
++		return ord;
++	return ord < 8 ? 4 : ord < 16 ? 5 : 6;
++}
++
++/*
++ * The section's CPU counts while it runs (preemption is off for it), or
++ * NULL: only per-load timing (2) needs them inside the count.
++ */
++static DEFINE_PER_CPU(struct svc_tcp_rx_rcv_lat *, svc_tcp_rx_rcv_cur);
++
++/* In svc_tcp_rx_region_span(): time this page's loads, if asked. */
++static void svc_tcp_rx_rcv_span(struct page *page)
++{
++	struct svc_tcp_rx_rcv_lat *l = this_cpu_read(svc_tcp_rx_rcv_cur);
++	struct page_pool *pool;
++	u64 ns;
++
++	if (!l)
++		return;
++	l->spans++;
++	if (page == l->timed)
++		return;
++	l->timed = page;
++	ns = svc_tcp_rx_rcv_time(&page->pp_magic);
++	svc_tcp_rx_rcv_add(l, svc_tcp_rx_rcv_ordinal_slot(l->ord), ns);
++	if (!l->ord++)
++		svc_tcp_rx_rcv_add(l, 8, svc_tcp_rx_rcv_time(&l->own));
++	if (page_pool_page_is_pp(page)) {
++		pool = netmem_get_pp(page_to_netmem(page));
++		svc_tcp_rx_rcv_add(l, 7, svc_tcp_rx_rcv_time(&pool->rx_region));
++	}
++}
++
++static int svc_tcp_rx_rcv_lat_get(char *buf, const struct kernel_param *kp)
++{
++	static const char * const name[SVC_TCP_RX_RCV_SLOTS] = {
++		"ord0", "ord1", "ord2", "ord3", "ord4-7", "ord8-15", "ord16+",
++		"pool_rx_region", "own", "unused", "section" };
++	u64 sections = 0, pages = 0, spans = 0;
++	int cpu, k, b, len = 0;
++
++	if (!svc_tcp_rx_rcv_pcpu)
++		return sysfs_emit(buf, "off\n");
++	for_each_possible_cpu(cpu) {
++		struct svc_tcp_rx_rcv_lat *l =
++			per_cpu_ptr(svc_tcp_rx_rcv_pcpu, cpu);
++
++		sections += l->sections;
++		pages += l->pages;
++		spans += l->spans;
++	}
++	len += sysfs_emit_at(buf, len, "sections %llu pages %llu spans %llu\n",
++			     sections, pages, spans);
++	for (k = 0; k < SVC_TCP_RX_RCV_SLOTS; k++) {
++		struct svc_tcp_rx_rcv_slot t = {};
++
++		for_each_possible_cpu(cpu) {
++			struct svc_tcp_rx_rcv_slot *s =
++				&per_cpu_ptr(svc_tcp_rx_rcv_pcpu, cpu)->s[k];
++
++			t.n += s->n;
++			t.sum += s->sum;
++			for (b = 0; b < 16; b++)
++				t.h[b] += s->h[b];
++		}
++		len += sysfs_emit_at(buf, len, "%s n %llu sum_ns %llu h",
++				     name[k], t.n, t.sum);
++		for (b = 0; b < 16; b++)
++			len += sysfs_emit_at(buf, len, " %llu", t.h[b]);
++		len += sysfs_emit_at(buf, len, "\n");
++	}
++	return len;
++}
++
++static int svc_tcp_rx_rcv_lat_set(const char *val,
++				  const struct kernel_param *kp)
++{
++	int cpu;
++
++	if (!svc_tcp_rx_rcv_pcpu)
++		return 0;
++	for_each_possible_cpu(cpu) {
++		struct svc_tcp_rx_rcv_lat *l =
++			per_cpu_ptr(svc_tcp_rx_rcv_pcpu, cpu);
++
++		memset(l->s, 0, sizeof(l->s));
++		l->sections = l->pages = l->spans = 0;
++	}
++	return 0;
++}
++
++static const struct kernel_param_ops svc_tcp_rx_rcv_lat_ops = {
++	.get = svc_tcp_rx_rcv_lat_get,
++	.set = svc_tcp_rx_rcv_lat_set,
++};
++module_param_cb(svc_tcp_rx_rcv_lat, &svc_tcp_rx_rcv_lat_ops, NULL, 0644);
++
++static void svc_tcp_rx_rcv_free(void)
++{
++	free_percpu(svc_tcp_rx_rcv_pcpu);
++}
++
+ /*
+  * Region pages bytes [off, off + len) of @page add to a count whose last
+  * page was *@prev.  A receive page that holds several frames is handed over
+@@ -1419,6 +1618,7 @@ static u32 svc_tcp_rx_region_span(struct page *page, u32 off, u32 len,
+ 	u32 pages = DIV_ROUND_UP(offset_in_page(off) + len, PAGE_SIZE);
+ 	struct page *last = first + pages - 1;
+ 
++	svc_tcp_rx_rcv_span(page);
+ 	if (!page_pool_page_in_rx_region(page))
+ 		return 0;
+ 	if (first == *prev)
+@@ -1481,6 +1681,17 @@ static u32 svc_tcp_rx_skb_region_pages_after(const struct sk_buff *skb,
+  * fetched for writing the reference count's atomics then find the line
+  * here.
+  */
++/* svc_tcp_rx_prefetch_pages()'s fetch, as svc_tcp_rx_rcv_ahead says. */
++static __always_inline void svc_tcp_rx_rcv_fetch(struct page *page)
++{
++	int ahead = READ_ONCE(svc_tcp_rx_rcv_ahead);
++
++	if (ahead == 2)
++		(void)READ_ONCE(*(const unsigned long *)page);
++	else if (ahead != 1)
++		prefetchw(page);
++}
++
+ static void svc_tcp_rx_prefetch_pages(const struct sk_buff *skb, u32 base,
+ 				      u32 first, u32 last)
+ {
+@@ -1492,7 +1703,7 @@ static void svc_tcp_rx_prefetch_pages(const struct sk_buff *skb, u32 base,
+ 		return;
+ 	if (skb_headlen(skb)) {
+ 		if (max(first, cursor) < min(last, cursor + skb_headlen(skb)))
+-			prefetchw(virt_to_page(skb->data));
++			svc_tcp_rx_rcv_fetch(virt_to_page(skb->data));
+ 		cursor += skb_headlen(skb);
+ 	}
+ 	for (index = 0; index < skb_shinfo(skb)->nr_frags; index++) {
+@@ -1501,7 +1712,8 @@ static void svc_tcp_rx_prefetch_pages(const struct sk_buff *skb, u32 base,
+ 
+ 		if (page && max(first, cursor) <
+ 			    min(last, cursor + skb_frag_size(frag)))
+-			prefetchw(page + (skb_frag_off(frag) >> PAGE_SHIFT));
++			svc_tcp_rx_rcv_fetch(page +
++					     (skb_frag_off(frag) >> PAGE_SHIFT));
+ 		cursor += skb_frag_size(frag);
+ 	}
+ 	skb_walk_frags(skb, frag_skb) {
+@@ -4148,14 +4360,34 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
+ 		if (remaining && state->mode == SVC_TCP_RX_MIXED) {
+ 			struct page *prev = state->region_last;
+ 			struct svc_tcp_rx_budget *c = NULL;
++			struct svc_tcp_rx_rcv_lat __percpu *pcpu =
++				smp_load_acquire(&svc_tcp_rx_rcv_pcpu);
++			int diag = pcpu ? READ_ONCE(svc_tcp_rx_diag_rcv) : 0;
++			struct svc_tcp_rx_rcv_lat *l = NULL;
++			u64 t0 = 0;
+ 			u32 need;
+ 
++			if (diag) {
++				l = get_cpu_ptr(pcpu);
++				l->timed = NULL;
++				l->ord = 0;
++				if (diag == 2)
++					this_cpu_write(svc_tcp_rx_rcv_cur, l);
++				t0 = svc_tcp_rx_rcv_t();
++			}
+ 			svc_tcp_rx_prefetch_pages(skb, 0, body_offset,
+ 						  body_offset + remaining);
+ 			need = svc_tcp_rx_skb_region_pages_after(skb, 0,
+ 						body_offset,
+ 						body_offset + remaining,
+ 						&prev);
++			if (diag) {
++				svc_tcp_rx_rcv_add(l, 10, svc_tcp_rx_rcv_t() - t0);
++				l->sections++;
++				l->pages += need;
++				this_cpu_write(svc_tcp_rx_rcv_cur, NULL);
++				put_cpu_ptr(pcpu);
++			}
+ 
+ 			/* One lookup for the copy check and the admission. */
+ 			if (need && !state->credit_linked)
+@@ -4653,6 +4885,7 @@ void svc_cleanup_xprt_sock(void)
+ {
+ 	svc_unreg_xprt_class(&svc_tcp_class);
+ 	svc_unreg_xprt_class(&svc_udp_class);
++	svc_tcp_rx_rcv_free();
+ }
+ 
+ /*
