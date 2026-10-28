@@ -107,3 +107,21 @@ client_free() {
 	[ -z "$p" ] || { echo "the client is running load already: $p" >&2; return 1; }
 }
 has_retry_patch() { grep -q 'xeu_rx_refill_timer' /proc/kallsyms; }
+# timed_load <run dir> [seconds]: for a look beside a twoport.sh run, wait
+# for the run's timed load to start, which is when twoport.sh starts its
+# drives-sec.tsv (one older than the call is another run's), then the
+# seconds given (10 by default, the looks' warm-up).  A WRITE rate is no
+# sign of it: the placement job before it writes as fast, and a look that
+# waits for the rate starts about 13 s early (FLAMEGRAPH round 38, section
+# 8).  Fails after 10 minutes without it.
+timed_load() {
+	local t0 s; t0=$(date +%s)
+	for s in $(seq 600); do
+		if [ -e "$1/drives-sec.tsv" ] && [ "$(stat -c %Y "$1/drives-sec.tsv")" -ge $t0 ]; then
+			sleep ${2:-10}
+			return 0
+		fi
+		sleep 1
+	done
+	return 1
+}

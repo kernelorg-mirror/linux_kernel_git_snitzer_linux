@@ -184,4 +184,23 @@ The drives' per-second figures start with the timed load (`drvsample.py`), which
 
 **Earlier rounds:** the same trigger is in the looks of rounds 29 to 36 (`run56watch.sh` to `run77.sh`). r75 and r77, round 36's, also began 13 s before their timed loads, so their first windows were in the placement job too. Their counts a WRITE come from `cost.sh` over `twoport.sh`'s own window in the timed load and are not affected; only what their looks sampled is.
 
-**The fix:** a look should wait for the timed load itself, for its run's `drives-sec.tsv` to appear, and then its warm-up. This is to go into the next look's script and into `common.sh` once r87 is done, since `twoport.sh` reads `common.sh` at each run.
+**The fix:** `timed_load` in `xeu-rig/common.sh`, put in after r87 (`twoport.sh` reads `common.sh` at each run). It waits for the run's `drives-sec.tsv`, which `twoport.sh` starts with the timed load (one older than the call belongs to another run), then the warm-up, 10 s by default. A look calls `timed_load $O/$t` in place of the wait for a WRITE rate. The scripts of r81 and r83 to r86 are left as they ran.
+
+## 9. The second request, committed, and the A/B of its fallback (r88, to run)
+
+**"SUNRPC: Fetch a released page's struct page a second time"** (code, at the tip) has `svc_tcp_rx_release_refs()` ask for each struct page twice:
+- **With `CONFIG_ARM64`:** r86's and r87's two stages. A PSTL2KEEP two batches ahead (`SVC_TCP_RX_PREFETCH_AGAIN` 32), then the prefetchw a batch ahead finds the line in the L2.
+- **Without it:** the page is prefetched again with prefetchw 4 entries ahead, r86's "twice". There is no generic way to prefetch into the L2 only.
+
+`svc_tcp_rx_prefetch_again()` and `SVC_TCP_RX_PREFETCH_AGAIN` are the two branches' only difference, so the loop is the same for both. Both branches build without warnings on build 499's -devel; the one without `CONFIG_ARM64` was built by setting the `#ifdef` aside for the build. Its release issues four PRFM PSTL1KEEP, where the arm64 build's has two PSTL1KEEP and two PSTL2KEEP.
+
+[The A/B's sunrpc](sunrpc-ab-release-again.patch) (`84B04E2B2F2BC0495CE5C43`, on that tip) adds `svc_tcp_rx_rel_again`:
+- 0: none, prefetchw a batch ahead only, as before the commit;
+- 1: as built, on arm64 the two stages (the default);
+- 2: what the build without `CONFIG_ARM64` does, prefetchw again 4 ahead.
+
+It was built in `/dev/shm`, and only `sunrpc.ko` and `build.log` are kept, in `/var/tmp/zc-run-logs/t2-r38-again`: the root file system had filled (below).
+
+[run88.sh](run88.sh), as `run87.sh`: four untraced loan64 runs a side, A B A B A B A B, with A at 0 and B at 2. Its A is r87's A, so r87 (two stages) and r88 (twice) each measure against the same thing.
+
+**The root file system was full** (17 MB free of 60 GB) when the check build without `CONFIG_ARM64` was made, and failed for it. r87 had ended settled, with its logs whole. Nothing is growing. The space is mostly `/root/nvme0-backup-2026-10-17` (13 GB), the tree (6.9 GB) and `/var/tmp/zc-run-logs` (8.8 GB, of which `t2-tipkernel` is 1.8 GB). Only this round's own check builds were removed. An A/B run writes about 1.5 MB of logs.
