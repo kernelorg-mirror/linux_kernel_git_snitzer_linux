@@ -90,6 +90,20 @@ static void nvmet_bdev_ns_enable_integrity(struct nvmet_ns *ns)
 	}
 }
 
+/*
+ * Lent bvecs (nvmet_req_set_data_bvec()) go to a device with limits @lim
+ * as they are, so they need meet only what its queue does.  None on a
+ * zoned device, where a write is cut on its write granularity instead.
+ */
+static void nvmet_bdev_set_data_bvec(struct nvmet_ns *ns,
+		const struct queue_limits *lim)
+{
+	ns->data_bvec_ok = !(lim->features & BLK_FEAT_ZONED);
+	ns->data_bvec_addr_mask = 0;
+	ns->data_bvec_len_mask = 0;
+	ns->data_bvec_lim = lim;
+}
+
 int nvmet_bdev_ns_enable(struct nvmet_ns *ns)
 {
 	int ret;
@@ -116,10 +130,7 @@ int nvmet_bdev_ns_enable(struct nvmet_ns *ns)
 	ns->bdev = file_bdev(ns->bdev_file);
 	ns->size = bdev_nr_bytes(ns->bdev);
 	ns->blksize_shift = blksize_bits(bdev_logical_block_size(ns->bdev));
-	ns->data_bvec_ok = true;
-	ns->data_bvec_addr_mask = bdev_dma_alignment(ns->bdev);
-	ns->data_bvec_len_mask = (bdev_logical_block_size(ns->bdev) - 1) |
-				 bdev_dma_alignment(ns->bdev);
+	nvmet_bdev_set_data_bvec(ns, &bdev_get_queue(ns->bdev)->limits);
 
 	ns->pi_type = 0;
 	ns->metadata_size = 0;
@@ -287,9 +298,27 @@ static bool nvmet_bdev_add_page(struct nvmet_req *req, struct bio **biop,
 		submit_bio(prev);
 	}
 	*biop = bio;
-	/* exact: lent segments are logical block multiples, as sgl ones are */
 	*sector += len >> SECTOR_SHIFT;
 	return true;
+}
+
+/*
+ * A lent bvec goes to the device as it is: one bio over it, which the
+ * block layer splits to the queue's limits at logical block boundaries,
+ * however its segments fall.  No metadata comes with one
+ * (nvmet_req_set_data_bvec()).
+ */
+static void nvmet_bdev_init_data_bvec_bio(struct nvmet_req *req,
+		struct bio *bio, blk_opf_t opf, sector_t sector)
+{
+	/* as bio_iov_iter_set() would, were it exported */
+	bio_init(bio, req->ns->bdev, NULL, 0, opf);
+	bio->bi_io_vec = req->data_bvec;
+	bio->bi_iter.bi_sector = sector;
+	bio->bi_iter.bi_size = req->transfer_len;
+	bio_set_flag(bio, BIO_CLONED);
+	bio->bi_private = req;
+	bio->bi_end_io = nvmet_bio_done;
 }
 
 static void nvmet_bdev_execute_rw(struct nvmet_req *req)
@@ -330,6 +359,12 @@ static void nvmet_bdev_execute_rw(struct nvmet_req *req)
 		opf |= REQ_NOMERGE;
 
 	sector = nvmet_lba_to_sect(req->ns, req->cmd->rw.slba);
+	if (req->data_bvec) {
+		nvmet_bdev_init_data_bvec_bio(req, &req->b.inline_bio, opf,
+					      sector);
+		submit_bio(&req->b.inline_bio);
+		return;
+	}
 
 	if (nvmet_use_inline_bvec(req)) {
 		bio = &req->b.inline_bio;
@@ -348,22 +383,11 @@ static void nvmet_bdev_execute_rw(struct nvmet_req *req)
 		sg_miter_start(&prot_miter, req->metadata_sg,
 			       req->metadata_sg_cnt, iter_flags);
 
-	if (req->data_bvec) {
-		for (i = 0; i < req->data_bvec_cnt; i++) {
-			struct bio_vec *bv = &req->data_bvec[i];
-
-			if (!nvmet_bdev_add_page(req, &bio, bv->bv_page,
-					bv->bv_len, bv->bv_offset, opf,
-					&sector, sg_cnt--, &prot_miter))
-				goto out;
-		}
-	} else {
-		for_each_sg(req->sg, sg, req->sg_cnt, i) {
-			if (!nvmet_bdev_add_page(req, &bio, sg_page(sg),
-					sg->length, sg->offset, opf,
-					&sector, sg_cnt--, &prot_miter))
-				goto out;
-		}
+	for_each_sg(req->sg, sg, req->sg_cnt, i) {
+		if (!nvmet_bdev_add_page(req, &bio, sg_page(sg), sg->length,
+				sg->offset, opf, &sector, sg_cnt--,
+				&prot_miter))
+			goto out;
 	}
 
 	if (req->metadata_len) {
@@ -509,3 +533,7 @@ u16 nvmet_bdev_parse_io_cmd(struct nvmet_req *req)
 		return nvmet_report_invalid_opcode(req);
 	}
 }
+
+#if IS_ENABLED(CONFIG_NVME_TARGET_TCP_KUNIT_TEST)
+#include "io_cmd_bdev_kunit.c"
+#endif

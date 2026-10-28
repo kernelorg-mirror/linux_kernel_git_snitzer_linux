@@ -1272,9 +1272,14 @@ EXPORT_SYMBOL_GPL(nvmet_req_uninit);
  * request.
  *
  * Every segment's offset and length must be aligned as the namespace
- * needs (&nvmet_ns.data_bvec_addr_mask, &nvmet_ns.data_bvec_len_mask: a
- * logical block multiple for a block device or direct I/O), and no page
- * may be PCI peer-to-peer memory.
+ * needs (&nvmet_ns.data_bvec_addr_mask, &nvmet_ns.data_bvec_len_mask),
+ * and no page may be PCI peer-to-peer memory.  Where the namespace's I/O
+ * goes to a queue (&nvmet_ns.data_bvec_lim) they must meet what
+ * bio_split_io_at() checks, so that it can always cut the bio on a logical
+ * block boundary: each DMA aligned and one segment to the queue, no block
+ * touched by more segments than a bio may have, and a gap behind the
+ * queue's virtual boundary only on a block boundary.  Nothing more: the
+ * lengths need not be block multiples, nor the joints page aligned.
  *
  * Return: true when the backend will use @bvec; false, lending nothing,
  * when the command's backend takes only an sgl (passthru, zone append,
@@ -1284,17 +1289,54 @@ EXPORT_SYMBOL_GPL(nvmet_req_uninit);
 bool nvmet_req_set_data_bvec(struct nvmet_req *req, struct bio_vec *bvec,
 		unsigned int nr)
 {
-	size_t len = 0;
-	unsigned int i;
+	struct nvmet_ns *ns = req->ns;
+	const struct queue_limits *lim = ns->data_bvec_lim;
+	u32 addr_mask = ns->data_bvec_addr_mask;
+	u32 len_mask = ns->data_bvec_len_mask;
+	unsigned int shift = 0, i, segs = 0;
+	size_t len = 0, blk = 0;
 
 	if (!req->data_bvec_ok || req->metadata_len || !nr || req->sg)
 		return false;
+	if (lim) {
+		addr_mask |= lim->dma_alignment;
+		len_mask |= lim->dma_alignment;
+		shift = blksize_bits(lim->logical_block_size);
+	}
 	for (i = 0; i < nr; i++) {
-		if ((bvec[i].bv_offset & req->ns->data_bvec_addr_mask) ||
-		    (bvec[i].bv_len & req->ns->data_bvec_len_mask) ||
-		    is_pci_p2pdma_page(bvec[i].bv_page))
+		const struct bio_vec *bv = &bvec[i];
+		phys_addr_t start = bvec_phys(bv);
+		size_t first = len >> shift;
+		size_t last = (len + bv->bv_len - 1) >> shift;
+
+		if ((bv->bv_offset & addr_mask) || (bv->bv_len & len_mask) ||
+		    !bv->bv_len || is_pci_p2pdma_page(bv->bv_page))
 			return false;
-		len += bvec[i].bv_len;
+		if (!lim)
+			goto next;
+		if (bv->bv_len > lim->max_segment_size ||
+		    ((start ^ (start + bv->bv_len - 1)) &
+		     ~(phys_addr_t)lim->seg_boundary_mask))
+			return false;
+		/* the queue cuts the bio at a gap */
+		if (i && lim->virt_boundary_mask &&
+		    ((bv->bv_offset | (bv[-1].bv_offset + bv[-1].bv_len)) &
+		     lim->virt_boundary_mask) &&
+		    (len & (lim->logical_block_size - 1)))
+			return false;
+		/* count the segments touching each block */
+		if (first != blk) {
+			blk = first;
+			segs = 0;
+		}
+		if (++segs > lim->max_segments)
+			return false;
+		if (last != first) {
+			blk = last;
+			segs = 1;
+		}
+next:
+		len += bv->bv_len;
 	}
 	if (WARN_ON_ONCE(len != req->transfer_len))
 		return false;

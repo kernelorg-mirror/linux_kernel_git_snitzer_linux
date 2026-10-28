@@ -31,16 +31,39 @@ void nvmet_file_ns_disable(struct nvmet_ns *ns)
 	}
 }
 
+/* whether @bdev's queue is what cuts the file's direct I/O bios */
+static bool nvmet_file_bdev_cuts_bios(struct block_device *bdev,
+				      const struct kstat *stat)
+{
+	u32 boundary;
+
+	if (bdev_is_zoned(bdev) ||
+	    stat->dio_offset_align > bdev_logical_block_size(bdev) ||
+	    stat->dio_mem_align != bdev_dma_alignment(bdev) + 1)
+		return false;
+	if (!(stat->result_mask & STATX_DIO_SEG_BOUNDARY))
+		return true;
+	return bdev_dio_seg_boundary(bdev, &boundary) &&
+		boundary == stat->dio_seg_boundary;
+}
+
 /*
  * Which lent bvecs (nvmet_req_set_data_bvec()) this file takes, and
  * whether a direct read goes IOCB_NOWAIT first.  Buffered I/O copies, so
  * it takes any bvec; direct I/O takes one whose segments meet the file
- * system's direct I/O alignment (STATX_DIOALIGN; a segment's length to
- * both its offset and its memory alignment), and none when it does not
- * say.  A direct read goes IOCB_NOWAIT first only where the block device
- * can refuse rather than block, and not where iomap always refuses one
- * (stable-write bounce, encryption): there it would only cost a workqueue
- * hop.  ext4 can still block a NOWAIT read updating atime.
+ * system's direct I/O memory alignment (STATX_DIOALIGN), and none when it
+ * does not say.  iomap checks no more of a bvec's segments than that and
+ * the whole I/O's offset alignment, so where the file system's block
+ * device is what cuts its bios, they need meet only what that queue does
+ * (as for a bdev namespace); elsewhere each segment must meet the offset
+ * alignment too.  A file whose data goes to another device (an xfs
+ * realtime file) says so where that device's DMA alignment or segment
+ * boundary differs, and keeps the offset alignment (its other limits
+ * are taken to be no stricter).  A direct read goes
+ * IOCB_NOWAIT first only where the block device can refuse rather than
+ * block, and not where iomap always refuses one (stable-write bounce,
+ * encryption): there it would only cost a workqueue hop.  ext4 can still
+ * block a NOWAIT read updating atime.
  */
 static void nvmet_file_ns_set_data_bvec(struct nvmet_ns *ns)
 {
@@ -51,6 +74,7 @@ static void nvmet_file_ns_set_data_bvec(struct nvmet_ns *ns)
 	ns->data_bvec_ok = false;
 	ns->data_bvec_addr_mask = 0;
 	ns->data_bvec_len_mask = 0;
+	ns->data_bvec_lim = NULL;
 	ns->file_nowait_read = false;
 
 	if (ns->buffered_io) {
@@ -58,15 +82,19 @@ static void nvmet_file_ns_set_data_bvec(struct nvmet_ns *ns)
 		return;
 	}
 
-	if (!vfs_getattr_nosec(&ns->file->f_path, &stat, STATX_DIOALIGN,
+	if (!vfs_getattr_nosec(&ns->file->f_path, &stat,
+			       STATX_DIOALIGN | STATX_DIO_SEG_BOUNDARY,
 			       AT_STATX_SYNC_AS_STAT) &&
 	    (stat.result_mask & STATX_DIOALIGN) &&
 	    is_power_of_2(stat.dio_mem_align) &&
 	    is_power_of_2(stat.dio_offset_align)) {
 		ns->data_bvec_ok = true;
 		ns->data_bvec_addr_mask = stat.dio_mem_align - 1;
-		ns->data_bvec_len_mask = (stat.dio_offset_align - 1) |
-					 (stat.dio_mem_align - 1);
+		ns->data_bvec_len_mask = stat.dio_mem_align - 1;
+		if (bdev && nvmet_file_bdev_cuts_bios(bdev, &stat))
+			ns->data_bvec_lim = &bdev_get_queue(bdev)->limits;
+		else
+			ns->data_bvec_len_mask |= stat.dio_offset_align - 1;
 	}
 
 	ns->file_nowait_read = (ns->file->f_mode & FMODE_NOWAIT) &&
