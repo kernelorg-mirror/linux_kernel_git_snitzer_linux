@@ -144,6 +144,8 @@ enum svc_rtc_reason {
 	SVC_RTC_FB_EAGAIN_COMPLETE,	/* async completion said -EAGAIN */
 	SVC_RTC_FB_REGION_PARK,		/* READ payload region would park */
 	SVC_RTC_FB_WRITE_MODE,		/* WRITE the thread path does differently */
+	SVC_RTC_FB_NOWAIT_ERR,		/* NOWAIT I/O error or short write */
+	SVC_RTC_FB_SB_FROZEN,		/* WRITE: sb_start_write_trylock() failed */
 	SVC_RTC_NR_REASONS
 };
 

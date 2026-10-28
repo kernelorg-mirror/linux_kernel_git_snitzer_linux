@@ -95,13 +95,41 @@ nfsd_hashsize(unsigned int limit)
 	return roundup_pow_of_two(limit / TARGET_BUCKET_SIZE);
 }
 
+#if IS_ENABLED(CONFIG_NFSD_RTC_KUNIT_TEST)
+/* KUnit: fail the work item's GFP_NOWAIT DRC allocations. */
+bool nfsd_cache_kunit_no_mem;
+EXPORT_SYMBOL_IF_KUNIT(nfsd_cache_kunit_no_mem);
+
+struct nfsd_net *nfsd_cache_kunit_nn(struct net *net)
+{
+	return net_generic(net, nfsd_net_id);
+}
+EXPORT_SYMBOL_IF_KUNIT(nfsd_cache_kunit_nn);
+#define nfsd_cache_inject_no_mem(gfp) \
+	(!gfpflags_allow_blocking(gfp) && READ_ONCE(nfsd_cache_kunit_no_mem))
+#else
+#define nfsd_cache_inject_no_mem(gfp)	false
+#endif
+
+/*
+ * An rtc attempt (RQ_RTC_TRY) runs on its connection's work item, which
+ * must not enter direct reclaim: its DRC allocations do not block.
+ */
+static gfp_t nfsd_cache_gfp(const struct svc_rqst *rqstp)
+{
+	return test_bit(RQ_RTC_TRY, &rqstp->rq_flags) ?
+	       GFP_NOWAIT | __GFP_NOWARN : GFP_KERNEL;
+}
+
 static struct nfsd_cacherep *
 nfsd_cacherep_alloc(struct svc_rqst *rqstp, __wsum csum,
 		    struct nfsd_net *nn)
 {
+	gfp_t gfp = nfsd_cache_gfp(rqstp);
 	struct nfsd_cacherep *rp;
 
-	rp = kmem_cache_alloc(drc_slab, GFP_KERNEL);
+	rp = nfsd_cache_inject_no_mem(gfp) ? NULL :
+	     kmem_cache_alloc(drc_slab, gfp);
 	if (rp) {
 		rp->c_state = RC_UNUSED;
 		rp->c_type = RC_NOCACHE;
@@ -225,6 +253,7 @@ out_shrinker:
 	printk(KERN_ERR "nfsd: failed to allocate reply cache\n");
 	return -ENOMEM;
 }
+EXPORT_SYMBOL_IF_KUNIT(nfsd_reply_cache_init);
 
 void nfsd_reply_cache_shutdown(struct nfsd_net *nn)
 {
@@ -247,6 +276,7 @@ void nfsd_reply_cache_shutdown(struct nfsd_net *nn)
 	nn->drc_hashsize = 0;
 
 }
+EXPORT_SYMBOL_IF_KUNIT(nfsd_reply_cache_shutdown);
 
 static void
 lru_put_end(struct nfsd_drc_bucket *b, struct nfsd_cacherep *rp)
@@ -279,6 +309,13 @@ nfsd_prune_bucket_locked(struct nfsd_net *nn, struct nfsd_drc_bucket *b,
 
 	/* The bucket LRU is ordered oldest-first. */
 	list_for_each_entry_safe(rp, tmp, &b->lru_head, c_lru) {
+		/*
+		 * Don't free entries attached to calls that are still
+		 * in-progress (a thread's, or an rtc WRITE's kept for its
+		 * rerun across the hand-off), but do keep scanning the list.
+		 */
+		if (rp->c_state == RC_INPROG)
+			continue;
 		if (atomic_read(&nn->num_drc_entries) <= nn->max_drc_entries &&
 		    time_before(expiry, rp->c_timestamp))
 			break;
@@ -478,8 +515,17 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 	 * preallocate an entry.
 	 */
 	rp = nfsd_cacherep_alloc(rqstp, csum, nn);
-	if (!rp)
+	if (!rp) {
+		/*
+		 * An rtc attempt reruns on a thread, whose GFP_KERNEL
+		 * allocation may wait, rather than run uncached.
+		 */
+		if (test_bit(RQ_RTC_TRY, &rqstp->rq_flags)) {
+			svc_rtc_miss(rqstp, SVC_RTC_FB_NO_MEM);
+			rtn = RC_DROPIT;
+		}
 		goto out;
+	}
 
 	b = nfsd_cache_bucket_find(rqstp->rq_xid, nn);
 	spin_lock(&b->cache_lock);
@@ -539,6 +585,7 @@ out_unlock:
 out:
 	return rtn;
 }
+EXPORT_SYMBOL_IF_KUNIT(nfsd_cache_lookup);
 
 /**
  * nfsd_cache_update - Update an entry in the duplicate reply cache.
@@ -593,7 +640,13 @@ void nfsd_cache_update(struct svc_rqst *rqstp, struct nfsd_cacherep *rp,
 	case RC_REPLBUFF:
 		cachv = &rp->c_replvec;
 		bufsize = len << 2;
-		cachv->iov_base = kmalloc(bufsize, GFP_KERNEL);
+		/*
+		 * On an rtc work item (RQ_RTC_TRY) the call has run: a failed
+		 * GFP_NOWAIT allocation leaves the reply uncached, as a failed
+		 * GFP_KERNEL one does on a thread.
+		 */
+		cachv->iov_base = nfsd_cache_inject_no_mem(nfsd_cache_gfp(rqstp)) ?
+				  NULL : kmalloc(bufsize, nfsd_cache_gfp(rqstp));
 		if (!cachv->iov_base) {
 			nfsd_reply_cache_free(b, rp, nn);
 			return;
@@ -614,6 +667,7 @@ void nfsd_cache_update(struct svc_rqst *rqstp, struct nfsd_cacherep *rp,
 	spin_unlock(&b->cache_lock);
 	return;
 }
+EXPORT_SYMBOL_IF_KUNIT(nfsd_cache_update);
 
 static int
 nfsd_cache_append(struct svc_rqst *rqstp, struct kvec *data)

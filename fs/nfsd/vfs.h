@@ -319,6 +319,9 @@ struct nfsd_rtc_ctx {
 	unsigned long		cnt;
 	errseq_t		since;
 	struct nfs_dio_seg_hold	hold;
+	/* the split's trace fields, for the one trace event on a hit */
+	size_t			dio_prefix, dio_middle, dio_suffix;
+	u32			dio_mem_offset;
 	/*
 	 * A WRITE's in-progress DRC entry, kept from the rtc attempt for its
 	 * rerun on a thread, which uses it instead of a second lookup.

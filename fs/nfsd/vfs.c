@@ -3527,9 +3527,17 @@ VISIBLE_IF_KUNIT __be32 nfsd_rtc_read_file(struct svc_rqst *rqstp,
 		return nfs_ok;
 	clear_bit(RQ_RTC_ASYNC, &rqstp->rq_flags);
 	c->nf = NULL;
-	if (host_err == -EAGAIN) {
+	if (host_err < 0) {
+		/*
+		 * Any error of the NOWAIT attempt reruns on a thread, which
+		 * owns the error reply: -EAGAIN, and errors that exist only
+		 * because of IOCB_NOWAIT (-EOPNOTSUPP on a !bdev_nowait()
+		 * stack).  A read has no side effect to undo.
+		 */
 		nfsd_file_put(nf);
-		svc_rtc_miss(rqstp, SVC_RTC_FB_EAGAIN_SUBMIT);
+		svc_rtc_miss(rqstp, host_err == -EAGAIN ?
+				    SVC_RTC_FB_EAGAIN_SUBMIT :
+				    SVC_RTC_FB_NOWAIT_ERR);
 		return nfs_ok;
 	}
 	/* Served here: count and trace it once (a miss reruns on a thread). */
@@ -3560,8 +3568,11 @@ int nfsd_rtc_read_finish(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	struct nfsd_file *nf = c->nf;
 
 	c->nf = NULL;
-	if (c->res == -EAGAIN) {
+	if (c->res < 0) {
+		/* As at submit; svc_rtc_run_completions() counts -EAGAIN. */
 		nfsd_file_put(nf);
+		if (c->res != -EAGAIN)
+			svc_rtc_miss(rqstp, SVC_RTC_FB_NOWAIT_ERR);
 		return -EAGAIN;
 	}
 	nfsd_file_count_cached(rqstp, nf, NFSD_MAY_READ);
@@ -3579,51 +3590,67 @@ int nfsd_rtc_read_finish(struct svc_rqst *rqstp, struct svc_fh *fhp,
  * nfsd_direct_write()) when nfs_dio_split() leaves exactly one direct
  * segment: then nfsd_direct_write() is one vfs_iocb_iter_write() with the
  * client's stability flags on the kiocb and no fsync of its own.  That one
- * write is submitted IOCB_NOWAIT with ki_complete set.  Under IOCB_NOWAIT
- * the write is all or nothing (one mapping, one bio: the same contract as
- * a NOWAIT write over RPC or LOCALIO), so a -EAGAIN at submit or at
- * completion has written nothing and the thread rerun is the first write.
+ * write is submitted IOCB_NOWAIT with ki_complete set.  Only a whole
+ * write is served on the work item.  Any other outcome of the NOWAIT
+ * attempt, at submit or at completion (-EAGAIN; errors that exist only
+ * because of IOCB_NOWAIT or the async kiocb, such as -EOPNOTSUPP from a
+ * !bdev_nowait() stack, -EINVAL from a geometry the thread path would
+ * rewrite buffered, or -EIO from a split bio; a short write), reruns on
+ * a thread with no verifier reset and no reply: the rerun writes the
+ * same bytes at the same offset and owns the definitive status.  Freeze
+ * protection is a trylock (a frozen superblock is a miss, not a sleep).
  * Everything nfsd_vfs_write() would do differently is a miss: a WRITE
  * that would bounce or split, gathered writes, a local (loopback) client,
  * io_cache_write not direct.
  */
 
-/* What nfsd_vfs_write() does after nfsd_direct_write() returns. */
+/*
+ * What nfsd_vfs_write() does after a nfsd_direct_write() that wrote all
+ * of a one-segment WRITE.  Only a whole write is served here: everything
+ * else reruns on a thread, which owns the error and verifier handling.
+ */
 static __be32 nfsd_rtc_write_end(struct svc_rqst *rqstp, struct svc_fh *fhp,
-				 struct nfsd_file *nf, ssize_t host_err,
-				 unsigned long *cnt)
+				 struct nfsd_file *nf, unsigned long *cnt)
 {
 	struct nfsd_net *nn = net_generic(SVC_NET(rqstp), nfsd_net_id);
 	struct nfsd_rtc_ctx *c = rqstp->rq_rtc_priv;
 	struct file *file = nf->nf_file;
+	struct nfs_dio_policy policy = {
+		.mem_align = nf->nf_dio_mem_align,
+		.offset_align = nf->nf_dio_offset_align,
+	};
+	struct nfs_dio_split split = {
+		.disposition = NFS_DIO_DIRECT,
+		.prefix = c->dio_prefix,
+		.middle = c->dio_middle,
+		.suffix = c->dio_suffix,
+		.mem_offset = c->dio_mem_offset,
+	};
 	loff_t offset = c->offset;
+	ssize_t host_err;
 	__be32 nfserr;
 
-	nfs_dio_seg_release(file, &c->hold, host_err > 0 ? host_err : 0);
-	/* Served here: count and trace it once (a miss reruns on a thread). */
+	nfs_dio_seg_release(file, &c->hold, c->cnt);
+	/*
+	 * Served here: count it and emit the thread path's traces for it
+	 * once (a miss emits none; its rerun on a thread emits them).
+	 */
 	nfsd_file_count_cached(rqstp, nf, NFSD_MAY_WRITE);
 	trace_nfsd_write_start(rqstp, fhp, offset, c->cnt);
 	trace_nfsd_write_opened(rqstp, fhp, offset, c->cnt);
+	nfsd_trace_write_dio(rqstp, fhp, offset, c->cnt, &policy, &split);
 	trace_nfsd_write_direct(rqstp, fhp, offset, c->cnt, c->kiocb.ki_flags);
 
-	*cnt = 0;
-	if (host_err < 0) {
-		nfsd_maybe_reset_write_verifier(nn, rqstp, host_err);
-		goto out_nfserr;
-	}
-	*cnt = host_err;
-	host_err = 0;
+	*cnt = c->cnt;
 	nfsd_stats_io_write_add(nn, fhp->fh_export, *cnt);
+	/* nfsd_vfs_write()'s; vfs_iocb_iter_write()'s came with the write. */
 	fsnotify_modify(file);
 	host_err = filemap_check_wb_err(file->f_mapping, c->since);
-	if (host_err < 0)
-		nfsd_maybe_reset_write_verifier(nn, rqstp, host_err);
-
-out_nfserr:
 	if (host_err >= 0) {
 		trace_nfsd_write_io_done(rqstp, fhp, offset, *cnt);
 		nfserr = nfs_ok;
 	} else {
+		nfsd_maybe_reset_write_verifier(nn, rqstp, host_err);
 		trace_nfsd_write_err(rqstp, fhp, offset, host_err);
 		nfserr = nfserrno(host_err);
 		switch (host_err) {
@@ -3638,6 +3665,43 @@ out_nfserr:
 	}
 	trace_nfsd_write_done(rqstp, fhp, offset, *cnt);
 	return nfserr;
+}
+
+/*
+ * vfs_iocb_iter_write() for the work item.  Freeze protection is taken
+ * with sb_start_write_trylock(), as io_uring's IOCB_NOWAIT writes take
+ * it: a frozen (or freezing) superblock is a miss before any side effect
+ * instead of a sleep in sb_start_write() that would stall every reply on
+ * the connection.  @frozen says which.
+ */
+static ssize_t nfsd_rtc_iocb_iter_write(struct file *file, struct kiocb *iocb,
+					struct iov_iter *iter, bool *frozen)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	ssize_t ret;
+
+	*frozen = false;
+	if (!file->f_op->write_iter)
+		return -EINVAL;
+	if (!(file->f_mode & FMODE_WRITE))
+		return -EBADF;
+	if (!(file->f_mode & FMODE_CAN_WRITE))
+		return -EINVAL;
+	ret = rw_verify_area(WRITE, file, &iocb->ki_pos, iov_iter_count(iter));
+	if (ret < 0)
+		return ret;
+	if (!sb_start_write_trylock(sb)) {
+		*frozen = true;
+		return -EAGAIN;
+	}
+	/* As kiocb_start_write(): an async completion inherits it. */
+	__sb_writers_release(sb, SB_FREEZE_WRITE);
+	ret = file->f_op->write_iter(iocb, iter);
+	if (ret != -EIOCBQUEUED)
+		kiocb_end_write(iocb);
+	if (ret > 0)
+		fsnotify_modify(file);
+	return ret;
 }
 
 /**
@@ -3697,10 +3761,18 @@ VISIBLE_IF_KUNIT __be32 nfsd_rtc_write_file(struct svc_rqst *rqstp,
 	struct nfsd_net *nn = net_generic(SVC_NET(rqstp), nfsd_net_id);
 	struct nfsd_rtc_ctx *c = rqstp->rq_rtc_priv;
 	struct file *file = nf->nf_file;
+	struct nfs_dio_policy policy = {
+		.mem_align = nf->nf_dio_mem_align,
+		.offset_align = nf->nf_dio_offset_align,
+		.seg_boundary = nf->nf_dio_seg_boundary,
+		.min_middle_bytes = nfsd_direct_misaligned_min_bytes,
+		.dontcache = nfsd_direct_misaligned_dontcache,
+	};
 	struct nfs_dio_split split;
 	struct nfs_dio_seg *seg;
 	ssize_t host_err;
 	__be32 nfserr;
+	bool frozen;
 	int nvecs;
 
 	/* Gathered writes wait for concurrent writers instead of syncing. */
@@ -3724,8 +3796,13 @@ VISIBLE_IF_KUNIT __be32 nfsd_rtc_write_file(struct svc_rqst *rqstp,
 	 * One direct segment and no stability flags held back for an fsync:
 	 * no edges, no bounce, no buffered part, no vfs_fsync_range().
 	 */
-	nfsd_write_dio_iters_init(rqstp, fhp, nf, rqstp->rq_bvec, nvecs,
-				  &c->kiocb, *cnt, &split);
+	/*
+	 * nfsd_write_dio_iters_init()'s split, untraced: its trace event is
+	 * emitted by nfsd_rtc_write_end() on a hit, and by the thread
+	 * rerun's own split on a miss, so that each WRITE traces it once.
+	 */
+	nfs_dio_split(file, &policy, ITER_SOURCE, rqstp->rq_bvec, nvecs,
+		      c->kiocb.ki_pos, *cnt, c->kiocb.ki_flags, &split);
 	seg = &split.segs[0];
 	if (split.disposition != NFS_DIO_DIRECT || split.nsegs != 1 ||
 	    nfsd_write_dio_bounce_helps(split.disposition,
@@ -3741,6 +3818,10 @@ VISIBLE_IF_KUNIT __be32 nfsd_rtc_write_file(struct svc_rqst *rqstp,
 	c->offset = offset;
 	c->cnt = *cnt;
 	c->since = READ_ONCE(file->f_wb_err);
+	c->dio_prefix = split.prefix;
+	c->dio_middle = split.middle;
+	c->dio_suffix = split.suffix;
+	c->dio_mem_offset = split.mem_offset;
 	if (verf)
 		nfsd_copy_write_verifier(verf, nn);
 	/* IOCB_DSYNC/IOCB_SYNC stay: the DIO completion persists the write. */
@@ -3749,19 +3830,33 @@ VISIBLE_IF_KUNIT __be32 nfsd_rtc_write_file(struct svc_rqst *rqstp,
 	nfs_dio_seg_hold(file, seg, offset, *cnt, &c->hold);
 	/* Before submit: the completion may run before it returns. */
 	set_bit(RQ_RTC_ASYNC, &rqstp->rq_flags);
-	host_err = vfs_iocb_iter_write(file, &c->kiocb, &seg->iter);
+	host_err = nfsd_rtc_iocb_iter_write(file, &c->kiocb, &seg->iter,
+					    &frozen);
 	if (host_err == -EIOCBQUEUED)
 		return nfs_ok;
 	clear_bit(RQ_RTC_ASYNC, &rqstp->rq_flags);
 	c->nf = NULL;
-	if (host_err == -EAGAIN || host_err == -EDIOALIGN) {
-		/* Nothing written: the thread rerun is the first write. */
-		nfs_dio_seg_release(file, &c->hold, 0);
+	if (host_err != (ssize_t)*cnt) {
+		/*
+		 * Anything but the whole write is a miss: -EAGAIN, and any
+		 * error that exists only because of IOCB_NOWAIT or the async
+		 * kiocb (-EOPNOTSUPP from a !bdev_nowait() stack, -EINVAL
+		 * where the thread path would take IOCB_DIO_GEOMETRY's
+		 * buffered rewrite, -EIO from a split bio), or a short write.
+		 * No verifier reset and no reply here: the thread rerun
+		 * rewrites the same bytes at the same offset and gives the
+		 * definitive status.
+		 */
+		nfs_dio_seg_release(file, &c->hold,
+				    host_err > 0 ? host_err : 0);
 		nfsd_file_put(nf);
-		svc_rtc_miss(rqstp, SVC_RTC_FB_EAGAIN_SUBMIT);
+		svc_rtc_miss(rqstp, frozen ? SVC_RTC_FB_SB_FROZEN :
+				    host_err == -EAGAIN ?
+				    SVC_RTC_FB_EAGAIN_SUBMIT :
+				    SVC_RTC_FB_NOWAIT_ERR);
 		return nfs_ok;
 	}
-	nfserr = nfsd_rtc_write_end(rqstp, fhp, nf, host_err, cnt);
+	nfserr = nfsd_rtc_write_end(rqstp, fhp, nf, cnt);
 	nfsd_file_put(nf);
 	return nfserr;
 
@@ -3788,14 +3883,21 @@ int nfsd_rtc_write_finish(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	struct nfsd_file *nf = c->nf;
 
 	c->nf = NULL;
-	/* vfs_iocb_iter_write() left the freeze protection to completion. */
+	/* nfsd_rtc_iocb_iter_write() left the freeze protection to here. */
 	kiocb_end_write(&c->kiocb);
-	if (c->res == -EAGAIN) {
-		nfs_dio_seg_release(nf->nf_file, &c->hold, 0);
+	if (c->res != (long)c->cnt) {
+		/* As at submit: any error or a short write reruns. */
+		nfs_dio_seg_release(nf->nf_file, &c->hold,
+				    c->res > 0 ? c->res : 0);
 		nfsd_file_put(nf);
+		/* svc_rtc_run_completions() counts -EAGAIN itself. */
+		if (c->res != -EAGAIN)
+			svc_rtc_miss(rqstp, SVC_RTC_FB_NOWAIT_ERR);
 		return -EAGAIN;
 	}
-	*status = nfsd_rtc_write_end(rqstp, fhp, nf, c->res, cnt);
+	/* vfs_iocb_iter_write()'s fsnotify, for a write that went async. */
+	fsnotify_modify(nf->nf_file);
+	*status = nfsd_rtc_write_end(rqstp, fhp, nf, cnt);
 	nfsd_file_put(nf);
 	return 0;
 }

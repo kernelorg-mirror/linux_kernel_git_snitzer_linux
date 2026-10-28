@@ -15,12 +15,22 @@
  * WRITE3res (nfs3svc_encode_writeres()) is compared byte for byte with the
  * thread path's (nfsd_vfs_write() with io_cache_write direct).
  *
+ * Either file can also fail an IOCB_NOWAIT call with a chosen error, or
+ * (write) stop short, to show that every outcome of the NOWAIT attempt
+ * other than a whole transfer is a counted miss with no reply and no
+ * verifier reset.  The superblock can be frozen (sb_start_write_trylock()
+ * failing on the work item).  The DRC case uses real nfsd_cache_lookup()
+ * entries in init_net's reply cache, set up and torn down by the test.
+ *
  * The suite is named under "sunrpc" so that the one sunrpc* KUnit boot
  * that covers the transport half of the fast path runs it too.
  */
 #include <kunit/test.h>
 
 #include <linux/file.h>
+#include <linux/fs/super.h>
+#include <linux/hash.h>
+#include <linux/in.h>
 #include <linux/fs.h>
 #include <linux/fs_context.h>
 #include <linux/highmem.h>
@@ -35,6 +45,7 @@
 
 #include "cache.h"
 #include "nfsd.h"
+#include "netns.h"
 #include "vfs.h"
 #include "xdr3.h"
 #include "filecache.h"
@@ -72,6 +83,8 @@ struct rtcn {
 	struct page		*wpages[RTCN_PAGES];
 	struct xdr_buf		payload;
 	struct svc_export	*exp;
+	int			nowait_err;	/* IOCB_NOWAIT I/O fails so */
+	size_t			nowait_short;	/* IOCB_NOWAIT write stops here */
 };
 
 static ssize_t rtcn_read_iter(struct kiocb *iocb, struct iov_iter *to)
@@ -84,6 +97,8 @@ static ssize_t rtcn_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	t->flags = iocb->ki_flags;
 	if (t->mode == RTCN_EAGAIN && (iocb->ki_flags & IOCB_NOWAIT))
 		return -EAGAIN;
+	if (t->nowait_err && (iocb->ki_flags & IOCB_NOWAIT))
+		return t->nowait_err;
 	if (pos < RTCN_SIZE)
 		n = copy_to_iter(t->data + pos,
 				 min_t(size_t, iov_iter_count(to),
@@ -107,11 +122,14 @@ static ssize_t rtcn_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	t->flags = iocb->ki_flags;
 	if (t->mode == RTCN_EAGAIN && (iocb->ki_flags & IOCB_NOWAIT))
 		return -EAGAIN;
+	if (t->nowait_err && (iocb->ki_flags & IOCB_NOWAIT))
+		return t->nowait_err;
 	if (pos >= RTCN_SIZE)
 		return -EFBIG;
-	n = copy_from_iter(t->wdata + pos,
-			   min_t(size_t, iov_iter_count(from), RTCN_SIZE - pos),
-			   from);
+	n = min_t(size_t, iov_iter_count(from), RTCN_SIZE - pos);
+	if (t->nowait_short && (iocb->ki_flags & IOCB_NOWAIT))
+		n = min(n, t->nowait_short);
+	n = copy_from_iter(t->wdata + pos, n, from);
 	iocb->ki_pos += n;
 	if (t->mode == RTCN_ASYNC && !is_sync_kiocb(iocb)) {
 		t->pending = iocb;
@@ -796,33 +814,184 @@ static void nfsd_rtc_write_eagain_complete(struct kunit *test)
 	rtcn_expect_ref_back(t);
 }
 
+/* A DRC call header: what nfsd_cache_lookup() checksums and keys on. */
+static void rtcn_drc_call(struct rtcn *t, struct svc_rqst *r, u32 xid,
+			  bool try)
+{
+	struct sockaddr_in *sin = (struct sockaddr_in *)&r->rq_addr;
+
+	rtcn_wprep(t, 1, try, PAGE_SIZE, NFS_UNSTABLE);
+	r->rq_xid = cpu_to_be32(xid);
+	r->rq_prot = IPPROTO_TCP;
+	memset(&r->rq_addr, 0, sizeof(r->rq_addr));
+	sin->sin_family = AF_INET;
+	sin->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	sin->sin_port = htons(700);
+	r->rq_addrlen = sizeof(*sin);
+}
+
+/* A short encoded reply for nfsd_cache_update(): returns its statp. */
+static __be32 *rtcn_drc_reply(struct svc_rqst *r)
+{
+	struct kvec *resv = &r->rq_res.head[0];
+	__be32 *p = resv->iov_base;
+
+	p[0] = 0;
+	p[1] = cpu_to_be32(1);
+	p[2] = cpu_to_be32(2);
+	p[3] = cpu_to_be32(3);
+	resv->iov_len = 4 * XDR_UNIT;
+	return p;
+}
+
+/* The next xid after @xid whose DRC bucket is @xid's. */
+static u32 rtcn_drc_same_bucket(struct nfsd_net *nn, u32 xid)
+{
+	u32 want = hash_32((__force u32)cpu_to_be32(xid), nn->maskbits);
+	u32 x = xid + 1;
+
+	while (hash_32((__force u32)cpu_to_be32(x), nn->maskbits) != want)
+		x++;
+	return x;
+}
+
 /*
- * DRC: an abandoned WRITE keeps its in-progress entry for the rerun
- * (nfsd_dispatch() then skips its lookup); rqst_done at hand-off keeps it.
+ * DRC, with real nfsd_cache_lookup() entries on init_net: an abandoned
+ * WRITE keeps its RC_INPROG entry for the thread rerun, a retransmission
+ * meanwhile is dropped, pruning skips the kept entry while it is handed
+ * off, the rerun's nfsd_cache_update() caches the reply exactly once, and
+ * a hand-off no thread runs (svc_rtc_handoff_drain()) frees it exactly
+ * once.  GFP_NOWAIT failures on the work item: no entry at lookup is a
+ * counted no_mem miss; no reply buffer at update leaves the reply
+ * uncached, as on a thread.
+ *
+ * The rerun's use of the kept entry inside nfsd_dispatch() (rp taken from
+ * drc_rp, no second lookup) is not driven here: that needs a fully
+ * decoded NFSv3 WRITE call in rq_arg.  The rerun is modelled by the
+ * nfsd_cache_update() that nfsd_dispatch() then makes on that entry.
  */
 static void nfsd_rtc_write_drc(struct kunit *test)
 {
 	struct rtcn *t = test->priv;
 	struct svc_rqst *r = t->rq[1];
 	struct nfsd_rtc_ctx *c = r->rq_rtc_priv;
-	struct nfsd_cacherep *rp = (struct nfsd_cacherep *)&t->nf;
+	struct nfsd_thread_local_info *ntli = r->rq_private;
+	struct nfsd_net *nn = nfsd_cache_kunit_nn(&init_net);
+	struct nfsd_cacherep *a = NULL, *b = NULL, *cc = NULL, *d = NULL;
+	struct nfsd_cacherep *rp;
+	u8 *arg;
+	u32 xa = 0x5000, xb, xc;
+	int n;
 
-	rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_UNSTABLE);
-	c->rp = rp;
+	if (nn->drc_hashtbl)
+		kunit_skip(test, "init_net DRC already in use");
+	arg = kunit_kzalloc(test, 64, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, arg);
+	memset(arg, 0x5a, 64);
+	r->rq_arg.head[0].iov_base = arg;
+	r->rq_arg.head[0].iov_len = 64;
+	r->rq_arg.page_len = 0;
+	r->rq_arg.tail[0].iov_len = 0;
+	r->rq_arg.len = 64;
+	KUNIT_ASSERT_EQ(test, nfsd_reply_cache_init(nn), 0);
+	nn->max_drc_entries = 0;	/* every entry past its turn prunes */
+	ntli->ntli_cachetype = RC_REPLBUFF;
+
+	/* The rtc attempt (RQ_RTC_TRY) inserts A in progress. */
+	rtcn_drc_call(t, r, xa, true);
+	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &a), RC_DOIT);
+	KUNIT_ASSERT_NOT_NULL(test, a);
+	KUNIT_EXPECT_EQ(test, a->c_state, RC_INPROG);
+	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), 1);
+	/* The NOWAIT write misses at completion: A is kept for the rerun. */
+	c->rp = a;
 	KUNIT_EXPECT_EQ(test, nfsd_rtc_dispatch_finish(r, true), 0);
-	KUNIT_EXPECT_PTR_EQ(test, c->drc_rp, rp);
+	KUNIT_EXPECT_PTR_EQ(test, c->drc_rp, a);
 	KUNIT_EXPECT_NULL(test, c->rp);
 	KUNIT_EXPECT_EQ(test, r->rq_res.len, 0);
 	set_bit(RQ_RTC_MISS, &r->rq_flags);
-	nfsd3_rtc_ops.rqst_done(r);
-	KUNIT_EXPECT_PTR_EQ(test, c->drc_rp, rp);
-	/* An entry-free (RC_NOCACHE) call carries nothing. */
+	nfsd3_rtc_ops.rqst_done(r);	/* a MISS hands off: A stays */
+	KUNIT_EXPECT_PTR_EQ(test, c->drc_rp, a);
+
+	/* A retransmission while A is handed off is dropped, as for a thread. */
+	rtcn_drc_call(t, r, xa, false);
+	rp = NULL;
+	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_DROPIT);
+	KUNIT_EXPECT_NULL(test, rp);
+
+	/* B, same bucket, done; C's lookup prunes B but skips in-progress A. */
+	xb = rtcn_drc_same_bucket(nn, xa);
+	xc = rtcn_drc_same_bucket(nn, xb);
+	rtcn_drc_call(t, r, xb, false);
+	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &b), RC_DOIT);
+	KUNIT_ASSERT_NOT_NULL(test, b);
+	nfsd_cache_update(r, b, RC_REPLBUFF, rtcn_drc_reply(r));
+	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), 2);
+	rtcn_drc_call(t, r, xc, false);
+	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &cc), RC_DOIT);
+	KUNIT_ASSERT_NOT_NULL(test, cc);
+	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), 2);
+	KUNIT_EXPECT_EQ(test, a->c_state, RC_INPROG);
+	rtcn_drc_call(t, r, xa, false);
+	rp = NULL;
+	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_DROPIT);
+
+	/* The thread rerun answers on A: one cached reply, then replayed. */
+	rtcn_drc_call(t, r, xa, false);
+	rp = c->drc_rp;
 	c->drc_rp = NULL;
-	c->rp = NULL;
+	nfsd_cache_update(r, rp, RC_REPLBUFF, rtcn_drc_reply(r));
+	KUNIT_EXPECT_EQ(test, a->c_state, RC_DONE);
+	KUNIT_EXPECT_EQ(test, a->c_type, RC_REPLBUFF);
+	rtcn_drc_call(t, r, xa, false);
+	rp = NULL;
+	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_REPLY);
+	nfsd_cache_update(r, cc, RC_NOCACHE, NULL);
+	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), 1);
+
+	/* A hand-off no thread runs: the drain's rqst_done frees D once. */
+	rtcn_drc_call(t, r, xc + 1, true);
+	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &d), RC_DOIT);
+	KUNIT_ASSERT_NOT_NULL(test, d);
+	/* (D's insert may prune done A if they share a bucket.) */
+	n = atomic_read(&nn->num_drc_entries);
+	c->rp = d;
 	KUNIT_EXPECT_EQ(test, nfsd_rtc_dispatch_finish(r, true), 0);
-	KUNIT_EXPECT_NULL(test, c->drc_rp);
-	clear_bit(RQ_RTC_MISS, &r->rq_flags);
+	KUNIT_EXPECT_PTR_EQ(test, c->drc_rp, d);
+	clear_bit(RQ_RTC_MISS, &r->rq_flags);	/* svc_rtc_handoff_drain() */
 	nfsd3_rtc_ops.rqst_done(r);
+	KUNIT_EXPECT_NULL(test, c->drc_rp);
+	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n - 1);
+	nfsd3_rtc_ops.rqst_done(r);
+	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n - 1);
+	n--;
+
+	/* No entry under GFP_NOWAIT: a counted miss, nothing inserted. */
+	nfsd_cache_kunit_no_mem = true;
+	rtcn_drc_call(t, r, xc + 2, true);
+	rp = NULL;
+	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_DROPIT);
+	KUNIT_EXPECT_NULL(test, rp);
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_NO_MEM);
+	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n);
+	/* The thread rerun allocates GFP_KERNEL: not injected. */
+	rtcn_drc_call(t, r, xc + 2, false);
+	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_DOIT);
+	KUNIT_ASSERT_NOT_NULL(test, rp);
+	n = atomic_read(&nn->num_drc_entries);
+	/* No reply buffer under GFP_NOWAIT: the reply is not cached. */
+	set_bit(RQ_RTC_TRY, &r->rq_flags);
+	nfsd_cache_update(r, rp, RC_REPLBUFF, rtcn_drc_reply(r));
+	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n - 1);
+	nfsd_cache_kunit_no_mem = false;
+
+	nfsd_reply_cache_shutdown(nn);
+	ntli->ntli_cachetype = RC_NOCACHE;
+	r->rq_arg.head[0].iov_base = NULL;
+	r->rq_arg.head[0].iov_len = 0;
+	r->rq_arg.len = 0;
+	clear_bit(RQ_RTC_TRY, &r->rq_flags);
 }
 
 /* What nfsd_vfs_write() would do differently is a miss, nothing written. */
@@ -864,6 +1033,289 @@ static void nfsd_rtc_write_unaligned(struct kunit *test)
 	nfsd_io_cache_write = NFSD_IO_DIRECT;
 }
 
+/*
+ * Any error of the NOWAIT read, at submit or completion, is a counted
+ * miss; -EOPNOTSUPP (a !bdev_nowait() stack) and -EIO stand for the
+ * errors that exist only because of IOCB_NOWAIT.  The rerun owns them.
+ */
+static void nfsd_rtc_read_nowait_errors(struct kunit *test)
+{
+	static const int errs[] = { -EOPNOTSUPP, -EIO };
+	struct rtcn *t = test->priv;
+	struct svc_rqst *r = t->rq[1];
+	struct nfsd_rtc_ctx *c = r->rq_rtc_priv;
+	unsigned long h0, a0, h1, a1;
+	struct nfsd3_readres *resp;
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(errs); i++) {
+		t->mode = RTCN_SYNC;
+		t->nowait_err = errs[i];
+		resp = rtcn_prep(t, 1, true, PAGE_SIZE);
+		rtcn_counts(&h0, &a0);
+		nfsd_rtc_read_file(r, &resp->fh, rtcn_get(t), 0, &resp->count,
+				   &resp->eof);
+		rtcn_counts(&h1, &a1);
+		KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+		KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
+		KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_NOWAIT_ERR);
+		KUNIT_EXPECT_EQ(test, t->calls, 1);
+		KUNIT_EXPECT_NULL(test, c->nf);
+		KUNIT_EXPECT_EQ(test, h1 - h0, 0);
+		KUNIT_EXPECT_EQ(test, a1 - a0, 0);
+		KUNIT_EXPECT_EQ(test, r->rq_res.len, 0);
+		rtcn_expect_ref_back(t);
+		/* The thread rerun (no IOCB_NOWAIT) serves the same READ. */
+		rtcn_thread_ref(t, 0, PAGE_SIZE);
+
+		t->nowait_err = 0;
+		t->mode = RTCN_ASYNC;
+		resp = rtcn_prep(t, 1, true, PAGE_SIZE);
+		rtcn_counts(&h0, &a0);
+		nfsd_rtc_read_file(r, &resp->fh, rtcn_get(t), 0, &resp->count,
+				   &resp->eof);
+		KUNIT_ASSERT_TRUE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
+		c->res = errs[i];
+		KUNIT_EXPECT_EQ(test, nfsd3_rtc_ops.complete(r), -EAGAIN);
+		rtcn_counts(&h1, &a1);
+		KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+		KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_NOWAIT_ERR);
+		KUNIT_EXPECT_EQ(test, h1 - h0, 0);
+		KUNIT_EXPECT_EQ(test, a1 - a0, 0);
+		KUNIT_EXPECT_NULL(test, c->nf);
+		KUNIT_EXPECT_EQ(test, r->rq_res.len, 0);
+		rtcn_expect_ref_back(t);
+	}
+	t->mode = RTCN_SYNC;
+}
+
+/* The thread path's WRITE3res for (0, PAGE_SIZE, UNSTABLE), kept. */
+static u8 *rtcn_wbaseline(struct rtcn *t, unsigned int *len)
+{
+	u8 *base;
+
+	rtcn_wthread_ref(t, 0, PAGE_SIZE, NFS_UNSTABLE);
+	base = kunit_kmalloc(t->test, t->reply_len[0], GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(t->test, base);
+	memcpy(base, t->reply[0], t->reply_len[0]);
+	*len = t->reply_len[0];
+	return base;
+}
+
+/* The thread rerun's reply is the baseline's: no verifier reset. */
+static void rtcn_wexpect_rerun(struct rtcn *t, const u8 *base,
+			       unsigned int len)
+{
+	rtcn_wthread_ref(t, 0, PAGE_SIZE, NFS_UNSTABLE);
+	KUNIT_ASSERT_EQ(t->test, t->reply_len[0], len);
+	KUNIT_EXPECT_EQ(t->test, memcmp(t->reply[0], base, len), 0);
+}
+
+/*
+ * The NOWAIT write submit fails in a way that is not -EAGAIN, or writes
+ * short: a counted nowait_err miss with no reply, no count, no verifier
+ * reset; the rerun's reply is the thread path's.
+ */
+static void nfsd_rtc_write_nowait_err_submit(struct kunit *test)
+{
+	static const int errs[] = { -EOPNOTSUPP, -EINVAL, -EIO, 0 };
+	struct rtcn *t = test->priv;
+	struct svc_rqst *r = t->rq[1];
+	struct nfsd_rtc_ctx *c = r->rq_rtc_priv;
+	unsigned long h0, a0, h1, a1, cnt;
+	struct nfsd3_writeres *resp;
+	unsigned int i, len;
+	u8 *base = rtcn_wbaseline(t, &len);
+
+	for (i = 0; i < ARRAY_SIZE(errs); i++) {
+		t->nowait_err = errs[i];
+		t->nowait_short = errs[i] ? 0 : PAGE_SIZE / 2;
+		cnt = PAGE_SIZE;
+		resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_UNSTABLE);
+		rtcn_counts(&h0, &a0);
+		KUNIT_EXPECT_EQ(test, nfsd_rtc_write_file(r, &resp->fh,
+				rtcn_get(t), 0, &t->payload, &cnt, 0,
+				resp->verf), nfs_ok);
+		rtcn_counts(&h1, &a1);
+		KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+		KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
+		KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_NOWAIT_ERR);
+		KUNIT_EXPECT_EQ(test, t->calls, 1);
+		KUNIT_EXPECT_NULL(test, c->nf);
+		KUNIT_EXPECT_EQ(test, h1 - h0, 0);
+		KUNIT_EXPECT_EQ(test, a1 - a0, 0);
+		KUNIT_EXPECT_EQ(test, r->rq_res.len, 0);
+		KUNIT_EXPECT_NULL(test, memchr_inv(t->wdata + t->nowait_short,
+						   0, RTCN_SIZE - t->nowait_short));
+		rtcn_expect_ref_back(t);
+		t->nowait_err = 0;
+		t->nowait_short = 0;
+		rtcn_wexpect_rerun(t, base, len);
+	}
+}
+
+/* As above, the async write completing so: abandoned, nothing encoded. */
+static void nfsd_rtc_write_nowait_err_complete(struct kunit *test)
+{
+	static const long res[] = { -EOPNOTSUPP, -EINVAL, -EIO, PAGE_SIZE - 1 };
+	struct rtcn *t = test->priv;
+	struct svc_rqst *r = t->rq[1];
+	struct nfsd_rtc_ctx *c = r->rq_rtc_priv;
+	unsigned long h0, a0, h1, a1, cnt;
+	struct nfsd3_writeres *resp;
+	unsigned int i, len;
+	u8 *base = rtcn_wbaseline(t, &len);
+
+	for (i = 0; i < ARRAY_SIZE(res); i++) {
+		t->mode = RTCN_ASYNC;
+		cnt = PAGE_SIZE;
+		resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_UNSTABLE);
+		rtcn_counts(&h0, &a0);
+		nfsd_rtc_write_file(r, &resp->fh, rtcn_get(t), 0, &t->payload,
+				    &cnt, 0, resp->verf);
+		KUNIT_ASSERT_TRUE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
+		c->res = res[i];
+		KUNIT_EXPECT_EQ(test, nfsd3_rtc_ops.complete(r), -EAGAIN);
+		rtcn_counts(&h1, &a1);
+		KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+		KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_NOWAIT_ERR);
+		KUNIT_EXPECT_EQ(test, h1 - h0, 0);
+		KUNIT_EXPECT_EQ(test, a1 - a0, 0);
+		KUNIT_EXPECT_NULL(test, c->nf);
+		KUNIT_EXPECT_EQ(test, r->rq_res.len, 0);
+		rtcn_expect_ref_back(t);
+		t->mode = RTCN_SYNC;
+		rtcn_wexpect_rerun(t, base, len);
+	}
+}
+
+/*
+ * A frozen superblock: sb_start_write_trylock() fails on the work item,
+ * a counted sb_frozen miss before ->write_iter (no sleep in
+ * sb_start_write() on the connection's work item).
+ */
+static void nfsd_rtc_write_frozen(struct kunit *test)
+{
+	struct rtcn *t = test->priv;
+	struct super_block *sb = file_inode(t->file)->i_sb;
+	struct svc_rqst *r = t->rq[1];
+	struct nfsd_rtc_ctx *c = r->rq_rtc_priv;
+	unsigned long h0, a0, h1, a1, cnt = PAGE_SIZE;
+	struct nfsd3_writeres *resp;
+
+	KUNIT_ASSERT_EQ(test, freeze_super(sb, FREEZE_HOLDER_KERNEL, NULL), 0);
+	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_FILE_SYNC);
+	rtcn_counts(&h0, &a0);
+	nfsd_rtc_write_file(r, &resp->fh, rtcn_get(t), 0, &t->payload, &cnt,
+			    rtcn_iocb_flags(NFS_FILE_SYNC), resp->verf);
+	rtcn_counts(&h1, &a1);
+	KUNIT_EXPECT_EQ(test, thaw_super(sb, FREEZE_HOLDER_KERNEL, NULL), 0);
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+	KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_SB_FROZEN);
+	KUNIT_EXPECT_EQ(test, t->calls, 0);
+	KUNIT_EXPECT_NULL(test, c->nf);
+	KUNIT_EXPECT_EQ(test, h1 - h0, 0);
+	KUNIT_EXPECT_EQ(test, a1 - a0, 0);
+	KUNIT_EXPECT_NULL(test, memchr_inv(t->wdata, 0, RTCN_SIZE));
+	rtcn_expect_ref_back(t);
+	/* Thawed, the thread rerun is the first write. */
+	rtcn_wthread_ref(t, 0, PAGE_SIZE, NFS_FILE_SYNC);
+}
+
+/*
+ * The WRITE declines not covered above: a local (loopback) client, a
+ * file-cache miss, O_APPEND, and a payload the split would bounce.
+ */
+static void nfsd_rtc_write_fallbacks(struct kunit *test)
+{
+	struct rtcn *t = test->priv;
+	struct svc_rqst *r = t->rq[1];
+	unsigned long h0, a0, h1, a1, cnt;
+	struct nfsd3_writeres *resp;
+	struct svc_fh fh;
+
+	cnt = PAGE_SIZE;
+	rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_UNSTABLE);
+	set_bit(RQ_LOCAL, &r->rq_flags);
+	KUNIT_EXPECT_EQ(test, nfsd_rtc_write(r, &t->fh, 0, &t->payload, &cnt,
+					     0, NULL), nfs_ok);
+	clear_bit(RQ_LOCAL, &r->rq_flags);
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_WRITE_MODE);
+	KUNIT_EXPECT_EQ(test, t->calls, 0);
+
+	cnt = PAGE_SIZE;
+	rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_UNSTABLE);
+	fh_init(&fh, NFS3_FHSIZE);
+	fh.fh_handle.fh_size = 8;
+	fh.fh_handle.fh_version = 0;		/* nfserr_badhandle */
+	rtcn_counts(&h0, &a0);
+	KUNIT_EXPECT_EQ(test, nfsd_rtc_write(r, &fh, 0, &t->payload, &cnt, 0,
+					     NULL), nfs_ok);
+	rtcn_counts(&h1, &a1);
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_FILE_MISS);
+	KUNIT_EXPECT_EQ(test, t->calls, 0);
+	KUNIT_EXPECT_EQ(test, h1 - h0, 0);
+	KUNIT_EXPECT_EQ(test, a1 - a0, 0);
+	rtcn_expect_ref_back(t);
+
+	t->file->f_flags |= O_APPEND;
+	cnt = PAGE_SIZE;
+	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_UNSTABLE);
+	nfsd_rtc_write_file(r, &resp->fh, rtcn_get(t), 0, &t->payload, &cnt,
+			    0, resp->verf);
+	t->file->f_flags &= ~O_APPEND;
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_UNALIGNED);
+	KUNIT_EXPECT_EQ(test, t->calls, 0);
+	rtcn_expect_ref_back(t);
+
+	/* Memory-misaligned payload: nfsd_vfs_write() would bounce it. */
+	cnt = PAGE_SIZE;
+	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_UNSTABLE);
+	t->payload.page_base = 100;
+	nfsd_rtc_write_file(r, &resp->fh, rtcn_get(t), 0, &t->payload, &cnt,
+			    0, resp->verf);
+	t->payload.page_base = 0;
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_UNALIGNED);
+	KUNIT_EXPECT_EQ(test, t->calls, 0);
+	rtcn_expect_ref_back(t);
+}
+
+/*
+ * An async (non-EX_ISSYNC) export: FILE_SYNC is not honoured, as in
+ * nfsd_vfs_write(); a sync hit with no IOCB_DSYNC, the thread's reply.
+ */
+static void nfsd_rtc_write_async_export(struct kunit *test)
+{
+	struct rtcn *t = test->priv;
+	struct svc_rqst *r = t->rq[1];
+	unsigned long cnt = PAGE_SIZE;
+	struct nfsd3_writeres *resp;
+	int saved = t->exp->ex_flags;
+
+	t->exp->ex_flags |= NFSEXP_ASYNC;
+	rtcn_wthread_ref(t, 0, PAGE_SIZE, NFS_FILE_SYNC);
+	KUNIT_EXPECT_FALSE(test, t->flags & IOCB_DSYNC);
+	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_FILE_SYNC);
+	resp->status = nfsd_rtc_write_file(r, &resp->fh, rtcn_get(t), 0,
+					   &t->payload, &cnt,
+					   rtcn_iocb_flags(NFS_FILE_SYNC),
+					   resp->verf);
+	resp->count = cnt;
+	t->exp->ex_flags = saved;
+	KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+	KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
+	KUNIT_EXPECT_EQ(test, resp->status, nfs_ok);
+	KUNIT_EXPECT_EQ(test, t->flags & (IOCB_DIRECT | IOCB_NOWAIT | IOCB_DSYNC),
+			IOCB_DIRECT | IOCB_NOWAIT);
+	rtcn_expect_ref_back(t);
+	KUNIT_ASSERT_TRUE(test, nfs3svc_encode_writeres(r, &r->rq_res_stream));
+	rtcn_capture(t, 1);
+	rtcn_wexpect_reply(t, 0, PAGE_SIZE, NFS_FILE_SYNC);
+}
+
 static struct kunit_case nfsd_rtc_cases[] = {
 	KUNIT_CASE(nfsd_rtc_sync_hit),
 	KUNIT_CASE(nfsd_rtc_async_complete),
@@ -878,6 +1330,12 @@ static struct kunit_case nfsd_rtc_cases[] = {
 	KUNIT_CASE(nfsd_rtc_write_eagain_complete),
 	KUNIT_CASE(nfsd_rtc_write_drc),
 	KUNIT_CASE(nfsd_rtc_write_unaligned),
+	KUNIT_CASE(nfsd_rtc_read_nowait_errors),
+	KUNIT_CASE(nfsd_rtc_write_nowait_err_submit),
+	KUNIT_CASE(nfsd_rtc_write_nowait_err_complete),
+	KUNIT_CASE(nfsd_rtc_write_frozen),
+	KUNIT_CASE(nfsd_rtc_write_fallbacks),
+	KUNIT_CASE(nfsd_rtc_write_async_export),
 	{}
 };
 

@@ -1156,6 +1156,8 @@ void svc_rtc_stats_show(struct seq_file *m)
 		[SVC_RTC_FB_EAGAIN_COMPLETE] = "eagain_complete",
 		[SVC_RTC_FB_REGION_PARK] = "region_park",
 		[SVC_RTC_FB_WRITE_MODE] = "write_mode",
+		[SVC_RTC_FB_NOWAIT_ERR] = "nowait_err",
+		[SVC_RTC_FB_SB_FROZEN] = "sb_frozen",
 	};
 	struct svc_rtc_stats s;
 	int i;
