@@ -92,5 +92,9 @@ int	nfsd_reply_cache_stats_show(struct seq_file *m, void *v);
 __wsum	nfsd_cache_csum(struct xdr_buf *buf, unsigned int start,
 			unsigned int remaining, __be32 *scratch);
 #endif
+#if IS_ENABLED(CONFIG_NFSD_RTC_KUNIT_TEST)
+extern bool nfsd_cache_kunit_no_mem;
+struct nfsd_net *nfsd_cache_kunit_nn(struct net *net);
+#endif
 
 #endif /* NFSCACHE_H */
