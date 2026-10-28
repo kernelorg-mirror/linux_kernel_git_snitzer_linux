@@ -111,7 +111,7 @@ It also records every switch on nfsd's CPUs by what goes out and what comes in (
 - **The drive wait (0.87) and the log forces (0.17)** are the WRITE's own. The log forces come from extents allocated anew after each run's trim, and an overwrite workload would have fewer.
 - **Wake-to-run latency**: whether 4 to 8 us is real untraced, and where it goes (IPI, WFI exit, the schedule).
 
-## 2. Which source's wakes find nothing (r93, to run)
+## 2. Which source's wakes find nothing (r93)
 
 [`xeu-rig/wakeempty.bt`](../../xeu-rig/wakeempty.bt) tags each idle thread woken by `svc_pool_wake_idle_thread()` with the wake's source, classed as `wakesrc.bt` does it. `svc_pool_thread_wake` names the woken thread, so the tag can follow it. When that thread's `svc_recv()` pass returns, the pass is counted by:
 - the source;
@@ -122,3 +122,23 @@ It also records every switch on nfsd's CPUs by what goes out and what comes in (
 An empty pass is followed one step further: did the thread sleep again, or go round once more and find work or nothing?
 
 [run93.sh](run93.sh): one traced loan64 run at the current state, with no module swapped. From 10 s into the timed load it runs 8 s of `wakeempty.bt`, then 8 s of `wakesrc.bt` for the same run's totals. About 5 minutes.
+
+**run93** ([run93.out](run93.out), [wakeempty-r93.txt](wakeempty-r93.txt), [wakesrc-r93.txt](wakesrc-r93.txt)): 40.48 GB/s, its flows placed, no drive stepping down. Traced, so nfsd's cycles (327.7k a WRITE) are not a cost. `wakesrc.bt` in the same run agrees with run92: 3.15 wakes a WRITE, 0.50 woken for nothing.
+
+Each woken thread's `svc_recv()` pass after the wake (`wakeempty.bt`, 433,463 WRITEs), by the wake's source. "Had not slept" is a thread woken after it had set itself to sleep but before it switched out, which costs no switch.
+
+| source | passes | slept, found work | slept, empty | had not slept, found work | had not slept, empty | empty in all |
+|---|---|---|---|---|---|---|
+| ring | 514.6k | 271.1k | **106.3k** | 23.3k | 113.9k | 43% |
+| next | 358.0k | 221.7k | 40.4k | 22.2k | 73.6k | 32% |
+| rcv-done | 233.6k | 127.4k | 43.0k | 11.2k | 51.9k | 41% |
+| credit | 191.4k | 115.2k | 18.1k | 16.8k | 41.2k | 31% |
+| dready-nfsd | 13.0k | 6.7k | 2.7k | 0.7k | 2.9k | 43% |
+| rcv-part | 9.6k | 6.3k | 1.8k | 0.6k | 0.8k | 27% |
+
+- **The woken-for-nothing wakes are spread over the sources, the ring's first.** Of the 0.49 a WRITE that slept and woke for nothing, the ring's are half (0.25 a WRITE), then the complete record's hand-back (0.10), the next-thread wake (0.09) and credit (0.04). Round 17's guess that they were mostly next-thread wakes was wrong.
+- **They lose a race.** A wake that finds nothing found a transport enqueued with no thread on it. By the time the woken thread looked, a thread already running had taken it. A woken thread that slept ends an empty pass mostly 2–4 us after the wake, with a second hump at 8–16 us. One that finds work ends at 8–32 us. Under trace it takes 4–8 us to get onto its CPU (section 1). Most of the woken thread's journey is the time a running thread has to take the work first.
+- **After an empty pass**, the thread most often goes round once more and finds nothing again (ring 112k, next 73k, rcv-done 52k, credit 41k), or sleeps again (ring 61k). Fewer go round and find work (ring 47k).
+- **What they cost.** A sleep and a wake on an idle CPU is roughly 6k nfsd cycles, by the share of nfsd's busy cycles the profile gives the switch and the wake (about a tenth) over 3.6 round trips a WRITE: a rough estimate. At 0.49 a WRITE that is about 3k cycles a WRITE, about 1% of nfsd's. The passes that go round without sleeping cost a pass each, not a switch.
+
+**So:** the most a change to who is woken could save is about 1% of nfsd's cycles, and round 18 showed it can cost latency. The race is lost because the woken thread takes 4–8 us to arrive, if that figure holds untraced. A faster wake would cut the empty wakes and shorten each WRITE's path. A smaller wake would only cut the empty wakes.

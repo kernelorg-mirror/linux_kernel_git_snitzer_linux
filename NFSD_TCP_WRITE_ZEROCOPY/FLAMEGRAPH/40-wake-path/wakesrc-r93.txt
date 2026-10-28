@@ -1,0 +1,34 @@
+Attached 22 probes
+
+
+@dequeue: 1542129
+@done_received: 1215510
+@dready_nfsd: 1187868
+@dready_ring: 10110518
+@eagain: 11
+@empty_no_sleep: 1471863
+@empty_slept: 248665
+@no_sleep: 2244042
+@other_after_part: 1244332
+@own_back: 30809
+@part_data_set: 20055
+@part_received: 1275485
+@recv: 3327673
+@short: 1277564
+@sleeps: 1132868
+@slept: 1013879
+@w[other, running]: 1197
+@w[other, woken]: 1823
+@w[rcv-part, running]: 8994
+@w[rcv-part, woken]: 11476
+@w[dready-nfsd, running]: 12926
+@w[dready-nfsd, woken]: 15808
+@w[credit, running]: 178652
+@w[rcv-done, running]: 220918
+@w[credit, woken]: 248956
+@w[rcv-done, woken]: 268119
+@w[next, running]: 345882
+@w[next, woken]: 438939
+@w[ring, running]: 441518
+@w[ring, woken]: 578833
+@writes: 496610
