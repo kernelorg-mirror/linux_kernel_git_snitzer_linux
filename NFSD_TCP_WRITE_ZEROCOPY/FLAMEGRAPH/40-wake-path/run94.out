@@ -1,0 +1,11 @@
+22:02:01 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu 63631721F8B149913C0DC19
+22:06:31 r94-load | total 40.47 GB/s | 1 no-step | 1 placed | untraced from 22:05:31 traced from 22:05:42 end 22:05:54
+22:06:31 r94-load untraced: runs 1962342 run_delay_ns 133146784 mean_ns 67 on_cpu_ns 36369126640 WRITEs 361176 runs_a_WRITE 5.43
+22:06:31 r94-load traced:   runs 1547956 run_delay_ns 194807432 mean_ns 125 on_cpu_ns 41175211584 WRITEs 361522 runs_a_WRITE 4.28
+22:06:31 r94-load wakelat:  @schedule_avg: 1465 @total_avg: 6422
+22:11:00 r94-qd1 | total 7.68 GB/s | 1 no-step | 1 placed | untraced from 22:10:00 traced from 22:10:09 end 22:10:21
+22:11:00 r94-qd1 untraced: runs 535106 run_delay_ns 88585104 mean_ns 165 on_cpu_ns 7832856424 WRITEs 62796 runs_a_WRITE 8.52
+22:11:00 r94-qd1 traced:   runs 481031 run_delay_ns 177406096 mean_ns 368 on_cpu_ns 9131971272 WRITEs 59355 runs_a_WRITE 8.10
+22:11:00 r94-qd1 wakelat:  @schedule_avg: 1182 @total_avg: 5382
+22:11:02 end: settled.sh audit rest: the settled setting; DONE
+
