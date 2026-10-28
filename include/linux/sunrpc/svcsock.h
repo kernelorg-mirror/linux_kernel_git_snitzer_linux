@@ -320,6 +320,7 @@ struct ubuf_info *svc_tcp_rx_region_kunit_send(struct svc_rqst *rqstp,
 					       unsigned int skbs);
 void svc_tcp_rx_region_kunit_flush(void);
 void svc_tcp_rx_region_kunit_reads(bool on);
+bool svc_tcp_rx_region_kunit_reads_on(void);
 int svc_tcp_rx_region_kunit_has_wspace(struct svc_sock *svsk);
 void svc_tcp_rx_region_kunit_escape(unsigned int n);
 void svc_tcp_rx_region_kunit_conn_drain(struct svc_sock *svsk);

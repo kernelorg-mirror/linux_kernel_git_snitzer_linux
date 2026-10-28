@@ -79,6 +79,11 @@ DEFINE_STATIC_KEY_FALSE(page_pool_mem_providers);
  */
 #define RX_REGION_DEV_LEN	256
 /*
+ * The region is off unless rx_region_dev is set or
+ * sunrpc.svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in,
+ * it does not enable one.  With neither, no pool binds a region, no carve
+ * makes one, and nothing is loaned from one.
+ *
  * Supported tunings: module parameters (page_pool.rx_region_* on the kernel
  * command line, /sys/module/page_pool/parameters/ at run time) and the same
  * settings in debugfs page_pool_rx_region_cfg/, both through one set of
@@ -3170,7 +3175,7 @@ static const struct kernel_param_ops rx_region_dev_ops = {
 };
 module_param_cb(rx_region_dev, &rx_region_dev_ops, NULL, 0644);
 MODULE_PARM_DESC(rx_region_dev,
-		 "Network devices, comma-separated (parent bus device, else interface name), whose page pools share the fixed receive region; read when a pool is created");
+		 "Network devices, comma-separated (parent bus device, else interface name), whose page pools share the fixed receive region; read when a pool is created (default: empty; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one)");
 
 /* 0 is auto: the size a carve computes (rx_region_size_now()). */
 static int rx_region_pages_param_set(const char *val,
@@ -3206,7 +3211,7 @@ static const struct kernel_param_ops rx_region_pages_ops = {
 };
 module_param_cb(rx_region_pages, &rx_region_pages_ops, NULL, 0644);
 MODULE_PARM_DESC(rx_region_pages,
-		 "Pages in the fixed receive region (0: auto, computed when carved); reads \"<pages> (auto|manual)\": the size the next carve uses, while debugfs page_pool_rx_region shows the carved region; a change takes effect once no pool is bound to the region");
+		 "Pages in the fixed receive region (0: auto, computed when carved; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one); reads \"<pages> (auto|manual)\": the size the next carve uses, while debugfs page_pool_rx_region shows the carved region; a change takes effect once no pool is bound to the region");
 
 static int rx_region_stack_param_set(const char *val,
 				     const struct kernel_param *kp)
@@ -3234,7 +3239,7 @@ static const struct kernel_param_ops rx_region_stack_ops = {
 };
 module_param_cb(rx_region_stack, &rx_region_stack_ops, NULL, 0644);
 MODULE_PARM_DESC(rx_region_stack,
-		 "Pages a pool bound to the fixed receive region keeps for reuse (0: auto, each pool's size, read back as \"0 (auto)\"); read when a pool is created");
+		 "Pages a pool bound to the fixed receive region keeps for reuse (0: auto, each pool's size, read back as \"0 (auto)\"); read when a pool is created; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one");
 
 /*
  * Only while no region exists: budgets are checked against the split.
@@ -3290,7 +3295,7 @@ static const struct kernel_param_ops rx_region_read_pages_ops = {
 };
 module_param_cb(rx_region_read_pages, &rx_region_read_pages_ops, NULL, 0644);
 MODULE_PARM_DESC(rx_region_read_pages,
-		 "Pages of the fixed receive region split off for reads (0: auto, reads and writes share it; else at least one maximum READ); -EBUSY while the region exists");
+		 "Pages of the fixed receive region split off for reads (0: auto, reads and writes share it; else at least one maximum READ); -EBUSY while the region exists; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one");
 
 static ssize_t rx_region_cfg_read(struct file *file, char __user *ubuf,
 				  size_t count, loff_t *ppos)
