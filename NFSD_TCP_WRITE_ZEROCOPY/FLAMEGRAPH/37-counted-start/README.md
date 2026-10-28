@@ -74,7 +74,11 @@ Round 01 was profiled on 23 October ([01-loan64-baseline](../01-loan64-baseline/
 
 [run80.sh](run80.sh), one loan64 run with `PROFILE=1` and `RUNTIME=55`: 40.44 GB/s, no drive stepped down, no WARNING, peak 6344, the settled setting at the end. Its counts over the window (rings 140.0k, nfsd 300.3k cycles a WRITE) are taken while perf runs and are not part of the table above. Runs are in `$L/t2-r80/`, perf data kept. Kept here: `perf-sym-*-r80.txt` (cycles by symbol, nfsd's CPUs 8-55 and the rings' 0-7,56-63), `perf-lmiss-*-r80.txt` (L3 read misses by symbol) and `perf-stat-*-r80.txt`.
 
-- **L3 read misses a WRITE:** about 7.3k on nfsd's CPUs and 2.9k on the rings' (8 s of `perf stat`, at 38.5k WRITEs a second).
+- **`l3d_cache_lmiss_rd` a WRITE:** about 7.3k on nfsd's CPUs and 2.9k on the rings' (8 s of `perf stat`, at 38.5k WRITEs a second). Not a count of misses a WRITE stalls on:
+  - the event counts refills of the N2's system-level cache (32 MiB, shared by all 64 CPUs) from memory reads, and on nfsd's CPUs it exceeds the L2 refills (7.3k against 4.5k), so it takes in hardware prefetches as well as demand misses;
+  - 7.3k lines is about 466 KB a WRITE, near half the payload, though every WRITE was loaned (2.5M direct segments, the 2.5M admitted) and a WRITE's struct pages are 64 pages of one or two lines;
+  - it counts all of CPUs 8-55: XFS, the block layer, NVMe completions and the scheduler too. The rings' group takes in port b's idle CPUs 56-63, so its 184k cycles a WRITE is not `cost.sh`'s 140k. 2.9k there is about 22 a frame (1 MiB at MTU 7792 is about 135 frames).
+  - So the event's samples rank where misses land, but its count is no yardstick for a round. Rounds are judged on counted cycles a WRITE and their own loads' timings.
 - **nfsd's misses, past idle and the scheduler:** `svc_tcp_rx_release_refs` 2.70%, `svc_tcp_rx_region_span` 1.99%, `svc_tcp_rx_skb_region_pages_after` 1.79%, `page_pool_put_netmem_bulk` 1.52%, `svc_tcp_rx_append_ref` 1.35%, `svc_tcp_rx_prefetch_pages` 1.14%. The release leads, as round 36 found. The region's span and pages-after tests are close behind and were not in round 38's scope.
 - **nfsd's cycles:** idle 28%, `finish_task_switch` 7.4%, `_raw_spin_unlock_irqrestore` 2.6%; the loan frames 1.1 to 1.6% each.
 - **The rings' misses** are GRO's (`inet_gro_receive`, `tcp_gro_receive`, `tcp4_gro_receive`, `__gro_receive_network_flush`, `gro_list_prepare`, `skb_gro_receive`, about 40% between them) and xeu's refill (7.65%) and poll (5.39%).
