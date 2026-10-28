@@ -1,0 +1,15 @@
+20:19:06 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc 751A649B7263BAC9E031BFC, nfsd 3F0C341E86E266D5FDF2ADF, xeu 63631721F8B149913C0DC19
+20:23:26 r91-look-loan64 | total 40.55 GB/s | 1 no-step | 1 placed | r91-look-loan64 ring 43.9 nfsd 93.6 us/W (38594 WRITEs/s) | ring 139.8k cycles 311.1k instructions, nfsd 300.7k cycles 309.7k instructions a WRITE | peak 6686
+20:23:26 look from 20:22:36
+20:23:26 lat-1-n0: section 422 ns mean | untimed 291.2k cycles a WRITE
+20:23:26 lat-2-n1: section 499 ns mean | untimed 293.0k cycles a WRITE
+20:23:26 lat-3-n2: section 480 ns mean | untimed 293.0k cycles a WRITE
+20:23:26 lat-4-n0: section 423 ns mean | untimed 290.9k cycles a WRITE
+20:27:35 r91-1-loan64-n0 | total 40.53 GB/s | 1 no-step | 1 placed | r91-1-loan64-n0 ring 43.9 nfsd 95.2 us/W (38672 WRITEs/s) | ring 138.4k cycles 309.2k instructions, nfsd 299.6k cycles 308.8k instructions a WRITE | peak 6471 | svc_tcp_rx_rcv_next 0
+20:31:44 r91-1-loan64-n1 | total 40.51 GB/s | 1 no-step | 1 placed | r91-1-loan64-n1 ring 45.2 nfsd 93.9 us/W (38661 WRITEs/s) | ring 139.2k cycles 310.1k instructions, nfsd 302.8k cycles 313.6k instructions a WRITE | peak 6391 | svc_tcp_rx_rcv_next 1
+20:35:54 r91-1-loan64-n2 | total 40.57 GB/s | 1 no-step | 1 placed | r91-1-loan64-n2 ring 42.5 nfsd 92.2 us/W (38577 WRITEs/s) | ring 138.7k cycles 309.4k instructions, nfsd 301.5k cycles 312.3k instructions a WRITE | peak 6593 | svc_tcp_rx_rcv_next 2
+20:40:03 r91-2-loan64-n1 | total 40.43 GB/s | 1 no-step | 1 placed | r91-2-loan64-n1 ring 43.3 nfsd 93.9 us/W (38565 WRITEs/s) | ring 139.0k cycles 310.8k instructions, nfsd 302.1k cycles 313.5k instructions a WRITE | peak 6314 | svc_tcp_rx_rcv_next 1
+20:44:12 r91-2-loan64-n2 | total 40.46 GB/s | 1 no-step | 1 placed | r91-2-loan64-n2 ring 41.3 nfsd 90.3 us/W (38487 WRITEs/s) | ring 139.0k cycles 310.2k instructions, nfsd 302.1k cycles 314.0k instructions a WRITE | peak 6579 | svc_tcp_rx_rcv_next 2
+20:49:35 r91-2-loan64-n0 | total 40.49 GB/s | 1 no-step | 1 placed | r91-2-loan64-n0 ring 41.4 nfsd 94.2 us/W (38671 WRITEs/s) | ring 138.5k cycles 309.3k instructions, nfsd 302.0k cycles 310.8k instructions a WRITE | peak 6288 | svc_tcp_rx_rcv_next 0
+20:53:44 r91-3-loan64-n2 | total 40.59 GB/s | 1 no-step | 1 placed | r91-3-loan64-n2 ring 43.4 nfsd 91.6 us/W (38643 WRITEs/s) | ring 138.3k cycles 309.5k instructions, nfsd 301.1k cycles 312.1k instructions a WRITE | peak 6706 | svc_tcp_rx_rcv_next 2
+
