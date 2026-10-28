@@ -11,12 +11,16 @@
 #include <linux/namei.h>
 #include <linux/nfs3.h>
 #include <kunit/visibility.h>
+#include <linux/cred.h>
+#include <linux/sunrpc/svc_xprt.h>
 
 #include "cache.h"
 #include "xdr3.h"
 #include "vfs.h"
 #include "nfserr.h"
 #include "filecache.h"
+#include "nfsd.h"
+#include "netns.h"
 #include "trace.h"
 
 #define NFSDDBG_FACILITY		NFSDDBG_PROC
@@ -285,8 +289,17 @@ nfsd3_proc_read(struct svc_rqst *rqstp)
 			 resp->count + 4);
 
 	fh_copy(&resp->fh, &argp->fh);
-	resp->status = nfsd_read(rqstp, &resp->fh, argp->offset,
-				 &resp->count, &resp->eof);
+	if (test_bit(RQ_RTC_TRY, &rqstp->rq_flags)) {
+		resp->status = nfsd_rtc_read(rqstp, &resp->fh, argp->offset,
+					     &resp->count, &resp->eof);
+		/* Finished by nfsd3_rtc_complete(), or rerun on a thread */
+		if (test_bit(RQ_RTC_ASYNC, &rqstp->rq_flags) ||
+		    test_bit(RQ_RTC_MISS, &rqstp->rq_flags))
+			return rpc_success;
+	} else {
+		resp->status = nfsd_read(rqstp, &resp->fh, argp->offset,
+					 &resp->count, &resp->eof);
+	}
 	resp->status = nfsd3_map_status(resp->status);
 	return rpc_success;
 }
@@ -1220,4 +1233,85 @@ const struct svc_version nfsd_version3 = {
 	.vs_proc	= nfsd_procedures3,
 	.vs_dispatch	= nfsd_dispatch,
 	.vs_xdrsize	= NFS3_SVC_XDRSIZE,
+};
+
+/*
+ * Run-to-completion NFSv3 READ (svc_rtc_register()).  Registered only when
+ * reads are direct (nfsd_create_serv()); want() keeps buffered configs on
+ * the thread path if io_cache_read changes while the service runs.
+ */
+static bool nfsd3_rtc_want(struct svc_xprt *xprt)
+{
+	return READ_ONCE(nfsd_io_cache_read) == NFSD_IO_DIRECT;
+}
+
+static bool nfsd3_rtc_want_call(struct svc_xprt *xprt, u32 prog, u32 vers,
+				u32 proc)
+{
+	return prog == NFS_PROGRAM && vers == 3 && proc == NFS3PROC_READ;
+}
+
+/* A pool rqst gets the per-thread state nfsd() keeps on its stack. */
+static int nfsd3_rtc_rqst_init(struct svc_rqst *rqstp)
+{
+	struct nfsd_rtc_ctx *c = kzalloc(sizeof(*c), GFP_KERNEL);
+
+	rqstp->rq_private = kzalloc(sizeof(struct nfsd_thread_local_info),
+				    GFP_KERNEL);
+	if (!c || !rqstp->rq_private) {
+		kfree(rqstp->rq_private);
+		rqstp->rq_private = NULL;
+		kfree(c);
+		return -ENOMEM;
+	}
+	c->rqstp = rqstp;
+	rqstp->rq_rtc_priv = c;
+	return 0;
+}
+
+static void nfsd3_rtc_rqst_free(struct svc_rqst *rqstp)
+{
+	struct nfsd_thread_local_info *ntli = rqstp->rq_private;
+
+	kfree(rqstp->rq_rtc_priv);
+	rqstp->rq_rtc_priv = NULL;
+	if (!ntli)
+		return;
+	put_cred(ntli->ntli_user_cred);
+	put_cred(ntli->ntli_fh_base);
+	put_cred(ntli->ntli_fh_cred);
+	kfree(ntli);
+	rqstp->rq_private = NULL;
+}
+
+static void nfsd3_rtc_rqst_done(struct svc_rqst *rqstp)
+{
+	/* A shared kworker must not keep the client's credentials. */
+	put_cred(revert_creds(get_cred(current_real_cred())));
+	/* Disposal of unhashed files (fput, may sleep) stays on threads. */
+}
+
+/* The READ's I/O completed: encode its reply on the work item. */
+static int nfsd3_rtc_complete(struct svc_rqst *rqstp)
+{
+	struct nfsd3_readres *resp = rqstp->rq_resp;
+	__be32 status;
+
+	if (nfsd_rtc_read_finish(rqstp, &resp->fh, &resp->count, &resp->eof,
+				 &status) == -EAGAIN) {
+		nfsd_rtc_dispatch_finish(rqstp, true);
+		return -EAGAIN;
+	}
+	resp->status = nfsd3_map_status(status);
+	return nfsd_rtc_dispatch_finish(rqstp, false);
+}
+
+const struct svc_rtc_ops nfsd3_rtc_ops = {
+	.flavor		= RPC_AUTH_UNIX,
+	.complete	= nfsd3_rtc_complete,
+	.want		= nfsd3_rtc_want,
+	.want_call	= nfsd3_rtc_want_call,
+	.rqst_init	= nfsd3_rtc_rqst_init,
+	.rqst_free	= nfsd3_rtc_rqst_free,
+	.rqst_done	= nfsd3_rtc_rqst_done,
 };

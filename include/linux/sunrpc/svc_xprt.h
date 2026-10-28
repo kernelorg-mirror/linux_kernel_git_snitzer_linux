@@ -23,6 +23,8 @@ struct svc_xprt_ops {
 	int		(*xpo_has_wspace)(struct svc_xprt *);
 	int		(*xpo_recvfrom)(struct svc_rqst *);
 	int		(*xpo_sendto)(struct svc_rqst *);
+	/* xpo_sendto() for a caller that holds xpt_mutex (rtc send FIFO) */
+	int		(*xpo_sendto_locked)(struct svc_rqst *);
 	int		(*xpo_result_payload)(struct svc_rqst *, unsigned int,
 					      unsigned int);
 	void		(*xpo_release_ctxt)(struct svc_xprt *xprt, void *ctxt);
@@ -45,6 +47,13 @@ struct svc_xprt_ops {
 	void		(*xpo_free)(struct svc_xprt *);
 	void		(*xpo_kill_temp_xprt)(struct svc_xprt *);
 	void		(*xpo_handshake)(struct svc_xprt *xprt);
+	/*
+	 * Read the next call's program, version and procedure without
+	 * consuming it.  Called with XPT_BUSY held; must not sleep.
+	 * Returns 0, or -EAGAIN when the header is not at hand.
+	 */
+	int		(*xpo_peek_call)(struct svc_xprt *xprt, u32 *prog,
+					   u32 *vers, u32 *proc, u32 *flavor);
 };
 
 struct svc_xprt_class {
@@ -110,16 +119,30 @@ struct svc_xprt {
  * that runs on the CPU that received its data.  svc_xprt_enqueue() queues
  * that work item instead of waking a thread; the work item offers the
  * transport to the hook and, when the hook declines, hands the transport to
- * a thread exactly as svc_xprt_enqueue() would have.  Replies the hook
- * produces are queued with svc_rtc_queue_send() and sent by the work item,
- * one xpt_mutex hold per batch.
+ * a thread exactly as svc_xprt_enqueue() would have.  A call the hook
+ * serves is received, decoded and submitted (lookup-only, IOCB_NOWAIT) on
+ * the work item; its reply is encoded on the work item after
+ * svc_rtc_complete() and sent through the per-connection FIFO, one
+ * xpt_mutex hold per batch.  A lookup miss or -EAGAIN hands the received
+ * call to an nfsd thread (svc_pool.sp_rtc_rqsts), which reruns it.
  */
 enum svc_rtc_reason {
 	SVC_RTC_FB_NO_HOOK,		/* no hook registered */
 	SVC_RTC_FB_XPRT_STATE,		/* close, conn, handshake, deferred */
 	SVC_RTC_FB_STOPPING,		/* transport being torn down */
 	SVC_RTC_FB_DECLINED,		/* hook declined the transport */
-	SVC_RTC_FB_NO_RECEIVE,		/* receive on the work item not built */
+	SVC_RTC_FB_NO_PEEK,		/* call header not peekable (partial, TLS) */
+	SVC_RTC_FB_NOT_FAST,		/* hook does not serve this call */
+	SVC_RTC_FB_POOL_EMPTY,		/* every pool rqst is in use */
+	SVC_RTC_FB_NO_SLOT,		/* per-connection request limit */
+	SVC_RTC_FB_NO_MEM,		/* receive pages not allocated (GFP_NOWAIT) */
+	SVC_RTC_FB_AUTH,		/* peeked cred flavor not the hook's */
+	SVC_RTC_FB_MISS,		/* cache lookup would upcall or wait */
+	SVC_RTC_FB_FILE_MISS,		/* no open file in the file cache */
+	SVC_RTC_FB_UNALIGNED,		/* not a direct-I/O-able READ */
+	SVC_RTC_FB_EAGAIN_SUBMIT,	/* IOCB_NOWAIT submit said -EAGAIN */
+	SVC_RTC_FB_EAGAIN_COMPLETE,	/* async completion said -EAGAIN */
+	SVC_RTC_FB_REGION_PARK,		/* READ payload region would park */
 	SVC_RTC_NR_REASONS
 };
 
@@ -127,9 +150,12 @@ enum svc_rtc_verdict {
 	SVC_RTC_THREAD,			/* hand the transport to a thread */
 	SVC_RTC_IDLE,			/* nothing more to do */
 	SVC_RTC_REQUEUE,		/* budget used up: run again */
+	SVC_RTC_FAST,			/* serve the next call on a work item */
 };
 
 struct svc_rtc_ops {
+	/* RPC auth flavor the hook serves; others go to a thread unreceived */
+	u32	flavor;
 	/*
 	 * Called on the work item with XPT_BUSY held and nothing read from
 	 * the transport.  Returns true to take the next record on the fast
@@ -137,6 +163,23 @@ struct svc_rtc_ops {
 	 * returns false.
 	 */
 	bool	(*want)(struct svc_xprt *xprt);
+	/*
+	 * Called after want() with the peeked call header.  Returns true
+	 * to receive and process the call on the work item.  Must not sleep.
+	 */
+	bool	(*want_call)(struct svc_xprt *xprt, u32 prog, u32 vers,
+			     u32 proc);
+	/* Set up / tear down a pool rqst's upper-layer state (may sleep). */
+	int	(*rqst_init)(struct svc_rqst *rqstp);
+	void	(*rqst_free)(struct svc_rqst *rqstp);
+	/* After processing on a work item or thread, before release. */
+	void	(*rqst_done)(struct svc_rqst *rqstp);
+	/*
+	 * On the work item, after svc_rtc_complete(): finish an
+	 * RQ_RTC_ASYNC call.  Returns the dispatch result (1 send, 0 drop),
+	 * or -EAGAIN to hand the call to a thread.
+	 */
+	int	(*complete)(struct svc_rqst *rqstp);
 };
 
 struct svc_rtc_send;
@@ -159,11 +202,33 @@ struct svc_rtc_send {
 struct svc_rtc_conn {
 	struct work_struct	work;
 	struct svc_xprt		*xprt;
-	int			cpu;
+	int			cpu;	/* CPU of the latest receive kick */
 	unsigned long		flags;
 	struct llist_head	sendq;
 	/* FIFO replies taken from @sendq not yet sent; work item only */
 	struct llist_node	*pending;
+	/* async calls completed (svc_rtc_complete(), any context) */
+	struct llist_head	done;
+};
+
+/* Pool rqsts per service: at most one per nfsd thread, and this many. */
+#define SVC_RTC_POOL_CAP	64
+
+struct svc_rtc_rqst {
+	struct lwq_node		qnode;	/* pool free list or sp_rtc_rqsts */
+	struct llist_node	node;	/* conn->done */
+	struct svc_rtc_send	send;	/* reply on conn->sendq */
+	struct svc_rtc_conn	*conn;	/* while in use on a connection */
+	struct svc_rqst		*rqstp;
+	struct list_head	all;
+	bool			queued;	/* reply on the send FIFO */
+};
+
+struct svc_rtc_pool {
+	const struct svc_rtc_ops *ops;
+	struct lwq		free;
+	struct list_head	all;
+	unsigned int		nr;
 };
 
 /* svc_rtc_conn.flags */
@@ -178,6 +243,10 @@ struct svc_rtc_stats {
 	u64	sends;
 	u64	send_batches;
 	u64	budget_exhausted;
+	u64	read_offered;	/* calls the hook wants (READ) */
+	u64	fast_completed;	/* replies sent from a work item */
+	u64	async_submitted;
+	u64	recv_empty;
 	u64	fallback[SVC_RTC_NR_REASONS];
 };
 
@@ -186,6 +255,14 @@ void	svc_rtc_unregister(struct svc_serv *serv);
 void	svc_rtc_queue_send(struct svc_xprt *xprt, struct svc_rtc_send *send);
 void	svc_rtc_stats_sum(struct svc_rtc_stats *sum);
 void	svc_rtc_serv_destroy(struct svc_serv *serv);
+void	svc_rtc_complete(struct svc_rqst *rqstp);
+#if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)
+extern bool svc_rtc_kunit_no_mem;	/* KUnit: fail the receive pages */
+extern bool svc_rtc_kunit_no_slot;	/* KUnit: fail the request slot */
+#endif
+void	svc_rtc_pool_resize(struct svc_serv *serv);
+struct seq_file;
+void	svc_rtc_stats_show(struct seq_file *m);
 #if IS_ENABLED(CONFIG_KUNIT)
 int	svc_rtc_serv_prepare(struct svc_serv *serv);
 int	svc_rtc_xprt_attach(struct svc_xprt *xprt, gfp_t gfp);
@@ -193,9 +270,22 @@ void	svc_rtc_xprt_stop(struct svc_xprt *xprt);
 void	svc_rtc_xprt_detach(struct svc_xprt *xprt);
 bool	svc_rtc_should_divert(struct svc_xprt *xprt);
 enum svc_rtc_verdict svc_rtc_recv_step(struct svc_xprt *xprt,
-				       enum svc_rtc_reason *reason);
+				       enum svc_rtc_reason *reason,
+				       const struct svc_rtc_ops **opsp);
+bool	svc_rtc_thread_serve(struct svc_rqst *rqstp, struct svc_xprt *xprt);
 unsigned int svc_rtc_drain_sends(struct svc_rtc_conn *conn, bool dead);
+int	svc_rtc_pool_set(struct svc_serv *serv, unsigned int nr);
+bool	svc_rtc_thread_run(struct svc_rqst *thr);
+bool	svc_rtc_thread_steal(struct svc_rqst *thr);
 #endif
+
+/* Abandon the fast path for @rqstp: a thread reruns the call. */
+static inline void svc_rtc_miss(struct svc_rqst *rqstp,
+				enum svc_rtc_reason reason)
+{
+	if (!test_and_set_bit(RQ_RTC_MISS, &rqstp->rq_flags))
+		rqstp->rq_rtc_reason = reason;
+}
 
 /* flag bits for xpt_flags */
 enum {
