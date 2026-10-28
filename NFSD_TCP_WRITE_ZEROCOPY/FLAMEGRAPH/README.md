@@ -85,7 +85,13 @@ decided.
    cheaper, the time going to idle at the drives' limit. The borrow's
    struct page loads are L1 hits; the release's miss. Kept
    ([36-loan-frames](36-loan-frames/README.md)).
-6. **The release's struct page misses:** 12% of its first touches of a
+6. **Round 37: round 01's starting point, counted** (Mike, 28 October).
+   The start replayed on build 494 with `rodata=full`, round 01's
+   sunrpc, nfsd, xeu and settings, and set against the current state
+   counted on the same day, to give the progress in counted cycles
+   ([37-counted-start](37-counted-start/README.md)). Planned: it needs a
+   reboot into 494 and back.
+7. **Round 38: the release's struct page misses:** 12% of its first touches of a
    page at 64 ns or more despite round 24's prefetch a batch ahead, at
    most about 2k cycles a WRITE; its prefetch distance and the order it
    gives pages back in.

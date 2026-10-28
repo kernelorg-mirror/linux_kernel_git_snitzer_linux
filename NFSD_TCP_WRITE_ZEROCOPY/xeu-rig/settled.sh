@@ -39,6 +39,8 @@
 # EXP_REFILL holds xeu's rx_refill_thresh to a run's REFILL= instead of 8,
 # and EXP_XEU_<parameter> (exported) holds any xeu parameter to a value, for
 # a host whose xeu was loaded off the setting on purpose (rx_ip_align=0).
+# EXP_XEU_<parameter>=absent holds a run to an xeu without that parameter
+# (FLAMEGRAPH round 37's replay of round 01 on build 494's own xeu).
 # A run that sets something on purpose (twoport.sh's RCVBUF= and the like)
 # passes it as EXP_<NAME>: the audit then holds the live state to that and
 # says the run is off the settled setting and where.
@@ -550,6 +552,10 @@ audit() {
 	for k in $(printf '%s\n' "${!XEU[@]}" | sort); do
 		w=${XEU[$k]}; [ $k = rx_refill_thresh ] && w=${EXP_REFILL:-$w}
 		v=EXP_XEU_$k; w=${!v:-$w}
+		if [ "$w" = absent ]; then	# a kmod from before the parameter, held to not having it
+			want "xeu $k" "$(cat /sys/module/xeu/parameters/$k 2>/dev/null || echo absent)" absent
+			continue
+		fi
 		want "xeu $k" "$(cat /sys/module/xeu/parameters/$k 2>/dev/null)" "$w"
 	done
 	want "receive region pages" "$(cat $PP/rx_region_pages)" $REGION_PAGES
