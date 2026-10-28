@@ -1025,6 +1025,73 @@ static void rtc_e2e_no_slot(struct kunit *test)
 	rtc_e2e_done(test, e);
 }
 
+static struct {
+	int n, active;
+	unsigned int ref;
+} rtc_pub;
+
+static void rtc_pub_hook(struct svc_xprt *xprt)
+{
+	rtc_pub.active = atomic_read(&xprt->xpt_server->sv_rtc_active);
+	rtc_pub.ref = kref_read(&xprt->xpt_ref);
+	rtc_pub.n++;
+}
+
+static void rtc_pub_unhook(void *unused)
+{
+	WRITE_ONCE(svc_rtc_kunit_published, NULL);
+}
+
+static void rtc_pub_send_fn(struct svc_xprt *xprt, struct svc_rtc_send *send,
+			    bool dead)
+{
+}
+
+/*
+ * M1, deterministic: from the instant svc_rtc_complete() or
+ * svc_rtc_queue_send() publishes to conn->done or conn->sendq, a pass may
+ * consume the entry and release the rqst's xprt ref and sv_rtc_active.
+ * The publisher's own pin must already be held at that instant.
+ */
+static void rtc_e2e_publish_pinned(struct kunit *test)
+{
+	struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
+	struct svc_rtc_send send = { .fn = rtc_pub_send_fn };
+	struct svc_rtc_stats a, b;
+	unsigned int ref;
+	int active;
+
+	rtc_e2e_ref(test, e);
+	e->mode = RTC_M_ASYNC;
+	rtc_e2e_kick(e, &a, &b);
+	KUNIT_ASSERT_NOT_NULL(test, e->pending);
+	drain_workqueue(e->serv->sv_rtc_wq);
+	memset(&rtc_pub, 0, sizeof(rtc_pub));
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test, rtc_pub_unhook,
+							NULL), 0);
+	WRITE_ONCE(svc_rtc_kunit_published, rtc_pub_hook);
+
+	active = atomic_read(&e->serv->sv_rtc_active);
+	ref = kref_read(&e->xprt.xpt_ref);
+	svc_rtc_complete(e->pending);
+	KUNIT_EXPECT_EQ(test, rtc_pub.n, 1);
+	KUNIT_EXPECT_EQ(test, rtc_pub.active, active + 1);
+	KUNIT_EXPECT_EQ(test, rtc_pub.ref, ref + 1);
+	drain_workqueue(e->serv->sv_rtc_wq);
+
+	active = atomic_read(&e->serv->sv_rtc_active);
+	ref = kref_read(&e->xprt.xpt_ref);
+	svc_rtc_queue_send(&e->xprt, &send);
+	KUNIT_EXPECT_EQ(test, rtc_pub.n, 2);
+	KUNIT_EXPECT_EQ(test, rtc_pub.active, active + 1);
+	KUNIT_EXPECT_EQ(test, rtc_pub.ref, ref + 1);
+	drain_workqueue(e->serv->sv_rtc_wq);
+	WRITE_ONCE(svc_rtc_kunit_published, NULL);
+
+	rtc_e2e_expect_identical(test, e);
+	rtc_e2e_done(test, e);
+}
+
 struct rtc_race {
 	struct work_struct work;
 	struct svc_rqst *rqstp;
@@ -1103,6 +1170,7 @@ static struct kunit_case svc_rtc_test_cases[] = {
 	KUNIT_CASE(rtc_e2e_region_handoff_balanced),
 	KUNIT_CASE(rtc_e2e_no_mem),
 	KUNIT_CASE(rtc_e2e_no_slot),
+	KUNIT_CASE(rtc_e2e_publish_pinned),
 	KUNIT_CASE_SLOW(rtc_e2e_complete_race),
 	{}
 };
