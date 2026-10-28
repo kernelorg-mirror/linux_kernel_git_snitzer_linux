@@ -5542,6 +5542,24 @@ static int svc_tcp_rx_copy_segment(struct svc_tcp_rx_walk *walk,
 				   start, len);
 }
 
+/*
+ * page_pool_page_is_pp(compound_head(@page)) with one load for a page that
+ * is its own head: compound_head() reads @page's compound_info, and when
+ * its bit 0 is clear that word is the page's own pp_magic.
+ */
+static bool svc_tcp_rx_page_is_pp(struct page *page)
+{
+#if IS_ENABLED(CONFIG_PAGE_POOL)
+	unsigned long info = READ_ONCE(page->compound_info);
+
+	BUILD_BUG_ON(offsetof(struct page, pp_magic) !=
+		     offsetof(struct page, compound_info));
+	if (likely(!(info & 1)))
+		return (info & PP_MAGIC_MASK) == PP_SIGNATURE;
+#endif
+	return page_pool_page_is_pp(compound_head(page));
+}
+
 static int svc_tcp_rx_borrow_segment(struct svc_tcp_rx_walk *walk,
 				     u32 start, struct page *page,
 				     unsigned int offset, unsigned int len)
@@ -5557,7 +5575,7 @@ static int svc_tcp_rx_borrow_segment(struct svc_tcp_rx_walk *walk,
 		struct page *span_page = page + ((offset + consumed) >> PAGE_SHIFT);
 		u32 expected = walk->body_base + start + consumed - walk->first;
 		bool page_pool = walk->pp_recycle &&
-			page_pool_page_is_pp(compound_head(span_page));
+				 svc_tcp_rx_page_is_pp(span_page);
 
 		if (WARN_ON_ONCE(state->lt.body_bytes != expected))
 			return -EINVAL;
