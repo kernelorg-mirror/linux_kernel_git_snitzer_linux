@@ -43,9 +43,9 @@
 #include <linux/sunrpc/xdr.h>
 #include <linux/uio.h>
 
-#include "cache.h"
 #include "nfsd.h"
 #include "netns.h"
+#include "cache.h"
 #include "vfs.h"
 #include "xdr3.h"
 #include "filecache.h"
@@ -844,6 +844,15 @@ static __be32 *rtcn_drc_reply(struct svc_rqst *r)
 	return p;
 }
 
+static void rtcn_drc_cleanup(void *ctx)
+{
+	struct nfsd_net *nn = ctx;
+
+	nfsd_cache_kunit_no_mem = 0;
+	nfsd_reply_cache_shutdown(nn);
+	nn->drc_hashtbl = NULL;
+}
+
 /* The next xid after @xid whose DRC bucket is @xid's. */
 static u32 rtcn_drc_same_bucket(struct nfsd_net *nn, u32 xid)
 {
@@ -861,9 +870,11 @@ static u32 rtcn_drc_same_bucket(struct nfsd_net *nn, u32 xid)
  * meanwhile is dropped, pruning skips the kept entry while it is handed
  * off, the rerun's nfsd_cache_update() caches the reply exactly once, and
  * a hand-off no thread runs (svc_rtc_handoff_drain()) frees it exactly
- * once.  GFP_NOWAIT failures on the work item: no entry at lookup is a
- * counted no_mem miss; no reply buffer at update leaves the reply
- * uncached, as on a thread.
+ * once.  GFP_NOWAIT failures on the work item: no entry, or no reply
+ * buffer (allocated at lookup by an rtc attempt), is a counted no_mem
+ * miss before the call runs, and the thread rerun caches the reply.
+ * A cleanup action clears the injection hook and tears the DRC down
+ * even if the case aborts.
  *
  * The rerun's use of the kept entry inside nfsd_dispatch() (rp taken from
  * drc_rp, no second lookup) is not driven here: that needs a fully
@@ -894,6 +905,8 @@ static void nfsd_rtc_write_drc(struct kunit *test)
 	r->rq_arg.tail[0].iov_len = 0;
 	r->rq_arg.len = 64;
 	KUNIT_ASSERT_EQ(test, nfsd_reply_cache_init(nn), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test, rtcn_drc_cleanup,
+							nn), 0);
 	nn->max_drc_entries = 0;	/* every entry past its turn prunes */
 	ntli->ntli_cachetype = RC_REPLBUFF;
 
@@ -902,6 +915,7 @@ static void nfsd_rtc_write_drc(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &a), RC_DOIT);
 	KUNIT_ASSERT_NOT_NULL(test, a);
 	KUNIT_EXPECT_EQ(test, a->c_state, RC_INPROG);
+	KUNIT_EXPECT_NOT_NULL(test, a->c_prebuf);	/* reply buffer, now */
 	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), 1);
 	/* The NOWAIT write misses at completion: A is kept for the rerun. */
 	c->rp = a;
@@ -943,6 +957,7 @@ static void nfsd_rtc_write_drc(struct kunit *test)
 	nfsd_cache_update(r, rp, RC_REPLBUFF, rtcn_drc_reply(r));
 	KUNIT_EXPECT_EQ(test, a->c_state, RC_DONE);
 	KUNIT_EXPECT_EQ(test, a->c_type, RC_REPLBUFF);
+	KUNIT_EXPECT_NULL(test, a->c_prebuf);	/* became c_replvec */
 	rtcn_drc_call(t, r, xa, false);
 	rp = NULL;
 	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_REPLY);
@@ -967,26 +982,43 @@ static void nfsd_rtc_write_drc(struct kunit *test)
 	n--;
 
 	/* No entry under GFP_NOWAIT: a counted miss, nothing inserted. */
-	nfsd_cache_kunit_no_mem = true;
+	nfsd_cache_kunit_no_mem = NFSD_CACHE_KUNIT_NO_ENTRY;
 	rtcn_drc_call(t, r, xc + 2, true);
 	rp = NULL;
 	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_DROPIT);
+	nfsd_cache_kunit_no_mem = 0;
 	KUNIT_EXPECT_NULL(test, rp);
 	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
 	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_NO_MEM);
 	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n);
-	/* The thread rerun allocates GFP_KERNEL: not injected. */
-	rtcn_drc_call(t, r, xc + 2, false);
+
+	/*
+	 * No reply buffer under GFP_NOWAIT at lookup: a counted miss before
+	 * the call runs, nothing inserted.  The thread rerun (GFP_KERNEL,
+	 * no buffer from lookup) caches the reply; a retransmission replays.
+	 */
+	nfsd_cache_kunit_no_mem = NFSD_CACHE_KUNIT_NO_REPLY;
+	rtcn_drc_call(t, r, xc + 3, true);
+	rp = NULL;
+	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_DROPIT);
+	nfsd_cache_kunit_no_mem = 0;
+	KUNIT_EXPECT_NULL(test, rp);
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_NO_MEM);
+	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n);
+	rtcn_drc_call(t, r, xc + 3, false);
 	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_DOIT);
 	KUNIT_ASSERT_NOT_NULL(test, rp);
-	n = atomic_read(&nn->num_drc_entries);
-	/* No reply buffer under GFP_NOWAIT: the reply is not cached. */
-	set_bit(RQ_RTC_TRY, &r->rq_flags);
+	KUNIT_EXPECT_NULL(test, rp->c_prebuf);
+	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n + 1);
 	nfsd_cache_update(r, rp, RC_REPLBUFF, rtcn_drc_reply(r));
-	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n - 1);
-	nfsd_cache_kunit_no_mem = false;
+	KUNIT_EXPECT_EQ(test, rp->c_state, RC_DONE);
+	KUNIT_EXPECT_EQ(test, rp->c_type, RC_REPLBUFF);
+	rtcn_drc_call(t, r, xc + 3, false);
+	rp = NULL;
+	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_REPLY);
 
-	nfsd_reply_cache_shutdown(nn);
+
 	ntli->ntli_cachetype = RC_NOCACHE;
 	r->rq_arg.head[0].iov_base = NULL;
 	r->rq_arg.head[0].iov_len = 0;
