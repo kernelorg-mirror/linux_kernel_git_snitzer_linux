@@ -1,0 +1,36 @@
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index 8b060dea3250..3651d0141aba 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -1412,15 +1412,30 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_default_avail);
+  * page was *@prev.  A receive page that holds several frames is handed over
+  * one fragment at a time: only the first of them adds the page.
+  */
++/*
++ * FLAMEGRAPH round 38, diagnostic, not for keeping: the region's pfn range,
++ * written from debugfs page_pool_rx_region.  A nonzero count makes the
++ * region test a range check that reads no struct page.
++ */
++static unsigned long svc_tcp_rx_region_pfn;
++module_param(svc_tcp_rx_region_pfn, ulong, 0644);
++static unsigned long svc_tcp_rx_region_pfns;
++module_param(svc_tcp_rx_region_pfns, ulong, 0644);
++
+ static u32 svc_tcp_rx_region_span(struct page *page, u32 off, u32 len,
+ 				  struct page **prev)
+ {
+ 	struct page *first = page + (off >> PAGE_SHIFT);
+ 	u32 pages = DIV_ROUND_UP(offset_in_page(off) + len, PAGE_SIZE);
+ 	struct page *last = first + pages - 1;
++	unsigned long nr = READ_ONCE(svc_tcp_rx_region_pfns);
+ 
+-	if (!page_pool_page_in_rx_region(page))
++	if (nr) {
++		if (page_to_pfn(page) - READ_ONCE(svc_tcp_rx_region_pfn) >= nr)
++			return 0;
++	} else if (!page_pool_page_in_rx_region(page)) {
+ 		return 0;
++	}
+ 	if (first == *prev)
+ 		pages--;
+ 	*prev = last;
