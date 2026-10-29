@@ -89,6 +89,8 @@
 #   WRITES=<n>       loan: a budget that lets <n> 1 MiB WRITEs hold loaned pages at
 #                    once, worked out as sweep.sh does from run-budget.sh's geometry
 #                    (charge per WRITE, reserve); unset or 0 copies, as settled
+#   BUDGET_PAGES=<n> with WRITES: the budget in pages instead (the reserve as
+#                    WRITES gives it)
 # Every run reports how nfsd issued its WRITEs (segments direct, dontcache and
 # buffered, from the nfsd_write_* tracepoints) and, with WRITES, what the
 # budget admitted, denied and paused.
@@ -149,6 +151,7 @@ if [ "${WRITES:-0}" -gt 0 ]; then
 	[ -n "$F9" ] && [ -n "$RESERVE" ] || { echo "cannot read the geometry: $G"; exit 1; }
 	CHARGE=$(( ( (1048716 + PS - 1) / PS * F9 + 99 ) / 100 + 2 ))
 	BUDGET=$(( WRITES * CHARGE + RESERVE + 4 ))
+	BUDGET=${BUDGET_PAGES:-$BUDGET}
 fi
 T=/sys/kernel/tracing; WREV="nfsd_write_direct nfsd_write_dontcache nfsd_write_vector"
 wr_hits() { local e; for e in $WREV; do awk '/^ *Hits:/ {print $2; f = 1} END {if (!f) print 0}' $T/events/nfsd/$e/hist 2>/dev/null || echo 0; done | paste -sd ' '; }
