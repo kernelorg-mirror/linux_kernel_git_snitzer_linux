@@ -140,6 +140,10 @@ RINGS=4
 MTU=7792
 MRRS=512	# PCIe MaxReadReq, bytes, of the card's two functions and the eight drives
 REGION_PAGES=32768
+# EXP_REGION_PAGES holds another size for a run that resizes the region
+# (with the port down: page_pool gives the old one back and makes the new
+# one when the port's pools come up again).  The region made is checked
+# too, in debugfs: a size written but not made reads as no region.
 # The depth of a region pool's stack of returned pages (page_pool's, built
 # in), held at 0, the ring's size of 256 (Mike, 25 October: "we cannot afford
 # to increase the region").  FLAMEGRAPH round 04 found 1024 saves the rings
@@ -413,6 +417,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
 	[ -n "${EXP_RODATA:-}" ] && [ "$EXP_RODATA" != "$RODATA" ] && OFF="$OFF rodata=$EXP_RODATA"
 	[ -n "${EXP_RX_REGION_STACK:-}" ] && [ "$EXP_RX_REGION_STACK" != "$RX_REGION_STACK" ] && OFF="$OFF rx_region_stack=$EXP_RX_REGION_STACK"
+	[ -n "${EXP_REGION_PAGES:-}" ] && [ "$EXP_REGION_PAGES" != "$REGION_PAGES" ] && OFF="$OFF region_pages=$EXP_REGION_PAGES"
 	[ -n "${EXP_DRC_MAX_ENTRIES:-}" ] && [ "$EXP_DRC_MAX_ENTRIES" != "$DRC_MAX_ENTRIES" ] && OFF="$OFF drc_max_entries=$EXP_DRC_MAX_ENTRIES"
 	local xk xv
 	for xk in "${!XEU[@]}"; do
@@ -568,7 +573,8 @@ audit() {
 		fi
 		want "xeu $k" "$(cat /sys/module/xeu/parameters/$k 2>/dev/null)" "$w"
 	done
-	want "receive region pages" "$(cat $PP/rx_region_pages)" $REGION_PAGES
+	want "receive region pages" "$(cat $PP/rx_region_pages)" ${EXP_REGION_PAGES:-$REGION_PAGES}
+	want "receive region made" "$(awk '$1 == "pages" {print $2}' /sys/kernel/debug/page_pool_rx_region 2>/dev/null || echo none)" ${EXP_REGION_PAGES:-$REGION_PAGES}
 	if [ -e $PP/rx_region_stack ]; then
 		want "receive region stack" "$(cat $PP/rx_region_stack)" "${EXP_RX_REGION_STACK:-$RX_REGION_STACK}"
 	else
