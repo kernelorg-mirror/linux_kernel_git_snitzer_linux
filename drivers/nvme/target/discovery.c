@@ -4,7 +4,9 @@
  * Copyright (C) 2016 Intel Corporation. All rights reserved.
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#include <linux/nsproxy.h>
 #include <linux/slab.h>
+#include <net/net_namespace.h>
 #include <generated/utsrelease.h>
 #include "nvmet.h"
 
@@ -80,25 +82,48 @@ void nvmet_subsys_disc_changed(struct nvmet_subsys *subsys,
 		}
 }
 
+/*
+ * A referral is visible in the network namespace of the process that enabled
+ * it, and only through a parent port enabled in that namespace.
+ */
+static bool nvmet_referral_visible(struct nvmet_port *parent,
+				   struct nvmet_port *r)
+{
+	return parent->net && net_eq(r->net, parent->net);
+}
+
 void nvmet_referral_enable(struct nvmet_port *parent, struct nvmet_port *port)
 {
 	down_write(&nvmet_config_sem);
 	if (list_empty(&port->entry)) {
+		port->net = current->nsproxy->net_ns;
 		list_add_tail(&port->entry, &parent->referrals);
 		port->enabled = true;
-		nvmet_port_disc_changed(parent, NULL);
+		if (nvmet_referral_visible(parent, port))
+			nvmet_port_disc_changed(parent, NULL);
 	}
 	up_write(&nvmet_config_sem);
+}
+
+void nvmet_referral_disable_locked(struct nvmet_port *parent,
+				   struct nvmet_port *port)
+{
+	bool visible = nvmet_referral_visible(parent, port);
+
+	lockdep_assert_held(&nvmet_config_sem);
+
+	port->enabled = false;
+	list_del_init(&port->entry);
+	port->net = NULL;
+	if (visible)
+		nvmet_port_disc_changed(parent, NULL);
 }
 
 void nvmet_referral_disable(struct nvmet_port *parent, struct nvmet_port *port)
 {
 	down_write(&nvmet_config_sem);
-	if (!list_empty(&port->entry)) {
-		port->enabled = false;
-		list_del_init(&port->entry);
-		nvmet_port_disc_changed(parent, NULL);
-	}
+	if (!list_empty(&port->entry))
+		nvmet_referral_disable_locked(parent, port);
 	up_write(&nvmet_config_sem);
 }
 
@@ -153,8 +178,11 @@ static size_t discovery_log_entries(struct nvmet_req *req)
 			continue;
 		entries++;
 	}
-	list_for_each_entry(r, &req->port->referrals, entry)
+	list_for_each_entry(r, &req->port->referrals, entry) {
+		if (!nvmet_referral_visible(req->port, r))
+			continue;
 		entries++;
+	}
 	return entries;
 }
 
@@ -225,7 +253,8 @@ static void nvmet_execute_disc_get_log_page(struct nvmet_req *req)
 	}
 
 	list_for_each_entry(r, &req->port->referrals, entry) {
-		if (r->disc_addr.trtype == NVMF_TRTYPE_PCI)
+		if (r->disc_addr.trtype == NVMF_TRTYPE_PCI ||
+		    !nvmet_referral_visible(req->port, r))
 			continue;
 
 		nvmet_format_discovery_entry(hdr, r,

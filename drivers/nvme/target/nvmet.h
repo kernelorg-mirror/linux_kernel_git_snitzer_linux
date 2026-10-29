@@ -231,6 +231,13 @@ struct nvmet_port {
 	struct config_group		ana_groups_group;
 	struct nvmet_ana_group		ana_default_group;
 	struct key			*keyring;
+	/*
+	 * Network namespace the port is enabled in (the referral is visible
+	 * in), or NULL while disabled.  Not a counted reference: the port is
+	 * disabled from that namespace's pre_exit before the namespace is
+	 * freed, see nvmet_disable_net_ports().
+	 */
+	struct net			*net;
 	void				*priv;
 	bool				enabled;
 	int				inline_data_size;
@@ -438,6 +445,7 @@ struct nvmet_fabrics_ops {
 	unsigned int flags;
 #define NVMF_KEYED_SGLS			(1 << 0)
 #define NVMF_METADATA_SUPPORTED		(1 << 1)
+#define NVMF_PORT_NETNS			(1 << 2)
 	void (*queue_response)(struct nvmet_req *req);
 	int (*add_port)(struct nvmet_port *port);
 	void (*remove_port)(struct nvmet_port *port);
@@ -701,9 +709,13 @@ void nvmet_port_del_ctrls(struct nvmet_port *port,
 
 int nvmet_enable_port(struct nvmet_port *port);
 void nvmet_disable_port(struct nvmet_port *port);
+void nvmet_disable_net_ports(struct net *net,
+		const struct nvmet_fabrics_ops *ops);
 
 void nvmet_referral_enable(struct nvmet_port *parent, struct nvmet_port *port);
 void nvmet_referral_disable(struct nvmet_port *parent, struct nvmet_port *port);
+void nvmet_referral_disable_locked(struct nvmet_port *parent,
+				   struct nvmet_port *port);
 
 u16 nvmet_copy_to_sgl(struct nvmet_req *req, off_t off, const void *buf,
 		size_t len);
