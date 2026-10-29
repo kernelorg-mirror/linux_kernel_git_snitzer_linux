@@ -1,0 +1,11 @@
+Attached 8 probes
+
+
+@[kprobe:page_pool_rx_region_alloc, ring]: 238162
+@[kprobe:page_pool_rx_stack_refill, ring]: 963139
+@[kprobe:page_pool_recycle_ring_bulk, nfsd]: 1444995
+@[kprobe:page_pool_put_netmem_bulk, nfsd]: 1588001
+@[kprobe:page_pool_dma_map, ring]: 3534190
+@[kprobe:page_pool_rx_region_put, nfsd]: 4422210
+@[kprobe:page_pool_return_netmem, nfsd]: 4746767
+WRITEs 355457

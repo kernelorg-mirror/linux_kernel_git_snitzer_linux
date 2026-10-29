@@ -104,3 +104,36 @@ Whether B is kept is Mike's: free in copy mode, 3% in loan mode, for 360 pages e
 
 [run112.sh](run112.sh): four loan64 runs, A B B A, the kept xeu at the settled setting. From 10 s into each timed load, 5 s of `perf record` on CPUs 0 to 55, one sample every million cycles with call chains, so that a function's samples with its callees are its cycles a WRITE, on the ring CPUs and nfsd's apart; then 5 s of bpftrace counting calls into the steps of the round trip (`page_pool_put_netmem_bulk`, `page_pool_recycle_ring_bulk`, `page_pool_return_netmem`, `page_pool_rx_region_put`, `page_pool_rx_stack_refill`, `page_pool_rx_region_alloc`, `page_pool_dma_map`) by the same groups. The profile names the step that costs (the region's lock and its contention, `__xa_erase` and `__xa_alloc`, the DMA map and unmap), the counts how many pages a WRITE go round. The runs' own cycles are perturbed by both, so run111's stay the A/B.
 
+### What r112 found
+
+[run112.out](run112.out), the reports and the profiles by symbol in [r112/](r112/), at 21:17 to 21:35 on 29 October. The runs carried 40.47 to 40.54 GB/s; their cycles are raised by the profile and the probes, so run111's stay the A/B. Each figure is the mean of the two runs of its arm, in cycles a WRITE with what the function calls.
+
+**How many pages go round, a WRITE (bpftrace):**
+
+| | A, 256 | B, 64 |
+|---|---|---|
+| nfsd: `page_pool_return_netmem` (a page out of its pool) | 3.0 | 13.1 |
+| nfsd: `page_pool_rx_region_put` (onto the region's free list) | 2.9 | 12.2 |
+| ring: `page_pool_dma_map` (a page mapped and indexed again) | 2.3 | 9.7 |
+| ring: `page_pool_rx_region_alloc` (a refill of up to 16 from the region) | 0.15 | 0.66 |
+
+**Where their cycles go (perf, every 1M cycles):**
+
+| | A, 256 | B, 64 | B − A |
+|---|---|---|---|
+| **nfsd** `page_pool_put_netmem_bulk` | 5.58k | 12.99k | +7.4k |
+| `page_pool_return_netmem` | 2.92k | 10.32k | +7.4k |
+| of it `__page_pool_unmap_netmem_dma`: the DMA index erased from the pool's xarray (`__xa_cmpxchg` 1.41k to 3.69k, its `xas_load` 0.97k to 2.15k) and the unmap | 1.75k | 5.06k | **+3.3k** |
+| of it `page_pool_return_netmem`'s own (the release count's atomic, the pool info cleared) | 0.47k | 1.81k | +1.3k |
+| of it `page_pool_rx_region_put` (the region's lock and free list) | 0.06k | 0.24k | +0.2k |
+| `queued_spin_lock_slowpath`, all of nfsd | 0.63k | 0.97k | +0.3k |
+| **ring** `page_pool_rx_region_alloc` | 1.47k | 5.76k | +4.3k |
+| of it `page_pool_register_dma_index`: the DMA index added to the pool's xarray (`__xa_alloc` and the index's own) | 1.04k | 3.90k | **+2.9k** |
+| of it `dma_map_page_attrs` | 0.12k | 0.54k | +0.4k |
+
+- **The round trip costs about 0.74k nfsd cycles and 0.58k ring cycles a page,** and B sends about ten pages a WRITE more round than A: that is run111's +10.5k and +3.9k.
+- **The pool's xarray of DMA indices is most of it,** not the region's lock and not the mapping. Every page a pool maps is given an index in `pool->dma_mapped` (`page_pool_register_dma_index()`, `xa_alloc` in the ring's softirq), so that a pool torn down with pages still out can unmap them; every page that leaves the pool has its index erased (`xa_cmpxchg` on nfsd's CPUs). The xarray's nodes are written by the ring and read and written by 48 nfsd CPUs, so its loads miss (`xas_load` 2.15k a WRITE at B). The region's lock costs 0.06 to 0.24k, the DMA map and unmap (no IOMMU) about 0.5k.
+- **A pays it too, for about 3 pages a WRITE:** 2.9k nfsd and 1.5k ring cycles a WRITE that a cheaper round trip would save at the settled depth.
+
+**What would make a shallow stack free.** A page of the fixed region that goes back to the region need not leave the device's mapping or the pool's index: the region is bound to one device, made and given back with its pools, and its pages can be unmapped by the region when it is given back, as the xarray does for a pool's. Kept mapped and indexed in the region's free list (or tracked by the region instead of each pool's xarray), the round trip would be the region's lock and a free-list push and pop, about 0.3k cycles a page instead of about 1.3k. That is a page_pool change (`page_pool_return_netmem()` and `page_pool_rx_region_alloc()` for region pools); with it B, or a shallower stack still, would cost close to nothing in loan mode as it already does in copy mode. Mike's to decide.
+
