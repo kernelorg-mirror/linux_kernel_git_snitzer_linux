@@ -83,12 +83,14 @@ kept on tardis2 (`git log --oneline 77f82c816493..0c375e06bf64 -- . ':!NFSD_TCP_
 tip" further down, items 1 to 6 (the kernel, its own sunrpc, the
 packages, `arm_cmn`, the drives, the bring-up):
 
-1. **xeu.** `settled.sh` wants `rx_gro_frags` and `rx_prefetch`
-   (kmod-xsight 2.0.1-13: kernel-rpmtree `b3cd3d5`, pushed). Build it
-   for the new kernel with `./build-kmod.sh`, install it (`rpm -U`) and
-   reload `xeu` before any region is bound. Do this only with no NFS
-   client connected (`ss -Htn state established '( sport = :2049 )'`),
-   then `./bringup.sh 32768 256` and `./port-setup.sh enp164s0f0 56`.
+1. **xeu comes with the build.** The GitLab build makes kmod-xsight
+   2.0.1-13 (kernel-rpmtree `b3cd3d5`) beside the kernel; install it
+   with the kernel, so no `./build-kmod.sh`. Check that the loaded xeu
+   is that one: `modinfo -F version xeu`, and `rx_gro_frags`,
+   `rx_prefetch` and `irq_msix_mask` in
+   `/sys/module/xeu/parameters/`, which `settled.sh` wants. Then, with
+   no NFS client connected (`ss -Htn state established '( sport = :2049 )'`),
+   `./bringup.sh 32768 256` and `./port-setup.sh enp164s0f0 56`.
 2. **`./settled.sh apply`** must end in "the settled setting". The
    receive region devices are both ports' PCI functions.
 3. **The region:** `cat /sys/kernel/debug/page_pool_rx_region`.
@@ -143,9 +145,9 @@ before believing a figure.
   on 27 October" below.
 - The kernel's own sunrpc and nfsd are now the tip's, so `updates/` is
   empty for the new kernel.
-- xeu: kmod-xsight 2.0.1-13 built for it with `./build-kmod.sh`.
-  Round 45's kept xeu, `CA0931345E46C929B11D01F`, is the same source;
-  check its srcversion.
+- xeu: the build's kmod-xsight 2.0.1-13, installed with the kernel.
+  Round 45's kept xeu, `CA0931345E46C929B11D01F`, is the same source,
+  so check that its srcversion matches.
 - Then `./settled.sh apply` and the region checks of tardis1's items 3
   and 4, with the one `mapped 0000:a1:00.0` line.
 
