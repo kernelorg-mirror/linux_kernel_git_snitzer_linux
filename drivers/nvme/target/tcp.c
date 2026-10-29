@@ -9,6 +9,8 @@
 #include <linux/slab.h>
 #include <linux/crc32c.h>
 #include <linux/err.h>
+#include <linux/delay.h>
+#include <linux/file.h>
 #include <linux/nvme-tcp.h>
 #include <linux/nvme-keyring.h>
 #include <net/sock.h>
@@ -3074,6 +3076,8 @@ static void nvmet_tcp_alloc_queue(struct nvmet_tcp_port *port,
 
 	INIT_WORK(&queue->release_work, nvmet_tcp_release_queue_work);
 	INIT_WORK(&queue->io_work, nvmet_tcp_io_work);
+	INIT_DELAYED_WORK(&queue->tls_handshake_tmo_work,
+			  nvmet_tcp_tls_handshake_timeout);
 	kref_init(&queue->kref);
 	queue->sock = newsock;
 	queue->port = port;
@@ -3119,8 +3123,6 @@ static void nvmet_tcp_alloc_queue(struct nvmet_tcp_port *port,
 	list_add_tail(&queue->queue_list, &nvmet_tcp_queue_list);
 	mutex_unlock(&nvmet_tcp_queue_mutex);
 
-	INIT_DELAYED_WORK(&queue->tls_handshake_tmo_work,
-			  nvmet_tcp_tls_handshake_timeout);
 #ifdef CONFIG_NVME_TARGET_TCP_TLS
 	if (queue->state == NVMET_TCP_Q_TLS_HANDSHAKE) {
 		struct sock *sk = queue->sock->sk;
@@ -3253,7 +3255,7 @@ static int nvmet_tcp_add_port(struct nvmet_port *nport)
 		goto err_port;
 	}
 
-	ret = inet_pton_with_scope(&init_net, af, nport->disc_addr.traddr,
+	ret = inet_pton_with_scope(nport->net, af, nport->disc_addr.traddr,
 			nport->disc_addr.trsvcid, &port->addr);
 	if (ret) {
 		pr_err("malformed ip/port passed: %s:%s\n",
@@ -3266,7 +3268,11 @@ static int nvmet_tcp_add_port(struct nvmet_port *nport)
 	if (port->nport->inline_data_size < 0)
 		port->nport->inline_data_size = NVMET_TCP_DEF_INLINE_DATA_SIZE;
 
-	ret = sock_create(port->addr.ss_family, SOCK_STREAM,
+	/*
+	 * A kernel socket holds no reference on the namespace, so the port
+	 * does not keep it alive: nvmet_tcp_net_pre_exit() tears it down.
+	 */
+	ret = sock_create_kern(nport->net, port->addr.ss_family, SOCK_STREAM,
 				IPPROTO_TCP, &port->sock);
 	if (ret) {
 		pr_err("failed to create a socket\n");
@@ -3410,6 +3416,7 @@ static const struct nvmet_fabrics_ops nvmet_tcp_ops = {
 	.owner			= THIS_MODULE,
 	.type			= NVMF_TRTYPE_TCP,
 	.msdbd			= 1,
+	.flags			= NVMF_PORT_NETNS,
 	.add_port		= nvmet_tcp_add_port,
 	.remove_port		= nvmet_tcp_remove_port,
 	.queue_response		= nvmet_tcp_queue_response,
@@ -3418,6 +3425,101 @@ static const struct nvmet_fabrics_ops nvmet_tcp_ops = {
 	.install_queue		= nvmet_tcp_install_queue,
 	.disc_traddr		= nvmet_tcp_disc_port_addr,
 	.host_traddr		= nvmet_tcp_host_port_addr,
+};
+
+/*
+ * Accepted queues are kernel sockets too and hold no reference on @net:
+ * disable the namespace's ports (shutting down their queues) and wait until
+ * every queue in @net has been released, before the namespace goes away.
+ */
+#define NVMET_TCP_NET_DRAIN_SLEEP_MS	20
+#define NVMET_TCP_NET_DRAIN_WARN_SECS	30
+
+struct nvmet_tcp_net_drain {
+	struct delayed_work	warn_work;
+	int			idx;
+	int			state;
+};
+
+static void nvmet_tcp_net_drain_warn(struct work_struct *w)
+{
+	struct nvmet_tcp_net_drain *drain = container_of(to_delayed_work(w),
+			struct nvmet_tcp_net_drain, warn_work);
+
+	pr_warn("netns exit: queue %d (state %d) still draining after %d s, waiting for its release (TLS handshake or backend I/O)\n",
+		READ_ONCE(drain->idx), READ_ONCE(drain->state),
+		NVMET_TCP_NET_DRAIN_WARN_SECS);
+}
+
+/*
+ * A queue in TLS handshake has no nvmet socket callbacks, so shutting its
+ * socket down does not release it, and in an exiting namespace nothing will
+ * answer the upcall.  Run the handshake timeout now for a handshake that was
+ * started (its timeout work is pending); the timeout releases the queue.
+ */
+static void nvmet_tcp_expire_tls_handshake(struct nvmet_tcp_queue *queue)
+{
+	if (!IS_ENABLED(CONFIG_NVME_TARGET_TCP_TLS))
+		return;
+
+	spin_lock_bh(&queue->state_lock);
+	if (queue->state == NVMET_TCP_Q_TLS_HANDSHAKE &&
+	    delayed_work_pending(&queue->tls_handshake_tmo_work))
+		mod_delayed_work(nvmet_wq, &queue->tls_handshake_tmo_work, 0);
+	spin_unlock_bh(&queue->state_lock);
+}
+
+static void __net_exit nvmet_tcp_net_pre_exit(struct net *net)
+{
+	struct nvmet_tcp_net_drain drain = { .idx = -1, .state = -1 };
+	struct nvmet_tcp_queue *queue;
+	unsigned int round = 0;
+	bool busy;
+
+	nvmet_disable_net_ports(net, &nvmet_tcp_ops);
+
+	/*
+	 * The warning is a timer rather than a check in the loop so that it
+	 * also fires while flush_workqueue() waits on a release work stuck in
+	 * nvmet_sq_destroy() behind a hung backend.
+	 */
+	INIT_DELAYED_WORK_ONSTACK(&drain.warn_work, nvmet_tcp_net_drain_warn);
+	queue_delayed_work(system_percpu_wq, &drain.warn_work,
+			   NVMET_TCP_NET_DRAIN_WARN_SECS * HZ);
+
+	for (;;) {
+		busy = false;
+		mutex_lock(&nvmet_tcp_queue_mutex);
+		list_for_each_entry(queue, &nvmet_tcp_queue_list, queue_list) {
+			if (!net_eq(sock_net(queue->sock->sk), net))
+				continue;
+			kernel_sock_shutdown(queue->sock, SHUT_RDWR);
+			nvmet_tcp_expire_tls_handshake(queue);
+			WRITE_ONCE(drain.idx, queue->idx);
+			WRITE_ONCE(drain.state, READ_ONCE(queue->state));
+			busy = true;
+		}
+		mutex_unlock(&nvmet_tcp_queue_mutex);
+		/*
+		 * Flush even after an empty scan: a release work delists its
+		 * queue first and closes the socket only after nvmet_sq_destroy().
+		 */
+		flush_workqueue(nvmet_wq);
+		if (!busy)
+			break;
+		if (round++)
+			msleep(NVMET_TCP_NET_DRAIN_SLEEP_MS);
+	}
+
+	cancel_delayed_work_sync(&drain.warn_work);
+	destroy_delayed_work_on_stack(&drain.warn_work);
+
+	/* the release work drops the queue sockets with fput() */
+	flush_delayed_fput();
+}
+
+static struct pernet_operations nvmet_tcp_net_ops = {
+	.pre_exit	= nvmet_tcp_net_pre_exit,
 };
 
 static int __init nvmet_tcp_init(void)
@@ -3433,11 +3535,17 @@ static int __init nvmet_tcp_init(void)
 	if (ret)
 		goto err_wq;
 
-	ret = nvmet_register_transport(&nvmet_tcp_ops);
+	ret = register_pernet_subsys(&nvmet_tcp_net_ops);
 	if (ret)
 		goto err;
 
+	ret = nvmet_register_transport(&nvmet_tcp_ops);
+	if (ret)
+		goto err_pernet;
+
 	return 0;
+err_pernet:
+	unregister_pernet_subsys(&nvmet_tcp_net_ops);
 err:
 	rx_loan_budget_destroy(&nvmet_tcp_rx_budget);
 err_wq:
@@ -3450,6 +3558,7 @@ static void __exit nvmet_tcp_exit(void)
 	struct nvmet_tcp_queue *queue;
 
 	nvmet_unregister_transport(&nvmet_tcp_ops);
+	unregister_pernet_subsys(&nvmet_tcp_net_ops);
 
 	flush_workqueue(nvmet_wq);
 	mutex_lock(&nvmet_tcp_queue_mutex);
