@@ -1,0 +1,11 @@
+00:11:50 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu CA0931345E46C929B11D01F
+00:16:09 r100-stat-loan64 | total 40.53 GB/s | 1 no-step | 1 placed | r100-stat-loan64 ring 42.9 nfsd 92.7 us/W (38619 WRITEs/s) | ring 139.5k cycles 306.0k instructions, nfsd 296.2k cycles 302.8k instructions a WRITE | peak 6434
+00:16:09 look from 00:15:19 end 00:15:44
+window 0 (117311 WRITEs): cycles 164.7k instructions 319.9k stall_frontend 0.9k (0.5%) stall_backend 72.6k (44.1%) stall_backend_mem 31.3k (19.0%) stall_slot_backend 212.8k (129.3%)
+window 1 (117607 WRITEs): cycles 164.8k instructions 320.7k dsb_spec 0.1k dmb_spec 0.3k isb_spec 0.1k exc_irq 0.0k
+window 2 (117177 WRITEs): cycles 164.5k instructions 320.0k l1d_cache_refill 1.1k l2d_cache_refill 1.1k l3d_cache_refill 2.5k ll_cache_miss_rd 1.1k
+window 3 (118046 WRITEs): cycles 164.4k instructions 319.5k bus_access_rd 4.6k bus_access_wr 0.6k remote_access 0.0k dtlb_walk 0.0k
+window 4 (140246 WRITEs): cycles 140.2k instructions 278.4k napi:napi_poll 0.0k irq:irq_handler_entry 0.0k
+@at_budget: 77467 @polls: 1838016 @sum: 16387441 WRITEs in the window: 164790
+00:16:12 end: settled.sh audit rest: the settled setting; DONE
+

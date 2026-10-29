@@ -36,6 +36,30 @@ Pseudo-NMI only if SPE cannot account for `handle_softirqs`'s share; it needs a 
 - Loan mode only. A change is judged on the rings' counted cycles a WRITE, with nfsd's, the rate and the region's peak beside it. A change that raises the peak is not kept.
 - An xeu swap reopens the port and drops the client's connections, so each one is Mike's to ask for.
 
-## 1. The stalls counted (r100, to run)
+## 1. The stalls counted (r100)
 
 [run100.sh](run100.sh): one loan64 run at the current state, no module swapped. From 10 s into the timed load, five 3 s `perf stat -C 0-7` windows, one counter group each (1 s apart), the WRITEs in each window counted from `/proc/net/rpc/nfsd`; then 3 s of `bpftrace` on `napi:napi_poll` for each ring poll's frames.
+
+**Run 29 October:** 40.53 GB/s, flows placed, no drive stepping down, counted ring 139.5k and nfsd 296.2k cycles a WRITE, peak 6434, settled at the end ([run100.out](run100.out), the windows in [r100/](r100/)). The windows count the ring CPUs system-wide, so their cycles (164.5k a WRITE) are above `cost.sh`'s. A frame here is about 136 a WRITE.
+
+| a WRITE, on the ring CPUs | count | a frame | share of cycles |
+|---|---|---|---|
+| frontend stalls | 0.9k cycles | | 0.5% |
+| backend stalls | 72.6k cycles | | 44.1% |
+| of them on memory | 31.3k cycles | | 19.0% |
+| `dsb` / `dmb` / `isb` executed | 65 / 327 / 77 | 0.5 / 2.4 / 0.6 | |
+| interrupts taken (`exc_irq`) | 15.5 | | |
+| L1D refills / L2 refills / last-level read misses | 1.12k / 1.05k / 1.06k | 8.2 / 7.7 / 7.8 | |
+| L3 refills | 2.55k | 18.7 | |
+| bus reads / bus writes | **4.59k** / 0.62k | **33.7** / 4.6 | |
+| data TLB walks | 0.6 | | |
+| NAPI polls / interrupt handlers (window 4) | 13.0 / 12.5 | | |
+
+- **The front end is not the problem** (0.5%), and neither is the TLB (since round 30's `rodata=noalias`).
+- **Nearly every line the rings miss in L2 comes from DRAM.** The 1.05k L2 refills and 1.06k last-level read misses a WRITE match: what the rings fetch is not in the SLC. That fits lines the card has just written, the completions and each frame's headers, if the card's writes go to DRAM and not into the SLC.
+- **The rings read four times as many lines from the bus as their demand misses.** 4.59k bus reads a WRITE against 1.06k demand misses: about 3.5k more lines a WRITE, 33.7 a frame, about 290 KB a WRITE or 11 GB/s at this rate. If they are 64-byte lines, they are prefetches (the software ones, 3 a frame, cannot account for them) or lines written back, and the likeliest is the core's own prefetcher running on from a frame's headers into its payload, which the rings never read. That is DRAM bandwidth and SLC space taken from nfsd and the drives. The unit of `bus_access` on this core has to be checked before anything is built on it.
+- **Barriers are few:** half a `dsb` and 2.4 `dmb` a frame. Whether they cost much each is for SPE to show.
+- **A poll and an interrupt about every 10 frames:** 13 polls and 12.5 interrupts a WRITE, so most polls start from an interrupt. 62.6% of polls handle 0–3 frames and 4.2% use the whole budget of 64 ([r100/polls.txt](r100/polls.txt), on the ring CPUs, TX polls included; its WRITE count is not used, as the trace's attach fell inside the window). xeu does not offer interrupt coalescing (`ethtool -c`: not supported).
+- **25% of the cycles are backend stalls not on memory,** and these counters do not say on what. On this core that is mostly the core's queues being full behind long operations: stores, barriers, the device's MMIO.
+
+**So, for step 2:** SPE, sampling loads and stores on the ring CPUs, gives each its latency and where its data came from. That will name the lines missed in DRAM (completions, headers, descriptors) and the instructions the non-memory stalls fall on. The bus reads not demanded are checked beside it: the unit of `bus_access`, and whether the extra lines are payload brought in by the core's prefetcher.

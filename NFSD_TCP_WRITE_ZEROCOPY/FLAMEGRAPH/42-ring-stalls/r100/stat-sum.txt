@@ -1,0 +1,5 @@
+window 0 (117311 WRITEs): cycles 164.7k instructions 319.9k stall_frontend 0.9k (0.5%) stall_backend 72.6k (44.1%) stall_backend_mem 31.3k (19.0%) stall_slot_backend 212.8k (129.3%)
+window 1 (117607 WRITEs): cycles 164.8k instructions 320.7k dsb_spec 0.1k dmb_spec 0.3k isb_spec 0.1k exc_irq 0.0k
+window 2 (117177 WRITEs): cycles 164.5k instructions 320.0k l1d_cache_refill 1.1k l2d_cache_refill 1.1k l3d_cache_refill 2.5k ll_cache_miss_rd 1.1k
+window 3 (118046 WRITEs): cycles 164.4k instructions 319.5k bus_access_rd 4.6k bus_access_wr 0.6k remote_access 0.0k dtlb_walk 0.0k
+window 4 (140246 WRITEs): cycles 140.2k instructions 278.4k napi:napi_poll 0.0k irq:irq_handler_entry 0.0k
