@@ -1,0 +1,169 @@
+--- xeu-esdk-v2.0.1.orig/xeu_drv.c
++++ xeu-esdk-v2.0.1/xeu_drv.c
+@@ -251,6 +251,144 @@
+ 		disable_irq_nosync(ring->irq_vector);
+ }
+ 
++/*
++ * DIAGNOSTIC (FLAMEGRAPH round 42, not for keeping): the completion at the
++ * head of a receive poll, timed by the 1 GHz counter read after ISB.  Each
++ * load is timed with a DSB LD before and after it.  On every poll while
++ * head_lat_on is set, in this order:
++ *   own   a line of this CPU's own, just written: the floor
++ *   prev  the completion before the head, read by the last poll and not
++ *         written by the card since: the control
++ *   1st   the completion at the head
++ *   2nd   the same line again, straight after
++ * split by whether the poll follows this ring's interrupt (irq) or not
++ * (re: a poll that used its budget, or one NAPI ran again), and by whether
++ * interrupts are left on during the reads or are off (every other poll),
++ * so that an interrupt inside the timed read can be told apart.  An empty
++ * head is counted on its own, and irq_to_poll is the time from this ring's
++ * interrupt to the start of its poll.  /sys/module/xeu/parameters/head_lat
++ * prints n, sum_ns and a log2 histogram for each; a write clears.
++ */
++#define XEU_HL_N 19
++struct xeu_head_lat {
++	u64 n[XEU_HL_N], sum[XEU_HL_N], h[XEU_HL_N][16];
++	struct xeu_ring *irq_ring;
++	u64 irq_t;
++	unsigned int tick;
++	u64 own[8] __aligned(64);
++};
++static DEFINE_PER_CPU(struct xeu_head_lat, xeu_head_lat);
++
++static unsigned int head_lat_on;
++module_param(head_lat_on, uint, 0644);
++MODULE_PARM_DESC(head_lat_on, "DIAGNOSTIC: time the completion at each receive poll's head (0: off)");
++
++static __always_inline u64 xeu_hl_t(void)
++{
++	isb();
++	return read_sysreg(cntvct_el0);
++}
++
++static __always_inline void xeu_hl_add(struct xeu_head_lat *l, int k, u64 ns)
++{
++	l->n[k]++;
++	l->sum[k] += ns;
++	l->h[k][min_t(int, ilog2(ns | 1), 15)]++;
++}
++
++static __always_inline u64 xeu_hl_load(const void *p)
++{
++	u64 t0, v;
++
++	dsb(ld);
++	t0 = xeu_hl_t();
++	v = READ_ONCE(*(const u64 *)p);
++	asm volatile("" : "+r" (v));
++	dsb(ld);
++	return xeu_hl_t() - t0;
++}
++
++static noinline void xeu_hl_head(struct xeu_ring *ring)
++{
++	struct xeu_head_lat *l = this_cpu_ptr(&xeu_head_lat);
++	bool irq = l->irq_ring == ring && l->irq_t;
++	bool irqson = l->tick++ & 1;
++	u32 c = ring->cr_cons_idx;
++	const void *head = &ring->rx_cr_16[(c & ring->mask) << ring->cp_size];
++	const void *prev = &ring->rx_cr_16[((c - 1) & ring->mask) << ring->cp_size];
++	u64 t_own, t_prev, t_1st, t_2nd;
++	unsigned long flags = 0;
++	int k;
++
++	if (irq)
++		xeu_hl_add(l, 0, xeu_hl_t() - l->irq_t);
++	l->irq_ring = NULL;
++	l->irq_t = 0;
++	WRITE_ONCE(l->own[0], l->tick);
++	if (!irqson)
++		local_irq_save(flags);
++	t_own = xeu_hl_load(&l->own[0]);
++	t_prev = xeu_hl_load(prev);
++	t_1st = xeu_hl_load(head);
++	t_2nd = xeu_hl_load(head);
++	if (!irqson)
++		local_irq_restore(flags);
++	if (!RX_CMPL_VALID(ring, c)) {
++		xeu_hl_add(l, irq ? 1 : 2, t_1st);
++		return;
++	}
++	k = 3 + 4 * ((!irq) << 1 | irqson);
++	xeu_hl_add(l, k, t_own);
++	xeu_hl_add(l, k + 1, t_prev);
++	xeu_hl_add(l, k + 2, t_1st);
++	xeu_hl_add(l, k + 3, t_2nd);
++}
++
++static int xeu_head_lat_get(char *buf, const struct kernel_param *kp)
++{
++	static const char * const g[4] = {
++		"irq_irqsoff", "irq_irqson", "re_irqsoff", "re_irqson" };
++	static const char * const r[4] = { "own", "prev", "1st", "2nd" };
++	int cpu, k, b, len = 0;
++
++	for_each_possible_cpu(cpu) {
++		struct xeu_head_lat *l = per_cpu_ptr(&xeu_head_lat, cpu);
++
++		for (k = 0; k < XEU_HL_N; k++) {
++			if (!l->n[k])
++				continue;
++			if (k < 3)
++				len += sysfs_emit_at(buf, len, "cpu%d %s", cpu,
++						     k == 0 ? "irq_to_poll" :
++						     k == 1 ? "empty_irq" : "empty_re");
++			else
++				len += sysfs_emit_at(buf, len, "cpu%d %s_%s", cpu,
++						     g[(k - 3) / 4], r[(k - 3) % 4]);
++			len += sysfs_emit_at(buf, len, " n %llu sum_ns %llu h",
++					     l->n[k], l->sum[k]);
++			for (b = 0; b < 16; b++)
++				len += sysfs_emit_at(buf, len, " %llu", l->h[k][b]);
++			len += sysfs_emit_at(buf, len, "\n");
++		}
++	}
++	return len;
++}
++
++static int xeu_head_lat_set(const char *val, const struct kernel_param *kp)
++{
++	int cpu;
++
++	for_each_possible_cpu(cpu)
++		memset(per_cpu_ptr(&xeu_head_lat, cpu), 0, sizeof(struct xeu_head_lat));
++	return 0;
++}
++
++static const struct kernel_param_ops xeu_head_lat_ops = {
++	.get = xeu_head_lat_get,
++	.set = xeu_head_lat_set,
++};
++module_param_cb(head_lat, &xeu_head_lat_ops, NULL, 0644);
++
+ static void xeu_ring_irq_rearm(struct xeu_ring *ring)
+ {
+ 	if (ring->msix_vc)
+@@ -271,6 +409,12 @@
+ {
+ 	struct xeu_ring *ring = arg;
+ 
++	if (unlikely(READ_ONCE(head_lat_on)) && ring->type == RING_TYPE_ETH_RX) {
++		struct xeu_head_lat *l = this_cpu_ptr(&xeu_head_lat);
++
++		l->irq_ring = ring;
++		l->irq_t = xeu_hl_t();
++	}
+ 	xeu_napi_kick(ring);
+ 
+ 	return IRQ_HANDLED;
+@@ -1175,6 +1319,8 @@
+ 	/* Get the expected VLAN ID for this interface */
+ 	expected_vlan_id = priv->vf_vlan_id;
+ 
++	if (unlikely(READ_ONCE(head_lat_on)))
++		xeu_hl_head(ring);
+ 	while (work_done < budget) {
+ 		if (!RX_CMPL_VALID(ring, ring->cr_cons_idx))
+ 			break;

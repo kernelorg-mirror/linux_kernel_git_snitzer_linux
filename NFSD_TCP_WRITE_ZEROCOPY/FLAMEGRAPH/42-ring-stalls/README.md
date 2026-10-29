@@ -155,7 +155,7 @@ What each costs above the floor, a WRITE, at 2 GHz, if nothing overlaps it:
 
 - **`new_page`, about 6.8k cycles** (50.5 ns × 67.7), 4.9% of the rings' cycles. Three in four `struct page`s that `page_pool_alloc_pages()` hands the refill come from the L3. The page was last written elsewhere: released by an nfsd CPU, or by another ring, and the refill's first load waits for it. Nothing prefetches it today.
 - **`pp_alloc`, about 2.8k cycles** (20.9 ns × 67.7). 94% of calls are at the floor, from the pool's own cache. Half the excess is the 0.4% that take 4–8 µs, one in about 230 allocations, which looks like the batch taken from the pool's ring of returned pages.
-- **`cmpl_first`, about 1.1k cycles** (87 ns × 6.39). Half the polls find the completion in the L3, which is expected for a line the card has just written. **12% wait 512–1023 ns**, a time no L3 or DRAM read takes. My guess is a read that collides with the card's write to that same line, since completions are smaller than a line and the card writes into a line the CPU holds; not shown.
+- **`cmpl_first`, about 1.1k cycles** (87 ns × 6.39). Half the polls find the completion in the L3, which is expected for a line the card has just written. **12% wait 512–1023 ns**, a time no L3 or DRAM read takes. My guess is a read that collides with the card's write to that same line, since completions are smaller than a line and the card writes into a line the CPU holds; not shown. (Corrected on looking: the receive completions are 64 bytes, `XSL_DMA_QE_SIZE_64B`, one to a line, so the card does not write into a line that holds a completion the CPU has read. A collision, if it is one, is with the card's write of the head's own line.)
 - **`frame_hdr`**: half the header lines are in the L3 (the card wrote them) and 1.4% further out. They would cost about 8k cycles unhidden (30 ns × 135), which is what xeu's next-frame prefetch hides today; run101's prefetch-off window (+3.4k cycles) says it hides most of it.
 - **The completions after the first, the ring entries, the frames' `struct page`s, the doorbell and the re-arm** are at the floor: the doorbell and re-arm are posted writes, and the rest are warm.
 
@@ -193,3 +193,34 @@ What to expect: at most the 6.8k ring cycles a WRITE that run102 put on `new_pag
 **Not kept.** `rx_refill_prefetch` stays out of xeu; round 41's kept xeu (`CA0931345E46C929B11D01F`) is the one loaded.
 
 **Next is step 3's second item,** the completion at a poll's head that waits 0.5–1 µs, which is at most about 1k ring cycles a WRITE. With run102's first touches and run103 together, the rings' 1.06k DRAM reads a WRITE are still not placed: they are not in the poll's first touches, and the one excess that was found there the core already hides.
+
+## 5. The completion at a poll's head (r105, to run)
+
+run102 found 12% of polls waiting 512–1023 ns for the completion at their head, a time no L3 or DRAM read takes. [xeu-diag-poll-head.patch](xeu-diag-poll-head.patch), on round 41's kept xeu (`EDAEF51052A598878DAED83` built), adds `head_lat_on` (0, off, by default). On every receive poll while it is set, it times four loads, each between DSB LDs as before:
+
+| | what |
+|---|---|
+| `own` | a line of the CPU's own, just written: the floor |
+| `prev` | the completion before the head: read by the last poll, not written by the card since. The control |
+| `1st` | the completion at the head |
+| `2nd` | the same line again, straight after |
+
+Each is split two ways:
+
+- **`irq` or `re`:** whether the poll follows this ring's interrupt (stamped in `xeu_napi_intr()` on the same CPU), or is a poll that used its budget or that NAPI ran again.
+- **`irqsoff` or `irqson`:** every other poll does the four reads with interrupts off.
+
+It also gives the time from the ring's interrupt to the start of its poll (`irq_to_poll`), and counts polls whose head is empty (`empty_irq`, `empty_re`).
+
+How to read it:
+
+- If the slow reads are only in `irqson`, they were an interrupt landing inside the timed read: run102's 12% is the measurement's, not the line's.
+- If `prev` is slow as well, the wait is not the completion's line: the CPU itself is slow to start (waking from idle, say).
+- If only `1st` is slow and `2nd` is at the floor, it is the head's line: a read meeting the card's write of that line.
+
+[run105.sh](run105.sh):
+
+1. Put the region back to the settled 32768 pages. run104 (round 43) was stopped on 29 October with it at 6400; this is done the way run104 resizes.
+2. Load the diagnostic xeu, refusing if an NFS client is connected.
+3. One loan64 run with `head_lat_on` for 8 s from 10 s into the timed load.
+4. Load round 41's kept xeu again and apply the settled setting.
