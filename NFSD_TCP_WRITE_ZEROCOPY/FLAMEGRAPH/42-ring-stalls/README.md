@@ -111,7 +111,7 @@ SPE was the plan, and is not to be had: `arm_spe_pmu` loads, but the firmware's 
 
 **So:** the rings' memory stalls (31k cycles a WRITE, 19%) come from about 1.06k DRAM reads and 1.2k L3 hits a WRITE, and the payload's own path through DRAM is the system's, not the rings'. Naming the rings' lines needs either a precise profile (pseudo-NMI, a reboot) or a diagnostic xeu that times the poll's remaining first touches as round 41 timed GRO's: the completion entry, the software ring entry, and the refill's take of a recycled page from page_pool.
 
-## 3. The poll's first touches (r102, to run)
+## 3. The poll's first touches (r102)
 
 [xeu-diag-poll-first-touches.patch](xeu-diag-poll-first-touches.patch), on round 41's kept xeu (`9461DCE8A67161729215CE0`), adds `poll_lat_every` (0, off, by default). Times are the 1 GHz counter after an ISB; a load is timed with a DSB LD before and after, a call whole:
 
@@ -131,3 +131,37 @@ SPE was the plan, and is not to be had: `arm_spe_pmu` loads, but the firmware's 
 The lines are timed at their first touch, before the prefetch, so a time well above the floor is a line coming from the L3 (about 64–127 ns) or DRAM (128 ns or more), the lines the rings would miss without the prefetch or pay for at the poll's head. A sampled frame's lines are warm afterwards, so N is 16 and the run's counted cycles are not a result.
 
 [run102.sh](run102.sh): load the diagnostic xeu (refusing if an NFS client is connected), one loan64 run with sampling for 8 s from 10 s into the timed load, then round 41's kept xeu again and the settled setting.
+
+### What run102 found
+
+[run102.out](run102.out); the per-CPU histograms are [r102/poll-lat.txt](r102/poll-lat.txt), the summary [r102/poll-lat-sum.txt](r102/poll-lat-sum.txt). 309,874 WRITEs in the 8 s window. Per WRITE that is 6.39 polls with a completion, 135 frames, 67.7 pages allocated, 4.57 doorbells and 6.44 re-arms (the per-frame and per-page kinds are sampled one in 16 and scaled). The run's 139.7k ring cycles a WRITE are the kept xeu's 139.3k within scatter, so the sampling cost little; its rate is not a result.
+
+Share of first touches by time (log2 buckets; the floor is 32–63 ns):
+
+| | mean | 32–63 ns | 64–127 ns (L3) | 128–255 ns (DRAM) | 256–511 | 512–1023 | 4–8 µs |
+|---|---|---|---|---|---|---|---|
+| `own` | 32.7 | 99.9% | 0.0% | 0.0% | | 0.1% | |
+| `cmpl_first` | 119.7 | 38.1% | 49.7% | 0.1% | 0.1% | **12.1%** | |
+| `cmpl_next` | 34.0 | 97.2% | 2.7% | | | | |
+| `sw_entry` | 32.2 | 99.9% | 0.1% | | | | |
+| `frame_page` | 34.6 | 96.0% | 3.6% | 0.3% | 0.1% | | |
+| `frame_hdr` | 62.8 | 47.8% | 50.8% | 1.0% | 0.4% | | |
+| `pp_alloc` (call) | 53.3 | 93.6% | 3.9% | 1.9% | 0.1% | | **0.4%** |
+| `new_page` | 83.2 | 21.8% | **74.1%** | 3.0% | 1.0% | | |
+| `doorbell` (call) | 32.4 | 99.8% | 0.1% | 0.1% | | | |
+| `rearm` (call) | 32.9 | 99.3% | 0.4% | 0.2% | 0.1% | | |
+
+What each costs above the floor, a WRITE, at 2 GHz, if nothing overlaps it:
+
+- **`new_page`, about 6.8k cycles** (50.5 ns × 67.7), 4.9% of the rings' cycles. Three in four `struct page`s that `page_pool_alloc_pages()` hands the refill come from the L3. The page was last written elsewhere: released by an nfsd CPU, or by another ring, and the refill's first load waits for it. Nothing prefetches it today.
+- **`pp_alloc`, about 2.8k cycles** (20.9 ns × 67.7). 94% of calls are at the floor, from the pool's own cache. Half the excess is the 0.4% that take 4–8 µs, one in about 230 allocations, which looks like the batch taken from the pool's ring of returned pages.
+- **`cmpl_first`, about 1.1k cycles** (87 ns × 6.39). Half the polls find the completion in the L3, which is expected for a line the card has just written. **12% wait 512–1023 ns**, a time no L3 or DRAM read takes. My guess is a read that collides with the card's write to that same line, since completions are smaller than a line and the card writes into a line the CPU holds; not shown.
+- **`frame_hdr`**: half the header lines are in the L3 (the card wrote them) and 1.4% further out. They would cost about 8k cycles unhidden (30 ns × 135), which is what xeu's next-frame prefetch hides today; run101's prefetch-off window (+3.4k cycles) says it hides most of it.
+- **The completions after the first, the ring entries, the frames' `struct page`s, the doorbell and the re-arm** are at the floor: the doorbell and re-arm are posted writes, and the rest are warm.
+
+**The DRAM reads are not here.** These first touches account for about 136 lines a WRITE coming from beyond the L2 (70 header lines, 53 `struct page`s, the rest a few each) and fewer than 5 from DRAM, against run100's 1.05k L2 refills and 1.06k L3 read misses a WRITE. Most of the rings' misses are elsewhere in the rings: skb and GRO, TCP, the transmit side's ACKs and completions.
+
+### Step 3
+
+1. **Prefetch the refill's `struct page`s (A/B).** In xeu's refill, take the pages for the refill first, `prefetchw()` each `struct page`, then post the descriptors; or prefetch the next page's while posting the current one. The pages, their number and their order are what they are today, so the region's footprint does not change. At most about 6.8k ring cycles a WRITE, less what the core already overlaps.
+2. **The completion that waits 0.5–1 µs (diagnostic).** Split `cmpl_first` by whether the poll follows the interrupt or is a re-poll, and time a second read of the same line straight after, to tell a collision with the card's write from something else. It is about 1k cycles a WRITE, so it comes second.
