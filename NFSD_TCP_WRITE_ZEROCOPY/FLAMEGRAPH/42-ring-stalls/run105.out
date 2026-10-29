@@ -1,0 +1,26 @@
+15:31:17 region 32768 pages (512 MiB) made at 0x8260000000; page_pool: fixed rx region for 0000:a1:00.0 freed: 6400 pages at 0x8107000000, 0 escaped
+15:31:53 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu EDAEF51052A598878DAED83, region 32768, settled.sh audit rest: the settled setting
+15:36:09 r105-diag-loan64 | total 40.44 GB/s | 1 no-step | 1 placed | r105-diag-loan64 ring 45.0 nfsd 93.5 us/W (38573 WRITEs/s) | ring 141.1k cycles 306.9k instructions, nfsd 296.9k cycles 302.6k instructions a WRITE | peak 6469
+15:36:09 head_lat from 15:35:19 end 15:35:27
+WRITEs in the window 308416
+                             n     /W    mean     <64    64-   128-   256-   512-  >=1us
+irq_to_poll            2383056   7.73  1416.4    0.0%   0.0%  71.0%  16.7%   0.1%  12.2%
+empty_irq               731627   2.37    32.2  100.0%   0.0%   0.0%   0.0%   0.0%   0.0%
+empty_re                346393   1.12    32.2  100.0%   0.0%   0.0%   0.0%   0.0%   0.0%
+irq_irqsoff_own         826089   2.68    32.4  100.0%   0.0%   0.0%   0.0%   0.0%   0.0%
+irq_irqsoff_prev        826089   2.68    32.4   99.9%   0.1%   0.0%   0.0%   0.0%   0.0%
+irq_irqsoff_1st         826089   2.68    63.3   38.7%  61.2%   0.1%   0.0%   0.0%   0.0%
+irq_irqsoff_2nd         826089   2.68    32.3   99.8%   0.2%   0.0%   0.0%   0.0%   0.0%
+irq_irqson_own          825340   2.68    54.8   95.6%   0.0%   0.0%   0.1%   4.3%   0.0%
+irq_irqson_prev         825340   2.68    42.4   98.0%   0.1%   0.0%   0.1%   1.9%   0.0%
+irq_irqson_1st          825340   2.68    77.5   36.1%  61.1%   0.1%   0.1%   2.6%   0.0%
+irq_irqson_2nd          825340   2.68    32.4   99.8%   0.2%   0.0%   0.0%   0.0%   0.0%
+re_irqsoff_own          220490   0.71    32.3  100.0%   0.0%   0.0%   0.0%   0.0%   0.0%
+re_irqsoff_prev         220490   0.71    32.3   99.9%   0.1%   0.0%   0.0%   0.0%   0.0%
+re_irqsoff_1st          220490   0.71    51.9   60.1%  39.8%   0.1%   0.0%   0.0%   0.0%
+re_irqsoff_2nd          220490   0.71    32.4   99.5%   0.5%   0.0%   0.0%   0.0%   0.0%
+re_irqson_own           220281   0.71    32.3  100.0%   0.0%   0.0%   0.0%   0.0%   0.0%
+re_irqson_prev          220281   0.71    32.3   99.9%   0.1%   0.0%   0.0%   0.0%   0.0%
+re_irqson_1st           220281   0.71    51.7   60.7%  39.2%   0.1%   0.0%   0.0%   0.0%
+re_irqson_2nd           220281   0.71    32.5   99.5%   0.5%   0.0%   0.0%   0.0%   0.0%
+15:36:44 end: xeu CA0931345E46C929B11D01F, region 32768, settled.sh audit rest: the settled setting; DONE
