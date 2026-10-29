@@ -2626,10 +2626,18 @@ int nfs_unlink(struct inode *dir, struct dentry *dentry)
 	 * completes.  ->d_revalidate will wait for ->d_fsdata
 	 * to clear.  We set it here to ensure no lookup succeeds until
 	 * the unlink is complete on the server.
+	 *
+	 * may_delete_dentry() refused an entry carrying a silly-delete,
+	 * but without ->d_lock, and nfs_call_unlink() can have handed
+	 * this one a silly-delete since.  It is busy, as the VFS says.
 	 */
+	error = -EBUSY;
+	if (dentry->d_flags & DCACHE_NFSFS_RENAMED) {
+		spin_unlock(&dentry->d_lock);
+		goto out;
+	}
 	error = -ETXTBSY;
-	if (WARN_ON(dentry->d_flags & DCACHE_NFSFS_RENAMED) ||
-	    WARN_ON(dentry->d_fsdata == NFS_FSDATA_BLOCKED)) {
+	if (WARN_ON(dentry->d_fsdata == NFS_FSDATA_BLOCKED)) {
 		spin_unlock(&dentry->d_lock);
 		goto out;
 	}
@@ -2825,13 +2833,25 @@ int nfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
 		 * completes.  ->d_revalidate will wait for ->d_fsdata
 		 * to clear.  We set it here to ensure no lookup succeeds until
 		 * the unlink is complete on the server.
+		 *
+		 * Test under ->d_lock, which nfs_call_unlink() hands a
+		 * silly-delete over under and block_revalidate() below
+		 * stores under, so that no hand-off lands between the test
+		 * and the store, which would kfree() it.  A target carrying
+		 * one is busy, as may_delete_dentry() says when it sees the
+		 * flag first.
 		 */
-		error = -ETXTBSY;
-		if (WARN_ON(new_dentry->d_flags & DCACHE_NFSFS_RENAMED) ||
-		    WARN_ON(new_dentry->d_fsdata == NFS_FSDATA_BLOCKED))
-			goto out;
-
 		spin_lock(&new_dentry->d_lock);
+		error = -EBUSY;
+		if (new_dentry->d_flags & DCACHE_NFSFS_RENAMED) {
+			spin_unlock(&new_dentry->d_lock);
+			goto out;
+		}
+		error = -ETXTBSY;
+		if (WARN_ON(new_dentry->d_fsdata == NFS_FSDATA_BLOCKED)) {
+			spin_unlock(&new_dentry->d_lock);
+			goto out;
+		}
 		if (d_count(new_dentry) > 2) {
 			int err;
 
