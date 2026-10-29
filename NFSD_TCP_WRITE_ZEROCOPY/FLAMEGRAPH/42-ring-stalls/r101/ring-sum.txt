@@ -1,0 +1,6 @@
+ring-1-YY  WRITEs 117376 | a WRITE: cycles 165.1k instructions 320.5k lines read beyond L2 2.27k L2 refills 1.04k LL read misses 1.06k memory stalls 31.3k
+ring-2-NY  WRITEs 117635 | a WRITE: cycles 168.5k instructions 311.6k lines read beyond L2 3.45k L2 refills 0.95k LL read misses 1.35k memory stalls 37.8k
+ring-3-YN  WRITEs 117335 | a WRITE: cycles 164.8k instructions 326.4k lines read beyond L2 2.36k L2 refills 1.00k LL read misses 1.08k memory stalls 29.0k
+ring-4-YY  WRITEs 117783 | a WRITE: cycles 166.0k instructions 321.1k lines read beyond L2 2.29k L2 refills 1.05k LL read misses 1.07k memory stalls 32.1k
+ring-5-NY  WRITEs 117464 | a WRITE: cycles 168.3k instructions 312.0k lines read beyond L2 3.51k L2 refills 0.95k LL read misses 1.37k memory stalls 37.7k
+ring-6-YN  WRITEs 118275 | a WRITE: cycles 164.6k instructions 326.8k lines read beyond L2 2.36k L2 refills 1.00k LL read misses 1.08k memory stalls 29.0k
