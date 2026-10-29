@@ -72,3 +72,31 @@ The runs' own lines: copy 137.8k ring and 678.6k nfsd cycles a WRITE, peak 1152 
 
 A smaller stack sends more returned pages back to the region, under its one lock, and a page taken from the region is mapped for DMA again. That is the cost to look for in the rings' cycles, and in nfsd's, whose release returns the loaned pages. A depth is kept only if it lowers the peak without costing rate or cycles beyond the noise.
 
+### What r111 found
+
+[run111.out](run111.out), the samples in [r111/](r111/), at 20:33 to 21:12 on 29 October.
+
+| run | mode | stack | GB/s | ring cycles (instructions) a WRITE | nfsd cycles (instructions) a WRITE | peak, pages | mean in use, pages |
+|---|---|---|---|---|---|---|---|
+| 1 | loan64 | A, 256 | 40.49 | 130.3k (285.7k) | 297.1k (303.5k) | 6401 | 5413 |
+| 2 | loan64 | B, 64 | 40.49 | 134.2k (297.1k) | 307.7k (315.9k) | 6101 | 4889 |
+| 3 | loan64 | C, 16 | **32.53** | 123.5k (307.9k) | 272.8k (332.5k) | 5884 | 1757 |
+| 4 | loan64 | C, 16 | 40.53 | 141.4k (313.4k) | 326.8k (332.6k) | 6049 | 4989 |
+| 5 | loan64 | B, 64 | 40.56 | 133.9k (297.4k) | 306.1k (314.7k) | 6325 | 5152 |
+| 6 | loan64 | A, 256 | 40.54 | 130.0k (285.1k) | 295.7k (302.1k) | 6336 | 5342 |
+| 7 | copy | C, 16 | 40.79 | 144.5k (285.4k) | 713.5k (480.7k) | 1036 | 678 |
+| 8 | copy | B, 64 | 40.80 | 137.8k (269.0k) | 697.2k (462.6k) | 1067 | 774 |
+| 9 | copy | A, 256 | 40.80 | 137.5k (269.1k) | 697.6k (463.0k) | 1152 | 1132 |
+
+| | loan64: cycles a WRITE, ring / nfsd | loan64: mean in use | copy: cycles a WRITE, ring / nfsd | copy: mean in use |
+|---|---|---|---|---|
+| B against A | **+3.9k / +10.5k** (+3.0%, +3.5%), instructions +11.6k / +13.1k | **−357 (5378 to 5021)**, peak −156 | **+0.3k / −0.4k**, instructions the same | **−358 (1132 to 774, −32%)**, peak −85 |
+| C against A | +11k / +30k (run 4) | −389 (run 4) | +7.0k / +15.9k | −454 (−40%) |
+
+- **C is not kept.** In run 3 one ring ran at 45% busy against 18% for the other three and held the port at 32.5 GB/s from 8 s into the load, with the drives 78 to 90% busy and no drops ([drives-sec-r111-3-loan64-C.tsv](r111/drives-sec-r111-3-loan64-C.tsv)); in run 4 it cost 11k ring and 30k nfsd cycles a WRITE.
+- **B in copy mode is free:** a third less of the region in use, the cycles and instructions the same.
+- **B in loan mode costs 3 to 3.5%** of the rings' and nfsd's cycles for 357 fewer pages (5.6 MiB, 7%). Instructions rise with the cycles, so it is work, not waits: a page that finds its pool's stack full is unmapped, its DMA index taken out of the pool's xarray, and put on the region's free list under its one lock (`page_pool_return_netmem()`, `page_pool_rx_region_put()`); a ring that runs short takes it back under the same lock and maps it again (`page_pool_rx_region_alloc()`, `page_pool_dma_map()`). nfsd returns the loaned pages, so it pays most. In copy mode the pages are freed on the ring's own CPU and do not, it seems, overflow the stack as often; this is inferred, not counted.
+- **The rate is the same at A and B in both modes.**
+
+Whether B is kept is Mike's: free in copy mode, 3% in loan mode, for 360 pages either way. What it costs in loan mode is a code question too: how many pages a WRITE make the round trip through the region, and which of its steps (the region's lock, the xarray, the mapping) dominates, is for a profile of A against B; a cheaper round trip would make a shallow stack free in loan mode as well.
+
