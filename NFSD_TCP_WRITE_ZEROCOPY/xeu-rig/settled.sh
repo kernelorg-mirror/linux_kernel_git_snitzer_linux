@@ -326,6 +326,18 @@ SRV_QDISC=fq_codel	# under the mq of each server port; apply puts it back (round
 GRO_MAX=65536	# each server port's gro_max_size and gro_ipv4_max_size (round 09 tries BIG TCP)
 gro_max() { ip -d link show $1 | grep -oE 'gro_(ipv4_)?max_size [0-9]+' | awk '{print $2}' | sort -u | paste -sd,; }
 set_gro_max() { ip link set dev $1 gro_max_size $2 gro_ipv4_max_size $2; }
+# NAPI's deferral of a port's receive interrupts, as napi_defer_hard_irqs
+# and gro_flush_timeout in ns: a poll that completes leaves the ring masked
+# and NAPI polls again from the timer, unmasking only after that many polls
+# in a row find nothing.  2/10000 on port a since FLAMEGRAPH round 44 (Mike,
+# 29 October): the rings 10.0k cycles a loaned WRITE fewer (7.1%), the
+# receive interrupts 10.7 to 1.25 a WRITE, no rate lost and the region's
+# peak not raised; 2/30000 fell to 34 GB/s for seconds at a time.  Port b
+# stays at 0/0 until a run on two ports shows the same.  Both outlive an
+# open of the port; place writes them all the same.
+declare -A DEFER=([a]=2/10000 [b]=0/0)
+defer() { echo "$(cat /sys/class/net/$1/napi_defer_hard_irqs)/$(cat /sys/class/net/$1/gro_flush_timeout)"; }
+set_defer() { echo ${2%/*} > /sys/class/net/$1/napi_defer_hard_irqs && echo ${2#*/} > /sys/class/net/$1/gro_flush_timeout; }
 # NFS is kept out of conntrack (FLAMEGRAPH round 01, 23 October): a table
 # that needs conntrack puts it on every packet.  On tardis2's one-port loan
 # run, deleting the table and loading zc-notrack.nft took the rings from 92.6
@@ -413,6 +425,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "${EXP_NOTRACK:-}" = absent ] && OFF="$OFF zc_notrack=absent"
 	[ "${EXP_NETAVARK:-}" = present ] && OFF="$OFF netavark=present"
 	[ -n "${EXP_GRO_MAX:-}" ] && [ "$EXP_GRO_MAX" != "$GRO_MAX" ] && OFF="$OFF gro_max=$EXP_GRO_MAX"
+	for k in $PORTS; do [ -n "${EXP_DEFER:-}" ] && [ "$EXP_DEFER" != "${DEFER[$k]}" ] && OFF="$OFF defer_$k=$EXP_DEFER"; done
 	[ -n "${EXP_SRV_QDISC:-}" ] && [ "$EXP_SRV_QDISC" != "$SRV_QDISC" ] && OFF="$OFF srv_qdisc=$EXP_SRV_QDISC"
 	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
 	[ -n "${EXP_RODATA:-}" ] && [ "$EXP_RODATA" != "$RODATA" ] && OFF="$OFF rodata=$EXP_RODATA"
@@ -514,6 +527,7 @@ audit_port() {	# audit_port <a|b>
 	want "$d mtu" "$(cat /sys/class/net/$d/mtu)" $MTU
 	want "$d qdisc" "$(srv_qdisc $d)" "${EXP_SRV_QDISC:-$SRV_QDISC}"
 	want "$d GRO max size" "$(gro_max $d)" "${EXP_GRO_MAX:-$GRO_MAX}"
+	want "$d NAPI deferral" "$(defer $d)" "${EXP_DEFER:-${DEFER[$p]}}"
 	want "$d rings" "$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')" ${EXP_RINGS:-$RINGS}
 	want "$d ring depth" "$(ethtool -g $d | awk '/^RX:/ {v = $2} END {print v}')" "${ENTRIES[$p]}"
 	want "$d threaded NAPI" "$(cat /sys/class/net/$d/threaded)" 0
@@ -632,6 +646,7 @@ place() {	# place [a] [b]: the CPU layout of nfsd and of the ports named (both)
 		done
 		for q in /sys/class/net/$d/queues/rx-*; do echo 0 > $q/rps_cpus; done
 		echo 0 > /sys/class/net/$d/threaded
+		set_defer $d ${DEFER[$p]}
 		# irq_tuning.service set this until it was masked (below); a reload
 		# of xeu puts it back to the card's 256.
 		set_mrrs $(pci_of /sys/class/net/$d/device) $MRRS
@@ -717,6 +732,7 @@ audit) audit "${2:?mode: rest, two, one or cell}" ;;
 apply) apply ;;
 place) shift; place "$@" ;;
 gro)   set_gro_max "${2:?dev}" "${3:-$GRO_MAX}" ;;	# no size: the settled one
+defer) set_defer "${2:?dev}" "${3:?napi_defer_hard_irqs/gro_flush_timeout}" ;;
 srvq)  set_srv_qdisc "${2:?dev}" "${3:-$SRV_QDISC}" ;;	# no qdisc: the settled one
 show)  show "${2:-rest}" ;;
 *)     sed -n '2,36p' "$0"; exit 2 ;;
