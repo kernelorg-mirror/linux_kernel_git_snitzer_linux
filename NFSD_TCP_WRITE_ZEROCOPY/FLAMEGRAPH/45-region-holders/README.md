@@ -66,3 +66,9 @@ The runs' own lines: copy 137.8k ring and 678.6k nfsd cycles a WRITE, peak 1152 
 
 **What it means for the footprint (the L3).** Of the region's working set in copy mode, about 1130 pages, half is the pools' idle stacks. In loan mode the stacks are 9% of it. `rx_region_stack` sets their size (0 is the ring's 256); a smaller stack gives pages back to the region sooner, where any ring can take them, and they are mapped again when taken. That is step 2: an A/B of `rx_region_stack` (for example 256 against 64) on the peak, the rings' cycles and the rate, in copy and loan mode. Separately, the budget's charge of 126 pages a WRITE is twice what a loan holds, so a budget sized by it admits half the loans the region could hold.
 
+## 2. The depth of the pools' stacks (r111)
+
+[run111.sh](run111.sh): `page_pool.rx_region_stack` at 0 (the pool's size, the ring's 256; the settled setting), 64 and 16, read when a pool is made, so `settled.sh apply` opens port a again for each (`EXP_RX_REGION_STACK`). Round 41's kept xeu, the region at 512 MiB, the settled setting with round 44's deferral, counted and untraced: loan64 in the order A B C C B A, then copy C B A. Each run reports the region's peak and its mean in use (the free pages every 0.2 s for 10 s from 10 s into the timed load), beside the rate and the rings' and nfsd's cycles.
+
+A smaller stack sends more returned pages back to the region, under its one lock, and a page taken from the region is mapped for DMA again. That is the cost to look for in the rings' cycles, and in nfsd's, whose release returns the loaned pages. A depth is kept only if it lowers the peak without costing rate or cycles beyond the noise.
+
