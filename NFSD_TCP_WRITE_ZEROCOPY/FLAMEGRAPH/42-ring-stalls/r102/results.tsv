@@ -1,0 +1,2 @@
+tag which total_GBps a_GBps b_GBps fifo_a fifo_b ringdrop_a ringdrop_b cli_retrans region_pages nfsd_busy ringcpu_a ringcpu_b rcvbuf linger threads entries qdisc nconn jobs drvbusy_a drvbusy_b warm lowat writes_ps woken_ps ctxsw_ps keep
+r102-diag-loan64 a 40.50 40.50 - 0 - 0 - 4 6366 7 22 0 768000 - - 256 codel 16 16 99 - 10 - 38493 153781 433828 -
