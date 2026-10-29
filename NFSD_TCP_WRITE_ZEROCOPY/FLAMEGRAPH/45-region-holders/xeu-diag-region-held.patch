@@ -1,0 +1,55 @@
+--- a/xeu-esdk-v2.0.1/xeu_drv.c	2026-10-29 00:57:53.773036391 +0000
++++ b/xeu-esdk-v2.0.1/xeu_drv.c	2026-10-29 19:46:15.087052273 +0000
+@@ -3823,3 +3823,52 @@
+ MODULE_INFO(git_ref, GIT_REF);
+ 
+ 
++
++/*
++ * FLAMEGRAPH round 45, diagnostic: what of the fixed receive region each
++ * port's receive rings hold, read on demand.  For each running xeu port and
++ * each of its receive rings: the buffers posted to the card, what is left
++ * of the page being cut, and the pages its page pool keeps for reuse, in
++ * its alloc cache and on its region stack.  Read without the rings' NAPI
++ * held, so each figure is a snapshot that may be a poll old; rtnl keeps the
++ * rings from being freed under the read.
++ */
++static int xeu_region_held_get(char *buf, const struct kernel_param *kp)
++{
++	struct net_device *dev;
++	int len = 0, i;
++
++	rtnl_lock();
++	for_each_netdev(&init_net, dev) {
++		struct xeu_dev *priv;
++
++		if (dev->netdev_ops != &xeu_netdev_ops || !netif_running(dev))
++			continue;
++		priv = netdev_priv(dev);
++		if (!test_bit(XEU_FLAG_DEV_RDY, &priv->flags) || !priv->rx_rings)
++			continue;
++		for (i = 0; i < priv->num_rings; i++) {
++			struct xeu_rx_ring *rxr = &priv->rx_rings[i];
++			struct xeu_ring *ring = &rxr->base;
++			struct page_pool *pp = rxr->page_pool;
++
++			len += scnprintf(buf + len, PAGE_SIZE - len,
++					 "%s rx%d posted %u split_left %u cache %u stack %u stack_size %u\n",
++					 dev->name, i,
++					 (u16)(READ_ONCE(ring->sr_prod_idx) - READ_ONCE(ring->sr_cons_idx)),
++					 READ_ONCE(rxr->split_left),
++					 pp ? READ_ONCE(pp->alloc.count) : 0,
++					 pp ? READ_ONCE(pp->rx_stack_n) : 0,
++					 pp ? pp->rx_stack_size : 0);
++		}
++	}
++	rtnl_unlock();
++	return len;
++}
++
++static const struct kernel_param_ops xeu_region_held_ops = {
++	.get = xeu_region_held_get,
++};
++module_param_cb(region_held, &xeu_region_held_ops, NULL, 0444);
++MODULE_PARM_DESC(region_held,
++		 "diagnostic: per receive ring, the buffers posted and the pages its page pool keeps for reuse");
