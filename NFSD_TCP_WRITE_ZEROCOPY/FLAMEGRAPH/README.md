@@ -129,6 +129,10 @@ decided.
    costs instructions. Kept: xeu hands GRO page fragments
    (`rx_gro_frags`, kmod-xsight 2.0.1-13), 6.5k ring instructions a WRITE
    fewer, the rings' cycles the same.
+11. **Round 42: where the rings' stalls are** (Mike, 29 October): 42% of
+   the ring CPUs' cycles are backend stalls, only 18% of them on memory;
+   counted by group first, then SPE for the instructions and data
+   ([42-ring-stalls](42-ring-stalls/README.md)).
 
 ## Where the kept rounds stand (2026-10-28)
 
