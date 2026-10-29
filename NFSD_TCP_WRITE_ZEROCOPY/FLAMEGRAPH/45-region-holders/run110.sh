@@ -14,7 +14,10 @@
 #   r110-4  loan, 2048 pages (32 MiB), budget 720, as run109
 # then the region at 32768 again, the kept xeu and the settled setting.
 # Each xeu swap and region resize refuses to run with an NFS client
-# connected.
+# connected.  As run on 29 October the samples summed every xeu port's rings,
+# port b's eight idle rings of 4096 entries (outside the region) among them;
+# r110/held-a.sh takes those 32768 posted buffers off, and the sample now
+# reads port a's alone.
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
 O=$L/t2-r110
@@ -62,7 +65,7 @@ resize() {	# resize PAGES: the region at PAGES, port a back up and settled
 }
 sample() {	# one line: the region, the rings and pools, the sockets, the budget
 	local t; t=$(date +%s%N)
-	echo "t=$(( t / 1000000 )) free=$(reg free) $(awk '{p += $4; s += $6; c += $8; k += $10; z += $12} END {printf "posted=%d split=%d cache=%d stack=%d stack_size=%d", p, s, c, k, z}' $P/region_held)" \
+	echo "t=$(( t / 1000000 )) free=$(reg free) $(awk -v d=$PA '$1 == d {p += $4; s += $6; c += $8; k += $10; z += $12} END {printf "posted=%d split=%d cache=%d stack=%d stack_size=%d", p, s, c, k, z}' $P/region_held)" \
 	     "$(ss -tmnH state established '( sport = :2049 )' | grep -o 'skmem:([^)]*)' | awk -F'[(,)]' '{n++; for (i = 2; i < NF; i++) {k = $i; sub(/[0-9]+$/, "", k); v = substr($i, length(k) + 1); if (k == "r") r += v; if (k == "bl") b += v}} END {printf "socks=%d rmem=%d bl=%d", n, r, b}')" \
 	     "$(awk '{for (i = 1; i < NF; i += 2) if ($i ~ /^(budget|avail|reserve|inflight)$/) printf "%s=%s ", $i, $(i + 1)}' $BS)"
 }
