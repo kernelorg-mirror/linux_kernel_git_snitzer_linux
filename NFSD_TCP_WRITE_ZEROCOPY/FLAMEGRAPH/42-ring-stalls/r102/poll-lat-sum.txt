@@ -1,0 +1,11 @@
+WRITEs in the window 309874
+own         n   2623114 mean    32.7 ns  64-127 ns   0.0%  >=128 ns   0.1%
+cmpl_first  n   1978902 mean   119.7 ns  64-127 ns  49.7%  >=128 ns  12.2%
+cmpl_next   n   2623114 mean    34.0 ns  64-127 ns   2.7%  >=128 ns   0.1%
+sw_entry    n   2623114 mean    32.2 ns  64-127 ns   0.1%  >=128 ns   0.0%
+frame_page  n   2497489 mean    34.6 ns  64-127 ns   3.6%  >=128 ns   0.3%
+frame_hdr   n   2497489 mean    62.8 ns  64-127 ns  50.8%  >=128 ns   1.4%
+pp_alloc    n   1311553 mean    53.3 ns  64-127 ns   3.9%  >=128 ns   2.5%
+new_page    n   1311553 mean    83.2 ns  64-127 ns  74.1%  >=128 ns   4.0%
+doorbell    n   1414767 mean    32.4 ns  64-127 ns   0.1%  >=128 ns   0.1%
+rearm       n   1994695 mean    32.9 ns  64-127 ns   0.4%  >=128 ns   0.2%

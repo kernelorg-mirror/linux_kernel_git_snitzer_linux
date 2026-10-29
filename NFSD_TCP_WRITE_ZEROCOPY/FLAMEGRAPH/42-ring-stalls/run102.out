@@ -1,0 +1,15 @@
+04:54:21 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu 9461DCE8A67161729215CE0, settled.sh audit rest: the settled setting
+04:58:37 r102-diag-loan64 | total 40.50 GB/s | 1 no-step | 1 placed | r102-diag-loan64 ring 45.7 nfsd 90.8 us/W (38493 WRITEs/s) | ring 139.7k cycles 308.6k instructions, nfsd 296.6k cycles 303.8k instructions a WRITE | peak 6366
+04:58:37 poll_lat from 04:57:47 end 04:57:55
+WRITEs in the window 309874
+own         n   2623114 mean    32.7 ns  64-127 ns   0.0%  >=128 ns   0.1%
+cmpl_first  n   1978902 mean   119.7 ns  64-127 ns  49.7%  >=128 ns  12.2%
+cmpl_next   n   2623114 mean    34.0 ns  64-127 ns   2.7%  >=128 ns   0.1%
+sw_entry    n   2623114 mean    32.2 ns  64-127 ns   0.1%  >=128 ns   0.0%
+frame_page  n   2497489 mean    34.6 ns  64-127 ns   3.6%  >=128 ns   0.3%
+frame_hdr   n   2497489 mean    62.8 ns  64-127 ns  50.8%  >=128 ns   1.4%
+pp_alloc    n   1311553 mean    53.3 ns  64-127 ns   3.9%  >=128 ns   2.5%
+new_page    n   1311553 mean    83.2 ns  64-127 ns  74.1%  >=128 ns   4.0%
+doorbell    n   1414767 mean    32.4 ns  64-127 ns   0.1%  >=128 ns   0.1%
+rearm       n   1994695 mean    32.9 ns  64-127 ns   0.4%  >=128 ns   0.2%
+04:59:12 end: xeu CA0931345E46C929B11D01F, settled.sh audit rest: the settled setting; DONE
