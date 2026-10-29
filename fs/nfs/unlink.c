@@ -113,6 +113,19 @@ static void nfs_do_call_unlink(struct inode *inode, struct nfs_unlinkdata *data)
 
 	NFS_PROTO(dir)->unlink_setup(&msg, data->dentry, inode);
 
+	/*
+	 * Hold off an rmdir() of the directory from here until the REMOVE
+	 * is done (nfs_async_unlink_release()), and not before.  Until the
+	 * REMOVE is submitted, the lookup in nfs_call_unlink(), its dput()
+	 * of an alias, and ->unlink_setup() (where NFSv4 returns the
+	 * file's delegation, putting open contexts and waiting for
+	 * writeback) can each drop the last reference to a dentry carrying
+	 * a silly-delete.  Its kill calls nfs_call_unlink() again, in this
+	 * thread or in one this thread waits for, and if rmdir_sem were
+	 * held here by then, that call's read hold would wait behind an
+	 * rmdir() waiting for this one.
+	 */
+	down_read_non_owner(&NFS_I(dir)->rmdir_sem);
 	task_setup_data.rpc_client = NFS_CLIENT(dir);
 	task = rpc_run_task(&task_setup_data);
 	if (!IS_ERR(task))
@@ -121,18 +134,14 @@ static void nfs_do_call_unlink(struct inode *inode, struct nfs_unlinkdata *data)
 
 static int nfs_call_unlink(struct dentry *dentry, struct inode *inode, struct nfs_unlinkdata *data)
 {
-	struct inode *dir = d_inode(dentry->d_parent);
 	struct dentry *alias;
 
-	down_read_non_owner(&NFS_I(dir)->rmdir_sem);
 	data->args.name.hash = full_name_hash(dentry->d_parent,
 					      data->args.name.name,
 					      data->args.name.len);
 	alias = d_alloc_parallel(dentry->d_parent, &data->args.name);
-	if (IS_ERR(alias)) {
-		up_read_non_owner(&NFS_I(dir)->rmdir_sem);
+	if (IS_ERR(alias))
 		return 0;
-	}
 	if (!d_in_lookup(alias)) {
 		int ret;
 		void *devname_garbage = NULL;
@@ -170,7 +179,6 @@ static int nfs_call_unlink(struct dentry *dentry, struct inode *inode, struct nf
 			ret = 0;
 		spin_unlock(&alias->d_lock);
 		dput(alias);
-		up_read_non_owner(&NFS_I(dir)->rmdir_sem);
 		/*
 		 * If we'd displaced old cached devname, free it.  At that
 		 * point dentry is definitely not a root, so we won't need
