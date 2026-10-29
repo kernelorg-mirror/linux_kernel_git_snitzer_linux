@@ -51,15 +51,30 @@ Pseudo-NMI only if SPE cannot account for `handle_softirqs`'s share; it needs a 
 | interrupts taken (`exc_irq`) | 15.5 | | |
 | L1D refills / L2 refills / last-level read misses | 1.12k / 1.05k / 1.06k | 8.2 / 7.7 / 7.8 | |
 | L3 refills | 2.55k | 18.7 | |
-| bus reads / bus writes | **4.59k** / 0.62k | **33.7** / 4.6 | |
+| bus reads / bus writes, in 32-byte beats | 4.59k / 0.62k | 33.7 / 4.6 | |
 | data TLB walks | 0.6 | | |
 | NAPI polls / interrupt handlers (window 4) | 13.0 / 12.5 | | |
 
 - **The front end is not the problem** (0.5%), and neither is the TLB (since round 30's `rodata=noalias`).
-- **Nearly every line the rings miss in L2 comes from DRAM.** The 1.05k L2 refills and 1.06k last-level read misses a WRITE match: what the rings fetch is not in the SLC. That fits lines the card has just written, the completions and each frame's headers, if the card's writes go to DRAM and not into the SLC.
-- **The rings read four times as many lines from the bus as their demand misses.** 4.59k bus reads a WRITE against 1.06k demand misses: about 3.5k more lines a WRITE, 33.7 a frame, about 290 KB a WRITE or 11 GB/s at this rate. If they are 64-byte lines, they are prefetches (the software ones, 3 a frame, cannot account for them) or lines written back, and the likeliest is the core's own prefetcher running on from a frame's headers into its payload, which the rings never read. That is DRAM bandwidth and SLC space taken from nfsd and the drives. The unit of `bus_access` on this core has to be checked before anything is built on it.
+- **The rings read about 2.3k lines a WRITE from beyond their L2, 17 a frame, and about 1.06k of them come from DRAM.** `bus_access_rd` counts 32-byte beats on this core, two to a line, and `ll_cache_miss_rd` counts lines the core's prefetcher brings in as well as demand misses: [`xeu-rig/busread.c`](../../xeu-rig/busread.c), reading 512 MiB once on an idle CPU and counting around the loop alone, read 2.001 bus counts and 1.001 last-level misses a line, and 0.109 L2 refills (the prefetcher's lines are not counted as refills). So of the 4.59k beats, 2.3k lines (about 147 KB a WRITE, 5.7 GB/s): about 1.06k missed the L3 (the CMN's system-level cache, the only cache past a core's L2) and went to DRAM, and about 1.24k hit in it. As first written here this read "4.59k lines, four times the misses, 11 GB/s"; the unit was then checked.
+- **What a frame's 17 lines are is not known:** the completion, the two header lines, the `struct page`, the descriptor and software ring entries, the socket and page_pool's state are fewer than that. The core's prefetcher running on past what is read (the headers into the payload) is one possibility.
 - **Barriers are few:** half a `dsb` and 2.4 `dmb` a frame. Whether they cost much each is for SPE to show.
 - **A poll and an interrupt about every 10 frames:** 13 polls and 12.5 interrupts a WRITE, so most polls start from an interrupt. 62.6% of polls handle 0–3 frames and 4.2% use the whole budget of 64 ([r100/polls.txt](r100/polls.txt), on the ring CPUs, TX polls included; its WRITE count is not used, as the trace's attach fell inside the window). xeu does not offer interrupt coalescing (`ethtool -c`: not supported).
 - **25% of the cycles are backend stalls not on memory,** and these counters do not say on what. On this core that is mostly the core's queues being full behind long operations: stores, barriers, the device's MMIO.
 
-**So, for step 2:** SPE, sampling loads and stores on the ring CPUs, gives each its latency and where its data came from. That will name the lines missed in DRAM (completions, headers, descriptors) and the instructions the non-memory stalls fall on. The bus reads not demanded are checked beside it: the unit of `bus_access`, and whether the extra lines are payload brought in by the core's prefetcher.
+**So, for step 2:** where the rings' lines beyond L2 come from, and why about half miss the L3.
+
+## 2. What the rings read beyond L2, and where the card's writes go (r101, to run)
+
+SPE was the plan, and is not to be had: `arm_spe_pmu` loads, but the firmware's ACPI MADT gives no CPU an SPE overflow interrupt (0 on all 64; the PMU's is 23), so the driver creates no device. Making one would take a patched MADT through the initrd (`CONFIG_ACPI_TABLE_UPGRADE=y`), a reboot, and SPE enabled for the kernel by the firmware, which an empty field suggests it is not. The module was unloaded again. In its place (Mike, 29 October), two looks with no change to the host:
+
+1. **The switches within one run,** on the ring CPUs: `rx_prefetch` and `rx_gro_frags` in turn (YY NY YN YY NY YN, 3 s each), counting cycles, instructions, `bus_access_rd`, `l2d_cache_refill`, `ll_cache_miss_rd` and `stall_backend_mem`. Without `rx_prefetch`, the lines the core's prefetcher brings in after a frame's headers should move with it if they are payload; without `rx_gro_frags`, the built skbs' lines come back.
+2. **The mesh** (`arm_cmn_0`, the CMN-700's counters, system-wide), at rest and under load, four groups of four in turn:
+   - what the PCIe devices write and read: `rnid_s0/s1/s2_wdata_beats` (the card's received frames and completions, mostly) and `rnid_s0/s1/s2_rdata_beats` (the drives reading the payload, the card sending);
+   - the L3: `hnf_slc_sf_cache_access`, `hnf_cache_miss`, `hnf_cache_fill`, `hnf_slc_eviction`;
+   - DRAM and stashing: `hnf_mc_reqs`, `hnf_stash_data_pull`;
+   - snoops: `hnf_snp_sent`, `hnf_sf_hit`, `hnf_sf_evictions`, `hnf_dir_snoops_sent`.
+
+   Whether the card's writes are filled into the L3 (fills against the device's write beats), how much the payload takes of it, and whether anything is stashed. If the card's writes go to DRAM, every completion and header line the rings read costs a DRAM read, and the lever is outside the CPU: the card stashing those lines (CMN supports stashing; whether the E1 can ask for it is Xsight's).
+
+[run101.sh](run101.sh): `busread` on CPU 63 again; the mesh's groups at rest during the rest before the load; one loan64 run with the switch windows from 10 s into its timed load and the mesh's groups under load after them. `settled.sh` puts both switches back.
