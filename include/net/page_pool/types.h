@@ -273,6 +273,8 @@ struct page_pool {
 	 * lines the allocation and recycling write (rx_stack_n above).
 	 */
 	struct page_pool_rx_region *rx_region;
+	/* 1 + the region's slot for the device the pool maps for, or 0 */
+	u8 rx_region_dev;
 };
 
 struct page *page_pool_alloc_pages(struct page_pool *pool, gfp_t gfp);

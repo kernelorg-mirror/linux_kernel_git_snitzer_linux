@@ -183,8 +183,38 @@ struct page_pool_rx_region_part {
 
 enum { RX_REGION_WRITE, RX_REGION_READ, RX_REGION_PARTS };
 
+/*
+ * A free region page keeps the DMA mapping of the device it was last mapped
+ * for, so that a pool of that device takes it back without mapping it again
+ * or indexing it in the pool's dma_mapped xarray.  The region is shared by
+ * every listed device and a mapping is one device's, so each device that
+ * maps (in each direction it maps in) has a slot: a CPU cache and behind it
+ * a free list of pages still mapped for it, and the region records which
+ * slot each page is mapped for.  The shards and the partition's CPU caches
+ * hold only pages mapped for no device.  The region, not the pool, then
+ * owns a slot's mappings: when the last pool of a device is destroyed, the
+ * region unmaps every page still mapped for it, free or not, as
+ * page_pool_scrub() does through the xarray for a pool's own pages.  Only
+ * the write partition's pages, which the pools draw on, are ever mapped.
+ */
+#define RX_REGION_DEVS	8
+
+struct rx_region_slot {
+	spinlock_t lock;		/* the fields below, and owner[] for it */
+	struct device *dev;		/* NULL while the slot is unused */
+	enum dma_data_direction dir;
+	unsigned int pools;		/* bound and not being destroyed */
+	bool dying;			/* its pages are being unmapped */
+	unsigned long drained;		/* jiffies of the last drain of its caches */
+	unsigned long nfree;
+	struct page **free;		/* free, still mapped for @dev */
+	struct rx_region_pcp __percpu *pcp;	/* kept until the region goes */
+} ____cacheline_aligned_in_smp;
+
 struct page_pool_rx_region {
 	struct page_pool_rx_region_part part[RX_REGION_PARTS];
+	struct rx_region_slot slots[RX_REGION_DEVS];
+	u8 *owner;			/* each page's slot + 1, or 0: unmapped */
 	unsigned long base_pfn;
 	unsigned long nr;
 	unsigned int pools;		/* bound to this region; rx_region_mutex */
@@ -194,6 +224,9 @@ struct page_pool_rx_region {
 
 static struct page_pool_rx_region *rx_region;
 static DEFINE_MUTEX(rx_region_mutex);
+static u8 rx_region_dev_get(struct page_pool_rx_region *r,
+			    const struct page_pool *pool);
+static void rx_region_dev_put(struct page_pool_rx_region *r, u8 s);
 /*
  * A READ consumer bound the region (page_pool_rx_region_bind_reads()): it is
  * held from then on as a bound pool holds it, and never given back.  Written
@@ -264,6 +297,7 @@ EXPORT_SYMBOL_GPL(page_pool_rx_region_key);
 static int rx_region_show(struct seq_file *m, void *v)
 {
 	struct page_pool_rx_region *r = m->private;
+	unsigned int i;
 
 	seq_printf(m, "dev %s\nphys_base 0x%llx\npages %lu\nread_pages %lu\n",
 		   r->dev, (u64)r->base_pfn << PAGE_SHIFT, r->nr,
@@ -271,6 +305,21 @@ static int rx_region_show(struct seq_file *m, void *v)
 	rx_region_part_show(m, "", &r->part[RX_REGION_WRITE]);
 	if (r->part[RX_REGION_READ].nr)
 		rx_region_part_show(m, "read_", &r->part[RX_REGION_READ]);
+	for (i = 0; i < RX_REGION_DEVS; i++) {
+		struct rx_region_slot *d = &r->slots[i];
+		unsigned long flags, cached = 0;
+		int cpu;
+
+		spin_lock_irqsave(&d->lock, flags);
+		if (d->dev) {
+			for_each_possible_cpu(cpu)
+				cached += READ_ONCE(per_cpu_ptr(d->pcp, cpu)->count);
+			seq_printf(m, "mapped %s dir %d pools %u free %lu cached %lu%s\n",
+				   dev_name(d->dev), d->dir, d->pools,
+				   d->nfree, cached, d->dying ? " dying" : "");
+		}
+		spin_unlock_irqrestore(&d->lock, flags);
+	}
 	return 0;
 }
 
@@ -486,6 +535,30 @@ static void rx_region_publish(struct page_pool_rx_region *r,
 		who, nr, nr_read, (u64)base_pfn << PAGE_SHIFT);
 }
 
+/* Owner bytes and unused slots for a region of @nr pages; false: none. */
+static bool rx_region_slots_init(struct page_pool_rx_region *r,
+				 unsigned long nr)
+{
+	unsigned int i;
+
+	r->owner = kvzalloc(nr, GFP_KERNEL);
+	if (!r->owner)
+		return false;
+	for (i = 0; i < RX_REGION_DEVS; i++)
+		spin_lock_init(&r->slots[i].lock);
+	return true;
+}
+
+/* What rx_region_slots_init() and the slots' first use allocated. */
+static void rx_region_slots_free(struct page_pool_rx_region *r)
+{
+	unsigned int i;
+
+	for (i = 0; i < RX_REGION_DEVS; i++)
+		free_percpu(r->slots[i].pcp);
+	kvfree(r->owner);
+}
+
 /*
  * The partitions' CPU caches: always the write partition's, the read
  * partition's only when @nr_read splits one off.  False (none left
@@ -524,7 +597,8 @@ static struct page_pool_rx_region *rx_region_create(unsigned long nr, int nid,
 	if (!r)
 		goto fail;
 	free = kvmalloc_array(nr, sizeof(*free), GFP_KERNEL);
-	if (free && rx_region_pcp_alloc(pcp, nr_read)) {
+	if (free && rx_region_slots_init(r, nr) &&
+	    rx_region_pcp_alloc(pcp, nr_read)) {
 #ifdef CONFIG_CONTIG_ALLOC
 		base = alloc_contig_pages(nr, GFP_KERNEL, nid, NULL);
 #endif
@@ -534,6 +608,7 @@ static struct page_pool_rx_region *rx_region_create(unsigned long nr, int nid,
 			nr, who);
 		free_percpu(pcp[RX_REGION_WRITE]);
 		free_percpu(pcp[RX_REGION_READ]);
+		rx_region_slots_free(r);
 		kvfree(free);
 		kfree(r);
 		goto fail;
@@ -572,9 +647,16 @@ static void page_pool_rx_region_reap(void)
 			rx_region_cached(&r->part[k]);
 	}
 	held += escaped;
-	/* No pool, so no page can be out: keep the memory if that is wrong. */
+	/*
+	 * No pool, so no page can be out, and every device's pages were
+	 * unmapped and handed to the shards when its last pool went: keep the
+	 * memory if that is wrong.
+	 */
 	if (WARN_ON_ONCE(held != r->nr))
 		return;
+	for (s = 0; s < RX_REGION_DEVS; s++)
+		if (WARN_ON_ONCE(r->slots[s].dev))
+			return;
 	WRITE_ONCE(rx_region, NULL);
 	debugfs_remove(r->debugfs);
 	synchronize_rcu();
@@ -598,6 +680,7 @@ static void page_pool_rx_region_reap(void)
 		r->dev, r->nr, (u64)r->base_pfn << PAGE_SHIFT, escaped);
 	free_percpu(r->part[RX_REGION_WRITE].pcp);
 	free_percpu(r->part[RX_REGION_READ].pcp);
+	rx_region_slots_free(r);
 	kvfree(r->part[RX_REGION_WRITE].shard[0].free);
 	kfree(r);
 	static_branch_dec(&page_pool_rx_region_key);
@@ -614,6 +697,12 @@ static void page_pool_rx_region_unbind(struct page_pool *pool)
 		smp_rmb();
 		if (!READ_ONCE(pool->rx_region))
 			return;
+	}
+	/* A pool never destroyed (its creation failed) gave nothing up yet. */
+	if (pool->rx_region_dev) {
+		if (!pool->destroy_cnt)
+			rx_region_dev_put(pool->rx_region, pool->rx_region_dev);
+		pool->rx_region_dev = 0;
 	}
 	mutex_lock(&rx_region_mutex);
 	if (xa_erase(&rx_region_waiting, (unsigned long)pool))
@@ -695,6 +784,9 @@ static struct page_pool_rx_region *rx_region_carve_locked(int nid,
 		return NULL;
 	xa_for_each(&rx_region_waiting, idx, pool) {
 		r->pools++;
+		pool->rx_region_dev = rx_region_dev_get(r, pool);
+		/* The slot is seen before the region: pairs with smp_rmb(). */
+		smp_wmb();
 		/* Pairs with READ_ONCE() in the allocation and return paths. */
 		WRITE_ONCE(pool->rx_region, r);
 		xa_erase(&rx_region_waiting, idx);
@@ -769,6 +861,7 @@ static void page_pool_rx_region_bind(struct page_pool *pool,
 	unsigned int size = READ_ONCE(rx_region_stack) ?:
 			    min_t(unsigned int, ring_qsize, RX_REGION_POOL_RING);
 
+	pool->rx_region_dev = rx_region_dev_get(r, pool);
 	pool->rx_region = r;
 	if (!r)
 		return;
@@ -1195,6 +1288,366 @@ static void rx_region_give(struct page_pool_rx_region_part *p,
 	rx_region_push(p, pages + start, n - start, false);
 }
 
+/* Slots are made by pools being created, which may sleep. */
+static DEFINE_MUTEX(rx_region_slot_mutex);
+
+#define RX_REGION_MAP_ATTRS	(DMA_ATTR_SKIP_CPU_SYNC | DMA_ATTR_WEAK_ORDERING)
+
+/* @page is one of @r's pages. */
+static bool rx_region_has(const struct page_pool_rx_region *r,
+			  const struct page *page)
+{
+	return page_to_pfn(page) - r->base_pfn < r->nr;
+}
+
+static u8 *rx_region_owner(struct page_pool_rx_region *r, struct page *page)
+{
+	return &r->owner[page_to_pfn(page) - r->base_pfn];
+}
+
+/* Unmap @page for slot @d's device; @d->lock held, or the slot dying. */
+static void rx_region_slot_unmap(struct rx_region_slot *d, struct page *page)
+{
+	netmem_ref netmem = page_to_netmem(page);
+
+	dma_unmap_page_attrs(d->dev, page_pool_get_dma_addr_netmem(netmem),
+			     PAGE_SIZE, d->dir, RX_REGION_MAP_ATTRS);
+	page_pool_set_dma_addr_netmem(netmem, 0);
+}
+
+/*
+ * A page of slot @o leaves the region (another holder has it): unmapped
+ * here, while the slot still holds the device, unless the slot's walk
+ * (rx_region_dev_put()) unmapped it first.
+ */
+static void rx_region_slot_release(struct page_pool_rx_region *r, u8 o,
+				   struct page *page)
+{
+	struct rx_region_slot *d = &r->slots[o - 1];
+	u8 *owner = rx_region_owner(r, page);
+	unsigned long flags;
+
+	spin_lock_irqsave(&d->lock, flags);
+	if (READ_ONCE(*owner) == o) {
+		rx_region_slot_unmap(d, page);
+		WRITE_ONCE(*owner, 0);
+	}
+	spin_unlock_irqrestore(&d->lock, flags);
+}
+
+/*
+ * Return a page still mapped for slot @o to this CPU's cache of the slot,
+ * moving the cache's oldest batch to the slot's list when it is full.  The
+ * owner byte is checked again under the cache's lock: the slot's walk may
+ * have unmapped the page meanwhile, and then it goes to the shards (false).
+ * Once the walk is done, rx_region_dev_put() empties every cache of the slot
+ * under that lock, so no page put here after the walk is stranded.
+ */
+static bool rx_region_slot_put(struct page_pool_rx_region *r, u8 o,
+			       struct page *page)
+{
+	struct rx_region_slot *d = &r->slots[o - 1];
+	struct rx_region_pcp *c;
+	unsigned long flags;
+	bool kept = false;
+
+	migrate_disable();
+	c = this_cpu_ptr(d->pcp);
+	spin_lock_irqsave(&c->lock, flags);
+	if (READ_ONCE(*rx_region_owner(r, page)) == o) {
+		if (c->count == RX_REGION_PCP_MAX) {
+			spin_lock(&d->lock);
+			memcpy(d->free + d->nfree, c->pages,
+			       RX_REGION_PCP_BATCH * sizeof(*c->pages));
+			WRITE_ONCE(d->nfree, d->nfree + RX_REGION_PCP_BATCH);
+			spin_unlock(&d->lock);
+			memmove(c->pages, c->pages + RX_REGION_PCP_BATCH,
+				(RX_REGION_PCP_MAX - RX_REGION_PCP_BATCH) *
+				sizeof(*c->pages));
+			c->count = RX_REGION_PCP_MAX - RX_REGION_PCP_BATCH;
+		}
+		c->pages[c->count] = page;
+		WRITE_ONCE(c->count, c->count + 1);
+		kept = true;
+	}
+	spin_unlock_irqrestore(&c->lock, flags);
+	migrate_enable();
+	return kept;
+}
+
+/*
+ * Return a pool's page to the region: to its device's slot while it is
+ * still mapped for one, else to the write partition's shards.  False when
+ * another holder still has it: it leaves the region, unmapped, counted, and
+ * the caller puts it.
+ */
+static bool rx_region_page_put(struct page_pool_rx_region *r,
+			       struct page *page)
+{
+	u8 o = rx_region_has(r, page) ? READ_ONCE(*rx_region_owner(r, page)) : 0;
+
+	if (o) {
+		if (page_ref_count(page) != 1) {
+			rx_region_slot_release(r, o, page);
+			atomic_long_inc(&r->part[RX_REGION_WRITE].escaped);
+			return false;
+		}
+		if (rx_region_slot_put(r, o, page))
+			return true;
+	}
+	return page_pool_rx_region_put(&r->part[RX_REGION_WRITE], page);
+}
+
+/* Up to @n pages still mapped for slot @s: this CPU's cache, then its list. */
+static unsigned int rx_region_slot_take(struct page_pool_rx_region *r, u8 s,
+					struct page **pages, unsigned int n)
+{
+	struct rx_region_slot *d = &r->slots[s - 1];
+	struct rx_region_pcp *c;
+	unsigned int got = 0;
+	unsigned long flags;
+
+	migrate_disable();
+	c = this_cpu_ptr(d->pcp);
+	spin_lock_irqsave(&c->lock, flags);
+	while (got < n && c->count) {
+		pages[got++] = c->pages[c->count - 1];
+		WRITE_ONCE(c->count, c->count - 1);
+	}
+	spin_unlock_irqrestore(&c->lock, flags);
+	migrate_enable();
+	if (got < n && READ_ONCE(d->nfree)) {
+		spin_lock_irqsave(&d->lock, flags);
+		while (got < n && d->nfree)
+			pages[got++] = d->free[--d->nfree];
+		spin_unlock_irqrestore(&d->lock, flags);
+	}
+	return got;
+}
+
+/*
+ * Move every CPU's cache of slot @s to its list, at most once a jiffy: a
+ * pool of the slot is short, and its pages may sit in other CPUs' caches.
+ * True when it drained.
+ */
+static bool rx_region_slot_drain(struct page_pool_rx_region *r, u8 s)
+{
+	struct rx_region_slot *d = &r->slots[s - 1];
+	unsigned long flags, now = jiffies;
+	int cpu;
+
+	if (READ_ONCE(d->drained) == now)
+		return false;
+	WRITE_ONCE(d->drained, now);
+	for_each_possible_cpu(cpu) {
+		struct rx_region_pcp *c = per_cpu_ptr(d->pcp, cpu);
+
+		if (!READ_ONCE(c->count))
+			continue;
+		spin_lock_irqsave(&c->lock, flags);
+		spin_lock(&d->lock);
+		memcpy(d->free + d->nfree, c->pages, c->count * sizeof(*c->pages));
+		WRITE_ONCE(d->nfree, d->nfree + c->count);
+		spin_unlock(&d->lock);
+		WRITE_ONCE(c->count, 0);
+		spin_unlock_irqrestore(&c->lock, flags);
+	}
+	return true;
+}
+
+/*
+ * Up to @n free pages mapped for another device than slot @except (0:
+ * any), from the slots' lists, unmapped for that device here.  A dying
+ * slot's pages are not taken: its walk unmaps them.
+ */
+static unsigned int rx_region_steal(struct page_pool_rx_region *r, u8 except,
+				    struct page **pages, unsigned int n)
+{
+	unsigned int j, got = 0;
+	unsigned long flags;
+
+	for (j = 0; got < n && j < RX_REGION_DEVS; j++) {
+		struct rx_region_slot *d = &r->slots[j];
+
+		if (j + 1 == except || !READ_ONCE(d->nfree))
+			continue;
+		spin_lock_irqsave(&d->lock, flags);
+		while (d->dev && !d->dying && got < n && d->nfree) {
+			struct page *page = d->free[--d->nfree];
+
+			rx_region_slot_unmap(d, page);
+			WRITE_ONCE(*rx_region_owner(r, page), 0);
+			pages[got++] = page;
+		}
+		spin_unlock_irqrestore(&d->lock, flags);
+	}
+	return got;
+}
+
+/*
+ * Pages parked on the slots' lists are out of reach of a take outside the
+ * pools: move up to @want of them, unmapped, to the write partition's
+ * shards.
+ */
+static void rx_region_steal_to_shards(struct page_pool_rx_region *r,
+				      unsigned long want)
+{
+	struct page *stage[RX_REGION_PCP_BATCH];
+	unsigned int got;
+
+	while (want) {
+		got = rx_region_steal(r, 0, stage,
+				      min_t(unsigned long, want,
+					    RX_REGION_PCP_BATCH));
+		if (!got)
+			return;
+		rx_region_push(&r->part[RX_REGION_WRITE], stage, got, false);
+		want -= got;
+	}
+}
+
+/*
+ * The slot of @pool's device and direction in @r, made if there is none:
+ * 1 + its index, or 0 for a pool that does not map or finds every slot
+ * taken, which maps and unmaps each page as it takes and returns it.
+ * Process context: called as the pool is bound to the region.
+ */
+static u8 rx_region_dev_get(struct page_pool_rx_region *r,
+			    const struct page_pool *pool)
+{
+	struct page **free = NULL;
+	struct rx_region_slot *d;
+	unsigned long flags;
+	int i, slot = -1, cpu;
+
+	if (!r || !pool->dma_map || !pool->p.dev)
+		return 0;
+	mutex_lock(&rx_region_slot_mutex);
+	for (i = 0; i < RX_REGION_DEVS; i++) {
+		d = &r->slots[i];
+		spin_lock_irqsave(&d->lock, flags);
+		if (d->dev == pool->p.dev && d->dir == pool->p.dma_dir &&
+		    !d->dying) {
+			d->pools++;
+			spin_unlock_irqrestore(&d->lock, flags);
+			mutex_unlock(&rx_region_slot_mutex);
+			return i + 1;
+		}
+		if (!d->dev && slot < 0)
+			slot = i;
+		spin_unlock_irqrestore(&d->lock, flags);
+	}
+	if (slot < 0)
+		goto none;
+	d = &r->slots[slot];
+	free = kvmalloc_array(r->nr, sizeof(*free), GFP_KERNEL);
+	if (!free)
+		goto none;
+	if (!d->pcp) {
+		struct rx_region_pcp __percpu *pcp;
+
+		pcp = alloc_percpu(struct rx_region_pcp);
+		if (!pcp)
+			goto none;
+		for_each_possible_cpu(cpu) {
+			spin_lock_init(&per_cpu_ptr(pcp, cpu)->lock);
+			per_cpu_ptr(pcp, cpu)->count = 0;
+		}
+		d->pcp = pcp;
+	}
+	spin_lock_irqsave(&d->lock, flags);
+	d->dev = get_device(pool->p.dev);
+	d->dir = pool->p.dma_dir;
+	d->pools = 1;
+	d->nfree = 0;
+	d->free = free;
+	d->drained = jiffies - 1;
+	spin_unlock_irqrestore(&d->lock, flags);
+	mutex_unlock(&rx_region_slot_mutex);
+	return slot + 1;
+none:
+	mutex_unlock(&rx_region_slot_mutex);
+	kvfree(free);
+	return 0;
+}
+
+/* Clear the DMA addresses of @n unmapped pages and push them to the shards. */
+static void rx_region_hand_over(struct page_pool_rx_region *r,
+				struct page **pages, unsigned int n)
+{
+	unsigned int k;
+
+	for (k = 0; k < n; k++)
+		page_pool_set_dma_addr_netmem(page_to_netmem(pages[k]), 0);
+	rx_region_push(&r->part[RX_REGION_WRITE], pages, n, false);
+}
+
+/*
+ * A pool of slot @s is going: when it was the device's last, unmap every
+ * page still mapped for the device, whether free or still out (in a ring,
+ * an skb or a loan, its device stopped), and give the slot up.  A page that
+ * comes back meanwhile goes onto the slot's cache or list, from which no
+ * pool of another device takes while the slot is dying; once the walk is
+ * done, the slot's caches and list go to the shards.
+ */
+static void rx_region_dev_put(struct page_pool_rx_region *r, u8 s)
+{
+	struct rx_region_slot *d = &r->slots[s - 1];
+	unsigned long flags, i = 0, scanned;
+	dma_addr_t dma[32];
+	struct page **free;
+	struct device *dev;
+	int j, n, cpu;
+
+	spin_lock_irqsave(&d->lock, flags);
+	if (WARN_ON_ONCE(!d->pools) || --d->pools) {
+		spin_unlock_irqrestore(&d->lock, flags);
+		return;
+	}
+	d->dying = true;
+	spin_unlock_irqrestore(&d->lock, flags);
+
+	while (i < r->nr) {
+		n = 0;
+		spin_lock_irqsave(&d->lock, flags);
+		for (scanned = 0; i < r->nr && n < ARRAY_SIZE(dma) &&
+		     scanned < 1024; i++, scanned++) {
+			netmem_ref netmem;
+
+			if (READ_ONCE(r->owner[i]) != s)
+				continue;
+			WRITE_ONCE(r->owner[i], 0);
+			netmem = page_to_netmem(pfn_to_page(r->base_pfn + i));
+			dma[n++] = page_pool_get_dma_addr_netmem(netmem);
+		}
+		spin_unlock_irqrestore(&d->lock, flags);
+		for (j = 0; j < n; j++)
+			dma_unmap_page_attrs(d->dev, dma[j], PAGE_SIZE, d->dir,
+					     RX_REGION_MAP_ATTRS);
+	}
+
+	/* Every page of the slot is unmapped now: hand them to the shards. */
+	for_each_possible_cpu(cpu) {
+		struct rx_region_pcp *c = per_cpu_ptr(d->pcp, cpu);
+
+		spin_lock_irqsave(&c->lock, flags);
+		rx_region_hand_over(r, c->pages, c->count);
+		WRITE_ONCE(c->count, 0);
+		spin_unlock_irqrestore(&c->lock, flags);
+	}
+	spin_lock_irqsave(&d->lock, flags);
+	rx_region_hand_over(r, d->free, d->nfree);
+	d->nfree = 0;
+	dev = d->dev;
+	free = d->free;
+	d->dev = NULL;
+	d->free = NULL;
+	d->dying = false;
+	spin_unlock_irqrestore(&d->lock, flags);
+	kvfree(free);
+	put_device(dev);
+}
+
 /* The partition a consumer outside the pools draws on. */
 static struct page_pool_rx_region_part *
 rx_region_part(struct page_pool_rx_region *r, bool read)
@@ -1235,10 +1688,24 @@ unsigned int page_pool_rx_region_take_pages(bool read, struct page **pages,
 					    unsigned int n)
 {
 	struct page_pool_rx_region *r = rx_region_published();
+	struct page_pool_rx_region_part *p;
+	unsigned int got;
 
 	if (!r || !n)
 		return 0;
-	return rx_region_get(rx_region_part(r, read), pages, n, true);
+	p = rx_region_part(r, read);
+	got = rx_region_get(p, pages, n, true);
+	/*
+	 * Short in the write partition: its free pages may be parked, still
+	 * mapped, on the device slots' lists.  Move them to the shards and
+	 * try once more.
+	 */
+	if (!got && p == &r->part[RX_REGION_WRITE] &&
+	    n <= rx_region_part_capacity(p)) {
+		rx_region_steal_to_shards(r, n);
+		got = rx_region_get(p, pages, n, true);
+	}
+	return got;
 }
 EXPORT_SYMBOL_GPL(page_pool_rx_region_take_pages);
 
@@ -1407,6 +1874,8 @@ int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
 	struct rx_region_pcp __percpu *pcp[RX_REGION_PARTS] = {};
 	int ret = !r || !free ? -ENOMEM : nr_read < nr ? 0 : -EINVAL;
 
+	if (!ret && !rx_region_slots_init(r, nr))
+		ret = -ENOMEM;
 	if (!ret && !rx_region_pcp_alloc(pcp, nr_read))
 		ret = -ENOMEM;
 	mutex_lock(&rx_region_mutex);
@@ -1421,6 +1890,8 @@ int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
 	if (ret) {
 		free_percpu(pcp[RX_REGION_WRITE]);
 		free_percpu(pcp[RX_REGION_READ]);
+		if (r)
+			rx_region_slots_free(r);
 		kvfree(free);
 		kfree(r);
 	}
@@ -1451,6 +1922,7 @@ void page_pool_rx_region_kunit_remove(bool contig)
 #endif
 	free_percpu(r->part[RX_REGION_WRITE].pcp);
 	free_percpu(r->part[RX_REGION_READ].pcp);
+	rx_region_slots_free(r);
 	kvfree(r->part[RX_REGION_WRITE].shard[0].free);
 	kfree(r);
 	static_branch_dec(&page_pool_rx_region_key);
@@ -2293,28 +2765,89 @@ static struct page *__page_pool_alloc_page_order(struct page_pool *pool,
 	return page;
 }
 
+/*
+ * Map a region page for the device of @pool's slot.  The region owns the
+ * mapping, so it is not indexed in the pool's dma_mapped xarray.
+ */
+static bool page_pool_rx_region_map(struct page_pool *pool, netmem_ref netmem)
+{
+	dma_addr_t dma;
+
+	dma = dma_map_page_attrs(pool->p.dev, netmem_to_page(netmem), 0,
+				 PAGE_SIZE, pool->p.dma_dir,
+				 RX_REGION_MAP_ATTRS);
+	if (dma_mapping_error(pool->p.dev, dma))
+		return false;
+	if (page_pool_set_dma_addr_netmem(netmem, dma)) {
+		WARN_ONCE(1, "unexpected DMA address, please report to netdev@");
+		dma_unmap_page_attrs(pool->p.dev, dma, PAGE_SIZE,
+				     pool->p.dma_dir, RX_REGION_MAP_ATTRS);
+		return false;
+	}
+	page_pool_dma_sync_for_device(pool, netmem, pool->p.max_len);
+	return true;
+}
+
 /* Slow path for a pool bound to the fixed receive region. */
 static noinline netmem_ref page_pool_rx_region_alloc(struct page_pool *pool,
 						     gfp_t gfp)
 {
+	struct page_pool_rx_region *region = READ_ONCE(pool->rx_region);
 	/* Every listed device's pools draw on the write partition. */
-	struct page_pool_rx_region_part *r =
-		&READ_ONCE(pool->rx_region)->part[RX_REGION_WRITE];
+	struct page_pool_rx_region_part *r = &region->part[RX_REGION_WRITE];
 	struct page *pages[RX_REGION_POOL_REFILL];
+	unsigned long kept = 0;
+	unsigned int n = 0, got;
 	netmem_ref netmem;
-	int i, n;
+	int i;
+	u8 s;
 
+	BUILD_BUG_ON(RX_REGION_POOL_REFILL > BITS_PER_LONG);
 	if (unlikely(pool->alloc.count > 0))
 		return pool->alloc.cache[--pool->alloc.count];
 
-	n = rx_region_get(r, pages, RX_REGION_POOL_REFILL, false);
+	/* Pairs with smp_wmb() in rx_region_carve_locked(). */
+	smp_rmb();
+	s = READ_ONCE(pool->rx_region_dev);
+	/* First the pages still mapped for this pool's device, */
+	if (s) {
+		n = rx_region_slot_take(region, s, pages,
+					RX_REGION_POOL_REFILL);
+		kept = BIT(n) - 1;
+	}
+	/* then those mapped for no device, */
+	if (n < RX_REGION_POOL_REFILL)
+		n += rx_region_get(r, pages + n, RX_REGION_POOL_REFILL - n,
+				   false);
+	/* then the device's own left in other CPUs' caches, */
+	if (s && n < RX_REGION_POOL_REFILL &&
+	    rx_region_slot_drain(region, s)) {
+		got = rx_region_slot_take(region, s, pages + n,
+					  RX_REGION_POOL_REFILL - n);
+		kept |= (BIT(got) - 1) << n;
+		n += got;
+	}
+	/* and last those another device has mapped, unmapped for it here. */
+	if (n < RX_REGION_POOL_REFILL)
+		n += rx_region_steal(region, s, pages + n,
+				     RX_REGION_POOL_REFILL - n);
 	if (!n)
 		atomic_long_inc(&r->alloc_fail);
 
 	for (i = 0; i < n; i++) {
 		netmem = page_to_netmem(pages[i]);
-		if (pool->dma_map &&
-		    unlikely(!page_pool_dma_map(pool, netmem, gfp))) {
+		if (kept & BIT(i)) {
+			page_pool_dma_sync_for_device(pool, netmem,
+						      pool->p.max_len);
+		} else if (s) {
+			if (unlikely(!page_pool_rx_region_map(pool, netmem))) {
+				page_pool_rx_region_put(r, pages[i]);
+				continue;
+			}
+			/* The page is this pool's alone: no lock needed. */
+			WRITE_ONCE(*rx_region_owner(region, pages[i]), s);
+		} else if (pool->dma_map &&
+			   unlikely(!page_pool_dma_map(pool, netmem, gfp))) {
 			page_pool_rx_region_put(r, pages[i]);
 			continue;
 		}
@@ -2494,13 +3027,20 @@ static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem)
 	/* Read before the release count: the pool may go once it is up. */
 	struct page_pool_rx_region *region =
 		page_pool_rx_region_exists() ? READ_ONCE(pool->rx_region) : NULL;
+	/*
+	 * A region page of a pool with a slot was mapped by the region, which
+	 * owns the mapping: it goes back still mapped, or the slot's walk has
+	 * unmapped it.  The pool's slot does not change while it holds pages.
+	 */
+	bool slotted = region && pool->rx_region_dev &&
+		       rx_region_has(region, netmem_to_page(netmem));
 	int count;
 	bool put;
 
 	put = true;
 	if (static_branch_unlikely(&page_pool_mem_providers) && pool->mp_ops)
 		put = pool->mp_ops->release_netmem(pool, netmem);
-	else
+	else if (!slotted)
 		__page_pool_release_netmem_dma(pool, netmem);
 
 	/* This may be the last page returned, releasing the pool, so
@@ -2512,8 +3052,7 @@ static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem)
 	if (put) {
 		page_pool_clear_pp_info(netmem);
 		if (likely(!region) ||
-		    !page_pool_rx_region_put(&region->part[RX_REGION_WRITE],
-					     netmem_to_page(netmem)))
+		    !rx_region_page_put(region, netmem_to_page(netmem)))
 			put_page(netmem_to_page(netmem));
 	}
 	/* An optimization would be to call __free_pages(page, pool->p.order)
@@ -2937,6 +3476,15 @@ static void page_pool_scrub(struct page_pool *pool)
 		/* No page ref, dma-unmap only. */
 		xa_for_each(&pool->dma_mapped, id, ptr)
 			__page_pool_unmap_netmem_dma(pool, page_to_netmem((struct page *)ptr));
+
+		/*
+		 * The region owns its slots' mappings: it unmaps the
+		 * device's pages once its last pool comes here.
+		 */
+		if (pool->rx_region_dev && page_pool_rx_region_exists() &&
+		    READ_ONCE(pool->rx_region))
+			rx_region_dev_put(pool->rx_region,
+					  pool->rx_region_dev);
 	}
 
 	/* No more consumers should exist, but producers could still
