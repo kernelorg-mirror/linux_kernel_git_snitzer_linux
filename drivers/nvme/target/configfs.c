@@ -1081,7 +1081,11 @@ static int nvmet_port_subsys_allow_link(struct config_item *parent,
 			goto out_free_link;
 	}
 
-	if (list_empty(&port->subsystems)) {
+	/*
+	 * A port disabled by its network namespace exiting keeps its links;
+	 * the next link re-enables it in the caller's namespace.
+	 */
+	if (!port->enabled) {
 		ret = nvmet_enable_port(port);
 		if (ret)
 			goto out_free_link;
@@ -1119,7 +1123,7 @@ found:
 	nvmet_port_del_ctrls(port, subsys);
 	nvmet_port_disc_changed(port, subsys);
 
-	if (list_empty(&port->subsystems))
+	if (list_empty(&port->subsystems) && port->enabled)
 		nvmet_disable_port(port);
 	up_write(&nvmet_config_sem);
 	kfree(p);
@@ -2009,7 +2013,10 @@ static void nvmet_port_release(struct config_item *item)
 
 	/* Let inflight controllers teardown complete */
 	flush_workqueue(nvmet_wq);
+	/* nvmet_ports is walked under nvmet_config_sem from pernet pre_exit */
+	down_write(&nvmet_config_sem);
 	list_del(&port->global_entry);
+	up_write(&nvmet_config_sem);
 
 	key_put(port->keyring);
 	kfree(port);
@@ -2070,8 +2077,6 @@ static struct config_group *nvmet_ports_make(struct config_group *group,
 			port->ana_state[i] = NVME_ANA_INACCESSIBLE;
 	}
 
-	list_add(&port->global_entry, &nvmet_ports_list);
-
 	INIT_LIST_HEAD(&port->entry);
 	INIT_LIST_HEAD(&port->subsystems);
 	INIT_LIST_HEAD(&port->referrals);
@@ -2104,6 +2109,15 @@ static struct config_group *nvmet_ports_make(struct config_group *group,
 			&nvmet_ana_group_type);
 	configfs_add_default_group(&port->ana_default_group.group,
 			&port->ana_groups_group);
+
+	/*
+	 * Publish the port only once it is fully initialised: nvmet_ports is
+	 * walked under nvmet_config_sem from pernet pre_exit, which can run
+	 * concurrently with this mkdir.
+	 */
+	down_write(&nvmet_config_sem);
+	list_add(&port->global_entry, &nvmet_ports_list);
+	up_write(&nvmet_config_sem);
 
 	return &port->group;
 }

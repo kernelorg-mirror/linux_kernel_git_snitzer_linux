@@ -6,10 +6,12 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/hex.h>
 #include <linux/module.h>
+#include <linux/nsproxy.h>
 #include <linux/random.h>
 #include <linux/rculist.h>
 #include <linux/pci-p2pdma.h>
 #include <linux/scatterlist.h>
+#include <net/net_namespace.h>
 
 #include <generated/utsrelease.h>
 
@@ -340,6 +342,16 @@ int nvmet_enable_port(struct nvmet_port *port)
 		return -EINVAL;
 
 	/*
+	 * A transport that listens in a network namespace listens in the
+	 * caller's: configfs runs this from the process that links the first
+	 * subsystem into the port.  Everything else is recorded in init_net.
+	 */
+	if (ops->flags & NVMF_PORT_NETNS)
+		port->net = current->nsproxy->net_ns;
+	else
+		port->net = &init_net;
+
+	/*
 	 * If the user requested PI support and the transport isn't pi capable,
 	 * don't enable the port.
 	 */
@@ -383,6 +395,7 @@ int nvmet_enable_port(struct nvmet_port *port)
 	return 0;
 
 out_put:
+	port->net = NULL;
 	module_put(ops->owner);
 	return ret;
 }
@@ -398,8 +411,76 @@ void nvmet_disable_port(struct nvmet_port *port)
 
 	ops = nvmet_transports[port->disc_addr.trtype];
 	ops->remove_port(port);
+	port->net = NULL;
 	module_put(ops->owner);
 }
+
+static void __nvmet_disable_net_ports(struct net *net,
+		const struct nvmet_fabrics_ops *ops)
+{
+	struct nvmet_subsys_link *s;
+	struct nvmet_port *port;
+
+	lockdep_assert_held(&nvmet_config_sem);
+
+	list_for_each_entry(port, nvmet_ports, global_entry) {
+		if (!port->enabled || !net_eq(port->net, net))
+			continue;
+		if (ops ? port->tr_ops != ops :
+		    !(port->tr_ops->flags & NVMF_PORT_NETNS))
+			continue;
+
+		pr_info("disabling port %d: its network namespace is exiting\n",
+			le16_to_cpu(port->disc_addr.portid));
+		list_for_each_entry(s, &port->subsystems, entry)
+			nvmet_port_del_ctrls(port, s->subsys);
+		nvmet_port_disc_changed(port, NULL);
+		nvmet_disable_port(port);
+	}
+}
+
+/**
+ * nvmet_disable_net_ports - disable a transport's ports in a namespace
+ * @net: network namespace that is exiting
+ * @ops: transport whose ports to disable
+ *
+ * Called from the transport's pernet pre_exit.  Deletes the controllers of
+ * every @ops port enabled in @net and disables the port, which shuts down its
+ * queues; the transport must still wait for them to be released.  The ports
+ * keep their configuration and subsystem links: linking a subsystem into one
+ * again re-enables it, in the linking process's namespace.
+ */
+void nvmet_disable_net_ports(struct net *net,
+		const struct nvmet_fabrics_ops *ops)
+{
+	down_write(&nvmet_config_sem);
+	__nvmet_disable_net_ports(net, ops);
+	up_write(&nvmet_config_sem);
+}
+EXPORT_SYMBOL_GPL(nvmet_disable_net_ports);
+
+/*
+ * Runs after the transports' pre_exit (pernet operations exit in reverse
+ * registration order): drop the referrals visible in @net and, as a backstop,
+ * any port of a namespace-aware transport still enabled there.
+ */
+static void __net_exit nvmet_net_pre_exit(struct net *net)
+{
+	struct nvmet_port *port, *r, *tmp;
+
+	down_write(&nvmet_config_sem);
+	list_for_each_entry(port, nvmet_ports, global_entry) {
+		list_for_each_entry_safe(r, tmp, &port->referrals, entry)
+			if (net_eq(r->net, net))
+				nvmet_referral_disable_locked(port, r);
+	}
+	__nvmet_disable_net_ports(net, NULL);
+	up_write(&nvmet_config_sem);
+}
+
+static struct pernet_operations nvmet_net_ops = {
+	.pre_exit	= nvmet_net_pre_exit,
+};
 
 static void nvmet_keep_alive_timer(struct work_struct *work)
 {
@@ -2106,12 +2187,18 @@ static int __init nvmet_init(void)
 	if (error)
 		goto out_exit_debugfs;
 
-	error = nvmet_init_configfs();
+	error = register_pernet_subsys(&nvmet_net_ops);
 	if (error)
 		goto out_exit_discovery;
 
+	error = nvmet_init_configfs();
+	if (error)
+		goto out_unregister_pernet;
+
 	return 0;
 
+out_unregister_pernet:
+	unregister_pernet_subsys(&nvmet_net_ops);
 out_exit_discovery:
 	nvmet_exit_discovery();
 out_exit_debugfs:
@@ -2132,6 +2219,7 @@ out_destroy_bvec_cache:
 static void __exit nvmet_exit(void)
 {
 	nvmet_exit_configfs();
+	unregister_pernet_subsys(&nvmet_net_ops);
 	nvmet_exit_discovery();
 	nvmet_exit_debugfs();
 	ida_destroy(&cntlid_ida);
