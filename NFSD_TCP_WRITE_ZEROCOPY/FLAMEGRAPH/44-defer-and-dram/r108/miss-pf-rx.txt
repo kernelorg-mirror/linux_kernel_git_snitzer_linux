@@ -1,0 +1,51 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 37K of event 'll_cache_miss_rd'
+# Event count (approx.): 185065000
+#
+# Overhead  Symbol                                     IPC   [IPC Coverage]
+# ........  .........................................  ....................
+#
+     9.81%  [k] xeu_rx_refill.isra.0                   -      -            
+     9.70%  [k] xeu_rx_poll                            -      -            
+     6.16%  [k] inet_gro_receive                       -      -            
+     5.66%  [k] gro_list_prepare                       -      -            
+     5.50%  [k] _raw_spin_unlock_irqrestore            -      -            
+     5.48%  [k] skb_gro_receive                        -      -            
+     3.89%  [k] dev_gro_receive                        -      -            
+     3.52%  [k] tcp_gro_receive                        -      -            
+     3.01%  [k] eth_type_trans                         -      -            
+     2.75%  [k] napi_build_skb                         -      -            
+     2.37%  [k] tcp4_gro_receive                       -      -            
+     1.73%  [k] gro_receive_skb                        -      -            
+     1.73%  [k] __gro_receive_network_flush            -      -            
+     1.69%  [k] tcp_v4_rcv                             -      -            
+     1.59%  [k] __build_skb_around                     -      -            
+     1.46%  [k] arch_counter_get_cntpct                -      -            
+     1.36%  [k] skb_put                                -      -            
+     1.22%  [k] __inet_lookup_established              -      -            
+     1.11%  [k] __pi_memset_generic                    -      -            
+     1.07%  [k] _raw_spin_lock                         -      -            
+     1.07%  [k] svc_data_ready                         -      -            
+     0.93%  [k] __list_del_entry_valid_or_report       -      -            
+     0.92%  [k] netif_receive_skb_list_internal        -      -            
+     0.89%  [k] __netif_receive_skb_core.constprop.0   -      -            
+     0.88%  [k] napi_skb_cache_put                     -      -            
+     0.83%  [k] skb_release_data                       -      -            
+     0.78%  [k] inet_gro_complete                      -      -            
+     0.71%  [k] kmem_cache_free                        -      -            
+     0.68%  [k] svc_xprt_enqueue.part.0                -      -            
+     0.65%  [k] napi_complete_done                     -      -            
+     0.64%  [k] cache_line_size                        -      -            
+     0.63%  [k] default_idle_call                      -      -            
+     0.62%  [k] __pi_memcpy_generic                    -      -            
+     0.58%  [k] tcp_ack                                -      -            
+     0.55%  [k] tcp_try_coalesce                       -      -            
+     0.54%  [k] page_pool_alloc_netmems                -      -            
+     0.52%  [k] _raw_spin_unlock                       -      -            
+#
+# (Tip: To see how parallelism changes over time, try: perf report -F time,latency,parallelism --time-quantum=1s)
+#
