@@ -1,0 +1,10 @@
+tag which total_GBps a_GBps b_GBps fifo_a fifo_b ringdrop_a ringdrop_b cli_retrans region_pages nfsd_busy ringcpu_a ringcpu_b rcvbuf linger threads entries qdisc nconn jobs drvbusy_a drvbusy_b warm lowat writes_ps woken_ps ctxsw_ps keep
+r107-1-loan64-A a 40.47 40.47 - 0 - 0 - 5 6606 7 21 0 768000 - - 256 codel 16 16 100 - 10 - 38571 154581 436151 -
+r107-2-loan64-B a 40.45 40.45 - 0 - 0 - 3 6321 7 17 0 768000 - - 256 codel 16 16 100 - 10 - 38578 154302 435003 -
+r107-3-loan64-C a 40.46 40.46 - 0 - 0 - 6 6433 7 17 0 768000 - - 256 codel 16 16 100 - 10 - 38532 156104 438388 -
+r107-4-loan64-C a 35.57 35.57 - 0 - 0 - 6 6373 7 18 0 768000 - - 256 codel 16 16 95 - 10 - 36563 149843 415047 -
+r107-5-loan64-B a 40.49 40.49 - 0 - 0 - 5 6333 8 17 0 768000 - - 256 codel 16 16 100 - 10 - 38684 153162 433284 -
+r107-6-loan64-A a 40.50 40.50 - 0 - 0 - 7 6356 7 21 0 768000 - - 256 codel 16 16 100 - 10 - 38594 153914 434735 -
+r107-7-loan64-A a 40.53 40.53 - 0 - 0 - 6 6541 7 23 3 768000 - - 256 codel 16 16 100 - 10 - 38693 153355 433717 -
+r107-8-loan64-B a 40.46 40.46 - 0 - 0 - 0 6336 7 16 0 768000 - - 256 codel 16 16 99 - 10 - 38565 154189 434921 -
+r107-9-loan64-C a 39.33 39.33 - 0 - 0 - 4 6446 8 16 0 768000 - - 256 codel 16 16 99 - 10 - 38603 156106 439037 -

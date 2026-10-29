@@ -1,0 +1,182 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 4K of event 'll_cache_miss_rd'
+# Event count (approx.): 22090000
+#
+# Overhead  Symbol                                     IPC   [IPC Coverage]
+# ........  .........................................  ....................
+#
+    29.04%  [k] xeu_tx_poll                            -      -            
+            |
+            ---__napi_poll
+               net_rx_action
+               handle_softirqs
+               __do_softirq
+               ____do_softirq
+               call_on_irq_stack
+               do_softirq_own_stack
+               __irq_exit_rcu
+               irq_exit_rcu
+               el1_interrupt
+               el1h_64_irq_handler
+               el1h_64_irq
+               default_idle_call
+               cpuidle_idle_call
+               do_idle
+               cpu_startup_entry
+               secondary_start_kernel
+               __secondary_switched
+    20.67%  [k] __sock_wfree                           -      -            
+            |          
+             --20.55%--skb_release_head_state
+                       napi_consume_skb
+                       xeu_tx_poll
+                       __napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       __do_softirq
+                       ____do_softirq
+                       call_on_irq_stack
+                       do_softirq_own_stack
+                       __irq_exit_rcu
+                       irq_exit_rcu
+                       el1_interrupt
+                       el1h_64_irq_handler
+                       el1h_64_irq
+                       default_idle_call
+                       cpuidle_idle_call
+                       do_idle
+                       cpu_startup_entry
+                       secondary_start_kernel
+                       __secondary_switched
+    10.86%  [k] tcp_wfree                              -      -            
+            |          
+             --10.84%--skb_release_head_state
+                       napi_consume_skb
+                       xeu_tx_poll
+                       __napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       __do_softirq
+                       ____do_softirq
+                       call_on_irq_stack
+                       do_softirq_own_stack
+                       __irq_exit_rcu
+                       irq_exit_rcu
+                       el1_interrupt
+                       el1h_64_irq_handler
+                       el1h_64_irq
+                       default_idle_call
+                       cpuidle_idle_call
+                       do_idle
+                       cpu_startup_entry
+                       secondary_start_kernel
+                       __secondary_switched
+     7.51%  [k] dql_completed                          -      -            
+            |
+            ---xeu_tx_poll
+               __napi_poll
+               net_rx_action
+               handle_softirqs
+               __do_softirq
+               ____do_softirq
+               call_on_irq_stack
+               do_softirq_own_stack
+               __irq_exit_rcu
+               irq_exit_rcu
+               el1_interrupt
+               el1h_64_irq_handler
+               el1h_64_irq
+               default_idle_call
+               cpuidle_idle_call
+               do_idle
+               cpu_startup_entry
+               secondary_start_kernel
+               __secondary_switched
+     5.89%  [k] skb_release_data                       -      -            
+            |          
+             --5.73%--napi_consume_skb
+                       xeu_tx_poll
+                       __napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       __do_softirq
+                       ____do_softirq
+                       call_on_irq_stack
+                       do_softirq_own_stack
+                       __irq_exit_rcu
+                       irq_exit_rcu
+                       el1_interrupt
+                       el1h_64_irq_handler
+                       el1h_64_irq
+                       |          
+                        --5.70%--default_idle_call
+                                  cpuidle_idle_call
+                                  do_idle
+                                  cpu_startup_entry
+                                  secondary_start_kernel
+                                  __secondary_switched
+     4.75%  [k] __memcg_slab_free_hook                 -      -            
+            |          
+             --4.59%--free_to_pcs_bulk
+                       kmem_cache_free_bulk
+                       napi_skb_cache_put
+                       napi_consume_skb
+                       xeu_tx_poll
+                       __napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       __do_softirq
+                       ____do_softirq
+                       call_on_irq_stack
+                       do_softirq_own_stack
+                       __irq_exit_rcu
+                       irq_exit_rcu
+                       el1_interrupt
+                       el1h_64_irq_handler
+                       el1h_64_irq
+                       default_idle_call
+                       cpuidle_idle_call
+                       do_idle
+                       cpu_startup_entry
+                       secondary_start_kernel
+                       __secondary_switched
+     2.76%  [k] default_idle_call                      -      -            
+            |          
+             --2.74%--cpuidle_idle_call
+                       do_idle
+                       cpu_startup_entry
+                       secondary_start_kernel
+                       __secondary_switched
+     2.33%  [k] kfree                                  -      -            
+            |          
+             --2.22%--skb_free_head
+                       skb_release_data
+                       napi_consume_skb
+                       xeu_tx_poll
+                       __napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       __do_softirq
+                       ____do_softirq
+                       call_on_irq_stack
+                       do_softirq_own_stack
+                       __irq_exit_rcu
+                       irq_exit_rcu
+                       el1_interrupt
+                       el1h_64_irq_handler
+                       el1h_64_irq
+                       default_idle_call
+                       cpuidle_idle_call
+                       do_idle
+                       cpu_startup_entry
+                       secondary_start_kernel
+                       __secondary_switched
+     2.26%  [k] _raw_spin_unlock_irqrestore            -      -            
+     2.06%  [k] napi_consume_skb                       -      -            
+#
+# (Tip: See assembly instructions with percentage: perf annotate <symbol>)
+#

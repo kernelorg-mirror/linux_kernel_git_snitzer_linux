@@ -1,0 +1,12 @@
+cycles               rx    137.2k  tx     25.8k a WRITE
+instructions         rx    301.4k  tx     17.0k a WRITE
+ll_cache_miss_rd     rx      0.9k  tx      0.1k a WRITE
+l2d_cache_refill     rx      0.9k  tx      0.1k a WRITE
+l2d_cache_lmiss_rd   rx      0.9k  tx      0.1k a WRITE
+l1d_cache_refill     rx      1.0k  tx      0.1k a WRITE
+cycles               rx    137.3k  tx     25.9k a WRITE
+instructions         rx    301.7k  tx     17.2k a WRITE
+stall_backend_mem    rx     25.9k  tx      5.1k a WRITE
+bus_access_rd        rx      4.3k  tx      0.3k a WRITE
+mem_access_rd        rx     84.0k  tx      4.5k a WRITE
+l3d_cache_refill     rx      2.4k  tx      0.2k a WRITE

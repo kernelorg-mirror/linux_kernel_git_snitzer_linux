@@ -1,0 +1,30 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 4K of event 'll_cache_miss_rd'
+# Event count (approx.): 21790000
+#
+# Overhead  Symbol                                     IPC   [IPC Coverage]
+# ........  .........................................  ....................
+#
+    29.53%  [k] xeu_tx_poll                            -      -            
+    20.86%  [k] __sock_wfree                           -      -            
+    10.56%  [k] tcp_wfree                              -      -            
+     9.52%  [k] dql_completed                          -      -            
+     5.92%  [k] skb_release_data                       -      -            
+     4.59%  [k] __memcg_slab_free_hook                 -      -            
+     3.12%  [k] default_idle_call                      -      -            
+     2.23%  [k] kfree                                  -      -            
+     1.93%  [k] _raw_spin_unlock_irqrestore            -      -            
+     1.93%  [k] handle_softirqs                        -      -            
+     1.79%  [k] free_to_pcs_bulk                       -      -            
+     1.51%  [k] napi_consume_skb                       -      -            
+     0.78%  [k] napi_complete_done                     -      -            
+     0.69%  [k] __free_to_pcs_batch                    -      -            
+     0.60%  [k] __pcs_replace_full_main                -      -            
+     0.57%  [k] dma_unmap_phys                         -      -            
+#
+# (Tip: Use parent filter to see specific call path: perf report -p <regex>)
+#
