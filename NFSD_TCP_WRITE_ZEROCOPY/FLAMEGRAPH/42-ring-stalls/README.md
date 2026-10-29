@@ -263,7 +263,7 @@ How to read it:
 
 The empty polls are step 4 (Mike, 29 October: closure on round 42 first, then run104).
 
-## 6. The polls that find nothing (r106, to run)
+## 6. The polls that find nothing (r106)
 
 [xeu-diag-empty-polls.patch](xeu-diag-empty-polls.patch), on round 41's kept xeu (`4A7F5BFDEEE8F39ACF263F6` built), adds `empty_lat_on` (0, off, by default). The receive poll is wrapped while it is set, and on every poll it records what each question needs.
 
@@ -281,3 +281,40 @@ The empty polls are step 4 (Mike, 29 October: closure on round 42 first, then ru
 **Which interrupts the ring CPUs take.** `/proc/interrupts` and `/proc/softirqs` on CPUs 0–7 over the same window, a WRITE, to name r105's second interrupt.
 
 [run106.sh](run106.sh): load the diagnostic xeu (refusing if an NFS client is connected), one loan64 run with `empty_lat_on` for 8 s from 10 s into the timed load, then round 41's kept xeu again and the settled setting. The spin delays one empty poll in two by up to 4 µs, so the run's rate and cycles are not a result.
+
+### What run106 found
+
+[run106.out](run106.out). The summary is [r106/empty-lat-sum.txt](r106/empty-lat-sum.txt), the per-CPU counts and histograms [r106/empty-lat.txt](r106/empty-lat.txt), and the interrupts [r106/irq-sum.txt](r106/irq-sum.txt). The run: 40.50 GB/s, flows placed, no drive stepping down, peak 6388; ring 139.3k cycles a WRITE (not a result, as the empty polls spun). The window was 8 s, 309,632 WRITEs, 135.4 frames a WRITE. At the end the kept xeu and the settled setting were back.
+
+**Where a WRITE's 9.89 receive interrupts go** (2.46–2.49 a WRITE on each of CPUs 0, 2, 4 and 6, and nothing else on them: no IPIs, no timer):
+
+| | a WRITE | |
+|---|---|---|
+| the interrupt starts a poll that finds work | 5.14 | |
+| the interrupt starts a poll that finds the head empty | 1.82 | `unmask_to_irq_empty`: 96% 512–1023 ns after the ring's unmask, mean 0.80 µs |
+| the interrupt comes while NAPI already has the ring (`lost_irq`) | 2.93 | sets `NAPI_STATE_MISSED`: `napi_complete_done()` returns false 2.92 times a WRITE, and the poll runs again |
+
+**And the polls, 10.54 a WRITE:** 6.96 started by an interrupt, and 3.58 run again: 2.92 for those lost interrupts and 0.67 after using their budget. The refill timer does not count (0.002). 7.16 find work, and 3.38 find nothing (1.82 after an interrupt, 1.56 run again).
+
+- **The empty polls after an interrupt are stale interrupts.** The ring is masked from its interrupt to the end of its poll. A completion the card writes in that time leaves the vector pending. The poll takes that completion, unmasks, and the pending message arrives about 0.8 µs later for work already done: 96% of the empty polls' interrupts come 512–1023 ns after the unmask, against a spread out to 8 µs and more for interrupts that find work. In the spun half, 70% of the heads did not turn valid within 4 µs, and the rest mostly took 1–4 µs: the next frame, not a late one. This holds whether or not the poll before the unmask had done work (0.80 µs either way).
+- **The lost interrupts are the card's interrupts sent before the mask lands.** The card has no interrupt coalescing (`ethtool -c`: not supported), so while the ring is unmasked it raises one per completion. The mask is written from the handler of the first, and a frame arrives on a ring about every 0.8 µs at this rate, so a further one gets out before the mask in 2.93 of 9.89 interrupts. Each costs a hardirq and a poll run again (`NAPI_STATE_MISSED`).
+- **This is r105's "second interrupt within a microsecond of the poll's start":** the ring's own interrupt, sent before its mask, and not another device's. r105's `irq_to_poll` tail of 2–64 µs was its own artefact: a lost interrupt stamped the time, and the poll run again for it was then counted from that stamp across the whole of the poll before (polls with work take a mean of 7.9 µs, a third of them 8 µs or more). r106 stamps only interrupts that schedule a poll: 74% of polls start 128–255 ns after their interrupt, 22% 512–1023 ns, and none wait a microsecond.
+- **What they cost, as far as is timed here: about 0.85 µs a WRITE, 1.7k ring cycles (1.2%).** An empty poll after an interrupt takes 379 ns from the handler to its return (143 ns of it the poll), × 1.82. An empty poll run again takes 100 ns, × 1.56. Not timed: the exception entry, the GIC's acknowledgment and the exit for the 4.75 interrupts a WRITE that bring no work (2.93 lost, 1.82 stale), and `net_rx_action()`'s own overhead for the empty polls. At a few hundred nanoseconds an interrupt that would be another 1–3k cycles, so all told perhaps 2–3% of the rings' cycles.
+
+**What would remove them:**
+
+- **In the card: interrupt moderation** (a minimum gap or a completion count before the next interrupt). That would take most of the lost interrupts, and with them the polls run again. It is Xsight's, and is worth asking for.
+- **In the kernel: NAPI's deferral of interrupts** (`napi_defer_hard_irqs` with `gro_flush_timeout`, both 0 at the settled setting). It keeps the ring masked and polls again from a timer for a set number of empty polls, so fewer interrupts and stale ones. It costs latency to the frames, and the rings' CPU time goes from interrupts to the timer. An A/B of a few settings would show what it saves; it is not run here.
+
+Neither is large: at most 2–3% of the rings' cycles, which are themselves about a third of nfsd's.
+
+## Round 42, closed
+
+Where the rings' stalls are, as far as this round could place them (runs 100 to 106):
+
+- **Counted (r100, r101):** 19% of the rings' cycles are memory stalls, from about 1.06k DRAM reads and 1.2k L3 hits a WRITE. 25% are backend stalls not on memory.
+- **The payload goes through DRAM (r101).** The card's writes are filled into the L3 and evicted before the drives read them, at about 1.8 DRAM requests a payload line. The region is larger than the L3, by the footprint rule as it stands. Nothing is stashed.
+- **The poll's own first touches are not where the DRAM reads are (r102 to r105).** The completions, ring entries, frames' `struct page`s, the doorbell and the re-arm are at the floor or near it. The header lines come from the L3, and xeu's next-frame prefetch hides them (`rx_prefetch` keeps its place). The refill's `struct page`s come from the L3, and the core already overlaps them: prefetching them gained nothing (r103, not kept). The head's completion costs 0.4k cycles a WRITE.
+- **The interrupts (r105, r106):** 9.89 a WRITE, of which 2.93 come too late to be needed and 1.82 are stale. Perhaps 2–3% of the rings' cycles, for which the remedies are the card's interrupt moderation or NAPI's deferral.
+
+**Still not placed:** the bulk of the rings' 1.06k DRAM reads a WRITE. They are not in the driver's poll, so they are in skb and GRO, TCP and the transmit side. Naming them needs a precise profile (SPE, which this firmware does not offer, or pseudo-NMI sampling after a reboot). **Nothing from this round is kept in xeu.**

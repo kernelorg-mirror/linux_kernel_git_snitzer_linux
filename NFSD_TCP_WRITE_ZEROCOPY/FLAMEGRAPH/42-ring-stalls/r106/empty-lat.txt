@@ -1,0 +1,49 @@
+cpu0 counts polls_irq 534836 polls_re 277269 empty_irq 140815 empty_re 120631 never_valid_irq 54315 never_valid_re 33886 kicks_irq 761649 lost_irq 226813 kicks_timer 176 lost_timer 147 budget_used 52076 complete_false 225165 unmasks 534865 unmasks_after_zero_work 217868 frames 10485045
+cpu0 irq_to_poll n 534836 sum_ns 182412256 h 0 0 0 0 0 0 0 412273 17581 101797 2468 226 151 100 168 72
+cpu0 unmask_to_irq_empty n 140812 sum_ns 108448992 h 0 0 0 0 0 0 0 0 1 138068 2471 233 27 12 0 0
+cpu0 unmask_to_irq_work n 394016 sum_ns 2718540848 h 0 0 0 0 0 0 0 0 1 249878 15179 19296 24312 33994 29006 22350
+cpu0 wait_valid_irq n 23351 sum_ns 42611768 h 0 0 0 0 0 0 79 1152 2209 3936 6474 9381 106 13 1 0
+cpu0 wait_valid_re n 19171 sum_ns 33227848 h 0 0 0 0 0 0 171 1105 2107 3315 5237 7141 89 6 0 0
+cpu0 empty_poll_irq n 63149 sum_ns 8808192 h 0 0 0 0 0 0 9243 53501 115 12 234 39 4 1 0 0
+cpu0 empty_irq_whole n 63149 sum_ns 24008832 h 0 0 0 0 0 0 0 0 62470 268 292 77 25 8 6 3
+cpu0 empty_poll_re n 67574 sum_ns 6719064 h 0 0 0 0 0 0 66413 960 24 22 145 9 0 1 0 0
+cpu0 work_poll n 550659 sum_ns 4395753648 h 0 0 0 0 0 0 0 0 0 7037 90489 158887 108285 93096 92525 340
+cpu0 unmask_to_irq_empty_after_zero n 83638 sum_ns 64235976 h 0 0 0 0 0 0 0 0 0 82206 1290 118 16 8 0 0
+cpu0 unmask_to_irq_empty_after_work n 57174 sum_ns 44213016 h 0 0 0 0 0 0 0 0 1 55862 1181 115 11 4 0 0
+cpu2 counts polls_irq 540504 polls_re 275965 empty_irq 140233 empty_re 120948 never_valid_irq 54587 never_valid_re 33807 kicks_irq 769935 lost_irq 229431 kicks_timer 153 lost_timer 125 budget_used 47725 complete_false 228212 unmasks 540532 unmasks_after_zero_work 217983 frames 10142468
+cpu2 irq_to_poll n 540504 sum_ns 184988376 h 0 0 0 0 0 0 0 398960 18378 121240 1698 119 74 29 6 0
+cpu2 unmask_to_irq_empty n 140233 sum_ns 110580904 h 0 0 0 0 0 0 0 0 0 136840 3193 152 39 8 0 1
+cpu2 unmask_to_irq_work n 400270 sum_ns 2888410808 h 0 0 0 0 0 0 0 0 1 255904 14946 18662 23275 32484 29813 25185
+cpu2 wait_valid_irq n 22918 sum_ns 41724184 h 0 0 0 0 0 0 123 1128 2179 3849 6315 9191 125 8 0 0
+cpu2 wait_valid_re n 19278 sum_ns 33312064 h 0 0 0 0 0 0 172 1035 2143 3438 5280 7119 84 6 1 0
+cpu2 empty_poll_irq n 62728 sum_ns 8863848 h 0 0 0 0 0 0 10007 52191 217 17 251 42 2 1 0 0
+cpu2 empty_irq_whole n 62728 sum_ns 23567400 h 0 0 0 0 0 0 0 0 62023 317 307 63 14 4 0 0
+cpu2 empty_poll_re n 67863 sum_ns 6787968 h 0 0 0 0 0 0 66211 1462 30 28 115 14 2 1 0 0
+cpu2 work_poll n 555288 sum_ns 4236025984 h 0 0 0 0 0 0 0 0 0 8487 96774 163984 108381 92299 85141 222
+cpu2 unmask_to_irq_empty_after_zero n 83583 sum_ns 65853616 h 0 0 0 0 0 0 0 0 0 81695 1767 88 26 6 0 1
+cpu2 unmask_to_irq_empty_after_work n 56650 sum_ns 44727288 h 0 0 0 0 0 0 0 0 0 55145 1426 64 13 2 0 0
+cpu4 counts polls_irq 541240 polls_re 279831 empty_irq 141692 empty_re 121624 never_valid_irq 54567 never_valid_re 34006 kicks_irq 769205 lost_irq 227965 kicks_timer 152 lost_timer 117 budget_used 52880 complete_false 226915 unmasks 541276 unmasks_after_zero_work 219174 frames 10639290
+cpu4 irq_to_poll n 541240 sum_ns 186465560 h 0 0 0 0 0 0 0 385033 31697 122742 1547 117 65 36 3 0
+cpu4 unmask_to_irq_empty n 141692 sum_ns 115880096 h 0 0 0 0 0 0 0 0 2 133278 8170 188 46 8 0 0
+cpu4 unmask_to_irq_work n 399545 sum_ns 2683004352 h 0 0 0 0 0 0 0 0 5 250643 18891 19841 25181 34315 28973 21696
+cpu4 wait_valid_irq n 23755 sum_ns 43287280 h 0 0 0 0 0 0 100 1241 2244 3930 6528 9623 83 6 0 0
+cpu4 wait_valid_re n 19330 sum_ns 33248624 h 0 0 0 0 0 0 196 1106 2094 3448 5345 7041 92 8 0 0
+cpu4 empty_poll_irq n 63370 sum_ns 8878912 h 0 0 0 0 0 0 10076 52773 202 16 273 28 1 1 0 0
+cpu4 empty_irq_whole n 63370 sum_ns 23806112 h 0 0 0 0 0 0 0 0 62619 377 325 42 6 1 0 0
+cpu4 empty_poll_re n 68288 sum_ns 6770536 h 0 0 0 0 0 0 66642 1414 57 28 137 9 1 0 0 0
+cpu4 work_poll n 557755 sum_ns 4416266264 h 0 0 0 0 0 0 0 0 0 7460 91765 162661 108369 94686 92609 205
+cpu4 unmask_to_irq_empty_after_zero n 84127 sum_ns 68802792 h 0 0 0 0 0 0 0 0 0 79246 4752 100 24 5 0 0
+cpu4 unmask_to_irq_empty_after_work n 57565 sum_ns 47077304 h 0 0 0 0 0 0 0 0 2 54032 3418 88 22 3 0 0
+cpu6 counts polls_irq 537237 polls_re 276797 empty_irq 140254 empty_re 119134 never_valid_irq 53962 never_valid_re 33198 kicks_irq 760973 lost_irq 223736 kicks_timer 158 lost_timer 126 budget_used 53759 complete_false 223006 unmasks 537270 unmasks_after_zero_work 215797 frames 10646959
+cpu6 irq_to_poll n 537237 sum_ns 184550712 h 0 0 0 0 0 0 0 393573 20299 121958 1189 109 57 51 1 0
+cpu6 unmask_to_irq_empty n 140254 sum_ns 115091264 h 0 0 0 0 0 0 0 0 0 132507 7528 170 44 5 0 0
+cpu6 unmask_to_irq_work n 396982 sum_ns 2698427120 h 0 0 0 0 0 0 0 0 4 250154 18496 19697 24699 33810 28214 21908
+cpu6 wait_valid_irq n 23582 sum_ns 42489016 h 0 0 0 0 0 0 128 1223 2255 4072 6461 9306 128 9 0 0
+cpu6 wait_valid_re n 18952 sum_ns 32843880 h 0 0 0 0 0 0 179 1056 2012 3368 5184 7041 106 6 0 0
+cpu6 empty_poll_irq n 62710 sum_ns 9388848 h 0 0 0 0 0 0 6478 55046 809 20 323 32 2 0 0 0
+cpu6 empty_irq_whole n 62710 sum_ns 24005656 h 0 0 0 0 0 0 0 0 61462 808 371 58 7 4 0 0
+cpu6 empty_poll_re n 66984 sum_ns 6812384 h 0 0 0 0 0 0 64357 2336 110 37 136 8 0 0 0 0
+cpu6 work_poll n 554646 sum_ns 4408811904 h 0 0 0 0 0 0 0 0 0 7166 91513 161580 107008 94174 92965 240
+cpu6 unmask_to_irq_empty_after_zero n 82414 sum_ns 67654912 h 0 0 0 0 0 0 0 0 0 78045 4248 96 24 1 0 0
+cpu6 unmask_to_irq_empty_after_work n 57840 sum_ns 47436352 h 0 0 0 0 0 0 0 0 0 54462 3280 74 20 4 0 0
+WRITEs in empty_lat: 309632
