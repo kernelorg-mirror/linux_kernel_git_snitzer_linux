@@ -1,0 +1,42 @@
+19:48:52 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu 7CFF720BA3CE35894DD922E, region 32768, settled.sh audit rest: the settled setting
+19:48:53 at rest:
+            in use  posted   pools  (cache  stack)  queues charged the rest  inflight
+mean           528   16888      23      23       0       0       0   -16383       0.0
+most           528   16888      23      23       0       0       0   -16384         0
+(5 samples; pages)
+enp161s0f0 rx0 posted 250 split_left 0 cache 3 stack 0 stack_size 256
+enp161s0f0 rx1 posted 256 split_left 0 cache 16 stack 0 stack_size 256
+enp161s0f0 rx2 posted 255 split_left 0 cache 0 stack 0 stack_size 256
+enp161s0f0 rx3 posted 254 split_left 0 cache 1 stack 0 stack_size 256
+enp164s0f0 rx0 posted 4096 split_left 0 cache 0 stack 0 stack_size 0
+enp164s0f0 rx1 posted 4096 split_left 0 cache 0 stack 0 stack_size 0
+enp164s0f0 rx2 posted 4096 split_left 0 cache 0 stack 0 stack_size 0
+enp164s0f0 rx3 posted 4096 split_left 0 cache 0 stack 0 stack_size 0
+enp164s0f0 rx4 posted 4096 split_left 0 cache 0 stack 0 stack_size 0
+enp164s0f0 rx5 posted 4096 split_left 0 cache 0 stack 0 stack_size 0
+enp164s0f0 rx6 posted 4096 split_left 0 cache 0 stack 0 stack_size 0
+enp164s0f0 rx7 posted 4096 split_left 0 cache 0 stack 0 stack_size 0
+19:53:02 r110-1-copy | total 40.79 GB/s | 1 no-step | 1 placed | r110-1-copy ring 37.8 nfsd 278.4 us/W (38903 WRITEs/s) | ring 137.8k cycles 270.2k instructions, nfsd 678.6k cycles 467.6k instructions a WRITE | in use at most 1152 of 32768 | alloc_fail 0 | copy | client retransmits in the window: 5
+            in use  posted   pools  (cache  stack)  queues charged the rest  inflight
+mean          1133   16877     528      29     499      99       0   -16371       0.0
+most          1136   16875     584      14     570      89       0   -16412         0
+(50 samples; pages)
+19:57:12 r110-2-loan64 | total 40.58 GB/s | 1 no-step | 1 placed | r110-2-loan64 ring 36.1 nfsd 91.3 us/W (38662 WRITEs/s) | ring 129.7k cycles 285.1k instructions, nfsd 295.3k cycles 301.8k instructions a WRITE | in use at most 6436 of 32768 | alloc_fail 0 | admitted 1544512, denied 1608134 | client retransmits in the window: 3
+            in use  posted   pools  (cache  stack)  queues charged the rest  inflight
+mean          5544   16871     509      28     481     245    7997   -20078      63.8
+most          6164   16838     487      38     449     277    8023   -19462        71
+(50 samples; pages)
+19:57:33 region 4096 pages (64 MiB) made at 0x808c000000; page_pool: fixed rx region for 0000:a1:00.0 freed: 32768 pages at 0x8260000000, 0 escaped
+20:01:42 r110-3-region4096-loan23 | total 37.77 GB/s | 1 no-step | 1 placed | r110-3-region4096-loan23 ring 30.6 nfsd 83.5 us/W (35857 WRITEs/s) | ring 128.9k cycles 285.3k instructions, nfsd 267.6k cycles 298.6k instructions a WRITE | in use at most 3490 of 4096 | alloc_fail 0 | admitted 1437720, denied 1490538 | client retransmits in the window: 16
+            in use  posted   pools  (cache  stack)  queues charged the rest  inflight
+mean          2774   16876     516      28     489     285    2826   -17729      23.9
+most          2983   16882     726      26     700     316    2875   -17815        25
+(50 samples; pages)
+20:02:03 region 2048 pages (32 MiB) made at 0x808a000000; page_pool: fixed rx region for 0000:a1:00.0 freed: 4096 pages at 0x808c000000, 0 escaped
+20:06:12 r110-4-region2048-loan-b720 | total 21.57 GB/s | 1 no-step | 1 placed | r110-4-region2048-loan-b720 ring 21.9 nfsd 74.2 us/W (20574 WRITEs/s) | ring 141.9k cycles 296.0k instructions, nfsd 226.6k cycles 293.0k instructions a WRITE | in use at most 2048 of 2048 | alloc_fail 1 | admitted 820280, denied 829137 | client retransmits in the window: 6
+            in use  posted   pools  (cache  stack)  queues charged the rest  inflight
+mean          2006   16886     684      30     654     492     529   -16585       5.9
+most          2045   16876     779      38     741     545     435   -16590         5
+(50 samples; pages)
+20:06:33 region 32768 pages (512 MiB) made at 0x8260000000; page_pool: fixed rx region for 0000:a1:00.0 freed: 2048 pages at 0x808a000000, 0 escaped
+20:07:11 end: region 32768 pages, xeu CA0931345E46C929B11D01F, settled.sh audit rest: the settled setting; DONE

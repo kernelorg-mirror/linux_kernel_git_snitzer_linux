@@ -1,0 +1,5 @@
+t=1793303332283 free=32240 posted=33777 split=0 cache=23 stack=0 stack_size=1024 socks=0 rmem=0 bl=0 budget=0 avail=0 reserve=0 inflight=0 
+t=1793303332505 free=32240 posted=33777 split=0 cache=23 stack=0 stack_size=1024 socks=0 rmem=0 bl=0 budget=0 avail=0 reserve=0 inflight=0 
+t=1793303332728 free=32240 posted=33777 split=0 cache=23 stack=0 stack_size=1024 socks=0 rmem=0 bl=0 budget=0 avail=0 reserve=0 inflight=0 
+t=1793303332950 free=32240 posted=33776 split=0 cache=23 stack=0 stack_size=1024 socks=0 rmem=0 bl=0 budget=0 avail=0 reserve=0 inflight=0 
+t=1793303333173 free=32240 posted=33776 split=0 cache=23 stack=0 stack_size=1024 socks=0 rmem=0 bl=0 budget=0 avail=0 reserve=0 inflight=0 
