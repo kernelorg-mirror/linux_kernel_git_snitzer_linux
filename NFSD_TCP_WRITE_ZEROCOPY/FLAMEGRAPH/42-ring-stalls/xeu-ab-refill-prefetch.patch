@@ -1,0 +1,79 @@
+--- xeu-esdk-v2.0.1.orig/xeu_drv.c
++++ xeu-esdk-v2.0.1/xeu_drv.c
+@@ -152,6 +152,20 @@
+ module_param(rx_refill_thresh, uint, 0644);
+ MODULE_PARM_DESC(rx_refill_thresh, "empty RX ring slots at which a poll refills the ring (default 32; 1 refills at every poll that took a buffer)");
+ /*
++ * A page the refill takes from the page pool was last written where it was
++ * freed, mostly on another CPU, and its struct page comes from the L3:
++ * the refill's first store to it (the fragment count) and load (its DMA
++ * address) wait for it, one page at a time.  With this set, the refill
++ * takes the pages it needs, up to XEU_RX_REFILL_BATCH at a time, and
++ * prefetches each struct page for writing before posting any, so the
++ * misses overlap.  The pages, their number and their order are the same
++ * either way.
++ */
++#define XEU_RX_REFILL_BATCH 16
++static bool rx_refill_prefetch;
++module_param(rx_refill_prefetch, bool, 0644);
++MODULE_PARM_DESC(rx_refill_prefetch, "prefetch the struct pages a refill takes before posting them (default N)");
++/*
+  * Entries of the RSS redirection table that ethtool -x shows and -X sets
+  * (xsl_rm_reta_get()/xsl_rm_reta_set(), which take fewer than
+  * XSL_RM_RSS_NUM_RINGS).  0, the default, leaves the table to the
+@@ -687,6 +701,27 @@
+ 	}
+ }
+ 
++/*
++ * Take up to @n pages for a refill from @pool into @pages, prefetching each
++ * struct page for writing when rx_refill_prefetch is set.  Returns the
++ * number taken; fewer than @n only when the pool has no more.
++ */
++static unsigned int xeu_rx_take_pages(struct page_pool *pool,
++				      struct page **pages, unsigned int n)
++{
++	const bool pf = READ_ONCE(rx_refill_prefetch);
++	unsigned int j;
++
++	for (j = 0; j < n; j++) {
++		pages[j] = page_pool_alloc_pages(pool, GFP_ATOMIC);
++		if (unlikely(!pages[j]))
++			break;
++		if (pf)
++			prefetchw(pages[j]);
++	}
++	return j;
++}
++
+ /**
+  * xeu_rx_refill - Refill RX ring with pages from page pool
+  * @rxr: RX ring structure
+@@ -728,6 +763,8 @@
+ 	const u16 mask = ring->mask;
+ 	u16 prod = ring->sr_prod_idx;
+ 	unsigned int offset;
++	struct page *pages[XEU_RX_REFILL_BATCH];
++	unsigned int np = 0, pi = 0;
+ 	struct page *rx_page;
+ 	u32 i, idx;
+ 
+@@ -740,7 +777,17 @@
+ 			split_offset += buf_size;
+ 			split_left--;
+ 		} else {
+-			rx_page = page_pool_alloc_pages(rxr->page_pool, GFP_ATOMIC);
++			/*
++			 * The pages still to take: one for each @pieces
++			 * buffers left to post, all of them used.
++			 */
++			if (pi == np) {
++				np = xeu_rx_take_pages(rxr->page_pool, pages,
++						       min_t(u32, XEU_RX_REFILL_BATCH,
++							     DIV_ROUND_UP(n - i, pieces)));
++				pi = 0;
++			}
++			rx_page = pi < np ? pages[pi++] : NULL;
+ 			if (unlikely(!rx_page)) {
+ 				if (net_ratelimit())
+ 					netdev_err(ring->dev, "Failed to allocate Rx page from pool\n");

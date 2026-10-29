@@ -165,3 +165,13 @@ What each costs above the floor, a WRITE, at 2 GHz, if nothing overlaps it:
 
 1. **Prefetch the refill's `struct page`s (A/B).** In xeu's refill, take the pages for the refill first, `prefetchw()` each `struct page`, then post the descriptors; or prefetch the next page's while posting the current one. The pages, their number and their order are what they are today, so the region's footprint does not change. At most about 6.8k ring cycles a WRITE, less what the core already overlaps.
 2. **The completion that waits 0.5–1 µs (diagnostic).** Split `cmpl_first` by whether the poll follows the interrupt or is a re-poll, and time a second read of the same line straight after, to tell a collision with the card's write from something else. It is about 1k cycles a WRITE, so it comes second.
+
+## 4. Prefetching the refill's struct pages (r103, to run)
+
+[xeu-ab-refill-prefetch.patch](xeu-ab-refill-prefetch.patch), on round 41's kept xeu (`D2FAF3EF3E02A99063C6FBC`), adds `rx_refill_prefetch` (default N), switched between runs without a reload. With it on, `xeu_rx_refill()` takes the pages it still needs from the page pool, up to 16 at a time (a refill of 32 buffers is 16 pages), and does a `prefetchw()` on each `struct page` before posting any. The fragment count's store and the DMA address's load then find their lines on the way, and the misses overlap instead of following one another. Both arms take the pages in the batch, so the switch moves only the prefetch.
+
+The pages, their number and the order they are posted in are the same with the switch on or off. Each page is taken from the pool at most a refill's few hundred nanoseconds earlier, so the region's footprint does not change; the peak is reported beside the result anyway.
+
+What to expect: at most the 6.8k ring cycles a WRITE that run102 put on `new_page`, less what the core already overlaps. run98's eight runs put the noise between arms near 0.4k.
+
+[run103.sh](run103.sh): load the A/B's xeu (refusing if an NFS client is connected), eight loan64 runs, counted and untraced, `rx_refill_prefetch` N Y Y N N Y Y N, then round 41's kept xeu again and the settled setting.
