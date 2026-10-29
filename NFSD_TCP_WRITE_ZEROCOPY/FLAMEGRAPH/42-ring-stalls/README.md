@@ -166,7 +166,7 @@ What each costs above the floor, a WRITE, at 2 GHz, if nothing overlaps it:
 1. **Prefetch the refill's `struct page`s (A/B).** In xeu's refill, take the pages for the refill first, `prefetchw()` each `struct page`, then post the descriptors; or prefetch the next page's while posting the current one. The pages, their number and their order are what they are today, so the region's footprint does not change. At most about 6.8k ring cycles a WRITE, less what the core already overlaps.
 2. **The completion that waits 0.5–1 µs (diagnostic).** Split `cmpl_first` by whether the poll follows the interrupt or is a re-poll, and time a second read of the same line straight after, to tell a collision with the card's write from something else. It is about 1k cycles a WRITE, so it comes second.
 
-## 4. Prefetching the refill's struct pages (r103, to run)
+## 4. Prefetching the refill's struct pages (r103)
 
 [xeu-ab-refill-prefetch.patch](xeu-ab-refill-prefetch.patch), on round 41's kept xeu (`D2FAF3EF3E02A99063C6FBC`), adds `rx_refill_prefetch` (default N), switched between runs without a reload. With it on, `xeu_rx_refill()` takes the pages it still needs from the page pool, up to 16 at a time (a refill of 32 buffers is 16 pages), and does a `prefetchw()` on each `struct page` before posting any. The fragment count's store and the DMA address's load then find their lines on the way, and the misses overlap instead of following one another. Both arms take the pages in the batch, so the switch moves only the prefetch.
 
@@ -175,3 +175,21 @@ The pages, their number and the order they are posted in are the same with the s
 What to expect: at most the 6.8k ring cycles a WRITE that run102 put on `new_page`, less what the core already overlaps. run98's eight runs put the noise between arms near 0.4k.
 
 [run103.sh](run103.sh): load the A/B's xeu (refusing if an NFS client is connected), eight loan64 runs, counted and untraced, `rx_refill_prefetch` N Y Y N N Y Y N, then round 41's kept xeu again and the settled setting.
+
+### What run103 found
+
+[run103.out](run103.out). All eight runs placed their flows, no drive stepped down, no new WARNING, and the kept xeu and the settled setting were back at the end.
+
+| `rx_refill_prefetch` | GB/s | ring cycles a WRITE | ring instructions | nfsd cycles | peak pages in use |
+|---|---|---|---|---|---|
+| N (runs 1, 4, 5, 8) | 40.52, 40.51, 40.54, 40.52 | 138.2k, 138.4k, 137.5k, 138.4k | 308.3k, 308.6k, 307.4k, 308.6k | 295.4k, 296.8k, 296.0k, 296.4k | 6320, 6389, 6636, 6585 |
+| Y (runs 2, 3, 6, 7) | 40.50, 40.50, 40.54, 40.48 | 138.4k, 137.1k, 136.9k, 138.9k | 311.6k, 309.4k, 308.8k, 312.3k | 296.7k, 295.6k, 295.6k, 295.1k | 6333, 6302, 6480, 6362 |
+| mean, N / Y | 40.52 / 40.51 | 138.1k / 137.8k | 308.2k / 310.5k | 296.2k / 295.8k | 6482 / 6369 |
+
+- **No gain to be seen.** The prefetch takes 0.3k ring cycles a WRITE off on average, against noise near 0.4k; by neighbouring pair (Y less N in run order) it is +0.2k, −1.3k, −0.6k and +0.5k. The rate does not move. The batch adds 2.3k instructions a WRITE.
+- **So the core already overlaps most of `new_page`'s 6.8k cycles.** The first touch of a page's `struct page` is the fragment count's store and the DMA address's load, and neither holds the refill up for long: the store waits in the store buffer, and the address goes to a descriptor the core does not read back. run102's timing, a load fenced by DSBs, showed what the line costs, not what the refill waits for it.
+- **The footprint is unchanged,** as designed: peak pages in use 6369 against 6482, inside the runs' own scatter (6302 to 6636).
+
+**Not kept.** `rx_refill_prefetch` stays out of xeu; round 41's kept xeu (`CA0931345E46C929B11D01F`) is the one loaded.
+
+**Next is step 3's second item,** the completion at a poll's head that waits 0.5–1 µs, which is at most about 1k ring cycles a WRITE. With run102's first touches and run103 together, the rings' 1.06k DRAM reads a WRITE are still not placed: they are not in the poll's first touches, and the one excess that was found there the core already hides.
