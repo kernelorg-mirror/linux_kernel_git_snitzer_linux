@@ -100,3 +100,7 @@ A smaller stack sends more returned pages back to the region, under its one lock
 
 Whether B is kept is Mike's: free in copy mode, 3% in loan mode, for 360 pages either way. What it costs in loan mode is a code question too: how many pages a WRITE make the round trip through the region, and which of its steps (the region's lock, the xarray, the mapping) dominates, is for a profile of A against B; a cheaper round trip would make a shallow stack free in loan mode as well.
 
+## 3. Where B's cycles go in loan mode (r112)
+
+[run112.sh](run112.sh): four loan64 runs, A B B A, the kept xeu at the settled setting. From 10 s into each timed load, 5 s of `perf record` on CPUs 0 to 55, one sample every million cycles with call chains, so that a function's samples with its callees are its cycles a WRITE, on the ring CPUs and nfsd's apart; then 5 s of bpftrace counting calls into the steps of the round trip (`page_pool_put_netmem_bulk`, `page_pool_recycle_ring_bulk`, `page_pool_return_netmem`, `page_pool_rx_region_put`, `page_pool_rx_stack_refill`, `page_pool_rx_region_alloc`, `page_pool_dma_map`) by the same groups. The profile names the step that costs (the region's lock and its contention, `__xa_erase` and `__xa_alloc`, the DMA map and unmap), the counts how many pages a WRITE go round. The runs' own cycles are perturbed by both, so run111's stay the A/B.
+
