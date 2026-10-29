@@ -1,0 +1,247 @@
+--- xeu-esdk-v2.0.1.orig/xeu_drv.c
++++ xeu-esdk-v2.0.1/xeu_drv.c
+@@ -251,6 +251,143 @@
+ 		disable_irq_nosync(ring->irq_vector);
+ }
+ 
++/*
++ * DIAGNOSTIC (FLAMEGRAPH round 42, not for keeping): the receive polls that
++ * find nothing.  Times are the 1 GHz counter read after ISB.  While
++ * empty_lat_on is set, on every receive poll:
++ *   irq_to_poll      this ring's interrupt to the start of its poll
++ *   unmask_to_irq_*  the ring's last unmask (after napi_complete_done()) to
++ *                    the interrupt, for polls that find the head empty and
++ *                    for those that find work: an interrupt left pending
++ *                    while the ring was masked fires straight after it
++ *   wait_valid_*     on every other empty poll, a spin of up to 4 us for the
++ *                    head to turn valid; never_valid_* when it does not
++ *   empty_poll_*     the other empty polls, start to return
++ *   empty_irq_whole  the same, from the interrupt (irq polls)
++ *   work_poll        polls that find work, start to return
++ * and counts of the polls by origin, of the kicks NAPI had already taken
++ * (lost) from the interrupt and from the refill timer, of the polls that
++ * used their budget, of napi_complete_done() returning false, and of the
++ * unmasks.  A poll is irq if this ring's interrupt (on this CPU) scheduled
++ * it, re otherwise.  /sys/module/xeu/parameters/empty_lat prints them; a
++ * write clears.
++ */
++#define XEU_EP_N 11
++#define XEU_EP_C 15
++struct xeu_empty_lat {
++	u64 n[XEU_EP_N], sum[XEU_EP_N], h[XEU_EP_N][16];
++	u64 cnt[XEU_EP_C];
++	struct xeu_ring *irq_ring, *unmask_ring;
++	u64 irq_t, unmask_t;
++	unsigned int tick;
++	bool unmask_after_work;
++};
++static DEFINE_PER_CPU(struct xeu_empty_lat, xeu_empty_lat);
++
++enum { EP_IRQ_TO_POLL, EP_UNMASK_EMPTY, EP_UNMASK_WORK, EP_WAIT_IRQ, EP_WAIT_RE,
++       EP_EMPTY_POLL_IRQ, EP_EMPTY_IRQ_WHOLE, EP_EMPTY_POLL_RE, EP_WORK_POLL,
++       EP_UNMASK_EMPTY_ZW, EP_UNMASK_EMPTY_W };
++enum { EC_POLL_IRQ, EC_POLL_RE, EC_EMPTY_IRQ, EC_EMPTY_RE, EC_NEVER_IRQ,
++       EC_NEVER_RE, EC_KICK_IRQ, EC_LOST_IRQ, EC_KICK_TIMER, EC_LOST_TIMER,
++       EC_BUDGET, EC_COMPLETE_FALSE, EC_UNMASK, EC_UNMASK_ZERO_WORK,
++       EC_FRAMES };
++
++static unsigned int empty_lat_on;
++module_param(empty_lat_on, uint, 0644);
++MODULE_PARM_DESC(empty_lat_on, "DIAGNOSTIC: time the receive polls that find nothing (0: off)");
++
++static __always_inline u64 xeu_ep_t(void)
++{
++	isb();
++	return read_sysreg(cntvct_el0);
++}
++
++static __always_inline void xeu_ep_add(struct xeu_empty_lat *l, int k, u64 ns)
++{
++	l->n[k]++;
++	l->sum[k] += ns;
++	l->h[k][min_t(int, ilog2(ns | 1), 15)]++;
++}
++
++/* From the interrupt or the refill timer: whether NAPI had taken a kick. */
++static __always_inline void xeu_ep_kick(struct xeu_ring *ring, bool from_irq)
++{
++	struct xeu_empty_lat *l = this_cpu_ptr(&xeu_empty_lat);
++	bool lost = test_bit(NAPI_STATE_SCHED, &ring->napi.state);
++
++	l->cnt[from_irq ? EC_KICK_IRQ : EC_KICK_TIMER]++;
++	if (lost)
++		l->cnt[from_irq ? EC_LOST_IRQ : EC_LOST_TIMER]++;
++	else if (from_irq) {
++		l->irq_ring = ring;
++		l->irq_t = xeu_ep_t();
++	}
++}
++
++/* After the unmask that ends a poll. */
++static __always_inline void xeu_ep_unmask(struct xeu_ring *ring, int work_done)
++{
++	struct xeu_empty_lat *l = this_cpu_ptr(&xeu_empty_lat);
++
++	l->cnt[EC_UNMASK]++;
++	if (!work_done)
++		l->cnt[EC_UNMASK_ZERO_WORK]++;
++	l->unmask_ring = ring;
++	l->unmask_t = xeu_ep_t();
++	l->unmask_after_work = work_done;
++}
++
++static int xeu_empty_lat_get(char *buf, const struct kernel_param *kp)
++{
++	static const char * const kn[XEU_EP_N] = {
++		"irq_to_poll", "unmask_to_irq_empty", "unmask_to_irq_work",
++		"wait_valid_irq", "wait_valid_re", "empty_poll_irq",
++		"empty_irq_whole", "empty_poll_re", "work_poll",
++		"unmask_to_irq_empty_after_zero", "unmask_to_irq_empty_after_work" };
++	static const char * const cn[XEU_EP_C] = {
++		"polls_irq", "polls_re", "empty_irq", "empty_re", "never_valid_irq",
++		"never_valid_re", "kicks_irq", "lost_irq", "kicks_timer",
++		"lost_timer", "budget_used", "complete_false", "unmasks",
++		"unmasks_after_zero_work", "frames" };
++	int cpu, k, b, len = 0;
++
++	for_each_possible_cpu(cpu) {
++		struct xeu_empty_lat *l = per_cpu_ptr(&xeu_empty_lat, cpu);
++
++		if (!l->cnt[EC_POLL_IRQ] && !l->cnt[EC_POLL_RE] && !l->cnt[EC_KICK_IRQ])
++			continue;
++		len += sysfs_emit_at(buf, len, "cpu%d counts", cpu);
++		for (k = 0; k < XEU_EP_C; k++)
++			len += sysfs_emit_at(buf, len, " %s %llu", cn[k], l->cnt[k]);
++		len += sysfs_emit_at(buf, len, "\n");
++		for (k = 0; k < XEU_EP_N; k++) {
++			if (!l->n[k])
++				continue;
++			len += sysfs_emit_at(buf, len, "cpu%d %s n %llu sum_ns %llu h",
++					     cpu, kn[k], l->n[k], l->sum[k]);
++			for (b = 0; b < 16; b++)
++				len += sysfs_emit_at(buf, len, " %llu", l->h[k][b]);
++			len += sysfs_emit_at(buf, len, "\n");
++		}
++	}
++	return len;
++}
++
++static int xeu_empty_lat_set(const char *val, const struct kernel_param *kp)
++{
++	int cpu;
++
++	for_each_possible_cpu(cpu)
++		memset(per_cpu_ptr(&xeu_empty_lat, cpu), 0, sizeof(struct xeu_empty_lat));
++	return 0;
++}
++
++static const struct kernel_param_ops xeu_empty_lat_ops = {
++	.get = xeu_empty_lat_get,
++	.set = xeu_empty_lat_set,
++};
++module_param_cb(empty_lat, &xeu_empty_lat_ops, NULL, 0644);
++
+ static void xeu_ring_irq_rearm(struct xeu_ring *ring)
+ {
+ 	if (ring->msix_vc)
+@@ -271,6 +408,8 @@
+ {
+ 	struct xeu_ring *ring = arg;
+ 
++	if (unlikely(READ_ONCE(empty_lat_on)) && ring->type == RING_TYPE_ETH_RX)
++		xeu_ep_kick(ring, true);
+ 	xeu_napi_kick(ring);
+ 
+ 	return IRQ_HANDLED;
+@@ -798,6 +937,8 @@
+ 	struct xeu_rx_ring *rxr = container_of(t, struct xeu_rx_ring,
+ 					       refill_timer);
+ 
++	if (unlikely(READ_ONCE(empty_lat_on)))
++		xeu_ep_kick(&rxr->base, false);
+ 	xeu_napi_kick(&rxr->base);
+ }
+ 
+@@ -1151,7 +1292,7 @@
+  *
+  * Return: Number of packets processed
+  */
+-static int xeu_rx_poll(struct napi_struct *napi, int budget)
++static int __xeu_rx_poll(struct napi_struct *napi, int budget)
+ {
+ 	u16 expected_vlan_id, rx_fill_cnt, sub_idx, error_status, hw_pkt_format;
+ 	u32 num_of_frags, total_len, linear_len, frag_idx, frag_len;
+@@ -1356,12 +1497,73 @@
+ 			ring->xeu_dev->interrupt_rx[ring->sw_ring_idx] = false;
+ #endif
+ 			xeu_ring_irq_rearm(ring);
++			if (unlikely(READ_ONCE(empty_lat_on)))
++				xeu_ep_unmask(ring, work_done);
++		} else if (unlikely(READ_ONCE(empty_lat_on))) {
++			this_cpu_inc(xeu_empty_lat.cnt[EC_COMPLETE_FALSE]);
+ 		}
+ 	}
+ 
+ 	return work_done;
+ }
+ 
++static noinline int xeu_ep_poll(struct napi_struct *napi, int budget)
++{
++	struct xeu_ring *ring = container_of(napi, struct xeu_ring, napi);
++	struct xeu_empty_lat *l = this_cpu_ptr(&xeu_empty_lat);
++	bool irq = l->irq_ring == ring && l->irq_t;
++	bool after_work = l->unmask_after_work, spun = false, valid;
++	u64 t0 = xeu_ep_t(), irq_t = l->irq_t, t1;
++	int done;
++
++	l->irq_ring = NULL;
++	l->irq_t = 0;
++	l->cnt[irq ? EC_POLL_IRQ : EC_POLL_RE]++;
++	if (irq)
++		xeu_ep_add(l, EP_IRQ_TO_POLL, t0 - irq_t);
++	valid = RX_CMPL_VALID(ring, ring->cr_cons_idx);
++	if (irq && l->unmask_ring == ring && l->unmask_t && irq_t > l->unmask_t) {
++		xeu_ep_add(l, valid ? EP_UNMASK_WORK : EP_UNMASK_EMPTY, irq_t - l->unmask_t);
++		if (!valid)
++			xeu_ep_add(l, after_work ? EP_UNMASK_EMPTY_W : EP_UNMASK_EMPTY_ZW,
++				   irq_t - l->unmask_t);
++	}
++	l->unmask_t = 0;
++	if (!valid) {
++		l->cnt[irq ? EC_EMPTY_IRQ : EC_EMPTY_RE]++;
++		if (l->tick++ & 1) {
++			spun = true;
++			while (!RX_CMPL_VALID(ring, ring->cr_cons_idx) &&
++			       xeu_ep_t() - t0 < 4000)
++				cpu_relax();
++			if (RX_CMPL_VALID(ring, ring->cr_cons_idx))
++				xeu_ep_add(l, irq ? EP_WAIT_IRQ : EP_WAIT_RE, xeu_ep_t() - t0);
++			else
++				l->cnt[irq ? EC_NEVER_IRQ : EC_NEVER_RE]++;
++		}
++	}
++	done = __xeu_rx_poll(napi, budget);
++	t1 = xeu_ep_t();
++	l->cnt[EC_FRAMES] += done;
++	if (done >= budget)
++		l->cnt[EC_BUDGET]++;
++	if (valid) {
++		xeu_ep_add(l, EP_WORK_POLL, t1 - t0);
++	} else if (!spun) {
++		xeu_ep_add(l, irq ? EP_EMPTY_POLL_IRQ : EP_EMPTY_POLL_RE, t1 - t0);
++		if (irq)
++			xeu_ep_add(l, EP_EMPTY_IRQ_WHOLE, t1 - irq_t);
++	}
++	return done;
++}
++
++static int xeu_rx_poll(struct napi_struct *napi, int budget)
++{
++	if (unlikely(READ_ONCE(empty_lat_on)))
++		return xeu_ep_poll(napi, budget);
++	return __xeu_rx_poll(napi, budget);
++}
++
+ 
+ static int xeu_tx_poll(struct napi_struct *napi, int budget)
+ {
