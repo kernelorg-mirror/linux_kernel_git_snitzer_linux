@@ -1,0 +1,54 @@
+=== xeu_rx_refill.isra.0 at ffff9fe0156d0b7c (the sample skids one instruction past the load)
+    0.25 :   ffff9fe0156d0b64:       and     w28, w10, #0xffff
+    0.28 :   ffff9fe0156d0b68:       str     x0, [x25, x11]
+    0.39 :   ffff9fe0156d0b6c:       ubfiz   x1, x1, #3, #18
+    0.19 :   ffff9fe0156d0b70:       str     w15, [x14, #8]
+    0.11 :   ffff9fe0156d0b74:       str     x3, [x26, x11]
+    0.30 :   ffff9fe0156d0b78:       ldr     x0, [x12, #32]
+   53.25 :   ffff9fe0156d0b7c:       add     x2, x2, x0
+   37.83 :   ffff9fe0156d0b80:       str     x2, [x26, x1]
+=== xeu_rx_poll at ffff9fe0156d0ed8 (the sample skids one instruction past the load)
+    0.06 :   ffff9fe0156d0ec0:       cset    w1, eq  // eq = none
+    0.28 :   ffff9fe0156d0ec4:       ldrb    w0, [x3, x0]
+    5.23 :   ffff9fe0156d0ec8:       and     w0, w0, #0x1
+    0.17 :   ffff9fe0156d0ecc:       cmp     w1, w0
+    0.03 :   ffff9fe0156d0ed0:       b.ne    0xffff9fe0156d17b0  // b.any
+    1.70 :   ffff9fe0156d0ed4:       dmb     oshld
+    8.99 :   ffff9fe0156d0ed8:       ldrh    w0, [x27, #12]
+    0.36 :   ffff9fe0156d0edc:       ldrh    w1, [x27, #16]
+=== skb_gro_receive at ffff9fe050dff5b0 (the sample skids one instruction past the load)
+    0.25 :   ffff9fe050dff598:       sub     w2, w8, w2
+    0.20 :   ffff9fe050dff59c:       sub     w3, w6, w4, lsl #14
+    0.25 :   ffff9fe050dff5a0:       stp     w2, w3, [x7, #8]
+    0.30 :   ffff9fe050dff5a4:       mov     x3, #0x100                      // #256
+    0.44 :   ffff9fe050dff5a8:       sub     x3, x3, x0
+    0.35 :   ffff9fe050dff5ac:       ldrb    w27, [x1, #2]
+   33.40 :   ffff9fe050dff5b0:       add     x28, x1, #0x30
+    0.25 :   ffff9fe050dff5b4:       add     x7, x7, #0x10
+=== inet_gro_receive at ffff9fe050eff660 (the sample skids one instruction past the load)
+    0.00 :   ffff9fe050eff648:       strh    w6, [x4, #70]
+    0.00 :   ffff9fe050eff64c:       ldr     x4, [x4]
+    0.00 :   ffff9fe050eff650:       cmp     x4, x22
+    0.00 :   ffff9fe050eff654:       b.ne    0xffff9fe050eff608  // b.any
+    0.18 :   ffff9fe050eff658:       ldr     w0, [x19, #16]
+    0.31 :   ffff9fe050eff65c:       ldr     x2, [x19, #24]
+   16.28 :   ffff9fe050eff660:       add     w0, w0, #0x14
+    0.26 :   ffff9fe050eff664:       ldrh    w1, [x19, #20]
+=== inet_gro_receive at ffff9fe050eff538 (the sample skids one instruction past the load)
+    0.26 :   ffff9fe050eff520:       b.hi    0xffff9fe050eff6d4  // b.pmore
+    2.63 :   ffff9fe050eff524:       cbz     x2, 0xffff9fe050eff550
+    0.26 :   ffff9fe050eff528:       ldrb    w1, [x2, #9]
+    3.16 :   ffff9fe050eff52c:       adrp    x0, 0xffff9fe052991000
+    0.61 :   ffff9fe050eff530:       add     x0, x0, #0xda8
+    0.53 :   ffff9fe050eff534:       ldr     x8, [x0, w1, sxtw #3]
+    9.26 :   ffff9fe050eff538:       cbz     x8, 0xffff9fe050eff550
+    2.41 :   ffff9fe050eff53c:       ldr     x0, [x8, #8]
+=== gro_list_prepare at ffff9fe050dfdfb0 (the sample skids one instruction past the load)
+    0.57 :   ffff9fe050dfdf98:       ldr     w21, [x19, #156]
+    1.38 :   ffff9fe050dfdf9c:       add     x0, x27, x0
+    0.38 :   ffff9fe050dfdfa0:       ldr     x2, [x19, #16]
+    1.15 :   ffff9fe050dfdfa4:       eor     w21, w21, w4
+    0.38 :   ffff9fe050dfdfa8:       ldr     x4, [x20, #16]
+    0.76 :   ffff9fe050dfdfac:       ldrb    w3, [x3, #1]
+   11.36 :   ffff9fe050dfdfb0:       ldrb    w0, [x0, #1]
+    1.91 :   ffff9fe050dfdfb4:       eor     x2, x2, x4

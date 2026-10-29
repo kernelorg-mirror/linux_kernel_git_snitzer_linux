@@ -1,0 +1,280 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 46K of event 'll_cache_miss_rd'
+# Event count (approx.): 233425000
+#
+# Overhead  Symbol                                     IPC   [IPC Coverage]
+# ........  .........................................  ....................
+#
+    11.33%  [k] eth_type_trans                         -      -            
+            |          
+             --11.14%--xeu_rx_poll
+                       __napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       |          
+                        --11.10%--__do_softirq
+                                  ____do_softirq
+                                  call_on_irq_stack
+                                  do_softirq_own_stack
+                                  __irq_exit_rcu
+                                  irq_exit_rcu
+                                  el1_interrupt
+                                  el1h_64_irq_handler
+                                  el1h_64_irq
+                                  |          
+                                   --11.08%--default_idle_call
+                                             |          
+                                              --11.08%--cpuidle_idle_call
+                                                        do_idle
+                                                        cpu_startup_entry
+                                                        |          
+                                                        |--8.25%--secondary_start_kernel
+                                                        |          __secondary_switched
+                                                        |          
+                                                         --2.83%--rest_init
+                                                                   start_kernel
+                                                                   __primary_switched
+     8.18%  [k] xeu_rx_refill.isra.0                   -      -            
+            |          
+             --8.16%--xeu_rx_poll
+                       __napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       |          
+                        --8.13%--__do_softirq
+                                  ____do_softirq
+                                  call_on_irq_stack
+                                  do_softirq_own_stack
+                                  __irq_exit_rcu
+                                  irq_exit_rcu
+                                  el1_interrupt
+                                  el1h_64_irq_handler
+                                  el1h_64_irq
+                                  |          
+                                   --8.10%--default_idle_call
+                                             cpuidle_idle_call
+                                             do_idle
+                                             cpu_startup_entry
+                                             |          
+                                             |--5.92%--secondary_start_kernel
+                                             |          __secondary_switched
+                                             |          
+                                              --2.18%--rest_init
+                                                        start_kernel
+                                                        __primary_switched
+     7.05%  [k] xeu_rx_poll                            -      -            
+            |          
+             --7.04%--__napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       |          
+                        --7.03%--__do_softirq
+                                  ____do_softirq
+                                  call_on_irq_stack
+                                  do_softirq_own_stack
+                                  __irq_exit_rcu
+                                  irq_exit_rcu
+                                  el1_interrupt
+                                  el1h_64_irq_handler
+                                  el1h_64_irq
+                                  |          
+                                   --7.02%--default_idle_call
+                                             |          
+                                              --7.02%--cpuidle_idle_call
+                                                        do_idle
+                                                        cpu_startup_entry
+                                                        |          
+                                                         --5.14%--secondary_start_kernel
+                                                                   __secondary_switched
+     6.92%  [k] skb_gro_receive                        -      -            
+            |          
+             --6.27%--tcp_gro_receive
+                       tcp4_gro_receive
+                       inet_gro_receive
+                       dev_gro_receive
+                       gro_receive_skb
+                       xeu_rx_poll
+                       __napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       |          
+                        --6.26%--__do_softirq
+                                  ____do_softirq
+                                  call_on_irq_stack
+                                  do_softirq_own_stack
+                                  __irq_exit_rcu
+                                  irq_exit_rcu
+                                  el1_interrupt
+                                  el1h_64_irq_handler
+                                  el1h_64_irq
+                                  |          
+                                   --6.23%--default_idle_call
+                                             |          
+                                              --6.23%--cpuidle_idle_call
+                                                        do_idle
+                                                        cpu_startup_entry
+                                                        |          
+                                                         --4.69%--secondary_start_kernel
+                                                                   __secondary_switched
+     5.02%  [k] inet_gro_receive                       -      -            
+            |          
+             --4.68%--dev_gro_receive
+                       gro_receive_skb
+                       xeu_rx_poll
+                       __napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       |          
+                        --4.67%--__do_softirq
+                                  ____do_softirq
+                                  call_on_irq_stack
+                                  do_softirq_own_stack
+                                  __irq_exit_rcu
+                                  irq_exit_rcu
+                                  el1_interrupt
+                                  el1h_64_irq_handler
+                                  el1h_64_irq
+                                  |          
+                                   --4.64%--default_idle_call
+                                             cpuidle_idle_call
+                                             do_idle
+                                             cpu_startup_entry
+                                             |          
+                                              --3.55%--secondary_start_kernel
+                                                        __secondary_switched
+     4.91%  [k] napi_build_skb                         -      -            
+            |          
+             --4.74%--xeu_rx_poll
+                       __napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       |          
+                        --4.72%--__do_softirq
+                                  ____do_softirq
+                                  call_on_irq_stack
+                                  do_softirq_own_stack
+                                  __irq_exit_rcu
+                                  irq_exit_rcu
+                                  el1_interrupt
+                                  el1h_64_irq_handler
+                                  el1h_64_irq
+                                  |          
+                                   --4.70%--default_idle_call
+                                             cpuidle_idle_call
+                                             do_idle
+                                             cpu_startup_entry
+                                             |          
+                                              --3.50%--secondary_start_kernel
+                                                        __secondary_switched
+     4.70%  [k] tcp_gro_receive                        -      -            
+            |          
+             --4.29%--tcp4_gro_receive
+                       inet_gro_receive
+                       dev_gro_receive
+                       gro_receive_skb
+                       xeu_rx_poll
+                       __napi_poll
+                       net_rx_action
+                       handle_softirqs
+                       |          
+                        --4.27%--__do_softirq
+                                  ____do_softirq
+                                  call_on_irq_stack
+                                  do_softirq_own_stack
+                                  __irq_exit_rcu
+                                  irq_exit_rcu
+                                  el1_interrupt
+                                  el1h_64_irq_handler
+                                  el1h_64_irq
+                                  |          
+                                   --4.25%--default_idle_call
+                                             |          
+                                              --4.25%--cpuidle_idle_call
+                                                        do_idle
+                                                        cpu_startup_entry
+                                                        |          
+                                                         --3.18%--secondary_start_kernel
+                                                                   __secondary_switched
+     4.67%  [k] _raw_spin_unlock_irqrestore            -      -            
+            |          
+             --3.38%--wake_up_process
+                       svc_pool_wake_idle_thread
+                       svc_xprt_enqueue.part.0
+                       svc_xprt_enqueue
+                       svc_data_ready
+                       tcp_data_ready
+                       |          
+                        --3.35%--tcp_data_queue
+                                  tcp_rcv_established
+                                  tcp_v4_do_rcv
+                                  tcp_v4_rcv
+                                  ip_protocol_deliver_rcu
+                                  ip_local_deliver_finish
+                                  ip_local_deliver
+                                  ip_sublist_rcv_finish
+                                  ip_sublist_rcv
+                                  ip_list_rcv
+                                  __netif_receive_skb_list_core
+                                  netif_receive_skb_list_internal
+                                  |          
+                                   --3.06%--gro_complete.constprop.0
+                                             |          
+                                              --2.92%--dev_gro_receive
+                                                        gro_receive_skb
+                                                        xeu_rx_poll
+                                                        __napi_poll
+                                                        net_rx_action
+                                                        handle_softirqs
+                                                        |          
+                                                         --2.91%--__do_softirq
+                                                                   ____do_softirq
+                                                                   call_on_irq_stack
+                                                                   do_softirq_own_stack
+                                                                   __irq_exit_rcu
+                                                                   irq_exit_rcu
+                                                                   el1_interrupt
+                                                                   el1h_64_irq_handler
+                                                                   el1h_64_irq
+                                                                   |          
+                                                                    --2.90%--default_idle_call
+                                                                              cpuidle_idle_call
+                                                                              do_idle
+                                                                              cpu_startup_entry
+                                                                              |          
+                                                                               --2.16%--secondary_start_kernel
+                                                                                         __secondary_switched
+     3.34%  [k] dev_gro_receive                        -      -            
+            |          
+             --3.05%--gro_receive_skb
+                       |          
+                        --3.05%--xeu_rx_poll
+                                  __napi_poll
+                                  net_rx_action
+                                  handle_softirqs
+                                  |          
+                                   --3.04%--__do_softirq
+                                             ____do_softirq
+                                             call_on_irq_stack
+                                             do_softirq_own_stack
+                                             __irq_exit_rcu
+                                             irq_exit_rcu
+                                             el1_interrupt
+                                             el1h_64_irq_handler
+                                             el1h_64_irq
+                                             |          
+                                              --3.04%--default_idle_call
+                                                        cpuidle_idle_call
+                                                        do_idle
+                                                        cpu_startup_entry
+                                                        |          
+                                                         --2.33%--secondary_start_kernel
+                                                                   __secondary_switched
+     2.26%  [k] gro_list_prepare                       -      -            
+     2.24%  [k] tcp4_gro_receive                       -      -            
+#
+# (Tip: For a higher level overview, try: perf report --sort comm,dso)
+#

@@ -1,0 +1,30 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 4K of event 'll_cache_miss_rd'
+# Event count (approx.): 22090000
+#
+# Overhead  Symbol                                     IPC   [IPC Coverage]
+# ........  .........................................  ....................
+#
+    29.04%  [k] xeu_tx_poll                            -      -            
+    20.67%  [k] __sock_wfree                           -      -            
+    10.86%  [k] tcp_wfree                              -      -            
+     7.51%  [k] dql_completed                          -      -            
+     5.89%  [k] skb_release_data                       -      -            
+     4.75%  [k] __memcg_slab_free_hook                 -      -            
+     2.76%  [k] default_idle_call                      -      -            
+     2.33%  [k] kfree                                  -      -            
+     2.26%  [k] _raw_spin_unlock_irqrestore            -      -            
+     2.06%  [k] napi_consume_skb                       -      -            
+     1.77%  [k] handle_softirqs                        -      -            
+     1.58%  [k] free_to_pcs_bulk                       -      -            
+     0.84%  [k] __free_to_pcs_batch                    -      -            
+     0.84%  [k] sched_balance_update_blocked_averages  -      -            
+     0.72%  [k] napi_complete_done                     -      -            
+     0.57%  [k] dma_unmap_phys                         -      -            
+#
+# (Tip: See assembly instructions with percentage: perf annotate <symbol>)
+#
