@@ -1,3 +1,168 @@
+# 29 October: the kernel with the region's per-device mapping — tardis1 copy on two ports, tardis2 loan on one — read this first
+
+Mike pushed the tip on 29 October evening (`effa3133c00a`, its last code
+commit `0c375e06bf64`) and started a GitLab build from it. That kernel
+goes on both servers:
+
+- **tardis1:** copy mode on both ports. It is the first run of the
+  region's per-device mapping with two devices sharing the region, and
+  of everything FLAMEGRAPH kept since build 494.
+- **tardis2:** loan mode on port a, FLAMEGRAPH round 45's step 4.
+
+Nothing in this section has run yet.
+
+**What the kernel carries that has never run anywhere:**
+`0c375e06bf64` "page_pool: keep a fixed receive region page mapped for its
+device". The account is [`../FLAMEGRAPH/45-region-holders/`](../FLAMEGRAPH/45-region-holders/README.md),
+steps 3 and 4.
+
+- **Why:** a region page that went back to the region was unmapped,
+  its DMA index erased from the pool's `dma_mapped` xarray, and mapped
+  and indexed again by the next ring to take it. That cost about 0.74k
+  nfsd and 0.58k ring cycles a page, most of it the xarray, whose nodes
+  bounce between nfsd's 48 CPUs and the ring's. It is why a shallow
+  pool stack (`rx_region_stack` 64, a third less of the region in use)
+  cost loan mode 3 to 3.5% (round 45, run111 and run112).
+- **What it does:**
+  - Each device that maps region pages (per DMA direction, up to 8) gets a
+    slot: a free list of pages still mapped for it. The region keeps an
+    owner byte per page.
+  - A pool returns its pages to its slot's list still mapped. It takes
+    pages in this order:
+    1. its own slot's list, with a sync and nothing else;
+    2. the unmapped pages, mapped with no xarray index;
+    3. another device's list, each page unmapped for that device under
+       the region's lock.
+  - When a device's last pool is destroyed (port down, xeu unload),
+    `page_pool_scrub()` has the region unmap every page still mapped
+    for that device, free or still out, and the slot gives up its
+    device reference.
+  - A pool that does not map, or finds every slot taken, keeps the old
+    round trip.
+- **debugfs:** `/sys/kernel/debug/page_pool_rx_region` gains
+  `free_unmapped` and one `mapped <pci> dir <d> pools <n> free <n>`
+  line per slot. That line is the first proof the kernel has it.
+- **Built:** with W=1 on `net/core/` (build 499's `.config`), and
+  checkpatch `--strict` clean. sparse is not on tardis2, so it has not
+  been run.
+
+**Also new on tardis1 since build 494:** every code commit FLAMEGRAPH
+kept on tardis2 (`git log --oneline 77f82c816493..0c375e06bf64 -- . ':!NFSD_TCP_WRITE_ZEROCOPY' ':!AGENTS.md'`).
+
+- **Those copy mode runs through:**
+  - the wake changes (`2fc9cd2e839b`, `eff5f16d4f30`, `0f0ed4159a12`,
+    `6c6dc284fed0`);
+  - nfsd's reused credentials (`916c11a2d1fc`) and its reply cache size
+    (`635e44bf37bf`);
+  - page_pool's stack depth (`dc23eac70f34`), `rx_region`'s own line
+    (`085734569d9d`), and the per-device mapping.
+- **What tardis2 measured but tardis1 has not run**, all held by
+  `settled.sh`:
+  - `drc_max_entries` 4096;
+  - `skb_defer_max` 0;
+  - xeu's `rx_prefetch` Y, `rx_gro_frags` Y and `irq_msix_mask` Y;
+  - **NAPI's deferral, 2/10000 on port a and 0/0 on port b**
+    (FLAMEGRAPH round 44, one port).
+
+  `rodata=noalias` is held on tardis2 only.
+
+## tardis1: copy mode on both ports
+
+**What to find out:**
+1. **No regression.** The two-port copy runs are to match build 494's
+   58.47 and 57.89 GB/s (`$L/t1-tipkernel/`, `two-384k-1` and `-2`).
+2. **The per-device mapping with two devices.** There are two slots,
+   each port's pages are mapped for its own function, and each slot
+   goes and comes back cleanly with its port.
+3. **The region's working set in copy mode on two ports**, at the
+   settled stack (0, the ring's 256) against 64. On tardis2, one port,
+   64 took copy mode's mean in use from 1132 to 774 pages with no cost
+   (round 45, run111).
+
+**The first ten minutes**, after "The boot into the kernel built from the
+tip" further down, items 1 to 6 (the kernel, its own sunrpc, the
+packages, `arm_cmn`, the drives, the bring-up):
+
+1. **xeu.** `settled.sh` wants `rx_gro_frags` and `rx_prefetch`
+   (kmod-xsight 2.0.1-13: kernel-rpmtree `b3cd3d5`, pushed). Build it
+   for the new kernel with `./build-kmod.sh`, install it (`rpm -U`) and
+   reload `xeu` before any region is bound. Do this only with no NFS
+   client connected (`ss -Htn state established '( sport = :2049 )'`),
+   then `./bringup.sh 32768 256` and `./port-setup.sh enp164s0f0 56`.
+2. **`./settled.sh apply`** must end in "the settled setting". The
+   receive region devices are both ports' PCI functions.
+3. **The region:** `cat /sys/kernel/debug/page_pool_rx_region`.
+   - Two `mapped` lines, one per port, each with `pools 4`.
+   - `escaped 0`, `alloc_fail 0`.
+   - No `mapped` line at all means the kernel does not have
+     `0c375e06bf64`: stop there.
+4. **A slot's life**, with no client connected:
+   - `ip link set enp164s0f0 down`: its `mapped` line goes,
+     `free_unmapped` takes its pages back, `escaped` stays 0, and dmesg
+     has no WARNING.
+   - `ip link set enp164s0f0 up`: the line comes back.
+   - Then the same for port a.
+   - Then `./settled.sh apply` again, since an open undoes part of it.
+5. **KUnit** from the package (`../run-kunit.sh`). On 494 the counts were
+   7, 50, 7 and 10, and FLAMEGRAPH added cases since, so record the new
+   counts. No failure and no skip.
+
+**The runs**, each after an fstrim of all eight drives and 120 s of rest,
+with `twoport.sh`'s defaults (`WARM=15 RUNTIME=45`, four drives a port).
+No `WRITES` means budget 0, which is copy mode. Read `drives.txt`
+before believing a figure.
+
+1. **As build 494 ran, both ports at deferral 0/0** (`DEFER` sets both
+   for the run), twice:
+
+       DEFER=0/0 RCVBUF=393216 ENTRIES=128 ./twoport.sh $L/t1-<build>/two-copy-A-1 ab
+
+2. **The stack at 64**, twice. `export EXP_RX_REGION_STACK=64; ./settled.sh
+   apply` reopens both ports for it. Keep it exported through the runs,
+   since twoport.sh's audit reads it; the twoport.sh line is the same.
+   Then `unset EXP_RX_REGION_STACK; ./settled.sh apply`.
+3. **Optional: both ports at deferral 2/10000** (`DEFER=2/10000`), at
+   the settled stack, twice. It has only been measured on one port, and
+   `settled.sh` holds port b at 0/0 until a run like this one shows the
+   same.
+
+**For each run, record:**
+- each port's GB/s, and the wire in the window;
+- the region's peak (`summary.txt`, "region pages in use at most");
+- the mean in use: the debugfs `free` every 0.2 s for 10 s, as
+  `../FLAMEGRAPH/45-region-holders/run111.sh` does;
+- each slot's `free` after the run;
+- `./cost.sh RUNDIR` for the rings' and nfsd's cycles a WRITE;
+- `admitted`, which must not move in copy mode.
+
+## tardis2: loan mode on port a (FLAMEGRAPH round 45, step 4)
+
+**After the boot:**
+- `rodata=noalias` is in `/etc/kernel/cmdline`, so it carries over.
+- The drives, `nfs-server` and `./bringup.sh 32768 256`, as in "tardis2
+  on 27 October" below.
+- The kernel's own sunrpc and nfsd are now the tip's, so `updates/` is
+  empty for the new kernel.
+- xeu: kmod-xsight 2.0.1-13 built for it with `./build-kmod.sh`.
+  Round 45's kept xeu, `CA0931345E46C929B11D01F`, is the same source;
+  check its srcversion.
+- Then `./settled.sh apply` and the region checks of tardis1's items 3
+  and 4, with the one `mapped 0000:a1:00.0` line.
+
+**Then:**
+1. Update the srcversions that `../FLAMEGRAPH/45-region-holders/run111.sh`
+   and `run112.sh` pin (`XK`, `N`, `K`).
+2. Run run111 (stack 256 against 64, loan64 and copy) and run112 (the
+   profile).
+
+**What should show:**
+- B's +3.9k ring and +10.5k nfsd cycles a WRITE should fall to about
+  the region's lock, a few hundred cycles a page.
+- A itself should come in under run111's A (130.2k and 296.4k), since
+  it too sent about 3 pages a WRITE round.
+- In run112's profile, `__xa_cmpxchg` and `page_pool_register_dma_index`
+  should be gone from the round trip.
+
 # tardis2 on 27 October: build 499 with `rodata=noalias` — read this first
 
 Since 23 October the work on tardis2 is the loan's CPU cost a WRITE,
