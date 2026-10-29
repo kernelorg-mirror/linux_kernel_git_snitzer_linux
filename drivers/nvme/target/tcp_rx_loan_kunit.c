@@ -130,7 +130,8 @@ static void nvmet_tcp_kunit_actor_borrows(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, cmd->flags & NVMET_TCP_F_RX_LOAN);
 }
 
-static void nvmet_tcp_kunit_locked_head_copies(struct kunit *test)
+/* A locked head's bytes go to the bounce page; the table takes them. */
+static void nvmet_tcp_kunit_locked_head_bounced(struct kunit *test)
 {
 	struct nvmet_tcp_kunit *k = test->priv;
 	struct nvmet_tcp_cmd *cmd = nvmet_tcp_kunit_cmd(test, k->queue, 3000);
@@ -138,12 +139,125 @@ static void nvmet_tcp_kunit_locked_head_copies(struct kunit *test)
 	int stop;
 
 	KUNIT_ASSERT_NOT_NULL(test, skb);
-	skb_put(skb, 3000);
+	memset(skb_put(skb, 3000), 0xa5, 3000);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_actor(cmd, skb, &stop), 3000);
+	KUNIT_EXPECT_EQ(test, stop, NVMET_TCP_RX_GO);
+	KUNIT_EXPECT_EQ(test, cmd->lt.count, 1U);
+	KUNIT_EXPECT_EQ(test, cmd->lt.copied_bytes, 3000U);
+	KUNIT_EXPECT_EQ(test, cmd->lt.borrowed_count, 0U);
+	KUNIT_EXPECT_NOT_NULL(test, cmd->rx_bounce);
+	kfree_skb(skb);
+	nvmet_tcp_free_cmd_buffers(cmd);
+	KUNIT_EXPECT_NULL(test, cmd->rx_bounce);
+}
+
+/*
+ * A small locked head (as virtio-net and GRO build it) before page frags:
+ * its bytes are bounced, the frags still lent, in data order.
+ */
+static void nvmet_tcp_kunit_locked_head_mixed(struct kunit *test)
+{
+	struct nvmet_tcp_kunit *k = test->priv;
+	struct nvmet_tcp_cmd *cmd = nvmet_tcp_kunit_cmd(test, k->queue, 3000);
+	struct sk_buff *skb = alloc_skb(56, GFP_KERNEL);
+	u8 buf[2];
+	int stop;
+
+	KUNIT_ASSERT_NOT_NULL(test, skb);
+	memset(skb_put(skb, 56), 0xa5, 56);
+	get_page(k->page);
+	skb_fill_page_desc(skb, 0, k->page, 0, 2944);
+	skb->len += 2944;
+	skb->data_len = 2944;
+	skb->truesize += PAGE_SIZE;
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_actor(cmd, skb, &stop), 3000);
+	KUNIT_EXPECT_EQ(test, stop, NVMET_TCP_RX_GO);
+	KUNIT_EXPECT_EQ(test, cmd->lt.copied_bytes, 56U);
+	KUNIT_EXPECT_EQ(test, cmd->lt.borrowed_bytes, 2944U);
+	kfree_skb(skb);
+	/* The frag's page stays lent beyond the skb's life. */
+	KUNIT_EXPECT_GT(test, page_ref_count(k->page), 1);
+	KUNIT_ASSERT_EQ(test, nvmet_tcp_rx_to_sgl(cmd), 0);
+	KUNIT_EXPECT_EQ(test, page_ref_count(k->page), 1);
+	KUNIT_EXPECT_NULL(test, cmd->rx_bounce);
+	KUNIT_ASSERT_NOT_NULL(test, cmd->req.sg);
+	sg_pcopy_to_buffer(cmd->req.sg, cmd->req.sg_cnt, buf, 2, 55);
+	KUNIT_EXPECT_EQ(test, buf[0], 0xa5);
+	KUNIT_EXPECT_EQ(test, buf[1], 0x5a);
+	nvmet_tcp_free_cmd_buffers(cmd);
+}
+
+/* A locked head and page frags, @fill in the head, as virtio-net builds it. */
+static struct sk_buff *nvmet_tcp_kunit_head_skb(struct kunit *test,
+						struct page *page, u8 fill)
+{
+	struct sk_buff *skb = alloc_skb(56, GFP_KERNEL);
+
+	KUNIT_ASSERT_NOT_NULL(test, skb);
+	memset(skb_put(skb, 56), fill, 56);
+	get_page(page);
+	skb_fill_page_desc(skb, 0, page, 0, 2944);
+	skb->len += 2944;
+	skb->data_len = 2944;
+	skb->truesize += PAGE_SIZE;
+	return skb;
+}
+
+/*
+ * Two such skbs into one command: the second head goes after the first in
+ * the bounce page, and each lands at its own place in the data.
+ */
+static void nvmet_tcp_kunit_locked_head_two_skbs(struct kunit *test)
+{
+	struct nvmet_tcp_kunit *k = test->priv;
+	struct nvmet_tcp_cmd *cmd = nvmet_tcp_kunit_cmd(test, k->queue, 6000);
+	struct sk_buff *skb;
+	u8 buf[2];
+	int stop;
+
+	skb = nvmet_tcp_kunit_head_skb(test, k->page, 0xa5);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_actor(cmd, skb, &stop), 3000);
+	KUNIT_EXPECT_EQ(test, stop, NVMET_TCP_RX_GO);
+	kfree_skb(skb);
+	skb = nvmet_tcp_kunit_head_skb(test, k->page, 0xc3);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_actor(cmd, skb, &stop), 3000);
+	KUNIT_EXPECT_EQ(test, stop, NVMET_TCP_RX_GO);
+	kfree_skb(skb);
+	KUNIT_EXPECT_EQ(test, cmd->rx_bounce_used, 112U);
+	KUNIT_EXPECT_EQ(test, cmd->lt.copied_bytes, 112U);
+	KUNIT_EXPECT_EQ(test, cmd->lt.borrowed_bytes, 5888U);
+	KUNIT_ASSERT_EQ(test, nvmet_tcp_rx_to_sgl(cmd), 0);
+	KUNIT_EXPECT_EQ(test, page_ref_count(k->page), 1);
+	KUNIT_EXPECT_NULL(test, cmd->rx_bounce);
+	KUNIT_ASSERT_NOT_NULL(test, cmd->req.sg);
+	sg_pcopy_to_buffer(cmd->req.sg, cmd->req.sg_cnt, buf, 2, 0);
+	KUNIT_EXPECT_EQ(test, buf[0], 0xa5);
+	sg_pcopy_to_buffer(cmd->req.sg, cmd->req.sg_cnt, buf, 2, 2999);
+	KUNIT_EXPECT_EQ(test, buf[0], 0x5a);
+	KUNIT_EXPECT_EQ(test, buf[1], 0xc3);
+	sg_pcopy_to_buffer(cmd->req.sg, cmd->req.sg_cnt, buf, 2, 3055);
+	KUNIT_EXPECT_EQ(test, buf[0], 0xc3);
+	KUNIT_EXPECT_EQ(test, buf[1], 0x5a);
+	nvmet_tcp_free_cmd_buffers(cmd);
+}
+
+/* A locked head past the bounce page's room still copies the record. */
+static void nvmet_tcp_kunit_locked_head_copies(struct kunit *test)
+{
+	struct nvmet_tcp_kunit *k = test->priv;
+	struct nvmet_tcp_cmd *cmd = nvmet_tcp_kunit_cmd(test, k->queue,
+							PAGE_SIZE + 1);
+	struct sk_buff *skb = alloc_skb(PAGE_SIZE + 1, GFP_KERNEL);
+	int stop;
+
+	KUNIT_ASSERT_NOT_NULL(test, skb);
+	skb_put(skb, PAGE_SIZE + 1);
 	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_actor(cmd, skb, &stop), 0);
 	KUNIT_EXPECT_EQ(test, stop, NVMET_TCP_RX_COPY);
 	KUNIT_EXPECT_EQ(test, cmd->lt.count, 0U);
 	kfree_skb(skb);
 	nvmet_tcp_free_cmd_buffers(cmd);
+	KUNIT_EXPECT_NULL(test, cmd->rx_bounce);
 }
 
 /*
@@ -1070,6 +1184,9 @@ static void nvmet_tcp_kunit_own_budget(struct kunit *test)
 static struct kunit_case nvmet_tcp_rx_loan_cases[] = {
 	KUNIT_CASE(nvmet_tcp_kunit_reserve_rule),
 	KUNIT_CASE(nvmet_tcp_kunit_actor_borrows),
+	KUNIT_CASE(nvmet_tcp_kunit_locked_head_bounced),
+	KUNIT_CASE(nvmet_tcp_kunit_locked_head_mixed),
+	KUNIT_CASE(nvmet_tcp_kunit_locked_head_two_skbs),
 	KUNIT_CASE(nvmet_tcp_kunit_locked_head_copies),
 	KUNIT_CASE(nvmet_tcp_kunit_copy_counted),
 	KUNIT_CASE(nvmet_tcp_kunit_data_done_once),

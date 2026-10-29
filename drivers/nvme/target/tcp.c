@@ -172,6 +172,8 @@ struct nvmet_tcp_cmd {
 	/* rx_loan region receive (NVMET_TCP_F_RX_LOAN) */
 	struct rx_loan_table		lt;
 	struct rx_loan_credit		cr;
+	struct page			*rx_bounce;	/* locked heads' bytes */
+	u32				rx_bounce_used;
 	u32				r2t_end;	/* end of the solicited unit */
 	struct llist_node		rx_done_node;
 };
@@ -665,6 +667,10 @@ static void nvmet_tcp_rx_return(struct nvmet_tcp_cmd *cmd)
 		rx_loan_return(&cmd->cr, sample, 0, &out);
 	}
 	rx_loan_table_reset_consumer(&cmd->lt, &nvmet_tcp_rx_consumer);
+	if (cmd->rx_bounce) {
+		__free_page(cmd->rx_bounce);
+		cmd->rx_bounce = NULL;
+	}
 }
 
 /* Return what @cmd holds, free its table: it is not loaned any more. */
@@ -971,9 +977,6 @@ static bool nvmet_tcp_rx_borrowable(struct sk_buff *skb, unsigned int offset,
 	if (skb_has_frag_list(skb) || skb_zcopy(skb) ||
 	    !skb_frags_readable(skb))
 		return false;
-	/* A kmalloc'ed or shared head cannot be lent. */
-	if (offset < cursor && skb_head_is_locked(skb))
-		return false;
 	for (i = 0; i < skb_shinfo(skb)->nr_frags && cursor < offset + len;
 	     i++) {
 		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
@@ -984,6 +987,35 @@ static bool nvmet_tcp_rx_borrowable(struct sk_buff *skb, unsigned int offset,
 		cursor += skb_frag_size(frag);
 	}
 	return true;
+}
+
+/*
+ * A kmalloc'ed or shared head cannot be lent: copy its @len bytes into
+ * @cmd's bounce page, as an entry of their own beside the loans (as kNFSd
+ * copies a locked head into its arena), counted as copied.  -ENOSPC: no
+ * page, or no room left in it; the caller copies the rest.
+ */
+static int nvmet_tcp_rx_head_copy(struct nvmet_tcp_cmd *cmd, const void *data,
+				  unsigned int len, unsigned int *done)
+{
+	int ret;
+
+	if (!cmd->rx_bounce) {
+		cmd->rx_bounce = alloc_page(GFP_NOWAIT | __GFP_NOWARN);
+		if (!cmd->rx_bounce)
+			return -ENOSPC;
+		cmd->rx_bounce_used = 0;
+	}
+	if (len > PAGE_SIZE - cmd->rx_bounce_used)
+		return -ENOSPC;
+	memcpy(page_address(cmd->rx_bounce) + cmd->rx_bounce_used, data, len);
+	ret = rx_loan_table_append(&cmd->lt, cmd->rx_bounce,
+				   cmd->rx_bounce_used, len, false, false);
+	if (ret)
+		return ret;
+	cmd->rx_bounce_used += len;
+	*done += len;
+	return 0;
 }
 
 /* Borrow @len bytes at @offset of @page, a page at a time. */
@@ -1131,11 +1163,14 @@ static int nvmet_tcp_rx_actor(read_descriptor_t *desc, struct sk_buff *skb,
 	cursor = skb_headlen(skb);
 	if (offset < cursor) {
 		const unsigned char *data = skb->data + offset;
+		unsigned int take = min(want, cursor - offset);
 
-		ret = nvmet_tcp_rx_borrow(lt, virt_to_page(data),
-					  offset_in_page(data),
-					  min(want, cursor - offset),
-					  skb->pp_recycle, &done);
+		if (skb_head_is_locked(skb))
+			ret = nvmet_tcp_rx_head_copy(cmd, data, take, &done);
+		else
+			ret = nvmet_tcp_rx_borrow(lt, virt_to_page(data),
+						  offset_in_page(data), take,
+						  skb->pp_recycle, &done);
 	}
 	for (i = 0; !ret && done < want && i < skb_shinfo(skb)->nr_frags; i++) {
 		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
@@ -1150,7 +1185,7 @@ static int nvmet_tcp_rx_actor(read_descriptor_t *desc, struct sk_buff *skb,
 						  skb->pp_recycle, &done);
 		cursor += size;
 	}
-	/* -ENOSPC: the table is full; copy the rest. */
+	/* -ENOSPC: the table or the bounce page is full; copy the rest. */
 	if (ret)
 		rd->stop = NVMET_TCP_RX_COPY;
 	nvmet_tcp_rx_hold_account(cmd->queue, skb, done, need);
