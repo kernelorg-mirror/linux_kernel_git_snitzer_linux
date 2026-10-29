@@ -1,0 +1,4 @@
+17:19:51 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu CA0931345E46C929B11D01F
+17:24:01 r107-1-loan64-A | total 40.48 GB/s | 1 no-step | 1 placed | r107-1-loan64-A ring 44.3 nfsd 93.8 us/W (38506 WRITEs/s) | ring 139.7k cycles 306.5k instructions, nfsd 297.2k cycles 303.4k instructions a WRITE | peak 6415 | admitted 1542248, denied 1622500 | client retransmits in the window: 7 | RX interrupts 0.13 a WRITE | defer 0/0
+the client has NFS mounted from 192.168.1.195, not tardis2: another server's run? (192.168.1.195)
+17:24:01 STOPPED: client not free

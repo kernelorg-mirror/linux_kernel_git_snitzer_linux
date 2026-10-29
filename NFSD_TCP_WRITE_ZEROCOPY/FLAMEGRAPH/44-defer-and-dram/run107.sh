@@ -9,8 +9,10 @@
 #   B  2 / 10000 ns   a poll that completes keeps the ring masked and polls
 #                     again from a 10 us timer, unmasking after 2 empty polls
 #   C  2 / 30000 ns   the same with 30 us
-# Each run also reports the RX interrupts a WRITE over the whole run.  Both
-# are put back to 0 at the end, and on a stop.
+# Each run also reports the RX interrupts a WRITE over 8 s from 10 s into
+# its timed load (an open of the port, which twoport.sh makes, zeroes the
+# counts in /proc/interrupts, so they are taken inside the load).  Both are
+# put back to 0 at the end, and on a stop.
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
 O=$L/t2-r107
@@ -46,12 +48,14 @@ for a in A B C C B A A B C; do
 	i=$((i + 1)); tag=r107-$i-loan64-$a
 	load $tag
 	defer ${SET[$a]} || die "$tag: deferral not set"
-	q0=$(rxirq); w0=$(writes)
+	( timed_load $O/$tag 10 || exit 1
+	  q0=$(rxirq); w0=$(writes); sleep 8; q1=$(rxirq); w1=$(writes)
+	  awk -v q=$((q1 - q0)) -v w=$((w1 - w0)) 'BEGIN {printf "%.2f\n", q / w}' > $O/$tag-irq.txt ) &
 	env FS_A="$FS" FS_B= WARM=10 RUNTIME=30 TSV=$O/results.tsv TAG=$tag WRITES=64 ./twoport.sh $O/$tag a > $O/$tag.log 2>&1; rc=$?
-	q1=$(rxirq); w1=$(writes); set=$(cat $D/napi_defer_hard_irqs)/$(cat $D/gro_flush_timeout)
+	wait; set=$(cat $D/napi_defer_hard_irqs)/$(cat $D/gro_flush_timeout)
 	defer 0 0
 	[ $rc = 0 ] || die "$tag: $(grep -E 'BAD|FAILED|no answer|refuse|not free' $O/$tag.log | head -3)"
-	say "$tag | $(grep '^total' $O/$tag.log) | $(grep -c 'no drive stepped down' $O/$tag.log) no-step | $(grep -c 'placed [0-9]* flows' $O/$tag/geometry.txt) placed | $(./cost.sh $O/$tag) | peak $((32768 - $(sort -n $O/$tag/region-min-free.txt | head -1))) | $(grep -o 'admitted [0-9]*, denied [0-9]*' $O/$tag/summary.txt) | $(grep -o 'client retransmits.*' $O/$tag/window.txt) | RX interrupts $(awk -v q=$((q1 - q0)) -v w=$((w1 - w0)) 'BEGIN {printf "%.2f", q / w}') a WRITE | defer $set"
+	say "$tag | $(grep '^total' $O/$tag.log) | $(grep -c 'no drive stepped down' $O/$tag.log) no-step | $(grep -c 'placed [0-9]* flows' $O/$tag/geometry.txt) placed | $(./cost.sh $O/$tag) | peak $((32768 - $(sort -n $O/$tag/region-min-free.txt | head -1))) | $(grep -o 'admitted [0-9]*, denied [0-9]*' $O/$tag/summary.txt) | $(grep -o 'client retransmits.*' $O/$tag/window.txt) | RX interrupts $(cat $O/$tag-irq.txt 2> /dev/null || echo -) a WRITE | defer $set"
 done
 [ "$(dmesg | grep -c 'WARNING:')" = $W0 ] || die "a new WARNING in dmesg"
 ./settled.sh apply > $O/apply-end.txt 2>&1 || die "not settled at the end: $(grep -E 'BAD|FAILED' $O/apply-end.txt | head -3)"
