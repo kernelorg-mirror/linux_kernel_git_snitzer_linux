@@ -110,3 +110,24 @@ SPE was the plan, and is not to be had: `arm_spe_pmu` loads, but the firmware's 
 - **The rings' 1.06k DRAM reads a WRITE are not explained by this.** The lines the card has just written, a completion or a frame's headers, are read by the ring within microseconds of the fill, so they should hit in the L3. What the rings miss in DRAM is likelier their own state touched last by another core (page_pool's recycled pages and their `struct page`s, released on nfsd's CPUs; the sockets) or lines evicted between uses. The counters cannot say which.
 
 **So:** the rings' memory stalls (31k cycles a WRITE, 19%) come from about 1.06k DRAM reads and 1.2k L3 hits a WRITE, and the payload's own path through DRAM is the system's, not the rings'. Naming the rings' lines needs either a precise profile (pseudo-NMI, a reboot) or a diagnostic xeu that times the poll's remaining first touches as round 41 timed GRO's: the completion entry, the software ring entry, and the refill's take of a recycled page from page_pool.
+
+## 3. The poll's first touches (r102, to run)
+
+[xeu-diag-poll-first-touches.patch](xeu-diag-poll-first-touches.patch), on round 41's kept xeu (`9461DCE8A67161729215CE0`), adds `poll_lat_every` (0, off, by default). Times are the 1 GHz counter after an ISB; a load is timed with a DSB LD before and after, a call whole:
+
+| | what | how often |
+|---|---|---|
+| `own` | a line of the CPU's own, just written: the floor (about 32 ns) | one frame in N |
+| `cmpl_first` | the completion at a poll's head, when valid | every poll |
+| `cmpl_next` | the next frame's completion, where `xeu_rx_prefetch_next()` reads its valid bit: the first touch of every later completion | one frame in N |
+| `sw_entry` | the next frame's software ring entry | one frame in N |
+| `frame_page` | the next frame's buffer's `struct page`, before the prefetch asks for it | one frame in N |
+| `frame_hdr` | the next frame's first header line, before the prefetch asks for it | one frame in N |
+| `pp_alloc` | a call of `page_pool_alloc_pages()` in the refill, whole: from the pool's own cache, or a batch taken from its ring of pages returned by other CPUs | one page in N |
+| `new_page` | the `struct page` that call returned, at its first load | one page in N |
+| `doorbell` | the refill's doorbell, `xeu_ring_db()`, whole | every refill |
+| `rearm` | `xeu_ring_irq_rearm()`, the MSI-X unmask, whole | every poll that completes |
+
+The lines are timed at their first touch, before the prefetch, so a time well above the floor is a line coming from the L3 (about 64–127 ns) or DRAM (128 ns or more), the lines the rings would miss without the prefetch or pay for at the poll's head. A sampled frame's lines are warm afterwards, so N is 16 and the run's counted cycles are not a result.
+
+[run102.sh](run102.sh): load the diagnostic xeu (refusing if an NFS client is connected), one loan64 run with sampling for 8 s from 10 s into the timed load, then round 41's kept xeu again and the settled setting.
