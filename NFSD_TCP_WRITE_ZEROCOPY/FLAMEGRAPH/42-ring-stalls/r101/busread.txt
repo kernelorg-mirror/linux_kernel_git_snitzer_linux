@@ -1,0 +1,1 @@
+read 512 MiB, 8388608 lines: bus_access_rd 16789278 (2.001 a line) l2d_cache_refill 1072823 (0.128 a line) ll_cache_miss_rd 8393333 (1.001 a line)

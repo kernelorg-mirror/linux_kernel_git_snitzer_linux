@@ -1,0 +1,7 @@
+# started on Thu Oct 29 00:51:30 2026
+
+5442312,,arm_cmn_0/hnf_slc_sf_cache_access/,1501285256,50.00,,
+5015415,,arm_cmn_0/hnf_cache_miss/,1501278184,50.00,,
+2135151,,arm_cmn_0/hnf_cache_fill/,1499990944,49.00,,
+611841,,arm_cmn_0/hnf_slc_eviction/,1499997368,49.00,,
+WRITEs,0
