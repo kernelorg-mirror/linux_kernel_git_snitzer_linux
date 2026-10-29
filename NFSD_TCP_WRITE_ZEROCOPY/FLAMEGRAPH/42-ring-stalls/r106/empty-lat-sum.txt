@@ -1,0 +1,28 @@
+WRITEs in the window 309632
+polls_irq                   2153817     6.96 a WRITE
+polls_re                    1109862     3.58 a WRITE
+empty_irq                    562994     1.82 a WRITE
+empty_re                     482337     1.56 a WRITE
+never_valid_irq              217431     0.70 a WRITE
+never_valid_re               134897     0.44 a WRITE
+kicks_irq                   3061762     9.89 a WRITE
+lost_irq                     907945     2.93 a WRITE
+kicks_timer                     639     0.00 a WRITE
+lost_timer                      515     0.00 a WRITE
+budget_used                  206440     0.67 a WRITE
+complete_false               903298     2.92 a WRITE
+unmasks                     2153943     6.96 a WRITE
+unmasks_after_zero_work      870822     2.81 a WRITE
+frames                     41913762   135.37 a WRITE
+                                        n     /W     mean    <128   128-   256-   512-   1us-   2us-   4us-  >=8us
+irq_to_poll                       2153817   6.96    342.8    0.0%  73.8%   4.1%  21.7%   0.3%   0.0%   0.0%   0.0%
+unmask_to_irq_empty                562991   1.82    799.3    0.0%   0.0%   0.0%  96.0%   3.8%   0.1%   0.0%   0.0%
+unmask_to_irq_work                1590813   5.14   6907.4    0.0%   0.0%   0.0%  63.3%   4.2%   4.9%   6.1%  21.5%
+wait_valid_irq                      93606   0.30   1817.3    0.5%   5.1%   9.5%  16.9%  27.5%  40.1%   0.5%   0.0%
+wait_valid_re                       76731   0.25   1728.5    0.9%   5.6%  10.9%  17.7%  27.4%  36.9%   0.5%   0.0%
+empty_poll_irq                     251957   0.81    142.6   14.2%  84.7%   0.5%   0.0%   0.4%   0.1%   0.0%   0.0%
+empty_irq_whole                    251957   0.81    378.6    0.0%   0.0%  98.7%   0.7%   0.5%   0.1%   0.0%   0.0%
+empty_poll_re                      270709   0.87    100.1   97.4%   2.3%   0.1%   0.0%   0.2%   0.0%   0.0%   0.0%
+work_poll                         2218348   7.16   7869.3    0.0%   0.0%   0.0%   1.4%  16.7%  29.2%  19.5%  33.3%
+unmask_to_irq_empty_after_zero     333762   1.08    798.6    0.0%   0.0%   0.0%  96.2%   3.6%   0.1%   0.0%   0.0%
+unmask_to_irq_empty_after_work     229229   0.74    800.3    0.0%   0.0%   0.0%  95.8%   4.1%   0.1%   0.0%   0.0%

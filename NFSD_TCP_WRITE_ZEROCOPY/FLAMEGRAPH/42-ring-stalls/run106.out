@@ -1,0 +1,57 @@
+16:30:02 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu 4A7F5BFDEEE8F39ACF263F6, region 32768, settled.sh audit rest: the settled setting
+16:34:18 r106-diag-loan64 | total 40.50 GB/s | 1 no-step | 1 placed | r106-diag-loan64 ring 42.2 nfsd 92.5 us/W (38630 WRITEs/s) | ring 139.3k cycles 306.2k instructions, nfsd 297.6k cycles 303.9k instructions a WRITE | peak 6388
+16:34:18 empty_lat from 16:33:28 end 16:33:36
+WRITEs in the window 309632
+polls_irq                   2153817     6.96 a WRITE
+polls_re                    1109862     3.58 a WRITE
+empty_irq                    562994     1.82 a WRITE
+empty_re                     482337     1.56 a WRITE
+never_valid_irq              217431     0.70 a WRITE
+never_valid_re               134897     0.44 a WRITE
+kicks_irq                   3061762     9.89 a WRITE
+lost_irq                     907945     2.93 a WRITE
+kicks_timer                     639     0.00 a WRITE
+lost_timer                      515     0.00 a WRITE
+budget_used                  206440     0.67 a WRITE
+complete_false               903298     2.92 a WRITE
+unmasks                     2153943     6.96 a WRITE
+unmasks_after_zero_work      870822     2.81 a WRITE
+frames                     41913762   135.37 a WRITE
+                                        n     /W     mean    <128   128-   256-   512-   1us-   2us-   4us-  >=8us
+irq_to_poll                       2153817   6.96    342.8    0.0%  73.8%   4.1%  21.7%   0.3%   0.0%   0.0%   0.0%
+unmask_to_irq_empty                562991   1.82    799.3    0.0%   0.0%   0.0%  96.0%   3.8%   0.1%   0.0%   0.0%
+unmask_to_irq_work                1590813   5.14   6907.4    0.0%   0.0%   0.0%  63.3%   4.2%   4.9%   6.1%  21.5%
+wait_valid_irq                      93606   0.30   1817.3    0.5%   5.1%   9.5%  16.9%  27.5%  40.1%   0.5%   0.0%
+wait_valid_re                       76731   0.25   1728.5    0.9%   5.6%  10.9%  17.7%  27.4%  36.9%   0.5%   0.0%
+empty_poll_irq                     251957   0.81    142.6   14.2%  84.7%   0.5%   0.0%   0.4%   0.1%   0.0%   0.0%
+empty_irq_whole                    251957   0.81    378.6    0.0%   0.0%  98.7%   0.7%   0.5%   0.1%   0.0%   0.0%
+empty_poll_re                      270709   0.87    100.1   97.4%   2.3%   0.1%   0.0%   0.2%   0.0%   0.0%   0.0%
+work_poll                         2218348   7.16   7869.3    0.0%   0.0%   0.0%   1.4%  16.7%  29.2%  19.5%  33.3%
+unmask_to_irq_empty_after_zero     333762   1.08    798.6    0.0%   0.0%   0.0%  96.2%   3.6%   0.1%   0.0%   0.0%
+unmask_to_irq_empty_after_work     229229   0.74    800.3    0.0%   0.0%   0.0%  95.8%   4.1%   0.1%   0.0%   0.0%
+12:              0.01     0.00     0.00     0.00     0.00     0.00     0.00     0.00  arch_timer
+16:              0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  emi_tx
+17:              0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  emi_rx
+58:              0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  nvme4q0
+64:              0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  nvme7q0
+68:              0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  nvme7q1
+80:              0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  nvme7q4
+574:             0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  nvme8q1
+575:             0.00     0.00     2.49     0.00     0.00     0.00     0.00     0.00  enp161s0f0-Rx-1
+576:             0.00     0.00     0.00     0.00     0.00     0.00     2.46     0.00  enp161s0f0-Rx-3
+578:             0.00     0.74     0.00     0.00     0.00     0.00     0.00     0.00  enp161s0f0-Tx-0
+579:             0.00     0.00     0.00     0.00     0.00     1.24     0.00     0.00  enp161s0f0-Tx-2
+580:             2.46     0.00     0.00     0.00     0.00     0.00     0.00     0.00  enp161s0f0-Rx-0
+581:             0.00     0.00     0.00     0.00     2.49     0.00     0.00     0.00  enp161s0f0-Rx-2
+582:             0.00     0.00     0.00     1.51     0.00     0.00     0.00     0.00  enp161s0f0-Tx-1
+583:             0.00     0.00     0.00     0.00     0.00     0.00     0.00     1.55  enp161s0f0-Tx-3
+IPI0:            0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  interrupts
+IPI1:            0.01     0.00     0.00     0.00     0.00     0.00     0.00     0.00  interrupts
+TIMER:           0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  
+NET_TX:          0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  
+NET_RX:          1.90     0.74     1.90     1.49     1.92     1.23     1.91     1.53  
+BLOCK:           0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  
+TASKLET:         0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  
+SCHED:           0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  
+RCU:             0.00     0.00     0.00     0.00     0.00     0.00     0.00     0.00  
+16:34:53 end: xeu CA0931345E46C929B11D01F, region 32768, settled.sh audit rest: the settled setting; DONE
