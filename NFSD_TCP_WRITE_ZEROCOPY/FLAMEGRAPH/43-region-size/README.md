@@ -73,10 +73,24 @@ Pages are 16 KiB: 64 pages are 1 MiB.
 
 - **Copy mode does not care about the region's size, down to 32 MiB.** Its peak is 18–20 MiB at every size, and its rate and cycles do not move.
 - **Loan mode loses rate as its budget shrinks:** 1.6% at 100 MiB, 6.4% at 64 MiB and 32% at 32 MiB. The two runs at 512 MiB, first and last, agree to 0.01 GB/s and 21 pages, so the steps are not drift.
-- **At 32 MiB the region ran out.** The budget left 1032 pages for the rings and the copied WRITEs, and copy mode alone needs 1168–1248. All 2048 pages were in use, and the ring failed 3352 allocations, each waiting for the refill timer. The 16 MiB margin is too small there. run109 runs it again with a budget of 720 pages.
+- **At 32 MiB the region ran out.** The budget left 1032 pages for the rings and the copied WRITEs, and copy mode alone needs 1168–1248. All 2048 pages were in use, and the ring failed 3352 allocations, each waiting for the refill timer. The 16 MiB margin is too small there. run109 ran it again with a budget of 720 pages, and that did not fit either (below).
 - **Cycles a WRITE fall with the budget, nfsd's most (296k to 232k), while the rate falls too.** So the smaller regions are not short of CPU. The likeliest limit is the number of WRITEs the budget lets hold loans at once, at the same 49% admitted. This is a reading, not shown.
 - **A loaned WRITE holds about 98 pages at peak, not 64:** 6306 pages at 512 MiB with up to 64 WRITEs on loan, beside the copied ones. twoport.sh charges 126 a WRITE.
 
-## 32 MiB with a budget that fits (r109, queued after round 44)
+## 32 MiB with a smaller budget (r109)
 
 [run109.sh](run109.sh): the region at 2048 pages, one loan run with the budget at 720 pages (`BUDGET_PAGES`, new in twoport.sh, with the reserve that `WRITES=5` gives), then 32768 again and the settled setting. 720 is below the 800–880 pages that copy mode's peak leaves, with a margin for its scatter.
+
+[run109.out](run109.out), at 19:06 to 19:11 on 29 October, after round 44:
+
+| region | budget, pages / MiB (WRITEs) | GB/s | peak in use, pages / MiB | ring alloc fails | ring cycles a WRITE | nfsd cycles a WRITE | WRITEs/s | admitted | paused |
+|---|---|---|---|---|---|---|---|---|---|
+| 32 MiB (r104) | 1016 / 15.9 MiB (7) | 27.67 | 2048 / 32.0 MiB, all of it | 3352 | 136.5k | 231.7k | 26.5k | 49.5% | 2 |
+| 32 MiB (r109) | 720 / 11.3 MiB (5) | **21.84** | **2048 / 32.0 MiB, all of it** | 6 | 137.1k | 227.3k | 20.8k | 49.6% | 0 |
+
+- **720 pages does not fit.** The estimate behind it added the budget to copy mode's peak (about 1170 + 720 = 1890 pages). The region still filled, so under loans something besides the loaned WRITEs holds pages that copy mode does not: the likeliest are records waiting in the sockets' receive queues before nfsd takes them. This is a reading, not shown. The run records only the region's lowest point, not what held it.
+- **The rate was flat and low the whole run, not in stretches.** The four drives carried 21.2 to 22.2 GB/s every second at 50 to 65% busy. The wire carried 22.05 GB/s with no FIFO or ring drops and 4 retransmits. The rings were 5% busy and nfsd 3%. The server was waiting, not working.
+- **A smaller budget gave a lower rate and almost no allocation failures** (6 against 3352). These figures do not explain that.
+
+Loan mode does not fit a 32 MiB region at a budget of 5 or 7 WRITEs, while copy mode runs there at 1170 pages. A budget that fits would first need a count of what holds the region's pages under loans.
+

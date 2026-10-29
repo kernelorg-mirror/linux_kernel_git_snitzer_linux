@@ -1,0 +1,5 @@
+19:06:30 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu CA0931345E46C929B11D01F
+19:06:51 region 2048 pages (32 MiB) made at 0x808e000000; page_pool: fixed rx region for 0000:a1:00.0 freed: 32768 pages at 0x8260000000, 0 escaped
+19:11:01 r109-region2048-loan-b720 | total 21.84 GB/s | 1 no-step | 1 placed | r109-region2048-loan-b720 ring 18.5 nfsd 77.0 us/W (20836 WRITEs/s) | ring 137.1k cycles 296.9k instructions, nfsd 227.3k cycles 293.5k instructions a WRITE | in use at most 2048 of 2048 | alloc_fail 6 | admitted 828824, denied 843279 | client retransmits in the window: 4
+19:11:21 region 32768 pages (512 MiB) made at 0x8260000000; page_pool: fixed rx region for 0000:a1:00.0 freed: 2048 pages at 0x808e000000, 0 escaped
+19:11:24 end: region 32768 pages, xeu CA0931345E46C929B11D01F, settled.sh audit rest: the settled setting; DONE
