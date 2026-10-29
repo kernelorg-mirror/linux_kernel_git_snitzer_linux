@@ -194,7 +194,7 @@ What to expect: at most the 6.8k ring cycles a WRITE that run102 put on `new_pag
 
 **Next is step 3's second item,** the completion at a poll's head that waits 0.5–1 µs, which is at most about 1k ring cycles a WRITE. With run102's first touches and run103 together, the rings' 1.06k DRAM reads a WRITE are still not placed: they are not in the poll's first touches, and the one excess that was found there the core already hides.
 
-## 5. The completion at a poll's head (r105, to run)
+## 5. The completion at a poll's head (r105)
 
 run102 found 12% of polls waiting 512–1023 ns for the completion at their head, a time no L3 or DRAM read takes. [xeu-diag-poll-head.patch](xeu-diag-poll-head.patch), on round 41's kept xeu (`EDAEF51052A598878DAED83` built), adds `head_lat_on` (0, off, by default). On every receive poll while it is set, it times four loads, each between DSB LDs as before:
 
@@ -224,3 +224,41 @@ How to read it:
 2. Load the diagnostic xeu, refusing if an NFS client is connected.
 3. One loan64 run with `head_lat_on` for 8 s from 10 s into the timed load.
 4. Load round 41's kept xeu again and apply the settled setting.
+
+### What run105 found
+
+[run105.out](run105.out); the per-CPU histograms are [r105/head-lat.txt](r105/head-lat.txt), the summary [r105/head-lat-sum.txt](r105/head-lat-sum.txt).
+
+- The region went back to 32768 pages (512 MiB) with 0 pages escaped, and the run was at the settled setting.
+- The run: 40.44 GB/s, flows placed, no drive stepping down, peak 6469 pages, ring 141.1k cycles a WRITE (every poll timed, so not a result).
+- At the end the kept xeu (`CA0931345E46C929B11D01F`) was back, with the settled setting.
+- The window was 8 s, 308,416 WRITEs.
+
+| a WRITE | n/W | mean ns | <64 | 64–127 | 128–255 | 256–511 | 512–1023 | ≥1 µs |
+|---|---|---|---|---|---|---|---|---|
+| `irq`, interrupts off: `own` | 2.68 | 32.4 | 100% | | | | | |
+| `prev` | | 32.4 | 99.9% | 0.1% | | | | |
+| `1st` | | 63.3 | 38.7% | 61.2% | 0.1% | | | |
+| `2nd` | | 32.3 | 99.8% | 0.2% | | | | |
+| `irq`, interrupts on: `own` | 2.68 | 54.8 | 95.6% | | | 0.1% | **4.3%** | |
+| `prev` | | 42.4 | 98.0% | 0.1% | | 0.1% | **1.9%** | |
+| `1st` | | 77.5 | 36.1% | 61.1% | 0.1% | 0.1% | **2.6%** | |
+| `2nd` | | 32.4 | 99.8% | 0.2% | | | | |
+| `re`, interrupts off: `1st` | 0.71 | 51.9 | 60.1% | 39.8% | 0.1% | | | |
+| `re`, interrupts on: `1st` | 0.71 | 51.7 | 60.7% | 39.2% | 0.1% | | | |
+| `empty_irq` / `empty_re` | 2.37 / 1.12 | 32.2 | 100% | | | | | |
+| `irq_to_poll` | 7.73 | 1416 | | | 71.0% | 16.7% | 0.1% | 12.2% |
+
+(`own`, `prev` and `2nd` of the `re` polls are at the floor, with or without interrupts.)
+
+- **run102's 12% at 0.5–1 µs was an interrupt landing inside the timed read, not the line.** With interrupts off, no read of the head takes more than 255 ns. With them on, the slow reads appear in every one of the three reads that run first in a poll after an interrupt: `own` 4.3%, `prev` 1.9% and `1st` 2.6%. They start at the floor, and nothing of the line's own makes them slow. They come only in polls that follow an interrupt, so a second interrupt arrives within about a microsecond of the poll's start, in roughly one such poll in eleven. Which interrupt it is (the same card's transmit ring on that CPU is the likeliest) is not shown here.
+- **The head's completion itself costs little.** Three in five after an interrupt come from the L3, as a line the card has just written should, and two in five in a re-poll. The second read is at the floor. Above the floor that is about 31 ns × 5.36 and 20 ns × 1.42 a WRITE, about 0.2 µs, **0.4k ring cycles a WRITE**, against run102's estimate of 1.1k (the excess there was the interrupts'). Nothing to win here.
+- **A third of the polls after an interrupt find nothing.** 731,627 of the 2,383,056 polls that follow the ring's interrupt (2.37 a WRITE) find the head empty. With the 1.12 empty re-polls, that is 3.5 empty polls a WRITE against 6.8 that do work. Each costs an interrupt, a NAPI run and an MSI-X unmask for nothing. The likeliest cause is the card raising the interrupt for completions the previous poll had already taken before it unmasked; that is not shown.
+- **The interrupt waits for its poll:** 71% start within 128–255 ns, but **12% wait 2–64 µs** (284k of 2.38M), while the CPU is in other softirq work. This is latency to the frames rather than ring cycles, and is noted.
+
+**So step 3 ends with the poll's own first touches accounted for.** The `struct page`'s miss is overlapped already (run103), the head's completion costs about 0.4k cycles, and run102's slow heads were interrupts. The rings' 1.06k DRAM reads a WRITE (run100, run101) are elsewhere: skb and GRO, TCP, the transmit side. Two things worth a look follow from r105:
+
+- **The empty polls.** 3.5 a WRITE: what an empty poll costs, and whether the card raises an interrupt for completions a poll has already taken.
+- **The 2–64 µs wait** for one interrupt in eight: what the CPU is doing in it.
+
+Neither is run yet.
