@@ -251,7 +251,7 @@ How to read it:
 
 (`own`, `prev` and `2nd` of the `re` polls are at the floor, with or without interrupts.)
 
-- **run102's 12% at 0.5–1 µs was an interrupt landing inside the timed read, not the line.** With interrupts off, no read of the head takes more than 255 ns. With them on, the slow reads appear in every one of the three reads that run first in a poll after an interrupt: `own` 4.3%, `prev` 1.9% and `1st` 2.6%. They start at the floor, and nothing of the line's own makes them slow. They come only in polls that follow an interrupt, so a second interrupt arrives within about a microsecond of the poll's start, in roughly one such poll in eleven. Which interrupt it is (the same card's transmit ring on that CPU is the likeliest) is not shown here.
+- **run102's 12% at 0.5–1 µs was an interrupt landing inside the timed read, not the line.** With interrupts off, no read of the head takes more than 255 ns. With them on, the slow reads appear in every one of the three reads that run first in a poll after an interrupt: `own` 4.3%, `prev` 1.9% and `1st` 2.6%. They start at the floor, and nothing of the line's own makes them slow. They come only in polls that follow an interrupt, so a second interrupt arrives within about a microsecond of the poll's start, in roughly one such poll in eleven. Which interrupt it is is not shown here. It is not the transmit ring's: the RX rings' interrupts are on CPUs 0, 2, 4 and 6 and the TX rings' on 1, 3, 5 and 7 (`/proc/irq/*/effective_affinity_list`), which run106 counts.
 - **The head's completion itself costs little.** Three in five after an interrupt come from the L3, as a line the card has just written should, and two in five in a re-poll. The second read is at the floor. Above the floor that is about 31 ns × 5.36 and 20 ns × 1.42 a WRITE, about 0.2 µs, **0.4k ring cycles a WRITE**, against run102's estimate of 1.1k (the excess there was the interrupts'). Nothing to win here.
 - **A third of the polls after an interrupt find nothing.** 731,627 of the 2,383,056 polls that follow the ring's interrupt (2.37 a WRITE) find the head empty. With the 1.12 empty re-polls, that is 3.5 empty polls a WRITE against 6.8 that do work. Each costs an interrupt, a NAPI run and an MSI-X unmask for nothing. The likeliest cause is the card raising the interrupt for completions the previous poll had already taken before it unmasked; that is not shown.
 - **The interrupt waits for its poll:** 71% start within 128–255 ns, but **12% wait 2–64 µs** (284k of 2.38M), while the CPU is in other softirq work. This is latency to the frames rather than ring cycles, and is noted.
@@ -261,4 +261,23 @@ How to read it:
 - **The empty polls.** 3.5 a WRITE: what an empty poll costs, and whether the card raises an interrupt for completions a poll has already taken.
 - **The 2–64 µs wait** for one interrupt in eight: what the CPU is doing in it.
 
-Neither is run yet.
+The empty polls are step 4 (Mike, 29 October: closure on round 42 first, then run104).
+
+## 6. The polls that find nothing (r106, to run)
+
+[xeu-diag-empty-polls.patch](xeu-diag-empty-polls.patch), on round 41's kept xeu (`4A7F5BFDEEE8F39ACF263F6` built), adds `empty_lat_on` (0, off, by default). The receive poll is wrapped while it is set, and on every poll it records what each question needs.
+
+**Why a poll finds nothing.** The ring is masked from its interrupt until `napi_complete_done()`, then unmasked. A completion the card writes in that window leaves its MSI-X vector pending. If the poll then takes that completion before the unmask, the unmask sends an interrupt for work already done.
+
+- `unmask_to_irq_empty` and `unmask_to_irq_work`: the ring's last unmask to its next interrupt, for interrupts whose poll finds the head empty and for those that find work. If the empty ones are stale they come within a microsecond or so of the unmask, and the others are spread out.
+- `wait_valid_irq` and `wait_valid_re`, on every other empty poll: a spin of up to 4 µs for the head to turn valid (`never_valid_*` when it does not). An interrupt that arrives before its completion can be read would turn valid within nanoseconds. A stale one waits for the next frame, about 0.8 µs at this rate, or longer.
+- Counts of the re-polls' causes:
+  - kicks from the interrupt or the refill timer that NAPI had already taken (`lost_*`, the `NAPI_STATE_MISSED` path);
+  - polls that used their budget;
+  - `napi_complete_done()` returning false.
+
+**What an empty poll costs.** On the empty polls that do not spin, the time from the poll's start to its return (`empty_poll_*`), and from the interrupt's handler (`empty_irq_whole`). Neither includes the interrupt's entry before `xeu_napi_intr()` or `net_rx_action()`'s own work. Polls that find work are timed as well, for scale.
+
+**Which interrupts the ring CPUs take.** `/proc/interrupts` and `/proc/softirqs` on CPUs 0–7 over the same window, a WRITE, to name r105's second interrupt.
+
+[run106.sh](run106.sh): load the diagnostic xeu (refusing if an NFS client is connected), one loan64 run with `empty_lat_on` for 8 s from 10 s into the timed load, then round 41's kept xeu again and the settled setting. The spin delays one empty poll in two by up to 4 µs, so the run's rate and cycles are not a result.
