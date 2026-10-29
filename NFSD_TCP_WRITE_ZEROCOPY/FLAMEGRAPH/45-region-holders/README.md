@@ -136,3 +136,18 @@ Whether B is kept is Mike's: free in copy mode, 3% in loan mode, for 360 pages e
 - **A pays it too, for about 3 pages a WRITE:** 2.9k nfsd and 1.5k ring cycles a WRITE that a cheaper round trip would save at the settled depth.
 
 **What would make a shallow stack free.** A region page that goes back to the region could keep its DMA mapping, and be tracked by the region instead of the pool's xarray. The region is not one device's, though: every device `rx_region_dev` lists shares it (on tardis1 both ports can), and a mapping is one device's. So the region would record, per page (an array indexed by its pfn less the base), which device it is mapped for, and keep a free list per device: a ring takes first from pages mapped for its own device, and only when that list is empty a page mapped for another device or for none, which it unmaps and maps again. When a device's last pool is destroyed (never with any of its pages out), the region unmaps that device's free pages and holds a reference to the device until it has. On one device, as on tardis2, the round trip is then the region's lock and an owner store, about 0.3k cycles a page instead of about 1.3k; across two, a page that changes device pays the unmap and map as now, without the xarray. That is a page_pool change (`page_pool_rx_region_put()`, `page_pool_rx_region_alloc()` and a pool's teardown), to be tried with both ports listed on tardis1 too; with it B, or a shallower stack still, would cost little in loan mode as it already does in copy mode. Mike's to decide.
+
+## 4. A region page kept mapped for its device (needs a kernel build)
+
+`0c375e06bf64` "page_pool: keep a fixed receive region page mapped for its device" (Mike, 29 October: "implement the per-device region mapping in page_pool"), at the tip, in the code group. page_pool is built in, so it runs only on a kernel built from a tip that has it; the build started on 29 October from the pushed tip before it does not.
+
+What it does: each device that maps region pages (in each direction) has a slot, a free list of pages still mapped for it, and the region records each page's slot. A pool with a slot returns pages to its list without unmapping them or erasing a DMA index, and takes from that list first, then from the unmapped pages (mapped with no xarray index), then from another device's list (unmapped for it under the region's lock). When a device's last pool is destroyed, `page_pool_scrub()` has the region unmap every page still mapped for it, free or out, and the slot gives up its device reference. A pool that does not map, or finds the eight slots taken, keeps the old round trip. `/sys/kernel/debug/page_pool_rx_region` gains `free_unmapped` and a `mapped <dev> dir <d> pools <n> free <n>` line per slot.
+
+Built with W=1 (`net/core/`, the running build 499's `.config`), checkpatch `--strict` clean; sparse is not on tardis2.
+
+**To run on the kernel that has it:**
+
+1. xeu rebuilt against it (`struct page_pool` has a new field), then the settled setting and the srcversions in the round scripts.
+2. The region's life with it: the port down and up (the slot's pages unmapped and the slot given up: `mapped` gone from debugfs, `free_unmapped` back to all free), a resize (`run110.sh`'s `resize`), no `escaped` and no WARNING. On tardis1, both ports listed in `rx_region_dev`, two slots, and a run on both.
+3. run111 again (A against B, loan and copy) and run112's profile: B's round trip should cost about the region's lock, a few hundred cycles a page, so B's 3 to 3.5% in loan mode should mostly go, and A's own 2.9k nfsd and 1.5k ring cycles a WRITE with it.
+
