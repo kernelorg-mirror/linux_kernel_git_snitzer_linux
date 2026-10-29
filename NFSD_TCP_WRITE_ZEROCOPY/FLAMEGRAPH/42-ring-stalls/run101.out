@@ -1,0 +1,28 @@
+00:50:15 kernel 7.3.0-7.hs.499.el10.aarch64+16k, rodata=noalias, sunrpc DDE22984B5905541BB2CD35, nfsd 3F0C341E86E266D5FDF2ADF, xeu CA0931345E46C929B11D01F
+read 512 MiB, 8388608 lines: bus_access_rd 16789278 (2.001 a line) l2d_cache_refill 1072823 (0.128 a line) ll_cache_miss_rd 8393333 (1.001 a line)
+00:54:57 r101-loan64 | total 40.49 GB/s | 1 no-step | 1 placed | r101-loan64 ring 43.1 nfsd 90.4 us/W (38464 WRITEs/s) | ring 139.7k cycles 306.7k instructions, nfsd 295.7k cycles 303.3k instructions a WRITE | peak 6419
+00:54:57 look from 00:53:57 rings end 00:54:21 end 00:54:33
+ring-1-YY  WRITEs 117376 | a WRITE: cycles 165.1k instructions 320.5k lines read beyond L2 2.27k L2 refills 1.04k LL read misses 1.06k memory stalls 31.3k
+ring-2-NY  WRITEs 117635 | a WRITE: cycles 168.5k instructions 311.6k lines read beyond L2 3.45k L2 refills 0.95k LL read misses 1.35k memory stalls 37.8k
+ring-3-YN  WRITEs 117335 | a WRITE: cycles 164.8k instructions 326.4k lines read beyond L2 2.36k L2 refills 1.00k LL read misses 1.08k memory stalls 29.0k
+ring-4-YY  WRITEs 117783 | a WRITE: cycles 166.0k instructions 321.1k lines read beyond L2 2.29k L2 refills 1.05k LL read misses 1.07k memory stalls 32.1k
+ring-5-NY  WRITEs 117464 | a WRITE: cycles 168.3k instructions 312.0k lines read beyond L2 3.51k L2 refills 0.95k LL read misses 1.37k memory stalls 37.7k
+ring-6-YN  WRITEs 118275 | a WRITE: cycles 164.6k instructions 326.8k lines read beyond L2 2.36k L2 refills 1.00k LL read misses 1.08k memory stalls 29.0k
+rnid_s0_wdata_beats        rest      0.0M/s load    643.6M/s | a WRITE, less the rest:  16482.7
+rnid_s1_wdata_beats        rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.0
+rnid_s2_wdata_beats        rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.0
+rnid_s0_rdata_beats        rest      0.0M/s load    644.3M/s | a WRITE, less the rest:  16500.4
+rnid_s1_rdata_beats        rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.0
+rnid_s2_rdata_beats        rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.0
+hnf_mc_reqs                rest      0.1M/s load   1147.7M/s | a WRITE, less the rest:  29261.7
+hnf_stash_data_pull        rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.0
+hnf_slc_sf_cache_access    rest      1.8M/s load   1918.2M/s | a WRITE, less the rest:  48959.1
+hnf_cache_miss             rest      1.7M/s load   1281.2M/s | a WRITE, less the rest:  32688.9
+hnf_cache_fill             rest      0.7M/s load    724.8M/s | a WRITE, less the rest:  18498.3
+hnf_slc_eviction           rest      0.2M/s load    603.7M/s | a WRITE, less the rest:  15418.0
+hnf_snp_sent               rest      0.2M/s load    102.7M/s | a WRITE, less the rest:   2623.8
+hnf_sf_hit                 rest      1.2M/s load    607.9M/s | a WRITE, less the rest:  15541.9
+hnf_sf_evictions           rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.1
+hnf_dir_snoops_sent        rest      0.0M/s load     61.5M/s | a WRITE, less the rest:   1574.2
+00:55:00 end: settled.sh audit rest: the settled setting; DONE
+

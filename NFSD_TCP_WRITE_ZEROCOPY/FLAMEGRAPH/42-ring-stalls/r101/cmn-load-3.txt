@@ -1,0 +1,7 @@
+# started on Thu Oct 29 00:54:30 2026
+
+307958665,,arm_cmn_0/hnf_snp_sent/,1502526456,50.00,,
+1823588397,,arm_cmn_0/hnf_sf_hit/,1502569704,50.00,,
+7096,,arm_cmn_0/hnf_sf_evictions/,1499998704,49.00,,
+184371194,,arm_cmn_0/hnf_dir_snoops_sent/,1500021712,49.00,,
+WRITEs,117107

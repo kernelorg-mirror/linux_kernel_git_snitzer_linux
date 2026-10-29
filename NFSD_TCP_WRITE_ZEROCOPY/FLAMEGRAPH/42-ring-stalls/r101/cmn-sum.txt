@@ -1,0 +1,16 @@
+rnid_s0_wdata_beats        rest      0.0M/s load    643.6M/s | a WRITE, less the rest:  16482.7
+rnid_s1_wdata_beats        rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.0
+rnid_s2_wdata_beats        rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.0
+rnid_s0_rdata_beats        rest      0.0M/s load    644.3M/s | a WRITE, less the rest:  16500.4
+rnid_s1_rdata_beats        rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.0
+rnid_s2_rdata_beats        rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.0
+hnf_mc_reqs                rest      0.1M/s load   1147.7M/s | a WRITE, less the rest:  29261.7
+hnf_stash_data_pull        rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.0
+hnf_slc_sf_cache_access    rest      1.8M/s load   1918.2M/s | a WRITE, less the rest:  48959.1
+hnf_cache_miss             rest      1.7M/s load   1281.2M/s | a WRITE, less the rest:  32688.9
+hnf_cache_fill             rest      0.7M/s load    724.8M/s | a WRITE, less the rest:  18498.3
+hnf_slc_eviction           rest      0.2M/s load    603.7M/s | a WRITE, less the rest:  15418.0
+hnf_snp_sent               rest      0.2M/s load    102.7M/s | a WRITE, less the rest:   2623.8
+hnf_sf_hit                 rest      1.2M/s load    607.9M/s | a WRITE, less the rest:  15541.9
+hnf_sf_evictions           rest      0.0M/s load      0.0M/s | a WRITE, less the rest:      0.1
+hnf_dir_snoops_sent        rest      0.0M/s load     61.5M/s | a WRITE, less the rest:   1574.2

@@ -64,7 +64,7 @@ Pseudo-NMI only if SPE cannot account for `handle_softirqs`'s share; it needs a 
 
 **So, for step 2:** where the rings' lines beyond L2 come from, and why about half miss the L3.
 
-## 2. What the rings read beyond L2, and where the card's writes go (r101, to run)
+## 2. What the rings read beyond L2, and where the card's writes go (r101)
 
 SPE was the plan, and is not to be had: `arm_spe_pmu` loads, but the firmware's ACPI MADT gives no CPU an SPE overflow interrupt (0 on all 64; the PMU's is 23), so the driver creates no device. Making one would take a patched MADT through the initrd (`CONFIG_ACPI_TABLE_UPGRADE=y`), a reboot, and SPE enabled for the kernel by the firmware, which an empty field suggests it is not. The module was unloaded again. In its place (Mike, 29 October), two looks with no change to the host:
 
@@ -78,3 +78,35 @@ SPE was the plan, and is not to be had: `arm_spe_pmu` loads, but the firmware's 
    Whether the card's writes are filled into the L3 (fills against the device's write beats), how much the payload takes of it, and whether anything is stashed. If the card's writes go to DRAM, every completion and header line the rings read costs a DRAM read, and the lever is outside the CPU: the card stashing those lines (CMN supports stashing; whether the E1 can ask for it is Xsight's).
 
 [run101.sh](run101.sh): `busread` on CPU 63 again; the mesh's groups at rest during the rest before the load; one loan64 run with the switch windows from 10 s into its timed load and the mesh's groups under load after them. `settled.sh` puts both switches back.
+
+**Run 29 October:** 40.49 GB/s, flows placed, no drive stepping down, counted ring 139.7k and nfsd 295.7k cycles a WRITE, peak 6419, settled at the end ([run101.out](run101.out), the windows in [r101/](r101/)). `busread` again: 2.001 bus beats and 1.001 last-level misses a line.
+
+**The switches, on the ring CPUs, a WRITE** (two 3 s windows each, system-wide on CPUs 0–7):
+
+| `rx_prefetch`, `rx_gro_frags` | cycles | instructions | lines beyond L2 | L2 refills | LL read misses | memory stalls |
+|---|---|---|---|---|---|---|
+| Y, Y (the settled setting) | 165.1k, 166.0k | 320.5k, 321.1k | 2.27k, 2.29k | 1.04k, 1.05k | 1.06k, 1.07k | 31.3k, 32.1k |
+| N, Y | 168.5k, 168.3k | 311.6k, 312.0k | 3.45k, 3.51k | 0.95k, 0.95k | 1.35k, 1.37k | 37.8k, 37.7k |
+| Y, N | 164.8k, 164.6k | 326.4k, 326.8k | 2.36k, 2.36k | 1.00k, 1.00k | 1.08k, 1.08k | 29.0k, 29.0k |
+
+- **`rx_prefetch` keeps its place, and is not pulling in payload.** Without it the rings take 3.3k cycles a WRITE more, 6k more memory stall cycles, and read 1.2k more lines beyond L2, 0.3k more of them from DRAM. The lines beyond L2 are not the core's prefetcher running on behind xeu's prefetch.
+- **`rx_gro_frags` may cost the rings a little:** with it off, 0.9k cycles a WRITE fewer here (164.7k against 165.6k), 5.8k instructions more and 2.7k memory stall cycles fewer. Run99 had it the other way round by 0.4k. Over the two runs it is between −0.4k and +0.9k cycles, inside the windows' scatter. It is noted here, not acted on.
+
+**The mesh** (`arm_cmn_0`, system-wide, a WRITE under load less the rest; RN-D beats are 64 bytes here: 16,483 a WRITE is 1.055 MB, a WRITE's payload and headers):
+
+| | a WRITE | a payload line |
+|---|---|---|
+| devices' writes to memory (the card's frames and completions) | 16.5k lines | 1.00 |
+| devices' reads from memory (the drives reading the payload; the card's sends) | 16.5k lines | 1.00 |
+| L3 accesses (`hnf_slc_sf_cache_access`) | 49.0k | 2.97 |
+| L3 misses | 32.7k | 1.98 |
+| L3 fills / evictions | 18.5k / 15.4k | 1.12 / 0.94 |
+| DRAM requests (`hnf_mc_reqs`) | 29.3k | 1.78 |
+| snoops sent / snoop filter hits | 2.6k / 15.5k | |
+| stash pulls | 0 | |
+
+- **The payload goes through DRAM.** About 1.8 DRAM requests a payload line, 1.87 MB a 1 MiB WRITE, about 72 GB/s at this rate. The likeliest reading: the card's writes are filled into the L3 (fills 18.5k against the card's 16.5k lines), and are evicted (15.4k) before the drives read them, so the payload is written back to DRAM and the drives read it from there. The L3 is 32 MiB; at 40 GB/s it holds 0.8 ms of payload, less than a WRITE's life from its arrival to the drive's read. That is the region, by the rule about its footprint, already larger than the L3 (6,419 pages of 16 KiB at peak, about 100 MiB).
+- **Nothing is stashed.**
+- **The rings' 1.06k DRAM reads a WRITE are not explained by this.** The lines the card has just written, a completion or a frame's headers, are read by the ring within microseconds of the fill, so they should hit in the L3. What the rings miss in DRAM is likelier their own state touched last by another core (page_pool's recycled pages and their `struct page`s, released on nfsd's CPUs; the sockets) or lines evicted between uses. The counters cannot say which.
+
+**So:** the rings' memory stalls (31k cycles a WRITE, 19%) come from about 1.06k DRAM reads and 1.2k L3 hits a WRITE, and the payload's own path through DRAM is the system's, not the rings'. Naming the rings' lines needs either a precise profile (pseudo-NMI, a reboot) or a diagnostic xeu that times the poll's remaining first touches as round 41 timed GRO's: the completion entry, the software ring entry, and the refill's take of a recycled page from page_pool.
