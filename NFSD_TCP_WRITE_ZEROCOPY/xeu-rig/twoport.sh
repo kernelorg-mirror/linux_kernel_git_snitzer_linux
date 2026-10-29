@@ -59,6 +59,8 @@
 #                    consumed skb where it was consumed, not on its ring's CPU)
 #   SRV_QDISC=<q>    the qdisc on each of the server port's transmit queues (settled: fq_codel)
 #   GRO_MAX=<bytes>  the server port's gro_max_size and gro_ipv4_max_size (settled: 65536; above it, BIG TCP)
+#   DEFER=<n>/<ns>   napi_defer_hard_irqs and gro_flush_timeout of the ports used
+#                    (settled: 2/10000 on port a since 29 October, 0/0 on port b)
 #   NOTRACK=absent   no zc_notrack table for the run (settled: loaded while conntrack is on)
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
@@ -237,6 +239,10 @@ sleep 7
 	"$RIG/settled.sh" gro ${DEV[$p]} $GRO_MAX || { echo "GRO max size not set"; exit 1; }
 	echo "${DEV[$p]}: gro_max_size and gro_ipv4_max_size $GRO_MAX for this run" | tee -a geometry.txt
 done
+[ -n "${DEFER:-}" ] && for p in $PORTS; do
+	"$RIG/settled.sh" defer ${DEV[$p]} $DEFER || { echo "NAPI deferral not set"; exit 1; }
+	echo "${DEV[$p]}: NAPI deferral $DEFER for this run" | tee -a geometry.txt
+done
 [ -n "${SRV_QDISC:-}" ] && for p in $PORTS; do
 	"$RIG/settled.sh" srvq ${DEV[$p]} $SRV_QDISC || { echo "server qdisc not set"; exit 1; }
 	echo "${DEV[$p]}: qdisc $SRV_QDISC for this run" | tee -a geometry.txt
@@ -363,7 +369,7 @@ if [ "$RW" != write ]; then	# a run that reads: every file written whole first, 
 fi
 # Just before the load: the live state, all of it, against the setting this
 # run is at; anything the run set on purpose is held to what it set.
-EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_WANT_EIGHTHS=${WANT_EIGHTHS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-} EXP_GRO_MAX=${GRO_MAX:-}"
+EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_WANT_EIGHTHS=${WANT_EIGHTHS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-} EXP_GRO_MAX=${GRO_MAX:-} EXP_DEFER=${DEFER:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}${XPS:-}" ] && EXPENV="$EXPENV EXP_RINGS=${RINGS:-} EXP_LAYOUT=RINGS=${RINGS:-4},RX_RINGS=${RX_RINGS:-},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-},XPS=${XPS:-}"
 # the client's qdisc is set only on the ports of this run

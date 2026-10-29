@@ -55,7 +55,7 @@ Both settings go back to 0 after each run and at the end. A setting is kept, in 
 - **C saves more cycles but stalls.** In runs 4 and 9 the four drives fell from about 40.5 to 34 GB/s for 8 to 13 s at a time. They were only 79 to 96% busy then, so less was arriving ([drives-sec-r107-4-loan64-C.tsv](r107/drives-sec-r107-4-loan64-C.tsv), [drives-sec-r107-9-loan64-C.tsv](r107/drives-sec-r107-9-loan64-C.tsv)). There were no FIFO or ring drops and no more retransmits than in the other runs. No run of A or B shows such a stretch. Under C the rings run almost entirely from the 30 µs timer, with 0.02 to 0.09 interrupts a WRITE. Run 4 was first put down to the client and was taken for an outlier; run 9 showed it is C's. Run 9's 10 s window missed its stretch, so its cycles are clean. C is not kept.
 - **The ring µs a WRITE did not fall from B to C** (34.2 and 34.2 in runs 2 and 3), although the cycles did. That is consistent with C's rings waiting on the timer, not with less work.
 
-**Proposed: B in `settled.sh`,** `napi_defer_hard_irqs=2` and `gro_flush_timeout=10000` on `enp161s0f0`, and on `enp164s0f0` for the two-port setting once a two-port run has shown the same. That is Mike's to decide; the setting is unchanged.
+**B is kept (Mike, 29 October).** `settled.sh` holds `napi_defer_hard_irqs` 2 and `gro_flush_timeout` 10000 on `enp161s0f0` (`DEFER`): `apply` writes them, and the audit reads them on each port. `enp164s0f0` stays at 0/0 until a run on two ports shows the same. Both values outlive an open of the port. twoport.sh's `DEFER=<n>/<ns>` sets another value for a run, and the audit then expects that value instead.
 
 ## 2. Where the rings read from DRAM (r108)
 
