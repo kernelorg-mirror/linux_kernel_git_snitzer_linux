@@ -218,10 +218,17 @@ first** (and `tardis1-boot1-testing.md` for builds 454 and 455): it says
 which commits at the tip are still to be regrouped, carried to the HS
 twin or decided.
 
-**tardis1 runs build 494, the kernel built from the tip of 22 October
-(`77f82c816493`; booted that evening): start at "Build 494: the kernel
-from the tip" in
+**On the kernel built from the tip of 29 October (`0c375e06bf64`, the
+region's per-device mapping), on either server, start at "29 October:
+the kernel with the region's per-device mapping" in
 [`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md).**
+tardis1 runs copy mode on both ports on it (no regression against
+build 494, two devices sharing the region, the stack at 64); tardis2
+runs loan mode on port a (FLAMEGRAPH round 45, step 4).
+
+**tardis1 ran build 494, the kernel built from the tip of 22 October
+(`77f82c816493`; booted that evening), until then: "Build 494: the
+kernel from the tip" in the same README.**
 The code that had only been built (the region key in page_pool and
 sunrpc, one budget lookup at a loaned record's first region skb, the
 budget's lock on its own cache line) has run: KUnit 7, 50, 7 and 10,

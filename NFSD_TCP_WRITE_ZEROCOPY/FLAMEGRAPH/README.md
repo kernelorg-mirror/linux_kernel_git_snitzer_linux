@@ -132,7 +132,34 @@ decided.
 11. **Round 42: where the rings' stalls are** (Mike, 29 October): 42% of
    the ring CPUs' cycles are backend stalls, only 18% of them on memory;
    counted by group first, then SPE for the instructions and data
-   ([42-ring-stalls](42-ring-stalls/README.md)).
+   ([42-ring-stalls](42-ring-stalls/README.md)). Closed: the stalls are
+   not in the driver's poll; a refill prefetch of the struct page saved
+   nothing and was not kept; 9.89 receive interrupts a WRITE, 1.82 of
+   them stale and 2.93 lost to NAPI already polling.
+12. **Round 43: the receive region's size** (Mike, 29 October;
+   [43-region-size](43-region-size/README.md)). Copy mode carries 40.8
+   GB/s at every size down to 32 MiB with about 1200 pages in use; loan
+   mode, its budget fitted to the region, loses 1.6% at 100 MiB, 6.4% at
+   64 MiB and 32% at 32 MiB, where even a budget of 5 WRITEs filled it.
+13. **Round 44: NAPI's deferral and the rings' DRAM reads** (Mike, 29
+   October; [44-defer-and-dram](44-defer-and-dram/README.md)).
+   `napi_defer_hard_irqs` 2 with `gro_flush_timeout` 10 us takes the
+   receive interrupts from 10.7 to 1.25 a WRITE and the rings 10.0k
+   cycles a WRITE (7.1%) lower, at the same rate and peak: **kept** on
+   port a (settled.sh `DEFER`). 30 us stalled the port for seconds. The
+   rings' DRAM reads are the RX CPUs': `struct page`'s `dma_addr` in the
+   refill, the completion, the buffer's `skb_shared_info` and header
+   lines past the first.
+14. **Round 45: what holds the region's pages** (Mike, 29 October;
+   [45-region-holders](45-region-holders/README.md)). A loaned record
+   holds about 64 pages, not the 126 the budget charges; the rings hold
+   about 500 posted and their pools about 500 idle on their stacks in
+   every mode, so a small region fills with fixed holders, not loans.
+   A stack of 64 takes a third off copy mode's working set for nothing,
+   but costs loan mode 3 to 3.5%, most of it the pool's DMA-index
+   xarray on each page's round trip through the region. Step 4,
+   `0c375e06bf64` (a region page kept mapped for its device, on a free
+   list per device), is to run on the next kernel.
 
 ## Where the kept rounds stand (2026-10-28)
 
@@ -163,6 +190,9 @@ runs (the profile where the A/B cannot resolve it):
 | 34 | 44.55 to 42.95, inside the spread (−0.17 without a pair put off) | | xeu (`DC23D10E104D370F14FB06E`, on 2.0.1-10): `rx_buf_size`'s buffers cut by the ring from whole pages counted once, no frag drain atomic |
 | 35 | 140.6k to 137.9k cycles a WRITE, counted (−1.9%; tick-sampled µs could not see it) | the same | xeu (`63631721F8B149913C0DC19`, 2.0.1-12): the refill's lean loop, its state in registers, each descriptor two eight-byte stores |
 | 36 | the same | 307.4k to 304.6k instructions a WRITE, counted; cycles 295.1k to 294.6k, inside the spread (the borrow 0.86k cheaper, the time to idle) | `eae183aaaff3`: the borrow's page-pool test from one load, the append's coalesce and region tests with their cheap conditions first |
+| 38 | | about 3.5k cycles a WRITE less | `93b10c1877fc`: a released page's struct page fetched a second time (PSTL2KEEP two batches ahead on arm64) |
+| 41 | 6.5k instructions a WRITE fewer, cycles the same | | xeu `rx_gro_frags` Y (kmod-xsight 2.0.1-13, settled.sh): GRO given page fragments, no skb a frame |
+| 44 | 140.2k to 130.2k cycles a WRITE (−7.1%) | the same | NAPI deferral 2/10000 on port a (settled.sh `DEFER`): receive interrupts 10.7 to 1.25 a WRITE |
 
 - **Since round 01:** the rings 92.6 to about 58 us a WRITE (-37%),
   and to about 50 on build 499 with the interrupt held off at the card
