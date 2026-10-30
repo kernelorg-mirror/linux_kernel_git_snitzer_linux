@@ -17,6 +17,11 @@
 #
 #   drvchar.py $L/drvchar-1 300 0:7.25 1:0 2:7.25 3:0
 #
+# A drive is named by its filesystem, /hs/nvme<n>, and read through the
+# device mounted there: the kernel's names follow the order the drives
+# were found in, which a boot that misses some (found later by a rescan)
+# changes.
+#
 # Writes <out>/sec.tsv (a line a second: for each drive GB/s, % busy and writes),
 # <out>/temp.tsv and <out>/summary.txt.
 import os, subprocess, sys, time
@@ -31,6 +36,17 @@ TAIL = int(os.environ.get('TAIL', 15))
 STOP = os.environ.get('STOP', '1') != '0'
 os.makedirs(out, exist_ok=True)
 
+def dev(n):
+    for l in open('/proc/self/mounts'):
+        f = l.split()
+        if f[1] == '/hs/nvme%d' % n and f[0].startswith('/dev/nvme'):
+            return f[0][5:]
+    return 'nvme%dn1' % n
+blk = {n: dev(n) for n in drives}
+for n, b in blk.items():
+    if any(l.split()[1] == '/' and l.split()[0].startswith('/dev/' + b) for l in open('/proc/self/mounts')):
+        sys.exit('/hs/nvme%d: %s holds the root filesystem, not a data drive' % (n, b))
+
 def stats():
     s = {}
     for l in open('/proc/diskstats'):
@@ -41,7 +57,7 @@ def stats():
 
 def temp(n):
     try:
-        o = subprocess.run(['nvme', 'smart-log', '/dev/nvme%d' % n], capture_output=True, text=True).stdout
+        o = subprocess.run(['nvme', 'smart-log', '/dev/' + blk[n].rsplit('n', 1)[0]], capture_output=True, text=True).stdout
         v = {}
         for l in o.splitlines():
             if l.startswith('temperature'): v['c'] = l.split(':')[1].split()[0]
@@ -82,7 +98,7 @@ while s < cap and len(done) < len(names):
     c = stats(); tc = time.time(); s += 1; dt = tc - tp
     row = []
     for n in names:
-        k = 'nvme%dn1' % n
+        k = blk[n]
         g = (c[k][0] - p[k][0]) * 512 / dt / 1e9
         b = (c[k][1] - p[k][1]) / dt / 10
         row.append('%.2f %.0f %.0f' % (g, b, (c[k][2] - p[k][2]) / dt))
@@ -110,6 +126,7 @@ for n in names:
     subprocess.run('rm -rf /hs/nvme%d/drvchar' % n, shell=True)
 def tag(n): return ' '.join([str(drives[n] or 'all')] + [x[2:] for x in extra[n]])
 with open(out + '/summary.txt', 'w') as f:
+    f.write('drives: %s\n' % ', '.join('nvme%d is %s' % (n, blk[n]) for n in names))
     for n in names:
         h = hist[n]; base = sorted(h[2:12])[5] if len(h) >= 12 else float('nan')
         if n in step:
