@@ -112,8 +112,11 @@ settled setting" with both ports at 2/10000, and both answered.
 `irq_msix_mask` at N, `WARM=10 RUNTIME=30`, stack 0) does not count:
 `/hs/nvme5` and `/hs/nvme7` stepped down at 14 and 17 s, 39.37 GB/s.
 Its rings took 114.1k cycles a WRITE, against 96 to 98k with the three
-at Y. It says nothing yet about xeu and the stalls; all three were put
-back to Y.
+at Y. All three were put back to Y. **It is not to be run again (Mike,
+30 October):** it was only to tell whether xeu's changes since 503 were
+behind the stalls, and the probes and the per-second drive lines of
+this boot put the stalls in the drives themselves, at 100% busy, with
+the rest of the rig starved after them.
 
 **The drives are still what decides a run.** Six of the twelve runs
 on six drives were decided by drives: `6d-short-A-1` by its length,
@@ -134,7 +137,6 @@ not.
 - Step 4 (the `STALLED` and `low in the warm-up` lines in `drives.txt`)
   is still to be written; `drives-sec.tsv` beside `wire-sec.tsv` shows
   the stalls today by hand.
-- xeu's three parameters off wants a run that counts.
 
 # tardis1 on build 504, second boot (29 October, late): four drives found only by a rescan, the runs decided by drives, power cycle again
 
