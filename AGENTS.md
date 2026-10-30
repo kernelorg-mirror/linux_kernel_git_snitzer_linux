@@ -229,7 +229,8 @@ RUNTIME=20`: with the per-device mapping, `page_pool.rx_region_stack`
 about 23% fewer of the region's pages than 0, and `settled.sh` holds
 it at 64 since 30 October (Mike); deferral 2/10000 on both ports took
 6% fewer ring cycles a WRITE at the same rate, in two runs that count
-at stack 64. The second boot before it, "tardis1 on build 504,
+at stack 64, and `settled.sh` holds port b at 2/10000 too since 30
+October (Mike). The second boot before it, "tardis1 on build 504,
 second boot", found four drives only by a PCI rescan. Then the plan
 after it, "tardis1's next boot: the per-device mapping, the drives and the
 stalls", in the same README. That is the plan: the mapping's checks, the drives probed on their own,

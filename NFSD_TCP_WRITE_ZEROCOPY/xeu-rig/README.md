@@ -104,8 +104,9 @@ The two that count: the same rate (58.4 GB/s, 55.6k to 55.7k WRITEs/s),
 the rings 90.4 and 91.5k cycles a WRITE against 97.6 and 96.1 at 0/0
 (6% fewer), nfsd 1019.6 and 1038.6k against 1065.1 and 1050.8 (3%
 fewer), the region's mean in use the same (943 and 945 against 954 and
-952). Both pass the plan's test for `DEFER[b]` to become 2/10000 in
-`settled.sh`; that is Mike's call, and port a is already at 2/10000.
+952). Both pass the plan's test, and **`settled.sh` holds `DEFER[b]` at
+2/10000 too since 30 October (Mike)**: `settled.sh apply` ended in "the
+settled setting" with both ports at 2/10000, and both answered.
 
 **The xeu-off run** (`6d-xeuoff-1`, `rx_prefetch`, `rx_gro_frags` and
 `irq_msix_mask` at N, `WARM=10 RUNTIME=30`, stack 0) does not count:
@@ -133,8 +134,7 @@ not.
 - Step 4 (the `STALLED` and `low in the warm-up` lines in `drives.txt`)
   is still to be written; `drives-sec.tsv` beside `wire-sec.tsv` shows
   the stalls today by hand.
-- `DEFER[b]` 2/10000 in `settled.sh` (Mike's call; the runs for it are
-  in); xeu's three parameters off wants a run that counts.
+- xeu's three parameters off wants a run that counts.
 
 # tardis1 on build 504, second boot (29 October, late): four drives found only by a rescan, the runs decided by drives, power cycle again
 

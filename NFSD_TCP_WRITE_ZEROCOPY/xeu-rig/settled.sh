@@ -336,9 +336,12 @@ set_gro_max() { ip link set dev $1 gro_max_size $2 gro_ipv4_max_size $2; }
 # 29 October): the rings 10.0k cycles a loaned WRITE fewer (7.1%), the
 # receive interrupts 10.7 to 1.25 a WRITE, no rate lost and the region's
 # peak not raised; 2/30000 fell to 34 GB/s for seconds at a time.  Port b
-# stays at 0/0 until a run on two ports shows the same.  Both outlive an
+# too since 30 October (Mike): in copy mode on two ports (build 504, third
+# boot, six drives, stack 64), 2/10000 on both took the rings 6% fewer
+# cycles a WRITE than 0/0 and nfsd 3% fewer, at the same rate and with the
+# region's pages in use unchanged, in two runs that count.  Both outlive an
 # open of the port; place writes them all the same.
-declare -A DEFER=([a]=2/10000 [b]=0/0)
+declare -A DEFER=([a]=2/10000 [b]=2/10000)
 defer() { echo "$(cat /sys/class/net/$1/napi_defer_hard_irqs)/$(cat /sys/class/net/$1/gro_flush_timeout)"; }
 set_defer() { echo ${2%/*} > /sys/class/net/$1/napi_defer_hard_irqs && echo ${2#*/} > /sys/class/net/$1/gro_flush_timeout; }
 # NFS is kept out of conntrack (FLAMEGRAPH round 01, 23 October): a table
