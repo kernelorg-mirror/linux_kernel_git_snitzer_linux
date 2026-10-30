@@ -145,14 +145,17 @@ REGION_PAGES=32768
 # one when the port's pools come up again).  The region made is checked
 # too, in debugfs: a size written but not made reads as no region.
 # The depth of a region pool's stack of returned pages (page_pool's, built
-# in), held at 0, the ring's size of 256 (Mike, 25 October: "we cannot afford
-# to increase the region").  FLAMEGRAPH round 04 found 1024 saves the rings
-# about 3 us a loaned WRITE, for about 940 more of the region's pages in use
-# at peak (15 MiB); not kept, as it grows what the L3 has to hold.  It is
-# read when a pool is made, so apply opens the ports again when it changes
-# it; set by hand, it waits for the next open.  EXP_RX_REGION_STACK holds a
-# run to another depth.
-RX_REGION_STACK=0
+# in): 64 (Mike, 30 October).  It may not grow the region (Mike, 25
+# October: "we cannot afford to increase the region"): FLAMEGRAPH round 04
+# found 1024 saves the rings about 3 us a loaned WRITE, for about 940 more of
+# the region's pages in use at peak (15 MiB), and it was not kept.  With the
+# region's per-device mapping (build 504, third boot, six drives), 64 against
+# 0 in copy mode on two ports kept the rate, took 3% fewer nfsd cycles a
+# WRITE, and held about 23% fewer of the region's pages on average, with a
+# lower peak.  It is read when a pool is made, so apply opens the ports again
+# when it changes it; set by hand, it waits for the next open.
+# EXP_RX_REGION_STACK holds a run to another depth.
+RX_REGION_STACK=64
 # The NFSv3 duplicate reply cache's entries (nfsd's drc_max_entries):
 # FLAMEGRAPH round 12 (25 October), nfsd -3.4 us a loaned WRITE against the
 # 262144 nfsd sizes itself to here, and the latency the same; it never hits
