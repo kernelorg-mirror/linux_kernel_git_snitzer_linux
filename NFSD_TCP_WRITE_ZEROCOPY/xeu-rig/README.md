@@ -751,6 +751,16 @@ before believing a figure.
 
 ## tardis2: loan mode on port a (FLAMEGRAPH round 45, step 4)
 
+**Done on 30 October** on build 504 (`run113.sh` and `run114.sh` in
+`../FLAMEGRAPH/45-region-holders/`, run111 and run112 again with the
+kernel's own sunrpc `666175BED7A343E376C1742` pinned): the `mapped
+0000:a1:00.0` line, the slot's life over a port down and up and a
+resize, no `escaped` and no WARNING. B against A in loan mode is now
++0.15k ring and +2.75k nfsd cycles a WRITE (0.9%, was 3 to 3.5%), A
+came in under run111's A, and the xarray is gone from the profile.
+The account is "What step 4 found" in the round's README. What
+follows is the plan as written before the boot.
+
 **After the boot:**
 - `rodata=noalias` is in `/etc/kernel/cmdline`, so it carries over.
 - The drives, `nfs-server` and `./bringup.sh 32768 256`, as in "tardis2
