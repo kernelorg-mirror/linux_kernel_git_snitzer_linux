@@ -892,6 +892,14 @@ int nfs_initiate_pgio(struct rpc_clnt *clnt, struct nfs_pgio_header *hdr,
 		return nowait ? -EAGAIN : 0;
 	}
 
+	/*
+	 * Let the first RPC leg of an O_DIRECT pgio run here: its callbacks
+	 * take no lock the submitter holds, and the submitter holds no mmap,
+	 * VMA or invalidate_lock.  Page-cache I/O can come from a fault or
+	 * from readahead under those, and a NOWAIT submitter must not block.
+	 */
+	if (hdr->dreq && !test_bit(NFS_IOHDR_NOWAIT, &hdr->flags))
+		task_setup_data.flags |= RPC_TASK_INLINE_OK;
 	task = rpc_run_task(&task_setup_data);
 	if (IS_ERR(task)) {
 		if (test_bit(NFS_IOHDR_NOWAIT, &hdr->flags)) {
