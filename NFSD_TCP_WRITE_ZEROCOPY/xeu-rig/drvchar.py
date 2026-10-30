@@ -15,6 +15,14 @@
 # TAIL seconds (15) after that, or at the cap.  STOP=0 runs every drive
 # to the cap.  A second under that 85% is counted as a dip either way.
 #
+# PAUSE=<second>:<seconds> stops every drive's fio (SIGSTOP to its process
+# group) at that second of the clock and starts them again (SIGCONT) after
+# the length given: a stall like those of the two-port runs, on every
+# drive at once.  The paused seconds and the two after them are not
+# judged for a dip or a step down.  fio's rate is an average from its
+# start, so after the pause a drive writes as fast as it can until it has
+# caught up, as a client does with its backlog after a stall.
+#
 #   drvchar.py $L/drvchar-1 300 0:7.25 1:0 2:7.25 3:0
 #
 # A drive is named by its filesystem, /hs/nvme<n>, and read through the
@@ -24,7 +32,7 @@
 #
 # Writes <out>/sec.tsv (a line a second: for each drive GB/s, % busy and writes),
 # <out>/temp.tsv and <out>/summary.txt.
-import os, subprocess, sys, time
+import os, signal, subprocess, sys, time
 
 out, cap = sys.argv[1], int(sys.argv[2])
 drives = {}; extra = {}
@@ -34,6 +42,7 @@ for a in sys.argv[3:]:
     extra[int(f[0])] = ['--' + x for x in f[2].split(',')] if len(f) > 2 else []
 TAIL = int(os.environ.get('TAIL', 15))
 STOP = os.environ.get('STOP', '1') != '0'
+PAUSE = [int(x) for x in os.environ['PAUSE'].split(':')] if os.environ.get('PAUSE') else None
 os.makedirs(out, exist_ok=True)
 
 def dev(n):
@@ -78,7 +87,7 @@ for n, r in drives.items():
     if r:
         cmd.append('--rate=%d' % (r * 1e9 / 4))
     cmd += extra[n]
-    procs[n] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    procs[n] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 # fio lays its files out first; the clock starts when every drive is writing.
 names = sorted(drives)
@@ -88,7 +97,7 @@ sec.write('s ' + ' '.join('nvme%d_GBps nvme%d_busy nvme%d_wps' % (n, n, n) for n
 tmp.write('s ' + ' '.join('nvme%d_C/sensor1/T1/T2' % n for n in names) + '\n')
 hist = {n: [] for n in names}
 dips = {}; dip1 = {}
-step = {}	# drive -> (second, GB written by then)
+step = {}	# drive -> (second, GB written by then, base, its place in hist)
 done = {}	# drive -> second its fio was stopped
 total = {n: 0.0 for n in names}
 time.sleep(4)
@@ -96,6 +105,11 @@ p = stats(); t0 = tp = time.time(); s = 0
 while s < cap and len(done) < len(names):
     time.sleep(max(0, t0 + s + 1 - time.time()))
     c = stats(); tc = time.time(); s += 1; dt = tc - tp
+    if PAUSE and s in (PAUSE[0], PAUSE[0] + PAUSE[1]):
+        for n in names:
+            if n not in done:
+                os.killpg(procs[n].pid, signal.SIGSTOP if s == PAUSE[0] else signal.SIGCONT)
+    paused = PAUSE and PAUSE[0] < s <= PAUSE[0] + PAUSE[1] + 2
     row = []
     for n in names:
         k = blk[n]
@@ -105,13 +119,15 @@ while s < cap and len(done) < len(names):
         if n in done:
             continue
         total[n] += g * dt
+        if paused:
+            continue
         h = hist[n]; h.append(g)
         if len(h) >= 13 and g < 0.85 * sorted(h[2:12])[5]:
             dips[n] = dips.get(n, 0) + 1; dip1.setdefault(n, s)
         if n not in step and len(h) >= 17:
             base = sorted(h[2:12])[5]
             if all(x < 0.85 * base for x in h[-5:]):
-                step[n] = (s - 4, total[n] - sum(h[-5:]) * 1.0, base)
+                step[n] = (s - 4, total[n] - sum(h[-5:]) * 1.0, base, len(h) - 5)
         if STOP and n in step and s >= step[n][0] + TAIL:
             procs[n].terminate(); done[n] = s
     sec.write('%d %s\n' % (s, ' '.join(row))); sec.flush()
@@ -127,10 +143,12 @@ for n in names:
 def tag(n): return ' '.join([str(drives[n] or 'all')] + [x[2:] for x in extra[n]])
 with open(out + '/summary.txt', 'w') as f:
     f.write('drives: %s\n' % ', '.join('nvme%d is %s' % (n, blk[n]) for n in names))
+    if PAUSE:
+        f.write('paused every drive at %d s for %d s\n' % tuple(PAUSE))
     for n in names:
         h = hist[n]; base = sorted(h[2:12])[5] if len(h) >= 12 else float('nan')
         if n in step:
-            after = h[step[n][0] - 1:]
+            after = h[step[n][3]:]
             l = 'nvme%d asked %s: %.1f GB/s, stepped down at %d s after %.0f GB, then %.1f GB/s (wrote %.0f GB in %d s)' % (
                 n, tag(n), base, step[n][0], step[n][1], sum(after) / max(1, len(after)), total[n], done[n])
         else:
