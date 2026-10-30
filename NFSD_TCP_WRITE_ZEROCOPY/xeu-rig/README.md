@@ -1,4 +1,110 @@
-# 29 October: the kernel with the region's per-device mapping — tardis1 copy on two ports, tardis2 loan on one — read this first
+# tardis1 on build 503 (29 October, evening): copy on two ports, no regression — read this first
+
+tardis1 booted `7.3.0-7.hs.503.loanpages_pool.el9.aarch64+16k`. **It is
+not the kernel the section below is for.** It was built at 14:00 MDT
+(20:00 UTC) on 29 October; `0c375e06bf64`, the region's per-device
+mapping, was committed at 15:49 MDT, and the debugfs file has no `mapped`
+and no `free_unmapped` line. It does
+carry every other code commit since build 494: `rx_region_stack`,
+`drc_max_entries`, the wake changes, nfsd's reused credentials. Mike
+chose to run copy mode on it anyway. Items 2 and 4 of "tardis1: copy mode
+on both ports" (the slots and a slot's life) could not be checked, and
+still wait for a kernel built from `0c375e06bf64` or later.
+
+Logs, the run scripts (`run.sh`, `run-s64.sh`, `run-d2.sh`, `chain.sh`)
+and `results.tsv` are in `$L/t1-503/`.
+
+**The first ten minutes:**
+- sunrpc `666175BED7A343E376C1742`, the same from `modinfo`.
+- nfsd `3F0C341E86E266D5FDF2ADF`.
+- xeu `CA0931345E46C929B11D01F` (kmod-xsight 2.0.1-13, already
+  installed for 503; no rebuild needed).
+- `arm_cmn` loaded at boot. No NFS client connected.
+- `./bringup.sh 32768 256` and `./port-setup.sh enp164s0f0 56`: region
+  32768 pages on `0000:a1:00.0,0000:a4:00.0`, `alloc_fail` 0, `escaped` 0.
+- `settled.sh apply` ended in "the settled setting".
+
+**KUnit, from the package:** `sunrpc-xdr-bvec` 7, `sunrpc-svcsock-rx` **52**
+(50 on 494), `nfsd-receive-bvec` 7, `nfsd4-receive-bvec` 10. No failure,
+no skip.
+
+**`twoport.sh`'s `DEFER=` did not hold (fixed).** Since `41194d60010d`
+`settled.sh place` writes each port's settled deferral, and `twoport.sh`
+ran the placement after setting the run's `DEFER`, so it put the settled
+value back. The first `DEFER=0/0` run failed the two-port audit
+(`enp161s0f0 NAPI deferral 2/10000 (want 0/0)`); `DEFER=2/10000` would
+have failed on port b the same way. `67b042f0993e` sets the run's
+deferral after the placement. It then held on both ports: `defer_a=0/0`
+and `defer_b=2/10000` each passed the audit.
+
+## The runs (18:16 to 18:41 MDT)
+
+Copy mode on both ports: `RCVBUF=393216 ENTRIES=128`, `twoport.sh`'s
+defaults (`WARM=15 RUNTIME=45`, four drives a port). Each run came after
+an fstrim of all eight drives and 120 s of rest. The region's free pages
+were sampled every 0.2 s for 10 s, from 10 s into the timed load.
+
+| run | setting | total (fio) | a / b | wire in the window, a + b | WRITEs/s | cycles a WRITE, ring / nfsd | rings a / b, nfsd busy | region peak, mean in use (min to max) | retrans | drives |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `two-copy-A-1` | DEFER 0/0, stack 0 (256) | 57.09 | 28.93 / 28.16 | 31.49 + 30.42 = 61.91 | 58.6k | 95.3k / 1030.6k | 25 / 23, 56% | 1280, 1279 (1264 to 1280) | 13 | none stepped down |
+| `two-copy-A-2` | DEFER 0/0, stack 0 (256) | **61.32** | 31.15 / 30.17 | 31.49 + 30.45 = 61.94 | 58.5k | 94.2k / 988.0k | 23 / 23, 53% | 1168, 1113 (1104 to 1168) | 12 | none stepped down; nvme1 and nvme3 past the fast region |
+| `two-copy-s64-1` | DEFER 0/0, stack 64 | 54.88 | 27.79 / 27.10 | 31.02 + 30.31 = 61.33 | 57.8k | 96.4k / 1062.4k | 24 / 24, 56% | 1193, 1087 (940 to 1164) | 22 | nvme4 and nvme7 at 21 s |
+| `two-copy-s64-2` | DEFER 0/0, stack 64 | 40.87 | 20.72 / 20.16 | 18.72 + 18.94 = 37.66 | 34.7k | 95.4k / 932.3k | 11 / 11, 27% | 1198, 995 (939 to 1177) | 265 | seven of eight, from 19 s |
+| `two-copy-d2-1` | DEFER 2/10000 on both, stack 0 | 48.52 | 23.84 / 24.69 | 29.02 + 29.18 = 58.20 | 55.5k | 88.3k / 957.5k | 17 / 15, 48% | 1280, 1152 (flat) | 38 | nvme0 at 23 s, nvme7 at 22 s, nvme5 and nvme6 at 48 to 51 s |
+| build 494 `two-384k-1` | DEFER 0/0 | 58.47 | 29.78 / 28.69 | 30.06 + 29.03 = 59.09 | | | | | | none stepped down |
+| build 494 `two-384k-2` | DEFER 0/0 | 57.89 | 29.14 / 28.74 | 29.58 + 29.16 = 58.74 | | | | | | nvme7 at 14 s |
+
+In every run `admitted` stayed at 3096 and 2 (nothing loaned), with
+`alloc_fail` 0, `escaped` 0 and 31616 pages free after it. No WARNING
+appeared in dmesg. The second `DEFER=2/10000` run was not run: Mike
+stopped the testing at about 18:40. The host was left at the settled setting
+(stack 0, port a 2/10000, port b 0/0), with the drives mounted,
+nfs-server running and the region bound.
+
+**What they show:**
+- **No regression against build 494; the wire is higher.** Both 0/0 runs
+  carried about 62 GB/s on the wire in the window (61.91, 61.94), against
+  494's 58.74 to 59.09, at the same 58.5k WRITEs a second in both.
+  - `A-2`'s 61.32 is the highest fio total on two ports recorded on
+    tardis1. Before it: 61.02 once with `fq` on the client, 60.41 at the
+    setting.
+  - Its twin `A-1` gave 57.09 with the same wire in the window, so the
+    gap is outside the window, not the steady rate. Quote the wire, or
+    more runs, not 61.32 alone.
+  - 494 ran `WARM=10 RUNTIME=30`; these ran 15 and 45.
+- **Stack 64 bought little region on two ports, and the drives decided
+  both runs.**
+  - The mean in use fell from 1113 to 1279 pages to 995 to 1087. On
+    tardis2, one port, stack 64 took it from 1132 to 774 (round 45,
+    run111).
+  - In `s64-1`, the run the drives spoiled least, the wire was 1% lower
+    and nfsd's cycles a WRITE 3 to 7% higher. That is the round trip
+    through the region that 503 still pays without the per-device
+    mapping.
+  - `s64-2` collapsed in the window (37.66 GB/s on the wire, 265
+    retransmits), with seven drives stepped down.
+- **Deferral 2/10000 on both ports, one run:** the rings' cycles a
+  WRITE were 7% lower (88.3k against 94 to 95k), and the rings were 15
+  to 17% busy against 23 to 25%, as round 44 found on port a. The rate
+  is not a measurement: four drives stepped down.
+- **Drives stepped down in the three runs after the 0/0 pair, writing
+  less than the pair did.** They wrote 437 to 563 GB each, where the 0/0
+  runs wrote 499 to 601 with none stepping down. The retransmits rose
+  with them (22, 265, 38 against 12 to 13). One possible reading: stalls
+  on the receive side pause the writes, and a pause of 0.3 s steps a
+  drive down ("Keep a run inside the drives' fast region",
+  `AGENTS.md`). That is not shown. It may also be the drives' state
+  after a series of runs, since every one of these came after the 0/0
+  pair.
+
+**Still open:**
+- A kernel built from `0c375e06bf64` or later, for items 2 to 4 of the
+  section below and stack 64 with the per-device mapping.
+- The second `DEFER=2/10000` run, and a pair whose drives hold, before
+  `settled.sh` moves port b to 2/10000.
+- Why the drives stepped down from the third run on.
+
+# 29 October: the kernel with the region's per-device mapping — tardis1 copy on two ports, tardis2 loan on one
 
 Mike pushed the tip on 29 October evening (`effa3133c00a`, its last code
 commit `0c375e06bf64`) and started a GitLab build from it. That kernel
