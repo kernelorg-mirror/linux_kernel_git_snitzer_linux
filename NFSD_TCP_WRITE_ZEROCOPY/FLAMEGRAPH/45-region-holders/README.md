@@ -198,3 +198,16 @@ tardis2 on build 504 (`7.3.0-7.hs.504.loanpages_pool.el10.aarch64+16k`, `rodata=
 - **nfsd's side is about 0.27k cycles a page** (3.1k for 11.4 pages), against 0.74k. By leaf, nearly all of it, 3.3k of B's 4.06k, is charged to `_raw_spin_unlock_irqrestore` under `page_pool_return_netmem` (A 0.71 and 0.88k). On arm64 without pseudo-NMI a cycle sample taken with interrupts off is delivered where they are enabled again, so that is the time inside `page_pool_rx_region_put()`'s irqsave section: the region's lock, its free list and the page's owner byte, shared by nfsd's 48 CPUs. That is "about the region's lock" as step 3 expected; its own cycles cannot be split further from this profile.
 
 **What it means.** With the mapping, a stack of 64 costs loan mode about 0.9% of nfsd and nothing on the rings, for 432 fewer pages in use (6.8 MiB, 8%) in loan mode and 379 (5.9 MiB, 33%) in copy mode, at the same rate. Whether to settle `rx_region_stack` at 64 is Mike's; on tardis1 it would also be run with both ports in the region (two slots). What is left of B's cost is nfsd's round trip through the region's lock, which a per-CPU or batched put onto the slot's list would cut further; not tried.
+
+**B again, five runs ([run115.sh](run115.sh), [run115.out](run115.out), samples in [r115/](r115/)).** Mike asked for B again: loan64 three times, then copy once, at 04:58 to 05:15 on 30 October, on the same boot. Taken with run113's two B runs, five loan64 runs of B against run113's two of A:
+
+| loan64 | runs | GB/s | ring cycles (instructions) a WRITE | nfsd cycles (instructions) a WRITE | peak, pages | mean in use, pages |
+|---|---|---|---|---|---|---|
+| A, 256 (run113) | 2 | 40.46 to 40.49 | 128.6k (281.7k) | 292.1k (300.9k) | 6307 to 6522 | 5376 |
+| B, 64 (run113, run115) | 5 | 40.45 to 40.54 | 128.6k (283.1k), 128.1 to 128.9 | 294.8k (303.6k), 294.1 to 295.8 | 6106 to 6277 | 4956 |
+| B − A | | | **−0.0k (+1.4k)** | **+2.7k, +0.9% (+2.7k)** | | **−420 (−8%)** |
+
+The copy run at B: 40.81 GB/s, ring 137.5k and nfsd 698.7k cycles a WRITE, peak 1042, mean in use 773: as run113's two copy runs at B (137.6k, 699.2k, 771).
+
+- **B's cost holds at about 0.9% of nfsd and nothing on the rings,** over five runs; every B run's nfsd cycles lie above both A runs' 292.1k, so the 2.7k is real, not noise.
+- **nfsd's instructions rise as much as its cycles** (+2.7k), so what is left is work, not waiting on the region's lock: about 0.24k instructions for each of the 11 more pages a WRITE that go round, nearly all inside `page_pool_rx_region_put()`'s irqsave section by r114's profile.
