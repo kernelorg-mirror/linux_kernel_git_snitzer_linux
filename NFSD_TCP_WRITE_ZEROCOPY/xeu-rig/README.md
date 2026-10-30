@@ -67,7 +67,7 @@ RUNTIME=20`**, about 340 to 430 GB a drive:
 In every run: `alloc_fail` 0, `escaped` 0, `free_unmapped` 31616 and
 both slots `free 0` after, both budgets' `admitted` unchanged (3096
 and 2), no new WARNING; the host was left at the settled setting,
-stack 0. These are six drives and 15 writers a port, so the rates do
+stack 256. These are six drives and 15 writers a port, so the rates do
 not compare with 503's or boot 2's; the settings compare with each
 other.
 
@@ -86,7 +86,7 @@ runs of each that count, all at the same rate (57.7 to 58.4 GB/s,
   for it and ended in "the settled setting"; the runs below are at 64.
 
 **Deferral 2/10000 on both ports: 6% fewer ring cycles a WRITE, at
-stack 0 and at 64.** At stack 0, `d2-1r` beside the stack-0 runs: the
+stack 256 and at 64.** At stack 256, `d2-1r` beside the stack-256 runs: the
 same rate (58.35 GB/s, 55.6k WRITEs/s), the rings 92.1k cycles a WRITE
 against 96.7 and 98.5 (6% fewer; 503's one run showed 7%), nfsd 1002.0k
 against 1088.6 and 1099.4 (8% fewer), the region's mean in use about the
@@ -109,7 +109,7 @@ fewer), the region's mean in use the same (943 and 945 against 954 and
 settled setting" with both ports at 2/10000, and both answered.
 
 **The xeu-off run** (`6d-xeuoff-1`, `rx_prefetch`, `rx_gro_frags` and
-`irq_msix_mask` at N, `WARM=10 RUNTIME=30`, stack 0) does not count:
+`irq_msix_mask` at N, `WARM=10 RUNTIME=30`, stack 256) does not count:
 `/hs/nvme5` and `/hs/nvme7` stepped down at 14 and 17 s, 39.37 GB/s.
 Its rings took 114.1k cycles a WRITE, against 96 to 98k with the three
 at Y. All three were put back to Y. **It is not to be run again (Mike,
@@ -230,7 +230,7 @@ an fstrim and 120 s of rest), then A-1 once more at `WARM=10 RUNTIME=30`
 | `two-copy-s64-2` | 64 | 35.67 | 10.51 + 10.37 | 19.4k | 106.4 / 710.0 | 1221 / 1002 | 440 | collapse at 33 s; six stepped down |
 | `two-copy-A-1r` (30 s) | 0 | 60.82 | 31.00 + 30.89 | 58.5k | 96.1 / 1043.7 | 1120 / 1104 | 9 | `/hs/nvme0` stepped down at 32 s (about 350 GB) |
 
-Only `s64-1` counts. There is no answer from this boot on stack 0
+Only `s64-1` counts. There is no answer from this boot on stack 256
 against 64; `s64-1` beside `A-1r` (both at about 58.4k WRITEs/s) has
 4% fewer nfsd cycles a WRITE and 13% fewer pages in use on average,
 the opposite of 503's cost, which is what the mapping is for. It wants
@@ -299,7 +299,7 @@ receiving. Mike is giving the host a hard power reset to get the port back.
   0, no WARNING.
 - KUnit (`kunit.log`): 7, 52, 7 and 10, no failure, no skip, as on 503.
 
-**What failed.** `run.sh` (A-1, s64-1, A-2, s64-2: stack 0 and 64 in
+**What failed.** `run.sh` (A-1, s64-1, A-2, s64-2: stack 256 and 64 in
 turns, with `wiresample.sh`'s `wire-sec.tsv` and a `client-sec.tsv`
 beside each run) stopped at its first run: `b: no answer from
 192.168.0.106 in 20 s`. Port b (`enp164s0f0`, 192.168.0.211) is up
@@ -319,7 +319,7 @@ bring-up and again after the slot test, so that a lost port is caught
 before a run.
 
 **Then** steps 1 and 2 again, then `$L/t1-504/run.sh` (Mike: test
-`page_pool.rx_region_stack` 64 first; the stack-0 runs alternate with
+`page_pool.rx_region_stack` 64 first; the stack-256 runs alternate with
 it for the comparison). Steps 3 and 4 (the drives on their own, the
 STALLED line) were put after it.
 
@@ -468,8 +468,8 @@ the scripts in `$L/t1-503/` (`run.sh`, `run-s64.sh`, `run-d2.sh`,
 over the session does not fall on one setting (on 503 every run after
 the first pair was decided by the drives):
 
-    A-1  s64-1  A-2  s64-2      (DEFER 0/0; stack 0, then 64 with EXP_RX_REGION_STACK=64)
-    d2-1  d2-2                  (DEFER=2/10000 on both ports, stack 0)
+    A-1  s64-1  A-2  s64-2      (DEFER 0/0; stack 256, then 64 with EXP_RX_REGION_STACK=64)
+    d2-1  d2-2                  (DEFER=2/10000 on both ports, stack 256)
 
 **A run counts only if it has no `STALLED` line and no step down.** A
 run that does not count is run once more at the end of its round. If
@@ -483,13 +483,13 @@ peak and mean in use (every 0.2 s for 10 s); **each `mapped` slot's
 `escaped`; client retransmits; the step-down, stall and warm-up lines.
 
 **What should show:**
-- **At stack 0, no regression against 503:** about 62 GB/s on the wire
+- **At stack 256, no regression against 503:** about 62 GB/s on the wire
   in the window (61.91 and 61.94 on 503) at 58.5k WRITEs/s.
 - **At stack 64, no cost now.** On 503, without the mapping, `s64-1`
   had 1% less on the wire and 3 to 7% more nfsd cycles a WRITE. With
   pages returned to their slot still mapped, both should be within
-  noise of stack 0, with the region's mean in use lower (995 to 1087
-  on 503, 1113 to 1279 at stack 0).
+  noise of stack 256, with the region's mean in use lower (995 to 1087
+  on 503, 1113 to 1279 at stack 256).
 - **Deferral 2/10000 on both ports:** the rings' cycles a WRITE 7% lower
   (88.3k against 94 to 95k on 503's one run) at the same rate. If both
   runs count and show that, `settled.sh`'s `DEFER[b]` can become
@@ -499,7 +499,7 @@ peak and mean in use (every 0.2 s for 10 s); **each `mapped` slot's
 
 - Write the results up at the top of this README, and point `AGENTS.md`
   at them.
-- Leave the host at the settled setting (`settled.sh apply`, stack 0,
+- Leave the host at the settled setting (`settled.sh apply`, stack 256,
   `EXP_RX_REGION_STACK` unset).
 - What is still open afterwards: whatever steps 3 and 4 found about the
   stalls, `DEFER[b]`, and the regroup when Mike asks.
@@ -552,11 +552,11 @@ were sampled every 0.2 s for 10 s, from 10 s into the timed load.
 
 | run | setting | total (fio) | a / b | wire in the window, a + b | WRITEs/s | cycles a WRITE, ring / nfsd | rings a / b, nfsd busy | region peak, mean in use (min to max) | retrans | drives |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `two-copy-A-1` | DEFER 0/0, stack 0 (256) | 57.09 | 28.93 / 28.16 | 31.49 + 30.42 = 61.91 | 58.6k | 95.3k / 1030.6k | 25 / 23, 56% | 1280, 1279 (1264 to 1280) | 13 | none stepped down |
-| `two-copy-A-2` | DEFER 0/0, stack 0 (256) | **61.32** | 31.15 / 30.17 | 31.49 + 30.45 = 61.94 | 58.5k | 94.2k / 988.0k | 23 / 23, 53% | 1168, 1113 (1104 to 1168) | 12 | none stepped down; nvme1 and nvme3 past the fast region |
+| `two-copy-A-1` | DEFER 0/0, stack 256 | 57.09 | 28.93 / 28.16 | 31.49 + 30.42 = 61.91 | 58.6k | 95.3k / 1030.6k | 25 / 23, 56% | 1280, 1279 (1264 to 1280) | 13 | none stepped down |
+| `two-copy-A-2` | DEFER 0/0, stack 256 | **61.32** | 31.15 / 30.17 | 31.49 + 30.45 = 61.94 | 58.5k | 94.2k / 988.0k | 23 / 23, 53% | 1168, 1113 (1104 to 1168) | 12 | none stepped down; nvme1 and nvme3 past the fast region |
 | `two-copy-s64-1` | DEFER 0/0, stack 64 | 54.88 | 27.79 / 27.10 | 31.02 + 30.31 = 61.33 | 57.8k | 96.4k / 1062.4k | 24 / 24, 56% | 1193, 1087 (940 to 1164) | 22 | nvme4 and nvme7 at 21 s |
 | `two-copy-s64-2` | DEFER 0/0, stack 64 | 40.87 | 20.72 / 20.16 | 18.72 + 18.94 = 37.66 | 34.7k | 95.4k / 932.3k | 11 / 11, 27% | 1198, 995 (939 to 1177) | 265 | seven of eight, from 19 s |
-| `two-copy-d2-1` | DEFER 2/10000 on both, stack 0 | 48.52 | 23.84 / 24.69 | 29.02 + 29.18 = 58.20 | 55.5k | 88.3k / 957.5k | 17 / 15, 48% | 1280, 1152 (flat) | 38 | nvme0 at 23 s, nvme7 at 22 s, nvme5 and nvme6 at 48 to 51 s |
+| `two-copy-d2-1` | DEFER 2/10000 on both, stack 256 | 48.52 | 23.84 / 24.69 | 29.02 + 29.18 = 58.20 | 55.5k | 88.3k / 957.5k | 17 / 15, 48% | 1280, 1152 (flat) | 38 | nvme0 at 23 s, nvme7 at 22 s, nvme5 and nvme6 at 48 to 51 s |
 | build 494 `two-384k-1` | DEFER 0/0 | 58.47 | 29.78 / 28.69 | 30.06 + 29.03 = 59.09 | | | | | | none stepped down |
 | build 494 `two-384k-2` | DEFER 0/0 | 57.89 | 29.14 / 28.74 | 29.58 + 29.16 = 58.74 | | | | | | nvme7 at 14 s |
 
@@ -564,7 +564,7 @@ In every run `admitted` stayed at 3096 and 2 (nothing loaned), with
 `alloc_fail` 0, `escaped` 0 and 31616 pages free after it. No WARNING
 appeared in dmesg. The second `DEFER=2/10000` run was not run: Mike
 stopped the testing at about 18:40. The host was left at the settled setting
-(stack 0, port a 2/10000, port b 0/0), with the drives mounted,
+(stack 256, port a 2/10000, port b 0/0), with the drives mounted,
 nfs-server running and the region bound.
 
 **What they show:**
@@ -687,7 +687,7 @@ kept on tardis2 (`git log --oneline 77f82c816493..0c375e06bf64 -- . ':!NFSD_TCP_
    each port's pages are mapped for its own function, and each slot
    goes and comes back cleanly with its port.
 3. **The region's working set in copy mode on two ports**, at the
-   settled stack (0, the ring's 256) against 64. On tardis2, one port,
+   settled stack (256, the ring's size) against 64. On tardis2, one port,
    64 took copy mode's mean in use from 1132 to 774 pages with no cost
    (round 45, run111).
 
