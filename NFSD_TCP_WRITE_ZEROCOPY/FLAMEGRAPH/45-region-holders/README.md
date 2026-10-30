@@ -211,3 +211,13 @@ The copy run at B: 40.81 GB/s, ring 137.5k and nfsd 698.7k cycles a WRITE, peak 
 
 - **B's cost holds at about 0.9% of nfsd and nothing on the rings,** over five runs; every B run's nfsd cycles lie above both A runs' 292.1k, so the 2.7k is real, not noise.
 - **nfsd's instructions rise as much as its cycles** (+2.7k), so what is left is work, not waiting on the region's lock: about 0.24k instructions for each of the 11 more pages a WRITE that go round, nearly all inside `page_pool_rx_region_put()`'s irqsave section by r114's profile.
+
+**At the new settled setting ([run116.sh](run116.sh), [run116.out](run116.out), samples in [r116/](r116/)).** `settled.sh` holds `rx_region_stack` at 64 and port b's NAPI deferral at 2/10000 since 30 October (Mike, from tardis1's two-port copy runs). Three loan64 runs at it, the stack taken from `settled.sh` with no override, at 16:32 to 16:44 on 30 October, on the same boot. On tardis2 only port a carries the load and only its deferral is audited, so of the two only the stack bears on these runs.
+
+| loan64, stack 64 | runs | GB/s | ring cycles (instructions) a WRITE | nfsd cycles (instructions) a WRITE | peak, pages | mean in use, pages |
+|---|---|---|---|---|---|---|
+| run115, the old setting with the stack set to 64 | 3 | 40.45 to 40.52 | 128.4k (283.2k) | 294.7k (303.7k) | 6140 to 6222 | 4964 |
+| run116, the new settled setting | 3 | 40.39 to 40.51 | 128.3k (282.9k) | 294.9k (303.9k) | 5904 to 6227 | 4888 |
+
+- **The same,** within the runs' spread: the settled setting with the stack at 64 is what run113 and run115 measured as B. Against run113's A (stack 0), loan mode costs nfsd about 2.7k cycles a WRITE (0.9%) and the rings nothing, for about 450 fewer pages in use.
+- Every run: no drive stepped down or low in the warm-up, no stall (twoport.sh's new lines), no failed allocation.
