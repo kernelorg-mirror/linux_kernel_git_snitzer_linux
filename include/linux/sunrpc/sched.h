@@ -129,6 +129,7 @@ struct rpc_task_setup {
 #define RPC_TASK_ASYNC		0x0001		/* is an async task */
 #define RPC_TASK_SWAPPER	0x0002		/* is swapping in/out */
 #define RPC_TASK_MOVEABLE	0x0004		/* nfs4.1+ rpc tasks */
+#define RPC_TASK_INLINE_OK	0x0008		/* may run first leg in caller */
 #define RPC_TASK_NULLCREDS	0x0010		/* Use AUTH_NULL credential */
 #define RPC_CALL_MAJORSEEN	0x0020		/* major timeout seen */
 #define RPC_TASK_NETUNREACH_FATAL 0x0040	/* ENETUNREACH is fatal */

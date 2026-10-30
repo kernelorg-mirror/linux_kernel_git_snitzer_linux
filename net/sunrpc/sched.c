@@ -1102,6 +1102,30 @@ out:
 }
 
 /*
+ * An async task runs its first FSM leg in the caller instead of on rpciod
+ * only when its submitter opted in with RPC_TASK_INLINE_OK, after auditing
+ * that its rpc_call_prepare and rpc_call_done callbacks may run under the
+ * locks it holds at rpc_run_task() time, and only from a plain process
+ * context: no spinlock held, irqs and BH enabled, not in reclaim, not a
+ * workqueue worker, and not already inside an RPC state machine
+ * (__rpc_execute always runs under memalloc_nofs).  Without
+ * CONFIG_PREEMPT_COUNT preemptible() is always false and every task is
+ * queued.  A TLS transport is excluded: its transmit takes the kTLS tx_lock
+ * mutex under the caller's locks.  The leg ends when the task first sleeps.
+ */
+static bool rpc_execute_inline_ok(const struct rpc_task *task)
+{
+	if (!(task->tk_flags & RPC_TASK_INLINE_OK))
+		return false;
+	if (task->tk_client &&
+	    task->tk_client->cl_xprtsec.policy != RPC_XPRTSEC_NONE)
+		return false;
+	return in_task() && preemptible() && !rcu_preempt_depth() &&
+	       !(current->flags & (PF_MEMALLOC | PF_MEMALLOC_NOFS)) &&
+	       !RPC_IS_SWAPPER(task) && !current_work();
+}
+
+/*
  * User-visible entry point to the scheduler.
  *
  * This may be called recursively if e.g. an async NFS task updates
@@ -1115,6 +1139,19 @@ void rpc_execute(struct rpc_task *task)
 	bool is_async = RPC_IS_ASYNC(task);
 
 	rpc_set_active(task);
+	if (is_async && rpc_execute_inline_ok(task)) {
+		/* As rpc_make_runnable(), but run here instead of queueing */
+		bool need_run = !rpc_test_and_set_running(task);
+		unsigned int pflags;
+
+		rpc_clear_queued(task);
+		if (!need_run)
+			return;
+		pflags = memalloc_nofs_save();
+		__rpc_execute(task);
+		memalloc_nofs_restore(pflags);
+		return;
+	}
 	rpc_make_runnable(rpciod_workqueue, task);
 	if (!is_async) {
 		unsigned int pflags = memalloc_nofs_save();
