@@ -134,9 +134,25 @@ not.
 - The drives: `/hs/nvme0`, `/hs/nvme4` and now `/hs/nvme5` stall on
   their own, all on firmware `830ZRR02`, none hot or worn. Whether that
   is the drives, their slots or the firmware is not known.
-- Step 4 (the `STALLED` and `low in the warm-up` lines in `drives.txt`)
-  is still to be written; `drives-sec.tsv` beside `wire-sec.tsv` shows
-  the stalls today by hand.
+- Step 4's `low in the warm-up` line is still to be written. **Its
+  `STALLED` line is in `twoport.sh` since 30 October:** `wiresample.py`
+  writes `wire-sec.tsv` (each port's receive GB/s and TcpExt's receive
+  counters) from the same moment as `drvsample.py`, row for row with
+  `drives-sec.tsv`; a loop on the client writes `client-sec.tsv` (the time
+  and `RetransSegs`) over the management link; and `stalled.py` adds to
+  `drives.txt`, for each run of seconds of the load (the warm-up
+  included) in which the drives together wrote under half their median,
+  `STALLED: <from> to <to> s, the drives down to <n> GB/s, the wire down to
+  <n> GB/s, client retransmits <n>, busy at the start: <drives>`, or `no
+  stall`. Busy at the start names where it began: the drive that stalls is
+  busy, the ones it starves are not. On the drive files of this boot it
+  finds `s64-2`'s stall at 12 to 21 s with `nvme2 nvme3` busy, and one the
+  old line missed in `6d-s20-A-1`'s warm-up, 3 to 5 s with `nvme5 nvme6`
+  busy; `d2-2r`, one drive slow and the others making up for it, is no
+  stall (its `STEPPED DOWN` says it). Its first run, `6d-stall-1` at the
+  settled setting (stack 64, 2/10000 on both ports): the three files line
+  up second for second, `/hs/nvme7` stepped down at 12 s (52.19 GB/s, does
+  not count) and the drives together fell only to 39 GB/s, so `no stall`.
 
 # tardis1 on build 504, second boot (29 October, late): four drives found only by a rescan, the runs decided by drives, power cycle again
 

@@ -12,8 +12,11 @@
 # in the writes leaves the drive at 4 GB/s.  The defaults (15 s of warm-up
 # and 45 s counted) keep two ports inside it on four drives each; one port
 # on its own four needs WARM=10 RUNTIME=25, or all eight drives in FS_A
-# (or FS_B) with RUNTIME=60.  drives.txt says what each drive wrote and
-# whether one stepped down.
+# (or FS_B) with RUNTIME=60.  drives.txt says what each drive wrote,
+# whether one stepped down, and (stalled.py) every stall of the drives
+# together, the warm-up included, with the wire and the client's
+# retransmits over it, from drives-sec.tsv, wire-sec.tsv and
+# client-sec.tsv, each second of the load.
 #
 #   a   enp161s0f0  192.168.1.211  /hs/nvme0 to /hs/nvme3  client ens3np0
 #   b   enp164s0f0  192.168.0.211  /hs/nvme4 to /hs/nvme7  client ens6np0
@@ -380,6 +383,8 @@ tail -1 audit.txt | tee -a geometry.txt
 echo 1 > $RG	# the region's low-water mark starts again from here
 WH0=$(wr_hits); declare -A BS0; for k in admitted denied paused overrun; do BS0[$k]=$(bstat $k); done
 DRIVES="$(data_drives)" "$RIG/drvsample.py" drives-sec.tsv $(( WARM + RUNTIME + 3 )) &	# every drive, each second of the load
+"$RIG/wiresample.py" wire-sec.tsv $(( WARM + RUNTIME + 3 )) $(for p in $PORTS; do echo ${DEV[$p]}; done) &	# the same seconds, row for row
+cl "for i in \$(seq $(( WARM + RUNTIME + 5 ))); do echo \$(date +%s.%N) \$(awk '/^Tcp:/ && !h {for (i = 1; i <= NF; i++) if (\$i == \"RetransSegs\") c = i; h = 1; next} /^Tcp:/ {print \$c}' /proc/net/snmp); sleep 1; done" > client-sec.tsv 2>&1 &
 for p in $PORTS; do
 	cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio; rm -f /mnt/rxr-$p[0-9]*/f-*" &
 done
@@ -467,6 +472,7 @@ awk -v w=$WARM 'NR == 1 {for (i = 2; i <= NF; i += 3) {split($i, x, "_"); nm[i] 
 		for (j = 1; j <= n; j++) {if (v[i, j] < 0.65 * M && u[i, j] >= 85) {if (++r == 5 && !s) s = j - 4 + w + 3} else r = 0}
 		if (s && m[i] > 0.5) o = o sprintf(" %s at %d s", nm[i], s)}
 	     print (o ? "STEPPED DOWN:" o : "no drive stepped down")}' drives-sec.tsv >> drives.txt
+"$RIG/stalled.py" drives-sec.tsv wire-sec.tsv client-sec.tsv $WARM $RUNTIME >> drives.txt 2>&1
 for p in $PORTS; do cl "cat /tmp/twoport-$p.json" > fio-$p.json; done
 reg min_free > region-min-free.txt; cat $RG > region.txt
 RW=$RW RWMIX=${RWMIX:-} BS=$BS IODEPTH=$IODEPTH JOBS=$JOBS RWTSV=${RWTSV:-} TAG=${TAG:-} python3 - $PORTS <<'EOF' | tee summary.txt
