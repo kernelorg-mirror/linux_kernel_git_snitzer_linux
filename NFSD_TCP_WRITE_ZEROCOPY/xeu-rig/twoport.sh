@@ -465,13 +465,21 @@ wrote > wrote.1
 paste wrote.0 wrote.1 | awk -v lim=${DRIVE_GB:-600} '{g = ($4 - $2) * 512 / 1e9; printf "%s%s %.0f", (NR > 1 ? ", " : "written in the run, GB: "), $1, g; if (g > lim) o = o " " $1} END {printf "%s\n", (o ? " -- PAST THE FAST REGION:" o : "")}' >> drives.txt
 # A drive that fell under 65% of the busiest drive's median for five
 # seconds running while at least 85% busy, in what fio counted, stepped
-# down.  One that is slow and not busy is short of work, not slow.
+# down.  One that is slow and not busy is short of work, not slow.  The
+# same in the warm-up (from its second second), against the same median,
+# for three seconds running, as a warm-up of 8 to 15 s has no room for
+# five: low in the warm-up.
 awk -v w=$WARM 'NR == 1 {for (i = 2; i <= NF; i += 3) {split($i, x, "_"); nm[i] = x[1]}; next} $1 > w + 3 {n++; for (i in nm) {v[i, n] = $i; u[i, n] = $(i + 1)}}
+	$1 >= 2 && $1 <= w + 3 {k++; t[k] = $1; for (i in nm) {wv[i, k] = $i; wu[i, k] = $(i + 1)}}
 	END {for (i = 2; i in nm; i += 3) {for (j = 1; j <= n; j++) a[j] = v[i, j]; asort(a); m[i] = a[int((n + 1) / 2)]; if (m[i] > M) M = m[i]}
 	     for (i = 2; i in nm; i += 3) {r = 0; s = 0
 		for (j = 1; j <= n; j++) {if (v[i, j] < 0.65 * M && u[i, j] >= 85) {if (++r == 5 && !s) s = j - 4 + w + 3} else r = 0}
 		if (s && m[i] > 0.5) o = o sprintf(" %s at %d s", nm[i], s)}
-	     print (o ? "STEPPED DOWN:" o : "no drive stepped down")}' drives-sec.tsv >> drives.txt
+	     print (o ? "STEPPED DOWN:" o : "no drive stepped down")
+	     for (i = 2; i in nm; i += 3) {r = 0; s = 0
+		for (j = 1; j <= k; j++) {if (wv[i, j] < 0.65 * M && wu[i, j] >= 85) {if (++r == 3 && !s) s = t[j] - 2} else r = 0}
+		if (s && m[i] > 0.5) l = l sprintf(" %s at %d s", nm[i], s)}
+	     print (l ? "low in the warm-up:" l : "no drive low in the warm-up")}' drives-sec.tsv >> drives.txt
 "$RIG/stalled.py" drives-sec.tsv wire-sec.tsv client-sec.tsv $WARM $RUNTIME >> drives.txt 2>&1
 for p in $PORTS; do cl "cat /tmp/twoport-$p.json" > fio-$p.json; done
 reg min_free > region-min-free.txt; cat $RG > region.txt
