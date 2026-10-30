@@ -1,4 +1,122 @@
-# tardis1 on build 504 (29 October, night): port b receives nothing, power cycle — read this first
+# tardis1 on build 504, second boot (29 October, late): four drives found only by a rescan, the runs decided by drives, power cycle again — read this first
+
+The hard power reset brought port b back, but the boot found only four
+of the eight data drives. The copy runs on that boot were decided by
+drives stepping down, the four rescanned ones first. Mike is power
+cycling again. Logs are in `$L/t1-504/`: this boot's checks in `boot2/`,
+the first boot's stopped `two-copy-A-1` in `boot1/`.
+
+**After the power cycle, before anything else:**
+1. `lspci | grep -c Non-Volatile` is 9, and `lsblk` shows `nvme8n1` as
+   the Micron root drive and `nvme0n1` to `nvme7n1` as the WD_BLACKs.
+   **If a drive is missing again, stop and tell Mike:** a drive that is
+   late to answer at a cold start is a fault of its own (firmware, or
+   the firmware's wait for slow devices), not something to work around
+   with a rescan.
+2. Port b answers: `ping -I enp164s0f0 192.168.0.106`.
+3. Steps 1 and 2 of the plan below again.
+4. **Step 3, the drives on their own, before any NFS run:**
+   `$L/t1-504/probes.sh` runs D1, D2 and D3 as the plan has them, about
+   12 minutes in all. If the drives hold their fast region (as on 12
+   October: about 625 GB), the rescan is what was wrong with this boot.
+5. Then `$L/t1-504/run-xeuoff.sh` (below), then a round at the short
+   length (`$L/t1-504/run-short.sh`: A, s64, A, s64 at `WARM=10
+   RUNTIME=30`), and only once the probes are clean.
+
+**The drives.** `nvme`s on root ports 00, 10, 20 and 30 (buses 01 to
+31) were missing at boot, although each port's link was up at 32 GT/s
+x4. `echo 1 > /sys/bus/pci/rescan` found all four. The kernel names
+them in the order it finds them, so the names moved: the root drive was
+`nvme4n1`, the drives on buses 41 to 71 `nvme0n1` to `nvme3n1`, and the
+rescanned ones `nvme5n1` to `nvme8n1`. They were mounted by bus, which
+is the usual order (01 is `/hs/nvme0` and holds `hke.git` and `thayne`,
+as the usual `nvme0` does):
+
+| `/hs/` | nvme0 | nvme1 | nvme2 | nvme3 | nvme4 | nvme5 | nvme6 | nvme7 |
+|---|---|---|---|---|---|---|---|---|
+| bus | 01 | 11 | 21 | 31 | 41 | 51 | 61 | 71 |
+| device on this boot | nvme5n1 | nvme6n1 | nvme7n1 | nvme8n1 | nvme0n1 | nvme1n1 | nvme2n1 | nvme3n1 |
+
+`twoport.sh` and `settled.sh` find the drives through their mounts and
+were right. `drvchar.py` took drive `n` to be `/dev/nvme<n>n1` and now
+reads through the mount too. `drives.txt` and `drives-sec.tsv` name the
+kernel's devices, so on this boot `nvme5` there is `/hs/nvme0`.
+
+**Steps 1 and 2 passed again** (`boot2/`): the mapping's two `mapped`
+lines; the settled setting after the bring-up, the slot test and
+KUnit; a slot's life on both ports with `escaped` 0 and no WARNING;
+KUnit 7, 52, 7 and 10; port b answered after each.
+(`dmesg -c` was run once before the slot test by mistake, so the boot's
+first 10 minutes of the kernel log are gone. The probe lines had been
+read, and the WARNING counts from then on are whole.)
+
+**The runs** (`run.log`, `run-r.log`): `run.sh` as the plan has it
+(`DEFER=0/0 RCVBUF=393216 ENTRIES=128`, `WARM=15 RUNTIME=45`, each after
+an fstrim and 120 s of rest), then A-1 once more at `WARM=10 RUNTIME=30`
+(`run-r.sh`). The region, the slots and the budgets held in every run:
+`alloc_fail` 0, `escaped` 0, `free_unmapped` 31616 and both slots
+`free 0` after each, nothing admitted for loans, no new WARNING.
+
+| run | stack | GB/s | wire a + b in the window | WRITEs/s | ring / nfsd kcycles a WRITE | peak / mean in use | client retransmits | drives |
+|---|---|---|---|---|---|---|---|---|
+| `two-copy-A-1` | 0 | 60.48 | 30.54 + 30.10 | 57.4k | 96.5 / 1068.9 | 1200 / 1200 | 10 | `/hs/nvme6` stepped down at 44 s (about 450 GB from the trim) |
+| `two-copy-s64-1` | 64 | 61.39 | 31.18 + 30.59 | 58.3k | 94.8 / 1005.2 | 1217 / 961 | 7 | none stepped down; up to 576 GB |
+| `two-copy-A-2` | 0 | 59.22 | 27.95 + 28.38 | 53.1k | 94.2 / 991.8 | 1280 / 1277 | 119 | stalls at 5 to 9 and 11 to 14 s; `/hs/nvme4` stepped down at 36 s (about 345 GB) |
+| `two-copy-s64-2` | 64 | 35.67 | 10.51 + 10.37 | 19.4k | 106.4 / 710.0 | 1221 / 1002 | 440 | collapse at 33 s; six stepped down |
+| `two-copy-A-1r` (30 s) | 0 | 60.82 | 31.00 + 30.89 | 58.5k | 96.1 / 1043.7 | 1120 / 1104 | 9 | `/hs/nvme0` stepped down at 32 s (about 350 GB) |
+
+Only `s64-1` counts. There is no answer from this boot on stack 0
+against 64; `s64-1` beside `A-1r` (both at about 58.4k WRITEs/s) has
+4% fewer nfsd cycles a WRITE and 13% fewer pages in use on average,
+the opposite of 503's cost, which is what the mapping is for. It wants
+the round run again on drives that hold.
+
+**How the stalls start** (`drives-sec.tsv` beside `wire-sec.tsv`):
+- In `A-2` at 5 s and `s64-2` at 33 s, `/hs/nvme1` to `/hs/nvme3` (three
+  of the four rescanned drives) went in the same second to 0.8 GB/s at
+  100% busy. In that second every other drive, on both ports, fell to
+  about 1 GB/s at 5 to 20% busy: idle, starved of WRITEs. The wire then
+  fell on both ports (to 4 GB/s for 10 s in `s64-2`) and the client
+  retransmitted. The likely path is nfsd's one pool filling with WRITEs
+  held by the slow drives, so that the other port's drives starve too;
+  that has not been measured.
+- Then other drives went to the same 0.75 to 0.8 GB/s at 100% busy:
+  `/hs/nvme0` (rescanned) and `/hs/nvme5`, `/hs/nvme7`. `/hs/nvme0` also
+  stopped for about 2 s at a time (0.12 GB/s, 100% busy) in `A-1`,
+  `s64-1` and `A-2`, too short for the step-down rule.
+- Every step-down came at 345 to 450 GB from the trim (the placement
+  load's 130 GB or so counted), well inside the 625 GB of 12 October,
+  and the shorter run did not avoid it. The drives were at 23 to 30 C
+  (composite) and 44 to 57 C (sensor 1): not heat.
+- `drives.txt`'s `STEPPED DOWN` misses most of this: it looks at one
+  drive at a time and only after the warm-up. Step 4's `STALLED` line is
+  still to be written.
+- Separately, the first 10 s or so of every run (placement and the
+  start of the warm-up) has the client retransmitting 3,000 to 15,000
+  segments a second, with `TCPOFOQueue` in the thousands. There is no
+  per-second record from earlier builds to tell whether that is new.
+
+**Is it xeu?** Builds 503 and 504 are tardis1's first with kmod-xsight
+2.0.1-13 and `rx_prefetch`, `rx_gro_frags` and `irq_msix_mask` at Y
+(also `skb_defer_max` 0 and NAPI's deferral), and 503 is where the
+stalls began. But the stalls traced here start with drives at 100% busy,
+which the network cannot cause, and the wire falls after them. Port b's
+loss of receive on the first boot and the retransmits at the start of a
+run are still open to it. `run-xeuoff.sh` is one `A` run at the short
+length with all three parameters at N (`EXP_XEU_*`; `settled.sh apply`
+reopens the ports for `irq_msix_mask`, and the script's end puts them
+back to Y).
+
+**Changed in the rig:** `drvchar.py` reads a drive through its mount,
+and has `PAUSE=<second>:<seconds>` for step 3: it stops each drive's
+fio by its process group and starts it again, and leaves the paused
+seconds and the two after them out of the step-down test. fio's rate is
+an average from its start, so after a pause the drives write flat out
+until they have caught up, as a client does with its backlog. It has
+not yet run against the drives. `twoport.sh`'s `DRIVE_GB` (600) is
+unchanged; the runs above passed 450.
+
+# tardis1 on build 504 (29 October, night): port b receives nothing, power cycle
 
 Build 504 (`7.3.0-7.hs.504.loanpages_pool`) is the first kernel on
 tardis1 with `0c375e06bf64`. Steps 1 and 2 of the plan below passed;
