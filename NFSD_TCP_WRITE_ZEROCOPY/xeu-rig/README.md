@@ -1,4 +1,185 @@
-# tardis1 on build 503 (29 October, evening): copy on two ports, no regression — read this first
+# tardis1's next boot: the per-device mapping, the drives and the stalls (plan of 29 October, evening) — read this first
+
+Mike is installing a kernel built from `0c375e06bf64` or later, the
+region's per-device mapping, on tardis1. Build 503, the kernel before
+it, lacked that commit (next section). This is the plan for the first
+session on the new kernel, in order. Nothing in it has run.
+
+**Why the plan changed: the drives' rule did not keep 503's runs
+clean.** The rule is fstrim, rest, then `WARM=15 RUNTIME=45` to stay
+inside a drive's 625 GB fast region ("What a drive takes",
+`../XEU_CONVERGENCE.md`). Three of 503's five runs were decided by drops
+in what the drives wrote, and `drives-sec.tsv` shows the rule is not
+what failed:
+- **Every drop began far inside the fast region**, 1 to 350 GB into a
+  run, after 120 s of rest and `twoport.sh`'s own 30.
+- **Several drops hit all eight drives in the same second, on both
+  ports**: `s64-1` at 11 to 15 s, down to 8 GB/s in all; `s64-2` at 34
+  to 44 s, to 5 to 8, with 265 client retransmits. The ports have
+  their own drives and filesystems, so the stream stopped upstream of
+  them: in the client, the wire or the server.
+- **A drive that stepped down mostly did so just after such a stall.**
+  The 12 October probe saw pauses of 0.3 to 3 s do no harm inside the
+  fast region; these stalls were 5 to 10 s.
+- **`twoport.sh` judges only what fio counted**, after the warm-up, so
+  `A-1`'s drop at 9 to 16 s read "no drive stepped down".
+
+The two questions are whether the drives still give back their fast
+region after a trim and a rest, and where the stalls start. Steps 3 and
+4 answer them, before the copy runs of step 5.
+
+## 1. The first ten minutes
+
+As in "The boot into the kernel built from the tip" further down, items
+1 to 6, with these changes:
+- `uname -r` is the new build, not `…hs.503…`, and
+  `cat /sys/module/sunrpc/srcversion` equals `modinfo -F srcversion sunrpc`.
+- **xeu comes with the build** (item 1 of "tardis1: copy mode on both
+  ports" below): `rpm -qa | grep kmod-xsight` names the new kernel, and
+  `modinfo -F version xeu` is 2.0.1-13. `/sys/module/xeu/parameters/` has
+  `rx_gro_frags`, `rx_prefetch` and `irq_msix_mask`, and the srcversion
+  is `CA0931345E46C929B11D01F` (round 45's source, as on 503). Only if
+  the package is missing: `./build-kmod.sh`, `rpm -U`, and reload `xeu`
+  before any region is bound, with no NFS client connected
+  (`ss -Htn state established '( sport = :2049 )'`).
+- `modprobe arm_cmn` if it is not loaded.
+- Mount the drives:
+  `for n in 0 1 2 3 4 5 6 7; do mount -o noatime /dev/nvme${n}n1 /hs/nvme$n; done`
+- `./bringup.sh 32768 256`, `./port-setup.sh enp164s0f0 56`, then
+  `./settled.sh apply`, which must end in "the settled setting".
+
+## 2. The per-device mapping, then KUnit
+
+Items 3 to 5 of "tardis1: copy mode on both ports" below:
+- **The mapping is there.** `cat /sys/kernel/debug/page_pool_rx_region`
+  shows `free_unmapped` and two `mapped <pci> dir <d> pools 4 free <n>`
+  lines, one for `0000:a1:00.0` and one for `0000:a4:00.0`. If there is
+  no `mapped` line, the kernel lacks `0c375e06bf64`: stop and tell Mike.
+- **A slot's life.** With no client connected:
+  - `ip link set enp164s0f0 down`: its line goes, `free_unmapped` grows,
+    `escaped` stays 0, dmesg has no WARNING.
+  - `ip link set enp164s0f0 up`: the line comes back.
+  - Then the same for `enp161s0f0`, then `./settled.sh apply`.
+- **KUnit** with nfs-server stopped (`../run-kunit.sh`). On 503 the
+  counts were 7, 52, 7 and 10. Record the counts; there must be no
+  failure and no skip.
+
+## 3. The drives on their own (local, no NFS)
+
+This answers whether the drives still give back their fast region after
+a trim and a rest, as 12 October found. It runs with no export and no
+client.
+
+**Change first: `drvchar.py` gains `PAUSE=<second>:<seconds>`.** At
+that second of the clock it stops every drive's fio (SIGSTOP), and
+starts them again (SIGCONT) after the length given. That is a stall
+like 503's, on every drive at once. Its sampling and summary are as
+before. This is a docs commit once it has run.
+
+**Three probes**, all eight drives at 7.5 GB/s each (what a two-port
+run writes to them) with an fsync every 8 MiB, `STOP=0`, 75 s
+(about 560 GB a drive, inside the fast region). Each probe starts with
+an fstrim of all eight, 120 s of rest, then an fstrim of each drive
+just before, as `twoport.sh` does:
+
+| probe | command | expected, if the drives are as on 12 October |
+|---|---|---|
+| D1, no pause | `STOP=0 ./drvchar.py $L/t1-<build>/drv-D1 75 0:7.5:fsync=8 1:7.5:fsync=8 … 7:7.5:fsync=8` | 7.5 GB/s throughout, no step down |
+| D2, an 8 s stall at 12 s (about 90 GB in) | `PAUSE=12:8` with the same line | 7.5 again after the stall, no step down |
+| D3, as D2 with no fstrim just before (only the first, then 150 s of rest) | `PAUSE=12:8` | as D2 |
+
+- If D1 or D2 steps down, the drives have changed since 12 October. The
+  rule for a run has to change first; tell Mike before step 5.
+- If D2 steps down and D3 does not, the fstrim just before the load is
+  to blame. `twoport.sh` then drops its fstrim, or rests after it.
+- If all three hold, the drives are not the problem, and the stalls of
+  step 4 are.
+
+The drives' cache must read `write through` (the audit holds it).
+
+## 4. Where a stall starts: the rig's two changes
+
+Both are `twoport.sh` changes, committed as docs once a run has shown
+them working (the first run of step 5 does).
+
+1. **Per second, beside `drives-sec.tsv`, what the drives cannot show.**
+   For the same seconds, from the same moment:
+   - `wire-sec.tsv` on the server, from a new `wiresample.py`: each
+     port's receive GB/s (`/sys/class/net/<dev>/statistics/rx_bytes`)
+     and the deltas of `TcpExt` `TCPOFOQueue`, `TCPRcvQDrop`,
+     `PruneCalled`, `TCPBacklogDrop`, `TCPZeroWindowDrop` and
+     `TCPToZeroWindowAdv` (`/proc/net/netstat`).
+   - `client-sec.tsv` from a loop on the client over the management
+     link: `Tcp` `RetransSegs` and `TcpExt` `TCPTimeouts` and
+     `TCPLossProbes` each second, with its epoch time, so that it can
+     be lined up.
+2. **The summary tells a stall from a drive.** Over every sampled
+   second, the warm-up included, `drives.txt` gains:
+   - `STALLED: <from> to <to> s, the drives down to <n> GB/s, the wire
+     down to <n> GB/s, client retransmits <n>`, for each run of seconds
+     in which all eight drives together wrote under half the run's
+     median;
+   - `low in the warm-up: …`, for a drive stepping down before fio
+     counted, in the same terms as the existing line.
+
+   The existing `STEPPED DOWN` line stays as it is, so runs compare with
+   503's.
+
+A stall in which the wire falls with the drives started before the
+server's disks: then look at the client's retransmits and timeouts and
+the server's receive counters. A stall in which the wire holds and the
+drives fall started in the server, after the socket.
+
+## 5. The copy runs: the stack at 64 with the mapping
+
+The same command line as on 503 (`DEFER=0/0 RCVBUF=393216 ENTRIES=128`,
+`WARM=15 RUNTIME=45`, four drives a port). Each run follows an fstrim
+of all eight and 120 s of rest, and checks: the settled setting, the
+region at 32768 pages, `admitted` unchanged and no new WARNING. Take
+the scripts in `$L/t1-503/` (`run.sh`, `run-s64.sh`, `run-d2.sh`,
+`chain.sh`) as the start, in `$L/t1-<build>/`.
+
+**In turns, not in pairs**, so that a drift in the drives or the host
+over the session does not fall on one setting (on 503 every run after
+the first pair was decided by the drives):
+
+    A-1  s64-1  A-2  s64-2      (DEFER 0/0; stack 0, then 64 with EXP_RX_REGION_STACK=64)
+    d2-1  d2-2                  (DEFER=2/10000 on both ports, stack 0)
+
+**A run counts only if it has no `STALLED` line and no step down.** A
+run that does not count is run once more at the end of its round. If
+the repeat does not count either, stop and look at its per-second
+files before going on.
+
+**For each run, record:** each port's GB/s and the wire in the window;
+WRITEs/s; `./cost.sh` (cycles a WRITE, ring and nfsd); the region's
+peak and mean in use (every 0.2 s for 10 s); **each `mapped` slot's
+`free` and `free_unmapped` after the run**; `alloc_fail` and
+`escaped`; client retransmits; the step-down, stall and warm-up lines.
+
+**What should show:**
+- **At stack 0, no regression against 503:** about 62 GB/s on the wire
+  in the window (61.91 and 61.94 on 503) at 58.5k WRITEs/s.
+- **At stack 64, no cost now.** On 503, without the mapping, `s64-1`
+  had 1% less on the wire and 3 to 7% more nfsd cycles a WRITE. With
+  pages returned to their slot still mapped, both should be within
+  noise of stack 0, with the region's mean in use lower (995 to 1087
+  on 503, 1113 to 1279 at stack 0).
+- **Deferral 2/10000 on both ports:** the rings' cycles a WRITE 7% lower
+  (88.3k against 94 to 95k on 503's one run) at the same rate. If both
+  runs count and show that, `settled.sh`'s `DEFER[b]` can become
+  2/10000 (Mike's call).
+
+## 6. Then
+
+- Write the results up at the top of this README, and point `AGENTS.md`
+  at them.
+- Leave the host at the settled setting (`settled.sh apply`, stack 0,
+  `EXP_RX_REGION_STACK` unset).
+- What is still open afterwards: whatever steps 3 and 4 found about the
+  stalls, `DEFER[b]`, and the regroup when Mike asks.
+
+# tardis1 on build 503 (29 October, evening): copy on two ports, no regression
 
 tardis1 booted `7.3.0-7.hs.503.loanpages_pool.el9.aarch64+16k`. **It is
 not the kernel the section below is for.** It was built at 14:00 MDT
