@@ -1530,6 +1530,43 @@ void xprt_end_transmit(struct rpc_task *task)
 	xprt_release_write(xprt, task);
 }
 
+static bool xprt_request_sleep_receive_action(struct rpc_task *task,
+					      void *data)
+{
+	return rpc_task_set_transmit_done(task);
+}
+
+/*
+ * @task, asleep on xprt->sending in call_transmit(), has just been sent
+ * by the transmit lock holder.  Put it to sleep on xprt->pending as
+ * call_transmit_status() and xprt_request_wait_receive() would, instead
+ * of waking it to do so.  The request is pinned by xprt_transmit(), so
+ * @task cannot be released under us.
+ */
+static bool xprt_request_sleep_receive(struct rpc_task *task)
+{
+	struct rpc_rqst *req = task->tk_rqstp;
+	struct rpc_xprt *xprt = req->rq_xprt;
+	bool moved = false;
+
+	if (xprt->ops->wait_for_reply_request !=
+	    xprt_wait_for_reply_request_def)
+		return false;
+	spin_lock(&xprt->queue_lock);
+	if (test_bit(RPC_TASK_NEED_RECV, &task->tk_runstate) &&
+	    !xprt_request_retransmit_after_disconnect(task)) {
+		moved = rpc_sleep_move_timeout(&xprt->sending, &xprt->pending,
+				task, xprt_request_sleep_receive_action, NULL,
+				xprt_timer, xprt_request_timeout(req));
+		/* As in xprt_request_wait_receive() */
+		if (moved && xprt_request_retransmit_after_disconnect(task))
+			rpc_wake_up_queued_task_set_status(&xprt->pending,
+					task, -ENOTCONN);
+	}
+	spin_unlock(&xprt->queue_lock);
+	return moved;
+}
+
 /**
  * xprt_request_transmit - send an RPC request on a transport
  * @req: pointer to request to transmit
@@ -1605,6 +1642,9 @@ xprt_request_transmit(struct rpc_rqst *req, struct rpc_task *snd_task)
 out_dequeue:
 	trace_xprt_transmit(req, status);
 	xprt_request_dequeue_transmit(task);
+	if (status == 0 && task != snd_task && !is_retrans &&
+	    xprt_request_sleep_receive(task))
+		return status;
 	rpc_wake_up_queued_task_set_status(&xprt->sending, task, status);
 	return status;
 }
