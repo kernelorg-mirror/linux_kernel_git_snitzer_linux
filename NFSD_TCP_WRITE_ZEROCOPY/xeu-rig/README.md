@@ -1,3 +1,45 @@
+# tardis1 on build 504 (29 October, night): port b receives nothing, power cycle — read this first
+
+Build 504 (`7.3.0-7.hs.504.loanpages_pool`) is the first kernel on
+tardis1 with `0c375e06bf64`. Steps 1 and 2 of the plan below passed;
+the copy runs of step 5 never started, because port b stopped
+receiving. Mike is giving the host a hard power reset to get the port back.
+
+**What passed** (`$L/t1-504/`):
+- sunrpc's srcversion is the module's own; xeu is the build's
+  `kmod-16k-xsight-…504…-13`, srcversion `CA0931345E46C929B11D01F`.
+- After `./bringup.sh 32768 256` and `./port-setup.sh enp164s0f0 56`,
+  the region has two `mapped` lines, `0000:a1:00.0` and `0000:a4:00.0`,
+  each `dir 2 pools 4`; `settled.sh apply` ends in "the settled setting".
+- A slot's life (`slot-life.txt`): each port down takes its line away
+  and gives its pages to `free_unmapped`, up brings it back, `escaped`
+  0, no WARNING.
+- KUnit (`kunit.log`): 7, 52, 7 and 10, no failure, no skip, as on 503.
+
+**What failed.** `run.sh` (A-1, s64-1, A-2, s64-2: stack 0 and 64 in
+turns, with `wiresample.sh`'s `wire-sec.tsv` and a `client-sec.tsv`
+beside each run) stopped at its first run: `b: no answer from
+192.168.0.106 in 20 s`. Port b (`enp164s0f0`, 192.168.0.211) is up
+with a link, and sends: its ARP requests for .106 show in tcpdump and
+`tx_packets` counts them. It receives nothing: `rx_packets` 0,
+`rx_dropped` 10, `port_rx_fifo_tc0_packets` stuck at 1804,
+`port_rx_non_prom_drop_packets` 1. The client's `ens6np0` is up at
+400 Gb/s and cannot ping .211 either. Port a works. There is no IOMMU
+on the ports (no `iommu_group`) and dmesg has no fault. A reopen by
+`./port-setup.sh enp164s0f0 56` did not bring it back.
+
+This is the card's known failure (Mike): port b stops receiving from
+time to time, for no known cause, and only a hard power reset brings
+it back; a reboot or a reopen does not. **After the power cycle, check
+that port b answers** (`ping -I enp164s0f0 192.168.0.106`) after the
+bring-up and again after the slot test, so that a lost port is caught
+before a run.
+
+**Then** steps 1 and 2 again, then `$L/t1-504/run.sh` (Mike: test
+`page_pool.rx_region_stack` 64 first; the stack-0 runs alternate with
+it for the comparison). Steps 3 and 4 (the drives on their own, the
+STALLED line) were put after it.
+
 # tardis1's next boot: the per-device mapping, the drives and the stalls (plan of 29 October, evening) — read this first
 
 Mike is installing a kernel built from `0c375e06bf64` or later, the
