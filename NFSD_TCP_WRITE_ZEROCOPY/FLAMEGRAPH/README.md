@@ -159,7 +159,12 @@ decided.
    but costs loan mode 3 to 3.5%, most of it the pool's DMA-index
    xarray on each page's round trip through the region. Step 4,
    `0c375e06bf64` (a region page kept mapped for its device, on a free
-   list per device), is to run on the next kernel.
+   list per device), ran on build 504 (30 October): the xarray is gone
+   from the round trip, B against A costs loan mode +0.15k ring and
+   +2.75k nfsd cycles a WRITE (0.9%, was 3 to 3.5%) for 432 fewer pages
+   in use, copy mode 379 fewer for nothing, the rate the same; A itself
+   came in 1.6k and 4.3k under build 499's. Settling the stack at 64 is
+   Mike's to decide.
 
 ## Where the kept rounds stand (2026-10-28)
 

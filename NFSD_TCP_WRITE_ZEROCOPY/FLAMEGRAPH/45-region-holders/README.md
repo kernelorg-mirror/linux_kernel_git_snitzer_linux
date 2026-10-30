@@ -151,3 +151,50 @@ Built with W=1 (`net/core/`, the running build 499's `.config`), checkpatch `--s
 2. The region's life with it: the port down and up (the slot's pages unmapped and the slot given up: `mapped` gone from debugfs, `free_unmapped` back to all free), a resize (`run110.sh`'s `resize`), no `escaped` and no WARNING. On tardis1, both ports listed in `rx_region_dev`, two slots, and a run on both.
 3. run111 again (A against B, loan and copy) and run112's profile: B's round trip should cost about the region's lock, a few hundred cycles a page, so B's 3 to 3.5% in loan mode should mostly go, and A's own 2.9k nfsd and 1.5k ring cycles a WRITE with it.
 
+
+### What step 4 found (r113, r114)
+
+tardis2 on build 504 (`7.3.0-7.hs.504.loanpages_pool.el10.aarch64+16k`, `rodata=noalias`), on 30 October: the kernel's own sunrpc (`666175BED7A343E376C1742`) and nfsd (`3F0C341E86E266D5FDF2ADF`), the build's kmod-xsight 2.0.1-13 (xeu `CA0931345E46C929B11D01F`, round 45's kept source), the region at 32768, the settled setting with round 44's deferral.
+
+**The region's life with the mapping.** After `bringup.sh`, debugfs had `free_unmapped 32256` and `mapped 0000:a1:00.0 dir 2 pools 4 free 0`. Port a down: the `mapped` line went and `free_unmapped` came back to all 32768, `escaped` 0; up, the line came back. A resize to 16384 and back to 32768 ([r113/resize.sh](r113/resize.sh), run110's `resize`): each region freed with 0 escaped, the slot made again each time. No WARNING in dmesg from the boot to the end of r114.
+
+**The A/B ([run113.sh](run113.sh), [run113.out](run113.out), samples in [r113/](r113/)):** run111 with C left out, loan64 A B B A then copy A B B A, at 01:13 to 01:49. Means of the two runs of each arm:
+
+| | GB/s | ring cycles (instructions) a WRITE | nfsd cycles (instructions) a WRITE | peak, pages | mean in use, pages |
+|---|---|---|---|---|---|
+| loan64 A, 256 | 40.48 | 128.6k (281.7k) | 292.1k (300.9k) | 6522, 6307 | 5376 |
+| loan64 B, 64 | 40.50 | 128.8k (282.8k) | 294.9k (303.6k) | 6106, 6277 | 4944 |
+| copy A, 256 | 40.79 | 137.3k (267.8k) | 699.9k (467.8k) | 1184, 1168 | 1150 |
+| copy B, 64 | 40.79 | 137.6k (268.5k) | 699.2k (466.9k) | 1061, 1043 | 771 |
+
+| B against A | loan64 | copy |
+|---|---|---|
+| ring cycles a WRITE | **+0.15k (+0.1%)**, was +3.9k | +0.3k |
+| nfsd cycles a WRITE | **+2.75k (+0.9%)**, was +10.5k | −0.7k |
+| instructions, ring / nfsd | +1.2k / +2.7k, was +11.6k / +13.1k | +0.7k / −0.9k |
+| mean in use | **−432 (5376 to 4944, −8%)** | **−379 (1150 to 771, −33%)** |
+
+- **B's cost in loan mode is mostly gone:** 0.9% of nfsd's cycles and nothing measurable on the rings, against 3.0 and 3.5% on build 499 with the pool's xarray (run111). The rate is the same at A and B in both modes, and no allocation failed.
+- **A itself is cheaper:** 128.6k ring and 292.1k nfsd cycles a WRITE against run111's A, 130.2k and 296.4k: −1.6k and −4.3k, as step 3 put A's own round trip at 1.5k and 2.9k. These are across a reboot and a kernel (build 499 with the tip's sunrpc in `updates/`, now build 504), so they are a reading, not an A/B.
+- **Copy mode is as on build 499:** B free, a third less of the region in use.
+
+**The profile ([run114.sh](run114.sh), [run114.out](run114.out), reports in [r114/](r114/)):** run112 again, loan64 A B B A, at 01:49 to 02:06, with `__page_pool_unmap_netmem_dma`, `__xa_cmpxchg` and `__page_pool_dma_sync_for_device` added to the functions reported. Means of each arm's two runs, cycles a WRITE with callees:
+
+| | A, 256 | B, 64 | B − A | build 499: B − A |
+|---|---|---|---|---|
+| nfsd: `page_pool_return_netmem` calls (a page out of its pool) | 3.38 | 14.81 | +11.4 | +10.1 |
+| nfsd: `page_pool_rx_region_put` calls | 3.23 | 14.03 | +10.8 | +9.3 |
+| ring: `page_pool_rx_region_alloc` calls (a refill of up to 16) | 0.18 | 0.77 | +0.59 | +0.51 |
+| **nfsd** `page_pool_put_netmem_bulk` | 3.34k | 6.48k | +3.1k | +7.4k |
+| `page_pool_return_netmem` | 0.99k | 4.06k | **+3.1k** | +7.4k |
+| `__page_pool_unmap_netmem_dma`, `__xa_cmpxchg`, `__xa_erase` | – | – | | +3.3k |
+| `page_pool_rx_region_put` | 0.07k | 0.19k | +0.1k | +0.2k |
+| `queued_spin_lock_slowpath`, all of nfsd | 0.48k | 0.57k | +0.1k | +0.3k |
+| **ring** `page_pool_rx_region_alloc` | 0.04k | 0.20k | **+0.16k** | +4.3k |
+| `page_pool_register_dma_index`, `__xa_alloc`, `page_pool_dma_map` | – | – | | +2.9k |
+
+- **The xarray is gone from the round trip,** on both sides: no sample in `__xa_cmpxchg`, `__xa_erase`, `__xa_alloc`, `page_pool_register_dma_index`, `page_pool_dma_map` or the unmap. Nor did `__page_pool_dma_sync_for_device` take a sample: on this coherent machine the slot's pages need no sync.
+- **The ring's side of a round trip is now about 0.015k cycles a page** (0.16k for 11 pages), against 0.58k: a page from the slot's own list is taken under the region's lock with nothing else to do.
+- **nfsd's side is about 0.27k cycles a page** (3.1k for 11.4 pages), against 0.74k. By leaf, nearly all of it, 3.3k of B's 4.06k, is charged to `_raw_spin_unlock_irqrestore` under `page_pool_return_netmem` (A 0.71 and 0.88k). On arm64 without pseudo-NMI a cycle sample taken with interrupts off is delivered where they are enabled again, so that is the time inside `page_pool_rx_region_put()`'s irqsave section: the region's lock, its free list and the page's owner byte, shared by nfsd's 48 CPUs. That is "about the region's lock" as step 3 expected; its own cycles cannot be split further from this profile.
+
+**What it means.** With the mapping, a stack of 64 costs loan mode about 0.9% of nfsd and nothing on the rings, for 432 fewer pages in use (6.8 MiB, 8%) in loan mode and 379 (5.9 MiB, 33%) in copy mode, at the same rate. Whether to settle `rx_region_stack` at 64 is Mike's; on tardis1 it would also be run with both ports in the region (two slots). What is left of B's cost is nfsd's round trip through the region's lock, which a per-CPU or batched put onto the slot's list would cut further; not tried.
