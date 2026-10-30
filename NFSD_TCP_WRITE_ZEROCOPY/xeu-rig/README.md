@@ -81,15 +81,31 @@ runs of each that count, all at the same rate (57.7 to 58.4 GB/s,
   about 23% fewer. The peak too: 1180 and 1018, against 1296 and 1196.
   On 503, without the mapping, stack 64 cost 3 to 7% more nfsd cycles;
   with it, it holds fewer of the region's pages, not more.
-- `settled.sh` still holds the stack at 0: changing it is Mike's call.
+- **`settled.sh` holds the stack at 64 since the morning of 30 October
+  (Mike, `9fe6781919d1`).** `settled.sh apply` opened both ports again
+  for it and ended in "the settled setting"; the runs below are at 64.
 
-**Deferral 2/10000 on both ports: one run counts.** `d2-1r` beside the
-stack-0 runs: the same rate (58.35 GB/s, 55.6k WRITEs/s), the rings
-92.1k cycles a WRITE against 96.7 and 98.5 (6% fewer; 503's one run
-showed 7%), nfsd 1002.0k against 1088.6 and 1099.4 (8% fewer), the
-region's mean in use about the same (1185). The three runs that do not
-count have the rings at 93.6 to 95.7k. One run is not enough to set
-`DEFER[b]` to 2/10000; the plan wants both to count.
+**Deferral 2/10000 on both ports: 6% fewer ring cycles a WRITE, at
+stack 0 and at 64.** At stack 0, `d2-1r` beside the stack-0 runs: the
+same rate (58.35 GB/s, 55.6k WRITEs/s), the rings 92.1k cycles a WRITE
+against 96.7 and 98.5 (6% fewer; 503's one run showed 7%), nfsd 1002.0k
+against 1088.6 and 1099.4 (8% fewer), the region's mean in use about the
+same (1185). Its partner did not count in two tries. Then at stack 64,
+after it was settled (`run-6d-s20-s64-d2*.sh`), against `s64-1` and
+`s64-2r`:
+
+| run | stack | GB/s | wire a + b in the window | WRITEs/s | ring / nfsd kcycles a WRITE | peak / mean in use | client retransmits | drives |
+|---|---|---|---|---|---|---|---|---|
+| `6d-s20-s64-d2-1` | 64, `DEFER=2/10000` | 58.36 | 29.42 + 29.44 | 55.6k | 90.4 / 1019.6 | 1009 / 943 | 11 | none stepped down |
+| `6d-s20-s64-d2-2` | 64, `DEFER=2/10000` | 49.47 | 26.79 + 26.49 | 50.3k | 94.1 / 1006.4 | 1205 / 1007 | 15 | does not count: `/hs/nvme6` and `/hs/nvme7` stepped down at 12 and 25 s |
+| `6d-s20-s64-d2-2r` | 64, `DEFER=2/10000` | 58.38 | 29.65 + 29.27 | 55.7k | 91.5 / 1038.6 | 1018 / 945 | 13 | none stepped down |
+
+The two that count: the same rate (58.4 GB/s, 55.6k to 55.7k WRITEs/s),
+the rings 90.4 and 91.5k cycles a WRITE against 97.6 and 96.1 at 0/0
+(6% fewer), nfsd 1019.6 and 1038.6k against 1065.1 and 1050.8 (3%
+fewer), the region's mean in use the same (943 and 945 against 954 and
+952). Both pass the plan's test for `DEFER[b]` to become 2/10000 in
+`settled.sh`; that is Mike's call, and port a is already at 2/10000.
 
 **The xeu-off run** (`6d-xeuoff-1`, `rx_prefetch`, `rx_gro_frags` and
 `irq_msix_mask` at N, `WARM=10 RUNTIME=30`, stack 0) does not count:
@@ -117,9 +133,8 @@ not.
 - Step 4 (the `STALLED` and `low in the warm-up` lines in `drives.txt`)
   is still to be written; `drives-sec.tsv` beside `wire-sec.tsv` shows
   the stalls today by hand.
-- `DEFER[b]` 2/10000 wants a second run that counts; stack 64 in
-  `settled.sh` is Mike's call; xeu's three parameters off wants a run
-  that counts.
+- `DEFER[b]` 2/10000 in `settled.sh` (Mike's call; the runs for it are
+  in); xeu's three parameters off wants a run that counts.
 
 # tardis1 on build 504, second boot (29 October, late): four drives found only by a rescan, the runs decided by drives, power cycle again
 
