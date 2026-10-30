@@ -226,8 +226,10 @@ All eight data drives were found at boot, but `/hs/nvme0` and
 the copy runs of 29 to 30 October ran on six drives at `WARM=8
 RUNTIME=20`: with the per-device mapping, `page_pool.rx_region_stack`
 64 costs nothing in rate, takes 3% fewer nfsd cycles a WRITE and holds
-about 23% fewer of the region's pages than 0; deferral 2/10000 has one
-run that counts. The second boot before it, "tardis1 on build 504,
+about 23% fewer of the region's pages than 0, and `settled.sh` holds
+it at 64 since 30 October (Mike); deferral 2/10000 on both ports took
+6% fewer ring cycles a WRITE at the same rate, in two runs that count
+at stack 64. The second boot before it, "tardis1 on build 504,
 second boot", found four drives only by a PCI rescan. Then the plan
 after it, "tardis1's next boot: the per-device mapping, the drives and the
 stalls", in the same README. That is the plan: the mapping's checks, the drives probed on their own,
