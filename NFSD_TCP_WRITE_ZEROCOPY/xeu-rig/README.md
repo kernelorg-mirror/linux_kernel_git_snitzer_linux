@@ -134,8 +134,17 @@ not.
 - The drives: `/hs/nvme0`, `/hs/nvme4` and now `/hs/nvme5` stall on
   their own, all on firmware `830ZRR02`, none hot or worn. Whether that
   is the drives, their slots or the firmware is not known.
-- Step 4's `low in the warm-up` line is still to be written. **Its
-  `STALLED` line is in `twoport.sh` since 30 October:** `wiresample.py`
+- **Step 4 is done.** Its `low in the warm-up` line is in `twoport.sh`
+  since 30 October: the `STEPPED DOWN` test (under 65% of the busiest
+  drive's median while at least 85% busy) in the warm-up, from its second
+  second, against the counted median, for three seconds running, as a
+  warm-up of 8 to 15 s has no room for five; then `low in the warm-up:
+  <drive> at <s> s ...` or `no drive low in the warm-up`. On this boot's
+  drive files the `STEPPED DOWN` lines are unchanged, and it names
+  `6d-s20-A-1`'s `nvme5 nvme6` at 2 s, `6d-xeuoff-1`'s `nvme1` to `nvme3`
+  at 9 s, and boot 2's `A-2` at 5 s (`nvme6` to `nvme8`, the rescanned
+  drives), as found by hand. **Its `STALLED` line is in `twoport.sh` since
+  30 October:** `wiresample.py`
   writes `wire-sec.tsv` (each port's receive GB/s and TcpExt's receive
   counters) from the same moment as `drvsample.py`, row for row with
   `drives-sec.tsv`; a loop on the client writes `client-sec.tsv` (the time
