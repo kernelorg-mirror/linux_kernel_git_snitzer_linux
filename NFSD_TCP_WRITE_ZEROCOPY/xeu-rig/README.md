@@ -1,4 +1,127 @@
-# tardis1 on build 504, second boot (29 October, late): four drives found only by a rescan, the runs decided by drives, power cycle again — read this first
+# tardis1 on build 504, third boot (29 to 30 October, night): two drives stall on their own, six drives give stack 64 its answer — read this first
+
+The power cycle found all eight data drives with no rescan, in bus
+order (`nvme0n1` to `nvme7n1` on buses 01 to 71, the Micron
+`nvme8n1`), all `write through`. Port b answered. Logs, the run scripts
+and `results.tsv` are in `$L/t1-504/`, this boot's checks in `boot3/`.
+
+**Steps 1 and 2 passed** (`boot3/`): sunrpc `666175BED7A343E376C1742`
+(the module's own), xeu `CA0931345E46C929B11D01F`, `arm_cmn` loaded;
+after `./bringup.sh 32768 256`, `./port-setup.sh enp164s0f0 56` and
+`settled.sh apply`, the two `mapped` lines and "the settled setting".
+A slot's life on both ports: each line goes and comes back,
+`escaped` 0, no WARNING. KUnit 7, 52, 7 and 10, no failure, no skip
+(`run-kunit.sh` refuses to run under an active nfs-server: stop it
+first; the script starts it again). Both ports answered after each
+step. No WARNING in dmesg all session.
+
+**Step 3, the drives on their own** (`probes.sh`, `drv-D1` to `drv-D3`,
+each drive's `sec.tsv`): all eight at 7.5 GB/s with an fsync every
+8 MiB, 75 s, about 560 GB a drive. `drvchar.py`'s `PAUSE` ran for the
+first time and works.
+
+| drive | D1, no pause | D2, every drive stopped at 12 s for 8 s | D3, as D2 with no fstrim just before |
+|---|---|---|---|
+| `/hs/nvme0` (bus 01) | stops from 6 s (about 45 GB) | the same | the same |
+| `/hs/nvme4` (bus 41) | one stop of about 10 s at 315 GB | at 390 GB | at 503 GB, still stopped at the end |
+| the other six | 7.5 GB/s throughout | 7.5, and caught up after the pause | the same |
+
+- `/hs/nvme0` stops every 10 to 20 s: 0.12 GB/s at 100% busy for 2 to
+  7 s, then 11.8 GB/s until it has caught up. That begins far inside
+  the fast region. Boot 2 saw it stop for about 2 s at a time too; this
+  boot had no rescan, so the rescan was not what was wrong.
+- `/hs/nvme4` goes to 0.28 GB/s at 100% busy for about 10 s once a
+  probe, earlier than 12 October's 625 GB.
+- The 8 s stall of every drive at once did no harm to the other six,
+  and the fstrim just before made no difference.
+- Not heat or wear: 22 to 32 C composite, 44 to 63 C sensor 1;
+  `critical_warning` 0, `media_errors` 0, 16 to 21% used, firmware
+  `830ZRR02` on all. `/hs/nvme0` holds 29 GB (`hke.git`, `thayne`)
+  against 14 on the others.
+
+By the plan that stops step 5. **Mike: run on six drives**, without
+`/hs/nvme0` and `/hs/nvme4`: `FS_A="/hs/nvme1 /hs/nvme2 /hs/nvme3"
+FS_B="/hs/nvme5 /hs/nvme6 /hs/nvme7"` (`twoport.sh` takes them as they
+are; `JOBS` 16 gives 5 writers a filesystem, 15 a port). Each drive then
+takes about 10 GB/s, not 7.5.
+
+**The runs** (each after an fstrim of all eight and 120 s of rest,
+`DEFER=0/0 RCVBUF=393216 ENTRIES=128`, `DRIVE_GB=450`; scripts
+`run-6d-*.sh`, logs `run-6d-*.log`). At `WARM=10 RUNTIME=30` the six
+drives passed 450 GB and stepped down (`6d-short-A-1`: five of six at
+33 to 36 s, 43.30 GB/s), so the round was stopped and run at **`WARM=8
+RUNTIME=20`**, about 340 to 430 GB a drive:
+
+| run | stack | GB/s | wire a + b in the window | WRITEs/s | ring / nfsd kcycles a WRITE | peak / mean in use | client retransmits | drives |
+|---|---|---|---|---|---|---|---|---|
+| `6d-s20-A-1` | 0 | 58.15 | 28.98 + 29.66 | 55.5k | 96.7 / 1088.6 | 1296 / 1296 | 16 | none stepped down |
+| `6d-s20-s64-1` | 64 | 57.68 | 29.84 + 29.19 | 55.7k | 97.6 / 1065.1 | 1180 / 954 | 16 | none stepped down |
+| `6d-s20-A-2` | 0 | 58.10 | 29.31 + 29.27 | 55.4k | 98.5 / 1099.4 | 1196 / 1193 | 19 | none stepped down |
+| `6d-s20-s64-2` | 64 | 25.84 | 10.20 + 10.44 | 18.7k | 98.7 / 690.1 | 1194 / 1133 | 891 | does not count: `/hs/nvme2` and `/hs/nvme3` stalled at 11 s |
+| `6d-s20-s64-2r` | 64 | 58.42 | 29.39 + 29.54 | 55.6k | 96.1 / 1050.8 | 1018 / 952 | 13 | none stepped down |
+| `6d-s20-d2-1` | 0, `DEFER=2/10000` | 53.34 | 27.44 + 27.46 | 51.8k | 93.6 / 1037.9 | 1247 / 1247 | 20 | does not count: `/hs/nvme6` stepped down at 12 s |
+| `6d-s20-d2-2` | 0, `DEFER=2/10000` | 51.29 | 26.39 + 25.29 | 48.8k | 93.9 / 981.1 | 1280 / 1115 | 114 | does not count: `/hs/nvme5` stepped down at 20 s |
+| `6d-s20-d2-1r` | 0, `DEFER=2/10000` | 58.35 | 30.14 + 28.74 | 55.6k | 92.1 / 1002.0 | 1201 / 1185 | 12 | none stepped down |
+| `6d-s20-d2-2r` | 0, `DEFER=2/10000` | 52.09 | 25.62 + 24.36 | 47.0k | 95.7 / 932.2 | 1191 / 1154 | 6 | does not count: `/hs/nvme5` stepped down at 14 s |
+
+In every run: `alloc_fail` 0, `escaped` 0, `free_unmapped` 31616 and
+both slots `free 0` after, both budgets' `admitted` unchanged (3096
+and 2), no new WARNING; the host was left at the settled setting,
+stack 0. These are six drives and 15 writers a port, so the rates do
+not compare with 503's or boot 2's; the settings compare with each
+other.
+
+**Stack 64 against 0, with the mapping: no cost, and fewer pages.** Two
+runs of each that count, all at the same rate (57.7 to 58.4 GB/s,
+55.4k to 55.7k WRITEs/s):
+- nfsd 1065.1 and 1050.8k cycles a WRITE at 64, against 1088.6 and
+  1099.4 at 0: 3.3% fewer, both runs at 64 below both at 0. The rings
+  are the same within noise (96.9k against 97.6k).
+- The region's mean in use 954 and 952 at 64, against 1296 and 1193:
+  about 23% fewer. The peak too: 1180 and 1018, against 1296 and 1196.
+  On 503, without the mapping, stack 64 cost 3 to 7% more nfsd cycles;
+  with it, it holds fewer of the region's pages, not more.
+- `settled.sh` still holds the stack at 0: changing it is Mike's call.
+
+**Deferral 2/10000 on both ports: one run counts.** `d2-1r` beside the
+stack-0 runs: the same rate (58.35 GB/s, 55.6k WRITEs/s), the rings
+92.1k cycles a WRITE against 96.7 and 98.5 (6% fewer; 503's one run
+showed 7%), nfsd 1002.0k against 1088.6 and 1099.4 (8% fewer), the
+region's mean in use about the same (1185). The three runs that do not
+count have the rings at 93.6 to 95.7k. One run is not enough to set
+`DEFER[b]` to 2/10000; the plan wants both to count.
+
+**The xeu-off run** (`6d-xeuoff-1`, `rx_prefetch`, `rx_gro_frags` and
+`irq_msix_mask` at N, `WARM=10 RUNTIME=30`, stack 0) does not count:
+`/hs/nvme5` and `/hs/nvme7` stepped down at 14 and 17 s, 39.37 GB/s.
+Its rings took 114.1k cycles a WRITE, against 96 to 98k with the three
+at Y. It says nothing yet about xeu and the stalls; all three were put
+back to Y.
+
+**The drives are still what decides a run.** Six of the twelve runs
+on six drives were decided by drives: `6d-short-A-1` by its length,
+the other five by a stall. `/hs/nvme5` (bus 51) stepped down in four of
+them (`6d-xeuoff-1`, `6d-short-A-1`, `d2-2`, `d2-2r`). In `d2-2r` it went alone to 0.75 GB/s at 100% busy for
+8 s while its port's other two wrote at 11 GB/s; in `s64-2`,
+`/hs/nvme2` and `/hs/nvme3` went to 0.75 GB/s at 100% busy at 11 s and
+every other drive, on both ports, fell to 1.4 to 3 GB/s at 10 to 30%
+busy, starved of WRITEs. A drive that stalls on one port stalls the
+other port's too (nfsd's one pool is the likely path; not measured).
+`/hs/nvme5` held 7.5 GB/s in all three probes; at about 10 GB/s it does
+not.
+
+**What is open:**
+- The drives: `/hs/nvme0`, `/hs/nvme4` and now `/hs/nvme5` stall on
+  their own, all on firmware `830ZRR02`, none hot or worn. Whether that
+  is the drives, their slots or the firmware is not known.
+- Step 4 (the `STALLED` and `low in the warm-up` lines in `drives.txt`)
+  is still to be written; `drives-sec.tsv` beside `wire-sec.tsv` shows
+  the stalls today by hand.
+- `DEFER[b]` 2/10000 wants a second run that counts; stack 64 in
+  `settled.sh` is Mike's call; xeu's three parameters off wants a run
+  that counts.
+
+# tardis1 on build 504, second boot (29 October, late): four drives found only by a rescan, the runs decided by drives, power cycle again
 
 The hard power reset brought port b back, but the boot found only four
 of the eight data drives. The copy runs on that boot were decided by

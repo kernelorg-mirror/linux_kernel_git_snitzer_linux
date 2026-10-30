@@ -218,15 +218,18 @@ first** (and `tardis1-boot1-testing.md` for builds 454 and 455): it says
 which commits at the tip are still to be regrouped, carried to the HS
 twin or decided.
 
-**On tardis1's next boot (build 504, after the power cycle of 29
-October, late), start at "tardis1 on build 504, second boot" at the top
-of
-[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md):
-check that all eight data drives were found at boot, then the drives
-on their own before any NFS run.** The boot before found four of them
-only by a PCI rescan, and its copy runs were decided by drives stepping
-down at 345 to 450 GB, the rescanned ones first. Then the plan after
-it, "tardis1's next boot: the per-device mapping, the drives and the
+**On tardis1 (build 504), start at "tardis1 on build 504, third boot"
+at the top of
+[`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md).**
+All eight data drives were found at boot, but `/hs/nvme0` and
+`/hs/nvme4` stall on their own (and at 10 GB/s `/hs/nvme5` too), so
+the copy runs of 29 to 30 October ran on six drives at `WARM=8
+RUNTIME=20`: with the per-device mapping, `page_pool.rx_region_stack`
+64 costs nothing in rate, takes 3% fewer nfsd cycles a WRITE and holds
+about 23% fewer of the region's pages than 0; deferral 2/10000 has one
+run that counts. The second boot before it, "tardis1 on build 504,
+second boot", found four drives only by a PCI rescan. Then the plan
+after it, "tardis1's next boot: the per-device mapping, the drives and the
 stalls", in the same README. That is the plan: the mapping's checks, the drives probed on their own,
 the rig's per-second wire and stall lines, then copy mode at stack 0
 and 64 in turns. Build 503, booted before it, lacked the mapping; its
