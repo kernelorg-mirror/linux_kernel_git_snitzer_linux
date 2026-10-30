@@ -218,13 +218,18 @@ first** (and `tardis1-boot1-testing.md` for builds 454 and 455): it says
 which commits at the tip are still to be regrouped, carried to the HS
 twin or decided.
 
-**On the kernel built from the tip of 29 October (`0c375e06bf64`, the
-region's per-device mapping), on either server, start at "29 October:
-the kernel with the region's per-device mapping" in
+**On tardis1's next boot, into a kernel built from `0c375e06bf64` or
+later (the region's per-device mapping), start at "tardis1's next
+boot: the per-device mapping, the drives and the stalls" in
 [`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`](NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md).**
-tardis1 runs copy mode on both ports on it (no regression against
-build 494, two devices sharing the region, the stack at 64); tardis2
-runs loan mode on port a (FLAMEGRAPH round 45, step 4).
+It is the plan: the mapping's checks, the drives probed on their own,
+the rig's per-second wire and stall lines, then copy mode at stack 0
+and 64 in turns. Build 503, booted before it, lacked the mapping; its
+copy runs on two ports showed no regression against build 494 but
+were decided by stalls and drives ("tardis1 on build 503" in the same
+README). On tardis2 the kernel runs loan mode on port a (FLAMEGRAPH
+round 45, step 4): "29 October: the kernel with the region's
+per-device mapping" in the same README.
 
 **tardis1 ran build 494, the kernel built from the tip of 22 October
 (`77f82c816493`; booted that evening), until then: "Build 494: the
