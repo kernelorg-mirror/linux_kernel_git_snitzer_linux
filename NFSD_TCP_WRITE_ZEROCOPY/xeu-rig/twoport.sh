@@ -60,7 +60,7 @@
 #   SRV_QDISC=<q>    the qdisc on each of the server port's transmit queues (settled: fq_codel)
 #   GRO_MAX=<bytes>  the server port's gro_max_size and gro_ipv4_max_size (settled: 65536; above it, BIG TCP)
 #   DEFER=<n>/<ns>   napi_defer_hard_irqs and gro_flush_timeout of the ports used
-#                    (settled: 2/10000 on port a since 29 October, 0/0 on port b)
+#                    (settled: 2/10000 on port a since 29 October, on port b since 30 October)
 #   NOTRACK=absent   no zc_notrack table for the run (settled: loaded while conntrack is on)
 #   ENTRIES=<n>      entries of each RX ring, on the ports used
 #   RINGS=<n>        rings of each port used (4); over 4, Rx and Tx share CPUs
