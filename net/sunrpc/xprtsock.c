@@ -781,7 +781,8 @@ static void xs_poll_check_readable(struct sock_xprt *transport)
 	if (!xs_poll_socket_readable(transport))
 		return;
 	if (!test_and_set_bit(XPRT_SOCK_DATA_READY, &transport->sock_state))
-		queue_work(xprtiod_workqueue, &transport->recv_worker);
+		xprt_queue_work(&transport->xprt, xprtiod_workqueue,
+				&transport->recv_worker);
 }
 
 static void xs_stream_data_receive(struct sock_xprt *transport)
@@ -1493,7 +1494,8 @@ static void xs_data_ready(struct sock *sk)
 		if (xprt->reestablish_timeout)
 			xprt->reestablish_timeout = 0;
 		if (!test_and_set_bit(XPRT_SOCK_DATA_READY, &transport->sock_state))
-			queue_work(xprtiod_workqueue, &transport->recv_worker);
+			xprt_queue_work(xprt, xprtiod_workqueue,
+					&transport->recv_worker);
 	}
 }
 

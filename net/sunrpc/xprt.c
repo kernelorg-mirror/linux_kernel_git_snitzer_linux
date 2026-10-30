@@ -2041,6 +2041,7 @@ xprt_init_bc_request(struct rpc_rqst *req, struct rpc_task *task,
 static void xprt_init(struct rpc_xprt *xprt, struct net *net)
 {
 	kref_init(&xprt->kref);
+	xprt->xprt_home_cpu = -1;
 
 	spin_lock_init(&xprt->transport_lock);
 	spin_lock_init(&xprt->reserve_lock);
@@ -2203,6 +2204,7 @@ void xprt_set_offline_locked(struct rpc_xprt *xprt, struct rpc_xprt_switch *xps)
 	if (!test_and_set_bit(XPRT_OFFLINE, &xprt->state)) {
 		spin_lock(&xps->xps_lock);
 		xps->xps_nactive--;
+		rpc_xprt_switch_update_cpu_map_locked(xps);
 		spin_unlock(&xps->xps_lock);
 	}
 }
@@ -2212,6 +2214,7 @@ void xprt_set_online_locked(struct rpc_xprt *xprt, struct rpc_xprt_switch *xps)
 	if (test_and_clear_bit(XPRT_OFFLINE, &xprt->state)) {
 		spin_lock(&xps->xps_lock);
 		xps->xps_nactive++;
+		rpc_xprt_switch_update_cpu_map_locked(xps);
 		spin_unlock(&xps->xps_lock);
 	}
 }

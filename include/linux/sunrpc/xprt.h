@@ -322,7 +322,22 @@ struct rpc_xprt {
 	const struct xprt_class	*xprt_class;
 	struct rpc_sysfs_xprt	*xprt_sysfs;
 	bool			main; /*mark if this is the 1st transport */
+	int			xprt_home_cpu;	/* per-CPU switch: CPU owning this xprt, or -1 */
 };
+
+/*
+ * Queue receive work for @xprt on its home CPU, the CPU whose tasks
+ * transmit on it; on the local CPU if it has none.
+ */
+static inline bool xprt_queue_work(const struct rpc_xprt *xprt,
+		struct workqueue_struct *wq, struct work_struct *work)
+{
+	int cpu = READ_ONCE(xprt->xprt_home_cpu);
+
+	if (cpu >= 0)
+		return queue_work_on(cpu, wq, work);
+	return queue_work(wq, work);
+}
 
 #if defined(CONFIG_SUNRPC_BACKCHANNEL)
 /*
