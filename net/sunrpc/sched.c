@@ -599,6 +599,52 @@ rpc_wake_up_queued_task_set_status(struct rpc_wait_queue *queue,
 	spin_unlock(&queue->lock);
 }
 
+/**
+ * rpc_sleep_move_timeout - move a sleeping task to another wait queue
+ * @from: wait queue @task is expected to sleep on
+ * @to: wait queue @task is to sleep on instead
+ * @task: task to move
+ * @action: called with both queue locks held; returns false to refuse
+ * @data: argument for @action
+ * @callback: tk_callback to run when @task is woken from @to
+ * @timeout: absolute timeout on @to, in jiffies
+ *
+ * Has the effect of waking a parked @task from @from and letting it
+ * put itself back to sleep on @to, without running it.  Only a task that
+ * has finished going to sleep (queued on @from and no longer running)
+ * is moved.  Returns false, leaving @task untouched, otherwise.
+ */
+bool rpc_sleep_move_timeout(struct rpc_wait_queue *from,
+		struct rpc_wait_queue *to, struct rpc_task *task,
+		bool (*action)(struct rpc_task *, void *), void *data,
+		rpc_action callback, unsigned long timeout)
+{
+	bool moved = false;
+
+	if (!RPC_IS_QUEUED(task))
+		return false;
+	spin_lock(&from->lock);
+	spin_lock_nested(&to->lock, SINGLE_DEPTH_NESTING);
+	if (RPC_IS_QUEUED(task) && task->tk_waitqueue == from &&
+	    !test_bit(RPC_TASK_RUNNING, &task->tk_runstate) &&
+	    !task->tk_callback && time_is_after_jiffies(timeout) &&
+	    READ_ONCE(task->tk_rpc_status) == 0 && action(task, data)) {
+		trace_rpc_task_wakeup(task, from);
+		__rpc_remove_wait_queue(from, task);
+		task->tk_callback = callback;
+		__rpc_do_sleep_on_priority(to, task, task->tk_priority);
+		__rpc_add_timer(to, task, timeout);
+		moved = true;
+		/* Pairs with rpc_task_set_rpc_status() in rpc_signal_task() */
+		smp_mb();
+		if (READ_ONCE(task->tk_rpc_status) != 0)
+			rpc_wake_up_task_queue_locked(to, task);
+	}
+	spin_unlock(&to->lock);
+	spin_unlock(&from->lock);
+	return moved;
+}
+
 /*
  * Wake up the next task on a priority queue.
  */
