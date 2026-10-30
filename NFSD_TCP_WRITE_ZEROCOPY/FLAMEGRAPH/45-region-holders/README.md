@@ -223,3 +223,19 @@ The copy run at B: 40.81 GB/s, ring 137.5k and nfsd 698.7k cycles a WRITE, peak 
 
 - **The same,** within the runs' spread: the settled setting with the stack at 64 is what run113 and run115 measured as B. Against run113's A (stack 256), loan mode costs nfsd about 2.7k cycles a WRITE (0.9%) and the rings nothing, for about 450 fewer pages in use.
 - Every run: no drive stepped down or low in the warm-up, no stall (twoport.sh's new lines), no failed allocation.
+
+## 5. A bulk's overflow returned under one lock (needs a kernel build)
+
+`a4fb143d7852` "page_pool: return a bulk's overflow to the fixed receive region at once" (Mike, 30 October: "try the per-CPU batched put onto the slot's list"), at the tip, in the code group. page_pool is built in, so it runs only on a kernel built from a tip that has it.
+
+**What it does.** With the stack at 64, nfsd sends about 15 pages a WRITE back to the region, from about 4 calls of `page_pool_recycle_ring_bulk()` (r114: 14.8 `page_pool_return_netmem` and 4.1 `page_pool_recycle_ring_bulk` calls a WRITE), each page taking the region's lock with interrupts off. Now each call's overflow, up to 16 pages, goes back under one hold of the lock (`page_pool_return_netmem_bulk()`, `page_pool_rx_region_put_bulk()`): about 4 holds a WRITE instead of 15. The pages are put back before the pool's release count goes up, so the pool is not released while the region is being touched. Other pools, and single pages, keep the old path.
+
+**Batched per call, not per CPU.** A cache per CPU that held pages across calls would take fewer holds still, but it keeps pages off every free list, out of the rings' reach and counted in use: 48 nfsd CPUs holding even 16 each would be 768 pages, more than the stack of 64 saves, against the rule not to grow the region's footprint. It would also need flushing whenever a slot dies or the region goes. Not done.
+
+Built with W=1 (`net/core/page_pool.o`, build 504's `.config`), checkpatch `--strict` clean; sparse is not on tardis2.
+
+**To run on the kernel that has it** (tardis2, the settled setting, the stack at 64):
+
+1. The region's life as in step 4: `mapped` line, port a down and up, a resize, no `escaped` and no WARNING.
+2. run116 again (loan64 three times at the settled setting) and run114's profile: `page_pool_return_netmem_bulk` should take the place of most of the `page_pool_return_netmem` calls, and nfsd's time under the region's lock (the `_raw_spin_unlock_irqrestore` leaf under it, 3.3k cycles a WRITE in r114's B) should fall. The mark to beat is run116's nfsd 294.9k cycles a WRITE; stack 256's 292.1k (run113) is the floor this could reach.
+3. The region's mean in use and peak beside it, which this should not change.
