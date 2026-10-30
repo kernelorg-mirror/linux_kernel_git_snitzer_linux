@@ -309,7 +309,7 @@ static ssize_t rpc_sysfs_xprt_switch_info_show(struct kobject *kobj,
 		      "num_unique_destaddr=%u\nqueue_len=%ld\n",
 		      xprt_switch->xps_nxprts, xprt_switch->xps_nactive,
 		      xprt_switch->xps_nunique_destaddr_xprts,
-		      atomic_long_read(&xprt_switch->xps_queuelen));
+		      rpc_xprt_switch_queuelen(xprt_switch));
 	xprt_switch_put(xprt_switch);
 	return ret;
 }
