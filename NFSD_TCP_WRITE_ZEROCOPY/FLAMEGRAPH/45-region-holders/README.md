@@ -68,7 +68,7 @@ The runs' own lines: copy 137.8k ring and 678.6k nfsd cycles a WRITE, peak 1152 
 
 ## 2. The depth of the pools' stacks (r111)
 
-[run111.sh](run111.sh): `page_pool.rx_region_stack` at 0 (the pool's size, the ring's 256; the settled setting), 64 and 16, read when a pool is made, so `settled.sh apply` opens port a again for each (`EXP_RX_REGION_STACK`). Round 41's kept xeu, the region at 512 MiB, the settled setting with round 44's deferral, counted and untraced: loan64 in the order A B C C B A, then copy C B A. Each run reports the region's peak and its mean in use (the free pages every 0.2 s for 10 s from 10 s into the timed load), beside the rate and the rings' and nfsd's cycles.
+[run111.sh](run111.sh): the stack at 256 (`page_pool.rx_region_stack` 0, which gives the pool's size, the ring's 256; the settled setting), 64 and 16, read when a pool is made, so `settled.sh apply` opens port a again for each (`EXP_RX_REGION_STACK`). Round 41's kept xeu, the region at 512 MiB, the settled setting with round 44's deferral, counted and untraced: loan64 in the order A B C C B A, then copy C B A. Each run reports the region's peak and its mean in use (the free pages every 0.2 s for 10 s from 10 s into the timed load), beside the rate and the rings' and nfsd's cycles.
 
 A smaller stack sends more returned pages back to the region, under its one lock, and a page taken from the region is mapped for DMA again. That is the cost to look for in the rings' cycles, and in nfsd's, whose release returns the loaned pages. A depth is kept only if it lowers the peak without costing rate or cycles beyond the noise.
 
@@ -154,6 +154,8 @@ Built with W=1 (`net/core/`, the running build 499's `.config`), checkpatch `--s
 
 ### What step 4 found (r113, r114)
 
+*Stack 256 is the stack the ring's size gives, written `rx_region_stack` 0 in the scripts (`rx_region_stack ?: ring_qsize`); the settled setting until 30 October. These sections call it stack 256 (Mike, 30 October).*
+
 tardis2 on build 504 (`7.3.0-7.hs.504.loanpages_pool.el10.aarch64+16k`, `rodata=noalias`), on 30 October: the kernel's own sunrpc (`666175BED7A343E376C1742`) and nfsd (`3F0C341E86E266D5FDF2ADF`), the build's kmod-xsight 2.0.1-13 (xeu `CA0931345E46C929B11D01F`, round 45's kept source), the region at 32768, the settled setting with round 44's deferral.
 
 **The region's life with the mapping.** After `bringup.sh`, debugfs had `free_unmapped 32256` and `mapped 0000:a1:00.0 dir 2 pools 4 free 0`. Port a down: the `mapped` line went and `free_unmapped` came back to all 32768, `escaped` 0; up, the line came back. A resize to 16384 and back to 32768 ([r113/resize.sh](r113/resize.sh), run110's `resize`): each region freed with 0 escaped, the slot made again each time. No WARNING in dmesg from the boot to the end of r114.
@@ -219,5 +221,5 @@ The copy run at B: 40.81 GB/s, ring 137.5k and nfsd 698.7k cycles a WRITE, peak 
 | run115, the old setting with the stack set to 64 | 3 | 40.45 to 40.52 | 128.4k (283.2k) | 294.7k (303.7k) | 6140 to 6222 | 4964 |
 | run116, the new settled setting | 3 | 40.39 to 40.51 | 128.3k (282.9k) | 294.9k (303.9k) | 5904 to 6227 | 4888 |
 
-- **The same,** within the runs' spread: the settled setting with the stack at 64 is what run113 and run115 measured as B. Against run113's A (stack 0), loan mode costs nfsd about 2.7k cycles a WRITE (0.9%) and the rings nothing, for about 450 fewer pages in use.
+- **The same,** within the runs' spread: the settled setting with the stack at 64 is what run113 and run115 measured as B. Against run113's A (stack 256), loan mode costs nfsd about 2.7k cycles a WRITE (0.9%) and the rings nothing, for about 450 fewer pages in use.
 - Every run: no drive stepped down or low in the warm-up, no stall (twoport.sh's new lines), no failed allocation.
