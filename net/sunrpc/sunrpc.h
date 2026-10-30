@@ -36,6 +36,12 @@ static inline int sock_is_loopback(struct sock *sk)
 	return loopback;
 }
 
+bool rpc_sleep_move_timeout(struct rpc_wait_queue *from,
+		struct rpc_wait_queue *to, struct rpc_task *task,
+		bool (*action)(struct rpc_task *, void *), void *data,
+		rpc_action callback, unsigned long timeout);
+bool rpc_task_set_transmit_done(struct rpc_task *task);
+
 struct svc_serv;
 struct svc_rqst;
 int rpc_clients_notifier_register(void);

@@ -2374,6 +2374,23 @@ call_transmit_status(struct rpc_task *task)
 	rpc_check_timeout(task);
 }
 
+/*
+ * The transmit lock holder sent @task's request while @task slept on
+ * xprt->sending in call_transmit().  Give @task the state that
+ * call_transmit_status() sets on success, so that it can be put to sleep
+ * on xprt->pending without running.  Returns false if @task is not
+ * waiting in call_transmit().
+ */
+bool rpc_task_set_transmit_done(struct rpc_task *task)
+{
+	if (task->tk_action != call_transmit_status ||
+	    !rpc_task_transmitted(task))
+		return false;
+	task->tk_status = 0;
+	task->tk_action = call_status;
+	return true;
+}
+
 #if defined(CONFIG_SUNRPC_BACKCHANNEL)
 static void call_bc_transmit(struct rpc_task *task);
 static void call_bc_transmit_status(struct rpc_task *task);
