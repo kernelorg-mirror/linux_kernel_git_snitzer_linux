@@ -239,10 +239,6 @@ sleep 7
 	"$RIG/settled.sh" gro ${DEV[$p]} $GRO_MAX || { echo "GRO max size not set"; exit 1; }
 	echo "${DEV[$p]}: gro_max_size and gro_ipv4_max_size $GRO_MAX for this run" | tee -a geometry.txt
 done
-[ -n "${DEFER:-}" ] && for p in $PORTS; do
-	"$RIG/settled.sh" defer ${DEV[$p]} $DEFER || { echo "NAPI deferral not set"; exit 1; }
-	echo "${DEV[$p]}: NAPI deferral $DEFER for this run" | tee -a geometry.txt
-done
 [ -n "${SRV_QDISC:-}" ] && for p in $PORTS; do
 	"$RIG/settled.sh" srvq ${DEV[$p]} $SRV_QDISC || { echo "server qdisc not set"; exit 1; }
 	echo "${DEV[$p]}: qdisc $SRV_QDISC for this run" | tee -a geometry.txt
@@ -285,6 +281,11 @@ for p in $PORTS; do
 	done
 	NFS[$p]=$i
 	echo "$p: $i filesystems: ${FS[$p]}" | tee -a geometry.txt
+done
+# After the placement above, which puts each port's settled deferral back.
+[ -n "${DEFER:-}" ] && for p in $PORTS; do
+	"$RIG/settled.sh" defer ${DEV[$p]} $DEFER || { echo "NAPI deferral not set"; exit 1; }
+	echo "${DEV[$p]}: NAPI deferral $DEFER for this run" | tee -a geometry.txt
 done
 
 job() {	# job <port> <prefix> <seconds> [seconds of warm-up fio leaves out of its figures]
