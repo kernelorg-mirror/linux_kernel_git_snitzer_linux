@@ -1,0 +1,9 @@
+03:42:53 life after: kernel 7.3.0-7.hs.505.loanpages_pool.el10.aarch64+16k
+03:42:53 before: dev 0000:a1:00.0 phys_base 0x81e0000000 pages 32768 free 32224 min_free 26487 alloc_fail 0 escaped 0 free_unmapped 32224 mapped 0000:a1:00.0 dir 2 pools 4 free 0 
+03:42:53 down after 1 s: dev 0000:a1:00.0 phys_base 0x81e0000000 pages 32768 free 32768 min_free 26487 alloc_fail 0 escaped 0 free_unmapped 32768 
+03:43:14 up: dev 0000:a1:00.0 phys_base 0x81e0000000 pages 32768 free 32224 min_free 26487 alloc_fail 0 escaped 0 free_unmapped 32224 mapped 0000:a1:00.0 dir 2 pools 4 free 0 
+03:43:35 region 16384 pages (256 MiB) made at 0x81e0000000; page_pool: fixed rx region for 0000:a1:00.0 freed: 32768 pages at 0x81e0000000, 0 escaped
+03:43:35 dev 0000:a1:00.0 phys_base 0x81e0000000 pages 16384 free 15840 min_free 15840 alloc_fail 0 escaped 0 free_unmapped 15840 mapped 0000:a1:00.0 dir 2 pools 4 free 0 
+03:43:55 region 32768 pages (512 MiB) made at 0x8220000000; page_pool: fixed rx region for 0000:a1:00.0 freed: 16384 pages at 0x81e0000000, 0 escaped
+03:43:55 dev 0000:a1:00.0 phys_base 0x8220000000 pages 32768 free 32224 min_free 32224 alloc_fail 0 escaped 0 free_unmapped 32224 mapped 0000:a1:00.0 dir 2 pools 4 free 0 
+03:43:58 end: settled.sh audit rest: the settled setting; no WARNING; DONE

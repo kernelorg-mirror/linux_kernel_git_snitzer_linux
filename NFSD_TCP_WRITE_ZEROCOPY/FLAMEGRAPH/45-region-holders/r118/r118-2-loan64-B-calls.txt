@@ -1,0 +1,29 @@
+Attached 10 probes
+
+
+@[kprobe:page_pool_return_netmem, nfsd]: 25391
+@[kprobe:page_pool_rx_region_alloc, ring]: 285266
+@[kprobe:page_pool_return_netmem_bulk, nfsd]: 506580
+@[kprobe:page_pool_rx_stack_refill, ring]: 1016795
+@[kprobe:page_pool_recycle_ring_bulk, nfsd]: 1585159
+@[kprobe:page_pool_put_netmem_bulk, nfsd]: 1726160
+@[kprobe:__page_pool_rx_region_put, nfsd]: 5144914
+@n:
+[1]                14985 |@@@@@@@                                             |
+[2]                14692 |@@@@@@                                              |
+[3]                15015 |@@@@@@@                                             |
+[4]                15506 |@@@@@@@                                             |
+[5]                16899 |@@@@@@@@                                            |
+[6]                17352 |@@@@@@@@                                            |
+[7]                16624 |@@@@@@@                                             |
+[8]                16352 |@@@@@@@                                             |
+[9]                15048 |@@@@@@@                                             |
+[10]               15079 |@@@@@@@                                             |
+[11]               14357 |@@@@@@                                              |
+[12]               15389 |@@@@@@@                                             |
+[13]               15676 |@@@@@@@                                             |
+[14]               20442 |@@@@@@@@@                                           |
+[15]               33269 |@@@@@@@@@@@@@@@                                     |
+[16]              109741 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+WRITEs 379455
