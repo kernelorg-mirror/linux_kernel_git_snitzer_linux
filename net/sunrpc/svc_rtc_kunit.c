@@ -86,18 +86,26 @@ static void rtc_no_hook(struct kunit *test)
 	rtc_fixture_done(test, f);
 }
 
-/* A declining hook: diverted, asked once, handed to a thread. */
+/*
+ * A declining hook: asked at enqueue and not diverted.  A run already
+ * queued when it starts declining (want() changed in between) asks
+ * again and hands the transport to a thread.
+ */
 static void rtc_hook_declines(struct kunit *test)
 {
 	struct rtc_fixture *f = rtc_fixture_new(test, true);
 	enum svc_rtc_reason reason = SVC_RTC_NR_REASONS;
 
 	KUNIT_ASSERT_EQ(test, svc_rtc_register(&f->serv, &rtc_ops), 0);
+	KUNIT_EXPECT_FALSE(test, svc_rtc_should_divert(&f->xprt));
+	KUNIT_EXPECT_EQ(test, rtc_want_calls, 1);
+	rtc_want_result = true;
 	KUNIT_EXPECT_TRUE(test, svc_rtc_should_divert(&f->xprt));
+	rtc_want_result = false;
 	KUNIT_EXPECT_EQ(test, svc_rtc_recv_step(&f->xprt, &reason, NULL),
 			SVC_RTC_THREAD);
 	KUNIT_EXPECT_EQ(test, reason, SVC_RTC_FB_DECLINED);
-	KUNIT_EXPECT_EQ(test, rtc_want_calls, 1);
+	KUNIT_EXPECT_EQ(test, rtc_want_calls, 3);
 	/* XPT_BUSY is still held: it passes to the thread with the xprt. */
 	KUNIT_EXPECT_TRUE(test, test_bit(XPT_BUSY, &f->xprt.xpt_flags));
 	rtc_fixture_done(test, f);
@@ -757,6 +765,37 @@ static void rtc_e2e_pool_empty(struct kunit *test)
 	rtc_e2e_done(test, e);
 }
 
+/*
+ * The pool stays empty, whatever the thread count, until a call wants
+ * the fast path; that call goes to a thread and the pool then fills.
+ */
+static void rtc_e2e_pool_lazy(struct kunit *test)
+{
+	struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
+	struct svc_rtc_pool *pool = e->serv->sv_rtc_pool;
+	struct svc_rtc_stats a, b;
+
+	KUNIT_ASSERT_EQ(test, svc_rtc_pool_set(e->serv, 0), 0);
+	/* No threads run: stand in their count for the resize only. */
+	e->serv->sv_nrthreads = 2;
+	svc_rtc_pool_resize(e->serv);
+	e->serv->sv_nrthreads = 0;
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 0);
+	KUNIT_EXPECT_FALSE(test, test_bit(SVC_RTC_POOL_ARMED, &pool->flags));
+
+	rtc_e2e_kick(e, &a, &b);
+	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_POOL_EMPTY), 1);
+	rtc_e2e_expect_thread_unreceived(test, e);
+	KUNIT_EXPECT_TRUE(test, test_bit(SVC_RTC_POOL_ARMED, &pool->flags));
+	flush_work(&pool->fill);
+
+	e->serv->sv_nrthreads = 2;
+	svc_rtc_pool_resize(e->serv);
+	e->serv->sv_nrthreads = 0;
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 2);
+	rtc_e2e_done(test, e);
+}
+
 /* The receive finds no record: the pool rqst goes straight back. */
 static void rtc_e2e_recv_empty(struct kunit *test)
 {
@@ -1160,6 +1199,7 @@ static struct kunit_case svc_rtc_test_cases[] = {
 	KUNIT_CASE(rtc_e2e_other_call_to_thread),
 	KUNIT_CASE(rtc_e2e_auth_to_thread),
 	KUNIT_CASE(rtc_e2e_pool_empty),
+	KUNIT_CASE(rtc_e2e_pool_lazy),
 	KUNIT_CASE(rtc_e2e_recv_empty),
 	KUNIT_CASE(rtc_e2e_miss_handoff),
 	KUNIT_CASE(rtc_e2e_miss_steal),
