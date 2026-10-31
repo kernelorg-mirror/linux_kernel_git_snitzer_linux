@@ -1159,6 +1159,7 @@ void svc_rtc_stats_show(struct seq_file *m)
 		[SVC_RTC_FB_WRITE_MODE] = "write_mode",
 		[SVC_RTC_FB_NOWAIT_ERR] = "nowait_err",
 		[SVC_RTC_FB_SB_FROZEN] = "sb_frozen",
+		[SVC_RTC_FB_NO_DIO_WQ] = "no_dio_wq",
 	};
 	struct svc_rtc_stats s;
 	int i;
@@ -1239,23 +1240,33 @@ static void svc_rtc_kick(struct svc_rtc_conn *conn)
  * svc_rtc_should_divert - Should svc_xprt_enqueue() queue the work item
  * @xprt: transport whose XPT_BUSY the caller just set
  *
- * Only a transport with a work item, a registered hook and data to read
- * is diverted; connect, close, handshake and deferred-request work go to
- * a thread directly.
+ * Only a transport with a work item, data to read and a registered hook
+ * that wants it is diverted; connect, close, handshake and
+ * deferred-request work go to a thread directly, and so does every
+ * receive while the hook declines (nfsd with buffered reads), with no
+ * work-item hop.  svc_rtc_recv_step() asks want() again: the answer can
+ * change before the work item runs.
  */
 VISIBLE_IF_KUNIT bool svc_rtc_should_divert(struct svc_xprt *xprt)
 {
 	struct svc_rtc_conn *conn = smp_load_acquire(&xprt->xpt_rtc);
+	const struct svc_rtc_ops *ops;
+	bool want;
 
 	if (likely(!conn))
-		return false;
-	if (!rcu_access_pointer(xprt->xpt_server->sv_rtc))
 		return false;
 	if (READ_ONCE(xprt->xpt_flags) &
 	    (BIT(XPT_CONN) | BIT(XPT_CLOSE) | BIT(XPT_HANDSHAKE) |
 	     BIT(XPT_DEFERRED) | BIT(XPT_DEAD) | BIT(XPT_LISTENER)))
 		return false;
-	return !test_bit(SVC_RTC_STOPPING, &conn->flags);
+	if (test_bit(SVC_RTC_STOPPING, &conn->flags))
+		return false;
+
+	rcu_read_lock();
+	ops = rcu_dereference(xprt->xpt_server->sv_rtc);
+	want = ops && ops->want(xprt);
+	rcu_read_unlock();
+	return want;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_should_divert);
 
@@ -1398,6 +1409,7 @@ static void svc_rtc_fast(struct svc_rtc_conn *conn);
 static void svc_rtc_run_completions(struct svc_rtc_conn *conn);
 static void svc_rtc_handoff_drain(struct svc_serv *serv);
 static void svc_rtc_pool_free(struct svc_rtc_pool *pool);
+static void svc_rtc_pool_fill(struct work_struct *work);
 
 /*
  * One work item per connection: finish completed async calls (encode and
@@ -1575,8 +1587,10 @@ int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 	if (!pool)
 		return -ENOMEM;
 	pool->ops = ops;
+	pool->serv = serv;
 	lwq_init(&pool->free);
 	INIT_LIST_HEAD(&pool->all);
+	INIT_WORK(&pool->fill, svc_rtc_pool_fill);
 
 	mutex_lock(&svc_rtc_mutex);
 	ret = svc_rtc_serv_prepare(serv);
@@ -1587,13 +1601,10 @@ int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 		rcu_assign_pointer(serv->sv_rtc, ops);
 	}
 	mutex_unlock(&svc_rtc_mutex);
-	if (ret) {
+	if (ret)
 		kfree(pool);
-		return ret;
-	}
-	/* Sized from the thread count; svc_set_num_threads() resizes it. */
-	svc_rtc_pool_resize(serv);
-	return 0;
+	/* The pool stays empty until svc_rtc_pool_arm(). */
+	return ret;
 }
 EXPORT_SYMBOL_GPL(svc_rtc_register);
 
@@ -1627,8 +1638,11 @@ void svc_rtc_unregister(struct svc_serv *serv)
 	serv->sv_rtc_pool = NULL;
 	WRITE_ONCE(serv->sv_rtc_nr, 0);
 	mutex_unlock(&svc_rtc_mutex);
-	if (pool)
+	if (pool) {
+		/* A fill that runs now finds no pool on @serv. */
+		cancel_work_sync(&pool->fill);
 		svc_rtc_pool_free(pool);
+	}
 }
 EXPORT_SYMBOL_GPL(svc_rtc_unregister);
 
@@ -2407,6 +2421,29 @@ EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_no_slot);
 #define svc_rtc_inject_no_slot()	false
 #endif
 
+/*
+ * The pool starts empty, so a service whose hook never wants a call
+ * (nfsd with buffered reads) holds no rqsts.  The first call that wants
+ * the fast path arms it; that call goes to a thread while the pool
+ * fills.  Once armed the pool follows the thread count until
+ * unregistered.  A pool left short by a failed fill is filled again by
+ * the next call that finds it empty.
+ */
+static void svc_rtc_pool_arm(struct svc_rtc_pool *pool)
+{
+	struct svc_serv *serv = pool->serv;
+
+	if (!test_bit(SVC_RTC_POOL_ARMED, &pool->flags)) {
+		if (!test_and_set_bit(SVC_RTC_POOL_ARMED, &pool->flags))
+			queue_work(system_dfl_wq, &pool->fill);
+		return;
+	}
+	if (READ_ONCE(serv->sv_rtc_nr) <
+	    min_t(unsigned int, READ_ONCE(serv->sv_nrthreads),
+		  SVC_RTC_POOL_CAP))
+		queue_work(system_dfl_wq, &pool->fill);
+}
+
 static void svc_rtc_fast(struct svc_rtc_conn *conn)
 {
 	struct svc_xprt *xprt = conn->xprt;
@@ -2419,6 +2456,8 @@ static void svc_rtc_fast(struct svc_rtc_conn *conn)
 	if (pool)
 		r = lwq_dequeue(&pool->free, struct svc_rtc_rqst, qnode);
 	if (!r) {
+		if (pool)
+			svc_rtc_pool_arm(pool);
 		reason = SVC_RTC_FB_POOL_EMPTY;
 		goto thread;
 	}
@@ -2506,25 +2545,19 @@ static void svc_rtc_pool_free(struct svc_rtc_pool *pool)
 	kfree(pool);
 }
 
-/**
- * svc_rtc_pool_set - Size the service's preallocated rtc rqsts
- * @serv: service with a registered hook (otherwise a no-op)
- * @nr: wanted rqsts, capped at %SVC_RTC_POOL_CAP
- *
- * Grows with GFP_KERNEL in process context; shrinks by freeing idle
- * rqsts only (rqsts in use stay until a later resize).
+/*
+ * Size @pool to @nr rqsts, capped at %SVC_RTC_POOL_CAP.  Grows with
+ * GFP_KERNEL in process context; shrinks by freeing idle rqsts only
+ * (rqsts in use stay until a later resize).
  */
-VISIBLE_IF_KUNIT int svc_rtc_pool_set(struct svc_serv *serv, unsigned int nr)
+static int svc_rtc_pool_set_locked(struct svc_serv *serv,
+				   struct svc_rtc_pool *pool, unsigned int nr)
 {
-	struct svc_rtc_pool *pool;
 	struct svc_rtc_rqst *r;
 	int ret = 0;
 
+	lockdep_assert_held(&svc_rtc_mutex);
 	nr = min_t(unsigned int, nr, SVC_RTC_POOL_CAP);
-	mutex_lock(&svc_rtc_mutex);
-	pool = serv->sv_rtc_pool;
-	if (!pool)
-		goto out;
 	while (pool->nr < nr) {
 		r = svc_rtc_rqst_new(serv, pool->ops, pool->nr);
 		if (!r) {
@@ -2544,11 +2577,29 @@ VISIBLE_IF_KUNIT int svc_rtc_pool_set(struct svc_serv *serv, unsigned int nr)
 		svc_rtc_rqst_destroy(pool->ops, r);
 	}
 	WRITE_ONCE(serv->sv_rtc_nr, pool->nr);
-out:
+	return ret;
+}
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/**
+ * svc_rtc_pool_set - Size the service's preallocated rtc rqsts
+ * @serv: service with a registered hook (otherwise a no-op)
+ * @nr: wanted rqsts, capped at %SVC_RTC_POOL_CAP
+ *
+ * Return: 0, or -ENOMEM if the pool could not grow to @nr.
+ */
+VISIBLE_IF_KUNIT int svc_rtc_pool_set(struct svc_serv *serv, unsigned int nr)
+{
+	int ret = 0;
+
+	mutex_lock(&svc_rtc_mutex);
+	if (serv->sv_rtc_pool)
+		ret = svc_rtc_pool_set_locked(serv, serv->sv_rtc_pool, nr);
 	mutex_unlock(&svc_rtc_mutex);
 	return ret;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_pool_set);
+#endif
 
 /**
  * svc_rtc_pool_resize - Follow the service's thread count
@@ -2556,13 +2607,26 @@ EXPORT_SYMBOL_IF_KUNIT(svc_rtc_pool_set);
  *
  * One pool rqst per nfsd thread, up to %SVC_RTC_POOL_CAP: the fast path
  * never holds more calls than the thread path could.  Failure to grow
- * only means more pool_empty fallbacks.
+ * only means more pool_empty fallbacks.  A pool no call has wanted yet
+ * (not armed) stays empty.
  */
 void svc_rtc_pool_resize(struct svc_serv *serv)
 {
-	svc_rtc_pool_set(serv, READ_ONCE(serv->sv_nrthreads));
+	struct svc_rtc_pool *pool;
+
+	mutex_lock(&svc_rtc_mutex);
+	pool = serv->sv_rtc_pool;
+	if (pool && test_bit(SVC_RTC_POOL_ARMED, &pool->flags))
+		svc_rtc_pool_set_locked(serv, pool,
+					READ_ONCE(serv->sv_nrthreads));
+	mutex_unlock(&svc_rtc_mutex);
 }
 EXPORT_SYMBOL_GPL(svc_rtc_pool_resize);
+
+static void svc_rtc_pool_fill(struct work_struct *work)
+{
+	svc_rtc_pool_resize(container_of(work, struct svc_rtc_pool, fill)->serv);
+}
 
 #if IS_ENABLED(CONFIG_KUNIT)
 /* Serve @xprt (XPT_BUSY held) as a thread would, for comparison tests. */

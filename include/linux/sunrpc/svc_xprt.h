@@ -146,6 +146,7 @@ enum svc_rtc_reason {
 	SVC_RTC_FB_WRITE_MODE,		/* WRITE the thread path does differently */
 	SVC_RTC_FB_NOWAIT_ERR,		/* NOWAIT I/O error or short write */
 	SVC_RTC_FB_SB_FROZEN,		/* WRITE: sb_start_write_trylock() failed */
+	SVC_RTC_FB_NO_DIO_WQ,		/* no superblock DIO completion workqueue */
 	SVC_RTC_NR_REASONS
 };
 
@@ -160,10 +161,10 @@ struct svc_rtc_ops {
 	/* RPC auth flavor the hook serves; others go to a thread unreceived */
 	u32	flavor;
 	/*
-	 * Called on the work item with XPT_BUSY held and nothing read from
-	 * the transport.  Returns true to take the next record on the fast
-	 * path.  Must not sleep and must have no side effect when it
-	 * returns false.
+	 * Called from svc_xprt_enqueue() (any context, under RCU) and again
+	 * on the work item with XPT_BUSY held, nothing read from the
+	 * transport either time.  Returns true to take the next record on
+	 * the fast path.  Must not sleep and must have no side effect.
 	 */
 	bool	(*want)(struct svc_xprt *xprt);
 	/*
@@ -232,6 +233,14 @@ struct svc_rtc_pool {
 	struct lwq		free;
 	struct list_head	all;
 	unsigned int		nr;
+	unsigned long		flags;
+	struct svc_serv		*serv;
+	struct work_struct	fill;	/* svc_rtc_pool_arm() */
+};
+
+/* svc_rtc_pool.flags */
+enum {
+	SVC_RTC_POOL_ARMED,		/* a call wanted the fast path */
 };
 
 /* svc_rtc_conn.flags */
