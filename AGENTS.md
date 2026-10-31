@@ -274,8 +274,9 @@ once. The eight data drives were two stripes of four for it until
 XFS, `/hs/nvme0` to `/hs/nvme7`**, the first four for `enp161s0f0`
 and the other four for `enp164s0f0`, and `xeu-rig/twoport.sh` exports
 and mounts each and divides a port's writers among its four. They are
-not in `/etc/fstab`: after a boot, `mount -o noatime /dev/nvmeNn1
-/hs/nvmeN` for each. Still check that no NFS client is connected before a port is
+not in `/etc/fstab`: after a boot, `mount -o noatime,lazytime
+/dev/nvmeNn1 /hs/nvmeN` for each (lazytime since 31 October, Mike;
+`settled.sh` holds it). Still check that no NFS client is connected before a port is
 reconfigured or `xeu` reloaded (192.168.0.105 has mounted over
 `enp164s0f0` before). The first section of `xeu-rig/README.md` has
 where that stands.

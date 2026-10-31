@@ -759,6 +759,11 @@ fewer pages in use. **Kept (Mike, 31 October).** The account is "What
 step 5 found" in the round's README. tardis2 is left at the settled setting on build 505, the region
 at `0x8220000000`.
 
+**The data drives are mounted `lazytime` since 31 October (Mike,
+FLAMEGRAPH round 47):** nfsd 292.0k to 287.8k cycles a WRITE on tardis2.
+`settled.sh apply` remounts each mounted drive, so an older `mount -o
+noatime` line in this file is still enough. Not run on tardis1.
+
 **Done on 30 October** on build 504 (`run113.sh` and `run114.sh` in
 `../FLAMEGRAPH/45-region-holders/`, run111 and run112 again with the
 kernel's own sunrpc `666175BED7A343E376C1742` pinned): the `mapped

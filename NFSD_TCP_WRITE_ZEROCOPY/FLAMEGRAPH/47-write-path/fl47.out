@@ -1,0 +1,8 @@
+17:26:39 kernel 7.3.0-7.hs.505.loanpages_pool.el10.aarch64+16k, sunrpc 666175BED7A343E376C1742
+17:26:48 trimmed, rest 120 s
+17:30:52 fl47 | total 40.49 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1541216, denied 1593207, paused 38, overrun 0
+17:30:55 end: settled.sh audit rest: the settled setting
+WRITEs a second in the profile: 38498
+rings (CPUs 0,2,4,6): busy 34.11 us a WRITE
+nfsd (CPUs 8-55): busy 89.31 us a WRITE
+17:31:42 DONE: /var/tmp/zc-run-logs/t2-fl47/fl47-flame

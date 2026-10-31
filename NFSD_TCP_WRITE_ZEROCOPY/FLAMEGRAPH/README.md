@@ -177,6 +177,13 @@ decided.
    write 26.3, the reply 14.2; the region's lock is 1.13. The write
    below nfsd, 19.1 us through XFS, iomap, the block layer and NVMe, is
    the largest path no round has taken up. Nothing changed.
+16. **Round 47: the write below nfsd** (Mike, 31 October;
+   [47-write-path](47-write-path/README.md)). Counted: 0.75 XFS
+   transactions a WRITE for timestamps, four requests of 256 KiB, four
+   NVMe interrupts, 13 us on nfsd's CPUs that perf cannot see.
+   `lazytime` **kept** (settled.sh): nfsd 292.0k to 287.8k cycles a WRITE
+   (-1.5%), the rate and peak the same. `nomerges` 2 not kept: one doorbell
+   a WRITE, the same four interrupts. Open: NVMe interrupt coalescing.
 
 ## Where the kept rounds stand (2026-10-28)
 

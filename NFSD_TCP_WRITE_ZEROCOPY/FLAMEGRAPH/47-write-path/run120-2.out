@@ -1,0 +1,3 @@
+16:21:37 kernel 7.3.0-7.hs.505.loanpages_pool.el10.aarch64+16k, rodata=noalias, sunrpc 666175BED7A343E376C1742, nfsd 3F0C341E86E266D5FDF2ADF, xeu CA0931345E46C929B11D01F, region 32768
+16:25:48 r120-2-loan64 | total 40.46 GB/s | 1 no-step | 1 placed | r120-2-loan64 ring 31.6 nfsd 94.2 us/W (38580 WRITEs/s) | ring 128.8k cycles 283.3k instructions, nfsd 300.4k cycles 311.0k instructions a WRITE | peak 6027 | alloc_fail 0 | admitted 1540680, denied 1560907 | client retransmits in the window: 3 | stack 64
+16:25:51 end: rx_region_stack 64, settled.sh audit rest: the settled setting; DONE

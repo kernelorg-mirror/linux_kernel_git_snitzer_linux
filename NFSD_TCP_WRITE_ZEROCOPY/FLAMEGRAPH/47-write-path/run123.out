@@ -1,0 +1,4 @@
+18:07:27 kernel 7.3.0-7.hs.505.loanpages_pool.el10.aarch64+16k, rodata=noalias, sunrpc 666175BED7A343E376C1742, nfsd 3F0C341E86E266D5FDF2ADF, xeu CA0931345E46C929B11D01F, region 32768
+18:11:39 r123-1-A | total 40.55 GB/s | 1 no-step | 1 placed | r123-1-A ring 32.4 nfsd 90.5 us/W (38727 WRITEs/s) | ring 128.2k cycles 283.3k instructions, nfsd 292.9k cycles 301.5k instructions a WRITE | peak 6416 | alloc_fail 0 | admitted 1544840, denied 1608890 | client retransmits in the window: 1 | stack 64
+18:15:51 r123-2-B | total 40.54 GB/s | 1 no-step | 1 placed | r123-2-B ring 31.7 nfsd 87.6 us/W (38555 WRITEs/s) | ring 128.5k cycles 283.7k instructions, nfsd 286.6k cycles 299.7k instructions a WRITE | peak 5964 | alloc_fail 0 | admitted 1543872, denied 1597902 | client retransmits in the window: 4 | stack 64
+18:15:53 end: rx_region_stack 64, settled.sh audit rest: the settled setting; DONE
