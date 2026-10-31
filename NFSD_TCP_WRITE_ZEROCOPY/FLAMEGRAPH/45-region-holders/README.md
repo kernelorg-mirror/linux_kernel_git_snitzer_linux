@@ -287,4 +287,4 @@ How to read the reports: on this build the call chain of a sample at the unlock 
 - **Stack 256 itself did not move across the kernels:** 291.7k against run113's 292.1k and 128.9k against 128.6k on the rings. So the saving is stack 64's own, not the boot's: the 2.7k that B cost on build 504 is gone.
 - **Stack 64 keeps its smaller footprint:** 270 fewer pages in use (4.2 MiB, 5%) and a peak 69 to 365 pages lower. That saving is less than build 504's 420 to 450; run117's mean is the higher of the two, as noted above.
 
-**What it means.** With the bulk return, stack 64 costs nfsd the same as stack 256 at the same rate, with fewer pages in use and no higher peak. Whether to keep `a4fb143d7852` is Mike's. Not run: tardis1, where two ports share the region's lock.
+**What it means.** With the bulk return, stack 64 costs nfsd the same as stack 256 at the same rate, with fewer pages in use and no higher peak. **Kept (Mike, 31 October):** `a4fb143d7852` stays in the code group. Not run: tardis1, where two ports share the region's lock.
