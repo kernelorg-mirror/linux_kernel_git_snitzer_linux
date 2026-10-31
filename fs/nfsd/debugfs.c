@@ -60,9 +60,8 @@ DEFINE_DEBUGFS_ATTRIBUTE(nfsd_dsr_fops, nfsd_dsr_get, nfsd_dsr_set, "%llu\n");
  *   %1: NFS READ will use dontcache (buffered IO w/ dropbehind)
  *   %2: NFS READ will use direct IO
  *
- * The NFSv3 READ run-to-completion fast path is registered at nfsd
- * start only when this is direct; changing it later turns the fast
- * path off at once but on again only at the next nfsd start.
+ * The NFSv3 READ run-to-completion fast path serves only direct;
+ * changing this turns it on or off for the next receive.
  * This setting takes immediate effect for all NFS versions,
  * all exports, and in all NFSD net namespaces.
  */

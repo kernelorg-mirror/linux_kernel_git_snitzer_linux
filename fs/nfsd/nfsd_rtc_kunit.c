@@ -232,6 +232,8 @@ static int rtcn_init(struct kunit *test)
 
 	t->mnt = kern_mount(&rtcn_fs_type);
 	KUNIT_ASSERT_FALSE(test, IS_ERR(t->mnt));
+	/* What the first thread-path direct I/O on a real mount leaves. */
+	KUNIT_ASSERT_EQ(test, sb_init_dio_done_wq(t->mnt->mnt_sb), 0);
 	inode = alloc_anon_inode(t->mnt->mnt_sb);
 	KUNIT_ASSERT_FALSE(test, IS_ERR(inode));
 	inode->i_mode = S_IFREG | 0644;
@@ -1221,6 +1223,74 @@ static void nfsd_rtc_write_nowait_err_complete(struct kunit *test)
 	}
 }
 
+/* A fresh superblock, as before any direct I/O: no DIO completion wq. */
+static void rtcn_drop_dio_wq(struct rtcn *t)
+{
+	struct super_block *sb = t->mnt->mnt_sb;
+
+	destroy_workqueue(sb->s_dio_done_wq);
+	sb->s_dio_done_wq = NULL;
+}
+
+/*
+ * No DIO completion workqueue: an async IOCB_NOWAIT read would only say
+ * -EAGAIN, so the fast path misses before submitting, and the thread
+ * rerun's direct read creates the workqueue for the next call.
+ */
+static void nfsd_rtc_read_no_dio_wq(struct kunit *test)
+{
+	struct rtcn *t = test->priv;
+	struct svc_rqst *r = t->rq[1];
+	struct nfsd_rtc_ctx *c = r->rq_rtc_priv;
+	unsigned long h0, a0, h1, a1;
+	struct nfsd3_readres *resp;
+
+	rtcn_drop_dio_wq(t);
+	resp = rtcn_prep(t, 1, true, PAGE_SIZE);
+	rtcn_counts(&h0, &a0);
+	nfsd_rtc_read_file(r, &resp->fh, rtcn_get(t), 0, &resp->count,
+			   &resp->eof);
+	rtcn_counts(&h1, &a1);
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+	KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_NO_DIO_WQ);
+	KUNIT_EXPECT_EQ(test, t->calls, 0);
+	KUNIT_EXPECT_NULL(test, c->nf);
+	KUNIT_EXPECT_EQ(test, h1 - h0, 0);
+	KUNIT_EXPECT_EQ(test, a1 - a0, 0);
+	rtcn_expect_ref_back(t);
+	rtcn_thread_ref(t, 0, PAGE_SIZE);
+	KUNIT_EXPECT_NOT_NULL(test, t->mnt->mnt_sb->s_dio_done_wq);
+}
+
+/* The WRITE twin of nfsd_rtc_read_no_dio_wq(). */
+static void nfsd_rtc_write_no_dio_wq(struct kunit *test)
+{
+	struct rtcn *t = test->priv;
+	struct svc_rqst *r = t->rq[1];
+	struct nfsd_rtc_ctx *c = r->rq_rtc_priv;
+	unsigned long h0, a0, h1, a1, cnt = PAGE_SIZE;
+	struct nfsd3_writeres *resp;
+
+	rtcn_drop_dio_wq(t);
+	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_FILE_SYNC);
+	rtcn_counts(&h0, &a0);
+	nfsd_rtc_write_file(r, &resp->fh, rtcn_get(t), 0, &t->payload, &cnt,
+			    rtcn_iocb_flags(NFS_FILE_SYNC), resp->verf);
+	rtcn_counts(&h1, &a1);
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+	KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_NO_DIO_WQ);
+	KUNIT_EXPECT_EQ(test, t->calls, 0);
+	KUNIT_EXPECT_NULL(test, c->nf);
+	KUNIT_EXPECT_EQ(test, h1 - h0, 0);
+	KUNIT_EXPECT_EQ(test, a1 - a0, 0);
+	KUNIT_EXPECT_NULL(test, memchr_inv(t->wdata, 0, RTCN_SIZE));
+	rtcn_expect_ref_back(t);
+	rtcn_wthread_ref(t, 0, PAGE_SIZE, NFS_FILE_SYNC);
+	KUNIT_EXPECT_NOT_NULL(test, t->mnt->mnt_sb->s_dio_done_wq);
+}
+
 /*
  * A frozen superblock: sb_start_write_trylock() fails on the work item,
  * a counted sb_frozen miss before ->write_iter (no sleep in
@@ -1348,6 +1418,93 @@ static void nfsd_rtc_write_async_export(struct kunit *test)
 	rtcn_wexpect_reply(t, 0, PAGE_SIZE, NFS_FILE_SYNC);
 }
 
+static void rtcn_serv_destroy(void *unused)
+{
+	mutex_lock(&nfsd_mutex);
+	nfsd_destroy_serv(&init_net);
+	mutex_unlock(&nfsd_mutex);
+}
+
+/*
+ * nfsd_create_serv() registers the hook whatever io_cache_read is, with
+ * an empty pool.  Each receive asks want(): a buffered config is not
+ * diverted and a direct one is, going on to peek (this transport has no
+ * xpo_peek_call, so the peek stops it there).  A receive diverted just
+ * before a switch to buffered is declined on the work item.
+ */
+static void rtcn_flip(struct kunit *test, u64 from, u64 to)
+{
+	struct nfsd_net *nn = net_generic(&init_net, nfsd_net_id);
+	struct svc_xprt *x = kunit_kzalloc(test, sizeof(*x), GFP_KERNEL);
+	enum svc_rtc_reason reason;
+	u64 io[2] = { from, to };
+	struct svc_serv *serv;
+	bool running;
+	unsigned int i;
+	int err;
+
+	KUNIT_ASSERT_NOT_NULL(test, x);
+	nfsd_io_cache_read = from;
+	mutex_lock(&nfsd_mutex);
+	running = nn->nfsd_serv != NULL;
+	err = running ? 0 : nfsd_create_serv(&init_net, true);
+	serv = nn->nfsd_serv;
+	mutex_unlock(&nfsd_mutex);
+	if (running)
+		kunit_skip(test, "nfsd already serves init_net");
+	KUNIT_ASSERT_EQ(test, err, 0);
+	/* Destroyed even when an assert below ends the case early. */
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test, rtcn_serv_destroy,
+							NULL), 0);
+	KUNIT_EXPECT_PTR_EQ(test, rcu_access_pointer(serv->sv_rtc),
+			    &nfsd3_rtc_ops);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(serv->sv_rtc_nr), 0);
+
+	kref_init(&x->xpt_ref);
+	mutex_init(&x->xpt_mutex);
+	x->xpt_server = serv;
+	x->xpt_ops = &rtcn_xprt_ops;
+	x->xpt_net = &init_net;
+	set_bit(XPT_TEMP, &x->xpt_flags);
+	set_bit(XPT_DATA, &x->xpt_flags);
+	set_bit(XPT_BUSY, &x->xpt_flags);
+	KUNIT_ASSERT_EQ(test, svc_rtc_xprt_attach(x, GFP_KERNEL), 0);
+
+	for (i = 0; i < ARRAY_SIZE(io); i++) {
+		nfsd_io_cache_read = io[i];
+		KUNIT_EXPECT_EQ(test, svc_rtc_should_divert(x),
+				io[i] == NFSD_IO_DIRECT);
+		reason = SVC_RTC_NR_REASONS;
+		KUNIT_EXPECT_EQ(test, svc_rtc_recv_step(x, &reason, NULL),
+				SVC_RTC_THREAD);
+		KUNIT_EXPECT_EQ(test, reason, io[i] == NFSD_IO_DIRECT ?
+				SVC_RTC_FB_NO_PEEK : SVC_RTC_FB_DECLINED);
+		KUNIT_EXPECT_TRUE(test, test_bit(XPT_BUSY, &x->xpt_flags));
+	}
+
+	nfsd_io_cache_read = NFSD_IO_DIRECT;
+	KUNIT_EXPECT_TRUE(test, svc_rtc_should_divert(x));
+	nfsd_io_cache_read = NFSD_IO_BUFFERED;
+	reason = SVC_RTC_NR_REASONS;
+	KUNIT_EXPECT_EQ(test, svc_rtc_recv_step(x, &reason, NULL),
+			SVC_RTC_THREAD);
+	KUNIT_EXPECT_EQ(test, reason, SVC_RTC_FB_DECLINED);
+
+	svc_rtc_xprt_stop(x);
+	KUNIT_EXPECT_EQ(test, kref_read(&x->xpt_ref), 1);
+	svc_rtc_xprt_detach(x);
+}
+
+static void nfsd_rtc_flip_to_direct(struct kunit *test)
+{
+	rtcn_flip(test, NFSD_IO_BUFFERED, NFSD_IO_DIRECT);
+}
+
+static void nfsd_rtc_flip_to_buffered(struct kunit *test)
+{
+	rtcn_flip(test, NFSD_IO_DIRECT, NFSD_IO_BUFFERED);
+}
+
 static struct kunit_case nfsd_rtc_cases[] = {
 	KUNIT_CASE(nfsd_rtc_sync_hit),
 	KUNIT_CASE(nfsd_rtc_async_complete),
@@ -1366,8 +1523,12 @@ static struct kunit_case nfsd_rtc_cases[] = {
 	KUNIT_CASE(nfsd_rtc_write_nowait_err_submit),
 	KUNIT_CASE(nfsd_rtc_write_nowait_err_complete),
 	KUNIT_CASE(nfsd_rtc_write_frozen),
+	KUNIT_CASE(nfsd_rtc_read_no_dio_wq),
+	KUNIT_CASE(nfsd_rtc_write_no_dio_wq),
 	KUNIT_CASE(nfsd_rtc_write_fallbacks),
 	KUNIT_CASE(nfsd_rtc_write_async_export),
+	KUNIT_CASE(nfsd_rtc_flip_to_direct),
+	KUNIT_CASE(nfsd_rtc_flip_to_buffered),
 	{}
 };
 

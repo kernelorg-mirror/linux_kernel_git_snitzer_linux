@@ -1247,9 +1247,9 @@ const struct svc_version nfsd_version3 = {
 };
 
 /*
- * Run-to-completion NFSv3 READ (svc_rtc_register()).  Registered only when
- * reads are direct (nfsd_create_serv()); want() keeps buffered configs on
- * the thread path if io_cache_read changes while the service runs.
+ * Run-to-completion NFSv3 READ (svc_rtc_register()).  Registered at every
+ * nfsd_create_serv(); want() keeps buffered configs on the thread path and
+ * follows io_cache_read when it changes while the service runs.
  */
 static bool nfsd3_rtc_want(struct svc_xprt *xprt)
 {

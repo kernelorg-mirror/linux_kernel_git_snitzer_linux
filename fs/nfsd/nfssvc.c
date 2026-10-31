@@ -658,12 +658,14 @@ int nfsd_create_serv(struct net *net, bool no_rpcbind)
 	/* svc_bind() reads this, so set it first. */
 	serv->sv_no_rpcbind = no_rpcbind;
 	/*
-	 * The NFSv3 READ fast path needs direct reads.  Without the hook
-	 * no connection gets a work item, so other configs keep today's
-	 * path.  Failing to register is not an error: threads serve all.
+	 * Register whatever io_cache_read is now: nfsd3_rtc_want() reads it
+	 * on each receive, so switching to direct reads after start enables
+	 * the NFSv3 READ fast path and switching away sends reads back to
+	 * threads.  While reads are buffered, receives go to threads with
+	 * no work-item hop and the rtc rqst pool stays empty.  Failing to
+	 * register is not an error: threads serve all.
 	 */
-	if (READ_ONCE(nfsd_io_cache_read) == NFSD_IO_DIRECT)
-		svc_rtc_register(serv, &nfsd3_rtc_ops);
+	svc_rtc_register(serv, &nfsd3_rtc_ops);
 
 	error = svc_bind(serv, net);
 	if (error < 0) {

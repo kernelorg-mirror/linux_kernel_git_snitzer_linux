@@ -1229,6 +1229,21 @@ static __be32 nfsd_direct_read_end(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				eof, host_err);
 }
 
+/*
+ * The rtc fast paths submit async IOCB_NOWAIT direct I/O, which fails
+ * -EAGAIN while the superblock has no DIO completion workqueue and never
+ * creates one; the sync thread path does not need one either.  So the
+ * thread path creates it, where it may sleep, and the fast paths miss
+ * until it exists.  An allocation failure leaves it to the next call.
+ */
+static void nfsd_dio_done_wq_init(struct file *file)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+
+	if (unlikely(!READ_ONCE(sb->s_dio_done_wq)))
+		sb_init_dio_done_wq(sb);
+}
+
 static noinline_for_stack __be32
 nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		 struct nfsd_file *nf, loff_t offset, unsigned long *count,
@@ -1239,6 +1254,7 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	ssize_t host_err;
 	u64 dio_start;
 
+	nfsd_dio_done_wq_init(nf->nf_file);
 	dio_start = nfsd_direct_read_prep(rqstp, fhp, nf, offset, *count,
 					  &kiocb, &iter);
 	host_err = vfs_iocb_iter_read(nf->nf_file, &kiocb, &iter);
@@ -1567,6 +1583,7 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	size_t expected;
 	int bounced = 0;
 
+	nfsd_dio_done_wq_init(file);
 	nsegs = nfsd_write_dio_iters_init(rqstp, fhp, nf, rqstp->rq_bvec,
 					  nvecs, kiocb, *cnt, &split);
 	/*
@@ -3514,6 +3531,12 @@ VISIBLE_IF_KUNIT __be32 nfsd_rtc_read_file(struct svc_rqst *rqstp,
 		return nfs_ok;
 	}
 
+	if (unlikely(!READ_ONCE(file_inode(file)->i_sb->s_dio_done_wq))) {
+		nfsd_file_put(nf);
+		svc_rtc_miss(rqstp, SVC_RTC_FB_NO_DIO_WQ);
+		return nfs_ok;
+	}
+
 	c->nf = nf;
 	c->offset = offset;
 	c->dio_start = nfsd_direct_read_prep(rqstp, fhp, nf, offset, *count,
@@ -3815,6 +3838,11 @@ VISIBLE_IF_KUNIT __be32 nfsd_rtc_write_file(struct svc_rqst *rqstp,
 	    nfs_dio_sync_flags(&split, c->kiocb.ki_flags) ||
 	    iov_iter_count(&seg->iter) != *cnt)
 		goto out_unaligned;
+	if (unlikely(!READ_ONCE(file_inode(file)->i_sb->s_dio_done_wq))) {
+		nfsd_file_put(nf);
+		svc_rtc_miss(rqstp, SVC_RTC_FB_NO_DIO_WQ);
+		return nfs_ok;
+	}
 
 	c->nf = nf;
 	c->offset = offset;
