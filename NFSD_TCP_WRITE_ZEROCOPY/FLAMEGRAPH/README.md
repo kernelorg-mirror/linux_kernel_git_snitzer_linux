@@ -186,6 +186,14 @@ decided.
    a WRITE, the same four interrupts. NVMe interrupt coalescing not kept:
    nfsd -6.7k cycles a WRITE at saturation, but at iodepth 1 p50 +137 us
    at 1 MiB and +280 us at 64 KiB.
+17. **Round 48: a profile with pseudo-NMI** (Mike, 31 October;
+   [48-pseudo-nmi](48-pseudo-nmi/README.md)). A look: pseudo-NMI adds
+   nfsd +5.0k cycles a WRITE (+1.7%, one run a side). Hard interrupts on
+   nfsd's CPUs are 27.8k cycles a WRITE (NVMe 11.4, IPIs 6.5, entry 7.7),
+   96% on an idle CPU, so earlier profiles dropped them with the idle
+   stacks. Sleeping and waking is the largest single thing, about 37.7k
+   (13%), with `sched_balance_newidle` 3.81k unranked before. Nothing
+   changed; the parameter is still on the command line.
 
 ## Where the kept rounds stand (2026-10-28)
 
@@ -334,10 +342,13 @@ tardis1's included: that is Mike's to ask for, each time.
 - The profile costs the rings a little of their rate (perf at 999 Hz on 64
   CPUs): take a round's run figures from untraced runs, and its shares from
   the profile.
-- Without pseudo-NMI (not on tardis2's command line), a sample taken with
-  interrupts off lands where they are turned on again: a wide
-  `_raw_spin_unlock_irqrestore` or `handle_softirqs` self cost belongs to
-  what ran before it. Read its callers before ranking it.
+- Without pseudo-NMI (not on tardis2's command line but for round 48), a
+  sample taken with interrupts off lands where they are turned on again:
+  a wide `_raw_spin_unlock_irqrestore` or `handle_softirqs` self cost
+  belongs to what ran before it. Read its callers before ranking it. A
+  hard interrupt of the idle task lands on an idle stack and `flame.sh`
+  drops it, so no profile without pseudo-NMI counts those at all: 27.8k
+  cycles a WRITE on nfsd's CPUs (round 48).
 - A change of a few us a WRITE on nfsd is below what mpstat resolves over
   48 CPUs: compare the function's cost in the profiles before and after,
   and use the A/B to show nothing else moved (round 02).
