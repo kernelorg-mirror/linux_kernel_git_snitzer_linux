@@ -255,7 +255,7 @@ tardis2 on build 505 (`7.3.0-7.hs.505.loanpages_pool.el10.aarch64+16k`, `rodata=
 | run113, build 504, stack 256 | 2 | 40.46 to 40.49 | 128.6k (281.7k) | 292.1k (300.9k) | 6307 to 6522 | 5376 |
 
 - **nfsd is 3.5k cycles (1.2%) a WRITE cheaper at stack 64,** and 2.9k instructions; all three runs lie below run116's three (294.2 to 295.9). The rings and the rate are the same. This is across a reboot and a kernel, so it is a reading, not an A/B.
-- **It reaches stack 256's figure,** which was the floor expected. 291.4k is under 292.1k, but stack 256 has not been run untraced on build 505, so that says level, not better.
+- **It reaches stack 256's figure,** which was the floor expected: see run119 below, stack 256 untraced on this build.
 - **The region's peak is not raised** (6118 to 6172, inside build 504's 5904 to 6277 at stack 64). The mean in use, 5029, is above run116's 4888 and above the 4936 of all eight runs of stack 64 on build 504 (4787 to 5034), one run at 5103 outside that range. The change holds no page longer, and three runs cannot tell this from the spread; note that this boot's resize had moved the region to `0x81e0000000`.
 
 **The profile ([run118.sh](run118.sh), [run118.out](run118.out), reports in [r118/](r118/)):** run114 again, loan64 A B B A, at 03:25 to 03:43. A (stack 256) needs `EXP_RX_REGION_STACK=0` now that `settled.sh` holds 64; the first start stopped on that before any load ([r117/run118-stopped-before-load.out](r117/run118-stopped-before-load.out)). `page_pool_rx_region_put()` is inlined on this build, so the per-page count is `__page_pool_rx_region_put()`. Means of each arm's two runs, nfsd, cycles a WRITE with callees (profiled runs, so their totals are not comparable with run117's):
@@ -275,4 +275,16 @@ tardis2 on build 505 (`7.3.0-7.hs.505.loanpages_pool.el10.aarch64+16k`, `rodata=
 
 How to read the reports: on this build the call chain of a sample at the unlock skips `page_pool_return_netmem_bulk()`'s frame, so the leaf is under `page_pool_recycle_ring_bulk` in `*-unlock.txt`. The `@n` histogram in `*-calls.txt` holds about 72% of the probe's count (its probe likely came up later), so only its shape is used. perf resolves an older build's data against the running kernel's symbols, so r114's `perf.data` cannot be reread on build 505; its figures here are from the reports kept on build 504.
 
-**What it means.** With the bulk return, stack 64 costs nfsd about what stack 256 did, for the same rate and no higher peak, and a stack of 64 no longer has a cost to set against its smaller footprint. Whether to keep `a4fb143d7852` is Mike's. Not run: stack 256 untraced on build 505, and tardis1, where two ports share the region's lock.
+**Stack 256 untraced on build 505 ([run119.sh](run119.sh), [run119.out](run119.out), samples in [r119/](r119/)).** Mike asked for it, to settle run117 against stack 256 on one kernel: three loan64 runs by override of `settled.sh`'s 64, otherwise as run117, at 04:02 to 04:15 on the same boot. Every run: no drive stepped down or low in the warm-up, no stall, no failed allocation. The life check's resize had moved the region from `0x81e0000000` to `0x8220000000` between run117 and run119, a difference between the two sets not tested on its own.
+
+| loan64, build 505 | runs | GB/s | ring cycles (instructions) a WRITE | nfsd cycles (instructions) a WRITE | peak, pages | mean in use, pages |
+|---|---|---|---|---|---|---|
+| A, stack 256 (run119) | 3 | 40.46 to 40.50 | 128.9k (282.1k) | 291.7k (300.2k), 291.3 to 292.0 | 6187 to 6537 | 5299, 5205 to 5346 |
+| B, stack 64 (run117) | 3 | 40.46 to 40.52 | 128.4k (283.5k) | 291.4k (301.0k), 290.6 to 292.3 | 6118 to 6172 | 5029, 4989 to 5103 |
+| B − A | | | −0.5k (+1.4k) | **−0.3k (+0.8k)** | | **−270 (−5%)** |
+
+- **Stack 64 now costs nfsd nothing measurable against stack 256:** the cycles lie inside each other's spread, where on build 504 every B run lay above both A runs (+2.7k, +0.9%). B's instructions are still 0.8k above A's, so a little more work is done, as about 10 more pages a WRITE go round; it does not show in the cycles.
+- **Stack 256 itself did not move across the kernels:** 291.7k against run113's 292.1k and 128.9k against 128.6k on the rings. So the saving is stack 64's own, not the boot's: the 2.7k that B cost on build 504 is gone.
+- **Stack 64 keeps its smaller footprint:** 270 fewer pages in use (4.2 MiB, 5%) and a peak 69 to 365 pages lower. That saving is less than build 504's 420 to 450; run117's mean is the higher of the two, as noted above.
+
+**What it means.** With the bulk return, stack 64 costs nfsd the same as stack 256 at the same rate, with fewer pages in use and no higher peak. Whether to keep `a4fb143d7852` is Mike's. Not run: tardis1, where two ports share the region's lock.
