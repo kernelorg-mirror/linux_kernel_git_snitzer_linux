@@ -239,3 +239,40 @@ Built with W=1 (`net/core/page_pool.o`, build 504's `.config`), checkpatch `--st
 1. The region's life as in step 4: `mapped` line, port a down and up, a resize, no `escaped` and no WARNING.
 2. run116 again (loan64 three times at the settled setting) and run114's profile: `page_pool_return_netmem_bulk` should take the place of most of the `page_pool_return_netmem` calls, and nfsd's time under the region's lock (the `_raw_spin_unlock_irqrestore` leaf under it, 3.3k cycles a WRITE in r114's B) should fall. The mark to beat is run116's nfsd 294.9k cycles a WRITE; stack 256's 292.1k (run113) is the floor this could reach.
 3. The region's mean in use and peak beside it, which this should not change.
+
+### What step 5 found (r117, r118)
+
+tardis2 on build 505 (`7.3.0-7.hs.505.loanpages_pool.el10.aarch64+16k`, `rodata=noalias`), on 31 October: sunrpc, nfsd and xeu with build 504's srcversions, the region at 32768, the settled setting (stack 64). Every run: no drive stepped down or low in the warm-up, no stall, and in r117 no failed allocation. Copy was not run (FLAMEGRAPH's rule).
+
+**The region's life ([r117/life.sh](r117/life.sh), [before](r117/life-before.out) and [after](r117/life-after.out) the loads).** Run twice, because the bulk return runs only under load: port a down and up, then a resize to 16384 and back. Each time the `mapped` line went and came back, all 32768 pages came back unmapped, each region was freed with 0 escaped, and there was no WARNING in dmesg from the boot to the end.
+
+**Untraced ([run117.sh](run117.sh), [run117.out](run117.out), samples in [r117/](r117/)):** run116 again, three loan64 runs.
+
+| loan64 | runs | GB/s | ring cycles (instructions) a WRITE | nfsd cycles (instructions) a WRITE | peak, pages | mean in use, pages |
+|---|---|---|---|---|---|---|
+| run116, build 504, stack 64 | 3 | 40.39 to 40.51 | 128.3k (282.9k) | 294.9k (303.9k) | 5904 to 6227 | 4888 |
+| **run117, build 505, stack 64** | 3 | 40.46 to 40.52 | 128.4k (283.5k) | **291.4k (301.0k)**, 290.6 to 292.3 | 6118 to 6172 | 5029, 4989 to 5103 |
+| run113, build 504, stack 256 | 2 | 40.46 to 40.49 | 128.6k (281.7k) | 292.1k (300.9k) | 6307 to 6522 | 5376 |
+
+- **nfsd is 3.5k cycles (1.2%) a WRITE cheaper at stack 64,** and 2.9k instructions; all three runs lie below run116's three (294.2 to 295.9). The rings and the rate are the same. This is across a reboot and a kernel, so it is a reading, not an A/B.
+- **It reaches stack 256's figure,** which was the floor expected. 291.4k is under 292.1k, but stack 256 has not been run untraced on build 505, so that says level, not better.
+- **The region's peak is not raised** (6118 to 6172, inside build 504's 5904 to 6277 at stack 64). The mean in use, 5029, is above run116's 4888 and above the 4936 of all eight runs of stack 64 on build 504 (4787 to 5034), one run at 5103 outside that range. The change holds no page longer, and three runs cannot tell this from the spread; note that this boot's resize had moved the region to `0x81e0000000`.
+
+**The profile ([run118.sh](run118.sh), [run118.out](run118.out), reports in [r118/](r118/)):** run114 again, loan64 A B B A, at 03:25 to 03:43. A (stack 256) needs `EXP_RX_REGION_STACK=0` now that `settled.sh` holds 64; the first start stopped on that before any load ([r117/run118-stopped-before-load.out](r117/run118-stopped-before-load.out)). `page_pool_rx_region_put()` is inlined on this build, so the per-page count is `__page_pool_rx_region_put()`. Means of each arm's two runs, nfsd, cycles a WRITE with callees (profiled runs, so their totals are not comparable with run117's):
+
+| | r114 A, 256 | r118 A, 256 | r114 B, 64 | r118 B, 64 |
+|---|---|---|---|---|
+| pages back to the region a WRITE | 3.23 | 3.17 | 14.03 | 13.60 |
+| **holds of the region's lock a WRITE, for those pages** | 3.23 | **0.32** | 14.03 | **1.34** |
+| `page_pool_put_netmem_bulk` | 3.34k | 2.85k | 6.48k | **4.77k** |
+| `_raw_spin_unlock_irqrestore` leaf on the way back to the region | 0.71 to 0.88k | 0.66k | 3.3k | **1.83k** |
+| `queued_spin_lock_slowpath`, all of nfsd | 0.48k | 0.51k | 0.57k | 0.53k |
+
+- **The lock is held about a tenth as often:** 13.6 pages in 1.34 holds, about 10 pages a hold, not the 4 holds a WRITE this step expected: only about one call of `page_pool_recycle_ring_bulk()` in three (1.34 of 4.15) overflows, and an overflow is rarely small (30% are the full 16, 16% are 4 or fewer). `page_pool_return_netmem` is down to 0.07 calls a WRITE.
+- **The region's round trip at stack 64 costs nfsd 1.9k cycles a WRITE more than at 256, against 3.1k on build 504;** the time under the lock falls from 3.3k to 1.83k. A hold for about 10 pages is longer than a hold for one, about 1.4k cycles against 0.24k, and waiting on the lock is no worse (`queued_spin_lock_slowpath` 0.53k against 0.57k), though interrupts stay off for up to 16 pages at a time.
+- The rings' `page_pool_rx_region_alloc` is unchanged: 0.75 calls and about 0.2k cycles a WRITE.
+- The profile accounts for about 1.7k of the 3.5k that run117 shows. The rest is not located: it may be less contention on the lock's line outside these frames, or the difference between the boots.
+
+How to read the reports: on this build the call chain of a sample at the unlock skips `page_pool_return_netmem_bulk()`'s frame, so the leaf is under `page_pool_recycle_ring_bulk` in `*-unlock.txt`. The `@n` histogram in `*-calls.txt` holds about 72% of the probe's count (its probe likely came up later), so only its shape is used. perf resolves an older build's data against the running kernel's symbols, so r114's `perf.data` cannot be reread on build 505; its figures here are from the reports kept on build 504.
+
+**What it means.** With the bulk return, stack 64 costs nfsd about what stack 256 did, for the same rate and no higher peak, and a stack of 64 no longer has a cost to set against its smaller footprint. Whether to keep `a4fb143d7852` is Mike's. Not run: stack 256 untraced on build 505, and tardis1, where two ports share the region's lock.
