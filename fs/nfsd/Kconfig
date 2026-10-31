@@ -48,15 +48,16 @@ config NFSD_BVEC_KUNIT_TEST
 	  request payloads.
 
 config NFSD_RTC_KUNIT_TEST
-	bool "KUnit tests for the NFSv3 READ run-to-completion fast path" if !KUNIT_ALL_TESTS
-	depends on KUNIT=y
-	depends on NFSD=y
+	tristate "KUnit tests for the NFSv3 READ run-to-completion fast path" if !KUNIT_ALL_TESTS
+	depends on KUNIT && NFSD
 	default KUNIT_ALL_TESTS
 	help
 	  Test nfsd's run-to-completion NFSv3 READ after the file-cache
 	  lookup: synchronous and asynchronous hits against the thread
 	  path's READ3res, every fallback reason, single counting of the
-	  file cache counters, and the file reference.
+	  file cache counters, and the file reference.  The tests are
+	  linked into nfsd itself, so a modular build runs them when nfsd
+	  loads.
 
 config NFSD4_BVEC_KUNIT_TEST
 	tristate "KUnit tests for NFSDv4 immutable receive bvecs" if !KUNIT_ALL_TESTS
