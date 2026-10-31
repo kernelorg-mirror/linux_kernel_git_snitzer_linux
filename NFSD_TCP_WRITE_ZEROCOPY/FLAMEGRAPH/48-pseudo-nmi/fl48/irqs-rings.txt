@@ -1,0 +1,115 @@
+busy 34.6 us a WRITE
+
+kind      part     interrupted   share of busy
+no interrupt                     94.85%  32.86 us
+timer     hard     idle          2.82%   0.98 us
+other     hard     idle          2.28%   0.79 us
+xeu       hard     idle          0.05%   0.02 us
+timer     hard     thread        0.01%   0.00 us
+IPI       hard     idle          0.00%   0.00 us
+other     hard     thread        0.00%   0.00 us
+
+by kind and part
+timer     hard       2.82%   0.98 us
+other     hard       2.28%   0.79 us
+xeu       hard       0.05%   0.02 us
+IPI       hard       0.00%   0.00 us
+
+== timer hard:   2.82%   0.98 us
+-- with what it calls
+  __gic_handle_irq_from_irqson.isra.0        2.82%   0.98 us
+  handle_irq_desc                            2.82%   0.98 us
+  arch_timer_handler_phys                    2.82%   0.98 us
+  generic_handle_domain_irq                  2.82%   0.98 us
+  handle_percpu_devid_irq                    2.72%   0.94 us
+  hrtimer_interrupt                          2.45%   0.85 us
+  tick_program_event                         1.00%   0.35 us
+  arch_counter_get_cntpct                    0.84%   0.29 us
+  arch_timer_set_next_event_phys             0.70%   0.24 us
+  ktime_get_update_offsets_now               0.61%   0.21 us
+  __hrtimer_run_queues                       0.35%   0.12 us
+  clockevents_program_event                  0.31%   0.11 us
+  ktime_get                                  0.26%   0.09 us
+  _raw_spin_unlock_irqrestore                0.21%   0.07 us
+  napi_watchdog                              0.18%   0.06 us
+  _raw_spin_lock_irq                         0.13%   0.04 us
+  ____napi_schedule                          0.10%   0.04 us
+  _raw_spin_lock_irqsave                     0.08%   0.03 us
+  __remove_hrtimer                           0.07%   0.02 us
+  rb_erase_linked                            0.06%   0.02 us
+  tick_nohz_handler                          0.06%   0.02 us
+  update_process_times                       0.04%   0.02 us
+-- self
+  arch_counter_get_cntpct                    0.84%   0.29 us
+  arch_timer_set_next_event_phys             0.70%   0.24 us
+  arch_timer_handler_phys                    0.27%   0.09 us
+  _raw_spin_unlock_irqrestore                0.21%   0.07 us
+  _raw_spin_lock_irq                         0.13%   0.04 us
+  _raw_spin_lock_irqsave                     0.08%   0.03 us
+  napi_watchdog                              0.08%   0.03 us
+  __hrtimer_run_queues                       0.08%   0.03 us
+  ____napi_schedule                          0.07%   0.03 us
+  rb_erase_linked                            0.06%   0.02 us
+
+== other hard:   2.28%   0.79 us
+-- with what it calls
+  __gic_handle_irq_from_irqson.isra.0        2.27%   0.79 us
+  generic_handle_domain_irq                  1.18%   0.41 us
+  handle_irq_desc                            0.88%   0.31 us
+  handle_percpu_devid_irq                    0.55%   0.19 us
+  arch_counter_get_cntpct                    0.39%   0.13 us
+  handle_fasteoi_irq                         0.32%   0.11 us
+  __irq_resolve_mapping                      0.21%   0.07 us
+  __radix_tree_lookup                        0.19%   0.07 us
+  handle_irq_event                           0.16%   0.06 us
+  gic_eoimode1_eoi_irq                       0.16%   0.06 us
+  _raw_spin_lock                             0.06%   0.02 us
+  __handle_irq_event_percpu                  0.05%   0.02 us
+  irq_chip_eoi_parent                        0.04%   0.01 us
+  _raw_spin_unlock                           0.03%   0.01 us
+  add_interrupt_randomness                   0.02%   0.01 us
+  napi_schedule_prep                         0.02%   0.01 us
+  hrtimer_interrupt                          0.01%   0.00 us
+  __rcu_read_unlock                          0.01%   0.00 us
+  gic_arm64_erratum_2941627_needed           0.01%   0.00 us
+  __napi_schedule                            0.01%   0.00 us
+  irq_can_handle_pm                          0.00%   0.00 us
+  note_interrupt                             0.00%   0.00 us
+-- self
+  __gic_handle_irq_from_irqson.isra.0        1.10%   0.38 us
+  arch_counter_get_cntpct                    0.39%   0.13 us
+  __radix_tree_lookup                        0.19%   0.07 us
+  gic_eoimode1_eoi_irq                       0.16%   0.06 us
+  handle_percpu_devid_irq                    0.09%   0.03 us
+  handle_fasteoi_irq                         0.07%   0.03 us
+  _raw_spin_lock                             0.06%   0.02 us
+  irq_chip_eoi_parent                        0.03%   0.01 us
+  _raw_spin_unlock                           0.03%   0.01 us
+  __handle_irq_event_percpu                  0.02%   0.01 us
+
+== xeu hard:   0.05%   0.02 us
+-- with what it calls
+  handle_irq_event                           0.05%   0.02 us
+  __gic_handle_irq_from_irqson.isra.0        0.05%   0.02 us
+  handle_irq_desc                            0.05%   0.02 us
+  [[xeu]]                                    0.05%   0.02 us
+  generic_handle_domain_irq                  0.05%   0.02 us
+  __handle_irq_event_percpu                  0.05%   0.02 us
+  handle_fasteoi_irq                         0.05%   0.02 us
+  __napi_schedule                            0.03%   0.01 us
+  ____napi_schedule                          0.01%   0.00 us
+  __raise_softirq_irqoff                     0.00%   0.00 us
+-- self
+  __napi_schedule                            0.03%   0.01 us
+  ____napi_schedule                          0.01%   0.00 us
+  [[xeu]]                                    0.01%   0.00 us
+  __raise_softirq_irqoff                     0.00%   0.00 us
+
+== IPI hard:   0.00%   0.00 us
+-- with what it calls
+  __gic_handle_irq_from_irqson.isra.0        0.00%   0.00 us
+  handle_irq_desc                            0.00%   0.00 us
+  ipi_handler                                0.00%   0.00 us
+  generic_handle_domain_irq                  0.00%   0.00 us
+-- self
+  ipi_handler                                0.00%   0.00 us

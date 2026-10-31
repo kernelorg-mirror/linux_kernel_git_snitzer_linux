@@ -1,0 +1,162 @@
+busy 90.4 us a WRITE
+
+kind      part     interrupted   share of busy
+no interrupt                     87.77%  79.35 us
+nvme      hard     idle          4.74%   4.28 us
+other     hard     idle          3.29%   2.98 us
+IPI       hard     idle          2.86%   2.59 us
+timer     hard     idle          0.86%   0.78 us
+nvme      hard     thread        0.28%   0.26 us
+other     hard     thread        0.11%   0.10 us
+timer     hard     thread        0.09%   0.08 us
+IPI       hard     thread        0.00%   0.00 us
+
+by kind and part
+nvme      hard       5.02%   4.54 us
+other     hard       3.40%   3.07 us
+IPI       hard       2.86%   2.59 us
+timer     hard       0.95%   0.86 us
+
+== nvme hard:   5.02%   4.54 us
+-- with what it calls
+  generic_handle_domain_irq                  5.02%   4.54 us
+  nvme_irq                                   5.02%   4.54 us
+  __gic_handle_irq_from_irqson.isra.0        5.02%   4.54 us
+  handle_irq_event                           5.02%   4.54 us
+  handle_irq_desc                            5.02%   4.54 us
+  handle_fasteoi_irq                         5.02%   4.54 us
+  __handle_irq_event_percpu                  5.01%   4.53 us
+  nvme_pci_complete_batch                    4.37%   3.95 us
+  blk_mq_end_request_batch                   3.77%   3.40 us
+  blk_complete_request.constprop.0           2.43%   2.20 us
+  bio_endio                                  2.19%   1.98 us
+  iomap_dio_bio_end_io                       1.41%   1.28 us
+  __iomap_dio_bio_end_io                     1.40%   1.26 us
+  wake_up_process                            1.39%   1.25 us
+  try_to_wake_up                             1.34%   1.21 us
+  ttwu_do_activate                           0.77%   0.69 us
+  enqueue_task                               0.61%   0.55 us
+  nvme_poll_cq                               0.59%   0.53 us
+  bio_put                                    0.45%   0.40 us
+  enqueue_task_fair                          0.43%   0.39 us
+  nvme_unmap_data                            0.43%   0.38 us
+  bio_free                                   0.37%   0.33 us
+-- self
+  nvme_poll_cq                               0.51%   0.46 us
+  blk_mq_end_request_batch                   0.33%   0.30 us
+  _raw_spin_lock_irqsave                     0.33%   0.30 us
+  arch_counter_get_cntpct                    0.25%   0.22 us
+  blk_stat_add                               0.24%   0.22 us
+  ktime_get                                  0.18%   0.16 us
+  bio_endio                                  0.17%   0.15 us
+  blk_account_io_completion.part.0           0.16%   0.15 us
+  enqueue_task_fair                          0.15%   0.14 us
+  kmem_cache_free                            0.15%   0.14 us
+
+== other hard:   3.40%   3.07 us
+-- with what it calls
+  __gic_handle_irq_from_irqson.isra.0        3.38%   3.06 us
+  generic_handle_domain_irq                  2.14%   1.94 us
+  handle_irq_desc                            1.40%   1.26 us
+  handle_fasteoi_irq                         0.67%   0.61 us
+  __irq_resolve_mapping                      0.66%   0.60 us
+  handle_percpu_devid_irq                    0.51%   0.46 us
+  __radix_tree_lookup                        0.50%   0.46 us
+  arch_counter_get_cntpct                    0.35%   0.32 us
+  handle_irq_event                           0.35%   0.31 us
+  irq_chip_eoi_parent                        0.12%   0.11 us
+  _raw_spin_lock                             0.11%   0.10 us
+  __handle_irq_event_percpu                  0.11%   0.10 us
+  gic_eoimode1_eoi_irq                       0.10%   0.09 us
+  note_interrupt                             0.06%   0.05 us
+  _raw_spin_unlock                           0.04%   0.04 us
+  gic_arm64_erratum_2941627_needed           0.04%   0.03 us
+  irq_can_handle_pm                          0.02%   0.02 us
+  add_interrupt_randomness                   0.02%   0.02 us
+  fast_mix                                   0.01%   0.01 us
+  hrtimer_interrupt                          0.01%   0.01 us
+  radix_tree_lookup                          0.00%   0.00 us
+  nvme_poll_cq                               0.00%   0.00 us
+-- self
+  __gic_handle_irq_from_irqson.isra.0        1.24%   1.12 us
+  __radix_tree_lookup                        0.50%   0.46 us
+  arch_counter_get_cntpct                    0.35%   0.32 us
+  handle_percpu_devid_irq                    0.19%   0.17 us
+  __irq_resolve_mapping                      0.16%   0.14 us
+  handle_irq_desc                            0.14%   0.13 us
+  handle_fasteoi_irq                         0.14%   0.12 us
+  irq_chip_eoi_parent                        0.11%   0.10 us
+  _raw_spin_lock                             0.11%   0.10 us
+  __handle_irq_event_percpu                  0.10%   0.09 us
+
+== IPI hard:   2.86%   2.59 us
+-- with what it calls
+  generic_handle_domain_irq                  2.86%   2.59 us
+  __gic_handle_irq_from_irqson.isra.0        2.86%   2.59 us
+  handle_irq_desc                            2.86%   2.59 us
+  handle_percpu_devid_irq                    2.86%   2.58 us
+  ipi_handler                                2.86%   2.58 us
+  do_handle_IPI                              2.83%   2.56 us
+  generic_smp_call_function_single_interrupt   2.80%   2.53 us
+  __flush_smp_call_function_queue            2.55%   2.31 us
+  sched_ttwu_pending                         2.17%   1.96 us
+  ttwu_do_activate                           1.51%   1.37 us
+  enqueue_task                               1.14%   1.03 us
+  enqueue_task_fair                          0.72%   0.65 us
+  update_rq_clock                            0.38%   0.34 us
+  arch_counter_get_cntpct                    0.37%   0.33 us
+  psi_task_change                            0.32%   0.29 us
+  enqueue_entity                             0.31%   0.28 us
+  llist_reverse_order                        0.24%   0.21 us
+  sched_clock_cpu                            0.21%   0.19 us
+  wakeup_preempt                             0.16%   0.14 us
+  __resched_curr                             0.12%   0.11 us
+  _raw_spin_lock                             0.09%   0.08 us
+  __enqueue_entity                           0.09%   0.08 us
+-- self
+  arch_counter_get_cntpct                    0.37%   0.33 us
+  __flush_smp_call_function_queue            0.34%   0.31 us
+  llist_reverse_order                        0.24%   0.21 us
+  enqueue_entity                             0.19%   0.17 us
+  ttwu_do_activate                           0.17%   0.15 us
+  enqueue_task_fair                          0.17%   0.15 us
+  update_rq_clock                            0.17%   0.15 us
+  sched_ttwu_pending                         0.17%   0.15 us
+  __resched_curr                             0.12%   0.11 us
+  _raw_spin_lock                             0.09%   0.08 us
+
+== timer hard:   0.95%   0.86 us
+-- with what it calls
+  generic_handle_domain_irq                  0.95%   0.86 us
+  __gic_handle_irq_from_irqson.isra.0        0.95%   0.86 us
+  arch_timer_handler_phys                    0.95%   0.86 us
+  handle_irq_desc                            0.95%   0.86 us
+  handle_percpu_devid_irq                    0.93%   0.85 us
+  hrtimer_interrupt                          0.91%   0.83 us
+  __hrtimer_run_queues                       0.64%   0.58 us
+  tick_nohz_handler                          0.57%   0.51 us
+  update_process_times                       0.46%   0.42 us
+  sched_tick                                 0.23%   0.21 us
+  ktime_get_update_offsets_now               0.18%   0.17 us
+  perf_event_task_tick                       0.17%   0.15 us
+  perf_adjust_freq_unthr_context             0.13%   0.12 us
+  rcu_sched_clock_irq                        0.08%   0.08 us
+  perf_adjust_freq_unthr_events              0.06%   0.05 us
+  ktime_get                                  0.04%   0.04 us
+  __remove_hrtimer                           0.04%   0.04 us
+  tick_program_event                         0.03%   0.03 us
+  run_posix_cpu_timers                       0.03%   0.03 us
+  profile_tick                               0.03%   0.03 us
+  arch_counter_get_cntpct                    0.03%   0.03 us
+  profile_pc                                 0.03%   0.02 us
+-- self
+  ktime_get_update_offsets_now               0.17%   0.15 us
+  perf_adjust_freq_unthr_events              0.06%   0.05 us
+  perf_adjust_freq_unthr_context             0.06%   0.05 us
+  hrtimer_interrupt                          0.04%   0.04 us
+  update_process_times                       0.03%   0.03 us
+  ktime_get                                  0.03%   0.03 us
+  run_posix_cpu_timers                       0.03%   0.03 us
+  rcu_sched_clock_irq                        0.03%   0.03 us
+  arch_counter_get_cntpct                    0.03%   0.03 us
+  rb_erase                                   0.02%   0.02 us
