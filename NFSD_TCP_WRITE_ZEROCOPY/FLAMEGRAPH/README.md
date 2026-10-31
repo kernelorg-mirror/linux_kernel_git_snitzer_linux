@@ -183,7 +183,9 @@ decided.
    NVMe interrupts, 13 us on nfsd's CPUs that perf cannot see.
    `lazytime` **kept** (settled.sh): nfsd 292.0k to 287.8k cycles a WRITE
    (-1.5%), the rate and peak the same. `nomerges` 2 not kept: one doorbell
-   a WRITE, the same four interrupts. Open: NVMe interrupt coalescing.
+   a WRITE, the same four interrupts. NVMe interrupt coalescing not kept:
+   nfsd -6.7k cycles a WRITE at saturation, but at iodepth 1 p50 +137 us
+   at 1 MiB and +280 us at 64 KiB.
 
 ## Where the kept rounds stand (2026-10-28)
 
