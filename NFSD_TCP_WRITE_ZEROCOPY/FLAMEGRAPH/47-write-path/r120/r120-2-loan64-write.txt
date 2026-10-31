@@ -1,0 +1,61 @@
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/47-write-path/write.bt:26:7-12: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @ts[cpu]; @irq_ns = hist($d); @irq_ns_total = sum($d); @irq_n = count(); @irq_by_n[@nm[cpu]] = count(); @irq_by_ns[@nm[cpu]] = sum($d); @ts[cpu] = 0;
+         ~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/47-write-path/write.bt:26:15-23: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @ts[cpu]; @irq_ns = hist($d); @irq_ns_total = sum($d); @irq_n = count(); @irq_by_n[@nm[cpu]] = count(); @irq_by_ns[@nm[cpu]] = sum($d); @ts[cpu] = 0;
+                 ~~~~~~~~
+Attached 19 probes
+
+
+@c[commit]: 24060
+@c[xfs_vn_update_time]: 143867
+@c[__xfs_trans_commit]: 143875
+@c[write]: 192504
+@c[iomap_dio_rw]: 192504
+@c[iomap_dio_bio_end_io]: 192505
+@c[xfs_file_write_iter]: 192520
+@c[bio_submit_split_bioset]: 577512
+@c[nvme_queue_rqs]: 770016
+@c[blk_mq_flush_plug_list]: 771493
+@c[nvme_irq]: 783320
+@c[blk_mq_submit_bio]: 783358
+@c[blk_mq_start_request]: 783363
+@irq_by_n[arc]: 23891
+@irq_by_n[IPI]: 757908
+@irq_by_n[nvm]: 783305
+@irq_by_ns[arc]: 176140192
+@irq_by_ns[IPI]: 1273069336
+@irq_by_ns[nvm]: 2512877180
+@irq_cpu[other]: 15
+@irq_cpu[nfsd]: 783305
+@irq_n: 1565104
+@irq_ns:
+[512, 1K)            237 |                                                    |
+[1K, 2K)          866967 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[2K, 4K)          433453 |@@@@@@@@@@@@@@@@@@@@@@@@@                           |
+[4K, 8K)          256366 |@@@@@@@@@@@@@@@                                     |
+[8K, 16K)           8069 |                                                    |
+[16K, 32K)            12 |                                                    |
+
+@irq_ns_total: 3962086708
+@rq_kb:
+[0, 32)            13347 |                                                    |
+[32, 64)               0 |                                                    |
+[64, 96)               0 |                                                    |
+[96, 128)              0 |                                                    |
+[128, 160)             0 |                                                    |
+[160, 192)             0 |                                                    |
+[192, 224)             0 |                                                    |
+[224, 256)             0 |                                                    |
+[256, 288)        770016 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@rq_segs:
+[0, 8)             13347 |                                                    |
+[8, 16)                0 |                                                    |
+[16, 24)               0 |                                                    |
+[24, 32)               0 |                                                    |
+[32, 40)          770016 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@upd[ssh]: 5
+@upd[python3]: 11
+@upd[nfsd]: 143851

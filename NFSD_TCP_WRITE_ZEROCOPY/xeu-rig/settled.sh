@@ -156,6 +156,14 @@ REGION_PAGES=32768
 # when it changes it; set by hand, it waits for the next open.
 # EXP_RX_REGION_STACK holds a run to another depth.
 RX_REGION_STACK=64
+# The data drives' filesystems are mounted lazytime: FLAMEGRAPH round 47 (31
+# October), nfsd 292.0k to 287.8k cycles a loaned WRITE (-1.5%), three runs a
+# side, the rate and the region's peak the same.  Each reply's post-op
+# attributes mark the ctime queried, so without it 0.75 of a WRITE takes an XFS
+# transaction for its timestamps.  They are in memory until the COMMIT's fsync
+# or inode writeback.  apply remounts each mounted one.  EXP_LAZYTIME=nolazytime
+# holds a run without it.
+LAZYTIME=lazytime
 # The NFSv3 duplicate reply cache's entries (nfsd's drc_max_entries):
 # FLAMEGRAPH round 12 (25 October), nfsd -3.4 us a loaned WRITE against the
 # 262144 nfsd sizes itself to here, and the latency the same; it never hits
@@ -605,6 +613,7 @@ audit() {
 	local drv; drv=$(data_drives) || bad "data drives" "$drv" "$DATA_DRIVES"
 	for k in $drv; do
 		want "$k cache" "$(cat /sys/block/$k/queue/write_cache)" "write through"
+		[ "$(mounted_lazytime $k)" = unmounted ] || want "$k mount" "$(mounted_lazytime $k)" "${EXP_LAZYTIME:-$LAZYTIME}"
 		want "$k PCIe MaxReadReq" "$(mrrs $(pci_of /sys/block/$k/device/device))" $MRRS
 	done
 	for k in $PORTS; do
@@ -697,6 +706,18 @@ sizes() {
 	fi
 }
 
+mounted_lazytime() {	# DRIVE: lazytime, nolazytime, or unmounted
+	local o; o=$(findmnt -rn -o OPTIONS /dev/$1 | head -1)
+	[ -n "$o" ] || { echo unmounted; return; }
+	case ",$o," in *,lazytime,*) echo lazytime ;; *) echo nolazytime ;; esac
+}
+set_lazytime() {	# remount each mounted data drive to EXP_LAZYTIME or the settled option
+	local k m w=${EXP_LAZYTIME:-$LAZYTIME}
+	for k in $(data_drives); do
+		m=$(findmnt -rn -o TARGET /dev/$k | head -1)
+		[ -n "$m" ] && [ "$(mounted_lazytime $k)" != "$w" ] && mount -o remount,$w "$m"
+	done
+}
 apply() {	# the sizes, the CPU layout, the resting module settings, and the audit
 	local k
 	sizes || return 1
@@ -726,6 +747,7 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 	else
 		echo "NFS connections are up: the sunrpc settings are left as they are"
 	fi
+	set_lazytime
 	audit rest
 }
 
