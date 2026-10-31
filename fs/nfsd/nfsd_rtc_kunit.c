@@ -1542,5 +1542,3 @@ static struct kunit_suite nfsd_rtc_suite = {
 kunit_test_suite(nfsd_rtc_suite);
 
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
-MODULE_DESCRIPTION("KUnit tests for the nfsd NFSv3 READ/WRITE run-to-completion fast path");
-MODULE_LICENSE("GPL");
