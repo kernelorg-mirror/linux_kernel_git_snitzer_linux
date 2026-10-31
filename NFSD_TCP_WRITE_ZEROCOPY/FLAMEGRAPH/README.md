@@ -194,6 +194,14 @@ decided.
    stacks. Sleeping and waking is the largest single thing, about 37.7k
    (13%), with `sched_balance_newidle` 3.81k unranked before. Nothing
    changed; the parameter is still on the command line.
+18. **Round 49: nfsd on fewer CPUs** (Mike, 31 October;
+   [49-fewer-nfsd-cpus](49-fewer-nfsd-cpus/README.md)). 512 threads on 48,
+   16 and 8 CPUs, on the pseudo-NMI boot. Counted nfsd cycles 292.9k to
+   266.5k and 246.5k a WRITE, but most of that is idle: the threads' own
+   work falls 3.7% and 6.3%, instructions 0.8% and 1.8%. The rate and
+   latency are the same, the region not raised on 16. The interrupts are
+   not cheaper: 4.08 a WRITE and 27.8k to 26.6k cycles, moved from idle
+   CPUs onto threads. Not settled, `NFSD_CPUSET` stays 8-55.
 
 ## Where the kept rounds stand (2026-10-28)
 
