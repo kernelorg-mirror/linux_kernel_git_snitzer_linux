@@ -1,0 +1,77 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 30K of event 'armv8_pmuv3_0/cycles/P'
+# Event count (approx.): 39650799636
+#
+# Overhead  Symbol                                     IPC   [IPC Coverage]
+# ........  .........................................  ....................
+#
+    11.10%  [k] default_idle_call                      -      -            
+     5.64%  [k] skb_gro_receive                        -      -            
+     5.42%  [k] handle_softirqs                        -      -            
+     4.32%  [k] inet_gro_receive                       -      -            
+     4.22%  [k] _raw_spin_unlock_irqrestore            -      -            
+     3.36%  [k] gro_list_prepare                       -      -            
+     3.06%  [k] dev_gro_receive                        -      -            
+     2.82%  [k] tcp_gro_receive                        -      -            
+     2.12%  [k] napi_build_skb                         -      -            
+     2.09%  [k] __inet_lookup_established              -      -            
+     2.08%  [k] eth_type_trans                         -      -            
+     1.96%  [k] tcp4_gro_receive                       -      -            
+     1.92%  [k] 0x0000000000010b7c                     -      -            
+     1.61%  [k] tcp_v4_rcv                             -      -            
+     1.61%  [k] __build_skb_around                     -      -            
+     1.37%  [k] _raw_spin_lock                         -      -            
+     1.35%  [k] __gro_receive_network_flush            -      -            
+     1.33%  [k] svc_data_ready                         -      -            
+     1.22%  [k] arch_counter_get_cntpct                -      -            
+     1.16%  [k] skb_put                                -      -            
+     1.12%  [k] gro_receive_skb                        -      -            
+     1.05%  [k] __sk_mem_raise_allocated               -      -            
+     1.04%  [k] __pi_memset_generic                    -      -            
+     1.02%  [k] __list_del_entry_valid_or_report       -      -            
+     0.97%  [k] tcp_ack                                -      -            
+     0.94%  [k] kmem_cache_free                        -      -            
+     0.92%  [k] page_pool_set_pp_info                  -      -            
+     0.76%  [k] tcp_try_coalesce                       -      -            
+     0.74%  [k] 0x0000000000010ed8                     -      -            
+     0.73%  [k] napi_skb_cache_put                     -      -            
+     0.71%  [k] skb_try_coalesce                       -      -            
+     0.69%  [k] __netif_receive_skb_core.constprop.0   -      -            
+     0.64%  [k] 0x0000000000010ec8                     -      -            
+     0.64%  [k] __memcg_slab_free_hook                 -      -            
+     0.58%  [k] svc_xprt_enqueue.part.0                -      -            
+     0.57%  [k] cache_line_size                        -      -            
+     0.54%  [k] ip_rcv_core                            -      -            
+     0.52%  [k] __list_add_valid_or_report             -      -            
+     0.52%  [k] 0x0000000000010f84                     -      -            
+     0.49%  [k] netif_receive_skb_list_internal        -      -            
+     0.44%  [k] 0x0000000000010b80                     -      -            
+     0.43%  [k] __rcu_read_unlock                      -      -            
+     0.42%  [k] 0x0000000000010fc0                     -      -            
+     0.41%  [k] __pi_memcpy_generic                    -      -            
+     0.40%  [k] napi_complete_done                     -      -            
+     0.39%  [k] percpu_counter_add_batch               -      -            
+     0.38%  [k] ip_sublist_rcv                         -      -            
+     0.38%  [k] tcp_rcv_established                    -      -            
+     0.37%  [k] ip_rcv_finish_core                     -      -            
+     0.36%  [k] skb_release_data                       -      -            
+     0.36%  [k] tcp_data_queue                         -      -            
+     0.36%  [k] page_pool_alloc_netmems                -      -            
+     0.35%  [k] tcp_grow_window                        -      -            
+     0.34%  [k] __netif_receive_skb_list_core          -      -            
+     0.34%  [k] 0x0000000000010ef4                     -      -            
+     0.34%  [k] ip_list_rcv                            -      -            
+     0.33%  [k] gro_complete.constprop.0               -      -            
+     0.33%  [k] 0x0000000000010f58                     -      -            
+     0.32%  [k] tcp_clean_rtx_queue                    -      -            
+     0.32%  [k] selinux_socket_sock_rcv_skb            -      -            
+     0.31%  [k] sk_filter_trim_cap                     -      -            
+     0.31%  [k] net_rx_action                          -      -            
+     0.30%  [k] inet_gro_complete                      -      -            
+#
+# (Tip: To set sampling period of individual events use perf record -e cpu/cpu-cycles,period=100001/,cpu/branches,period=10001/ ...)
+#
