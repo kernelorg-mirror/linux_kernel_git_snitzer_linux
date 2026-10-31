@@ -1,0 +1,34 @@
+// write.bt: round 47, the write below nfsd, counted a WRITE.  The counters
+// start at 3 s, after every probe has attached, and stop at 8 s, before exit()
+// detaches them one at a time, so all share one window.  nvme_irq is timed, since perf cannot sample a hard interrupt
+// here (no pseudo-NMI).
+kprobe:nfsd3_proc_write /@go/ { @c["write"] = count(); }
+kprobe:nfsd3_proc_commit /@go/ { @c["commit"] = count(); }
+kprobe:xfs_vn_update_time /@go/ { @c["xfs_vn_update_time"] = count(); @upd[comm] = count(); }
+kprobe:__xfs_trans_commit /@go/ { @c["__xfs_trans_commit"] = count(); }
+kprobe:xfs_vn_sync_lazytime /@go/ { @c["xfs_vn_sync_lazytime"] = count(); }
+kprobe:__mark_inode_dirty /@go/ { @c["__mark_inode_dirty"] = count(); }
+kprobe:xfs_file_fsync /@go/ { @c["xfs_file_fsync"] = count(); }
+kprobe:xfs_file_write_iter /@go/ { @c["xfs_file_write_iter"] = count(); }
+kprobe:iomap_dio_rw /@go/ { @c["iomap_dio_rw"] = count(); }
+kprobe:blk_mq_submit_bio /@go/ { @c["blk_mq_submit_bio"] = count(); }
+kprobe:bio_submit_split_bioset /@go/ { @c["bio_submit_split_bioset"] = count(); }
+kprobe:blk_mq_flush_plug_list /@go/ { @c["blk_mq_flush_plug_list"] = count(); }
+kprobe:nvme_queue_rqs /@go/ { @c["nvme_queue_rqs"] = count(); }
+kprobe:blk_mq_start_request /@go/ {
+	$rq = (struct request *)arg0;
+	@c["blk_mq_start_request"] = count();
+	@rq_kb = lhist($rq->__data_len >> 10, 0, 512, 32);
+	@rq_segs = lhist($rq->nr_phys_segments, 0, 132, 8);
+}
+kprobe:iomap_dio_bio_end_io /@go/ { @c["iomap_dio_bio_end_io"] = count(); }
+kprobe:nvme_irq /@go/ { @c["nvme_irq"] = count(); @irq_cpu[cpu >= 8 && cpu < 56 ? "nfsd" : "other"] = count(); }
+// All hard interrupts on nfsd's CPUs, timed: nvme's are nearly all of them.
+tracepoint:irq:irq_handler_entry /@go && cpu >= 8 && cpu < 56/ { @ts[cpu] = nsecs; @nm[cpu] = str(args.name, 4); }
+tracepoint:irq:irq_handler_exit /@go && cpu >= 8 && cpu < 56 && @ts[cpu] != 0/ {
+	$d = nsecs - @ts[cpu]; @irq_ns = hist($d); @irq_ns_total = sum($d); @irq_n = count(); @irq_by_n[@nm[cpu]] = count(); @irq_by_ns[@nm[cpu]] = sum($d); @ts[cpu] = 0;
+}
+interval:s:3 /!@done/ { @go = 1; }
+interval:s:8 { @go = 0; @done = 1; }
+interval:s:9 { exit(); }
+END { clear(@ts); clear(@go); clear(@done); clear(@nm); }
