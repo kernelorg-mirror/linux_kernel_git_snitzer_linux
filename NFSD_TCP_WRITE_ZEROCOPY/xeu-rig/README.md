@@ -755,8 +755,8 @@ before believing a figure.
 `a4fb143d7852` takes the region's lock 1.34 times a WRITE, not 14, and
 nfsd 294.9k to 291.4k cycles a WRITE at stack 64, level with stack
 256's 291.7k on the same build (run119), with the rate the same and 270
-fewer pages in use. The account is "What step 5 found" in the round's
-README. tardis2 is left at the settled setting on build 505, the region
+fewer pages in use. **Kept (Mike, 31 October).** The account is "What
+step 5 found" in the round's README. tardis2 is left at the settled setting on build 505, the region
 at `0x8220000000`.
 
 **Done on 30 October** on build 504 (`run113.sh` and `run114.sh` in
