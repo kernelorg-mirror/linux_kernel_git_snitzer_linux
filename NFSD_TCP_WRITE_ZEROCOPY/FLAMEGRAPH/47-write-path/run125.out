@@ -1,0 +1,8 @@
+20:01:06 kernel 7.3.0-7.hs.505.loanpages_pool.el10.aarch64+16k
+20:04:15 c1-0 coalescing 00000000, 1 no-step: 2.31 GB/s, 35275 IOPS; ms p50 0.104 p90 0.112 p99 0.142 p99.9 0.185 mean 0.105
+20:07:24 c2-0x0100 coalescing 0x00000100, 1 no-step: 2.54 GB/s, 38713 IOPS; ms p50 0.096 p90 0.101 p99 0.116 p99.9 0.171 mean 0.097
+20:10:33 c3-0x0200 coalescing 0x00000200, 1 no-step: 2.50 GB/s, 38125 IOPS; ms p50 0.096 p90 0.106 p99 0.163 p99.9 0.173 mean 0.099
+20:13:41 c4-0x0203 coalescing 0x00000203, 1 no-step: 0.38 GB/s, 5868 IOPS; ms p50 0.676 p90 0.684 p99 0.692 p99.9 0.709 mean 0.674
+20:16:50 c5-0x0103 coalescing 0x00000103, 1 no-step: 0.64 GB/s, 9820 IOPS; ms p50 0.399 p90 0.408 p99 0.420 p99.9 0.469 mean 0.397
+20:19:59 c6-0 coalescing 00000000, 1 no-step: 2.54 GB/s, 38751 IOPS; ms p50 0.096 p90 0.100 p99 0.114 p99.9 0.169 mean 0.097
+20:20:02 ALL end: coalescing 00000000, settled.sh audit rest: the settled setting; DONE

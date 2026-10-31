@@ -83,8 +83,25 @@ nfsd −6.7k cycles (−2.3%), −5.9k instructions. Counted (r124-7): `nvme_irq
 | 64 KiB, `0x0103` | 2, 3 | 0.68, 0.68 | **0.379, 0.379** | 0.387, 0.391 | 0.379, 0.379 |
 
 - **+137 us at 1 MiB (32%), +280 us at 64 KiB (3.8 times), the rate at iodepth 1 down 20% and 72%.** `lat.bt` puts all of it in the write: `nfsd_vfs_write` moves from the 128 to 256 us bucket to 256 to 512; wakes, queueing and the reply stay.
-- **The drive does not do what the setting says:** a lone completion waits about 280 us, not 100, and a WRITE's four requests do not end the wait when the fourth arrives. 100 us is the shortest time there is (TIME is in units of it, and 0 is no aggregation), so a setting with a smaller hold is not available. Only this one value was tried.
+- **The drive's timer runs about 2.9 times the spec's unit** (run125, below), and a WRITE's four requests do not end the wait when the fourth arrives. TIME 1 is the shortest wait there is, so a setting with a smaller hold is not available.
 - **Not kept (Mike's condition: keep it if the latency holds; it does not).** `settled.sh` is unchanged and all four drives are back at 0.
+
+**What the drive does with the feature ([run125.sh](run125.sh), [run125.out](run125.out)).** Mike asked whether this is a coarse timer as in dm-delay. **Not in Linux:** `drivers/nvme/host/` has no coalescing code (`NVME_FEAT_IRQ_COALESCE` is only defined; `nvme set-feature` passes the value to the drive), `pci.c` has no timer in its completion path, and a jiffy here is 10 ms. It is the drive's, firmware `FE003208`. 64 KiB at iodepth 1, one run a value:
+
+| value | threshold, TIME | GB/s | p50, ms | p99, ms | added to p50 |
+|---|---|---|---|---|---|
+| 0 (first) | off | 2.31 | 0.104 | 0.142 | |
+| `0x0100` | 1, 1 | 2.54 | 0.096 | 0.116 | none |
+| `0x0200` | 1, 2 | 2.50 | 0.096 | 0.163 | none |
+| `0x0103` | 4, 1 | 0.64 | 0.399 | 0.420 | about 300 us |
+| `0x0203` | 4, 2 | 0.38 | 0.676 | 0.692 | about 580 us |
+| 0 (last) | off | 2.54 | 0.096 | 0.114 | |
+
+- **A threshold of 1 is honoured:** no wait at either TIME, which is a sign that the time is not being run on its own.
+- **TIME scales, at about 290 us a unit, not the spec's 100.** It looks one-shot, not a free-running tick, since p50 to p99 span only about 20 us, where a free tick would spread the wait across its period.
+- **Why the fourth request does not end the wait at 1 MiB is not settled.** A timer that starts at the first completion, with the threshold of 4 not firing, would fit +137 us, but no run tests it.
+
+The baselines here and in run124 lie from 0.096 to 0.104, so the differences under about 10 us mean nothing.
 
 **`lazytime`'s latency, the check owed from run122:** lazytime (runs 2, 5) against not (1, 6): p50 0.424 against 0.428, p99 0.553 against 0.578 and 0.569, mean 0.436 and 0.431 against 0.441 and 0.442. A little better; it holds on both yardsticks.
 
