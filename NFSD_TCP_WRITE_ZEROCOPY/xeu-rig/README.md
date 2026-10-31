@@ -753,10 +753,11 @@ before believing a figure.
 
 **Step 5 is done too (31 October, build 505):** the bulk return of
 `a4fb143d7852` takes the region's lock 1.34 times a WRITE, not 14, and
-nfsd 294.9k to 291.4k cycles a WRITE at stack 64, about stack 256's
-292.1k, with the rate and the region's peak the same. The account is
-"What step 5 found" in the round's README. tardis2 is left at the
-settled setting on build 505, the region at `0x8220000000`.
+nfsd 294.9k to 291.4k cycles a WRITE at stack 64, level with stack
+256's 291.7k on the same build (run119), with the rate the same and 270
+fewer pages in use. The account is "What step 5 found" in the round's
+README. tardis2 is left at the settled setting on build 505, the region
+at `0x8220000000`.
 
 **Done on 30 October** on build 504 (`run113.sh` and `run114.sh` in
 `../FLAMEGRAPH/45-region-holders/`, run111 and run112 again with the
