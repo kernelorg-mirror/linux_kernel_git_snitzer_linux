@@ -62,6 +62,34 @@ A B B A B A, untraced, [run122.sh](run122.sh), [run122.out](run122.out).
 - **The work did not move to the COMMIT:** only 0.5k instructions came back there.
 - **What is left is small and at the sleep:** a net saving of about 1.5k instructions is reduced by about 1.2k more in `finish_task_switch` and 0.4k in idle entry. Those are from one run a side; total sampled instructions are the same in both (245.6k and 245.5k).
 
+## NVMe Interrupt Coalescing: not kept (run124)
+
+Feature 8 at `0x0103`, 4 completions or 100 us, not saved on the drive; off is 0. [run124.sh](run124.sh), [run124.out](run124.out). At saturation, with `lazytime`, A B B A B A untraced:
+
+| | GB/s | ring cycles (instructions) a WRITE | nfsd cycles (instructions) a WRITE | peak | mean in use |
+|---|---|---|---|---|---|
+| A, off | 40.28 to 40.46 | 128.9k (283.6k) | 287.8k (300.7k), 286.8 to 288.4 | 5878 to 6177 | 4699 |
+| B, `0x0103` | 40.45 to 40.57 | 128.3k (283.4k) | **281.1k (294.8k)**, 280.8 to 281.2 | 5944 to 6199 | 4991 |
+
+nfsd −6.7k cycles (−2.3%), −5.9k instructions. Counted (r124-7): `nvme_irq` 4.08 to 1.12 a WRITE, its time 13.2 to 8.9 us, IPIs the same.
+
+**At iodepth 1 the drive holds completions, far past what was set** (`lat.sh`, O A B B A O, O being `lazytime` off; then 64 KiB, A B B A):
+
+| | run | GB/s | p50, ms | p99, ms | mean, ms |
+|---|---|---|---|---|---|
+| 1 MiB, off | 2, 5 | 8.27, 8.47 | 0.424, 0.424 | 0.553, 0.553 | 0.436, 0.431 |
+| 1 MiB, `0x0103` | 3, 4 | 6.63, 6.72 | **0.561, 0.561** | 0.676, 0.684 | 0.567, 0.563 |
+| 64 KiB, off | 1, 4 | 2.40, 2.45 | 0.099, 0.098 | 0.130, 0.121 | 0.102, 0.101 |
+| 64 KiB, `0x0103` | 2, 3 | 0.68, 0.68 | **0.379, 0.379** | 0.387, 0.391 | 0.379, 0.379 |
+
+- **+137 us at 1 MiB (32%), +280 us at 64 KiB (3.8 times), the rate at iodepth 1 down 20% and 72%.** `lat.bt` puts all of it in the write: `nfsd_vfs_write` moves from the 128 to 256 us bucket to 256 to 512; wakes, queueing and the reply stay.
+- **The drive does not do what the setting says:** a lone completion waits about 280 us, not 100, and a WRITE's four requests do not end the wait when the fourth arrives. 100 us is the shortest time there is (TIME is in units of it, and 0 is no aggregation), so a setting with a smaller hold is not available. Only this one value was tried.
+- **Not kept (Mike's condition: keep it if the latency holds; it does not).** `settled.sh` is unchanged and all four drives are back at 0.
+
+**`lazytime`'s latency, the check owed from run122:** lazytime (runs 2, 5) against not (1, 6): p50 0.424 against 0.428, p99 0.553 against 0.578 and 0.569, mean 0.436 and 0.431 against 0.441 and 0.442. A little better; it holds on both yardsticks.
+
 ## Where it stands
 
-Still open in this path: the 13 us of NVMe hard interrupts, one a request. The drives support Interrupt Coalescing (feature 8, off), which `nvme_queue_rqs`'s count says could take four to one: a WRITE's four requests arrive within a short time on one queue. It costs latency on small writes and has not been tried. What is left of `nvme_map_data`, about 5 us, follows from 128 pieces of 8 KiB a WRITE, and `bio_split_rw` 1.85 us from the drive's 256 KiB limit.
+Kept: `lazytime`, nfsd −4.3k cycles a WRITE (−1.5%) and a little less latency. Not kept: `nomerges` 2 and interrupt coalescing.
+
+The NVMe hard interrupts are still there, about 13 us a WRITE as timed, one a request. The drive's coalescing cannot take them without the latency, so anything further needs kernel or firmware work, and none has been tried. What is left of `nvme_map_data`, about 5 us, follows from 128 pieces of 8 KiB a WRITE, and `bio_split_rw`, 1.85 us, from the drive's 256 KiB limit.
