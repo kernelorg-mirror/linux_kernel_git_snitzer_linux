@@ -1,0 +1,5 @@
+21:55:56 kernel 7.3.0-7.hs.505.loanpages_pool.el10.aarch64+16k, irqchip.gicv3_pseudo_nmi=1, sunrpc 666175BED7A343E376C1742, nfsd 3F0C341E86E266D5FDF2ADF, xeu CA0931345E46C929B11D01F, region 32768
+22:00:09 r126-1-A | CPUs 8-55 | total 40.33 GB/s | 1 no-step | 1 no-stall | 1 placed | r126-1-A ring 31.5 nfsd 88.5 us/W (38549 WRITEs/s) | ring 130.6k cycles 283.5k instructions, nfsd 292.5k cycles 300.2k instructions a WRITE | peak 6242 | mean in use 4710 | a WRITE: nvme irqs 4.09, IPIs 4.75 | threads woken 151834, context switches 439470 | completion 51.70 ms mean, 84.41 ms at the 99th percentile | alloc_fail 0 | admitted 1537696, denied 1551597 | client retransmits in the window: 5
+22:12:19 STOPPED: r126-2-B:   BAD  nfsd threads' CPUs                 512 on 8-55 (want 512 on 8-23)
+settled.sh audit one: FAILED, 1 item(s) BAD
+22:12:22 after the stop: settled.sh audit rest: the settled setting
