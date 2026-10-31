@@ -170,6 +170,13 @@ decided.
    boot stack 64 costs nfsd 291.4k cycles a WRITE against stack 256's
    291.7k, the rate the same, for 270 fewer pages in use. **Kept**
    (Mike). Not run on tardis1, where two ports share the lock.
+15. **Round 46: a fresh profile of the tip** (Mike, 31 October;
+   [46-tip-profile](46-tip-profile/README.md)). Build 505, nfsd 94.1 and
+   the rings 33.3 us a WRITE busy. The profile is flat, no one thing on
+   nfsd over about 3% read by caller. Taking the record is 28.7 us, the
+   write 26.3, the reply 14.2; the region's lock is 1.13. The write
+   below nfsd, 19.1 us through XFS, iomap, the block layer and NVMe, is
+   the largest path no round has taken up. Nothing changed.
 
 ## Where the kept rounds stand (2026-10-28)
 
@@ -329,6 +336,9 @@ tardis1's included: that is Mike's to ask for, each time.
   buildid-list -i perf.data`); a later reload leaves a different
   `sunrpc.ko` in `updates/`. The kernel's own text is in `/proc/kcore`
   (no vmlinux with symbols on tardis2).
+- With the kernel's debuginfo installed perf expands inlined frames from
+  the line tables, and the ranking comes out wrong (round 46): `flame.sh`
+  passes `--no-inline`; do the same by hand.
 - A function under two parents is counted once: read its callers before
   adding it to a ranking (round 01 counted `napi_consume_skb` under
   `skb_defer_free_flush` as a second item).

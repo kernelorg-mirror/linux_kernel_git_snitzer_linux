@@ -54,12 +54,12 @@ report() {	# DIR
 	local F=$1 R=${1%-flame} g n c t us
 	for g in rings:$RINGS nfsd:$NFSD all:; do
 		n=${g%%:*}; c=${g#*:}
-		perf script -i $F/perf.data ${c:+--cpu $c} 2> /dev/null | $FG/stackcollapse-perf.pl | busy /dev/stdin > $F/$n.folded
+		perf script --no-inline -i $F/perf.data ${c:+--cpu $c} 2> /dev/null | $FG/stackcollapse-perf.pl | busy /dev/stdin > $F/$n.folded
 		t="$(cat $F/tag 2> /dev/null): $n${c:+ (CPUs $c)}, cycles, idle left out"
 		$FG/flamegraph.pl --title "$t" --countname cycles $F/$n.folded > $F/$n.svg
 		[ -n "$c" ] || continue
-		perf report -i $F/perf.data --cpu $c --no-children -g none --percent-limit 0.3 --sort symbol 2> /dev/null | grep -v '^$' > $F/self-$n.txt
-		perf report -i $F/perf.data --cpu $c --children -g none --percent-limit 2 --sort symbol 2> /dev/null | grep -v '^$' > $F/incl-$n.txt
+		perf report --no-inline -i $F/perf.data --cpu $c --no-children -g none --percent-limit 0.3 --sort symbol 2> /dev/null | grep -v '^$' > $F/self-$n.txt
+		perf report --no-inline -i $F/perf.data --cpu $c --children -g none --percent-limit 2 --sort symbol 2> /dev/null | grep -v '^$' > $F/incl-$n.txt
 	done
 	read w0 t0 w1 t1 < $F/writes.txt
 	ws=$(echo "($w1 - $w0) / ($t1 - $t0)" | bc -l)
