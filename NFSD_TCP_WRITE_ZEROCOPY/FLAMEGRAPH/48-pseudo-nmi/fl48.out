@@ -1,0 +1,8 @@
+21:39:09 kernel 7.3.0-7.hs.505.loanpages_pool.el10.aarch64+16k, sunrpc 666175BED7A343E376C1742
+21:39:18 trimmed, rest 120 s
+21:43:22 fl48 | total 40.40 GB/s | loans: budget 8198 pages (64 WRITEs), in the run admitted 1538656, denied 1543445, paused 41, overrun 0
+21:43:25 end: settled.sh audit rest: the settled setting
+WRITEs a second in the profile: 38556
+rings (CPUs 0,2,4,6): busy 34.65 us a WRITE
+nfsd (CPUs 8-55): busy 90.41 us a WRITE
+21:44:19 DONE: /var/tmp/zc-run-logs/t2-fl48/fl48-flame
