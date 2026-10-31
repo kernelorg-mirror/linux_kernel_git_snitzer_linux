@@ -163,8 +163,13 @@ decided.
    from the round trip, B against A costs loan mode +0.15k ring and
    +2.75k nfsd cycles a WRITE (0.9%, was 3 to 3.5%) for 432 fewer pages
    in use, copy mode 379 fewer for nothing, the rate the same; A itself
-   came in 1.6k and 4.3k under build 499's. Settling the stack at 64 is
-   Mike's to decide.
+   came in 1.6k and 4.3k under build 499's. `settled.sh` holds the stack
+   at 64 since 30 October (Mike). Step 5, `a4fb143d7852` (a bulk's
+   overflow returned under one hold of the region's lock), ran on build
+   505 (31 October): 1.34 holds a WRITE, not 14, and at one kernel and
+   boot stack 64 costs nfsd 291.4k cycles a WRITE against stack 256's
+   291.7k, the rate the same, for 270 fewer pages in use. **Kept**
+   (Mike). Not run on tardis1, where two ports share the lock.
 
 ## Where the kept rounds stand (2026-10-28)
 
