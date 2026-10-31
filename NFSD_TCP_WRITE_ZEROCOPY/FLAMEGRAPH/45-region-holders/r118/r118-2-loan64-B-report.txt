@@ -1,0 +1,47 @@
+ring  page_pool_put_netmem_bulk                 -
+ring  page_pool_recycle_ring_bulk               -
+ring  page_pool_return_netmem                   -
+ring  page_pool_return_netmem_bulk              -
+ring  __page_pool_rx_region_put                 -
+ring  _raw_spin_unlock_irqrestore            7.64k cycles a WRITE with callees,    7.55k self
+ring  __page_pool_unmap_netmem_dma              -
+ring  __xa_cmpxchg                              -
+ring  dma_unmap_page_attrs                   0.08k cycles a WRITE with callees,    0.00k self
+ring  __xa_erase                                -
+ring  page_pool_rx_stack_refill              0.08k cycles a WRITE with callees,    0.07k self
+ring  __page_pool_alloc_netmems_slow            -
+ring  page_pool_rx_region_alloc              0.17k cycles a WRITE with callees,    0.17k self
+ring  page_pool_dma_map                         -
+ring  dma_map_page_attrs                     0.01k cycles a WRITE with callees,    0.00k self
+ring  page_pool_register_dma_index              -
+ring  __xa_alloc                                -
+ring  __page_pool_dma_sync_for_device           -
+ring  _raw_spin_lock_irqsave                 0.01k cycles a WRITE with callees,    0.01k self
+ring  queued_spin_lock_slowpath              0.03k cycles a WRITE with callees,    0.03k self
+nfsd  page_pool_put_netmem_bulk              4.75k cycles a WRITE with callees,    1.29k self
+nfsd  page_pool_recycle_ring_bulk            3.20k cycles a WRITE with callees,    0.81k self
+nfsd  page_pool_return_netmem                0.05k cycles a WRITE with callees,    0.05k self
+nfsd  page_pool_return_netmem_bulk           0.45k cycles a WRITE with callees,    0.41k self
+nfsd  __page_pool_rx_region_put                 -
+nfsd  _raw_spin_unlock_irqrestore            8.07k cycles a WRITE with callees,    8.07k self
+nfsd  __page_pool_unmap_netmem_dma              -
+nfsd  __xa_cmpxchg                              -
+nfsd  dma_unmap_page_attrs                      -
+nfsd  __xa_erase                                -
+nfsd  page_pool_rx_stack_refill                 -
+nfsd  __page_pool_alloc_netmems_slow            -
+nfsd  page_pool_rx_region_alloc                 -
+nfsd  page_pool_dma_map                         -
+nfsd  dma_map_page_attrs                     0.21k cycles a WRITE with callees,    0.05k self
+nfsd  page_pool_register_dma_index              -
+nfsd  __xa_alloc                                -
+nfsd  __page_pool_dma_sync_for_device           -
+nfsd  _raw_spin_lock_irqsave                 0.02k cycles a WRITE with callees,    0.02k self
+nfsd  queued_spin_lock_slowpath              0.53k cycles a WRITE with callees,    0.53k self
+ring  page_pool_rx_stack_refill              2.68 calls a WRITE
+nfsd  page_pool_return_netmem_bulk           1.34 calls a WRITE
+nfsd  page_pool_recycle_ring_bulk            4.18 calls a WRITE
+nfsd  page_pool_return_netmem                0.07 calls a WRITE
+nfsd  __page_pool_rx_region_put             13.56 calls a WRITE
+nfsd  page_pool_put_netmem_bulk              4.55 calls a WRITE
+ring  page_pool_rx_region_alloc              0.75 calls a WRITE

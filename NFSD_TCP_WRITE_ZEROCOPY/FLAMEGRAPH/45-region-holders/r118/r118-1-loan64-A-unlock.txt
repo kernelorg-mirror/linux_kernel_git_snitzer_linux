@@ -1,0 +1,7 @@
+# Event count (approx.): 56683000000
+     0.30%  [k] _raw_spin_unlock_irqrestore                        page_pool_recycle_ring_bulk  -      -            
+     0.29%  [k] page_pool_recycle_ring_bulk                        page_pool_recycle_ring_bulk  -      -            
+     0.05%  [k] __local_bh_enable_ip                               page_pool_recycle_ring_bulk  -      -            
+     0.05%  [k] page_pool_return_netmem_bulk                       page_pool_recycle_ring_bulk  -      -            
+     0.01%  [k] page_pool_clear_pp_info                            page_pool_recycle_ring_bulk  -      -            
+     0.01%  [k] queued_spin_lock_slowpath                          page_pool_recycle_ring_bulk  -      -            
