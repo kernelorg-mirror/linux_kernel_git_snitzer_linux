@@ -174,6 +174,19 @@ This holds while regrouping itself is suspended (below): commit at the
 tip, but never one commit across two groups. Before committing, check
 `git diff --cached --stat` against the list above.
 
+**A regroup folds all of the KUnit interface into one commit (Mike,
+2026-11-01).** It is "SUNRPC/nfsd: expose the receive internals for
+the KUnit suites", right after the last code commit, and it holds only
+what enables KUnit testing of the code before it. Interface commits
+made at the tip are folded into it at the next regroup. No code commit
+carries any of the interface, no `VISIBLE_IF_KUNIT`,
+`EXPORT_SYMBOL_IF_KUNIT` or `CONFIG_KUNIT` block, because the interface
+and the tests may never go upstream: the code stands without them.
+After a regroup, a branch marks the last commit of each group:
+`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-code`, `…-kunit-interface`,
+`…-kunit-tests` and `…-docs`, which is the same commit as the branch
+itself.
+
 ## NFSD TCP write-path zero-copy (page-loan series)
 
 The server-side page-loan work — eliminating the redundant receive-side data
@@ -411,8 +424,10 @@ a test host must pass `transplant/check-grouping.sh` (code, then KUnit, then
 docs) before the work is handed back; regroup until it does.
 
 **That rule is suspended on every test host (Mike, 2026-10-07): do not
-worry about regrouping until he asks.** The branch was regrouped on
-2026-10-14 and `check-grouping.sh v7.3-3` passed then; a code or KUnit
+worry about regrouping until he asks.** The branch was last regrouped
+on 2026-11-01 and `check-grouping.sh v7.3-7` passed then (the tip before
+is `.pre-regroup`, and `…-code`'s old stage is `…-code.pre-regroup`); a
+code or KUnit
 commit at the tip from here on breaks that, which is expected until
 Mike asks for the next regroup. Commit at the tip and stop: do not
 offer a regroup. Claude's memory on the test hosts does not
