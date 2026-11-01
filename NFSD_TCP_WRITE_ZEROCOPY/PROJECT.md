@@ -653,8 +653,9 @@ rings or, in a smaller buffer, leaves no room behind the window.
       capability review says the placement may be reachable in software:
       the RX submit descriptor already carries a per-buffer address and
       length and the engine already spreads a frame over several buffers.
-      Driver patch, operator README and an executable procedure are in
-      [`xeu-hds-experiment/`](xeu-hds-experiment/); RPMs for the hs.165
+      A driver patch, operator README and procedure were written and
+      dropped unrun on 2026-11-01, since `xeu` lacks the support (on the
+      branch `.pre-drop-hds`); RPMs for the hs.165
       kernel were delivered 2026-09-10 as
       `xeu-hds-tardis1-hs.165-2.tar.gz` (both 4K and 64K kmod flavors,
       both verified to carry the patch). Untested on hardware. A pass

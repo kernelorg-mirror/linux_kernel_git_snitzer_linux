@@ -162,7 +162,7 @@ item 9 is this file and the artifact, with the handoff, `README.md` and
    for 256 KiB. These are from the arithmetic of section 2 and are what
    work item 5 checks. `PARKED` is still read after the warm-up.
 4. **Bring-up on one port** (decision 1). Stage the deadman switch of
-   `xeu-hds-experiment/TESTING.md` section 0. Set `num_rings` and the
+   `xeu-SGL-compat-receive-placement/TESTING.md` section 0. Set `num_rings` and the
    ring size, boot with `page_pool.rx_region_dev=<port>` and
    `rx_region_pages`, and check `/sys/kernel/debug/page_pool_rx_region`
    shows the pages and no `alloc_fail`. Find the smallest ring that
