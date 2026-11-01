@@ -441,10 +441,11 @@ needs no switch or other gate before it. `svc_tcp_rx_loan_pages` and
 `svc_tcp_rx_credit_factor` are gone from the whole series, tests
 included. Nothing before the budget commit names a budget. Five more
 were folded the same day, leaving 55 (the tips before are
-`.pre-five-folds`). Still owed:
-`svc_tcp_rx_hold_buffer()`'s re-hold writes TCP's `scaling_ratio` and
-`rcv_ssthresh` from sunrpc, and belongs in the TCP helpers beside
-`tcp_sock_set_scaling_ratio_max()`. A
+`.pre-five-folds`). The re-hold's writes of TCP's `scaling_ratio` and
+`rcv_ssthresh` moved from sunrpc into `tcp_sock_raise_rcv_window()`
+beside the other TCP helpers (the tips before are `.pre-tcp-helper`):
+the first kernel from this tree needs that export, so a `sunrpc.ko`
+from it no longer loads on build 505. A
 code or KUnit
 commit at the tip from here on breaks that, which is expected until
 Mike asks for the next regroup. Commit at the tip and stop: do not

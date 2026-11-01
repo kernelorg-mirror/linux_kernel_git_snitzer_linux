@@ -133,6 +133,27 @@ at the settled setting with nfs-server back at 512 threads.
 The tip's code ran here, not the regrouped intermediate commits, and
 this was 16 KiB pages only.
 
+## KUnit in a guest after the TCP helper (2026-11-01)
+
+Moving the re-hold's TCP writes into `tcp_sock_raise_rcv_window()` adds
+an export to `vmlinux`, so these modules cannot load on build 505. The
+tip's kernel, built at 16 KiB with the host's config and the suites as
+modules, was booted in a KVM guest on tardis2 with an initramfs that
+runs the steps of `run-kunit.sh`. No host setting, module or service was
+touched.
+
+| Suite | Pass | Fail | Skip |
+|---|---|---|---|
+| `sunrpc-xdr-bvec` | 7 | 0 | 0 |
+| `sunrpc-svcsock-rx` | 52 | 0 | 0 |
+| `nfsd-receive-bvec` | 7 | 0 | 0 |
+| `nfsd4-receive-bvec` | 10 | 0 | 0 |
+
+`svcsock_rx_hold_again_test` covers the moved code. No WARNING, BUG or
+Oops. The console log, init and config are in
+`/var/tmp/zc-run-logs/t2-kunit-guest/`. The guest has no card or drives,
+so the suites ran there and no traffic did.
+
 ## Next regression run (handoff, 2026-09-25)
 
 State at hand-off: branch `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
