@@ -1160,6 +1160,7 @@ void svc_rtc_stats_show(struct seq_file *m)
 		[SVC_RTC_FB_NOWAIT_ERR] = "nowait_err",
 		[SVC_RTC_FB_SB_FROZEN] = "sb_frozen",
 		[SVC_RTC_FB_NO_DIO_WQ] = "no_dio_wq",
+		[SVC_RTC_FB_STABLE]	= "stable",
 	};
 	struct svc_rtc_stats s;
 	int i;

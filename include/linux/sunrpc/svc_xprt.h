@@ -147,6 +147,7 @@ enum svc_rtc_reason {
 	SVC_RTC_FB_NOWAIT_ERR,		/* NOWAIT I/O error or short write */
 	SVC_RTC_FB_SB_FROZEN,		/* WRITE: sb_start_write_trylock() failed */
 	SVC_RTC_FB_NO_DIO_WQ,		/* no superblock DIO completion workqueue */
+	SVC_RTC_FB_STABLE,		/* WRITE: DATA_SYNC/FILE_SYNC (IOCB_DSYNC) */
 	SVC_RTC_NR_REASONS
 };
 

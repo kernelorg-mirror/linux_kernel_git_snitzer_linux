@@ -756,11 +756,43 @@ static void nfsd_rtc_write_async_complete(struct kunit *test)
 	rtcn_write_async(test, NFS_UNSTABLE);
 }
 
-/* DATA_SYNC and FILE_SYNC: IOCB_DSYNC (and IOCB_SYNC) on the async kiocb. */
+/*
+ * A stable WRITE on a sync export: a counted stable miss before
+ * ->write_iter, nothing written or counted; the thread rerun is the first
+ * write and carries the client's IOCB_DSYNC (and IOCB_SYNC).
+ */
+static void rtcn_write_stable(struct kunit *test, int stable)
+{
+	struct rtcn *t = test->priv;
+	struct svc_rqst *r = t->rq[1];
+	struct nfsd_rtc_ctx *c = r->rq_rtc_priv;
+	unsigned long h0, a0, h1, a1, cnt = PAGE_SIZE;
+	struct nfsd3_writeres *resp;
+
+	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, stable);
+	rtcn_counts(&h0, &a0);
+	nfsd_rtc_write_file(r, &resp->fh, rtcn_get(t), 0, &t->payload, &cnt,
+			    rtcn_iocb_flags(stable), resp->verf);
+	rtcn_counts(&h1, &a1);
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+	KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_STABLE);
+	KUNIT_EXPECT_EQ(test, t->calls, 0);
+	KUNIT_EXPECT_NULL(test, c->nf);
+	KUNIT_EXPECT_EQ(test, h1 - h0, 0);
+	KUNIT_EXPECT_EQ(test, a1 - a0, 0);
+	KUNIT_EXPECT_NULL(test, memchr_inv(t->wdata, 0, RTCN_SIZE));
+	rtcn_expect_ref_back(t);
+	rtcn_wthread_ref(t, 0, PAGE_SIZE, stable);
+	KUNIT_EXPECT_EQ(test, t->flags & (IOCB_DSYNC | IOCB_SYNC),
+			rtcn_iocb_flags(stable));
+}
+
+/* DATA_SYNC and FILE_SYNC: never on the rtc path. */
 static void nfsd_rtc_write_stable(struct kunit *test)
 {
-	rtcn_write_async(test, NFS_DATA_SYNC);
-	rtcn_write_async(test, NFS_FILE_SYNC);
+	rtcn_write_stable(test, NFS_DATA_SYNC);
+	rtcn_write_stable(test, NFS_FILE_SYNC);
 }
 
 /* IOCB_NOWAIT write submit says -EAGAIN: a miss, nothing written or counted. */
@@ -773,10 +805,10 @@ static void nfsd_rtc_write_eagain_submit(struct kunit *test)
 	struct nfsd_rtc_ctx *c = r->rq_rtc_priv;
 
 	t->mode = RTCN_EAGAIN;
-	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_FILE_SYNC);
+	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_UNSTABLE);
 	rtcn_counts(&h0, &a0);
 	nfsd_rtc_write_file(r, &resp->fh, rtcn_get(t), 0, &t->payload, &cnt,
-			    rtcn_iocb_flags(NFS_FILE_SYNC), resp->verf);
+			    0, resp->verf);
 	rtcn_counts(&h1, &a1);
 	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
 	KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
@@ -788,7 +820,7 @@ static void nfsd_rtc_write_eagain_submit(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, memchr_inv(t->wdata, 0, RTCN_SIZE));
 	rtcn_expect_ref_back(t);
 	/* The thread rerun (no IOCB_NOWAIT) is the first write. */
-	rtcn_wthread_ref(t, 0, PAGE_SIZE, NFS_FILE_SYNC);
+	rtcn_wthread_ref(t, 0, PAGE_SIZE, NFS_UNSTABLE);
 }
 
 /* The async write completes -EAGAIN: abandoned, nothing encoded or counted. */
@@ -1273,10 +1305,10 @@ static void nfsd_rtc_write_no_dio_wq(struct kunit *test)
 	struct nfsd3_writeres *resp;
 
 	rtcn_drop_dio_wq(t);
-	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_FILE_SYNC);
+	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_UNSTABLE);
 	rtcn_counts(&h0, &a0);
 	nfsd_rtc_write_file(r, &resp->fh, rtcn_get(t), 0, &t->payload, &cnt,
-			    rtcn_iocb_flags(NFS_FILE_SYNC), resp->verf);
+			    0, resp->verf);
 	rtcn_counts(&h1, &a1);
 	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
 	KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
@@ -1287,7 +1319,7 @@ static void nfsd_rtc_write_no_dio_wq(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, a1 - a0, 0);
 	KUNIT_EXPECT_NULL(test, memchr_inv(t->wdata, 0, RTCN_SIZE));
 	rtcn_expect_ref_back(t);
-	rtcn_wthread_ref(t, 0, PAGE_SIZE, NFS_FILE_SYNC);
+	rtcn_wthread_ref(t, 0, PAGE_SIZE, NFS_UNSTABLE);
 	KUNIT_EXPECT_NOT_NULL(test, t->mnt->mnt_sb->s_dio_done_wq);
 }
 
@@ -1306,10 +1338,10 @@ static void nfsd_rtc_write_frozen(struct kunit *test)
 	struct nfsd3_writeres *resp;
 
 	KUNIT_ASSERT_EQ(test, freeze_super(sb, FREEZE_HOLDER_KERNEL, NULL), 0);
-	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_FILE_SYNC);
+	resp = rtcn_wprep(t, 1, true, PAGE_SIZE, NFS_UNSTABLE);
 	rtcn_counts(&h0, &a0);
 	nfsd_rtc_write_file(r, &resp->fh, rtcn_get(t), 0, &t->payload, &cnt,
-			    rtcn_iocb_flags(NFS_FILE_SYNC), resp->verf);
+			    0, resp->verf);
 	rtcn_counts(&h1, &a1);
 	KUNIT_EXPECT_EQ(test, thaw_super(sb, FREEZE_HOLDER_KERNEL, NULL), 0);
 	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
@@ -1322,7 +1354,7 @@ static void nfsd_rtc_write_frozen(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, memchr_inv(t->wdata, 0, RTCN_SIZE));
 	rtcn_expect_ref_back(t);
 	/* Thawed, the thread rerun is the first write. */
-	rtcn_wthread_ref(t, 0, PAGE_SIZE, NFS_FILE_SYNC);
+	rtcn_wthread_ref(t, 0, PAGE_SIZE, NFS_UNSTABLE);
 }
 
 /*
