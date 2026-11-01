@@ -201,7 +201,10 @@ decided.
    work falls 3.7% and 6.3%, instructions 0.8% and 1.8%. The rate and
    latency are the same, the region not raised on 16. The interrupts are
    not cheaper: 4.08 a WRITE and 27.8k to 26.6k cycles, moved from idle
-   CPUs onto threads. Not settled, `NFSD_CPUSET` stays 8-55.
+   CPUs onto threads. Repeated without pseudo-NMI: the same result, 288.3k
+   to 261.5k and 242.4k, instructions -0.8% and -1.7%, all nine runs
+   counting, 8 CPUs' region mean up on both boots (1.3%, 1.9%), 16 CPUs'
+   not. Not settled, `NFSD_CPUSET` stays 8-55; two ports are not run.
 
 ## Where the kept rounds stand (2026-10-28)
 

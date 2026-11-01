@@ -68,3 +68,40 @@ No worse on fewer CPUs. Run 6's 0.457 is A's traced partner's 0.428, so it is sc
 2. `for n in 0 1 2 3 4 5 6 7; do mount -o noatime,lazytime /dev/nvme${n}n1 /hs/nvme$n; done`, `systemctl start nfs-server`, `./bringup.sh 32768 256`, `./settled.sh apply`, which must end in "the settled setting". Check that no NFS client is connected first.
 3. `./run127.sh`: the same A B C C B A C A B and lat.sh A B C C B A, about 90 minutes, logs in `$L/t2-r127/`, refused on a pseudo-NMI boot. No profiles: without pseudo-NMI they cannot split hard interrupts from idle.
 4. Read it for what was in doubt: the instructions a WRITE, and how the counted cycles fall beside round 48's split.
+
+## The repeat's result (run127)
+
+Done on 1 November: no `gicv3_pseudo_nmi` on the command line, `rodata=noalias` there, the same modules, `run127.out`, logs in `$L/t2-r127/`. All nine saturation runs count: no drive stepped down, no stall, alloc_fail 0, no new WARNING, and no dip like run126's runs 4 and 5. It ended at the settled setting.
+
+| | runs | GB/s | ring cycles a WRITE | nfsd cycles (instructions) a WRITE | context switches a WRITE | peak | mean in use |
+|---|---|---|---|---|---|---|---|
+| A, 48 CPUs | 3 | 40.47 to 40.52 | 128.1k | 288.3k (300.8k) | 11.5 | 6059 to 6172 | 4927 |
+| B, 16 CPUs | 3 | 40.46 to 40.54 | 127.4k | **261.5k (298.5k)** | 11.4 | 6012 to 6195 | 4913 |
+| C, 8 CPUs | 3 | 40.47 to 40.55 | 127.5k | **242.4k (295.7k)** | 10.5 | 6024 to 6324 | 5020 |
+
+NVMe interrupts are 4.08 to 4.09 a WRITE on all three sides, and IPIs 4.7 to 5.0.
+
+**The result holds without pseudo-NMI.** Against A:
+
+| | nfsd cycles, this boot | with pseudo-NMI | nfsd instructions, this boot | with pseudo-NMI |
+|---|---|---|---|---|
+| B | -9.3% (-26.8k) | -9.0% | -0.8% (-2.3k) | -0.8% |
+| C | -15.9% (-45.9k) | -15.8% | -1.7% (-5.1k) | -1.8% |
+
+- **So round 48's split stands as the reading of the fall.** This boot cannot split it (no profiles, by plan), but the fall is the same to within 0.3 of a point, so nothing here says pseudo-NMI made it. Most of it is idle; the threads' share of it is known only from round 49's profiles on the pseudo-NMI boot.
+- **Busy time did not fall here either.** mpstat on CPUs 8-55, without iowait: A 3.39 CPUs (3.36 to 3.44), B 3.52 (3.46 to 3.57), C 3.51 (3.43 to 3.58). It is tick-sampled, so it is not a measure of the small differences; it does not show a saving. iowait is 35, 12.4 and 4.5 CPUs, which is only the idle time left to count on each side.
+- **What pseudo-NMI cost, across two boots:** A's nfsd cycles 292.9k to 288.3k without it (-1.6%), ring cycles 130.4k to 128.1k (-1.8%), with instructions unchanged within scatter (nfsd 300.1k to 300.8k, ring 283.2k to 283.1k).
+
+**The region, now on two boots:** B does not raise it (mean 4913 against 4927, 4904 against 4935 before). C's mean is up on both boots, 1.9% and 1.3%, and its highest peak is the highest of each round, 6324 and 6316 against A's 6172 and 6225. Each is small and the sets of peaks overlap, but the same side twice is what was asked of this repeat, and AGENTS.md's rule on the region's footprint counts against C.
+
+**Latency (lat.sh, iodepth 1, 1 MiB), A B C C B A:**
+
+| | run | GB/s | p50, ms | p99, ms | mean, ms |
+|---|---|---|---|---|---|
+| 48 CPUs | 1, 6 | 8.04, 8.28 | 0.432, 0.420 | 0.578, 0.553 | 0.444, 0.432 |
+| 16 CPUs | 2, 5 | 7.99, 8.57 | 0.436, 0.420 | 0.578, 0.528 | 0.446, 0.425 |
+| 8 CPUs | 3, 4 | 8.55, 8.48 | 0.420, 0.424 | 0.522, 0.545 | 0.424, 0.430 |
+
+No worse on fewer CPUs. Over both rounds the rate at iodepth 1 is 7.74 to 8.34 on 48 CPUs, 7.99 to 8.57 on 16, 8.46 to 8.55 on 8: four runs a side, on two boots, with 8 CPUs the steadiest. That may be a real difference for a light load; it was not looked into. Saturation's completion latency is the same on all sides (51.4 to 51.6 ms mean).
+
+**Nothing changed in `settled.sh`:** `NFSD_CPUSET` stays 8-55. B is the one side with nothing against it at one port's load, but what stands for it is about 0.8% of instructions and a threads' saving seen on one profile, and two ports, which carry about 1.5 times the WRITEs, have not been run on it.
