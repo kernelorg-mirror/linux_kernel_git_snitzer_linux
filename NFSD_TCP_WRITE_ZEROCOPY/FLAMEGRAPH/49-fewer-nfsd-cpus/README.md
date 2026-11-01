@@ -59,3 +59,12 @@ No worse on fewer CPUs. Run 6's 0.457 is A's traced partner's 0.428, so it is sc
 - **Boot:** run with pseudo-NMI on; a boot without it should repeat the A/B before anything is settled.
 
 **Nothing changed in `settled.sh`:** `NFSD_CPUSET` stays 8-55, and the host was left there at the settled setting. Hammerspace's own layout puts threads on 8-55 too, which AGENTS.md's reconciliation note covers.
+
+## The repeat, on a boot without pseudo-NMI
+
+**Mike, 1 November: take pseudo-NMI off, reboot, repeat the A/B.** The parameter is off `/etc/kernel/cmdline` and build 505's entry, restored from round 48's kept copies. After the boot:
+
+1. `grep gicv3_pseudo_nmi /proc/cmdline` finds nothing, and `rodata=noalias` is there.
+2. `for n in 0 1 2 3 4 5 6 7; do mount -o noatime,lazytime /dev/nvme${n}n1 /hs/nvme$n; done`, `systemctl start nfs-server`, `./bringup.sh 32768 256`, `./settled.sh apply`, which must end in "the settled setting". Check that no NFS client is connected first.
+3. `./run127.sh`: the same A B C C B A C A B and lat.sh A B C C B A, about 90 minutes, logs in `$L/t2-r127/`, refused on a pseudo-NMI boot. No profiles: without pseudo-NMI they cannot split hard interrupts from idle.
+4. Read it for what was in doubt: the instructions a WRITE, and how the counted cycles fall beside round 48's split.
