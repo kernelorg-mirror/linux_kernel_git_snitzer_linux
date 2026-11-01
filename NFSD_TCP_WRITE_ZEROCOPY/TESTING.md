@@ -96,6 +96,8 @@ After the regroup of 1 November, on tardis2, on the running build 505
 `100cc4807a42`. The kernel source at `…-kunit-tests`, `4b1f455c0a0d`,
 is the same, and so is the source after the same day's folds, which
 left the tree as it was (those SHAs are on the `.pre-fold` branches).
+The later layout by subsystem changed one comment in
+`net/core/page_pool.c`; the suites were not run again after it.
 
 | Suite | Pass | Fail | Skip |
 |---|---|---|---|
