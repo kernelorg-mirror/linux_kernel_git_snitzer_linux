@@ -148,6 +148,8 @@ enum svc_rtc_reason {
 	SVC_RTC_FB_SB_FROZEN,		/* WRITE: sb_start_write_trylock() failed */
 	SVC_RTC_FB_NO_DIO_WQ,		/* no superblock DIO completion workqueue */
 	SVC_RTC_FB_STABLE,		/* WRITE: DATA_SYNC/FILE_SYNC (IOCB_DSYNC) */
+	SVC_RTC_FB_CONN_FULL,		/* SVC_RTC_CONN_PARKED calls parked */
+	SVC_RTC_FB_SERV_FULL,		/* svc_rtc_parked_max() calls parked */
 	SVC_RTC_NR_REASONS
 };
 
@@ -214,10 +216,36 @@ struct svc_rtc_conn {
 	struct llist_node	*pending;
 	/* async calls completed (svc_rtc_complete(), any context) */
 	struct llist_head	done;
+	/* calls parked on async I/O; raised only by the work item */
+	atomic_t		parked;
 };
 
-/* Pool rqsts per service: at most one per nfsd thread, and this many. */
-#define SVC_RTC_POOL_CAP	64
+/*
+ * Pool rqsts per service.  Once armed the pool holds one rqst per nfsd
+ * thread.  It grows past that only for calls parked on async I/O: an
+ * RQ_RTC_ASYNC call is parked from its submit until its rqst is
+ * released or handed to a thread.  Calls handed to threads never count:
+ * a call that finds no free rqst while at least 3/4 of the pool is
+ * parked lets the fill raise the target to
+ * parked + max(parked / 2, SVC_RTC_POOL_STEP).  Two ceilings send the
+ * next call to a thread unreceived instead: a connection parks at most
+ * SVC_RTC_CONN_PARKED calls (conn_full), and the service at most
+ *	svc_rtc_parked_max() = SVC_RTC_CONN_PARKED * max(nfsd threads, 1)
+ * (serv_full), as many as the threads would hold if each carried one
+ * connection's ceiling.  The target is capped at the same value, so an
+ * armed pool grows to at most SVC_RTC_CONN_PARKED * max(nfsd threads, 1)
+ * rqsts whatever the number of connections; after the thread count
+ * drops, idle rqsts above the new ceiling are freed at once and busy
+ * ones at a later resize or decay pass.  Growth allocates at most
+ * SVC_RTC_POOL_STEP rqsts per svc_rtc_mutex hold.  Every
+ * SVC_RTC_POOL_DECAY after a growth the target drops to the parked high
+ * water of the period just ended, and idle rqsts above it are freed.  A
+ * failed growth keeps what it allocated, lowers the target to it and
+ * does not grow again until the next decay pass.
+ */
+#define SVC_RTC_POOL_STEP	8
+#define SVC_RTC_CONN_PARKED	32
+#define SVC_RTC_POOL_DECAY	(5 * HZ)
 
 struct svc_rtc_rqst {
 	struct lwq_node		qnode;	/* pool free list or sp_rtc_rqsts */
@@ -227,6 +255,7 @@ struct svc_rtc_rqst {
 	struct svc_rqst		*rqstp;
 	struct list_head	all;
 	bool			queued;	/* reply on the send FIFO */
+	bool			parked;	/* counted in conn and pool ->parked */
 };
 
 struct svc_rtc_pool {
@@ -234,14 +263,21 @@ struct svc_rtc_pool {
 	struct lwq		free;
 	struct list_head	all;
 	unsigned int		nr;
+	unsigned int		want;	/* target from parked calls */
 	unsigned long		flags;
 	struct svc_serv		*serv;
 	struct work_struct	fill;	/* svc_rtc_pool_arm() */
+	struct delayed_work	decay;	/* SVC_RTC_POOL_DECAY after growth */
+	/* Written by every async call: off the sizing fields' cacheline. */
+	atomic_t		parked ____cacheline_aligned_in_smp;
+	unsigned int		hw;	/* parked high water this period */
 };
 
 /* svc_rtc_pool.flags */
 enum {
 	SVC_RTC_POOL_ARMED,		/* a call wanted the fast path */
+	SVC_RTC_POOL_GROW,		/* a call found no free rqst */
+	SVC_RTC_POOL_NOGROW,		/* growth failed: wait for decay */
 };
 
 /* svc_rtc_conn.flags */
@@ -273,6 +309,8 @@ void	svc_rtc_complete(struct svc_rqst *rqstp);
 extern void (*svc_rtc_kunit_published)(struct svc_xprt *xprt);
 extern bool svc_rtc_kunit_no_mem;	/* KUnit: fail the receive pages */
 extern bool svc_rtc_kunit_no_slot;	/* KUnit: fail the request slot */
+extern bool svc_rtc_kunit_no_grow;	/* KUnit: fail pool growth */
+extern unsigned int svc_rtc_kunit_no_grow_hits;	/* growths it failed */
 #endif
 void	svc_rtc_pool_resize(struct svc_serv *serv);
 struct seq_file;
