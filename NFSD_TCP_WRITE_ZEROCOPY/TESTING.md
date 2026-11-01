@@ -89,6 +89,47 @@ name the code they drive -- never the other way around:
   early (`nfsd4_payload_shared_test`, Slipstream patch 19 and its fix);
   10 cases from `447f7a2465d0` on.
 
+## KUnit on the regrouped tip (2026-11-01)
+
+After the regroup of 1 November, on tardis2, on the running build 505
+(16 KiB pages), with the four suites rebuilt from the tip,
+`100cc4807a42`. The kernel source at `…-kunit-tests`, `4b1f455c0a0d`,
+is the same.
+
+| Suite | Pass | Fail | Skip |
+|---|---|---|---|
+| `sunrpc-xdr-bvec` | 7 | 0 | 0 |
+| `sunrpc-svcsock-rx` | 52 | 0 | 0 |
+| `nfsd-receive-bvec` | 7 | 0 | 0 |
+| `nfsd4-receive-bvec` | 10 | 0 | 0 |
+
+No WARNING, BUG or Oops in dmesg. The logs are in
+`/var/tmp/zc-run-logs/t2-kunit-tip/`.
+
+**Why build 505 stands for the tip:** `updates/` is empty on it, so the
+package's own sunrpc and nfsd are what is loaded, and its source in
+`kernel-debuginfo-common` has no `.c` or `.h` file that differs from the
+tip's, of about 20,000 in both, the four `*_kunit.c` included.
+
+**How the suites were built:** the tip's four `*_kunit.c` as external
+modules against build 505's `-devel`, with the tip's
+`include/linux/sunrpc` and `fs/nfsd` headers. Each source matches the
+tip's git blob. Of the modules' 220 imported symbols none has another
+version than the running kernel exports and none is missing. The two
+sunrpc suites have the packaged modules' srcversions. Srcversion does
+not compare a module in the package with an external build of it:
+`build-sunrpc.sh` and `build-nfsd.sh` give other values from the same
+source.
+
+**How they ran:** `run-kunit-tip.sh`, kept with the logs, which is
+`run-kunit.sh` with `insmod` of the rebuilt suites for `modprobe`, so
+that the packaged ones are not the ones run, and `settled.sh` by its
+full path. The KUnit core was the package's `kunit.ko`. The host ended
+at the settled setting with nfs-server back at 512 threads.
+
+The tip's code ran here, not the regrouped intermediate commits, and
+this was 16 KiB pages only.
+
 ## Next regression run (handoff, 2026-09-25)
 
 State at hand-off: branch `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
