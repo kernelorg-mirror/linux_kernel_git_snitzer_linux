@@ -1412,8 +1412,15 @@ static int rpciod_start(void)
 
 	/*
 	 * Create the rpciod thread and wait for it to start.
+	 *
+	 * rpciod is per-CPU: an async task is woken on the CPU that saw its
+	 * reply and runs there.  An unbound rpciod shares one nr_active limit
+	 * per NUMA node, so with tens of thousands of RPCs in flight most
+	 * work items go inactive and every completion must activate one under
+	 * the node's lock.  A per-CPU pwq has its own max_active and never
+	 * touches the node limit.  WQ_MEM_RECLAIM still gives it a rescuer.
 	 */
-	wq = alloc_workqueue("rpciod", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
+	wq = alloc_workqueue("rpciod", WQ_MEM_RECLAIM | WQ_PERCPU, 0);
 	if (!wq)
 		goto out_failed;
 	rpciod_workqueue = wq;
