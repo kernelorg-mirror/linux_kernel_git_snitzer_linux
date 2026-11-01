@@ -1161,6 +1161,8 @@ void svc_rtc_stats_show(struct seq_file *m)
 		[SVC_RTC_FB_SB_FROZEN] = "sb_frozen",
 		[SVC_RTC_FB_NO_DIO_WQ] = "no_dio_wq",
 		[SVC_RTC_FB_STABLE]	= "stable",
+		[SVC_RTC_FB_CONN_FULL]	= "conn_full",
+		[SVC_RTC_FB_SERV_FULL]	= "serv_full",
 	};
 	struct svc_rtc_stats s;
 	int i;
@@ -1411,6 +1413,7 @@ static void svc_rtc_run_completions(struct svc_rtc_conn *conn);
 static void svc_rtc_handoff_drain(struct svc_serv *serv);
 static void svc_rtc_pool_free(struct svc_rtc_pool *pool);
 static void svc_rtc_pool_fill(struct work_struct *work);
+static void svc_rtc_pool_decay(struct work_struct *work);
 
 /*
  * One work item per connection: finish completed async calls (encode and
@@ -1592,6 +1595,7 @@ int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 	lwq_init(&pool->free);
 	INIT_LIST_HEAD(&pool->all);
 	INIT_WORK(&pool->fill, svc_rtc_pool_fill);
+	INIT_DELAYED_WORK(&pool->decay, svc_rtc_pool_decay);
 
 	mutex_lock(&svc_rtc_mutex);
 	ret = svc_rtc_serv_prepare(serv);
@@ -1642,6 +1646,8 @@ void svc_rtc_unregister(struct svc_serv *serv)
 	if (pool) {
 		/* A fill that runs now finds no pool on @serv. */
 		cancel_work_sync(&pool->fill);
+		/* After the fill: it may queue the decay. */
+		cancel_delayed_work_sync(&pool->decay);
 		svc_rtc_pool_free(pool);
 	}
 }
@@ -2251,10 +2257,56 @@ out:
  * handed, received, to a thread of the transport's pool, which reruns it
  * from its first byte with svc_process().
  */
+/*
+ * An RQ_RTC_ASYNC call is parked from its submit until its rqst is
+ * released (after its completion, encode and send) or handed to a
+ * thread: count it on the connection (SVC_RTC_CONN_PARKED) and the pool
+ * (svc_rtc_parked_max(), growth, decay).  Only the connection's work
+ * item parks, so svc_rtc_fast() reads an exact per-connection count.
+ * The pool high water is a racy max: a decay hint.
+ */
+static void svc_rtc_park(struct svc_rtc_rqst *r)
+{
+	struct svc_rtc_pool *pool = r->rqstp->rq_server->sv_rtc_pool;
+	unsigned int n;
+
+	if (r->parked)
+		return;
+	r->parked = true;
+	atomic_inc(&r->conn->parked);
+	n = atomic_inc_return(&pool->parked);
+	if (n > READ_ONCE(pool->hw))
+		WRITE_ONCE(pool->hw, n);
+}
+
+/* The call left its async wait: released, or handed to a thread. */
+static void svc_rtc_unpark(struct svc_rtc_rqst *r)
+{
+	if (!r->parked)
+		return;
+	r->parked = false;
+	atomic_dec(&r->conn->parked);
+	atomic_dec(&r->rqstp->rq_server->sv_rtc_pool->parked);
+}
+
+/*
+ * The service-wide ceiling on parked calls, derived from the thread
+ * count only: SVC_RTC_CONN_PARKED per nfsd thread (one connection's
+ * worth while no thread is counted).  The pool's target is capped at it
+ * too (svc_rtc_pool_size()), so the pool size does not depend on the
+ * number of connections.
+ */
+static unsigned int svc_rtc_parked_max(const struct svc_serv *serv)
+{
+	return SVC_RTC_CONN_PARKED *
+	       max_t(unsigned int, READ_ONCE(serv->sv_nrthreads), 1);
+}
+
 static void svc_rtc_pool_put(struct svc_rtc_rqst *r)
 {
 	struct svc_serv *serv = r->rqstp->rq_server;
 
+	svc_rtc_unpark(r);
 	r->conn = NULL;
 	lwq_enqueue(&r->qnode, &serv->sv_rtc_pool->free);
 	if (atomic_dec_and_test(&serv->sv_rtc_active))
@@ -2280,6 +2332,8 @@ static void svc_rtc_handoff(struct svc_rtc_rqst *r)
 	struct svc_serv *serv = rqstp->rq_server;
 	struct svc_pool *pool = svc_pool_for_cpu(serv);
 
+	/* A call on a thread never counts toward pool growth. */
+	svc_rtc_unpark(r);
 	svc_rtc_stat_inc(fallback[rqstp->rq_rtc_reason]);
 	/*
 	 * The rerun admits its READ payload pages afresh: return the region
@@ -2329,6 +2383,7 @@ static void svc_rtc_after_process(struct svc_rtc_rqst *r)
 		ops->rqst_done(rqstp);
 	if (test_bit(RQ_RTC_ASYNC, &rqstp->rq_flags)) {
 		svc_rtc_stat_inc(async_submitted);
+		svc_rtc_park(r);
 		return;
 	}
 	if (test_bit(RQ_RTC_MISS, &rqstp->rq_flags)) {
@@ -2412,37 +2467,45 @@ static void svc_rtc_run_completions(struct svc_rtc_conn *conn)
 }
 
 #if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)
-bool svc_rtc_kunit_no_mem, svc_rtc_kunit_no_slot;
+bool svc_rtc_kunit_no_mem, svc_rtc_kunit_no_slot, svc_rtc_kunit_no_grow;
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_no_mem);
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_no_slot);
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_no_grow);
+unsigned int svc_rtc_kunit_no_grow_hits;	/* under svc_rtc_mutex */
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_no_grow_hits);
 #define svc_rtc_inject_no_mem()		READ_ONCE(svc_rtc_kunit_no_mem)
 #define svc_rtc_inject_no_slot()	READ_ONCE(svc_rtc_kunit_no_slot)
+#define svc_rtc_inject_no_grow()	\
+	(READ_ONCE(svc_rtc_kunit_no_grow) && ++svc_rtc_kunit_no_grow_hits)
 #else
 #define svc_rtc_inject_no_mem()		false
 #define svc_rtc_inject_no_slot()	false
+#define svc_rtc_inject_no_grow()	false
 #endif
 
 /*
  * The pool starts empty, so a service whose hook never wants a call
  * (nfsd with buffered reads) holds no rqsts.  The first call that wants
  * the fast path arms it; that call goes to a thread while the pool
- * fills.  Once armed the pool follows the thread count until
- * unregistered.  A pool left short by a failed fill is filled again by
- * the next call that finds it empty.
+ * fills.  Once armed the pool holds one rqst per thread until
+ * unregistered.  A later call that finds no free rqst goes to a thread
+ * too and asks the fill (SVC_RTC_POOL_GROW) to grow the pool if most of
+ * it is parked on async I/O (see %SVC_RTC_POOL_STEP).  After a failed
+ * growth (SVC_RTC_POOL_NOGROW) no call queues the fill until the decay
+ * pass clears it.
  */
 static void svc_rtc_pool_arm(struct svc_rtc_pool *pool)
 {
-	struct svc_serv *serv = pool->serv;
-
 	if (!test_bit(SVC_RTC_POOL_ARMED, &pool->flags)) {
 		if (!test_and_set_bit(SVC_RTC_POOL_ARMED, &pool->flags))
 			queue_work(system_dfl_wq, &pool->fill);
 		return;
 	}
-	if (READ_ONCE(serv->sv_rtc_nr) <
-	    min_t(unsigned int, READ_ONCE(serv->sv_nrthreads),
-		  SVC_RTC_POOL_CAP))
-		queue_work(system_dfl_wq, &pool->fill);
+	if (test_bit(SVC_RTC_POOL_NOGROW, &pool->flags))
+		return;
+	if (!test_bit(SVC_RTC_POOL_GROW, &pool->flags))
+		set_bit(SVC_RTC_POOL_GROW, &pool->flags);
+	queue_work(system_dfl_wq, &pool->fill);
 }
 
 static void svc_rtc_fast(struct svc_rtc_conn *conn)
@@ -2454,6 +2517,16 @@ static void svc_rtc_fast(struct svc_rtc_conn *conn)
 	struct svc_rtc_rqst *r = NULL;
 	struct svc_rqst *rqstp;
 
+	/* Only this work item parks calls: the count is exact here. */
+	if (atomic_read(&conn->parked) >= SVC_RTC_CONN_PARKED) {
+		reason = SVC_RTC_FB_CONN_FULL;
+		goto thread;
+	}
+	/* Other connections park concurrently: a ceiling, not a count. */
+	if (pool && atomic_read(&pool->parked) >= svc_rtc_parked_max(serv)) {
+		reason = SVC_RTC_FB_SERV_FULL;
+		goto thread;
+	}
 	if (pool)
 		r = lwq_dequeue(&pool->free, struct svc_rtc_rqst, qnode);
 	if (!r) {
@@ -2547,9 +2620,9 @@ static void svc_rtc_pool_free(struct svc_rtc_pool *pool)
 }
 
 /*
- * Size @pool to @nr rqsts, capped at %SVC_RTC_POOL_CAP.  Grows with
- * GFP_KERNEL in process context; shrinks by freeing idle rqsts only
- * (rqsts in use stay until a later resize).
+ * Size @pool to @nr rqsts.  Grows with GFP_KERNEL in process context; on
+ * an allocation failure keeps the rqsts it allocated.  Shrinks by
+ * freeing idle rqsts only (rqsts in use stay until a later resize).
  */
 static int svc_rtc_pool_set_locked(struct svc_serv *serv,
 				   struct svc_rtc_pool *pool, unsigned int nr)
@@ -2558,9 +2631,9 @@ static int svc_rtc_pool_set_locked(struct svc_serv *serv,
 	int ret = 0;
 
 	lockdep_assert_held(&svc_rtc_mutex);
-	nr = min_t(unsigned int, nr, SVC_RTC_POOL_CAP);
 	while (pool->nr < nr) {
-		r = svc_rtc_rqst_new(serv, pool->ops, pool->nr);
+		r = svc_rtc_inject_no_grow() ? NULL :
+			svc_rtc_rqst_new(serv, pool->ops, pool->nr);
 		if (!r) {
 			ret = -ENOMEM;
 			break;
@@ -2585,7 +2658,7 @@ static int svc_rtc_pool_set_locked(struct svc_serv *serv,
 /**
  * svc_rtc_pool_set - Size the service's preallocated rtc rqsts
  * @serv: service with a registered hook (otherwise a no-op)
- * @nr: wanted rqsts, capped at %SVC_RTC_POOL_CAP
+ * @nr: wanted rqsts
  *
  * Return: 0, or -ENOMEM if the pool could not grow to @nr.
  */
@@ -2602,31 +2675,138 @@ VISIBLE_IF_KUNIT int svc_rtc_pool_set(struct svc_serv *serv, unsigned int nr)
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_pool_set);
 #endif
 
+/* The target for @parked calls in flight: half again, at least a step. */
+static unsigned int svc_rtc_pool_headroom(unsigned int parked)
+{
+	return parked ? parked + max_t(unsigned int, parked / 2,
+				       SVC_RTC_POOL_STEP) : 0;
+}
+
+static void svc_rtc_pool_decay_arm(struct svc_rtc_pool *pool)
+{
+	queue_delayed_work(system_dfl_wq, &pool->decay, SVC_RTC_POOL_DECAY);
+}
+
+/*
+ * Move @serv's armed pool toward
+ * max(threads, min(@pool->want, svc_rtc_parked_max())), at most
+ * %SVC_RTC_POOL_STEP allocations per svc_rtc_mutex hold.  The pool is
+ * looked up under the mutex on every pass, so no pass touches a pool
+ * svc_rtc_unregister() has taken off @serv.  An allocation failure keeps
+ * what was allocated, lowers @pool->want to it and stops growth
+ * (SVC_RTC_POOL_NOGROW) until the next decay pass.
+ */
+static void svc_rtc_pool_size(struct svc_serv *serv)
+{
+	struct svc_rtc_pool *pool;
+	unsigned int target;
+	bool more;
+
+	do {
+		more = false;
+		mutex_lock(&svc_rtc_mutex);
+		pool = serv->sv_rtc_pool;
+		if (!pool || !test_bit(SVC_RTC_POOL_ARMED, &pool->flags)) {
+			mutex_unlock(&svc_rtc_mutex);
+			return;
+		}
+		target = max(READ_ONCE(serv->sv_nrthreads),
+			     min(pool->want, svc_rtc_parked_max(serv)));
+		if (test_bit(SVC_RTC_POOL_NOGROW, &pool->flags))
+			target = min(target, pool->nr);
+		if (target <= pool->nr) {
+			svc_rtc_pool_set_locked(serv, pool, target);
+		} else if (svc_rtc_pool_set_locked(serv, pool,
+				min(target, pool->nr + SVC_RTC_POOL_STEP))) {
+			pool->want = pool->nr;
+			set_bit(SVC_RTC_POOL_NOGROW, &pool->flags);
+			svc_rtc_pool_decay_arm(pool);
+		} else {
+			more = pool->nr < target;
+		}
+		mutex_unlock(&svc_rtc_mutex);
+		if (more)
+			cond_resched();
+	} while (more);
+}
+
 /**
  * svc_rtc_pool_resize - Follow the service's thread count
  * @serv: service
  *
- * One pool rqst per nfsd thread, up to %SVC_RTC_POOL_CAP: the fast path
- * never holds more calls than the thread path could.  Failure to grow
- * only means more pool_empty fallbacks.  A pool no call has wanted yet
- * (not armed) stays empty.
+ * An armed pool holds one rqst per nfsd thread, or the target its parked
+ * calls set (@pool->want) if that is larger, capped at
+ * svc_rtc_parked_max(); see %SVC_RTC_POOL_STEP for the bound.  Failure
+ * to grow only means more pool_empty fallbacks.  A pool no call has
+ * wanted yet (not armed) stays empty.
  */
 void svc_rtc_pool_resize(struct svc_serv *serv)
 {
-	struct svc_rtc_pool *pool;
-
-	mutex_lock(&svc_rtc_mutex);
-	pool = serv->sv_rtc_pool;
-	if (pool && test_bit(SVC_RTC_POOL_ARMED, &pool->flags))
-		svc_rtc_pool_set_locked(serv, pool,
-					READ_ONCE(serv->sv_nrthreads));
-	mutex_unlock(&svc_rtc_mutex);
+	/* Looks the pool up under svc_rtc_mutex on every pass. */
+	svc_rtc_pool_size(serv);
 }
 EXPORT_SYMBOL_GPL(svc_rtc_pool_resize);
 
+/*
+ * A call found no free rqst (SVC_RTC_POOL_GROW): if there is still none,
+ * the pool holds its thread-count floor and at least 3/4 of it is parked
+ * on async I/O, raise the target to the parked calls' headroom, capped
+ * at svc_rtc_parked_max().  Calls handed to threads are not parked, so
+ * they never grow the pool.
+ */
 static void svc_rtc_pool_fill(struct work_struct *work)
 {
-	svc_rtc_pool_resize(container_of(work, struct svc_rtc_pool, fill)->serv);
+	struct svc_rtc_pool *pool = container_of(work, struct svc_rtc_pool,
+						 fill);
+	struct svc_serv *serv = pool->serv;
+	unsigned int parked;
+
+	mutex_lock(&svc_rtc_mutex);
+	if (serv->sv_rtc_pool == pool &&
+	    test_and_clear_bit(SVC_RTC_POOL_GROW, &pool->flags) &&
+	    !test_bit(SVC_RTC_POOL_NOGROW, &pool->flags) &&
+	    lwq_empty(&pool->free) &&
+	    pool->nr >= READ_ONCE(serv->sv_nrthreads)) {
+		parked = atomic_read(&pool->parked);
+		if (parked * 4 >= pool->nr * 3) {
+			pool->want = max(pool->want,
+					 min(svc_rtc_pool_headroom(parked),
+					     svc_rtc_parked_max(serv)));
+			svc_rtc_pool_decay_arm(pool);
+		}
+	}
+	mutex_unlock(&svc_rtc_mutex);
+	svc_rtc_pool_size(serv);
+}
+
+/*
+ * SVC_RTC_POOL_DECAY after a growth: drop the target to the headroom of
+ * the parked high water of the period just ended, free idle rqsts above
+ * it, lift a failed growth's back-off, and run again while above the
+ * thread count.
+ */
+static void svc_rtc_pool_decay(struct work_struct *work)
+{
+	struct svc_rtc_pool *pool = container_of(to_delayed_work(work),
+						 struct svc_rtc_pool, decay);
+	struct svc_serv *serv = pool->serv;
+	unsigned int now, recent, nrthreads;
+
+	mutex_lock(&svc_rtc_mutex);
+	if (serv->sv_rtc_pool != pool) {
+		mutex_unlock(&svc_rtc_mutex);
+		return;
+	}
+	now = atomic_read(&pool->parked);
+	recent = max(READ_ONCE(pool->hw), now);
+	WRITE_ONCE(pool->hw, now);
+	pool->want = min(pool->want, svc_rtc_pool_headroom(recent));
+	clear_bit(SVC_RTC_POOL_NOGROW, &pool->flags);
+	nrthreads = READ_ONCE(serv->sv_nrthreads);
+	if (pool->want > nrthreads || pool->nr > max(nrthreads, pool->want))
+		svc_rtc_pool_decay_arm(pool);
+	mutex_unlock(&svc_rtc_mutex);
+	svc_rtc_pool_size(serv);
 }
 
 #if IS_ENABLED(CONFIG_KUNIT)
