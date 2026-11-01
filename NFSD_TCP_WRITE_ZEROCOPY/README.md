@@ -257,8 +257,6 @@ Robustness posture without special hardware + pre-submission checklist:
 Live instrumentation for a running server (`zcstat.sh` + its usage guide),
 and the receive-pass profiler (`run-rxpasses.sh`): see
 [`zcstat.sh-usage.md`](zcstat.sh-usage.md) and `TESTING.md`.
-The software-only NIC experiment that must pass before this series can
-pay off on Xsight E1: [`xeu-hds-experiment/`](xeu-hds-experiment/).
 
 Visual summaries (shareable reports):
 - v7.1.8-5 status, and why E1 blocks the win:

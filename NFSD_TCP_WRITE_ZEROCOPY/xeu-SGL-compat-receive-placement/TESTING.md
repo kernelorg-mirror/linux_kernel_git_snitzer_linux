@@ -6,10 +6,27 @@ export those WRITEs then go direct — with the data intact. Not yet run.
 
 ## 0. Access hazard
 
-Reloading `xeu` takes the NIC down. Follow section 0 of
-[`../xeu-hds-experiment/TESTING.md`](../xeu-hds-experiment/TESTING.md): work
-from a console or out-of-band path, and stage the deadman switch that
-reloads the known-good module before every load.
+`xeu` drives both 400G ports. Reloading it drops them, and if your
+session rides one you lose the machine mid-run.
+
+```sh
+ip route get 1.1.1.1                    # which device carries your traffic?
+ip -br link show | grep -iE 'xeu|ens|eth'
+```
+
+Proceed only with **one** of:
+
+- an out-of-band path (BMC / serial console), or
+- SSH confirmed arriving on a non-xeu management interface.
+
+Either way, stage a deadman switch before every load, so a bad module
+self-heals:
+
+```sh
+cp /path/to/unmodified/xeu.ko /root/xeu-known-good.ko
+( sleep 600; rmmod xeu; insmod /root/xeu-known-good.ko; ip link set <dev> up ) &
+echo $! > /tmp/deadman.pid      # kill it once the run is confirmed good
+```
 
 ## 1. Gates — check these first
 
