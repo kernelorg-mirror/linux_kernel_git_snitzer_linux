@@ -426,7 +426,13 @@ docs) before the work is handed back; regroup until it does.
 **That rule is suspended on every test host (Mike, 2026-10-07): do not
 worry about regrouping until he asks.** The branch was last regrouped
 on 2026-11-01 and `check-grouping.sh v7.3-7` passed then (the tip before
-is `.pre-regroup`, and `…-code`'s old stage is `…-code.pre-regroup`); a
+is `.pre-regroup`, and `…-code`'s old stage is `…-code.pre-regroup`).
+The same day the code group went from 73 commits to 58 (Mike): ten
+reverted or reverting commits dropped and five folded, with the kernel
+source unchanged (the tips before are `.pre-fold`). Still owed:
+`svc_tcp_rx_hold_buffer()`'s re-hold writes TCP's `scaling_ratio` and
+`rcv_ssthresh` from sunrpc, and belongs in the TCP helpers beside
+`tcp_sock_set_scaling_ratio_max()`. A
 code or KUnit
 commit at the tip from here on breaks that, which is expected until
 Mike asks for the next regroup. Commit at the tip and stop: do not
