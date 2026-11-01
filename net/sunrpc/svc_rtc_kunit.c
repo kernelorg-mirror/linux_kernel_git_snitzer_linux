@@ -4,11 +4,14 @@
  * hook, the hand-back decision, the serialized send queue and teardown.
  */
 #include <kunit/test.h>
+#include <linux/delay.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/svc_xprt.h>
+#include <linux/sunrpc/svcsock.h>
 #include <linux/sunrpc/xdr.h>
 #include <net/net_namespace.h>
 
@@ -30,36 +33,48 @@ static const struct svc_rtc_ops rtc_ops = {
 	.want = rtc_want,
 };
 
+static void rtc_xprt_setup(struct kunit *test, struct svc_serv *serv,
+			   struct svc_xprt *xprt, bool attach)
+{
+	kref_init(&xprt->xpt_ref);
+	mutex_init(&xprt->xpt_mutex);
+	xprt->xpt_server = serv;
+	set_bit(XPT_TEMP, &xprt->xpt_flags);
+	set_bit(XPT_DATA, &xprt->xpt_flags);
+	set_bit(XPT_BUSY, &xprt->xpt_flags);
+	KUNIT_ASSERT_EQ(test, svc_rtc_serv_prepare(serv), 0);
+	if (attach)
+		KUNIT_ASSERT_EQ(test, svc_rtc_xprt_attach(xprt, GFP_KERNEL), 0);
+	rtc_want_calls = 0;
+	rtc_want_result = false;
+}
+
+static void rtc_xprt_teardown(struct kunit *test, struct svc_serv *serv,
+			      struct svc_xprt *xprt)
+{
+	if (rcu_access_pointer(serv->sv_rtc))
+		svc_rtc_unregister(serv);
+	svc_rtc_xprt_stop(xprt);
+	KUNIT_EXPECT_EQ(test, atomic_read(&serv->sv_rtc_active), 0);
+	KUNIT_EXPECT_EQ(test, kref_read(&xprt->xpt_ref), 1);
+	svc_rtc_xprt_detach(xprt);
+	KUNIT_EXPECT_NULL(test, xprt->xpt_rtc);
+	svc_rtc_serv_destroy(serv);
+	KUNIT_EXPECT_NULL(test, serv->sv_rtc_wq);
+}
+
 static struct rtc_fixture *rtc_fixture_new(struct kunit *test, bool attach)
 {
 	struct rtc_fixture *f = kunit_kzalloc(test, sizeof(*f), GFP_KERNEL);
 
 	KUNIT_ASSERT_NOT_NULL(test, f);
-	kref_init(&f->xprt.xpt_ref);
-	mutex_init(&f->xprt.xpt_mutex);
-	f->xprt.xpt_server = &f->serv;
-	set_bit(XPT_TEMP, &f->xprt.xpt_flags);
-	set_bit(XPT_DATA, &f->xprt.xpt_flags);
-	set_bit(XPT_BUSY, &f->xprt.xpt_flags);
-	KUNIT_ASSERT_EQ(test, svc_rtc_serv_prepare(&f->serv), 0);
-	if (attach)
-		KUNIT_ASSERT_EQ(test, svc_rtc_xprt_attach(&f->xprt, GFP_KERNEL), 0);
-	rtc_want_calls = 0;
-	rtc_want_result = false;
+	rtc_xprt_setup(test, &f->serv, &f->xprt, attach);
 	return f;
 }
 
 static void rtc_fixture_done(struct kunit *test, struct rtc_fixture *f)
 {
-	if (rcu_access_pointer(f->serv.sv_rtc))
-		svc_rtc_unregister(&f->serv);
-	svc_rtc_xprt_stop(&f->xprt);
-	KUNIT_EXPECT_EQ(test, atomic_read(&f->serv.sv_rtc_active), 0);
-	KUNIT_EXPECT_EQ(test, kref_read(&f->xprt.xpt_ref), 1);
-	svc_rtc_xprt_detach(&f->xprt);
-	KUNIT_EXPECT_NULL(test, f->xprt.xpt_rtc);
-	svc_rtc_serv_destroy(&f->serv);
-	KUNIT_EXPECT_NULL(test, f->serv.sv_rtc_wq);
+	rtc_xprt_teardown(test, &f->serv, &f->xprt);
 }
 
 /* No hook registered at accept: no work item, svc_xprt_enqueue() unchanged. */
@@ -557,6 +572,307 @@ static void rtc_send_after_stop_released(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, set->nlog, 1);
 	KUNIT_EXPECT_TRUE(test, set->dead[0]);
 	rtc_fixture_done(test, f);
+}
+
+/*
+ * TCP flat combining (svcsock.c), run without a socket: the
+ * svc_tcp_kunit_hooks send hook logs each record sent on the test's own
+ * svc_sock in place of sending it.
+ */
+#define RTC_TCP_NSENDERS	(3 * SVC_TCP_SEND_BATCH + 1)
+/* So long that a sender left to its timeout shows in the elapsed time. */
+#define RTC_TCP_WAIT_MS		30000
+/* A record sent by a task that is not one of the senders */
+#define RTC_TCP_NOBODY		UINT_MAX
+
+struct rtc_tcp_set;
+
+struct rtc_tcp_sender {
+	struct work_struct	work;
+	struct rtc_tcp_set	*set;
+	struct svc_rqst		*rqstp;		/* NULL: a backchannel Call */
+	struct xdr_buf		xdr;
+	/* The kworker running this sender, while it runs */
+	struct task_struct	*running;
+	/* Its trylock failed and it is about to sleep (the wait hook ran) */
+	bool			parked;
+	int			result;
+};
+
+struct rtc_tcp_set {
+	struct svc_serv		serv;
+	struct svc_sock		*svsk;
+	struct rtc_tcp_sender	senders[RTC_TCP_NSENDERS];
+	unsigned int		nsenders;
+	/* Written by the send hook, under xpt_mutex */
+	unsigned int		log[RTC_TCP_NSENDERS];	/* whose record */
+	unsigned int		by[RTC_TCP_NSENDERS];	/* sent by sender */
+	unsigned int		nlog;
+	unsigned int		bad;
+};
+
+static struct rtc_tcp_set *rtc_tcp_cur;
+
+static const struct svc_xprt_ops rtc_tcp_xprt_ops = {
+	.xpo_send_unlock = svc_tcp_xpo_send_unlock,
+};
+
+/* The sender running in this task, if any: one sender per kworker at a time. */
+static unsigned int rtc_tcp_sender_id(struct rtc_tcp_set *set)
+{
+	unsigned int i;
+
+	for (i = 0; i < set->nsenders; i++)
+		if (READ_ONCE(set->senders[i].running) == current)
+			return i;
+	return RTC_TCP_NOBODY;
+}
+
+/*
+ * Only the current test's svc_sock is faked; anything else (no test
+ * running, or a live connection) is sent for real.  The senders run in
+ * kworkers, where kunit_get_current_test() is NULL, so the test is
+ * found through rtc_tcp_cur rather than through current.
+ */
+static bool rtc_tcp_sendmsg(struct svc_sock *svsk, struct svc_rqst *rqstp,
+			    struct xdr_buf *xdr, rpc_fraghdr marker, int *sent)
+{
+	struct rtc_tcp_set *set = READ_ONCE(rtc_tcp_cur);
+	struct rtc_tcp_sender *s;
+
+	if (!set || svsk != set->svsk)
+		return false;
+	s = container_of(xdr, struct rtc_tcp_sender, xdr);
+	if (!mutex_is_locked(&svsk->sk_xprt.xpt_mutex) || s->rqstp != rqstp ||
+	    marker != cpu_to_be32(RPC_LAST_STREAM_FRAGMENT | xdr->len) ||
+	    set->nlog >= RTC_TCP_NSENDERS) {
+		set->bad++;
+	} else {
+		set->log[set->nlog] = s - set->senders;
+		set->by[set->nlog] = rtc_tcp_sender_id(set);
+		set->nlog++;
+	}
+	*sent = xdr->len + sizeof(marker);
+	return true;
+}
+
+/*
+ * Called by a sender whose trylock failed, just before it sleeps: from
+ * here on it sends nothing until it is handed the role, its record is
+ * sent, or its wait times out.
+ */
+static unsigned long rtc_tcp_wait_jiffies(const struct svc_sock *svsk)
+{
+	struct rtc_tcp_set *set = READ_ONCE(rtc_tcp_cur);
+	unsigned int id;
+
+	if (!set || svsk != set->svsk)
+		return 0;
+	id = rtc_tcp_sender_id(set);
+	if (id != RTC_TCP_NOBODY)
+		WRITE_ONCE(set->senders[id].parked, true);
+	return msecs_to_jiffies(RTC_TCP_WAIT_MS);
+}
+
+static const struct svc_tcp_kunit_hooks rtc_tcp_hooks = {
+	.sendmsg	= rtc_tcp_sendmsg,
+	.wait		= rtc_tcp_wait_jiffies,
+};
+
+static void rtc_tcp_sender_fn(struct work_struct *work)
+{
+	struct rtc_tcp_sender *s = container_of(work, struct rtc_tcp_sender,
+						work);
+
+	WRITE_ONCE(s->running, current);
+	s->result = __svc_tcp_send(s->set->svsk, s->rqstp, &s->xdr,
+				   cpu_to_be32(RPC_LAST_STREAM_FRAGMENT |
+					       s->xdr.len));
+	WRITE_ONCE(s->running, NULL);
+}
+
+/*
+ * Start the senders one at a time, each parked (queued, trylock failed,
+ * about to sleep) before the next starts, so that queue order is index
+ * order and no sender's trylock can still win after the caller's
+ * release.  The caller holds xpt_mutex.  False if one did not park.
+ */
+static bool rtc_tcp_start(struct rtc_tcp_set *set)
+{
+	unsigned int i, tries;
+
+	for (i = 0; i < set->nsenders; i++) {
+		queue_work(system_unbound_wq, &set->senders[i].work);
+		for (tries = 0; !READ_ONCE(set->senders[i].parked); tries++) {
+			if (tries == 20000)
+				return false;
+			usleep_range(200, 500);
+		}
+	}
+	return true;
+}
+
+/*
+ * Wait for every sender to return, then disarm the hooks.  Runs on the
+ * pass path before the checks, and again as a kunit action at test exit
+ * (harmless twice), so a failed assertion cannot leave them armed.
+ */
+static void rtc_tcp_cleanup(void *data)
+{
+	struct rtc_tcp_set *set = data;
+	unsigned int i;
+
+	for (i = 0; i < set->nsenders; i++)
+		flush_work(&set->senders[i].work);
+	RCU_INIT_POINTER(svc_tcp_kunit_hooks, NULL);
+	WRITE_ONCE(rtc_tcp_cur, NULL);
+	/* No caller is left inside the hooks, or reading set, after this. */
+	synchronize_rcu();
+}
+
+/* Senders: every third one a backchannel Call, the rest replies. */
+static struct rtc_tcp_set *rtc_tcp_set_new(struct kunit *test,
+					   unsigned int nsenders, bool attach)
+{
+	struct rtc_tcp_set *set = kunit_kzalloc(test, sizeof(*set), GFP_KERNEL);
+	struct svc_rqst *rqstp = kunit_kzalloc(test, sizeof(*rqstp),
+					       GFP_KERNEL);
+	unsigned int i;
+
+	KUNIT_ASSERT_NOT_NULL(test, set);
+	KUNIT_ASSERT_NOT_NULL(test, rqstp);
+	set->svsk = kunit_kzalloc(test, sizeof(*set->svsk), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, set->svsk);
+	rtc_xprt_setup(test, &set->serv, &set->svsk->sk_xprt, attach);
+	set->svsk->sk_xprt.xpt_ops = &rtc_tcp_xprt_ops;
+	init_llist_head(&set->svsk->sk_send_queue);
+	set->nsenders = nsenders;
+	for (i = 0; i < nsenders; i++) {
+		struct rtc_tcp_sender *s = &set->senders[i];
+
+		INIT_WORK(&s->work, rtc_tcp_sender_fn);
+		s->set = set;
+		s->rqstp = i % 3 ? rqstp : NULL;
+		s->xdr.len = 4 * (i + 1);
+	}
+	/* Registered after the allocations, so it runs before they go. */
+	KUNIT_ASSERT_EQ(test,
+			kunit_add_action_or_reset(test, rtc_tcp_cleanup, set),
+			0);
+	WRITE_ONCE(rtc_tcp_cur, set);
+	rcu_assign_pointer(svc_tcp_kunit_hooks, &rtc_tcp_hooks);
+	return set;
+}
+
+/*
+ * Every record sent once, under xpt_mutex, in queue order; every sender
+ * got its own result; no sender sent more than its bound; the mutex ends
+ * free with nothing queued.
+ */
+static void rtc_tcp_expect_done(struct kunit *test, struct rtc_tcp_set *set,
+				u64 start)
+{
+	struct svc_sock *svsk = set->svsk;
+	unsigned int i, k, n;
+
+	KUNIT_EXPECT_EQ(test, set->bad, 0U);
+	KUNIT_EXPECT_EQ(test, set->nlog, set->nsenders);
+	for (k = 0; k < set->nlog; k++)
+		KUNIT_EXPECT_EQ(test, set->log[k], k);
+	for (i = 0; i < set->nsenders; i++) {
+		struct rtc_tcp_sender *s = &set->senders[i];
+		unsigned int max = SVC_TCP_SEND_BATCH;
+
+		KUNIT_EXPECT_EQ(test, s->result,
+				(int)(s->xdr.len + sizeof(__be32)));
+		if (s->rqstp)
+			max += SVC_TCP_COMBINE_BUDGET;
+		for (n = 0, k = 0; k < set->nlog; k++)
+			n += set->by[k] == i;
+		KUNIT_EXPECT_LE(test, n, max);
+	}
+	/* Nothing waited out its timeout: the role was handed on each time. */
+	KUNIT_EXPECT_LT(test, ktime_get_ns() - start,
+			(u64)RTC_TCP_WAIT_MS * NSEC_PER_MSEC / 2);
+	KUNIT_EXPECT_FALSE(test, mutex_is_locked(&svsk->sk_xprt.xpt_mutex));
+	KUNIT_EXPECT_TRUE(test, llist_empty(&svsk->sk_send_queue));
+	KUNIT_EXPECT_NULL(test, svsk->sk_send_held);
+}
+
+/*
+ * Senders queued behind a holder: the holder's release hands the role to
+ * the oldest, and each combiner sends a bounded run before handing on.
+ */
+static void rtc_tcp_combine_fifo(struct kunit *test)
+{
+	struct rtc_tcp_set *set = rtc_tcp_set_new(test, RTC_TCP_NSENDERS,
+						  false);
+	struct svc_xprt *xprt = &set->svsk->sk_xprt;
+	unsigned int k;
+	bool queued;
+	u64 start;
+
+	mutex_lock(&xprt->xpt_mutex);
+	queued = rtc_tcp_start(set);
+	start = ktime_get_ns();
+	svc_tcp_xpo_send_unlock(xprt);
+	rtc_tcp_cleanup(set);
+	KUNIT_EXPECT_TRUE(test, queued);
+	rtc_tcp_expect_done(test, set, start);
+	/* The releasing holder (this task) sent none of them. */
+	for (k = 0; k < set->nlog; k++)
+		KUNIT_EXPECT_NE(test, set->by[k], RTC_TCP_NOBODY);
+	rtc_xprt_teardown(test, &set->serv, xprt);
+}
+
+struct rtc_tcp_gate {
+	struct svc_rtc_send	send;
+	struct rtc_tcp_set	*set;
+	bool			locked;
+	bool			queued;
+};
+
+/* An rtc FIFO reply whose "send" queues the TCP senders behind it. */
+static void rtc_tcp_gate_fn(struct svc_xprt *xprt, struct svc_rtc_send *send,
+			    bool dead)
+{
+	struct rtc_tcp_gate *g = container_of(send, struct rtc_tcp_gate, send);
+
+	g->locked = !dead && mutex_is_locked(&xprt->xpt_mutex);
+	g->queued = !dead && rtc_tcp_start(g->set);
+}
+
+/*
+ * The rtc FIFO's release, with senders queued during its batch, sends
+ * none of them (the work item stays within its own budget) and hands the
+ * role to the oldest, which sends its own record first.
+ */
+static void rtc_tcp_rtc_release_hands_off(struct kunit *test)
+{
+	struct rtc_tcp_gate *g = kunit_kzalloc(test, sizeof(*g), GFP_KERNEL);
+	struct rtc_tcp_set *set;
+	struct svc_xprt *xprt;
+	unsigned int k;
+	u64 start;
+
+	KUNIT_ASSERT_NOT_NULL(test, g);
+	set = rtc_tcp_set_new(test, SVC_TCP_SEND_BATCH + 2, true);
+	xprt = &set->svsk->sk_xprt;
+	g->send.fn = rtc_tcp_gate_fn;
+	g->set = set;
+	llist_add(&g->send.node, &xprt->xpt_rtc->sendq);
+	start = ktime_get_ns();
+	KUNIT_EXPECT_EQ(test, svc_rtc_drain_sends(xprt->xpt_rtc, false), 1U);
+	rtc_tcp_cleanup(set);
+	KUNIT_EXPECT_TRUE(test, g->locked);
+	KUNIT_EXPECT_TRUE(test, g->queued);
+	rtc_tcp_expect_done(test, set, start);
+	/* The rtc release (this task) sent none of them. */
+	for (k = 0; k < set->nlog; k++)
+		KUNIT_EXPECT_NE(test, set->by[k], RTC_TCP_NOBODY);
+	if (set->nlog)
+		KUNIT_EXPECT_EQ(test, set->by[0], 0U);
+	rtc_xprt_teardown(test, &set->serv, xprt);
 }
 
 /* One hook per service; unregister returns with no run outstanding. */
@@ -1878,6 +2194,8 @@ static struct kunit_case svc_rtc_test_cases[] = {
 	KUNIT_CASE(rtc_send_refill_past_budget_rekicks),
 	KUNIT_CASE(rtc_stop_releases_sends),
 	KUNIT_CASE(rtc_send_after_stop_released),
+	KUNIT_CASE(rtc_tcp_combine_fifo),
+	KUNIT_CASE(rtc_tcp_rtc_release_hands_off),
 	KUNIT_CASE(rtc_register_once),
 	KUNIT_CASE(rtc_place_pick_node_not_rx),
 	KUNIT_CASE(rtc_place_pick_empty_falls_back),

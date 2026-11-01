@@ -1461,6 +1461,20 @@ static bool svc_rtc_refill(struct svc_rtc_conn *conn)
 	return conn->pending;
 }
 
+/*
+ * Release xpt_mutex after a FIFO batch.  A transport whose other senders
+ * queue their replies for the mutex holder (TCP flat combining) hands
+ * the holder's role to one of them, so none waits out its timeout behind
+ * us; the work item itself sends no more than its budget.
+ */
+static void svc_rtc_send_unlock(struct svc_xprt *xprt)
+{
+	if (xprt->xpt_ops && xprt->xpt_ops->xpo_send_unlock)
+		xprt->xpt_ops->xpo_send_unlock(xprt);
+	else
+		mutex_unlock(&xprt->xpt_mutex);
+}
+
 /**
  * svc_rtc_drain_sends - Send (or, if @dead, release) queued replies
  * @conn: the transport's work item; called from it or with it idle
@@ -1493,7 +1507,7 @@ VISIBLE_IF_KUNIT unsigned int svc_rtc_drain_sends(struct svc_rtc_conn *conn,
 		n++;
 	}
 	if (!dead)
-		mutex_unlock(&xprt->xpt_mutex);
+		svc_rtc_send_unlock(xprt);
 
 	svc_rtc_stat_add(sends, n);
 	svc_rtc_stat_inc(send_batches);

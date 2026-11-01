@@ -105,7 +105,8 @@ config SUNRPC_SVC_RTC_KUNIT_TEST
 	  Build focused tests for the per-connection run-to-completion work
 	  item: the offer hook, the hand-back to threads, the serialized send
 	  queue and teardown. These tests are intended for kernel developers
-	  and are not useful in a production kernel.
+	  and are not useful in a production kernel. Do not load them on a
+	  host that is serving NFS: they arm test hooks in the TCP send path.
 
 	  For more information, see Documentation/dev-tools/kunit/.
 

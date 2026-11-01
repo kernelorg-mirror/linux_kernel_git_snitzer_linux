@@ -109,6 +109,11 @@ struct svc_sock {
 
 	/* For sends (protected by xpt_mutex) */
 	struct bio_vec		*sk_bvec;
+	/* TCP records waiting for the xpt_mutex holder to send them: */
+	struct llist_head	sk_send_queue;	/* newest first, lock-free */
+	struct llist_node	*sk_send_held;	/* older, oldest first */
+	/* EMA of one combined batch's send time, ns (0: none yet) */
+	u64			sk_drain_avg_ns;
 
 	/* private TCP part */
 	/* On-the-wire fragment header: */
@@ -177,6 +182,12 @@ static inline u32 svc_sock_final_rec(struct svc_sock *svsk)
  */
 int		svc_recv(struct svc_rqst *rqstp, long timeo);
 void		svc_send(struct svc_rqst *rqstp);
+int		svc_tcp_send(struct svc_xprt *xprt, struct xdr_buf *xdr,
+			     rpc_fraghdr marker);
+
+/* TCP flat combining: records per xpt_mutex hold, and per reply sender */
+#define SVC_TCP_SEND_BATCH	8
+#define SVC_TCP_COMBINE_BUDGET	(2 * SVC_TCP_SEND_BATCH)
 int		svc_addsock(struct svc_serv *serv, struct net *net,
 			    const int fd, char *name_return, const size_t len,
 			    int flags, const struct cred *cred);
@@ -222,6 +233,9 @@ int svc_tcp_recv_actor_kunit(struct svc_rqst *rqstp, unsigned int *frags,
 			     struct sk_buff *skb, unsigned int offset,
 			     size_t len);
 int svc_tcp_restore_pages(struct svc_sock *svsk, struct svc_rqst *rqstp);
+int __svc_tcp_send(struct svc_sock *svsk, struct svc_rqst *rqstp,
+		   struct xdr_buf *xdr, rpc_fraghdr marker);
+void svc_tcp_xpo_send_unlock(struct svc_xprt *xprt);
 int svc_tcp_save_pages(struct svc_sock *svsk, struct svc_rqst *rqstp);
 void svc_tcp_clear_pages(struct svc_sock *svsk);
 int svc_tcp_recvfrom(struct svc_rqst *rqstp);
@@ -343,6 +357,24 @@ u8 svc_tcp_rx_scaling_ratio(unsigned int factor);
 void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
 void svc_tcp_rx_set_want(struct svc_sock *svsk,
 			 const struct svc_tcp_rx_state *state, bool drained);
+#endif
+#if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)
+/*
+ * KUnit hooks in the TCP send path, called under rcu_read_lock() (they
+ * must not sleep).  Each acts only on the test's own svc_sock:
+ * @sendmsg replaces the socket send of one record and returns true
+ * (bytes in *@sent), or returns false to send for real; @wait is a
+ * queued sender's wait in jiffies, called just before it sleeps, or 0
+ * for the computed wait.
+ */
+struct svc_tcp_kunit_hooks {
+	bool		(*sendmsg)(struct svc_sock *svsk,
+				   struct svc_rqst *rqstp,
+				   struct xdr_buf *xdr, rpc_fraghdr marker,
+				   int *sent);
+	unsigned long	(*wait)(const struct svc_sock *svsk);
+};
+extern const struct svc_tcp_kunit_hooks __rcu *svc_tcp_kunit_hooks;
 #endif
 
 /*
