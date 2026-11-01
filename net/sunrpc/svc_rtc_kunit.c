@@ -358,6 +358,7 @@ struct rtc_e2e {
 	bool empty;		/* receive finds no record */
 	struct svc_rqst *pending;	/* async call awaiting completion */
 	int region_held;	/* fake RX-region admissions outstanding */
+	bool complete_eagain;	/* ops->complete() returns -EAGAIN */
 	bool freed;
 };
 
@@ -581,12 +582,22 @@ static bool rtc_e2e_want_call(struct svc_xprt *xprt, u32 prog, u32 vers,
 
 static int rtc_e2e_complete(struct svc_rqst *rqstp)
 {
+	if (rtc_e2e_cur->complete_eagain)
+		return -EAGAIN;
 	return rtc_proc_encode(rqstp, &rqstp->rq_res_stream) ? 1 : 0;
+}
+
+static unsigned int rtc_e2e_rqst_frees;
+
+static void rtc_e2e_rqst_free(struct svc_rqst *rqstp)
+{
+	rtc_e2e_rqst_frees++;
 }
 
 static const struct svc_rtc_ops rtc_e2e_ops = {
 	.flavor		= RPC_AUTH_NULL,
 	.complete	= rtc_e2e_complete,
+	.rqst_free	= rtc_e2e_rqst_free,
 	.want		= rtc_e2e_want,
 	.want_call	= rtc_e2e_want_call,
 };
@@ -776,24 +787,445 @@ static void rtc_e2e_pool_lazy(struct kunit *test)
 	struct svc_rtc_stats a, b;
 
 	KUNIT_ASSERT_EQ(test, svc_rtc_pool_set(e->serv, 0), 0);
-	/* No threads run: stand in their count for the resize only. */
+	/* No threads run: stand in their count until the fill has run. */
 	e->serv->sv_nrthreads = 2;
 	svc_rtc_pool_resize(e->serv);
-	e->serv->sv_nrthreads = 0;
 	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 0);
 	KUNIT_EXPECT_FALSE(test, test_bit(SVC_RTC_POOL_ARMED, &pool->flags));
 
 	rtc_e2e_kick(e, &a, &b);
+	flush_work(&pool->fill);
+	e->serv->sv_nrthreads = 0;
+	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_POOL_EMPTY), 1);
+	KUNIT_EXPECT_TRUE(test, test_bit(SVC_RTC_POOL_ARMED, &pool->flags));
+	/* The fill work alone sized the pool to the thread count. */
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 2);
+	rtc_e2e_expect_thread_unreceived(test, e);
+	rtc_e2e_done(test, e);
+}
+
+/* F6: the pool grows only for calls parked on async I/O. */
+
+/* The transport went to a thread queue; nothing more was received. */
+static void rtc_e2e_expect_thread_at(struct kunit *test, struct rtc_e2e *e,
+				     unsigned int recvs)
+{
+	struct svc_xprt *x;
+
+	KUNIT_EXPECT_EQ(test, e->recvs, recvs);
+	KUNIT_EXPECT_TRUE(test, test_bit(XPT_BUSY, &e->xprt.xpt_flags));
+	x = lwq_dequeue(&e->serv->sv_pools[0].sp_xprts, struct svc_xprt,
+			xpt_ready);
+	KUNIT_EXPECT_PTR_EQ(test, x, &e->xprt);
+	rtc_e2e_thread_serve(test, e, 0);
+	KUNIT_EXPECT_EQ(test, e->recvs, recvs + 1);
+}
+
+/* Park @n calls on async I/O through the fast path; their rqsts in @p. */
+static void rtc_e2e_park(struct kunit *test, struct rtc_e2e *e,
+			 struct svc_rqst **p, unsigned int n)
+{
+	struct svc_rtc_stats a, b;
+	unsigned int i;
+
+	e->mode = RTC_M_ASYNC;
+	for (i = 0; i < n; i++) {
+		e->pending = NULL;
+		rtc_e2e_kick(e, &a, &b);
+		KUNIT_ASSERT_NOT_NULL(test, e->pending);
+		KUNIT_EXPECT_EQ(test, b.async_submitted - a.async_submitted, 1);
+		p[i] = e->pending;
+	}
+	e->mode = RTC_M_SYNC;
+}
+
+/* Complete @n parked calls; their replies go out and the rqsts return. */
+static void rtc_e2e_unpark(struct rtc_e2e *e, struct svc_rqst **p,
+			   unsigned int n)
+{
+	while (n)
+		svc_rtc_complete(p[--n]);
+	drain_workqueue(e->serv->sv_rtc_wq);
+}
+
+/* A call that finds no free rqst, served by a thread; the fill has run. */
+static void rtc_e2e_kick_empty(struct kunit *test, struct rtc_e2e *e)
+{
+	struct svc_rtc_pool *pool = e->serv->sv_rtc_pool;
+	unsigned int recvs = e->recvs;
+	struct svc_rtc_stats a, b;
+
+	rtc_e2e_kick(e, &a, &b);
+	flush_work(&pool->fill);
+	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_POOL_EMPTY), 1);
+	rtc_e2e_expect_thread_at(test, e, recvs);
+}
+
+/* The decay pass, now. */
+static void rtc_pool_decay_pass(struct svc_rtc_pool *pool)
+{
+	mod_delayed_work(system_dfl_wq, &pool->decay, 0);
+	flush_delayed_work(&pool->decay);
+}
+
+/*
+ * A wanted call arms the empty pool with @nthreads threads counted (none
+ * run): the fill work alone sizes it to @nthreads.  Leaves sv_nrthreads
+ * at @nthreads.
+ */
+static struct svc_rtc_pool *rtc_pool_armed_n(struct kunit *test,
+					     struct rtc_e2e *e,
+					     unsigned int nthreads)
+{
+	struct svc_rtc_pool *pool = e->serv->sv_rtc_pool;
+	struct svc_rtc_stats a, b;
+
+	KUNIT_ASSERT_EQ(test, svc_rtc_pool_set(e->serv, 0), 0);
+	e->serv->sv_nrthreads = nthreads;
+	rtc_e2e_kick(e, &a, &b);
+	flush_work(&pool->fill);
 	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_POOL_EMPTY), 1);
 	rtc_e2e_expect_thread_unreceived(test, e);
 	KUNIT_EXPECT_TRUE(test, test_bit(SVC_RTC_POOL_ARMED, &pool->flags));
-	flush_work(&pool->fill);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), nthreads);
+	return pool;
+}
 
-	e->serv->sv_nrthreads = 2;
-	svc_rtc_pool_resize(e->serv);
+static struct svc_rtc_pool *rtc_pool_armed(struct kunit *test,
+					   struct rtc_e2e *e)
+{
+	return rtc_pool_armed_n(test, e, 2);
+}
+
+/* A second connection on @e's service; rtc_e2e_cur picks the receiver. */
+static struct rtc_e2e *rtc_e2e_conn2(struct kunit *test, struct rtc_e2e *e)
+{
+	struct rtc_e2e *e2 = kunit_kzalloc(test, sizeof(*e2), GFP_KERNEL);
+
+	KUNIT_ASSERT_NOT_NULL(test, e2);
+	e2->proc = e->proc;
+	e2->serv = e->serv;
+	svc_xprt_init(&init_net, &rtc_x_class, &e2->xprt, e->serv);
+	KUNIT_ASSERT_EQ(test, svc_rtc_xprt_attach(&e2->xprt, GFP_KERNEL), 0);
+	clear_bit(XPT_BUSY, &e2->xprt.xpt_flags);
+	return e2;
+}
+
+/* rtc_e2e_done() for a service with a second connection @e2. */
+static void rtc_e2e_done2(struct kunit *test, struct rtc_e2e *e,
+			  struct rtc_e2e *e2)
+{
+	svc_rtc_xprt_stop(&e2->xprt);
+	svc_rtc_xprt_stop(&e->xprt);
+	drain_workqueue(e->serv->sv_rtc_wq);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e->serv->sv_rtc_active), 0);
+	svc_rtc_unregister(e->serv);
+	KUNIT_EXPECT_EQ(test, kref_read(&e2->xprt.xpt_ref), 1);
+	svc_xprt_put(&e2->xprt);
+	KUNIT_EXPECT_TRUE(test, e2->freed);
+	KUNIT_EXPECT_EQ(test, kref_read(&e->xprt.xpt_ref), 1);
+	svc_xprt_put(&e->xprt);
+	KUNIT_EXPECT_TRUE(test, e->freed);
+	svc_destroy(&e->serv);
+}
+
+/*
+ * Every rqst parked on async I/O: the next call misses as pool_empty
+ * through the real fast path, and the fill grows the pool to the parked
+ * calls' headroom.  The third growth, 18 -> 27, is more than one
+ * SVC_RTC_POOL_STEP batch: the fill keeps allocating until the target.
+ */
+static void rtc_e2e_pool_grow_inflight(struct kunit *test)
+{
+	struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
+	struct svc_rtc_pool *pool;
+	struct svc_rqst *p[19];
+
+	BUILD_BUG_ON(SVC_RTC_POOL_STEP != 8 || SVC_RTC_CONN_PARKED < 19);
+	pool = rtc_pool_armed(test, e);
+	rtc_e2e_park(test, e, p, 2);
+	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 2);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked), 2);
+	KUNIT_EXPECT_TRUE(test, lwq_empty(&pool->free));
+	rtc_e2e_kick_empty(test, e);
+	/* 2 + max(2 / 2, 8) */
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 10);
+	rtc_e2e_park(test, e, &p[2], 8);
+	KUNIT_EXPECT_TRUE(test, lwq_empty(&pool->free));
+	rtc_e2e_kick_empty(test, e);
+	/* 10 + max(10 / 2, 8) */
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 18);
+	rtc_e2e_park(test, e, &p[10], 8);
+	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 18);
+	KUNIT_EXPECT_TRUE(test, lwq_empty(&pool->free));
+	rtc_e2e_kick_empty(test, e);
+	/* 18 + max(18 / 2, 8): nine rqsts, two batches */
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 27);
+	KUNIT_EXPECT_EQ(test, pool->want, 27);
+	/* A grown rqst carries the next call on the fast path. */
+	rtc_e2e_park(test, e, &p[18], 1);
+	rtc_e2e_unpark(e, p, 19);
+	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 0);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked), 0);
 	e->serv->sv_nrthreads = 0;
-	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 2);
 	rtc_e2e_done(test, e);
+}
+
+/*
+ * A parked call whose completion returns -EAGAIN is handed to a thread:
+ * it stops counting as parked (svc_rtc_handoff()) while its rqst waits
+ * on sp_rtc_rqsts, so the hand-off never grows the pool.
+ */
+static void rtc_e2e_pool_handoff_no_grow(struct kunit *test)
+{
+	struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
+	struct svc_rtc_stats a, b;
+	struct svc_rtc_pool *pool;
+	struct svc_rqst *p[2], *thr;
+
+	pool = rtc_pool_armed(test, e);
+	rtc_e2e_park(test, e, p, 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked), 1);
+	e->complete_eagain = true;
+	svc_rtc_stats_sum(&a);
+	svc_rtc_complete(p[0]);
+	drain_workqueue(e->serv->sv_rtc_wq);
+	svc_rtc_stats_sum(&b);
+	e->complete_eagain = false;
+	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_EAGAIN_COMPLETE), 1);
+	KUNIT_EXPECT_FALSE(test, lwq_empty(&e->serv->sv_pools[0].sp_rtc_rqsts));
+	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 0);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked), 0);
+	/* The other rqst parks: one of two parked, under 3/4. */
+	rtc_e2e_park(test, e, &p[1], 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 1);
+	KUNIT_EXPECT_TRUE(test, lwq_empty(&pool->free));
+	rtc_e2e_kick_empty(test, e);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 2);
+	KUNIT_EXPECT_EQ(test, pool->want, 0);
+	thr = svc_rqst_alloc(e->serv, &e->serv->sv_pools[0], NUMA_NO_NODE);
+	KUNIT_ASSERT_NOT_NULL(test, thr);
+	KUNIT_EXPECT_TRUE(test, svc_rtc_thread_run(thr));
+	svc_rqst_free(thr);
+	KUNIT_EXPECT_TRUE(test, lwq_empty(&e->serv->sv_pools[0].sp_rtc_rqsts));
+	rtc_e2e_unpark(e, &p[1], 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 0);
+	e->serv->sv_nrthreads = 0;
+	rtc_e2e_done(test, e);
+}
+
+/*
+ * The service ceiling: one thread counted allows SVC_RTC_CONN_PARKED
+ * parked calls across all connections, and caps the pool there.  Two
+ * connections park 16 each, the pool growing with them to 32 (headroom
+ * 37 capped); the next call on the second connection, itself well under
+ * its own ceiling, goes to a thread unreceived as serv_full without
+ * asking for growth.  One completion reopens the fast path.
+ */
+static void rtc_e2e_pool_serv_ceiling(struct kunit *test)
+{
+	struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
+	struct svc_rqst *pa[16], *pb[17];
+	struct svc_rtc_stats a, b;
+	struct svc_rtc_pool *pool;
+	struct rtc_e2e *e2;
+	unsigned int recvs;
+
+	BUILD_BUG_ON(SVC_RTC_POOL_STEP != 8 || SVC_RTC_CONN_PARKED != 32);
+	pool = rtc_pool_armed_n(test, e, 1);
+	e2 = rtc_e2e_conn2(test, e);
+	rtc_e2e_park(test, e, pa, 1);
+	rtc_e2e_kick_empty(test, e);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 9);
+	rtc_e2e_park(test, e, &pa[1], 8);
+	rtc_e2e_kick_empty(test, e);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 17);
+	rtc_e2e_cur = e2;
+	rtc_e2e_park(test, e2, pb, 8);
+	rtc_e2e_cur = e;
+	rtc_e2e_kick_empty(test, e);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 25);
+	rtc_e2e_cur = e2;
+	rtc_e2e_park(test, e2, &pb[8], 8);
+	rtc_e2e_cur = e;
+	rtc_e2e_kick_empty(test, e);
+	/* headroom(25) = 37, capped at 32 x 1 thread */
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr),
+			SVC_RTC_CONN_PARKED);
+	KUNIT_EXPECT_EQ(test, pool->want, SVC_RTC_CONN_PARKED);
+	rtc_e2e_park(test, e, &pa[9], 7);
+	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), SVC_RTC_CONN_PARKED);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked), 16);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e2->xprt.xpt_rtc->parked), 16);
+
+	rtc_e2e_cur = e2;
+	recvs = e2->recvs;
+	e2->mode = RTC_M_ASYNC;
+	e2->pending = NULL;
+	rtc_e2e_kick(e2, &a, &b);
+	e2->mode = RTC_M_SYNC;
+	flush_work(&pool->fill);
+	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_SERV_FULL), 1);
+	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_CONN_FULL), 0);
+	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_POOL_EMPTY), 0);
+	KUNIT_EXPECT_NULL(test, e2->pending);
+	rtc_e2e_expect_thread_at(test, e2, recvs);
+	KUNIT_EXPECT_FALSE(test, test_bit(SVC_RTC_POOL_GROW, &pool->flags));
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr),
+			SVC_RTC_CONN_PARKED);
+
+	rtc_e2e_cur = e;
+	rtc_e2e_unpark(e, &pa[15], 1);
+	rtc_e2e_cur = e2;
+	rtc_e2e_park(test, e2, &pb[16], 1);
+	rtc_e2e_unpark(e2, pb, 17);
+	rtc_e2e_cur = e;
+	rtc_e2e_unpark(e, pa, 15);
+	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 0);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e2->xprt.xpt_rtc->parked), 0);
+	e->serv->sv_nrthreads = 0;
+	rtc_e2e_done2(test, e, e2);
+}
+
+/*
+ * A connection with SVC_RTC_CONN_PARKED calls parked sends its next call
+ * to a thread, unreceived, as conn_full, with free rqsts left and no
+ * growth asked; one completion reopens the fast path.
+ */
+static void rtc_e2e_pool_conn_ceiling(struct kunit *test)
+{
+	struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
+	struct svc_rtc_pool *pool = e->serv->sv_rtc_pool;
+	struct svc_rtc_stats a, b;
+	struct svc_rqst **p;
+	unsigned int recvs;
+
+	p = kunit_kcalloc(test, SVC_RTC_CONN_PARKED, sizeof(*p), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, p);
+	KUNIT_ASSERT_EQ(test, svc_rtc_pool_set(e->serv,
+					       SVC_RTC_CONN_PARKED + 4), 0);
+	rtc_e2e_park(test, e, p, SVC_RTC_CONN_PARKED);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked),
+			SVC_RTC_CONN_PARKED);
+	recvs = e->recvs;
+	e->mode = RTC_M_ASYNC;
+	e->pending = NULL;
+	rtc_e2e_kick(e, &a, &b);
+	e->mode = RTC_M_SYNC;
+	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_CONN_FULL), 1);
+	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_POOL_EMPTY), 0);
+	KUNIT_EXPECT_NULL(test, e->pending);
+	rtc_e2e_expect_thread_at(test, e, recvs);
+	KUNIT_EXPECT_FALSE(test, lwq_empty(&pool->free));
+	KUNIT_EXPECT_FALSE(test, test_bit(SVC_RTC_POOL_GROW, &pool->flags));
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr),
+			SVC_RTC_CONN_PARKED + 4);
+	rtc_e2e_unpark(e, &p[SVC_RTC_CONN_PARKED - 1], 1);
+	rtc_e2e_park(test, e, &p[SVC_RTC_CONN_PARKED - 1], 1);
+	rtc_e2e_unpark(e, p, SVC_RTC_CONN_PARKED);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked), 0);
+	rtc_e2e_done(test, e);
+}
+
+/*
+ * A growth whose allocation fails (the injection counts the attempt)
+ * keeps the pool, lowers the target to it and backs off: a later miss
+ * makes no attempt.  The decay pass lifts the back-off; the next miss
+ * grows.
+ */
+static void rtc_e2e_pool_grow_fail(struct kunit *test)
+{
+	struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
+	struct svc_rtc_pool *pool;
+	struct svc_rqst *p[3];
+	unsigned int hits;
+
+	pool = rtc_pool_armed(test, e);
+	rtc_e2e_park(test, e, p, 2);
+	svc_rtc_kunit_no_grow_hits = 0;
+	WRITE_ONCE(svc_rtc_kunit_no_grow, true);
+	rtc_e2e_kick_empty(test, e);
+	hits = READ_ONCE(svc_rtc_kunit_no_grow_hits);
+	KUNIT_EXPECT_GT(test, hits, 0U);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 2);
+	KUNIT_EXPECT_EQ(test, pool->want, 2);
+	KUNIT_EXPECT_TRUE(test, test_bit(SVC_RTC_POOL_NOGROW, &pool->flags));
+	rtc_e2e_kick_empty(test, e);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(svc_rtc_kunit_no_grow_hits), hits);
+	WRITE_ONCE(svc_rtc_kunit_no_grow, false);
+	rtc_pool_decay_pass(pool);
+	KUNIT_EXPECT_FALSE(test, test_bit(SVC_RTC_POOL_NOGROW, &pool->flags));
+	rtc_e2e_kick_empty(test, e);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr),
+			2 + SVC_RTC_POOL_STEP);
+	rtc_e2e_park(test, e, &p[2], 1);
+	rtc_e2e_unpark(e, p, 3);
+	e->serv->sv_nrthreads = 0;
+	rtc_e2e_done(test, e);
+}
+
+/*
+ * Decay: the period that saw two parked keeps the grown pool; a period
+ * with none parked frees the idle rqsts back to the thread count.
+ */
+static void rtc_e2e_pool_grow_decay(struct kunit *test)
+{
+	struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
+	struct svc_rtc_pool *pool;
+	struct svc_rqst *p[2];
+
+	pool = rtc_pool_armed(test, e);
+	rtc_e2e_park(test, e, p, 2);
+	rtc_e2e_kick_empty(test, e);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr),
+			2 + SVC_RTC_POOL_STEP);
+	rtc_e2e_unpark(e, p, 2);
+	rtc_pool_decay_pass(pool);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr),
+			2 + SVC_RTC_POOL_STEP);
+	rtc_pool_decay_pass(pool);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 2);
+	KUNIT_EXPECT_EQ(test, pool->want, 0);
+	e->serv->sv_nrthreads = 0;
+	rtc_e2e_done(test, e);
+}
+
+/*
+ * The connection dies with a grown pool, two calls parked and one handed
+ * to a thread that never runs it: the completions release theirs,
+ * unregister releases the hand-off, and every rqst is freed once.
+ */
+static void rtc_e2e_pool_grow_teardown(struct kunit *test)
+{
+	struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
+	struct svc_rtc_stats a, b;
+	struct svc_rqst *p[2];
+	unsigned int nr;
+
+	rtc_pool_armed(test, e);
+	rtc_e2e_park(test, e, p, 2);
+	rtc_e2e_kick_empty(test, e);
+	nr = READ_ONCE(e->serv->sv_rtc_nr);
+	KUNIT_EXPECT_EQ(test, nr, 2 + SVC_RTC_POOL_STEP);
+	e->mode = RTC_M_MISS;
+	rtc_e2e_kick(e, &a, &b);
+	e->mode = RTC_M_SYNC;
+	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_MISS), 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e->serv->sv_rtc_active), 3);
+	set_bit(XPT_DEAD, &e->xprt.xpt_flags);
+	svc_rtc_xprt_stop(&e->xprt);
+	rtc_e2e_unpark(e, p, 2);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e->serv->sv_rtc_active), 1);
+	e->serv->sv_nrthreads = 0;
+	rtc_e2e_rqst_frees = 0;
+	svc_rtc_unregister(e->serv);
+	KUNIT_EXPECT_EQ(test, atomic_read(&e->serv->sv_rtc_active), 0);
+	KUNIT_EXPECT_EQ(test, rtc_e2e_rqst_frees, nr);
+	KUNIT_EXPECT_EQ(test, kref_read(&e->xprt.xpt_ref), 1);
+	svc_xprt_put(&e->xprt);
+	KUNIT_EXPECT_TRUE(test, e->freed);
+	svc_destroy(&e->serv);
 }
 
 /* The receive finds no record: the pool rqst goes straight back. */
@@ -1200,6 +1632,13 @@ static struct kunit_case svc_rtc_test_cases[] = {
 	KUNIT_CASE(rtc_e2e_auth_to_thread),
 	KUNIT_CASE(rtc_e2e_pool_empty),
 	KUNIT_CASE(rtc_e2e_pool_lazy),
+	KUNIT_CASE(rtc_e2e_pool_grow_inflight),
+	KUNIT_CASE(rtc_e2e_pool_handoff_no_grow),
+	KUNIT_CASE(rtc_e2e_pool_conn_ceiling),
+	KUNIT_CASE(rtc_e2e_pool_serv_ceiling),
+	KUNIT_CASE(rtc_e2e_pool_grow_fail),
+	KUNIT_CASE(rtc_e2e_pool_grow_decay),
+	KUNIT_CASE(rtc_e2e_pool_grow_teardown),
 	KUNIT_CASE(rtc_e2e_recv_empty),
 	KUNIT_CASE(rtc_e2e_miss_handoff),
 	KUNIT_CASE(rtc_e2e_miss_steal),
