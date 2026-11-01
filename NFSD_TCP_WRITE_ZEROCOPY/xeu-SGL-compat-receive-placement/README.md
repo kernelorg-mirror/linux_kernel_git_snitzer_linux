@@ -182,8 +182,8 @@ same way without it. `xsl-core` needs the spec's own
 
 ## Relation to the paired-posting experiment
 
-[`../xeu-hds-experiment/`](../xeu-hds-experiment/) approximates header-data
-split (a short header buffer, then the payload at page offset 0) so payload
+That experiment, dropped unrun on 2026-11-01 (on the branch
+`.pre-drop-hds`), approximates header-data split (a short header buffer, then the payload at page offset 0) so payload
 lands **page-aligned** — the placement a device *with* a virtual boundary
 needs. This sub-project targets devices *without* one, which only need
 4-byte alignment, so no buffer pairing, no header-length tuning and no
