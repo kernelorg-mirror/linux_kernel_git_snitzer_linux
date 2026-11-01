@@ -430,8 +430,9 @@ is `.pre-regroup`, and `…-code`'s old stage is `…-code.pre-regroup`).
 The same day the code group went from 73 commits to 58 (Mike): ten
 reverted or reverting commits dropped and five folded, with the kernel
 source unchanged (the tips before are `.pre-fold`). Then to 60, laid
-out by subsystem (the tips before are `.pre-subsys`): block, fs and
-loop, then core networking and `page_pool`, then SUNRPC, then
+out by subsystem (the tips before are `.pre-subsys`): the two upstream
+`Fixes:` commits that stand on their own first (the tips before are
+`.pre-fixes-first`), then block, fs and loop, then core networking and `page_pool`, then SUNRPC, then
 `nfs_common` and NFSD. **The order is what keeps loans safe, so keep
 it:** only NFSD marks a procedure `pc_xdr_bvec`, so nothing is loaned
 until after the budget that bounds loans is in, and the receive path
