@@ -25,6 +25,14 @@ struct svc_xprt_ops {
 	int		(*xpo_sendto)(struct svc_rqst *);
 	/* xpo_sendto() for a caller that holds xpt_mutex (rtc send FIFO) */
 	int		(*xpo_sendto_locked)(struct svc_rqst *);
+	/*
+	 * Release xpt_mutex taken for xpo_sendto_locked().  A transport
+	 * whose other senders queue records for the mutex holder (TCP
+	 * flat combining) sends none of them here: it hands the holder's
+	 * role to the oldest queued sender.  Optional: without it the
+	 * caller does mutex_unlock().
+	 */
+	void		(*xpo_send_unlock)(struct svc_xprt *);
 	int		(*xpo_result_payload)(struct svc_rqst *, unsigned int,
 					      unsigned int);
 	void		(*xpo_release_ctxt)(struct svc_xprt *xprt, void *ctxt);

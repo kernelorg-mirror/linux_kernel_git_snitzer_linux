@@ -3007,66 +3007,36 @@ static void bc_free(struct rpc_task *task)
 	free_page((unsigned long)buf);
 }
 
-static int bc_sendto(struct rpc_rqst *req)
-{
-	struct xdr_buf *xdr = &req->rq_snd_buf;
-	struct sock_xprt *transport =
-			container_of(req->rq_xprt, struct sock_xprt, xprt);
-	struct msghdr msg = {
-		.msg_flags	= 0,
-	};
-	rpc_fraghdr marker = cpu_to_be32(RPC_LAST_STREAM_FRAGMENT |
-					 (u32)xdr->len);
-	unsigned int sent = 0;
-	int err;
-
-	req->rq_xtime = ktime_get();
-	err = xdr_alloc_bvec(xdr, rpc_task_gfp_mask());
-	if (err < 0)
-		return err;
-	err = xprt_sock_sendmsg(transport->sock, &msg, xdr, 0, marker, &sent);
-	xdr_free_bvec(xdr);
-	if (err < 0 || sent != (xdr->len + sizeof(marker)))
-		return -EAGAIN;
-	return sent;
-}
-
 /**
  * bc_send_request - Send a backchannel Call on a TCP socket
  * @req: rpc_rqst containing Call message to be sent
  *
- * xpt_mutex ensures @rqstp's whole message is written to the socket
- * without interruption.
+ * The connection is shared with the fore channel, so the Call joins the
+ * same send queue as the server's replies: svc_tcp_send() writes its
+ * record marker and message contiguously, under xpt_mutex, in the order
+ * the senders queued them.
  *
  * Return values:
  *   %0 if the message was sent successfully
- *   %ENOTCONN if the message was not sent
+ *   %ENOTCONN if the connection is closing; the message was not sent
+ *   %ENOMEM if the socket could not allocate; nothing was sent and the
+ *	connection stays up (plain TCP only: under kTLS it is closed and
+ *	%EAGAIN returned)
+ *   %EAGAIN if the send failed or was short (the connection is then
+ *	closed)
+ *
+ * rq_xtime includes the time the Call waits behind other senders.
  */
 static int bc_send_request(struct rpc_rqst *req)
 {
-	struct svc_xprt	*xprt;
+	struct xdr_buf *xdr = &req->rq_snd_buf;
+	rpc_fraghdr marker = cpu_to_be32(RPC_LAST_STREAM_FRAGMENT |
+					 (u32)xdr->len);
 	int len;
 
-	/*
-	 * Get the server socket associated with this callback xprt
-	 */
-	xprt = req->rq_xprt->bc_xprt;
-
-	/*
-	 * Grab the mutex to serialize data as the connection is shared
-	 * with the fore channel
-	 */
-	mutex_lock(&xprt->xpt_mutex);
-	if (test_bit(XPT_DEAD, &xprt->xpt_flags))
-		len = -ENOTCONN;
-	else
-		len = bc_sendto(req);
-	mutex_unlock(&xprt->xpt_mutex);
-
-	if (len > 0)
-		len = 0;
-
-	return len;
+	req->rq_xtime = ktime_get();
+	len = svc_tcp_send(req->rq_xprt->bc_xprt, xdr, marker);
+	return len < 0 ? len : 0;
 }
 
 static void bc_close(struct rpc_xprt *xprt)

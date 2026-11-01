@@ -6356,15 +6356,19 @@ static int svc_tcp_sendmsg_rx_region(struct svc_sock *svsk,
 }
 
 /*
- * MSG_SPLICE_PAGES is used exclusively to reduce the number of
- * copy operations in this path. Therefore the caller must ensure
- * that the pages backing @xdr are unchanging.
+ * Send one RPC record, @marker then @xdr, as a single sock_sendmsg().
+ *
+ * For a reply (@rqstp set), MSG_SPLICE_PAGES is used exclusively to
+ * reduce the number of copy operations in this path, so the caller must
+ * ensure that the pages backing @xdr are unchanging.  A backchannel Call
+ * (@rqstp NULL) is copied into the socket, as xprt_sock_sendmsg() did:
+ * its rpc_rqst buffer is reused once the send returns.
  */
 static int svc_tcp_sendmsg(struct svc_sock *svsk, struct svc_rqst *rqstp,
-			   rpc_fraghdr marker)
+			   struct xdr_buf *xdr, rpc_fraghdr marker)
 {
 	struct msghdr msg = {
-		.msg_flags	= MSG_SPLICE_PAGES,
+		.msg_flags	= rqstp ? MSG_SPLICE_PAGES : 0,
 	};
 	int count;
 	void *buf;
@@ -6380,48 +6384,95 @@ static int svc_tcp_sendmsg(struct svc_sock *svsk, struct svc_rqst *rqstp,
 	memcpy(buf, &marker, sizeof(marker));
 	bvec_set_virt(svsk->sk_bvec, buf, sizeof(marker));
 
-	count = xdr_buf_to_bvec(svsk->sk_bvec + 1, rqstp->rq_maxpages,
-				&rqstp->rq_res);
+	count = xdr_buf_to_bvec(svsk->sk_bvec + 1,
+				rqstp ? rqstp->rq_maxpages : svsk->sk_maxpages,
+				xdr);
 	if (count < 0) {
 		ret = count;
 		goto out;
 	}
 
-	if (svc_rqst_rx_region_used(rqstp)) {
+	if (rqstp && svc_rqst_rx_region_used(rqstp)) {
 		ret = svc_tcp_sendmsg_rx_region(svsk, rqstp, 1 + count);
 		goto out;
 	}
 	iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, svsk->sk_bvec,
-		      1 + count, sizeof(marker) + rqstp->rq_res.len);
+		      1 + count, sizeof(marker) + xdr->len);
 	ret = sock_sendmsg(svsk->sk_sock, &msg);
 out:
 	page_frag_free(buf);
 	return ret;
 }
 
-/**
- * svc_tcp_sendto - Send out a reply on a TCP socket
- * @rqstp: completed svc_rqst
- *
- * xpt_mutex ensures @rqstp's whole message is written to the socket
- * without interruption.
+#if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)
+/*
+ * KUnit: hooks that act only on a test's own svc_sock (see struct
+ * svc_tcp_kunit_hooks).  Called under rcu_read_lock(); the test clears
+ * the pointer and calls synchronize_rcu() before it frees anything the
+ * hooks use, so no caller is still inside them once it returns.
+ */
+const struct svc_tcp_kunit_hooks __rcu *svc_tcp_kunit_hooks;
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_kunit_hooks);
+
+static int svc_tcp_record_sendmsg(struct svc_sock *svsk,
+				  struct svc_rqst *rqstp,
+				  struct xdr_buf *xdr, rpc_fraghdr marker)
+{
+	const struct svc_tcp_kunit_hooks *hooks;
+	bool faked = false;
+	int sent;
+
+	rcu_read_lock();
+	hooks = rcu_dereference(svc_tcp_kunit_hooks);
+	if (hooks)
+		faked = hooks->sendmsg(svsk, rqstp, xdr, marker, &sent);
+	rcu_read_unlock();
+	if (faked)
+		return sent;
+	return svc_tcp_sendmsg(svsk, rqstp, xdr, marker);
+}
+#else
+static inline int svc_tcp_record_sendmsg(struct svc_sock *svsk,
+					 struct svc_rqst *rqstp,
+					 struct xdr_buf *xdr,
+					 rpc_fraghdr marker)
+{
+	return svc_tcp_sendmsg(svsk, rqstp, xdr, marker);
+}
+#endif
+
+/*
+ * Write one whole record with xpt_mutex held, so that its marker and
+ * all of @xdr are contiguous on the stream.  A failed or short send
+ * leaves the stream unusable: the connection is closed.
  *
  * Returns the number of bytes sent, or a negative errno.
  */
-static int __svc_tcp_sendto(struct svc_rqst *rqstp)
+static int svc_tcp_send_record(struct svc_sock *svsk, struct svc_rqst *rqstp,
+			       struct xdr_buf *xdr, rpc_fraghdr marker)
 {
-	struct svc_xprt *xprt = rqstp->rq_xprt;
-	struct svc_sock	*svsk = container_of(xprt, struct svc_sock, sk_xprt);
-	struct xdr_buf *xdr = &rqstp->rq_res;
-	rpc_fraghdr marker = cpu_to_be32(RPC_LAST_STREAM_FRAGMENT |
-					 (u32)xdr->len);
+	struct svc_xprt *xprt = &svsk->sk_xprt;
 	int sent;
 
 	lockdep_assert_held(&xprt->xpt_mutex);
 	if (svc_xprt_is_dead(xprt))
 		return -ENOTCONN;
-	sent = svc_tcp_sendmsg(svsk, rqstp, marker);
+	sent = svc_tcp_record_sendmsg(svsk, rqstp, xdr, marker);
 	trace_svcsock_tcp_send(xprt, sent);
+	/*
+	 * A backchannel Call is a single sock_sendmsg(): on plain TCP,
+	 * -ENOMEM (the record marker's page fragment, or tcp_sendmsg()
+	 * with nothing copied) means nothing reached the stream, which is
+	 * still at a record boundary.  Fail just this Call, as bc_sendto()
+	 * did, and leave the connection up for the RPC client's retry.
+	 * Not under kTLS: tls_sw_sendmsg() can return -ENOMEM with
+	 * nothing counted as copied after an open TLS record was started,
+	 * or (async crypto) after records went out, so the stream's
+	 * position is unknown; close as for any other failed send.
+	 */
+	if (sent == -ENOMEM && !rqstp &&
+	    !test_bit(XPT_TLS_SESSION, &xprt->xpt_flags))
+		return -ENOMEM;
 	if (sent < 0 || sent != (xdr->len + sizeof(marker))) {
 		pr_notice("rpc-srv/tcp: %s: %s %d when sending %zu bytes - shutting down socket\n",
 			  xprt->xpt_server->sv_name,
@@ -6433,26 +6484,332 @@ static int __svc_tcp_sendto(struct svc_rqst *rqstp)
 	return sent;
 }
 
+/*
+ * Flat combining of TCP sends (after Chuck Lever, "sunrpc: implement
+ * flat combining for TCP socket sends").
+ *
+ * A sender queues a svc_pending_send on its own stack, then tries
+ * xpt_mutex.  The task holding the mutex is the combiner: it sends
+ * queued records, oldest first, completing each, while the other
+ * senders sleep on their completion instead of contending for the
+ * mutex.
+ *
+ * The send queue is sk_send_queue (lock-free, newest first) followed,
+ * in age, by sk_send_held (oldest first, xpt_mutex only): the holder
+ * moves sk_send_queue to sk_send_held, reversed, when sk_send_held is
+ * empty.  An entry leaves the queue only at the head of sk_send_held,
+ * under xpt_mutex, and is sent and completed in that same hold.  So
+ * whoever holds the mutex knows that an entry not yet ->sent is still
+ * queued, and still owned by a sender that has not returned.
+ *
+ * Work is bounded: at most SVC_TCP_SEND_BATCH records per hold of
+ * xpt_mutex, with cond_resched() between holds, and at most
+ * SVC_TCP_COMBINE_BUDGET records of other senders per reply sender.
+ * The rtc work item and a backchannel Call (rpciod) send none of other
+ * senders' records beyond the hold that sends their own.  A holder that
+ * stops with records still queued hands the combiner role on: it
+ * completes the oldest queued entry with ->combine set, without sending
+ * it, and that sender takes the mutex and combines.
+ */
+struct svc_pending_send {
+	struct llist_node	node;
+	struct svc_rqst		*rqstp;		/* NULL: backchannel Call */
+	struct xdr_buf		*xdr;
+	rpc_fraghdr		marker;
+	struct completion	done;
+	int			result;
+	bool			sent;		/* xpt_mutex */
+	bool			combine;	/* set once, under xpt_mutex */
+};
+
+#define SVC_TCP_SEND_WAIT_MIN_MS	1
+#define SVC_TCP_SEND_WAIT_MAX_MS	100
+#define SVC_TCP_SEND_WAIT_INIT_MS	10
+
+/*
+ * How long a queued sender sleeps before taking xpt_mutex itself:
+ * twice the average time of one hold's sends, within 1-100 ms; 10 ms
+ * until there is an average.  Only a holder that is slow (or the rtc
+ * FIFO's budget) makes a sender wait this out: a holder that leaves
+ * records queued hands the combiner role on at once.
+ */
+static unsigned long svc_tcp_send_wait_timeout(const struct svc_sock *svsk)
+{
+	u64 avg = READ_ONCE(svsk->sk_drain_avg_ns);
+
+#if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)
+	const struct svc_tcp_kunit_hooks *hooks;
+	unsigned long timeout = 0;
+
+	rcu_read_lock();
+	hooks = rcu_dereference(svc_tcp_kunit_hooks);
+	if (hooks)
+		timeout = hooks->wait(svsk);
+	rcu_read_unlock();
+	if (timeout)
+		return timeout;
+#endif
+	if (!avg)
+		return msecs_to_jiffies(SVC_TCP_SEND_WAIT_INIT_MS);
+	return clamp(nsecs_to_jiffies(2 * avg),
+		     msecs_to_jiffies(SVC_TCP_SEND_WAIT_MIN_MS),
+		     msecs_to_jiffies(SVC_TCP_SEND_WAIT_MAX_MS));
+}
+
+/* Make sk_send_held non-empty if anything is queued; xpt_mutex held. */
+static bool svc_tcp_send_refill(struct svc_sock *svsk)
+{
+	if (!svsk->sk_send_held)
+		svsk->sk_send_held =
+			llist_reverse_order(llist_del_all(&svsk->sk_send_queue));
+	return svsk->sk_send_held;
+}
+
+/*
+ * Send up to @max queued records, oldest first, in this hold of
+ * xpt_mutex.  Each is sent and completed before the next is looked at.
+ * Returns the number sent.
+ */
+static unsigned int svc_tcp_combine_sends(struct svc_sock *svsk,
+					  unsigned int max)
+{
+	unsigned int n = 0;
+	u64 start, ns, avg;
+
+	lockdep_assert_held(&svsk->sk_xprt.xpt_mutex);
+	start = ktime_get_ns();
+	while (n < max && svc_tcp_send_refill(svsk)) {
+		struct svc_pending_send *ps;
+
+		ps = llist_entry(svsk->sk_send_held, struct svc_pending_send,
+				 node);
+		svsk->sk_send_held = ps->node.next;
+		ps->result = svc_tcp_send_record(svsk, ps->rqstp, ps->xdr,
+						 ps->marker);
+		ps->sent = true;
+		/* @ps belongs to its sender again from here on. */
+		complete(&ps->done);
+		n++;
+	}
+	if (!n)
+		return 0;
+	ns = ktime_get_ns() - start;
+	avg = READ_ONCE(svsk->sk_drain_avg_ns);
+	if (avg)
+		ns = avg - (avg >> 3) + (ns >> 3);
+	WRITE_ONCE(svsk->sk_drain_avg_ns, max_t(u64, ns, 1));
+	return n;
+}
+
+/*
+ * The holder is about to release xpt_mutex with records still queued:
+ * hand the combiner role to the oldest queued sender.  Its entry stays
+ * queued and unsent; ->combine tells it to take the mutex and combine.
+ * An entry is handed the role at most once, so its completion is
+ * completed at most once before it is sent: if the oldest already has
+ * the role, that sender has not taken the mutex since (it would have
+ * sent its own record first) and is on its way.
+ */
+static void svc_tcp_send_handoff(struct svc_sock *svsk)
+{
+	struct svc_pending_send *ps;
+
+	lockdep_assert_held(&svsk->sk_xprt.xpt_mutex);
+	if (!svc_tcp_send_refill(svsk))
+		return;
+	ps = llist_entry(svsk->sk_send_held, struct svc_pending_send, node);
+	if (ps->combine)
+		return;
+	WRITE_ONCE(ps->combine, true);
+	complete(&ps->done);
+}
+
+/*
+ * Release xpt_mutex without stranding a queued send, after sending up
+ * to @budget more queued records, SVC_TCP_SEND_BATCH per hold.
+ *
+ * No stranding: every holder of xpt_mutex on a TCP svc_sock (a sender in
+ * __svc_tcp_send(), which includes backchannel Calls, and the rtc FIFO
+ * through ->xpo_send_unlock) lets go of it only here, or after
+ * svc_tcp_send_handoff(), or to take it again at once with
+ * mutex_lock().  A plain mutex_unlock() anywhere else would leave queued
+ * senders to their timeout.  So:
+ *  - with records queued, the holder sends a batch and takes the mutex
+ *    again, or hands the role on and returns;
+ *  - with none queued, a sender whose llist_add() follows our last
+ *    refill saw its trylock fail against us: either we see its entry
+ *    after the unlock and full barrier below, or its own trylock (or
+ *    the next holder, which releases here too) runs after our unlock.
+ */
+static void svc_tcp_send_unlock(struct svc_sock *svsk, unsigned int budget)
+{
+	struct mutex *mutex = &svsk->sk_xprt.xpt_mutex;
+
+	for (;;) {
+		while (svsk->sk_send_held ||
+		       !llist_empty(&svsk->sk_send_queue)) {
+			if (!budget) {
+				svc_tcp_send_handoff(svsk);
+				mutex_unlock(mutex);
+				return;
+			}
+			budget -= svc_tcp_combine_sends(svsk,
+					min_t(unsigned int, budget,
+					      SVC_TCP_SEND_BATCH));
+			if (!budget || (!svsk->sk_send_held &&
+					llist_empty(&svsk->sk_send_queue)))
+				continue;
+			/* Between batches: let mutex_lock() waiters in. */
+			mutex_unlock(mutex);
+			cond_resched();
+			mutex_lock(mutex);
+		}
+		mutex_unlock(mutex);
+		/* Order the unlock before the queue check; pairs with the
+		 * full barrier of llist_add()'s cmpxchg before a sender's
+		 * mutex_trylock().
+		 */
+		smp_mb();
+		if (llist_empty(&svsk->sk_send_queue))
+			return;
+		cond_resched();
+		if (!mutex_trylock(mutex))
+			return;
+	}
+}
+
+/*
+ * ->xpo_send_unlock for the rtc send FIFO: release xpt_mutex after an
+ * rtc batch.  The rtc work item sends no other sender's record: if any
+ * are queued, it hands the combiner role to the oldest.
+ */
+VISIBLE_IF_KUNIT void svc_tcp_xpo_send_unlock(struct svc_xprt *xprt)
+{
+	svc_tcp_send_unlock(container_of(xprt, struct svc_sock, sk_xprt), 0);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_xpo_send_unlock);
+
+/*
+ * Queue one record and see it sent, by an xpt_mutex holder or by us.
+ * A reply sender (@rqstp set) may then send up to SVC_TCP_COMBINE_BUDGET
+ * records of other senders; a backchannel Call (rpciod) sends none
+ * beyond the hold that sends its own.
+ *
+ * Returns the number of bytes sent, or a negative errno.
+ */
+VISIBLE_IF_KUNIT int __svc_tcp_send(struct svc_sock *svsk,
+				    struct svc_rqst *rqstp,
+				    struct xdr_buf *xdr, rpc_fraghdr marker)
+{
+	struct mutex *mutex = &svsk->sk_xprt.xpt_mutex;
+	unsigned int budget = rqstp ? SVC_TCP_COMBINE_BUDGET : 0;
+	struct svc_pending_send ps = {
+		.rqstp	= rqstp,
+		.xdr	= xdr,
+		.marker	= marker,
+	};
+	bool locked;
+
+	init_completion(&ps.done);
+	llist_add(&ps.node, &svsk->sk_send_queue);
+	locked = mutex_trylock(mutex);
+	for (;;) {
+		if (!locked) {
+			/*
+			 * Woken without ->combine: our record was sent, and
+			 * that complete() was the last use of @ps by anyone
+			 * else (no handoff follows a send).
+			 */
+			if (wait_for_completion_timeout(&ps.done,
+					svc_tcp_send_wait_timeout(svsk)) &&
+			    !READ_ONCE(ps.combine))
+				return ps.result;
+			/*
+			 * Handed the combiner role, or the holder is slow
+			 * (or is the rtc FIFO): take the mutex ourselves.
+			 */
+			mutex_lock(mutex);
+		}
+		/* We hold xpt_mutex: @ps is either sent or still queued. */
+		if (!ps.sent)
+			svc_tcp_combine_sends(svsk, SVC_TCP_SEND_BATCH);
+		if (ps.sent)
+			break;
+		/*
+		 * Older records filled the batch.  Hand the role to the
+		 * oldest queued sender (it may be us) and wait our turn.
+		 */
+		svc_tcp_send_handoff(svsk);
+		mutex_unlock(mutex);
+		locked = false;
+	}
+	/*
+	 * Every complete() of @ps.done ran under xpt_mutex before now, and
+	 * none can follow: @ps is off the queue.
+	 */
+	svc_tcp_send_unlock(svsk, budget);
+	return ps.result;
+}
+EXPORT_SYMBOL_IF_KUNIT(__svc_tcp_send);
+
+/**
+ * svc_tcp_send - Send one RPC record on a server TCP connection
+ * @xprt: the connection's transport
+ * @xdr: the message
+ * @marker: its record marker
+ *
+ * For the NFSv4.1 backchannel, whose Calls share the connection with
+ * the server's replies: both go through the same send queue.
+ *
+ * Returns the number of bytes sent, or a negative errno.
+ */
+int svc_tcp_send(struct svc_xprt *xprt, struct xdr_buf *xdr,
+		 rpc_fraghdr marker)
+{
+	return __svc_tcp_send(container_of(xprt, struct svc_sock, sk_xprt),
+			      NULL, xdr, marker);
+}
+EXPORT_SYMBOL_GPL(svc_tcp_send);
+
+static rpc_fraghdr svc_tcp_reply_marker(const struct svc_rqst *rqstp)
+{
+	return cpu_to_be32(RPC_LAST_STREAM_FRAGMENT | (u32)rqstp->rq_res.len);
+}
+
+/**
+ * svc_tcp_sendto - Send out a reply on a TCP socket
+ * @rqstp: completed svc_rqst
+ *
+ * The reply is written to the socket whole, by the xpt_mutex holder
+ * (see svc_tcp_combine_sends()).
+ *
+ * Returns the number of bytes sent, or a negative errno.
+ */
 static int svc_tcp_sendto(struct svc_rqst *rqstp)
 {
 	struct svc_xprt *xprt = rqstp->rq_xprt;
-	int sent;
 
 	svc_tcp_release_ctxt(xprt, rqstp->rq_xprt_ctxt);
 	rqstp->rq_xprt_ctxt = NULL;
-
-	mutex_lock(&xprt->xpt_mutex);
-	sent = __svc_tcp_sendto(rqstp);
-	mutex_unlock(&xprt->xpt_mutex);
-	return sent;
+	return __svc_tcp_send(container_of(xprt, struct svc_sock, sk_xprt),
+			      rqstp, &rqstp->rq_res,
+			      svc_tcp_reply_marker(rqstp));
 }
 
-/* svc_tcp_sendto() for the rtc send FIFO, which holds xpt_mutex. */
+/*
+ * svc_tcp_sendto() for the rtc send FIFO, which holds xpt_mutex and
+ * releases it with svc_tcp_xpo_send_unlock().
+ */
 static int svc_tcp_sendto_locked(struct svc_rqst *rqstp)
 {
-	svc_tcp_release_ctxt(rqstp->rq_xprt, rqstp->rq_xprt_ctxt);
+	struct svc_xprt *xprt = rqstp->rq_xprt;
+
+	svc_tcp_release_ctxt(xprt, rqstp->rq_xprt_ctxt);
 	rqstp->rq_xprt_ctxt = NULL;
-	return __svc_tcp_sendto(rqstp);
+	return svc_tcp_send_record(container_of(xprt, struct svc_sock,
+						sk_xprt),
+				   rqstp, &rqstp->rq_res,
+				   svc_tcp_reply_marker(rqstp));
 }
 
 static struct svc_xprt *svc_tcp_create(struct svc_serv *serv,
@@ -6505,6 +6862,7 @@ static const struct svc_xprt_ops svc_tcp_ops = {
 	.xpo_recvfrom = svc_tcp_recvfrom,
 	.xpo_sendto = svc_tcp_sendto,
 	.xpo_sendto_locked = svc_tcp_sendto_locked,
+	.xpo_send_unlock = svc_tcp_xpo_send_unlock,
 	.xpo_result_payload = svc_sock_result_payload,
 	.xpo_release_ctxt = svc_tcp_release_ctxt,
 	.xpo_release_payload = svc_tcp_release_payload,
@@ -6780,6 +7138,7 @@ static struct svc_sock *svc_setup_socket(struct svc_serv *serv,
 	}
 
 	svsk->sk_maxpages = pages;
+	init_llist_head(&svsk->sk_send_queue);
 
 	inet = sock->sk;
 	if (sock->type == SOCK_STREAM && inet->sk_state != TCP_LISTEN) {
