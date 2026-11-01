@@ -16,7 +16,10 @@ says so. This overrides what the two entries below say about keeping
 the branches in step and about where development is done.
 
 - **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` is the branch to work
-  on**, on hs-gitlab again since 2026-10-22: the `v7.3-7` series was
+  on**, **rebased 2026-11-01 onto `v7.3-10`** (`git rebase --onto
+  v7.3-10 v7.3-7`; the tags are rebuilt, so `v7.3-7` is no ancestor of
+  it, and no conflicts; the tips before are `.pre-rebase-v7.3-10`), on
+  hs-gitlab again since 2026-10-22: the `v7.3-7` series was
   pushed first, on 2026-10-20, under the new name
   `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-v7.3-7` (left at
   `eb1ca139fcb5`, behind it; do not commit there), then Mike pushed it
@@ -426,7 +429,8 @@ docs) before the work is handed back; regroup until it does.
 
 **That rule is suspended on every test host (Mike, 2026-10-07): do not
 worry about regrouping until he asks.** The branch was last regrouped
-on 2026-11-01 and `check-grouping.sh v7.3-7` passed then (the tip before
+on 2026-11-01 and `check-grouping.sh v7.3-10` passes on the rebased
+branch (the tip before the regroup
 is `.pre-regroup`, and `…-code`'s old stage is `…-code.pre-regroup`).
 The same day the code group went from 73 commits to 58 (Mike): ten
 reverted or reverting commits dropped and five folded, with the kernel
