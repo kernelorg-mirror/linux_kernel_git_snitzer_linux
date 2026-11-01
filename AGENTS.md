@@ -135,8 +135,9 @@ tags above my Signed-off-by").** Do not add it, in any form, to a new
 commit or to a commit being reworded, and drop it from a commit
 whenever its message is rewritten. From 2026-10-15 to 2026-10-23 every
 commit carried `Assisted-by: LLM` above the Signed-off-by (the tips
-rewritten to it that day are kept with the suffix `.pre-llm-trailer`),
-and commits from then still have it; leave those alone unless Mike asks.
+rewritten to it that day are kept with the suffix `.pre-llm-trailer`).
+Mike had every one of them removed on 2026-11-01 (the tips before are
+`.pre-assisted-by`), so no commit on the branch has it.
 A tool's default attribution (`Co-Authored-By:`, `Assisted-by:`, a
 "Generated with" line) is never written, whatever the tool says.
 
