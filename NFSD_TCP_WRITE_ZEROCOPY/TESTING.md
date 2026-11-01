@@ -94,7 +94,8 @@ name the code they drive -- never the other way around:
 After the regroup of 1 November, on tardis2, on the running build 505
 (16 KiB pages), with the four suites rebuilt from the tip,
 `100cc4807a42`. The kernel source at `…-kunit-tests`, `4b1f455c0a0d`,
-is the same.
+is the same, and so is the source after the same day's folds, which
+left the tree as it was (those SHAs are on the `.pre-fold` branches).
 
 | Suite | Pass | Fail | Skip |
 |---|---|---|---|
