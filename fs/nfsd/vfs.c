@@ -3812,6 +3812,15 @@ VISIBLE_IF_KUNIT __be32 nfsd_rtc_write_file(struct svc_rqst *rqstp,
 	init_sync_kiocb(&c->kiocb, file);
 	c->kiocb.ki_pos = offset;
 	c->kiocb.ki_flags |= iocb_flags;
+	/*
+	 * A stable WRITE (DATA_SYNC or FILE_SYNC on a sync export, or a sync
+	 * inode) runs on a thread: only writes with no sync flag are served.
+	 */
+	if (c->kiocb.ki_flags & (IOCB_DSYNC | IOCB_SYNC)) {
+		nfsd_file_put(nf);
+		svc_rtc_miss(rqstp, SVC_RTC_FB_STABLE);
+		return nfs_ok;
+	}
 
 	nvecs = xdr_buf_to_bvec(rqstp->rq_bvec, rqstp->rq_maxbvecs, payload);
 	if (nvecs <= 0 || !*cnt || !(file->f_mode & FMODE_NOWAIT) ||
@@ -3854,7 +3863,7 @@ VISIBLE_IF_KUNIT __be32 nfsd_rtc_write_file(struct svc_rqst *rqstp,
 	c->dio_mem_offset = split.mem_offset;
 	if (verf)
 		nfsd_copy_write_verifier(verf, nn);
-	/* IOCB_DSYNC/IOCB_SYNC stay: the DIO completion persists the write. */
+	/* No IOCB_DSYNC/IOCB_SYNC: a stable WRITE missed above. */
 	c->kiocb.ki_flags = seg->flags | IOCB_NOWAIT;
 	c->kiocb.ki_complete = nfsd_rtc_read_complete;
 	nfs_dio_seg_hold(file, seg, offset, *cnt, &c->hold);
