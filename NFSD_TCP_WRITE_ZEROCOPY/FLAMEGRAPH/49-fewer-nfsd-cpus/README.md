@@ -92,7 +92,7 @@ NVMe interrupts are 4.08 to 4.09 a WRITE on all three sides, and IPIs 4.7 to 5.0
 - **Busy time did not fall here either.** mpstat on CPUs 8-55, without iowait: A 3.39 CPUs (3.36 to 3.44), B 3.52 (3.46 to 3.57), C 3.51 (3.43 to 3.58). It is tick-sampled, so it is not a measure of the small differences; it does not show a saving. iowait is 35, 12.4 and 4.5 CPUs, which is only the idle time left to count on each side.
 - **What pseudo-NMI cost, across two boots:** A's nfsd cycles 292.9k to 288.3k without it (-1.6%), ring cycles 130.4k to 128.1k (-1.8%), with instructions unchanged within scatter (nfsd 300.1k to 300.8k, ring 283.2k to 283.1k).
 
-**The region, now on two boots:** B does not raise it (mean 4913 against 4927, 4904 against 4935 before). C's mean is up on both boots, 1.9% and 1.3%, and its highest peak is the highest of each round, 6324 and 6316 against A's 6172 and 6225. Each is small and the sets of peaks overlap, but the same side twice is what was asked of this repeat, and AGENTS.md's rule on the region's footprint counts against C.
+**The region, mean pages in use, 48 CPUs against 8:** without pseudo-NMI (run127) 4927 and 5020, +1.9%; with it (run126) 4935 and 5001, +1.3%. **That does not show that 8 CPUs raises the region.** Each mean is of three runs, and the runs overlap: 5022, 4868, 4891 on 48 CPUs and 5120, 5004, 4937 on 8 without pseudo-NMI; 4906, 4986, 4913 and 5082, 5004, 4916 with it. The rise is inside the scatter, about 93 pages (1.5 MiB). 16 CPUs shows none: 4913 against 4927 and 4904 against 4935.
 
 **Latency (lat.sh, iodepth 1, 1 MiB), A B C C B A:**
 
@@ -104,4 +104,4 @@ NVMe interrupts are 4.08 to 4.09 a WRITE on all three sides, and IPIs 4.7 to 5.0
 
 No worse on fewer CPUs. Over both rounds the rate at iodepth 1 is 7.74 to 8.34 on 48 CPUs, 7.99 to 8.57 on 16, 8.46 to 8.55 on 8: four runs a side, on two boots, with 8 CPUs the steadiest. That may be a real difference for a light load; it was not looked into. Saturation's completion latency is the same on all sides (51.4 to 51.6 ms mean).
 
-**Nothing changed in `settled.sh`:** `NFSD_CPUSET` stays 8-55. B is the one side with nothing against it at one port's load, but what stands for it is about 0.8% of instructions and a threads' saving seen on one profile, and two ports, which carry about 1.5 times the WRITEs, have not been run on it.
+**Decided (Mike, 1 November): running nfsd on 8 or 16 CPUs is a non-starter.** The server has to carry much more load than one client with many threads, so this is not to be taken further, and no two-port run on fewer CPUs is owed. `NFSD_CPUSET` stays 8-55; nothing changed in `settled.sh`.

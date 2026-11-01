@@ -203,8 +203,9 @@ decided.
    not cheaper: 4.08 a WRITE and 27.8k to 26.6k cycles, moved from idle
    CPUs onto threads. Repeated without pseudo-NMI: the same result, 288.3k
    to 261.5k and 242.4k, instructions -0.8% and -1.7%, all nine runs
-   counting, 8 CPUs' region mean up on both boots (1.3%, 1.9%), 16 CPUs'
-   not. Not settled, `NFSD_CPUSET` stays 8-55; two ports are not run.
+   counting, and no region change that stands above the scatter. Decided
+   (Mike, 1 November): a non-starter, the server has to carry much more
+   load than one client. `NFSD_CPUSET` stays 8-55.
 
 ## Where the kept rounds stand (2026-10-28)
 
