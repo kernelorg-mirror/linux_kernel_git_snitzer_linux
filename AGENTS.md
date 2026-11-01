@@ -429,7 +429,15 @@ on 2026-11-01 and `check-grouping.sh v7.3-7` passed then (the tip before
 is `.pre-regroup`, and `…-code`'s old stage is `…-code.pre-regroup`).
 The same day the code group went from 73 commits to 58 (Mike): ten
 reverted or reverting commits dropped and five folded, with the kernel
-source unchanged (the tips before are `.pre-fold`). Still owed:
+source unchanged (the tips before are `.pre-fold`). Then to 60, laid
+out by subsystem (the tips before are `.pre-subsys`): block, fs and
+loop, then core networking and `page_pool`, then SUNRPC, then
+`nfs_common` and NFSD. **The order is what keeps loans safe, so keep
+it:** only NFSD marks a procedure `pc_xdr_bvec`, so nothing is loaned
+until after the budget that bounds loans is in, and the receive path
+needs no switch or other gate before it. `svc_tcp_rx_loan_pages` and
+`svc_tcp_rx_credit_factor` are gone from the whole series, tests
+included. Nothing before the budget commit names a budget. Still owed:
 `svc_tcp_rx_hold_buffer()`'s re-hold writes TCP's `scaling_ratio` and
 `rcv_ssthresh` from sunrpc, and belongs in the TCP helpers beside
 `tcp_sock_set_scaling_ratio_max()`. A
