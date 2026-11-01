@@ -56,7 +56,6 @@
 #include <linux/kvm_para.h>
 #include <linux/delay.h>
 #include <linux/irq_work.h>
-#include <linux/jump_label.h>
 
 #include "workqueue_internal.h"
 
@@ -447,13 +446,6 @@ module_param_named(power_efficient, wq_power_efficient, bool, 0444);
 
 static unsigned int wq_cache_shard_size = 8;
 module_param_named(cache_shard_size, wq_cache_shard_size, uint, 0444);
-
-/*
- * Test knob for pwq_handoff_nr_active(), off by default.  Applied to
- * wq_nna_local_handoff_key by workqueue_init() if set on the command line.
- */
-static bool wq_nna_local_handoff;
-static DEFINE_STATIC_KEY_FALSE(wq_nna_local_handoff_key);
 
 static bool wq_online;			/* can kworkers be created yet? */
 static bool wq_topo_initialized __read_mostly = false;
@@ -2023,35 +2015,6 @@ out_unlock:
  */
 #define WQ_NNA_HANDOFF_BATCH	16
 
-static int wq_nna_local_handoff_set(const char *val,
-				    const struct kernel_param *kp)
-{
-	bool enable;
-	int ret;
-
-	ret = kstrtobool(val, &enable);
-	if (ret)
-		return ret;
-
-	wq_nna_local_handoff = enable;
-	if (!wq_online)
-		return 0;	/* workqueue_init() applies it */
-
-	if (enable)
-		static_branch_enable(&wq_nna_local_handoff_key);
-	else
-		static_branch_disable(&wq_nna_local_handoff_key);
-	return 0;
-}
-
-static const struct kernel_param_ops wq_nna_local_handoff_ops = {
-	.set	= wq_nna_local_handoff_set,
-	.get	= param_get_bool,
-};
-
-module_param_cb(nna_local_handoff, &wq_nna_local_handoff_ops,
-		&wq_nna_local_handoff, 0644);
-
 /**
  * pwq_handoff_nr_active - Hand a retiring nr_active count to @pwq itself
  * @pwq: unbound pool_workqueue retiring an nr_active count
@@ -2144,8 +2107,7 @@ static void pwq_dec_nr_active(struct pool_workqueue *pwq)
 
 	nna = wq_node_nr_active(pwq->wq, pool->node);
 
-	if (static_branch_unlikely(&wq_nna_local_handoff_key) &&
-	    pwq_handoff_nr_active(pwq, nna))
+	if (pwq_handoff_nr_active(pwq, nna))
 		return;
 
 	/*
@@ -8410,9 +8372,6 @@ void __init workqueue_init(void)
 	int cpu, bkt;
 
 	wq_cpu_intensive_thresh_init();
-
-	if (wq_nna_local_handoff)
-		static_branch_enable(&wq_nna_local_handoff_key);
 
 	mutex_lock(&wq_pool_mutex);
 
