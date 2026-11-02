@@ -10,8 +10,8 @@ kprobe:xfs_iget { @op["xfs_iget"] = count(); }
 
 kprobe:nfsd_set_fh_dentry
 {
-	$fh = &((struct svc_fh *)arg5)->fh_handle;
-	$raw = (uint8 *)$fh->fh_raw;
+	/* fh_handle is first in struct svc_fh, fh_raw after an unsigned int. */
+	$raw = (uint8 *)(arg5 + 4);
 	$a = *(uint64 *)($raw + 0);
 	$b = *(uint64 *)($raw + 8);
 	$c = *(uint64 *)($raw + 16);
@@ -20,7 +20,7 @@ kprobe:nfsd_set_fh_dentry
 	     ($c * 0x165667b19e3779f9) ^ ($d * 0x27d4eb2f165667c5);
 
 	@op["set_fh_dentry"] = count();
-	@fh_size = lhist($fh->fh_size, 0, 64, 4);
+	@fh_size = lhist(*(uint32 *)arg5, 0, 64, 4);
 	@handles[$h] = count();
 	@handle_cpus[$h, cpu] = count();
 
