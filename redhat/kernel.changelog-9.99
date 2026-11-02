@@ -1,3 +1,21 @@
+* Mon Nov 02 2026 Mike Snitzer <snitzer@kernel.org> [6.12.114-3]
+- nfs-testing-canary adds "NFS/localio: don't run the release of a
+  failed COMMIT in the submitter", the LOCALIO path to the same
+  writeback deadlock
+- nfs-testing-canary-localio-reprobe adds "NFS/localio: give the
+  LOCALIO probe a short timeout of its own": the new nfs module
+  parameter localio_timeout, in seconds, 10 by default, and 0 for the
+  NFS client's own timeouts
+- Update nfsd-testing to Chuck Lever's rebased cel/nfsd-testing: the
+  same nine commits, cherry-picked again from their new commit IDs,
+  "NFSD: cut a misaligned direct-mode WRITE at folio boundaries" among
+  them as Chuck applied it; his edits are to comments and documentation
+  only
+- nfsd-testing-canary-dontcache is v9 of the series as posted
+  (https://lore.kernel.org/linux-nfs/20261024221152.6965-1-snitzer@kernel.org/),
+  rebased on it, and nfsd-testing-canary-dontcache-LOCALIO is rebased on
+  that
+
 * Sun Oct 25 2026 Mike Snitzer <snitzer@kernel.org> [6.12.114-2]
 - Update nfsd-testing-canary-dontcache to a revised v9 of the series:
   where the file system tracks uptodate per block, as iomap does for
