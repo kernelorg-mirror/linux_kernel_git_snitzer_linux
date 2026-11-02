@@ -15,12 +15,15 @@
 #include <linux/pseudo_fs.h>
 #include <linux/sizes.h>
 #include <linux/bvec.h>
+#include <linux/fs.h>
 #include <linux/highmem.h>
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/nfs3.h>
 #include <linux/nfs_dio.h>
 #include <linux/pagemap.h>
+#include <linux/shmem_fs.h>
 #include <linux/sched/task.h>
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/svc_xprt.h>
@@ -309,6 +312,76 @@ static void nfsd_bvec_decode_error_test(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, decoded);
 }
 
+
+static char *dontcache_dir = "/var/tmp";
+module_param(dontcache_dir, charp, 0444);
+MODULE_PARM_DESC(dontcache_dir,
+		 "directory on a file system with FOP_DONTCACHE, such as XFS");
+
+static struct file *nfsd_bvec_dontcache;
+
+/*
+ * An unnamed file on a file system that does DONTCACHE: the file a WRITE
+ * reaches nfs_dio_split() with, and nothing to clean up however the suite
+ * ends.  Opened here because this runs in the task that loaded the module: a
+ * test case runs in a kthread, which does not see the real root.
+ */
+static int nfsd_bvec_suite_init(struct kunit_suite *suite)
+{
+	nfsd_bvec_dontcache = filp_open(dontcache_dir, O_TMPFILE | O_RDWR, 0600);
+	return 0;
+}
+
+static void nfsd_bvec_suite_exit(struct kunit_suite *suite)
+{
+	if (!IS_ERR(nfsd_bvec_dontcache))
+		fput(nfsd_bvec_dontcache);
+}
+
+/*
+ * The expected splits are written in pages: a file whose smallest folio is
+ * larger would cut its ends elsewhere, which is a test of its own.
+ */
+static void nfsd_bvec_dio_file_check(struct kunit *test, struct file *file)
+{
+	if (mapping_min_folio_nrbytes(file->f_mapping) != PAGE_SIZE)
+		kunit_skip(test, "%s: smallest folio is not a page",
+			   file->f_inode->i_sb->s_id);
+}
+
+static struct file *nfsd_bvec_dontcache_file(struct kunit *test)
+{
+	struct file *file = nfsd_bvec_dontcache;
+
+	if (IS_ERR(file))
+		kunit_skip(test, "O_TMPFILE in %s: %ld", dontcache_dir,
+			   PTR_ERR(file));
+	nfsd_bvec_dio_file_check(test, file);
+	if (!(file->f_op->fop_flags & FOP_DONTCACHE))
+		kunit_skip(test, "%s (%s) does not do DONTCACHE", dontcache_dir,
+			   file->f_inode->i_sb->s_type->name);
+	return file;
+}
+
+static void nfsd_bvec_fput(void *data)
+{
+	fput(data);
+}
+
+/* A file on a file system that does not: tmpfs. */
+static struct file *nfsd_bvec_plain_file(struct kunit *test)
+{
+	struct file *file;
+
+	file = shmem_kernel_file_setup("nfsd_bvec_kunit", 0, EMPTY_VMA_FLAGS);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, file);
+	KUNIT_ASSERT_EQ(test,
+			kunit_add_action_or_reset(test, nfsd_bvec_fput, file),
+			0);
+	nfsd_bvec_dio_file_check(test, file);
+	KUNIT_ASSERT_FALSE(test, file->f_op->fop_flags & FOP_DONTCACHE);
+	return file;
+}
 
 struct nfsd_bvec_dio_case {
 	const char	*name;
@@ -840,28 +913,17 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 			.expected_counts = { PAGE_SIZE - 3000, 2 * PAGE_SIZE },
 		},
 	};
+	struct file *dontcache_file = nfsd_bvec_dontcache_file(test);
+	struct file *plain_file = nfsd_bvec_plain_file(test);
 	unsigned int case_index;
 
 	for (case_index = 0; case_index < ARRAY_SIZE(cases); case_index++) {
 		const struct nfsd_bvec_dio_case *test_case = &cases[case_index];
+		struct file *file = test_case->fop_flags & FOP_DONTCACHE ?
+				    dontcache_file : plain_file;
 		struct nfs_dio_split split = {};
 		struct nfs_dio_seg *segments = split.segs;
 		struct bio_vec bvec[4] = {};
-		/*
-		 * The split consults file->f_op->fop_flags for FOP_DONTCACHE,
-		 * so the file must carry real file_operations.
-		 */
-		const struct file_operations fake_fops = {
-			.fop_flags = test_case->fop_flags,
-		};
-		/* Its size: no test write starts beyond EOF. */
-		static struct inode fake_inode = {
-			.i_size = MAX_LFS_FILESIZE,
-		};
-		struct file fake_file = {
-			.f_inode = &fake_inode,
-			.f_op = &fake_fops,
-		};
 		/*
 		 * The policy nfsd_write_dio_iters_init() hands the split for
 		 * this file with direct_misaligned_min_bytes at two pages, its
@@ -907,7 +969,7 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 		}
 		KUNIT_ASSERT_EQ(test, consumed, test_case->total);
 
-		nfs_dio_split(&fake_file, &policy, ITER_SOURCE, bvec, nvecs,
+		nfs_dio_split(file, &policy, ITER_SOURCE, bvec, nvecs,
 			      test_case->position, total, IOCB_DSYNC, &split);
 		nsegs = split.nsegs;
 		KUNIT_EXPECT_EQ(test, nsegs, test_case->expected_nsegs);
@@ -2421,6 +2483,8 @@ static struct kunit_case nfsd_bvec_test_cases[] = {
 
 static struct kunit_suite nfsd_bvec_test_suite = {
 	.name = "nfsd-receive-bvec",
+	.suite_init = nfsd_bvec_suite_init,
+	.suite_exit = nfsd_bvec_suite_exit,
 	.test_cases = nfsd_bvec_test_cases,
 };
 
