@@ -5,3 +5,5 @@ fentry:sunrpc:xdr_stream_subsegment /args.nbytes & 3/
 {
 	@[args.xdr->buf->page_mode, args.xdr->buf->flags & 8, args.nbytes] = count();
 }
+
+fentry:sunrpc:xdr_stream_subsegment { @all[args.xdr->buf->page_mode, args.nbytes & 3] = count(); }
