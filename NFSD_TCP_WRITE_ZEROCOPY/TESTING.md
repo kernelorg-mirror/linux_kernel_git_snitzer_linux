@@ -302,9 +302,9 @@ body, in order:
    built beside it in the region and ownership tests, moved onto
    `svcsock_rx_connect()`; hand-set `sk_rx` stays only in a test that
    builds a broken case on purpose.
-3. `nfsd4_bvec_kunit.c`: the decode tests build `auth_ops`, a transport,
-   `serv` and `rqstp` by hand, `xpt_net` included. See "Before and after
-   `nfsd4_bvec_kunit`" below.
+3. `nfsd4_bvec_kunit.c`: the decode fixtures are replaced, see "Before
+   and after `nfsd4_bvec_kunit`" below. Its session tests' test transport
+   class is still to be reviewed.
 4. `nfsd_bvec_kunit.c`: the same in its decode tests, sharing what 3
    builds.
 5. Settings saved per test with KUnit cleanup actions. Tests write
@@ -350,14 +350,36 @@ tardis2 down at `boot5` was a fixture rewrite, not an old fixture.
 `struct file` or `nfs_dio` of its own. It passed on 505. With a baseline, a
 failure after the rewrite is the rewrite's, not 506's.
 
-**The fix, after the baseline, whatever it shows.** A real `svc_rqst` and
-transport for the decode and dispatch tests, so that `xpt_net`,
-`rq_server` and `sv_max_payload` stop being set by hand. The svcsock
-suite's helpers are private to its module, so this suite needs its own
-small version, probably a private service with a thread that never
-receives. Use what that fixture taught: the queue holds no reference on a
-transport, an accepted transport needs a module reference and a
-credential, and KUnit frees its resources last in, first out.
+**The fix, made after the baseline (`nfsd: decode on a real service in the
+nfsd4 KUnit suite`).** Each test gets a private service, created in the
+suite's `.init` so that it goes last, with a loopback listener, an accepted
+transport and one thread per request, which never receives. All of the
+suite's `svc_rqst`s are those threads': decode, savemem, payload-shared and
+session cleanup. The fake `svc_serv`, `svc_xprt` and `auth_ops` are gone;
+nothing in nfsd read `rq_authop`.
+
+What a real `svc_rqst` required, and what to suspect first if this suite
+takes the host down:
+
+- A thread owns `rq_argp`, `rq_resp` and `rq_respages` and frees them when
+  it exits, so the fixture uses them and never replaces them; the reply's
+  pages go into `rq_respages`, set up as `svc_process()` does, and the
+  arguments are zeroed as `svc_process_common()` does.
+- `rqstp` no longer sits in the context, so the dispatch observer finds
+  its context through `rq_private`.
+- `svc_exit_thread()` reads `rq_server`, and a session test puts nfsd's
+  `serv` there because SEQUENCE sizes slots by nfsd's thread limit, so
+  `nfsd4_bvec_env_free()` puts each thread's own back before stopping them.
+- As in the svcsock fixture: the queue holds no reference on a transport,
+  an accepted transport takes a module reference and a credential, and the
+  hidden version answers `pg_rpcbind_set`.
+- This build is out of tree, as the suite's source changed. It matches
+  build 506, which was built at `c814cca07975`: no file outside the
+  KUnit suites has changed since.
+
+Left as it was, and not a decode fixture: the session tests' own
+`svc_xprt_class`, on nfsd's real `serv`. Its logs on the host are
+`boot6-nfsd4-real/`, to compare with the baseline in `boot6-nfsd4/`.
 
 **What the trace of `pc_func` found.** `nfsd4_proc_compound()` reads
 `rq_xprt->xpt_net`, `rq_private`, `rq_argp`, `rq_resp` and the encode
