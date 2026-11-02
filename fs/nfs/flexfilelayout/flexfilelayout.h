@@ -63,23 +63,21 @@ struct nfs4_ff_io_stat {
 	ktime_t				aggregate_completion_time;
 };
 
-/* Both members are protected by the enclosing stripe's lock */
-struct nfs4_ff_busy_timer {
-	ktime_t start_time;
-	int ops_in_flight;
-};
-
+/* One direction's statistics for one stripe, with the lock that guards them */
 struct nfs4_ff_layoutstat {
-	struct nfs4_ff_io_stat io_stat;
-	struct nfs4_ff_busy_timer busy_timer;
-};
+	/* Protects every other member of this structure */
+	spinlock_t			lock;
+	int				ops_in_flight;
+	struct nfs4_ff_io_stat		io_stat;
+	/* Start of the interval io_stat.total_busy_time accrues */
+	ktime_t				busy_start_time;
+} ____cacheline_aligned_in_smp;
 
 /* Caller must hold the lock guarding this nfs4_ff_layoutstat. */
 static inline __u64
 nfs4_ff_ops_requested(const struct nfs4_ff_layoutstat *layoutstat)
 {
-	return layoutstat->io_stat.ops_completed +
-	       layoutstat->busy_timer.ops_in_flight;
+	return layoutstat->io_stat.ops_completed + layoutstat->ops_in_flight;
 }
 
 struct nfs4_ff_layout_mirror;
@@ -95,12 +93,10 @@ struct nfs4_ff_layout_ds_stripe {
 	const struct cred __rcu		*ro_cred;
 	const struct cred __rcu		*rw_cred;
 	struct nfs_file_localio		nfl;
-	/* Protects read_stat and write_stat below */
-	spinlock_t			lock ____cacheline_aligned_in_smp;
-	struct nfs4_ff_layoutstat	read_stat;
-	struct nfs4_ff_layoutstat	write_stat;
 	/* Published once by the first I/O; see nfs4_ff_layoutstat_set_start_time() */
 	atomic64_t			start_time;
+	struct nfs4_ff_layoutstat	read_stat;
+	struct nfs4_ff_layoutstat	write_stat;
 };
 
 struct nfs4_ff_layout_mirror {
