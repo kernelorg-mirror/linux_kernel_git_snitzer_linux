@@ -4,7 +4,6 @@
 
 #include <linux/bvec.h>
 #include <linux/cred.h>
-#include <linux/delay.h>
 #include <linux/highmem.h>
 #include <linux/in.h>
 #include <linux/mm.h>
@@ -18,6 +17,7 @@
 #include <net/net_namespace.h>
 
 #include "nfsd.h"
+#include "nfsd_kunit_svc.h"
 #include "nfserr.h"
 #include "state.h"
 #include "xdr4.h"
@@ -127,13 +127,6 @@ struct nfsd4_q35_session_owner {
  * reads another of their fields.  The test case's init makes it, so that it
  * is the last of a test's resources to go.
  */
-struct nfsd4_bvec_env {
-	struct svc_serv		*serv;
-	struct svc_xprt		*listener;
-	struct svc_xprt		*xprt;
-	struct socket		*client;
-};
-
 #define NFSD4_BVEC_TEST_PROGRAM	0x2000f4b4
 #define NFSD4_BVEC_TEST_VERSION	4
 #define NFSD4_BVEC_REPLY_PAGES	3
@@ -159,124 +152,10 @@ static struct svc_program nfsd4_bvec_test_program = {
 	.pg_rpcbind_set = svc_generic_rpcbind_set,
 };
 
-/*
- * A thread for a test to take a request from.  It never receives, so a
- * request stays the test's; it notices that it is to stop by asking.
- */
-static int nfsd4_bvec_thread(void *data)
-{
-	struct svc_rqst *rqstp = data;
-
-	svc_thread_init_status(rqstp, 0);
-	while (!svc_thread_should_stop(rqstp))
-		msleep(1);
-	svc_exit_thread(rqstp);
-	return 0;
-}
-
-static void nfsd4_bvec_env_free(void *data)
-{
-	struct nfsd4_bvec_env *env = data;
-	struct svc_pool *pool = &env->serv->sv_pools[0];
-	struct svc_rqst *rqstp;
-
-	/* A session test's request was on nfsd's service. */
-	list_for_each_entry(rqstp, &pool->sp_all_threads, rq_all)
-		rqstp->rq_server = env->serv;
-	svc_set_num_threads(env->serv, 0, 0);
-	if (env->xprt) {
-		clear_bit(XPT_BUSY, &env->xprt->xpt_flags);
-		svc_xprt_close(env->xprt);
-		sock_release(env->client);
-	}
-	clear_bit(XPT_BUSY, &env->listener->xpt_flags);
-	svc_xprt_destroy_all(env->serv, &init_net, false);
-	svc_destroy(&env->serv);
-}
-
 static int nfsd4_bvec_test_init(struct kunit *test)
 {
-	struct sockaddr_in addr = {
-		.sin_family = AF_INET,
-		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
-	};
-	struct nfsd4_bvec_env *env;
-	struct svc_xprt *queued;
-	struct module *owner;
-	int port, ret;
-
-	env = kunit_kzalloc(test, sizeof(*env), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_NULL(test, env);
-	env->serv = svc_create(&nfsd4_bvec_test_program, PAGE_SIZE * 4,
-			       nfsd4_bvec_thread);
-	KUNIT_ASSERT_NOT_NULL(test, env->serv);
-	port = svc_xprt_create_from_sa(env->serv, "tcp", &init_net,
-				       (struct sockaddr *)&addr,
-				       SVC_SOCK_ANONYMOUS, current_cred());
-	if (port <= 0)
-		svc_destroy(&env->serv);
-	KUNIT_ASSERT_GT(test, port, 0);
-	addr.sin_port = htons(port);
-	env->listener = list_first_entry(&env->serv->sv_permsocks,
-					 struct svc_xprt, xpt_list);
-	/*
-	 * A new listener is queued for its first connection, with no thread
-	 * to take it.  It stays busy, off the queue; the queue held no
-	 * reference on it.
-	 */
-	queued = lwq_dequeue(&env->serv->sv_pools[0].sp_xprts, struct svc_xprt,
-			     xpt_ready);
-	ret = kunit_add_action_or_reset(test, nfsd4_bvec_env_free, env);
-	KUNIT_ASSERT_EQ(test, ret, 0);
-	KUNIT_ASSERT_PTR_EQ(test, queued, env->listener);
-	test->priv = env;
-
-	ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM, IPPROTO_TCP,
-			       &env->client);
-	KUNIT_ASSERT_EQ(test, ret, 0);
-	ret = kernel_connect(env->client, (struct sockaddr_unsized *)&addr,
-			     sizeof(addr), 0);
-	if (ret)
-		sock_release(env->client);
-	KUNIT_ASSERT_EQ(test, ret, 0);
-	/* As svc_handle_xprt() does: freeing the transport drops the module. */
-	owner = env->listener->xpt_class->xcl_owner;
-	__module_get(owner);
-	env->xprt = env->listener->xpt_ops->xpo_accept(env->listener);
-	if (!env->xprt) {
-		module_put(owner);
-		sock_release(env->client);
-	}
-	KUNIT_ASSERT_NOT_NULL(test, env->xprt);
-	env->xprt->xpt_cred = get_cred(env->listener->xpt_cred);
-	clear_bit(XPT_DATA, &env->xprt->xpt_flags);
+	nfsd_kunit_env_init(test, &nfsd4_bvec_test_program);
 	return 0;
-}
-
-/*
- * What svc_authenticate() leaves in rq_authop, which COMPOUND decoding reads
- * through nfsd_read_splice_ok(). sunrpc keeps its own flavors to itself, and
- * no request here is authenticated, so only the flavor is meaningful.
- */
-static struct auth_ops nfsd4_bvec_auth = {
-	.name		= "nfsd4_bvec_kunit",
-	.flavour	= RPC_AUTH_NULL,
-};
-
-/* A thread's request on the transport, as svc_process_common() zeroes it. */
-static struct svc_rqst *nfsd4_bvec_rqst(struct kunit *test)
-{
-	struct nfsd4_bvec_env *env = test->priv;
-	struct svc_pool *pool = &env->serv->sv_pools[0];
-	struct svc_rqst *rqstp;
-
-	KUNIT_ASSERT_EQ(test, svc_new_thread(env->serv, pool), 0);
-	rqstp = list_first_entry(&pool->sp_all_threads, struct svc_rqst, rq_all);
-	rqstp->rq_xprt = env->xprt;
-	rqstp->rq_authop = &nfsd4_bvec_auth;
-	memset(rqstp->rq_argp, 0, sizeof(struct nfsd4_compoundargs));
-	memset(rqstp->rq_resp, 0, sizeof(struct nfsd4_compoundres));
-	return rqstp;
 }
 
 /* A session is nfsd's: SEQUENCE sizes its slots by nfsd's thread limit. */
@@ -529,7 +408,7 @@ nfsd4_q35_session_owner_alloc(struct kunit *test)
 	ret = kunit_add_action_or_reset(test, nfsd4_q35_xprt_release,
 					&xprt->xprt);
 	KUNIT_ASSERT_EQ(test, ret, 0);
-	owner->cleanup_rqst = nfsd4_bvec_rqst(test);
+	owner->cleanup_rqst = nfsd_kunit_rqst(test);
 	nfsd4_q35_rqst_on_session(owner->cleanup_rqst, owner);
 	ret = kunit_add_action_or_reset(test, nfsd4_q35_session_cleanup,
 					owner);
@@ -589,7 +468,7 @@ nfsd4_bvec_decode_context_alloc(struct kunit *test, struct xdr_buf *buf)
 	context = kunit_kzalloc(test, sizeof(*context), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, context);
 	context->test = test;
-	context->rqstp = nfsd4_bvec_rqst(test);
+	context->rqstp = nfsd_kunit_rqst(test);
 	context->args = context->rqstp->rq_argp;
 	scratch = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, scratch);
@@ -1282,7 +1161,7 @@ static void nfsd4_bvec_savemem_lifetime_test(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, scratch);
 	memcpy(direct, expected, sizeof(expected));
 	memcpy(scratch, expected, sizeof(expected));
-	context->rqstp = nfsd4_bvec_rqst(test);
+	context->rqstp = nfsd_kunit_rqst(test);
 	context->args = context->rqstp->rq_argp;
 	context->args->xdr = &context->xdr;
 	context->xdr.scratch.iov_base = scratch;
@@ -2040,7 +1919,7 @@ static void nfsd4_payload_shared_test(struct kunit *test)
 		  { OP_SEQUENCE, OP_PUTFH, OP_WRITE, OP_GETATTR, OP_LOOKUP },
 		  5, 2, true },
 	};
-	struct svc_rqst *rqstp = nfsd4_bvec_rqst(test);
+	struct svc_rqst *rqstp = nfsd_kunit_rqst(test);
 	struct nfsd4_compoundargs *args = rqstp->rq_argp;
 	struct nfsd4_compoundres *resp = rqstp->rq_resp;
 	unsigned int i, j;
