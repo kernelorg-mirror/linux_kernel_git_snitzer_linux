@@ -298,6 +298,19 @@ reconfigured or `xeu` reloaded (192.168.0.105 has mounted over
 `enp164s0f0` before). The first section of `xeu-rig/README.md` has
 where that stands.
 
+**Kdump is armed before anything else on a boot (Mike, 2026-11-02:
+"as part of preliminary bringup, please always ensure that kdump is
+armed").** `xeu-rig/bringup.sh` does it first and stops if it cannot:
+`/sys/kernel/kexec_crash_loaded` must read 1 and the kernel must have
+`crashkernel=`. Check it too on a boot that does not run `bringup.sh`.
+On tardis2 each newly booted kernel needs a real copy in
+`/var/lib/kdump/boot/`, since SELinux denies `kdump_t` a symlink there
+and the service then fails at boot; `bringup.sh` makes the copy.
+A dump in `/var/crash` is named for the clock at boot, which on
+tardis2 reads 10 June until NTP corrects it, so its date says nothing
+and a later dump can collide with it: read `vmcore-dmesg.txt` to see
+what it is, and rename it once read.
+
 **Always run tardis1 in the mode that acts like enterprise storage
 (Mike, 2026-10-12: "seriously: never forget this").** Advertise WCE=0
 to Linux, so the sync to storage is elided, and leave the drives' own

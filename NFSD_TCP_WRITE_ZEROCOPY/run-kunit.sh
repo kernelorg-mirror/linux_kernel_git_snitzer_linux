@@ -7,7 +7,9 @@
 #
 # Needs: the suites installed for $(uname -r) (CONFIG_*_KUNIT_TEST=m; on an
 # RPM kernel they are in kernel[-64k]-modules-internal), nfs-server stopped
-# (nfsd's versions file is busy while it runs).  Leaves the suites unloaded
+# (nfsd's versions file is busy while it runs), and /var/tmp on a file system
+# that does DONTCACHE such as XFS (nfsd_bvec_kunit's dontcache_dir, a skip
+# otherwise, which fails the run).  Leaves the suites unloaded
 # and the server as it found it: every writable sunrpc parameter is saved
 # before the suites and written back after them (the svcsock suite once left
 # svc_tcp_rx_rcvbuf at 0), and nfs-server is started again: where
