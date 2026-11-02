@@ -267,6 +267,37 @@ static void rtc_queue_send_runs_work(struct kunit *test)
 	rtc_fixture_done(test, f);
 }
 
+/*
+ * A pass that starts with a full budget on pending and a reply on sendq
+ * sends the budget, leaves pending empty and sendq non-empty, and must
+ * re-kick itself: the reply on sendq has no other kick coming.
+ */
+static void rtc_send_refill_past_budget_rekicks(struct kunit *test)
+{
+	struct rtc_fixture *f = rtc_fixture_new(test, true);
+	struct rtc_send_set *set = kunit_kzalloc(test, sizeof(*set), GFP_KERNEL);
+	struct svc_rtc_conn *conn = f->xprt.xpt_rtc;
+	int i;
+
+	KUNIT_ASSERT_NOT_NULL(test, set);
+	rtc_send_set_init(set);
+	for (i = 0; i < SVC_RTC_SEND_BUDGET; i++)
+		llist_add(&set->sends[i].send.node, &conn->sendq);
+	conn->pending = llist_reverse_order(llist_del_all(&conn->sendq));
+	/* One kick: the work runs one pass with 8 pending + 1 on sendq. */
+	svc_rtc_queue_send(&f->xprt, &set->sends[SVC_RTC_SEND_BUDGET].send);
+	for (i = 0; i < 4 && set->nlog < SVC_RTC_SEND_BUDGET + 1; i++)
+		flush_work(&conn->work);
+	KUNIT_EXPECT_EQ(test, set->nlog, SVC_RTC_SEND_BUDGET + 1);
+	KUNIT_EXPECT_NULL(test, conn->pending);
+	KUNIT_EXPECT_TRUE(test, llist_empty(&conn->sendq));
+	for (i = 0; i < set->nlog; i++) {
+		KUNIT_EXPECT_EQ(test, set->log[i], i);
+		KUNIT_EXPECT_FALSE(test, set->dead[i]);
+	}
+	rtc_fixture_done(test, f);
+}
+
 /* Work placement: svc_rtc_pick_cpu() and svc_rtc_place(). */
 static int rtc_place_keys[64];
 
@@ -1844,6 +1875,7 @@ static struct kunit_case svc_rtc_test_cases[] = {
 	KUNIT_CASE(rtc_dead_xprt_idle),
 	KUNIT_CASE(rtc_send_fifo_budget),
 	KUNIT_CASE(rtc_queue_send_runs_work),
+	KUNIT_CASE(rtc_send_refill_past_budget_rekicks),
 	KUNIT_CASE(rtc_stop_releases_sends),
 	KUNIT_CASE(rtc_send_after_stop_released),
 	KUNIT_CASE(rtc_register_once),
