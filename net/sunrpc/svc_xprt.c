@@ -1541,8 +1541,14 @@ static void svc_rtc_work(struct work_struct *work)
 	       test_bit(XPT_DEAD, &xprt->xpt_flags);
 	svc_rtc_drain_sends(conn, dead);
 
-	/* Replies left over the send budget go out on the next pass. */
-	if (conn->pending) {
+	/*
+	 * Replies left over the send budget go out on the next pass.  That
+	 * includes replies queued on sendq while this pass sent a full
+	 * budget from pending: svc_rtc_queue_reply() does not kick, and the
+	 * svc_rtc_queue_send() kick that queued them may have been absorbed
+	 * by this pass, so nothing else runs the work for them.
+	 */
+	if (conn->pending || !llist_empty(&conn->sendq)) {
 		svc_rtc_stat_inc(budget_exhausted);
 		svc_rtc_kick(conn);
 	}
