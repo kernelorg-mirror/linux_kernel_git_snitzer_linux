@@ -1,0 +1,64 @@
+#!/usr/bin/env bpftrace
+/*
+ * Round 54: what repeats in fh_verify under load.  A look: its probes cost the
+ * run, and its times are inflated by them.  Runs 8 s.
+ */
+kprobe:nfsd3_proc_write { @op["write"] = count(); }
+kprobe:nfsd3_proc_commit { @op["commit"] = count(); }
+kprobe:__fh_verify { @op["__fh_verify"] = count(); }
+kprobe:xfs_iget { @op["xfs_iget"] = count(); }
+
+kprobe:nfsd_set_fh_dentry
+{
+	$fh = &((struct svc_fh *)arg5)->fh_handle;
+	$raw = (uint8 *)$fh->fh_raw;
+	$a = *(uint64 *)($raw + 0);
+	$b = *(uint64 *)($raw + 8);
+	$c = *(uint64 *)($raw + 16);
+	$d = *(uint64 *)($raw + 24);
+	$h = ($a * 0x9e3779b97f4a7c15) ^ ($b * 0xc2b2ae3d27d4eb4f) ^
+	     ($c * 0x165667b19e3779f9) ^ ($d * 0x27d4eb2f165667c5);
+
+	@op["set_fh_dentry"] = count();
+	@fh_size = lhist($fh->fh_size, 0, 64, 4);
+	@handles[$h] = count();
+	@handle_cpus[$h, cpu] = count();
+
+	@total = count();
+	if (@last_global == $h) { @same["global last"] = count(); }
+	@last_global = $h;
+	if (@last_cpu[cpu] == $h) { @same["this CPU's last"] = count(); }
+	@last_cpu[cpu] = $h;
+	if (@last_tid[tid] == $h) { @same["this thread's last"] = count(); }
+	@last_tid[tid] = $h;
+
+	$seen = @seen[$h, cpu];
+	if ($seen) { @gap_same_cpu_us = hist((nsecs - $seen) / 1000); }
+	@seen[$h, cpu] = nsecs;
+	$any = @seen_any[$h];
+	if ($any) { @gap_any_cpu_us = hist((nsecs - $any) / 1000); }
+	@seen_any[$h] = nsecs;
+
+	@t[tid, 0] = nsecs;
+}
+kretprobe:nfsd_set_fh_dentry /@t[tid, 0]/
+{ @ns["set_fh_dentry"] = avg(nsecs - @t[tid, 0]); delete(@t, (tid, 0)); }
+kprobe:rqst_exp_find { @t[tid, 1] = nsecs; }
+kretprobe:rqst_exp_find /@t[tid, 1]/
+{ @ns["rqst_exp_find"] = avg(nsecs - @t[tid, 1]); delete(@t, (tid, 1)); }
+kprobe:exportfs_decode_fh_raw { @t[tid, 2] = nsecs; }
+kretprobe:exportfs_decode_fh_raw /@t[tid, 2]/
+{ @ns["exportfs_decode_fh_raw"] = avg(nsecs - @t[tid, 2]); delete(@t, (tid, 2)); }
+kprobe:xfs_iget { @t[tid, 3] = nsecs; }
+kretprobe:xfs_iget /@t[tid, 3]/
+{ @ns["xfs_iget"] = avg(nsecs - @t[tid, 3]); delete(@t, (tid, 3)); }
+kprobe:d_obtain_alias { @t[tid, 4] = nsecs; }
+kretprobe:d_obtain_alias /@t[tid, 4]/
+{ @ns["d_obtain_alias"] = avg(nsecs - @t[tid, 4]); delete(@t, (tid, 4)); }
+
+interval:s:8
+{
+	clear(@last_cpu); clear(@last_tid); clear(@seen); clear(@seen_any);
+	clear(@t); clear(@last_global);
+	exit();
+}
