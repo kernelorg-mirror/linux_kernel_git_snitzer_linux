@@ -244,8 +244,12 @@ decided.
    on all 48 CPUs, repeat at chance (6%) by thread or CPU, and the path
    runs at 0.2 to 0.6 IPC with up to 15 times nfsd's refill rate: the cost
    is memory, so a cache of handles is not worth its lifetime problems.
-   Next is `exp_find()`'s reference on the expkey, about 0.35 us by
-   estimate.
+   Then `exp_find()`'s reference on the expkey, `b91623167b04` and
+   `1ffe1b8da005`: every way out of its fast path was checked on the rig,
+   but it saved 0.13 points of nfsd, about 0.11 us, against 0.35 estimated,
+   and the A/B cannot see it. Left at the tip, undecided, with a
+   recommendation to drop it (Mike). Latency stopped at 3 of 8 runs for
+   tardis2's shutdown for four SGL drives and the second port.
 
 ## Where the kept rounds stand (2026-10-28)
 

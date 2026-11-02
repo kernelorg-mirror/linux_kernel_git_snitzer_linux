@@ -82,6 +82,41 @@ So each way out of the fast path has run.
 
 `run142.sh` is the A/B: both sides on the new sunrpc, A the kernel's nfsd, B this one. Latency runs in the same A B B A B A A B, since A B B A alone misled rounds 52 and 53.
 
-## The A/B so far (run142, `t2-r142/`, saved ahead of a shutdown)
+## The A/B and the profile (run142, `t2-r142/`), cut short by a shutdown
 
-Both on sunrpc `1C40775238B884E7ED53863`, A nfsd `3F0C341E86E266D5FDF2ADF`, B `FB4139BC86377896E24C64D`. See `run142.out`. Saved before the profile, in case the machine goes down first. The results follow when they are in.
+Both on sunrpc `1C40775238B884E7ED53863`, A nfsd `3F0C341E86E266D5FDF2ADF`, B `FB4139BC86377896E24C64D`, in the order A B B A B A A B, no kernel warning. Mike needed tardis2 down to add four SGL drives and the second port, so latency stopped after 3 of its 8 runs. `l4-A` was not run: 7 minutes would not fit.
+
+| run | GB/s | rings cycles (instr) | nfsd cycles (instr) | peak | mean in use |
+|---|---|---|---|---|---|
+| 1 A | 40.51 | 127.8k (283.1k) | 281.5k (271.2k) | 6134 | 5024 |
+| 4 A, 5 s at 36 to 38 GB/s | 40.23 | 128.1k (282.6k) | 280.3k (271.1k) | 6183 | 4373 |
+| 6 A | 40.57 | 127.6k (282.5k) | 280.2k (271.2k) | 6215 | 5157 |
+| 7 A, 1 s at 38.3 | 40.43 | 128.3k (283.6k) | 284.0k (275.1k) | 6127 | 4807 |
+| **A mean** | **40.44** | **128.0k (283.0k)** | **281.5k (272.2k)** | **6165** | **4840** |
+| 2 B | 40.58 | 127.7k (282.9k) | 279.1k (270.0k) | 6287 | 5130 |
+| 3 B | 40.52 | 128.4k (283.1k) | 281.5k (271.9k) | 6069 | 4950 |
+| 5 B | 40.57 | 127.8k (283.2k) | 281.5k (270.9k) | 6290 | 5244 |
+| 8 B | 40.51 | 127.8k (283.0k) | 279.0k (271.4k) | 6123 | 5055 |
+| **B mean** | **40.55** | **127.9k (283.1k)** | **280.3k (271.1k)** | **6192** | **5095** |
+
+**The A/B does not show it.** nfsd -1.2k cycles and -1.1k instructions, with the sides overlapping. Most of that is run 7, whose 284.0k and 275.1k stand well above the rest of A, and its one second at 38.3 does not obviously explain them. Without runs 4 and 7, -0.6k cycles and -0.2k instructions, still overlapping. The rate's gain is runs 4 and 7 too. Peak +27 and mean in use +255 are those two runs' low figures on A's side, not a rise; B's 5095 is about A's other two runs' 5090.
+
+**The profile (fl54, on B, against fl53), % of nfsd:**
+
+| | fl53 | fl54 |
+|---|---|---|
+| `rqst_exp_find`, inclusive | 0.93 | 0.80 |
+| `exp_find`, inclusive | 0.88 | 0.72 |
+| `exp_find_key` | 0.40 | gone |
+| `exp_find_rcu`, inclusive | | 0.58 |
+| `sunrpc_cache_peek_rcu`, inclusive | | 0.36 |
+| `nfsd_set_fh_dentry`, inclusive | 2.72 | 2.59 |
+| `fh_verify`, inclusive | 3.25 | 3.13 |
+
+**It works and it is small: 0.13 points of nfsd, about 0.11 us a WRITE, against about 0.35 estimated.** `exp_find_key` is gone, so the slow path is off the hot path, and most of the cost stayed: the two lookups' misses are still there. The export's own `kref` is still written on every request, and the key's line evidently cost less than `cache_check_rcu`'s 0.09 IPC suggested. Those are different builds' profiles, with fl54 taken after a restart.
+
+**Latency, too few to read:** l1-A p50 0.457, l2-B 0.424, l3-B 0.424, the last with a 10.6 ms maximum that is unexplained.
+
+**Not decided (Mike).** The commits, `b91623167b04`, `1ffe1b8da005` and the test `svcsock_cache_peek_test`, remain at the tip. The recommendation is to drop them: a new sunrpc export and about 40 lines of nfsd for 0.13% of nfsd is not worth it, though each way out of the fast path was checked and nothing got worse. If they stay, latency is owed its other runs, and run 4's sort of dip should be kept apart from the comparison.
+
+**A mistake in the cut.** `finish54.sh` took `lat.sh`'s pid with `pgrep -f`, which matched the shell running the pgrep, so it ran on at once, while run142 was itself ending, and the two collided in `swap-sunrpc.sh`. nfsd was left unloaded and off the settled setting. A plain swap and `settled.sh apply` recovered it in under a minute, and the profile was run after that. No figure above comes from that state. `finish54.sh` is kept as it ran.
