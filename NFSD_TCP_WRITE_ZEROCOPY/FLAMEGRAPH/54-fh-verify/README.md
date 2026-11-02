@@ -56,4 +56,14 @@ These are short paths that stall. A refill here is often a line another CPU wrot
 
 It is not a one-liner. `svc_export_lookup()` may allocate on a miss, so the fast path needs a lookup that does not take a reference and does not allocate, in sunrpc's cache and nfsd's export code, falling back to today's path on a miss, an entry not valid or one due for refresh. So it swaps both `sunrpc.ko` and `nfsd.ko`.
 
-Not done yet. `svc_export`'s own reference stays, since the file handle holds it for the whole request.
+`svc_export`'s own reference stays, since the file handle holds it for the whole request.
+
+## The change (Mike, 2 November)
+
+`b91623167b04` adds `sunrpc_cache_peek_rcu()`, which returns only what `cache_check()` would pass with nothing to do: valid, positive, not expired or flushed, not due for a refresh. `1ffe1b8da005` uses it in a new `exp_find_rcu()`, for the key and for the export, and takes a reference on the export alone; anything else takes today's path, including the upcall.
+
+**Why it is safe:** `svc_expkey` is freed by `kfree_rcu()`. A key may have dropped its path by the time it is read, but `svc_export_match()` and `svc_export_hash()` only compare and hash the pointers, and the export found holds that path itself. Skipping `cache_put()` skips its update of `nextcheck`, which `cache_clean()` and `sunrpc_cache_update()` keep too.
+
+Test: `svcsock_cache_peek_test`, with a fake one-bucket cache. `svcsock_kunit` has 56 tests.
+
+`run141.sh` checks it before any A/B: KUnit, two mutants, the paths a second under load (`paths.bt`) with a flush and keys set to expire in 14 s in the window, and an unexport seen by a live mount. So this round swaps `nfsd.ko`: `build-nfsd.sh` needs `KBUILD_EXTRA_SYMBOLS` for the new export.
