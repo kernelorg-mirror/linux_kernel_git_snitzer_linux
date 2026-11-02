@@ -347,10 +347,15 @@ body, in order:
 
    Left: `nfsd4_kunit_serv()` reads `nfsd_serv` without `nfsd_mutex` and
    holds it for the test, so stopping nfsd during the suite is unsafe, and
-   `rq_addr` and `rq_daddr` are still set by hand. The next runs on the
-   real transport are `boot7-session-abort2/`, `boot7-session-lost/`, which
-   skips the cleanup so that the close runs `nfsd4_conn_lost()`,
-   `boot7-session-clean/` and `boot7-all4-session/`, the stock script.
+   `rq_addr` and `rq_daddr` are still set by hand. On the real transport:
+   the forced assertion gave 9 pass, 1 fail and no clients left
+   (`boot7-session-abort2/`). A scratch build that also skipped the cleanup
+   left the client on the server, as it should, and the module still
+   unloaded, which the old transport's module reference would have stopped;
+   stopping nfsd then cleared the client, with no warning
+   (`boot7-session-lost/`). A clean run after them passed 10/10
+   (`boot7-session-clean/`). The next run is `boot7-all4-session/`, the
+   stock script.
 
 4. `nfsd_bvec_kunit.c`: done, the decode and dispatch tests take requests
    from the service in `fs/nfsd/nfsd_kunit_svc.h`, moved there from the
