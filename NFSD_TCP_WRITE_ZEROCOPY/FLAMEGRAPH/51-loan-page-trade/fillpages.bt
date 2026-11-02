@@ -1,0 +1,26 @@
+#!/usr/bin/bpftrace
+/* What svc_fill_pages() still allocates once a parked record trades one page:
+ * by the part of rq_pages it fills, the entries asked for and the single-page
+ * allocations under it. */
+
+fentry:sunrpc:svc_fill_pages
+{
+	$part = args.pages == args.rqstp->rq_pages ? "arg" : "reply";
+	@in[tid] = $part;
+	@fills[$part] = count();
+	@npages[$part] = lhist((uint64)args.npages, 0, 72, 1);
+}
+
+kprobe:__alloc_frozen_pages_noprof /@in[tid] != ""/ { @allocs[@in[tid]] = count(); }
+
+fexit:sunrpc:svc_fill_pages { delete(@in[tid]); }
+
+fentry:sunrpc:svc_tcp_save_pages /args.svsk->sk_datalen/
+{
+	@parks = count();
+	if (args.svsk->sk_pages[0] == 0) { @parks_nothing_waiting = count(); }
+}
+
+fentry:sunrpc:svc_tcp_rx_validate_mixed { @publishes = count(); }
+
+interval:s:8 { clear(@in); exit(); }
