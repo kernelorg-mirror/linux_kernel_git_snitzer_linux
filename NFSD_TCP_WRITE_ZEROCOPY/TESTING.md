@@ -154,6 +154,84 @@ Oops. The console log, init and config are in
 `/var/tmp/zc-run-logs/t2-kunit-guest/`. The guest has no card or drives,
 so the suites ran there and no traffic did.
 
+## KUnit crashes on build 506, tardis2 (2026-11-02)
+
+Read this before loading a KUnit suite on tardis2. KUnit has not finished
+on 506 (`v7.3-10`): the host went down in each of three runs, and **no
+crash has left a dump or an oops, so no cause below is observed.** The
+logs are in `/var/tmp/zc-run-logs/t2-506/`, one directory for each boot.
+
+| Boot | Last sign of life | What was loading | Next kernel started | Dump |
+|---|---|---|---|---|
+| 01:57 test | `sysrq-c` at about 01:57:30 | nothing | about 01:59:15 (1m45) | **saved** |
+| `boot3` | 02:28:43, svcsock 52/52 | `run-kunit.sh`, next `nfsd_bvec_kunit` | about 02:38:38 (9m55) | none |
+| `boot4` | 02:45:18, svcsock 52/52 | the same | about 02:50:11 (4m53) | none |
+| `boot5-xfs-file` | 03:19:38, netconsole `1..1` | rebuilt `svcsock_kunit` | 03:23:23 (3m45) | none |
+
+The next kernel's start is taken from the time `kdump.service` armed,
+less the 27 s it took on the last boot. An earlier crash at about 01:34
+was before kdump was armed and had no KUnit in it. It did not come back
+in five one-port runs (`boot3/hunt-*`), and it is unexplained.
+
+**`boot3` and `boot4`: a NULL `f_mapping`, from reading the code.** The
+base's `0cb2965b6ffb` made `nfs_dio_split()` read `file->f_mapping`, and
+`nfsd_bvec_kunit` used fake files without one; the installed 506
+`nfs_dio.ko` loads through it. The suite ran 7/7 with no skip on `boot5`
+once it used real files (`f325016f531d`, `151e1045af68`), which supports
+this, but no oops of it has been seen.
+
+**`boot5`: the first run of the svcsock suite on a real service.** The
+run started at 03:19:37. `stage1.params.before` was written and no
+`stage1.log` was. The stream in `boot5-xfs-file/netconsole.log` holds
+all of `kunit_test`, then `KTAP version 1` and `1..1` for
+`svcsock_kunit` at 1766.6996 s, and nothing more: no `# Subtest`, no
+test result, no oops.
+
+- The module's suite init only reads variables, and earlier suites
+  printed `# Subtest` about 85 us after that header. So the machine went
+  down at or just after the start of the first test, or the last lines
+  did not get out. The first test's work at that point is the new
+  fixture: `svc_create()`, the listener, `kernel_connect()`,
+  `svc_tcp_accept()`, `svc_new_thread()`.
+- **The stub `proto_ops` is not the cause.** Only the outer-receive tests
+  install it, the first being the sixth case listed, and no case before
+  it reported anything.
+- The same fixture has not completed a run, so the svcsock suite at the
+  tip is expected to take the host down until the cause is found. Do not
+  load it, or run `run-kunit.sh`, on the strength of a build.
+
+**Why nothing was caught.**
+
+- *netconsole cannot carry an oops while kdump is armed.* On this kernel
+  it is `CON_NBCON | CON_NBCON_ATOMIC_UNSAFE`, so it prints from a
+  kthread. arm64's `die()` calls `crash_kexec()` first
+  (`arch/arm64/kernel/traps.c:219`), `panic()` does too
+  (`kernel/panic.c:671`), and the only flush that would use it comes
+  last (`kernel/panic.c:768`). A silent stream does not show that the
+  kernel did not oops. What it does show is when printing stopped.
+- *It would have carried a stall.* A slow death with the printing thread
+  alive would have sent an RCU stall or soft lockup report; none came.
+- *The dump path was proved in one easy case.* `sysrq-c` saved a dump on
+  an idle host. `/var/crash` has no trace of any attempt since, not even
+  a `vmcore-incomplete`, so the crash kernel did not reach the root file
+  system, or did not run. Why is unknown.
+- *The host stayed down longer than a saved dump took,* 3m45 to 9m55
+  against 1m45, where `kernel.panic=10` alone would be quicker than
+  either. That points to a hang ended from outside, or a crash kernel
+  that hung. It is an inference: how the host came back was not recorded.
+  An earlier note here that this was not a hard hang had no better
+  evidence.
+- *Hard lockups are not detected.* `nmi_watchdog` is 0, as the detector
+  needs `irqchip.gicv3_pseudo_nmi=1`, which is not on the command line.
+- *pstore has no backend,* and the journal is not persistent, so a boot
+  leaves only what was written to `/var/tmp` and synced.
+
+**What is in place.** `/etc/sysctl.d/90-kernel-crash.conf` holds the
+panic sysctls across boots. netconsole does not: it was set up by hand
+on `boot5` and is not loaded on this boot. The listener still runs on
+the client (10.20.12.106:6666), appending to
+`/var/tmp/tardis2-netconsole.log`, until that host reboots.
+
 ## Next regression run (handoff, 2026-09-25)
 
 State at hand-off: branch `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
