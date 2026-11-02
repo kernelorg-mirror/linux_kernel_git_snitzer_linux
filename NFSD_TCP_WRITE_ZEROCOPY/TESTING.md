@@ -431,6 +431,11 @@ body, in order:
    path from the rig's mounts, which start at `/mnt/rxr-a1`: `rxr-a0` is
    the client's own disk, and three runs were lost to it.
 
+   With round 53's sunrpc, `svcsock_kunit` has 55 tests: the stock script
+   ran 10/10, 55/55, 7/7 and 10/10 (`t2-r137/kunit.log`), and each of two
+   mutants of the release's check failed `svcsock_rx_release_published_test`
+   alone.
+
 Also brittle, and left as they are for now: the fixture's use of a live
 thread's `rqstp`, `svc_new_thread()` called without a service mutex, and
 transports that stay off `sv_tempsocks`. `nfsd4_bvec_kunit` needs a
