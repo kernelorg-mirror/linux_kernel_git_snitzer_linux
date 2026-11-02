@@ -44,12 +44,7 @@ static int nfsd_kunit_thread(void *data)
 static void nfsd_kunit_env_free(void *data)
 {
 	struct nfsd_kunit_env *env = data;
-	struct svc_pool *pool = &env->serv->sv_pools[0];
-	struct svc_rqst *rqstp;
 
-	/* svc_exit_thread() reads it: a test may have moved a request. */
-	list_for_each_entry(rqstp, &pool->sp_all_threads, rq_all)
-		rqstp->rq_server = env->serv;
 	svc_set_num_threads(env->serv, 0, 0);
 	if (env->xprt) {
 		clear_bit(XPT_BUSY, &env->xprt->xpt_flags);

@@ -61,6 +61,7 @@ static void nfsd4_bvec_init_buf(struct xdr_buf *buf, void *head,
 #define NFSD4_BVEC_MAX_SEGMENTS	8U
 #define NFSD4_Q35_MAX_OPS	6U
 #define NFSD4_Q35_MAX_WIRE	1024U
+#define NFSD4_Q35_MAX_THREADS	4U
 #define NFSD4_Q35_LEGACY_OFFSET	13U
 
 struct nfsd4_bvec_fixture {
@@ -104,7 +105,6 @@ struct nfsd4_q35_page_owner {
 };
 
 struct nfsd4_q35_session_owner {
-	struct svc_serv			*serv;
 	struct svc_rqst			*cleanup_rqst;
 	struct nfsd4_compound_state cleanup_cstate;
 	union nfsd4_op_u		 cleanup_op;
@@ -150,17 +150,6 @@ static int nfsd4_bvec_test_init(struct kunit *test)
 {
 	nfsd_kunit_env_init(test, &nfsd4_bvec_test_program);
 	return 0;
-}
-
-/*
- * A session is nfsd's: SEQUENCE sizes its slots by nfsd's thread limit.  Its
- * connection is the request's transport, on the test's service in the same
- * namespace, so closing that is a connection lost, as it is to a server.
- */
-static void nfsd4_q35_rqst_on_session(struct svc_rqst *rqstp,
-				      struct nfsd4_q35_session_owner *owner)
-{
-	rqstp->rq_server = owner->serv;
 }
 
 static struct nfsd4_bvec_fixture *
@@ -366,15 +355,22 @@ static void nfsd4_q35_session_cleanup(void *data)
 static struct nfsd4_q35_session_owner *
 nfsd4_q35_session_owner_alloc(struct kunit *test)
 {
+	struct nfsd_kunit_env *env = test->priv;
 	struct nfsd4_q35_session_owner *owner;
 	int ret;
 
 	owner = kunit_kzalloc(test, sizeof(*owner), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, owner);
-	owner->serv = nfsd4_kunit_serv(&init_net);
-	KUNIT_ASSERT_NOT_NULL(test, owner->serv);
+	/*
+	 * Sessions live in nfsd's state in the namespace, so nfsd must be up;
+	 * nothing holds it there, so it must not be stopped during the test.
+	 * A session's connection is the request's transport, on the test's
+	 * service, so closing that is a connection lost, as it is to a server.
+	 */
+	KUNIT_ASSERT_NOT_NULL(test, nfsd4_kunit_serv(&init_net));
+	/* SEQUENCE grows a session's slots up to its service's thread limit. */
+	env->serv->sv_pools[0].sp_nrthrmax = NFSD4_Q35_MAX_THREADS;
 	owner->cleanup_rqst = nfsd_kunit_rqst(test);
-	nfsd4_q35_rqst_on_session(owner->cleanup_rqst, owner);
 	ret = kunit_add_action_or_reset(test, nfsd4_q35_session_cleanup,
 					owner);
 	KUNIT_ASSERT_EQ(test, ret, 0);
@@ -395,7 +391,6 @@ nfsd4_q35_session_context_prepare(struct kunit *test,
 	struct sockaddr_in *local = (struct sockaddr_in *)&context->rqstp->rq_daddr;
 	int ret;
 
-	nfsd4_q35_rqst_on_session(context->rqstp, owner);
 	context->rqstp->rq_prot = IPPROTO_TCP;
 	remote->sin_family = AF_INET;
 	remote->sin_port = htons(20549);
