@@ -267,6 +267,226 @@ static void rtc_queue_send_runs_work(struct kunit *test)
 	rtc_fixture_done(test, f);
 }
 
+/* Work placement: svc_rtc_pick_cpu() and svc_rtc_place(). */
+static int rtc_place_keys[64];
+
+static struct cpumask *rtc_mask(struct kunit *test)
+{
+	struct cpumask *m = kunit_kzalloc(test, cpumask_size(), GFP_KERNEL);
+
+	KUNIT_ASSERT_NOT_NULL(test, m);
+	return m;
+}
+
+/* The pick is on the given node, online, never an RX CPU, per key stable. */
+static void rtc_place_pick_node_not_rx(struct kunit *test)
+{
+	struct cpumask *node, *rx, *online;
+	unsigned int i;
+	int cpu;
+
+	if (nr_cpu_ids < 4)
+		kunit_skip(test, "needs four CPU ids");
+	node = rtc_mask(test);
+	rx = rtc_mask(test);
+	online = rtc_mask(test);
+	/* Node {1..n-1}: CPU 1 takes receives, CPU 2 is offline. */
+	for (cpu = 0; cpu < nr_cpu_ids; cpu++) {
+		if (cpu)
+			cpumask_set_cpu(cpu, node);
+		if (cpu != 2)
+			cpumask_set_cpu(cpu, online);
+	}
+	cpumask_set_cpu(1, rx);
+	for (i = 0; i < ARRAY_SIZE(rtc_place_keys); i++) {
+		cpu = svc_rtc_pick_cpu(&rtc_place_keys[i], 1, node, rx, online);
+		KUNIT_EXPECT_TRUE(test, cpumask_test_cpu(cpu, node));
+		KUNIT_EXPECT_TRUE(test, cpumask_test_cpu(cpu, online));
+		KUNIT_EXPECT_FALSE(test, cpumask_test_cpu(cpu, rx));
+		KUNIT_EXPECT_EQ(test, svc_rtc_pick_cpu(&rtc_place_keys[i], 1,
+						       node, rx, online), cpu);
+	}
+}
+
+/* No online non-RX CPU on the node: the receive CPU, as before. */
+static void rtc_place_pick_empty_falls_back(struct kunit *test)
+{
+	struct cpumask *node, *rx, *online;
+	int cpu;
+
+	if (nr_cpu_ids < 4)
+		kunit_skip(test, "needs four CPU ids");
+	node = rtc_mask(test);
+	rx = rtc_mask(test);
+	online = rtc_mask(test);
+	for (cpu = 1; cpu < 4; cpu++)
+		cpumask_set_cpu(cpu, node);
+	cpumask_copy(rx, node);
+	for (cpu = 0; cpu < nr_cpu_ids; cpu++)
+		cpumask_set_cpu(cpu, online);
+	KUNIT_EXPECT_EQ(test, svc_rtc_pick_cpu(&rtc_place_keys[0], 3, node,
+					       rx, online), 3);
+	/* The only non-RX CPUs are offline. */
+	cpumask_clear(rx);
+	cpumask_set_cpu(1, rx);
+	cpumask_clear_cpu(2, online);
+	cpumask_clear_cpu(3, online);
+	KUNIT_EXPECT_EQ(test, svc_rtc_pick_cpu(&rtc_place_keys[0], 1, node,
+					       rx, online), 1);
+}
+
+/* First online CPU and the next two online CPUs on its node, or skip. */
+static int rtc_place_cpus(struct kunit *test, int cpus[3])
+{
+	const struct cpumask *node;
+	int cpu, n = 0;
+
+	cpus[0] = cpumask_first(cpu_online_mask);
+	node = cpumask_of_node(cpu_to_node(cpus[0]));
+	for_each_cpu_and(cpu, node, cpu_online_mask)
+		if (cpu != cpus[0] && n < 2)
+			cpus[++n] = cpu;
+	return n;
+}
+
+/*
+ * On the real topology: placed on the receive node off the RX CPUs,
+ * kept across receives, re-picked once its CPU takes a receive, and the
+ * receive CPU when every CPU of the node takes receives.
+ */
+static void rtc_place_conn_stable(struct kunit *test)
+{
+	struct rtc_fixture *f = rtc_fixture_new(test, true);
+	struct svc_rtc_conn *conn = f->xprt.xpt_rtc;
+	struct svc_serv *serv = &f->serv;
+	int cpus[3], target, i;
+
+	if (rtc_place_cpus(test, cpus) < 2) {
+		rtc_fixture_done(test, f);
+		kunit_skip(test, "needs three online CPUs on one node");
+	}
+	target = svc_rtc_place(serv, conn, cpus[0], true);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(conn->cpu), target);
+	KUNIT_EXPECT_NE(test, target, cpus[0]);
+	KUNIT_EXPECT_EQ(test, cpu_to_node(target), cpu_to_node(cpus[0]));
+	KUNIT_EXPECT_TRUE(test, cpumask_test_cpu(cpus[0], serv->sv_rtc_rxcpus));
+	KUNIT_EXPECT_FALSE(test, cpumask_test_cpu(target, serv->sv_rtc_rxcpus));
+	/* A second RX CPU that is not the target leaves the choice alone. */
+	i = cpus[1] == target ? cpus[2] : cpus[1];
+	KUNIT_EXPECT_EQ(test, svc_rtc_place(serv, conn, i, true), target);
+	for (i = 0; i < 8; i++)
+		KUNIT_EXPECT_EQ(test, svc_rtc_place(serv, conn, cpus[0], true),
+				target);
+
+	/* The target takes a receive: kept there, re-picked from elsewhere. */
+	KUNIT_EXPECT_EQ(test, svc_rtc_place(serv, conn, target, true), target);
+	i = svc_rtc_place(serv, conn, cpus[0], true);
+	KUNIT_EXPECT_NE(test, i, target);
+	KUNIT_EXPECT_EQ(test, cpu_to_node(i), cpu_to_node(cpus[0]));
+	if (i != cpus[0])
+		KUNIT_EXPECT_FALSE(test,
+				   cpumask_test_cpu(i, serv->sv_rtc_rxcpus));
+
+	/* Every CPU of the node takes receives: the receive CPU. */
+	cpumask_or(serv->sv_rtc_rxcpus, serv->sv_rtc_rxcpus,
+		   cpumask_of_node(cpu_to_node(cpus[0])));
+	KUNIT_EXPECT_EQ(test, svc_rtc_place(serv, conn, cpus[1], true), cpus[1]);
+	KUNIT_EXPECT_EQ(test, svc_rtc_place(serv, conn, cpus[1], true), cpus[1]);
+	KUNIT_EXPECT_EQ(test, svc_rtc_place(serv, conn, cpus[0], true), cpus[0]);
+	rtc_fixture_done(test, f);
+}
+
+/*
+ * Enqueues from task context (recvfrom, backlog, write space) run on
+ * the work CPUs: they mark no RX CPU and leave the placement alone.
+ */
+static void rtc_place_task_no_mark(struct kunit *test)
+{
+	struct rtc_fixture *f = rtc_fixture_new(test, true);
+	struct svc_rtc_conn *conn = f->xprt.xpt_rtc;
+	struct svc_serv *serv = &f->serv;
+	int cpus[3], target, i;
+
+	if (rtc_place_cpus(test, cpus) < 2) {
+		rtc_fixture_done(test, f);
+		kunit_skip(test, "needs three online CPUs on one node");
+	}
+	/* Before the first softirq receive: still unplaced. */
+	KUNIT_EXPECT_EQ(test, svc_rtc_place(serv, conn, cpus[1], false), -1);
+	KUNIT_EXPECT_FALSE(test, cpumask_test_cpu(cpus[1], serv->sv_rtc_rxcpus));
+	target = svc_rtc_place(serv, conn, cpus[0], true);
+	KUNIT_EXPECT_NE(test, target, cpus[0]);
+	/* On the work CPU itself and on another non-RX CPU. */
+	i = cpus[1] == target ? cpus[2] : cpus[1];
+	KUNIT_EXPECT_EQ(test, svc_rtc_place(serv, conn, target, false), target);
+	KUNIT_EXPECT_EQ(test, svc_rtc_place(serv, conn, i, false), target);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(conn->cpu), target);
+	KUNIT_EXPECT_FALSE(test, cpumask_test_cpu(target, serv->sv_rtc_rxcpus));
+	KUNIT_EXPECT_FALSE(test, cpumask_test_cpu(i, serv->sv_rtc_rxcpus));
+	/* The next receive from the RX CPU keeps the connection placed. */
+	KUNIT_EXPECT_EQ(test, svc_rtc_place(serv, conn, cpus[0], true), target);
+	rtc_fixture_done(test, f);
+}
+
+struct rtc_cpu_send {
+	struct svc_rtc_send send;
+	int id;
+	int cpu;
+	int *log;
+	int *nlog;
+};
+
+static void rtc_cpu_send_fn(struct svc_xprt *xprt, struct svc_rtc_send *send,
+			    bool dead)
+{
+	struct rtc_cpu_send *t = container_of(send, struct rtc_cpu_send, send);
+
+	t->cpu = raw_smp_processor_id();
+	t->log[(*t->nlog)++] = t->id;
+}
+
+/*
+ * Receives alternate between two RX CPUs while replies queue: every reply
+ * goes out in queue order from the one work item on the placed CPU.
+ */
+static void rtc_place_fifo_rx_moves(struct kunit *test)
+{
+	struct rtc_fixture *f = rtc_fixture_new(test, true);
+	struct svc_rtc_conn *conn = f->xprt.xpt_rtc;
+	struct rtc_cpu_send *s;
+	int log[RTC_NSENDS], nlog = 0, cpus[3], rx[2], target, i;
+
+	if (rtc_place_cpus(test, cpus) < 2) {
+		rtc_fixture_done(test, f);
+		kunit_skip(test, "needs three online CPUs on one node");
+	}
+	s = kunit_kcalloc(test, RTC_NSENDS, sizeof(*s), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, s);
+	for (i = 0; i < RTC_NSENDS; i++) {
+		s[i].send.fn = rtc_cpu_send_fn;
+		s[i].id = i;
+		s[i].cpu = -1;
+		s[i].log = log;
+		s[i].nlog = &nlog;
+	}
+	rx[0] = cpus[0];
+	target = svc_rtc_place(&f->serv, conn, rx[0], true);
+	rx[1] = cpus[1] == target ? cpus[2] : cpus[1];
+	for (i = 0; i < RTC_NSENDS; i++) {
+		KUNIT_EXPECT_EQ(test, svc_rtc_place(&f->serv, conn, rx[i & 1],
+						    true), target);
+		svc_rtc_queue_send(&f->xprt, &s[i].send);
+	}
+	for (i = 0; i < 2 * RTC_NSENDS && READ_ONCE(nlog) < RTC_NSENDS; i++)
+		flush_work(&conn->work);
+	KUNIT_EXPECT_EQ(test, nlog, RTC_NSENDS);
+	for (i = 0; i < RTC_NSENDS; i++) {
+		KUNIT_EXPECT_EQ(test, log[i], i);
+		KUNIT_EXPECT_EQ(test, s[i].cpu, target);
+	}
+	rtc_fixture_done(test, f);
+}
+
 /* Teardown releases queued replies unsent and stops later diversion. */
 static void rtc_stop_releases_sends(struct kunit *test)
 {
@@ -1627,6 +1847,11 @@ static struct kunit_case svc_rtc_test_cases[] = {
 	KUNIT_CASE(rtc_stop_releases_sends),
 	KUNIT_CASE(rtc_send_after_stop_released),
 	KUNIT_CASE(rtc_register_once),
+	KUNIT_CASE(rtc_place_pick_node_not_rx),
+	KUNIT_CASE(rtc_place_pick_empty_falls_back),
+	KUNIT_CASE(rtc_place_conn_stable),
+	KUNIT_CASE(rtc_place_task_no_mark),
+	KUNIT_CASE(rtc_place_fifo_rx_moves),
 	KUNIT_CASE(rtc_e2e_read_reply_identical),
 	KUNIT_CASE(rtc_e2e_other_call_to_thread),
 	KUNIT_CASE(rtc_e2e_auth_to_thread),
