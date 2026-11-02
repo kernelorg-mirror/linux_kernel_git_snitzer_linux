@@ -1,14 +1,7 @@
 #!/usr/bin/bpftrace
-/* Each payload that needs a pad as the server decodes it: page mode 1 is a
- * loaned record, and the flag says its table was not walked again. */
-fentry:sunrpc:xdr_stream_subsegment /args.nbytes & 3/
-{
-	@[args.xdr->buf->page_mode, args.xdr->buf->flags & 8, args.nbytes] = count();
-}
-
-fentry:sunrpc:xdr_stream_subsegment { @all[args.xdr->buf->page_mode, args.nbytes & 3] = count(); }
-
+/* The payloads the server decodes, other than the load's own 1 MiB: page mode
+ * BVECS is a loaned record, and flag 8 says its table was not walked again. */
 fentry:sunrpc:xdr_stream_subsegment /args.nbytes != 1048576/
 {
-	@sizes[args.xdr->buf->page_mode, args.nbytes] = count();
+	@sizes[args.xdr->buf->page_mode, args.xdr->buf->flags & 8, args.nbytes] = count();
 }
