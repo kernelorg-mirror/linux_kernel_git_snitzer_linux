@@ -1,0 +1,8 @@
+19:10:33 kernel 7.3.0-10.hs.506.loanpages_pool.el10.aarch64+16k, A 5D39507E93127A6010C9B8E, B 5DDCC44639FC73AF533513F, nfsd 3F0C341E86E266D5FDF2ADF, xeu CA0931345E46C929B11D01F, region 32768, W0 0
+19:17:07 l1-B: write 8.14 GB/s, 7765 IOPS; completion ms: p50 0.436, p90 0.510, p99 0.561, p99.9 0.627, mean 0.445, max 0.803
+19:23:53 l2-A: write 8.49 GB/s, 8100 IOPS; completion ms: p50 0.420, p90 0.473, p99 0.528, p99.9 0.569, mean 0.428, max 0.966
+19:30:28 l3-A: write 7.87 GB/s, 7501 IOPS; completion ms: p50 0.444, p90 0.522, p99 0.586, p99.9 0.676, mean 0.454, max 0.790
+19:37:14 l4-B: write 8.30 GB/s, 7914 IOPS; completion ms: p50 0.420, p90 0.494, p99 0.561, p99.9 0.635, mean 0.434, max 1.054
+19:37:19 ALL end: settled.sh audit rest: the settled setting; DONE
+rc=0
+

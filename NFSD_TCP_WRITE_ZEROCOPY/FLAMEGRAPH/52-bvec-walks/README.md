@@ -88,7 +88,7 @@ A's means leave run 6 out of the rate, cycles and mean in use, and keep its inst
 | 3 B | 8.00 | 0.453 | 0.578 | 0.457 | 1.057 |
 | 4 A | 8.35 | 0.428 | 0.545 | 0.433 | 0.883 |
 
-B sits at about the top of A here, p50 0.449 against 0.434, inside the 0.420 to 0.457 that rounds 49 to 51 show for one build. Two runs a side cannot say more, and the change takes work out of the path and adds no wait. Run 2's 4.99 ms maximum did not recur. The next latency runs should read this again.
+B sits at about the top of A here, p50 0.449 against 0.434, inside the 0.420 to 0.457 that rounds 49 to 51 show for one build. Two runs a side cannot say more, and the change takes work out of the path and adds no wait. Run 2's 4.99 ms maximum did not recur. Round 53 read it again in both orders: this module's p50 averaged 0.429 over four runs, so the higher figure here was position and scatter.
 
 ## The profile (fl52, on B, against fl51)
 

@@ -231,6 +231,15 @@ decided.
    the rings, rate and region the same; p50 at iodepth 1 0.449 against
    0.434 ms, inside the scatter, to be read again. Payloads with and
    without a pad verified by crc32c through NFSv3 and NFSv4.1.
+22. **Round 53: the table walk at release** (Mike, 2 November;
+   [53-release-walk](53-release-walk/README.md)). Kept, `3ddd62ce0809`:
+   a published record's entries were checked at publish, so the release
+   checks only its counts and bitmaps. A/B, 4 runs a side: nfsd -3.0k
+   instructions (-1.1%), and -1.9k cycles (-0.7%) without one run's
+   one-second dip, no overlap; the rings, rate and region the same.
+   Latency in both orders found that B's higher p50 here and in round
+   52 was the order of the runs. Next is `fh_verify`, starting from a
+   trace.
 
 ## Where the kept rounds stand (2026-10-28)
 
