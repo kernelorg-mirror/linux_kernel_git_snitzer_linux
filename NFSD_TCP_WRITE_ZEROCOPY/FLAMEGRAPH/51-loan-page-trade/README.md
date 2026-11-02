@@ -64,4 +64,8 @@ Latency at iodepth 1, A B B A: p50 0.424, 0.436, 0.424, 0.436 ms, p99 0.545, 0.5
 
 **Kept:** `7ca95cca4c1a` and its tests, for a saving small but clean of the scatter, and for no cost.
 
+## What `svc_fill_pages` still allocates, to run
+
+`run131.sh`, `fillpages.bt`, 8 s in a run on B: the entries each fill asks for, of the arguments and of the reply, and the page allocations under it. Expected: one page a WRITE, the reply's, since the skb holds that page until the send is acknowledged. To be shown.
+
 Copy was not run.
