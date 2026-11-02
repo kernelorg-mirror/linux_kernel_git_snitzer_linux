@@ -308,7 +308,17 @@ int cache_check_rcu(struct cache_detail *detail,
 				refresh_age, age);
 		switch (detail->cache_upcall(detail, h)) {
 		case -EINVAL:
-			rv = try_to_negate_entry(detail, h);
+			/*
+			 * No listener.  Only an entry that is not valid is
+			 * negated.  A valid entry past refresh_age/2 keeps its
+			 * contents and expiry, and the next lookup tries the
+			 * upcall again, so a listener that starts later still
+			 * refreshes it.  try_to_negate_entry() would only
+			 * recheck it under detail->hash_lock, once per lookup,
+			 * until the entry expires.
+			 */
+			if (rv == -EAGAIN)
+				rv = try_to_negate_entry(detail, h);
 			break;
 		case -EAGAIN:
 			cache_fresh_unlocked(h, detail);
