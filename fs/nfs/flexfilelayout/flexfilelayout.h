@@ -95,6 +95,8 @@ struct nfs4_ff_layout_ds_stripe {
 	struct nfs_file_localio		nfl;
 	/* Published once by the first I/O; see nfs4_ff_layoutstat_set_start_time() */
 	atomic64_t			start_time;
+	/* Completed ops, both directions, as of this stripe's last report */
+	__u64				last_reported_ops;
 	struct nfs4_ff_layoutstat	read_stat;
 	struct nfs4_ff_layoutstat	write_stat;
 };
@@ -105,11 +107,8 @@ struct nfs4_ff_layout_mirror {
 	u32				dss_count;
 	struct nfs4_ff_layout_ds_stripe *dss;
 	refcount_t			ref;
-	unsigned long			flags;
 	u32				report_interval;
 };
-
-#define NFS4_FF_MIRROR_STAT_AVAIL	(0)
 
 struct nfs4_ff_layout_segment {
 	struct pnfs_layout_segment	generic_hdr;
