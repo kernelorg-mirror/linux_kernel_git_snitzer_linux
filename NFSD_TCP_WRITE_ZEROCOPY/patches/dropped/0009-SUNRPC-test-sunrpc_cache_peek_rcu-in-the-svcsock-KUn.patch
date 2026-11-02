@@ -1,0 +1,116 @@
+From d119056b09d5af5bd0cc8ddc637e932809f30f9f Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 2 Nov 2026 20:07:32 +0000
+Subject: [PATCH] SUNRPC: test sunrpc_cache_peek_rcu() in the svcsock KUnit
+ suite
+
+It returns only what cache_check() would pass with no upcall, and writes
+no reference to it.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ net/sunrpc/svcsock_kunit.c | 74 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 74 insertions(+)
+
+diff --git a/net/sunrpc/svcsock_kunit.c b/net/sunrpc/svcsock_kunit.c
+index 6c031d33d0da..3bdef530c20c 100644
+--- a/net/sunrpc/svcsock_kunit.c
++++ b/net/sunrpc/svcsock_kunit.c
+@@ -14,6 +14,7 @@
+ #include <net/sock.h>
+ #include <linux/percpu_counter.h>
+ #include <linux/skbuff.h>
++#include <linux/sunrpc/cache.h>
+ #include <linux/sunrpc/msg_prot.h>
+ #include <linux/sunrpc/svc_xprt.h>
+ #include <linux/sunrpc/svcsock.h>
+@@ -3682,6 +3683,78 @@ static void svcsock_rx_release_published_test(struct kunit *test)
+ 	svc_tcp_rx_reset(state);
+ }
+ 
++struct svcsock_cache_item {
++	struct cache_head h;
++	int key;
++};
++
++static int svcsock_cache_match(struct cache_head *a, struct cache_head *b)
++{
++	return container_of(a, struct svcsock_cache_item, h)->key ==
++	       container_of(b, struct svcsock_cache_item, h)->key;
++}
++
++static void svcsock_cache_item_init(struct svcsock_cache_item *item, int key)
++{
++	time64_t now = seconds_since_boot();
++
++	item->key = key;
++	item->h.expiry_time = now + 1800;
++	item->h.last_refresh = now;
++	item->h.flags = BIT(CACHE_VALID);
++	kref_init(&item->h.ref);
++}
++
++/*
++ * sunrpc_cache_peek_rcu() gives only what cache_check() would pass with no
++ * upcall, and writes nothing to it.
++ */
++static void svcsock_cache_peek_test(struct kunit *test)
++{
++	time64_t now = seconds_since_boot();
++	struct hlist_head bucket = HLIST_HEAD_INIT;
++	struct svcsock_cache_item item, key = { .key = 1 }, other = { .key = 2 };
++	struct cache_detail cd = {
++		.hash_size	= 1,
++		.hash_table	= &bucket,
++		.match		= svcsock_cache_match,
++	};
++
++	svcsock_cache_item_init(&item, 1);
++	hlist_add_head_rcu(&item.h.cache_list, &bucket);
++
++	rcu_read_lock();
++	KUNIT_EXPECT_PTR_EQ(test, sunrpc_cache_peek_rcu(&cd, &key.h, 0), &item.h);
++	KUNIT_EXPECT_EQ(test, kref_read(&item.h.ref), 1U);
++	KUNIT_EXPECT_NULL(test, sunrpc_cache_peek_rcu(&cd, &other.h, 0));
++
++	/* An upcall is still to answer. */
++	item.h.flags = 0;
++	KUNIT_EXPECT_NULL(test, sunrpc_cache_peek_rcu(&cd, &key.h, 0));
++
++	/* cache_check() would return -ENOENT. */
++	item.h.flags = BIT(CACHE_VALID) | BIT(CACHE_NEGATIVE);
++	KUNIT_EXPECT_NULL(test, sunrpc_cache_peek_rcu(&cd, &key.h, 0));
++
++	/* Expired, or flushed since it was refreshed. */
++	svcsock_cache_item_init(&item, 1);
++	item.h.expiry_time = now - 1;
++	KUNIT_EXPECT_NULL(test, sunrpc_cache_peek_rcu(&cd, &key.h, 0));
++	svcsock_cache_item_init(&item, 1);
++	cd.flush_time = item.h.last_refresh;
++	KUNIT_EXPECT_NULL(test, sunrpc_cache_peek_rcu(&cd, &key.h, 0));
++	cd.flush_time = 0;
++
++	/* Past half of its life, an upcall is due; just before, it is not. */
++	item.h.last_refresh = now - 1000;
++	item.h.expiry_time = now + 800;
++	KUNIT_EXPECT_NULL(test, sunrpc_cache_peek_rcu(&cd, &key.h, 0));
++	item.h.last_refresh = now - 800;
++	item.h.expiry_time = now + 1000;
++	KUNIT_EXPECT_PTR_EQ(test, sunrpc_cache_peek_rcu(&cd, &key.h, 0), &item.h);
++	rcu_read_unlock();
++}
++
+ static struct kunit_case svcsock_rx_test_cases[] = {
+ 	KUNIT_CASE_PARAM(svcsock_rx_actor_split_test,
+ 			 svcsock_rx_split_gen_params),
+@@ -3727,6 +3800,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
+ 	KUNIT_CASE(svcsock_rx_park_loaned_test),
+ 	KUNIT_CASE(svcsock_rx_park_copied_test),
+ 	KUNIT_CASE(svcsock_rx_release_published_test),
++	KUNIT_CASE(svcsock_cache_peek_test),
+ 	KUNIT_CASE(svcsock_rx_exclusion_table_test),
+ 	KUNIT_CASE(svcsock_rx_materialize_test),
+ 	KUNIT_CASE(svcsock_rx_merge_then_materialize_test),
+-- 
+2.52.0
+

@@ -1,0 +1,86 @@
+From 1ffe1b8da005e8ff5a6a64e9a4c91fb78cbef19b Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 2 Nov 2026 20:05:54 +0000
+Subject: [PATCH] NFSD: Do not take a reference on an export key in exp_find()
+
+exp_find() runs for each request that verifies a file handle. It takes a
+reference on the svc_expkey to hold it across the lookup of the export,
+and drops it right after. That is two atomic writes to a line that every
+other lookup of the entry reads, and all of the CPUs that serve an
+export use the same entry.
+
+Find the key and the export under rcu_read_lock() when both are in
+their caches and need nothing, taking a reference on the export alone,
+and take the existing path otherwise. A key's path is not followed, only
+compared, so it does not matter that the key may be going away.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ fs/nfsd/export.c | 45 ++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 44 insertions(+), 1 deletion(-)
+
+diff --git a/fs/nfsd/export.c b/fs/nfsd/export.c
+index e5a0f1ababe6..d5ec5fcc7eb2 100644
+--- a/fs/nfsd/export.c
++++ b/fs/nfsd/export.c
+@@ -1769,13 +1769,56 @@ exp_rootfh(struct net *net, struct auth_domain *clp, char *name,
+ 	return err;
+ }
+ 
++/*
++ * The usual case: the fsid's key and its export are both in their caches
++ * and need nothing. The key is needed only to find the export, so nothing
++ * writes it, and the CPUs that serve the export keep its cache line shared.
++ * It may be going away, but its path is only compared here, and the export
++ * found holds that path itself.
++ */
++static struct svc_export *exp_find_rcu(struct cache_detail *cd,
++				       struct cache_detail *key_cd,
++				       struct auth_domain *clp, int fsid_type,
++				       u32 *fsidv)
++{
++	struct svc_export *exp = NULL, key;
++	struct svc_expkey ekey;
++	struct cache_head *ch;
++
++	if (!clp)
++		return NULL;
++	ekey.ek_client = clp;
++	ekey.ek_fsidtype = fsid_type;
++	memcpy(ekey.ek_fsid, fsidv, key_len(fsid_type));
++
++	rcu_read_lock();
++	ch = sunrpc_cache_peek_rcu(key_cd, &ekey.h, svc_expkey_hash(&ekey));
++	if (!ch)
++		goto out;
++	key.ex_client = clp;
++	key.ex_path = container_of(ch, struct svc_expkey, h)->ek_path;
++	key.cd = cd;
++	ch = sunrpc_cache_peek_rcu(cd, &key.h, svc_export_hash(&key));
++	if (ch && cache_get_rcu(ch))
++		exp = container_of(ch, struct svc_export, h);
++out:
++	rcu_read_unlock();
++	return exp;
++}
++
+ static struct svc_export *exp_find(struct cache_detail *cd,
+ 				   struct auth_domain *clp, int fsid_type,
+ 				   u32 *fsidv, struct cache_req *reqp)
+ {
+ 	struct svc_export *exp;
+ 	struct nfsd_net *nn = net_generic(cd->net, nfsd_net_id);
+-	struct svc_expkey *ek = exp_find_key(nn->svc_expkey_cache, clp, fsid_type, fsidv, reqp);
++	struct svc_expkey *ek;
++
++	exp = exp_find_rcu(cd, nn->svc_expkey_cache, clp, fsid_type, fsidv);
++	if (exp)
++		return exp;
++
++	ek = exp_find_key(nn->svc_expkey_cache, clp, fsid_type, fsidv, reqp);
+ 	if (IS_ERR(ek))
+ 		return ERR_CAST(ek);
+ 
+-- 
+2.52.0
+
