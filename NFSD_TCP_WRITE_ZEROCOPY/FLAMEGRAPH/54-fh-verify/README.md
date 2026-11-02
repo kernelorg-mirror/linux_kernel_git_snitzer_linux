@@ -13,3 +13,47 @@ No code until these are known:
 3. What does a call cost when no probe is on it? PMU counts per function give IPC and L2 refills, to tell a walk from a miss. Only the walk can be cached away: a line bouncing between CPUs may bounce in the cache too.
 
 `fh.bt` answers 1 and 2, with inflated times, in one loaded run. `perf record` on nfsd's CPUs answers 3 in another, with no probes and no call chains.
+
+**What went wrong first.** run139's `fh.bt` also timed each step with kretprobes. bpftrace 0.26 joins a kprobe and a kretprobe of one function into a session and runs the kprobe's body at both ends, and never the kretprobe's (shown on `do_sys_openat2`, 5 runs of a process, 20 hits for 10 calls). So its counts were doubled, half its handles were a clobbered `arg5`, and its "same as the last" figures could only read 0. `fh-run139-spoiled.txt` is kept for that. run140 is the trace without the timing. run139's `perf record`, a separate load, stands.
+
+## What the trace found (run140, 8 s; run139's PMU)
+
+| of 348052 handle decodes | |
+|---|---|
+| distinct handles | 16, one to a fio file, 21.3k to 22.0k each |
+| CPUs that used each handle | all 48 |
+| same as this thread's last | 6.1% |
+| same as this CPU's last | 6.1% |
+| same as anyone's last | 6.2% |
+| 1 in 16, by chance | 6.25% |
+| a handle's last use on this CPU | typically 4 to 32 ms ago |
+| a handle's last use on any CPU | typically 128 us to 1 ms ago |
+
+**A handle does not repeat where a cheap cache could see it.** Round 13's reuse per thread would hit at chance, 6%. A table of all 16 per CPU would hit every time, but each entry would be about 10 ms cold, and another CPU would have used that file in the last 300 us or so. This is the rig's load: 16 files spread evenly over 48 CPUs. A load with one hot file would repeat far more, and it was not measured.
+
+**The cost is memory, not work.** From `pmu.txt`, with no probes:
+
+| | % of cycles | IPC | L2 refills a thousand instructions |
+|---|---|---|---|
+| all of nfsd's CPUs | 100 | 1.26 | 14.6 |
+| `svc_tcp_rx_append_ref`, for scale | 2.29 | 3.04 | 2.9 |
+| `sunrpc_cache_find_rcu` | 0.56 | 0.69 | 24.6 |
+| `nfsd_set_fh_dentry` | 0.30 | 0.57 | 52.8 |
+| `__radix_tree_lookup` | 0.20 | 0.51 | 68.0 |
+| `lockref_put_return` | 0.19 | 0.27 | 128.1 |
+| `xfs_iget` | 0.17 | 0.39 | 94.9 |
+| `xfs_iget_cache_hit` | 0.12 | 0.18 | 131.3 |
+| `exportfs_decode_fh_raw` | 0.09 | 0.23 | 130.3 |
+| `cache_check_rcu` | 0.05 | 0.09 | 216.0 |
+
+These are short paths that stall. A refill here is often a line another CPU wrote: `dentry` lockrefs, the inode's locks and count, `nfsd_file` refcounts, and the export caches' krefs, all written by whichever of 48 CPUs came last. Refills do not say which, and the PMU cannot tell a bounced line from a cold one here: that is inferred from the gaps above.
+
+## What it means for a fix
+
+**A cache of handles is not worth it on this evidence.** Its table would be cold too, it would have to keep the permission checks, and it would still take `nfsd_file_get()`, one more write to a shared line. The saving would be a fraction of the 2.2 us that can be skipped at all, at the price of holding dentries and exports across unexport and unmount, which upstream would look at hardest. No code was written for it.
+
+**The better target is the export lookup's references.** `exp_find()` takes a reference on the `svc_expkey`, which it holds only across `exp_get_by_name()`. That is 2 atomic writes a call on one of 4 entries from 48 CPUs, and `struct cache_head` keeps the `kref` on the line with `expiry_time`, `last_refresh` and `flags`, which every lookup reads. That fits `cache_check_rcu`'s 0.09 IPC, the lowest of the path. The expkey has nothing to hold it for on the fast path, so its line could go read-mostly: its lookup, about 0.35 us by fl52's `exp_find_key`, is what might come back, an estimate.
+
+It is not a one-liner. `svc_export_lookup()` may allocate on a miss, so the fast path needs a lookup that does not take a reference and does not allocate, in sunrpc's cache and nfsd's export code, falling back to today's path on a miss, an entry not valid or one due for refresh. So it swaps both `sunrpc.ko` and `nfsd.ko`.
+
+Not done yet. `svc_export`'s own reference stays, since the file handle holds it for the whole request.

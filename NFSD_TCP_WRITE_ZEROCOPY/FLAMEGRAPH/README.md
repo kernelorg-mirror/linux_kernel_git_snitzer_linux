@@ -238,8 +238,14 @@ decided.
    instructions (-1.1%), and -1.9k cycles (-0.7%) without one run's
    one-second dip, no overlap; the rings, rate and region the same.
    Latency in both orders found that B's higher p50 here and in round
-   52 was the order of the runs. Next is `fh_verify`, starting from a
-   trace.
+   52 was the order of the runs.
+23. **Round 54: `fh_verify`, the trace** (Mike, 2 November;
+   [54-fh-verify](54-fh-verify/README.md)). No code yet. 16 handles, each
+   on all 48 CPUs, repeat at chance (6%) by thread or CPU, and the path
+   runs at 0.2 to 0.6 IPC with up to 15 times nfsd's refill rate: the cost
+   is memory, so a cache of handles is not worth its lifetime problems.
+   Next is `exp_find()`'s reference on the expkey, about 0.35 us by
+   estimate.
 
 ## Where the kept rounds stand (2026-10-28)
 
