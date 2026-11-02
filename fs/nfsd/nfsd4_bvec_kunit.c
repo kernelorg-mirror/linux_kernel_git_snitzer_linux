@@ -103,13 +103,7 @@ struct nfsd4_q35_page_owner {
 	bool			 held;
 };
 
-struct nfsd4_q35_xprt {
-	struct svc_xprt_class		 xprt_class;
-	struct svc_xprt		 xprt;
-};
-
 struct nfsd4_q35_session_owner {
-	struct nfsd4_q35_xprt		*xprt;
 	struct svc_serv			*serv;
 	struct svc_rqst			*cleanup_rqst;
 	struct nfsd4_compound_state cleanup_cstate;
@@ -158,11 +152,14 @@ static int nfsd4_bvec_test_init(struct kunit *test)
 	return 0;
 }
 
-/* A session is nfsd's: SEQUENCE sizes its slots by nfsd's thread limit. */
+/*
+ * A session is nfsd's: SEQUENCE sizes its slots by nfsd's thread limit.  Its
+ * connection is the request's transport, on the test's service in the same
+ * namespace, so closing that is a connection lost, as it is to a server.
+ */
 static void nfsd4_q35_rqst_on_session(struct svc_rqst *rqstp,
 				      struct nfsd4_q35_session_owner *owner)
 {
-	rqstp->rq_xprt = &owner->xprt->xprt;
 	rqstp->rq_server = owner->serv;
 }
 
@@ -342,23 +339,6 @@ nfsd4_q35_page_owner_release(struct kunit *test,
 				owner->baseline[i]);
 }
 
-static void nfsd4_q35_xprt_free(struct svc_xprt *xprt)
-{
-	struct nfsd4_q35_xprt *owner;
-
-	owner = container_of(xprt, struct nfsd4_q35_xprt, xprt);
-	kfree(owner);
-}
-
-static const struct svc_xprt_ops nfsd4_q35_xprt_ops = {
-	.xpo_free = nfsd4_q35_xprt_free,
-};
-
-static void nfsd4_q35_xprt_release(void *data)
-{
-	svc_xprt_put(data);
-}
-
 static void nfsd4_q35_session_cleanup(void *data)
 {
 	struct nfsd4_q35_session_owner *owner = data;
@@ -387,27 +367,12 @@ static struct nfsd4_q35_session_owner *
 nfsd4_q35_session_owner_alloc(struct kunit *test)
 {
 	struct nfsd4_q35_session_owner *owner;
-	struct nfsd4_q35_xprt *xprt;
 	int ret;
 
 	owner = kunit_kzalloc(test, sizeof(*owner), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, owner);
 	owner->serv = nfsd4_kunit_serv(&init_net);
 	KUNIT_ASSERT_NOT_NULL(test, owner->serv);
-	xprt = kzalloc_obj(*xprt);
-	KUNIT_ASSERT_NOT_NULL(test, xprt);
-	xprt->xprt_class.xcl_name = "q35-session";
-	xprt->xprt_class.xcl_owner = THIS_MODULE;
-	xprt->xprt_class.xcl_ops = &nfsd4_q35_xprt_ops;
-	xprt->xprt_class.xcl_max_payload = PAGE_SIZE * 4;
-	__module_get(THIS_MODULE);
-	svc_xprt_init(&init_net, &xprt->xprt_class, &xprt->xprt,
-		      owner->serv);
-	xprt->xprt.xpt_cred = get_current_cred();
-	owner->xprt = xprt;
-	ret = kunit_add_action_or_reset(test, nfsd4_q35_xprt_release,
-					&xprt->xprt);
-	KUNIT_ASSERT_EQ(test, ret, 0);
 	owner->cleanup_rqst = nfsd_kunit_rqst(test);
 	nfsd4_q35_rqst_on_session(owner->cleanup_rqst, owner);
 	ret = kunit_add_action_or_reset(test, nfsd4_q35_session_cleanup,
