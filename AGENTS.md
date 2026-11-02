@@ -311,6 +311,14 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**KUnit took tardis2 down three times on build 506 (2026-11-02), with
+no dump and no oops: read "KUnit crashes on build 506" in
+`NFSD_TCP_WRITE_ZEROCOPY/TESTING.md` before loading a suite.** The
+svcsock suite at the tip has not completed a run on its real-service
+fixture. Kernel test code runs on the host (Mike: no guest for this),
+so write down what was found and commit before each run: a crash takes
+the session with it.
+
 **Always run tardis1 in the mode that acts like enterprise storage
 (Mike, 2026-10-12: "seriously: never forget this").** Advertise WCE=0
 to Linux, so the sync to storage is elided, and leave the drives' own
