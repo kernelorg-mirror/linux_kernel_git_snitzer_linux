@@ -357,8 +357,21 @@ receives. Use what that fixture taught: the queue holds no reference on a
 transport, an accepted transport needs a module reference and a
 credential, and KUnit frees its resources last in, first out.
 
-**To run it, as `run-kunit.sh` does and alone:** build it out of tree with
-`ccflags-y := -I<tree>/fs/nfsd -I<tree>/fs`, `modprobe kunit enable=1`,
+**What the trace of `pc_func` found.** `nfsd4_proc_compound()` reads
+`rq_xprt->xpt_net`, `rq_private`, `rq_argp`, `rq_resp` and the encode
+stream, all set by the fixture before the call. The op handlers are the
+test's observer, except in the session tests, which run real ops on the
+real `serv`. Against the tip before the `v7.3-10` rebase, the suite's
+source has no difference, and `fs/nfsd`, `net/sunrpc` and the sunrpc headers
+differ only in two KUnit files; that tip passed this suite 10/10 in the
+guest on 1 November. So no missing field was found. This is a reading of
+the paths taken, not of every op a session test reaches.
+
+**To run it, as `run-kunit.sh` does and alone:** use the packaged
+`internal/fs/nfsd/nfsd4_bvec_kunit.ko.xz`, not an out-of-tree build. It
+compiles against nfsd's private headers, so one built from a tree that
+differs from the running `nfsd.ko` would corrupt memory, not fail to
+load. `modprobe kunit enable=1`,
 `modprobe nfsd`, mount `/proc/fs/nfsd`, then 0 threads, `-2 -3 +4 +4.1 +4.2`
 in `versions`, `tcp 2049` in `portlist`, 4 threads, load the module, and
 0 threads after. With `kdump` armed, netconsole up and
