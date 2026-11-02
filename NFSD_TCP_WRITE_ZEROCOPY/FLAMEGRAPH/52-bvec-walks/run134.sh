@@ -10,9 +10,10 @@ client_free || exit 1
 [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ] || exit 1
 ./settled.sh apply > $O/apply.txt 2>&1 || { grep -E 'BAD|FAILED' $O/apply.txt | head; exit 1; }
 side() {
-	timed_load $O/t 6 || exit 1
-	timeout -s INT 22 bpftrace ../FLAMEGRAPH/52-bvec-walks/padded.bt > $O/padded.txt 2>&1 &
-	sleep 4
+	timed_load $O/t 0 || exit 1
+	timeout -s INT 40 bpftrace ../FLAMEGRAPH/52-bvec-walks/padded.bt > $O/padded.txt 2>&1 &
+	for i in $(seq 60); do grep -q Attached $O/padded.txt && break; sleep 1; done
+	echo "$(date +%T) probe attached" >> $O/verify.txt
 	for n in 1000001 1000002 1000003 1048573 1048575 524289 262147 4099; do
 		$SSHC "dd if=/dev/urandom of=/var/tmp/p$n bs=$n count=1 iflag=fullblock status=none && cp /var/tmp/p$n /mnt/rxr-a0/v-p$n && sync /mnt/rxr-a0/v-p$n && echo 3 > /proc/sys/vm/drop_caches && cmp /var/tmp/p$n /mnt/rxr-a0/v-p$n; r=\$?; rm -f /var/tmp/p$n /mnt/rxr-a0/v-p$n; exit \$r" > $O/p$n.out 2>&1
 		echo "$(date +%T) buffered $n, cmp rc=$? $(cut -c1-80 $O/p$n.out)" >> $O/verify.txt
@@ -23,7 +24,7 @@ side() {
 }
 : > $O/verify.txt
 side &
-env FS_A="$FS" FS_B= WARM=10 RUNTIME=25 IODEPTH=1 TAG=t WRITES=64 ./twoport.sh $O/t a > $O/t.log 2>&1; rc=$?
+env FS_A="$FS" FS_B= WARM=10 RUNTIME=40 IODEPTH=1 TAG=t WRITES=64 ./twoport.sh $O/t a > $O/t.log 2>&1; rc=$?
 wait
 echo "rc=$rc $(grep '^total' $O/t.log) | $(grep -o 'admitted [0-9]*, denied [0-9]*' $O/t/summary.txt)"; cat $O/verify.txt; grep -v Attached $O/padded.txt
 ./settled.sh apply > $O/apply-end.txt 2>&1; tail -1 $O/apply-end.txt
