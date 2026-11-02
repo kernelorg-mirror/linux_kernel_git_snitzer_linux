@@ -1156,14 +1156,7 @@ static void nfsd_bvec_dio_disposition_test(struct kunit *test)
 		{ "gap-off-offset-align-no-boundary", NFS_DIO_SEG_BOUNDARY_NONE,
 		  3, { PAGE_SIZE, 512, PAGE_SIZE - 512 }, NFS_DIO_DIRECT },
 	};
-	static const struct file_operations fake_fops;
-	static struct inode fake_inode = {
-		.i_size = MAX_LFS_FILESIZE,
-	};
-	struct file fake_file = {
-		.f_inode = &fake_inode,
-		.f_op = &fake_fops,
-	};
+	struct file *file = nfsd_bvec_plain_file(test);
 	unsigned int case_index;
 
 	for (case_index = 0; case_index < ARRAY_SIZE(cases); case_index++) {
@@ -1187,7 +1180,7 @@ static void nfsd_bvec_dio_disposition_test(struct kunit *test)
 				      cases[case_index].lengths[vector_index], 0);
 		}
 
-		nfs_dio_split(&fake_file, &policy, ITER_SOURCE, bvec,
+		nfs_dio_split(file, &policy, ITER_SOURCE, bvec,
 			      cases[case_index].nvecs, 0, 2 * PAGE_SIZE, 0,
 			      &split);
 		KUNIT_EXPECT_EQ(test, split.disposition,
