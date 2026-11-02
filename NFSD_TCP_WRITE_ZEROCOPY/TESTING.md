@@ -251,10 +251,13 @@ test result, no oops.
   for replacing its decode fixtures: its passing does not make them
   safe, only shows that they still fit this kernel.
 - **Not yet run:** `run-kunit.sh` itself, so the four suites in one
-  pass, and any page size but 16 KiB. The stock script must not be run on
-  506: it `modprobe`s the packaged suites, whose `nfsd_bvec_kunit` has the
-  fake files of `boot3` and `boot4`. The first pass, `boot7-all4/`, is its
-  steps on suites built from `07f1f08e9b78`, by a copy kept with the logs.
+  pass, and any page size but 16 KiB. On 506 the packaged suites in
+  `internal/` are not to be run: their `nfsd_bvec_kunit` has the fake files
+  of `boot3` and `boot4`. So the tip's four are installed in
+  `/lib/modules/$(uname -r)/updates/` (Mike), then `depmod`, and `modprobe`
+  takes them over the packaged ones, so the stock script runs them. Check
+  `modinfo -n` first. Reinstall after any change to a suite. The first pass
+  is `/var/tmp/zc-run-logs/t2-506/boot7-all4/`.
   After a run that warned, use `clear_warn_once` before believing the
   next one.
 
