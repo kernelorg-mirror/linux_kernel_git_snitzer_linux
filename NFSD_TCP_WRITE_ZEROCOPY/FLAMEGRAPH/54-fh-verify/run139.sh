@@ -23,7 +23,7 @@ prep p
 ( timed_load $O/p 10 && perf record -q -C 8-55 -F 1999 -e cycles,instructions,l2d_cache_refill -o $O/pmu.data -- sleep 8 > $O/pmu.out 2>&1 ) &
 load p; rc=$?; wait
 echo "$(date +%T) pmu run rc=$rc: $(grep '^total' $O/p.log | head -1)"
-perf script -i $O/pmu.data -F period,event,sym 2>/dev/null > $O/pmu.script
+perf script -i $O/pmu.data -F ip,sym,period,event 2>/dev/null > $O/pmu.script
 python3 $R/pmu.py $O/pmu.script > $O/pmu.txt
 ./settled.sh apply > $O/apply-end.txt 2>&1 || { grep -E 'BAD|FAILED' $O/apply-end.txt | head; exit 1; }
 echo "$(date +%T) end: $(./settled.sh audit rest 2>&1 | tail -1); warnings $(dmesg | grep -cE 'WARNING:|BUG:|Oops')"

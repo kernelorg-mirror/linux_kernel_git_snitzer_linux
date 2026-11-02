@@ -8,12 +8,15 @@ __d_obtain_alias __d_find_any_alias rqst_exp_find exp_find exp_find_key exp_get_
 sunrpc_cache_lookup_rcu sunrpc_cache_find_rcu cache_check_rcu cache_check full_name_hash
 nfsd_setuser_and_check_port nfsd_setuser lockref_put_return dput iput fh_put
 svc_tcp_rx_append_ref svc_tcp_rx_borrow_segment""".split()
+IDLE = 'default_idle_call cpu_do_idle arch_cpu_idle do_idle cpu_idle_poll'.split()
 c = collections.defaultdict(collections.Counter)
 for l in open(sys.argv[1]):
     f = l.split()
-    if len(f) < 3:
+    if len(f) < 4:
         continue
-    period, ev, sym = f[0], f[1].rstrip(':').split(':')[0], f[2]
+    period, ev, sym = f[0], f[1].rstrip(':').split(':')[0], f[3]
+    if sym in IDLE:
+        continue
     try:
         c[ev][sym] += int(period)
     except ValueError:
