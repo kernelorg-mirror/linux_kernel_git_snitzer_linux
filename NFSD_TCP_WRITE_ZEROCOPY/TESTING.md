@@ -299,8 +299,8 @@ body, in order:
    `svcsock_rx_connect()`; hand-set `sk_rx` stays only in a test that
    builds a broken case on purpose.
 3. `nfsd4_bvec_kunit.c`: the decode tests build `auth_ops`, a transport,
-   `serv` and `rqstp` by hand, `xpt_net` included. Use the real `serv`
-   its session tests already have.
+   `serv` and `rqstp` by hand, `xpt_net` included. See "Before and after
+   `nfsd4_bvec_kunit`" below.
 4. `nfsd_bvec_kunit.c`: the same in its decode tests, sharing what 3
    builds.
 5. Settings saved per test with KUnit cleanup actions. Tests write
@@ -315,6 +315,55 @@ thread's `rqstp`, `svc_new_thread()` called without a service mutex, and
 transports that stay off `sv_tempsocks`. `nfsd4_bvec_kunit` needs a
 started `nfsd_serv`, and `nfsd_bvec_kunit` needs `/var/tmp` on a file
 system with DONTCACHE. `xdr_kunit.c` builds no kernel objects.
+
+### Before and after `nfsd4_bvec_kunit`
+
+**Read this first if tardis2 went down on 2 November after `boot6-xdr`:**
+the next step was a baseline run of this suite, unchanged, on 506. Its
+logs are `boot6-nfsd4/` (`dmesg-live.log`, synced every 0.5 s) and the
+stream in `/var/tmp/tardis2-netconsole.log` on the client, which cannot
+carry an oops while kdump is armed, as above. The suite was the last
+of the four to run, and the riskiest (Mike), so nothing else is lost by
+its crash; the host had nothing else running.
+
+**Why it is the riskiest: the hand-built decode fixtures.**
+`nfsd4_bvec_decode_context_alloc()` zeroes a `svc_serv`, a `svc_xprt` and
+an embedded `svc_rqst` and sets a field or two, and
+`nfsd4_q35_run_dispatch()` passes that `rqstp` to the real `pc_func`, the
+COMPOUND handler, setting `xpt_net` by hand just before. It is the pattern
+of the `xpt_net` crash on tardis1, through much more real code: a field the
+fixture never set is a panic.
+
+**The live `nfsd_serv` is the lesser matter.** It is real, which is the
+direction wanted, and if it is missing `KUNIT_ASSERT_NOT_NULL` fails the
+test without a crash. What it costs is that `run-kunit.sh` starts nfsd by
+hand and the tests run in the real server's `init_net`. The session tests
+also put a test `svc_xprt_class` on that `serv`, which is half fake and
+to be reviewed.
+
+**Why a baseline before a rewrite (Mike agreed, 2 November).** What took
+tardis2 down at `boot5` was a fixture rewrite, not an old fixture.
+`fs/nfsd`, `net/sunrpc` and the sunrpc headers do not change from
+`v7.3-7` to `v7.3-10`, only `nfs_dio` does, and this suite has no
+`struct file` or `nfs_dio` of its own. It passed on 505. With a baseline, a
+failure after the rewrite is the rewrite's, not 506's.
+
+**The fix, after the baseline, whatever it shows.** A real `svc_rqst` and
+transport for the decode and dispatch tests, so that `xpt_net`,
+`rq_server` and `sv_max_payload` stop being set by hand. The svcsock
+suite's helpers are private to its module, so this suite needs its own
+small version, probably a private service with a thread that never
+receives. Use what that fixture taught: the queue holds no reference on a
+transport, an accepted transport needs a module reference and a
+credential, and KUnit frees its resources last in, first out.
+
+**To run it, as `run-kunit.sh` does and alone:** build it out of tree with
+`ccflags-y := -I<tree>/fs/nfsd -I<tree>/fs`, `modprobe kunit enable=1`,
+`modprobe nfsd`, mount `/proc/fs/nfsd`, then 0 threads, `-2 -3 +4 +4.1 +4.2`
+in `versions`, `tcp 2049` in `portlist`, 4 threads, load the module, and
+0 threads after. With `kdump` armed, netconsole up and
+`/sys/kernel/debug/clear_warn_once` written first. `/etc/exports` is
+empty and no client mounts this host.
 
 ## Next regression run (handoff, 2026-09-25)
 
