@@ -354,8 +354,9 @@ body, in order:
    unloaded, which the old transport's module reference would have stopped;
    stopping nfsd then cleared the client, with no warning
    (`boot7-session-lost/`). A clean run after them passed 10/10
-   (`boot7-session-clean/`). The next run is `boot7-all4-session/`, the
-   stock script.
+   (`boot7-session-clean/`). With the other three, by the stock script:
+   7/7, 52/52, 7/7 and 10/10, no skip, no warning, no crash
+   (`boot7-all4-session/`), ending `KUNIT FAIL` only on the 8 rings.
 
 4. `nfsd_bvec_kunit.c`: done, the decode and dispatch tests take requests
    from the service in `fs/nfsd/nfsd_kunit_svc.h`, moved there from the
