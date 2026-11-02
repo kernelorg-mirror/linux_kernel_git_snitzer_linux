@@ -624,9 +624,10 @@ static void rx_loan_hold_raise(struct sock *sk, u8 old_ratio, u32 old_clamp)
  * that never receive a region page keep TCP's own buffer
  * (rx_loan_hold_release()).  TCP sizes a
  * connection's first window from its listener when the SYN arrives and
- * never shrinks a window it has offered, so listeners are held too: a
- * connection that opened with the listener's larger window would overflow
- * the buffer it is held to with its first burst.
+ * never shrinks a window it has offered, so a listener's buffer and ratio
+ * are held too (rx_loan_hold_listen(), no lock or clamp): a connection that
+ * opened with the listener's larger window would overflow the buffer it is
+ * held to with its first burst.
  *
  * Return: 0 once held; -EALREADY, nothing done, when @bytes is 0 or @h is
  * already held; else the window clamp's error, @h held all the same.

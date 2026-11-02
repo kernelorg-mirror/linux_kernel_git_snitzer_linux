@@ -52,6 +52,11 @@
 	KUNIT_EXPECT_LE(test, KUNIT_SUPPRESSED_WARNING_COUNT(), 1)
 #endif
 
+/* The listener and TLS holds, visible to KUnit only (svcsock.c). */
+void svc_tcp_rx_hold_listener(struct svc_sock *svsk);
+void svc_tcp_rx_hold_drop(struct svc_sock *svsk);
+void svc_tcp_rx_hold_conn(struct svc_sock *svsk);
+
 struct svcsock_rx_fixture {
 	struct svc_sock *svsk;
 	struct svc_rqst *rqstp;
@@ -4371,7 +4376,8 @@ static void svcsock_rx_loopback_up(struct kunit *test)
  * TCP sizes a connection's first window from its listener and never
  * shrinks it. From a listener with a large buffer the window is already
  * above what the region clamp allows when the accepted socket is held;
- * from a held listener it opens within the clamp.
+ * from a held listener (its buffer and ratio only) it opens within the
+ * clamp, and the connection, held before its first read, keeps it there.
  */
 static void svcsock_rx_listener_window_test(struct kunit *test)
 {
@@ -4382,14 +4388,14 @@ static void svcsock_rx_listener_window_test(struct kunit *test)
 		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
 	};
 	struct socket *lsock, *csock, *ssock;
-	struct svc_sock *svsk;
+	struct svc_sock *svsk, *child;
 	struct tcp_sock *tp;
 	int held;
 
 	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
 			svcsock_rx_budget_off, NULL), 0);
 	svcsock_rx_loopback_up(test);
-	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
+	svc_tcp_rx_budget_kunit_configure(40, 10, 150);
 	svc_tcp_rx_budget_kunit_rcvbuf(SZ_256K);
 
 	for (held = 0; held < 2; held++) {
@@ -4407,11 +4413,11 @@ static void svcsock_rx_listener_window_test(struct kunit *test)
 			svsk = svcsock_rx_credit_sock(test);
 			svsk->sk_sock = lsock;
 			svsk->sk_sk = lsock->sk;
-			svc_tcp_rx_hold_buffer(svsk);
+			svc_tcp_rx_hold_listener(svsk);
 			KUNIT_ASSERT_TRUE(test, svsk->sk_rx_held);
-			KUNIT_EXPECT_EQ(test, READ_ONCE(tcp_sk(lsock->sk)->window_clamp),
-					(u32)want);
-			KUNIT_EXPECT_EQ(test, tcp_sk(lsock->sk)->scaling_ratio_max,
+			KUNIT_EXPECT_EQ(test, READ_ONCE(lsock->sk->sk_rcvbuf),
+					SZ_256K);
+			KUNIT_EXPECT_LE(test, tcp_sk(lsock->sk)->scaling_ratio,
 					ratio);
 		}
 		KUNIT_ASSERT_EQ(test, kernel_getsockname(lsock,
@@ -4431,13 +4437,108 @@ static void svcsock_rx_listener_window_test(struct kunit *test)
 			KUNIT_EXPECT_GT(test, READ_ONCE(tp->rcv_wnd), (u32)want);
 			continue;
 		}
+		/* svc_tcp_init(): held before its first read. */
+		child = svcsock_rx_credit_sock(test);
+		child->sk_sock = ssock;
+		child->sk_sk = ssock->sk;
+		svc_tcp_rx_hold_conn(child);
+		KUNIT_EXPECT_TRUE(test, child->sk_rx_held);
 		KUNIT_EXPECT_EQ(test, READ_ONCE(ssock->sk->sk_rcvbuf), SZ_256K);
 		KUNIT_EXPECT_TRUE(test, ssock->sk->sk_userlocks & SOCK_RCVBUF_LOCK);
-		/* tcp_init_buffer_space() may trim it to the full space. */
-		KUNIT_EXPECT_LE(test, READ_ONCE(tp->window_clamp), (u32)want);
+		/* Never under two segments (rx_loan_hold_apply()). */
+		KUNIT_EXPECT_LE(test, READ_ONCE(tp->window_clamp),
+				max_t(u32, want, 2 * READ_ONCE(tp->advmss)));
 		KUNIT_EXPECT_LE(test, READ_ONCE(tp->rcv_wnd), (u32)want);
 		KUNIT_EXPECT_LE(test, tp->scaling_ratio, ratio);
 	}
+}
+
+/*
+ * A held listener must leave its connections TCP's own window scale: one
+ * that never lends (a TLS session, svc_tcp_rx_hold_drop()) opens its
+ * window past the hold, up to tcp_rmem, as one from a stock listener
+ * does.  A lock or a window clamp on the listener fixes a small scale at
+ * the SYN that no later release can widen.
+ */
+static void svcsock_rx_listener_wscale_test(struct kunit *test)
+{
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+	};
+	struct socket *lsock, *csock, *ssock;
+	struct svc_sock *svsk, *child;
+	u8 wscale[2];
+	struct tcp_sock *tp;
+	int held;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svcsock_rx_loopback_up(test);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
+	svc_tcp_rx_budget_kunit_rcvbuf(SZ_256K);
+
+	for (held = 0; held < 2; held++) {
+		KUNIT_ASSERT_EQ(test, sock_create_kern(&init_net, AF_INET,
+				SOCK_STREAM, IPPROTO_TCP, &lsock), 0);
+		KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+				svcsock_rx_sock_release, lsock), 0);
+		addr.sin_port = 0;
+		KUNIT_ASSERT_EQ(test, kernel_bind(lsock,
+				(struct sockaddr_unsized *)&addr, sizeof(addr)), 0);
+		KUNIT_ASSERT_EQ(test, kernel_listen(lsock, 1), 0);
+		if (held) {
+			/* svc_tcp_init() of a listener */
+			svsk = svcsock_rx_credit_sock(test);
+			svsk->sk_sock = lsock;
+			svsk->sk_sk = lsock->sk;
+			svc_tcp_rx_hold_listener(svsk);
+			KUNIT_ASSERT_TRUE(test, svsk->sk_rx_held);
+		}
+		KUNIT_ASSERT_EQ(test, kernel_getsockname(lsock,
+				(struct sockaddr *)&addr), (int)sizeof(addr));
+		KUNIT_ASSERT_EQ(test, sock_create_kern(&init_net, AF_INET,
+				SOCK_STREAM, IPPROTO_TCP, &csock), 0);
+		KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+				svcsock_rx_sock_release, csock), 0);
+		KUNIT_ASSERT_EQ(test, kernel_connect(csock,
+				(struct sockaddr_unsized *)&addr, sizeof(addr), 0), 0);
+		KUNIT_ASSERT_EQ(test, kernel_accept(lsock, &ssock, 0), 0);
+		KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+				svcsock_rx_sock_release, ssock), 0);
+		tp = tcp_sk(ssock->sk);
+		wscale[held] = tp->rx_opt.rcv_wscale;
+		if (!held)
+			continue;
+
+		child = svcsock_rx_credit_sock(test);
+		child->sk_sock = ssock;
+		child->sk_sk = ssock->sk;
+		/*
+		 * A budget of 0, with a hold buffer set, lends nothing: TCP's
+		 * own buffer from the start, where a hold would lock it.
+		 */
+		svc_tcp_rx_budget_kunit_default(0, 0);
+		svc_tcp_rx_hold_conn(child);
+		KUNIT_EXPECT_FALSE(test, child->sk_rx_held);
+		KUNIT_EXPECT_FALSE(test,
+				   ssock->sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+
+		/* Held before its first read, then found not to lend (TLS). */
+		svc_tcp_rx_budget_kunit_configure(40, 10, 150);
+		svc_tcp_rx_budget_kunit_rcvbuf(SZ_256K);
+		svc_tcp_rx_hold_conn(child);
+		KUNIT_ASSERT_TRUE(test, child->sk_rx_held);
+		svc_tcp_rx_hold_drop(child);
+		KUNIT_EXPECT_FALSE(test, child->sk_rx_held);
+		KUNIT_EXPECT_FALSE(test,
+				   ssock->sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+		/* Its scale admits a window past the hold, ... */
+		KUNIT_EXPECT_GT(test, (u32)U16_MAX << tp->rx_opt.rcv_wscale,
+				(u32)SZ_256K);
+	}
+	/* ... the one a stock listener's connection negotiates. */
+	KUNIT_EXPECT_EQ(test, wscale[1], wscale[0]);
 }
 
 static void svcsock_rx_capacity_plus_one_test(struct kunit *test)
@@ -8103,6 +8204,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_credit_reserve_oldest_test),
 	KUNIT_CASE(svcsock_rx_window_clamp_test),
 	KUNIT_CASE(svcsock_rx_listener_window_test),
+	KUNIT_CASE(svcsock_rx_listener_wscale_test),
 	KUNIT_CASE(svcsock_rx_hold_buffer_test),
 	KUNIT_CASE(svcsock_rx_hold_again_test),
 	KUNIT_CASE(svcsock_rx_credit_rcvbuf_floor_test),
