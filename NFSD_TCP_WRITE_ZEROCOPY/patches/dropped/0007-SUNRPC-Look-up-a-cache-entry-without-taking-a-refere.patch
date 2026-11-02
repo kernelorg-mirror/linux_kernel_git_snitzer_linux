@@ -1,0 +1,163 @@
+From b91623167b04cf022a21cb52f3d2ddd7c47a18fd Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 2 Nov 2026 20:05:54 +0000
+Subject: [PATCH] SUNRPC: Look up a cache entry without taking a reference
+
+Every lookup in a sunrpc cache takes a reference on the entry it finds.
+struct cache_head keeps that reference on the cache line that holds
+expiry_time, last_refresh and flags, which every lookup reads, so when
+many CPUs use one entry, each lookup writes a line the others are about
+to read.
+
+Add sunrpc_cache_peek_rcu() for a reader that needs an entry only for a
+moment. It returns only what cache_check() would pass with nothing more
+to do, and otherwise NULL, so that the caller takes the usual path for a
+missing entry, an invalid one or one due for a refresh.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ include/linux/sunrpc/cache.h |  3 ++
+ net/sunrpc/cache.c           | 72 ++++++++++++++++++++++++++++--------
+ 2 files changed, 60 insertions(+), 15 deletions(-)
+
+diff --git a/include/linux/sunrpc/cache.h b/include/linux/sunrpc/cache.h
+index 2735c332ddb7..ba3d08759065 100644
+--- a/include/linux/sunrpc/cache.h
++++ b/include/linux/sunrpc/cache.h
+@@ -234,6 +234,9 @@ extern int cache_check_rcu(struct cache_detail *detail,
+ 		       struct cache_head *h, struct cache_req *rqstp);
+ extern int cache_check(struct cache_detail *detail,
+ 		       struct cache_head *h, struct cache_req *rqstp);
++extern struct cache_head *sunrpc_cache_peek_rcu(struct cache_detail *detail,
++						struct cache_head *key,
++						int hash);
+ extern void cache_flush(void);
+ extern void cache_purge(struct cache_detail *detail);
+ #define NEVER (0x7FFFFFFF)
+diff --git a/net/sunrpc/cache.c b/net/sunrpc/cache.c
+index 1bc04109d213..a42fc71ef39b 100644
+--- a/net/sunrpc/cache.c
++++ b/net/sunrpc/cache.c
+@@ -61,28 +61,38 @@ static void cache_init(struct cache_head *h, struct cache_detail *detail)
+ static void cache_fresh_unlocked(struct cache_head *head,
+ 				struct cache_detail *detail);
+ 
+-static struct cache_head *sunrpc_cache_find_rcu(struct cache_detail *detail,
+-						struct cache_head *key,
+-						int hash)
++/* The caller holds rcu_read_lock(). */
++static struct cache_head *__sunrpc_cache_find(struct cache_detail *detail,
++					      struct cache_head *key, int hash)
+ {
+ 	struct hlist_head *head = &detail->hash_table[hash];
+ 	struct cache_head *tmp;
+ 
+-	rcu_read_lock();
+ 	hlist_for_each_entry_rcu(tmp, head, cache_list) {
+ 		if (!detail->match(tmp, key))
+ 			continue;
+ 		if (test_bit(CACHE_VALID, &tmp->flags) &&
+ 		    cache_is_expired(detail, tmp))
+ 			continue;
+-		tmp = cache_get_rcu(tmp);
+-		rcu_read_unlock();
+ 		return tmp;
+ 	}
+-	rcu_read_unlock();
+ 	return NULL;
+ }
+ 
++static struct cache_head *sunrpc_cache_find_rcu(struct cache_detail *detail,
++						struct cache_head *key,
++						int hash)
++{
++	struct cache_head *tmp;
++
++	rcu_read_lock();
++	tmp = __sunrpc_cache_find(detail, key, hash);
++	if (tmp)
++		tmp = cache_get_rcu(tmp);
++	rcu_read_unlock();
++	return tmp;
++}
++
+ static void sunrpc_begin_cache_remove_entry(struct cache_head *ch,
+ 					    struct cache_detail *cd)
+ {
+@@ -286,26 +296,28 @@ static int try_to_negate_entry(struct cache_detail *detail, struct cache_head *h
+ 	return rv;
+ }
+ 
++static bool cache_needs_refresh(const struct cache_head *h)
++{
++	time64_t refresh_age = h->expiry_time - h->last_refresh;
++	time64_t age = seconds_since_boot() - h->last_refresh;
++
++	return h->expiry_time != 0 && age > refresh_age / 2;
++}
++
+ int cache_check_rcu(struct cache_detail *detail,
+ 		    struct cache_head *h, struct cache_req *rqstp)
+ {
+ 	int rv;
+-	time64_t refresh_age, age;
+ 
+ 	/* First decide return status as best we can */
+ 	rv = cache_is_valid(h);
+ 
+ 	/* now see if we want to start an upcall */
+-	refresh_age = (h->expiry_time - h->last_refresh);
+-	age = seconds_since_boot() - h->last_refresh;
+-
+ 	if (rqstp == NULL) {
+ 		if (rv == -EAGAIN)
+ 			rv = -ENOENT;
+-	} else if (rv == -EAGAIN ||
+-		   (h->expiry_time != 0 && age > refresh_age/2)) {
+-		dprintk("RPC:       Want update, refage=%lld, age=%lld\n",
+-				refresh_age, age);
++	} else if (rv == -EAGAIN || cache_needs_refresh(h)) {
++		dprintk("RPC:       Want update\n");
+ 		switch (detail->cache_upcall(detail, h)) {
+ 		case -EINVAL:
+ 			rv = try_to_negate_entry(detail, h);
+@@ -332,6 +344,36 @@ int cache_check_rcu(struct cache_detail *detail,
+ }
+ EXPORT_SYMBOL_GPL(cache_check_rcu);
+ 
++/**
++ * sunrpc_cache_peek_rcu - find a usable cache entry without a reference
++ * @detail: the cache to search
++ * @key: what to match
++ * @hash: @key's hash
++ *
++ * Finds an entry that cache_check() would pass with nothing more to do:
++ * valid, positive and not due for a refresh. Anything else returns NULL, and
++ * the caller takes the usual path, which adds a missing entry and makes the
++ * upcall. An entry's reference shares a cache line with what every lookup
++ * reads, so a reader that needs the entry only briefly can leave that line
++ * shared between CPUs by taking none.
++ *
++ * The caller holds rcu_read_lock() and may use the entry only until it drops
++ * that. A reference the entry's owner held to other objects may have been
++ * dropped already, so they may be compared but not followed.
++ *
++ * Return: the entry, or NULL.
++ */
++struct cache_head *sunrpc_cache_peek_rcu(struct cache_detail *detail,
++					 struct cache_head *key, int hash)
++{
++	struct cache_head *h = __sunrpc_cache_find(detail, key, hash);
++
++	if (!h || cache_is_valid(h) || cache_needs_refresh(h))
++		return NULL;
++	return h;
++}
++EXPORT_SYMBOL_GPL(sunrpc_cache_peek_rcu);
++
+ /*
+  * This is the generic cache management routine for all
+  * the authentication caches.
+-- 
+2.52.0
+
