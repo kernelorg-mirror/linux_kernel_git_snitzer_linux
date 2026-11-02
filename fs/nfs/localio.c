@@ -1094,6 +1094,32 @@ nfs_local_release_commit_data(struct nfsd_file *localio,
 	call_ops->rpc_release(data);
 }
 
+static void nfs_local_commit_release_work(struct work_struct *work)
+{
+	struct nfs_commit_data *data =
+		container_of(work, struct nfs_commit_data, task.u.tk_work);
+
+	data->task.tk_ops->rpc_call_done(&data->task, data);
+	data->task.tk_ops->rpc_release(data);
+}
+
+/*
+ * The release of a COMMIT releases its write requests and, with them, what
+ * may be the last reference to an open context.  The caller may be
+ * writeback, which must not release the context itself, so release from
+ * nfsiod, as the release of an RPC COMMIT is.  The commit's task is not an
+ * RPC task here, so its work item is free.
+ */
+static void nfs_local_commit_release_async(struct nfsd_file *localio,
+					   struct nfs_commit_data *data,
+					   const struct rpc_call_ops *call_ops)
+{
+	nfs_local_file_put(localio);
+	data->task.tk_ops = call_ops;
+	INIT_WORK(&data->task.u.tk_work, nfs_local_commit_release_work);
+	queue_work(nfsiod_workqueue, &data->task.u.tk_work);
+}
+
 static void
 nfs_local_fsync_ctx_free(struct nfs_local_fsync_ctx *ctx)
 {
@@ -1144,7 +1170,7 @@ int nfs_local_commit(struct nfsd_file *localio,
 	ctx = nfs_local_fsync_ctx_alloc(data, localio, GFP_NOIO);
 	if (!ctx) {
 		nfs_local_commit_done(data, -ENOMEM);
-		nfs_local_release_commit_data(localio, data, call_ops);
+		nfs_local_commit_release_async(localio, data, call_ops);
 		return -ENOMEM;
 	}
 
