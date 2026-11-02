@@ -413,6 +413,14 @@ body, in order:
    stock script: 7/7, 52/52, 7/7 and 10/10, no skip, no warning, no crash
    (`boot7-all4-settings/`), ending `KUNIT FAIL` only on the 8 rings.
 
+   Two tests since then, `svcsock_rx_park_loaned_test` and
+   `svcsock_rx_park_copied_test`, for `7ca95cca4c1a` (FLAMEGRAPH round
+   51). With that `sunrpc.ko` in `updates/`, the stock script on 506 ran
+   7/7, 54/54, 7/7 and 10/10, no skip, no warning, no crash, `KUNIT PASS`
+   with the rig up, so the 8 rings are not in it (`t2-r131/kunit.log`). A
+   mutant that trades one page whatever the record copied failed only
+   `park_copied`, on 4 expectations, 53 passing.
+
 Also brittle, and left as they are for now: the fixture's use of a live
 thread's `rqstp`, `svc_new_thread()` called without a service mutex, and
 transports that stay off `sv_tempsocks`. `nfsd4_bvec_kunit` needs a
