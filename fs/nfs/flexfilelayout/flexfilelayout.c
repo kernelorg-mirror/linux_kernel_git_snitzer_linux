@@ -739,32 +739,36 @@ nfs4_ff_layoutstat_set_start_time(struct nfs4_ff_layout_ds_stripe *dss_info,
 		atomic64_try_cmpxchg(&dss_info->start_time, &unset, now);
 }
 
+/* Account for an I/O about to be sent to this stripe. */
+static void
+nfs4_ff_layoutstat_start_io(struct nfs4_ff_layoutstat *layoutstat,
+			    __u64 requested, ktime_t now)
+{
+	lockdep_assert_held(&layoutstat->lock);
+
+	nfs4_ff_start_busy_timer(layoutstat, now);
+	layoutstat->io_stat.bytes_requested += requested;
+}
+
 /*
- * Account for an I/O about to be sent to this stripe, and return true if a
- * LAYOUTSTATS report is due.
+ * Is a LAYOUTSTATS report due?  Called outside the statistics locks, which
+ * protect none of this.  last_report_time is shared by every mirror and
+ * stripe of the layout: the cmpxchg winner reports.
  */
 static bool
-nfs4_ff_layoutstat_start_io(struct nfs4_ff_layout_ds_stripe *dss_info,
-			    struct nfs4_ff_layoutstat *layoutstat,
-			    __u64 requested, ktime_t now)
+nfs4_ff_layoutstat_report_due(struct nfs4_ff_layout_ds_stripe *dss_info,
+			      ktime_t now)
 {
 	struct nfs4_ff_layout_mirror *mirror = dss_info->mirror;
 	struct nfs4_flexfile_layout *ffl = FF_LAYOUT_FROM_HDR(mirror->layout);
 	s64 report_interval = FF_LAYOUTSTATS_REPORT_INTERVAL;
 	s64 last_report;
 
-	lockdep_assert_held(&layoutstat->lock);
-
-	nfs4_ff_start_busy_timer(layoutstat, now);
-	layoutstat->io_stat.bytes_requested += requested;
-
-	nfs4_ff_layoutstat_set_start_time(dss_info, now);
 	if (mirror->report_interval != 0)
 		report_interval = (s64)mirror->report_interval * 1000LL;
 	else if (layoutstats_timer != 0)
 		report_interval = (s64)layoutstats_timer * 1000LL;
 
-	/* Shared by every mirror and stripe: the cmpxchg winner reports. */
 	last_report = atomic64_read(&ffl->last_report_time);
 	if (ktime_to_ms(ktime_sub(now, last_report)) < report_interval)
 		return false;
@@ -774,8 +778,7 @@ nfs4_ff_layoutstat_start_io(struct nfs4_ff_layout_ds_stripe *dss_info,
 
 /* Account for an I/O that has completed on this stripe. */
 static void
-nfs4_ff_layoutstat_end_io(struct nfs4_ff_layout_ds_stripe *dss_info,
-			  struct nfs4_ff_layoutstat *layoutstat,
+nfs4_ff_layoutstat_end_io(struct nfs4_ff_layoutstat *layoutstat,
 			  __u64 requested,
 			  __u64 completed,
 			  ktime_t time_completed,
@@ -809,10 +812,11 @@ nfs4_ff_layout_stat_io_start_read(struct inode *inode,
 	bool report;
 
 	spin_lock(&dss_info->read_stat.lock);
-	report = nfs4_ff_layoutstat_start_io(dss_info, &dss_info->read_stat,
-					     requested, now);
+	nfs4_ff_layoutstat_start_io(&dss_info->read_stat, requested, now);
 	spin_unlock(&dss_info->read_stat.lock);
 
+	nfs4_ff_layoutstat_set_start_time(dss_info, now);
+	report = nfs4_ff_layoutstat_report_due(dss_info, now);
 	if (report)
 		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
 }
@@ -827,7 +831,7 @@ nfs4_ff_layout_stat_io_end_read(struct rpc_task *task,
 	struct nfs4_ff_layout_ds_stripe *dss_info = &mirror->dss[dss_id];
 
 	spin_lock(&dss_info->read_stat.lock);
-	nfs4_ff_layoutstat_end_io(dss_info, &dss_info->read_stat,
+	nfs4_ff_layoutstat_end_io(&dss_info->read_stat,
 				  requested, completed,
 				  ktime_get(), task->tk_start);
 	spin_unlock(&dss_info->read_stat.lock);
@@ -843,10 +847,11 @@ nfs4_ff_layout_stat_io_start_write(struct inode *inode,
 	bool report;
 
 	spin_lock(&dss_info->write_stat.lock);
-	report = nfs4_ff_layoutstat_start_io(dss_info, &dss_info->write_stat,
-					     requested, now);
+	nfs4_ff_layoutstat_start_io(&dss_info->write_stat, requested, now);
 	spin_unlock(&dss_info->write_stat.lock);
 
+	nfs4_ff_layoutstat_set_start_time(dss_info, now);
+	report = nfs4_ff_layoutstat_report_due(dss_info, now);
 	if (report)
 		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
 }
@@ -865,7 +870,7 @@ nfs4_ff_layout_stat_io_end_write(struct rpc_task *task,
 		requested = completed = 0;
 
 	spin_lock(&dss_info->write_stat.lock);
-	nfs4_ff_layoutstat_end_io(dss_info, &dss_info->write_stat,
+	nfs4_ff_layoutstat_end_io(&dss_info->write_stat,
 				  requested, completed,
 				  ktime_get(), task->tk_start);
 	spin_unlock(&dss_info->write_stat.lock);
