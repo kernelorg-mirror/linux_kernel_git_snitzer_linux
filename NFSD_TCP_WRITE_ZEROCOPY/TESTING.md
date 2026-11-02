@@ -221,19 +221,32 @@ test result, no oops.
   skipped the `__module_get()` of `svc_handle_xprt()`, so each test took
   a reference from sunrpc that `svc_xprt_free()` dropped, and a page
   taken from `rq_pages` leaked. All are fixed in "keep to a real
-  service's rules", at the tip after this account, which builds but has
-  not been loaded.
-- **What may still go wrong on the first run.** Page and state ownership
-  at teardown is read, not proved, for all 52 cases: a test that left a
-  loan would warn or worse once its pages are gone. `kernel_accept()` is
-  non-blocking right after the connect, so it could fail an assertion if
-  the handshake's last ACK is still in flight. `sk_maxpages` and
-  `rq_maxpages` are now the requested capacity plus 3, which may fail a
-  test written to the exact figure. The other hand-built `svc_sock`s
-  in the suite are not converted yet.
-- The fixture has still not completed a run. Do not load it, or run
-  `run-kunit.sh`, on the strength of a build: arm kdump, set up
-  netconsole again, and load the suite alone.
+  service's rules".
+- **The suite then ran on the host (`boot6-svcsock*/`, build 506, 16 KiB,
+  module built from the tip, loaded alone with netconsole up and kdump
+  armed).**
+
+  | Run | Result | What it showed |
+  |---|---|---|
+  | `-run1` | 51 pass, 1 skip, 1 WARNING | no crash; teardown left `sk_datalen` set with no record, `svc_tcp_rx_abort_active()` warned; `svcsock_rx_materialize_fault_outer_close_test` skipped, as a service's smallest table is too big for one skb |
+  | `-run2` | 52 pass | after `b9ed59b8aece`, but `WARN_ON_ONCE` had already fired, so its silence means nothing |
+  | `boot6-svcsock` | **52 pass, 0 fail, 0 skip, 0 WARNING** | after `echo 1 > /sys/kernel/debug/clear_warn_once`, which resets modules' once-only warnings as well |
+
+  In each, sunrpc's refcount read 1 after as before, and its writable
+  settings came back unchanged; only the stats counters moved.
+- The three crashes stopped with these fixes, which supports the cause
+  above and does not prove it: the fixes went in together and no oops of
+  the original crash was ever seen.
+- `kernel_accept()` is still non-blocking right after the connect, so it
+  could fail an assertion if the handshake's last ACK is in flight; it
+  did not in these runs. `sk_maxpages` and `rq_maxpages` are the
+  requested capacity plus 3, so a test sized to the old exact figure
+  passes with more room than it was written for.
+- **Not yet run:** `run-kunit.sh` itself, so the four suites in one pass
+  (`nfsd_bvec_kunit` ran 7/7 on its own on `boot5`; `xdr_kunit` and
+  `nfsd4_bvec_kunit` have not run on 506), and any page size but 16 KiB.
+  After a run that warned, use `clear_warn_once` before believing the
+  next one.
 
 **Why nothing was caught.**
 
@@ -276,7 +289,8 @@ object breaks when the code reads a field it lacks, and in a kernel test
 that takes the host down. From searches and the fixtures, not every test
 body, in order:
 
-1. Run the svcsock fixture to the end, on its own, as above.
+1. `run-kunit.sh`, all four suites in one pass, as they have not yet run
+   on 506.
 2. `svcsock_kunit.c`: the credit helper's zeroed `svc_sock`, and those
    built beside it in the region and ownership tests, moved onto
    `svcsock_rx_connect()`; hand-set `sk_rx` stays only in a test that

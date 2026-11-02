@@ -314,8 +314,9 @@ what it is, and rename it once read.
 **KUnit took tardis2 down three times on build 506 (2026-11-02), with
 no dump and no oops: read "KUnit crashes on build 506" in
 `NFSD_TCP_WRITE_ZEROCOPY/TESTING.md` before loading a suite.** The
-svcsock suite at the tip has not completed a run on its real-service
-fixture. Kernel test code runs on the host (Mike: no guest for this),
+svcsock suite at the tip has since run 52/52 alone on its real-service
+fixture; the four together have not, and why kdump saved nothing is
+still open. Kernel test code runs on the host (Mike: no guest for this),
 so write down what was found and commit before each run: a crash takes
 the session with it.
 
