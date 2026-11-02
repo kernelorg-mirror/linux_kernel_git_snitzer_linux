@@ -321,8 +321,10 @@ body, in order:
    reads `sv_stats`, NULL here, and `rq_argp` and `rq_resp` too, which the
    test now uses instead of replacing. Alone on 506 it ran 7/7, no skip, no
    warning, sunrpc's refcount and settings unchanged
-   (`boot7-nfsd-bvec-real/`). The next run is `boot7-all4-real/`, the stock
-   script.
+   (`boot7-nfsd-bvec-real/`). With the other three, by the stock script, it
+   ran 7/7, 52/52, 7/7 and 10/10, no skip, no warning, no crash
+   (`boot7-all4-real/`), the script ending `KUNIT FAIL` only on the 8 rings,
+   as in `boot7-all4/`.
 5. Settings saved per test with KUnit cleanup actions. Tests write
    `svc_tcp_rx_copy_below`, the budgets, the `svc_tcp_rx_loans` key and
    fault injection in `init_net`, which now reach a real transport's
