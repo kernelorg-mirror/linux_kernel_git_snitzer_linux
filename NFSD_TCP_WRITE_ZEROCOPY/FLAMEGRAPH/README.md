@@ -220,7 +220,17 @@ decided.
    1 us of the 2.3 us round 50 expected: `svc_fill_pages` did not fall,
    since what it allocates now is the reply's page, 1.2 a WRITE, none for
    the arguments. Next is round 50's second target, the repeated bvec
-   walks, which needs a new kernel.
+   walks.
+21. **Round 52: the repeated walks of a bvec table** (Mike, 2 November;
+   [52-bvec-walks](52-bvec-walks/README.md)). Kept, `e3c7a5faa02f` and
+   `1eac016ea851`: a table checked at publish is not walked again, and a
+   payload that reaches the end of the pages is neither counted nor
+   stepped through. It needed no new kernel after all: a bit in
+   `xdr_buf.flags` changes no layout. A/B, 4 runs a side: nfsd -5.9k
+   cycles (-2.1%) and -21.7k instructions (-7.3%) a WRITE, no overlap;
+   the rings, rate and region the same; p50 at iodepth 1 0.449 against
+   0.434 ms, inside the scatter, to be read again. Payloads with and
+   without a pad verified by crc32c through NFSv3 and NFSv4.1.
 
 ## Where the kept rounds stand (2026-10-28)
 
