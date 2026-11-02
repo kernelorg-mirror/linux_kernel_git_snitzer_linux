@@ -4,13 +4,16 @@
 
 #include <linux/bvec.h>
 #include <linux/cred.h>
+#include <linux/delay.h>
 #include <linux/highmem.h>
 #include <linux/in.h>
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/net.h>
 #include <linux/nfs4.h>
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/svc_xprt.h>
+#include <linux/sunrpc/svcsock.h>
 #include <linux/sunrpc/xdr.h>
 #include <net/net_namespace.h>
 
@@ -68,11 +71,7 @@ struct nfsd4_bvec_fixture {
 };
 
 struct nfsd4_bvec_decode_context {
-	struct auth_ops			 auth;
-	struct svc_xprt_class		 xprt_class;
-	struct svc_xprt			 xprt;
-	struct svc_serv			 serv;
-	struct svc_rqst			 rqst;
+	struct svc_rqst			*rqstp;
 	struct nfsd_thread_local_info ntli;
 	struct nfsd4_compoundargs	*args;
 	struct xdr_stream		 stream;
@@ -112,7 +111,7 @@ struct nfsd4_q35_xprt {
 struct nfsd4_q35_session_owner {
 	struct nfsd4_q35_xprt		*xprt;
 	struct svc_serv			*serv;
-	struct svc_rqst			 cleanup_rqst;
+	struct svc_rqst			*cleanup_rqst;
 	struct nfsd4_compound_state cleanup_cstate;
 	union nfsd4_op_u		 cleanup_op;
 	struct nfs4_sessionid		 sessionid;
@@ -120,6 +119,173 @@ struct nfsd4_q35_session_owner {
 	bool				 session_live;
 	bool				 client_live;
 };
+
+/*
+ * What a test decodes on: a real service, a transport accepted from its
+ * loopback listener and threads, as requests arrive at nfsd.  Nothing here
+ * is built by hand, so these objects stay correct when the code under test
+ * reads another of their fields.  The test case's init makes it, so that it
+ * is the last of a test's resources to go.
+ */
+struct nfsd4_bvec_env {
+	struct svc_serv		*serv;
+	struct svc_xprt		*listener;
+	struct svc_xprt		*xprt;
+	struct socket		*client;
+};
+
+#define NFSD4_BVEC_TEST_PROGRAM	0x2000f4b4
+#define NFSD4_BVEC_TEST_VERSION	4
+#define NFSD4_BVEC_REPLY_PAGES	3
+
+/* Its threads hold what nfsd's do; hidden, it never asks rpcbind. */
+static const struct svc_version nfsd4_bvec_test_version = {
+	.vs_vers = NFSD4_BVEC_TEST_VERSION,
+	.vs_xdrsize = NFS4_SVC_XDRSIZE,
+	.vs_hidden = true,
+};
+
+static const struct svc_version *nfsd4_bvec_test_versions[] = {
+	[NFSD4_BVEC_TEST_VERSION] = &nfsd4_bvec_test_version,
+};
+
+static struct svc_program nfsd4_bvec_test_program = {
+	.pg_prog = NFSD4_BVEC_TEST_PROGRAM,
+	.pg_lovers = NFSD4_BVEC_TEST_VERSION,
+	.pg_hivers = NFSD4_BVEC_TEST_VERSION,
+	.pg_nvers = ARRAY_SIZE(nfsd4_bvec_test_versions),
+	.pg_vers = nfsd4_bvec_test_versions,
+	.pg_name = "nfsd4-bvec-kunit",
+	.pg_rpcbind_set = svc_generic_rpcbind_set,
+};
+
+/*
+ * A thread for a test to take a request from.  It never receives, so a
+ * request stays the test's; it notices that it is to stop by asking.
+ */
+static int nfsd4_bvec_thread(void *data)
+{
+	struct svc_rqst *rqstp = data;
+
+	svc_thread_init_status(rqstp, 0);
+	while (!svc_thread_should_stop(rqstp))
+		msleep(1);
+	svc_exit_thread(rqstp);
+	return 0;
+}
+
+static void nfsd4_bvec_env_free(void *data)
+{
+	struct nfsd4_bvec_env *env = data;
+	struct svc_pool *pool = &env->serv->sv_pools[0];
+	struct svc_rqst *rqstp;
+
+	/* A session test's request was on nfsd's service. */
+	list_for_each_entry(rqstp, &pool->sp_all_threads, rq_all)
+		rqstp->rq_server = env->serv;
+	svc_set_num_threads(env->serv, 0, 0);
+	if (env->xprt) {
+		clear_bit(XPT_BUSY, &env->xprt->xpt_flags);
+		svc_xprt_close(env->xprt);
+		sock_release(env->client);
+	}
+	clear_bit(XPT_BUSY, &env->listener->xpt_flags);
+	svc_xprt_destroy_all(env->serv, &init_net, false);
+	svc_destroy(&env->serv);
+}
+
+static int nfsd4_bvec_test_init(struct kunit *test)
+{
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+	};
+	struct nfsd4_bvec_env *env;
+	struct svc_xprt *queued;
+	struct module *owner;
+	int port, ret;
+
+	env = kunit_kzalloc(test, sizeof(*env), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, env);
+	env->serv = svc_create(&nfsd4_bvec_test_program, PAGE_SIZE * 4,
+			       nfsd4_bvec_thread);
+	KUNIT_ASSERT_NOT_NULL(test, env->serv);
+	port = svc_xprt_create_from_sa(env->serv, "tcp", &init_net,
+				       (struct sockaddr *)&addr,
+				       SVC_SOCK_ANONYMOUS, current_cred());
+	if (port <= 0)
+		svc_destroy(&env->serv);
+	KUNIT_ASSERT_GT(test, port, 0);
+	addr.sin_port = htons(port);
+	env->listener = list_first_entry(&env->serv->sv_permsocks,
+					 struct svc_xprt, xpt_list);
+	/*
+	 * A new listener is queued for its first connection, with no thread
+	 * to take it.  It stays busy, off the queue; the queue held no
+	 * reference on it.
+	 */
+	queued = lwq_dequeue(&env->serv->sv_pools[0].sp_xprts, struct svc_xprt,
+			     xpt_ready);
+	ret = kunit_add_action_or_reset(test, nfsd4_bvec_env_free, env);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_ASSERT_PTR_EQ(test, queued, env->listener);
+	test->priv = env;
+
+	ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM, IPPROTO_TCP,
+			       &env->client);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	ret = kernel_connect(env->client, (struct sockaddr_unsized *)&addr,
+			     sizeof(addr), 0);
+	if (ret)
+		sock_release(env->client);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	/* As svc_handle_xprt() does: freeing the transport drops the module. */
+	owner = env->listener->xpt_class->xcl_owner;
+	__module_get(owner);
+	env->xprt = env->listener->xpt_ops->xpo_accept(env->listener);
+	if (!env->xprt) {
+		module_put(owner);
+		sock_release(env->client);
+	}
+	KUNIT_ASSERT_NOT_NULL(test, env->xprt);
+	env->xprt->xpt_cred = get_cred(env->listener->xpt_cred);
+	clear_bit(XPT_DATA, &env->xprt->xpt_flags);
+	return 0;
+}
+
+/*
+ * What svc_authenticate() leaves in rq_authop, which COMPOUND decoding reads
+ * through nfsd_read_splice_ok(). sunrpc keeps its own flavors to itself, and
+ * no request here is authenticated, so only the flavor is meaningful.
+ */
+static struct auth_ops nfsd4_bvec_auth = {
+	.name		= "nfsd4_bvec_kunit",
+	.flavour	= RPC_AUTH_NULL,
+};
+
+/* A thread's request on the transport, as svc_process_common() zeroes it. */
+static struct svc_rqst *nfsd4_bvec_rqst(struct kunit *test)
+{
+	struct nfsd4_bvec_env *env = test->priv;
+	struct svc_pool *pool = &env->serv->sv_pools[0];
+	struct svc_rqst *rqstp;
+
+	KUNIT_ASSERT_EQ(test, svc_new_thread(env->serv, pool), 0);
+	rqstp = list_first_entry(&pool->sp_all_threads, struct svc_rqst, rq_all);
+	rqstp->rq_xprt = env->xprt;
+	rqstp->rq_authop = &nfsd4_bvec_auth;
+	memset(rqstp->rq_argp, 0, sizeof(struct nfsd4_compoundargs));
+	memset(rqstp->rq_resp, 0, sizeof(struct nfsd4_compoundres));
+	return rqstp;
+}
+
+/* A session is nfsd's: SEQUENCE sizes its slots by nfsd's thread limit. */
+static void nfsd4_q35_rqst_on_session(struct svc_rqst *rqstp,
+				      struct nfsd4_q35_session_owner *owner)
+{
+	rqstp->rq_xprt = &owner->xprt->xprt;
+	rqstp->rq_server = owner->serv;
+}
 
 static struct nfsd4_bvec_fixture *
 nfsd4_bvec_fixture_alloc(struct kunit *test, const void *wire,
@@ -322,7 +488,7 @@ static void nfsd4_q35_session_cleanup(void *data)
 		memset(&owner->cleanup_op, 0, sizeof(owner->cleanup_op));
 		owner->cleanup_op.destroy_session.sessionid = owner->sessionid;
 		memset(&owner->cleanup_cstate, 0, sizeof(owner->cleanup_cstate));
-		nfsd4_kunit_destroy_session(&owner->cleanup_rqst,
+		nfsd4_kunit_destroy_session(owner->cleanup_rqst,
 					    &owner->cleanup_cstate,
 					    &owner->cleanup_op);
 		owner->session_live = false;
@@ -331,7 +497,7 @@ static void nfsd4_q35_session_cleanup(void *data)
 		memset(&owner->cleanup_op, 0, sizeof(owner->cleanup_op));
 		owner->cleanup_op.destroy_clientid.clientid = owner->clientid;
 		memset(&owner->cleanup_cstate, 0, sizeof(owner->cleanup_cstate));
-		nfsd4_kunit_destroy_clientid(&owner->cleanup_rqst,
+		nfsd4_kunit_destroy_clientid(owner->cleanup_rqst,
 					     &owner->cleanup_cstate,
 					     &owner->cleanup_op);
 		owner->client_live = false;
@@ -363,8 +529,8 @@ nfsd4_q35_session_owner_alloc(struct kunit *test)
 	ret = kunit_add_action_or_reset(test, nfsd4_q35_xprt_release,
 					&xprt->xprt);
 	KUNIT_ASSERT_EQ(test, ret, 0);
-	owner->cleanup_rqst.rq_xprt = &xprt->xprt;
-	owner->cleanup_rqst.rq_server = owner->serv;
+	owner->cleanup_rqst = nfsd4_bvec_rqst(test);
+	nfsd4_q35_rqst_on_session(owner->cleanup_rqst, owner);
 	ret = kunit_add_action_or_reset(test, nfsd4_q35_session_cleanup,
 					owner);
 	KUNIT_ASSERT_EQ(test, ret, 0);
@@ -381,25 +547,24 @@ nfsd4_q35_session_context_prepare(struct kunit *test,
 				  struct nfsd4_bvec_decode_context *context,
 				  struct nfsd4_q35_session_owner *owner)
 {
-	struct sockaddr_in *remote = (struct sockaddr_in *)&context->rqst.rq_addr;
-	struct sockaddr_in *local = (struct sockaddr_in *)&context->rqst.rq_daddr;
+	struct sockaddr_in *remote = (struct sockaddr_in *)&context->rqstp->rq_addr;
+	struct sockaddr_in *local = (struct sockaddr_in *)&context->rqstp->rq_daddr;
 	int ret;
 
-	context->rqst.rq_xprt = &owner->xprt->xprt;
-	context->rqst.rq_server = owner->serv;
-	context->rqst.rq_prot = IPPROTO_TCP;
+	nfsd4_q35_rqst_on_session(context->rqstp, owner);
+	context->rqstp->rq_prot = IPPROTO_TCP;
 	remote->sin_family = AF_INET;
 	remote->sin_port = htons(20549);
 	remote->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	context->rqst.rq_addrlen = sizeof(*remote);
+	context->rqstp->rq_addrlen = sizeof(*remote);
 	*local = *remote;
-	context->rqst.rq_daddrlen = sizeof(*local);
-	context->rqst.rq_cred.cr_uid = current_uid();
-	context->rqst.rq_cred.cr_gid = current_gid();
-	context->rqst.rq_cred.cr_group_info = get_current_groups();
-	context->rqst.rq_cred.cr_flavor = RPC_AUTH_UNIX;
+	context->rqstp->rq_daddrlen = sizeof(*local);
+	context->rqstp->rq_cred.cr_uid = current_uid();
+	context->rqstp->rq_cred.cr_gid = current_gid();
+	context->rqstp->rq_cred.cr_group_info = get_current_groups();
+	context->rqstp->rq_cred.cr_flavor = RPC_AUTH_UNIX;
 	ret = kunit_add_action_or_reset(test, nfsd4_q35_free_cred,
-					&context->rqst.rq_cred);
+					&context->rqstp->rq_cred);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 }
 
@@ -409,7 +574,7 @@ static void nfsd4_decode_release(void *data)
 
 	if (context->released)
 		return;
-	nfsd4_release_compoundargs(&context->rqst);
+	nfsd4_release_compoundargs(context->rqstp);
 	xdr_finish_decode(&context->stream);
 	context->released = true;
 }
@@ -424,20 +589,12 @@ nfsd4_bvec_decode_context_alloc(struct kunit *test, struct xdr_buf *buf)
 	context = kunit_kzalloc(test, sizeof(*context), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, context);
 	context->test = test;
-	context->args = kunit_kzalloc(test, sizeof(*context->args), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_NULL(test, context->args);
+	context->rqstp = nfsd4_bvec_rqst(test);
+	context->args = context->rqstp->rq_argp;
 	scratch = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, scratch);
 
-	context->auth.flavour = RPC_AUTH_NULL;
-	context->xprt_class.xcl_max_payload = PAGE_SIZE * 4;
-	context->xprt.xpt_class = &context->xprt_class;
-	context->serv.sv_max_payload = PAGE_SIZE * 4;
-	context->rqst.rq_authop = &context->auth;
-	context->rqst.rq_xprt = &context->xprt;
-	context->rqst.rq_server = &context->serv;
-	context->rqst.rq_argp = context->args;
-	context->rqst.rq_private = &context->ntli;
+	context->rqstp->rq_private = &context->ntli;
 	xdr_init_decode(&context->stream, buf, NULL, NULL);
 	xdr_set_scratch_buffer(&context->stream, scratch, PAGE_SIZE);
 	ret = kunit_add_action_or_reset(test, nfsd4_decode_release, context);
@@ -666,7 +823,7 @@ static void nfsd4_bvec_setxattr_decode_test(struct kunit *test)
 	fixture = nfsd4_bvec_fixture_alloc(test, wire, wire_len, lengths,
 					   ARRAY_SIZE(lengths));
 	context = nfsd4_bvec_decode_context_alloc(test, &fixture->buf);
-	decoded = nfs4svc_decode_compoundargs(&context->rqst, &context->stream);
+	decoded = nfs4svc_decode_compoundargs(context->rqstp, &context->stream);
 	KUNIT_ASSERT_TRUE(test, decoded);
 	KUNIT_ASSERT_EQ(test, context->args->opcnt, 1U);
 	KUNIT_ASSERT_EQ(test, context->args->ops[0].opnum, (u32)OP_SETXATTR);
@@ -729,7 +886,7 @@ static void nfsd4_bvec_compound_boundaries_test(struct kunit *test)
 	fixture = nfsd4_bvec_fixture_alloc(test, wire, wire_len, lengths,
 					   ARRAY_SIZE(lengths));
 	context = nfsd4_bvec_decode_context_alloc(test, &fixture->buf);
-	decoded = nfs4svc_decode_compoundargs(&context->rqst, &context->stream);
+	decoded = nfs4svc_decode_compoundargs(context->rqstp, &context->stream);
 	KUNIT_ASSERT_TRUE(test, decoded);
 	KUNIT_ASSERT_EQ(test, context->args->opcnt, 3U);
 	KUNIT_EXPECT_EQ(test, context->args->ops[0].opnum, (u32)OP_ACCESS);
@@ -951,12 +1108,12 @@ static void nfsd4_q35_decode_matrix_test(struct kunit *test)
 							  wire->len, lengths, count);
 		nfsd4_q35_page_owner_init(test, &owner, fixture, true);
 		legacy = nfsd4_bvec_decode_context_alloc(test, &fixture->legacy);
-		decoded = nfs4svc_decode_compoundargs(&legacy->rqst,
+		decoded = nfs4svc_decode_compoundargs(legacy->rqstp,
 						      &legacy->stream);
 		KUNIT_ASSERT_TRUE(test, decoded);
 		authoritative = nfsd4_bvec_decode_context_alloc(test,
 								&fixture->authoritative);
-		decoded = nfs4svc_decode_compoundargs(&authoritative->rqst,
+		decoded = nfs4svc_decode_compoundargs(authoritative->rqstp,
 						      &authoritative->stream);
 		KUNIT_ASSERT_TRUE(test, decoded);
 		nfsd4_q35_compare_decoded(test, &cases[case_index], wire, fixture,
@@ -985,10 +1142,10 @@ nfsd4_q35_expect_post_write_bad_xdr(struct kunit *test,
 	bool legacy_decoded;
 
 	legacy = nfsd4_bvec_decode_context_alloc(test, legacy_buf);
-	legacy_decoded = nfs4svc_decode_compoundargs(&legacy->rqst,
+	legacy_decoded = nfs4svc_decode_compoundargs(legacy->rqstp,
 						     &legacy->stream);
 	authoritative = nfsd4_bvec_decode_context_alloc(test, authoritative_buf);
-	authoritative_decoded = nfs4svc_decode_compoundargs(&authoritative->rqst,
+	authoritative_decoded = nfs4svc_decode_compoundargs(authoritative->rqstp,
 							    &authoritative->stream);
 	KUNIT_EXPECT_EQ(test, authoritative_decoded, legacy_decoded);
 	KUNIT_ASSERT_TRUE(test, authoritative_decoded);
@@ -1072,7 +1229,7 @@ static void nfsd4_q35_malformed_post_write_test(struct kunit *test)
 	invalid_geometry->bvec = invalid_bvec;
 	bad_geometry = nfsd4_bvec_decode_context_alloc(test,
 						       invalid_geometry);
-	decoded = nfs4svc_decode_compoundargs(&bad_geometry->rqst,
+	decoded = nfs4svc_decode_compoundargs(bad_geometry->rqstp,
 					      &bad_geometry->stream);
 	KUNIT_EXPECT_FALSE(test, decoded);
 	nfsd4_bvec_decode_context_release(bad_geometry);
@@ -1096,8 +1253,8 @@ static void nfsd4_q35_malformed_post_write_test(struct kunit *test)
 }
 
 struct nfsd4_savemem_context {
-	struct svc_rqst			rqst;
-	struct nfsd4_compoundargs	args;
+	struct svc_rqst			*rqstp;
+	struct nfsd4_compoundargs	*args;
 	struct xdr_stream		xdr;
 };
 
@@ -1105,7 +1262,7 @@ static void nfsd4_savemem_release(void *data)
 {
 	struct nfsd4_savemem_context *context = data;
 
-	nfsd4_release_compoundargs(&context->rqst);
+	nfsd4_release_compoundargs(context->rqstp);
 }
 
 static void nfsd4_bvec_savemem_lifetime_test(struct kunit *test)
@@ -1125,21 +1282,22 @@ static void nfsd4_bvec_savemem_lifetime_test(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, scratch);
 	memcpy(direct, expected, sizeof(expected));
 	memcpy(scratch, expected, sizeof(expected));
-	context->rqst.rq_argp = &context->args;
-	context->args.xdr = &context->xdr;
+	context->rqstp = nfsd4_bvec_rqst(test);
+	context->args = context->rqstp->rq_argp;
+	context->args->xdr = &context->xdr;
 	context->xdr.scratch.iov_base = scratch;
 	context->xdr.scratch.iov_len = sizeof(expected);
 	ret = kunit_add_action_or_reset(test, nfsd4_savemem_release, context);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 
-	saved = nfsd4_kunit_savemem(&context->args, (__be32 *)scratch,
+	saved = nfsd4_kunit_savemem(context->args, (__be32 *)scratch,
 				    sizeof(expected));
 	KUNIT_ASSERT_NOT_NULL(test, saved);
 	KUNIT_EXPECT_PTR_NE(test, saved, scratch);
 	memset(scratch, 0x5a, sizeof(expected));
 	KUNIT_EXPECT_MEMEQ(test, saved, expected, sizeof(expected));
 
-	saved = nfsd4_kunit_savemem(&context->args, (__be32 *)direct,
+	saved = nfsd4_kunit_savemem(context->args, (__be32 *)direct,
 				    sizeof(expected));
 	KUNIT_EXPECT_PTR_EQ(test, saved, direct);
 }
@@ -1220,11 +1378,11 @@ static void nfsd4_q35_saved_values_lifetime_test(struct kunit *test)
 						  lengths, count);
 	nfsd4_q35_page_owner_init(test, &owner, fixture, false);
 	legacy = nfsd4_bvec_decode_context_alloc(test, &fixture->legacy);
-	decoded = nfs4svc_decode_compoundargs(&legacy->rqst, &legacy->stream);
+	decoded = nfs4svc_decode_compoundargs(legacy->rqstp, &legacy->stream);
 	KUNIT_ASSERT_TRUE(test, decoded);
 	authoritative = nfsd4_bvec_decode_context_alloc(test,
 							&fixture->authoritative);
-	decoded = nfs4svc_decode_compoundargs(&authoritative->rqst,
+	decoded = nfs4svc_decode_compoundargs(authoritative->rqstp,
 					      &authoritative->stream);
 	KUNIT_ASSERT_TRUE(test, decoded);
 	KUNIT_ASSERT_EQ(test, legacy->args->opcnt, 2U);
@@ -1309,7 +1467,7 @@ nfsd4_q35_session_decode(struct kunit *test,
 					   ARRAY_SIZE(lengths));
 	context = nfsd4_bvec_decode_context_alloc(test, &fixture->buf);
 	nfsd4_q35_session_context_prepare(test, context, owner);
-	decoded = nfs4svc_decode_compoundargs(&context->rqst, &context->stream);
+	decoded = nfs4svc_decode_compoundargs(context->rqstp, &context->stream);
 	KUNIT_ASSERT_TRUE(test, decoded);
 	return context;
 }
@@ -1448,12 +1606,12 @@ static void nfsd4_q35_session_replay_test(struct kunit *test)
 	nfsd4_q35_page_owner_init(test, page_owner, fixture, true);
 	legacy = nfsd4_bvec_decode_context_alloc(test, &fixture->legacy);
 	nfsd4_q35_session_context_prepare(test, legacy, session_owner);
-	decoded = nfs4svc_decode_compoundargs(&legacy->rqst, &legacy->stream);
+	decoded = nfs4svc_decode_compoundargs(legacy->rqstp, &legacy->stream);
 	KUNIT_ASSERT_TRUE(test, decoded);
 	authoritative = nfsd4_bvec_decode_context_alloc(test,
 							&fixture->authoritative);
 	nfsd4_q35_session_context_prepare(test, authoritative, session_owner);
-	decoded = nfs4svc_decode_compoundargs(&authoritative->rqst,
+	decoded = nfs4svc_decode_compoundargs(authoritative->rqstp,
 					      &authoritative->stream);
 	KUNIT_ASSERT_TRUE(test, decoded);
 	KUNIT_ASSERT_EQ(test, legacy->args->opcnt, 2U);
@@ -1497,7 +1655,7 @@ static void nfsd4_q35_session_replay_test(struct kunit *test)
 	 */
 	legacy = nfsd4_bvec_decode_context_alloc(test, &fixture->legacy);
 	nfsd4_q35_session_context_prepare(test, legacy, session_owner);
-	KUNIT_ASSERT_TRUE(test, nfs4svc_decode_compoundargs(&legacy->rqst, &legacy->stream));
+	KUNIT_ASSERT_TRUE(test, nfs4svc_decode_compoundargs(legacy->rqstp, &legacy->stream));
 	memset(legacy_result, 0, sizeof(*legacy_result));
 	nfsd4_q35_run_dispatch(test, legacy, NFSD4_Q35_DISPATCH_TEST_AFTER_SEQUENCE, legacy_output, PAGE_SIZE, legacy_result);
 	KUNIT_EXPECT_EQ(test, legacy->dispatch_count, 0U);
@@ -1543,12 +1701,12 @@ static void nfsd4_q35_session_replay_test(struct kunit *test)
 	authoritative = nfsd4_bvec_decode_context_alloc(test,
 							&fixture->authoritative);
 	nfsd4_q35_session_context_prepare(test, authoritative, session_owner);
-	decoded = nfs4svc_decode_compoundargs(&authoritative->rqst,
+	decoded = nfs4svc_decode_compoundargs(authoritative->rqstp,
 					      &authoritative->stream);
 	KUNIT_ASSERT_TRUE(test, decoded);
 	legacy = nfsd4_bvec_decode_context_alloc(test, &fixture->legacy);
 	nfsd4_q35_session_context_prepare(test, legacy, session_owner);
-	decoded = nfs4svc_decode_compoundargs(&legacy->rqst, &legacy->stream);
+	decoded = nfs4svc_decode_compoundargs(legacy->rqstp, &legacy->stream);
 	KUNIT_ASSERT_TRUE(test, decoded);
 	KUNIT_EXPECT_EQ(test, authoritative->args->ops[0].u.sequence.seqid,
 			2U);
@@ -1629,7 +1787,8 @@ nfsd4_q35_dispatch_observer(struct svc_rqst *rqstp,
 	struct nfsd4_op *op = NULL;
 	unsigned int i;
 
-	context = container_of(rqstp, struct nfsd4_bvec_decode_context, rqst);
+	context = container_of(rqstp->rq_private,
+			       struct nfsd4_bvec_decode_context, ntli);
 	for (i = 0; i < args->opcnt; i++) {
 		if (&args->ops[i].u == u) {
 			op = &args->ops[i];
@@ -1677,18 +1836,20 @@ nfsd4_q35_run_dispatch(struct kunit *test,
 		       u8 *output, unsigned int output_capacity,
 		       struct nfsd4_q35_dispatch_result *result)
 {
+	struct svc_rqst *rqstp = context->rqstp;
+	struct nfsd4_compoundres *resp = rqstp->rq_resp;
 	const struct svc_procedure *compound;
-	struct nfsd4_compoundres *resp;
-	struct page *response_pages[3];
+	struct kvec *resv = &rqstp->rq_res.head[0];
 	unsigned int i;
 	__be32 status;
 	bool encoded;
 
-	resp = kunit_kzalloc(test, sizeof(*resp), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_NULL(test, resp);
-	for (i = 0; i < ARRAY_SIZE(response_pages); i++) {
-		response_pages[i] = nfsd4_bvec_alloc_page(test);
-		KUNIT_ASSERT_NOT_NULL(test, response_pages[i]);
+	memset(resp, 0, sizeof(*resp));
+	/* The thread's own array, so its pages are released with it. */
+	for (i = 0; i < NFSD4_BVEC_REPLY_PAGES; i++) {
+		if (!rqstp->rq_respages[i])
+			rqstp->rq_respages[i] = alloc_page(GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, rqstp->rq_respages[i]);
 	}
 	compound = nfsd4_procedure(NFSPROC4_COMPOUND);
 	KUNIT_ASSERT_NOT_NULL(test, compound);
@@ -1701,33 +1862,36 @@ nfsd4_q35_run_dispatch(struct kunit *test,
 		for (i = first; i < context->args->opcnt; i++)
 			context->args->ops[i].opdesc = &nfsd4_q35_dispatch_op;
 	}
-	context->xprt.xpt_net = &init_net;
-	context->rqst.rq_procinfo = compound;
-	context->rqst.rq_resp = resp;
-	context->rqst.rq_res.head[0].iov_base = page_address(response_pages[0]);
-	context->rqst.rq_res.head[0].iov_len = 0;
-	context->rqst.rq_res.pages = &response_pages[1];
-	context->rqst.rq_res.page_mode = XDRBUF_PAGE_ARRAY;
-	context->rqst.rq_respages = &response_pages[1];
-	context->rqst.rq_next_page = &response_pages[1];
-	context->rqst.rq_page_end = &response_pages[3];
-	svcxdr_init_encode(&context->rqst);
+	/* The reply as svc_process() sets it up, in NFSD4_BVEC_REPLY_PAGES. */
+	rqstp->rq_procinfo = compound;
+	rqstp->rq_next_page = &rqstp->rq_respages[1];
+	rqstp->rq_page_end = &rqstp->rq_respages[NFSD4_BVEC_REPLY_PAGES];
+	resv->iov_base = page_address(rqstp->rq_respages[0]);
+	resv->iov_len = 0;
+	rqstp->rq_res.pages = rqstp->rq_next_page;
+	rqstp->rq_res.page_mode = XDRBUF_PAGE_ARRAY;
+	rqstp->rq_res.len = 0;
+	rqstp->rq_res.page_base = 0;
+	rqstp->rq_res.page_len = 0;
+	rqstp->rq_res.tail[0].iov_base = NULL;
+	rqstp->rq_res.tail[0].iov_len = 0;
+	svcxdr_init_encode(rqstp);
 
-	status = compound->pc_func(&context->rqst);
+	status = compound->pc_func(context->rqstp);
 	KUNIT_ASSERT_EQ(test, (__force u32)status, (__force u32)rpc_success);
-	encoded = compound->pc_encode(&context->rqst,
-				      &context->rqst.rq_res_stream);
+	encoded = compound->pc_encode(context->rqstp,
+				      &context->rqstp->rq_res_stream);
 	KUNIT_ASSERT_TRUE(test, encoded);
-	KUNIT_ASSERT_LE(test, context->rqst.rq_res.len, output_capacity);
+	KUNIT_ASSERT_LE(test, context->rqstp->rq_res.len, output_capacity);
 	KUNIT_ASSERT_EQ(test,
-			read_bytes_from_xdr_buf(&context->rqst.rq_res, 0, output,
-						context->rqst.rq_res.len),
+			read_bytes_from_xdr_buf(&context->rqstp->rq_res, 0, output,
+						context->rqstp->rq_res.len),
 			0);
 	result->status = resp->cstate.status;
 	result->opcnt = resp->opcnt;
 	result->stop_op = resp->opcnt ?
 		context->args->ops[resp->opcnt - 1].opnum : OP_ILLEGAL;
-	result->len = context->rqst.rq_res.len;
+	result->len = context->rqstp->rq_res.len;
 	return result->len;
 }
 
@@ -1876,18 +2040,11 @@ static void nfsd4_payload_shared_test(struct kunit *test)
 		  { OP_SEQUENCE, OP_PUTFH, OP_WRITE, OP_GETATTR, OP_LOOKUP },
 		  5, 2, true },
 	};
-	struct svc_rqst *rqstp = kunit_kzalloc(test, sizeof(*rqstp), GFP_KERNEL);
-	struct nfsd4_compoundargs *args =
-		kunit_kzalloc(test, sizeof(*args), GFP_KERNEL);
-	struct nfsd4_compoundres *resp =
-		kunit_kzalloc(test, sizeof(*resp), GFP_KERNEL);
+	struct svc_rqst *rqstp = nfsd4_bvec_rqst(test);
+	struct nfsd4_compoundargs *args = rqstp->rq_argp;
+	struct nfsd4_compoundres *resp = rqstp->rq_resp;
 	unsigned int i, j;
 
-	KUNIT_ASSERT_NOT_NULL(test, rqstp);
-	KUNIT_ASSERT_NOT_NULL(test, args);
-	KUNIT_ASSERT_NOT_NULL(test, resp);
-	rqstp->rq_argp = args;
-	rqstp->rq_resp = resp;
 	args->ops = args->iops;
 
 	for (i = 0; i < ARRAY_SIZE(cases); i++) {
@@ -1946,7 +2103,7 @@ static void nfsd4_bvec_layoutreturn_lifetime_test(struct kunit *test)
 	fixture = nfsd4_bvec_fixture_alloc(test, wire, wire_len, lengths,
 					   ARRAY_SIZE(lengths));
 	context = nfsd4_bvec_decode_context_alloc(test, &fixture->buf);
-	decoded = nfs4svc_decode_compoundargs(&context->rqst, &context->stream);
+	decoded = nfs4svc_decode_compoundargs(context->rqstp, &context->stream);
 	KUNIT_ASSERT_TRUE(test, decoded);
 	KUNIT_ASSERT_EQ(test, context->args->opcnt, 2U);
 	KUNIT_ASSERT_EQ(test, context->args->ops[0].opnum,
@@ -2007,6 +2164,7 @@ static struct kunit_case nfsd4_bvec_test_cases[] = {
 
 static struct kunit_suite nfsd4_bvec_test_suite = {
 	.name = "nfsd4-receive-bvec",
+	.init = nfsd4_bvec_test_init,
 	.test_cases = nfsd4_bvec_test_cases,
 };
 
