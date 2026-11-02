@@ -256,8 +256,12 @@ test result, no oops.
   of `boot3` and `boot4`. So the tip's four are installed in
   `/lib/modules/$(uname -r)/updates/` (Mike), then `depmod`, and `modprobe`
   takes them over the packaged ones, so the stock script runs them. Check
-  `modinfo -n` first. Reinstall after any change to a suite. The first pass
-  is `/var/tmp/zc-run-logs/t2-506/boot7-all4/`.
+  `modinfo -n` first. Reinstall after any change to a suite.
+- **The four in one pass, stock `run-kunit.sh`, on 506 (`boot7-all4/`):**
+  7/7, 52/52, 7/7 and 10/10, no skip, no warning, no crash, nfs-server back
+  at 512 threads. The script still ended `KUNIT FAIL`, only because
+  `settled.sh` found `enp161s0f0` at 8 rings: `bringup.sh` had not been run
+  on that boot, which the suites do not need. Run it first for a clean end.
   After a run that warned, use `clear_warn_once` before believing the
   next one.
 
@@ -302,8 +306,7 @@ object breaks when the code reads a field it lacks, and in a kernel test
 that takes the host down. From searches and the fixtures, not every test
 body, in order:
 
-1. `run-kunit.sh`, all four suites in one pass, as they have not yet run
-   on 506.
+1. Done: `run-kunit.sh`, all four suites in one pass (`boot7-all4/`).
 2. `svcsock_kunit.c`: the credit helper's zeroed `svc_sock`, and those
    built beside it in the region and ownership tests, moved onto
    `svcsock_rx_connect()`; hand-set `sk_rx` stays only in a test that
