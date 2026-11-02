@@ -711,9 +711,8 @@ static void
 nfs4_ff_start_busy_timer(struct nfs4_ff_busy_timer *timer, ktime_t now)
 {
 	/* first IO request? */
-	if (atomic_inc_return(&timer->n_ops) == 1) {
+	if (++timer->n_ops == 1)
 		timer->start_time = now;
-	}
 }
 
 static ktime_t
@@ -721,8 +720,7 @@ nfs4_ff_end_busy_timer(struct nfs4_ff_busy_timer *timer, ktime_t now)
 {
 	ktime_t start;
 
-	if (atomic_dec_return(&timer->n_ops) < 0)
-		WARN_ON_ONCE(1);
+	WARN_ON_ONCE(--timer->n_ops < 0);
 
 	start = timer->start_time;
 	timer->start_time = now;
