@@ -307,10 +307,19 @@ that takes the host down. From searches and the fixtures, not every test
 body, in order:
 
 1. Done: `run-kunit.sh`, all four suites in one pass (`boot7-all4/`).
-2. `svcsock_kunit.c`: the credit helper's zeroed `svc_sock`, and those
-   built beside it in the region and ownership tests, moved onto
-   `svcsock_rx_connect()`; hand-set `sk_rx` stays only in a test that
-   builds a broken case on purpose.
+2. `svcsock_kunit.c`: the credit helper's zeroed `svc_sock` and those
+   built beside it are moved onto `svcsock_rx_connect()`; no test hand-sets
+   `sk_rx`, `sk_sock` or `sk_sk` now. About 40 tests run on a live idle
+   loopback connection, so what to suspect first if this suite takes the
+   host down:
+   - The `want` tests write `rcv_nxt`, `rcv_wnd` and others on that live
+     socket, and `svcsock_rx_want_restore()` puts them back before it
+     closes. They rely on nothing having been sent on it.
+   - The hold tests now run TCP's clamp on a connected socket, where
+     `2 * advmss` is about 131 KB, so they use a 1 MiB buffer.
+   - `kernel_accept()` is non-blocking, and there are many more connects.
+   The first runs are `boot7-svcsock-real/`, alone, and
+   `boot7-all4-svcsock/`, the stock script.
 3. `nfsd4_bvec_kunit.c`: the decode fixtures are replaced, see "Before
    and after `nfsd4_bvec_kunit`" below. Its session tests' test transport
    class is still to be reviewed.
