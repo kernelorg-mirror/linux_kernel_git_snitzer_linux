@@ -270,6 +270,35 @@ on `boot5` and is not loaded on this boot. The listener still runs on
 the client (10.20.12.106:6666), appending to
 `/var/tmp/tardis2-netconsole.log`, until that host reboots.
 
+**What is still to fix in the suites (Mike: real objects, not fakes; each
+fix carries a `Fixes:` for the KUnit commit it folds into).** A fake
+object breaks when the code reads a field it lacks, and in a kernel test
+that takes the host down. From searches and the fixtures, not every test
+body, in order:
+
+1. Run the svcsock fixture to the end, on its own, as above.
+2. `svcsock_kunit.c`: the credit helper's zeroed `svc_sock`, and those
+   built beside it in the region and ownership tests, moved onto
+   `svcsock_rx_connect()`; hand-set `sk_rx` stays only in a test that
+   builds a broken case on purpose.
+3. `nfsd4_bvec_kunit.c`: the decode tests build `auth_ops`, a transport,
+   `serv` and `rqstp` by hand, `xpt_net` included. Use the real `serv`
+   its session tests already have.
+4. `nfsd_bvec_kunit.c`: the same in its decode tests, sharing what 3
+   builds.
+5. Settings saved per test with KUnit cleanup actions. Tests write
+   `svc_tcp_rx_copy_below`, the budgets, the `svc_tcp_rx_loans` key and
+   fault injection in `init_net`, which now reach a real transport's
+   receive path. They are put back only by `suite_exit`, with
+   `run-kunit.sh` behind it, so a crash or a failed run leaves them
+   changed.
+
+Also brittle, and left as they are for now: the fixture's use of a live
+thread's `rqstp`, `svc_new_thread()` called without a service mutex, and
+transports that stay off `sv_tempsocks`. `nfsd4_bvec_kunit` needs a
+started `nfsd_serv`, and `nfsd_bvec_kunit` needs `/var/tmp` on a file
+system with DONTCACHE. `xdr_kunit.c` builds no kernel objects.
+
 ## Next regression run (handoff, 2026-09-25)
 
 State at hand-off: branch `kernel-7.1.13/main.NFSD_TCP_WRITE_ZEROCOPY`
