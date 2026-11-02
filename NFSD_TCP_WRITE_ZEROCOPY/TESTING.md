@@ -391,8 +391,13 @@ takes the host down:
   KUnit suites has changed since.
 
 Left as it was, and not a decode fixture: the session tests' own
-`svc_xprt_class`, on nfsd's real `serv`. Its logs on the host are
-`boot6-nfsd4-real/`, to compare with the baseline in `boot6-nfsd4/`.
+`svc_xprt_class`, on nfsd's real `serv`.
+
+**With `rq_authop` back it ran 10/10 on 506** (`boot7-nfsd4-real/`, the
+baseline being `boot6-nfsd4/`): no skip, no warning, settings unchanged,
+nfsd's 4 threads up as in `run-kunit.sh`. `run-one.sh`'s `sunrpc refs 10 ->
+12` is not a leak by itself: it read during teardown, and with nfsd at 0
+threads the count was 8.
 
 **What the trace of `pc_func` found.** `nfsd4_proc_compound()` reads
 `rq_xprt->xpt_net`, `rq_private`, `rq_argp`, `rq_resp` and the encode
