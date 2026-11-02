@@ -206,6 +206,12 @@ decided.
    counting, and no region change that stands above the scatter. Decided
    (Mike, 1 November): a non-starter, the server has to carry much more
    load than one client. `NFSD_CPUSET` stays 8-55.
+19. **Round 50: the 1 MiB load on build 506** (Mike, 2 November;
+   [50-build-506](50-build-506/README.md)). 40.48 GB/s, the rings 128.2k
+   and nfsd 290.2k cycles a WRITE, instructions level with build 505, no
+   regression. The next target: parking and restoring a loaned record
+   trades pages by `sk_datalen` though its body is in the region, about
+   2.3 us a WRITE, 2.4% of nfsd, all in sunrpc.
 
 ## Where the kept rounds stand (2026-10-28)
 
