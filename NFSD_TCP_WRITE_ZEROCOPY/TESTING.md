@@ -319,8 +319,15 @@ body, in order:
      `2 * advmss` is about 131 KB, so they use a 1 MiB buffer.
    - `kernel_accept()` is non-blocking, and there are many more connects.
    Alone on 506 it ran 52/52, no skip, no warning, settings unchanged
-   (`boot7-svcsock-real/`). The next runs are `boot7-svcsock-real2/`, a
-   second load, and `boot7-all4-svcsock/`, the stock script.
+   (`boot7-svcsock-real/`). A second load on the boot also ran 52/52, and
+   sunrpc's refcount held at 10 (`boot7-svcsock-real2/`). Each load leaves
+   101 loopback sockets in `TIME-WAIT`, all gone in 60 s, then
+   `/proc/net/sockstat` shows 18 TCP sockets allocated, none orphaned, and
+   `TCPChallengeACK` is 0, so none closed with a test's numbers on it. The
+   `TCP` line of `/proc/slabinfo` rises across runs and is not a measure of
+   this: it counts objects cached per CPU. With the other three, by the
+   stock script: 7/7, 52/52, 7/7 and 10/10, no skip, no warning, no crash
+   (`boot7-all4-svcsock/`), ending `KUNIT FAIL` only on the 8 rings.
 3. `nfsd4_bvec_kunit.c`: the decode fixtures are replaced, see "Before
    and after `nfsd4_bvec_kunit`" below. Its session tests' test transport
    class is still to be reviewed.
