@@ -804,6 +804,274 @@ static void xdr_bvec_legacy_parity_test(struct kunit *test)
 			(u8)0xa5);
 }
 
+/*
+ * The flag says a table was checked when it was built.  It spares only the
+ * walk of the table, a segment has it only from its parent, and a buffer that
+ * was never given it is walked as before.
+ */
+static void xdr_bvec_checked_test(struct kunit *test)
+{
+	struct page *pages[2] = {
+		xdr_bvec_test_alloc_page(test),
+		xdr_bvec_test_alloc_page(test),
+	};
+	struct bio_vec converted[4];
+	struct xdr_buf buf, subbuf, nested;
+	struct bio_vec bvec[2];
+
+	KUNIT_ASSERT_NOT_NULL(test, pages[0]);
+	KUNIT_ASSERT_NOT_NULL(test, pages[1]);
+	bvec_set_page(&bvec[0], pages[0], 4, 1);
+	bvec_set_page(&bvec[1], pages[1], 4, 7);
+	xdr_bvec_test_init_buf(&buf, bvec, ARRAY_SIZE(bvec), 0, 8,
+			       NULL, 0, NULL, 0);
+
+	/* A segment's own garbage does not count: it may be on the stack. */
+	memset(&subbuf, 0xff, sizeof(subbuf));
+	KUNIT_ASSERT_EQ(test, xdr_buf_subsegment(&buf, &subbuf, 2, 4), 0);
+	KUNIT_EXPECT_FALSE(test, subbuf.flags & XDRBUF_BVECS_CHECKED);
+
+	buf.flags = XDRBUF_BVECS_CHECKED;
+	memset(&subbuf, 0, sizeof(subbuf));
+	KUNIT_ASSERT_EQ(test, xdr_buf_subsegment(&buf, &subbuf, 2, 4), 0);
+	KUNIT_EXPECT_TRUE(test, subbuf.flags & XDRBUF_BVECS_CHECKED);
+	memset(&nested, 0, sizeof(nested));
+	KUNIT_ASSERT_EQ(test, xdr_buf_subsegment(&subbuf, &nested, 1, 2), 0);
+	KUNIT_EXPECT_TRUE(test, nested.flags & XDRBUF_BVECS_CHECKED);
+
+	/* An entry the walk refuses shows that the walk was spared. */
+	bvec_set_page(&bvec[0], pages[0], 4, PAGE_SIZE - 2);
+	KUNIT_EXPECT_GT(test, xdr_buf_to_bvec(converted, ARRAY_SIZE(converted),
+					      &buf), 0);
+	buf.flags = 0;
+	KUNIT_EXPECT_EQ(test, xdr_buf_to_bvec(converted, ARRAY_SIZE(converted),
+					      &buf), -EINVAL);
+	bvec_set_page(&bvec[0], pages[0], 4, 1);
+
+	/* The buffer's own checks take no walk, and stay. */
+	buf.flags = XDRBUF_BVECS_CHECKED;
+	buf.page_base = 1;
+	KUNIT_EXPECT_EQ(test, xdr_buf_to_bvec(converted, ARRAY_SIZE(converted),
+					      &buf), -EINVAL);
+	buf.page_base = 0;
+	buf.bvec = NULL;
+	KUNIT_EXPECT_EQ(test, xdr_buf_to_bvec(converted, ARRAY_SIZE(converted),
+					      &buf), -EINVAL);
+	buf.bvec = bvec;
+	buf.bvec_count = 0;
+	KUNIT_EXPECT_EQ(test, xdr_buf_to_bvec(converted, ARRAY_SIZE(converted),
+					      &buf), -EINVAL);
+	buf.bvec_count = ARRAY_SIZE(bvec);
+	buf.len = 9;
+	KUNIT_EXPECT_EQ(test, xdr_buf_to_bvec(converted, ARRAY_SIZE(converted),
+					      &buf), -EINVAL);
+}
+
+static const struct {
+	const char *name;
+	unsigned int page_len, bvec_offset, tail_len;
+	unsigned int base, len;
+	unsigned int index, offset, count;
+} xdr_bvec_end_cases[] = {
+	{ "from an entry's middle", 12, 0, 0, 9, 7, 1, 2, 2 },
+	{ "the whole of the pages", 12, 0, 0, 4, 12, 0, 0, 3 },
+	{ "the last entry alone", 12, 0, 0, 11, 5, 2, 0, 1 },
+	{ "on into the tail", 12, 0, 4, 9, 11, 1, 2, 2 },
+	{ "one byte short", 12, 0, 0, 4, 11, 0, 0, 3 },
+	{ "ending with an entry", 12, 0, 0, 4, 7, 0, 0, 2 },
+	{ "final entry clipped", 10, 0, 0, 4, 10, 0, 0, 3 },
+	{ "in a clipped entry", 10, 0, 0, 12, 2, 2, 1, 1 },
+	{ "offset in the first entry", 11, 1, 0, 4, 11, 0, 1, 3 },
+};
+
+/* A segment's table is the same whether or not it was counted entry by entry. */
+static void xdr_bvec_end_of_pages_test(struct kunit *test)
+{
+	static const u8 expected[20] = {
+		0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+		0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60, 0x61, 0x62, 0x63,
+	};
+	struct page *pages[3] = {
+		xdr_bvec_test_alloc_page(test),
+		xdr_bvec_test_alloc_page(test),
+		xdr_bvec_test_alloc_page(test),
+	};
+	struct bio_vec bvec[3];
+	u8 head[4] __aligned(4);
+	u8 tail[4] __aligned(4);
+	unsigned int i;
+
+	KUNIT_ASSERT_NOT_NULL(test, pages[0]);
+	KUNIT_ASSERT_NOT_NULL(test, pages[1]);
+	KUNIT_ASSERT_NOT_NULL(test, pages[2]);
+	memcpy(head, expected, sizeof(head));
+	memcpy(tail, expected + 16, sizeof(tail));
+	bvec_set_page(&bvec[0], pages[0], 3, 1);
+	bvec_set_page(&bvec[1], pages[1], 4, 7);
+	bvec_set_page(&bvec[2], pages[2], 5, 11);
+	xdr_bvec_test_write(pages[0], 1, expected + 4, 3);
+	xdr_bvec_test_write(pages[1], 7, expected + 7, 4);
+	xdr_bvec_test_write(pages[2], 11, expected + 11, 5);
+
+	for (i = 0; i < ARRAY_SIZE(xdr_bvec_end_cases); i++) {
+		typeof(xdr_bvec_end_cases[0]) *c = &xdr_bvec_end_cases[i];
+		unsigned int pages_len;
+		struct xdr_buf buf, subbuf;
+		u8 copied[20];
+
+		kunit_info(test, "%s", c->name);
+		xdr_bvec_test_init_buf(&buf, bvec, ARRAY_SIZE(bvec),
+				       c->bvec_offset, c->page_len,
+				       head, sizeof(head), tail, c->tail_len);
+		pages_len = min(c->base + c->len,
+				c->page_len + (unsigned int)sizeof(head)) -
+			    c->base;
+		KUNIT_ASSERT_EQ(test,
+				xdr_buf_subsegment(&buf, &subbuf, c->base,
+						   c->len), 0);
+		KUNIT_EXPECT_PTR_EQ(test, subbuf.bvec, &bvec[c->index]);
+		KUNIT_EXPECT_EQ(test, subbuf.bvec_offset, c->offset);
+		KUNIT_EXPECT_EQ(test, subbuf.bvec_count, c->count);
+		KUNIT_EXPECT_EQ(test, subbuf.page_len, pages_len);
+		KUNIT_ASSERT_EQ(test,
+				read_bytes_from_xdr_buf(&subbuf, 0, copied,
+							c->len), 0);
+		KUNIT_EXPECT_MEMEQ(test, copied,
+				   expected + c->base + c->bvec_offset, c->len);
+	}
+
+	/*
+	 * @buf and @subbuf may be one buffer, and the segment's length is
+	 * written over the pages' before the table is looked at.
+	 */
+	{
+		struct xdr_buf buf;
+		u8 copied[7];
+
+		xdr_bvec_test_init_buf(&buf, bvec, ARRAY_SIZE(bvec), 0, 12,
+				       head, sizeof(head), NULL, 0);
+		KUNIT_ASSERT_EQ(test, xdr_buf_subsegment(&buf, &buf, 4, 7), 0);
+		KUNIT_EXPECT_EQ(test, buf.bvec_count, 2U);
+		KUNIT_EXPECT_EQ(test, buf.page_len, 7U);
+		KUNIT_ASSERT_EQ(test,
+				read_bytes_from_xdr_buf(&buf, 0, copied,
+							sizeof(copied)), 0);
+		KUNIT_EXPECT_MEMEQ(test, copied, expected + 4, sizeof(copied));
+	}
+}
+
+/* Where a payload leaves the stream, on each side of the end of the pages. */
+static void xdr_bvec_advance_test(struct kunit *test)
+{
+	static const u8 expected[20] = {
+		0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79,
+		0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f, 0x80, 0x81, 0x82, 0x83,
+	};
+	struct page *pages[3] = {
+		xdr_bvec_test_alloc_page(test),
+		xdr_bvec_test_alloc_page(test),
+		xdr_bvec_test_alloc_page(test),
+	};
+	struct xdr_stream xdr;
+	struct xdr_buf buf, payload;
+	struct bio_vec bvec[3];
+	u8 head[4] __aligned(4);
+	u8 tail[6] __aligned(4);
+	u8 scratch[4] __aligned(4);
+	__be32 *p;
+	unsigned int i;
+
+	KUNIT_ASSERT_NOT_NULL(test, pages[0]);
+	KUNIT_ASSERT_NOT_NULL(test, pages[1]);
+	KUNIT_ASSERT_NOT_NULL(test, pages[2]);
+	memcpy(head, expected, sizeof(head));
+	for (i = 0; i < ARRAY_SIZE(bvec); i++) {
+		bvec_set_page(&bvec[i], pages[i], 4, 0);
+		xdr_bvec_test_write(pages[i], 0, expected + 4 + i * 4, 4);
+	}
+
+	/* Into a tail. */
+	memcpy(tail, expected + 16, 4);
+	xdr_bvec_test_init_buf(&buf, bvec, ARRAY_SIZE(bvec), 0, 12,
+			       head, sizeof(head), tail, 4);
+	xdr_init_decode(&xdr, &buf, NULL, NULL);
+	KUNIT_ASSERT_NOT_NULL(test, xdr_inline_decode(&xdr, 4));
+	KUNIT_ASSERT_TRUE(test, xdr_stream_subsegment(&xdr, &payload, 12));
+	KUNIT_EXPECT_EQ(test, xdr_stream_pos(&xdr), 16U);
+	KUNIT_EXPECT_EQ(test, xdr_stream_remaining(&xdr), (size_t)4);
+	p = xdr_inline_decode(&xdr, 4);
+	KUNIT_ASSERT_NOT_NULL(test, p);
+	KUNIT_EXPECT_MEMEQ(test, p, expected + 16, 4);
+	KUNIT_EXPECT_EQ(test, xdr_stream_remaining(&xdr), (size_t)0);
+	KUNIT_EXPECT_PTR_EQ(test, xdr_inline_decode(&xdr, 4), NULL);
+	xdr_finish_decode(&xdr);
+
+	/* To the very end, from inside the pages, with no tail at all. */
+	xdr_bvec_test_init_buf(&buf, bvec, ARRAY_SIZE(bvec), 0, 12,
+			       head, sizeof(head), NULL, 0);
+	xdr_init_decode(&xdr, &buf, NULL, NULL);
+	KUNIT_ASSERT_NOT_NULL(test, xdr_inline_decode(&xdr, 8));
+	KUNIT_ASSERT_TRUE(test, xdr_stream_subsegment(&xdr, &payload, 8));
+	KUNIT_EXPECT_EQ(test, payload.bvec_count, 2U);
+	KUNIT_EXPECT_EQ(test, xdr_stream_pos(&xdr), 16U);
+	KUNIT_EXPECT_EQ(test, xdr_stream_remaining(&xdr), (size_t)0);
+	/* Nothing is left, but asking for nothing is not an overflow. */
+	KUNIT_EXPECT_NOT_NULL(test, xdr_inline_decode(&xdr, 0));
+	KUNIT_EXPECT_PTR_EQ(test, xdr_inline_decode(&xdr, 4), NULL);
+	KUNIT_EXPECT_TRUE(test, xdr_stream_subsegment(&xdr, &payload, 0));
+	KUNIT_EXPECT_FALSE(test, xdr_stream_subsegment(&xdr, &payload, 4));
+	xdr_finish_decode(&xdr);
+
+	/* The pad in the pages. */
+	xdr_init_decode(&xdr, &buf, NULL, NULL);
+	KUNIT_ASSERT_NOT_NULL(test, xdr_inline_decode(&xdr, 4));
+	KUNIT_ASSERT_TRUE(test, xdr_stream_subsegment(&xdr, &payload, 10));
+	KUNIT_EXPECT_EQ(test, payload.page_len, 10U);
+	KUNIT_EXPECT_EQ(test, payload.bvec_count, 3U);
+	KUNIT_EXPECT_EQ(test, xdr_stream_pos(&xdr), 16U);
+	KUNIT_EXPECT_EQ(test, xdr_stream_remaining(&xdr), (size_t)0);
+	xdr_finish_decode(&xdr);
+
+	/* The pad in the tail: the stream lands past it. */
+	memcpy(tail, expected + 14, sizeof(tail));
+	xdr_bvec_test_init_buf(&buf, bvec, ARRAY_SIZE(bvec), 0, 10,
+			       head, sizeof(head), tail, sizeof(tail));
+	xdr_init_decode(&xdr, &buf, NULL, NULL);
+	xdr_set_scratch_buffer(&xdr, scratch, sizeof(scratch));
+	KUNIT_ASSERT_NOT_NULL(test, xdr_inline_decode(&xdr, 4));
+	KUNIT_ASSERT_TRUE(test, xdr_stream_subsegment(&xdr, &payload, 10));
+	KUNIT_EXPECT_EQ(test, xdr_stream_pos(&xdr), 16U);
+	KUNIT_EXPECT_EQ(test, xdr_stream_remaining(&xdr), (size_t)4);
+	p = xdr_inline_decode(&xdr, 4);
+	KUNIT_ASSERT_NOT_NULL(test, p);
+	KUNIT_EXPECT_MEMEQ(test, p, expected + 16, 4);
+	xdr_finish_decode(&xdr);
+
+	/* Short of the end, the stream is still in the pages. */
+	xdr_bvec_test_init_buf(&buf, bvec, ARRAY_SIZE(bvec), 0, 12,
+			       head, sizeof(head), NULL, 0);
+	xdr_init_decode(&xdr, &buf, NULL, NULL);
+	KUNIT_ASSERT_NOT_NULL(test, xdr_inline_decode(&xdr, 4));
+	KUNIT_ASSERT_TRUE(test, xdr_stream_subsegment(&xdr, &payload, 8));
+	KUNIT_EXPECT_EQ(test, xdr_stream_remaining(&xdr), (size_t)4);
+	p = xdr_inline_decode(&xdr, 4);
+	KUNIT_ASSERT_NOT_NULL(test, p);
+	KUNIT_EXPECT_MEMEQ(test, p, expected + 12, 4);
+	xdr_finish_decode(&xdr);
+
+	/* A message that ends before the pages do stops where it ends. */
+	xdr_bvec_test_init_buf(&buf, bvec, ARRAY_SIZE(bvec), 0, 12,
+			       head, sizeof(head), NULL, 0);
+	buf.len = 12;
+	xdr_init_decode(&xdr, &buf, NULL, NULL);
+	KUNIT_ASSERT_NOT_NULL(test, xdr_inline_decode(&xdr, 4));
+	KUNIT_ASSERT_TRUE(test, xdr_stream_subsegment(&xdr, &payload, 8));
+	KUNIT_EXPECT_EQ(test, xdr_stream_pos(&xdr), 12U);
+	KUNIT_EXPECT_EQ(test, xdr_stream_remaining(&xdr), (size_t)0);
+	KUNIT_EXPECT_PTR_EQ(test, xdr_inline_decode(&xdr, 4), NULL);
+	xdr_finish_decode(&xdr);
+}
+
 static struct kunit_case xdr_bvec_test_cases[] = {
 	KUNIT_CASE(xdr_bvec_offset_matrix_test),
 	KUNIT_CASE(xdr_bvec_component_matrix_test),
@@ -812,6 +1080,9 @@ static struct kunit_case xdr_bvec_test_cases[] = {
 	KUNIT_CASE(xdr_bvec_bounds_and_scratch_test),
 	KUNIT_CASE(xdr_bvec_mutation_rejection_test),
 	KUNIT_CASE(xdr_bvec_legacy_parity_test),
+	KUNIT_CASE(xdr_bvec_checked_test),
+	KUNIT_CASE(xdr_bvec_end_of_pages_test),
+	KUNIT_CASE(xdr_bvec_advance_test),
 	{}
 };
 
