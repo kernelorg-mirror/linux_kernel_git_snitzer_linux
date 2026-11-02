@@ -306,6 +306,9 @@ static bool svc_tcp_rx_rcvbuf_given;
 static bool svc_tcp_rx_rcvbuf_wanted;
 static void svc_tcp_rx_budget_apply_all(void);
 static bool svc_tcp_rx_hold_stale(struct svc_sock *svsk);
+VISIBLE_IF_KUNIT void svc_tcp_rx_hold_listener(struct svc_sock *svsk);
+VISIBLE_IF_KUNIT void svc_tcp_rx_hold_drop(struct svc_sock *svsk);
+VISIBLE_IF_KUNIT void svc_tcp_rx_hold_conn(struct svc_sock *svsk);
 VISIBLE_IF_KUNIT void svc_tcp_rx_geometry_account(struct svc_sock *svsk,
 						  unsigned int truesize,
 						  unsigned int skb_len,
@@ -4575,6 +4578,7 @@ static void svc_tcp_handshake(struct svc_xprt *xprt)
 		trace_svc_tls_unavailable(xprt);
 		goto out_close;
 	}
+	svc_tcp_rx_hold_drop(svsk);
 
 	/* Mark the transport ready in case the remote sent RPC
 	 * traffic before the kernel received the handshake
@@ -4994,6 +4998,9 @@ static struct svc_xprt *svc_tcp_accept(struct svc_xprt *xprt)
 	clear_bit(XPT_CONN, &svsk->sk_xprt.xpt_flags);
 	/* Before a connection's first record: the region, sized for the threads. */
 	rx_loan_region_carve();
+	/* A region carved since svc_tcp_init(): hold the next first window. */
+	if (!READ_ONCE(svsk->sk_rx_hold.held))
+		svc_tcp_rx_hold_listener(svsk);
 	err = kernel_accept(sock, &newsock, O_NONBLOCK);
 	if (err < 0) {
 		if (err != -EAGAIN)
@@ -5803,12 +5810,14 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 
 	/*
 	 * A transport holds its receive buffer to svc_tcp_rx_rcvbuf once it
-	 * receives region pages; svc_tcp_recvfrom() applies it after the
-	 * socket lock is released.
+	 * receives region pages, if svc_tcp_init() did not already; a TLS
+	 * session never lends (svc_tcp_rx_hold_drop()).  svc_tcp_recvfrom()
+	 * applies it after the socket lock is released.
 	 */
 	if (!svsk->sk_rx_hold.held && !svsk->sk_rx_hold.pending &&
 	    svc_tcp_rx_rcvbuf_effective() &&
-	    svc_tcp_rx_skb_region_pages(skb, 0, offset, offset + len))
+	    svc_tcp_rx_skb_region_pages(skb, 0, offset, offset + len) &&
+	    !test_bit(XPT_TLS_SESSION, &svsk->sk_xprt.xpt_flags))
 		svsk->sk_rx_hold.pending = true;
 	else if (svsk->sk_rx_hold.held && svc_tcp_rx_hold_stale(svsk)) {
 		svsk->sk_rx_hold.held = false;
@@ -7004,11 +7013,13 @@ static bool svc_tcp_rx_hold_stale(struct svc_sock *svsk)
 }
 
 /*
- * A transport that receives region pages: hold its receive buffer to
+ * A transport that may receive region pages: hold its receive buffer to
  * svc_tcp_rx_rcvbuf, at the region's geometry, so its unread data stays its
  * share of the region (rx_loan_hold_apply()).  Transports that never
- * receive a region page keep TCP's own buffer; listeners are held too.
- * Called with the socket unlocked: each step takes the socket lock itself.
+ * receive a region page keep TCP's own buffer (svc_tcp_rx_hold_drop());
+ * listeners hold only their connections' first window
+ * (svc_tcp_rx_hold_listener()).  Called with the socket unlocked: each
+ * step takes the socket lock itself.
  */
 VISIBLE_IF_KUNIT void svc_tcp_rx_hold_buffer(struct svc_sock *svsk)
 {
@@ -7026,6 +7037,55 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_hold_buffer(struct svc_sock *svsk)
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_hold_buffer);
 
+/*
+ * A listener: hold only the buffer and ratio its connections open their
+ * first window with (rx_loan_hold_listen()).  A lock or a window clamp
+ * here would also fix a small window scale on every connection at its
+ * SYN, for life, lending or not.  svc_tcp_init() holds each connection
+ * fully before its first read.
+ */
+VISIBLE_IF_KUNIT void svc_tcp_rx_hold_listener(struct svc_sock *svsk)
+{
+	unsigned int bytes = svc_tcp_rx_rcvbuf_effective();
+	unsigned int factor = svc_tcp_rx_hold_factor(svsk);
+
+	if (!rx_loan_hold_listen(&svsk->sk_rx_hold, svsk->sk_sk, bytes,
+				 factor))
+		trace_svcsock_tcp_rx_hold(&svsk->sk_xprt, factor,
+					  READ_ONCE(svsk->sk_sk->sk_rcvbuf), 0);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_hold_listener);
+
+/*
+ * A transport that will never receive region pages (a TLS session): give
+ * it back TCP's own buffer, from its hold or the one it inherited from a
+ * held listener (rx_loan_hold_release()).  Its window scale is TCP's own,
+ * so the window opens past the hold.
+ */
+VISIBLE_IF_KUNIT void svc_tcp_rx_hold_drop(struct svc_sock *svsk)
+{
+	rx_loan_hold_release(svsk->sk_sk);
+	svsk->sk_rx_hold.held = false;
+	svsk->sk_rx_hold.pending = false;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_hold_drop);
+
+/*
+ * A new connection: whether it lends is known only after its first RPC
+ * (TLS), and its first burst must not overflow the buffer it is held to,
+ * so hold it before it is read when its budget lends at all.  One whose
+ * budget is 0 copies every record: it gets back TCP's own buffer, from
+ * the first window a held listener gave it.
+ */
+VISIBLE_IF_KUNIT void svc_tcp_rx_hold_conn(struct svc_sock *svsk)
+{
+	if (svc_tcp_rx_budget_none(svsk))
+		svc_tcp_rx_hold_drop(svsk);
+	else
+		svc_tcp_rx_hold_buffer(svsk);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_hold_conn);
+
 static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 {
 	struct sock	*sk = svsk->sk_sk;
@@ -7041,7 +7101,7 @@ static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 		sk->sk_data_ready = svc_tcp_listen_data_ready;
 		set_bit(XPT_CONN, &svsk->sk_xprt.xpt_flags);
 		/* Connections take their first window from the listener. */
-		svc_tcp_rx_hold_buffer(svsk);
+		svc_tcp_rx_hold_listener(svsk);
 	} else {
 		sk->sk_state_change = svc_tcp_state_change;
 		sk->sk_data_ready = svc_data_ready;
@@ -7062,6 +7122,9 @@ static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 		    READ_ONCE(svc_tcp_rx_region_user_timeout))
 			tcp_sock_set_user_timeout(sk,
 				READ_ONCE(svc_tcp_rx_region_user_timeout));
+
+		/* Held before it is read, if it may lend. */
+		svc_tcp_rx_hold_conn(svsk);
 
 		set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags);
 		switch (sk->sk_state) {
