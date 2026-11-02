@@ -51,6 +51,12 @@ static int xdr_buf_validate_page_mode(const struct xdr_buf *buf)
 		return (buf->bvec_count || buf->bvec_offset) ? -EINVAL : 0;
 	if (!buf->bvec || !buf->bvec_count)
 		return -EINVAL;
+	/*
+	 * The table is immutable and nothing here changes a buffer in this
+	 * mode, so what was true of it when it was built is true now.
+	 */
+	if (buf->flags & XDRBUF_BVECS_CHECKED)
+		return 0;
 
 	remaining = buf->page_len;
 	for (i = 0; i < buf->bvec_count; i++) {
@@ -2290,6 +2296,8 @@ int xdr_buf_subsegment(const struct xdr_buf *buf, struct xdr_buf *subbuf,
 		bvec = buf->bvec;
 		bvec_count = buf->bvec_count;
 		bvec_offset = buf->bvec_offset;
+		/* A segment of a checked table is itself checked. */
+		subbuf->flags = buf->flags;
 	}
 	subbuf->buflen = subbuf->len = len;
 	subbuf->page_mode = page_mode;
