@@ -330,8 +330,8 @@ body, in order:
    (`boot7-all4-svcsock/`), ending `KUNIT FAIL` only on the 8 rings.
 3. `nfsd4_bvec_kunit.c`: the decode fixtures are replaced, see "Before
    and after `nfsd4_bvec_kunit`" below. The session tests' own transport is
-   gone: their requests stay on the fixture's accepted transport, and only
-   `rq_server` is nfsd's. Before that it was reviewed, and no path to a
+   gone: their requests stay on the fixture's accepted transport and on the
+   test's service. Before that it was reviewed, and no path to a
    NULL hook found. The test's own DESTROY means
    `nfsd4_q35_session_cleanup()` does nothing on a pass, so a scratch build,
    not committed, failed an assertion after `CREATE_SESSION`: on the old
@@ -345,8 +345,15 @@ body, in order:
    Were it to fire, a session's reference would hold `cl_rpc_users` and the
    lease would not end it either.
 
-   Left: `nfsd4_kunit_serv()` reads `nfsd_serv` without `nfsd_mutex` and
-   holds it for the test, so stopping nfsd during the suite is unsafe, and
+   `nfsd4_kunit_serv()` now takes `nfsd_mutex`, and no request points at
+   nfsd's `serv`: the suite only asks whether nfsd is up. **Stopping nfsd
+   during the suite is still unsafe,** as a session test uses nfsd's state
+   in the namespace from a thread nfsd does not wait for. `nfsd_net_ref`
+   does not help: `nfsd_shutdown_net()` calls `nfs4_state_shutdown_net()`
+   before it waits for that reference. `nfsd_mutex` cannot be held across a
+   test either, as KUnit runs cleanup in another kthread. So
+   `run-kunit.sh`, which does one thing at a time, is what keeps it safe.
+
    `rq_addr` and `rq_daddr` are still set by hand. On the real transport:
    the forced assertion gave 9 pass, 1 fail and no clients left
    (`boot7-session-abort2/`). A scratch build that also skipped the cleanup
@@ -357,6 +364,10 @@ body, in order:
    (`boot7-session-clean/`). With the other three, by the stock script:
    7/7, 52/52, 7/7 and 10/10, no skip, no warning, no crash
    (`boot7-all4-session/`), ending `KUNIT FAIL` only on the 8 rings.
+   Those ran with nfsd's `serv` in `rq_server`. On the test's service the
+   next runs are `boot7-private-clean/`, `boot7-private-abort/` and
+   `boot7-all4-private/`, the stock script. The locked read needs a new
+   `nfsd.ko`: `build-nfsd.sh` compiled it, and it has not run.
 
 4. `nfsd_bvec_kunit.c`: done, the decode and dispatch tests take requests
    from the service in `fs/nfsd/nfsd_kunit_svc.h`, moved there from the
@@ -457,9 +468,10 @@ takes the host down:
   arguments are zeroed as `svc_process_common()` does.
 - `rqstp` no longer sits in the context, so the dispatch observer finds
   its context through `rq_private`.
-- `svc_exit_thread()` reads `rq_server`, and a session test puts nfsd's
-  `serv` there because SEQUENCE sizes slots by nfsd's thread limit, so
-  `nfsd4_bvec_env_free()` puts each thread's own back before stopping them.
+- SEQUENCE grows a session's slots to `svc_serv_maxthreads(rq_server)`,
+  which a service made by `svc_create()` has as 0, so the session tests set
+  `sp_nrthrmax` on the test's pool. An earlier version put nfsd's `serv` in
+  `rq_server` instead, and had to put each thread's own back at teardown.
 - As in the svcsock fixture: the queue holds no reference on a transport,
   an accepted transport takes a module reference and a credential, and the
   hidden version answers `pg_rpcbind_set`.
