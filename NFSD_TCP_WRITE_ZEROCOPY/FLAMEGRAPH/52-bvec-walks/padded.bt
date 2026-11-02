@@ -1,0 +1,7 @@
+#!/usr/bin/bpftrace
+/* Each payload that needs a pad as the server decodes it: page mode 1 is a
+ * loaned record, and the flag says its table was not walked again. */
+fentry:sunrpc:xdr_stream_subsegment /args.nbytes & 3/
+{
+	@[args.xdr->buf->page_mode, args.xdr->buf->flags & 8, args.nbytes] = count();
+}
