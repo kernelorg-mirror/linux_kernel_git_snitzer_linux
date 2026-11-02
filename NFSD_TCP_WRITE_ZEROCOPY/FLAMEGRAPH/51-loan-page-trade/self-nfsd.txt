@@ -1,0 +1,60 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 256K of event 'armv8_pmuv3_0/cycles/P'
+# Event count (approx.): 88541470394
+#
+# Overhead  Symbol                                         IPC   [IPC Coverage]
+# ........  .............................................  ....................
+#
+    28.90%  [k] default_idle_call                          -      -            
+     7.82%  [k] finish_task_switch.isra.0                  -      -            
+     3.40%  [k] _raw_spin_unlock_irqrestore                -      -            
+     1.63%  [k] _raw_spin_lock                             -      -            
+     1.53%  [k] svc_tcp_rx_append_ref                      -      -            
+     1.36%  [k] svc_tcp_rx_borrow_segment                  -      -            
+     1.23%  [k] blk_map_iter_next                          -      -            
+     1.06%  [k] svc_tcp_rx_release_refs                    -      -            
+     0.96%  [k] svc_tcp_rx_prefetch_pages                  -      -            
+     0.92%  [k] napi_pp_put_page                           -      -            
+     0.83%  [k] svc_tcp_rx_walk_skb                        -      -            
+     0.80%  [k] xdr_buf_validate_page_mode                 -      -            
+     0.78%  [k] svc_tcp_recv_skb                           -      -            
+     0.77%  [k] _raw_spin_unlock_irq                       -      -            
+     0.74%  [k] dma_direct_map_phys                        -      -            
+     0.73%  [k] svc_recv                                   -      -            
+     0.67%  [k] xdr_stream_subsegment                      -      -            
+     0.65%  [k] __dev_xmit_skb                             -      -            
+     0.62%  [k] __tcp_transmit_skb                         -      -            
+     0.60%  [k] bio_split_io_at                            -      -            
+     0.59%  [k] page_pool_put_netmem_bulk                  -      -            
+     0.57%  [k] percpu_counter_add_batch                   -      -            
+     0.57%  [k] svc_tcp_rx_refs_valid                      -      -            
+     0.55%  [k] svc_tcp_rx_region_span                     -      -            
+     0.50%  [k] _raw_spin_lock_bh                          -      -            
+     0.48%  [k] svc_tcp_rx_skb_region_pages_after.part.0   -      -            
+     0.48%  [k] dma_map_phys                               -      -            
+     0.47%  [k] svc_tcp_recvfrom                           -      -            
+     0.45%  [k] blk_rq_dma_map_iter_next                   -      -            
+     0.43%  [k] svc_tcp_rx_validate_mixed                  -      -            
+     0.42%  [k] llist_del_first_this                       -      -            
+     0.41%  [k] blk_mq_submit_bio                          -      -            
+     0.41%  [k] xdr_buf_to_bvec                            -      -            
+     0.40%  [k] kmem_cache_alloc_node_noprof               -      -            
+     0.40%  [k] nfsd_cache_insert                          -      -            
+     0.38%  [k] sunrpc_cache_find_rcu                      -      -            
+     0.37%  [k] _raw_spin_unlock                           -      -            
+     0.36%  [k] svc_xprt_received                          -      -            
+     0.35%  [k] arch_counter_get_cntpct                    -      -            
+     0.34%  [k] lock_sock_nested                           -      -            
+     0.33%  [k] tcp_recv_skb                               -      -            
+     0.33%  [k] nfs_dio_split                              -      -            
+     0.32%  [k] page_pool_recycle_ring_bulk                -      -            
+     0.32%  [k] __sk_mem_reduce_allocated                  -      -            
+     0.31%  [k] xfs_iext_lookup_extent                     -      -            
+     0.31%  [k] kmem_cache_alloc_noprof                    -      -            
+#
+# (Tip: System-wide collection from all CPUs: perf record -a)
+#
