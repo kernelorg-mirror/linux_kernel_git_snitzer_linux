@@ -245,9 +245,13 @@ test result, no oops.
 - **The other suites, one at a time (Mike: not all at once, the riskiest
   last).** `xdr_kunit` ran 7/7 with no skip and no warning, sunrpc's
   refcount and settings unchanged (`boot6-xdr/`). `nfsd_bvec_kunit` ran
-  7/7 on `boot5`.
-- **Not yet run:** `nfsd4_bvec_kunit` on 506, `run-kunit.sh` itself, so
-  the four suites in one pass, and any page size but 16 KiB.
+  7/7 on `boot5`. `nfsd4_bvec_kunit`, the packaged module unchanged, ran
+  10/10 with no skip and no warning under 4 nfsd threads, sunrpc's
+  refcount and settings unchanged (`boot6-nfsd4/`). That is the baseline
+  for replacing its decode fixtures: its passing does not make them
+  safe, only shows that they still fit this kernel.
+- **Not yet run:** `run-kunit.sh` itself, so the four suites in one
+  pass, and any page size but 16 KiB.
   After a run that warned, use `clear_warn_once` before believing the
   next one.
 
@@ -318,13 +322,11 @@ system with DONTCACHE. `xdr_kunit.c` builds no kernel objects.
 
 ### Before and after `nfsd4_bvec_kunit`
 
-**Read this first if tardis2 went down on 2 November after `boot6-xdr`:**
-the next step was a baseline run of this suite, unchanged, on 506. Its
-logs are `boot6-nfsd4/` (`dmesg-live.log`, synced every 0.5 s) and the
-stream in `/var/tmp/tardis2-netconsole.log` on the client, which cannot
-carry an oops while kdump is armed, as above. The suite was the last
-of the four to run, and the riskiest (Mike), so nothing else is lost by
-its crash; the host had nothing else running.
+The baseline run of this suite, unchanged, on 506 passed 10/10 on
+2 November (`boot6-nfsd4/`, with the stream in
+`/var/tmp/tardis2-netconsole.log` on the client, which cannot carry an oops
+while kdump is armed, as above). What follows is why it ran as it did and
+what comes after it. The same steps apply to a run of the rewritten suite.
 
 **Why it is the riskiest: the hand-built decode fixtures.**
 `nfsd4_bvec_decode_context_alloc()` zeroes a `svc_serv`, a `svc_xprt` and
