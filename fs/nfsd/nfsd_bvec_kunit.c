@@ -33,6 +33,7 @@
 
 #include "cache.h"
 #include "nfsd.h"
+#include "nfsd_kunit_svc.h"
 #include "vfs.h"
 #include "xdr3.h"
 #include "filecache.h"
@@ -52,11 +53,33 @@ struct nfsd_bvec_wire_fixture {
 };
 
 struct nfsd_bvec_decode_context {
-	struct svc_xprt_class	xprt_class;
-	struct svc_xprt	xprt;
-	struct svc_serv		serv;
-	struct svc_rqst		rqst;
+	struct svc_rqst		*rqstp;
+	struct nfsd3_writeargs	*args;
 	struct xdr_stream	stream;
+};
+
+#define NFSD_BVEC_TEST_PROGRAM	0x2000f4b3
+#define NFSD_BVEC_TEST_VERSION	3
+
+/* Its threads hold what nfsd's do; hidden, it never asks rpcbind. */
+static const struct svc_version nfsd_bvec_test_version = {
+	.vs_vers = NFSD_BVEC_TEST_VERSION,
+	.vs_xdrsize = NFS3_SVC_XDRSIZE,
+	.vs_hidden = true,
+};
+
+static const struct svc_version *nfsd_bvec_test_versions[] = {
+	[NFSD_BVEC_TEST_VERSION] = &nfsd_bvec_test_version,
+};
+
+static struct svc_program nfsd_bvec_test_program = {
+	.pg_prog = NFSD_BVEC_TEST_PROGRAM,
+	.pg_lovers = NFSD_BVEC_TEST_VERSION,
+	.pg_hivers = NFSD_BVEC_TEST_VERSION,
+	.pg_nvers = ARRAY_SIZE(nfsd_bvec_test_versions),
+	.pg_vers = nfsd_bvec_test_versions,
+	.pg_name = "nfsd-bvec-kunit",
+	.pg_rpcbind_set = svc_generic_rpcbind_set,
 };
 
 static void nfsd_bvec_free_page(void *data)
@@ -152,24 +175,20 @@ nfsd_bvec_wire_fixture_alloc(struct kunit *test, unsigned int odd_split)
 }
 
 static void
-nfsd_bvec_decode_context_init(struct nfsd_bvec_decode_context *context,
-			      struct xdr_buf *buf,
-			      struct nfsd3_writeargs *args)
+nfsd_bvec_decode_context_init(struct kunit *test,
+			      struct nfsd_bvec_decode_context *context,
+			      struct xdr_buf *buf)
 {
 	memset(context, 0, sizeof(*context));
-	context->xprt_class.xcl_max_payload = PAGE_SIZE;
-	context->xprt.xpt_class = &context->xprt_class;
-	context->serv.sv_max_payload = PAGE_SIZE;
-	context->rqst.rq_xprt = &context->xprt;
-	context->rqst.rq_server = &context->serv;
-	context->rqst.rq_argp = args;
+	context->rqstp = nfsd_kunit_rqst(test);
+	context->args = context->rqstp->rq_argp;
 	xdr_init_decode(&context->stream, buf, buf->head[0].iov_base, NULL);
 }
 
 static bool
 nfsd_bvec_decode_write(struct nfsd_bvec_decode_context *context)
 {
-	return nfs3svc_decode_writeargs(&context->rqst, &context->stream);
+	return nfs3svc_decode_writeargs(context->rqstp, &context->stream);
 }
 
 static void nfsd_bvec_decode_checksum_parity_test(struct kunit *test)
@@ -178,6 +197,7 @@ static void nfsd_bvec_decode_checksum_parity_test(struct kunit *test)
 	__be32 scratch[RC_CSUMLEN / sizeof(__be32)];
 	unsigned int case_index;
 
+	nfsd_kunit_env_init(test, &nfsd_bvec_test_program);
 	for (case_index = 0; case_index < ARRAY_SIZE(odd_splits);
 	     case_index++) {
 		struct nfsd_bvec_decode_context *authoritative_context;
@@ -203,9 +223,6 @@ static void nfsd_bvec_decode_checksum_parity_test(struct kunit *test)
 		authoritative_context = kunit_kzalloc(test,
 						      sizeof(*authoritative_context),
 						      GFP_KERNEL);
-		legacy_args = kunit_kzalloc(test, sizeof(*legacy_args), GFP_KERNEL);
-		authoritative_args = kunit_kzalloc(test, sizeof(*authoritative_args),
-						   GFP_KERNEL);
 		legacy_payload = kunit_kmalloc(test, NFSD_BVEC_Q20_PAYLOAD_LEN, GFP_KERNEL);
 		authoritative_payload = kunit_kmalloc(test,
 						      NFSD_BVEC_Q20_PAYLOAD_LEN,
@@ -213,19 +230,18 @@ static void nfsd_bvec_decode_checksum_parity_test(struct kunit *test)
 		checksum_prefix = kunit_kmalloc(test, RC_CSUMLEN, GFP_KERNEL);
 		KUNIT_ASSERT_NOT_NULL(test, legacy_context);
 		KUNIT_ASSERT_NOT_NULL(test, authoritative_context);
-		KUNIT_ASSERT_NOT_NULL(test, legacy_args);
-		KUNIT_ASSERT_NOT_NULL(test, authoritative_args);
 		KUNIT_ASSERT_NOT_NULL(test, legacy_payload);
 		KUNIT_ASSERT_NOT_NULL(test, authoritative_payload);
 		KUNIT_ASSERT_NOT_NULL(test, checksum_prefix);
 
-		nfsd_bvec_decode_context_init(legacy_context, &fixture->legacy,
-					      legacy_args);
+		nfsd_bvec_decode_context_init(test, legacy_context,
+					      &fixture->legacy);
+		legacy_args = legacy_context->args;
 		decoded = nfsd_bvec_decode_write(legacy_context);
 		KUNIT_ASSERT_TRUE(test, decoded);
-		nfsd_bvec_decode_context_init(authoritative_context,
-					      &fixture->authoritative,
-					      authoritative_args);
+		nfsd_bvec_decode_context_init(test, authoritative_context,
+					      &fixture->authoritative);
+		authoritative_args = authoritative_context->args;
 		decoded = nfsd_bvec_decode_write(authoritative_context);
 		KUNIT_ASSERT_TRUE(test, decoded);
 
@@ -275,40 +291,36 @@ static void nfsd_bvec_decode_error_test(struct kunit *test)
 {
 	struct nfsd_bvec_decode_context *context;
 	struct nfsd_bvec_wire_fixture *fixture;
-	struct nfsd3_writeargs *args;
 	struct xdr_buf short_buf;
 	bool decoded;
 
+	nfsd_kunit_env_init(test, &nfsd_bvec_test_program);
 	fixture = nfsd_bvec_wire_fixture_alloc(test, 3);
 	context = kunit_kzalloc(test, sizeof(*context), GFP_KERNEL);
-	args = kunit_kzalloc(test, sizeof(*args), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, context);
-	KUNIT_ASSERT_NOT_NULL(test, args);
 
 	/*
 	 * The selected public decoder rejects an out-of-range stable_how;
 	 * keep that provider behavior explicit while checking bvec errors.
 	 */
 	fixture->head[5] = cpu_to_be32(NFS_FILE_SYNC + 1);
-	nfsd_bvec_decode_context_init(context, &fixture->authoritative, args);
-	decoded = nfs3svc_decode_writeargs(&context->rqst, &context->stream);
+	nfsd_bvec_decode_context_init(test, context, &fixture->authoritative);
+	decoded = nfsd_bvec_decode_write(context);
 	KUNIT_EXPECT_FALSE(test, decoded);
 	fixture->head[5] = cpu_to_be32(NFS_UNSTABLE);
 
-	memset(args, 0, sizeof(*args));
 	fixture->head[4] = cpu_to_be32(NFSD_BVEC_Q20_PAYLOAD_LEN - 1);
-	nfsd_bvec_decode_context_init(context, &fixture->legacy, args);
-	decoded = nfs3svc_decode_writeargs(&context->rqst, &context->stream);
+	nfsd_bvec_decode_context_init(test, context, &fixture->legacy);
+	decoded = nfsd_bvec_decode_write(context);
 	KUNIT_EXPECT_FALSE(test, decoded);
 	fixture->head[4] = cpu_to_be32(NFSD_BVEC_Q20_PAYLOAD_LEN);
 
-	memset(args, 0, sizeof(*args));
 	short_buf = fixture->authoritative;
 	short_buf.page_len--;
 	short_buf.len--;
 	short_buf.buflen--;
-	nfsd_bvec_decode_context_init(context, &short_buf, args);
-	decoded = nfs3svc_decode_writeargs(&context->rqst, &context->stream);
+	nfsd_bvec_decode_context_init(test, context, &short_buf);
+	decoded = nfsd_bvec_decode_write(context);
 	KUNIT_EXPECT_FALSE(test, decoded);
 }
 
@@ -1229,7 +1241,14 @@ static void nfsd_bvec_proc_dispatch_parity_test(struct kunit *test)
 		{ &program, 4, 0, rpc_prog_mismatch, NULL },
 		{ &program, 3, 2, rpc_proc_unavail, NULL },
 	};
+	struct svc_rqst *rqst;
 	unsigned int case_index;
+	u32 *argument, *response;
+
+	nfsd_kunit_env_init(test, &nfsd_bvec_test_program);
+	rqst = nfsd_kunit_rqst(test);
+	argument = rqst->rq_argp;
+	response = rqst->rq_resp;
 
 	for (case_index = 0; case_index < ARRAY_SIZE(cases); case_index++) {
 		const struct svc_program *case_program = cases[case_index].program;
@@ -1237,25 +1256,16 @@ static void nfsd_bvec_proc_dispatch_parity_test(struct kunit *test)
 		const struct svc_version *found_version = ERR_PTR(-EUCLEAN);
 		const struct svc_procedure *sentinel = &procedures[0];
 		struct svc_process_info *process;
-		struct svc_rqst *rqst;
-		struct svc_serv *serv;
-		u32 argument = U32_MAX;
-		u32 response = U32_MAX;
 		__be32 lookup_status;
 		__be32 dispatch_status;
 
 		process = kunit_kzalloc(test, sizeof(*process), GFP_KERNEL);
-		rqst = kunit_kzalloc(test, sizeof(*rqst), GFP_KERNEL);
-		serv = kunit_kzalloc(test, sizeof(*serv), GFP_KERNEL);
 		KUNIT_ASSERT_NOT_NULL(test, process);
-		KUNIT_ASSERT_NOT_NULL(test, rqst);
-		KUNIT_ASSERT_NOT_NULL(test, serv);
-		rqst->rq_server = serv;
 		rqst->rq_procinfo = sentinel;
 		rqst->rq_vers = cases[case_index].version;
 		rqst->rq_proc = cases[case_index].procedure;
-		rqst->rq_argp = &argument;
-		rqst->rq_resp = &response;
+		*argument = U32_MAX;
+		*response = U32_MAX;
 		lookup_status = svc_proc_lookup(case_program,
 						cases[case_index].version,
 						cases[case_index].procedure,
@@ -1273,8 +1283,8 @@ static void nfsd_bvec_proc_dispatch_parity_test(struct kunit *test)
 		KUNIT_EXPECT_PTR_EQ(test, rqst->rq_procinfo,
 				    cases[case_index].expected_procedure);
 		if (dispatch_status == rpc_success) {
-			KUNIT_EXPECT_EQ(test, argument, 0U);
-			KUNIT_EXPECT_EQ(test, response, 0U);
+			KUNIT_EXPECT_EQ(test, *argument, 0U);
+			KUNIT_EXPECT_EQ(test, *response, 0U);
 		}
 	}
 }
