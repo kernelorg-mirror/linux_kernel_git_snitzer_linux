@@ -249,6 +249,12 @@ decided.
    0.11 us, against 0.35 estimated, and the A/B cannot see it. Dropped
    (Mike), in `patches/dropped/` as 0007 to 0009. Latency stopped at 3 of
    8 runs for tardis2's shutdown for four SGL drives and the second port.
+24. **Round 55: the walk per piece in the NVMe SGL write path** (plan,
+   2 November; [55-nvme-sgl-walk](55-nvme-sgl-walk/README.md)). About 5 us
+   a WRITE, 5.9% of nfsd, at IPC 3 to 5: the kind of target that paid in
+   round 52. After a new baseline on tardis2's added drives and second
+   port, starting from a trace. 1 to 2 us at a guess. It likely needs a
+   new kernel.
 
 ## Where the kept rounds stand (2026-10-28)
 

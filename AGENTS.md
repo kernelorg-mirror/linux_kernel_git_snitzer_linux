@@ -319,6 +319,14 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**After tardis2's reboot with four more SGL drives and its second port
+(2026-11-02), start at the plan for round 55,
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/55-nvme-sgl-walk/README.md`:**
+bring-up, a new baseline (earlier figures are not comparable), a profile,
+then a trace before any code. Round 54's expkey change is dropped, its
+patches in `patches/dropped/` as 0007 to 0009; `updates/` holds round 53's
+`sunrpc.ko` and no `nfsd.ko`.
+
 **KUnit took tardis2 down three times on build 506 (2026-11-02), with
 no dump and no oops: read "KUnit crashes on build 506" in
 `NFSD_TCP_WRITE_ZEROCOPY/TESTING.md` before loading a suite.** The
