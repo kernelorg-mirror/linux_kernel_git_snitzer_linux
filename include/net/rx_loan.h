@@ -69,6 +69,7 @@ int rx_loan_table_alloc(struct rx_loan_table *t, unsigned long entries,
 			gfp_t gfp, int node);
 void rx_loan_table_free(struct rx_loan_table *t);
 bool rx_loan_table_refs_valid(const struct rx_loan_table *t);
+bool rx_loan_table_refs_valid_checked(const struct rx_loan_table *t);
 int rx_loan_table_release(struct rx_loan_table *t);
 void rx_loan_table_reset(struct rx_loan_table *t);
 void rx_loan_table_reset_consumer(struct rx_loan_table *t,
