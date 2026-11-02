@@ -430,7 +430,8 @@ static void nfsd_rtc_sync_hit(struct kunit *test)
 	struct rtcn *t = test->priv;
 	/* Unaligned start and a short read at EOF: pad and eof are mapped. */
 	loff_t offset = PAGE_SIZE + 1000;
-	u32 want = 8192, count = RTCN_SIZE - offset;
+	/* In pages, so the READ reaches past EOF at any PAGE_SIZE. */
+	u32 want = 2 * PAGE_SIZE, count = RTCN_SIZE - offset;
 	unsigned long h0, a0, h1, a1;
 	struct nfsd3_readres *resp;
 	struct svc_rqst *r = t->rq[1];
