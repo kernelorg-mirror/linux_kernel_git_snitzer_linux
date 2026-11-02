@@ -319,8 +319,10 @@ body, in order:
    nfsd4 suite. What it read was traced first: `nfs3svc_decode_writeargs()`
    reads `rq_argp` and `svc_max_payload()`, and `svc_generic_init_request()`
    reads `sv_stats`, NULL here, and `rq_argp` and `rq_resp` too, which the
-   test now uses instead of replacing. The first runs are
-   `boot7-nfsd-bvec-real/`, alone, and `boot7-all4-real/`, the stock script.
+   test now uses instead of replacing. Alone on 506 it ran 7/7, no skip, no
+   warning, sunrpc's refcount and settings unchanged
+   (`boot7-nfsd-bvec-real/`). The next run is `boot7-all4-real/`, the stock
+   script.
 5. Settings saved per test with KUnit cleanup actions. Tests write
    `svc_tcp_rx_copy_below`, the budgets, the `svc_tcp_rx_loans` key and
    fault injection in `init_net`, which now reach a real transport's
