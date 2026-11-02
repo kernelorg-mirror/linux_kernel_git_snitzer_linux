@@ -1,0 +1,10 @@
+#!/usr/bin/env bpftrace
+/* Round 54: the export lookups a second: rqst_exp_find is every one, exp_find_key the slow path. */
+kprobe:rqst_exp_find { @all = count(); }
+kprobe:exp_find_key { @slow = count(); }
+kprobe:expkey_upcall { @upcall = count(); }
+BEGIN { printf("Attached\n"); }
+interval:s:1 {
+	printf("%s lookups %d slow %d upcalls %d\n", strftime("%H:%M:%S", nsecs), (int64)@all, (int64)@slow, (int64)@upcall);
+	clear(@all); clear(@slow); clear(@upcall);
+}
