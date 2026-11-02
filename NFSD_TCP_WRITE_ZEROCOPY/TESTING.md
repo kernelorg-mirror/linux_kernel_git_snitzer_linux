@@ -436,6 +436,13 @@ body, in order:
    mutants of the release's check failed `svcsock_rx_release_published_test`
    alone.
 
+   With FLAMEGRAPH round 54's `svcsock_cache_peek_test`, `svcsock_kunit` has
+   56 tests: 56/56 alone, and each of two mutants of the peek failed that
+   test alone (`t2-r141/`). The stock four suites were not run on that
+   change. Those commits export `sunrpc_cache_peek_rcu`, so `build-nfsd.sh`
+   and a suite built outside the tree need `KBUILD_EXTRA_SYMBOLS` naming the
+   new sunrpc's `Module.symvers`.
+
 Also brittle, and left as they are for now: the fixture's use of a live
 thread's `rqstp`, `svc_new_thread()` called without a service mutex, and
 transports that stay off `sv_tempsocks`. `nfsd4_bvec_kunit` needs a
