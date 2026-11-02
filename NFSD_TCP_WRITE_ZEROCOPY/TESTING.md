@@ -318,8 +318,9 @@ body, in order:
    - The hold tests now run TCP's clamp on a connected socket, where
      `2 * advmss` is about 131 KB, so they use a 1 MiB buffer.
    - `kernel_accept()` is non-blocking, and there are many more connects.
-   The first runs are `boot7-svcsock-real/`, alone, and
-   `boot7-all4-svcsock/`, the stock script.
+   Alone on 506 it ran 52/52, no skip, no warning, settings unchanged
+   (`boot7-svcsock-real/`). The next runs are `boot7-svcsock-real2/`, a
+   second load, and `boot7-all4-svcsock/`, the stock script.
 3. `nfsd4_bvec_kunit.c`: the decode fixtures are replaced, see "Before
    and after `nfsd4_bvec_kunit`" below. Its session tests' test transport
    class is still to be reviewed.
