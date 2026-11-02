@@ -4810,6 +4810,116 @@ static void svcsock_rx_spare_kept_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, page_ref_count(own), own_refs - 1);
 }
 
+/*
+ * A loaned record of more than a page, partly received: nothing of it past
+ * the fixed bytes is in rq_pages.  The marker promises four pages.
+ */
+static void svcsock_rx_park_partial(struct kunit *test,
+				    struct svcsock_rx_fixture *fixture)
+{
+	const unsigned int len = SKB_WITH_OVERHEAD(PAGE_SIZE);
+	struct svcsock_rx_actor_state actor = {};
+	read_descriptor_t desc = { .count = 2 * len };
+	unsigned int refs, i;
+	struct page *head;
+	u8 *bytes;
+
+	bytes = kunit_kzalloc(test, len, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, bytes);
+	for (i = 0; i < 2; i++) {
+		struct sk_buff *skb;
+
+		if (!i) {
+			svcsock_rx_fill_body(bytes + sizeof(rpc_fraghdr),
+					     len - sizeof(rpc_fraghdr),
+					     RPC_CALL, RPC_AUTH_UNIX);
+			put_unaligned_be32(4 * PAGE_SIZE, bytes);
+		}
+		skb = svcsock_rx_build_page_skb(test, bytes, len, &head, &refs);
+		KUNIT_ASSERT_EQ(test,
+				svcsock_rx_run_actor(fixture->rqstp, &actor,
+						     &desc, skb, 0, skb->len),
+				(int)skb->len);
+	}
+	KUNIT_ASSERT_FALSE(test, actor.complete);
+	KUNIT_ASSERT_EQ(test, fixture->rqstp->rq_tcp_rx->mode,
+			(u8)SVC_TCP_RX_MIXED);
+	KUNIT_ASSERT_EQ(test, fixture->rqstp->rq_tcp_rx->lt.copied_bytes, 0U);
+	KUNIT_ASSERT_GT(test, fixture->svsk->sk_datalen, (u32)PAGE_SIZE);
+}
+
+/* End the record @rqstp took up and close the socket's receive state. */
+static void svcsock_rx_park_finish(struct kunit *test,
+				   struct svcsock_rx_fixture *fixture,
+				   struct svc_rqst *rqstp)
+{
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_abort(fixture->svsk, rqstp, rqstp->rq_tcp_rx,
+					 SVC_TCP_RX_ERROR,
+					 SVC_TCP_RX_REASON_COPY_FAULT), 0);
+	svc_tcp_recv_record_done(fixture->svsk);
+	svc_tcp_clear_pages(fixture->svsk);
+}
+
+/* A loaned record trades its first page and leaves the thread the others. */
+static void svcsock_rx_park_loaned_test(struct kunit *test)
+{
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 8);
+	struct svc_rqst *rqstp = fixture->rqstp;
+	struct page *first = rqstp->rq_pages[0];
+	struct page *second = rqstp->rq_pages[1];
+	struct page *own;
+
+	svcsock_rx_park_partial(test, fixture);
+	KUNIT_ASSERT_EQ(test, svc_tcp_save_pages(fixture->svsk, rqstp), 0);
+	KUNIT_EXPECT_PTR_EQ(test, fixture->svsk->sk_pages[0], first);
+	KUNIT_EXPECT_NULL(test, rqstp->rq_pages[0]);
+	KUNIT_EXPECT_PTR_EQ(test, rqstp->rq_pages[1], second);
+	KUNIT_EXPECT_NULL(test, fixture->svsk->sk_pages[1]);
+	KUNIT_EXPECT_EQ(test, rqstp->rq_pages_nfree, 1UL);
+
+	own = alloc_page(GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, own);
+	rqstp->rq_pages[0] = own;
+	rqstp->rq_pages_nfree = 0;
+	KUNIT_ASSERT_EQ(test, svc_tcp_restore_pages(fixture->svsk, rqstp), 0);
+	KUNIT_EXPECT_PTR_EQ(test, rqstp->rq_pages[0], first);
+	KUNIT_EXPECT_PTR_EQ(test, rqstp->rq_pages[1], second);
+	svcsock_rx_park_finish(test, fixture, rqstp);
+}
+
+/*
+ * A copied piece's bvec names the rq_pages entry it is in, so that page goes
+ * with the record to the next thread.  Left with the first thread it would
+ * be used again under the record.
+ */
+static void svcsock_rx_park_copied_test(struct kunit *test)
+{
+	struct svcsock_rx_fixture *fixture = svcsock_rx_alloc_fixture(test, 8);
+	struct svc_rqst *rqstp = fixture->rqstp;
+	struct svc_rqst *fresh = svcsock_rx_alloc_request(test, fixture, 8);
+	struct page *piece;
+	unsigned int pages;
+
+	svcsock_rx_park_partial(test, fixture);
+	/* What svc_tcp_rx_copy_skb() does, at this offset in the record. */
+	pages = DIV_ROUND_UP(fixture->svsk->sk_datalen, PAGE_SIZE);
+	piece = rqstp->rq_pages[pages - 1];
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_append_copied(rqstp->rq_tcp_rx, piece, 0, 8),
+			0);
+	fixture->svsk->sk_datalen = rqstp->rq_tcp_rx->lt.body_bytes;
+
+	KUNIT_ASSERT_EQ(test, svc_tcp_save_pages(fixture->svsk, rqstp), 0);
+	KUNIT_EXPECT_NULL(test, rqstp->rq_pages[pages - 1]);
+	KUNIT_EXPECT_PTR_EQ(test, fixture->svsk->sk_pages[pages - 1], piece);
+	KUNIT_EXPECT_EQ(test, rqstp->rq_pages_nfree, (unsigned long)pages);
+
+	KUNIT_ASSERT_EQ(test, svc_tcp_restore_pages(fixture->svsk, fresh), 0);
+	KUNIT_EXPECT_PTR_EQ(test, fresh->rq_pages[pages - 1], piece);
+	svcsock_rx_park_finish(test, fixture, fresh);
+}
+
 static void svcsock_rx_exclusion_table_test(struct kunit *test)
 {
 	static const struct {
@@ -8268,6 +8378,8 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_partial_save_restore_test),
 	KUNIT_CASE(svcsock_rx_spare_none_test),
 	KUNIT_CASE(svcsock_rx_spare_kept_test),
+	KUNIT_CASE(svcsock_rx_park_loaned_test),
+	KUNIT_CASE(svcsock_rx_park_copied_test),
 	KUNIT_CASE(svcsock_rx_exclusion_table_test),
 	KUNIT_CASE(svcsock_rx_materialize_test),
 	KUNIT_CASE(svcsock_rx_locked_head_then_materialize_test),
