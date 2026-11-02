@@ -55,7 +55,6 @@ struct nfs4_ff_layout_ds_err {
 };
 
 struct nfs4_ff_io_stat {
-	__u64				ops_requested;
 	__u64				bytes_requested;
 	__u64				ops_completed;
 	__u64				bytes_completed;
@@ -74,6 +73,14 @@ struct nfs4_ff_layoutstat {
 	struct nfs4_ff_io_stat io_stat;
 	struct nfs4_ff_busy_timer busy_timer;
 };
+
+/* Caller must hold the lock guarding this nfs4_ff_layoutstat. */
+static inline __u64
+nfs4_ff_ops_requested(const struct nfs4_ff_layoutstat *layoutstat)
+{
+	return layoutstat->io_stat.ops_completed +
+	       layoutstat->busy_timer.ops_in_flight;
+}
 
 struct nfs4_ff_layout_mirror;
 
