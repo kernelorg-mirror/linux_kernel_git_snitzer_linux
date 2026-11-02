@@ -355,8 +355,21 @@ nfsd4 KUnit suite`).** Each test gets a private service, created in the
 suite's `.init` so that it goes last, with a loopback listener, an accepted
 transport and one thread per request, which never receives. All of the
 suite's `svc_rqst`s are those threads': decode, savemem, payload-shared and
-session cleanup. The fake `svc_serv`, `svc_xprt` and `auth_ops` are gone;
-nothing in nfsd read `rq_authop`.
+session cleanup. The fake `svc_serv` and `svc_xprt` are gone. One
+`auth_ops` stays, static in the suite with only its flavor set, because
+`svcauth_null` and `svc_authenticate()` are not exported.
+
+**That first version took the host down (`boot6-nfsd4-real`, 04:06), with
+a dump, the first of a KUnit crash here.** It dropped `rq_authop` as well,
+on the word of a grep: nothing in `fs/nfsd` names the field. But
+`nfsd4_decode_compound()` calls `nfsd_read_splice_ok()`, which calls
+`svc_auth_flavor()`, and that reads it. The first test oopsed at
+`svc_auth_flavor+0xc`, a NULL deref at 0x38, `rq_authop->pseudoflavor`,
+from `nfsd4_bvec_setxattr_decode_test`. The dump is kept as
+`/var/crash/nfsd4-kunit-rq_authop-boot6/`. The fields the old fixture set
+were then compared with the new one's: `rq_authop` was the only one lost.
+This also shows that kdump can save a KUnit crash in a test's own thread,
+so the empty dumps of `boot3` to `boot5` are still unexplained.
 
 What a real `svc_rqst` required, and what to suspect first if this suite
 takes the host down:
