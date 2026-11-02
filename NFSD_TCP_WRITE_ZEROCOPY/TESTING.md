@@ -242,9 +242,12 @@ test result, no oops.
   did not in these runs. `sk_maxpages` and `rq_maxpages` are the
   requested capacity plus 3, so a test sized to the old exact figure
   passes with more room than it was written for.
-- **Not yet run:** `run-kunit.sh` itself, so the four suites in one pass
-  (`nfsd_bvec_kunit` ran 7/7 on its own on `boot5`; `xdr_kunit` and
-  `nfsd4_bvec_kunit` have not run on 506), and any page size but 16 KiB.
+- **The other suites, one at a time (Mike: not all at once, the riskiest
+  last).** `xdr_kunit` ran 7/7 with no skip and no warning, sunrpc's
+  refcount and settings unchanged (`boot6-xdr/`). `nfsd_bvec_kunit` ran
+  7/7 on `boot5`.
+- **Not yet run:** `nfsd4_bvec_kunit` on 506, `run-kunit.sh` itself, so
+  the four suites in one pass, and any page size but 16 KiB.
   After a run that warned, use `clear_warn_once` before believing the
   next one.
 
