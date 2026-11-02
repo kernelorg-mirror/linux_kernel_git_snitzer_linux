@@ -8310,6 +8310,48 @@ static void svcsock_rx_param_auto_manual_test(struct kunit *test)
 	KUNIT_EXPECT_STREQ(test, buf, "0 (auto)\n");
 }
 
+/*
+ * Release walks the entries of a record that was never published.  A
+ * published one had them checked at publish, so a bad entry shows that the
+ * walk was spared, while its counts are still checked.
+ */
+static void svcsock_rx_release_published_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 8);
+	struct page *page = svcsock_rx_alloc_page(test);
+	unsigned int refs;
+
+	KUNIT_ASSERT_NOT_NULL(test, state);
+	KUNIT_ASSERT_NOT_NULL(test, page);
+	refs = page_ref_count(page);
+	state->mode = SVC_TCP_RX_MIXED;
+	state->fixed_bytes = 28;
+	state->lt.body_bytes = 28;
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_append_borrowed(state, page, 1, 3, false), 0);
+	KUNIT_ASSERT_EQ(test, page_ref_count(page), refs + 1);
+
+	state->lt.bvec[0].bv_len = 0;
+	kunit_warning_suppress(test) {
+		KUNIT_EXPECT_EQ(test, svc_tcp_rx_release_refs(state), -EINVAL);
+	}
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs + 1);
+
+	state->lt.bvec[0].bv_len = 3;
+	state->mode = SVC_TCP_RX_PUBLISHED;
+	state->lt.refs_acquired++;
+	kunit_warning_suppress(test) {
+		KUNIT_EXPECT_EQ(test, svc_tcp_rx_release_refs(state), -EINVAL);
+	}
+	state->lt.refs_acquired--;
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs + 1);
+
+	state->lt.bvec[0].bv_len = 0;
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_release_refs(state), 0);
+	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
+	svc_tcp_rx_reset(state);
+}
+
 static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_param_auto_manual_test),
 	KUNIT_CASE_PARAM(svcsock_rx_actor_split_test,
@@ -8386,6 +8428,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_spare_kept_test),
 	KUNIT_CASE(svcsock_rx_park_loaned_test),
 	KUNIT_CASE(svcsock_rx_park_copied_test),
+	KUNIT_CASE(svcsock_rx_release_published_test),
 	KUNIT_CASE(svcsock_rx_exclusion_table_test),
 	KUNIT_CASE(svcsock_rx_materialize_test),
 	KUNIT_CASE(svcsock_rx_locked_head_then_materialize_test),
