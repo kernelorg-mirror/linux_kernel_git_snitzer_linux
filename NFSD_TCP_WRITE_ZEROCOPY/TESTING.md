@@ -356,9 +356,13 @@ body, in order:
    KUnit runs it before the actions. The 23 `budget_off` and
    `budget_default_off` registrations went too. `suite_exit` and
    `run-kunit.sh` stay as backstops. Alone on 506 it ran 52/52, no skip, no
-   warning, so no test depended on the leak (`boot7-settings/`). The next
-   runs are `boot7-settings-abort/`, a scratch build with one forced
-   assertion, and `boot7-all4-settings/`, the stock script.
+   warning, so no test depended on the leak (`boot7-settings/`). A scratch
+   build, not committed, set the want share to 6 and `copy_below` to 12345
+   in `svcsock_rx_set_want_test` and failed an assertion: the test after it
+   found 4 and 1024, as did all 88 starts of a test, and the suite ended
+   51 pass, 1 fail (`boot7-settings-abort/`). With the other three, by the
+   stock script: 7/7, 52/52, 7/7 and 10/10, no skip, no warning, no crash
+   (`boot7-all4-settings/`), ending `KUNIT FAIL` only on the 8 rings.
 
 Also brittle, and left as they are for now: the fixture's use of a live
 thread's `rqstp`, `svc_new_thread()` called without a service mutex, and
