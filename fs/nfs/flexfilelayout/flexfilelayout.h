@@ -108,6 +108,7 @@ struct nfs4_ff_layout_mirror {
 	struct nfs4_ff_layout_ds_stripe *dss;
 	refcount_t			ref;
 	u32				report_interval;
+	u32				dss_report_index;
 };
 
 struct nfs4_ff_layout_segment {
