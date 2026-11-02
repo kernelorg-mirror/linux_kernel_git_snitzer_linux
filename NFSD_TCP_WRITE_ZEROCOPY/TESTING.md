@@ -364,10 +364,13 @@ body, in order:
    (`boot7-session-clean/`). With the other three, by the stock script:
    7/7, 52/52, 7/7 and 10/10, no skip, no warning, no crash
    (`boot7-all4-session/`), ending `KUNIT FAIL` only on the 8 rings.
-   Those ran with nfsd's `serv` in `rq_server`. On the test's service the
-   next runs are `boot7-private-clean/`, `boot7-private-abort/` and
-   `boot7-all4-private/`, the stock script. The locked read needs a new
-   `nfsd.ko`: `build-nfsd.sh` compiled it, and it has not run.
+   Those ran with nfsd's `serv` in `rq_server`. On the test's service: 10/10
+   alone (`boot7-private-clean/`); 9 pass, 1 fail with the forced assertion,
+   no clients left (`boot7-private-abort/`); and by the stock script 7/7,
+   52/52, 7/7 and 10/10, no skip, no warning, no crash
+   (`boot7-all4-private/`), ending `KUNIT FAIL` only on the 8 rings. The
+   locked read needs a new `nfsd.ko`: `build-nfsd.sh` compiled it, and it
+   has not run; these runs used 506's unlocked one, as a NULL check.
 
 4. `nfsd_bvec_kunit.c`: done, the decode and dispatch tests take requests
    from the service in `fs/nfsd/nfsd_kunit_svc.h`, moved there from the
