@@ -15,6 +15,7 @@ obj-$(CONFIG_SUNRPC_XDR_KUNIT_TEST) += xdr_kunit.o
 obj-$(CONFIG_SUNRPC_SVCSOCK_KUNIT_TEST) += svcsock_kunit.o
 obj-$(CONFIG_SUNRPC_SVC_POOL_KUNIT_TEST) += svc_pool_kunit.o
 obj-$(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST) += svc_rtc_kunit.o
+obj-$(CONFIG_SUNRPC_CACHE_KUNIT_TEST) += cache_kunit.o
 
 sunrpc-y := clnt.o xprt.o socklib.o xprtsock.o sched.o \
 	    auth.o auth_null.o auth_tls.o auth_unix.o \
