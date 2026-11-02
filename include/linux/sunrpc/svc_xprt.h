@@ -209,7 +209,7 @@ struct svc_rtc_send {
 struct svc_rtc_conn {
 	struct work_struct	work;
 	struct svc_xprt		*xprt;
-	int			cpu;	/* CPU of the latest receive kick */
+	int			cpu;	/* work CPU, set by svc_rtc_place() */
 	unsigned long		flags;
 	struct llist_head	sendq;
 	/* FIFO replies taken from @sendq not yet sent; work item only */
@@ -326,6 +326,12 @@ enum svc_rtc_verdict svc_rtc_recv_step(struct svc_xprt *xprt,
 				       const struct svc_rtc_ops **opsp);
 bool	svc_rtc_thread_serve(struct svc_rqst *rqstp, struct svc_xprt *xprt);
 unsigned int svc_rtc_drain_sends(struct svc_rtc_conn *conn, bool dead);
+int	svc_rtc_pick_cpu(const void *key, int rx_cpu,
+			 const struct cpumask *node,
+			 const struct cpumask *rxcpus,
+			 const struct cpumask *online);
+int	svc_rtc_place(struct svc_serv *serv, struct svc_rtc_conn *conn,
+		      int rx_cpu, bool softirq);
 int	svc_rtc_pool_set(struct svc_serv *serv, unsigned int nr);
 bool	svc_rtc_thread_run(struct svc_rqst *thr);
 bool	svc_rtc_thread_steal(struct svc_rqst *thr);
