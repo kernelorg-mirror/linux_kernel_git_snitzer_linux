@@ -67,3 +67,17 @@ It is not a one-liner. `svc_export_lookup()` may allocate on a miss, so the fast
 Test: `svcsock_cache_peek_test`, with a fake one-bucket cache. `svcsock_kunit` has 56 tests.
 
 `run141.sh` checks it before any A/B: KUnit, two mutants, the paths a second under load (`paths.bt`) with a flush and keys set to expire in 14 s in the window, and an unexport seen by a live mount. So this round swaps `nfsd.ko`: `build-nfsd.sh` needs `KBUILD_EXTRA_SYMBOLS` for the new export.
+
+## Before the A/B
+
+On `sunrpc` `1C40775238B884E7ED53863` and `nfsd` `FB4139BC86377896E24C64D`, `t2-r141/`:
+
+- **KUnit:** svcsock 56/56, twice. M1, which lets an invalid or negative entry through, and M2, which ignores a refresh due, each failed `svcsock_cache_peek_test` alone.
+- **Under load:** about 43k lookups a second, none slow outside the events below, 40.50 GB/s, no fio error, by `paths.bt`, whose probes cost the run a little.
+- **`exportfs -f` in the window:** one second of 15 slow lookups and 12 upcalls, then fast again.
+- **A key due for refresh (`run141b.sh`):** set to expire in 16 s, it went on the fast path until 9 s, just past half its life, then 2 slow lookups and 2 upcalls, `mountd` answered, and fast again, with no write failing. run141's own attempt lost this to the channel's format: an fsid goes down it as raw bytes in hex.
+- **An unexport on a live mount:** a write worked, `exportfs -u` and `-f` gave `Permission denied` at once, and exporting again gave a working write.
+
+So each way out of the fast path has run.
+
+`run142.sh` is the A/B: both sides on the new sunrpc, A the kernel's nfsd, B this one. Latency runs in the same A B B A B A A B, since A B B A alone misled rounds 52 and 53.
