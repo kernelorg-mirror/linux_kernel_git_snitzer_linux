@@ -191,6 +191,14 @@ After a regroup, a branch marks the last commit of each group:
 `…-kunit-tests` and `…-docs`, which is the same commit as the branch
 itself.
 
+**Fold at the next regroup (Mike, 2026-11-02):** `nfsd: take nfsd_mutex
+to read nfsd_serv for the KUnit suites` goes into the interface commit
+above, the one thing since it outside the suites. It applies there
+cleanly and touches only that commit's `nfsd4_kunit_serv()`.
+`nfsd: keep rq_authop in the nfsd4 KUnit suite's requests` has no
+`Fixes:`: it goes into `nfsd: decode on a real service in the nfsd4 KUnit
+suite`.
+
 ## NFSD TCP write-path zero-copy (page-loan series)
 
 The server-side page-loan work — eliminating the redundant receive-side data
