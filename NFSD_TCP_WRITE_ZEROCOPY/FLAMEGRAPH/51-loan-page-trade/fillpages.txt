@@ -1,0 +1,17 @@
+../FLAMEGRAPH/51-loan-page-trade/fillpages.bt:16:31-47: WARNING: Return value discarded.
+fexit:sunrpc:svc_fill_pages { delete(@in[tid]); }
+                              ~~~~~~~~~~~~~~~~
+Attached 6 probes
+
+
+@allocs[reply]: 370248
+@fills[reply]: 387597
+@fills[arg]: 1253698
+@npages[reply]:
+[1]               387597 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@npages[arg]:
+[1]              1253698 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@parks: 1153081
+@publishes: 308032

@@ -217,7 +217,10 @@ decided.
    `7ca95cca4c1a`: a loaned record with no copied bytes trades one page.
    A/B, 4 runs a side: nfsd -3.3k cycles and -3.3k instructions a WRITE,
    -1.1%, no overlap; the rings, rate, region and latency the same. About
-   1 us of the 2.3 us round 50 expected: `svc_fill_pages` did not fall.
+   1 us of the 2.3 us round 50 expected: `svc_fill_pages` did not fall,
+   since what it allocates now is the reply's page, 1.2 a WRITE, none for
+   the arguments. Next is round 50's second target, the repeated bvec
+   walks, which needs a new kernel.
 
 ## Where the kept rounds stand (2026-10-28)
 
