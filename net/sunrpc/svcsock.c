@@ -5065,6 +5065,20 @@ failed:
 	return NULL;
 }
 
+/*
+ * How many of rq_pages hold some of @svsk's partly received record.  Copied
+ * bytes land in rq_pages at their offset in the record.  A loaned record has
+ * none past its fixed bytes, at the start of the first page: the rest of it
+ * is in the pages it borrowed, so the other entries need not travel with it.
+ */
+static unsigned int svc_tcp_rx_held_pages(const struct svc_sock *svsk,
+					  const struct svc_tcp_rx_state *state)
+{
+	if (state->mode == SVC_TCP_RX_MIXED && !state->lt.copied_bytes)
+		return 1;
+	return DIV_ROUND_UP(svsk->sk_datalen, PAGE_SIZE);
+}
+
 VISIBLE_IF_KUNIT int svc_tcp_restore_pages(struct svc_sock *svsk,
 					   struct svc_rqst *rqstp)
 {
@@ -5078,7 +5092,7 @@ VISIBLE_IF_KUNIT int svc_tcp_restore_pages(struct svc_sock *svsk,
 			return -EINVAL;
 		return 0;
 	}
-	npages = (len + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	npages = svc_tcp_rx_held_pages(svsk, svsk->sk_rx);
 	/*
 	 * Trade pages with the socket: the pages this thread gives up wait
 	 * in sk_pages[] for the thread that next saves a partial record
@@ -5126,7 +5140,7 @@ VISIBLE_IF_KUNIT int svc_tcp_save_pages(struct svc_sock *svsk,
 	len = svsk->sk_datalen;
 	if (WARN_ON_ONCE(rqstp->rq_tcp_rx->lt.body_bytes != len))
 		return -EINVAL;
-	npages = (len + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	npages = svc_tcp_rx_held_pages(svsk, rqstp->rq_tcp_rx);
 	/*
 	 * Take the pages an earlier restore left here in exchange.
 	 * svc_alloc_arg() fills whichever of these entries is still NULL.
@@ -5145,8 +5159,10 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_save_pages);
 
 VISIBLE_IF_KUNIT void svc_tcp_clear_pages(struct svc_sock *svsk)
 {
-	unsigned int i, len, npages;
+	unsigned int i, npages;
 
+	/* Before the abort, which empties the record's state. */
+	npages = svc_tcp_rx_held_pages(svsk, svsk->sk_rx);
 	if (svc_tcp_rx_abort_active(svsk, NULL, SVC_TCP_RX_ABORT,
 				    SVC_TCP_RX_REASON_NONE,
 				    svsk->sk_datalen == 0))
@@ -5154,8 +5170,6 @@ VISIBLE_IF_KUNIT void svc_tcp_clear_pages(struct svc_sock *svsk)
 
 	/* A partial record's pages, and the pages left by a restore. */
 	svc_tcp_spare_release(svsk, svsk->sk_spare_pages);
-	len = svsk->sk_datalen;
-	npages = (len + PAGE_SIZE - 1) >> PAGE_SHIFT;
 	for (i = 0; i < svsk->sk_maxpages; i++) {
 		if (svsk->sk_pages[i] == NULL) {
 			WARN_ON_ONCE(i < npages);
