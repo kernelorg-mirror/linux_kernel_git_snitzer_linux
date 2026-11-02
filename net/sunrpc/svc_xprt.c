@@ -11,6 +11,7 @@
 #include <kunit/visibility.h>
 #include <linux/errno.h>
 #include <linux/freezer.h>
+#include <linux/hash.h>
 #include <linux/slab.h>
 #include <net/sock.h>
 #include <linux/sunrpc/addr.h>
@@ -1227,7 +1228,12 @@ static void svc_rtc_queue_pinned(struct svc_rtc_conn *conn,
 {
 	int cpu = READ_ONCE(conn->cpu);
 
-	/* Receive kicks record their CPU; completions follow the latest. */
+	/*
+	 * RX softirq receive kicks place the connection (svc_rtc_place());
+	 * other kicks and completions follow it.  Before the first such
+	 * receive, or while the chosen CPU is offline, run here; the next
+	 * such receive picks an online CPU.
+	 */
 	if (cpu < 0 || !cpu_online(cpu))
 		cpu = raw_smp_processor_id();
 	if (!queue_work_on(cpu, xprt->xpt_server->sv_rtc_wq, &conn->work))
@@ -1273,6 +1279,92 @@ VISIBLE_IF_KUNIT bool svc_rtc_should_divert(struct svc_xprt *xprt)
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_should_divert);
 
+/**
+ * svc_rtc_pick_cpu - Choose the CPU a connection's work item runs on
+ * @key: connection identity; the same key picks the same CPU
+ * @rx_cpu: CPU that took the receive
+ * @node: CPUs of @rx_cpu's node
+ * @rxcpus: CPUs that have taken a run-to-completion receive
+ * @online: online CPUs
+ *
+ * Two passes over @node, once per connection placement, with no
+ * temporary mask.  @rxcpus may grow concurrently: a CPU it gains between
+ * the passes can shift the choice, and a short second pass falls back.
+ *
+ * Return: a CPU of @node & @online & ~@rxcpus chosen by a hash of @key,
+ * or @rx_cpu when that set is empty.
+ */
+VISIBLE_IF_KUNIT int svc_rtc_pick_cpu(const void *key, int rx_cpu,
+				      const struct cpumask *node,
+				      const struct cpumask *rxcpus,
+				      const struct cpumask *online)
+{
+	unsigned int n = 0, i;
+	int cpu;
+
+	/* rxcpus grows concurrently in svc_rtc_place(); a stale bit only gives a
+	 * less ideal pick, which is re-picked on a later receive, so it is benign.
+	 */
+	for_each_cpu(cpu, node)
+		if (cpumask_test_cpu(cpu, online) && !cpumask_test_cpu(cpu, rxcpus))
+			n++;
+	if (!n)
+		return rx_cpu;
+	i = hash_ptr(key, 32) % n;
+	for_each_cpu(cpu, node)
+		if (cpumask_test_cpu(cpu, online) && !cpumask_test_cpu(cpu, rxcpus) &&
+		    !i--)
+			return cpu;
+	return rx_cpu;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_pick_cpu);
+
+/**
+ * svc_rtc_place - Record a receive CPU and place the connection's work
+ * @serv: service of @conn; svc_rtc_serv_prepare() allocated its rx mask
+ * @conn: connection taking a receive kick
+ * @rx_cpu: CPU of the receive
+ * @softirq: the receive was taken in the RX softirq
+ *
+ * Only a receive taken in the RX softirq marks or places.  Enqueues
+ * from process context (svc_xprt_received() after a recvfrom, socket
+ * backlog processing, svc_reserve(), write space) run on the work CPUs
+ * themselves; they leave the rx mask and the connection's CPU alone.
+ *
+ * Marks @rx_cpu in @serv's rx mask, testing first so that the steady
+ * state stores nothing.  A connection keeps its CPU while that CPU is
+ * online and takes no receives.  It is (re)picked by svc_rtc_pick_cpu()
+ * on the first receive, after its CPU went offline, and when its CPU
+ * has since taken a receive itself and this receive came from another
+ * CPU.  That last case covers a connection placed before every RX CPU
+ * had been seen.  A connection that fell back to its receive CPU keeps
+ * it until a receive arrives on another CPU.  The rx mask never clears,
+ * so CPUs that stop taking receives (IRQs moved) stay excluded.
+ *
+ * Return: the connection's work CPU, or -1 when a process-context
+ * enqueue comes before its first softirq receive.
+ */
+VISIBLE_IF_KUNIT int svc_rtc_place(struct svc_serv *serv,
+				   struct svc_rtc_conn *conn, int rx_cpu,
+				   bool softirq)
+{
+	int cpu = READ_ONCE(conn->cpu);
+
+	if (!softirq)
+		return cpu;
+	if (!cpumask_test_cpu(rx_cpu, serv->sv_rtc_rxcpus))
+		cpumask_set_cpu(rx_cpu, serv->sv_rtc_rxcpus);
+	if (cpu >= 0 && cpu_online(cpu) &&
+	    (cpu == rx_cpu || !cpumask_test_cpu(cpu, serv->sv_rtc_rxcpus)))
+		return cpu;
+	cpu = svc_rtc_pick_cpu(conn->xprt, rx_cpu,
+			       cpumask_of_node(cpu_to_node(rx_cpu)),
+			       serv->sv_rtc_rxcpus, cpu_online_mask);
+	WRITE_ONCE(conn->cpu, cpu);
+	return cpu;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_place);
+
 static bool svc_rtc_divert(struct svc_xprt *xprt)
 {
 	struct svc_rtc_conn *conn;
@@ -1281,8 +1373,9 @@ static bool svc_rtc_divert(struct svc_xprt *xprt)
 		return false;
 	conn = xprt->xpt_rtc;
 	svc_rtc_stat_inc(diverted);
-	/* Run on the CPU that took this receive, not the first one. */
-	WRITE_ONCE(conn->cpu, raw_smp_processor_id());
+	/* Run on this receive's node, off the CPUs that take receives. */
+	svc_rtc_place(xprt->xpt_server, conn, raw_smp_processor_id(),
+		      in_serving_softirq());
 	set_bit(SVC_RTC_RECV, &conn->flags);
 	svc_rtc_kick(conn);
 	return true;
@@ -1541,18 +1634,25 @@ EXPORT_SYMBOL_GPL(svc_rtc_queue_send);
 
 /*
  * Give @serv its work-item queue: per-CPU, so a connection's work stays on
- * the CPU that received it, and WQ_MEM_RECLAIM, because sending NFS
- * replies can be what frees memory.  It outlives svc_rtc_unregister()
- * (work items of live connections may still send) and is destroyed with
- * the service, after every transport is gone.
+ * the one CPU svc_rtc_place() chose for it, and WQ_MEM_RECLAIM, because
+ * sending NFS replies can be what frees memory.  It and the rx mask that
+ * svc_rtc_place() reads outlive svc_rtc_unregister() (work items of live
+ * connections may still send) and are freed with the service, after
+ * every transport is gone.
  */
 VISIBLE_IF_KUNIT int svc_rtc_serv_prepare(struct svc_serv *serv)
 {
 	if (serv->sv_rtc_wq)
 		return 0;
+	if (!zalloc_cpumask_var(&serv->sv_rtc_rxcpus, GFP_KERNEL))
+		return -ENOMEM;
 	serv->sv_rtc_wq = alloc_workqueue("svc_rtc", WQ_MEM_RECLAIM | WQ_PERCPU,
 					  0);
-	return serv->sv_rtc_wq ? 0 : -ENOMEM;
+	if (!serv->sv_rtc_wq) {
+		free_cpumask_var(serv->sv_rtc_rxcpus);
+		return -ENOMEM;
+	}
+	return 0;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_serv_prepare);
 
@@ -1568,6 +1668,7 @@ void svc_rtc_serv_destroy(struct svc_serv *serv)
 	if (serv->sv_rtc_wq) {
 		destroy_workqueue(serv->sv_rtc_wq);
 		serv->sv_rtc_wq = NULL;
+		free_cpumask_var(serv->sv_rtc_rxcpus);
 	}
 }
 EXPORT_SYMBOL_GPL(svc_rtc_serv_destroy);
