@@ -421,6 +421,16 @@ body, in order:
    mutant that trades one page whatever the record copied failed only
    `park_copied`, on 4 expectations, 53 passing.
 
+   With FLAMEGRAPH round 52's sunrpc in `updates/`, three more in
+   `xdr_kunit` (`xdr_bvec_checked_test`, `xdr_bvec_end_of_pages_test`,
+   `xdr_bvec_advance_test`), the stock script ran 10/10, 54/54, 7/7 and
+   10/10, no skip, no warning, no crash, `KUNIT PASS` (`t2-r132/kunit.log`).
+   Seven mutants of `xdr.c` each failed the test written for it. KUnit
+   builds small tables by hand, so round 52 also verified real loaned
+   records by crc32c from the client, `run135.sh`. Run such a check on a
+   path from the rig's mounts, which start at `/mnt/rxr-a1`: `rxr-a0` is
+   the client's own disk, and three runs were lost to it.
+
 Also brittle, and left as they are for now: the fixture's use of a live
 thread's `rqstp`, `svc_new_thread()` called without a service mutex, and
 transports that stay off `sv_tempsocks`. `nfsd4_bvec_kunit` needs a

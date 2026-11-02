@@ -56,6 +56,58 @@ On the mount (`run135.sh`, on B, a light loan64 run, `verify.txt`, `padded.txt`)
 
 So a pad reaches the end-of-pages path on real loaned records, and NFSv4.1's payload, which does not end the record, takes the walk, and both come back whole.
 
-## The runs, to do
+## The A/B (run136)
 
-The sunrpc builds, `build-sunrpc.sh`'s way: A round 51's kept module `167B8BE080CE8001F6D7E4A`, B with these. KUnit on B, then mutants, then 4 runs a side, A B B A B A A B, then `lat.sh` A B B A, then a profile on B. `$L/t2-r136/`.
+Build 506 with sunrpc swapped before each run, A `167B8BE080CE8001F6D7E4A`, round 51's kept module, B `5D39507E93127A6010C9B8E`, in the order A B B A B A A B, one port, 256 threads, `$L/t2-r136/`, all 8 no-step, no-stall, placed, alloc_fail 0, no kernel warning. The script kept round 51's tag, so the runs are named `r130-N-A` and `r130-N-B`.
+
+| run | GB/s | rings cycles (instr) | nfsd cycles (instr) | peak | mean in use |
+|---|---|---|---|---|---|
+| 1 A | 40.54 | 127.8k (282.8k) | 287.6k (295.3k) | 6161 | 5005 |
+| 4 A | 40.50 | 127.9k (282.7k) | 285.8k (296.0k) | 6008 | 4927 |
+| 6 A, the dip | 39.51 | 124.5k (281.1k) | 281.2k (296.9k) | 6136 | 5243 |
+| 7 A | 40.47 | 128.2k (283.2k) | 287.4k (297.2k) | 6189 | 5020 |
+| **A mean** | **40.50** | **128.0k (282.9k)** | **286.9k (296.1k)** | **6124** | **4984** |
+| 2 B | 40.55 | 127.9k (282.6k) | 282.3k (274.6k) | 6175 | 4985 |
+| 3 B | 40.54 | 127.7k (282.8k) | 281.4k (273.9k) | 6086 | 5024 |
+| 5 B | 40.53 | 128.1k (283.2k) | 280.0k (274.6k) | 6140 | 4997 |
+| 8 B | 40.48 | 127.6k (282.7k) | 279.7k (274.3k) | 6100 | 4995 |
+| **B mean** | **40.52** | **127.9k (282.8k)** | **281.0k (274.4k)** | **6125** | **5000** |
+
+A's means leave run 6 out of the rate, cycles and mean in use, and keep its instructions and peak.
+
+**nfsd -5.9k cycles a WRITE (-2.1%) and -21.7k instructions (-7.3%), and no run of B reaches a run of A in either,** run 6 aside for cycles (with it, -4.5k, and its 281.2k lies inside B's). Nothing else moves: rings, rate, NVMe interrupts 4.08, IPIs 4.8. The region is not raised: peak +1 page, mean in use +16, against a scatter of about 150.
+
+**Run 6's dip.** The wire fell from about 41 to about 36 GB/s for a stretch late in the run and came back. No drive stepped down or stalled, TCP's drop counters stayed 0, and the client retransmitted 4. Its cycles fell with its rate and its instructions match its side. It looks like the dips of round 49's runs 4 and 5. The cause was not found, here or there.
+
+**Latency at iodepth 1, A B B A:**
+
+| run | GB/s | p50 | p99 | mean, ms | max |
+|---|---|---|---|---|---|
+| 1 A | 8.01 | 0.440 | 0.586 | 0.452 | 1.125 |
+| 2 B | 7.94 | 0.444 | 0.578 | 0.456 | 4.986 |
+| 3 B | 8.00 | 0.453 | 0.578 | 0.457 | 1.057 |
+| 4 A | 8.35 | 0.428 | 0.545 | 0.433 | 0.883 |
+
+B sits at about the top of A here, p50 0.449 against 0.434, inside the 0.420 to 0.457 that rounds 49 to 51 show for one build. Two runs a side cannot say more, and the change takes work out of the path and adds no wait. Run 2's 4.99 ms maximum did not recur. The next latency runs should read this again.
+
+## The profile (fl52, on B, against fl51)
+
+| % of nfsd, self | fl51 | fl52 |
+|---|---|---|
+| `xdr_buf_validate_page_mode` | 1.23 | 0.04 |
+| `xdr_stream_subsegment` | 1.03 | 0.07 |
+| `xdr_set_next_authoritative_buffer` | 0.36 | 0.01 |
+| `xdr_buf_subsegment` | 0.32 | 0.13 |
+| `xdr_init_decode` | 0.08 | 0.02 |
+| together | 3.02 | 0.27 |
+| `xdr_buf_to_bvec`, the walk that is left | 0.62 | 0.61 |
+
+**The target's frames fell 2.75 points of nfsd and nothing took their place:** no frame rose by more than 0.16, and those that rose are spread through the path as anyone's share does when the whole shrinks. `xdr_buf_to_bvec` did not take the misses, as this README expected it might.
+
+**Why instructions fell 7.3% and cycles 2.1%.** The walks were tight loops: 21.7k instructions in the 7.9k cycles those frames held, an IPC near 2.7, against about 1 for nfsd as a whole. So they were cheap instructions, and 2.75% of the cycles is 7.3% of the instructions. The A/B's 5.9k is below the profile's 7.9k; where the difference went was not looked for.
+
+The saving is larger than round 51's 3.3k, from a target round 50 ranked second, and this time the estimate held: about 2.9% expected, 2.75 points came out by the profile, 2.1% by the A/B.
+
+**Kept:** `e3c7a5faa02f` and `1eac016ea851`, with `a85c18d5b456` and its follow-up. `updates/sunrpc.ko` is B.
+
+Copy was not run.
