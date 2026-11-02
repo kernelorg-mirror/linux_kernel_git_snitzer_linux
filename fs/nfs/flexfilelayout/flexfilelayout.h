@@ -87,11 +87,12 @@ struct nfs4_ff_layout_ds_stripe {
 	const struct cred __rcu		*ro_cred;
 	const struct cred __rcu		*rw_cred;
 	struct nfs_file_localio		nfl;
-	/* Protects read_stat, write_stat and start_time below */
+	/* Protects read_stat and write_stat below */
 	spinlock_t			lock ____cacheline_aligned_in_smp;
 	struct nfs4_ff_layoutstat	read_stat;
 	struct nfs4_ff_layoutstat	write_stat;
-	ktime_t				start_time;
+	/* Published once by the first I/O; see nfs4_ff_layoutstat_set_start_time() */
+	atomic64_t			start_time;
 };
 
 struct nfs4_ff_layout_mirror {
