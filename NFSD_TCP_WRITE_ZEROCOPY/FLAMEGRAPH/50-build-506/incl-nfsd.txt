@@ -1,0 +1,102 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 257K of event 'armv8_pmuv3_0/cycles/P'
+# Event count (approx.): 89846904121
+#
+# Children      Self  Symbol                                           IPC   [IPC Coverage]
+# ........  ........  ...............................................  ....................
+#
+    65.02%     0.00%  [.] kthread                                      -      -            
+    65.02%     0.00%  [.] ret_from_fork                                -      -            
+    63.71%     0.20%  [.] nfsd                                         -      -            
+    63.40%     0.76%  [.] svc_recv                                     -      -            
+    58.24%     0.04%  [.] svc_handle_xprt                              -      -            
+    36.77%     0.08%  [.] svc_process                                  -      -            
+    34.97%     0.00%  [.] __secondary_switched                         -      -            
+    34.97%     0.00%  [.] secondary_start_kernel                       -      -            
+    34.93%     0.03%  [.] cpu_startup_entry                            -      -            
+    34.78%     0.12%  [.] do_idle                                      -      -            
+    28.94%    28.67%  [k] default_idle_call                            -      -            
+    28.90%     0.04%  [.] cpuidle_idle_call                            -      -            
+    26.05%     0.07%  [.] svc_process_common                           -      -            
+    23.95%     0.07%  [.] nfsd_dispatch                                -      -            
+    20.86%     0.48%  [.] svc_tcp_recvfrom                             -      -            
+    16.57%     0.01%  [.] nfsd3_proc_write                             -      -            
+    16.54%     0.01%  [.] nfsd_write                                   -      -            
+    15.16%     0.01%  [.] tcp_read_sock                                -      -            
+    14.97%     0.13%  [.] __tcp_read_sock                              -      -            
+    14.07%     0.10%  [.] nfsd_vfs_write                               -      -            
+    13.19%     0.17%  [.] nfsd_direct_write                            -      -            
+    12.01%     0.07%  [.] vfs_iocb_iter_write                          -      -            
+    11.59%     0.06%  [.] xfs_file_write_iter                          -      -            
+    11.51%     0.02%  [.] xfs_file_dio_write_aligned.constprop.0       -      -            
+    10.80%     0.01%  [.] iomap_dio_rw                                 -      -            
+    10.43%     0.18%  [.] __iomap_dio_rw                               -      -            
+    10.13%     0.01%  [.] svc_send                                     -      -            
+    10.09%     0.02%  [.] svc_tcp_sendto                               -      -            
+     7.85%     0.14%  [.] __schedule                                   -      -            
+     7.83%     0.05%  [.] svc_tcp_recv_actor                           -      -            
+     7.62%     7.62%  [k] finish_task_switch.isra.0                    -      -            
+     7.59%     0.69%  [.] svc_tcp_recv_skb                             -      -            
+     7.32%     0.00%  [.] iomap_dio_iter                               -      -            
+     7.31%     0.12%  [.] iomap_dio_bio_iter                           -      -            
+     7.18%     0.04%  [.] iomap_dio_bio_iter_one                       -      -            
+     6.65%     0.08%  [.] submit_bio                                   -      -            
+     6.57%     0.09%  [.] submit_bio_noacct                            -      -            
+     6.48%     0.01%  [.] iomap_dio_submit_bio                         -      -            
+     6.42%     0.05%  [.] submit_bio_noacct_nocheck                    -      -            
+     6.38%     0.03%  [.] __submit_bio                                 -      -            
+     6.34%     0.66%  [.] __tcp_transmit_skb                           -      -            
+     6.30%     0.41%  [.] blk_mq_submit_bio                            -      -            
+     5.31%     0.06%  [.] schedule_idle                                -      -            
+     5.29%     0.02%  [.] ip_queue_xmit                                -      -            
+     5.20%     0.27%  [.] __ip_queue_xmit                              -      -            
+     5.06%     0.05%  [.] svc_tcp_sendmsg                              -      -            
+     4.98%     0.03%  [.] sock_sendmsg                                 -      -            
+     4.92%     0.02%  [.] __sock_sendmsg                               -      -            
+     4.81%     0.06%  [.] svc_tcp_release_ctxt                         -      -            
+     4.78%     0.06%  [.] inet_sendmsg                                 -      -            
+     4.72%     0.01%  [.] tcp_sendmsg                                  -      -            
+     4.70%     0.02%  [.] tcp_cleanup_rbuf                             -      -            
+     4.67%     0.07%  [.] __tcp_cleanup_rbuf                           -      -            
+     4.46%     0.06%  [.] ip_output                                    -      -            
+     4.45%     0.02%  [.] tcp_send_ack                                 -      -            
+     4.44%     0.06%  [.] __tcp_send_ack.part.0                        -      -            
+     4.28%     0.09%  [.] ip_finish_output                             -      -            
+     4.25%     0.03%  [.] blk_mq_flush_plug_list                       -      -            
+     4.22%     0.08%  [.] blk_mq_dispatch_queue_requests               -      -            
+     4.15%     0.04%  [.] __ip_finish_output                           -      -            
+     4.06%     0.28%  [.] ip_finish_output2                            -      -            
+     4.04%     0.15%  [.] nvme_queue_rqs                               -      -            
+     3.86%     0.11%  [.] tcp_sendmsg_locked                           -      -            
+     3.86%     1.02%  [.] svc_tcp_rx_release_refs                      -      -            
+     3.81%     0.03%  [.] nvme_prep_rq.part.0                          -      -            
+     3.79%     0.04%  [.] neigh_hh_output                              -      -            
+     3.73%     0.19%  [.] __dev_queue_xmit                             -      -            
+     3.68%     0.83%  [k] svc_tcp_rx_walk_skb                          -      -            
+     3.63%     0.09%  [.] nvme_map_data                                -      -            
+     3.41%     0.05%  [.] blk_add_rq_to_plug                           -      -            
+     3.34%     3.34%  [k] _raw_spin_unlock_irqrestore                  -      -            
+     3.11%     0.65%  [.] __dev_xmit_skb                               -      -            
+     3.05%     0.23%  [.] nvme_pci_setup_data_sgl                      -      -            
+     2.91%     0.02%  [.] tcp_push                                     -      -            
+     2.90%     0.01%  [.] __tcp_push_pending_frames                    -      -            
+     2.82%     0.09%  [.] tcp_write_xmit                               -      -            
+     2.79%     1.38%  [.] svc_tcp_rx_borrow_segment                    -      -            
+     2.69%     0.07%  [.] schedule                                     -      -            
+     2.66%     0.01%  [.] nfsd3_proc_commit                            -      -            
+     2.59%     0.01%  [.] nfsd_file_acquire_gc                         -      -            
+     2.56%     0.10%  [.] nfsd_file_do_acquire                         -      -            
+     2.52%     0.04%  [.] schedule_timeout                             -      -            
+     2.35%     0.03%  [.] nfsd_commit                                  -      -            
+     2.32%     0.01%  [.] vfs_fsync_range                              -      -            
+     2.30%     0.07%  [.] release_sock                                 -      -            
+     2.09%     0.02%  [.] fh_verify                                    -      -            
+     2.06%     0.60%  [k] page_pool_put_netmem_bulk                    -      -            
+     2.03%     0.11%  [.] __fh_verify                                  -      -            
+#
+# (Tip: For parallelism histogram, try: perf report --hierarchy --sort latency,parallelism,comm,symbol)
+#
