@@ -36,6 +36,12 @@ Two things the shortcuts could have broken, both caught before a run and both pi
 
 **Not for NFSv4:** a compound's GETATTR after the WRITE follows the payload in the pages, so the count and the advance still walk. The validations go there too. The rig runs NFSv3.
 
+## Verified writes: a mistake to set right
+
+KUnit on B: 10/10, 54/54, 7/7, 10/10. Seven mutants, each failing the test written for it.
+
+`run132.sh`, `run133.sh` and `run134.sh` count for nothing but the NFSv4.1 job of run132. They wrote to `/mnt/rxr-a0`, and `twoport.sh` mounts from `rxr-a1`: that path is a directory on the client's own XFS. So the "NFSv3 verified" of run132 was the client's disk, the odd `O_DIRECT` `EINVAL` was XFS's alignment, and the file that went missing was `twoport.sh`'s `rm` of `rxr-a[0-9]*/f-*`. What showed it: `padded.bt` found no WRITE but the load's own 1 MiB. `run135.sh` is the same check on the mount, refusing a path that is not NFS.
+
 ## The runs, to do
 
 The sunrpc builds, `build-sunrpc.sh`'s way: A round 51's kept module `167B8BE080CE8001F6D7E4A`, B with these. KUnit on B, then mutants, then 4 runs a side, A B B A B A A B, then `lat.sh` A B B A, then a profile on B. `$L/t2-r132/`.
