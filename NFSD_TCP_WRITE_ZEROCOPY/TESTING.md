@@ -330,7 +330,13 @@ body, in order:
    (`boot7-all4-svcsock/`), ending `KUNIT FAIL` only on the 8 rings.
 3. `nfsd4_bvec_kunit.c`: the decode fixtures are replaced, see "Before
    and after `nfsd4_bvec_kunit`" below. Its session tests' test transport
-   class is still to be reviewed.
+   is reviewed, from reading: no path found to a NULL hook. It has only
+   `xpo_free`, but it is on neither of a service's lists and never closed;
+   `CREATE_SESSION` sets no back channel, so `rpc_create()` never sees its
+   `xcl_ident` of 0; and its module reference covers a stale client. The
+   test's own DESTROY means `nfsd4_q35_session_cleanup()` does nothing on a
+   pass, so it had not run since `cleanup_rqst` became a real thread. The
+   next run, `boot7-session-abort/`, forces it with a scratch build.
 4. `nfsd_bvec_kunit.c`: done, the decode and dispatch tests take requests
    from the service in `fs/nfsd/nfsd_kunit_svc.h`, moved there from the
    nfsd4 suite. What it read was traced first: `nfs3svc_decode_writeargs()`
