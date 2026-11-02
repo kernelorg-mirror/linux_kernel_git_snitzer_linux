@@ -196,9 +196,44 @@ test result, no oops.
 - **The stub `proto_ops` is not the cause.** Only the outer-receive tests
   install it, the first being the sixth case listed, and no case before
   it reported anything.
-- The same fixture has not completed a run, so the svcsock suite at the
-  tip is expected to take the host down until the cause is found. Do not
-  load it, or run `run-kunit.sh`, on the strength of a build.
+- **The cause, from reading the code: the new fixture's own teardown.**
+  Nothing has run since, so this is not observed. In order of execution:
+  1. The fixture dequeued the listener by hand and called
+     `svc_xprt_put()`. The queue holds no reference
+     (`svc_xprt_dequeue()` takes one for its caller), so that dropped the
+     last one: the listener's socket was released and its `svc_sock`
+     freed while it stayed on `sv_permsocks`.
+  2. `kernel_connect()` to the closed port is refused, the assertion
+     fails, and KUnit runs `svcsock_rx_env_free()` on the freed listener.
+  3. `svc_xprt_destroy_all()` reaches `svc_delete_xprt()`, and with
+     `XPT_RPCB_UNREG`, which every listener has, `svc_register()` calls
+     `pg_rpcbind_set`, which the test's program did not set: a jump to
+     NULL. This one would have fired on every test's teardown without
+     the first.
+
+  All of this takes well under a millisecond, which fits the printing
+  thread sending nothing after `1..1`.
+- Reading on found what would have crashed next, each in a teardown:
+  `svcsock_rx_conn` was a KUnit allocation, so it was freed before the
+  cleanup action walked the list of them; a closing transport was put
+  the same wrong way as the listener; a failed test could leave a
+  transport on the queue for closing to free. Accepted transports also
+  skipped the `__module_get()` of `svc_handle_xprt()`, so each test took
+  a reference from sunrpc that `svc_xprt_free()` dropped, and a page
+  taken from `rq_pages` leaked. All are fixed in "keep to a real
+  service's rules", at the tip after this account, which builds but has
+  not been loaded.
+- **What may still go wrong on the first run.** Page and state ownership
+  at teardown is read, not proved, for all 52 cases: a test that left a
+  loan would warn or worse once its pages are gone. `kernel_accept()` is
+  non-blocking right after the connect, so it could fail an assertion if
+  the handshake's last ACK is still in flight. `sk_maxpages` and
+  `rq_maxpages` are now the requested capacity plus 3, which may fail a
+  test written to the exact figure. The other hand-built `svc_sock`s
+  in the suite are not converted yet.
+- The fixture has still not completed a run. Do not load it, or run
+  `run-kunit.sh`, on the strength of a build: arm kdump, set up
+  netconsole again, and load the suite alone.
 
 **Why nothing was caught.**
 
@@ -214,7 +249,10 @@ test result, no oops.
 - *The dump path was proved in one easy case.* `sysrq-c` saved a dump on
   an idle host. `/var/crash` has no trace of any attempt since, not even
   a `vmcore-incomplete`, so the crash kernel did not reach the root file
-  system, or did not run. Why is unknown.
+  system, or did not run. Why is unknown, and the fixes above do not
+  touch it: if the causes given here are right, plain oopses in a kthread
+  went undumped three times, so the next real crash may leave nothing
+  either.
 - *The host stayed down longer than a saved dump took,* 3m45 to 9m55
   against 1m45, where `kernel.panic=10` alone would be quicker than
   either. That points to a hang ended from outside, or a crash kernel
