@@ -259,7 +259,8 @@ static int rtcn_init(struct kunit *test)
 	t->fh.fh_dentry = t->file->f_path.dentry;
 	t->fh.fh_no_wcc = true;
 
-	t->serv = svc_create(&rtcn_program, 65536, NULL);
+	/* In pages, so rq_maxpages exceeds RTCN_PAGES at any PAGE_SIZE. */
+	t->serv = svc_create(&rtcn_program, 16 * PAGE_SIZE, NULL);
 	KUNIT_ASSERT_NOT_NULL(test, t->serv);
 	t->xprt.xpt_ops = &rtcn_xprt_ops;
 	t->xprt.xpt_net = &init_net;
