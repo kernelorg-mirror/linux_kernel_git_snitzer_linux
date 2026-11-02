@@ -1,7 +1,9 @@
 #!/usr/bin/env bpftrace
 /*
  * Round 54: what repeats in fh_verify under load.  A look: its probes cost the
- * run, and its times are inflated by them.  Runs 8 s.
+ * run.  Runs 8 s.  No kretprobe: bpftrace 0.26 joins a kprobe and a kretprobe of
+ * one function into a session and runs the kprobe's body at both ends, never
+ * the kretprobe's, which doubled every count here and read a clobbered arg5.
  */
 kprobe:nfsd3_proc_write { @op["write"] = count(); }
 kprobe:nfsd3_proc_commit { @op["commit"] = count(); }
@@ -38,27 +40,11 @@ kprobe:nfsd_set_fh_dentry
 	$any = @seen_any[$h];
 	if ($any) { @gap_any_cpu_us = hist((nsecs - $any) / 1000); }
 	@seen_any[$h] = nsecs;
-
-	@t[tid, 0] = nsecs;
 }
-kretprobe:nfsd_set_fh_dentry /@t[tid, 0]/
-{ @ns["set_fh_dentry"] = avg(nsecs - @t[tid, 0]); delete(@t, (tid, 0)); }
-kprobe:rqst_exp_find { @t[tid, 1] = nsecs; }
-kretprobe:rqst_exp_find /@t[tid, 1]/
-{ @ns["rqst_exp_find"] = avg(nsecs - @t[tid, 1]); delete(@t, (tid, 1)); }
-kprobe:exportfs_decode_fh_raw { @t[tid, 2] = nsecs; }
-kretprobe:exportfs_decode_fh_raw /@t[tid, 2]/
-{ @ns["exportfs_decode_fh_raw"] = avg(nsecs - @t[tid, 2]); delete(@t, (tid, 2)); }
-kprobe:xfs_iget { @t[tid, 3] = nsecs; }
-kretprobe:xfs_iget /@t[tid, 3]/
-{ @ns["xfs_iget"] = avg(nsecs - @t[tid, 3]); delete(@t, (tid, 3)); }
-kprobe:d_obtain_alias { @t[tid, 4] = nsecs; }
-kretprobe:d_obtain_alias /@t[tid, 4]/
-{ @ns["d_obtain_alias"] = avg(nsecs - @t[tid, 4]); delete(@t, (tid, 4)); }
 
 interval:s:8
 {
 	clear(@last_cpu); clear(@last_tid); clear(@seen); clear(@seen_any);
-	clear(@t); clear(@last_global);
+	clear(@last_global);
 	exit();
 }
