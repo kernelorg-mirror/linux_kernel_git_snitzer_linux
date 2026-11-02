@@ -314,8 +314,13 @@ body, in order:
 3. `nfsd4_bvec_kunit.c`: the decode fixtures are replaced, see "Before
    and after `nfsd4_bvec_kunit`" below. Its session tests' test transport
    class is still to be reviewed.
-4. `nfsd_bvec_kunit.c`: the same in its decode tests, sharing what 3
-   builds.
+4. `nfsd_bvec_kunit.c`: done, the decode and dispatch tests take requests
+   from the service in `fs/nfsd/nfsd_kunit_svc.h`, moved there from the
+   nfsd4 suite. What it read was traced first: `nfs3svc_decode_writeargs()`
+   reads `rq_argp` and `svc_max_payload()`, and `svc_generic_init_request()`
+   reads `sv_stats`, NULL here, and `rq_argp` and `rq_resp` too, which the
+   test now uses instead of replacing. The first runs are
+   `boot7-nfsd-bvec-real/`, alone, and `boot7-all4-real/`, the stock script.
 5. Settings saved per test with KUnit cleanup actions. Tests write
    `svc_tcp_rx_copy_below`, the budgets, the `svc_tcp_rx_loans` key and
    fault injection in `init_net`, which now reach a real transport's
