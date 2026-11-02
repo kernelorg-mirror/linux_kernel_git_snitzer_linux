@@ -1,8 +1,8 @@
 #!/usr/bin/bpftrace
-/* What a parked record really has in rq_pages: on each park and take-up, the
- * pages the trade walks by sk_datalen against the highest page an arena copy
- * reached.  The index of an arena copy is the record's body_bytes at the copy. */
-config = { max_strlen = 32; missing_probes = "warn" }
+/* What a parked record really has in rq_pages: on each park, the pages the
+ * trade walks by sk_datalen against the highest page an arena copy reached.
+ * The index of an arena copy is the record's body_bytes at the copy.  The state
+ * object travels with the record, so it and record_seq name the record. */
 
 fentry:sunrpc:svc_tcp_rx_append_copied
 {
@@ -10,7 +10,8 @@ fentry:sunrpc:svc_tcp_rx_append_copied
 	$i = (uint64)$s->body_bytes >> 14;
 	@copy_len = hist((uint64)args.len);
 	@copy_page = lhist($i, 0, 72, 4);
-	if ($i > @high[(uint64)$s]) { @high[(uint64)$s] = $i; }
+	@copies = count();
+	if ($i > @high[(uint64)$s, $s->record_seq]) { @high[(uint64)$s, $s->record_seq] = $i; }
 }
 
 fentry:sunrpc:svc_tcp_save_pages
@@ -19,7 +20,7 @@ fentry:sunrpc:svc_tcp_save_pages
 	if ($l) {
 		$s = args.rqstp->rq_tcp_rx;
 		$n = ($l + 16383) >> 14;
-		$h = @high[(uint64)$s] + 1;
+		$h = @high[(uint64)$s, $s->record_seq] + 1;
 		@saves = count();
 		@save_mode[$s->mode] = count();
 		@walked = sum($n);
@@ -27,19 +28,17 @@ fentry:sunrpc:svc_tcp_save_pages
 		@walked_hist = lhist($n, 0, 72, 4);
 		@needed_hist = lhist($h, 0, 72, 4);
 		@copied_bytes = hist((uint64)$s->copied_bytes);
-		if ($s->copied_bytes == 0) { @no_copied = count(); }
-		@saved_high[(uint64)args.svsk] = @high[(uint64)$s];
-		delete(@high, (uint64)$s);
+		@body_bytes = lhist($l >> 14, 0, 72, 8);
+		if ($s->copied_bytes <= 28) { @only_fixed = count(); }
 	}
 }
 
 fentry:sunrpc:svc_tcp_restore_pages
 {
-	$l = (uint64)args.svsk->sk_datalen;
-	if ($l) {
-		@restores = count();
-		@high[(uint64)args.svsk->sk_rx] = @saved_high[(uint64)args.svsk];
-	}
+	if ((uint64)args.svsk->sk_datalen) { @restores = count(); }
 }
 
-interval:s:8 { exit(); }
+fentry:sunrpc:svc_tcp_rx_validate_mixed { @publishes = count(); }
+fentry:sunrpc:svc_tcp_release_ctxt { @releases = count(); }
+
+interval:s:8 { clear(@high); exit(); }
