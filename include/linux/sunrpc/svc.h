@@ -206,6 +206,7 @@ struct svc_serv {
 	const struct svc_rtc_ops __rcu *sv_rtc;
 	atomic_t		sv_rtc_active;	/* rtc runs and pool rqsts in use */
 	struct workqueue_struct	*sv_rtc_wq;	/* rtc work items; WQ_MEM_RECLAIM */
+	cpumask_var_t		sv_rtc_rxcpus;	/* CPUs that took an rtc receive */
 	struct svc_rtc_pool	*sv_rtc_pool;	/* preallocated rtc rqsts */
 	unsigned int		sv_rtc_nr;	/* rqsts in sv_rtc_pool */
 	/* Caller registers with rpcbind itself. Set before svc_bind(). */
