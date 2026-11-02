@@ -159,3 +159,11 @@ uncommitted diff against that commit: what the worktree
 `/var/tmp/keep-tree` on tardis2 held, for the runs of "`svc_tcp_rx_keep`
 again, on top of the gating" in `xeu-rig/README.md`. The worktree was
 removed on 28 October to free space, and this is what it kept.
+
+## 0007 to 0009: the expkey reference in `exp_find()` (2 November, Mike)
+
+`0007` adds `sunrpc_cache_peek_rcu()`, `0008` uses it for a new `exp_find_rcu()`, and `0009` is its KUnit test. They apply in that order on `c86e11886f2b`; `0007` and `0008` were `b91623167b04` and `1ffe1b8da005`, and the branch reverts them at the tip. They are in the history under the reverts until a regroup folds them away.
+
+They worked: every way out of the fast path ran on tardis2 (a flush, a key due for refresh, an unexport on a live mount), and `exp_find_key` left the hot path. But they saved about 0.11 us a WRITE against 0.35 estimated, too little for an A/B to see, so they were not kept. The account is `FLAMEGRAPH/54-fh-verify/README.md`.
+
+They would be worth another look on a load where a lookup costs more, for instance many more CPUs on one export. `svc_export`'s own reference is still written on every request. `build-nfsd.sh` and a KUnit module built outside the tree need `KBUILD_EXTRA_SYMBOLS` for the new export.
