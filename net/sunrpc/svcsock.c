@@ -2836,8 +2836,12 @@ static bool svc_tcp_rx_counts_valid(const struct svc_tcp_rx_state *state)
 
 static bool svc_tcp_rx_refs_valid(const struct svc_tcp_rx_state *state)
 {
-	return svc_tcp_rx_counts_valid(state) &&
-	       rx_loan_table_refs_valid(&state->lt);
+	if (!svc_tcp_rx_counts_valid(state))
+		return false;
+	/* svc_tcp_rx_validate_mixed() checked this table to publish it. */
+	if (state->mode == SVC_TCP_RX_PUBLISHED)
+		return rx_loan_table_refs_valid_checked(&state->lt);
+	return rx_loan_table_refs_valid(&state->lt);
 }
 
 VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
@@ -2876,8 +2880,8 @@ svc_tcp_rx_exchange(struct svc_tcp_rx_state **active,
 	/*
 	 * A record is saved and restored on each pass that reads part of
 	 * it, so only its counts are checked here. Each borrowed entry is
-	 * checked once, by svc_tcp_rx_release_refs(), before its page goes
-	 * back.
+	 * checked once, at publish or, for a record that never gets there,
+	 * by svc_tcp_rx_release_refs() before its page goes back.
 	 */
 	if (WARN_ON(!state || !*empty ||
 		    state->lt.capacity != (*empty)->lt.capacity ||
