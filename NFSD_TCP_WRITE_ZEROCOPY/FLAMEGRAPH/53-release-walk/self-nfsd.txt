@@ -1,0 +1,59 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 256K of event 'armv8_pmuv3_0/cycles/P'
+# Event count (approx.): 87242465489
+#
+# Overhead  Symbol                                          IPC   [IPC Coverage]
+# ........  ..............................................  ....................
+#
+    28.97%  [k] default_idle_call                           -      -            
+     8.11%  [k] finish_task_switch.isra.0                   -      -            
+     3.54%  [k] _raw_spin_unlock_irqrestore                 -      -            
+     1.69%  [k] _raw_spin_lock                              -      -            
+     1.62%  [k] svc_tcp_rx_append_ref                       -      -            
+     1.39%  [k] svc_tcp_rx_borrow_segment                   -      -            
+     1.19%  [k] svc_tcp_rx_release_refs                     -      -            
+     1.19%  [k] blk_map_iter_next                           -      -            
+     0.96%  [k] napi_pp_put_page                            -      -            
+     0.94%  [k] svc_tcp_rx_prefetch_pages                   -      -            
+     0.92%  [k] svc_tcp_rx_walk_skb                         -      -            
+     0.83%  [k] svc_tcp_recv_skb                            -      -            
+     0.75%  [k] svc_recv                                    -      -            
+     0.74%  [k] _raw_spin_unlock_irq                        -      -            
+     0.70%  [k] dma_direct_map_phys                         -      -            
+     0.70%  [k] __tcp_transmit_skb                          -      -            
+     0.64%  [k] __dev_xmit_skb                              -      -            
+     0.60%  [k] bio_split_io_at                             -      -            
+     0.57%  [k] svc_tcp_rx_region_span                      -      -            
+     0.57%  [k] percpu_counter_add_batch                    -      -            
+     0.56%  [k] page_pool_put_netmem_bulk                   -      -            
+     0.50%  [k] dma_map_phys                                -      -            
+     0.49%  [k] _raw_spin_lock_bh                           -      -            
+     0.47%  [k] svc_tcp_rx_skb_region_pages_after.part.0    -      -            
+     0.45%  [k] llist_del_first_this                        -      -            
+     0.45%  [k] blk_rq_dma_map_iter_next                    -      -            
+     0.44%  [k] svc_tcp_recvfrom                            -      -            
+     0.42%  [k] blk_mq_submit_bio                           -      -            
+     0.42%  [k] nfsd_cache_insert                           -      -            
+     0.42%  [k] kmem_cache_alloc_node_noprof                -      -            
+     0.40%  [k] sunrpc_cache_find_rcu                       -      -            
+     0.39%  [k] _raw_spin_unlock                            -      -            
+     0.37%  [k] xdr_buf_to_bvec                             -      -            
+     0.37%  [k] svc_tcp_rx_validate_mixed                   -      -            
+     0.37%  [k] svc_xprt_received                           -      -            
+     0.37%  [k] lock_sock_nested                            -      -            
+     0.36%  [k] arch_counter_get_cntpct                     -      -            
+     0.35%  [k] tcp_recv_skb                                -      -            
+     0.35%  [k] xfs_iext_lookup_extent                      -      -            
+     0.34%  [k] nfs_dio_split                               -      -            
+     0.33%  [k] __sk_mem_reduce_allocated                   -      -            
+     0.32%  [k] __memcg_slab_free_hook                      -      -            
+     0.32%  [k] kmem_cache_alloc_noprof                     -      -            
+     0.31%  [k] page_pool_recycle_ring_bulk                 -      -            
+     0.30%  [k] __local_bh_enable_ip                        -      -            
+#
+# (Tip: To record callchains for each sample: perf record -g)
+#
