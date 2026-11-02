@@ -342,12 +342,21 @@ body, in order:
    ran 7/7, 52/52, 7/7 and 10/10, no skip, no warning, no crash
    (`boot7-all4-real/`), the script ending `KUNIT FAIL` only on the 8 rings,
    as in `boot7-all4/`.
-5. Settings saved per test with KUnit cleanup actions. Tests write
-   `svc_tcp_rx_copy_below`, the budgets, the `svc_tcp_rx_loans` key and
-   fault injection in `init_net`, which now reach a real transport's
-   receive path. They are put back only by `suite_exit`, with
-   `run-kunit.sh` behind it, so a crash or a failed run leaves them
-   changed.
+5. Settings saved per test: done in `svcsock_kunit.c`. The tests write
+   the budgets, `svc_tcp_rx_rcvbuf`, `svc_tcp_rx_copy_below`, the want share
+   and fault injection in `init_net`, shared with the kernel's real server.
+   The point is isolation between tests, not crashes: a crash reboots and
+   loses these anyway. `.init` saves them and adds one cleanup action,
+   `svcsock_rx_settings_restore()`, which so runs last, after the transports
+   close, however the test ended. It forgets what the budgets learned
+   through `configure(0, 0, 0)`, which `restore()` does not, and then
+   restores, because `configure()` zeroes `svc_tcp_rx_rcvbuf`. That zero was
+   a leak: the old `budget_off` action left every later test at 0 until
+   `suite_exit`, so results could depend on test order. `.exit` went, as
+   KUnit runs it before the actions. The 23 `budget_off` and
+   `budget_default_off` registrations went too. `suite_exit` and
+   `run-kunit.sh` stay as backstops. The first runs are
+   `boot7-settings/`, alone, and `boot7-all4-settings/`, the stock script.
 
 Also brittle, and left as they are for now: the fixture's use of a live
 thread's `rqstp`, `svc_new_thread()` called without a service mutex, and
