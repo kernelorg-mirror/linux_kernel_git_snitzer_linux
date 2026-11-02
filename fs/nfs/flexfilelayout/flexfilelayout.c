@@ -729,6 +729,17 @@ nfs4_ff_end_busy_timer(struct nfs4_ff_busy_timer *timer, ktime_t now)
 	return ktime_sub(now, start);
 }
 
+/* ffl_duration runs from the stripe's first I/O: publish start_time once. */
+static void
+nfs4_ff_layoutstat_set_start_time(struct nfs4_ff_layout_ds_stripe *dss_info,
+				  ktime_t now)
+{
+	s64 unset = 0;
+
+	if (!atomic64_read(&dss_info->start_time))
+		atomic64_try_cmpxchg(&dss_info->start_time, &unset, now);
+}
+
 static bool
 nfs4_ff_layoutstat_start_io(struct nfs4_ff_layout_mirror *mirror,
 			    u32 dss_id,
@@ -740,8 +751,7 @@ nfs4_ff_layoutstat_start_io(struct nfs4_ff_layout_mirror *mirror,
 	s64 last_report;
 
 	nfs4_ff_start_busy_timer(&layoutstat->busy_timer, now);
-	if (!mirror->dss[dss_id].start_time)
-		mirror->dss[dss_id].start_time = now;
+	nfs4_ff_layoutstat_set_start_time(&mirror->dss[dss_id], now);
 	if (mirror->report_interval != 0)
 		report_interval = (s64)mirror->report_interval * 1000LL;
 	else if (layoutstats_timer != 0)
@@ -3066,7 +3076,7 @@ ff_layout_encode_ff_layoutupdate(struct xdr_stream *xdr,
 	/* nfstime4 */
 	ff_layout_encode_nfstime(xdr,
 				 ktime_sub(ktime_get(),
-					   dss_info->start_time));
+					   atomic64_read(&dss_info->start_time)));
 	/* bool */
 	p = xdr_reserve_space(xdr, 4);
 	*p = cpu_to_be32(false);
