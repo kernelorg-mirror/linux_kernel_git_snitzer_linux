@@ -354,7 +354,12 @@ body, in order:
    test either, as KUnit runs cleanup in another kthread. So
    `run-kunit.sh`, which does one thing at a time, is what keeps it safe.
 
-   `rq_addr` and `rq_daddr` are still set by hand. On the real transport:
+   `rq_addr` and `rq_daddr` now come from the transport, by
+   `svc_xprt_copy_addrs()` in `nfsd_kunit_rqst()`, for every request in both
+   suites. The runs are `boot7-addrs-clean/` and `boot7-all4-addrs/`, the
+   stock script.
+
+   On the real transport:
    the forced assertion gave 9 pass, 1 fail and no clients left
    (`boot7-session-abort2/`). A scratch build that also skipped the cleanup
    left the client on the server, as it should, and the module still
