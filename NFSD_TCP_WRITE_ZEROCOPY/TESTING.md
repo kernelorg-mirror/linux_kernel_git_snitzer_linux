@@ -356,8 +356,11 @@ body, in order:
 
    `rq_addr` and `rq_daddr` now come from the transport, by
    `svc_xprt_copy_addrs()` in `nfsd_kunit_rqst()`, for every request in both
-   suites. The runs are `boot7-addrs-clean/` and `boot7-all4-addrs/`, the
-   stock script.
+   suites. It ran 10/10 alone with no clients left (`boot7-addrs-clean/`),
+   and by the stock script 7/7, 52/52, 7/7 and 10/10, no skip, no warning,
+   no crash (`boot7-all4-addrs/`), ending `KUNIT FAIL` only on the 8 rings.
+   Srcversion does not cover the shared header, so check a rebuilt module
+   with `nm -u`, not by that.
 
    On the real transport:
    the forced assertion gave 9 pass, 1 fail and no clients left
