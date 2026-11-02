@@ -40,12 +40,22 @@ which_ok() {
 # a data drive).  The drive of /hs/nvmeN is the one mounted there, which
 # after a boot that renamed the drives is not nvmeNn1 (tardis2 on 27
 # October: the Micron came up as nvme7, the fourth DPRP5 as nvme8);
-# nvmeNn1 only while nothing is mounted there.
+# nvmeNn1 only while nothing is mounted there.  With nothing mounted there,
+# nvmeNn1 is left out if it is absent or in use, as it is after a boot that
+# found fewer drives (tardis2 on 2 November: two SN8100s gone, the DPRP5s
+# nvme2 to nvme5 mounted at /hs/nvme4 to 7, and the Micron nvme6).
 data_drives() {
 	local n d
 	for n in $DATA_DRIVES; do
 		d=$(findmnt -rno SOURCE -M /hs/nvme$n 2>/dev/null | head -1)
-		d=${d:-/dev/nvme${n}n1}; d=${d#/dev/}
+		if [ -z "$d" ]; then
+			d=nvme${n}n1
+			[ -b /dev/$d ] || continue
+			lsblk -nro MOUNTPOINT /dev/$d 2>/dev/null | grep -q . && continue
+			echo $d
+			continue
+		fi
+		d=${d#/dev/}
 		findmnt -rno TARGET -S /dev/$d 2>/dev/null | grep -qvx "/hs/nvme$n" &&
 			{ echo "$d is mounted outside /hs/nvme$n: not a data drive" >&2; return 1; }
 		lsblk -nro MOUNTPOINT /dev/$d 2>/dev/null | grep -qE '^/(boot.*)?$' &&
