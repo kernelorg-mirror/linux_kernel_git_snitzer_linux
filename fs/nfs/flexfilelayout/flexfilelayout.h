@@ -64,9 +64,10 @@ struct nfs4_ff_io_stat {
 	ktime_t				aggregate_completion_time;
 };
 
+/* Both members are protected by the enclosing stripe's lock */
 struct nfs4_ff_busy_timer {
 	ktime_t start_time;
-	atomic_t n_ops;
+	int n_ops;
 };
 
 struct nfs4_ff_layoutstat {
