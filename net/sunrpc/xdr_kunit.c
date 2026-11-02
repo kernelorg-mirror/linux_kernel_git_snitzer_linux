@@ -1010,7 +1010,8 @@ static void xdr_bvec_advance_test(struct kunit *test)
 	xdr_bvec_test_init_buf(&buf, bvec, ARRAY_SIZE(bvec), 0, 12,
 			       head, sizeof(head), NULL, 0);
 	xdr_init_decode(&xdr, &buf, NULL, NULL);
-	KUNIT_ASSERT_NOT_NULL(test, xdr_inline_decode(&xdr, 8));
+	KUNIT_ASSERT_NOT_NULL(test, xdr_inline_decode(&xdr, 4));
+	KUNIT_ASSERT_NOT_NULL(test, xdr_inline_decode(&xdr, 4));
 	KUNIT_ASSERT_TRUE(test, xdr_stream_subsegment(&xdr, &payload, 8));
 	KUNIT_EXPECT_EQ(test, payload.bvec_count, 2U);
 	KUNIT_EXPECT_EQ(test, xdr_stream_pos(&xdr), 16U);
