@@ -172,8 +172,13 @@ void rx_loan_table_free(struct rx_loan_table *t)
 }
 EXPORT_SYMBOL_GPL(rx_loan_table_free);
 
-/* The counts agree and every borrowed entry holds a page. */
-bool rx_loan_table_refs_valid(const struct rx_loan_table *t)
+/*
+ * The counts agree and every borrowed entry holds a page; with @checked,
+ * whoever built the table checked its entries, and only the counts and the
+ * bitmaps are checked again.
+ */
+static bool __rx_loan_table_refs_valid(const struct rx_loan_table *t,
+				       bool checked)
 {
 	unsigned int index;
 
@@ -185,6 +190,8 @@ bool rx_loan_table_refs_valid(const struct rx_loan_table *t)
 	if (bitmap_weight(t->borrowed, t->count) != t->borrowed_count ||
 	    !bitmap_subset(t->page_pool, t->borrowed, t->count))
 		return false;
+	if (checked)
+		return true;
 	for (index = 0; index < t->count; index++)
 		if (test_bit(index, t->borrowed) &&
 		    (!t->bvec[index].bv_page ||
@@ -195,7 +202,23 @@ bool rx_loan_table_refs_valid(const struct rx_loan_table *t)
 			return false;
 	return true;
 }
+
+/* The counts agree and every borrowed entry holds a page. */
+bool rx_loan_table_refs_valid(const struct rx_loan_table *t)
+{
+	return __rx_loan_table_refs_valid(t, false);
+}
 EXPORT_SYMBOL_GPL(rx_loan_table_refs_valid);
+
+/*
+ * rx_loan_table_refs_valid() for a table whose entries were checked when it
+ * was published and have not changed since: the counts and bitmaps only.
+ */
+bool rx_loan_table_refs_valid_checked(const struct rx_loan_table *t)
+{
+	return __rx_loan_table_refs_valid(t, true);
+}
+EXPORT_SYMBOL_GPL(rx_loan_table_refs_valid_checked);
 
 /*
  * Page-pool pages of one record returned to their pool at a time.
