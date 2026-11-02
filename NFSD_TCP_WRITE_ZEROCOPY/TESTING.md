@@ -329,28 +329,29 @@ body, in order:
    stock script: 7/7, 52/52, 7/7 and 10/10, no skip, no warning, no crash
    (`boot7-all4-svcsock/`), ending `KUNIT FAIL` only on the 8 rings.
 3. `nfsd4_bvec_kunit.c`: the decode fixtures are replaced, see "Before
-   and after `nfsd4_bvec_kunit`" below. Its session tests' test transport
-   is reviewed, from reading: no path found to a NULL hook. It has only
-   `xpo_free`, but it is on neither of a service's lists and never closed;
-   `CREATE_SESSION` sets no back channel, so `rpc_create()` never sees its
-   `xcl_ident` of 0; and its module reference covers a stale client. The
-   test's own DESTROY means `nfsd4_q35_session_cleanup()` does nothing on a
-   pass, so it had not run since `cleanup_rqst` became a real thread. A
-   scratch build, not committed, failed an assertion after `CREATE_SESSION`
-   (`boot7-session-abort/`): 9 pass, 1 fail, no clients left in
-   `/proc/fs/nfsd/clients`, and the module unloaded, so the transport's
-   last reference went. A clean run after it passed 10/10
-   (`boot7-session-after/`).
+   and after `nfsd4_bvec_kunit`" below. The session tests' own transport is
+   gone: their requests stay on the fixture's accepted transport, and only
+   `rq_server` is nfsd's. Before that it was reviewed, and no path to a
+   NULL hook found. The test's own DESTROY means
+   `nfsd4_q35_session_cleanup()` does nothing on a pass, so a scratch build,
+   not committed, failed an assertion after `CREATE_SESSION`: on the old
+   transport 9 pass, 1 fail, no clients left in `/proc/fs/nfsd/clients`,
+   the module unloaded, and a clean run after it 10/10
+   (`boot7-session-abort/`, `boot7-session-after/`).
 
-   Left, from reading and not observed: an assertion between `pc_func` and
-   `pc_encode` would keep SEQUENCE's reference on the session, so the
-   cleanup's DESTROY_SESSION would fail, unchecked, and the client would
-   stay until its lease ends; the module could not unload until then.
-   `nfsd4_kunit_serv()` reads `nfsd_serv` without `nfsd_mutex` and holds it
-   for the test, so stopping nfsd during the suite is unsafe. The transport
-   can also go: the fixture's accepted transport is in `init_net` too, and
-   only `rq_server` needs to be nfsd's, so the class, its `xpo_free` and
-   its module reference could be replaced by `env->xprt`. Not done.
+   An assertion between `pc_func` and `pc_encode` cannot fire, as
+   `nfsd4_proc_compound()` has one `return rpc_success`. That corrects the
+   review, which called it a way to leave a client until its lease ends.
+   Were it to fire, a session's reference would hold `cl_rpc_users` and the
+   lease would not end it either.
+
+   Left: `nfsd4_kunit_serv()` reads `nfsd_serv` without `nfsd_mutex` and
+   holds it for the test, so stopping nfsd during the suite is unsafe, and
+   `rq_addr` and `rq_daddr` are still set by hand. The next runs on the
+   real transport are `boot7-session-abort2/`, `boot7-session-lost/`, which
+   skips the cleanup so that the close runs `nfsd4_conn_lost()`,
+   `boot7-session-clean/` and `boot7-all4-session/`, the stock script.
+
 4. `nfsd_bvec_kunit.c`: done, the decode and dispatch tests take requests
    from the service in `fs/nfsd/nfsd_kunit_svc.h`, moved there from the
    nfsd4 suite. What it read was traced first: `nfs3svc_decode_writeargs()`
