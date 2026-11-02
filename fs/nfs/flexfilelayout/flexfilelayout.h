@@ -86,6 +86,8 @@ struct nfs4_ff_layout_ds_stripe {
 	const struct cred __rcu		*ro_cred;
 	const struct cred __rcu		*rw_cred;
 	struct nfs_file_localio		nfl;
+	/* Protects read_stat, write_stat and start_time below */
+	spinlock_t			lock;
 	struct nfs4_ff_layoutstat	read_stat;
 	struct nfs4_ff_layoutstat	write_stat;
 	ktime_t				start_time;
@@ -120,7 +122,7 @@ struct nfs4_flexfile_layout {
 	struct pnfs_ds_commit_info commit_info;
 	struct list_head	mirrors;
 	struct list_head	error_list; /* nfs4_ff_layout_ds_err */
-	ktime_t			last_report_time; /* Layoutstat report times */
+	atomic64_t		last_report_time; /* Layoutstat report times */
 	unsigned long		flags;
 };
 
