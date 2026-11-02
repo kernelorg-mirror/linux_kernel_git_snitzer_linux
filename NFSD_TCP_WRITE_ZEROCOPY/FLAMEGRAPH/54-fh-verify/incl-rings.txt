@@ -1,0 +1,75 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 30K of event 'armv8_pmuv3_0/cycles/P'
+# Event count (approx.): 39601682076
+#
+# Children      Self  Symbol                                     IPC   [IPC Coverage]
+# ........  ........  .........................................  ....................
+#
+    99.66%     0.00%  [.] cpu_startup_entry                      -      -            
+    99.64%     0.01%  [.] do_idle                                -      -            
+    99.54%    11.41%  [.] default_idle_call                      -      -            
+    99.50%     0.03%  [.] cpuidle_idle_call                      -      -            
+    88.41%     5.71%  [k] handle_softirqs                        -      -            
+    88.23%     0.00%  [.] ____do_softirq                         -      -            
+    88.23%     0.00%  [.] __do_softirq                           -      -            
+    88.23%     0.00%  [.] call_on_irq_stack                      -      -            
+    88.23%     0.00%  [.] do_softirq_own_stack                   -      -            
+    88.22%     0.00%  [.] __irq_exit_rcu                         -      -            
+    88.22%     0.00%  [.] irq_exit_rcu                           -      -            
+    88.21%     0.00%  [.] el1_interrupt                          -      -            
+    88.21%     0.00%  [.] el1h_64_irq                            -      -            
+    88.21%     0.00%  [.] el1h_64_irq_handler                    -      -            
+    82.53%     0.30%  [.] net_rx_action                          -      -            
+    81.97%     0.06%  [.] __napi_poll                            -      -            
+    73.84%     0.00%  [.] __secondary_switched                   -      -            
+    73.84%     0.00%  [.] secondary_start_kernel                 -      -            
+    52.60%     0.00%  [.] 0xffff9fdfe38b5464                     -      -            
+    52.37%     1.14%  [.] gro_receive_skb                        -      -            
+    49.58%     3.11%  [.] dev_gro_receive                        -      -            
+    29.30%     0.45%  [.] netif_receive_skb_list_internal        -      -            
+    28.52%     0.36%  [.] __netif_receive_skb_list_core          -      -            
+    27.27%     0.39%  [.] ip_list_rcv                            -      -            
+    27.23%     0.30%  [.] gro_complete.constprop.0               -      -            
+    26.18%     0.32%  [.] ip_sublist_rcv                         -      -            
+    25.81%     0.00%  [.] __primary_switched                     -      -            
+    25.81%     0.00%  [.] 0xffff9fe0511b1db8                     -      -            
+    25.81%     0.00%  [.] 0xffff9fe0521917c0                     -      -            
+    23.00%     0.12%  [.] ip_sublist_rcv_finish                  -      -            
+    22.80%     0.08%  [.] ip_local_deliver                       -      -            
+    22.68%     0.13%  [.] ip_local_deliver_finish                -      -            
+    22.47%     0.09%  [.] ip_protocol_deliver_rcu                -      -            
+    20.17%     1.66%  [.] tcp_v4_rcv                             -      -            
+    16.59%     4.58%  [k] inet_gro_receive                       -      -            
+    16.45%     0.11%  [.] tcp_v4_do_rcv                          -      -            
+    16.19%     0.42%  [.] tcp_rcv_established                    -      -            
+    11.94%     1.91%  [.] tcp4_gro_receive                       -      -            
+     9.59%     0.39%  [.] tcp_data_queue                         -      -            
+     8.46%     3.01%  [.] tcp_gro_receive                        -      -            
+     5.74%     5.74%  [k] skb_gro_receive                        -      -            
+     5.58%     0.00%  [.] 0xffff9fdfe38b54f4                     -      -            
+     5.01%     0.00%  [.] 0xffff9fdfe38b507c                     -      -            
+     4.46%     0.06%  [.] tcp_data_ready                         -      -            
+     4.34%     1.26%  [.] svc_data_ready                         -      -            
+     4.26%     4.25%  [.] _raw_spin_unlock_irqrestore            -      -            
+     3.78%     0.37%  [.] napi_complete_done                     -      -            
+     3.78%     0.00%  [.] 0xffff9fdfe38b581c                     -      -            
+     3.51%     3.51%  [k] gro_list_prepare                       -      -            
+     3.48%     2.29%  [k] napi_build_skb                         -      -            
+     3.09%     0.92%  [k] tcp_ack                                -      -            
+     2.84%     0.02%  [.] svc_xprt_enqueue                       -      -            
+     2.74%     0.45%  [.] svc_xprt_enqueue.part.0                -      -            
+     2.71%     0.23%  [.] ip_rcv_finish_core                     -      -            
+     2.32%     0.00%  [.] 0xffff9fdfe38b4bfc                     -      -            
+     2.29%     0.16%  [.] page_pool_alloc_pages                  -      -            
+     2.19%     0.39%  [.] page_pool_alloc_netmems                -      -            
+     2.05%     2.05%  [k] 0x0000000000010b7c                     -      -            
+     2.05%     0.00%  [.] 0xffff9fdfe38b4b7c                     -      -            
+     2.03%     2.03%  [k] eth_type_trans                         -      -            
+     2.00%     0.21%  [.] svc_pool_wake_idle_thread              -      -            
+#
+# (Tip: To browse sample contexts use perf report --sample 10 and select in context menu)
+#
