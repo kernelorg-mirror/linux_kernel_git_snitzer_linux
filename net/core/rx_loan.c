@@ -2960,17 +2960,23 @@ EXPORT_SYMBOL_GPL(rx_loan_tx_give);
  * send whose pages are still referenced (a frag downgraded from managed,
  * which skb_release_data() drops after the send's reference) waits on the
  * busy list, retried each jiffy and given up after RX_LOAN_TX_BUSY_TRIES.
- * The list's work runs at normal priority on the completing CPU, so it
- * does not preempt the consumers' threads there.  It can run before
- * skb_release_data() has dropped the frags' references, so a send first
- * found busy is queued again at once; only later retries wait a jiffy.
+ * The list's work runs on the completing CPU at the priority the consumer
+ * picks (ops->highpri).  Normal priority does not preempt a consumer's
+ * threads there (kNFSd's nfsd threads).  A consumer whose senders are
+ * themselves high-priority workers on that CPU (nvmet-tcp's io_work) picks
+ * high priority: a normal-priority release would get only the CPU time
+ * those workers leave, and the partition would sit in released sends.
+ * The work can run before skb_release_data() has dropped the frags'
+ * references, so a send first found busy is queued again at once; only
+ * later retries wait a jiffy.
  */
 struct rx_loan_tx_done {
 	struct llist_head	list;
 	struct work_struct	work;
 };
 
-static DEFINE_PER_CPU(struct rx_loan_tx_done, rx_loan_tx_done);
+/* [0] normal priority (system_percpu_wq), [1] high (system_highpri_wq) */
+static DEFINE_PER_CPU(struct rx_loan_tx_done, rx_loan_tx_done[2]);
 static LLIST_HEAD(rx_loan_tx_busy_list);
 static void rx_loan_tx_busy_fn(struct work_struct *work);
 static DECLARE_DELAYED_WORK(rx_loan_tx_busy_work, rx_loan_tx_busy_fn);
@@ -2978,11 +2984,15 @@ static DECLARE_DELAYED_WORK(rx_loan_tx_busy_work, rx_loan_tx_busy_fn);
 
 static void rx_loan_tx_queue(struct rx_loan_tx *tx)
 {
-	struct rx_loan_tx_done *d = get_cpu_ptr(&rx_loan_tx_done);
+	bool hp = container_of(tx->ubuf.ops, struct rx_loan_tx_ops,
+			       ubuf)->highpri;
+	struct rx_loan_tx_done *d = get_cpu_ptr(&rx_loan_tx_done[hp]);
 
 	if (llist_add(&tx->done, &d->list))
-		queue_work_on(smp_processor_id(), system_percpu_wq, &d->work);
-	put_cpu_ptr(&rx_loan_tx_done);
+		queue_work_on(smp_processor_id(),
+			      hp ? system_highpri_wq : system_percpu_wq,
+			      &d->work);
+	put_cpu_ptr(&rx_loan_tx_done[hp]);
 }
 
 /* ubuf_info_ops.complete of every consumer's sends. */
@@ -3156,15 +3166,20 @@ static void rx_loan_tx_busy_fn(struct work_struct *work)
  * Run the releases pending now: a consumer's module exit, after its last
  * send, and KUnit.  A send still busy is queued again, as it would be.
  */
-void rx_loan_tx_flush(void)
+static void rx_loan_tx_flush_done(void)
 {
-	int cpu;
+	int cpu, hp;
 
 	for_each_possible_cpu(cpu)
-		flush_work(&per_cpu_ptr(&rx_loan_tx_done, cpu)->work);
+		for (hp = 0; hp < 2; hp++)
+			flush_work(&per_cpu_ptr(&rx_loan_tx_done[hp], cpu)->work);
+}
+
+void rx_loan_tx_flush(void)
+{
+	rx_loan_tx_flush_done();
 	flush_delayed_work(&rx_loan_tx_busy_work);
-	for_each_possible_cpu(cpu)
-		flush_work(&per_cpu_ptr(&rx_loan_tx_done, cpu)->work);
+	rx_loan_tx_flush_done();
 }
 EXPORT_SYMBOL_GPL(rx_loan_tx_flush);
 
@@ -3264,15 +3279,18 @@ static struct pernet_operations rx_loan_net_ops = {
 
 static int __init rx_loan_init(void)
 {
-	int cpu;
+	int cpu, hp;
 
 	BUILD_BUG_ON(RX_LOAN_TX_BUSY_TRIES > U16_MAX);
 	BUILD_BUG_ON(sizeof(struct rx_loan_tx) > RX_LOAN_TX_SIZE);
 	for_each_possible_cpu(cpu) {
-		struct rx_loan_tx_done *d = per_cpu_ptr(&rx_loan_tx_done, cpu);
+		for (hp = 0; hp < 2; hp++) {
+			struct rx_loan_tx_done *d =
+				per_cpu_ptr(&rx_loan_tx_done[hp], cpu);
 
-		init_llist_head(&d->list);
-		INIT_WORK(&d->work, rx_loan_tx_done_fn);
+			init_llist_head(&d->list);
+			INIT_WORK(&d->work, rx_loan_tx_done_fn);
+		}
 	}
 	return register_pernet_subsys(&rx_loan_net_ops);
 }

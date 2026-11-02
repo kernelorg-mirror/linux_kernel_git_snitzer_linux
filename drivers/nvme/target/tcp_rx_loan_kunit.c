@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * KUnit tests for nvmet-tcp's receive of WRITE data into rx_loan region
- * loans.  Included from tcp.c so that the static helpers are reachable.
+ * loans and its sends of READ data from them.  Included from tcp.c so that the static helpers are reachable.
  */
 #include <kunit/test.h>
 
@@ -1181,6 +1181,518 @@ static void nvmet_tcp_kunit_own_budget(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, READ_ONCE(nvmet_tcp_rx_budget.stock) != NULL);
 }
 
+/* A stand-in READ partition of @n pages, gone (pages freed) at test end. */
+struct nvmet_tcp_kunit_tx_region {
+	struct page	**pages;
+	unsigned int	n;
+};
+
+static void nvmet_tcp_kunit_tx_region_free(void *data)
+{
+	struct nvmet_tcp_kunit_tx_region *r = data;
+	unsigned int i;
+
+	rx_loan_tx_flush();
+	rx_loan_kunit_tx_region(NULL, 0);
+	for (i = 0; i < r->n; i++)
+		if (r->pages[i])
+			__free_page(r->pages[i]);
+}
+
+static void nvmet_tcp_kunit_tx_region(struct kunit *test, unsigned int n)
+{
+	struct nvmet_tcp_kunit_tx_region *r;
+	unsigned int i;
+	int ret;
+
+	r = kunit_kzalloc(test, sizeof(*r), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, r);
+	r->pages = kunit_kcalloc(test, n, sizeof(*r->pages), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, r->pages);
+	r->n = n;
+	ret = kunit_add_action_or_reset(test, nvmet_tcp_kunit_tx_region_free,
+					r);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	for (i = 0; i < n; i++) {
+		r->pages[i] = alloc_page(GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, r->pages[i]);
+	}
+	rx_loan_kunit_tx_region(r->pages, n);
+}
+
+/*
+ * A READ budget over the stand-in region, sized as admission sizes it (the
+ * region less the write budgets) before the test reads its credit.
+ */
+static struct rx_loan_budget *nvmet_tcp_kunit_read_budget(struct kunit *test)
+{
+	struct rx_loan_budget *lb = nvmet_tcp_kunit_budget(test, 64, 0);
+
+	lb->read = true;
+	spin_lock_bh(&lb->lock);
+	rx_loan_budget_update_locked(lb);
+	spin_unlock_bh(&lb->lock);
+	return lb;
+}
+
+/* A READ of @bytes on a queue that lends, to a namespace taking bvecs. */
+static struct nvmet_tcp_cmd *nvmet_tcp_kunit_read(struct kunit *test,
+						  u32 bytes)
+{
+	struct nvmet_tcp_cmd *cmd = kunit_kzalloc(test, sizeof(*cmd),
+						  GFP_KERNEL);
+	struct nvme_command *sqe = kunit_kzalloc(test, sizeof(*sqe),
+						 GFP_KERNEL);
+	struct nvmet_ns *ns = kunit_kzalloc(test, sizeof(*ns), GFP_KERNEL);
+
+	KUNIT_ASSERT_NOT_NULL(test, cmd);
+	KUNIT_ASSERT_NOT_NULL(test, sqe);
+	KUNIT_ASSERT_NOT_NULL(test, ns);
+	cmd->queue = nvmet_tcp_kunit_queue(test);
+	cmd->queue->rx_region = true;
+	sqe->common.opcode = nvme_cmd_read;
+	ns->data_bvec_ok = true;
+	cmd->req.cmd = sqe;
+	cmd->req.ns = ns;
+	cmd->req.data_bvec_ok = true;
+	cmd->req.transfer_len = bytes;
+	return cmd;
+}
+
+static void nvmet_tcp_kunit_tx_delta(struct nvmet_tcp_tx_stats *base,
+				     struct nvmet_tcp_tx_stats *d)
+{
+	nvmet_tcp_tx_sum(d);
+	d->confined -= base->confined;
+	d->unconfined -= base->unconfined;
+	d->sends -= base->sends;
+	d->copies -= base->copies;
+	d->copy_pages -= base->copy_pages;
+}
+
+/*
+ * A READ is served from READ-partition pages under exact credit; TCP's
+ * references outlive the command's, and the pages and credit come back
+ * only with the last of them.
+ */
+static void nvmet_tcp_kunit_tx_confined(struct kunit *test)
+{
+	struct rx_loan_budget *lb = nvmet_tcp_kunit_read_budget(test);
+	u32 bytes = 3 * PAGE_SIZE + 100;
+	struct nvmet_tcp_tx_stats base, d;
+	struct nvmet_tcp_cmd *cmd;
+	struct ubuf_info *ubuf;
+	long avail;
+
+	nvmet_tcp_kunit_tx_region(test, 8);
+	cmd = nvmet_tcp_kunit_read(test, bytes);
+	avail = nvmet_tcp_kunit_avail(lb);
+	nvmet_tcp_tx_sum(&base);
+
+	KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(cmd, bytes, lb));
+	KUNIT_EXPECT_TRUE(test, cmd->flags & NVMET_TCP_F_TX_LOAN);
+	KUNIT_ASSERT_NOT_NULL(test, cmd->tx);
+	KUNIT_EXPECT_NULL(test, cmd->req.sg);
+	KUNIT_EXPECT_NULL(test, cmd->cur_sg);
+	KUNIT_EXPECT_PTR_EQ(test, cmd->req.data_bvec, cmd->iov);
+	KUNIT_EXPECT_EQ(test, cmd->req.data_bvec_cnt, 4U);
+	KUNIT_EXPECT_EQ(test, cmd->req.data_bvec[3].bv_len, 100U);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 4U);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail - 4);
+	nvmet_tcp_kunit_tx_delta(&base, &d);
+	KUNIT_EXPECT_EQ(test, d.confined, 1ULL);
+	KUNIT_EXPECT_EQ(test, d.unconfined, 0ULL);
+	KUNIT_EXPECT_EQ(test, d.sends, 1L);
+
+	/* Sent in two skbs, then the command is done. */
+	ubuf = &cmd->tx->tx.ubuf;
+	refcount_add(2, &ubuf->refcnt);
+	nvmet_tcp_free_cmd_buffers(cmd);
+	KUNIT_EXPECT_FALSE(test, cmd->flags & NVMET_TCP_F_TX_LOAN);
+	KUNIT_EXPECT_NULL(test, cmd->tx);
+	KUNIT_EXPECT_NULL(test, cmd->iov);
+	rx_loan_tx_flush();
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 4U);
+
+	ubuf->ops->complete(NULL, ubuf, true);
+	rx_loan_tx_flush();
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 4U);
+	ubuf->ops->complete(NULL, ubuf, true);
+	rx_loan_tx_flush();
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 8U);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail);
+	nvmet_tcp_kunit_tx_delta(&base, &d);
+	KUNIT_EXPECT_EQ(test, d.sends, 0L);
+}
+
+/* A command freed before its data went out returns at once. */
+static void nvmet_tcp_kunit_tx_unsent(struct kunit *test)
+{
+	struct rx_loan_budget *lb = nvmet_tcp_kunit_read_budget(test);
+	struct nvmet_tcp_cmd *cmd;
+	long avail;
+
+	nvmet_tcp_kunit_tx_region(test, 4);
+	cmd = nvmet_tcp_kunit_read(test, 2 * PAGE_SIZE);
+	avail = nvmet_tcp_kunit_avail(lb);
+	KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(cmd, 2 * PAGE_SIZE, lb));
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 2U);
+	nvmet_tcp_free_cmd_buffers(cmd);
+	rx_loan_tx_flush();
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 4U);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail);
+}
+
+/*
+ * Pages short: the stock sgl, the credit returned at once; a READ larger
+ * than the partition never asks for credit.  Neither waits.
+ */
+static void nvmet_tcp_kunit_tx_unconfined(struct kunit *test)
+{
+	struct rx_loan_budget *lb = nvmet_tcp_kunit_read_budget(test);
+	struct nvmet_tcp_cmd *first, *cmd, *big;
+	struct nvmet_tcp_tx_stats base, d;
+	long avail;
+
+	nvmet_tcp_kunit_tx_region(test, 4);
+	first = nvmet_tcp_kunit_read(test, 3 * PAGE_SIZE);
+	cmd = nvmet_tcp_kunit_read(test, 2 * PAGE_SIZE);
+	big = nvmet_tcp_kunit_read(test, 5 * PAGE_SIZE);
+	avail = nvmet_tcp_kunit_avail(lb);
+	nvmet_tcp_tx_sum(&base);
+
+	KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(first, 3 * PAGE_SIZE, lb));
+	KUNIT_EXPECT_FALSE(test, nvmet_tcp_tx_want(cmd, 2 * PAGE_SIZE, lb));
+	KUNIT_EXPECT_FALSE(test, cmd->flags & NVMET_TCP_F_TX_LOAN);
+	KUNIT_EXPECT_NULL(test, cmd->iov);
+	KUNIT_EXPECT_NULL(test, cmd->req.data_bvec);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 1U);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail - 3);
+
+	KUNIT_EXPECT_FALSE(test, nvmet_tcp_tx_want(big, 5 * PAGE_SIZE, lb));
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail - 3);
+	nvmet_tcp_kunit_tx_delta(&base, &d);
+	KUNIT_EXPECT_EQ(test, d.confined, 1ULL);
+	KUNIT_EXPECT_EQ(test, d.unconfined, 2ULL);
+
+	nvmet_tcp_free_cmd_buffers(first);
+	rx_loan_tx_flush();
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 4U);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail);
+}
+
+/*
+ * The backend refuses the bvec (a misaligned length): the send is
+ * undone, pages and credit back, and the READ takes the stock sgl.
+ */
+static void nvmet_tcp_kunit_tx_bvec_refused(struct kunit *test)
+{
+	struct rx_loan_budget *lb = nvmet_tcp_kunit_read_budget(test);
+	struct nvmet_tcp_tx_stats base, d;
+	struct nvmet_tcp_cmd *cmd;
+	long avail;
+
+	nvmet_tcp_kunit_tx_region(test, 4);
+	cmd = nvmet_tcp_kunit_read(test, PAGE_SIZE + 4);
+	cmd->req.ns->data_bvec_len_mask = 511;
+	avail = nvmet_tcp_kunit_avail(lb);
+	nvmet_tcp_tx_sum(&base);
+	KUNIT_EXPECT_FALSE(test, nvmet_tcp_tx_want(cmd, PAGE_SIZE + 4, lb));
+	KUNIT_EXPECT_FALSE(test, cmd->flags & NVMET_TCP_F_TX_LOAN);
+	KUNIT_EXPECT_NULL(test, cmd->iov);
+	KUNIT_EXPECT_NULL(test, cmd->tx);
+	rx_loan_tx_flush();
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 4U);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail);
+	nvmet_tcp_kunit_tx_delta(&base, &d);
+	KUNIT_EXPECT_EQ(test, d.unconfined, 1ULL);
+	KUNIT_EXPECT_EQ(test, d.sends, 0L);
+}
+
+/*
+ * A send whose pages TCP copied (zerocopy_success false on one of its
+ * skbs) is counted with its pages at release; one zero copy is not.
+ */
+static void nvmet_tcp_kunit_tx_copied(struct kunit *test)
+{
+	struct rx_loan_budget *lb = nvmet_tcp_kunit_read_budget(test);
+	struct nvmet_tcp_cmd *zc, *cp;
+	struct nvmet_tcp_tx_stats base, d;
+	struct ubuf_info *ubuf;
+
+	nvmet_tcp_kunit_tx_region(test, 8);
+	zc = nvmet_tcp_kunit_read(test, 2 * PAGE_SIZE);
+	cp = nvmet_tcp_kunit_read(test, 3 * PAGE_SIZE);
+	nvmet_tcp_tx_sum(&base);
+	KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(zc, 2 * PAGE_SIZE, lb));
+	KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(cp, 3 * PAGE_SIZE, lb));
+
+	ubuf = &zc->tx->tx.ubuf;
+	refcount_inc(&ubuf->refcnt);
+	nvmet_tcp_free_cmd_buffers(zc);
+	ubuf->ops->complete(NULL, ubuf, true);
+
+	/* Two skbs: the first copied, the last zero copy. */
+	ubuf = &cp->tx->tx.ubuf;
+	refcount_add(2, &ubuf->refcnt);
+	nvmet_tcp_free_cmd_buffers(cp);
+	ubuf->ops->complete(NULL, ubuf, false);
+	ubuf->ops->complete(NULL, ubuf, true);
+	rx_loan_tx_flush();
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 8U);
+	nvmet_tcp_kunit_tx_delta(&base, &d);
+	KUNIT_EXPECT_EQ(test, d.sends, 0L);
+	KUNIT_EXPECT_EQ(test, d.copies, 1ULL);
+	KUNIT_EXPECT_EQ(test, d.copy_pages, 3ULL);
+}
+
+/* An skb that carries @ubuf's send, as TCP's first zero-copy append. */
+static struct sk_buff *nvmet_tcp_kunit_tx_skb(struct kunit *test,
+					      struct ubuf_info *ubuf)
+{
+	struct sk_buff *skb = alloc_skb(0, GFP_KERNEL);
+
+	KUNIT_ASSERT_NOT_NULL(test, skb);
+	KUNIT_ASSERT_NOT_NULL(test, ubuf->ops->link_skb);
+	KUNIT_ASSERT_EQ(test, ubuf->ops->link_skb(skb, ubuf), 0);
+	KUNIT_ASSERT_PTR_EQ(test, skb_zcopy(skb), ubuf);
+	return skb;
+}
+
+/* Chaining is built in only with CONFIG_RX_LOAN_TX_LINK. */
+#define NVMET_TCP_KUNIT_NEED_TX_LINK(test)				\
+	do {								\
+		if (!IS_ENABLED(CONFIG_RX_LOAN_TX_LINK))		\
+			kunit_skip(test, "CONFIG_RX_LOAN_TX_LINK=n");	\
+	} while (0)
+
+/*
+ * Consecutive READs share skbs (->link_skb): each READ's pages and credit
+ * come back only when the last skb carrying any of the chain is freed,
+ * whichever skb that is, and not with the command.
+ */
+static void nvmet_tcp_kunit_tx_linked(struct kunit *test)
+{
+	struct rx_loan_budget *lb = nvmet_tcp_kunit_read_budget(test);
+	struct nvmet_tcp_cmd *a, *b;
+	struct ubuf_info *ua, *ub;
+	struct sk_buff *s1, *s2;
+	long avail;
+	int order;
+
+	NVMET_TCP_KUNIT_NEED_TX_LINK(test);
+	nvmet_tcp_kunit_tx_region(test, 8);
+	avail = nvmet_tcp_kunit_avail(lb);
+	for (order = 0; order < 2; order++) {
+		a = nvmet_tcp_kunit_read(test, 2 * PAGE_SIZE);
+		b = nvmet_tcp_kunit_read(test, 2 * PAGE_SIZE);
+		KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(a, 2 * PAGE_SIZE, lb));
+		KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(b, 2 * PAGE_SIZE, lb));
+		ua = &a->tx->tx.ubuf;
+		ub = &b->tx->tx.ubuf;
+
+		/* s1 carries a's data then b's head; s2 the rest of b's. */
+		s1 = nvmet_tcp_kunit_tx_skb(test, ua);
+		KUNIT_ASSERT_EQ(test, ub->ops->link_skb(s1, ub), 0);
+		KUNIT_EXPECT_PTR_EQ(test, skb_zcopy(s1), ua);
+		KUNIT_EXPECT_EQ(test, ua->ops->link_skb(s1, ua), 0);
+		s2 = nvmet_tcp_kunit_tx_skb(test, ub);
+
+		nvmet_tcp_free_cmd_buffers(a);
+		nvmet_tcp_free_cmd_buffers(b);
+		rx_loan_tx_flush();
+		KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 4U);
+		KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail - 4);
+
+		kfree_skb(order ? s2 : s1);
+		rx_loan_tx_flush();
+		KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 4U);
+		KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail - 4);
+
+		kfree_skb(order ? s1 : s2);
+		rx_loan_tx_flush();
+		KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 8U);
+		KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail);
+	}
+}
+
+static void nvmet_tcp_kunit_other_complete(struct sk_buff *skb,
+					   struct ubuf_info *uarg,
+					   bool zerocopy_success)
+{
+	if (refcount_dec_and_test(&uarg->refcnt))
+		return;
+}
+
+static const struct ubuf_info_ops nvmet_tcp_kunit_other_ops = {
+	.complete = nvmet_tcp_kunit_other_complete,
+};
+
+/*
+ * A READ starts its own skb behind another provider's send, behind a send
+ * whose chain is full, and when it is in a chain already; each refused READ
+ * comes back on its own.
+ */
+static void nvmet_tcp_kunit_tx_link_refused(struct kunit *test)
+{
+	struct rx_loan_budget *lb = nvmet_tcp_kunit_read_budget(test);
+	struct nvmet_tcp_cmd *cmd[RX_LOAN_KUNIT_TX_CHAIN_MAX + 2];
+	struct ubuf_info other = {
+		.ops = &nvmet_tcp_kunit_other_ops,
+		.flags = SKBFL_ZEROCOPY_FRAG,
+		.refcnt = REFCOUNT_INIT(1),
+	};
+	struct sk_buff *s1, *s2, *s3;
+	struct ubuf_info *u0, *u1;
+	unsigned int i, n = ARRAY_SIZE(cmd);
+	long avail;
+
+	NVMET_TCP_KUNIT_NEED_TX_LINK(test);
+	nvmet_tcp_kunit_tx_region(test, n);
+	avail = nvmet_tcp_kunit_avail(lb);
+	for (i = 0; i < n; i++) {
+		cmd[i] = nvmet_tcp_kunit_read(test, PAGE_SIZE);
+		KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(cmd[i], PAGE_SIZE,
+							  lb));
+	}
+	u0 = &cmd[0]->tx->tx.ubuf;
+
+	/* Another provider's skb. */
+	s1 = alloc_skb(0, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, s1);
+	skb_zcopy_init(s1, &other);
+	KUNIT_EXPECT_EQ(test, u0->ops->link_skb(s1, u0), -EEXIST);
+	KUNIT_EXPECT_PTR_EQ(test, skb_zcopy(s1), &other);
+	kfree_skb(s1);
+	KUNIT_EXPECT_EQ(test, refcount_read(&other.refcnt), 0U);
+
+	/* The chain fills at its cap; the next READ is refused. */
+	s1 = nvmet_tcp_kunit_tx_skb(test, u0);
+	for (i = 1; i < RX_LOAN_KUNIT_TX_CHAIN_MAX; i++) {
+		struct ubuf_info *u = &cmd[i]->tx->tx.ubuf;
+
+		KUNIT_EXPECT_EQ(test, u->ops->link_skb(s1, u), 0);
+	}
+	u1 = &cmd[RX_LOAN_KUNIT_TX_CHAIN_MAX]->tx->tx.ubuf;
+	KUNIT_EXPECT_EQ(test, u1->ops->link_skb(s1, u1), -EEXIST);
+	/* A new skb behind a member of a full chain is refused too. */
+	s2 = nvmet_tcp_kunit_tx_skb(test, &cmd[5]->tx->tx.ubuf);
+	KUNIT_EXPECT_EQ(test, u1->ops->link_skb(s2, u1), -EEXIST);
+
+	/* A send in a chain does not join another. */
+	s3 = nvmet_tcp_kunit_tx_skb(test, u1);
+	u0 = &cmd[RX_LOAN_KUNIT_TX_CHAIN_MAX + 1]->tx->tx.ubuf;
+	KUNIT_EXPECT_EQ(test, u0->ops->link_skb(s3, u0), 0);
+	KUNIT_EXPECT_EQ(test, cmd[2]->tx->tx.ubuf.ops->link_skb(s3,
+				&cmd[2]->tx->tx.ubuf), -EEXIST);
+
+	for (i = 0; i < n; i++)
+		nvmet_tcp_free_cmd_buffers(cmd[i]);
+	kfree_skb(s3);
+	rx_loan_tx_flush();
+	/* The refused READs' own chain is back; the full chain is not. */
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 2U);
+	kfree_skb(s1);
+	rx_loan_tx_flush();
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 2U);
+	kfree_skb(s2);
+	rx_loan_tx_flush();
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), n);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail);
+}
+
+/* One copied skb of a chain counts every READ of it as copied. */
+static void nvmet_tcp_kunit_tx_link_copied(struct kunit *test)
+{
+	struct rx_loan_budget *lb = nvmet_tcp_kunit_read_budget(test);
+	struct nvmet_tcp_tx_stats base, d;
+	struct nvmet_tcp_cmd *a, *b;
+	struct ubuf_info *ua, *ub;
+	struct sk_buff *s1;
+
+	NVMET_TCP_KUNIT_NEED_TX_LINK(test);
+	nvmet_tcp_kunit_tx_region(test, 8);
+	a = nvmet_tcp_kunit_read(test, 2 * PAGE_SIZE);
+	b = nvmet_tcp_kunit_read(test, 3 * PAGE_SIZE);
+	nvmet_tcp_tx_sum(&base);
+	KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(a, 2 * PAGE_SIZE, lb));
+	KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(b, 3 * PAGE_SIZE, lb));
+	ua = &a->tx->tx.ubuf;
+	ub = &b->tx->tx.ubuf;
+	s1 = nvmet_tcp_kunit_tx_skb(test, ua);
+	KUNIT_ASSERT_EQ(test, ub->ops->link_skb(s1, ub), 0);
+	nvmet_tcp_free_cmd_buffers(a);
+	nvmet_tcp_free_cmd_buffers(b);
+	/* TCP copied s1's frags (skb_copy_ubufs()), then freed it. */
+	skb_zcopy_clear(s1, false);
+	kfree_skb(s1);
+	rx_loan_tx_flush();
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 8U);
+	nvmet_tcp_kunit_tx_delta(&base, &d);
+	KUNIT_EXPECT_EQ(test, d.sends, 0L);
+	KUNIT_EXPECT_EQ(test, d.copies, 2ULL);
+	KUNIT_EXPECT_EQ(test, d.copy_pages, 5ULL);
+}
+
+/*
+ * Up to NVMET_TCP_TX_INLINE pages the bvecs are the command's own; a
+ * larger READ allocates them, and both come back whole.
+ */
+static void nvmet_tcp_kunit_tx_inline(struct kunit *test)
+{
+	struct rx_loan_budget *lb = nvmet_tcp_kunit_read_budget(test);
+	u32 small = NVMET_TCP_TX_INLINE * PAGE_SIZE;
+	u32 large = (NVMET_TCP_TX_INLINE + 4) * PAGE_SIZE;
+	struct nvmet_tcp_cmd *cmd, *big;
+	long avail;
+
+	nvmet_tcp_kunit_tx_region(test, 2 * NVMET_TCP_TX_INLINE + 4);
+	cmd = nvmet_tcp_kunit_read(test, small);
+	big = nvmet_tcp_kunit_read(test, large);
+	avail = nvmet_tcp_kunit_avail(lb);
+
+	KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(cmd, small, lb));
+	KUNIT_EXPECT_PTR_EQ(test, cmd->iov, &cmd->tx_bv[0]);
+	KUNIT_EXPECT_EQ(test, cmd->req.data_bvec_cnt, NVMET_TCP_TX_INLINE);
+	KUNIT_ASSERT_TRUE(test, nvmet_tcp_tx_want(big, large, lb));
+	KUNIT_EXPECT_PTR_NE(test, big->iov, &big->tx_bv[0]);
+	KUNIT_EXPECT_EQ(test, big->req.data_bvec_cnt, NVMET_TCP_TX_INLINE + 4);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 0U);
+
+	nvmet_tcp_free_cmd_buffers(cmd);
+	nvmet_tcp_free_cmd_buffers(big);
+	KUNIT_EXPECT_NULL(test, cmd->iov);
+	KUNIT_EXPECT_NULL(test, big->iov);
+	rx_loan_tx_flush();
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(),
+			2 * NVMET_TCP_TX_INLINE + 4);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_kunit_avail(lb), avail);
+}
+
+/* Not a READ the region serves: no pages, no credit, nothing counted. */
+static void nvmet_tcp_kunit_tx_ineligible(struct kunit *test)
+{
+	struct rx_loan_budget *lb = nvmet_tcp_kunit_read_budget(test);
+	struct nvmet_tcp_cmd *write, *stock, *sgl;
+	struct nvmet_tcp_tx_stats base, d;
+
+	nvmet_tcp_kunit_tx_region(test, 4);
+	write = nvmet_tcp_kunit_read(test, PAGE_SIZE);
+	write->req.cmd->common.opcode = nvme_cmd_write;
+	stock = nvmet_tcp_kunit_read(test, PAGE_SIZE);
+	stock->queue->rx_region = false;
+	sgl = nvmet_tcp_kunit_read(test, PAGE_SIZE);
+	sgl->req.data_bvec_ok = false;
+	nvmet_tcp_tx_sum(&base);
+	KUNIT_EXPECT_FALSE(test, nvmet_tcp_tx_want(write, PAGE_SIZE, lb));
+	KUNIT_EXPECT_FALSE(test, nvmet_tcp_tx_want(stock, PAGE_SIZE, lb));
+	KUNIT_EXPECT_FALSE(test, nvmet_tcp_tx_want(sgl, PAGE_SIZE, lb));
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_tx_free(), 4U);
+	nvmet_tcp_kunit_tx_delta(&base, &d);
+	KUNIT_EXPECT_EQ(test, d.confined, 0ULL);
+	KUNIT_EXPECT_EQ(test, d.unconfined, 0ULL);
+}
+
 static struct kunit_case nvmet_tcp_rx_loan_cases[] = {
 	KUNIT_CASE(nvmet_tcp_kunit_reserve_rule),
 	KUNIT_CASE(nvmet_tcp_kunit_actor_borrows),
@@ -1206,6 +1718,16 @@ static struct kunit_case nvmet_tcp_rx_loan_cases[] = {
 	KUNIT_CASE(nvmet_tcp_kunit_hold_release),
 	KUNIT_CASE(nvmet_tcp_kunit_listener_release),
 	KUNIT_CASE(nvmet_tcp_kunit_own_budget),
+	KUNIT_CASE(nvmet_tcp_kunit_tx_confined),
+	KUNIT_CASE(nvmet_tcp_kunit_tx_unsent),
+	KUNIT_CASE(nvmet_tcp_kunit_tx_unconfined),
+	KUNIT_CASE(nvmet_tcp_kunit_tx_bvec_refused),
+	KUNIT_CASE(nvmet_tcp_kunit_tx_ineligible),
+	KUNIT_CASE(nvmet_tcp_kunit_tx_copied),
+	KUNIT_CASE(nvmet_tcp_kunit_tx_inline),
+	KUNIT_CASE(nvmet_tcp_kunit_tx_linked),
+	KUNIT_CASE(nvmet_tcp_kunit_tx_link_refused),
+	KUNIT_CASE(nvmet_tcp_kunit_tx_link_copied),
 	{}
 };
 

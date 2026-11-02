@@ -138,7 +138,12 @@ enum {
 	NVMET_TCP_F_RX_DEFER	= (1 << 3),
 	/* no memory to copy into: the solicited data is discarded */
 	NVMET_TCP_F_RX_SINK	= (1 << 4),
+	/* READ data is sent from region READ-partition pages (cmd->tx) */
+	NVMET_TCP_F_TX_LOAN	= (1 << 5),
 };
+
+/* A region READ of up to this many pages needs no allocation. */
+#define NVMET_TCP_TX_INLINE	16
 
 struct nvmet_tcp_cmd {
 	struct nvmet_tcp_queue		*queue;
@@ -178,6 +183,11 @@ struct nvmet_tcp_cmd {
 	u32				rx_bounce_used;
 	u32				r2t_end;	/* end of the solicited unit */
 	struct llist_node		rx_done_node;
+
+	/* region READ send (NVMET_TCP_F_TX_LOAN): the sender's reference */
+	struct nvmet_tcp_tx		*tx;
+	/* its bvecs, as cmd->iov, for a READ of up to NVMET_TCP_TX_INLINE pages */
+	struct bio_vec			tx_bv[NVMET_TCP_TX_INLINE];
 };
 
 enum nvmet_tcp_queue_state {
@@ -463,11 +473,43 @@ static int nvmet_tcp_rx_budget_init(struct rx_loan_budget *lb)
 	return rx_loan_budget_init(lb, false);
 }
 
+/*
+ * READs served from region pages and not, sends TCP still holds, and the
+ * released sends whose pages TCP copied (no zero copy) and their pages.
+ */
+struct nvmet_tcp_tx_stats {
+	u64	confined;
+	u64	unconfined;
+	long	sends;
+	u64	copies;
+	u64	copy_pages;
+};
+
+static DEFINE_PER_CPU(struct nvmet_tcp_tx_stats, nvmet_tcp_tx_stats);
+
+static void nvmet_tcp_tx_sum(struct nvmet_tcp_tx_stats *sum)
+{
+	int cpu;
+
+	memset(sum, 0, sizeof(*sum));
+	for_each_possible_cpu(cpu) {
+		struct nvmet_tcp_tx_stats *s = per_cpu_ptr(&nvmet_tcp_tx_stats,
+							   cpu);
+
+		sum->confined += READ_ONCE(s->confined);
+		sum->unconfined += READ_ONCE(s->unconfined);
+		sum->sends += READ_ONCE(s->sends);
+		sum->copies += READ_ONCE(s->copies);
+		sum->copy_pages += READ_ONCE(s->copy_pages);
+	}
+}
+
 static int nvmet_tcp_rx_budget_stats_get(char *buf,
 					 const struct kernel_param *kp)
 {
 	struct rx_loan_budget *lb = &nvmet_tcp_rx_budget;
 	struct rx_loan_stock_sum sum;
+	struct nvmet_tcp_tx_stats tx;
 	unsigned int waiters = 0;
 	struct rx_loan_waiter *pos;
 	int len;
@@ -484,14 +526,16 @@ static int nvmet_tcp_rx_budget_stats_get(char *buf,
 		waiters++;
 	/* Stocked credit is available; stocked records are in flight. */
 	rx_loan_stock_sum(lb, &sum);
+	nvmet_tcp_tx_sum(&tx);
 	len = scnprintf(buf, PAGE_SIZE,
-			"budget %u reserve_size %u avail %ld reserve %ld inflight %ld waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu cost_factor %u hold_factor %u lent %u\n",
+			"budget %u reserve_size %u avail %ld reserve %ld inflight %ld waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu cost_factor %u hold_factor %u lent %u read_confined %llu read_unconfined %llu read_sends %ld read_copies %llu read_copy_pages %llu\n",
 			lb->budget, lb->reserve_size, lb->avail + sum.pages,
 			lb->reserve, (long)lb->inflight_count + sum.records,
 			waiters, lb->admitted + sum.admitted, lb->denied,
 			lb->paused, lb->overrun, lb->orphaned, lb->cost_factor,
 			READ_ONCE(lb->hold_factor),
-			lb->lent + (unsigned int)sum.lent);
+			lb->lent + (unsigned int)sum.lent, tx.confined,
+			tx.unconfined, tx.sends, tx.copies, tx.copy_pages);
 	spin_unlock_bh(&lb->lock);
 	return len;
 }
@@ -501,7 +545,7 @@ static const struct kernel_param_ops nvmet_tcp_rx_budget_stats_ops = {
 };
 module_param_cb(rx_budget_stats, &nvmet_tcp_rx_budget_stats_ops, NULL, 0444);
 MODULE_PARM_DESC(rx_budget_stats,
-		 "State of nvmet-tcp's rx region write budget");
+		 "State of nvmet-tcp's rx region write budget and region READs");
 
 enum {
 	NVMET_TCP_RX_GO,
@@ -1393,14 +1437,164 @@ static bool nvmet_tcp_rx_want(struct nvmet_tcp_cmd *cmd, u32 len)
 	return true;
 }
 
+/*
+ * READ data from the region's READ partition, sent zero copy.
+ *
+ * A READ on a queue that lends (queue->rx_region) whose backend takes a
+ * bvec is served from READ-partition pages, as kNFSd's READ replies are:
+ * the backend reads straight into them, and they go to TCP with
+ * MSG_ZEROCOPY under the partition's shared send descriptor (struct
+ * rx_loan_tx).  The pages and the exact credit granted for them from the
+ * namespace's read budget come back when TCP frees the last socket buffer
+ * that carries them (->release), however the command ends.  Credit or
+ * pages short, or a READ larger than the partition could ever lend: the
+ * stock sgl, counted unconfined.  A READ never waits for the region.
+ */
+struct nvmet_tcp_tx {
+	struct rx_loan_tx	tx;
+	struct rx_loan_budget	*lb;
+	u32			credit;
+	u32			reserve;
+};
+static_assert(sizeof(struct nvmet_tcp_tx) <= RX_LOAN_TX_SIZE);
+static_assert(offsetof(struct nvmet_tcp_tx, tx) == 0);
+
+/* The last touch of a send: its slot is the next taker's once given. */
+static void nvmet_tcp_tx_release(struct rx_loan_tx *t)
+{
+	struct nvmet_tcp_tx *tx = container_of(t, struct nvmet_tcp_tx, tx);
+	struct rx_loan_budget *lb = tx->lb;
+	u32 credit = tx->credit, reserve = tx->reserve;
+
+	if (READ_ONCE(t->copied)) {
+		this_cpu_inc(nvmet_tcp_tx_stats.copies);
+		this_cpu_add(nvmet_tcp_tx_stats.copy_pages, t->count);
+	}
+	rx_loan_tx_give(t);
+	rx_loan_grant_return(lb, &nvmet_tcp_rx_consumer, credit, reserve);
+	this_cpu_dec(nvmet_tcp_tx_stats.sends);
+}
+
+/*
+ * Released on the completing CPU's high-priority workers: that CPU's sends
+ * come from io_work on nvmet_tcp_wq (WQ_HIGHPRI), which a normal-priority
+ * release could not keep up with, leaving the READ partition held by sends
+ * TCP is done with.
+ */
+static const struct rx_loan_tx_ops nvmet_tcp_tx_ops = {
+	.ubuf.complete	= rx_loan_tx_complete,
+	/* consecutive READs share skbs (CONFIG_RX_LOAN_TX_LINK) */
+	.ubuf.link_skb	= IS_ENABLED(CONFIG_RX_LOAN_TX_LINK) ?
+			  rx_loan_tx_link_skb : NULL,
+	.release	= nvmet_tcp_tx_release,
+	.highpri	= true,
+};
+
+/* Serve @cmd's @len bytes of READ data from READ-partition pages of @lb? */
+static bool nvmet_tcp_tx_want(struct nvmet_tcp_cmd *cmd, u32 len,
+			      struct rx_loan_budget *lb)
+{
+	unsigned int n = DIV_ROUND_UP(len, PAGE_SIZE), i;
+	struct page *inline_pages[NVMET_TCP_TX_INLINE];
+	struct rx_loan_waiter w = { .need = n };
+	struct page **pages = inline_pages;
+	struct bio_vec *bv = cmd->tx_bv;
+	struct nvmet_tcp_tx *tx;
+
+	if (!cmd->queue->rx_region || nvme_is_write(cmd->req.cmd) ||
+	    !cmd->req.data_bvec_ok || (cmd->flags & NVMET_TCP_F_INIT_FAILED))
+		return false;
+	if (!rx_loan_tx_bind() || n > rx_loan_tx_span())
+		goto unconfined;
+	/*
+	 * Larger: the bvecs, then the pages they were taken as, allocated and
+	 * freed as cmd->iov.
+	 */
+	if (n > NVMET_TCP_TX_INLINE) {
+		bv = kmalloc_array(n, sizeof(*bv) + sizeof(*pages),
+				   GFP_KERNEL | __GFP_NOWARN);
+		if (!bv)
+			goto unconfined;
+		pages = (struct page **)(bv + n);
+	}
+	if (rx_loan_grant(lb, &nvmet_tcp_rx_consumer, &w))
+		goto free;
+	if (rx_loan_tx_take_pages(pages, n) != n) {
+		rx_loan_grant_return(lb, &nvmet_tcp_rx_consumer, w.credit,
+				     w.reserve);
+		goto free;
+	}
+	for (i = 0; i < n; i++)
+		bvec_set_page(&bv[i], pages[i],
+			      min_t(u32, len - i * PAGE_SIZE, PAGE_SIZE), 0);
+	tx = container_of(rx_loan_tx_make(pages, n, &nvmet_tcp_tx_ops),
+			  struct nvmet_tcp_tx, tx);
+	tx->lb = lb;
+	tx->credit = w.credit;
+	tx->reserve = w.reserve;
+	this_cpu_inc(nvmet_tcp_tx_stats.sends);
+	if (!nvmet_req_set_data_bvec(&cmd->req, bv, n)) {
+		nvmet_tcp_tx_release(&tx->tx);
+		goto free;
+	}
+	cmd->iov = bv;
+	cmd->tx = tx;
+	cmd->cur_sg = NULL;
+	cmd->flags |= NVMET_TCP_F_TX_LOAN;
+	this_cpu_inc(nvmet_tcp_tx_stats.confined);
+	return true;
+free:
+	if (bv != cmd->tx_bv)
+		kfree(bv);
+unconfined:
+	this_cpu_inc(nvmet_tcp_tx_stats.unconfined);
+	return false;
+}
+
+/* Hand a READ's pages to TCP: they return when its last skb is freed. */
+static void nvmet_tcp_tx_put(struct nvmet_tcp_cmd *cmd)
+{
+	cmd->flags &= ~NVMET_TCP_F_TX_LOAN;
+	net_zcopy_put(&cmd->tx->tx.ubuf);
+	cmd->tx = NULL;
+}
+
+/*
+ * Every READ's pages and credit back before the module goes: TCP can hold
+ * an orphaned socket's skbs past its close, until they are acknowledged or
+ * the socket is reset.  A release that dropped the count to none may still
+ * be returning on the work that ran it, so that work is flushed once more.
+ */
+static void nvmet_tcp_tx_drain(void)
+{
+	struct nvmet_tcp_tx_stats sum;
+	unsigned int i;
+
+	for (i = 1; ; i++) {
+		rx_loan_tx_flush();
+		nvmet_tcp_tx_sum(&sum);
+		if (!sum.sends) {
+			rx_loan_tx_flush();
+			return;
+		}
+		if (!(i % 100))
+			pr_warn("nvmet_tcp: %ld READ sends still held by TCP\n",
+				sum.sends);
+		msleep(100);
+	}
+}
+
 /* If cmd buffers are NULL, no operation is performed */
 static void nvmet_tcp_free_cmd_buffers(struct nvmet_tcp_cmd *cmd)
 {
+	if (cmd->flags & NVMET_TCP_F_TX_LOAN)
+		nvmet_tcp_tx_put(cmd);
 	if (cmd->flags & NVMET_TCP_F_RX_LOAN)
 		nvmet_tcp_rx_put(cmd);
 	else
 		nvmet_tcp_rx_unit_free(cmd->queue, cmd);
-	kfree(cmd->iov);
+	if (cmd->iov != cmd->tx_bv)
+		kfree(cmd->iov);
 	sgl_free(cmd->req.sg);
 	cmd->iov = NULL;
 	cmd->req.sg = NULL;
@@ -1503,7 +1697,8 @@ static int nvmet_tcp_map_data(struct nvmet_tcp_cmd *cmd)
 	}
 	cmd->req.transfer_len += len;
 
-	if (nvmet_tcp_rx_want(cmd, len))
+	if (nvmet_tcp_rx_want(cmd, len) ||
+	    nvmet_tcp_tx_want(cmd, len, &rx_loan_net(&init_net)->read))
 		return 0;
 
 	cmd->req.sg = sgl_alloc(len, GFP_KERNEL | __GFP_NOWARN,
@@ -1743,10 +1938,51 @@ static int nvmet_try_send_data_pdu(struct nvmet_tcp_cmd *cmd)
 	return 1;
 }
 
+/*
+ * Send the rest of a READ's region pages, zero copy under its descriptor,
+ * as kNFSd's svc_tcp_sendmsg_rx_region() does.  A queue that lends has no
+ * data digest.
+ */
+static int nvmet_tcp_tx_send(struct nvmet_tcp_cmd *cmd, bool last_in_batch)
+{
+	struct nvmet_tcp_queue *queue = cmd->queue;
+	u32 len = cmd->req.transfer_len;
+	int ret;
+
+	while (cmd->wbytes_done < len) {
+		struct msghdr msg = {
+			.msg_flags = MSG_DONTWAIT | MSG_ZEROCOPY,
+			.msg_ubuf = &cmd->tx->tx.ubuf,
+			.sg_from_iter = rx_loan_tx_sg_from_iter,
+		};
+
+		if ((!last_in_batch && queue->send_list_len) ||
+		    !queue->nvme_sq.sqhd_disabled)
+			msg.msg_flags |= MSG_MORE;
+		iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, cmd->req.data_bvec,
+			      cmd->req.data_bvec_cnt, len);
+		iov_iter_advance(&msg.msg_iter, cmd->wbytes_done);
+		/* No SG: TCP copies and never takes the ubuf (tcp_sendmsg). */
+		if (!(queue->sock->sk->sk_route_caps & NETIF_F_SG))
+			WRITE_ONCE(cmd->tx->tx.copied, true);
+		ret = sock_sendmsg(queue->sock, &msg);
+		if (ret <= 0)
+			return ret;
+		cmd->wbytes_done += ret;
+	}
+	return 1;
+}
+
 static int nvmet_try_send_data(struct nvmet_tcp_cmd *cmd, bool last_in_batch)
 {
 	struct nvmet_tcp_queue *queue = cmd->queue;
 	int ret;
+
+	if (cmd->flags & NVMET_TCP_F_TX_LOAN) {
+		ret = nvmet_tcp_tx_send(cmd, last_in_batch);
+		if (ret <= 0)
+			return ret;
+	}
 
 	while (cmd->cur_sg) {
 		struct msghdr msg = {
@@ -3566,6 +3802,8 @@ static void __exit nvmet_tcp_exit(void)
 		kernel_sock_shutdown(queue->sock, SHUT_RDWR);
 	mutex_unlock(&nvmet_tcp_queue_mutex);
 	flush_workqueue(nvmet_wq);
+	/* the READ sends' releases use the consumer and this module's code */
+	nvmet_tcp_tx_drain();
 	mutex_lock(&nvmet_tcp_rx_consumer_lock);
 	if (nvmet_tcp_rx_consumer_on)
 		rx_loan_consumer_unregister(&nvmet_tcp_rx_consumer);

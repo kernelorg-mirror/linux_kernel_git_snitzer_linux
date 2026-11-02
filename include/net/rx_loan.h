@@ -781,6 +781,8 @@ struct rx_loan_tx_ops {
 	struct ubuf_info_ops	ubuf;	/* .complete = rx_loan_tx_complete */
 	/* every lock dropped, in process context: the last touch of the send */
 	void (*release)(struct rx_loan_tx *tx);
+	/* release on the completing CPU's high-priority workers, not normal */
+	bool			highpri;
 };
 
 bool rx_loan_tx_bind(void);
