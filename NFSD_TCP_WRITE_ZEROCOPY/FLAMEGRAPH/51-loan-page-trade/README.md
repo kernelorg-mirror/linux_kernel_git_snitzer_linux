@@ -64,8 +64,19 @@ Latency at iodepth 1, A B B A: p50 0.424, 0.436, 0.424, 0.436 ms, p99 0.545, 0.5
 
 **Kept:** `7ca95cca4c1a` and its tests, for a saving small but clean of the scatter, and for no cost.
 
-## What `svc_fill_pages` still allocates, to run
+## What `svc_fill_pages` still allocates (run131)
 
-`run131.sh`, `fillpages.bt`, 8 s in a run on B: the entries each fill asks for, of the arguments and of the reply, and the page allocations under it. Expected: one page a WRITE, the reply's, since the skb holds that page until the send is acknowledged. To be shown.
+`fillpages.bt`, 8 s in a run on B, 40.45 GB/s traced, so a look:
+
+| 308,032 WRITEs published | fills | entries a fill | page allocations |
+|---|---|---|---|
+| of the arguments | 1,253,698 | 1 | **0** |
+| of the reply | 387,597 | 1 | **370,248**, 1.2 a WRITE |
+
+Of 1,153,081 parks, none found `sk_pages[0]` empty, so the page each park leaves is the spare the last restore put there, and the argument side no longer allocates at all. Its fills reach `alloc_pages_bulk()`, find the entry filled and return, which is the 0.03% self.
+
+**What is left of `svc_fill_pages` is the reply's page.** An RPC reply goes out on that page, the skb holds it until the send is acknowledged, so the thread cannot take it back and has to get another. Every RPC on this server pays it, and it is not the trade's. So this target is finished, with nothing left in it for sunrpc to save.
+
+**Next:** round 50's second target, the bvec table walked again after `svc_tcp_rx_validate_mixed()` checked it, 1.15 us a WRITE, with `xdr_stream_subsegment` beside it. It changes `xdr_buf`, so it needs a new kernel.
 
 Copy was not run.
