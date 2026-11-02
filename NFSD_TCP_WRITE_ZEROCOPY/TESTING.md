@@ -355,8 +355,10 @@ body, in order:
    `suite_exit`, so results could depend on test order. `.exit` went, as
    KUnit runs it before the actions. The 23 `budget_off` and
    `budget_default_off` registrations went too. `suite_exit` and
-   `run-kunit.sh` stay as backstops. The first runs are
-   `boot7-settings/`, alone, and `boot7-all4-settings/`, the stock script.
+   `run-kunit.sh` stay as backstops. Alone on 506 it ran 52/52, no skip, no
+   warning, so no test depended on the leak (`boot7-settings/`). The next
+   runs are `boot7-settings-abort/`, a scratch build with one forced
+   assertion, and `boot7-all4-settings/`, the stock script.
 
 Also brittle, and left as they are for now: the fixture's use of a live
 thread's `rqstp`, `svc_new_thread()` called without a service mutex, and
