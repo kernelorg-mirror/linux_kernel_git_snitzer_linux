@@ -387,17 +387,9 @@ nfsd4_q35_session_context_prepare(struct kunit *test,
 				  struct nfsd4_bvec_decode_context *context,
 				  struct nfsd4_q35_session_owner *owner)
 {
-	struct sockaddr_in *remote = (struct sockaddr_in *)&context->rqstp->rq_addr;
-	struct sockaddr_in *local = (struct sockaddr_in *)&context->rqstp->rq_daddr;
 	int ret;
 
 	context->rqstp->rq_prot = IPPROTO_TCP;
-	remote->sin_family = AF_INET;
-	remote->sin_port = htons(20549);
-	remote->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	context->rqstp->rq_addrlen = sizeof(*remote);
-	*local = *remote;
-	context->rqstp->rq_daddrlen = sizeof(*local);
 	context->rqstp->rq_cred.cr_uid = current_uid();
 	context->rqstp->rq_cred.cr_gid = current_gid();
 	context->rqstp->rq_cred.cr_group_info = get_current_groups();
