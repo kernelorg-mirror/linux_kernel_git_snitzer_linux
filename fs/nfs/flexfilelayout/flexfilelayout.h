@@ -67,7 +67,7 @@ struct nfs4_ff_io_stat {
 /* Both members are protected by the enclosing stripe's lock */
 struct nfs4_ff_busy_timer {
 	ktime_t start_time;
-	int n_ops;
+	int ops_in_flight;
 };
 
 struct nfs4_ff_layoutstat {
