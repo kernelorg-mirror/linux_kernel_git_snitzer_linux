@@ -2032,12 +2032,29 @@ out_overflow:
 static bool xdr_advance_authoritative(struct xdr_stream *xdr,
 				      unsigned int nbytes)
 {
+	struct xdr_buf *buf = xdr->buf;
 	unsigned int pos = xdr_stream_pos(xdr);
 	size_t remaining = xdr_align_size(nbytes);
+	size_t end;
 
 	if (remaining > xdr_stream_remaining(xdr) || pos > xdr->buf->len ||
 	    remaining > xdr->buf->len - pos)
 		return false;
+
+	/* Past the last of the pages, there is no need to step through them. */
+	end = (size_t)buf->head[0].iov_len + buf->page_len;
+	if (xdr->iov != buf->tail && pos + remaining >= end) {
+		if (buf->tail[0].iov_len) {
+			xdr_stream_unmap_current_page(xdr);
+			xdr_set_iov(xdr, buf->tail, pos + remaining - end,
+				    buf->tail[0].iov_len);
+		} else {
+			/* An empty tail may have no address to decode from. */
+			xdr->p = xdr->end;
+		}
+		xdr->nwords -= XDR_QUADLEN(nbytes);
+		return true;
+	}
 
 	while (remaining) {
 		size_t len;
@@ -2231,6 +2248,7 @@ EXPORT_SYMBOL_GPL(xdr_buf_from_iov);
 static int xdr_buf_bvec_subsegment(struct bio_vec *bvec,
 				   unsigned int bvec_count,
 				   unsigned int bvec_offset,
+				   unsigned int page_len,
 				   struct xdr_buf *subbuf,
 				   unsigned int base, unsigned int len)
 {
@@ -2247,6 +2265,11 @@ static int xdr_buf_bvec_subsegment(struct bio_vec *bvec,
 		return -1;
 	index = iter.bi_idx;
 	offset = iter.bi_offset;
+	/* The table ends where the pages do, so a segment that does has it. */
+	if (base + len == page_len) {
+		count = bvec_count - index;
+		remaining = 0;
+	}
 	while (remaining) {
 		unsigned int avail;
 
@@ -2287,6 +2310,7 @@ int xdr_buf_subsegment(const struct xdr_buf *buf, struct xdr_buf *subbuf,
 	struct bio_vec *bvec = NULL;
 	unsigned int bvec_count = 0;
 	unsigned int bvec_offset = 0;
+	unsigned int page_len = buf->page_len;
 
 	if (xdr_buf_validate_page_mode(buf))
 		return -1;
@@ -2320,7 +2344,7 @@ int xdr_buf_subsegment(const struct xdr_buf *buf, struct xdr_buf *subbuf,
 		if (page_mode == XDRBUF_PAGE_BVECS) {
 			if (subbuf->page_len &&
 			    xdr_buf_bvec_subsegment(bvec, bvec_count, bvec_offset,
-						    subbuf, base,
+						    page_len, subbuf, base,
 						    subbuf->page_len))
 				return -1;
 			if (!subbuf->page_len)
