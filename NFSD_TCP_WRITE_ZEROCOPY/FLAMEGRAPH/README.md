@@ -212,6 +212,12 @@ decided.
    regression. The next target: parking and restoring a loaned record
    trades pages by `sk_datalen` though its body is in the region, about
    2.3 us a WRITE, 2.4% of nfsd, all in sunrpc.
+20. **Round 51: the page trade of a parked loaned record** (Mike, 2
+   November; [51-loan-page-trade](51-loan-page-trade/README.md)). Kept,
+   `7ca95cca4c1a`: a loaned record with no copied bytes trades one page.
+   A/B, 4 runs a side: nfsd -3.3k cycles and -3.3k instructions a WRITE,
+   -1.1%, no overlap; the rings, rate, region and latency the same. About
+   1 us of the 2.3 us round 50 expected: `svc_fill_pages` did not fall.
 
 ## Where the kept rounds stand (2026-10-28)
 
