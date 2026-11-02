@@ -81,3 +81,7 @@ On `sunrpc` `1C40775238B884E7ED53863` and `nfsd` `FB4139BC86377896E24C64D`, `t2-
 So each way out of the fast path has run.
 
 `run142.sh` is the A/B: both sides on the new sunrpc, A the kernel's nfsd, B this one. Latency runs in the same A B B A B A A B, since A B B A alone misled rounds 52 and 53.
+
+## The A/B so far (run142, `t2-r142/`, saved ahead of a shutdown)
+
+Both on sunrpc `1C40775238B884E7ED53863`, A nfsd `3F0C341E86E266D5FDF2ADF`, B `FB4139BC86377896E24C64D`. See `run142.out`. Saved before the profile, in case the machine goes down first. The results follow when they are in.
