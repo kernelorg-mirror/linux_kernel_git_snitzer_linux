@@ -133,8 +133,9 @@ static struct auth_ops nfsd_kunit_auth = {
 };
 
 /*
- * A new thread's request on the transport, its arguments and results zeroed
- * as svc_process_common() does.  A thread owns rq_argp and rq_resp and frees
+ * A new thread's request on the transport, with its addresses as
+ * svc_tcp_recvfrom() sets them and its arguments and results zeroed as
+ * svc_process_common() does.  A thread owns rq_argp and rq_resp and frees
  * them when it exits, so a test uses them and never replaces them.
  */
 static struct svc_rqst *nfsd_kunit_rqst(struct kunit *test)
@@ -146,6 +147,7 @@ static struct svc_rqst *nfsd_kunit_rqst(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, svc_new_thread(env->serv, pool), 0);
 	rqstp = list_first_entry(&pool->sp_all_threads, struct svc_rqst, rq_all);
 	rqstp->rq_xprt = env->xprt;
+	svc_xprt_copy_addrs(rqstp, env->xprt);
 	rqstp->rq_authop = &nfsd_kunit_auth;
 	memset(rqstp->rq_argp, 0, env->serv->sv_xdrsize);
 	memset(rqstp->rq_resp, 0, env->serv->sv_xdrsize);
