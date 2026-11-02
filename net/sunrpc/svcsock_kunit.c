@@ -679,6 +679,9 @@ static void svcsock_rx_actor_split_test(struct kunit *test)
 
 	KUNIT_ASSERT_EQ(test,
 			svc_tcp_rx_publish(fixture->svsk, fixture->rqstp), 0);
+	/* What was validated at publish is not walked again. */
+	KUNIT_EXPECT_TRUE(test, fixture->rqstp->rq_arg.flags &
+				XDRBUF_BVECS_CHECKED);
 	kunit_kfree_skb(test, skb);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs);
 	KUNIT_EXPECT_MEMEQ(test, page_address(fixture->rqstp->rq_pages[0]),
@@ -689,6 +692,8 @@ static void svcsock_rx_actor_split_test(struct kunit *test)
 	svc_tcp_release_ctxt(&fixture->svsk->sk_xprt, state);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), refs - 1);
 	KUNIT_EXPECT_EQ(test, state->mode, (u8)SVC_TCP_RX_EMPTY);
+	KUNIT_EXPECT_FALSE(test, fixture->rqstp->rq_arg.flags &
+				 XDRBUF_BVECS_CHECKED);
 }
 
 /* A whole record at or below svc_tcp_rx_copy_below is copied, not loaned. */
@@ -1010,6 +1015,7 @@ static void svcsock_rx_prefix_only_then_loan_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, state->lt.refs_acquired, 0U);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_publish(fixture->svsk, rqstp), 0);
 	KUNIT_EXPECT_EQ(test, rqstp->rq_arg.page_mode, XDRBUF_PAGE_ARRAY);
+	KUNIT_EXPECT_FALSE(test, rqstp->rq_arg.flags & XDRBUF_BVECS_CHECKED);
 	KUNIT_EXPECT_EQ(test, rqstp->rq_arg.page_len, 0U);
 	KUNIT_EXPECT_EQ(test, rqstp->rq_arg.head[0].iov_len,
 			FIRST_BODY_LEN);
