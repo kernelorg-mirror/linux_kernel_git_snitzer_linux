@@ -117,6 +117,6 @@ Both on sunrpc `1C40775238B884E7ED53863`, A nfsd `3F0C341E86E266D5FDF2ADF`, B `F
 
 **Latency, too few to read:** l1-A p50 0.457, l2-B 0.424, l3-B 0.424, the last with a 10.6 ms maximum that is unexplained.
 
-**Not decided (Mike).** The commits, `b91623167b04`, `1ffe1b8da005` and the test `svcsock_cache_peek_test`, remain at the tip. The recommendation is to drop them: a new sunrpc export and about 40 lines of nfsd for 0.13% of nfsd is not worth it, though each way out of the fast path was checked and nothing got worse. If they stay, latency is owed its other runs, and run 4's sort of dip should be kept apart from the comparison.
+**Dropped (Mike).** `b91623167b04`, `1ffe1b8da005` and the test `d119056b09d5` are reverted at the tip: a new sunrpc export and about 40 lines of nfsd were not worth 0.13% of nfsd. The patches are 0007 to 0009 in `patches/dropped/`. The kernel code is back as it was at `c86e11886f2b`, and the host on round 53's `sunrpc` `5DDCC44639FC73AF533513F` and the kernel's nfsd.
 
 **A mistake in the cut.** `finish54.sh` took `lat.sh`'s pid with `pgrep -f`, which matched the shell running the pgrep, so it ran on at once, while run142 was itself ending, and the two collided in `swap-sunrpc.sh`. nfsd was left unloaded and off the settled setting. A plain swap and `settled.sh apply` recovered it in under a minute, and the profile was run after that. No figure above comes from that state. `finish54.sh` is kept as it ran.
