@@ -75,6 +75,7 @@ struct xdr_buf {
 #define XDRBUF_READ		0x01		/* target of file read */
 #define XDRBUF_WRITE		0x02		/* source of file write */
 #define XDRBUF_SPARSE_PAGES	0x04		/* Page array is sparse */
+#define XDRBUF_BVECS_CHECKED	0x08		/* Whoever built @bvec checked it */
 	/*
 	 * @bvec_offset is a logical offset into the first authoritative
 	 * bvec. @bvec_count covers exactly @page_len visible bytes, with the

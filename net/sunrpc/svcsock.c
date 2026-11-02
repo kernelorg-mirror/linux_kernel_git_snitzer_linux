@@ -2909,6 +2909,7 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_state_free);
 static void svc_tcp_rx_clear_xdr(struct svc_rqst *rqstp)
 {
 	rqstp->rq_arg.page_mode = XDRBUF_PAGE_ARRAY;
+	rqstp->rq_arg.flags &= ~XDRBUF_BVECS_CHECKED;
 	rqstp->rq_arg.bvec = NULL;
 	rqstp->rq_arg.bvec_count = 0;
 	rqstp->rq_arg.bvec_offset = 0;
@@ -5924,6 +5925,8 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_publish(struct svc_sock *svsk,
 
 	arg->head[0].iov_len = SVC_TCP_RX_FIXED_BYTES;
 	arg->page_mode = XDRBUF_PAGE_BVECS;
+	/* svc_tcp_rx_validate_mixed() has just checked the table. */
+	arg->flags |= XDRBUF_BVECS_CHECKED;
 	arg->bvec = state->lt.bvec;
 	arg->bvec_count = state->lt.count;
 	arg->bvec_offset = 0;
