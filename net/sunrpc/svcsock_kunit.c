@@ -7860,9 +7860,9 @@ static void svcsock_rx_second_consumer_test(struct kunit *test)
 		}
 		KUNIT_EXPECT_LE(test, rx_loan_region_out(), region);
 	}
-	out_s = atomic_long_read(&rc->out_read) + atomic_long_read(&rc->out_write);
-	out_o = atomic_long_read(&other->out_read) +
-		atomic_long_read(&other->out_write);
+	out_s = rx_loan_consumer_out(rc, true) + rx_loan_consumer_out(rc, false);
+	out_o = rx_loan_consumer_out(other, true) +
+		rx_loan_consumer_out(other, false);
 	KUNIT_EXPECT_GT(test, ns, 0);
 	KUNIT_EXPECT_GT(test, no, 0);
 	KUNIT_EXPECT_LE(test, out_s + out_o, region);
@@ -7875,8 +7875,8 @@ static void svcsock_rx_second_consumer_test(struct kunit *test)
 		svc_tcp_rx_budget_kunit_grant_return(c, &ws[ns]);
 	while (no--)
 		svc_tcp_rx_budget_kunit_grant_return(c, &wo[no]);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&rc->out_read), 0L);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&other->out_read), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_consumer_out(rc, true), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_consumer_out(other, true), 0L);
 	rx_loan_consumer_unregister(other);
 	rx_loan_consumer_destroy(other);
 	rx_loan_consumer_unregister(rc);

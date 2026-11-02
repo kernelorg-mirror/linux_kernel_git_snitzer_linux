@@ -98,6 +98,19 @@ config RX_LOAN
 	  skbs a record holds, and the walk that counts the fixed receive
 	  region's pages among them.  Selected by its consumers.
 
+config RX_LOAN_TX_LINK
+	bool "Chain loaned receive pages' sends into shared transmit skbs"
+	depends on RX_LOAN
+	default y
+	help
+	  Lets consecutive zero-copy sends of loaned receive pages on one
+	  socket share transmit skbs (rx_loan_tx_link_skb()), released
+	  together when the last skb carrying any of them is freed, so a
+	  small READ need not end its own skb.  Without it each send starts
+	  its own skb.  Used by nvmet-tcp.
+
+	  If unsure, say Y.
+
 config RX_LOAN_KUNIT_TEST
 	tristate "KUnit tests for the rx page-loan helper" if !KUNIT_ALL_TESTS
 	depends on KUNIT && RX_LOAN

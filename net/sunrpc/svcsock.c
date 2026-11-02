@@ -1520,8 +1520,8 @@ static ssize_t svc_rx_debugfs_consumer_read(struct file *file,
 			  "registered %d floor %lu share %lu out_write %ld out_read %ld overrun_share %ld share_denied %ld copies %llu copy_bytes %llu\n",
 			  READ_ONCE(rc->registered), rc->floor,
 			  rx_loan_consumer_share(rc),
-			  atomic_long_read(&rc->out_write),
-			  atomic_long_read(&rc->out_read),
+			  rx_loan_consumer_out(rc, false),
+			  rx_loan_consumer_out(rc, true),
 			  atomic_long_read(&rc->overrun_share),
 			  atomic_long_read(&rc->share_denied), copies,
 			  copy_bytes));
@@ -3595,300 +3595,73 @@ static int svc_tcp_bounce_payload(struct svc_rqst *rqstp,
 }
 
 /*
- * A confined READ reply: its region pages and the credit they hold, kept
- * until TCP frees the reply's last socket buffer (ubuf_info completion).
- * Nothing is allocated per READ: every page of the partition READs draw on
- * has a descriptor and a link, set up once with the region.  A reply uses
- * its first page's descriptor, and the links chain its pages by index.
- * Overrun (park->over) is never returned, so it is not kept here.
+ * A confined READ reply: its region pages and the credit they hold, in its
+ * first page's rx_loan_tx slot (struct rx_loan_tx), kept until TCP frees
+ * the reply's last socket buffer.  Overrun (park->over) is never returned,
+ * so it is not kept here.
  */
 struct svc_rx_region_tx {
-	struct ubuf_info		ubuf;
-	struct llist_node		done;
+	struct rx_loan_tx		tx;
 	struct svc_tcp_rx_budget	*budget;	/* the credit's */
 	struct svc_sock			*svsk;	/* holds a transport reference */
 	__be32				xid;
-	u16				count;
 	u16				credit;	/* from avail */
 	u16				reserve;	/* from the reserve */
-	u16				tries;	/* waits for page references */
 	u32				share;	/* the connection's, at admission */
 	bool				shared;	/* counted in the connection share */
 	bool				sent;
 	/*
 	 * the credit is charged to the namespace's consumer (as granted:
 	 * it may have unregistered since).  A flag, not the pointer, keeps
-	 * the descriptor in one cacheline; the consumer is the namespace's.
+	 * the descriptor in its slot; the consumer is the namespace's.
 	 */
 	bool				charged;
 };
-static_assert(sizeof(struct svc_rx_region_tx) <= 64);
-
-static struct svc_rx_region_tx *svc_rx_region_txs;
-static u32 *svc_rx_region_links;	/* each page's successor */
-static unsigned long svc_rx_region_txs_pfn;
-static unsigned long svc_rx_region_txs_nr;	/* pages READs draw on */
-static bool svc_rx_region_txs_failed;
-static DEFINE_MUTEX(svc_rx_region_txs_mutex);
+static_assert(sizeof(struct svc_rx_region_tx) <= RX_LOAN_TX_SIZE);
+static_assert(offsetof(struct svc_rx_region_tx, tx) == 0);
 
 #if IS_ENABLED(CONFIG_KUNIT)
-/*
- * KUnit stand-in for the region's READ partition: a free-page stack over
- * pages indexed by their place in @svc_rx_region_kunit_all.
- */
-static struct page **svc_rx_region_kunit_free, **svc_rx_region_kunit_all;
-static struct svc_rx_region_tx *svc_rx_region_kunit_txs;
-static u32 *svc_rx_region_kunit_links;
-static unsigned int svc_rx_region_kunit_nfree, svc_rx_region_kunit_capacity;
-static unsigned int svc_rx_region_kunit_escaped;
-static DEFINE_SPINLOCK(svc_rx_region_kunit_lock);
-
+/* KUnit stand-in for the region's READ partition (rx_loan's). */
 void svc_tcp_rx_region_kunit_read_region(struct page **pages, unsigned int n)
 {
-	struct svc_rx_region_tx *txs = NULL;
-	struct page **all = NULL;
-	u32 *links = NULL;
-
-	if (pages) {
-		all = kmemdup_array(pages, n, sizeof(*pages), GFP_KERNEL);
-		txs = kcalloc(n, sizeof(*txs), GFP_KERNEL);
-		links = kcalloc(n, sizeof(*links), GFP_KERNEL);
-		if (WARN_ON(!all || !txs || !links)) {
-			kfree(all);
-			kfree(txs);
-			kfree(links);
-			return;
-		}
-	}
-	spin_lock_bh(&svc_rx_region_kunit_lock);
-	swap(svc_rx_region_kunit_all, all);
-	swap(svc_rx_region_kunit_txs, txs);
-	swap(svc_rx_region_kunit_links, links);
-	svc_rx_region_kunit_free = pages;
-	svc_rx_region_kunit_nfree = n;
-	svc_rx_region_kunit_capacity = n;
-	svc_rx_region_kunit_escaped = 0;
-	spin_unlock_bh(&svc_rx_region_kunit_lock);
-	kfree(all);
-	kfree(txs);
-	kfree(links);
+	rx_loan_kunit_tx_region(pages, n);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_read_region);
 
 unsigned int svc_tcp_rx_region_kunit_read_free(void)
 {
-	return READ_ONCE(svc_rx_region_kunit_nfree);
+	return rx_loan_kunit_tx_free();
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_read_free);
 
 /* @n stand-in pages escape, as page_pool_rx_region_capacity() counts them. */
 void svc_tcp_rx_region_kunit_escape(unsigned int n)
 {
-	WRITE_ONCE(svc_rx_region_kunit_escaped, n);
+	rx_loan_kunit_tx_escape(n);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_escape);
 #endif
 
-static unsigned int svc_rx_region_take_pages(struct page **pages,
-					     unsigned int n)
-{
-#if IS_ENABLED(CONFIG_KUNIT)
-	if (svc_rx_region_kunit_free) {
-		unsigned int i;
-
-		spin_lock_bh(&svc_rx_region_kunit_lock);
-		if (svc_rx_region_kunit_nfree < n) {
-			spin_unlock_bh(&svc_rx_region_kunit_lock);
-			return 0;
-		}
-		for (i = 0; i < n; i++)
-			pages[i] = svc_rx_region_kunit_free[--svc_rx_region_kunit_nfree];
-		spin_unlock_bh(&svc_rx_region_kunit_lock);
-		return n;
-	}
-#endif
-	return page_pool_rx_region_take_pages(true, pages, n);
-}
-
-static void svc_rx_region_give_pages(struct page **pages, unsigned int n)
-{
-#if IS_ENABLED(CONFIG_KUNIT)
-	if (svc_rx_region_kunit_free) {
-		unsigned int i;
-
-		spin_lock_bh(&svc_rx_region_kunit_lock);
-		for (i = 0; i < n; i++)
-			if (!WARN_ON_ONCE(svc_rx_region_kunit_nfree >=
-					  svc_rx_region_kunit_capacity))
-				svc_rx_region_kunit_free[svc_rx_region_kunit_nfree++] = pages[i];
-		spin_unlock_bh(&svc_rx_region_kunit_lock);
-		return;
-	}
-#endif
-	page_pool_rx_region_give_pages(pages, n);
-}
+static const struct rx_loan_tx_ops svc_rx_region_tx_ops;
 
 /*
- * Pages the partition READs draw on can still lend, its escaped pages
- * excluded: a READ needing more could never be confined, so it is served
- * unconfined rather than waiting.  Zero until svc_rx_region_bind_reads()
- * succeeds.
- */
-static unsigned long svc_rx_region_read_span(void)
-{
-#if IS_ENABLED(CONFIG_KUNIT)
-	if (svc_rx_region_kunit_free)
-		return svc_rx_region_kunit_capacity -
-		       min(READ_ONCE(svc_rx_region_kunit_escaped),
-			   svc_rx_region_kunit_capacity);
-#endif
-	if (!READ_ONCE(svc_rx_region_txs_nr))
-		return 0;
-	return page_pool_rx_region_capacity(true);
-}
-
-/*
- * The READ partition's descriptors and links, made once a boot by the first
- * READ (which also makes the region if no listed device has).  A failure is
- * not retried: READs are then served unconfined.
- */
-static bool svc_rx_region_bind_reads(void)
-{
-	struct svc_rx_region_tx *txs;
-	unsigned long pfn, nr;
-	u32 *links;
-
-#if IS_ENABLED(CONFIG_KUNIT)
-	if (svc_rx_region_kunit_free)
-		return true;
-#endif
-	if (smp_load_acquire(&svc_rx_region_txs))
-		return true;
-	if (READ_ONCE(svc_rx_region_txs_failed) ||
-	    !page_pool_rx_region_bind_reads())
-		return false;
-	mutex_lock(&svc_rx_region_txs_mutex);
-	if (!svc_rx_region_txs && !svc_rx_region_txs_failed) {
-		nr = page_pool_rx_region_span(true, &pfn);
-		txs = nr ? kvcalloc(nr, sizeof(*txs), GFP_KERNEL) : NULL;
-		links = nr ? kvcalloc(nr, sizeof(*links), GFP_KERNEL) : NULL;
-		if (txs && links) {
-			svc_rx_region_txs_pfn = pfn;
-			svc_rx_region_links = links;
-			WRITE_ONCE(svc_rx_region_txs_nr, nr);
-			smp_store_release(&svc_rx_region_txs, txs);
-		} else {
-			pr_warn("svc: no READ descriptors for %lu rx region pages\n",
-				nr);
-			kvfree(txs);
-			kvfree(links);
-			WRITE_ONCE(svc_rx_region_txs_failed, true);
-		}
-	}
-	mutex_unlock(&svc_rx_region_txs_mutex);
-	return smp_load_acquire(&svc_rx_region_txs);
-}
-
-static struct svc_rx_region_tx *svc_rx_region_tx_at(u32 idx)
-{
-#if IS_ENABLED(CONFIG_KUNIT)
-	if (svc_rx_region_kunit_free)
-		return &svc_rx_region_kunit_txs[idx];
-#endif
-	return &svc_rx_region_txs[idx];
-}
-
-static u32 *svc_rx_region_link(u32 idx)
-{
-#if IS_ENABLED(CONFIG_KUNIT)
-	if (svc_rx_region_kunit_free)
-		return &svc_rx_region_kunit_links[idx];
-#endif
-	return &svc_rx_region_links[idx];
-}
-
-static u32 svc_rx_region_tx_index(const struct svc_rx_region_tx *tx)
-{
-	return tx - svc_rx_region_tx_at(0);
-}
-
-static u32 svc_rx_region_page_index(struct page *page)
-{
-#if IS_ENABLED(CONFIG_KUNIT)
-	if (svc_rx_region_kunit_free) {
-		u32 i;
-
-		for (i = 0; i < svc_rx_region_kunit_capacity; i++)
-			if (svc_rx_region_kunit_all[i] == page)
-				return i;
-		WARN_ON_ONCE(1);
-		return 0;
-	}
-#endif
-	return page_to_pfn(page) - svc_rx_region_txs_pfn;
-}
-
-static struct page *svc_rx_region_page(u32 idx)
-{
-#if IS_ENABLED(CONFIG_KUNIT)
-	if (svc_rx_region_kunit_free)
-		return svc_rx_region_kunit_all[idx];
-#endif
-	return pfn_to_page(svc_rx_region_txs_pfn + idx);
-}
-
-/*
- * Pages given back per call: a batch of 32 or more goes straight to the
- * region's shards, so a large READ's completion skips the CPU caches.
- */
-#define SVC_RX_REGION_BATCH	64
-
-/* Return @n pages chained from @idx; each link is read before its page goes. */
-static void svc_rx_region_chain_give(u32 idx, unsigned int n)
-{
-	struct page *batch[SVC_RX_REGION_BATCH];
-	unsigned int k = 0;
-
-	while (n--) {
-		batch[k++] = svc_rx_region_page(idx);
-		idx = *svc_rx_region_link(idx);
-		if (k == SVC_RX_REGION_BATCH || !n) {
-			svc_rx_region_give_pages(batch, k);
-			k = 0;
-		}
-	}
-}
-
-static const struct ubuf_info_ops svc_rx_region_tx_ops;
-
-/*
- * The reply for the READ @w describes, which holds @pages and w's credit:
- * link the pages and fill in the first one's descriptor.  The pages are
- * the caller's alone, so no lock is needed.
+ * The reply for the READ @w describes, which holds @pages and w's credit.
+ * The pages are the caller's alone, so no lock is needed.
  */
 static struct svc_rx_region_tx *
 svc_rx_region_tx_make(struct svc_rx_region_park *w, struct page **pages)
 {
-	u32 first = svc_rx_region_page_index(pages[0]), prev = first, idx;
-	struct svc_rx_region_tx *tx = svc_rx_region_tx_at(first);
-	unsigned int i;
+	struct svc_rx_region_tx *tx =
+		container_of(rx_loan_tx_make(pages, w->count,
+					     &svc_rx_region_tx_ops),
+			     struct svc_rx_region_tx, tx);
 
-	for (i = 1; i < w->count; i++) {
-		idx = svc_rx_region_page_index(pages[i]);
-		*svc_rx_region_link(prev) = idx;
-		prev = idx;
-	}
-	tx->ubuf.ops = &svc_rx_region_tx_ops;
-	tx->ubuf.flags = SKBFL_ZEROCOPY_FRAG | SKBFL_DONT_ORPHAN;
-	refcount_set(&tx->ubuf.refcnt, 1);
 	tx->budget = svc_tcp_rx_budget_of(w->w.budget);
 	svc_xprt_get(&w->svsk->sk_xprt);
 	tx->svsk = w->svsk;
 	tx->xid = w->xid;
-	tx->count = w->count;
 	tx->credit = w->w.credit;
 	tx->reserve = w->w.reserve;
-	tx->tries = 0;
 	tx->share = w->share;
 	tx->shared = w->shared;	/* the share goes with the pages */
 	tx->charged = w->w.consumer;
@@ -3906,100 +3679,6 @@ static unsigned int svc_rx_region_share(const struct svc_sock *svsk)
 	return READ_ONCE(svc_tcp_rx_region_conn_share) ?:
 	       2 * ((unsigned int)DIV_ROUND_UP(svsk->sk_xprt.xpt_server->sv_max_payload,
 					       PAGE_SIZE) + 1);
-}
-
-/*
- * Reply releases: TCP's completions land on the completing CPU's list; a
- * reply whose pages are still referenced (a frag downgraded from managed,
- * which skb_release_data() drops after the reply's reference) waits on the
- * busy list, retried each jiffy and given up after svc_rx_region_busy_tries.
- * The list's work runs at normal priority on the completing CPU, so it
- * does not preempt the nfsd threads there.  It can run before
- * skb_release_data() has dropped the frags' references, so a reply first
- * found busy is queued again at once; only later retries wait a jiffy.
- */
-struct svc_rx_region_done {
-	struct llist_head	list;
-	struct work_struct	work;
-};
-
-static DEFINE_PER_CPU(struct svc_rx_region_done, svc_rx_region_done);
-static LLIST_HEAD(svc_rx_region_busy);
-static void svc_rx_region_busy_fn(struct work_struct *work);
-static DECLARE_DELAYED_WORK(svc_rx_region_busy_work, svc_rx_region_busy_fn);
-#define svc_rx_region_busy_tries	(10 * HZ)
-
-static void svc_rx_region_tx_release(struct svc_rx_region_tx *tx);
-
-static void svc_rx_region_tx_queue(struct svc_rx_region_tx *tx)
-{
-	struct svc_rx_region_done *d = get_cpu_ptr(&svc_rx_region_done);
-
-	if (llist_add(&tx->done, &d->list))
-		queue_work_on(smp_processor_id(), system_percpu_wq, &d->work);
-	put_cpu_ptr(&svc_rx_region_done);
-}
-
-static void svc_rx_region_tx_complete(struct sk_buff *skb,
-				      struct ubuf_info *uarg,
-				      bool zerocopy_success)
-{
-	struct svc_rx_region_tx *tx = container_of(uarg, struct svc_rx_region_tx,
-						   ubuf);
-
-	if (refcount_dec_and_test(&uarg->refcnt))
-		svc_rx_region_tx_queue(tx);
-}
-
-static const struct ubuf_info_ops svc_rx_region_tx_ops = {
-	.complete	= svc_rx_region_tx_complete,
-};
-
-/* Is any of @tx's pages still referenced beyond its region ownership? */
-static bool svc_rx_region_tx_busy(const struct svc_rx_region_tx *tx)
-{
-	u32 idx = svc_rx_region_tx_index(tx);
-	unsigned int i;
-
-	for (i = 0; i < tx->count; i++) {
-		if (page_ref_count(svc_rx_region_page(idx)) != 1)
-			return true;
-		idx = *svc_rx_region_link(idx);
-	}
-	return false;
-}
-
-static void svc_rx_region_tx_finish(struct llist_node *list)
-{
-	struct svc_rx_region_tx *tx, *next;
-
-	llist_for_each_entry_safe(tx, next, list, done) {
-		if (svc_rx_region_tx_busy(tx) &&
-		    ++tx->tries < svc_rx_region_busy_tries) {
-			if (tx->tries == 1)	/* once more, at once */
-				svc_rx_region_tx_queue(tx);
-			else if (llist_add(&tx->done, &svc_rx_region_busy))
-				mod_delayed_work(system_dfl_wq,
-						 &svc_rx_region_busy_work, 1);
-			continue;
-		}
-		/* Still referenced after the limit: the pages escape. */
-		svc_rx_region_tx_release(tx);
-	}
-}
-
-static void svc_rx_region_done_fn(struct work_struct *work)
-{
-	struct svc_rx_region_done *d = container_of(work,
-						    struct svc_rx_region_done,
-						    work);
-
-	svc_rx_region_tx_finish(llist_del_all(&d->list));
-}
-
-static void svc_rx_region_busy_fn(struct work_struct *work)
-{
-	svc_rx_region_tx_finish(llist_del_all(&svc_rx_region_busy));
 }
 
 /* Clear @svsk's stall once, and let it take requests again. */
@@ -4085,14 +3764,14 @@ static void svc_rx_region_tx_release(struct svc_rx_region_tx *tx)
 {
 	struct svc_tcp_rx_budget *c = tx->budget;
 	struct svc_sock *svsk = tx->svsk;
-	unsigned int count = tx->count, share = tx->share;
+	unsigned int count = tx->tx.count, share = tx->share;
 	long credit = tx->credit, reserve = tx->reserve;
 	bool shared = tx->shared, charged = tx->charged;
 
 	if (tx->sent)
 		trace_svcsock_tcp_rx_region_read(&svsk->sk_xprt, tx->xid, count,
 						 "complete", "-");
-	svc_rx_region_chain_give(svc_rx_region_tx_index(tx), count);
+	rx_loan_tx_give(&tx->tx);
 	/* the consumer it was granted to, registered or not now */
 	svc_tcp_rx_budget_read_return(c, charged ?
 				      svc_tcp_rx_net_consumer(svsk) : NULL,
@@ -4102,6 +3781,16 @@ static void svc_rx_region_tx_release(struct svc_rx_region_tx *tx)
 	svc_xprt_put(&svsk->sk_xprt);
 }
 
+static void svc_rx_region_tx_put(struct rx_loan_tx *tx)
+{
+	svc_rx_region_tx_release(container_of(tx, struct svc_rx_region_tx, tx));
+}
+
+static const struct rx_loan_tx_ops svc_rx_region_tx_ops = {
+	.ubuf.complete	= rx_loan_tx_complete,
+	.release	= svc_rx_region_tx_put,
+};
+
 /*
  * @rqstp now holds @tx's pages, listed in rq_rx_region_pages and installed
  * by each READ as it runs.
@@ -4110,7 +3799,7 @@ static void svc_rx_region_hold(struct svc_rqst *rqstp,
 			       struct svc_rx_region_tx *tx)
 {
 	rqstp->rq_rx_region_tx = tx;
-	rqstp->rq_rx_region_count = tx->count;
+	rqstp->rq_rx_region_count = tx->tx.count;
 	rqstp->rq_rx_region_used = 0;
 }
 
@@ -4277,7 +3966,7 @@ static bool svc_rx_region_read_pages(struct svc_rqst *rqstp,
 {
 	struct svc_tcp_rx_budget *c = svc_tcp_rx_budget_of(w->w.budget);
 
-	if (svc_rx_region_take_pages(rqstp->rq_rx_region_pages, w->count) !=
+	if (rx_loan_tx_take_pages(rqstp->rq_rx_region_pages, w->count) !=
 	    w->count) {
 		atomic64_inc(&c->read_short);
 		svc_tcp_rx_budget_read_return(c, w->w.consumer, w->w.credit,
@@ -4333,10 +4022,10 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_region_read(struct svc_rqst *rqstp,
 		/* It waited for its connection's share: admit it afresh. */
 	}
 	why = svc_rx_region_read_ineligible(rqstp, pages);
-	if (!why && !svc_rx_region_bind_reads())
+	if (!why && !rx_loan_tx_bind())
 		why = "unbound";
 	/* A READ larger than the partition could never be confined (1b). */
-	if (!why && pages > svc_rx_region_read_span())
+	if (!why && pages > rx_loan_tx_span())
 		why = "span";
 	if (why)
 		goto unconfined;
@@ -4385,32 +4074,13 @@ static void svc_rx_region_handoff(struct svc_rqst *rqstp)
 
 	svc_rqst_rx_region_uninstall(rqstp, false);
 	tx->sent = true;
-	net_zcopy_put(&tx->ubuf);
+	net_zcopy_put(&tx->tx.ubuf);
 }
 
-static void svc_rx_region_init(void)
-{
-	int cpu;
-
-	BUILD_BUG_ON(svc_rx_region_busy_tries > U16_MAX);
-	for_each_possible_cpu(cpu) {
-		struct svc_rx_region_done *d = per_cpu_ptr(&svc_rx_region_done,
-							   cpu);
-
-		init_llist_head(&d->list);
-		INIT_WORK(&d->work, svc_rx_region_done_fn);
-	}
-}
-
+/* Run the releases of replies already sent: the module is going. */
 static void svc_rx_region_cleanup(void)
 {
-	int cpu;
-
-	for_each_possible_cpu(cpu)
-		flush_work(&per_cpu_ptr(&svc_rx_region_done, cpu)->work);
-	flush_delayed_work(&svc_rx_region_busy_work);
-	kvfree(svc_rx_region_txs);
-	kvfree(svc_rx_region_links);
+	rx_loan_tx_flush();
 }
 
 #if IS_ENABLED(CONFIG_KUNIT)
@@ -4425,9 +4095,9 @@ struct ubuf_info *svc_tcp_rx_region_kunit_send(struct svc_rqst *rqstp,
 {
 	struct svc_rx_region_tx *tx = rqstp->rq_rx_region_tx;
 
-	refcount_add(skbs, &tx->ubuf.refcnt);
+	refcount_add(skbs, &tx->tx.ubuf.refcnt);
 	svc_rx_region_handoff(rqstp);
-	return &tx->ubuf;
+	return &tx->tx.ubuf;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_send);
 
@@ -4446,13 +4116,7 @@ static void svc_rx_region_kunit_flush_kicks(void)
 /* Run pending reply releases and dropped-park kicks now. */
 void svc_tcp_rx_region_kunit_flush(void)
 {
-	int cpu;
-
-	for_each_possible_cpu(cpu)
-		flush_work(&per_cpu_ptr(&svc_rx_region_done, cpu)->work);
-	flush_delayed_work(&svc_rx_region_busy_work);
-	for_each_possible_cpu(cpu)
-		flush_work(&per_cpu_ptr(&svc_rx_region_done, cpu)->work);
+	rx_loan_tx_flush();
 	svc_rx_region_kunit_flush_kicks();
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_flush);
@@ -4491,8 +4155,10 @@ static void svc_rx_region_kunit_drain_budget(struct svc_tcp_rx_budget *c)
 
 	spin_lock_bh(&c->lb->lock);
 	list_for_each_entry_safe(w, n, &c->lb->waiters, node)
-		if (w->exact)
-			list_move_tail(&w->node, &drain);
+		if (w->exact) {
+			rx_loan_kunit_unlist_locked(w);
+			list_add_tail(&w->node, &drain);
+		}
 	spin_unlock_bh(&c->lb->lock);
 	list_for_each_entry_safe(park, next, &drain, w.node) {
 		struct svc_deferred_req *dr =
@@ -4546,8 +4212,7 @@ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_budget);
 /* Make a sent reply's next busy check its last. */
 void svc_tcp_rx_region_kunit_age(struct ubuf_info *ubuf)
 {
-	container_of(ubuf, struct svc_rx_region_tx, ubuf)->tries =
-		svc_rx_region_busy_tries - 1;
+	rx_loan_kunit_tx_age(container_of(ubuf, struct rx_loan_tx, ubuf));
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_region_kunit_age);
 #endif
@@ -6810,58 +6475,6 @@ err_noclose:
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_recvfrom);
 
 /*
- * Fill @skb with region pages.  A fresh skb takes them without page
- * references: the reply's ubuf_info holds them until TCP frees its last
- * socket buffer (as io_uring does for registered buffers).  An skb that
- * already carries the reply's spliced header takes them with references,
- * so header and payload share one segment; the completion then waits for
- * those references before returning the pages.
- */
-static int svc_rx_region_sg_from_iter(struct sk_buff *skb,
-				      struct iov_iter *from, size_t length)
-{
-	struct skb_shared_info *shinfo = skb_shinfo(skb);
-	int frag = shinfo->nr_frags;
-	unsigned long truesize = 0;
-	ssize_t copied = 0;
-	bool refs = frag && !skb_zcopy_managed(skb);
-	struct bvec_iter bi;
-	int ret = 0;
-
-	if (!frag)
-		shinfo->flags |= SKBFL_MANAGED_FRAG_REFS;
-
-	bi.bi_size = min(from->count, length);
-	bi.bi_offset = from->iov_offset;
-	bi.bi_idx = 0;
-
-	while (bi.bi_size && frag < MAX_SKB_FRAGS) {
-		struct bio_vec v = mp_bvec_iter_bvec(from->bvec, bi);
-
-		copied += v.bv_len;
-		truesize += PAGE_ALIGN(v.bv_len + v.bv_offset);
-		if (refs)
-			get_page(v.bv_page);
-		__skb_fill_page_desc_noacc(shinfo, frag++, v.bv_page,
-					   v.bv_offset, v.bv_len);
-		bvec_iter_advance_single(from->bvec, &bi, v.bv_len);
-	}
-	if (bi.bi_size)
-		ret = -EMSGSIZE;
-
-	shinfo->nr_frags = frag;
-	from->bvec += bi.bi_idx;
-	from->nr_segs -= bi.bi_idx;
-	from->count -= copied;
-	from->iov_offset = bi.bi_offset;
-
-	skb->data_len += copied;
-	skb->len += copied;
-	skb->truesize += truesize;
-	return ret;
-}
-
-/*
  * Does bvec @k of the reply (as svc_tcp_sendmsg() builds it: record
  * marker, head, one entry per rq_res page, tail) carry a region page?
  * Decided by the reply slot's bit in rq_rx_region_map, never by address.
@@ -6908,8 +6521,8 @@ static int svc_tcp_sendmsg_rx_region(struct svc_sock *svsk,
 		if (j < nvecs)
 			msg.msg_flags |= MSG_MORE;
 		if (region) {
-			msg.msg_ubuf = &tx->ubuf;
-			msg.sg_from_iter = svc_rx_region_sg_from_iter;
+			msg.msg_ubuf = &tx->tx.ubuf;
+			msg.sg_from_iter = rx_loan_tx_sg_from_iter;
 		}
 		iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, bv + i, j - i, bytes);
 		ret = sock_sendmsg(svsk->sk_sock, &msg);
@@ -7476,7 +7089,6 @@ static bool svc_tcp_rx_budget_list(struct svc_tcp_rx_budget *c, bool read)
 
 void svc_init_xprt_sock(void)
 {
-	svc_rx_region_init();
 	svc_rx_budget_default_listed =
 		svc_tcp_rx_budget_list(&svc_rx_budget_default, false);
 	/* The read pool is the initial namespace's rx_loan READ budget. */

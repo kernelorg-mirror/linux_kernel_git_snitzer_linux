@@ -18,6 +18,7 @@
 #include <linux/gfp_types.h>
 #include <linux/mm.h>
 #include <linux/list.h>
+#include <linux/llist.h>
 #include <linux/math.h>
 #include <linux/minmax.h>
 #include <linux/overflow.h>
@@ -498,9 +499,15 @@ long rx_loan_kunit_region_denied(void);
  * registered (rx_loan_consumer_share()); a late consumer gets its share of
  * the region that exists, which never grows, and the others' shrink to
  * theirs with nothing taken back.  Credit the consumer holds is counted in
- * @out_write and @out_read, one atomic per record or READ, and an admission
- * that would take either past the share waits, unless its record is the
- * budget's oldest (progress; counted in @overrun_share).  The region-wide
+ * @out_write and @out_read, one atomic per record, and an admission that
+ * would take either past the share waits, unless its record is the
+ * budget's oldest (progress; counted in @overrun_share).  READ credit is
+ * charged to @out_read a batch at a time and cached per CPU in
+ * @read_cached, so that a READ's charge and return touch only its CPU's
+ * cache: the share is judged on what READs hold (rx_loan_consumer_out(),
+ * @out_read less the caches), so cached credit never holds anyone back,
+ * and READs can pass the share by at most what the other CPUs have
+ * cached (RX_LOAN_STOCK_MAX pages each).  The region-wide
  * total (rx_loan_region_out()) is a hard cap on every budget of every
  * namespace together; nothing passes it.  A write_capped budget is also
  * held to the write partition with all write credit
@@ -516,6 +523,8 @@ struct rx_loan_consumer {
 	atomic_long_t		out_read;
 	atomic_long_t		overrun_share;	/* oldest records past the share */
 	atomic_long_t		share_denied;
+	/* READ credit charged to @out_read, not yet taken: see above */
+	atomic_long_t __percpu	*read_cached;
 	/*
 	 * Its own copies (rx_loan_table_reset_consumer(), rx_loan_tile()),
 	 * also counted in the host-wide total: allocated at its first
@@ -556,6 +565,7 @@ void rx_loan_consumer_set_floor(struct rx_loan_consumer *c,
 void rx_loan_region_carve(void);
 unsigned long rx_loan_region_write_default(void);
 unsigned long rx_loan_consumer_share(const struct rx_loan_consumer *c);
+long rx_loan_consumer_out(const struct rx_loan_consumer *c, bool read);
 
 long rx_loan_region_out(void);
 long rx_loan_region_write_out(void);
@@ -744,5 +754,55 @@ static inline bool rx_loan_cost_warm(const struct rx_loan_budget *lb)
 {
 	return READ_ONCE(lb->cost_warm) >= RX_LOAN_COST_WARMUP;
 }
+
+/*
+ * Region READ-partition pages lent to a send (READ data, kNFSd's replies
+ * and nvmet-tcp's C2H data alike), kept until TCP frees the last socket
+ * buffer that carries them (ubuf_info completion).  Nothing is allocated per
+ * send: every page of the partition has a descriptor slot of
+ * RX_LOAN_TX_SIZE bytes and a link, set up once with the region
+ * (rx_loan_tx_bind()).  A send uses its first page's slot, and the links
+ * chain its pages by index.  Each consumer's descriptor starts with a
+ * struct rx_loan_tx and fills the rest of the slot with its own fields; its
+ * ops' ->release() returns what the send held, calling rx_loan_tx_give()
+ * for the pages once it has read its fields.
+ */
+#define RX_LOAN_TX_SIZE		64
+
+struct rx_loan_tx {
+	struct ubuf_info	ubuf;
+	struct llist_node	done;
+	u16			count;	/* pages */
+	u16			tries;	/* waits for page references */
+	bool			copied;	/* TCP copied the pages (zerocopy failed) */
+};
+
+struct rx_loan_tx_ops {
+	struct ubuf_info_ops	ubuf;	/* .complete = rx_loan_tx_complete */
+	/* every lock dropped, in process context: the last touch of the send */
+	void (*release)(struct rx_loan_tx *tx);
+};
+
+bool rx_loan_tx_bind(void);
+unsigned long rx_loan_tx_span(void);
+unsigned int rx_loan_tx_take_pages(struct page **pages, unsigned int n);
+struct rx_loan_tx *rx_loan_tx_make(struct page **pages, unsigned int n,
+				   const struct rx_loan_tx_ops *ops);
+void rx_loan_tx_give(struct rx_loan_tx *tx);
+void rx_loan_tx_complete(struct sk_buff *skb, struct ubuf_info *uarg,
+			 bool zerocopy_success);
+int rx_loan_tx_link_skb(struct sk_buff *skb, struct ubuf_info *uarg);
+void rx_loan_tx_flush(void);
+int rx_loan_tx_sg_from_iter(struct sk_buff *skb, struct iov_iter *from,
+			    size_t length);
+#if IS_ENABLED(CONFIG_KUNIT)
+void rx_loan_kunit_tx_region(struct page **pages, unsigned int n);
+unsigned int rx_loan_kunit_tx_free(void);
+void rx_loan_kunit_tx_escape(unsigned int n);
+void rx_loan_kunit_tx_age(struct rx_loan_tx *tx);
+/* The most sends one chain holds (rx_loan_tx_link_skb()). */
+#define RX_LOAN_KUNIT_TX_CHAIN_MAX	32
+void rx_loan_kunit_unlist_locked(struct rx_loan_waiter *w);
+#endif
 
 #endif /* _NET_RX_LOAN_H */

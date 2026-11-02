@@ -1023,10 +1023,60 @@ unsigned long rx_loan_consumer_share(const struct rx_loan_consumer *c)
 }
 EXPORT_SYMBOL_GPL(rx_loan_consumer_share);
 
+/* READ credit charged to @c and cached on the CPUs, not held by READs. */
+static long rx_loan_consumer_cached(const struct rx_loan_consumer *c)
+{
+	atomic_long_t __percpu *pc = READ_ONCE(c->read_cached);
+	long n = 0;
+	int cpu;
+
+	if (!pc)
+		return 0;
+	for_each_possible_cpu(cpu)
+		n += atomic_long_read(per_cpu_ptr(pc, cpu));
+	return n;
+}
+
+/**
+ * rx_loan_consumer_out - credit @c's records or READs hold
+ * @c: a consumer
+ * @read: READ (exact) credit, else write
+ *
+ * What its share is judged on: READ credit cached on the CPUs is charged
+ * but held by no READ.  Lockless.
+ */
+long rx_loan_consumer_out(const struct rx_loan_consumer *c, bool read)
+{
+	if (!read)
+		return atomic_long_read(&c->out_write);
+	return atomic_long_read(&c->out_read) - rx_loan_consumer_cached(c);
+}
+EXPORT_SYMBOL_GPL(rx_loan_consumer_out);
+
+/* Take @n pages of READ credit this CPU has cached for @c. */
+static bool rx_loan_consumer_cache_take(struct rx_loan_consumer *c, long n)
+{
+	atomic_long_t __percpu *pc = READ_ONCE(c->read_cached);
+	atomic_long_t *v;
+	long x;
+
+	if (!pc)
+		return false;
+	v = raw_cpu_ptr(pc);
+	x = atomic_long_read(v);
+	do {
+		if (x < n)
+			return false;
+	} while (!atomic_long_try_cmpxchg(v, &x, x - n));
+	return true;
+}
+
 /*
  * Charge @n pages to @c's count of @read or write credit: false, with
  * nothing charged, if that would pass its share, unless @force (the oldest
- * record, which always starts; counted in overrun_share).
+ * record, which always starts; counted in overrun_share).  A READ takes
+ * its charge from this CPU's cache, refilled a batch at a time while the
+ * batch fits the share.
  */
 static bool rx_loan_consumer_get(struct rx_loan_consumer *c, bool read,
 				 long n, bool force)
@@ -1037,11 +1087,30 @@ static bool rx_loan_consumer_get(struct rx_loan_consumer *c, bool read,
 
 	if (!c || n <= 0)
 		return true;
+	if (read && rx_loan_consumer_cache_take(c, n))
+		return true;
 	out = read ? &c->out_read : &c->out_write;
 	share = rx_loan_consumer_share(c);
 	v = atomic_long_read(out);
+	if (read && share && READ_ONCE(c->read_cached)) {
+		/* The batch only where it fits: else @n alone, below. */
+		while (v + n + RX_LOAN_STOCK_BATCH <= (long)share) {
+			if (atomic_long_try_cmpxchg(out, &v,
+						    v + n + RX_LOAN_STOCK_BATCH)) {
+				atomic_long_add(RX_LOAN_STOCK_BATCH,
+						raw_cpu_ptr(c->read_cached));
+				return true;
+			}
+		}
+	}
 	do {
 		if (share && v + n > (long)share) {
+			/* Judged on what READs hold, the caches excluded. */
+			if (read && v - rx_loan_consumer_cached(c) + n <=
+				    (long)share) {
+				atomic_long_add(n, out);
+				return true;
+			}
 			if (!force) {
 				atomic_long_inc(&c->share_denied);
 				return false;
@@ -1067,8 +1136,27 @@ static bool rx_loan_consumer_get(struct rx_loan_consumer *c, bool read,
  */
 void rx_loan_consumer_put(struct rx_loan_consumer *c, bool read, long n)
 {
-	if (c && n > 0)
+	atomic_long_t __percpu *pc;
+	atomic_long_t *v;
+	long x;
+
+	if (!c || n <= 0)
+		return;
+	pc = read ? READ_ONCE(c->read_cached) : NULL;
+	if (!pc || !READ_ONCE(c->registered)) {
 		atomic_long_sub(n, read ? &c->out_read : &c->out_write);
+		return;
+	}
+	/* To this CPU's cache; past RX_LOAN_STOCK_MAX, back to a batch. */
+	v = raw_cpu_ptr(pc);
+	if (atomic_long_add_return(n, v) <= RX_LOAN_STOCK_MAX)
+		return;
+	x = atomic_long_read(v);
+	do {
+		if (x <= RX_LOAN_STOCK_BATCH)
+			return;
+	} while (!atomic_long_try_cmpxchg(v, &x, RX_LOAN_STOCK_BATCH));
+	atomic_long_sub(x - RX_LOAN_STOCK_BATCH, &c->out_read);
 }
 EXPORT_SYMBOL_GPL(rx_loan_consumer_put);
 
@@ -1378,6 +1466,9 @@ int rx_loan_consumer_register(struct rx_loan_consumer *c,
 	 */
 	if (!c->copies)
 		WRITE_ONCE(c->copies, alloc_percpu(struct rx_loan_copies));
+	/* Without a cache, each READ charges @out_read itself. */
+	if (!c->read_cached)
+		WRITE_ONCE(c->read_cached, alloc_percpu(atomic_long_t));
 	c->name = name;
 	c->floor = floor;
 	c->ln = ln;
@@ -1394,6 +1485,24 @@ int rx_loan_consumer_register(struct rx_loan_consumer *c,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(rx_loan_consumer_register);
+
+/*
+ * Return @c's cached READ credit to @out_read: unregistered, its returns
+ * then go straight there, and a cache refilled by a READ racing this comes
+ * back at destroy.
+ */
+static void rx_loan_consumer_uncache(struct rx_loan_consumer *c)
+{
+	atomic_long_t __percpu *pc = READ_ONCE(c->read_cached);
+	long back = 0;
+	int cpu;
+
+	if (!pc)
+		return;
+	for_each_possible_cpu(cpu)
+		back += atomic_long_xchg(per_cpu_ptr(pc, cpu), 0);
+	atomic_long_sub(back, &c->out_read);
+}
 
 /**
  * rx_loan_consumer_unregister - a consumer of region loans stops
@@ -1417,6 +1526,7 @@ void rx_loan_consumer_unregister(struct rx_loan_consumer *c)
 	WRITE_ONCE(c->registered, false);
 	page_pool_rx_region_demand(-(long)c->floor);
 	mutex_unlock(&rx_loan_consumers_lock);
+	rx_loan_consumer_uncache(c);
 }
 EXPORT_SYMBOL_GPL(rx_loan_consumer_unregister);
 
@@ -1429,6 +1539,9 @@ EXPORT_SYMBOL_GPL(rx_loan_consumer_unregister);
 void rx_loan_consumer_destroy(struct rx_loan_consumer *c)
 {
 	WARN_ON_ONCE(READ_ONCE(c->registered));
+	rx_loan_consumer_uncache(c);
+	free_percpu(c->read_cached);
+	c->read_cached = NULL;
 	free_percpu(c->copies);
 	c->copies = NULL;
 }
@@ -1664,8 +1777,8 @@ static bool rx_loan_share_waits(struct rx_loan_budget *lb,
 	if (!c || !w->share)
 		return false;
 	share = rx_loan_consumer_share(c);
-	return share && atomic_long_read(lb->read ? &c->out_read :
-					 &c->out_write) + w->need > (long)share;
+	return share && rx_loan_consumer_out(c, lb->read) + w->need >
+			(long)share;
 }
 
 /* The oldest waiter whose consumer is within its share, lb->lock held. */
@@ -2527,6 +2640,597 @@ void rx_loan_net_state_exit(struct rx_loan_net *ln)
 }
 EXPORT_SYMBOL_GPL(rx_loan_net_state_exit);
 
+/*
+ * Sends of READ-partition pages (struct rx_loan_tx): one descriptor slot
+ * and one link per page of the partition, shared by every consumer.
+ */
+/*
+ * Sends sharing one skb (rx_loan_tx_link_skb()), by slot index + 1, 0 for
+ * none: @head is the chain's first send, which holds a reference for each
+ * other, unset on the first itself; @next is the next send after it.  The
+ * head's @nr counts its chain.  Zero is unchained, so a send starts so.
+ */
+struct rx_loan_tx_chain {
+	u32	head;
+	u32	next;
+	u32	nr;
+};
+
+static void *rx_loan_txs;
+static u32 *rx_loan_tx_links;	/* each page's successor */
+static struct rx_loan_tx_chain *rx_loan_tx_chains;	/* each slot's */
+static unsigned long rx_loan_txs_pfn;
+static unsigned long rx_loan_txs_nr;	/* pages READs draw on */
+static bool rx_loan_txs_failed;
+static DEFINE_MUTEX(rx_loan_txs_mutex);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/*
+ * KUnit stand-in for the region's READ partition: a free-page stack over
+ * pages indexed by their place in @rx_loan_kunit_tx_all.
+ */
+static struct page **rx_loan_kunit_tx_stack, **rx_loan_kunit_tx_all;
+static void *rx_loan_kunit_txs;
+static u32 *rx_loan_kunit_tx_links;
+static struct rx_loan_tx_chain *rx_loan_kunit_tx_chains;
+static unsigned int rx_loan_kunit_tx_nfree, rx_loan_kunit_tx_capacity;
+static unsigned int rx_loan_kunit_tx_escaped;
+static DEFINE_SPINLOCK(rx_loan_kunit_tx_lock);
+
+void rx_loan_kunit_tx_region(struct page **pages, unsigned int n)
+{
+	struct page **all = NULL;
+	struct rx_loan_tx_chain *chains = NULL;
+	void *txs = NULL;
+	u32 *links = NULL;
+
+	if (pages) {
+		all = kmemdup_array(pages, n, sizeof(*pages), GFP_KERNEL);
+		txs = kcalloc(n, RX_LOAN_TX_SIZE, GFP_KERNEL);
+		links = kcalloc(n, sizeof(*links), GFP_KERNEL);
+		chains = kcalloc(n, sizeof(*chains), GFP_KERNEL);
+		if (WARN_ON(!all || !txs || !links || !chains)) {
+			kfree(all);
+			kfree(txs);
+			kfree(links);
+			kfree(chains);
+			return;
+		}
+	}
+	spin_lock_bh(&rx_loan_kunit_tx_lock);
+	swap(rx_loan_kunit_tx_all, all);
+	swap(rx_loan_kunit_txs, txs);
+	swap(rx_loan_kunit_tx_links, links);
+	swap(rx_loan_kunit_tx_chains, chains);
+	rx_loan_kunit_tx_stack = pages;
+	rx_loan_kunit_tx_nfree = n;
+	rx_loan_kunit_tx_capacity = n;
+	rx_loan_kunit_tx_escaped = 0;
+	spin_unlock_bh(&rx_loan_kunit_tx_lock);
+	kfree(all);
+	kfree(txs);
+	kfree(links);
+	kfree(chains);
+}
+EXPORT_SYMBOL_IF_KUNIT(rx_loan_kunit_tx_region);
+
+unsigned int rx_loan_kunit_tx_free(void)
+{
+	return READ_ONCE(rx_loan_kunit_tx_nfree);
+}
+EXPORT_SYMBOL_IF_KUNIT(rx_loan_kunit_tx_free);
+
+/* @n stand-in pages escape, as page_pool_rx_region_capacity() counts them. */
+void rx_loan_kunit_tx_escape(unsigned int n)
+{
+	WRITE_ONCE(rx_loan_kunit_tx_escaped, n);
+}
+EXPORT_SYMBOL_IF_KUNIT(rx_loan_kunit_tx_escape);
+#endif
+
+/* Take @n READ-partition pages into @pages: all of them, or none (0). */
+unsigned int rx_loan_tx_take_pages(struct page **pages, unsigned int n)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (rx_loan_kunit_tx_stack) {
+		unsigned int i;
+
+		spin_lock_bh(&rx_loan_kunit_tx_lock);
+		if (rx_loan_kunit_tx_nfree < n) {
+			spin_unlock_bh(&rx_loan_kunit_tx_lock);
+			return 0;
+		}
+		for (i = 0; i < n; i++)
+			pages[i] = rx_loan_kunit_tx_stack[--rx_loan_kunit_tx_nfree];
+		spin_unlock_bh(&rx_loan_kunit_tx_lock);
+		return n;
+	}
+#endif
+	return page_pool_rx_region_take_pages(true, pages, n);
+}
+EXPORT_SYMBOL_GPL(rx_loan_tx_take_pages);
+
+static void rx_loan_tx_give_pages(struct page **pages, unsigned int n)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (rx_loan_kunit_tx_stack) {
+		unsigned int i;
+
+		spin_lock_bh(&rx_loan_kunit_tx_lock);
+		for (i = 0; i < n; i++)
+			if (!WARN_ON_ONCE(rx_loan_kunit_tx_nfree >=
+					  rx_loan_kunit_tx_capacity))
+				rx_loan_kunit_tx_stack[rx_loan_kunit_tx_nfree++] = pages[i];
+		spin_unlock_bh(&rx_loan_kunit_tx_lock);
+		return;
+	}
+#endif
+	page_pool_rx_region_give_pages(pages, n);
+}
+
+/*
+ * Pages the partition READs draw on can still lend, its escaped pages
+ * excluded: a send needing more could never be confined, so it is served
+ * unconfined rather than waiting.  Zero until rx_loan_tx_bind() succeeds.
+ */
+unsigned long rx_loan_tx_span(void)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (rx_loan_kunit_tx_stack)
+		return rx_loan_kunit_tx_capacity -
+		       min(READ_ONCE(rx_loan_kunit_tx_escaped),
+			   rx_loan_kunit_tx_capacity);
+#endif
+	if (!READ_ONCE(rx_loan_txs_nr))
+		return 0;
+	return page_pool_rx_region_capacity(true);
+}
+EXPORT_SYMBOL_GPL(rx_loan_tx_span);
+
+/*
+ * The READ partition's descriptors and links, made once a boot by the first
+ * send of any consumer (which also makes the region if no listed device
+ * has).  A failure is not retried: sends are then served unconfined.
+ */
+bool rx_loan_tx_bind(void)
+{
+	unsigned long pfn, nr;
+	struct rx_loan_tx_chain *chains;
+	void *txs;
+	u32 *links;
+
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (rx_loan_kunit_tx_stack)
+		return true;
+#endif
+	if (smp_load_acquire(&rx_loan_txs))
+		return true;
+	if (READ_ONCE(rx_loan_txs_failed) ||
+	    !page_pool_rx_region_bind_reads())
+		return false;
+	mutex_lock(&rx_loan_txs_mutex);
+	if (!rx_loan_txs && !rx_loan_txs_failed) {
+		nr = page_pool_rx_region_span(true, &pfn);
+		txs = nr ? kvcalloc(nr, RX_LOAN_TX_SIZE, GFP_KERNEL) : NULL;
+		links = nr ? kvcalloc(nr, sizeof(*links), GFP_KERNEL) : NULL;
+		chains = nr ? kvcalloc(nr, sizeof(*chains), GFP_KERNEL) : NULL;
+		if (txs && links && chains) {
+			rx_loan_txs_pfn = pfn;
+			rx_loan_tx_links = links;
+			rx_loan_tx_chains = chains;
+			WRITE_ONCE(rx_loan_txs_nr, nr);
+			smp_store_release(&rx_loan_txs, txs);
+		} else {
+			pr_warn("rx_loan: no READ descriptors for %lu rx region pages\n",
+				nr);
+			kvfree(txs);
+			kvfree(links);
+			kvfree(chains);
+			WRITE_ONCE(rx_loan_txs_failed, true);
+		}
+	}
+	mutex_unlock(&rx_loan_txs_mutex);
+	return smp_load_acquire(&rx_loan_txs);
+}
+EXPORT_SYMBOL_GPL(rx_loan_tx_bind);
+
+static struct rx_loan_tx *rx_loan_tx_at(u32 idx)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (rx_loan_kunit_tx_stack)
+		return rx_loan_kunit_txs + (size_t)idx * RX_LOAN_TX_SIZE;
+#endif
+	return rx_loan_txs + (size_t)idx * RX_LOAN_TX_SIZE;
+}
+
+static u32 *rx_loan_tx_link(u32 idx)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (rx_loan_kunit_tx_stack)
+		return &rx_loan_kunit_tx_links[idx];
+#endif
+	return &rx_loan_tx_links[idx];
+}
+
+static u32 rx_loan_tx_index(const struct rx_loan_tx *tx)
+{
+	return ((const void *)tx - (const void *)rx_loan_tx_at(0)) /
+	       RX_LOAN_TX_SIZE;
+}
+
+static struct rx_loan_tx_chain *rx_loan_tx_chain(const struct rx_loan_tx *tx)
+{
+	u32 idx = rx_loan_tx_index(tx);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (rx_loan_kunit_tx_stack)
+		return &rx_loan_kunit_tx_chains[idx];
+#endif
+	return &rx_loan_tx_chains[idx];
+}
+
+/* The send of chain reference @ref (slot index + 1), NULL for none. */
+static struct rx_loan_tx *rx_loan_tx_ref(u32 ref)
+{
+	return ref ? rx_loan_tx_at(ref - 1) : NULL;
+}
+
+static u32 rx_loan_tx_page_index(struct page *page)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (rx_loan_kunit_tx_stack) {
+		u32 i;
+
+		for (i = 0; i < rx_loan_kunit_tx_capacity; i++)
+			if (rx_loan_kunit_tx_all[i] == page)
+				return i;
+		WARN_ON_ONCE(1);
+		return 0;
+	}
+#endif
+	return page_to_pfn(page) - rx_loan_txs_pfn;
+}
+
+static struct page *rx_loan_tx_page(u32 idx)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (rx_loan_kunit_tx_stack)
+		return rx_loan_kunit_tx_all[idx];
+#endif
+	return pfn_to_page(rx_loan_txs_pfn + idx);
+}
+
+/*
+ * Pages given back per call: a batch of 32 or more goes straight to the
+ * region's shards, so a large send's completion skips the CPU caches.
+ */
+#define RX_LOAN_TX_BATCH	64
+
+/*
+ * The send of @n pages the caller took (rx_loan_tx_take_pages()), all its
+ * own, so no lock is needed: link them and set up the first one's
+ * descriptor, holding the sender's reference.  The caller fills in the
+ * rest of its slot.
+ */
+struct rx_loan_tx *rx_loan_tx_make(struct page **pages, unsigned int n,
+				   const struct rx_loan_tx_ops *ops)
+{
+	u32 first = rx_loan_tx_page_index(pages[0]), prev = first, idx;
+	struct rx_loan_tx *tx = rx_loan_tx_at(first);
+	unsigned int i;
+
+	for (i = 1; i < n; i++) {
+		idx = rx_loan_tx_page_index(pages[i]);
+		*rx_loan_tx_link(prev) = idx;
+		prev = idx;
+	}
+	tx->ubuf.ops = &ops->ubuf;
+	tx->ubuf.flags = SKBFL_ZEROCOPY_FRAG | SKBFL_DONT_ORPHAN;
+	refcount_set(&tx->ubuf.refcnt, 1);
+	tx->count = n;
+	tx->tries = 0;
+	tx->copied = false;
+	return tx;
+}
+EXPORT_SYMBOL_GPL(rx_loan_tx_make);
+
+/*
+ * Return @tx's pages; each link is read before its page goes.  The slot
+ * belongs to whoever takes its first page next: read it before this.
+ */
+void rx_loan_tx_give(struct rx_loan_tx *tx)
+{
+	struct page *batch[RX_LOAN_TX_BATCH];
+	u32 idx = rx_loan_tx_index(tx);
+	unsigned int n = tx->count, k = 0;
+
+	while (n--) {
+		batch[k++] = rx_loan_tx_page(idx);
+		idx = *rx_loan_tx_link(idx);
+		if (k == RX_LOAN_TX_BATCH || !n) {
+			rx_loan_tx_give_pages(batch, k);
+			k = 0;
+		}
+	}
+}
+EXPORT_SYMBOL_GPL(rx_loan_tx_give);
+
+/*
+ * Send releases: TCP's completions land on the completing CPU's list; a
+ * send whose pages are still referenced (a frag downgraded from managed,
+ * which skb_release_data() drops after the send's reference) waits on the
+ * busy list, retried each jiffy and given up after RX_LOAN_TX_BUSY_TRIES.
+ * The list's work runs at normal priority on the completing CPU, so it
+ * does not preempt the consumers' threads there.  It can run before
+ * skb_release_data() has dropped the frags' references, so a send first
+ * found busy is queued again at once; only later retries wait a jiffy.
+ */
+struct rx_loan_tx_done {
+	struct llist_head	list;
+	struct work_struct	work;
+};
+
+static DEFINE_PER_CPU(struct rx_loan_tx_done, rx_loan_tx_done);
+static LLIST_HEAD(rx_loan_tx_busy_list);
+static void rx_loan_tx_busy_fn(struct work_struct *work);
+static DECLARE_DELAYED_WORK(rx_loan_tx_busy_work, rx_loan_tx_busy_fn);
+#define RX_LOAN_TX_BUSY_TRIES	(10 * HZ)
+
+static void rx_loan_tx_queue(struct rx_loan_tx *tx)
+{
+	struct rx_loan_tx_done *d = get_cpu_ptr(&rx_loan_tx_done);
+
+	if (llist_add(&tx->done, &d->list))
+		queue_work_on(smp_processor_id(), system_percpu_wq, &d->work);
+	put_cpu_ptr(&rx_loan_tx_done);
+}
+
+/* ubuf_info_ops.complete of every consumer's sends. */
+void rx_loan_tx_complete(struct sk_buff *skb, struct ubuf_info *uarg,
+			 bool zerocopy_success)
+{
+	struct rx_loan_tx *tx = container_of(uarg, struct rx_loan_tx, ubuf);
+	struct rx_loan_tx *head;
+
+	/* An skb whose frags TCP copied (skb_copy_ubufs()): ->release reads it. */
+	if (!zerocopy_success)
+		WRITE_ONCE(tx->copied, true);
+	if (!refcount_dec_and_test(&uarg->refcnt))
+		return;
+	/*
+	 * A send linked behind another drops the reference the chain's head
+	 * holds for it; set before this send's last reference could go.
+	 */
+	head = rx_loan_tx_ref(rx_loan_tx_chain(tx)->head);
+	if (head)
+		rx_loan_tx_complete(skb, &head->ubuf, zerocopy_success);
+	else
+		rx_loan_tx_queue(tx);
+}
+EXPORT_SYMBOL_GPL(rx_loan_tx_complete);
+
+/*
+ * Consecutive sends on one socket share skbs, for a consumer whose ops set this
+ * as ->link_skb (CONFIG_RX_LOAN_TX_LINK; without it each send starts its own
+ * skb), as io_uring's notifications do (io_link_skb()): the first send an skb
+ * carries is its uarg, and each send linked behind it takes a reference on the
+ * chain's head for its own, dropped when its own references are all gone.  The
+ * chain is released together, once the last skb carrying any of it is freed.
+ * Only sends of one consumer's ops chain, and at most RX_LOAN_TX_CHAIN_MAX
+ * sends: that bounds a chain's pages and credit to that many sends', held until
+ * its last skb frees (one member's busy page requeues, or escapes, the whole
+ * chain).  Never onto an skb with no frag left, which this send would join
+ * without adding to.  Under the socket lock, as every ->link_skb() is.
+ */
+#define RX_LOAN_TX_CHAIN_MAX	32
+#if IS_ENABLED(CONFIG_KUNIT)
+static_assert(RX_LOAN_TX_CHAIN_MAX == RX_LOAN_KUNIT_TX_CHAIN_MAX);
+#endif
+int rx_loan_tx_link_skb(struct sk_buff *skb, struct ubuf_info *uarg)
+{
+	struct rx_loan_tx *tx = container_of(uarg, struct rx_loan_tx, ubuf);
+	struct ubuf_info *prev_uarg = skb_zcopy(skb);
+	struct rx_loan_tx_chain *c, *pc, *hc;
+	struct rx_loan_tx *prev, *head;
+	u32 nr;
+
+	if (!prev_uarg) {
+		net_zcopy_get(uarg);
+		skb_zcopy_init(skb, uarg);
+		return 0;
+	}
+	if (prev_uarg == uarg)
+		return 0;
+	if (prev_uarg->ops != uarg->ops ||
+	    skb_shinfo(skb)->nr_frags >= MAX_SKB_FRAGS)
+		return -EEXIST;
+	c = rx_loan_tx_chain(tx);
+	if (c->head || c->next)		/* in a chain already */
+		return -EEXIST;
+	prev = container_of(prev_uarg, struct rx_loan_tx, ubuf);
+	pc = rx_loan_tx_chain(prev);
+	head = rx_loan_tx_ref(pc->head) ?: prev;
+	hc = rx_loan_tx_chain(head);
+	nr = (hc->nr ?: 1) + 1;
+	if (nr > RX_LOAN_TX_CHAIN_MAX)
+		return -EEXIST;
+	hc->nr = nr;
+	c->head = rx_loan_tx_index(head) + 1;
+	c->next = pc->next;
+	pc->next = rx_loan_tx_index(tx) + 1;
+	net_zcopy_get(&head->ubuf);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rx_loan_tx_link_skb);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/* Take @w off its budget's waiters, lb->lock held, as a test drains them. */
+void rx_loan_kunit_unlist_locked(struct rx_loan_waiter *w)
+{
+	list_del_init(&w->node);
+}
+EXPORT_SYMBOL_IF_KUNIT(rx_loan_kunit_unlist_locked);
+#endif
+
+/* Is any of @tx's pages still referenced beyond its region ownership? */
+static bool rx_loan_tx_pages_busy(const struct rx_loan_tx *tx)
+{
+	u32 idx = rx_loan_tx_index(tx);
+	unsigned int i;
+
+	for (i = 0; i < tx->count; i++) {
+		if (page_ref_count(rx_loan_tx_page(idx)) != 1)
+			return true;
+		idx = *rx_loan_tx_link(idx);
+	}
+	return false;
+}
+
+/* ... or any page of the sends chained behind it, @tx a chain's head. */
+static bool rx_loan_tx_busy(const struct rx_loan_tx *tx)
+{
+	for (; tx; tx = rx_loan_tx_ref(rx_loan_tx_chain(tx)->next))
+		if (rx_loan_tx_pages_busy(tx))
+			return true;
+	return false;
+}
+
+/*
+ * Release @tx and the sends chained behind it.  Each is unchained and its
+ * successor read before its ->release(), after which its slot may be
+ * another send's.  A chain's sends shared skbs, and which skb TCP copied
+ * is not kept: one copied counts for all of them.
+ */
+static void rx_loan_tx_release(struct rx_loan_tx *tx)
+{
+	struct rx_loan_tx *t, *next;
+	bool copied = false;
+
+	for (t = tx; t; t = rx_loan_tx_ref(rx_loan_tx_chain(t)->next))
+		copied |= READ_ONCE(t->copied);
+	for (t = tx; t; t = next) {
+		struct rx_loan_tx_chain *c = rx_loan_tx_chain(t);
+
+		next = rx_loan_tx_ref(c->next);
+		*c = (struct rx_loan_tx_chain){};
+		if (copied)
+			WRITE_ONCE(t->copied, true);
+		container_of(t->ubuf.ops, struct rx_loan_tx_ops,
+			     ubuf)->release(t);
+	}
+}
+
+static void rx_loan_tx_finish(struct llist_node *list)
+{
+	struct rx_loan_tx *tx, *next;
+
+	llist_for_each_entry_safe(tx, next, list, done) {
+		if (rx_loan_tx_busy(tx) &&
+		    ++tx->tries < RX_LOAN_TX_BUSY_TRIES) {
+			if (tx->tries == 1)	/* once more, at once */
+				rx_loan_tx_queue(tx);
+			else if (llist_add(&tx->done, &rx_loan_tx_busy_list))
+				mod_delayed_work(system_dfl_wq,
+						 &rx_loan_tx_busy_work, 1);
+			continue;
+		}
+		/* Still referenced after the limit: the pages escape. */
+		rx_loan_tx_release(tx);
+	}
+}
+
+static void rx_loan_tx_done_fn(struct work_struct *work)
+{
+	struct rx_loan_tx_done *d = container_of(work, struct rx_loan_tx_done,
+						 work);
+
+	rx_loan_tx_finish(llist_del_all(&d->list));
+}
+
+static void rx_loan_tx_busy_fn(struct work_struct *work)
+{
+	rx_loan_tx_finish(llist_del_all(&rx_loan_tx_busy_list));
+}
+
+/*
+ * Run the releases pending now: a consumer's module exit, after its last
+ * send, and KUnit.  A send still busy is queued again, as it would be.
+ */
+void rx_loan_tx_flush(void)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		flush_work(&per_cpu_ptr(&rx_loan_tx_done, cpu)->work);
+	flush_delayed_work(&rx_loan_tx_busy_work);
+	for_each_possible_cpu(cpu)
+		flush_work(&per_cpu_ptr(&rx_loan_tx_done, cpu)->work);
+}
+EXPORT_SYMBOL_GPL(rx_loan_tx_flush);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/* Make a sent send's next busy check its last. */
+void rx_loan_kunit_tx_age(struct rx_loan_tx *tx)
+{
+	tx->tries = RX_LOAN_TX_BUSY_TRIES - 1;
+}
+EXPORT_SYMBOL_IF_KUNIT(rx_loan_kunit_tx_age);
+#endif
+
+/*
+ * msghdr.sg_from_iter of a send of region pages under its rx_loan_tx: fill
+ * @skb with them.  A fresh skb takes them without page references: the
+ * send's ubuf_info holds them until TCP frees its last socket buffer (as
+ * io_uring does for registered buffers).  An skb that already carries the
+ * send's spliced header takes them with references, so header and payload
+ * share one segment; the completion then waits for those references before
+ * returning the pages.
+ */
+int rx_loan_tx_sg_from_iter(struct sk_buff *skb, struct iov_iter *from,
+			    size_t length)
+{
+	struct skb_shared_info *shinfo = skb_shinfo(skb);
+	int frag = shinfo->nr_frags;
+	unsigned long truesize = 0;
+	ssize_t copied = 0;
+	bool refs = frag && !skb_zcopy_managed(skb);
+	struct bvec_iter bi;
+	int ret = 0;
+
+	if (!frag)
+		shinfo->flags |= SKBFL_MANAGED_FRAG_REFS;
+
+	bi.bi_size = min(from->count, length);
+	bi.bi_offset = from->iov_offset;
+	bi.bi_idx = 0;
+
+	while (bi.bi_size && frag < MAX_SKB_FRAGS) {
+		struct bio_vec v = mp_bvec_iter_bvec(from->bvec, bi);
+
+		copied += v.bv_len;
+		truesize += PAGE_ALIGN(v.bv_len + v.bv_offset);
+		if (refs)
+			get_page(v.bv_page);
+		__skb_fill_page_desc_noacc(shinfo, frag++, v.bv_page,
+					   v.bv_offset, v.bv_len);
+		bvec_iter_advance_single(from->bvec, &bi, v.bv_len);
+	}
+	if (bi.bi_size)
+		ret = -EMSGSIZE;
+
+	shinfo->nr_frags = frag;
+	from->bvec += bi.bi_idx;
+	from->nr_segs -= bi.bi_idx;
+	from->count -= copied;
+	from->iov_offset = bi.bi_offset;
+
+	skb->data_len += copied;
+	skb->len += copied;
+	skb->truesize += truesize;
+	return ret;
+}
+EXPORT_SYMBOL_GPL(rx_loan_tx_sg_from_iter);
+
 static unsigned int rx_loan_net_id __read_mostly;
 
 struct rx_loan_net *rx_loan_net(const struct net *net)
@@ -2560,6 +3264,16 @@ static struct pernet_operations rx_loan_net_ops = {
 
 static int __init rx_loan_init(void)
 {
+	int cpu;
+
+	BUILD_BUG_ON(RX_LOAN_TX_BUSY_TRIES > U16_MAX);
+	BUILD_BUG_ON(sizeof(struct rx_loan_tx) > RX_LOAN_TX_SIZE);
+	for_each_possible_cpu(cpu) {
+		struct rx_loan_tx_done *d = per_cpu_ptr(&rx_loan_tx_done, cpu);
+
+		init_llist_head(&d->list);
+		INIT_WORK(&d->work, rx_loan_tx_done_fn);
+	}
 	return register_pernet_subsys(&rx_loan_net_ops);
 }
 subsys_initcall(rx_loan_init);

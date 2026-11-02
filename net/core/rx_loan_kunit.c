@@ -951,6 +951,67 @@ static void rx_loan_hold_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, rx_loan_hold_window_clamp(65536, 280), 11520);
 }
 
+/*
+ * A consumer's READ credit is charged to its share a batch at a time and
+ * cached on the CPU: a READ's grant and return touch only the cache, the
+ * share is judged on what READs hold (rx_loan_consumer_out()), so READs
+ * fill it exactly, and unregistering returns the cache.
+ */
+static void rx_loan_consumer_read_cache_test(struct kunit *test)
+{
+	struct rx_loan_kunit_waiter *g;
+	struct rx_loan_budget *lb;
+	struct rx_loan_consumer *c;
+	long share, n, i;
+	unsigned long o;
+
+	rx_loan_kunit_standin(test, 1024, 0);
+	o = rx_loan_kunit_others(test, 1024);
+	rx_loan_kunit_region(128 * (o + 1), 128 * (o + 1));
+	lb = rx_loan_kunit_budget(test, 0, 0);
+	lb->read = true;
+	rx_loan_budget_request(lb, 0, 0, false);
+	c = rx_loan_kunit_consumer(test, "read-cache");
+	share = rx_loan_consumer_share(c);
+	KUNIT_ASSERT_EQ(test, share, 128L);
+	/* A __percpu pointer is __seg_gs on x86: test it, do not compare it */
+	KUNIT_ASSERT_TRUE(test, c->read_cached);
+	g = kunit_kcalloc(test, share + 1, sizeof(*g), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, g);
+
+	/* On one CPU throughout: its cache is the one filled and drawn. */
+	migrate_disable();
+	rx_loan_kunit_waiter_init(&g[0], true, 1);
+	KUNIT_EXPECT_EQ(test, rx_loan_grant(lb, c, &g[0].w), 0);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&c->out_read),
+			1L + RX_LOAN_STOCK_BATCH);
+	KUNIT_EXPECT_EQ(test, rx_loan_consumer_out(c, true), 1L);
+	for (n = 1; n <= RX_LOAN_STOCK_BATCH; n++) {
+		rx_loan_kunit_waiter_init(&g[n], true, 1);
+		KUNIT_ASSERT_EQ(test, rx_loan_grant(lb, c, &g[n].w), 0);
+	}
+	/* The batch's READs charged nothing more. */
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&c->out_read),
+			1L + RX_LOAN_STOCK_BATCH);
+	for (; n <= share; n++) {
+		rx_loan_kunit_waiter_init(&g[n], true, 1);
+		if (rx_loan_grant(lb, c, &g[n].w))
+			break;
+	}
+	KUNIT_EXPECT_EQ(test, n, share);
+	KUNIT_EXPECT_EQ(test, rx_loan_consumer_out(c, true), share);
+	KUNIT_EXPECT_GT(test, atomic_long_read(&c->share_denied), 0L);
+	for (i = 0; i < n; i++)
+		rx_loan_grant_return(lb, c, g[i].w.credit, g[i].w.reserve);
+	migrate_enable();
+	KUNIT_EXPECT_EQ(test, rx_loan_consumer_out(c, true), 0L);
+	KUNIT_EXPECT_LE(test, atomic_long_read(&c->out_read),
+			(long)RX_LOAN_STOCK_MAX);
+	KUNIT_EXPECT_EQ(test, rx_loan_read_inflight(lb), 0L);
+	rx_loan_consumer_unregister(c);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&c->out_read), 0L);
+}
+
 /* A read pool follows the region's read size at its next locked op. */
 static void rx_loan_region_read_pickup_test(struct kunit *test)
 {
@@ -1842,6 +1903,7 @@ static struct kunit_case rx_loan_test_cases[] = {
 	KUNIT_CASE(rx_loan_tile_arena_test),
 	KUNIT_CASE(rx_loan_hold_test),
 	KUNIT_CASE(rx_loan_region_read_pickup_test),
+	KUNIT_CASE(rx_loan_consumer_read_cache_test),
 	KUNIT_CASE(rx_loan_region_write_cap_test),
 	{}
 };
