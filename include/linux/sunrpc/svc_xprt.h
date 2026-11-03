@@ -158,6 +158,7 @@ enum svc_rtc_reason {
 	SVC_RTC_FB_STABLE,		/* WRITE: DATA_SYNC/FILE_SYNC (IOCB_DSYNC) */
 	SVC_RTC_FB_CONN_FULL,		/* SVC_RTC_CONN_PARKED calls parked */
 	SVC_RTC_FB_SERV_FULL,		/* svc_rtc_parked_max() calls parked */
+	SVC_RTC_FB_DIR_OFF,		/* its direction switched off after peek */
 	SVC_RTC_NR_REASONS
 };
 
