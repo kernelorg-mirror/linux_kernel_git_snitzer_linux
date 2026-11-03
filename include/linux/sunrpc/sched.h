@@ -54,7 +54,7 @@ struct rpc_timeout {
 struct rpc_task {
 	atomic_t		tk_count;	/* Reference count */
 	int			tk_status;	/* result of last operation */
-	struct list_head	tk_task;	/* global list of tasks */
+	struct list_head	tk_task;	/* on a tk_client task shard */
 
 	/*
 	 * callback	to be executed after waking up
@@ -99,6 +99,7 @@ struct rpc_task {
 	unsigned char		tk_priority : 2,/* Task priority */
 				tk_garb_retry : 2,
 				tk_cred_retry : 2;
+	unsigned char		tk_shard;	/* index of the tk_task shard */
 };
 
 typedef void			(*rpc_action)(struct rpc_task *);

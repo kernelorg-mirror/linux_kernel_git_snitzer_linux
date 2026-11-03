@@ -10,6 +10,7 @@
 #ifndef _LINUX_SUNRPC_CLNT_H
 #define _LINUX_SUNRPC_CLNT_H
 
+#include <linux/cache.h>
 #include <linux/types.h>
 #include <linux/socket.h>
 #include <linux/in.h>
@@ -38,6 +39,24 @@ struct rpc_sysfs_client {
 	struct rpc_xprt_switch *xprt_switch;
 };
 
+/*
+ * An rpc_task is linked on one shard of its rpc_clnt's task list once it
+ * has obtained a transport request slot, and stays linked, also while it
+ * waits for a new slot after a restart, until rpc_task_release_client().
+ * rpc_killall_tasks(), rpc_cancel_tasks(), rpc_shutdown_client() and
+ * debugfs find tasks there.  The shard is chosen by the CPU that links
+ * the task, and its index is kept in task->tk_shard so that the task can
+ * be unlinked from any CPU.  Splitting the list keeps concurrent RPCs on
+ * one rpc_clnt from serializing on a single lock.
+ *
+ * RPC_CLNT_MAX_TASK_SHARDS must be a power of two that fits in tk_shard.
+ */
+#define RPC_CLNT_MAX_TASK_SHARDS	16
+
+struct rpc_task_shard {
+	spinlock_t		lock;		/* protects tasks */
+	struct list_head	tasks;
+} ____cacheline_aligned_in_smp;
 
 /*
  * The high-level client handle
@@ -46,9 +65,10 @@ struct rpc_clnt {
 	refcount_t		cl_count;	/* Number of references */
 	unsigned int		cl_clid;	/* client id */
 	struct list_head	cl_clients;	/* Global list of clients */
-	struct list_head	cl_tasks;	/* List of tasks */
+	struct rpc_task_shard	*cl_task_shards; /* Task list, sharded */
+	unsigned int		cl_task_nshards; /* Number of shards (2^n) */
 	atomic_t		cl_pid;		/* task PID counter */
-	spinlock_t		cl_lock;	/* spinlock */
+	spinlock_t		cl_lock;	/* serializes cl_xprt changes */
 	struct rpc_xprt __rcu *	cl_xprt;	/* transport */
 	const struct rpc_procinfo *cl_procinfo;	/* procedure info */
 	u32			cl_prog,	/* RPC program number */

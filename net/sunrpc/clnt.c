@@ -362,6 +362,97 @@ static void rpc_free_clid(struct rpc_clnt *clnt)
 	ida_free(&rpc_clids, clnt->cl_clid);
 }
 
+/*
+ * The client's task list is split into shards, each on its own cache
+ * line.  A shard per CPU would cost too much memory on servers with many
+ * clients (nfsd creates an rpc_clnt for every NFSv4 callback channel),
+ * and a modest number of shards already makes lock collisions rare.
+ */
+static int rpc_clnt_alloc_task_shards(struct rpc_clnt *clnt)
+{
+	unsigned int i, n;
+
+	BUILD_BUG_ON_NOT_POWER_OF_2(RPC_CLNT_MAX_TASK_SHARDS);
+	/* task->tk_shard is an unsigned char */
+	BUILD_BUG_ON(RPC_CLNT_MAX_TASK_SHARDS - 1 > U8_MAX);
+
+	n = min_t(unsigned int, roundup_pow_of_two(nr_cpu_ids),
+		  RPC_CLNT_MAX_TASK_SHARDS);
+	/*
+	 * A shard is a whole number of cache lines, and kmalloc() aligns an
+	 * object to the largest power of two that divides its size, so each
+	 * shard starts a cache line.
+	 */
+	clnt->cl_task_shards = kzalloc_objs(*clnt->cl_task_shards, n);
+	if (!clnt->cl_task_shards)
+		return -ENOMEM;
+	for (i = 0; i < n; i++) {
+		spin_lock_init(&clnt->cl_task_shards[i].lock);
+		INIT_LIST_HEAD(&clnt->cl_task_shards[i].tasks);
+	}
+	clnt->cl_task_nshards = n;
+	return 0;
+}
+
+/*
+ * Lockless test that every shard was empty when it was examined.  Unlike
+ * list_empty() on a single list, this is not a snapshot: a task can be
+ * linked on a shard already examined while another task is still linked
+ * on a shard not yet examined.  rpc_shutdown_client() and
+ * rpc_release_client() explain why that is enough for them.
+ */
+static bool rpc_clnt_tasks_empty(const struct rpc_clnt *clnt)
+{
+	unsigned int i;
+
+	for (i = 0; i < clnt->cl_task_nshards; i++)
+		if (!list_empty(&clnt->cl_task_shards[i].tasks))
+			return false;
+	return true;
+}
+
+/*
+ * Link @task on a shard of @clnt's task list.  Only the task itself links
+ * and unlinks tk_task, and does so from its own FSM steps or after it
+ * has finished running, so the lockless list_empty() test here and in
+ * rpc_clnt_del_task() is reliable: list operations on neighboring tasks
+ * change tk_task.next while @task is linked, but never make it point
+ * back to tk_task.
+ */
+static void rpc_clnt_add_task(struct rpc_clnt *clnt, struct rpc_task *task)
+{
+	struct rpc_task_shard *shard;
+	unsigned int idx;
+
+	/* Already linked by an earlier pass through call_reserveresult()? */
+	if (!list_empty(&task->tk_task))
+		return;
+	/*
+	 * Any shard is correct.  Using the current CPU's shard keeps this
+	 * CPU's insertions on one cache line; migrating right after
+	 * sampling the CPU number is harmless.
+	 */
+	idx = raw_smp_processor_id() & (clnt->cl_task_nshards - 1);
+	shard = &clnt->cl_task_shards[idx];
+	spin_lock(&shard->lock);
+	task->tk_shard = idx;
+	list_add_tail(&task->tk_task, &shard->tasks);
+	spin_unlock(&shard->lock);
+}
+
+static void rpc_clnt_del_task(struct rpc_clnt *clnt, struct rpc_task *task)
+{
+	struct rpc_task_shard *shard;
+
+	/* Tasks that never obtained a request slot were never linked */
+	if (list_empty(&task->tk_task))
+		return;
+	shard = &clnt->cl_task_shards[task->tk_shard];
+	spin_lock(&shard->lock);
+	list_del(&task->tk_task);
+	spin_unlock(&shard->lock);
+}
+
 static struct rpc_clnt * rpc_new_client(const struct rpc_create_args *args,
 		struct rpc_xprt_switch *xps,
 		struct rpc_xprt *xprt,
@@ -407,8 +498,10 @@ static struct rpc_clnt * rpc_new_client(const struct rpc_create_args *args,
 	err = -ENOMEM;
 	if (clnt->cl_metrics == NULL)
 		goto out_no_stats;
+	err = rpc_clnt_alloc_task_shards(clnt);
+	if (err)
+		goto out_no_shards;
 	clnt->cl_program  = program;
-	INIT_LIST_HEAD(&clnt->cl_tasks);
 	spin_lock_init(&clnt->cl_lock);
 
 	timeout = xprt->timeout;
@@ -444,6 +537,8 @@ static struct rpc_clnt * rpc_new_client(const struct rpc_create_args *args,
 	return clnt;
 
 out_no_path:
+	kfree(clnt->cl_task_shards);
+out_no_shards:
 	rpc_free_iostats(clnt->cl_metrics);
 out_no_stats:
 	put_cred(clnt->cl_cred);
@@ -896,19 +991,23 @@ EXPORT_SYMBOL_GPL(rpc_clnt_iterate_for_each_xprt);
 void rpc_killall_tasks(struct rpc_clnt *clnt)
 {
 	struct rpc_task	*rovr;
+	unsigned int i;
 
-
-	if (list_empty(&clnt->cl_tasks))
+	if (rpc_clnt_tasks_empty(clnt))
 		return;
 
-	/*
-	 * Spin lock all_tasks to prevent changes...
-	 */
 	trace_rpc_clnt_killall(clnt);
-	spin_lock(&clnt->cl_lock);
-	list_for_each_entry(rovr, &clnt->cl_tasks, tk_task)
-		rpc_signal_task(rovr);
-	spin_unlock(&clnt->cl_lock);
+	for (i = 0; i < clnt->cl_task_nshards; i++) {
+		struct rpc_task_shard *shard = &clnt->cl_task_shards[i];
+
+		/*
+		 * Spin lock the shard to prevent changes...
+		 */
+		spin_lock(&shard->lock);
+		list_for_each_entry(rovr, &shard->tasks, tk_task)
+			rpc_signal_task(rovr);
+		spin_unlock(&shard->lock);
+	}
 }
 EXPORT_SYMBOL_GPL(rpc_killall_tasks);
 
@@ -929,22 +1028,27 @@ unsigned long rpc_cancel_tasks(struct rpc_clnt *clnt, int error,
 {
 	struct rpc_task *task;
 	unsigned long count = 0;
+	unsigned int i;
 
-	if (list_empty(&clnt->cl_tasks))
+	if (rpc_clnt_tasks_empty(clnt))
 		return 0;
-	/*
-	 * Spin lock all_tasks to prevent changes...
-	 */
-	spin_lock(&clnt->cl_lock);
-	list_for_each_entry(task, &clnt->cl_tasks, tk_task) {
-		if (!RPC_IS_ACTIVATED(task))
-			continue;
-		if (!fnmatch(task, data))
-			continue;
-		rpc_task_try_cancel(task, error);
-		count++;
+	for (i = 0; i < clnt->cl_task_nshards; i++) {
+		struct rpc_task_shard *shard = &clnt->cl_task_shards[i];
+
+		/*
+		 * Spin lock the shard to prevent changes...
+		 */
+		spin_lock(&shard->lock);
+		list_for_each_entry(task, &shard->tasks, tk_task) {
+			if (!RPC_IS_ACTIVATED(task))
+				continue;
+			if (!fnmatch(task, data))
+				continue;
+			rpc_task_try_cancel(task, error);
+			count++;
+		}
+		spin_unlock(&shard->lock);
 	}
-	spin_unlock(&clnt->cl_lock);
 	return count;
 }
 EXPORT_SYMBOL_GPL(rpc_cancel_tasks);
@@ -974,10 +1078,18 @@ void rpc_shutdown_client(struct rpc_clnt *clnt)
 	trace_rpc_clnt_shutdown(clnt);
 
 	clnt->cl_shutdown = 1;
-	while (!list_empty(&clnt->cl_tasks)) {
+	/*
+	 * A task can be linked on a shard that this test has already found
+	 * empty.  Such a task got past call_start() before cl_shutdown took
+	 * effect, for example a backlogged task handed the slot of a task
+	 * that is exiting, and with a single list it could equally have
+	 * been linked just after list_empty().  It holds its own reference
+	 * to @clnt, and the cl_task_count wait below covers it as before.
+	 */
+	while (!rpc_clnt_tasks_empty(clnt)) {
 		rpc_killall_tasks(clnt);
 		wait_event_timeout(destroy_wait,
-			list_empty(&clnt->cl_tasks), 1*HZ);
+			rpc_clnt_tasks_empty(clnt), 1 * HZ);
 	}
 
 	/* wait for tasks still in workqueue or waitqueue */
@@ -1007,6 +1119,7 @@ static void rpc_free_client_work(struct work_struct *work)
 	rpc_clnt_remove_pipedir(clnt);
 	xprt_put(rcu_dereference_raw(clnt->cl_xprt));
 
+	kfree(clnt->cl_task_shards);
 	kfree(clnt);
 	rpciod_down();
 }
@@ -1071,7 +1184,24 @@ void
 rpc_release_client(struct rpc_clnt *clnt)
 {
 	do {
-		if (list_empty(&clnt->cl_tasks))
+		/*
+		 * Wake rpc_shutdown_client().  The full barrier in
+		 * wq_has_sleeper() pairs with the one in
+		 * prepare_to_wait_event(): either the waiter sees the task
+		 * list removal or cl_task_count decrement that preceded
+		 * this call, or this call sees the waiter.  The same
+		 * barrier separates this caller's unlink from its scan of
+		 * the other shards, so concurrent unlinks on different
+		 * shards cannot all miss one another: an execution in
+		 * which every scan misses some unlink would contain a
+		 * cycle of full barriers and from-read edges, which the
+		 * kernel memory model forbids.  Once every shard is empty,
+		 * either the waiter's own test sees that, or at least one
+		 * caller here sees the waiter and every shard empty.  Keep
+		 * wq_has_sleeper() as the first test.
+		 */
+		if (wq_has_sleeper(&destroy_wait) &&
+		    rpc_clnt_tasks_empty(clnt))
 			wake_up(&destroy_wait);
 		if (refcount_dec_not_one(&clnt->cl_count))
 			break;
@@ -1156,9 +1286,7 @@ void rpc_task_release_client(struct rpc_task *task)
 	rpc_task_release_transport(task);
 	if (clnt != NULL) {
 		/* Remove from client task list */
-		spin_lock(&clnt->cl_lock);
-		list_del(&task->tk_task);
-		spin_unlock(&clnt->cl_lock);
+		rpc_clnt_del_task(clnt, task);
 		task->tk_client = NULL;
 		atomic_dec(&clnt->cl_task_count);
 
@@ -1810,10 +1938,7 @@ call_reserveresult(struct rpc_task *task)
 			task->tk_action = call_refresh;
 
 			/* Add to the client's list of all tasks */
-			spin_lock(&task->tk_client->cl_lock);
-			if (list_empty(&task->tk_task))
-				list_add_tail(&task->tk_task, &task->tk_client->cl_tasks);
-			spin_unlock(&task->tk_client->cl_lock);
+			rpc_clnt_add_task(task->tk_client, task);
 			return;
 		}
 		rpc_call_rpcerror(task, -EIO);
@@ -3418,18 +3543,23 @@ void rpc_show_tasks(struct net *net)
 	struct rpc_task *task;
 	int header = 0;
 	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
+	unsigned int i;
 
 	spin_lock(&sn->rpc_client_lock);
 	list_for_each_entry(clnt, &sn->all_clients, cl_clients) {
-		spin_lock(&clnt->cl_lock);
-		list_for_each_entry(task, &clnt->cl_tasks, tk_task) {
-			if (!header) {
-				rpc_show_header(clnt);
-				header++;
+		for (i = 0; i < clnt->cl_task_nshards; i++) {
+			struct rpc_task_shard *shard = &clnt->cl_task_shards[i];
+
+			spin_lock(&shard->lock);
+			list_for_each_entry(task, &shard->tasks, tk_task) {
+				if (!header) {
+					rpc_show_header(clnt);
+					header++;
+				}
+				rpc_show_task(clnt, task);
 			}
-			rpc_show_task(clnt, task);
+			spin_unlock(&shard->lock);
 		}
-		spin_unlock(&clnt->cl_lock);
 	}
 	spin_unlock(&sn->rpc_client_lock);
 }

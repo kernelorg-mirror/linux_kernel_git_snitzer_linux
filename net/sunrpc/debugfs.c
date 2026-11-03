@@ -38,18 +38,28 @@ tasks_show(struct seq_file *f, void *v)
 	return 0;
 }
 
+/*
+ * While the iterator points at a task, the lock of that task's shard is
+ * held, so the task cannot be unlinked and freed.  Only one shard lock
+ * is held at a time.
+ */
 static void *
 tasks_start(struct seq_file *f, loff_t *ppos)
-	__acquires(&clnt->cl_lock)
 {
 	struct rpc_clnt *clnt = f->private;
 	loff_t pos = *ppos;
 	struct rpc_task *task;
+	unsigned int i;
 
-	spin_lock(&clnt->cl_lock);
-	list_for_each_entry(task, &clnt->cl_tasks, tk_task)
-		if (pos-- == 0)
-			return task;
+	for (i = 0; i < clnt->cl_task_nshards; i++) {
+		struct rpc_task_shard *shard = &clnt->cl_task_shards[i];
+
+		spin_lock(&shard->lock);
+		list_for_each_entry(task, &shard->tasks, tk_task)
+			if (pos-- == 0)
+				return task;
+		spin_unlock(&shard->lock);
+	}
 	return NULL;
 }
 
@@ -58,22 +68,36 @@ tasks_next(struct seq_file *f, void *v, loff_t *pos)
 {
 	struct rpc_clnt *clnt = f->private;
 	struct rpc_task *task = v;
-	struct list_head *next = task->tk_task.next;
+	unsigned int i = task->tk_shard;
+	struct rpc_task_shard *shard = &clnt->cl_task_shards[i];
 
 	++*pos;
 
-	/* If there's another task on list, return it */
-	if (next == &clnt->cl_tasks)
-		return NULL;
-	return list_entry(next, struct rpc_task, tk_task);
+	/* If there's another task on this shard, return it */
+	if (!list_is_last(&task->tk_task, &shard->tasks))
+		return list_next_entry(task, tk_task);
+
+	/* Otherwise return the first task on the next non-empty shard */
+	spin_unlock(&shard->lock);
+	while (++i < clnt->cl_task_nshards) {
+		shard = &clnt->cl_task_shards[i];
+		spin_lock(&shard->lock);
+		if (!list_empty(&shard->tasks))
+			return list_first_entry(&shard->tasks, struct rpc_task,
+						tk_task);
+		spin_unlock(&shard->lock);
+	}
+	return NULL;
 }
 
 static void
 tasks_stop(struct seq_file *f, void *v)
-	__releases(&clnt->cl_lock)
 {
 	struct rpc_clnt *clnt = f->private;
-	spin_unlock(&clnt->cl_lock);
+	struct rpc_task *task = v;
+
+	if (task)
+		spin_unlock(&clnt->cl_task_shards[task->tk_shard].lock);
 	seq_printf(f, "clnt[%pISpc] RPC tasks[%d]\n",
 		   (struct sockaddr *)&clnt->cl_xprt->addr,
 		   atomic_read(&clnt->cl_task_count));

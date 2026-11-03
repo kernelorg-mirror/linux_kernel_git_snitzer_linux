@@ -1378,7 +1378,7 @@ static void rpc_release_task(struct rpc_task *task)
 	rpc_release_resources_task(task);
 
 	/*
-	 * Note: at this point we have been removed from rpc_clnt->cl_tasks,
+	 * Note: at this point we are no longer on the rpc_clnt's task list,
 	 * so it should be safe to use task->tk_count as a test for whether
 	 * or not any other processes still hold references to our rpc_task.
 	 */
