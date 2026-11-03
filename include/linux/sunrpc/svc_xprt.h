@@ -269,6 +269,9 @@ struct svc_rtc_rqst {
 struct svc_rtc_pool {
 	const struct svc_rtc_ops *ops;
 	struct lwq		free;
+	/* per-CPU free lists; the shared list serves fill and resize */
+	struct lwq		*shard;
+	unsigned int		nshard;
 	struct list_head	all;
 	unsigned int		nr;
 	unsigned int		want;	/* target from parked calls */
