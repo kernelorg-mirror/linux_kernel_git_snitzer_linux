@@ -1247,20 +1247,34 @@ const struct svc_version nfsd_version3 = {
 };
 
 /*
- * Run-to-completion NFSv3 READ (svc_rtc_register()).  Registered at every
- * nfsd_create_serv(); want() keeps buffered configs on the thread path and
- * follows io_cache_read when it changes while the service runs.
+ * Run-to-completion NFSv3 READ and WRITE (svc_rtc_register()).  Registered
+ * at every nfsd_create_serv().  A receive is diverted while either
+ * direction is switched on (debugfs rtc_read, rtc_write) and its mode is
+ * direct, so a config with neither pays no work-item hop and a switch
+ * takes effect at the next receive.  The peek admits only a switched-on
+ * direction's call; the other goes to a thread unreceived.  Each op also
+ * reads its own switch and mode (nfsd_rtc_read(), nfsd_rtc_write()): one
+ * that is off or not direct misses back to a thread and never runs on the
+ * work item.  The switches leave the IO mode alone.
  */
 static bool nfsd3_rtc_want(struct svc_xprt *xprt)
 {
-	return READ_ONCE(nfsd_io_cache_read) == NFSD_IO_DIRECT;
+	return (READ_ONCE(nfsd_rtc_read_on) &&
+		READ_ONCE(nfsd_io_cache_read) == NFSD_IO_DIRECT) ||
+	       (READ_ONCE(nfsd_rtc_write_on) &&
+		READ_ONCE(nfsd_io_cache_write) == NFSD_IO_DIRECT);
 }
 
 static bool nfsd3_rtc_want_call(struct svc_xprt *xprt, u32 prog, u32 vers,
 				u32 proc)
 {
-	return prog == NFS_PROGRAM && vers == 3 &&
-	       (proc == NFS3PROC_READ || proc == NFS3PROC_WRITE);
+	if (prog != NFS_PROGRAM || vers != 3)
+		return false;
+	if (proc == NFS3PROC_READ)
+		return READ_ONCE(nfsd_rtc_read_on);
+	if (proc == NFS3PROC_WRITE)
+		return READ_ONCE(nfsd_rtc_write_on);
+	return false;
 }
 
 /* A pool rqst gets the per-thread state nfsd() keeps on its stack. */

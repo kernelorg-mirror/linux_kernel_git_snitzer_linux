@@ -1164,6 +1164,7 @@ void svc_rtc_stats_show(struct seq_file *m)
 		[SVC_RTC_FB_STABLE]	= "stable",
 		[SVC_RTC_FB_CONN_FULL]	= "conn_full",
 		[SVC_RTC_FB_SERV_FULL]	= "serv_full",
+		[SVC_RTC_FB_DIR_OFF]	= "dir_off",
 	};
 	struct svc_rtc_stats s;
 	int i;
