@@ -36,10 +36,12 @@
 # port-setup.sh (MTU 7792, 4 rings of 256, in the region).  It takes each
 # port down and up first, which zeroes its rings' counters, and puts the
 # rings' interrupts back on their CPUs afterwards.
-# RUNTIME=<s> (45), JOBS=<n> (16), BS (8M), NCONN (16), PLACE=0 to leave
+# RUNTIME=<s> (45), JOBS=<n> (16), BS (8M), NCONN (16 on one port; on two,
+# common.sh's TWO_NCONN: 12 on tardis2, 16 on tardis1), PLACE=0 to leave
 # the flows where they fall.  For a run and put back after it:
 # The setting is settled.sh's: a run on both ports is at the two-port
-# setting (RCVBUF=393216 ENTRIES=128 LINGER=0 unless given), a run on one
+# setting (RCVBUF=$TWO_RCVBUF ENTRIES=128 LINGER=0 unless given: 512 KiB on
+# tardis2, 384 KiB on tardis1), a run on one
 # port at the one-port setting.  settled.sh audits the host before the run
 # changes anything (audit-start.txt) and the live state just before the load
 # (audit.txt), and the run refuses if anything differs from the setting or
@@ -107,7 +109,7 @@ which_ok "$WHICH" || exit 1
 # one-port setting, unless it asks otherwise (settled.sh, README.md "Where
 # it stands").
 if [ ${#WHICH} = 2 ]; then
-	MODE_SET=two; RCVBUF=${RCVBUF-393216}; ENTRIES=${ENTRIES-128}; LINGER=${LINGER-0}
+	MODE_SET=two; RCVBUF=${RCVBUF-$TWO_RCVBUF}; ENTRIES=${ENTRIES-128}; LINGER=${LINGER-0}; NCONN=${NCONN:-$TWO_NCONN}
 else
 	MODE_SET=one
 fi

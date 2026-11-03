@@ -627,6 +627,11 @@ the tardis2 sections below, it is right.
   makes a one-port run.
 - **After a boot:** `./bringup.sh 32768 256` now mounts the drives, starts
   nfs-server and puts both ports in the region, then `./settled.sh apply`.
+- **The two-port setting (Mike, 3 November): 12 connections a port, a
+  512 KiB held buffer, rings of 128,** in `common.sh` (`TWO_RCVBUF`,
+  `TWO_NCONN`) for tardis2 only: 66 to 70 GB/s in loan mode at 48 to 49 MiB
+  of the region in use, against 63 GB/s and 55 MiB at 16 and 384 KiB. The
+  account is `../FLAMEGRAPH/56-eight-sgl-two-ports/README.md`.
 
 # 29 October: the kernel with the region's per-device mapping — tardis1 copy on two ports, tardis2 loan on one
 

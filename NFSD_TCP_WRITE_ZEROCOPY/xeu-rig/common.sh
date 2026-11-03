@@ -20,6 +20,17 @@ esac
 declare -A PDEVS=([a]=enp161s0f0 [b]=enp164s0f0)
 declare -A SRVP=([a]=192.168.1.$SRVHOST [b]=192.168.0.$SRVHOST) CLIP=([a]=192.168.1.106 [b]=192.168.0.106)
 declare -A PFS=([a]="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" [b]="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7")
+# The two-port setting's held buffer and connections a port (each port's
+# client mount's nconnect, which the server cannot set).  tardis2 from 3
+# November (Mike, FLAMEGRAPH round 56): 12 connections a port at 512 KiB
+# on rings of 128 carried 66.4 and 70.5 GB/s in loan mode, against 62.96 at
+# 16 and 384 KiB, with 48 to 49 MiB of the region in use against 55 and nfsd
+# 272k to 279k cycles a WRITE against 282k.  tardis1 keeps 16 at 384 KiB,
+# measured in copy mode, until it is measured there.
+case $HOST in
+tardis2) TWO_RCVBUF=524288; TWO_NCONN=12 ;;
+*)       TWO_RCVBUF=393216; TWO_NCONN=16 ;;
+esac
 DEFWHICH=$(tr -d ' ' <<< "$PORTS")	# a script's default ports: "ab" or "a"
 # which_ok <a|b|ab>: the ports asked for are this host's
 which_ok() {
