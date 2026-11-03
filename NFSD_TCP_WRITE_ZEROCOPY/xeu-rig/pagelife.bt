@@ -61,6 +61,20 @@ fexit:vmlinux:page_pool_alloc_pages
 				} else {
 					@n["put, page free at put"] = count();
 					@sum["5b to repost, page free at put"] = sum(($now - $r) / 1000); @us["5b to repost, page free at put"] = hist(($now - $r) / 1000);
+					$rin = @rin[$p]; $cin = @cin[$p];
+					if ($rin >= $r && $cin >= $rin) {
+						@n["5b via the region"] = count();
+						@sum["5b.1 put .. into the region"] = sum(($rin - $r) / 1000);
+						@sum["5b.2 free in the region"] = sum(($cin - $rin) / 1000); @us["5b.2 free in the region"] = hist(($cin - $rin) / 1000);
+						@sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+					} else if ($cin >= $r) {
+						@n["5b via the pool's stack"] = count();
+						@sum["5b.4 put .. out of the stack (in the stack)"] = sum(($cin - $r) / 1000); @us["5b.4 put .. out of the stack (in the stack)"] = hist(($cin - $r) / 1000);
+						@sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+					} else {
+						@n["5b straight to the alloc cache"] = count();
+						@sum["5b.5 put .. posted, straight to the alloc cache"] = sum(($now - $r) / 1000);
+					}
 				}
 			} else {
 				@n["loaned, no put seen"] = count();
@@ -71,7 +85,7 @@ fexit:vmlinux:page_pool_alloc_pages
 			@sum["0 not loaned"] = sum(($now - $a) / 1000); @us["0 not loaned"] = hist(($now - $a) / 1000);
 		}
 	}
-	delete(@borrow[$p]); delete(@held[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
+	delete(@borrow[$p]); delete(@held[$p]); delete(@rin[$p]); delete(@cin[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
 	@post[$p] = nsecs;
 }
 
@@ -110,8 +124,35 @@ fentry:sunrpc:svc_tcp_rx_put_borrowed
 	}
 }
 
+/* Where a free page waits: the region's free lists, then the pool's alloc
+ * cache, filled from the region (page_pool_rx_region_alloc) or from the
+ * pool's stack of returned pages (page_pool_rx_stack_refill).  A page put
+ * into a pool's stack is not seen until it leaves it. */
+fentry:vmlinux:__page_pool_rx_region_put
+{
+	@rv[tid] = (uint64)args.page; $p = @rv[tid];
+	if ((($p >> 6) & 7) == 0 && @post[$p]) { @rin[$p] = nsecs; }
+}
+fentry:vmlinux:page_pool_rx_stack_refill, fentry:vmlinux:page_pool_rx_region_alloc
+{
+	@c0[tid] = args.pool->alloc.count;
+}
+fexit:vmlinux:page_pool_rx_stack_refill, fexit:vmlinux:page_pool_rx_region_alloc
+{
+	$c0 = @c0[tid]; $end = args.pool->alloc.count; $now = nsecs; $pool = args.pool;
+	/* bpf_loop, not unrolled: a refill moves at most PP_ALLOC_CACHE_REFILL */
+	for ($i : 0..64) {
+		if ($c0 + $i < $end) {
+			$q = (uint64)$pool->alloc.cache[$c0 + $i];
+			if ((($q >> 6) & 7) == 0 && @post[$q]) { @cin[$q] = $now; }
+		}
+	}
+	$p = (uint64)retval;
+	if ($p && (($p >> 6) & 7) == 0 && @post[$p]) { @cin[$p] = $now; }
+}
+
 END
 {
 	printf("traced_us %d, one page in 8\n", (nsecs - @t0) / 1000);
-	clear(@post); clear(@held); clear(@borrow); clear(@tid); clear(@put); clear(@w0); clear(@w1); clear(@ws); clear(@we); clear(@rv);
+	clear(@post); clear(@held); clear(@rin); clear(@cin); clear(@c0); clear(@borrow); clear(@tid); clear(@put); clear(@w0); clear(@w1); clear(@ws); clear(@we); clear(@rv);
 }
