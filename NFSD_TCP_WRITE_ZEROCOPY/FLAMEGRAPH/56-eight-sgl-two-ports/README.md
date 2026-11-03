@@ -29,3 +29,22 @@ Copy on tardis1 took 2.17 bytes a byte, about 131 GB/s at 60.4. So at the same r
 - **The rings:** a ring of 128 holds about 990 KB and has four connections, so a window of about 247 KiB fills it. 512 KiB's window is 244 KiB and that is where ring drops begin. Rings of 256 moved the loss to the FIFO at 750 KiB.
 - **Not explained:** 448 KiB's dip. tardis1 at 4 x 128 shows the same shape (61.02 at 384, 49.15 at 448).
 - **Not known:** PCIe MaxPayload reads 128 bytes on the card and the drives checked; not in `settled.sh` or the docs searched, and tardis1 is down.
+
+## Rings of 256 and the ceiling (run147, run148)
+
+One run a cell, except where two figures are given.
+
+| held buffer, rings | GB/s | window | client held by the window | drops a / b | client retransmits | region peak | to memory, GB/s | bytes a byte |
+|---|---|---|---|---|---|---|---|---|
+| 448 KiB, 128 | 52.69, 59.17 | 202 KiB | 96% | ring 24 / 21, 310 / 274 | 49, 595 | 6,745, 8,926 | | |
+| 480 KiB, 128 | 69.69 | 229 KiB | 80.1% | ring 5,069 / 5,058 | 10,568 | 11,436 | | |
+| **512 KiB, 256** | **73.27** | 241 KiB | 98.0% | **none** | **5** | 12,316 | not taken | |
+| 576 KiB, 256 | 73.24 | 270 KiB | 95.8% | FIFO 284 / 286 | 598 | 12,290 | 140 | 1.90 |
+| 640 KiB, 256 | 73.57 | 279 KiB | 90.9% | FIFO 4,610 / 4,318 | 9,300 | 11,924 | 140 | 1.89 |
+
+- **512 KiB at rings of 256 is the best setting found:** 73.27 GB/s with nothing lost, against 61.93 at tardis1's. Its cost: nfsd 322.6k and the rings 164.9k cycles a WRITE, the highest here.
+- **448 KiB is unsteady, not a dip:** 52.69 and 59.17 at one setting. Rings of 128 go from about 300 drops at 448 KiB to about 5,000 at 480, and the rate from about 59 to about 70. Why it jumps is not explained.
+- **About 73 GB/s is a ceiling at rings of 256:** the rate is flat from 512 to 640 KiB, memory requests are 2.18e9/s (about 140 GB/s) at both sizes taken, and only the FIFO drops grow. That fits the card being unable to get frames into memory, but it is not shown: tardis2's DIMM layout is not recorded, so its limit is not known.
+- **Rings of 256 cost the loan most of its memory saving:** 1.19 bytes a byte at 384 KiB and rings of 128, 1.57 at 512 and 128, 1.90 at 576 and 256. At 1.90, 80 GB/s needs about 152 GB/s of memory; at 1.19, about 95.
+
+`settled.sh` still holds 384 KiB and rings of 128 for two ports.
