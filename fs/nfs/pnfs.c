@@ -1593,6 +1593,12 @@ static int pnfs_layout_return_on_reboot(struct pnfs_layout_hdr *lo)
 
 static void pnfs_list_write_lseg(struct inode *inode, struct list_head *listp);
 
+/* LAB ONLY: never to be posted.  N sends the standalone LAYOUTCOMMIT. */
+static bool pnfs_close_layoutcommit = true;
+module_param_named(close_layoutcommit, pnfs_close_layoutcommit, bool, 0644);
+MODULE_PARM_DESC(close_layoutcommit,
+		 "LAB ONLY: send the last close's LAYOUTCOMMIT inside the CLOSE compound");
+
 /*
  * The last close of a file written through a layout whose driver allows it
  * (PNFS_LAYOUTCOMMIT_IN_CLOSE) can carry its LAYOUTCOMMIT in the CLOSE, or
@@ -1734,7 +1740,7 @@ static bool __pnfs_roc(struct inode *ino, struct nfs4_layoutreturn_args *args,
 	 * taken.  Not for a driver with ->prepare_layoutcommit(), which this
 	 * path does not call.
 	 */
-	if (lcp &&
+	if (lcp && READ_ONCE(pnfs_close_layoutcommit) &&
 	    (NFS_SERVER(ino)->pnfs_curr_ld->flags &
 	     PNFS_LAYOUTCOMMIT_IN_CLOSE) &&
 	    !NFS_SERVER(ino)->pnfs_curr_ld->prepare_layoutcommit &&
