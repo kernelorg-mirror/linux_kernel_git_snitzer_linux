@@ -176,3 +176,24 @@ few instructions a piece it is not worth a new field.
 default) the inlined one. From this directory:
 `../ab-switch.sh blk t2-r172 > run172.out` (four loan runs A B B A, latency A B
 B A then B A A B, a profile of B).
+
+## The A/B on build 507 (tardis2, 3 November), the loan runs
+
+`../ab-switch.sh blk t2-r172` (`run172.out`, logs in `$L/t2-r172`), both
+ports, 12 connections a port at 512 KiB, rings of 128, budget 128;
+`page_pool.rx_region_bulk_ab` at Y throughout (round 58, kept).
+
+| run | GB/s | nfsd cycles a WRITE | instructions | rings | region in use at the middle | peak |
+|---|---|---|---|---|---|---|
+| blk-1-A (N) | 70.54 | 279.6k | 278.2k | 145.3k | 3304 (52 MiB) | 3664 |
+| blk-2-B (Y) | 70.01 | 275.9k | 272.7k | 143.7k | 3408 (53 MiB) | 3763 |
+| blk-3-B (Y) | 67.63 | 270.0k | 272.8k | 144.2k | 3088 (48 MiB) | 4455 |
+| blk-4-A (N) | 65.63 | 269.5k | 278.7k | 143.9k | 2935 (46 MiB) | 2956 |
+
+The inline takes 5.7k instructions off a WRITE on nfsd (278.45k to
+272.75k, -2.0%), the same in every run. Cycles fall less, 274.6k to
+273.0k (-0.6%), inside the drift: on this boot cycles a WRITE follow the
+rate (about 276 to 280k at 70 GB/s, 270k at 66 to 68), and the A pair
+spans both. Rate level (68.09 against 68.82 GB/s), the region the same.
+blk-4-A was disturbed: 813 ring drops on port b and 868 client
+retransmits, against 19 to 183 and 66 to 322 in the others.
