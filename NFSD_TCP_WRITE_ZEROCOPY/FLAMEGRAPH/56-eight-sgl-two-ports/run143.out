@@ -1,0 +1,1 @@
+00:44:45 b1 | total 61.93 GB/s | 1 no-step | 1 no-stall | 2 placed | b1 ring 14.7 nfsd 89.1 us/W (60139 WRITEs/s) | ring 75.8k cycles 146.1k instructions, nfsd 280.3k cycles 281.5k instructions a WRITE | peak 9881 | mean in use 3573 | alloc_fail 0 | admitted 2389016, denied 0 | client retransmits in the window: 75
