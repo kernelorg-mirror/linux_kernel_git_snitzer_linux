@@ -199,6 +199,15 @@ cleanly and touches only that commit's `nfsd4_kunit_serv()`.
 `Fixes:`: it goes into `nfsd: decode on a real service in the nfsd4 KUnit
 suite`.
 
+**Drop at the next regroup (3 November):** `DROP: page_pool, block: A/B
+switches for FLAMEGRAPH rounds 55 and 58`, a temporary commit at the tip
+for the A/B on one boot (`page_pool.rx_region_bulk_ab`,
+`blk_mq_dma.map_iter_inline`). The three code commits before it
+(`page_pool: count a bulk returned to the receive region with one atomic`,
+`page_pool: prefetch the region list's top before taking the region's
+lock`, `block: inline blk_map_iter_next()`) stay or go on that A/B:
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/ab-switch.sh`, rounds 55 and 58.
+
 ## NFSD TCP write-path zero-copy (page-loan series)
 
 The server-side page-loan work — eliminating the redundant receive-side data

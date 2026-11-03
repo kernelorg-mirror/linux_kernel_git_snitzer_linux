@@ -1,0 +1,20 @@
+events {'cycles': 103906162989, 'instructions': 125977143541, 'l1d_cache_refill': 1117702639, 'l2d_cache_refill': 1836821027}
+symbol                             %cyc   IPC L1 refills/kI L2 refills/kI %L2 refill
+ALL                              100.00  1.21           8.9          14.6     100.00
+svc_tcp_rx_append_ref              2.22  2.92           2.6           4.0       1.46
+svc_tcp_rx_borrow_segment          1.94  3.62           2.4           2.9       1.16
+blk_map_iter_next                  1.73  4.19           1.8           1.3       0.51
+svc_tcp_rx_release_refs            1.40  2.74           2.8           3.6       0.77
+svc_tcp_rx_walk_skb                1.25  3.76           2.4           3.0       0.80
+dma_direct_map_phys                1.03  2.48           3.5           3.1       0.45
+bio_split_io_at                    0.82  3.37           1.0           2.4       0.38
+dma_map_phys                       0.74  3.95           2.6           1.7       0.28
+blk_mq_submit_bio                  0.71  0.72           7.2          27.1       0.79
+blk_rq_dma_map_iter_next           0.62  5.30           1.6           1.0       0.19
+nvme_pci_setup_data_sgl            0.34  5.10           1.5           1.3       0.13
+nvme_queue_rqs                     0.27  0.40          34.8          67.7       0.42
+nvme_map_data                      0.13  1.20          15.4          14.4       0.13
+iomap_dio_bio_iter_one             0.08  1.76           3.1           6.8       0.06
+blk_rq_dma_map_iter_start          0.04  1.10          17.7          18.5       0.05
+bio_submit_split                   0.04  1.80           0.7           9.4       0.04
+nvme_prep_rq.part.0                0.03  1.82           3.4           7.6       0.03

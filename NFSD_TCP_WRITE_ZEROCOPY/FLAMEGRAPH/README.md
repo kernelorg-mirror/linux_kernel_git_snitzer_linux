@@ -254,7 +254,11 @@ decided.
    a WRITE, 5.9% of nfsd, at IPC 3 to 5: the kind of target that paid in
    round 52. After a new baseline on tardis2's added drives and second
    port, starting from a trace. 1 to 2 us at a guess. It likely needs a
-   new kernel. Waits (Mike, 3 November) after round 56.
+   new kernel. Waits (Mike, 3 November) after round 56. Traced 3 November
+   on build 506: the split walks each piece once, the map walk never merges,
+   and the walk runs at IPC 4 to 5 with few refills, so it is the calls a
+   piece, not misses. Change: `block: inline blk_map_iter_next()`, to be
+   tested on the next kernel (`ab-switch.sh blk`).
 25. **Round 56: eight SGL drives on two ports** (Mike, 3 November;
    [56-eight-sgl-two-ports](56-eight-sgl-two-ports/README.md)). The sweeps
    that settled tardis2's two ports at 12 connections a port, 512 KiB and
@@ -273,7 +277,11 @@ decided.
    region lock. The lock is not contended (`queued_spin_lock_slowpath` 0.02),
    so the cost is the work done under it with interrupts off. A trace of
    pages a hold and holds a WRITE on build 506 first, then a change in
-   page_pool, in the kernel that carries round 55's.
+   page_pool, in the kernel that carries round 55's. Traced 3 November: 1.78
+   holds and 19.4 pages a WRITE, 2.1 us a hold, waits on 1.9% of holds; the
+   hold runs at IPC 0.5 on misses. Changes: one atomic for a bulk's release
+   count, and the list's top prefetched before the lock, to be tested on the
+   next kernel (`ab-switch.sh pp`).
 28. **Round 59: pages free in the region** (planned, 3 November; a look
    first). Round 57's page life: 15% of the pages free at their put go into
    the region and wait about 1.3 ms (median 128 to 256 us) before a pool
@@ -281,7 +289,9 @@ decided.
    in-use count. What they cost is in the L3: they are pages that go round. A
    trace of which slot's list and how deep a page sits decides whether a
    change (for example, handing the region's newest pages first, across
-   slots) is worth a kernel.
+   slots) is worth a kernel. [59-region-free](59-region-free/README.md):
+   each port's LIFO list holds 4K to 8K pages, and the 377 are round 58's
+   round trip seen from the pages; no kernel change of its own.
 
 ## Where the kept rounds stand (2026-10-28)
 

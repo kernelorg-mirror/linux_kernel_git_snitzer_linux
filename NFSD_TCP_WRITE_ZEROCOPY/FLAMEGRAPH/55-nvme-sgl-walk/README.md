@@ -117,3 +117,62 @@ Read from the source of build 506 (`block/blk-merge.c`, `block/blk-mq-dma.c`,
 Reviewers: block and NVMe (Christoph Hellwig, Keith Busch, Jens Axboe), not
 Chuck Lever. Do not grow the region's footprint; this path holds no region
 page longer.
+
+## The trace and the PMU on build 506 (3 November)
+
+Both on tardis2 at the two-port setting, nfsd `3F0C341E86E266D5FDF2ADF`,
+sunrpc `5DDCC44639FC73AF533513F`.
+
+**[sglwalk.txt](sglwalk.txt)** (run168, `xeu-rig/sglwalk.bt` for 10 s, the run
+at 68.07 GB/s, about 580,000 WRITEs):
+- **`bio_split_io_at()`: four calls a WRITE, three splits.** The calls see
+  1 MiB, 768 KiB, 512 KiB and 256 KiB left, and each stops at its split, so
+  each piece is walked once by the split. There is no repeated walk inside it.
+- **About 3.5 requests a WRITE of 256 KiB,** `nr_phys_segments` 32 to 36
+  (34.9 on average), about 125 pieces a WRITE.
+- **The map walk never merges:** in all 2,011,208 requests the SGL entries
+  written equal `nr_phys_segments`. The merge test in `blk_map_iter_next()`
+  is paid on every piece and never succeeds.
+- The times per call in the trace include the probes' own cost (nested
+  probes add to the outer ones), so they are used only to rank.
+
+**[pmu.txt](pmu.txt)** (run170, [run170.sh](run170.sh), cycles, instructions
+and L1 and L2 refills sampled on nfsd's CPUs for 8 s, 67.27 GB/s):
+
+| function | % of nfsd's cycles | IPC | L1 refills / k instructions | L2 refills / k instructions |
+|---|---|---|---|---|
+| `blk_map_iter_next` | 1.73 | 4.19 | 1.8 | 1.3 |
+| `dma_direct_map_phys` | 1.03 | 2.48 | 3.5 | 3.1 |
+| `bio_split_io_at` | 0.82 | 3.37 | 1.0 | 2.4 |
+| `dma_map_phys` | 0.74 | 3.95 | 2.6 | 1.7 |
+| `blk_rq_dma_map_iter_next` | 0.62 | 5.30 | 1.6 | 1.0 |
+| `nvme_pci_setup_data_sgl` | 0.34 | 5.10 | 1.5 | 1.3 |
+| all of nfsd | 100 | 1.21 | 8.9 | 14.6 |
+
+- **The walk is instructions, not misses.** The per-piece functions run at
+  IPC 2.5 to 5.3 with a fifth of nfsd's refills. In round 57's profile the
+  samples of `blk_map_iter_next` and `bio_split_io_at` pile up after the
+  loads of the bvec table (37% and 45%), which looked like misses. The PMU
+  says they are not, so a prefetch of the table was not written.
+- **What a piece costs is the calls:** about 4.5% of nfsd's cycles (5.3 with the split) for about
+  125 pieces a WRITE, through four calls a piece (`nvme_pci_setup_data_sgl`
+  → `blk_rq_dma_map_iter_next` → `blk_map_iter_next`, `dma_map_phys` →
+  `dma_direct_map_phys`), each return checked by pointer authentication: in
+  `dma_map_phys`, `autiasp` and `ret` take 29% of its samples.
+
+## The change
+
+`block: inline blk_map_iter_next()` (code group, at the tip): one call a
+piece fewer, inside the block layer, with no change to what is mapped. The
+merge test stays: removing it would need the split to tell the map walk that
+nothing can merge, and the split does not look at physical addresses. At a
+few instructions a piece it is not worth a new field.
+
+**Estimate: 0.5 to 1 µs a WRITE (about 125 calls and returns), a guess.**
+
+**To test, on the kernel built from the tip** (with the temporary commit
+`DROP: page_pool, block: A/B switches for FLAMEGRAPH rounds 55 and 58`):
+`blk_mq_dma.map_iter_inline` N calls an out-of-line copy as before, Y (the
+default) the inlined one. From this directory:
+`../ab-switch.sh blk t2-r172 > run172.out` (four loan runs A B B A, latency A B
+B A then B A A B, a profile of B).
