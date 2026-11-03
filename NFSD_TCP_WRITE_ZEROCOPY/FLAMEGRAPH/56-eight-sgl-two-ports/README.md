@@ -42,7 +42,7 @@ One run a cell, except where two figures are given.
 | 576 KiB, 256 | 73.24 | 270 KiB | 95.8% | FIFO 284 / 286 | 598 | 12,290 | 140 | 1.90 |
 | 640 KiB, 256 | 73.57 | 279 KiB | 90.9% | FIFO 4,610 / 4,318 | 9,300 | 11,924 | 140 | 1.89 |
 
-- **512 KiB at rings of 256 is the best setting found:** 73.27 GB/s with nothing lost, against 61.93 at tardis1's. Its cost: nfsd 322.6k and the rings 164.9k cycles a WRITE, the highest here.
+- **512 KiB at rings of 256 is the fastest setting found, and is not to be settled:** 73.27 GB/s with nothing lost, against 61.93 at tardis1's, but at 68 to 70 MiB of the region in use and 1.84 bytes a byte against 47 MiB and 1.19 (Mike, 3 November: the lowest footprint at the best rate). Its cost: nfsd 322.6k and the rings 164.9k cycles a WRITE, the highest here.
 - **448 KiB is unsteady, not a dip:** 52.69 and 59.17 at one setting. Rings of 128 go from about 300 drops at 448 KiB to about 5,000 at 480, and the rate from about 59 to about 70. Why it jumps is not explained.
 - **About 73 GB/s is a ceiling at rings of 256:** the rate is flat from 512 to 640 KiB, memory requests are 2.18e9/s (about 140 GB/s) at both sizes taken, and only the FIFO drops grow. That fits the card being unable to get frames into memory, but it is not shown: tardis2's DIMM layout is not recorded, so its limit is not known.
 - **Rings of 256 cost the loan most of its memory saving:** 1.19 bytes a byte at 384 KiB and rings of 128, 1.57 at 512 and 128, 1.90 at 576 and 256. At 1.90, 80 GB/s needs about 152 GB/s of memory; at 1.19, about 95.
@@ -69,6 +69,10 @@ One run a budget, the memory traffic beside each.
 | 64 | 72.26 | none | 2 | 7,417 | 68 MiB | 134 | 1.85 | 160,893 |
 | 48 | 71.79 | none | 9 | 6,307 | 69 MiB | 128 | 1.78 | 1,970,803 |
 
-The budget sets the peak and costs almost no rate down to 48 WRITEs (about 0.7 refusals a WRITE). It does not move the pages in use in the middle of a run or the bytes a byte: what fills the L3 at rings of 256 is not the loans the budget bounds. 128 against run147's 73.27 shows the setting is steady.
+The budget sets the peak and costs almost no rate down to 48 WRITEs (about 0.7 refusals a WRITE). It does not move the pages in use in the middle of a run or the bytes a byte: what fills the L3 at rings of 256 is not the loans the budget bounds. The peak is the budget's; the region's use in the middle of a run is the measure against the L3, and on it rings of 256 are about 21 MiB over the settled setting at any budget. 128 against run147's 73.27 shows the setting is steady.
+
+## Where it stands
+
+The settled two-port setting, 384 KiB and four rings of 128, stays: the lowest footprint that loses nothing (47 MiB in use, 1.19 bytes a byte, about 61 GB/s). Every setting that carries more holds more of the region, in the middle of a run as well as at its peak. 80 GB/s within the L3 needs less of the region for each byte of window, which is a change to the code, not to the setting.
 
 `settled.sh` still holds 384 KiB and rings of 128 for two ports.
