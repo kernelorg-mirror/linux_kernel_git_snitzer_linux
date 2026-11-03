@@ -76,6 +76,8 @@ struct rtcn {
 	struct nfsd_file	nf;
 	struct svc_fh		fh;
 	u64			saved_io_cache_read;
+	bool			saved_rtc_read_on;
+	bool			saved_rtc_write_on;
 	u8			*reply[2];
 	unsigned int		reply_len[2];
 	u64			saved_io_cache_write;
@@ -269,6 +271,10 @@ static int rtcn_init(struct kunit *test)
 
 	t->saved_io_cache_read = nfsd_io_cache_read;
 	nfsd_io_cache_read = NFSD_IO_DIRECT;
+	t->saved_rtc_read_on = nfsd_rtc_read_on;
+	t->saved_rtc_write_on = nfsd_rtc_write_on;
+	nfsd_rtc_read_on = true;
+	nfsd_rtc_write_on = true;
 
 	/* WRITE: a sync export, a page-aligned payload, a write buffer. */
 	t->wdata = kunit_kzalloc(test, RTCN_SIZE, GFP_KERNEL);
@@ -307,6 +313,8 @@ static void rtcn_exit(struct kunit *test)
 	if (!t)
 		return;
 	nfsd_io_cache_read = t->saved_io_cache_read;
+	nfsd_rtc_read_on = t->saved_rtc_read_on;
+	nfsd_rtc_write_on = t->saved_rtc_write_on;
 	if (t->wdata)
 		nfsd_io_cache_write = t->saved_io_cache_write;
 	for (i = 0; i < RTCN_PAGES; i++)
@@ -1505,7 +1513,9 @@ static void rtcn_flip(struct kunit *test, u64 from, u64 to)
 	KUNIT_ASSERT_EQ(test, svc_rtc_xprt_attach(x, GFP_KERNEL), 0);
 
 	for (i = 0; i < ARRAY_SIZE(io); i++) {
+		/* The debugfs interlock moves both modes together. */
 		nfsd_io_cache_read = io[i];
+		nfsd_io_cache_write = io[i];
 		KUNIT_EXPECT_EQ(test, svc_rtc_should_divert(x),
 				io[i] == NFSD_IO_DIRECT);
 		reason = SVC_RTC_NR_REASONS;
@@ -1517,8 +1527,10 @@ static void rtcn_flip(struct kunit *test, u64 from, u64 to)
 	}
 
 	nfsd_io_cache_read = NFSD_IO_DIRECT;
+	nfsd_io_cache_write = NFSD_IO_DIRECT;
 	KUNIT_EXPECT_TRUE(test, svc_rtc_should_divert(x));
 	nfsd_io_cache_read = NFSD_IO_BUFFERED;
+	nfsd_io_cache_write = NFSD_IO_BUFFERED;
 	reason = SVC_RTC_NR_REASONS;
 	KUNIT_EXPECT_EQ(test, svc_rtc_recv_step(x, &reason, NULL),
 			SVC_RTC_THREAD);
@@ -1537,6 +1549,88 @@ static void nfsd_rtc_flip_to_direct(struct kunit *test)
 static void nfsd_rtc_flip_to_buffered(struct kunit *test)
 {
 	rtcn_flip(test, NFSD_IO_DIRECT, NFSD_IO_BUFFERED);
+}
+
+/*
+ * rtc_read and rtc_write, both modes direct: a receive is diverted while
+ * either direction is on, and the peek admits only an on direction's call.
+ * A direction that is on but not direct does not divert alone.
+ */
+static void nfsd_rtc_switch_matrix(struct kunit *test)
+{
+	struct rtcn *t = test->priv;
+	const struct svc_rtc_ops *ops = &nfsd3_rtc_ops;
+	struct svc_xprt *x = &t->xprt;
+	unsigned int i;
+
+	for (i = 0; i < 4; i++) {
+		bool rd = i & 1, wr = i & 2;
+
+		nfsd_rtc_read_on = rd;
+		nfsd_rtc_write_on = wr;
+		KUNIT_EXPECT_EQ(test, ops->want(x), rd || wr);
+		KUNIT_EXPECT_EQ(test, ops->want_call(x, RTCN_NFS_PROGRAM, 3,
+						     NFS3PROC_READ), rd);
+		KUNIT_EXPECT_EQ(test, ops->want_call(x, RTCN_NFS_PROGRAM, 3,
+						     NFS3PROC_WRITE), wr);
+		KUNIT_EXPECT_FALSE(test, ops->want_call(x, RTCN_NFS_PROGRAM, 3,
+							NFS3PROC_GETATTR));
+		KUNIT_EXPECT_FALSE(test, ops->want_call(x, RTCN_NFS_PROGRAM, 4,
+							NFS3PROC_READ));
+	}
+
+	nfsd_rtc_read_on = true;
+	nfsd_rtc_write_on = false;
+	nfsd_io_cache_read = NFSD_IO_BUFFERED;
+	KUNIT_EXPECT_FALSE(test, ops->want(x));
+	nfsd_rtc_read_on = false;
+	nfsd_rtc_write_on = true;
+	nfsd_io_cache_read = NFSD_IO_DIRECT;
+	nfsd_io_cache_write = NFSD_IO_BUFFERED;
+	KUNIT_EXPECT_FALSE(test, ops->want(x));
+	nfsd_io_cache_write = NFSD_IO_DIRECT;
+}
+
+/*
+ * rtc_read N after the peek: the READ misses to a thread with dir_off
+ * before the file lookup and leaves io_cache_read alone.
+ */
+static void nfsd_rtc_switch_read_off(struct kunit *test)
+{
+	struct rtcn *t = test->priv;
+	struct svc_rqst *r = t->rq[1];
+	struct nfsd3_readres *resp;
+
+	nfsd_rtc_read_on = false;
+	resp = rtcn_prep(t, 1, true, PAGE_SIZE);
+	KUNIT_EXPECT_EQ(test, nfsd_rtc_read(r, &resp->fh, 0, &resp->count,
+					    &resp->eof), nfs_ok);
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+	KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_DIR_OFF);
+	KUNIT_EXPECT_EQ(test, t->calls, 0);
+	KUNIT_EXPECT_EQ(test, nfsd_io_cache_read, (u64)NFSD_IO_DIRECT);
+}
+
+/*
+ * rtc_write N after the peek: the WRITE misses to a thread with dir_off
+ * before the mode check and leaves io_cache_write alone.
+ */
+static void nfsd_rtc_switch_write_off(struct kunit *test)
+{
+	struct rtcn *t = test->priv;
+	struct svc_rqst *r = t->rq[1];
+	unsigned long cnt = PAGE_SIZE;
+
+	nfsd_rtc_write_on = false;
+	rtcn_wprep(t, 1, true, cnt, NFS_UNSTABLE);
+	KUNIT_EXPECT_EQ(test, nfsd_rtc_write(r, &t->fh, 0, &t->payload, &cnt,
+					     0, NULL), nfs_ok);
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
+	KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_ASYNC, &r->rq_flags));
+	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_DIR_OFF);
+	KUNIT_EXPECT_EQ(test, t->calls, 0);
+	KUNIT_EXPECT_EQ(test, nfsd_io_cache_write, (u64)NFSD_IO_DIRECT);
 }
 
 static struct kunit_case nfsd_rtc_cases[] = {
@@ -1563,6 +1657,9 @@ static struct kunit_case nfsd_rtc_cases[] = {
 	KUNIT_CASE(nfsd_rtc_write_async_export),
 	KUNIT_CASE(nfsd_rtc_flip_to_direct),
 	KUNIT_CASE(nfsd_rtc_flip_to_buffered),
+	KUNIT_CASE(nfsd_rtc_switch_matrix),
+	KUNIT_CASE(nfsd_rtc_switch_read_off),
+	KUNIT_CASE(nfsd_rtc_switch_write_off),
 	{}
 };
 

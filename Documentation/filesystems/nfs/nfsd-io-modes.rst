@@ -76,6 +76,21 @@ well.
 Always read both interfaces back after writing either of them to
 confirm the resulting configuration.
 
+Run-to-completion switches
+==========================
+
+An NFSv3 READ or WRITE whose IO mode is DIRECT can be served to
+completion on the connection's work item instead of an nfsd thread.
+/sys/kernel/debug/nfsd/rtc_read and /sys/kernel/debug/nfsd/rtc_write
+switch that path on and off per direction. rtc_read defaults to Y and
+rtc_write to N. Set to N, that direction's READ (or WRITE) runs on an
+nfsd thread, still in its own io_cache_read (or io_cache_write) mode:
+neither switch changes a mode, and no mode changes a switch. With both
+N, or with each Y direction's mode not DIRECT, receives go straight to
+threads. A change takes effect at the next receive, and an op already
+received for the work item reads the switch again and runs on a thread
+if it is now N (counted as dir_off in /sys/kernel/debug/nfsd/rtc_stats).
+
 NFSD DONTCACHE
 ==============
 

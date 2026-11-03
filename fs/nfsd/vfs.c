@@ -63,6 +63,13 @@ u64 nfsd_io_cache_read __read_mostly = NFSD_IO_BUFFERED;
 u64 nfsd_io_cache_write __read_mostly = NFSD_IO_BUFFERED;
 u32 nfsd_direct_misaligned_min_bytes __read_mostly = 8192;
 bool nfsd_direct_misaligned_dontcache __read_mostly = true;
+/*
+ * NFSv3 READ / WRITE run-to-completion, per direction (debugfs rtc_read,
+ * rtc_write).  READ defaults on; WRITE defaults off and runs on nfsd
+ * threads, where it measured faster.
+ */
+bool nfsd_rtc_read_on __read_mostly = true;
+bool nfsd_rtc_write_on __read_mostly;
 
 /**
  * nfserrno - Map Linux errnos to NFS errnos
@@ -3491,6 +3498,11 @@ __be32 nfsd_rtc_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	struct nfsd_file *nf;
 	__be32 err;
 
+	/* Switched off after the peek: from this op, READ runs on a thread. */
+	if (!READ_ONCE(nfsd_rtc_read_on)) {
+		svc_rtc_miss(rqstp, SVC_RTC_FB_DIR_OFF);
+		return nfs_ok;
+	}
 	err = nfsd_file_lookup_cached(rqstp, fhp, NFSD_MAY_READ, &nf);
 	if (err != nfs_ok || !nf) {
 		/* Errors, and their logging, stay on the thread path. */
@@ -3748,6 +3760,11 @@ __be32 nfsd_rtc_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	struct nfsd_file *nf;
 	__be32 err;
 
+	/* Switched off after the peek: from this op, WRITE runs on a thread. */
+	if (!READ_ONCE(nfsd_rtc_write_on)) {
+		svc_rtc_miss(rqstp, SVC_RTC_FB_DIR_OFF);
+		return nfs_ok;
+	}
 	/* nfsd_vfs_write() would not take nfsd_direct_write(), or throttles. */
 	if (READ_ONCE(nfsd_io_cache_write) != NFSD_IO_DIRECT ||
 	    test_bit(RQ_LOCAL, &rqstp->rq_flags)) {

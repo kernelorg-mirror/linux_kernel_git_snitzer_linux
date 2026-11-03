@@ -198,6 +198,21 @@ void nfsd_debugfs_init(void)
 	debugfs_create_file("io_cache_write", 0644, nfsd_top_dir, NULL,
 			    &nfsd_io_cache_write_fops);
 
+	/*
+	 * /sys/kernel/debug/nfsd/rtc_read
+	 * /sys/kernel/debug/nfsd/rtc_write
+	 *
+	 * Y: an NFSv3 READ (WRITE) whose io_cache_read (io_cache_write) mode
+	 * is direct runs to completion on a work item.  N: it runs on an nfsd
+	 * thread with its mode unchanged.  rtc_read defaults to Y and
+	 * rtc_write to N.  Each takes effect from the next receive and the
+	 * next op.
+	 */
+	debugfs_create_bool("rtc_read", 0644, nfsd_top_dir,
+			    &nfsd_rtc_read_on);
+	debugfs_create_bool("rtc_write", 0644, nfsd_top_dir,
+			    &nfsd_rtc_write_on);
+
 	debugfs_create_u32("direct_misaligned_min_bytes", 0644, nfsd_top_dir,
 			   &nfsd_direct_misaligned_min_bytes);
 
