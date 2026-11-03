@@ -14,7 +14,9 @@
  * borrowed by one thread and finished, written and released by another.
  * Each stage's mean pages in use is its sum over the time traced, times 8
  * (pagelife-read.py).
- *   to repost     nfsd's put .. posted again (skb frees, the pool, idle)
+ *   to repost     nfsd's put .. posted again (skb frees, the pool, idle),
+ *                 split by whether the page's other buffer was still held at
+ *                 the put (its pool count above the references dropped)
  *
  * and a cycle no record borrowed is one stage, "not loaned".  A page's
  * references drop more than once, so the cycle ends at its next hand-out,
@@ -53,7 +55,13 @@ fexit:vmlinux:page_pool_alloc_pages
 					@n["loaned, no WRITE seen"] = count();
 					@sum["2-4 borrow to put, no WRITE seen"] = sum(($r - $c) / 1000);
 				}
-				@sum["5 to repost"] = sum(($now - $r) / 1000); @us["5 to repost"] = hist(($now - $r) / 1000);
+				if (@held[$p]) {
+					@n["put, other buffer still held"] = count();
+					@sum["5a to repost, other buffer held at put"] = sum(($now - $r) / 1000); @us["5a to repost, other buffer held at put"] = hist(($now - $r) / 1000);
+				} else {
+					@n["put, page free at put"] = count();
+					@sum["5b to repost, page free at put"] = sum(($now - $r) / 1000); @us["5b to repost, page free at put"] = hist(($now - $r) / 1000);
+				}
 			} else {
 				@n["loaned, no put seen"] = count();
 				@sum["2-5 borrow to repost, no put seen"] = sum(($now - $c) / 1000);
@@ -63,7 +71,7 @@ fexit:vmlinux:page_pool_alloc_pages
 			@sum["0 not loaned"] = sum(($now - $a) / 1000); @us["0 not loaned"] = hist(($now - $a) / 1000);
 		}
 	}
-	delete(@borrow[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
+	delete(@borrow[$p]); delete(@held[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
 	@post[$p] = nsecs;
 }
 
@@ -82,6 +90,11 @@ fentry:sunrpc:svc_tcp_rx_put_run
 {
 	$p = (uint64)args.netmem;
 	if ((($p >> 6) & 7) == 0 && @borrow[$p] && !@put[$p]) {
+		/* the page's other buffer is still held if its count is more
+		 * than the references this put drops */
+		$rc = ((struct page *)$p)->pp_ref_count.counter;
+		@held[$p] = $rc > args.refs ? 1 : 0;
+		@refs = lhist(args.refs, 0, 4, 1); @rc = lhist($rc, 0, 4, 1);
 		@put[$p] = nsecs; $t = tid;
 		if (@ws[$t] >= @borrow[$p] && @we[$t] >= @ws[$t]) { @w0[$p] = @ws[$t]; @w1[$p] = @we[$t]; }
 	}
@@ -90,6 +103,8 @@ fentry:sunrpc:svc_tcp_rx_put_borrowed
 {
 	@rv[tid] = (uint64)args.page; $p = @rv[tid];
 	if ((($p >> 6) & 7) == 0 && @borrow[$p] && !@put[$p]) {
+		$rc = args.page->pp_ref_count.counter;
+		@held[$p] = $rc > 1 ? 1 : 0;
 		@put[$p] = nsecs; $t = tid;
 		if (@ws[$t] >= @borrow[$p] && @we[$t] >= @ws[$t]) { @w0[$p] = @ws[$t]; @w1[$p] = @we[$t]; }
 	}
@@ -98,5 +113,5 @@ fentry:sunrpc:svc_tcp_rx_put_borrowed
 END
 {
 	printf("traced_us %d, one page in 8\n", (nsecs - @t0) / 1000);
-	clear(@post); clear(@borrow); clear(@tid); clear(@put); clear(@w0); clear(@w1); clear(@ws); clear(@we); clear(@rv);
+	clear(@post); clear(@held); clear(@borrow); clear(@tid); clear(@put); clear(@w0); clear(@w1); clear(@ws); clear(@we); clear(@rv);
 }
