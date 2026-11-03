@@ -5,7 +5,7 @@
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
 F=../FLAMEGRAPH/56-eight-sgl-two-ports/run160.out
-until grep -qE ' s16 \|| failed|not settled| end: ' $F; do sleep 2; done
+until grep -qE ' s16-512k \|| failed|not settled| end: ' $F; do sleep 2; done
 pkill -TERM -f '[r]un160\.sh'; sleep 2
 pgrep -f 'twoport\.sh /var/tmp' > /dev/null && { echo "run160 had started another load"; exit 1; }
 O=$L/t2-r161
