@@ -47,4 +47,15 @@ One run a cell, except where two figures are given.
 - **About 73 GB/s is a ceiling at rings of 256:** the rate is flat from 512 to 640 KiB, memory requests are 2.18e9/s (about 140 GB/s) at both sizes taken, and only the FIFO drops grow. That fits the card being unable to get frames into memory, but it is not shown: tardis2's DIMM layout is not recorded, so its limit is not known.
 - **Rings of 256 cost the loan most of its memory saving:** 1.19 bytes a byte at 384 KiB and rings of 128, 1.57 at 512 and 128, 1.90 at 576 and 256. At 1.90, 80 GB/s needs about 152 GB/s of memory; at 1.19, about 95.
 
+## Eight rings of 64 at 512 KiB (run149, Mike)
+
+Two runs. Each ring's Rx and Tx share one of the port's eight CPUs; tardis1's 8 x 64 runs put Tx on nfsd's CPUs instead.
+
+| | GB/s | ring drops a / b | client retransmits | client held by the window | region in use, middle | to memory, GB/s | bytes a byte | rings cycles a WRITE, all sixteen CPUs |
+|---|---|---|---|---|---|---|---|---|
+| run 1 | 57.41 | 6,107 / 6,340 | 12,987 | 42.5% | 54 MiB | 64 | 1.11 | 222.5k |
+| run 2 | 58.32 | 7,643 / 6,999 | 15,246 | 46.3% | 54 MiB | 64 | 1.10 | 222.2k |
+
+It loses as many frames as four of 128 and runs about 12 GB/s under it, with 1.10 bytes a byte, the least measured. Not the way to 80. A ring of 64 takes two connections, so each has the same ring space as four of 128.
+
 `settled.sh` still holds 384 KiB and rings of 128 for two ports.
