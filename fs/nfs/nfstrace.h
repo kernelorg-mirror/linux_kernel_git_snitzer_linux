@@ -1737,6 +1737,8 @@ DECLARE_EVENT_CLASS(nfs_direct_req_class,
 			), \
 			TP_ARGS(dreq))
 
+DEFINE_NFS_DIRECT_REQ_EVENT(nfs_direct_read_complete);
+DEFINE_NFS_DIRECT_REQ_EVENT(nfs_direct_read_completion);
 DEFINE_NFS_DIRECT_REQ_EVENT(nfs_direct_commit_complete);
 DEFINE_NFS_DIRECT_REQ_EVENT(nfs_direct_resched_write);
 DEFINE_NFS_DIRECT_REQ_EVENT(nfs_direct_write_complete);
