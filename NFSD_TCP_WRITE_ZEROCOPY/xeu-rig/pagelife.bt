@@ -9,6 +9,11 @@
  *   record        first borrow .. the borrowing thread issues the WRITE
  *   drive         the WRITE issued .. returned (nfsd_direct_write)
  *   to release    the WRITE returned .. nfsd puts the page
+ *
+ * The WRITE is the one of the thread that puts the page: a record is often
+ * borrowed by one thread and finished, written and released by another.
+ * Each stage's mean pages in use is its sum over the time traced, times 8
+ * (pagelife-read.py).
  *   to repost     nfsd's put .. posted again (skb frees, the pool, idle)
  *
  * and a cycle no record borrowed is one stage, "not loaned".  A page's
@@ -33,33 +38,29 @@ fexit:vmlinux:page_pool_alloc_pages
 	if ($p == 0 || ($p & 1) || (($p >> 6) & 7) != 0) { return; }
 
 	if (@post[$p]) {
-		$now = nsecs;
-		if (@borrow[$p]) {
+		$now = nsecs; $a = @post[$p]; $c = @borrow[$p]; $r = @put[$p];
+		if ($c >= $a) {
 			@n["loaned"] = count();
-			@sum["1 ring+socket"] = sum((@borrow[$p] - @post[$p]) / 1000);
-			@us["1 ring+socket"] = hist((@borrow[$p] - @post[$p]) / 1000);
-			if (@put[$p]) {
-				if (@w0[$p]) {
-					@n["with WRITE"] = count();
-					@sum["2 record"] = sum((@w0[$p] - @borrow[$p]) / 1000);
-					@us["2 record"] = hist((@w0[$p] - @borrow[$p]) / 1000);
-					@sum["3 drive"] = sum((@w1[$p] - @w0[$p]) / 1000);
-					@us["3 drive"] = hist((@w1[$p] - @w0[$p]) / 1000);
-					@sum["4 to release"] = sum((@put[$p] - @w1[$p]) / 1000);
-					@us["4 to release"] = hist((@put[$p] - @w1[$p]) / 1000);
+			@sum["1 ring+socket"] = sum(($c - $a) / 1000); @us["1 ring+socket"] = hist(($c - $a) / 1000);
+			if ($r >= $c) {
+				$w0 = @w0[$p]; $w1 = @w1[$p];
+				if ($w0 >= $c && $w1 >= $w0 && $r >= $w1) {
+					@n["loaned, WRITE seen"] = count();
+					@sum["2 record"] = sum(($w0 - $c) / 1000); @us["2 record"] = hist(($w0 - $c) / 1000);
+					@sum["3 drive"] = sum(($w1 - $w0) / 1000); @us["3 drive"] = hist(($w1 - $w0) / 1000);
+					@sum["4 to release"] = sum(($r - $w1) / 1000); @us["4 to release"] = hist(($r - $w1) / 1000);
 				} else {
-					@n["no WRITE seen"] = count();
-					@sum["2-4 borrow to put, no WRITE seen"] = sum((@put[$p] - @borrow[$p]) / 1000);
+					@n["loaned, no WRITE seen"] = count();
+					@sum["2-4 borrow to put, no WRITE seen"] = sum(($r - $c) / 1000);
 				}
-				@sum["5 to repost"] = sum(($now - @put[$p]) / 1000);
-				@us["5 to repost"] = hist(($now - @put[$p]) / 1000);
+				@sum["5 to repost"] = sum(($now - $r) / 1000); @us["5 to repost"] = hist(($now - $r) / 1000);
 			} else {
-				@n["no put seen"] = count();
+				@n["loaned, no put seen"] = count();
+				@sum["2-5 borrow to repost, no put seen"] = sum(($now - $c) / 1000);
 			}
 		} else {
 			@n["not loaned"] = count();
-			@sum["0 not loaned"] = sum(($now - @post[$p]) / 1000);
-			@us["0 not loaned"] = hist(($now - @post[$p]) / 1000);
+			@sum["0 not loaned"] = sum(($now - $a) / 1000); @us["0 not loaned"] = hist(($now - $a) / 1000);
 		}
 	}
 	delete(@borrow[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
@@ -81,21 +82,21 @@ fentry:sunrpc:svc_tcp_rx_put_run
 {
 	$p = (uint64)args.netmem;
 	if ((($p >> 6) & 7) == 0 && @borrow[$p] && !@put[$p]) {
-		@put[$p] = nsecs; $t = @tid[$p];
-		if (@ws[$t] > @borrow[$p] && @we[$t] > @ws[$t]) { @w0[$p] = @ws[$t]; @w1[$p] = @we[$t]; }
+		@put[$p] = nsecs; $t = tid;
+		if (@ws[$t] >= @borrow[$p] && @we[$t] >= @ws[$t]) { @w0[$p] = @ws[$t]; @w1[$p] = @we[$t]; }
 	}
 }
 fentry:sunrpc:svc_tcp_rx_put_borrowed
 {
 	@rv[tid] = (uint64)args.page; $p = @rv[tid];
 	if ((($p >> 6) & 7) == 0 && @borrow[$p] && !@put[$p]) {
-		@put[$p] = nsecs; $t = @tid[$p];
-		if (@ws[$t] > @borrow[$p] && @we[$t] > @ws[$t]) { @w0[$p] = @ws[$t]; @w1[$p] = @we[$t]; }
+		@put[$p] = nsecs; $t = tid;
+		if (@ws[$t] >= @borrow[$p] && @we[$t] >= @ws[$t]) { @w0[$p] = @ws[$t]; @w1[$p] = @we[$t]; }
 	}
 }
 
 END
 {
-	printf("traced %d ms, one page in 8\n", (nsecs - @t0) / 1000000);
+	printf("traced_us %d, one page in 8\n", (nsecs - @t0) / 1000);
 	clear(@post); clear(@borrow); clear(@tid); clear(@put); clear(@w0); clear(@w1); clear(@ws); clear(@we); clear(@rv);
 }
