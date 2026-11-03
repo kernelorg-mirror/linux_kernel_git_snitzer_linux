@@ -178,6 +178,6 @@ The record wait's pages follow the number of connections, so a port's connection
 
 ## Where it stands
 
-The settled two-port setting, 384 KiB and four rings of 128, stays: the lowest footprint that loses nothing (47 MiB in use, 1.19 bytes a byte, about 61 GB/s). Every setting that carries more holds more of the region, in the middle of a run as well as at its peak. 80 GB/s within the L3 needs less of the region for each byte of window, which is a change to the code, not to the setting.
+**Settled on tardis2 (Mike, 3 November): two ports at 12 connections a port, a 512 KiB held buffer and rings of 128.** `common.sh` holds it as `TWO_RCVBUF` and `TWO_NCONN` for the host, `settled.sh`'s mode `two` audits the buffer and rings, and `twoport.sh` mounts the connections. On run163 it carried 66.44 and 70.48 GB/s with 48 to 49 MiB of the region in use and 1.26 to 1.41 bytes through memory for each byte of payload, against the old setting's 62.96, 55 MiB and 1.29. The connections are the client's `nconnect`: the server cannot hold them, so a client that mounts with more holds more of the region. tardis1 keeps 16 connections at 384 KiB, measured in copy mode, until it is measured there.
 
-`settled.sh` still holds 384 KiB and rings of 128 for two ports.
+80 GB/s is not reached: 73 GB/s takes 16 connections a port on rings of 256, at 67 MiB and 1.88 bytes a byte. The receive side holds most of the pages in use (the record's transfer on its connection, the ring and the socket); the drive about a tenth.
