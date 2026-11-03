@@ -1,0 +1,17 @@
+06:43:38 pl-settled | total 57.37 GB/s | region pages in use at most: 11390
+/var/tmp/zc-run-logs/t2-r166/pl-settled-pagelife.txt traced 9.458276 s; 5b straight to the alloc cache 357223, 5b via the pool's stack 1604977, 5b via the region 342978, loaned 2643366, loaned, WRITE seen 2436608, loaned, no put seen 206758, not loaned 106581, put, other buffer still held 131430, put, page free at put 2305178
+  0 not loaned                         cycles   106581  mean     956 us  median [512, 1024) us  pages held      86
+  1 ring+socket                        cycles  2643366  mean     262 us  median [128, 256) us  pages held     585
+  2 record                             cycles  2436608  mean     352 us  median [128, 256) us  pages held     726
+  2-5 borrow to repost, no put seen    cycles   206758  mean     906 us  median [None, -) us  pages held     159
+  3 drive                              cycles  2436608  mean     165 us  median [128, 256) us  pages held     341
+  4 to release                         cycles  2436608  mean      23 us  median [16, 32) us  pages held      47
+  5a to repost, other buffer held at put cycles   131430  mean    1607 us  median [256, 512) us  pages held     179
+  5b to repost, page free at put       cycles  2305178  mean     385 us  median [64, 128) us  pages held     751
+  5b.1 put .. into the region          cycles        0  mean       0 us  median [None, -) us  pages held       2
+  5b.2 free in the region              cycles   342978  mean    1301 us  median [128, 256) us  pages held     377
+  5b.3 in the alloc cache              cycles  1947955  mean      27 us  median [16, 32) us  pages held      45
+  5b.4 put .. out of the stack (in the stack) cycles  1604977  mean     133 us  median [64, 128) us  pages held     180
+  5b.5 put .. posted, straight to the alloc cache cycles        0  mean       0 us  median [None, -) us  pages held     145
+                                       3623 pages held in all (sampled 1 in 8)
+06:43:42 end: settled.sh audit rest: the settled setting

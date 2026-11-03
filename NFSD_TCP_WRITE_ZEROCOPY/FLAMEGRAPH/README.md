@@ -254,7 +254,15 @@ decided.
    a WRITE, 5.9% of nfsd, at IPC 3 to 5: the kind of target that paid in
    round 52. After a new baseline on tardis2's added drives and second
    port, starting from a trace. 1 to 2 us at a guess. It likely needs a
-   new kernel.
+   new kernel. Waits (Mike, 3 November) after round 56.
+25. **Round 56: eight SGL drives on two ports** (Mike, 3 November;
+   [56-eight-sgl-two-ports](56-eight-sgl-two-ports/README.md)). The sweeps
+   that settled tardis2's two ports at 12 connections a port, 512 KiB and
+   rings of 128.
+26. **Round 57: the ACKs nfsd's reads send, at the two-port setting**
+   ([57-two-port-acks](57-two-port-acks/README.md)). The new baseline
+   (67.42 GB/s, nfsd 273.1k cycles a WRITE, 49 MiB in use), its profile and
+   page life; about six ACKs a WRITE, 9.1 us of nfsd. A trace first.
 
 ## Where the kept rounds stand (2026-10-28)
 

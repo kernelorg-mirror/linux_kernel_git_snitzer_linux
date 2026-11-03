@@ -1,0 +1,559 @@
+pagelife.bt:156:43-62: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    printf("traced_us %d, one page in 8\n", (nsecs - @t0) / 1000);
+                                             ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:46:33-48: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @sum["1 ring+socket"] = sum(($c - $a) / 1000); @us["1 ring+socket"] = hist(($c - $a) / 1000);
+                                         ~~~~~~~~~~~~~~~
+pagelife.bt:46:80-95: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @sum["1 ring+socket"] = sum(($c - $a) / 1000); @us["1 ring+socket"] = hist(($c - $a) / 1000);
+                                                                                        ~~~~~~~~~~~~~~~
+pagelife.bt:85:32-49: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @sum["0 not loaned"] = sum(($now - $a) / 1000); @us["0 not loaned"] = hist(($now - $a) / 1000);
+                                        ~~~~~~~~~~~~~~~~~
+pagelife.bt:85:80-97: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @sum["0 not loaned"] = sum(($now - $a) / 1000); @us["0 not loaned"] = hist(($now - $a) / 1000);
+                                                                                        ~~~~~~~~~~~~~~~~~
+pagelife.bt:56:54-69: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["2-4 borrow to put, no WRITE seen"] = sum(($r - $c) / 1000);
+                                                                    ~~~~~~~~~~~~~~~
+pagelife.bt:81:54-71: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                @sum["2-5 borrow to repost, no put seen"] = sum(($now - $c) / 1000);
+                                                                 ~~~~~~~~~~~~~~~~~
+pagelife.bt:60:60-77: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["5a to repost, other buffer held at put"] = sum(($now - $r) / 1000); @us["5a to repost, other buffer held at put"] = hist(($now - $r) / 1000);
+                                                                          ~~~~~~~~~~~~~~~~~
+pagelife.bt:60:134-151: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["5a to repost, other buffer held at put"] = sum(($now - $r) / 1000); @us["5a to repost, other buffer held at put"] = hist(($now - $r) / 1000);
+                                                                                                                                                    ~~~~~~~~~~~~~~~~~
+pagelife.bt:63:52-69: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["5b to repost, page free at put"] = sum(($now - $r) / 1000); @us["5b to repost, page free at put"] = hist(($now - $r) / 1000);
+                                                                  ~~~~~~~~~~~~~~~~~
+pagelife.bt:63:118-135: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["5b to repost, page free at put"] = sum(($now - $r) / 1000); @us["5b to repost, page free at put"] = hist(($now - $r) / 1000);
+                                                                                                                                    ~~~~~~~~~~~~~~~~~
+pagelife.bt:67:50-67: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.1 put .. into the region"] = sum(($rin - $r) / 1000);
+                                                                   ~~~~~~~~~~~~~~~~~
+pagelife.bt:76:70-87: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.5 put .. posted, straight to the alloc cache"] = sum(($now - $r) / 1000);
+                                                                                       ~~~~~~~~~~~~~~~~~
+pagelife.bt:51:30-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["2 record"] = sum(($w0 - $c) / 1000); @us["2 record"] = hist(($w0 - $c) / 1000);
+                                            ~~~~~~~~~~~~~~~~
+pagelife.bt:51:73-89: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["2 record"] = sum(($w0 - $c) / 1000); @us["2 record"] = hist(($w0 - $c) / 1000);
+                                                                                       ~~~~~~~~~~~~~~~~
+pagelife.bt:52:29-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["3 drive"] = sum(($w1 - $w0) / 1000); @us["3 drive"] = hist(($w1 - $w0) / 1000);
+                                           ~~~~~~~~~~~~~~~~~
+pagelife.bt:52:72-89: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["3 drive"] = sum(($w1 - $w0) / 1000); @us["3 drive"] = hist(($w1 - $w0) / 1000);
+                                                                                      ~~~~~~~~~~~~~~~~~
+pagelife.bt:53:34-50: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["4 to release"] = sum(($r - $w1) / 1000); @us["4 to release"] = hist(($r - $w1) / 1000);
+                                                ~~~~~~~~~~~~~~~~
+pagelife.bt:53:81-97: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["4 to release"] = sum(($r - $w1) / 1000); @us["4 to release"] = hist(($r - $w1) / 1000);
+                                                                                               ~~~~~~~~~~~~~~~~
+pagelife.bt:68:46-65: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.2 free in the region"] = sum(($cin - $rin) / 1000); @us["5b.2 free in the region"] = hist(($cin - $rin) / 1000);
+                                                               ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:68:107-126: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.2 free in the region"] = sum(($cin - $rin) / 1000); @us["5b.2 free in the region"] = hist(($cin - $rin) / 1000);
+                                                                                                                            ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:69:46-65: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                               ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:69:107-126: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                                                                                            ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:72:66-83: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.4 put .. out of the stack (in the stack)"] = sum(($cin - $r) / 1000); @us["5b.4 put .. out of the stack (in the stack)"] = hist(($cin - $r) / 1000);
+                                                                                   ~~~~~~~~~~~~~~~~~
+pagelife.bt:72:145-162: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.4 put .. out of the stack (in the stack)"] = sum(($cin - $r) / 1000); @us["5b.4 put .. out of the stack (in the stack)"] = hist(($cin - $r) / 1000);
+                                                                                                                                                                  ~~~~~~~~~~~~~~~~~
+pagelife.bt:73:46-65: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                               ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:73:107-126: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                                                                                            ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:156:43-62: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    printf("traced_us %d, one page in 8\n", (nsecs - @t0) / 1000);
+                                             ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:46:33-48: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @sum["1 ring+socket"] = sum(($c - $a) / 1000); @us["1 ring+socket"] = hist(($c - $a) / 1000);
+                                         ~~~~~~~~~~~~~~~
+pagelife.bt:46:80-95: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @sum["1 ring+socket"] = sum(($c - $a) / 1000); @us["1 ring+socket"] = hist(($c - $a) / 1000);
+                                                                                        ~~~~~~~~~~~~~~~
+pagelife.bt:85:32-49: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @sum["0 not loaned"] = sum(($now - $a) / 1000); @us["0 not loaned"] = hist(($now - $a) / 1000);
+                                        ~~~~~~~~~~~~~~~~~
+pagelife.bt:85:80-97: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @sum["0 not loaned"] = sum(($now - $a) / 1000); @us["0 not loaned"] = hist(($now - $a) / 1000);
+                                                                                        ~~~~~~~~~~~~~~~~~
+pagelife.bt:56:54-69: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["2-4 borrow to put, no WRITE seen"] = sum(($r - $c) / 1000);
+                                                                    ~~~~~~~~~~~~~~~
+pagelife.bt:81:54-71: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                @sum["2-5 borrow to repost, no put seen"] = sum(($now - $c) / 1000);
+                                                                 ~~~~~~~~~~~~~~~~~
+pagelife.bt:60:60-77: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["5a to repost, other buffer held at put"] = sum(($now - $r) / 1000); @us["5a to repost, other buffer held at put"] = hist(($now - $r) / 1000);
+                                                                          ~~~~~~~~~~~~~~~~~
+pagelife.bt:60:134-151: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["5a to repost, other buffer held at put"] = sum(($now - $r) / 1000); @us["5a to repost, other buffer held at put"] = hist(($now - $r) / 1000);
+                                                                                                                                                    ~~~~~~~~~~~~~~~~~
+pagelife.bt:63:52-69: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["5b to repost, page free at put"] = sum(($now - $r) / 1000); @us["5b to repost, page free at put"] = hist(($now - $r) / 1000);
+                                                                  ~~~~~~~~~~~~~~~~~
+pagelife.bt:63:118-135: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["5b to repost, page free at put"] = sum(($now - $r) / 1000); @us["5b to repost, page free at put"] = hist(($now - $r) / 1000);
+                                                                                                                                    ~~~~~~~~~~~~~~~~~
+pagelife.bt:67:50-67: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.1 put .. into the region"] = sum(($rin - $r) / 1000);
+                                                                   ~~~~~~~~~~~~~~~~~
+pagelife.bt:76:70-87: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.5 put .. posted, straight to the alloc cache"] = sum(($now - $r) / 1000);
+                                                                                       ~~~~~~~~~~~~~~~~~
+pagelife.bt:51:30-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["2 record"] = sum(($w0 - $c) / 1000); @us["2 record"] = hist(($w0 - $c) / 1000);
+                                            ~~~~~~~~~~~~~~~~
+pagelife.bt:51:73-89: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["2 record"] = sum(($w0 - $c) / 1000); @us["2 record"] = hist(($w0 - $c) / 1000);
+                                                                                       ~~~~~~~~~~~~~~~~
+pagelife.bt:52:29-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["3 drive"] = sum(($w1 - $w0) / 1000); @us["3 drive"] = hist(($w1 - $w0) / 1000);
+                                           ~~~~~~~~~~~~~~~~~
+pagelife.bt:52:72-89: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["3 drive"] = sum(($w1 - $w0) / 1000); @us["3 drive"] = hist(($w1 - $w0) / 1000);
+                                                                                      ~~~~~~~~~~~~~~~~~
+pagelife.bt:53:34-50: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["4 to release"] = sum(($r - $w1) / 1000); @us["4 to release"] = hist(($r - $w1) / 1000);
+                                                ~~~~~~~~~~~~~~~~
+pagelife.bt:53:81-97: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                    @sum["4 to release"] = sum(($r - $w1) / 1000); @us["4 to release"] = hist(($r - $w1) / 1000);
+                                                                                               ~~~~~~~~~~~~~~~~
+pagelife.bt:68:46-65: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.2 free in the region"] = sum(($cin - $rin) / 1000); @us["5b.2 free in the region"] = hist(($cin - $rin) / 1000);
+                                                               ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:68:107-126: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.2 free in the region"] = sum(($cin - $rin) / 1000); @us["5b.2 free in the region"] = hist(($cin - $rin) / 1000);
+                                                                                                                            ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:69:46-65: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                               ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:69:107-126: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                                                                                            ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:72:66-83: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.4 put .. out of the stack (in the stack)"] = sum(($cin - $r) / 1000); @us["5b.4 put .. out of the stack (in the stack)"] = hist(($cin - $r) / 1000);
+                                                                                   ~~~~~~~~~~~~~~~~~
+pagelife.bt:72:145-162: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.4 put .. out of the stack (in the stack)"] = sum(($cin - $r) / 1000); @us["5b.4 put .. out of the stack (in the stack)"] = hist(($cin - $r) / 1000);
+                                                                                                                                                                  ~~~~~~~~~~~~~~~~~
+pagelife.bt:73:46-65: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                               ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:73:107-126: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                                                                                            ~~~~~~~~~~~~~~~~~~~
+pagelife.bt:46:33-35: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @sum["1 ring+socket"] = sum(($c - $a) / 1000); @us["1 ring+socket"] = hist(($c - $a) / 1000);
+                                         ~~
+pagelife.bt:46:38-40: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @sum["1 ring+socket"] = sum(($c - $a) / 1000); @us["1 ring+socket"] = hist(($c - $a) / 1000);
+                                              ~~
+pagelife.bt:46:80-82: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @sum["1 ring+socket"] = sum(($c - $a) / 1000); @us["1 ring+socket"] = hist(($c - $a) / 1000);
+                                                                                        ~~
+pagelife.bt:46:85-87: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @sum["1 ring+socket"] = sum(($c - $a) / 1000); @us["1 ring+socket"] = hist(($c - $a) / 1000);
+                                                                                             ~~
+pagelife.bt:51:30-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["2 record"] = sum(($w0 - $c) / 1000); @us["2 record"] = hist(($w0 - $c) / 1000);
+                                            ~~~
+pagelife.bt:51:36-38: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["2 record"] = sum(($w0 - $c) / 1000); @us["2 record"] = hist(($w0 - $c) / 1000);
+                                                  ~~
+pagelife.bt:51:73-76: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["2 record"] = sum(($w0 - $c) / 1000); @us["2 record"] = hist(($w0 - $c) / 1000);
+                                                                                       ~~~
+pagelife.bt:51:79-81: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["2 record"] = sum(($w0 - $c) / 1000); @us["2 record"] = hist(($w0 - $c) / 1000);
+                                                                                             ~~
+pagelife.bt:52:29-32: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["3 drive"] = sum(($w1 - $w0) / 1000); @us["3 drive"] = hist(($w1 - $w0) / 1000);
+                                           ~~~
+pagelife.bt:52:35-38: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["3 drive"] = sum(($w1 - $w0) / 1000); @us["3 drive"] = hist(($w1 - $w0) / 1000);
+                                                 ~~~
+pagelife.bt:52:72-75: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["3 drive"] = sum(($w1 - $w0) / 1000); @us["3 drive"] = hist(($w1 - $w0) / 1000);
+                                                                                      ~~~
+pagelife.bt:52:78-81: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["3 drive"] = sum(($w1 - $w0) / 1000); @us["3 drive"] = hist(($w1 - $w0) / 1000);
+                                                                                            ~~~
+pagelife.bt:53:34-36: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["4 to release"] = sum(($r - $w1) / 1000); @us["4 to release"] = hist(($r - $w1) / 1000);
+                                                ~~
+pagelife.bt:53:39-42: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["4 to release"] = sum(($r - $w1) / 1000); @us["4 to release"] = hist(($r - $w1) / 1000);
+                                                     ~~~
+pagelife.bt:53:81-83: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["4 to release"] = sum(($r - $w1) / 1000); @us["4 to release"] = hist(($r - $w1) / 1000);
+                                                                                               ~~
+pagelife.bt:53:86-89: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["4 to release"] = sum(($r - $w1) / 1000); @us["4 to release"] = hist(($r - $w1) / 1000);
+                                                                                                    ~~~
+pagelife.bt:56:54-56: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["2-4 borrow to put, no WRITE seen"] = sum(($r - $c) / 1000);
+                                                                    ~~
+pagelife.bt:56:59-61: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["2-4 borrow to put, no WRITE seen"] = sum(($r - $c) / 1000);
+                                                                         ~~
+pagelife.bt:60:60-64: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["5a to repost, other buffer held at put"] = sum(($now - $r) / 1000); @us["5a to repost, other buffer held at put"] = hist(($now - $r) / 1000);
+                                                                          ~~~~
+pagelife.bt:60:67-69: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["5a to repost, other buffer held at put"] = sum(($now - $r) / 1000); @us["5a to repost, other buffer held at put"] = hist(($now - $r) / 1000);
+                                                                                 ~~
+pagelife.bt:60:134-138: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["5a to repost, other buffer held at put"] = sum(($now - $r) / 1000); @us["5a to repost, other buffer held at put"] = hist(($now - $r) / 1000);
+                                                                                                                                                    ~~~~
+pagelife.bt:60:141-143: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["5a to repost, other buffer held at put"] = sum(($now - $r) / 1000); @us["5a to repost, other buffer held at put"] = hist(($now - $r) / 1000);
+                                                                                                                                                           ~~
+pagelife.bt:63:52-56: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["5b to repost, page free at put"] = sum(($now - $r) / 1000); @us["5b to repost, page free at put"] = hist(($now - $r) / 1000);
+                                                                  ~~~~
+pagelife.bt:63:59-61: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["5b to repost, page free at put"] = sum(($now - $r) / 1000); @us["5b to repost, page free at put"] = hist(($now - $r) / 1000);
+                                                                         ~~
+pagelife.bt:63:118-122: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["5b to repost, page free at put"] = sum(($now - $r) / 1000); @us["5b to repost, page free at put"] = hist(($now - $r) / 1000);
+                                                                                                                                    ~~~~
+pagelife.bt:63:125-127: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                    @sum["5b to repost, page free at put"] = sum(($now - $r) / 1000); @us["5b to repost, page free at put"] = hist(($now - $r) / 1000);
+                                                                                                                                           ~~
+pagelife.bt:67:50-54: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.1 put .. into the region"] = sum(($rin - $r) / 1000);
+                                                                   ~~~~
+pagelife.bt:67:57-59: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.1 put .. into the region"] = sum(($rin - $r) / 1000);
+                                                                          ~~
+pagelife.bt:68:46-50: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.2 free in the region"] = sum(($cin - $rin) / 1000); @us["5b.2 free in the region"] = hist(($cin - $rin) / 1000);
+                                                               ~~~~
+pagelife.bt:68:53-57: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.2 free in the region"] = sum(($cin - $rin) / 1000); @us["5b.2 free in the region"] = hist(($cin - $rin) / 1000);
+                                                                      ~~~~
+pagelife.bt:68:107-111: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.2 free in the region"] = sum(($cin - $rin) / 1000); @us["5b.2 free in the region"] = hist(($cin - $rin) / 1000);
+                                                                                                                            ~~~~
+pagelife.bt:68:114-118: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.2 free in the region"] = sum(($cin - $rin) / 1000); @us["5b.2 free in the region"] = hist(($cin - $rin) / 1000);
+                                                                                                                                   ~~~~
+pagelife.bt:69:46-50: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                               ~~~~
+pagelife.bt:69:53-57: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                                      ~~~~
+pagelife.bt:69:107-111: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                                                                                            ~~~~
+pagelife.bt:69:114-118: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                                                                                                   ~~~~
+pagelife.bt:72:66-70: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.4 put .. out of the stack (in the stack)"] = sum(($cin - $r) / 1000); @us["5b.4 put .. out of the stack (in the stack)"] = hist(($cin - $r) / 1000);
+                                                                                   ~~~~
+pagelife.bt:72:73-75: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.4 put .. out of the stack (in the stack)"] = sum(($cin - $r) / 1000); @us["5b.4 put .. out of the stack (in the stack)"] = hist(($cin - $r) / 1000);
+                                                                                          ~~
+pagelife.bt:72:145-149: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.4 put .. out of the stack (in the stack)"] = sum(($cin - $r) / 1000); @us["5b.4 put .. out of the stack (in the stack)"] = hist(($cin - $r) / 1000);
+                                                                                                                                                                  ~~~~
+pagelife.bt:72:152-154: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.4 put .. out of the stack (in the stack)"] = sum(($cin - $r) / 1000); @us["5b.4 put .. out of the stack (in the stack)"] = hist(($cin - $r) / 1000);
+                                                                                                                                                                         ~~
+pagelife.bt:73:46-50: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                               ~~~~
+pagelife.bt:73:53-57: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                                      ~~~~
+pagelife.bt:73:107-111: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                                                                                            ~~~~
+pagelife.bt:73:114-118: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.3 in the alloc cache"] = sum(($now - $cin) / 1000); @us["5b.3 in the alloc cache"] = hist(($now - $cin) / 1000);
+                                                                                                                                   ~~~~
+pagelife.bt:76:70-74: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.5 put .. posted, straight to the alloc cache"] = sum(($now - $r) / 1000);
+                                                                                       ~~~~
+pagelife.bt:76:77-79: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                        @sum["5b.5 put .. posted, straight to the alloc cache"] = sum(($now - $r) / 1000);
+                                                                                              ~~
+pagelife.bt:81:54-58: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                @sum["2-5 borrow to repost, no put seen"] = sum(($now - $c) / 1000);
+                                                                 ~~~~
+pagelife.bt:81:61-63: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+                @sum["2-5 borrow to repost, no put seen"] = sum(($now - $c) / 1000);
+                                                                        ~~
+pagelife.bt:85:32-36: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @sum["0 not loaned"] = sum(($now - $a) / 1000); @us["0 not loaned"] = hist(($now - $a) / 1000);
+                                        ~~~~
+pagelife.bt:85:39-41: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @sum["0 not loaned"] = sum(($now - $a) / 1000); @us["0 not loaned"] = hist(($now - $a) / 1000);
+                                               ~~
+pagelife.bt:85:80-84: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @sum["0 not loaned"] = sum(($now - $a) / 1000); @us["0 not loaned"] = hist(($now - $a) / 1000);
+                                                                                        ~~~~
+pagelife.bt:85:87-89: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @sum["0 not loaned"] = sum(($now - $a) / 1000); @us["0 not loaned"] = hist(($now - $a) / 1000);
+                                                                                               ~~
+pagelife.bt:156:43-48: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    printf("traced_us %d, one page in 8\n", (nsecs - @t0) / 1000);
+                                             ~~~~~
+pagelife.bt:156:51-54: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    printf("traced_us %d, one page in 8\n", (nsecs - @t0) / 1000);
+                                                     ~~~
+pagelife.bt:88:2-22: WARNING: Return value discarded.
+    delete(@borrow[$p]); delete(@held[$p]); delete(@rin[$p]); delete(@cin[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
+    ~~~~~~~~~~~~~~~~~~~~
+pagelife.bt:88:23-41: WARNING: Return value discarded.
+    delete(@borrow[$p]); delete(@held[$p]); delete(@rin[$p]); delete(@cin[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
+                         ~~~~~~~~~~~~~~~~~~
+pagelife.bt:88:42-59: WARNING: Return value discarded.
+    delete(@borrow[$p]); delete(@held[$p]); delete(@rin[$p]); delete(@cin[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
+                                            ~~~~~~~~~~~~~~~~~
+pagelife.bt:88:60-77: WARNING: Return value discarded.
+    delete(@borrow[$p]); delete(@held[$p]); delete(@rin[$p]); delete(@cin[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
+                                                              ~~~~~~~~~~~~~~~~~
+pagelife.bt:88:78-95: WARNING: Return value discarded.
+    delete(@borrow[$p]); delete(@held[$p]); delete(@rin[$p]); delete(@cin[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
+                                                                                ~~~~~~~~~~~~~~~~~
+pagelife.bt:88:96-113: WARNING: Return value discarded.
+    delete(@borrow[$p]); delete(@held[$p]); delete(@rin[$p]); delete(@cin[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
+                                                                                                  ~~~~~~~~~~~~~~~~~
+pagelife.bt:88:114-130: WARNING: Return value discarded.
+    delete(@borrow[$p]); delete(@held[$p]); delete(@rin[$p]); delete(@cin[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
+                                                                                                                    ~~~~~~~~~~~~~~~~
+pagelife.bt:88:131-147: WARNING: Return value discarded.
+    delete(@borrow[$p]); delete(@held[$p]); delete(@rin[$p]); delete(@cin[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
+                                                                                                                                     ~~~~~~~~~~~~~~~~
+Attached 13 probes
+traced_us 9458276, one page in 8
+
+
+@n[not loaned]: 106581
+@n[put, other buffer still held]: 131430
+@n[loaned, no put seen]: 206758
+@n[5b via the region]: 342978
+@n[5b straight to the alloc cache]: 357223
+@n[5b via the pool's stack]: 1604977
+@n[put, page free at put]: 2305178
+@n[loaned, WRITE seen]: 2436608
+@n[loaned]: 2643366
+@rc:
+[1]                  242 |                                                    |
+[2]              2401866 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[3]                34877 |                                                    |
+[4, ...)               7 |                                                    |
+
+@refs:
+[1]               115674 |@@                                                  |
+[2]              2321318 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@sum[5b.1 put .. into the region]: 2768581
+@sum[5b.3 in the alloc cache]: 52842240
+@sum[4 to release]: 55358241
+@sum[0 not loaned]: 101918262
+@sum[5b.5 put .. posted, straight to the alloc cache]: 171072550
+@sum[2-5 borrow to repost, no put seen]: 187392307
+@sum[5a to repost, other buffer held at put]: 211190703
+@sum[5b.4 put .. out of the stack (in the stack)]: 213223027
+@sum[3 drive]: 403135908
+@sum[5b.2 free in the region]: 446267561
+@sum[1 ring+socket]: 691971756
+@sum[2 record]: 858485736
+@sum[5b to repost, page free at put]: 887310888
+@t0: 26748451811637
+@us[0 not loaned]:
+[0]                   38 |                                                    |
+[1]                    4 |                                                    |
+[2, 4)                 0 |                                                    |
+[4, 8)                 0 |                                                    |
+[8, 16)                0 |                                                    |
+[16, 32)               0 |                                                    |
+[32, 64)               0 |                                                    |
+[64, 128)              0 |                                                    |
+[128, 256)             1 |                                                    |
+[256, 512)         20315 |@@@@@@@@@@@@@@                                      |
+[512, 1K)          75433 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1K, 2K)            8273 |@@@@@                                               |
+[2K, 4K)            1062 |                                                    |
+[4K, 8K)             891 |                                                    |
+[8K, 16K)            204 |                                                    |
+[16K, 32K)           155 |                                                    |
+[32K, 64K)           124 |                                                    |
+[64K, 128K)           72 |                                                    |
+[128K, 256K)           9 |                                                    |
+
+@us[5a to repost, other buffer held at put]:
+[2, 4)                 1 |                                                    |
+[4, 8)                 5 |                                                    |
+[8, 16)               32 |                                                    |
+[16, 32)             248 |                                                    |
+[32, 64)            1508 |@                                                   |
+[64, 128)          10152 |@@@@@@@@@@@                                         |
+[128, 256)         29736 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                  |
+[256, 512)         44342 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          34688 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@            |
+[1K, 2K)            3365 |@@@                                                 |
+[2K, 4K)            1885 |@@                                                  |
+[4K, 8K)            3419 |@@@@                                                |
+[8K, 16K)            402 |                                                    |
+[16K, 32K)           292 |                                                    |
+[32K, 64K)           670 |                                                    |
+[64K, 128K)          468 |                                                    |
+[128K, 256K)         191 |                                                    |
+[256K, 512K)          15 |                                                    |
+[512K, 1M)             7 |                                                    |
+[1M, 2M)               4 |                                                    |
+
+@us[5b.2 free in the region]:
+[1]                 2992 |@@                                                  |
+[2, 4)             11769 |@@@@@@@@@@                                          |
+[4, 8)             19131 |@@@@@@@@@@@@@@@@@                                   |
+[8, 16)            20952 |@@@@@@@@@@@@@@@@@@@                                 |
+[16, 32)           28412 |@@@@@@@@@@@@@@@@@@@@@@@@@@                          |
+[32, 64)           40432 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@               |
+[64, 128)          42776 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@             |
+[128, 256)         56409 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)         51808 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     |
+[512, 1K)          28865 |@@@@@@@@@@@@@@@@@@@@@@@@@@                          |
+[1K, 2K)           17938 |@@@@@@@@@@@@@@@@                                    |
+[2K, 4K)            9574 |@@@@@@@@                                            |
+[4K, 8K)            5579 |@@@@@                                               |
+[8K, 16K)           3043 |@@                                                  |
+[16K, 32K)          1597 |@                                                   |
+[32K, 64K)           819 |                                                    |
+[64K, 128K)          464 |                                                    |
+[128K, 256K)         244 |                                                    |
+[256K, 512K)         103 |                                                    |
+[512K, 1M)            41 |                                                    |
+[1M, 2M)              26 |                                                    |
+[2M, 4M)               4 |                                                    |
+
+@us[5b.4 put .. out of the stack (in the stack)]:
+[1]                  152 |                                                    |
+[2, 4)             12092 |@                                                   |
+[4, 8)             57775 |@@@@@@@                                             |
+[8, 16)           141019 |@@@@@@@@@@@@@@@@@@                                  |
+[16, 32)          179494 |@@@@@@@@@@@@@@@@@@@@@@@                             |
+[32, 64)          263584 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                  |
+[64, 128)         327974 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          |
+[128, 256)        400453 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)        191085 |@@@@@@@@@@@@@@@@@@@@@@@@                            |
+[512, 1K)          27039 |@@@                                                 |
+[1K, 2K)            2553 |                                                    |
+[2K, 4K)            1234 |                                                    |
+[4K, 8K)             514 |                                                    |
+[8K, 16K)              0 |                                                    |
+[16K, 32K)             0 |                                                    |
+[32K, 64K)             9 |                                                    |
+
+@us[5b.3 in the alloc cache]:
+[0]                    3 |                                                    |
+[1]                53433 |@@@@                                                |
+[2, 4)            269070 |@@@@@@@@@@@@@@@@@@@@@@@                             |
+[4, 8)            222883 |@@@@@@@@@@@@@@@@@@@                                 |
+[8, 16)           363378 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    |
+[16, 32)          337495 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                       |
+[32, 64)          585922 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[64, 128)          93640 |@@@@@@@@                                            |
+[128, 256)         20815 |@                                                   |
+[256, 512)           542 |                                                    |
+[512, 1K)            246 |                                                    |
+[1K, 2K)             210 |                                                    |
+[2K, 4K)             255 |                                                    |
+[4K, 8K)              56 |                                                    |
+[8K, 16K)              0 |                                                    |
+[16K, 32K)             0 |                                                    |
+[32K, 64K)             7 |                                                    |
+
+@us[5b to repost, page free at put]:
+[2, 4)               416 |                                                    |
+[4, 8)             15688 |@                                                   |
+[8, 16)            60765 |@@@@                                                |
+[16, 32)          153668 |@@@@@@@@@@@@                                        |
+[32, 64)          379265 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                     |
+[64, 128)         560410 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@       |
+[128, 256)        634354 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)        369108 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                      |
+[512, 1K)          77443 |@@@@@@                                              |
+[1K, 2K)           25624 |@@                                                  |
+[2K, 4K)           13462 |@                                                   |
+[4K, 8K)            7377 |                                                    |
+[8K, 16K)           3633 |                                                    |
+[16K, 32K)          1890 |                                                    |
+[32K, 64K)           966 |                                                    |
+[64K, 128K)          576 |                                                    |
+[128K, 256K)         284 |                                                    |
+[256K, 512K)         152 |                                                    |
+[512K, 1M)            54 |                                                    |
+[1M, 2M)              34 |                                                    |
+[2M, 4M)               7 |                                                    |
+[4M, 8M)               2 |                                                    |
+
+@us[2 record]:
+[8, 16)            72260 |@@@@                                                |
+[16, 32)          206089 |@@@@@@@@@@@@@                                       |
+[32, 64)          152949 |@@@@@@@@@                                           |
+[64, 128)         443366 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@                        |
+[128, 256)        801086 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)        717855 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@      |
+[512, 1K)          11592 |                                                    |
+[1K, 2K)             266 |                                                    |
+[2K, 4K)            6866 |                                                    |
+[4K, 8K)           19693 |@                                                   |
+[8K, 16K)            587 |                                                    |
+[16K, 32K)           467 |                                                    |
+[32K, 64K)          2084 |                                                    |
+[64K, 128K)         1105 |                                                    |
+[128K, 256K)         331 |                                                    |
+[256K, 512K)          12 |                                                    |
+
+@us[3 drive]:
+[64, 128)          14818 |                                                    |
+[128, 256)       2249739 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)        170981 |@@@                                                 |
+[512, 1K)           1070 |                                                    |
+
+@us[4 to release]:
+[2, 4)              6113 |                                                    |
+[4, 8)            292428 |@@@@@@@@@@@@@@@                                     |
+[8, 16)           554071 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                       |
+[16, 32)          977968 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[32, 64)          595044 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                     |
+[64, 128)          10984 |                                                    |
+
+@us[1 ring+socket]:
+[64, 128)          74662 |@                                                   |
+[128, 256)       1988139 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)        552305 |@@@@@@@@@@@@@@                                      |
+[512, 1K)          12677 |                                                    |
+[1K, 2K)            3152 |                                                    |
+[2K, 4K)            4695 |                                                    |
+[4K, 8K)            5886 |                                                    |
+[8K, 16K)            251 |                                                    |
+[16K, 32K)           290 |                                                    |
+[32K, 64K)          1267 |                                                    |
+[64K, 128K)           16 |                                                    |
+[128K, 256K)          26 |                                                    |
+
