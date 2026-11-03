@@ -262,7 +262,9 @@ decided.
 26. **Round 57: the ACKs nfsd's reads send, at the two-port setting**
    ([57-two-port-acks](57-two-port-acks/README.md)). The new baseline
    (67.42 GB/s, nfsd 273.1k cycles a WRITE, 49 MiB in use), its profile and
-   page life; about six ACKs a WRITE, 9.1 us of nfsd. A trace first.
+   page life; about six ACKs a WRITE, 9.1 us of nfsd. The trace: each ACK
+   is a pass and a window update the client waits for, no pass waits for
+   credit; no sunrpc change. The next targets need a kernel.
 
 ## Where the kept rounds stand (2026-10-28)
 

@@ -1,0 +1,4 @@
+06:48:26 kernel 7.3.0-10.hs.506.loanpages_pool.el10.aarch64+16k, sunrpc 5DDCC44639FC73AF533513F, nfsd 3F0C341E86E266D5FDF2ADF, want_eighths 6
+nstat: history is aged out, resetting
+06:53:21 acks | total 66.21 GB/s | 305 lines acks, 429 lines small
+06:53:24 end: settled.sh audit rest: the settled setting

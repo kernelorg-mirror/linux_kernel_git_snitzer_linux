@@ -127,3 +127,52 @@ the settled setting with round 25's [acks.bt](../25-later-wake/acks.bt) for
 each ACK, after which read, and how many passes a record takes, against round
 25's 4.8 ACKs and about four passes a WRITE. Needs no rebuild and no reload;
 the A/B after it decides whether a change is sunrpc's.
+
+## The trace (run167)
+
+One loan run on both ports at the settled setting, 66.21 GB/s (33.24 on a,
+32.97 on b) with the probes on. [acks.txt](acks.txt) is 10 s of `acks.bt`,
+then [small.txt](small.txt) 10 s of `small.bt`
+(`/var/tmp/zc-run-logs/t2-r167/`). About 632,000 WRITEs in `small.bt`'s 10 s
+(the passes that completed a WRITE's record).
+
+| a WRITE | round 57 | round 25 (one port, 384 KiB) |
+|---|---|---|
+| ACKs sent by the read | 5.37 | 4.8 |
+| of them "more than one rcv_mss unacknowledged" | 5.37 (99.96%) | 98% |
+| of them window updates | 0.002 | 2% |
+| ACKs after a read under 4 KiB | 0.08 | 0.35 |
+| passes of the record, incomplete / completing | 4.97 / 1 | about 3 / 1 |
+| passes waiting for loan credit | **0** | 0.55 |
+
+- **The refused pass is gone.** At budget 128 no pass waited for credit, so
+  round 25's second open item no longer costs anything.
+- **Each ACK is one pass of the record, and a pass takes what the window
+  lets in.** Most reads that ACK take 128 to 256 KiB, and most ACKs follow
+  128 to 256 KiB not yet acknowledged. 1 MiB in passes of about 175 KB, three
+  quarters of a window of about 235 KB (`want_eighths` 6 of a 512 KiB held
+  buffer), is six passes.
+- **The ACKs are not redundant: the window is nearly closed when they go.**
+  At the ACK the window still open is 32 to 64 KiB for 40% of them and
+  under 16 KiB for 27%. The client has sent most of what it may, and the ACK
+  is what lets it go on.
+
+## Outcome: no sunrpc change for the ACKs
+
+- **Fewer ACKs means larger passes,** so a larger window (a larger held
+  buffer, which round 56 settled against for the footprint) or a larger
+  share of it. `want_eighths` 7 held WRITEs at iodepth 1 until the
+  delayed-ACK timer in round 25 (p90 4.2 ms); with a window this full at
+  each ACK, waiting for more would close it.
+- **What one ACK costs** (about 1.5 µs on nfsd) is TCP's and the transmit
+  path's: rounds 07, 31 and 32 tried the qdisc and the queues and kept
+  nothing.
+- So the round ends with the trace. It was worked without a rebuild or a
+  reload.
+
+**The next targets need a new kernel** (none is sunrpc's or nfsd's alone):
+- the pages free in the region, 377 pages held at about 1.3 ms each
+  (page_pool's region free lists);
+- page_pool's producer lock at the release, 3.0 µs a WRITE (round 45);
+- round 55's walk per piece in the NVMe SGL write path, part of
+  `nvme_prep_rq`'s 5.8 µs.
