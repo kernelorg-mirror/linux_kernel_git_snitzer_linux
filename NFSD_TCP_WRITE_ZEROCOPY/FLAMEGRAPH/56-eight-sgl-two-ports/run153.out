@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/./pagelife-read.py", line 18, in <module>
+    if m and cur: H[cur].append((int(m.group(1)) * mult[m.group(2)], int(l.split()[-2])))
+                                                                     ^^^^^^^^^^^^^^^^^^
+ValueError: invalid literal for int() with base 10: '|'
+03:33:50 pl393216-128 | total 51.96 GB/s | region pages in use at most: 11537 | 
+03:38:33 pl524288-256 | total 65.52 GB/s | region pages in use at most: 12243 |  0 not loaned cycles 149509 mean 1179 us median [512, 1024) us pages held 150; 1 ring+socket cycles 3444548 mean 326 us median [256, 512) us pages held 956; 2 record cycles 3172692 mean 325 us median [256, 512) us pages held 878; 2-5 borrow to repost, no put seen cycles 271856 mean 971 us median [None, -) us pages held 225; 3 drive cycles 3172692 mean 203 us median [128, 256) us pages held 549; 4 to release cycles 3172692 mean 19 us median [16, 32) us pages held 51; 5 to repost cycles 3172692 mean 467 us median [64, 128) us pages held 1263; 4071 pages held in all (sampled 1 in 8)
+03:38:36 end: settled.sh audit rest: the settled setting

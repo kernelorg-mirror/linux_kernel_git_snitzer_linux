@@ -15,7 +15,8 @@ for f in sys.argv[1:]:
         m = re.match(r'^@us\[(.*)\]:', l)
         if m: cur = m.group(1); H[cur] = []; continue
         m = re.match(r'^\[(\d+)([KMG]?)[,\]]', l)
-        if m and cur: H[cur].append((int(m.group(1)) * mult[m.group(2)], int(l.split()[-2])))
+        c = re.search(r'[\])]\s+(\d+)\s+\|', l)
+        if m and cur and c: H[cur].append((int(m.group(1)) * mult[m.group(2)], int(c.group(1))))
     print(f, 'traced', t / 1e6 if t else '?', 's;', ', '.join('%s %d' % kv for kv in sorted(N.items())))
     tot = 0
     for k in sorted(S):

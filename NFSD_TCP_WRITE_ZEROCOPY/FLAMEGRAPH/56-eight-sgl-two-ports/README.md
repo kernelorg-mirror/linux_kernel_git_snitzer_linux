@@ -84,6 +84,26 @@ The budget sets the peak and costs almost no rate down to 48 WRITEs (about 0.7 r
 
 The rate is the same (62.1 against 61.4 on average). The peak falls about 3,000 pages (30%). The middle is 47 to 58 MiB against 47, and the bytes a byte 1.33 against one figure of 1.19 at 128, so it is not shown to help the L3 and may not. At this setting one port ran 4 to 6 GB/s under the other in three of the four runs, which port it was changing; not looked into.
 
+## Where a page of the region spends its time (run153, `pagelife.bt`)
+
+`xeu-rig/pagelife.bt` follows one page in eight of the region through a cycle, from the pool handing it to the driver to its next hand-out, 10 s inside a run's window; `pagelife-read.py` gives each stage's mean time and, by Little's law, the pages it holds on average. Its total matches the region's use in the middle of an untraced run (about 3,000 pages at 384 KiB). The trace slows the server (51.96 GB/s against about 61, 65.52 against about 73), so the times are somewhat long; the shares are what to read. The WRITE is joined by the thread that releases the page: a record is often borrowed by one thread and written by another. (run152 joined it by the borrowing thread and is not to be read.)
+
+| stage | 384 KiB, 128: mean | pages | share | 512 KiB, 256: mean | pages | share |
+|---|---|---|---|---|---|---|
+| 1 posted .. borrowed (the ring, then the socket) | 329 us | 603 | 19% | 326 us | 956 | 23% |
+| 2 borrowed .. the WRITE issued (the rest of the record) | 572 us | 969 | 31% | 325 us | 878 | 22% |
+| 3 the WRITE (the drive) | 160 us | 272 | 9% | 203 us | 549 | 13% |
+| 4 the WRITE returned .. nfsd's put | 17 us | 29 | 1% | 19 us | 51 | 1% |
+| 5 nfsd's put .. posted again | 584 us | 989 | 31% | 467 us | 1,263 | 31% |
+| borrowed, no put seen (borrow .. posted again) | 1,282 us | 182 | 6% | 971 us | 225 | 6% |
+| not loaned | 1,388 us | 102 | 3% | 1,179 us | 150 | 4% |
+| all | | 3,145 | | | 4,071 | |
+
+- **The drive holds 9 to 13% of the pages.** The rest is the receive side and the way back.
+- **The way back is the largest:** about 31% at both settings, a page waiting from nfsd's put to its next hand-out (the skb holding its other buffer, the pool, idle). Its mean is two to four times its median, so a minority of pages hold most of it.
+- **The record holds the next most:** pages borrowed early in a 1 MiB record wait for its last frames; at 384 KiB 572 us on average, at 512 KiB 325.
+- **What the faster setting adds:** the ring (+353 pages, the deeper rings' posted pages), the drive (+277, its latency 160 to 203 us), the way back (+274). Each page's cycle is shorter (about 1.3 ms against 1.7), but more pages turn.
+
 ## Where it stands
 
 The settled two-port setting, 384 KiB and four rings of 128, stays: the lowest footprint that loses nothing (47 MiB in use, 1.19 bytes a byte, about 61 GB/s). Every setting that carries more holds more of the region, in the middle of a run as well as at its peak. 80 GB/s within the L3 needs less of the region for each byte of window, which is a change to the code, not to the setting.
