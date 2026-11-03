@@ -138,6 +138,23 @@ A page free at nfsd's put goes to its pool's stack of returned pages (64 deep), 
 
 (The not-loaned row of run155's 384 KiB trace has a bad sum; its count and median are good.)
 
+## The record wait, by where the record's frames are (run157, `recordwait.bt`)
+
+From a loaned record's first borrow to its WRITE, for each connection: in nfsd's calls, on the wire (until the transport is queued for a thread again, which for a loaned record is when the socket holds the share of the window the thread waits for), waiting for a thread, and from the record complete to its WRITE. run156 read `xpt_qtime` without the tracepoint that has sunrpc stamp it and is not to be read; run157 attaches to it. The per-record sums of the two gaps are spoiled by a few stale values, so the medians are what to read for them. Traced rates 58.64 and 73.16 GB/s.
+
+| | 384 KiB, 128 | 512 KiB, 256 |
+|---|---|---|
+| first borrow to WRITE, mean (median) | 582 us ([256, 512)) | 467 us ([256, 512)) |
+| in calls, mean | 58 us | 64 us |
+| on the wire, median | [256, 512) | [256, 512) |
+| waiting for a thread, median | [32, 64) | [32, 64) |
+| complete to WRITE, mean (median) | 14 us ([8, 16)) | 15 us ([8, 16)) |
+| calls after the first borrow | 6 to 7 | 5 to 7 |
+
+- **A record's first pages wait for the rest of the record to arrive.** nfsd reading it (about 60 us), waiting for a thread (a median of 32 to 64 us at a gap) and getting to the WRITE (about 15 us) are small.
+- **That is the record's transfer time on its connection:** 32 connections share about 61 GB/s, about 1.9 GB/s each, and 1 MiB takes about 550 us at that. With every connection part way through a record, about 32 half-records are in the region at once: 32 x 0.5 MiB is about 1,000 pages, which is stage 2's 975.
+- **So stage 2's pages follow the number of connections and the record's size,** not anything nfsd does. Fewer connections, each with a larger window, would carry the same bytes in flight with fewer partial records.
+
 ## Where it stands
 
 The settled two-port setting, 384 KiB and four rings of 128, stays: the lowest footprint that loses nothing (47 MiB in use, 1.19 bytes a byte, about 61 GB/s). Every setting that carries more holds more of the region, in the middle of a run as well as at its peak. 80 GB/s within the L3 needs less of the region for each byte of window, which is a change to the code, not to the setting.
