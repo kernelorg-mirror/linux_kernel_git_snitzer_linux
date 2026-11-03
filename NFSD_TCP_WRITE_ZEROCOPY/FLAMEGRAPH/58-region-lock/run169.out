@@ -1,0 +1,7 @@
+16:26:20 kernel 7.3.0-10.hs.506.loanpages_pool.el10.aarch64+16k, sunrpc 5DDCC44639FC73AF533513F, nfsd 3F0C341E86E266D5FDF2ADF, want_eighths 6
+16:31:14 lock | total 66.01 GB/s |     printf("traced_us %d\n", (nsecs - @t0) / 1000);
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+traced_us 9836957
+16:31:17 end: settled.sh audit rest: the settled setting
