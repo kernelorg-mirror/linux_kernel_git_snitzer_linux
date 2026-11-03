@@ -610,6 +610,24 @@ nfs-server running and the region bound.
   `settled.sh` moves port b to 2/10000.
 - Why the drives stepped down from the third run on.
 
+# tardis2 on 3 November: eight SGL drives on both ports — read this first
+
+Round 55 waits (Mike): the job is a baseline of the eight SGL drives over
+both ports, with the region on both xeu devices. Where this differs from
+the tardis2 sections below, it is right.
+
+- **The drives:** nvme0 to nvme7 are all DapuStor DPRP5 15.36 TB with SGLs
+  (65 segments, 256 KiB, dword alignment); the WD_BLACKs are gone and nvme8
+  is the Micron boot drive. The new four each got `mkfs.xfs -f`, default
+  options, after they read all zero with no signature.
+- **The ports:** port b is cabled. `common.sh` gives tardis2 `PORTS="a b"`
+  and four drives a port, as tardis1: `/hs/nvme0` to `3` on port a,
+  `/hs/nvme4` to `7` on port b. Port b's MTU 7792 is in NetworkManager
+  (connection `enp164s0f0`). `FS_A="/hs/nvme4 ..." FS_B=` with `a` still
+  makes a one-port run.
+- **After a boot:** `./bringup.sh 32768 256` now mounts the drives, starts
+  nfs-server and puts both ports in the region, then `./settled.sh apply`.
+
 # 29 October: the kernel with the region's per-device mapping — tardis1 copy on two ports, tardis2 loan on one
 
 Mike pushed the tip on 29 October evening (`effa3133c00a`, its last code
