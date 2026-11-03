@@ -38,3 +38,82 @@ This corrects the ranking after round 53, which set "the block layer's 128 piece
 **What it costs to test:** `block/` is built in, so a change there needs a new kernel and only `nvme.ko` can be swapped. Its reviewers are block and NVMe, not Chuck Lever. Do not grow the region's footprint, and A/B latency in both orders, as rounds 52 to 54 showed it has to be.
 
 **The fallback:** `svc_tcp_rx_append_ref` and `svc_tcp_rx_borrow_segment`, about 4.1 us together at IPC 3 to 4, and a `sunrpc` swap to test. Round 27's prefetch did not help, and about a third of the second one's cost is on `struct page`. Nobody has tried trimming the per-fragment checks, which may repeat what the skb already guarantees.
+
+## For a new kernel (the plan of 3 November, after round 57)
+
+Round 57's baseline at the two-port setting (12 connections a port, 512 KiB,
+rings of 128) is the new reference. Its profile (fl56,
+`/var/tmp/zc-run-logs/t2-r165/fl56-flame`), nfsd, µs a WRITE: `nfsd_direct_write`
+20.4, `submit_bio` 10.7, `nvme_queue_rqs` 6.2, `nvme_prep_rq` 5.8,
+`blk_map_iter_next` 1.7 self, `bio_split_io_at` 0.9, `dma_direct_map_phys`
+1.1 and `dma_map_phys` 0.7 self, `nvme_pci_setup_data_sgl`'s producer-lock
+leaf 0.5. The path has not shrunk with eight drives: it is the same cost a
+WRITE.
+
+### The path as it runs on these drives
+
+Read from the source of build 506 (`block/blk-merge.c`, `block/blk-mq-dma.c`,
+`drivers/nvme/host/pci.c`), not yet traced:
+- **A 1 MiB WRITE is about 135 pieces,** one a received frame (about 7.75 KB
+  of payload in each 8 KiB buffer). `max_sectors_kb` 256 binds before
+  `max_segments` 65, so it goes out as about four requests of about 33 pieces
+  (4.12 NVMe interrupts a WRITE agree).
+- **SGL is forced, not chosen:** `nvme_pci_use_sgls()` returns `SGL_FORCED`
+  because the pieces leave gaps inside the controller's page
+  (`req_phys_gap_mask()`), so `sgl_threshold` (32768, above the average piece)
+  is not consulted.
+- **No IOMMU:** every piece is mapped with `dma_map_phys()` →
+  `dma_direct_map_phys()` one at a time. The IOVA path is not taken.
+- **Each piece is walked twice:**
+  - `bio_split_io_at()` walks the bvecs to find the 256 KiB split. For each
+    it does the alignment checks, the gap test and accumulation, and the
+    segment and byte counts. It never merges neighbours.
+  - `blk_map_iter_next()` walks them again to map them. For each piece it
+    works out `get_max_segment_size()` and, at every bvec boundary, tries
+    `biovec_phys_mergeable()` against the next piece.
+- **The merge test likely never succeeds:** each buffer's payload begins
+  after its frame's headers, so neighbouring pieces should never be
+  physically contiguous. If so, the test is paid on about 135 pieces a WRITE
+  for nothing. `bio_split_io_at()` already knows the segment count without
+  merging; if the request's `nr_phys_segments` equals its bvec count, nothing
+  can merge.
+
+### Steps
+
+1. **Trace on build 506 now, no rebuild** (bpftrace, one loan run on both
+   ports at the settled setting):
+   - requests a WRITE and pieces a request (`nr_phys_segments` at
+     `nvme_prep_rq`);
+   - the SGL entries written (`nvme_pci_setup_data_sgl`'s count) against
+     `nr_phys_segments`: any difference is merges, and none means the merge
+     test is wasted;
+   - calls of `bio_split_io_at()` a WRITE, and bvecs walked a call, to check
+     that the split does not walk the same pieces again;
+   - the time a call of `bio_split_io_at()`, `nvme_map_data()` and
+     `blk_rq_dma_map_iter_next()` (fentry/fexit, the per-call figure only:
+     the probes cost more than the work).
+2. **Candidate changes, only as far as the trace bears them out:**
+   - (a) **Skip the merge test when the split found no mergeable
+     neighbours.** For example, a request flag set when
+     `nr_phys_segments` equals the bvecs it holds, tested in
+     `blk_map_iter_next()` before `biovec_phys_mergeable()`.
+   - (b) **Hoist `get_max_segment_size()` out of the walk** when the queue
+     has no segment boundary and `max_segment_size` is `UINT_MAX`, as here.
+   - (c) **Carry what the split computed into the map walk,** if (a) and (b)
+     leave the second walk's cost per piece above about 10 ns.
+   - The SGL must still be written once a piece, and each piece mapped once.
+     Only the repeats and the per-step overhead can go.
+3. **The kernel.** `block/` is built in, and `nvme.ko` cannot be swapped
+   while the boot drive (`nvme8`) is on it. So:
+   - one kernel carries the change behind a temporary switch (a debugfs or
+     sysfs knob, default off) for the A/B, four runs a side, A B B A,
+     latency in both orders;
+   - the switch is dropped before the commit goes into the code group;
+   - the same kernel carries rounds 58 and 59's changes, each behind its own
+     switch, so one boot serves all three.
+4. **Estimate:** (a) and (b) together about 1 µs a WRITE (135 pieces at about
+   7 ns), 1% of nfsd. Still a guess: round 54 was three times too high.
+
+Reviewers: block and NVMe (Christoph Hellwig, Keith Busch, Jens Axboe), not
+Chuck Lever. Do not grow the region's footprint; this path holds no region
+page longer.

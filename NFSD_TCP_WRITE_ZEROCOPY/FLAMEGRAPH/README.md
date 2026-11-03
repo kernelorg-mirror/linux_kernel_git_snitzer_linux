@@ -265,6 +265,23 @@ decided.
    page life; about six ACKs a WRITE, 9.1 us of nfsd. The trace: each ACK
    is a pass and a window update the client waits for, no pass waits for
    credit; no sunrpc change. The next targets need a kernel.
+27. **Round 58: the region's lock at the release, on two ports** (planned,
+   3 November). At round 57's setting, 2.1 us a WRITE of nfsd sits at the
+   interrupt-enable after the region's lock under
+   `page_pool_recycle_ring_bulk` (the overflow round 45 batched), plus 0.5
+   self. Round 45 measured one port only; now both ports' pools return to one
+   region lock. The lock is not contended (`queued_spin_lock_slowpath` 0.02),
+   so the cost is the work done under it with interrupts off. A trace of
+   pages a hold and holds a WRITE on build 506 first, then a change in
+   page_pool, in the kernel that carries round 55's.
+28. **Round 59: pages free in the region** (planned, 3 November; a look
+   first). Round 57's page life: 15% of the pages free at their put go into
+   the region and wait about 1.3 ms (median 128 to 256 us) before a pool
+   takes them, 377 pages of the cycle. These are free, not in the region's
+   in-use count. What they cost is in the L3: they are pages that go round. A
+   trace of which slot's list and how deep a page sits decides whether a
+   change (for example, handing the region's newest pages first, across
+   slots) is worth a kernel.
 
 ## Where the kept rounds stand (2026-10-28)
 
