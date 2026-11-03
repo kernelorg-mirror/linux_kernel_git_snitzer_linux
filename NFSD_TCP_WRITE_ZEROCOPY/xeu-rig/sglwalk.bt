@@ -1,0 +1,95 @@
+#!/usr/bin/bpftrace
+/*
+ * sglwalk.bt: the NVMe SGL write path a piece at a time (FLAMEGRAPH round 55).
+ *   - bio_split_io_at(): calls, bvecs and bytes left in the bio at each call,
+ *     whether it split, the segments it counted, the time a call;
+ *   - nvme_pci_setup_data_sgl(): requests, nr_phys_segments (the split's
+ *     count, no merging) against the SGL entries written (after the map
+ *     walk's merges): any difference is pieces merged;
+ *   - nvme_map_data() and blk_rq_dma_map_iter_start(): the time a call;
+ *   - nfsd_direct_write(): the WRITEs, to divide by.
+ * The times are each call's own, from fentry to fexit, so they include the
+ * probes' cost; use them per call and against each other, not as a total.
+ *     timeout -s INT 10 bpftrace sglwalk.bt
+ */
+config = { missing_probes = "warn"; max_map_keys = 65536 }
+
+BEGIN { @t0 = nsecs; }
+
+fentry:nfsd:nfsd_direct_write { @writes = count(); }
+
+fentry:vmlinux:bio_split_io_at
+{
+	$b = args.bio;
+	@split_calls = count();
+	@split_bvecs_left = hist((uint32)($b->bi_vcnt - $b->bi_iter.bi_idx));
+	@split_bytes_left = hist($b->bi_iter.bi_size);
+	@sp[tid] = nsecs;
+	@spsegs[tid] = (uint64)args.segs;
+}
+fexit:vmlinux:bio_split_io_at
+/@sp[tid]/
+{
+	$d = nsecs - @sp[tid];
+	@split_ret[retval > 0 ? "split" : (retval == 0 ? "no split" : "error")] = count();
+	@split_segs = lhist(*(uint32 *)@spsegs[tid], 0, 80, 4);
+	@split_ns = hist($d);
+	@ns_sum["bio_split_io_at"] = sum($d);
+	@ns_n["bio_split_io_at"] = count();
+	delete(@sp[tid]); delete(@spsegs[tid]);
+}
+
+fentry:nvme:nvme_map_data { @md[tid] = nsecs; }
+fexit:nvme:nvme_map_data
+/@md[tid]/
+{
+	$d = nsecs - @md[tid];
+	@map_data_ns = hist($d);
+	@ns_sum["nvme_map_data"] = sum($d);
+	@ns_n["nvme_map_data"] = count();
+	delete(@md[tid]);
+}
+
+fentry:vmlinux:blk_rq_dma_map_iter_start { @ms[tid] = nsecs; }
+fexit:vmlinux:blk_rq_dma_map_iter_start
+/@ms[tid]/
+{
+	$d = nsecs - @ms[tid];
+	@ns_sum["blk_rq_dma_map_iter_start"] = sum($d);
+	@ns_n["blk_rq_dma_map_iter_start"] = count();
+	delete(@ms[tid]);
+}
+
+fentry:nvme:nvme_pci_setup_data_sgl
+{
+	$r = args.req;
+	@sgl_requests = count();
+	@nr_phys_segments = lhist($r->nr_phys_segments, 0, 80, 4);
+	@request_bytes = hist($r->__data_len);
+	@sg[tid] = nsecs;
+	@nps[tid] = $r->nr_phys_segments;
+}
+fexit:nvme:nvme_pci_setup_data_sgl
+/@sg[tid]/
+{
+	$d = nsecs - @sg[tid];
+	$iod = (struct nvme_iod *)((uint64)args.req + sizeof(struct request));
+	$type = $iod->cmd.common.dptr.sgl.type >> 4;
+	/* one data descriptor in the command, or a last-segment descriptor
+	 * pointing at a list of 16-byte entries */
+	$entries = $type == 0 ? (uint32)1 : $iod->cmd.common.dptr.sgl.length / 16;
+	@sgl_entries = lhist($entries, 0, 80, 4);
+	@sgl_entries_sum = sum($entries);
+	@nr_phys_sum = sum(@nps[tid]);
+	@merged = lhist(@nps[tid] - $entries, 0, 8, 1);
+	@sgl_ns = hist($d);
+	@ns_sum["nvme_pci_setup_data_sgl"] = sum($d);
+	@ns_n["nvme_pci_setup_data_sgl"] = count();
+	delete(@sg[tid]); delete(@nps[tid]);
+}
+
+END
+{
+	printf("traced_us %d\n", (nsecs - @t0) / 1000);
+	clear(@sp); clear(@spsegs); clear(@md); clear(@ms); clear(@sg); clear(@nps);
+}
