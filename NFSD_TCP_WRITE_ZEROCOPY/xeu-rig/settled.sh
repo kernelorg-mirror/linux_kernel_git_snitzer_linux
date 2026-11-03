@@ -25,7 +25,9 @@
 #   rest   no load: both ports at four rings of 256, the module settings
 #          of /etc/modprobe.d (the one-port setting's), nothing connected
 #   two    a two-port run at the two-port setting: rings of 128 on both
-#          ports, a 384 KiB held buffer, no linger
+#          ports, common.sh's TWO_RCVBUF held buffer (512 KiB on tardis2,
+#          384 KiB on tardis1), no linger; twoport.sh mounts TWO_NCONN
+#          connections a port (12 on tardis2, 16 on tardis1)
 #   one    a one-port run at the one-port setting: rings of 256, a 1 MiB
 #          held buffer (no linger since 15 October, when it was dropped)
 #   cell   a loan sweep's cell on port a: its plan line sets the rings, the
@@ -410,7 +412,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	for k in "${!REST[@]}"; do EXPECT[$k]=${REST[$k]}; done
 	case $mode in
 	rest|one) ;;
-	two)	EXPECT[svc_tcp_rx_rcvbuf]=393216; EXPECT[svc_tcp_rx_linger_us]=0
+	two)	EXPECT[svc_tcp_rx_rcvbuf]=$TWO_RCVBUF; EXPECT[svc_tcp_rx_linger_us]=0
 		ENTRIES=([a]=128 [b]=128) ;;
 	cell)	: ;;	# its plan line, below
 	*)	echo "unknown mode: $mode"; exit 2 ;;

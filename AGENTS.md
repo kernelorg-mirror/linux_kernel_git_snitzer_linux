@@ -323,7 +323,11 @@ what it is, and rename it once read.
 (2026-11-02), start at the plan for round 55,
 `NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/55-nvme-sgl-walk/README.md`:**
 bring-up, a new baseline (earlier figures are not comparable), a profile,
-then a trace before any code. Round 54's expkey change is dropped, its
+then a trace before any code. **Round 55 waits (Mike, 3 November): tardis2 now has eight
+SGL drives on both ports, four a port, and its two-port setting is 12
+connections a port at a 512 KiB held buffer on rings of 128 (`common.sh`'s
+`TWO_RCVBUF` and `TWO_NCONN`; tardis1 keeps 16 at 384 KiB). The account is
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/56-eight-sgl-two-ports/README.md`.** Round 54's expkey change is dropped, its
 patches in `patches/dropped/` as 0007 to 0009; `updates/` holds round 53's
 `sunrpc.ko` and no `nfsd.ko`.
 
