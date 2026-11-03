@@ -53,6 +53,21 @@ and nothing to run. Round 57's ACKs need no change either.
    records them too.
 6. `dmesg | grep -E 'WARNING:|BUG:|Oops'` is empty.
 
+**Found on build 507 (3 November, after the boot):** `uname -r`
+`7.3.0-10.hs.507.loanpages_pool.el10.aarch64+16k`, page size 16384,
+the command line as build 506's. Both switches read `Y`. sunrpc and
+nfsd from `kernel/`, nothing in `updates/`; xeu is build 506's own
+module (`CA0931345E46C929B11D01F`), reached through
+`weak-updates/xsight/`, as 507 has no `extra/`. That is sound: nothing
+xeu builds against changed since `c814cca07975` (the only header
+touched is `include/linux/sunrpc/xdr.h`). kdump was not armed at boot
+(the service failed, as expected for a new kernel); `bringup.sh 32768
+256` copied the kernel, armed it (1024 MiB) and brought both ports into
+the region (`mapped` on `a1:00.0` and `a4:00.0`), and `settled.sh
+apply` ended in "the settled setting". srcversions: sunrpc
+`2A512644C685341146A3A9B`, nfsd `BB6D1949646AB051A8D99CC`, xeu
+`CA0931345E46C929B11D01F`. No WARNING, BUG or Oops.
+
 ## 2. The A/B runs
 
 One boot carries both, each its own driver run from the round's directory
