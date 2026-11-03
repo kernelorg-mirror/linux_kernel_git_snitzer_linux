@@ -1,0 +1,14 @@
+23:08:33 kernel 7.3.0-10.hs.507.loanpages_pool.el10.aarch64+16k, sunrpc 2A512644C685341146A3A9B, nfsd BB6D1949646AB051A8D99CC, want_eighths 6
+23:08:36 lock-B: /sys/module/page_pool/parameters/rx_region_bulk_ab Y
+23:13:26 lock-B | total 66.87 GB/s |     printf("traced_us %d\n", (nsecs - @t0) / 1000);
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+traced_us 10262777
+23:13:30 lock-A: /sys/module/page_pool/parameters/rx_region_bulk_ab N
+23:19:55 lock-A | total 69.31 GB/s |     printf("traced_us %d\n", (nsecs - @t0) / 1000);
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+traced_us 10614316
+23:19:58 end: settled.sh audit rest: the settled setting
