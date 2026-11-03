@@ -1,0 +1,101 @@
+#!/usr/bin/bpftrace
+/*
+ * pagelife.bt: where a page of the receive region spends its time, one
+ * cycle at a time (FLAMEGRAPH round 56).  A cycle runs from the pool
+ * handing the page to the driver to its next hand-out, for one page in
+ * eight (by its struct page's index).  A loaned cycle is cut at:
+ *
+ *   ring+socket   posted .. first borrowed by a loaned record
+ *   record        first borrow .. the borrowing thread issues the WRITE
+ *   drive         the WRITE issued .. returned (nfsd_direct_write)
+ *   to release    the WRITE returned .. nfsd puts the page
+ *   to repost     nfsd's put .. posted again (skb frees, the pool, idle)
+ *
+ * and a cycle no record borrowed is one stage, "not loaned".  A page's
+ * references drop more than once, so the cycle ends at its next hand-out,
+ * not at a put.  Little's law gives each stage's share of the region's
+ * pages in use: its cycles a second (times 8) by its mean.  Run it for a
+ * fixed time inside a run's measured window:
+ *     timeout -s INT 10 bpftrace pagelife.bt
+ * It slows the server: compare its run's rate with an untraced one.
+ */
+config = { missing_probes = "warn"; max_map_keys = 131072 }
+
+BEGIN { @t0 = nsecs; }
+
+/* xeu takes its pages with page_pool_alloc_pages() (whose own call of
+ * page_pool_alloc_netmems() is not traced, or each hand-out would count
+ * twice).  The pointer goes through a map: the verifier refuses
+ * arithmetic on a struct page pointer. */
+fexit:vmlinux:page_pool_alloc_pages
+{
+	@rv[tid] = (uint64)retval; $p = @rv[tid];
+	if ($p == 0 || ($p & 1) || (($p >> 6) & 7) != 0) { return; }
+
+	if (@post[$p]) {
+		$now = nsecs;
+		if (@borrow[$p]) {
+			@n["loaned"] = count();
+			@sum["1 ring+socket"] = sum((@borrow[$p] - @post[$p]) / 1000);
+			@us["1 ring+socket"] = hist((@borrow[$p] - @post[$p]) / 1000);
+			if (@put[$p]) {
+				if (@w0[$p]) {
+					@n["with WRITE"] = count();
+					@sum["2 record"] = sum((@w0[$p] - @borrow[$p]) / 1000);
+					@us["2 record"] = hist((@w0[$p] - @borrow[$p]) / 1000);
+					@sum["3 drive"] = sum((@w1[$p] - @w0[$p]) / 1000);
+					@us["3 drive"] = hist((@w1[$p] - @w0[$p]) / 1000);
+					@sum["4 to release"] = sum((@put[$p] - @w1[$p]) / 1000);
+					@us["4 to release"] = hist((@put[$p] - @w1[$p]) / 1000);
+				} else {
+					@n["no WRITE seen"] = count();
+					@sum["2-4 borrow to put, no WRITE seen"] = sum((@put[$p] - @borrow[$p]) / 1000);
+				}
+				@sum["5 to repost"] = sum(($now - @put[$p]) / 1000);
+				@us["5 to repost"] = hist(($now - @put[$p]) / 1000);
+			} else {
+				@n["no put seen"] = count();
+			}
+		} else {
+			@n["not loaned"] = count();
+			@sum["0 not loaned"] = sum(($now - @post[$p]) / 1000);
+			@us["0 not loaned"] = hist(($now - @post[$p]) / 1000);
+		}
+	}
+	delete(@borrow[$p]); delete(@tid[$p]); delete(@put[$p]); delete(@w0[$p]); delete(@w1[$p]);
+	@post[$p] = nsecs;
+}
+
+fentry:sunrpc:svc_tcp_rx_borrow_segment
+{
+	@rv[tid] = (uint64)args.page; $p = @rv[tid] + ((uint64)args.offset >> 14) * 64;
+	if ((($p >> 6) & 7) == 0 && @post[$p] && !@borrow[$p]) {
+		@borrow[$p] = nsecs; @tid[$p] = tid;
+	}
+}
+
+fentry:nfsd:nfsd_direct_write { @ws[tid] = nsecs; }
+fexit:nfsd:nfsd_direct_write { @we[tid] = nsecs; }
+
+fentry:sunrpc:svc_tcp_rx_put_run
+{
+	$p = (uint64)args.netmem;
+	if ((($p >> 6) & 7) == 0 && @borrow[$p] && !@put[$p]) {
+		@put[$p] = nsecs; $t = @tid[$p];
+		if (@ws[$t] > @borrow[$p] && @we[$t] > @ws[$t]) { @w0[$p] = @ws[$t]; @w1[$p] = @we[$t]; }
+	}
+}
+fentry:sunrpc:svc_tcp_rx_put_borrowed
+{
+	@rv[tid] = (uint64)args.page; $p = @rv[tid];
+	if ((($p >> 6) & 7) == 0 && @borrow[$p] && !@put[$p]) {
+		@put[$p] = nsecs; $t = @tid[$p];
+		if (@ws[$t] > @borrow[$p] && @we[$t] > @ws[$t]) { @w0[$p] = @ws[$t]; @w1[$p] = @we[$t]; }
+	}
+}
+
+END
+{
+	printf("traced %d ms, one page in 8\n", (nsecs - @t0) / 1000000);
+	clear(@post); clear(@borrow); clear(@tid); clear(@put); clear(@w0); clear(@w1); clear(@ws); clear(@we); clear(@rv);
+}
