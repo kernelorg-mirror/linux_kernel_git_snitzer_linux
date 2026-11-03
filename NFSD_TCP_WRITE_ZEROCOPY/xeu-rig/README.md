@@ -1,3 +1,93 @@
+# tardis2's next boot: the kernel with rounds 55 and 58's changes (plan of 3 November) — read this first
+
+Mike is building a kernel on gitlab from the branch at `7a39dcaebc9b`
+(pushed; `origin/kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` is the same
+commit) and booting tardis2 into it. Build 506 was built at
+`c814cca07975`. What the new kernel adds in code:
+
+- **sunrpc, from round 53, built in at last:** `7ca95cca4c1a` (trade only
+  the pages a partly received loaned record holds), `e3c7a5faa02f` and
+  `1eac016ea851` (check a received record's bvec table once), `3ddd62ce0809`
+  (no second check at release). Build 506 ran them from
+  `/lib/modules/7.3.0-10.hs.506…/updates/sunrpc.ko`; the new kernel needs no
+  `updates/` module, and nothing is to be put there.
+- **Round 58 (`../FLAMEGRAPH/58-region-lock/README.md`):** `ca7b00ac39c7`
+  page_pool: count a bulk returned to the receive region with one atomic;
+  `d7d119a39c92` page_pool: prefetch the region list's top before taking the
+  region's lock.
+- **Round 55 (`../FLAMEGRAPH/55-nvme-sgl-walk/README.md`):** `0da60509468b`
+  block: inline blk_map_iter_next().
+- **`74f6b7bd0ea8` DROP: page_pool, block: A/B switches for FLAMEGRAPH
+  rounds 55 and 58:** `/sys/module/page_pool/parameters/rx_region_bulk_ab`
+  and `/sys/module/blk_mq_dma/parameters/map_iter_inline`, both `Y` by
+  default (the change on); `N` is build 506's behaviour. Temporary: AGENTS.md
+  drops it at the next regroup.
+- The rest since `c814cca07975` is KUnit (interface and tests) and docs.
+  The KUnit suites are not to be loaded for these runs (`ab-switch.sh`
+  refuses); read "KUnit crashes on build 506" in `../TESTING.md` before any.
+
+Round 59 (`../FLAMEGRAPH/59-region-free/README.md`) has no kernel change
+and nothing to run. Round 57's ACKs need no change either.
+
+## 1. The first ten minutes
+
+1. `uname -r` is the new build, `getconf PAGESIZE` 16384, and
+   `/proc/cmdline` has `rodata=noalias` and `crashkernel=1G` and no
+   `gicv3_pseudo_nmi` (build 506's line: `console=ttyAMA0 rodata=noalias
+   crashkernel=1G`).
+2. Both switches exist and read `Y`:
+   `cat /sys/module/page_pool/parameters/rx_region_bulk_ab
+   /sys/module/blk_mq_dma/parameters/map_iter_inline`. If either is
+   missing, the kernel is not from `74f6b7bd0ea8` or later: stop and tell
+   Mike.
+3. `modinfo -n xeu sunrpc nfsd`: xeu from `extra/xsight/`, sunrpc and nfsd
+   from `kernel/`, nothing from `updates/`.
+4. `./bringup.sh 32768 256` from here (xeu-rig), as on build 506 (the
+   two-port runs put the rings at 128 themselves): it arms kdump first (it
+   copies the new kernel to `/var/lib/kdump/boot/`, which SELinux needs) and
+   stops if it cannot, then mounts `/hs/nvme0` to `7`, starts nfs-server and
+   puts both ports in the region. Then `./settled.sh apply`, which must end
+   in "the settled setting". `cat /sys/kernel/kexec_crash_loaded` reads 1.
+5. Write down the new srcversions of sunrpc, nfsd and xeu
+   (`/sys/module/*/srcversion`) here before the first run; `ab-switch.sh`
+   records them too.
+6. `dmesg | grep -E 'WARNING:|BUG:|Oops'` is empty.
+
+## 2. The A/B runs
+
+One boot carries both, each its own driver run from the round's directory
+(about 40 minutes each: four loan runs A B B A with the memory traffic,
+`lat.sh` eight times, a profile of B; logs in `$L/t2-r171` and `t2-r172`):
+
+    cd ../FLAMEGRAPH/58-region-lock  && ../ab-switch.sh pp  t2-r171 > run171.out
+    cd ../FLAMEGRAPH/55-nvme-sgl-walk && ../ab-switch.sh blk t2-r172 > run172.out
+
+Round 58 first: it is the larger guess (0.5 to 1.5 µs a WRITE against 0.5
+to 1). While one switch is under test the other stays at `Y`, its
+default, so the second A/B runs with the first change in. Report each
+loan run's line as it completes. Commit what was found before each run
+(a crash takes the session with it).
+
+What to compare: A against B on the same boot, by nfsd's cycles a WRITE
+(round 57's baseline on build 506: nfsd 273.1k cycles, rings 144.6k,
+67.42 GB/s mean on both ports, 49 MiB of the region in use). Round 58 is
+also read by the region's peak in use, which must not rise (AGENTS.md),
+and its profile by `page_pool_return_netmem_bulk` and the
+`_raw_spin_unlock_irqrestore` it ends in. Round 55's is read by
+`blk_rq_dma_map_iter_next` and `blk_map_iter_next` (1.73% of cycles on
+build 506, `55-nvme-sgl-walk/pmu.txt`); `run170.sh`'s PMU sampling can be run
+again on B to set beside it. For round 58, `regionlock.bt` again on B
+(`timeout -s INT 10 bpftrace regionlock.bt` during a loan run) gives the
+hold time a WRITE against 3.8 µs on build 506.
+
+## 3. Then
+
+Each change is kept or dropped on its A/B; say which in its round's README
+and in `../FLAMEGRAPH/README.md`'s table, and in AGENTS.md's "Drop at the
+next regroup (3 November)" paragraph. A change that is dropped is reverted
+at the tip (a code commit of its own); the DROP commit stays until the
+regroup. The next target is chosen from the B profile.
+
 # tardis1 on build 504, third boot (29 to 30 October, night): two drives stall on their own, six drives give stack 64 its answer — read this first
 
 The power cycle found all eight data drives with no rescan, in bus
@@ -610,7 +700,7 @@ nfs-server running and the region bound.
   `settled.sh` moves port b to 2/10000.
 - Why the drives stepped down from the third run on.
 
-# tardis2 on 3 November: eight SGL drives on both ports — read this first
+# tardis2 on 3 November: eight SGL drives on both ports
 
 Round 55 waits (Mike): the job is a baseline of the eight SGL drives over
 both ports, with the region on both xeu devices. Where this differs from
