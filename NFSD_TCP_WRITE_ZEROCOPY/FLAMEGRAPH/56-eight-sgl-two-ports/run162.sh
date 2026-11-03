@@ -1,6 +1,6 @@
 #!/bin/bash
-# run162.sh: twelve connections a port at 640 KiB on rings of 128 (Mike), twice, the
-# memory traffic beside each: three connections a ring at about 305 KiB of window each.
+# run162.sh: twelve connections a port at 576 KiB on rings of 128 (Mike), twice, the
+# memory traffic beside each: three connections a ring at about 270 KiB of window each.
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
 while pgrep -f '[r]un161\.sh' > /dev/null; do sleep 2; done
@@ -8,7 +8,7 @@ O=$L/t2-r162
 mkdir -p $O
 say() { echo "$(date +%T) $*"; }
 DRV="nvme0n1 nvme1n1 nvme2n1 nvme3n1 nvme4n1 nvme5n1 nvme6n1 nvme7n1"
-for c in n12-640-1:12:655360 n12-640-2:12:655360; do
+for c in n12-576-1:12:589824 n12-576-2:12:589824; do
 	wr=128 e=128
 	tag=${c%%:*}; nc=${c#*:}; nc=${nc%%:*}; rb=${c##*:}
 	client_free || { say "client not free"; exit 1; }
