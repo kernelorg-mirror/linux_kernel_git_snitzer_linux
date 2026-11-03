@@ -1,0 +1,4 @@
+01:22:48 local | 81.616940453 GB/s; 81.6 | memory 125.2 GB/s
+01:27:34 m524288 | total 69.39 GB/s | ringdrop 6280 6329 fifo 0 0 | client retransmits in the window: 13083 | the mesh counted 100.00% of the time   10 to   18 s: wire 70.9 GB/s (70.6 to 70.9), drives writing 73.3 GB/s, region in use 4403 pages (69 MiB) at the middle, 5121 at most; requests to memory 1.73e9/s
+01:32:18 m393216 | total 60.95 GB/s | ringdrop 10 15 fifo 0 0 | client retransmits in the window: 29 | the mesh counted 100.00% of the time   10 to   18 s: wire 61.9 GB/s (61.0 to 62.2), drives writing 63.4 GB/s, region in use 3004 pages (47 MiB) at the middle, 4084 at most; requests to memory 1.14e9/s
+01:32:21 end: settled.sh audit rest: the settled setting
