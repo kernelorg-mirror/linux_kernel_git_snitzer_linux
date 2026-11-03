@@ -122,6 +122,12 @@ enum layoutdriver_policy_flags {
 	PNFS_LAYOUTRET_ON_ERROR		= 1 << 1,
 	PNFS_READ_WHOLE_PAGE		= 1 << 2,
 	PNFS_LAYOUTGET_ON_OPEN		= 1 << 3,
+	/*
+	 * The last close's LAYOUTCOMMIT may go in the CLOSE compound: the
+	 * driver sends no layoutupdate body and has no
+	 * ->prepare_layoutcommit() (flexfiles).
+	 */
+	PNFS_LAYOUTCOMMIT_IN_CLOSE	= 1 << 4,
 };
 
 enum pnfs_layout_destroy_mode {
@@ -346,6 +352,11 @@ int pnfs_mark_matching_lsegs_return(struct pnfs_layout_hdr *lo,
 				const struct nfs4_deviceid *devid);
 int pnfs_mark_layout_stateid_invalid(struct pnfs_layout_hdr *lo,
 		struct list_head *lseg_list);
+bool pnfs_roc_lc(struct inode *ino, struct nfs4_layoutreturn_args *args,
+		 struct nfs4_layoutreturn_res *res, const struct cred *cred,
+		 bool sync, struct nfs4_layoutcommit_data **lcp);
+void pnfs_close_layoutcommit_done(struct nfs4_layoutcommit_data *data,
+				  bool finished, bool returned);
 bool pnfs_roc(struct inode *ino, struct nfs4_layoutreturn_args *args,
 	      struct nfs4_layoutreturn_res *res, const struct cred *cred,
 	      bool sync);
@@ -888,6 +899,22 @@ static inline bool
 pnfs_layoutcommit_outstanding(struct inode *inode)
 {
 	return false;
+}
+
+static inline bool pnfs_roc_lc(struct inode *ino,
+			       struct nfs4_layoutreturn_args *args,
+			       struct nfs4_layoutreturn_res *res,
+			       const struct cred *cred, bool sync,
+			       struct nfs4_layoutcommit_data **lcp)
+{
+	*lcp = NULL;
+	return false;
+}
+
+static inline void
+pnfs_close_layoutcommit_done(struct nfs4_layoutcommit_data *data,
+			     bool finished, bool returned)
+{
 }
 
 static inline bool pnfs_roc(struct inode *ino,

@@ -3597,6 +3597,19 @@ struct nfs4_closedata {
 		u32 roc_barrier;
 		bool roc;
 	} lr;
+	/*
+	 * The LAYOUTCOMMIT sent ahead of the LAYOUTRETURN (pnfs_roc_lc()),
+	 * which is then always there too.
+	 * lc_ok: it is finished, because the server answered it or it ended
+	 * as nfs4_layoutcommit_done() ends a standalone commit; if not, it is
+	 * sent on its own when the close is released.
+	 * lc_wcc: the server committed it, so the attributes the GETATTR
+	 * after it brings back follow our own change; they are applied when
+	 * the close is released, once the commit is finished.
+	 */
+	struct nfs4_layoutcommit_data *lc;
+	bool lc_ok;
+	bool lc_wcc;
 	struct nfs_fattr fattr;
 	unsigned long timestamp;
 	unsigned short retrans;
@@ -3608,6 +3621,18 @@ static void nfs4_free_closedata(void *data)
 	struct nfs4_state_owner *sp = calldata->state->owner;
 	struct super_block *sb = calldata->state->inode->i_sb;
 
+	/*
+	 * Finish the LAYOUTCOMMIT before releasing the LAYOUTRETURN that went
+	 * with it, then, as nfs4_layoutcommit_release() does, update the inode
+	 * from the attributes that follow it: the change is our own.
+	 */
+	if (calldata->lc) {
+		pnfs_close_layoutcommit_done(calldata->lc, calldata->lc_ok,
+					     calldata->res.lr_ret == 0);
+		if (calldata->lc_wcc)
+			nfs_post_op_update_inode_force_wcc(calldata->inode,
+							   &calldata->fattr);
+	}
 	if (calldata->lr.roc)
 		pnfs_roc_release(&calldata->lr.arg, &calldata->lr.res,
 				calldata->res.lr_ret);
@@ -3616,6 +3641,38 @@ static void nfs4_free_closedata(void *data)
 	nfs4_put_state_owner(sp);
 	nfs_sb_deactive(sb);
 	kfree(calldata);
+}
+
+/*
+ * A LAYOUTCOMMIT sent in the CLOSE or OPEN_DOWNGRADE compound failed:
+ * decide as nfs4_layoutcommit_done() does for a standalone one whether it
+ * is sent again.  Returns true to retry the compound with the commit.
+ */
+static bool nfs4_close_layoutcommit_retry(struct rpc_task *task,
+					  struct nfs4_closedata *calldata,
+					  int lc_ret)
+{
+	struct nfs4_layoutcommit_data *lc = calldata->lc;
+	struct pnfs_layout_range range = {
+		.iomode = IOMODE_ANY,
+		.offset = 0,
+		.length = NFS4_MAX_UINT64,
+	};
+
+	switch (lc_ret) {
+	case -NFS4ERR_DELEG_REVOKED:	/* layout was recalled */
+	case -NFS4ERR_BADIOMODE:	/* no IOMODE_RW layout for range */
+	case -NFS4ERR_BADLAYOUT:	/* no layout */
+	case -NFS4ERR_GRACE:		/* loca_reclaim is always false */
+		return false;
+	case -NFS4ERR_OLD_STATEID:
+		return nfs4_layout_refresh_old_stateid(&lc->args.stateid, &range,
+						       lc->args.inode);
+	default:
+		task->tk_status = lc_ret;
+		return nfs4_async_handle_error(task, NFS_SERVER(lc->args.inode),
+					       NULL, NULL) == -EAGAIN;
+	}
 }
 
 static void nfs4_close_done(struct rpc_task *task, void *data)
@@ -3634,6 +3691,40 @@ static void nfs4_close_done(struct rpc_task *task, void *data)
 	if (!nfs4_sequence_done(task, &calldata->res.seq_res))
 		return;
 	trace_nfs4_close(state, &calldata->arg, &calldata->res, task->tk_status);
+
+	if (calldata->res.lc_res) {
+		int lc_ret = calldata->res.lc_ret;
+		bool lc_done = calldata->res.lc_done;
+
+		/*
+		 * Act on a reply's LAYOUTCOMMIT result once: a task signalled
+		 * while it waits to be sent again comes back here without one.
+		 */
+		calldata->res.lc_ret = 0;
+		calldata->res.lc_done = false;
+		if (lc_done) {
+			/* Committed, whatever the rest did: never send it again. */
+			calldata->lc_ok = true;
+			calldata->lc_wcc = true;
+			calldata->arg.lc_args = NULL;
+			calldata->res.lc_res = NULL;
+		} else if (lc_ret) {
+			/*
+			 * The LAYOUTCOMMIT failed, so nothing after it ran,
+			 * the LAYOUTRETURN included.  Retry with it where a
+			 * standalone commit would be retried; otherwise it is
+			 * over, as nfs4_layoutcommit_done() would decide, and
+			 * the CLOSE is sent again without it.
+			 */
+			if (nfs4_close_layoutcommit_retry(task, calldata,
+							  lc_ret))
+				goto out_restart;
+			calldata->lc_ok = true;
+			calldata->arg.lc_args = NULL;
+			calldata->res.lc_res = NULL;
+			goto out_restart;
+		}
+	}
 
 	/* Handle Layoutreturn errors */
 	if (pnfs_roc_done(task, &calldata->arg.lr_args, &calldata->res.lr_res,
@@ -3685,7 +3776,9 @@ static void nfs4_close_done(struct rpc_task *task, void *data)
 out_release:
 	task->tk_status = 0;
 	nfs_release_seqid(calldata->arg.seqid);
-	nfs_refresh_inode(calldata->inode, &calldata->fattr);
+	/* after our commit, nfs4_free_closedata() updates the inode */
+	if (!calldata->lc_wcc)
+		nfs_refresh_inode(calldata->inode, &calldata->fattr);
 	dprintk("%s: ret = %d\n", __func__, task->tk_status);
 	return;
 out_restart:
@@ -3742,6 +3835,10 @@ static void nfs4_close_prepare(struct rpc_task *task, void *data)
 		nfs_release_seqid(calldata->arg.seqid);
 		goto out_wait;
 	}
+
+	/* each attempt decodes its own LAYOUTCOMMIT result */
+	calldata->res.lc_ret = 0;
+	calldata->res.lc_done = false;
 
 	lo = calldata->arg.lr_args ? calldata->arg.lr_args->layout : NULL;
 	if (lo && !pnfs_layout_is_valid(lo)) {
@@ -3849,11 +3946,16 @@ int nfs4_do_close(struct nfs4_state *state, gfp_t gfp_mask, int wait)
 	calldata->res.seqid = calldata->arg.seqid;
 	calldata->res.server = server;
 	calldata->res.lr_ret = -NFS4ERR_NOMATCHING_LAYOUT;
-	calldata->lr.roc = pnfs_roc(state->inode, &calldata->lr.arg,
-				    &calldata->lr.res, msg.rpc_cred, wait);
+	calldata->lr.roc = pnfs_roc_lc(state->inode, &calldata->lr.arg,
+				       &calldata->lr.res, msg.rpc_cred, wait,
+				       &calldata->lc);
 	if (calldata->lr.roc) {
 		calldata->arg.lr_args = &calldata->lr.arg;
 		calldata->res.lr_res = &calldata->lr.res;
+	}
+	if (calldata->lc) {
+		calldata->arg.lc_args = &calldata->lc->args;
+		calldata->res.lc_res = &calldata->lc->res;
 	}
 	nfs_sb_active(calldata->inode->i_sb);
 

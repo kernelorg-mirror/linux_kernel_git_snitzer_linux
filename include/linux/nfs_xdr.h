@@ -575,6 +575,7 @@ struct nfs_closeargs {
 	const u32 *		bitmask;
 	u32			bitmask_store[NFS_BITMASK_SZ];
 	struct nfs4_layoutreturn_args *lr_args;
+	struct nfs4_layoutcommit_args *lc_args;	/* sent ahead of lr_args */
 };
 
 struct nfs_closeres {
@@ -585,6 +586,9 @@ struct nfs_closeres {
 	const struct nfs_server *server;
 	struct nfs4_layoutreturn_res *lr_res;
 	int lr_ret;
+	struct nfs4_layoutcommit_res *lc_res;	/* decoded ahead of lr_res */
+	int lc_ret;
+	bool lc_done;		/* its LAYOUTCOMMIT was answered NFS4_OK */
 };
 /*
  *  * Arguments to the lock,lockt, and locku call.

@@ -3395,7 +3395,8 @@ static struct pnfs_layoutdriver_type flexfilelayout_type = {
 	.id			= LAYOUT_FLEX_FILES,
 	.name			= "LAYOUT_FLEX_FILES",
 	.owner			= THIS_MODULE,
-	.flags			= PNFS_LAYOUTGET_ON_OPEN,
+	.flags			= PNFS_LAYOUTGET_ON_OPEN |
+				  PNFS_LAYOUTCOMMIT_IN_CLOSE,
 	.max_layoutget_response	= 4096, /* 1 page or so... */
 	.set_layoutdriver	= ff_layout_set_layoutdriver,
 	.alloc_layout_hdr	= ff_layout_alloc_layout_hdr,

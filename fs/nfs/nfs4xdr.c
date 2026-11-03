@@ -546,23 +546,29 @@ static int decode_layoutget(struct xdr_stream *xdr, struct rpc_rqst *req,
 				(compound_encode_hdr_maxsz + \
 				 encode_sequence_maxsz + \
 				 encode_putfh_maxsz + \
+				 encode_layoutcommit_maxsz + \
 				 encode_layoutreturn_maxsz + \
+				 encode_getattr_maxsz + \
 				 encode_open_downgrade_maxsz)
 #define NFS4_dec_open_downgrade_sz \
 				(compound_decode_hdr_maxsz + \
 				 decode_sequence_maxsz + \
 				 decode_putfh_maxsz + \
+				 decode_layoutcommit_maxsz + \
 				 decode_layoutreturn_maxsz + \
+				 decode_getattr_maxsz + \
 				 decode_open_downgrade_maxsz)
 #define NFS4_enc_close_sz	(compound_encode_hdr_maxsz + \
 				 encode_sequence_maxsz + \
 				 encode_putfh_maxsz + \
+				 encode_layoutcommit_maxsz + \
 				 encode_layoutreturn_maxsz + \
 				 encode_close_maxsz + \
 				 encode_getattr_maxsz)
 #define NFS4_dec_close_sz	(compound_decode_hdr_maxsz + \
 				 decode_sequence_maxsz + \
 				 decode_putfh_maxsz + \
+				 decode_layoutcommit_maxsz + \
 				 decode_layoutreturn_maxsz + \
 				 decode_close_maxsz + \
 				 decode_getattr_maxsz)
@@ -2438,6 +2444,10 @@ static void nfs4_xdr_enc_close(struct rpc_rqst *req, struct xdr_stream *xdr,
 	encode_compound_hdr(xdr, req, &hdr);
 	encode_sequence(xdr, &args->seq_args, &hdr);
 	encode_putfh(xdr, args->fh, &hdr);
+	/* commit the layout before it goes back (RFC 8881 20.3.4) */
+	if (args->lc_args)
+		encode_layoutcommit(xdr, args->lc_args->inode, args->lc_args,
+				    &hdr);
 	if (args->lr_args)
 		encode_layoutreturn(xdr, args->lr_args, &hdr);
 	if (args->bitmask != NULL)
@@ -2535,8 +2545,15 @@ static void nfs4_xdr_enc_open_downgrade(struct rpc_rqst *req,
 	encode_compound_hdr(xdr, req, &hdr);
 	encode_sequence(xdr, &args->seq_args, &hdr);
 	encode_putfh(xdr, args->fh, &hdr);
+	/* as for CLOSE: commit the layout before it goes back */
+	if (args->lc_args)
+		encode_layoutcommit(xdr, args->lc_args->inode, args->lc_args,
+				    &hdr);
 	if (args->lr_args)
 		encode_layoutreturn(xdr, args->lr_args, &hdr);
+	/* the attributes after the commit, as the standalone one gets them */
+	if (args->lc_args && args->bitmask)
+		encode_getfattr(xdr, args->bitmask, &hdr);
 	encode_open_downgrade(xdr, args, &hdr);
 	encode_nops(&hdr);
 }
@@ -6530,10 +6547,22 @@ static int nfs4_xdr_dec_open_downgrade(struct rpc_rqst *rqstp,
 	status = decode_putfh(xdr);
 	if (status)
 		goto out;
+	if (res->lc_res) {
+		status = decode_layoutcommit(xdr, rqstp, res->lc_res);
+		res->lc_ret = status;
+		if (status)
+			goto out;	/* the ops after it did not run */
+		res->lc_done = true;
+	}
 	if (res->lr_res) {
 		status = decode_layoutreturn(xdr, res->lr_res);
 		res->lr_ret = status;
 		if (status)
+			goto out;
+	}
+	if (res->lc_res && res->fattr) {
+		status = decode_getfattr(xdr, res->fattr, res->server);
+		if (status != 0)
 			goto out;
 	}
 	status = decode_open_downgrade(xdr, res);
@@ -6908,6 +6937,13 @@ static int nfs4_xdr_dec_close(struct rpc_rqst *rqstp, struct xdr_stream *xdr,
 	status = decode_putfh(xdr);
 	if (status)
 		goto out;
+	if (res->lc_res) {
+		status = decode_layoutcommit(xdr, rqstp, res->lc_res);
+		res->lc_ret = status;
+		if (status)
+			goto out;	/* the ops after it did not run */
+		res->lc_done = true;
+	}
 	if (res->lr_res) {
 		status = decode_layoutreturn(xdr, res->lr_res);
 		res->lr_ret = status;

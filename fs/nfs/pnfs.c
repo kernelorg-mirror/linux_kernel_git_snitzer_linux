@@ -1591,23 +1591,155 @@ static int pnfs_layout_return_on_reboot(struct pnfs_layout_hdr *lo)
 				      PNFS_FL_LAYOUTRETURN_PRIVILEGED);
 }
 
-bool pnfs_roc(struct inode *ino, struct nfs4_layoutreturn_args *args,
-	      struct nfs4_layoutreturn_res *res, const struct cred *cred,
-	      bool sync)
+static void pnfs_list_write_lseg(struct inode *inode, struct list_head *listp);
+
+/*
+ * The last close of a file written through a layout whose driver allows it
+ * (PNFS_LAYOUTCOMMIT_IN_CLOSE) can carry its LAYOUTCOMMIT in the CLOSE, or
+ * OPEN_DOWNGRADE, compound, ahead of the LAYOUTRETURN of the written lsegs:
+ * one RPC where there were three, the LAYOUTCOMMIT, the LAYOUTRETURN its
+ * release sends, and the CLOSE, which waits for that return.
+ *
+ * The commit keeps the references pnfs_set_layoutcommit() took on the write
+ * lsegs until the close is released, as a standalone commit keeps them until
+ * nfs4_layoutcommit_release().  They are what makes a recall, a bulk recall
+ * or a deferred LAYOUTRETURN of those lsegs wait for the commit.
+ *
+ * Can the close carry it?  Only if each write lseg the commit holds that has
+ * been marked for return is held by nothing else: the commit's reference is
+ * then its last, and its LAYOUTRETURN can go in the same compound.  *@fold is
+ * set if there is such an lseg.  One still in use is returned when its I/O
+ * completes, as before, and the commit then goes on its own.
+ */
+static bool pnfs_close_layoutcommit_idle(struct pnfs_layout_hdr *lo,
+					 bool *fold)
+{
+	struct pnfs_layout_segment *lseg;
+
+	*fold = false;
+	list_for_each_entry(lseg, &lo->plh_segs, pls_list) {
+		if (lseg->pls_range.iomode != IOMODE_RW ||
+		    !test_bit(NFS_LSEG_LAYOUTCOMMIT, &lseg->pls_flags) ||
+		    test_bit(NFS_LSEG_VALID, &lseg->pls_flags) ||
+		    !test_bit(NFS_LSEG_LAYOUTRETURN, &lseg->pls_flags))
+			continue;
+		if (refcount_read(&lseg->pls_refcount) != 1)
+			return false;
+		*fold = true;
+	}
+	return true;
+}
+
+/*
+ * Take the LAYOUTCOMMIT the close carries, under i_lock, the caller holding
+ * NFS_INO_LAYOUTCOMMITTING: the first half of pnfs_layoutcommit_inode().
+ * With @fold, the compound's LAYOUTRETURN covers the write lsegs marked for
+ * return, but pnfs_prepare_layoutreturn() has just asked again for the
+ * return of every lseg still marked: leave those the commit now holds out of
+ * that request, or their return would be sent twice.
+ */
+static void pnfs_close_layoutcommit_take_locked(struct inode *ino,
+						struct pnfs_layout_hdr *lo,
+						struct nfs4_layoutcommit_data *data,
+						bool fold)
+{
+	struct pnfs_layout_segment *lseg;
+	loff_t end_pos = lo->plh_lwb;
+
+	clear_bit(NFS_INO_LAYOUTCOMMIT, &NFS_I(ino)->flags);
+	INIT_LIST_HEAD(&data->lseg_list);
+	pnfs_list_write_lseg(ino, &data->lseg_list);
+	if (fold) {
+		lo->plh_return_iomode = 0;
+		lo->plh_return_seq = 0;
+		clear_bit(NFS_LAYOUT_RETURN_REQUESTED, &lo->plh_flags);
+		list_for_each_entry(lseg, &lo->plh_segs, pls_list) {
+			if (!list_empty(&lseg->pls_lc_list) ||
+			    !test_bit(NFS_LSEG_LAYOUTRETURN, &lseg->pls_flags))
+				continue;
+			pnfs_set_plh_return_info(lo, lseg->pls_range.iomode, 0);
+		}
+	}
+	nfs4_stateid_copy(&data->args.stateid, &lo->plh_stateid);
+	data->cred = get_cred(lo->plh_lc_cred);
+	data->args.inode = ino;
+	nfs_fattr_init(&data->fattr);
+	data->args.bitmask = NFS_SERVER(ino)->cache_consistency_bitmask;
+	data->res.fattr = &data->fattr;
+	data->args.lastbytewritten = end_pos ? end_pos - 1 : U64_MAX;
+	data->res.server = NFS_SERVER(ino);
+}
+
+/*
+ * The close is over, and the caller has not yet released the LAYOUTRETURN
+ * that went with the commit.  If that return went back (@returned), the
+ * write lsegs it covered must not queue another when the commit lets go of
+ * them; otherwise they still carry their mark, and their return is queued
+ * then, after the commit.
+ *
+ * If the LAYOUTCOMMIT is finished, because the server answered it or it
+ * ended as nfs4_layoutcommit_done() ends a standalone one, clean it up.
+ * Otherwise it was never sent or never answered: the close turned out to be
+ * unnecessary, or its compound failed before the reply.  Send it now as a
+ * standalone, asynchronous LAYOUTCOMMIT, which releases @data, and with it
+ * the lseg references that hold any return back, when it completes.
+ */
+void pnfs_close_layoutcommit_done(struct nfs4_layoutcommit_data *data,
+				  bool finished, bool returned)
+{
+	struct inode *inode = data->args.inode;
+	struct pnfs_layout_segment *lseg;
+
+	if (returned) {
+		spin_lock(&inode->i_lock);
+		list_for_each_entry(lseg, &data->lseg_list, pls_lc_list)
+			if (!test_bit(NFS_LSEG_VALID, &lseg->pls_flags))
+				clear_bit(NFS_LSEG_LAYOUTRETURN,
+					  &lseg->pls_flags);
+		spin_unlock(&inode->i_lock);
+	}
+	if (!finished) {
+		nfs4_proc_layoutcommit(data, false);
+		return;
+	}
+	pnfs_cleanup_layoutcommit(data);	/* clears NFS_INO_LAYOUTCOMMITTING */
+	put_cred(data->cred);
+	kfree(data);
+}
+
+static bool __pnfs_roc(struct inode *ino, struct nfs4_layoutreturn_args *args,
+		       struct nfs4_layoutreturn_res *res,
+		       const struct cred *cred, bool sync,
+		       struct nfs4_layoutcommit_data **lcp)
 {
 	struct nfs_inode *nfsi = NFS_I(ino);
 	struct nfs_open_context *ctx;
 	struct nfs4_state *state;
 	struct pnfs_layout_hdr *lo;
 	struct pnfs_layout_segment *lseg, *next;
+	struct nfs4_layoutcommit_data *lcd = NULL;
 	const struct cred *lc_cred;
 	nfs4_stateid stateid;
 	enum pnfs_iomode iomode = 0;
 	bool layoutreturn = false, roc = false;
+	bool lc_held = false, lc_fold = false, lc_taken = false;
 	bool skip_read;
 
+	if (lcp)
+		*lcp = NULL;
 	if (!nfs_have_layout(ino))
 		return false;
+	/*
+	 * The LAYOUTCOMMIT a CLOSE may carry, allocated before any lock is
+	 * taken.  Not for a driver with ->prepare_layoutcommit(), which this
+	 * path does not call.
+	 */
+	if (lcp &&
+	    (NFS_SERVER(ino)->pnfs_curr_ld->flags &
+	     PNFS_LAYOUTCOMMIT_IN_CLOSE) &&
+	    !NFS_SERVER(ino)->pnfs_curr_ld->prepare_layoutcommit &&
+	    pnfs_layoutcommit_outstanding(ino))
+		lcd = kzalloc_obj(*lcd, nfs_io_gfp_mask());
 retry:
 	rcu_read_lock();
 	spin_lock(&ino->i_lock);
@@ -1687,6 +1819,27 @@ retry:
 		pnfs_set_plh_return_info(lo, lseg->pls_range.iomode, 0);
 	}
 
+	/*
+	 * The last writer's close can carry its commit, with the close's cred
+	 * as the LAYOUTRETURN uses it.  The written lsegs the loop could not
+	 * free because only the commit holds them go back in this compound,
+	 * after the commit, so their return is requested here as the loop
+	 * requests it for an lseg it frees.  The commit is carried only with a
+	 * LAYOUTRETURN (roc below), whose lock no other return can take until
+	 * the close is released; and the close then never waits for another
+	 * return while it holds NFS_INO_LAYOUTCOMMITTING.  A commit already in
+	 * flight is not taken: pnfs_layoutcommit_inode() below handles it as
+	 * before, waiting for it on a synchronous close.
+	 */
+	if (lcd && test_bit(NFS_INO_LAYOUTCOMMIT, &nfsi->flags) &&
+	    lo->plh_lc_cred && cred_fscmp(cred, lo->plh_lc_cred) == 0 &&
+	    pnfs_close_layoutcommit_idle(lo, &lc_fold) &&
+	    !test_and_set_bit(NFS_INO_LAYOUTCOMMITTING, &nfsi->flags)) {
+		lc_held = true;
+		if (lc_fold)
+			pnfs_set_plh_return_info(lo, IOMODE_RW, 0);
+	}
+
 	if (!test_bit(NFS_LAYOUT_RETURN_REQUESTED, &lo->plh_flags))
 		goto out_noroc;
 
@@ -1701,6 +1854,10 @@ retry:
 		goto out_noroc;
 
 	roc = layoutreturn;
+	if (lc_held) {
+		pnfs_close_layoutcommit_take_locked(ino, lo, lcd, lc_fold);
+		lc_taken = true;
+	}
 	pnfs_init_layoutreturn_args(args, lo, &stateid, iomode);
 	res->lrs_present = 0;
 	layoutreturn = false;
@@ -1709,7 +1866,21 @@ retry:
 out_noroc:
 	spin_unlock(&ino->i_lock);
 	rcu_read_unlock();
-	pnfs_layoutcommit_inode(ino, sync);
+	if (lc_taken) {
+		*lcp = lcd;	/* the CLOSE or OPEN_DOWNGRADE carries it */
+	} else {
+		if (lc_held)
+			clear_and_wake_up_bit(NFS_INO_LAYOUTCOMMITTING,
+					      &nfsi->flags);
+		kfree(lcd);
+	}
+	/*
+	 * The standalone commit, unless the CLOSE carries it: we hold
+	 * NFS_INO_LAYOUTCOMMITTING and pnfs_layoutcommit_outstanding() counts
+	 * it, so a sync commit here would wait on ourselves.
+	 */
+	if (!lc_taken)
+		pnfs_layoutcommit_inode(ino, sync);
 	if (roc) {
 		struct pnfs_layoutdriver_type *ld = NFS_SERVER(ino)->pnfs_curr_ld;
 		if (ld->prepare_layoutreturn)
@@ -1721,6 +1892,24 @@ out_noroc:
 		pnfs_send_layoutreturn(lo, &stateid, &lc_cred, iomode, 0);
 	pnfs_put_layout_hdr(lo);
 	return false;
+}
+
+bool pnfs_roc(struct inode *ino, struct nfs4_layoutreturn_args *args,
+	      struct nfs4_layoutreturn_res *res, const struct cred *cred,
+	      bool sync)
+{
+	return __pnfs_roc(ino, args, res, cred, sync, NULL);
+}
+
+/*
+ * pnfs_roc() for a CLOSE or OPEN_DOWNGRADE that can also carry the
+ * LAYOUTCOMMIT: *@lcp is set to it, or to NULL if there is none to carry.
+ */
+bool pnfs_roc_lc(struct inode *ino, struct nfs4_layoutreturn_args *args,
+		 struct nfs4_layoutreturn_res *res, const struct cred *cred,
+		 bool sync, struct nfs4_layoutcommit_data **lcp)
+{
+	return __pnfs_roc(ino, args, res, cred, sync, lcp);
 }
 
 int pnfs_roc_done(struct rpc_task *task, struct nfs4_layoutreturn_args **argpp,
