@@ -13,24 +13,32 @@
  *   to the WRITE  from the call that completes the record to its WRITE
  *
  * A transport queued again while a thread still held it is queued when the
- * thread lets it go, so its gap counts as waiting for a thread.
+ * thread lets it go, so its gap counts as waiting for a thread.  "On the
+ * wire" is until the socket has what the thread asked for to be woken
+ * (svc_tcp_rx_want_eighths of the window for a loaned record), not only
+ * until the next frame.
  *     timeout -s INT 10 bpftrace recordwait.bt
  */
 config = { missing_probes = "warn"; max_map_keys = 65536 }
 
 BEGIN { @t0 = nsecs; }
 
+/* sunrpc stamps xpt_qtime only while this tracepoint is enabled
+ * (svc_xprt_enqueue()): attaching to it is what turns the stamp on. */
+tracepoint:sunrpc:svc_xprt_dequeue { @dequeues = count(); }
+
 fentry:sunrpc:svc_tcp_recvfrom
 {
 	$x = (uint64)args.rqstp->rq_xprt;
 	@cx[tid] = $x; @in[tid] = nsecs;
-	if (@rb[$x] && @out[$x]) {
+	if (@rb[$x] && @out[$x] && @out[$x] <= nsecs && nsecs - @out[$x] < 1000000000) {
 		$q = *(uint64 *)($x + offsetof(struct svc_xprt, xpt_qtime));
 		if ($q > @out[$x] && $q <= nsecs) {
 			@wire[$x] += $q - @out[$x];
 			@thr[$x] += nsecs - $q;
 		} else {
 			@thr[$x] += nsecs - @out[$x];
+			@gap_queued_before_exit = count();
 		}
 	}
 }

@@ -1,0 +1,3 @@
+04:24:45 pl393216-128 | total 63.13 GB/s | region pages in use at most: 12456 | 1 in calls 56 us; 3 for a thread 708380 us; all, first borrow to WRITE 539 us; 4 to the WRITE 14 us; 2 on the wire 0 us; records 494385
+04:29:29 pl524288-256 | total 72.12 GB/s | region pages in use at most: 11634 | 1 in calls 60 us; 3 for a thread 2744742 us; all, first borrow to WRITE 475 us; 4 to the WRITE 15 us; 2 on the wire 0 us; records 558820
+04:29:32 end: settled.sh audit rest: the settled setting
