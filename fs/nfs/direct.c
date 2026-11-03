@@ -443,10 +443,19 @@ static void nfs_direct_complete(struct nfs_direct_req *dreq)
 	nfs_direct_req_release(dreq);
 }
 
+/* Called by whoever drops the last I/O count of a read request */
+static void nfs_direct_read_complete(struct nfs_direct_req *dreq)
+{
+	trace_nfs_direct_read_complete(dreq);
+	nfs_direct_complete(dreq);
+}
+
 static void nfs_direct_read_completion(struct nfs_pgio_header *hdr)
 {
 	unsigned long bytes = 0;
 	struct nfs_direct_req *dreq = hdr->dreq;
+
+	trace_nfs_direct_read_completion(dreq);
 
 	spin_lock(&dreq->lock);
 	if (test_bit(NFS_IOHDR_REDO, &hdr->flags)) {
@@ -490,7 +499,7 @@ static void nfs_direct_read_completion(struct nfs_pgio_header *hdr)
 	}
 out_put:
 	if (put_dreq(dreq))
-		nfs_direct_complete(dreq);
+		nfs_direct_read_complete(dreq);
 	hdr->release(hdr);
 }
 
@@ -611,7 +620,7 @@ static ssize_t nfs_direct_read_schedule_iovec(struct nfs_direct_req *dreq,
 	}
 
 	if (put_dreq(dreq))
-		nfs_direct_complete(dreq);
+		nfs_direct_read_complete(dreq);
 	return requested_bytes;
 }
 
