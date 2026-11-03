@@ -1180,12 +1180,38 @@ void svc_rtc_stats_show(struct seq_file *m)
 }
 EXPORT_SYMBOL_GPL(svc_rtc_stats_show);
 
+/*
+ * Runs and pool rqsts in use are counted per CPU instead of in
+ * serv->sv_rtc_active, so no op writes a serv-wide line.  A get and its
+ * put may run on different CPUs; only the sum is meaningful.  The sum is
+ * global, not per serv: svc_rtc_unregister() polls it, so with more than
+ * one service it waits for every service's in-flight work, not only its own.
+ */
+static DEFINE_PER_CPU(long, svc_rtc_active_pc);
+
+static inline void svc_rtc_active_get(void)
+{
+	this_cpu_inc(svc_rtc_active_pc);
+}
+
+static inline void svc_rtc_active_put(void)
+{
+	this_cpu_dec(svc_rtc_active_pc);
+}
+
+static long svc_rtc_active_sum(void)
+{
+	long sum = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		sum += per_cpu(svc_rtc_active_pc, cpu);
+	return sum;
+}
+
 static void svc_rtc_run_done(struct svc_xprt *xprt)
 {
-	struct svc_serv *serv = xprt->xpt_server;
-
-	if (atomic_dec_and_test(&serv->sv_rtc_active))
-		wake_up_var(&serv->sv_rtc_active);
+	svc_rtc_active_put();
 	svc_xprt_put(xprt);
 }
 
@@ -1217,7 +1243,7 @@ static struct svc_xprt *svc_rtc_pin(struct svc_rtc_conn *conn)
 	struct svc_xprt *xprt = conn->xprt;
 
 	svc_xprt_get(xprt);
-	atomic_inc(&xprt->xpt_server->sv_rtc_active);
+	svc_rtc_active_get();
 	return xprt;
 }
 
@@ -1705,6 +1731,7 @@ EXPORT_SYMBOL_GPL(svc_rtc_serv_destroy);
 int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 {
 	struct svc_rtc_pool *pool;
+	unsigned int i;
 	int ret;
 
 	pool = kzalloc(sizeof(*pool), GFP_KERNEL);
@@ -1713,6 +1740,14 @@ int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 	pool->ops = ops;
 	pool->serv = serv;
 	lwq_init(&pool->free);
+	pool->nshard = nr_cpu_ids;
+	pool->shard = kcalloc(pool->nshard, sizeof(*pool->shard), GFP_KERNEL);
+	if (!pool->shard) {
+		kfree(pool);
+		return -ENOMEM;
+	}
+	for (i = 0; i < pool->nshard; i++)
+		lwq_init(&pool->shard[i]);
 	INIT_LIST_HEAD(&pool->all);
 	INIT_WORK(&pool->fill, svc_rtc_pool_fill);
 	INIT_DELAYED_WORK(&pool->decay, svc_rtc_pool_decay);
@@ -1726,8 +1761,10 @@ int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 		rcu_assign_pointer(serv->sv_rtc, ops);
 	}
 	mutex_unlock(&svc_rtc_mutex);
-	if (ret)
+	if (ret) {
+		kfree(pool->shard);
 		kfree(pool);
+	}
 	/* The pool stays empty until svc_rtc_pool_arm(). */
 	return ret;
 }
@@ -1753,11 +1790,12 @@ void svc_rtc_unregister(struct svc_serv *serv)
 	 * thread may find no thread left to run it: release it here (the
 	 * client retransmits, as for any call dropped at shutdown).
 	 */
-	do {
+	for (;;) {
 		svc_rtc_handoff_drain(serv);
-	} while (!wait_var_event_timeout(&serv->sv_rtc_active,
-					 !atomic_read(&serv->sv_rtc_active),
-					 HZ / 10));
+		if (!svc_rtc_active_sum())
+			break;
+		schedule_timeout_uninterruptible(HZ / 100);
+	}
 	mutex_lock(&svc_rtc_mutex);
 	pool = serv->sv_rtc_pool;
 	serv->sv_rtc_pool = NULL;
@@ -2420,15 +2458,73 @@ static unsigned int svc_rtc_parked_max(const struct svc_serv *serv)
 	       max_t(unsigned int, READ_ONCE(serv->sv_nrthreads), 1);
 }
 
+/* Free rqsts go back to the releasing CPU's own list. */
+static void svc_rtc_pool_free_local(struct svc_rtc_pool *pool,
+				    struct svc_rtc_rqst *r)
+{
+	lwq_enqueue(&r->qnode,
+		    &pool->shard[raw_smp_processor_id() % pool->nshard]);
+}
+
+/*
+ * This CPU's list first, then the shared list (fill and resize use it),
+ * then the other CPUs' lists, skipping empty ones unlocked.
+ */
+static struct svc_rtc_rqst *svc_rtc_pool_get(struct svc_rtc_pool *pool)
+{
+	unsigned int me = raw_smp_processor_id() % pool->nshard, i;
+	struct svc_rtc_rqst *r;
+
+	r = lwq_dequeue(&pool->shard[me], struct svc_rtc_rqst, qnode);
+	if (r)
+		return r;
+	r = lwq_dequeue(&pool->free, struct svc_rtc_rqst, qnode);
+	if (r)
+		return r;
+	for (i = 1; i < pool->nshard; i++) {
+		struct lwq *q = &pool->shard[(me + i) % pool->nshard];
+
+		if (lwq_empty(q))
+			continue;
+		r = lwq_dequeue(q, struct svc_rtc_rqst, qnode);
+		if (r)
+			return r;
+	}
+	return NULL;
+}
+
+/* Move every per-CPU free rqst to the shared list (resize, fill). */
+static void svc_rtc_pool_gather(struct svc_rtc_pool *pool)
+{
+	struct svc_rtc_rqst *r;
+	unsigned int i;
+
+	for (i = 0; i < pool->nshard; i++)
+		while ((r = lwq_dequeue(&pool->shard[i], struct svc_rtc_rqst,
+					qnode)))
+			lwq_enqueue(&r->qnode, &pool->free);
+}
+
+static bool svc_rtc_pool_empty(struct svc_rtc_pool *pool)
+{
+	unsigned int i;
+
+	if (!lwq_empty(&pool->free))
+		return false;
+	for (i = 0; i < pool->nshard; i++)
+		if (!lwq_empty(&pool->shard[i]))
+			return false;
+	return true;
+}
+
 static void svc_rtc_pool_put(struct svc_rtc_rqst *r)
 {
 	struct svc_serv *serv = r->rqstp->rq_server;
 
 	svc_rtc_unpark(r);
 	r->conn = NULL;
-	lwq_enqueue(&r->qnode, &serv->sv_rtc_pool->free);
-	if (atomic_dec_and_test(&serv->sv_rtc_active))
-		wake_up_var(&serv->sv_rtc_active);
+	svc_rtc_pool_free_local(serv->sv_rtc_pool, r);
+	svc_rtc_active_put();
 }
 
 static void svc_rtc_rqst_release(struct svc_rtc_rqst *r)
@@ -2646,14 +2742,14 @@ static void svc_rtc_fast(struct svc_rtc_conn *conn)
 		goto thread;
 	}
 	if (pool)
-		r = lwq_dequeue(&pool->free, struct svc_rtc_rqst, qnode);
+		r = svc_rtc_pool_get(pool);
 	if (!r) {
 		if (pool)
 			svc_rtc_pool_arm(pool);
 		reason = SVC_RTC_FB_POOL_EMPTY;
 		goto thread;
 	}
-	atomic_inc(&serv->sv_rtc_active);
+	svc_rtc_active_get();
 	r->conn = conn;
 	r->queued = false;
 	rqstp = r->rqstp;
@@ -2734,6 +2830,7 @@ static void svc_rtc_pool_free(struct svc_rtc_pool *pool)
 		list_del(&r->all);
 		svc_rtc_rqst_destroy(pool->ops, r);
 	}
+	kfree(pool->shard);
 	kfree(pool);
 }
 
@@ -2749,6 +2846,8 @@ static int svc_rtc_pool_set_locked(struct svc_serv *serv,
 	int ret = 0;
 
 	lockdep_assert_held(&svc_rtc_mutex);
+	if (pool->nr > nr)
+		svc_rtc_pool_gather(pool);	/* idle rqsts to the shared list */
 	while (pool->nr < nr) {
 		r = svc_rtc_inject_no_grow() ? NULL :
 			svc_rtc_rqst_new(serv, pool->ops, pool->nr);
@@ -2883,7 +2982,7 @@ static void svc_rtc_pool_fill(struct work_struct *work)
 	if (serv->sv_rtc_pool == pool &&
 	    test_and_clear_bit(SVC_RTC_POOL_GROW, &pool->flags) &&
 	    !test_bit(SVC_RTC_POOL_NOGROW, &pool->flags) &&
-	    lwq_empty(&pool->free) &&
+	    svc_rtc_pool_empty(pool) &&
 	    pool->nr >= READ_ONCE(serv->sv_nrthreads)) {
 		parked = atomic_read(&pool->parked);
 		if (parked * 4 >= pool->nr * 3) {
