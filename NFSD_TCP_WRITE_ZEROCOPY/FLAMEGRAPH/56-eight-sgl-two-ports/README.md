@@ -120,6 +120,24 @@ At nfsd's first put of a traced page, its pool count against the references the 
 - **The other buffer costs 5 to 7% of the pages.** Each such page waits long (2 ms on average at 384 KiB), but there are few.
 - **Most of the way back is a free page waiting to be posted again:** 686 pages at 384 KiB, 1,039 at 512 KiB, 23 to 25% of all, about 11 to 16 MiB. That is the pools' recycled pages (each pool's cache and ring, the region's stack) between the put and the next hand-out. Not yet split by where they wait.
 
+## A free page's wait, by where it waits (run155)
+
+A page free at nfsd's put goes to its pool's stack of returned pages (64 deep), or to the region's free lists when the stack is full, or, from a release in NAPI context, straight into the pool's alloc cache; the ring takes it from the alloc cache, which is filled from the stack or the region. Traced rates 49.75 and 65.07 GB/s.
+
+| 5b, page free at the put | 384 KiB, 128: cycles | mean | pages | 512 KiB, 256: cycles | mean | pages |
+|---|---|---|---|---|---|---|
+| free in the region (the stack was full) | 15% | 1,804 us (median [128, 256)) | 402 | 20% | 1,434 us (median [64, 128)) | 744 |
+| in the pool's stack | 70% | 171 us | 180 | 64% | 98 us | 162 |
+| straight to the alloc cache | 15% | | 137 | 16% | | 191 |
+| in the alloc cache, from the stack or the region | | 33 us | 42 | | 20 us | 42 |
+| all of 5b | | 511 us | 763 | | 445 us | 1,145 |
+
+- **Half of the way back is pages free in the region,** which the region counts as free, not in use. So run153 and run154 overstated the pages in use on the way back, and their totals include about 400 (384 KiB) and 750 (512 KiB) free pages. What the region counts in use on the way back is the stack, the alloc caches and the pages going straight to them: about 360 pages at 384 KiB, 395 at 512 KiB, 11 to 12% of the pages in use.
+- The region's free lists are a stack too (the newest page is handed out first); the long mean over a short median is pages left deep in it.
+- **So what holds the pages in use, in order:** the rest of the record (975 and 925), the ring and the socket (605 and 996), the drive (250 and 586), the pools' stacks and caches (about 360 and 395), the other buffer (239 and 259), records not seen put (162 and 215), pages never loaned (about 120 and 143).
+
+(The not-loaned row of run155's 384 KiB trace has a bad sum; its count and median are good.)
+
 ## Where it stands
 
 The settled two-port setting, 384 KiB and four rings of 128, stays: the lowest footprint that loses nothing (47 MiB in use, 1.19 bytes a byte, about 61 GB/s). Every setting that carries more holds more of the region, in the middle of a run as well as at its peak. 80 GB/s within the L3 needs less of the region for each byte of window, which is a change to the code, not to the setting.
