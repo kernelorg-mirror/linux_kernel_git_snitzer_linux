@@ -71,6 +71,19 @@ One run a budget, the memory traffic beside each.
 
 The budget sets the peak and costs almost no rate down to 48 WRITEs (about 0.7 refusals a WRITE). It does not move the pages in use in the middle of a run or the bytes a byte: what fills the L3 at rings of 256 is not the loans the budget bounds. The peak is the budget's; the region's use in the middle of a run is the measure against the L3, and on it rings of 256 are about 21 MiB over the settled setting at any budget. 128 against run147's 73.27 shows the setting is steady.
 
+## Budget 64 at the settled setting (run151, Mike)
+
+384 KiB and rings of 128, two runs at budget 64 against budget 128 (run143's b1 and run146's m393216; run143 had no memory traffic).
+
+| budget | GB/s | port a / b, fio | ring drops a / b | client retransmits | region peak | in use, middle | bytes a byte | loans refused |
+|---|---|---|---|---|---|---|---|---|
+| 128 | 61.93 | 31.29 / 30.65 | 42 / 30 | 75 | 9,881 | | | 0 |
+| 128 | 60.95 | 31.98 / 28.97 | 10 / 15 | 29 | 4,084 (memcost's) | 47 MiB | 1.19 | |
+| 64 | 63.99 | 30.02 / 33.98 | 6 / 40 | 50 | 6,822 | 58 MiB | 1.33 | 48,552 |
+| 64 | 60.23 | 32.76 / 27.47 | 22 / 38 | 70 | 6,850 | 47 MiB | 1.33 | 30,813 |
+
+The rate is the same (62.1 against 61.4 on average). The peak falls about 3,000 pages (30%). The middle is 47 to 58 MiB against 47, and the bytes a byte 1.33 against one figure of 1.19 at 128, so it is not shown to help the L3 and may not. At this setting one port ran 4 to 6 GB/s under the other in three of the four runs, which port it was changing; not looked into.
+
 ## Where it stands
 
 The settled two-port setting, 384 KiB and four rings of 128, stays: the lowest footprint that loses nothing (47 MiB in use, 1.19 bytes a byte, about 61 GB/s). Every setting that carries more holds more of the region, in the middle of a run as well as at its peak. 80 GB/s within the L3 needs less of the region for each byte of window, which is a change to the code, not to the setting.
