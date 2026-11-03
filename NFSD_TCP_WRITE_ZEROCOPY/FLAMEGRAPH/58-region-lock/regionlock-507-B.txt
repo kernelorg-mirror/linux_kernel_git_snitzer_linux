@@ -1,0 +1,116 @@
+regionlock.bt:89:28-47: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+                              ~~~~~~~~~~~~~~~~~~~
+regionlock.bt:89:28-47: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+                              ~~~~~~~~~~~~~~~~~~~
+regionlock.bt:40:7-12: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @rb[tid];
+         ~~~~~
+regionlock.bt:40:15-23: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @rb[tid];
+                 ~~~~~~~~
+regionlock.bt:64:7-15: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = (uint64)nsecs - (uint64)@ra[tid];
+         ~~~~~~~~
+regionlock.bt:64:23-31: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = (uint64)nsecs - (uint64)@ra[tid];
+                         ~~~~~~~~
+regionlock.bt:81:7-12: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @lw[tid];
+         ~~~~~
+regionlock.bt:81:15-23: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @lw[tid];
+                 ~~~~~~~~
+regionlock.bt:89:28-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+                              ~~~~~
+regionlock.bt:89:36-39: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    printf("traced_us %d\n", (nsecs - @t0) / 1000);
+                                      ~~~
+regionlock.bt:45:2-18: WARNING: Return value discarded.
+    delete(@rb[tid]);
+    ~~~~~~~~~~~~~~~~
+regionlock.bt:67:2-18: WARNING: Return value discarded.
+    delete(@ra[tid]);
+    ~~~~~~~~~~~~~~~~
+regionlock.bt:84:2-18: WARNING: Return value discarded.
+    delete(@lw[tid]);
+    ~~~~~~~~~~~~~~~~
+Attached 11 probes
+traced_us 10262777
+
+
+@alloc_calls[]: 731907
+@alloc_own_list_depth[1]:
+[2K, 4K)            1513 |                                                    |
+[4K, 8K)          364377 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@alloc_own_list_depth[2]:
+[1K, 2K)              86 |                                                    |
+[2K, 4K)            5742 |                                                    |
+[4K, 8K)          360189 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@alloc_slot[, 1]: 365890
+@alloc_slot[, 2]: 366017
+@lock: 18446463150630955008
+@lock_wait_ns:
+[128, 256)             1 |                                                    |
+[256, 512)           115 |                                                    |
+[512, 1K)           2753 |@@@@@@@@@@@@@                                       |
+[1K, 2K)           10980 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[2K, 4K)            4709 |@@@@@@@@@@@@@@@@@@@@@@                              |
+[4K, 8K)            1601 |@@@@@@@                                             |
+[8K, 16K)            122 |                                                    |
+
+@lock_waits[rings]: 7030
+@lock_waits[nfsd]: 13685
+@ns_n[rx_region_alloc]: 612416
+@ns_n[return_netmem_bulk]: 1125683
+@ns_sum[lock wait]: 41205330
+@ns_sum[return_netmem_bulk]: 2250185668
+@ns_sum[rx_region_alloc]: 23846634395639408
+@ret_bulk_calls[nfsd]: 1125683
+@ret_bulk_n:
+[1]                31500 |@@@@                                                |
+[2]                35463 |@@@@@                                               |
+[3]                38647 |@@@@@@                                              |
+[4]                45356 |@@@@@@@                                             |
+[5]                57233 |@@@@@@@@@                                           |
+[6]                66534 |@@@@@@@@@@                                          |
+[7]                62478 |@@@@@@@@@                                           |
+[8]                53079 |@@@@@@@@                                            |
+[9]                45120 |@@@@@@@                                             |
+[10]               39913 |@@@@@@                                              |
+[11]               37436 |@@@@@                                               |
+[12]               40116 |@@@@@@                                              |
+[13]               49081 |@@@@@@@                                             |
+[14]               69963 |@@@@@@@@@@@                                         |
+[15]              126225 |@@@@@@@@@@@@@@@@@@@@                                |
+[16]              327922 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@ret_bulk_ns:
+[256, 512)           515 |                                                    |
+[512, 1K)          99597 |@@@@@@@@                                            |
+[1K, 2K)          588873 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[2K, 4K)          408341 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                |
+[4K, 8K)           23817 |@@                                                  |
+[8K, 16K)           4428 |                                                    |
+[16K, 32K)           112 |                                                    |
+
+@ret_bulk_pages: 12403198
+@return_one: 30463
+@ring_bulk_calls[-]: 3053374
+@ring_bulk_len:
+[0, 2)             12435 |                                                    |
+[2, 4)             29440 |@                                                   |
+[4, 6)            122516 |@@@@                                                |
+[6, 8)            218794 |@@@@@@@@                                            |
+[8, 10)           173186 |@@@@@@                                              |
+[10, 12)          143289 |@@@@@                                               |
+[12, 14)          216913 |@@@@@@@@                                            |
+[14, 16)          750955 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@                        |
+[16, 18)         1385846 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@t0: 6163787321771
+@writes: 624158

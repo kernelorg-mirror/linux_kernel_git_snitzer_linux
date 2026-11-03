@@ -102,3 +102,20 @@ nfsd 98.52). By that, about 0.5 µs less of nfsd's time a WRITE in the
 interrupts-off section, but across two boots whose busy times differ by
 8%. So `run173.sh` traces the lock's hold on this boot both ways, B
 then A.
+
+**The lock's hold on this boot** (`run173.sh`, `run173.out`;
+[regionlock-507-B.txt](regionlock-507-B.txt),
+[regionlock-507-A.txt](regionlock-507-A.txt); one loan run each, the
+trace for 10 s, as run169):
+
+| | a hold | a WRITE | holds a WRITE | pages back a WRITE | holds that waited | GB/s |
+|---|---|---|---|---|---|---|
+| B (Y) | 2.00 µs | **3.61 µs** | 1.80 | 19.9 | 1.8% | 66.87 |
+| A (N) | 2.30 µs | **4.10 µs** | 1.79 | 19.7 | 2.8% | 69.31 |
+| run169, build 506 | 2.14 µs | 3.80 µs | 1.78 | 19.4 | 1.9% | 66.01 |
+
+The changes take 13% off the hold, 0.5 µs a WRITE, the low end of the
+estimate, with the same number of holds and pages. A ran 3.6% faster and
+waited more, which flatters B a little. Yet the four loan runs above put
+nfsd's cycles a WRITE 2k higher with them on, not lower: the time saved
+under the lock does not show in nfsd's total. One trace each.
