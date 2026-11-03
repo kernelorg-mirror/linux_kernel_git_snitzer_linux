@@ -88,3 +88,17 @@ follow the rate. The peaks are mixed (A's 6458 is one spike). No
 alloc_fail, no stall, no step on any run. The switch turns both changes
 together, so this does not say which of them, if either, costs the 2k.
 `lat.sh`, the profile of B and `regionlock.bt` follow.
+
+The rest of `run171.out`: `lat.sh` at iodepth 1, A B B A then B A A B,
+A 7.76, 7.82, 7.70, 8.42 GB/s (mean 7.93, mean completion 0.457 ms), B
+8.18, 7.85, 8.33, 8.42 (8.20, 0.445 ms): B ahead by about 3% in both
+sets, within reach of the spread (l7-A and l8-B tie). The profile of B
+(`fl-pp`, 69.39 GB/s; rings busy 31.54 µs a WRITE, nfsd 90.77):
+`_raw_spin_unlock_irqrestore` 3.65% of nfsd's cycles and 4.91% of the
+rings', `page_pool_put_netmem_bulk` 2.50% of nfsd's inclusive, against
+3.93%, 4.92% and 2.68% in round 56's profile on build 506
+(`t2-r165/fl56`, the same setting, another boot, rings 34.39 µs and
+nfsd 98.52). By that, about 0.5 µs less of nfsd's time a WRITE in the
+interrupts-off section, but across two boots whose busy times differ by
+8%. So `run173.sh` traces the lock's hold on this boot both ways, B
+then A.
