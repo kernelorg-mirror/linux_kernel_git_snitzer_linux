@@ -771,7 +771,15 @@ ssize_t nfs_file_direct_read(struct kiocb *iocb, struct iov_iter *iter,
 			requested -= result;
 			iocb->ki_pos += result;
 		}
-		iov_iter_revert(iter, requested);
+		/*
+		 * Once an async request has been submitted, its ->ki_complete()
+		 * may run at any time, and some callers free the memory behind
+		 * @iter there (swap frees the bio_vec array with its swap_iocb,
+		 * and so does the NVMe target's file backend).  Callers do not
+		 * use @iter after -EIOCBQUEUED, so revert it only after waiting.
+		 */
+		if (result != -EIOCBQUEUED)
+			iov_iter_revert(iter, requested);
 	} else {
 		result = requested;
 	}
@@ -1691,7 +1699,9 @@ ssize_t nfs_file_direct_write(struct kiocb *iocb, struct iov_iter *iter,
 			/* XXX: should check the generic_write_sync retval */
 			generic_write_sync(iocb, result);
 		}
-		iov_iter_revert(iter, requested);
+		/* See nfs_file_direct_read(): @iter may be gone by now */
+		if (result != -EIOCBQUEUED)
+			iov_iter_revert(iter, requested);
 	} else {
 		result = requested;
 	}
