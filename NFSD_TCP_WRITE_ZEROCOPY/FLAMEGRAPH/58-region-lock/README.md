@@ -62,3 +62,29 @@ N returns a bulk as before, Y (the default) with both changes. From this
 directory: `../ab-switch.sh pp t2-r171 > run171.out`. The region's mean in use
 and peak are reported beside each run, and `regionlock.bt` again on B gives
 the hold's new time.
+
+## The A/B on build 507 (tardis2, 3 November), the loan runs
+
+`../ab-switch.sh pp t2-r171` (`run171.out`, logs in `$L/t2-r171`), both
+ports, 12 connections a port at 512 KiB, rings of 128, budget 128;
+`blk_mq_dma.map_iter_inline` at Y throughout. sunrpc
+`2A512644C685341146A3A9B`, nfsd `BB6D1949646AB051A8D99CC`, xeu
+`CA0931345E46C929B11D01F`.
+
+| run | GB/s | nfsd cycles a WRITE | rings | region in use at the middle | peak |
+|---|---|---|---|---|---|
+| pp-1-A (N) | 66.05 | 268.2k | 144.2k | 2815 (44 MiB) | 3540 |
+| pp-2-B (Y) | 66.64 | 271.3k | 144.1k | 3107 (49 MiB) | 3703 |
+| pp-3-B (Y) | 66.96 | 270.8k | 144.2k | 3203 (50 MiB) | 3489 |
+| pp-4-A (N) | 65.94 | 270.0k | 144.5k | 2807 (44 MiB) | 6458 |
+
+A, build 506's return, reproduces round 57's baseline (273.1k nfsd,
+144.6k rings). With both changes on, nfsd takes 271.1k cycles a WRITE
+against 269.1k (+0.7%), rings the same: the 0.5 to 1.5 µs saved is not
+there. The rate is 1.2% higher on B in both pairs (66.80 against 66.00
+GB/s), and the region holds about 350 pages more at the middle, which
+the changes cannot cause by holding (they hold nothing longer) and may
+follow the rate. The peaks are mixed (A's 6458 is one spike). No
+alloc_fail, no stall, no step on any run. The switch turns both changes
+together, so this does not say which of them, if either, costs the 2k.
+`lat.sh`, the profile of B and `regionlock.bt` follow.
