@@ -1,0 +1,91 @@
+#!/usr/bin/bpftrace
+/*
+ * recordwait.bt: where a loaned record's frames are while its first
+ * borrowed pages wait for its WRITE (FLAMEGRAPH round 56, pagelife.bt's
+ * stage 2).  From the record's first borrow to its WRITE (nfsd_direct_write)
+ * the time is cut, for each connection, into:
+ *
+ *   in calls      inside svc_tcp_recvfrom(), reading the record
+ *   on the wire   between calls, until the transport is queued for a
+ *                 thread again (xpt_qtime): the rest has not arrived
+ *   for a thread  between calls, from the transport being queued to a
+ *                 thread reading it: the rest has arrived and waits
+ *   to the WRITE  from the call that completes the record to its WRITE
+ *
+ * A transport queued again while a thread still held it is queued when the
+ * thread lets it go, so its gap counts as waiting for a thread.
+ *     timeout -s INT 10 bpftrace recordwait.bt
+ */
+config = { missing_probes = "warn"; max_map_keys = 65536 }
+
+BEGIN { @t0 = nsecs; }
+
+fentry:sunrpc:svc_tcp_recvfrom
+{
+	$x = (uint64)args.rqstp->rq_xprt;
+	@cx[tid] = $x; @in[tid] = nsecs;
+	if (@rb[$x] && @out[$x]) {
+		$q = *(uint64 *)($x + offsetof(struct svc_xprt, xpt_qtime));
+		if ($q > @out[$x] && $q <= nsecs) {
+			@wire[$x] += $q - @out[$x];
+			@thr[$x] += nsecs - $q;
+		} else {
+			@thr[$x] += nsecs - @out[$x];
+		}
+	}
+}
+
+fentry:sunrpc:svc_tcp_rx_borrow_segment
+{
+	$x = @cx[tid];
+	if ($x && !@rb[$x]) { @rb[$x] = nsecs; @calls[$x] = 0; }
+}
+
+fexit:sunrpc:svc_tcp_recvfrom
+/@in[tid]/
+{
+	$x = (uint64)args.rqstp->rq_xprt;
+	if (@rb[$x]) {
+		$from = @in[tid] > @rb[$x] ? @in[tid] : @rb[$x];
+		@incall[$x] += nsecs - $from;
+		@calls[$x] += 1;
+	}
+	if (retval > 0) {
+		if (retval > 65536 && @rb[$x]) {
+			/* complete: hand the parts to the thread, for its WRITE */
+			@done[tid] = nsecs; @pb[tid] = @rb[$x];
+			@pw[tid] = @wire[$x]; @pt[tid] = @thr[$x]; @pc[tid] = @incall[$x]; @pn[tid] = @calls[$x];
+		}
+		delete(@rb[$x]); delete(@wire[$x]); delete(@thr[$x]); delete(@incall[$x]); delete(@calls[$x]); delete(@out[$x]);
+	} else {
+		@out[$x] = nsecs;
+	}
+	delete(@in[tid]); delete(@cx[tid]);
+}
+
+fentry:nfsd:nfsd_direct_write
+/@done[tid]/
+{
+	$all = nsecs - @pb[tid]; $tw = nsecs - @done[tid];
+	if ($all < 1000000000) {
+		@records = count();
+		@sum["1 in calls"] = sum(@pc[tid] / 1000);
+		@sum["2 on the wire"] = sum(@pw[tid] / 1000);
+		@sum["3 for a thread"] = sum(@pt[tid] / 1000);
+		@sum["4 to the WRITE"] = sum($tw / 1000);
+		@sum["all, first borrow to WRITE"] = sum($all / 1000);
+		@us["2 on the wire"] = hist(@pw[tid] / 1000);
+		@us["3 for a thread"] = hist(@pt[tid] / 1000);
+		@us["4 to the WRITE"] = hist($tw / 1000);
+		@us["all, first borrow to WRITE"] = hist($all / 1000);
+		@calls_after_first_borrow = lhist(@pn[tid], 0, 20, 1);
+	}
+	delete(@done[tid]); delete(@pb[tid]); delete(@pw[tid]); delete(@pt[tid]); delete(@pc[tid]); delete(@pn[tid]);
+}
+
+END
+{
+	printf("traced_us %d\n", (nsecs - @t0) / 1000);
+	clear(@cx); clear(@in); clear(@rb); clear(@out); clear(@wire); clear(@thr); clear(@incall); clear(@calls);
+	clear(@done); clear(@pb); clear(@pw); clear(@pt); clear(@pc); clear(@pn);
+}
