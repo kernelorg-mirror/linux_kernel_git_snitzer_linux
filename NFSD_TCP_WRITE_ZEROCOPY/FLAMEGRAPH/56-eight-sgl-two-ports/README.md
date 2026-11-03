@@ -104,6 +104,22 @@ The rate is the same (62.1 against 61.4 on average). The peak falls about 3,000 
 - **The record holds the next most:** pages borrowed early in a 1 MiB record wait for its last frames; at 384 KiB 572 us on average, at 512 KiB 325.
 - **What the faster setting adds:** the ring (+353 pages, the deeper rings' posted pages), the drive (+277, its latency 160 to 203 us), the way back (+274). Each page's cycle is shorter (about 1.3 ms against 1.7), but more pages turn.
 
+## The way back, split by the page's other buffer (run154)
+
+At nfsd's first put of a traced page, its pool count against the references the put drops says whether the page's other 8 KiB buffer was still held elsewhere. Traced rates 53.73 and 66.04 GB/s.
+
+| | 384 KiB, 128 | | | 512 KiB, 256 | | |
+|---|---|---|---|---|---|---|
+| | cycles | mean, median | pages | cycles | mean, median | pages |
+| the put drops both buffers (refs 2) | 94% | | | 90% | | |
+| 5a other buffer still held at the put | 101,535 (6%) | 2,071 us, [256, 512) | 202 | 305,173 (10%) | 796 us, [256, 512) | 227 |
+| 5b page free at the put, until posted again | 1,528,244 (94%) | 467 us, [128, 256) | 686 | 2,608,156 (90%) | 426 us, [64, 128) | 1,039 |
+| all stages | | | 2,972 | | | 4,173 |
+
+- **A page's two buffers already go together:** in 90 to 94% of loaned cycles one record holds both and releases them in one put. The client's bursts put a flow's frames back to back on a ring, so consecutive buffers are mostly one connection's. Round 23's 37% counted entries handed to the bulk put, not pages.
+- **The other buffer costs 5 to 7% of the pages.** Each such page waits long (2 ms on average at 384 KiB), but there are few.
+- **Most of the way back is a free page waiting to be posted again:** 686 pages at 384 KiB, 1,039 at 512 KiB, 23 to 25% of all, about 11 to 16 MiB. That is the pools' recycled pages (each pool's cache and ring, the region's stack) between the put and the next hand-out. Not yet split by where they wait.
+
 ## Where it stands
 
 The settled two-port setting, 384 KiB and four rings of 128, stays: the lowest footprint that loses nothing (47 MiB in use, 1.19 bytes a byte, about 61 GB/s). Every setting that carries more holds more of the region, in the middle of a run as well as at its peak. 80 GB/s within the L3 needs less of the region for each byte of window, which is a change to the code, not to the setting.
