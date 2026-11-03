@@ -22,10 +22,8 @@
 #   b   enp164s0f0  192.168.0.211  /hs/nvme4 to /hs/nvme7  client ens6np0
 #
 # That is tardis1.  The ports' addresses and filesystems are common.sh's for
-# the host: on tardis2 port a is 192.168.1.213 onto all eight drives (/hs/nvme0
-# to /hs/nvme7; FS_A="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7" for the four with
-# SGLs), port b is not cabled, and the ports default to the host's (a there, ab
-# on tardis1).
+# the host: on tardis2 the same drives on the same ports, at .213, all eight
+# with SGLs since 2 November.  The ports default to the host's, ab on both.
 #
 # A port's drives each carry a filesystem of their own (no MD since
 # 2026-10-12): each is exported and mounted, /mnt/rxr-<port><n> on the

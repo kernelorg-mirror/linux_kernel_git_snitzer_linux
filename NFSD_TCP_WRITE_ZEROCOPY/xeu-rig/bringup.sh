@@ -1,7 +1,9 @@
 #!/bin/bash
-# bringup.sh <region pages> [ring entries] - bind the fixed receive region to
-# enp161s0f0 on a fresh boot and set its rings.  Run once per boot, before
-# anything else on the port and before anything on veth.
+# bringup.sh <region pages> [ring entries] - the data drives mounted, nfsd
+# started, the fixed receive region bound to every port of the host (both,
+# since tardis2's second port on 2 November) and their rings set, on a fresh
+# boot.  Run once per boot, before anything else on a port and before
+# anything on veth.
 #
 # What 64 KiB taught (XEU_CONVERGENCE.md 5b): the region is named by the
 # port's PCI device, not the interface; ethtool -L works only with the port
@@ -36,6 +38,16 @@ kdump_armed() {
 	echo "kdump armed: $(( $(cat /sys/kernel/kexec_crash_size) >> 20 )) MiB reserved"
 }
 kdump_armed || exit 1
+# The drives are not in /etc/fstab, and place below needs nfsd's threads (on
+# tardis1 hammerspace-nfsd-tuning starts them).  data_drives names a drive
+# here only while nothing is mounted on /hs/nvmeN.
+for dv in $(data_drives); do
+	mp=/hs/${dv%n1}
+	mountpoint -q $mp || mount -o noatime,lazytime /dev/$dv $mp || { echo "cannot mount $dv on $mp"; exit 1; }
+done
+if ! systemctl cat hammerspace-nfsd-tuning.service > /dev/null 2>&1; then
+	systemctl start nfs-server || { echo "nfs-server did not start"; exit 1; }
+fi
 [ -e $RG ] && { echo "a region already exists this boot:"; cat $RG; exit 1; }
 [ "$(cat /sys/module/xeu/parameters/rx_ip_align)" = 2 ] || echo "WARNING: rx_ip_align is not 2: loans will not be written direct on NVMe/TCP"
 $SSHC true || { echo "client $CLIMGMT does not answer"; exit 1; }
@@ -58,4 +70,14 @@ cat $RG || { echo "NO REGION: check 'dmesg | grep page_pool'"; exit 1; }
 "$RIG/settled.sh" place a	# the settled CPU layout for nfsd and the port
 dmesg | grep 'page_pool: ' | tail -2
 [ "$(reg dev)" = "$PCI" ] && [ "$(reg pages)" = "$PAGES" ] || { echo "region is not as asked"; exit 1; }
+# Every other port of the host joins the region: port-setup.sh names it in
+# rx_region_dev with the port down, and its pools map the region when it opens.
+for p in $PORTS; do
+	[ "${PDEVS[$p]}" = "$D" ] && continue
+	"$RIG/port-setup.sh" ${PDEVS[$p]} $([ $p = b ] && echo 56 || echo 0) $ENTRIES || { echo "port $p not set up"; exit 1; }
+	ping -c2 -W2 -I ${PDEVS[$p]} ${CLIP[$p]} | tail -1
+done
+n=$(grep -c . <<< "$(tr ',' '\n' < $PP/rx_region_dev)")
+[ "$n" = "$(wc -w <<< "$PORTS")" ] || { echo "region devices are $(cat $PP/rx_region_dev), not one for each of: $PORTS"; exit 1; }
+dmesg | grep 'page_pool: ' | tail -3
 echo "alloc_fail now $(reg alloc_fail): the sweep reports its change per run"

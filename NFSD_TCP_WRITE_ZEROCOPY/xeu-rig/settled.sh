@@ -6,8 +6,8 @@
 #
 # tardis2 (from 17 October) has the same card, CPUs and client, and is held
 # to the same setting except where common.sh's host block says otherwise:
-# its six data drives (nvme0 to nvme5; nvme6 is its boot drive), port a only
-# (port b is not cabled), its own addresses, no tuned (the sysctls below are
+# its eight DPRP5 data drives with SGLs (nvme0 to nvme7; nvme8 is its boot
+# drive), both ports since 2 November, its own addresses, no tuned (the sysctls below are
 # held by apply and by /etc/sysctl.d/90-zc-settled.conf) and none of
 # Hammerspace's services (nfsd's 512 threads come from /etc/nfs.conf and are
 # pinned by place).
