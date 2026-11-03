@@ -8,11 +8,11 @@
  *     inlined in it): calls, pages a call, the time a call, by caller
  *     (nfsd's threads or the rest, the rings);
  *   - page_pool_return_netmem(): pages returned one at a time;
- *   - __page_pool_rx_region_put(): every page put back under the lock, and
- *     the depth of its device's free list at that put (round 59);
  *   - page_pool_rx_region_alloc(): the rings' refills from the region, the
  *     time a call, and its device list's depth at the call (round 59);
- *   - queued_spin_lock_slowpath() on the region's lock: waits.
+ *   - the lock's contention events (lock:contention_begin/end): waits.
+ * No probe runs under the lock: one on each page put there (run168) held
+ * interrupts off for its BPF program and stretched every hold.
  *     timeout -s INT 10 bpftrace regionlock.bt
  */
 config = { missing_probes = "warn"; max_map_keys = 65536 }
@@ -47,22 +47,11 @@ fexit:vmlinux:page_pool_return_netmem_bulk
 
 fentry:vmlinux:page_pool_return_netmem { @return_one = count(); }
 
-fentry:vmlinux:__page_pool_rx_region_put
-{
-	$r = args.r;
-	/* the lock is the region's first member */
-	if (!@lock) { @lock = (uint64)$r; }
-	@region_puts = count();
-	@puts_cpu_nfsd[comm == "nfsd" ? "nfsd" : "rings"] = count();
-	@put_list_depth_slot1 = hist($r->devs[0].nfree);
-	@put_list_depth_slot2 = hist($r->devs[1].nfree);
-	@unmapped = hist($r->nunmapped);
-}
-
 fentry:vmlinux:page_pool_rx_region_alloc
 {
 	$r = (struct page_pool_rx_region *)args.pool->rx_region;
 	$s = args.pool->rx_region_dev;
+	if (!@lock) { @lock = (uint64)$r; }	/* the lock is its first member */
 	@ra[tid] = nsecs;
 	@alloc_calls[str(args.pool->slow.netdev->name)] = count();
 	@alloc_slot[str(args.pool->slow.netdev->name), $s] = count();
@@ -72,22 +61,26 @@ fentry:vmlinux:page_pool_rx_region_alloc
 fexit:vmlinux:page_pool_rx_region_alloc
 /@ra[tid]/
 {
-	$d = nsecs - @ra[tid];
+	$d = (uint64)nsecs - (uint64)@ra[tid];
 	@ns_sum["rx_region_alloc"] = sum($d);
 	@ns_n["rx_region_alloc"] = count();
 	delete(@ra[tid]);
 }
 
-fentry:vmlinux:queued_spin_lock_slowpath
-/(uint64)args.lock == @lock/
+/* Waits on the region's lock, from the kernel's lock-contention events:
+ * nothing runs under the lock, so a hold is not stretched by the trace. */
+tracepoint:lock:contention_begin
+/args.lock_addr == @lock/
 {
 	@lock_waits[comm == "nfsd" ? "nfsd" : "rings"] = count();
 	@lw[tid] = nsecs;
 }
-fexit:vmlinux:queued_spin_lock_slowpath
+tracepoint:lock:contention_end
 /@lw[tid]/
 {
-	@lock_wait_ns = hist(nsecs - @lw[tid]);
+	$d = nsecs - @lw[tid];
+	@lock_wait_ns = hist($d);
+	@ns_sum["lock wait"] = sum($d);
 	delete(@lw[tid]);
 }
 
