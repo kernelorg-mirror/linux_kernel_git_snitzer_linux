@@ -1,0 +1,98 @@
+#!/usr/bin/bpftrace
+/*
+ * regionlock.bt: the fixed receive region's lock on the way back from nfsd,
+ * and the region's per-device free lists (FLAMEGRAPH rounds 58 and 59).
+ *   - page_pool_recycle_ring_bulk(): calls, pages a call, by port;
+ *   - page_pool_return_netmem_bulk(): the overflow of a call returned under
+ *     one hold of the region's lock (page_pool_rx_region_put_bulk() is
+ *     inlined in it): calls, pages a call, the time a call, by caller
+ *     (nfsd's threads or the rest, the rings);
+ *   - page_pool_return_netmem(): pages returned one at a time;
+ *   - __page_pool_rx_region_put(): every page put back under the lock, and
+ *     the depth of its device's free list at that put (round 59);
+ *   - page_pool_rx_region_alloc(): the rings' refills from the region, the
+ *     time a call, and its device list's depth at the call (round 59);
+ *   - queued_spin_lock_slowpath() on the region's lock: waits.
+ *     timeout -s INT 10 bpftrace regionlock.bt
+ */
+config = { missing_probes = "warn"; max_map_keys = 65536 }
+
+BEGIN { @t0 = nsecs; }
+
+fentry:nfsd:nfsd_direct_write { @writes = count(); }
+
+fentry:vmlinux:page_pool_recycle_ring_bulk
+{
+	$dev = args.pool->slow.netdev ? args.pool->slow.netdev->name : "-";
+	@ring_bulk_calls[str($dev)] = count();
+	@ring_bulk_len = lhist(args.bulk_len, 0, 64, 2);
+}
+
+fentry:vmlinux:page_pool_return_netmem_bulk
+{
+	@rb[tid] = nsecs;
+	@ret_bulk_n = lhist(args.n, 0, 33, 1);
+	@ret_bulk_pages = sum(args.n);
+}
+fexit:vmlinux:page_pool_return_netmem_bulk
+/@rb[tid]/
+{
+	$d = nsecs - @rb[tid];
+	@ret_bulk_calls[comm == "nfsd" ? "nfsd" : "rings"] = count();
+	@ret_bulk_ns = hist($d);
+	@ns_sum["return_netmem_bulk"] = sum($d);
+	@ns_n["return_netmem_bulk"] = count();
+	delete(@rb[tid]);
+}
+
+fentry:vmlinux:page_pool_return_netmem { @return_one = count(); }
+
+fentry:vmlinux:__page_pool_rx_region_put
+{
+	$r = args.r;
+	/* the lock is the region's first member */
+	if (!@lock) { @lock = (uint64)$r; }
+	@region_puts = count();
+	@puts_cpu_nfsd[comm == "nfsd" ? "nfsd" : "rings"] = count();
+	@put_list_depth_slot1 = hist($r->devs[0].nfree);
+	@put_list_depth_slot2 = hist($r->devs[1].nfree);
+	@unmapped = hist($r->nunmapped);
+}
+
+fentry:vmlinux:page_pool_rx_region_alloc
+{
+	$r = (struct page_pool_rx_region *)args.pool->rx_region;
+	$s = args.pool->rx_region_dev;
+	@ra[tid] = nsecs;
+	@alloc_calls[str(args.pool->slow.netdev->name)] = count();
+	@alloc_slot[str(args.pool->slow.netdev->name), $s] = count();
+	if ($s == 1) { @alloc_own_list_depth[1] = hist($r->devs[0].nfree); }
+	if ($s == 2) { @alloc_own_list_depth[2] = hist($r->devs[1].nfree); }
+}
+fexit:vmlinux:page_pool_rx_region_alloc
+/@ra[tid]/
+{
+	$d = nsecs - @ra[tid];
+	@ns_sum["rx_region_alloc"] = sum($d);
+	@ns_n["rx_region_alloc"] = count();
+	delete(@ra[tid]);
+}
+
+fentry:vmlinux:queued_spin_lock_slowpath
+/(uint64)args.lock == @lock/
+{
+	@lock_waits[comm == "nfsd" ? "nfsd" : "rings"] = count();
+	@lw[tid] = nsecs;
+}
+fexit:vmlinux:queued_spin_lock_slowpath
+/@lw[tid]/
+{
+	@lock_wait_ns = hist(nsecs - @lw[tid]);
+	delete(@lw[tid]);
+}
+
+END
+{
+	printf("traced_us %d\n", (nsecs - @t0) / 1000);
+	clear(@rb); clear(@ra); clear(@lw);
+}
