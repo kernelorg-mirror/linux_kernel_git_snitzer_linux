@@ -328,6 +328,15 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**After tardis2's reboot into the kernel built from `7a39dcaebc9b` (3
+November; Mike builds it on gitlab), start at "tardis2's next boot: the
+kernel with rounds 55 and 58's changes" at the top of
+`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`:** the checks on the new
+kernel (kdump armed, both A/B switches present, nothing from `updates/`),
+then `FLAMEGRAPH/ab-switch.sh pp t2-r171` (round 58) and `blk t2-r172`
+(round 55), and the keep or drop of each change. The paragraph below is
+the handoff before it.
+
 **After tardis2's reboot with four more SGL drives and its second port
 (2026-11-02), start at the plan for round 55,
 `NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/55-nvme-sgl-walk/README.md`:**
