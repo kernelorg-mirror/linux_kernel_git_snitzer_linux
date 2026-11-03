@@ -24,8 +24,13 @@ static bool __blk_map_iter_next(struct blk_map_iter *iter)
 	return true;
 }
 
-static bool blk_map_iter_next(struct request *req, struct blk_map_iter *iter,
-			      struct phys_vec *vec)
+/*
+ * Inlined: it is called once for every segment mapped, from
+ * blk_rq_dma_map_iter_next() for each entry of a driver's scatter list, and
+ * the call's own cost is a fair part of a small segment's.
+ */
+static __always_inline bool blk_map_iter_next(struct request *req,
+		struct blk_map_iter *iter, struct phys_vec *vec)
 {
 	unsigned int max_size;
 	struct bio_vec bv;
