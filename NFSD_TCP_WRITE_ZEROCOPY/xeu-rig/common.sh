@@ -6,27 +6,20 @@
 D=${D:-enp161s0f0}
 # What differs between the two servers that share the client (2026-10-17).
 # tardis1: the card, eight data drives nvme0 to nvme7, .211 on each port.
-# tardis2: the same card and CPUs, eight data drives (from 2026-10-21:
-# nvme0 to nvme3 WD_BLACK SN8100 without SGLs, nvme4 to nvme7 DapuStor
-# DPRP5 15.36 TB with SGLs; the boot drive, a Micron, is nvme8), .213 on
-# each port, and port b not cabled.
+# tardis2: the same card and CPUs, eight data drives (from 2026-11-02:
+# nvme0 to nvme7 all DapuStor DPRP5 15.36 TB with SGLs; the boot drive, a
+# Micron, is nvme8), .213 on each port, and both ports cabled.
 HOST=$(hostname -s)
 case $HOST in
-tardis2) SRVHOST=213; DATA_DRIVES="0 1 2 3 4 5 6 7"; PORTS=${PORTS:-a} ;;
+tardis2) SRVHOST=213; DATA_DRIVES="0 1 2 3 4 5 6 7"; PORTS=${PORTS:-a b} ;;
 *)       SRVHOST=211; DATA_DRIVES="0 1 2 3 4 5 6 7"; PORTS=${PORTS:-a b} ;;
 esac
 # Each port: the server's interface and address, the client's address, and
 # the filesystems a run on it writes to by default (twoport.sh's FS_A and
-# FS_B).  tardis1 gives each port four drives; tardis2's one port has all
-# eight (FS_A="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7" for the SGL drives
-# alone).
+# FS_B).  Each host gives each port four drives.
 declare -A PDEVS=([a]=enp161s0f0 [b]=enp164s0f0)
 declare -A SRVP=([a]=192.168.1.$SRVHOST [b]=192.168.0.$SRVHOST) CLIP=([a]=192.168.1.106 [b]=192.168.0.106)
-ALL_FS=$(for n in $DATA_DRIVES; do printf '/hs/nvme%s ' $n; done); ALL_FS=${ALL_FS% }
-case $HOST in
-tardis2) declare -A PFS=([a]="$ALL_FS" [b]="") ;;
-*)       declare -A PFS=([a]="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" [b]="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7") ;;
-esac
+declare -A PFS=([a]="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" [b]="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7")
 DEFWHICH=$(tr -d ' ' <<< "$PORTS")	# a script's default ports: "ab" or "a"
 # which_ok <a|b|ab>: the ports asked for are this host's
 which_ok() {
