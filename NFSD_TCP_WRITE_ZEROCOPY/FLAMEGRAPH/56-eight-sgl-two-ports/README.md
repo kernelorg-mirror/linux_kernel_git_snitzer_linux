@@ -58,4 +58,17 @@ Two runs. Each ring's Rx and Tx share one of the port's eight CPUs; tardis1's 8 
 
 It loses as many frames as four of 128 and runs about 12 GB/s under it, with 1.10 bytes a byte, the least measured. Not the way to 80. A ring of 64 takes two connections, so each has the same ring space as four of 128.
 
+## The budget at 512 KiB and rings of 256 (run150, Mike)
+
+One run a budget, the memory traffic beside each.
+
+| budget, WRITEs | GB/s | drops | client retransmits | region peak | in use, middle | to memory, GB/s | bytes a byte | loans refused |
+|---|---|---|---|---|---|---|---|---|
+| 128 | 72.73 | none | 9 | 12,312 | 70 MiB | 134 | 1.84 | 993 |
+| 96 | 73.37 | none | 8 | 10,170 | 65 MiB | 137 | 1.87 | 18,587 |
+| 64 | 72.26 | none | 2 | 7,417 | 68 MiB | 134 | 1.85 | 160,893 |
+| 48 | 71.79 | none | 9 | 6,307 | 69 MiB | 128 | 1.78 | 1,970,803 |
+
+The budget sets the peak and costs almost no rate down to 48 WRITEs (about 0.7 refusals a WRITE). It does not move the pages in use in the middle of a run or the bytes a byte: what fills the L3 at rings of 256 is not the loans the budget bounds. 128 against run147's 73.27 shows the setting is steady.
+
 `settled.sh` still holds 384 KiB and rings of 128 for two ports.
