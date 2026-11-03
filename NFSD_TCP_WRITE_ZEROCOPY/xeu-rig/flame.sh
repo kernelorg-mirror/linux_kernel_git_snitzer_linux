@@ -5,6 +5,9 @@
 # of FLAMEGRAPH/README.md (analyze, fix, test, repeat).
 #
 #   flame.sh OUTDIR TAG [WRITES]     run, record, then report
+#   WHICH=ab flame.sh OUTDIR TAG ... both ports at the two-port setting, each
+#                                  onto its own four drives; the rings are
+#                                  both ports' Rx CPUs (0,2,4,6,56,58,60,62)
 #   flame.sh report DIR              report again from DIR/perf.data
 #
 # The run is the one-port battery's (port a, the four drives /hs/nvme4-7,
@@ -34,7 +37,9 @@
 # rate on the rings: take the run's figures from an untraced run beside it.
 cd "$(dirname "$(readlink -f "$0")")" || exit 1
 FG=${FG:-/opt/FlameGraph}; HZ=999
-RINGS=0,2,4,6; NFSD=8-55
+WHICH=${WHICH:-a}
+RINGS=0,2,4,6; [ "$WHICH" = ab ] && RINGS=0,2,4,6,56,58,60,62
+NFSD=8-55
 busy() {	# FOLDED: the stacks that are not idle, with the weight last
 	awk '!(/;do_idle;/ && !/_irq/)' $1
 }
@@ -84,11 +89,15 @@ snap() { echo "$(date +%s.%N) $(awk '/^proc3/{print $10}' /proc/net/rpc/nfsd) $(
 writes() { awk '/^proc3/{print $10}' /proc/net/rpc/nfsd; }
 say "kernel $(uname -r), sunrpc $(cat /sys/module/sunrpc/srcversion)"
 ./settled.sh apply > $F/apply-start.txt 2>&1 || die "not settled: $(grep -E 'BAD|FAILED' $F/apply-start.txt | head -3)"
-for n in 4 5 6 7; do fstrim /hs/nvme$n; done; say "trimmed, rest 120 s"; sleep 120
+if [ "$WHICH" = ab ]; then for n in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$n; done; else for n in 4 5 6 7; do fstrim /hs/nvme$n; done; fi; say "trimmed, rest 120 s"; sleep 120
 client_free || die "client not free"
 snap > $O/$tag-snap0.txt
 rm -rf $O/$tag
-env FS_A="$FS" FS_B= WARM=10 RUNTIME=30 TSV=$O/results.tsv TAG=$tag WRITES=$WR ./twoport.sh $O/$tag a > $O/$tag.log 2>&1 & tp=$!
+if [ "$WHICH" = ab ]; then
+	env WARM=10 RUNTIME=30 TSV=$O/results.tsv TAG=$tag WRITES=$WR ./twoport.sh $O/$tag ab > $O/$tag.log 2>&1 & tp=$!
+else
+	env FS_A="$FS" FS_B= WARM=10 RUNTIME=30 TSV=$O/results.tsv TAG=$tag WRITES=$WR ./twoport.sh $O/$tag a > $O/$tag.log 2>&1 & tp=$!
+fi
 while [ ! -e $O/$tag/srv-mpstat.txt ]; do kill -0 $tp 2> /dev/null || break; sleep 0.2; done
 if [ -e $O/$tag/srv-mpstat.txt ]; then
 	sleep 1; w0=$(writes); t0=$(date +%s.%N)
