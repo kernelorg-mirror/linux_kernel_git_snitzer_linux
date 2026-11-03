@@ -155,6 +155,27 @@ From a loaned record's first borrow to its WRITE, for each connection: in nfsd's
 - **That is the record's transfer time on its connection:** 32 connections share about 61 GB/s, about 1.9 GB/s each, and 1 MiB takes about 550 us at that. With every connection part way through a record, about 32 half-records are in the region at once: 32 x 0.5 MiB is about 1,000 pages, which is stage 2's 975.
 - **So stage 2's pages follow the number of connections and the record's size,** not anything nfsd does. Fewer connections, each with a larger window, would carry the same bytes in flight with fewer partial records.
 
+## Fewer connections (run158 to run163, Mike)
+
+The record wait's pages follow the number of connections, so a port's connections (`NCONN`) were cut with the held buffer raised to keep the bytes in flight. Budget 128, the memory traffic beside every run; one connection's window is about 0.47 of its held buffer.
+
+| connections a port, held buffer, rings | GB/s | in use, middle | bytes a byte | nfsd / rings cycles a WRITE | drops a / b | client retransmits |
+|---|---|---|---|---|---|---|
+| 8, 640 KiB, 128 | 63.13, 63.08 | 38, 40 MiB | 0.96, 0.96 | 256.5k, 256.7k / 143.7k, 144.9k | none | 7, 6 |
+| 8, 750 KiB, 128 | 62.67 | 38 MiB | 0.92 | 249.9k / 140.4k | ring 899 / 0 | 904 |
+| 8, 1 MiB, 256 | 62.66 | 45 MiB | 1.20 | 249.2k / 136.0k | none | 3 |
+| 12, 512 KiB, 128 | 66.44, 70.48 | 48, 49 MiB | 1.26, 1.41 | 272.1k, 279.3k / 144.4k, 144.3k | ring 16 / 20, 147 / 120 | 39, 291 |
+| 12, 576 KiB, 128 | 68.99, 70.62 | 53, 54 MiB | 1.37, 1.44 | 272.7k, 279.8k / 143.6k, 145.2k | ring 341 / 476, 984 / 926 | 846, 1,978 |
+| 12, 512 KiB, 256 | 70.27, 67.03 | 61, 55 MiB | 1.58, 1.46 | 293.0k, 282.9k / 150.1k, 148.7k | none | 2, 16 |
+| 16, 384 KiB, 128 (settled) | 62.96 | 55 MiB | 1.29 | 281.5k / 151.5k | ring 41 / 35 | 83 |
+| 16, 512 KiB, 256 | 73.13 | 67 MiB | 1.88 | 320.2k / 164.6k | FIFO 15 / 11 | 26 |
+
+- **Eight connections a port carry the settled rate on less of everything:** about 15 MiB fewer pages in use, under one byte through memory for each byte of payload, nfsd about 9% fewer cycles a WRITE. At 640 KiB nothing is lost.
+- **Eight connections cannot go faster:** a larger window (1 MiB, rings of 256) left the rate at 63 and the client still held by the window 98% of the time. A connection is read by one thread at a time, so each seems to top out near 4 GB/s (inferred, not measured).
+- **The rate follows the connections, and so does the footprint:** about 63 GB/s on 8, 66 to 71 on 12, 73 on 16 (at rings of 256).
+- **Twelve connections at 512 KiB on rings of 128** carry 66 to 70 GB/s at 48 to 49 MiB and 1.26 to 1.41 bytes a byte, with a few hundred frames lost in one run of two: more rate than the settled setting on less footprint.
+- Each pair of runs differs by up to 4 GB/s, so a single run's rate is not to be leaned on.
+
 ## Where it stands
 
 The settled two-port setting, 384 KiB and four rings of 128, stays: the lowest footprint that loses nothing (47 MiB in use, 1.19 bytes a byte, about 61 GB/s). Every setting that carries more holds more of the region, in the middle of a run as well as at its peak. 80 GB/s within the L3 needs less of the region for each byte of window, which is a change to the code, not to the setting.
