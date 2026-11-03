@@ -281,7 +281,10 @@ decided.
    holds and 19.4 pages a WRITE, 2.1 us a hold, waits on 1.9% of holds; the
    hold runs at IPC 0.5 on misses. Changes: one atomic for a bulk's release
    count, and the list's top prefetched before the lock, to be tested on the
-   next kernel (`ab-switch.sh pp`).
+   next kernel (`ab-switch.sh pp`). **Kept (Mike, 3 November)** on build
+   507's A/B: the hold 4.10 to 3.61 us a WRITE on one boot (-13%), the rate
+   1.2% higher; nfsd's cycles a WRITE 269.1k to 271.1k in the loan runs,
+   not lower.
 28. **Round 59: pages free in the region** (planned, 3 November; a look
    first). Round 57's page life: 15% of the pages free at their put go into
    the region and wait about 1.3 ms (median 128 to 256 us) before a pool
@@ -325,6 +328,7 @@ runs (the profile where the A/B cannot resolve it):
 | 38 | | about 3.5k cycles a WRITE less | `93b10c1877fc`: a released page's struct page fetched a second time (PSTL2KEEP two batches ahead on arm64) |
 | 41 | 6.5k instructions a WRITE fewer, cycles the same | | xeu `rx_gro_frags` Y (kmod-xsight 2.0.1-13, settled.sh): GRO given page fragments, no skb a frame |
 | 44 | 140.2k to 130.2k cycles a WRITE (−7.1%) | the same | NAPI deferral 2/10000 on port a (settled.sh `DEFER`): receive interrupts 10.7 to 1.25 a WRITE |
+| 58 | | the region lock's hold 4.10 to 3.61 us a WRITE on build 507 (traced); cycles a WRITE 269.1k to 271.1k, not lower | `ca7b00ac39c7`, `d7d119a39c92`: one atomic for a bulk's release count, the region list's top prefetched before the lock |
 
 - **Since round 01:** the rings 92.6 to about 58 us a WRITE (-37%),
   and to about 50 on build 499 with the interrupt held off at the card

@@ -119,3 +119,6 @@ estimate, with the same number of holds and pages. A ran 3.6% faster and
 waited more, which flatters B a little. Yet the four loan runs above put
 nfsd's cycles a WRITE 2k higher with them on, not lower: the time saved
 under the lock does not show in nfsd's total. One trace each.
+
+**Kept (Mike, 3 November).** Both changes stay in the code group; only
+the A/B switch goes, with the DROP commit at the next regroup.
