@@ -1,8 +1,7 @@
 # Handoff: the 7.3 canary with David's performance series, on tardis2
 
 Written 2026-11-04.  Background and every port decision:
-`/root/kernel/linux/patches/hammerspace-7.3-performance-review/CANARY-SPLIT.md`
-on the build host (not in the tree), beside David's package.
+`CANARY-SPLIT.md` beside this file.
 
 ## What to test
 
@@ -14,7 +13,7 @@ on the build host (not in the tree), beside David's package.
 | 1 | nfsd-testing-canary-nfs_common-XFS-IOLOCK-and-async-DIO-middle | 2649cfbf2d43 |
 | 2 | nfs-localio-performance-canary (David's 13 LOCALIO patches) | 6c4afbe39222 |
 | 3 | NFSD_TCP_WRITE_ZEROCOPY-canary (hs-gitlab ZEROCOPY up to David's base) | 96438024c362 |
-| 4 | nfs-and-nfsd-performance-canary (David's other 69, plus the localio KUnit real-file fix) | c0400502bcec |
+| 4 | nfs-and-nfsd-performance-canary (David's other 69, plus the localio KUnit real-file fix and the KUnit configs) | cfcdd9807468 |
 | 5 | NFSD_TCP_WRITE_ZEROCOPY-canary-part2 (ZEROCOPY after David's base, ported) | this branch |
 | 6 | changelog-canary | cfeb1c621b45 |
 
