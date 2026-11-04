@@ -202,12 +202,12 @@ suite`.
 **Drop at the next regroup (3 November):** `DROP: page_pool, block: A/B
 switches for FLAMEGRAPH rounds 55 and 58`, a temporary commit at the tip
 for the A/B on one boot (`page_pool.rx_region_bulk_ab`,
-`blk_mq_dma.map_iter_inline`). Of the three code commits before it,
-the two of round 58 (`page_pool: count a bulk returned to the receive
-region with one atomic`, `page_pool: prefetch the region list's top before
-taking the region's lock`) are **kept** (Mike, 3 November, on build 507's
-A/B); `block: inline blk_map_iter_next()` stays or goes on round 55's:
-`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/ab-switch.sh`.
+`blk_mq_dma.map_iter_inline`). The three code commits before it are
+**kept** (Mike, 3 and 4 November, on build 507's A/Bs, FLAMEGRAPH rounds
+58 and 55): `page_pool: count a bulk returned to the receive region with
+one atomic`, `page_pool: prefetch the region list's top before taking the
+region's lock` and `block: inline blk_map_iter_next()`. Only the DROP
+commit goes.
 
 ## NFSD TCP write-path zero-copy (page-loan series)
 
