@@ -99,3 +99,22 @@ only, 2 (the default) the change. Built with `build-sunrpc.sh` (sunrpc
 
 **To test:** `../ab-switch.sh look t2-r176 > run176.out` from here: A 0,
 B 2, as rounds 55 and 58.
+
+## 4. The A/B on build 507 (r176), the loan runs
+
+`../ab-switch.sh look t2-r176` (`run176.out`), both ports, 12 connections
+a port at 512 KiB, rings of 128, budget 128; rounds 55's and 58's changes
+on.
+
+| run | GB/s | nfsd cycles a WRITE | instructions | region in use at the middle | peak |
+|---|---|---|---|---|---|
+| look-1-A (0) | 66.86 | 271.9k | 273.1k | 3083 | 3583 |
+| look-2-B (2) | 67.16 | 270.5k | 274.8k | 3095 | 3531 |
+| look-3-B (2) | 66.89 | 270.2k | 275.5k | 3326 | 3416 |
+| look-4-A (0) | 66.53 | 270.1k | 272.6k | 2714 | 3549 |
+
+Cycles 271.0k to 270.4k a WRITE (-0.2%), inside the spread and far from
+the 3k of stall aimed at (look-4-A alone matches the B runs);
+instructions +2.3k, the walk and the prefetches added. Rate level (66.70
+against 67.03 GB/s); the region's middle 2900 to 3210 pages, the peaks
+level, and the change holds nothing.
