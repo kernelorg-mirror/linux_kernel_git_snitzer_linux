@@ -155,6 +155,20 @@ struct pnfs_layoutdriver_type {
 	void (*return_range) (struct pnfs_layout_hdr *lo,
 			      struct pnfs_layout_range *range);
 
+	/*
+	 * Lockless hint for pnfs_lookup_cached_lseg(): return the driver's
+	 * cached candidate segment for @iomode on @lo, or NULL.  Called under
+	 * rcu_read_lock(); must not sleep and must take no reference.  The
+	 * driver must clear the hint before freeing a segment and free the
+	 * segment memory only after an RCU grace period; the layout header
+	 * must likewise be freed only after an RCU grace period (kfree_rcu()
+	 * via plh_rcu, as every in-tree driver does), since the lookup reads
+	 * it under rcu_read_lock().  A driver that does not set this op never
+	 * uses the pnfs_lookup_cached_lseg() fast path.
+	 */
+	struct pnfs_layout_segment *(*get_cached_lseg_hint)(struct pnfs_layout_hdr *lo,
+							    enum pnfs_iomode iomode);
+
 	/* test for nfs page cache coalescing */
 	const struct nfs_pageio_ops *pg_read_ops;
 	const struct nfs_pageio_ops *pg_write_ops;
@@ -354,6 +368,10 @@ struct pnfs_layout_segment *pnfs_update_layout(struct inode *ino,
 					       enum pnfs_iomode iomode,
 					       bool strict_iomode,
 					       gfp_t gfp_flags);
+struct pnfs_layout_segment *
+pnfs_lookup_cached_lseg(struct inode *ino, struct nfs_open_context *ctx,
+			loff_t pos, u64 count, enum pnfs_iomode iomode,
+			bool strict_iomode);
 void pnfs_layoutreturn_retry_later(struct pnfs_layout_hdr *lo,
 				   const nfs4_stateid *arg_stateid,
 				   const struct pnfs_layout_range *range);
