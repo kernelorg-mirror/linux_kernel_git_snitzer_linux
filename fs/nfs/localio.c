@@ -565,6 +565,7 @@ void nfs_local_open_prepare(struct file *file)
 			nfs_to->nfsd_file_dio_policy(localio, ITER_SOURCE, &policy);
 			ctx->nfl.nowait_mem_align = policy.mem_align;
 			ctx->nfl.nowait_offset_align = policy.offset_align;
+			ctx->nfl.nowait_seg_boundary = policy.seg_boundary;
 			nfs_to->nfsd_file_dio_policy(localio, ITER_DEST, &policy);
 			ctx->nfl.nowait_read_offset_align = policy.offset_align;
 			nfs_local_mapping_set_gfp_nofs_context(backing->f_mapping);
@@ -699,6 +700,7 @@ nfs_local_iters_init(struct nfs_local_kiocb *iocb, int rw)
 			policy.offset_align = rw == ITER_DEST ?
 				READ_ONCE(nfl->nowait_read_offset_align) :
 				READ_ONCE(nfl->nowait_offset_align);
+			policy.seg_boundary = READ_ONCE(nfl->nowait_seg_boundary);
 		} else {
 			nfs_to->nfsd_file_dio_policy(iocb->localio, rw, &policy);
 		}

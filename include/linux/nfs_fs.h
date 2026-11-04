@@ -85,6 +85,7 @@ struct nfs_file_localio {
 	u32 nowait_mem_align;
 	u32 nowait_offset_align;
 	u32 nowait_read_offset_align;
+	u32 nowait_seg_boundary;
 	struct list_head list;
 	void __rcu *nfs_uuid; /* opaque pointer to 'nfs_uuid_t' */
 };
@@ -98,6 +99,7 @@ static inline void nfs_localio_file_init(struct nfs_file_localio *nfl)
 	nfl->nowait_mem_align = 0;
 	nfl->nowait_offset_align = 0;
 	nfl->nowait_read_offset_align = 0;
+	nfl->nowait_seg_boundary = 0;
 	INIT_LIST_HEAD(&nfl->list);
 	nfl->nfs_uuid = NULL;
 #endif
