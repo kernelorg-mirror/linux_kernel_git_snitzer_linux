@@ -215,3 +215,6 @@ What the B profile has at its top on nfsd, past idle: `finish_task_switch`
 root lock in `__dev_xmit_skb` 1.55, `svc_recv` 0.57), then
 `blk_rq_dma_map_iter_next` 1.83, `svc_tcp_rx_append_ref` 1.71 and
 `svc_tcp_rx_borrow_segment` 1.45.
+
+**Kept (Mike, 4 November).** The change stays in the code group; only
+the A/B switch goes, with the DROP commit at the next regroup.
