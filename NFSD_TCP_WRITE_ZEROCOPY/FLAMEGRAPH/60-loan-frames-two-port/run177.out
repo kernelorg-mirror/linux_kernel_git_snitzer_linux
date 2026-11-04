@@ -1,0 +1,2 @@
+04:22:51 r177-ab | total 65.78 GB/s | 1 no-step | r177-ab ring 16.2 nfsd 87.0 us/W (62843 WRITEs/s) | ring 72.6k cycles 144.1k instructions, nfsd 272.9k cycles 276.5k instructions a WRITE
+04:22:59 end: /sys/module/sunrpc/parameters/svc_tcp_rx_lookahead 2; settled.sh audit rest: the settled setting; DONE

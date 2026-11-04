@@ -118,3 +118,49 @@ the 3k of stall aimed at (look-4-A alone matches the B runs);
 instructions +2.3k, the walk and the prefetches added. Rate level (66.70
 against 67.03 GB/s); the region's middle 2900 to 3210 pages, the peaks
 level, and the change holds nothing.
+
+The rest of `run176.out`: `lat.sh` at iodepth 1, A 8.16, 7.97, 8.30, 8.17
+GB/s (mean 8.15, mean completion 0.444 ms), B 7.92, 8.18, 7.49, 7.92
+(7.88, 0.456 ms): B slower in three pairs of four. The profile of B
+(`fl-look`, 68.86 GB/s, nfsd busy 92.40 µs a WRITE) against round 55's B
+(`fl-blk`, 88.79): `svc_tcp_rx_region_span` 0.57% to 0.41% of nfsd's
+samples, but `svc_tcp_recv_skb` 0.81% to 1.19% and
+`svc_tcp_rx_prefetch_pages` 0.86% to 1.05%.
+
+## 5. Where the stalls went (r177)
+
+[run177.sh](run177.sh), `$L/t2-r177`: one loan run at 65.78 GB/s, the
+switch at 0, 2, 0 in turn, 4 s each of backend memory stall samples and
+of cycle samples on nfsd's CPUs, each window's WRITEs counted from perf's
+own start.
+
+| cycles a WRITE | 0 (two windows) | 2 |
+|---|---|---|
+| `svc_tcp_rx_region_span` | 1.51k | **1.11k** |
+| `svc_tcp_rx_prefetch_pages` | 2.42k | 2.86k |
+| `svc_tcp_recv_skb` (the lookahead is inlined there) | 2.12k | **3.13k** |
+| stall in those two | 2.20k | 3.20k |
+| sunrpc's loan frames in all | 22.4k | **23.5k** |
+
+- **The struct pages arrive:** the region count is 0.4k cheaper.
+- **The lookahead makes first touches of its own**
+  ([recv_skb at 2](annotate-stall-recv_skb-r177-2.txt)): 25% of
+  `svc_tcp_recv_skb`'s stall samples follow `next->len`, a line of the
+  next skb's `sk_buff` nothing has read yet.
+- **The shared info prefetched a step ahead does not arrive**
+  ([the prefetch walk at 2](annotate-stall-prefetch_pages-r177-2.txt)): 43%
+  of the walk's stall samples still follow `nr_frags`. The plain
+  `prefetch()` of five lines is likely dropped, as round 38 found the
+  release's were.
+
+So the change costs 1.2k cycles a WRITE in sunrpc's frames, the loan runs
+put the whole at -0.2% (inside the spread) and latency at iodepth 1 is no
+better. The switch is at 0 until it is decided (Mike); `updates/` still
+holds the A/B's sunrpc (`796267B1BA39136191F34A9`).
+
+**What another form would need:** every load of the lookahead on a line
+prefetched a step before: the `sk_buff` lines (`next`, `len`,
+`head`/`end`) three skbs ahead, the shared info two ahead with a prefetch
+that is kept (round 38's kinds), the struct pages one ahead. At best that
+recovers the 3k cycles of stall measured, less its own instructions:
+perhaps 2k a WRITE, under 1% of nfsd's.
