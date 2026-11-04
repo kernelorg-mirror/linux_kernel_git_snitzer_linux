@@ -1603,13 +1603,14 @@ static void rx_loan_wait_locked(struct rx_loan_budget *lb,
 		return;
 	w->ticket = ticket;
 	w->budget = lb;
-	list_for_each_entry(pos, &lb->waiters, node) {
-		if (pos->ticket > ticket) {
-			list_add_tail(&w->node, &pos->node);
+	/* From the newest: a waiter refused for the first time goes last. */
+	list_for_each_entry_reverse(pos, &lb->waiters, node) {
+		if (pos->ticket <= ticket) {
+			list_add(&w->node, &pos->node);
 			return;
 		}
 	}
-	list_add_tail(&w->node, &lb->waiters);
+	list_add(&w->node, &lb->waiters);
 }
 
 /* @w no longer waits. */
@@ -1627,13 +1628,18 @@ static void rx_loan_link_locked(struct rx_loan_budget *lb,
 {
 	struct rx_loan_credit *pos;
 
-	list_for_each_entry(pos, &lb->inflight, node) {
-		if (pos->ticket > cr->ticket) {
-			list_add_tail(&cr->node, &pos->node);
+	/*
+	 * From the newest: a record is admitted only as the oldest waiter or
+	 * with nobody waiting, so its ticket is nearly always the newest, and
+	 * walking from the oldest would touch every record in flight.
+	 */
+	list_for_each_entry_reverse(pos, &lb->inflight, node) {
+		if (pos->ticket <= cr->ticket) {
+			list_add(&cr->node, &pos->node);
 			goto linked;
 		}
 	}
-	list_add_tail(&cr->node, &lb->inflight);
+	list_add(&cr->node, &lb->inflight);
 linked:
 	cr->linked = true;
 	cr->budget = lb;
