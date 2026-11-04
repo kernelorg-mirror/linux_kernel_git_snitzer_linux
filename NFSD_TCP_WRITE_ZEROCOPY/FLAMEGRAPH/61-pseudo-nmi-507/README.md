@@ -64,6 +64,19 @@ unchanged, so a kernel installed later boots without it. Mike reboots.
    breakdown by interrupt.
 5. The next target is chosen from that ranking (Mike).
 
+**Found after the boot (4 November):** `/proc/cmdline` has
+`irqchip.gicv3_pseudo_nmi=1`; dmesg `GICv3: Pseudo-NMIs enabled using
+relaxed ICC_PMR_EL1 synchronisation`, the PMU `using NMIs`, and with it
+`NMI watchdog: Enabled. Permanently consumes one hw-PMU counter` (6 of 7
+left to perf; `kernel.nmi_watchdog` 1, left as it is). kdump was loaded at
+boot (`kexec_crash_loaded` 1, the kernel's copy in `/var/lib/kdump/boot/`
+from the boot before); `bringup.sh 32768 256` mounted `/hs/nvme0` to `7`,
+started nfs-server and mapped both ports into the region, and `settled.sh
+apply` ended in "the settled setting". srcversions as before: sunrpc
+`2A512644C685341146A3A9B`, nfsd `BB6D1949646AB051A8D99CC`, xeu
+`CA0931345E46C929B11D01F`; `updates/` does not exist. No NFS connection,
+no WARNING, BUG or Oops.
+
 **To take it out:** put the `options` line back as in
 `boot-entry-507-before.conf` and reboot. Every A/B after this round runs
 on a boot without the parameter.
