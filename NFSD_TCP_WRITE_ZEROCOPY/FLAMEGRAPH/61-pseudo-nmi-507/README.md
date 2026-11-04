@@ -31,6 +31,10 @@ are here: [boot-entry-507-before.conf](boot-entry-507-before.conf) and
 [etc-kernel-cmdline-before](etc-kernel-cmdline-before). `settled.sh` does
 not audit the parameter. Then reboot.
 
+**Done (4 November):** the parameter is on build 507's entry's `options`
+line (`grubby --info=DEFAULT` shows it); `/etc/kernel/cmdline` is
+unchanged, so a kernel installed later boots without it. Mike reboots.
+
 ## After the boot
 
 1. `grep gicv3_pseudo_nmi /proc/cmdline`, dmesg shows
