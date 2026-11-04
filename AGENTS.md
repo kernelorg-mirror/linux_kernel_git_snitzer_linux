@@ -16,7 +16,23 @@ says so. This overrides what the two entries below say about keeping
 the branches in step and about where development is done.
 
 - **`kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` is the branch to work
-  on**, **rebased 2026-11-01 onto `v7.3-10`** (`git rebase --onto
+  on**, **rebased 2026-11-04 onto `v7.3-11`** (`git rebase --onto
+  v7.3-11 v7.3-10`, right after the regroup of that day; the tags are
+  rebuilt, so `v7.3-10` is no ancestor of it; no conflicts, no commit
+  already in `v7.3-11`, and `git range-diff` shows every code and KUnit
+  patch the same, so no `[snitzer: …]` note was needed; judged as
+  `kernel-rpmtree`'s `hs/UPSTREAM_LINUX_REBASE.md` ("Judging a
+  resolution") says: the four files the tag and the series both change
+  (`fs/nfs/localio.c`, `fs/nfs_common/nfs_dio.c`, `fs/nfsd/vfs.c`,
+  `nfsd-io-modes.rst`; the tag's changes to `nfs_dio.c` and `vfs.c`
+  are comments only, to `localio.c` code away from the series' lines)
+  are byte
+  for byte the old branch's with the tag's change merged, and the tree
+  differs from the old tip by exactly `v7.3-10..v7.3-11`; the regrouped
+  tips before are `.pre-rebase-v7.3-11`, and the tip before both is
+  `.pre-regroup-1104`, the same commit as Mike's
+  `kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY-pre-v7.3-11-rebase`), and
+  before that 2026-11-01 onto `v7.3-10` (`git rebase --onto
   v7.3-10 v7.3-7`; the tags are rebuilt, so `v7.3-7` is no ancestor of
   it, and no conflicts; the tips before are `.pre-rebase-v7.3-10`), on
   hs-gitlab again since 2026-10-22: the `v7.3-7` series was
@@ -191,27 +207,55 @@ After a regroup, a branch marks the last commit of each group:
 `…-kunit-tests` and `…-docs`, which is the same commit as the branch
 itself.
 
-**Fold at the next regroup (Mike, 2026-11-02):** `nfsd: take nfsd_mutex
-to read nfsd_serv for the KUnit suites` goes into the interface commit
-above, the one thing since it outside the suites. It applies there
-cleanly and touches only that commit's `nfsd4_kunit_serv()`.
-`nfsd: keep rq_authop in the nfsd4 KUnit suite's requests` has no
-`Fixes:`: it goes into `nfsd: decode on a real service in the nfsd4 KUnit
-suite`.
+**Regrouped 4 November (Mike), then rebased onto `v7.3-11`:** 945
+commits, 62 code, the one interface commit, 69 KUnit tests and 813
+docs. What was done:
 
-**Drop at the next regroup (3 November):** `DROP: page_pool, block: A/B
-switches for FLAMEGRAPH rounds 55 and 58`, a temporary commit at the tip
-for the A/B on one boot (`page_pool.rx_region_bulk_ab`,
-`blk_mq_dma.map_iter_inline`). The three code commits before it are
-**kept** (Mike, 3 and 4 November, on build 507's A/Bs, FLAMEGRAPH rounds
-58 and 55): `page_pool: count a bulk returned to the receive region with
-one atomic`, `page_pool: prefetch the region list's top before taking the
-region's lock` and `block: inline blk_map_iter_next()`. Only the DROP
-commit goes. FLAMEGRAPH round 60's `SUNRPC: Prefetch the next skbs of a
-loaned record`, its `DROP: SUNRPC: A/B switch for FLAMEGRAPH round 60`
-and the revert of both at the tip (`350d97bf27c5`) all go too:
-**dropped** (Mike, 4 November; no gain on build 507). tardis2 runs build
-507's own sunrpc again, with nothing in `updates/`.
+- **Dropped, ten commits, all reverted or temporary:** round 54's expkey
+  change (`SUNRPC: Look up a cache entry without taking a reference`,
+  `NFSD: Do not take a reference on an export key in exp_find()`, its
+  test) and the three reverts of them; `DROP: page_pool, block: A/B
+  switches for FLAMEGRAPH rounds 55 and 58`; round 60's `SUNRPC:
+  Prefetch the next skbs of a loaned record`, its `DROP: SUNRPC: A/B
+  switch for FLAMEGRAPH round 60` and the revert of both. The kernel
+  source is the old tip's less the rounds 55 and 58 A/B switches, and
+  nothing else (checked with `git diff` against that commit's reverse).
+  tardis2 runs build 507's own sunrpc, with nothing in `updates/`.
+- **Moved into the code group by subsystem:** `block: inline
+  blk_map_iter_next()` after `block: add bdev_dio_seg_boundary()`
+  (round 55); `page_pool: count a bulk returned to the receive region
+  with one atomic` and `page_pool: prefetch the region list's top before
+  taking the region's lock` at the end of `page_pool` (round 58); round
+  53's `SUNRPC: Trade only the pages a partly received loaned record
+  holds`, `SUNRPC: Check a received record's bvec table only once`,
+  `SUNRPC: Do not step to the end of a bvec-backed buffer's pages` and
+  `SUNRPC: Do not check a published record's bvec table again at
+  release` at the end of SUNRPC. The first of those had been written on
+  top of the interface (`VISIBLE_IF_KUNIT` on `svc_tcp_restore_pages()`):
+  it now has `static` there, and the interface commit's own change is
+  as it was.
+- **Folded, as decided on 2 November:** `nfsd: take nfsd_mutex to read
+  nfsd_serv for the KUnit suites` into the interface commit (its message
+  says so), and `nfsd: keep rq_authop in the nfsd4 KUnit suite's
+  requests` into `nfsd: decode on a real service in the nfsd4 KUnit
+  suite` (its message no longer says nfsd does not read `rq_authop`).
+  The other KUnit test commits since 1 November stay commits of their
+  own after the tests already there, as at the last regroup.
+- **Every `Fixes:` names a commit on the branch:** 26 tags in the KUnit
+  group named SHAs the regroup (or an earlier rebase) had replaced, and
+  were re-pointed by subject.
+- **Built:** every code and KUnit commit, on `v7.3-10` and again on
+  `v7.3-11`, compiled at 16 KiB pages with `CONFIG_WERROR=y` and the
+  four suites as modules (`block/`, `drivers/block/loop.o`, `fs/stat.o`,
+  `fs/nfs/`, `fs/nfs_common/`, `fs/nfsd/`, `fs/xfs/`, `net/core/`,
+  `net/ipv4/`, `net/sunrpc/`): no error and no warning; the last code
+  commit and the last KUnit commit also with `CONFIG_KUNIT=n`. Objects
+  only, without debug info: tardis2's root had too little room for a
+  whole kernel, and it has no sparse, so modpost, the link and sparse
+  are left to the next build on gitlab.
+
+The tips before the regroup are kept with the suffix
+`.pre-regroup-1104` (branch and the four markers).
 
 ## NFSD TCP write-path zero-copy (page-loan series)
 
@@ -501,10 +545,10 @@ docs) before the work is handed back; regroup until it does.
 
 **That rule is suspended on every test host (Mike, 2026-10-07): do not
 worry about regrouping until he asks.** The branch was last regrouped
-on 2026-11-01 and `check-grouping.sh v7.3-10` passes on the rebased
-branch (the tip before the regroup
-is `.pre-regroup`, and `…-code`'s old stage is `…-code.pre-regroup`).
-The same day the code group went from 73 commits to 58 (Mike): ten
+on 2026-11-04 ("Regrouped 4 November" above) and `check-grouping.sh
+v7.3-11` passes on it. The regroup before that was on 2026-11-01 (the
+tip before it is `.pre-regroup`, and `…-code`'s old stage is
+`…-code.pre-regroup`). That day the code group went from 73 commits to 58 (Mike): ten
 reverted or reverting commits dropped and five folded, with the kernel
 source unchanged (the tips before are `.pre-fold`). Then to 60, laid
 out by subsystem (the tips before are `.pre-subsys`): the two upstream
