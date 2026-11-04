@@ -155,8 +155,13 @@ own start.
 
 So the change costs 1.2k cycles a WRITE in sunrpc's frames, the loan runs
 put the whole at -0.2% (inside the spread) and latency at iodepth 1 is no
-better. The switch is at 0 until it is decided (Mike); `updates/` still
-holds the A/B's sunrpc (`796267B1BA39136191F34A9`).
+better.
+
+**Dropped (Mike, 4 November).** The change and its switch are reverted at
+the tip (`Revert "SUNRPC: Prefetch the next skbs of a loaned record"`),
+and the A/B's sunrpc (`796267B1BA39136191F34A9`) is out of `updates/`:
+tardis2 runs build 507's own (`2A512644C685341146A3A9B`) again, with
+`settled.sh` at the settled setting.
 
 **What another form would need:** every load of the lookahead on a line
 prefetched a step before: the `sk_buff` lines (`next`, `len`,

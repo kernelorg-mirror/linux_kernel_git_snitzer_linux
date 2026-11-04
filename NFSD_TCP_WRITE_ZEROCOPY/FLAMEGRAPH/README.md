@@ -298,6 +298,17 @@ decided.
    slots) is worth a kernel. [59-region-free](59-region-free/README.md):
    each port's LIFO list holds 4K to 8K pages, and the 377 are round 58's
    round trip seen from the pages; no kernel change of its own.
+29. **Round 60: sunrpc's own loan frames, at the two-port setting** (Mike,
+   4 November; [60-loan-frames-two-port](60-loan-frames-two-port/README.md)).
+   On build 507 the frames are about 22k cycles a WRITE, 8.3% of nfsd, and
+   their stalls are the first read of an skb's shared info and the region
+   count's read of struct pages just prefetched; about 10 skbs a WRITE. The
+   change, a prefetch of the next skb's pages and the shared info of the one
+   after, built as a sunrpc in `updates/`: cycles -0.2%, inside the drift,
+   instructions +2.3k, latency at iodepth 1 3% worse; the region count's
+   stall went, but a new one came on the next skb's `sk_buff`, and the
+   shared info still stalls. **Dropped (Mike, 4 November)**, reverted at
+   the tip.
 
 ## Where the kept rounds stand (2026-10-28)
 
