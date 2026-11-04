@@ -333,6 +333,13 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**After tardis2's next reboot, into build 507 again with
+`irqchip.gicv3_pseudo_nmi=1` (4 November), start at "tardis2's next boot:
+build 507 with pseudo-NMI" at the top of
+`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md`:** FLAMEGRAPH round 61's
+profile, `FLAMEGRAPH/61-pseudo-nmi-507/README.md`, the next target chosen
+from it. The paragraph below is the boot before it.
+
 **After tardis2's reboot into the kernel built from `7a39dcaebc9b` (3
 November; Mike builds it on gitlab), start at "tardis2's next boot: the
 kernel with rounds 55 and 58's changes" at the top of

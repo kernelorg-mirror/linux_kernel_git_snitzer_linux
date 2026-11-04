@@ -1,4 +1,15 @@
-# tardis2's next boot: the kernel with rounds 55 and 58's changes (plan of 3 November) — read this first
+# tardis2's next boot: build 507 with pseudo-NMI (plan of 4 November) — read this first
+
+The same kernel, build 507, booted with `irqchip.gicv3_pseudo_nmi=1`
+added to its entry's `options` line (Mike), for FLAMEGRAPH round 61, a
+profile and not a change: `../FLAMEGRAPH/61-pseudo-nmi-507/README.md`
+has the boot, the checks and the run. Where the boot before it ended:
+rounds 58 and 55 kept, round 60 dropped (its revert at the tip), sunrpc
+and nfsd build 507's own, `updates/` empty, kdump armed and the settled
+setting held. Every A/B after round 61 wants a boot without the
+parameter (`ab-switch.sh` refuses one with it).
+
+# The boot before: the kernel with rounds 55 and 58's changes (plan of 3 November)
 
 Mike is building a kernel on gitlab from the branch at `7a39dcaebc9b`
 (pushed; `origin/kernel-7.3/main.NFSD_TCP_WRITE_ZEROCOPY` is the same
