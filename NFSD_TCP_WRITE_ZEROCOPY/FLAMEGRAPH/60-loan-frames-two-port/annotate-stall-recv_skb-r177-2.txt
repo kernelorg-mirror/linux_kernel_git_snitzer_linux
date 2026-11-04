@@ -1,0 +1,1048 @@
+ Percent |	Source code & Disassembly of sunrpc.ko for stall_backend_mem (2818 samples, percent: local period)
+------------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3     Disassembly of section .text:
+         :
+         : 5     000000000003dee8 <svc_tcp_recv_skb>:
+         : 6     * the count of body octets received so far and their write offset into
+         : 7     * rq_pages.
+         : 8     */
+         : 9     static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
+         : 10    unsigned int offset, size_t len)
+         : 11    {
+    0.21 :   3dee8:  nop
+    0.11 :   3deec:  nop
+    0.11 :   3def0:  paciasp
+    0.18 :   3def4:  sub     sp, sp, #0x160
+    0.18 :   3def8:  mrs     x4, sp_el0
+    0.07 :   3defc:  stp     x29, x30, [sp, #256]
+    0.07 :   3df00:  add     x29, sp, #0x100
+    0.14 :   3df04:  stp     x19, x20, [sp, #272]
+    0.28 :   3df08:  mov     x20, x1
+         : 21    struct svc_tcp_recv_ctx *ctx = desc->arg.data;
+         : 22    struct svc_rqst *rqstp = ctx->rqstp;
+         : 23    struct svc_sock *svsk =
+         : 24    container_of(rqstp->rq_xprt, struct svc_sock, sk_xprt);
+         : 25    struct svc_tcp_rx_takeover takeover, *t = NULL;
+    0.14 :   3df0c:  mov     w1, #0x0                        // #0
+         : 27    {
+    0.14 :   3df10:  stp     x21, x22, [sp, #288]
+    0.14 :   3df14:  mov     x22, x3
+    0.18 :   3df18:  stp     x23, x24, [sp, #304]
+    0.11 :   3df1c:  mov     w23, w2
+         : 32    struct svc_tcp_rx_takeover takeover, *t = NULL;
+    0.04 :   3df20:  mov     x2, #0x90                       // #144
+         : 34    {
+    0.11 :   3df24:  stp     x25, x26, [sp, #320]
+    0.07 :   3df28:  mov     x25, x0
+         : 37    struct svc_tcp_recv_ctx *ctx = desc->arg.data;
+    0.11 :   3df2c:  ldr     x21, [x0, #16]
+         : 39    {
+    0.18 :   3df30:  ldr     x0, [x4, #80]
+    0.18 :   3df34:  str     x0, [sp, #248]
+    0.14 :   3df38:  mov     x0, #0x0                        // #0
+         : 43    struct svc_tcp_rx_takeover takeover, *t = NULL;
+    0.04 :   3df3c:  add     x0, sp, #0x68
+         : 45    struct svc_rqst *rqstp = ctx->rqstp;
+    0.04 :   3df40:  ldr     x24, [x21]
+         : 47    struct svc_sock *svsk =
+    0.18 :   3df44:  ldr     x19, [x24, #40]
+         : 49    struct svc_tcp_rx_takeover takeover, *t = NULL;
+    0.28 :   3df48:  bl      0 <memset>
+         : 51    /*
+         : 52    * A transport holds its receive buffer to svc_tcp_rx_rcvbuf once it
+         : 53    * receives region pages; svc_tcp_recvfrom() applies it after the
+         : 54    * socket lock is released.
+         : 55    */
+         : 56    if (!svsk->sk_rx_held && !svsk->sk_rx_hold_pending &&
+    0.04 :   3df4c:  ldrb    w0, [x19, #645]
+    1.99 :   3df50:  tbz     w0, #0, 3e1c0 <svc_tcp_recv_skb+0x2d8>
+    0.28 :   3df54:  adrp    x26, 0 <rpc_default_callback-0x8>
+    0.04 :   3df58:  add     x26, x26, #0x0
+         : 61    * else the factor this code had before it measured.  What a transport has
+         : 62    * read of its first window is not used: a few skbs are not a sample.
+         : 63    */
+         : 64    VISIBLE_IF_KUNIT unsigned int svc_tcp_rx_hold_factor(struct svc_sock *svsk)
+         : 65    {
+         : 66    unsigned int factor = svc_tcp_rx_fixed_factor();
+    0.28 :   3df5c:  ldr     w4, [x26, #68]
+         : 68    * A transport whose buffer is held to one figure and has since measured
+         : 69    * another is held again, once the two are an eighth apart.
+         : 70    */
+         : 71    static bool svc_tcp_rx_hold_stale(struct svc_sock *svsk)
+         : 72    {
+         : 73    unsigned int held = svsk->sk_rx_hold_factor;
+   19.77 :   3df60:  ldr     w26, [x19, #648]
+         : 75    if (factor)
+    0.21 :   3df64:  cbnz    w4, 3df7c <svc_tcp_recv_skb+0x94>
+         : 77    factor = max(svsk->sk_rx_geo_factor[0], svsk->sk_rx_geo_factor[1]);
+    0.14 :   3df68:  ldr     w4, [x19, #660]
+    0.28 :   3df6c:  ldr     w0, [x19, #664]
+    0.11 :   3df70:  cmp     w4, w0
+    0.11 :   3df74:  csel    w4, w4, w0, cs  // cs = hs, nlast
+         : 82    if (factor)
+    0.14 :   3df78:  cbz     w4, 3e33c <svc_tcp_recv_skb+0x454>
+         : 84    unsigned int now = svc_tcp_rx_hold_factor(svsk);
+         :
+         : 86    return abs_diff(now, held) * 8 > held;
+    0.39 :   3df7c:  cmp     w26, w4
+    0.14 :   3df80:  sub     w0, w4, w26
+    0.14 :   3df84:  sub     w4, w26, w4
+    0.07 :   3df88:  csel    w4, w4, w0, cs  // cs = hs, nlast
+         : 91    else if (svsk->sk_rx_held && svc_tcp_rx_hold_stale(svsk)) {
+    0.11 :   3df8c:  cmp     w26, w4, lsl #3
+    0.07 :   3df90:  b.cc    3e330 <svc_tcp_recv_skb+0x448>  // b.lo, b.ul, b.last
+    0.82 :   3df94:  nop
+    0.28 :   3df98:  nop
+    0.07 :   3df9c:  nop
+         : 97    if (!desc->count)
+    0.00 :   3dfa0:  ldr     x1, [x25, #8]
+         : 99    return 0;
+    0.07 :   3dfa4:  mov     w26, #0x0                       // #0
+         : 101   if (!desc->count)
+    0.07 :   3dfa8:  cbz     x1, 3e260 <svc_tcp_recv_skb+0x378>
+    0.11 :   3dfac:  stp     x27, x28, [sp, #336]
+         : 104   len = min(len, desc->count);
+    0.07 :   3dfb0:  cmp     x1, x22
+    0.07 :   3dfb4:  csel    x22, x1, x22, ls        // ls = plast
+         : 107   if (svsk->sk_tcplen < sizeof(rpc_fraghdr)) {
+    0.07 :   3dfb8:  ldr     w2, [x19, #572]
+    0.04 :   3dfbc:  cmp     w2, #0x3
+    0.28 :   3dfc0:  b.ls    3e29c <svc_tcp_recv_skb+0x3b4>  // b.plast
+    0.11 :   3dfc4:  ldr     w27, [x19, #568]
+         : 112   size_t consumed = 0;
+    0.07 :   3dfc8:  mov     x28, #0x0                       // #0
+    0.11 :   3dfcc:  rev     w27, w27
+         : 115   struct page *           sk_pages[] __counted_by(sk_maxpages);
+         : 116   };
+         :
+         : 118   static inline u32 svc_sock_reclen(struct svc_sock *svsk)
+         : 119   {
+         : 120   return be32_to_cpu(svsk->sk_marker) & RPC_FRAGMENT_SIZE_MASK;
+    0.00 :   3dfd0:  and     w27, w27, #0x7fffffff
+         : 122   want = reclen - received;
+    0.11 :   3dfd4:  add     w8, w27, #0x4
+    0.04 :   3dfd8:  sub     x8, x8, w2, uxtw
+         : 125   take = min(want, len);
+    0.04 :   3dfdc:  cmp     x22, x8
+    0.07 :   3dfe0:  csel    x26, x22, x8, ls        // ls = plast
+         : 128   if (take) {
+    0.04 :   3dfe4:  cbz     x26, 3e250 <svc_tcp_recv_skb+0x368>
+         : 130   struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+    1.03 :   3dfe8:  ldr     x22, [x24, #1088]
+         : 132   unsigned int remaining = take;
+    0.11 :   3dfec:  str     w26, [sp]
+         : 134   if (state->mode == SVC_TCP_RX_EMPTY) {
+    0.14 :   3dff0:  ldrb    w0, [x22, #96]
+    0.14 :   3dff4:  cbz     w0, 3e370 <svc_tcp_recv_skb+0x488>
+         : 137   if (state->body_bytes < SVC_TCP_RX_FIXED_BYTES) {
+    0.14 :   3dff8:  ldr     w0, [x22, #48]
+         : 139   unsigned int remaining = take;
+    0.18 :   3dffc:  mov     w5, w26
+         : 141   if (state->body_bytes < SVC_TCP_RX_FIXED_BYTES) {
+    0.25 :   3e000:  cmp     w0, #0x1b
+    0.04 :   3e004:  b.ls    3e3cc <svc_tcp_recv_skb+0x4e4>  // b.plast
+         : 144   if (remaining && state->mode == SVC_TCP_RX_MIXED) {
+    0.11 :   3e008:  cbz     w5, 3e1e4 <svc_tcp_recv_skb+0x2fc>
+    0.21 :   3e00c:  ldrb    w0, [x22, #96]
+    0.11 :   3e010:  cmp     w0, #0x2
+    0.04 :   3e014:  b.eq    3e648 <svc_tcp_recv_skb+0x760>  // b.none
+         : 149   return !list_empty_careful(&svsk->sk_credit_wait);
+    0.00 :   3e018:  add     x0, x19, #0x258
+         : 151   * if another CPU could re-list_add() it.
+         : 152   */
+         : 153   static inline int list_empty_careful(const struct list_head *head)
+         : 154   __context_unsafe(/* intentional lockless access to @head */)
+         : 155   {
+         : 156   struct list_head *next = smp_load_acquire(&head->next);
+    0.00 :   3e01c:  ldar    x1, [x0]
+         : 158   return list_is_head(next, head) && (next == READ_ONCE(head->prev));
+    0.00 :   3e020:  cmp     x1, x0
+    0.00 :   3e024:  b.eq    3e554 <svc_tcp_recv_skb+0x66c>  // b.none
+    0.00 :   3e028:  str     x8, [sp, #16]
+         : 162   svc_tcp_rx_credit_forget(svsk);
+    0.00 :   3e02c:  mov     x0, x19
+    0.00 :   3e030:  str     w5, [sp, #8]
+    0.00 :   3e034:  bl      37898 <svc_tcp_rx_credit_forget>
+         : 166   if (remaining) {
+    0.00 :   3e038:  ldr     w5, [sp, #8]
+    0.00 :   3e03c:  ldr     x8, [sp, #16]
+         : 169   if (state->mode == SVC_TCP_RX_COPY) {
+    0.00 :   3e040:  ldrb    w0, [x22, #96]
+    0.04 :   3e044:  cmp     w0, #0x3
+    0.00 :   3e048:  b.eq    3e5d0 <svc_tcp_recv_skb+0x6e8>  // b.none
+         : 173   if (end != skb->len || !skb->pp_recycle || skb_cloned(skb) ||
+    0.00 :   3e04c:  ldr     w1, [x20, #112]
+    0.04 :   3e050:  adds    w0, w23, w5
+    0.00 :   3e054:  cset    w2, cs  // cs = hs, nlast
+         : 177   return NULL;
+    0.00 :   3e058:  mov     x27, #0x0                       // #0
+         : 179   if (end != skb->len || !skb->pp_recycle || skb_cloned(skb) ||
+    0.04 :   3e05c:  cmp     w0, w1
+    0.00 :   3e060:  b.ne    3e0a8 <svc_tcp_recv_skb+0x1c0>  // b.any
+    0.00 :   3e064:  ldrb    w3, [x20, #126]
+    0.11 :   3e068:  tbz     w3, #7, 3e0a8 <svc_tcp_recv_skb+0x1c0>
+         : 184   *       one of multiple shared copies of the buffer. Cloned buffers are
+         : 185   *       shared data so must not be written to under normal circumstances.
+         : 186   */
+         : 187   static inline int skb_cloned(const struct sk_buff *skb)
+         : 188   {
+         : 189   return skb->cloned &&
+    0.00 :   3e06c:  tbz     w3, #0, 3e08c <svc_tcp_recv_skb+0x1a4>
+         : 191   return skb->head + skb->end;
+    0.00 :   3e070:  ldr     x3, [x20, #200]
+    0.00 :   3e074:  ldr     w4, [x20, #192]
+    0.00 :   3e078:  add     x3, x3, x4
+         : 195   * Return: The value loaded from @v.
+         : 196   */
+         : 197   static __always_inline int
+         : 198   raw_atomic_read(const atomic_t *v)
+         : 199   {
+         : 200   return arch_atomic_read(v);
+    0.00 :   3e07c:  ldr     w3, [x3, #32]
+         : 202   (atomic_read(&skb_shinfo(skb)->dataref) & SKB_DATAREF_MASK) != 1;
+    0.00 :   3e080:  and     w3, w3, #0xffff
+         : 204   return skb->cloned &&
+    0.00 :   3e084:  cmp     w3, #0x1
+    0.00 :   3e088:  b.ne    3e0a8 <svc_tcp_recv_skb+0x1c0>  // b.any
+    0.04 :   3e08c:  ldr     w3, [x20, #220]
+         : 208   return NULL;
+    0.04 :   3e090:  mov     x27, #0x0                       // #0
+         : 210   if (end != skb->len || !skb->pp_recycle || skb_cloned(skb) ||
+    0.04 :   3e094:  cmp     w3, #0x1
+    0.00 :   3e098:  b.ne    3e0a8 <svc_tcp_recv_skb+0x1c0>  // b.any
+         : 213   return t;
+    0.00 :   3e09c:  add     x27, sp, #0x68
+         : 215   t->frag = -1;
+    0.00 :   3e0a0:  mov     x3, #0xffffffff                 // #4294967295
+    0.04 :   3e0a4:  str     x3, [sp, #104]
+         : 218   struct svc_tcp_rx_walk walk = {
+    0.00 :   3e0a8:  stp     x19, x24, [sp, #56]
+    0.00 :   3e0ac:  cmp     w2, #0x0
+    0.04 :   3e0b0:  ccmp    w0, w1, #0x2, eq        // eq = none
+    0.04 :   3e0b4:  str     x20, [sp, #72]
+    0.07 :   3e0b8:  cset    w3, hi  // hi = pmore
+    0.00 :   3e0bc:  stp     w23, w0, [sp, #80]
+         : 225   if (WARN_ON_ONCE(walk.last < walk.first || walk.last > skb->len))
+    0.11 :   3e0c0:  mov     w23, w3
+         : 227   struct svc_tcp_rx_walk walk = {
+    0.04 :   3e0c4:  str     wzr, [sp, #92]
+         : 229   .body_base = rqstp->rq_tcp_rx->body_bytes,
+    0.07 :   3e0c8:  ldr     x0, [x24, #1088]
+         : 231   struct svc_tcp_rx_walk walk = {
+    0.04 :   3e0cc:  ldr     w0, [x0, #48]
+    0.00 :   3e0d0:  str     w0, [sp, #88]
+    0.04 :   3e0d4:  str     x27, [sp, #96]
+         : 235   if (WARN_ON_ONCE(walk.last < walk.first || walk.last > skb->len))
+    0.00 :   3e0d8:  b.hi    3e91c <svc_tcp_recv_skb+0xa34>  // b.pmore
+         : 237   ret = svc_tcp_rx_walk_skb(&walk, skb, 0);
+    0.11 :   3e0dc:  mov     w2, #0x0                        // #0
+    0.00 :   3e0e0:  mov     x1, x20
+    0.04 :   3e0e4:  add     x0, sp, #0x38
+    0.04 :   3e0e8:  str     x8, [sp, #8]
+    0.00 :   3e0ec:  str     w3, [sp, #16]
+    0.04 :   3e0f0:  str     w5, [sp, #24]
+    0.00 :   3e0f4:  bl      3db30 <svc_tcp_rx_walk_skb>
+    0.25 :   3e0f8:  mov     w2, w0
+         : 246   if (ret)
+    0.00 :   3e0fc:  cbnz    w0, 3e570 <svc_tcp_recv_skb+0x688>
+         : 248   if (WARN_ON_ONCE(rqstp->rq_tcp_rx->body_bytes != walk.body_base + len))
+    0.11 :   3e100:  ldr     x1, [x24, #1088]
+    0.07 :   3e104:  ldr     w5, [sp, #24]
+    0.00 :   3e108:  ldr     w0, [sp, #88]
+    0.07 :   3e10c:  ldr     w1, [x1, #48]
+    0.07 :   3e110:  add     w0, w5, w0
+    0.00 :   3e114:  cmp     w1, w0
+    0.00 :   3e118:  b.ne    3e87c <svc_tcp_recv_skb+0x994>  // b.any
+         : 256   if (WARN_ON_ONCE(state->body_bytes != svsk->sk_datalen + take)) {
+    0.07 :   3e11c:  ldr     w1, [x19, #576]
+    0.00 :   3e120:  ldr     w2, [x22, #48]
+    0.00 :   3e124:  add     x1, x1, x26
+    0.00 :   3e128:  ldr     w3, [sp, #16]
+    0.04 :   3e12c:  ldr     x8, [sp, #8]
+    0.00 :   3e130:  cmp     x2, x1
+    0.00 :   3e134:  b.ne    3e598 <svc_tcp_recv_skb+0x6b0>  // b.any
+         : 264   if (!t)
+    0.04 :   3e138:  cbz     x27, 3e968 <svc_tcp_recv_skb+0xa80>
+         : 266   return skb->head + skb->end;
+    0.04 :   3e13c:  ldr     x0, [x20, #200]
+    0.14 :   3e140:  ldr     w1, [x20, #192]
+         : 269   while (read_all && t->nr && t->pages[t->nr - 1].frag == nr_frags - 1) {
+    0.07 :   3e144:  ldr     w5, [x27, #4]
+    0.00 :   3e148:  add     x0, x0, x1
+         : 272   nr_frags = skb_shinfo(skb)->nr_frags;
+    0.00 :   3e14c:  ldrb    w4, [x0, #2]
+    0.11 :   3e150:  mov     w1, w4
+         : 275   while (read_all && t->nr && t->pages[t->nr - 1].frag == nr_frags - 1) {
+    0.04 :   3e154:  cbz     w5, 3e1a0 <svc_tcp_recv_skb+0x2b8>
+    0.00 :   3e158:  sub     w5, w5, #0x1
+    0.04 :   3e15c:  mov     x6, #0xc                        // #12
+    0.00 :   3e160:  add     x6, x6, w5, uxtw #3
+    0.00 :   3e164:  add     x6, x27, x6
+    0.00 :   3e168:  b       3e17c <svc_tcp_recv_skb+0x294>
+         : 282   t->nr--;
+    0.39 :   3e16c:  str     w5, [x27, #4]
+         : 284   while (read_all && t->nr && t->pages[t->nr - 1].frag == nr_frags - 1) {
+    0.11 :   3e170:  sub     x6, x6, #0x8
+    0.00 :   3e174:  cbz     w5, 3e5bc <svc_tcp_recv_skb+0x6d4>
+    0.11 :   3e178:  sub     w5, w5, #0x1
+    0.14 :   3e17c:  ldr     w0, [x6]
+    0.53 :   3e180:  mov     w1, w4
+    0.00 :   3e184:  sub     w4, w4, #0x1
+    0.14 :   3e188:  cmp     w0, w4
+    0.07 :   3e18c:  b.eq    3e16c <svc_tcp_recv_skb+0x284>  // b.none
+    0.00 :   3e190:  ldr     x0, [x20, #200]
+         : 294   {
+         : 295   struct skb_shared_info *shinfo = skb_shinfo(skb);
+         :
+         : 297   DEBUG_NET_WARN_ON_ONCE(skb_cloned(skb) || skb_zcopy_managed(skb) ||
+         : 298   first > shinfo->nr_frags);
+         : 299   shinfo->nr_frags = first;
+    0.00 :   3e194:  and     w1, w1, #0xff
+    0.00 :   3e198:  ldr     w2, [x20, #192]
+    0.00 :   3e19c:  add     x0, x0, x2
+    0.00 :   3e1a0:  strb    w1, [x0, #2]
+    0.07 :   3e1a4:  mov     x0, x22
+    0.00 :   3e1a8:  mov     x1, x27
+    0.00 :   3e1ac:  str     x8, [sp, #8]
+         : 307   if (!t)
+    0.04 :   3e1b0:  bl      371d8 <svc_tcp_rx_takeover_settle.part.0>
+         : 309   svsk->sk_datalen += take;
+    0.00 :   3e1b4:  ldr     x8, [sp, #8]
+    0.00 :   3e1b8:  ldr     w0, [x19, #576]
+    0.04 :   3e1bc:  b       3e224 <svc_tcp_recv_skb+0x33c>
+         : 313   if (!svsk->sk_rx_held && !svsk->sk_rx_hold_pending &&
+    0.00 :   3e1c0:  ldrb    w0, [x19, #644]
+    0.00 :   3e1c4:  tbnz    w0, #0, 3dfa0 <svc_tcp_recv_skb+0xb8>
+         : 316   READ_ONCE(svc_tcp_rx_rcvbuf) &&
+    0.00 :   3e1c8:  adrp    x26, 0 <rpc_default_callback-0x8>
+    0.00 :   3e1cc:  add     x26, x26, #0x0
+    0.00 :   3e1d0:  ldr     w0, [x26, #24]
+         : 320   if (!svsk->sk_rx_held && !svsk->sk_rx_hold_pending &&
+    0.00 :   3e1d4:  cbz     w0, 3dfa0 <svc_tcp_recv_skb+0xb8>
+         : 322   struct page *prev = NULL;
+    0.00 :   3e1d8:  str     xzr, [sp, #56]
+         : 324   static __always_inline bool arch_static_branch(struct static_key * const key,
+         : 325   const bool branch)
+         : 326   {
+         : 327   char *k = &((char *)key)[branch];
+         :
+         : 329   asm goto(
+    0.00 :   3e1dc:  nop
+    0.00 :   3e1e0:  b       3dfa0 <svc_tcp_recv_skb+0xb8>
+         : 332   return !list_empty_careful(&svsk->sk_credit_wait);
+    0.00 :   3e1e4:  add     x0, x19, #0x258
+         : 334   struct list_head *next = smp_load_acquire(&head->next);
+    0.00 :   3e1e8:  ldar    x1, [x0]
+         : 336   return list_is_head(next, head) && (next == READ_ONCE(head->prev));
+    0.00 :   3e1ec:  cmp     x0, x1
+    0.00 :   3e1f0:  b.eq    3e638 <svc_tcp_recv_skb+0x750>  // b.none
+         : 339   svc_tcp_rx_credit_forget(svsk);
+    0.00 :   3e1f4:  mov     x0, x19
+    0.00 :   3e1f8:  str     x8, [sp]
+    0.00 :   3e1fc:  bl      37898 <svc_tcp_rx_credit_forget>
+    0.00 :   3e200:  ldr     x8, [sp]
+         : 344   unsigned int remaining = take;
+    0.00 :   3e204:  mov     w3, #0x0                        // #0
+         : 346   if (WARN_ON_ONCE(state->body_bytes != svsk->sk_datalen + take)) {
+    0.00 :   3e208:  ldr     w0, [x19, #576]
+    0.00 :   3e20c:  ldr     w2, [x22, #48]
+    0.00 :   3e210:  add     x1, x26, w0, uxtw
+    0.00 :   3e214:  cmp     x2, x1
+    0.00 :   3e218:  b.ne    3e594 <svc_tcp_recv_skb+0x6ac>  // b.any
+    0.00 :   3e21c:  and     w23, w3, #0x1
+         : 353   svsk->sk_datalen += take;
+    0.00 :   3e220:  str     w26, [sp]
+    0.46 :   3e224:  ldr     w2, [sp]
+         : 356   consumed += take;
+    0.07 :   3e228:  add     x28, x28, x26
+         : 358   svsk->sk_tcplen += take;
+    0.00 :   3e22c:  ldr     w1, [x19, #572]
+         : 360   svsk->sk_datalen += take;
+    0.11 :   3e230:  add     w0, w2, w0
+    0.00 :   3e234:  str     w0, [x19, #576]
+         : 363   svsk->sk_tcplen += take;
+    0.07 :   3e238:  add     w0, w1, w2
+    0.04 :   3e23c:  str     w0, [x19, #572]
+         : 366   desc->count -= take;
+    0.32 :   3e240:  ldr     x0, [x25, #8]
+    0.07 :   3e244:  sub     x0, x0, x26
+    0.00 :   3e248:  str     x0, [x25, #8]
+         : 370   if (paused) {
+    0.04 :   3e24c:  cbnz    w23, 3e4c0 <svc_tcp_recv_skb+0x5d8>
+         : 372   if (take == want) {
+    0.00 :   3e250:  cmp     x8, x26
+    0.00 :   3e254:  b.eq    3e47c <svc_tcp_recv_skb+0x594>  // b.none
+         : 375   return consumed;
+    0.04 :   3e258:  mov     w26, w28
+    0.00 :   3e25c:  ldp     x27, x28, [sp, #336]
+         : 378   }
+    0.14 :   3e260:  mrs     x0, sp_el0
+    0.04 :   3e264:  ldr     x2, [sp, #248]
+    0.00 :   3e268:  ldr     x1, [x0, #80]
+    0.14 :   3e26c:  subs    x2, x2, x1
+    0.00 :   3e270:  mov     x1, #0x0                        // #0
+    0.00 :   3e274:  b.ne    3e984 <svc_tcp_recv_skb+0xa9c>  // b.any
+    0.21 :   3e278:  ldp     x29, x30, [sp, #256]
+    0.07 :   3e27c:  mov     w0, w26
+    0.39 :   3e280:  ldp     x19, x20, [sp, #272]
+    0.11 :   3e284:  ldp     x21, x22, [sp, #288]
+    0.04 :   3e288:  ldp     x23, x24, [sp, #304]
+    0.04 :   3e28c:  ldp     x25, x26, [sp, #320]
+    0.07 :   3e290:  add     sp, sp, #0x160
+    0.00 :   3e294:  autiasp
+    0.00 :   3e298:  ret
+         : 394   want = sizeof(rpc_fraghdr) - svsk->sk_tcplen;
+    0.14 :   3e29c:  mov     w0, w2
+    0.00 :   3e2a0:  mov     x7, #0x4                        // #4
+    0.00 :   3e2a4:  sub     x7, x7, x0
+         : 398   (char *)&svsk->sk_marker + svsk->sk_tcplen,
+    0.00 :   3e2a8:  add     x2, x19, #0x238
+         : 400   n = min(want, len);
+    0.04 :   3e2ac:  cmp     x7, x22
+         : 402   if (skb_copy_bits(skb, offset,
+    0.00 :   3e2b0:  add     x2, x2, x0
+         : 404   n = min(want, len);
+    0.00 :   3e2b4:  csel    x28, x7, x22, ls        // ls = plast
+         : 406   if (skb_copy_bits(skb, offset,
+    0.04 :   3e2b8:  mov     w1, w23
+    0.00 :   3e2bc:  mov     w26, w28
+    0.11 :   3e2c0:  mov     w3, w28
+    0.04 :   3e2c4:  mov     x0, x20
+    0.00 :   3e2c8:  bl      0 <skb_copy_bits>
+    0.00 :   3e2cc:  cbnz    w0, 3e3b4 <svc_tcp_recv_skb+0x4cc>
+         : 413   svsk->sk_tcplen += n;
+    0.00 :   3e2d0:  ldr     w0, [x19, #572]
+    0.00 :   3e2d4:  mov     w3, w28
+    0.00 :   3e2d8:  add     w0, w0, w28
+    0.00 :   3e2dc:  str     w0, [x19, #572]
+         : 418   desc->count -= n;
+    0.00 :   3e2e0:  ldr     x0, [x25, #8]
+    0.04 :   3e2e4:  sub     x0, x0, x28
+    0.00 :   3e2e8:  str     x0, [x25, #8]
+         : 422   if (svsk->sk_tcplen < sizeof(rpc_fraghdr))
+    0.00 :   3e2ec:  ldr     w0, [x19, #572]
+    0.00 :   3e2f0:  cmp     w0, #0x3
+    0.00 :   3e2f4:  b.ls    3e498 <svc_tcp_recv_skb+0x5b0>  // b.plast
+         : 426   trace_svcsock_marker(&svsk->sk_xprt, svsk->sk_marker);
+    0.04 :   3e2f8:  ldr     w27, [x19, #568]
+    0.00 :   3e2fc:  nop
+         : 429   svsk->sk_xprt.xpt_server->sv_max_mesg) {
+    0.11 :   3e300:  ldr     x1, [x19, #64]
+    0.35 :   3e304:  rev     w27, w27
+         : 432   if (svc_sock_reclen(svsk) + svsk->sk_datalen >
+    0.00 :   3e308:  ldr     w0, [x19, #576]
+    0.00 :   3e30c:  and     w27, w27, #0x7fffffff
+    0.00 :   3e310:  ldr     w1, [x1, #32]
+    0.00 :   3e314:  add     w0, w27, w0
+    0.00 :   3e318:  cmp     w0, w1
+    0.00 :   3e31c:  b.hi    3e72c <svc_tcp_recv_skb+0x844>  // b.pmore
+         : 439   received = svsk->sk_tcplen - sizeof(rpc_fraghdr);
+    0.00 :   3e320:  ldr     w2, [x19, #572]
+         : 441   offset += n;
+    0.00 :   3e324:  add     w23, w23, w3
+         : 443   len -= n;
+    0.00 :   3e328:  sub     x22, x22, x28
+    0.04 :   3e32c:  b       3dfd4 <svc_tcp_recv_skb+0xec>
+         : 446   svsk->sk_rx_hold_pending = true;
+    0.00 :   3e330:  mov     w0, #0x1                        // #1
+    0.00 :   3e334:  strh    w0, [x19, #644]
+    0.00 :   3e338:  b       3dfa0 <svc_tcp_recv_skb+0xb8>
+         : 450   return READ_ONCE(svc_tcp_rx_budget_for(svsk)->hold_factor) ?:
+    0.00 :   3e33c:  mov     x0, x19
+    0.00 :   3e340:  bl      38d88 <svc_tcp_rx_budget_for>
+    0.00 :   3e344:  ldr     w4, [x0, #116]
+    0.00 :   3e348:  mov     w1, #0x96                       // #150
+    0.00 :   3e34c:  cmp     w4, #0x0
+    0.00 :   3e350:  csel    w4, w4, w1, ne  // ne = any
+         : 457   return abs_diff(now, held) * 8 > held;
+    0.00 :   3e354:  cmp     w26, w4
+    0.00 :   3e358:  sub     w0, w4, w26
+    0.00 :   3e35c:  sub     w4, w26, w4
+    0.00 :   3e360:  csel    w4, w4, w0, cs  // cs = hs, nlast
+         : 462   else if (svsk->sk_rx_held && svc_tcp_rx_hold_stale(svsk)) {
+    0.00 :   3e364:  cmp     w26, w4, lsl #3
+    0.00 :   3e368:  b.cs    3dfa0 <svc_tcp_recv_skb+0xb8>  // b.hs, b.nlast
+    0.00 :   3e36c:  b       3e330 <svc_tcp_recv_skb+0x448>
+         : 466   if (WARN_ON_ONCE(!state || !svc_tcp_rx_is_empty(state) ||
+    0.04 :   3e370:  str     x8, [sp, #8]
+    0.00 :   3e374:  cbz     x22, 3e928 <svc_tcp_recv_skb+0xa40>
+    0.00 :   3e378:  mov     x0, x22
+    0.00 :   3e37c:  bl      34848 <svc_tcp_rx_is_empty>
+    0.07 :   3e380:  tbz     w0, #0, 3e928 <svc_tcp_recv_skb+0xa40>
+    0.04 :   3e384:  ldr     x0, [x19, #592]
+    0.00 :   3e388:  bl      34848 <svc_tcp_rx_is_empty>
+    0.00 :   3e38c:  ldr     x8, [sp, #8]
+    0.00 :   3e390:  tbz     w0, #0, 3e928 <svc_tcp_recv_skb+0xa40>
+         : 476   if (WARN_ON_ONCE(++svsk->sk_rx_sequence == 0))
+    0.00 :   3e394:  ldr     x0, [x19, #584]
+    0.00 :   3e398:  add     x0, x0, #0x1
+    0.00 :   3e39c:  str     x0, [x19, #584]
+    0.00 :   3e3a0:  cbz     x0, 3e748 <svc_tcp_recv_skb+0x860>
+         : 481   state->mode = SVC_TCP_RX_PREFIX;
+    0.00 :   3e3a4:  mov     w1, #0x1                        // #1
+         : 483   state->record_seq = svsk->sk_rx_sequence;
+    0.00 :   3e3a8:  str     x0, [x22, #88]
+         : 485   state->mode = SVC_TCP_RX_PREFIX;
+    0.00 :   3e3ac:  strb    w1, [x22, #96]
+    0.00 :   3e3b0:  b       3dff8 <svc_tcp_recv_skb+0x110>
+    0.00 :   3e3b4:  mov     w26, #0x0                       // #0
+         : 489   int error = -EFAULT;
+    0.00 :   3e3b8:  mov     w2, #0xfffffff2                 // #-14
+         : 491   desc->count = 0;
+    0.00 :   3e3bc:  str     xzr, [x25, #8]
+         : 493   desc->error = error;
+    0.00 :   3e3c0:  str     w2, [x25, #24]
+         : 495   return consumed;
+    0.00 :   3e3c4:  ldp     x27, x28, [sp, #336]
+    0.00 :   3e3c8:  b       3e260 <svc_tcp_recv_skb+0x378>
+         : 498   unsigned int prefix = min_t(unsigned int, remaining,
+    0.71 :   3e3cc:  mov     w4, #0x1c                       // #28
+    0.00 :   3e3d0:  sub     w4, w4, w0
+    0.00 :   3e3d4:  cmp     w4, w26
+         : 502   error = svc_tcp_rx_copy_skb(svsk, rqstp, skb, body_offset,
+    0.00 :   3e3d8:  mov     x2, x20
+         : 504   unsigned int prefix = min_t(unsigned int, remaining,
+    0.00 :   3e3dc:  csel    w4, w4, w26, ls // ls = plast
+         : 506   error = svc_tcp_rx_copy_skb(svsk, rqstp, skb, body_offset,
+    0.00 :   3e3e0:  mov     w3, w23
+    0.07 :   3e3e4:  mov     x1, x24
+    0.00 :   3e3e8:  mov     x0, x19
+    0.00 :   3e3ec:  str     w4, [sp, #8]
+    0.04 :   3e3f0:  str     x8, [sp, #16]
+    0.04 :   3e3f4:  bl      3d090 <svc_tcp_rx_copy_skb>
+         : 513   if (error)
+    0.11 :   3e3f8:  ldr     x8, [sp, #16]
+         : 515   error = svc_tcp_rx_copy_skb(svsk, rqstp, skb, body_offset,
+    0.00 :   3e3fc:  mov     w2, w0
+         : 517   if (error)
+    0.28 :   3e400:  ldr     w4, [sp, #8]
+    0.00 :   3e404:  cbnz    w0, 3e564 <svc_tcp_recv_skb+0x67c>
+         : 520   if (state->fixed_bytes == SVC_TCP_RX_FIXED_BYTES) {
+    0.00 :   3e408:  ldr     w0, [x22, #52]
+         : 522   body_offset += prefix;
+    0.00 :   3e40c:  add     w23, w23, w4
+         : 524   remaining -= prefix;
+    0.00 :   3e410:  sub     w5, w26, w4
+         : 526   if (state->fixed_bytes == SVC_TCP_RX_FIXED_BYTES) {
+    0.04 :   3e414:  cmp     w0, #0x1c
+    0.00 :   3e418:  b.ne    3e008 <svc_tcp_recv_skb+0x120>  // b.any
+         : 529   struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+    0.00 :   3e41c:  ldr     x2, [x24, #1088]
+         : 531   enum svc_tcp_rx_reason reason = svc_tcp_rx_classify(svsk, rqstp);
+    0.00 :   3e420:  mov     x1, x24
+    0.00 :   3e424:  mov     x0, x19
+         : 534   struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+    0.00 :   3e428:  str     x2, [sp, #8]
+         : 536   enum svc_tcp_rx_reason reason = svc_tcp_rx_classify(svsk, rqstp);
+    0.00 :   3e42c:  str     w5, [sp, #16]
+    0.00 :   3e430:  str     x8, [sp, #24]
+    0.04 :   3e434:  bl      39830 <svc_tcp_rx_classify>
+         : 540   state->reason = reason;
+    0.04 :   3e438:  ldr     x2, [sp, #8]
+         : 542   enum svc_tcp_rx_reason reason = svc_tcp_rx_classify(svsk, rqstp);
+    0.00 :   3e43c:  mov     w4, w0
+         : 544   state->mode = reason == SVC_TCP_RX_REASON_NONE ?
+    0.07 :   3e440:  ldr     x8, [sp, #24]
+         : 546   state->reason = reason;
+    0.04 :   3e444:  strb    w0, [x2, #97]
+         : 548   state->mode = reason == SVC_TCP_RX_REASON_NONE ?
+    0.00 :   3e448:  ldr     w5, [sp, #16]
+    0.00 :   3e44c:  cbnz    w0, 3e838 <svc_tcp_recv_skb+0x950>
+    0.07 :   3e450:  mov     w0, #0x2                        // #2
+    0.00 :   3e454:  strb    w0, [x2, #96]
+         : 553   trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state,
+    0.00 :   3e458:  mov     x1, x24
+    0.00 :   3e45c:  mov     x0, x19
+    0.00 :   3e460:  mov     w3, #0x0                        // #0
+    0.00 :   3e464:  str     w5, [sp, #8]
+    0.00 :   3e468:  str     x8, [sp, #16]
+    0.00 :   3e46c:  bl      39aa8 <trace_svcsock_tcp_rx_lifetime>
+         : 560   return reason == SVC_TCP_RX_REASON_INVARIANT ? -EINVAL : 0;
+    0.00 :   3e470:  ldr     x8, [sp, #16]
+    0.04 :   3e474:  ldr     w5, [sp, #8]
+    0.00 :   3e478:  b       3e008 <svc_tcp_recv_skb+0x120>
+         : 564   if (svc_sock_final_rec(svsk)) {
+    0.07 :   3e47c:  ldr     w0, [x19, #568]
+    0.21 :   3e480:  rev     w0, w0
+    0.00 :   3e484:  tbz     w0, #31, 3e4a0 <svc_tcp_recv_skb+0x5b8>
+         : 568   ctx->complete = true;
+    0.04 :   3e488:  mov     w0, #0x1                        // #1
+    0.00 :   3e48c:  strb    w0, [x21, #12]
+         : 571   desc->count = 0;
+    0.00 :   3e490:  str     xzr, [x25, #8]
+    0.00 :   3e494:  b       3e258 <svc_tcp_recv_skb+0x370>
+    0.00 :   3e498:  ldp     x27, x28, [sp, #336]
+    0.00 :   3e49c:  b       3e260 <svc_tcp_recv_skb+0x378>
+         : 576   svsk->sk_marker = xdr_zero;
+    0.00 :   3e4a0:  str     xzr, [x19, #568]
+         : 578   if (++ctx->frags >= SVC_TCP_MAX_FRAGS)
+    0.00 :   3e4a4:  ldr     w0, [x21, #8]
+    0.00 :   3e4a8:  add     w0, w0, #0x1
+    0.00 :   3e4ac:  str     w0, [x21, #8]
+    0.00 :   3e4b0:  cmp     w0, #0xff
+    0.00 :   3e4b4:  b.ls    3e258 <svc_tcp_recv_skb+0x370>  // b.plast
+         : 584   desc->count = 0;
+    0.00 :   3e4b8:  str     xzr, [x25, #8]
+    0.00 :   3e4bc:  b       3e258 <svc_tcp_recv_skb+0x370>
+         : 587   ctx->credit_wait = true;
+    0.00 :   3e4c0:  mov     w0, #0x1                        // #1
+    0.00 :   3e4c4:  strb    w0, [x21, #13]
+         : 590   desc->count = 0;
+    0.00 :   3e4c8:  str     xzr, [x25, #8]
+         : 592   return consumed;
+    0.00 :   3e4cc:  mov     w26, w28
+    0.00 :   3e4d0:  ldp     x27, x28, [sp, #336]
+    0.00 :   3e4d4:  b       3e260 <svc_tcp_recv_skb+0x378>
+    0.00 :   3e4d8:  add     x4, sp, #0x38
+    0.00 :   3e4dc:  add     w3, w23, w22
+    0.00 :   3e4e0:  mov     w2, w23
+    0.00 :   3e4e4:  mov     x0, x20
+    0.00 :   3e4e8:  mov     w1, #0x0                        // #0
+    0.00 :   3e4ec:  bl      37430 <svc_tcp_rx_skb_region_pages_after.part.0>
+         : 602   READ_ONCE(svc_tcp_rx_rcvbuf) &&
+    0.00 :   3e4f0:  cbz     w0, 3e5b0 <svc_tcp_recv_skb+0x6c8>
+         : 604   svsk->sk_rx_hold_pending = true;
+    0.00 :   3e4f4:  mov     w0, #0x1                        // #1
+    0.00 :   3e4f8:  strb    w0, [x19, #644]
+    0.00 :   3e4fc:  b       3dfa0 <svc_tcp_recv_skb+0xb8>
+         : 608   */
+         : 609   static __always_inline struct task_struct *get_current(void)
+         : 610   {
+         : 611   unsigned long sp_el0;
+         :
+         : 613   asm ("mrs %0, sp_el0" : "=r" (sp_el0));
+    0.00 :   3e500:  mrs     x0, sp_el0
+         : 615   TP_ARGS(svsk, socket))
+         :
+         : 617   DEFINE_SVCSOCK_LIFETIME_EVENT(svcsock_new);
+         : 618   DEFINE_SVCSOCK_LIFETIME_EVENT(svcsock_free);
+         :
+         : 620   TRACE_EVENT(svcsock_marker,
+    0.00 :   3e504:  ldr     w2, [x0, #24]
+         : 622   /*
+         : 623   * Unlike the bitops with the '__' prefix above, this one *is* atomic,
+         : 624   * so `volatile` must always stay here with no cast-aways. See
+         : 625   * `Documentation/atomic_bitops.txt` for the details.
+         : 626   */
+         : 627   return 1UL & (addr[BIT_WORD(nr)] >> (nr & (BITS_PER_LONG-1)));
+    0.00 :   3e508:  adrp    x1, 0 <__cpu_online_mask>
+    0.00 :   3e50c:  add     x1, x1, #0x0
+    0.00 :   3e510:  lsr     w0, w2, #6
+    0.00 :   3e514:  lsl     x0, x0, #3
+    0.00 :   3e518:  ldr     x0, [x1, x0]
+    0.00 :   3e51c:  lsr     x0, x0, x2
+    0.00 :   3e520:  tbz     w0, #0, 3e300 <svc_tcp_recv_skb+0x418>
+    0.00 :   3e524:  str     w28, [sp]
+         : 636   __acquires_shared(ssp)
+         : 637   {
+         : 638   struct srcu_ctr __percpu *retval;
+         :
+         : 640   srcu_check_read_flavor(ssp, SRCU_READ_FLAVOR_FAST);
+         : 641   retval = __srcu_read_lock_fast(ssp);
+    0.00 :   3e528:  bl      36828 <__srcu_read_lock_fast.constprop.0>
+    0.00 :   3e52c:  mov     w2, w27
+    0.00 :   3e530:  mov     x1, x19
+    0.00 :   3e534:  mov     x27, x0
+    0.00 :   3e538:  mov     x0, #0x0                        // #0
+    0.00 :   3e53c:  bl      17ec8 <__traceiter_svcsock_marker>
+         : 648   */
+         : 649   static inline void srcu_read_unlock_fast_notrace(struct srcu_struct *ssp,
+         : 650   struct srcu_ctr __percpu *scp) __releases_shared(ssp)
+         : 651   {
+         : 652   srcu_check_read_flavor(ssp, SRCU_READ_FLAVOR_FAST);
+         : 653   __srcu_read_unlock_fast(ssp, scp);
+    0.00 :   3e540:  mov     x0, x27
+    0.00 :   3e544:  bl      373c0 <__srcu_read_unlock_fast.constprop.0>
+    0.00 :   3e548:  ldr     w27, [x19, #568]
+    0.00 :   3e54c:  ldr     w3, [sp]
+    0.00 :   3e550:  b       3e300 <svc_tcp_recv_skb+0x418>
+    0.14 :   3e554:  ldr     x0, [x19, #608]
+    0.04 :   3e558:  cmp     x0, x1
+    0.00 :   3e55c:  b.ne    3e028 <svc_tcp_recv_skb+0x140>  // b.any
+    0.00 :   3e560:  b       3e040 <svc_tcp_recv_skb+0x158>
+         : 663   return consumed;
+    0.00 :   3e564:  mov     w26, w28
+    0.00 :   3e568:  b       3e3bc <svc_tcp_recv_skb+0x4d4>
+         : 666   error = -EINVAL;
+    0.00 :   3e56c:  mov     w2, #0xffffffea                 // #-22
+         : 668   svc_tcp_rx_takeover_end(rqstp->rq_tcp_rx, t, skb, false);
+    0.00 :   3e570:  ldr     x0, [x24, #1088]
+         : 670   return consumed;
+    0.00 :   3e574:  mov     w26, w28
+         : 672   if (!t)
+    0.00 :   3e578:  cbz     x27, 3e3bc <svc_tcp_recv_skb+0x4d4>
+    0.00 :   3e57c:  mov     x1, x27
+    0.00 :   3e580:  str     w2, [sp]
+         : 676   if (!t)
+    0.00 :   3e584:  bl      371d8 <svc_tcp_rx_takeover_settle.part.0>
+    0.00 :   3e588:  ldr     w2, [sp]
+    0.00 :   3e58c:  b       3e3bc <svc_tcp_recv_skb+0x4d4>
+         : 680   if (WARN_ON_ONCE(state->body_bytes != svsk->sk_datalen + take)) {
+    0.00 :   3e590:  mov     w3, #0x0                        // #0
+         : 682   struct svc_tcp_rx_takeover takeover, *t = NULL;
+    0.00 :   3e594:  mov     x27, #0x0                       // #0
+         : 684   if (WARN_ON_ONCE(state->body_bytes != svsk->sk_datalen + take)) {
+    0.00 :   3e598:  brk     #0x800
+    0.00 :   3e59c:  cmp     x2, x1
+    0.00 :   3e5a0:  b.ne    3e56c <svc_tcp_recv_skb+0x684>  // b.any
+    0.00 :   3e5a4:  and     w23, w3, #0x1
+         : 689   svsk->sk_datalen += take;
+    0.00 :   3e5a8:  str     w26, [sp]
+    0.00 :   3e5ac:  b       3e138 <svc_tcp_recv_skb+0x250>
+         : 692   else if (svsk->sk_rx_held && svc_tcp_rx_hold_stale(svsk)) {
+    0.00 :   3e5b0:  ldrb    w0, [x19, #645]
+    0.00 :   3e5b4:  tbz     w0, #0, 3dfa0 <svc_tcp_recv_skb+0xb8>
+    0.00 :   3e5b8:  b       3df5c <svc_tcp_recv_skb+0x74>
+    0.60 :   3e5bc:  ldr     x0, [x20, #200]
+    0.60 :   3e5c0:  and     w1, w4, #0xff
+    0.00 :   3e5c4:  ldr     w2, [x20, #192]
+    0.04 :   3e5c8:  add     x0, x0, x2
+    0.00 :   3e5cc:  b       3e1a0 <svc_tcp_recv_skb+0x2b8>
+         : 701   error = svc_tcp_rx_copy_skb(svsk, rqstp, skb,
+    0.00 :   3e5d0:  mov     x2, x20
+    0.00 :   3e5d4:  mov     w4, w5
+    0.00 :   3e5d8:  mov     w3, w23
+    0.00 :   3e5dc:  mov     x1, x24
+    0.00 :   3e5e0:  mov     x0, x19
+    0.00 :   3e5e4:  str     x8, [sp, #8]
+    0.04 :   3e5e8:  bl      3d090 <svc_tcp_rx_copy_skb>
+    0.00 :   3e5ec:  mov     w2, w0
+         : 710   if (error)
+    0.00 :   3e5f0:  ldr     x8, [sp, #8]
+    0.00 :   3e5f4:  cbnz    w0, 3e564 <svc_tcp_recv_skb+0x67c>
+         : 713   if (WARN_ON_ONCE(state->body_bytes != svsk->sk_datalen + take)) {
+    0.00 :   3e5f8:  ldr     w0, [x19, #576]
+    0.00 :   3e5fc:  ldr     w2, [x22, #48]
+    0.60 :   3e600:  add     x1, x26, w0, uxtw
+    0.00 :   3e604:  cmp     x2, x1
+    0.00 :   3e608:  b.ne    3e590 <svc_tcp_recv_skb+0x6a8>  // b.any
+         : 719   svsk->sk_datalen += take;
+    0.04 :   3e60c:  ldr     w2, [sp]
+         : 721   consumed += take;
+    0.00 :   3e610:  add     x28, x28, x26
+         : 723   svsk->sk_tcplen += take;
+    0.00 :   3e614:  ldr     w1, [x19, #572]
+         : 725   svsk->sk_datalen += take;
+    0.00 :   3e618:  add     w0, w2, w0
+    0.00 :   3e61c:  str     w0, [x19, #576]
+         : 728   svsk->sk_tcplen += take;
+    0.00 :   3e620:  add     w0, w1, w2
+    0.00 :   3e624:  str     w0, [x19, #572]
+         : 731   desc->count -= take;
+    0.00 :   3e628:  ldr     x0, [x25, #8]
+    0.00 :   3e62c:  sub     x0, x0, x26
+    0.00 :   3e630:  str     x0, [x25, #8]
+         : 735   if (paused) {
+    0.00 :   3e634:  b       3e250 <svc_tcp_recv_skb+0x368>
+    0.00 :   3e638:  ldr     x1, [x19, #608]
+    0.00 :   3e63c:  cmp     x0, x1
+    0.00 :   3e640:  b.ne    3e1f4 <svc_tcp_recv_skb+0x30c>  // b.any
+    0.00 :   3e644:  b       3e204 <svc_tcp_recv_skb+0x31c>
+         : 741   struct page *prev = state->region_last;
+    0.32 :   3e648:  ldr     x4, [x22, #136]
+         : 743   svc_tcp_rx_prefetch_pages(skb, 0, body_offset,
+    2.24 :   3e64c:  add     w0, w23, w5
+    0.04 :   3e650:  mov     w3, w0
+    0.04 :   3e654:  mov     w1, #0x0                        // #0
+    0.11 :   3e658:  mov     w2, w23
+    0.11 :   3e65c:  str     w5, [sp, #8]
+    0.00 :   3e660:  str     x8, [sp, #16]
+    0.11 :   3e664:  str     w0, [sp, #24]
+    0.07 :   3e668:  mov     x0, x20
+         : 752   struct page *prev = state->region_last;
+    0.00 :   3e66c:  str     x4, [sp, #56]
+         : 754   svc_tcp_rx_prefetch_pages(skb, 0, body_offset,
+    0.07 :   3e670:  bl      37258 <svc_tcp_rx_prefetch_pages>
+         : 756   unsigned int ahead = READ_ONCE(svc_tcp_rx_lookahead);
+    0.67 :   3e674:  adrp    x0, 0 <rpc_default_callback-0x8>
+    0.00 :   3e678:  add     x0, x0, #0x0
+         : 759   if (!ahead || svsk->sk_sock->ops->read_sock != tcp_read_sock ||
+    0.00 :   3e67c:  ldr     x8, [sp, #16]
+         : 761   unsigned int ahead = READ_ONCE(svc_tcp_rx_lookahead);
+    1.77 :   3e680:  ldr     w1, [x0, #8]
+         : 763   if (!ahead || svsk->sk_sock->ops->read_sock != tcp_read_sock ||
+    0.71 :   3e684:  ldr     w5, [sp, #8]
+    0.00 :   3e688:  cbz     w1, 3e6a8 <svc_tcp_recv_skb+0x7c0>
+    0.14 :   3e68c:  ldr     x2, [x19, #520]
+    0.21 :   3e690:  adrp    x0, 0 <tcp_read_sock>
+    0.04 :   3e694:  add     x0, x0, #0x0
+    0.14 :   3e698:  ldr     x2, [x2, #32]
+    0.57 :   3e69c:  ldr     x2, [x2, #192]
+    1.63 :   3e6a0:  cmp     x2, x0
+    0.00 :   3e6a4:  b.eq    3e7b4 <svc_tcp_recv_skb+0x8cc>  // b.none
+    0.39 :   3e6a8:  nop
+    0.00 :   3e6ac:  b       3e018 <svc_tcp_recv_skb+0x130>
+    0.14 :   3e6b0:  ldr     w3, [sp, #24]
+    0.11 :   3e6b4:  add     x4, sp, #0x38
+    0.11 :   3e6b8:  mov     w2, w23
+    0.11 :   3e6bc:  mov     x0, x20
+    1.60 :   3e6c0:  mov     w1, #0x0                        // #0
+    0.18 :   3e6c4:  str     w5, [sp, #8]
+    0.04 :   3e6c8:  str     x8, [sp, #16]
+    0.25 :   3e6cc:  bl      37430 <svc_tcp_rx_skb_region_pages_after.part.0>
+         : 783   if (need && !state->credit_linked)
+    0.11 :   3e6d0:  ldr     w5, [sp, #8]
+    0.00 :   3e6d4:  ldr     x8, [sp, #16]
+    0.00 :   3e6d8:  mov     w4, w0
+    0.00 :   3e6dc:  cbz     w0, 3e018 <svc_tcp_recv_skb+0x130>
+    0.00 :   3e6e0:  ldrb    w0, [x22, #144]
+    0.04 :   3e6e4:  tbz     w0, #0, 3e888 <svc_tcp_recv_skb+0x9a0>
+         : 790   !svc_tcp_rx_credit_charge(svsk, state, need))) {
+    0.00 :   3e6e8:  mov     w2, w4
+    0.04 :   3e6ec:  mov     x1, x22
+    0.00 :   3e6f0:  mov     x0, x19
+    0.00 :   3e6f4:  str     w5, [sp, #8]
+    0.00 :   3e6f8:  str     x8, [sp, #16]
+    0.00 :   3e6fc:  bl      380c8 <svc_tcp_rx_credit_charge>
+         : 797   reclen)) ||
+    0.25 :   3e700:  ldr     x8, [sp, #16]
+    0.00 :   3e704:  ldr     w5, [sp, #8]
+    0.00 :   3e708:  tbz     w0, #0, 3e7a8 <svc_tcp_recv_skb+0x8c0>
+         : 801   return !list_empty_careful(&svsk->sk_credit_wait);
+    0.07 :   3e70c:  add     x0, x19, #0x258
+         : 803   struct list_head *next = smp_load_acquire(&head->next);
+    0.00 :   3e710:  ldar    x1, [x0]
+         : 805   return list_is_head(next, head) && (next == READ_ONCE(head->prev));
+    7.10 :   3e714:  cmp     x0, x1
+    0.00 :   3e718:  b.ne    3e028 <svc_tcp_recv_skb+0x140>  // b.any
+    0.00 :   3e71c:  ldr     x1, [x19, #608]
+    0.04 :   3e720:  cmp     x0, x1
+    0.00 :   3e724:  b.ne    3e028 <svc_tcp_recv_skb+0x140>  // b.any
+    0.00 :   3e728:  b       3e040 <svc_tcp_recv_skb+0x158>
+         : 812   net_notice_ratelimited("svc: %s oversized RPC fragment (%u octets) from %pISpc\n",
+    0.00 :   3e72c:  bl      0 <net_ratelimit>
+    0.00 :   3e730:  cbnz    w0, 3e9a0 <svc_tcp_recv_skb+0xab8>
+         : 815   desc->error = -EMSGSIZE;
+    0.00 :   3e734:  mov     w0, #0xffffffa6                 // #-90
+         : 817   desc->count = 0;
+    0.00 :   3e738:  str     xzr, [x25, #8]
+         : 819   desc->error = -EMSGSIZE;
+    0.00 :   3e73c:  str     w0, [x25, #24]
+         : 821   return consumed;
+    0.00 :   3e740:  ldp     x27, x28, [sp, #336]
+    0.00 :   3e744:  b       3e260 <svc_tcp_recv_skb+0x378>
+         : 824   if (WARN_ON_ONCE(++svsk->sk_rx_sequence == 0))
+    0.00 :   3e748:  brk     #0x800
+         : 826   error = svc_tcp_rx_start(svsk, rqstp);
+    0.00 :   3e74c:  mov     w2, #0xffffffb5                 // #-75
+         : 828   return consumed;
+    0.00 :   3e750:  mov     w26, w28
+    0.00 :   3e754:  b       3e3bc <svc_tcp_recv_skb+0x4d4>
+         : 831   if (!c->net) {
+    0.39 :   3e758:  ldr     x2, [x0]
+    0.07 :   3e75c:  cbz     x2, 3e970 <svc_tcp_recv_skb+0xa88>
+         : 834   } else if (net_eq(c->net, &init_net)) {
+    0.00 :   3e760:  adrp    x0, 0 <init_net>
+    0.00 :   3e764:  add     x0, x0, #0x0
+    0.04 :   3e768:  cmp     x2, x0
+    0.00 :   3e76c:  b.eq    3e98c <svc_tcp_recv_skb+0xaa4>  // b.none
+         : 839   *pages = READ_ONCE(c->cfg_pages);
+    0.00 :   3e770:  ldr     w2, [x1, #8]
+         : 841   *reserve = READ_ONCE(c->cfg_reserve);
+    0.00 :   3e774:  ldr     w0, [x1, #12]
+         : 843   if (!svc_tcp_rx_budget_zero(c))
+    0.00 :   3e778:  cbz     w2, 3e8ac <svc_tcp_recv_skb+0x9c4>
+         : 845   ((c && !svc_tcp_rx_credit_admit_to(svsk, c, state,
+    0.00 :   3e77c:  mov     w3, w27
+    0.00 :   3e780:  mov     x2, x22
+    0.00 :   3e784:  mov     x0, x19
+    0.00 :   3e788:  str     w5, [sp, #8]
+    0.00 :   3e78c:  str     x8, [sp, #16]
+    0.00 :   3e790:  str     w4, [sp, #24]
+    0.00 :   3e794:  bl      37c88 <svc_tcp_rx_credit_admit_to>
+    0.04 :   3e798:  ldr     x8, [sp, #16]
+    0.00 :   3e79c:  ldr     w5, [sp, #8]
+    0.00 :   3e7a0:  ldr     w4, [sp, #24]
+    0.00 :   3e7a4:  tbnz    w0, #0, 3e6e8 <svc_tcp_recv_skb+0x800>
+         : 857   take -= remaining;
+    0.00 :   3e7a8:  sub     x26, x26, w5, uxtw
+         : 859   paused = true;
+    0.00 :   3e7ac:  mov     w3, #0x1                        // #1
+    0.00 :   3e7b0:  b       3e208 <svc_tcp_recv_skb+0x320>
+         : 862   const struct sk_buff_head *queue = &svsk->sk_sk->sk_receive_queue;
+    1.38 :   3e7b4:  ldr     x4, [x19, #528]
+         : 864   return skb->next == (const struct sk_buff *) list;
+    0.21 :   3e7b8:  ldr     x6, [x20]
+    0.07 :   3e7bc:  add     x4, x4, #0xa8
+         : 867   if (!ahead || svsk->sk_sock->ops->read_sock != tcp_read_sock ||
+    0.32 :   3e7c0:  cmp     x4, x6
+    0.00 :   3e7c4:  b.eq    3e6a8 <svc_tcp_recv_skb+0x7c0>  // b.none
+         : 870   if (ahead == 1) {
+    0.11 :   3e7c8:  cmp     w1, #0x1
+    0.00 :   3e7cc:  b.eq    3e938 <svc_tcp_recv_skb+0xa50>  // b.none
+         : 873   svc_tcp_rx_prefetch_pages(next, 0, 0, next->len);
+    0.21 :   3e7d0:  ldr     w3, [x6, #112]
+   24.66 :   3e7d4:  mov     x0, x6
+    0.53 :   3e7d8:  mov     w1, #0x0                        // #0
+    0.04 :   3e7dc:  mov     w2, #0x0                        // #0
+    0.00 :   3e7e0:  str     x6, [sp, #8]
+    0.04 :   3e7e4:  str     w5, [sp, #16]
+    0.04 :   3e7e8:  stp     x8, x4, [sp, #32]
+    0.00 :   3e7ec:  bl      37258 <svc_tcp_rx_prefetch_pages>
+         : 882   if (!skb_queue_is_last(queue, next))
+    0.14 :   3e7f0:  ldr     w5, [sp, #16]
+    0.07 :   3e7f4:  ldr     x6, [sp, #8]
+    0.04 :   3e7f8:  ldp     x8, x4, [sp, #32]
+    0.11 :   3e7fc:  ldr     x1, [x6]
+    5.71 :   3e800:  cmp     x4, x1
+    0.00 :   3e804:  b.eq    3e6a8 <svc_tcp_recv_skb+0x7c0>  // b.none
+         : 889   return skb->head + skb->end;
+    0.00 :   3e808:  ldr     x0, [x1, #200]
+    0.96 :   3e80c:  ldr     w1, [x1, #192]
+    0.00 :   3e810:  add     x0, x0, x1
+         : 893   const char *end = p + offsetof(struct skb_shared_info,
+    0.00 :   3e814:  add     x1, x0, #0x140
+         : 895   for (p = PTR_ALIGN_DOWN(p, L1_CACHE_BYTES); p < end;
+    0.00 :   3e818:  and     x0, x0, #0xffffffffffffffc0
+    0.00 :   3e81c:  cmp     x1, x0
+    0.00 :   3e820:  b.ls    3e6a8 <svc_tcp_recv_skb+0x7c0>  // b.plast
+         : 899   * Prefetching support
+         : 900   */
+         : 901   #define ARCH_HAS_PREFETCH
+         : 902   static inline void prefetch(const void *ptr)
+         : 903   {
+         : 904   asm volatile("prfm pldl1keep, %a0\n" : : "p" (ptr));
+    0.04 :   3e824:  prfm    pldl1keep, [x0]
+         : 906   p += L1_CACHE_BYTES)
+    0.00 :   3e828:  add     x0, x0, #0x40
+         : 908   for (p = PTR_ALIGN_DOWN(p, L1_CACHE_BYTES); p < end;
+    0.00 :   3e82c:  cmp     x1, x0
+    0.00 :   3e830:  b.hi    3e824 <svc_tcp_recv_skb+0x93c>  // b.pmore
+    0.00 :   3e834:  b       3e6a8 <svc_tcp_recv_skb+0x7c0>
+         : 912   state->mode = reason == SVC_TCP_RX_REASON_NONE ?
+    0.00 :   3e838:  mov     w0, #0x3                        // #3
+    0.00 :   3e83c:  strb    w0, [x2, #96]
+         : 915   trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt, rqstp, state,
+    0.43 :   3e840:  mov     x1, x24
+    0.00 :   3e844:  mov     x0, x19
+    0.00 :   3e848:  mov     w3, #0x0                        // #0
+    0.00 :   3e84c:  str     w5, [sp, #8]
+    0.00 :   3e850:  str     x8, [sp, #16]
+    0.04 :   3e854:  str     w4, [sp, #24]
+    0.00 :   3e858:  bl      39aa8 <trace_svcsock_tcp_rx_lifetime>
+         : 923   return reason == SVC_TCP_RX_REASON_INVARIANT ? -EINVAL : 0;
+    0.00 :   3e85c:  ldr     w4, [sp, #24]
+    0.04 :   3e860:  ldr     x8, [sp, #16]
+    0.00 :   3e864:  cmp     w4, #0x10
+    0.00 :   3e868:  ldr     w5, [sp, #8]
+    0.00 :   3e86c:  b.ne    3e008 <svc_tcp_recv_skb+0x120>  // b.any
+         : 929   return consumed;
+    0.00 :   3e870:  mov     w26, w28
+         : 931   error = svc_tcp_rx_finish_classify(svsk, rqstp);
+    0.00 :   3e874:  mov     w2, #0xffffffea                 // #-22
+    0.00 :   3e878:  b       3e3bc <svc_tcp_recv_skb+0x4d4>
+         : 934   if (WARN_ON_ONCE(rqstp->rq_tcp_rx->body_bytes != walk.body_base + len))
+    0.00 :   3e87c:  brk     #0x800
+         : 936   error = svc_tcp_rx_walk(svsk, rqstp, skb,
+    0.00 :   3e880:  mov     w2, #0xffffffea                 // #-22
+    0.00 :   3e884:  b       3e570 <svc_tcp_recv_skb+0x688>
+         : 939   c = svc_tcp_rx_budget_for(svsk);
+    0.28 :   3e888:  mov     x0, x19
+    0.00 :   3e88c:  str     w5, [sp, #8]
+    0.00 :   3e890:  str     w4, [sp, #24]
+    0.00 :   3e894:  bl      38d88 <svc_tcp_rx_budget_for>
+    0.00 :   3e898:  ldr     x8, [sp, #16]
+    0.00 :   3e89c:  mov     x1, x0
+    0.00 :   3e8a0:  ldr     w5, [sp, #8]
+    0.00 :   3e8a4:  ldr     w4, [sp, #24]
+    0.00 :   3e8a8:  nop
+         : 949   svc_tcp_rx_credit_forget(svsk);
+    0.00 :   3e8ac:  mov     x0, x19
+    0.00 :   3e8b0:  str     w5, [sp, #8]
+    0.00 :   3e8b4:  str     x8, [sp, #16]
+    0.00 :   3e8b8:  bl      37898 <svc_tcp_rx_credit_forget>
+         : 954   state->reason = SVC_TCP_RX_REASON_NO_BUDGET;
+    0.00 :   3e8bc:  mov     w0, #0x12                       // #18
+    0.00 :   3e8c0:  strb    w0, [x22, #97]
+         : 957   error = svc_tcp_rx_materialize(state,
+    0.00 :   3e8c4:  mov     x0, x22
+    0.00 :   3e8c8:  ldr     x1, [x24, #784]
+    0.00 :   3e8cc:  bl      384e8 <svc_tcp_rx_materialize>
+    0.00 :   3e8d0:  mov     w2, w0
+         : 962   if (error)
+    0.00 :   3e8d4:  cbnz    w0, 3e564 <svc_tcp_recv_skb+0x67c>
+    0.00 :   3e8d8:  ldr     w5, [sp, #8]
+         : 965   trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt,
+    0.00 :   3e8dc:  mov     x0, x19
+    0.00 :   3e8e0:  mov     x2, x22
+    0.00 :   3e8e4:  mov     x1, x24
+    0.00 :   3e8e8:  mov     w3, #0x1                        // #1
+    0.00 :   3e8ec:  str     w5, [sp, #8]
+    0.00 :   3e8f0:  bl      39aa8 <trace_svcsock_tcp_rx_lifetime>
+         : 972   return !list_empty_careful(&svsk->sk_credit_wait);
+    0.00 :   3e8f4:  add     x0, x19, #0x258
+         : 974   struct list_head *next = smp_load_acquire(&head->next);
+    0.00 :   3e8f8:  ldar    x1, [x0]
+         : 976   return list_is_head(next, head) && (next == READ_ONCE(head->prev));
+    0.00 :   3e8fc:  ldr     x8, [sp, #16]
+    0.00 :   3e900:  cmp     x0, x1
+    0.00 :   3e904:  ldr     w5, [sp, #8]
+    0.00 :   3e908:  b.ne    3e02c <svc_tcp_recv_skb+0x144>  // b.any
+    0.00 :   3e90c:  ldr     x1, [x19, #608]
+    0.00 :   3e910:  cmp     x1, x0
+    0.00 :   3e914:  b.ne    3e028 <svc_tcp_recv_skb+0x140>  // b.any
+    0.00 :   3e918:  b       3e040 <svc_tcp_recv_skb+0x158>
+         : 985   if (WARN_ON_ONCE(walk.last < walk.first || walk.last > skb->len))
+    0.00 :   3e91c:  brk     #0x800
+         : 987   error = svc_tcp_rx_walk(svsk, rqstp, skb,
+    0.00 :   3e920:  mov     w2, #0xffffffea                 // #-22
+    0.00 :   3e924:  b       3e570 <svc_tcp_recv_skb+0x688>
+         : 990   if (WARN_ON_ONCE(!state || !svc_tcp_rx_is_empty(state) ||
+    0.00 :   3e928:  brk     #0x800
+         : 992   error = svc_tcp_rx_start(svsk, rqstp);
+    0.00 :   3e92c:  mov     w2, #0xffffffea                 // #-22
+         : 994   return consumed;
+    0.00 :   3e930:  mov     w26, w28
+    0.00 :   3e934:  b       3e3bc <svc_tcp_recv_skb+0x4d4>
+    0.00 :   3e938:  ldr     x0, [x6, #200]
+    0.00 :   3e93c:  ldr     w1, [x6, #192]
+    0.00 :   3e940:  add     x0, x0, x1
+         : 1000  const char *end = p + offsetof(struct skb_shared_info,
+    0.00 :   3e944:  add     x1, x0, #0x140
+         : 1002  for (p = PTR_ALIGN_DOWN(p, L1_CACHE_BYTES); p < end;
+    0.00 :   3e948:  and     x0, x0, #0xffffffffffffffc0
+    0.00 :   3e94c:  cmp     x1, x0
+    0.00 :   3e950:  b.ls    3e6a8 <svc_tcp_recv_skb+0x7c0>  // b.plast
+    0.00 :   3e954:  prfm    pldl1keep, [x0]
+         : 1007  p += L1_CACHE_BYTES)
+    0.00 :   3e958:  add     x0, x0, #0x40
+         : 1009  for (p = PTR_ALIGN_DOWN(p, L1_CACHE_BYTES); p < end;
+    0.00 :   3e95c:  cmp     x1, x0
+    0.00 :   3e960:  b.hi    3e954 <svc_tcp_recv_skb+0xa6c>  // b.pmore
+    0.00 :   3e964:  b       3e6a8 <svc_tcp_recv_skb+0x7c0>
+         : 1013  svsk->sk_datalen += take;
+    0.18 :   3e968:  ldr     w0, [x19, #576]
+    0.11 :   3e96c:  b       3e224 <svc_tcp_recv_skb+0x33c>
+         : 1016  *pages = READ_ONCE(svc_tcp_rx_budget_default_pages);
+    0.00 :   3e970:  adrp    x0, 0 <rpc_default_callback-0x8>
+    0.00 :   3e974:  add     x0, x0, #0x0
+    0.00 :   3e978:  ldr     w2, [x0, #72]
+         : 1020  *reserve = READ_ONCE(svc_tcp_rx_budget_default_reserve);
+    0.00 :   3e97c:  ldr     w0, [x0, #76]
+    0.00 :   3e980:  b       3e778 <svc_tcp_recv_skb+0x890>
+    0.00 :   3e984:  stp     x27, x28, [sp, #336]
+         : 1024  }
+    0.00 :   3e988:  bl      0 <__stack_chk_fail>
+         : 1026  *pages = READ_ONCE(svc_tcp_rx_budget_pages);
+    0.21 :   3e98c:  adrp    x0, 0 <rpc_default_callback-0x8>
+    0.04 :   3e990:  add     x0, x0, #0x0
+    0.00 :   3e994:  ldr     w2, [x0, #60]
+         : 1030  *reserve = READ_ONCE(svc_tcp_rx_budget_reserve);
+    0.00 :   3e998:  ldr     w0, [x0, #64]
+         : 1032  }
+    0.00 :   3e99c:  b       3e778 <svc_tcp_recv_skb+0x890>
+         : 1034  net_notice_ratelimited("svc: %s oversized RPC fragment (%u octets) from %pISpc\n",
+    0.00 :   3e9a0:  ldr     x1, [x19, #64]
+    0.00 :   3e9a4:  mov     x0, x19
+    0.00 :   3e9a8:  ldr     x20, [x1, #128]
+    0.00 :   3e9ac:  bl      34ce0 <svc_sock_reclen>
+    0.00 :   3e9b0:  add     x3, x19, #0x110
+    0.00 :   3e9b4:  mov     w2, w0
+    0.00 :   3e9b8:  mov     x1, x20
+    0.00 :   3e9bc:  adrp    x0, 0 <rpc_default_callback-0x8>
+    0.00 :   3e9c0:  add     x0, x0, #0x0
+    0.00 :   3e9c4:  bl      0 <_printk>
+    0.00 :   3e9c8:  b       3e734 <svc_tcp_recv_skb+0x84c>
