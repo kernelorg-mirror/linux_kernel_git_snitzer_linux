@@ -309,6 +309,12 @@ decided.
    stall went, but a new one came on the next skb's `sk_buff`, and the
    shared info still stalls. **Dropped (Mike, 4 November)**, reverted at
    the tip.
+30. **Round 61: build 507 at the two-port setting, seen with pseudo-NMI**
+   (planned, 4 November; [61-pseudo-nmi-507](61-pseudo-nmi-507/README.md)).
+   Round 48's look again, on two ports and eight SGL drives: hard
+   interrupts, sleeping and waking and the paths with interrupts off,
+   ranked in cycles a WRITE before the next change is chosen. Needs a boot
+   with `irqchip.gicv3_pseudo_nmi=1` (Mike).
 
 ## Where the kept rounds stand (2026-10-28)
 
