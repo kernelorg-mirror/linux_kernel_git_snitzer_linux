@@ -13,11 +13,13 @@
 #include <kunit/test.h>
 #include <linux/cpumask.h>
 #include <linux/bvec.h>
+#include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/module.h>
 #include <linux/nfs_dio.h>
 #include <linux/nfs_fs.h>
 #include <linux/nfs_page.h>
+#include <linux/shmem_fs.h>
 #include <linux/uio.h>
 
 #include "internal.h"
@@ -194,7 +196,29 @@ struct localio_copy_count {
 	unsigned int	nsegs;
 };
 
-static const struct file_operations localio_copy_fops;
+static void localio_copy_fput(void *data)
+{
+	fput(data);
+}
+
+/*
+ * A real file, so that nfs_dio_split() finds the mapping it reads for a
+ * write's cut: an unnamed shmem file, which does no DONTCACHE and whose
+ * smallest folio is a page.
+ */
+static struct file *localio_copy_file(struct kunit *test)
+{
+	struct file *file;
+
+	file = shmem_kernel_file_setup("localio_cpu_kunit", 0, EMPTY_VMA_FLAGS);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, file);
+	KUNIT_ASSERT_EQ(test,
+			kunit_add_action_or_reset(test, localio_copy_fput, file),
+			0);
+	if (mapping_min_folio_nrbytes(file->f_mapping) != PAGE_SIZE)
+		kunit_skip(test, "smallest folio is not a page");
+	return file;
+}
 
 static void localio_copy_split(struct kunit *test,
 			       const struct localio_copy_case *c,
@@ -207,13 +231,11 @@ static void localio_copy_split(struct kunit *test,
 		.seg_boundary = c->seg_boundary,
 		.min_middle_bytes = c->min_middle_bytes,
 	};
-	struct file *file = kunit_kzalloc(test, sizeof(*file), GFP_KERNEL);
+	struct file *file = localio_copy_file(test);
 	struct nfs_dio_split split;
 	size_t len = 0;
 	unsigned int i;
 
-	KUNIT_ASSERT_NOT_NULL(test, file);
-	file->f_op = &localio_copy_fops;
 	nfs_dio_split(file, &policy, c->rw, bvec, nvecs, c->pos, c->len, 0,
 		      &split);
 	memset(count, 0, sizeof(*count));
