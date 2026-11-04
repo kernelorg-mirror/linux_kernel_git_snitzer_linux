@@ -1,0 +1,16 @@
+# started on Wed Nov  4 02:41:58 2026
+
+
+ Performance counter stats for 'CPU(s) 8-55':
+
+       67004061989      cycles                                                                
+       68368176546      instructions                                                          
+       22372101641      stall_backend_mem                                                     
+         368430465      l1d_cache_refill_rd                                                   
+         930990325      l2d_cache_refill_rd                                                   
+         518751401      ll_cache_miss_rd                                                      
+            963492      dtlb_walk                                                             
+
+       4.005355477 seconds time elapsed
+
+WRITEs in the stat: 257116

@@ -1,0 +1,46 @@
+#!/bin/bash
+# run175.sh: round 60, run174's calls again (its count named an inlined
+# frame and attached nothing), with the shape of the skbs: on
+# build 507, a look (round 36's run75 method).  One loan run on both ports
+# (12 connections a port at 512 KiB, rings of 128, budget 128), the kernel's
+# own sunrpc, nfsd and xeu.  From 5 s into the timed window, on nfsd's CPUs
+# (8 to 55): perf stat of cycles, instructions and the cache events for 4 s,
+# then 4 s of samples each of cycles, backend memory stall cycles and L1D
+# read refills, ranked and annotated; last, 4 s of bpftrace counts of each
+# frame's calls (kprobes, so after the samples).  The WRITEs in each window
+# are kept, so samples and calls become a WRITE's.
+cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
+. ./common.sh
+O=$L/t2-r175
+mkdir -p $O
+say() { echo "$(date +%T) $*"; }
+die() { say "STOPPED: $*"; exit 1; }
+K=2A512644C685341146A3A9B N=BB6D1949646AB051A8D99CC XB=CA0931345E46C929B11D01F
+say "kernel $(uname -r), sunrpc $(cat /sys/module/sunrpc/srcversion), nfsd $(cat /sys/module/nfsd/srcversion), xeu $(cat /sys/module/xeu/srcversion)"
+[ "$(cat /sys/kernel/kexec_crash_loaded)" = 1 ] || die "kdump not armed"
+[ "$(cat /sys/module/sunrpc/srcversion)" = $K ] || die "sunrpc is not $K"
+[ "$(cat /sys/module/nfsd/srcversion)" = $N ] || die "nfsd is not $N"
+[ "$(cat /sys/module/xeu/srcversion)" = $XB ] || die "xeu is not $XB"
+client_free || die "client not free"
+[ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ] || die "an NFS client is connected"
+./settled.sh apply > $O/apply.txt 2>&1 || die "not settled: $(grep -E 'BAD|FAILED' $O/apply.txt | head -3)"
+sync; for d in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$d; done; sleep 120
+client_free || die "client not free"
+t=r175-shape
+F="svc_tcp_rx_append_ref svc_tcp_rx_borrow_segment svc_tcp_rx_release_refs svc_tcp_rx_put_run svc_tcp_rx_walk_skb svc_tcp_rx_prefetch_pages svc_tcp_rx_region_span svc_tcp_recv_skb"
+( w() { awk '/^proc3/{print $10}' /proc/net/rpc/nfsd; }
+  timed_load $O/$t 5 || exit 1
+  echo "look from $(date +%T)" > $O/look.when
+  p=$(for f in $F; do printf 'kprobe:%s,' $f; done)
+  w0=$(w); timeout -s INT 6 bpftrace -e "${p%,} { @[func] = count(); } interval:s:4 { exit(); }" > $O/calls.txt 2>&1; w1=$(w)
+  echo "WRITEs while counted: $((w1 - w0)) (bpftrace's start included)" >> $O/calls.txt
+  # the skbs svc_tcp_recv_skb is handed: frags, a frag list, bytes
+  w0=$(w); timeout -s INT 6 bpftrace -e 'kprobe:svc_tcp_recv_skb { $s = (struct sk_buff *)arg1; $i = (struct skb_shared_info *)($s->head + $s->end); @nr_frags = lhist($i->nr_frags, 0, 20, 1); @has_frag_list[$i->frag_list != 0] = count(); @len = hist(arg3); @skbs = count(); } kprobe:svc_tcp_rx_walk_skb { @walk_len = hist(((struct sk_buff *)arg1)->len); } interval:s:4 { exit(); }' > $O/shape.txt 2>&1; w1=$(w)
+  echo "WRITEs while traced: $((w1 - w0)) (bpftrace's start included)" >> $O/shape.txt
+  echo "look ends $(date +%T)" >> $O/look.when ) &
+env WARM=10 RUNTIME=40 TSV=$O/results.tsv TAG=$t WRITES=128 ./twoport.sh $O/$t ab > $O/$t.log 2>&1; rc=$?
+wait
+[ $rc = 0 ] || die "$t: $(grep -E 'BAD|FAILED|no answer|refuse|not free' $O/$t.log | head -3)"
+say "$t | $(grep '^total' $O/$t.log) | $(grep -c 'no drive stepped down' $O/$t.log) no-step | $(./cost.sh $O/$t) | $(cat $O/look.when | paste -sd' ')"
+./settled.sh apply > $O/apply-end.txt 2>&1 || die "end not settled"
+say "end: $(tail -1 $O/apply-end.txt); DONE"

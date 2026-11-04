@@ -1,0 +1,90 @@
+ Percent |	Source code & Disassembly of sunrpc.ko.xz for stall_backend_mem (1750 samples, percent: local period)
+---------------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3     Disassembly of section .text:
+         :
+         : 5     0000000000036f10 <svc_tcp_rx_region_span>:
+         : 6     * page was *@prev.  A receive page that holds several frames is handed over
+         : 7     * one fragment at a time: only the first of them adds the page.
+         : 8     */
+         : 9     static u32 svc_tcp_rx_region_span(struct page *page, u32 off, u32 len,
+         : 10    struct page **prev)
+         : 11    {
+    3.77 :   36f10:  nop
+    0.97 :   36f14:  nop
+    0.40 :   36f18:  mov     x5, x0
+         : 15    * a pool allocates only from the region, so its pages are region pages,
+         : 16    * wherever they are while the pool owns them (in a ring, an skb or a loan).
+         : 17    */
+         : 18    static inline bool page_pool_page_in_rx_region(struct page *page)
+         : 19    {
+         : 20    return page_pool_page_is_pp(page) &&
+    1.03 :   36f1c:  mov     x0, #0x40                       // #64
+    0.74 :   36f20:  movk    x0, #0xdead, lsl #48
+         : 23    #define PP_MAGIC_MASK ~(PP_DMA_INDEX_MASK | 0x3UL)
+         :
+         : 25    #ifdef CONFIG_PAGE_POOL
+         : 26    static inline bool page_pool_page_is_pp(const struct page *page)
+         : 27    {
+         : 28    return (page->pp_magic & PP_MAGIC_MASK) == PP_SIGNATURE;
+    0.86 :   36f24:  ldr     x4, [x5, #8]
+   27.77 :   36f28:  and     x4, x4, #0xfffffffffffffffc
+    6.63 :   36f2c:  and     x4, x4, #0xffffff800000007f
+    1.26 :   36f30:  cmp     x4, x0
+    0.06 :   36f34:  b.eq    36f40 <svc_tcp_rx_region_span+0x30>  // b.none
+         : 34    struct page *first = page + (off >> PAGE_SHIFT);
+         : 35    u32 pages = DIV_ROUND_UP(offset_in_page(off) + len, PAGE_SIZE);
+         : 36    struct page *last = first + pages - 1;
+         :
+         : 38    if (!page_pool_page_in_rx_region(page))
+         : 39    return 0;
+    0.00 :   36f38:  mov     w0, #0x0                        // #0
+         : 41    if (first == *prev)
+         : 42    pages--;
+         : 43    *prev = last;
+         : 44    return pages;
+         : 45    }
+    0.00 :   36f3c:  ret
+         : 47    * Return: the pointer to struct netmem_desc * regardless of its
+         : 48    * underlying type.
+         : 49    */
+         : 50    static inline struct netmem_desc *netmem_to_nmdesc(netmem_ref netmem)
+         : 51    {
+         : 52    void *p = (void *)((__force unsigned long)netmem & ~NET_IOV);
+    9.03 :   36f40:  and     x4, x5, #0xfffffffffffffffe
+         : 54    return 0;
+    0.63 :   36f44:  mov     w0, #0x0                        // #0
+         : 56    netmem_get_pp(page_to_netmem(page))->rx_region;
+    0.57 :   36f48:  ldr     x4, [x4, #16]
+         : 58    return page_pool_page_is_pp(page) &&
+    1.54 :   36f4c:  ldr     x4, [x4, #968]
+   29.83 :   36f50:  cbz     x4, 36f3c <svc_tcp_rx_region_span+0x2c>
+         : 61    u32 pages = DIV_ROUND_UP(offset_in_page(off) + len, PAGE_SIZE);
+    5.54 :   36f54:  mov     x0, #0x3fff                     // #16383
+    0.29 :   36f58:  and     x4, x1, x0
+    0.63 :   36f5c:  add     x2, x0, w2, uxtw
+         : 65    struct page *first = page + (off >> PAGE_SHIFT);
+    0.80 :   36f60:  lsr     w1, w1, #14
+         : 67    if (first == *prev)
+    0.91 :   36f64:  ldr     x6, [x3]
+         : 69    u32 pages = DIV_ROUND_UP(offset_in_page(off) + len, PAGE_SIZE);
+    0.40 :   36f68:  add     x2, x4, x2
+         : 71    struct page *first = page + (off >> PAGE_SHIFT);
+    0.86 :   36f6c:  add     x1, x5, x1, lsl #6
+         : 73    u32 pages = DIV_ROUND_UP(offset_in_page(off) + len, PAGE_SIZE);
+    0.29 :   36f70:  lsr     x0, x2, #14
+         : 75    pages--;
+    0.63 :   36f74:  cmp     x6, x1
+    0.74 :   36f78:  cset    w2, eq  // eq = none
+         : 78    struct page *last = first + pages - 1;
+    0.51 :   36f7c:  add     x1, x1, x0, lsl #6
+         : 80    pages--;
+    1.49 :   36f80:  sub     w0, w0, w2
+         : 82    struct page *last = first + pages - 1;
+    0.57 :   36f84:  sub     x1, x1, #0x40
+         : 84    *prev = last;
+    0.57 :   36f88:  str     x1, [x3]
+         : 86    }
+    0.69 :   36f8c:  ret

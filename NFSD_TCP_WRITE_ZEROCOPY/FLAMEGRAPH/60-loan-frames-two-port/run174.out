@@ -1,0 +1,3 @@
+02:38:09 kernel 7.3.0-10.hs.507.loanpages_pool.el10.aarch64+16k, sunrpc 2A512644C685341146A3A9B, nfsd BB6D1949646AB051A8D99CC, xeu CA0931345E46C929B11D01F
+02:43:03 r174-look | total 66.84 GB/s | 1 no-step | r174-look ring 16.5 nfsd 87.4 us/W (64030 WRITEs/s) | ring 72.9k cycles 144.6k instructions, nfsd 270.7k cycles 272.5k instructions a WRITE | look from 02:41:58 look ends 02:42:20
+02:43:38 end: settled.sh audit rest: the settled setting; DONE

@@ -24,3 +24,43 @@ on both ports, counted, with samples of cycles, backend memory stalls and
 L1D refills on nfsd's CPUs, annotated, and the frames' calls a WRITE. Then
 a change judged by instructions and cycles a WRITE, counted, A/B on one
 boot.
+
+## 1. The look (r174)
+
+[run174.sh](run174.sh), `$L/t2-r174`: 66.84 GB/s, no drive stepped down,
+nfsd 270.7k cycles and 272.5k instructions a WRITE counted (rings 72.9k
+and 144.6k... as `cost.sh` prints them), no WARNING. The calls were not
+counted: the probe list named `svc_tcp_rx_skb_region_pages_after`,
+which is inlined, and bpftrace attached nothing (run175 counts them).
+
+Each record window ran longer than its 4 s of samples, so the samples are
+put over 4 s at the run's 64,030 WRITEs a second
+([samples-cycles.txt](samples-cycles.txt),
+[samples-stall_backend_mem.txt](samples-stall_backend_mem.txt),
+[stat-nfsd.txt](stat-nfsd.txt)). Cycles a WRITE on nfsd:
+
+| frame | cycles | backend memory stall |
+|---|---|---|
+| `svc_tcp_rx_append_ref` | 4.7k | 1.0k |
+| `svc_tcp_rx_borrow_segment` | 3.9k | 0.7k |
+| `svc_tcp_rx_release_refs` | 3.0k | 0.8k |
+| `svc_tcp_rx_walk_skb` | 2.4k | 0.4k |
+| `svc_tcp_rx_prefetch_pages` | 2.3k | **1.8k** |
+| `svc_tcp_recv_skb` | 2.3k | 0.8k |
+| `svc_tcp_rx_region_span` and `..._pages_after.part.0` | 2.7k | **1.3k** |
+| `svc_tcp_rx_validate_mixed` | 1.1k | 0.6k |
+
+About 22k cycles, 8.3% of nfsd's. Two of them are mostly stall, and both
+are first touches
+([prefetch](annotate-stall_backend_mem-svc_tcp_rx_prefetch_pages.txt),
+[region span](annotate-stall_backend_mem-svc_tcp_rx_region_span.txt)):
+
+- **The prefetch walk is the first reader of each skb's shared info.** 34%
+  of its stall samples follow the load of `skb_shinfo(skb)->nr_frags`, and
+  about 21% follow the loads of each `frags[]` entry: lines the ring's CPU
+  wrote last. Its `prefetchw()`s cost nothing.
+- **The region count reads each struct page just after its prefetch was
+  issued.** 28% of its stall samples follow `page->pp_magic` and 30% the
+  `pool->rx_region` load that waits on `page->pp`, in the same struct page
+  line. The pool's line at 960 holds only read-mostly fields
+  (`user.id`, `rx_region`, `rx_region_dev`).
