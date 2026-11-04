@@ -258,7 +258,10 @@ decided.
    on build 506: the split walks each piece once, the map walk never merges,
    and the walk runs at IPC 4 to 5 with few refills, so it is the calls a
    piece, not misses. Change: `block: inline blk_map_iter_next()`, to be
-   tested on the next kernel (`ab-switch.sh blk`).
+   tested on the next kernel (`ab-switch.sh blk`). **Kept (Mike, 4
+   November)** on build 507's A/B: 5.7k instructions a WRITE fewer on nfsd
+   (-2.0%) in every run, cycles -0.6% inside the drift, rate and latency
+   level; the walk's time a WRITE the same.
 25. **Round 56: eight SGL drives on two ports** (Mike, 3 November;
    [56-eight-sgl-two-ports](56-eight-sgl-two-ports/README.md)). The sweeps
    that settled tardis2's two ports at 12 connections a port, 512 KiB and
@@ -328,6 +331,7 @@ runs (the profile where the A/B cannot resolve it):
 | 38 | | about 3.5k cycles a WRITE less | `93b10c1877fc`: a released page's struct page fetched a second time (PSTL2KEEP two batches ahead on arm64) |
 | 41 | 6.5k instructions a WRITE fewer, cycles the same | | xeu `rx_gro_frags` Y (kmod-xsight 2.0.1-13, settled.sh): GRO given page fragments, no skb a frame |
 | 44 | 140.2k to 130.2k cycles a WRITE (−7.1%) | the same | NAPI deferral 2/10000 on port a (settled.sh `DEFER`): receive interrupts 10.7 to 1.25 a WRITE |
+| 55 | | 278.45k to 272.75k instructions a WRITE on build 507, counted; cycles 274.6k to 273.0k, inside the drift | `0da60509468b`: `blk_map_iter_next()` inlined into the NVMe SGL walk |
 | 58 | | the region lock's hold 4.10 to 3.61 us a WRITE on build 507 (traced); cycles a WRITE 269.1k to 271.1k, not lower | `ca7b00ac39c7`, `d7d119a39c92`: one atomic for a bulk's release count, the region list's top prefetched before the lock |
 
 - **Since round 01:** the rings 92.6 to about 58 us a WRITE (-37%),
