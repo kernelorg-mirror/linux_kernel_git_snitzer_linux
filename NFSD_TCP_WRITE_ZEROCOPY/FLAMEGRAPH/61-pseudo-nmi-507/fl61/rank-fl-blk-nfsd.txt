@@ -1,0 +1,24 @@
+WRITEs 514752, all   273.93k cycles a WRITE
+  thread                         188.56k  68.8%
+  irq                              0.00k   0.0%
+  softirq                          0.52k   0.2%
+  idle                            84.85k  31.0%
+    idle: the wait itself    67.89k, the rest    16.97k
+interrupts by handler, the softirqs on exit apart (on idle, on a thread)
+  softirq on exit                  0.52k  (    0.47k,     0.06k)
+
+frame inclusive                 all       thread    in irq    irq on idle   (in irq: hard and softirq on exit)
+  __schedule                      22.06k     6.64k     0.01k     0.01k
+  try_to_wake_up                   0.08k     0.08k     0.00k     0.00k
+  _raw_spin_unlock_irqrestore     10.16k    10.09k     0.07k     0.06k
+  _raw_spin_unlock_irq             2.20k     2.16k     0.04k     0.04k
+  page_pool_return_netmem_bulk     0.39k     0.39k     0.00k     0.00k
+  page_pool_recycle_ring_bulk      5.29k     5.29k     0.00k     0.00k
+  dma_pool_alloc                   0.05k     0.05k     0.00k     0.00k
+  blk_rq_dma_map_iter_next         6.74k     6.74k     0.00k     0.00k
+  __flush_workqueue                1.86k     1.85k     0.00k     0.00k
+  nfsd3_proc_commit                7.93k     7.92k     0.01k     0.00k
+  nfsd3_proc_write                48.62k    48.60k     0.02k     0.00k
+  handle_softirqs                  0.52k     0.00k     0.52k     0.46k
+  svc_tcp_recvfrom                62.87k    62.86k     0.01k     0.00k
+  svc_recv                       182.45k   182.40k     0.06k     0.00k

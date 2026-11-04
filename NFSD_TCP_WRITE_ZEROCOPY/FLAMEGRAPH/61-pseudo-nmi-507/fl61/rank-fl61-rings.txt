@@ -1,0 +1,28 @@
+WRITEs 505384, all   147.11k cycles a WRITE
+  thread                           0.69k   0.5%
+  irq                              8.42k   5.7%
+  softirq                        114.91k  78.1%
+  idle                            23.10k  15.7%
+    idle: the wait itself    21.00k, the rest     2.10k
+interrupts by handler, the softirqs on exit apart (on idle, on a thread)
+  softirq on exit                114.91k  (  114.59k,     0.31k)
+  timer                            4.79k  (    4.78k,     0.02k)
+  GIC entry only                   3.55k  (    3.54k,     0.01k)
+  xeu                              0.07k  (    0.07k,     0.00k)
+  IPI                              0.01k  (    0.01k,     0.00k)
+
+frame inclusive                 all       thread    in irq    irq on idle   (in irq: hard and softirq on exit)
+  __schedule                       0.29k     0.10k     0.15k     0.09k
+  try_to_wake_up                   2.68k     0.02k     2.66k     2.65k
+  sched_ttwu_pending               0.01k     0.00k     0.01k     0.01k
+  sched_balance_newidle            0.04k     0.04k     0.00k     0.00k
+  psi_task_switch                  0.02k     0.00k     0.00k     0.00k
+  _raw_spin_unlock_irqrestore      0.98k     0.00k     0.98k     0.91k
+  _raw_spin_unlock_irq             0.05k     0.01k     0.04k     0.00k
+  hrtimer_interrupt                4.13k     0.00k     4.13k     4.12k
+  hrtimer_start_range_ns           2.83k     0.00k     2.82k     2.82k
+  napi_watchdog                    0.27k     0.00k     0.27k     0.26k
+  net_rx_action                  112.58k     0.12k   112.47k   112.17k
+  gro_receive_skb                 70.26k     0.08k    70.18k    69.97k
+  tcp_v4_rcv                      29.70k     0.02k    29.67k    29.57k
+  handle_softirqs                113.99k     0.16k   113.82k   113.52k
