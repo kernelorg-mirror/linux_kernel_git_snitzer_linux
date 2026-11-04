@@ -1,0 +1,39 @@
+WRITEs 505384, all   276.84k cycles a WRITE
+  thread                         195.50k  70.6%
+  irq                             25.14k   9.1%
+  softirq                          0.87k   0.3%
+  idle                            55.34k  20.0%
+    idle: the wait itself    44.39k, the rest    10.94k
+interrupts by handler, the softirqs on exit apart (on idle, on a thread)
+  nvme_irq                        10.45k  (   10.31k,     0.15k)
+  GIC entry only                   7.73k  (    7.64k,     0.09k)
+  IPI                              5.72k  (    5.69k,     0.03k)
+  timer                            1.23k  (    1.02k,     0.21k)
+  softirq on exit                  0.87k  (    0.84k,     0.03k)
+
+frame inclusive                 all       thread    in irq    irq on idle   (in irq: hard and softirq on exit)
+  __schedule                      21.83k    14.68k     0.64k     0.63k
+  try_to_wake_up                   7.06k     4.14k     2.92k     2.87k
+  sched_ttwu_pending               4.43k     0.00k     4.43k     4.41k
+  sched_balance_newidle            3.65k     3.65k     0.00k     0.00k
+  psi_task_switch                  2.11k     1.37k     0.00k     0.00k
+  _raw_spin_unlock_irqrestore      1.03k     0.73k     0.29k     0.26k
+  _raw_spin_unlock_irq             0.14k     0.12k     0.02k     0.00k
+  page_pool_return_netmem_bulk     3.42k     3.42k     0.00k     0.00k
+  __page_pool_rx_region_put        2.55k     2.55k     0.00k     0.00k
+  page_pool_recycle_ring_bulk      4.70k     4.70k     0.01k     0.00k
+  dma_pool_alloc                   0.85k     0.85k     0.00k     0.00k
+  dma_pool_free                    0.40k     0.00k     0.40k     0.39k
+  blk_mq_end_request_batch         8.29k     0.00k     8.29k     8.17k
+  iomap_dio_bio_end_io             2.91k     0.00k     2.91k     2.87k
+  nvme_poll_cq                     0.98k     0.00k     0.98k     0.97k
+  nvme_unmap_data                  0.80k     0.00k     0.80k     0.79k
+  blk_rq_dma_map_iter_next         6.63k     6.61k     0.02k     0.00k
+  __flush_workqueue                2.36k     2.35k     0.01k     0.00k
+  nfsd3_proc_commit                8.49k     8.46k     0.03k     0.00k
+  nfsd3_proc_write                51.31k    51.21k     0.11k     0.00k
+  hrtimer_interrupt                1.16k     0.00k     1.16k     0.96k
+  hrtimer_start_range_ns           0.04k     0.00k     0.00k     0.00k
+  handle_softirqs                  0.34k     0.00k     0.33k     0.31k
+  svc_tcp_recvfrom                62.06k    61.89k     0.17k     0.00k
+  svc_recv                       189.78k   189.35k     0.43k     0.00k
