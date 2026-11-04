@@ -207,7 +207,11 @@ for the A/B on one boot (`page_pool.rx_region_bulk_ab`,
 58 and 55): `page_pool: count a bulk returned to the receive region with
 one atomic`, `page_pool: prefetch the region list's top before taking the
 region's lock` and `block: inline blk_map_iter_next()`. Only the DROP
-commit goes.
+commit goes. FLAMEGRAPH round 60's `SUNRPC: Prefetch the next skbs of a
+loaned record`, its `DROP: SUNRPC: A/B switch for FLAMEGRAPH round 60`
+and the revert of both at the tip (`350d97bf27c5`) all go too:
+**dropped** (Mike, 4 November; no gain on build 507). tardis2 runs build
+507's own sunrpc again, with nothing in `updates/`.
 
 ## NFSD TCP write-path zero-copy (page-loan series)
 
