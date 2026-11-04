@@ -956,10 +956,8 @@ out_unlock:
 	return ret;
 }
 
-static ssize_t
-xfs_file_dio_write(
-	struct kiocb		*iocb,
-	struct iov_iter		*from)
+static ssize_t xfs_file_dio_write_dispatch(struct kiocb *iocb,
+					   struct iov_iter *from)
 {
 	struct xfs_inode	*ip = XFS_I(file_inode(iocb->ki_filp));
 	struct xfs_buftarg      *target = xfs_inode_buftarg(ip);
@@ -977,6 +975,34 @@ xfs_file_dio_write(
 		return xfs_file_dio_write_atomic(ip, iocb, from);
 	return xfs_file_dio_write_aligned(ip, iocb, from,
 			&xfs_direct_write_iomap_ops, &xfs_dio_write_ops, NULL);
+}
+
+/*
+ * An IOCB_NOSERIAL buffered write holds the IOLOCK shared, so it can run
+ * beside a direct write to its folio.  Dirtied while the direct write is in
+ * flight, the folio fails that write's invalidation once it completes, and
+ * its writeback stores over the direct write's data what the buffered write
+ * read before it.  A synchronous direct write holds the IOLOCK across the
+ * I/O: count it in i_noserial_dio for xfs_file_buffered_write(), which then
+ * takes the IOLOCK exclusive, and wait out a buffered write already under
+ * i_noserial_lock.  An asynchronous one drops the IOLOCK once queued, and
+ * any buffered write can then reach its folio.
+ */
+static ssize_t xfs_file_dio_write(struct kiocb *iocb, struct iov_iter *from)
+{
+	struct xfs_inode *ip = XFS_I(file_inode(iocb->ki_filp));
+	bool sync = is_sync_kiocb(iocb);
+	ssize_t ret;
+
+	if (sync) {
+		atomic_inc(&ip->i_noserial_dio);
+		mutex_lock(&ip->i_noserial_lock);
+		mutex_unlock(&ip->i_noserial_lock);
+	}
+	ret = xfs_file_dio_write_dispatch(iocb, from);
+	if (sync)
+		atomic_dec(&ip->i_noserial_dio);
+	return ret;
 }
 
 static noinline ssize_t
@@ -1020,6 +1046,39 @@ out:
 	return ret;
 }
 
+/*
+ * A buffered write the caller marked IOCB_NOSERIAL can take the IOLOCK shared
+ * when no exclusion beyond the folio lock is needed: it changes nothing but
+ * the data of one folio.  So it lies within one folio, which the folio lock
+ * keeps atomic against other writes, and within EOF, so it neither moves
+ * i_size nor zeroes up to it.  The file has an extent size hint, so the
+ * write is mapped the way a direct write is, with no delalloc reservation to
+ * punch out again after a short write.  Reflink, DAX, atomic and appending
+ * writes keep the exclusive lock.  Reads of the folio are not serialised
+ * against the copy.
+ */
+static bool xfs_buffered_write_noserial(struct kiocb *iocb,
+					struct iov_iter *from)
+{
+	struct inode *inode = iocb->ki_filp->f_mapping->host;
+	struct xfs_inode *ip = XFS_I(inode);
+	size_t unit = mapping_min_folio_nrbytes(inode->i_mapping);
+	size_t count = iov_iter_count(from);
+	loff_t pos = iocb->ki_pos;
+
+	if (!(iocb->ki_flags & IOCB_NOSERIAL) || !count)
+		return false;
+	if (iocb->ki_flags & (IOCB_APPEND | IOCB_ATOMIC))
+		return false;
+	if (IS_DAX(inode) || xfs_is_cow_inode(ip) || !xfs_get_extsz_hint(ip))
+		return false;
+	/* within one folio: folios are naturally aligned and at least unit */
+	if ((pos & ~(loff_t)(unit - 1)) !=
+	    ((pos + count - 1) & ~(loff_t)(unit - 1)))
+		return false;
+	return pos + count <= i_size_read(inode);
+}
+
 STATIC ssize_t
 xfs_file_buffered_write(
 	struct kiocb		*iocb,
@@ -1029,22 +1088,68 @@ xfs_file_buffered_write(
 	struct xfs_inode	*ip = XFS_I(inode);
 	ssize_t			ret;
 	bool			cleared_space = false;
+	bool			noserial, excl = false;
 	unsigned int		iolock;
 
 write_retry:
-	iolock = XFS_IOLOCK_EXCL;
+	iolock = !excl && xfs_buffered_write_noserial(iocb, from) ?
+			XFS_IOLOCK_SHARED : XFS_IOLOCK_EXCL;
 	ret = xfs_ilock_iocb(iocb, iolock);
 	if (ret)
 		return ret;
+
+	/*
+	 * The checks ran before the lock was held.  Truncate and reflink take
+	 * the IOLOCK exclusive, so with it held shared what they change is
+	 * stable: check again.
+	 */
+	if (iolock == XFS_IOLOCK_SHARED &&
+	    !xfs_buffered_write_noserial(iocb, from)) {
+		xfs_iunlock(ip, iolock);
+		iolock = XFS_IOLOCK_EXCL;
+		ret = xfs_ilock_iocb(iocb, iolock);
+		if (ret)
+			return ret;
+	}
 
 	ret = xfs_file_write_checks(iocb, from, &iolock, NULL);
 	if (ret)
 		goto out;
 
+	/*
+	 * Under the shared IOLOCK, buffered writes still run one at a time
+	 * against each other, as under the exclusive one: only direct writes
+	 * run beside them.
+	 */
+	noserial = iolock == XFS_IOLOCK_SHARED;
+	if (noserial) {
+		if (iocb->ki_flags & IOCB_NOWAIT) {
+			if (!mutex_trylock(&ip->i_noserial_lock)) {
+				ret = -EAGAIN;
+				goto out;
+			}
+		} else {
+			mutex_lock(&ip->i_noserial_lock);
+		}
+		/*
+		 * A synchronous direct write in flight may be writing this
+		 * folio, see xfs_file_dio_write().  The exclusive IOLOCK waits
+		 * for it.
+		 */
+		if (atomic_read(&ip->i_noserial_dio)) {
+			mutex_unlock(&ip->i_noserial_lock);
+			xfs_iunlock(ip, iolock);
+			excl = true;
+			goto write_retry;
+		}
+	}
+
 	trace_xfs_file_buffered_write(iocb, from);
 	ret = iomap_file_buffered_write(iocb, from,
 			&xfs_buffered_write_iomap_ops, &xfs_iomap_write_ops,
 			NULL);
+	if (noserial)
+		mutex_unlock(&ip->i_noserial_lock);
 
 	/*
 	 * If we hit a space limit, try to free up some lingering preallocated

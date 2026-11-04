@@ -40,6 +40,14 @@ typedef struct xfs_inode {
 	/* Transaction and locking information. */
 	struct xfs_inode_log_item *i_itemp;	/* logging information */
 	struct rw_semaphore	i_lock;		/* inode lock */
+	/*
+	 * Serialises IOCB_NOSERIAL buffered writes, which hold the IOLOCK
+	 * shared, against each other.  Taken after the IOLOCK and before the
+	 * folio lock and the ILOCK; a synchronous direct write takes and drops
+	 * it, holding nothing, to wait out such a write.
+	 */
+	struct mutex		i_noserial_lock;
+	atomic_t		i_noserial_dio;	/* sync direct writes in flight */
 	atomic_t		i_pincount;	/* inode pin count */
 	struct llist_node	i_gclist;	/* deferred inactivation list */
 

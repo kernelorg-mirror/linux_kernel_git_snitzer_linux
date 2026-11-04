@@ -121,6 +121,26 @@ static inline bool nfs_dio_write_shares_page(loff_t pos, size_t len)
 	return ((pos | (pos + len)) & ~PAGE_MASK) != 0;
 }
 
+/*
+ * A direct write that ends beyond EOF must also complete before its
+ * ->write_iter() returns.  Its completion moves i_size, and nothing that
+ * completion takes is held by a buffered write that also extends EOF: that
+ * write reads i_size and stores its own end without a lock in common with
+ * the completion.  A file system keeps buffered writes out for the length
+ * of a synchronous direct write, so only an asynchronous one can complete
+ * in between, and i_size then moves backward.  The next write past the
+ * stale EOF zeroes the direct write's blocks.  A direct write within EOF
+ * does not move i_size when it completes.
+ *
+ * True if a direct write of @len bytes at @pos into @file must not be
+ * issued for asynchronous completion because it ends beyond EOF.
+ */
+static inline bool nfs_dio_write_extends_eof(struct file *file, loff_t pos,
+					     size_t len)
+{
+	return pos + len > i_size_read(file_inode(file));
+}
+
 void nfs_dio_split(struct file *file, const struct nfs_dio_policy *policy,
 		   unsigned int direction, struct bio_vec *bvec,
 		   unsigned int nvecs, loff_t pos, unsigned long total,
