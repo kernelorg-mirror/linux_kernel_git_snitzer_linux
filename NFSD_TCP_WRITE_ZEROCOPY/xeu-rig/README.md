@@ -9,6 +9,14 @@ and nfsd build 507's own, `updates/` empty, kdump armed and the settled
 setting held. Every A/B after round 61 wants a boot without the
 parameter (`ab-switch.sh` refuses one with it).
 
+**Done (4 November):** the boot checked (pseudo-NMI on, kdump armed, the
+settled setting), the profile fl61 (66.18 GB/s) and the counted run
+t2-r178 (71.21 GB/s, nfsd 285.1k cycles a WRITE against 273.8k without
+pseudo-NMI: +4.1%, more than round 48's 1.7%) taken, and the profile read
+in cycles a WRITE, with a ranking for the next target. The parameter is
+still on build 507's entry. What to take up is Mike's: "The ranking" in
+`../FLAMEGRAPH/61-pseudo-nmi-507/README.md`.
+
 # The boot before: the kernel with rounds 55 and 58's changes (plan of 3 November)
 
 Mike is building a kernel on gitlab from the branch at `7a39dcaebc9b`
