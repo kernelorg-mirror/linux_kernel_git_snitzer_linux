@@ -679,32 +679,6 @@ unsigned int rx_loan_hold_factor(const struct rx_loan_hold *h,
 EXPORT_SYMBOL_GPL(rx_loan_hold_factor);
 
 #if IS_ENABLED(CONFIG_INET)
-/*
- * A socket held again at a lower factor (rx_loan_hold_stale()) gets a
- * higher ratio ceiling and window clamp, but neither lifts what the first
- * hold held down: TCP lowers its ratio to a lower ceiling at once and
- * raises it only when it next measures a segment of a new size, and a
- * higher clamp raises rcv_ssthresh only as far as the window TCP already
- * offers.  The window would stay where the first hold left it for the
- * socket's life, so that a socket held before its budget had learned its
- * factor never had the window of those held after.  Lift both: the ratio
- * to the new ceiling where the old one held it, rcv_ssthresh by what the
- * clamp rose.  TCP still offers no more window than the free buffer
- * allows.
- */
-static void rx_loan_hold_raise(struct sock *sk, u8 old_ratio, u32 old_clamp)
-{
-	struct tcp_sock *tp = tcp_sk(sk);
-
-	lock_sock(sk);
-	if (tp->scaling_ratio == old_ratio && tp->scaling_ratio_max > old_ratio)
-		tp->scaling_ratio = tp->scaling_ratio_max;
-	if (tp->window_clamp > old_clamp)
-		tp->rcv_ssthresh = min(tp->window_clamp, tp->rcv_ssthresh +
-				       (tp->window_clamp - old_clamp));
-	release_sock(sk);
-}
-
 /**
  * rx_loan_hold_apply - hold a TCP socket's receive buffer
  * @h: the socket's hold; its pending request is cleared
@@ -761,7 +735,7 @@ int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
 	tcp_sock_set_scaling_ratio_max(sk, ratio);
 	err = tcp_sock_set_window_clamp(sk, *clamp);
 	if (!err && again)
-		rx_loan_hold_raise(sk, old_ratio, old_clamp);
+		tcp_sock_raise_rcv_window(sk, old_ratio, old_clamp);
 	h->held = true;
 	return err;
 }
@@ -849,7 +823,7 @@ void rx_loan_hold_release(struct sock *sk)
 	release_sock(sk);
 
 	if ((u32)clamp > old_clamp && !tcp_sock_set_window_clamp(sk, clamp))
-		rx_loan_hold_raise(sk, old_ratio, old_clamp);
+		tcp_sock_raise_rcv_window(sk, old_ratio, old_clamp);
 }
 EXPORT_SYMBOL_GPL(rx_loan_hold_release);
 #endif /* CONFIG_INET */
