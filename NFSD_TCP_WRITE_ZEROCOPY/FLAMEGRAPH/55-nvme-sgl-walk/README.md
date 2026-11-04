@@ -197,3 +197,21 @@ rate (about 276 to 280k at 70 GB/s, 270k at 66 to 68), and the A pair
 spans both. Rate level (68.09 against 68.82 GB/s), the region the same.
 blk-4-A was disturbed: 813 ring drops on port b and 868 client
 retransmits, against 19 to 183 and 66 to 322 in the others.
+
+The rest of `run172.out`: `lat.sh` at iodepth 1, A 8.19, 8.38, 7.89,
+8.46 GB/s (mean 8.23, mean completion 0.439 ms), B 8.54, 8.38, 7.66, 8.46
+(8.26, 0.439 ms): no difference. The profile of B (`fl-blk`, 67.31 GB/s;
+rings busy 31.89 µs a WRITE, nfsd 88.79): `blk_rq_dma_map_iter_next`, with
+`blk_map_iter_next` in it, 1.83% of nfsd's busy time, 1.62 µs a WRITE,
+against 1.22% and 0.47% (1.66 µs) in round 56's profile on build 506
+(`t2-r165/fl56`, another boot). The walk costs the same: the inline takes
+the call and 5.7k instructions a WRITE, not the walk's time.
+
+What the B profile has at its top on nfsd, past idle: `finish_task_switch`
+7.81% (about 700k context switches in a loan run's window),
+`_raw_spin_unlock_irqrestore` 3.71% (the region's lock under
+`page_pool_recycle_ring_bulk` 1.94% of nfsd's samples, `wake_up_process`
+1.62, `nvme_pci_setup_data_sgl` 0.51), `_raw_spin_lock` 2.19% (the qdisc's
+root lock in `__dev_xmit_skb` 1.55, `svc_recv` 0.57), then
+`blk_rq_dma_map_iter_next` 1.83, `svc_tcp_rx_append_ref` 1.71 and
+`svc_tcp_rx_borrow_segment` 1.45.
