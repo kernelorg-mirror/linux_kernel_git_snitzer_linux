@@ -80,3 +80,13 @@ no WARNING, BUG or Oops.
 **To take it out:** put the `options` line back as in
 `boot-entry-507-before.conf` and reboot. Every A/B after this round runs
 on a boot without the parameter.
+
+## The runs
+
+**fl61, the profile (4 November):** `WHICH=ab ./flame.sh $L/t2-fl61 fl61
+128`, [run-fl61.out](run-fl61.out): 66.18 GB/s on both ports, 63173 WRITEs
+a second in the profile, nfsd busy 88.35 us a WRITE, rings 29.40 (fl-blk:
+67.31, 64344, 88.79, 31.89). Loans admitted 2503728, denied 344, overrun
+0; the setting held at the end. Three `perf: interrupt took too long`
+lines lowered `perf_event_max_sample_rate` to 51000, far above the 999 Hz
+used. `perf.data` is in `$L/t2-fl61/fl61-flame/`.
