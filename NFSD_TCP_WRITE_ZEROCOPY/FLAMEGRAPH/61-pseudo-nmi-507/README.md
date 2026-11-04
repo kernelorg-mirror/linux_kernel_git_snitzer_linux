@@ -90,3 +90,29 @@ a second in the profile, nfsd busy 88.35 us a WRITE, rings 29.40 (fl-blk:
 0; the setting held at the end. Three `perf: interrupt took too long`
 lines lowered `perf_event_max_sample_rate` to 51000, far above the 999 Hz
 used. `perf.data` is in `$L/t2-fl61/fl61-flame/`.
+
+**t2-r178, the counted run (4 November):** after `fstrim` of the eight and
+120 s of rest, `env WARM=10 RUNTIME=30 WRITES=128 ./twoport.sh $L/t2-r178
+ab`: **71.21 GB/s** on both ports (67806 WRITEs a second in the window), no
+drive stepped down, none low in the warm-up, no stall; port b's drives
+8.8 to 8.9 GB/s each, the busiest 90% busy, so twoport.sh marks it
+`DRIVE-LIMITED`. Loans admitted 2700464, denied 84, overrun 0; client
+retransmits 562; the region's pages in use at most 12124 (blk-2-B's
+11152). `cost.sh`, port a's rings and nfsd's CPUs, counted:
+
+| | GB/s | ring cycles (instructions) a WRITE | nfsd cycles (instructions) a WRITE |
+|---|---|---|---|
+| blk-1-A, no pseudo-NMI | 70.54 | 73.9k (144.6k) | 279.6k (278.2k) |
+| blk-2-B | 70.01 | 72.8k (143.4k) | 275.9k (272.7k) |
+| blk-3-B | 67.63 | 74.0k (146.8k) | 270.0k (272.8k) |
+| blk-4-A | 65.63 | 73.7k (145.4k) | 269.5k (278.7k) |
+| **t2-r178, pseudo-NMI** | **71.21** | **74.7k (144.0k)** | **285.1k (269.2k)** |
+
+**Pseudo-NMI costs more here than round 48 found: nfsd +11.4k cycles a
+WRITE against the four runs' mean of 273.8k (+4.1%; +5.5k, +2.0%, against
+the highest of them), where round 48 had +5.0k (+1.7%); the rings +0.9k
+(+1.2%).** Instructions are no more than theirs (269.2k against 268.9k to
+278.7k), so it is time with the same work, as in round 48. One run a side;
+the rate is the highest of the five, so it is not a slower run's idle
+cost. (`cost.sh`'s ring is port a's four CPUs; the ab-switch lines' 144k
+are both ports' eight.)
