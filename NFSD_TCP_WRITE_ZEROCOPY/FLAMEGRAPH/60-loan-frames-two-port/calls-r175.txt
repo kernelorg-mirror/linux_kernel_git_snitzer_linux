@@ -1,0 +1,12 @@
+Attached 9 probes
+
+
+@[svc_tcp_rx_release_refs]: 325084
+@[svc_tcp_recv_skb]: 2542486
+@[svc_tcp_rx_prefetch_pages]: 2693698
+@[svc_tcp_rx_walk_skb]: 2934443
+@[svc_tcp_rx_put_run]: 20088718
+@[svc_tcp_rx_region_span]: 29665440
+@[svc_tcp_rx_borrow_segment]: 42278198
+@[svc_tcp_rx_append_ref]: 45678468
+WRITEs while counted: 521644 (bpftrace's start included)
