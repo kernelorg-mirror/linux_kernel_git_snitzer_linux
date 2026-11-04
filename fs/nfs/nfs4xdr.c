@@ -121,7 +121,7 @@ static int decode_layoutget(struct xdr_stream *xdr, struct rpc_rqst *req,
 				nfs4_owner_maxsz + \
 				nfs4_group_maxsz + nfs4_label_maxsz + \
 				 decode_mdsthreshold_maxsz + \
-				 1)) /* uncacheable_file_data */
+				 1)) /* uncacheable_file_data / dirent_metadata */
 #define nfs4_fattr_maxsz	(nfs4_fattr_bitmap_maxsz + \
 				nfs4_fattr_value_maxsz)
 #define decode_getattr_maxsz    (op_decode_hdr_maxsz + nfs4_fattr_maxsz)
@@ -4405,6 +4405,30 @@ static int decode_attr_uncacheable_file_data(struct xdr_stream *xdr, uint32_t *b
 	return status;
 }
 
+static int decode_attr_uncacheable_dirent_metadata(struct xdr_stream *xdr, uint32_t *bitmap,
+				   uint32_t *res, uint64_t *flags)
+{
+	int status = 0;
+	__be32 *p;
+
+	if (unlikely(bitmap[2] & (FATTR4_WORD2_UNCACHEABLE_DIRENT_METADATA - 1U)))
+		return -EIO;
+	if (likely(bitmap[2] & FATTR4_WORD2_UNCACHEABLE_DIRENT_METADATA)) {
+		p = xdr_inline_decode(xdr, 4);
+		if (unlikely(!p))
+			return -EIO;
+		if (be32_to_cpup(p))
+			*res |= NFS_AUX_UNCACHEABLE_DIRENT_METADATA;
+		else
+			*res &= ~NFS_AUX_UNCACHEABLE_DIRENT_METADATA;
+		bitmap[2] &= ~FATTR4_WORD2_UNCACHEABLE_DIRENT_METADATA;
+		*flags |= NFS_ATTR_FATTR_UNCACHEABLE_DIRENT_METADATA;
+	}
+	dprintk("%s: uncacheable_dirent_metadata: =%s\n", __func__,
+		(*res & NFS_AUX_UNCACHEABLE_DIRENT_METADATA) == 0 ? "false" : "true");
+	return status;
+}
+
 static int verify_attr_len(struct xdr_stream *xdr, unsigned int savep, uint32_t attrlen)
 {
 	unsigned int attrwords = XDR_QUADLEN(attrlen);
@@ -4871,6 +4895,11 @@ static int decode_getfattr_attrs(struct xdr_stream *xdr, uint32_t *bitmap,
 	fattr->valid |= status;
 
 	status = decode_attr_uncacheable_file_data(xdr, bitmap, &fattr->aux_flags,
+					 &fattr->valid);
+	if (status < 0)
+		goto xdr_error;
+
+	status = decode_attr_uncacheable_dirent_metadata(xdr, bitmap, &fattr->aux_flags,
 					 &fattr->valid);
 	if (status < 0)
 		goto xdr_error;
