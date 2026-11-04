@@ -28,8 +28,7 @@ boot.
 ## 1. The look (r174)
 
 [run174.sh](run174.sh), `$L/t2-r174`: 66.84 GB/s, no drive stepped down,
-nfsd 270.7k cycles and 272.5k instructions a WRITE counted (rings 72.9k
-and 144.6k... as `cost.sh` prints them), no WARNING. The calls were not
+nfsd 270.7k cycles and 272.5k instructions a WRITE counted, no WARNING. The calls were not
 counted: the probe list named `svc_tcp_rx_skb_region_pages_after`,
 which is inlined, and bpftrace attached nothing (run175 counts them).
 
@@ -64,3 +63,39 @@ are first touches
   `pool->rx_region` load that waits on `page->pp`, in the same struct page
   line. The pool's line at 960 holds only read-mostly fields
   (`user.id`, `rx_region`, `rx_region_dev`).
+
+## 2. The skbs' shape and the calls (r175)
+
+[run175.sh](run175.sh), `$L/t2-r175`, 68.67 GB/s
+([calls-r175.txt](calls-r175.txt), [shape-r175.txt](shape-r175.txt); a
+WRITE is the run's 66,556 a second over the 4 s counted):
+
+- **About ten skbs a WRITE,** most of 64 to 128 KiB, with 7 or 14 to 15
+  frags (GRO's page fragments), **none with a frag list.**
+- **Calls a WRITE:** 159 borrows, 172 appends, 111 region spans, 75 put
+  runs, about 10 prefetch walks and 11 skb walks.
+
+So the prefetch walk's stall is about ten skbs a WRITE, each the first
+reader of some five lines of shared info, and nfsd takes some 2k cycles
+over each skb: room enough to fetch the next one's lines while it does.
+
+## 3. The change
+
+`af250a0051d5` "SUNRPC: Prefetch the next skbs of a loaned record": while
+one skb of a loaned record is taken, the struct pages of the next skb on
+the receive queue are prefetched, and the shared info of the one after it
+(every line of it, frags included, without reading its frag count),
+whose struct pages are then fetched at the next skb. So the region count
+and the borrow find both in place. `->read_sock` runs under the socket
+lock, so the queue holds still (segments that arrive go to the backlog);
+only TCP's own `->read_sock` hands over skbs on it, and the lookahead is
+limited to that. Nothing is held: no page, no skb.
+
+`399de17d35f5` "DROP: SUNRPC: A/B switch for FLAMEGRAPH round 60":
+`sunrpc.svc_tcp_rx_lookahead`, 0 as before, 1 the next skb's shared info
+only, 2 (the default) the change. Built with `build-sunrpc.sh` (sunrpc
+`796267B1BA39136191F34A9`, exports unchanged) and put in `updates/` by
+`swap-sunrpc.sh` (Mike: allowed for this round), then the settled setting.
+
+**To test:** `../ab-switch.sh look t2-r176 > run176.out` from here: A 0,
+B 2, as rounds 55 and 58.

@@ -1,22 +1,26 @@
 #!/bin/bash
-# ab-switch.sh SW OUT: the A/B for FLAMEGRAPH round 55 or 58 on the kernel built
-# with "DROP: page_pool, block: A/B switches for FLAMEGRAPH rounds 55 and 58",
+# ab-switch.sh SW OUT: the A/B for FLAMEGRAPH round 55, 58 or 60 on the kernel
+# built with "DROP: page_pool, block: A/B switches for FLAMEGRAPH rounds 55 and
+# 58" (round 60: with the sunrpc built with "DROP: SUNRPC: A/B switch for
+# FLAMEGRAPH round 60" in updates/),
 # on one boot, at the two-port setting (12 connections a port, 512 KiB, rings of
 # 128, budget 128): four untraced loan runs on both ports, A B B A, with the
 # memory traffic beside each, then lat.sh at iodepth 1 in both orders, A B B A
 # then B A A B, and a profile of B.  Ends on B (the switch on, the kernel's default).
 #   SW=pp   page_pool.rx_region_bulk_ab: A N, B Y (round 58)
 #   SW=blk  blk_mq_dma.map_iter_inline: A N, B Y (round 55)
+#   SW=look sunrpc.svc_tcp_rx_lookahead: A 0, B 2 (round 60)
 # Run it from the round's directory: ../ab-switch.sh pp t2-r171
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
 SW=$1
-O=$L/${2:?usage: ab-switch.sh pp|blk OUT}
+O=$L/${2:?usage: ab-switch.sh pp|blk|look OUT}
 mkdir -p $O
 case $SW in
-pp)  SP=/sys/module/page_pool/parameters/rx_region_bulk_ab ;;
-blk) SP=/sys/module/blk_mq_dma/parameters/map_iter_inline ;;
-*)   echo "usage: ab-switch.sh pp|blk OUT"; exit 1 ;;
+pp)  SP=/sys/module/page_pool/parameters/rx_region_bulk_ab VA=N VB=Y ;;
+blk) SP=/sys/module/blk_mq_dma/parameters/map_iter_inline VA=N VB=Y ;;
+look) SP=/sys/module/sunrpc/parameters/svc_tcp_rx_lookahead VA=0 VB=2 ;;
+*)   echo "usage: ab-switch.sh pp|blk|look OUT"; exit 1 ;;
 esac
 PP=/sys/module/page_pool/parameters
 DRV="nvme0n1 nvme1n1 nvme2n1 nvme3n1 nvme4n1 nvme5n1 nvme6n1 nvme7n1"
@@ -39,7 +43,7 @@ ready() {	# ready TAG: the settled setting, checked, and the arm TAG ends in
 	[ "$(cat $PP/rx_region_stack)" = 64 ] || die "$1: rx_region_stack $(cat $PP/rx_region_stack), not 64"
 	[ "$(reg pages)" = 32768 ] || die "$1: the region is $(reg pages) pages, not 32768"
 	[ "$(bad)" = $W0 ] || die "$1: a new kernel message: $(dmesg | grep -E 'WARNING:|BUG:|Oops' | tail -3)"
-	case $1 in *A) echo N > $SP ;; *B) echo Y > $SP ;; esac
+	case $1 in *A) echo $VA > $SP ;; *B) echo $VB > $SP ;; esac
 	sync
 }
 irqs() {	# over the node's whole life: NVMe (the eight data drives), IPIs, WRITEs
@@ -78,7 +82,7 @@ done
 ready fl-B
 WHICH=ab ./flame.sh $O fl-$SW 128 > $O/fl.out 2>&1 || die "flame: $(tail -2 $O/fl.out)"
 say "fl-$SW (B): $(grep '^total' $O/fl-$SW.log 2>/dev/null) | $(cat $O/fl-$SW-flame/cost.txt | paste -sd' ')"
-echo Y > $SP
+echo $VB > $SP
 ./settled.sh apply > $O/apply-end.txt 2>&1 || die "not settled at the end: $(grep -E 'BAD|FAILED' $O/apply-end.txt | head -3)"
 [ "$(bad)" = $W0 ] || die "a new kernel message"
 say "ALL end: $SP $(cat $SP); $(tail -1 $O/apply-end.txt); DONE"
