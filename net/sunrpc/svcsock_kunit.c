@@ -21,6 +21,7 @@
 #include <linux/sunrpc/svcsock.h>
 #include <linux/unaligned.h>
 
+#include <net/hotdata.h>
 #include <net/net_namespace.h>
 #include <net/page_pool/cfg.h>
 #include <net/page_pool/helpers.h>
@@ -4130,6 +4131,9 @@ static void svcsock_rx_region_pool_defer_test(struct kunit *test)
 
 	if (num_online_cpus() < 2)
 		kunit_skip(test, "needs a second online CPU");
+	/* With deferral off, the skb and its page are freed at once. */
+	if (!READ_ONCE(net_hotdata.sysctl_skb_defer_max))
+		kunit_skip(test, "needs deferred skb frees (net.core.skb_defer_max is 0)");
 	svcsock_rx_region_contig(test, nr, 0);
 	svcsock_rx_region_pin(test);
 	rp = kunit_kzalloc(test, sizeof(*rp), GFP_KERNEL);
