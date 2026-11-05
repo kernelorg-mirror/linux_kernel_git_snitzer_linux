@@ -2082,6 +2082,8 @@ static void xprt_init(struct rpc_xprt *xprt, struct net *net)
 {
 	kref_init(&xprt->kref);
 	xprt->xprt_home_cpu = -1;
+	xprt->xprt_numa_node = NUMA_NO_NODE;
+	xprt->xprt_numa_home = -1;
 
 	spin_lock_init(&xprt->transport_lock);
 	spin_lock_init(&xprt->reserve_lock);

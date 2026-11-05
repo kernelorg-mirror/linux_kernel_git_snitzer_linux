@@ -18,6 +18,11 @@
 #include <linux/sunrpc/xprt.h>
 #include <linux/sunrpc/addr.h>
 #include <linux/sunrpc/xprtmultipath.h>
+#include <linux/inetdevice.h>
+#include <linux/moduleparam.h>
+#include <linux/topology.h>
+#include <net/inet_dscp.h>
+#include <net/route.h>
 
 #include "sysfs.h"
 
@@ -55,6 +60,7 @@ void rpc_xprt_switch_add_xprt(struct rpc_xprt_switch *xps,
 {
 	if (xprt == NULL)
 		return;
+	rpc_xprt_numa_assign(xprt);
 	spin_lock(&xps->xps_lock);
 	if (xps->xps_net == xprt->xprt_net || xps->xps_net == NULL)
 		xprt_switch_add_xprt_locked(xps, xprt);
@@ -164,6 +170,7 @@ struct rpc_xprt_switch *xprt_switch_alloc(struct rpc_xprt *xprt,
 		xps->xps_iter_ops = &rpc_xprt_iter_singular;
 		RCU_INIT_POINTER(xps->xps_cpu_map, NULL);
 		rpc_sysfs_xprt_switch_setup(xps, xprt, gfp_flags);
+		rpc_xprt_numa_assign(xprt);
 		xprt_switch_add_xprt_locked(xps, xprt);
 		xps->xps_nunique_destaddr_xprts = 1;
 		rpc_sysfs_xprt_setup(xps, xprt, gfp_flags);
@@ -230,6 +237,154 @@ struct rpc_xprt_cpu_map {
 	struct rpc_xprt		*xprt[];	/* indexed by CPU; NULL: none */
 };
 
+/*
+ * LAB ONLY switch.  Y: each transport gets a home core on the NUMA node of
+ * the NIC its route leaves by, from a rotor per node shared by every
+ * switch, so the transports to all servers cover every core of the node
+ * before any core is home to two; a per-CPU switch is then mapped around
+ * those homes.  N: the CPU-count split of rpc_xprt_switch_update_cpu_map_locked().
+ */
+static bool rpc_xprt_numa_map __read_mostly = true;
+module_param_named(xprt_numa_map, rpc_xprt_numa_map, bool, 0644);
+MODULE_PARM_DESC(xprt_numa_map,
+		 "LAB ONLY: home nconnect transports on their NIC's NUMA node, one core each, staggered across servers (default Y)");
+
+static atomic_t rpc_xprt_numa_rotor[MAX_NUMNODES];
+
+/* The NUMA node of the NIC the route to @xprt's server leaves by */
+static int rpc_xprt_route_node(struct rpc_xprt *xprt)
+{
+	const struct sockaddr_in *sin = (const struct sockaddr_in *)&xprt->addr;
+	struct net_device *dev;
+	struct rtable *rt;
+	int node = NUMA_NO_NODE;
+
+	if (xprt->addr.ss_family != AF_INET || !xprt->xprt_net)
+		return NUMA_NO_NODE;
+	rt = ip_route_output(xprt->xprt_net, sin->sin_addr.s_addr, 0,
+			     inet_dsfield_to_dscp(0), 0, RT_SCOPE_UNIVERSE);
+	if (IS_ERR(rt))
+		return NUMA_NO_NODE;
+	dev = rt->dst.dev;
+	if (dev && (dev->flags & IFF_LOOPBACK)) {
+		/* A server address of this host: the NIC that owns it */
+		rcu_read_lock();
+		dev = __ip_dev_find(xprt->xprt_net, sin->sin_addr.s_addr, false);
+		if (dev)
+			node = dev_to_node(&dev->dev);
+		rcu_read_unlock();
+	} else if (dev) {
+		node = dev_to_node(&dev->dev);
+	}
+	ip_rt_put(rt);
+	return node;
+}
+
+/* Position of @cpu among the online CPUs of @node, or -1 */
+static int rpc_xprt_numa_pos(int cpu, int node)
+{
+	int c, pos = 0;
+
+	if (cpu < 0 || node == NUMA_NO_NODE)
+		return -1;
+	for_each_cpu_and(c, cpumask_of_node(node), cpu_online_mask) {
+		if (c == cpu)
+			return pos;
+		pos++;
+	}
+	return -1;
+}
+
+/**
+ * rpc_xprt_numa_assign - Give @xprt a home core on its NIC's NUMA node
+ * @xprt: transport, before it joins a switch and before it connects
+ *
+ * Process context.  Does nothing if @xprt already has a home, or if the
+ * route to its server gives no node.
+ */
+void rpc_xprt_numa_assign(struct rpc_xprt *xprt)
+{
+	unsigned int cnt, pos, cpu;
+	int node;
+
+	if (!READ_ONCE(rpc_xprt_numa_map) || READ_ONCE(xprt->xprt_numa_home) >= 0)
+		return;
+	node = rpc_xprt_route_node(xprt);
+	if (node == NUMA_NO_NODE || node < 0 || node >= MAX_NUMNODES)
+		return;
+	cnt = cpumask_weight_and(cpumask_of_node(node), cpu_online_mask);
+	if (cnt == 0)
+		return;
+	pos = (unsigned int)atomic_fetch_inc(&rpc_xprt_numa_rotor[node]) % cnt;
+	cpu = cpumask_nth_and(pos, cpumask_of_node(node), cpu_online_mask);
+	if (cpu >= nr_cpu_ids)
+		return;
+	WRITE_ONCE(xprt->xprt_numa_node, node);
+	WRITE_ONCE(xprt->xprt_numa_home, cpu);
+}
+
+/**
+ * rpc_xprt_numa_comp_vector - The completion vector of @xprt's home core
+ * @xprt: transport
+ * @nvec: completion vectors of its device
+ *
+ * Assumes vector i interrupts on the i-th online CPU of the device's node,
+ * as mlx5 spreads them and as the lab pins them.  Returns -1 without a home.
+ */
+int rpc_xprt_numa_comp_vector(const struct rpc_xprt *xprt, int nvec)
+{
+	int pos;
+
+	if (!READ_ONCE(rpc_xprt_numa_map) || nvec <= 0)
+		return -1;
+	pos = rpc_xprt_numa_pos(READ_ONCE(xprt->xprt_numa_home),
+				READ_ONCE(xprt->xprt_numa_node));
+	return pos < 0 ? -1 : pos % nvec;
+}
+EXPORT_SYMBOL_GPL(rpc_xprt_numa_comp_vector);
+
+/*
+ * Map a per-CPU switch around its transports' homes.  On the transports'
+ * NIC node each home core uses the transport homed on it and the other
+ * cores are dealt round the transports in turn; the cores of any other
+ * node are dealt round them the same way.  Returns false, leaving @map
+ * alone, unless every active transport has a home on one node.
+ */
+static bool rpc_xprt_switch_numa_map_locked(struct rpc_xprt_cpu_map *map,
+					    struct rpc_xprt **active,
+					    unsigned int n)
+{
+	int node = READ_ONCE(active[0]->xprt_numa_node);
+	unsigned int i, k;
+	int cpu, other;
+
+	if (!READ_ONCE(rpc_xprt_numa_map) || node == NUMA_NO_NODE)
+		return false;
+	for (i = 0; i < n; i++)
+		if (READ_ONCE(active[i]->xprt_numa_node) != node ||
+		    READ_ONCE(active[i]->xprt_numa_home) < 0)
+			return false;
+
+	for (i = 0; i < n; i++) {
+		cpu = READ_ONCE(active[i]->xprt_numa_home);
+		WRITE_ONCE(active[i]->xprt_home_cpu, cpu);
+		if (!map->xprt[cpu])
+			map->xprt[cpu] = active[i];
+	}
+	k = 0;
+	for_each_cpu_and(cpu, cpumask_of_node(node), cpu_online_mask)
+		if (!map->xprt[cpu])
+			map->xprt[cpu] = active[k++ % n];
+	for_each_node_with_cpus(other) {
+		if (other == node)
+			continue;
+		k = 0;
+		for_each_cpu_and(cpu, cpumask_of_node(other), cpu_online_mask)
+			map->xprt[cpu] = active[k++ % n];
+	}
+	return true;
+}
+
 /**
  * rpc_xprt_switch_update_cpu_map_locked - Rebuild a per-CPU switch's CPU map
  * @xps: pointer to struct rpc_xprt_switch, with xps_lock held
@@ -281,6 +436,8 @@ void rpc_xprt_switch_update_cpu_map_locked(struct rpc_xprt_switch *xps)
 		map = NULL;
 		goto publish;
 	}
+	if (rpc_xprt_switch_numa_map_locked(map, active, n))
+		goto publish;
 	for_each_node_with_cpus(node) {
 		const struct cpumask *mask = cpumask_of_node(node);
 		unsigned int cnt = cpumask_weight_and(mask, cpu_online_mask);
