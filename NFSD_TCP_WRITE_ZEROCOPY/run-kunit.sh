@@ -80,6 +80,9 @@ skips=$(dmesg | grep -E 'ok [0-9]+ [a-z0-9_]+ # SKIP' | grep -oE 'ok [0-9]+ [a-z
 for t in $skips; do
 	if [ "$PS" = 4096 ] && [ "$t" = svcsock_rx_arena_bound_test ]; then
 		echo "skip (expected on 4 KiB): $t"
+	elif [ "$t" = svcsock_rx_region_pool_defer_test ] &&
+	     [ "$(sysctl -n net.core.skb_defer_max)" = 0 ]; then
+		echo "skip (expected with net.core.skb_defer_max 0, the settled setting): $t"
 	else
 		echo "UNEXPECTED SKIP on $PS-byte pages: $t"; fail=1
 	fi
