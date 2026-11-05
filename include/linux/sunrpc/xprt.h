@@ -326,6 +326,8 @@ struct rpc_xprt {
 	struct rpc_sysfs_xprt	*xprt_sysfs;
 	bool			main; /*mark if this is the 1st transport */
 	int			xprt_home_cpu;	/* per-CPU switch: CPU owning this xprt, or -1 */
+	int			xprt_numa_node;	/* NIC node of the route to addr, or NUMA_NO_NODE */
+	int			xprt_numa_home;	/* home core on xprt_numa_node, or -1 */
 	/*
 	 * Requests awaiting a reply, by the low bits of their XID, which a
 	 * transport hands out in sequence; one whose slot is taken is in
