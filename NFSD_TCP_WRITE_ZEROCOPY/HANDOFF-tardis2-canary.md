@@ -18,7 +18,96 @@ Written 2026-11-04.  Background and every port decision:
 | 6 | changelog-canary | cfeb1c621b45 |
 
 State: every commit of topics 2-5 builds W=1 clean with all KUnit suites
-enabled.  Nothing has run: no KUnit, no boot.
+enabled.  Build 512 (`05df800d5668`) booted on tardis2 on 2026-11-05 and
+every KUnit suite it has passes once nine stale tests and setup steps are
+fixed: see "KUnit on build 512" below.  The runtime tests have not run.
+
+## KUnit on build 512 (tardis2, 16 KiB, 2026-11-05)
+
+Each suite was loaded alone, the riskiest last, with kdump armed (it was
+not at boot: the SELinux symlink of TESTING.md, fixed by `bringup.sh`'s
+`kdump_armed`) and netconsole to the client.  Nothing crashed and no
+suite warned.  Logs and notes: `/var/tmp/zc-run-logs/t2-512-canary/`.
+
+| suite | first run | after the fixes |
+|---|---|---|
+| `xdr_kunit` | 10/10 | 10/10 |
+| `cache_kunit` | 3/3 | 3/3 |
+| `rx_loan_kunit` | 32/34 | 34/34 |
+| `nfsd_rtc` (in `nfsd.ko`) | 26/26 | 26/26 |
+| `nfsd_bvec_kunit` | 16/18 | 18/18 |
+| `localio_cpu_kunit` | 7/7, 20/20 | 7/7, 20/20 |
+| `nfsd4_bvec_kunit` | 8/10 | 10/10 |
+| `svc_pool_kunit` | 28/28 | 28/28 |
+| `svc_rtc_kunit` | 40/43 | 43/43 |
+| `svcsock_kunit` | 187/188 | 187 and 1 skip; 188/188 at `skb_defer_max` 128 |
+
+Not run: the NVMe target TCP suite, as `NVME_TARGET_TCP_KUNIT_TEST`
+needs `KUNIT=y` and the build has `KUNIT=m`.
+
+Every failure was a test or the test setup, not the code under test:
+
+- **`rx_loan` tile tests** (`rx_loan_tile_region_test`,
+  `rx_loan_tile_arena_test`) assumed 4 KiB pages: a 5000-byte payload
+  at region offset 100 fits one 16 KiB page.  Sizes now follow
+  `PAGE_SIZE` and are as before at 4 KiB.  Fixes `2a68b3a50d7c`.
+- **`nfsd_bvec_dio_segments_test`** did not expect the `IOCB_NOSERIAL`
+  that `293b0ad2399b` puts on a split write's buffered ends.  Fixes
+  `6a653f95202f`.
+- **`nfsd_dio_geometry_iomap_test`** expected `IOCB_DIO_GEOMETRY` at bit 25
+  and an async kiocb's EDIOALIGN as -EINVAL.  Port decisions 0008 and 0009
+  (`CANARY-SPLIT.md`) moved the flag to bit 26 (25 is `IOCB_NOSERIAL`) and
+  let the flag alone report the refusal.  Fixes `a7105d5e4eb6`.
+- **`nfsd4_q35_decode_matrix_test`, `nfsd4_q35_malformed_post_write_test`**
+  send NFSv4.0 COMPOUNDs.  With the Hammerspace extensions
+  (`1bb07fd5eb81`), writing `+4.2` to nfsd's versions file clears 4.0, so
+  `run-kunit.sh`'s `-2 -3 +4 +4.1 +4.2` left it off and every COMPOUND was
+  refused whole (NFS4ERR_MINOR_VERS_MISMATCH).  `run-kunit.sh` now writes
+  `+4.0` last, and the tests say so when 4.0 is off.  Also: writing 0 to
+  `threads` drops the listener, so write `tcp 2049` to `portlist` again
+  before restarting threads.
+- **`svcsock_rx_region_pool_defer_test`** needs deferred skb frees, and
+  the settled setting has `net.core.skb_defer_max` 0
+  (`/etc/sysctl.d/90-zc-settled.conf`): the skb is freed at once and the
+  page is back before the pool goes.  It now skips with its reason there,
+  and `run-kunit.sh` takes that skip as expected.  Fixes `cb2438048e4c`.
+- **`rtc_e2e_pool_grow_teardown`, `rtc_e2e_async_complete`,
+  `rtc_e2e_publish_pinned`** read `serv->sv_rtc_active`, which
+  `6879939e7074` replaced with a per-CPU count: it reads 0 always, so the
+  checks for 0 in the suite passed whatever was held.  An interface commit
+  exports the sum as `svc_rtc_kunit_active()`, and the suite reads it
+  against the count at each test's start.  `sv_rtc_active` in
+  `include/linux/sunrpc/svc.h` is now unused (code; left for David).
+
+The nine commits (seven KUnit, two `run-kunit.sh`) are at the tip of
+local `kernel-7.3/canary` on `05df800d5668`, build 512's own base, not
+pushed.  The tree at the tip is the one tested: the fixes ran as modules
+built from it.  Their `Fixes:` name commits of this history.
+
+Notes for the next run:
+
+- **No kernel has been built from the tip.** The fixes ran only as
+  modules built out of tree for 512 (below).  Build a kernel from the
+  tip, boot it with `updates/` empty and run every suite again; the
+  results above are expected to hold.
+- A rebase of the nine onto `v7.3-11.canary` (`5dd960d0097a`) was made
+  and undone on 2026-11-05.  It applied unchanged (`git range-diff` all
+  `=`); that base's 32 changed files touch neither the `IOCB_*` bits nor
+  the server side of sunrpc (only `clnt.c`, `clnt.h`).
+- **Empty `updates/` first.** It holds modules built out of tree for 512
+  from these fixes: `sunrpc.ko` (with `svc_rtc_kunit_active`; its 438 old
+  CRCs equal 512's) and `rx_loan_kunit`, `nfsd_bvec_kunit`,
+  `nfsd4_bvec_kunit`, `svcsock_kunit`, `svc_rtc_kunit`.
+- `modprobe -r` of a suite also unloads its unused dependencies, `kunit`
+  among them; nfsd then autoloads `kunit` without `enable=1` and the next
+  suite reports `kunit: disabled`.  Use `rmmod`.
+- `pool_mode` reads `auto` at boot and `percpu` once a pooled service has
+  started (`svc_pool_map_choose_mode()` always picks it): not a leak of
+  the suites.
+- Build 512 came from `05df800d5668`: its sources were checked against the
+  debuginfo in `/usr/src/debug/`.  On tardis2 the local tag
+  `v7.3-11.canary` was `4b828d2219f8` that morning, then `5dd960d0097a`;
+  neither is build 512's base.
 
 ## First: David's KUnit suites, with the code as it is
 
