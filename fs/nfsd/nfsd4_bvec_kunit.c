@@ -1800,6 +1800,14 @@ nfsd4_q35_expect_dispatch_pair(struct kunit *test,
 			       NFSD4_Q35_DISPATCH_TEST_ALL,
 				authoritative_output, PAGE_SIZE,
 				authoritative_result);
+	/*
+	 * The q35 COMPOUNDs are NFSv4.0: a server with 4.0 disabled refuses
+	 * each of them whole, before any operation is decoded.
+	 */
+	if (legacy_result->status == nfserr_minor_vers_mismatch &&
+	    expected_status != nfserr_minor_vers_mismatch)
+		KUNIT_FAIL_AND_ABORT(test,
+				     "nfsd refused NFSv4.0: enable it (\"+4.0\" in /proc/fs/nfsd/versions, after any \"+4.2\")");
 	KUNIT_EXPECT_EQ(test, (__force u32)legacy_result->status,
 			(__force u32)expected_status);
 	KUNIT_EXPECT_EQ(test, (__force u32)authoritative_result->status,
