@@ -803,21 +803,21 @@ nfs4_ff_layoutstat_end_io(struct nfs4_ff_layoutstat *layoutstat,
 }
 
 static void
-nfs4_ff_layout_stat_io_start_read(struct inode *inode,
-		struct nfs4_ff_layout_mirror *mirror,
-		u32 dss_id,
-		__u64 requested, ktime_t now)
+nfs4_ff_layout_stat_io_start(struct inode *inode,
+			     struct nfs4_ff_layout_mirror *mirror,
+			     u32 dss_id, bool write,
+			     __u64 requested, ktime_t now)
 {
 	struct nfs4_ff_layout_ds_stripe *dss_info = &mirror->dss[dss_id];
-	bool report;
+	struct nfs4_ff_layoutstat *layoutstat =
+		write ? &dss_info->write_stat : &dss_info->read_stat;
 
-	spin_lock(&dss_info->read_stat.lock);
-	nfs4_ff_layoutstat_start_io(&dss_info->read_stat, requested, now);
-	spin_unlock(&dss_info->read_stat.lock);
+	spin_lock(&layoutstat->lock);
+	nfs4_ff_layoutstat_start_io(layoutstat, requested, now);
+	spin_unlock(&layoutstat->lock);
 
 	nfs4_ff_layoutstat_set_start_time(dss_info, now);
-	report = nfs4_ff_layoutstat_report_due(dss_info, now);
-	if (report)
+	if (nfs4_ff_layoutstat_report_due(dss_info, now))
 		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
 }
 
@@ -835,25 +835,6 @@ nfs4_ff_layout_stat_io_end_read(struct rpc_task *task,
 				  requested, completed,
 				  ktime_get(), task->tk_start);
 	spin_unlock(&dss_info->read_stat.lock);
-}
-
-static void
-nfs4_ff_layout_stat_io_start_write(struct inode *inode,
-		struct nfs4_ff_layout_mirror *mirror,
-		u32 dss_id,
-		__u64 requested, ktime_t now)
-{
-	struct nfs4_ff_layout_ds_stripe *dss_info = &mirror->dss[dss_id];
-	bool report;
-
-	spin_lock(&dss_info->write_stat.lock);
-	nfs4_ff_layoutstat_start_io(&dss_info->write_stat, requested, now);
-	spin_unlock(&dss_info->write_stat.lock);
-
-	nfs4_ff_layoutstat_set_start_time(dss_info, now);
-	report = nfs4_ff_layoutstat_report_due(dss_info, now);
-	if (report)
-		pnfs_report_layoutstat(inode, nfs_io_gfp_mask());
 }
 
 static void
@@ -1755,12 +1736,8 @@ static void ff_layout_read_record_layoutstats_start(struct rpc_task *task,
 		mirror->dss_count,
 		hdr->args.offset);
 
-	nfs4_ff_layout_stat_io_start_read(
-		hdr->inode,
-		mirror,
-		dss_id,
-		hdr->args.count,
-		task->tk_start);
+	nfs4_ff_layout_stat_io_start(hdr->inode, mirror, dss_id, false,
+				     hdr->args.count, task->tk_start);
 }
 
 static void ff_layout_read_record_layoutstats_done(struct rpc_task *task,
@@ -1985,12 +1962,8 @@ static void ff_layout_write_record_layoutstats_start(struct rpc_task *task,
 		mirror->dss_count,
 		hdr->args.offset);
 
-	nfs4_ff_layout_stat_io_start_write(
-		hdr->inode,
-		mirror,
-		dss_id,
-		hdr->args.count,
-		task->tk_start);
+	nfs4_ff_layout_stat_io_start(hdr->inode, mirror, dss_id, true,
+				     hdr->args.count, task->tk_start);
 }
 
 static void ff_layout_write_record_layoutstats_done(struct rpc_task *task,
@@ -2104,10 +2077,9 @@ static void ff_layout_commit_record_layoutstats_start(struct rpc_task *task,
 
 	idx = calc_mirror_idx_from_commit(cdata->lseg, cdata->ds_commit_index);
 	dss_id = calc_dss_id_from_commit(cdata->lseg, cdata->ds_commit_index);
-	nfs4_ff_layout_stat_io_start_write(cdata->inode,
-			FF_LAYOUT_COMP(cdata->lseg, idx),
-			dss_id,
-			0, task->tk_start);
+	nfs4_ff_layout_stat_io_start(cdata->inode,
+				     FF_LAYOUT_COMP(cdata->lseg, idx),
+				     dss_id, true, 0, task->tk_start);
 }
 
 static void ff_layout_commit_record_layoutstats_done(struct rpc_task *task,
