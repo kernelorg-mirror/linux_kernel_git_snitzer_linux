@@ -1030,15 +1030,20 @@ static void nfsd_bvec_dio_segments_test(struct kunit *test)
 			KUNIT_EXPECT_EQ(test, dontcache, expected_dontcache);
 			/*
 			 * A buffered segment that claims its shared pages
-			 * completes them itself (IOCB_DONTCACHE_DEFER); the
-			 * direct middle never does.
+			 * completes them itself (IOCB_DONTCACHE_DEFER), and
+			 * the buffered ends of a split write need no
+			 * serialisation beyond the folio lock
+			 * (IOCB_NOSERIAL); the direct middle has neither,
+			 * nor does a write issued as one buffered segment.
 			 */
 			base_flags = segments[segment_index].flags &
 				     ~(IOCB_DIRECT | IOCB_DONTCACHE);
 			KUNIT_EXPECT_EQ(test, base_flags,
 					IOCB_DSYNC |
 					(!direct && dontcache ?
-					 IOCB_DONTCACHE_DEFER : 0));
+					 IOCB_DONTCACHE_DEFER : 0) |
+					(!direct && nsegs > 1 ?
+					 IOCB_NOSERIAL : 0));
 			copied = copy_from_iter(actual, expected, &iter);
 			KUNIT_ASSERT_EQ(test, copied, expected);
 			KUNIT_EXPECT_MEMEQ(test, actual, source + consumed, expected);
