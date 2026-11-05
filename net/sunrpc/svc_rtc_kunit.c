@@ -20,6 +20,24 @@ struct rtc_fixture {
 	struct svc_xprt xprt;
 };
 
+/*
+ * Runs and pool rqsts in use are counted per CPU over every service
+ * (svc_rtc_kunit_active()); each test reads them against the count at its
+ * start.
+ */
+static long rtc_active_base;
+
+static long rtc_active(void)
+{
+	return svc_rtc_kunit_active() - rtc_active_base;
+}
+
+static int rtc_test_init(struct kunit *test)
+{
+	rtc_active_base = svc_rtc_kunit_active();
+	return 0;
+}
+
 static unsigned int rtc_want_calls;
 static bool rtc_want_result;
 
@@ -55,7 +73,7 @@ static void rtc_xprt_teardown(struct kunit *test, struct svc_serv *serv,
 	if (rcu_access_pointer(serv->sv_rtc))
 		svc_rtc_unregister(serv);
 	svc_rtc_xprt_stop(xprt);
-	KUNIT_EXPECT_EQ(test, atomic_read(&serv->sv_rtc_active), 0);
+	KUNIT_EXPECT_EQ(test, rtc_active(), 0);
 	KUNIT_EXPECT_EQ(test, kref_read(&xprt->xpt_ref), 1);
 	svc_rtc_xprt_detach(xprt);
 	KUNIT_EXPECT_NULL(test, xprt->xpt_rtc);
@@ -1193,7 +1211,7 @@ static void rtc_e2e_done(struct kunit *test, struct rtc_e2e *e)
 	svc_rtc_xprt_stop(&e->xprt);
 	drain_workqueue(e->serv->sv_rtc_wq);
 	/* Every pool rqst is back: none pins the idle connection. */
-	KUNIT_EXPECT_EQ(test, atomic_read(&e->serv->sv_rtc_active), 0);
+	KUNIT_EXPECT_EQ(test, rtc_active(), 0);
 	svc_rtc_unregister(e->serv);
 	KUNIT_EXPECT_EQ(test, kref_read(&e->xprt.xpt_ref), 1);
 	svc_xprt_put(&e->xprt);
@@ -1485,7 +1503,7 @@ static void rtc_e2e_done2(struct kunit *test, struct rtc_e2e *e,
 	svc_rtc_xprt_stop(&e2->xprt);
 	svc_rtc_xprt_stop(&e->xprt);
 	drain_workqueue(e->serv->sv_rtc_wq);
-	KUNIT_EXPECT_EQ(test, atomic_read(&e->serv->sv_rtc_active), 0);
+	KUNIT_EXPECT_EQ(test, rtc_active(), 0);
 	svc_rtc_unregister(e->serv);
 	KUNIT_EXPECT_EQ(test, kref_read(&e2->xprt.xpt_ref), 1);
 	svc_xprt_put(&e2->xprt);
@@ -1779,15 +1797,15 @@ static void rtc_e2e_pool_grow_teardown(struct kunit *test)
 	rtc_e2e_kick(e, &a, &b);
 	e->mode = RTC_M_SYNC;
 	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_MISS), 1);
-	KUNIT_EXPECT_EQ(test, atomic_read(&e->serv->sv_rtc_active), 3);
+	KUNIT_EXPECT_EQ(test, rtc_active(), 3);
 	set_bit(XPT_DEAD, &e->xprt.xpt_flags);
 	svc_rtc_xprt_stop(&e->xprt);
 	rtc_e2e_unpark(e, p, 2);
-	KUNIT_EXPECT_EQ(test, atomic_read(&e->serv->sv_rtc_active), 1);
+	KUNIT_EXPECT_EQ(test, rtc_active(), 1);
 	e->serv->sv_nrthreads = 0;
 	rtc_e2e_rqst_frees = 0;
 	svc_rtc_unregister(e->serv);
-	KUNIT_EXPECT_EQ(test, atomic_read(&e->serv->sv_rtc_active), 0);
+	KUNIT_EXPECT_EQ(test, rtc_active(), 0);
 	KUNIT_EXPECT_EQ(test, rtc_e2e_rqst_frees, nr);
 	KUNIT_EXPECT_EQ(test, kref_read(&e->xprt.xpt_ref), 1);
 	svc_xprt_put(&e->xprt);
@@ -1915,7 +1933,7 @@ static void rtc_e2e_async_complete(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, b.async_submitted - a.async_submitted, 1);
 	KUNIT_EXPECT_EQ(test, e->reply_len[1], 0);
 	KUNIT_ASSERT_NOT_NULL(test, e->pending);
-	KUNIT_EXPECT_EQ(test, atomic_read(&e->serv->sv_rtc_active), 1);
+	KUNIT_EXPECT_EQ(test, rtc_active(), 1);
 
 	svc_rtc_complete(e->pending);
 	drain_workqueue(e->serv->sv_rtc_wq);
@@ -2064,13 +2082,14 @@ static void rtc_e2e_no_slot(struct kunit *test)
 }
 
 static struct {
-	int n, active;
+	int n;
+	long active;
 	unsigned int ref;
 } rtc_pub;
 
 static void rtc_pub_hook(struct svc_xprt *xprt)
 {
-	rtc_pub.active = atomic_read(&xprt->xpt_server->sv_rtc_active);
+	rtc_pub.active = rtc_active();
 	rtc_pub.ref = kref_read(&xprt->xpt_ref);
 	rtc_pub.n++;
 }
@@ -2088,7 +2107,7 @@ static void rtc_pub_send_fn(struct svc_xprt *xprt, struct svc_rtc_send *send,
 /*
  * M1, deterministic: from the instant svc_rtc_complete() or
  * svc_rtc_queue_send() publishes to conn->done or conn->sendq, a pass may
- * consume the entry and release the rqst's xprt ref and sv_rtc_active.
+ * consume the entry and release the rqst's xprt ref and its active count.
  * The publisher's own pin must already be held at that instant.
  */
 static void rtc_e2e_publish_pinned(struct kunit *test)
@@ -2097,7 +2116,7 @@ static void rtc_e2e_publish_pinned(struct kunit *test)
 	struct svc_rtc_send send = { .fn = rtc_pub_send_fn };
 	struct svc_rtc_stats a, b;
 	unsigned int ref;
-	int active;
+	long active;
 
 	rtc_e2e_ref(test, e);
 	e->mode = RTC_M_ASYNC;
@@ -2109,7 +2128,7 @@ static void rtc_e2e_publish_pinned(struct kunit *test)
 							NULL), 0);
 	WRITE_ONCE(svc_rtc_kunit_published, rtc_pub_hook);
 
-	active = atomic_read(&e->serv->sv_rtc_active);
+	active = rtc_active();
 	ref = kref_read(&e->xprt.xpt_ref);
 	svc_rtc_complete(e->pending);
 	KUNIT_EXPECT_EQ(test, rtc_pub.n, 1);
@@ -2117,7 +2136,7 @@ static void rtc_e2e_publish_pinned(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, rtc_pub.ref, ref + 1);
 	drain_workqueue(e->serv->sv_rtc_wq);
 
-	active = atomic_read(&e->serv->sv_rtc_active);
+	active = rtc_active();
 	ref = kref_read(&e->xprt.xpt_ref);
 	svc_rtc_queue_send(&e->xprt, &send);
 	KUNIT_EXPECT_EQ(test, rtc_pub.n, 2);
@@ -2231,6 +2250,7 @@ static struct kunit_case svc_rtc_test_cases[] = {
 
 static struct kunit_suite svc_rtc_test_suite = {
 	.name = "sunrpc_svc_rtc",
+	.init = rtc_test_init,
 	.test_cases = svc_rtc_test_cases,
 };
 
