@@ -50,10 +50,12 @@ for m in xdr_kunit svcsock_kunit nfsd_bvec_kunit; do
 done
 
 # nfsd4_bvec_kunit needs a live nn->nfsd_serv (v4-only hand-start, no rpcbind)
+# and NFSv4.0, which its q35 tests' COMPOUNDs use.  "+4.0" comes last: with
+# the Hammerspace extensions (canary 1bb07fd5eb81) "+4.2" clears 4.0.
 modprobe nfsd
 mountpoint -q /proc/fs/nfsd || mount -t nfsd nfsd /proc/fs/nfsd
 echo 0 > /proc/fs/nfsd/threads
-echo "-2 -3 +4 +4.1 +4.2" > /proc/fs/nfsd/versions
+echo "-2 -3 +4 +4.1 +4.2 +4.0" > /proc/fs/nfsd/versions
 grep -q 2049 /proc/fs/nfsd/portlist 2>/dev/null || echo "tcp 2049" > /proc/fs/nfsd/portlist
 echo 4 > /proc/fs/nfsd/threads
 sleep 1
