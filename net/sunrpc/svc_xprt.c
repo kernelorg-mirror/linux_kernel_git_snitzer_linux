@@ -1211,6 +1211,15 @@ static long svc_rtc_active_sum(void)
 	return sum;
 }
 
+#if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)
+/* KUnit: the runs and pool rqsts in use, summed over every service. */
+long svc_rtc_kunit_active(void)
+{
+	return svc_rtc_active_sum();
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_active);
+#endif
+
 static void svc_rtc_run_done(struct svc_xprt *xprt)
 {
 	svc_rtc_active_put();
