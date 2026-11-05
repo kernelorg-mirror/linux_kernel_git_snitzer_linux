@@ -753,21 +753,30 @@ static void rx_loan_consumer_copies_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, ar, 0ULL);
 }
 
-#define RX_LOAN_KUNIT_TILE_LEN	5000U
+/*
+ * The tile tests' sizes follow the page size, so that the payload crosses
+ * a page of the destination at every page size; on 4 KiB pages they are
+ * 1000 copied bytes, a payload from body offset 500 and a region offset
+ * of 100.
+ */
+#define RX_LOAN_KUNIT_TILE_LEN		5000U
+#define RX_LOAN_KUNIT_TILE_COPIED	((u32)PAGE_SIZE - 3096)
+#define RX_LOAN_KUNIT_TILE_START	((u32)PAGE_SIZE - 3596)
+#define RX_LOAN_KUNIT_TILE_REGION_OFF	((u32)PAGE_SIZE - 3996)
 
 /* Byte @off of the tile tests' record body: three pages' patterns. */
 static u8 rx_loan_kunit_tile_byte(u32 off)
 {
-	if (off < 1000)
+	if (off < RX_LOAN_KUNIT_TILE_COPIED)
 		return off * 7 + 1;
-	if (off < 4000)
-		return (off - 1000) * 11 + 2;
-	return (100 + off - 4000) * 13 + 3;
+	if (off < RX_LOAN_KUNIT_TILE_COPIED + 3000)
+		return (off - RX_LOAN_KUNIT_TILE_COPIED) * 11 + 2;
+	return (100 + off - RX_LOAN_KUNIT_TILE_COPIED - 3000) * 13 + 3;
 }
 
 /*
- * A record of 6000 body bytes: 1000 copied bytes of @p[0], 3000 borrowed
- * of @p[1] and 2000 borrowed at offset 100 of @p[2].
+ * A record of RX_LOAN_KUNIT_TILE_COPIED + 5000 body bytes: the copied bytes
+ * of @p[0], 3000 borrowed of @p[1] and 2000 borrowed at offset 100 of @p[2].
  */
 static struct rx_loan_table *rx_loan_kunit_tile_table(struct kunit *test,
 						      struct page **p)
@@ -782,8 +791,9 @@ static struct rx_loan_table *rx_loan_kunit_tile_table(struct kunit *test,
 		((u8 *)page_address(p[1]))[i] = i * 11 + 2;
 		((u8 *)page_address(p[2]))[i] = i * 13 + 3;
 	}
-	KUNIT_ASSERT_EQ(test, rx_loan_table_append(t, p[0], 0, 1000, false,
-						   false), 0);
+	KUNIT_ASSERT_EQ(test, rx_loan_table_append(t, p[0], 0,
+						   RX_LOAN_KUNIT_TILE_COPIED,
+						   false, false), 0);
 	KUNIT_ASSERT_EQ(test, rx_loan_table_append(t, p[1], 0, 3000, true,
 						   false), 0);
 	KUNIT_ASSERT_EQ(test, rx_loan_table_append(t, p[2], 100, 2000, true,
@@ -818,21 +828,23 @@ static void rx_loan_tile_region_test(struct kunit *test)
 	region[1].bv_page = rx_loan_kunit_page(test);
 	rx_loan_copies_read(&records, &bytes);
 
-	n = rx_loan_tile(t, 0, 500, RX_LOAN_KUNIT_TILE_LEN, NULL, region, 100,
-			 out, c);
+	n = rx_loan_tile(t, 0, RX_LOAN_KUNIT_TILE_START, RX_LOAN_KUNIT_TILE_LEN,
+			 NULL, region, RX_LOAN_KUNIT_TILE_REGION_OFF, out, c);
 	KUNIT_ASSERT_EQ(test, n, 2U);
 	KUNIT_EXPECT_PTR_EQ(test, out[0].bv_page, region[0].bv_page);
-	KUNIT_EXPECT_EQ(test, out[0].bv_offset, 100U);
-	KUNIT_EXPECT_EQ(test, out[0].bv_len, (u32)PAGE_SIZE - 100);
+	KUNIT_EXPECT_EQ(test, out[0].bv_offset, RX_LOAN_KUNIT_TILE_REGION_OFF);
+	KUNIT_EXPECT_EQ(test, out[0].bv_len,
+			(u32)PAGE_SIZE - RX_LOAN_KUNIT_TILE_REGION_OFF);
 	KUNIT_EXPECT_PTR_EQ(test, out[1].bv_page, region[1].bv_page);
 	KUNIT_EXPECT_EQ(test, out[1].bv_offset, 0U);
 	KUNIT_EXPECT_EQ(test, out[0].bv_len + out[1].bv_len,
 			RX_LOAN_KUNIT_TILE_LEN);
 	for (k = 0; k < RX_LOAN_KUNIT_TILE_LEN; k++) {
-		u32 d = 100 + k;
+		u32 d = RX_LOAN_KUNIT_TILE_REGION_OFF + k;
 		u8 *dst = page_address(region[d >> PAGE_SHIFT].bv_page);
 
-		bad += dst[offset_in_page(d)] != rx_loan_kunit_tile_byte(500 + k);
+		bad += dst[offset_in_page(d)] !=
+		       rx_loan_kunit_tile_byte(RX_LOAN_KUNIT_TILE_START + k);
 	}
 	KUNIT_EXPECT_EQ(test, bad, 0U);
 
@@ -840,7 +852,7 @@ static void rx_loan_tile_region_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, page_ref_count(p[1]), ref1 - 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(p[2]), ref2);
 	KUNIT_EXPECT_EQ(test, t->borrowed_count, 1U);
-	KUNIT_EXPECT_EQ(test, t->body_bytes, 6000U);
+	KUNIT_EXPECT_EQ(test, t->body_bytes, RX_LOAN_KUNIT_TILE_COPIED + 5000);
 	KUNIT_ASSERT_TRUE(test, rx_loan_table_refs_valid(t));
 	KUNIT_EXPECT_EQ(test, rx_loan_table_release(t), 0);
 
@@ -872,17 +884,19 @@ static void rx_loan_tile_arena_test(struct kunit *test)
 	arena[1] = rx_loan_kunit_page(test);
 	rx_loan_copies_read(&records, &bytes);
 
-	n = rx_loan_tile(t, 0, 500, RX_LOAN_KUNIT_TILE_LEN, arena, NULL, 0,
-			 out, NULL);
+	n = rx_loan_tile(t, 0, RX_LOAN_KUNIT_TILE_START, RX_LOAN_KUNIT_TILE_LEN,
+			 arena, NULL, 0, out, NULL);
 	KUNIT_ASSERT_EQ(test, n, 2U);
 	KUNIT_EXPECT_PTR_EQ(test, out[0].bv_page, arena[0]);
-	KUNIT_EXPECT_EQ(test, out[0].bv_offset, 500U);
-	KUNIT_EXPECT_EQ(test, out[0].bv_len, (u32)PAGE_SIZE - 500);
+	KUNIT_EXPECT_EQ(test, out[0].bv_offset, RX_LOAN_KUNIT_TILE_START);
+	KUNIT_EXPECT_EQ(test, out[0].bv_len,
+			(u32)PAGE_SIZE - RX_LOAN_KUNIT_TILE_START);
 	KUNIT_EXPECT_PTR_EQ(test, out[1].bv_page, arena[1]);
 	KUNIT_EXPECT_EQ(test, out[0].bv_len + out[1].bv_len,
 			RX_LOAN_KUNIT_TILE_LEN);
-	/* The borrowed bytes [1000, 5500) landed at their body offsets. */
-	for (k = 1000; k < 500 + RX_LOAN_KUNIT_TILE_LEN; k++) {
+	/* The borrowed bytes landed at their body offsets. */
+	for (k = RX_LOAN_KUNIT_TILE_COPIED;
+	     k < RX_LOAN_KUNIT_TILE_START + RX_LOAN_KUNIT_TILE_LEN; k++) {
 		u8 *dst = page_address(arena[k >> PAGE_SHIFT]);
 
 		bad += dst[offset_in_page(k)] != rx_loan_kunit_tile_byte(k);
