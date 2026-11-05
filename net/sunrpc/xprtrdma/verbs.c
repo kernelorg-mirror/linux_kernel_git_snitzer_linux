@@ -54,6 +54,7 @@
 #include <linux/slab.h>
 #include <linux/sunrpc/addr.h>
 #include <linux/sunrpc/svc_rdma.h>
+#include <linux/sunrpc/xprtmultipath.h>
 #include <linux/log2.h>
 
 #include <asm/barrier.h>
@@ -394,7 +395,7 @@ static int rpcrdma_ep_create(struct rpcrdma_xprt *r_xprt)
 	struct ib_device *device;
 	struct rdma_cm_id *id;
 	struct rpcrdma_ep *ep;
-	int rc;
+	int rc, vec;
 
 	ep = kzalloc_obj(*ep, XPRTRDMA_GFP_FLAGS);
 	if (!ep)
@@ -430,18 +431,31 @@ static int rpcrdma_ep_create(struct rpcrdma_xprt *r_xprt)
 	ep->re_send_count = ep->re_send_batch;
 	init_waitqueue_head(&ep->re_connect_wait);
 
-	ep->re_attr.send_cq = ib_alloc_cq_any(device, r_xprt,
-					      ep->re_attr.cap.max_send_wr,
-					      IB_POLL_WORKQUEUE);
+	/* Both CQs interrupt on the transport's home core, if it has one */
+	vec = rpc_xprt_numa_comp_vector(&r_xprt->rx_xprt,
+					device->num_comp_vectors);
+	if (vec < 0)
+		ep->re_attr.send_cq = ib_alloc_cq_any(device, r_xprt,
+						      ep->re_attr.cap.max_send_wr,
+						      IB_POLL_WORKQUEUE);
+	else
+		ep->re_attr.send_cq = ib_alloc_cq(device, r_xprt,
+						  ep->re_attr.cap.max_send_wr,
+						  vec, IB_POLL_WORKQUEUE);
 	if (IS_ERR(ep->re_attr.send_cq)) {
 		rc = PTR_ERR(ep->re_attr.send_cq);
 		ep->re_attr.send_cq = NULL;
 		goto out_destroy;
 	}
 
-	ep->re_attr.recv_cq = ib_alloc_cq_any(device, r_xprt,
-					      ep->re_attr.cap.max_recv_wr,
-					      IB_POLL_WORKQUEUE);
+	if (vec < 0)
+		ep->re_attr.recv_cq = ib_alloc_cq_any(device, r_xprt,
+						      ep->re_attr.cap.max_recv_wr,
+						      IB_POLL_WORKQUEUE);
+	else
+		ep->re_attr.recv_cq = ib_alloc_cq(device, r_xprt,
+						  ep->re_attr.cap.max_recv_wr,
+						  vec, IB_POLL_WORKQUEUE);
 	if (IS_ERR(ep->re_attr.recv_cq)) {
 		rc = PTR_ERR(ep->re_attr.recv_cq);
 		ep->re_attr.recv_cq = NULL;
