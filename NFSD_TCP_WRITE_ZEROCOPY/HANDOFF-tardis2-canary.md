@@ -20,7 +20,11 @@ Written 2026-11-04.  Background and every port decision:
 State: every commit of topics 2-5 builds W=1 clean with all KUnit suites
 enabled.  Build 512 (`05df800d5668`) booted on tardis2 on 2026-11-05 and
 every KUnit suite it has passes once nine stale tests and setup steps are
-fixed: see "KUnit on build 512" below.  The runtime tests have not run.
+fixed: see "KUnit on build 512" below.  The runtime baselines ran the same
+day: see "Runtime on build 512" below.  In short, loan mode on two ports runs
+at build 507's rate, but at 45% more nfsd cycles a WRITE until the per-CPU
+pools and the run-to-completion hop on WRITEs are turned off; copy mode runs
+at 62.38 GB/s; the region did not grow.
 
 ## KUnit on build 512 (tardis2, 16 KiB, 2026-11-05)
 
@@ -150,7 +154,98 @@ riskiest last, with kdump armed.
 The two xeu NICs must share the one region, each keeping its own
 mappings: that is what 63f918f53588 is for.  Check
 `/sys/kernel/debug/page_pool_rx_region`: one `mapped <dev>` line per
-NIC, `free` and `cached` per slot.
+NIC, `free` and `cached` per slot.  (Build 512: both NICs `mapped`, on
+`0000:a1:00.0` and `0000:a4:00.0`, after `bringup.sh 32768 256`.)
+
+## Runtime on build 512 (tardis2, 2026-11-05)
+
+Build 512's own sunrpc and nfsd (`updates/` emptied first; sunrpc
+`E00DDF4219EE8F0CD7A25BA`, nfsd `90122931101ECCD1B292201`, xeu
+`CA0931345E46C929B11D01F`), no pseudo-NMI, kdump armed, `bringup.sh 32768
+256`, then `settled.sh apply` ending in the settled setting (after the
+script changes below).  Every run is round 61's: `fstrim` of the eight
+drives, 120 s of rest, `env WARM=10 RUNTIME=30 WRITES=<n> ./twoport.sh
+$L/<run> ab` and `./cost.sh`, two ports, 1 MiB wsize from the client
+10.20.12.106; `WRITES=128` is a loan run (budget 16262 pages), `WRITES=0`
+copy.  No run had a drive step down or stall, and dmesg stayed clean.
+Logs in `/var/tmp/zc-run-logs/<run>/`, notes in
+`/var/tmp/zc-run-logs/t2-512-canary/NOTES`.
+
+| run | mode | pools, `rtc_read` | GB/s | nfsd cycles (instr) a WRITE | ring cycles | woken a WRITE |
+|---|---|---|---|---|---|---|
+| build 507 blk-1..4 | loan | one, (none) | 65.63-70.54 | 269.5k-279.6k (272.7k-278.7k) | 72.8k-74.0k | 3.42 (r178) |
+| t2-r179 | loan | per-CPU, Y | 67.23 | 397.2k (353.6k) | 79.2k | 6.22 |
+| t2-r180 | loan | one, Y | 66.47 | 350.3k (328.0k) | 77.5k | 3.89 |
+| t2-r181 | loan | one, N | 65.83 | 291.7k (277.9k) | 71.5k | 3.99 |
+| t2-r182 | loan | one, N | 64.56 | 291.2k (278.8k) | 75.8k | — |
+| t2-r185 | loan | one, N | 66.59 | 296.9k (278.1k) | 75.0k | — |
+| t2-r184 | copy | one, N | 62.38 | 706.1k (477.0k) | 83.2k | 4.12 |
+
+The loan runs are held by the drives (83 to 90% busy), so their rate says
+little; the cost a WRITE is the measure.  Two of David's changes account
+for nearly all of the 45% more nfsd cycles:
+
+- **Per-CPU pools** (`3fe6000275d8`): `auto`, the default `pool_mode`,
+  always picks one pool for each CPU, 64 pools of 8 threads on tardis2, with
+  sibling wake and steal.  About 47k cycles a WRITE (397.2k to 350.3k with
+  `pool_mode=global`, one pool of 512) and nearly twice the wakes.  This
+  brings back the several pools a node that the series dropped on 15
+  October (`pools_per_node`), and undoes Jeff Layton's per-node pools
+  upstream (`a1a7071195b9`).
+- **The run-to-completion hop on WRITEs** (`cd57a466c835`, on
+  `9874eba2dca0`'s fast path): a receive goes
+  to a work item while either direction is on and its mode is direct
+  (`fs/nfsd/nfs3proc.c:1248`).  `rtc_read` defaults to Y and the rig runs
+  `io_cache_read=2`, so every receive, WRITEs included, went to a
+  `kworker` and back to a thread: in `rtc_stats` 63.2M diverted, 51.2M
+  `fallback_no_peek`, 11.9M `fallback_not_fast`, none run to completion.
+  FLAMEGRAPH profile fl62 (one pool, `rtc_read=Y`; `$L/t2-fl62/`,
+  compared with round 61's fl-blk in `vs-fl-blk/`): the `kworker`s cost
+  26.4k cycles a WRITE on nfsd's CPUs, absent on 507.  With `echo N >
+  /sys/kernel/debug/nfsd/rtc_read` the hop is gone (`diverted` did not
+  move), nfsd is at 291.7k cycles a WRITE and its instructions within
+  507's range, and context switches halve.
+
+What is left, about 18k cycles a WRITE (+6.5%) at the same instructions,
+is not explained; 507's own runs spread by about 10k.  Whether the rig
+holds `pool_mode=global` and `rtc_read=N`, or the defaults change in the
+series, is Mike's.  Neither is in `settled.sh`: both go back to their
+defaults when nfsd is reloaded or the host reboots.
+
+**Copy mode** (t2-r184): 62.38 GB/s, nothing loaned (the budget read
+`0 (manual)` throughout and `admitted` did not move), drives 71 to 76%
+busy, nfsd 2.4 times a loaned WRITE's cycles.  There is no copy run on
+tardis2 at the two-port setting of 3 November to set it against.
+
+**The region did not grow.** The rig's "region pages in use at most"
+(`pages - min_free`) read 18880 to 26080 on these loan runs against 507's
+10118 to 12124, but the figure changed meaning: on 507 the region's `free`
+and `min_free` counted the pages free on each device's mapped slot
+(`free = free_unmapped + mapped free`), and here (`63f918f53588`) they
+leave the slots out, so up to about 20,000 free pages parked on the slots
+count as held.  Sampled every 20 ms with the slots' free and cached
+counted free, t2-r185 held 2867 pages at the median, 5616 at the 99th
+percentile and 8420 at most (copy, t2-r184: 922 at the median).  A 20 ms
+sample can miss a short dip, so 8420 is a lower bound of the peak, which
+507's figure gives exactly.  Ways to make the figure exact again: in
+`twoport.sh`, add the slots (samples only, as the kernel keeps no
+low-water mark for them), or in the kernel, a low-water mark over the
+shards, the CPU caches and the slots together in the region's debugfs file.
+Earlier on this day the figure was read as real growth, and samples
+without the slots seemed to confirm it; they were wrong in the same way.
+
+**What the rig scripts needed** (committed as "the rig scripts on David's
+region sizing and per-CPU pools": `xeu-rig/common.sh`, `settled.sh`,
+`twoport.sh`, `run-budget.sh`):
+on this canary a budget reads back `<n> (auto)` or `<n> (manual)`, and a
+write of 0 is auto, the computed size (the whole region here), so the 0
+that the scripts wrote to mean copy turned loaning on (`cb2438048e4c`:
+"kNFSd lends with no parameter set"; `99197ab25abb`: "off" is a budget
+of 0).  That reverses the series' decision of 22 October that a budget of
+0, the default, loans nothing.  `rx_w` writes 0 as `off` on such a kernel,
+`rx_r` reads the value in effect, and `settled.sh` expects 64 pools of 8
+with `pool_mode=percpu`.  A new network namespace starts at `32768
+(auto)`, so it loans with nothing configured.
 
 ## TODO (formal, once the above passes on tardis2)
 
