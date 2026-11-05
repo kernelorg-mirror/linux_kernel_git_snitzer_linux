@@ -1590,14 +1590,20 @@ static void nfsd_dio_geometry_iomap_test(struct kunit *test)
 	unsigned int completions = 0;
 	unsigned int i, order;
 
-	KUNIT_EXPECT_EQ(test, IOCB_DIO_GEOMETRY, 1 << 25);
+	KUNIT_EXPECT_EQ(test, IOCB_DIO_GEOMETRY, 1 << 26);
 	KUNIT_EXPECT_EQ(test, iomap_dio_kunit_result(&iocb, -EDIOALIGN),
 			-EDIOALIGN);
 	KUNIT_EXPECT_EQ(test, iomap_dio_kunit_result(&iocb, LONG_MAX),
 			(ssize_t)LONG_MAX);
+	/*
+	 * NFSD issues a split write's direct middle as an async kiocb that it
+	 * waits on, so the flag alone, not a sync kiocb, lets the refusal
+	 * through, and the result is not completed here.
+	 */
 	iocb.ki_complete = nfsd_dio_normalizer_complete;
 	iocb.private = &completions;
-	KUNIT_EXPECT_EQ(test, iomap_dio_kunit_result(&iocb, -EDIOALIGN), -EINVAL);
+	KUNIT_EXPECT_EQ(test, iomap_dio_kunit_result(&iocb, -EDIOALIGN),
+			-EDIOALIGN);
 	KUNIT_EXPECT_EQ(test, iomap_dio_kunit_result(&iocb, LONG_MAX),
 			(ssize_t)LONG_MAX);
 	KUNIT_EXPECT_EQ(test, completions, 0U);
