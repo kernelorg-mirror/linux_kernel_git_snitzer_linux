@@ -135,6 +135,18 @@
 NFSD_CPUSET=8-55
 NFSD_THREADS=512
 NFSD_POOLS=512	# one pool: pools_per_node was dropped from the series on 15 October
+# With David's per-CPU pools (canary 3fe6000275d8) "auto" is one pool per
+# online CPU, and the threads are spread evenly over them: on tardis2, 64
+# pools of 8.  Any other pool_mode keeps one pool of NFSD_POOLS.
+nfsd_pools() {
+	local n
+	if [ "$(cat /sys/module/sunrpc/parameters/pool_mode 2>/dev/null)" = percpu ]; then
+		n=$(nproc)
+		printf "%s\n" $(yes $(( NFSD_THREADS / n )) | head -n $n) | paste -sd ' '
+	else
+		echo $NFSD_POOLS
+	fi
+}
 declare -A PDEV=([a]=enp161s0f0 [b]=enp164s0f0)
 declare -A PCPU=([a]=0 [b]=56)		# a port's eight CPUs start here
 declare -A PXPS=([a]=8 [b]=32)		# tx-i's XPS CPU, as recorded: <this> + i
@@ -463,7 +475,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 audit_nfsd() {
 	local n; n=$(pgrep -x nfsd | wc -l)
 	want "nfsd threads" "$n" "$NFSD_THREADS"
-	want "nfsd threads in each pool" "$(cat /proc/fs/nfsd/pool_threads 2>/dev/null)" "$NFSD_POOLS"
+	want "nfsd threads in each pool" "$(cat /proc/fs/nfsd/pool_threads 2>/dev/null)" "$(nfsd_pools)"
 	want "nfsd threads' CPUs" "$(nfsd_cpus)" "$n on ${EXP_NFSD_CPUS:-$NFSD_CPUSET}"
 	local k; for k in "${!NFSD_DBG[@]}"; do
 		want "nfsd $k" "$(cat /sys/kernel/debug/nfsd/$k 2>/dev/null)" "${NFSD_DBG[$k]}"
@@ -592,7 +604,7 @@ audit() {
 			printf '  --   %-34s %s\n' "sunrpc $k" "not in this kernel"
 			continue
 		fi
-		want "sunrpc $k" "$(cat $SUNRPC/$k 2>/dev/null)" "${EXPECT[$k]}"
+		want "sunrpc $k" "$(rx_r $SUNRPC/$k)" "${EXPECT[$k]}"
 	done
 	for k in $(printf '%s\n' "${!XEU[@]}" | sort); do
 		w=${XEU[$k]}; [ $k = rx_refill_thresh ] && w=${EXP_REFILL:-$w}
@@ -603,10 +615,10 @@ audit() {
 		fi
 		want "xeu $k" "$(cat /sys/module/xeu/parameters/$k 2>/dev/null)" "$w"
 	done
-	want "receive region pages" "$(cat $PP/rx_region_pages)" ${EXP_REGION_PAGES:-$REGION_PAGES}
+	want "receive region pages" "$(rx_r $PP/rx_region_pages)" ${EXP_REGION_PAGES:-$REGION_PAGES}
 	want "receive region made" "$(awk '$1 == "pages" {print $2}' /sys/kernel/debug/page_pool_rx_region 2>/dev/null || echo none)" ${EXP_REGION_PAGES:-$REGION_PAGES}
 	if [ -e $PP/rx_region_stack ]; then
-		want "receive region stack" "$(cat $PP/rx_region_stack)" "${EXP_RX_REGION_STACK:-$RX_REGION_STACK}"
+		want "receive region stack" "$(rx_r $PP/rx_region_stack)" "${EXP_RX_REGION_STACK:-$RX_REGION_STACK}"
 	else
 		printf '  --   %-34s %s\n' "receive region stack" "not in this kernel"
 	fi
@@ -691,7 +703,7 @@ sizes() {
 		fi
 	fi
 	local msx=${EXP_XEU_irq_msix_mask:-${XEU[irq_msix_mask]}} why=
-	[ -e $PP/rx_region_stack ] && [ "$(cat $PP/rx_region_stack)" != "$stk" ] && why="rx_region_stack $stk"
+	[ -e $PP/rx_region_stack ] && [ "$(rx_r $PP/rx_region_stack)" != "$stk" ] && why="rx_region_stack $stk"
 	[ -e $XM ] && [ "$(cat $XM)" != "$msx" ] && why="${why:+$why, }xeu irq_msix_mask $msx"
 	if [ -n "$why" ]; then
 		if [ -n "${idle:-}" ]; then
@@ -741,7 +753,7 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 	fi
 	if [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ]; then
 		for k in "${!REST[@]}"; do
-			[ -w $SUNRPC/$k ] && [ "$(cat $SUNRPC/$k)" != "${REST[$k]}" ] && echo "${REST[$k]}" > $SUNRPC/$k
+			[ -w $SUNRPC/$k ] && [ "$(rx_r $SUNRPC/$k)" != "${REST[$k]}" ] && rx_w $SUNRPC/$k "${REST[$k]}"
 		done
 		for k in "${!NFSD_DBG[@]}"; do
 			[ "$(cat /sys/kernel/debug/nfsd/$k 2>/dev/null)" = "${NFSD_DBG[$k]}" ] || echo "${NFSD_DBG[$k]}" > /sys/kernel/debug/nfsd/$k

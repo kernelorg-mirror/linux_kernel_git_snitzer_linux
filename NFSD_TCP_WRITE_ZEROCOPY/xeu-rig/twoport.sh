@@ -174,7 +174,7 @@ cleanup() {
 	for k in rcvbuf linger_us copy_threads lowat keep want_eighths; do [ -e $SP/svc_tcp_rx_$k ] && echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
 	[ -n "${SAVE[spare]}" ] && echo ${SAVE[spare]} > $SP/svc_tcp_spare_bytes_max
 	echo ${SAVE[refill]} > /sys/module/xeu/parameters/rx_refill_thresh
-	echo 0 > $SP/svc_tcp_rx_budget_pages; echo ${SAVE[reserve]} > $SP/svc_tcp_rx_budget_reserve; echo ${SAVE[budget]} > $SP/svc_tcp_rx_budget_pages
+	rx_w $SP/svc_tcp_rx_budget_pages 0; rx_w $SP/svc_tcp_rx_budget_reserve "${SAVE[reserve]}"; rx_w $SP/svc_tcp_rx_budget_pages "${SAVE[budget]}"
 	for e in $WREV; do echo '!hist:keys=common_type' > $T/events/nfsd/$e/trigger 2>/dev/null; done
 	[ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} codel; done
 	# The RSS table may name rings that are going: spread it over four first.
@@ -221,7 +221,7 @@ setp "${LOWAT:-}" lowat 0
 setp "${KEEP:-}" keep N
 setp "${WANT_EIGHTHS:-}" want_eighths 4
 if [ -n "$BUDGET" ]; then	# reserve first, as run-budget.sh sets them
-	echo 0 > $SP/svc_tcp_rx_budget_pages; echo $RESERVE > $SP/svc_tcp_rx_budget_reserve; echo $BUDGET > $SP/svc_tcp_rx_budget_pages
+	rx_w $SP/svc_tcp_rx_budget_pages 0; rx_w $SP/svc_tcp_rx_budget_reserve $RESERVE; rx_w $SP/svc_tcp_rx_budget_pages $BUDGET
 	echo "loan: $G; charge $CHARGE pages a 1 MiB WRITE, budget $BUDGET pages for $WRITES WRITEs, reserve $RESERVE" | tee -a geometry.txt
 fi
 for e in $WREV; do grep -q '^hist:' $T/events/nfsd/$e/trigger 2>/dev/null || echo 'hist:keys=common_type' > $T/events/nfsd/$e/trigger; done
