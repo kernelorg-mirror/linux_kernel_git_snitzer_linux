@@ -175,3 +175,22 @@ timed_load() {
 	done
 	return 1
 }
+
+# The receive region's and the RPC receive budgets' sizes on a kernel with
+# David's sizing (canary 99197ab25abb) read back "<n> (auto)" or
+# "<n> (manual)", and a write of 0 there is auto, the computed size: a
+# budget of 0, nothing loaned, is "off" (read back "0 (manual)").  The
+# number is the value in effect: an auto budget reads "32768 (auto)" on
+# tardis2, and the default budget and the reserves have no manual setting,
+# so they read "0 (auto)" at 0.  rx_w writes a value as the kernel at hand
+# takes it, so 0 stays a budget of 0; rx_r reads the value in effect.  On a
+# kernel without the suffix both are a plain write and read.
+rx_w() {	# rx_w <file> <value>
+	local v=$2
+	case "$(cat "$1")" in *' ('*')') [ "$v" = 0 ] && v=off ;; esac
+	echo "$v" > "$1"
+}
+rx_r() {	# rx_r <file>
+	local v; v=$(cat "$1" 2>/dev/null) || return
+	v=${v% (manual)}; echo "${v% (auto)}"
+}

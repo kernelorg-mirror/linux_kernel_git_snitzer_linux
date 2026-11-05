@@ -236,6 +236,26 @@ mkdir -p "$E"
 exec > >(tee -a "$E/campaign.log") 2>&1
 
 SP=/sys/module/sunrpc/parameters
+# On a kernel with David's sizing (canary 99197ab25abb) a budget reads back
+# "<n> (auto)" or "<n> (manual)" and a write of 0 is auto, the computed
+# size; a budget of 0 is "off".  rx_w writes 0 as the kernel at hand takes
+# it, so 0 stays a budget of 0 (xeu-rig/common.sh has the same).
+rx_w() {	# rx_w <file> <value>
+	local v=$2
+	case "$(cat "$1")" in *' ('*')') [ "$v" = 0 ] && v=off ;; esac
+	echo "$v" > "$1"
+}
+# The same for a namespace's net.sunrpc.region_budget_* sysctls, which go
+# through the same setters: rx_nsw writes, rx_nsr reads the value in effect.
+rx_nsw() {	# rx_nsw <netns> <key> <value>
+	local v=$3
+	case "$(ip netns exec "$1" sysctl -n "$2")" in *' ('*')') [ "$v" = 0 ] && v=off ;; esac
+	ip netns exec "$1" sysctl -qw "$2=$v"
+}
+rx_nsr() {	# rx_nsr <netns> <key>
+	local v; v=$(ip netns exec "$1" sysctl -n "$2")
+	v=${v% (manual)}; echo "${v% (auto)}"
+}
 PP=/sys/module/page_pool/parameters
 RG=/sys/kernel/debug/page_pool_rx_region
 CFG=/sys/kernel/config
@@ -380,14 +400,14 @@ bstats() {
 # set_budgets <init> <default> <B> (pages; one record's reserve where non-zero)
 set_budgets() {
 	local r
-	echo 0 > $SP/svc_tcp_rx_budget_pages; echo 0 > $SP/svc_tcp_rx_budget_default_pages
-	ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_pages=0
-	r=0; [ "$1" != 0 ] && r=$R9; echo $r > $SP/svc_tcp_rx_budget_reserve
-	r=0; [ "$2" != 0 ] && r=$R9; echo $r > $SP/svc_tcp_rx_budget_default_reserve
-	r=0; [ "$3" != 0 ] && r=$R9; ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_reserve=$r
-	echo "$1" > $SP/svc_tcp_rx_budget_pages &&
-	echo "$2" > $SP/svc_tcp_rx_budget_default_pages &&
-	ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_pages="$3"
+	rx_w $SP/svc_tcp_rx_budget_pages 0; rx_w $SP/svc_tcp_rx_budget_default_pages 0
+	rx_nsw zcsrvB net.sunrpc.region_budget_pages 0
+	r=0; [ "$1" != 0 ] && r=$R9; rx_w $SP/svc_tcp_rx_budget_reserve $r
+	r=0; [ "$2" != 0 ] && r=$R9; rx_w $SP/svc_tcp_rx_budget_default_reserve $r
+	r=0; [ "$3" != 0 ] && r=$R9; rx_nsw zcsrvB net.sunrpc.region_budget_reserve $r
+	rx_w $SP/svc_tcp_rx_budget_pages "$1" &&
+	rx_w $SP/svc_tcp_rx_budget_default_pages "$2" &&
+	rx_nsw zcsrvB net.sunrpc.region_budget_pages "$3"
 }
 # ncell <name> <init> <default> <B> <clients: B or RB>
 ncell() {
@@ -477,9 +497,9 @@ cleanup() {
 	sysctl -qw net.core.skb_defer_max="$SAVE_DEFER"
 	echo "$SAVE_LIO" > /sys/module/nfs/parameters/localio_enabled
 	echo "$SAVE_ICW" > /sys/kernel/debug/nfsd/io_cache_write
-	echo 0 > $SP/svc_tcp_rx_budget_pages
-	echo 0 > $SP/svc_tcp_rx_budget_default_pages
-	echo 0 > $SP/svc_tcp_rx_budget_default_reserve
+	rx_w $SP/svc_tcp_rx_budget_pages 0
+	rx_w $SP/svc_tcp_rx_budget_default_pages 0
+	rx_w $SP/svc_tcp_rx_budget_default_reserve 0
 	for p in budget_reserve credit_factor rcvbuf linger_us budget_pages; do
 		[ -e $SP/svc_tcp_rx_$p ] || continue
 		eval "echo \$SAVE_$p > $SP/svc_tcp_rx_$p"
@@ -970,11 +990,11 @@ cell() {
 	# device's own latency, and a step cell is a steady load.
 	[ -n "$NODELAY" ] && { DELAY=0; SPIKE=; }
 	rm -rf "$O"; mkdir -p "$O"
-	echo 0 > $SP/svc_tcp_rx_budget_pages
-	echo "$RESERVE" > $SP/svc_tcp_rx_budget_reserve
+	rx_w $SP/svc_tcp_rx_budget_pages 0
+	rx_w $SP/svc_tcp_rx_budget_reserve "$RESERVE"
 	setfactor "$FACTOR"
 	echo "$RCVBUF" > $SP/svc_tcp_rx_rcvbuf
-	echo "$BUDGET" > $SP/svc_tcp_rx_budget_pages
+	rx_w $SP/svc_tcp_rx_budget_pages "$BUDGET"
 	# RX_LINGER_US=<us>: a thread waits that long for the rest of a partly
 	# received record before it gives the connection up (0: it does not;
 	# kernels without the parameter are left alone).
@@ -1091,11 +1111,11 @@ xclient() {	# xclient <netns> <server> <dir> <name>
 xcell() {
 	local name=$1 O=$E/$1
 	rm -rf "$O"; mkdir -p "$O/R" "$O/N"
-	echo 0 > $SP/svc_tcp_rx_budget_pages
-	echo "$RESERVE" > $SP/svc_tcp_rx_budget_reserve
+	rx_w $SP/svc_tcp_rx_budget_pages 0
+	rx_w $SP/svc_tcp_rx_budget_reserve "$RESERVE"
 	setfactor "$FACTOR"
 	echo "$RCVBUF" > $SP/svc_tcp_rx_rcvbuf
-	echo "$BUDGET" > $SP/svc_tcp_rx_budget_pages
+	rx_w $SP/svc_tcp_rx_budget_pages "$BUDGET"
 	setdelay "$DELAY"
 	MTU=$MTU veth_up "$SIZE"
 	MTU=$MTU veth2_up
@@ -1319,15 +1339,15 @@ elif [ "$PHASE" = N ]; then
 	# keep the load running past the hook's last change at 18 s -- one pass
 	# took about 4 s once dm-delay stopped rounding the delay up to a tick.
 	nrun $nb I=0 DF=$(nf 1500) BB=$(nf 2000) CL=B MIXMIB=768 LOOPS=10 CELL=n-reconf \
-		HOOK='sleep 6; ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_pages=$(nf 400); echo "6s B=$(nf 400) [$(bstats)]"; sleep 6; ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_pages=0; echo "12s B=0 [$(bstats)]"; sleep 6; ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_pages=$(nf 2000); echo "18s B=$(nf 2000) [$(bstats)]"'
+		HOOK='sleep 6; ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_pages=$(nf 400); echo "6s B=$(nf 400) [$(bstats)]"; sleep 6; rx_nsw zcsrvB net.sunrpc.region_budget_pages 0; echo "12s B=0 [$(bstats)]"; sleep 6; ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_pages=$(nf 2000); echo "18s B=$(nf 2000) [$(bstats)]"'
 	# The sum check: the region has $SIZE pages.
 	# sysctl(8) exits 0 even when the write is refused: read the value back.
 	set_budgets "$(nf 2000)" 0 0 || true
 	ip netns exec zcsrvB sysctl -qw net.sunrpc.region_budget_pages="$(nf 2500)" 2>"$E/n-sum.err" || true
-	if [ "$(ip netns exec zcsrvB sysctl -n net.sunrpc.region_budget_pages)" = "$(nf 2500)" ]; then
+	if [ "$(rx_nsr zcsrvB net.sunrpc.region_budget_pages)" = "$(nf 2500)" ]; then
 		echo "n-sum: init $(nf 2000) + B $(nf 2500) over $SIZE ACCEPTED (unexpected)"
 	else
-		echo "n-sum: init $(nf 2000) + B $(nf 2500) over $SIZE refused ($(tr -d '\n' < "$E/n-sum.err")), B stays $(ip netns exec zcsrvB sysctl -n net.sunrpc.region_budget_pages)"
+		echo "n-sum: init $(nf 2000) + B $(nf 2500) over $SIZE refused ($(tr -d '\n' < "$E/n-sum.err")), B stays $(rx_nsr zcsrvB net.sunrpc.region_budget_pages)"
 	fi
 	set_budgets 0 0 0
 	# B's namespace removed with records in flight: its nfsd stopped and
