@@ -7920,16 +7920,20 @@ static void svcsock_rx_default_sizing_test(struct kunit *test)
  * it starts, before its threads, so registering asks nothing of the
  * region and carves nothing; the threads set the floor, and the region
  * carved then (at the first connection, READ or NIC pool) is its floor
- * rounded up to a power of two: 262144 pages on 4 KiB pages, 65536 on
- * 16 KiB, 16384 on 64 KiB.
+ * rounded up to a power of two (262144 pages on 4 KiB pages, 65536 on
+ * 16 KiB, 16384 on 64 KiB) for the write partition, plus as much again
+ * for the read split: nfsd's READ floor is its region floor.
  */
 static void svcsock_rx_floor_follows_threads_test(struct kunit *test)
 {
 	const unsigned long ram = 1UL << 30;	/* pages: no RAM cap */
-	const unsigned long m8a = roundup_pow_of_two(svcsock_rx_m8a_floor(192));
+	const unsigned long f = svcsock_rx_m8a_floor(192);
 	struct rx_loan_consumer *rc;
-	unsigned long base;
+	unsigned long base, m8a, nr_read;
 
+	m8a = page_pool_rx_region_kunit_split_for(0, f, f, ram, &nr_read);
+	KUNIT_EXPECT_EQ(test, nr_read, roundup_pow_of_two(f));
+	KUNIT_EXPECT_EQ(test, m8a, 2 * roundup_pow_of_two(f));
 	svcsock_rx_skip_live_consumer(test);
 	rc = svcsock_rx_own_consumer(test, 0, 1U << 20);
 	base = page_pool_rx_region_kunit_carve_size(ram);
@@ -7952,16 +7956,18 @@ static void svcsock_rx_floor_follows_threads_test(struct kunit *test)
  * A 1-thread server started first, then a new 192-thread one, re-binds
  * the consumer: its floor is the new server's, and the region carved then
  * is that floor rounded up to a power of two (262144 pages on 4 KiB
- * pages, 65536 on 16 KiB, 16384 on 64 KiB).  Stopping the server
- * unregisters the consumer.
+ * pages, 65536 on 16 KiB, 16384 on 64 KiB), plus as much again for the
+ * read split.  Stopping the server unregisters the consumer.
  */
 static void svcsock_rx_consumer_rebind_test(struct kunit *test)
 {
 	const unsigned long ram = 1UL << 30;	/* pages: no RAM cap */
-	const unsigned long m8a = roundup_pow_of_two(svcsock_rx_m8a_floor(192));
+	const unsigned long f1 = svcsock_rx_m8a_floor(1);
+	const unsigned long f = svcsock_rx_m8a_floor(192);
 	struct rx_loan_consumer *rc;
-	unsigned long base;
+	unsigned long base, m8a, nr_read;
 
+	m8a = page_pool_rx_region_kunit_split_for(0, f, f, ram, &nr_read);
 	svcsock_rx_skip_live_consumer(test);
 	base = page_pool_rx_region_kunit_carve_size(ram);
 	if (base != page_pool_rx_region_kunit_size_for(0, 0, ram))
@@ -7970,8 +7976,8 @@ static void svcsock_rx_consumer_rebind_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, rc->registered);
 	/* one thread: 4 records of 1 MiB, each with its alignment page */
 	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_carve_size(ram),
-			page_pool_rx_region_kunit_size_for(0,
-					svcsock_rx_m8a_floor(1), ram));
+			page_pool_rx_region_kunit_split_for(0, f1, f1, ram,
+							    &nr_read));
 
 	KUNIT_EXPECT_PTR_EQ(test, svc_tcp_rx_kunit_consumer(192, 1U << 20), rc);
 	KUNIT_EXPECT_TRUE(test, rc->registered);

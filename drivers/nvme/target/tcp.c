@@ -37,6 +37,11 @@
 /* region pages the transport asks to be set aside for it */
 #define NVMET_TCP_RX_FLOOR		(SZ_4M >> PAGE_SHIFT)
 /*
+ * The most a port's READs in flight ask of the region's read split
+ * (nvmet_tcp_tx_read_floor()): 1 GiB of pages.
+ */
+#define NVMET_TCP_TX_READ_FLOOR_MAX	(SZ_1G >> PAGE_SHIFT)
+/*
  * The receive buffer a queue is held to once it receives region pages,
  * and its port's listener with it (rx_loan_hold_apply()): kNFSd's default.
  */
@@ -250,6 +255,8 @@ struct nvmet_tcp_queue {
 	void (*state_change)(struct sock *);
 	void (*write_space)(struct sock *);
 
+	/* READ data may be sent from the region's read split (ICReq) */
+	bool			tx_region;
 	/* rx_loan region receive: io_work context unless noted */
 	bool			rx_region;
 	bool			rx_kicked;	/* set by nvmet_tcp_rx_wake() */
@@ -445,11 +452,44 @@ static struct rx_loan_consumer nvmet_tcp_rx_consumer;
 static struct rx_loan_budget nvmet_tcp_rx_budget;
 static DEFINE_MUTEX(nvmet_tcp_rx_consumer_lock);
 static bool nvmet_tcp_rx_consumer_on;
+/* The largest port READ floor seen; under nvmet_tcp_rx_consumer_lock. */
+static unsigned long nvmet_tcp_tx_read_pages;
 
-/* Register the consumer, once, at the first queue that could lend. */
-static void nvmet_tcp_rx_consumer_start(void)
+/*
+ * The READ pages @port can have in flight at once: every queue it allows
+ * (NVMET_NR_QUEUES) full (its max_queue_size) of READs of the most a
+ * command transfers (its MDTS, within NVMET_TCP_MAXH2CDATA), at most
+ * NVMET_TCP_TX_READ_FLOOR_MAX.  The region's read split is sized when it
+ * is carved, before later queues connect: sized for queues live then, they
+ * would be served unconfined.
+ */
+static unsigned long nvmet_tcp_tx_read_floor(const struct nvmet_port *port)
 {
+	u64 qsize = port->max_queue_size > 0 ? port->max_queue_size :
+						NVMET_MAX_QUEUE_SIZE;
+	u64 bytes = port->mdts > 0 && port->mdts < 10 ?
+		    (u64)SZ_4K << port->mdts : NVMET_TCP_MAXH2CDATA;
+	u64 pages = (u64)NVMET_NR_QUEUES * qsize *
+		    DIV_ROUND_UP(min_t(u64, bytes, NVMET_TCP_MAXH2CDATA),
+				 PAGE_SIZE);
+
+	return min_t(u64, pages, NVMET_TCP_TX_READ_FLOOR_MAX);
+}
+
+/*
+ * Register the consumer, once, at the first queue that could lend or send
+ * from the region, with @port's READ floor; a port asking more raises it.
+ */
+static void nvmet_tcp_rx_consumer_start(const struct nvmet_port *port)
+{
+	unsigned long read_pages = nvmet_tcp_tx_read_floor(port);
+
 	mutex_lock(&nvmet_tcp_rx_consumer_lock);
+	if (read_pages > nvmet_tcp_tx_read_pages) {
+		nvmet_tcp_tx_read_pages = read_pages;
+		rx_loan_consumer_set_read_floor(&nvmet_tcp_rx_consumer,
+						read_pages);
+	}
 	if (!nvmet_tcp_rx_consumer_on) {
 		/* Region demand only: the region is carved at a queue's first use. */
 		rx_loan_consumer_register(&nvmet_tcp_rx_consumer,
@@ -1364,7 +1404,13 @@ static int nvmet_tcp_rx_finish(struct nvmet_tcp_cmd *cmd)
 	return -ENOMEM;
 }
 
-/* At ICReq: does this queue receive into region loans? */
+/*
+ * At ICReq: may this queue send READ data from the region, and does it
+ * receive into region loans?  The first is decided here alone (its first
+ * READ carves the region if need be, nvmet_tcp_tx_want()); the second
+ * needs a listed device's pool attached to the region, which a NIC that
+ * builds no page_pool (ENA) never has: receive stays unconfined there.
+ */
 static void nvmet_tcp_rx_setup(struct nvmet_tcp_queue *queue)
 {
 	struct rx_loan_budget *lb = &nvmet_tcp_rx_budget;
@@ -1378,9 +1424,10 @@ static void nvmet_tcp_rx_setup(struct nvmet_tcp_queue *queue)
 	 * region, then size the write budget from it.  The budget is only
 	 * sized on admission, which this queue would never reach at 0.
 	 */
-	nvmet_tcp_rx_consumer_start();
+	nvmet_tcp_rx_consumer_start(queue->port->nport);
+	queue->tx_region = true;
 	rx_loan_region_carve();
-	if (!rx_loan_region_size())
+	if (!rx_loan_region_lends())
 		goto stock;
 	rx_loan_budget_reconfigure(lb);
 	if (!READ_ONCE(lb->budget))
@@ -1501,8 +1548,9 @@ static bool nvmet_tcp_tx_want(struct nvmet_tcp_cmd *cmd, u32 len,
 	struct bio_vec *bv = cmd->tx_bv;
 	struct nvmet_tcp_tx *tx;
 
-	if (!cmd->queue->rx_region || nvme_is_write(cmd->req.cmd) ||
-	    !cmd->req.data_bvec_ok || (cmd->flags & NVMET_TCP_F_INIT_FAILED))
+	if (!cmd->queue->tx_region || nvme_is_write(cmd->req.cmd) ||
+	    !cmd->req.data_bvec_ok || (cmd->flags & NVMET_TCP_F_INIT_FAILED) ||
+	    !rx_loan_region_reads_on())
 		return false;
 	if (!rx_loan_tx_bind() || n > rx_loan_tx_span())
 		goto unconfined;
@@ -3420,16 +3468,17 @@ static void nvmet_tcp_accept_work(struct work_struct *w)
 	int ret;
 
 	/*
-	 * Once a queue has carved the region (nvmet_tcp_rx_setup()), hold the
-	 * listener's first window (rx_loan_hold_listen(), which leaves the
-	 * window scale stock); each connection is then held before its first
-	 * read (nvmet_tcp_set_queue_sock()).  A port none of whose queues can
-	 * lend (TLS only, or the region or budget gone) keeps or gets back a
-	 * stock listener.
+	 * Once a queue can lend (nvmet_tcp_rx_setup(): a listed device's pool
+	 * is attached to the region), hold the listener's first window
+	 * (rx_loan_hold_listen(), which leaves the window scale stock); each
+	 * connection is then held before its first read
+	 * (nvmet_tcp_set_queue_sock()).  A port none of whose queues can lend
+	 * (TLS only, no attached pool, as on ENA after a READ carved the
+	 * region, or the budget gone) keeps or gets back a stock listener.
 	 */
 	lends = net_eq(sock_net(port->sock->sk), &init_net) &&
 		!nvmet_port_secure_channel_required(port->nport) &&
-		rx_loan_region_size() && READ_ONCE(lb->budget);
+		rx_loan_region_lends() && READ_ONCE(lb->budget);
 	if (lends && !port->rx_hold.held) {
 		rx_loan_hold_listen(&port->rx_hold, port->sock->sk,
 				    NVMET_TCP_RX_RCVBUF,

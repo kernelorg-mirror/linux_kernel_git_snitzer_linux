@@ -56,13 +56,16 @@ DEFINE_STATIC_KEY_FALSE(page_pool_mem_providers);
  * pool created for a listed device allocates only from one physically
  * contiguous region that all listed devices share, allocated when the first
  * such pool is created, and its pages return to the region instead of the
- * page allocator.  rx_region_read_pages splits the last pages of the region
- * off as a read partition for NFSD READ payloads; the listed devices' pools
- * use the rest (the write partition).  Without a split both directions share
- * the one partition.  Each partition has its own free list, lock and
- * statistics.  An empty partition fails the allocation: that is the stall.
- * A page another holder still references when it is returned leaves the
- * region for good and is counted as escaped; it is never replaced.
+ * page allocator.  The last pages of the region are split off as a read
+ * partition for READ payloads (kNFSd's and nvmet-tcp's); the listed
+ * devices' pools use the rest (the write partition).  The split is computed
+ * from the READ floors the consumers register (rx_region_read_want()), or
+ * set by rx_region_read_pages, a test override.  Without either both
+ * directions share the one partition.  Each partition has its own free
+ * list, lock and statistics.  An empty partition fails the allocation:
+ * that is the stall.  A page another holder still references when it is
+ * returned leaves the region for good and is counted as escaped; it is
+ * never replaced.
  *
  * The region outlives its pools, so that taking a port down and up, or
  * resizing its rings, finds the same memory again and needs no second
@@ -113,6 +116,12 @@ static unsigned int rx_region_read_pages;
  */
 static unsigned long rx_region_demand;
 static unsigned long rx_region_nic;
+/*
+ * What the registered READ consumers can have out at once
+ * (page_pool_rx_region_read_demand()), under rx_region_mutex: the computed
+ * read split is sized from it.
+ */
+static unsigned long rx_region_read_demand;
 static DEFINE_XARRAY(rx_region_waiting);
 /* Of memory, the most the region takes: 1/RX_REGION_RAM_DIV. */
 #define RX_REGION_RAM_DIV	64
@@ -220,7 +229,7 @@ struct page_pool_rx_region {
 	u8 *owner;			/* each page's slot + 1, or 0: unmapped */
 	unsigned long base_pfn;
 	unsigned long nr;
-	unsigned int pools;		/* bound to this region; rx_region_mutex */
+	unsigned int pools;	/* bound to it; rx_region_mutex, READ_ONCE */
 	struct dentry *debugfs;
 	char dev[RX_REGION_DEV_LEN];
 };
@@ -445,6 +454,49 @@ static unsigned long rx_region_size_for(unsigned long nic,
 	return min(roundup_pow_of_two(nr), cap);
 }
 
+/*
+ * The read partition the READ consumers ask for (@read_demand pages out at
+ * once), on a host of @ram pages, when no read_pages override is set: at
+ * least one maximum READ, rounded up to a power of two as the region is,
+ * at most half the region's cap so that a write partition is always left.
+ * 0 while no consumer asks for any, or when half the cap could not hold one
+ * maximum READ.
+ */
+static unsigned long rx_region_read_want(unsigned long read_demand,
+					 unsigned long ram)
+{
+	unsigned long cap = rounddown_pow_of_two(max(ram / RX_REGION_RAM_DIV,
+						     1UL)) / 2;
+
+	if (!read_demand || cap < PAGE_POOL_RX_REGION_READ_MIN)
+		return 0;
+	read_demand = max_t(unsigned long, read_demand,
+			    PAGE_POOL_RX_REGION_READ_MIN);
+	return min(roundup_pow_of_two(read_demand), cap);
+}
+
+/*
+ * The region's computed size: the write partition, sized for rings of @nic
+ * pages and consumers asking @demand as rx_region_size_for() sizes a
+ * region, within what the read partition leaves of the cap, plus the read
+ * partition for @read_demand (rx_region_read_want()).  0 while nothing asks
+ * for a write partition: every READ consumer is a receive consumer too.
+ */
+static unsigned long rx_region_size_total(unsigned long nic,
+					  unsigned long demand,
+					  unsigned long read_demand,
+					  unsigned long ram)
+{
+	unsigned long cap = rounddown_pow_of_two(max(ram / RX_REGION_RAM_DIV,
+						     1UL));
+	unsigned long nr_read = rx_region_read_want(read_demand, ram);
+	unsigned long nr = rx_region_size_for(nic, demand, ram);
+
+	if (!nr)
+		return 0;
+	return min(nr, cap - nr_read) + nr_read;
+}
+
 /* The size a region carved now would have; lockless, may be stale. */
 static unsigned long rx_region_size_now(void)
 {
@@ -452,9 +504,10 @@ static unsigned long rx_region_size_now(void)
 
 	if (pages)
 		return pages;
-	return rx_region_size_for(READ_ONCE(rx_region_nic),
-				  READ_ONCE(rx_region_demand),
-				  totalram_pages());
+	return rx_region_size_total(READ_ONCE(rx_region_nic),
+				    READ_ONCE(rx_region_demand),
+				    READ_ONCE(rx_region_read_demand),
+				    totalram_pages());
 }
 
 /* The ring a pool's pages recycle through: its share of the NIC term. */
@@ -526,12 +579,32 @@ static void rx_region_part_init(struct page_pool_rx_region_part *p,
 	}
 }
 
-/* The read split requested for a region of @nr pages; 0 if it leaves none. */
-static unsigned long rx_region_read_split(unsigned long nr)
+/*
+ * The read split of a region of @nr pages, on a host of @ram pages: the
+ * read_pages override when set (0 if it leaves no write partition), else
+ * the computed split for @read_demand (rx_region_read_want()).  A computed
+ * split always leaves a write partition: within a region sized by pages,
+ * at most half of it, and none if that could not hold one maximum READ.
+ */
+static unsigned long rx_region_read_split_for(unsigned long nr,
+					      unsigned long read_demand,
+					      unsigned long ram)
 {
 	unsigned long nr_read = READ_ONCE(rx_region_read_pages);
 
-	return nr_read < nr ? nr_read : 0;
+	if (nr_read)
+		return nr_read < nr ? nr_read : 0;
+	nr_read = rx_region_read_want(read_demand, ram);
+	if (nr_read >= nr)
+		nr_read = nr / 2;
+	return nr_read >= PAGE_POOL_RX_REGION_READ_MIN ? nr_read : 0;
+}
+
+/* The read split for a region of @nr pages carved now; lockless. */
+static unsigned long rx_region_read_split(unsigned long nr)
+{
+	return rx_region_read_split_for(nr, READ_ONCE(rx_region_read_demand),
+					totalram_pages());
 }
 
 /*
@@ -684,7 +757,7 @@ static void page_pool_rx_region_reap(void)
 	lockdep_assert_held(&rx_region_mutex);
 	if (!r || r->pools || rx_region_reads_bound)
 		return;
-	if (rx_region_demand ||
+	if (rx_region_demand || rx_region_read_demand ||
 	    (rx_region_dev[0] && rx_region_size_now() == r->nr))
 		return;
 	for (k = 0; k < RX_REGION_PARTS; k++) {
@@ -756,7 +829,7 @@ static void page_pool_rx_region_unbind(struct page_pool *pool)
 			   rx_region_nic - rx_region_pool_ring(pool));
 	if (pool->rx_region && pool->rx_region == rx_region &&
 	    !WARN_ON_ONCE(!rx_region->pools))
-		rx_region->pools--;
+		WRITE_ONCE(rx_region->pools, rx_region->pools - 1);
 	pool->rx_region = NULL;
 	page_pool_rx_region_reap();
 	mutex_unlock(&rx_region_mutex);
@@ -796,7 +869,7 @@ page_pool_rx_region_get(const struct page_pool *pool)
 				     pool->p.nid == NUMA_NO_NODE ?
 				     numa_mem_id() : pool->p.nid, dev);
 	if (r)
-		r->pools++;
+		WRITE_ONCE(r->pools, r->pools + 1);
 	else if (!xa_insert(&rx_region_waiting, (unsigned long)pool,
 			    (void *)pool, GFP_KERNEL))
 		WRITE_ONCE(rx_region_nic,
@@ -829,7 +902,7 @@ static struct page_pool_rx_region *rx_region_carve_locked(int nid,
 	if (!r)
 		return NULL;
 	xa_for_each(&rx_region_waiting, idx, pool) {
-		r->pools++;
+		WRITE_ONCE(r->pools, r->pools + 1);
 		pool->rx_region_dev = rx_region_dev_get(r, pool);
 		/* The slot is seen before the region: pairs with smp_rmb(). */
 		smp_wmb();
@@ -864,6 +937,64 @@ void page_pool_rx_region_demand(long delta)
 	mutex_unlock(&rx_region_mutex);
 }
 EXPORT_SYMBOL_GPL(page_pool_rx_region_demand);
+
+/**
+ * page_pool_rx_region_read_demand - a READ consumer's floor comes or goes
+ * @delta: READ pages the consumer can have out at once (negative: gives up)
+ *
+ * The computed read split follows the sum (rx_region_read_want()) when no
+ * read_pages override is set, one partition shared by every READ consumer.
+ * Like page_pool_rx_region_demand(), it only counts toward the region a
+ * later carve makes: a region that exists keeps its split.
+ *
+ * Context: process context; may sleep.
+ */
+void page_pool_rx_region_read_demand(long delta)
+{
+	might_sleep();
+	mutex_lock(&rx_region_mutex);
+	WRITE_ONCE(rx_region_read_demand, rx_region_read_demand + delta);
+	if (delta < 0)
+		page_pool_rx_region_reap();
+	mutex_unlock(&rx_region_mutex);
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_read_demand);
+
+/**
+ * page_pool_rx_region_listed_any - is a network device listed for the region
+ *
+ * The region is off unless rx_region_dev is set or
+ * sunrpc.svc_tcp_rx_region_reads=Y: a READ consumer with no switch of its
+ * own (nvmet-tcp) carves a region only when a device is listed, whether or
+ * not that device's pools can attach to it.  Lockless.
+ */
+bool page_pool_rx_region_listed_any(void)
+{
+	return READ_ONCE(rx_region_dev[0]);
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_listed_any);
+
+/**
+ * page_pool_rx_region_pools_bound - is a listed device's pool attached
+ *
+ * Receive loans take region pages only from an attached pool.  On a NIC
+ * that builds no page_pool (AWS ENA) none ever attaches, so a region that
+ * a READ carved there serves READs only.  Lockless.
+ *
+ * Return: true while the region exists and a pool is bound to it.
+ */
+bool page_pool_rx_region_pools_bound(void)
+{
+	struct page_pool_rx_region *r;
+	bool bound;
+
+	rcu_read_lock();
+	r = rx_region_published();
+	bound = r && READ_ONCE(r->pools);
+	rcu_read_unlock();
+	return bound;
+}
+EXPORT_SYMBOL_GPL(page_pool_rx_region_pools_bound);
 
 /**
  * page_pool_rx_region_carve - carve the region for the pools that wait
@@ -926,8 +1057,11 @@ static void page_pool_rx_region_bind(struct page_pool *pool,
  * page_pool_rx_region_bind_reads - make sure the region exists for reads
  *
  * A READ consumer has no listed device, so it creates the region itself,
- * when rx_region_pages is set and no earlier allocation failed (never
- * retried).  Devices listed in rx_region_dev later bind to it.  The region
+ * at its configured or computed size (with the computed read split, when
+ * READ consumers registered floors), unless that is 0 or an earlier
+ * allocation failed (never retried).  On a NIC that builds no page_pool no
+ * pool ever binds, and the region serves READs only.  Devices listed in
+ * rx_region_dev later bind to it.  The region
  * is then placed on the calling thread's memory node (numa_mem_id()); a
  * device on another node that binds later reaches it across nodes, so a
  * READ consumer on a multi-node host should bind from a thread on the
@@ -1893,10 +2027,35 @@ EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_size_for);
 /* The size a carve now would compute, on a host of @ram pages. */
 unsigned long page_pool_rx_region_kunit_carve_size(unsigned long ram)
 {
-	return rx_region_size_for(READ_ONCE(rx_region_nic),
-				  READ_ONCE(rx_region_demand), ram);
+	return rx_region_size_total(READ_ONCE(rx_region_nic),
+				    READ_ONCE(rx_region_demand),
+				    READ_ONCE(rx_region_read_demand), ram);
 }
 EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_carve_size);
+
+/*
+ * The computed region for rings of @nic pages, @demand and @read_demand,
+ * on a host of @ram pages: its size, and its read split in *@nr_read.
+ */
+unsigned long page_pool_rx_region_kunit_split_for(unsigned long nic,
+						  unsigned long demand,
+						  unsigned long read_demand,
+						  unsigned long ram,
+						  unsigned long *nr_read)
+{
+	unsigned long nr = rx_region_size_total(nic, demand, read_demand, ram);
+
+	*nr_read = nr ? rx_region_read_split_for(nr, read_demand, ram) : 0;
+	return nr;
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_split_for);
+
+/* The READ demand the registered consumers ask for now. */
+unsigned long page_pool_rx_region_kunit_read_demand(void)
+{
+	return READ_ONCE(rx_region_read_demand);
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_read_demand);
 
 /* The overrides and the failure flag, for a test to restore later. */
 void page_pool_rx_region_kunit_params(unsigned int *pages,
@@ -1947,7 +2106,7 @@ int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
 	if (!ret) {
 		rx_region_publish(r, free, pcp, page_to_pfn(base), nr, nr_read,
 				  "kunit");
-		r->pools = 1;
+		WRITE_ONCE(r->pools, 1);
 	}
 	mutex_unlock(&rx_region_mutex);
 	if (ret) {
@@ -2133,7 +2292,7 @@ struct page_pool *page_pool_rx_region_kunit_pool(void)
 		return pool;
 	/* Counted as page_pool_rx_region_get() counts it; unbind uncounts. */
 	mutex_lock(&rx_region_mutex);
-	r->pools++;
+	WRITE_ONCE(r->pools, r->pools + 1);
 	mutex_unlock(&rx_region_mutex);
 	page_pool_rx_region_bind(pool, r, pool->p.pool_size);
 	return pool;
@@ -3983,7 +4142,7 @@ static const struct kernel_param_ops rx_region_read_pages_ops = {
 };
 module_param_cb(rx_region_read_pages, &rx_region_read_pages_ops, NULL, 0644);
 MODULE_PARM_DESC(rx_region_read_pages,
-		 "Pages of the fixed receive region split off for reads (0: auto, reads and writes share it; else at least one maximum READ); -EBUSY while the region exists; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one");
+		 "Pages of the fixed receive region split off for reads (0: auto, computed from the READ consumers' floors when carved, reads and writes share it while none asks; else at least one maximum READ, a test override); -EBUSY while the region exists; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one");
 
 static ssize_t rx_region_cfg_read(struct file *file, char __user *ubuf,
 				  size_t count, loff_t *ppos)

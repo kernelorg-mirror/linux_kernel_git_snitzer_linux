@@ -427,7 +427,8 @@ static struct rx_loan_budget *nvmet_tcp_kunit_budget(struct kunit *test,
 	spin_lock_bh(&lb->lock);
 	lb->contended = false;
 	spin_unlock_bh(&lb->lock);
-	ret = kunit_add_action_or_reset(test, nvmet_tcp_kunit_region_reset, NULL);
+	ret = kunit_add_action_or_reset(test, nvmet_tcp_kunit_region_reset,
+					NULL);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	rx_loan_kunit_region(1UL << 16, 0);
 	return lb;
@@ -1060,6 +1061,7 @@ static void nvmet_tcp_kunit_hold_release(struct kunit *test)
 	queue->data_digest = true;
 	nvmet_tcp_rx_setup(queue);
 	KUNIT_EXPECT_FALSE(test, queue->rx_region);
+	KUNIT_EXPECT_FALSE(test, queue->tx_region);
 	KUNIT_EXPECT_FALSE(test, sk->sk_userlocks & SOCK_RCVBUF_LOCK);
 	KUNIT_EXPECT_EQ(test, READ_ONCE(tcp_sk(sk)->scaling_ratio_max), 0);
 	KUNIT_EXPECT_GE(test, READ_ONCE(sk->sk_rcvbuf),
@@ -1171,7 +1173,8 @@ static void nvmet_tcp_kunit_own_budget(struct kunit *test)
 	/* Actions run last first: kNFSd's restore after the region's. */
 	ret = kunit_add_action_or_reset(test, nvmet_tcp_kunit_knfsd_restore, k);
 	KUNIT_ASSERT_EQ(test, ret, 0);
-	ret = kunit_add_action_or_reset(test, nvmet_tcp_kunit_region_reset, NULL);
+	ret = kunit_add_action_or_reset(test, nvmet_tcp_kunit_region_reset,
+					NULL);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	rx_loan_kunit_region(1UL << 16, 1UL << 12);
 	KUNIT_ASSERT_EQ(test, nvmet_tcp_rx_budget_init(lb), 0);
@@ -1250,7 +1253,7 @@ static struct rx_loan_budget *nvmet_tcp_kunit_read_budget(struct kunit *test)
 	return lb;
 }
 
-/* A READ of @bytes on a queue that lends, to a namespace taking bvecs. */
+/* A READ of @bytes on a READ-eligible queue, to a namespace taking bvecs. */
 static struct nvmet_tcp_cmd *nvmet_tcp_kunit_read(struct kunit *test,
 						  u32 bytes)
 {
@@ -1264,7 +1267,8 @@ static struct nvmet_tcp_cmd *nvmet_tcp_kunit_read(struct kunit *test,
 	KUNIT_ASSERT_NOT_NULL(test, sqe);
 	KUNIT_ASSERT_NOT_NULL(test, ns);
 	cmd->queue = nvmet_tcp_kunit_queue(test);
-	cmd->queue->rx_region = true;
+	/* Sent from the region whether or not the queue lends on receive. */
+	cmd->queue->tx_region = true;
 	sqe->common.opcode = nvme_cmd_read;
 	ns->data_bvec_ok = true;
 	cmd->req.cmd = sqe;
@@ -1695,7 +1699,8 @@ static void nvmet_tcp_kunit_tx_ineligible(struct kunit *test)
 	write = nvmet_tcp_kunit_read(test, PAGE_SIZE);
 	write->req.cmd->common.opcode = nvme_cmd_write;
 	stock = nvmet_tcp_kunit_read(test, PAGE_SIZE);
-	stock->queue->rx_region = false;
+	stock->queue->tx_region = false;
+	stock->queue->rx_region = true;
 	sgl = nvmet_tcp_kunit_read(test, PAGE_SIZE);
 	sgl->req.data_bvec_ok = false;
 	nvmet_tcp_tx_sum(&base);
@@ -1706,6 +1711,285 @@ static void nvmet_tcp_kunit_tx_ineligible(struct kunit *test)
 	nvmet_tcp_kunit_tx_delta(&base, &d);
 	KUNIT_EXPECT_EQ(test, d.confined, 0ULL);
 	KUNIT_EXPECT_EQ(test, d.unconfined, 0ULL);
+}
+
+/* The region's parameters, put back as the test found them. */
+struct nvmet_tcp_kunit_params {
+	unsigned int pages;
+	unsigned int read_pages;
+	bool failed;
+};
+
+static void nvmet_tcp_kunit_params_restore(void *data)
+{
+	struct nvmet_tcp_kunit_params *st = data;
+
+	page_pool_rx_region_kunit_config(st->pages, st->read_pages, st->failed);
+}
+
+/*
+ * The region's computed read split, one rule for every READ consumer:
+ * their READ floors rounded up to a power of two, at most half the
+ * region's cap, added to the write partition; none while no consumer asks
+ * for one, or where half the cap could not hold one maximum READ.  A
+ * read_pages override wins over it.
+ */
+static void nvmet_tcp_kunit_read_split(struct kunit *test)
+{
+	const unsigned long rmin = PAGE_POOL_RX_REGION_READ_MIN;
+	const unsigned long ram = 1UL << 24;	/* pages: cap 1UL << 18 */
+	const unsigned long cap = 1UL << 18;
+	struct nvmet_tcp_kunit_params *st;
+	unsigned long nr, nr_read, nr_write, want, small;
+	int ret;
+
+	/* No READ consumer: no split, the region as sized before. */
+	nr = page_pool_rx_region_kunit_split_for(0, NVMET_TCP_RX_FLOOR, 0,
+						 ram, &nr_read);
+	nr_write = page_pool_rx_region_kunit_size_for(0, NVMET_TCP_RX_FLOOR,
+						      ram);
+	KUNIT_EXPECT_EQ(test, nr, nr_write);
+	KUNIT_EXPECT_EQ(test, nr_read, 0UL);
+
+	/* nvmet-tcp alone on a NIC with no pool: rx floor + READ floor. */
+	nr = page_pool_rx_region_kunit_split_for(0, NVMET_TCP_RX_FLOOR,
+						 NVMET_TCP_TX_READ_FLOOR_MAX,
+						 ram, &nr_read);
+	want = roundup_pow_of_two((unsigned long)NVMET_TCP_TX_READ_FLOOR_MAX);
+	KUNIT_EXPECT_EQ(test, nr_read, min(want, cap / 2));
+	KUNIT_EXPECT_EQ(test, nr, nr_read + nr_write);
+	KUNIT_EXPECT_LE(test, nr, cap);
+
+	/* A small READ floor still gets one maximum READ, rounded. */
+	nr = page_pool_rx_region_kunit_split_for(0, NVMET_TCP_RX_FLOOR, 1,
+						 ram, &nr_read);
+	KUNIT_EXPECT_EQ(test, nr_read, roundup_pow_of_two(rmin));
+
+	/* Write demand past what the split leaves is cut to fit the cap. */
+	nr = page_pool_rx_region_kunit_split_for(0, cap, cap, ram, &nr_read);
+	KUNIT_EXPECT_EQ(test, nr_read, cap / 2);
+	KUNIT_EXPECT_EQ(test, nr, cap);
+
+	/* Half the cap too small for one maximum READ: no split. */
+	small = 64 * roundup_pow_of_two(rmin);		/* RAM/64 */
+	nr = page_pool_rx_region_kunit_split_for(0, NVMET_TCP_RX_FLOOR,
+						 NVMET_TCP_TX_READ_FLOOR_MAX,
+						 small, &nr_read);
+	KUNIT_EXPECT_EQ(test, nr_read, 0UL);
+
+	/* The read_pages override wins. */
+	st = kunit_kzalloc(test, sizeof(*st), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, st);
+	page_pool_rx_region_kunit_params(&st->pages, &st->read_pages,
+					 &st->failed);
+	ret = kunit_add_action_or_reset(test, nvmet_tcp_kunit_params_restore,
+					st);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	page_pool_rx_region_kunit_config(st->pages, 2 * rmin, st->failed);
+	nr = page_pool_rx_region_kunit_split_for(0, NVMET_TCP_RX_FLOOR,
+						 NVMET_TCP_TX_READ_FLOOR_MAX,
+						 ram, &nr_read);
+	KUNIT_EXPECT_EQ(test, nr_read, 2 * rmin);
+}
+
+static void nvmet_tcp_kunit_consumer_gone(void *data)
+{
+	struct rx_loan_consumer *c = data;
+
+	if (READ_ONCE(c->registered))
+		rx_loan_consumer_unregister(c);
+	rx_loan_consumer_destroy(c);
+}
+
+/*
+ * A consumer's READ floor counts toward the split: its region floor until
+ * it sets its own (kNFSd never does: its READ floor follows its threads as
+ * its region floor does), then its own; both come off when it goes.
+ */
+static void nvmet_tcp_kunit_read_floor_consumer(struct kunit *test)
+{
+	struct rx_loan_consumer *c = kunit_kzalloc(test, sizeof(*c),
+						   GFP_KERNEL);
+	unsigned long base = page_pool_rx_region_kunit_read_demand();
+	int ret;
+
+	KUNIT_ASSERT_NOT_NULL(test, c);
+	ret = kunit_add_action_or_reset(test, nvmet_tcp_kunit_consumer_gone, c);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	rx_loan_consumer_register(c, NULL, "kunit", 3000);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_read_demand(),
+			base + 3000);
+	rx_loan_consumer_set_floor(c, 5000);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_read_demand(),
+			base + 5000);
+	rx_loan_consumer_set_read_floor(c, 100);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_read_demand(),
+			base + 100);
+	/* Its own READ floor set, the region floor no longer moves it. */
+	rx_loan_consumer_set_floor(c, 7000);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_read_demand(),
+			base + 100);
+	rx_loan_consumer_unregister(c);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_read_demand(), base);
+}
+
+/*
+ * A port's READ floor: every queue full of maximum READs, its MDTS within
+ * NVMET_TCP_MAXH2CDATA, clamped to NVMET_TCP_TX_READ_FLOOR_MAX.
+ */
+static void nvmet_tcp_kunit_read_floor_port(struct kunit *test)
+{
+	struct nvmet_port port = { .max_queue_size = -1 };
+
+	/* Defaults (1024 deep, MDTS unlimited): the clamp. */
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_tx_read_floor(&port),
+			(unsigned long)NVMET_TCP_TX_READ_FLOOR_MAX);
+	/* 4 deep, 8 KiB transfers: 128 queues x 4 x 2 pages on 4 KiB. */
+	port.max_queue_size = 4;
+	port.mdts = 1;
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_tx_read_floor(&port),
+			(unsigned long)NVMET_NR_QUEUES * 4 *
+			DIV_ROUND_UP(SZ_8K, PAGE_SIZE));
+	/* An MDTS past NVMET_TCP_MAXH2CDATA is held to it. */
+	port.max_queue_size = 1;
+	port.mdts = 12;
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_tx_read_floor(&port),
+			(unsigned long)NVMET_NR_QUEUES *
+			DIV_ROUND_UP(NVMET_TCP_MAXH2CDATA, PAGE_SIZE));
+}
+
+/* Put the module's consumer back as the test found it. */
+struct nvmet_tcp_kunit_consumer_state {
+	bool on;
+	unsigned long read_pages;
+	unsigned long read_floor;
+	bool read_floor_own;
+};
+
+static void nvmet_tcp_kunit_consumer_restore(void *data)
+{
+	struct nvmet_tcp_kunit_consumer_state *st = data;
+
+	mutex_lock(&nvmet_tcp_rx_consumer_lock);
+	if (nvmet_tcp_rx_consumer_on && !st->on) {
+		rx_loan_consumer_unregister(&nvmet_tcp_rx_consumer);
+		nvmet_tcp_rx_consumer_on = false;
+	}
+	nvmet_tcp_tx_read_pages = st->read_pages;
+	nvmet_tcp_rx_consumer.read_floor = st->read_floor;
+	nvmet_tcp_rx_consumer.read_floor_own = st->read_floor_own;
+	mutex_unlock(&nvmet_tcp_rx_consumer_lock);
+}
+
+/*
+ * A queue at ICReq, on a port with nvmet's defaults; the module's consumer
+ * is put back as found at test end.
+ */
+static struct nvmet_tcp_queue *
+nvmet_tcp_kunit_icreq_queue(struct kunit *test)
+{
+	struct nvmet_tcp_kunit_consumer_state *st;
+	struct nvmet_tcp_queue *queue = nvmet_tcp_kunit_queue(test);
+	struct nvmet_tcp_port *port = kunit_kzalloc(test, sizeof(*port),
+						    GFP_KERNEL);
+	struct nvmet_port *nport = kunit_kzalloc(test, sizeof(*nport),
+						 GFP_KERNEL);
+	int ret;
+
+	st = kunit_kzalloc(test, sizeof(*st), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, port);
+	KUNIT_ASSERT_NOT_NULL(test, nport);
+	KUNIT_ASSERT_NOT_NULL(test, st);
+	nport->max_queue_size = -1;
+	port->nport = nport;
+	queue->port = port;
+	mutex_lock(&nvmet_tcp_rx_consumer_lock);
+	st->on = nvmet_tcp_rx_consumer_on;
+	st->read_pages = nvmet_tcp_tx_read_pages;
+	st->read_floor = nvmet_tcp_rx_consumer.read_floor;
+	st->read_floor_own = nvmet_tcp_rx_consumer.read_floor_own;
+	mutex_unlock(&nvmet_tcp_rx_consumer_lock);
+	ret = kunit_add_action_or_reset(test, nvmet_tcp_kunit_consumer_restore,
+					st);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	return queue;
+}
+
+/* TLS or a data digest: neither READ-eligible nor lending, ever. */
+static void nvmet_tcp_kunit_setup_gates(struct kunit *test)
+{
+	struct nvmet_tcp_queue *queue = nvmet_tcp_kunit_icreq_queue(test);
+	unsigned long base = page_pool_rx_region_kunit_read_demand();
+
+	queue->data_digest = true;
+	nvmet_tcp_rx_setup(queue);
+	KUNIT_EXPECT_FALSE(test, queue->tx_region);
+	KUNIT_EXPECT_FALSE(test, queue->rx_region);
+	queue->data_digest = false;
+	queue->tls_pskid = 1;
+	nvmet_tcp_rx_setup(queue);
+	KUNIT_EXPECT_FALSE(test, queue->tx_region);
+	KUNIT_EXPECT_FALSE(test, queue->rx_region);
+	queue->tls_pskid = 0;
+	/* Neither registered a READ floor. */
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_read_demand(), base);
+}
+
+/*
+ * No listed device's pool attached (ENA: none ever is): the queue is
+ * READ-eligible, registers nvmet-tcp's READ floor, and stays stock on
+ * receive, holding nothing.
+ */
+static void nvmet_tcp_kunit_setup_no_pool(struct kunit *test)
+{
+	struct nvmet_tcp_queue *queue;
+	unsigned long base;
+	struct sock *sk;
+
+	if (page_pool_rx_region_exists())
+		kunit_skip(test, "a region exists");
+	queue = nvmet_tcp_kunit_icreq_queue(test);
+	sk = queue->sock->sk;
+	base = page_pool_rx_region_kunit_read_demand();
+	if (nvmet_tcp_rx_consumer_on)
+		kunit_skip(test, "nvmet-tcp's consumer is live");
+	sk->sk_userlocks |= SOCK_RCVBUF_LOCK;	/* a held listener's */
+	nvmet_tcp_rx_setup(queue);
+	KUNIT_EXPECT_TRUE(test, queue->tx_region);
+	KUNIT_EXPECT_FALSE(test, queue->rx_region);
+	KUNIT_EXPECT_NULL(test, queue->rx_budget);
+	KUNIT_EXPECT_FALSE(test, sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+	KUNIT_EXPECT_FALSE(test, rx_loan_region_lends());
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_read_demand(),
+			base + NVMET_TCP_TX_READ_FLOOR_MAX);
+	/* Nothing carved at ICReq: a READ carves it (rx_loan_tx_bind()). */
+	KUNIT_EXPECT_FALSE(test, page_pool_rx_region_exists());
+}
+
+static void nvmet_tcp_kunit_budget_resize(void *data)
+{
+	rx_loan_budget_reconfigure(data);
+}
+
+/* A listed device's pool attached (the stand-in region): as before. */
+static void nvmet_tcp_kunit_setup_pool(struct kunit *test)
+{
+	struct nvmet_tcp_queue *queue = nvmet_tcp_kunit_icreq_queue(test);
+	int ret;
+
+	/* Actions run last first: the budget resized after the region goes. */
+	ret = kunit_add_action_or_reset(test, nvmet_tcp_kunit_budget_resize,
+					&nvmet_tcp_rx_budget);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	ret = kunit_add_action_or_reset(test, nvmet_tcp_kunit_region_reset,
+					NULL);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	rx_loan_kunit_region(1UL << 16, 1UL << 12);
+	KUNIT_ASSERT_TRUE(test, rx_loan_region_lends());
+	nvmet_tcp_rx_setup(queue);
+	KUNIT_EXPECT_TRUE(test, queue->tx_region);
+	KUNIT_EXPECT_TRUE(test, queue->rx_region);
+	KUNIT_EXPECT_PTR_EQ(test, queue->rx_budget, &nvmet_tcp_rx_budget);
 }
 
 static struct kunit_case nvmet_tcp_rx_loan_cases[] = {
@@ -1743,6 +2027,12 @@ static struct kunit_case nvmet_tcp_rx_loan_cases[] = {
 	KUNIT_CASE(nvmet_tcp_kunit_tx_linked),
 	KUNIT_CASE(nvmet_tcp_kunit_tx_link_refused),
 	KUNIT_CASE(nvmet_tcp_kunit_tx_link_copied),
+	KUNIT_CASE(nvmet_tcp_kunit_read_split),
+	KUNIT_CASE(nvmet_tcp_kunit_read_floor_consumer),
+	KUNIT_CASE(nvmet_tcp_kunit_read_floor_port),
+	KUNIT_CASE(nvmet_tcp_kunit_setup_gates),
+	KUNIT_CASE(nvmet_tcp_kunit_setup_no_pool),
+	KUNIT_CASE(nvmet_tcp_kunit_setup_pool),
 	{}
 };
 

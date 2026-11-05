@@ -1431,6 +1431,18 @@ unsigned long rx_loan_region_size(void)
 }
 EXPORT_SYMBOL_GPL(rx_loan_region_size);
 
+/*
+ * The READ pages @c asks the read split to hold: its own READ floor once
+ * set (nvmet-tcp: its ports' READs in flight), else its region floor
+ * (sunrpc: its threads' maximum payloads, which bound its READs too).
+ * Under rx_loan_consumers_lock.
+ */
+static unsigned long
+rx_loan_consumer_read_floor(const struct rx_loan_consumer *c)
+{
+	return c->read_floor_own ? c->read_floor : c->floor;
+}
+
 /**
  * rx_loan_consumer_register - a consumer of region loans starts
  * @c: the consumer's record, held until rx_loan_consumer_unregister()
@@ -1476,6 +1488,7 @@ int rx_loan_consumer_register(struct rx_loan_consumer *c,
 	atomic_long_set(&c->share_denied, 0);
 	mutex_lock(&rx_loan_consumers_lock);
 	page_pool_rx_region_demand(floor);
+	page_pool_rx_region_read_demand(rx_loan_consumer_read_floor(c));
 	list_add_tail(&c->node, &rx_loan_consumers);
 	if (ln)
 		ln->nr_consumers++;
@@ -1525,6 +1538,7 @@ void rx_loan_consumer_unregister(struct rx_loan_consumer *c)
 	WRITE_ONCE(rx_loan_nr_consumers, rx_loan_nr_consumers - 1);
 	WRITE_ONCE(c->registered, false);
 	page_pool_rx_region_demand(-(long)c->floor);
+	page_pool_rx_region_read_demand(-(long)rx_loan_consumer_read_floor(c));
 	mutex_unlock(&rx_loan_consumers_lock);
 	rx_loan_consumer_uncache(c);
 }
@@ -1567,11 +1581,42 @@ void rx_loan_consumer_set_floor(struct rx_loan_consumer *c,
 	mutex_lock(&rx_loan_consumers_lock);
 	delta = (long)floor - (long)c->floor;
 	c->floor = floor;
-	if (c->registered && delta)
+	if (c->registered && delta) {
 		page_pool_rx_region_demand(delta);
+		if (!c->read_floor_own)
+			page_pool_rx_region_read_demand(delta);
+	}
 	mutex_unlock(&rx_loan_consumers_lock);
 }
 EXPORT_SYMBOL_GPL(rx_loan_consumer_set_floor);
+
+/**
+ * rx_loan_consumer_set_read_floor - a consumer's READs in flight
+ * @c: a consumer, registered or not
+ * @read_floor: READ pages it can have out at once
+ *
+ * The region's read split is computed, when it is carved, from what the
+ * READ consumers registered can have out at once: one partition, shared.
+ * A consumer that never sets its own READ floor counts its region floor
+ * there.  Like the region floor, it no longer matters once the region is
+ * carved: the split is fixed then.
+ *
+ * Context: process context; may sleep.  Control path only.
+ */
+void rx_loan_consumer_set_read_floor(struct rx_loan_consumer *c,
+				     unsigned long read_floor)
+{
+	long delta;
+
+	mutex_lock(&rx_loan_consumers_lock);
+	delta = (long)read_floor - (long)rx_loan_consumer_read_floor(c);
+	c->read_floor = read_floor;
+	c->read_floor_own = true;
+	if (c->registered && delta)
+		page_pool_rx_region_read_demand(delta);
+	mutex_unlock(&rx_loan_consumers_lock);
+}
+EXPORT_SYMBOL_GPL(rx_loan_consumer_set_read_floor);
 
 /**
  * rx_loan_region_carve - carve the region for a consumer's first admission
@@ -1590,6 +1635,24 @@ void rx_loan_region_carve(void)
 	page_pool_rx_region_carve();
 }
 EXPORT_SYMBOL_GPL(rx_loan_region_carve);
+
+/**
+ * rx_loan_region_lends - can receive loans take region pages
+ *
+ * Receive loans take region pages from a listed device's pool attached to
+ * the region: without one (no region yet, or a NIC that builds no
+ * page_pool, such as ENA, whose region a READ carved) a transport stays
+ * stock on receive and takes no receive hold.  Lockless.
+ */
+bool rx_loan_region_lends(void)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (READ_ONCE(rx_loan_kunit_region_pages))
+		return true;
+#endif
+	return page_pool_rx_region_pools_bound();
+}
+EXPORT_SYMBOL_GPL(rx_loan_region_lends);
 
 /**
  * rx_loan_region_write_default - a namespace's write budget by default
@@ -2786,6 +2849,26 @@ unsigned long rx_loan_tx_span(void)
 	return page_pool_rx_region_capacity(true);
 }
 EXPORT_SYMBOL_GPL(rx_loan_tx_span);
+
+/**
+ * rx_loan_region_reads_on - may READ sends use the region
+ *
+ * The region is off unless rx_region_dev is set or
+ * sunrpc.svc_tcp_rx_region_reads=Y: a READ consumer with no switch of its
+ * own (nvmet-tcp) sends from the region only when it exists or a device
+ * is listed for it, and then its first READ carves it if need be
+ * (rx_loan_tx_bind()).  Lockless.
+ */
+bool rx_loan_region_reads_on(void)
+{
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (rx_loan_kunit_tx_stack || READ_ONCE(rx_loan_kunit_region_pages))
+		return true;
+#endif
+	return page_pool_rx_region_exists() ||
+	       page_pool_rx_region_listed_any();
+}
+EXPORT_SYMBOL_GPL(rx_loan_region_reads_on);
 
 /*
  * The READ partition's descriptors and links, made once a boot by the first

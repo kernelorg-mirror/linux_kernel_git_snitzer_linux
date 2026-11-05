@@ -518,6 +518,13 @@ struct rx_loan_consumer {
 	struct list_head	node;
 	struct rx_loan_net	*ln;	/* its namespace's budgets, or NULL */
 	unsigned long		floor;	/* pages asked of the region */
+	/*
+	 * READ pages it can have out at once, toward the computed read
+	 * split: its own (rx_loan_consumer_set_read_floor()) once set, else
+	 * @floor.
+	 */
+	unsigned long		read_floor;
+	bool			read_floor_own;
 	bool			registered;
 	atomic_long_t		out_write ____cacheline_aligned_in_smp;
 	atomic_long_t		out_read;
@@ -562,7 +569,11 @@ void rx_loan_consumer_copies_read(const struct rx_loan_consumer *c,
 				  u64 *records, u64 *bytes);
 void rx_loan_consumer_set_floor(struct rx_loan_consumer *c,
 				unsigned long floor);
+void rx_loan_consumer_set_read_floor(struct rx_loan_consumer *c,
+				     unsigned long read_floor);
 void rx_loan_region_carve(void);
+bool rx_loan_region_lends(void);
+bool rx_loan_region_reads_on(void);
 unsigned long rx_loan_region_write_default(void);
 unsigned long rx_loan_consumer_share(const struct rx_loan_consumer *c);
 long rx_loan_consumer_out(const struct rx_loan_consumer *c, bool read);

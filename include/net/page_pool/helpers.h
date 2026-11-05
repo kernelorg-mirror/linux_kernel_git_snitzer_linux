@@ -356,6 +356,9 @@ static inline bool page_pool_rx_region_exists(void)
 unsigned long page_pool_rx_region_read_pages(void);
 bool page_pool_rx_region_bind_reads(void);
 void page_pool_rx_region_demand(long delta);
+void page_pool_rx_region_read_demand(long delta);
+bool page_pool_rx_region_listed_any(void);
+bool page_pool_rx_region_pools_bound(void);
 void page_pool_rx_region_carve(void);
 unsigned int page_pool_rx_region_take_pages(bool read, struct page **pages,
 					    unsigned int n);
@@ -370,6 +373,12 @@ unsigned long page_pool_rx_region_kunit_size_for(unsigned long nic,
 						 unsigned long demand,
 						 unsigned long ram);
 unsigned long page_pool_rx_region_kunit_carve_size(unsigned long ram);
+unsigned long page_pool_rx_region_kunit_split_for(unsigned long nic,
+						  unsigned long demand,
+						  unsigned long read_demand,
+						  unsigned long ram,
+						  unsigned long *nr_read);
+unsigned long page_pool_rx_region_kunit_read_demand(void);
 void page_pool_rx_region_kunit_params(unsigned int *pages,
 				      unsigned int *read_pages, bool *failed);
 void page_pool_rx_region_kunit_config(unsigned int pages,
@@ -411,6 +420,20 @@ static inline unsigned long page_pool_rx_region_read_pages(void)
 
 static inline void page_pool_rx_region_demand(long delta)
 {
+}
+
+static inline void page_pool_rx_region_read_demand(long delta)
+{
+}
+
+static inline bool page_pool_rx_region_listed_any(void)
+{
+	return false;
+}
+
+static inline bool page_pool_rx_region_pools_bound(void)
+{
+	return false;
 }
 
 static inline void page_pool_rx_region_carve(void)
