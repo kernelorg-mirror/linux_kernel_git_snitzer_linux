@@ -662,6 +662,18 @@ svc_pool_idle_del(struct svc_pool_ext *ext, struct svc_pool *pool,
 EXPORT_SYMBOL_IF_KUNIT(svc_pool_idle_del);
 
 /*
+ * LAB ONLY switch, set on the boot line.  Y: a pool that cannot claim one
+ * of its own idle threads wakes a sibling pool's thread, and idle threads
+ * take work from sibling pools.  N: a pool with threads keeps its work on
+ * them, so the work a CPU's completions queue is served on that CPU, and
+ * a thread takes work only from the pools without threads that it serves.
+ */
+static bool svc_pool_siblings __read_mostly = true;
+module_param(svc_pool_siblings, bool, 0444);
+MODULE_PARM_DESC(svc_pool_siblings,
+		 "LAB ONLY: N keeps a pool's work on its own threads (no sibling wake or steal)");
+
+/*
  * Does @pool share its run with other pools, or reach other nodes?  An
  * unpooled service has one pool; otherwise this reads only @pool's own
  * ext, not the global map.
@@ -671,9 +683,26 @@ static bool svc_pool_has_siblings(const struct svc_serv *serv,
 {
 	const struct svc_pool_ext *ext = &serv->sv_pool_ext[pool->sp_id];
 
+	/* svc_pool_siblings=N: a pool with threads keeps its work on them */
+	if (!READ_ONCE(svc_pool_siblings) && READ_ONCE(pool->sp_nrthreads))
+		return false;
 	return serv->sv_is_pooled &&
 	       ((READ_ONCE(ext->range) & 0xffff) > 1 ||
 		READ_ONCE(ext->far) != pool->sp_id);
+}
+
+/*
+ * May a thread of @pool take work from other pools?  With
+ * svc_pool_siblings=N, only from the pools without threads that it
+ * serves, and svc_pool_steal_scan() then walks only those.
+ */
+static bool svc_pool_may_steal(const struct svc_serv *serv,
+			       const struct svc_pool *pool)
+{
+	if (READ_ONCE(svc_pool_siblings))
+		return svc_pool_has_siblings(serv, pool);
+	return serv->sv_is_pooled &&
+	       READ_ONCE(serv->sv_pool_ext[pool->sp_id].gap);
 }
 
 /*
@@ -960,7 +989,10 @@ svc_pool_steal_scan(struct svc_pool *pools, const struct svc_pool_ext *ext,
 	unsigned int gap = READ_ONCE(ext[self].gap);
 	unsigned int back = gap >> 16, block = back + (gap & 0xffff);
 	unsigned int range = READ_ONCE(ext[self].range);
-	unsigned int span = svc_pool_local_span(ext, self, range, full);
+	bool siblings = READ_ONCE(svc_pool_siblings);
+	/* svc_pool_siblings=N: only the pools without threads @self serves */
+	unsigned int span = siblings ?
+		svc_pool_local_span(ext, self, range, full) : 0;
 	unsigned int peer = self, far = self;
 	unsigned int k, n, i, r, nr, lo[2], hi[2], frange, fbase, last;
 	const unsigned long *fmap;
@@ -977,7 +1009,7 @@ svc_pool_steal_scan(struct svc_pool *pools, const struct svc_pool_ext *ext,
 		if (svc_pool_steal_one(&pools[peer], xprtp, what))
 			return &pools[peer];
 	}
-	for (n = 0; full && n < MAX_NUMNODES; n++) {
+	for (n = 0; full && siblings && n < MAX_NUMNODES; n++) {
 		far = svc_pool_next_far(ext, self, far);
 		if (far == UINT_MAX)
 			break;
@@ -2082,7 +2114,7 @@ static bool svc_thread_sibling_work(struct svc_rqst *rqstp,
 {
 	struct svc_serv *serv = rqstp->rq_server;
 
-	if (!svc_pool_has_siblings(serv, rqstp->rq_pool))
+	if (!svc_pool_may_steal(serv, rqstp->rq_pool))
 		return false;
 	/* transports and rtc calls, in one pass */
 	cyc->walked = true;
@@ -2101,7 +2133,7 @@ static struct svc_xprt *svc_thread_steal(struct svc_rqst *rqstp,
 	struct svc_pool *pool = cyc->found;
 	unsigned int id;
 
-	if (!svc_pool_has_siblings(serv, rqstp->rq_pool))
+	if (!svc_pool_may_steal(serv, rqstp->rq_pool))
 		return NULL;
 	if (!pool || !svc_pool_steal_one(pool, &xprt, SVC_STEAL_XPRT)) {
 		if (cyc->walked) {
@@ -3137,7 +3169,7 @@ VISIBLE_IF_KUNIT bool svc_rtc_thread_steal(struct svc_rqst *thr)
 	struct svc_serv *serv = thr->rq_server;
 	struct svc_pool *pool;
 
-	if (!svc_pool_has_siblings(serv, thr->rq_pool))
+	if (!svc_pool_may_steal(serv, thr->rq_pool))
 		return false;
 	pool = svc_pool_steal_scan(serv->sv_pools, serv->sv_pool_ext,
 				   thr->rq_pool->sp_id, NULL, SVC_STEAL_RTC, true);
@@ -3152,7 +3184,7 @@ static bool svc_rtc_thread_steal_cycle(struct svc_rqst *thr,
 	struct svc_serv *serv = thr->rq_server;
 	struct svc_pool *pool = cyc->found;
 
-	if (!svc_pool_has_siblings(serv, thr->rq_pool))
+	if (!svc_pool_may_steal(serv, thr->rq_pool))
 		return false;
 	if (pool && svc_pool_steal_one(pool, NULL, SVC_STEAL_RTC))
 		return svc_rtc_thread_run_from(thr, pool);
