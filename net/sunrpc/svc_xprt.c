@@ -213,6 +213,7 @@ void svc_xprt_init(struct net *net, struct svc_xprt_class *xcl,
 		   struct svc_xprt *xprt, struct svc_serv *serv)
 {
 	memset(xprt, 0, sizeof(*xprt));
+	xprt->xpt_home_cpu = -1;
 	xprt->xpt_class = xcl;
 	xprt->xpt_ops = xcl->xcl_ops;
 	kref_init(&xprt->xpt_ref);
@@ -1123,9 +1124,16 @@ EXPORT_SYMBOL_GPL(svc_xprt_enqueue);
 static void svc_xprt_enqueue_thread(struct svc_xprt *xprt)
 {
 	struct svc_serv *serv = xprt->xpt_server;
+	int cpu = READ_ONCE(xprt->xpt_home_cpu);
 
-	/* Per-CPU pool; wakes a sibling pool when it has no idle thread. */
-	svc_pool_enqueue_xprt(serv, svc_pool_for_cpu(serv), xprt);
+	/*
+	 * The pool of the CPU the transport's completions interrupt on, when
+	 * it has one (svcrdma's svc_cq_per_core), else this CPU's pool;
+	 * wakes a sibling pool when it has no idle thread.
+	 */
+	svc_pool_enqueue_xprt(serv, cpu >= 0 && cpu_online(cpu) ?
+			      svc_pool_for_cpu_on(serv, cpu) :
+			      svc_pool_for_cpu(serv), xprt);
 }
 
 /*

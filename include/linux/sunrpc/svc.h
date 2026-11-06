@@ -782,6 +782,7 @@ void svc_pool_enqueue_xprt(struct svc_serv *serv, struct svc_pool *pool,
 			   struct svc_xprt *xprt);
 #endif
 struct svc_pool   *svc_pool_for_cpu(struct svc_serv *serv);
+struct svc_pool   *svc_pool_for_cpu_on(struct svc_serv *serv, unsigned int cpu);
 struct svc_rqst *svc_rqst_alloc(struct svc_serv *serv,
 				struct svc_pool *pool, int node);
 void		   svc_rqst_free(struct svc_rqst *rqstp);

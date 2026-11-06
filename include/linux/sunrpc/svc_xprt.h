@@ -117,6 +117,7 @@ struct svc_xprt {
 	struct rpc_xprt		*xpt_bc_xprt;	/* NFSv4.1 backchannel */
 	struct rpc_xprt_switch	*xpt_bc_xps;	/* NFSv4.1 backchannel */
 	struct svc_rtc_conn	*xpt_rtc;	/* run-to-completion work item */
+	int			xpt_home_cpu;	/* CPU whose pool takes its work, or -1 */
 };
 
 /*
