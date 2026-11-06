@@ -1375,8 +1375,13 @@ svc_set_pool_threads(struct svc_serv *serv, struct svc_pool *pool,
 	delta -= pool->sp_nrthreads;
 	if (delta > 0)
 		return svc_start_kthreads(serv, pool, delta);
-	if (delta < 0)
-		return svc_stop_kthreads(serv, pool, delta);
+	if (delta < 0) {
+		int err = svc_stop_kthreads(serv, pool, delta);
+
+		/* svc_pool_siblings=N: what it still holds goes to its server */
+		svc_pool_rehome(serv, pool);
+		return err;
+	}
 	return 0;
 }
 EXPORT_SYMBOL_GPL(svc_set_pool_threads);

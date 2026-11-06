@@ -684,8 +684,12 @@ static bool svc_pool_has_siblings(const struct svc_serv *serv,
 {
 	const struct svc_pool_ext *ext = &serv->sv_pool_ext[pool->sp_id];
 
-	/* svc_pool_siblings=N: a pool with threads keeps its work on them */
-	if (!READ_ONCE(svc_pool_siblings) && READ_ONCE(pool->sp_nrthreads))
+	/*
+	 * svc_pool_siblings=N: a pool given threads keeps its work on them.
+	 * sp_nrthrmax, not sp_nrthreads, so this agrees with the layout
+	 * while a pool's threads are being stopped.
+	 */
+	if (!READ_ONCE(svc_pool_siblings) && READ_ONCE(pool->sp_nrthrmax))
 		return false;
 	return serv->sv_is_pooled &&
 	       ((READ_ONCE(ext->range) & 0xffff) > 1 ||
@@ -1076,6 +1080,22 @@ svc_xprt_steal(struct svc_pool *pools, const struct svc_pool_ext *ext,
 EXPORT_SYMBOL_IF_KUNIT(svc_xprt_steal);
 
 /*
+ * svc_pool_siblings=N: the pool that takes work queued for @pool.  A pool
+ * given no threads hands its work to the pool serving it, since no other
+ * pool's thread would take it from there.
+ */
+static struct svc_pool *svc_pool_strict_target(struct svc_serv *serv,
+					       struct svc_pool *pool)
+{
+	struct svc_pool *to;
+
+	if (!serv->sv_is_pooled || READ_ONCE(pool->sp_nrthrmax))
+		return pool;
+	to = &serv->sv_pools[READ_ONCE(serv->sv_pool_ext[pool->sp_id].serve)];
+	return READ_ONCE(to->sp_nrthrmax) ? to : pool;
+}
+
+/*
  * Queue @xprt on @pool, then claim an idle thread of @pool for it, or,
  * when that fails, an idle thread of a sibling pool, which steals it.
  */
@@ -1083,6 +1103,8 @@ VISIBLE_IF_KUNIT void svc_pool_enqueue_xprt(struct svc_serv *serv,
 					    struct svc_pool *pool,
 					    struct svc_xprt *xprt)
 {
+	if (!READ_ONCE(svc_pool_siblings))
+		pool = svc_pool_strict_target(serv, pool);
 	percpu_counter_inc(&pool->sp_sockets_queued);
 	/* Only trace_svc_xprt_dequeue() reads the enqueue time. */
 	if (trace_svc_xprt_dequeue_enabled())
@@ -1095,6 +1117,41 @@ VISIBLE_IF_KUNIT void svc_pool_enqueue_xprt(struct svc_serv *serv,
 				      pool->sp_id);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_pool_enqueue_xprt);
+
+/**
+ * svc_pool_rehome - Move a drained pool's queued work to its serving pool
+ * @serv: RPC service
+ * @pool: a pool whose threads svc_set_pool_threads() has just stopped
+ *
+ * With svc_pool_siblings=N, no thread of a pool that has threads takes
+ * work from another such pool, so work still queued on @pool when its
+ * last thread exits would wait until the serving pool went idle.  Queue
+ * it on the serving pool instead.  With the switch at Y, sibling wakes
+ * and steals already move it.
+ */
+void svc_pool_rehome(struct svc_serv *serv, struct svc_pool *pool)
+{
+	struct llist_node *q, **t1, *t2;
+	struct svc_rtc_rqst *r;
+	struct svc_xprt *xprt;
+	struct svc_pool *to;
+
+	if (READ_ONCE(svc_pool_siblings) || READ_ONCE(pool->sp_nrthreads))
+		return;
+	to = svc_pool_strict_target(serv, pool);
+	if (to == pool)
+		return;
+	q = lwq_dequeue_all(&pool->sp_xprts);
+	lwq_for_each_safe(xprt, t1, t2, &q, xpt_ready) {
+		svc_pool_enqueue_xprt(serv, to, xprt);
+		xprt = NULL;
+	}
+	while ((r = lwq_dequeue(&pool->sp_rtc_rqsts,
+				struct svc_rtc_rqst, qnode))) {
+		lwq_enqueue(&r->qnode, &to->sp_rtc_rqsts);
+		svc_pool_wake_idle_thread(to);
+	}
+}
 
 /**
  * svc_xprt_enqueue - Queue a transport on an idle nfsd thread
@@ -1128,8 +1185,9 @@ static void svc_xprt_enqueue_thread(struct svc_xprt *xprt)
 
 	/*
 	 * The pool of the CPU the transport's completions interrupt on, when
-	 * it has one (svcrdma's svc_cq_per_core), else this CPU's pool;
-	 * wakes a sibling pool when it has no idle thread.
+	 * it has one (svcrdma's svc_cq_per_core), else this CPU's pool.  With
+	 * svc_pool_siblings=Y it wakes a sibling pool's thread when that pool
+	 * has no idle one.
 	 */
 	svc_pool_enqueue_xprt(serv, cpu >= 0 && cpu_online(cpu) ?
 			      svc_pool_for_cpu_on(serv, cpu) :
@@ -3262,7 +3320,11 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
 	clear_bit(SP_TASK_PENDING, &pool->sp_flags);
 
 	if (svc_thread_should_stop(rqstp)) {
-		/* a pool losing its last thread leaves its queues to siblings */
+		/*
+		 * A pool losing its last thread leaves its queues to siblings;
+		 * with svc_pool_siblings=N, svc_set_pool_threads() moves them to
+		 * the serving pool once the thread is gone (svc_pool_rehome()).
+		 */
 		svc_thread_wake_next(rqstp, pool);
 		return ret;
 	}
