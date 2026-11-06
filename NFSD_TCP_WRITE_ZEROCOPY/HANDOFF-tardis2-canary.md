@@ -258,8 +258,9 @@ that the scripts wrote to mean copy turned loaning on (`cb2438048e4c`:
 "kNFSd lends with no parameter set"; `99197ab25abb`: "off" is a budget
 of 0).  That reverses the series' decision of 22 October that a budget of
 0, the default, loans nothing.  `rx_w` writes 0 as `off` on such a kernel,
-`rx_r` reads the value in effect, and `settled.sh` expects 64 pools of 8
-with `pool_mode=percpu`.  A new network namespace starts at `32768
+`rx_r` reads the value in effect, and `settled.sh` expected 64 pools of 8
+with `pool_mode=percpu` (until 6 November: it now holds `pernode`, see
+"Runtime on build 514").  A new network namespace starts at `32768
 (auto)`, so it loans with nothing configured.
 
 ## Runtime on build 514 (tardis2, 2026-11-06)
@@ -293,7 +294,15 @@ stepped down or stalled and dmesg stayed clean.  Driver and notes in
 - **t2-r189 denied 515 loans** (2.52M admitted); every 512 run denied 0.
   Not looked into.
 
-The host was left at `pool_mode=global`, `rtc_read=N`, `rtc_write=N`.
+**Per-CPU pools are off from here (Mike, 6 November):** they were a
+liability on tardis2's Xsight hardware when tried before (`pools_per_node`,
+dropped 15 October), and these runs show the same.  `settled.sh` holds
+`pool_mode=pernode`, as it holds `rtc_read` and `rtc_write` at N.  That is
+upstream's only mode since Jeff Layton's `a1a7071195b9`, and on tardis2's one
+NUMA node it is one pool of 512, the same as `global` in the runs above.
+`apply` restarts nfs-server to put it in place, because the mode is read only
+when a pooled service starts and is refused (-EBUSY) while one runs.  Whether
+the series' default changes is still open.
 
 ## TODO (formal, once the above passes on tardis2)
 

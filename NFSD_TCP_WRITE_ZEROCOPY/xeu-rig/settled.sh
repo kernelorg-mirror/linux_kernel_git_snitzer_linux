@@ -138,6 +138,17 @@ NFSD_POOLS=512	# one pool: pools_per_node was dropped from the series on 15 Octo
 # With David's per-CPU pools (canary 3fe6000275d8) "auto" is one pool per
 # online CPU, and the threads are spread evenly over them: on tardis2, 64
 # pools of 8.  Any other pool_mode keeps one pool of NFSD_POOLS.
+# Held at pernode from 6 November (Mike): per-CPU pools were a
+# liability on this hardware before (pools_per_node, dropped 15 October),
+# and on builds 512 and 514 they cost about 43k nfsd cycles a loaned WRITE
+# (t2-r187 against t2-r189) and 232k a copied one, with copy 7% slower
+# (t2-r188 against t2-r190).  pernode is what upstream does (Jeff Layton's
+# a1a7071195b9 left no other mode; those kernels always read pernode), and
+# on tardis2's one NUMA node it is one pool, the same as global.  Read only
+# when a pooled service starts, so apply restarts nfs-server to change it.
+# EXP_POOL_MODE holds a run to another.
+POOL_MODE=pernode
+PM=/sys/module/sunrpc/parameters/pool_mode
 nfsd_pools() {
 	local n
 	if [ "$(cat /sys/module/sunrpc/parameters/pool_mode 2>/dev/null)" = percpu ]; then
@@ -483,6 +494,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 audit_nfsd() {
 	local n; n=$(pgrep -x nfsd | wc -l)
 	want "nfsd threads" "$n" "$NFSD_THREADS"
+	want "sunrpc pool_mode" "$(cat $PM 2>/dev/null)" "${EXP_POOL_MODE:-$POOL_MODE}"
 	want "nfsd threads in each pool" "$(cat /proc/fs/nfsd/pool_threads 2>/dev/null)" "$(nfsd_pools)"
 	want "nfsd threads' CPUs" "$(nfsd_cpus)" "$n on ${EXP_NFSD_CPUS:-$NFSD_CPUSET}"
 	local k; for k in "${!NFSD_DBG[@]}"; do
@@ -708,6 +720,16 @@ drc_live() { awk -F: '/^max entries/ {print $2 + 0}' /proc/fs/nfsd/reply_cache_s
 sizes() {
 	local drc=${EXP_DRC_MAX_ENTRIES:-$DRC_MAX_ENTRIES} stk=${EXP_RX_REGION_STACK:-$RX_REGION_STACK} p
 	local idle; [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ] && idle=1
+	local pm=${EXP_POOL_MODE:-$POOL_MODE} cur; cur=$(cat $PM 2>/dev/null)
+	if [ -n "$cur" ] && [ "$cur" != "$pm" ]; then
+		if [ -n "${idle:-}" ]; then
+			# -EBUSY while a pooled service holds the map: write it with nfsd stopped
+			echo "sunrpc pool_mode $pm (was $cur): restarting nfs-server"
+			systemctl stop nfs-server && echo "$pm" > $PM && systemctl start nfs-server || return 1
+		else
+			echo "NFS connections are up: sunrpc pool_mode is left at $cur"
+		fi
+	fi
 	if [ -e $DRC ] && { [ "$(cat $DRC)" != "$drc" ] || { [ "$drc" != 0 ] && [ "$(drc_live)" != "$drc" ]; }; }; then
 		if [ -n "${idle:-}" ]; then
 			echo "$drc" > $DRC
