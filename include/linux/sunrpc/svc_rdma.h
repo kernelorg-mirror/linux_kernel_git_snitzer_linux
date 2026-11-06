@@ -107,6 +107,7 @@ struct svcxprt_rdma {
 	struct ib_qp         *sc_qp;
 	struct ib_cq         *sc_rq_cq;
 	struct ib_cq         *sc_sq_cq;
+	int		     sc_cq_cpu;		/* core both CQs interrupt on, or -1 */
 
 	spinlock_t	     sc_lock;		/* transport lock */
 
