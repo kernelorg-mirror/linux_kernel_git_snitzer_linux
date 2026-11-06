@@ -82,18 +82,31 @@ static int svc_rdma_has_wspace(struct svc_xprt *xprt);
 static void svc_rdma_kill_temp_xprt(struct svc_xprt *);
 
 /*
- * LAB ONLY: both CQs of each accepted connection share one completion
- * vector, chosen so a device's connections spread one per core of its
- * NUMA node.  With per-CPU nfsd pools, the work a core's receive
- * completions queue then goes to that core's own threads.  A change
- * applies to connections accepted after it.
+ * LAB ONLY, set on the boot line: both CQs of each accepted connection
+ * share one completion vector, chosen so that a client's connections on
+ * a device take distinct cores of its NUMA node and every core carries
+ * the same number of connections.  With per-CPU nfsd pools, the work a
+ * core's receive completions queue then goes to that core's own pool.
  */
 static bool svc_rdma_cq_per_core __read_mostly = true;
-module_param_named(svc_cq_per_core, svc_rdma_cq_per_core, bool, 0644);
+module_param_named(svc_cq_per_core, svc_rdma_cq_per_core, bool, 0444);
 MODULE_PARM_DESC(svc_cq_per_core,
 		 "LAB ONLY: spread svcrdma CQs one per core of the device's NUMA node");
 
+/*
+ * One client's live connections on one device, per CPU.  The client is
+ * its address with the port zeroed, as handle_connect_req() records it.
+ */
+struct svc_rdma_cq_peer {
+	struct list_head	list;
+	const struct ib_device	*dev;
+	struct sockaddr_storage	addr;
+	unsigned int		ref;		/* connections holding it */
+	u16			load[];		/* nr_cpu_ids entries */
+};
+
 static DEFINE_SPINLOCK(svc_rdma_cq_lock);
+static LIST_HEAD(svc_rdma_cq_peers);
 static DEFINE_PER_CPU(unsigned int, svc_rdma_cq_load);	/* live connections */
 static unsigned int svc_rdma_cq_rotor;
 
@@ -446,42 +459,67 @@ static void svc_rdma_xprt_done(struct rpcrdma_notification *rn)
 	svc_xprt_close(&rdma->sc_xprt);
 }
 
+/* The client @sap's entry for @dev, with svc_rdma_cq_lock held */
+static struct svc_rdma_cq_peer *
+svc_rdma_cq_peer_find(const struct ib_device *dev, const struct sockaddr *sap)
+{
+	struct svc_rdma_cq_peer *peer;
+
+	list_for_each_entry(peer, &svc_rdma_cq_peers, list)
+		if (peer->dev == dev &&
+		    rpc_cmp_addr((const struct sockaddr *)&peer->addr, sap))
+			return peer;
+	return NULL;
+}
+
 /**
  * svc_rdma_cq_vector - Choose the completion vector for a new connection
  * @rdma: transport being accepted
  * @dev: its device
  *
- * Takes the online CPU of @dev's NUMA node that carries the fewest
- * connections, ties going round robin, and returns the vector that
- * interrupts on it.  That assumes vector i interrupts on the i-th online
- * CPU of the node, as mlx5 spreads its vectors and as the lab pins them.
- * Returns -1, taking no CPU, when the device gives no node or has one
- * vector.
+ * Takes the online CPU of @dev's NUMA node that carries the fewest of
+ * this client's connections on @dev, then the fewest connections, ties
+ * round robin, and returns the vector that interrupts on it.  That
+ * assumes vector i interrupts on the i-th online CPU of the node, as
+ * mlx5 spreads its vectors and as the lab pins them.  Returns -1, taking
+ * no CPU, when the device gives no node or has one vector.  Process
+ * context.
  */
 static int svc_rdma_cq_vector(struct svcxprt_rdma *rdma,
 			      struct ib_device *dev)
 {
-	unsigned int cnt, start, key, load, pos = 0;
+	const struct sockaddr *sap =
+		(const struct sockaddr *)&rdma->sc_xprt.xpt_remote;
+	unsigned int cnt, start, key, load, mine, pos = 0;
 	unsigned int best_key = UINT_MAX, best_load = UINT_MAX;
+	unsigned int best_mine = UINT_MAX;
+	struct svc_rdma_cq_peer *peer, *new;
 	int node, cpu, best_cpu = -1, best_pos = -1;
 	const struct cpumask *mask;
 
 	if (!READ_ONCE(svc_rdma_cq_per_core) || dev->num_comp_vectors < 2)
 		return -1;
 	node = ibdev_to_node(dev);
-	if (node < 0 || node >= MAX_NUMNODES)
+	if (node < 0 || node >= nr_node_ids)
 		return -1;
 	mask = cpumask_of_node(node);
+	new = kzalloc(struct_size(new, load, nr_cpu_ids), GFP_KERNEL);
 
 	spin_lock(&svc_rdma_cq_lock);
 	cnt = cpumask_weight_and(mask, cpu_online_mask);
 	if (!cnt)
 		goto out_unlock;
+	peer = svc_rdma_cq_peer_find(dev, sap);
 	start = svc_rdma_cq_rotor++ % cnt;
 	for_each_cpu_and(cpu, mask, cpu_online_mask) {
-		key = (pos + cnt - start) % cnt;
+		mine = peer ? peer->load[cpu] : 0;
 		load = per_cpu(svc_rdma_cq_load, cpu);
-		if (load < best_load || (load == best_load && key < best_key)) {
+		key = (pos + cnt - start) % cnt;
+		if (mine < best_mine ||
+		    (mine == best_mine &&
+		     (load < best_load ||
+		      (load == best_load && key < best_key)))) {
+			best_mine = mine;
 			best_load = load;
 			best_key = key;
 			best_cpu = cpu;
@@ -489,39 +527,98 @@ static int svc_rdma_cq_vector(struct svcxprt_rdma *rdma,
 		}
 		pos++;
 	}
-	if (best_cpu >= 0) {
-		per_cpu(svc_rdma_cq_load, best_cpu)++;
-		rdma->sc_cq_cpu = best_cpu;
+	if (best_cpu < 0)
+		goto out_unlock;
+	if (!peer && new) {
+		peer = new;
+		new = NULL;
+		peer->dev = dev;
+		memcpy(&peer->addr, sap, rdma->sc_xprt.xpt_remotelen);
+		list_add(&peer->list, &svc_rdma_cq_peers);
+	}
+	per_cpu(svc_rdma_cq_load, best_cpu)++;
+	rdma->sc_cq_cpu = best_cpu;
+	if (peer) {
+		peer->load[best_cpu]++;
+		peer->ref++;
+		rdma->sc_cq_peer = peer;
 	}
 out_unlock:
 	spin_unlock(&svc_rdma_cq_lock);
-	return best_pos < 0 ? -1 : best_pos % dev->num_comp_vectors;
+	kfree(new);
+	return best_cpu < 0 ? -1 : best_pos % dev->num_comp_vectors;
 }
 
-/* Give back the CPU svc_rdma_cq_vector() took for @rdma, if any */
+/*
+ * Give back what svc_rdma_cq_vector() took for @rdma.  Called when the
+ * connection closes and again when it is freed; only the first call
+ * finds anything to give back.
+ */
 static void svc_rdma_cq_vector_put(struct svcxprt_rdma *rdma)
 {
-	if (rdma->sc_cq_cpu < 0)
+	struct svc_rdma_cq_peer *peer, *dead = NULL;
+	int cpu;
+
+	if (READ_ONCE(rdma->sc_cq_cpu) < 0)
 		return;
 	spin_lock(&svc_rdma_cq_lock);
-	per_cpu(svc_rdma_cq_load, rdma->sc_cq_cpu)--;
+	cpu = rdma->sc_cq_cpu;
+	peer = rdma->sc_cq_peer;
+	if (cpu >= 0) {
+		per_cpu(svc_rdma_cq_load, cpu)--;
+		if (peer) {
+			peer->load[cpu]--;
+			if (!--peer->ref) {
+				list_del(&peer->list);
+				dead = peer;
+			}
+		}
+	}
+	WRITE_ONCE(rdma->sc_cq_cpu, -1);
+	rdma->sc_cq_peer = NULL;
 	spin_unlock(&svc_rdma_cq_lock);
-	rdma->sc_cq_cpu = -1;
+	kfree(dead);
 }
 
-/* A CQ on @vec, or on any vector when @vec is -1 or cannot be used */
-static struct ib_cq *svc_rdma_alloc_cq(struct ib_device *dev,
-				       struct svcxprt_rdma *rdma,
-				       int nr_cqe, int vec)
+/*
+ * Both CQs of @rdma on one vector: @vec, from svc_rdma_cq_vector(), or
+ * any vector as before when @vec is -1.  If @vec cannot be used, give
+ * its CPU back and keep the two CQs together on the vector the first
+ * one gets.
+ */
+static int svc_rdma_alloc_cqs(struct svcxprt_rdma *rdma,
+			      struct ib_device *dev, int vec, int rq_depth)
 {
-	struct ib_cq *cq;
-
 	if (vec >= 0) {
-		cq = ib_alloc_cq(dev, rdma, nr_cqe, vec, IB_POLL_WORKQUEUE);
-		if (!IS_ERR(cq))
-			return cq;
+		rdma->sc_sq_cq = ib_alloc_cq(dev, rdma, rdma->sc_sq_depth, vec,
+					     IB_POLL_WORKQUEUE);
+		if (!IS_ERR(rdma->sc_sq_cq)) {
+			rdma->sc_rq_cq = ib_alloc_cq(dev, rdma, rq_depth, vec,
+						     IB_POLL_WORKQUEUE);
+			if (!IS_ERR(rdma->sc_rq_cq))
+				return 0;
+			ib_free_cq(rdma->sc_sq_cq);
+		}
+		rdma->sc_sq_cq = NULL;
+		rdma->sc_rq_cq = NULL;
+		svc_rdma_cq_vector_put(rdma);
+		rdma->sc_sq_cq = ib_alloc_cq_any(dev, rdma, rdma->sc_sq_depth,
+						 IB_POLL_WORKQUEUE);
+		if (IS_ERR(rdma->sc_sq_cq))
+			return PTR_ERR(rdma->sc_sq_cq);
+		rdma->sc_rq_cq = ib_alloc_cq(dev, rdma, rq_depth,
+					     rdma->sc_sq_cq->comp_vector,
+					     IB_POLL_WORKQUEUE);
+		return PTR_ERR_OR_ZERO(rdma->sc_rq_cq);
 	}
-	return ib_alloc_cq_any(dev, rdma, nr_cqe, IB_POLL_WORKQUEUE);
+	/* As before: svc_cq_per_core=N, or a device that gives no node */
+	rdma->sc_sq_cq = ib_alloc_cq_any(dev, rdma, rdma->sc_sq_depth,
+					 IB_POLL_WORKQUEUE);
+	if (IS_ERR(rdma->sc_sq_cq))
+		return PTR_ERR(rdma->sc_sq_cq);
+	rdma->sc_rq_cq = ib_alloc_cq_any(dev, rdma, rq_depth,
+					 IB_POLL_WORKQUEUE);
+	return PTR_ERR_OR_ZERO(rdma->sc_rq_cq);
 }
 
 /*
@@ -618,12 +715,7 @@ static struct svc_xprt *svc_rdma_accept(struct svc_xprt *xprt)
 		goto errout;
 	}
 	vec = svc_rdma_cq_vector(newxprt, dev);
-	newxprt->sc_sq_cq = svc_rdma_alloc_cq(dev, newxprt,
-					      newxprt->sc_sq_depth, vec);
-	if (IS_ERR(newxprt->sc_sq_cq))
-		goto errout;
-	newxprt->sc_rq_cq = svc_rdma_alloc_cq(dev, newxprt, rq_depth, vec);
-	if (IS_ERR(newxprt->sc_rq_cq))
+	if (svc_rdma_alloc_cqs(newxprt, dev, vec, rq_depth))
 		goto errout;
 
 	memset(&qp_attr, 0, sizeof qp_attr);
@@ -753,6 +845,9 @@ static void svc_rdma_detach(struct svc_xprt *xprt)
 	 */
 	wake_up_all(&rdma->sc_sq_ticket_wait);
 	wake_up_all(&rdma->sc_send_wait);
+
+	/* A closed connection no longer counts toward its core's load */
+	svc_rdma_cq_vector_put(rdma);
 }
 
 /**
