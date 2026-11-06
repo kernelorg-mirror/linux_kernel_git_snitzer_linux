@@ -292,7 +292,18 @@ stepped down or stalled and dmesg stayed clean.  Driver and notes in
   times the wakes and twice the context switches (1.50M a second against
   769k).  This is the first copy run with per-CPU pools.
 - **t2-r189 denied 515 loans** (2.52M admitted); every 512 run denied 0.
-  Not looked into.
+  Not a regression: build 507 denied too (84 in t2-r178, 344 in fl61), and
+  a denied record is not copied: its transport stops reading until credit
+  returns (`paused` and `overrun` stayed 0).  The consumer's share refused
+  nothing (`share_denied` 0; the share is the whole region), so it was the
+  budget.  t2-r191 repeated t2-r189 at one pool (`pernode`) and sampled the
+  budget every 20 ms: 66.63 GB/s, nfsd 298.0k cycles a WRITE, **denied 0**.
+  While admitting, the budget had 12058 of 16262 pages free at the median
+  and 5422 at the least, never under one WRITE's 126; 42 records in flight
+  at the median, 105 at most.  So a denial comes from a burst shorter than
+  20 ms, now and then, as on 507.  Sampler and samples:
+  `/var/tmp/zc-run-logs/t2-514-canary/budget-sampler.sh`,
+  `/var/tmp/zc-run-logs/t2-r191.budget.tsv`.
 
 **Per-CPU pools are off from here (Mike, 6 November):** they were a
 liability on tardis2's Xsight hardware when tried before (`pools_per_node`,
