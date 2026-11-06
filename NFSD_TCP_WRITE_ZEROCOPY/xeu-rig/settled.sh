@@ -279,6 +279,14 @@ declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_ind
 XP=/sys/module/xeu/parameters/rx_prefetch
 XG=/sys/module/xeu/parameters/rx_gro_frags
 declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
+# Held only where the kernel has them (the canary from build 512 on; not
+# build 507 or tardis1's kernels).  rtc_read and rtc_write off: with either
+# on and its io_cache mode direct (2, above), every receive, WRITEs too, goes
+# to a run-to-completion work item and back to a thread (cd57a466c835),
+# about 55k nfsd cycles a loaned WRITE on build 512 (t2-r180 against t2-r181,
+# t2-r179 against t2-r186).  rtc_read defaults to Y and rtc_write to N, and
+# both go back to that when nfsd is reloaded.
+declare -A NFSD_DBG_OPT=([rtc_read]=N [rtc_write]=N)
 # The server's network sysctls, as every figure here was measured with them.
 # netdev_max_backlog and netdev_budget come from Hammerspace's tuned profile
 # hs-e1; the 16384 at the bottom of tcp_wmem and tcp_rmem is the kernel's
@@ -479,6 +487,13 @@ audit_nfsd() {
 	want "nfsd threads' CPUs" "$(nfsd_cpus)" "$n on ${EXP_NFSD_CPUS:-$NFSD_CPUSET}"
 	local k; for k in "${!NFSD_DBG[@]}"; do
 		want "nfsd $k" "$(cat /sys/kernel/debug/nfsd/$k 2>/dev/null)" "${NFSD_DBG[$k]}"
+	done
+	for k in "${!NFSD_DBG_OPT[@]}"; do
+		if [ -e /sys/kernel/debug/nfsd/$k ]; then
+			want "nfsd $k" "$(cat /sys/kernel/debug/nfsd/$k)" "${NFSD_DBG_OPT[$k]}"
+		else
+			printf '  --   %-34s %s\n' "nfsd $k" "not in this kernel"
+		fi
 	done
 	want "nfsd max_block_size" "$(cat /proc/fs/nfsd/max_block_size 2>/dev/null)" 1048576
 	local drc=${EXP_DRC_MAX_ENTRIES:-$DRC_MAX_ENTRIES}
@@ -757,6 +772,10 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 		done
 		for k in "${!NFSD_DBG[@]}"; do
 			[ "$(cat /sys/kernel/debug/nfsd/$k 2>/dev/null)" = "${NFSD_DBG[$k]}" ] || echo "${NFSD_DBG[$k]}" > /sys/kernel/debug/nfsd/$k
+		done
+		for k in "${!NFSD_DBG_OPT[@]}"; do
+			[ -e /sys/kernel/debug/nfsd/$k ] || continue
+			[ "$(cat /sys/kernel/debug/nfsd/$k)" = "${NFSD_DBG_OPT[$k]}" ] || echo "${NFSD_DBG_OPT[$k]}" > /sys/kernel/debug/nfsd/$k
 		done
 	else
 		echo "NFS connections are up: the sunrpc settings are left as they are"
