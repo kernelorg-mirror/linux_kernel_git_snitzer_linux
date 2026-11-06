@@ -42,11 +42,14 @@
  * Author: Tom Tucker <tom@opengridcomputing.com>
  */
 
+#include <linux/cpumask.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
+#include <linux/percpu.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/topology.h>
 #include <linux/workqueue.h>
 #include <linux/export.h>
 
@@ -77,6 +80,22 @@ static void svc_rdma_detach(struct svc_xprt *xprt);
 static void svc_rdma_free(struct svc_xprt *xprt);
 static int svc_rdma_has_wspace(struct svc_xprt *xprt);
 static void svc_rdma_kill_temp_xprt(struct svc_xprt *);
+
+/*
+ * LAB ONLY: both CQs of each accepted connection share one completion
+ * vector, chosen so a device's connections spread one per core of its
+ * NUMA node.  With per-CPU nfsd pools, the work a core's receive
+ * completions queue then goes to that core's own threads.  A change
+ * applies to connections accepted after it.
+ */
+static bool svc_rdma_cq_per_core __read_mostly = true;
+module_param_named(svc_cq_per_core, svc_rdma_cq_per_core, bool, 0644);
+MODULE_PARM_DESC(svc_cq_per_core,
+		 "LAB ONLY: spread svcrdma CQs one per core of the device's NUMA node");
+
+static DEFINE_SPINLOCK(svc_rdma_cq_lock);
+static DEFINE_PER_CPU(unsigned int, svc_rdma_cq_load);	/* live connections */
+static unsigned int svc_rdma_cq_rotor;
 
 static const struct svc_xprt_ops svc_rdma_ops = {
 	.xpo_create = svc_rdma_create,
@@ -188,6 +207,7 @@ static struct svcxprt_rdma *svc_rdma_create_xprt(struct svc_serv *serv,
 	cma_xprt = kzalloc_node(sizeof(*cma_xprt), GFP_KERNEL, node);
 	if (!cma_xprt)
 		return NULL;
+	cma_xprt->sc_cq_cpu = -1;
 
 	svc_xprt_init(net, &svc_rdma_class, &cma_xprt->sc_xprt, serv);
 	INIT_LIST_HEAD(&cma_xprt->sc_accept_q);
@@ -426,6 +446,84 @@ static void svc_rdma_xprt_done(struct rpcrdma_notification *rn)
 	svc_xprt_close(&rdma->sc_xprt);
 }
 
+/**
+ * svc_rdma_cq_vector - Choose the completion vector for a new connection
+ * @rdma: transport being accepted
+ * @dev: its device
+ *
+ * Takes the online CPU of @dev's NUMA node that carries the fewest
+ * connections, ties going round robin, and returns the vector that
+ * interrupts on it.  That assumes vector i interrupts on the i-th online
+ * CPU of the node, as mlx5 spreads its vectors and as the lab pins them.
+ * Returns -1, taking no CPU, when the device gives no node or has one
+ * vector.
+ */
+static int svc_rdma_cq_vector(struct svcxprt_rdma *rdma,
+			      struct ib_device *dev)
+{
+	unsigned int cnt, start, key, load, pos = 0;
+	unsigned int best_key = UINT_MAX, best_load = UINT_MAX;
+	int node, cpu, best_cpu = -1, best_pos = -1;
+	const struct cpumask *mask;
+
+	if (!READ_ONCE(svc_rdma_cq_per_core) || dev->num_comp_vectors < 2)
+		return -1;
+	node = ibdev_to_node(dev);
+	if (node < 0 || node >= MAX_NUMNODES)
+		return -1;
+	mask = cpumask_of_node(node);
+
+	spin_lock(&svc_rdma_cq_lock);
+	cnt = cpumask_weight_and(mask, cpu_online_mask);
+	if (!cnt)
+		goto out_unlock;
+	start = svc_rdma_cq_rotor++ % cnt;
+	for_each_cpu_and(cpu, mask, cpu_online_mask) {
+		key = (pos + cnt - start) % cnt;
+		load = per_cpu(svc_rdma_cq_load, cpu);
+		if (load < best_load || (load == best_load && key < best_key)) {
+			best_load = load;
+			best_key = key;
+			best_cpu = cpu;
+			best_pos = pos;
+		}
+		pos++;
+	}
+	if (best_cpu >= 0) {
+		per_cpu(svc_rdma_cq_load, best_cpu)++;
+		rdma->sc_cq_cpu = best_cpu;
+	}
+out_unlock:
+	spin_unlock(&svc_rdma_cq_lock);
+	return best_pos < 0 ? -1 : best_pos % dev->num_comp_vectors;
+}
+
+/* Give back the CPU svc_rdma_cq_vector() took for @rdma, if any */
+static void svc_rdma_cq_vector_put(struct svcxprt_rdma *rdma)
+{
+	if (rdma->sc_cq_cpu < 0)
+		return;
+	spin_lock(&svc_rdma_cq_lock);
+	per_cpu(svc_rdma_cq_load, rdma->sc_cq_cpu)--;
+	spin_unlock(&svc_rdma_cq_lock);
+	rdma->sc_cq_cpu = -1;
+}
+
+/* A CQ on @vec, or on any vector when @vec is -1 or cannot be used */
+static struct ib_cq *svc_rdma_alloc_cq(struct ib_device *dev,
+				       struct svcxprt_rdma *rdma,
+				       int nr_cqe, int vec)
+{
+	struct ib_cq *cq;
+
+	if (vec >= 0) {
+		cq = ib_alloc_cq(dev, rdma, nr_cqe, vec, IB_POLL_WORKQUEUE);
+		if (!IS_ERR(cq))
+			return cq;
+	}
+	return ib_alloc_cq_any(dev, rdma, nr_cqe, IB_POLL_WORKQUEUE);
+}
+
 /*
  * This is the xpo_recvfrom function for listening endpoints. Its
  * purpose is to accept incoming connections. The CMA callback handler
@@ -446,7 +544,7 @@ static struct svc_xprt *svc_rdma_accept(struct svc_xprt *xprt)
 	struct rpcrdma_connect_private pmsg;
 	struct ib_qp_init_attr qp_attr;
 	struct ib_device *dev;
-	int ret = 0;
+	int ret = 0, vec;
 
 	listen_rdma = container_of(xprt, struct svcxprt_rdma, sc_xprt);
 	clear_bit(XPT_CONN, &xprt->xpt_flags);
@@ -519,12 +617,12 @@ static struct svc_xprt *svc_rdma_accept(struct svc_xprt *xprt)
 		trace_svcrdma_pd_err(newxprt, PTR_ERR(newxprt->sc_pd));
 		goto errout;
 	}
-	newxprt->sc_sq_cq = ib_alloc_cq_any(dev, newxprt, newxprt->sc_sq_depth,
-					    IB_POLL_WORKQUEUE);
+	vec = svc_rdma_cq_vector(newxprt, dev);
+	newxprt->sc_sq_cq = svc_rdma_alloc_cq(dev, newxprt,
+					      newxprt->sc_sq_depth, vec);
 	if (IS_ERR(newxprt->sc_sq_cq))
 		goto errout;
-	newxprt->sc_rq_cq =
-		ib_alloc_cq_any(dev, newxprt, rq_depth, IB_POLL_WORKQUEUE);
+	newxprt->sc_rq_cq = svc_rdma_alloc_cq(dev, newxprt, rq_depth, vec);
 	if (IS_ERR(newxprt->sc_rq_cq))
 		goto errout;
 
@@ -607,6 +705,9 @@ static struct svc_xprt *svc_rdma_accept(struct svc_xprt *xprt)
 		dprintk("    rdma_rw_ctxs    : %d\n", ctxts);
 		dprintk("    max_requests    : %d\n", newxprt->sc_max_requests);
 		dprintk("    ord             : %d\n", conn_param.initiator_depth);
+		dprintk("    cq vectors      : %u/%u (cpu %d)\n",
+			newxprt->sc_sq_cq->comp_vector,
+			newxprt->sc_rq_cq->comp_vector, newxprt->sc_cq_cpu);
 	}
 
 	return &newxprt->sc_xprt;
@@ -693,6 +794,7 @@ static void svc_rdma_free(struct svc_xprt *xprt)
 
 	if (rdma->sc_rq_cq && !IS_ERR(rdma->sc_rq_cq))
 		ib_free_cq(rdma->sc_rq_cq);
+	svc_rdma_cq_vector_put(rdma);
 
 	if (rdma->sc_pd && !IS_ERR(rdma->sc_pd))
 		ib_dealloc_pd(rdma->sc_pd);
