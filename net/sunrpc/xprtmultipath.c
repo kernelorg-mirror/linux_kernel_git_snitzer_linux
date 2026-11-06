@@ -60,7 +60,7 @@ void rpc_xprt_switch_add_xprt(struct rpc_xprt_switch *xps,
 {
 	if (xprt == NULL)
 		return;
-	rpc_xprt_numa_assign(xprt);
+	rpc_xprt_numa_assign(xprt, xps);
 	spin_lock(&xps->xps_lock);
 	if (xps->xps_net == xprt->xprt_net || xps->xps_net == NULL)
 		xprt_switch_add_xprt_locked(xps, xprt);
@@ -170,7 +170,7 @@ struct rpc_xprt_switch *xprt_switch_alloc(struct rpc_xprt *xprt,
 		xps->xps_iter_ops = &rpc_xprt_iter_singular;
 		RCU_INIT_POINTER(xps->xps_cpu_map, NULL);
 		rpc_sysfs_xprt_switch_setup(xps, xprt, gfp_flags);
-		rpc_xprt_numa_assign(xprt);
+		rpc_xprt_numa_assign(xprt, xps);
 		xprt_switch_add_xprt_locked(xps, xprt);
 		xps->xps_nunique_destaddr_xprts = 1;
 		rpc_sysfs_xprt_setup(xps, xprt, gfp_flags);
@@ -238,18 +238,22 @@ struct rpc_xprt_cpu_map {
 };
 
 /*
- * LAB ONLY switch.  Y: each transport gets a home core on the NUMA node of
- * the NIC its route leaves by, from a rotor per node shared by every
- * switch, so the transports to all servers cover every core of the node
- * before any core is home to two; a per-CPU switch is then mapped around
- * those homes.  N: the CPU-count split of rpc_xprt_switch_update_cpu_map_locked().
+ * LAB ONLY switch, set on the boot line.  Y: each transport gets a home
+ * core on the NUMA node of the NIC its route leaves by: a core no other
+ * transport of its switch is homed on, then the core with the fewest
+ * live homes, ties round robin, so a switch's transports take distinct
+ * cores and every core of the node is home before any is home to two; a
+ * per-CPU switch is then mapped around those homes.  N: the CPU-count
+ * split of rpc_xprt_switch_update_cpu_map_locked().
  */
 static bool rpc_xprt_numa_map __read_mostly = true;
-module_param_named(xprt_numa_map, rpc_xprt_numa_map, bool, 0644);
+module_param_named(xprt_numa_map, rpc_xprt_numa_map, bool, 0444);
 MODULE_PARM_DESC(xprt_numa_map,
 		 "LAB ONLY: home nconnect transports on their NIC's NUMA node, one core each, staggered across servers (default Y)");
 
-static atomic_t rpc_xprt_numa_rotor[MAX_NUMNODES];
+static DEFINE_SPINLOCK(rpc_xprt_numa_lock);
+static unsigned int rpc_xprt_numa_rotor[MAX_NUMNODES];
+static DEFINE_PER_CPU(unsigned int, rpc_xprt_numa_homes);	/* live homes */
 
 /* The NUMA node of the NIC the route to @xprt's server leaves by */
 static int rpc_xprt_route_node(struct rpc_xprt *xprt)
@@ -295,32 +299,94 @@ static int rpc_xprt_numa_pos(int cpu, int node)
 	return -1;
 }
 
+/* How many transports of @xps, other than @xprt, are homed on @cpu */
+static unsigned int rpc_xprt_numa_switch_homes(struct rpc_xprt_switch *xps,
+					       const struct rpc_xprt *xprt,
+					       int cpu)
+{
+	struct rpc_xprt *pos;
+	unsigned int n = 0;
+
+	if (!xps)
+		return 0;
+	list_for_each_entry_rcu(pos, &xps->xps_xprt_list, xprt_switch)
+		if (pos != xprt && READ_ONCE(pos->xprt_numa_home) == cpu)
+			n++;
+	return n;
+}
+
 /**
  * rpc_xprt_numa_assign - Give @xprt a home core on its NIC's NUMA node
  * @xprt: transport, before it joins a switch and before it connects
+ * @xps: the switch @xprt is joining, or NULL
  *
+ * Takes the online core of the node carrying the fewest transports of
+ * @xps, then the fewest live homes, ties round robin.  A switch's
+ * transports are added one at a time, so they take distinct cores.
  * Process context.  Does nothing if @xprt already has a home, or if the
  * route to its server gives no node.
  */
-void rpc_xprt_numa_assign(struct rpc_xprt *xprt)
+void rpc_xprt_numa_assign(struct rpc_xprt *xprt, struct rpc_xprt_switch *xps)
 {
-	unsigned int cnt, pos, cpu;
-	int node;
+	unsigned int cnt, start, key, same, homes, pos = 0;
+	unsigned int best_key = UINT_MAX, best_same = UINT_MAX;
+	unsigned int best_homes = UINT_MAX;
+	const struct cpumask *mask;
+	int node, cpu, best = -1;
 
 	if (!READ_ONCE(rpc_xprt_numa_map) || READ_ONCE(xprt->xprt_numa_home) >= 0)
 		return;
 	node = rpc_xprt_route_node(xprt);
-	if (node == NUMA_NO_NODE || node < 0 || node >= MAX_NUMNODES)
+	if (node < 0 || node >= nr_node_ids)
 		return;
-	cnt = cpumask_weight_and(cpumask_of_node(node), cpu_online_mask);
-	if (cnt == 0)
+	mask = cpumask_of_node(node);
+
+	spin_lock(&rpc_xprt_numa_lock);
+	cnt = cpumask_weight_and(mask, cpu_online_mask);
+	if (!cnt)
+		goto out_unlock;
+	start = rpc_xprt_numa_rotor[node]++ % cnt;
+	rcu_read_lock();
+	for_each_cpu_and(cpu, mask, cpu_online_mask) {
+		same = rpc_xprt_numa_switch_homes(xps, xprt, cpu);
+		homes = per_cpu(rpc_xprt_numa_homes, cpu);
+		key = (pos + cnt - start) % cnt;
+		if (same < best_same ||
+		    (same == best_same &&
+		     (homes < best_homes ||
+		      (homes == best_homes && key < best_key)))) {
+			best_same = same;
+			best_homes = homes;
+			best_key = key;
+			best = cpu;
+		}
+		pos++;
+	}
+	rcu_read_unlock();
+	if (best >= 0) {
+		per_cpu(rpc_xprt_numa_homes, best)++;
+		WRITE_ONCE(xprt->xprt_numa_node, node);
+		WRITE_ONCE(xprt->xprt_numa_home, best);
+	}
+out_unlock:
+	spin_unlock(&rpc_xprt_numa_lock);
+}
+
+/**
+ * rpc_xprt_numa_release - Drop @xprt's home from the live count
+ * @xprt: transport being freed
+ */
+void rpc_xprt_numa_release(struct rpc_xprt *xprt)
+{
+	int cpu = READ_ONCE(xprt->xprt_numa_home);
+
+	if (cpu < 0)
 		return;
-	pos = (unsigned int)atomic_fetch_inc(&rpc_xprt_numa_rotor[node]) % cnt;
-	cpu = cpumask_nth_and(pos, cpumask_of_node(node), cpu_online_mask);
-	if (cpu >= nr_cpu_ids)
-		return;
-	WRITE_ONCE(xprt->xprt_numa_node, node);
-	WRITE_ONCE(xprt->xprt_numa_home, cpu);
+	spin_lock(&rpc_xprt_numa_lock);
+	if (per_cpu(rpc_xprt_numa_homes, cpu))
+		per_cpu(rpc_xprt_numa_homes, cpu)--;
+	spin_unlock(&rpc_xprt_numa_lock);
+	WRITE_ONCE(xprt->xprt_numa_home, -1);
 }
 
 /**

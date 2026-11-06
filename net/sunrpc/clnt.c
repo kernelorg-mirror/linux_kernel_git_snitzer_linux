@@ -3301,7 +3301,7 @@ int rpc_clnt_add_xprt(struct rpc_clnt *clnt,
 	}
 	xprt->resvport = resvport;
 	xprt->reuseport = reuseport;
-	rpc_xprt_numa_assign(xprt);
+	rpc_xprt_numa_assign(xprt, xps);
 
 	if (xprtargs->connect_timeout)
 		connect_timeout = xprtargs->connect_timeout;

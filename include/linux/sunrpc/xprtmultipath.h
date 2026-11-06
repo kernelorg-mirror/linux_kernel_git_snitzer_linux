@@ -52,7 +52,9 @@ extern struct rpc_xprt_switch *xprt_switch_get(struct rpc_xprt_switch *xps);
 extern void xprt_switch_put(struct rpc_xprt_switch *xps);
 
 extern void rpc_xprt_switch_set_percpu(struct rpc_xprt_switch *xps);
-extern void rpc_xprt_numa_assign(struct rpc_xprt *xprt);
+extern void rpc_xprt_numa_assign(struct rpc_xprt *xprt,
+				 struct rpc_xprt_switch *xps);
+extern void rpc_xprt_numa_release(struct rpc_xprt *xprt);
 extern int rpc_xprt_numa_comp_vector(const struct rpc_xprt *xprt, int nvec);
 extern void rpc_xprt_switch_update_cpu_map_locked(struct rpc_xprt_switch *xps);
 extern long rpc_xprt_switch_queuelen(struct rpc_xprt_switch *xps);
