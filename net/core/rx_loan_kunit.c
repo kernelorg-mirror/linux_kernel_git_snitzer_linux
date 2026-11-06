@@ -1773,6 +1773,64 @@ static void rx_loan_kunit_carved_remove(void *data)
 	rx_loan_kunit_carved_free(data);
 }
 
+struct rx_loan_kunit_published {
+	int calls;
+	bool exists;
+	bool lends;
+};
+
+static void rx_loan_kunit_published_seen(void *arg)
+{
+	struct rx_loan_kunit_published *seen = arg;
+
+	seen->calls++;
+	seen->exists = page_pool_rx_region_exists();
+	seen->lends = rx_loan_region_lends();
+}
+
+static void rx_loan_kunit_published_off(void *data)
+{
+	page_pool_rx_region_kunit_on_publish(NULL, NULL);
+}
+
+/*
+ * A region a pool holds lends from the moment it can be seen.  A consumer
+ * that sees it exist does not carve, takes no lock and decides once
+ * (nvmet-tcp at ICReq: rx_loan_region_carve(), then rx_loan_region_lends()
+ * for the queue's lifetime), so a reader that saw the region before its
+ * pools were counted would stay stock for good.  Seen here at the instant
+ * of publication, from the publish a carve makes for one bound pool.
+ */
+static void rx_loan_region_publish_lends_test(struct kunit *test)
+{
+	struct rx_loan_kunit_published *seen;
+	struct page *base;
+	int ret;
+
+	if (page_pool_rx_region_exists())
+		kunit_skip(test, "a region exists");
+	seen = kunit_kzalloc(test, sizeof(*seen), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, seen);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			rx_loan_kunit_published_off, NULL), 0);
+	base = alloc_pages(GFP_KERNEL, RX_LOAN_KUNIT_CARVED_ORDER);
+	KUNIT_ASSERT_NOT_NULL(test, base);
+	split_page(base, RX_LOAN_KUNIT_CARVED_ORDER);
+	page_pool_rx_region_kunit_on_publish(rx_loan_kunit_published_seen, seen);
+	ret = page_pool_rx_region_kunit_install(base,
+			1UL << RX_LOAN_KUNIT_CARVED_ORDER, 0);
+	page_pool_rx_region_kunit_on_publish(NULL, NULL);
+	if (ret)
+		rx_loan_kunit_carved_free(base);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			rx_loan_kunit_carved_remove, base), 0);
+	KUNIT_EXPECT_EQ(test, seen->calls, 1);
+	KUNIT_EXPECT_TRUE(test, seen->exists);
+	KUNIT_EXPECT_TRUE(test, seen->lends);
+	KUNIT_EXPECT_TRUE(test, rx_loan_region_lends());
+}
+
 /*
  * The region's settings through the ops their module parameters and
  * debugfs files share: 0 is auto (the computed size), N is manual N, and
@@ -1871,6 +1929,7 @@ static void rx_loan_region_param_test(struct kunit *test)
 
 static struct kunit_case rx_loan_test_cases[] = {
 	KUNIT_CASE(rx_loan_region_param_test),
+	KUNIT_CASE(rx_loan_region_publish_lends_test),
 	KUNIT_CASE(rx_loan_region_size_for_test),
 	KUNIT_CASE(rx_loan_consumer_share_test),
 	KUNIT_CASE(rx_loan_other_consumer_test),

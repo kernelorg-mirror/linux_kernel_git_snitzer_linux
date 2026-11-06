@@ -386,6 +386,7 @@ void page_pool_rx_region_kunit_config(unsigned int pages,
 int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
 				      unsigned long nr_read);
 void page_pool_rx_region_kunit_remove(bool contig);
+void page_pool_rx_region_kunit_on_publish(void (*fn)(void *arg), void *arg);
 void page_pool_rx_region_kunit_part(bool read, unsigned long out[4]);
 unsigned long page_pool_rx_region_kunit_shards(bool read, int i,
 					       unsigned long *cap,

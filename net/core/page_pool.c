@@ -82,10 +82,13 @@ DEFINE_STATIC_KEY_FALSE(page_pool_mem_providers);
  */
 #define RX_REGION_DEV_LEN	256
 /*
- * The region is off unless rx_region_dev is set or
- * sunrpc.svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in,
- * it does not enable one.  With neither, no pool binds a region, no carve
- * makes one, and nothing is loaned from one.
+ * The region is off unless rx_region_dev is set or kNFSd carves one for
+ * its READs (sunrpc.svc_tcp_rx_region_reads=Y); autosize sizes a region
+ * once opted in, it does not enable one.  With neither, no pool binds a
+ * region, no carve makes one, and nothing is loaned from one.  nvmet-tcp
+ * has no switch of its own: it sends READs from the region only once a
+ * device is listed or a region exists (rx_loan_region_reads_on()), so
+ * svc_tcp_rx_region_reads=Y alone turns them on only after kNFSd carves.
  *
  * Supported tunings: module parameters (page_pool.rx_region_* on the kernel
  * command line, /sys/module/page_pool/parameters/ at run time) and the same
@@ -479,8 +482,11 @@ static unsigned long rx_region_read_want(unsigned long read_demand,
  * The region's computed size: the write partition, sized for rings of @nic
  * pages and consumers asking @demand as rx_region_size_for() sizes a
  * region, within what the read partition leaves of the cap, plus the read
- * partition for @read_demand (rx_region_read_want()).  0 while nothing asks
- * for a write partition: every READ consumer is a receive consumer too.
+ * partition: the read_pages override when set, else the one for
+ * @read_demand (rx_region_read_want()).  An override that leaves no write
+ * partition within the cap adds nothing: the region is not split
+ * (rx_region_read_split_for()).  0 while nothing asks for a write
+ * partition: every READ consumer is a receive consumer too.
  */
 static unsigned long rx_region_size_total(unsigned long nic,
 					  unsigned long demand,
@@ -489,11 +495,15 @@ static unsigned long rx_region_size_total(unsigned long nic,
 {
 	unsigned long cap = rounddown_pow_of_two(max(ram / RX_REGION_RAM_DIV,
 						     1UL));
-	unsigned long nr_read = rx_region_read_want(read_demand, ram);
+	unsigned long nr_read = READ_ONCE(rx_region_read_pages);
 	unsigned long nr = rx_region_size_for(nic, demand, ram);
 
 	if (!nr)
 		return 0;
+	if (!nr_read)
+		nr_read = rx_region_read_want(read_demand, ram);
+	else if (nr_read >= cap)
+		return nr;
 	return min(nr, cap - nr_read) + nr_read;
 }
 
@@ -623,21 +633,33 @@ static struct page_pool_rx_region *rx_region_published(void)
 /* An earlier allocation failed: a device-less consumer does not retry. */
 static bool rx_region_failed;
 
+#if IS_ENABLED(CONFIG_KUNIT)
+/* Called right after a region is published; see _kunit_on_publish(). */
+static void (*rx_region_kunit_published)(void *arg);
+static void *rx_region_kunit_published_arg;
+#endif
+
 /*
  * Lay the region @r out over the @nr pages at @base_pfn, @nr_read of them
  * split off for reads, with @pcp[RX_REGION_WRITE] and @pcp[RX_REGION_READ]
  * as the partitions' CPU caches (a read partition of no pages does not use
- * its own, which may be NULL), and publish it; under rx_region_mutex.
+ * its own, which may be NULL), held by the @pools pools that bind to it, and
+ * publish it; under rx_region_mutex.  The pools are counted before it is
+ * seen: a lockless reader that sees it exist then sees whether it lends
+ * (page_pool_rx_region_pools_bound()), and one that decides once (a queue
+ * at ICReq) is not left stock by a carve it raced.
  */
 static void rx_region_publish(struct page_pool_rx_region *r,
 			      struct page **free,
 			      struct rx_region_pcp __percpu *pcp[RX_REGION_PARTS],
 			      unsigned long base_pfn, unsigned long nr,
-			      unsigned long nr_read, const char *who)
+			      unsigned long nr_read, unsigned int pools,
+			      const char *who)
 {
 	lockdep_assert_held(&rx_region_mutex);
 	r->base_pfn = base_pfn;
 	r->nr = nr;
+	r->pools = pools;
 	rx_region_part_init(&r->part[RX_REGION_WRITE], base_pfn, nr - nr_read,
 			    free, pcp[RX_REGION_WRITE]);
 	rx_region_part_init(&r->part[RX_REGION_READ], base_pfn + nr - nr_read,
@@ -648,6 +670,10 @@ static void rx_region_publish(struct page_pool_rx_region *r,
 	static_branch_inc(&page_pool_rx_region_key);
 	/* Pairs with rx_region_published(). */
 	smp_store_release(&rx_region, r);
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (rx_region_kunit_published)
+		rx_region_kunit_published(rx_region_kunit_published_arg);
+#endif
 	r->debugfs = debugfs_create_file("page_pool_rx_region", 0600, NULL, r,
 					 &rx_region_fops);
 	pr_info("page_pool: fixed rx region for %s: %lu pages (%lu read) at 0x%llx\n",
@@ -698,8 +724,12 @@ static bool rx_region_pcp_alloc(struct rx_region_pcp __percpu *pcp[RX_REGION_PAR
 	return false;
 }
 
-/* Allocate the region of @nr pages on @nid; under rx_region_mutex. */
+/*
+ * Allocate the region of @nr pages on @nid, held by the @pools pools that
+ * bind to it; under rx_region_mutex.
+ */
 static struct page_pool_rx_region *rx_region_create(unsigned long nr, int nid,
+						    unsigned int pools,
 						    const char *who)
 {
 	struct rx_region_pcp __percpu *pcp[RX_REGION_PARTS] = {};
@@ -732,7 +762,8 @@ static struct page_pool_rx_region *rx_region_create(unsigned long nr, int nid,
 		kfree(r);
 		goto fail;
 	}
-	rx_region_publish(r, free, pcp, page_to_pfn(base), nr, nr_read, who);
+	rx_region_publish(r, free, pcp, page_to_pfn(base), nr, nr_read,
+			  pools, who);
 	return r;
 fail:
 	/* Pairs with READ_ONCE() in page_pool_rx_region_bind_reads(). */
@@ -863,15 +894,16 @@ page_pool_rx_region_get(const struct page_pool *pool)
 	 * and the first consumer's carve attaches it.
 	 */
 	r = rx_region;
-	if (!r && (READ_ONCE(rx_region_pages) || rx_region_demand) &&
-	    !rx_region_failed)
-		r = rx_region_create(rx_region_size_now() ?: 1,
-				     pool->p.nid == NUMA_NO_NODE ?
-				     numa_mem_id() : pool->p.nid, dev);
 	if (r)
 		WRITE_ONCE(r->pools, r->pools + 1);
-	else if (!xa_insert(&rx_region_waiting, (unsigned long)pool,
-			    (void *)pool, GFP_KERNEL))
+	else if ((READ_ONCE(rx_region_pages) || rx_region_demand) &&
+		 !rx_region_failed)
+		/* Published with this pool counted (rx_region_publish()). */
+		r = rx_region_create(rx_region_size_now() ?: 1,
+				     pool->p.nid == NUMA_NO_NODE ?
+				     numa_mem_id() : pool->p.nid, 1, dev);
+	if (!r && !xa_insert(&rx_region_waiting, (unsigned long)pool,
+			     (void *)pool, GFP_KERNEL))
 		WRITE_ONCE(rx_region_nic,
 			   rx_region_nic + rx_region_pool_ring(pool));
 	mutex_unlock(&rx_region_mutex);
@@ -893,16 +925,19 @@ static struct page_pool_rx_region *rx_region_carve_locked(int nid,
 	unsigned long nr = rx_region_size_now();
 	struct page_pool_rx_region *r;
 	struct page_pool *pool;
+	unsigned int pools = 0;
 	unsigned long idx;
 
 	lockdep_assert_held(&rx_region_mutex);
 	if (rx_region || rx_region_failed || !nr)
 		return rx_region;
-	r = rx_region_create(nr, nid, who);
+	/* Counted in r->pools before it is published (rx_region_publish()). */
+	xa_for_each(&rx_region_waiting, idx, pool)
+		pools++;
+	r = rx_region_create(nr, nid, pools, who);
 	if (!r)
 		return NULL;
 	xa_for_each(&rx_region_waiting, idx, pool) {
-		WRITE_ONCE(r->pools, r->pools + 1);
 		pool->rx_region_dev = rx_region_dev_get(r, pool);
 		/* The slot is seen before the region: pairs with smp_rmb(). */
 		smp_wmb();
@@ -963,10 +998,10 @@ EXPORT_SYMBOL_GPL(page_pool_rx_region_read_demand);
 /**
  * page_pool_rx_region_listed_any - is a network device listed for the region
  *
- * The region is off unless rx_region_dev is set or
- * sunrpc.svc_tcp_rx_region_reads=Y: a READ consumer with no switch of its
- * own (nvmet-tcp) carves a region only when a device is listed, whether or
- * not that device's pools can attach to it.  Lockless.
+ * A READ consumer with no switch of its own (nvmet-tcp) carves a region
+ * only when a device is listed, whether or not that device's pools can
+ * attach to it.  sunrpc.svc_tcp_rx_region_reads=Y is kNFSd's switch, not
+ * a listing: it does not count here.  Lockless.
  */
 bool page_pool_rx_region_listed_any(void)
 {
@@ -2105,8 +2140,7 @@ int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
 		ret = -EBUSY;
 	if (!ret) {
 		rx_region_publish(r, free, pcp, page_to_pfn(base), nr, nr_read,
-				  "kunit");
-		WRITE_ONCE(r->pools, 1);
+				  1, "kunit");
 	}
 	mutex_unlock(&rx_region_mutex);
 	if (ret) {
@@ -2120,6 +2154,20 @@ int page_pool_rx_region_kunit_install(struct page *base, unsigned long nr,
 	return ret;
 }
 EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_install);
+
+/*
+ * Call @fn(@arg) under rx_region_mutex as soon as a region is published,
+ * before anything else is done to it (NULL: no call): what @fn sees is what
+ * the first lockless reader that sees the region sees.
+ */
+void page_pool_rx_region_kunit_on_publish(void (*fn)(void *arg), void *arg)
+{
+	mutex_lock(&rx_region_mutex);
+	rx_region_kunit_published = fn;
+	rx_region_kunit_published_arg = arg;
+	mutex_unlock(&rx_region_mutex);
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_on_publish);
 
 /*
  * Unpublish the region; free its pages too when bind_reads() allocated them
@@ -3948,7 +3996,7 @@ static const struct kernel_param_ops rx_region_dev_ops = {
 };
 module_param_cb(rx_region_dev, &rx_region_dev_ops, NULL, 0644);
 MODULE_PARM_DESC(rx_region_dev,
-		 "Network devices, comma-separated (parent bus device, else interface name), whose page pools share the fixed receive region; read when a pool is created (default: empty; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one)");
+		 "Network devices, comma-separated (parent bus device, else interface name), whose page pools share the fixed receive region; read when a pool is created (default: empty; the region is off unless rx_region_dev is set or kNFSd carves one for READs (sunrpc.svc_tcp_rx_region_reads=Y); nvmet-tcp sends READs from it only once a device is listed or a region exists; autosize sizes a region once opted in, it does not enable one)");
 
 /* 0 is auto: the size a carve computes (rx_region_size_now()). */
 static int rx_region_pages_param_set(const char *val,
@@ -3984,7 +4032,7 @@ static const struct kernel_param_ops rx_region_pages_ops = {
 };
 module_param_cb(rx_region_pages, &rx_region_pages_ops, NULL, 0644);
 MODULE_PARM_DESC(rx_region_pages,
-		 "Pages in the fixed receive region (0: auto, computed when carved; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one); reads \"<pages> (auto|manual)\": the size the next carve uses, while debugfs page_pool_rx_region shows the carved region; a change takes effect once no pool is bound to the region");
+		 "Pages in the fixed receive region (0: auto, computed when carved; the region is off unless rx_region_dev is set or kNFSd carves one for READs (sunrpc.svc_tcp_rx_region_reads=Y); nvmet-tcp sends READs from it only once a device is listed or a region exists; autosize sizes a region once opted in, it does not enable one); reads \"<pages> (auto|manual)\": the size the next carve uses, while debugfs page_pool_rx_region shows the carved region; a change takes effect once no pool is bound to the region");
 
 static int rx_region_stack_param_set(const char *val,
 				     const struct kernel_param *kp)
@@ -4086,7 +4134,7 @@ module_param_cb(rx_region_held_mark, &rx_region_held_mark_ops, NULL, 0644);
 MODULE_PARM_DESC(rx_region_held_mark,
 		 "Count the fixed receive region's pages held and their peak, shown as held and max_held in debugfs page_pool_rx_region (a write there restarts the peak); a shared count on every take and return, so off by default; switch it on with the region at rest");
 MODULE_PARM_DESC(rx_region_stack,
-		 "Pages a pool bound to the fixed receive region keeps for reuse (0: auto, each pool's size, read back as \"0 (auto)\"); read when a pool is created; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one");
+		 "Pages a pool bound to the fixed receive region keeps for reuse (0: auto, each pool's size, read back as \"0 (auto)\"); read when a pool is created; the region is off unless rx_region_dev is set or kNFSd carves one for READs (sunrpc.svc_tcp_rx_region_reads=Y); nvmet-tcp sends READs from it only once a device is listed or a region exists; autosize sizes a region once opted in, it does not enable one");
 
 /*
  * Only while no region exists: budgets are checked against the split.
@@ -4142,7 +4190,7 @@ static const struct kernel_param_ops rx_region_read_pages_ops = {
 };
 module_param_cb(rx_region_read_pages, &rx_region_read_pages_ops, NULL, 0644);
 MODULE_PARM_DESC(rx_region_read_pages,
-		 "Pages of the fixed receive region split off for reads (0: auto, computed from the READ consumers' floors when carved, reads and writes share it while none asks; else at least one maximum READ, a test override); -EBUSY while the region exists; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one");
+		 "Pages of the fixed receive region split off for reads (0: auto, computed from the READ consumers' floors when carved, reads and writes share it while none asks; else at least one maximum READ, a test override); -EBUSY while the region exists; the region is off unless rx_region_dev is set or kNFSd carves one for READs (sunrpc.svc_tcp_rx_region_reads=Y); nvmet-tcp sends READs from it only once a device is listed or a region exists; autosize sizes a region once opted in, it does not enable one");
 
 static ssize_t rx_region_cfg_read(struct file *file, char __user *ubuf,
 				  size_t count, loff_t *ppos)

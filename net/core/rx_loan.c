@@ -2853,11 +2853,11 @@ EXPORT_SYMBOL_GPL(rx_loan_tx_span);
 /**
  * rx_loan_region_reads_on - may READ sends use the region
  *
- * The region is off unless rx_region_dev is set or
- * sunrpc.svc_tcp_rx_region_reads=Y: a READ consumer with no switch of its
- * own (nvmet-tcp) sends from the region only when it exists or a device
- * is listed for it, and then its first READ carves it if need be
- * (rx_loan_tx_bind()).  Lockless.
+ * A READ consumer with no switch of its own (nvmet-tcp) sends from the
+ * region only when it exists or a device is listed for it, and then its
+ * first READ carves it if need be (rx_loan_tx_bind()).
+ * sunrpc.svc_tcp_rx_region_reads=Y alone does not turn its sends on: only
+ * once kNFSd has carved the region do they use it.  Lockless.
  */
 bool rx_loan_region_reads_on(void)
 {

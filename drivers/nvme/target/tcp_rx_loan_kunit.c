@@ -1790,6 +1790,19 @@ static void nvmet_tcp_kunit_read_split(struct kunit *test)
 						 NVMET_TCP_TX_READ_FLOOR_MAX,
 						 ram, &nr_read);
 	KUNIT_EXPECT_EQ(test, nr_read, 2 * rmin);
+	/* ... in the total too: the region is the write partition plus it. */
+	KUNIT_EXPECT_EQ(test, nr, nr_write + 2 * rmin);
+	/* Write demand past what it leaves is cut to fit the cap. */
+	nr = page_pool_rx_region_kunit_split_for(0, cap, cap, ram, &nr_read);
+	KUNIT_EXPECT_EQ(test, nr_read, 2 * rmin);
+	KUNIT_EXPECT_EQ(test, nr, cap);
+	/* An override of the whole cap leaves no write partition: unsplit. */
+	page_pool_rx_region_kunit_config(st->pages, cap, st->failed);
+	nr = page_pool_rx_region_kunit_split_for(0, NVMET_TCP_RX_FLOOR,
+						 NVMET_TCP_TX_READ_FLOOR_MAX,
+						 ram, &nr_read);
+	KUNIT_EXPECT_EQ(test, nr, nr_write);
+	KUNIT_EXPECT_EQ(test, nr_read, 0UL);
 }
 
 static void nvmet_tcp_kunit_consumer_gone(void *data)
@@ -1876,8 +1889,17 @@ static void nvmet_tcp_kunit_consumer_restore(void *data)
 		nvmet_tcp_rx_consumer_on = false;
 	}
 	nvmet_tcp_tx_read_pages = st->read_pages;
-	nvmet_tcp_rx_consumer.read_floor = st->read_floor;
-	nvmet_tcp_rx_consumer.read_floor_own = st->read_floor_own;
+	if (nvmet_tcp_rx_consumer_on) {
+		/*
+		 * Still registered: its READ demand follows the floor.  A live
+		 * consumer always has its own (nvmet_tcp_rx_consumer_start()).
+		 */
+		rx_loan_consumer_set_read_floor(&nvmet_tcp_rx_consumer,
+						st->read_floor);
+	} else {
+		nvmet_tcp_rx_consumer.read_floor = st->read_floor;
+		nvmet_tcp_rx_consumer.read_floor_own = st->read_floor_own;
+	}
 	mutex_unlock(&nvmet_tcp_rx_consumer_lock);
 }
 
@@ -1966,6 +1988,41 @@ static void nvmet_tcp_kunit_setup_no_pool(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, page_pool_rx_region_exists());
 }
 
+/*
+ * Putting back a consumer that was live puts its READ demand back too: a
+ * test that raised the READ floor of a registered consumer leaves the
+ * region's read demand as it found it.
+ */
+static void nvmet_tcp_kunit_restore_live(struct kunit *test)
+{
+	struct nvmet_tcp_kunit_consumer_state *st;
+	struct nvmet_port nport = { .max_queue_size = 1, .mdts = 1 };
+	unsigned long live;
+
+	if (nvmet_tcp_rx_consumer_on)
+		kunit_skip(test, "nvmet-tcp's consumer is live");
+	nvmet_tcp_kunit_icreq_queue(test);	/* unregisters it at test end */
+	st = kunit_kzalloc(test, sizeof(*st), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, st);
+	nvmet_tcp_rx_consumer_start(&nport);
+	KUNIT_ASSERT_TRUE(test, nvmet_tcp_rx_consumer_on);
+	live = page_pool_rx_region_kunit_read_demand();
+	mutex_lock(&nvmet_tcp_rx_consumer_lock);
+	st->on = nvmet_tcp_rx_consumer_on;
+	st->read_pages = nvmet_tcp_tx_read_pages;
+	st->read_floor = nvmet_tcp_rx_consumer.read_floor;
+	st->read_floor_own = nvmet_tcp_rx_consumer.read_floor_own;
+	mutex_unlock(&nvmet_tcp_rx_consumer_lock);
+
+	nport.max_queue_size = -1;	/* nvmet's defaults: a larger floor */
+	nport.mdts = 0;
+	nvmet_tcp_rx_consumer_start(&nport);
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_read_demand(), live);
+	nvmet_tcp_kunit_consumer_restore(st);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_kunit_read_demand(), live);
+	KUNIT_EXPECT_EQ(test, nvmet_tcp_rx_consumer.read_floor, st->read_floor);
+}
+
 static void nvmet_tcp_kunit_budget_resize(void *data)
 {
 	rx_loan_budget_reconfigure(data);
@@ -2033,6 +2090,7 @@ static struct kunit_case nvmet_tcp_rx_loan_cases[] = {
 	KUNIT_CASE(nvmet_tcp_kunit_setup_gates),
 	KUNIT_CASE(nvmet_tcp_kunit_setup_no_pool),
 	KUNIT_CASE(nvmet_tcp_kunit_setup_pool),
+	KUNIT_CASE(nvmet_tcp_kunit_restore_live),
 	{}
 };
 

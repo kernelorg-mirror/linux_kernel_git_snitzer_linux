@@ -458,10 +458,13 @@ static unsigned long nvmet_tcp_tx_read_pages;
 /*
  * The READ pages @port can have in flight at once: every queue it allows
  * (NVMET_NR_QUEUES) full (its max_queue_size) of READs of the most a
- * command transfers (its MDTS, within NVMET_TCP_MAXH2CDATA), at most
- * NVMET_TCP_TX_READ_FLOOR_MAX.  The region's read split is sized when it
- * is carved, before later queues connect: sized for queues live then, they
- * would be served unconfined.
+ * command transfers (its MDTS), at most NVMET_TCP_TX_READ_FLOOR_MAX.
+ * NVMET_TCP_MAXH2CDATA bounds a READ here not as an NVMe/TCP C2H limit
+ * (it is the H2C one; C2H data has none) but as the most data any command
+ * may carry on this target (nvmet_tcp_map_data() refuses a longer SGL), so
+ * the largest READ the region serves.  The region's read split is sized
+ * when it is carved, before later queues connect: sized for queues live
+ * then, they would be served unconfined.
  */
 static unsigned long nvmet_tcp_tx_read_floor(const struct nvmet_port *port)
 {
