@@ -179,19 +179,33 @@ Logs in `/var/tmp/zc-run-logs/<run>/`, notes in
 | t2-r181 | loan | one, N | 65.83 | 291.7k (277.9k) | 71.5k | 3.99 |
 | t2-r182 | loan | one, N | 64.56 | 291.2k (278.8k) | 75.8k | — |
 | t2-r185 | loan | one, N | 66.59 | 296.9k (278.1k) | 75.0k | — |
+| t2-r186 | loan | per-CPU, N | 68.71 | 347.8k (305.5k) | 77.4k | 6.43 |
 | t2-r184 | copy | one, N | 62.38 | 706.1k (477.0k) | 83.2k | 4.12 |
 
-The loan runs are held by the drives (83 to 90% busy), so their rate says
-little; the cost a WRITE is the measure.  Two of David's changes account
-for nearly all of the 45% more nfsd cycles:
+The loan runs are held by memory bandwidth, as on every run of this rig
+(the eight drives take about 80 GB/s, and nfsd's CPUs are about 16% busy),
+so their rate says little; the cost a WRITE is the measure.  Two of David's
+changes account for nearly all of the 45% more nfsd cycles, and their costs
+add up:
+
+| nfsd cycles a WRITE | one pool | 64 per-CPU pools |
+|---|---|---|
+| `rtc_read=Y` (the default: the hop) | 350.3k (t2-r180) | 397.2k (t2-r179) |
+| `rtc_read=N` (no hop) | 291.2k-296.9k (t2-r181, r182, r185) | 347.8k (t2-r186) |
+
 
 - **Per-CPU pools** (`3fe6000275d8`): `auto`, the default `pool_mode`,
   always picks one pool for each CPU, 64 pools of 8 threads on tardis2, with
-  sibling wake and steal.  About 47k cycles a WRITE (397.2k to 350.3k with
-  `pool_mode=global`, one pool of 512) and nearly twice the wakes.  This
-  brings back the several pools a node that the series dropped on 15
-  October (`pools_per_node`), and undoes Jeff Layton's per-node pools
-  upstream (`a1a7071195b9`).
+  sibling wake and steal.  About 50k cycles a WRITE with the hop or
+  without it (t2-r179 against t2-r180; t2-r186 against t2-r181, r182 and
+  r185, which change only `pool_mode`), 1.6 times the wakes and half again
+  the context switches (1.07M a second against 703k), with more cycles
+  than instructions added.  This brings back the several pools a node that
+  the series dropped on 15 October (`pools_per_node`), and undoes Jeff
+  Layton's `a1a7071195b9` (in `v7.3-11`), which removed every mode but
+  per-node: on tardis2's one node that is one pool, the same code path as
+  `pool_mode=global` (no thread affinity, `svc_pool_for_cpu()` returns the
+  one pool), so `global` here stands for upstream and build 507.
 - **The run-to-completion hop on WRITEs** (`cd57a466c835`, on
   `9874eba2dca0`'s fast path): a receive goes
   to a work item while either direction is on and its mode is direct
@@ -210,7 +224,8 @@ What is left, about 18k cycles a WRITE (+6.5%) at the same instructions,
 is not explained; 507's own runs spread by about 10k.  Whether the rig
 holds `pool_mode=global` and `rtc_read=N`, or the defaults change in the
 series, is Mike's.  Neither is in `settled.sh`: both go back to their
-defaults when nfsd is reloaded or the host reboots.
+defaults when nfsd is reloaded or the host reboots.  After t2-r186 the host
+was left at `pool_mode=percpu` and `rtc_read=N`.
 
 **Copy mode** (t2-r184): 62.38 GB/s, nothing loaned (the budget read
 `0 (manual)` throughout and `admitted` did not move), drives 71 to 76%
