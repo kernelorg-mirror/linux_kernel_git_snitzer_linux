@@ -458,16 +458,17 @@ unsigned int svc_serv_nrpools(const struct svc_serv *serv)
 EXPORT_SYMBOL_GPL(svc_serv_nrpools);
 
 /**
- * svc_pool_for_cpu - Select pool to run a thread on this cpu
+ * svc_pool_for_cpu_on - Select the pool that serves @cpu
  * @serv: An RPC service
+ * @cpu: an online CPU
  *
- * Use the active CPU and the svc_pool_map to select the svc thread
- * pool to use. Once initialized, the svc_pool_map does not change.
+ * Use @cpu and the svc_pool_map to select the svc thread pool to use.
+ * Once initialized, the svc_pool_map does not change.
  *
  * Return value:
  *   A pointer to an svc_pool
  */
-struct svc_pool *svc_pool_for_cpu(struct svc_serv *serv)
+struct svc_pool *svc_pool_for_cpu_on(struct svc_serv *serv, unsigned int cpu)
 {
 	unsigned int nrpools = svc_serv_nrpools(serv);
 	struct svc_pool_map *m = &svc_pool_map;
@@ -489,9 +490,9 @@ struct svc_pool *svc_pool_for_cpu(struct svc_serv *serv)
 	 * serviced.
 	 */
 	if (m->mode == SVC_POOL_PERCPU)
-		pidx = m->to_pool[raw_smp_processor_id()];
+		pidx = m->to_pool[cpu];
 	else
-		pidx = m->to_pool[cpu_to_node(raw_smp_processor_id())];
+		pidx = m->to_pool[cpu_to_node(cpu)];
 	if (likely(data_race(serv->sv_pools[pidx].sp_nrthreads)))
 		return &serv->sv_pools[pidx];
 	pidx = READ_ONCE(serv->sv_pool_ext[pidx].serve);
@@ -510,6 +511,18 @@ struct svc_pool *svc_pool_for_cpu(struct svc_serv *serv)
 
 	/* No pool has any threads; nothing can service the transport. */
 	return &serv->sv_pools[pidx];
+}
+
+/**
+ * svc_pool_for_cpu - Select pool to run a thread on this cpu
+ * @serv: An RPC service
+ *
+ * Return value:
+ *   A pointer to the svc_pool that serves the active CPU
+ */
+struct svc_pool *svc_pool_for_cpu(struct svc_serv *serv)
+{
+	return svc_pool_for_cpu_on(serv, raw_smp_processor_id());
 }
 
 static int svc_rpcb_setup(struct svc_serv *serv, struct net *net)

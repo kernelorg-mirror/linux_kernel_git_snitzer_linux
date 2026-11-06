@@ -717,6 +717,8 @@ static struct svc_xprt *svc_rdma_accept(struct svc_xprt *xprt)
 	vec = svc_rdma_cq_vector(newxprt, dev);
 	if (svc_rdma_alloc_cqs(newxprt, dev, vec, rq_depth))
 		goto errout;
+	/* Its work then goes to the pool of the core its CQs interrupt on */
+	newxprt->sc_xprt.xpt_home_cpu = newxprt->sc_cq_cpu;
 
 	memset(&qp_attr, 0, sizeof qp_attr);
 	qp_attr.event_handler = qp_event_handler;
