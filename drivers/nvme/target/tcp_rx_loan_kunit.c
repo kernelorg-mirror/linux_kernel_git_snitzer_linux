@@ -536,36 +536,45 @@ static void nvmet_tcp_kunit_unit_kept(struct kunit *test)
 {
 	struct nvmet_tcp_kunit *k = test->priv;
 	struct nvmet_tcp_queue *queue = k->queue;
+	/*
+	 * a keeps its first unit's credit when the unit passes to b, so the
+	 * budget (not the reserve) grows with the page: it covers both.
+	 */
+	unsigned int budget = 100 * (PAGE_SIZE / SZ_4K);
 	struct nvmet_tcp_cmd *a, *b;
+	u32 unit;
 
 	nvmet_tcp_kunit_queue_live(test, queue);
-	queue->rx_budget = nvmet_tcp_kunit_budget(test, 100, 6); /* 4 KiB unit */
-	a = nvmet_tcp_kunit_cmd(test, queue, 3 * 4096);
-	b = nvmet_tcp_kunit_cmd(test, queue, 4096);
+	queue->rx_budget = nvmet_tcp_kunit_budget(test, budget, 6);
+	unit = nvmet_tcp_rx_unit(queue->rx_budget);
+	KUNIT_ASSERT_EQ(test, unit, (u32)PAGE_SIZE);	/* one page */
+	KUNIT_ASSERT_GE(test, budget - 6, 2 * nvmet_tcp_rx_entries(unit));
+	a = nvmet_tcp_kunit_cmd(test, queue, 3 * unit);
+	b = nvmet_tcp_kunit_cmd(test, queue, unit);
 
 	KUNIT_ASSERT_TRUE(test, nvmet_tcp_rx_r2t_ok(a));
-	KUNIT_EXPECT_EQ(test, a->r2t_end, 4096U);
+	KUNIT_EXPECT_EQ(test, a->r2t_end, unit);
 	KUNIT_EXPECT_FALSE(test, nvmet_tcp_rx_r2t_ok(b));
 	KUNIT_EXPECT_FALSE(test, b->cr.linked);
 
 	/* Unit 1 is in: a solicits more and keeps the unit. */
-	a->rbytes_done = 4096;
+	a->rbytes_done = unit;
 	KUNIT_EXPECT_FALSE(test, nvmet_tcp_rx_unit_done(a));
 	KUNIT_EXPECT_PTR_EQ(test, queue->rx_unit, a);
 	KUNIT_EXPECT_PTR_EQ(test, llist_del_all(&queue->resp_list), &a->lentry);
 	WRITE_ONCE(queue->rx_kicked, true);
 	KUNIT_EXPECT_NULL(test, nvmet_tcp_rx_next_withheld(queue));
 	KUNIT_EXPECT_TRUE(test, nvmet_tcp_rx_r2t_ok(a));
-	KUNIT_EXPECT_EQ(test, a->r2t_end, 2 * 4096U);
+	KUNIT_EXPECT_EQ(test, a->r2t_end, 2 * unit);
 
-	a->rbytes_done = 2 * 4096;
+	a->rbytes_done = 2 * unit;
 	KUNIT_EXPECT_FALSE(test, nvmet_tcp_rx_unit_done(a));
 	KUNIT_EXPECT_PTR_EQ(test, llist_del_all(&queue->resp_list), &a->lentry);
 	KUNIT_EXPECT_TRUE(test, nvmet_tcp_rx_r2t_ok(a));
-	KUNIT_EXPECT_EQ(test, a->r2t_end, 3 * 4096U);
+	KUNIT_EXPECT_EQ(test, a->r2t_end, 3 * unit);
 
 	/* All of a is in: the unit passes to b, the oldest withheld. */
-	a->rbytes_done = 3 * 4096;
+	a->rbytes_done = 3 * unit;
 	KUNIT_EXPECT_FALSE(test, nvmet_tcp_rx_unit_done(a));
 	KUNIT_EXPECT_NULL(test, queue->rx_unit);
 	KUNIT_EXPECT_TRUE(test, llist_empty(&queue->resp_list));
@@ -723,6 +732,7 @@ static void nvmet_tcp_kunit_table_cap(struct kunit *test)
 	struct nvmet_tcp_cmd *cmd = kunit_kzalloc(test, sizeof(*cmd),
 						  GFP_KERNEL);
 	u64 rec0, bytes0, rec1, bytes1;
+	u32 unit;
 
 	KUNIT_ASSERT_NOT_NULL(test, nc);
 	KUNIT_ASSERT_NOT_NULL(test, cmd);
@@ -751,14 +761,16 @@ static void nvmet_tcp_kunit_table_cap(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, bytes1 - bytes0, (u64)SZ_4M);
 
 	/* A capsule larger than a unit: the same, before any allocation. */
-	queue->rx_budget = nvmet_tcp_kunit_budget(test, 100, 6); /* 4 KiB unit */
-	cmd->pdu_len = 8192;
+	queue->rx_budget = nvmet_tcp_kunit_budget(test, 100, 6);
+	unit = nvmet_tcp_rx_unit(queue->rx_budget);
+	KUNIT_ASSERT_EQ(test, unit, (u32)PAGE_SIZE);	/* one page */
+	cmd->pdu_len = 2 * unit;
 	rx_loan_copies_read(&rec0, &bytes0);
-	KUNIT_EXPECT_FALSE(test, nvmet_tcp_rx_want(cmd, 8192));
+	KUNIT_EXPECT_FALSE(test, nvmet_tcp_rx_want(cmd, 2 * unit));
 	rx_loan_copies_read(&rec1, &bytes1);
 	KUNIT_EXPECT_NULL(test, cmd->lt.bvec);
 	KUNIT_EXPECT_EQ(test, rec1 - rec0, 1ULL);
-	KUNIT_EXPECT_EQ(test, bytes1 - bytes0, 8192ULL);
+	KUNIT_EXPECT_EQ(test, bytes1 - bytes0, 2ULL * unit);
 
 	/* A table of one entry: the copy is counted in full all the same. */
 	cmd = nvmet_tcp_kunit_cmd(test, queue, SZ_64K);
@@ -780,10 +792,13 @@ static void nvmet_tcp_kunit_capsule_over_unit(struct kunit *test)
 	struct nvmet_tcp_queue *queue = k->queue;
 	u64 rec0, bytes0, rec1, bytes1;
 	struct nvmet_tcp_cmd *c;
+	u32 unit;
 
 	nvmet_tcp_kunit_queue_live(test, queue);
-	queue->rx_budget = nvmet_tcp_kunit_budget(test, 100, 6); /* 4 KiB unit */
-	c = nvmet_tcp_kunit_cmd(test, queue, 8192);
+	queue->rx_budget = nvmet_tcp_kunit_budget(test, 100, 6);
+	unit = nvmet_tcp_rx_unit(queue->rx_budget);
+	KUNIT_ASSERT_EQ(test, unit, (u32)PAGE_SIZE);	/* one page */
+	c = nvmet_tcp_kunit_cmd(test, queue, 2 * unit);
 	rx_loan_copies_read(&rec0, &bytes0);
 	KUNIT_EXPECT_EQ(test, nvmet_tcp_rx_admit_capsule(c), 1);
 	rx_loan_copies_read(&rec1, &bytes1);
@@ -791,7 +806,7 @@ static void nvmet_tcp_kunit_capsule_over_unit(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, c->cr.linked);
 	KUNIT_EXPECT_NULL(test, queue->rx_unit);
 	KUNIT_EXPECT_EQ(test, rec1 - rec0, 1ULL);
-	KUNIT_EXPECT_EQ(test, bytes1 - bytes0, 8192ULL);
+	KUNIT_EXPECT_EQ(test, bytes1 - bytes0, 2ULL * unit);
 	nvmet_tcp_free_cmd_buffers(c);
 }
 
