@@ -262,6 +262,39 @@ of 0).  That reverses the series' decision of 22 October that a budget of
 with `pool_mode=percpu`.  A new network namespace starts at `32768
 (auto)`, so it loans with nothing configured.
 
+## Runtime on build 514 (tardis2, 2026-11-06)
+
+Build 514 (`7.3.0-11.hs.514.canary`) differs from 512 on the server only in
+KUnit (the fixes above and `svc_rtc_kunit_active()`); the rest is NFS client
+work.  `updates/` empty; sunrpc `1C2C5C459F3413804A2CEE1`, nfsd
+`90122931101ECCD1B292201` (512's), xeu `CA0931345E46C929B11D01F`; no
+pseudo-NMI.  kdump was not armed at boot; `bringup.sh 32768 256` armed it
+and mapped both NICs, and `settled.sh apply` ended in the settled setting,
+`rtc_read` and `rtc_write` at N for every run.  The runs are 512's: fstrim,
+120 s of rest, `WARM=10 RUNTIME=30 twoport.sh ab`, `cost.sh`.  No drive
+stepped down or stalled and dmesg stayed clean.  Driver and notes in
+`/var/tmp/zc-run-logs/t2-514-canary/`.
+
+| run | mode | pools | GB/s | nfsd cycles (instr) a WRITE | ring cycles | woken a WRITE | 512's |
+|---|---|---|---|---|---|---|---|
+| t2-r187 | loan | per-CPU | 66.34 | 340.1k (305.0k) | 77.2k | 6.39 | t2-r186: 347.8k (305.5k) |
+| t2-r189 | loan | one | 66.72 | 297.0k (278.7k) | 73.4k | 3.95 | t2-r181/182/185: 291.2k-296.9k (~278k) |
+| t2-r188 | copy | per-CPU | 57.93 | 925.2k (552.1k) | 85.3k | 10.99 | none |
+| t2-r190 | copy | one | 62.23 | 693.4k (476.1k) | 80.5k | 4.22 | t2-r184: 62.38, 706.1k (477.0k) |
+
+- **No regression against 512.** With one pool, loan and copy are within
+  512's spread, and so within about 6% of 507's loan cost
+  (269.5k-279.6k, the unexplained gap noted above).
+- **Per-CPU pools cost even more in copy mode.** With the hop off, they add
+  about 43k cycles a loaned WRITE (as on 512) and about 232k cycles (+33%) a
+  copied WRITE.  Copy runs 7% slower (57.93 against 62.23 GB/s), with 2.6
+  times the wakes and twice the context switches (1.50M a second against
+  769k).  This is the first copy run with per-CPU pools.
+- **t2-r189 denied 515 loans** (2.52M admitted); every 512 run denied 0.
+  Not looked into.
+
+The host was left at `pool_mode=global`, `rtc_read=N`, `rtc_write=N`.
+
 ## TODO (formal, once the above passes on tardis2)
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
