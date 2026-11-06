@@ -80,6 +80,7 @@ static void svc_rdma_detach(struct svc_xprt *xprt);
 static void svc_rdma_free(struct svc_xprt *xprt);
 static int svc_rdma_has_wspace(struct svc_xprt *xprt);
 static void svc_rdma_kill_temp_xprt(struct svc_xprt *);
+static void svc_rdma_cq_vector_put(struct svcxprt_rdma *rdma);
 
 /*
  * LAB ONLY, set on the boot line: both CQs of each accepted connection
@@ -399,6 +400,12 @@ static int svc_rdma_cma_handler(struct rdma_cm_id *cma_id,
 		svc_xprt_enqueue(xprt);
 		break;
 	case RDMA_CM_EVENT_DISCONNECTED:
+		/*
+		 * The client is gone: stop counting this connection against
+		 * its core now, so a reconnect accepted before the close runs
+		 * is placed against the live connections only.
+		 */
+		svc_rdma_cq_vector_put(rdma);
 		svc_rdma_xprt_deferred_close(rdma);
 		break;
 	default:
@@ -551,8 +558,8 @@ out_unlock:
 
 /*
  * Give back what svc_rdma_cq_vector() took for @rdma.  Called when the
- * connection closes and again when it is freed; only the first call
- * finds anything to give back.
+ * client disconnects, when the connection closes and when it is freed;
+ * only the first call finds anything to give back.
  */
 static void svc_rdma_cq_vector_put(struct svcxprt_rdma *rdma)
 {
