@@ -99,7 +99,12 @@ static bool svc_tcp_rx_small_record(struct svc_sock *svsk)
 }
 
 #if IS_ENABLED(CONFIG_KUNIT)
-static enum svc_tcp_rx_kunit_fault svc_tcp_rx_kunit_fault;
+/*
+ * Read for every loaned piece, written only by a test: kept off the
+ * lines of .bss that the receive path writes, such as
+ * svc_tcp_spare_pages.
+ */
+static enum svc_tcp_rx_kunit_fault svc_tcp_rx_kunit_fault __read_mostly;
 static unsigned int svc_tcp_rx_kunit_fault_skip;
 static u32 svc_tcp_rx_kunit_fault_acquired;
 static u32 svc_tcp_rx_kunit_fault_released;
