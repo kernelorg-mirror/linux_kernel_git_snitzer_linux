@@ -1023,6 +1023,42 @@ cpumask cannot give each port its node.  Next, `ab-scope.sh`
 `workqueue.default_affinity_scope` `numa` against `cache_shard`, fio
 pinned.
 
+**The client's workqueue scope (7 November, 07:50 to 08:19).**
+`ab-scope.sh` ran N C N C N C, fio pinned in all six and `irqbalance`
+stopped, N the client's `workqueue.default_affinity_scope` at `numa`
+(each node one pod), C at `cache_shard` (pods of 8 CPUs, the default);
+`cache_shard` was set back after it.
+
+| run | scope | GB/s | far node's share of each NIC's packets (a, b) | retransmits | kworker CPUs |
+|---|---|---|---|---|---|
+| `t2-r215` | numa | 69.80 | 2.4%, 2.7% | 1623 | 22.9 |
+| `t2-r216` | cache_shard | 69.76 | 3.1%, 3.5% | 1229 | 22.7 |
+| `t2-r217` | numa | 69.55 | 1.3%, 1.5% | 3268 | 21.7 |
+| `t2-r218` | cache_shard | 68.30 | 4.6%, 4.0% | 705 | 23.1 |
+| `t2-r219` | numa | 69.13 | 2.8%, 2.8% | 873 | 22.8 |
+| `t2-r220` | cache_shard | 68.05 | 5.5%, 4.3% | 596 | 23.2 |
+
+- **These are the fast runs:** 68.05 to 69.80, every run clean (no drive
+  stepped down, no stall, dmesg clean).  Each has more drops and
+  retransmits than the slower runs, as the earlier fast runs had.
+- **The far node's share of the sends orders the rates:** from 1.3 to
+  1.5% (`t2-r217`, 69.55) up to 5.5 and 4.3% (`t2-r220`, 68.05), the
+  slowest runs those that sent most from the far node, `t2-r216` the
+  exception at 3.3% and 69.76.
+- **`numa` halves the far share:** 1.3 to 2.8% against 3.1 to 5.5%.  In
+  rate it is 69.13 to 69.80 against 68.05 to 69.76, about 1% on three
+  runs each, the two overlapping by one run.
+- **Pinned with `cache_shard` came out higher than in `ab-pin.sh`'s
+  runs** (68.05 to 69.76 against 67.90 to 68.35): the same setting half
+  an hour apart, so between series a drift of about 1 GB/s that pinning
+  does not remove.
+
+So a 514 run reaches 69 to 70 GB/s when the client sends from its NICs'
+own nodes: fio on its port's node (`PIN=1`), and its sunrpc kworkers
+there as much as the non-strict scope lets them.  The earlier fast runs,
+unpinned, are the ones where the scheduler happened to place it so; that
+was not recorded for them, so it is the likely reading, not a finding.
+
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
 into a test kernel did).  Use this kernel as long as possible: no reboot,
