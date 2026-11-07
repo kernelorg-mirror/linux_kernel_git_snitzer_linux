@@ -348,9 +348,88 @@ paired with 507's `svc_tcp_rx_*` they replace):
   them); 1.0k to 2.0k a stage, none alone the gap.  507's runs spread by
   about 10k cycles a WRITE, so what is under 1k a stage is not to be read.
 
+**Against the profiles nearest 70 GB/s** (cycles a WRITE rise with the
+rate on this rig, so fl-blk, at fl63's rate, is the like-for-like one):
+
+| reference | GB/s | nfsd busy cycles a WRITE | 514's excess |
+|---|---|---|---|
+| fl-blk, build 507 (round 55's B) | 67.31 | 189.5k | +21.0k |
+| fl-pp, build 507 (round 58's B) | 69.39 | 192.5k | +18.1k |
+| round 57's profile, build 506 (`t2-r165/fl56-flame`) | 71.68 | 201.8k | +8.7k |
+
+Build 506 had neither round 55 nor round 58 built in, and ran at the top
+of the rig's spread.  Against all three, the loan release
+(`svc_tcp_release_ctxt` +2.3k to +3.0k, of it the pages' return +1.7k to
++2.6k) and the reply send (+3.4k to +5.0k) are over, and the receive by
++2.0k to +5.8k.
+
 Files: `/var/tmp/zc-run-logs/t2-fl63/` (the profile) and
 `t2-fl63/vs-fl-blk/` (`incl.txt`, `children.txt`, `by-leaf.txt`, and the
 scripts `incl.py`, `children.py`, `fdiff.py`).
+
+## Next boot: the A/B of the bulk return to the region's slot (7 November)
+
+The commit at the tip of `kernel-7.3/canary`, "page_pool: return a
+bulk's overflow to the receive region's slot at once", brings back for the
+slots what round 58's `ca7b00ac39c7` did for one region list. When a pool
+with a slot finds its stack full, the pages
+`page_pool_recycle_ring_bulk()` leaves over go back to this CPU's cache of
+the slot under one hold of its lock, with one `atomic_add()` on the pool's
+release count. Pages not still mapped for the slot, or held elsewhere, go
+back one at a time as before. Built W=1 clean.
+
+**The A/B kernel** is built on tardis2, not on gitlab: branch
+`kernel-7.3/canary.ab-bulk-514` is build 514's own source (`6089265ea2c1`:
+514's debug sources are byte for byte that commit, all but pNFS flexfiles,
+a client module) with the change cherry-picked (`78efb6bc835c`) and a DROP
+switch on top (`1e95d3be2ede`: `page_pool.rx_region_return_bulk_ab`, Y the
+bulk return, N one page at a time as 514). It has 514's config and release
+string, so it boots with 514's initrd and modules: all 14,075 of vmlinux's
+exported CRCs are 514's. The config differs only in the compiler (gcc 14.3.1
+here, 14.4.1 on gitlab), a signing key made here for the build, and
+`CONFIG_MODULE_ALLOW_BTF_MISMATCH=y`, so that 514's modules, whose BTF was
+generated against gitlab's vmlinux, load with a warning and are not
+refused. Turning BTF off instead drops `sched_ext` and changes the CRCs.
+514's modules load tainted (signed by another key; signatures are not
+enforced). The image, its `System.map`, `vmlinux.symvers`, config and key
+are in `/var/tmp/zc-run-logs/t2-514-canary/ab-bulk-kernel/`, with
+`SHA256`.
+
+**To boot it once** (the auto mode classifier refused these to the
+session; build 514 stays the default):
+
+    R=7.3.0-11.hs.514.canary.el10.aarch64+16k K=/var/tmp/zc-run-logs/t2-514-canary/ab-bulk-kernel
+    mkdir -p /boot/ofp-rocky/ab-bulk-514
+    cp $K/vmlinuz.efi /boot/ofp-rocky/ab-bulk-514/linux
+    cp /boot/ofp-rocky/$R/initrd /boot/ofp-rocky/ab-bulk-514/initrd
+    printf '%s\n' 'title      A/B bulk return on 514 (one-shot test)' "version    $R" \
+      'sort-key   ofp-rocky-zz-ab' 'options    console=ttyAMA0 rodata=noalias crashkernel=1G' \
+      'linux      /ofp-rocky/ab-bulk-514/linux' 'initrd     /ofp-rocky/ab-bulk-514/initrd' \
+      > /boot/loader/entries/ofp-rocky-ab-bulk-514.conf
+    bootctl set-oneshot ofp-rocky-ab-bulk-514.conf && systemctl reboot
+
+**After it boots:**
+
+1. `uname -v` names tardis2's build (`root@tardis2`, gcc 14.3.1), and
+   `/sys/module/page_pool/parameters/rx_region_return_bulk_ab` reads Y. If
+   it is missing, the boot fell back to 514.
+2. `dmesg | grep -iE 'btf|taint|WARNING:|BUG:|Oops'`: BTF-mismatch
+   warnings for 514's modules and their taint are expected, nothing else.
+   `lsmod | grep -E 'xeu|sunrpc|nfsd'` shows all three loaded.
+3. From `xeu-rig/`: `./bringup.sh 32768 256` (it arms kdump), then
+   `./settled.sh apply`, ending in "the settled setting".
+4. `/var/tmp/zc-run-logs/t2-514-canary/ab-bulk.sh` (about 20 minutes): four
+   loan runs A B B A, `t2-r192` to `t2-r195`, each in NOTES.
+5. Read A against B by nfsd's cycles a WRITE (`cost.sh`, last line of each
+   `.out`) and the region's pages in use, which must not rise (AGENTS.md).
+   The profile's `page_pool_recycle_ring_bulk` was 7.75k cycles a WRITE on
+   514 (`page_pool_return_netmem` 6.6k of it): what B can take is about 2.5k
+   (507's was 4.1k under the region's lock). A `flame.sh` profile of B
+   shows where it went.
+6. Keep or drop: on a drop, revert that commit at the tip (a code
+   commit). The A/B branch and its DROP commit stay off `kernel-7.3/canary`
+   either way. Then boot 514 again (the one-shot entry already gives way to
+   the default) and remove `/boot/ofp-rocky/ab-bulk-514` and its entry.
 
 ## TODO (formal, once the above passes on tardis2)
 
