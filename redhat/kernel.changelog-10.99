@@ -1,6 +1,218 @@
 * Fri Nov 06 2026 Mike Snitzer <snitzer@kernel.org> [7.3.3-0]
 - Linux v7.3.3
 
+* Fri Nov 06 2026 Mike Snitzer <snitzer@kernel.org> [7.3-12]
+- nfs-testing-canary: the flexfiles layoutstats series keeps
+  ffl->last_report_time and dss_info->start_time as atomic64_t, set with
+  atomic64_try_cmpxchg() and read with atomic64_read(), rather than as
+  ktime_t with try_cmpxchg64() and READ_ONCE()
+- Add nfsd-next: all of cel/nfsd-next after v7.4-rc1, each commit
+  cherry-picked with -xs, on nfsd-7.4.  It carries "nfsd: use direct I/O
+  only for the last operation in a COMPOUND" and "SUNRPC: preserve
+  RQ_SECURE across request deferral", which nfsd-testing carried before
+- nfsd-testing is rebased on nfsd-next: its other seven commits,
+  cherry-picked again from Chuck Lever's rebased cel/nfsd-testing with
+  their new commit IDs, code unchanged; nfsd-testing-canary-dontcache and
+  nfsd-testing-canary-dontcache-LOCALIO are rebased on it
+
+* Thu Nov 05 2026 Mike Snitzer <snitzer@kernel.org> [7.3-11]
+- nfs-testing-canary carries v2 of the flexfiles layoutstats scaling
+  series as posted
+  (https://lore.kernel.org/linux-nfs/20261106001251.73472-1-snitzer@kernel.org/):
+  shorter commit messages and comments, dss_report_start renamed to
+  dss_report_index, and the new "NFSv4/flexfiles: share one helper for
+  the start of a read and a write"
+- snitzer-nfs-fixes-canary adds "NFS/localio: don't run the release
+  of a failed COMMIT in the submitter", the LOCALIO path to the same
+  writeback deadlock
+- nfs-testing-canary-localio-reprobe adds "NFS/localio: give the
+  LOCALIO probe a short timeout of its own": the new nfs module
+  parameter localio_timeout, in seconds, 10 by default, and 0 for the
+  NFS client's own timeouts
+- Update nfsd-testing to Chuck Lever's rebased cel/nfsd-testing: the
+  same nine commits, cherry-picked again from their new commit IDs,
+  "NFSD: cut a misaligned direct-mode WRITE at folio boundaries" among
+  them as Chuck applied it; his edits are to comments and documentation
+  only
+- nfsd-testing-canary-dontcache is v10 of the series as posted
+  (https://lore.kernel.org/linux-nfs/20261103211754.35352-1-snitzer@kernel.org/):
+  v9's comments shortened, and its first commit split into "mm: move
+  clearing the uncached flag of a found folio into a helper", with no
+  functional change, and the fix; it is rebased on nfsd-testing, and
+  nfsd-testing-canary-dontcache-LOCALIO is rebased on it
+
+* Sat Oct 24 2026 Mike Snitzer <snitzer@kernel.org> [7.3-10]
+- Update nfsd-testing-canary-dontcache to a revised v9 of the series:
+  where the file system tracks uptodate per block, as iomap does for
+  blocks smaller than the folio, a shared edge counts as written by the
+  neighbouring write once every block this write does not cover in full
+  is uptodate (folio_dontcache_edge_written()), so 4 KiB blocks on 16 or
+  64 KiB pages keep the edge too; filemap_dontcache_edge_complete()
+  waits for writeback in flight, marks a dirty edge and wakes the
+  DONTCACHE writeback kick, and drops a clean, unmapped edge at once;
+  NFSD and LOCALIO's nfs_dio_seg_hold() pass the range they cover in
+  each edge
+- Fix the earlier NFSD commit Chuck Lever had already staged in
+  cel/nfsd-testing, rather than carry a fix for it: nfsd-testing's
+  "NFSD: cut a misaligned direct-mode WRITE at folio boundaries" cuts a
+  misaligned end at the smallest folio the mapping allows, and
+  nfsd-testing-canary-dontcache no longer carries a separate fix;
+  nfsd-testing-canary-dontcache-LOCALIO is rebased on it
+- Add nfs-testing-canary-localio-reprobe, built on nfs-testing-canary:
+  an asynchronous LOCALIO probe holds a reference on its client, and
+  setting localio_enabled to Y probes again every client that does not
+  use LOCALIO, so a client that probed while it was N uses LOCALIO
+
+* Fri Oct 23 2026 Mike Snitzer <snitzer@kernel.org> [7.3-9]
+- Update nfsd-testing-canary-dontcache to v9 of the series: a folio is
+  counted in, or taken off, WB_DONTCACHE_DIRTY only when both PG_dirty
+  and its dirty tag are set, since __folio_cancel_dirty() uncounts a
+  folio and clears PG_dirty but leaves the tag; NFSD's shared edge is the
+  smallest folio the mapping allows, a page or a block, and a short write
+  that stopped inside a segment's first unit no longer completes that
+  edge
+- Rebase nfsd-testing-canary-dontcache-LOCALIO on it: nfs_dio_seg_hold()
+  and nfs_dio_seg_release() take the same unit and the same short-write
+  rule, so LOCALIO's shared edges match NFSD's
+- Redo the reduce-i_lock-contention-LOCALIO merge on the rebased LOCALIO
+  topic
+
+* Thu Oct 22 2026 Mike Snitzer <snitzer@kernel.org> [7.3-8]
+- Rename nfsd-next to nfsd-7.4: it carries all of Chuck Lever's
+  nfsd-7.4 tag, his v7.4 merge window pull, that the baseline lacks
+- Point the -x references of "nfsd: use direct I/O only for the last
+  operation in a COMPOUND" and "SUNRPC: preserve RQ_SECURE across
+  request deferral" in nfsd-testing at the commits cel/nfsd-testing now
+  carries; no code change
+- Update nfsd-testing-canary-dontcache to v8 of the series
+  (https://lore.kernel.org/linux-nfs/20261023024548.71123-1-snitzer@kernel.org/):
+  "NFSD: cut a misaligned direct-mode WRITE at the mapping's smallest
+  folio" is new, so where the smallest folio is a block larger than a
+  page the direct middle and a buffered end no longer share a block;
+  so is "mm: take a folio off WB_DONTCACHE_DIRTY only if it was counted
+  there"; folio_mark_dropbehind() tests the dirty tag rather than
+  PG_dirty, so a folio marked as it is dirtied is not counted twice; the
+  edge kept for the write that completes it is the smallest folio the
+  mapping allows, both in iomap's test and in what is marked, and an
+  edge already clean is dropped before the folio lock is released; and
+  "mm: expose WB_DONTCACHE_DIRTY in bdi debugfs stats" has Jeff Layton's
+  Reviewed-by
+- Rebase nfsd-testing-canary-dontcache-LOCALIO on it: nfs_dio_split()
+  cuts a misaligned write at the mapping's smallest folio, as NFSD does,
+  so LOCALIO direct writes get the same cut
+- Redo the reduce-i_lock-contention-LOCALIO merge on the rebased LOCALIO
+  topic
+
+* Tue Oct 20 2026 Mike Snitzer <snitzer@kernel.org> [7.3-7]
+- Update nfsd-testing with "NFSD: add tracing for how direct-mode READ
+  and WRITE are serviced", which Chuck Lever applied to cel/nfsd-testing
+  from the v6 posting, cherry-picked with -x from his commit, in place of
+  nfsd-testing-canary-dontcache's copy: the per-I/O events test the kiocb
+  flags in TP_CONDITION(), only while enabled (Jeff Layton), and one
+  event per direct-mode READ and WRITE decision (nfsd_read_dio_* and
+  nfsd_write_dio_*) replaces nfsd_write_dio_split, its disposition and
+  dontcache fields; the WRITE events now fire in every io_cache_write
+  mode, and the memory offset reported is the one the alignment test
+  checks (Chuck Lever); with Jeff Layton's Reviewed-by
+- Rebase nfsd-testing-canary-dontcache on it
+- Rebase nfsd-testing-canary-dontcache-LOCALIO on it: nfsd reports
+  nfs_dio_split()'s decision with the per-outcome events, and
+  nfs_dio_split() records the memory offset it tested
+- Redo the reduce-i_lock-contention-LOCALIO merge on the rebased LOCALIO
+  topic
+
+* Sun Oct 18 2026 Mike Snitzer <snitzer@kernel.org> [7.3-6]
+- Rebase all branches on Linux v7.3
+- Drop Pavankumar Kondeti's "workqueue: Fix NULL current_pwq deref in
+  mem-reclaim helper" from snitzer-nfs-fixes-canary: v7.3 has it, as
+  Tejun Heo took it upstream
+
+* Sun Oct 18 2026 Mike Snitzer <snitzer@kernel.org> [7.3-5]
+- Update nfsd-testing with the 6 NFSD direct-mode patches Chuck Lever
+  applied to cel/nfsd-testing from the v4 posting, each cherry-picked
+  with -x from its current commit; they replace this topic's copies of
+  v4 1/10-6/10.  His versions compute a misaligned WRITE's cut once with
+  IS_ALIGNED(), so a WRITE ending at OFFSET_MAX cannot wrap, and let
+  every unsplit WRITE keep IOCB_DSYNC
+- Rebase nfsd-testing-canary-dontcache on it as v5 of the series: the
+  page cache now keeps the page an uncached write covers only partly
+  until the write that completes it ("mm, iomap: keep a partly covered
+  page until an uncached write completes it"), and lets a writer that
+  syncs its own write complete those pages after the sync ("mm, iomap:
+  let an uncached writer complete its shared pages itself").  "NFSD:
+  drop a shared boundary page only once both WRITEs have written it"
+  replaces v4's 9/10: NFSD no longer inserts a folio of its own, which
+  also closes the window in which two WRITEs arriving together could
+  have the shared page dropped before the second had written it
+- Rebase nfsd-testing-canary-dontcache-LOCALIO on it: nfs_common now
+  carries Chuck's version of the split, completes shared pages through
+  the page cache helpers, and shares the persist-once rule with NFSD as
+  nfs_dio_sync_flags(), so an unsplit LOCALIO write now keeps its
+  stability flags as NFSD's does
+- Redo the reduce-i_lock-contention-LOCALIO merge on the rebased LOCALIO
+  topic
+
+* Wed Oct 14 2026 Mike Snitzer <snitzer@kernel.org> [7.3-4]
+- Move "NFSD: Enable return of an updated stable_how to NFS clients" and
+  "NFSD: add io_cache_write modes that persist each direct-mode WRITE"
+  out of nfsd-testing-canary-dontcache and into the Hammerspace private
+  patches
+- Reword commit messages in nfsd-testing-canary-dontcache and
+  nfsd-testing-canary-dontcache-LOCALIO, and shorten the comment on the
+  IOCB_DONTCACHE of nfs_dio_split()'s direct middle
+- Credit LLM assistance in every canary topic as "Assisted-by: LLM",
+  directly above the author's Signed-off-by
+
+* Mon Oct 12 2026 Mike Snitzer <snitzer@kernel.org> [7.3-3]
+- Update anna-nfs-next with the 8 commits anna-nfs/linux-next has added,
+  each cherry-picked with -x from its current commit: Chuck Lever's
+  series naming each network namespace's .nfs keyring in the x509 TLS
+  handshake, "xprtrdma: prevent disconnect feedback during endpoint
+  teardown", "xprtrdma: trim head iovec when the payload arrives via a
+  Write chunk" and "nfs: set gencount on protocol-specific remove"
+- Add Jon Flynn's "xprtrdma: do not clamp the FRWR depth below one
+  chunk": on mlx5 the clamp to max_sge_rd registered a maximum-size READ
+  with 9 MRs, each torn down with its own LOCAL_INV; one MR again lets
+  the reply use SEND_WITH_INV
+- Rename nfs-testing-canary-rdma-ds-connect to nfs-testing-canary-rdma
+
+* Mon Oct 12 2026 Mike Snitzer <snitzer@kernel.org> [7.3-2]
+- redhat: remove all riscv configs and kernel.spec enablement
+- Rebase all branches on Linux v7.3-rc7
+- Update anna-nfs-next to all of anna-nfs/linux-next, each commit
+  cherry-picked with -x from its current commit. New with it: NFS direct
+  I/O moved to iov_iter_extract_pages() with pinned nfs_pages, the pNFS
+  block and SCSI layouts split into PNFS_BLOCK_LAYOUT and
+  PNFS_SCSI_LAYOUT, and "NFS: return DENIED in decode_lock_denied if we
+  cannot decode owner"
+- Add nfsd-next: all of cel/nfsd-next that v7.3-rc7 lacks, 184 commits,
+  each cherry-picked with -x from its current commit, merged ahead of
+  nfsd-testing, which now builds on it as cel/nfsd-testing does
+- nfsd-testing: drop the 4 commits nfsd-next now carries, and take
+  "nfsd: use direct I/O only for the last operation in a COMPOUND" and
+  "SUNRPC: preserve RQ_SECURE across request deferral" from their
+  current cel/nfsd-testing commits; the former now includes xdr4.h
+- Rename snitzer-nfs-fixes to snitzer-nfs-fixes-canary and drop 6
+  NFS/localio and pNFS/flexfiles fixes from it: anna-nfs-next carries
+  them now
+- Carry "NFSv4/pnfs: Give the data server cache its own reference" and
+  "NFSv4/pnfs: Let unused data server connections linger" at the bottom
+  of nfs-testing-canary: anna-nfs/linux-next no longer has them
+- redhat/configs: enable PNFS_BLOCK_LAYOUT and PNFS_SCSI_LAYOUT
+
+* Sun Oct 11 2026 Mike Snitzer <snitzer@kernel.org> [7.3-1]
+- Rebase all branches on kernel-7.3-0, Linux v7.3-rc6 from kernel-ark
+- Stop merging the 8 topics v7.3-rc6 carries in full: vfs-7.3-rc1.iomap,
+  vfs-7.2-merge, nfsd-7.2, nfsd-7.2-1, nfsd-7.2-2, nfsd-7.3, nfs-for-7.2-3
+  and nfs-for-7.3-1
+- Drop the commits of the other topics that v7.3-rc6 carries, among them 10
+  of block-DIO-alignment-fixes' 14
+- redhat/configs: sign modules with RSA, not ML-DSA-87, replacing the 3
+  commits that reverted kernel-ark's ML-DSA module signing configs
+- Drop Revert "uki: use systemd-pcrphase dracut module": kernel-ark now adds
+  systemd-pcrphase or systemd-pcrextend only when dracut has it
+- Rename nfs4_acl-passthru to nfs-testing-canary-nfs4_acl-passthru
+
 * Sun Oct 11 2026 Mike Snitzer <snitzer@kernel.org> [7.3-0]
 - Linux v7.3-rc6, from kernel-ark kernel-7.3.0-0.rc6.a5ebb76233b7.57
 
