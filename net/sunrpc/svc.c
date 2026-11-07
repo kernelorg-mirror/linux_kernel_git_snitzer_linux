@@ -1208,16 +1208,13 @@ int svc_register(const struct svc_serv *serv, struct net *net,
 		struct svc_program *progp = &serv->sv_programs[p];
 
 		for (i = 0; i < progp->pg_nvers; i++) {
-			int ret;
 
-			ret = progp->pg_rpcbind_set(net, progp, i,
+			error = progp->pg_rpcbind_set(net, progp, i,
 					family, proto, port);
-			if (ret < 0) {
+			if (error < 0) {
 				printk(KERN_WARNING "svc: failed to register "
 					"%sv%u RPC service (errno %d).\n",
-					progp->pg_name, i, -ret);
-				if (!error)
-					error = ret;
+					progp->pg_name, i, -error);
 				break;
 			}
 		}
