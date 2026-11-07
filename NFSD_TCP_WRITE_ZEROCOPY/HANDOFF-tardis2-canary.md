@@ -315,6 +315,43 @@ NUMA node it is one pool of 512, the same as `global` in the runs above.
 when a pooled service starts and is refused (-EBUSY) while one runs.  Whether
 the series' default changes is still open.
 
+## The nfsd cycles over 507 (tardis2, 7 November)
+
+The profile fl63 (`WHICH=ab flame.sh t2-fl63 fl63 128` at the settled
+setting: `pernode`, `rtc_read` and `rtc_write` N, budget 128; 66.33 GB/s,
+denied 346) against build 507's fl-blk (round 55's B, 67.31 GB/s).  nfsd's
+CPUs were busy 100.85 us a WRITE against 88.79; idle left out, their cycles
+are 210.5k a WRITE against 189.5k, +21.0k.  Instructions a WRITE are 507's
+(about 278k, `cost.sh`), so the gap is cycles an instruction, spread over
+the path.  By stage, in k cycles a WRITE, inclusive (the canary's `rx_loan_*`
+paired with 507's `svc_tcp_rx_*` they replace):
+
+| stage | 507 | 514 | delta | where |
+|---|---|---|---|---|
+| receive (`svc_tcp_recvfrom` and its new caller `svc_xprt_recv_call`) | 62.9 | 70.6 | +7.7 | ACKs (`tcp_send_ack`) +1.8; admission (`rx_loan_admit`) +1.3; the loan walk, prefetch and region pages +1.6; the new caller's own +1.1; `skb_attempt_defer_free` +0.6 |
+| thread wake and wait (`svc_recv` outside `svc_handle_xprt`) | 18.0 | 22.7 | +4.7 | `wake_up_process` +0.9, waiting for work +1.8, `svc_thread_should_sleep` +1.1, `svc_pool_idle_add` +0.7, the `lwq` dequeue +0.5 |
+| WRITE and COMMIT (`nfsd_dispatch`) | 66.0 | 68.9 | +3.0 | `nfsd_write` +2.0 (XFS itself -1.4), COMMIT +0.6 |
+| loan release at the reply (`svc_tcp_release_ctxt`) | 12.1 | 14.9 | +2.9 | pages back to the region one at a time, +2.5; credit return +0.9 |
+| reply send (`svc_tcp_sendto` less the release) | 14.5 | 16.6 | +2.1 | David's `svc_tcp_combine_sends` around `svc_tcp_sendmsg` |
+| the rest of `svc_process` | | | +0.8 | |
+
+- **The release's +2.5 is a port decision, not David's code:** round 58's
+  bulk return to the region (507's `ca7b00ac39c7`, one lock and one atomic
+  for the pages a pool's stack cannot take) was dropped at the port
+  (`CANARY-SPLIT.md`), as it was written for one region list.  On the
+  canary the overflow goes back page by page (`page_pool_return_netmem`, then
+  `rx_region_page_put` and `rx_region_slot_put`): 6.6k a WRITE against
+  507's 4.1k under the region's lock.  A bulk return to a device's slot
+  would take it back.  Rounds 53 and 55's changes are in the canary.
+- The rest is in David's receive, admission, thread and send changes, and
+  the base (`v7.3-10` to `v7.3-11` and the canary's other topics, XFS among
+  them); 1.0k to 2.0k a stage, none alone the gap.  507's runs spread by
+  about 10k cycles a WRITE, so what is under 1k a stage is not to be read.
+
+Files: `/var/tmp/zc-run-logs/t2-fl63/` (the profile) and
+`t2-fl63/vs-fl-blk/` (`incl.txt`, `children.txt`, `by-leaf.txt`, and the
+scripts `incl.py`, `children.py`, `fdiff.py`).
+
 ## TODO (formal, once the above passes on tardis2)
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
