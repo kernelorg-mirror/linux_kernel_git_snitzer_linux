@@ -462,6 +462,33 @@ up like a reboot), then steps 0 to 4 again, with a ping of both ports
 after `bringup.sh` and before `ab-bulk.sh`.  The empty `t2-r192` to
 `t2-r195` are to be overwritten (`ab-bulk.sh 192`).
 
+### The second boot (7 November, after the power reset): dropped
+
+The power reset brought port a back.  Steps 0 to 3 passed again (the
+switch read Y, dmesg only BTF and taint, kdump armed, the settled
+setting), and both ports answered three pings of three.  The four runs,
+all clean (no drive stepped down, no stall, dmesg clean):
+
+| run | | GB/s | nfsd cycles/W | nfsd instr/W | region peak | denied |
+|---|---|---|---|---|---|---|
+| `t2-r192` | A | 65.65 | 288.5k | 277.6k | 19658 | 0 |
+| `t2-r193` | B | 66.32 | 288.4k | 274.4k | 21200 | 501 |
+| `t2-r194` | B | 70.60 | 302.9k | 272.1k | 20176 | 0 |
+| `t2-r195` | A | 65.33 | 288.3k | 277.7k | 19558 | 0 |
+
+B runs 3k to 5.5k fewer instructions a WRITE in nfsd, but no fewer
+cycles: `t2-r193`, at A's rate, costs the same 288k (`t2-r194` ran
+faster and costs more).  And both B runs hold more of the region at peak
+than either A, by 518 to 1642 pages.  A change that raises the region's
+peak is not kept (AGENTS.md), so it is **dropped**: the revert of
+"page_pool: return a bulk's overflow to the receive region's slot at
+once" is at the tip of `kernel-7.3/canary`.  The A/B branch and its DROP
+commit stay off it.
+
+**Left for Mike:** boot build 514 again (the one-shot entry is used up,
+so any reboot gives 514), then remove `/boot/ofp-rocky/ab-bulk-514` and
+`/boot/loader/entries/ofp-rocky-ab-bulk-514.conf`.
+
 ## TODO (formal, once the above passes on tardis2)
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
