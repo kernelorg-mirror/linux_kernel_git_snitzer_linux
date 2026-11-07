@@ -1240,6 +1240,66 @@ bool svc_pool_wake_idle_thread(struct svc_pool *pool)
 EXPORT_SYMBOL_GPL(svc_pool_wake_idle_thread);
 
 /**
+ * svc_pool_hand_idle_thread - give a transport to an idle thread of @pool
+ * @pool: service thread pool
+ * @xprt: a transport whose XPT_BUSY the caller holds
+ *
+ * Claims the first idle thread as svc_pool_wake_idle_thread() does, and
+ * in the same atomic step marks the claim as bringing a transport
+ * (RQ_HANDOFF), so the thread takes @xprt from rq_handoff and not off
+ * sp_xprts, whose lock it does not take.  The thread waits for the store
+ * of @xprt that follows the claim (svc_thread_take_handoff()).
+ *
+ * Return: true if the thread has @xprt.  false leaves @xprt with the
+ * caller, which queues it; the thread a false return claimed, if any,
+ * then stands for that queued work.
+ */
+bool svc_pool_hand_idle_thread(struct svc_pool *pool, struct svc_xprt *xprt)
+{
+	struct svc_rqst	*rqstp;
+	struct llist_node *ln;
+	unsigned long flags;
+	bool handed = false;
+
+	rcu_read_lock();
+	ln = READ_ONCE(pool->sp_idle_threads.first);
+	if (!ln)
+		goto out;
+	rqstp = llist_entry(ln, struct svc_rqst, rq_idle);
+	flags = READ_ONCE(rqstp->rq_flags);
+	/* the thread waits for the store after the claim: no preemption
+	 * between them
+	 */
+	preempt_disable();
+	do {
+		if (flags & (BIT(RQ_WAKING) | BIT(RQ_HANDOFF))) {
+			preempt_enable();
+			goto out;
+		}
+	} while (!try_cmpxchg(&rqstp->rq_flags, &flags,
+			      flags | BIT(RQ_WAKING) | BIT(RQ_HANDOFF)));
+	/* Only a claim's owner stores here, and the thread empties the
+	 * slot before it can be claimed again; a full slot is a transport
+	 * the thread has not taken yet, so this one is queued instead.
+	 */
+	handed = !cmpxchg_release(&rqstp->rq_handoff, NULL, xprt);
+	preempt_enable();
+	/* The cmpxchg() of the claim orders it before the task_is_running()
+	 * read, as test_and_set_bit() does in svc_pool_wake_idle_thread().
+	 */
+	if (!task_is_running(rqstp->rq_task)) {
+		wake_up_process(rqstp->rq_task);
+		trace_svc_pool_thread_wake(pool, rqstp->rq_task->pid);
+		percpu_counter_inc(&pool->sp_threads_woken);
+	} else {
+		trace_svc_pool_thread_running(pool, rqstp->rq_task->pid);
+	}
+out:
+	rcu_read_unlock();
+	return handed;
+}
+
+/**
  * svc_new_thread - spawn a new thread in the given pool
  * @serv: the serv to which the pool belongs
  * @pool: pool in which thread should be spawned
@@ -1791,6 +1851,7 @@ svc_exit_thread(struct svc_rqst *rqstp)
 	struct svc_serv	*serv = rqstp->rq_server;
 	struct svc_pool	*pool = rqstp->rq_pool;
 
+	svc_thread_return_handoff(rqstp);
 	list_del_rcu(&rqstp->rq_all);
 
 	pool->sp_nrthreads -= 1;
