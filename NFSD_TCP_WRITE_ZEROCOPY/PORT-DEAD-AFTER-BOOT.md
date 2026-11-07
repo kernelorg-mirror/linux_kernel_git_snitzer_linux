@@ -41,10 +41,20 @@ port and were lost after it".
 - **Not** a reopen of the port: `port-setup.sh enp164s0f0 56` once on
   tardis1, four reopens by `twoport.sh` on tardis2.
 - **Not** a reboot (Mike, from earlier cases on tardis1).
-- **Not tried:** a reload of `xeu`, a PCI remove and rescan of the
-  port's function, or a function-level reset. Ask Mike before trying
-  any of them: `xeu` is not to be reloaded on a rig without his word
-  (section 0 of `XEU_CONVERGENCE.md`).
+- **Not** a reload of `xeu` (tardis2, 7 November 04:43, port b, on
+  Mike's word): `modprobe -r xeu; modprobe xeu`, then `bringup.sh 32768
+  256` and `settled.sh apply`. Port b came back up with a link and its
+  address, sent 23 packets and received none, the neighbour FAILED,
+  as before. The reload also leaves the rig off its setting: port a
+  answered but logged `Failed to allocate Rx page from pool` every 1
+  to 3 s (the region's `alloc_fail` 8), the region showed 8 pools a
+  port where a fresh boot has 4, and `bringup.sh` stopped at
+  `enp161s0f0 does not have 4 rings`. So after a reload the boot is
+  good for nothing but the power reset. Counters before and after are
+  in `/var/tmp/zc-run-logs/t2-514-canary/port-dead/`.
+- **Not tried:** a PCI remove and rescan of the port's function, or a
+  function-level reset. Ask Mike before trying either, as for a reload
+  of `xeu` (section 0 of `XEU_CONVERGENCE.md`).
 
 A power cycle uses up a one-shot boot entry, so set it again before
 the reset when the boot is into a test kernel: `bootctl set-oneshot
@@ -59,7 +69,7 @@ the reset when the boot is into a test kernel: `bootctl set-oneshot
 | 7 Nov, 02:00 | tardis2, A/B kernel (514 + bulk return), first boot | a | 4596 | power reset |
 | 7 Nov, after reset | tardis2, A/B kernel, second boot | none | | runs done |
 | 7 Nov, 04:25 | tardis2, held-mark kernel (514 + held mark), first boot | a | 0 | power reset |
-| 7 Nov, 04:35 | tardis2, held-mark kernel, second boot | **b** | 0 (and 0 on the working a) | power reset pending |
+| 7 Nov, 04:35 | tardis2, held-mark kernel, second boot | **b** | 0 (and 0 on the working a) | `xeu` reload: still dead; power reset pending |
 
 The tardis1 case was seen after the first boot's slot test, which
 takes each port down and up, so it is not known whether that port was
@@ -89,8 +99,10 @@ bulk return" and "Next boot: the region's held mark" in
   514 itself, or of any other kernel, loses a port. Until that is
   counted, a lost port is not evidence against the kernel booted.
 - **What the card's receiver is doing is not known.** `xeu` exposes no
-  counter that shows it, and the tries above that might reset it
-  without a power cut have not been made.
+  counter that shows it. A reload of `xeu`, which opens the port afresh
+  from the driver's side, does not reach it, so the fault sits under
+  what the driver sets up at probe: a PCI-level reset is the one try
+  left short of a power cut.
 
 ## On every boot
 
