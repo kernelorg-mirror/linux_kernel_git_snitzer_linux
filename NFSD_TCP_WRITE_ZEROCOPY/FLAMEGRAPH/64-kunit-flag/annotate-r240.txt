@@ -1,0 +1,181 @@
+====================================================================================================
+svc_tcp_rx_append_ref: 240 bytes, 1139 cycles and 3427 instructions a WRITE, IPC 3.01
+  by kind:              cycles    insns  cyc %  count
+    other                          467     1313  41.0%     34
+    entry/exit                     423     1307  37.1%      8
+    loads                          154      503  13.5%      5
+    branches                        83      226   7.3%      9
+    calls                           13       77   1.1%      1
+    stores                           0        0   0.0%      3
+  by source line (innermost < caller), 85% of cycles:
+       330  29.0%  svc_tcp_rx_append_ref /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2721
+       211  18.5%  svc_tcp_rx_append_ref /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2709
+       139  12.2%  rx_loan_table_append_ok /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:232 < svc_tcp_rx_append_ref /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2711
+       125  11.0%  rx_loan_table_append_ok /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:230 < svc_tcp_rx_append_ref /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2711
+        99   8.7%  svc_tcp_rx_kunit_should_fail /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:133 < svc_tcp_rx_append_ref /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2716
+        95   8.3%  rx_loan_table_append_ok /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:231 < svc_tcp_rx_append_ref /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2711
+  hottest instructions:
+    +0x0d4    250  21.9%  L2  2.28  ret                                         /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2721
+    +0x068    119  10.4%  L2  1.67  ldr      w0, [x7, #32]                      /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:232
+    +0x0b8     62   5.5%  L2  0.92  paciasp                                     /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2709
+    +0x0c4     60   5.3%  L2  0.49  mov      x29, sp                            /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2709
+    +0x0d0     56   4.9%  L2  0.39  autiasp                                     /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2721
+    +0x084     49   4.3%  L2  0.93  cmp      w0, #0x1                           /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:133
+    +0x000     40   3.5%  L2  0.76  nop                                         /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2709
+    +0x078     35   3.1%  L2  0.67  tbz      w4, #0, 3ad40 <svc_tcp_rx_append_r /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2715
+    +0x038     35   3.1%  L2  0.45  eor      w0, w5, #0x1                       /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:230
+    +0x0bc     30   2.7%  L2  0.40  stp      x29, x30, [sp, #-16]!              /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2709
+    +0x074     27   2.4%  L2  0.26  and      w6, w6, #0xff                      /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2715
+    +0x07c     25   2.2%  L2  0.24  adrp     x8, 0 <rpc_default_callback-0x8>   /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:133
+    +0x0cc     24   2.1%  L2  0.23  ldp      x29, x30, [sp], #16                /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:2721
+    +0x080     23   2.1%  L2  0.14  ldr      w0, [x8]                           /var/tmp/zc-run-logs/sunrpc-flag-B/sunrpc/svcsock.c:133
+====================================================================================================
+__rx_loan_table_append_ref: 768 bytes, 4552 cycles and 11948 instructions a WRITE, IPC 2.62
+  by kind:              cycles    insns  cyc %  count
+    other                         2663     6180  58.5%     83
+    loads                          969     2778  21.3%     34
+    branches                       511     1564  11.2%     36
+    stores                         380     1360   8.4%     29
+    entry/exit                      22       56   0.5%      2
+    atomics, barriers, prefetch       7       11   0.2%      6
+    prefetch                         0        0   0.0%      2
+  by source line (innermost < caller), 85% of cycles:
+       829  18.2%  rx_loan_table_can_coalesce /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:179 < __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:248
+       481  10.6%  generic___set_bit /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:33 < __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:259
+       417   9.2%  generic___set_bit /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:33 < __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:269
+       346   7.6%  rx_loan_table_can_coalesce /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:180 < __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:248
+       340   7.5%  page_pool_page_in_rx_region /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/page_pool/helpers.h:459 < __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:263
+       229   5.0%  __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:258
+       224   4.9%  __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:252
+       199   4.4%  __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:264
+       188   4.1%  __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:270
+       178   3.9%  __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:261
+       136   3.0%  page_pool_page_is_pp /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/mm.h:5493 < page_pool_page_in_rx_region /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/page_pool/helpers.h:459
+       117   2.6%  __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:262
+        77   1.7%  __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:260
+        58   1.3%  generic___set_bit /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:30 < __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:259
+        55   1.2%  __rx_loan_table_append_ref /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:274
+  hottest instructions:
+    +0x028    779  17.1%  L2  9.54  add      x8, x8, x9, lsl #4                 /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:179
+    +0x1d0    377   8.3%  L2  5.27  orr      x2, x2, x4                         /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:33
+    +0x088    304   6.7%  L2  4.09  orr      x6, x6, x7                         /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:33
+    +0x290    209   4.6%  L2  1.75  cbz      x2, 3a8e4 <__rx_loan_table_append_ /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/page_pool/helpers.h:459
+    +0x05c    160   3.5%  L2  0.33  and      w6, w4, #0x1                       /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:258
+    +0x08c    158   3.5%  L2  1.45  str      x6, [x8, x2]                       /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:33
+    +0x090    157   3.4%  L2  0.60  ldr      w6, [x0, #48]                      /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:261
+    +0x02c    146   3.2%  L2  1.42  cmp      x1, x10                            /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:180
+    +0x29c    139   3.1%  L2  0.30  add      w1, w2, #0x1                       /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:264
+    +0x034    124   2.7%  L2  1.26  ldr      w8, [x0, #24]                      /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:252
+    +0x1d8    107   2.4%  L2  0.26  ldr      w1, [x0, #28]                      /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:270
+    +0x198    101   2.2%  L2  1.14  and      w6, w4, #0x1                       /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/mm.h:5493
+    +0x038    101   2.2%  L2  1.08  cmp      w8, w7                             /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/rx_loan.h:252
+    +0x28c     99   2.2%  L2  0.78  ldr      x2, [x2, #968]                     /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/net/page_pool/helpers.h:459
+====================================================================================================
+rx_loan_table_release: 872 bytes, 3295 cycles and 7725 instructions a WRITE, IPC 2.34
+  by kind:              cycles    insns  cyc %  count
+    other                         1530     3840  46.5%     96
+    prefetch                       698      895  21.2%      5
+    loads                          494     1276  15.0%     38
+    branches                       394     1218  12.0%     39
+    stores                          89      251   2.7%     13
+    calls                           81      234   2.5%     18
+    entry/exit                       9       11   0.3%      5
+    atomics, barriers, prefetch       0        0   0.0%      4
+  by source line (innermost < caller), 85% of cycles:
+       436  13.2%  rx_loan_table_release net/core/rx_loan.c:312
+       433  13.1%  rx_loan_prefetch_again net/core/rx_loan.c:267 < rx_loan_table_release net/core/rx_loan.c:310
+       361  11.0%  _compound_head include/linux/page-flags.h:233 < netmem_compound_head include/net/netmem.h:319
+       197   6.0%  generic_test_bit include/asm-generic/bitops/generic-non-atomic.h:128 < rx_loan_table_release net/core/rx_loan.c:314
+       192   5.8%  rx_loan_table_release net/core/rx_loan.c:329
+       162   4.9%  prefetchw arch/arm64/include/asm/processor.h:404 < rx_loan_table_release net/core/rx_loan.c:305
+       134   4.1%  rx_loan_table_release net/core/rx_loan.c:327
+       128   3.9%  rx_loan_table_release net/core/rx_loan.c:330
+        91   2.8%  generic___clear_bit include/asm-generic/bitops/generic-non-atomic.h:42 < rx_loan_table_release net/core/rx_loan.c:338
+        86   2.6%  rx_loan_prefetch_again net/core/rx_loan.c:267 < rx_loan_table_release net/core/rx_loan.c:307
+        77   2.3%  generic_test_bit include/asm-generic/bitops/generic-non-atomic.h:128 < rx_loan_table_release net/core/rx_loan.c:321
+        73   2.2%  generic___clear_bit include/asm-generic/bitops/generic-non-atomic.h:42 < rx_loan_table_release net/core/rx_loan.c:339
+        65   2.0%  rx_loan_table_release net/core/rx_loan.c:304
+        62   1.9%  rx_loan_table_release net/core/rx_loan.c:338
+        58   1.8%  prefetchw arch/arm64/include/asm/processor.h:404 < rx_loan_table_release net/core/rx_loan.c:313
+        56   1.7%  rx_loan_table_release net/core/rx_loan.c:322
+        55   1.7%  rx_loan_table_release net/core/rx_loan.c:309
+        48   1.5%  rx_loan_table_release net/core/rx_loan.c:341
+        45   1.4%  netmem_to_page include/net/netmem.h:165 < netmem_compound_head include/net/netmem.h:319
+        43   1.3%  generic___clear_bit include/asm-generic/bitops/generic-non-atomic.h:40 < rx_loan_table_release net/core/rx_loan.c:338
+  hottest instructions:
+    +0x16c    417  12.6%  L2  2.92  prfm     pstl2keep, [x0]                    net/core/rx_loan.c:267
+    +0x170    295   9.0%  L2  2.25  add      w0, w5, #0x10                      net/core/rx_loan.c:312
+    +0x0f4    288   8.7%  L2  2.38  tst      x1, #0x1                           include/linux/page-flags.h:233
+    +0x214    192   5.8%  L2  1.42  cbnz     x26, ffff800080f74290 <rx_loan_tab net/core/rx_loan.c:329
+    +0x080    160   4.8%  L2  4.55  prfm     pstl1keep, [x3]                    arch/arm64/include/asm/processor.h:404
+    +0x174    140   4.3%  L2  0.88  cmp      w0, w4                             net/core/rx_loan.c:312
+    +0x108    134   4.1%  L2  0.84  add      x26, x26, #0x1                     net/core/rx_loan.c:327
+    +0x308     91   2.8%  L2  1.28  mov      x3, x26                            net/core/rx_loan.c:330
+    +0x0c0     84   2.6%  L2  2.37  prfm     pstl2keep, [x2]                    net/core/rx_loan.c:267
+    +0x190     75   2.3%  L2  0.50  and      w20, w5, #0x3f                     include/asm-generic/bitops/generic-non-atomic.h:128
+    +0x31c     62   1.9%  L2  0.30  b        ffff800080f741a0 <rx_loan_table_re net/core/rx_loan.c:338
+    +0x0f0     56   1.7%  L2  1.54  sub      x27, x1, #0x1                      include/linux/page-flags.h:233
+    +0x1a8     54   1.6%  L2  0.27  ldr      x1, [x22, #16]                     include/asm-generic/bitops/generic-non-atomic.h:128
+    +0x084     49   1.5%  L2  0.96  add      x2, x2, #0x1                       net/core/rx_loan.c:304
+====================================================================================================
+rx_loan_prefetch_pages: 368 bytes, 3730 cycles and 4119 instructions a WRITE, IPC 1.10
+  by kind:              cycles    insns  cyc %  count
+    branches                      1669     2174  44.7%     12
+    other                         1599     1606  42.9%     53
+    loads                          415      304  11.1%     16
+    entry/exit                      30       21   0.8%      5
+    prefetch                        14       11   0.4%      2
+    stores                           3        2   0.1%      2
+    calls                            0        0   0.0%      2
+  by source line (innermost < caller), 85% of cycles:
+      1594  42.7%  rx_loan_prefetch_pages net/core/rx_loan.c:122
+       571  15.3%  rx_loan_prefetch_pages net/core/rx_loan.c:119
+       359   9.6%  skb_frag_page include/linux/skbuff.h:3720 < rx_loan_prefetch_pages net/core/rx_loan.c:124
+       346   9.3%  skb_end_pointer include/linux/skbuff.h:1725 < rx_loan_prefetch_pages net/core/rx_loan.c:122
+       329   8.8%  netmem_is_net_iov include/net/netmem.h:144 < skb_frag_is_net_iov include/linux/skbuff.h:3693
+  hottest instructions:
+    +0x09c   1259  33.7%  L2 17.72  cbz      w1, ffff800080f736d0 <rx_loan_pref net/core/rx_loan.c:122
+    +0x070    540  14.5%  L2  9.39  mov      x3, #0x1000000000000               net/core/rx_loan.c:119
+    +0x104    359   9.6%  L2 11.03  tbz      w5, #0, ffff800080f73654 <rx_loan_ include/linux/skbuff.h:3720
+    +0x100    329   8.8%  L2  5.21  add      x2, x0, w1, uxtw #4                include/net/netmem.h:144
+    +0x0e8    262   7.0%  L2  3.47  add      w1, w1, #0x1                       net/core/rx_loan.c:122
+    +0x0e4    188   5.0%  L2  1.90  add      x0, x6, x7                         include/linux/skbuff.h:1725
+    +0x08c    156   4.2%  L2  1.54  ldr      x6, [x0, #200]                     include/linux/skbuff.h:1725
+    +0x0d4     64   1.7%  L2  0.60  ldr      w0, [x2, #60]                      net/core/rx_loan.c:128
+    +0x0ac     44   1.2%  L2  0.30  ldr      w0, [x2, #56]                      net/core/rx_loan.c:127
+    +0x0fc     41   1.1%  L2  0.29  ldr      x5, [x0, x4]                       net/core/rx_loan.c:127
+    +0x0b0     37   1.0%  L2  0.24  cmp      w21, w19                           net/core/rx_loan.c:126
+    +0x000     31   0.8%  L2  1.09  nop                                         net/core/rx_loan.c:110
+    +0x0c4     26   0.7%  L2  0.30  cmp      w20, w0                            net/core/rx_loan.c:127
+    +0x048     26   0.7%  L2  0.28  ldr      w1, [x0, #116]                     include/linux/skbuff.h:2517
+====================================================================================================
+rx_region_page_put: 352 bytes, 3026 cycles and 2234 instructions a WRITE, IPC 0.74
+  by kind:              cycles    insns  cyc %  count
+    branches                      2457     1845  81.2%     10
+    other                          462      272  15.3%     39
+    loads                           74       75   2.4%     15
+    entry/exit                      16       21   0.5%      5
+    stores                          12       12   0.4%      5
+    calls                            4        9   0.1%     10
+    atomics, barriers, prefetch       0        0   0.0%      3
+    prefetch                         0        0   0.0%      1
+  by source line (innermost < caller), 85% of cycles:
+      2832  93.6%  rx_region_page_put net/core/page_pool.c:1389
+  hottest instructions:
+    +0x068   2455  81.1%  L2 10.38  b.eq     ffff800080f6d6dc <rx_region_page_p net/core/page_pool.c:1389
+    +0x064    377  12.5%  L2  4.37  ands     w22, w1, #0xff                     net/core/page_pool.c:1389
+    +0x06c     41   1.3%  L2  0.16  ldr      w1, [x21, #52]                     include/linux/atomic/atomic-arch-fallback.h:457
+    +0x030     28   0.9%  L2  0.54  mov      x21, x1                            net/core/page_pool.c:1386
+    +0x000     16   0.5%  L2  0.35  nop                                         net/core/page_pool.c:1386
+    +0x0e0     15   0.5%  L2  0.17  ldp      x19, x20, [sp, #16]                net/core/page_pool.c:1399
+    +0x024      8   0.3%  L2  0.08  stp      x19, x20, [sp, #16]                net/core/page_pool.c:1386
+    +0x0f4      6   0.2%  L2  0.05  mov      w1, w22                            net/core/page_pool.c:1395
+    +0x0e4      6   0.2%  L2  0.05  ldp      x21, x22, [sp, #32]                net/core/page_pool.c:1399
+    +0x0ec      6   0.2%  L2  0.01  autiasp                                     net/core/page_pool.c:1399
+    +0x070      5   0.2%  L2  0.11  cmp      w1, #0x1                           net/core/page_pool.c:1390
+    +0x018      5   0.2%  L2  0.08  mov      x29, sp                            net/core/page_pool.c:1386
+    +0x020      4   0.1%  L2  0.10  ldr      x3, [x2, #304]                     net/core/page_pool.c:1300
+    +0x0f0      4   0.1%  L2  0.01  ret                                         net/core/page_pool.c:1399
+====================================================================================================
+the five: 15741 cycles, 29453 instructions a WRITE
+sunrpc's PLT (veneers into vmlinux): 0 cycles, 0 instructions a WRITE

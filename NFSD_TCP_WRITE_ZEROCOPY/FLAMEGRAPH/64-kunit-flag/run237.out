@@ -1,0 +1,5 @@
+21:50:06 t2-r237 A | total 70.36 GB/s | sunrpc 7C904912D8695E04F50EC4E | WRITEs 67089
+21:55:25 t2-r238 B | total 70.56 GB/s | sunrpc 8CEB0586E30A8CA17845711 | WRITEs 67263
+22:00:45 t2-r239 A | total 71.42 GB/s | sunrpc 7C904912D8695E04F50EC4E | WRITEs 67989
+22:06:05 t2-r240 B | total 71.19 GB/s | sunrpc 8CEB0586E30A8CA17845711 | WRITEs 67798
+22:06:36 stock: sunrpc 1C2C5C459F3413804A2CEE1, /lib/modules/7.3.0-11.hs.514.canary.el10.aarch64+16k/kernel/net/sunrpc/sunrpc.ko.xz, settled.sh audit rest: the settled setting

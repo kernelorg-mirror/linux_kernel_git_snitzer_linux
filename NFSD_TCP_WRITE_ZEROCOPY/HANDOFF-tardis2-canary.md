@@ -1207,12 +1207,12 @@ a wake or pickup, a dequeue, a save and a restore.  The options are in
 `ae72537cb5ac`, `svc_tcp_rx_kunit_fault` `__read_mostly`, a KUnit
 interface commit at the canary's tip.  `svcsock.o` builds at 16 KiB with
 W=1 and `-Werror` (`/var/tmp/kbuild-check`), the flag in
-`.data..read_mostly` and `svc_tcp_spare_pages` still in `.bss`.  It has not
-run: this boot runs 514's own sunrpc, and the tip's sunrpc is not 514's,
-so measuring it needs 514's source with the change built as a `sunrpc.ko`
-for `updates/` and nfsd restarted on it, or a later kernel.  What to read:
-`svc_tcp_rx_append_ref`'s cycles a WRITE (2.81k on `t2-r235`, 1.76k of it
-the flag's load).
+`.data..read_mostly` and `svc_tcp_spare_pages` still in `.bss`.
+**Measured (round 64, `FLAMEGRAPH/64-kunit-flag/README.md`):** two
+sunrpc.ko built here from 514's source, A as is and B with the change,
+swapped in A B A B (`t2-r237..r240`): `svc_tcp_rx_append_ref` 2.73k and
+3.04k cycles a WRITE on A, 1.21k and 1.14k on B; nfsd 1.1% fewer cycles a
+WRITE; the rate the same.  The stock sunrpc is back, `updates/` empty.
 
 **DRIVE-LIMITED is a label, not the limit (Mike, 7 November).**
 `twoport.sh` printed "DRIVE-LIMITED" beside any port whose busiest drive
