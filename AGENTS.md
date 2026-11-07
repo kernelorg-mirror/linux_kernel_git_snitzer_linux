@@ -377,6 +377,21 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**After tardis2's next reboot (7 November) into the held-mark kernel (the
+one-shot entry `ofp-rocky-held-514.conf`: build 514's source with "page_pool:
+count the receive region's pages held and their peak", built on tardis2),
+start at "Next boot: the region's held mark" in
+`NFSD_TCP_WRITE_ZEROCOPY/HANDOFF-tardis2-canary.md`:** the boot's checks,
+`bringup.sh`, `settled.sh apply`, the mark checked at rest, then
+`/var/tmp/zc-run-logs/t2-514-canary/ab-held.sh`.  If
+`/sys/module/page_pool/parameters/rx_region_held_mark` is missing, the boot
+fell back to build 514: say so and stop.  On that kernel and every kernel
+since build 512, the rig's old "region pages in use at most" (`pages -
+min_free`) is not the peak and is not to be set beside 507's: read "What
+twoport reports of the region" at the top of
+`NFSD_TCP_WRITE_ZEROCOPY/xeu-rig/README.md` before any region figure.  The
+A/B of the bulk return, the boot before it, was dropped on its cycles.
+
 **After tardis2's reboot of 7 November into the A/B kernel (the one-shot
 entry `ofp-rocky-ab-bulk-514.conf`: build 514's source with the bulk return
 to the region's slot and its A/B switch, built on tardis2), start at "Next

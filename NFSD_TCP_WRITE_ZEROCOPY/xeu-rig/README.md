@@ -21,7 +21,13 @@ takes too.  A dip shorter than the interval is missed, so that maximum is
 a lower bound of the peak: above an exact figure it shows a rise, below
 one it does not rule a rise out.  An exact peak on such a region needs a
 low-water mark over the shards, the caches and the slots together in the
-kernel, which costs a shared count on the receive path (not made).
+kernel, which costs a shared count on the receive path.  That is
+`bb7fd3100c3b` ("page_pool: count the receive region's pages held and
+their peak", on test; it may be dropped): with
+`page_pool.rx_region_held_mark=Y` the region file shows `held` and
+`max_held`, and `twoport.sh` reports `max_held`, marked "the kernel's
+mark, exact", sampling nothing unless `REGION_SAMPLE=1` asks for the sample
+beside it.  Switch the mark on at rest: it starts from the free counts.
 `iperf2port.sh` still prints `pages - min_free`.
 
 # tardis2's next boot: build 507 with pseudo-NMI (plan of 4 November) — read this first

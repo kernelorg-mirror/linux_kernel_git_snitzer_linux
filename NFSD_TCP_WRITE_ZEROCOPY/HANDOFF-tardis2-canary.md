@@ -512,7 +512,57 @@ peak there needs a low-water mark over the whole region in the kernel.
 so any reboot gives 514), then remove `/boot/ofp-rocky/ab-bulk-514` and
 `/boot/loader/entries/ofp-rocky-ab-bulk-514.conf`.
 
-## TODO (formal, once the above passes on tardis2)
+## Next boot: the region's held mark (7 November)
+
+Mike, the same night: add a low-water mark to the kernel, behind a static
+key, so the region's peak is exact again; it may be dropped after the test.
+`bb7fd3100c3b` at the tip, "page_pool: count the receive region's pages
+held and their peak": each partition counts the pages it has out (in no
+shard, CPU cache or slot) and the most since the debugfs file was last
+written, shown there as `held` and `max_held`, while
+`page_pool.rx_region_held_mark` is Y (N by default; switched on, it starts
+from the free counts, so at rest).  The count moves only where pages leave
+the free lists or come back: `rx_region_get()`, `rx_region_slot_take()`,
+the pool's steal, and the returns in `page_pool_rx_region_put()`,
+`rx_region_slot_put()` and `rx_region_give()`'s bulk push; escaped pages
+stay counted.  It moves just after its pages do, so a peak can be off by
+the takes and returns in flight on other CPUs at that instant (a refill
+each at most), with no drift.  W=1 and checkpatch clean.
+
+**The kernel** is built on tardis2 as the A/B kernel was: branch
+`kernel-7.3/canary.held-514` is build 514's source (`6089265ea2c1`) with
+the change (`cd7e94513437`), 514's config and release string
+(`make EXTRAVERSION=-11.hs.514.canary.el10.aarch64+16k LOCALVERSION=`),
+all of vmlinux's exported CRCs 514's.  Image and the rest in
+`/var/tmp/zc-run-logs/t2-514-canary/held-kernel/` with `SHA256`; the
+worktree was `/dev/shm/wt-held` (gone with the reboot: `git worktree
+prune`).  **Installed and set to boot once:** `ofp-rocky-held-514.conf`
+and `/boot/ofp-rocky/held-514/`; 514 stays the default.
+
+**After it boots:**
+
+1. `/proc/version` names `root@tardis2`, gcc 14.3.1, and
+   `/sys/module/page_pool/parameters/rx_region_held_mark` reads N.  If it
+   is missing, the boot fell back to 514: say so and stop.
+2. dmesg: only the BTF-mismatch and taint lines, as on the A/B kernel.
+3. From `xeu-rig/`: `./bringup.sh 32768 256`, `./settled.sh apply`, a ping
+   of both ports (`-I enp161s0f0 192.168.1.106`, `-I enp164s0f0
+   192.168.0.106`).
+4. At rest: `echo Y > .../rx_region_held_mark`; `held` must equal the
+   pages held from the free counts (`pages - free - Σ slots' free and
+   cached`, about 1152 at rest on this boot's predecessor); `echo N`.
+5. `/var/tmp/zc-run-logs/t2-514-canary/ab-held.sh` (about 20 minutes):
+   four loan runs A B B A, `t2-r198` to `t2-r201`, A the mark off, B on,
+   `twoport.sh`'s 20 ms sampler in all four (`REGION_SAMPLE=1`).  At rest
+   before and after each B, `held` against the free counts (they must
+   agree: no drift).
+6. Read: B's exact `max_held` against the sampled maximum of the same run
+   (the sample is a lower bound, so the mark must be at or above it, by
+   the dips under 20 ms), against 507's exact 12124 (`t2-r178`); A against
+   B in nfsd and ring cycles a WRITE, the mark's own cost.  Then Mike's:
+   keep the mark or drop it (a revert at the tip).
+
+
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
