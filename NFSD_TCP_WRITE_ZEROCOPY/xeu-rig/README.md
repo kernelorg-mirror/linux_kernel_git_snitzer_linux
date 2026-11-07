@@ -1,3 +1,29 @@
+# What twoport reports of the region (7 November) — read before any region figure
+
+`summary.txt`'s "region pages in use at most" is `pages - min_free`.  On
+a region of one free list (build 507 and before; its debugfs file has a
+`free_unmapped` line) `min_free` is the whole region's low-water mark,
+slots included, and the figure is the peak exactly.  On the canary's
+region (shards, CPU caches and per-device slots) `min_free` is the sum of
+the shards' own marks: a page in a CPU cache or free on a device's slot
+counts as held, and each shard reaches its low at its own moment, so the
+figure read 18,000 to 26,000 on builds 512 and 514 where the pages held
+peaked near 7,600.  Figures from the two kinds of kernel are not to be
+set side by side.
+
+On such a region `twoport.sh` now samples instead: `regionsample.py`,
+every `REGION_MS` (20) ms on CPU `REGION_CPU` (63, a ring CPU of port
+b, about 15% busy), from the same reset as `min_free` for the warm-up and
+the run, into `region-sec.tsv`.  A page is held when it is on no shard,
+CPU cache or slot.  `summary.txt` gives the median and 99th percentile,
+then "region pages in use at most" as the sampled maximum, which the TSV
+takes too.  A dip shorter than the interval is missed, so that maximum is
+a lower bound of the peak: above an exact figure it shows a rise, below
+one it does not rule a rise out.  An exact peak on such a region needs a
+low-water mark over the shards, the caches and the slots together in the
+kernel, which costs a shared count on the receive path (not made).
+`iperf2port.sh` still prints `pages - min_free`.
+
 # tardis2's next boot: build 507 with pseudo-NMI (plan of 4 November) — read this first
 
 The same kernel, build 507, booted with `irqchip.gicv3_pseudo_nmi=1`
