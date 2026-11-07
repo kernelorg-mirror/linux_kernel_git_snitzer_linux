@@ -469,7 +469,7 @@ switch read Y, dmesg only BTF and taint, kdump armed, the settled
 setting), and both ports answered three pings of three.  The four runs,
 all clean (no drive stepped down, no stall, dmesg clean):
 
-| run | | GB/s | nfsd cycles/W | nfsd instr/W | region peak | denied |
+| run | | GB/s | nfsd cycles/W | nfsd instr/W | rig's region figure | denied |
 |---|---|---|---|---|---|---|
 | `t2-r192` | A | 65.65 | 288.5k | 277.6k | 19658 | 0 |
 | `t2-r193` | B | 66.32 | 288.4k | 274.4k | 21200 | 501 |
@@ -478,12 +478,35 @@ all clean (no drive stepped down, no stall, dmesg clean):
 
 B runs 3k to 5.5k fewer instructions a WRITE in nfsd, but no fewer
 cycles: `t2-r193`, at A's rate, costs the same 288k (`t2-r194` ran
-faster and costs more).  And both B runs hold more of the region at peak
-than either A, by 518 to 1642 pages.  A change that raises the region's
-peak is not kept (AGENTS.md), so it is **dropped**: the revert of
+faster and costs more).  It is **dropped** for that: the revert of
 "page_pool: return a bulk's overflow to the receive region's slot at
 once" is at the tip of `kernel-7.3/canary`.  The A/B branch and its DROP
 commit stay off it.
+
+**The region did not grow with it.**  B's rig figure ("region pages in
+use at most", 518 to 1642 above A's) was first read as a rise, and the
+drop given that reason; it is not one.  On this kernel `pages -
+min_free` counts as held the pages free on the device slots and in the
+CPU caches, and sums the shards' low-water marks, each reached at its
+own moment ("The region did not grow" under "Runtime on build 512"):
+it is 507's exact peak no more.  The bulk return parks more free pages
+on the slot, so it raises that figure and no page held.  One more pair
+with the region sampled every 20 ms, a page counted held when it is on
+no shard, CPU cache or slot (`t2-514-canary/region-sampler.sh`, the
+loaded 59 s):
+
+| run | | GB/s | nfsd cycles/W | held median | 99th pct | max | rig's figure |
+|---|---|---|---|---|---|---|---|
+| `t2-r196` | A | 69.08 | 303.2k | 3122 | 6394 | 7559 | 20464 |
+| `t2-r197` | B | 66.06 | 290.8k | 2925 | 5691 | 7577 | 21936 |
+
+The same held, and A's maximum of 7559 sits under 507's exact 12124
+(`t2-r178`); a sample can miss a dip under 20 ms, so a sampled maximum
+is a lower bound of the peak.  The cycles of this pair follow its rates
+(65582 against 63142 WRITEs a second) and decide nothing.  `twoport.sh`
+now samples the region so on such a kernel (`regionsample.py`, see
+"What twoport reports of the region" in `xeu-rig/README.md`); an exact
+peak there needs a low-water mark over the whole region in the kernel.
 
 **Left for Mike:** boot build 514 again (the one-shot entry is used up,
 so any reboot gives 514), then remove `/boot/ofp-rocky/ab-bulk-514` and
