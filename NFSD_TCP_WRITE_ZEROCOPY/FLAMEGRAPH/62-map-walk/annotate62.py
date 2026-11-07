@@ -20,7 +20,11 @@ import collections, os, re, subprocess, sys
 REL = os.uname().release
 DBG = '/usr/lib/debug/lib/modules/%s' % REL
 SCR = os.environ.get('ANN_DIR', '.')
-SUNRPC_KO = os.path.join(SCR, 'sunrpc.ko')        # xz -dc of the stock module
+# SUNRPC_KO: the running sunrpc.ko (default: an xz -dc of the stock module in
+# ANN_DIR); SUNRPC_DBG: its lines (default: 514's debug file; a module built
+# by build-sunrpc.sh carries its own, so give it as both)
+SUNRPC_KO = os.environ.get('SUNRPC_KO', os.path.join(SCR, 'sunrpc.ko'))
+SUNRPC_DBG = os.environ.get('SUNRPC_DBG', DBG + '/kernel/net/sunrpc/sunrpc.ko.debug')
 HELD_MAP = '/var/tmp/zc-run-logs/t2-514-canary/held-kernel/System.map'
 FUNCS = [('sunrpc', 'svc_tcp_rx_append_ref'), ('sunrpc', '__rx_loan_table_append_ref'),
          ('vmlinux', 'rx_loan_table_release'), ('vmlinux', 'rx_loan_prefetch_pages'),
@@ -50,16 +54,18 @@ ks = kallsyms()
 kaslr = ks['_text'] - 0xffff800080000000
 held, held_end = nm(HELD_MAP)
 stock, _ = nm(DBG + '/vmlinux')
-modbase = int(open('/sys/module/sunrpc/sections/.text').read(), 16)
-mod, mod_end = nm(DBG + '/kernel/net/sunrpc/sunrpc.ko.debug')
-plt = int(open('/sys/module/sunrpc/sections/.plt').read(), 16)
+# SUNRPC_TEXT: sunrpc's .text base when the run's module is no longer the
+# one loaded (saved by the run); its PLT is then not read
+modbase = int(os.environ.get('SUNRPC_TEXT') or open('/sys/module/sunrpc/sections/.text').read(), 16)
+mod, mod_end = nm(SUNRPC_DBG)
+plt = 0 if os.environ.get('SUNRPC_TEXT') else int(open('/sys/module/sunrpc/sections/.plt').read(), 16)
 
 # per function: running start, size, the address to disassemble at, file
 F = {}
 for where, fn in FUNCS:
     if where == 'sunrpc':
         F[fn] = (modbase + mod[fn], mod_end[fn] - mod[fn], mod[fn], SUNRPC_KO,
-                 DBG + '/kernel/net/sunrpc/sunrpc.ko.debug')
+                 SUNRPC_DBG)
     else:
         F[fn] = (held[fn] + kaslr, held_end[fn] - held[fn], stock[fn], DBG + '/vmlinux',
                  DBG + '/vmlinux')
@@ -75,7 +81,7 @@ for l in open(sys.argv[1]):
     except ValueError:
         continue
     ev = f[1].rstrip(':')
-    if plt <= ip < plt + 0x2000:
+    if plt and plt <= ip < plt + 0x2000:
         pltc[ev] += p
     for fn, (lo, sz, _, _, _) in F.items():
         if lo <= ip < lo + sz:
