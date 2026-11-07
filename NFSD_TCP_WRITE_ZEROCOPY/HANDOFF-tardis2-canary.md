@@ -858,8 +858,10 @@ was not affected, since `twoport.sh` writes the debugfs file just before
 the load (`echo 1 > $RG`), which restarts the peak.  `ab-held.sh` now
 writes it before the "before" line too.
 
-**Next (Mike):** keep the mark or drop it (a revert at the tip).  Then
-step 7's rest: boot 514 again and remove the two test kernels.
+**Kept (Mike, 7 November):** the mark stays, `bb7fd3100c3b` at the tip of
+`kernel-7.3/canary`, off by default.  From here on a region peak is
+`max_held` with `rx_region_held_mark=Y`, not the sample.  Still to do
+(step 7, with Mike): boot 514 again and remove the test kernels.
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
