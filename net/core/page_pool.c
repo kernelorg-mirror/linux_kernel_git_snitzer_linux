@@ -1335,6 +1335,20 @@ static void rx_region_slot_release(struct page_pool_rx_region *r, u8 o,
 	spin_unlock_irqrestore(&d->lock, flags);
 }
 
+/* Move full cache @c's oldest batch to slot @d's list; @c->lock held. */
+static void rx_region_slot_spill(struct rx_region_slot *d,
+				 struct rx_region_pcp *c)
+{
+	spin_lock(&d->lock);
+	memcpy(d->free + d->nfree, c->pages,
+	       RX_REGION_PCP_BATCH * sizeof(*c->pages));
+	WRITE_ONCE(d->nfree, d->nfree + RX_REGION_PCP_BATCH);
+	spin_unlock(&d->lock);
+	memmove(c->pages, c->pages + RX_REGION_PCP_BATCH,
+		(RX_REGION_PCP_MAX - RX_REGION_PCP_BATCH) * sizeof(*c->pages));
+	c->count = RX_REGION_PCP_MAX - RX_REGION_PCP_BATCH;
+}
+
 /*
  * Return a page still mapped for slot @o to this CPU's cache of the slot,
  * moving the cache's oldest batch to the slot's list when it is full.  The
@@ -1355,17 +1369,8 @@ static bool rx_region_slot_put(struct page_pool_rx_region *r, u8 o,
 	c = this_cpu_ptr(d->pcp);
 	spin_lock_irqsave(&c->lock, flags);
 	if (READ_ONCE(*rx_region_owner(r, page)) == o) {
-		if (c->count == RX_REGION_PCP_MAX) {
-			spin_lock(&d->lock);
-			memcpy(d->free + d->nfree, c->pages,
-			       RX_REGION_PCP_BATCH * sizeof(*c->pages));
-			WRITE_ONCE(d->nfree, d->nfree + RX_REGION_PCP_BATCH);
-			spin_unlock(&d->lock);
-			memmove(c->pages, c->pages + RX_REGION_PCP_BATCH,
-				(RX_REGION_PCP_MAX - RX_REGION_PCP_BATCH) *
-				sizeof(*c->pages));
-			c->count = RX_REGION_PCP_MAX - RX_REGION_PCP_BATCH;
-		}
+		if (c->count == RX_REGION_PCP_MAX)
+			rx_region_slot_spill(d, c);
 		c->pages[c->count] = page;
 		WRITE_ONCE(c->count, c->count + 1);
 		kept = true;
@@ -1373,6 +1378,39 @@ static bool rx_region_slot_put(struct page_pool_rx_region *r, u8 o,
 	spin_unlock_irqrestore(&c->lock, flags);
 	migrate_enable();
 	return kept;
+}
+
+/*
+ * Return @n (at most 32) pages mapped for slot @o, as rx_region_slot_put()
+ * does each, under one hold of this CPU's cache of the slot.  The pages the
+ * slot's walk unmapped meanwhile are set in the mask returned, for the
+ * shards.
+ */
+static u32 rx_region_slot_put_bulk(struct page_pool_rx_region *r, u8 o,
+				   struct page **pages, unsigned int n)
+{
+	struct rx_region_slot *d = &r->slots[o - 1];
+	struct rx_region_pcp *c;
+	unsigned long flags;
+	unsigned int i;
+	u32 left = 0;
+
+	migrate_disable();
+	c = this_cpu_ptr(d->pcp);
+	spin_lock_irqsave(&c->lock, flags);
+	for (i = 0; i < n; i++) {
+		if (READ_ONCE(*rx_region_owner(r, pages[i])) != o) {
+			left |= BIT(i);
+			continue;
+		}
+		if (c->count == RX_REGION_PCP_MAX)
+			rx_region_slot_spill(d, c);
+		c->pages[c->count] = pages[i];
+		WRITE_ONCE(c->count, c->count + 1);
+	}
+	spin_unlock_irqrestore(&c->lock, flags);
+	migrate_enable();
+	return left;
 }
 
 /*
@@ -3061,6 +3099,73 @@ static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem)
 	 */
 }
 
+/*
+ * Disconnect @n pages of @pool, as page_pool_return_netmem() does each.  The
+ * region pages of a pool with a slot that are still mapped for it and held
+ * by nothing else go back to this CPU's cache of the slot under one hold of
+ * its lock, with one atomic on the pool's release count, which every CPU
+ * that releases the pool's pages writes.  Any other page goes back on its
+ * own, as before.
+ */
+static void page_pool_return_netmem_bulk(struct page_pool *pool,
+					 netmem_ref *bulk, u32 n)
+{
+	/* Read before the release count: the pool may go once it is up. */
+	struct page_pool_rx_region *region =
+		page_pool_rx_region_exists() ? READ_ONCE(pool->rx_region) : NULL;
+	u8 o = region ? pool->rx_region_dev : 0;
+	struct page *pages[XDP_BULK_QUEUE_SIZE];
+	u32 i, m = 0, left;
+	int count;
+
+	BUILD_BUG_ON(XDP_BULK_QUEUE_SIZE > 32);
+	if (n < 2 || n > XDP_BULK_QUEUE_SIZE || !o ||
+	    (static_branch_unlikely(&page_pool_mem_providers) && pool->mp_ops)) {
+		for (i = 0; i < n; i++)
+			page_pool_return_netmem(pool, bulk[i]);
+		return;
+	}
+	/*
+	 * The pages kept back here are not yet counted, so the pool cannot go
+	 * while the others are returned.
+	 */
+	for (i = 0; i < n; i++) {
+		struct page *page = netmem_to_page(bulk[i]);
+
+		if (rx_region_has(region, page) && page_ref_count(page) == 1 &&
+		    READ_ONCE(*rx_region_owner(region, page)) == o)
+			pages[m++] = page;
+		else
+			page_pool_return_netmem(pool, bulk[i]);
+	}
+	if (!m)
+		return;
+
+	/*
+	 * As page_pool_return_netmem(), the count first: the pool may go once
+	 * it is up, and the region and slot do not need it.  Each page is
+	 * counted on its own only for the tracepoint, which reports every count.
+	 */
+	if (!trace_page_pool_state_release_enabled()) {
+		atomic_add(m, &pool->pages_state_release_cnt);
+	} else {
+		for (i = 0; i < m; i++) {
+			count = atomic_inc_return_relaxed(&pool->pages_state_release_cnt);
+			trace_page_pool_state_release(pool, page_to_netmem(pages[i]),
+						      count);
+		}
+	}
+
+	for (i = 0; i < m; i++)
+		page_pool_clear_pp_info(page_to_netmem(pages[i]));
+	left = rx_region_slot_put_bulk(region, o, pages, m);
+	for (i = 0; i < m; i++)
+		if ((left & BIT(i)) &&
+		    !page_pool_rx_region_put(&region->part[RX_REGION_WRITE],
+					     pages[i]))
+			put_page(pages[i]);
+}
+
 static bool page_pool_recycle_in_ring(struct page_pool *pool, netmem_ref netmem)
 {
 	bool in_softirq, ret;
@@ -3240,8 +3345,7 @@ static void page_pool_recycle_ring_bulk(struct page_pool *pool,
 	 * ptr_ring cache is full, free remaining pages outside producer lock
 	 * since put_page() with refcnt == 1 can be an expensive operation.
 	 */
-	for (; i < bulk_len; i++)
-		page_pool_return_netmem(pool, bulk[i]);
+	page_pool_return_netmem_bulk(pool, &bulk[i], bulk_len - i);
 }
 
 /**
