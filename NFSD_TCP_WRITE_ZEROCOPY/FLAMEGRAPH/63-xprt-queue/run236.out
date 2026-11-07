@@ -1,0 +1,5 @@
+21:00:38 kernel 7.3.0-11.hs.514.canary.el10.aarch64+16k, sunrpc 1C2C5C459F3413804A2CEE1, nfsd 90122931101ECCD1B292201
+21:05:34 t2-r236 trace | total 68.72 GB/s | 153 lines
+21:05:37 end: settled.sh audit rest: the settled setting
+
+[exited with code 0]

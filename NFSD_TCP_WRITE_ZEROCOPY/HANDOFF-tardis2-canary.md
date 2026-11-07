@@ -1088,8 +1088,10 @@ run), the held mark off:
 | `t2-r226` | 69.18 | 35.73, 33.45 | 2.7%, 2.0% | 91% DRIVE-LIMITED, 87% | 1049 |
 
 - **Five of six at 70.07 to 71.03,** `t2-r224` within 0.3% of 507's
-  71.21 (`t2-r178`, unpinned); port a is limited by its drives in every
-  run, as 507's run was.  The client's CPUs are 68 to 71% busy, against
+  71.21 (`t2-r178`, unpinned); a drive of port a is 91 to 93% busy in
+  every run, as in 507's run, which says the drives are kept busy, not
+  that they are the limit (see "DRIVE-LIMITED is a label, not the limit"
+  below).  The client's CPUs are 68 to 71% busy, against
   73 to 76% unpinned.  Every run clean; the client was put back
   (`cache_shard`, `irqbalance` active) and the audit at the end found
   nothing BAD.
@@ -1185,6 +1187,34 @@ nfsd's added cycles are mostly elsewhere: the loan's code, about 7k cycles
 a WRITE more since it moved out of sunrpc (`49e2111a6420`), and lock
 contention in `svc_recv`'s transport queue.  The account and the next
 targets are in `FLAMEGRAPH/62-map-walk/README.md`.
+
+**The loan's functions annotated, then the transport queue traced
+(Mike, 7 November).**  `FLAMEGRAPH/62-map-walk/annotate62.py` over
+`t2-r235`: the five loan functions' calls, returns and sunrpc's PLT are
+about 1k of their 16.6k cycles a WRITE.  Three loads that miss are 5.5k:
+the region's owner byte in `rx_region_page_put` (2.46k), the KUnit fault
+hook's flag in `svc_tcp_rx_append_ref` (1.76k, on one line with
+`svc_tcp_spare_pages`, a global atomic every save and restore of a partial
+record writes), and `rx_loan_prefetch_pages`'s walk of the skbs (1.28k).
+Then `FLAMEGRAPH/63-xprt-queue/run236.sh`, `t2-r236` (68.72 GB/s under the
+probes): a WRITE puts its transport on the pool's queue 5.56 times, one for
+each piece `tcp_data_ready()` finds it idle for, and 1.23 of those take the
+queue's lock through the slow path.  The passes are the multiplier: each is
+a wake or pickup, a dequeue, a save and a restore.  The options are in
+`FLAMEGRAPH/63-xprt-queue/README.md`.
+
+**DRIVE-LIMITED is a label, not the limit (Mike, 7 November).**
+`twoport.sh` printed "DRIVE-LIMITED" beside any port whose busiest drive
+was 90% busy or more.  A drive's busy figure is the time it had any write
+outstanding; an NVMe drive at 90% has room left, and the eight take over
+80 GB/s together.  So the label in the tables above (and in rounds 02 to
+28) says the drives were kept busy, not that they set the rate, and the
+reports of this day that called 514 at 70 GB/s "drive-limited" were
+wrong.  What limits this rig, on every run, is memory bandwidth: the loan
+carries 70 where copy carries 60 because it moves fewer bytes a byte, and
+round 56 (`FLAMEGRAPH/56-eight-sgl-two-ports/README.md`) reached 73.27 at
+rings of 256 with memory requests at about 140 GB/s, flat from 512 to
+640 KiB held.  `twoport.sh` now prints the busy figure without a verdict.
 
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots

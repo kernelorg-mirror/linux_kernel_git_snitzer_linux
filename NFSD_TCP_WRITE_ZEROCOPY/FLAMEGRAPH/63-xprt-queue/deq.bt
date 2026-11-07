@@ -1,0 +1,58 @@
+#!/usr/bin/bpftrace
+/*
+ * deq.bt: round 63, the thread pool's transport queue (pool->sp_xprts) a
+ * WRITE.  sunrpc is a module whose BTF does not match this boot's vmlinux,
+ * so its functions are kprobes; __lwq_dequeue and the lock's slow path are
+ * vmlinux's; __lwq_dequeue has no fentry here, so it is a kprobe on entry
+ * only, and its empty returns are the calls less the transports queued.  The queue is found from svc_pool_enqueue_xprt()'s
+ * pool: sp_xprts at +16, its lock first, sp_rtc_rqsts at +40 (struct
+ * svc_pool, 514's sunrpc.ko.debug).  bpftrace 0.26 does not join a kprobe
+ * and a kretprobe of one function, so svc_pool_wake_idle_thread() is a
+ * kretprobe only.
+ *   timeout -s INT 10 bpftrace deq.bt
+ */
+config = { missing_probes = "warn"; max_map_keys = 65536 }
+
+BEGIN { @t0 = nsecs; }
+
+kprobe:nfsd_direct_write { @writes = count(); }
+
+kprobe:svc_xprt_enqueue { @enqueue_calls = count(); @enqueue_from[kstack(4)] = count(); }
+kprobe:svc_pool_enqueue_xprt { @queued = count(); @pool = arg1; @xq = arg1 + 16; }
+kprobe:svc_xprt_received { @received = count(); }
+kretprobe:svc_pool_wake_idle_thread { @wake[(retval & 1) ? "claimed a thread" : "none idle"] = count(); }
+
+kprobe:__lwq_dequeue
+{
+	if ((uint64)arg0 == @xq) {
+		@dequeue_calls = count();
+		@dequeue_cpu = lhist(cpu, 0, 64, 4);
+	} else {
+		@dequeue_other[(uint64)arg0] = count();
+	}
+}
+
+fentry:vmlinux:queued_spin_lock_slowpath
+{
+	$l = (uint64)args.lock;
+	$k = $l == @xq ? "sp_xprts" : ($l == @xq + 24 ? "sp_rtc_rqsts" : "other");
+	@slow[$k] = count();
+	@sl[tid] = nsecs;
+	@slk[tid] = $k;
+	if ($k == "other") { @slow_other_from[kstack(3)] = count(); }
+}
+fexit:vmlinux:queued_spin_lock_slowpath
+/@sl[tid]/
+{
+	$d = (uint64)nsecs - (uint64)@sl[tid];
+	@slow_ns_sum[@slk[tid]] = sum($d);
+	@slow_ns[@slk[tid]] = hist($d);
+	delete(@sl[tid]); delete(@slk[tid]);
+}
+
+END
+{
+	printf("traced_us %d pool %lx sp_xprts %lx (line offset %d)\n",
+	       (uint64)(nsecs - @t0) / 1000, @pool, @xq, @xq & 63);
+	clear(@sl); clear(@slk);
+}

@@ -1,0 +1,180 @@
+====================================================================================================
+svc_tcp_rx_append_ref: 232 bytes, 2805 cycles and 6656 instructions a WRITE, IPC 2.37
+  by kind:              cycles    insns  cyc %  count
+    other                         2159     4723  77.0%     32
+    entry/exit                     369     1226  13.2%      8
+    loads                          169      438   6.0%      5
+    branches                        80      207   2.9%      9
+    calls                           27       61   0.9%      1
+    stores                           0        0   0.0%      3
+  by source line (innermost < caller), 85% of cycles:
+      1811  64.6%  svc_tcp_rx_kunit_should_fail net/sunrpc/svcsock.c:128 < svc_tcp_rx_append_ref net/sunrpc/svcsock.c:2711
+       302  10.8%  svc_tcp_rx_append_ref net/sunrpc/svcsock.c:2716
+       156   5.6%  svc_tcp_rx_append_ref net/sunrpc/svcsock.c:2704
+       147   5.2%  rx_loan_table_append_ok include/net/rx_loan.h:232 < svc_tcp_rx_append_ref net/sunrpc/svcsock.c:2706
+  hottest instructions:
+    +0x088   1761  62.8%  L2 16.31  cmp      w0, #0x1                           net/sunrpc/svcsock.c:128
+    +0x0d0    232   8.3%  L2  2.59  ret                                         net/sunrpc/svcsock.c:2716
+    +0x068    127   4.5%  L2  1.52  ldr      w0, [x7, #32]                      include/net/rx_loan.h:232
+    +0x0cc     54   1.9%  L2  0.63  autiasp                                     net/sunrpc/svcsock.c:2716
+    +0x000     35   1.2%  L2  0.31  nop                                         net/sunrpc/svcsock.c:2704
+    +0x0b4     34   1.2%  L2  0.52  paciasp                                     net/sunrpc/svcsock.c:2704
+    +0x0b8     33   1.2%  L2  0.28  stp      x29, x30, [sp, #-16]!              net/sunrpc/svcsock.c:2704
+    +0x0c0     32   1.1%  L2  0.28  mov      x29, sp                            net/sunrpc/svcsock.c:2704
+    +0x038     31   1.1%  L2  0.42  eor      w0, w5, #0x1                       include/net/rx_loan.h:230
+    +0x078     29   1.0%  L2  0.27  tbz      w4, #0, 3ad3c <svc_tcp_rx_append_r net/sunrpc/svcsock.c:2710
+    +0x0c4     27   0.9%  L2  0.12  bl       3a730 <__rx_loan_table_append_ref> net/sunrpc/svcsock.c:2714
+    +0x084     26   0.9%  L2  0.14  ldr      w0, [x8]                           net/sunrpc/svcsock.c:128
+    +0x0bc     26   0.9%  L2  0.30  mov      x0, x7                             net/sunrpc/svcsock.c:2714
+    +0x058     26   0.9%  L2  0.31  mov      x0, #0x4000                        include/net/rx_loan.h:231
+====================================================================================================
+__rx_loan_table_append_ref: 768 bytes, 3918 cycles and 10131 instructions a WRITE, IPC 2.59
+  by kind:              cycles    insns  cyc %  count
+    other                         2263     5244  57.8%     83
+    loads                          885     2497  22.6%     34
+    branches                       475     1382  12.1%     36
+    stores                         277      932   7.1%     29
+    entry/exit                       9       66   0.2%      2
+    atomics, barriers, prefetch       9       10   0.2%      6
+    prefetch                         0        0   0.0%      2
+  by source line (innermost < caller), 85% of cycles:
+       539  13.8%  rx_loan_table_can_coalesce include/net/rx_loan.h:179 < __rx_loan_table_append_ref include/net/rx_loan.h:248
+       414  10.6%  rx_loan_table_can_coalesce include/net/rx_loan.h:180 < __rx_loan_table_append_ref include/net/rx_loan.h:248
+       413  10.5%  generic___set_bit include/asm-generic/bitops/generic-non-atomic.h:33 < __rx_loan_table_append_ref include/net/rx_loan.h:259
+       346   8.8%  generic___set_bit include/asm-generic/bitops/generic-non-atomic.h:33 < __rx_loan_table_append_ref include/net/rx_loan.h:269
+       302   7.7%  page_pool_page_in_rx_region include/net/page_pool/helpers.h:459 < __rx_loan_table_append_ref include/net/rx_loan.h:263
+       205   5.2%  __rx_loan_table_append_ref include/net/rx_loan.h:258
+       194   4.9%  __rx_loan_table_append_ref include/net/rx_loan.h:252
+       176   4.5%  __rx_loan_table_append_ref include/net/rx_loan.h:264
+       172   4.4%  __rx_loan_table_append_ref include/net/rx_loan.h:270
+       145   3.7%  __rx_loan_table_append_ref include/net/rx_loan.h:261
+       130   3.3%  __rx_loan_table_append_ref include/net/rx_loan.h:262
+        79   2.0%  page_pool_page_is_pp include/linux/mm.h:5493 < page_pool_page_in_rx_region include/net/page_pool/helpers.h:459
+        71   1.8%  __rx_loan_table_append_ref include/net/rx_loan.h:260
+        59   1.5%  generic___set_bit include/asm-generic/bitops/generic-non-atomic.h:30 < __rx_loan_table_append_ref include/net/rx_loan.h:259
+        44   1.1%  __rx_loan_table_append_ref include/net/rx_loan.h:254
+        44   1.1%  rx_loan_table_can_coalesce include/net/rx_loan.h:176 < __rx_loan_table_append_ref include/net/rx_loan.h:248
+  hottest instructions:
+    +0x028    497  12.7%  L2  5.97  add      x8, x8, x9, lsl #4                 include/net/rx_loan.h:179
+    +0x088    311   7.9%  L2  4.19  orr      x6, x6, x7                         include/asm-generic/bitops/generic-non-atomic.h:33
+    +0x1d0    305   7.8%  L2  4.16  orr      x2, x2, x4                         include/asm-generic/bitops/generic-non-atomic.h:33
+    +0x02c    223   5.7%  L2  1.88  cmp      x1, x10                            include/net/rx_loan.h:180
+    +0x290    202   5.2%  L2  1.92  cbz      x2, 3a8e4 <__rx_loan_table_append_ include/net/page_pool/helpers.h:459
+    +0x05c    152   3.9%  L2  0.24  and      w6, w4, #0x1                       include/net/rx_loan.h:258
+    +0x090    126   3.2%  L2  0.36  ldr      w6, [x0, #48]                      include/net/rx_loan.h:261
+    +0x034    105   2.7%  L2  0.99  ldr      w8, [x0, #24]                      include/net/rx_loan.h:252
+    +0x1d8     95   2.4%  L2  0.37  ldr      w1, [x0, #28]                      include/net/rx_loan.h:270
+    +0x29c     95   2.4%  L2  0.22  add      w1, w2, #0x1                       include/net/rx_loan.h:264
+    +0x038     89   2.3%  L2  1.13  cmp      w8, w7                             include/net/rx_loan.h:252
+    +0x0d0     88   2.2%  L2  1.23  ldp      w10, w11, [x8, #8]                 include/net/rx_loan.h:180
+    +0x08c     81   2.1%  L2  1.05  str      x6, [x8, x2]                       include/asm-generic/bitops/generic-non-atomic.h:33
+    +0x0d4     78   2.0%  L2  0.79  add      w11, w10, w11                      include/net/rx_loan.h:180
+====================================================================================================
+rx_loan_table_release: 872 bytes, 3352 cycles and 7792 instructions a WRITE, IPC 2.32
+  by kind:              cycles    insns  cyc %  count
+    other                         1523     3804  45.4%     96
+    prefetch                       747      927  22.3%      5
+    loads                          459     1346  13.7%     38
+    branches                       432     1217  12.9%     39
+    stores                          93      241   2.8%     13
+    calls                           85      247   2.5%     18
+    entry/exit                      12        9   0.3%      5
+    atomics, barriers, prefetch       0        0   0.0%      4
+  by source line (innermost < caller), 85% of cycles:
+       443  13.2%  rx_loan_prefetch_again net/core/rx_loan.c:267 < rx_loan_table_release net/core/rx_loan.c:310
+       405  12.1%  rx_loan_table_release net/core/rx_loan.c:312
+       324   9.7%  _compound_head include/linux/page-flags.h:233 < netmem_compound_head include/net/netmem.h:319
+       215   6.4%  generic_test_bit include/asm-generic/bitops/generic-non-atomic.h:128 < rx_loan_table_release net/core/rx_loan.c:314
+       197   5.9%  rx_loan_table_release net/core/rx_loan.c:329
+       171   5.1%  prefetchw arch/arm64/include/asm/processor.h:404 < rx_loan_table_release net/core/rx_loan.c:305
+       143   4.3%  rx_loan_table_release net/core/rx_loan.c:327
+       143   4.3%  rx_loan_table_release net/core/rx_loan.c:330
+       114   3.4%  rx_loan_prefetch_again net/core/rx_loan.c:267 < rx_loan_table_release net/core/rx_loan.c:307
+       103   3.1%  generic___clear_bit include/asm-generic/bitops/generic-non-atomic.h:42 < rx_loan_table_release net/core/rx_loan.c:338
+        81   2.4%  rx_loan_table_release net/core/rx_loan.c:304
+        75   2.2%  generic___clear_bit include/asm-generic/bitops/generic-non-atomic.h:42 < rx_loan_table_release net/core/rx_loan.c:339
+        65   1.9%  rx_loan_table_release net/core/rx_loan.c:338
+        64   1.9%  generic_test_bit include/asm-generic/bitops/generic-non-atomic.h:128 < rx_loan_table_release net/core/rx_loan.c:321
+        61   1.8%  rx_loan_table_release net/core/rx_loan.c:322
+        59   1.8%  rx_loan_table_release net/core/rx_loan.c:309
+        51   1.5%  prefetchw arch/arm64/include/asm/processor.h:404 < rx_loan_table_release net/core/rx_loan.c:313
+        46   1.4%  rx_loan_table_release net/core/rx_loan.c:314
+        46   1.4%  rx_loan_table_release net/core/rx_loan.c:341
+        43   1.3%  rx_loan_table_release net/core/rx_loan.c:308
+  hottest instructions:
+    +0x16c    430  12.8%  L2  3.25  prfm     pstl2keep, [x0]                    net/core/rx_loan.c:267
+    +0x170    272   8.1%  L2  2.12  add      w0, w5, #0x10                      net/core/rx_loan.c:312
+    +0x0f4    249   7.4%  L2  2.35  tst      x1, #0x1                           include/linux/page-flags.h:233
+    +0x214    197   5.9%  L2  1.36  cbnz     x26, ffff800080f74290 <rx_loan_tab net/core/rx_loan.c:329
+    +0x080    169   5.1%  L2  4.60  prfm     pstl1keep, [x3]                    arch/arm64/include/asm/processor.h:404
+    +0x108    143   4.3%  L2  0.86  add      x26, x26, #0x1                     net/core/rx_loan.c:327
+    +0x174    131   3.9%  L2  1.15  cmp      w0, w4                             net/core/rx_loan.c:312
+    +0x0c0    111   3.3%  L2  2.89  prfm     pstl2keep, [x2]                    net/core/rx_loan.c:267
+    +0x308     96   2.9%  L2  1.52  mov      x3, x26                            net/core/rx_loan.c:330
+    +0x190     89   2.7%  L2  0.46  and      w20, w5, #0x3f                     include/asm-generic/bitops/generic-non-atomic.h:128
+    +0x31c     65   1.9%  L2  0.46  b        ffff800080f741a0 <rx_loan_table_re net/core/rx_loan.c:338
+    +0x0f0     57   1.7%  L2  1.65  sub      x27, x1, #0x1                      include/linux/page-flags.h:233
+    +0x12c     52   1.6%  L2  0.34  str      x20, [x0, x19]                     include/asm-generic/bitops/generic-non-atomic.h:42
+    +0x118     48   1.4%  L2  0.31  bic      x0, x0, x20                        include/asm-generic/bitops/generic-non-atomic.h:42
+====================================================================================================
+rx_loan_prefetch_pages: 368 bytes, 3510 cycles and 3908 instructions a WRITE, IPC 1.11
+  by kind:              cycles    insns  cyc %  count
+    branches                      1678     2175  47.8%     12
+    other                         1416     1420  40.4%     53
+    loads                          368      287  10.5%     16
+    entry/exit                      29       14   0.8%      5
+    prefetch                        16       10   0.5%      2
+    stores                           2        2   0.1%      2
+    calls                            0        0   0.0%      2
+  by source line (innermost < caller), 85% of cycles:
+      1597  45.5%  rx_loan_prefetch_pages net/core/rx_loan.c:122
+       508  14.5%  rx_loan_prefetch_pages net/core/rx_loan.c:119
+       355  10.1%  skb_frag_page include/linux/skbuff.h:3720 < rx_loan_prefetch_pages net/core/rx_loan.c:124
+       306   8.7%  netmem_is_net_iov include/net/netmem.h:144 < skb_frag_is_net_iov include/linux/skbuff.h:3693
+       295   8.4%  skb_end_pointer include/linux/skbuff.h:1725 < rx_loan_prefetch_pages net/core/rx_loan.c:122
+  hottest instructions:
+    +0x09c   1282  36.5%  L2 18.18  cbz      w1, ffff800080f736d0 <rx_loan_pref net/core/rx_loan.c:122
+    +0x070    483  13.8%  L2  9.83  mov      x3, #0x1000000000000               net/core/rx_loan.c:119
+    +0x104    355  10.1%  L2  8.84  tbz      w5, #0, ffff800080f73654 <rx_loan_ include/linux/skbuff.h:3720
+    +0x100    306   8.7%  L2  4.80  add      x2, x0, w1, uxtw #4                include/net/netmem.h:144
+    +0x0e8    234   6.7%  L2  2.99  add      w1, w1, #0x1                       net/core/rx_loan.c:122
+    +0x0e4    151   4.3%  L2  1.94  add      x0, x6, x7                         include/linux/skbuff.h:1725
+    +0x08c    140   4.0%  L2  1.38  ldr      x6, [x0, #200]                     include/linux/skbuff.h:1725
+    +0x0d4     68   1.9%  L2  0.51  ldr      w0, [x2, #60]                      net/core/rx_loan.c:128
+    +0x0ac     36   1.0%  L2  0.44  ldr      w0, [x2, #56]                      net/core/rx_loan.c:127
+    +0x0d8     26   0.8%  L2  0.32  lsr      w0, w0, #14                        net/core/rx_loan.c:128
+    +0x0fc     25   0.7%  L2  0.31  ldr      x5, [x0, x4]                       net/core/rx_loan.c:127
+    +0x0f0     24   0.7%  L2  0.15  ldrb     w2, [x0, #2]                       net/core/rx_loan.c:122
+    +0x0c4     24   0.7%  L2  0.24  cmp      w20, w0                            net/core/rx_loan.c:127
+    +0x048     24   0.7%  L2  0.33  ldr      w1, [x0, #116]                     include/linux/skbuff.h:2517
+====================================================================================================
+rx_region_page_put: 352 bytes, 2987 cycles and 2180 instructions a WRITE, IPC 0.73
+  by kind:              cycles    insns  cyc %  count
+    branches                      2460     1791  82.4%     10
+    other                          426      274  14.3%     39
+    loads                           59       60   2.0%     15
+    entry/exit                      27       31   0.9%      5
+    stores                          10       14   0.3%      5
+    calls                            5       10   0.2%     10
+    atomics, barriers, prefetch       0        0   0.0%      3
+    prefetch                         0        0   0.0%      1
+  by source line (innermost < caller), 85% of cycles:
+      2805  93.9%  rx_region_page_put net/core/page_pool.c:1389
+  hottest instructions:
+    +0x068   2456  82.2%  L2 10.04  b.eq     ffff800080f6d6dc <rx_region_page_p net/core/page_pool.c:1389
+    +0x064    349  11.7%  L2  4.38  ands     w22, w1, #0xff                     net/core/page_pool.c:1389
+    +0x06c     34   1.1%  L2  0.15  ldr      w1, [x21, #52]                     include/linux/atomic/atomic-arch-fallback.h:457
+    +0x000     16   0.5%  L2  0.33  nop                                         net/core/page_pool.c:1386
+    +0x0ec     13   0.4%  L2  0.02  autiasp                                     net/core/page_pool.c:1399
+    +0x030     13   0.4%  L2  0.25  mov      x21, x1                            net/core/page_pool.c:1386
+    +0x018      8   0.3%  L2  0.11  mov      x29, sp                            net/core/page_pool.c:1386
+    +0x0f4      7   0.2%  L2  0.03  mov      w1, w22                            net/core/page_pool.c:1395
+    +0x0e0      6   0.2%  L2  0.03  ldp      x19, x20, [sp, #16]                net/core/page_pool.c:1399
+    +0x070      6   0.2%  L2  0.07  cmp      w1, #0x1                           net/core/page_pool.c:1390
+    +0x004      6   0.2%  L2  0.02  nop                                         net/core/page_pool.c:1386
+    +0x040      4   0.1%  L2  0.07  sub      x19, x1, x19                       net/core/page_pool.c:1300
+    +0x010      4   0.1%  L2  0.09  stp      x29, x30, [sp, #-80]!              net/core/page_pool.c:1386
+    +0x050      4   0.1%  L2  0.03  cmp      x19, x1                            net/core/page_pool.c:1387
+====================================================================================================
+the five: 16571 cycles, 30667 instructions a WRITE
+sunrpc's PLT (veneers into vmlinux): 425 cycles, 228 instructions a WRITE
