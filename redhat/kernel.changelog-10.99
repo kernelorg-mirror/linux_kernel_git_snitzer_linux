@@ -1,3 +1,11 @@
+* Fri Nov 06 2026 Mike Snitzer <snitzer@kernel.org> [7.3.3-13]
+- Rebase all branches on kernel-7.3.3-0, every topic commit unchanged
+- baseline-reverts, new: revert the 53 stable backports in v7.3.3 whose
+  upstream commits the topics carry themselves (41 in nfsd-7.4, 11 in
+  anna-nfs-next, 1 in trond-nfs-next), so each topic applies as it did on
+  v7.3; trond-nfs-next, anna-nfs-next, nfsd-7.4 and
+  nfs-testing-canary-nfs4_acl-passthru are built on it
+
 * Fri Nov 06 2026 Mike Snitzer <snitzer@kernel.org> [7.3.3-0]
 - Linux v7.3.3
 
