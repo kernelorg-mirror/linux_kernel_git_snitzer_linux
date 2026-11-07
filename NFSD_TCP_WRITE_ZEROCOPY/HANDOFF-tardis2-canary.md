@@ -985,6 +985,44 @@ the rate.  That is a correlation, not a cause: `cli-mpstat.txt` has no
 per-process figures, so what the client's extra user time is (fio, or
 something else on the client, up 25 days) is not known.
 
+**The client's fio pinned (7 November).**  The client (Xeon Gold 6542Y,
+two sockets, `idle=poll`, all CPUs at 3600 MHz throughout) has port a's
+NIC (`ens3np0`) on node 0 and port b's (`ens6np0`) on node 1, and
+`twoport.sh` left fio unpinned: the scheduler placed it.  `twoport.sh`
+now records the client by process, where fio runs each second, its
+clocks, and its NICs' counters (`b88e391a8e94`, `d7082977b0a1`).  With
+the client's `irqbalance` stopped (its IRQs, all on their NIC's own node,
+saved in `t2-514-canary/client-irq-affinity-0730.txt`; started again
+after the runs), `ab-pin.sh` ran P U P U P U, P being `PIN=1` (fio on
+CPUs 0-23 for a, 24-47 for b):
+
+| run | fio | GB/s | fio on its NIC's node (a, b) | fio CPUs | kworker CPUs |
+|---|---|---|---|---|---|
+| `t2-r209` | pinned | 67.92 | 100%, 100% | 8.4 | 23.1 |
+| `t2-r210` | not | 63.38 | 85%, 80% | 9.9 | 23.8 |
+| `t2-r211` | pinned | 67.90 | 100%, 100% | 8.6 | 23.6 |
+| `t2-r212` | not | 64.60 | 89%, 93% | 9.7 | 23.5 |
+| `t2-r213` | pinned | 68.35 | 100%, 100% | 8.3 | 23.0 |
+| `t2-r214` | not | 63.43 | 81%, 76% | 9.4 | 23.7 |
+
+Pinned, 67.90 to 68.35 GB/s; not, 63.38 to 64.60: about 6% more, and
+steadier.  Unpinned, 7 to 24% of fio's time is on the far node and fio
+takes about 1.3 CPUs more.  The sending is mostly the sunrpc kworkers'
+(23 CPUs of system time), which start where their work is queued: only
+about 5% of each NIC's packets leave from the far node's CPUs, pinned or
+not (from the NIC's per-queue counters and the client's XPS map; port
+b's NIC numbers its queues from CPU 24).  The pinned runs do not reach
+the earlier fast runs' 69 to 70.6.  `t2-r206`, unpinned with
+`irqbalance` running, carried 68.59.
+
+The kworkers cannot be pinned strictly on the client's kernel:
+`rpciod` and `xprtiod` are not `WQ_SYSFS` (no `affinity_strict` or
+cpumask of their own), kworkers refuse `taskset`, and the global unbound
+cpumask cannot give each port its node.  Next, `ab-scope.sh`
+(`t2-r215` to `t2-r220`): the client's
+`workqueue.default_affinity_scope` `numa` against `cache_shard`, fio
+pinned.
+
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
 into a test kernel did).  Use this kernel as long as possible: no reboot,
