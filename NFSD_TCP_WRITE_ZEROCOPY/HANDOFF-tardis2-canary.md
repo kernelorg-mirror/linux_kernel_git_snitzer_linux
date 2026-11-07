@@ -735,8 +735,35 @@ scripts' output are in
 **So far stock 514 is one lost of two boots**, against five of six for the
 two test kernels: too few boots for either rate.
 
-**Next:** Mike's call between going on with the count (another power reset
-into the default entry) and using this good boot.
+**This good boot ran build 514's runtime baselines again (Mike), below.**
+
+#### Baselines on it (05:31 to 05:52)
+
+As in "Runtime on build 514": `run.sh` (fstrim, 120 s of rest, `WARM=10
+RUNTIME=30 twoport.sh ab`, `cost.sh`), at one pool (`pernode`, the settled
+mode since 6 November), loan and copy in turns.  Driver
+`/var/tmp/zc-run-logs/t2-514-canary/base-boot2.sh`, its log `base-boot2.log`
+beside it.  `t2-r198..r201` are left to `ab-held.sh`.  No drive stepped down
+or stalled, dmesg stayed clean, no loan was denied, and both ports still
+answered after the last run.
+
+| run | mode | GB/s | nfsd cycles (instr) a WRITE | ring cycles | region sampled: median / p99 / max | 6 November, one pool |
+|---|---|---|---|---|---|---|
+| t2-r202 | loan | 65.64 | 292.4k (277.4k) | 75.0k | 2981 / 6074 / 9175 | t2-r189: 66.72, 297.0k (278.7k) |
+| t2-r203 | copy | 64.15 | 738.6k (475.2k) | 80.3k | 930 / 950 / 985 | t2-r190: 62.23, 693.4k (476.1k) |
+| t2-r204 | loan | 66.36 | 294.5k (277.7k) | 74.4k | 3023 / 6227 / 8160 | t2-r191: 66.63, 298.0k |
+| t2-r205 | copy | 62.29 | 694.1k (475.7k) | 81.7k | 921 / 942 / 958 | |
+
+- **Build 514 runs as it did on 6 November.** Loan is within 1.6% in rate
+  and 2% in nfsd cycles of t2-r189 and t2-r191; t2-r205 is t2-r190 again
+  (62.29 against 62.23 GB/s, 694.1k against 693.4k cycles).
+- **t2-r203 is the outlier of the copy runs:** 3% faster and 6.5% more nfsd
+  cycles a WRITE on the same instructions (475.2k), so cycles a WRITE in
+  copy mode vary by about that much from run to run.
+- The region figures are sampled with the slots and caches free (a lower
+  bound of the peak); the 6 November runs' "in use at most" is not set
+  beside them (see "What twoport reports of the region" in
+  `xeu-rig/README.md`).
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
