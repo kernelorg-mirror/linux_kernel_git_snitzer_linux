@@ -1059,6 +1059,13 @@ there as much as the non-strict scope lets them.  The earlier fast runs,
 unpinned, are the ones where the scheduler happened to place it so; that
 was not recorded for them, so it is the likely reading, not a finding.
 
+**`twoport.sh` pins the client's fio by default from here on (Mike, 7
+November: "the cpu pinning on client is a really good catch and sorely
+missing"):** `PIN` defaults to 1, `PIN=0` leaves fio unpinned, and
+`geometry.txt`'s "this run" line ends in `client pin`.  Runs from before
+it, all unpinned, are not to be set beside pinned ones without saying
+so: pinned carries about 6% more on 514.
+
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
 into a test kernel did).  Use this kernel as long as possible: no reboot,
