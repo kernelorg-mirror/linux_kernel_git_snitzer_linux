@@ -29,6 +29,9 @@ HELD_MAP = '/var/tmp/zc-run-logs/t2-514-canary/held-kernel/System.map'
 FUNCS = [('sunrpc', 'svc_tcp_rx_append_ref'), ('sunrpc', '__rx_loan_table_append_ref'),
          ('vmlinux', 'rx_loan_table_release'), ('vmlinux', 'rx_loan_prefetch_pages'),
          ('vmlinux', 'rx_region_page_put')]
+# ANN_FUNCS=sunrpc:svc_recv,vmlinux:__lwq_dequeue annotates those instead
+if os.environ.get('ANN_FUNCS'):
+    FUNCS = [tuple(x.split(':')) for x in os.environ['ANN_FUNCS'].split(',')]
 
 def kallsyms():
     k = {}
@@ -172,5 +175,5 @@ for fn in [f for _, f in FUNCS]:
         print('    +%#05x %6.0f %5.1f%%  L2 %5.2f  %-8s %-34s %s' % (o, s[o]['cycles'] / W, 100 * s[o]['cycles'] / W / c,
               s[o]['l2d_cache_refill'] / W, mn, ops[:34], ln[o][0][1] if ln[o] else ''))
 print('=' * 100)
-print('the five: %.0f cycles, %.0f instructions a WRITE' % (tot['cycles'], tot['instructions']))
+print('all %d: %.0f cycles, %.0f instructions a WRITE' % (len(FUNCS), tot['cycles'], tot['instructions']))
 print("sunrpc's PLT (veneers into vmlinux): %.0f cycles, %.0f instructions a WRITE" % (pltc['cycles'] / W, pltc['instructions'] / W))
