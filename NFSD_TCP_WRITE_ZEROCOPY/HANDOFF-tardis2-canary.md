@@ -1066,6 +1066,13 @@ missing"):** `PIN` defaults to 1, `PIN=0` leaves fio unpinned, and
 it, all unpinned, are not to be set beside pinned ones without saying
 so: pinned carries about 6% more on 514.
 
+**And the client's kworkers and interrupts (Mike, 7 November):** each
+run sets the client's `workqueue.default_affinity_scope` to `numa`
+(`CLI_SCOPE`) and stops its `irqbalance` (`CLI_IRQB=keep` leaves it),
+records both on a "client:" line of `geometry.txt`, and puts both back
+as they were when it ends.  `irqbalance` was started again on the
+client at 16:03, after the series.
+
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
 into a test kernel did).  Use this kernel as long as possible: no reboot,
