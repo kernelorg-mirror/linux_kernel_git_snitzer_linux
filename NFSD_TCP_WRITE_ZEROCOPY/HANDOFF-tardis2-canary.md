@@ -606,6 +606,29 @@ reached.
 (`bootctl set-oneshot ofp-rocky-held-514.conf`, `OneShot Entry` reads
 it).  Then steps 1 to 3 again, with both pings, before step 4.
 
+### The second boot into it (7 November, 04:35, after the power reset): port b lost
+
+The reset brought port a back and lost port b.  Steps 1 and 2 passed as
+before (`root@tardis2`, gcc 14.3.1, the mark N, dmesg only BTF and taint,
+kdump armed at 1024 MiB), `bringup.sh 32768 256` mapped both NICs and
+`settled.sh apply` ended in the settled setting.  Port a answered 3 of 3;
+port b (`enp164s0f0`) 0 of 3, three times over, neighbour FAILED: link up,
+18 packets sent, `rx_packets` 0, `rx_dropped` 11, no fault in dmesg.  The
+client (up 25 days, both carriers up) pings 192.168.1.213 and not
+192.168.0.213, so it is tardis2's port.  `port_rx_fifo_tc0_packets` is 0
+here, but it reads 0 on the working port a too, so that counter does not
+say a port saw no frame, and the first boot's reading of it above does not
+stand.  Nothing was run, step 4 not reached.
+
+That is the card's failure on three of the four boots into a test kernel
+tonight (the A/B kernel's first, the held mark's first and second), on
+either port.  Whether boots of build 514 itself lose a port as often has
+not been counted.
+
+**Next:** a hard power reset again; the one-shot entry is set again
+(`OneShot Entry` reads `ofp-rocky-held-514.conf`).  Then steps 1 to 3 with
+both pings, before step 4.
+
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
