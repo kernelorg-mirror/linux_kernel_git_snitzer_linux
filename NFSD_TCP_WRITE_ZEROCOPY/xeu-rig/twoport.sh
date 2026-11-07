@@ -445,6 +445,8 @@ if [ -n "${PROFILE:-}" ]; then
 	  [ -n "${KEEP_PERF:-}" ] || rm -f perf.data perf-lmiss.data ) &
 fi
 cl "mpstat -P ALL $W 1" > cli-mpstat.txt 2>&1 &
+# and by process: which commands the client's user and system time go to
+cl "LC_ALL=C pidstat -u $W 1" > cli-pidstat.txt 2>&1 &
 sleep $W
 N1=$(nfsdc); TN1=$(now)
 for p in $PORTS; do drives $p > drives-$p.1; done; TD1=$(now)
@@ -541,6 +543,17 @@ def busy(path, cpus):
     return sum(v) / len(v) if v else float('nan')
 print("server CPUs busy: rings of a (0-7) %.0f%%, rings of b (56-63) %.0f%%, nfsd (8-55) %.0f%%" % (busy('srv-mpstat.txt', range(0, 8)), busy('srv-mpstat.txt', range(56, 64)), busy('srv-mpstat.txt', range(8, 56))))
 print("client CPUs busy: %.0f%%" % busy('cli-mpstat.txt', range(0, 48)))
+# pidstat's %usr and %system are of one CPU: summed by command (a kworker's
+# queue name dropped), in CPUs' worth.
+if os.path.exists('cli-pidstat.txt'):
+    t = {}
+    for l in open('cli-pidstat.txt'):
+        f = l.split()
+        if len(f) >= 10 and f[0] == 'Average:' and f[2].isdigit():
+            c = f[-1].split('/')[0].split('-')[0]
+            u, s = t.get(c, (0.0, 0.0)); t[c] = (u + float(f[3]) / 100, s + float(f[4]) / 100)
+    top = sorted(t.items(), key=lambda kv: -(kv[1][0] + kv[1][1]))[:6]
+    print("client by command, CPUs of usr + sys: " + ", ".join("%s %.1f + %.1f" % (c, u, s) for c, (u, s) in top))
 EOF
 region_sampled() {
 	echo "region pages in use, sampled every ${REGION_MS:-20} ms, the slots and caches free (a lower bound of the peak): $(awk 'NR > 1 {h[++n] = $2} END {asort(h); printf "median %d, 99th percentile %d, at most %d", h[int(n / 2) + 1], h[int(n * 0.99) + 1], h[n]}' region-sec.tsv)" | tee -a summary.txt
