@@ -438,6 +438,30 @@ is all that is left.  What was run, for the record:
    either way. Then boot 514 again (the one-shot entry already gives way to
    the default) and remove `/boot/ofp-rocky/ab-bulk-514` and its entry.
 
+### The first boot into it (7 November, 02:00): port a lost, no data
+
+Steps 0 to 3 passed: `/proc/version` names `root@tardis2` and gcc 14.3.1,
+the switch read Y, dmesg had only the BTF-mismatch and taint lines, kdump
+was armed, `bringup.sh 32768 256` mapped both NICs and `settled.sh apply`
+ended in the settled setting.  Step 4 gave nothing: each of `t2-r192` to
+`t2-r195` stopped after its rest at `a: no answer from 192.168.1.106 in
+20 s`.  Port a (`enp161s0f0`) has a link at both ends and sends, but
+receives nothing: `rx_packets` 0, `rx_dropped` 17,
+`port_rx_fifo_tc0_packets` 4596, `port_rx_non_prom_drop_packets` 1, its
+rings filled, no fault in dmesg; the client's `ens3np0` cannot ping it
+either.  Port b answers.  Four reopens by `twoport.sh` did not bring it
+back.  That is the card's known failure, seen on tardis1's port b on build
+504 ("tardis1 on build 504 (29 October, night)" in `xeu-rig/README.md`),
+where only a hard power reset brought the port back.  It is not shown to be
+the A/B kernel's doing, and not ruled out: this was its first boot.
+
+**Next:** a hard power reset, with the one-shot entry set again first
+(`bootctl set-oneshot ofp-rocky-ab-bulk-514.conf`; a power cycle uses it
+up like a reboot), then steps 0 to 4 again, with a ping of both ports
+(`ping -I enp161s0f0 192.168.1.106`, `-I enp164s0f0 192.168.0.106`)
+after `bringup.sh` and before `ab-bulk.sh`.  The empty `t2-r192` to
+`t2-r195` are to be overwritten (`ab-bulk.sh 192`).
+
 ## TODO (formal, once the above passes on tardis2)
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
