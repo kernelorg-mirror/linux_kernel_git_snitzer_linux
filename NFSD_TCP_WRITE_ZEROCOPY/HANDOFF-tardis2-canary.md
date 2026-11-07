@@ -721,6 +721,23 @@ no rate to set beside its five of six.
 **Next:** a hard power reset into the default entry again (no one-shot is
 set), and the same steps, to go on counting stock 514's boots.
 
+### Stock build 514, second boot of the count (7 November, 05:27, after the power reset): both ports good
+
+`uname -r` 7.3.0-11.hs.514.canary.el10.aarch64+16k (the default entry, no
+one-shot), kdump armed (`kexec_crash_loaded` 1, `crashkernel=1G`).  Pinged
+before `bringup.sh` (step 0): port a 3 of 3, port b 3 of 3, both neighbours
+REACHABLE.  Then `bringup.sh 32768 256` (both NICs mapped, 4 pools each) and
+`settled.sh apply` (the settled setting, no BAD item), and both still 3 of
+3.  dmesg has nothing beyond the usual lines.  Counters, dmesg and both
+scripts' output are in
+`/var/tmp/zc-run-logs/t2-514-canary/port-dead/stock514-boot2/`.
+
+**So far stock 514 is one lost of two boots**, against five of six for the
+two test kernels: too few boots for either rate.
+
+**Next:** Mike's call between going on with the count (another power reset
+into the default entry) and using this good boot.
+
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
 transports rather than fake interfaces; those changes are needed.  Not
