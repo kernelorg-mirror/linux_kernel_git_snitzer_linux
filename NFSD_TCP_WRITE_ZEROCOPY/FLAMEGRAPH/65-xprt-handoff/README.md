@@ -58,9 +58,35 @@ is the same throughout: memory bandwidth holds it.
   the transports passed on by a claimed thread that could not leave the
   idle list, which count again.
 
-## For Mike
+## Kept, and chased further (Mike, 7 November)
 
-Neither change saves nfsd's cycles as it stands.  S could be dropped
-outright.  H would need to hand off only where it saves a wake: to an
-idle thread still running, or only when no thread that is finishing a call
-would find the queue first.  That is a rework, not a keep.
+Neither change saves nfsd's cycles as it stands, and neither is dropped:
+each change is kept while it furthers the search, until it is shown
+untenable.  So the next step is where their cycles moved, below.  H would
+also need to hand off only where it saves a wake (to an idle thread still
+running, or only when no thread finishing a call would find the queue
+first).
+
+## Where S's cycles went (Mike: keep chasing them)
+
+`annotate62.py` with `ANN_FUNCS=sunrpc:svc_recv,vmlinux:__lwq_dequeue`
+(`annotate-recv-r241.txt` to `-r245.txt`), cycles a WRITE, B against S:
+
+| load | B | S | what it reads |
+|---|---|---|---|
+| `svc_pool_can_shrink()` in `svc_recv` | 1186, L2 9.2 | 77 | `sp_nrthreads`, `sp_nrthrmin` |
+| `lwq_empty()` at the top of `__lwq_dequeue` | 29 | 1014, L2 4.8 | the queue's `ready` and `new` |
+
+The miss moved.  On B the thread counts were on the queue's line, so
+`svc_recv`'s check of whether the pool may shrink was the first load of it
+and took the miss, and the dequeue found the line cached.  On S that check
+hits, and the dequeue's first look at the queue takes the miss.  The line
+is written by another CPU at every arrival and dequeue, so whichever load
+comes first pays.  Two changes would remove or hide it, run in round 66:
+S with H, where most transports skip the dequeue, and S with a read
+prefetch of the queue at the top of `svc_recv()`.
+
+Also in every run, about 1.2 to 1.5k each: `svc_xprt_get()`'s refcount after
+the dequeue (the transport's line, last written on another CPU), and
+`svc_thread_should_stop()`'s read of the thread's own `rq_flags`, which a
+waker's `RQ_WAKING` claim writes from another CPU.
