@@ -52,9 +52,19 @@ port and were lost after it".
   `enp161s0f0 does not have 4 rings`. So after a reload the boot is
   good for nothing but the power reset. Counters before and after are
   in `/var/tmp/zc-run-logs/t2-514-canary/port-dead/`.
-- **Not tried:** a PCI remove and rescan of the port's function, or a
-  function-level reset. Ask Mike before trying either, as for a reload
-  of `xeu` (section 0 of `XEU_CONVERGENCE.md`).
+- **Not** a PCI remove and rescan of the port's function (tardis2, 7
+  November 04:46, port b, after the reload above, on Mike's word):
+  `echo 1 > /sys/bus/pci/devices/0000:a4:00.0/remove`, `echo 1 >
+  /sys/bus/pci/rescan`. The function came back with its BARs assigned,
+  `xeu` probed it and named it `enp164s0f0` again, and after
+  `bringup.sh` and `settled.sh apply` it had its address and received
+  nothing, the neighbour FAILED, as before. A remove and rescan need
+  not reset the card itself: it unbinds and probes again.
+- **Not tried:** a function-level reset (`reset_method` on
+  `0000:a4:00.0` reads `flr bus`: `echo flr > .../reset_method; echo 1
+  > .../reset` with the port's driver unbound), or a reset of the
+  secondary bus above it. Ask Mike before trying either, as for a
+  reload of `xeu` (section 0 of `XEU_CONVERGENCE.md`).
 
 A power cycle uses up a one-shot boot entry, so set it again before
 the reset when the boot is into a test kernel: `bootctl set-oneshot
@@ -69,7 +79,7 @@ the reset when the boot is into a test kernel: `bootctl set-oneshot
 | 7 Nov, 02:00 | tardis2, A/B kernel (514 + bulk return), first boot | a | 4596 | power reset |
 | 7 Nov, after reset | tardis2, A/B kernel, second boot | none | | runs done |
 | 7 Nov, 04:25 | tardis2, held-mark kernel (514 + held mark), first boot | a | 0 | power reset |
-| 7 Nov, 04:35 | tardis2, held-mark kernel, second boot | **b** | 0 (and 0 on the working a) | `xeu` reload: still dead; power reset pending |
+| 7 Nov, 04:35 | tardis2, held-mark kernel, second boot | **b** | 0 (and 0 on the working a) | `xeu` reload, then PCI remove and rescan: still dead; power reset pending |
 
 The tardis1 case was seen after the first boot's slot test, which
 takes each port down and up, so it is not known whether that port was
@@ -99,10 +109,10 @@ bulk return" and "Next boot: the region's held mark" in
   514 itself, or of any other kernel, loses a port. Until that is
   counted, a lost port is not evidence against the kernel booted.
 - **What the card's receiver is doing is not known.** `xeu` exposes no
-  counter that shows it. A reload of `xeu`, which opens the port afresh
-  from the driver's side, does not reach it, so the fault sits under
-  what the driver sets up at probe: a PCI-level reset is the one try
-  left short of a power cut.
+  counter that shows it. A reload of `xeu` and a PCI remove and
+  rescan, which give the driver a fresh probe, do not reach it, so the
+  fault sits under what a probe sets up. A function-level or bus reset
+  is the one try left short of a power cut.
 
 ## On every boot
 
