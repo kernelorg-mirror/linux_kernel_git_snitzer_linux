@@ -561,6 +561,30 @@ and `/boot/ofp-rocky/held-514/`; 514 stays the default.
    the dips under 20 ms), against 507's exact 12124 (`t2-r178`); A against
    B in nfsd and ring cycles a WRITE, the mark's own cost.  Then Mike's:
    keep the mark or drop it (a revert at the tip).
+7. Record the runs here and in NOTES, and commit (docs) before anything
+   else.  Then boot 514 again (the one-shot entry gives way to the
+   default) and, with Mike, remove the two test kernels:
+   `/boot/ofp-rocky/held-514`, `/boot/ofp-rocky/ab-bulk-514` and their
+   entries `ofp-rocky-held-514.conf`, `ofp-rocky-ab-bulk-514.conf`.
+
+**Before step 5, know:**
+- `git worktree prune` in the tree first: `/dev/shm/wt-held` went with
+  the reboot (the branch stays).
+- `ab-held.sh` is the first run of `twoport.sh`'s new region paths (the
+  sampler of `6ad3e2e2daca`, `max_held` and `REGION_SAMPLE` of
+  `a9bac4b7a5a8`); only the summary lines were tried, on `t2-r197`'s
+  samples.  If a run's `summary.txt` has no "region pages in use" lines,
+  or `region-sec.tsv` is missing in a run dir, stop and fix `twoport.sh`
+  before reading anything.
+- If a port does not answer the ping in step 3 (port a received nothing
+  on the A/B kernel's first boot, the card's known failure): only a hard
+  power reset brought it back.  Set the one-shot entry again first
+  (`bootctl set-oneshot ofp-rocky-held-514.conf`), since a power cycle
+  uses it up.
+- Nothing of tonight is pushed: on `kernel-7.3/canary` from `2a4ce5220019`
+  (the bulk return's revert, reworded; the tip before is kept as
+  `kernel-7.3/canary.pre-reword-0407`) to the tip, and
+  `kernel-7.3/canary.held-514`.
 
 
 
