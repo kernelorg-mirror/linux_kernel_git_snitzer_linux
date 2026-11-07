@@ -188,7 +188,7 @@ create_req:
 		return NULL;
 
 	size = min_t(size_t, r_xprt->rx_ep->re_inline_recv, PAGE_SIZE);
-	req = rpcrdma_req_create(r_xprt, size);
+	req = rpcrdma_req_create(r_xprt, size, XPRTRDMA_GFP_FLAGS);
 	if (!req)
 		return NULL;
 	if (rpcrdma_req_setup(r_xprt, req)) {
