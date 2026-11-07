@@ -178,6 +178,9 @@ struct page_pool_rx_region_part {
 	atomic_long_t alloc_fail;
 	atomic_long_t escaped;
 	struct rx_region_pcp __percpu *pcp;
+	/* Kept only while rx_region_held_key is on: rx_region_held(). */
+	atomic_long_t held ____cacheline_aligned_in_smp;
+	atomic_long_t held_max;
 	struct rx_region_shard shard[RX_REGION_SHARDS_MAX];
 };
 
@@ -270,6 +273,44 @@ static unsigned long rx_region_min_free(const struct page_pool_rx_region_part *p
 }
 
 /*
+ * The shards' low-water marks do not give a partition's peak: a page free in
+ * a CPU cache or on a device's slot counts as taken from its shard, and each
+ * shard reaches its low at its own moment.  While rx_region_held_mark is set,
+ * each partition counts instead the pages it has out (in a pool, a ring, an
+ * skb or a consumer's hands: in no shard, cache or slot) and the most it has
+ * had out since the debugfs file was last written: the peak, exactly but for
+ * the pages of takes and returns in flight on other CPUs at that moment (the
+ * count moves just after the pages do, at most a refill each), and with no
+ * drift.  Pages moving between the shards, the caches and the slots do not
+ * count.
+ * That is a shared count on every take and every return, which the receive
+ * path otherwise does without, so it is behind a static key, off by default.
+ */
+static DEFINE_STATIC_KEY_FALSE(rx_region_held_key);
+
+static void rx_region_held_add(struct page_pool_rx_region_part *p, long n)
+{
+	long held = atomic_long_add_return(n, &p->held);
+	long max;
+
+	/* Each value the count takes is seen by the add that made it. */
+	if (n < 0)
+		return;
+	max = atomic_long_read(&p->held_max);
+	while (held > max &&
+	       !atomic_long_try_cmpxchg(&p->held_max, &max, held))
+		;
+}
+
+/* @n pages of @p left the free lists (or came back, @n < 0). */
+static __always_inline void rx_region_held(struct page_pool_rx_region_part *p,
+					   long n)
+{
+	if (static_branch_unlikely(&rx_region_held_key) && n)
+		rx_region_held_add(p, n);
+}
+
+/*
  * free counts the shards and the CPU caches; min_free sums the shards'
  * low-water marks (pages a cache holds count as taken from its shard).
  */
@@ -284,6 +325,10 @@ static void rx_region_part_show(struct seq_file *m, const char *prefix,
 		   prefix, atomic_long_read(&p->alloc_fail),
 		   prefix, atomic_long_read(&p->escaped),
 		   prefix, cached, prefix, p->nshards);
+	if (static_branch_unlikely(&rx_region_held_key))
+		seq_printf(m, "%sheld %ld\n%smax_held %ld\n",
+			   prefix, atomic_long_read(&p->held),
+			   prefix, atomic_long_read(&p->held_max));
 }
 
 /*
@@ -328,7 +373,7 @@ static int rx_region_open(struct inode *inode, struct file *file)
 	return single_open(file, rx_region_show, inode->i_private);
 }
 
-/* Restart each shard's low-water mark at its free count. */
+/* Restart each shard's low-water mark at its free count, and the held mark. */
 static void rx_region_reset_min_free(struct page_pool_rx_region *r)
 {
 	unsigned long flags;
@@ -337,6 +382,7 @@ static void rx_region_reset_min_free(struct page_pool_rx_region *r)
 	for (i = 0; i < RX_REGION_PARTS; i++) {
 		struct page_pool_rx_region_part *p = &r->part[i];
 
+		atomic_long_set(&p->held_max, atomic_long_read(&p->held));
 		for (j = 0; j < p->nshards; j++) {
 			struct rx_region_shard *sh = &p->shard[j];
 
@@ -1093,6 +1139,7 @@ static bool page_pool_rx_region_put(struct page_pool_rx_region_part *p,
 	WRITE_ONCE(c->count, c->count + 1);
 	spin_unlock_irqrestore(&c->lock, flags);
 	migrate_enable();
+	rx_region_held(p, -1);
 	return true;
 }
 
@@ -1239,9 +1286,9 @@ static unsigned int rx_region_get_once(struct page_pool_rx_region_part *p,
  * device refill (not @exact) that finds nothing drains at most once a
  * jiffy, or at exhaustion every poll would lock every CPU's cache.
  */
-static unsigned int rx_region_get(struct page_pool_rx_region_part *p,
-				  struct page **dst, unsigned int n,
-				  bool exact)
+static unsigned int rx_region_get_pages(struct page_pool_rx_region_part *p,
+					struct page **dst, unsigned int n,
+					bool exact)
 {
 	unsigned long now;
 	unsigned int got;
@@ -1261,6 +1308,16 @@ static unsigned int rx_region_get(struct page_pool_rx_region_part *p,
 	return rx_region_get_once(p, dst, n, exact);
 }
 
+static unsigned int rx_region_get(struct page_pool_rx_region_part *p,
+				  struct page **dst, unsigned int n,
+				  bool exact)
+{
+	unsigned int got = rx_region_get_pages(p, dst, n, exact);
+
+	rx_region_held(p, got);
+	return got;
+}
+
 /*
  * Return @n pages of @p: fewer than a batch through this CPU's cache, a
  * batch or more straight to their shards.  A page another holder still
@@ -1269,7 +1326,7 @@ static unsigned int rx_region_get(struct page_pool_rx_region_part *p,
 static void rx_region_give(struct page_pool_rx_region_part *p,
 			   struct page **pages, unsigned int n)
 {
-	unsigned int i, start = 0;
+	unsigned int i, start = 0, escaped = 0;
 
 	if (n < RX_REGION_PCP_BATCH) {
 		for (i = 0; i < n; i++)
@@ -1283,9 +1340,12 @@ static void rx_region_give(struct page_pool_rx_region_part *p,
 		rx_region_push(p, pages + start, i - start, false);
 		atomic_long_inc(&p->escaped);
 		put_page(pages[i]);
+		escaped++;
 		start = i + 1;
 	}
 	rx_region_push(p, pages + start, n - start, false);
+	/* An escaped page stays counted: it is out of the region for good. */
+	rx_region_held(p, -(long)(n - escaped));
 }
 
 /* Slots are made by pools being created, which may sleep. */
@@ -1372,6 +1432,8 @@ static bool rx_region_slot_put(struct page_pool_rx_region *r, u8 o,
 	}
 	spin_unlock_irqrestore(&c->lock, flags);
 	migrate_enable();
+	if (kept)
+		rx_region_held(&r->part[RX_REGION_WRITE], -1);
 	return kept;
 }
 
@@ -1422,6 +1484,7 @@ static unsigned int rx_region_slot_take(struct page_pool_rx_region *r, u8 s,
 			pages[got++] = d->free[--d->nfree];
 		spin_unlock_irqrestore(&d->lock, flags);
 	}
+	rx_region_held(&r->part[RX_REGION_WRITE], got);
 	return got;
 }
 
@@ -2828,9 +2891,12 @@ static noinline netmem_ref page_pool_rx_region_alloc(struct page_pool *pool,
 		n += got;
 	}
 	/* and last those another device has mapped, unmapped for it here. */
-	if (n < RX_REGION_POOL_REFILL)
-		n += rx_region_steal(region, s, pages + n,
-				     RX_REGION_POOL_REFILL - n);
+	if (n < RX_REGION_POOL_REFILL) {
+		got = rx_region_steal(region, s, pages + n,
+				      RX_REGION_POOL_REFILL - n);
+		rx_region_held(r, got);
+		n += got;
+	}
 	if (!n)
 		atomic_long_inc(&r->alloc_fail);
 
@@ -3786,6 +3852,80 @@ static const struct kernel_param_ops rx_region_stack_ops = {
 	.get = rx_region_stack_param_get,
 };
 module_param_cb(rx_region_stack, &rx_region_stack_ops, NULL, 0644);
+
+/* Pages of @r's partition @i out now, from the free counts; lockless. */
+static long rx_region_held_now(struct page_pool_rx_region *r, unsigned int i)
+{
+	struct page_pool_rx_region_part *p = &r->part[i];
+	long held = p->nr - rx_region_shards_free(p) - rx_region_cached(p);
+	unsigned int j;
+	int cpu;
+
+	if (i != RX_REGION_WRITE)
+		return held;
+	for (j = 0; j < RX_REGION_DEVS; j++) {
+		struct rx_region_slot *d = &r->slots[j];
+
+		held -= READ_ONCE(d->nfree);
+		if (d->pcp)
+			for_each_possible_cpu(cpu)
+				held -= READ_ONCE(per_cpu_ptr(d->pcp, cpu)->count);
+	}
+	return held;
+}
+
+static bool rx_region_held_mark;
+
+/*
+ * On, the count starts from the region's free counts as they are, and is
+ * exact from then on if no page moved while it was switched on: switch it
+ * on with the region at rest.  A region made while it is on starts at 0.
+ */
+static int rx_region_held_mark_set(const char *val,
+				   const struct kernel_param *kp)
+{
+	struct page_pool_rx_region *r;
+	unsigned int i;
+	bool on;
+	int ret = kstrtobool(val, &on);
+
+	if (ret)
+		return ret;
+	mutex_lock(&rx_region_mutex);
+	if (on == rx_region_held_mark)
+		goto out;
+	if (!on) {
+		static_branch_disable(&rx_region_held_key);
+		rx_region_held_mark = false;
+		goto out;
+	}
+	static_branch_enable(&rx_region_held_key);
+	r = rx_region;
+	if (r)
+		for (i = 0; i < RX_REGION_PARTS; i++) {
+			long held = rx_region_held_now(r, i);
+
+			atomic_long_set(&r->part[i].held, held);
+			atomic_long_set(&r->part[i].held_max, held);
+		}
+	rx_region_held_mark = true;
+out:
+	mutex_unlock(&rx_region_mutex);
+	return 0;
+}
+
+static int rx_region_held_mark_get(char *buffer, const struct kernel_param *kp)
+{
+	return sysfs_emit(buffer, "%c\n", READ_ONCE(rx_region_held_mark) ? 'Y' : 'N');
+}
+
+static const struct kernel_param_ops rx_region_held_mark_ops = {
+	.set = rx_region_held_mark_set,
+	.get = rx_region_held_mark_get,
+};
+module_param_cb(rx_region_held_mark, &rx_region_held_mark_ops, NULL, 0644);
+MODULE_PARM_DESC(rx_region_held_mark,
+		 "Count the fixed receive region's pages held and their peak, shown as held and max_held in debugfs page_pool_rx_region (a write there restarts the peak); a shared count on every take and return, so off by default; switch it on with the region at rest");
 MODULE_PARM_DESC(rx_region_stack,
 		 "Pages a pool bound to the fixed receive region keeps for reuse (0: auto, each pool's size, read back as \"0 (auto)\"); read when a pool is created; the region is off unless rx_region_dev is set or svc_tcp_rx_region_reads=Y; autosize sizes a region once opted in, it does not enable one");
 
