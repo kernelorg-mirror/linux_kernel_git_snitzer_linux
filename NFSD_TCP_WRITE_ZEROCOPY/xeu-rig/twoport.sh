@@ -386,8 +386,12 @@ echo 1 > $RG	# the region's low-water mark starts again from here
 # own, so pages - min_free is its peak exactly.  One of shards, CPU caches and
 # device slots does not: min_free sums the shards' marks only, counting a page
 # cached or free on a slot as held.  There the held pages are sampled.
+# With page_pool.rx_region_held_mark=Y the kernel counts the pages held and
+# their peak (max_held, restarted by the write above), exactly, and nothing
+# is sampled unless REGION_SAMPLE=1 asks for the sample beside it.
 REGION_EXACT=; grep -q '^free_unmapped ' $RG && REGION_EXACT=1
-[ -n "$REGION_EXACT" ] || taskset -c ${REGION_CPU:-63} "$RIG/regionsample.py" region-sec.tsv $(( WARM + RUNTIME + 3 )) ${REGION_MS:-20} &
+grep -q '^max_held ' $RG && REGION_EXACT=held
+[ -z "$REGION_EXACT" ] || { [ $REGION_EXACT = held ] && [ "${REGION_SAMPLE:-}" = 1 ]; } && taskset -c ${REGION_CPU:-63} "$RIG/regionsample.py" region-sec.tsv $(( WARM + RUNTIME + 3 )) ${REGION_MS:-20} &
 WH0=$(wr_hits); declare -A BS0; for k in admitted denied paused overrun; do BS0[$k]=$(bstat $k); done
 DRIVES="$(data_drives)" "$RIG/drvsample.py" drives-sec.tsv $(( WARM + RUNTIME + 3 )) &	# every drive, each second of the load
 "$RIG/wiresample.py" wire-sec.tsv $(( WARM + RUNTIME + 3 )) $(for p in $PORTS; do echo ${DEV[$p]}; done) &	# the same seconds, row for row
@@ -538,12 +542,19 @@ def busy(path, cpus):
 print("server CPUs busy: rings of a (0-7) %.0f%%, rings of b (56-63) %.0f%%, nfsd (8-55) %.0f%%" % (busy('srv-mpstat.txt', range(0, 8)), busy('srv-mpstat.txt', range(56, 64)), busy('srv-mpstat.txt', range(8, 56))))
 print("client CPUs busy: %.0f%%" % busy('cli-mpstat.txt', range(0, 48)))
 EOF
-if [ -n "$REGION_EXACT" ]; then
+region_sampled() {
+	echo "region pages in use, sampled every ${REGION_MS:-20} ms, the slots and caches free (a lower bound of the peak): $(awk 'NR > 1 {h[++n] = $2} END {asort(h); printf "median %d, 99th percentile %d, at most %d", h[int(n / 2) + 1], h[int(n * 0.99) + 1], h[n]}' region-sec.tsv)" | tee -a summary.txt
+}
+if [ "$REGION_EXACT" = held ]; then
+	REGION_PEAK=$(reg max_held)
+	[ -s region-sec.tsv ] && region_sampled
+	echo "region pages in use at most (the kernel's mark, exact): $REGION_PEAK" | tee -a summary.txt
+elif [ -n "$REGION_EXACT" ]; then
 	REGION_PEAK=$(( $(reg pages) - $(reg min_free) ))
 	echo "region pages in use at most: $REGION_PEAK" | tee -a summary.txt
 else	# from the same reset as min_free: the warm-up and the load
 	REGION_PEAK=$(awk 'NR > 1 && $2 > m {m = $2} END {print m + 0}' region-sec.tsv)
-	echo "region pages in use, sampled every ${REGION_MS:-20} ms, the slots and caches free (a lower bound of the peak): $(awk 'NR > 1 {h[++n] = $2} END {asort(h); printf "median %d, 99th percentile %d", h[int(n / 2) + 1], h[int(n * 0.99) + 1]}' region-sec.tsv)" | tee -a summary.txt
+	region_sampled
 	echo "region pages in use at most: $REGION_PEAK" | tee -a summary.txt
 fi
 if [ -n "${TSV:-}" ] && [ "$RW" = write ]; then
