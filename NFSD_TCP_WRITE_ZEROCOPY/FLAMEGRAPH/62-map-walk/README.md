@@ -104,19 +104,67 @@ nfsd's CPUs, sampled, k a WRITE, 506 to 514: **201.1 to 250.7 cycles (+49.6k),
   did not resolve xeu's symbols (`[unknown]`, 3.3k cycles a WRITE), so xeu's
   transmit frames (about 2k on 514) appear new here.
 
+## The loan's functions annotated: misses, not calls
+
+[annotate62.py](annotate62.py) over `t2-r235`'s samples, per instruction and
+source line: [annotate-r235.txt](annotate-r235.txt).  sunrpc is 514's stock
+module, its lines from 514's debug file; vmlinux is the held-mark build,
+whose image was not kept, so its four functions are read from 514's debug
+vmlinux (each the same size in both System.maps).  PMU samples skid: a
+load's cost lands on the instruction or two after it.
+
+The five (`svc_tcp_rx_append_ref`, `__rx_loan_table_append_ref`,
+`rx_loan_table_release`, `rx_loan_prefetch_pages`, `rx_region_page_put`) are
+16.6k cycles and 30.7k instructions a WRITE.  **The calls are not their cost:**
+entry and exit (`paciasp`, `autiasp`, `ret`, the frame) 0.45k, the calls and
+their returns 0.12k, and sunrpc's PLT, whose veneers carry its calls into
+vmlinux (out of a `bl`'s range on this boot), 0.43k: about 1k of the 16.6k.
+**Three loads that miss are 5.5k:**
+
+| where | cycles a WRITE | L2 refills a WRITE | what is read |
+|---|---|---|---|
+| `rx_region_page_put`, `page_pool.c:1387` | 2.46k of its 2.99k | 10.0 | the page's owner byte, `*rx_region_owner(r, page)` |
+| `svc_tcp_rx_append_ref`, `svcsock.c:128` | 1.76k of its 2.81k | 16.3 | `svc_tcp_rx_kunit_fault`, the KUnit fault hook's flag |
+| `rx_loan_prefetch_pages`, `rx_loan.c:122` | 1.28k of its 3.51k | 18.2 | `skb_shinfo(skb)->nr_frags` of the skbs it walks |
+
+- **The KUnit flag is false sharing.**  514 is built with `CONFIG_KUNIT=m`, so
+  `svc_tcp_rx_append_ref()` reads the fault hook's flag on every loaned
+  piece.  The flag shares its 64-byte line in sunrpc's `.bss` with
+  `svc_tcp_spare_pages`, an `atomic_long_t` that every
+  `svc_tcp_restore_pages()` and `svc_tcp_save_pages()` writes, from every CPU,
+  each time a partly received record changes hands.  The flag never changes;
+  the counter takes the line away.  Main has the hook (the interface commit)
+  and the counter (`SUNRPC: Swap pages with the socket when a partial record
+  changes hands`) too; whether they share a line there depends on its layout.
+  The fix is to put the flag behind a static key or apart from the counter,
+  and to ask whether the counter needs to be one global.
+- **The owner byte** is read for every region page put back: on 514 a page
+  is kept mapped for its device and the byte says which (`4522295b0c55`,
+  canary only).  It misses as often as a page comes back.
+- **The prefetch's own loads miss:** `rx_loan_prefetch_pages()` walks each
+  skb's frags to prefetch their pages, and the shared info it reads is cold.
+- The rest is work done at a fair IPC: `__rx_loan_table_append_ref` 2.59
+  (the coalesce check against the previous entry, the bitmaps' bits),
+  `rx_loan_table_release` 2.32 (the prefetches of the next pages, the pages'
+  compound heads).
+
+So the move out of sunrpc does not cost through its calls.  The 7k more than
+506 are mostly these misses.  The owner byte and the prefetch came with
+canary commits after 506.  Whether the KUnit flag shared a line with the
+counter on 506 too is not known (506's module is not on this host).
+
 ## For the next round
 
 The walk is closed: it does the same work at the same cost, and its calls were
 not its cost.  What these samples point at, by size:
 
 1. **The loan's code since it moved out of sunrpc** (about 7k cycles a WRITE
-   against 506, the largest change).  A look first: an A/B of the canary
-   before and after `49e2111a6420` would measure the move itself; failing a
-   reboot, `perf annotate` of the four functions for call and return
-   overhead.  Inline helpers in a header, or one entry point per job, would be
-   the change.
+   against 506, the largest change).  Annotated above: not its calls, but
+   three loads that miss (the region's owner byte, the KUnit flag on the
+   spare counter's line, the prefetch's walk of the skbs).
 2. **The thread pool's transport queue** (`__lwq_dequeue`'s contended lock,
    0.86 us a WRITE in fl64).  Rounds 17, 18 and 40 worked the wakes, not this
-   lock.
+   lock.  Traced in round 63 (`../63-xprt-queue/README.md`): a WRITE passes
+   the queue 5.5 times.
 3. **`rx_region_page_put` under the release** (3.09 us in fl64): round 58's
    ground; the bulk return to the slot was dropped on 7 November on its cycles.

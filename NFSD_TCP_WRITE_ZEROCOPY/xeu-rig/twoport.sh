@@ -482,7 +482,7 @@ for p in $PORTS; do
 		 if (NR == 1 || g < gmin) gmin = g; if (g > gmax) gmax = g; if (NR == 1 || r < rmin) rmin = r; if (r > rmax) rmax = r; if (u > umax) umax = u}
 		END {printf "drives of %s (%s): %d, each writing %.1f to %.1f GB/s", p, fs, NR, gmin, gmax
 		     if (rmax > 0.05) printf " and reading %.1f to %.1f", rmin, rmax
-		     printf ", busiest %.0f%% busy%s\n", umax, (umax >= 90 ? " -- DRIVE-LIMITED" : "")}'
+		     printf ", busiest %.0f%% busy\n", umax}'
 done > drives.txt
 {
 	echo "port dev fio_GBps wire_GBps fifo_drops ring_drops ring_shares window_s"
