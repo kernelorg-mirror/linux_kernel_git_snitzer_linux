@@ -925,13 +925,17 @@ limited by the drives or the server.
 A drive is about 10% busy for each GB/s it writes in every run, so the
 drives are not slower: they are sent less, each port carrying 32 to 34
 GB/s on the wire against about 36 in the fast runs.  The server's CPUs
-are 12 to 17% busy throughout.  `t2-r178` was a run on its own, after an
-idle (there is no `t2-r176` or `t2-r177`), and so was `t2-r198`, the
-first of the four; those two are within 1.3% of each other, both limited
-by the drives.  The 65 to 66 GB/s are the second to fourth of four runs
-back to back.  So the rate gap is the runs' order, not 514; why runs back
-to back are slower, with neither the drives nor the server the limit, is
-open (less arrives on the wire, so the client or TCP).
+are 12 to 17% busy throughout.  Run order does not explain the gap, though it was
+first read so: `t2-r178` was a run on its own, after an idle, as
+`t2-r198` was, and the two are within 1.3%.  But `run.sh` trims every
+drive and rests 120 s before each run, and 514's other loan runs at the
+settled setting all carry about 66: `t2-r189` 66.72, `t2-r191` 66.63,
+`t2-r197` 66.06, `t2-r202` 65.64 (the first loan run after stock 514's
+second boot, the drives long idle), `t2-r204` 66.36, and `t2-r199` to
+`t2-r201` 65.28 to 66.17.  `t2-r198` is the outlier, not the others.  So
+507's 71.21 against 514's 66 is a gap of about 7%, on one 507 run, with
+neither the drives nor the server the limit on 514 (less arrives on the
+wire): open.
 
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
