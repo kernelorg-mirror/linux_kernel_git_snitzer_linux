@@ -937,6 +937,54 @@ second boot, the drives long idle), `t2-r204` 66.36, and `t2-r199` to
 neither the drives nor the server the limit on 514 (less arrives on the
 wire): open.
 
+**nfsd's wakeups, read from the runs (7 November).**  Loan runs at the
+settled setting only (not copy, and not `t2-r179`, `t2-r180`, `t2-r186`
+to `t2-r188`, on per-CPU pools or run-to-completion, at 6 to 11 wakeups
+a WRITE), from "nfsd in the window" of each `summary.txt`:
+
+| kernel | runs | GB/s | threads woken a second | woken a WRITE | context switches a WRITE |
+|---|---|---|---|---|---|
+| 507 | `t2-r178` | 71.21 | 231.7k | 3.42 | 9.96 |
+| 514, fast | `t2-r194`, `t2-r196`, `t2-r198` | 69.1 to 70.6 | 249.8k to 251.4k | 3.73 to 3.83 | 10.6 to 10.8 |
+| 514, usual | ten, `t2-r189` to `t2-r204` | 65.3 to 66.7 | 250.4k to 253.9k | 3.95 to 4.07 | 11.1 to 11.35 |
+| 512 | `t2-r181` to `t2-r185` | 64.6 to 66.6 | 249.8k to 250.1k | 3.93 to 4.06 | 11.1 to 11.4 |
+
+512 and 514 wake about 250k threads a second against 507's 232k, 9% more
+a WRITE even in 514's fast runs.  But within 514 the count is the same a
+second in fast runs and usual ones, so the wakeups do not decide a run's
+rate: they are a difference that came with 512, open on its own.
+
+**514's fast runs against its usual ones.**  Three of 13 loan runs carry
+69 to 70.6 GB/s, ten 65 to 67.
+
+| | fast (`t2-r194`, `t2-r196`, `t2-r198`) | usual (ten) | 507 (`t2-r178`) |
+|---|---|---|---|
+| port a, b (GB/s) | 34.3 to 35.5, 34.5 to 36.0 | 31.7 to 34.3, 31.9 to 34.3 | 35.7, 35.5 |
+| ring drops in the window, a port | 543 to 1001 | 97 to 309 | 266, 270 |
+| client retransmits | 1187 to 2073 | 209 to 592 | 562 |
+| client CPUs: usr, sys, idle | 8.2 to 8.5, 53.5 to 55.9, 28 to 31% | 10.2 to 10.4, 56.2 to 58.9, 24 to 27% | 8.9, 58.5, 25% |
+| server busy: rings a, b; nfsd | 16 to 19, 16 to 20; 14 to 15% | 13 to 16, 11 to 17; 12 to 13% (`t2-r191` 30, 30) | 16, 14; 13% |
+
+- **Both ports are faster together** in a fast run, not one port: what
+  differs is not a port, a drive set or the flows' spread over the rings
+  (25% each in every run).
+- **More drops and retransmits go with the higher rate:** the client
+  offers more, and the rings drop more of it.
+- **The client does less user work while it sends more:** usr 8.2 to
+  8.5% in the fast runs, 10.2 to 10.4% in every usual one, sys and idle
+  following.  507's run reads 8.9.  It is not a rule: 512's `t2-r185`
+  read 8.8 at 66.59.  No CPU of the client is saturated in any run
+  (busiest 76 to 83%).
+- **Not the runs' order or an idle:** `t2-r194` was the second of two B
+  runs, `t2-r196` the first of a pair after 25 minutes, `t2-r198` the
+  first of four.
+
+So what sets a 514 run at 66 or 70 shows on the client (its user time
+and how much it offers) more than on the server, whose figures follow
+the rate.  That is a correlation, not a cause: `cli-mpstat.txt` has no
+per-process figures, so what the client's extra user time is (fio, or
+something else on the client, up 25 days) is not known.
+
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
 into a test kernel did).  Use this kernel as long as possible: no reboot,
