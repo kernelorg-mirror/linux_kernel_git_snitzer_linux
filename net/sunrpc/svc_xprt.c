@@ -3351,6 +3351,10 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
 	bool did_timeout;
 	int ret = 0;
 
+	/* Other CPUs write the queue's line on every arrival and dequeue;
+	 * start its fetch before the work that comes before the dequeue.
+	 */
+	prefetch(&pool->sp_xprts);
 	if (!svc_alloc_arg(rqstp))
 		return ret;
 
