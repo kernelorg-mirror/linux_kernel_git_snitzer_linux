@@ -2454,7 +2454,7 @@ nfsd4_decode_setxattr(struct nfsd4_compoundargs *argp,
 						&setxattr->setxa_buf, size);
 	}
 
-	return status;
+	return nfs_ok;
 }
 
 static __be32
