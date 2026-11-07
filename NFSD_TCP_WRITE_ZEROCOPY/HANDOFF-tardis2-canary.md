@@ -1134,6 +1134,37 @@ this range, and that is as far as these runs go.  What still moves the
 far share from run to run is where the scheduler lets the client's
 sunrpc kworkers stray, which the client's kernel gives no way to fix.
 
+**fl64: a profile at the new client defaults (7 November, 17:33).**
+`WHICH=ab ./flame.sh $L/t2-fl64 fl64 128` (fl62 and fl63 were taken on
+5 November), the client pinned, scope `numa`, `irqbalance` stopped (its
+`geometry.txt`): 70.73 GB/s, 67299 WRITEs a second in the profile, no loan
+denied, the setting held; nfsd busy 109.84 us a WRITE, rings 38.16.  The
+counted run beside it, `t2-r233`: 69.89 GB/s, nfsd **309.6k cycles,
+277.8k instructions** a WRITE, rings 75.5k and 142.3k.  No pseudo-NMI, so
+time with interrupts off is charged where they come back on.
+
+fl64's own ranking on nfsd, inclusive, us a WRITE (of 109.84):
+
+| what | us | what is in it | past rounds |
+|---|---|---|---|
+| the loan receive walk (`svc_tcp_recv_actor`) | 11.96 | borrow, append, region span | worked in 14, 22 to 24, 27, 36, 52, 53 |
+| the WRITE into the block layer (`blk_mq_submit_bio`) | 10.50 | plug and NVMe prep 5.28 (SGL setup 4.54, of it the map walk `blk_rq_dma_map_iter_next` 3.19), `bio_split_rw` 1.97, request alloc 1.09 | 47, 55 (an inlined call kept; "the walk costs the same", 1.62 us on 507's fl-blk) |
+| the ACKs nfsd's reads send (`__tcp_cleanup_rbuf`) | 10.80 | `tcp_send_ack` 10.30; under the sends the qdisc's lock in `__dev_xmit_skb`, 2.17 self | 25 (want_eighths 6 kept); 57: not redundant, no sunrpc change; 07, 31, 32 on the transmit path: nothing kept |
+| the reply's send (`svc_tcp_send_record`) | 7.85 | the same transmit path | 07, 31, 32 |
+| the loan release (`svc_tcp_rx_release_refs`) | 7.04 | the bulk put 4.93, the region's return under its lock 0.93 | 16, 22 to 24, 45, 58; the bulk return to the slot dropped today |
+| the file and its handle (`nfsd_file_do_acquire`) | 4.29 | `fh_verify` 3.06 | 13 (kept), 54 (dropped: 0.11 us) |
+| COMMIT (`nfsd_commit`) | 4.00 | XFS's log force 2.76, the lazytime timestamps 0.96 | 47 (lazytime kept) |
+| waking and sleeping, the visible part | about 6 | `svc_thread_wake_next` 1.76, `schedule` 3.25 | 17, 18, 40 |
+
+Two things beside the ranking.  **The map walk is twice 507's** (3.19
+against 1.62 us a WRITE in fl-blk), at the drives' limits of 256 KiB and
+65 segments a request, both as on 507: either a request carries more
+pieces now or each costs more.  **And nfsd does the same work in more
+cycles:** `t2-r233`'s instructions are 507's (277.8k against 272.7k to
+278.7k) but its cycles 309.6k against 269.5k to 279.6k (round 55's four
+runs at 65.6 to 70.5 GB/s), about 11% more, where fl63 found 21k more
+unpinned.
+
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
 into a test kernel did).  Use this kernel as long as possible: no reboot,
