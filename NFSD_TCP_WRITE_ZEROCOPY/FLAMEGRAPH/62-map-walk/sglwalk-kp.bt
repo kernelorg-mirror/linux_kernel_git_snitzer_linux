@@ -1,0 +1,72 @@
+#!/usr/bin/bpftrace
+/*
+ * sglwalk-kp.bt: round 55's sglwalk.bt for a boot whose modules' BTF does
+ * not match vmlinux (the held-mark kernel: vmlinux rebuilt, modules stock
+ * 514's), so fentry cannot see nfsd or nvme.  Those two are kprobes here,
+ * their arguments read as vmlinux's struct request; vmlinux's functions stay
+ * fentry/fexit.  Left out against sglwalk.bt: the SGL entries written (in
+ * struct nvme_iod, nvme's own type; round 55 found no merge in 2,011,208
+ * requests) and the time of nvme's calls (bpftrace 0.26 joins a kprobe and
+ * a kretprobe of one function, round 54).
+ *   - nfsd_direct_write(): the WRITEs, to divide by;
+ *   - bio_split_io_at(): calls, bvecs and bytes left at each call, whether it
+ *     split, the segments it counted, the time a call;
+ *   - the bvecs of each bio at its first split call (bi_idx 0): a WRITE's
+ *     pieces, and the bytes a piece;
+ *   - nvme_pci_setup_data_sgl(): requests, nr_phys_segments, bytes;
+ *   - blk_rq_dma_map_iter_next(): calls, against the requests' segments.
+ *     timeout -s INT 10 bpftrace sglwalk-kp.bt
+ */
+config = { missing_probes = "warn"; max_map_keys = 65536 }
+
+BEGIN { @t0 = nsecs; }
+
+kprobe:nfsd_direct_write { @writes = count(); }
+
+fentry:vmlinux:bio_split_io_at
+{
+	$b = args.bio;
+	$left = (uint32)($b->bi_vcnt - $b->bi_iter.bi_idx);
+	@split_calls = count();
+	@split_bvecs_left = hist($left);
+	@split_bytes_left = hist($b->bi_iter.bi_size);
+	if ($b->bi_iter.bi_idx == 0 && $b->bi_iter.bi_offset == 0) {
+		@bio_first = count();
+		@bio_bvecs = hist((uint32)$b->bi_vcnt);
+		@bio_bvecs_sum = sum((uint32)$b->bi_vcnt);
+		@bio_bytes = hist($b->bi_iter.bi_size);
+		@bio_bytes_sum = sum($b->bi_iter.bi_size);
+	}
+	@sp[tid] = nsecs;
+	@spsegs[tid] = (uint64)args.segs;
+}
+fexit:vmlinux:bio_split_io_at
+/@sp[tid]/
+{
+	$d = nsecs - @sp[tid];
+	@split_ret[retval > 0 ? "split" : (retval == 0 ? "no split" : "error")] = count();
+	@split_segs = lhist(*(uint32 *)@spsegs[tid], 0, 80, 4);
+	@split_ns = hist($d);
+	@ns_sum["bio_split_io_at"] = sum($d);
+	@ns_n["bio_split_io_at"] = count();
+	delete(@sp[tid]); delete(@spsegs[tid]);
+}
+
+kprobe:nvme_pci_setup_data_sgl
+{
+	$r = (struct request *)arg0;
+	@sgl_requests = count();
+	@nr_phys_segments = lhist($r->nr_phys_segments, 0, 80, 4);
+	@nr_phys_sum = sum($r->nr_phys_segments);
+	@request_bytes = hist($r->__data_len);
+	@request_bytes_sum = sum($r->__data_len);
+}
+
+fentry:vmlinux:blk_rq_dma_map_iter_next { @map_next = count(); }
+fentry:vmlinux:blk_rq_dma_map_iter_start { @map_start = count(); }
+
+END
+{
+	printf("traced_us %d\n", (uint64)(nsecs - @t0) / 1000);
+	clear(@sp); clear(@spsegs);
+}
