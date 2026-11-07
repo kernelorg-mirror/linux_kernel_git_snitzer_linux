@@ -1,0 +1,23 @@
+17:51:36 kernel 7.3.0-11.hs.514.canary.el10.aarch64+16k, sunrpc 1C2C5C459F3413804A2CEE1, nfsd 90122931101ECCD1B292201
+17:56:32 t2-r234 trace | total 70.88 GB/s | 121 lines
+18:01:28 t2-r235 pmu | total 70.44 GB/s | 108736 /var/tmp/zc-run-logs/t2-r235/pmu.data
+18:01:31 end: settled.sh audit rest: the settled setting
+events {'cycles': 134686310577, 'instructions': 137360058583, 'l1d_cache_refill': 1244498358, 'l2d_cache_refill': 2013352229}
+symbol                             %cyc   IPC L1 refills/kI L2 refills/kI %L2 refill
+ALL                              100.00  1.02           9.1          14.7     100.00
+blk_rq_dma_map_iter_next           2.05  4.15           1.9           1.3       0.73
+svc_tcp_rx_borrow_segment          1.42  3.25           2.8           3.1       0.96
+svc_tcp_rx_append_ref              1.12  2.37           3.4           4.1       0.73
+svc_tcp_rx_walk_skb                0.99  3.61           2.4           2.5       0.60
+blk_mq_submit_bio                  0.74  0.67           6.5          26.0       0.87
+bio_split_io_at                    0.70  3.13           1.0           2.2       0.33
+dma_direct_map_phys                0.67  2.05           4.0           4.0       0.37
+dma_map_phys                       0.47  1.76           4.4           3.7       0.21
+nvme_pci_setup_data_sgl            0.37  3.85           1.5           1.6       0.15
+nvme_queue_rqs                     0.28  0.28          37.0          69.9       0.38
+nvme_map_data                      0.11  0.86          18.8          26.2       0.16
+iomap_dio_bio_iter_one             0.06  1.11           3.5          12.5       0.05
+bio_submit_split                   0.05  1.31           0.4          15.7       0.07
+svc_tcp_rx_release_refs            0.03  1.13           6.2          18.4       0.04
+nvme_prep_rq.part.0                0.02  1.94           3.9           6.0       0.02
+blk_rq_dma_map_iter_start          0.02  1.02          21.8          16.3       0.02
