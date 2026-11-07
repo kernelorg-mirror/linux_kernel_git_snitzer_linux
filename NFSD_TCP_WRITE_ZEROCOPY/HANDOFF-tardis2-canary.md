@@ -911,6 +911,36 @@ GB/s in three of the four runs (70.25 in the first) against 507's 71.21.
 That rests on one 507 run, and whether 514's runs were limited by the
 drives, as 507's was (each drive 90 to 92% busy), is not yet read.
 
+**The drives, read (7 November):** 514's three slower runs were not
+limited by the drives or the server.
+
+| run | kernel | GB/s | drives of a | drives of b | server busy (rings a, b, nfsd) | client |
+|---|---|---|---|---|---|---|
+| `t2-r178` | 507 | 71.21 | 8.9 to 9.0, 92%, DRIVE-LIMITED | 8.8 to 8.9, 90%, DRIVE-LIMITED | 16, 14, 13% | 75% |
+| `t2-r198` A | 514 | 70.25 | 8.5 to 8.6, 88% | 9.0, 92%, DRIVE-LIMITED | 16, 17, 15% | 71% |
+| `t2-r199` B | 514 | 65.28 | 8.0, 84% | 8.3 to 8.4, 87% | 15, 12, 12% | 75% |
+| `t2-r200` B | 514 | 66.17 | 8.5 to 8.6, 88% | 7.9 to 8.0, 83% | 16, 14, 13% | 74% |
+| `t2-r201` A | 514 | 65.77 | 8.1 to 8.2, 85% | 8.3, 88% | 15, 14, 13% | 75% |
+
+A drive is about 10% busy for each GB/s it writes in every run, so the
+drives are not slower: they are sent less, each port carrying 32 to 34
+GB/s on the wire against about 36 in the fast runs.  The server's CPUs
+are 12 to 17% busy throughout.  `t2-r178` was a run on its own, after an
+idle (there is no `t2-r176` or `t2-r177`), and so was `t2-r198`, the
+first of the four; those two are within 1.3% of each other, both limited
+by the drives.  The 65 to 66 GB/s are the second to fourth of four runs
+back to back.  So the rate gap is the runs' order, not 514; why runs back
+to back are slower, with neither the drives nor the server the limit, is
+open (less arrives on the wire, so the client or TCP).
+
+**Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
+boot has both ports, and a reboot risks losing one (six of seven boots
+into a test kernel did).  Use this kernel as long as possible: no reboot,
+nothing that could take the host down (no KUnit suite, which crashed
+tardis2 three times on build 506), and no reload of `xeu`.  A comparison
+with 507 waits for a later boot; what can be learned on 514 alone is done
+here.
+
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
 transports rather than fake interfaces; those changes are needed.  Not
