@@ -387,7 +387,9 @@ what it is, and rename it once read.
 November, `t2-r198..r201`) and Mike kept the mark (`bb7fd3100c3b`):
 "The sixth boot into it" in `NFSD_TCP_WRITE_ZEROCOPY/HANDOFF-tardis2-canary.md`.
 The held-mark kernel is now tardis2's default (`ofp-rocky-held-514.conf`)
-and the A/B kernel is gone from `/boot`.  The paragraph below is the boot
+and the A/B kernel is gone from `/boot`.  **Stay on that boot (Mike, 7 November): it has
+both ports, and a reboot risks losing one.  No reboot, no KUnit, no
+reload of `xeu`: "Stay on this boot" in the same handoff.**  The paragraph below is the boot
 plan it ran.**
 
 **After tardis2's next reboot (7 November) into the held-mark kernel (the
