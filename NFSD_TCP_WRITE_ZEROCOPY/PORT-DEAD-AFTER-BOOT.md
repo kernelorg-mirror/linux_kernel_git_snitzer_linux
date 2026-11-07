@@ -102,7 +102,8 @@ the reset when the boot is into a test kernel: `bootctl set-oneshot
 | 7 Nov, 04:25 | tardis2, held-mark kernel (514 + held mark), first boot | a | 0 | power reset |
 | 7 Nov, 04:35 | tardis2, held-mark kernel, second boot | **b** | 0 (and 0 on the working a) | `xeu` reload, PCI remove and rescan, FLR, bus reset: still dead; power reset |
 | 7 Nov, 04:55 | tardis2, held-mark kernel, third boot | **a and b** | 0 on both | nothing tried; power reset |
-| 7 Nov, 05:05 | tardis2, held-mark kernel, fourth boot | **b**, dead before `bringup.sh` | 0 | nothing tried; power reset pending |
+| 7 Nov, 05:05 | tardis2, held-mark kernel, fourth boot | **b**, dead before `bringup.sh` | 0 | nothing tried; power reset |
+| 7 Nov, 05:19 | tardis2, **stock build 514**, first boot of the count | **a**, dead before `bringup.sh` | 0 | `bringup.sh` and `settled.sh apply`: still dead; power reset pending |
 
 The tardis1 case was seen after the first boot's slot test, which
 takes each port down and up, so it is not known whether that port was
@@ -140,14 +141,19 @@ bulk return" and "Next boot: the region's held mark" in
   pinging before `bringup.sh` (step 0 below) to see how often a port is
   dead before the reopen.
 - **It happens on both hosts**, so it is not one card.
-- **Whether the test kernels cause it is not shown.** On tardis2 five
-  of the six boots into a test kernel that night lost a port (the
-  third both, the fourth b before `bringup.sh` had run). Both
-  test kernels are build 514's source plus a small `page_pool` change
-  (the bulk return, the held mark), with no change to `xeu` or the
-  receive path's setup. Nobody has counted how often a boot of build
-  514 itself, or of any other kernel, loses a port. Until that is
-  counted, a lost port is not evidence against the kernel booted.
+- **The test kernels are not needed for it: stock build 514 lost a
+  port on its first boot of the count** (tardis2, 7 November 05:19,
+  port a, dead before `bringup.sh`). Before that, five of the six
+  boots into a test kernel that night lost a port (the third both, the
+  fourth b before `bringup.sh` had run); both test kernels are build
+  514's source plus a small `page_pool` change (the bulk return, the
+  held mark), with no change to `xeu` or the receive path's setup. One
+  boot does not give stock 514's rate, so whether the test kernels make
+  it more likely is still not shown; but a lost port is not evidence
+  against the kernel booted. On stock 514 the receive region has no
+  device before `bringup.sh` (`page_pool.rx_region_dev` empty), so that
+  port died with `xeu`'s pools plain page pools, without the region's
+  override.
 - **What the card's receiver is doing is not known.** `xeu` exposes no
   counter that shows it. A reload of `xeu` and a PCI remove and
   rescan, which give the driver a fresh probe, do not reach it, and nor

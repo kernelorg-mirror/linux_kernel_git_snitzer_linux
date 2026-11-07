@@ -697,6 +697,30 @@ mark (`bootctl set-oneshot ofp-rocky-held-514.conf`).  Before `bringup.sh`,
 the region's override.
 
 
+### Stock build 514, first boot of the count (7 November, 05:19, after the power reset): port a dead before `bringup.sh`
+
+`uname -r` 7.3.0-11.hs.514.canary.el10.aarch64+16k (the default entry, no
+one-shot), `rx_region_held_mark` absent, kdump armed (`kexec_crash_loaded`
+1, `crashkernel=1G`, the kernel's copy in `/var/lib/kdump/boot/`).  Pinged
+before `bringup.sh` (step 0): port a (`enp161s0f0`) 0 of 3, neighbour
+FAILED; port b 3 of 3.  The client (up 25 days) has both ports up at 400
+Gb/s and pings 192.168.0.213 and not 192.168.1.213, so it is tardis2's
+port a.  As with the held mark's fourth boot, a was not silent: 86 frames
+received (31 on ring 0, 36 on ring 3), 147 dropped, 21 sent,
+`port_rx_fifo_tc0_packets` 0, and no ARP reply reached it.  dmesg has
+nothing beyond the usual firmware, taint and `rx_ip_align` lines.  Then
+`bringup.sh 32768 256` (both NICs mapped) and `settled.sh apply` (the
+settled setting), and a was still dead: 0 of 3, 0 received, 23 dropped, 8
+sent; b 3 of 3.  Counters, dmesg and both scripts' output are in
+`/var/tmp/zc-run-logs/t2-514-canary/port-dead/stock514-boot1/`.
+
+**So stock build 514 loses a port too, from boot, before the region has a
+device.**  The held mark's kernel is not shown to cause it; one boot gives
+no rate to set beside its five of six.
+
+**Next:** a hard power reset into the default entry again (no one-shot is
+set), and the same steps, to go on counting stock 514's boots.
+
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
 transports rather than fake interfaces; those changes are needed.  Not
