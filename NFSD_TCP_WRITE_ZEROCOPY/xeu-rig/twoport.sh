@@ -453,6 +453,8 @@ cl "LC_ALL=C pidstat -u $W 1" > cli-pidstat.txt 2>&1 &
 cl "LC_ALL=C pidstat -u -l -C fio 1 $W" > cli-fio-cpu.txt 2>&1 &
 cl "turbostat -q -s CPU,Busy%,Bzy_MHz,Avg_MHz -i $W -n 1" > cli-turbostat.txt 2>&1 &
 for p in $PORTS; do cl "ethtool -S ${CDEV[$p]}" > cli-ethtool-$p.0 2>&1; done
+# each transmit queue's CPU, from the client's XPS map, for the far share
+for p in $PORTS; do cl "for q in /sys/class/net/${CDEV[$p]}/queues/tx-*; do echo \${q##*-} \$(cat \$q/xps_cpus); done" > cli-xps-$p.txt 2>&1; done
 sleep $W
 for p in $PORTS; do cl "ethtool -S ${CDEV[$p]}" > cli-ethtool-$p.1 2>&1; done
 N1=$(nfsdc); TN1=$(now)
@@ -602,6 +604,18 @@ for q in sys.argv[1:]:
         e0, e1 = eth('cli-ethtool-%s.0' % q), eth('cli-ethtool-%s.1' % q)
         dd = lambda k: e1.get(k, 0) - e0.get(k, 0)
         print("client NIC of %s in the window: tx queue stopped %d, rx pause %d, tx pause %d, rx discards %d" % (q, dd('tx_queue_stopped'), dd('rx_pause_ctrl_phy'), dd('tx_pause_ctrl_phy'), dd('rx_discards_phy')))
+        if os.path.exists('cli-xps-%s.txt' % q):
+            near = range(0, 24) if q == 'a' else range(24, 48); qc = {}
+            for l in open('cli-xps-%s.txt' % q):
+                f = l.split()
+                if len(f) == 2 and f[0].isdigit():
+                    m = int(f[1].replace(',', ''), 16)
+                    if m and m & (m - 1) == 0:
+                        qc[int(f[0])] = m.bit_length() - 1
+            tx = {int(k[2:-8]): dd(k) for k in e1 if k.startswith('tx') and k.endswith('_packets') and k[2:-8].isdigit()}
+            t = sum(tx.values()); far = sum(v for k, v in tx.items() if k in qc and qc[k] not in near)
+            if t and qc:
+                print("client NIC of %s: %.1f%% of its packets sent from the far node's CPUs" % (q, 100 * far / t))
 EOF
 region_sampled() {
 	echo "region pages in use, sampled every ${REGION_MS:-20} ms, the slots and caches free (a lower bound of the peak): $(awk 'NR > 1 {h[++n] = $2} END {asort(h); printf "median %d, 99th percentile %d, at most %d", h[int(n / 2) + 1], h[int(n * 0.99) + 1], h[n]}' region-sec.tsv)" | tee -a summary.txt
