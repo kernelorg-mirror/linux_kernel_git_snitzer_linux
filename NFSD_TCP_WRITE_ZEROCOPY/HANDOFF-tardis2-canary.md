@@ -875,6 +875,42 @@ share 514's release string, so kdump's capture kernel in
 `/var/lib/kdump/boot/` is stock 514's image; that does for a capture, and
 `bringup.sh`'s copy stays as it is.
 
+**514 against 507: the region's peak (7 November).**  514 holds fewer of
+the region's pages than 507 did, at the same setting:
+
+| run | kernel | GB/s | peak pages | pages a GB/s | loans denied |
+|---|---|---|---|---|---|
+| `t2-r178` | 507 | 71.21 | 12124 (exact) | 170 | 84 |
+| `t2-r199` | 514, the mark | 65.28 | 8949 (exact) | 137 | 0 |
+| `t2-r200` | 514, the mark | 66.17 | 9134 (exact) | 138 | 0 |
+
+507's `pages - min_free` is exact (its region is one free list with the
+slots), as is 514's `max_held`.  A slower run has fewer WRITEs in flight,
+so part of the drop is the rate, but per GB/s 514 still holds about 20%
+fewer pages, and it never reached the budget where 507 was denied 84
+loans.
+
+The two runs were checked to be at the same setting (`geometry.txt` and
+`audit.txt` of each): `settled.sh audit two` passed on both, off the
+settled setting only in the budget the run sets
+(`svc_tcp_rx_budget_pages=16262`, `svc_tcp_rx_budget_reserve=130`); the
+"this run" lines are the same (rings 4 x 128, rcvbuf 524288, 12
+connections a port, 16 jobs of 8M at iodepth 16, `/hs/nvme0` to
+`/hs/nvme7`, both region devices), and the region is 32768 pages on both.
+The audits differ only in what the kernels have: 507 has no `rtc_read` or
+`rtc_write` (no run-to-completion, which is where `settled.sh` holds 514,
+both N), and `pool_mode` was audited only from 6 November, but 507 is a
+main-series kernel, which always reads pernode: one pool of 512, as 514
+runs now.  The `256` of `bringup.sh 32768 256` is not the ring, which is
+128 entries on both.  What differs is the region's design: on 507 one
+free list and each device's slot, on 514 16 shards, per-CPU caches and
+the slots' caches (about 2300 pages cached on each slot at rest).
+
+So the region's peak is not 514's problem.  Its rate may be: 65 to 66
+GB/s in three of the four runs (70.25 in the first) against 507's 71.21.
+That rests on one 507 run, and whether 514's runs were limited by the
+drives, as 507's was (each drive 90 to 92% busy), is not yet read.
+
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
 transports rather than fake interfaces; those changes are needed.  Not
