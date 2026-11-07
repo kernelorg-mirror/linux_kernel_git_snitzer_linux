@@ -166,6 +166,14 @@ writes it), never from a name written in a document or copied from
 another commit. Never `Co-Authored-By`, whatever a tool's default says,
 and never leave the Signed-off-by off.
 
+**Wrap every commit message at 72 columns (Mike, 2026-11-07), the
+subject included, which is one line of at most 72.** This is a mistake
+agents keep making: a body written as one long line per paragraph, or a
+`git commit -m` with a long paragraph. Write the message to a file or a
+heredoc already wrapped, and before committing check it:
+`git log -1 --format=%B | awk 'length > 72'` must print nothing. Amend
+(at the tip) or reword the commit when it does.
+
 A commit message says what the change is and why. It carries no
 disclaimer about the state of the work ("Not booted.", "untested",
 "compile-tested only"): this series is being polished, and such lines
