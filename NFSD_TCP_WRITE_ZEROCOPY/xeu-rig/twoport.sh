@@ -447,7 +447,14 @@ fi
 cl "mpstat -P ALL $W 1" > cli-mpstat.txt 2>&1 &
 # and by process: which commands the client's user and system time go to
 cl "LC_ALL=C pidstat -u $W 1" > cli-pidstat.txt 2>&1 &
+# fio's processes each second, with the CPU each ran on (the port from its
+# command line), the client's clocks a CPU, and its NICs' counters around
+# the window: where the client sends from and how fast its CPUs ran.
+cl "LC_ALL=C pidstat -u -l -C fio 1 $W" > cli-fio-cpu.txt 2>&1 &
+cl "turbostat -q -s CPU,Busy%,Bzy_MHz,Avg_MHz -i $W -n 1" > cli-turbostat.txt 2>&1 &
+for p in $PORTS; do cl "ethtool -S ${CDEV[$p]}" > cli-ethtool-$p.0 2>&1; done
 sleep $W
+for p in $PORTS; do cl "ethtool -S ${CDEV[$p]}" > cli-ethtool-$p.1 2>&1; done
 N1=$(nfsdc); TN1=$(now)
 for p in $PORTS; do drives $p > drives-$p.1; done; TD1=$(now)
 for p in $PORTS; do
@@ -554,6 +561,47 @@ if os.path.exists('cli-pidstat.txt'):
             u, s = t.get(c, (0.0, 0.0)); t[c] = (u + float(f[3]) / 100, s + float(f[4]) / 100)
     top = sorted(t.items(), key=lambda kv: -(kv[1][0] + kv[1][1]))[:6]
     print("client by command, CPUs of usr + sys: " + ", ".join("%s %.1f + %.1f" % (c, u, s) for c, (u, s) in top))
+# fio's CPU time on the NUMA node of its port's NIC (the client's a on node
+# 0, CPUs 0-23; b on node 1, 24-47), weighted by its %CPU each second.
+if os.path.exists('cli-fio-cpu.txt'):
+    loc = {'a': range(0, 24), 'b': range(24, 48)}
+    tot = {}; near = {}; secs = set()
+    for l in open('cli-fio-cpu.txt'):
+        f = l.split()
+        if len(f) < 10 or not f[1].isdigit() or f[0] == 'Average:':
+            continue
+        cmd = ' '.join(f[9:])
+        port = 'a' if 'twoport-a.fio' in cmd else 'b' if 'twoport-b.fio' in cmd else None
+        if not port or not f[8].isdigit():
+            continue
+        c = float(f[7]); tot[port] = tot.get(port, 0) + c; secs.add(f[0])
+        if int(f[8]) in loc[port]:
+            near[port] = near.get(port, 0) + c
+    if tot:
+        print("client's fio on its NIC's node: " + ", ".join("%s %.0f%% of %.1f CPUs" % (q, 100 * near.get(q, 0) / tot[q], tot[q] / 100 / max(1, len(secs))) for q in sorted(tot)))
+if os.path.exists('cli-turbostat.txt'):
+    mhz = {}; col = None
+    for l in open('cli-turbostat.txt'):
+        f = l.split()
+        if f[:1] == ['CPU']:
+            col = {k: i for i, k in enumerate(f)}
+        elif col and len(f) == len(col) and (f[0] == '-' or f[0].isdigit()):
+            mhz[f[0]] = (float(f[col['Busy%']]), float(f[col['Bzy_MHz']]))
+    if '-' in mhz:
+        node = lambda r: sum(mhz[str(c)][1] for c in r if str(c) in mhz) / max(1, sum(1 for c in r if str(c) in mhz))
+        print("client clocks: busy %.0f%%, %d MHz busy (node 0 %d, node 1 %d)" % (mhz['-'][0], mhz['-'][1], node(range(0, 24)), node(range(24, 48))))
+def eth(path):
+    d = {}
+    for l in open(path):
+        f = l.split(':')
+        if len(f) == 2 and f[1].strip().isdigit():
+            d[f[0].strip()] = int(f[1])
+    return d
+for q in sys.argv[1:]:
+    if os.path.exists('cli-ethtool-%s.0' % q) and os.path.exists('cli-ethtool-%s.1' % q):
+        e0, e1 = eth('cli-ethtool-%s.0' % q), eth('cli-ethtool-%s.1' % q)
+        dd = lambda k: e1.get(k, 0) - e0.get(k, 0)
+        print("client NIC of %s in the window: tx queue stopped %d, rx pause %d, tx pause %d, rx discards %d" % (q, dd('tx_queue_stopped'), dd('rx_pause_ctrl_phy'), dd('tx_pause_ctrl_phy'), dd('rx_discards_phy')))
 EOF
 region_sampled() {
 	echo "region pages in use, sampled every ${REGION_MS:-20} ms, the slots and caches free (a lower bound of the peak): $(awk 'NR > 1 {h[++n] = $2} END {asort(h); printf "median %d, 99th percentile %d, at most %d", h[int(n / 2) + 1], h[int(n * 0.99) + 1], h[n]}' region-sec.tsv)" | tee -a summary.txt
