@@ -774,6 +774,34 @@ at "Next boot: the region's held mark" above: ping both ports before
 again, then `ab-held.sh` (`t2-r198..r201`).  If `rx_region_held_mark` is
 missing, the boot fell back to stock 514: say so and stop.
 
+### The fifth boot into it (7 November, 05:59): port a dead before `bringup.sh`
+
+Steps 1 and 2 passed: `/proc/version` names `root@tardis2` and gcc
+14.3.1 (built 04:16), `rx_region_held_mark` reads N, dmesg has only the
+firmware, BTF-mismatch, taint and `rx_ip_align` lines, kdump is armed
+(`kexec_crash_loaded` 1, `crashkernel=1G`).  Pinged before `bringup.sh`
+(step 0): port a (`enp161s0f0`) 0 of 3, neighbour FAILED; port b 3 of 3,
+REACHABLE.  As on the fourth boot and stock 514's first, a has a link and
+is not silent: 79 frames received (31 on ring 0, 39 on ring 3), 137
+dropped, 21 sent, `port_rx_fifo_tc0_packets` 0.  `bringup.sh` was not run
+and nothing else was.  Counters, neighbours and dmesg are in
+`/var/tmp/zc-run-logs/t2-514-canary/port-dead/held-boot5/`.
+
+One counter seen on reading the boots side by side, not yet a finding:
+`ring_0_rx_hw_pp_drop_packets` is not 0 on both ports on each of the
+three boots with a port dead before `bringup.sh` (held-boot4: a 107,
+b 53; stock514-boot1: a 124, b 52; this boot: a 114), on the port that
+works as well, and 0 on both on stock 514's good second boot.
+
+**That is six of seven boots into a test kernel with a port lost, and one
+of two for stock 514.**  `ab-held.sh` has still not run.
+
+**Next:** the one-shot is set again (`bootctl set-oneshot
+ofp-rocky-held-514.conf`; `bootctl status` shows it), so a hard power
+reset boots the held-mark kernel, its sixth.  The same steps as on this
+boot: ping before `bringup.sh`, and on two good ports go on to step 3 and
+`ab-held.sh`.
+
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
 transports rather than fake interfaces; those changes are needed.  Not
