@@ -587,6 +587,25 @@ and `/boot/ofp-rocky/held-514/`; 514 stays the default.
   `kernel-7.3/canary.held-514`.
 
 
+### The first boot into it (7 November, 04:25): port a lost again
+
+Steps 1 and 2 passed: `/proc/version` names `root@tardis2` and gcc
+14.3.1, `rx_region_held_mark` reads N, dmesg has only the BTF-mismatch and
+taint lines, kdump is armed (1024 MiB).  In step 3 `bringup.sh 32768 256`
+mapped both NICs and `settled.sh apply` ended in the settled setting, but
+port a (`enp161s0f0`) did not answer the ping (0 of 3, neighbour FAILED);
+port b answered 3 of 3.  Port a has a link and sends (8 packets), and
+receives nothing: `rx_packets` 0 on every ring, `rx_dropped` 15, no fault
+in dmesg.  Unlike the A/B kernel's first boot, `port_rx_fifo_tc0_packets`
+and `port_rx_non_prom_drop_packets` are 0 too: the port saw no frame at
+all, not only its rings.  The card's known failure again, on the first
+boot of a test kernel for the second time; nothing was run, step 4 not
+reached.
+
+**Next:** a hard power reset.  The one-shot entry is set again
+(`bootctl set-oneshot ofp-rocky-held-514.conf`, `OneShot Entry` reads
+it).  Then steps 1 to 3 again, with both pings, before step 4.
+
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
