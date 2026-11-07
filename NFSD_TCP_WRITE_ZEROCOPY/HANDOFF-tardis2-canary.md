@@ -1156,14 +1156,27 @@ fl64's own ranking on nfsd, inclusive, us a WRITE (of 109.84):
 | COMMIT (`nfsd_commit`) | 4.00 | XFS's log force 2.76, the lazytime timestamps 0.96 | 47 (lazytime kept) |
 | waking and sleeping, the visible part | about 6 | `svc_thread_wake_next` 1.76, `schedule` 3.25 | 17, 18, 40 |
 
-Two things beside the ranking.  **The map walk is twice 507's** (3.19
-against 1.62 us a WRITE in fl-blk), at the drives' limits of 256 KiB and
-65 segments a request, both as on 507: either a request carries more
-pieces now or each costs more.  **And nfsd does the same work in more
+Two things beside the ranking.  **The map walk is not twice 507's,
+as first written here:** that set fl64's 3.19 us inclusive (with the DMA
+mapping under it) against fl-blk's 1.62 self.  Self against self,
+`blk_rq_dma_map_iter_next` with round 55's inlined `blk_map_iter_next()`
+(`46a42a774aed`, in this kernel) is 2.33 us a WRITE in fl64 against 1.62
+in fl-blk, 2.12% of nfsd against 1.83%: a little more, at the drives'
+limits of 256 KiB and 65 segments a request as on 507.  **And nfsd does the same work in more
 cycles:** `t2-r233`'s instructions are 507's (277.8k against 272.7k to
 278.7k) but its cycles 309.6k against 269.5k to 279.6k (round 55's four
 runs at 65.6 to 70.5 GB/s), about 11% more, where fl63 found 21k more
 unpinned.
+
+**Round 62 (Mike, 7 November): where the work went.**  Round 55's inline
+took 5.7k instructions off a WRITE on nfsd and about 0.6% of its cycles,
+and where the rest went was not found; here nfsd's instructions are 507's
+in 11% more cycles.  `FLAMEGRAPH/62-map-walk/run234.sh`: one loan run with
+`sglwalk-kp.bt` (round 55's trace with kprobes for nfsd and nvme, whose
+BTF does not match this boot's vmlinux), `t2-r234`, then one sampling
+cycles, instructions and L1 and L2 refills on nfsd's CPUs, `t2-r235`,
+read by `pmu62.py` in cycles and instructions a WRITE a function beside
+round 55's `t2-r170` (build 506, the walk out of line).
 
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
