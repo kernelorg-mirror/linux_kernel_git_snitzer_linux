@@ -824,7 +824,42 @@ The fifth boot's counter does not stand: `ring_0_rx_hw_pp_drop_packets`
 reads a 101 and b 51 on this boot, with both ports good, so it is not a
 mark of a dead port.
 
-**Next:** `ab-held.sh` (`t2-r198..r201`), step 5.
+`ab-held.sh` ran there (06:18 to 06:38), four loan runs at the settled
+setting, A B B A, A with the mark off and B on, all four with the 20 ms
+sampler.  Every run was clean: no drive stepped down, no stall, no loan
+denied, paused or overrun, dmesg clean.
+
+| run | mark | GB/s | nfsd cycles a WRITE | ring cycles a WRITE | sampled at most | exact `max_held` |
+|---|---|---|---|---|---|---|
+| `t2-r198` | A, off | 70.25 | 310.6k | 74.7k | 8639 | |
+| `t2-r199` | B, on | 65.28 | 294.2k | 73.5k | 6939 | 8949 |
+| `t2-r200` | B, on | 66.17 | 295.7k | 76.1k | 7892 | 9134 |
+| `t2-r201` | A, off | 65.77 | 294.9k | 74.4k | 8926 | |
+
+- **No drift:** at rest before and after each B, `held` was 1152 and the
+  free counts gave 1152.
+- **The mark is at or above the sample, as it must be:** 8949 against
+  6939 and 9134 against 7892, the sample short by 1200 to 2000 pages of
+  dips under 20 ms.  In the A runs the sample alone reached 8639 and 8926,
+  so a single run's sample can come within 200 pages of the peak or fall
+  2000 short of it.
+- **Against 507's exact 12124 (`t2-r178`):** 514's exact peak is about
+  9000 to 9100 pages, a quarter fewer.
+- **The mark's cost is not seen:** `t2-r198`, the first run, is the
+  outlier (70.25 GB/s, 310.6k nfsd cycles); `t2-r201`, the A beside the
+  two Bs, matches them in rate (65.77 against 65.28 and 66.17) and in nfsd
+  cycles (294.9k against 294.2k and 295.7k), and ring cycles are within
+  the runs' spread (73.5k to 76.1k).  Whatever the shared count costs is
+  below what four runs can tell.
+
+The "before" line of a B read the last run's peak (`max_held` 8949 before
+`t2-r200`): `ab-held.sh` did not restart it at rest.  The run's own figure
+was not affected, since `twoport.sh` writes the debugfs file just before
+the load (`echo 1 > $RG`), which restarts the peak.  `ab-held.sh` now
+writes it before the "before" line too.
+
+**Next (Mike):** keep the mark or drop it (a revert at the tip).  Then
+step 7's rest: boot 514 again and remove the two test kernels.
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
