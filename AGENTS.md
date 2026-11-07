@@ -377,6 +377,18 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**After tardis2's reboot of 7 November into the A/B kernel (the one-shot
+entry `ofp-rocky-ab-bulk-514.conf`: build 514's source with the bulk return
+to the region's slot and its A/B switch, built on tardis2), start at "Next
+boot: the A/B of the bulk return to the region's slot" in
+`NFSD_TCP_WRITE_ZEROCOPY/HANDOFF-tardis2-canary.md`:** the boot's checks,
+`bringup.sh`, `settled.sh apply`, then
+`/var/tmp/zc-run-logs/t2-514-canary/ab-bulk.sh` and the keep or drop.  The
+kernel is installed and the one-shot set; nothing is left to install.  If
+`/sys/module/page_pool/parameters/rx_region_return_bulk_ab` is missing, the
+boot fell back to build 514: say so and stop.  The paragraphs below are the
+boots before it.
+
 **After tardis2's next reboot, into build 507 again with
 `irqchip.gicv3_pseudo_nmi=1` (4 November), start at "tardis2's next boot:
 build 507 with pseudo-NMI" at the top of

@@ -395,8 +395,11 @@ enforced). The image, its `System.map`, `vmlinux.symvers`, config and key
 are in `/var/tmp/zc-run-logs/t2-514-canary/ab-bulk-kernel/`, with
 `SHA256`.
 
-**To boot it once** (the auto mode classifier refused these to the
-session; build 514 stays the default):
+**Installed and set to boot once (7 November, at Mike's request):** the
+entry `ofp-rocky-ab-bulk-514.conf` and `/boot/ofp-rocky/ab-bulk-514/`
+(`linux` checked against `SHA256`), and `bootctl set-oneshot` on it; build
+514 stays the default, so the boot after this one is 514's again.  A reboot
+is all that is left.  What was run, for the record:
 
     R=7.3.0-11.hs.514.canary.el10.aarch64+16k K=/var/tmp/zc-run-logs/t2-514-canary/ab-bulk-kernel
     mkdir -p /boot/ofp-rocky/ab-bulk-514
@@ -406,10 +409,14 @@ session; build 514 stays the default):
       'sort-key   ofp-rocky-zz-ab' 'options    console=ttyAMA0 rodata=noalias crashkernel=1G' \
       'linux      /ofp-rocky/ab-bulk-514/linux' 'initrd     /ofp-rocky/ab-bulk-514/initrd' \
       > /boot/loader/entries/ofp-rocky-ab-bulk-514.conf
-    bootctl set-oneshot ofp-rocky-ab-bulk-514.conf && systemctl reboot
+    bootctl set-oneshot ofp-rocky-ab-bulk-514.conf
 
 **After it boots:**
 
+0. `git worktree prune` in the tree: the A/B branch's worktree was in
+   `/dev/shm/wt514`, gone with the reboot (the branch stays).  If a
+   setting differs from what is written here, read NOTES in
+   `/var/tmp/zc-run-logs/t2-514-canary/` for the last state.
 1. `uname -v` names tardis2's build (`root@tardis2`, gcc 14.3.1), and
    `/sys/module/page_pool/parameters/rx_region_return_bulk_ab` reads Y. If
    it is missing, the boot fell back to 514.
