@@ -382,6 +382,12 @@ for p in $PORTS; do case "${QDISC:-}" in fq*) EXPENV="$EXPENV EXP_QDISC_$(tr a-z
 env $EXPENV "$RIG/settled.sh" audit $MODE_SET > audit.txt 2>&1 || { grep -E 'BAD|FAILED' audit.txt; exit 1; }
 tail -1 audit.txt | tee -a geometry.txt
 echo 1 > $RG	# the region's low-water mark starts again from here
+# A region of one free list (with free_unmapped) has a low-water mark of its
+# own, so pages - min_free is its peak exactly.  One of shards, CPU caches and
+# device slots does not: min_free sums the shards' marks only, counting a page
+# cached or free on a slot as held.  There the held pages are sampled.
+REGION_EXACT=; grep -q '^free_unmapped ' $RG && REGION_EXACT=1
+[ -n "$REGION_EXACT" ] || taskset -c ${REGION_CPU:-63} "$RIG/regionsample.py" region-sec.tsv $(( WARM + RUNTIME + 3 )) ${REGION_MS:-20} &
 WH0=$(wr_hits); declare -A BS0; for k in admitted denied paused overrun; do BS0[$k]=$(bstat $k); done
 DRIVES="$(data_drives)" "$RIG/drvsample.py" drives-sec.tsv $(( WARM + RUNTIME + 3 )) &	# every drive, each second of the load
 "$RIG/wiresample.py" wire-sec.tsv $(( WARM + RUNTIME + 3 )) $(for p in $PORTS; do echo ${DEV[$p]}; done) &	# the same seconds, row for row
@@ -532,12 +538,19 @@ def busy(path, cpus):
 print("server CPUs busy: rings of a (0-7) %.0f%%, rings of b (56-63) %.0f%%, nfsd (8-55) %.0f%%" % (busy('srv-mpstat.txt', range(0, 8)), busy('srv-mpstat.txt', range(56, 64)), busy('srv-mpstat.txt', range(8, 56))))
 print("client CPUs busy: %.0f%%" % busy('cli-mpstat.txt', range(0, 48)))
 EOF
-echo "region pages in use at most: $(( $(reg pages) - $(reg min_free) ))" | tee -a summary.txt
+if [ -n "$REGION_EXACT" ]; then
+	REGION_PEAK=$(( $(reg pages) - $(reg min_free) ))
+	echo "region pages in use at most: $REGION_PEAK" | tee -a summary.txt
+else	# from the same reset as min_free: the warm-up and the load
+	REGION_PEAK=$(awk 'NR > 1 && $2 > m {m = $2} END {print m + 0}' region-sec.tsv)
+	echo "region pages in use, sampled every ${REGION_MS:-20} ms, the slots and caches free (a lower bound of the peak): $(awk 'NR > 1 {h[++n] = $2} END {asort(h); printf "median %d, 99th percentile %d", h[int(n / 2) + 1], h[int(n * 0.99) + 1]}' region-sec.tsv)" | tee -a summary.txt
+	echo "region pages in use at most: $REGION_PEAK" | tee -a summary.txt
+fi
 if [ -n "${TSV:-}" ] && [ "$RW" = write ]; then
 	[ -s $TSV ] || echo "tag which total_GBps a_GBps b_GBps fifo_a fifo_b ringdrop_a ringdrop_b cli_retrans region_pages nfsd_busy ringcpu_a ringcpu_b rcvbuf linger threads entries qdisc nconn jobs drvbusy_a drvbusy_b warm lowat writes_ps woken_ps ctxsw_ps keep" > $TSV
 	g() { awk -v p=$1 -v c=$2 '$1 == p {print $c; f = 1} END {if (!f) print "-"}' window.txt; }	# "-" for a port not run, so the columns stay put
 	db() { awk -v p=$1 '$3 == p {for (i = 1; i <= NF; i++) if ($i == "busiest") {sub(/%/, "", $(i+1)); print $(i+1); f = 1}} END {if (!f) print "-"}' drives.txt; }
 	fb() { python3 -c "import json;print('%.2f' % (json.load(open('fio-$1.json'))['jobs'][0]['write']['bw_bytes']/1e9))" 2> /dev/null || echo -; }
 	cb=$(awk '$1 == "Average:" && $2 ~ /^[0-9]+$/ {b = 100 - $NF - $6; c = $2 + 0; if (c < 8) a += b; else if (c >= 56) z += b; else n += b} END {printf "%.0f %.0f %.0f", n / 48, a / 8, z / 8}' srv-mpstat.txt)
-	echo "${TAG:-$(basename $OUT)} $WHICH $(cat total.txt) $(fb a) $(fb b) $(g a 5) $(g b 5) $(g a 6) $(g b 6) $(awk '/^client retransmits/{print $NF}' window.txt) $(( $(reg pages) - $(reg min_free) )) $cb $(cat $SP/svc_tcp_rx_rcvbuf) $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) ${ENTRIES:-256} ${QDISC:-codel} $NCONN $JOBS $(db a) $(db b) $WARM $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) $(awk '/^nfsd in the window/{gsub(",", ""); print $8, $11, $14}' window.txt) $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -)" | sed 's/  */ /g' >> $TSV
+	echo "${TAG:-$(basename $OUT)} $WHICH $(cat total.txt) $(fb a) $(fb b) $(g a 5) $(g b 5) $(g a 6) $(g b 6) $(awk '/^client retransmits/{print $NF}' window.txt) $REGION_PEAK $cb $(cat $SP/svc_tcp_rx_rcvbuf) $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) ${ENTRIES:-256} ${QDISC:-codel} $NCONN $JOBS $(db a) $(db b) $WARM $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) $(awk '/^nfsd in the window/{gsub(",", ""); print $8, $11, $14}' window.txt) $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -)" | sed 's/  */ /g' >> $TSV
 fi
