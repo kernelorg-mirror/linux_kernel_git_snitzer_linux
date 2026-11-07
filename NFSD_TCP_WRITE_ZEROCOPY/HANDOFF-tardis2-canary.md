@@ -1073,6 +1073,41 @@ records both on a "client:" line of `geometry.txt`, and puts both back
 as they were when it ends.  `irqbalance` was started again on the
 client at 16:03, after the series.
 
+**At those defaults, 514 reaches 70 (7 November, 16:04 to 16:34).**
+`more-numa.sh` ran six loan runs at `twoport.sh`'s new defaults (fio
+pinned, the client's scope `numa`, its `irqbalance` stopped for each
+run), the held mark off:
+
+| run | GB/s | port a, b | far node's share of each NIC's packets (a, b) | busiest drive (a, b) | retransmits |
+|---|---|---|---|---|---|
+| `t2-r221` | 70.88 | 35.64, 35.24 | 1.6%, 0.9% | 91%, 91%, both DRIVE-LIMITED | 2222 |
+| `t2-r222` | 70.07 | 35.81, 34.25 | 0.5%, 1.3% | 93% DRIVE-LIMITED, 88% | 1913 |
+| `t2-r223` | 70.62 | 35.96, 34.66 | 1.7%, 1.3% | 92% DRIVE-LIMITED, 90% | 2042 |
+| `t2-r224` | 71.03 | 35.86, 35.17 | 1.0%, 1.1% | 91% DRIVE-LIMITED, 90% | 2688 |
+| `t2-r225` | 70.21 | 35.66, 34.54 | 1.4%, 2.1% | 91% DRIVE-LIMITED, 90% | 1494 |
+| `t2-r226` | 69.18 | 35.73, 33.45 | 2.7%, 2.0% | 91% DRIVE-LIMITED, 87% | 1049 |
+
+- **Five of six at 70.07 to 71.03,** `t2-r224` within 0.3% of 507's
+  71.21 (`t2-r178`, unpinned); port a is limited by its drives in every
+  run, as 507's run was.  The client's CPUs are 68 to 71% busy, against
+  73 to 76% unpinned.  Every run clean; the client was put back
+  (`cache_shard`, `irqbalance` active) and the audit at the end found
+  nothing BAD.
+- **The far share orders the rate again:** the one run under 70,
+  `t2-r226`, sent the most from the far node (2.7%, 2.0%).
+- **Faster than the morning's `numa` runs at the same setting** (69.13
+  to 69.80, far 1.3 to 2.8%).  Between the two `irqbalance` ran again
+  from 16:03 until the first run stopped it: 48 of port a's 49 NIC IRQs
+  and 47 of port b's moved to another CPU, every one still on its NIC's
+  node (`t2-514-canary/client-irq-affinity-0730.txt` against `-1635.txt`,
+  the NICs' IRQs in `client-nic-irqs.txt`).  Which CPU of the node takes
+  a queue's interrupt may be what tells 69 from 70; these runs cannot say,
+  and the drives had also been idle about eight hours.
+
+So the gap to 507 was the client: with its writers and kworkers on their
+NICs' nodes, 514 carries what 507 did, up to the drives.  What 507 does
+pinned is not measured (a reboot).
+
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
 into a test kernel did).  Use this kernel as long as possible: no reboot,
