@@ -1108,6 +1108,32 @@ So the gap to 507 was the client: with its writers and kworkers on their
 NICs' nodes, 514 carries what 507 did, up to the drives.  What 507 does
 pinned is not measured (a reboot).
 
+**The client's NIC IRQs, 07:30 placement against 16:35 (7 November,
+16:38 to 17:08).**  `ab-irq.sh` wrote one saved placement or the other
+to the 98 IRQs of `ens3np0` and `ens6np0` before each run and read it
+back (`client-nic-place-0730.txt`, `-1635.txt`), with the client's
+`irqbalance` stopped for the whole series and started again after it,
+at `twoport.sh`'s defaults:
+
+| run | placement | GB/s | far node's share (a, b) | busiest drive (a, b) |
+|---|---|---|---|---|
+| `t2-r227` | 07:30 | 70.30 | 1.0%, 2.2% | 89%, 91% DRIVE-LIMITED |
+| `t2-r228` | 16:35 | 70.22 | 1.7%, 1.9% | 92% DRIVE-LIMITED, 89% |
+| `t2-r229` | 07:30 | 69.28 | 2.8%, 2.7% | 90%, 88% |
+| `t2-r230` | 16:35 | 70.07 | 1.1%, 1.1% | 89%, 92% DRIVE-LIMITED |
+| `t2-r231` | 07:30 | 70.03 | 1.4%, 0.9% | 89%, 93% DRIVE-LIMITED |
+| `t2-r232` | 16:35 | 70.23 | 1.4%, 1.5% | 93% DRIVE-LIMITED, 89% |
+
+The placement does not set the rate: 07:30's carries 70.30 and 70.03
+with one run at 69.28, 16:35's 70.07 to 70.23.  What does is again the
+far node's share of the sends, the slow run the one that sent the most
+from it, and with it below about 2% a run is at 70 and limited by a
+port's drives.  So the morning's `numa` runs at 69.1 to 69.8 are not
+explained by the IRQs; their far share (1.3 to 2.8%) was at the top of
+this range, and that is as far as these runs go.  What still moves the
+far share from run to run is where the scheduler lets the client's
+sunrpc kworkers stray, which the client's kernel gives no way to fix.
+
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
 into a test kernel did).  Use this kernel as long as possible: no reboot,
