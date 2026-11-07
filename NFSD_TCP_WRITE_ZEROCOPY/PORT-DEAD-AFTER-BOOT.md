@@ -100,7 +100,9 @@ the reset when the boot is into a test kernel: `bootctl set-oneshot
 | 7 Nov, 02:00 | tardis2, A/B kernel (514 + bulk return), first boot | a | 4596 | power reset |
 | 7 Nov, after reset | tardis2, A/B kernel, second boot | none | | runs done |
 | 7 Nov, 04:25 | tardis2, held-mark kernel (514 + held mark), first boot | a | 0 | power reset |
-| 7 Nov, 04:35 | tardis2, held-mark kernel, second boot | **b** | 0 (and 0 on the working a) | `xeu` reload, PCI remove and rescan, FLR, bus reset: still dead; power reset pending |
+| 7 Nov, 04:35 | tardis2, held-mark kernel, second boot | **b** | 0 (and 0 on the working a) | `xeu` reload, PCI remove and rescan, FLR, bus reset: still dead; power reset |
+| 7 Nov, 04:55 | tardis2, held-mark kernel, third boot | **a and b** | 0 on both | nothing tried; power reset |
+| 7 Nov, 05:05 | tardis2, held-mark kernel, fourth boot | **b**, dead before `bringup.sh` | 0 | nothing tried; power reset pending |
 
 The tardis1 case was seen after the first boot's slot test, which
 takes each port down and up, so it is not known whether that port was
@@ -121,9 +123,26 @@ bulk return" and "Next boot: the region's held mark" in
   have failed on tardis2, port a then port b on consecutive boots of
   the same kernel. That fits something going wrong in the card's
   receive path as it comes up, more than a link fault.
+- **It can take both ports at once** (tardis2, held-mark kernel's
+  third boot, 7 November 04:55): both had their link (the client at
+  400 Gb/s on both), sent ARP (9 and 11 packets) and received nothing,
+  `rx_dropped` 21 and 12, both neighbours FAILED, while the client's
+  management address answered. Counters and dmesg are in
+  `/var/tmp/zc-run-logs/t2-514-canary/port-dead/held-boot3/`.
+- **A port can be dead from boot, before `bringup.sh`'s reopen**
+  (tardis2, held-mark kernel's fourth boot, 7 November 05:05): pinged
+  on the ports as the boot left them, a answered 3 of 3 and b 0 of 3,
+  neighbour FAILED, so the reopen is not what kills it (at least not
+  always). Unlike the earlier cases b was not silent: 38 frames
+  received (31 on ring 3, one or two on six others), 65 dropped, 21
+  sent, and still no ARP reply reached it. Counters and dmesg are in
+  `/var/tmp/zc-run-logs/t2-514-canary/port-dead/held-boot4/`. Keep
+  pinging before `bringup.sh` (step 0 below) to see how often a port is
+  dead before the reopen.
 - **It happens on both hosts**, so it is not one card.
-- **Whether the test kernels cause it is not shown.** On tardis2 three
-  of the four boots into a test kernel that night lost a port. Both
+- **Whether the test kernels cause it is not shown.** On tardis2 five
+  of the six boots into a test kernel that night lost a port (the
+  third both, the fourth b before `bringup.sh` had run). Both
   test kernels are build 514's source plus a small `page_pool` change
   (the bulk return, the held mark), with no change to `xeu` or the
   receive path's setup. Nobody has counted how often a boot of build
@@ -140,6 +159,9 @@ bulk return" and "Next boot: the region's held mark" in
 
 ## On every boot
 
+0. Before `bringup.sh`, on the ports as the boot left them, ping both
+   (the two commands in 1) and record the answer: it says whether a
+   port lost later was dead from boot or went dead at the reopen.
 1. After `bringup.sh` and `settled.sh apply`, ping both ports before
    anything else: `ping -c3 -I enp161s0f0 192.168.1.106` and `ping -c3
    -I enp164s0f0 192.168.0.106`. On tardis1 also after the slot test
