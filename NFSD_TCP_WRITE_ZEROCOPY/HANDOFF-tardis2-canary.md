@@ -802,6 +802,30 @@ reset boots the held-mark kernel, its sixth.  The same steps as on this
 boot: ping before `bringup.sh`, and on two good ports go on to step 3 and
 `ab-held.sh`.
 
+### The sixth boot into it (7 November, 06:08): both ports answer
+
+The boot before it left git broken: the commit recording the fifth boot
+(06:04) had its ref, index and three objects written empty when the power
+was cut.  The working tree had kept its text, so the ref was set back to
+`01c99985f0a6`, the empty objects removed (copies kept in the session's
+scratchpad), the index rebuilt with `git reset` and the fifth boot
+committed again.
+
+Steps 1 and 2 passed (`root@tardis2`, gcc 14.3.1, built 04:16, the mark
+N, dmesg only the firmware, BTF-mismatch, taint and `rx_ip_align` lines,
+kdump armed at `crashkernel=1G`).  Pinged before `bringup.sh`: port a 3 of
+3 and port b 3 of 3, both neighbours REACHABLE.  `bringup.sh 32768 256`
+mapped both NICs, `settled.sh apply` ended in the settled setting, and both
+ports answered again after it.  Step 4 at rest: `held` 1072, `max_held`
+1072, and 1072 from the free counts.  Counters and logs are in
+`/var/tmp/zc-run-logs/t2-514-canary/port-dead/held-boot6/`.
+
+The fifth boot's counter does not stand: `ring_0_rx_hw_pp_drop_packets`
+reads a 101 and b 51 on this boot, with both ports good, so it is not a
+mark of a dead port.
+
+**Next:** `ab-held.sh` (`t2-r198..r201`), step 5.
+
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
 transports rather than fake interfaces; those changes are needed.  Not

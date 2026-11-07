@@ -106,6 +106,7 @@ the reset when the boot is into a test kernel: `bootctl set-oneshot
 | 7 Nov, 05:19 | tardis2, **stock build 514**, first boot of the count | **a**, dead before `bringup.sh` | 0 | `bringup.sh` and `settled.sh apply`: still dead; power reset |
 | 7 Nov, 05:27 | tardis2, stock build 514, second boot of the count | none (both answer before and after `bringup.sh`) | | |
 | 7 Nov, 05:59 | tardis2, held-mark kernel, fifth boot | **a**, dead before `bringup.sh` | 0 | nothing tried; power reset |
+| 7 Nov, 06:08 | tardis2, held-mark kernel, sixth boot | none (both answer before and after `bringup.sh`) | | |
 
 The tardis1 case was seen after the first boot's slot test, which
 takes each port down and up, so it is not known whether that port was
