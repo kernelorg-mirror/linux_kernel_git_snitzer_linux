@@ -630,6 +630,64 @@ not been counted.
 (`OneShot Entry` reads `ofp-rocky-held-514.conf`).  Then steps 1 to 3 with
 both pings, before step 4.
 
+### The third boot into it (7 November, 04:55, after the power reset): both ports lost
+
+Steps 1 and 2 passed as before (`root@tardis2`, gcc 14.3.1, the mark N,
+dmesg only the firmware, BTF and taint lines, kdump armed).
+`bringup.sh 32768 256` mapped both NICs and `settled.sh apply` ended in
+the settled setting, and then **neither** port answered: port a 0 of 3
+(9 packets sent, `rx_dropped` 21), port b 0 of 3 (11 sent, `rx_dropped`
+12), `rx_packets` 0 on both, both neighbours FAILED, no fault in dmesg.
+The client (up 25 days) has both links up at 400 Gb/s and answers on its
+management address, and cannot ping 192.168.1.213 or 192.168.0.213.
+`port_rx_fifo_tc0_packets` 0 on both.  No reset tried (none helps:
+`PORT-DEAD-AFTER-BOOT.md`).  Counters and dmesg in
+`/var/tmp/zc-run-logs/t2-514-canary/port-dead/held-boot3/`.  Nothing run.
+
+That is four of five boots into a test kernel tonight with a port lost,
+this one both.  The pings were only after `bringup.sh`, which reopens both
+ports; on the next boot ping before it too (step 0 of "On every boot" in
+`PORT-DEAD-AFTER-BOOT.md`).
+
+**Next:** a hard power reset; the one-shot entry is set again
+(`OneShot Entry` reads `ofp-rocky-held-514.conf`).  Then steps 1 and 2,
+the pings before `bringup.sh`, then step 3 with both pings, before step 4.
+
+
+### The fourth boot into it (7 November, 05:05, after the power reset): port b dead before `bringup.sh`
+
+Steps 1 and 2 passed (`root@tardis2`, gcc 14.3.1, the mark N, dmesg only
+the firmware, BTF and taint lines, kdump armed).  Pinged before
+`bringup.sh` (step 0): port a 3 of 3, port b (`enp164s0f0`) 0 of 3,
+neighbour FAILED.  So b was dead as the boot left it, before any reopen.
+b was not silent this time: 38 frames received (31 on ring 3), 65 dropped,
+21 sent.  `bringup.sh` was not run and nothing else was.  Counters and
+dmesg are in `/var/tmp/zc-run-logs/t2-514-canary/port-dead/held-boot4/`.
+That is five of six boots into a test kernel tonight with a port lost.
+
+**The power cut at the third boot's commit (05:00) broke the tree.**  The
+commit's five objects, `.git/index` and `refs/heads/kernel-7.3/canary`
+were left empty, and the reflog's last line was lost.  Repaired by setting
+the branch back to the reflog's last entry, `139cc9976c4c` (04:48: "a bus
+reset does not bring a dead port back either"), and rebuilding the index
+with `git reset`.  The working tree was intact, and the third boot's text
+went into this boot's commit.  The empty objects are kept outside the tree.
+
+**Integrity of the kernel, checked on this boot** (Mike doubted it after
+the cut): `held-kernel/SHA256` verifies (`vmlinuz.efi`, `System.map`,
+`vmlinux.symvers`, `config`), `/boot/ofp-rocky/held-514/linux` is
+byte-for-byte that `vmlinuz.efi`, and `rpm -V` is clean (beyond
+timestamps) on every build 514 package, `kmod-16k-xsight` (`xeu.ko`)
+included.  Nothing under `/lib/modules` or `/boot` was written after 04:50,
+and `updates/` is empty.  The kernel was installed at 04:18 and first
+booted at 04:25, both before the cut.  The initrd has no recorded sum,
+but it is dated 04:18 and three boots used it before the cut.  No
+reinstall.
+
+**Next:** a hard power reset; the one-shot entry is set again
+(`bootctl set-oneshot ofp-rocky-held-514.conf`).  Then steps 1 and 2,
+the pings before `bringup.sh`, then step 3 with both pings, before step 4.
+
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
