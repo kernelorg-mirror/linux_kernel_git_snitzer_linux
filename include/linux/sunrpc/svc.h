@@ -480,6 +480,7 @@ struct svc_rqst {
 	void			*rq_rtc_priv;	/* rtc: upper layer per-rqst state */
 	void			*rq_private;	/* For use by the service thread */
 	unsigned int		rq_spin_ns;	/* adaptive idle spin budget */
+	struct svc_xprt		*rq_handoff;	/* transport an enqueue gave this idle thread */
 };
 
 /* bits for rq_flags */
@@ -497,6 +498,7 @@ enum {
 	RQ_RTC_COUNT,		/* rtc attempt owes its vs_count bump */
 	RQ_PAYLOAD_SHARED,	/* a later operation still reads the payload */
 	RQ_WAKING,		/* a wake of this idle thread is in flight */
+	RQ_HANDOFF,		/* the wake brings a transport in rq_handoff */
 };
 
 #define SVC_NET(rqst) (rqst->rq_xprt ? rqst->rq_xprt->xpt_net : rqst->rq_bc_net)
@@ -747,6 +749,8 @@ int		   svc_register(struct svc_serv *serv, struct net *net,
 void		   svc_wake_up(struct svc_serv *);
 void		   svc_reserve(struct svc_rqst *rqstp, int space);
 bool		   svc_pool_wake_idle_thread(struct svc_pool *pool);
+bool		   svc_pool_hand_idle_thread(struct svc_pool *pool,
+					     struct svc_xprt *xprt);
 #if IS_ENABLED(CONFIG_KUNIT)
 unsigned int svc_pool_map_fill_percpu(unsigned int *to_pool,
 				      unsigned int *pool_to,

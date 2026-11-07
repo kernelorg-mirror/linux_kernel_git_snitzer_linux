@@ -26,6 +26,8 @@
 #include <kunit/visibility.h>
 #include <linux/seq_file.h>
 
+#include "sunrpc.h"
+
 #define RPCDBG_FACILITY	RPCDBG_SVCXPRT
 
 static unsigned int svc_rpc_per_connection_limit __read_mostly;
@@ -1109,6 +1111,8 @@ VISIBLE_IF_KUNIT void svc_pool_enqueue_xprt(struct svc_serv *serv,
 	/* Only trace_svc_xprt_dequeue() reads the enqueue time. */
 	if (trace_svc_xprt_dequeue_enabled())
 		xprt->xpt_qtime = ktime_get();
+	if (svc_pool_hand_idle_thread(pool, xprt))
+		return;
 	lwq_enqueue(&xprt->xpt_ready, &pool->sp_xprts);
 
 	if (!svc_pool_wake_idle_thread(pool) &&
@@ -2220,10 +2224,50 @@ static struct svc_xprt *svc_thread_steal(struct svc_rqst *rqstp,
 	return xprt;
 }
 
+/*
+ * Take the transport svc_pool_hand_idle_thread() gave this thread, if
+ * any.  Its claim (RQ_HANDOFF) comes before its store of the transport,
+ * a few instructions later with preemption off, so wait for the store.
+ * The slot is emptied before RQ_HANDOFF is cleared, which a new claim
+ * needs, so it is never filled twice.
+ */
+static struct svc_xprt *svc_thread_take_handoff(struct svc_rqst *rqstp)
+{
+	struct svc_xprt *xprt;
+
+	if (!test_bit(RQ_HANDOFF, &rqstp->rq_flags))
+		return NULL;
+	xprt = smp_cond_load_acquire(&rqstp->rq_handoff, VAL);
+	WRITE_ONCE(rqstp->rq_handoff, NULL);
+	clear_bit_unlock(RQ_HANDOFF, &rqstp->rq_flags);
+	return xprt;
+}
+
+/**
+ * svc_thread_return_handoff - give back a transport handed to an exiting thread
+ * @rqstp: a thread that is leaving its pool
+ *
+ * Setting RQ_WAKING closes the thread to claims, which need it clear;
+ * a claim that came first is waited for and its transport queued again.
+ */
+void svc_thread_return_handoff(struct svc_rqst *rqstp)
+{
+	struct svc_xprt *xprt;
+
+	set_bit(RQ_WAKING, &rqstp->rq_flags);
+	xprt = svc_thread_take_handoff(rqstp);
+	if (xprt)
+		svc_xprt_enqueue_thread(xprt);
+}
+
 static bool
 svc_thread_should_sleep(struct svc_rqst *rqstp)
 {
 	struct svc_pool		*pool = rqstp->rq_pool;
+
+	/* was a transport handed to this thread? */
+	if (test_bit(RQ_HANDOFF, &rqstp->rq_flags))
+		return false;
 
 	/* did someone call svc_wake_up? */
 	if (test_bit(SP_TASK_PENDING, &pool->sp_flags))
@@ -2390,11 +2434,19 @@ dequeue_self:
 			 * thread again before it is first again.  Then this
 			 * thread can safely sleep until woken again; each
 			 * sleep follows set_current_state() and a test of
-			 * RQ_WAKING, so a later claim is not lost.
+			 * RQ_WAKING, so a later claim is not lost.  A claim
+			 * that brought a transport (RQ_HANDOFF) passes the
+			 * transport on, queued again as an enqueue would.
 			 */
-			if (test_and_clear_bit(RQ_WAKING, &rqstp->rq_flags))
-				svc_thread_pass_claim(rqstp);
-			else
+			if (test_and_clear_bit(RQ_WAKING, &rqstp->rq_flags)) {
+				struct svc_xprt *xprt;
+
+				xprt = svc_thread_take_handoff(rqstp);
+				if (xprt)
+					svc_xprt_enqueue_thread(xprt);
+				else
+					svc_thread_pass_claim(rqstp);
+			} else
 				did_timeout = svc_schedule_timeout(timeo);
 			cyc->walked = false;
 			cyc->found = NULL;
@@ -3294,6 +3346,7 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
 {
 	struct svc_steal_cycle cyc = {};
 	struct svc_pool *pool = rqstp->rq_pool;
+	struct svc_xprt *handed;
 	struct svc_pool *from;
 	bool did_timeout;
 	int ret = 0;
@@ -3312,14 +3365,17 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
 	did_timeout = svc_thread_wait_for_work(rqstp,
 					       svc_pool_can_shrink(pool) ?
 					       timeo : 0, &cyc);
+	handed = svc_thread_take_handoff(rqstp);
 
-	if (did_timeout && svc_thread_should_sleep(rqstp) &&
+	if (!handed && did_timeout && svc_thread_should_sleep(rqstp) &&
 	    svc_pool_can_shrink(pool))
 		ret = -ETIMEDOUT;
 
 	clear_bit(SP_TASK_PENDING, &pool->sp_flags);
 
 	if (svc_thread_should_stop(rqstp)) {
+		if (handed)
+			svc_xprt_enqueue_thread(handed);
 		/*
 		 * A pool losing its last thread leaves its queues to siblings;
 		 * with svc_pool_siblings=N, svc_set_pool_threads() moves them to
@@ -3329,11 +3385,19 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
 		return ret;
 	}
 
-	if (svc_rtc_thread_run(rqstp))
+	/* A handed transport first: svc_thread_wake_next() below finds
+	 * the rtc work this skips, as it finds a queued transport.
+	 */
+	if (!handed && svc_rtc_thread_run(rqstp))
 		return ret;
 
 	from = pool;
-	rqstp->rq_xprt = svc_xprt_dequeue(pool);
+	if (handed) {
+		svc_xprt_get(handed);
+		rqstp->rq_xprt = handed;
+	} else {
+		rqstp->rq_xprt = svc_xprt_dequeue(pool);
+	}
 	if (!rqstp->rq_xprt)
 		rqstp->rq_xprt = svc_thread_steal(rqstp, &from, &cyc);
 	if (rqstp->rq_xprt) {
