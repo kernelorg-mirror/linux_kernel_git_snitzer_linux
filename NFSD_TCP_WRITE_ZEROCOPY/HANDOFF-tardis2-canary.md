@@ -580,7 +580,8 @@ and `/boot/ofp-rocky/held-514/`; 514 stays the default.
   on the A/B kernel's first boot, the card's known failure): only a hard
   power reset brought it back.  Set the one-shot entry again first
   (`bootctl set-oneshot ofp-rocky-held-514.conf`), since a power cycle
-  uses it up.
+  uses it up.  What is known of it, the cases and what to record are in
+  `PORT-DEAD-AFTER-BOOT.md`; add each boot there, good or not.
 - Nothing of tonight is pushed: on `kernel-7.3/canary` from `2a4ce5220019`
   (the bulk return's revert, reworded; the tip before is kept as
   `kernel-7.3/canary.pre-reword-0407`) to the tip, and

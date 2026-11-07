@@ -364,6 +364,12 @@ reconfigured or `xeu` reloaded (192.168.0.105 has mounted over
 `enp164s0f0` before). The first section of `xeu-rig/README.md` has
 where that stands.
 
+**After every boot, ping both ports before any run: an E1 port can come
+up receiving nothing and only a hard power reset brings it back.** The
+cases, what does not fix it and what to record (every boot's outcome,
+good or not) are in
+[`NFSD_TCP_WRITE_ZEROCOPY/PORT-DEAD-AFTER-BOOT.md`](NFSD_TCP_WRITE_ZEROCOPY/PORT-DEAD-AFTER-BOOT.md).
+
 **Kdump is armed before anything else on a boot (Mike, 2026-11-02:
 "as part of preliminary bringup, please always ensure that kdump is
 armed").** `xeu-rig/bringup.sh` does it first and stops if it cannot:
