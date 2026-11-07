@@ -1203,6 +1203,17 @@ queue's lock through the slow path.  The passes are the multiplier: each is
 a wake or pickup, a dequeue, a save and a restore.  The options are in
 `FLAMEGRAPH/63-xprt-queue/README.md`.
 
+**The KUnit flag moved off the counter's line (Mike, 7 November):**
+`ae72537cb5ac`, `svc_tcp_rx_kunit_fault` `__read_mostly`, a KUnit
+interface commit at the canary's tip.  `svcsock.o` builds at 16 KiB with
+W=1 and `-Werror` (`/var/tmp/kbuild-check`), the flag in
+`.data..read_mostly` and `svc_tcp_spare_pages` still in `.bss`.  It has not
+run: this boot runs 514's own sunrpc, and the tip's sunrpc is not 514's,
+so measuring it needs 514's source with the change built as a `sunrpc.ko`
+for `updates/` and nfsd restarted on it, or a later kernel.  What to read:
+`svc_tcp_rx_append_ref`'s cycles a WRITE (2.81k on `t2-r235`, 1.76k of it
+the flag's load).
+
 **DRIVE-LIMITED is a label, not the limit (Mike, 7 November).**
 `twoport.sh` printed "DRIVE-LIMITED" beside any port whose busiest drive
 was 90% busy or more.  A drive's busy figure is the time it had any write
