@@ -860,8 +860,20 @@ writes it before the "before" line too.
 
 **Kept (Mike, 7 November):** the mark stays, `bb7fd3100c3b` at the tip of
 `kernel-7.3/canary`, off by default.  From here on a region peak is
-`max_held` with `rx_region_held_mark=Y`, not the sample.  Still to do
-(step 7, with Mike): boot 514 again and remove the test kernels.
+`max_held` with `rx_region_held_mark=Y`, not the sample.
+
+**The held-mark kernel is tardis2's default (Mike, 7 November), in place
+of step 7's return to 514:** stock 514 has no mark, so its region figures
+could not be exact.  `ofp-rocky-held-514.conf` is retitled "Held mark on
+514 (default)" and set with `bootctl set-default` (the EFI variable; there
+is no `default` in `loader.conf`), with the same options as 514's entry.
+Stock 514 stays in the menu.  The A/B kernel of the bulk return is gone
+from `/boot` (`ofp-rocky-ab-bulk-514.conf`, `/boot/ofp-rocky/ab-bulk-514/`);
+its image, the same by SHA256, and its entry are kept in
+`/var/tmp/zc-run-logs/t2-514-canary/ab-bulk-kernel/`.  The two kernels
+share 514's release string, so kdump's capture kernel in
+`/var/lib/kdump/boot/` is stock 514's image; that does for a capture, and
+`bringup.sh`'s copy stays as it is.
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real

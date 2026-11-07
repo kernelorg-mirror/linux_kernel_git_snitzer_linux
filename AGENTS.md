@@ -386,8 +386,9 @@ what it is, and rename it once read.
 **The held mark's A/B ran on the held-mark kernel's sixth boot (7
 November, `t2-r198..r201`) and Mike kept the mark (`bb7fd3100c3b`):
 "The sixth boot into it" in `NFSD_TCP_WRITE_ZEROCOPY/HANDOFF-tardis2-canary.md`.
-What is left is booting 514 again and removing the test kernels, with
-Mike.  The paragraph below is the boot plan it ran.**
+The held-mark kernel is now tardis2's default (`ofp-rocky-held-514.conf`)
+and the A/B kernel is gone from `/boot`.  The paragraph below is the boot
+plan it ran.**
 
 **After tardis2's next reboot (7 November) into the held-mark kernel (the
 one-shot entry `ofp-rocky-held-514.conf`: build 514's source with "page_pool:
