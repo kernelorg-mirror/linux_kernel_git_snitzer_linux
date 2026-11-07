@@ -68,9 +68,24 @@ port and were lost after it".
   the probe. After `bringup.sh` and `settled.sh apply` the port had its
   address, sent 21 packets and received none, the neighbour FAILED, as
   before.
-- **Not tried:** a reset of the secondary bus above the port
-  (`reset_method` `bus`), the last reset short of a power cut. Ask Mike
-  first, as for a reload of `xeu` (section 0 of `XEU_CONVERGENCE.md`).
+- **Not** a reset of the secondary bus above the port (tardis2, 7
+  November 04:48, port b, after the three above, on Mike's word): the
+  port down, `xeu` unbound, `echo bus > reset_method; echo 1 > reset`
+  (no error; put back to `flr bus` after), `xeu` bound again. The bridge
+  above it, `0000:a3:00.0`, has port b alone under it, so nothing else
+  was reset. dmesg as for the FLR: bus mastering off and on, the probe.
+  After `bringup.sh` and `settled.sh apply`: its address, 21 packets
+  sent, none received, the neighbour FAILED, as before; port a still
+  answered.
+
+So on a boot that has lost a port, nothing short of cutting the host's
+power has been found to bring it back. Do not spend a boot on these
+again: record the case and hand the host over for the power reset.
+
+`lspci -vv` reads `LnkSta: Speed 2.5GT/s, Width x1` on the bridges
+above both ports and `Speed unknown, Width x0` on both ports' functions,
+the working port a's as well as the dead port b's. That is how the
+card presents itself, not a sign of the fault.
 
 A power cycle uses up a one-shot boot entry, so set it again before
 the reset when the boot is into a test kernel: `bootctl set-oneshot
@@ -85,7 +100,7 @@ the reset when the boot is into a test kernel: `bootctl set-oneshot
 | 7 Nov, 02:00 | tardis2, A/B kernel (514 + bulk return), first boot | a | 4596 | power reset |
 | 7 Nov, after reset | tardis2, A/B kernel, second boot | none | | runs done |
 | 7 Nov, 04:25 | tardis2, held-mark kernel (514 + held mark), first boot | a | 0 | power reset |
-| 7 Nov, 04:35 | tardis2, held-mark kernel, second boot | **b** | 0 (and 0 on the working a) | `xeu` reload, PCI remove and rescan, FLR: still dead; power reset pending |
+| 7 Nov, 04:35 | tardis2, held-mark kernel, second boot | **b** | 0 (and 0 on the working a) | `xeu` reload, PCI remove and rescan, FLR, bus reset: still dead; power reset pending |
 
 The tardis1 case was seen after the first boot's slot test, which
 takes each port down and up, so it is not known whether that port was
@@ -117,10 +132,11 @@ bulk return" and "Next boot: the region's held mark" in
 - **What the card's receiver is doing is not known.** `xeu` exposes no
   counter that shows it. A reload of `xeu` and a PCI remove and
   rescan, which give the driver a fresh probe, do not reach it, and nor
-  does a function-level reset of the port: so whatever holds the
-  receiver survives an FLR, below the function, in the card's shared
-  logic or its port. A bus reset is the one try left short of a power
-  cut.
+  does a function-level reset of the port or a reset of the bus above
+  it: whatever holds the receiver survives every reset the host can
+  give one port, so it is in logic a PCIe reset does not reach (the
+  card's shared logic, its port's MAC or PHY, or its firmware), and
+  only the power cut clears it. That is a question for Xsight.
 
 ## On every boot
 
