@@ -765,6 +765,15 @@ answered after the last run.
   beside them (see "What twoport reports of the region" in
   `xeu-rig/README.md`).
 
+**Next (Mike): back to the held mark.**  The one-shot is set again
+(`bootctl set-oneshot ofp-rocky-held-514.conf`; `bootctl status` shows it as
+`OneShot Entry`), so the next boot is the held-mark kernel, its fifth.  Start
+at "Next boot: the region's held mark" above: ping both ports before
+`bringup.sh` (step 0 of `PORT-DEAD-AFTER-BOOT.md`), `bringup.sh 32768 256`
+(it copies the kernel into `/var/lib/kdump/boot/`), `settled.sh apply`, ping
+again, then `ab-held.sh` (`t2-r198..r201`).  If `rx_region_held_mark` is
+missing, the boot fell back to stock 514: say so and stop.
+
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
 updated the fixture so that the tests run on a real service and real
 transports rather than fake interfaces; those changes are needed.  Not
