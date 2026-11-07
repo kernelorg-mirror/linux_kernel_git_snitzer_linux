@@ -684,9 +684,17 @@ booted at 04:25, both before the cut.  The initrd has no recorded sum,
 but it is dated 04:18 and three boots used it before the cut.  No
 reinstall.
 
-**Next:** a hard power reset; the one-shot entry is set again
-(`bootctl set-oneshot ofp-rocky-held-514.conf`).  Then steps 1 and 2,
-the pings before `bringup.sh`, then step 3 with both pings, before step 4.
+**Next (Mike, 05:20): boot stock build 514, to see whether it loses a port
+too.**  The one-shot entry is cleared, so the power reset boots the default,
+`ofp-rocky-7.3.0-11.hs.514.canary.el10.aarch64+16k.conf`.  On that boot:
+check `uname -r` and that `rx_region_held_mark` is absent; arm kdump; ping
+both ports before `bringup.sh` and record the result in
+`PORT-DEAD-AFTER-BOOT.md`'s table.  Then `bringup.sh` and `settled.sh apply`
+and ping again.  Count a few boots that way before going back to the held
+mark (`bootctl set-oneshot ofp-rocky-held-514.conf`).  Before `bringup.sh`,
+`page_pool.rx_region_dev` is empty, so the receive region has no device and
+`xeu`'s pools are plain page pools.  A port dead at that point died without
+the region's override.
 
 
 **Port the svcsock KUnit fixture rework onto David's suites.**  Mike
