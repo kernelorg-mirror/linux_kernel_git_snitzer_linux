@@ -1,0 +1,131 @@
+../FLAMEGRAPH/62-map-walk/sglwalk-kp.bt:46:7-12: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @sp[tid];
+         ~~~~~
+../FLAMEGRAPH/62-map-walk/sglwalk-kp.bt:46:15-23: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @sp[tid];
+                 ~~~~~~~~
+../FLAMEGRAPH/62-map-walk/sglwalk-kp.bt:70:36-41: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    printf("traced_us %d\n", (uint64)(nsecs - @t0) / 1000);
+                                      ~~~~~
+../FLAMEGRAPH/62-map-walk/sglwalk-kp.bt:70:44-47: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    printf("traced_us %d\n", (uint64)(nsecs - @t0) / 1000);
+                                              ~~~
+../FLAMEGRAPH/62-map-walk/sglwalk-kp.bt:52:2-19: WARNING: Return value discarded.
+    delete(@sp[tid]); delete(@spsegs[tid]);
+    ~~~~~~~~~~~~~~~~~
+../FLAMEGRAPH/62-map-walk/sglwalk-kp.bt:52:20-40: WARNING: Return value discarded.
+    delete(@sp[tid]); delete(@spsegs[tid]);
+                      ~~~~~~~~~~~~~~~~~~~~
+Attached 8 probes
+traced_us 8544978
+
+
+@bio_bvecs:
+[0]               531427 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1]                   16 |                                                    |
+
+@bio_bvecs_sum: 16
+@bio_bytes:
+[512, 1K)             16 |                                                    |
+[1K, 2K)               0 |                                                    |
+[2K, 4K)               0 |                                                    |
+[4K, 8K)               0 |                                                    |
+[8K, 16K)              0 |                                                    |
+[16K, 32K)             0 |                                                    |
+[32K, 64K)             0 |                                                    |
+[64K, 128K)            0 |                                                    |
+[128K, 256K)           0 |                                                    |
+[256K, 512K)           0 |                                                    |
+[512K, 1M)             0 |                                                    |
+[1M, 2M)          531427 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@bio_bytes_sum: 557241606144
+@bio_first: 531443
+@map_next: 67922520
+@map_start: 1876335
+@nr_phys_segments:
+[32, 36)         2031526 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[36, 40)            2018 |                                                    |
+
+@nr_phys_sum: 70908490
+@ns_n[bio_split_io_at]: 2124900
+@ns_sum[bio_split_io_at]: 1955675454
+@request_bytes:
+[256K, 512K)     2033544 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@request_bytes_sum: 533081358336
+@sgl_requests: 2033544
+@split_bvecs_left:
+[0]               531427 |@@@@@@@@@@@@@@@@@                                   |
+[1]                   16 |                                                    |
+[2, 4)                 0 |                                                    |
+[4, 8)                 0 |                                                    |
+[8, 16)                0 |                                                    |
+[16, 32)               0 |                                                    |
+[32, 64)               0 |                                                    |
+[64, 128)              0 |                                                    |
+[128, 256)             0 |                                                    |
+[256, 512)             0 |                                                    |
+[512, 1K)              0 |                                                    |
+[1K, 2K)               0 |                                                    |
+[2K, 4K)               0 |                                                    |
+[4K, 8K)               0 |                                                    |
+[8K, 16K)              0 |                                                    |
+[16K, 32K)             0 |                                                    |
+[32K, 64K)             0 |                                                    |
+[64K, 128K)            0 |                                                    |
+[128K, 256K)           0 |                                                    |
+[256K, 512K)           0 |                                                    |
+[512K, 1M)             0 |                                                    |
+[1M, 2M)               0 |                                                    |
+[2M, 4M)               0 |                                                    |
+[4M, 8M)               0 |                                                    |
+[8M, 16M)              0 |                                                    |
+[16M, 32M)             0 |                                                    |
+[32M, 64M)             0 |                                                    |
+[64M, 128M)            0 |                                                    |
+[128M, 256M)           0 |                                                    |
+[256M, 512M)           0 |                                                    |
+[512M, 1G)             0 |                                                    |
+[1G, 2G)               0 |                                                    |
+[2G, 4G)         1594277 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@split_bytes_left:
+[512, 1K)             16 |                                                    |
+[1K, 2K)               0 |                                                    |
+[2K, 4K)               0 |                                                    |
+[4K, 8K)               0 |                                                    |
+[8K, 16K)              0 |                                                    |
+[16K, 32K)             0 |                                                    |
+[32K, 64K)             0 |                                                    |
+[64K, 128K)            0 |                                                    |
+[128K, 256K)           0 |                                                    |
+[256K, 512K)      531425 |@@@@@@@@@@@@@@@@@@@@@@@@@                           |
+[512K, 1M)       1062852 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1M, 2M)          531427 |@@@@@@@@@@@@@@@@@@@@@@@@@@                          |
+
+@split_calls: 2125720
+@split_ns:
+[512, 1K)        1589342 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1K, 2K)          466366 |@@@@@@@@@@@@@@@                                     |
+[2K, 4K)           67689 |@@                                                  |
+[4K, 8K)            1216 |                                                    |
+[8K, 16K)            165 |                                                    |
+[16K, 32K)           122 |                                                    |
+
+@split_ret[no split]: 531237
+@split_ret[split]: 1593663
+@split_segs:
+[0, 4)                16 |                                                    |
+[4, 8)                 0 |                                                    |
+[8, 12)                0 |                                                    |
+[12, 16)               0 |                                                    |
+[16, 20)               0 |                                                    |
+[20, 24)               0 |                                                    |
+[24, 28)               0 |                                                    |
+[28, 32)               0 |                                                    |
+[32, 36)         2122761 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[36, 40)            2123 |                                                    |
+
+@t0: 42499275136928
+@writes: 551937

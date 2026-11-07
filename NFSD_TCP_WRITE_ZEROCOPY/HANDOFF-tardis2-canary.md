@@ -1178,6 +1178,14 @@ cycles, instructions and L1 and L2 refills on nfsd's CPUs, `t2-r235`,
 read by `pmu62.py` in cycles and instructions a WRITE a function beside
 round 55's `t2-r170` (build 506, the walk out of line).
 
+**Done (18:01):** the walk does the same work as on 506 (four 256 KiB
+requests a WRITE, 34.9 pieces each, one step a piece) and the inline moved
+its instructions into `blk_rq_dma_map_iter_next` without saving cycles.
+nfsd's added cycles are mostly elsewhere: the loan's code, about 7k cycles
+a WRITE more since it moved out of sunrpc (`49e2111a6420`), and lock
+contention in `svc_recv`'s transport queue.  The account and the next
+targets are in `FLAMEGRAPH/62-map-walk/README.md`.
+
 **Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
 into a test kernel did).  Use this kernel as long as possible: no reboot,
