@@ -82,7 +82,9 @@
 #                    NN Gbit/s a flow)
 #   PROFILE=1        mid-run: perf stat for the rings' CPUs and the rest, then where the
 #                    cycles and the fetches from memory go (needs RUNTIME=55 at least)
-#   PIN=1            each port's writers on the client CPUs of its NIC's NUMA node
+#   PIN=0            leave the client's writers unpinned (PIN=1, the default since
+#                    7 November: each port's writers on the client CPUs of its NIC's
+#                    NUMA node, about 6% more on 514, t2-r209 to t2-r214)
 #   WARM=<s>         the writers run this long before fio starts counting (15)
 #   REST=<s>         wait this long first, for the drives (30)
 #   DRIVE_GB=<n>     mark the run if a drive wrote more than this in it (600)
@@ -121,6 +123,7 @@ declare -A CLI=([a]=${CLIP[a]} [b]=${CLIP[b]}) FS=([a]="${FS_A:-${PFS[a]}}" [b]=
 declare -A IRQ0=([a]=0 [b]=56) FSID=([a]=7701 [b]=7702) TXIRQ=([a]=${TXIRQ_A:-} [b]=${TXIRQ_B:-})
 declare -A NFS	# how many filesystems each port has
 declare -A CPUS=([a]=0-23 [b]=24-47)	# the client's CPUs on each port's NUMA node, for PIN=1
+PIN=${PIN:-1}
 PORTS=$(sed 's/./& /g' <<< "$WHICH")
 SSHC="ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -i $KEY root@$CLIMGMT"	# not over a port under test
 cl() { $SSHC "$@" < /dev/null; }
@@ -227,7 +230,7 @@ fi
 for e in $WREV; do grep -q '^hist:' $T/events/nfsd/$e/trigger 2>/dev/null || echo 'hist:keys=common_type' > $T/events/nfsd/$e/trigger; done
 [ -n "${SPARE:-}" ] && { echo $SPARE > $SP/svc_tcp_spare_bytes_max || { echo "no svc_tcp_spare_bytes_max in this sunrpc"; exit 1; }; }
 [ -n "${QDISC:-}" ] && for p in $PORTS; do setq ${CDEV[$p]} $QDISC || { echo "qdisc not set"; exit 1; }; done
-echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) want_eighths $(cat $SP/svc_tcp_rx_want_eighths 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read)" | tee -a geometry.txt
+echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) want_eighths $(cat $SP/svc_tcp_rx_want_eighths 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read) client pin $PIN" | tee -a geometry.txt
 
 for p in $PORTS; do
 	d=${DEV[$p]}
@@ -307,7 +310,7 @@ ioengine=libaio
 iodepth=$IODEPTH
 numjobs=$per
 group_reporting
-${PIN:+cpus_allowed=${CPUS[$1]}}
+$([ "$PIN" = 1 ] && echo "cpus_allowed=${CPUS[$1]}")
 J
 	for i in $(seq 1 $n); do
 		cat <<J
