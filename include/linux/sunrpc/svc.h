@@ -49,12 +49,14 @@ struct svc_pool {
 	struct list_head	sp_all_threads;	/* all server threads */
 	struct llist_head	sp_idle_threads; /* idle server threads */
 
-	/* statistics on pool operation */
+	/*
+	 * Statistics on pool operation, each counter within one line:
+	 * sp_messages_arrived ends the second, sp_flags shares the third.
+	 */
 	struct percpu_counter	sp_messages_arrived;
+	unsigned long		sp_flags ____cacheline_aligned_in_smp;
 	struct percpu_counter	sp_sockets_queued;
-	struct percpu_counter	sp_threads_woken;
-
-	unsigned long		sp_flags;
+	struct percpu_counter	sp_threads_woken ____cacheline_aligned_in_smp;
 } ____cacheline_aligned_in_smp;
 
 /*
