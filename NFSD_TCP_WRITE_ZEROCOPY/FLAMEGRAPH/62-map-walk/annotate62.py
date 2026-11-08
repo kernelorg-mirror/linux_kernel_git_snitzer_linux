@@ -17,6 +17,15 @@
 # one or two before it.  Also: the samples in sunrpc's PLT (calls from
 # sunrpc into vmlinux, which is out of a bl's range on this boot).
 import collections, os, re, subprocess, sys
+
+def opn(path):
+    """Open a perf script, or its .xz once it has been compressed."""
+    import lzma, os
+    if path.endswith('.xz'):
+        return lzma.open(path, 'rt')
+    if not os.path.exists(path) and os.path.exists(path + '.xz'):
+        return lzma.open(path + '.xz', 'rt')
+    return open(path)
 REL = os.uname().release
 DBG = '/usr/lib/debug/lib/modules/%s' % REL
 SCR = os.environ.get('ANN_DIR', '.')
@@ -75,7 +84,7 @@ for where, fn in FUNCS:
 
 samp = collections.defaultdict(lambda: collections.defaultdict(collections.Counter))
 pltc = collections.Counter()
-for l in open(sys.argv[1]):
+for l in opn(sys.argv[1]):
     f = l.split()
     if len(f) < 3:
         continue

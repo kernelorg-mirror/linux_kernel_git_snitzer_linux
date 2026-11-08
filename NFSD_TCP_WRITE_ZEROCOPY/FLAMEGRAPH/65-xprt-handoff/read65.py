@@ -3,6 +3,15 @@
 # WRITE (sampled, the idle loop out), the lock's fast and slow paths, the
 # pool's own functions, and pool_stats' enqueues and wakes a WRITE.
 import collections, os, re, sys
+
+def opn(path):
+    """Open a perf script, or its .xz once it has been compressed."""
+    import lzma, os
+    if path.endswith('.xz'):
+        return lzma.open(path, 'rt')
+    if not os.path.exists(path) and os.path.exists(path + '.xz'):
+        return lzma.open(path + '.xz', 'rt')
+    return open(path)
 L = '/var/tmp/zc-run-logs'
 IDLE = set('default_idle_call cpu_do_idle arch_cpu_idle do_idle cpu_idle_poll'.split())
 SYMS = ['_raw_spin_lock', 'queued_spin_lock_slowpath', '__lwq_dequeue', 'svc_recv',
@@ -18,7 +27,7 @@ for r in sys.argv[1:]:
     w = int(re.search(r'WRITEs ([0-9]+)', log).group(1))
     tag = open(d + '/results.tsv').read().split('\n')[1].split('\t')[0][-1]
     c = collections.Counter()
-    for l in open(d + '/pmu.script'):
+    for l in opn(d + '/pmu.script'):
         f = l.split()
         if len(f) < 4 or not f[1].startswith('cycles'):
             continue

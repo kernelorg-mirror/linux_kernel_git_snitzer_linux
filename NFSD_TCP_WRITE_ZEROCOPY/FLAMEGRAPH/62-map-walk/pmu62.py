@@ -8,13 +8,22 @@
 # functions whether inlined or not (round 55: blk_map_iter_next out of line;
 # round 62: inlined into blk_rq_dma_map_iter_next and _start), so it compares.
 import collections, sys
+
+def opn(path):
+    """Open a perf script, or its .xz once it has been compressed."""
+    import lzma, os
+    if path.endswith('.xz'):
+        return lzma.open(path, 'rt')
+    if not os.path.exists(path) and os.path.exists(path + '.xz'):
+        return lzma.open(path + '.xz', 'rt')
+    return open(path)
 IDLE = set('default_idle_call cpu_do_idle arch_cpu_idle do_idle cpu_idle_poll'.split())
 WALK = set('''blk_map_iter_next __blk_map_iter_next blk_rq_dma_map_iter_next
 blk_rq_dma_map_iter_start nvme_pci_setup_data_sgl dma_map_phys dma_direct_map_phys
 bio_split_io_at'''.split())
 def load(path, writes):
     c = collections.defaultdict(collections.Counter)
-    for l in open(path):
+    for l in opn(path):
         f = l.split()
         if len(f) < 4:
             continue
