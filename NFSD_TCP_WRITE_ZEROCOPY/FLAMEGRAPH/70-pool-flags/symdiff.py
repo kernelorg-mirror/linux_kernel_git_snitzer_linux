@@ -8,7 +8,8 @@ IDLE=set('default_idle_call cpu_do_idle arch_cpu_idle do_idle cpu_idle_poll'.spl
 def load(r):
     d=L+'/'+r; w=int(re.search(r'WRITEs ([0-9]+)',open(d+'/pmu.log').read()).group(1))*8.0
     c=collections.Counter()
-    for l in open(d+'/pmu.script'):
+    p=d+'/pmu.script'
+    for l in (open(p) if os.path.exists(p) else lzma.open(p+'.xz','rt')):
         f=l.split()
         if len(f)<4 or not f[1].startswith('cycles') or f[3] in IDLE: continue
         c[f[3]]+=int(f[0])
