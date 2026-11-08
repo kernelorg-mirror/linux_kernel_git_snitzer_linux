@@ -1,0 +1,36 @@
+struct svc_pool {
+	struct lwq                 sp_xprts __attribute__((__aligned__(8))); /*     0    24 */
+
+	/* XXX last struct has 1 hole */
+
+	unsigned int               sp_id;                /*    24     4 */
+	unsigned int               sp_nrthreads;         /*    28     4 */
+	unsigned int               sp_nrthrmin;          /*    32     4 */
+	unsigned int               sp_nrthrmax;          /*    36     4 */
+	struct lwq                 sp_rtc_rqsts __attribute__((__aligned__(8))); /*    40    24 */
+
+	/* XXX last struct has 1 hole */
+
+	/* --- cacheline 1 boundary (64 bytes) --- */
+	struct llist_head          sp_idle_threads __attribute__((__aligned__(64))); /*    64     8 */
+	long unsigned int          sp_flags;             /*    72     8 */
+	struct list_head           sp_all_threads;       /*    80    16 */
+	struct percpu_counter      sp_messages_arrived __attribute__((__aligned__(8))); /*    96    40 */
+
+	/* XXX last struct has 1 hole */
+
+	/* --- cacheline 2 boundary (128 bytes) was 8 bytes ago --- */
+	struct percpu_counter      sp_sockets_queued __attribute__((__aligned__(8))); /*   136    40 */
+
+	/* XXX last struct has 1 hole */
+
+	struct percpu_counter      sp_threads_woken __attribute__((__aligned__(8))); /*   176    40 */
+
+	/* XXX last struct has 1 hole */
+
+	/* size: 256, cachelines: 4, members: 12 */
+	/* padding: 40 */
+	/* member types with holes: 5, total: 5 */
+	/* forced alignments: 6 */
+} __attribute__((__aligned__(64)));
+
