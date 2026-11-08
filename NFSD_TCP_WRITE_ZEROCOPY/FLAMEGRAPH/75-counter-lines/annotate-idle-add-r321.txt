@@ -1,0 +1,26 @@
+====================================================================================================
+svc_pool_idle_add: 176 bytes, 574 cycles and 475 instructions a WRITE, IPC 0.83
+  by kind:              cycles    insns  cyc %  count
+    other                          562      468  97.9%     17
+    loads                            6        2   1.0%      3
+    branches                         5        3   0.9%     11
+    atomics, barriers, prefetch       1        1   0.1%      9
+    stores                           1        2   0.1%      1
+    entry/exit                       0        1   0.0%      1
+    prefetch                         0        0   0.0%      2
+  by source line (innermost < caller), 85% of cycles:
+       545  94.9%  llist_add_batch /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/llist.h:242 < llist_add /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/llist.h:265
+  hottest instructions:
+    +0x020    544  94.7%  L2  5.44  cmp      x3, x4                             /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/llist.h:242
+    +0x00c      9   1.5%  L2  0.14  add      x5, x2, #0x10                      /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:621
+    +0x000      7   1.3%  L2  0.16  nop                                         /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:618
+    +0x008      6   1.0%  L2  0.06  ldr      x3, [x1, #64]!                     /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/llist.h:238
+    +0x028      4   0.7%  L2  0.03  cbnz     x3, 5f40c <svc_pool_idle_add+0x54> /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:621
+    +0x004      2   0.3%  L2  0.04  nop                                         /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:618
+    +0x014      1   0.2%  L2  0.00  b        5f410 <svc_pool_idle_add+0x58>     /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/arch/arm64/include/asm/alternative-macros.h:232
+    +0x07c      1   0.2%  L2  0.00  mov      x3, x4                             /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/llist.h:242
+    +0x01c      1   0.1%  L2  0.02  casal    x4, x5, [x1]                       /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/arch/arm64/include/asm/atomic_lse.h:280
+    +0x010      1   0.1%  L2  0.01  str      x3, [x2, #16]                      /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/llist.h:241
+====================================================================================================
+all 1: 574 cycles, 475 instructions a WRITE
+sunrpc's PLT (veneers into vmlinux): 0 cycles, 0 instructions a WRITE
