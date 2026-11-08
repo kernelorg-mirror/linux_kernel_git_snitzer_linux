@@ -1,0 +1,7 @@
+20:21:31 t2-r311 B | total 69.48 GB/s | WRITEs 66141 | retransmits 1207 | new kernel warnings 0
+20:26:50 t2-r312 PF | total 70.67 GB/s | WRITEs 67379 | retransmits 1615 | new kernel warnings 0
+20:32:09 t2-r313 B | total 69.82 GB/s | WRITEs 66415 | retransmits 1396 | new kernel warnings 0
+20:37:28 t2-r314 PF | total 70.42 GB/s | WRITEs 67134 | retransmits 1289 | new kernel warnings 0
+20:42:47 t2-r315 B | total 69.47 GB/s | WRITEs 66150 | retransmits 1406 | new kernel warnings 0
+20:50:06 t2-r316 PF | total 70.36 GB/s | WRITEs 66864 | retransmits 1164 | new kernel warnings 0
+20:50:24 stock: sunrpc 1C2C5C459F3413804A2CEE1, /lib/modules/7.3.0-11.hs.514.canary.el10.aarch64+16k/kernel/net/sunrpc/sunrpc.ko.xz, nfsd /lib/modules/7.3.0-11.hs.514.canary.el10.aarch64+16k/kernel/fs/nfsd/nfsd.ko.xz, updates: , settled.sh audit rest: the settled setting
