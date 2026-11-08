@@ -3375,7 +3375,13 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
 	    svc_pool_can_shrink(pool))
 		ret = -ETIMEDOUT;
 
-	clear_bit(SP_TASK_PENDING, &pool->sp_flags);
+	/*
+	 * Every thread passes here each time it wakes, and the bit is
+	 * rarely set: read it first, so the pool's flags are not written
+	 * from every CPU.
+	 */
+	if (test_bit(SP_TASK_PENDING, &pool->sp_flags))
+		clear_bit(SP_TASK_PENDING, &pool->sp_flags);
 
 	if (svc_thread_should_stop(rqstp)) {
 		if (handed)

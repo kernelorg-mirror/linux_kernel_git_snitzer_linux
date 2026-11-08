@@ -552,7 +552,11 @@ static inline struct sockaddr *svc_daddr(const struct svc_rqst *rqst)
  */
 static inline bool svc_thread_should_stop(struct svc_rqst *rqstp)
 {
-	if (test_and_clear_bit(SP_NEED_VICTIM, &rqstp->rq_pool->sp_flags))
+	struct svc_pool *pool = rqstp->rq_pool;
+
+	/* read first: a test_and_clear_bit() writes the line even when clear */
+	if (test_bit(SP_NEED_VICTIM, &pool->sp_flags) &&
+	    test_and_clear_bit(SP_NEED_VICTIM, &pool->sp_flags))
 		set_bit(RQ_VICTIM, &rqstp->rq_flags);
 
 	return test_bit(RQ_VICTIM, &rqstp->rq_flags);
