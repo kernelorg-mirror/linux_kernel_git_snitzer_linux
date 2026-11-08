@@ -1,0 +1,82 @@
+====================================================================================================
+svc_recv: 1560 bytes, 3072 cycles and 1313 instructions a WRITE, IPC 0.43
+  by kind:              cycles    insns  cyc %  count
+    branches                      1656      231  53.9%     66
+    other                         1272     1030  41.4%    145
+    loads                           53       13   1.7%     64
+    calls                           44       28   1.4%     64
+    stores                          36        8   1.2%     25
+    entry/exit                      10        3   0.3%      5
+    atomics, barriers, prefetch       1        1   0.0%     17
+    prefetch                         0        0   0.0%      4
+  by source line (innermost < caller), 85% of cycles:
+      1252  40.8%  __refcount_add /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/refcount.h:288 < __refcount_inc /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/refcount.h:366
+      1192  38.8%  svc_recv /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:3264
+       356  11.6%  svc_recv /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:3278
+  hottest instructions:
+    +0x268   1220  39.7%  L2 14.23  cbz      w1, 658e8 <svc_recv+0x5f0>         /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/refcount.h:288
+    +0x054   1171  38.1%  L2  6.63  mov      x1, #0x0                           /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:3264
+    +0x098    356  11.6%  L2  1.70  tbz      w0, #0, 653a4 <svc_recv+0xac>      /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:3278
+    +0x0d0     31   1.0%  L2  0.40  cbz      w1, 65830 <svc_recv+0x538>         /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/refcount.h:288
+    +0x288     21   0.7%  L2  0.32  str      xzr, [sp, #8]                      /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2103
+    +0x058     16   0.5%  L2  0.03  cbz      w0, 65360 <svc_recv+0x68>          /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:3224
+    +0x0f8     15   0.5%  L2  0.11  cbz      x0, 65780 <svc_recv+0x488>         /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:3312
+    +0x4c4     13   0.4%  L2  0.17  ldr      w0, [x0, #24]                      /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:677
+    +0x074     11   0.4%  L2  0.12  and      w23, w0, #0xff                     /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:3264
+    +0x4c8     10   0.3%  L2  0.06  cmp      w1, w0                             /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:676
+    +0x26c      9   0.3%  L2  0.05  add      w2, w1, #0x1                       /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/refcount.h:290
+    +0x298      8   0.3%  L2  0.09  tbz      w0, #0, 65620 <svc_recv+0x328>     /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:675
+    +0x000      7   0.2%  L2  0.10  nop                                         /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:3245
+    +0x088      7   0.2%  L2  0.24  ccmp     w23, #0x0, #0x4, eq                /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:3269
+====================================================================================================
+svc_thread_should_stop: 152 bytes, 79 cycles and 15 instructions a WRITE, IPC 0.19
+  by kind:              cycles    insns  cyc %  count
+    branches                        37        5  46.5%      8
+    loads                           32        8  40.2%      4
+    entry/exit                       6        1   7.0%      2
+    other                            5        1   6.2%     15
+    atomics, barriers, prefetch       0        0   0.0%      7
+    prefetch                         0        0   0.0%      2
+  by source line (innermost < caller), 85% of cycles:
+        37  46.5%  svc_thread_should_stop /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/inc/linux/sunrpc/svc.h:563
+        14  18.2%  generic_test_bit /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:128 < svc_thread_should_stop /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/inc/linux/sunrpc/svc.h:567
+        13  16.1%  svc_thread_should_stop /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/inc/linux/sunrpc/svc.h:560
+        10  12.1%  generic_test_bit /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:128 < svc_thread_should_stop /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/inc/linux/sunrpc/svc.h:563
+  hottest instructions:
+    +0x008     37  46.5%  L2  0.37  tbz      w2, #1, 5cf04 <svc_thread_should_s /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/inc/linux/sunrpc/svc.h:563
+    +0x000     13  16.1%  L2  0.16  ldr      x1, [x0, #328]                     /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/inc/linux/sunrpc/svc.h:560
+    +0x004     10  12.1%  L2  0.18  ldr      x2, [x1, #40]                      /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:128
+    +0x034      9  12.0%  L2  0.15  ldr      x0, [x0, #1160]                    /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:128
+    +0x03c      6   7.0%  L2  0.06  ret                                         /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/inc/linux/sunrpc/svc.h:568
+    +0x038      5   6.2%  L2  0.08  ubfx     w0, w0, #4, #1                     /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:128
+====================================================================================================
+svc_thread_should_sleep: 176 bytes, 961 cycles and 303 instructions a WRITE, IPC 0.32
+  by kind:              cycles    insns  cyc %  count
+    loads                          458       51  47.6%     12
+    branches                       404      186  42.0%      9
+    entry/exit                      54       33   5.6%      6
+    other                           41       32   4.2%     14
+    stores                           3        1   0.3%      1
+    calls                            2        0   0.2%      2
+  by source line (innermost < caller), 85% of cycles:
+       620  64.6%  lwq_empty /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/lwq.h:51 < svc_thread_should_sleep /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2178
+       188  19.6%  lwq_empty /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/lwq.h:51 < svc_thread_should_sleep /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2182
+        58   6.0%  svc_thread_should_sleep /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2197
+  hottest instructions:
+    +0x034    428  44.5%  L2  1.81  ldar     x2, [x2]                           /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/lwq.h:51
+    +0x038    181  18.8%  L2  1.22  cbnz     x2, 5cfac <svc_thread_should_sleep /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/lwq.h:51
+    +0x068    165  17.2%  L2  1.48  cbnz     x2, 5cfac <svc_thread_should_sleep /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/lwq.h:51
+    +0x02c     38   4.0%  L2  0.16  tbnz     w2, #0, 5cfac <svc_thread_should_s /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2174
+    +0x04c     23   2.4%  L2  0.12  ldp      x29, x30, [sp], #32                /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2197
+    +0x060     19   1.9%  L2  0.47  add      x2, x1, #0x60                      /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/lwq.h:51
+    +0x054     17   1.7%  L2  0.11  ret                                         /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2197
+    +0x048      9   1.0%  L2  0.06  ldr      x19, [sp, #16]                     /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2197
+    +0x00c      8   0.9%  L2  0.04  tbnz     w1, #13, 5cfc0 <svc_thread_should_ /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2170
+    +0x050      8   0.9%  L2  0.06  autiasp                                     /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2197
+    +0x040      8   0.8%  L2  0.02  cbz      x2, 5cfc8 <svc_thread_should_sleep /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/lwq.h:51
+    +0x018      6   0.6%  L2  0.08  mov      x29, sp                            /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2166
+    +0x000      6   0.6%  L2  0.08  nop                                         /var/tmp/zc-run-logs/svcstack-pool-PN/rpc/sunrpc/svc_xprt.c:2166
+    +0x06c      4   0.4%  L2  0.05  ldr      x1, [x1, #104]                     /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/llist.h:218
+====================================================================================================
+all 3: 4111 cycles, 1631 instructions a WRITE
+sunrpc's PLT (veneers into vmlinux): 0 cycles, 0 instructions a WRITE
