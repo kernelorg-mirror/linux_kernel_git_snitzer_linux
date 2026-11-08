@@ -1,0 +1,11 @@
+./run259.sh: line 35: /var/tmp/zc-run-logs/t2-r259/sunrpc-text.txt: No space left on device
+./run259.sh: line 35: /var/tmp/zc-run-logs/t2-r259/sunrpc-srcversion.txt: No space left on device
+00:34:15 t2-r259 B | total 70.19 GB/s | WRITEs 66942 | retransmits 1591 | new kernel warnings 0
+mkdir: cannot create directory ‘/var/tmp/zc-run-logs/t2-r260’: No space left on device
+./run259.sh: line 19: /var/tmp/zc-run-logs/t2-r260/swap.txt: No such file or directory
+tail: cannot open '/var/tmp/zc-run-logs/t2-r260/swap.txt' for reading: No such file or directory
+00:34:16 swap to SH failed: 
+./run259.sh: line 12: /var/tmp/zc-run-logs/t2-r266/swap-stock.txt: No space left on device
+./run259.sh: line 13: /var/tmp/zc-run-logs/t2-r266/apply-stock.txt: No space left on device
+tail: cannot open '/var/tmp/zc-run-logs/t2-r266/apply-stock.txt' for reading: No such file or directory
+00:34:16 stock: sunrpc 8CEB0586E30A8CA17845711, /lib/modules/7.3.0-11.hs.514.canary.el10.aarch64+16k/updates/sunrpc.ko, nfsd /lib/modules/7.3.0-11.hs.514.canary.el10.aarch64+16k/updates/nfsd.ko, updates: auth_rpcgss.ko lockd.ko nfs_acl.ko nfs_localio.ko nfsd.ko rpcrdma.ko rpcsec_gss_krb5.ko sunrpc.ko , 
