@@ -1,0 +1,17 @@
+	struct lwq                 sp_xprts __attribute__((__aligned__(8))); /*     0    24 */
+	unsigned int               sp_id;                /*    24     4 */
+	unsigned int               sp_nrthreads;         /*    28     4 */
+	unsigned int               sp_nrthrmin;          /*    32     4 */
+	unsigned int               sp_nrthrmax;          /*    36     4 */
+	long unsigned int          sp_flags;             /*    40     8 */
+	/* --- cacheline 1 boundary (64 bytes) --- */
+	struct llist_head          sp_idle_threads __attribute__((__aligned__(64))); /*    64     8 */
+	struct list_head           sp_all_threads;       /*    72    16 */
+	struct lwq                 sp_rtc_rqsts __attribute__((__aligned__(8))); /*    88    24 */
+	struct percpu_counter      sp_messages_arrived __attribute__((__aligned__(8))); /*   112    40 */
+	/* --- cacheline 2 boundary (128 bytes) was 24 bytes ago --- */
+	struct percpu_counter      sp_sockets_queued __attribute__((__aligned__(8))); /*   152    40 */
+	/* --- cacheline 3 boundary (192 bytes) --- */
+	struct percpu_counter      sp_threads_woken __attribute__((__aligned__(8))); /*   192    40 */
+	/* size: 256, cachelines: 4, members: 12 */
+	/* padding: 24 */
