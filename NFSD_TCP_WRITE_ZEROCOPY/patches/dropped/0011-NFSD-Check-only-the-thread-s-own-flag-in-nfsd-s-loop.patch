@@ -1,0 +1,33 @@
+From ec6243032736d85d4de1f048176db24696de59ba Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Sun, 8 Nov 2026 04:34:42 +0000
+Subject: [PATCH] NFSD: Check only the thread's own flag in nfsd()'s loop
+
+nfsd()'s loop called svc_thread_should_stop() before each svc_recv(),
+reading the pool's sp_flags once a request.  On a busy pool another
+CPU has written that line while the thread handled its request, so the
+check missed, though svc_recv() checks the pool's flags itself after
+its wait and marks the thread chosen to stop with RQ_VICTIM.  Check
+that with svc_thread_chosen_to_stop().
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ fs/nfsd/nfssvc.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fs/nfsd/nfssvc.c b/fs/nfsd/nfssvc.c
+index 29ca36bb8832..450a1f3785ca 100644
+--- a/fs/nfsd/nfssvc.c
++++ b/fs/nfsd/nfssvc.c
+@@ -974,7 +974,7 @@ nfsd(void *vrqstp)
+ 	/*
+ 	 * The main request loop
+ 	 */
+-	while (!svc_thread_should_stop(rqstp)) {
++	while (!svc_thread_chosen_to_stop(rqstp)) {
+ 		switch (svc_recv(rqstp, 5 * HZ)) {
+ 		case -ETIMEDOUT:
+ 			/* No work arrived within the timeout window */
+-- 
+2.52.0
+

@@ -167,3 +167,27 @@ removed on 28 October to free space, and this is what it kept.
 They worked: every way out of the fast path ran on tardis2 (a flush, a key due for refresh, an unexport on a live mount), and `exp_find_key` left the hot path. But they saved about 0.11 us a WRITE against 0.35 estimated, too little for an A/B to see, so they were not kept. The account is `FLAMEGRAPH/54-fh-verify/README.md`.
 
 They would be worth another look on a load where a lookup costs more, for instance many more CPUs on one export. `svc_export`'s own reference is still written on every request. `build-nfsd.sh` and a KUnit module built outside the tree need `KBUILD_EXTRA_SYMBOLS` for the new export.
+
+## 0010 to 0012: rounds 72 and 73 on the pool's wakeup (8 November, Mike)
+
+`0010` adds `svc_thread_chosen_to_stop()`, `0011` uses it in nfsd()'s
+loop, and `0012` has `svc_pool_hand_idle_thread()` take the reference a
+handed transport's thread holds.  They apply in that order on
+`6887c0124e6c`, whose code is the branch's since; on the branch before
+it was consolidated they were `fc5465db0a78`, `8f395d70e9c6` and
+`51cbfc0196e3`, each reverted at the tip, and the commits and their
+reverts are kept on `kernel-7.3/canary.pre-drop-reverted`.
+
+They did what they said, but each only moved a cache miss: `0010` and
+`0011` took nfsd's loop off the pool's flags, and the miss went to
+`svc_pool_can_shrink()` in `svc_recv()` (round 72); `0012` covers only
+the transports handed to a thread, while most are queued and pay the
+same miss in `svc_xprt_dequeue()`'s reference (round 73).  Neither
+saved cycles a WRITE at matched rates.  The accounts are
+`FLAMEGRAPH/72-nfsd-loop/README.md` and `FLAMEGRAPH/73-handoff-ref/README.md`.
+
+`0010` and `0011` were written for round 71's layout, with `sp_flags`
+on the queue's line, which is dropped too (folded away in the
+consolidation, see `FLAMEGRAPH/74-b-vs-pf/README.md`); with `sp_flags`
+off that line they have less to save.  `0012` would matter if more
+transports were handed than queued.
