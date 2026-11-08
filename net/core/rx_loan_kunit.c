@@ -1693,6 +1693,8 @@ static void rx_loan_netns_budget_test(struct kunit *test)
 	rx_loan_kunit_waiter_init(&k2, false, 0);
 	KUNIT_EXPECT_FALSE(test, rx_loan_admit(&n2->write, NULL, &k2.w,
 					       &k2.cr, 40, false));
+	flush_work(&n2->write.kick_work);
+	k2.woken = 0;	/* the refusal's drain kick wakes it once, by design */
 	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base + 40);
 	rx_loan_kunit_return(&k1);
 	flush_work(&n2->write.kick_work);
