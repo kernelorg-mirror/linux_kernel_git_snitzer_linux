@@ -1,0 +1,39 @@
+struct svc_pool {
+	unsigned int               sp_id;                /*     0     4 */
+	unsigned int               sp_nrthreads;         /*     4     4 */
+	unsigned int               sp_nrthrmin;          /*     8     4 */
+	unsigned int               sp_nrthrmax;          /*    12     4 */
+	struct lwq                 sp_xprts __attribute__((__aligned__(8))); /*    16    24 */
+
+	/* XXX last struct has 1 hole */
+
+	struct lwq                 sp_rtc_rqsts __attribute__((__aligned__(8))); /*    40    24 */
+
+	/* XXX last struct has 1 hole */
+
+	/* --- cacheline 1 boundary (64 bytes) --- */
+	struct list_head           sp_all_threads;       /*    64    16 */
+	struct llist_head          sp_idle_threads;      /*    80     8 */
+	struct percpu_counter      sp_messages_arrived __attribute__((__aligned__(8))); /*    88    40 */
+
+	/* XXX last struct has 1 hole */
+
+	/* --- cacheline 2 boundary (128 bytes) --- */
+	long unsigned int          sp_flags __attribute__((__aligned__(64))); /*   128     8 */
+	struct percpu_counter      sp_sockets_queued __attribute__((__aligned__(8))); /*   136    40 */
+
+	/* XXX last struct has 1 hole */
+	/* XXX 16 bytes hole, try to pack */
+
+	/* --- cacheline 3 boundary (192 bytes) --- */
+	struct percpu_counter      sp_threads_woken __attribute__((__aligned__(64))); /*   192    40 */
+
+	/* XXX last struct has 1 hole */
+
+	/* size: 256, cachelines: 4, members: 12 */
+	/* sum members: 216, holes: 1, sum holes: 16 */
+	/* padding: 24 */
+	/* member types with holes: 5, total: 5 */
+	/* forced alignments: 6, forced holes: 1, sum forced holes: 16 */
+} __attribute__((__aligned__(64)));
+
