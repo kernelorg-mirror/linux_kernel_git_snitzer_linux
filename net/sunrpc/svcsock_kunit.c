@@ -2479,8 +2479,9 @@ static void svcsock_rx_region_fixture_free(struct svcsock_rx_region_fixture *f)
 
 static void svcsock_rx_region_fixture_remove(void *data)
 {
-	rx_loan_kunit_region_set_aside(false);
+	/* First, or the retire refunds what was set aside, not the test's. */
 	page_pool_rx_region_kunit_remove(false);
+	rx_loan_kunit_region_set_aside(false);
 	svcsock_rx_region_fixture_free(data);
 }
 
@@ -2525,10 +2526,10 @@ static void svcsock_rx_credit_orphan(struct kunit *test,
 
 /*
  * Budget 34, reserve 1, factor 100: a 10-page record costs 11.  Credit
- * charged with no region holds no region page: abandoned, it goes back to
- * the region's total, so a region carved later does not start with it
- * spent, nor does one carved while it is held.  Credit charged and
- * abandoned while a region is in place stays spent there.  Abandoned
+ * charged with no region holds no region page: the region's total never
+ * counts it, so a region carved later does not start with it spent, nor
+ * does one carved while it is held.  Credit charged and abandoned while a
+ * region is in place stays spent there until the region goes.  Abandoned
  * credit stays spent in the budget, and a later test asking for the same
  * configuration would find it unchanged: no other test uses it.
  */
@@ -2541,6 +2542,7 @@ static void svcsock_rx_credit_orphan_region_test(struct kunit *test)
 	struct svc_sock *sb = svcsock_rx_credit_sock_forget(test);
 	struct svc_sock *sc = svcsock_rx_credit_sock_forget(test);
 	const u32 len = 10 * PAGE_SIZE;
+	struct svcsock_rx_region_fixture *f;
 	long out, orphaned;
 
 	if (rx_loan_region_size())
@@ -2552,7 +2554,8 @@ static void svcsock_rx_credit_orphan_region_test(struct kunit *test)
 	orphaned = rx_loan_region_orphaned();
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
 	KUNIT_EXPECT_EQ(test, a->cr.credit, 11U);
-	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out + 11);
+	KUNIT_EXPECT_EQ(test, a->cr.region, 0U);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
 	svcsock_rx_credit_orphan(test, a);
 	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
 	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), orphaned);
@@ -2560,19 +2563,23 @@ static void svcsock_rx_credit_orphan_region_test(struct kunit *test)
 	/* Charged before the region, abandoned under it: still none of its. */
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sc, c, len));
 	KUNIT_EXPECT_EQ(test, c->cr.region, 0U);
-	svcsock_rx_region_fixture(test, 0);
+	f = svcsock_rx_region_fixture(test, 0);
 	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
 	svcsock_rx_credit_orphan(test, c);
-	/* The fixture set aside the total it was charged to. */
-	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), -11L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
 	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 0L);
 
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sb, b, len));
 	KUNIT_EXPECT_EQ(test, b->cr.credit, 11U);
 	KUNIT_EXPECT_EQ(test, b->cr.region, 11U);
 	svcsock_rx_credit_orphan(test, b);
-	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 11L);
 	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 11L);
+
+	/* The region goes, every page back: what was kept goes with it. */
+	kunit_release_action(test, svcsock_rx_region_fixture_remove, f);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), orphaned);
 }
 
 /*

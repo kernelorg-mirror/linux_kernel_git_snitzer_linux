@@ -20,6 +20,7 @@
 #include <net/page_pool/cfg.h>
 #include <net/page_pool/helpers.h>
 #include <net/page_pool/memory_provider.h>
+#include <net/rx_loan.h>
 #include <net/xdp.h>
 
 #include <linux/dma-direction.h>
@@ -778,6 +779,13 @@ fail:
  * readers (page_pool_rx_region_size(), _read_pages()) hold rcu_read_lock(),
  * so the region is unpublished and a grace period passes before it is freed.
  */
+static void rx_region_retire(struct page_pool_rx_region *r)
+{
+	debugfs_remove(r->debugfs);
+	/* Unpublished: its readers drain, and orphans' credit comes back. */
+	rx_loan_region_retire();
+}
+
 static void page_pool_rx_region_reap(void)
 {
 	struct page_pool_rx_region *r = rx_region;
@@ -808,8 +816,7 @@ static void page_pool_rx_region_reap(void)
 		if (WARN_ON_ONCE(r->slots[s].dev))
 			return;
 	WRITE_ONCE(rx_region, NULL);
-	debugfs_remove(r->debugfs);
-	synchronize_rcu();
+	rx_region_retire(r);
 	/* Free pages are in the shards and in the CPU caches. */
 	for (k = 0; k < RX_REGION_PARTS; k++) {
 		struct page_pool_rx_region_part *p = &r->part[k];
@@ -2184,8 +2191,7 @@ void page_pool_rx_region_kunit_remove(bool contig)
 	mutex_unlock(&rx_region_mutex);
 	if (!r)
 		return;
-	debugfs_remove(r->debugfs);
-	synchronize_rcu();
+	rx_region_retire(r);
 #ifdef CONFIG_CONTIG_ALLOC
 	if (contig)
 		free_contig_range(r->base_pfn, r->nr);

@@ -470,12 +470,44 @@ static void rx_loan_wake_need_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 16L);
 }
 
+/* The region's settings as a case found them, put back however it ends. */
+struct rx_loan_kunit_region_saved {
+	unsigned int pages, read_pages;
+	bool failed;
+	char *stack;
+};
+
+static void rx_loan_kunit_region_params_restore(void *data)
+{
+	struct rx_loan_kunit_region_saved *saved = data;
+
+	page_pool_rx_region_kunit_config(saved->pages, saved->read_pages,
+					 saved->failed);
+	page_pool_rx_region_kunit_param("stack", saved->stack, NULL);
+}
+
+/* Keep the region's settings as they are now, for when the case ends. */
+static void rx_loan_kunit_region_save(struct kunit *test)
+{
+	struct rx_loan_kunit_region_saved *saved;
+
+	saved = kunit_kzalloc(test, sizeof(*saved), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, saved);
+	saved->stack = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, saved->stack);
+	page_pool_rx_region_kunit_params(&saved->pages, &saved->read_pages,
+					 &saved->failed);
+	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("stack", NULL,
+							      saved->stack), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			rx_loan_kunit_region_params_restore, saved), 0);
+}
+
 /*
  * Only credit charged while a region was in place can hold its pages: a
  * record charged before the region is carved and grown after it keeps only
  * the growth spent when it is abandoned.  The rest goes back to its
- * consumer's share and to the region's total, here below the stand-in's
- * nothing: it was charged before it.
+ * consumer's share; the region's total never counted it.
  */
 static void rx_loan_orphan_carved_test(struct kunit *test)
 {
@@ -492,7 +524,7 @@ static void rx_loan_orphan_carved_test(struct kunit *test)
 	rx_loan_kunit_waiter_init(&a, false, 0);
 	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, c, &a.w, &a.cr, 12, false));
 	KUNIT_EXPECT_EQ(test, a.cr.region, 0U);
-	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out + 12);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
 
 	rx_loan_kunit_standin(test, 1024, 0);
 	base = rx_loan_region_out();
@@ -504,7 +536,7 @@ static void rx_loan_orphan_carved_test(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, a.cr.linked);
 	KUNIT_EXPECT_EQ(test, atomic_long_read(&c->out_write), 8L);
 	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 8L);
-	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base - 4);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base + 8);
 	KUNIT_EXPECT_EQ(test, lb->orphaned, 20ULL);
 	rx_loan_consumer_unregister(c);
 	rx_loan_kunit_region(0, 0);
@@ -514,23 +546,21 @@ static void rx_loan_orphan_carved_test(struct kunit *test)
 
 /*
  * A region configured but not yet carved, or whose carve failed, has a size
- * that caps charges but no pages: a record charged then holds none of its
- * pages, so an orphan gives all its credit back to its consumer's share and
- * to the region's total.
+ * but no pages: a record charged then holds none of them, so the region's
+ * total neither counts nor caps it, and an orphan gives all its credit back
+ * to its consumer's share.
  */
 static void rx_loan_orphan_uncarved_test(struct kunit *test)
 {
 	long out = rx_loan_region_out(), orphaned = rx_loan_region_orphaned();
-	unsigned int pages, read_pages;
 	struct rx_loan_consumer *c;
 	struct rx_loan_kunit_waiter a;
 	struct rx_loan_budget *lb;
-	bool failed;
 	int i;
 
 	if (page_pool_rx_region_exists() || rx_loan_region_size())
 		kunit_skip(test, "a region or a region size already exists");
-	page_pool_rx_region_kunit_params(&pages, &read_pages, &failed);
+	rx_loan_kunit_region_save(test);
 	lb = rx_loan_kunit_budget(test, 256, 0);
 	c = rx_loan_kunit_consumer(test, "c");
 	for (i = 0; i < 2; i++) {
@@ -543,7 +573,7 @@ static void rx_loan_orphan_uncarved_test(struct kunit *test)
 		KUNIT_EXPECT_TRUE(test, rx_loan_charge(&a.w, &a.cr, 20));
 		KUNIT_EXPECT_EQ(test, a.cr.credit, 20U);
 		KUNIT_EXPECT_EQ(test, a.cr.region, 0U);
-		KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out + 20);
+		KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
 		rx_loan_orphan(&a.cr, U32_MAX);
 		KUNIT_EXPECT_FALSE(test, a.cr.linked);
 		KUNIT_EXPECT_EQ(test, atomic_long_read(&c->out_write), 0L);
@@ -553,7 +583,175 @@ static void rx_loan_orphan_uncarved_test(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, page_pool_rx_region_exists());
 	KUNIT_EXPECT_EQ(test, lb->orphaned, 40ULL);
 	rx_loan_consumer_unregister(c);
-	page_pool_rx_region_kunit_config(pages, read_pages, failed);
+}
+
+/*
+ * What a record holds of the region (cr->region) follows every way its
+ * credit grows under one: a stocked admission and its stocked growth, a
+ * growth with the budget turned off, and a growth past avail onto the
+ * reserve and past the budget; a growth refused in part keeps only what
+ * it took.  Each return gives back exactly that.
+ */
+static void rx_loan_region_charge_paths_test(struct kunit *test)
+{
+	struct rx_loan_kunit_waiter s, r, q, f;
+	struct rx_loan_budget *lb, *lr, *lf;
+	long base;
+
+	rx_loan_kunit_standin(test, 1024, 0);
+	base = rx_loan_region_out();
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	rx_loan_kunit_waiter_init(&s, false, 0);
+	migrate_disable();
+	spin_lock_bh(&lb->lock);
+	lb->contended = false;
+	KUNIT_EXPECT_EQ(test, rx_loan_stock_refill_locked(lb),
+			(long)RX_LOAN_STOCK_BATCH);
+	spin_unlock_bh(&lb->lock);
+	KUNIT_EXPECT_TRUE(test, rx_loan_admit(lb, NULL, &s.w, &s.cr, 4, true));
+	KUNIT_EXPECT_TRUE(test, s.cr.stocked);
+	KUNIT_EXPECT_EQ(test, s.cr.region, 4U);
+	KUNIT_EXPECT_TRUE(test, rx_loan_charge(&s.w, &s.cr, 10));
+	KUNIT_EXPECT_TRUE(test, s.cr.stocked);
+	KUNIT_EXPECT_EQ(test, s.cr.region, 10U);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base + 10);
+	rx_loan_kunit_return(&s);
+	migrate_enable();
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base);
+
+	/* Past avail onto the reserve and past the budget: all of it held. */
+	lr = rx_loan_kunit_budget(test, 16, 4);
+	rx_loan_kunit_waiter_init(&r, false, 0);
+	rx_loan_kunit_waiter_init(&q, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lr, NULL, &r.w, &r.cr, 10, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lr, NULL, &q.w, &q.cr, 2, false));
+	/*
+	 * Not the oldest, and the avail left is in a stock, which a drained,
+	 * contended budget does not take back: it pauses, and the region gets
+	 * back what was charged for the growth.
+	 */
+	KUNIT_EXPECT_FALSE(test, rx_loan_charge(&q.w, &q.cr, 10));
+	KUNIT_EXPECT_EQ(test, q.cr.credit, 2U);
+	KUNIT_EXPECT_EQ(test, q.cr.region, 2U);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base + 12);
+	KUNIT_EXPECT_TRUE(test, rx_loan_charge(&r.w, &r.cr, 30));
+	KUNIT_EXPECT_EQ(test, r.cr.reserve, 4U);
+	KUNIT_EXPECT_EQ(test, r.cr.over, 16U);
+	KUNIT_EXPECT_EQ(test, r.cr.region, 30U);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base + 32);
+	rx_loan_unwait(&q.w);
+	rx_loan_kunit_return(&q);
+	rx_loan_kunit_return(&r);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base);
+
+	/* Turned off: in flight, it grows unthrottled, and it is all held. */
+	lf = rx_loan_kunit_budget(test, 16, 0);
+	rx_loan_kunit_waiter_init(&f, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lf, NULL, &f.w, &f.cr, 4, false));
+	spin_lock_bh(&lf->lock);
+	rx_loan_budget_stage_locked(lf, 16, 0, true);
+	spin_unlock_bh(&lf->lock);
+	KUNIT_EXPECT_TRUE(test, rx_loan_charge(&f.w, &f.cr, 20));
+	KUNIT_EXPECT_EQ(test, f.cr.over, 16U);
+	KUNIT_EXPECT_EQ(test, f.cr.region, 20U);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base + 20);
+	rx_loan_kunit_return(&f);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base);
+
+	/* Abandoned, a stocked record keeps what it charged to this region. */
+	rx_loan_kunit_waiter_init(&s, false, 0);
+	migrate_disable();
+	spin_lock_bh(&lb->lock);
+	lb->contended = false;
+	rx_loan_stock_refill_locked(lb);
+	spin_unlock_bh(&lb->lock);
+	KUNIT_EXPECT_TRUE(test, rx_loan_admit(lb, NULL, &s.w, &s.cr, 4, true));
+	KUNIT_EXPECT_TRUE(test, s.cr.stocked);
+	rx_loan_orphan(&s.cr, 2);
+	migrate_enable();
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), base + 2);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 2L);
+}
+
+/*
+ * A test's region sets the real counts aside and they come back when it
+ * goes, whatever it left: below nothing (an exact grant charged before it
+ * and given back under it, so taken off what was set aside), or spent (a
+ * record left charged, as by a failed assertion, or kept orphaned), which
+ * goes with it.
+ */
+static void rx_loan_region_set_aside_test(struct kunit *test)
+{
+	long out = rx_loan_region_out(), orphaned = rx_loan_region_orphaned();
+	long write = rx_loan_region_write_out();
+	struct rx_loan_kunit_waiter a, b;
+	struct rx_loan_budget *lb;
+
+	if (page_pool_rx_region_exists() || rx_loan_region_size())
+		kunit_skip(test, "a region or a region size already exists");
+	lb = rx_loan_kunit_budget(test, 256, 0);
+
+	KUNIT_ASSERT_TRUE(test, rx_loan_region_take(3, lb, NULL));
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out + 3);
+	rx_loan_kunit_standin(test, 1024, 0);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
+	rx_loan_region_put(3, false);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), -3L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), -3L);
+	rx_loan_kunit_region(0, 0);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), write);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), orphaned);
+
+	rx_loan_kunit_region(1024, 0);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
+	rx_loan_kunit_waiter_init(&a, false, 0);
+	rx_loan_kunit_waiter_init(&b, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &a.w, &a.cr, 5, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &b.w, &b.cr, 3, false));
+	rx_loan_orphan(&a.cr, 2);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 5L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 2L);
+	rx_loan_kunit_region(0, 0);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), write);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), orphaned);
+	/* Its region is gone with what it counted: the budget gets its own. */
+	b.cr.region = 0;
+	rx_loan_kunit_return(&b);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
+}
+
+/*
+ * A record charged with no region holds none of it: lent on to a bounce,
+ * the part lent is counted when the record returns, for the bounce to
+ * give back to the region as it does any lent credit.
+ */
+static void rx_loan_region_lend_uncarved_test(struct kunit *test)
+{
+	long out = rx_loan_region_out();
+	struct rx_loan_lend lent = {};
+	struct rx_loan_kunit_waiter a;
+	struct rx_loan_budget *lb;
+
+	if (page_pool_rx_region_exists() || rx_loan_region_size())
+		kunit_skip(test, "a region or a region size already exists");
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	rx_loan_kunit_waiter_init(&a, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, NULL, &a.w, &a.cr, 8, false));
+	KUNIT_EXPECT_EQ(test, a.cr.region, 0U);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
+	rx_loan_return(&a.cr, 0, 3, &lent);
+	KUNIT_EXPECT_EQ(test, lent.credit, 3U);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out + 3);
+	/* The bounce's return of what it was lent, as svcsock's does. */
+	rx_loan_region_put(lent.credit, false);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
+	spin_lock_bh(&lb->lock);
+	lb->avail += lent.credit;
+	lb->lent -= lent.credit;
+	spin_unlock_bh(&lb->lock);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_avail(lb), 256L);
 }
 
 /* An orphan stays spent but leaves the in-flight order. */
@@ -1742,22 +1940,6 @@ static void rx_loan_cfg_parse_expect(struct kunit *test, const char *val,
 	KUNIT_EXPECT_EQ_MSG(test, manual, want_manual, "%s", val);
 }
 
-/* The region's settings as a case found them, put back however it ends. */
-struct rx_loan_kunit_region_saved {
-	unsigned int pages, read_pages;
-	bool failed;
-	char *stack;
-};
-
-static void rx_loan_kunit_region_params_restore(void *data)
-{
-	struct rx_loan_kunit_region_saved *saved = data;
-
-	page_pool_rx_region_kunit_config(saved->pages, saved->read_pages,
-					 saved->failed);
-	page_pool_rx_region_kunit_param("stack", saved->stack, NULL);
-}
-
 #define RX_LOAN_KUNIT_CARVED_ORDER	4
 
 static void rx_loan_kunit_carved_free(struct page *base)
@@ -1843,7 +2025,6 @@ static void rx_loan_region_publish_lends_test(struct kunit *test)
  */
 static void rx_loan_region_param_test(struct kunit *test)
 {
-	struct rx_loan_kunit_region_saved *saved;
 	char *buf = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
 	char *line = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
 	unsigned int out, read_pages;
@@ -1852,18 +2033,9 @@ static void rx_loan_region_param_test(struct kunit *test)
 	bool manual;
 	int ret;
 
-	saved = kunit_kzalloc(test, sizeof(*saved), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_NULL(test, saved);
-	saved->stack = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
-	KUNIT_ASSERT_NOT_NULL(test, saved->stack);
 	KUNIT_ASSERT_NOT_NULL(test, buf);
 	KUNIT_ASSERT_NOT_NULL(test, line);
-	page_pool_rx_region_kunit_params(&saved->pages, &saved->read_pages,
-					 &saved->failed);
-	KUNIT_ASSERT_GT(test, page_pool_rx_region_kunit_param("stack", NULL,
-							      saved->stack), 0);
-	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
-			rx_loan_kunit_region_params_restore, saved), 0);
+	rx_loan_kunit_region_save(test);
 
 	rx_loan_cfg_parse_expect(test, "0", 0, false);
 	rx_loan_cfg_parse_expect(test, "auto\n", 0, false);
@@ -1929,6 +2101,235 @@ static void rx_loan_region_param_test(struct kunit *test)
 	KUNIT_EXPECT_STREQ(test, buf, "4096 (manual)\n");
 }
 
+/*
+ * Region accounting across a resize, over real KUnit regions: the pages are
+ * a region's own, and resizing one is removing it and publishing another,
+ * as page_pool_rx_region_reap() and the next pool's carve do.  Nothing is
+ * out when the case starts (rx_loan_kunit_region_set_aside()).
+ */
+struct rx_loan_kunit_resize_region {
+	struct page *base;
+	unsigned int order;
+};
+
+static void rx_loan_kunit_resize_gone(void *data)
+{
+	struct rx_loan_kunit_resize_region *rr = data;
+	unsigned long i;
+
+	page_pool_rx_region_kunit_remove(false);
+	for (i = 0; i < (1UL << rr->order); i++)
+		__free_page(rr->base + i);
+}
+
+static struct rx_loan_kunit_resize_region *
+rx_loan_kunit_resize_region(struct kunit *test, unsigned int order)
+{
+	struct rx_loan_kunit_resize_region *rr;
+	unsigned long i;
+	int ret;
+
+	rr = kunit_kzalloc(test, sizeof(*rr), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	rr->order = order;
+	rr->base = alloc_pages(GFP_KERNEL, order);
+	KUNIT_ASSERT_NOT_NULL(test, rr->base);
+	split_page(rr->base, order);
+	ret = page_pool_rx_region_kunit_install(rr->base, 1UL << order, 0);
+	if (ret) {
+		for (i = 0; i < (1UL << order); i++)
+			__free_page(rr->base + i);
+	}
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			rx_loan_kunit_resize_gone, rr), 0);
+	return rr;
+}
+
+/* Take the region away, and put one of 1 << @order pages in its place. */
+static struct rx_loan_kunit_resize_region *
+rx_loan_kunit_resize(struct kunit *test,
+		     struct rx_loan_kunit_resize_region *rr, unsigned int order)
+{
+	kunit_release_action(test, rx_loan_kunit_resize_gone, rr);
+	return rx_loan_kunit_resize_region(test, order);
+}
+
+static void rx_loan_kunit_resize_aside_off(void *data)
+{
+	rx_loan_kunit_region_set_aside(false);
+}
+
+static void rx_loan_kunit_resize_begin(struct kunit *test)
+{
+	if (page_pool_rx_region_exists() || rx_loan_region_size())
+		kunit_skip(test, "a region or a region size already exists");
+	rx_loan_kunit_region_set_aside(true);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			rx_loan_kunit_resize_aside_off, NULL), 0);
+}
+
+/*
+ * @n of the region's pages leave it: another holder keeps a reference, the
+ * one left after the give, which rx_loan_kunit_resize_gone() frees.
+ */
+static void rx_loan_kunit_resize_escape(struct kunit *test, unsigned int n)
+{
+	struct page *pages[8];
+	unsigned long part[4];
+	unsigned int i;
+
+	KUNIT_ASSERT_LE(test, n, (unsigned int)ARRAY_SIZE(pages));
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_kunit_take(false, pages, n,
+							     true), n);
+	for (i = 0; i < n; i++)
+		get_page(pages[i]);
+	page_pool_rx_region_give_pages(pages, n);
+	for (i = 0; i < n; i++)
+		KUNIT_ASSERT_EQ(test, page_ref_count(pages[i]), 1);
+	page_pool_rx_region_kunit_part(false, part);
+	KUNIT_ASSERT_EQ(test, part[3], (unsigned long)n);
+}
+
+/* Control: an orphan with no resize stays spent under its own region. */
+static void rx_loan_region_no_resize_control_test(struct kunit *test)
+{
+	struct rx_loan_kunit_resize_region *rr;
+	struct rx_loan_kunit_waiter a;
+	struct rx_loan_consumer *c;
+	struct rx_loan_budget *lb;
+
+	rx_loan_kunit_resize_begin(test);
+	rr = rx_loan_kunit_resize_region(test, 4);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	c = rx_loan_kunit_consumer(test, "c");
+	rx_loan_kunit_waiter_init(&a, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, c, &a.w, &a.cr, 6, false));
+	KUNIT_EXPECT_EQ(test, a.cr.region, 6U);
+	rx_loan_orphan(&a.cr, 4);
+	rx_loan_kunit_resize_escape(test, 4);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 4L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 4L);
+}
+
+/* Control: every record returned before and after a resize leaves nothing. */
+static void rx_loan_region_resize_returned_control_test(struct kunit *test)
+{
+	struct rx_loan_kunit_resize_region *rr;
+	struct rx_loan_kunit_waiter a, b;
+	struct rx_loan_consumer *c;
+	struct rx_loan_budget *lb;
+
+	rx_loan_kunit_resize_begin(test);
+	rr = rx_loan_kunit_resize_region(test, 4);
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	c = rx_loan_kunit_consumer(test, "c");
+	rx_loan_kunit_waiter_init(&a, false, 0);
+	rx_loan_kunit_waiter_init(&b, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, c, &a.w, &a.cr, 6, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, c, &b.w, &b.cr, 5, false));
+	rx_loan_kunit_return(&a);
+	rr = rx_loan_kunit_resize(test, rr, 5);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 5L);
+	rx_loan_kunit_return(&b);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 0L);
+	KUNIT_EXPECT_TRUE(test, rx_loan_region_take(32, lb, NULL));
+	rx_loan_region_put(32, lb->read);
+}
+
+/*
+ * Case 2: a record orphaned under the old region, its pages escaped, the
+ * region resized and everything drained: the new region, which lent none
+ * of that, shows nothing out or orphaned, and can lend all its pages.
+ */
+static void rx_loan_region_resize_orphan_drained_test(struct kunit *test)
+{
+	struct rx_loan_kunit_resize_region *rr;
+	struct rx_loan_kunit_waiter a;
+	struct rx_loan_consumer *c;
+	struct rx_loan_budget *lb;
+	bool took;
+
+	rx_loan_kunit_resize_begin(test);
+	rr = rx_loan_kunit_resize_region(test, 4);
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	c = rx_loan_kunit_consumer(test, "c");
+	rx_loan_kunit_waiter_init(&a, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, c, &a.w, &a.cr, 6, false));
+	KUNIT_EXPECT_EQ(test, a.cr.region, 6U);
+	rx_loan_orphan(&a.cr, 4);
+	rx_loan_kunit_resize_escape(test, 4);
+	rx_loan_consumer_unregister(c);
+	rr = rx_loan_kunit_resize(test, rr, 5);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_size(), 32UL);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 0L);
+	took = rx_loan_region_take(32, lb, NULL);
+	KUNIT_EXPECT_TRUE(test, took);
+	if (took)
+		rx_loan_region_put(32, lb->read);
+}
+
+/*
+ * Case 1: a record charged under the old region and abandoned under the
+ * new one: its charge is none of the new region's.
+ */
+static void rx_loan_region_resize_orphan_late_test(struct kunit *test)
+{
+	struct rx_loan_kunit_resize_region *rr;
+	struct rx_loan_kunit_waiter a;
+	struct rx_loan_consumer *c;
+	struct rx_loan_budget *lb;
+
+	rx_loan_kunit_resize_begin(test);
+	rr = rx_loan_kunit_resize_region(test, 4);
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	c = rx_loan_kunit_consumer(test, "c");
+	rx_loan_kunit_waiter_init(&a, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, c, &a.w, &a.cr, 5, false));
+	KUNIT_EXPECT_EQ(test, a.cr.region, 5U);
+	rr = rx_loan_kunit_resize(test, rr, 5);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	rx_loan_orphan(&a.cr, 5);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 0L);
+}
+
+/*
+ * Case 3: a charge taken with no region (none sized, or sized and not yet
+ * carved) holds no region page, so it is not counted in out.
+ */
+static void rx_loan_region_no_region_charge_test(struct kunit *test)
+{
+	struct rx_loan_kunit_waiter a;
+	struct rx_loan_consumer *c;
+	struct rx_loan_budget *lb;
+
+	rx_loan_kunit_resize_begin(test);
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	c = rx_loan_kunit_consumer(test, "c");
+	rx_loan_kunit_waiter_init(&a, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, c, &a.w, &a.cr, 12, false));
+	KUNIT_EXPECT_EQ(test, a.cr.region, 0U);
+	KUNIT_EXPECT_EQ_MSG(test, rx_loan_region_out(), 0L, "no region size");
+	rx_loan_kunit_return(&a);
+
+	rx_loan_kunit_region_save(test);
+	page_pool_rx_region_kunit_config(1024, 0, false);
+	KUNIT_ASSERT_NE(test, rx_loan_region_size(), 0UL);
+	KUNIT_ASSERT_FALSE(test, page_pool_rx_region_exists());
+	rx_loan_kunit_waiter_init(&a, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, c, &a.w, &a.cr, 12, false));
+	KUNIT_EXPECT_EQ(test, a.cr.region, 0U);
+	KUNIT_EXPECT_EQ_MSG(test, rx_loan_region_out(), 0L,
+			    "sized, not carved");
+	rx_loan_kunit_return(&a);
+}
+
 static struct kunit_case rx_loan_test_cases[] = {
 	KUNIT_CASE(rx_loan_region_param_test),
 	KUNIT_CASE(rx_loan_region_publish_lends_test),
@@ -1954,6 +2355,14 @@ static struct kunit_case rx_loan_test_cases[] = {
 	KUNIT_CASE(rx_loan_orphan_test),
 	KUNIT_CASE(rx_loan_orphan_carved_test),
 	KUNIT_CASE(rx_loan_orphan_uncarved_test),
+	KUNIT_CASE(rx_loan_region_no_resize_control_test),
+	KUNIT_CASE(rx_loan_region_resize_returned_control_test),
+	KUNIT_CASE(rx_loan_region_resize_orphan_drained_test),
+	KUNIT_CASE(rx_loan_region_resize_orphan_late_test),
+	KUNIT_CASE(rx_loan_region_no_region_charge_test),
+	KUNIT_CASE(rx_loan_region_charge_paths_test),
+	KUNIT_CASE(rx_loan_region_set_aside_test),
+	KUNIT_CASE(rx_loan_region_lend_uncarved_test),
 	KUNIT_CASE(rx_loan_grant_drop_test),
 	KUNIT_CASE(rx_loan_reconfigure_test),
 	KUNIT_CASE(rx_loan_stock_test),

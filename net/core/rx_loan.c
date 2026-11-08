@@ -837,7 +837,13 @@ EXPORT_SYMBOL_GPL(rx_loan_hold_release);
  * comes back.  Stocked credit is the budget's, not the region's, so a stock
  * larger than what the region has left takes nothing past it; a refusal
  * drains the stocks once (@draining) and every return after it kicks the
- * budgets (@waiting).  With no region it counts, and refuses nothing.
+ * budgets (@waiting).  A record's charge taken with no region in place
+ * holds no region page and is not counted (rx_loan_credit.region stays 0).
+ * An exact grant's is counted with no region and refused nothing: its return
+ * does not say what it charged.  @gen moves on when a region goes
+ * (rx_loan_region_retire()): a record notes it with what it charged
+ * (rx_loan_credit.region_gen), so one orphaned under a later region keeps
+ * none of it spent.
  * Write credit, every budget's but the read pools', is also counted in
  * @out_write, whatever namespace or consumer it belongs to.  A
  * write_capped budget (nvmet-tcp's, sized to the write share beside
@@ -852,6 +858,7 @@ static struct {
 	atomic_long_t	denied;
 	atomic_t	waiting;	/* refused since the last return */
 	atomic_t	draining;	/* stocks drained for a refusal */
+	atomic_t	gen;		/* the region's, for its records */
 } rx_loan_region ____cacheline_aligned_in_smp;
 
 /*
@@ -877,8 +884,10 @@ static void rx_loan_region_kick_all(void)
 /*
  * Charge @n pages to the region: false, with nothing charged, if that
  * would pass it, unless @force (a budget turned off: counted, not capped).
- * With no region size the charge is counted, not capped.  @carved, if not
- * NULL: whether a region was in place to charge, not only a size for one.
+ * @carved, if not NULL: whether a region was in place to charge, not only a
+ * size for one; if none was, nothing is charged or capped, as the caller
+ * keeps what it charged (rx_loan_credit.region).  With @carved NULL (an
+ * exact grant) and no region size the charge is counted, not capped.
  * No undo of the total: a refusal never makes another admission see a
  * total it passed.  A write_capped budget's write count is undone when the
  * total refuses it, so another such admission may briefly see it.
@@ -911,6 +920,29 @@ static bool rx_loan_region_add(atomic_long_t *ctr, long n, long cap)
 	return true;
 }
 
+/* Count @n pages out with no cap. */
+static void rx_loan_region_count(long n, bool read)
+{
+	atomic_long_add(n, &rx_loan_region.out);
+	if (!read)
+		atomic_long_add(n, &rx_loan_region.out_write);
+}
+
+/*
+ * The region's generation, a label on what a record charged: no ordering
+ * against the charge is needed or given.  Counting an orphan's kept credit
+ * once is rx_loan_orphan()'s RCU section against rx_loan_region_retire().
+ * A charge racing a retire can carry the label of a region it holds no page
+ * of.  Labelled newer, its orphan keeps up to its charge in the next
+ * region's @orphaned until that region's retire; labelled older, it keeps
+ * none and @out is short by that much until the region goes.  One record's
+ * charge at most, and only around a reap, which needs no region demand.
+ */
+static int rx_loan_region_gen(void)
+{
+	return atomic_read(&rx_loan_region.gen);
+}
+
 static bool rx_loan_region_get(long n, const struct rx_loan_budget *lb,
 			       bool force, bool *carved)
 {
@@ -920,12 +952,13 @@ static bool rx_loan_region_get(long n, const struct rx_loan_budget *lb,
 	if (n <= 0)
 		return true;
 	size = rx_loan_region_size();
-	if (carved)
+	if (carved) {
 		*carved = rx_loan_region_carved();
+		if (!*carved)
+			return true;
+	}
 	if (!size || force) {
-		atomic_long_add(n, &rx_loan_region.out);
-		if (!read)
-			atomic_long_add(n, &rx_loan_region.out_write);
+		rx_loan_region_count(n, read);
 		return true;
 	}
 	if (lb->write_capped) {
@@ -986,6 +1019,29 @@ void rx_loan_region_put(long pages, bool read)
 	rx_loan_region_returned();
 }
 EXPORT_SYMBOL_GPL(rx_loan_region_put);
+
+/**
+ * rx_loan_region_retire - a region is unpublished, every page of it back
+ *
+ * What orphaned records kept spent was counted against pages that are all
+ * back now: refund it, or the next region starts with it out for good (it
+ * is write credit: rx_loan_orphan() is only for records).  Each is counted
+ * once: rx_loan_orphan() reads @gen and adds to @orphaned in one RCU
+ * section.  A section the grace period waits for has its add in the xchg
+ * below; one it does not wait for began after the increment, sees the new
+ * @gen and keeps nothing of an older charge.  The same grace period is the
+ * one a region's lockless readers need before it is freed.  Called by the
+ * page pool, on the path that frees the region.
+ *
+ * Context: process context; sleeps.
+ */
+void rx_loan_region_retire(void)
+{
+	atomic_inc(&rx_loan_region.gen);
+	synchronize_rcu();
+	rx_loan_region_put(atomic_long_xchg(&rx_loan_region.orphaned, 0), false);
+}
+EXPORT_SYMBOL_GPL(rx_loan_region_retire);
 
 long rx_loan_region_out(void)
 {
@@ -1524,8 +1580,8 @@ static void rx_loan_consumer_uncache(struct rx_loan_consumer *c)
  * Its transports are gone, but credit they lent on (a bounce, a transmit)
  * may still be out: it returns to @c's counts as it lands, so they are
  * kept, and @c must outlive it.  Credit of records abandoned by
- * rx_loan_orphan() under a region stays spent there, and was counted as
- * orphaned then.
+ * rx_loan_orphan() under a region stays spent there until the region goes
+ * (rx_loan_region_retire()), and was counted as orphaned then.
  *
  * Context: process context; may sleep.
  */
@@ -2046,6 +2102,7 @@ bool rx_loan_admit(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
 	u32 from_avail, from_reserve;
 	bool changed, oldest, tried = false, share_only = false, carved = false;
 	LIST_HEAD(granted);
+	int gen;
 
 	if (WARN_ON_ONCE(cr->linked))
 		return true;
@@ -2060,10 +2117,12 @@ bool rx_loan_admit(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
 	    !READ_ONCE(lb->contended) && list_empty(&w->node) && warm) {
 		tried = true;
 		this_cpu_inc(lb->stock->records);
+		gen = rx_loan_region_gen();
 		if (rx_loan_stock_take_charged(lb, c, cost, &carved)) {
 			/* This CPU's stock: nobody waits, no order to keep. */
 			cr->credit = cost;
 			cr->region = carved ? cost : 0;
+			cr->region_gen = gen;
 			cr->reserve = 0;
 			cr->over = 0;
 			cr->ticket = 0;
@@ -2113,6 +2172,7 @@ bool rx_loan_admit(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
 		share_only = true;	/* never the oldest: it may pass */
 		goto deny_limit;
 	}
+	gen = rx_loan_region_gen();
 	if (!rx_loan_region_get(from_avail + from_reserve, lb, false, &carved)) {
 		rx_loan_consumer_put(c, lb->read, from_avail + from_reserve);
 		goto deny_limit;
@@ -2121,6 +2181,7 @@ bool rx_loan_admit(struct rx_loan_budget *lb, struct rx_loan_consumer *c,
 	lb->reserve -= from_reserve;
 	cr->credit = from_avail + from_reserve;
 	cr->region = carved ? cr->credit : 0;
+	cr->region_gen = gen;
 	cr->reserve = from_reserve;
 	cr->over = 0;
 	cr->ticket = w->ticket ?: lb->next_ticket++;
@@ -2157,6 +2218,18 @@ deny:
 EXPORT_SYMBOL_GPL(rx_loan_admit);
 
 /*
+ * @n more pages of @cr's credit were charged to the region of generation
+ * @gen.  A record charged again after a resize takes the newer: orphaned,
+ * it may keep a little of the older's charge too, which the next retire
+ * gives back.
+ */
+static void rx_loan_credit_region(struct rx_loan_credit *cr, long n, int gen)
+{
+	cr->region += n;
+	cr->region_gen = gen;
+}
+
+/*
  * The slow path of rx_loan_charge(): an admitted record's credit @cr must
  * grow to @held pages.  False: pause the record; @w is woken when credit
  * returns.  The growth is charged to the consumer's share (the oldest
@@ -2172,12 +2245,14 @@ bool __rx_loan_charge(struct rx_loan_waiter *w, struct rx_loan_credit *cr,
 	bool oldest, changed, limited = false, share_only = false;
 	bool carved = false;
 	long want, take, asked;
+	int gen;
 
 	want = held - cr->credit;
+	gen = rx_loan_region_gen();
 	if (cr->stocked && rx_loan_stock_take_charged(lb, c, want, &carved)) {
 		cr->credit += want;
 		if (carved)
-			cr->region += want;
+			rx_loan_credit_region(cr, want, gen);
 		return true;
 	}
 	spin_lock_bh(&lb->lock);
@@ -2196,7 +2271,7 @@ bool __rx_loan_charge(struct rx_loan_waiter *w, struct rx_loan_credit *cr,
 		cr->credit += want;
 		cr->over += want;
 		if (carved)
-			cr->region += want;
+			rx_loan_credit_region(cr, want, gen);
 		want = 0;
 	}
 	if (want && lb->avail < want && !lb->contended)
@@ -2237,10 +2312,11 @@ bool __rx_loan_charge(struct rx_loan_waiter *w, struct rx_loan_credit *cr,
 		if (want) {
 			/* Not taken: give back what was charged for it. */
 			rx_loan_consumer_put(c, lb->read, want);
-			rx_loan_region_put(want, lb->read);
+			if (carved)
+				rx_loan_region_put(want, lb->read);
 		}
 		if (carved)
-			cr->region += asked - want;
+			rx_loan_credit_region(cr, asked - want, gen);
 	}
 	if (want) {
 		w->consumer = c;
@@ -2269,7 +2345,9 @@ EXPORT_SYMBOL_GPL(__rx_loan_charge);
  * (rx_loan_cost_learn_locked()).  The consumer's share gets all of it back
  * at once, the lent part included; the region gets back what returns to
  * the budget, and the lent part when the bounce returns it
- * (rx_loan_region_put()).
+ * (rx_loan_region_put()).  Of that, the region had only what was charged
+ * while it was in place (cr->region): if the lent part is more, the rest
+ * is counted now, for the bounce to give back.
  */
 void rx_loan_return(struct rx_loan_credit *cr, unsigned int sample, u32 lend,
 		    struct rx_loan_lend *out)
@@ -2286,6 +2364,9 @@ void rx_loan_return(struct rx_loan_credit *cr, unsigned int sample, u32 lend,
 	/* The lent part stays charged until the borrower returns it. */
 	rx_loan_consumer_put(c, lb->read, (long)cr->credit - lend);
 	cr->consumer = NULL;
+	refund = (long)cr->region - lend;
+	if (refund < 0)
+		rx_loan_region_count(-refund, lb->read);
 	if (cr->stocked) {
 		/*
 		 * To this CPU's stock of the budget it came from, but for
@@ -2296,7 +2377,7 @@ void rx_loan_return(struct rx_loan_credit *cr, unsigned int sample, u32 lend,
 
 		WARN_ON_ONCE(lend > cr->credit);
 		rx_loan_cost_stash(lb, sample);
-		back = rx_loan_stock_put(lb, cr->credit - lend);
+		back = __rx_loan_stock_put(lb, cr->credit - lend, refund);
 		if (lend) {
 			this_cpu_add(lb->stock->lent, lend);
 			out->budget = lb;
@@ -2318,7 +2399,7 @@ void rx_loan_return(struct rx_loan_credit *cr, unsigned int sample, u32 lend,
 		}
 		spin_lock_bh(&lb->lock);
 		lb->avail += back;
-		refund = 0;	/* rx_loan_stock_put() refunded it */
+		refund = 0;	/* __rx_loan_stock_put() refunded it */
 		rx_loan_cost_fold_cpu_locked(lb, raw_cpu_ptr(lb->stock));
 		if (!lend)
 			this_cpu_dec(lb->stock->records);
@@ -2342,7 +2423,6 @@ void rx_loan_return(struct rx_loan_credit *cr, unsigned int sample, u32 lend,
 	lb->inflight_count--;
 	lb->reserve += cr->reserve;
 	lb->avail += cr->credit - cr->reserve - cr->over;
-	refund = cr->credit;
 	rx_loan_cost_learn_locked(lb, sample);
 	cr->credit = 0;
 	cr->region = 0;
@@ -2371,8 +2451,8 @@ EXPORT_SYMBOL_GPL(rx_loan_return);
  * region's total too.  The rest, charged before the region was carved (or
  * after its carve failed), holds no region page: it goes back to both, or
  * the region, carved later, would keep it spent for good.  So does all of
- * it if the region is no longer in place (only a test's stand-in is ever
- * taken away).
+ * it if the region it was charged under is gone (rx_loan_region_retire()):
+ * its pages are back, and what it charged was counted against that one.
  */
 void rx_loan_orphan(struct rx_loan_credit *cr, u32 held)
 {
@@ -2386,18 +2466,23 @@ void rx_loan_orphan(struct rx_loan_credit *cr, u32 held)
 	if (!cr->linked)
 		return;
 	lb = cr->budget;
+	WARN_ON_ONCE(lb->read);
 	keep = min(held, cr->credit);
 	back = cr->credit - keep;
 	over = min(back, cr->over);
 	reserve = min(back - over, cr->reserve);
-	kept = rx_loan_region_carved() ? min_t(long, keep, cr->region) : 0;
-	refund = cr->credit - kept;
-	rx_loan_consumer_put(cr->consumer, lb->read, refund);
+	/* In orphaned by the end of the section: see rx_loan_region_retire(). */
+	rcu_read_lock();
+	kept = rx_loan_region_carved() &&
+	       cr->region_gen == rx_loan_region_gen() ?
+	       min_t(long, keep, cr->region) : 0;
+	atomic_long_add(kept, &rx_loan_region.orphaned);
+	rcu_read_unlock();
+	rx_loan_consumer_put(cr->consumer, lb->read, cr->credit - kept);
+	refund = cr->region - kept;
 	/* A stocked record's credit is all ordinary: to the stock, as returned. */
-	if (stocked && back) {
-		spill = rx_loan_stock_put(lb, back);
-		refund -= back;	/* rx_loan_stock_put() refunded it */
-	}
+	if (stocked && back)
+		spill = __rx_loan_stock_put(lb, back, 0);
 	spin_lock_bh(&lb->lock);
 	if (stocked) {
 		/* Not on the in-flight list: only its holder count goes. */
@@ -2411,7 +2496,6 @@ void rx_loan_orphan(struct rx_loan_credit *cr, u32 held)
 		lb->avail += back - over - reserve;
 	}
 	lb->orphaned += keep - min(keep, cr->over - over);
-	atomic_long_add(kept, &rx_loan_region.orphaned);
 	cr->credit = 0;
 	cr->region = 0;
 	cr->reserve = 0;

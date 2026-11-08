@@ -464,6 +464,7 @@ struct rx_loan_credit {
 	u32			over;
 	/* of credit, what was charged while a region was in place */
 	u32			region;
+	int			region_gen;	/* of that region */
 	bool			linked;
 	/* admitted from a CPU's stock: off the budget's in-flight list */
 	bool			stocked;
@@ -672,6 +673,14 @@ long rx_loan_stock_refill_locked(struct rx_loan_budget *lb);
 bool rx_loan_region_take(long pages, const struct rx_loan_budget *lb,
 			 bool *carved);
 void rx_loan_region_put(long pages, bool read);
+#if IS_ENABLED(CONFIG_RX_LOAN)
+void rx_loan_region_retire(void);
+#else
+static inline void rx_loan_region_retire(void)
+{
+	synchronize_rcu();
+}
+#endif
 
 /*
  * Take @n pages of credit from this CPU's stock, with no lock.  The caller
@@ -706,18 +715,18 @@ static inline bool rx_loan_stock_take(struct rx_loan_budget *lb, long n)
 }
 
 /*
- * Return @n pages of credit to this CPU's stock, and so @n pages to the
- * region, which charged them at rx_loan_stock_take().  Returns what must go
- * to @lb's avail under its lock instead (already refunded to the region):
- * all of it while @lb is contended, else what a full stock spills (all but
- * a batch).
+ * Return @n pages of credit to this CPU's stock, and @region pages to the
+ * region, what of them it charged.  Returns what must go to @lb's avail
+ * under its lock instead (already refunded to the region): all of it while
+ * @lb is contended, else what a full stock spills (all but a batch).
  */
-static inline long rx_loan_stock_put(struct rx_loan_budget *lb, long n)
+static inline long __rx_loan_stock_put(struct rx_loan_budget *lb, long n,
+				       long region)
 {
 	atomic_long_t *pages = &raw_cpu_ptr(lb->stock)->pages;
 	long v, keep;
 
-	rx_loan_region_put(n, lb->read);
+	rx_loan_region_put(region, lb->read);
 	if (READ_ONCE(lb->contended))
 		return n;
 	v = atomic_long_add_return(n, pages);
@@ -733,6 +742,12 @@ static inline long rx_loan_stock_put(struct rx_loan_budget *lb, long n)
 		return v - keep;
 	}
 	return 0;
+}
+
+/* Return @n pages rx_loan_stock_take() took: to the stock and the region. */
+static inline long rx_loan_stock_put(struct rx_loan_budget *lb, long n)
+{
+	return __rx_loan_stock_put(lb, n, n);
 }
 
 /*
