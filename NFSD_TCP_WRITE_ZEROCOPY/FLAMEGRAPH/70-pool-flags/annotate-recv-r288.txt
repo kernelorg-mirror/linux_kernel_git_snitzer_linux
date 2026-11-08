@@ -1,0 +1,84 @@
+====================================================================================================
+svc_recv: 1560 bytes, 2758 cycles and 914 instructions a WRITE, IPC 0.33
+  by kind:              cycles    insns  cyc %  count
+    branches                      1353      221  49.0%     66
+    other                         1241      645  45.0%    145
+    loads                           67       21   2.4%     64
+    calls                           50       18   1.8%     64
+    stores                          39        8   1.4%     25
+    entry/exit                       9        1   0.3%      5
+    atomics, barriers, prefetch       1        0   0.0%     17
+    prefetch                         0        0   0.0%      4
+  by source line (innermost < caller), 85% of cycles:
+      1212  43.9%  __refcount_add /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/refcount.h:288 < __refcount_inc /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/refcount.h:366
+      1177  42.7%  svc_recv /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:3264
+  hottest instructions:
+    +0x268   1190  43.2%  L2 13.98  cbz      w1, 658e8 <svc_recv+0x5f0>         /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/refcount.h:288
+    +0x054   1163  42.2%  L2  6.39  mov      x1, #0x0                           /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:3264
+    +0x0f8     58   2.1%  L2  0.40  cbz      x0, 65780 <svc_recv+0x488>         /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:3312
+    +0x098     54   2.0%  L2  0.40  tbz      w0, #0, 653a4 <svc_recv+0xac>      /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:3278
+    +0x288     26   0.9%  L2  0.26  str      xzr, [sp, #8]                      /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:2103
+    +0x0d0     22   0.8%  L2  0.59  cbz      w1, 65830 <svc_recv+0x538>         /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/refcount.h:288
+    +0x230     18   0.7%  L2  0.53  ldr      x1, [x19, #328]                    /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:3171
+    +0x328     18   0.6%  L2  0.25  ldr      x6, [x19, #320]                    /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:3201
+    +0x278     12   0.4%  L2  0.09  ldr      x27, [sp, #128]                    /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/refcount.h:290
+    +0x04c     10   0.4%  L2  0.04  tbz      w0, #0, 6541c <svc_recv+0x124>     /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:3253
+    +0x058      9   0.3%  L2  0.03  cbz      w0, 65360 <svc_recv+0x68>          /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:3224
+    +0x088      8   0.3%  L2  0.29  ccmp     w23, #0x0, #0x4, eq                /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:3269
+    +0x26c      7   0.3%  L2  0.05  add      w2, w1, #0x1                       /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/linux/refcount.h:290
+    +0x074      7   0.3%  L2  0.05  and      w23, w0, #0xff                     /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/sunrpc/svc_xprt.c:3264
+====================================================================================================
+__lwq_dequeue: 160 bytes, 389 cycles and 57 instructions a WRITE, IPC 0.15
+  by kind:              cycles    insns  cyc %  count
+    atomics, barriers, prefetch     148        9  38.0%      3
+    stores                         121       10  31.0%      4
+    branches                        58       19  14.8%      7
+    entry/exit                      27        9   6.8%      5
+    other                           18        4   4.6%      9
+    calls                           12        4   3.1%      6
+    loads                            6        1   1.7%      5
+    prefetch                         0        0   0.0%      1
+  by source line (innermost < caller), 85% of cycles:
+       149  38.3%  __xchg_case_mb_64 arch/arm64/include/asm/cmpxchg.h:60 < __arch_xchg_mb arch/arm64/include/asm/cmpxchg.h:87
+       120  30.9%  __lwq_dequeue lib/lwq.c:35
+        30   7.6%  __lwq_dequeue lib/lwq.c:27
+        29   7.5%  lwq_empty include/linux/lwq.h:51 < __lwq_dequeue lib/lwq.c:23
+        25   6.5%  __lwq_dequeue lib/lwq.c:20
+  hottest instructions:
+    +0x078    148  38.0%  L2  0.58  ldxr     x0, [x2]                           arch/arm64/include/asm/cmpxchg.h:60
+    +0x03c    120  30.9%  L2  1.04  str      x0, [x19, #8]                      lib/lwq.c:35
+    +0x01c     23   5.9%  L2  0.30  cbnz     x0, ffff800080841688 <__lwq_dequeu include/linux/lwq.h:51
+    +0x000     16   4.1%  L2  0.33  paciasp                                     lib/lwq.c:20
+    +0x034     15   3.9%  L2  0.08  cbz      x20, ffff8000808416bc <__lwq_deque lib/lwq.c:27
+    +0x060     14   3.7%  L2  0.07  cbz      x0, ffff8000808416a0 <__lwq_dequeu lib/lwq.c:27
+    +0x08c      9   2.2%  L2  0.12  cbz      x0, ffff8000808416f8 <__lwq_dequeu lib/lwq.c:31
+    +0x004      5   1.4%  L2  0.09  stp      x29, x30, [sp, #-32]!              lib/lwq.c:20
+    +0x028      5   1.4%  L2  0.09  mov      x0, x19                            include/linux/spinlock.h:347
+    +0x024      4   1.1%  L2  0.04  cbz      x20, ffff8000808416a8 <__lwq_deque include/linux/lwq.h:51
+    +0x090      3   0.8%  L2  0.04  mov      x20, x0                            lib/lwq.c:30
+    +0x050      3   0.7%  L2  0.02  ldp      x29, x30, [sp], #32                lib/lwq.c:38
+    +0x054      2   0.6%  L2  0.05  autiasp                                     lib/lwq.c:38
+    +0x040      2   0.6%  L2  0.01  mov      x0, x19                            include/linux/spinlock.h:401
+====================================================================================================
+svc_thread_should_stop: 152 bytes, 96 cycles and 29 instructions a WRITE, IPC 0.30
+  by kind:              cycles    insns  cyc %  count
+    branches                        62       18  64.5%      8
+    loads                           26        8  27.5%      4
+    other                            5        2   4.9%     15
+    entry/exit                       3        1   3.2%      2
+    atomics, barriers, prefetch       0        0   0.0%      7
+    prefetch                         0        0   0.0%      2
+  by source line (innermost < caller), 85% of cycles:
+        62  64.5%  svc_thread_should_stop /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/inc/linux/sunrpc/svc.h:563
+        15  16.1%  generic_test_bit /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:128 < svc_thread_should_stop /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/inc/linux/sunrpc/svc.h:567
+         9   9.8%  generic_test_bit /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:128 < svc_thread_should_stop /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/inc/linux/sunrpc/svc.h:563
+  hottest instructions:
+    +0x008     62  64.5%  L2  0.65  tbz      w2, #1, 5cf04 <svc_thread_should_s /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/inc/linux/sunrpc/svc.h:563
+    +0x034     11  11.2%  L2  0.13  ldr      x0, [x0, #1160]                    /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:128
+    +0x004      9   9.8%  L2  0.20  ldr      x2, [x1, #72]                      /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:128
+    +0x000      6   6.5%  L2  0.22  ldr      x1, [x0, #328]                     /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/inc/linux/sunrpc/svc.h:560
+    +0x038      5   4.9%  L2  0.09  ubfx     w0, w0, #4, #1                     /usr/src/kernels/7.3.0-11.hs.514.canary.el10.aarch64+16k/include/asm-generic/bitops/generic-non-atomic.h:128
+    +0x03c      3   3.2%  L2  0.07  ret                                         /var/tmp/zc-run-logs/svcstack-pool-PF/rpc/inc/linux/sunrpc/svc.h:568
+====================================================================================================
+all 3: 3243 cycles, 1000 instructions a WRITE
+sunrpc's PLT (veneers into vmlinux): 0 cycles, 0 instructions a WRITE
