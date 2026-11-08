@@ -1,0 +1,52 @@
+From c7e3348def349446159e001134ab246260762939 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Sun, 8 Nov 2026 04:34:42 +0000
+Subject: [PATCH] SUNRPC: Add svc_thread_chosen_to_stop()
+
+A service thread's loop calls svc_thread_should_stop() once a request
+before it calls svc_recv() again, and svc_recv() calls it again after
+its wait.  Each call reads the pool's sp_flags, which other CPUs write
+while the thread handles its request, so the loop's call takes a cache
+miss on a busy pool for a check svc_recv() is about to repeat.
+
+Add svc_thread_chosen_to_stop(), which reads only RQ_VICTIM in the
+thread's own rq_flags: svc_recv() sets it in the thread that takes
+SP_NEED_VICTIM, on every path that returns without a request.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ include/linux/sunrpc/svc.h | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/include/linux/sunrpc/svc.h b/include/linux/sunrpc/svc.h
+index 311d14aa6355..3bb4a084b21b 100644
+--- a/include/linux/sunrpc/svc.h
++++ b/include/linux/sunrpc/svc.h
+@@ -560,6 +560,24 @@ static inline bool svc_thread_should_stop(struct svc_rqst *rqstp)
+ 	return test_bit(RQ_VICTIM, &rqstp->rq_flags);
+ }
+ 
++/**
++ * svc_thread_chosen_to_stop - check if this thread has been told to stop
++ * @rqstp: the thread that might need to stop
++ *
++ * svc_recv() calls svc_thread_should_stop() on each pass, which makes the
++ * thread that takes SP_NEED_VICTIM a victim with RQ_VICTIM.  A thread's
++ * loop around svc_recv() can read that flag in its own rq_flags instead
++ * of the pool's flags, which other CPUs write while it handles a request.
++ *
++ * Return values:
++ *   %true: caller should invoke svc_exit_thread()
++ *   %false: caller should do nothing
++ */
++static inline bool svc_thread_chosen_to_stop(const struct svc_rqst *rqstp)
++{
++	return test_bit(RQ_VICTIM, &rqstp->rq_flags);
++}
++
+ /**
+  * svc_thread_init_status - report whether thread has initialised successfully
+  * @rqstp: the thread in question
+-- 
+2.52.0
+

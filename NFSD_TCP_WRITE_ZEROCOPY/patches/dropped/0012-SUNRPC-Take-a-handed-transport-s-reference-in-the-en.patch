@@ -1,0 +1,125 @@
+From b8d8fc5b48776bac48fe3db2dae8cd5a8717d306 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Sun, 8 Nov 2026 16:45:03 +0000
+Subject: [PATCH] SUNRPC: Take a handed transport's reference in the enqueuer
+
+A thread that svc_pool_hand_idle_thread() hands a transport takes its
+reference with svc_xprt_get() after it wakes.  By then the enqueuer,
+which has just set XPT_BUSY in the same cache line, has the line, so
+the thread's refcount increment waits for it to come across.
+
+Take the reference in svc_pool_hand_idle_thread(), before the
+transport is stored for the thread, while the enqueuing CPU still
+holds the line.  A thread that does not serve a handed transport
+queues it again and drops the reference.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ net/sunrpc/svc.c      | 13 ++++++++++---
+ net/sunrpc/svc_xprt.c | 22 +++++++++++++++-------
+ 2 files changed, 25 insertions(+), 10 deletions(-)
+
+diff --git a/net/sunrpc/svc.c b/net/sunrpc/svc.c
+index 458015bca5ba..38cc300b3780 100644
+--- a/net/sunrpc/svc.c
++++ b/net/sunrpc/svc.c
+@@ -1237,9 +1237,13 @@ EXPORT_SYMBOL_GPL(svc_pool_wake_idle_thread);
+  * sp_xprts, whose lock it does not take.  The thread waits for the store
+  * of @xprt that follows the claim (svc_thread_take_handoff()).
+  *
+- * Return: true if the thread has @xprt.  false leaves @xprt with the
+- * caller, which queues it; the thread a false return claimed, if any,
+- * then stands for that queued work.
++ * The reference the thread holds on @xprt while it serves it is taken
++ * here, by the enqueuer, which has just written @xprt's flags (XPT_BUSY)
++ * and so holds the line with its refcount.
++ *
++ * Return: true if the thread has @xprt, with a reference for it.  false
++ * leaves @xprt with the caller, which queues it; the thread a false
++ * return claimed, if any, then stands for that queued work.
+  */
+ bool svc_pool_hand_idle_thread(struct svc_pool *pool, struct svc_xprt *xprt)
+ {
+@@ -1269,8 +1273,11 @@ bool svc_pool_hand_idle_thread(struct svc_pool *pool, struct svc_xprt *xprt)
+ 	 * slot before it can be claimed again; a full slot is a transport
+ 	 * the thread has not taken yet, so this one is queued instead.
+ 	 */
++	svc_xprt_get(xprt);
+ 	handed = !cmpxchg_release(&rqstp->rq_handoff, NULL, xprt);
+ 	preempt_enable();
++	if (!handed)
++		svc_xprt_put(xprt);
+ 	/* The cmpxchg() of the claim orders it before the task_is_running()
+ 	 * read, as test_and_set_bit() does in svc_pool_wake_idle_thread().
+ 	 */
+diff --git a/net/sunrpc/svc_xprt.c b/net/sunrpc/svc_xprt.c
+index 534206a16149..7bbe458e03ff 100644
+--- a/net/sunrpc/svc_xprt.c
++++ b/net/sunrpc/svc_xprt.c
+@@ -2127,9 +2127,10 @@ static struct svc_xprt *svc_thread_steal(struct svc_rqst *rqstp,
+ 
+ /*
+  * Take the transport svc_pool_hand_idle_thread() gave this thread, if
+- * any.  Its claim (RQ_HANDOFF) comes before its store of the transport,
+- * a few instructions later with preemption off, so wait for the store.
+- * The slot is emptied before RQ_HANDOFF is cleared, which a new claim
++ * any, with the reference it took for the thread.  Its claim
++ * (RQ_HANDOFF) comes before its store of the transport, a few
++ * instructions later with preemption off, so wait for the store.  The
++ * slot is emptied before RQ_HANDOFF is cleared, which a new claim
+  * needs, so it is never filled twice.
+  */
+ static struct svc_xprt *svc_thread_take_handoff(struct svc_rqst *rqstp)
+@@ -2144,6 +2145,13 @@ static struct svc_xprt *svc_thread_take_handoff(struct svc_rqst *rqstp)
+ 	return xprt;
+ }
+ 
++/* Queue again a transport handed to a thread that will not serve it. */
++static void svc_thread_requeue_handoff(struct svc_xprt *xprt)
++{
++	svc_xprt_enqueue_thread(xprt);
++	svc_xprt_put(xprt);
++}
++
+ /**
+  * svc_thread_return_handoff - give back a transport handed to an exiting thread
+  * @rqstp: a thread that is leaving its pool
+@@ -2158,7 +2166,7 @@ void svc_thread_return_handoff(struct svc_rqst *rqstp)
+ 	set_bit(RQ_WAKING, &rqstp->rq_flags);
+ 	xprt = svc_thread_take_handoff(rqstp);
+ 	if (xprt)
+-		svc_xprt_enqueue_thread(xprt);
++		svc_thread_requeue_handoff(xprt);
+ }
+ 
+ static bool
+@@ -2344,7 +2352,7 @@ static bool svc_thread_wait_for_work(struct svc_rqst *rqstp, long timeo,
+ 
+ 				xprt = svc_thread_take_handoff(rqstp);
+ 				if (xprt)
+-					svc_xprt_enqueue_thread(xprt);
++					svc_thread_requeue_handoff(xprt);
+ 				else
+ 					svc_thread_pass_claim(rqstp);
+ 			} else
+@@ -3284,7 +3292,7 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
+ 
+ 	if (svc_thread_should_stop(rqstp)) {
+ 		if (handed)
+-			svc_xprt_enqueue_thread(handed);
++			svc_thread_requeue_handoff(handed);
+ 		/* a pool losing its last thread leaves its queues to siblings */
+ 		svc_thread_wake_next(rqstp, pool);
+ 		return ret;
+@@ -3298,7 +3306,7 @@ int svc_recv(struct svc_rqst *rqstp, long timeo)
+ 
+ 	from = pool;
+ 	if (handed) {
+-		svc_xprt_get(handed);
++		/* svc_pool_hand_idle_thread() took the reference */
+ 		rqstp->rq_xprt = handed;
+ 	} else {
+ 		rqstp->rq_xprt = svc_xprt_dequeue(pool);
+-- 
+2.52.0
+
