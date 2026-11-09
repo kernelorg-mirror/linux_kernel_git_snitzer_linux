@@ -1,0 +1,2 @@
+05:32:31 t2-r326 mark Y | total 70.08 GB/s | WRITEs 66744 | retransmits 1051 | region pages in use at most (the kernel's mark, exact): 8092 | new kernel warnings 0
+05:38:13 t2-r327 mark N | total 69.61 GB/s | WRITEs 66246 | retransmits 2783 | region pages in use at most: 9551 | new kernel warnings 0

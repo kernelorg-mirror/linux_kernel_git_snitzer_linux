@@ -90,6 +90,14 @@ owed).  Suggested next: the loan's per-segment bookkeeping (28k cycles
 a WRITE), after a call-graph profile.
 `FLAMEGRAPH/76-canary-baseline/README.md`.
 
+**Round 77, before any code (9 November, `t2-r326`, `t2-r327`):** the
+held mark's exact peak is 8092 pages, under 514's 8949 and 9134, so no
+rise.  The call graph puts the loan's own code at about 22k cycles a
+WRITE at receive (three passes over each skb's frags: prefetch 2.9k,
+region count 2.7k, the borrowing walk 10.7k) and 14k at release.
+Suggested first change: take the region count in the prefetch's pass.
+`FLAMEGRAPH/77-loan-walk/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

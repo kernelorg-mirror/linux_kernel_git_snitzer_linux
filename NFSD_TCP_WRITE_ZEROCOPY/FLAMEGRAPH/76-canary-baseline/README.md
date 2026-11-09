@@ -46,7 +46,9 @@ line and `t2-r324` and `t2-r325` ran on it ([run323-first.out](run323-first.out)
   the region" in `xeu-rig/README.md`), so it does not show a rise by
   itself, but it does not rule one out: one run with
   `page_pool.rx_region_held_mark=Y` gives the exact peak to set beside
-  514's (about 7,600).
+  514's.  It ran in round 77: 8092 exact, under 514's 8949 and 9134
+  (`t2-r199`, `t2-r200`); the "about 7,600" this line gave for 514 at
+  first was not a measured exact peak.
 
 ## Where the canary's cycles are ([top-canary.txt](top-canary.txt))
 
