@@ -136,6 +136,19 @@ their received, save and restore, and round 79's takeover misses.  That
 is many times what the prefetches could save.  No code is written.
 `FLAMEGRAPH/81-thread-core/README.md`.
 
+**Round 82, staying with the record (9 November, `t2-r337..r344`):** a
+thread that read a piece of a loaned record keeps it and sleeps until
+`svc_data_ready()` wakes it for the rest.  This is
+`svc_tcp_rx_stay_us`, on the local branch `kernel-7.3/canary.ST`
+(`02a9b93793f7`); the whole server stack is swapped in, since the new
+`svc_sock` field changes sunrpc's symbol versions.  It works: about 22
+million waits a run, nearly all ending with data, and 71% fewer threads
+woken.  But the rate is 2.3 GB/s lower (68.44 against 70.72, B under A in
+every pair) at the same cycles a WRITE (242.3k against 243.4k): the pool's
+costs and the table's takeover misses went away, and a sleep and wake on
+every piece came in their place.  Not kept as it is.  The stock stack is
+back.  `FLAMEGRAPH/82-thread-stay/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

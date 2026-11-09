@@ -1,0 +1,10 @@
+18:56:07 stack in: sunrpc 8A37E19FDA9673122049930, nfsd F4B404A9ADAD6BCA2C9B64E
+19:01:16 t2-r337 A stay_us 0 | total 71.32 GB/s | WRITEs 68064, threads woken 289818 | retransmits 1922 | 11747 | stay stayed 0 woken 0 left 0 | new kernel warnings 0
+19:06:27 t2-r338 B stay_us 1000 | total 69.33 GB/s | WRITEs 66003, threads woken 84793 | retransmits 1721 | 9749 | stay stayed 22037890 woken 22037149 left 741 | new kernel warnings 0
+19:11:33 t2-r339 A stay_us 0 | total 71.24 GB/s | WRITEs 67906, threads woken 290955 | retransmits 1850 | 10595 | stay stayed 22037890 woken 22037149 left 741 | new kernel warnings 0
+19:16:44 t2-r340 B stay_us 1000 | total 68.01 GB/s | WRITEs 64495, threads woken 82981 | retransmits 1137 | 7508 | stay stayed 43792806 woken 43791579 left 1227 | new kernel warnings 0
+19:21:51 t2-r341 A stay_us 0 | total 69.59 GB/s | WRITEs 66188, threads woken 292042 | retransmits 1261 | 8488 | stay stayed 43792806 woken 43791579 left 1227 | new kernel warnings 0
+19:27:02 t2-r342 B stay_us 1000 | total 67.97 GB/s | WRITEs 64860, threads woken 83442 | retransmits 1100 | 8602 | stay stayed 65446061 woken 65444169 left 1892 | new kernel warnings 0
+19:31:58 t2-r343 AH stay_us 0 | total 70.58 GB/s | WRITEs 67224, threads woken 292423 | retransmits 1335 | 11738 | stay stayed 65446061 woken 65444169 left 1892 | new kernel warnings 0
+19:36:54 t2-r344 BH stay_us 1000 | total 68.74 GB/s | WRITEs 65413, threads woken 84093 | retransmits 1392 | 9907 | stay stayed 87347555 woken 87345029 left 2526 | new kernel warnings 0
+19:37:10 stock: sunrpc 2A2297D3850E37768921BCC, /lib/modules/7.3.3-13.hs.519.canary.el10.aarch64+16k/kernel/net/sunrpc/sunrpc.ko.xz, updates: , settled.sh audit rest: the settled setting
