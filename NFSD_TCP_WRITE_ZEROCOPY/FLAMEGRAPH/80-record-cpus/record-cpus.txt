@@ -1,0 +1,81 @@
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/80-record-cpus/record-cpus.bt:27:35-40: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @resume_gap_us = hist((uint64)(nsecs - @lastt[$b]) / 1000);
+                                           ~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/80-record-cpus/record-cpus.bt:27:43-53: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @resume_gap_us = hist((uint64)(nsecs - @lastt[$b]) / 1000);
+                                                   ~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/80-record-cpus/record-cpus.bt:49:48-53: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @release_after_last_piece_us = hist((uint64)(nsecs - @lastt[$b]) / 1000);
+                                                     ~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/80-record-cpus/record-cpus.bt:49:56-66: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @release_after_last_piece_us = hist((uint64)(nsecs - @lastt[$b]) / 1000);
+                                                             ~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/80-record-cpus/record-cpus.bt:51:3-18: WARNING: Return value discarded.
+        delete(@np[$b]);
+        ~~~~~~~~~~~~~~~
+Attached 5 probes
+
+
+@entries_at_release:
+[128, 256)        335141 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@first_piece_cpu:
+[8, 16)            58984 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  |
+[16, 24)           60505 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[24, 32)           59377 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ |
+[32, 40)           58969 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  |
+[40, 48)           54952 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     |
+[48, 56)           57702 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   |
+
+@pieces_a_record:
+[1]                    3 |                                                    |
+[2]                    6 |                                                    |
+[3]                    7 |                                                    |
+[4]                  141 |                                                    |
+[5]                61305 |@@@@@@@@@@@@@                                       |
+[6]               240414 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[7]                33263 |@@@@@@@                                             |
+[8]                    2 |                                                    |
+
+@records_started: 350489
+@release_after_last_piece_us:
+[128, 256)        119202 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@            |
+[256, 512)        153223 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          57593 |@@@@@@@@@@@@@@@@@@@                                 |
+[1K, 2K)            2024 |                                                    |
+[2K, 4K)            1591 |                                                    |
+[4K, 8K)            1343 |                                                    |
+[8K, 16K)            165 |                                                    |
+
+@release_cpu_other: 9779
+@release_cpu_same_as_first_piece: 7807
+@release_cpu_same_as_last_piece: 325362
+@released: 335141
+@resume_entries:
+[1]                11752 |                                                    |
+[2, 4)             24940 |@                                                   |
+[4, 8)             51797 |@@@                                                 |
+[8, 16)           107057 |@@@@@@                                              |
+[16, 32)          228246 |@@@@@@@@@@@@@@                                      |
+[32, 64)          415763 |@@@@@@@@@@@@@@@@@@@@@@@@@@                          |
+[64, 128)         805818 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[128, 256)         77423 |@@@@                                                |
+
+@resume_gap_us:
+[4, 8)               396 |                                                    |
+[8, 16)            11449 |                                                    |
+[16, 32)          180797 |@@@@@@@@                                            |
+[32, 64)         1054013 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[64, 128)         290492 |@@@@@@@@@@@@@@                                      |
+[128, 256)        180271 |@@@@@@@@                                            |
+[256, 512)          3562 |                                                    |
+[512, 1K)            812 |                                                    |
+[1K, 2K)              56 |                                                    |
+[2K, 4K)             382 |                                                    |
+[4K, 8K)             564 |                                                    |
+[8K, 16K)              0 |                                                    |
+[16K, 32K)             0 |                                                    |
+[32K, 64K)             2 |                                                    |
+
+@resume_other_cpu: 1601867
+@resume_same_cpu: 120929

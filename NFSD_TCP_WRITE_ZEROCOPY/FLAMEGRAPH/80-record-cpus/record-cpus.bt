@@ -1,0 +1,61 @@
+// record-cpus.bt: for each loaned record, keyed by its loan table's bvec
+// array (the table moves between a thread's state and the transport's
+// with svc_tcp_rx_exchange()), the CPU of each piece that walks its
+// skbs and the CPU of its release.  A piece is one svc_tcp_recvfrom()
+// call; a record starts at a piece whose first walk finds the table
+// empty.  Aggregated in the kernel; five seconds from attach.
+fentry:sunrpc:svc_tcp_recvfrom { @call[tid] = nsecs; }
+
+fentry:sunrpc:svc_tcp_rx_walk_skb
+{
+	$s = args.walk->rqstp->rq_tcp_rx;
+	$b = (uint64)$s->lt.bvec;
+	if (@piece[$b] != @call[tid]) {
+		@piece[$b] = @call[tid];
+		if ($s->lt.count == 0) {
+			@records_started = count();
+			@np[$b] = 1;
+			@first[$b] = cpu;
+			@first_piece_cpu = lhist(cpu, 0, 64, 8);
+		} else {
+			@np[$b] = @np[$b] + 1;
+			if (cpu == @last[$b]) {
+				@resume_same_cpu = count();
+			} else {
+				@resume_other_cpu = count();
+			}
+			@resume_gap_us = hist((uint64)(nsecs - @lastt[$b]) / 1000);
+			@resume_entries = hist((uint64)$s->lt.count);
+		}
+	}
+	@last[$b] = cpu;
+	@lastt[$b] = nsecs;
+}
+
+fentry:sunrpc:svc_tcp_rx_release_refs
+{
+	$b = (uint64)args.state->lt.bvec;
+	if (args.state->lt.borrowed_count > 0 && @np[$b] > 0) {
+		@released = count();
+		if (cpu == @last[$b]) {
+			@release_cpu_same_as_last_piece = count();
+		} else {
+			@release_cpu_other = count();
+		}
+		if (cpu == @first[$b]) {
+			@release_cpu_same_as_first_piece = count();
+		}
+		@pieces_a_record = lhist(@np[$b], 0, 40, 1);
+		@release_after_last_piece_us = hist((uint64)(nsecs - @lastt[$b]) / 1000);
+		@entries_at_release = hist((uint64)args.state->lt.count);
+		delete(@np[$b]);
+	}
+}
+
+interval:s:5 { exit(); }
+
+END
+{
+	clear(@call); clear(@piece); clear(@np); clear(@first);
+	clear(@last); clear(@lastt);
+}

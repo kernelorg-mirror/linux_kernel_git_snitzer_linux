@@ -117,6 +117,13 @@ lines, its bvec array and two bitmaps, not on the loaned pages.
 Suggested next: trace which CPUs a record's pieces and its release run
 on before any change.  `FLAMEGRAPH/79-append-release/README.md`.
 
+**Round 80, the CPUs (9 November, `t2-r335`, a bpftrace in the window):**
+a loaned record arrives in 5.9 pieces, 93% of them on another core than
+the piece before, and is released on its last piece's core (97%): its
+loan table is taken over from another core at every piece and at
+release.  Suggested next: prefetch the table's bvec lines ahead of the
+append and of release.  `FLAMEGRAPH/80-record-cpus/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
