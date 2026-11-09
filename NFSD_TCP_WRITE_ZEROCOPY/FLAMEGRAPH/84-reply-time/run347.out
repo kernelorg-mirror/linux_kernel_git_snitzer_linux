@@ -1,0 +1,4 @@
+21:34:01 stack in: sunrpc 8A37E19FDA9673122049930, nfsd F4B404A9ADAD6BCA2C9B64E
+21:38:59 t2-r347 A stay_us 0 | total 69.18 GB/s | WRITEs 65913, threads woken 296262 | writes timed 329649 | client WRITE ops 552216 trans 552216 timeouts 0 MB sent 579120 | per op ms: queue 23.025 rtt 1.320 execute 24.370 | new kernel warnings 0
+21:43:55 t2-r348 B stay_us 1000 | total 68.39 GB/s | WRITEs 65077, threads woken 83555 | writes timed 327100 | client WRITE ops 544062 trans 544062 timeouts 0 MB sent 570569 | per op ms: queue 25.030 rtt 1.347 execute 26.396 | new kernel warnings 0
+21:44:10 stock: sunrpc 2A2297D3850E37768921BCC, /lib/modules/7.3.3-13.hs.519.canary.el10.aarch64+16k/kernel/net/sunrpc/sunrpc.ko.xz, updates: , settled.sh audit rest: the settled setting

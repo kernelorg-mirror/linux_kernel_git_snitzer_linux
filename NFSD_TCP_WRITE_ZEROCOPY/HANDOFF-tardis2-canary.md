@@ -157,6 +157,13 @@ wakes nfsd 1.9 times as often a WRITE, and takes a record in 7% more
 pieces (6.29 against 5.88).  Where the 3% goes is still open.
 `FLAMEGRAPH/83-wake-latency/README.md`.
 
+**Round 84, a WRITE's time to its reply (9 November, `t2-r347`,
+`t2-r348`):** with staying on, a WRITE takes 16.8 us (2.3%) longer from
+its record's first read to its reply, and the client's RTT grows 2.0%.
+12.2 us of it is in `nfsd_vfs_write()`, all in writes over 2 ms (A
+1,515, B 2,572); the receive adds 3.2 us.  One run each, and the trace
+narrowed the rate gap to 1.1%.  `FLAMEGRAPH/84-reply-time/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

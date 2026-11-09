@@ -1,0 +1,741 @@
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:47:21-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @recv_us = hist(($t1 - $t0) / (uint64)1000);
+                             ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:52:24-49: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @to_write_us = hist(($t2 - $t1) / (uint64)1000);
+                             ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:60:29-54: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @last_to_reply_us = hist(($t5 - $t1) / (uint64)1000);
+                                  ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:54:21-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @write_us = hist(($t3 - $t2) / (uint64)1000);
+                          ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:56:23-48: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @to_send_us = hist(($t4 - $t3) / (uint64)1000);
+                            ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:58:20-45: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @send_us = hist(($t5 - $t4) / (uint64)1000);
+                         ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:49:22-47: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @whole_us = hist(($t5 - $t0) / (uint64)1000);
+                              ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:47:21-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @recv_us = hist(($t1 - $t0) / (uint64)1000);
+                             ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:52:24-49: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @to_write_us = hist(($t2 - $t1) / (uint64)1000);
+                             ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:54:21-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @write_us = hist(($t3 - $t2) / (uint64)1000);
+                          ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:56:23-48: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @to_send_us = hist(($t4 - $t3) / (uint64)1000);
+                            ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:47:21-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @recv_us = hist(($t1 - $t0) / (uint64)1000);
+                             ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:52:24-49: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @to_write_us = hist(($t2 - $t1) / (uint64)1000);
+                             ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:60:29-54: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @last_to_reply_us = hist(($t5 - $t1) / (uint64)1000);
+                                  ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:54:21-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @write_us = hist(($t3 - $t2) / (uint64)1000);
+                          ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:56:23-48: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @to_send_us = hist(($t4 - $t3) / (uint64)1000);
+                            ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:58:20-45: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @send_us = hist(($t5 - $t4) / (uint64)1000);
+                         ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:49:22-47: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @whole_us = hist(($t5 - $t0) / (uint64)1000);
+                              ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:47:21-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @recv_us = hist(($t1 - $t0) / (uint64)1000);
+                             ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:52:24-49: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @to_write_us = hist(($t2 - $t1) / (uint64)1000);
+                             ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:54:21-46: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @write_us = hist(($t3 - $t2) / (uint64)1000);
+                          ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:56:23-48: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @to_send_us = hist(($t4 - $t3) / (uint64)1000);
+                            ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:47:21-24: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @recv_us = hist(($t1 - $t0) / (uint64)1000);
+                             ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:47:27-30: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @recv_us = hist(($t1 - $t0) / (uint64)1000);
+                                   ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:47:34-42: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @recv_us = hist(($t1 - $t0) / (uint64)1000);
+                                          ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:48:42-45: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @recv_n = count(); @recv_sum_ns = sum($t1 - $t0);
+                                                  ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:48:48-51: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @recv_n = count(); @recv_sum_ns = sum($t1 - $t0);
+                                                        ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:49:22-25: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @whole_us = hist(($t5 - $t0) / (uint64)1000);
+                              ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:49:28-31: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @whole_us = hist(($t5 - $t0) / (uint64)1000);
+                                    ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:49:35-43: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @whole_us = hist(($t5 - $t0) / (uint64)1000);
+                                           ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:50:24-27: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @whole_sum_ns = sum($t5 - $t0);
+                                ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:50:30-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @whole_sum_ns = sum($t5 - $t0);
+                                      ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:52:24-27: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @to_write_us = hist(($t2 - $t1) / (uint64)1000);
+                             ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:52:30-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @to_write_us = hist(($t2 - $t1) / (uint64)1000);
+                                   ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:52:37-45: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @to_write_us = hist(($t2 - $t1) / (uint64)1000);
+                                          ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:53:26-29: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @to_write_sum_ns = sum($t2 - $t1);
+                               ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:53:32-35: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @to_write_sum_ns = sum($t2 - $t1);
+                                     ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:54:21-24: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @write_us = hist(($t3 - $t2) / (uint64)1000);
+                          ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:54:27-30: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @write_us = hist(($t3 - $t2) / (uint64)1000);
+                                ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:54:34-42: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @write_us = hist(($t3 - $t2) / (uint64)1000);
+                                       ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:55:23-26: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @write_sum_ns = sum($t3 - $t2);
+                            ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:55:29-32: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @write_sum_ns = sum($t3 - $t2);
+                                  ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:56:23-26: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @to_send_us = hist(($t4 - $t3) / (uint64)1000);
+                            ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:56:29-32: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @to_send_us = hist(($t4 - $t3) / (uint64)1000);
+                                  ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:56:36-44: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @to_send_us = hist(($t4 - $t3) / (uint64)1000);
+                                         ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:57:25-28: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @to_send_sum_ns = sum($t4 - $t3);
+                              ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:57:31-34: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @to_send_sum_ns = sum($t4 - $t3);
+                                    ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:58:20-23: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @send_us = hist(($t5 - $t4) / (uint64)1000);
+                         ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:58:26-29: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @send_us = hist(($t5 - $t4) / (uint64)1000);
+                               ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:58:33-41: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @send_us = hist(($t5 - $t4) / (uint64)1000);
+                                      ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:59:22-25: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @send_sum_ns = sum($t5 - $t4);
+                           ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:59:28-31: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @send_sum_ns = sum($t5 - $t4);
+                                 ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:60:29-32: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @last_to_reply_us = hist(($t5 - $t1) / (uint64)1000);
+                                  ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:60:35-38: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @last_to_reply_us = hist(($t5 - $t1) / (uint64)1000);
+                                        ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:60:42-50: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @last_to_reply_us = hist(($t5 - $t1) / (uint64)1000);
+                                               ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:61:31-34: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @last_to_reply_sum_ns = sum($t5 - $t1);
+                                    ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:61:37-40: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @last_to_reply_sum_ns = sum($t5 - $t1);
+                                          ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:62:7-10: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        if ($t4 - $t3 > (uint64)1000000) { @to_send_over_1ms = count(); }
+            ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:62:13-16: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        if ($t4 - $t3 > (uint64)1000000) { @to_send_over_1ms = count(); }
+                  ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:62:19-27: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        if ($t4 - $t3 > (uint64)1000000) { @to_send_over_1ms = count(); }
+                        ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:21:3-22: WARNING: Return value discarded.
+        delete(@r0, $svsk);
+        ~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:64:2-18: WARNING: Return value discarded.
+    delete(@t0, $r); delete(@t1, $r); delete(@t2, $r);
+    ~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:64:19-35: WARNING: Return value discarded.
+    delete(@t0, $r); delete(@t1, $r); delete(@t2, $r);
+                     ~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:64:36-52: WARNING: Return value discarded.
+    delete(@t0, $r); delete(@t1, $r); delete(@t2, $r);
+                                      ~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:65:2-18: WARNING: Return value discarded.
+    delete(@t3, $r); delete(@t4, $r);
+    ~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/84-reply-time/reply-time.bt:65:19-34: WARNING: Return value discarded.
+    delete(@t3, $r); delete(@t4, $r);
+                     ~~~~~~~~~~~~~~~
+Attached 7 probes
+
+
+@last_to_reply_sum_ns: 125446888464
+@last_to_reply_us:
+[128, 256)        112067 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@               |
+[256, 512)        156253 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          57977 |@@@@@@@@@@@@@@@@@@@                                 |
+[1K, 2K)            1819 |                                                    |
+[2K, 4K)             792 |                                                    |
+[4K, 8K)             695 |                                                    |
+[8K, 16K)             46 |                                                    |
+
+@n: 329649
+@r0[0xffff008010ac8800]: 60172640118892
+@r0[0xffff008009695000]: 60172743275999
+@r0[0xffff0080f5462000]: 60172743362528
+@r0[0xffff0080f546a000]: 60172743517144
+@r0[0xffff0081060c6800]: 60172743581624
+@r0[0xffff0080241d0000]: 60172743586576
+@r0[0xffff0080d7124000]: 60172743633000
+@r0[0xffff00801ed91000]: 60172743642240
+@r0[0xffff008065517000]: 60172743650825
+@r0[0xffff00801f182800]: 60172743654193
+@r0[0xffff0081067af000]: 60172743665409
+@r0[0xffff00804dc72000]: 60172743690369
+@r0[0xffff00804d60e000]: 60172743696713
+@r0[0xffff00806a9f1800]: 60172743699881
+@r0[0xffff00804571f800]: 60172743717609
+@r0[0xffff0080e6404000]: 60172743720369
+@r0[0xffff008009693800]: 60172743730337
+@r0[0xffff0080fedf4000]: 60172743743969
+@r0[0xffff0080f61c1000]: 60172743753881
+@r0[0xffff0080f61c3000]: 60172743765129
+@r0[0xffff00801ed95800]: 60172743773481
+@r0[0xffff00804d57f000]: 60172743776369
+@r0[0xffff0080f5456000]: 60172743783249
+@r0[0xffff008041f49800]: 60172743803465
+@recv_n: 321020
+@recv_sum_ns: 114179926421
+@recv_us:
+[0]                    1 |                                                    |
+[1]                 1287 |                                                    |
+[2, 4)               560 |                                                    |
+[4, 8)                46 |                                                    |
+[8, 16)                3 |                                                    |
+[16, 32)               0 |                                                    |
+[32, 64)               0 |                                                    |
+[64, 128)              0 |                                                    |
+[128, 256)         71167 |@@@@@@@@@@@@@@@                                     |
+[256, 512)        235844 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          10979 |@@                                                  |
+[1K, 2K)             166 |                                                    |
+[2K, 4K)             206 |                                                    |
+[4K, 8K)             662 |                                                    |
+[8K, 16K)             34 |                                                    |
+[16K, 32K)             8 |                                                    |
+[32K, 64K)            31 |                                                    |
+[64K, 128K)           21 |                                                    |
+[128K, 256K)           5 |                                                    |
+
+@send_sum_ns: 2996282520
+@send_us:
+[2, 4)               530 |                                                    |
+[4, 8)            170488 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[8, 16)           143497 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@         |
+[16, 32)           14896 |@@@@                                                |
+[32, 64)             236 |                                                    |
+[64, 128)              2 |                                                    |
+
+@t0[0xffff00801a8a7000]: 60172321750670
+@t0[0xffff0081067a1800]: 60172321915326
+@t0[0xffff00806ad01800]: 60172322337744
+@t0[0xffff0081067ab800]: 60172327930729
+@t0[0xffff008076e0c000]: 60172446894717
+@t0[0xffff0080f545a800]: 60172451490843
+@t0[0xffff008011cbc800]: 60172451997797
+@t0[0xffff00806a97c000]: 60172452272118
+@t0[0xffff00804d62d000]: 60172452562983
+@t0[0xffff008073b82000]: 60172454807542
+@t0[0xffff0081067b8800]: 60172694222745
+@t0[0xffff00810b84c000]: 60172694722986
+@t0[0xffff00806a979800]: 60172696480048
+@t0[0xffff00801ec2a000]: 60172697734276
+@t0[0xffff008076df8000]: 60172697986485
+@t0[0xffff0081060d5000]: 60172699957003
+@t0[0xffff00801a592800]: 60172700101099
+@t0[0xffff008065519000]: 60172700369284
+@t0[0xffff00804d624000]: 60172700404348
+@t0[0xffff0080f544d000]: 60172700510196
+@t0[0xffff008010acf000]: 60172700585965
+@t0[0xffff00801a012800]: 60172700629325
+@t0[0xffff00801a50d000]: 60172701495839
+@t0[0xffff008041f44800]: 60172702215818
+@t0[0xffff008010ac3000]: 60172702233338
+@t0[0xffff0081067b2000]: 60172702406114
+@t0[0xffff00801a59c800]: 60172702802444
+@t0[0xffff00804d604800]: 60172702860524
+@t0[0xffff008076e19000]: 60172702887172
+@t0[0xffff00801a8a6800]: 60172703694974
+@t0[0xffff00801ec24000]: 60172704858474
+@t0[0xffff0080f5462800]: 60172706648735
+@t0[0xffff0081067ce000]: 60172706776880
+@t0[0xffff00810b84f000]: 60172706819072
+@t0[0xffff00801a590800]: 60172706866760
+@t0[0xffff008065519800]: 60172707165369
+@t0[0xffff00801141b000]: 60172707271409
+@t0[0xffff008103f97800]: 60172707434178
+@t0[0xffff00801ed9a000]: 60172709903418
+@t0[0xffff008076df0000]: 60172710093930
+@t0[0xffff008076e01000]: 60172710331923
+@t0[0xffff00801ec27000]: 60172710419315
+@t0[0xffff00801f6b3000]: 60172715152129
+@t0[0xffff008076dfe000]: 60172715273722
+@t0[0xffff00801ec28000]: 60172715331394
+@t0[0xffff0081067b4000]: 60172715381978
+@t0[0xffff0081067bc800]: 60172715628547
+@t0[0xffff00804183e800]: 60172715804595
+@t0[0xffff00801a50e000]: 60172715810723
+@t0[0xffff008010ac9800]: 60172715938012
+@t0[0xffff0080f5461000]: 60172715954516
+@t0[0xffff00801a50c000]: 60172716308013
+@t0[0xffff0081067ba000]: 60172719025117
+@t0[0xffff00801ec23800]: 60172720696106
+@t0[0xffff00801a598800]: 60172721721005
+@t0[0xffff00801f6cb000]: 60172736804892
+@t0[0xffff00801a8ac800]: 60172736850684
+@t0[0xffff008011cb6000]: 60172737059245
+@t0[0xffff0080378d6800]: 60172737207053
+@t0[0xffff008076e1d000]: 60172737267997
+@t0[0xffff0080f546b800]: 60172737506846
+@t0[0xffff008039e8d000]: 60172737649598
+@t0[0xffff00804d608800]: 60172737656686
+@t0[0xffff00801a502800]: 60172737675694
+@t0[0xffff00801a59e000]: 60172737716463
+@t0[0xffff00801a8a8000]: 60172737969799
+@t0[0xffff00810b849000]: 60172739264395
+@t0[0xffff00801f6bd000]: 60172739274235
+@t0[0xffff00801bc8f800]: 60172739307939
+@t0[0xffff008073b83000]: 60172739316612
+@t0[0xffff00801ec2c000]: 60172739336284
+@t0[0xffff00801ec25800]: 60172739365244
+@t0[0xffff0080241b6000]: 60172739418884
+@t0[0xffff0080241b4000]: 60172739447788
+@t0[0xffff008076df6800]: 60172739449252
+@t0[0xffff00801ed99000]: 60172739452340
+@t0[0xffff008103f9f000]: 60172739482548
+@t0[0xffff008103f9e000]: 60172739548580
+@t0[0xffff008073b8d000]: 60172739578492
+@t0[0xffff0081060c7800]: 60172739581748
+@t0[0xffff0080d712c000]: 60172739590212
+@t0[0xffff0080f5458000]: 60172739612524
+@t0[0xffff00806a97b000]: 60172739619252
+@t0[0xffff008040ada800]: 60172739619812
+@t0[0xffff0080241d4800]: 60172739648565
+@t0[0xffff00801a362000]: 60172739665749
+@t0[0xffff00801a8ad000]: 60172739674701
+@t0[0xffff0080115cc800]: 60172739690845
+@t0[0xffff00806a97f800]: 60172739700957
+@t0[0xffff00804183c800]: 60172739710629
+@t0[0xffff0081060dd800]: 60172739794133
+@t0[0xffff008076dfb000]: 60172739796701
+@t0[0xffff00806a97c800]: 60172739801557
+@t0[0xffff00806a9f0000]: 60172739809957
+@t0[0xffff008010aca000]: 60172739828085
+@t0[0xffff008076e1f000]: 60172739949637
+@t0[0xffff0080115cd800]: 60172740030838
+@t1[0xffff00801a8a7000]: 60172321961887
+@t1[0xffff0081067a1800]: 60172322140279
+@t1[0xffff00806ad01800]: 60172322632161
+@t1[0xffff0081067ab800]: 60172328307538
+@t1[0xffff008076e0c000]: 60172447253030
+@t1[0xffff0080f545a800]: 60172451496499
+@t1[0xffff008011cbc800]: 60172452319102
+@t1[0xffff00806a97c000]: 60172452517575
+@t1[0xffff00804d62d000]: 60172452884184
+@t1[0xffff008073b82000]: 60172455062102
+@t1[0xffff0081067b8800]: 60172694606602
+@t1[0xffff00810b84c000]: 60172694997771
+@t1[0xffff00806a979800]: 60172696880321
+@t1[0xffff008076df8000]: 60172697992645
+@t1[0xffff00801ec2a000]: 60172698145101
+@t1[0xffff0081060d5000]: 60172700245652
+@t1[0xffff00801a592800]: 60172700401516
+@t1[0xffff008010acf000]: 60172700591573
+@t1[0xffff00804d624000]: 60172700661765
+@t1[0xffff008065519000]: 60172700706029
+@t1[0xffff0080f544d000]: 60172700914014
+@t1[0xffff00801a012800]: 60172701005678
+@t1[0xffff00801a50d000]: 60172701816088
+@t1[0xffff008041f44800]: 60172702516851
+@t1[0xffff008010ac3000]: 60172702556011
+@t1[0xffff0081067b2000]: 60172702861404
+@t1[0xffff00804d604800]: 60172702865068
+@t1[0xffff00801a59c800]: 60172703079860
+@t1[0xffff008076e19000]: 60172703146101
+@t1[0xffff00801a8a6800]: 60172703995823
+@t1[0xffff00801ec24000]: 60172705130043
+@t1[0xffff0080f5462800]: 60172706999425
+@t1[0xffff0081067ce000]: 60172707003721
+@t1[0xffff00801a590800]: 60172707164145
+@t1[0xffff00810b84f000]: 60172707257793
+@t1[0xffff00801141b000]: 60172707480970
+@t1[0xffff008065519800]: 60172707510986
+@t1[0xffff008103f97800]: 60172707777467
+@t1[0xffff00801ed9a000]: 60172710222490
+@t1[0xffff008076df0000]: 60172710413995
+@t1[0xffff008076e01000]: 60172710665036
+@t1[0xffff00801ec27000]: 60172710753268
+@t1[0xffff00801ec28000]: 60172715336698
+@t1[0xffff00801f6b3000]: 60172715517826
+@t1[0xffff008076dfe000]: 60172715538762
+@t1[0xffff0081067b4000]: 60172715569442
+@t1[0xffff0081067bc800]: 60172715883259
+@t1[0xffff008010ac9800]: 60172715942684
+@t1[0xffff00801a50e000]: 60172716006148
+@t1[0xffff00804183e800]: 60172716147660
+@t1[0xffff0080f5461000]: 60172716181284
+@t1[0xffff00801a50c000]: 60172716636662
+@t1[0xffff0081067ba000]: 60172720397257
+@t1[0xffff00801a598800]: 60172722013614
+@t1[0xffff00801f6cb000]: 60172737170453
+@t1[0xffff00801ec23800]: 60172737199493
+@t1[0xffff00801a8ac800]: 60172737310957
+@t1[0xffff008011cb6000]: 60172737358741
+@t1[0xffff008076e1d000]: 60172737482246
+@t1[0xffff0080378d6800]: 60172737637182
+@t1[0xffff0080f546b800]: 60172737795471
+@t1[0xffff00804d608800]: 60172737965207
+@t1[0xffff00801a8a8000]: 60172737974287
+@t1[0xffff00801a59e000]: 60172738050824
+@t1[0xffff00801a502800]: 60172738112888
+@t1[0xffff008039e8d000]: 60172738181104
+@t1[0xffff00810b849000]: 60172739575436
+@t1[0xffff00801ec2c000]: 60172739688501
+@t1[0xffff00801f6bd000]: 60172739704501
+@t1[0xffff00801ec25800]: 60172739780309
+@t1[0xffff0080241b6000]: 60172739792581
+@t1[0xffff0080241b4000]: 60172739795301
+@t1[0xffff008103f9f000]: 60172739798533
+@t1[0xffff00801bc8f800]: 60172739806045
+@t1[0xffff00806a97c800]: 60172739806325
+@t1[0xffff008076df6800]: 60172739807309
+@t1[0xffff0080d712c000]: 60172739820965
+@t1[0xffff008073b8d000]: 60172739822221
+@t1[0xffff00801ed99000]: 60172739827389
+@t1[0xffff008010aca000]: 60172739833149
+@t1[0xffff008103f9e000]: 60172739837229
+@t1[0xffff0080115cc800]: 60172739911581
+@t1[0xffff0080241d4800]: 60172739940893
+@t1[0xffff008040ada800]: 60172739946461
+@t1[0xffff0081060c7800]: 60172739946493
+@t1[0xffff0080f5458000]: 60172739946501
+@t1[0xffff008076e1f000]: 60172739954973
+@t1[0xffff00806a97b000]: 60172739959685
+@t1[0xffff00804183c800]: 60172739990678
+@t1[0xffff008076dfb000]: 60172740017030
+@t1[0xffff00801a362000]: 60172740021990
+@t1[0xffff00801a8ad000]: 60172740028966
+@t1[0xffff008073b83000]: 60172740030902
+@t1[0xffff0080115cd800]: 60172740037574
+@t1[0xffff00806a9f0000]: 60172740039118
+@t1[0xffff0081060dd800]: 60172740041086
+@t1[0xffff00806a97f800]: 60172740062222
+@t2[0xffff008076e1d000]: 60172321826118
+@t2[0xffff00801a8a7000]: 60172321970519
+@t2[0xffff0081067a1800]: 60172322152847
+@t2[0xffff00806ad01800]: 60172322642409
+@t2[0xffff0081067b2000]: 60172323773692
+@t2[0xffff00801a59e000]: 60172324025269
+@t2[0xffff00810b84f000]: 60172326819806
+@t2[0xffff008039e8d000]: 60172327968641
+@t2[0xffff008076dfb000]: 60172328195162
+@t2[0xffff00801a592800]: 60172328273266
+@t2[0xffff0081067ab800]: 60172328319218
+@t2[0xffff008073b8d000]: 60172328500139
+@t2[0xffff00806a9f0000]: 60172328508635
+@t2[0xffff00801a50c000]: 60172328794748
+@t2[0xffff0080241b4000]: 60172328848564
+@t2[0xffff00801a598800]: 60172328874636
+@t2[0xffff008076df6800]: 60172329175773
+@t2[0xffff008073b83000]: 60172329833623
+@t2[0xffff00810b84c000]: 60172329891423
+@t2[0xffff008011cb6000]: 60172330094944
+@t2[0xffff00801f6bd000]: 60172332021822
+@t2[0xffff008103f9f000]: 60172332739336
+@t2[0xffff00801a8a8000]: 60172333301682
+@t2[0xffff0081067b4000]: 60172333449978
+@t2[0xffff008073b82000]: 60172333808219
+@t2[0xffff0080f544d000]: 60172334190285
+@t2[0xffff0080f5462800]: 60172334271029
+@t2[0xffff008076e0c000]: 60172334312469
+@t2[0xffff00801a59c800]: 60172334422941
+@t2[0xffff008065519800]: 60172334879047
+@t2[0xffff00801ed99000]: 60172335394280
+@t2[0xffff008103f97800]: 60172335610361
+@t2[0xffff00801ec27000]: 60172335990290
+@t2[0xffff00801ec2c000]: 60172337508279
+@t2[0xffff00810b849000]: 60172337655615
+@t2[0xffff00806a97c000]: 60172338006416
+@t2[0xffff00801a50e000]: 60172338051200
+@t2[0xffff00801a590800]: 60172338066577
+@t2[0xffff0081067ce000]: 60172338295081
+@t2[0xffff00801a8a6800]: 60172338362169
+@t2[0xffff008076dfe000]: 60172338831187
+@t2[0xffff008010ac3000]: 60172339007651
+@t2[0xffff0080f5458000]: 60172339126044
+@t2[0xffff008041f44800]: 60172339163668
+@t2[0xffff00806a97b000]: 60172339221588
+@t2[0xffff00804d62d000]: 60172339296908
+@t2[0xffff0080f5461000]: 60172339375997
+@t2[0xffff008040ada800]: 60172339701182
+@t2[0xffff008076e01000]: 60172340023535
+@t2[0xffff00801ec2a000]: 60172340122151
+@t2[0xffff008103f9e000]: 60172340184575
+@t2[0xffff00801a502800]: 60172340418880
+@t2[0xffff0081067b8800]: 60172340987385
+@t2[0xffff008076df0000]: 60172389273013
+@t2[0xffff0081060dd800]: 60172389797398
+@t2[0xffff008076df8000]: 60172390491817
+@t2[0xffff00801ec25800]: 60172391019802
+@t2[0xffff0080241d4800]: 60172392466927
+@t2[0xffff0080241b6000]: 60172392713488
+@t2[0xffff00801ec24000]: 60172393292449
+@t2[0xffff00801a012800]: 60172393338577
+@t2[0xffff00804d624000]: 60172393339265
+@t2[0xffff00801a8ac800]: 60172393349450
+@t2[0xffff0080f545a800]: 60172393364858
+@t2[0xffff00804d608800]: 60172393381938
+@t2[0xffff00801ec28000]: 60172393386442
+@t2[0xffff008010ac9800]: 60172393387762
+@t2[0xffff008010acf000]: 60172393403258
+@t2[0xffff00801ec23800]: 60172393406010
+@t2[0xffff00801a8ad000]: 60172393428338
+@t2[0xffff00804183e800]: 60172393462258
+@t2[0xffff0080115cd800]: 60172393480770
+@t2[0xffff00801141b000]: 60172393484402
+@t2[0xffff0080d712c000]: 60172393494370
+@t2[0xffff0080f546b800]: 60172393506730
+@t2[0xffff008076e1f000]: 60172393602986
+@t2[0xffff00806a979800]: 60172393651298
+@t2[0xffff00801a50d000]: 60172393662642
+@t2[0xffff008076e19000]: 60172393664338
+@t2[0xffff0081060d5000]: 60172393680243
+@t2[0xffff008011cbc800]: 60172393684235
+@t2[0xffff00801f6b3000]: 60172393684619
+@t2[0xffff0081060c7800]: 60172393715003
+@t2[0xffff00806a97f800]: 60172393716467
+@t2[0xffff00806a97c800]: 60172393717867
+@t2[0xffff00801bc8f800]: 60172393720787
+@t2[0xffff008065519000]: 60172393761515
+@t2[0xffff008010aca000]: 60172393764003
+@t2[0xffff00801a362000]: 60172393784787
+@t2[0xffff0081067bc800]: 60172393786947
+@t2[0xffff00801f6cb000]: 60172393791515
+@t2[0xffff00804183c800]: 60172393796667
+@t2[0xffff00804d604800]: 60172393797483
+@t2[0xffff00801ed9a000]: 60172393802179
+@t2[0xffff0080115cc800]: 60172393825955
+@t2[0xffff0080378d6800]: 60172393832771
+@t2[0xffff0081067ba000]: 60172393844867
+@t3[0xffff00801a8a7000]: 60172322328152
+@t3[0xffff0081067a1800]: 60172322546328
+@t3[0xffff00806ad01800]: 60172322852713
+@t3[0xffff0081067b2000]: 60172324317918
+@t3[0xffff008039e8d000]: 60172328113466
+@t3[0xffff008076dfb000]: 60172328665459
+@t3[0xffff0081067ab800]: 60172328862700
+@t3[0xffff00801a592800]: 60172328944380
+@t3[0xffff008076e1d000]: 60172328960348
+@t3[0xffff0080241b4000]: 60172329251445
+@t3[0xffff00810b84f000]: 60172329261925
+@t3[0xffff00801a598800]: 60172329277221
+@t3[0xffff00806a9f0000]: 60172329279037
+@t3[0xffff00801a50c000]: 60172329299565
+@t3[0xffff008076df6800]: 60172329310157
+@t3[0xffff00810b84c000]: 60172330116768
+@t3[0xffff008011cb6000]: 60172330243816
+@t3[0xffff008073b83000]: 60172330307584
+@t3[0xffff008103f9f000]: 60172333202281
+@t3[0xffff00801a8a8000]: 60172333830435
+@t3[0xffff0081067b4000]: 60172333834619
+@t3[0xffff00801a59e000]: 60172333842403
+@t3[0xffff008073b82000]: 60172334417765
+@t3[0xffff008073b8d000]: 60172334550030
+@t3[0xffff0080f5462800]: 60172334650014
+@t3[0xffff008076e0c000]: 60172334659150
+@t3[0xffff0080f544d000]: 60172334830239
+@t3[0xffff00801f6bd000]: 60172334846759
+@t3[0xffff00801a59c800]: 60172334855839
+@t3[0xffff008065519800]: 60172335442392
+@t3[0xffff00801ed99000]: 60172335922882
+@t3[0xffff008103f97800]: 60172335929570
+@t3[0xffff00801ec27000]: 60172336339475
+@t3[0xffff00801ec2c000]: 60172337688071
+@t3[0xffff00806a97c000]: 60172338421218
+@t3[0xffff00801a590800]: 60172338422938
+@t3[0xffff0081067ce000]: 60172338433442
+@t3[0xffff00801a50e000]: 60172338485098
+@t3[0xffff008076dfe000]: 60172339331100
+@t3[0xffff008010ac3000]: 60172339368989
+@t3[0xffff0080f5458000]: 60172339402901
+@t3[0xffff00810b849000]: 60172339486205
+@t3[0xffff008041f44800]: 60172339584245
+@t3[0xffff00804d62d000]: 60172339641453
+@t3[0xffff0080f5461000]: 60172339661781
+@t3[0xffff00806a97b000]: 60172339677862
+@t3[0xffff00801a8a6800]: 60172339969702
+@t3[0xffff008040ada800]: 60172340152359
+@t3[0xffff008076e01000]: 60172340199975
+@t3[0xffff00801ec2a000]: 60172340630248
+@t3[0xffff008103f9e000]: 60172340653592
+@t3[0xffff00801a502800]: 60172340761633
+@t3[0xffff0081067b8800]: 60172341219338
+@t3[0xffff00806a97c800]: 60172376724774
+@t3[0xffff00804183e800]: 60172376733126
+@t3[0xffff008076e19000]: 60172386680469
+@t3[0xffff00801a8ac800]: 60172386690005
+@t3[0xffff0080115cd800]: 60172388015593
+@t3[0xffff008010acf000]: 60172388655403
+@t3[0xffff00804d608800]: 60172388673915
+@t3[0xffff00801ec23800]: 60172388746067
+@t3[0xffff00801f6cb000]: 60172388784243
+@t3[0xffff008011cbc800]: 60172388848268
+@t3[0xffff00801f6b3000]: 60172389313405
+@t3[0xffff008076df0000]: 60172389513486
+@t3[0xffff00801141b000]: 60172389523286
+@t3[0xffff008010aca000]: 60172389529806
+@t3[0xffff00801a8ad000]: 60172389597294
+@t3[0xffff008076df8000]: 60172389611574
+@t3[0xffff00801a012800]: 60172389642470
+@t3[0xffff00801ec25800]: 60172389670366
+@t3[0xffff0080241d4800]: 60172389674350
+@t3[0xffff00801a50d000]: 60172389709830
+@t3[0xffff00806a97f800]: 60172389742510
+@t3[0xffff008010ac9800]: 60172389772550
+@t3[0xffff0080d712c000]: 60172389776086
+@t3[0xffff0080241b6000]: 60172389849847
+@t3[0xffff0081060d5000]: 60172389870343
+@t3[0xffff008076e1f000]: 60172389877207
+@t3[0xffff00806a979800]: 60172389877831
+@t3[0xffff0081067ba000]: 60172389904111
+@t3[0xffff00804d624000]: 60172389914143
+@t3[0xffff008065519000]: 60172389914391
+@t3[0xffff00804183c800]: 60172389920703
+@t3[0xffff0080378d6800]: 60172389941567
+@t3[0xffff0080f545a800]: 60172389968231
+@t3[0xffff00801ed9a000]: 60172389981103
+@t3[0xffff00801ec28000]: 60172389989519
+@t3[0xffff0081060dd800]: 60172390019031
+@t3[0xffff00801ec24000]: 60172390028231
+@t3[0xffff0081067bc800]: 60172390032735
+@t3[0xffff0081060c7800]: 60172390033215
+@t3[0xffff0080f546b800]: 60172390039583
+@t3[0xffff0080115cc800]: 60172390074927
+@t3[0xffff00801a362000]: 60172390077175
+@t3[0xffff00804d604800]: 60172390088703
+@t3[0xffff00801bc8f800]: 60172390091039
+@t4[0xffff00804d62d000]: 60172024373161
+@t4[0xffff008011cb6000]: 60172024422306
+@t4[0xffff008065519800]: 60172045594754
+@t4[0xffff0080378d6800]: 60172045648018
+@t4[0xffff00801a50e000]: 60172045694906
+@t4[0xffff0081067b2000]: 60172045705570
+@t4[0xffff0080115cd800]: 60172046335052
+@t4[0xffff00801a50d000]: 60172049064917
+@t4[0xffff008010ac3000]: 60172049173749
+@t4[0xffff00801a8ac800]: 60172049267589
+@t4[0xffff00801a59c800]: 60172049366846
+@t4[0xffff00810b849000]: 60172049377806
+@t4[0xffff008010acf000]: 60172049411806
+@t4[0xffff00801ed9a000]: 60172049433150
+@t4[0xffff008076e1d000]: 60172049472102
+@t4[0xffff008073b82000]: 60172049475070
+@t4[0xffff008076e1f000]: 60172049586070
+@t4[0xffff00806a9f0000]: 60172049656127
+@t4[0xffff0080f5462800]: 60172049682711
+@t4[0xffff00801bc8f800]: 60172049689343
+@t4[0xffff008039e8d000]: 60172049727159
+@t4[0xffff008076df8000]: 60172049738975
+@t4[0xffff00806ad01800]: 60172049757071
+@t4[0xffff008065519000]: 60172049762959
+@t4[0xffff00801f6b3000]: 60172049781415
+@t4[0xffff008040ada800]: 60172049839967
+@t4[0xffff0081067ce000]: 60172049854551
+@t4[0xffff00801ec24000]: 60172049863895
+@t4[0xffff00801ec25800]: 60172049878919
+@t4[0xffff0080241d4800]: 60172049899527
+@t4[0xffff008041f44800]: 60172049908871
+@t4[0xffff008103f9f000]: 60172049914247
+@t4[0xffff0081067b4000]: 60172049940383
+@t4[0xffff00801a8a6800]: 60172049940535
+@t4[0xffff0081060c7800]: 60172049940919
+@t4[0xffff00810b84f000]: 60172049957935
+@t4[0xffff00804183c800]: 60172049975128
+@t4[0xffff00801141b000]: 60172049990992
+@t4[0xffff00801a59e000]: 60172049993800
+@t4[0xffff0081067bc800]: 60172050038032
+@t4[0xffff00801a502800]: 60172050044024
+@t4[0xffff00804d624000]: 60172050045992
+@t4[0xffff00804d608800]: 60172050048280
+@t4[0xffff00801a598800]: 60172050049232
+@t4[0xffff0081067ba000]: 60172050108336
+@t4[0xffff00801ed99000]: 60172050108416
+@t4[0xffff00806a97c000]: 60172050109624
+@to_send_sum_ns: 3954474849
+@to_send_us:
+[4, 8)             40849 |@@@@@@@@                                            |
+[8, 16)           237938 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[16, 32)           50632 |@@@@@@@@@@@                                         |
+[32, 64)             230 |                                                    |
+
+@to_write_sum_ns: 3585977750
+@to_write_us:
+[4, 8)              5467 |                                                    |
+[8, 16)           320048 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[16, 32)            4100 |                                                    |
+[32, 64)              34 |                                                    |
+
+@whole_sum_ns: 236345764625
+@whole_us:
+[128, 256)           632 |                                                    |
+[256, 512)         56648 |@@@@@@@@@@@@                                        |
+[512, 1K)         238994 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1K, 2K)           22083 |@@@@                                                |
+[2K, 4K)            1009 |                                                    |
+[4K, 8K)            1491 |                                                    |
+[8K, 16K)             96 |                                                    |
+[16K, 32K)            10 |                                                    |
+[32K, 64K)            31 |                                                    |
+[64K, 128K)           21 |                                                    |
+[128K, 256K)           5 |                                                    |
+
+@write_sum_ns: 114910153345
+@write_us:
+[128, 256)        142282 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)        136443 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   |
+[512, 1K)          47961 |@@@@@@@@@@@@@@@@@                                   |
+[1K, 2K)            1448 |                                                    |
+[2K, 4K)             792 |                                                    |
+[4K, 8K)             679 |                                                    |
+[8K, 16K)             44 |                                                    |
+
