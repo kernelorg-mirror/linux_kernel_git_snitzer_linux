@@ -184,7 +184,10 @@ prefetch of the loan table's lines (round 86).
 cycles a WRITE in every pair and `rx_loan_table_release()` 0.27k fewer,
 for about 0.46k in the prefetches: about 1.0k net, not visible in the
 totals or the rate.  The region's exact peak is not raised (10,400 off,
-10,037 on).  Keep or drop is Mike's.  `FLAMEGRAPH/86-table-prefetch/README.md`.
+10,037 on).  Mike kept the appends' half, at the tip as `87ebdd82721b`
+(topic `NFSD_TCP_WRITE_ZEROCOPY-canary-part3` at the next rebuild; not
+yet run as committed), and dropped the release's.
+`FLAMEGRAPH/86-table-prefetch/README.md`.
 
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In

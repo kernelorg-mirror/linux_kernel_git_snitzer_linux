@@ -77,3 +77,15 @@ Cycles a WRITE on nfsd's CPUs, each run:
   average); why is not known.
 - **The region's exact peak is not raised:** 10,400 with the prefetch off
   (`t2-r361`), 10,037 with it on (`t2-r362`).
+
+## Decision (Mike, 9 November): keep the appends' half, drop the release's
+
+The appends' half is "SUNRPC: Prefetch a loaned record's table lines
+ahead of its appends" (`87ebdd82721b`) at the tip of `kernel-7.3/canary`,
+without the switch; it belongs in topic
+`NFSD_TCP_WRITE_ZEROCOPY-canary-part3` at the next rebuild of the canary.
+It built with `build-sunrpc.sh` without a warning, every export's version
+unchanged, and `checkpatch` clean.  It has not run as committed: the A/B
+ran it behind the switch, and tardis2 runs the stock sunrpc.  The release's
+half (bit 1) saved 271 cycles a WRITE for about 110; it stays only in
+`table-prefetch.patch` and on `kernel-7.3/canary.TP`.
