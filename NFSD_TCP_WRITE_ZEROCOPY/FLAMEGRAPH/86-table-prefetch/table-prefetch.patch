@@ -1,0 +1,135 @@
+From 44cc481e874611e163f3eb287d8639f8349ca2fd Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 9 Nov 2026 22:31:16 +0000
+Subject: [PATCH] SUNRPC: Prefetch a loaned record's table ahead of its use
+
+A loaned record's table is written a piece at a time, each piece by
+whichever nfsd thread took the record up, and is released by the
+thread that ran the WRITE, so at each step its lines were last written
+on another CPU.  Fetch them ahead: for writing when a thread takes the
+record up and ahead of each skb's appends, and for reading before the
+release walks the table.  sunrpc.svc_tcp_rx_table_prefetch selects
+each (bit 0 and bit 1), for an A/B.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ net/sunrpc/svcsock.c | 71 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 71 insertions(+)
+
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index ae0082408fd5..7bf40fb296a6 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -2849,10 +2849,69 @@ static bool svc_tcp_rx_refs_valid(const struct svc_tcp_rx_state *state)
+ 	return rx_loan_table_refs_valid(&state->lt);
+ }
+ 
++/*
++ * A loaned record's table is written a piece at a time, each piece by
++ * whichever thread took the record up, and released by the thread that
++ * ran it: its lines were last written on another CPU at each step.
++ * svc_tcp_rx_table_prefetch (FLAMEGRAPH round 86's A/B) fetches them
++ * ahead: bit 0 for writing at each takeover and ahead of each skb's
++ * appends, bit 1 ahead of the release.
++ */
++static unsigned int svc_tcp_rx_table_prefetch;
++module_param(svc_tcp_rx_table_prefetch, uint, 0644);
++
++#define SVC_TCP_RX_BVEC_LINE	(L1_CACHE_BYTES / sizeof(struct bio_vec))
++
++/* Fetch for writing entries [@first, @first + @n) and their bitmap words. */
++static void svc_tcp_rx_prefetch_entries(struct rx_loan_table *t, u32 first,
++					u32 n)
++{
++	u32 last, i;
++
++	if (!n || first >= t->capacity)
++		return;
++	last = min(first + n, t->capacity) - 1;
++	for (i = round_down(first, SVC_TCP_RX_BVEC_LINE); i <= last;
++	     i += SVC_TCP_RX_BVEC_LINE)
++		prefetchw(&t->bvec[i]);
++	prefetchw(&t->borrowed[BIT_WORD(first)]);
++	prefetchw(&t->page_pool[BIT_WORD(first)]);
++	if (BIT_WORD(last) != BIT_WORD(first)) {
++		prefetchw(&t->borrowed[BIT_WORD(last)]);
++		prefetchw(&t->page_pool[BIT_WORD(last)]);
++	}
++}
++
++/* The entry an append coalesces into, and @n more after it. */
++static void svc_tcp_rx_prefetch_tail(struct rx_loan_table *t, u32 n)
++{
++	u32 count = t->count;
++
++	if (count)
++		svc_tcp_rx_prefetch_entries(t, count - 1, n + 1);
++	else
++		svc_tcp_rx_prefetch_entries(t, 0, n);
++}
++
++/* Fetch the whole table for reading before its release walks it. */
++static void svc_tcp_rx_prefetch_release(const struct rx_loan_table *t)
++{
++	u32 i;
++
++	for (i = 0; i < t->count; i += SVC_TCP_RX_BVEC_LINE)
++		prefetch(&t->bvec[i]);
++	for (i = 0; i < t->count; i += BITS_PER_LONG) {
++		prefetch(&t->borrowed[BIT_WORD(i)]);
++		prefetch(&t->page_pool[BIT_WORD(i)]);
++	}
++}
++
+ VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
+ {
+ 	int ret;
+ 
++	if (state && (READ_ONCE(svc_tcp_rx_table_prefetch) & 2))
++		svc_tcp_rx_prefetch_release(&state->lt);
+ 	/* None of its pages went back: all of them may still be out. */
+ 	if (WARN_ON_ONCE(!svc_tcp_rx_refs_valid(state))) {
+ 		svc_tcp_rx_credit_orphan(state, U32_MAX);
+@@ -5094,6 +5153,7 @@ VISIBLE_IF_KUNIT int svc_tcp_restore_pages(struct svc_sock *svsk,
+ {
+ 	size_t len = svsk->sk_datalen;
+ 	unsigned int i, npages, keep;
++	bool prefetch_tp;
+ 	int ret;
+ 
+ 	if (!len) {
+@@ -5102,6 +5162,10 @@ VISIBLE_IF_KUNIT int svc_tcp_restore_pages(struct svc_sock *svsk,
+ 			return -EINVAL;
+ 		return 0;
+ 	}
++	prefetch_tp = svsk->sk_rx &&
++		      (READ_ONCE(svc_tcp_rx_table_prefetch) & 1);
++	if (prefetch_tp)
++		prefetchw(&svsk->sk_rx->lt);
+ 	npages = svc_tcp_rx_held_pages(svsk, svsk->sk_rx);
+ 	/*
+ 	 * Trade pages with the socket: the pages this thread gives up wait
+@@ -5129,6 +5193,9 @@ VISIBLE_IF_KUNIT int svc_tcp_restore_pages(struct svc_sock *svsk,
+ 			svc_rqst_page_release(rqstp, page);
+ 		}
+ 	}
++	if (prefetch_tp)
++		svc_tcp_rx_prefetch_tail(&svsk->sk_rx->lt,
++					 SVC_TCP_RX_BVEC_LINE);
+ 	ret = svc_tcp_rx_exchange(&svsk->sk_rx, &rqstp->rq_tcp_rx);
+ 	if (ret)
+ 		return ret;
+@@ -6062,6 +6129,10 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
+ 
+ 			rx_loan_prefetch_pages(skb, 0, body_offset,
+ 					       body_offset + remaining);
++			if (READ_ONCE(svc_tcp_rx_table_prefetch) & 1)
++				svc_tcp_rx_prefetch_tail(&state->lt,
++					skb_shinfo(skb)->nr_frags +
++					SVC_TCP_RX_BVEC_LINE);
+ 			need = rx_loan_skb_region_pages(skb, 0, body_offset,
+ 							body_offset + remaining,
+ 							&prev);
+-- 
+2.52.0
+
