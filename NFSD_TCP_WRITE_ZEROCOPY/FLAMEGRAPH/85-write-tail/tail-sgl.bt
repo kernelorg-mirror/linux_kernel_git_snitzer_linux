@@ -1,0 +1,62 @@
+// tail-sgl.bt: round 85, a WRITE's SGL and where its slow writes form.
+// - nfsd_vfs_write(): WRITEs, their time, and the count over 2 ms;
+// - nvme_pci_setup_data_sgl(): requests, nr_phys_segments, the SGL
+//   entries written (round 55's reading of the command), request bytes;
+// - block_rq_issue to block_rq_complete, writes only (rwbs 'W', 87), by drive (the
+//   minor number): the time a request and the count over 2 ms;
+// - blk_mq_get_tag(): its time, and the count over 100 us (a tag wait).
+// Exits after 5 s.
+config = { max_map_keys = 65536 }
+fentry:nfsd:nfsd_vfs_write { @vw[tid] = nsecs; }
+fexit:nfsd:nfsd_vfs_write /has_key(@vw, tid)/
+{
+	$d = (uint64)nsecs - (uint64)@vw[tid];
+	@writes = count();
+	@write_us = hist($d / (uint64)1000);
+	@write_sum_ns = sum($d);
+	if ($d > (uint64)2000000) { @write_over_2ms = count(); @write_over_2ms_sum_ns = sum($d); }
+	delete(@vw, tid);
+}
+fentry:nvme:nvme_pci_setup_data_sgl
+{
+	$r = args.req;
+	@sgl_requests = count();
+	@nr_phys_segments = lhist($r->nr_phys_segments, 0, 80, 4);
+	@nr_phys_sum = sum($r->nr_phys_segments);
+	@request_bytes_sum = sum($r->__data_len);
+}
+fexit:nvme:nvme_pci_setup_data_sgl
+{
+	$iod = (struct nvme_iod *)((uint64)args.req + sizeof(struct request));
+	$type = $iod->cmd.common.dptr.sgl.type >> 4;
+	$entries = $type == 0 ? (uint32)1 : $iod->cmd.common.dptr.sgl.length / 16;
+	@sgl_entries_sum = sum($entries);
+}
+tracepoint:block:block_rq_issue /args.rwbs[0] == 87/
+{
+	@iss[args.dev, args.sector] = nsecs;
+}
+tracepoint:block:block_rq_complete /has_key(@iss, (args.dev, args.sector))/
+{
+	$m = args.dev & 0xfffff;
+	$d = (uint64)nsecs - (uint64)@iss[args.dev, args.sector];
+	@rq_us[$m] = hist($d / (uint64)1000);
+	@rq_n[$m] = count();
+	@rq_sum_ns[$m] = sum($d);
+	if ($d > (uint64)2000000) { @rq_over_2ms[$m] = count(); }
+	delete(@iss, (args.dev, args.sector));
+}
+fentry:vmlinux:blk_mq_get_tag { @gt[tid] = nsecs; }
+fexit:vmlinux:blk_mq_get_tag /has_key(@gt, tid)/
+{
+	$d = (uint64)nsecs - (uint64)@gt[tid];
+	@tag_n = count();
+	@tag_sum_ns = sum($d);
+	if ($d > (uint64)100000) { @tag_over_100us = count(); @tag_over_100us_sum_ns = sum($d); }
+	delete(@gt, tid);
+}
+interval:s:5
+{
+	clear(@vw); clear(@iss); clear(@gt);
+	exit();
+}
