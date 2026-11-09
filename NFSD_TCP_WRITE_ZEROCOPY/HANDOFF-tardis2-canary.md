@@ -3,6 +3,67 @@
 Written 2026-11-04.  Background and every port decision:
 `CANARY-SPLIT.md` beside this file.
 
+## Next boot: the canary from `3bdeea5a21cc` (9 November)
+
+**Where things stand.**  tardis2 ran the held-mark kernel's sixth boot
+(build 514's source, `ofp-rocky-held-514.conf`) from 7 November to 9
+November, both ports up throughout.  FLAMEGRAPH rounds 64 to 75 ran on it.
+Mike then built a kernel from `origin/kernel-7.3/canary` at `3bdeea5a21cc`
+(kernel-7.3.3-13.canary, the topics ported onto nfsd-next), and the local
+tree was reset to it before the reboot into it.  When this was written it
+was not yet installed in `/boot`.
+
+What the new kernel has of this work, in topic
+`NFSD_TCP_WRITE_ZEROCOPY-canary-part3` (hs-gitlab's `kernel-7.3/canary-WIP`):
+
+- "SUNRPC: Keep each of struct svc_pool's counters within one cache line"
+  (`ab52027534cb`): line 0 and line 1 as in B, `sp_flags` starting line 2
+  with `sp_sockets_queued`, `sp_threads_woken` on line 3, 256 bytes.
+- "SUNRPC: Hand an enqueued transport to the idle thread claimed for it"
+  (`07516fdd8d78`), "SUNRPC: Prefetch a pool's transport queue at the
+  start of svc_recv()" (`1f37c66a5694`), and "SUNRPC: Read a pool's flags
+  before clearing them on each wakeup" (`013b4fb22657`).
+- The KUnit fault hook's flag `__read_mostly` (`9ed98c94d6ef`, round 64)
+  and the held mark (`5404199464a2`).
+- The docs of rounds 64 to 75, with the dropped patches 0010 to 0012 in
+  `patches/dropped/`.
+
+On 514 this code (PL) ran at 70.64 GB/s and 248.0k nfsd cycles a WRITE
+on average, against B's 69.59 (rounds 74 and 75,
+`FLAMEGRAPH/74-b-vs-pf/README.md` and `FLAMEGRAPH/75-counter-lines/README.md`).
+The new kernel has another base and other topics, so set none of those
+figures beside its own before a baseline on it.  Rounds 66 to 73 are
+closed: what is left, if the queue is taken up again, is to queue fewer
+transports and hand more of them (`FLAMEGRAPH/73-handoff-ref/README.md`).
+
+**On the boot:**
+
+1. Ping both ports before anything else.  Six of seven boots into a test
+   kernel on 7 November lost a port (`PORT-DEAD-AFTER-BOOT.md`); record
+   this boot's outcome either way.
+2. Kdump armed: `xeu-rig/bringup.sh` copies the new kernel into
+   `/var/lib/kdump/boot/` (SELinux denies a symlink there) and stops
+   unless `/sys/kernel/kexec_crash_loaded` reads 1.
+3. `uname -r` is the new kernel, nothing in `updates/`, and
+   `rx_region_held_mark` is under `/sys/module/page_pool/parameters/`.
+   `pahole` on the new `sunrpc.ko`'s `struct svc_pool` should match
+   `FLAMEGRAPH/75-counter-lines/pahole-PL.txt` (unless nfsd-next changed
+   the struct).
+4. `xeu-rig/settled.sh apply` ends in "the settled setting".
+5. A two-port loan baseline as round 74's runs (`run311.sh`), three runs,
+   read with `read65.py` and `fsum.py` from round 75: rate, nfsd cycles a
+   WRITE, `svc_recv()`, enqueues and wakes a WRITE, far shares, and the
+   region's held peak.
+
+**State of the host before the reboot.**  Root has about 13 GB free after
+the cleanup of 9 November.  Every worktree but the main tree is gone.  In
+`/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
+`.data` files are deleted, and every `pmu.script` is now `.xz` (the
+readers open either).  `/root/nvme0-backup-2026-10-17` (13 GB) is not ours:
+leave it alone.  The local branches from before the reset are kept,
+`kernel-7.3/canary.pre-fold-pool-layout`, `.pre-drop-reverted` and the
+variant branches `kernel-7.3/canary.{PF,PL,…}-514`, none of them pushed.
+
 ## What to test
 
 `kernel-7.3/canary` as rebuilt after this commit, made by `hs/merge703_canary.sh v7.3-11`
@@ -1227,7 +1288,8 @@ round 56 (`FLAMEGRAPH/56-eight-sgl-two-ports/README.md`) reached 73.27 at
 rings of 256 with memory requests at about 140 GB/s, flat from 512 to
 640 KiB held.  `twoport.sh` now prints the busy figure without a verdict.
 
-**Stay on this boot (Mike, 7 November):** the held-mark kernel's sixth
+**Stay on this boot (Mike, 7 November; it ended 9 November with the
+reboot into the canary from `3bdeea5a21cc`, see the top):** the held-mark kernel's sixth
 boot has both ports, and a reboot risks losing one (six of seven boots
 into a test kernel did).  Use this kernel as long as possible: no reboot,
 nothing that could take the host down (no KUnit suite, which crashed
