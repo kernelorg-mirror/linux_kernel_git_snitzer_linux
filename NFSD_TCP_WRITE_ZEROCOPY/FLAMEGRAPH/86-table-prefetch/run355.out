@@ -1,0 +1,10 @@
+22:33:00 module in: sunrpc 689D648F4C1FE9E11CAD5B9, nfsd 6231290C598B2BE07952E0B
+22:38:08 t2-r355 A prefetch 0 | total 69.92 GB/s | WRITEs 66606, threads woken 295384 | retransmits 923 | 7368 | new kernel warnings 0
+22:43:15 t2-r356 B prefetch 3 | total 71.08 GB/s | WRITEs 67721, threads woken 291785 | retransmits 1928 | 7565 | new kernel warnings 0
+22:50:06 t2-r357 A prefetch 0 | total 70.44 GB/s | WRITEs 67238, threads woken 293090 | retransmits 1282 | 7805 | new kernel warnings 0
+22:55:13 t2-r358 B prefetch 3 | total 70.74 GB/s | WRITEs 67424, threads woken 292258 | retransmits 1607 | 11570 | new kernel warnings 0
+23:00:20 t2-r359 A prefetch 0 | total 71.10 GB/s | WRITEs 67777, threads woken 291469 | retransmits 1734 | 12048 | new kernel warnings 0
+23:05:26 t2-r360 B prefetch 3 | total 70.15 GB/s | WRITEs 66767, threads woken 292693 | retransmits 1331 | 8109 | new kernel warnings 0
+23:10:22 t2-r361 AH prefetch 0 | total 70.91 GB/s | WRITEs 67605, threads woken 291729 | retransmits 1615 | 10400 | new kernel warnings 0
+23:15:18 t2-r362 BH prefetch 3 | total 70.92 GB/s | WRITEs 67540, threads woken 291502 | retransmits 1960 | 10037 | new kernel warnings 0
+23:15:38 stock: sunrpc 2A2297D3850E37768921BCC, /lib/modules/7.3.3-13.hs.519.canary.el10.aarch64+16k/kernel/net/sunrpc/sunrpc.ko.xz, updates: , settled.sh audit rest: the settled setting

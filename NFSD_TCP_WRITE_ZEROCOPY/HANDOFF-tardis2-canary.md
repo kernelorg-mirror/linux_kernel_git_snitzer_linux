@@ -178,6 +178,14 @@ to 3.2 GB/s; its cause is not in the drives or the block layer.
 stack `$L/svcstack-ST` is deleted.  Next is round 81's alternative, the
 prefetch of the loan table's lines (round 86).
 
+**Round 86, the table prefetch (9 November, `t2-r355..r362`,
+`kernel-7.3/canary.TP`, `44cc481e8746`, unpushed; its module is
+`$L/sunrpc-TP`):** `__rx_loan_table_append_ref()` takes 1.2k fewer
+cycles a WRITE in every pair and `rx_loan_table_release()` 0.27k fewer,
+for about 0.46k in the prefetches: about 1.0k net, not visible in the
+totals or the rate.  The region's exact peak is not raised (10,400 off,
+10,037 on).  Keep or drop is Mike's.  `FLAMEGRAPH/86-table-prefetch/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
