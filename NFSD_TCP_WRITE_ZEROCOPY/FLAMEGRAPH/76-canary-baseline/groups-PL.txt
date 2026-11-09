@@ -1,0 +1,12 @@
+  66356  26.8%  (other)
+  38080  15.4%  skid at irq enable
+  28613  11.5%  loan bookkeeping
+  27573  11.1%  tcp/ip tx+rx
+  22285   9.0%  block mapping/submit
+  13830   5.6%  spinlocks
+  13231   5.3%  svc queue/threads
+  11662   4.7%  region/page_pool
+  10582   4.3%  nfsd/xdr/cache
+   7966   3.2%  xfs/iomap
+   4972   2.0%  slab/mm
+   2833   1.1%  sched/timer

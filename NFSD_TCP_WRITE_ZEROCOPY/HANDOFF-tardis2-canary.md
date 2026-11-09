@@ -81,6 +81,15 @@ again after `bringup.sh 32768 256` and `settled.sh apply`.  kdump armed
 `settled.sh apply` ends in "the settled setting".  The baseline of step
 5 is round 76, `FLAMEGRAPH/76-canary-baseline/`.
 
+**Round 76, the baseline (9 November, `t2-r323..r325`):** 70.00 GB/s
+against PL's 70.64 on 514, the same; 237.1k nfsd cycles a WRITE against
+248.0k, the fall spread over the whole profile; enqueues and wakes as
+PL; the region's median and 99th percentile as PL's, its sampled
+maximum higher (a lower bound, so an exact peak with the held mark is
+owed).  Suggested next: the loan's per-segment bookkeeping (28k cycles
+a WRITE), after a call-graph profile.
+`FLAMEGRAPH/76-canary-baseline/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

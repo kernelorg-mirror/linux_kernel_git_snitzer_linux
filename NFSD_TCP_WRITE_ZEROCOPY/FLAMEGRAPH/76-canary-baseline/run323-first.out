@@ -1,0 +1,17 @@
+05:05:59 t2-r323 C | total 68.91 GB/s | WRITEs 65645 | retransmits 2247 | new kernel warnings 1
+05:05:59 the kernel warned; stopping
+1698a1699,1712
+> [  515.629482] xeu 0000:a1:00.0 enp161s0f0: rx_buf_size: 8192-byte RX buffers, 2 to a page, up to 2 to a 9000-byte MTU frame
+> [  515.629491] xeu 0000:a1:00.0 enp161s0f0: rx_ip_align: MTU 7792 spans 2 RX buffers; payload after the first buffer is not 4-byte aligned
+> [  516.641723] xeu 0000:a4:00.0 enp164s0f0: rx_buf_size: 8192-byte RX buffers, 2 to a page, up to 2 to a 9000-byte MTU frame
+> [  516.641730] xeu 0000:a4:00.0 enp164s0f0: rx_ip_align: MTU 7792 spans 2 RX buffers; payload after the first buffer is not 4-byte aligned
+> [  523.651701] xeu 0000:a1:00.0 enp161s0f0: rx_buf_size: 8192-byte RX buffers, 2 to a page, up to 2 to a 9000-byte MTU frame
+> [  523.651707] xeu 0000:a1:00.0 enp161s0f0: rx_ip_align: MTU 7792 spans 2 RX buffers; payload after the first buffer is not 4-byte aligned
+> [  523.659611] xeu 0000:a4:00.0 enp164s0f0: rx_buf_size: 8192-byte RX buffers, 2 to a page, up to 2 to a 9000-byte MTU frame
+> [  523.659618] xeu 0000:a4:00.0 enp164s0f0: rx_ip_align: MTU 7792 spans 2 RX buffers; payload after the first buffer is not 4-byte aligned
+> [  553.431632] FAT-fs (nvme8n1p1): Volume was not properly unmounted. Some data may be corrupt. Please run fsck.
+> [  553.452586] NOTICE: Automounting of tracing to debugfs is deprecated and will be removed in 2030
+> [  626.743084] xeu 0000:a1:00.0 enp161s0f0: rx_buf_size: 8192-byte RX buffers, 2 to a page, up to 2 to a 9000-byte MTU frame
+> [  626.743093] xeu 0000:a1:00.0 enp161s0f0: rx_ip_align: MTU 7792 spans 2 RX buffers; payload after the first buffer is not 4-byte aligned
+> [  626.774296] xeu 0000:a4:00.0 enp164s0f0: rx_buf_size: 8192-byte RX buffers, 2 to a page, up to 2 to a 9000-byte MTU frame
+> [  626.774303] xeu 0000:a4:00.0 enp164s0f0: rx_ip_align: MTU 7792 spans 2 RX buffers; payload after the first buffer is not 4-byte aligned
