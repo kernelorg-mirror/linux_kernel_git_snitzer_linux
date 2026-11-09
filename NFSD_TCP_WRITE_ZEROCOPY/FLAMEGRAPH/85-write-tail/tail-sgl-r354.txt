@@ -1,0 +1,329 @@
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:15:19-36: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    @write_us = hist($d / (uint64)1000);
+                     ~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:43:20-37: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    @rq_us[$m] = hist($d / (uint64)1000);
+                      ~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:15:19-36: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    @write_us = hist($d / (uint64)1000);
+                     ~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:43:20-37: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    @rq_us[$m] = hist($d / (uint64)1000);
+                      ~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:13:7-15: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = (uint64)nsecs - (uint64)@vw[tid];
+         ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:13:23-31: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = (uint64)nsecs - (uint64)@vw[tid];
+                         ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:15:24-32: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @write_us = hist($d / (uint64)1000);
+                          ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:17:11-19: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    if ($d > (uint64)2000000) { @write_over_2ms = count(); @write_over_2ms_sum_ns = sum($d); }
+             ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:42:7-15: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = (uint64)nsecs - (uint64)@iss[args.dev, args.sector];
+         ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:42:23-31: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = (uint64)nsecs - (uint64)@iss[args.dev, args.sector];
+                         ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:43:25-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @rq_us[$m] = hist($d / (uint64)1000);
+                           ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:46:11-19: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    if ($d > (uint64)2000000) { @rq_over_2ms[$m] = count(); }
+             ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:52:7-15: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = (uint64)nsecs - (uint64)@gt[tid];
+         ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:52:23-31: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = (uint64)nsecs - (uint64)@gt[tid];
+                         ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:55:11-19: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    if ($d > (uint64)100000) { @tag_over_100us = count(); @tag_over_100us_sum_ns = sum($d); }
+             ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:18:2-18: WARNING: Return value discarded.
+    delete(@vw, tid);
+    ~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:47:2-39: WARNING: Return value discarded.
+    delete(@iss, (args.dev, args.sector));
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/85-write-tail/tail-sgl.bt:56:2-18: WARNING: Return value discarded.
+    delete(@gt, tid);
+    ~~~~~~~~~~~~~~~~
+Attached 9 probes
+
+
+@gt[370519]: 62928840643105
+@gt[370517]: 62928841538596
+@gt[370488]: 62928844737806
+@gt[370555]: 62928844767230
+@gt[370401]: 62928844826038
+@gt[370482]: 62928844896238
+@gt[370439]: 62928844920798
+@gt[370443]: 62928844961575
+@gt[370487]: 62928845057799
+@gt[370497]: 62928845058335
+@gt[370468]: 62928845060191
+@gt[370513]: 62928845078607
+@gt[370480]: 62928845092311
+@gt[370460]: 62928845105039
+@gt[370423]: 62928845123423
+@gt[370471]: 62928845129671
+@gt[370503]: 62928845144255
+@gt[370464]: 62928845165199
+@gt[370421]: 62928845177143
+@gt[370440]: 62928845178007
+@gt[370512]: 62928845196255
+@gt[370456]: 62928845209127
+@gt[370402]: 62928845215071
+@gt[370523]: 62928845236527
+@gt[370436]: 62928845240679
+@gt[370477]: 62928845244247
+@gt[370419]: 62928845249463
+@gt[370522]: 62928845279632
+@gt[370452]: 62928845324432
+@gt[370562]: 62928845326744
+@gt[370398]: 62928845328536
+@gt[370408]: 62928845337520
+@gt[370536]: 62928845345776
+@gt[370474]: 62928845349608
+@gt[370393]: 62928845350592
+@gt[370463]: 62928845374880
+@gt[370489]: 62928845397192
+@gt[370478]: 62928845430528
+@gt[370516]: 62928845435496
+@gt[370435]: 62928845445888
+@gt[370428]: 62928845462744
+@gt[370426]: 62928845463512
+@gt[370454]: 62928845464080
+@gt[370444]: 62928845483680
+@gt[370558]: 62928845507088
+@gt[370496]: 62928845525536
+@gt[370541]: 62928845533240
+@gt[370467]: 62928845534608
+@gt[370465]: 62928845543944
+@gt[370431]: 62928845547848
+@gt[370502]: 62928845566128
+@gt[370561]: 62928845579897
+@gt[370407]: 62928845610169
+@gt[370554]: 62928845625681
+@gt[370403]: 62928845649113
+@gt[370490]: 62928845657265
+@nr_phys_segments:
+[32, 36)         1749381 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[36, 40)            2815 |                                                    |
+
+@nr_phys_sum: 61099430
+@request_bytes_sum: 459327668224
+@rq_n[8]: 3
+@rq_n[6]: 168840
+@rq_n[7]: 169632
+@rq_n[5]: 169993
+@rq_n[3]: 169999
+@rq_n[4]: 171550
+@rq_n[0]: 172055
+@rq_n[2]: 172745
+@rq_n[1]: 173141
+@rq_over_2ms[2]: 30
+@rq_over_2ms[6]: 1582
+@rq_over_2ms[1]: 1959
+@rq_over_2ms[3]: 1974
+@rq_over_2ms[0]: 2243
+@rq_over_2ms[4]: 2626
+@rq_over_2ms[5]: 2682
+@rq_sum_ns[8]: 1042467
+@rq_sum_ns[7]: 45034339574
+@rq_sum_ns[2]: 48973157456
+@rq_sum_ns[6]: 50605632203
+@rq_sum_ns[3]: 54066885843
+@rq_sum_ns[1]: 57791372948
+@rq_sum_ns[5]: 58427741614
+@rq_sum_ns[0]: 59206316899
+@rq_sum_ns[4]: 60152460905
+@rq_us[8]:
+[256, 512)             3 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@rq_us[6]:
+[4, 8)               205 |                                                    |
+[8, 16)              385 |                                                    |
+[16, 32)              83 |                                                    |
+[32, 64)            8606 |@@@@@@@@                                            |
+[64, 128)          36900 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                |
+[128, 256)         52758 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[256, 512)         51971 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ |
+[512, 1K)          15524 |@@@@@@@@@@@@@@@                                     |
+[1K, 2K)             862 |                                                    |
+[2K, 4K)             848 |                                                    |
+[4K, 8K)             607 |                                                    |
+[8K, 16K)             91 |                                                    |
+
+@rq_us[7]:
+[4, 8)               207 |                                                    |
+[8, 16)              349 |                                                    |
+[16, 32)              88 |                                                    |
+[32, 64)            8522 |@@@@@@@@                                            |
+[64, 128)          36532 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                  |
+[128, 256)         51117 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@    |
+[256, 512)         54835 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          17778 |@@@@@@@@@@@@@@@@                                    |
+[1K, 2K)             204 |                                                    |
+
+@rq_us[5]:
+[4, 8)               207 |                                                    |
+[8, 16)              347 |                                                    |
+[16, 32)              77 |                                                    |
+[32, 64)            8077 |@@@@@@@                                             |
+[64, 128)          34460 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                   |
+[128, 256)         49422 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     |
+[256, 512)         54238 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          17824 |@@@@@@@@@@@@@@@@@                                   |
+[1K, 2K)            2745 |@@                                                  |
+[2K, 4K)            1702 |@                                                   |
+[4K, 8K)             826 |                                                    |
+[8K, 16K)             68 |                                                    |
+
+@rq_us[3]:
+[4, 8)               204 |                                                    |
+[8, 16)              320 |                                                    |
+[16, 32)              77 |                                                    |
+[32, 64)            8163 |@@@@@@@                                             |
+[64, 128)          35127 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                   |
+[128, 256)         51093 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@    |
+[256, 512)         54623 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          17980 |@@@@@@@@@@@@@@@@@                                   |
+[1K, 2K)             459 |                                                    |
+[2K, 4K)             983 |                                                    |
+[4K, 8K)             895 |                                                    |
+[8K, 16K)             75 |                                                    |
+
+@rq_us[4]:
+[4, 8)               206 |                                                    |
+[8, 16)              373 |                                                    |
+[16, 32)              67 |                                                    |
+[32, 64)            7935 |@@@@@@@                                             |
+[64, 128)          33901 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                     |
+[128, 256)         48933 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@       |
+[256, 512)         56035 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          20152 |@@@@@@@@@@@@@@@@@@                                  |
+[1K, 2K)            1373 |@                                                   |
+[2K, 4K)            1305 |@                                                   |
+[4K, 8K)            1102 |@                                                   |
+[8K, 16K)            168 |                                                    |
+
+@rq_us[0]:
+[4, 8)               221 |                                                    |
+[8, 16)              320 |                                                    |
+[16, 32)              76 |                                                    |
+[32, 64)            7764 |@@@@@@@                                             |
+[64, 128)          33531 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                     |
+[128, 256)         48384 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@        |
+[256, 512)         56142 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          22011 |@@@@@@@@@@@@@@@@@@@@                                |
+[1K, 2K)            1402 |@                                                   |
+[2K, 4K)            1178 |@                                                   |
+[4K, 8K)             907 |                                                    |
+[8K, 16K)            119 |                                                    |
+
+@rq_us[2]:
+[4, 8)               225 |                                                    |
+[8, 16)              317 |                                                    |
+[16, 32)              81 |                                                    |
+[32, 64)            7840 |@@@@@@@                                             |
+[64, 128)          33965 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                      |
+[128, 256)         50014 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@        |
+[256, 512)         58210 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          21703 |@@@@@@@@@@@@@@@@@@@                                 |
+[1K, 2K)             360 |                                                    |
+[2K, 4K)              30 |                                                    |
+
+@rq_us[1]:
+[4, 8)               196 |                                                    |
+[8, 16)              301 |                                                    |
+[16, 32)              80 |                                                    |
+[32, 64)            7655 |@@@@@@                                              |
+[64, 128)          33031 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                       |
+[128, 256)         49382 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@        |
+[256, 512)         57428 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          21627 |@@@@@@@@@@@@@@@@@@@                                 |
+[1K, 2K)            1519 |@                                                   |
+[2K, 4K)            1095 |                                                    |
+[4K, 8K)             806 |                                                    |
+[8K, 16K)             21 |                                                    |
+
+@sgl_entries_sum: 61053083
+@sgl_requests: 1752196
+@tag_n: 1742746
+@tag_sum_ns: 1119758953
+@vw[370477]: 62929380248475
+@vw[370497]: 62929380267763
+@vw[370415]: 62929381299935
+@vw[370555]: 62929381318791
+@vw[370408]: 62929381846592
+@vw[370440]: 62929381977577
+@vw[370424]: 62929382100345
+@vw[370485]: 62929382160577
+@vw[370401]: 62929382330066
+@vw[370444]: 62929382393002
+@vw[370451]: 62929382451410
+@vw[370518]: 62929382512346
+@vw[370542]: 62929382696651
+@vw[370470]: 62929382745235
+@vw[370398]: 62929382795587
+@vw[370552]: 62929382801187
+@vw[370523]: 62929382892964
+@vw[370556]: 62929382911844
+@vw[370522]: 62929382930348
+@vw[370511]: 62929383007572
+@vw[370563]: 62929383043636
+@vw[370498]: 62929383052972
+@vw[370434]: 62929383079788
+@vw[370409]: 62929383095028
+@vw[370467]: 62929383144740
+@vw[370422]: 62929383168644
+@vw[370447]: 62929383175644
+@vw[370493]: 62929383180356
+@vw[370404]: 62929383236181
+@vw[370464]: 62929383247157
+@vw[370531]: 62929383249501
+@vw[370562]: 62929383274309
+@vw[370452]: 62929383284261
+@vw[370532]: 62929383300429
+@vw[370458]: 62929383308165
+@vw[370504]: 62929383314253
+@vw[370431]: 62929383337565
+@vw[370483]: 62929383344861
+@vw[370519]: 62929383354509
+@vw[370554]: 62929383359661
+@vw[370561]: 62929383376997
+@vw[370490]: 62929383388733
+@vw[370474]: 62929383394989
+@vw[370535]: 62929383409957
+@vw[370541]: 62929383452637
+@vw[370557]: 62929383467973
+@vw[370547]: 62929383486413
+@vw[370526]: 62929383492925
+@vw[370418]: 62929383504341
+@vw[370565]: 62929383524646
+@vw[370544]: 62929383535326
+@vw[370425]: 62929383588958
+@vw[370466]: 62929383630342
+@vw[370463]: 62929383637782
+@vw[370516]: 62929383653294
+@vw[370421]: 62929383659990
+@vw[370501]: 62929383665182
+@vw[370536]: 62929383689390
+@write_over_2ms: 4345
+@write_over_2ms_sum_ns: 18486881238
+@write_sum_ns: 178109693948
+@write_us:
+[128, 256)        180817 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@    |
+[256, 512)        192386 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)          77588 |@@@@@@@@@@@@@@@@@@@@                                |
+[1K, 2K)            3837 |@                                                   |
+[2K, 4K)            2372 |                                                    |
+[4K, 8K)            1716 |                                                    |
+[8K, 16K)            184 |                                                    |
+
+@writes: 458900

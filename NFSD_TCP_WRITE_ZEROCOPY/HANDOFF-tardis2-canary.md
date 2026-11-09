@@ -164,6 +164,15 @@ its record's first read to its reply, and the client's RTT grows 2.0%.
 1,515, B 2,572); the receive adds 3.2 us.  One run each, and the trace
 narrowed the rate gap to 1.1%.  `FLAMEGRAPH/84-reply-time/README.md`.
 
+**Round 85, three pairs (9 November, `t2-r349..r354`):** round 84's
+larger tail of slow writes does not repeat.  Each drive has its own
+slow phases (about 2,000 requests over 2 ms in a 5 s window, or none),
+changing from run to run and not with staying.  No tag waits, and the
+SGLs are the same (34.87 segments a request, about 133 entries a
+WRITE).  Staying is lower in all six pairs of rounds 82 and 85, by 0.1
+to 3.2 GB/s; its cause is not in the drives or the block layer.
+`FLAMEGRAPH/85-write-tail/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
