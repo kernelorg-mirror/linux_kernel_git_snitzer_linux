@@ -1,0 +1,71 @@
+// reply-time.bt: round 84, a WRITE's time on the server, stage by stage,
+// keyed by its svc_rqst.  t0: the svc_tcp_recvfrom() that starts its
+// record (sk_tcplen 0 at entry; the latest such call on the socket before
+// the record completes).  t1: the svc_tcp_recvfrom() that returns it
+// whole (the last piece).  t2/t3: nfsd_vfs_write() entry and exit.  t4:
+// svc_tcp_send_record() for it, whichever thread combines the send.  t5:
+// its svc_tcp_sendto() returns.  Only records that reach nfsd_vfs_write()
+// are counted.  Exits after 5 s.
+fentry:sunrpc:svc_tcp_recvfrom
+{
+	$svsk = (struct svc_sock *)args.rqstp->rq_xprt;
+	if ($svsk->sk_tcplen == 0) {
+		@r0[$svsk] = nsecs;
+	}
+}
+fexit:sunrpc:svc_tcp_recvfrom /retval > 0/
+{
+	$svsk = (struct svc_sock *)args.rqstp->rq_xprt;
+	if (has_key(@r0, $svsk)) {
+		@t0[args.rqstp] = @r0[$svsk];
+		delete(@r0, $svsk);
+	}
+	@t1[args.rqstp] = nsecs;
+}
+fentry:nfsd:nfsd_vfs_write /has_key(@t1, args.rqstp)/
+{
+	@t2[args.rqstp] = nsecs;
+}
+fexit:nfsd:nfsd_vfs_write /has_key(@t2, args.rqstp)/
+{
+	@t3[args.rqstp] = nsecs;
+}
+fentry:sunrpc:svc_tcp_send_record /args.rqstp != 0 && has_key(@t3, args.rqstp)/
+{
+	@t4[args.rqstp] = nsecs;
+}
+fexit:sunrpc:svc_tcp_sendto
+{
+	$r = args.rqstp;
+	if (has_key(@t4, $r) && has_key(@t1, $r)) {
+		$t1 = (uint64)@t1[$r]; $t2 = (uint64)@t2[$r];
+		$t3 = (uint64)@t3[$r]; $t4 = (uint64)@t4[$r];
+		$t5 = (uint64)nsecs;
+		@n = count();
+		if (has_key(@t0, $r)) {
+			$t0 = (uint64)@t0[$r];
+			@recv_us = hist(($t1 - $t0) / (uint64)1000);
+			@recv_n = count(); @recv_sum_ns = sum($t1 - $t0);
+			@whole_us = hist(($t5 - $t0) / (uint64)1000);
+			@whole_sum_ns = sum($t5 - $t0);
+		}
+		@to_write_us = hist(($t2 - $t1) / (uint64)1000);
+		@to_write_sum_ns = sum($t2 - $t1);
+		@write_us = hist(($t3 - $t2) / (uint64)1000);
+		@write_sum_ns = sum($t3 - $t2);
+		@to_send_us = hist(($t4 - $t3) / (uint64)1000);
+		@to_send_sum_ns = sum($t4 - $t3);
+		@send_us = hist(($t5 - $t4) / (uint64)1000);
+		@send_sum_ns = sum($t5 - $t4);
+		@last_to_reply_us = hist(($t5 - $t1) / (uint64)1000);
+		@last_to_reply_sum_ns = sum($t5 - $t1);
+		if ($t4 - $t3 > (uint64)1000000) { @to_send_over_1ms = count(); }
+	}
+	delete(@t0, $r); delete(@t1, $r); delete(@t2, $r);
+	delete(@t3, $r); delete(@t4, $r);
+}
+interval:s:5
+{
+	clear(@r0); clear(@t0); clear(@t1); clear(@t2); clear(@t3); clear(@t4);
+	exit();
+}
