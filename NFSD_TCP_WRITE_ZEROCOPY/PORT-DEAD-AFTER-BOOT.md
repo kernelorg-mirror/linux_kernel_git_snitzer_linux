@@ -107,6 +107,7 @@ the reset when the boot is into a test kernel: `bootctl set-oneshot
 | 7 Nov, 05:27 | tardis2, stock build 514, second boot of the count | none (both answer before and after `bringup.sh`) | | |
 | 7 Nov, 05:59 | tardis2, held-mark kernel, fifth boot | **a**, dead before `bringup.sh` | 0 | nothing tried; power reset |
 | 7 Nov, 06:08 | tardis2, held-mark kernel, sixth boot | none (both answer before and after `bringup.sh`) | | |
+| 9 Nov, 04:30 | tardis2, canary from `3bdeea5a21cc` (`7.3.3-13.hs.519.canary`), first boot | **a**, dead before `bringup.sh` | 0 (and 0 on the working b) | nothing tried; power reset |
 
 The tardis1 case was seen after the first boot's slot test, which
 takes each port down and up, so it is not known whether that port was

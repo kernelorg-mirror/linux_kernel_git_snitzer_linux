@@ -55,6 +55,24 @@ transports and hand more of them (`FLAMEGRAPH/73-handoff-ref/README.md`).
    WRITE, `svc_recv()`, enqueues and wakes a WRITE, far shares, and the
    region's held peak.
 
+**The first boot (9 November, 04:30) lost port a.**  Pinged before
+`bringup.sh`, as the boot left the ports: `enp161s0f0` 0 of 5, the
+neighbour INCOMPLETE; `enp164s0f0` 5 of 5.  Port a had its carrier and
+address, sent 23 packets and received 143 (40 on ring 0, 61 on ring 3,
+a few on five others) with 207 dropped, and no ARP reply among them;
+`port_rx_fifo_tc0_packets` 0 on both ports.  The client
+(`plsm121c-06`, over 10.20.12.106) had `ens3np0` up at 400 Gb/s and
+pinged the server's port b but not port a, so the fault is at the
+server's receiver, as in `PORT-DEAD-AFTER-BOOT.md`.  Nothing was tried
+on the port.  What this boot did check: the kernel is the canary
+(`7.3.3-13.hs.519.canary.el10.aarch64+16k`, the default boot entry, so
+no one-shot to set again), kdump armed (1024 MiB), nothing in
+`updates/`, `rx_region_held_mark` present, and `pahole` on its
+`sunrpc.ko`'s `struct svc_pool` the same as
+`FLAMEGRAPH/75-counter-lines/pahole-PL.txt`.  Counters and dmesg are in
+`/var/tmp/zc-run-logs/t2-canary/port-dead/canary-boot1/`.  On the next
+boot steps 2 and 3 above need only `bringup.sh`'s own check.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
