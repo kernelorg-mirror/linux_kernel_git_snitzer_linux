@@ -107,6 +107,16 @@ Suggested: drop.  The stock sunrpc was put back by hand after the
 script's put-back left B in `updates/`.
 `FLAMEGRAPH/78-prefetch-count/README.md`.
 
+Round 78's change is dropped (Mike, 9 November), kept as
+`patches/dropped/0013`.
+
+**Round 79, the annotation (9 November, `t2-r334`, `perf.data` kept):**
+about 2.9k cycles a WRITE of `__rx_loan_table_append_ref()` and
+`rx_loan_table_release()` (7.5k together) wait on the loan table's own
+lines, its bvec array and two bitmaps, not on the loaned pages.
+Suggested next: trace which CPUs a record's pieces and its release run
+on before any change.  `FLAMEGRAPH/79-append-release/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

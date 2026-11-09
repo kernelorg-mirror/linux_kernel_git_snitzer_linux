@@ -1,0 +1,1636 @@
+ Percent |	Source code & Disassembly of sunrpc.ko.xz for cycles (6813 samples, percent: local period)
+----------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3     Disassembly of section .text:
+         :
+         : 5     000000000003af10 <__rx_loan_table_append_ref>:
+         : 6     bool borrowed, bool page_pool)
+         : 7     {
+         : 8     const struct bio_vec *last;
+         : 9     unsigned int index;
+         :
+         : 11    if (!t->count)
+    0.64 :   3af10:  ldr     w7, [x0, #28]
+         : 13    static inline int __rx_loan_table_append_ref(struct rx_loan_table *t,
+         : 14    struct page *page,
+         : 15    unsigned int offset,
+         : 16    unsigned int len, bool borrowed,
+         : 17    bool page_pool, bool take_ref)
+         : 18    {
+    0.12 :   3af14:  and     w4, w4, #0xff
+    0.41 :   3af18:  and     w5, w5, #0xff
+    0.12 :   3af1c:  and     w6, w6, #0xff
+         : 22    if (!t->count)
+    0.41 :   3af20:  cbz     w7, 3af44 <__rx_loan_table_append_ref+0x34>
+         : 24    last = &t->bvec[index];
+    0.59 :   3af24:  sub     w9, w7, #0x1
+         : 26    index = t->count - 1;
+    0.01 :   3af28:  sub     w12, w7, #0x1
+         : 28    last = &t->bvec[index];
+    0.46 :   3af2c:  ldr     x8, [x0]
+    0.28 :   3af30:  lsl     x10, x9, #4
+         : 31    if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    0.39 :   3af34:  ldr     x10, [x8, x10]
+         : 33    last = &t->bvec[index];
+   18.05 :   3af38:  add     x8, x8, x9, lsl #4
+         : 35    if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    2.86 :   3af3c:  cmp     x1, x10
+    0.16 :   3af40:  b.eq    3afe0 <__rx_loan_table_append_ref+0xd0>  // b.none
+         :
+         : 39    if (rx_loan_table_can_coalesce(t, page, offset, borrowed, page_pool)) {
+         : 40    bvec = &t->bvec[t->count - 1];
+         : 41    bvec->bv_len += len;
+         : 42    } else {
+         : 43    if (t->count == t->capacity)
+    2.52 :   3af44:  ldr     w8, [x0, #24]
+    1.92 :   3af48:  cmp     w8, w7
+    0.00 :   3af4c:  b.eq    3b1dc <__rx_loan_table_append_ref+0x2cc>  // b.none
+         : 47    return -ENOSPC;
+         : 48    bvec = &t->bvec[t->count];
+    0.72 :   3af50:  ldr     x8, [x0]
+    0.08 :   3af54:  ubfiz   x7, x7, #4, #32
+         : 51    if (borrowed && take_ref)
+    0.40 :   3af58:  cmp     w4, #0x0
+    0.12 :   3af5c:  ccmp    w6, #0x0, #0x4, ne      // ne = any
+         : 54    bvec = &t->bvec[t->count];
+    0.30 :   3af60:  add     x9, x8, x7
+         : 56    if (borrowed && take_ref)
+    0.19 :   3af64:  b.ne    3b0f8 <__rx_loan_table_append_ref+0x1e8>  // b.any
+         : 58    * @offset:      offset into the page
+         : 59    */
+         : 60    static inline void bvec_set_page(struct bio_vec *bv, struct page *page,
+         : 61    unsigned int len, unsigned int offset)
+         : 62    {
+         : 63    bv->bv_page = page;
+    0.31 :   3af68:  str     x1, [x8, x7]
+         : 65    rx_loan_get_borrowed(page, page_pool);
+         : 66    bvec_set_page(bvec, page, len, offset);
+         : 67    if (borrowed) {
+    2.97 :   3af6c:  and     w6, w4, #0x1
+         : 69    bv->bv_len = len;
+    0.43 :   3af70:  stp     w3, w2, [x9, #8]
+    0.81 :   3af74:  tbz     w4, #0, 3b06c <__rx_loan_table_append_ref+0x15c>
+    0.37 :   3af78:  and     w10, w5, #0x1
+         : 73    __set_bit(t->count, t->borrowed);
+    0.47 :   3af7c:  ldr     w6, [x0, #28]
+         : 75    * may be that only one operation succeeds.
+         : 76    */
+         : 77    static __always_inline void
+         : 78    generic___set_bit(unsigned long nr, volatile unsigned long *addr)
+         : 79    {
+         : 80    unsigned long mask = BIT_MASK(nr);
+    0.72 :   3af80:  mov     x7, #0x1                        // #1
+         : 82    unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.42 :   3af84:  ldr     x8, [x0, #8]
+    0.07 :   3af88:  lsr     w2, w6, #6
+         : 85    unsigned long mask = BIT_MASK(nr);
+    0.45 :   3af8c:  lsl     x7, x7, x6
+         : 87    unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.07 :   3af90:  lsl     x2, x2, #3
+         :
+         : 90    *p  |= mask;
+    0.41 :   3af94:  ldr     x6, [x8, x2]
+    7.35 :   3af98:  orr     x6, x6, x7
+    3.87 :   3af9c:  str     x6, [x8, x2]
+         : 94    t->borrowed_count++;
+         : 95    t->refs_acquired++;
+    2.86 :   3afa0:  ldr     w6, [x0, #48]
+         : 97    t->borrowed_count++;
+    0.68 :   3afa4:  ldr     w2, [x0, #56]
+         : 99    t->refs_acquired++;
+    0.12 :   3afa8:  add     w6, w6, #0x1
+    0.49 :   3afac:  str     w6, [x0, #48]
+         : 102   t->borrowed_count++;
+    0.51 :   3afb0:  add     w2, w2, #0x1
+    0.29 :   3afb4:  str     w2, [x0, #56]
+         : 105   if (page_pool && page != t->region_last &&
+    1.44 :   3afb8:  cbnz    w10, 3b094 <__rx_loan_table_append_ref+0x184>
+         : 107   }
+         : 108   if (page_pool)
+         : 109   __set_bit(t->count, t->page_pool);
+         : 110   t->count++;
+         : 111   }
+         : 112   t->body_bytes += len;
+    0.00 :   3afbc:  ldp     w2, w4, [x0, #28]
+         : 114   if (borrowed) {
+         : 115   t->borrowed_bytes += len;
+    0.00 :   3afc0:  ldr     w1, [x0, #36]
+         : 117   t->count++;
+    0.00 :   3afc4:  add     w2, w2, #0x1
+         : 119   t->body_bytes += len;
+    0.00 :   3afc8:  add     w4, w4, w3
+         : 121   t->borrowed_bytes += len;
+    0.00 :   3afcc:  add     w1, w1, w3
+         : 123   t->count++;
+    0.00 :   3afd0:  stp     w2, w4, [x0, #28]
+         : 125   t->borrowed_bytes += len;
+    0.00 :   3afd4:  str     w1, [x0, #36]
+         : 127   if (page_pool)
+         : 128   t->page_pool_bytes += len;
+         : 129   } else {
+         : 130   t->copied_bytes += len;
+         : 131   }
+         : 132   return 0;
+    0.00 :   3afd8:  mov     w0, #0x0                        // #0
+         : 134   }
+    0.59 :   3afdc:  ret
+         : 136   if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    0.98 :   3afe0:  ldp     w10, w11, [x8, #8]
+    1.83 :   3afe4:  add     w11, w10, w11
+    0.28 :   3afe8:  cmp     w2, w11
+    0.00 :   3afec:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+         : 141   /*
+         : 142   * Unlike the bitops with the '__' prefix above, this one *is* atomic,
+         : 143   * so `volatile` must always stay here with no cast-aways. See
+         : 144   * `Documentation/atomic_bitops.txt` for the details.
+         : 145   */
+         : 146   return 1UL & (addr[BIT_WORD(nr)] >> (nr & (BITS_PER_LONG-1)));
+    0.00 :   3aff0:  lsr     x9, x9, #6
+    0.00 :   3aff4:  and     w13, w12, #0x3f
+    0.00 :   3aff8:  ldr     x11, [x0, #8]
+    0.00 :   3affc:  lsl     x9, x9, #3
+    0.00 :   3b000:  ldr     x11, [x11, x9]
+    0.00 :   3b004:  lsr     x11, x11, x12
+         : 153   return test_bit(index, t->borrowed) == borrowed &&
+    0.00 :   3b008:  and     w11, w11, #0x1
+    0.00 :   3b00c:  cmp     w4, w11
+    0.00 :   3b010:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+    0.00 :   3b014:  ldr     x11, [x0, #16]
+    0.00 :   3b018:  ldr     x9, [x11, x9]
+    0.00 :   3b01c:  lsr     x9, x9, x13
+    0.00 :   3b020:  and     w9, w9, #0x1
+    0.00 :   3b024:  cmp     w5, w9
+    0.00 :   3b028:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+         : 163   bvec->bv_len += len;
+    0.00 :   3b02c:  and     w6, w4, #0x1
+    0.00 :   3b030:  add     w10, w3, w10
+    0.00 :   3b034:  str     w10, [x8, #8]
+         : 167   t->body_bytes += len;
+    0.63 :   3b038:  ldr     w1, [x0, #32]
+    0.09 :   3b03c:  add     w1, w1, w3
+    0.75 :   3b040:  str     w1, [x0, #32]
+         : 171   if (borrowed) {
+    0.49 :   3b044:  cbz     w6, 3b080 <__rx_loan_table_append_ref+0x170>
+         : 173   t->borrowed_bytes += len;
+    0.42 :   3b048:  ldr     w1, [x0, #36]
+    0.14 :   3b04c:  add     w1, w1, w3
+    0.49 :   3b050:  str     w1, [x0, #36]
+         : 177   if (page_pool)
+    0.60 :   3b054:  tbz     w5, #0, 3afd8 <__rx_loan_table_append_ref+0xc8>
+         : 179   t->page_pool_bytes += len;
+    0.38 :   3b058:  ldr     w1, [x0, #44]
+    0.09 :   3b05c:  add     w1, w1, w3
+    0.63 :   3b060:  str     w1, [x0, #44]
+         : 183   return 0;
+    0.57 :   3b064:  mov     w0, #0x0                        // #0
+    0.18 :   3b068:  b       3afdc <__rx_loan_table_append_ref+0xcc>
+         : 186   if (page_pool)
+    0.00 :   3b06c:  tbnz    w5, #0, 3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 188   t->body_bytes += len;
+    0.00 :   3b070:  ldp     w1, w2, [x0, #28]
+         : 190   t->count++;
+    0.00 :   3b074:  add     w1, w1, #0x1
+         : 192   t->body_bytes += len;
+    0.00 :   3b078:  add     w2, w2, w3
+         : 194   t->count++;
+    0.00 :   3b07c:  stp     w1, w2, [x0, #28]
+         : 196   t->copied_bytes += len;
+    0.00 :   3b080:  ldr     w1, [x0, #40]
+    0.00 :   3b084:  add     w1, w1, w3
+    0.00 :   3b088:  str     w1, [x0, #40]
+         : 200   return 0;
+    0.00 :   3b08c:  mov     w0, #0x0                        // #0
+    0.00 :   3b090:  b       3afdc <__rx_loan_table_append_ref+0xcc>
+         : 203   if (page_pool && page != t->region_last &&
+    0.59 :   3b094:  ldr     x2, [x0, #64]
+    0.13 :   3b098:  and     w6, w4, #0x1
+    0.39 :   3b09c:  cmp     x2, x1
+    0.02 :   3b0a0:  b.eq    3b0c4 <__rx_loan_table_append_ref+0x1b4>  // b.none
+         : 208   #define PP_MAGIC_MASK ~(PP_DMA_INDEX_MASK | 0x3UL)
+         :
+         : 210   #ifdef CONFIG_PAGE_POOL
+         : 211   static inline bool page_pool_page_is_pp(const struct page *page)
+         : 212   {
+         : 213   return (page->pp_magic & PP_MAGIC_MASK) == PP_SIGNATURE;
+    0.45 :   3b0a4:  ldr     x2, [x1, #8]
+    2.03 :   3b0a8:  and     w6, w4, #0x1
+         : 216   * a pool allocates only from the region, so its pages are region pages,
+         : 217   * wherever they are while the pool owns them (in a ring, an skb or a loan).
+         : 218   */
+         : 219   static inline bool page_pool_page_in_rx_region(struct page *page)
+         : 220   {
+         : 221   return page_pool_page_is_pp(page) &&
+    0.24 :   3b0ac:  mov     x4, #0x40                       // #64
+    0.19 :   3b0b0:  and     x2, x2, #0xfffffffffffffffc
+    0.11 :   3b0b4:  movk    x4, #0xdead, lsl #48
+    0.29 :   3b0b8:  and     x2, x2, #0xffffff800000007f
+    0.18 :   3b0bc:  cmp     x2, x4
+    0.07 :   3b0c0:  b.eq    3b194 <__rx_loan_table_append_ref+0x284>  // b.none
+         : 228   __set_bit(t->count, t->page_pool);
+    0.82 :   3b0c4:  ldr     w2, [x0, #28]
+         : 230   unsigned long mask = BIT_MASK(nr);
+    0.22 :   3b0c8:  mov     x4, #0x1                        // #1
+         : 232   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.45 :   3b0cc:  ldr     x7, [x0, #16]
+    0.30 :   3b0d0:  lsr     w1, w2, #6
+         : 235   unsigned long mask = BIT_MASK(nr);
+    0.32 :   3b0d4:  lsl     x4, x4, x2
+         : 237   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.12 :   3b0d8:  lsl     x1, x1, #3
+         : 239   *p  |= mask;
+    0.46 :   3b0dc:  ldr     x2, [x7, x1]
+    8.31 :   3b0e0:  orr     x2, x2, x4
+    0.39 :   3b0e4:  str     x2, [x7, x1]
+         : 243   t->count++;
+    2.50 :   3b0e8:  ldr     w1, [x0, #28]
+    0.21 :   3b0ec:  add     w1, w1, #0x1
+    0.61 :   3b0f0:  str     w1, [x0, #28]
+    1.01 :   3b0f4:  b       3b038 <__rx_loan_table_append_ref+0x128>
+         : 248   if (page_pool) {
+    0.35 :   3b0f8:  and     w10, w5, #0x1
+    0.06 :   3b0fc:  tbnz    w5, #0, 3b140 <__rx_loan_table_append_ref+0x230>
+         : 251   }
+         :
+         : 253   static __always_inline unsigned long _compound_head(const struct page *page)
+         : 254   {
+         : 255   /* Head-page LRU pointers alias this word but must keep bit 0 clear. */
+         : 256   unsigned long info = data_race(READ_ONCE(page->compound_info));
+    0.00 :   3b100:  ldr     x11, [x1, #8]
+         : 258   unsigned long mask;
+         :
+         : 260   if (!compound_info_has_mask()) {
+         : 261   /* Bit 0 encodes PageTail() */
+         : 262   if (info & 1)
+         : 263   return info - 1;
+    0.00 :   3b104:  sub     x6, x11, #0x1
+    0.00 :   3b108:  tst     x11, #0x1
+    0.00 :   3b10c:  csel    x6, x6, x1, ne  // ne = any
+         : 267   /*
+         : 268   * Marks guardpages used with debug_pagealloc.
+         : 269   */
+         : 270   PAGE_TYPE_OPS(Guard, guard, guard)
+         :
+         : 272   PAGE_TYPE_OPS(Slab, slab, slab)
+    0.00 :   3b110:  ldrb    w11, [x6, #51]
+         : 274   if (WARN_ON_ONCE(folio_test_slab(folio)))
+    0.00 :   3b114:  cmp     w11, #0xf5
+    0.00 :   3b118:  b.eq    3b1e4 <__rx_loan_table_append_ref+0x2d4>  // b.none
+         : 277   if (WARN_ON_ONCE(folio_test_large_kmalloc(folio)))
+    0.00 :   3b11c:  cmp     w11, #0xf8
+    0.00 :   3b120:  b.eq    3b1f4 <__rx_loan_table_append_ref+0x2e4>  // b.none
+         : 280   alternative_has_cap_likely(const unsigned long cpucap)
+         : 281   {
+         : 282   if (!cpucap_is_possible(cpucap))
+         : 283   return false;
+         :
+         : 285   asm goto(
+    0.00 :   3b124:  b       3b170 <__rx_loan_table_append_ref+0x260>
+         : 287   }
+         :
+         : 289   ATOMIC_OP(andnot, stclr)
+         : 290   ATOMIC_OP(or, stset)
+         : 291   ATOMIC_OP(xor, steor)
+         : 292   ATOMIC_OP(add, stadd)
+    0.00 :   3b128:  add     x6, x6, #0x34
+    0.00 :   3b12c:  mov     w11, #0x1                       // #1
+    0.00 :   3b130:  stadd   w11, [x6]
+         : 296   bv->bv_page = page;
+    0.00 :   3b134:  str     x1, [x8, x7]
+         : 298   bv->bv_len = len;
+    0.00 :   3b138:  stp     w3, w2, [x9, #8]
+         : 300   if (borrowed) {
+    0.00 :   3b13c:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 302   * Return: the pointer to struct netmem_desc * regardless of its
+         : 303   * underlying type.
+         : 304   */
+         : 305   static inline struct netmem_desc *netmem_to_nmdesc(netmem_ref netmem)
+         : 306   {
+         : 307   void *p = (void *)((__force unsigned long)netmem & ~NET_IOV);
+    0.16 :   3b140:  and     x6, x1, #0xfffffffffffffffe
+         : 309   }
+         :
+         : 311   static inline netmem_ref netmem_compound_head(netmem_ref netmem)
+         : 312   {
+         : 313   /* niov are never compounded */
+         : 314   if (netmem_is_net_iov(netmem))
+    0.04 :   3b144:  tbnz    w1, #0, 3b154 <__rx_loan_table_append_ref+0x244>
+         : 316   unsigned long info = data_race(READ_ONCE(page->compound_info));
+    0.11 :   3b148:  ldr     x11, [x1, #8]
+         : 318   if (info & 1)
+    0.22 :   3b14c:  tbz     w11, #0, 3b154 <__rx_loan_table_append_ref+0x244>
+         : 320   return info - 1;
+    0.00 :   3b150:  sub     x6, x11, #0x1
+    0.18 :   3b154:  b       3b1b8 <__rx_loan_table_append_ref+0x2a8>
+         : 323   }
+         :
+         : 325   ATOMIC64_OP(andnot, stclr)
+         : 326   ATOMIC64_OP(or, stset)
+         : 327   ATOMIC64_OP(xor, steor)
+         : 328   ATOMIC64_OP(add, stadd)
+    0.03 :   3b158:  add     x6, x6, #0x28
+    0.01 :   3b15c:  mov     x11, #0x1                       // #1
+    0.07 :   3b160:  stadd   x11, [x6]
+         : 332   bv->bv_page = page;
+    0.07 :   3b164:  str     x1, [x8, x7]
+         : 334   bv->bv_len = len;
+    0.08 :   3b168:  stp     w3, w2, [x9, #8]
+    0.09 :   3b16c:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 337   ATOMIC_FETCH_OP (        , dmb ish,  , l, "memory", __VA_ARGS__)\
+         : 338   ATOMIC_FETCH_OP (_relaxed,        ,  ,  ,         , __VA_ARGS__)\
+         : 339   ATOMIC_FETCH_OP (_acquire,        , a,  , "memory", __VA_ARGS__)\
+         : 340   ATOMIC_FETCH_OP (_release,        ,  , l, "memory", __VA_ARGS__)
+         :
+         : 342   ATOMIC_OPS(add, add, I)
+    0.00 :   3b170:  add     x6, x6, #0x34
+    0.00 :   3b174:  prfm    pstl1strm, [x6]
+    0.00 :   3b178:  ldxr    w11, [x6]
+    0.00 :   3b17c:  add     w11, w11, #0x1
+    0.00 :   3b180:  stxr    w12, w11, [x6]
+    0.00 :   3b184:  cbnz    w12, 3b178 <__rx_loan_table_append_ref+0x268>
+         : 349   bv->bv_page = page;
+    0.00 :   3b188:  str     x1, [x8, x7]
+         : 351   bv->bv_len = len;
+    0.00 :   3b18c:  stp     w3, w2, [x9, #8]
+    0.00 :   3b190:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 354   void *p = (void *)((__force unsigned long)netmem & ~NET_IOV);
+    1.24 :   3b194:  and     x2, x1, #0xfffffffffffffffe
+         : 356   netmem_get_pp(page_to_netmem(page))->rx_region;
+    0.67 :   3b198:  ldr     x2, [x2, #16]
+         : 358   return page_pool_page_is_pp(page) &&
+    2.45 :   3b19c:  ldr     x2, [x2, #968]
+    4.27 :   3b1a0:  cbz     x2, 3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 361   t->region_count++;
+    1.59 :   3b1a4:  ldr     w2, [x0, #60]
+         : 363   t->region_last = page;
+    0.22 :   3b1a8:  str     x1, [x0, #64]
+         : 365   t->region_count++;
+    2.16 :   3b1ac:  add     w1, w2, #0x1
+    0.18 :   3b1b0:  str     w1, [x0, #60]
+         : 368   if (page_pool)
+    0.34 :   3b1b4:  b       3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 370   ATOMIC64_FETCH_OP (, dmb ish,  , l, "memory", __VA_ARGS__)      \
+         : 371   ATOMIC64_FETCH_OP (_relaxed,,  ,  ,         , __VA_ARGS__)      \
+         : 372   ATOMIC64_FETCH_OP (_acquire,, a,  , "memory", __VA_ARGS__)      \
+         : 373   ATOMIC64_FETCH_OP (_release,,  , l, "memory", __VA_ARGS__)
+         :
+         : 375   ATOMIC64_OPS(add, add, I)
+    0.00 :   3b1b8:  add     x6, x6, #0x28
+    0.00 :   3b1bc:  prfm    pstl1strm, [x6]
+    0.00 :   3b1c0:  ldxr    x11, [x6]
+    0.00 :   3b1c4:  add     x11, x11, #0x1
+    0.00 :   3b1c8:  stxr    w12, x11, [x6]
+    0.00 :   3b1cc:  cbnz    w12, 3b1c0 <__rx_loan_table_append_ref+0x2b0>
+         : 382   bv->bv_page = page;
+    0.00 :   3b1d0:  str     x1, [x8, x7]
+         : 384   bv->bv_len = len;
+    0.00 :   3b1d4:  stp     w3, w2, [x9, #8]
+         : 386   if (borrowed) {
+    0.00 :   3b1d8:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 388   return -ENOSPC;
+    0.00 :   3b1dc:  mov     w0, #0xffffffe4                 // #-28
+         : 390   }
+    0.00 :   3b1e0:  ret
+         : 392   if (WARN_ON_ONCE(folio_test_slab(folio)))
+    0.00 :   3b1e4:  brk     #0x800
+         : 394   bv->bv_page = page;
+    0.00 :   3b1e8:  str     x1, [x8, x7]
+         : 396   bv->bv_len = len;
+    0.00 :   3b1ec:  stp     w3, w2, [x9, #8]
+         : 398   if (borrowed) {
+    0.00 :   3b1f0:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 400   if (WARN_ON_ONCE(folio_test_large_kmalloc(folio)))
+    0.00 :   3b1f4:  brk     #0x800
+         : 402   bv->bv_page = page;
+    0.00 :   3b1f8:  str     x1, [x8, x7]
+         : 404   bv->bv_len = len;
+    0.00 :   3b1fc:  stp     w3, w2, [x9, #8]
+    0.00 :   3b200:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+ Percent |	Source code & Disassembly of sunrpc.ko.xz for instructions (18805 samples, percent: local period)
+-----------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3     Disassembly of section .text:
+         :
+         : 5     000000000003af10 <__rx_loan_table_append_ref>:
+         : 6     bool borrowed, bool page_pool)
+         : 7     {
+         : 8     const struct bio_vec *last;
+         : 9     unsigned int index;
+         :
+         : 11    if (!t->count)
+    0.60 :   3af10:  ldr     w7, [x0, #28]
+         : 13    static inline int __rx_loan_table_append_ref(struct rx_loan_table *t,
+         : 14    struct page *page,
+         : 15    unsigned int offset,
+         : 16    unsigned int len, bool borrowed,
+         : 17    bool page_pool, bool take_ref)
+         : 18    {
+    0.10 :   3af14:  and     w4, w4, #0xff
+    0.47 :   3af18:  and     w5, w5, #0xff
+    0.24 :   3af1c:  and     w6, w6, #0xff
+         : 22    if (!t->count)
+    0.55 :   3af20:  cbz     w7, 3af44 <__rx_loan_table_append_ref+0x34>
+         : 24    last = &t->bvec[index];
+    0.54 :   3af24:  sub     w9, w7, #0x1
+         : 26    index = t->count - 1;
+    0.05 :   3af28:  sub     w12, w7, #0x1
+         : 28    last = &t->bvec[index];
+    0.49 :   3af2c:  ldr     x8, [x0]
+    0.34 :   3af30:  lsl     x10, x9, #4
+         : 31    if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    0.55 :   3af34:  ldr     x10, [x8, x10]
+         : 33    last = &t->bvec[index];
+   13.97 :   3af38:  add     x8, x8, x9, lsl #4
+         : 35    if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    3.26 :   3af3c:  cmp     x1, x10
+    0.05 :   3af40:  b.eq    3afe0 <__rx_loan_table_append_ref+0xd0>  // b.none
+         :
+         : 39    if (rx_loan_table_can_coalesce(t, page, offset, borrowed, page_pool)) {
+         : 40    bvec = &t->bvec[t->count - 1];
+         : 41    bvec->bv_len += len;
+         : 42    } else {
+         : 43    if (t->count == t->capacity)
+    3.40 :   3af44:  ldr     w8, [x0, #24]
+    2.30 :   3af48:  cmp     w8, w7
+    0.00 :   3af4c:  b.eq    3b1dc <__rx_loan_table_append_ref+0x2cc>  // b.none
+         : 47    return -ENOSPC;
+         : 48    bvec = &t->bvec[t->count];
+    0.79 :   3af50:  ldr     x8, [x0]
+    0.03 :   3af54:  ubfiz   x7, x7, #4, #32
+         : 51    if (borrowed && take_ref)
+    0.65 :   3af58:  cmp     w4, #0x0
+    0.15 :   3af5c:  ccmp    w6, #0x0, #0x4, ne      // ne = any
+         : 54    bvec = &t->bvec[t->count];
+    0.60 :   3af60:  add     x9, x8, x7
+         : 56    if (borrowed && take_ref)
+    0.50 :   3af64:  b.ne    3b0f8 <__rx_loan_table_append_ref+0x1e8>  // b.any
+         : 58    * @offset:      offset into the page
+         : 59    */
+         : 60    static inline void bvec_set_page(struct bio_vec *bv, struct page *page,
+         : 61    unsigned int len, unsigned int offset)
+         : 62    {
+         : 63    bv->bv_page = page;
+    0.70 :   3af68:  str     x1, [x8, x7]
+         : 65    rx_loan_get_borrowed(page, page_pool);
+         : 66    bvec_set_page(bvec, page, len, offset);
+         : 67    if (borrowed) {
+    1.09 :   3af6c:  and     w6, w4, #0x1
+         : 69    bv->bv_len = len;
+    0.58 :   3af70:  stp     w3, w2, [x9, #8]
+    0.74 :   3af74:  tbz     w4, #0, 3b06c <__rx_loan_table_append_ref+0x15c>
+    0.64 :   3af78:  and     w10, w5, #0x1
+         : 73    __set_bit(t->count, t->borrowed);
+    0.65 :   3af7c:  ldr     w6, [x0, #28]
+         : 75    * may be that only one operation succeeds.
+         : 76    */
+         : 77    static __always_inline void
+         : 78    generic___set_bit(unsigned long nr, volatile unsigned long *addr)
+         : 79    {
+         : 80    unsigned long mask = BIT_MASK(nr);
+    1.09 :   3af80:  mov     x7, #0x1                        // #1
+         : 82    unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.77 :   3af84:  ldr     x8, [x0, #8]
+    0.16 :   3af88:  lsr     w2, w6, #6
+         : 85    unsigned long mask = BIT_MASK(nr);
+    0.74 :   3af8c:  lsl     x7, x7, x6
+         : 87    unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.07 :   3af90:  lsl     x2, x2, #3
+         :
+         : 90    *p  |= mask;
+    0.65 :   3af94:  ldr     x6, [x8, x2]
+    4.92 :   3af98:  orr     x6, x6, x7
+    5.46 :   3af9c:  str     x6, [x8, x2]
+         : 94    t->borrowed_count++;
+         : 95    t->refs_acquired++;
+    1.14 :   3afa0:  ldr     w6, [x0, #48]
+         : 97    t->borrowed_count++;
+    0.93 :   3afa4:  ldr     w2, [x0, #56]
+         : 99    t->refs_acquired++;
+    0.06 :   3afa8:  add     w6, w6, #0x1
+    0.67 :   3afac:  str     w6, [x0, #48]
+         : 102   t->borrowed_count++;
+    0.75 :   3afb0:  add     w2, w2, #0x1
+    0.67 :   3afb4:  str     w2, [x0, #56]
+         : 105   if (page_pool && page != t->region_last &&
+    0.92 :   3afb8:  cbnz    w10, 3b094 <__rx_loan_table_append_ref+0x184>
+         : 107   }
+         : 108   if (page_pool)
+         : 109   __set_bit(t->count, t->page_pool);
+         : 110   t->count++;
+         : 111   }
+         : 112   t->body_bytes += len;
+    0.00 :   3afbc:  ldp     w2, w4, [x0, #28]
+         : 114   if (borrowed) {
+         : 115   t->borrowed_bytes += len;
+    0.00 :   3afc0:  ldr     w1, [x0, #36]
+         : 117   t->count++;
+    0.00 :   3afc4:  add     w2, w2, #0x1
+         : 119   t->body_bytes += len;
+    0.00 :   3afc8:  add     w4, w4, w3
+         : 121   t->borrowed_bytes += len;
+    0.00 :   3afcc:  add     w1, w1, w3
+         : 123   t->count++;
+    0.00 :   3afd0:  stp     w2, w4, [x0, #28]
+         : 125   t->borrowed_bytes += len;
+    0.00 :   3afd4:  str     w1, [x0, #36]
+         : 127   if (page_pool)
+         : 128   t->page_pool_bytes += len;
+         : 129   } else {
+         : 130   t->copied_bytes += len;
+         : 131   }
+         : 132   return 0;
+    0.00 :   3afd8:  mov     w0, #0x0                        // #0
+         : 134   }
+    0.52 :   3afdc:  ret
+         : 136   if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    1.42 :   3afe0:  ldp     w10, w11, [x8, #8]
+    2.44 :   3afe4:  add     w11, w10, w11
+    0.22 :   3afe8:  cmp     w2, w11
+    0.00 :   3afec:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+         : 141   /*
+         : 142   * Unlike the bitops with the '__' prefix above, this one *is* atomic,
+         : 143   * so `volatile` must always stay here with no cast-aways. See
+         : 144   * `Documentation/atomic_bitops.txt` for the details.
+         : 145   */
+         : 146   return 1UL & (addr[BIT_WORD(nr)] >> (nr & (BITS_PER_LONG-1)));
+    0.00 :   3aff0:  lsr     x9, x9, #6
+    0.00 :   3aff4:  and     w13, w12, #0x3f
+    0.00 :   3aff8:  ldr     x11, [x0, #8]
+    0.00 :   3affc:  lsl     x9, x9, #3
+    0.00 :   3b000:  ldr     x11, [x11, x9]
+    0.00 :   3b004:  lsr     x11, x11, x12
+         : 153   return test_bit(index, t->borrowed) == borrowed &&
+    0.00 :   3b008:  and     w11, w11, #0x1
+    0.00 :   3b00c:  cmp     w4, w11
+    0.00 :   3b010:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+    0.00 :   3b014:  ldr     x11, [x0, #16]
+    0.00 :   3b018:  ldr     x9, [x11, x9]
+    0.00 :   3b01c:  lsr     x9, x9, x13
+    0.00 :   3b020:  and     w9, w9, #0x1
+    0.00 :   3b024:  cmp     w5, w9
+    0.00 :   3b028:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+         : 163   bvec->bv_len += len;
+    0.00 :   3b02c:  and     w6, w4, #0x1
+    0.00 :   3b030:  add     w10, w3, w10
+    0.00 :   3b034:  str     w10, [x8, #8]
+         : 167   t->body_bytes += len;
+    0.74 :   3b038:  ldr     w1, [x0, #32]
+    0.07 :   3b03c:  add     w1, w1, w3
+    0.65 :   3b040:  str     w1, [x0, #32]
+         : 171   if (borrowed) {
+    0.70 :   3b044:  cbz     w6, 3b080 <__rx_loan_table_append_ref+0x170>
+         : 173   t->borrowed_bytes += len;
+    0.53 :   3b048:  ldr     w1, [x0, #36]
+    0.35 :   3b04c:  add     w1, w1, w3
+    0.56 :   3b050:  str     w1, [x0, #36]
+         : 177   if (page_pool)
+    0.63 :   3b054:  tbz     w5, #0, 3afd8 <__rx_loan_table_append_ref+0xc8>
+         : 179   t->page_pool_bytes += len;
+    0.52 :   3b058:  ldr     w1, [x0, #44]
+    0.07 :   3b05c:  add     w1, w1, w3
+    0.64 :   3b060:  str     w1, [x0, #44]
+         : 183   return 0;
+    0.59 :   3b064:  mov     w0, #0x0                        // #0
+    0.30 :   3b068:  b       3afdc <__rx_loan_table_append_ref+0xcc>
+         : 186   if (page_pool)
+    0.00 :   3b06c:  tbnz    w5, #0, 3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 188   t->body_bytes += len;
+    0.00 :   3b070:  ldp     w1, w2, [x0, #28]
+         : 190   t->count++;
+    0.00 :   3b074:  add     w1, w1, #0x1
+         : 192   t->body_bytes += len;
+    0.00 :   3b078:  add     w2, w2, w3
+         : 194   t->count++;
+    0.00 :   3b07c:  stp     w1, w2, [x0, #28]
+         : 196   t->copied_bytes += len;
+    0.00 :   3b080:  ldr     w1, [x0, #40]
+    0.00 :   3b084:  add     w1, w1, w3
+    0.00 :   3b088:  str     w1, [x0, #40]
+         : 200   return 0;
+    0.00 :   3b08c:  mov     w0, #0x0                        // #0
+    0.00 :   3b090:  b       3afdc <__rx_loan_table_append_ref+0xcc>
+         : 203   if (page_pool && page != t->region_last &&
+    0.93 :   3b094:  ldr     x2, [x0, #64]
+    0.23 :   3b098:  and     w6, w4, #0x1
+    0.83 :   3b09c:  cmp     x2, x1
+    0.02 :   3b0a0:  b.eq    3b0c4 <__rx_loan_table_append_ref+0x1b4>  // b.none
+         : 208   #define PP_MAGIC_MASK ~(PP_DMA_INDEX_MASK | 0x3UL)
+         :
+         : 210   #ifdef CONFIG_PAGE_POOL
+         : 211   static inline bool page_pool_page_is_pp(const struct page *page)
+         : 212   {
+         : 213   return (page->pp_magic & PP_MAGIC_MASK) == PP_SIGNATURE;
+    0.79 :   3b0a4:  ldr     x2, [x1, #8]
+    1.23 :   3b0a8:  and     w6, w4, #0x1
+         : 216   * a pool allocates only from the region, so its pages are region pages,
+         : 217   * wherever they are while the pool owns them (in a ring, an skb or a loan).
+         : 218   */
+         : 219   static inline bool page_pool_page_in_rx_region(struct page *page)
+         : 220   {
+         : 221   return page_pool_page_is_pp(page) &&
+    0.35 :   3b0ac:  mov     x4, #0x40                       // #64
+    0.29 :   3b0b0:  and     x2, x2, #0xfffffffffffffffc
+    0.12 :   3b0b4:  movk    x4, #0xdead, lsl #48
+    0.26 :   3b0b8:  and     x2, x2, #0xffffff800000007f
+    0.37 :   3b0bc:  cmp     x2, x4
+    0.05 :   3b0c0:  b.eq    3b194 <__rx_loan_table_append_ref+0x284>  // b.none
+         : 228   __set_bit(t->count, t->page_pool);
+    0.96 :   3b0c4:  ldr     w2, [x0, #28]
+         : 230   unsigned long mask = BIT_MASK(nr);
+    0.29 :   3b0c8:  mov     x4, #0x1                        // #1
+         : 232   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.66 :   3b0cc:  ldr     x7, [x0, #16]
+    0.39 :   3b0d0:  lsr     w1, w2, #6
+         : 235   unsigned long mask = BIT_MASK(nr);
+    0.30 :   3b0d4:  lsl     x4, x4, x2
+         : 237   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.43 :   3b0d8:  lsl     x1, x1, #3
+         : 239   *p  |= mask;
+    0.69 :   3b0dc:  ldr     x2, [x7, x1]
+    7.67 :   3b0e0:  orr     x2, x2, x4
+    0.52 :   3b0e4:  str     x2, [x7, x1]
+         : 243   t->count++;
+    0.81 :   3b0e8:  ldr     w1, [x0, #28]
+    0.37 :   3b0ec:  add     w1, w1, #0x1
+    0.61 :   3b0f0:  str     w1, [x0, #28]
+    0.81 :   3b0f4:  b       3b038 <__rx_loan_table_append_ref+0x128>
+         : 248   if (page_pool) {
+    0.21 :   3b0f8:  and     w10, w5, #0x1
+    0.06 :   3b0fc:  tbnz    w5, #0, 3b140 <__rx_loan_table_append_ref+0x230>
+         : 251   }
+         :
+         : 253   static __always_inline unsigned long _compound_head(const struct page *page)
+         : 254   {
+         : 255   /* Head-page LRU pointers alias this word but must keep bit 0 clear. */
+         : 256   unsigned long info = data_race(READ_ONCE(page->compound_info));
+    0.00 :   3b100:  ldr     x11, [x1, #8]
+         : 258   unsigned long mask;
+         :
+         : 260   if (!compound_info_has_mask()) {
+         : 261   /* Bit 0 encodes PageTail() */
+         : 262   if (info & 1)
+         : 263   return info - 1;
+    0.00 :   3b104:  sub     x6, x11, #0x1
+    0.00 :   3b108:  tst     x11, #0x1
+    0.00 :   3b10c:  csel    x6, x6, x1, ne  // ne = any
+         : 267   /*
+         : 268   * Marks guardpages used with debug_pagealloc.
+         : 269   */
+         : 270   PAGE_TYPE_OPS(Guard, guard, guard)
+         :
+         : 272   PAGE_TYPE_OPS(Slab, slab, slab)
+    0.00 :   3b110:  ldrb    w11, [x6, #51]
+         : 274   if (WARN_ON_ONCE(folio_test_slab(folio)))
+    0.00 :   3b114:  cmp     w11, #0xf5
+    0.00 :   3b118:  b.eq    3b1e4 <__rx_loan_table_append_ref+0x2d4>  // b.none
+         : 277   if (WARN_ON_ONCE(folio_test_large_kmalloc(folio)))
+    0.00 :   3b11c:  cmp     w11, #0xf8
+    0.00 :   3b120:  b.eq    3b1f4 <__rx_loan_table_append_ref+0x2e4>  // b.none
+         : 280   alternative_has_cap_likely(const unsigned long cpucap)
+         : 281   {
+         : 282   if (!cpucap_is_possible(cpucap))
+         : 283   return false;
+         :
+         : 285   asm goto(
+    0.00 :   3b124:  b       3b170 <__rx_loan_table_append_ref+0x260>
+         : 287   }
+         :
+         : 289   ATOMIC_OP(andnot, stclr)
+         : 290   ATOMIC_OP(or, stset)
+         : 291   ATOMIC_OP(xor, steor)
+         : 292   ATOMIC_OP(add, stadd)
+    0.00 :   3b128:  add     x6, x6, #0x34
+    0.00 :   3b12c:  mov     w11, #0x1                       // #1
+    0.00 :   3b130:  stadd   w11, [x6]
+         : 296   bv->bv_page = page;
+    0.00 :   3b134:  str     x1, [x8, x7]
+         : 298   bv->bv_len = len;
+    0.00 :   3b138:  stp     w3, w2, [x9, #8]
+         : 300   if (borrowed) {
+    0.00 :   3b13c:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 302   * Return: the pointer to struct netmem_desc * regardless of its
+         : 303   * underlying type.
+         : 304   */
+         : 305   static inline struct netmem_desc *netmem_to_nmdesc(netmem_ref netmem)
+         : 306   {
+         : 307   void *p = (void *)((__force unsigned long)netmem & ~NET_IOV);
+    0.14 :   3b140:  and     x6, x1, #0xfffffffffffffffe
+         : 309   }
+         :
+         : 311   static inline netmem_ref netmem_compound_head(netmem_ref netmem)
+         : 312   {
+         : 313   /* niov are never compounded */
+         : 314   if (netmem_is_net_iov(netmem))
+    0.03 :   3b144:  tbnz    w1, #0, 3b154 <__rx_loan_table_append_ref+0x244>
+         : 316   unsigned long info = data_race(READ_ONCE(page->compound_info));
+    0.05 :   3b148:  ldr     x11, [x1, #8]
+         : 318   if (info & 1)
+    0.13 :   3b14c:  tbz     w11, #0, 3b154 <__rx_loan_table_append_ref+0x244>
+         : 320   return info - 1;
+    0.00 :   3b150:  sub     x6, x11, #0x1
+    0.10 :   3b154:  b       3b1b8 <__rx_loan_table_append_ref+0x2a8>
+         : 323   }
+         :
+         : 325   ATOMIC64_OP(andnot, stclr)
+         : 326   ATOMIC64_OP(or, stset)
+         : 327   ATOMIC64_OP(xor, steor)
+         : 328   ATOMIC64_OP(add, stadd)
+    0.02 :   3b158:  add     x6, x6, #0x28
+    0.04 :   3b15c:  mov     x11, #0x1                       // #1
+    0.05 :   3b160:  stadd   x11, [x6]
+         : 332   bv->bv_page = page;
+    0.06 :   3b164:  str     x1, [x8, x7]
+         : 334   bv->bv_len = len;
+    0.03 :   3b168:  stp     w3, w2, [x9, #8]
+    0.08 :   3b16c:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 337   ATOMIC_FETCH_OP (        , dmb ish,  , l, "memory", __VA_ARGS__)\
+         : 338   ATOMIC_FETCH_OP (_relaxed,        ,  ,  ,         , __VA_ARGS__)\
+         : 339   ATOMIC_FETCH_OP (_acquire,        , a,  , "memory", __VA_ARGS__)\
+         : 340   ATOMIC_FETCH_OP (_release,        ,  , l, "memory", __VA_ARGS__)
+         :
+         : 342   ATOMIC_OPS(add, add, I)
+    0.00 :   3b170:  add     x6, x6, #0x34
+    0.00 :   3b174:  prfm    pstl1strm, [x6]
+    0.00 :   3b178:  ldxr    w11, [x6]
+    0.00 :   3b17c:  add     w11, w11, #0x1
+    0.00 :   3b180:  stxr    w12, w11, [x6]
+    0.00 :   3b184:  cbnz    w12, 3b178 <__rx_loan_table_append_ref+0x268>
+         : 349   bv->bv_page = page;
+    0.00 :   3b188:  str     x1, [x8, x7]
+         : 351   bv->bv_len = len;
+    0.00 :   3b18c:  stp     w3, w2, [x9, #8]
+    0.00 :   3b190:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 354   void *p = (void *)((__force unsigned long)netmem & ~NET_IOV);
+    1.25 :   3b194:  and     x2, x1, #0xfffffffffffffffe
+         : 356   netmem_get_pp(page_to_netmem(page))->rx_region;
+    0.39 :   3b198:  ldr     x2, [x2, #16]
+         : 358   return page_pool_page_is_pp(page) &&
+    2.34 :   3b19c:  ldr     x2, [x2, #968]
+    7.01 :   3b1a0:  cbz     x2, 3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 361   t->region_count++;
+    2.30 :   3b1a4:  ldr     w2, [x0, #60]
+         : 363   t->region_last = page;
+    0.40 :   3b1a8:  str     x1, [x0, #64]
+         : 365   t->region_count++;
+    0.68 :   3b1ac:  add     w1, w2, #0x1
+    0.26 :   3b1b0:  str     w1, [x0, #60]
+         : 368   if (page_pool)
+    0.40 :   3b1b4:  b       3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 370   ATOMIC64_FETCH_OP (, dmb ish,  , l, "memory", __VA_ARGS__)      \
+         : 371   ATOMIC64_FETCH_OP (_relaxed,,  ,  ,         , __VA_ARGS__)      \
+         : 372   ATOMIC64_FETCH_OP (_acquire,, a,  , "memory", __VA_ARGS__)      \
+         : 373   ATOMIC64_FETCH_OP (_release,,  , l, "memory", __VA_ARGS__)
+         :
+         : 375   ATOMIC64_OPS(add, add, I)
+    0.00 :   3b1b8:  add     x6, x6, #0x28
+    0.00 :   3b1bc:  prfm    pstl1strm, [x6]
+    0.00 :   3b1c0:  ldxr    x11, [x6]
+    0.00 :   3b1c4:  add     x11, x11, #0x1
+    0.00 :   3b1c8:  stxr    w12, x11, [x6]
+    0.00 :   3b1cc:  cbnz    w12, 3b1c0 <__rx_loan_table_append_ref+0x2b0>
+         : 382   bv->bv_page = page;
+    0.00 :   3b1d0:  str     x1, [x8, x7]
+         : 384   bv->bv_len = len;
+    0.00 :   3b1d4:  stp     w3, w2, [x9, #8]
+         : 386   if (borrowed) {
+    0.00 :   3b1d8:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 388   return -ENOSPC;
+    0.00 :   3b1dc:  mov     w0, #0xffffffe4                 // #-28
+         : 390   }
+    0.00 :   3b1e0:  ret
+         : 392   if (WARN_ON_ONCE(folio_test_slab(folio)))
+    0.00 :   3b1e4:  brk     #0x800
+         : 394   bv->bv_page = page;
+    0.00 :   3b1e8:  str     x1, [x8, x7]
+         : 396   bv->bv_len = len;
+    0.00 :   3b1ec:  stp     w3, w2, [x9, #8]
+         : 398   if (borrowed) {
+    0.00 :   3b1f0:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 400   if (WARN_ON_ONCE(folio_test_large_kmalloc(folio)))
+    0.00 :   3b1f4:  brk     #0x800
+         : 402   bv->bv_page = page;
+    0.00 :   3b1f8:  str     x1, [x8, x7]
+         : 404   bv->bv_len = len;
+    0.00 :   3b1fc:  stp     w3, w2, [x9, #8]
+    0.00 :   3b200:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+ Percent |	Source code & Disassembly of sunrpc.ko.xz for l1d_cache_refill (6164 samples, percent: local period)
+--------------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3     Disassembly of section .text:
+         :
+         : 5     000000000003af10 <__rx_loan_table_append_ref>:
+         : 6     bool borrowed, bool page_pool)
+         : 7     {
+         : 8     const struct bio_vec *last;
+         : 9     unsigned int index;
+         :
+         : 11    if (!t->count)
+    0.46 :   3af10:  ldr     w7, [x0, #28]
+         : 13    static inline int __rx_loan_table_append_ref(struct rx_loan_table *t,
+         : 14    struct page *page,
+         : 15    unsigned int offset,
+         : 16    unsigned int len, bool borrowed,
+         : 17    bool page_pool, bool take_ref)
+         : 18    {
+    0.14 :   3af14:  and     w4, w4, #0xff
+    0.49 :   3af18:  and     w5, w5, #0xff
+    0.17 :   3af1c:  and     w6, w6, #0xff
+         : 22    if (!t->count)
+    0.38 :   3af20:  cbz     w7, 3af44 <__rx_loan_table_append_ref+0x34>
+         : 24    last = &t->bvec[index];
+    0.42 :   3af24:  sub     w9, w7, #0x1
+         : 26    index = t->count - 1;
+    0.08 :   3af28:  sub     w12, w7, #0x1
+         : 28    last = &t->bvec[index];
+    0.55 :   3af2c:  ldr     x8, [x0]
+    0.20 :   3af30:  lsl     x10, x9, #4
+         : 31    if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    0.60 :   3af34:  ldr     x10, [x8, x10]
+         : 33    last = &t->bvec[index];
+   23.50 :   3af38:  add     x8, x8, x9, lsl #4
+         : 35    if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    3.05 :   3af3c:  cmp     x1, x10
+    0.12 :   3af40:  b.eq    3afe0 <__rx_loan_table_append_ref+0xd0>  // b.none
+         :
+         : 39    if (rx_loan_table_can_coalesce(t, page, offset, borrowed, page_pool)) {
+         : 40    bvec = &t->bvec[t->count - 1];
+         : 41    bvec->bv_len += len;
+         : 42    } else {
+         : 43    if (t->count == t->capacity)
+    2.59 :   3af44:  ldr     w8, [x0, #24]
+    3.30 :   3af48:  cmp     w8, w7
+    0.00 :   3af4c:  b.eq    3b1dc <__rx_loan_table_append_ref+0x2cc>  // b.none
+         : 47    return -ENOSPC;
+         : 48    bvec = &t->bvec[t->count];
+    0.66 :   3af50:  ldr     x8, [x0]
+    0.05 :   3af54:  ubfiz   x7, x7, #4, #32
+         : 51    if (borrowed && take_ref)
+    0.41 :   3af58:  cmp     w4, #0x0
+    0.11 :   3af5c:  ccmp    w6, #0x0, #0x4, ne      // ne = any
+         : 54    bvec = &t->bvec[t->count];
+    0.50 :   3af60:  add     x9, x8, x7
+         : 56    if (borrowed && take_ref)
+    0.24 :   3af64:  b.ne    3b0f8 <__rx_loan_table_append_ref+0x1e8>  // b.any
+         : 58    * @offset:      offset into the page
+         : 59    */
+         : 60    static inline void bvec_set_page(struct bio_vec *bv, struct page *page,
+         : 61    unsigned int len, unsigned int offset)
+         : 62    {
+         : 63    bv->bv_page = page;
+    0.33 :   3af68:  str     x1, [x8, x7]
+         : 65    rx_loan_get_borrowed(page, page_pool);
+         : 66    bvec_set_page(bvec, page, len, offset);
+         : 67    if (borrowed) {
+    0.61 :   3af6c:  and     w6, w4, #0x1
+         : 69    bv->bv_len = len;
+    0.33 :   3af70:  stp     w3, w2, [x9, #8]
+    0.61 :   3af74:  tbz     w4, #0, 3b06c <__rx_loan_table_append_ref+0x15c>
+    0.47 :   3af78:  and     w10, w5, #0x1
+         : 73    __set_bit(t->count, t->borrowed);
+    0.41 :   3af7c:  ldr     w6, [x0, #28]
+         : 75    * may be that only one operation succeeds.
+         : 76    */
+         : 77    static __always_inline void
+         : 78    generic___set_bit(unsigned long nr, volatile unsigned long *addr)
+         : 79    {
+         : 80    unsigned long mask = BIT_MASK(nr);
+    1.16 :   3af80:  mov     x7, #0x1                        // #1
+         : 82    unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.42 :   3af84:  ldr     x8, [x0, #8]
+    0.33 :   3af88:  lsr     w2, w6, #6
+         : 85    unsigned long mask = BIT_MASK(nr);
+    0.53 :   3af8c:  lsl     x7, x7, x6
+         : 87    unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.14 :   3af90:  lsl     x2, x2, #3
+         :
+         : 90    *p  |= mask;
+    0.35 :   3af94:  ldr     x6, [x8, x2]
+    8.03 :   3af98:  orr     x6, x6, x7
+    3.54 :   3af9c:  str     x6, [x8, x2]
+         : 94    t->borrowed_count++;
+         : 95    t->refs_acquired++;
+    1.14 :   3afa0:  ldr     w6, [x0, #48]
+         : 97    t->borrowed_count++;
+    0.66 :   3afa4:  ldr     w2, [x0, #56]
+         : 99    t->refs_acquired++;
+    0.09 :   3afa8:  add     w6, w6, #0x1
+    0.73 :   3afac:  str     w6, [x0, #48]
+         : 102   t->borrowed_count++;
+    0.46 :   3afb0:  add     w2, w2, #0x1
+    0.40 :   3afb4:  str     w2, [x0, #56]
+         : 105   if (page_pool && page != t->region_last &&
+    0.48 :   3afb8:  cbnz    w10, 3b094 <__rx_loan_table_append_ref+0x184>
+         : 107   }
+         : 108   if (page_pool)
+         : 109   __set_bit(t->count, t->page_pool);
+         : 110   t->count++;
+         : 111   }
+         : 112   t->body_bytes += len;
+    0.00 :   3afbc:  ldp     w2, w4, [x0, #28]
+         : 114   if (borrowed) {
+         : 115   t->borrowed_bytes += len;
+    0.00 :   3afc0:  ldr     w1, [x0, #36]
+         : 117   t->count++;
+    0.00 :   3afc4:  add     w2, w2, #0x1
+         : 119   t->body_bytes += len;
+    0.00 :   3afc8:  add     w4, w4, w3
+         : 121   t->borrowed_bytes += len;
+    0.00 :   3afcc:  add     w1, w1, w3
+         : 123   t->count++;
+    0.00 :   3afd0:  stp     w2, w4, [x0, #28]
+         : 125   t->borrowed_bytes += len;
+    0.00 :   3afd4:  str     w1, [x0, #36]
+         : 127   if (page_pool)
+         : 128   t->page_pool_bytes += len;
+         : 129   } else {
+         : 130   t->copied_bytes += len;
+         : 131   }
+         : 132   return 0;
+    0.00 :   3afd8:  mov     w0, #0x0                        // #0
+         : 134   }
+    0.68 :   3afdc:  ret
+         : 136   if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    0.98 :   3afe0:  ldp     w10, w11, [x8, #8]
+    1.81 :   3afe4:  add     w11, w10, w11
+    0.20 :   3afe8:  cmp     w2, w11
+    0.00 :   3afec:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+         : 141   /*
+         : 142   * Unlike the bitops with the '__' prefix above, this one *is* atomic,
+         : 143   * so `volatile` must always stay here with no cast-aways. See
+         : 144   * `Documentation/atomic_bitops.txt` for the details.
+         : 145   */
+         : 146   return 1UL & (addr[BIT_WORD(nr)] >> (nr & (BITS_PER_LONG-1)));
+    0.00 :   3aff0:  lsr     x9, x9, #6
+    0.00 :   3aff4:  and     w13, w12, #0x3f
+    0.00 :   3aff8:  ldr     x11, [x0, #8]
+    0.00 :   3affc:  lsl     x9, x9, #3
+    0.00 :   3b000:  ldr     x11, [x11, x9]
+    0.00 :   3b004:  lsr     x11, x11, x12
+         : 153   return test_bit(index, t->borrowed) == borrowed &&
+    0.00 :   3b008:  and     w11, w11, #0x1
+    0.00 :   3b00c:  cmp     w4, w11
+    0.00 :   3b010:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+    0.00 :   3b014:  ldr     x11, [x0, #16]
+    0.00 :   3b018:  ldr     x9, [x11, x9]
+    0.00 :   3b01c:  lsr     x9, x9, x13
+    0.00 :   3b020:  and     w9, w9, #0x1
+    0.00 :   3b024:  cmp     w5, w9
+    0.00 :   3b028:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+         : 163   bvec->bv_len += len;
+    0.00 :   3b02c:  and     w6, w4, #0x1
+    0.00 :   3b030:  add     w10, w3, w10
+    0.00 :   3b034:  str     w10, [x8, #8]
+         : 167   t->body_bytes += len;
+    0.80 :   3b038:  ldr     w1, [x0, #32]
+    0.03 :   3b03c:  add     w1, w1, w3
+    0.66 :   3b040:  str     w1, [x0, #32]
+         : 171   if (borrowed) {
+    0.46 :   3b044:  cbz     w6, 3b080 <__rx_loan_table_append_ref+0x170>
+         : 173   t->borrowed_bytes += len;
+    0.54 :   3b048:  ldr     w1, [x0, #36]
+    0.24 :   3b04c:  add     w1, w1, w3
+    0.49 :   3b050:  str     w1, [x0, #36]
+         : 177   if (page_pool)
+    0.70 :   3b054:  tbz     w5, #0, 3afd8 <__rx_loan_table_append_ref+0xc8>
+         : 179   t->page_pool_bytes += len;
+    0.58 :   3b058:  ldr     w1, [x0, #44]
+    0.07 :   3b05c:  add     w1, w1, w3
+    0.62 :   3b060:  str     w1, [x0, #44]
+         : 183   return 0;
+    0.46 :   3b064:  mov     w0, #0x0                        // #0
+    0.32 :   3b068:  b       3afdc <__rx_loan_table_append_ref+0xcc>
+         : 186   if (page_pool)
+    0.00 :   3b06c:  tbnz    w5, #0, 3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 188   t->body_bytes += len;
+    0.00 :   3b070:  ldp     w1, w2, [x0, #28]
+         : 190   t->count++;
+    0.00 :   3b074:  add     w1, w1, #0x1
+         : 192   t->body_bytes += len;
+    0.00 :   3b078:  add     w2, w2, w3
+         : 194   t->count++;
+    0.00 :   3b07c:  stp     w1, w2, [x0, #28]
+         : 196   t->copied_bytes += len;
+    0.00 :   3b080:  ldr     w1, [x0, #40]
+    0.00 :   3b084:  add     w1, w1, w3
+    0.00 :   3b088:  str     w1, [x0, #40]
+         : 200   return 0;
+    0.00 :   3b08c:  mov     w0, #0x0                        // #0
+    0.00 :   3b090:  b       3afdc <__rx_loan_table_append_ref+0xcc>
+         : 203   if (page_pool && page != t->region_last &&
+    0.99 :   3b094:  ldr     x2, [x0, #64]
+    0.21 :   3b098:  and     w6, w4, #0x1
+    0.56 :   3b09c:  cmp     x2, x1
+    0.13 :   3b0a0:  b.eq    3b0c4 <__rx_loan_table_append_ref+0x1b4>  // b.none
+         : 208   #define PP_MAGIC_MASK ~(PP_DMA_INDEX_MASK | 0x3UL)
+         :
+         : 210   #ifdef CONFIG_PAGE_POOL
+         : 211   static inline bool page_pool_page_is_pp(const struct page *page)
+         : 212   {
+         : 213   return (page->pp_magic & PP_MAGIC_MASK) == PP_SIGNATURE;
+    0.85 :   3b0a4:  ldr     x2, [x1, #8]
+    1.53 :   3b0a8:  and     w6, w4, #0x1
+         : 216   * a pool allocates only from the region, so its pages are region pages,
+         : 217   * wherever they are while the pool owns them (in a ring, an skb or a loan).
+         : 218   */
+         : 219   static inline bool page_pool_page_in_rx_region(struct page *page)
+         : 220   {
+         : 221   return page_pool_page_is_pp(page) &&
+    0.42 :   3b0ac:  mov     x4, #0x40                       // #64
+    0.13 :   3b0b0:  and     x2, x2, #0xfffffffffffffffc
+    0.11 :   3b0b4:  movk    x4, #0xdead, lsl #48
+    0.31 :   3b0b8:  and     x2, x2, #0xffffff800000007f
+    0.26 :   3b0bc:  cmp     x2, x4
+    0.18 :   3b0c0:  b.eq    3b194 <__rx_loan_table_append_ref+0x284>  // b.none
+         : 228   __set_bit(t->count, t->page_pool);
+    0.84 :   3b0c4:  ldr     w2, [x0, #28]
+         : 230   unsigned long mask = BIT_MASK(nr);
+    0.11 :   3b0c8:  mov     x4, #0x1                        // #1
+         : 232   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.35 :   3b0cc:  ldr     x7, [x0, #16]
+    0.16 :   3b0d0:  lsr     w1, w2, #6
+         : 235   unsigned long mask = BIT_MASK(nr);
+    0.37 :   3b0d4:  lsl     x4, x4, x2
+         : 237   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.31 :   3b0d8:  lsl     x1, x1, #3
+         : 239   *p  |= mask;
+    0.32 :   3b0dc:  ldr     x2, [x7, x1]
+    7.95 :   3b0e0:  orr     x2, x2, x4
+    0.36 :   3b0e4:  str     x2, [x7, x1]
+         : 243   t->count++;
+    0.79 :   3b0e8:  ldr     w1, [x0, #28]
+    0.29 :   3b0ec:  add     w1, w1, #0x1
+    0.30 :   3b0f0:  str     w1, [x0, #28]
+    0.60 :   3b0f4:  b       3b038 <__rx_loan_table_append_ref+0x128>
+         : 248   if (page_pool) {
+    0.28 :   3b0f8:  and     w10, w5, #0x1
+    0.04 :   3b0fc:  tbnz    w5, #0, 3b140 <__rx_loan_table_append_ref+0x230>
+         : 251   }
+         :
+         : 253   static __always_inline unsigned long _compound_head(const struct page *page)
+         : 254   {
+         : 255   /* Head-page LRU pointers alias this word but must keep bit 0 clear. */
+         : 256   unsigned long info = data_race(READ_ONCE(page->compound_info));
+    0.00 :   3b100:  ldr     x11, [x1, #8]
+         : 258   unsigned long mask;
+         :
+         : 260   if (!compound_info_has_mask()) {
+         : 261   /* Bit 0 encodes PageTail() */
+         : 262   if (info & 1)
+         : 263   return info - 1;
+    0.00 :   3b104:  sub     x6, x11, #0x1
+    0.00 :   3b108:  tst     x11, #0x1
+    0.00 :   3b10c:  csel    x6, x6, x1, ne  // ne = any
+         : 267   /*
+         : 268   * Marks guardpages used with debug_pagealloc.
+         : 269   */
+         : 270   PAGE_TYPE_OPS(Guard, guard, guard)
+         :
+         : 272   PAGE_TYPE_OPS(Slab, slab, slab)
+    0.00 :   3b110:  ldrb    w11, [x6, #51]
+         : 274   if (WARN_ON_ONCE(folio_test_slab(folio)))
+    0.00 :   3b114:  cmp     w11, #0xf5
+    0.00 :   3b118:  b.eq    3b1e4 <__rx_loan_table_append_ref+0x2d4>  // b.none
+         : 277   if (WARN_ON_ONCE(folio_test_large_kmalloc(folio)))
+    0.00 :   3b11c:  cmp     w11, #0xf8
+    0.00 :   3b120:  b.eq    3b1f4 <__rx_loan_table_append_ref+0x2e4>  // b.none
+         : 280   alternative_has_cap_likely(const unsigned long cpucap)
+         : 281   {
+         : 282   if (!cpucap_is_possible(cpucap))
+         : 283   return false;
+         :
+         : 285   asm goto(
+    0.00 :   3b124:  b       3b170 <__rx_loan_table_append_ref+0x260>
+         : 287   }
+         :
+         : 289   ATOMIC_OP(andnot, stclr)
+         : 290   ATOMIC_OP(or, stset)
+         : 291   ATOMIC_OP(xor, steor)
+         : 292   ATOMIC_OP(add, stadd)
+    0.00 :   3b128:  add     x6, x6, #0x34
+    0.00 :   3b12c:  mov     w11, #0x1                       // #1
+    0.00 :   3b130:  stadd   w11, [x6]
+         : 296   bv->bv_page = page;
+    0.00 :   3b134:  str     x1, [x8, x7]
+         : 298   bv->bv_len = len;
+    0.00 :   3b138:  stp     w3, w2, [x9, #8]
+         : 300   if (borrowed) {
+    0.00 :   3b13c:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 302   * Return: the pointer to struct netmem_desc * regardless of its
+         : 303   * underlying type.
+         : 304   */
+         : 305   static inline struct netmem_desc *netmem_to_nmdesc(netmem_ref netmem)
+         : 306   {
+         : 307   void *p = (void *)((__force unsigned long)netmem & ~NET_IOV);
+    0.06 :   3b140:  and     x6, x1, #0xfffffffffffffffe
+         : 309   }
+         :
+         : 311   static inline netmem_ref netmem_compound_head(netmem_ref netmem)
+         : 312   {
+         : 313   /* niov are never compounded */
+         : 314   if (netmem_is_net_iov(netmem))
+    0.03 :   3b144:  tbnz    w1, #0, 3b154 <__rx_loan_table_append_ref+0x244>
+         : 316   unsigned long info = data_race(READ_ONCE(page->compound_info));
+    0.13 :   3b148:  ldr     x11, [x1, #8]
+         : 318   if (info & 1)
+    0.17 :   3b14c:  tbz     w11, #0, 3b154 <__rx_loan_table_append_ref+0x244>
+         : 320   return info - 1;
+    0.00 :   3b150:  sub     x6, x11, #0x1
+    0.13 :   3b154:  b       3b1b8 <__rx_loan_table_append_ref+0x2a8>
+         : 323   }
+         :
+         : 325   ATOMIC64_OP(andnot, stclr)
+         : 326   ATOMIC64_OP(or, stset)
+         : 327   ATOMIC64_OP(xor, steor)
+         : 328   ATOMIC64_OP(add, stadd)
+    0.05 :   3b158:  add     x6, x6, #0x28
+    0.07 :   3b15c:  mov     x11, #0x1                       // #1
+    0.05 :   3b160:  stadd   x11, [x6]
+         : 332   bv->bv_page = page;
+    0.10 :   3b164:  str     x1, [x8, x7]
+         : 334   bv->bv_len = len;
+    0.09 :   3b168:  stp     w3, w2, [x9, #8]
+    0.02 :   3b16c:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 337   ATOMIC_FETCH_OP (        , dmb ish,  , l, "memory", __VA_ARGS__)\
+         : 338   ATOMIC_FETCH_OP (_relaxed,        ,  ,  ,         , __VA_ARGS__)\
+         : 339   ATOMIC_FETCH_OP (_acquire,        , a,  , "memory", __VA_ARGS__)\
+         : 340   ATOMIC_FETCH_OP (_release,        ,  , l, "memory", __VA_ARGS__)
+         :
+         : 342   ATOMIC_OPS(add, add, I)
+    0.00 :   3b170:  add     x6, x6, #0x34
+    0.00 :   3b174:  prfm    pstl1strm, [x6]
+    0.00 :   3b178:  ldxr    w11, [x6]
+    0.00 :   3b17c:  add     w11, w11, #0x1
+    0.00 :   3b180:  stxr    w12, w11, [x6]
+    0.00 :   3b184:  cbnz    w12, 3b178 <__rx_loan_table_append_ref+0x268>
+         : 349   bv->bv_page = page;
+    0.00 :   3b188:  str     x1, [x8, x7]
+         : 351   bv->bv_len = len;
+    0.00 :   3b18c:  stp     w3, w2, [x9, #8]
+    0.00 :   3b190:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 354   void *p = (void *)((__force unsigned long)netmem & ~NET_IOV);
+    1.15 :   3b194:  and     x2, x1, #0xfffffffffffffffe
+         : 356   netmem_get_pp(page_to_netmem(page))->rx_region;
+    0.25 :   3b198:  ldr     x2, [x2, #16]
+         : 358   return page_pool_page_is_pp(page) &&
+    2.16 :   3b19c:  ldr     x2, [x2, #968]
+    4.75 :   3b1a0:  cbz     x2, 3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 361   t->region_count++;
+    1.73 :   3b1a4:  ldr     w2, [x0, #60]
+         : 363   t->region_last = page;
+    0.26 :   3b1a8:  str     x1, [x0, #64]
+         : 365   t->region_count++;
+    0.58 :   3b1ac:  add     w1, w2, #0x1
+    0.23 :   3b1b0:  str     w1, [x0, #60]
+         : 368   if (page_pool)
+    0.37 :   3b1b4:  b       3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 370   ATOMIC64_FETCH_OP (, dmb ish,  , l, "memory", __VA_ARGS__)      \
+         : 371   ATOMIC64_FETCH_OP (_relaxed,,  ,  ,         , __VA_ARGS__)      \
+         : 372   ATOMIC64_FETCH_OP (_acquire,, a,  , "memory", __VA_ARGS__)      \
+         : 373   ATOMIC64_FETCH_OP (_release,,  , l, "memory", __VA_ARGS__)
+         :
+         : 375   ATOMIC64_OPS(add, add, I)
+    0.00 :   3b1b8:  add     x6, x6, #0x28
+    0.00 :   3b1bc:  prfm    pstl1strm, [x6]
+    0.00 :   3b1c0:  ldxr    x11, [x6]
+    0.00 :   3b1c4:  add     x11, x11, #0x1
+    0.00 :   3b1c8:  stxr    w12, x11, [x6]
+    0.00 :   3b1cc:  cbnz    w12, 3b1c0 <__rx_loan_table_append_ref+0x2b0>
+         : 382   bv->bv_page = page;
+    0.00 :   3b1d0:  str     x1, [x8, x7]
+         : 384   bv->bv_len = len;
+    0.00 :   3b1d4:  stp     w3, w2, [x9, #8]
+         : 386   if (borrowed) {
+    0.00 :   3b1d8:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 388   return -ENOSPC;
+    0.00 :   3b1dc:  mov     w0, #0xffffffe4                 // #-28
+         : 390   }
+    0.00 :   3b1e0:  ret
+         : 392   if (WARN_ON_ONCE(folio_test_slab(folio)))
+    0.00 :   3b1e4:  brk     #0x800
+         : 394   bv->bv_page = page;
+    0.00 :   3b1e8:  str     x1, [x8, x7]
+         : 396   bv->bv_len = len;
+    0.00 :   3b1ec:  stp     w3, w2, [x9, #8]
+         : 398   if (borrowed) {
+    0.00 :   3b1f0:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 400   if (WARN_ON_ONCE(folio_test_large_kmalloc(folio)))
+    0.00 :   3b1f4:  brk     #0x800
+         : 402   bv->bv_page = page;
+    0.00 :   3b1f8:  str     x1, [x8, x7]
+         : 404   bv->bv_len = len;
+    0.00 :   3b1fc:  stp     w3, w2, [x9, #8]
+    0.00 :   3b200:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+ Percent |	Source code & Disassembly of sunrpc.ko.xz for l2d_cache_refill (4654 samples, percent: local period)
+--------------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3     Disassembly of section .text:
+         :
+         : 5     000000000003af10 <__rx_loan_table_append_ref>:
+         : 6     bool borrowed, bool page_pool)
+         : 7     {
+         : 8     const struct bio_vec *last;
+         : 9     unsigned int index;
+         :
+         : 11    if (!t->count)
+    1.45 :   3af10:  ldr     w7, [x0, #28]
+         : 13    static inline int __rx_loan_table_append_ref(struct rx_loan_table *t,
+         : 14    struct page *page,
+         : 15    unsigned int offset,
+         : 16    unsigned int len, bool borrowed,
+         : 17    bool page_pool, bool take_ref)
+         : 18    {
+    0.22 :   3af14:  and     w4, w4, #0xff
+    0.36 :   3af18:  and     w5, w5, #0xff
+    0.20 :   3af1c:  and     w6, w6, #0xff
+         : 22    if (!t->count)
+    0.37 :   3af20:  cbz     w7, 3af44 <__rx_loan_table_append_ref+0x34>
+         : 24    last = &t->bvec[index];
+    0.38 :   3af24:  sub     w9, w7, #0x1
+         : 26    index = t->count - 1;
+    0.10 :   3af28:  sub     w12, w7, #0x1
+         : 28    last = &t->bvec[index];
+    0.46 :   3af2c:  ldr     x8, [x0]
+    0.27 :   3af30:  lsl     x10, x9, #4
+         : 31    if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    0.51 :   3af34:  ldr     x10, [x8, x10]
+         : 33    last = &t->bvec[index];
+   22.93 :   3af38:  add     x8, x8, x9, lsl #4
+         : 35    if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    2.89 :   3af3c:  cmp     x1, x10
+    0.20 :   3af40:  b.eq    3afe0 <__rx_loan_table_append_ref+0xd0>  // b.none
+         :
+         : 39    if (rx_loan_table_can_coalesce(t, page, offset, borrowed, page_pool)) {
+         : 40    bvec = &t->bvec[t->count - 1];
+         : 41    bvec->bv_len += len;
+         : 42    } else {
+         : 43    if (t->count == t->capacity)
+    2.92 :   3af44:  ldr     w8, [x0, #24]
+    2.91 :   3af48:  cmp     w8, w7
+    0.00 :   3af4c:  b.eq    3b1dc <__rx_loan_table_append_ref+0x2cc>  // b.none
+         : 47    return -ENOSPC;
+         : 48    bvec = &t->bvec[t->count];
+    0.84 :   3af50:  ldr     x8, [x0]
+    0.05 :   3af54:  ubfiz   x7, x7, #4, #32
+         : 51    if (borrowed && take_ref)
+    0.19 :   3af58:  cmp     w4, #0x0
+    0.06 :   3af5c:  ccmp    w6, #0x0, #0x4, ne      // ne = any
+         : 54    bvec = &t->bvec[t->count];
+    0.42 :   3af60:  add     x9, x8, x7
+         : 56    if (borrowed && take_ref)
+    0.08 :   3af64:  b.ne    3b0f8 <__rx_loan_table_append_ref+0x1e8>  // b.any
+         : 58    * @offset:      offset into the page
+         : 59    */
+         : 60    static inline void bvec_set_page(struct bio_vec *bv, struct page *page,
+         : 61    unsigned int len, unsigned int offset)
+         : 62    {
+         : 63    bv->bv_page = page;
+    0.28 :   3af68:  str     x1, [x8, x7]
+         : 65    rx_loan_get_borrowed(page, page_pool);
+         : 66    bvec_set_page(bvec, page, len, offset);
+         : 67    if (borrowed) {
+    0.71 :   3af6c:  and     w6, w4, #0x1
+         : 69    bv->bv_len = len;
+    0.24 :   3af70:  stp     w3, w2, [x9, #8]
+    0.37 :   3af74:  tbz     w4, #0, 3b06c <__rx_loan_table_append_ref+0x15c>
+    0.38 :   3af78:  and     w10, w5, #0x1
+         : 73    __set_bit(t->count, t->borrowed);
+    0.52 :   3af7c:  ldr     w6, [x0, #28]
+         : 75    * may be that only one operation succeeds.
+         : 76    */
+         : 77    static __always_inline void
+         : 78    generic___set_bit(unsigned long nr, volatile unsigned long *addr)
+         : 79    {
+         : 80    unsigned long mask = BIT_MASK(nr);
+    1.03 :   3af80:  mov     x7, #0x1                        // #1
+         : 82    unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.61 :   3af84:  ldr     x8, [x0, #8]
+    0.31 :   3af88:  lsr     w2, w6, #6
+         : 85    unsigned long mask = BIT_MASK(nr);
+    0.48 :   3af8c:  lsl     x7, x7, x6
+         : 87    unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.15 :   3af90:  lsl     x2, x2, #3
+         :
+         : 90    *p  |= mask;
+    0.41 :   3af94:  ldr     x6, [x8, x2]
+   10.58 :   3af98:  orr     x6, x6, x7
+    3.11 :   3af9c:  str     x6, [x8, x2]
+         : 94    t->borrowed_count++;
+         : 95    t->refs_acquired++;
+    0.75 :   3afa0:  ldr     w6, [x0, #48]
+         : 97    t->borrowed_count++;
+    0.50 :   3afa4:  ldr     w2, [x0, #56]
+         : 99    t->refs_acquired++;
+    0.16 :   3afa8:  add     w6, w6, #0x1
+    0.52 :   3afac:  str     w6, [x0, #48]
+         : 102   t->borrowed_count++;
+    0.38 :   3afb0:  add     w2, w2, #0x1
+    0.50 :   3afb4:  str     w2, [x0, #56]
+         : 105   if (page_pool && page != t->region_last &&
+    0.54 :   3afb8:  cbnz    w10, 3b094 <__rx_loan_table_append_ref+0x184>
+         : 107   }
+         : 108   if (page_pool)
+         : 109   __set_bit(t->count, t->page_pool);
+         : 110   t->count++;
+         : 111   }
+         : 112   t->body_bytes += len;
+    0.00 :   3afbc:  ldp     w2, w4, [x0, #28]
+         : 114   if (borrowed) {
+         : 115   t->borrowed_bytes += len;
+    0.00 :   3afc0:  ldr     w1, [x0, #36]
+         : 117   t->count++;
+    0.00 :   3afc4:  add     w2, w2, #0x1
+         : 119   t->body_bytes += len;
+    0.00 :   3afc8:  add     w4, w4, w3
+         : 121   t->borrowed_bytes += len;
+    0.00 :   3afcc:  add     w1, w1, w3
+         : 123   t->count++;
+    0.00 :   3afd0:  stp     w2, w4, [x0, #28]
+         : 125   t->borrowed_bytes += len;
+    0.00 :   3afd4:  str     w1, [x0, #36]
+         : 127   if (page_pool)
+         : 128   t->page_pool_bytes += len;
+         : 129   } else {
+         : 130   t->copied_bytes += len;
+         : 131   }
+         : 132   return 0;
+    0.00 :   3afd8:  mov     w0, #0x0                        // #0
+         : 134   }
+    0.26 :   3afdc:  ret
+         : 136   if (last->bv_page != page || last->bv_offset + last->bv_len != offset)
+    1.25 :   3afe0:  ldp     w10, w11, [x8, #8]
+    2.00 :   3afe4:  add     w11, w10, w11
+    0.16 :   3afe8:  cmp     w2, w11
+    0.00 :   3afec:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+         : 141   /*
+         : 142   * Unlike the bitops with the '__' prefix above, this one *is* atomic,
+         : 143   * so `volatile` must always stay here with no cast-aways. See
+         : 144   * `Documentation/atomic_bitops.txt` for the details.
+         : 145   */
+         : 146   return 1UL & (addr[BIT_WORD(nr)] >> (nr & (BITS_PER_LONG-1)));
+    0.00 :   3aff0:  lsr     x9, x9, #6
+    0.00 :   3aff4:  and     w13, w12, #0x3f
+    0.00 :   3aff8:  ldr     x11, [x0, #8]
+    0.00 :   3affc:  lsl     x9, x9, #3
+    0.00 :   3b000:  ldr     x11, [x11, x9]
+    0.00 :   3b004:  lsr     x11, x11, x12
+         : 153   return test_bit(index, t->borrowed) == borrowed &&
+    0.00 :   3b008:  and     w11, w11, #0x1
+    0.00 :   3b00c:  cmp     w4, w11
+    0.00 :   3b010:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+    0.00 :   3b014:  ldr     x11, [x0, #16]
+    0.00 :   3b018:  ldr     x9, [x11, x9]
+    0.00 :   3b01c:  lsr     x9, x9, x13
+    0.00 :   3b020:  and     w9, w9, #0x1
+    0.00 :   3b024:  cmp     w5, w9
+    0.00 :   3b028:  b.ne    3af44 <__rx_loan_table_append_ref+0x34>  // b.any
+         : 163   bvec->bv_len += len;
+    0.00 :   3b02c:  and     w6, w4, #0x1
+    0.00 :   3b030:  add     w10, w3, w10
+    0.00 :   3b034:  str     w10, [x8, #8]
+         : 167   t->body_bytes += len;
+    0.76 :   3b038:  ldr     w1, [x0, #32]
+    0.04 :   3b03c:  add     w1, w1, w3
+    0.69 :   3b040:  str     w1, [x0, #32]
+         : 171   if (borrowed) {
+    0.46 :   3b044:  cbz     w6, 3b080 <__rx_loan_table_append_ref+0x170>
+         : 173   t->borrowed_bytes += len;
+    0.33 :   3b048:  ldr     w1, [x0, #36]
+    0.24 :   3b04c:  add     w1, w1, w3
+    0.29 :   3b050:  str     w1, [x0, #36]
+         : 177   if (page_pool)
+    0.39 :   3b054:  tbz     w5, #0, 3afd8 <__rx_loan_table_append_ref+0xc8>
+         : 179   t->page_pool_bytes += len;
+    0.21 :   3b058:  ldr     w1, [x0, #44]
+    0.11 :   3b05c:  add     w1, w1, w3
+    0.23 :   3b060:  str     w1, [x0, #44]
+         : 183   return 0;
+    0.33 :   3b064:  mov     w0, #0x0                        // #0
+    0.17 :   3b068:  b       3afdc <__rx_loan_table_append_ref+0xcc>
+         : 186   if (page_pool)
+    0.00 :   3b06c:  tbnz    w5, #0, 3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 188   t->body_bytes += len;
+    0.00 :   3b070:  ldp     w1, w2, [x0, #28]
+         : 190   t->count++;
+    0.00 :   3b074:  add     w1, w1, #0x1
+         : 192   t->body_bytes += len;
+    0.00 :   3b078:  add     w2, w2, w3
+         : 194   t->count++;
+    0.00 :   3b07c:  stp     w1, w2, [x0, #28]
+         : 196   t->copied_bytes += len;
+    0.00 :   3b080:  ldr     w1, [x0, #40]
+    0.00 :   3b084:  add     w1, w1, w3
+    0.00 :   3b088:  str     w1, [x0, #40]
+         : 200   return 0;
+    0.00 :   3b08c:  mov     w0, #0x0                        // #0
+    0.00 :   3b090:  b       3afdc <__rx_loan_table_append_ref+0xcc>
+         : 203   if (page_pool && page != t->region_last &&
+    0.78 :   3b094:  ldr     x2, [x0, #64]
+    0.28 :   3b098:  and     w6, w4, #0x1
+    0.44 :   3b09c:  cmp     x2, x1
+    0.00 :   3b0a0:  b.eq    3b0c4 <__rx_loan_table_append_ref+0x1b4>  // b.none
+         : 208   #define PP_MAGIC_MASK ~(PP_DMA_INDEX_MASK | 0x3UL)
+         :
+         : 210   #ifdef CONFIG_PAGE_POOL
+         : 211   static inline bool page_pool_page_is_pp(const struct page *page)
+         : 212   {
+         : 213   return (page->pp_magic & PP_MAGIC_MASK) == PP_SIGNATURE;
+    0.66 :   3b0a4:  ldr     x2, [x1, #8]
+    2.28 :   3b0a8:  and     w6, w4, #0x1
+         : 216   * a pool allocates only from the region, so its pages are region pages,
+         : 217   * wherever they are while the pool owns them (in a ring, an skb or a loan).
+         : 218   */
+         : 219   static inline bool page_pool_page_in_rx_region(struct page *page)
+         : 220   {
+         : 221   return page_pool_page_is_pp(page) &&
+    0.31 :   3b0ac:  mov     x4, #0x40                       // #64
+    0.06 :   3b0b0:  and     x2, x2, #0xfffffffffffffffc
+    0.20 :   3b0b4:  movk    x4, #0xdead, lsl #48
+    0.09 :   3b0b8:  and     x2, x2, #0xffffff800000007f
+    0.27 :   3b0bc:  cmp     x2, x4
+    0.14 :   3b0c0:  b.eq    3b194 <__rx_loan_table_append_ref+0x284>  // b.none
+         : 228   __set_bit(t->count, t->page_pool);
+    0.57 :   3b0c4:  ldr     w2, [x0, #28]
+         : 230   unsigned long mask = BIT_MASK(nr);
+    0.10 :   3b0c8:  mov     x4, #0x1                        // #1
+         : 232   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.26 :   3b0cc:  ldr     x7, [x0, #16]
+    0.29 :   3b0d0:  lsr     w1, w2, #6
+         : 235   unsigned long mask = BIT_MASK(nr);
+    0.18 :   3b0d4:  lsl     x4, x4, x2
+         : 237   unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+    0.24 :   3b0d8:  lsl     x1, x1, #3
+         : 239   *p  |= mask;
+    0.51 :   3b0dc:  ldr     x2, [x7, x1]
+   10.01 :   3b0e0:  orr     x2, x2, x4
+    0.30 :   3b0e4:  str     x2, [x7, x1]
+         : 243   t->count++;
+    0.60 :   3b0e8:  ldr     w1, [x0, #28]
+    0.24 :   3b0ec:  add     w1, w1, #0x1
+    0.32 :   3b0f0:  str     w1, [x0, #28]
+    0.44 :   3b0f4:  b       3b038 <__rx_loan_table_append_ref+0x128>
+         : 248   if (page_pool) {
+    0.58 :   3b0f8:  and     w10, w5, #0x1
+    0.03 :   3b0fc:  tbnz    w5, #0, 3b140 <__rx_loan_table_append_ref+0x230>
+         : 251   }
+         :
+         : 253   static __always_inline unsigned long _compound_head(const struct page *page)
+         : 254   {
+         : 255   /* Head-page LRU pointers alias this word but must keep bit 0 clear. */
+         : 256   unsigned long info = data_race(READ_ONCE(page->compound_info));
+    0.00 :   3b100:  ldr     x11, [x1, #8]
+         : 258   unsigned long mask;
+         :
+         : 260   if (!compound_info_has_mask()) {
+         : 261   /* Bit 0 encodes PageTail() */
+         : 262   if (info & 1)
+         : 263   return info - 1;
+    0.00 :   3b104:  sub     x6, x11, #0x1
+    0.00 :   3b108:  tst     x11, #0x1
+    0.00 :   3b10c:  csel    x6, x6, x1, ne  // ne = any
+         : 267   /*
+         : 268   * Marks guardpages used with debug_pagealloc.
+         : 269   */
+         : 270   PAGE_TYPE_OPS(Guard, guard, guard)
+         :
+         : 272   PAGE_TYPE_OPS(Slab, slab, slab)
+    0.00 :   3b110:  ldrb    w11, [x6, #51]
+         : 274   if (WARN_ON_ONCE(folio_test_slab(folio)))
+    0.00 :   3b114:  cmp     w11, #0xf5
+    0.00 :   3b118:  b.eq    3b1e4 <__rx_loan_table_append_ref+0x2d4>  // b.none
+         : 277   if (WARN_ON_ONCE(folio_test_large_kmalloc(folio)))
+    0.00 :   3b11c:  cmp     w11, #0xf8
+    0.00 :   3b120:  b.eq    3b1f4 <__rx_loan_table_append_ref+0x2e4>  // b.none
+         : 280   alternative_has_cap_likely(const unsigned long cpucap)
+         : 281   {
+         : 282   if (!cpucap_is_possible(cpucap))
+         : 283   return false;
+         :
+         : 285   asm goto(
+    0.00 :   3b124:  b       3b170 <__rx_loan_table_append_ref+0x260>
+         : 287   }
+         :
+         : 289   ATOMIC_OP(andnot, stclr)
+         : 290   ATOMIC_OP(or, stset)
+         : 291   ATOMIC_OP(xor, steor)
+         : 292   ATOMIC_OP(add, stadd)
+    0.00 :   3b128:  add     x6, x6, #0x34
+    0.00 :   3b12c:  mov     w11, #0x1                       // #1
+    0.00 :   3b130:  stadd   w11, [x6]
+         : 296   bv->bv_page = page;
+    0.00 :   3b134:  str     x1, [x8, x7]
+         : 298   bv->bv_len = len;
+    0.00 :   3b138:  stp     w3, w2, [x9, #8]
+         : 300   if (borrowed) {
+    0.00 :   3b13c:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 302   * Return: the pointer to struct netmem_desc * regardless of its
+         : 303   * underlying type.
+         : 304   */
+         : 305   static inline struct netmem_desc *netmem_to_nmdesc(netmem_ref netmem)
+         : 306   {
+         : 307   void *p = (void *)((__force unsigned long)netmem & ~NET_IOV);
+    0.41 :   3b140:  and     x6, x1, #0xfffffffffffffffe
+         : 309   }
+         :
+         : 311   static inline netmem_ref netmem_compound_head(netmem_ref netmem)
+         : 312   {
+         : 313   /* niov are never compounded */
+         : 314   if (netmem_is_net_iov(netmem))
+    0.06 :   3b144:  tbnz    w1, #0, 3b154 <__rx_loan_table_append_ref+0x244>
+         : 316   unsigned long info = data_race(READ_ONCE(page->compound_info));
+    0.06 :   3b148:  ldr     x11, [x1, #8]
+         : 318   if (info & 1)
+    0.24 :   3b14c:  tbz     w11, #0, 3b154 <__rx_loan_table_append_ref+0x244>
+         : 320   return info - 1;
+    0.00 :   3b150:  sub     x6, x11, #0x1
+    0.14 :   3b154:  b       3b1b8 <__rx_loan_table_append_ref+0x2a8>
+         : 323   }
+         :
+         : 325   ATOMIC64_OP(andnot, stclr)
+         : 326   ATOMIC64_OP(or, stset)
+         : 327   ATOMIC64_OP(xor, steor)
+         : 328   ATOMIC64_OP(add, stadd)
+    0.04 :   3b158:  add     x6, x6, #0x28
+    0.04 :   3b15c:  mov     x11, #0x1                       // #1
+    0.02 :   3b160:  stadd   x11, [x6]
+         : 332   bv->bv_page = page;
+    0.19 :   3b164:  str     x1, [x8, x7]
+         : 334   bv->bv_len = len;
+    0.15 :   3b168:  stp     w3, w2, [x9, #8]
+    0.04 :   3b16c:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 337   ATOMIC_FETCH_OP (        , dmb ish,  , l, "memory", __VA_ARGS__)\
+         : 338   ATOMIC_FETCH_OP (_relaxed,        ,  ,  ,         , __VA_ARGS__)\
+         : 339   ATOMIC_FETCH_OP (_acquire,        , a,  , "memory", __VA_ARGS__)\
+         : 340   ATOMIC_FETCH_OP (_release,        ,  , l, "memory", __VA_ARGS__)
+         :
+         : 342   ATOMIC_OPS(add, add, I)
+    0.00 :   3b170:  add     x6, x6, #0x34
+    0.00 :   3b174:  prfm    pstl1strm, [x6]
+    0.00 :   3b178:  ldxr    w11, [x6]
+    0.00 :   3b17c:  add     w11, w11, #0x1
+    0.00 :   3b180:  stxr    w12, w11, [x6]
+    0.00 :   3b184:  cbnz    w12, 3b178 <__rx_loan_table_append_ref+0x268>
+         : 349   bv->bv_page = page;
+    0.00 :   3b188:  str     x1, [x8, x7]
+         : 351   bv->bv_len = len;
+    0.00 :   3b18c:  stp     w3, w2, [x9, #8]
+    0.00 :   3b190:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 354   void *p = (void *)((__force unsigned long)netmem & ~NET_IOV);
+    0.92 :   3b194:  and     x2, x1, #0xfffffffffffffffe
+         : 356   netmem_get_pp(page_to_netmem(page))->rx_region;
+    0.24 :   3b198:  ldr     x2, [x2, #16]
+         : 358   return page_pool_page_is_pp(page) &&
+    2.47 :   3b19c:  ldr     x2, [x2, #968]
+    4.06 :   3b1a0:  cbz     x2, 3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 361   t->region_count++;
+    1.37 :   3b1a4:  ldr     w2, [x0, #60]
+         : 363   t->region_last = page;
+    0.26 :   3b1a8:  str     x1, [x0, #64]
+         : 365   t->region_count++;
+    0.44 :   3b1ac:  add     w1, w2, #0x1
+    0.22 :   3b1b0:  str     w1, [x0, #60]
+         : 368   if (page_pool)
+    0.23 :   3b1b4:  b       3b0c4 <__rx_loan_table_append_ref+0x1b4>
+         : 370   ATOMIC64_FETCH_OP (, dmb ish,  , l, "memory", __VA_ARGS__)      \
+         : 371   ATOMIC64_FETCH_OP (_relaxed,,  ,  ,         , __VA_ARGS__)      \
+         : 372   ATOMIC64_FETCH_OP (_acquire,, a,  , "memory", __VA_ARGS__)      \
+         : 373   ATOMIC64_FETCH_OP (_release,,  , l, "memory", __VA_ARGS__)
+         :
+         : 375   ATOMIC64_OPS(add, add, I)
+    0.00 :   3b1b8:  add     x6, x6, #0x28
+    0.00 :   3b1bc:  prfm    pstl1strm, [x6]
+    0.00 :   3b1c0:  ldxr    x11, [x6]
+    0.00 :   3b1c4:  add     x11, x11, #0x1
+    0.00 :   3b1c8:  stxr    w12, x11, [x6]
+    0.00 :   3b1cc:  cbnz    w12, 3b1c0 <__rx_loan_table_append_ref+0x2b0>
+         : 382   bv->bv_page = page;
+    0.00 :   3b1d0:  str     x1, [x8, x7]
+         : 384   bv->bv_len = len;
+    0.00 :   3b1d4:  stp     w3, w2, [x9, #8]
+         : 386   if (borrowed) {
+    0.00 :   3b1d8:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 388   return -ENOSPC;
+    0.00 :   3b1dc:  mov     w0, #0xffffffe4                 // #-28
+         : 390   }
+    0.00 :   3b1e0:  ret
+         : 392   if (WARN_ON_ONCE(folio_test_slab(folio)))
+    0.00 :   3b1e4:  brk     #0x800
+         : 394   bv->bv_page = page;
+    0.00 :   3b1e8:  str     x1, [x8, x7]
+         : 396   bv->bv_len = len;
+    0.00 :   3b1ec:  stp     w3, w2, [x9, #8]
+         : 398   if (borrowed) {
+    0.00 :   3b1f0:  b       3af7c <__rx_loan_table_append_ref+0x6c>
+         : 400   if (WARN_ON_ONCE(folio_test_large_kmalloc(folio)))
+    0.00 :   3b1f4:  brk     #0x800
+         : 402   bv->bv_page = page;
+    0.00 :   3b1f8:  str     x1, [x8, x7]
+         : 404   bv->bv_len = len;
+    0.00 :   3b1fc:  stp     w3, w2, [x9, #8]
+    0.00 :   3b200:  b       3af7c <__rx_loan_table_append_ref+0x6c>
