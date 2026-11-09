@@ -1,0 +1,16 @@
+t2-r327, cycles a WRITE: under FUNC; and under FUNC but not under svc_tcp_recvfrom, schedule_timeout or svc_process
+   205914   21376  svc_recv
+     8610    4200  svc_thread_wait_for_work
+     4831    4831  svc_thread_wake_next
+     2029    2029  svc_alloc_arg
+   183558    3460  svc_handle_xprt
+    71063    1908  svc_xprt_recv_call
+    69164   69164  svc_tcp_recvfrom
+     3167    3167  svc_xprt_received
+      890     890  svc_tcp_restore_pages
+      205     205  svc_tcp_save_pages
+      291     291  svc_xprt_enqueue
+     1332    1332  svc_xprt_release
+     6666    6666  schedule_timeout
+      798     798  svc_data_ready
+nfsd in the window, a second: WRITEs 66246, threads woken 295447, context switches 819856

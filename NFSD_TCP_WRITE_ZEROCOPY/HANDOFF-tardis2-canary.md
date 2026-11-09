@@ -124,6 +124,18 @@ loan table is taken over from another core at every piece and at
 release.  Suggested next: prefetch the table's bvec lines ahead of the
 append and of release.  `FLAMEGRAPH/80-record-cpus/README.md`.
 
+**Round 81, the checks for one thread a record (9 November, `t2-r336`
+and `t2-r327`'s call graph):** Mike asked how a record's pieces would be
+kept on one thread.  The thread that read a piece keeps the record and
+sleeps until `svc_data_ready()` wakes it for the rest.  Two checks before
+any code.  A woken nfsd thread runs again on the CPU it slept on 99% of
+the time (98.6% after 10 us to 1 ms off), so keeping the thread keeps the
+core.  What the parked pieces cost today is at most about 23k cycles a
+WRITE, some 10% of nfsd's: the thread loop for 4.92 of the 5.92 pieces,
+their received, save and restore, and round 79's takeover misses.  That
+is many times what the prefetches could save.  No code is written.
+`FLAMEGRAPH/81-thread-core/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

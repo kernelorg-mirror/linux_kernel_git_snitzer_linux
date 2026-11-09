@@ -1,0 +1,29 @@
+// wake-cpu.bt: round 81, does an nfsd thread run again on the CPU it last
+// ran on?  At each switch-in of an nfsd thread, the CPU against the one it
+// switched out on, by how long it was off; for a move, whether that CPU was
+// idle (running pid 0) at the time.  Exits after 5 s.
+tracepoint:sched:sched_switch
+{
+	@cur[cpu] = args.next_pid;
+	if (args.prev_comm == "nfsd") {
+		@out[args.prev_pid] = cpu;
+		@outt[args.prev_pid] = nsecs;
+	}
+	if (args.next_comm == "nfsd" && has_key(@outt, args.next_pid)) {
+		$pid = args.next_pid;
+		$us = ((uint64)nsecs - (uint64)@outt[$pid]) / (uint64)1000;
+		$prev = @out[$pid];
+		if ((uint64)cpu == (uint64)$prev) {
+			@same = count();
+			@off_same_us = hist($us);
+			if ($us >= 10 && $us < 1000) { @same_10us_1ms = count(); }
+		} else {
+			@moved = count();
+			@off_moved_us = hist($us);
+			if ($us >= 10 && $us < 1000) { @moved_10us_1ms = count(); }
+			if (@cur[$prev] == 0) { @moved_prev_idle = count(); }
+			else { @moved_prev_busy = count(); }
+		}
+	}
+}
+interval:s:5 { clear(@cur); clear(@out); clear(@outt); exit(); }

@@ -1,0 +1,152 @@
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/81-thread-core/wake-cpu.bt:14:10-61: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        $us = ((uint64)nsecs - (uint64)@outt[$pid]) / (uint64)1000;
+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/81-thread-core/wake-cpu.bt:14:10-61: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        $us = ((uint64)nsecs - (uint64)@outt[$pid]) / (uint64)1000;
+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/81-thread-core/wake-cpu.bt:14:10-18: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        $us = ((uint64)nsecs - (uint64)@outt[$pid]) / (uint64)1000;
+               ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/81-thread-core/wake-cpu.bt:14:26-34: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        $us = ((uint64)nsecs - (uint64)@outt[$pid]) / (uint64)1000;
+                               ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/81-thread-core/wake-cpu.bt:14:49-57: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        $us = ((uint64)nsecs - (uint64)@outt[$pid]) / (uint64)1000;
+                                                      ~~~~~~~~
+Attached 2 probes
+
+
+@cur[23]: 0
+@cur[26]: 0
+@cur[41]: 0
+@cur[20]: 0
+@cur[42]: 0
+@cur[29]: 0
+@cur[47]: 0
+@cur[43]: 152907
+@cur[49]: 152977
+@cur[21]: 0
+@cur[14]: 152930
+@cur[17]: 152979
+@cur[33]: 0
+@cur[50]: 0
+@cur[31]: 0
+@cur[11]: 152945
+@cur[39]: 0
+@cur[28]: 0
+@cur[53]: 0
+@cur[8]: 0
+@cur[34]: 152965
+@cur[45]: 152922
+@cur[55]: 0
+@cur[36]: 152982
+@cur[51]: 0
+@cur[18]: 0
+@cur[30]: 0
+@cur[19]: 0
+@cur[24]: 0
+@cur[48]: 0
+@cur[15]: 153016
+@cur[52]: 0
+@cur[25]: 0
+@cur[32]: 0
+@cur[9]: 152975
+@cur[38]: 0
+@cur[46]: 0
+@cur[16]: 0
+@cur[40]: 0
+@moved: 14434
+@moved_10us_1ms: 12691
+@moved_prev_busy: 11951
+@moved_prev_idle: 2483
+@off_moved_us:
+[2, 4)                 1 |                                                    |
+[4, 8)                87 |@                                                   |
+[8, 16)              574 |@@@@@@@@                                            |
+[16, 32)            1145 |@@@@@@@@@@@@@@@@                                    |
+[32, 64)            1032 |@@@@@@@@@@@@@@                                      |
+[64, 128)           1822 |@@@@@@@@@@@@@@@@@@@@@@@@@@                          |
+[128, 256)          2925 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          |
+[256, 512)          3612 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)           1705 |@@@@@@@@@@@@@@@@@@@@@@@@                            |
+[1K, 2K)             379 |@@@@@                                               |
+[2K, 4K)             444 |@@@@@@                                              |
+[4K, 8K)             335 |@@@@                                                |
+[8K, 16K)             89 |@                                                   |
+[16K, 32K)            51 |                                                    |
+[32K, 64K)            69 |                                                    |
+[64K, 128K)           99 |@                                                   |
+[128K, 256K)          27 |                                                    |
+[256K, 512K)          11 |                                                    |
+[512K, 1M)            14 |                                                    |
+[1M, 2M)               9 |                                                    |
+[2M, 4M)               4 |                                                    |
+
+@off_same_us:
+[1]               110746 |@@@@@@@@@@@@@@                                      |
+[2, 4)            410966 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)            253777 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    |
+[8, 16)           218439 |@@@@@@@@@@@@@@@@@@@@@@@@@@@                         |
+[16, 32)          171867 |@@@@@@@@@@@@@@@@@@@@@                               |
+[32, 64)           98469 |@@@@@@@@@@@@                                        |
+[64, 128)         108251 |@@@@@@@@@@@@@                                       |
+[128, 256)        136447 |@@@@@@@@@@@@@@@@@                                   |
+[256, 512)        157594 |@@@@@@@@@@@@@@@@@@@                                 |
+[512, 1K)          54958 |@@@@@@                                              |
+[1K, 2K)            5776 |                                                    |
+[2K, 4K)            3752 |                                                    |
+[4K, 8K)            2281 |                                                    |
+[8K, 16K)            666 |                                                    |
+[16K, 32K)           278 |                                                    |
+[32K, 64K)           251 |                                                    |
+[64K, 128K)          340 |                                                    |
+[128K, 256K)          75 |                                                    |
+[256K, 512K)          47 |                                                    |
+[512K, 1M)            39 |                                                    |
+[1M, 2M)              25 |                                                    |
+[2M, 4M)              10 |                                                    |
+
+@out[152975]: 9
+@out[152945]: 11
+@out[152930]: 14
+@out[152871]: 16
+@out[152979]: 17
+@out[152896]: 18
+@out[152986]: 19
+@out[152997]: 20
+@out[152980]: 24
+@out[153005]: 26
+@out[152962]: 28
+@out[152921]: 30
+@out[152895]: 31
+@out[152999]: 33
+@out[152965]: 34
+@out[152982]: 36
+@out[152959]: 38
+@out[152943]: 39
+@out[152928]: 40
+@out[153007]: 41
+@out[152907]: 43
+@out[152957]: 43
+@out[152922]: 45
+@out[152897]: 46
+@out[152913]: 47
+@out[153006]: 48
+@out[152976]: 50
+@out[153015]: 51
+@out[152894]: 53
+@out[152918]: 55
+@outt[152980]: 45426403611071
+@outt[152943]: 45426403629591
+@outt[152959]: 45426403645207
+@outt[152913]: 45426403665447
+@outt[152965]: 45426403675551
+@outt[152907]: 45426403676031
+@outt[152945]: 45426403676679
+@outt[152976]: 45426403694487
+@outt[152986]: 45426403706407
+@outt[152982]: 45426403709535
+@outt[152997]: 45426403710535
+@outt[152975]: 45426403710767
+@same: 1735054
+@same_10us_1ms: 869421
