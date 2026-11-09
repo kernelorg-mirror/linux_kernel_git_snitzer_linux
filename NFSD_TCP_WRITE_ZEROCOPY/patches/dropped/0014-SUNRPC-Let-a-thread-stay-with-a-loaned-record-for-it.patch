@@ -1,0 +1,221 @@
+From 02a9b93793f7b33735af941ba66e7b9cbd4c21b8 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 9 Nov 2026 18:53:00 +0000
+Subject: [PATCH] SUNRPC: Let a thread stay with a loaned record for its rest
+
+A loaned record arrives in pieces: while it is incomplete,
+svc_data_ready() wakes no thread until the rest, or half the open
+window, has arrived.  Each piece then goes to whichever thread is idle
+next, so the pieces of one record are walked on different threads, and
+nearly always on different cores.  The record's loan table and state
+are taken over from another core's cache at every piece, and each
+piece pays a trip through the pool: the transport is released and
+queued again, the record's pages saved and restored, and a thread
+woken through the idle list.
+
+Let the thread that read a piece stay with the record instead.  It
+keeps XPT_BUSY and the record's state and sleeps until svc_data_ready()
+finds the rest has arrived, which wakes it in place of queueing the
+transport, and it reads on.  The scheduler wakes a sleeping thread on
+the core it slept on, so the record stays in that core's cache.
+
+svc_tcp_rx_stay_us bounds the wait (0, the default, turns staying
+off).  A closing transport, a thread asked to stop, a pending signal
+and the timeout end it, and the record is then saved as before;
+svc_xprt_received() queues the transport again for data that arrived
+meanwhile.  svc_tcp_rx_stay_stats counts the waits and how they ended.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ include/linux/sunrpc/svcsock.h |   6 ++
+ net/sunrpc/svcsock.c           | 128 ++++++++++++++++++++++++++++++++-
+ 2 files changed, 131 insertions(+), 3 deletions(-)
+
+diff --git a/include/linux/sunrpc/svcsock.h b/include/linux/sunrpc/svcsock.h
+index f745c7b7ff78..089a0b2ae805 100644
+--- a/include/linux/sunrpc/svcsock.h
++++ b/include/linux/sunrpc/svcsock.h
+@@ -134,6 +134,12 @@ struct svc_sock {
+ 	 * less (svc_tcp_rx_set_want())
+ 	 */
+ 	u32			sk_rx_want;
++	/*
++	 * The thread that read the last piece of an incomplete loaned
++	 * record and waits for its rest (svc_tcp_rx_stay()), or NULL:
++	 * svc_data_ready() wakes it in place of queueing the transport
++	 */
++	struct task_struct	*sk_rx_waiter;
+ 	/* region pages held by this connection's confined READ replies */
+ 	atomic_t		sk_rx_region_inflight;
+ 	bool			sk_rx_region_stalled;	/* at its share */
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index ae0082408fd5..af58fe3c8344 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -31,6 +31,7 @@
+ #include <linux/skbuff_ref.h>
+ #include <linux/file.h>
+ #include <linux/freezer.h>
++#include <linux/kthread.h>
+ #include <linux/bvec.h>
+ 
+ #include <net/sock.h>
+@@ -4478,8 +4479,24 @@ VISIBLE_IF_KUNIT void svc_data_ready(struct sock *sk)
+ 		 * finds this data.
+ 		 */
+ 		if (!test_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags) &&
+-		    !test_and_set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags))
+-			svc_xprt_enqueue(&svsk->sk_xprt);
++		    !test_and_set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags)) {
++			struct task_struct *waiter;
++
++			/* A thread staying with the record holds XPT_BUSY,
++			 * so the enqueue would do nothing: wake it.  It
++			 * clears the waiter before it can leave the wait,
++			 * and the task is freed only after an RCU grace
++			 * period, so a stale read wakes a live task, at
++			 * worst spuriously, which every sleep allows for.
++			 */
++			rcu_read_lock();
++			waiter = READ_ONCE(svsk->sk_rx_waiter);
++			if (waiter)
++				wake_up_process(waiter);
++			rcu_read_unlock();
++			if (!waiter)
++				svc_xprt_enqueue(&svsk->sk_xprt);
++		}
+ 	}
+ }
+ EXPORT_SYMBOL_IF_KUNIT(svc_data_ready);
+@@ -4996,8 +5013,20 @@ static void svc_tcp_state_change(struct sock *sk)
+ 		rmb();
+ 		svsk->sk_ostate(sk);
+ 		trace_svcsock_tcp_state(&svsk->sk_xprt, svsk->sk_sock);
+-		if (sk->sk_state != TCP_ESTABLISHED)
++		if (sk->sk_state != TCP_ESTABLISHED) {
++			struct task_struct *waiter;
++
+ 			svc_xprt_deferred_close(&svsk->sk_xprt);
++			/* XPT_CLOSE before the waiter: svc_tcp_rx_stay()
++			 * publishes the waiter before it tests XPT_CLOSE.
++			 */
++			smp_mb__after_atomic();
++			rcu_read_lock();
++			waiter = READ_ONCE(svsk->sk_rx_waiter);
++			if (waiter)
++				wake_up_process(waiter);
++			rcu_read_unlock();
++		}
+ 	}
+ }
+ 
+@@ -6258,6 +6287,97 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_set_want(struct svc_sock *svsk,
+ }
+ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_set_want);
+ 
++/*
++ * A thread that reads a piece of a loaned record and leaves it incomplete
++ * can stay with it: it keeps the transport (XPT_BUSY) and the record's
++ * state, and sleeps until svc_data_ready() finds the rest has arrived and
++ * wakes it, in place of saving the record on the socket and leaving it to
++ * whichever thread is idle next.  The record's pieces are then walked on
++ * one thread, which the scheduler keeps on one core, so the loan table and
++ * the thread's own lines stay in that core's cache, and the pieces skip
++ * the trip through the pool.  svc_tcp_rx_stay_us bounds the wait, rounded
++ * up to the next clock tick and one more; 0 turns staying off.  A thread
++ * that is to stop, a transport that is closing, a pending signal or the
++ * timeout ends the wait, and the record is saved as it would have been.
++ */
++static unsigned int svc_tcp_rx_stay_us __read_mostly;
++module_param(svc_tcp_rx_stay_us, uint, 0644);
++MODULE_PARM_DESC(svc_tcp_rx_stay_us,
++		 "Microseconds a thread waits with an incomplete loaned record for its rest (0: it does not wait)");
++
++struct svc_tcp_rx_stay_stats {
++	unsigned long	stayed;		/* waits begun */
++	unsigned long	woken;		/* ended with data to read */
++	unsigned long	left;		/* ended without, record saved */
++};
++static DEFINE_PER_CPU(struct svc_tcp_rx_stay_stats, svc_tcp_rx_stay_stats);
++
++static int svc_tcp_rx_stay_stats_get(char *buf, const struct kernel_param *kp)
++{
++	struct svc_tcp_rx_stay_stats sum = {};
++	int cpu;
++
++	for_each_possible_cpu(cpu) {
++		const struct svc_tcp_rx_stay_stats *s =
++			per_cpu_ptr(&svc_tcp_rx_stay_stats, cpu);
++
++		sum.stayed += READ_ONCE(s->stayed);
++		sum.woken += READ_ONCE(s->woken);
++		sum.left += READ_ONCE(s->left);
++	}
++	return sysfs_emit(buf, "stayed %lu woken %lu left %lu\n",
++			  sum.stayed, sum.woken, sum.left);
++}
++
++static const struct kernel_param_ops svc_tcp_rx_stay_stats_ops = {
++	.get	= svc_tcp_rx_stay_stats_get,
++};
++module_param_cb(svc_tcp_rx_stay_stats, &svc_tcp_rx_stay_stats_ops, NULL, 0444);
++MODULE_PARM_DESC(svc_tcp_rx_stay_stats,
++		 "Waits for the rest of a loaned record: begun, ended with data, ended without");
++
++/*
++ * Wait for the rest of an incomplete loaned record.  Returns true when
++ * svc_data_ready() has armed XPT_DATA for it, which this clears: the
++ * caller reads again.  On false the caller saves the record and gives up
++ * the transport as it otherwise would, and svc_xprt_received() queues it
++ * again for data that arrived after the wait ended.
++ *
++ * The waiter is published before the task state is set, whose barrier
++ * orders it before the XPT_DATA test; svc_data_ready() sets XPT_DATA with
++ * a test_and_set_bit() before it reads the waiter.  So either the wait
++ * sees XPT_DATA, or svc_data_ready() sees the waiter and wakes it.
++ */
++static bool svc_tcp_rx_stay(struct svc_sock *svsk, struct svc_rqst *rqstp)
++{
++	unsigned long *flags = &svsk->sk_xprt.xpt_flags;
++	unsigned int us = READ_ONCE(svc_tcp_rx_stay_us);
++	long left;
++	bool data;
++
++	if (!us || !READ_ONCE(svsk->sk_rx_want) || test_bit(XPT_CLOSE, flags))
++		return false;
++	this_cpu_inc(svc_tcp_rx_stay_stats.stayed);
++	left = usecs_to_jiffies(us) + 1;
++	WRITE_ONCE(svsk->sk_rx_waiter, current);
++	for (;;) {
++		set_current_state(TASK_INTERRUPTIBLE);
++		if (test_bit(XPT_DATA, flags) || test_bit(XPT_CLOSE, flags) ||
++		    test_bit(SP_NEED_VICTIM, &rqstp->rq_pool->sp_flags) ||
++		    kthread_should_stop() || signal_pending(current) || !left)
++			break;
++		left = schedule_timeout(left);
++	}
++	__set_current_state(TASK_RUNNING);
++	WRITE_ONCE(svsk->sk_rx_waiter, NULL);
++	data = test_and_clear_bit(XPT_DATA, flags);
++	if (data)
++		this_cpu_inc(svc_tcp_rx_stay_stats.woken);
++	else
++		this_cpu_inc(svc_tcp_rx_stay_stats.left);
++	return data;
++}
++
+ VISIBLE_IF_KUNIT void svc_tcp_rx_hold_buffer(struct svc_sock *svsk);
+ 
+ /**
+@@ -6348,6 +6468,8 @@ VISIBLE_IF_KUNIT int svc_tcp_recvfrom(struct svc_rqst *rqstp)
+ 		if (len >= 0 && READ_ONCE(svsk->sk_rx_want) &&
+ 		    test_and_clear_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags))
+ 			goto again;
++		if (len >= 0 && svc_tcp_rx_stay(svsk, rqstp))
++			goto again;
+ 		/* A zero return leaves no record at the head to classify.
+ 		 * -EINVAL means a control record sits there. Screen the
+ 		 * other errors out first, because a probe calls
+-- 
+2.52.0
+

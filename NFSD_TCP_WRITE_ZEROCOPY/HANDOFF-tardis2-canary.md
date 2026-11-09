@@ -173,6 +173,11 @@ WRITE).  Staying is lower in all six pairs of rounds 82 and 85, by 0.1
 to 3.2 GB/s; its cause is not in the drives or the block layer.
 `FLAMEGRAPH/85-write-tail/README.md`.
 
+**Staying is dropped (Mike, 9 November):** the patch is
+`patches/dropped/0014`; `kernel-7.3/canary.ST` is kept, unpushed, and its
+stack `$L/svcstack-ST` is deleted.  Next is round 81's alternative, the
+prefetch of the loan table's lines (round 86).
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

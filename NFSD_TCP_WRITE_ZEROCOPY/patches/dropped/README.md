@@ -202,3 +202,18 @@ walk; kept, it would have gone into `net/core/rx_loan.c`.  It took the
 second loop away, but the count then read each page one fragment after
 asking for it and waited for it: the two passes went from 5.9k cycles a
 WRITE to 8.3k (`FLAMEGRAPH/78-prefetch-count/README.md`).
+
+`0014-SUNRPC-Let-a-thread-stay-with-a-loaned-record-for-it.patch`
+(FLAMEGRAPH rounds 81 to 85, 9 November, dropped by Mike) lets the
+thread that read a piece of an incomplete loaned record keep it and
+sleep until `svc_data_ready()` wakes it for the rest, behind
+`sunrpc.svc_tcp_rx_stay_us` (0, off, by default).  It is `02a9b93793f7`
+on the unpushed `kernel-7.3/canary.ST`, on `3bdeea5a21cc`.  It adds a
+field to `struct svc_sock`, which changes the versions of 273 sunrpc
+exports, so it was tried as a whole server stack
+(`xeu-rig/build-svcstack.sh`).  It did what it said: a piece is read in
+3.4 us against 7.8, and threads woken fall from about 291k to 84k a
+second.  But it was lower in all six pairs, by 0.1 to 3.2 GB/s, at the
+same cycles a WRITE, and no cause was found in the wait for a piece, the
+drives, the block layer or the SGLs (`FLAMEGRAPH/82-thread-stay/` to
+`85-write-tail/`).
