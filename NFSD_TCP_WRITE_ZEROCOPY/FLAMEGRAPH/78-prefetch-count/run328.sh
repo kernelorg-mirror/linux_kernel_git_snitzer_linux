@@ -11,7 +11,10 @@ cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit
 say() { echo "$(date +%T) $*"; }
 [ "$(cat /sys/kernel/kexec_crash_loaded)" = 1 ] || { say "kdump not armed"; exit 1; }
 E=$L/t2-r333; mkdir -p $E
-put_back() { SUNRPC_KO=none DROP_CLIENTS=1 ./swap-sunrpc.sh > $E/swap-stock.txt 2>&1
+# SUNRPC_KO=none alone leaves updates/sunrpc.ko in place (the stock was not
+# put back on 9 November and was by hand): take it out and depmod first.
+put_back() { rm -f /lib/modules/$(uname -r)/updates/sunrpc.ko; depmod -a
+	SUNRPC_KO=none DROP_CLIENTS=1 ./swap-sunrpc.sh > $E/swap-stock.txt 2>&1
 	./settled.sh apply > $E/apply-stock.txt 2>&1
 	say "stock: sunrpc $(cat /sys/module/sunrpc/srcversion), $(modinfo -n sunrpc), updates: $(ls /lib/modules/$(uname -r)/updates | tr '\n' ' '), $(tail -1 $E/apply-stock.txt)"; }
 n=328

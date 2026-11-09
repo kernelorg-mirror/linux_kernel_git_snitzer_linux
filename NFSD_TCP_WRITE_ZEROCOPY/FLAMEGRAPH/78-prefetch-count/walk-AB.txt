@@ -1,0 +1,21 @@
+== t2-r328 t2-r330 t2-r332
+all 239362 cycles a WRITE, IPC 1.08
+   4444   1.9%  IPC 2.59  L2 refill/W   44.2  __rx_loan_table_append_ref
+   3813   1.6%  IPC 3.29  L2 refill/W   37.4  svc_tcp_rx_borrow_segment
+   3131   1.3%  IPC 1.19  L2 refill/W   45.2  rx_loan_prefetch_pages
+   2599   1.1%  IPC 3.72  L2 refill/W   24.8  svc_tcp_rx_walk_skb
+   2171   0.9%  IPC 2.65  L2 refill/W   25.8  svc_tcp_recv_skb
+   1549   0.6%  IPC 2.09  L2 refill/W   50.8  rx_loan_region_span
+   1208   0.5%  IPC 2.18  L2 refill/W   36.3  rx_loan_skb_region_pages.part.0
+   1173   0.5%  IPC 0.87  L2 refill/W   30.4  tcp_recv_skb
+   1139   0.5%  IPC 2.99  L2 refill/W   11.8  svc_tcp_rx_append_ref
+== t2-r329 t2-r331 t2-r333
+all 247523 cycles a WRITE, IPC 1.04
+   4803   1.9%  IPC 1.48  L2 refill/W   84.3  svc_tcp_rx_region_span
+   4481   1.8%  IPC 2.43  L2 refill/W   45.5  __rx_loan_table_append_ref
+   3592   1.5%  IPC 3.29  L2 refill/W   35.5  svc_tcp_rx_borrow_segment
+   3449   1.4%  IPC 1.24  L2 refill/W   48.5  svc_tcp_rx_prefetch_count
+   2875   1.2%  IPC 3.42  L2 refill/W   30.6  svc_tcp_rx_walk_skb
+   2202   0.9%  IPC 1.99  L2 refill/W   28.0  svc_tcp_recv_skb
+   1186   0.5%  IPC 0.87  L2 refill/W   31.1  tcp_recv_skb
+   1130   0.5%  IPC 2.71  L2 refill/W   12.7  svc_tcp_rx_append_ref

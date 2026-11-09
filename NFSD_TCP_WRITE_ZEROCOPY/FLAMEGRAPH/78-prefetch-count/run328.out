@@ -1,0 +1,7 @@
+05:54:46 t2-r328 A | total 69.95 GB/s | WRITEs 66559 | retransmits 999 | new kernel warnings 0
+06:00:06 t2-r329 B | total 70.86 GB/s | WRITEs 67486 | retransmits 1489 | new kernel warnings 0
+06:05:25 t2-r330 A | total 70.79 GB/s | WRITEs 67533 | retransmits 1434 | new kernel warnings 0
+06:10:45 t2-r331 B | total 71.27 GB/s | WRITEs 67852 | retransmits 1698 | new kernel warnings 0
+06:16:06 t2-r332 A | total 69.77 GB/s | WRITEs 66578 | retransmits 2613 | new kernel warnings 0
+06:21:27 t2-r333 B | total 70.02 GB/s | WRITEs 66729 | retransmits 1154 | new kernel warnings 0
+06:21:43 stock: sunrpc 306DE3D63221C6367E625E0, /lib/modules/7.3.3-13.hs.519.canary.el10.aarch64+16k/updates/sunrpc.ko, updates: sunrpc.ko , settled.sh audit rest: the settled setting

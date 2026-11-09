@@ -98,6 +98,15 @@ region count 2.7k, the borrowing walk 10.7k) and 14k at release.
 Suggested first change: take the region count in the prefetch's pass.
 `FLAMEGRAPH/77-loan-walk/README.md`.
 
+**Round 78, the region count in the prefetch's walk (9 November,
+`t2-r328..r333`, A B A B A B on swapped `sunrpc.ko`):** the fold costs
+2.4k cycles a WRITE more than it saves (the count now waits on the
+lines just prefetched, one fragment ahead being too short a lead); the
+rate 0.55 GB/s ahead within the far share's noise; the region the same.
+Suggested: drop.  The stock sunrpc was put back by hand after the
+script's put-back left B in `updates/`.
+`FLAMEGRAPH/78-prefetch-count/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
