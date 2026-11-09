@@ -2849,6 +2849,45 @@ static bool svc_tcp_rx_refs_valid(const struct svc_tcp_rx_state *state)
 	return rx_loan_table_refs_valid(&state->lt);
 }
 
+/*
+ * A loaned record's table is written a piece at a time, each piece by
+ * whichever thread took the record up, so the lines the next append
+ * reads and writes were last written on another CPU.  Fetch them for
+ * writing ahead: at each takeover, and ahead of each skb's appends.
+ */
+#define SVC_TCP_RX_BVEC_LINE	(L1_CACHE_BYTES / sizeof(struct bio_vec))
+
+/* Fetch for writing entries [@first, @first + @n) and their bitmap words. */
+static void svc_tcp_rx_prefetch_entries(struct rx_loan_table *t, u32 first,
+					u32 n)
+{
+	u32 last, i;
+
+	if (!n || first >= t->capacity)
+		return;
+	last = min(first + n, t->capacity) - 1;
+	for (i = round_down(first, SVC_TCP_RX_BVEC_LINE); i <= last;
+	     i += SVC_TCP_RX_BVEC_LINE)
+		prefetchw(&t->bvec[i]);
+	prefetchw(&t->borrowed[BIT_WORD(first)]);
+	prefetchw(&t->page_pool[BIT_WORD(first)]);
+	if (BIT_WORD(last) != BIT_WORD(first)) {
+		prefetchw(&t->borrowed[BIT_WORD(last)]);
+		prefetchw(&t->page_pool[BIT_WORD(last)]);
+	}
+}
+
+/* The entry an append may coalesce into, and @n more after it. */
+static void svc_tcp_rx_prefetch_tail(struct rx_loan_table *t, u32 n)
+{
+	u32 count = t->count;
+
+	if (count)
+		svc_tcp_rx_prefetch_entries(t, count - 1, n + 1);
+	else
+		svc_tcp_rx_prefetch_entries(t, 0, n);
+}
+
 VISIBLE_IF_KUNIT int svc_tcp_rx_release_refs(struct svc_tcp_rx_state *state)
 {
 	int ret;
@@ -5102,6 +5141,8 @@ VISIBLE_IF_KUNIT int svc_tcp_restore_pages(struct svc_sock *svsk,
 			return -EINVAL;
 		return 0;
 	}
+	if (svsk->sk_rx)
+		prefetchw(&svsk->sk_rx->lt);
 	npages = svc_tcp_rx_held_pages(svsk, svsk->sk_rx);
 	/*
 	 * Trade pages with the socket: the pages this thread gives up wait
@@ -5129,6 +5170,9 @@ VISIBLE_IF_KUNIT int svc_tcp_restore_pages(struct svc_sock *svsk,
 			svc_rqst_page_release(rqstp, page);
 		}
 	}
+	if (svsk->sk_rx)
+		svc_tcp_rx_prefetch_tail(&svsk->sk_rx->lt,
+					 SVC_TCP_RX_BVEC_LINE);
 	ret = svc_tcp_rx_exchange(&svsk->sk_rx, &rqstp->rq_tcp_rx);
 	if (ret)
 		return ret;
@@ -6062,6 +6106,9 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 
 			rx_loan_prefetch_pages(skb, 0, body_offset,
 					       body_offset + remaining);
+			svc_tcp_rx_prefetch_tail(&state->lt,
+						 skb_shinfo(skb)->nr_frags +
+						 SVC_TCP_RX_BVEC_LINE);
 			need = rx_loan_skb_region_pages(skb, 0, body_offset,
 							body_offset + remaining,
 							&prev);
