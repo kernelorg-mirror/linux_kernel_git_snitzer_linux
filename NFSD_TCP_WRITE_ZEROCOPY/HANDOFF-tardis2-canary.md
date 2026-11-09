@@ -149,6 +149,14 @@ costs and the table's takeover misses went away, and a sleep and wake on
 every piece came in their place.  Not kept as it is.  The stock stack is
 back.  `FLAMEGRAPH/82-thread-stay/README.md`.
 
+**Round 83, the wake latency (9 November, `t2-r345`, `t2-r346`):** with
+staying on, the time from a piece's release to its read falls from 7.79
+to 3.40 us, and waking a thread on an idle core costs 4.5 to 4.7 us
+either way.  So round 82's loss is not the wait for a piece.  Staying
+wakes nfsd 1.9 times as often a WRITE, and takes a record in 7% more
+pieces (6.29 against 5.88).  Where the 3% goes is still open.
+`FLAMEGRAPH/83-wake-latency/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

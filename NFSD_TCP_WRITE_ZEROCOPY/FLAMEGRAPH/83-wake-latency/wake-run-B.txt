@@ -1,0 +1,180 @@
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:18:9-64: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    $us = ((uint64)nsecs - (uint64)@armed[args.sk]) / (uint64)1000;
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:35:25-43: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @wake_idle_us = hist($ns / (uint64)1000);
+                                 ~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:38:25-43: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @wake_busy_us = hist($ns / (uint64)1000);
+                                 ~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:18:9-64: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    $us = ((uint64)nsecs - (uint64)@armed[args.sk]) / (uint64)1000;
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:35:25-43: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @wake_idle_us = hist($ns / (uint64)1000);
+                                 ~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:38:25-43: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+            @wake_busy_us = hist($ns / (uint64)1000);
+                                 ~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:18:9-17: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $us = ((uint64)nsecs - (uint64)@armed[args.sk]) / (uint64)1000;
+           ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:18:25-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $us = ((uint64)nsecs - (uint64)@armed[args.sk]) / (uint64)1000;
+                           ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:18:52-60: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $us = ((uint64)nsecs - (uint64)@armed[args.sk]) / (uint64)1000;
+                                                      ~~~~~~~~
+stdlib/base.bt:205-208: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+macro cpu()
+{
+  __builtin_cpu
+}
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:31:7-10: WARNING: expanded from
+    @cur[cpu] = args.next_pid;
+         ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:33:9-17: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        $ns = (uint64)nsecs - (uint64)@wk[args.next_pid];
+              ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:33:25-33: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        $ns = (uint64)nsecs - (uint64)@wk[args.next_pid];
+                              ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:35:31-39: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @wake_idle_us = hist($ns / (uint64)1000);
+                                       ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:38:31-39: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+            @wake_busy_us = hist($ns / (uint64)1000);
+                                       ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:22:2-25: WARNING: Return value discarded.
+    delete(@armed, args.sk);
+    ~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:41:3-30: WARNING: Return value discarded.
+        delete(@wk, args.next_pid);
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/83-wake-latency/wake-run.bt:42:3-34: WARNING: Return value discarded.
+        delete(@wk_idle, args.next_pid);
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Attached 5 probes
+
+
+@armed[0xffff008082a2c780]: 54154950165472
+@armed[0xffff008066ee3900]: 54154950167424
+@armed[0xffff008082a34300]: 54154950167808
+@armed[0xffff00810176ed80]: 54154950168816
+@armed[0xffff00815a757280]: 54154950169056
+@armed[0xffff008082a2a180]: 54154950169680
+@armed[0xffff008096df0080]: 54154950171504
+@armed[0xffff00806ff84280]: 54154950175360
+@armed[0xffff008082a37c00]: 54154950183777
+@armed[0xffff00815a74da80]: 54154950189049
+@armed[0xffff008554f6d100]: 54154950191521
+@armed[0xffff00801e562f80]: 54154950192801
+@armed[0xffff00806ff97c00]: 54154950198265
+@armed[0xffff0080e669b500]: 54154950201585
+@armed[0xffff00806b70f700]: 54154950201769
+@armed[0xffff0080e6687b80]: 54154950204945
+@armed[0xffff008096de5f00]: 54154950207369
+@armed[0xffff008082a2ed80]: 54154950208073
+@armed[0xffff0080d4f2e400]: 54154950210449
+@armed[0xffff00815a75ee00]: 54154950218465
+@armed[0xffff0080e6681300]: 54154950243329
+@armed[0xffff008065f52680]: 54154950274241
+@armed[0xffff008065f53980]: 54154950300009
+@armed[0xffff0080d4f5e480]: 54154950331993
+@cur[39]: 0
+@cur[25]: 0
+@cur[43]: 0
+@cur[34]: 0
+@cur[33]: 0
+@cur[42]: 0
+@cur[6]: 0
+@cur[28]: 0
+@cur[35]: 0
+@cur[38]: 310785
+@cur[45]: 0
+@cur[20]: 310738
+@cur[41]: 0
+@cur[14]: 0
+@cur[9]: 0
+@cur[37]: 0
+@cur[49]: 0
+@cur[59]: 0
+@cur[40]: 310894
+@cur[27]: 0
+@cur[57]: 0
+@cur[56]: 0
+@cur[62]: 0
+@cur[30]: 318857
+@cur[23]: 310794
+@cur[60]: 0
+@cur[4]: 0
+@cur[32]: 0
+@cur[0]: 0
+@cur[10]: 0
+@cur[21]: 0
+@cur[52]: 0
+@cur[36]: 0
+@cur[55]: 0
+@cur[44]: 0
+@cur[16]: 310772
+@cur[18]: 310880
+@cur[50]: 0
+@cur[29]: 0
+@cur[8]: 0
+@cur[48]: 0
+@cur[7]: 0
+@cur[3]: 0
+@cur[2]: 0
+@cur[58]: 0
+@cur[47]: 0
+@cur[17]: 0
+@cur[26]: 310866
+@cur[63]: 0
+@cur[24]: 0
+@cur[51]: 0
+@cur[15]: 0
+@cur[19]: 0
+@cur[61]: 0
+@cur[12]: 0
+@cur[46]: 0
+@cur[11]: 0
+@cur[1]: 329682
+@cur[53]: 310782
+@cur[22]: 0
+@cur[31]: 0
+@cur[13]: 0
+@cur[54]: 310830
+@cur[5]: 0
+@piece_sum_us: 6986355
+@piece_us:
+[0]                41553 |@                                                   |
+[1]                62614 |@@                                                  |
+[2, 4)           1383950 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)            509152 |@@@@@@@@@@@@@@@@@@@                                 |
+[8, 16)            40704 |@                                                   |
+[16, 32)           17548 |                                                    |
+[32, 64)             695 |                                                    |
+[64, 128)             14 |                                                    |
+
+@pieces: 2056230
+@wake_busy_n: 168128
+@wake_busy_sum_ns: 1039604688
+@wake_busy_us:
+[2, 4)              4157 |@                                                   |
+[4, 8)            148816 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[8, 16)            13609 |@@@@                                                |
+[16, 32)            1207 |                                                    |
+[32, 64)             327 |                                                    |
+[64, 128)             12 |                                                    |
+
+@wake_idle_n: 2312890
+@wake_idle_sum_ns: 10831277129
+@wake_idle_us:
+[1]                    7 |                                                    |
+[2, 4)            348107 |@@@@@@@@@                                           |
+[4, 8)           1939657 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[8, 16)            21860 |                                                    |
+[16, 32)            2643 |                                                    |
+[32, 64)             597 |                                                    |
+[64, 128)             19 |                                                    |
+
