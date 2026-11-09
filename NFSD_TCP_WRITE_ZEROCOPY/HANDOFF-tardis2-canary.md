@@ -73,6 +73,14 @@ no one-shot to set again), kdump armed (1024 MiB), nothing in
 `/var/tmp/zc-run-logs/t2-canary/port-dead/canary-boot1/`.  On the next
 boot steps 2 and 3 above need only `bringup.sh`'s own check.
 
+**The second boot (9 November, 04:55, after the power reset) has both
+ports.**  Pinged before `bringup.sh`: 5 of 5 on each, and 3 of 3 on each
+again after `bringup.sh 32768 256` and `settled.sh apply`.  kdump armed
+(1024 MiB), nothing in `updates/`, `rx_region_held_mark` present, the
+`struct svc_pool` of its `sunrpc.ko` the same as `pahole-PL.txt`, and
+`settled.sh apply` ends in "the settled setting".  The baseline of step
+5 is round 76, `FLAMEGRAPH/76-canary-baseline/`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
