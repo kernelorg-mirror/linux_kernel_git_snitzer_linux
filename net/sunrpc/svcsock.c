@@ -446,9 +446,17 @@ MODULE_PARM_DESC(svc_tcp_rx_region_reads,
 
 /*
  * svc_tcp_rx_region_conn_share and rx_loan/sunrpc/conn_share, one for all;
- * 0: auto, twice the server's largest READ
+ * 0: auto, see svc_rx_region_share()
  */
 static unsigned int svc_tcp_rx_region_conn_share __read_mostly;
+
+/*
+ * TCP connections, listeners not, from svc_tcp_init() to
+ * svc_tcp_sock_detach(): the auto share divides the READ partition among
+ * them.  Read at every READ admission, written only when a connection opens
+ * or closes.
+ */
+static atomic_t svc_tcp_rx_region_conns __read_mostly;
 
 /*
  * Q-C (decided): 10 s by default, a deliberate deviation from stock NFSD,
@@ -953,7 +961,7 @@ static const struct kernel_param_ops svc_tcp_rx_conn_share_ops = {
 module_param_cb(svc_tcp_rx_region_conn_share, &svc_tcp_rx_conn_share_ops,
 		NULL, 0644);
 MODULE_PARM_DESC(svc_tcp_rx_region_conn_share,
-		 "Most rx region pages one connection's READ replies may hold (0: auto, twice the server's largest READ, read back as \"0 (auto)\")");
+		 "Most rx region pages one connection's READ replies may hold (0: auto, the READ partition over the open connections, at most 2048 pages and at least one largest READ, with at most two largest READs in flight; read back as \"0 (auto)\")");
 
 /*
  * A window of loaned records for each target.  A program names a call's
@@ -3670,16 +3678,36 @@ svc_rx_region_tx_make(struct svc_rx_region_park *w, struct page **pages)
 	return tx;
 }
 
+/* Most pages the auto share gives one connection. */
+#define SVC_RX_REGION_SHARE_MAX	2048UL
+
 /*
- * Most region pages one connection may hold: auto is two largest READs,
- * each with its direct-I/O alignment page.
+ * Most region pages @svsk may hold once it admits an @n-page READ, out of
+ * a READ partition of @span pages.  R, one largest READ with its direct-I/O
+ * alignment page, is the floor; B is the partition over the open
+ * connections, at most SVC_RX_REGION_SHARE_MAX.  A largest READ (@n == R)
+ * fits within min(B, 2R), so at most two of their replies are in flight;
+ * any other READ fits within B.  A nonzero svc_tcp_rx_region_conn_share is
+ * the share of every READ.
  */
-static unsigned int svc_rx_region_share(const struct svc_sock *svsk)
+VISIBLE_IF_KUNIT unsigned int svc_rx_region_share(const struct svc_sock *svsk,
+						  unsigned int n,
+						  unsigned long span)
 {
-	return READ_ONCE(svc_tcp_rx_region_conn_share) ?:
-	       2 * ((unsigned int)DIV_ROUND_UP(svsk->sk_xprt.xpt_server->sv_max_payload,
-					       PAGE_SIZE) + 1);
+	unsigned int share = READ_ONCE(svc_tcp_rx_region_conn_share);
+	unsigned int r;
+	int conns;
+
+	if (share)
+		return share;
+	r = DIV_ROUND_UP(svsk->sk_xprt.xpt_server->sv_max_payload,
+			 PAGE_SIZE) + 1;
+	conns = max(atomic_read(&svc_tcp_rx_region_conns), 1);
+	share = max_t(unsigned long, r,
+		      min(span / conns, SVC_RX_REGION_SHARE_MAX));
+	return n == r ? min(share, 2 * r) : share;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_rx_region_share);
 
 /* Clear @svsk's stall once, and let it take requests again. */
 static void svc_rx_region_share_unstall(struct svc_sock *svsk)
@@ -3996,6 +4024,7 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_region_read(struct svc_rqst *rqstp,
 	struct svc_rx_region_park want = {
 		.svsk = svsk, .xid = rqstp->rq_xid, .count = pages,
 	};
+	unsigned long span = 0;
 	const char *why;
 	int ret;
 
@@ -4025,11 +4054,14 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_region_read(struct svc_rqst *rqstp,
 	if (!why && !rx_loan_tx_bind())
 		why = "unbound";
 	/* A READ larger than the partition could never be confined (1b). */
-	if (!why && pages > rx_loan_tx_span())
-		why = "span";
+	if (!why) {
+		span = rx_loan_tx_span();
+		if (pages > span)
+			why = "span";
+	}
 	if (why)
 		goto unconfined;
-	want.share = svc_rx_region_share(svsk);
+	want.share = svc_rx_region_share(svsk, pages, span);
 	if (!svc_rx_region_share_get(svsk, pages, want.share, rqstp->rq_xid)) {
 		ret = svc_rx_region_conn_park(rqstp, svsk, pages);
 		if (ret == -EAGAIN)
@@ -7259,7 +7291,7 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_hold_conn(struct svc_sock *svsk)
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_hold_conn);
 
-static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
+VISIBLE_IF_KUNIT void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 {
 	struct sock	*sk = svsk->sk_sk;
 
@@ -7285,6 +7317,7 @@ static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 		svsk->sk_datalen = 0;
 		memset(&svsk->sk_pages[0], 0,
 		       svsk->sk_maxpages * sizeof(struct page *));
+		atomic_inc(&svc_tcp_rx_region_conns);
 
 		tcp_sock_set_nodelay(sk);
 		/*
@@ -7309,6 +7342,7 @@ static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 		}
 	}
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_init);
 
 void svc_sock_update_bufs(struct svc_serv *serv)
 {
@@ -7595,6 +7629,7 @@ static void svc_tcp_sock_detach(struct svc_xprt *xprt)
 	svc_sock_detach(xprt);
 
 	if (!test_bit(XPT_LISTENER, &xprt->xpt_flags)) {
+		atomic_dec(&svc_tcp_rx_region_conns);
 		svc_tcp_rx_credit_forget(svsk);
 		svc_tcp_rx_target_forget(svsk);
 		svc_rx_region_conn_drain(svsk);

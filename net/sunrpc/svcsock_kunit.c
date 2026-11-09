@@ -6053,6 +6053,18 @@ struct svcsock_region {
 
 #define SVCSOCK_REGION_RESP	12
 
+/* Defined with the parameter tests below. */
+static void svcsock_rx_param_save(struct kunit *test, const char *name);
+
+/* conn_share is @val until the case ends. */
+static void svcsock_rx_conn_share(struct kunit *test, const char *val)
+{
+	svcsock_rx_param_save(test, "conn_share");
+	KUNIT_ASSERT_EQ(test,
+			svc_tcp_rx_budget_kunit_param("conn_share", val, NULL),
+			0);
+}
+
 static void svcsock_region_off(void *unused)
 {
 	svc_tcp_rx_region_kunit_reads(false);
@@ -6066,8 +6078,10 @@ static void svcsock_region_off(void *unused)
 /*
  * A request on a TCP transport in the initial namespace, with @nregion
  * stand-in READ-partition pages and an initial-namespace budget of @budget
- * pages (no reserve: the oldest READ starts by overrun, 1b).  The share is
- * 10 pages (twice a 4-page maximum READ, each with its alignment page).
+ * pages (no reserve: the oldest READ starts by overrun, 1b).  A largest
+ * READ is 5 pages (4 and its alignment page); with no transport open the
+ * auto share is max(5, @nregion) for a smaller READ and min(that, 10) for
+ * a largest one.  Cases written for a fixed share pin conn_share.
  * The topology is shared unless a test forces the split.
  */
 static struct svcsock_region *svcsock_region_alloc(struct kunit *test,
@@ -6535,6 +6549,8 @@ static void svcsock_rx_region_share_test(struct kunit *test)
 	long stalls = svcsock_region_stat(test, r, "share_stalls");
 	struct svc_deferred_req *dr;
 
+	/* The share these cases were written for: 10 pages, every READ. */
+	svcsock_rx_conn_share(test, "10");
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 7), 0);
 	KUNIT_EXPECT_FALSE(test, svsk->sk_rx_region_stalled);
 	/* 7 + 4 > 10: B waits on the connection, not the pool. */
@@ -6697,8 +6713,8 @@ static void svcsock_rx_region_share_park_test(struct kunit *test)
 
 	/* sv_max_payload 4 pages: a maximum READ is 5, the share 10. */
 	svcsock_region_park_at_share(test, r, two_max, ARRAY_SIZE(two_max));
-	/* sv_max_payload 2 pages: the share is 6, the READ 7. */
-	r->fx->svsk->sk_xprt.xpt_server->sv_max_payload = 2 * PAGE_SIZE;
+	/* A share of 6 and a READ of 7. */
+	svcsock_rx_conn_share(test, "6");
 	svcsock_region_park_at_share(test, r, one_large, ARRAY_SIZE(one_large));
 }
 
@@ -6820,6 +6836,8 @@ static void svcsock_rx_region_conn_wake_test(struct kunit *test)
 	struct svc_deferred_req *b, *c;
 	struct ubuf_info *ubuf;
 
+	/* The share these cases were written for: 10 pages, every READ. */
+	svcsock_rx_conn_share(test, "10");
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 7), 0);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_read(rqstp, 4), -EAGAIN);
 	clear_bit(RQ_DROPME, &rqstp->rq_flags);
@@ -6962,7 +6980,7 @@ static void svcsock_rx_region_park_secure_test(struct kunit *test)
 	struct ubuf_info *ua, *uc;
 
 	/* Share 4: A (2) and C (2) fill it; B (3) waits on the connection. */
-	svsk->sk_xprt.xpt_server->sv_max_payload = PAGE_SIZE;
+	svcsock_rx_conn_share(test, "4");
 	set_bit(RQ_SECURE, &rqstp->rq_flags);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 2), 0);
 	ua = svcsock_region_send(r, 1);
@@ -7228,6 +7246,8 @@ static void svcsock_rx_region_read_short_test(struct kunit *test)
 	long unconfined = svcsock_region_stat(test, r, "read_unconfined");
 	struct ubuf_info *ubuf;
 
+	/* Room for both READs in the connection's share. */
+	svcsock_rx_conn_share(test, "10");
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 3), 0);
 	ubuf = svcsock_region_send(r, 1);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 1U);
@@ -8369,6 +8389,360 @@ static void svcsock_rx_release_published_test(struct kunit *test)
 	svc_tcp_rx_reset(state);
 }
 
+/*
+ * Share sizing.  R is one largest READ with its direct-I/O
+ * alignment page; B = max(R, min(2048, partition / connections)); a
+ * largest READ is admitted while the connection holds at most min(B, 2R),
+ * any other while it holds at most B.  The region fixture has R = 5 (a
+ * 4-page largest READ) and, over one connection, B = its partition.
+ */
+
+/* Admit an @n-page READ on @r's transport and hand its reply to TCP. */
+static struct ubuf_info *svcsock_region_admit_send(struct kunit *test,
+						   struct svcsock_region *r,
+						   unsigned int n)
+{
+	int ret = svc_tcp_rx_region_read(r->fx->rqstp, n);
+
+	KUNIT_EXPECT_EQ(test, ret, 0);
+	if (ret) {
+		clear_bit(RQ_DROPME, &r->fx->rqstp->rq_flags);
+		return NULL;
+	}
+	svcsock_region_read(test, r->fx->rqstp, n);
+	return svcsock_region_send(r, 1);
+}
+
+/* TCP frees the reply's last socket buffer. */
+static void svcsock_region_complete(struct ubuf_info *ubuf)
+{
+	if (ubuf)
+		ubuf->ops->complete(NULL, ubuf, true);
+	svcsock_region_settle();
+}
+
+/* An @n-page READ waits on @r's connection. */
+static void svcsock_region_conn_waits(struct kunit *test,
+				      struct svcsock_region *r, unsigned int n)
+{
+	int ret = svc_tcp_rx_region_read(r->fx->rqstp, n);
+
+	KUNIT_EXPECT_EQ(test, ret, -EAGAIN);
+	if (!ret && svc_rqst_rx_region_held(r->fx->rqstp))
+		svc_tcp_rx_region_unconfine(r->fx->rqstp);	/* give it back */
+	clear_bit(RQ_DROPME, &r->fx->rqstp->rq_flags);
+}
+
+/* svc_delete_xprt()'s detach, and the namespace svc_xprt_free() puts. */
+static void svcsock_rx_tcp_detach(void *data)
+{
+	struct svc_xprt *xprt = &((struct svc_sock *)data)->sk_xprt;
+
+	xprt->xpt_ops->xpo_detach(xprt);
+	put_net_track(xprt->xpt_net, &xprt->ns_tracker);
+}
+
+/* What svc_setup_socket() does with @sock: a TCP transport. */
+static struct svc_sock *svcsock_rx_tcp_init(struct kunit *test,
+					    struct socket *sock)
+{
+	struct svc_sock *svsk = svcsock_rx_alloc_fixture(test, 8)->svsk;
+	struct sock *sk = sock->sk;
+	int ret;
+
+	spin_lock_init(&svsk->sk_rx_region_lock);
+	INIT_LIST_HEAD(&svsk->sk_rx_region_waiters);
+	svsk->sk_sock = sock;
+	svsk->sk_sk = sk;
+	svsk->sk_ostate = sk->sk_state_change;
+	svsk->sk_odata = sk->sk_data_ready;
+	svsk->sk_owspace = sk->sk_write_space;
+	sk->sk_user_data = svsk;
+	svc_tcp_init(svsk, svsk->sk_xprt.xpt_server);
+	/* Before the socket's release, which the actions run later. */
+	ret = kunit_add_action_or_reset(test, svcsock_rx_tcp_detach, svsk);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	return svsk;
+}
+
+/* @n accepted loopback connections in @ssock, and their listener. */
+static struct socket *svcsock_rx_loopback_conns(struct kunit *test,
+						struct socket **ssock,
+						unsigned int n)
+{
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+	};
+	struct socket *lsock, *csock;
+	unsigned int i;
+	int ret;
+
+	svcsock_rx_loopback_up(test);
+	ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM, IPPROTO_TCP,
+			       &lsock);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	ret = kunit_add_action_or_reset(test, svcsock_rx_sock_release, lsock);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	ret = kernel_bind(lsock, (struct sockaddr_unsized *)&addr, sizeof(addr));
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_ASSERT_EQ(test, kernel_listen(lsock, n), 0);
+	ret = kernel_getsockname(lsock, (struct sockaddr *)&addr);
+	KUNIT_ASSERT_EQ(test, ret, (int)sizeof(addr));
+	for (i = 0; i < n; i++) {
+		ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
+				       IPPROTO_TCP, &csock);
+		KUNIT_ASSERT_EQ(test, ret, 0);
+		ret = kunit_add_action_or_reset(test, svcsock_rx_sock_release,
+						csock);
+		KUNIT_ASSERT_EQ(test, ret, 0);
+		ret = kernel_connect(csock, (struct sockaddr_unsized *)&addr,
+				     sizeof(addr), 0);
+		KUNIT_ASSERT_EQ(test, ret, 0);
+		KUNIT_ASSERT_EQ(test, kernel_accept(lsock, &ssock[i], 0), 0);
+		ret = kunit_add_action_or_reset(test, svcsock_rx_sock_release,
+						ssock[i]);
+		KUNIT_ASSERT_EQ(test, ret, 0);
+	}
+	return lsock;
+}
+
+/*
+ * S1.  The formula: R the floor, B capped at 2048 pages, a largest READ
+ * held to min(B, 2R), any smaller READ to B; a nonzero conn_share is that
+ * many pages for every READ.  No transport is open, which counts as one.
+ */
+static void svcsock_rx_region_share_rule_test(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_alloc_fixture(test, 8)->svsk;
+	const unsigned int r = DIV_ROUND_UP(SZ_1M, PAGE_SIZE) + 1;
+	const unsigned long big = 1UL << 20, mid = r + r / 2;
+
+	svsk->sk_xprt.xpt_server->sv_max_payload = SZ_1M;
+	/* A large partition: B is 2048, a largest READ still 2R. */
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, big), 2048U);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, r - 1, big), 2048U);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, r, big),
+			min(2048U, 2 * r));
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, 1000), max(r, 1000U));
+	/* Between R and 2R: B for every READ. */
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, mid), (unsigned int)mid);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, r, mid), (unsigned int)mid);
+	/* Under R: one largest READ, the floor. */
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, r - 1), r);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, r, r - 1), r);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, 0), r);
+
+	/* The manual share: that many pages for every READ, no reply term. */
+	svcsock_rx_conn_share(test, "7");
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, big), 7U);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, r, big), 7U);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, r, 1), 7U);
+	svcsock_rx_conn_share(test, "0");
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, big), 2048U);
+}
+
+/*
+ * S2.  Connections are counted from svc_tcp_init() to svc_tcp_sock_detach(),
+ * listeners not, and B divides the partition among them.
+ */
+static void svcsock_rx_region_share_conns_test(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_alloc_fixture(test, 8)->svsk;
+	struct socket *lsock, *ssock[3];
+	struct svc_sock *l, *c[3];
+	unsigned int i;
+
+	/* R = 5: the partition (1200 pages) over the connections is B. */
+	svsk->sk_xprt.xpt_server->sv_max_payload = 4 * PAGE_SIZE;
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, 1200), 1200U);
+	lsock = svcsock_rx_loopback_conns(test, ssock, ARRAY_SIZE(ssock));
+	l = svcsock_rx_tcp_init(test, lsock);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, 1200), 1200U);
+	for (i = 0; i < ARRAY_SIZE(c); i++)
+		c[i] = svcsock_rx_tcp_init(test, ssock[i]);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, 1200), 400U);
+	kunit_release_action(test, svcsock_rx_tcp_detach, c[0]);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, 1200), 600U);
+	kunit_release_action(test, svcsock_rx_tcp_detach, l);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, 1200), 600U);
+	kunit_release_action(test, svcsock_rx_tcp_detach, c[1]);
+	kunit_release_action(test, svcsock_rx_tcp_detach, c[2]);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, 1200), 1200U);
+}
+
+/*
+ * S3.  Largest and small READs on one connection (B = 16, 2R = 10): at most
+ * two largest READs are in flight, smaller ones fill the connection to B,
+ * a largest READ counts the smaller ones' pages against 2R, and every
+ * waiter is admitted once replies return.
+ */
+static void svcsock_rx_region_share_mixed_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 16, 16);
+	struct svc_sock *svsk = r->fx->svsk;
+	struct ubuf_info *max1, *max2, *s4, *s2, *s1 = NULL, *max3 = NULL;
+	struct svc_deferred_req *dr;
+	unsigned int i;
+
+	max1 = svcsock_region_admit_send(test, r, 5);
+	max2 = svcsock_region_admit_send(test, r, 5);
+	KUNIT_EXPECT_TRUE(test, svsk->sk_rx_region_stalled);
+	svcsock_region_conn_waits(test, r, 5);
+	s4 = svcsock_region_admit_send(test, r, 4);
+	s2 = svcsock_region_admit_send(test, r, 2);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 16);
+	svcsock_region_conn_waits(test, r, 1);
+	KUNIT_EXPECT_EQ(test,
+			list_count_nodes(&svsk->sk_rx_region_waiters), 2);
+
+	/* Both largest replies return: 6 held, both waiters replay. */
+	svcsock_region_complete(max1);
+	svcsock_region_complete(max2);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 6);
+	KUNIT_EXPECT_EQ(test, list_count_nodes(&svsk->sk_xprt.xpt_deferred), 2);
+	for (i = 0; i < 2; i++) {
+		dr = svcsock_region_replay(test, r);
+		if (dr->rx_region.count == 5) {
+			/* 6 + 5 > 2R: it waits again. */
+			svcsock_region_conn_waits(test, r, 5);
+			continue;
+		}
+		KUNIT_EXPECT_EQ(test, dr->rx_region.count, 1U);
+		s1 = svcsock_region_admit_send(test, r, 1);
+		svcsock_region_free_dr(r, dr);
+	}
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 7);
+	KUNIT_EXPECT_EQ(test,
+			list_count_nodes(&svsk->sk_rx_region_waiters), 1);
+
+	/* The 4-page reply returns: 3 + 5 <= 2R, the largest is admitted. */
+	svcsock_region_complete(s4);
+	if (!list_empty(&svsk->sk_xprt.xpt_deferred)) {
+		dr = svcsock_region_replay(test, r);
+		KUNIT_EXPECT_EQ(test, dr->rx_region.count, 5U);
+		max3 = svcsock_region_admit_send(test, r, 5);
+		svcsock_region_free_dr(r, dr);
+	}
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 8);
+
+	svcsock_region_complete(s2);
+	svcsock_region_complete(s1);
+	svcsock_region_complete(max3);
+	KUNIT_EXPECT_FALSE(test, svsk->sk_rx_region_stalled);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_rx_region_waiters));
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 16U);
+}
+
+/* S4.  Small READs alone fill one connection to B (16), past 2R. */
+static void svcsock_rx_region_share_small_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 16, 16);
+	struct svc_sock *svsk = r->fx->svsk;
+	struct ubuf_info *u[4], *one = NULL;
+	struct svc_deferred_req *dr;
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(u); i++)
+		u[i] = svcsock_region_admit_send(test, r, 4);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 16);
+	KUNIT_EXPECT_TRUE(test, svsk->sk_rx_region_stalled);
+	svcsock_region_conn_waits(test, r, 1);
+
+	svcsock_region_complete(u[0]);
+	if (!list_empty(&svsk->sk_xprt.xpt_deferred)) {
+		dr = svcsock_region_replay(test, r);
+		one = svcsock_region_admit_send(test, r, 1);
+		svcsock_region_free_dr(r, dr);
+	}
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 13);
+	for (i = 1; i < ARRAY_SIZE(u); i++)
+		svcsock_region_complete(u[i]);
+	svcsock_region_complete(one);
+	KUNIT_EXPECT_FALSE(test, svsk->sk_rx_region_stalled);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 16U);
+}
+
+/*
+ * S5.  A small partition over many connections: 12 pages over 4 is 3,
+ * under R, so B is R (5); over 2 it is 6.  One connection never holds
+ * less than one largest READ.
+ */
+static void svcsock_rx_region_share_many_conns_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 12, 12);
+	struct svc_sock *svsk = r->fx->svsk;
+	struct ubuf_info *a, *b = NULL, *c;
+	struct socket *ssock[4];
+	struct svc_sock *conn[4];
+	struct svc_deferred_req *dr;
+	unsigned int i;
+
+	svcsock_rx_loopback_conns(test, ssock, ARRAY_SIZE(ssock));
+	for (i = 0; i < ARRAY_SIZE(conn); i++)
+		conn[i] = svcsock_rx_tcp_init(test, ssock[i]);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, 12), 5U);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 5, 12), 5U);
+	a = svcsock_region_admit_send(test, r, 3);
+	svcsock_region_conn_waits(test, r, 3);
+
+	/* Two close: B is 6, and the waiter fits beside a new 3-page READ. */
+	kunit_release_action(test, svcsock_rx_tcp_detach, conn[0]);
+	kunit_release_action(test, svcsock_rx_tcp_detach, conn[1]);
+	KUNIT_EXPECT_EQ(test, svc_rx_region_share(svsk, 1, 12), 6U);
+	svcsock_region_complete(a);
+	if (!list_empty(&svsk->sk_xprt.xpt_deferred)) {
+		dr = svcsock_region_replay(test, r);
+		b = svcsock_region_admit_send(test, r, 3);
+		svcsock_region_free_dr(r, dr);
+	}
+	c = svcsock_region_admit_send(test, r, 3);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 6);
+	svcsock_region_complete(b);
+	svcsock_region_complete(c);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 12U);
+}
+
+/* S6.  A manual conn_share keeps its meaning: 7 pages for every READ. */
+static void svcsock_rx_region_share_manual_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 16, 16);
+	struct svc_sock *svsk = r->fx->svsk;
+	struct ubuf_info *a, *b = NULL, *c;
+	struct svc_deferred_req *dr;
+
+	svcsock_rx_conn_share(test, "7");
+	a = svcsock_region_admit_send(test, r, 4);
+	svcsock_region_conn_waits(test, r, 4);
+	svcsock_region_complete(a);
+	if (!list_empty(&svsk->sk_xprt.xpt_deferred)) {
+		dr = svcsock_region_replay(test, r);
+		b = svcsock_region_admit_send(test, r, 4);
+		svcsock_region_free_dr(r, dr);
+	}
+	/* 4 + 3 = 7: at the share, stalled. */
+	c = svcsock_region_admit_send(test, r, 3);
+	KUNIT_EXPECT_TRUE(test, svsk->sk_rx_region_stalled);
+	svcsock_region_complete(b);
+	svcsock_region_complete(c);
+	/* Largest READs too: one at a time under a share of 7. */
+	a = svcsock_region_admit_send(test, r, 5);
+	svcsock_region_conn_waits(test, r, 5);
+	svcsock_region_complete(a);
+	if (!list_empty(&svsk->sk_xprt.xpt_deferred)) {
+		dr = svcsock_region_replay(test, r);
+		b = svcsock_region_admit_send(test, r, 5);
+		svcsock_region_free_dr(r, dr);
+		svcsock_region_complete(b);
+	}
+	KUNIT_EXPECT_FALSE(test, svsk->sk_rx_region_stalled);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 16U);
+}
+
 static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_param_auto_manual_test),
 	KUNIT_CASE_PARAM(svcsock_rx_actor_split_test,
@@ -8484,6 +8858,12 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_region_read_short_test),
 	KUNIT_CASE(svcsock_rx_region_share_park_test),
 	KUNIT_CASE(svcsock_rx_region_escaped_capacity_test),
+	KUNIT_CASE(svcsock_rx_region_share_rule_test),
+	KUNIT_CASE(svcsock_rx_region_share_conns_test),
+	KUNIT_CASE(svcsock_rx_region_share_mixed_test),
+	KUNIT_CASE(svcsock_rx_region_share_small_test),
+	KUNIT_CASE(svcsock_rx_region_share_many_conns_test),
+	KUNIT_CASE(svcsock_rx_region_share_manual_test),
 	KUNIT_CASE(svcsock_rx_credit_stock_test),
 	KUNIT_CASE(svcsock_rx_credit_stock_record_test),
 	KUNIT_CASE(svcsock_rx_credit_stock_learn_test),

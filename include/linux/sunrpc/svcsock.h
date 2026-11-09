@@ -354,6 +354,9 @@ void svc_tcp_rx_region_park_free(struct svc_rx_region_park *park);
 void svc_tcp_rx_region_unconfine_op(struct svc_rqst *rqstp, bool served);
 void svc_rx_region_share_stall(struct svc_sock *svsk, unsigned int share,
 			       unsigned int held, __be32 xid);
+unsigned int svc_rx_region_share(const struct svc_sock *svsk, unsigned int n,
+				 unsigned long span);
+void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv);
 void svc_tcp_rx_region_kunit_read_region(struct page **pages, unsigned int n);
 unsigned int svc_tcp_rx_region_kunit_read_free(void);
 struct ubuf_info *svc_tcp_rx_region_kunit_send(struct svc_rqst *rqstp,
