@@ -1,0 +1,140 @@
+From f9eb67570da8e52acf9616c78758b231a0ec8efd Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 9 Nov 2026 05:47:51 +0000
+Subject: [PATCH] SUNRPC: Count a loaned skb's region pages in the walk that
+ prefetches
+
+svc_tcp_recv_skb() walks the body of each skb of a loaned record twice
+before it borrows from it: once to prefetch each fragment's struct page
+for writing, and once to count the receive region's pages it holds, for
+the credit admitted before any borrow.  Both walks visit the same
+fragments with the same cursor arithmetic and the same recursion into
+the frag list.
+
+Count the region pages in the prefetching walk.  The count reads the
+struct page it is given, so each fragment's page is fetched one
+fragment ahead of its count, and the misses still overlap.  The
+admission still comes before any borrow, and no page is held longer.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ net/sunrpc/svcsock.c | 96 +++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 91 insertions(+), 5 deletions(-)
+
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index ae0082408fd5..1cc551dcdf54 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -2594,6 +2594,94 @@ unsigned long svc_tcp_rx_kunit_computed_default(bool on,
+ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_computed_default);
+ #endif
+ 
++/*
++ * Region pages bytes [off, off + len) of @page add to a count whose last
++ * page was *@prev, as rx_loan_region_span() counts them.
++ */
++static u32 svc_tcp_rx_region_span(struct page *page, u32 off, u32 len,
++				  struct page **prev)
++{
++	struct page *first = page + (off >> PAGE_SHIFT);
++	u32 pages = DIV_ROUND_UP(offset_in_page(off) + len, PAGE_SIZE);
++	struct page *last = first + pages - 1;
++
++	if (!page_pool_page_in_rx_region(page))
++		return 0;
++	if (first == *prev)
++		pages--;
++	*prev = last;
++	return pages;
++}
++
++/*
++ * Fetch for writing the struct page of each page bytes [first, last) of
++ * @skb lie in, as rx_loan_prefetch_pages() does, and return the region
++ * pages they add to a count whose last page was *@prev, as
++ * rx_loan_skb_region_pages() does, in one walk of the skb.  The count
++ * reads the struct page it is given, so each fragment's page is fetched
++ * one fragment ahead of its count: the misses still overlap, as they did
++ * when every page was fetched before the first was counted.
++ */
++static u32 svc_tcp_rx_prefetch_count(const struct sk_buff *skb, u32 base,
++				     u32 first, u32 last, struct page **prev)
++{
++	const struct skb_shared_info *shinfo = skb_shinfo(skb);
++	bool region = page_pool_rx_region_exists();
++	const struct sk_buff *frag_skb;
++	u32 cursor = base, pages = 0, lo, hi;
++	unsigned int index;
++
++	if (max(first, base) >= min(last, base + skb->len))
++		return 0;
++	if (shinfo->nr_frags) {
++		const skb_frag_t *frag = &shinfo->frags[0];
++
++		if (skb_frag_page(frag))
++			prefetchw(skb_frag_page(frag) +
++				  (skb_frag_off(frag) >> PAGE_SHIFT));
++	}
++	if (skb_headlen(skb)) {
++		lo = max(first, cursor);
++		hi = min(last, cursor + skb_headlen(skb));
++		if (lo < hi) {
++			const unsigned char *data = skb->data + lo - cursor;
++			struct page *page = virt_to_page(data);
++
++			prefetchw(page);
++			if (region)
++				pages += svc_tcp_rx_region_span(page,
++						offset_in_page(data),
++						hi - lo, prev);
++		}
++		cursor += skb_headlen(skb);
++	}
++	for (index = 0; index < shinfo->nr_frags; index++) {
++		const skb_frag_t *frag = &shinfo->frags[index];
++		struct page *page = skb_frag_page(frag);
++
++		if (index + 1 < shinfo->nr_frags) {
++			const skb_frag_t *next = &shinfo->frags[index + 1];
++
++			if (skb_frag_page(next))
++				prefetchw(skb_frag_page(next) +
++					  (skb_frag_off(next) >> PAGE_SHIFT));
++		}
++		lo = max(first, cursor);
++		hi = min(last, cursor + skb_frag_size(frag));
++		if (lo < hi && page && region)
++			pages += svc_tcp_rx_region_span(page,
++					skb_frag_off(frag) + lo - cursor,
++					hi - lo, prev);
++		cursor += skb_frag_size(frag);
++	}
++	skb_walk_frags(skb, frag_skb) {
++		pages += svc_tcp_rx_prefetch_count(frag_skb, cursor, first, last,
++						   prev);
++		cursor += frag_skb->len;
++	}
++	return pages;
++}
++
+ /*
+  * Upper bound on the region pages bytes [first, last) of @skb can add:
+  * only pages from a pool bound to the fixed receive region count, and a
+@@ -6060,11 +6148,9 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
+ 			struct svc_tcp_rx_budget *c = NULL;
+ 			u32 need;
+ 
+-			rx_loan_prefetch_pages(skb, 0, body_offset,
+-					       body_offset + remaining);
+-			need = rx_loan_skb_region_pages(skb, 0, body_offset,
+-							body_offset + remaining,
+-							&prev);
++			need = svc_tcp_rx_prefetch_count(skb, 0, body_offset,
++							 body_offset + remaining,
++							 &prev);
+ 
+ 			/* One lookup for the copy check and the admission. */
+ 			if (need && !state->cr.linked)
+-- 
+2.52.0
+

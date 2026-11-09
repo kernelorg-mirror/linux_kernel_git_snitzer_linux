@@ -191,3 +191,14 @@ on the queue's line, which is dropped too (folded away in the
 consolidation, see `FLAMEGRAPH/74-b-vs-pf/README.md`); with `sp_flags`
 off that line they have less to save.  `0012` would matter if more
 transports were handed than queued.
+
+`0013-SUNRPC-Count-a-loaned-skb-s-region-pages-in-the-walk.patch`
+(FLAMEGRAPH round 78, 9 November, dropped by Mike) counts the receive
+region's pages of a loaned skb in the walk that prefetches their struct
+pages, instead of in a second walk.  It applies on `kernel-7.3/canary`
+at `d25f3bc3a935` and is kept as `f9eb67570da8` on the unpushed
+`kernel-7.3/canary.PC`.  For the A/B it is sunrpc's own copy of the
+walk; kept, it would have gone into `net/core/rx_loan.c`.  It took the
+second loop away, but the count then read each page one fragment after
+asking for it and waited for it: the two passes went from 5.9k cycles a
+WRITE to 8.3k (`FLAMEGRAPH/78-prefetch-count/README.md`).
