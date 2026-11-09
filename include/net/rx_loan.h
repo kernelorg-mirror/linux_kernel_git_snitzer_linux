@@ -531,6 +531,12 @@ struct rx_loan_consumer {
 	atomic_long_t		out_read;
 	atomic_long_t		overrun_share;	/* oldest records past the share */
 	atomic_long_t		share_denied;
+	/*
+	 * Of @out_write, what abandoned records kept spent: added by
+	 * rx_loan_orphan(), moved out of @out_write by rx_loan_region_retire()
+	 * and rx_loan_consumer_register().  Never on admission or return.
+	 */
+	atomic_long_t		orphaned;
 	/* READ credit charged to @out_read, not yet taken: see above */
 	atomic_long_t __percpu	*read_cached;
 	/*

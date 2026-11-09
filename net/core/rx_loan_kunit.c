@@ -7,6 +7,7 @@
 
 #include <kunit/test.h>
 #include <linux/completion.h>
+#include <linux/delay.h>
 #include <linux/gfp.h>
 #include <linux/kthread.h>
 #include <linux/slab.h>
@@ -2299,6 +2300,207 @@ static void rx_loan_region_resize_orphan_late_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 0L);
 }
 
+/* The two consumers' shares, after a record of @a's was orphaned. */
+static void rx_loan_kunit_expect_shares(struct kunit *test,
+					struct rx_loan_consumer *a, long in_a,
+					struct rx_loan_consumer *b, long in_b)
+{
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), in_a);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&b->out_write), in_b);
+}
+
+/*
+ * A retire gives each consumer back what its orphans kept, and no other
+ * consumer's: its share is whole again once the region has gone.
+ */
+static void rx_loan_region_retire_consumer_share_test(struct kunit *test)
+{
+	struct rx_loan_kunit_resize_region *rr;
+	struct rx_loan_kunit_waiter a1, b1;
+	struct rx_loan_consumer *a, *b;
+	struct rx_loan_budget *lb;
+
+	rx_loan_kunit_resize_begin(test);
+	rr = rx_loan_kunit_resize_region(test, 6);
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	a = rx_loan_kunit_consumer(test, "a");
+	b = rx_loan_kunit_consumer(test, "b");
+	rx_loan_kunit_waiter_init(&a1, false, 0);
+	rx_loan_kunit_waiter_init(&b1, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, a, &a1.w, &a1.cr, 6, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, b, &b1.w, &b1.cr, 3, false));
+	rx_loan_orphan(&a1.cr, 4);
+	rx_loan_kunit_resize_escape(test, 4);
+	rx_loan_kunit_expect_shares(test, a, 4, b, 3);
+	rr = rx_loan_kunit_resize(test, rr, 5);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	rx_loan_kunit_expect_shares(test, a, 0, b, 3);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 3L);
+	rx_loan_kunit_return(&b1);
+	rx_loan_kunit_expect_shares(test, a, 0, b, 0);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 0L);
+}
+
+/*
+ * Only what orphans kept comes back, once: a live record across the retire
+ * refunds its own charge when it returns, a record orphaned under the next
+ * region kept nothing, and a second retire has nothing left to give.
+ */
+static void rx_loan_region_retire_share_once_test(struct kunit *test)
+{
+	struct rx_loan_kunit_resize_region *rr;
+	struct rx_loan_kunit_waiter a1, a2, a3, b1;
+	struct rx_loan_consumer *a, *b;
+	struct rx_loan_budget *lb;
+
+	rx_loan_kunit_resize_begin(test);
+	rr = rx_loan_kunit_resize_region(test, 6);
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	a = rx_loan_kunit_consumer(test, "a");
+	b = rx_loan_kunit_consumer(test, "b");
+	rx_loan_kunit_waiter_init(&a1, false, 0);
+	rx_loan_kunit_waiter_init(&a2, false, 0);
+	rx_loan_kunit_waiter_init(&a3, false, 0);
+	rx_loan_kunit_waiter_init(&b1, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, a, &a1.w, &a1.cr, 6, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, a, &a2.w, &a2.cr, 5, false));
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, a, &a3.w, &a3.cr, 2, false));
+	rx_loan_orphan(&a1.cr, 4);
+	rx_loan_kunit_resize_escape(test, 4);
+	rr = rx_loan_kunit_resize(test, rr, 5);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), 7L);
+	rx_loan_orphan(&a3.cr, 2);	/* charged under the old region */
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), 5L);
+	rx_loan_kunit_return(&a2);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), 0L);
+	/* Under this region: kept for it, and the next retire takes it. */
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, b, &b1.w, &b1.cr, 3, false));
+	rx_loan_orphan(&b1.cr, 3);
+	rx_loan_kunit_resize_escape(test, 3);
+	rx_loan_kunit_expect_shares(test, a, 0, b, 3);
+	rr = rx_loan_kunit_resize(test, rr, 4);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	rx_loan_kunit_expect_shares(test, a, 0, b, 0);
+	rr = rx_loan_kunit_resize(test, rr, 5);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	rx_loan_kunit_expect_shares(test, a, 0, b, 0);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 0L);
+}
+
+/*
+ * A consumer off the list at the retire is missed by it: what its orphans
+ * kept comes back when it registers again, its share whole from the start.
+ */
+static void rx_loan_region_retire_share_reregister_test(struct kunit *test)
+{
+	struct rx_loan_kunit_resize_region *rr;
+	struct rx_loan_kunit_waiter a1;
+	struct rx_loan_consumer *a;
+	struct rx_loan_budget *lb;
+
+	rx_loan_kunit_resize_begin(test);
+	rr = rx_loan_kunit_resize_region(test, 4);
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	a = rx_loan_kunit_consumer(test, "a");
+	rx_loan_kunit_waiter_init(&a1, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, a, &a1.w, &a1.cr, 6, false));
+	rx_loan_orphan(&a1.cr, 4);
+	rx_loan_kunit_resize_escape(test, 4);
+	rx_loan_consumer_unregister(a);
+	rr = rx_loan_kunit_resize(test, rr, 5);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	KUNIT_ASSERT_EQ(test, rx_loan_consumer_register(a, NULL, "a", 0), 0);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), 0L);
+	rr = rx_loan_kunit_resize(test, rr, 4);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), 0L);
+}
+
+/*
+ * Registered again before any retire, a consumer has its orphans' part back
+ * at once while the region still counts it out; the retire after that gives
+ * the region its part and takes nothing more from the share.
+ */
+static void rx_loan_region_reregister_before_retire_test(struct kunit *test)
+{
+	struct rx_loan_kunit_resize_region *rr;
+	struct rx_loan_kunit_waiter a1;
+	struct rx_loan_consumer *a;
+	struct rx_loan_budget *lb;
+
+	rx_loan_kunit_resize_begin(test);
+	rr = rx_loan_kunit_resize_region(test, 4);
+	lb = rx_loan_kunit_budget(test, 256, 0);
+	a = rx_loan_kunit_consumer(test, "a");
+	rx_loan_kunit_waiter_init(&a1, false, 0);
+	KUNIT_ASSERT_TRUE(test, rx_loan_admit(lb, a, &a1.w, &a1.cr, 6, false));
+	rx_loan_orphan(&a1.cr, 4);
+	rx_loan_kunit_resize_escape(test, 4);
+	rx_loan_consumer_unregister(a);
+	KUNIT_ASSERT_EQ(test, rx_loan_consumer_register(a, NULL, "a", 0), 0);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 4L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 4L);
+	rr = rx_loan_kunit_resize(test, rr, 5);
+	KUNIT_ASSERT_NOT_NULL(test, rr);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&a->out_write), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_orphaned(), 0L);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), 0L);
+}
+
+struct rx_loan_kunit_unregister {
+	struct rx_loan_consumer *c;
+	atomic_t started, returned;
+	struct completion go, done;
+};
+
+static int rx_loan_kunit_unregister_fn(void *data)
+{
+	struct rx_loan_kunit_unregister *u = data;
+
+	wait_for_completion(&u->go);
+	atomic_set(&u->started, 1);
+	rx_loan_consumer_unregister(u->c);
+	atomic_set(&u->returned, 1);
+	complete(&u->done);
+	return 0;
+}
+
+/*
+ * Unregistering waits for an RCU reader that may stand on the consumer, as
+ * a retire's walk of the consumers does: the caller may register it again
+ * or free it once unregister returns.  Needs a second CPU.
+ */
+static void rx_loan_consumer_unregister_grace_test(struct kunit *test)
+{
+	struct rx_loan_kunit_unregister u = {};
+	struct task_struct *t;
+	int i, started, returned;
+
+	if (num_online_cpus() < 2)
+		kunit_skip(test, "needs 2 CPUs");
+	u.c = rx_loan_kunit_consumer(test, "u");
+	init_completion(&u.go);
+	init_completion(&u.done);
+	/* Started outside the reader: kthread_run() sleeps. */
+	t = kthread_run(rx_loan_kunit_unregister_fn, &u, "rx_loan_unreg");
+	KUNIT_ASSERT_FALSE(test, IS_ERR(t));
+	rcu_read_lock();
+	complete(&u.go);
+	/* Only leaving the reader ends unregister's wait: no flake either way. */
+	for (i = 0; i < 50 && !atomic_read(&u.returned); i++)
+		mdelay(1);
+	started = atomic_read(&u.started);
+	returned = atomic_read(&u.returned);
+	rcu_read_unlock();
+	wait_for_completion(&u.done);
+	KUNIT_EXPECT_EQ(test, started, 1);
+	KUNIT_EXPECT_EQ(test, returned, 0);
+}
+
 /*
  * Case 3: a charge taken with no region (none sized, or sized and not yet
  * carved) holds no region page, so it is not counted in out.
@@ -2359,6 +2561,11 @@ static struct kunit_case rx_loan_test_cases[] = {
 	KUNIT_CASE(rx_loan_region_resize_returned_control_test),
 	KUNIT_CASE(rx_loan_region_resize_orphan_drained_test),
 	KUNIT_CASE(rx_loan_region_resize_orphan_late_test),
+	KUNIT_CASE(rx_loan_region_retire_consumer_share_test),
+	KUNIT_CASE(rx_loan_region_retire_share_once_test),
+	KUNIT_CASE(rx_loan_region_retire_share_reregister_test),
+	KUNIT_CASE(rx_loan_region_reregister_before_retire_test),
+	KUNIT_CASE(rx_loan_consumer_unregister_grace_test),
 	KUNIT_CASE(rx_loan_region_no_region_charge_test),
 	KUNIT_CASE(rx_loan_region_charge_paths_test),
 	KUNIT_CASE(rx_loan_region_set_aside_test),

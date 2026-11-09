@@ -864,7 +864,8 @@ static struct {
 /*
  * Registered consumers and the budgets a region return kicks: written on
  * the control path only (a consumer's start and stop, a namespace's),
- * never on admission, so a mutex.  The budgets are walked under RCU.
+ * never on admission, so a mutex.  Both are walked under RCU, the consumers
+ * by rx_loan_region_retire(), which may run under the mutex.
  */
 static DEFINE_MUTEX(rx_loan_consumers_lock);
 static LIST_HEAD(rx_loan_consumers);
@@ -1033,12 +1034,24 @@ EXPORT_SYMBOL_GPL(rx_loan_region_put);
  * one a region's lockless readers need before it is freed.  Called by the
  * page pool, on the path that frees the region.
  *
+ * Each registered consumer's share gets its own orphans' part back, counted
+ * once the same way.  Under RCU, not rx_loan_consumers_lock: a consumer's
+ * unregistering holds that across the region demand that can reap.
+ *
  * Context: process context; sleeps.
  */
 void rx_loan_region_retire(void)
 {
+	struct rx_loan_consumer *c;
+
 	atomic_inc(&rx_loan_region.gen);
 	synchronize_rcu();
+	/* Shares first: the region's refund may kick their waiters. */
+	rcu_read_lock();
+	list_for_each_entry_rcu(c, &rx_loan_consumers, node)
+		atomic_long_sub(atomic_long_xchg(&c->orphaned, 0),
+				&c->out_write);
+	rcu_read_unlock();
 	rx_loan_region_put(atomic_long_xchg(&rx_loan_region.orphaned, 0), false);
 }
 EXPORT_SYMBOL_GPL(rx_loan_region_retire);
@@ -1518,8 +1531,10 @@ rx_loan_consumer_read_floor(const struct rx_loan_consumer *c)
  *
  * @c's counts of credit out start zeroed (the caller's to clear) and are
  * not reset here: what it still had out when it last unregistered keeps
- * returning to them.  Its copies counter is allocated at the first
- * registration and freed by rx_loan_consumer_destroy().
+ * returning to them.  What its orphans kept is an exception: no retire
+ * reaches a consumer off the list, so it comes back to its share here.  Its
+ * copies counter is allocated at the first registration and freed by
+ * rx_loan_consumer_destroy().
  *
  * Context: process context; may sleep.
  * Return: 0.
@@ -1542,10 +1557,11 @@ int rx_loan_consumer_register(struct rx_loan_consumer *c,
 	c->ln = ln;
 	atomic_long_set(&c->overrun_share, 0);
 	atomic_long_set(&c->share_denied, 0);
+	atomic_long_sub(atomic_long_xchg(&c->orphaned, 0), &c->out_write);
 	mutex_lock(&rx_loan_consumers_lock);
 	page_pool_rx_region_demand(floor);
 	page_pool_rx_region_read_demand(rx_loan_consumer_read_floor(c));
-	list_add_tail(&c->node, &rx_loan_consumers);
+	list_add_tail_rcu(&c->node, &rx_loan_consumers);
 	if (ln)
 		ln->nr_consumers++;
 	WRITE_ONCE(rx_loan_nr_consumers, rx_loan_nr_consumers + 1);
@@ -1581,14 +1597,15 @@ static void rx_loan_consumer_uncache(struct rx_loan_consumer *c)
  * may still be out: it returns to @c's counts as it lands, so they are
  * kept, and @c must outlive it.  Credit of records abandoned by
  * rx_loan_orphan() under a region stays spent there until the region goes
- * (rx_loan_region_retire()), and was counted as orphaned then.
+ * (rx_loan_region_retire()), and was counted as orphaned then.  Waits for
+ * a retire walking the consumers: @c can then be registered again or freed.
  *
  * Context: process context; may sleep.
  */
 void rx_loan_consumer_unregister(struct rx_loan_consumer *c)
 {
 	mutex_lock(&rx_loan_consumers_lock);
-	list_del(&c->node);
+	list_del_rcu(&c->node);
 	if (c->ln)
 		c->ln->nr_consumers--;
 	WRITE_ONCE(rx_loan_nr_consumers, rx_loan_nr_consumers - 1);
@@ -1596,6 +1613,7 @@ void rx_loan_consumer_unregister(struct rx_loan_consumer *c)
 	page_pool_rx_region_demand(-(long)c->floor);
 	page_pool_rx_region_read_demand(-(long)rx_loan_consumer_read_floor(c));
 	mutex_unlock(&rx_loan_consumers_lock);
+	synchronize_rcu();
 	rx_loan_consumer_uncache(c);
 }
 EXPORT_SYMBOL_GPL(rx_loan_consumer_unregister);
@@ -2477,6 +2495,8 @@ void rx_loan_orphan(struct rx_loan_credit *cr, u32 held)
 	       cr->region_gen == rx_loan_region_gen() ?
 	       min_t(long, keep, cr->region) : 0;
 	atomic_long_add(kept, &rx_loan_region.orphaned);
+	if (cr->consumer)
+		atomic_long_add(kept, &cr->consumer->orphaned);
 	rcu_read_unlock();
 	rx_loan_consumer_put(cr->consumer, lb->read, cr->credit - kept);
 	refund = cr->region - kept;
