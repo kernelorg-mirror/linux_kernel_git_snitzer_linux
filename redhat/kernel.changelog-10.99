@@ -1,3 +1,53 @@
+* Mon Nov 09 2026 Mike Snitzer <snitzer@kernel.org> [7.3.3-14]
+- baseline-reverts reverts four more v7.3.3 backports: "NFS: Fix stale
+  negative cache on failed nfs_mkdir()" and "NFSv4/flexfiles: fail I/O to
+  the data server once a lock is lost", whose upstream commits
+  nfs-for-7.4-1 carries, and the ksmbd "fix named stream write and EOF
+  handling" and "use the existing xattr name for a named stream", which
+  collide with vfs-7.4-rc1.idmap-and-misc and whose upstream commits
+  fixes-from-stable-baseline carries; its reverts of commits that
+  trond-nfs-next and anna-nfs-next carried now name nfs-for-7.4-1
+- Drop trond-nfs-next: its one commit, "NFSv4: Fix a regression in the
+  handling of CB_RECALL_ANY", is in nfs-for-7.4-1
+- Add nfs-for-7.4-1: all of Anna Schumaker's nfs-for-7.4-1 pull, in its
+  order, each commit cherry-picked with -xs: the commits anna-nfs-next
+  carried and the rest of the pull (the pNFS data server fixes, the
+  LOCALIO UUID pin, TCP for MOUNT under xprtsec=tls, the xprtrdma short
+  reply header fix, the CB_RECALL_ANY fix, and the nfs_mkdir() and
+  flexfiles lock-lost fixes)
+- anna-nfs-next is synced to anna-nfs/linux-next, now on v7.4-rc2, on
+  nfs-for-7.4-1: the v7.4-rc1 merge's fix-up of the xprtrdma Write chunk
+  head trim, Avi Weiss's NFS and SUNRPC client fixes, and the LOCALIO
+  reprobe series Anna Schumaker took: "NFS/localio: hold the client
+  across an asynchronous LOCALIO probe", "NFS/localio: probe again for
+  LOCALIO when localio_enabled is set to Y" and "NFS/localio: give the
+  LOCALIO probe a short timeout of its own"
+- Drop nfs-testing-canary-localio-reprobe: its three commits are in
+  anna-nfs-next
+- Add vfs-7.4-rc1.idmap-and-misc, on nfsd-7.4: the NFSD changes that
+  reached v7.4-rc1 through the VFS tree, Christian Brauner's
+  vfs-7.4-rc1.idmap series porting the tree to a const struct mnt_idmap
+  and "splice: emit a single fsnotify access event per NFSD READ"
+- Add net-7.4-rc1.misc, on vfs-7.4-rc1.idmap-and-misc: sk_set_nospace()
+  and sk_clear_nospace() and their use in SUNRPC, and the treewide
+  linux/umh.h includes
+- nfsd-next is resynced to cel/nfsd-next after v7.4-rc2, which Chuck
+  Lever rebased, and built on net-7.4-rc1.misc: it adds "nfsd: do not
+  allocate blocks for an RW layout with a minlength of zero", "nfsd: pin
+  source client while using COPY_NOTIFY stateid" and "NFSD: Report a
+  first-batch readdir error in the reply status", and "NFSD: Use direct
+  I/O only for the last operation in a COMPOUND" moves to nfsd-testing,
+  as Chuck now carries it in cel/nfsd-testing
+- Add fixes-from-stable-baseline, on nfsd-next: the upstream commits of
+  the two reverted ksmbd backports
+- nfsd-testing takes Chuck's rebased cel/nfsd-testing, each commit
+  cherry-picked again from its new commit ID, with Jeff Layton's
+  NFSD_CMD_FILEHANDLE_GET and per-export read_io=/write_io= I/O modes and
+  statistics, which its direct-mode tracing needs, in cel/nfsd-testing's
+  order; nfsd-testing-canary-dontcache and
+  nfsd-testing-canary-dontcache-LOCALIO are rebased on it, every commit
+  unchanged
+
 * Fri Nov 06 2026 Mike Snitzer <snitzer@kernel.org> [7.3.3-13]
 - Rebase all branches on kernel-7.3.3-0, every topic commit unchanged
 - baseline-reverts, new: revert the 53 stable backports in v7.3.3 whose
