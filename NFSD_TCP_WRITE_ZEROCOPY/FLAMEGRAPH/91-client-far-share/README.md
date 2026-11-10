@@ -94,3 +94,32 @@ unloads every module on sunrpc, loads the build by path with `insmod`
 In B, `affinity_strict` is 1 on both workqueues, their scope `default`,
 which `twoport.sh` sets to `numa` for each run.  Runs A B B A A B,
 `t2-r392..r397`, as round 90's, no perf.
+
+### Result (`t2-r392..r397`)
+
+| run | arm | GB/s | far share a / b | client idle | retransmits | server ring drops |
+|---|---|---|---|---|---|---|
+| t2-r392 | A | 71.46 | 2.3% / 1.3% | 27.6% | 1,367 | 1,299 |
+| t2-r393 | B | 71.50 | 0.0% / 0.0% | 31.2% | 2,116 | 2,032 |
+| t2-r394 | B | 71.32 | 0.0% / 0.0% | 32.4% | 1,720 | 1,628 |
+| t2-r395 | A | 71.69 | 1.6% / 1.0% | 28.5% | 1,512 | 1,405 |
+| t2-r396 | A | 71.43 | 1.2% / 1.7% | 28.1% | 1,313 | 1,256 |
+| t2-r397 | B | 72.16 | 0.0% / 0.0% | 31.5% | 2,369 | 2,251 |
+| **mean** | **A** | **71.53** | 1.5% | **28.1%** | **1,397** | 1,320 |
+| | **B** | **71.66** | **0.0%** | **31.7%** | **2,068** | 1,970 |
+
+- **Strict `rpciod` and `xprtiod` take the far share to 0.0% on both
+  ports in every B run**, against 1.0% to 2.3% in A.  The variance it
+  had is gone with it.
+- **The client idles 3.6 points more** (mpstat over the window, 48
+  CPUs: about 1.7 CPUs' worth), every B run above every A run.
+- **The rate does not move:** +0.13 GB/s on the mean, inside the
+  spread of either arm.
+- **Retransmits rise by about half (+671 on the mean), every B run
+  above every A run**, and they follow the server's receive ring drops
+  run for run (+650): with the client's work held to the near node the
+  server's rings drop more, so the client's sends are probably burstier.
+  Not yet looked at.
+- The client is back on its stock `sunrpc.ko` (srcversion
+  `1E38773581DFB9A910A824D`) with its NFS server and 16 exports; the two
+  workqueues are not in sysfs on it.
