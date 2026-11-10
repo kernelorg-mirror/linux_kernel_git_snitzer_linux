@@ -224,6 +224,14 @@ NFS stack's drivers, and `/boot/ofp-rocky/$K/initrd` was rebuilt
 boot fails, rename `initrd.pre-zc-no-nfs` back.  The run scripts' check
 that `updates/` is empty (`run323.sh`, `run363.sh`) refuses this on purpose.
 
+**The second boot into build 522 (10 November, 01:21, after the power
+reset) has both ports.**  Pinged before `bringup.sh`: 5 of 5 on each.
+The tip's sunrpc loaded from `updates/` (`/sys/module/sunrpc/srcversion`
+reads `F99F549CC7AF44FA39DAE34`), so the initrd without the NFS stack
+works.  `bringup.sh 32768 256` armed kdump (`kexec_crash_loaded` 1), and
+`settled.sh apply` ends in "the settled setting".  The profile for the
+next round's focus is round 88, `FLAMEGRAPH/88-build522-baseline/`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
