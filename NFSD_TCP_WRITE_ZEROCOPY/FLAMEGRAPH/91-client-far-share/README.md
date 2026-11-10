@@ -75,3 +75,22 @@ window, a few 3.3M and one (`tx9`) 12.5M; port b alike (`tx19` 10.3M,
 on `rpciod` and `xprtiod` (nothing else), so a run can set each to
 `numa` and `affinity_strict=1`; then runs against the stock module, the
 far share and the rate.
+
+## The A/B: rpciod and xprtiod strict to a node (`run392.sh`)
+
+Built on the client against its `kernel-devel`, with its own compiler,
+from `v7.3.0-0.rc7.2.hs.469.el9`'s `net/sunrpc` (`CONFIG_SUNRPC_GSS` and
+`_XPRT_RDMA` left out of the make, their modules not swapped): A as it
+is, B with `wqsysfs.diff` (`WQ_SYSFS` on `rpciod` and `xprtiod`, nothing
+else).  A against the rpm's `sunrpc.ko`: the same 2,487 symbols, the same
+parameters, data and bss, text 199 bytes longer (gcc differs from the
+rpm's); srcversion differs, as an `M=` build's does.  Both arms are these
+builds, so the compiler is the same on both sides; stock goes back at the
+end.  `cswap.sh` swaps them on the client with nothing mounted: it stops
+the client's own NFS server and helpers (it exports `/mnt/nvme0n1`,
+`/mnt/nvme1n1` and volumes for other work; no client was connected),
+unloads every module on sunrpc, loads the build by path with `insmod`
+(nothing installed: a reboot brings stock back), and starts them again.
+In B, `affinity_strict` is 1 on both workqueues, their scope `default`,
+which `twoport.sh` sets to `numa` for each run.  Runs A B B A A B,
+`t2-r392..r397`, as round 90's, no perf.

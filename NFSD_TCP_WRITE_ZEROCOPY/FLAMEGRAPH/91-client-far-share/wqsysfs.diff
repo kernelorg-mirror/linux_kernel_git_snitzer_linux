@@ -1,0 +1,17 @@
+diff -ru A/sunrpc/sched.c B/sunrpc/sched.c
+--- A/sunrpc/sched.c	2026-10-12 05:20:03.000000000 +0000
++++ B/sunrpc/sched.c	2026-11-10 17:15:59.110460398 +0000
+@@ -1330,11 +1330,11 @@
+ 	/*
+ 	 * Create the rpciod thread and wait for it to start.
+ 	 */
+-	wq = alloc_workqueue("rpciod", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
++	wq = alloc_workqueue("rpciod", WQ_MEM_RECLAIM | WQ_UNBOUND | WQ_SYSFS, 0);
+ 	if (!wq)
+ 		goto out_failed;
+ 	rpciod_workqueue = wq;
+-	wq = alloc_workqueue("xprtiod", WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
++	wq = alloc_workqueue("xprtiod", WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_SYSFS, 0);
+ 	if (!wq)
+ 		goto free_rpciod;
+ 	xprtiod_workqueue = wq;
