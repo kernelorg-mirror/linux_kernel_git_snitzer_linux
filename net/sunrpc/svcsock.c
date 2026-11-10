@@ -614,14 +614,19 @@ static void svc_tcp_rx_budget_requested(const struct svc_tcp_rx_budget *c,
  * The pages @c lends: what is requested of it, else, for a namespace's
  * write budget nobody configured, the region's write share once a region
  * exists (rx_loan_region_write_default()), so that kNFSd loans by default.
+ * A write budget, configured or computed, is 0 under a receive clamp below
+ * SVC_TCP_RX_RCVBUF_MIN, as it is staged (svc_tcp_rx_budget_cfg()).
  */
 static unsigned long svc_tcp_rx_budget_in_force(const struct svc_tcp_rx_budget *c)
 {
 	unsigned int pages, reserve;
 
 	svc_tcp_rx_budget_requested(c, &pages, &reserve);
-	if (pages || !c->net || c->lb->read || !READ_ONCE(c->lb->cfg_default) ||
-	    __svc_tcp_rx_rcvbuf_effective(false) < SVC_TCP_RX_RCVBUF_MIN)
+	if (c->lb->read)
+		return pages;
+	if (__svc_tcp_rx_rcvbuf_effective(false) < SVC_TCP_RX_RCVBUF_MIN)
+		return 0;
+	if (pages || !c->net || !READ_ONCE(c->lb->cfg_default))
 		return pages;
 	return rx_loan_region_write_default();
 }
@@ -638,6 +643,8 @@ static bool svc_tcp_rx_budget_is_init(const struct svc_tcp_rx_budget *c)
  * draw on.
  */
 static DEFINE_STATIC_KEY_FALSE(svc_tcp_rx_loans);
+
+static void svc_tcp_rx_budget_stage(struct svc_tcp_rx_budget *c);
 
 /* Turn svc_tcp_rx_loans on or off for the budgets as now requested. */
 static void svc_tcp_rx_loans_update_locked(void)
@@ -656,7 +663,13 @@ static void svc_tcp_rx_loans_update_locked(void)
 		on |= READ_ONCE(pos->consumer.registered) &&
 		      READ_ONCE(pos->lb->cfg_default);
 	}
-	WRITE_ONCE(svc_tcp_rx_rcvbuf_wanted, on);
+	if (on != svc_tcp_rx_rcvbuf_wanted) {
+		WRITE_ONCE(svc_tcp_rx_rcvbuf_wanted, on);
+		/* the clamp the budgets' off is staged from has changed */
+		svc_tcp_rx_budget_stage(&svc_rx_budget_default);
+		list_for_each_entry(pos, &svc_rx_budget_pools, node)
+			svc_tcp_rx_budget_stage(pos);
+	}
 	if (on)
 		static_branch_enable(&svc_tcp_rx_loans);
 	else
@@ -664,7 +677,6 @@ static void svc_tcp_rx_loans_update_locked(void)
 }
 
 static void svc_tcp_rx_budget_apply(struct svc_tcp_rx_budget *c);
-static void svc_tcp_rx_budget_stage(struct svc_tcp_rx_budget *c);
 #if IS_ENABLED(CONFIG_KUNIT)
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
 static void svc_tcp_rx_budget_kunit_stage(void);
@@ -1933,7 +1945,8 @@ void svc_tcp_rx_budget_kunit_configure(unsigned int pages,
 	WRITE_ONCE(svc_tcp_rx_budget_pages, pages);
 	WRITE_ONCE(svc_tcp_rx_budget_reserve, reserve);
 	WRITE_ONCE(svc_tcp_rx_kunit_factor, factor);
-	WRITE_ONCE(svc_tcp_rx_rcvbuf, pages ? SVC_TCP_RX_RCVBUF_MIN : 0);
+	/* a clamp a budget lends under; a case about the clamp sets its own */
+	WRITE_ONCE(svc_tcp_rx_rcvbuf, SVC_TCP_RX_RCVBUF_MIN);
 	WRITE_ONCE(svc_tcp_rx_rcvbuf_given, true);
 	svc_tcp_rx_budget_kunit_nowake = pages != 0;
 	/* Each test starts with nothing learned. */
@@ -1953,6 +1966,14 @@ void svc_tcp_rx_budget_kunit_rcvbuf(unsigned int bytes)
 	svc_tcp_rx_budget_kunit_stage_all();
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_kunit_rcvbuf);
+
+/* SVC_TCP_RX_RCVBUF_MIN, for the cases (declared in svcsock_kunit.c). */
+unsigned int svc_tcp_rx_kunit_rcvbuf_min(void);
+unsigned int svc_tcp_rx_kunit_rcvbuf_min(void)
+{
+	return SVC_TCP_RX_RCVBUF_MIN;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_kunit_rcvbuf_min);
 
 void svc_tcp_rx_budget_kunit_default(unsigned int pages, unsigned int reserve)
 {
@@ -2286,6 +2307,9 @@ static void svc_tcp_rx_budget_stage(struct svc_tcp_rx_budget *c)
 	svc_tcp_rx_budget_cfg(c, &pages, &reserve, &off);
 	rx_loan_budget_stage_locked(c->lb, pages, reserve, off);
 	spin_unlock_bh(&c->lb->lock);
+	if (off && pages)
+		pr_warn_once("svc: a region budget needs svc_tcp_rx_rcvbuf >= %u; budgets off\n",
+			     SVC_TCP_RX_RCVBUF_MIN);
 }
 
 /*
@@ -2475,24 +2499,6 @@ static void svc_tcp_rx_budget_apply_all(void)
 	mutex_unlock(&svc_rx_budget_cfg_lock);
 }
 
-VISIBLE_IF_KUNIT bool svc_tcp_rx_budget_on(struct svc_tcp_rx_budget *c)
-{
-	unsigned int pages, reserve;
-	bool configured;
-
-	svc_tcp_rx_budget_requested(c, &pages, &reserve);
-	configured = pages != 0;
-	/* The receive clamp does not gate the read pool. */
-	if (configured && !c->lb->read &&
-	    __svc_tcp_rx_rcvbuf_effective(false) < SVC_TCP_RX_RCVBUF_MIN) {
-		pr_warn_once("svc: a region budget needs svc_tcp_rx_rcvbuf >= %u; budgets off\n",
-			     SVC_TCP_RX_RCVBUF_MIN);
-		configured = false;
-	}
-	return configured || READ_ONCE(c->lb->budget);
-}
-EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_budget_on);
-
 /*
  * The budget @svsk draws on: the one it waits on, else its namespace's if
  * one is requested there, else the default one.  The budget in force is
@@ -2575,8 +2581,9 @@ static bool svc_tcp_rx_budget_copy_from(struct svc_sock *svsk,
 
 /*
  * Admit a record at its first skb that carries region pages, against @c,
- * the budget @svsk draws on.  False: leave it unread from there; the
- * transport is woken, oldest first, when credit returns.
+ * the budget @svsk draws on, which the copy check just found lending.
+ * False: leave it unread from there; the transport is woken, oldest first,
+ * when credit returns.
  */
 static bool svc_tcp_rx_credit_admit_to(struct svc_sock *svsk,
 				       struct svc_tcp_rx_budget *c,
@@ -2585,8 +2592,6 @@ static bool svc_tcp_rx_credit_admit_to(struct svc_sock *svsk,
 {
 	u32 pages = DIV_ROUND_UP(reclen, PAGE_SIZE);
 
-	if (!svc_tcp_rx_budget_on(c) && list_empty(&svsk->sk_rx_wait.node))
-		return true;
 	if (WARN_ON_ONCE(state->cr.linked))
 		return true;
 	return rx_loan_admit(c->lb, svc_tcp_rx_consumer(svsk), &svsk->sk_rx_wait, &state->cr,

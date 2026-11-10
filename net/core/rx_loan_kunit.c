@@ -304,6 +304,12 @@ static void rx_loan_kunit_standin(struct kunit *test, unsigned long pages,
 	rx_loan_kunit_region(pages, read_pages);
 }
 
+/* A stand-in region with a read partition, the shape the split cases share. */
+static void rx_loan_kunit_standin_split(struct kunit *test)
+{
+	rx_loan_kunit_standin(test, 64, 16);
+}
+
 static void rx_loan_kunit_consumer_stop(void *data)
 {
 	struct rx_loan_consumer *c = data;
@@ -1252,7 +1258,7 @@ static void rx_loan_region_write_cap_test(struct kunit *test)
 	static const struct rx_loan_budget plain = {};
 	static const struct rx_loan_budget rd = { .read = true };
 
-	rx_loan_kunit_standin(test, 64, 16);
+	rx_loan_kunit_standin_split(test);
 	KUNIT_EXPECT_TRUE(test, rx_loan_region_take(30, &capped, NULL));
 	KUNIT_EXPECT_TRUE(test, rx_loan_region_take(10, &plain, NULL));
 	KUNIT_EXPECT_TRUE(test, rx_loan_region_take(8, &capped, NULL));
@@ -2532,7 +2538,238 @@ static void rx_loan_region_no_region_charge_test(struct kunit *test)
 	rx_loan_kunit_return(&a);
 }
 
+/*
+ * A write-partition refill that finds the partition empty takes one system
+ * page.  The carved region's read partition is RX_LOAN_KUNIT_PP_READ of
+ * its pages, the write partition the rest.
+ */
+#define RX_LOAN_KUNIT_PP_PAGES	(1UL << RX_LOAN_KUNIT_CARVED_ORDER)
+#define RX_LOAN_KUNIT_PP_READ	4UL
+#define RX_LOAN_KUNIT_PP_WRITE	(RX_LOAN_KUNIT_PP_PAGES - RX_LOAN_KUNIT_PP_READ)
+
+struct rx_loan_kunit_pp {
+	struct page *base;
+	struct page_pool *pool;
+	struct page *taken[RX_LOAN_KUNIT_PP_WRITE];
+};
+
+static void rx_loan_kunit_pp_destroy(void *data)
+{
+	page_pool_destroy(data);
+}
+
+/* A region of its own and a pool bound to it, both gone with the test. */
+static struct rx_loan_kunit_pp *rx_loan_kunit_pp(struct kunit *test)
+{
+	struct rx_loan_kunit_pp *pp;
+	int ret;
+
+	if (page_pool_rx_region_exists())
+		kunit_skip(test, "a region exists");
+	pp = kunit_kzalloc(test, sizeof(*pp), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, pp);
+	pp->base = alloc_pages(GFP_KERNEL, RX_LOAN_KUNIT_CARVED_ORDER);
+	KUNIT_ASSERT_NOT_NULL(test, pp->base);
+	split_page(pp->base, RX_LOAN_KUNIT_CARVED_ORDER);
+	ret = page_pool_rx_region_kunit_install(pp->base, RX_LOAN_KUNIT_PP_PAGES,
+						RX_LOAN_KUNIT_PP_READ);
+	if (ret)
+		rx_loan_kunit_carved_free(pp->base);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			rx_loan_kunit_carved_remove, pp->base), 0);
+	pp->pool = page_pool_rx_region_kunit_pool();
+	KUNIT_ASSERT_FALSE(test, IS_ERR(pp->pool));
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			rx_loan_kunit_pp_destroy, pp->pool), 0);
+	return pp;
+}
+
+static bool rx_loan_kunit_pp_in_region(const struct rx_loan_kunit_pp *pp,
+				       const struct page *page)
+{
+	return page_to_pfn(page) - page_to_pfn(pp->base) < RX_LOAN_KUNIT_PP_PAGES;
+}
+
+/* Pages the pool holds that have not been released to the allocator. */
+static u32 rx_loan_kunit_pp_held(const struct rx_loan_kunit_pp *pp)
+{
+	return pp->pool->pages_state_hold_cnt -
+	       atomic_read(&pp->pool->pages_state_release_cnt);
+}
+
+/* Free pages of the read or the write partition. */
+static unsigned long rx_loan_kunit_pp_free(bool read)
+{
+	unsigned long out[4];
+
+	page_pool_rx_region_kunit_part(read, out);
+	return out[0];
+}
+
+/* Leave @left free pages in the write partition. */
+static void rx_loan_kunit_pp_drain(struct kunit *test,
+				   struct rx_loan_kunit_pp *pp,
+				   unsigned long left)
+{
+	unsigned long n = RX_LOAN_KUNIT_PP_WRITE - left;
+
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(false, pp->taken,
+							     n), n);
+	KUNIT_ASSERT_EQ(test, rx_loan_kunit_pp_free(false), left);
+}
+
+/*
+ * With the write partition empty a pool's allocation takes one system
+ * page, not a failure.  The pool predicate is unchanged, so the page counts
+ * for loan credit as a region page does (one page charged, one returned),
+ * and on release it goes back to the page allocator, from the pool's cache
+ * path and from its ring path alike, not into either and not into the
+ * region.
+ */
+static void rx_loan_region_fallback_alloc_test(struct kunit *test)
+{
+	static const struct rx_loan_budget plain = {};
+	struct rx_loan_kunit_pp *pp = rx_loan_kunit_pp(test);
+	struct page *page, *prev;
+	struct sk_buff *skb;
+	const u32 len = 100;
+	long base;
+	bool direct;
+
+	rx_loan_kunit_standin_split(test);
+	rx_loan_kunit_pp_drain(test, pp, 0);
+	for (direct = false;; direct = true) {
+		page = page_pool_alloc_pages(pp->pool, GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, page);
+		KUNIT_EXPECT_FALSE(test, rx_loan_kunit_pp_in_region(pp, page));
+		KUNIT_EXPECT_TRUE(test, page_pool_page_in_rx_region(page));
+		KUNIT_EXPECT_EQ(test, rx_loan_kunit_pp_held(pp), 1U);
+
+		skb = alloc_skb(0, GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, skb);
+		skb_fill_page_desc(skb, 0, page, 0, len);
+		skb->len = skb->data_len = len;
+		prev = NULL;
+		KUNIT_EXPECT_EQ(test, rx_loan_skb_region_pages(skb, 0, 0, len,
+							       &prev), 1U);
+		/* the page is not the skb's to put in this test */
+		skb_shinfo(skb)->nr_frags = 0;
+		kfree_skb(skb);
+		base = rx_loan_region_write_out();
+		KUNIT_EXPECT_TRUE(test, rx_loan_region_take(1, &plain, NULL));
+		KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), base + 1);
+		rx_loan_region_put(1, false);
+		KUNIT_EXPECT_EQ(test, rx_loan_region_write_out(), base);
+
+		page_pool_put_full_page(pp->pool, page, direct);
+		KUNIT_EXPECT_EQ(test, rx_loan_kunit_pp_held(pp), 0U);
+		KUNIT_EXPECT_EQ(test, pp->pool->alloc.count, 0U);
+		KUNIT_EXPECT_EQ(test, pp->pool->rx_stack_n, 0U);
+		KUNIT_EXPECT_EQ(test, rx_loan_kunit_pp_free(false), 0UL);
+		if (direct)
+			break;
+	}
+}
+
+/*
+ * The refill, put and refill again of a pool that has one region page left
+ * and then none: the region page recycles, the fallback page after it does
+ * not, and none of it reaches the partition's free lists or caches, which
+ * stay as they were.
+ */
+static void rx_loan_region_fallback_recycle_test(struct kunit *test)
+{
+	struct rx_loan_kunit_pp *pp = rx_loan_kunit_pp(test);
+	struct page *region, *fallback, *again;
+
+	rx_loan_kunit_pp_drain(test, pp, 1);
+	region = page_pool_alloc_pages(pp->pool, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, region);
+	KUNIT_EXPECT_TRUE(test, rx_loan_kunit_pp_in_region(pp, region));
+	fallback = page_pool_alloc_pages(pp->pool, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, fallback);
+	KUNIT_EXPECT_FALSE(test, rx_loan_kunit_pp_in_region(pp, fallback));
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_pp_free(false), 0UL);
+
+	page_pool_put_full_page(pp->pool, fallback, false);
+	page_pool_put_full_page(pp->pool, region, false);
+	/* only the region page is still the pool's: it sits in its stack */
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_pp_held(pp), 1U);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_pp_free(false), 0UL);
+	again = page_pool_alloc_pages(pp->pool, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, again);
+	KUNIT_EXPECT_PTR_EQ(test, again, region);
+	/* the partition is empty again: the next page is a fallback page */
+	fallback = page_pool_alloc_pages(pp->pool, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, fallback);
+	KUNIT_EXPECT_FALSE(test, rx_loan_kunit_pp_in_region(pp, fallback));
+	page_pool_put_full_page(pp->pool, fallback, true);
+	page_pool_put_full_page(pp->pool, again, true);
+	KUNIT_EXPECT_EQ(test, pp->pool->alloc.count, 1U);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_pp_held(pp), 1U);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_pp_free(false), 0UL);
+}
+
+/*
+ * The read partition has no fallback: a take with every read page out
+ * fails, untouched, and a write pool's fallback pages do not change that.
+ */
+static void rx_loan_region_fallback_read_test(struct kunit *test)
+{
+	struct rx_loan_kunit_pp *pp = rx_loan_kunit_pp(test);
+	struct page *reads[RX_LOAN_KUNIT_PP_READ], *one = NULL, *page;
+
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, reads,
+			RX_LOAN_KUNIT_PP_READ), RX_LOAN_KUNIT_PP_READ);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_take_pages(true, &one, 1), 0U);
+	KUNIT_EXPECT_NULL(test, one);
+	rx_loan_kunit_pp_drain(test, pp, 0);
+	page = page_pool_alloc_pages(pp->pool, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, page);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_take_pages(true, &one, 1), 0U);
+	KUNIT_EXPECT_NULL(test, one);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_pp_free(true), 0UL);
+	page_pool_put_full_page(pp->pool, page, false);
+}
+
+/*
+ * A fallback page is not reused as the pool's frag page either: when the
+ * page fills and every user is gone it goes back to the allocator, and the
+ * next fragment comes from the region once the partition has a page again.
+ */
+static void rx_loan_region_fallback_frag_test(struct kunit *test)
+{
+	struct rx_loan_kunit_pp *pp = rx_loan_kunit_pp(test);
+	const unsigned int half = PAGE_SIZE / 2;
+	struct page *first, *second, *third;
+	unsigned int off;
+
+	rx_loan_kunit_pp_drain(test, pp, 0);
+	first = page_pool_alloc_frag(pp->pool, &off, half, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, first);
+	KUNIT_EXPECT_FALSE(test, rx_loan_kunit_pp_in_region(pp, first));
+	second = page_pool_alloc_frag(pp->pool, &off, half, GFP_KERNEL);
+	KUNIT_EXPECT_PTR_EQ(test, second, first);
+	page_pool_put_full_page(pp->pool, second, false);
+	page_pool_put_full_page(pp->pool, first, false);
+
+	/* The page is full and unused; the partition has a page again. */
+	page_pool_rx_region_give_pages(pp->taken, 1);
+	third = page_pool_alloc_frag(pp->pool, &off, half, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, third);
+	KUNIT_EXPECT_TRUE(test, rx_loan_kunit_pp_in_region(pp, third));
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_pp_held(pp), 1U);
+	KUNIT_EXPECT_EQ(test, rx_loan_kunit_pp_free(false), 0UL);
+	/* The last user goes, or the pool never finishes shutting down. */
+	page_pool_put_full_page(pp->pool, third, false);
+}
+
 static struct kunit_case rx_loan_test_cases[] = {
+	KUNIT_CASE(rx_loan_region_fallback_frag_test),
+	KUNIT_CASE(rx_loan_region_fallback_alloc_test),
+	KUNIT_CASE(rx_loan_region_fallback_recycle_test),
+	KUNIT_CASE(rx_loan_region_fallback_read_test),
 	KUNIT_CASE(rx_loan_region_param_test),
 	KUNIT_CASE(rx_loan_region_publish_lends_test),
 	KUNIT_CASE(rx_loan_region_size_for_test),

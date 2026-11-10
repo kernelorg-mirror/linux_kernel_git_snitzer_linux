@@ -63,10 +63,14 @@ DEFINE_STATIC_KEY_FALSE(page_pool_mem_providers);
  * from the READ floors the consumers register (rx_region_read_want()), or
  * set by rx_region_read_pages, a test override.  Without either both
  * directions share the one partition.  Each partition has its own free
- * list, lock and statistics.  An empty partition fails the allocation:
- * that is the stall.  A page another holder still references when it is
- * returned leaves the region for good and is counted as escaped; it is
- * never replaced.
+ * list, lock and statistics.  When the write partition is empty a pool's
+ * refill takes one system page instead of failing: the page is the pool's
+ * and is loaned and credited like a region page (the pool decides, see
+ * page_pool_page_in_rx_region()), but it never enters the region, nor the
+ * pool's cache or ring: when released it goes back to the page allocator.
+ * Only the write partition has this fallback, never the read partition.
+ * A page another holder still references when it is returned leaves the
+ * region for good and is counted as escaped; it is never replaced.
  *
  * The region outlives its pools, so that taking a port down and up, or
  * resizing its rings, finds the same memory again and needs no second
@@ -3110,8 +3114,12 @@ static noinline netmem_ref page_pool_rx_region_alloc(struct page_pool *pool,
 		rx_region_held(r, got);
 		n += got;
 	}
-	if (!n)
+	if (!n) {
+		/* An empty write partition: counted, and served by one system page. */
 		atomic_long_inc(&r->alloc_fail);
+		return page_to_netmem(__page_pool_alloc_page_order(pool,
+						gfp | __GFP_NOWARN));
+	}
 
 	for (i = 0; i < n; i++) {
 		netmem = page_to_netmem(pages[i]);
@@ -3340,6 +3348,21 @@ static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem)
 	 */
 }
 
+/*
+ * A page of a region-bound pool that is outside the region is a fallback page
+ * (an empty write partition was served by a system page): it is never cached,
+ * recycled or reused as the frag page, so every put path asks this before it
+ * keeps a page.
+ */
+static bool page_pool_rx_region_foreign(const struct page_pool *pool,
+					netmem_ref netmem)
+{
+	const struct page_pool_rx_region *region =
+		page_pool_rx_region_exists() ? READ_ONCE(pool->rx_region) : NULL;
+
+	return region && !rx_region_has(region, netmem_to_page(netmem));
+}
+
 static bool page_pool_recycle_in_ring(struct page_pool *pool, netmem_ref netmem)
 {
 	bool in_softirq, ret;
@@ -3407,6 +3430,11 @@ __page_pool_put_page(struct page_pool *pool, netmem_ref netmem,
 	 * some pressure. (page_is_pfmemalloc)
 	 */
 	if (likely(__page_pool_page_can_be_recycled(netmem))) {
+		/* A fallback page is not recycled: it goes to the allocator. */
+		if (unlikely(page_pool_rx_region_foreign(pool, netmem))) {
+			page_pool_return_netmem(pool, netmem);
+			return 0;
+		}
 		/* Read barrier done in page_ref_count / READ_ONCE */
 
 		page_pool_dma_sync_for_device(pool, netmem, dma_sync_size);
@@ -3598,7 +3626,9 @@ static netmem_ref page_pool_drain_frag(struct page_pool *pool,
 	if (likely(page_pool_unref_netmem(netmem, drain_count)))
 		return 0;
 
-	if (__page_pool_page_can_be_recycled(netmem)) {
+	/* A fallback page is not reused as the frag page either. */
+	if (__page_pool_page_can_be_recycled(netmem) &&
+	    likely(!page_pool_rx_region_foreign(pool, netmem))) {
 		page_pool_dma_sync_for_device(pool, netmem, -1);
 		return netmem;
 	}

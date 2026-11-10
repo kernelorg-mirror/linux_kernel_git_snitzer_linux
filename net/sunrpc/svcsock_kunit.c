@@ -57,6 +57,8 @@
 void svc_tcp_rx_hold_listener(struct svc_sock *svsk);
 void svc_tcp_rx_hold_drop(struct svc_sock *svsk);
 void svc_tcp_rx_hold_conn(struct svc_sock *svsk);
+/* SVC_TCP_RX_RCVBUF_MIN, the clamp below which write budgets are off. */
+unsigned int svc_tcp_rx_kunit_rcvbuf_min(void);
 
 struct svcsock_rx_fixture {
 	struct svc_sock *svsk;
@@ -1847,6 +1849,7 @@ static void svcsock_rx_credit_reconfigure_inflight_test(struct kunit *test)
 
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
 	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
+	svc_tcp_rx_budget_kunit_default(0, 0);
 	/* Off: no wait for credit, whatever the record needs. */
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_charge(sa, a, 100));
 	KUNIT_EXPECT_TRUE(test, list_empty(&sa->sk_rx_wait.node));
@@ -2146,7 +2149,7 @@ static void svcsock_rx_credit_default_budget_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
 			svcsock_rx_budget_default_off, NULL), 0);
 	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
-	svc_tcp_rx_budget_kunit_rcvbuf(128 * 1024);
+	svc_tcp_rx_budget_kunit_rcvbuf(svc_tcp_rx_kunit_rcvbuf_min());
 	svc_tcp_rx_budget_kunit_default(20, 0);
 	/* Whatever an earlier user left in force there, nothing changes it. */
 	init_avail = svc_tcp_rx_budget_kunit_avail();
@@ -2337,7 +2340,6 @@ static void svcsock_rx_read_pool_init_test(struct kunit *test)
 	svcsock_rx_expect_stats(test, read, "budget 0 ");
 
 	svc_tcp_rx_budget_kunit_region(100, 30);
-	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_budget_on(read));
 	svc_tcp_rx_budget_kunit_init();
 	svcsock_rx_expect_stats(test, read,
 		"budget 30 reserve_size 0 avail 30 reserve 0 inflight 0 waiters 0");
@@ -2461,6 +2463,8 @@ static void svcsock_rx_bounce_arena_test(struct kunit *test)
 /* A fixture region: pages the test owns, published as the rx region. */
 #define SVCSOCK_RX_REGION_ORDER	4
 #define SVCSOCK_RX_REGION_PAGES	(1UL << SVCSOCK_RX_REGION_ORDER)
+#define SVCSOCK_RX_REGION_READ	4UL
+#define SVCSOCK_RX_REGION_WRITE	(SVCSOCK_RX_REGION_PAGES - SVCSOCK_RX_REGION_READ)
 
 struct svcsock_rx_region_fixture {
 	struct page *base;
@@ -2524,6 +2528,12 @@ static void svcsock_rx_credit_orphan(struct kunit *test,
 	KUNIT_EXPECT_FALSE(test, state->cr.linked);
 }
 
+/* The budget of the region credit cases: 34 pages, reserve 1, factor 100. */
+static void svcsock_rx_credit_region_budget(void)
+{
+	svc_tcp_rx_budget_kunit_configure(34, 1, 100);
+}
+
 /*
  * Budget 34, reserve 1, factor 100: a 10-page record costs 11.  Credit
  * charged with no region holds no region page: the region's total never
@@ -2531,7 +2541,8 @@ static void svcsock_rx_credit_orphan(struct kunit *test,
  * does one carved while it is held.  Credit charged and abandoned while a
  * region is in place stays spent there until the region goes.  Abandoned
  * credit stays spent in the budget, and a later test asking for the same
- * configuration would find it unchanged: no other test uses it.
+ * configuration would find it unchanged: only the fallback-page case below
+ * asks for it too, and it releases what it charges.
  */
 static void svcsock_rx_credit_orphan_region_test(struct kunit *test)
 {
@@ -2549,7 +2560,7 @@ static void svcsock_rx_credit_orphan_region_test(struct kunit *test)
 		kunit_skip(test, "a fixed rx region already exists");
 	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
 							svcsock_rx_budget_off, NULL), 0);
-	svc_tcp_rx_budget_kunit_configure(34, 1, 100);
+	svcsock_rx_credit_region_budget();
 	out = rx_loan_region_out();
 	orphaned = rx_loan_region_orphaned();
 	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, len));
@@ -2617,41 +2628,46 @@ static void svcsock_rx_region_expect_part(struct kunit *test, bool read,
  */
 static void svcsock_rx_region_take_give_test(struct kunit *test)
 {
-	struct svcsock_rx_region_fixture *f = svcsock_rx_region_fixture(test, 4);
+	struct svcsock_rx_region_fixture *f = svcsock_rx_region_fixture(test,
+								    SVCSOCK_RX_REGION_READ);
 	struct page *pages[SVCSOCK_RX_REGION_PAGES], *stray;
+	const unsigned long total = SVCSOCK_RX_REGION_PAGES;
+	const unsigned long read = SVCSOCK_RX_REGION_READ;
+	const unsigned long write = SVCSOCK_RX_REGION_WRITE;
 	unsigned long pfn = 0;
 
 	svcsock_rx_region_pin(test);
 
-	KUNIT_EXPECT_EQ(test, page_pool_rx_region_size(), 16UL);
-	KUNIT_EXPECT_EQ(test, page_pool_rx_region_read_pages(), 4UL);
-	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(false, &pfn), 12UL);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_size(), total);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_read_pages(), read);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(false, &pfn), write);
 	KUNIT_EXPECT_EQ(test, pfn, f->pfn);
-	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(true, &pfn), 4UL);
-	KUNIT_EXPECT_EQ(test, pfn, f->pfn + 12);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(true, &pfn), read);
+	KUNIT_EXPECT_EQ(test, pfn, f->pfn + write);
 
-	KUNIT_EXPECT_EQ(test, page_pool_rx_region_take_pages(true, pages, 5), 0U);
-	svcsock_rx_region_expect_part(test, true, 4, 4, 0);
-	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 4), 4U);
-	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[0]), f->pfn + 15);
-	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[3]), f->pfn + 12);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_take_pages(true, pages, read + 1),
+			0U);
+	svcsock_rx_region_expect_part(test, true, read, read, 0);
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, read), read);
+	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[0]), f->pfn + total - 1);
+	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[read - 1]), f->pfn + write);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pages[0]), 1);
-	KUNIT_EXPECT_EQ(test, page_pool_rx_region_take_pages(true, pages + 4, 1),
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_take_pages(true, pages + read, 1),
 			0U);
 	svcsock_rx_region_expect_part(test, true, 0, 0, 0);
-	svcsock_rx_region_expect_part(test, false, 12, 12, 0);
+	svcsock_rx_region_expect_part(test, false, write, write, 0);
 
 	/*
 	 * One call gives back pages of both partitions, each to its own.  The
 	 * write take refilled this CPU's cache with the other ten pages, which
 	 * counts as taken from the shard: min_free 0.
 	 */
-	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(false, pages + 4, 2),
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(false, pages + read, 2),
 			2U);
 	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[5]), f->pfn + 10);
-	page_pool_rx_region_give_pages(pages, 6);
-	svcsock_rx_region_expect_part(test, true, 4, 0, 0);
-	svcsock_rx_region_expect_part(test, false, 12, 0, 0);
+	page_pool_rx_region_give_pages(pages, read + 2);
+	svcsock_rx_region_expect_part(test, true, read, 0, 0);
+	svcsock_rx_region_expect_part(test, false, write, 0, 0);
 
 	/*
 	 * A double give into a full partition warns, is not stored or put.
@@ -2665,7 +2681,7 @@ static void svcsock_rx_region_take_give_test(struct kunit *test)
 		page_pool_rx_region_kunit_drain(true);
 		SVCSOCK_EXPECT_ONCE_WARNING(test);
 	}
-	svcsock_rx_region_expect_part(test, true, 4, 0, 1);
+	svcsock_rx_region_expect_part(test, true, read, 0, 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pages[0]), 1);
 
 	/*
@@ -2673,7 +2689,7 @@ static void svcsock_rx_region_take_give_test(struct kunit *test)
 	 * cache with the other three, so they still count as free.
 	 */
 	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(true, pages, 1), 1U);
-	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[0]), f->pfn + 12);
+	KUNIT_EXPECT_EQ(test, page_to_pfn(pages[0]), f->pfn + write);
 
 	/*
 	 * Allocate it before the escaped page is freed, or the allocator may
@@ -2685,10 +2701,10 @@ static void svcsock_rx_region_take_give_test(struct kunit *test)
 	/* Still referenced when given: it escapes, and this reference goes. */
 	get_page(pages[0]);
 	page_pool_rx_region_give_pages(pages, 1);
-	svcsock_rx_region_expect_part(test, true, 3, 0, 2);
+	svcsock_rx_region_expect_part(test, true, read - 1, 0, 2);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pages[0]), 1);
 	KUNIT_EXPECT_EQ(test, page_pool_rx_region_capacity(true), 2UL);
-	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(true, &pfn), 4UL);
+	KUNIT_EXPECT_EQ(test, page_pool_rx_region_span(true, &pfn), read);
 	__set_bit(page_to_pfn(pages[0]) - f->pfn, &f->freed);
 	put_page(pages[0]);
 
@@ -2697,8 +2713,8 @@ static void svcsock_rx_region_take_give_test(struct kunit *test)
 		page_pool_rx_region_give_pages(&stray, 1);
 		SVCSOCK_EXPECT_ONCE_WARNING(test);
 	}
-	svcsock_rx_region_expect_part(test, true, 3, 0, 2);
-	svcsock_rx_region_expect_part(test, false, 12, 0, 0);
+	svcsock_rx_region_expect_part(test, true, read - 1, 0, 2);
+	svcsock_rx_region_expect_part(test, false, write, 0, 0);
 }
 
 /*
@@ -2720,6 +2736,75 @@ static void svcsock_rx_region_unsplit_test(struct kunit *test)
 	svcsock_rx_region_expect_part(test, false, 0, 0, 0);
 	page_pool_rx_region_give_pages(pages, 16);
 	svcsock_rx_region_expect_part(test, false, 16, 0, 0);
+}
+
+static void svcsock_rx_region_pool_destroy(void *pool)
+{
+	page_pool_destroy(pool);
+}
+
+/*
+ * A record on a fallback page, one the region-bound pool took from the page
+ * allocator because its write partition was empty, is a region record: its
+ * skb counts the page, the record is admitted and charged for it as for a
+ * region page, and its release returns that credit to the region's total
+ * and the budget.
+ */
+static void svcsock_rx_credit_fallback_page_test(struct kunit *test)
+{
+	const unsigned long write = SVCSOCK_RX_REGION_WRITE;
+	struct svcsock_rx_region_fixture *f =
+		svcsock_rx_region_fixture(test, SVCSOCK_RX_REGION_READ);
+	struct page *taken[SVCSOCK_RX_REGION_PAGES], *page;
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *svsk = svcsock_rx_credit_sock_forget(test);
+	struct page_pool *pool;
+	struct sk_buff *skb;
+	long out;
+	u32 need;
+
+	svcsock_rx_region_pin(test);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svcsock_rx_credit_region_budget();
+	pool = page_pool_rx_region_kunit_pool();
+	KUNIT_ASSERT_FALSE(test, IS_ERR(pool));
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_region_pool_destroy, pool), 0);
+	/* Empty the write partition: the pool's next page is a fallback page. */
+	KUNIT_ASSERT_EQ(test, page_pool_rx_region_take_pages(false, taken,
+							     write), write);
+	page = page_pool_alloc_pages(pool, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, page);
+	KUNIT_EXPECT_TRUE(test, page_to_pfn(page) - f->pfn >=
+				SVCSOCK_RX_REGION_PAGES);
+
+	skb = alloc_skb(0, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, skb);
+	skb_fill_page_desc(skb, 0, page, 0, PAGE_SIZE);
+	skb->len = skb->data_len = PAGE_SIZE;
+	need = svc_tcp_rx_skb_region_pages(skb, 0, 0, PAGE_SIZE);
+	/* The page is not the skb's to put in this test. */
+	skb_shinfo(skb)->nr_frags = 0;
+	kfree_skb(skb);
+	KUNIT_EXPECT_EQ(test, need, 1U);
+
+	/* Admitted and charged as a region page is. */
+	out = rx_loan_region_out();
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(svsk, a, PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test, a->cr.linked);
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_charge(svsk, a, need));
+	KUNIT_EXPECT_GE(test, a->cr.credit, need);
+	KUNIT_EXPECT_EQ(test, a->cr.region, a->cr.credit);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out + a->cr.region);
+
+	/* Its release returns the credit. */
+	svc_tcp_rx_credit_release(a);
+	KUNIT_EXPECT_FALSE(test, a->cr.linked);
+	KUNIT_EXPECT_EQ(test, rx_loan_region_out(), out);
+
+	page_pool_put_full_page(pool, page, false);
+	page_pool_rx_region_give_pages(taken, write);
 }
 
 /* The boot region parameters, restored when the test ends. */
@@ -4233,22 +4318,30 @@ static void svcsock_rx_credit_factor_bounds_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_scaling_ratio(50), (u8)128);
 }
 
-/* Credit stays off while the receive-buffer clamp is below the floor. */
+/*
+ * A configured budget under a receive-buffer clamp below the floor is not
+ * in force: a record copies, as for a budget of 0, so nothing is lent
+ * outside credit.  At the floor it is admitted under credit (budget 40,
+ * reserve 10, factor 100: a 10-page record costs 11).
+ */
 static void svcsock_rx_credit_rcvbuf_floor_test(struct kunit *test)
 {
 	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 64);
 	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
+	unsigned int min = svc_tcp_rx_kunit_rcvbuf_min();
+	const unsigned long pages = 40;
 	const u32 len = 10 * PAGE_SIZE;
 
+	KUNIT_ASSERT_NOT_NULL(test, state);
 	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
 			svcsock_rx_budget_off, NULL), 0);
-	svc_tcp_rx_budget_kunit_configure(40, 10, 100);
-	svc_tcp_rx_budget_kunit_rcvbuf(64 * 1024);
-	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(svsk, state, len));
-	KUNIT_EXPECT_EQ(test, state->cr.credit, 0U);
-	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 0L);
-	svc_tcp_rx_credit_release(state);
-	svc_tcp_rx_budget_kunit_rcvbuf(128 * 1024);
+	svc_tcp_rx_budget_kunit_configure(pages, 10, 100);
+	svc_tcp_rx_budget_kunit_rcvbuf(min - 1);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_in_force(), 0UL);
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_budget_copy(svsk));
+	svc_tcp_rx_budget_kunit_rcvbuf(min);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_in_force(), pages);
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_budget_copy(svsk));
 	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_credit_admit(svsk, state, len));
 	KUNIT_EXPECT_EQ(test, state->cr.credit, 11U);
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_avail(), 19L);
@@ -4283,7 +4376,7 @@ static void svcsock_rx_sock_release(void *sock)
 static void svcsock_rx_hold_buffer_test(struct kunit *test)
 {
 	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
-	const int rcvbuf = 128 * 1024;
+	const int rcvbuf = svc_tcp_rx_kunit_rcvbuf_min();
 	struct socket *sock;
 	struct tcp_sock *tp;
 	u8 ratio = svc_tcp_rx_scaling_ratio(280);
@@ -4331,7 +4424,7 @@ static void svcsock_rx_hold_buffer_test(struct kunit *test)
 static void svcsock_rx_hold_again_test(struct kunit *test)
 {
 	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
-	const int rcvbuf = 128 * 1024;
+	const int rcvbuf = svc_tcp_rx_kunit_rcvbuf_min();
 	struct socket *sock;
 	struct tcp_sock *tp;
 
@@ -7072,7 +7165,7 @@ static void svcsock_rx_region_shared_budget_test(struct kunit *test)
 
 	/* No budget there: the default one. */
 	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
-	svc_tcp_rx_budget_kunit_rcvbuf(128 * 1024);
+	svc_tcp_rx_budget_kunit_rcvbuf(svc_tcp_rx_kunit_rcvbuf_min());
 	svc_tcp_rx_budget_kunit_default(6, 0);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 2), 0);
 	KUNIT_ASSERT_TRUE(test, svc_rqst_rx_region_held(rqstp));
@@ -8218,7 +8311,7 @@ static void svcsock_rx_computed_default_test(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
 			svcsock_rx_budget_off, NULL), 0);
 	/* the receive clamp at the loan minimum, as a loaning server runs */
-	svc_tcp_rx_budget_kunit_rcvbuf(128 * 1024);
+	svc_tcp_rx_budget_kunit_rcvbuf(svc_tcp_rx_kunit_rcvbuf_min());
 	svc_tcp_rx_budget_kunit_region(64, 16);
 	pages = svc_tcp_rx_kunit_computed_default(true, &lb);
 	svc_tcp_rx_kunit_computed_default(false, &lb);
@@ -8344,6 +8437,200 @@ static void svcsock_rx_rcvbuf_default_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_kunit_rcvbuf_ungiven(), 0U);
 }
 
+/* @c's admitted count, from its stats line. */
+static unsigned long long svcsock_rx_admitted(struct kunit *test,
+					      struct svc_tcp_rx_budget *c)
+{
+	unsigned long long admitted = 0;
+	char buf[256];
+	char *at;
+	int n;
+
+	svc_tcp_rx_budget_kunit_stats(c, buf, sizeof(buf));
+	at = strstr(buf, " admitted ");
+	KUNIT_ASSERT_NOT_NULL_MSG(test, at, "%s", buf);
+	n = sscanf(at, " admitted %llu", &admitted);
+	KUNIT_ASSERT_EQ_MSG(test, n, 1, "%s", buf);
+	return admitted;
+}
+
+/*
+ * The initial namespace's budget on the computed default with no region,
+ * applied as its namespace's init applies it (0), then a region of
+ * @pages pages with @read split off carved under it: the write share is
+ * the budget's once the clamp allows, and nothing has applied it yet.
+ * Returns the write share.
+ */
+static unsigned long svcsock_rx_default_carve(struct kunit *test,
+					      unsigned long pages,
+					      unsigned long read)
+{
+	struct rx_loan_budget *lb = NULL;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_region_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_computed_default_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_region(0, 0);
+	svc_tcp_rx_kunit_computed_default(true, &lb);
+	if (!lb)
+		kunit_skip(test, "no initial namespace budget");
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_kunit_set(0), 0);
+	svc_tcp_rx_budget_kunit_region(pages, read);
+	return rx_loan_region_write_default();
+}
+
+/*
+ * A record of @svsk is admitted against the computed default of @pages,
+ * whose budget was never applied: it holds credit from the initial
+ * namespace's budget, which applies @pages and counts the record.
+ */
+static void svcsock_rx_expect_default_admit(struct kunit *test,
+					    struct svc_sock *svsk,
+					    unsigned long pages)
+{
+	struct svc_tcp_rx_state *state = svcsock_rx_alloc_state(test, 64);
+	struct svc_tcp_rx_budget *c;
+	unsigned long long admitted;
+	char want[32];
+
+	KUNIT_ASSERT_NOT_NULL(test, state);
+	c = svc_tcp_rx_region_kunit_budget(svsk, SVC_TCP_RX_STATS_INIT);
+	KUNIT_ASSERT_NOT_NULL(test, c);
+	KUNIT_ASSERT_GT(test, pages, 0UL);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_kunit_in_force(), pages);
+	/* the receive path loans: the copy check sees the budget in force */
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_budget_copy(svsk));
+	svcsock_rx_expect_stats(test, c, "budget 0 ");
+	admitted = svcsock_rx_admitted(test, c);
+	KUNIT_ASSERT_TRUE(test,
+			  svc_tcp_rx_credit_admit(svsk, state, 10 * PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test, state->cr.linked);
+	KUNIT_EXPECT_GT(test, state->cr.credit, 0U);
+	KUNIT_EXPECT_LE(test, (unsigned long)state->cr.credit, pages);
+	scnprintf(want, sizeof(want), "budget %lu ", pages);
+	svcsock_rx_expect_stats(test, c, want);
+	KUNIT_EXPECT_EQ(test, svcsock_rx_admitted(test, c), admitted + 1);
+	svc_tcp_rx_credit_release(state);
+}
+
+/*
+ * The computed default, a region carved, no budget configured: the
+ * receive path loans (the budget in force is the write share), so a record
+ * is admitted under credit, as with a configured budget.
+ */
+static void svcsock_rx_computed_default_admit_test(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_credit_sock_forget(test);
+	unsigned long pages;
+
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	/* the receive clamp at the loan minimum, as a loaning server runs */
+	svc_tcp_rx_budget_kunit_rcvbuf(svc_tcp_rx_kunit_rcvbuf_min());
+	pages = svcsock_rx_default_carve(test, 64, 16);
+	svcsock_rx_expect_default_admit(test, svsk, pages);
+}
+
+/*
+ * As above with no svc_tcp_rx_rcvbuf given and no other budget, in boot
+ * order: the budget is staged before the server starts, when no clamp is
+ * in force, and the server's start puts SVC_TCP_RX_RCVBUF_DEFAULT in
+ * force.  Admission must lend under the clamp in force, not the one the
+ * budget was staged under.
+ */
+static void svcsock_rx_computed_default_admit_start_test(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_credit_sock_forget(test);
+	unsigned long pages;
+
+	svcsock_rx_skip_live_consumer(test);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_default_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	svc_tcp_rx_budget_kunit_default(0, 0);
+	pages = svcsock_rx_default_carve(test, 64, 16);
+	/* no server yet: no clamp, so nothing is lent */
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_kunit_rcvbuf_ungiven(), 0U);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_budget_kunit_in_force(), 0UL);
+	svcsock_rx_own_consumer(test, 1, PAGE_SIZE);
+	svcsock_rx_expect_default_admit(test, svsk, pages);
+}
+
+/*
+ * The default budget set while nothing wants loans, with no
+ * svc_tcp_rx_rcvbuf given, as at load: svc_tcp_rx_budget_init() staged it
+ * with no clamp in force (off), and svc_tcp_rx_budget_apply_staged_locked()
+ * sets its pages without staging it.  The pages turn the clamp on; the
+ * default budget is staged again, so a record is admitted under credit.
+ */
+static void svcsock_rx_restage_default_test(struct kunit *test)
+{
+	struct svc_tcp_rx_state *a = svcsock_rx_alloc_state(test, 64);
+	struct svc_sock *sa = svcsock_rx_credit_sock_forget(test);
+
+	KUNIT_ASSERT_NOT_NULL(test, a);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_default_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	svc_tcp_rx_budget_kunit_default(0, 0);
+	/* nothing wants loans: no clamp */
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_kunit_rcvbuf_ungiven(), 0U);
+	svc_tcp_rx_budget_kunit_default(20, 0);
+	KUNIT_EXPECT_FALSE(test, svc_tcp_rx_budget_copy(sa));
+	KUNIT_ASSERT_TRUE(test, svc_tcp_rx_credit_admit(sa, a, 10 * PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test, a->cr.linked);
+	KUNIT_EXPECT_EQ(test, a->cr.credit, 11U);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_default_avail(), 9L);
+	svc_tcp_rx_credit_release(a);
+}
+
+/*
+ * The computed default lending with no svc_tcp_rx_rcvbuf given, then the
+ * server stops: nothing wants loans, so the clamp goes, and the budget is
+ * staged off.  Records copy from there, and the return of the one in
+ * flight applies the budget at 0.
+ */
+static void svcsock_rx_restage_stop_test(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_credit_sock_forget(test);
+	struct svc_tcp_rx_state *state;
+	struct svc_tcp_rx_budget *c;
+	unsigned long pages;
+	char want[32];
+
+	svcsock_rx_skip_live_consumer(test);
+	state = svcsock_rx_alloc_state(test, 64);
+	KUNIT_ASSERT_NOT_NULL(test, state);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_default_off, NULL), 0);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 100);
+	svc_tcp_rx_budget_kunit_default(0, 0);
+	pages = svcsock_rx_default_carve(test, 64, 16);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_kunit_rcvbuf_ungiven(), 0U);
+	svcsock_rx_own_consumer(test, 1, PAGE_SIZE);
+	c = svc_tcp_rx_region_kunit_budget(svsk, SVC_TCP_RX_STATS_INIT);
+	KUNIT_ASSERT_NOT_NULL(test, c);
+	KUNIT_ASSERT_TRUE(test,
+			  svc_tcp_rx_credit_admit(svsk, state, 10 * PAGE_SIZE));
+	KUNIT_ASSERT_TRUE(test, state->cr.linked);
+	scnprintf(want, sizeof(want), "budget %lu ", pages);
+	svcsock_rx_expect_stats(test, c, want);
+
+	svc_tcp_rx_kunit_consumer_stop();
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_budget_kunit_in_force(), 0UL);
+	KUNIT_EXPECT_TRUE(test, svc_tcp_rx_budget_copy(svsk));
+	svc_tcp_rx_credit_release(state);
+	svcsock_rx_expect_stats(test, c, "budget 0 ");
+}
+
 /* A setting of the initial namespace's, put back however the case ends. */
 struct svcsock_rx_param_saved {
 	const char *name;
@@ -8426,7 +8713,7 @@ static void svcsock_rx_param_auto_manual_test(struct kunit *test)
 	/* a shared region of a known size, with a clamp that lets it lend */
 	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
 			svcsock_rx_region_off, NULL), 0);
-	svc_tcp_rx_budget_kunit_rcvbuf(128 * 1024);
+	svc_tcp_rx_budget_kunit_rcvbuf(svc_tcp_rx_kunit_rcvbuf_min());
 	svc_tcp_rx_budget_kunit_region(SVCSOCK_RX_PARAM_REGION, 0);
 	svc_tcp_rx_budget_kunit_init();
 	/* auto lends the region's write share */
@@ -8909,6 +9196,7 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_credit_invalid_reset_test),
 	KUNIT_CASE(svcsock_rx_credit_orphan_test),
 	KUNIT_CASE(svcsock_rx_credit_orphan_region_test),
+	KUNIT_CASE(svcsock_rx_credit_fallback_page_test),
 	KUNIT_CASE(svcsock_rx_credit_reconfigure_inflight_test),
 	KUNIT_CASE(svcsock_rx_credit_reconfigure_wakes_test),
 	KUNIT_CASE(svcsock_rx_credit_wake_need_test),
@@ -9014,6 +9302,10 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_computed_default_test),
 	KUNIT_CASE(svcsock_rx_netns_lend_test),
 	KUNIT_CASE(svcsock_rx_rcvbuf_default_test),
+	KUNIT_CASE(svcsock_rx_computed_default_admit_test),
+	KUNIT_CASE(svcsock_rx_computed_default_admit_start_test),
+	KUNIT_CASE(svcsock_rx_restage_default_test),
+	KUNIT_CASE(svcsock_rx_restage_stop_test),
 	{}
 };
 
@@ -9029,6 +9321,8 @@ static unsigned int svcsock_rx_saved_copy_below;
 static int svcsock_rx_test_init(struct kunit *test)
 {
 	svcsock_rx_saved_copy_below = svc_tcp_rx_copy_below;
+	/* a clamp the default budget lends under */
+	svc_tcp_rx_budget_kunit_rcvbuf(svc_tcp_rx_kunit_rcvbuf_min());
 	svc_tcp_rx_budget_kunit_default(SVCSOCK_RX_LOAN_BUDGET, 0);
 	svc_tcp_rx_copy_below = 0;	/* the loan tests use small records */
 	return 0;
