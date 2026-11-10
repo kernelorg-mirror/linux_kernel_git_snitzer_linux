@@ -164,3 +164,26 @@ Mike (10 November): add that arm, FX (F's modules, `affinity_strict` 1 on
 `xprtiod`).  Whether what is left is `xprtiod`'s is tested, not assumed:
 the first F run and the first FX run carry round 91's client trace of the
 far sends.  F T, FX T, FX, FX from `t2-r407`.
+
+### Result (`t2-r407..r410`)
+
+| run | arm | GB/s | far share a / b | client idle | ring drops | retransmits |
+|---|---|---|---|---|---|---|
+| t2-r407 | F, traced | 70.55 | 1.8% / 1.8% | 29.5% | 1,384 | 1,540 |
+| t2-r408 | FX, traced | 70.74 | 0.0% / 0.0% | 33.4% | 1,640 | 1,768 |
+| t2-r409 | FX | 70.95 | 0.0% / 0.0% | 32.8% | 2,469 | 2,613 |
+| t2-r410 | FX | 71.21 | 0.0% / 0.0% | 32.7% | 2,305 | 2,481 |
+
+- **What F leaves on the far node is `xprtiod`'s** (`farread-r407-r408.txt`).
+  In `t2-r407` 99% of the far sends run `rpc_async_schedule`, but 70% to
+  90% of them on unbound workers (`kworker/uN:N`), and F's `rpciod` is
+  per-CPU: they are tasks run by `xprtiod`, unbound and not strict.  With
+  `xprtiod` strict (`t2-r408`) 46 and 24 of about 9.2M skbs a port left
+  from the far node, all from the run's teardown (`umount.nfs`, `rm`,
+  `bash`).
+- **FX: mean 70.97 GB/s, client idle 33.0%, the most of any arm**
+  (S 31.1%, F 31.0%, A 26.0%), and no far sends.  Its rate sits between
+  F's (70.71) and S's (71.59) but these runs were not interleaved with
+  S's, so the order is not shown.
+- Ring drops and retransmits as S's and F's (2,138 and 2,287 on the
+  mean of FX's three).

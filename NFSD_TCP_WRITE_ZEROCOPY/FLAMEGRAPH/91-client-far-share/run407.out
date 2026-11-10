@@ -1,0 +1,5 @@
+20:00:06 t2-r407 FT | rpciod per_cpu 1 xprtiod scope default (cache_shard) strict 0 xprt_numa_map Y | client idle 29.50 | ring drops 1384 | total 70.55 GB/s | WRITEs 67009 | retransmits 1540 | far a: 1.8% b: 1.8% | new kernel warnings 0
+20:05:05 t2-r408 FXT | rpciod per_cpu 1 xprtiod scope default (cache_shard) strict 1 xprt_numa_map Y | client idle 33.38 | ring drops 1640 | total 70.74 GB/s | WRITEs 67478 | retransmits 1768 | far a: 0.0% b: 0.0% | new kernel warnings 0
+20:10:04 t2-r409 FX | rpciod per_cpu 1 xprtiod scope default (cache_shard) strict 1 xprt_numa_map Y | client idle 32.79 | ring drops 2469 | total 70.95 GB/s | WRITEs 67538 | retransmits 2613 | far a: 0.0% b: 0.0% | new kernel warnings 0
+20:15:03 t2-r410 FX | rpciod per_cpu 1 xprtiod scope default (cache_shard) strict 1 xprt_numa_map Y | client idle 32.70 | ring drops 2305 | total 71.21 GB/s | WRITEs 67849 | retransmits 2481 | far a: 0.0% b: 0.0% | new kernel warnings 0
+20:15:06 client back to stock: sunrpc 1E38773581DFB9A910A824D; running: nfs-server nfs-mountd nfsdcld nfs-idmapd rpc-statd rpc-statd-notify gssproxy ; exports 16

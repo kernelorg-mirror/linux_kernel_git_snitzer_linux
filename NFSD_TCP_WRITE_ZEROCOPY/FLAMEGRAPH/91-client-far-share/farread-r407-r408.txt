@@ -1,0 +1,46 @@
+== t2-r407: total 70.55 GB/s
+port a: skbs 9310194, from the far node 169714 (1.82%); NIC packets from the far node 1.8%
+port b: skbs 9142927, from the far node 158806 (1.74%); NIC packets from the far node 1.8%
+ port a far samples 166105
+    99.0%  rpciod: rpc_async_schedule
+     1.0%  xprtiod: transport work
+     0.0%  timer: TCP
+     0.0%  syscall
+     0.0%  (other)
+   comms: kworker/uN:N 70%, kworker/uN:N+ 21%, kworker/uN:N- 8%, umount.nfs 0%, bash 0%, kworker/N:N-rp 0%
+   CPUs:  24:3174 25:7849 26:6149 27:7958 28:7266 29:3174 30:7555 31:6195 32:7483 33:7029 34:6389 35:6801 36:7392 37:8506 38:5559 39:9494 40:7848 41:7458 42:9072 43:2927 44:8328 45:8979 46:5451 47:8069
+    98.6%  [rpciod: rpc_async_schedule] dev_hard_start_xmit < sch_direct_xmit < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit < __tcp_transmit_skb
+     0.9%  [xprtiod: transport work] dev_hard_start_xmit < sch_direct_xmit < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit < __tcp_transmit_skb
+     0.3%  [rpciod: rpc_async_schedule] dev_hard_start_xmit < sch_direct_xmit < __qdisc_run < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit
+     0.1%  [xprtiod: transport work] dev_hard_start_xmit < sch_direct_xmit < __qdisc_run < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit
+     0.0%  [timer: TCP] dev_hard_start_xmit < sch_direct_xmit < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit < __tcp_transmit_skb
+     0.0%  [syscall] dev_hard_start_xmit < sch_direct_xmit < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit < __tcp_transmit_skb
+ port b far samples 157013
+    99.0%  rpciod: rpc_async_schedule
+     0.9%  xprtiod: transport work
+     0.0%  timer: TCP
+   comms: kworker/uN:N 69%, kworker/uN:N- 22%, kworker/uN:N+ 9%, swapper 0%, fio 0%
+   CPUs:  0:2312 1:3344 2:9267 3:10503 4:3575 5:5366 6:4228 7:8777 8:7750 9:7923 10:9194 11:3329 12:8704 13:2612 14:8980 15:7726 16:7288 17:7785 18:3077 19:9069 20:9639 21:3856 22:3902 23:8807
+    98.7%  [rpciod: rpc_async_schedule] dev_hard_start_xmit < sch_direct_xmit < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit < __tcp_transmit_skb
+     0.9%  [xprtiod: transport work] dev_hard_start_xmit < sch_direct_xmit < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit < __tcp_transmit_skb
+     0.3%  [rpciod: rpc_async_schedule] dev_hard_start_xmit < sch_direct_xmit < __qdisc_run < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit
+     0.1%  [xprtiod: transport work] dev_hard_start_xmit < sch_direct_xmit < __qdisc_run < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit
+     0.0%  [timer: TCP] dev_hard_start_xmit < sch_direct_xmit < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit < __tcp_transmit_skb
+     0.0%  [rpciod: rpc_async_schedule] dev_hard_start_xmit < sch_direct_xmit < __qdisc_run < net_tx_action < handle_softirqs < do_softirq < __local_bh_enable_ip < __dev_queue_xmit
+== t2-r408: total 70.74 GB/s
+port a: skbs 9180325, from the far node 46 (0.00%); NIC packets from the far node 0.0%
+port b: skbs 9269453, from the far node 24 (0.00%); NIC packets from the far node 0.0%
+ port a far samples 46
+    39.1%  syscall
+    34.8%  xprtiod: transport work
+    26.1%  (other)
+   comms: umount.nfs 39%, bash 35%, kworker/N:N-rp 26%
+   CPUs:  25:9 42:16 45:21
+    39.1%  [syscall] dev_hard_start_xmit < sch_direct_xmit < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit < __tcp_transmit_skb
+    34.8%  [xprtiod: transport work] dev_hard_start_xmit < sch_direct_xmit < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit < __tcp_transmit_skb
+    26.1%  [(other)] dev_hard_start_xmit < sch_direct_xmit < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit < __tcp_transmit_skb
+ port b far samples 24
+   100.0%  xprtiod: transport work
+   comms: rm 67%, bash 33%
+   CPUs:  6:24
+   100.0%  [xprtiod: transport work] dev_hard_start_xmit < sch_direct_xmit < __dev_xmit_skb < __dev_queue_xmit < ip_finish_output2 < ip_output < __ip_queue_xmit < __tcp_transmit_skb
