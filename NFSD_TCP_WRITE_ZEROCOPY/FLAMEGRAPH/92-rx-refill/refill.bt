@@ -1,0 +1,65 @@
+// refill.bt SECS: tardis2's xeu receive rings for SECS seconds: each NAPI
+// poll's start (kprobe xeu_rx_poll) and end (tracepoint napi:napi_poll),
+// what each refill posts (the return of xeu_rx_refill.isra.0), the refill
+// retry timer, and the page pool's failures and slow paths.  No BTF for
+// xeu, so nothing reads its structures: a ring is its NAPI pointer, named
+// by the device the tracepoint gives.  A ring holds 256 buffers of 8 KiB
+// (2 MiB), about 220 us at 9 GB/s a ring: the gaps between polls are
+// measured against that.
+kprobe:xeu_rx_poll {
+	$k = (uint64)arg0;
+	@t[$k] = nsecs;
+	if (@e[$k]) { @g[$k] = nsecs - @e[$k]; }
+}
+tracepoint:napi:napi_poll /@t[(uint64)args.napi]/ {
+	$n = (uint64)args.napi;
+	$d = nsecs - @t[$n];
+	@dev[$n] = str(args.dev_name);
+	@polls[$n] = count();
+	@frames[$n] = sum(args.work);
+	@dur_us = hist($d / 1000);
+	if (args.work >= args.budget) {
+		@full[$n] = count();
+		// the gap before a poll that found the ring with more than a
+		// budget waiting: time the card had the ring to itself
+		if (@g[$n]) { @gap_full_us = hist(@g[$n] / 1000); if (@g[$n] > 50000) { @gap_full_over50[$n] = count(); } }
+	} else {
+		if (@g[$n]) { @gap_part_us = hist(@g[$n] / 1000); }
+	}
+	if ($d > 50000) { @dur_over50[$n] = count(); }
+	@e[$n] = nsecs;
+	delete(@t[$n]); delete(@g[$n]);
+}
+// xeu_rx_refill.isra.0(rxr, n) returns nothing (its callers ignore the
+// count, so the isra copy dropped it).  From the code of the loaded
+// xeu.ko (xeu_rx_poll's fill count): the ring's size is a u16 at rxr+70,
+// sr_prod_idx at rxr+10, sr_cons_idx at rxr+14.  n is the ring's empty
+// slots at the refill, so size - n buffers were still posted: the lower,
+// the nearer the ring came to running out.  Only a refill moves the
+// producer index, so what the last refill of a ring posted is the index
+// now less the index then.  (A kretprobe beside this kprobe gave the
+// kprobe bad arguments on this kernel: none is used.)
+kprobe:xeu_rx_refill.isra.0 /arg0 >= 0xffff000000000000/ {
+	$r = arg0;
+	$sz = (int64)*(uint16 *)($r + 70);
+	$n = (int64)(arg1 & 0xffff);
+	$prod = (int64)*(uint16 *)($r + 10);
+	$left = $sz - $n;
+	@size[$r] = max($sz);
+	@refills[$r] = count();
+	@left_h = lhist($left, 0, 272, 16);
+	if ($left < 32) { @left_under32[$r] = count(); }
+	if ($left == 0) { @left_zero[$r] = count(); }
+	if (@lp[$r]) {
+		$posted = ($prod - @lp[$r]) & 0xffff;
+		@posted[$r] = sum($posted);
+		if ($posted < @lw[$r]) { @refill_short[$r] = count(); @short_by[$r] = sum(@lw[$r] - $posted); }
+	}
+	@lp[$r] = $prod; @lw[$r] = $n;
+}
+kprobe:xeu_rx_refill_timer { @refill_timer = count(); }
+kretprobe:page_pool_alloc_pages /retval == 0/ { @pp_alloc_null = count(); }
+kprobe:__page_pool_alloc_netmems_slow { @pp_slow = count(); }
+kprobe:page_pool_rx_region_alloc { @pp_region_alloc = count(); }
+interval:s:$1 { exit(); }
+END { clear(@t); clear(@e); clear(@g); clear(@lp); clear(@lw); }
