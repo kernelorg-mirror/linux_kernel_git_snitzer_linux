@@ -195,6 +195,35 @@ confirmed against the canary's own sunrpc built the same way:
 prefetches, 71.03 against 71.29 GB/s, the region's exact peak 11,928
 against 9,843.  `FLAMEGRAPH/87-append-prefetch-confirm/README.md`.
 
+**The first boot into build 522 (10 November, 00:45) lost port b.**  The
+kernel is `7.3.3-14.hs.522.canary.el10.aarch64+16k`, built from the
+rebased `kernel-7.3/canary` (`d87b7e7c664b`, round 87's prefetch in).
+Pinged before `bringup.sh`, as the boot left the ports: `enp161s0f0` 5 of
+5; `enp164s0f0` 0 of 5, the neighbour FAILED.  Port b had its carrier and
+address, received 34 packets (31 on ring 3) with 65 dropped, and
+`port_rx_fifo_tc0_packets` 0 on both ports.  The client had `ens3np0` up at
+400 Gb/s and pinged the server's port a but not port b: the server's
+receiver, as in `PORT-DEAD-AFTER-BOOT.md`.  Nothing was tried on the port,
+and kdump was not yet armed (`bringup.sh` not run).  Counters, dmesg and
+the client's view are in
+`/var/tmp/zc-run-logs/t2-canary/port-dead/canary-522-boot1/`.  The tip's
+sunrpc is built for this kernel by `build-sunrpc.sh` in
+`$L/sunrpc-522-tip` (srcversion `F99F549CC7AF44FA39DAE34`, every export's
+version unchanged; `include/trace/events/sunrpc_base.h` has moved since
+"trace: Relocate event helper files", so the script's copy of it fails,
+harmlessly).  At Mike's word it is installed as
+`/lib/modules/$(uname -r)/updates/sunrpc.ko` (depmod run) for the next boot
+to load, not swapped in on this one.  tardis2's initrd loaded the stock
+sunrpc at 10.4 s, before sysroot (dracut's `nfs` module, with rpc.statd),
+so `updates/` would never have been reached: as tardis1 on 22 October,
+`/etc/dracut.conf.d/zc-no-nfs.conf` now omits dracut's `nfs` module and the
+NFS stack's drivers, and `/boot/ofp-rocky/$K/initrd` was rebuilt
+(`$L/dracut-522-zc-no-nfs.log`); the one before is beside it as
+`initrd.pre-zc-no-nfs`.  **After the next boot** `cat
+/sys/module/sunrpc/srcversion` must read `F99F549CC7AF44FA39DAE34`; if the
+boot fails, rename `initrd.pre-zc-no-nfs` back.  The run scripts' check
+that `updates/` is empty (`run323.sh`, `run363.sh`) refuses this on purpose.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
