@@ -1,0 +1,6 @@
+t2-r373 rx_region_page_put 3026 rx_region_slot_put 1375 page_pool_return_netmem 701 _raw_spin_unlock_irqrestore 10932
+t2-r374 rx_region_page_put 2355 rx_region_slot_put 911 page_pool_return_netmem 457 _raw_spin_unlock_irqrestore 10220
+t2-r375 rx_region_page_put 1769 rx_region_slot_put 607 page_pool_return_netmem 361 _raw_spin_unlock_irqrestore 9622
+t2-r376 rx_region_page_put 1646 rx_region_slot_put 609 page_pool_return_netmem 338 _raw_spin_unlock_irqrestore 9571
+t2-r377 rx_region_page_put 2433 rx_region_slot_put 841 page_pool_return_netmem 481 _raw_spin_unlock_irqrestore 10180
+t2-r378 rx_region_page_put 3043 rx_region_slot_put 1351 page_pool_return_netmem 694 _raw_spin_unlock_irqrestore 10844

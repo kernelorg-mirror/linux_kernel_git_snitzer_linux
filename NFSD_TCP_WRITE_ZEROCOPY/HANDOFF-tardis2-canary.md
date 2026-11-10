@@ -253,6 +253,14 @@ slots.  Nothing escaped.  The bulk return of this overflow was dropped on
 region's held peak (at most 512 more pages held).
 `FLAMEGRAPH/89-release-trace/README.md`.
 
+**Round 90, the pool's stack (10 November, `t2-r373..r381`):** at 128
+nfsd takes 9.1k fewer cycles a WRITE than at 64 (237.3k against 246.4k,
+3.7k of it the overflow path), the rate level, but the exact held peak is
+12,632 against 11,036 and loans were denied in all three runs at 128 and
+none at 64.  96: -2.9k cycles, the peak +174, one run with denials.  128
+is not to be kept (the footprint).  Whether to measure 96 further is
+Mike's.  The stack is back at 64.  `FLAMEGRAPH/90-stack-size/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
