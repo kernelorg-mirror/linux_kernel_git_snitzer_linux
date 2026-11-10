@@ -1,0 +1,7 @@
+03:49:56 t2-r382 stack 64 H | total 70.95 GB/s | WRITEs 67570 | retransmits 1888 | 8019 | to stack 66, overflowing bulks 0 (0.000 a page) | new kernel warnings 0
+03:55:10 t2-r383 stack 96 H | total 69.93 GB/s | WRITEs 66565 | retransmits 858 | 10082 | to stack 40, overflowing bulks 0 (0.000 a page) | new kernel warnings 0
+04:00:10 t2-r384 stack 96 H | total 70.68 GB/s | WRITEs 67249 | retransmits 813 | 9803 | to stack 16, overflowing bulks 0 (0.000 a page) | new kernel warnings 0
+04:05:24 t2-r385 stack 64 H | total 70.45 GB/s | WRITEs 67151 | retransmits 1337 | 10462 | to stack 50, overflowing bulks 0 (0.000 a page) | new kernel warnings 0
+04:10:24 t2-r386 stack 64 H | total 70.19 GB/s | WRITEs 66823 | retransmits 1438 | 12294 | to stack 6, overflowing bulks 0 (0.000 a page) | new kernel warnings 0
+04:15:38 t2-r387 stack 96 H | total 70.85 GB/s | WRITEs 67383 | retransmits 939 | 11924 | to stack 49, overflowing bulks 0 (0.000 a page) | new kernel warnings 0
+04:15:55 end: rx_region_stack 64 (manual), settled.sh audit rest: the settled setting

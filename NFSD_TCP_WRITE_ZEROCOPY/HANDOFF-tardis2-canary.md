@@ -258,8 +258,12 @@ nfsd takes 9.1k fewer cycles a WRITE than at 64 (237.3k against 246.4k,
 3.7k of it the overflow path), the rate level, but the exact held peak is
 12,632 against 11,036 and loans were denied in all three runs at 128 and
 none at 64.  96: -2.9k cycles, the peak +174, one run with denials.  128
-is not to be kept (the footprint).  Whether to measure 96 further is
-Mike's.  The stack is back at 64.  `FLAMEGRAPH/90-stack-size/README.md`.
+is not to be kept (the footprint).  Three more held-mark
+pairs at 64 and 96 (`t2-r382..r387`): the exact peak 10,453 at 64 and
+10,755 at 96 on average over four pairs, +302 against a spread of 4k
+between runs, so not shown either way; a run at 64 also denied loans
+(240).  Keeping 96 (-2.9k cycles a WRITE) is Mike's call.  The stack is
+back at 64.  `FLAMEGRAPH/90-stack-size/README.md`.
 
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In

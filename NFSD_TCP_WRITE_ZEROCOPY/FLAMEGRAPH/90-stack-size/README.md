@@ -87,3 +87,35 @@ Three more pairs with the held mark, `RUNS="64:H 96:H 96:H 64:H 64:H
 96:H" N0=382 ./run373.sh` (`t2-r382..r387`, `run382.out`): the exact held
 peak and the denied loans at each, to see whether 96's +174 and its one
 run with denials are real.
+
+### Result: 96's peak is not shown to differ from 64's
+
+`run382.out`.  All six runs clean (no new kernel warning, no drive
+stepped down, both ports answering after each reopen); the stack is back
+at 64 in the settled setting at the end.
+
+| pair | 64 | 96 | 96 - 64 |
+|---|---|---|---|
+| `t2-r379`, `t2-r380` | 11,036 | 11,210 | +174 |
+| `t2-r382`, `t2-r383` | 8,019 | 10,082 | +2,063 |
+| `t2-r385`, `t2-r384` | 10,462 | 9,803 | -659 |
+| `t2-r386`, `t2-r387` | 12,294 (240 denied) | 11,924 (173 denied) | -370 |
+| mean | 10,453 | 10,755 | **+302** |
+
+- The exact held peaks at each size spread by 4k pages (8.0k to 12.3k at
+  64), and the pairs' differences go both ways (+2,063 to -659).  The
+  mean, +302 (3%), is well inside that spread: **96 is not shown to raise
+  the peak, nor shown not to.**  Four pairs cannot resolve a difference of
+  a few hundred pages against this spread.
+- **Denials are not 96's:** `t2-r386`, at 64, denied 240 loans, the first
+  at 64 in rounds 88 to 90; `t2-r387` at 96 denied 173 beside it.  So the
+  denial burst in `t2-r377` is not evidence against 96 either.  At 128 the
+  case stands: denials in all three runs and a peak 1,596 over 64's in the
+  same pair of runs.
+- The peak drifted upward over the six runs at both sizes (8.0k to 12.3k
+  at 64), more than it moved between sizes.
+
+**For Mike:** 96 saves 2.9k nfsd cycles a WRITE (1.2%, counted runs
+`t2-r374` and `t2-r377` against `t2-r373` and `t2-r378`) for a held peak
+that four pairs cannot tell from 64's.  Keeping it is a change to
+`settled.sh` (`RX_REGION_STACK=96`); leaving it at 64 changes nothing.
