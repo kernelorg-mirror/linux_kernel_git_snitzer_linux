@@ -198,3 +198,35 @@ page pool drops and each port's FIFO drops (`srv-ring-sec.tsv`); on the
 client each of the 48 transmit queues' packets, bytes, `xmit_more` and
 `stopped` per port (`cli-txq-sec.tsv`).  A FX FX S S FX FX A A FX FX S,
 `t2-r411..r422`.
+
+### Result (`t2-r411..r422`, `ringsec-r411-r422.txt`)
+
+| arm | runs | GB/s | mean | client idle | tail drops, 40 s, a + b |
+|---|---|---|---|---|---|
+| A | r411, r418, r419 | 69.73, 72.04, 70.32 | 70.70 | 26.4% | 1,920, 6,583, 2,993 |
+| S | r414, r415, r422 | 70.30, 70.48, 72.01 | 70.93 | 31.1% | 3,351, 3,160, 7,418 |
+| FX | r412, r413, r416, r417, r420, r421 | 71.23, 71.31, 71.44, 71.38, 71.53, 70.86 | **71.29** | **32.6%** | 9,015, 9,084, 10,093, 8,443, 10,222, 7,172 |
+
+- **The drops are not bursts a second could show.**  In every run of
+  every arm they fall in every second of the 40, the worst 3 s hold 10%
+  to 16% of them, and the four rings of a port share them evenly.  The
+  client sends steadily: 4.5M to 4.8M packets a second a port, 0.7% to
+  1.0% from second to second, over all 24 near queues, the busiest with
+  12% to 18%, never stopped.  Second by second the drops do not follow
+  the client's packets (-0.4 to +0.4).  `ringsec.py` leaves out a
+  second in which the client sends under 90% of its median: the load's
+  end fell in the 40 s of `t2-r421` and `t2-r422`.
+- **The drops go with the rate.**  Over the twelve runs, corr(rate,
+  drops) is +0.79; within A's three runs +1.00 and within S's +0.99:
+  `t2-r418` (A, 72.04 GB/s) and `t2-r422` (S, 72.01) drop two to three
+  times what their arms' slower runs do.  So the server's rings drop as
+  the client delivers more: the drops say the server's receive is near
+  its limit, more than that the client misbehaves.
+- **But FX drops more than its rate accounts for:** about 9,000 at 70.9
+  to 71.5 GB/s, where A and S drop 6,600 to 7,400 at 72.0.  Something in
+  how FX sends (a transport per CPU, homed; the first leg in the caller)
+  costs the server's rings more, at a time scale under a second.
+- **FX against S and A:** FX leads in rate in 2 of 3 pairs of each (mean
+  71.29 against S's 70.93 and A's 70.70, inside A's and S's spread) and
+  idles the client the most in every pair.  FX against S is not settled
+  by rate; on client CPU FX is ahead by 1.5 points.

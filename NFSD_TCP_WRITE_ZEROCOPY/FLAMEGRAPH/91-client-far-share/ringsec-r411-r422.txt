@@ -1,0 +1,65 @@
+== t2-r411 A: total 69.73 GB/s
+ port a: tail drops 1063 in 40 of 40 s, worst second 69, worst 3 s 16%; rings {'0': 287, '1': 258, '2': 250, '3': 268}; pp drops 480, fifo 0
+         client: packets/s 4.56M (cv 1.0%), queues over 1% 24, busiest 11%, far queues 2.7%, xmit_more 0.0%, stopped 0; corr(drops, packets) +0.09
+ port b: tail drops 857 in 40 of 40 s, worst second 45, worst 3 s 15%; rings {'0': 187, '1': 241, '2': 160, '3': 269}; pp drops 245, fifo 0
+         client: packets/s 4.45M (cv 0.9%), queues over 1% 24, busiest 16%, far queues 2.6%, xmit_more 0.0%, stopped 0; corr(drops, packets) +0.38
+== t2-r412 FX: total 71.23 GB/s
+ port a: tail drops 4670 in 40 of 40 s, worst second 207, worst 3 s 11%; rings {'0': 1136, '1': 1241, '2': 1050, '3': 1243}; pp drops 674, fifo 0
+         client: packets/s 4.63M (cv 0.7%), queues over 1% 24, busiest 18%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.21
+ port b: tail drops 4345 in 40 of 40 s, worst second 177, worst 3 s 11%; rings {'0': 987, '1': 1232, '2': 1020, '3': 1106}; pp drops 351, fifo 0
+         client: packets/s 4.57M (cv 1.0%), queues over 1% 24, busiest 12%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.26
+== t2-r413 FX: total 71.31 GB/s
+ port a: tail drops 4887 in 40 of 40 s, worst second 178, worst 3 s 10%; rings {'0': 1601, '1': 1217, '2': 1017, '3': 1052}; pp drops 604, fifo 0
+         client: packets/s 4.59M (cv 0.9%), queues over 1% 24, busiest 12%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.34
+ port b: tail drops 4197 in 40 of 40 s, worst second 170, worst 3 s 11%; rings {'0': 937, '1': 913, '2': 1185, '3': 1162}; pp drops 310, fifo 0
+         client: packets/s 4.62M (cv 0.9%), queues over 1% 24, busiest 12%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.43
+== t2-r414 S: total 70.30 GB/s
+ port a: tail drops 1870 in 40 of 40 s, worst second 78, worst 3 s 12%; rings {'0': 475, '1': 524, '2': 433, '3': 435}; pp drops 674, fifo 0
+         client: packets/s 4.63M (cv 0.7%), queues over 1% 24, busiest 12%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.24
+ port b: tail drops 1481 in 40 of 40 s, worst second 71, worst 3 s 13%; rings {'0': 383, '1': 355, '2': 335, '3': 405}; pp drops 346, fifo 0
+         client: packets/s 4.45M (cv 1.0%), queues over 1% 24, busiest 16%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) +0.18
+== t2-r415 S: total 70.48 GB/s
+ port a: tail drops 1700 in 40 of 40 s, worst second 96, worst 3 s 14%; rings {'0': 368, '1': 509, '2': 511, '3': 312}; pp drops 681, fifo 0
+         client: packets/s 4.54M (cv 0.8%), queues over 1% 24, busiest 16%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.17
+ port b: tail drops 1460 in 40 of 40 s, worst second 69, worst 3 s 14%; rings {'0': 250, '1': 393, '2': 430, '3': 387}; pp drops 340, fifo 0
+         client: packets/s 4.56M (cv 0.7%), queues over 1% 24, busiest 17%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.00
+== t2-r416 FX: total 71.44 GB/s
+ port a: tail drops 5164 in 40 of 40 s, worst second 186, worst 3 s 10%; rings {'0': 1218, '1': 1532, '2': 1124, '3': 1290}; pp drops 677, fifo 0
+         client: packets/s 4.68M (cv 0.9%), queues over 1% 24, busiest 13%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.10
+ port b: tail drops 4929 in 40 of 40 s, worst second 182, worst 3 s 10%; rings {'0': 1232, '1': 1296, '2': 1142, '3': 1259}; pp drops 338, fifo 0
+         client: packets/s 4.56M (cv 0.8%), queues over 1% 24, busiest 17%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.25
+== t2-r417 FX: total 71.38 GB/s
+ port a: tail drops 4172 in 40 of 40 s, worst second 158, worst 3 s 11%; rings {'0': 1131, '1': 1113, '2': 880, '3': 1045}; pp drops 689, fifo 0
+         client: packets/s 4.58M (cv 0.7%), queues over 1% 24, busiest 12%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.24
+ port b: tail drops 4271 in 40 of 40 s, worst second 161, worst 3 s 11%; rings {'0': 900, '1': 1179, '2': 960, '3': 1229}; pp drops 344, fifo 0
+         client: packets/s 4.64M (cv 0.7%), queues over 1% 24, busiest 12%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.40
+== t2-r418 A: total 72.04 GB/s
+ port a: tail drops 3222 in 40 of 40 s, worst second 121, worst 3 s 11%; rings {'0': 926, '1': 738, '2': 766, '3': 792}; pp drops 688, fifo 0
+         client: packets/s 4.70M (cv 0.9%), queues over 1% 24, busiest 12%, far queues 1.5%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.23
+ port b: tail drops 3361 in 40 of 40 s, worst second 113, worst 3 s 10%; rings {'0': 879, '1': 764, '2': 769, '3': 949}; pp drops 345, fifo 0
+         client: packets/s 4.61M (cv 0.7%), queues over 1% 24, busiest 11%, far queues 1.1%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.20
+== t2-r419 A: total 70.32 GB/s
+ port a: tail drops 1510 in 40 of 40 s, worst second 65, worst 3 s 13%; rings {'0': 406, '1': 413, '2': 409, '3': 282}; pp drops 681, fifo 0
+         client: packets/s 4.54M (cv 0.7%), queues over 1% 24, busiest 16%, far queues 2.6%, xmit_more 0.0%, stopped 0; corr(drops, packets) +0.07
+ port b: tail drops 1483 in 40 of 40 s, worst second 63, worst 3 s 13%; rings {'0': 398, '1': 319, '2': 390, '3': 376}; pp drops 340, fifo 0
+         client: packets/s 4.54M (cv 0.9%), queues over 1% 24, busiest 11%, far queues 2.4%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.28
+== t2-r420 FX: total 71.53 GB/s
+ port a: tail drops 5377 in 40 of 40 s, worst second 188, worst 3 s 10%; rings {'0': 1598, '1': 1344, '2': 1344, '3': 1091}; pp drops 682, fifo 0
+         client: packets/s 4.61M (cv 1.0%), queues over 1% 24, busiest 17%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.36
+ port b: tail drops 4845 in 40 of 40 s, worst second 178, worst 3 s 11%; rings {'0': 1157, '1': 1239, '2': 1127, '3': 1322}; pp drops 342, fifo 0
+         client: packets/s 4.64M (cv 0.8%), queues over 1% 24, busiest 12%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.41
+== t2-r421 FX: total 70.86 GB/s
+ port a: tail drops 3418 in 39 of 39 s, worst second 161, worst 3 s 12%; rings {'0': 929, '1': 852, '2': 779, '3': 880}; pp drops 678, fifo 0
+         client: packets/s 4.59M (cv 0.8%), queues over 1% 24, busiest 12%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.24
+ port b: tail drops 3754 in 39 of 39 s, worst second 143, worst 3 s 11%; rings {'0': 988, '1': 924, '2': 875, '3': 989}; pp drops 338, fifo 0
+         client: packets/s 4.57M (cv 0.7%), queues over 1% 24, busiest 18%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.33
+== t2-r422 S: total 72.01 GB/s
+ port a: tail drops 3967 in 39 of 39 s, worst second 152, worst 3 s 11%; rings {'0': 1119, '1': 1061, '2': 941, '3': 903}; pp drops 686, fifo 0
+         client: packets/s 4.76M (cv 0.7%), queues over 1% 24, busiest 12%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) +0.20
+ port b: tail drops 3451 in 39 of 39 s, worst second 160, worst 3 s 13%; rings {'0': 805, '1': 891, '2': 841, '3': 951}; pp drops 343, fifo 0
+         client: packets/s 4.57M (cv 0.8%), queues over 1% 24, busiest 17%, far queues 0.0%, xmit_more 0.0%, stopped 0; corr(drops, packets) -0.41
+
+== by arm (mean over runs and ports)
+ A   drops/port   1916, seconds with drops 40.0, worst second    79, client cv  0.8%, queues over 1% 24.0, busiest 12.9%, xmit_more  0.0%, corr -0.03
+ FX  drops/port   4502, seconds with drops 39.8, worst second   174, client cv  0.8%, queues over 1% 24.0, busiest 14.0%, xmit_more  0.0%, corr -0.30
+ S   drops/port   2322, seconds with drops 39.7, worst second   104, client cv  0.8%, queues over 1% 24.0, busiest 15.1%, xmit_more  0.0%, corr -0.07
