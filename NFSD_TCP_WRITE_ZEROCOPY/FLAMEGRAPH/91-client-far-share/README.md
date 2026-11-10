@@ -42,3 +42,36 @@ The client NIC's own counters in `t2-r388` show its queues used
 unevenly too: of port a's 64 queues most carry about 0.8M packets in the
 window, a few 3.3M and one (`tx9`) 12.5M; port b alike (`tx19` 10.3M,
 `tx3` 7.9M).
+
+## Result (`t2-r390`, `t2-r391`)
+
+| run | GB/s | port | skbs in 30 s | from the far node | NIC's far share |
+|---|---|---|---|---|---|
+| t2-r390 | 70.44 | a | 8,807,408 | 197,331 (2.24%) | 2.3% |
+| | | b | 9,305,152 | 219,917 (2.36%) | 2.5% |
+| t2-r391 | 71.59 | a | 8,821,740 | 131,726 (1.49%) | 1.5% |
+| | | b | 8,822,203 | 183,811 (2.08%) | 2.2% |
+
+- **The NIC's far share is the sending CPU's.**  Counted by the CPU that
+  handed each skb to the driver, the share is within 0.1 of what
+  `twoport.sh` reads from the queues, so a socket's cached queue does
+  not blur it.
+- **Who: `rpciod`, 97.4% to 97.8% of the far sends in each port and
+  run**, `rpc_async_schedule` above `__tcp_transmit_skb`; `xprtiod` 2.2%
+  to 2.5%; TCP's timers, syscalls and the rest under 0.1%.  fio itself
+  (pinned) sends nothing from the far node.  The far sends are spread
+  over every CPU of the far node, 2.5k to 11k samples each
+  (`farread-r390-r391.txt`).
+- **Why it can happen:** the client's sunrpc (`v7.3.0-0.rc7.2.hs.469.el9`,
+  `net/sunrpc/sched.c`) makes both with `alloc_workqueue(...,
+  WQ_UNBOUND | WQ_MEM_RECLAIM, 0)`.  The run's `numa` scope queues an
+  async task's work to the pod of the CPU that queued it, but an unbound
+  workqueue's scope is not strict by default, so the scheduler may run
+  its worker on the other node; and without `WQ_SYSFS` neither has
+  `affinity_strict` (nor `affinity_scope` or `cpumask`) in
+  `/sys/devices/virtual/workqueue/` to change that.
+
+**Next (for Mike):** a client `sunrpc.ko` from that tag with `WQ_SYSFS`
+on `rpciod` and `xprtiod` (nothing else), so a run can set each to
+`numa` and `affinity_strict=1`; then runs against the stock module, the
+far share and the rate.

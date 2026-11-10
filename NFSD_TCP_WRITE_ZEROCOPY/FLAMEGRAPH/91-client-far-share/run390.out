@@ -1,0 +1,2 @@
+16:50:27 t2-r390 | total 70.44 GB/s | WRITEs 66918 | retransmits 2435 | a: 2.3% b: 2.5% | client samples 192433 214786 | new kernel warnings 0
+16:55:46 t2-r391 | total 71.59 GB/s | WRITEs 68043 | retransmits 1502 | a: 1.5% b: 2.2% | client samples 125906 176712 | new kernel warnings 0
