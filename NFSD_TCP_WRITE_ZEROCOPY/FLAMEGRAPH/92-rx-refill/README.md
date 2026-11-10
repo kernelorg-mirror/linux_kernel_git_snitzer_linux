@@ -72,3 +72,44 @@ twoport's window, against an untraced run, for what the trace costs.
 **Next (`short.bt`, `t2-r436`):** a light trace, no probe on the polls:
 at `xeu_rx_refill_retry_if_short()`, right after each refill, how many
 slots the ring still has empty, and the timer.
+
+## Result (`short.bt`, `t2-r436`)
+
+71.59 GB/s, ring drops 1,788 in twoport's window: the light trace costs
+nothing.  In 10 s, 2.68 million refills asked for 99.3 million buffers.
+
+- **No refill comes up short.**  Right after each of 2.58 million
+  refills (`xeu_rx_refill_retry_if_short()`), the ring had fewer than 8
+  empty slots: every refill posted what it asked for.
+- **The retry timer's 1,409 firings are a wrap of the ring's indexes.**
+  `xeu_rx_refill_retry_if_short()` is the only caller of `mod_timer` on
+  the refill timer, and in the loaded module it computes the empty slots
+  as `cons + size - prod` in 32 bits, not masked to the u16 the indexes
+  are:
+
+  ```
+  f458:	add	w1, w1, w3	// cons + size
+  f45c:	sub	w1, w1, w5	// - prod, not masked to u16
+  f474:	cmp	w1, w2		// >= rx_refill_thresh: arm the timer
+  ```
+
+  So whenever a ring's producer index has wrapped past 65535 and its
+  consumer index has not yet, the count is near 65536 and the timer is
+  armed though the ring is full.  A ring posts about 1.12 million
+  buffers a second (89.5 million in 10 s over eight rings), so it wraps
+  every 58 ms: about 17 a second a ring, 137 a second over eight, as the
+  timer fires (133 to 141 a second).  `xeu_rx_poll()`'s own count is
+  masked (`and w1, w1, #0xffff`), so the refills are right.  The bug is
+  in kernel-rpmtree's `xeu-retry-an-RX-refill-that-came-up-short.patch`
+  (the C expression `ring->size - (ring->sr_prod_idx -
+  ring->sr_cons_idx)` is computed in int); it is harmless (the timer
+  only schedules the ring's NAPI, normally running already) and a cast
+  to u16 fixes it.
+
+**So the refill path does not explain the drops.**  Allocation never
+fails, no refill is short, and at every refill the driver still counts
+at least 48 of the ring's 128 buffers posted.  Those include buffers the
+card has filled and the poll has not yet reached, so what is left is the
+card's side: how many of the posted buffers are still free when frames
+arrive, which is a question of how long the card's completions wait for
+a poll (a ring of 128 is about 110 us at 9 GB/s).
