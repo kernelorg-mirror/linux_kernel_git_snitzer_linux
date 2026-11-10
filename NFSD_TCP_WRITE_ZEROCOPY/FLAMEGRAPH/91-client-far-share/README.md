@@ -230,3 +230,29 @@ client each of the 48 transmit queues' packets, bytes, `xmit_more` and
   71.29 against S's 70.93 and A's 70.70, inside A's and S's spread) and
   idles the client the most in every pair.  FX against S is not settled
   by rate; on client CPU FX is ahead by 1.5 points.
+
+## The rings at millisecond scale, and GX (`run423.sh`)
+
+Mike (10 November): sample the rings at millisecond scale, FX against
+S, and a variant of FX without the first RPC leg in the caller.
+
+**GX** is `kernel-7.3/hs-469.client-sunrpc-noinline`: the client series
+and one DROP commit (`e7c7bab27cc5`) that takes out NFS's two opt-ins to
+`RPC_TASK_INLINE_OK` (the O_DIRECT pgio and commit), so every first leg
+goes to `rpciod` again; built as G by `cbuild.sh`, run with `xprtiod`
+strict as FX is.
+
+**What a ring read costs.**  From the driver's source
+(`kmod-xsight-2.0.1`, `xeu_get_hw_stats()`): every `ethtool -S`, and
+every `ndo_get_stats64`, asks the card's firmware through its mailbox,
+one message for the rx rings and one a tx ring, each waited for in
+`udelay(100)` steps under `spin_lock_bh(&priv->stats_lock)`: about 1.4 ms
+a port with bottom halves off on the reading CPU.  The firmware returns
+the counts since the last read (the driver adds them up), so a 10 ms
+sample is a true 10 ms delta.  So the sampler reads every 10 ms, on
+nfsd's CPU 55 and never on a ring CPU, for 10 s from 10 s into the
+window, the same in every arm; the 1 s server sampler is left out so
+the two do not contend for the lock.  Beside it, `napi.bt` counts the
+ring CPUs' NAPI polls in the same 10 ms buckets, with the frames taken
+and the polls that used their whole budget.  S FX GX GX FX S S FX GX,
+`t2-r423..r431`.

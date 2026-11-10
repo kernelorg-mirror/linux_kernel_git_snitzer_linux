@@ -1,0 +1,12 @@
+// napi.bt SECS: on tardis2's ring CPUs (0-7, 56-63), for SECS seconds,
+// each 10 ms bucket's NAPI polls per CPU: how many, the frames they took,
+// and how many used their whole budget (the ring had more waiting).
+BEGIN { @t0 = (uint64)nsecs; }
+tracepoint:napi:napi_poll /cpu < 8 || cpu >= 56/ {
+	$b = ((uint64)nsecs - (uint64)@t0) / (uint64)10000000;
+	@polls[cpu, $b] = count();
+	@work[cpu, $b] = sum(args.work);
+	if (args.work >= args.budget) { @full[cpu, $b] = count(); }
+}
+interval:s:$1 { exit(); }
+END { clear(@t0); }
