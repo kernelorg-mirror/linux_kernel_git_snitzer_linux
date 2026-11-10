@@ -187,3 +187,14 @@ far sends.  F T, FX T, FX, FX from `t2-r407`.
   S's, so the order is not shown.
 - Ring drops and retransmits as S's and F's (2,138 and 2,287 on the
   mean of FX's three).
+
+## Option 1: the ring drops, with S against FX (`run411.sh`)
+
+Mike (10 November): A against FX with the server's ring drops each
+second and the client's transmit queues each second, and interleaved S
+against FX pairs alongside.  `ethsec.py` samples `ethtool -S` each
+second on both sides: on tardis2 each ring's rx packets, tail drops and
+page pool drops and each port's FIFO drops (`srv-ring-sec.tsv`); on the
+client each of the 48 transmit queues' packets, bytes, `xmit_more` and
+`stopped` per port (`cli-txq-sec.tsv`).  A FX FX S S FX FX A A FX FX S,
+`t2-r411..r422`.
