@@ -4,6 +4,8 @@
 # EXP_RX_REGION_STACK (the ports opened again):
 #   t2-r373..r378  counted profile, mark off, stacks 64 96 128 128 96 64;
 #   t2-r379..r381  the held mark on, no profile, stacks 64 96 128.
+# RUNS= and N0= run another list from another run number: round 90's
+# second part, RUNS="64:H 96:H 96:H 64:H 64:H 96:H" N0=382.
 # Each run keeps both ports' ethtool -S before and after, for the pools'
 # recycle_ring (pages to the stack), recycle_ring_full (bulk returns that
 # overflowed) and alloc_slow (region allocs).  At the end, 64 again.
@@ -19,7 +21,7 @@ die() { say "STOPPED: $*"; back; exit 1; }
 stats() { for d in enp161s0f0 enp164s0f0; do ethtool -S $d | awk -v d=$d '/rx_pp_(recycle_ring|recycle_ring_full|alloc_slow|alloc_refill|alloc_empty):/ {k=$1; sub(/^ring_[0-9]+_rx_pp_/, "", k); sub(/:$/, "", k); s[k] += $2} END {for (k in s) print d, k, s[k]}'; done; }
 [ "$(cat /sys/kernel/kexec_crash_loaded)" = 1 ] || die "kdump not armed"
 [ "$(cat /sys/module/sunrpc/srcversion)" = $SRCV ] || die "sunrpc loaded is not the tip's ($SRCV)"
-n=373
+n=${N0:-373}
 for run in ${RUNS:-64:C 96:C 128:C 128:C 96:C 64:C 64:H 96:H 128:H}; do
 	stk=${run%:*} kind=${run#*:}
 	[ "$(df --output=avail -k / | tail -1)" -gt 2097152 ] || die "root has under 2 GB free"

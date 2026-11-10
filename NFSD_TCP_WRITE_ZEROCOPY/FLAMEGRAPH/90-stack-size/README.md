@@ -80,3 +80,10 @@ peak and denied loans.  96 is not shown either way.  Two ways on:
   the pages in the region's count: a stack that holds no more pages but
   spills less, or the spill made cheaper than the dropped bulk return
   managed.
+
+## Second part: 64 against 96, held mark only (Mike)
+
+Three more pairs with the held mark, `RUNS="64:H 96:H 96:H 64:H 64:H
+96:H" N0=382 ./run373.sh` (`t2-r382..r387`, `run382.out`): the exact held
+peak and the denied loans at each, to see whether 96's +174 and its one
+run with denials are real.
