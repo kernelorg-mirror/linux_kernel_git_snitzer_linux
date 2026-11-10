@@ -4,27 +4,27 @@
 # t2-r389, no perf on the server.  Once the window opens (twoport has
 # written ss-client.txt) the client counts every skb handed to each E1
 # port's driver (net:net_dev_start_xmit, filtered on the device) on each
-# node's CPUs, and records one in $C of those sent from the far node's
+# node's CPUs, and records one in $FAR_C of those sent from the far node's
 # CPUs with kernel call chains: port a (ens3np0) is near CPUs 0-23, port
 # b (ens6np0) near 24-47.  The samples come back as far-*.script.xz.
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
 say() { echo "$(date +%T) $*"; }
 [ "$(cat /sys/kernel/kexec_crash_loaded)" = 1 ] || { say "kdump not armed"; exit 1; }
-C=${C:-5} D=${D:-30}
+FAR_C=${FAR_C:-5} FAR_SECS=${FAR_SECS:-30}
 ctrace() {
 	$SSHC "cd /dev/shm && rm -f far-*.data st-*.txt
 	f() { echo \"--filter 'name == \\\"\$1\\\"'\"; }
 	E=net:net_dev_start_xmit
-	eval perf stat -C 0-23 -x, -e \$E \$(f ens3np0) -e \$E \$(f ens6np0) -o st-n0.txt -- sleep $D &
-	eval perf stat -C 24-47 -x, -e \$E \$(f ens3np0) -e \$E \$(f ens6np0) -o st-n1.txt -- sleep $D &
-	eval perf record -q -C 24-47 -e \$E \$(f ens3np0) -c $C -g -o far-a.data -- sleep $D &
-	eval perf record -q -C 0-23 -e \$E \$(f ens6np0) -c $C -g -o far-b.data -- sleep $D &
+	eval perf stat -C 0-23 -x, -e \$E \$(f ens3np0) -e \$E \$(f ens6np0) -o st-n0.txt -- sleep $FAR_SECS &
+	eval perf stat -C 24-47 -x, -e \$E \$(f ens3np0) -e \$E \$(f ens6np0) -o st-n1.txt -- sleep $FAR_SECS &
+	eval perf record -q -C 24-47 -e \$E \$(f ens3np0) -c $FAR_C -g -o far-a.data -- sleep $FAR_SECS &
+	eval perf record -q -C 0-23 -e \$E \$(f ens6np0) -c $FAR_C -g -o far-b.data -- sleep $FAR_SECS &
 	wait
 	for p in a b; do perf script -i far-\$p.data -F comm,tid,cpu,ip,sym 2>/dev/null | xz -T8 -3 > far-\$p.script.xz; done
 	rm -f far-*.data" < /dev/null
 }
-for n in ${RUNS:-388 389}; do
+for n in ${RUNS:-390 391}; do
 	[ "$(df --output=avail -k / | tail -1)" -gt 1048576 ] || { say "root has under 1 GB free"; exit 1; }
 	O=$L/t2-r$n; mkdir -p $O
 	client_free || { say "client not free"; exit 1; }
