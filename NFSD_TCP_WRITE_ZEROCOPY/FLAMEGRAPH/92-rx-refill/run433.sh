@@ -24,7 +24,7 @@ for k in ${KINDS:-T U T}; do
 	tp=$!
 	if [ $k = T ]; then
 		for i in $(seq 1 300); do [ -e $O/pmu/ss-client.txt ] && break; kill -0 $tp 2>/dev/null || break; sleep 1; done
-		[ -e $O/pmu/ss-client.txt ] && bpftrace $HERE/refill.bt 10 > $O/refill.txt 2>&1
+		[ -e $O/pmu/ss-client.txt ] && bpftrace $HERE/${BT:-refill}.bt 10 > $O/${BT:-refill}.txt 2>&1
 	fi
 	wait $tp || { say "run failed: $(grep -E 'BAD|FAILED|no answer|not free' $O/pmu.log | head -3)"; exit 1; }
 	dmesg > $O/dmesg.1

@@ -1,0 +1,32 @@
+== t2-r433: total 67.22 GB/s; twoport ring drops in the window 10780
+  ring ffff008106728000: size 128, refills 304233, left <32 0, left 0 0, short 0 by 0, posted 11174261
+  ring ffff008106728480: size 128, refills 303359, left <32 0, left 0 0, short 0 by 0, posted 11233255
+  ring ffff008106728900: size 128, refills 301463, left <32 0, left 0 0, short 0 by 0, posted 11100496
+  ring ffff008106728d80: size 128, refills 298770, left <32 0, left 0 0, short 0 by 0, posted 11030550
+  ring ffff008127b04000: size 128, refills 299424, left <32 0, left 0 0, short 0 by 0, posted 11017413
+  ring ffff008127b04480: size 128, refills 303748, left <32 0, left 0 0, short 0 by 0, posted 11433923
+  ring ffff008127b04900: size 128, refills 307066, left <32 0, left 0 0, short 0 by 0, posted 11445262
+  ring ffff008127b04d80: size 128, refills 304796, left <32 0, left 0 0, short 0 by 0, posted 11290246
+  rings: refills 2422859, left <32 0, left 0 0, short 0 (by 0 buffers), posted 89725406
+  enp161s0f0: polls 1425822, frames/poll 25.4, full budget 3.7%, gaps >50 us before a full poll 55, polls >50 us 464
+  enp164s0f0: polls 1458326, frames/poll 24.5, full budget 4.1%, gaps >50 us before a full poll 72, polls >50 us 455
+  pp_region_alloc 426355, refill_timer 1324
+  @left_h: [48, 64) 7898; [64, 80) 770761; [80, 96) 364922; [96, 112) 939338; [112, 128) 339940
+  @gap_full_us: [0] 2314; [1] 9324; [2, 4) 23896; [4, 8) 4964; [8, 16) 70535; [16, 32) 488; [32, 64) 554; [64, 128) 43
+  @dur_us: [0] 531977; [1] 331129; [2, 4) 52259; [4, 8) 111590; [8, 16) 357440; [16, 32) 864673; [32, 64) 635048; [64, 128) 32
+== t2-r435: total 67.11 GB/s; twoport ring drops in the window 10862
+  ring ffff00807bcb2000: size 128, refills 301710, left <32 0, left 0 0, short 0 by 0, posted 11154216
+  ring ffff00807bcb2480: size 128, refills 304737, left <32 0, left 0 0, short 0 by 0, posted 11293839
+  ring ffff00807bcb2900: size 128, refills 304269, left <32 0, left 0 0, short 0 by 0, posted 11178582
+  ring ffff00807bcb2d80: size 128, refills 301830, left <32 0, left 0 0, short 0 by 0, posted 11292210
+  ring ffff00811ada4000: size 128, refills 301059, left <32 0, left 0 0, short 0 by 0, posted 10929676
+  ring ffff00811ada4480: size 128, refills 302545, left <32 0, left 0 0, short 0 by 0, posted 11050995
+  ring ffff00811ada4900: size 128, refills 303981, left <32 0, left 0 0, short 0 by 0, posted 11136567
+  ring ffff00811ada4d80: size 128, refills 306688, left <32 0, left 0 0, short 0 by 0, posted 11495895
+  rings: refills 2426819, left <32 0, left 0 0, short 0 (by 0 buffers), posted 89531980
+  enp161s0f0: polls 1461865, frames/poll 24.5, full budget 3.8%, gaps >50 us before a full poll 66, polls >50 us 538
+  enp164s0f0: polls 1455490, frames/poll 24.8, full budget 4.6%, gaps >50 us before a full poll 69, polls >50 us 526
+  pp_region_alloc 425591, refill_timer 1328
+  @left_h: [48, 64) 8213; [64, 80) 760236; [80, 96) 369029; [96, 112) 941084; [112, 128) 348257
+  @gap_full_us: [0] 2450; [1] 9357; [2, 4) 26466; [4, 8) 5378; [8, 16) 78805; [16, 32) 591; [32, 64) 566; [64, 128) 46; [128, 256) 2
+  @dur_us: [0] 525934; [1] 364041; [2, 4) 53005; [4, 8) 114431; [8, 16) 360079; [16, 32) 869467; [32, 64) 630346; [64, 128) 52

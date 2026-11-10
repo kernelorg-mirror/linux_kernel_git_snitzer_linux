@@ -1,0 +1,14 @@
+// short.bt SECS: light.  At xeu_rx_refill_retry_if_short(rxr), called
+// right after each refill, the ring's empty slots (size - (prod - cons),
+// from rxr+70, +10, +14): 0 if the refill posted all it was asked, at
+// least rx_refill_thresh (8) when the retry timer is armed.  Also each
+// refill's request and the timer's firings.  No probe on the polls.
+kprobe:xeu_rx_refill.isra.0 /arg0 >= 0xffff000000000000/ { @refills = count(); @asked = sum(arg1 & 0xffff); }
+kprobe:xeu_rx_refill_retry_if_short /arg0 >= 0xffff000000000000/ {
+	$r = arg0;
+	$e = (int64)*(uint16 *)($r + 70) - (((int64)*(uint16 *)($r + 10) - (int64)*(uint16 *)($r + 14)) & 0xffff);
+	@empty_after = lhist($e, 0, 129, 8);
+	if ($e >= 8) { @armed[$r] = count(); @armed_empty = sum($e); }
+}
+kprobe:xeu_rx_refill_timer { @timer = count(); }
+interval:s:$1 { exit(); }

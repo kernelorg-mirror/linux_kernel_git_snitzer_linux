@@ -15,15 +15,16 @@ time, under 10 ms.  Mike (10 November): the next area is the refill path.
 `kmod-xsight-2.0.1.tar.gz` with kernel-rpmtree's `xsight/` patches 0 to 13
 applied as the spec's `%autosetup -p0` does; its module parameters are
 exactly the loaded `xeu.ko`'s.  Live: `rx_refill_thresh` 8,
-`rx_buf_size` 8192 (two buffers a 16 KiB page), rings of 256 (read from
-the ring itself: `twoport.sh`'s `ENTRIES` default).  So a ring has 2 MiB
-posted, about 220 us at the 9 GB/s each of a port's four rings takes.
+`rx_buf_size` 8192 (two buffers a 16 KiB page), rings of 128 under load
+(`twoport.sh`'s two-port `ENTRIES=128`; 256 at rest, which is what a
+first look read).  So a ring has 1 MiB posted, about 110 us at the 9
+GB/s each of a port's four rings takes.
 
 - A ring is refilled only at the end of `xeu_rx_poll()`, once at least
   `rx_refill_thresh` slots are empty (`xeu_rx_refill()`, buffers from
   the ring's page pool, which the receive region backs).
 - A refill that leaves the ring short arms a timer to poll again in
-  `XEU_RX_REFILL_RETRY_USECS`, 1000 us: about four ring lifetimes.
+  `XEU_RX_REFILL_RETRY_USECS`, 1000 us: about nine ring lifetimes.
 - A failed allocation prints "Failed to allocate Rx page from pool"
   (rate limited).  There has been none since this boot.
 - Reading the ring counters (`ethtool -S`, `ndo_get_stats64`) waits on
@@ -43,3 +44,31 @@ and each poll's length.  Then the retry timer, NULL returns of
 `page_pool_alloc_pages`, the page pool's slow path and the region's
 allocations.  T U T, `t2-r433..r435`: 10 s traced from the start of
 twoport's window, against an untraced run, for what the trace costs.
+
+## Result (`t2-r433..r435`, `refread-r433-r435.txt`)
+
+| run | | GB/s | twoport's ring drops (10 s window) |
+|---|---|---|---|
+| t2-r433 | traced | 67.22 | 10,780 |
+| t2-r434 | untraced | 71.84 | 2,100 |
+| t2-r435 | traced | 67.11 | 10,862 |
+
+- **The trace is far too heavy:** 4.6 GB/s less and five times the
+  drops.  Its probes on every poll (about 290,000 a second, plus the
+  tracepoint) cost the ring CPUs that much, so its timings (gaps, poll
+  lengths) are of a disturbed system and are not used.
+- **Seen from the driver, no ring came near running out at a refill:**
+  of 2.42 million refills in 10 s, every one found at least 48 of the
+  ring's 128 buffers still posted (most 64 to 128).  The driver's count
+  of posted buffers includes those the card has already filled and the
+  poll has not reached, so this does not say the card had free buffers.
+- **No allocation failed:** no NULL from `page_pool_alloc_pages`, no
+  slow path; the region gave 426,000 pages to the pools' stacks.
+- **But the retry timer fired about 1,326 times in 10 s**, about 133 a
+  second, and only a refill that leaves 8 or more slots empty arms it,
+  where the trace's own measure (the producer index at a ring's next
+  refill) found no refill short.  One of the two is wrong.
+
+**Next (`short.bt`, `t2-r436`):** a light trace, no probe on the polls:
+at `xeu_rx_refill_retry_if_short()`, right after each refill, how many
+slots the ring still has empty, and the timer.

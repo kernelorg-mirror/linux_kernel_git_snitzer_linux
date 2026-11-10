@@ -1,0 +1,3 @@
+23:05:53 t2-r433 T | total 67.22 GB/s | WRITEs 55420 | ring drops 10780 | retransmits 11231 | far 0.0%/0.0% | new kernel warnings 0
+23:10:49 t2-r434 U | total 71.84 GB/s | WRITEs 68643 | ring drops 2100 | retransmits 2210 | far 0.0%/0.0% | new kernel warnings 0
+23:15:46 t2-r435 T | total 67.11 GB/s | WRITEs 56000 | ring drops 10862 | retransmits 11171 | far 0.0%/0.0% | new kernel warnings 0
