@@ -1,0 +1,50 @@
+t2-r369 under rx_loan_table_release: 14026 cycles a WRITE
+ by called from:
+    13990  99.7%  svc_tcp_rx_release_refs
+       33   0.2%  svc_tcp_release_ctxt
+        3   0.0%  svc_tcp_rx_publish
+ by direct callee:
+     8804  62.8%  rx_loan_put_run
+     3282  23.4%  (self)
+     1923  13.7%  page_pool_put_netmem_bulk
+        7   0.0%  __pi_memset_generic
+        5   0.0%  page_pool_recycle_ring_bulk
+        5   0.0%  __page_pool_page_can_be_recycled
+        1   0.0%  __memset
+ by leaf:
+     3282  23.4%  rx_loan_table_release
+     2829  20.2%  rx_region_page_put
+     2020  14.4%  _raw_spin_unlock_irqrestore
+     1555  11.1%  page_pool_put_netmem_bulk
+     1373   9.8%  rx_region_slot_put
+     1167   8.3%  page_pool_recycle_ring_bulk
+      705   5.0%  page_pool_return_netmem
+      402   2.9%  rx_loan_put_run
+      341   2.4%  _raw_spin_lock_bh
+      106   0.8%  __local_bh_enable_ip
+
+t2-r369 under wake_up_process: 5344 cycles a WRITE
+ by called from:
+     3886  72.7%  svc_pool_wake_idle_thread
+     1428  26.7%  svc_pool_hand_idle_thread
+       13   0.2%  process_timeout
+        8   0.2%  __mutex_unlock_slowpath.isra.0
+        4   0.1%  process_one_work
+        3   0.1%  svc_thread_wake_next
+        1   0.0%  svc_pool_enqueue_xprt
+        1   0.0%  call_timer_fn
+        1   0.0%  svc_thread_pass_claim
+        0   0.0%  cpu_stop_queue_work
+ by direct callee:
+     5227  97.8%  _raw_spin_unlock_irqrestore
+      108   2.0%  try_to_wake_up
+        7   0.1%  (self)
+        3   0.0%  _raw_spin_lock_irqsave
+ by leaf:
+     5226  97.8%  _raw_spin_unlock_irqrestore
+      101   1.9%  try_to_wake_up
+        8   0.1%  _raw_spin_lock_irqsave
+        7   0.1%  wake_up_process
+        2   0.0%  __srcu_read_lock_fast.constprop.0
+        1   0.0%  handle_softirqs
+

@@ -232,6 +232,16 @@ works.  `bringup.sh 32768 256` armed kdump (`kexec_crash_loaded` 1), and
 `settled.sh apply` ends in "the settled setting".  The profile for the
 next round's focus is round 88, `FLAMEGRAPH/88-build522-baseline/`.
 
+**Round 88, the profile on build 522 (10 November, `t2-r367..r370`):**
+69.89 and 70.63 GB/s at 242.9k and 244.8k nfsd cycles a WRITE, as round
+76; round 87's prefetch shows (`__rx_loan_table_append_ref` 3.2k against
+4.3k); the region's exact peak 11,919.  By the call graph: sleeping,
+waking and interrupts hidden at IRQ enable about 33k, the loan's receive
+bookkeeping about 22k, block submit 21.7k, the loan's release 14.0k, the
+qdisc lock about 7k.  Suggested next: the release (`rx_loan_put_run()`
+8.8k, 2.0k of it with interrupts off under the region's lock), traced
+before any code.  `FLAMEGRAPH/88-build522-baseline/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

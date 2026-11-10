@@ -1,0 +1,4 @@
+01:31:37 t2-r367 C | total 69.89 GB/s | WRITEs 66533 | retransmits 961 | region pages in use at most: 9464 | new kernel warnings 0
+01:36:43 t2-r368 C | total 70.63 GB/s | WRITEs 67315 | retransmits 1477 | region pages in use at most: 11083 | new kernel warnings 0
+01:42:25 t2-r369 G | total 69.98 GB/s | WRITEs 66520 | retransmits 1215 | region pages in use at most: 9241 | new kernel warnings 0
+01:47:21 t2-r370 H | total 70.86 GB/s | WRITEs 67344 | retransmits 1097 | region pages in use at most (the kernel's mark, exact): 11919 | new kernel warnings 0
