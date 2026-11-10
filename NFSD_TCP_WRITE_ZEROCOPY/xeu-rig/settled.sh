@@ -179,8 +179,13 @@ REGION_PAGES=32768
 # WRITE, and held about 23% fewer of the region's pages on average, with a
 # lower peak.  It is read when a pool is made, so apply opens the ports again
 # when it changes it; set by hand, it waits for the next open.
+# 96 since 10 November (Mike), from FLAMEGRAPH round 90 on build 522 in
+# loan mode on two ports: 2.9k fewer nfsd cycles a WRITE than 64 (1.2%,
+# the overflow to the region's slot caches 5.1k to 3.7k), and a held peak
+# four pairs could not tell from 64's (+302 pages mean, 4k spread).  128
+# saved more but raised the peak 1,596 pages and denied loans in 3 of 3.
 # EXP_RX_REGION_STACK holds a run to another depth.
-RX_REGION_STACK=64
+RX_REGION_STACK=96
 # The data drives' filesystems are mounted lazytime: FLAMEGRAPH round 47 (31
 # October), nfsd 292.0k to 287.8k cycles a loaned WRITE (-1.5%), three runs a
 # side, the rate and the region's peak the same.  Each reply's post-op

@@ -119,3 +119,7 @@ at 64 in the settled setting at the end.
 `t2-r374` and `t2-r377` against `t2-r373` and `t2-r378`) for a held peak
 that four pairs cannot tell from 64's.  Keeping it is a change to
 `settled.sh` (`RX_REGION_STACK=96`); leaving it at 64 changes nothing.
+
+**Kept (Mike, 10 November): `settled.sh` holds `RX_REGION_STACK=96`.**
+Its region figures are watched in the rounds after: a peak that settles
+above 64's from here is a reason to go back.

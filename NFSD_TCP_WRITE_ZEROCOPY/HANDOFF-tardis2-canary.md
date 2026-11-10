@@ -262,8 +262,8 @@ is not to be kept (the footprint).  Three more held-mark
 pairs at 64 and 96 (`t2-r382..r387`): the exact peak 10,453 at 64 and
 10,755 at 96 on average over four pairs, +302 against a spread of 4k
 between runs, so not shown either way; a run at 64 also denied loans
-(240).  Keeping 96 (-2.9k cycles a WRITE) is Mike's call.  The stack is
-back at 64.  `FLAMEGRAPH/90-stack-size/README.md`.
+(240).  **Mike kept 96 (10 November): `settled.sh` holds
+`RX_REGION_STACK=96`.**  `FLAMEGRAPH/90-stack-size/README.md`.
 
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
