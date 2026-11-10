@@ -1,0 +1,102 @@
+#!/usr/bin/bpftrace
+/*
+ * rel.bt: round 89, the loan's release and where its pages go.
+ *   - rx_loan_table_release(): calls (one a loaned record), the table's
+ *     entries and borrowed entries, the time a call (nfsd);
+ *   - rx_loan_put_run(): runs of entries on one page, references a run;
+ *   - page_pool_put_netmem_bulk(): calls and pages a call, by caller;
+ *   - page_pool_recycle_ring_bulk(): calls, pages a call, the pool's stack
+ *     depth at the call, and the pages that cannot fit (the overflow);
+ *   - page_pool_return_netmem(): pages that left their pool one at a time,
+ *     and of them rx_region_page_put(), rx_region_slot_put() (the slot's
+ *     per-CPU cache, a lock with interrupts off for each page, timed from
+ *     entry to exit) and page_pool_rx_region_put() (the shards);
+ *   - the way back: page_pool_rx_stack_refill(), page_pool_rx_region_alloc(),
+ *     rx_region_slot_take(), page_pool_dma_map(), napi_pp_put_page().
+ * Callers are "nfsd" (comm) or "other" (the rings' softirqs and the rest).
+ * No probe runs under a lock: rx_region_push() and rx_region_drain() run
+ * under the slot's or the cache's lock and are not probed (round 58).
+ *     timeout -s INT 10 bpftrace rel.bt
+ */
+config = { missing_probes = "warn"; max_map_keys = 65536 }
+
+BEGIN { @t0 = nsecs; }
+
+fentry:nfsd:nfsd3_proc_write { @writes = count(); }
+
+fentry:vmlinux:rx_loan_table_release
+{
+	@release = count();
+	@rel_entries = lhist(args.t->count, 0, 256, 8);
+	@rel_borrowed = lhist(args.t->borrowed_count, 0, 256, 8);
+	@sum["entries"] = sum(args.t->count);
+	@sum["borrowed"] = sum(args.t->borrowed_count);
+	@rl[tid] = nsecs;
+}
+fexit:vmlinux:rx_loan_table_release
+/@rl[tid]/
+{
+	$d = nsecs - @rl[tid];
+	@rel_ns = hist($d);
+	@ns_sum["table_release"] = sum($d);
+	delete(@rl[tid]);
+}
+
+fentry:vmlinux:rx_loan_put_run
+{
+	@run_refs = lhist(args.refs, 0, 9, 1);
+	@sum["runs"] = sum(1);
+	@sum["run refs"] = sum(args.refs);
+}
+
+fentry:vmlinux:page_pool_put_netmem_bulk
+{
+	@bulk_calls[comm == "nfsd" ? "nfsd" : "other"] = count();
+	@bulk_pages[comm == "nfsd" ? "nfsd" : "other"] = sum(args.count);
+	if (comm == "nfsd") { @bulk_len_nfsd = lhist(args.count, 0, 17, 1); }
+}
+
+fentry:vmlinux:page_pool_recycle_ring_bulk
+{
+	$g = comm == "nfsd" ? "nfsd" : "other";
+	$n = args.pool->rx_stack_n;
+	$size = args.pool->rx_stack_size;
+	$room = $size > $n ? $size - $n : 0;
+	@ring_calls[$g] = count();
+	@ring_pages[$g] = sum(args.bulk_len);
+	@ring_over[$g] = sum(args.bulk_len > $room ? args.bulk_len - $room : 0);
+	@ring_over_calls[$g] = sum(args.bulk_len > $room ? 1 : 0);
+	@stack_depth[$g] = lhist($n, 0, 1025, 8);
+}
+
+fentry:vmlinux:page_pool_return_netmem { @return_one[comm == "nfsd" ? "nfsd" : "other"] = count(); }
+fentry:vmlinux:rx_region_page_put { @region_page_put[comm == "nfsd" ? "nfsd" : "other"] = count(); }
+fentry:vmlinux:page_pool_rx_region_put { @region_shard_put[comm == "nfsd" ? "nfsd" : "other"] = count(); }
+
+fentry:vmlinux:rx_region_slot_put
+{
+	@slot_put[comm == "nfsd" ? "nfsd" : "other"] = count();
+	@sp[tid] = nsecs;
+}
+fexit:vmlinux:rx_region_slot_put
+/@sp[tid]/
+{
+	$d = nsecs - @sp[tid];
+	@slot_put_ns = hist($d);
+	@ns_sum["slot_put"] = sum($d);
+	if (!retval) { @slot_put_refused = count(); }
+	delete(@sp[tid]);
+}
+
+fentry:vmlinux:page_pool_rx_stack_refill { @stack_refill[comm == "nfsd" ? "nfsd" : "other"] = count(); }
+fentry:vmlinux:page_pool_rx_region_alloc { @region_alloc[comm == "nfsd" ? "nfsd" : "other"] = count(); }
+fentry:vmlinux:rx_region_slot_take { @slot_take[comm == "nfsd" ? "nfsd" : "other"] = count(); }
+fexit:vmlinux:rx_region_slot_take { @slot_take_pages = sum(retval); }
+fentry:vmlinux:page_pool_dma_map { @dma_map[comm == "nfsd" ? "nfsd" : "other"] = count(); }
+fentry:vmlinux:napi_pp_put_page { @napi_pp_put[comm == "nfsd" ? "nfsd" : "other"] = count(); }
+
+END
+{
+	printf("traced_us %d\n", (uint64)(nsecs - @t0) / 1000);
+	clear(@rl); clear(@sp);
+}
