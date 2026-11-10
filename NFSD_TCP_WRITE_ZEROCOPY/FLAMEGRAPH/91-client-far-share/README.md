@@ -137,6 +137,26 @@ one's module root.  Arms: A, the WQ_SYSFS build as stock runs it; S, the
 same with `affinity_strict` 1 on both workqueues; F, the series as it is
 (`xprt_numa_map` Y).  A S F F S A A S F from `t2-r398`, as round 90's.
 
+
+### Result (`t2-r398..r406`)
+
+| arm | runs | GB/s | mean | far share | client idle | ring drops | retransmits |
+|---|---|---|---|---|---|---|---|
+| A | r398, r403, r404 | 69.36, 70.07, 70.58 | **70.00** | 2.6% to 3.3% | 26.0% | 696 | 760 |
+| S | r399, r402, r405 | 71.69, 71.50, 71.58 | **71.59** | **0.0%** | 31.1% | 1,826 | 1,936 |
+| F | r400, r401, r406 | 70.13, 70.91, 71.10 | **70.71** | 0.9% to 1.6% | 31.0% | 1,736 | 1,820 |
+
+- **S: no far sends, 5 points more client idle and +1.59 GB/s over A,
+  every S run above every A run.**  In `t2-r392..r397` S was only +0.13
+  over A; the difference is A's (70.00 here, 71.53 there), and this A is
+  every module on sunrpc rebuilt where that A was `sunrpc.ko` alone.  To
+  be seen again before it is believed.
+- **F: the same client idle as S, but 0.9% to 1.6% of the sends still
+  from the far node and +0.71 GB/s over A**, below S in every pair.
+- **Ring drops and retransmits go with every client change**: A's are
+  the fewest, S's and F's two to three times as many.
+- All nine clean; the client back on stock at the end.
+
 **Then F with `xprtiod` strict (`run407.sh`).**  In its first two runs
 F left 0.9% to 1.6% of the sends on the far node, where S leaves none:
 F's `rpciod` is per-CPU, but `xprtiod` is still unbound and not strict.
