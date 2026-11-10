@@ -189,6 +189,12 @@ totals or the rate.  The region's exact peak is not raised (10,400 off,
 yet run as committed), and dropped the release's.
 `FLAMEGRAPH/86-table-prefetch/README.md`.
 
+**Round 87, the appends' prefetch as committed (10 November, `t2-r363..r366`):**
+confirmed against the canary's own sunrpc built the same way:
+`__rx_loan_table_append_ref()` -1,078 cycles a WRITE for 331 in the
+prefetches, 71.03 against 71.29 GB/s, the region's exact peak 11,928
+against 9,843.  `FLAMEGRAPH/87-append-prefetch-confirm/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

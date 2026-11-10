@@ -1,0 +1,5 @@
+00:05:33 t2-r363 A sunrpc BF7C91691266656E8821694 | total 71.03 GB/s | WRITEs 67642, threads woken 292174 | retransmits 1839 | 11254 | new kernel warnings 0
+00:11:08 t2-r364 B sunrpc 55B4437DF708ECC9DABBE9E | total 71.29 GB/s | WRITEs 67949, threads woken 289922 | retransmits 2417 | 9168 | new kernel warnings 0
+00:16:17 t2-r365 AH sunrpc BF7C91691266656E8821694 | total 69.99 GB/s | WRITEs 66677, threads woken 293553 | retransmits 1097 | 11928 | new kernel warnings 0
+00:21:26 t2-r366 BH sunrpc 55B4437DF708ECC9DABBE9E | total 69.85 GB/s | WRITEs 66628, threads woken 291233 | retransmits 1293 | 9843 | new kernel warnings 0
+00:21:46 stock: sunrpc 2A2297D3850E37768921BCC, /lib/modules/7.3.3-13.hs.519.canary.el10.aarch64+16k/kernel/net/sunrpc/sunrpc.ko.xz, updates: , settled.sh audit rest: the settled setting
