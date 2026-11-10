@@ -1,0 +1,146 @@
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/89-release-trace/rel.bt:39:7-12: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @rl[tid];
+         ~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/89-release-trace/rel.bt:39:15-23: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @rl[tid];
+                 ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/89-release-trace/rel.bt:84:7-12: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @sp[tid];
+         ~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/89-release-trace/rel.bt:84:15-23: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $d = nsecs - @sp[tid];
+                 ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/89-release-trace/rel.bt:100:36-41: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    printf("traced_us %d\n", (uint64)(nsecs - @t0) / 1000);
+                                      ~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/89-release-trace/rel.bt:100:44-47: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    printf("traced_us %d\n", (uint64)(nsecs - @t0) / 1000);
+                                              ~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/89-release-trace/rel.bt:42:2-18: WARNING: Return value discarded.
+    delete(@rl[tid]);
+    ~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/89-release-trace/rel.bt:88:2-18: WARNING: Return value discarded.
+    delete(@sp[tid]);
+    ~~~~~~~~~~~~~~~~
+Attached 19 probes
+traced_us 10554082
+
+
+@bulk_calls[nfsd]: 3172171
+@bulk_len_nfsd:
+[1]                13969 |                                                    |
+[2]                11015 |                                                    |
+[3]                 8933 |                                                    |
+[4]                11653 |                                                    |
+[5]                27206 |                                                    |
+[6]                53575 |@                                                   |
+[7]                78584 |@                                                   |
+[8]                84681 |@                                                   |
+[9]                75076 |@                                                   |
+[10]               63046 |@                                                   |
+[11]               51540 |@                                                   |
+[12]               42483 |                                                    |
+[13]               33925 |                                                    |
+[14]               27564 |                                                    |
+[15]               22163 |                                                    |
+[16]             2566758 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@bulk_pages[nfsd]: 46404800
+@napi_pp_put[other]: 2802
+@napi_pp_put[nfsd]: 6750003
+@ns_sum[slot_put]: 3528936844
+@ns_sum[table_release]: 33327375461
+@region_alloc[other]: 477813
+@region_page_put[nfsd]: 9242611
+@rel_borrowed:
+[0, 8)             83594 |@@@@@@                                              |
+[8, 16)                0 |                                                    |
+[16, 24)               0 |                                                    |
+[24, 32)               0 |                                                    |
+[32, 40)               0 |                                                    |
+[40, 48)               0 |                                                    |
+[48, 56)               0 |                                                    |
+[56, 64)               0 |                                                    |
+[64, 72)               0 |                                                    |
+[72, 80)               0 |                                                    |
+[80, 88)               0 |                                                    |
+[88, 96)               0 |                                                    |
+[96, 104)              0 |                                                    |
+[104, 112)             0 |                                                    |
+[112, 120)             0 |                                                    |
+[120, 128)             0 |                                                    |
+[128, 136)             0 |                                                    |
+[136, 144)        668707 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@rel_entries:
+[0, 8)             83594 |@@@@@@                                              |
+[8, 16)                0 |                                                    |
+[16, 24)               0 |                                                    |
+[24, 32)               0 |                                                    |
+[32, 40)               0 |                                                    |
+[40, 48)               0 |                                                    |
+[48, 56)               0 |                                                    |
+[56, 64)               0 |                                                    |
+[64, 72)               0 |                                                    |
+[72, 80)               0 |                                                    |
+[80, 88)               0 |                                                    |
+[88, 96)               0 |                                                    |
+[96, 104)              0 |                                                    |
+[104, 112)             0 |                                                    |
+[112, 120)             0 |                                                    |
+[120, 128)             0 |                                                    |
+[128, 136)             0 |                                                    |
+[136, 144)        668707 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@rel_ns:
+[256, 512)         12506 |@@                                                  |
+[512, 1K)          59548 |@@@@@@@@@@@@@                                       |
+[1K, 2K)           11201 |@@                                                  |
+[2K, 4K)             900 |                                                    |
+[4K, 8K)           12084 |@@                                                  |
+[8K, 16K)          20563 |@@@@                                                |
+[16K, 32K)        229672 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[32K, 64K)        218848 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   |
+[64K, 128K)       181297 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@           |
+[128K, 256K)        5401 |@                                                   |
+
+@release: 752301
+@return_one[nfsd]: 9698434
+@ring_calls[nfsd]: 3045404
+@ring_over[nfsd]: 10247686
+@ring_over_calls[nfsd]: 955748
+@ring_pages[nfsd]: 40715028
+@run_refs:
+[1]              8663941 |@@@@@@@@@@@                                         |
+[2]             39799044 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@slot_put[nfsd]: 8393131
+@slot_put_ns:
+[256, 512)       7459565 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[512, 1K)         719772 |@@@@@                                               |
+[1K, 2K)          200357 |@                                                   |
+[2K, 4K)            7630 |                                                    |
+[4K, 8K)            1223 |                                                    |
+[8K, 16K)            235 |                                                    |
+[16K, 32K)           183 |                                                    |
+
+@slot_take[other]: 453221
+@slot_take_pages: 7257424
+@stack_depth[nfsd]:
+[0, 8)            280372 |@@@@@@@@@@@@@@@@@@@@@@@@@                           |
+[8, 16)           131626 |@@@@@@@@@@@                                         |
+[16, 24)          265215 |@@@@@@@@@@@@@@@@@@@@@@@@                            |
+[24, 32)          219125 |@@@@@@@@@@@@@@@@@@@                                 |
+[32, 40)          429164 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@             |
+[40, 48)          310795 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@                        |
+[48, 56)          516722 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@      |
+[56, 64)          320397 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                       |
+[64, 72)          571988 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@stack_refill[other]: 2108456
+@sum[runs]: 48462985
+@sum[run refs]: 88262029
+@sum[entries]: 91273436
+@sum[borrowed]: 91273436
+@t0: 4150036070849
+@writes: 690262

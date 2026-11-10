@@ -1,0 +1,23 @@
+a WRITE                              t2-r371   t2-r372
+WRITEs traced                         690262    674713
+releases                                1.09      1.09
+table entries                         132.23    132.39
+runs (pages put)                       70.21     70.12
+  of them 2 refs                       57.66     58.13
+pages into bulk                        67.23     67.41
+bulk calls                              4.60      4.61
+pages to the stack (ring_bulk)         58.98     59.30
+ring_bulk calls                         4.41      4.42
+  of them overflowing                   1.38      1.40
+pages overflowing the stack            14.85     14.99
+page_pool_return_netmem, nfsd          14.05     14.23
+rx_region_page_put, nfsd               13.39     13.58
+rx_region_slot_put, nfsd               12.16     12.38
+page_pool_rx_region_put, nfsd              0         0
+rings: stack refills                    3.05      3.09
+rings: region allocs                    0.69      0.71
+rings: pages from slot caches          10.51     10.74
+rings: DMA maps                            0         0
+napi_pp_put_page, nfsd                  9.78     10.00
+slot_put ns (traced)                 5112.46   5208.73
+table_release ns (traced)           48282.21  48484.53

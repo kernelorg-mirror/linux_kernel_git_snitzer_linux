@@ -242,6 +242,17 @@ qdisc lock about 7k.  Suggested next: the release (`rx_loan_put_run()`
 8.8k, 2.0k of it with interrupts off under the region's lock), traced
 before any code.  `FLAMEGRAPH/88-build522-baseline/README.md`.
 
+**Round 89, the release traced (10 November, `t2-r371`, `t2-r372`):** a
+WRITE returns 70 pages, 59 of them as their pool's last reference.  15 of
+those (25%) find the pool's 64-entry stack full and go back to the region
+one at a time, each under the slot cache's irqsave lock: about 7k of the
+release's 14k cycles a WRITE.  The rings take 10.5 of them back from the
+slots.  Nothing escaped.  The bulk return of this overflow was dropped on
+7 November (no fewer cycles), so the suggested next is fewer pages over:
+`rx_region_stack` 64 against 96 and 128, a setting, measured with the
+region's held peak (at most 512 more pages held).
+`FLAMEGRAPH/89-release-trace/README.md`.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
