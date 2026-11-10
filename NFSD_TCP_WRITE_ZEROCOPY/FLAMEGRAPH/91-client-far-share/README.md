@@ -256,3 +256,41 @@ the two do not contend for the lock.  Beside it, `napi.bt` counts the
 ring CPUs' NAPI polls in the same 10 ms buckets, with the frames taken
 and the polls that used their whole budget.  S FX GX GX FX S S FX GX,
 `t2-r423..r431`.
+
+### Result (`t2-r423..r431`, `msread-r423-r431.txt`)
+
+| arm | runs | GB/s | mean | client idle | twoport's ring drops (10 s window) |
+|---|---|---|---|---|---|
+| S | r423, r428, r429 | 70.59, 71.26, 71.04 | 70.96 | 31.4% | 2,964, 1,444, 1,333 |
+| FX | r424, r427, r430 | 71.08, 70.26, 70.94 | 70.76 | 33.3% | 3,049, 1,718, 2,172 |
+| GX | r425, r426, r431 | 70.67, 70.83, 69.03 | 70.18 | **33.7%** | 2,092, 2,094, 3,206 |
+
+At 10 ms (10 s a run, both ports, on CPU 55):
+
+| arm | drops a port | 10 ms intervals with drops | worst 1% of intervals hold | longest run | frames a 10 ms, spread | NAPI polls at full budget |
+|---|---|---|---|---|---|---|
+| S | 840 | 20% | 15% | 48 ms | 4% | 3.7% |
+| FX | 872 | 24% | 14% | 53 ms | 5% | 3.9% |
+| GX | 1,056 | 26% | 12% | 57 ms | 5% | 3.9% |
+
+- **The counters are fresh at 10 ms:** no interval of any run is empty
+  of frames (about 45,000 a port), so the card counts in real time and
+  the mailbox read gives each 10 ms its own.
+- **The drops are a trickle, not bursts, even at 10 ms.**  A fifth to a
+  quarter of 10 ms intervals have any; the worst has 11 to 45; the worst
+  1% hold only 10% to 18%.  Frames per 10 ms vary 4% to 9%, and drops do
+  not follow them (corr -0.07 to +0.10), nor the ring CPUs' polls that
+  used their whole budget (-0.19 to +0.14, the same bucket or the next).
+  So nothing the client does at 10 ms, nor the host's polling falling
+  behind at 10 ms, explains them: a ring runs out of buffers for a few
+  frames at a time scale under 10 ms.  Page pool drops are steady, about
+  175 and 88 a port in 10 s, in every arm.
+- **FX's extra drops did not repeat.**  Here FX drops about what S drops
+  (872 against 840 a port at 10 ms; 2,313 against 1,914 in twoport's 10 s
+  window), where `t2-r411..r422` had it at about twice.  The drops spread
+  more from run to run than between the arms (S: 1,333 to 2,964).  The 10
+  ms sampler runs in every arm here, so it may also change them.
+- **GX: the first leg in the caller is not what saves the client's CPU.**
+  Without it the client idles 33.7%, as much as or more than FX's 33.3%;
+  its rate is 70.18, pulled down by `t2-r431` (69.03, port b dropping
+  most), and its drops a little above FX's.
