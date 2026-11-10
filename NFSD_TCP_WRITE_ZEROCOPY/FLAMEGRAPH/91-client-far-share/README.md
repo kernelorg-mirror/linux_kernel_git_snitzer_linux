@@ -136,3 +136,11 @@ client for both branches (`cbuild.sh`), loaded by `cswap.sh` from each
 one's module root.  Arms: A, the WQ_SYSFS build as stock runs it; S, the
 same with `affinity_strict` 1 on both workqueues; F, the series as it is
 (`xprt_numa_map` Y).  A S F F S A A S F from `t2-r398`, as round 90's.
+
+**Then F with `xprtiod` strict (`run407.sh`).**  In its first two runs
+F left 0.9% to 1.6% of the sends on the far node, where S leaves none:
+F's `rpciod` is per-CPU, but `xprtiod` is still unbound and not strict.
+Mike (10 November): add that arm, FX (F's modules, `affinity_strict` 1 on
+`xprtiod`).  Whether what is left is `xprtiod`'s is tested, not assumed:
+the first F run and the first FX run carry round 91's client trace of the
+far sends.  F T, FX T, FX, FX from `t2-r407`.
