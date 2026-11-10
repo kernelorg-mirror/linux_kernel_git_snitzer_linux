@@ -273,8 +273,10 @@ more at the same rate, with half again as many ring drops on tardis2.
 The change is `kernel-7.3/hs-469.sunrpc-wq-sysfs`, from the client's
 tag; this tree's client series picked onto it is
 `kernel-7.3/hs-469.client-sunrpc`.  The account and how to build and
-swap the client's modules: `CLIENT-SUNRPC.md`.  The client runs its
-stock modules between rounds; a reboot of it brings them back too.
+swap the client's modules: `CLIENT-SUNRPC.md`.  **Settled (Mike, 10
+November): the client runs the WQ_SYSFS `sunrpc.ko` from its
+`updates/` with both workqueues strict (a udev rule), and `twoport.sh`
+refuses a run without it (`CLI_STRICT=1`).**
 
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In

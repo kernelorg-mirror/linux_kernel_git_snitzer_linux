@@ -85,6 +85,11 @@
 #   CLI_SCOPE=<s>    the client's workqueue default_affinity_scope for the run (numa,
 #                    since 7 November: its sunrpc kworkers start on the node of the CPU
 #                    that queues their work; t2-r215 to t2-r220), put back after it
+#   CLI_STRICT=0     run with the client's rpciod and xprtiod not held to a node (1,
+#                    the default since 10 November: affinity_strict 1 on both, which
+#                    its sunrpc.ko in updates/ (WQ_SYSFS) allows and a udev rule
+#                    sets; a client without them refuses to run: FLAMEGRAPH round 91,
+#                    CLIENT-SUNRPC.md)
 #   CLI_IRQB=keep    leave the client's irqbalance running (it is stopped for the run
 #                    and started again after it, so the NICs' interrupts stay put)
 #   PIN=0            leave the client's writers unpinned (PIN=1, the default since
@@ -128,7 +133,7 @@ declare -A CLI=([a]=${CLIP[a]} [b]=${CLIP[b]}) FS=([a]="${FS_A:-${PFS[a]}}" [b]=
 declare -A IRQ0=([a]=0 [b]=56) FSID=([a]=7701 [b]=7702) TXIRQ=([a]=${TXIRQ_A:-} [b]=${TXIRQ_B:-})
 declare -A NFS	# how many filesystems each port has
 declare -A CPUS=([a]=0-23 [b]=24-47)	# the client's CPUs on each port's NUMA node, for PIN=1
-PIN=${PIN:-1} CLI_SCOPE=${CLI_SCOPE:-numa} CLI_IRQB=${CLI_IRQB:-stop}
+PIN=${PIN:-1} CLI_SCOPE=${CLI_SCOPE:-numa} CLI_IRQB=${CLI_IRQB:-stop} CLI_STRICT=${CLI_STRICT:-1}
 WQS=/sys/module/workqueue/parameters/default_affinity_scope
 PORTS=$(sed 's/./& /g' <<< "$WHICH")
 SSHC="ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -i $KEY root@$CLIMGMT"	# not over a port under test
@@ -242,8 +247,12 @@ for e in $WREV; do grep -q '^hist:' $T/events/nfsd/$e/trigger 2>/dev/null || ech
 # workqueue scope that places its sunrpc kworkers, and its irqbalance stopped.
 SAVE[cscope]=$(cl "cat $WQS"); SAVE[cirqb]=$(cl "systemctl is-active irqbalance")
 cl "echo $CLI_SCOPE > $WQS" && [ "$(cl "cat $WQS")" = $CLI_SCOPE ] || { echo "the client's workqueue scope not set to $CLI_SCOPE"; exit 1; }
+# rpciod and xprtiod held to the node of the CPU that queues their work
+# (affinity_strict): none of the client's sends leaves from the far node.
+cl "for w in rpciod xprtiod; do d=/sys/devices/virtual/workqueue/\$w; [ -e \$d/affinity_strict ] || exit 1; echo $CLI_STRICT > \$d/affinity_strict; [ \$(cat \$d/affinity_strict) = $CLI_STRICT ] || exit 1; done" ||
+	{ [ $CLI_STRICT = 0 ] || { echo "the client's rpciod and xprtiod not made strict: is its sunrpc.ko the one in updates/ (WQ_SYSFS)? CLI_STRICT=0 runs without"; exit 1; }; }
 [ $CLI_IRQB = stop ] && [ "${SAVE[cirqb]}" = active ] && { cl "systemctl stop irqbalance" || { echo "the client's irqbalance not stopped"; exit 1; }; }
-echo "client: writers pinned $PIN, workqueue scope $(cl "cat $WQS") (was ${SAVE[cscope]}), irqbalance $(cl "systemctl is-active irqbalance") (was ${SAVE[cirqb]})" | tee -a geometry.txt
+echo "client: writers pinned $PIN, workqueue scope $(cl "cat $WQS") (was ${SAVE[cscope]}), rpciod and xprtiod strict $(cl "cat /sys/devices/virtual/workqueue/{rpciod,xprtiod}/affinity_strict 2>/dev/null | paste -sd/" || echo -) (sunrpc $(cl "cat /sys/module/sunrpc/srcversion")), irqbalance $(cl "systemctl is-active irqbalance") (was ${SAVE[cirqb]})" | tee -a geometry.txt
 echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) want_eighths $(cat $SP/svc_tcp_rx_want_eighths 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read) client pin $PIN" | tee -a geometry.txt
 
 for p in $PORTS; do

@@ -4,8 +4,10 @@
 # nfsd's filesystem), unload every module on sunrpc, load KO by path
 # (insmod), or every NFS module from the module root ROOT/ that
 # cbuild.sh made (modprobe -d), or the stock ones (modprobe), and start
-# again what was running, exports and all.  Nothing is installed: a
-# reboot brings stock back.
+# again what was running, exports and all.  "stock" is what modprobe
+# resolves: since 10 November the WQ_SYSFS sunrpc.ko in updates/ with the
+# rpm's NFS modules.  A KO or ROOT/ is loaded, not installed: a reboot
+# brings back what modprobe resolves.
 set -u
 ko=$1
 [ -z "$(findmnt -rn -t nfs,nfs4)" ] || { echo "NFS is mounted"; exit 1; }

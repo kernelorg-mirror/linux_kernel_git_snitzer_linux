@@ -7,6 +7,39 @@ and 24-47 near port b's `ens6np0`) runs Hammerspace build 469,
 (`FLAMEGRAPH/91-client-far-share/README.md`) is the account of what is
 below.
 
+## Settled (Mike, 10 November): S
+
+**The client runs with `rpciod` and `xprtiod` held to the node of the
+CPU that queues their work.**  What is in place on 106:
+
+- `/lib/modules/7.3.0-0.rc7.2.hs.469.el9.x86_64/updates/sunrpc.ko`: the
+  client's tag with `WQ_SYSFS` on both workqueues
+  (`kernel-7.3/hs-469.sunrpc-wq-sysfs`, `4fddf1fecd4b`), srcversion
+  `85AFD4D91848A02D6133EEF`, built on the client against its
+  `kernel-devel` (its source and build in `/root/zc-csunrpc/B/`).  Only
+  `sunrpc.ko`: the rpm's NFS modules load on it unchanged (its exports'
+  CRCs are the rpm's).  `depmod -a` was run; the initramfs has no
+  sunrpc, so every boot loads this one.
+- `/etc/udev/rules.d/99-zc-sunrpc-wq-strict.rules`: `affinity_strict` 1
+  on `rpciod` and `xprtiod` whenever they are made.
+- `xeu-rig/twoport.sh`: `CLI_STRICT=1`, the default, writes and checks
+  `affinity_strict` 1 on both before a run and refuses to run on a client
+  without them; `CLI_STRICT=0` runs without (and writes 0).  Their scope
+  stays `default`, which `CLI_SCOPE` sets to `numa` for a run.  The
+  run's `geometry.txt` names the client's sunrpc srcversion.
+
+To undo: remove the two files, `depmod -a`, and swap sunrpc
+(`FLAMEGRAPH/91-client-far-share/cswap.sh stock`, which loads whatever
+`modprobe` resolves) or reboot the client.  tardis1 shares the client and
+gets this too.  The arms A and F of `run398.sh`, `run407.sh`,
+`run411.sh` and `run423.sh` were run before it: run again, the udev rule
+would make A's and F's workqueues strict too.
+
+Why S and not this tree's series (F, FX, GX below): in round 91 all
+three end the far sends and save 5 to 7 points of the client's CPU at
+rates inside each other's spread, and S is two flags on the client's
+own kernel.
+
 ## Why
 
 `twoport.sh` reports the share of each client port's packets sent from

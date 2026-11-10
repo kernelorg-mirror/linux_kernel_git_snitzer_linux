@@ -294,3 +294,10 @@ At 10 ms (10 s a run, both ports, on CPU 55):
   Without it the client idles 33.7%, as much as or more than FX's 33.3%;
   its rate is 70.18, pulled down by `t2-r431` (69.03, port b dropping
   most), and its drops a little above FX's.
+
+## Settled: S on the client (Mike, 10 November)
+
+The client keeps `rpciod` and `xprtiod` strict from here: its WQ_SYSFS
+`sunrpc.ko` installed in `updates/`, a udev rule that sets
+`affinity_strict`, and `twoport.sh`'s `CLI_STRICT=1` that checks it
+before every run.  The account is "Settled" in `../../CLIENT-SUNRPC.md`.
