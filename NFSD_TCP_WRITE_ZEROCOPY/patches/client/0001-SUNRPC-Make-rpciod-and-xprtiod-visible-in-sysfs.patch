@@ -1,0 +1,50 @@
+From 4fddf1fecd4b107235a124a1eabaef58b3db1339 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Tue, 10 Nov 2026 19:01:45 +0000
+Subject: [PATCH] SUNRPC: Make rpciod and xprtiod visible in sysfs
+
+rpciod and xprtiod are unbound workqueues.  An async task's work is
+queued to the affinity pod of the CPU that queues it, but an unbound
+workqueue's affinity is not strict by default, so the scheduler is free
+to run the worker on any CPU the workqueue allows.  On a two-node NFS
+client whose writers are pinned to the node local to their NIC, with
+the workqueues' affinity scope set to numa, 1.5% to 2.4% of the skbs
+sent on each port were still handed to the driver from the other
+node's CPUs: 97% of them from rpciod running rpc_async_schedule(), the
+rest from xprtiod.
+
+Neither workqueue can be made strict today, because neither is created
+with WQ_SYSFS and so neither has affinity_scope, affinity_strict or
+cpumask under /sys/devices/virtual/workqueue/.  Add WQ_SYSFS to both.
+Nothing changes until an administrator writes those attributes.
+
+With affinity_strict set to 1 on both, the same client sent nothing
+from the other node and spent about 1.7 fewer CPUs at the same
+throughput.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ net/sunrpc/sched.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/net/sunrpc/sched.c b/net/sunrpc/sched.c
+index 76426da6a830..61b21fe447f6 100644
+--- a/net/sunrpc/sched.c
++++ b/net/sunrpc/sched.c
+@@ -1330,11 +1330,11 @@ static int rpciod_start(void)
+ 	/*
+ 	 * Create the rpciod thread and wait for it to start.
+ 	 */
+-	wq = alloc_workqueue("rpciod", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
++	wq = alloc_workqueue("rpciod", WQ_MEM_RECLAIM | WQ_UNBOUND | WQ_SYSFS, 0);
+ 	if (!wq)
+ 		goto out_failed;
+ 	rpciod_workqueue = wq;
+-	wq = alloc_workqueue("xprtiod", WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
++	wq = alloc_workqueue("xprtiod", WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_SYSFS, 0);
+ 	if (!wq)
+ 		goto free_rpciod;
+ 	xprtiod_workqueue = wq;
+-- 
+2.52.0
+

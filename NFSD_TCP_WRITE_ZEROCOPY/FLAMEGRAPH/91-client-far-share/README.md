@@ -123,3 +123,16 @@ which `twoport.sh` sets to `numa` for each run.  Runs A B B A A B,
 - The client is back on its stock `sunrpc.ko` (srcversion
   `1E38773581DFB9A910A824D`) with its NFS server and 16 exports; the two
   workqueues are not in sysfs on it.
+
+## This tree's client series on the client (`run398.sh`)
+
+Mike (10 November): commit the client change with a writeup
+(`../../CLIENT-SUNRPC.md`, the change as
+`kernel-7.3/hs-469.sunrpc-wq-sysfs`), then go further with this tree's
+own client work, factored out onto the client's tag
+(`kernel-7.3/hs-469.client-sunrpc`, eleven commits on the WQ_SYSFS one),
+then look at the extra ring drops.  Every module on sunrpc built on the
+client for both branches (`cbuild.sh`), loaded by `cswap.sh` from each
+one's module root.  Arms: A, the WQ_SYSFS build as stock runs it; S, the
+same with `affinity_strict` 1 on both workqueues; F, the series as it is
+(`xprt_numa_map` Y).  A S F F S A A S F from `t2-r398`, as round 90's.

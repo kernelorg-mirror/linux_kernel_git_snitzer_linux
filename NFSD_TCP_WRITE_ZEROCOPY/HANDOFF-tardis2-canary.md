@@ -265,6 +265,17 @@ between runs, so not shown either way; a run at 64 also denied loans
 (240).  **Mike kept 96 (10 November): `settled.sh` holds
 `RX_REGION_STACK=96`.**  `FLAMEGRAPH/90-stack-size/README.md`.
 
+**Round 91, the client's far sends (10 November, `t2-r388..r397`):**
+on the client 97% of the sends from the far node are `rpciod`'s.  A
+client `sunrpc.ko` with `WQ_SYSFS` on `rpciod` and `xprtiod`, run with
+`affinity_strict` 1, sends nothing from the far node and idles 3.6 points
+more at the same rate, with half again as many ring drops on tardis2.
+The change is `kernel-7.3/hs-469.sunrpc-wq-sysfs`, from the client's
+tag; this tree's client series picked onto it is
+`kernel-7.3/hs-469.client-sunrpc`.  The account and how to build and
+swap the client's modules: `CLIENT-SUNRPC.md`.  The client runs its
+stock modules between rounds; a reboot of it brings them back too.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
