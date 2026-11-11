@@ -1,0 +1,9 @@
+03:24:15 t2-r457 ring 128 mid 48 | total 71.74 GB/s | WRITEs 68302 | ring drops 54 | retransmits 87 | peak 9728 | rings of a (0-7) 18%, rings of b (56-63) 14% | flows placed 12/12 | new kernel warnings 0
+03:29:12 t2-r458 ring 128 mid 64 | total 72.24 GB/s | WRITEs 68786 | ring drops 2035 | retransmits 2153 | peak 8434 | rings of a (0-7) 17%, rings of b (56-63) 14% | flows placed 12/12 | new kernel warnings 0
+03:34:08 t2-r459 ring 128 mid 32 | total 71.94 GB/s | WRITEs 68581 | ring drops 0 | retransmits 32 | peak 12719 | rings of a (0-7) 17%, rings of b (56-63) 15% | flows placed 12/12 | new kernel warnings 0
+03:39:05 t2-r460 ring 128 mid 64 | total 71.86 GB/s | WRITEs 68554 | ring drops 1347 | retransmits 1425 | peak 12656 | rings of a (0-7) 17%, rings of b (56-63) 16% | flows placed 12/12 | new kernel warnings 0
+03:44:01 t2-r461 ring 128 mid 48 | total 71.54 GB/s | WRITEs 68173 | ring drops 31 | retransmits 69 | peak 10306 | rings of a (0-7) 17%, rings of b (56-63) 16% | flows placed 12/12 | new kernel warnings 0
+03:49:56 t2-r462 ring 128 mid 32 | total 71.98 GB/s | WRITEs 68630 | ring drops 0 | retransmits 28 | peak 11303 | rings of a (0-7) 20%, rings of b (56-63) 15% | flows placed 12/12 | new kernel warnings 0
+03:54:52 t2-r463 ring 128 mid 48 | total 72.04 GB/s | WRITEs 68569 | ring drops 29 | retransmits 69 | peak 12472 | rings of a (0-7) 16%, rings of b (56-63) 15% | flows placed 12/12 | new kernel warnings 0
+03:59:49 t2-r464 ring 128 mid 64 | total 71.54 GB/s | WRITEs 68264 | ring drops 1684 | retransmits 1778 | peak 13181 | rings of a (0-7) 16%, rings of b (56-63) 14% | flows placed 12/12 | new kernel warnings 0
+03:59:52 after: settled.sh audit rest: the settled setting, rx_refill_mid 0

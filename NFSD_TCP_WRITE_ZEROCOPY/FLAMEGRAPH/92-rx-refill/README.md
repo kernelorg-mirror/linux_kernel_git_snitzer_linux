@@ -349,3 +349,19 @@ with the CPU: 16 32 32 16 16 32 from t2-r465.  `ringcost.py` gives the
 cycles and instructions a WRITE on the receive CPUs and the transmit
 ones, and on the receive CPUs by area (the refill with its doorbell, the
 page pool's allocation, the poll, GRO and TCP, the rest).
+
+### The edge (t2-r457 to r464)
+
+| mid | runs | GB/s | ring drops | retransmits | region peak |
+|---|---|---|---|---|---|
+| 32 | r459 r462 | 71.94, 71.98 | 0, 0 | 32, 28 | 12,719, 11,303 |
+| 48 | r457 r461 r463 | 71.74, 71.54, 72.04 | 54, 31, 29 | 87, 69, 69 | 9,728, 10,306, 12,472 |
+| 64 | r458 r460 r464 | 72.24, 71.86, 71.54 | 2,035, 1,347, 1,684 | 2,153, 1,425, 1,778 | 8,434, 12,656, 13,181 |
+
+Every run placed its flows; the setting at rest afterwards.  The edge is
+between 32 and 48: at 48 every run dropped a few (29 to 54), at 64 the
+refill comes about once a full poll, near its end, and the drops are as
+at 0.  32 has now dropped nothing in five runs out of five, 16 in three
+out of three; the rate and the peak do not tell the settings apart.  So
+32 is one step short of the edge and 16 two: 16 has the margin, unless
+it costs the rings (next).
