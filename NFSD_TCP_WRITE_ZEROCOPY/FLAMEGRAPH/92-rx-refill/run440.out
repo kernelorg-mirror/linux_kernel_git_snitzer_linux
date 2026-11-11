@@ -1,0 +1,7 @@
+01:16:05 t2-r440 ring 128 | total 62.91 GB/s | WRITEs 60115 | ring drops 7748 | retransmits 7975 | peak 8643 | rings  | new kernel warnings 0
+01:21:02 t2-r441 ring 256 | total 70.36 GB/s | WRITEs 67043 | ring drops 0 | retransmits 11 | peak 10912 | rings  | new kernel warnings 0
+01:25:59 t2-r442 ring 256 | total 71.20 GB/s | WRITEs 67924 | ring drops 0 | retransmits 28 | peak 13239 | rings  | new kernel warnings 0
+01:30:56 t2-r443 ring 128 | total 70.89 GB/s | WRITEs 67468 | ring drops 1221 | retransmits 1300 | peak 10138 | rings  | new kernel warnings 0
+01:35:54 t2-r444 ring 128 | total 71.68 GB/s | WRITEs 68257 | ring drops 1813 | retransmits 1920 | peak 11878 | rings  | new kernel warnings 0
+01:40:50 t2-r445 ring 256 | total 70.68 GB/s | WRITEs 67352 | ring drops 0 | retransmits 27 | peak 12456 | rings  | new kernel warnings 0
+01:40:53 after: settled.sh audit rest: the settled setting

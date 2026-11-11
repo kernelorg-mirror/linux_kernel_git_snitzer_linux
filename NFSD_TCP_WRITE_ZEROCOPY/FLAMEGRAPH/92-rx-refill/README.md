@@ -201,3 +201,40 @@ held mark on in every run for the region's exact peak, since a ring of
 256 posts 128 more buffers (1 MiB) a ring: up to 8 MiB more of the
 region over eight rings, against the footprint rule.  What counts:
 drops, retransmits and rate against the peak.
+
+### What it found (t2-r440 to r445)
+
+```
+t2-r440 ring 128 | 62.91 GB/s | ring drops 7748 | retransmits 7975 | peak  8643   (not counted)
+t2-r441 ring 256 | 70.36 GB/s | ring drops    0 | retransmits   11 | peak 10912
+t2-r442 ring 256 | 71.20 GB/s | ring drops    0 | retransmits   28 | peak 13239
+t2-r443 ring 128 | 70.89 GB/s | ring drops 1221 | retransmits 1300 | peak 10138
+t2-r444 ring 128 | 71.68 GB/s | ring drops 1813 | retransmits 1920 | peak 11878
+t2-r445 ring 256 | 70.68 GB/s | ring drops    0 | retransmits   27 | peak 12456
+```
+
+t2-r440 does not count: twoport placed none of port a's flows ("No
+flows in place-flows-a.txt"), so RSS left ring 0 with none of the
+traffic and rings 2 and 3 with 44 and 42%, and port a dropped 7743 and
+carried 26.3 GB/s.  Every other run placed its flows (rings at 24 to 26%
+each).  The settled setting was back at rest after the last run.
+
+- **Rings of 256 drop nothing**: 0 in all three runs, against 1221 and
+  1813 at 128, and the client's retransmits fall from 1300 to 1920 to 11
+  to 28.  That confirms step 2: the drops are bursts larger than the
+  ring holds.
+- **The rate does not rise**: 70.75 GB/s on average at 256 against 71.29
+  at 128 here (and 71.2 to 71.8 at 128 in t2-r434 to r439).  The
+  retransmits cost nothing measurable, and 256 may be 0.5 to 0.8 GB/s
+  lower.
+- **The region's peak rises**: 12,202 pages on average at 256 (10,912
+  to 13,239) against 11,008 at 128 (10,138 and 11,878), about 1,200
+  pages (11%, 19 MiB) more.  That is more than the 512 pages (8 MiB) the
+  rings' extra buffers alone would hold, but the spread between runs is
+  as large.
+
+Under the footprint rule, rings of 256 are not kept as they are: they
+remove the drops but raise the peak and do not raise the rate.  It is
+Mike's call.  What would remove the drops without growing the region is
+step 2's other lever: a poll that refills before its end, so that a
+ring behind never has only 64 buffers free for a whole 34 us.
