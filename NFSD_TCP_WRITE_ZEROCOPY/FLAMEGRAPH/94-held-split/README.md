@@ -121,3 +121,47 @@ assembly are the two levers that are large enough: a shorter WRITE
 (fewer outstanding at a drive, if the rate holds) or fewer or smaller
 records in assembly (fewer connections, as round 56 showed at a cost in
 rate, or a smaller `wsize`).  Neither has been tried here.
+
+## The WRITE's time, XFS or the drive (t2-r488, t2-r489)
+
+Mike: "split the WRITE's time between XFS and the drive".
+[writesplit.bt](writesplit.bt) on each `nfsd_direct_write()` call, on
+its nfsd thread: entry to its first bio queued (XFS and iomap before the
+I/O), the first bio to its last request completed, that completion to
+the return; and each request on the eight data drives issued from such
+a call, its bytes times issue to complete (the pages at the drive).
+`run485.sh` with `BT=writesplit`, two runs, [run488.out](run488.out);
+71.43 and 71.29 GB/s, 0 ring drops, no drive stepped down, no new
+kernel warning.
+
+| | t2-r488 pages | t2-r489 pages | MiB | share of the call | mean time |
+|---|---|---|---|---|---|
+| a Before the I/O (XFS, iomap) | 39 | 37 | 0.6 | 2.5% | 10 us |
+| b First bio .. last request done | 1,397 | 1,349 | 21.5 | 91% | 378 us |
+| of it at the drive (issue .. complete) | **1,239** | **1,218** | **19.2** | **82%** | 335 to 341 us |
+| of it before issue or after its own completion | 158 | 131 | 2.3 | 9% | |
+| c Last request done .. the return | 21 | 20 | 0.3 | 1.3% | 6 us |
+| Calls with no I/O seen | 59 | 84 | 1.1 | 4 to 6% | 16 to 23 us |
+| The whole call | 1,516 | 1,490 | 23.5 | | 410 to 417 us |
+
+- **The drive's own time is 82% of the call; XFS is under 4%.**  XFS
+  and iomap take 10 us before the first bio and 6 us after the last
+  completion.  Every WRITE is four requests of 256 KiB
+  (`max_sectors_kb` 256), and a request is at the drive 335 to 341 us
+  on average (median 256 to 512 us, 1% over 1 ms).
+- **The rest of the I/O window, 9%,** is a request's bytes before its
+  issue (blk-mq, no scheduler) and after its own completion while the
+  call's other three finish.
+- **The drive's time is its queue.**  A drive writes about 9 GB/s, so a
+  256 KiB request's own transfer is about 29 us; at 340 us a request,
+  Little's law puts about 12 requests (three WRITEs) at each drive at
+  once.  The pages at the drive are the rate times that queue's wait,
+  and only a shorter queue at the drive makes them fewer at this rate.
+  Whether a drive keeps 9 GB/s with fewer requests outstanding is not
+  measured here: local fio at a lower queue depth would say.
+- The whole call is 410 to 417 us under this trace against 360 under
+  heldsplit.bt; the block tracepoints (about a million events a second)
+  lengthen it.  The 25,269 and 34,136 calls with no I/O seen are short
+  (16 to 23 us) and hold 1 MiB; 75,042 and 71,826 requests were issued
+  outside a WRITE's call, 68,714 of them 4 to 8 KiB (the log's, most
+  likely).  Not looked into.
