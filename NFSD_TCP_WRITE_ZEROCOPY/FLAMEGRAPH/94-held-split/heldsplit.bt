@@ -1,0 +1,103 @@
+#!/usr/bin/bpftrace
+/*
+ * heldsplit.bt: where the receive region's held pages sit, by a loaned
+ * record's stages (FLAMEGRAPH round 94).  Each record is followed by its
+ * transport and sequence (svcsock_tcp_rx_lifetime's own key), and its
+ * pages' time in each stage summed, in page-microseconds:
+ *
+ *   1 assembly   each skb's bytes from nfsd's read of them off the socket
+ *                (svc_tcp_rx_walk_skb on the read's root skb) to the
+ *                record's publish: the record waiting for its own rest
+ *   2 to WRITE   publish .. nfsd_direct_write() entered (a thread, decode)
+ *   3 drive      nfsd_direct_write() entered .. its last return
+ *   4 to release the WRITE returned .. the payload released (action
+ *                payload-release or release, whichever is first)
+ *   5 no WRITE   publish .. release for a record with no direct write
+ *
+ * A record's pages are its page_pool_bytes at publish over 15,480 (two
+ * 8 KiB buffers of 7,740 payload bytes to a 16 KiB page).  Over the time
+ * traced, each sum is the stage's mean pages held (heldsplit-read.py).
+ * What it does not see: the rings' posted buffers, the socket's queue
+ * (sampled beside it), a page's way back after the release.
+ *     timeout -s INT 10 bpftrace heldsplit.bt
+ */
+config = { missing_probes = "error"; max_map_keys = 65536 }
+
+BEGIN { @t0 = nsecs; }
+
+fentry:sunrpc:svc_tcp_rx_walk_skb
+/ args.base == 0 && args.skb == args.walk->root /
+{
+	$w = args.walk; $e = args.skb->len;
+	$s = $w->first; $l = $w->last < $e ? $w->last : $e;
+	if ($l > $s) {
+		$x = (uint64)$w->svsk; $q = $w->rqstp->rq_tcp_rx->record_seq;
+		$b = (uint64)($l - $s); $t = (nsecs - @t0) / 1000;
+		@rb[$x, $q] += $b; @rbt[$x, $q] += $b * $t;
+	}
+}
+
+tracepoint:sunrpc:svcsock_tcp_rx_lifetime
+{
+	$x = (uint64)args.xprt; $q = args.sequence; $t = (nsecs - @t0) / 1000;
+	$a = args.action;
+	if ($a == 2) {			/* publish */
+		$pg = (uint64)args.page_pool_bytes;
+		@pp[$x, $q] = $pg; @tp[$x, $q] = $t;
+		if (@rb[$x, $q]) {
+			/* bytes * us; pages = bytes / 15480 at the read */
+			@sum["1 assembly"] = sum(@rb[$x, $q] * $t - @rbt[$x, $q]);
+			@n["published, read seen"] = count();
+		}
+		@ppb = sum($pg); @n["published"] = count();
+		delete(@rb[$x, $q]); delete(@rbt[$x, $q]);
+	} else if ($a == 4 || $a == 6) {	/* release, payload-release */
+		$p0 = @tp[$x, $q];
+		if ($p0) {
+			$pg = @pp[$x, $q]; $w0 = @w0[$x, $q]; $w1 = @w1[$x, $q];
+			if ($w0 >= $p0 && $w1 >= $w0 && $t >= $w1) {
+				@sum["2 to WRITE"] = sum($pg * ($w0 - $p0));
+				@sum["3 drive"] = sum($pg * ($w1 - $w0));
+				@sum["4 to release"] = sum($pg * ($t - $w1));
+				@n["released, WRITE seen"] = count();
+				@us["3 drive"] = hist($w1 - $w0);
+				@us["2 to WRITE"] = hist($w0 - $p0);
+			} else {
+				@sum["5 no WRITE"] = sum($pg * ($t - $p0));
+				@n["released, no WRITE seen"] = count();
+			}
+		}
+		delete(@tp[$x, $q]); delete(@pp[$x, $q]); delete(@w0[$x, $q]); delete(@w1[$x, $q]);
+		delete(@rb[$x, $q]); delete(@rbt[$x, $q]);
+	} else if ($a == 3 || $a == 5) {	/* error, abort */
+		@n["error or abort"] = count();
+		delete(@tp[$x, $q]); delete(@pp[$x, $q]); delete(@w0[$x, $q]); delete(@w1[$x, $q]);
+		delete(@rb[$x, $q]); delete(@rbt[$x, $q]);
+	}
+}
+
+/* nfsd_direct_write() has no BTF entry of its own: a kprobe, its first
+ * argument the request */
+kprobe:nfsd:nfsd_direct_write
+{
+	$r = (struct svc_rqst *)arg0; $st = $r->rq_tcp_rx;
+	if ($st != 0) {
+		$x = (uint64)$r->rq_xprt; $q = $st->record_seq;
+		if (@tp[$x, $q] && !@w0[$x, $q]) { @w0[$x, $q] = (nsecs - @t0) / 1000; }
+		@k[tid] = ($x, $q);
+	}
+}
+kretprobe:nfsd:nfsd_direct_write
+{
+	if (has_key(@k, tid)) {
+		$k = @k[tid];
+		if (@tp[$k.0, $k.1]) { @w1[$k.0, $k.1] = (nsecs - @t0) / 1000; }
+		delete(@k[tid]);
+	}
+}
+
+END
+{
+	printf("traced_us %d\n", (nsecs - @t0) / 1000);
+	clear(@rb); clear(@rbt); clear(@tp); clear(@pp); clear(@w0); clear(@w1); clear(@k);
+}
