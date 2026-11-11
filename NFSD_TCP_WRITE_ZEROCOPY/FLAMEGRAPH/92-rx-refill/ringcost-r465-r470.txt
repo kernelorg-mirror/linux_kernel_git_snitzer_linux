@@ -1,0 +1,6 @@
+t2-r465 mid 16: rx  138106 cycles  282054 instructions a WRITE, tx  31726 cycles; rx by area: refill 5795, page_pool alloc 1016, poll 13170, gro/tcp/ip 44749, rest 73365, unknown 11
+t2-r466 mid 32: rx  135886 cycles  281754 instructions a WRITE, tx  29022 cycles; rx by area: refill 6131, page_pool alloc 965, poll 13090, gro/tcp/ip 44933, rest 70758, unknown 9
+t2-r467 mid 32: rx  140134 cycles  282622 instructions a WRITE, tx  37085 cycles; rx by area: refill 6207, page_pool alloc 991, poll 13493, gro/tcp/ip 45547, rest 73837, unknown 60
+t2-r468 mid 16: rx  138212 cycles  281966 instructions a WRITE, tx  31021 cycles; rx by area: refill 5942, page_pool alloc 923, poll 13162, gro/tcp/ip 44632, rest 73538, unknown 16
+t2-r469 mid 16: rx  138364 cycles  282625 instructions a WRITE, tx  28664 cycles; rx by area: refill 5836, page_pool alloc 989, poll 13257, gro/tcp/ip 44814, rest 73461, unknown 7
+t2-r470 mid 32: rx  136864 cycles  280423 instructions a WRITE, tx  31542 cycles; rx by area: refill 6044, page_pool alloc 993, poll 13406, gro/tcp/ip 44844, rest 71567, unknown 10

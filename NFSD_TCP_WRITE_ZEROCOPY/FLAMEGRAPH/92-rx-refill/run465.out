@@ -1,0 +1,7 @@
+04:05:25 t2-r465 ring 128 mid 16 | total 71.46 GB/s | WRITEs 68038 | ring drops 0 | retransmits 30 | peak 12180 | rings of a (0-7) 17%, rings of b (56-63) 14% | flows placed 12/12 | new kernel warnings 0
+04:10:27 t2-r466 ring 128 mid 32 | total 71.55 GB/s | WRITEs 68091 | ring drops 0 | retransmits 25 | peak 10144 | rings of a (0-7) 17%, rings of b (56-63) 14% | flows placed 12/12 | new kernel warnings 0
+04:15:29 t2-r467 ring 128 mid 32 | total 71.86 GB/s | WRITEs 68438 | ring drops 1 | retransmits 32 | peak 11613 | rings of a (0-7) 21%, rings of b (56-63) 18% | flows placed 12/12 | new kernel warnings 0
+04:20:30 t2-r468 ring 128 mid 16 | total 71.46 GB/s | WRITEs 68035 | ring drops 0 | retransmits 28 | peak 11356 | rings of a (0-7) 18%, rings of b (56-63) 20% | flows placed 12/12 | new kernel warnings 0
+04:25:34 t2-r469 ring 128 mid 16 | total 71.33 GB/s | WRITEs 67924 | ring drops 0 | retransmits 25 | peak 12271 | rings of a (0-7) 17%, rings of b (56-63) 15% | flows placed 12/12 | new kernel warnings 0
+04:30:36 t2-r470 ring 128 mid 32 | total 71.71 GB/s | WRITEs 68346 | ring drops 0 | retransmits 42 | peak 10666 | rings of a (0-7) 17%, rings of b (56-63) 15% | flows placed 12/12 | new kernel warnings 0
+04:30:39 after: settled.sh audit rest: the settled setting, rx_refill_mid 0

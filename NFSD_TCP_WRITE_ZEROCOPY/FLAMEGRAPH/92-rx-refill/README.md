@@ -365,3 +365,35 @@ at 0.  32 has now dropped nothing in five runs out of five, 16 in three
 out of three; the rate and the peak do not tell the settings apart.  So
 32 is one step short of the edge and 16 two: 16 has the margin, unless
 it costs the rings (next).
+
+### What 16 costs (t2-r465 to r470)
+
+Per run, the receive CPUs' cycles and instructions a WRITE, and of the
+cycles the refill's (`ringcost-r465-r470.txt`; xeu's samples resolved
+against the module's kallsyms, kept in `xeu-r15-reload/`):
+
+| mid | runs | GB/s | drops | rx cycles | rx instructions | refill | tx cycles | region peak |
+|---|---|---|---|---|---|---|---|---|
+| 16 | r465 r468 r469 | 71.46, 71.46, 71.33 | 0, 0, 0 | 138.1k, 138.2k, 138.4k | 282.1k, 282.0k, 282.6k | 5.8k, 5.9k, 5.8k | 31.7k, 31.0k, 28.7k | 12,180, 11,356, 12,271 |
+| 32 | r466 r467 r470 | 71.55, 71.86, 71.71 | 0, 1, 0 | 135.9k, 140.1k, 136.9k | 281.8k, 282.6k, 280.4k | 6.1k, 6.2k, 6.0k | 29.0k, 37.1k, 31.5k | 10,144, 11,613, 10,666 |
+
+- **16 costs the rings nothing measurable.**  The receive CPUs take
+  138.2k cycles a WRITE at 16 and 137.6k at 32 on average, 0.4% apart
+  against a spread of 4.2k between runs at 32; the instructions are the
+  same (282.2k and 281.6k).  The refill itself is 5.9k at 16 and 6.1k at
+  32: refilling twice as often posts half as many buffers each time, and
+  the doorbell is cheap.  The transmit CPUs do not separate either.
+- **32 dropped a frame for the first time** (t2-r467, 1), its sixth run
+  without a run of drops: one step from the edge, as above.
+- **The rate**: 71.42 at 16 and 71.71 at 32 here, against 71.68 and 71.53
+  in t2-r446 to r456: no difference either way.
+- **The region's peak is higher at 16 in both sets**: 11,936 against
+  10,808 here and 12,198 against 11,422 before, about 950 pages on
+  average.  Each set's difference is inside its spread, and what 16
+  holds more on the rings by itself is about 16 buffers a ring, 64 pages
+  over eight rings, so it is not shown; but it is the same way twice.
+
+So 16 has the margin (two steps from the edge, no drop in six runs) at
+no cost in cycles or rate.  Keeping it is `settled.sh`'s xeu table,
+Mike's call, with the peak to watch: under the footprint rule a third
+set with the held mark would say whether the 950 pages are real.
