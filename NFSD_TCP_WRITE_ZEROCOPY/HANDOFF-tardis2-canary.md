@@ -293,6 +293,15 @@ Release 15's `xeu.ko` is in `updates/` (srcversion
 C3071685F0211EF8EBA2A7F; the rpm installed is still Release 13), and the
 host is back at the settled setting.**  `FLAMEGRAPH/92-rx-refill/README.md`.
 
+**`num_rings` 4 (Mike, 11 November): the audit fails until xeu is next
+loaded.**  `/etc/modprobe.d/xeu.conf` now loads xeu with `num_rings=4`
+(the copy before is `/root/xeu.conf.pre-num-rings-2026-11-11`; xeu is
+not in the initramfs), and `settled.sh` holds it at 4 on tardis2.  The
+parameter is read only at load, and the xeu loaded on this boot has 8,
+so `settled.sh apply` ends in `FAILED, 1 item(s) BAD` (`xeu num_rings 8
+(want 4)`) and every run is refused until a reload of xeu (Mike's word
+only) or a reboot.  Do not get past it by hand.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

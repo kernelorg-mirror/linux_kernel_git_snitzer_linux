@@ -300,6 +300,13 @@ RODATA=noalias
 # xeu without it is not held to it.
 declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=Y [rx_prefetch]=Y [rx_gro_frags]=Y [rx_refill_mid]=0)
 [ $HOST = tardis2 ] && XEU[rx_refill_mid]=16
+# num_rings, the ring pairs a port can have (the driver's own, read only at
+# load; /etc/modprobe.d/xeu.conf): 4 on tardis2 since 11 November (Mike),
+# the four a port the setting uses.  At the driver's default of eight, each
+# load first opened eight rings a port before port-setup.sh cut them to
+# four, and at Release 15's reload they ran the region dry for about 30 s
+# (alloc_fail 13).  Eight rings now take a reload.  Not held elsewhere.
+[ $HOST = tardis2 ] && XEU[num_rings]=4
 XP=/sys/module/xeu/parameters/rx_prefetch
 XG=/sys/module/xeu/parameters/rx_gro_frags
 XR=/sys/module/xeu/parameters/rx_refill_mid
