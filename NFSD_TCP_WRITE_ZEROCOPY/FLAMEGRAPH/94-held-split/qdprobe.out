@@ -1,0 +1,8 @@
+21:26:00 jobs  3: 10.20 GB/s, a 1 MiB write   296 us mean, p50 297, p99 309, p99.9 420 us; drive busy 100%
+21:26:54 jobs  1:  8.74 GB/s, a 1 MiB write   108 us mean, p50 108, p99 110, p99.9 138 us; drive busy 79%
+21:27:49 jobs  2: 10.20 GB/s, a 1 MiB write   194 us mean, p50 194, p99 204, p99.9 281 us; drive busy 100%
+21:28:44 jobs  4: 10.20 GB/s, a 1 MiB write   399 us mean, p50 399, p99 412, p99.9 553 us; drive busy 100%
+21:29:39 jobs  6: 10.20 GB/s, a 1 MiB write   601 us mean, p50 602, p99 627, p99.9 840 us; drive busy 100%
+21:30:34 jobs  8: 10.20 GB/s, a 1 MiB write   810 us mean, p50 807, p99 856, p99.9 1122 us; drive busy 100%
+21:31:29 jobs 12: 10.20 GB/s, a 1 MiB write  1222 us mean, p50 1221, p99 1286, p99.9 1729 us; drive busy 100%
+21:32:24 jobs  3: 10.20 GB/s, a 1 MiB write   295 us mean, p50 297, p99 309, p99.9 416 us; drive busy 100%

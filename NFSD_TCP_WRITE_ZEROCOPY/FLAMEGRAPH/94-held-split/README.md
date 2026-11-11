@@ -165,3 +165,43 @@ kernel warning.
   (16 to 23 us) and hold 1 MiB; 75,042 and 71,826 requests were issued
   outside a WRITE's call, 68,714 of them 4 to 8 KiB (the log's, most
   likely).  Not looked into.
+
+## One drive at lower queue depths (qdprobe.sh)
+
+Mike: "run local fio on one drive at lower queue depths".
+[qdprobe.sh](qdprobe.sh): `/hs/nvme0`, locally with no NFS (no client
+connected), JOBS threads of fio's psync engine, each one 1 MiB O_DIRECT
+write at a time, as nfsd issues them (four 256 KiB requests each); 20 s
+a point after 3 s of ramp, an fstrim and 30 s of rest.  All eight
+drives are the same model (DapuStor DPRP5), each with 64 hardware
+queues of 1,023 requests, so the depth is set by what is issued, not
+by the drive.  [qdprobe.out](qdprobe.out):
+
+| 1 MiB writes outstanding | GB/s | a write, mean | p99 | p99.9 | drive busy |
+|---|---|---|---|---|---|
+| 1 | 8.74 | 108 us | 110 us | 138 us | 79% |
+| **2** | **10.20** | **194 us** | 204 us | 281 us | 100% |
+| 3 (first, last) | 10.20, 10.20 | 296, 295 us | 309 us | 420, 416 us | 100% |
+| 4 | 10.20 | 399 us | 412 us | 553 us | 100% |
+| 6 | 10.20 | 601 us | 627 us | 840 us | 100% |
+| 8 | 10.20 | 810 us | 856 us | 1,122 us | 100% |
+| 12 | 10.20 | 1,222 us | 1,286 us | 1,729 us | 100% |
+
+- **The drive is at its full 10.2 GB/s from two writes outstanding.**
+  Past two, every write more adds about 100 us to each and nothing to
+  the rate: the time is the queue.  One alone leaves the drive idle a
+  fifth of the time between writes, at 8.74 GB/s.
+- **Under the two-port load a drive writes 8.6 to 9.0 GB/s with about
+  three outstanding** (`t2-r487` to `r489`: 335 to 341 us a 256 KiB
+  request at the drive, against 296 us for a whole 1 MiB write here at
+  three).  At two, a write would take about 194 us here.
+- **What it would save:** the pages at the drive are the rate times a
+  write's time there.  At 72 GB/s, about 0.2 ms a write in place of 0.34
+  to 0.38 is about 9 to 10 MiB fewer held, which, with nothing else
+  changed, takes the 50 MiB toward 40.  Not tried.
+- **The margin is thin.**  Two outstanding have about 13% over the 9
+  GB/s a drive takes in the two-port runs; one has none.  nfsd's WRITEs
+  reach a drive as the connections deliver them, not evenly, so a
+  limit of two a drive could leave a drive idle when a burst of WRITEs
+  for another drive is ahead of it.  Only a run on the load would show
+  whether the rate holds.
