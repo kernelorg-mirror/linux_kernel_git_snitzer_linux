@@ -113,3 +113,43 @@ card has filled and the poll has not yet reached, so what is left is the
 card's side: how many of the posted buffers are still free when frames
 arrive, which is a question of how long the card's completions wait for
 a poll (a ring of 128 is about 110 us at 9 GB/s).
+
+## The wrap fixed in kernel-rpmtree (11 November, Mike: "fix the wrap")
+
+kernel-rpmtree `7cbd88c` "xsight: count an xeu ring's empty slots in a u16
+at the refill retry", Release 14: `u32 rx_fill_cnt` becomes `u16` in
+the retry patch (Patch3), as the poll's own count is, and the threshold
+patch (Patch4) after it carries the new context.  All fourteen patches
+apply to the tarball in spec order, and the only difference from the
+source of the loaded module is that line; xeu builds against this kernel
+with no warning of its own.  It is not loaded: no reload of `xeu` on
+this boot.  It changes no figure here (the timer only kicks a NAPI that
+is already running) and takes effect with the next package.
+
+## Step 2: how long a ring that is behind waits for its refill
+
+Mike, 11 November: do 2 (a light look at how long the card's
+completions wait for a poll), then 3 (rings of 256 against 128) is in
+play.
+
+What sets it.  The MTU is 7792, so a frame takes one 8 KiB buffer; a
+poll takes at most 64 frames (`XEU_NAPI_POLL_WEIGHT`), half a ring of
+128, and refills only at its end.  Each ring has a CPU of its own (port
+a's on 0, 2, 4 and 6, port b's on 56, 58, 60 and 62; transmit on the odd
+CPUs), and both ports defer at 2/10000: a poll that empties the ring
+leaves it masked and the next poll comes from a 10 us timer.  A ring that
+is behind (a poll took its whole budget, so more was waiting) is polled
+again at once, and the card then has, until that poll ends, what was
+posted less what was waiting: at most 64 buffers.  So the figure that
+decides a drop is how long a full poll takes against how fast frames come
+to its ring.
+
+`napigap.bt` gets it from the `napi:napi_poll` tracepoint alone, the one
+round 91's 10 ms sampling used at no measurable cost: per port, the gap
+from each poll's end to the next of the same NAPI, by whether the one
+before took its whole budget, some or none; the length of each run of full
+polls, and the frames and time inside them; the frames a poll took; and
+what a poll took after a wait of 64 us or more that did not follow a full
+one.  `run433.sh` with `BT=napigap`, T U T from t2-r437, keeps
+`/proc/net/softnet_stat` before and after each run as well (a squeeze of
+NET_RX by its budget is its third column).

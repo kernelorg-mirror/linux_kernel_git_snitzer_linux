@@ -1,0 +1,47 @@
+// napigap.bt SECS: round 92's second look, from the napi:napi_poll
+// tracepoint alone, on tardis2's receive rings' CPUs (port a's rings on
+// 0, 2, 4 and 6, port b's on 56, 58, 60 and 62, one ring each; the
+// transmit rings are on the odd CPUs).  xeu refills a ring only at the
+// end of a poll, so the time from one poll's end to the next is the time
+// the card has with what was posted.  For SECS seconds, per port (0 a,
+// 1 b), the gap in us to a poll from the poll of the same NAPI before it,
+// by what that one did: 2 took its whole budget (more was waiting, the
+// next runs at once), 1 took some, 0 took none (the deferral's 10 us
+// timer or the interrupt brings the next).  Also the frames each poll
+// took, the length of each run of full polls, the frames and time inside
+// such runs, and what a poll took after a wait of 64 us or more that did
+// not follow a full one.
+tracepoint:napi:napi_poll /(cpu < 8 || cpu >= 56) && (cpu & 1) == 0/ {
+	$t = (uint64)nsecs;
+	$n = (uint64)args.napi;
+	$w = (int64)args.work;
+	$p = cpu >= 56 ? 1 : 0;
+	@napis[cpu, $n] = count();
+	@work[$p] = lhist($w, 0, 65, 8);
+	$l = @last[$n];
+	if ($l != 0) {
+		$g = (int64)(($t - (uint64)$l) / (uint64)1000);
+		$k = @kind[$n];
+		@gap[$p, $k] = hist($g);
+		if ($k == 2) {
+			@inrun_us[$p] = sum($g);
+			@inrun_frames[$p] = sum($w);
+			@inrun_maxgap[$p] = max($g);
+		} else if ($g >= 64) {
+			@after_wait[$p] = lhist($w, 0, 65, 8);
+		}
+	}
+	if ($w >= (int64)args.budget) {
+		@kind[$n] = 2;
+		@run[$n] = @run[$n] + 1;
+	} else {
+		@kind[$n] = $w > 0 ? 1 : 0;
+		if (@run[$n] > 0) {
+			@runlen[$p] = hist(@run[$n]);
+			@run[$n] = 0;
+		}
+	}
+	@last[$n] = $t;
+}
+interval:s:$1 { exit(); }
+END { clear(@last); clear(@kind); clear(@run); }
