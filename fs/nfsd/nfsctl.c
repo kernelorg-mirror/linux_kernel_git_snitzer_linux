@@ -3152,6 +3152,7 @@ static int __init init_nfsd(void)
 	if (retval)
 		goto out_free_pnfs;
 	nfsd_lockd_init();	/* lockd->nfsd callbacks */
+	nfsd3_rx_target_init();	/* a window of WRITEs for each export */
 	retval = register_pernet_subsys(&nfsd_net_ops);
 	if (retval < 0)
 		goto out_free_lockd;
@@ -3196,6 +3197,7 @@ out_free_slabs:
 
 static void __exit exit_nfsd(void)
 {
+	nfsd3_rx_target_exit();
 	remove_proc_entry("fs/nfs/exports", NULL);
 	remove_proc_entry("fs/nfs", NULL);
 	genl_unregister_family(&nfsd_nl_family);

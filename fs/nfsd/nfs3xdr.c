@@ -9,6 +9,7 @@
 
 #include <linux/namei.h>
 #include <linux/nfs3.h>
+#include <linux/jhash.h>
 #include <linux/sunrpc/svc_xprt.h>
 #include <kunit/visibility.h>
 
@@ -579,6 +580,58 @@ nfs3svc_decode_writeargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 	return xdr_stream_subsegment(xdr, &args->payload, args->count);
 }
 EXPORT_SYMBOL_IF_KUNIT(nfs3svc_decode_writeargs);
+
+/**
+ * nfs3svc_rx_target - Name the filesystem an NFSv3 WRITE's payload is for
+ * @vers: the call's NFS version
+ * @proc: the call's procedure
+ * @head: the record's first bytes, from the xid
+ * @len: how many of them, a multiple of XDR_UNIT
+ *
+ * The transport asks before it loans a record's pages, so the WRITEs
+ * bound for one filesystem can be counted and the rest held back
+ * (svc_rx_target_register()).  The credential and the verifier are skipped
+ * by their lengths; the file handle's fsid is the filesystem.
+ *
+ * Return values:
+ *   %0: not an NFSv3 WRITE, or the handle is not within @head
+ *   nonzero: a key for the handle's fsid
+ */
+u32 nfs3svc_rx_target(u32 vers, u32 proc, const __be32 *head,
+		      unsigned int len)
+{
+	unsigned int n = len / XDR_UNIT, i = 7, fh_len, kl;
+	u32 cred_len, verf_len;
+	const u8 *fh;
+
+	if (vers != 3 || proc != NFS3PROC_WRITE || n <= i)
+		return 0;
+	/* the credential: its flavor at 6, its length at 7, then its body */
+	cred_len = be32_to_cpu(head[i++]);
+	if (cred_len > RPC_MAX_AUTH_SIZE)
+		return 0;
+	i += XDR_QUADLEN(cred_len);
+	/* the verifier: flavor, length, body */
+	if (i + 2 > n)
+		return 0;
+	verf_len = be32_to_cpu(head[i + 1]);
+	if (verf_len > RPC_MAX_AUTH_SIZE)
+		return 0;
+	i += 2 + XDR_QUADLEN(verf_len);
+	/* nfs_fh3: length, then the handle */
+	if (i + 1 > n)
+		return 0;
+	fh_len = be32_to_cpu(head[i++]);
+	if (fh_len < 8 || fh_len > NFS3_FHSIZE || i + XDR_QUADLEN(fh_len) > n)
+		return 0;
+	fh = (const u8 *)&head[i];
+	if (fh[0] != 1)		/* fh_version: fsid type at 2, fsid at 4 */
+		return 0;
+	kl = key_len(fh[2]);
+	if (!kl || 4 + kl > fh_len)
+		return 0;
+	return jhash(fh + 4, kl, fh[2]) ?: 1;
+}
 
 bool
 nfs3svc_decode_createargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)

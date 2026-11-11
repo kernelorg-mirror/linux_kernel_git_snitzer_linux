@@ -174,6 +174,8 @@ bool nfsd_v4client(struct svc_rqst *rqstp);
  */
 void		nfsd_lockd_init(void);
 void		nfsd_lockd_shutdown(void);
+void		nfsd3_rx_target_init(void);
+void		nfsd3_rx_target_exit(void);
 
 
 #endif /* LINUX_NFSD_NFSD_H */

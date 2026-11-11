@@ -13,6 +13,7 @@
 #include <kunit/visibility.h>
 #include <linux/cred.h>
 #include <linux/sunrpc/svc_xprt.h>
+#include <linux/sunrpc/svcsock.h>
 
 #include "cache.h"
 #include "xdr3.h"
@@ -1365,3 +1366,18 @@ const struct svc_rtc_ops nfsd3_rtc_ops = {
 	.rqst_free	= nfsd3_rtc_rqst_free,
 	.rqst_done	= nfsd3_rtc_rqst_done,
 };
+
+/*
+ * The transport names a WRITE's target (its export's filesystem) before it
+ * loans the record's pages, to bound the WRITEs in flight for each; the
+ * hook is nfs3svc_rx_target().
+ */
+void nfsd3_rx_target_init(void)
+{
+	svc_rx_target_register(NFS_PROGRAM, nfs3svc_rx_target);
+}
+
+void nfsd3_rx_target_exit(void)
+{
+	svc_rx_target_unregister(NFS_PROGRAM);
+}
