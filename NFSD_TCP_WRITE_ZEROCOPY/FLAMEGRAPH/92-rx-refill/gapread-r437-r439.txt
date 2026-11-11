@@ -1,0 +1,28 @@
+t2-r437:
+  port a: 1981919 polls, 10.9% full, 21+ frames a poll
+    gap after full :   215584, median 8 us+, p99 32 us+, >=32 us 6.25%, >=64 us 0.089%
+    gap after part :  1109072, median 16 us+, p99 32 us+, >=32 us 26.67%, >=64 us 0.081%
+    gap after empty:   488754, median 16 us+, p99 64 us+, >=32 us 24.11%, >=64 us 1.720%
+    in runs of full polls: 1.87 frames a us (34.2 us a full poll), longest gap 149 us; runs 21041, median length 2+, p99 4+
+    after a wait >= 64 us: 9318 polls, 9.8% full
+  port b: 2035011 polls, 9.7% full, 20+ frames a poll
+    gap after full :   196715, median 8 us+, p99 32 us+, >=32 us 5.97%, >=64 us 0.084%
+    gap after part :  1106909, median 16 us+, p99 32 us+, >=32 us 24.67%, >=64 us 0.020%
+    gap after empty:   544785, median 16 us+, p99 64 us+, >=32 us 22.95%, >=64 us 1.900%
+    in runs of full polls: 1.86 frames a us (34.3 us a full poll), longest gap 93 us; runs 17630, median length 2+, p99 4+
+    after a wait >= 64 us: 10572 polls, 9.3% full
+  softnet on the ring CPUs (processed, dropped, squeezed): 0:10069713/0/2 2:10682013/0/0 4:11000768/0/0 6:10992472/0/0 56:10215205/0/0 58:10912234/0/1 60:8690295/0/0 62:10609418/0/0
+t2-r439:
+  port a: 2047138 polls, 9.7% full, 20+ frames a poll
+    gap after full :   196721, median 8 us+, p99 32 us+, >=32 us 5.18%, >=64 us 0.065%
+    gap after part :  1120302, median 16 us+, p99 32 us+, >=32 us 24.26%, >=64 us 0.062%
+    gap after empty:   537257, median 16 us+, p99 64 us+, >=32 us 22.87%, >=64 us 2.033%
+    in runs of full polls: 1.89 frames a us (33.8 us a full poll), longest gap 157 us; runs 17979, median length 2+, p99 4+
+    after a wait >= 64 us: 11629 polls, 7.4% full
+  port b: 2046865 polls, 9.7% full, 20+ frames a poll
+    gap after full :   197925, median 8 us+, p99 32 us+, >=32 us 5.20%, >=64 us 0.034%
+    gap after part :  1123594, median 16 us+, p99 32 us+, >=32 us 24.25%, >=64 us 0.011%
+    gap after empty:   542967, median 16 us+, p99 64 us+, >=32 us 22.51%, >=64 us 1.700%
+    in runs of full polls: 1.88 frames a us (34.1 us a full poll), longest gap 320 us; runs 17449, median length 2+, p99 4+
+    after a wait >= 64 us: 9353 polls, 7.8% full
+  softnet on the ring CPUs (processed, dropped, squeezed): 0:10891926/0/6 2:9640422/0/0 4:10669196/0/0 6:10308544/0/0 56:9447728/0/0 58:9112317/0/0 60:10771698/0/0 62:10980284/0/0

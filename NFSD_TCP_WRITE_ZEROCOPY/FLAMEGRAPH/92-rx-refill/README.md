@@ -153,3 +153,42 @@ what a poll took after a wait of 64 us or more that did not follow a full
 one.  `run433.sh` with `BT=napigap`, T U T from t2-r437, keeps
 `/proc/net/softnet_stat` before and after each run as well (a squeeze of
 NET_RX by its budget is its third column).
+
+### What it found (t2-r437 to r439)
+
+```
+t2-r437 T | 71.58 GB/s | ring drops 1856 | retransmits 1996
+t2-r438 U | 71.66 GB/s | ring drops 1929 | retransmits 2060
+t2-r439 T | 71.23 GB/s | ring drops 1525 | retransmits 1613
+```
+
+The trace costs nothing (the untraced run between is at the same rate
+and drops).  The reading is in `gapread-r437-r439.txt`; the two traced
+runs agree, and the two ports do too.  Per port, in 10 s:
+
+- **About 2 million polls, 10% of them full** (64 frames: more was
+  waiting).  Runs of full polls are short: median 2, the 99th percentile
+  4.
+- **Inside such runs a ring is drained at 1.87 frames a us**, 34 us a
+  full poll, 14.6 GB/s a ring.  A ring's average is about 9 GB/s, so a
+  ring is behind only in bursts.
+- **The polls are not late.**  After a full poll the next follows at once
+  (gaps of 64 us or more 0.03 to 0.09%, the longest 93 to 320 us); after
+  a partial one the deferral's timer brings the next (64 us or more 0.01
+  to 0.08%).  Only after an empty poll, with the ring idle and unmasked,
+  are gaps of 32 to 64 us common (about 22%) and of 64 us or more 1.7 to
+  2%: the ring had nothing to take.
+- **What a poll finds after such a wait shows how frames come:** the
+  frames taken peak at 24 to 32 (a client TSO send of about 256 KiB at
+  7792 a frame), and 7 to 10% of those polls are full.
+- **NET_RX is never squeezed** (0 to 6 in 10 s a CPU) and the backlog
+  drops nothing (`softnet_stat`).
+
+So a completion does not wait for a poll that is late: the card is
+outrunning a poll that is on time.  Frames come to a ring in bursts of
+TSO sends at line rate, several connections to a ring (twelve a port on
+four rings), and a full poll drains 64 frames in 34 us while the card
+has at most 64 buffers free until it ends.  A burst of more than the
+ring holds, at more than 1.87 frames a us, is dropped at the tail.  Two
+levers: a ring that holds a longer burst (step 3, rings of 256) or a
+poll that drains faster, or refills before its end.
