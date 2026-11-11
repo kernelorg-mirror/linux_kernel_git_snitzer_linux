@@ -403,3 +403,23 @@ set with the held mark would say whether the 950 pages are real.
 `run446.sh` with `ARMS="128:16 128:32 128:32 128:16 128:32 128:16
 128:16 128:32"` from t2-r471, no perf: four runs of each, the held mark
 on, for whether 16's higher peak (about 950 pages in two sets) is real.
+
+### The third set (t2-r471 to r478)
+
+| mid | runs | GB/s | ring drops | retransmits | region peak |
+|---|---|---|---|---|---|
+| 16 | r471 r474 r476 r477 | 71.50, 71.12, 72.14, 72.16 | 0 each | 33, 26, 33, 31 | 10,575, 10,566, 11,959, 12,070 |
+| 32 | r472 r473 r475 r478 | 72.00, 71.74, 72.23, 71.80 | 0 each | 31, 32, 44, 22 | 12,357, 9,828, 12,570, 12,327 |
+
+Every run placed its flows; the setting at rest afterwards.  Here the
+peak is lower at 16, 11,293 against 11,771: the other way from the first
+two sets.  Over the three sets, ten runs of each: the peak 11,757 at 16
+and 11,377 at 32, 380 pages apart against about 3,000 between runs of
+one setting, and the rate 71.62 against 71.75 GB/s.  So 16 does not
+hold more of the region than 32, as the 64 pages it keeps more on the
+rings said, and costs nothing in rate or cycles.  Drops: none in ten
+runs at 16, one frame in twelve at 32.
+
+**16 is the setting to keep.**  It is two steps from the edge (48), at no
+cost against 32 in rate, cycles or the region.  Keeping it is
+`settled.sh`'s xeu table (`rx_refill_mid` 0 now), Mike's call.
