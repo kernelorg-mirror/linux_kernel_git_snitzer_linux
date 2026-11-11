@@ -205,3 +205,47 @@ by the drive.  [qdprobe.out](qdprobe.out):
   limit of two a drive could leave a drive idle when a burst of WRITEs
   for another drive is ahead of it.  Only a run on the load would show
   whether the rate holds.
+
+## The payload's layout at the drive (sglwrite.c, sglprobe.sh)
+
+Mike asked whether the SGL payload makes the I/O finer than 256 KiB.
+It does not: under the load every WRITE call was four requests (589,498
+of 589,498 in `t2-r489`) and every request on the data drives from a
+call 256 KiB (2,497,648; `max_segments` is 65, `virt_boundary_mask` 0,
+`dma_alignment` 3).  The payload's grain is inside each request, as its
+segments: one a received frame.  fio writes from page-contiguous
+buffers, so its requests are the same size and number with fewer
+segments, which qdprobe.sh does not reproduce.
+
+[sglwrite.c](sglwrite.c) writes 1 MiB O_DIRECT as the payload is laid
+out (136 iovecs: 7,740 bytes at byte 68 of each 8 KiB receive buffer,
+two buffers to a 16 KiB page) or flat, one write a thread as nfsd
+issues them.  Checked with `blk_mq_start_request`: every 256 KiB
+request carries 34 or 35 segments laid out as the payload, 16 flat.
+[sglprobe.sh](sglprobe.sh) on `/hs/nvme0`, each point after an fstrim
+and 30 s of rest, [sglprobe.out](sglprobe.out):
+
+| writes outstanding | payload layout: GB/s | a write | flat: GB/s | a write |
+|---|---|---|---|---|
+| 1 | **6.66** | **157 us** | 9.76 | 107 us |
+| 2 (twice for the payload layout) | 10.11, 10.11 | 207 us | 10.20 | 205 us |
+| 3 | 10.20 | 308 us | 10.20 | 308 us |
+| 4 | 10.17 | 412 us | 10.20 | 411 us |
+
+- **The layout costs a write about 50 us of its own** (157 us against
+  107 at one outstanding, 12 or so a 256 KiB request), most likely the
+  drive fetching 34 descriptors in place of 16 and moving unaligned
+  pieces; it is not separated from the writer's own time, which builds
+  the same 136 iovecs either way.
+- **From two outstanding the queue hides it:** 10.11 GB/s against 10.20
+  (1%), and from three the two are the same.  So two writes still fill
+  a drive with the payload's layout, about 12% over the 9 GB/s a drive
+  takes in the two-port runs.
+- **But one is much worse than it looked:** 6.66 GB/s, not fio's 8.74
+  (this writer's flat 9.76; fio's own time between writes made its one
+  slower).  A drive that falls to one WRITE outstanding loses a third
+  of its rate with this payload, so a limit of two a drive has less
+  room under bursts than the flat figures said.
+- The 4% between the load's rate while busy (9.7 to 9.8 GB/s) and 10.2
+  is not the layout: at three outstanding, as under the load, the
+  layout costs nothing.  Where it comes from is not shown.
