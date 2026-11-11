@@ -272,21 +272,10 @@ is issuing IO to the underlying local filesystem that it is sharing with
 the NFS server. See: fs/nfs/localio.c:nfs_local_doio() and
 fs/nfs/localio.c:nfs_local_commit().
 
-With normal NFS that makes use of RPC to issue IO to the server, if an
-application uses O_DIRECT the NFS client will bypass the pagecache but
-the NFS server will not. The NFS server's use of buffered IO affords
-applications to be less precise with their alignment when issuing IO to
-the NFS client. But if all applications properly align their IO, LOCALIO
-can be configured to use end-to-end O_DIRECT semantics from the NFS
-client to the underlying local filesystem, that it is sharing with
-the NFS server, by setting the 'localio_O_DIRECT_semantics' nfs module
-parameter to Y, e.g.:
-
-    echo Y > /sys/module/nfs/parameters/localio_O_DIRECT_semantics
-
-Once enabled, it will cause LOCALIO to use end-to-end O_DIRECT semantics
-(but again, this may cause IO to fail if applications do not properly
-align their IO).
+With LOCALIO, an application's O_DIRECT extends down to the underlying
+local filesystem. LOCALIO issues DIO-aligned IO as O_DIRECT. It issues
+IO that is not DIO-aligned as buffered IO, so misaligned application IO
+does not fail.
 
 Security
 ========
@@ -324,11 +313,6 @@ the probe gives up without a log message.  The client then does not use
 LOCALIO.  The mount's timeouts do not apply to the probe.  Set to 0, the
 probe uses the mount's timeouts instead, as an NFS RPC would.  A change
 applies to the next probe.
-
-/sys/module/nfs/parameters/localio_O_DIRECT_semantics (bool)
-controls if O_DIRECT extends down to the underlying filesystem, defaults
-to N. Application IO must be logical blocksize aligned, otherwise
-O_DIRECT will fail.
 
 /sys/module/nfsv3/parameters/nfs3_localio_probe_throttle (uint)
 controls if NFSv3 read and write IOs will trigger (re)enabling of
