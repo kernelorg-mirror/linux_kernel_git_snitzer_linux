@@ -282,8 +282,10 @@ refuses a run without it (`CLI_STRICT=1`).**
 refill path is not the drops (no allocation fails, no refill is short);
 the polls are on time and the card outruns them in bursts of the
 client's TSO sends, a full poll draining 64 frames in 34 us with no
-refill until its end.  Rings of 256 drop nothing but raise the region's
-peak about 1,200 pages and not the rate, so they are not kept.  xeu's
+refill until its end.  Rings of 256 drop nothing but carry about 0.8
+GB/s less, at a region peak within the spread of 128's (the 1,200
+pages more of the first three runs did not hold over five), so they
+are not kept.  xeu's
 retry-check wrap is fixed (kernel-rpmtree `cd60c0b`, Release 14) and the
 mid-poll refill written (`2e18d74`, Release 15, `rx_refill_mid`, default
 0).  **On Mike's word (11 November) xeu was reloaded on this boot:

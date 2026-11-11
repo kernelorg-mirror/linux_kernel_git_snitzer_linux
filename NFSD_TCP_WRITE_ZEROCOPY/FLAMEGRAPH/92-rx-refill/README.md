@@ -231,10 +231,14 @@ each).  The settled setting was back at rest after the last run.
   to 13,239) against 11,008 at 128 (10,138 and 11,878), about 1,200
   pages (11%, 19 MiB) more.  That is more than the 512 pages (8 MiB) the
   rings' extra buffers alone would hold, but the spread between runs is
-  as large.
+  as large.  Over all five runs of rings of 256 in the round (with
+  `t2-r449` and `r453`), the rise does not hold: 11,457 against 11,320
+  at rings of 128 at mid 0, inside the spread ("The three settings side
+  by side" at the end).
 
 Under the footprint rule, rings of 256 are not kept as they are: they
-remove the drops but raise the peak and do not raise the rate.  It is
+remove the drops but carry about 0.8 GB/s less (70.66 against 71.44
+over the round), and the peak is no reason to prefer them.  It is
 Mike's call.  What would remove the drops without growing the region is
 step 2's other lever: a poll that refills before its end, so that a
 ring behind never has only 64 buffers free for a whole 34 us.
@@ -430,3 +434,40 @@ without the parameter audits BAD on tardis2; tardis1's Release 13 xeu
 is held at 0 and passes without it.  Applied after the third set: the
 audit at rest reads `xeu rx_refill_mid 16` and ends in the settled
 setting.
+
+## The three settings side by side (all of round 92's two-port runs)
+
+Rings of 128 with `rx_refill_mid` 16 against both settings without it,
+pooled over every run of each in this round (mean, range in brackets).
+Rings 128 at mid 0 are `t2-r443`, `r444`, `r446`, `r451` and `r456`;
+rings 256 at mid 0 are `t2-r441`, `r442`, `r445`, `r449` and `r453`
+(`t2-r440` is left out: port a's flows were not placed); mid 16 is its
+ten runs, `t2-r447` to `r477`.
+
+| | rings 128, mid 16 (kept) | rings 128, mid 0 (before) | rings 256, mid 0 |
+|---|---|---|---|
+| Runs | 10 | 5 | 5 |
+| Rate, GB/s | **71.62** (71.12–72.16) | 71.44 (70.89–72.11) | 70.66 (70.26–71.20) |
+| Ring drops a run | **0** (0 in all 10) | 1,686 (1,221–2,269) | 0 |
+| Retransmits a run | **31** (25–44) | 1,771 (1,300–2,360) | 28 (11–47) |
+| Region peak, pages | 11,757 (10,566–12,573) | 11,320 (10,138–12,599) | 11,457 (9,455–13,239) |
+
+- **Against rings of 128 at mid 0:** about 1,700 drops a run go to none,
+  and the retransmits with them.  The rate is about 0.2 GB/s higher,
+  inside both ranges.  The peak is about 440 pages higher, small
+  against a spread of about 2,000 at each setting.
+- **Against rings of 256 at mid 0:** no drops either way, and the same
+  retransmits.  The rate is about 1 GB/s higher; the ranges barely
+  overlap (256's best run 71.20, 16's worst 71.12).  The peak is about
+  300 pages higher, inside the spread, and each ring posts half the
+  buffers.
+- **Step 3 revised:** its "raise the peak" came from `t2-r440` to
+  `r445`; over all five runs of rings of 256 the peak is 11,457 against
+  11,320 at rings of 128, no clear difference.  What stands is the
+  rate.
+- **The number to watch:** in the one set where all three ran together
+  (`t2-r446` to `r456`), mid 16 had the highest peak of the three:
+  12,198 against 11,528 at mid 0 and 10,339 at rings of 256, from two
+  or three runs each.  Pooled, the three are within noise.
+- **Cycles:** perf ran only on 16 against 32 (`t2-r465` to `r470`), so
+  there is no cycle comparison against mid 0 or rings of 256.
