@@ -332,3 +332,11 @@ The softirq share is the mean of the eight receive CPUs' `%soft` in
 So `rx_refill_mid` 32 does what rings of 256 did for the drops without
 their lower rate or the region they hold.  Keeping it is a change to
 `settled.sh` (its xeu table, 0 now), Mike's call.
+
+## Where the mid-poll refill stops working (planned; Mike, 11 November: "run 48 and 64 to find the edge")
+
+16 and 32 both dropped nothing, so the choice between them waits on
+where drops come back.  `run446.sh` with `ARMS="128:48 128:64 128:32
+128:64 128:48 128:32 128:48 128:64"` from t2-r457: three runs each at 48
+and 64, two at 32 to tie the set to the last one.  At 64 a full poll of
+64 frames refills about once, near its end, so it should be close to 0.
