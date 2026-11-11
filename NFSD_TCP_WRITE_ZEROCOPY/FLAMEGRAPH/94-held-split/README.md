@@ -330,3 +330,95 @@ fsid at admission (an nfsd procedure hook names the target from the
 record's first bytes; sunrpc counts and pauses as the budget does),
 what it would buy (the drive's queue from three writes to two, 5 to 6
 MiB of the 50 held) and what it would not (the assembly's 11 MiB).
+
+## The window built and run (t2-r494 to r496, then r497 and r498)
+
+Mike: "go ahead, build it and run W 0, 5, 4".  The code is two commits
+on `kernel-7.3/canary`: `05844df27a1f` (SUNRPC: the targets' table in
+the budget, the pause at admission, the wake at the credit's return,
+`svc_tcp_rx_target_window`, four fields on the budget's stats line) and
+`db48abad7ef5` (NFSD: `nfs3svc_rx_target()`, the NFSv3 WRITE hook that
+hashes the handle's fsid, registered as nfsd loads).  The hook is
+registered by program (`svc_rx_target_register()`) rather than a field
+on `struct svc_procedure`, so no structure lockd or the client share is
+relaid out; the two fields added to `struct svc_sock` and the record's
+state still give 273 of sunrpc's 440 exports new versions, so the whole
+server stack was rebuilt with it (`xeu-rig/build-svcstack.sh`) and
+swapped in (`swap-sunrpc.sh STACK=`; the tip's own sunrpc, srcversion
+`F99F549CC7AF44FA39DAE34`, is in `$L/sunrpc-522-tip/sunrpc/` if it is
+wanted back).  [run494.sh](run494.sh), [run494.out](run494.out).
+
+| window | GB/s | held, median (L3) | at the drive (heldsplit) | assembly | sockets | bytes a byte | pauses |
+|---|---|---|---|---|---|---|---|
+| 0 (t2-r494) | 70.79 | 3,500 (1.71) | 1,382 | 698 | 100 | 1.68 | 0 |
+| 5 (t2-r495) | **51.51** | 2,422 (1.18) | 525 | 411 | 309 | 1.01 | 4,679,224 |
+| 4 (t2-r496) | **43.81** | 2,249 (1.10) | 401 | 352 | 355 | 0.86 | 4,421,891 |
+
+The window did what it is for to the region (38 MiB held at 5, the
+drive's row down to 8 MiB, one byte through memory a byte) and took
+27% and 38% of the rate with it: the drives ran at about one write
+outstanding (525 pages at 51.5 GB/s is 0.17 ms a write at the drive),
+which is 6.66 GB/s a drive with this payload, 53 for eight.  Two faults
+in the first build, both fixed in `9e4eb880bb91` before the rerun:
+
+- **Two drives shared a slot.**  The eight fsids (77010 to 77013,
+  77020 to 77023) hashed into 64 slots put nvme2 and nvme6, one on
+  each port, in slot 57 (computed with the kernel's jhash in Python),
+  so those two shared one window of 5, and every connection on either
+  port paused for them held back its records for the other drives.
+  The design's "unlikely and harmless" was wrong on both counts: with
+  eight keys in 64 slots about one table in three has a pair.  Now a
+  key probes from its hash to the slot that holds it or is free and
+  claims it; keys share only once the table is full.
+- **A paused transport was woken for every segment.**  The budget's
+  pause is left alone by `svc_data_ready()` (the credit's return runs
+  the transport); the target's pause was not, so each arriving segment
+  woke a thread to read 300 bytes and pause again, 4.7 M pauses for
+  2.5 M records.  Now a transport paused for a place is left to the
+  return that runs it, as a transport waiting for credit is.
+
+### The rerun with both fixed (t2-r497, r498)
+
+[run497.out](run497.out); the stack's sunrpc is
+`FC78BAE8A6C2B0A92A1366A`.
+Beside them, the budget sweep's nearest point (`t2-r493`, 48 WRITEs)
+and the window off (`t2-r494`):
+
+| | off (r494) | window 5 (r497) | window 4 (r498) | budget 48 (r493) |
+|---|---|---|---|---|
+| Rate, GB/s | 70.79 | **64.79 (−8.5%)** | 60.28 (−15%) | 70.30 (−2%) |
+| Held, median (MiB, L3) | 3,500 (55, 1.71) | **2,748 (43, 1.34)** | 2,511 (39, 1.23) | 3,521 (55, 1.72) |
+| 99th percentile, peak | 6,998, 11,845 | 2,996, 3,308 | 2,706, 2,989 | 5,250, 5,923 |
+| Bytes through memory a byte | 1.68 | **1.24** | 1.10 | 1.66 |
+| At the drive (pages) | 1,382 | 760 | 615 | 1,358 |
+| Assembly | 698 | 547 | 475 | 691 |
+| Sockets' queues | 100 | 196 | 236 | 97 |
+| Records paused (of admitted) | 0 | 2.03 M (of 3.09 M) | 2.38 M (of 2.87 M) | 154 k (of 3.35 M) |
+| Client retransmits in the window | 28 | 56 | 31 | 41 |
+
+- **The window moves the region as nothing else has:** 55 to 43 MiB
+  held at the median at 5, the peak from 11,845 pages to 3,308, the
+  bytes through memory from 1.68 to 1.24 a byte (80 GB/s to the DIMMs
+  in place of 118).  The drive's row falls from 21.6 to 11.9 MiB, the
+  assembly's from 10.9 to 8.6, while the sockets' queues double (a
+  paused connection's bytes wait in its socket, about 3 MiB).
+- **And it costs rate: 8.5% at 5, 15% at 4.**  The drives ran under
+  two outstanding: 760 pages at 64.8 GB/s is 0.19 ms a write at the
+  drive, about 1.5 writes, where two fill a drive.  The design's sizing
+  (5 in flight a drive leaves 2.4 at the drive) assumed the steady mean,
+  4 to 6 in flight a drive; the client's 16 jobs at a depth of 16 send
+  each drive's WRITEs in bursts, so a drive's count swings well past
+  the mean and back, and at the window the burst waits on the client
+  while the drive, 0.3 ms of assembly away from the next record, runs
+  dry.  Two of every three records paused at 5.
+- **Against the global budget:** 48 WRITEs (six a drive) cost 2% and
+  saved nothing of the median; the window at 5 saves 12 MiB and costs
+  8.5%.  The window is the stronger lever on the footprint and the
+  dearer one in rate; neither setting is free.
+- **Not run:** windows of 6 and 7, where the drive would stay above two
+  under the bursts and the saving would be smaller; one run each would
+  place the knee.  Nor the client's side of the same lever: fewer,
+  larger bursts (`iodepth`) or a connection set a drive, which would
+  end the head-of-line pauses.  No ring drops, no drive stepped down,
+  no kernel warning in any run; the host is left at the settled setting
+  with the window at 0 and the stack from `9e4eb880bb91` loaded.

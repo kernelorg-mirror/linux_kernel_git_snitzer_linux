@@ -307,6 +307,28 @@ reload.  xeu has moved: its kallsyms are now
 perf profile's `[unknown]` (round 92's `ringcost.py` reads the old
 one, right for its runs only).
 
+**The server's module stack is the tip's, with the window of WRITEs
+per export (11 November, Mike: "go ahead, build it and run W 0, 5,
+4").**  `FLAMEGRAPH/94-held-split/` found 22 of the 50 MiB held to be
+WRITEs queued at the drives, three a drive where two fill one, and
+built a window of loaned records per export's filesystem
+(`DESIGN-per-export-window.md`; `05844df27a1f`, `db48abad7ef5`,
+`9e4eb880bb91`).  The fields it adds to `svc_sock` and the record's
+state renumber most of sunrpc's exports, so `build-svcstack.sh` built
+sunrpc, auth_rpcgss, rpcsec_gss_krb5, rpcrdma, lockd, nfs_acl,
+nfs_localio and nfsd from the tip and `swap-sunrpc.sh STACK=` put them
+in `updates/` (`.svcstack` lists them): `/sys/module/sunrpc/srcversion`
+reads `FC78BAE8A6C2B0A92A1366A`, nfsd `B692CCE771BEB35E44E4085`
+(the first stack's `2250400763E6EC917BB7F48` ran `t2-r494..r496`).  The
+window is `sunrpc.svc_tcp_rx_target_window`, 0 (off) at rest and left
+so; `settled.sh` does not know it.  A window of 5 holds 43 MiB in
+place of 55 and costs 8.5% of the rate (`t2-r497`); the account is the
+round's README.  To go back to the tip's own sunrpc: `SUNRPC_KO=none
+STACK=none ./swap-sunrpc.sh`, then copy the tip's
+`$L/sunrpc-522-tip/sunrpc/sunrpc.ko` to
+`/lib/modules/$(uname -r)/updates/`, `depmod -a`, and the swap again;
+`settled.sh apply` after either.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf
