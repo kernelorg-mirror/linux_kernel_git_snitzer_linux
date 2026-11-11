@@ -474,7 +474,7 @@ MODULE_PARM_DESC(svc_tcp_rx_region_user_timeout,
 #define SVC_TCP_RX_TARGET_BITS	6
 #define SVC_TCP_RX_TARGETS	(1 << SVC_TCP_RX_TARGET_BITS)
 struct svc_tcp_rx_target {
-	u32			key;		/* the last key hashed here */
+	u32			key;		/* 0: free; else the one key here */
 	atomic_t		inflight;
 	struct list_head	waiters;	/* svc_sock.sk_rx_target_node */
 	struct svc_tcp_rx_budget *budget;
@@ -1053,10 +1053,29 @@ static void svc_tcp_rx_targets_init(struct svc_tcp_rx_budget *c)
 	}
 }
 
+/*
+ * The slot of @key: the first from its hash that holds it or is free (a
+ * free slot is claimed, and keeps its key).  Two keys share a slot only
+ * once the table is full.
+ */
 static struct svc_tcp_rx_target *
 svc_tcp_rx_target_slot(struct svc_tcp_rx_budget *c, u32 key)
 {
-	return &c->targets[(key * 0x9E3779B9u) >> (32 - SVC_TCP_RX_TARGET_BITS)];
+	unsigned int h = (key * 0x9E3779B9u) >> (32 - SVC_TCP_RX_TARGET_BITS);
+	unsigned int i;
+
+	for (i = 0; i < SVC_TCP_RX_TARGETS; i++) {
+		struct svc_tcp_rx_target *t = &c->targets[(h + i) % SVC_TCP_RX_TARGETS];
+		u32 have = READ_ONCE(t->key);
+
+		if (have == key)
+			return t;
+		if (!have && cmpxchg(&t->key, 0, key) == 0)
+			return t;
+		if (READ_ONCE(t->key) == key)
+			return t;
+	}
+	return &c->targets[h];
 }
 
 /* Take a place in @t's window of @w, if one is free. */
@@ -1209,7 +1228,6 @@ static bool svc_tcp_rx_target_admit(struct svc_sock *svsk,
 	return false;
 
 counted:
-	WRITE_ONCE(t->key, key);
 	state->target = t;
 	state->target_counted = true;
 	svsk->sk_rx_target_ticket = 0;
@@ -4800,6 +4818,9 @@ VISIBLE_IF_KUNIT void svc_data_ready(struct sock *sk)
 		if (test_bit(XPT_HANDSHAKE, &svsk->sk_xprt.xpt_flags))
 			return;
 		if (svc_tcp_rx_credit_waiting(svsk))
+			return;
+		/* Paused for a place in a target's window: its return runs it. */
+		if (READ_ONCE(svsk->sk_rx_target_wait))
 			return;
 		if (svc_tcp_rx_wait_rest(svsk, sk))
 			return;
