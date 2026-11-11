@@ -13,10 +13,13 @@ bounded working set?"  Then: "yes, run the six-run L3 measurement".
   is a burst's maximum, under the loan budget's 16,262 pages (128
   WRITEs, about 254 MiB).  The region was back to 1,292 pages held at
   the end of `t2-r477`.
-- **The drives set the rate.** In `t2-r477` each of the eight wrote 9.0
-  to 9.1 GB/s at 92 to 93% busy, about 72 GB/s together, the run's rate;
-  nfsd's CPUs were 15% busy.  A WRITE's payload waits in the region for
-  its drive.
+- **The drives are not the limit.** In `t2-r477` each of the eight wrote
+  9.0 to 9.1 GB/s at 92 to 93% busy, about 72 GB/s together, the run's
+  rate; but busy is the share of time a drive has an I/O outstanding,
+  not of what it can take, and all eight take 81.6 GB/s from local fio
+  with no network (round 56).  nfsd's CPUs were 15% busy.  What holds
+  the rate at 72 is not shown here; round 56 found it follows the
+  connections.
 - **The last look at the L3 was round 57** (build 514, 3 to 4 November,
   the settled two-port setting): 49 MiB of the region in use in the
   middle of a run (`pages - free`, which counts CPU caches and device
@@ -76,8 +79,9 @@ was left at the settled setting (`rx_refill_mid` 16).
   (3,567 to 3,617 pages), the 90th percentile to 3.5%.  The region is
   at 64 MiB or under 90% of the time, at 108 MiB or under 99%; the
   peak, 8,707 to 12,641, is bursts, which touch the budget (16,262
-  pages) at times (up to 687 refusals a run).  The drives run at 90 to
-  93% busy, 8.8 to 9.1 GB/s each, and keep up: nothing grows over a run.
+  pages) at times (up to 687 refusals a run).  The drives write 8.8 to
+  9.1 GB/s each, under the 10 or so each takes, and keep up: nothing
+  grows over a run.
 - **Not inside the L3.**  The working set at the median is 1.76 times
   the 32 MiB L3, and a page is held 0.82 ms at the median against the
   0.47 ms of payload the L3 holds at this rate, with nothing else in it.
