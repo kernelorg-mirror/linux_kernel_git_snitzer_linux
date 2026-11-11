@@ -20,3 +20,14 @@
       5 no WRITE                             1 pages    0.0 MiB   0.0%
       rest: the way back, unseen           557 pages    8.7 MiB  17.8%
 19:30:20 after: settled.sh audit rest: the settled setting
+19:35:47 t2-r487 | total 70.66 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r487: total 70.66 GB/s; traced 10.70 s; held over it: mean 3217, median 3392 (511 samples); 24 connections; records published 690799, WRITE seen 613907, no WRITE 127, error/abort 0
+      rings, posted (taken as full)        512 pages    8.0 MiB  15.9%
+      sockets, receive queues               99 pages    1.6 MiB   3.1%
+      1 assembly                           691 pages   10.8 MiB  21.5%
+      2 to WRITE                            63 pages    1.0 MiB   2.0%
+      3 drive                             1391 pages   21.7 MiB  43.2%
+      4 to release                          46 pages    0.7 MiB   1.4%
+      5 no WRITE                             0 pages    0.0 MiB   0.0%
+      rest: the way back, unseen           414 pages    6.5 MiB  12.9%
+19:35:50 after: settled.sh audit rest: the settled setting
