@@ -249,3 +249,28 @@ and 30 s of rest, [sglprobe.out](sglprobe.out):
 - The 4% between the load's rate while busy (9.7 to 9.8 GB/s) and 10.2
   is not the layout: at three outstanding, as under the load, the
   layout costs nothing.  Where it comes from is not shown.
+
+### At 128 KiB requests (`MAXKB=128`)
+
+Mike: "lower max_sectors_kb to 128 and rerun the sgl probe".
+`sglprobe.sh` with `MAXKB=128` (nvme0n1 only, put back to 256 at the
+end), [sglprobe-128.out](sglprobe-128.out).  A trace of
+`blk_mq_start_request` over the first points saw the 128 KiB requests
+with 16 to 19 segments in the payload's layout and 8 to 9 flat.
+
+| writes outstanding | payload layout, 256 KiB | payload layout, 128 KiB | flat, 256 | flat, 128 |
+|---|---|---|---|---|
+| 1 | 6.66 GB/s, 157 us | 6.90 GB/s, 151 us | 9.76, 107 us | 9.84, 106 us |
+| 2 | 10.11, 207 us (twice) | 10.04, 208 us (twice) | 10.20, 205 us | 10.20, 205 us |
+| 3 | 10.20, 308 us | 10.17, 309 us | 10.20, 308 us | 10.20, 308 us |
+| 4 | 10.17, 412 us | 10.14, 413 us | 10.20, 411 us | 10.20, 411 us |
+
+- **The request size does not change the layout's cost.**  At one write
+  outstanding, eight requests of 128 KiB take 151 us against four of
+  256 KiB at 157 (6.90 GB/s against 6.66, 4% better); at two to four
+  they are 0.3 to 0.7% slower.  Flat, the two sizes are the same.
+- So the 50 us a write goes with the payload's 136 pieces, however
+  they are cut into requests, not with the number of requests: the
+  cost is per segment, not per command.  A smaller `max_sectors_kb` is
+  no lever for the pages held at the drive either: at two outstanding
+  and more a write's time is the same.

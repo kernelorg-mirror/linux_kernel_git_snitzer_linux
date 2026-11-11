@@ -1,0 +1,10 @@
+21:59:38 nvme0n1 max_sectors_kb 128
+22:00:33 sgl threads  2: 10.04 GB/s, a 1 MiB write   208 us mean, p50 208, p99 211, p99.9 288 us, 191591 writes; drive busy 100% (ramp included)
+22:01:28 flat threads  2: 10.20 GB/s, a 1 MiB write   205 us mean, p50 205, p99 209, p99.9 290 us, 194507 writes; drive busy 100% (ramp included)
+22:02:22 sgl threads  1:  6.90 GB/s, a 1 MiB write   151 us mean, p50 151, p99 153, p99.9 162 us, 131628 writes; drive busy 77% (ramp included)
+22:03:17 flat threads  1:  9.84 GB/s, a 1 MiB write   106 us mean, p50 106, p99 107, p99.9 142 us, 187711 writes; drive busy 88% (ramp included)
+22:04:11 sgl threads  3: 10.17 GB/s, a 1 MiB write   309 us mean, p50 308, p99 314, p99.9 318 us, 193883 writes; drive busy 100% (ramp included)
+22:05:06 flat threads  3: 10.20 GB/s, a 1 MiB write   308 us mean, p50 308, p99 311, p99.9 412 us, 194518 writes; drive busy 100% (ramp included)
+22:06:00 sgl threads  4: 10.14 GB/s, a 1 MiB write   413 us mean, p50 412, p99 418, p99.9 443 us, 193441 writes; drive busy 100% (ramp included)
+22:06:55 flat threads  4: 10.20 GB/s, a 1 MiB write   411 us mean, p50 411, p99 422, p99.9 563 us, 194508 writes; drive busy 100% (ramp included)
+22:07:49 sgl threads  2: 10.04 GB/s, a 1 MiB write   208 us mean, p50 208, p99 211, p99.9 284 us, 191581 writes; drive busy 100% (ramp included)
