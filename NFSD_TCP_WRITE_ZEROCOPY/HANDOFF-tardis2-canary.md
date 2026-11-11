@@ -293,14 +293,19 @@ Release 15's `xeu.ko` is in `updates/` (srcversion
 C3071685F0211EF8EBA2A7F; the rpm installed is still Release 13), and the
 host is back at the settled setting.**  `FLAMEGRAPH/92-rx-refill/README.md`.
 
-**`num_rings` 4 (Mike, 11 November): the audit fails until xeu is next
-loaded.**  `/etc/modprobe.d/xeu.conf` now loads xeu with `num_rings=4`
-(the copy before is `/root/xeu.conf.pre-num-rings-2026-11-11`; xeu is
-not in the initramfs), and `settled.sh` holds it at 4 on tardis2.  The
-parameter is read only at load, and the xeu loaded on this boot has 8,
-so `settled.sh apply` ends in `FAILED, 1 item(s) BAD` (`xeu num_rings 8
-(want 4)`) and every run is refused until a reload of xeu (Mike's word
-only) or a reboot.  Do not get past it by hand.
+**`num_rings` 4 (Mike, 11 November), and xeu reloaded for it on his
+word.**  `/etc/modprobe.d/xeu.conf` loads xeu with `num_rings=4` (the
+copy before is `/root/xeu.conf.pre-num-rings-2026-11-11`; xeu is not in
+the initramfs), and `settled.sh` holds it at 4 on tardis2.  It is read
+only at load: `rmmod xeu; modprobe xeu`, `port-setup.sh enp161s0f0 0`
+and `enp164s0f0 56`, `settled.sh apply`, both ports pinged.  The same
+xeu (C3071685F0211EF8EBA2A7F), four rings a port at most and now;
+the apply ends in the settled setting, `alloc_fail` stayed at 13 (the
+Release 15 reload's), no kernel warning.  Eight rings now take a
+reload.  xeu has moved: its kallsyms are now
+`/var/tmp/zc-run-logs/xeu-num-rings-4-reload/kallsyms-xeu.txt`, for a
+perf profile's `[unknown]` (round 92's `ringcost.py` reads the old
+one, right for its runs only).
 
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
