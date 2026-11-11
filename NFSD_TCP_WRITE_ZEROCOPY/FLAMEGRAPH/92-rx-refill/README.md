@@ -397,3 +397,9 @@ So 16 has the margin (two steps from the edge, no drop in six runs) at
 no cost in cycles or rate.  Keeping it is `settled.sh`'s xeu table,
 Mike's call, with the peak to watch: under the footprint rule a third
 set with the held mark would say whether the 950 pages are real.
+
+## A third set for the peak (planned; Mike, 11 November: "run the third set of 16 vs 32 first")
+
+`run446.sh` with `ARMS="128:16 128:32 128:32 128:16 128:32 128:16
+128:16 128:32"` from t2-r471, no perf: four runs of each, the held mark
+on, for whether 16's higher peak (about 950 pages in two sets) is real.
