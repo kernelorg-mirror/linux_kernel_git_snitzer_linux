@@ -466,6 +466,20 @@ MODULE_PARM_DESC(svc_tcp_rx_region_user_timeout,
  * changes only with the configuration, so it is kept off the lines that
  * admission and release write.
  */
+/*
+ * A target: the filesystem the loaned records in one slot of a budget's
+ * table write, counted from admission to the return of their credit,
+ * with the transports paused for a place in its window (svc_tcp_rx_target_*).
+ */
+#define SVC_TCP_RX_TARGET_BITS	6
+#define SVC_TCP_RX_TARGETS	(1 << SVC_TCP_RX_TARGET_BITS)
+struct svc_tcp_rx_target {
+	u32			key;		/* the last key hashed here */
+	atomic_t		inflight;
+	struct list_head	waiters;	/* svc_sock.sk_rx_target_node */
+	struct svc_tcp_rx_budget *budget;
+};
+
 struct svc_tcp_rx_budget {
 	/* only the default budget's and KUnit's: lb points here */
 	struct rx_loan_budget	own;
@@ -494,6 +508,12 @@ struct svc_tcp_rx_budget {
 	atomic64_t		read_unconfined;
 	atomic64_t		read_short;
 	atomic64_t		share_stalls;
+	/* the targets' windows (svc_tcp_rx_target_window) */
+	struct svc_tcp_rx_target targets[SVC_TCP_RX_TARGETS];
+	spinlock_t		target_lock;	/* the slots' waiter lists */
+	u64			target_next_ticket;
+	atomic64_t		target_paused;
+	atomic64_t		target_unkeyed;
 };
 
 static DEFINE_PER_CPU(struct rx_loan_stock, svc_rx_stock_default);
@@ -935,13 +955,277 @@ module_param_cb(svc_tcp_rx_region_conn_share, &svc_tcp_rx_conn_share_ops,
 MODULE_PARM_DESC(svc_tcp_rx_region_conn_share,
 		 "Most rx region pages one connection's READ replies may hold (0: auto, twice the server's largest READ, read back as \"0 (auto)\")");
 
+/*
+ * A window of loaned records for each target.  A program names a call's
+ * target from the record's first bytes (svc_rx_target_register(); nfsd
+ * hashes the WRITE's file handle's fsid, so a target is an export's
+ * filesystem, in practice a drive).  A record is counted in its target's
+ * slot from its admission to the return of its credit; at the window it
+ * pauses at its first region skb as a refused budget admission does, with
+ * nothing borrowed, its transport on the slot's FIFO by ticket, and each
+ * record's return wakes the oldest waiters, one for each free place.  So
+ * a drive keeps what fills it and the rest waits on the client, in the
+ * client's window.  0: no window.
+ */
+static unsigned int svc_tcp_rx_target_window __read_mostly;
+module_param_named(svc_tcp_rx_target_window, svc_tcp_rx_target_window,
+		   uint, 0644);
+MODULE_PARM_DESC(svc_tcp_rx_target_window,
+		 "Most loaned records in flight for one target (an export's filesystem) before its next record waits unread (0: no limit)");
+
+#define SVC_RX_TARGET_PROGRAMS	2
+static struct svc_rx_target_hook {
+	u32			program;
+	svc_rx_target_fn	fn;
+} svc_rx_target_hooks[SVC_RX_TARGET_PROGRAMS];
+static DEFINE_MUTEX(svc_rx_target_hooks_lock);
+
+/**
+ * svc_rx_target_register - Name the targets of a program's loaned calls
+ * @program: the RPC program number
+ * @fn: names a call's target from a record's first bytes
+ *
+ * Return values:
+ *   %0: registered
+ *   %-ENOSPC: no room for another program
+ */
+int svc_rx_target_register(u32 program, svc_rx_target_fn fn)
+{
+	unsigned int i;
+	int ret = -ENOSPC;
+
+	mutex_lock(&svc_rx_target_hooks_lock);
+	for (i = 0; i < SVC_RX_TARGET_PROGRAMS; i++) {
+		struct svc_rx_target_hook *h = &svc_rx_target_hooks[i];
+
+		if (h->program && h->program != program)
+			continue;
+		WRITE_ONCE(h->program, program);
+		WRITE_ONCE(h->fn, fn);
+		ret = 0;
+		break;
+	}
+	mutex_unlock(&svc_rx_target_hooks_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(svc_rx_target_register);
+
+/**
+ * svc_rx_target_unregister - Forget a program's target hook
+ * @program: the RPC program number
+ *
+ * The caller's servers are stopped: no record of the program is read.
+ */
+void svc_rx_target_unregister(u32 program)
+{
+	unsigned int i;
+
+	mutex_lock(&svc_rx_target_hooks_lock);
+	for (i = 0; i < SVC_RX_TARGET_PROGRAMS; i++) {
+		if (svc_rx_target_hooks[i].program != program)
+			continue;
+		WRITE_ONCE(svc_rx_target_hooks[i].fn, NULL);
+		WRITE_ONCE(svc_rx_target_hooks[i].program, 0);
+	}
+	mutex_unlock(&svc_rx_target_hooks_lock);
+}
+EXPORT_SYMBOL_GPL(svc_rx_target_unregister);
+
+static svc_rx_target_fn svc_rx_target_hook(u32 program)
+{
+	unsigned int i;
+
+	for (i = 0; i < SVC_RX_TARGET_PROGRAMS; i++)
+		if (READ_ONCE(svc_rx_target_hooks[i].program) == program)
+			return READ_ONCE(svc_rx_target_hooks[i].fn);
+	return NULL;
+}
+
+/* A budget's targets, empty: at its allocation, or at init for a static one. */
+static void svc_tcp_rx_targets_init(struct svc_tcp_rx_budget *c)
+{
+	unsigned int i;
+
+	spin_lock_init(&c->target_lock);
+	for (i = 0; i < SVC_TCP_RX_TARGETS; i++) {
+		INIT_LIST_HEAD(&c->targets[i].waiters);
+		c->targets[i].budget = c;
+	}
+}
+
+static struct svc_tcp_rx_target *
+svc_tcp_rx_target_slot(struct svc_tcp_rx_budget *c, u32 key)
+{
+	return &c->targets[(key * 0x9E3779B9u) >> (32 - SVC_TCP_RX_TARGET_BITS)];
+}
+
+/* Take a place in @t's window of @w, if one is free. */
+static bool svc_tcp_rx_target_take(struct svc_tcp_rx_target *t, unsigned int w)
+{
+	int v = atomic_read(&t->inflight);
+
+	do {
+		if (v >= (int)w)
+			return false;
+	} while (!atomic_try_cmpxchg(&t->inflight, &v, v + 1));
+	return true;
+}
+
+/* @svsk stops waiting for a place: the lock held, or the list its own. */
+static void svc_tcp_rx_target_unwait_locked(struct svc_sock *svsk)
+{
+	list_del_init(&svsk->sk_rx_target_node);
+	svsk->sk_rx_target_wait = NULL;
+}
+
+/* A transport going away, or admitted elsewhere, stops waiting. */
+static void svc_tcp_rx_target_forget(struct svc_sock *svsk)
+{
+	struct svc_tcp_rx_target *t = READ_ONCE(svsk->sk_rx_target_wait);
+
+	if (!t)
+		return;
+	spin_lock_bh(&t->budget->target_lock);
+	if (svsk->sk_rx_target_wait)
+		svc_tcp_rx_target_unwait_locked(svsk);
+	spin_unlock_bh(&t->budget->target_lock);
+}
+
+/*
+ * A record of @t returned: wake its oldest waiters, one for each place
+ * free in the window (all of them with the window off).  Each is taken off
+ * the FIFO here and enqueued with every lock dropped, as the budget's
+ * waiters are; a waiter refused again goes back by its ticket.
+ */
+#define SVC_TCP_RX_TARGET_WAKE_MAX	16
+static void svc_tcp_rx_target_wake(struct svc_tcp_rx_target *t)
+{
+	struct svc_tcp_rx_budget *c = t->budget;
+	struct svc_sock *woken[SVC_TCP_RX_TARGET_WAKE_MAX];
+	unsigned int w = READ_ONCE(svc_tcp_rx_target_window), n = 0, i;
+
+	if (list_empty_careful(&t->waiters))
+		return;
+	spin_lock_bh(&c->target_lock);
+	while (n < SVC_TCP_RX_TARGET_WAKE_MAX && !list_empty(&t->waiters) &&
+	       (!w || atomic_read(&t->inflight) + (int)n < (int)w)) {
+		struct svc_sock *svsk = list_first_entry(&t->waiters,
+							 struct svc_sock,
+							 sk_rx_target_node);
+
+		svc_tcp_rx_target_unwait_locked(svsk);
+		svc_xprt_get(&svsk->sk_xprt);
+		woken[n++] = svsk;
+	}
+	spin_unlock_bh(&c->target_lock);
+	for (i = 0; i < n; i++) {
+		set_bit(XPT_DATA, &woken[i]->sk_xprt.xpt_flags);
+		svc_xprt_enqueue(&woken[i]->sk_xprt);
+		svc_xprt_put(&woken[i]->sk_xprt);
+	}
+}
+
+/* The record's place in its target's window goes back; exactly once. */
+static void svc_tcp_rx_target_put(struct svc_tcp_rx_state *state)
+{
+	struct svc_tcp_rx_target *t = state->target;
+
+	if (!state->target_counted)
+		return;
+	state->target_counted = false;
+	state->target = NULL;
+	atomic_dec(&t->inflight);
+	svc_tcp_rx_target_wake(t);
+}
+
+/* The prefix classified before a record is admitted: through the auth flavor. */
+#define SVC_TCP_RX_FIXED_BYTES	(7 * XDR_UNIT)
+/* The record's first bytes a hook may read: the prefix and what follows. */
+#define SVC_RX_TARGET_HEAD	512
+
+/*
+ * Admit @rqstp's record to its target's window, at its first skb that
+ * carries region pages (@skb from @offset, @len of the record in it).
+ * True: counted, or not a record any window counts (no window, no hook for
+ * its program, no key from its first bytes: the handle beyond them).
+ * False: the window is full; the record pauses at this skb, nothing of it
+ * borrowed, and the transport is woken from the target's FIFO when a
+ * record of the target returns.
+ */
+static bool svc_tcp_rx_target_admit(struct svc_sock *svsk,
+				    struct svc_tcp_rx_budget *c,
+				    struct svc_rqst *rqstp, struct sk_buff *skb,
+				    unsigned int offset, unsigned int len)
+{
+	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
+	unsigned int w = READ_ONCE(svc_tcp_rx_target_window);
+	struct svc_tcp_rx_target *t;
+	struct svc_sock *pos;
+	svc_rx_target_fn fn;
+	__be32 head[SVC_RX_TARGET_HEAD / XDR_UNIT];
+	unsigned int n;
+	u32 key;
+
+	if (state->target_counted)
+		return true;
+	if (!w)
+		goto pass;
+	fn = svc_rx_target_hook(state->target_prog);
+	if (!fn)
+		goto pass;
+	memcpy(head, page_address(rqstp->rq_pages[0]), SVC_TCP_RX_FIXED_BYTES);
+	n = min_t(unsigned int, len, sizeof(head) - SVC_TCP_RX_FIXED_BYTES);
+	n &= ~(XDR_UNIT - 1);
+	if (skb_copy_bits(skb, offset, (u8 *)head + SVC_TCP_RX_FIXED_BYTES, n))
+		goto pass;	/* unreadable: the walk says so */
+	key = fn(state->target_vers, state->target_proc, head,
+		 SVC_TCP_RX_FIXED_BYTES + n);
+	if (!key) {
+		atomic64_inc(&c->target_unkeyed);
+		goto pass;
+	}
+	t = svc_tcp_rx_target_slot(c, key);
+	if (svc_tcp_rx_target_take(t, w))
+		goto counted;
+	spin_lock_bh(&c->target_lock);
+	if (list_empty(&svsk->sk_rx_target_node)) {
+		if (!svsk->sk_rx_target_ticket)
+			svsk->sk_rx_target_ticket = ++c->target_next_ticket;
+		/* by ticket: a waiter woken and refused again keeps its turn */
+		list_for_each_entry(pos, &t->waiters, sk_rx_target_node)
+			if (pos->sk_rx_target_ticket > svsk->sk_rx_target_ticket)
+				break;
+		list_add_tail(&svsk->sk_rx_target_node, &pos->sk_rx_target_node);
+		svsk->sk_rx_target_wait = t;
+	}
+	/* A place freed before this transport was listed would wake no one. */
+	if (svc_tcp_rx_target_take(t, w)) {
+		svc_tcp_rx_target_unwait_locked(svsk);
+		spin_unlock_bh(&c->target_lock);
+		goto counted;
+	}
+	atomic64_inc(&c->target_paused);
+	spin_unlock_bh(&c->target_lock);
+	return false;
+
+counted:
+	WRITE_ONCE(t->key, key);
+	state->target = t;
+	state->target_counted = true;
+	svsk->sk_rx_target_ticket = 0;
+pass:
+	svc_tcp_rx_target_forget(svsk);
+	return true;
+}
+
 static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 				    size_t size)
 {
-	unsigned int waiters = 0, read_waiters = 0;
+	unsigned int waiters = 0, read_waiters = 0, i;
 	struct rx_loan_stock_sum sum;
 	struct rx_loan_waiter *pos;
 	u64 copies, copy_bytes;
+	long target_inflight = 0;
 	int len;
 
 	if (!c)
@@ -956,10 +1240,13 @@ static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 	}
 	/* Stocked credit is available; stocked records are in flight. */
 	rx_loan_stock_sum(c->lb, &sum);
+	for (i = 0; i < SVC_TCP_RX_TARGETS; i++)
+		target_inflight += atomic_read(&c->targets[i].inflight);
 	/* Q-B: READ fields appended to every budget's line */
 	len = scnprintf(buf, size,
 			"budget %u reserve_size %u avail %ld reserve %ld inflight %ld waiters %u admitted %llu denied %llu paused %llu overrun %llu orphaned %llu cost_factor %u hold_factor %u lent %u bounced %llu bounce_refused %llu"
-			" read_inflight %ld read_waiters %u read_admitted %llu read_parked %llu read_granted %llu read_completed %llu read_unconfined %llu read_short %llu share_stalls %llu copies %llu copy_bytes %llu\n",
+			" read_inflight %ld read_waiters %u read_admitted %llu read_parked %llu read_granted %llu read_completed %llu read_unconfined %llu read_short %llu share_stalls %llu copies %llu copy_bytes %llu"
+			" target_window %u target_inflight %ld target_paused %llu target_unkeyed %llu\n",
 			c->lb->budget, c->lb->reserve_size, c->lb->avail + sum.pages,
 			c->lb->reserve, (long)c->lb->inflight_count + sum.records,
 			waiters, c->lb->admitted + sum.admitted, c->lb->denied,
@@ -972,7 +1259,10 @@ static int svc_tcp_rx_budget_format(struct svc_tcp_rx_budget *c, char *buf,
 			c->lb->read_parked, c->lb->read_granted, sum.read_completed,
 			(u64)atomic64_read(&c->read_unconfined),
 			(u64)atomic64_read(&c->read_short),
-			(u64)atomic64_read(&c->share_stalls), copies, copy_bytes);
+			(u64)atomic64_read(&c->share_stalls), copies, copy_bytes,
+			READ_ONCE(svc_tcp_rx_target_window), target_inflight,
+			(u64)atomic64_read(&c->target_paused),
+			(u64)atomic64_read(&c->target_unkeyed));
 	spin_unlock_bh(&c->lb->lock);
 	return len;
 }
@@ -1423,6 +1713,7 @@ static struct svc_tcp_rx_budget *svc_tcp_rx_budget_alloc(struct net *net,
 	}
 	WRITE_ONCE(c->lb->owner, c);
 	c->net = net;
+	svc_tcp_rx_targets_init(c);
 	return c;
 }
 
@@ -2068,6 +2359,7 @@ VISIBLE_IF_KUNIT void svc_tcp_rx_wait_init(struct svc_sock *svsk)
 {
 	INIT_LIST_HEAD(&svsk->sk_rx_wait.node);
 	svsk->sk_rx_wait.ops = &svc_tcp_rx_waiter_ops;
+	INIT_LIST_HEAD(&svsk->sk_rx_target_node);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_wait_init);
 
@@ -2139,6 +2431,8 @@ static void svc_tcp_rx_budget_init(void)
 {
 	static_assert(PAGE_POOL_RX_REGION_READ_MIN * PAGE_SIZE >=
 		      RPCSVC_MAXPAYLOAD + PAGE_SIZE);
+	svc_tcp_rx_targets_init(&svc_rx_budget_default);
+	svc_tcp_rx_targets_init(&svc_rx_budget_read);
 	svc_tcp_rx_budget_stage(&svc_rx_budget_default);
 	svc_tcp_rx_budget_apply(&svc_rx_budget_read);
 }
@@ -2332,6 +2626,7 @@ static void svc_tcp_rx_credit_return(struct svc_tcp_rx_state *state, u32 lend)
 VISIBLE_IF_KUNIT void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state)
 {
 	svc_tcp_rx_credit_return(state, 0);
+	svc_tcp_rx_target_put(state);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_tcp_rx_credit_release);
 
@@ -5357,8 +5652,6 @@ static void svc_tcp_recv_iter_init(struct svc_rqst *rqstp,
 	iov_iter_advance(iter, seek);
 }
 
-#define SVC_TCP_RX_FIXED_BYTES	(7 * XDR_UNIT)
-
 static int svc_tcp_rx_start(struct svc_sock *svsk, struct svc_rqst *rqstp)
 {
 	struct svc_tcp_rx_state *state = rqstp->rq_tcp_rx;
@@ -5514,6 +5807,10 @@ svc_tcp_rx_classify(struct svc_sock *svsk, struct svc_rqst *rqstp)
 		return SVC_TCP_RX_REASON_PROCEDURE;
 	if (!svc_proc_accepts_xdr_bvec(procp, auth))
 		return SVC_TCP_RX_REASON_AUTH;
+	/* for the program's target hook at admission */
+	state->target_prog = program;
+	state->target_vers = version;
+	state->target_proc = procedure;
 	return SVC_TCP_RX_REASON_NONE;
 }
 
@@ -6126,6 +6423,14 @@ static int svc_tcp_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 				trace_svcsock_tcp_rx_lifetime(&svsk->sk_xprt,
 							       rqstp, state,
 							       SVC_TCP_RX_MATERIALIZE);
+			} else if (need && c &&
+				   !svc_tcp_rx_target_admit(svsk, c, rqstp, skb,
+							    body_offset,
+							    remaining)) {
+				/* Its target's window is full: pause here. */
+				take -= remaining;
+				remaining = 0;
+				paused = true;
 			} else if (need &&
 			    ((c && !svc_tcp_rx_credit_admit_to(svsk, c, state,
 							       reclen)) ||
@@ -7658,6 +7963,7 @@ static void svc_tcp_sock_detach(struct svc_xprt *xprt)
 
 	if (!test_bit(XPT_LISTENER, &xprt->xpt_flags)) {
 		svc_tcp_rx_credit_forget(svsk);
+		svc_tcp_rx_target_forget(svsk);
 		svc_rx_region_conn_drain(svsk);
 		svc_tcp_clear_pages(svsk);
 		kernel_sock_shutdown(svsk->sk_sock, SHUT_RDWR);

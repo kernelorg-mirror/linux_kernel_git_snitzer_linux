@@ -92,6 +92,16 @@ struct svc_tcp_rx_state {
 	u32			bounce_reserve;
 	/* lent from a stocked record: done returns it to a CPU's stock */
 	bool			bounce_stocked;
+	/*
+	 * The target (an export's filesystem) the record is counted
+	 * against, from its admission to the return of its credit, and
+	 * what names it: the call's program, version and procedure.
+	 */
+	struct svc_tcp_rx_target *target;
+	u32			target_prog;
+	u32			target_vers;
+	u32			target_proc;
+	bool			target_counted;
 } ____cacheline_aligned;
 
 /*
@@ -128,6 +138,10 @@ struct svc_sock {
 	struct svc_tcp_rx_state	*sk_rx;
 	/* waiting for region credit on its budget's FIFO */
 	struct rx_loan_waiter	sk_rx_wait;
+	/* waiting for a place in a target's window, on its FIFO by ticket */
+	struct list_head	sk_rx_target_node;
+	struct svc_tcp_rx_target *sk_rx_target_wait;
+	u64			sk_rx_target_ticket;
 	/*
 	 * What an incomplete loaned record still lacks after a read that
 	 * drained the socket, or 0: svc_data_ready() wakes no thread for
@@ -303,6 +317,16 @@ bool svc_tcp_rx_credit_charge(struct svc_sock *svsk,
 void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state);
 void svc_tcp_rx_credit_forget(struct svc_sock *svsk);
 void svc_tcp_rx_wait_init(struct svc_sock *svsk);
+
+/*
+ * A program's hook that names the target of a call whose payload is about
+ * to be loaned, from the record's first @len bytes at @head (from the
+ * xid): a nonzero key for the filesystem it writes, 0 for none known.
+ */
+typedef u32 (*svc_rx_target_fn)(u32 vers, u32 proc, const __be32 *head,
+				unsigned int len);
+int svc_rx_target_register(u32 program, svc_rx_target_fn fn);
+void svc_rx_target_unregister(u32 program);
 bool svc_tcp_rx_budget_copy(struct svc_sock *svsk);
 long svc_tcp_rx_budget_avail(void);
 unsigned int svc_tcp_rx_budget_cost_factor(void);
