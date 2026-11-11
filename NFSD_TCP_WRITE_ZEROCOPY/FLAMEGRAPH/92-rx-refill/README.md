@@ -287,3 +287,16 @@ frame of MTU 7792 can span two buffers of 8192 with `rx_ip_align` 2.
 Round 92's first trace asked 99.3 million buffers in 10 s for about 92
 million frames, so about one frame in thirteen takes two, and a full poll
 of 64 frames takes about 69 of a ring's 128 buffers, not 64.
+
+## The mid-poll refill's A/B (planned; Mike, 11 November: "run the rx_refill_mid A/B")
+
+`settled.sh` now holds `rx_refill_mid` at 0 in its xeu table (what
+Release 15 loads with, so the setting is unchanged; an xeu without the
+parameter, tardis1's, is not held to it), writes it at `apply` and takes
+a run's value as `EXP_XEU_rx_refill_mid`.  `run446.sh` from t2-r446:
+rings of 128 at `rx_refill_mid` 0, 16 and 32, three runs each in a
+rotated order, and rings of 256 at 0 twice beside them, the held mark on
+in every run.  What counts: ring drops and retransmits, the rate, the
+region's exact peak, and the ring CPUs' busy share (the doorbell writes'
+cost).  A run in which twoport placed no flows on a port does not count
+(t2-r440); the line says how many it placed.

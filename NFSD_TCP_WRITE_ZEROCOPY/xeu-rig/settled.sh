@@ -291,9 +291,12 @@ RODATA=noalias
 # FLAMEGRAPH round 41 (Mike, 28 October): the rings 6.5k instructions a
 # loaned WRITE fewer, their cycles and nothing else moved.  A kmod without
 # it audits BAD.
-declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=Y [rx_prefetch]=Y [rx_gro_frags]=Y)
+# rx_refill_mid (Release 15, FLAMEGRAPH round 92): 0, a poll refills only
+# at its end, as before it existed; an xeu without it is not held to it.
+declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=Y [rx_prefetch]=Y [rx_gro_frags]=Y [rx_refill_mid]=0)
 XP=/sys/module/xeu/parameters/rx_prefetch
 XG=/sys/module/xeu/parameters/rx_gro_frags
+XR=/sys/module/xeu/parameters/rx_refill_mid
 declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
 # Held only where the kernel has them (the canary from build 512 on; not
 # build 507 or tardis1's kernels).  rtc_read and rtc_write off: with either
@@ -641,6 +644,10 @@ audit() {
 	for k in $(printf '%s\n' "${!XEU[@]}" | sort); do
 		w=${XEU[$k]}; [ $k = rx_refill_thresh ] && w=${EXP_REFILL:-$w}
 		v=EXP_XEU_$k; w=${!v:-$w}
+		if [ $k = rx_refill_mid ] && [ "$w" = 0 ] && [ ! -e /sys/module/xeu/parameters/$k ]; then
+			printf '  --   %-34s %s\n' "xeu $k" "not in this xeu"
+			continue
+		fi
 		if [ "$w" = absent ]; then	# a kmod from before the parameter, held to not having it
 			want "xeu $k" "$(cat /sys/module/xeu/parameters/$k 2>/dev/null || echo absent)" absent
 			continue
@@ -787,6 +794,8 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 	[ -w $XP ] && [ "$(cat $XP)" != "$k" ] && echo "$k" > $XP
 	k=${EXP_XEU_rx_gro_frags:-${XEU[rx_gro_frags]}}
 	[ -w $XG ] && [ "$(cat $XG)" != "$k" ] && echo "$k" > $XG
+	k=${EXP_XEU_rx_refill_mid:-${XEU[rx_refill_mid]}}
+	[ -w $XR ] && [ "$(cat $XR)" != "$k" ] && echo "$k" > $XR
 	[ "$(containers)" = 0 ] && nft list table inet netavark > /dev/null 2>&1 && nft delete table inet netavark
 	if [ "$(conntrack_hooks)" != 0 ]; then
 		[ "$(nft list table inet zc_notrack 2> /dev/null | grep -c 'port 2049 notrack')" = 4 ] || nft -f "$NOTRACK"
