@@ -340,3 +340,12 @@ where drops come back.  `run446.sh` with `ARMS="128:48 128:64 128:32
 128:64 128:48 128:32 128:48 128:64"` from t2-r457: three runs each at 48
 and 64, two at 32 to tie the set to the last one.  At 64 a full poll of
 64 frames refills about once, near its end, so it should be close to 0.
+
+## What 16 costs against 32 (planned; Mike, 11 November: "after the edge runs finish, run perf on 16 vs 32")
+
+`run465.sh` is `run446.sh` with perf on the ring CPUs (0-7 and 56-63)
+for 8 s from 5 s into the load, cycles and instructions at 1999 Hz, kept
+with the CPU: 16 32 32 16 16 32 from t2-r465.  `ringcost.py` gives the
+cycles and instructions a WRITE on the receive CPUs and the transmit
+ones, and on the receive CPUs by area (the refill with its doorbell, the
+page pool's allocation, the poll, GRO and TCP, the rest).
