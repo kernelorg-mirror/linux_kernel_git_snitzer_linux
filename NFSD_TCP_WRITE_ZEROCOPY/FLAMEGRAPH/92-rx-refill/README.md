@@ -116,7 +116,7 @@ a poll (a ring of 128 is about 110 us at 9 GB/s).
 
 ## The wrap fixed in kernel-rpmtree (11 November, Mike: "fix the wrap")
 
-kernel-rpmtree `7cbd88c` "xsight: count an xeu ring's empty slots in a u16
+kernel-rpmtree `cd60c0b` (pushed; `7cbd88c` before) "xsight: count an xeu ring's empty slots in a u16
 at the refill retry", Release 14: `u32 rx_fill_cnt` becomes `u16` in
 the retry patch (Patch3), as the poll's own count is, and the threshold
 patch (Patch4) after it carries the new context.  All fourteen patches
@@ -238,3 +238,23 @@ remove the drops but raise the peak and do not raise the rate.  It is
 Mike's call.  What would remove the drops without growing the region is
 step 2's other lever: a poll that refills before its end, so that a
 ring behind never has only 64 buffers free for a whole 34 us.
+
+## The mid-poll refill (11 November, Mike: "write the mid-poll refill patch for xeu")
+
+kernel-rpmtree `19c4c5d` "xsight: refill xeu's RX rings in the middle of
+a poll", Patch14, Release 15: `rx_refill_mid` (default 0, read once a
+poll).  Set, the poll also refills its ring between frames as soon as
+that many slots are empty, after `sr_cons_idx` has moved past the frame
+just taken, so only slots the poll is done with are posted again.  The
+end-of-poll refill and its retry are unchanged, and the ring holds no
+more buffers than it did: the region's footprint is bounded as at 128,
+though the ring may run fuller on average.  Each refill is a doorbell
+write, so a low setting costs the rings some.
+
+All fifteen patches apply to the tarball in spec order, and xeu builds
+against this kernel with no warning of its own.  It is not loaded (no
+reload of `xeu` on this boot).  The A/B it wants on the next boot with
+the package: twoport's rings of 128 with `rx_refill_mid` 0 against 16
+and 32 (16 posts a quarter of a full poll's buffers back mid-poll, 32
+half), for ring drops, retransmits, the rings' cycles and the region's
+peak, with rings of 256 beside them for what the drops cost.
