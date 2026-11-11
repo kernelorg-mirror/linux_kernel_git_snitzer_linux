@@ -291,9 +291,15 @@ RODATA=noalias
 # FLAMEGRAPH round 41 (Mike, 28 October): the rings 6.5k instructions a
 # loaned WRITE fewer, their cycles and nothing else moved.  A kmod without
 # it audits BAD.
-# rx_refill_mid (Release 15, FLAMEGRAPH round 92): 0, a poll refills only
-# at its end, as before it existed; an xeu without it is not held to it.
+# rx_refill_mid (Release 15, FLAMEGRAPH round 92): a poll refills its
+# ring as soon as this many slots are empty, not only at its end (0).  16
+# on tardis2 since 11 November (Mike): the rings dropped 1,479 to 2,269
+# frames a two-port run at 0 and none in ten runs at 16, at the same rate,
+# cycles and region peak as 32; 48 drops a few.  On tardis2 an xeu without
+# it audits BAD; elsewhere (tardis1's Release 13) it is held at 0, and an
+# xeu without it is not held to it.
 declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_indir_size]=128 [irq_msix_mask]=Y [rx_prefetch]=Y [rx_gro_frags]=Y [rx_refill_mid]=0)
+[ $HOST = tardis2 ] && XEU[rx_refill_mid]=16
 XP=/sys/module/xeu/parameters/rx_prefetch
 XG=/sys/module/xeu/parameters/rx_gro_frags
 XR=/sys/module/xeu/parameters/rx_refill_mid

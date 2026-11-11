@@ -285,7 +285,7 @@ client's TSO sends, a full poll draining 64 frames in 34 us with no
 refill until its end.  Rings of 256 drop nothing but raise the region's
 peak about 1,200 pages and not the rate, so they are not kept.  xeu's
 retry-check wrap is fixed (kernel-rpmtree `cd60c0b`, Release 14) and the
-mid-poll refill written (`19c4c5d`, Release 15, `rx_refill_mid`, default
+mid-poll refill written (`2e18d74`, Release 15, `rx_refill_mid`, default
 0).  **On Mike's word (11 November) xeu was reloaded on this boot:
 Release 15's `xeu.ko` is in `updates/` (srcversion
 C3071685F0211EF8EBA2A7F; the rpm installed is still Release 13), and the

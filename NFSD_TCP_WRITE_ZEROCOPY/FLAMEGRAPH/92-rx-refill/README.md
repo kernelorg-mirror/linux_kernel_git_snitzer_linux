@@ -241,7 +241,7 @@ ring behind never has only 64 buffers free for a whole 34 us.
 
 ## The mid-poll refill (11 November, Mike: "write the mid-poll refill patch for xeu")
 
-kernel-rpmtree `19c4c5d` "xsight: refill xeu's RX rings in the middle of
+kernel-rpmtree `2e18d74` "xsight: refill xeu's RX rings in the middle of
 a poll", Patch14, Release 15: `rx_refill_mid` (default 0, read once a
 poll).  Set, the poll also refills its ring between frames as soon as
 that many slots are empty, after `sr_cons_idx` has moved past the frame
@@ -423,3 +423,10 @@ runs at 16, one frame in twelve at 32.
 **16 is the setting to keep.**  It is two steps from the edge (48), at no
 cost against 32 in rate, cycles or the region.  Keeping it is
 `settled.sh`'s xeu table (`rx_refill_mid` 0 now), Mike's call.
+
+**Kept (Mike, 11 November): `settled.sh` holds `rx_refill_mid` at 16 on
+tardis2.**  `apply` writes it and the audit holds it there, so an xeu
+without the parameter audits BAD on tardis2; tardis1's Release 13 xeu
+is held at 0 and passes without it.  Applied after the third set: the
+audit at rest reads `xeu rx_refill_mid 16` and ends in the settled
+setting.
