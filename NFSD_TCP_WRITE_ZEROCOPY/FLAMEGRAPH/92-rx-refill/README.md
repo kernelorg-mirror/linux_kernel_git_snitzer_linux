@@ -192,3 +192,12 @@ has at most 64 buffers free until it ends.  A burst of more than the
 ring holds, at more than 1.87 frames a us, is dropped at the tail.  Two
 levers: a ring that holds a longer burst (step 3, rings of 256) or a
 poll that drains faster, or refills before its end.
+
+## Step 3: rings of 256 against 128 (planned)
+
+`run440.sh`: twoport's 128 against `ENTRIES=256` (a run's experiment,
+which `settled.sh` audits), 128 256 256 128 128 256 from t2-r440, the
+held mark on in every run for the region's exact peak, since a ring of
+256 posts 128 more buffers (1 MiB) a ring: up to 8 MiB more of the
+region over eight rings, against the footprint rule.  What counts:
+drops, retransmits and rate against the peak.
