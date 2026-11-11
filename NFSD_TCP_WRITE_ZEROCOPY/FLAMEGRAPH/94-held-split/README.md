@@ -321,3 +321,12 @@ warning.  A WRITE's charge is 127 pages, about twice its 64-odd pages.
   bound that counts only the WRITEs at a drive (or that admits a
   record only when its drive has room) is what would shorten the
   drive's queue without starving assembly.
+
+## The design of a per-drive bound
+
+[DESIGN-per-export-window.md](DESIGN-per-export-window.md): a window of
+loaned WRITEs in flight for each export, keyed by the file handle's
+fsid at admission (an nfsd procedure hook names the target from the
+record's first bytes; sunrpc counts and pauses as the budget does),
+what it would buy (the drive's queue from three writes to two, 5 to 6
+MiB of the 50 held) and what it would not (the assembly's 11 MiB).
