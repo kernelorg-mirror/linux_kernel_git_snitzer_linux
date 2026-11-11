@@ -4,7 +4,9 @@
 # Beside each twoport.sh run (REGION_SAMPLE=1, the held mark on): from the
 # window's start, heldsplit.bt for 14 s (a loaned record's pages by stage)
 # and sockq.py for 10 s (the bytes in nfsd's sockets' receive queues).  No
-# perf on the cores.  RUNS runs from t2-r485.
+# perf on the cores.  RUNS runs from t2-r485.  BT=writesplit runs
+# writesplit.bt in heldsplit.bt's place (the WRITE's time split between
+# XFS and the drive), read by writesplit-read.py.
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
 say() { echo "$(date +%T) $*"; }
@@ -20,10 +22,11 @@ split() {	# split <run dir>
 	for i in $(seq 1 30000); do [ -e $O/pmu/perf-stat-window.txt ] && break; sleep 0.01; done
 	[ -e $O/pmu/perf-stat-window.txt ] || return
 	taskset -c 63 python3 -I $HERE/sockq.py $O/sockq.txt 10 50 &
-	taskset -c 63 timeout -s INT 14 bpftrace $HERE/heldsplit.bt > $O/heldsplit.out 2>&1
-	date +%s.%N > $O/heldsplit.t1
+	taskset -c 63 timeout -s INT 14 bpftrace $HERE/$BT.bt > $O/$BT.out 2>&1
+	date +%s.%N > $O/$BT.t1
 	wait
 }
+BT=${BT:-heldsplit}
 n=${N0:-485}
 for i in $(seq 1 ${RUNS:-3}); do
 	[ "$(df --output=avail -k / | tail -1)" -gt 1048576 ] || { say "root has under 1 GB free"; stop; }
@@ -41,7 +44,7 @@ for i in $(seq 1 ${RUNS:-3}); do
 	dmesg > $O/dmesg.1
 	hung=$(diff $O/dmesg.0 $O/dmesg.1 | grep -v 'tracing to debugfs is deprecated' | grep -c -i -E 'hung|blocked for more|soft lockup|rcu.*stall|WARNING|BUG|Failed to allocate')
 	say "t2-r$n | $(grep '^total' $O/pmu.log) | ring drops $(grep -oE 'ring drops [0-9]+' $O/pmu.log | awk '{s+=$3} END {print s}') | flows placed $(grep -c "^flow" $O/pmu/place-a.txt)/$(grep -c "^flow" $O/pmu/place-b.txt) | $(grep -o 'no drive stepped down' $O/pmu.log || echo 'a drive stepped down') | new kernel warnings $hung"
-	python3 -I $HERE/heldsplit-read.py t2-r$n 2>&1 | sed 's/^/    /'
+	python3 -I $HERE/$BT-read.py t2-r$n 2>&1 | sed 's/^/    /'
 	[ "$hung" = 0 ] || { say "the kernel warned; stopping"; diff $O/dmesg.0 $O/dmesg.1 | head -20; stop; }
 	n=$((n + 1))
 done

@@ -1,0 +1,93 @@
+#!/usr/bin/bpftrace
+/*
+ * writesplit.bt: a loaned WRITE's time in nfsd_direct_write() split
+ * between XFS and the drive (FLAMEGRAPH round 94).  For each call, on the
+ * nfsd thread that makes it (rtc_write is off, so the call waits for its
+ * I/O), in page-microseconds (the payload's bytes over 15,480):
+ *
+ *   a before I/O   entry .. the call's first bio queued (block_bio_queue):
+ *                  XFS mapping the range, iomap building the bios
+ *   b I/O          the first bio queued .. the last request completed
+ *   c after I/O    the last request completed .. the return: the wake of
+ *                  the thread, iomap's and XFS's completion
+ *
+ * and, for each request on the eight data drives (259:0 to 259:7, 256 KiB
+ * at most) issued from such a call, its bytes over 15,480 times issue ..
+ * complete: the pages at the drive.  What b holds beyond that is a
+ * request's bytes before its issue (the bio's way through blk-mq) and
+ * after its completion while the call's other requests finish.
+ *     timeout -s INT 14 bpftrace writesplit.bt
+ */
+config = { missing_probes = "error"; max_map_keys = 262144 }
+
+BEGIN { @t0 = nsecs; }
+
+kprobe:nfsd:nfsd_direct_write
+{
+	$p = (struct xdr_buf *)arg3;
+	@pg[tid] = (uint64)$p->len; @e[tid] = (nsecs - @t0) / 1000;
+	@fq[tid] = 0; @lc[tid] = 0; @nrq[tid] = 0;
+}
+
+tracepoint:block:block_bio_queue
+/ args.dev >= (259 << 20) && args.dev <= (259 << 20) + 7 && has_key(@e, tid) /
+{
+	if (@fq[tid] == 0) { @fq[tid] = (nsecs - @t0) / 1000; }
+}
+
+tracepoint:block:block_rq_issue
+/ args.dev >= (259 << 20) && args.dev <= (259 << 20) + 7 /
+{
+	if (has_key(@e, tid)) {
+		@is[args.dev, args.sector] = (nsecs - @t0) / 1000;
+		@own[args.dev, args.sector] = tid; @nrq[tid] += 1;
+		@n["requests issued in a WRITE's call"] = count();
+	} else {
+		@n["requests issued elsewhere"] = count();
+	}
+	@rqkb = hist(args.bytes / 1024);
+}
+
+tracepoint:block:block_rq_complete
+/ args.dev >= (259 << 20) && args.dev <= (259 << 20) + 7 /
+{
+	$k0 = args.dev; $k1 = args.sector;
+	if (has_key(@own, ($k0, $k1))) {
+		$t = (nsecs - @t0) / 1000; $o = @own[$k0, $k1];
+		$d = $t - @is[$k0, $k1];
+		@sum["drive (issue .. complete)"] = sum((uint64)args.nr_sector * 512 * $d);
+		@us["drive, a request"] = hist($d);
+		if (has_key(@e, $o)) { @lc[$o] = $t; }
+		delete(@own[$k0, $k1]); delete(@is[$k0, $k1]);
+	}
+}
+
+kretprobe:nfsd:nfsd_direct_write
+{
+	if (has_key(@e, tid)) {
+		$t = (nsecs - @t0) / 1000; $e = @e[tid]; $b = @pg[tid];
+		$f = @fq[tid]; $c = @lc[tid];
+		if ($f >= $e && $c >= $f && $t >= $c) {
+			@sum["a before I/O"] = sum($b * ($f - $e));
+			@sum["b I/O"] = sum($b * ($c - $f));
+			@sum["c after I/O"] = sum($b * ($t - $c));
+			@us["a before I/O"] = hist($f - $e);
+			@us["b I/O"] = hist($c - $f);
+			@us["c after I/O"] = hist($t - $c);
+			@reqs = lhist(@nrq[tid], 0, 12, 1);
+			@n["calls, I/O seen"] = count(); @bytes = sum($b);
+		} else {
+			@sum["calls, no I/O seen"] = sum($b * ($t - $e));
+			@n["calls, no I/O seen"] = count();
+		}
+		@sum["whole call"] = sum($b * ($t - $e));
+		delete(@e[tid]); delete(@pg[tid]); delete(@fq[tid]); delete(@lc[tid]); delete(@nrq[tid]);
+	}
+}
+
+END
+{
+	printf("traced_us %d\n", (nsecs - @t0) / 1000);
+	printf("left in the maps: own %d e %d\n", len(@own), len(@e));
+	clear(@e); clear(@pg); clear(@fq); clear(@lc); clear(@nrq); clear(@own); clear(@is);
+}
