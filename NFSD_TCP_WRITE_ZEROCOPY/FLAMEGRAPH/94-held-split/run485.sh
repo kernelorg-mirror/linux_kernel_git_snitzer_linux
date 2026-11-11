@@ -2,7 +2,7 @@
 # run485.sh: round 94, where the receive region's held pages sit, on the
 # settled two-port setting (rings of 128, stack 96, rx_refill_mid 16).
 # Beside each twoport.sh run (REGION_SAMPLE=1, the held mark on): from the
-# window's start, heldsplit.bt for 12 s (a loaned record's pages by stage)
+# window's start, heldsplit.bt for 14 s (a loaned record's pages by stage)
 # and sockq.py for 10 s (the bytes in nfsd's sockets' receive queues).  No
 # perf on the cores.  RUNS runs from t2-r485.
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
@@ -20,7 +20,7 @@ split() {	# split <run dir>
 	for i in $(seq 1 30000); do [ -e $O/pmu/perf-stat-window.txt ] && break; sleep 0.01; done
 	[ -e $O/pmu/perf-stat-window.txt ] || return
 	taskset -c 63 python3 -I $HERE/sockq.py $O/sockq.txt 10 50 &
-	taskset -c 63 timeout -s INT 12 bpftrace $HERE/heldsplit.bt > $O/heldsplit.out 2>&1
+	taskset -c 63 timeout -s INT 14 bpftrace $HERE/heldsplit.bt > $O/heldsplit.out 2>&1
 	date +%s.%N > $O/heldsplit.t1
 	wait
 }

@@ -21,7 +21,7 @@
  * (sampled beside it), a page's way back after the release.
  *     timeout -s INT 10 bpftrace heldsplit.bt
  */
-config = { missing_probes = "error"; max_map_keys = 65536 }
+config = { missing_probes = "error"; max_map_keys = 1048576 }
 
 BEGIN { @t0 = nsecs; }
 
@@ -40,7 +40,7 @@ fentry:sunrpc:svc_tcp_rx_walk_skb
 tracepoint:sunrpc:svcsock_tcp_rx_lifetime
 {
 	$x = (uint64)args.xprt; $q = args.sequence; $t = (nsecs - @t0) / 1000;
-	$a = args.action;
+	$a = args.action; @act[$a] = count();
 	if ($a == 2) {			/* publish */
 		$pg = (uint64)args.page_pool_bytes;
 		@pp[$x, $q] = $pg; @tp[$x, $q] = $t;
@@ -99,5 +99,6 @@ kretprobe:nfsd:nfsd_direct_write
 END
 {
 	printf("traced_us %d\n", (nsecs - @t0) / 1000);
+	printf("left in the maps: rb %d tp %d w0 %d w1 %d k %d\n", len(@rb), len(@tp), len(@w0), len(@w1), len(@k));
 	clear(@rb); clear(@rbt); clear(@tp); clear(@pp); clear(@w0); clear(@w1); clear(@k);
 }

@@ -1,0 +1,11 @@
+19:23:16 t2-r485 | total 70.36 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r485: total 70.36 GB/s; traced 10.18 s; held over it: mean 3574, median 3418 (471 samples); 24 connections; records published 621390, WRITE seen 524128, no WRITE 219, error/abort 0
+      rings, posted (taken as full)        512 pages    8.0 MiB  14.3%
+      sockets, receive queues               94 pages    1.5 MiB   2.6%
+      1 assembly                           650 pages   10.2 MiB  18.2%
+      2 to WRITE                            56 pages    0.9 MiB   1.6%
+      3 drive                             1270 pages   19.9 MiB  35.6%
+      4 to release                          41 pages    0.6 MiB   1.1%
+      5 no WRITE                             1 pages    0.0 MiB   0.0%
+      rest: the way back, unseen           950 pages   14.9 MiB  26.6%
+19:23:19 after: settled.sh audit rest: the settled setting
