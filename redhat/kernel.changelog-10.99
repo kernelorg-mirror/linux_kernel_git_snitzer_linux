@@ -1,3 +1,20 @@
+* Tue Nov 10 2026 Mike Snitzer <snitzer@kernel.org> [7.3.3-15]
+- nfsd-testing-canary-dontcache is v11 of the series as posted
+  (https://lore.kernel.org/linux-nfs/20261111015607.46338-1-snitzer@kernel.org/),
+  with two fixes from the review of v10: iomap decides whether a unit is
+  an edge from what is left of the whole write, not of the current
+  extent, so with blocks smaller than the folio an extent boundary no
+  longer splits a unit the write covers in full into two edges that
+  nothing marks; and filemap_dontcache_edge_complete() leaves a clean
+  mapped folio unmarked, as filemap_end_dropbehind() leaves a mapped
+  folio, instead of marking it dropbehind for a writeback that never
+  comes; its commit messages, comments and nfsd-io-modes.rst say
+  DONTCACHE and dropbehind, and "the other WRITE that covers the rest of
+  the page"; nfsd-testing-canary-dontcache-LOCALIO is rebased on it and
+  its comments in nfs_dio.c, nfs_dio.h and the client's localio.c say
+  "the other write" the same way, code unchanged;
+  nfs-testing-canary-reduce-i_lock-contention-LOCALIO is rebased on it
+
 * Mon Nov 09 2026 Mike Snitzer <snitzer@kernel.org> [7.3.3-14]
 - baseline-reverts reverts four more v7.3.3 backports: "NFS: Fix stale
   negative cache on failed nfs_mkdir()" and "NFSv4/flexfiles: fail I/O to
