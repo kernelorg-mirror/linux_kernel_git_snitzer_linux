@@ -219,6 +219,13 @@ Tracing:
       nfsd_read_dio_pages_in_use  an earlier operation in the same
                                   COMPOUND already put data in the
                                   reply's pages
+      nfsd_read_dio_range_too_large
+                                  the DIO read offset alignment exceeds
+                                  the page size and the READ, expanded
+                                  to that alignment, needs more pages
+                                  than the reply has. An NFSv4 READ
+                                  that also meets one of the conditions
+                                  below reports that condition instead.
       nfsd_read_dio_not_last_op   an NFSv4 READ that is not the last
                                   operation of its COMPOUND
 
