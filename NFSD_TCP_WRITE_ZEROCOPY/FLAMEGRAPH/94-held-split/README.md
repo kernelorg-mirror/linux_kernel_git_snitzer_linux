@@ -274,3 +274,50 @@ with 16 to 19 segments in the payload's layout and 8 to 9 flat.
   cost is per segment, not per command.  A smaller `max_sectors_kb` is
   no lever for the pages held at the drive either: at two outstanding
   and more a write's time is the same.
+
+## The loan budget sweep (t2-r490 to r493)
+
+**A full budget pauses, it does not copy.**  In the receive path
+(`net/sunrpc/svcsock.c`, at `svc_tcp_rx_credit_admit_to()`), a record
+the budget cannot admit at its first skb with region pages is left
+unread there: its transport waits, oldest first, and is woken when
+credit returns (`rx_loan_admit()`, `net/core/rx_loan.c`; the oldest
+record in flight always starts).  Only a budget of 0 copies
+(`svc_tcp_rx_budget_copy_from()`, reason `NO_BUDGET`).  The budget's
+`denied` counts these pauses; its `paused` stayed 0.  So round 93's
+"loans refused" were pauses too.
+
+[run490.sh](run490.sh), one two-port run a budget, heldsplit.bt, the
+socket sampler and the mesh beside each, [run490.out](run490.out).
+Every run at 0 ring drops, no drive stepped down, no new kernel
+warning.  A WRITE's charge is 127 pages, about twice its 64-odd pages.
+
+| budget, WRITEs (pages) | 128 (16,262) | 80 (10,214) | 64 (8,198) | 48 (6,182) |
+|---|---|---|---|---|
+| Rate, GB/s | 71.79 | 71.13 | 71.41 | 70.30 |
+| Admissions paused | 254 | 9,439 | 84,632 | 154,330 |
+| Held, median (MiB, L3) | 3,574 (56, 1.75) | 3,535 (55, 1.73) | 3,543 (55, 1.73) | 3,521 (55, 1.72) |
+| 99th percentile | 6,909 | 6,925 | 5,926 | 5,250 |
+| Kernel peak | 11,511 | 8,674 | 7,362 | 5,923 |
+| Bytes through memory a byte | 1.72 | 1.69 | 1.71 | 1.66 |
+| At the drive (heldsplit) | 1,499 | 1,454 | 1,482 | 1,358 |
+| Assembly | 671 | 679 | 686 | 691 |
+| Sockets' queues | 90 | 95 | 97 | 97 |
+
+- **The budget cuts the bursts, not the working set.**  The peak falls
+  from 11,511 to 5,923 pages and the 99th percentile from 6,909 to
+  5,250, but the median stays at 3,520 to 3,575 pages (1.72 to 1.75
+  L3), and so do the bytes through memory (1.66 to 1.72).
+- **The drive's share does not move** until 48, and then only by 9%
+  (1,358 pages), with the rate 2% down (70.30 GB/s).  Assembly and the
+  sockets do not grow: a paused connection's bytes wait on the client.
+- **Why:** the budget charges a record from its first payload skb, so
+  the records in assembly (about 24, one a connection) draw on it as
+  much as those at the drives.  About 52 records are in flight in
+  steady state, so 48 is the first budget that binds outside bursts,
+  and it binds on both kinds alike.  To bring the drives to two
+  outstanding (16 WRITEs), a global budget would have to go to about
+  40 and pause assembly too; at 48 the rate is already falling.  A
+  bound that counts only the WRITEs at a drive (or that admits a
+  record only when its drive has room) is what would shorten the
+  drive's queue without starving assembly.
