@@ -258,3 +258,32 @@ the package: twoport's rings of 128 with `rx_refill_mid` 0 against 16
 and 32 (16 posts a quarter of a full poll's buffers back mid-poll, 32
 half), for ring drops, retransmits, the rings' cycles and the region's
 peak, with rings of 256 beside them for what the drops cost.
+
+## Release 15 loaded (11 November, Mike: "add the new xeu driver to updates and reload the xeu interfaces")
+
+Built from the tarball with the fifteen patches against this kernel; its
+`xsl_core` came out identical to the loaded one (srcversion
+5D07B4F4E11C2A6F73046EE), so only `xeu` was reloaded.  The new `xeu.ko`
+(srcversion C3071685F0211EF8EBA2A7F, against Release 13's
+CA0931345E46C929B11D01F) is in `/lib/modules/$(uname -r)/updates/` beside
+the `sunrpc.ko` already there (10 November, the one loaded), after `depmod -a`; the Release 13 rpm is still
+installed, its module in `extra/xsight/` shadowed.  With the client free
+and the setting audited at rest: `rmmod xeu; modprobe xeu` (02:11:24),
+then `port-setup.sh` for each port and `settled.sh apply`, as on tardis1
+(`xeu-rig/XSIGHT-FOLLOWUP.md`, X4's reload).
+
+As on 7 November, the ports came back with the driver's default eight
+rings, which ran the region dry for the 30 s until `port-setup.sh` cut
+each to four (`alloc_fail` 13, "Failed to allocate Rx page from pool" a
+few times a second on both ports).  Once both were set up the region had
+31,664 pages free and four pools a port, and nothing has failed since.
+After `settled.sh apply`: "the settled setting" at rest, both ports
+answer the client, the rings' interrupts on 0 to 7 and 56 to 63 as
+before, `rx_refill_mid` 0, kdump armed.  The record is in
+`/var/tmp/zc-run-logs/xeu-r15-reload/`.
+
+A note on step 2's "a frame to a buffer": xeu says at every open that a
+frame of MTU 7792 can span two buffers of 8192 with `rx_ip_align` 2.
+Round 92's first trace asked 99.3 million buffers in 10 s for about 92
+million frames, so about one frame in thirteen takes two, and a full poll
+of 64 frames takes about 69 of a ring's 128 buffers, not 64.
