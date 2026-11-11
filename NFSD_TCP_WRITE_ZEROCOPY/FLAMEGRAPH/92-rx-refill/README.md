@@ -300,3 +300,35 @@ in every run.  What counts: ring drops and retransmits, the rate, the
 region's exact peak, and the ring CPUs' busy share (the doorbell writes'
 cost).  A run in which twoport placed no flows on a port does not count
 (t2-r440); the line says how many it placed.
+
+### What it found (t2-r446 to r456)
+
+| arm | runs | GB/s (mean) | ring drops | retransmits | region peak (mean, range) | ring CPUs' softirq |
+|---|---|---|---|---|---|---|
+| 128, mid 0 | r446 r451 r456 | 71.54 (71.19 to 72.11) | 1,479 to 2,269 | 1,547 to 2,360 | 11,528 (10,974 to 12,599) | 20.4, 25.4, 29.3% |
+| 128, mid 16 | r447 r452 r454 | 71.68 (71.61 to 71.78) | 0 | 26 to 44 | 12,198 (11,558 to 12,573) | 23.2, 27.5, 28.9% |
+| 128, mid 32 | r448 r450 r455 | 71.53 (71.35 to 71.72) | 0 | 25 to 26 | 11,422 (9,561 to 12,995) | 27.8, 26.4, 28.4% |
+| 256, mid 0 | r449 r453 | 70.53 (70.26, 70.79) | 0 | 26, 47 | 10,339 (9,455, 11,222) | 27.5, 28.6% |
+
+Every run placed its twelve flows a port, no kernel warning, no
+allocation failure; the setting at rest afterwards, `rx_refill_mid` 0.
+The softirq share is the mean of the eight receive CPUs' `%soft` in
+`srv-mpstat.txt`, in run order within each arm.
+
+- **The mid-poll refill takes the drops away on rings of 128**: none in
+  any of six runs at 16 or 32, against 1,479 to 2,269 at 0, and the
+  client's retransmits from about 1,900 to 25 to 44, as low as rings of
+  256.
+- **At no cost in rate**: 71.68 at 16 and 71.53 at 32 against 71.54 at
+  0; rings of 256 are again about 1 GB/s lower (70.53).
+- **The region's peak is not raised at 32**: 11,422 against 11,528 at 0.
+  At 16 it is 670 higher, inside a spread of 1,600 to 3,400 between runs
+  of one arm, so not shown either way.
+- **The rings' cost is not seen**: the receive CPUs' softirq share rose
+  through the session in every arm (20 to 29% from the first run to the
+  last), and within that drift the arms do not separate; the extra
+  doorbells cost at most a point or two.
+
+So `rx_refill_mid` 32 does what rings of 256 did for the drops without
+their lower rate or the region they hold.  Keeping it is a change to
+`settled.sh` (its xeu table, 0 now), Mike's call.
