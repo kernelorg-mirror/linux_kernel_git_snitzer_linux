@@ -397,3 +397,42 @@ client's connections are held by the server's window in both, so the
 extra WRITEs wait at the client: none of them arrives sooner, and a
 drive takes eight interleaved streams instead of four.  The client's
 writers are not the lever; 16 stays.
+
+## A 512 KiB wsize (t2-r577..r582)
+
+[run577.sh](run577.sh) ([run577.out](run577.out)): the client's
+rsize and wsize (twoport.sh's `WSIZE`) at 1 MiB and 512 KiB, in turns,
+at the settled setting otherwise (512 KiB held buffer, 12 connections a
+port, 16 writers a port, 8 MiB blocks), the budget held at 8198 pages,
+`WARM=10 RUNTIME=40`.  The window counts records an export, so 512 KiB
+ran at window 14 (window 7's bytes) and at window 7 (half of them).
+Every client mount took the wsize asked.
+
+| run | wsize, window | GB/s | a drive empty / 4+ | client CPUs | held median, most | to memory |
+|---|---|---|---|---|---|---|
+| `t2-r577` | 1 MiB, 7 | 75.04 | 6.6% / 85.6% | 42% | 55 MiB, 3889 | 131.7 GB/s, 1.76 a byte |
+| `t2-r580` | 1 MiB, 7 | 74.81 | 6.9% / 85.2% | 42% | 55 MiB, 3913 | 131.1, 1.75 |
+| `t2-r578` | 512 KiB, 14 | 78.46 | 2.7% / 90.1% | 49% | 54 MiB, 3754 | 131.4, 1.68 |
+| `t2-r581` | 512 KiB, 14 | 78.40 | 2.5% / 90.0% | 50% | 54 MiB, 3771 | 132.4, 1.69 |
+| `t2-r579` | 512 KiB, 7 | 76.72 | 4.1% / 83.4% | 48% | 41 MiB, 2847 | 87.1, 1.13 |
+| `t2-r582` | 512 KiB, 7 | 76.23 | 4.5% / 81.9% | 48% | 40 MiB, 2818 | 84.2, 1.10 |
+
+No loan denied, no ring drop, no drive stepped down in any; twice the
+loans admitted at 512 KiB, as there are twice the WRITEs.
+
+- **512 KiB at window 14 carries 78.43 GB/s against 1 MiB's 74.93
+  (+4.7%), at the same held pages.**  A drive's empty time falls from
+  6.7% to 2.6%: the record that refills it is read in half the time,
+  as the section above has it.  The cost is the client's CPUs, 50%
+  busy against 42% for twice the RPCs, and twice the WRITEs through
+  nfsd.
+- **512 KiB at window 7 carries 76.48 (+2.1%) on a quarter fewer held
+  pages (40 MiB, 1.25 the L3, against 55 MiB, 1.73) and a third less
+  traffic to memory (1.10 bytes a byte written against 1.76).**  Half
+  the bytes in flight an export: the drives are empty less often than
+  at 1 MiB but are kept less deep (82 to 83% at 4 or more against
+  85%), and what is held nearly fits the L3.
+- Neither is a change to the server: the wsize is the client's mount.
+  Window 7 at 1 MiB and 14 at 512 KiB are the same bytes, so a window
+  counted in bytes rather than records would keep its meaning across
+  wsizes.  Window 10 or 11 at 512 KiB, between the two, is not run.
