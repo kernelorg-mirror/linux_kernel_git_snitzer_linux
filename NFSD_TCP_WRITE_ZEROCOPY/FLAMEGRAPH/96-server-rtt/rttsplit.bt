@@ -1,0 +1,127 @@
+#!/usr/bin/bpftrace
+// rttsplit.bt: the server's share of the client's round trip, on nfsd's
+// TCP connections (local port 2049), from the segment's arrival in the
+// stack to the ACK that covers it, and what the receive window does.
+//
+// At each segment's arrival (tcp:tcp_probe, before it is queued): the
+// room left in the window after it (room_kib, offset by 32 KiB so the
+// first bucket is a negative room; wall counts those under a
+// frame); a segment that finds everything before it acknowledged starts
+// the ack clock (unacked), and one that finds the queue read starts the
+// queue-wait clock (qempty); a segment that closes the window starts the
+// closed clock.
+// At each transmit (__tcp_transmit_skb) on such a socket: the ack clock's
+// time (ack_us), by where it is sent from: "read" is tcp_cleanup_rbuf
+// after nfsd's read (the ACK that opens the window), "ring" a ring CPU
+// (the softirq's ACK at arrival), "nfsd other" anything else on nfsd's
+// CPUs (the reply, the delayed-ACK timer).  The window chosen for each
+// (adv_kib, __tcp_select_window), by the same classes; a window at or
+// over 64 KiB after a close ends the closed clock (closed_us).
+// At nfsd's read (tcp_read_sock): the queue-wait time (qwait_us), bytes
+// waiting (avail_kib), the read's length (read_us) and bytes (read_kib).
+// nfsd threads: wakeup to running (wake_us).  Ring CPUs: the gap between
+// NAPI polls and the frames a poll (poll_gap_us, poll_work).
+
+BEGIN { @t0 = nsecs; }
+
+tracepoint:tcp:tcp_probe /args->sport == 2049 && args->data_len > 0/
+{
+	$sk = (uint64)args->skaddr;
+	$tp = (struct tcp_sock *)args->skaddr;
+	$end = $tp->rcv_nxt + (uint32)args->data_len;
+	$room = (int64)$tp->rcv_wup + (int64)$tp->rcv_wnd - (int64)$end;
+	@room_kib = lhist((uint64)($room + 32768) / 1024, 0, 288, 16);	// 32 KiB added: the first bucket is room under 0
+	if ($room < 9000) {
+		@wall = count();
+		if (!@closed[$sk]) { @closed[$sk] = nsecs; }
+	}
+	if ($tp->rcv_nxt == $tp->rcv_wup) { @unacked[$sk] = nsecs; }
+	if ($tp->rcv_nxt == $tp->copied_seq) { @qempty[$sk] = nsecs; }
+	@segs = count();
+}
+
+kprobe:tcp_cleanup_rbuf { @inrbuf[tid] = 1; }
+kretprobe:tcp_cleanup_rbuf { delete(@inrbuf[tid]); }
+
+kprobe:__tcp_transmit_skb
+/((struct sock *)arg0)->__sk_common.skc_num == 2049/
+{
+	$c = @inrbuf[tid] ? "read" : ((cpu < 8 || cpu >= 56) ? "ring" : "nfsd other");
+	if (@unacked[(uint64)arg0]) {
+		$d = (uint64)(nsecs - @unacked[(uint64)arg0]);
+		@ack_us[$c] = hist($d / 1000);
+		@ack_avg_ns[$c] = avg($d);
+		@acks[$c] = count();
+		delete(@unacked[(uint64)arg0]);
+	} else {
+		@tx_nothing_unacked[$c] = count();
+	}
+}
+
+kprobe:__tcp_select_window
+/((struct sock *)arg0)->__sk_common.skc_num == 2049/
+{
+	@selsk[cpu] = (uint64)arg0;
+}
+kretprobe:__tcp_select_window /@selsk[cpu]/
+{
+	$c = @inrbuf[tid] ? "read" : ((cpu < 8 || cpu >= 56) ? "ring" : "nfsd other");
+	@adv_kib[$c] = hist((uint64)retval / 1024);
+	@adv_avg_b[$c] = avg(retval);
+	if (@closed[@selsk[cpu]] && retval >= 65536) {
+		$d = nsecs - @closed[@selsk[cpu]];
+		@closed_us[$c] = hist($d / 1000);
+		@closed_avg_ns[$c] = avg($d);
+		@reopened[$c] = count();
+		delete(@closed[@selsk[cpu]]);
+	}
+	delete(@selsk[cpu]);
+}
+
+kfunc:tcp_read_sock
+{
+	$sk = (uint64)args->sk;
+	$tp = (struct tcp_sock *)args->sk;
+	if (@qempty[$sk]) {
+		$d = (uint64)(nsecs - @qempty[$sk]);
+		@qwait_us = hist($d / 1000);
+		@qwait_avg_ns = avg($d);
+		delete(@qempty[$sk]);
+	}
+	@avail_kib = hist((uint64)($tp->rcv_nxt - $tp->copied_seq) / 1024);
+	@rd[tid] = nsecs;
+	@reads = count();
+}
+kretfunc:tcp_read_sock /@rd[tid]/
+{
+	$d = (uint64)(nsecs - @rd[tid]);
+	@read_us = hist($d / 1000);
+	@read_avg_ns = avg($d);
+	@read_kib = hist((uint64)retval / 1024);
+	delete(@rd[tid]);
+}
+
+tracepoint:sched:sched_wakeup /str(args->comm) == "nfsd"/ { @wk[args->pid] = nsecs; }
+tracepoint:sched:sched_switch /@wk[args->next_pid]/
+{
+	$d = (uint64)(nsecs - @wk[args->next_pid]);
+	@wake_us = hist($d / 1000);
+	@wake_avg_ns = avg($d);
+	@wakes = count();
+	delete(@wk[args->next_pid]);
+}
+
+tracepoint:napi:napi_poll /cpu < 8 || cpu >= 56/
+{
+	if (@np[cpu]) { $g = (uint64)(nsecs - @np[cpu]); @poll_gap_us = hist($g / 1000); @poll_gap_avg_ns = avg($g); }
+	@np[cpu] = nsecs;
+	@poll_work = hist(args->work);
+	@polls = count();
+}
+
+END
+{
+	printf("traced_us %d\n", (uint64)(nsecs - @t0) / 1000);
+	clear(@unacked); clear(@qempty); clear(@closed); clear(@rd); clear(@wk);
+	clear(@np); clear(@selsk); clear(@inrbuf); clear(@t0);
+}
