@@ -71,3 +71,76 @@ in turns, twice each (`t2-r516` to `r519`), otherwise the mark A/B's
 runs.  The question is whether the 18 us the mark gives back lets a
 384 KiB held buffer (a 178 KiB window) carry what 512 KiB does, so
 that the footprint comes down at the rate kept.
+
+### Result: the small window gets its rate back, the footprint stays
+
+[run516.out](run516.out) (`t2-r516` to `r519`), every run clean (12/12
+flows, no drop, no drive stepped down, 21 to 38 retransmits, no new
+kernel warning):
+
+| held buffer | mark | GB/s | read's ACK after arrival | at the wall | nfsd k cycles a WRITE | held median | peak | MiB held a GB/s | client RTT |
+|---|---|---|---|---|---|---|---|---|---|
+| 512 KiB (settled) | 6 | 70.18, 70.32 | 32 us | 10.8% | 373, 376 | 55 MiB | 7,079, 7,134 | 0.78 | 78 us |
+| 512 KiB | 2 | 72.13, 72.21 | 14 | 2.6% | 444, 447 | 57 | 7,244, 7,397 | 0.79 | 71, 80 |
+| 384 KiB | 6 | 55.68, 60.11 | 39, 33 | 25.7% | 371, 372 | 43, 45 | 6,737, 6,993 | 0.76 | 58, 60 |
+| **384 KiB** | **2** | **69.04, 69.11** | 11.5 | 4.2% | 459, 459 (+23%) | **52, 53** | 7,213, 7,213 | 0.76 | 56, 53 |
+
+- **The mechanism is confirmed where the window binds.**  At 384 KiB
+  the mark of 6 gives 56 to 60 GB/s (round 56's 61.9) with a quarter
+  of the segments at the wall; the mark of 2 gives 69, within 1.5% of
+  the settled 512 KiB, with the read's ACK 11.5 us after arrival.  A
+  small window needs the server's ACK soon; the settled window does
+  not.
+- **But the footprint follows the rate, not the window.**  Every cell
+  holds 0.76 to 0.79 MiB at the median for each GB/s it carries,
+  whatever the window and the mark: 55 MiB at 70, 52 at 69, 44 at 58.
+  The TCP window is where the client's bytes queue, not where the
+  server's pages wait: a loaned page's life (round 94) is 43% at the
+  drive, 16% posted in the rings, 21% in a record's assembly, and
+  about 17% on the way back, and the window changes only the socket's
+  queue and part of the assembly.  Held pages are the rate times the
+  time a page lives, about 0.75 ms, and the window moved that by 4%.
+- **So the receive window is not the lever for the 32 MiB**; at 72
+  GB/s the L3 needs a page to live 0.45 ms instead of 0.75.  Where the
+  0.75 ms is, and what of it can move, is the stage split below.
+
+### The stage split at 384 KiB (t2-r520, r521)
+
+[run520.sh](run520.sh), [run520.out](run520.out): round 94's
+`heldsplit.bt` beside a run at 384 KiB with the mark at 2 and one at
+the settled 512 KiB with the mark at 6, no socket sampler (its pages
+are in the rest row).  Pages at the median:
+
+| stage of a loaned page's life | 512 KiB, mark 6 (`r521`, 70.76 GB/s) | 384 KiB, mark 2 (`r520`, 68.75 GB/s) |
+|---|---|---|
+| posted in the rings | 512 (8.0 MiB) | 512 (8.0 MiB) |
+| a record assembling | 683 (10.7) | 717 (11.2) |
+| in the WRITE at the drive | 1,364 (21.3) | 1,273 (19.9) |
+| the way back (and the sockets) | 547 (8.5) | 503 (7.9) |
+| to WRITE, to release | 107 (1.7) | 106 (1.7) |
+| **held** | **3,435 (54 MiB)** | **3,221 (50 MiB)** |
+
+The smaller window and the earlier read moved no stage but the
+drive's, and that one by the rate (-3% at -2.8%).  The assembly did
+not shrink: a record's pages wait for the rest of the record, which
+the client sends at its pace, not the window's.  **The receive
+window is where the client's bytes queue, not where the server's
+pages wait.**  The mark stays 6 and the held buffer 512 KiB
+(`settled.sh`), nothing changed on the host.
+
+## What this round closes, and what is left
+
+Rounds 94 to 97 tried every bound on the receive side (the budget,
+a window of WRITEs a drive, the TCP window, the read's mark) and
+each trades rate for pages along one line, about 0.77 MiB held for
+each GB/s carried, because held pages are the rate times the 0.75 ms
+a page lives and none of them shortens that life.  At 72 GB/s the L3
+needs 0.45 ms.  Of the 0.75: the drive's queue is 0.3 ms and needs
+two writes queued a drive to run flat out (16 MiB of the 21); the
+rings are 8 MiB posted whatever the rate; the assembly, 11 MiB, is
+the client's pace; the way back, about 8 MiB, is the release path
+and the pool's refill, the one stage that is wholly the server's and
+has been worked for cycles but never for time.  The two stages left
+that are not the drives' or the client's are the way back and the
+rings' size; together they are about 16 MiB, and 32 at 72 GB/s is
+not reachable by tuning this design.

@@ -24,8 +24,9 @@ for run in sys.argv[1:]:
     pages = {k: s.get(k, 0) / span / PPB for k in STAGES}
     held = [int(l.split()[1]) for l in list(open(f'{d}/pmu/region-sec.tsv'))[1:]
             if t0 <= float(l.split()[0]) <= t1]
-    sq = [int(l.split()[2]) for l in open(f'{d}/sockq.txt')]
-    conns = st.median(int(l.split()[1]) for l in open(f'{d}/sockq.txt'))
+    try: sq = [int(l.split()[2]) for l in open(f'{d}/sockq.txt')]
+    except FileNotFoundError: sq = [0]  # no socket sampler beside this run: the row reads 0 and the rest row holds it
+    conns = st.median(int(l.split()[1]) for l in open(f'{d}/sockq.txt')) if sq != [0] else 24
     rows = [('rings, posted (taken as full)', 512), ('sockets, receive queues', st.median(sq) / PAGE)]
     rows += [(k, pages[k]) for k in STAGES]
     hmed, hmean = st.median(held), st.mean(held)

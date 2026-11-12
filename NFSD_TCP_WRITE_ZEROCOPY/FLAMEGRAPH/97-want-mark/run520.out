@@ -1,0 +1,15 @@
+03:01:10 t2-r520 rcvbuf 393216 mark 2 | total 68.75 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    Traceback (most recent call last):
+      File "/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/94-held-split/heldsplit-read.py", line 27, in <module>
+        sq = [int(l.split()[2]) for l in open(f'{d}/sockq.txt')]
+                                         ^^^^^^^^^^^^^^^^^^^^^^
+    FileNotFoundError: [Errno 2] No such file or directory: '/var/tmp/zc-run-logs/t2-r520/sockq.txt'
+    t2-r520: rcvbuf 384 KiB, mark 2 | 68.75 GB/s | a WRITE: nfsd 401.2k cycles, rings 226.7k, 5.15 woken, 14.09 switches | held median 3282 (51 MiB), peak 7250 | client rtt median 62 us (44 to 107)
+03:06:06 t2-r521 rcvbuf 524288 mark 6 | total 70.76 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    Traceback (most recent call last):
+      File "/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/94-held-split/heldsplit-read.py", line 27, in <module>
+        sq = [int(l.split()[2]) for l in open(f'{d}/sockq.txt')]
+                                         ^^^^^^^^^^^^^^^^^^^^^^
+    FileNotFoundError: [Errno 2] No such file or directory: '/var/tmp/zc-run-logs/t2-r521/sockq.txt'
+    t2-r521: rcvbuf 512 KiB, mark 6 | 70.76 GB/s | a WRITE: nfsd 347.5k cycles, rings 206.1k, 4.29 woken, 12.02 switches | held median 3541 (55 MiB), peak 7298 | client rtt median 79 us (66 to 128)
+03:06:10 after: settled.sh audit rest: the settled setting

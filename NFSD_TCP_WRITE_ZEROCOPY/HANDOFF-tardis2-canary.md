@@ -376,6 +376,13 @@ bytes wait elsewhere, and the round trip is the window over the rate,
 not the other way.  The mark stays 6 (`settled.sh`).  The test left on
 this line is the held buffer at 384 KiB with the mark at 2 against 6,
 for the footprint at the rate; after that, what the ceiling is.
+**Run (`t2-r516..r521`): at 384 KiB the mark at 2 carries 69 GB/s
+against 56 to 60 at 6, but holds 52 MiB against 55 at 512 KiB: every
+cell of rounds 94 to 97 holds about 0.77 MiB a GB/s, and the stage
+split shows the window moves no stage but the drive's, by the rate.
+The receive side is closed as a lever for the 32 MiB; what is left is
+the way back (8 MiB, the server's own) and the rings' 8 MiB.**  Mark 6
+and 512 KiB stay settled; nothing changed on the host.
 
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
