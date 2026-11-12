@@ -215,6 +215,31 @@ Misaligned WRITE:
     buffered IO, or for a filesystem that does not use iomap for
     buffered writes.
 
+LOCALIO:
+    A LOCALIO client (see Documentation/filesystems/nfs/localio.rst)
+    reads and writes the file itself, without NFSD. io_cache_read,
+    io_cache_write and the read_io= and write_io= export options do not
+    apply to it. A LOCALIO READ or WRITE takes the direct path only if
+    the application opened the file with O_DIRECT on the client.
+
+    A LOCALIO O_DIRECT WRITE is split by the same rules as a misaligned
+    WRITE (above). For each WRITE, LOCALIO reads NFSD's
+    /sys/kernel/debug/nfsd/direct_misaligned_min_bytes and
+    /sys/kernel/debug/nfsd/direct_misaligned_dontcache, so a change to
+    either knob applies to LOCALIO WRITEs too.
+
+    A LOCALIO O_DIRECT READ is not expanded like a misaligned READ
+    (above). Its DIO-aligned middle is issued as O_DIRECT, and a
+    misaligned start or end as normal buffered IO. LOCALIO issues the
+    whole READ as normal buffered IO if:
+
+    - the READ is smaller than the larger of the DIO read offset
+      alignment and the memory alignment;
+    - the READ has no DIO-aligned middle;
+    - the READ's memory is not DIO-aligned.
+
+    direct_misaligned_min_bytes does not apply to READs.
+
 Tracing:
     The nfsd_read_direct trace event marks a READ that NFSD issues as
     O_DIRECT. It records the offset and length the client requested.
