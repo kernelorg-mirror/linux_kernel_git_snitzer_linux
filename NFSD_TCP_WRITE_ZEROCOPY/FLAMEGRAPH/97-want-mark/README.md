@@ -63,3 +63,11 @@ footprint (round 56's 384 KiB peaked at 9,881 pages against 12,648):
 each.**  If 384 KiB at mark 2 holds 70 GB/s, the footprint comes down
 with the rate kept; if it does not, the window is not the lever and
 the next round goes to what the ceiling is.
+
+## The second step: the held buffer at 384 KiB
+
+[run516.sh](run516.sh): `RCVBUF=393216` with the mark at 2 and at 6
+in turns, twice each (`t2-r516` to `r519`), otherwise the mark A/B's
+runs.  The question is whether the 18 us the mark gives back lets a
+384 KiB held buffer (a 178 KiB window) carry what 512 KiB does, so
+that the footprint comes down at the rate kept.
