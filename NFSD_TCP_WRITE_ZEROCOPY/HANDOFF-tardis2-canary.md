@@ -367,6 +367,16 @@ Nothing has been changed on the host for it.  (The round's first three
 runs had a kprobe and kretprobe pair, which bpftrace 0.26 breaks, as
 round 54 found: use fentry/fexit.)
 
+**Round 97 ran the mark A/B (`t2-r510..r515`,
+`FLAMEGRAPH/97-want-mark/`): the mark at 2 brings the read's ACK from
+32 to 14 us after arrival for 19% more nfsd cycles a WRITE, but the
+client's round trip stays at about 78 us and the rate rises 2.7%
+(70.2 to 72.2 GB/s, round 56's ceiling): the window stays full, the
+bytes wait elsewhere, and the round trip is the window over the rate,
+not the other way.  The mark stays 6 (`settled.sh`).  The test left on
+this line is the held buffer at 384 KiB with the mark at 2 against 6,
+for the footprint at the rate; after that, what the ceiling is.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

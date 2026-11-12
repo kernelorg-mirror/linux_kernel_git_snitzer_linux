@@ -1,0 +1,91 @@
+01:54:26 t2-r510 mark 6 | total 70.18 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r510: total 70.18 GB/s; traced 13.16 s; segments 10660126, at the window's wall 1154666 (10.8%)
+      client's round trip (ss, 24 connections): smoothed median 78 us, 64 to 104; floor (minrtt) median 13 us
+      ack delay, arrival of the first unacked segment to the ACK's transmit, by where the ACK is sent from:
+        ring       acks    260483  mean    4.5 us  median bucket        2-4 us | window chosen mean  172.1 KiB, median bucket    128-256 KiB | transmits with nothing unacked 68121
+        read       acks   3200662  mean   32.0 us  median bucket      16-32 us | window chosen mean  219.3 KiB, median bucket    128-256 KiB | transmits with nothing unacked 820230
+        nfsd other acks    320026  mean   33.3 us  median bucket      16-32 us | window chosen mean  158.9 KiB, median bucket    128-256 KiB | transmits with nothing unacked 513324
+      the window closed (room under a frame at a segment's arrival) to a window of 64 KiB or more chosen:
+        ring       reopened  1065460  mean    1.9 us  median bucket          1 us
+        read       reopened    78788  mean   16.1 us  median bucket       8-16 us
+        nfsd other reopened     9125  mean    8.8 us  median bucket        2-4 us
+      nfsd's read: queue wait (first unread byte's arrival to the read) mean 34.7 us, median bucket 16-32 us; reads 4777832, bytes waiting median bucket 128-256 KiB, a read 6.7 us mean, median bucket 4-8 us, read median bucket 128-256 KiB
+      nfsd threads: wakeup to running mean 1.3 us, median bucket 1 us, 3236516 wakes
+      rings: NAPI polls 11247759, gap mean 16.0 us, median bucket 8-16 us, frames a poll median bucket 1
+    t2-r510: mark 6 | 70.18 GB/s | a WRITE: nfsd 372.7k cycles, rings 245.3k, 3.67 woken, 10.99 switches | held median 3531 (55 MiB), peak 7079 | client rtt median 78 us (64 to 104)
+01:59:23 t2-r511 mark 4 | total 70.86 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r511: total 70.86 GB/s; traced 13.04 s; segments 10940910, at the window's wall 593719 (5.4%)
+      client's round trip (ss, 24 connections): smoothed median 85 us, 55 to 133; floor (minrtt) median 13 us
+      ack delay, arrival of the first unacked segment to the ACK's transmit, by where the ACK is sent from:
+        ring       acks    232676  mean    4.8 us  median bucket        4-8 us | window chosen mean  177.6 KiB, median bucket    128-256 KiB | transmits with nothing unacked 69169
+        read       acks   4118663  mean   25.7 us  median bucket      16-32 us | window chosen mean  218.1 KiB, median bucket    128-256 KiB | transmits with nothing unacked 1116295
+        nfsd other acks    364763  mean   29.7 us  median bucket       8-16 us | window chosen mean  159.8 KiB, median bucket    128-256 KiB | transmits with nothing unacked 521008
+      the window closed (room under a frame at a segment's arrival) to a window of 64 KiB or more chosen:
+        ring       reopened   518573  mean    1.9 us  median bucket          1 us
+        read       reopened    65417  mean   16.4 us  median bucket       8-16 us
+        nfsd other reopened     8931  mean   12.1 us  median bucket        2-4 us
+      nfsd's read: queue wait (first unread byte's arrival to the read) mean 27.5 us, median bucket 16-32 us; reads 6006774, bytes waiting median bucket 128-256 KiB, a read 6.4 us mean, median bucket 4-8 us, read median bucket 64-128 KiB
+      nfsd threads: wakeup to running mean 1.3 us, median bucket 1 us, 3378456 wakes
+      rings: NAPI polls 11765386, gap mean 15.5 us, median bucket 8-16 us, frames a poll median bucket 1
+    t2-r511: mark 4 | 70.86 GB/s | a WRITE: nfsd 401.7k cycles, rings 247.7k, 3.62 woken, 11.05 switches | held median 3547 (55 MiB), peak 7416 | client rtt median 85 us (55 to 133)
+02:04:19 t2-r512 mark 2 | total 72.13 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r512: total 72.13 GB/s; traced 12.60 s; segments 9711574, at the window's wall 255964 (2.6%)
+      client's round trip (ss, 24 connections): smoothed median 71 us, 57 to 107; floor (minrtt) median 13 us
+      ack delay, arrival of the first unacked segment to the ACK's transmit, by where the ACK is sent from:
+        ring       acks    307446  mean    5.1 us  median bucket        4-8 us | window chosen mean  193.1 KiB, median bucket    128-256 KiB | transmits with nothing unacked 95066
+        read       acks   5417801  mean   14.4 us  median bucket       8-16 us | window chosen mean  221.3 KiB, median bucket    128-256 KiB | transmits with nothing unacked 1542318
+        nfsd other acks    250983  mean   19.6 us  median bucket       8-16 us | window chosen mean  150.7 KiB, median bucket    128-256 KiB | transmits with nothing unacked 590613
+      the window closed (room under a frame at a segment's arrival) to a window of 64 KiB or more chosen:
+        ring       reopened   103138  mean    3.1 us  median bucket          1 us
+        read       reopened    56075  mean   19.1 us  median bucket       8-16 us
+        nfsd other reopened    96258  mean    2.6 us  median bucket          1 us
+      nfsd's read: queue wait (first unread byte's arrival to the read) mean 11.9 us, median bucket 4-8 us; reads 7949778, bytes waiting median bucket 64-128 KiB, a read 5.7 us mean, median bucket 4-8 us, read median bucket 64-128 KiB
+      nfsd threads: wakeup to running mean 1.3 us, median bucket 1 us, 3430132 wakes
+      rings: NAPI polls 10840285, gap mean 15.9 us, median bucket 8-16 us, frames a poll median bucket 1
+    t2-r512: mark 2 | 72.13 GB/s | a WRITE: nfsd 444.3k cycles, rings 253.0k, 3.80 woken, 11.86 switches | held median 3636 (57 MiB), peak 7244 | client rtt median 71 us (57 to 107)
+02:09:16 t2-r513 mark 6 | total 70.32 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r513: total 70.32 GB/s; traced 12.69 s; segments 10696840, at the window's wall 1156864 (10.8%)
+      client's round trip (ss, 24 connections): smoothed median 78 us, 68 to 125; floor (minrtt) median 13 us
+      ack delay, arrival of the first unacked segment to the ACK's transmit, by where the ACK is sent from:
+        ring       acks    260816  mean    4.7 us  median bucket        4-8 us | window chosen mean  172.1 KiB, median bucket    128-256 KiB | transmits with nothing unacked 73670
+        read       acks   3208442  mean   32.0 us  median bucket      16-32 us | window chosen mean  219.4 KiB, median bucket    128-256 KiB | transmits with nothing unacked 911843
+        nfsd other acks    321646  mean   32.7 us  median bucket      16-32 us | window chosen mean  159.0 KiB, median bucket    128-256 KiB | transmits with nothing unacked 531829
+      the window closed (room under a frame at a segment's arrival) to a window of 64 KiB or more chosen:
+        ring       reopened  1067677  mean    1.8 us  median bucket          1 us
+        read       reopened    78700  mean   16.7 us  median bucket       8-16 us
+        nfsd other reopened     9090  mean   12.9 us  median bucket        2-4 us
+      nfsd's read: queue wait (first unread byte's arrival to the read) mean 34.5 us, median bucket 16-32 us; reads 4888836, bytes waiting median bucket 128-256 KiB, a read 6.8 us mean, median bucket 4-8 us, read median bucket 128-256 KiB
+      nfsd threads: wakeup to running mean 1.3 us, median bucket 1 us, 3204512 wakes
+      rings: NAPI polls 11136342, gap mean 16.0 us, median bucket 8-16 us, frames a poll median bucket 1
+    t2-r513: mark 6 | 70.32 GB/s | a WRITE: nfsd 376.3k cycles, rings 245.4k, 3.67 woken, 11.06 switches | held median 3545 (55 MiB), peak 7134 | client rtt median 78 us (68 to 125)
+02:14:13 t2-r514 mark 4 | total 71.39 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r514: total 71.39 GB/s; traced 12.65 s; segments 10709431, at the window's wall 559793 (5.2%)
+      client's round trip (ss, 24 connections): smoothed median 82 us, 62 to 119; floor (minrtt) median 13 us
+      ack delay, arrival of the first unacked segment to the ACK's transmit, by where the ACK is sent from:
+        ring       acks    226138  mean    4.8 us  median bucket        4-8 us | window chosen mean  176.2 KiB, median bucket    128-256 KiB | transmits with nothing unacked 66407
+        read       acks   4065371  mean   25.6 us  median bucket      16-32 us | window chosen mean  216.4 KiB, median bucket    128-256 KiB | transmits with nothing unacked 1089421
+        nfsd other acks    361876  mean   29.2 us  median bucket       8-16 us | window chosen mean  158.7 KiB, median bucket    128-256 KiB | transmits with nothing unacked 504380
+      the window closed (room under a frame at a segment's arrival) to a window of 64 KiB or more chosen:
+        ring       reopened   486421  mean    2.0 us  median bucket          1 us
+        read       reopened    60329  mean   17.0 us  median bucket       8-16 us
+        nfsd other reopened    12213  mean    9.3 us  median bucket        2-4 us
+      nfsd's read: queue wait (first unread byte's arrival to the read) mean 27.3 us, median bucket 16-32 us; reads 5910900, bytes waiting median bucket 128-256 KiB, a read 6.4 us mean, median bucket 4-8 us, read median bucket 64-128 KiB
+      nfsd threads: wakeup to running mean 1.3 us, median bucket 1 us, 3332544 wakes
+      rings: NAPI polls 11581596, gap mean 15.3 us, median bucket 8-16 us, frames a poll median bucket 1
+    t2-r514: mark 4 | 71.39 GB/s | a WRITE: nfsd 400.7k cycles, rings 249.5k, 3.63 woken, 11.07 switches | held median 3597 (56 MiB), peak 7149 | client rtt median 82 us (62 to 119)
+02:19:56 t2-r515 mark 2 | total 72.21 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r515: total 72.21 GB/s; traced 12.64 s; segments 10058085, at the window's wall 250382 (2.5%)
+      client's round trip (ss, 24 connections): smoothed median 80 us, 57 to 115; floor (minrtt) median 13 us
+      ack delay, arrival of the first unacked segment to the ACK's transmit, by where the ACK is sent from:
+        ring       acks    324932  mean    5.1 us  median bucket        4-8 us | window chosen mean  193.6 KiB, median bucket    128-256 KiB | transmits with nothing unacked 105746
+        read       acks   5642500  mean   14.4 us  median bucket       8-16 us | window chosen mean  221.6 KiB, median bucket    128-256 KiB | transmits with nothing unacked 1726706
+        nfsd other acks    262124  mean   19.4 us  median bucket       8-16 us | window chosen mean  151.5 KiB, median bucket    128-256 KiB | transmits with nothing unacked 619879
+      the window closed (room under a frame at a segment's arrival) to a window of 64 KiB or more chosen:
+        ring       reopened   100072  mean    3.3 us  median bucket          1 us
+        read       reopened    56069  mean   18.1 us  median bucket       8-16 us
+        nfsd other reopened    93827  mean    2.5 us  median bucket          1 us
+      nfsd's read: queue wait (first unread byte's arrival to the read) mean 11.9 us, median bucket 4-8 us; reads 8412868, bytes waiting median bucket 64-128 KiB, a read 5.7 us mean, median bucket 4-8 us, read median bucket 64-128 KiB
+      nfsd threads: wakeup to running mean 1.3 us, median bucket 1 us, 3531404 wakes
+      rings: NAPI polls 11093713, gap mean 15.7 us, median bucket 8-16 us, frames a poll median bucket 1
+    t2-r515: mark 2 | 72.21 GB/s | a WRITE: nfsd 446.8k cycles, rings 258.0k, 3.75 woken, 11.76 switches | held median 3647 (57 MiB), peak 7397 | client rtt median 80 us (57 to 115)
+02:19:59 after: settled.sh audit rest: the settled setting
