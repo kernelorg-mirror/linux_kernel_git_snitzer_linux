@@ -461,3 +461,28 @@ FSINFO's `rtmax` and `wtmax` say, and the client takes no more.  It
 can be written only with nfsd stopped, caps reads as well, and sizes
 the server's own buffers, so it is to be run against the mount option
 before it is settled.
+
+## The server imposes the wsize (t2-r589..r592)
+
+[run589.out](run589.out): `run577.sh` with a third field in each cell,
+512 KiB at window 10 asked by the client's mount (nfsd's
+`max_block_size` at 1 MiB) and imposed by the server (`max_block_size`
+524288, the client mounting with no rsize or wsize), in turns.  The
+server's value is written with nfsd stopped: `settled.sh`'s
+`EXP_MAX_BLOCK_SIZE` through `/run/zc-max-block-size`, which the rig's
+drop-in `nfs-server.service.d/zc-max-block-size.conf` now reads at each
+start (1048576 without it).
+
+| run | 512 KiB from | GB/s | a drive empty | held median, most | to memory |
+|---|---|---|---|---|---|
+| `t2-r589` | the client's mount | 78.02 | 3.0% | 48 MiB, 3457 | 115.0 GB/s, 1.47 a byte |
+| `t2-r590` | nfsd's max_block_size | 78.01 | 2.9% | 48 MiB, 3436 | 115.5, 1.48 |
+| `t2-r591` | the client's mount | 78.13 | 3.1% | 48 MiB, 3397 | 116.0, 1.49 |
+| `t2-r592` | nfsd's max_block_size | 78.14 | 3.0% | 48 MiB, 3349 | 115.4, 1.48 |
+
+The client mounting with no size took rsize and wsize 524288 from the
+server's FSINFO.  The two are the same in every figure: 78.08 GB/s
+each, the client 49% busy, no loan denied, no ring drop, no drive
+stepped down.  nfsd's smaller per-thread pages change nothing measured.
+`max_block_size` also caps a READ at 512 KiB, which no run here has
+measured.

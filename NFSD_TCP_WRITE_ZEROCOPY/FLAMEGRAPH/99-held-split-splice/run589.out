@@ -1,0 +1,29 @@
+21:45:20 t2-r589 wsize 524288 window 10 | total 78.02 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 wsize 524288 ; window 10; loans: budget 8198 pages (64 WRITEs), in the run admitted 7437120, denied 0, paused 0, overrun 0; client retransmits in the window: 223
+    client: 24 connections, rwnd_limited 96.7% of busy, snd_wnd mean 219 KiB; client CPUs busy: 49%
+    client mount: rsize=524288 wsize=524288 
+    drives   all 8:   3.0%   1.5%   3.7%   3.2%  88.6%  77.99 GB/s
+    PAST THE FAST REGION: nvme0n1 nvme1n1 nv
+     held in the window (489 samples): median 3084 (48 MiB, 1.51 L3), p90 3225, p99 3304, most 3457 | kernel peak 3570 | a page held 0.65 ms at the median | to memory 115.0 GB/s, 1.47 bytes a byte | fills 1.18 a payload line
+21:50:26 t2-r590 wsize server window 10 max_block_size 524288 | total 78.01 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; window 10; loans: budget 8198 pages (64 WRITEs), in the run admitted 7433808, denied 0, paused 0, overrun 0; client retransmits in the window: 204
+    client: 24 connections, rwnd_limited 98.6% of busy, snd_wnd mean 207 KiB; client CPUs busy: 49%
+    client mount: rsize=524288 wsize=524288 
+    drives   all 8:   2.9%   1.5%   3.6%   3.1%  88.9%  78.15 GB/s
+    PAST THE FAST REGION: nvme0n1 nvme1n1 nv
+     held in the window (489 samples): median 3090 (48 MiB, 1.51 L3), p90 3219, p99 3313, most 3436 | kernel peak 3643 | a page held 0.65 ms at the median | to memory 115.5 GB/s, 1.48 bytes a byte | fills 1.18 a payload line
+21:55:22 t2-r591 wsize 524288 window 10 | total 78.13 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 wsize 524288 ; window 10; loans: budget 8198 pages (64 WRITEs), in the run admitted 7443376, denied 0, paused 0, overrun 0; client retransmits in the window: 231
+    client: 24 connections, rwnd_limited 98.4% of busy, snd_wnd mean 186 KiB; client CPUs busy: 49%
+    client mount: rsize=524288 wsize=524288 
+    drives   all 8:   3.1%   1.5%   3.6%   3.2%  88.8%  78.06 GB/s
+    PAST THE FAST REGION: nvme0n1 nvme1n1 nv
+     held in the window (489 samples): median 3100 (48 MiB, 1.51 L3), p90 3238, p99 3318, most 3397 | kernel peak 3619 | a page held 0.65 ms at the median | to memory 116.0 GB/s, 1.49 bytes a byte | fills 1.18 a payload line
+22:00:28 t2-r592 wsize server window 10 max_block_size 524288 | total 78.14 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; window 10; loans: budget 8198 pages (64 WRITEs), in the run admitted 7440496, denied 0, paused 0, overrun 0; client retransmits in the window: 215
+    client: 24 connections, rwnd_limited 99.0% of busy, snd_wnd mean 191 KiB; client CPUs busy: 49%
+    client mount: rsize=524288 wsize=524288 
+    drives   all 8:   3.0%   1.5%   3.5%   3.0%  88.9%  78.05 GB/s
+    PAST THE FAST REGION: nvme0n1 nvme1n1 nv
+     held in the window (489 samples): median 3091 (48 MiB, 1.51 L3), p90 3219, p99 3314, most 3349 | kernel peak 3560 | a page held 0.65 ms at the median | to memory 115.4 GB/s, 1.48 bytes a byte | fills 1.18 a payload line
+22:00:32 after: settled.sh audit rest: the settled setting

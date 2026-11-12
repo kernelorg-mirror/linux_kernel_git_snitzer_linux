@@ -11,7 +11,9 @@
 # pages) with the drives' exact queue depth (inflight.py, 12 s) and the
 # mesh from the window's start, the client's rwnd_limited share and
 # CPUs busy, the wsize the client's mount took, and l3read.py's held
-# and memory line.  A run without loans at its window stops it.
+# and memory line.  A run without loans at its window stops it.  A
+# third field in a cell, WSIZE:WINDOW:MAXBLK, holds nfsd's max_block_size
+# for the run (twoport.sh's MAXBLK); WSIZE server mounts without a size.
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
 say() { echo "$(date +%T) $*"; }
@@ -48,7 +50,7 @@ E
 }
 n=${N0:-577}
 for c in ${CELLS:-1048576:7 524288:14 524288:7 1048576:7 524288:14 524288:7}; do
-	IFS=: read ws w <<< "$c"
+	IFS=: read ws w mb <<< "$c"
 	[ "$(df --output=avail -k / | tail -1)" -gt 1048576 ] || { say "root has under 1 GB free"; stop; }
 	O=$L/t2-r$n; mkdir -p $O
 	client_free || { say "client not free"; stop; }
@@ -58,13 +60,13 @@ for c in ${CELLS:-1048576:7 524288:14 524288:7 1048576:7 524288:14 524288:7}; do
 	sync; for d in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$d; done; sleep 120
 	dmesg > $O/dmesg.0
 	side $O &
-	env WARM=10 RUNTIME=40 TSV=$O/results.tsv TAG=wsize-$ws-window-$w WRITES=${WRITES:-64} BUDGET_PAGES=${BUDGET_PAGES:-8198} WSIZE=$ws TARGET_WINDOW=$w REGION_SAMPLE=1 ./twoport.sh $O/pmu ab > $O/pmu.log 2>&1 ||
+	env WARM=10 RUNTIME=40 TSV=$O/results.tsv TAG=wsize-$ws-window-$w WRITES=${WRITES:-64} BUDGET_PAGES=${BUDGET_PAGES:-8198} WSIZE=$ws MAXBLK=$mb TARGET_WINDOW=$w REGION_SAMPLE=1 ./twoport.sh $O/pmu ab > $O/pmu.log 2>&1 ||
 		{ say "run failed: $(grep -E 'BAD|FAILED|no answer|not free' $O/pmu.log | head -3)"; wait; stop; }
 	wait
 	grep -q "budget [0-9]* pages for [1-9][0-9]* WRITEs.*window $w\$" $O/pmu/geometry.txt || { say "t2-r$n did not loan at window $w: $(grep '^loan' $O/pmu/geometry.txt)"; stop; }
 	dmesg > $O/dmesg.1
 	hung=$(diff $O/dmesg.0 $O/dmesg.1 | grep -v 'tracing to debugfs is deprecated' | grep -c -i -E 'hung|blocked for more|soft lockup|rcu.*stall|WARNING|BUG|Failed to allocate')
-	say "t2-r$n wsize $ws window $w | $(grep '^total' $O/pmu.log) | ring drops $(grep -oE 'ring drops [0-9]+' $O/pmu.log | awk '{s+=$3} END {print s}') | flows placed $(grep -c "^flow" $O/pmu/place-a.txt)/$(grep -c "^flow" $O/pmu/place-b.txt) | $(grep -o 'no drive stepped down' $O/pmu.log || echo 'a drive stepped down') | new kernel warnings $hung"
+	say "t2-r$n wsize $ws window $w${mb:+ max_block_size $mb} | $(grep '^total' $O/pmu.log) | ring drops $(grep -oE 'ring drops [0-9]+' $O/pmu.log | awk '{s+=$3} END {print s}') | flows placed $(grep -c "^flow" $O/pmu/place-a.txt)/$(grep -c "^flow" $O/pmu/place-b.txt) | $(grep -o 'no drive stepped down' $O/pmu.log || echo 'a drive stepped down') | new kernel warnings $hung"
 	echo "    $(grep '^this run' $O/pmu/geometry.txt | grep -oE 'rcvbuf [0-9]+|nconn [0-9]+|wsize [0-9]+' | tr '\n' ' '); $(grep -oE 'window [0-9]+$' $O/pmu/geometry.txt | tail -1); $(grep '^loans' $O/pmu/window.txt); $(grep '^client retransmits' $O/pmu/window.txt)"
 	echo "    $(rwnd $O/pmu/ss-client.txt); $(grep -m1 'client CPUs busy' $O/pmu/summary.txt)"
 	echo "    client mount: $(grep -oE '[rw]size=[0-9]+' $O/client-mount.txt | tr '\n' ' ')"
