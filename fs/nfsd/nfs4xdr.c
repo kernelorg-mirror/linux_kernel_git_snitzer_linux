@@ -5308,7 +5308,8 @@ static __be32 nfsd4_encode_readv(struct nfsd4_compoundres *resp,
 	__be32 nfserr;
 
 	nfserr = nfsd_iter_read(resp->rqstp, read->rd_fhp, read->rd_nf,
-				read->rd_offset, &maxcount, &read->rd_eof);
+				read->rd_offset, &maxcount, &read->rd_eof,
+				read->rd_dio_ok);
 	read->rd_length = maxcount;
 	if (nfserr)
 		return nfserr;
@@ -5365,7 +5366,8 @@ nfsd4_encode_read(struct nfsd4_compoundres *resp, __be32 nfserr,
 	maxcount = min_t(unsigned long, read->rd_length,
 			 (xdr->buf->buflen - xdr->buf->len));
 
-	if (file->f_op->splice_read && splice_ok)
+	if (file->f_op->splice_read && splice_ok &&
+	    nfsd_read_io_mode(read->rd_fhp->fh_export) == NFSD_IO_BUFFERED)
 		nfserr = nfsd4_encode_splice_read(resp, read, file, maxcount);
 	else
 		nfserr = nfsd4_encode_readv(resp, read, maxcount);
@@ -6263,7 +6265,8 @@ nfsd4_encode_read_plus_data(struct nfsd4_compoundres *resp,
 	maxcount = min_t(unsigned long, read->rd_length,
 			 (xdr->buf->buflen - xdr->buf->len));
 
-	if (file->f_op->splice_read && splice_ok)
+	if (file->f_op->splice_read && splice_ok &&
+	    nfsd_read_io_mode(read->rd_fhp->fh_export) == NFSD_IO_BUFFERED)
 		nfserr = nfsd4_encode_splice_read(resp, read, file, maxcount);
 	else
 		nfserr = nfsd4_encode_readv(resp, read, maxcount);

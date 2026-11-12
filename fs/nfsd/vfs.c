@@ -53,6 +53,8 @@
 bool nfsd_disable_splice_read __read_mostly;
 u64 nfsd_io_cache_read __read_mostly = NFSD_IO_BUFFERED;
 u64 nfsd_io_cache_write __read_mostly = NFSD_IO_BUFFERED;
+u32 nfsd_direct_misaligned_min_bytes __read_mostly = 8192;
+bool nfsd_direct_misaligned_dontcache __read_mostly = true;
 
 /**
  * nfserrno - Map Linux errnos to NFS errnos
@@ -1038,8 +1040,11 @@ static u32 nfsd_eof_on_read(struct file *file, loff_t offset, ssize_t len,
 
 static __be32 nfsd_finish_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			       struct file *file, loff_t offset,
-			       unsigned long *count, u32 *eof, ssize_t host_err)
+			       unsigned long *count, u32 *eof, ssize_t host_err,
+			       u64 storage_start)
 {
+	nfsd_stats_io_read_storage_add(fhp->fh_export,
+				       nfsd_storage_read_bytes() - storage_start);
 	if (host_err >= 0) {
 		struct nfsd_net *nn = net_generic(SVC_NET(rqstp), nfsd_net_id);
 
@@ -1070,12 +1075,14 @@ __be32 nfsd_splice_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			struct file *file, loff_t offset, unsigned long *count,
 			u32 *eof)
 {
+	u64 storage_start = nfsd_storage_read_bytes();
 	ssize_t host_err;
 
 	trace_nfsd_read_splice(rqstp, fhp, offset, *count);
 	host_err = vfs_splice_to_actor(file, offset, *count,
 				       nfsd_direct_splice_actor, rqstp);
-	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err);
+	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err,
+				storage_start);
 }
 
 /*
@@ -1093,7 +1100,7 @@ __be32 nfsd_splice_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 static noinline_for_stack __be32
 nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		 struct nfsd_file *nf, loff_t offset, unsigned long *count,
-		 struct page **page, u32 *eof)
+		 struct page **page, u32 *eof, u64 storage_start)
 {
 	u64 dio_start, dio_end;
 	unsigned long v, total;
@@ -1151,7 +1158,77 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	}
 
 	return nfsd_finish_read(rqstp, fhp, nf->nf_file, offset, count,
-				eof, host_err);
+				eof, host_err, storage_start);
+}
+
+static bool nfsd_direct_read_ok(struct svc_rqst *rqstp, struct svc_fh *fhp,
+				struct nfsd_file *nf, loff_t offset,
+				unsigned long count, struct page **page,
+				bool dio_ok)
+{
+	u32 offset_align = nf->nf_dio_read_offset_align;
+	u64 dio_len;
+
+	/* When dio_read_offset_align is zero, dio is not supported */
+	if (!offset_align) {
+		trace_nfsd_read_dio_no_alignment(rqstp, fhp, offset, count,
+						 offset_align);
+		return false;
+	}
+	/* Not worth rounding a READ this small out to whole alignment units */
+	if (count < offset_align) {
+		trace_nfsd_read_dio_too_small(rqstp, fhp, offset, count,
+					      offset_align);
+		return false;
+	}
+	if (rqstp->rq_res.page_len) {
+		trace_nfsd_read_dio_pages_in_use(rqstp, fhp, offset, count,
+						 offset_align);
+		return false;
+	}
+	if (!dio_ok)
+		return false;
+	/* An alignment above PAGE_SIZE can round the range past rq_page_end */
+	dio_len = round_up((u64)offset + count, offset_align) -
+		  round_down(offset, offset_align);
+	if ((s64)dio_len > (s64)PAGE_SIZE * (rqstp->rq_page_end - page)) {
+		trace_nfsd_read_dio_range_too_large(rqstp, fhp, offset, count,
+						    offset_align);
+		return false;
+	}
+	return true;
+}
+
+/**
+ * nfsd_read_io_mode - effective NFS READ I/O mode for an export
+ * @exp: export being accessed
+ *
+ * An export without an explicit read_io= setting follows the global
+ * nfsd_io_cache_read knob.
+ *
+ * Returns one of NFSD_IO_BUFFERED, NFSD_IO_DONTCACHE, or NFSD_IO_DIRECT.
+ */
+int nfsd_read_io_mode(struct svc_export *exp)
+{
+	if (exp->ex_read_io == NFSD_IO_DEFAULT)
+		return nfsd_io_cache_read;
+	return exp->ex_read_io;
+}
+
+/**
+ * nfsd_write_io_mode - effective NFS WRITE I/O mode for an export
+ * @exp: export being accessed
+ *
+ * An export without an explicit write_io= setting follows the global
+ * nfsd_io_cache_write knob.
+ *
+ * Returns one of NFSD_IO_BUFFERED, NFSD_IO_DONTCACHE, or NFSD_IO_DIRECT.
+ */
+int nfsd_write_io_mode(struct svc_export *exp)
+{
+	if (exp->ex_write_io == NFSD_IO_DEFAULT)
+		return nfsd_io_cache_write;
+	return exp->ex_write_io;
 }
 
 /**
@@ -1162,6 +1239,8 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
  * @offset: starting byte offset
  * @count: IN: requested number of bytes; OUT: number of bytes read
  * @eof: OUT: set non-zero if operation reached the end of the file
+ * @dio_ok: false forces a buffered read even when the export selects
+ *	    direct I/O
  *
  * Some filesystems or situations cannot use nfsd_splice_read. This
  * function is the slightly less-performant fallback for those cases.
@@ -1169,17 +1248,23 @@ nfsd_direct_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
  * records. On return, @rqstp->rq_next_page points past the last page
  * offered to the read.
  *
+ * A direct read leaves its alignment pad at the front of the pages and
+ * records the pad length in @rqstp->rq_res.page_base. The xdr_stream
+ * encoder does not account for page_base, so pass @dio_ok false when
+ * more XDR items follow the payload in the pages.
+ *
  * Returns nfs_ok on success, otherwise an nfserr stat value is
  * returned.
  */
 __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		      struct nfsd_file *nf, loff_t offset, unsigned long *count,
-		      u32 *eof)
+		      u32 *eof, bool dio_ok)
 {
 	struct xdr_buf *buf = &rqstp->rq_res;
 	struct page **page = buf->pages + (buf->page_len >> PAGE_SHIFT);
 	unsigned int base = buf->page_len & ~PAGE_MASK;
 	struct file *file = nf->nf_file;
+	u64 storage_start = nfsd_storage_read_bytes();
 	unsigned long v, total;
 	struct iov_iter iter;
 	struct kiocb kiocb;
@@ -1188,14 +1273,15 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	init_sync_kiocb(&kiocb, file);
 
-	switch (nfsd_io_cache_read) {
+	switch (nfsd_read_io_mode(fhp->fh_export)) {
 	case NFSD_IO_BUFFERED:
 		break;
 	case NFSD_IO_DIRECT:
-		/* When dio_read_offset_align is zero, dio is not supported */
-		if (nf->nf_dio_read_offset_align && !rqstp->rq_res.page_len)
+		if (nfsd_direct_read_ok(rqstp, fhp, nf, offset, *count,
+					page, dio_ok))
 			return nfsd_direct_read(rqstp, fhp, nf, offset,
-						count, page, eof);
+						count, page, eof,
+						storage_start);
 		fallthrough;
 	case NFSD_IO_DONTCACHE:
 		if (file->f_op->fop_flags & FOP_DONTCACHE)
@@ -1218,10 +1304,14 @@ __be32 nfsd_iter_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	}
 	rqstp->rq_next_page = page;
 
-	trace_nfsd_read_vector(rqstp, fhp, offset, *count - total);
+	trace_nfsd_read_vector(rqstp, fhp, offset, *count - total,
+			       kiocb.ki_flags);
+	trace_nfsd_read_dontcache(rqstp, fhp, offset, *count - total,
+				  kiocb.ki_flags);
 	iov_iter_bvec(&iter, ITER_DEST, rqstp->rq_bvec, v, *count - total);
 	host_err = vfs_iocb_iter_read(file, &kiocb, &iter);
-	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err);
+	return nfsd_finish_read(rqstp, fhp, file, offset, count, eof, host_err,
+				storage_start);
 }
 
 /*
@@ -1286,7 +1376,8 @@ nfsd_write_dio_seg_init(struct nfsd_write_dio_seg *segment,
 }
 
 static unsigned int
-nfsd_write_dio_iters_init(struct nfsd_file *nf, struct bio_vec *bvec,
+nfsd_write_dio_iters_init(struct svc_rqst *rqstp, struct svc_fh *fhp,
+			  struct nfsd_file *nf, struct bio_vec *bvec,
 			  unsigned int nvecs, struct kiocb *iocb,
 			  unsigned long total,
 			  struct nfsd_write_dio_seg segments[3])
@@ -1294,33 +1385,72 @@ nfsd_write_dio_iters_init(struct nfsd_file *nf, struct bio_vec *bvec,
 	u32 offset_align = nf->nf_dio_offset_align;
 	loff_t prefix_end, orig_end, middle_end;
 	u32 mem_align = nf->nf_dio_mem_align;
+	u32 mem_offset = nvecs ? bvec->bv_offset : 0;
 	size_t prefix, middle, suffix;
 	loff_t offset = iocb->ki_pos;
+	unsigned int dontcache_flags = 0;
+	unsigned int buffered_flags;
 	unsigned int nsegs = 0;
+	unsigned long cut;
+
+	if (nf->nf_file->f_op->fop_flags & FOP_DONTCACHE)
+		dontcache_flags = IOCB_DONTCACHE;
+	buffered_flags = nfsd_direct_misaligned_dontcache ? dontcache_flags : 0;
 
 	/*
 	 * Check if direct I/O is feasible for this write request.
 	 * If alignments are not available, the write is too small,
 	 * or no alignment can be found, fall back to buffered I/O.
 	 */
-	if (unlikely(!mem_align || !offset_align) ||
-	    unlikely(total < max(offset_align, mem_align)))
+	if (unlikely(!mem_align || !offset_align)) {
+		trace_nfsd_write_dio_no_alignment(rqstp, fhp, offset, total,
+						  offset_align, mem_align,
+						  mem_offset, 0, 0, 0);
 		goto no_dio;
+	}
+	if (unlikely(total < max(offset_align, mem_align))) {
+		trace_nfsd_write_dio_too_small(rqstp, fhp, offset, total,
+					       offset_align, mem_align,
+					       mem_offset, 0, 0, 0);
+		goto no_dio;
+	}
 
-	prefix_end = round_up(offset, offset_align);
 	orig_end = offset + total;
-	middle_end = round_down(orig_end, offset_align);
+
+	/*
+	 * The direct middle invalidates the page cache over its range. A
+	 * middle that starts or stops inside the folio of a buffered end
+	 * drops that folio, and the neighboring WRITE reads the folio back.
+	 */
+	cut = max_t(unsigned long, offset_align,
+		    mapping_min_folio_nrbytes(nf->nf_file->f_mapping));
+	/* round_up(offset, cut) can wrap at OFFSET_MAX, so take a distance. */
+	prefix_end = offset;
+	if (!IS_ALIGNED(offset, offset_align))
+		prefix_end += min_t(loff_t, cut - (offset & (cut - 1)), total);
+	middle_end = orig_end;
+	if (!IS_ALIGNED(orig_end, offset_align))
+		middle_end = max(round_down(orig_end, cut), prefix_end);
 
 	prefix = prefix_end - offset;
 	middle = middle_end - prefix_end;
 	suffix = orig_end - middle_end;
 
-	if (!middle)
+	if (!middle ||
+	    ((prefix || suffix) &&
+	     middle < nfsd_direct_misaligned_min_bytes)) {
+		trace_nfsd_write_dio_no_middle(rqstp, fhp, offset, total,
+					       offset_align, mem_align,
+					       mem_offset, prefix, middle,
+					       suffix);
 		goto no_dio;
+	}
 
-	if (prefix)
-		nfsd_write_dio_seg_init(&segments[nsegs++], bvec,
+	if (prefix) {
+		nfsd_write_dio_seg_init(&segments[nsegs], bvec,
 					nvecs, total, 0, prefix, iocb);
+		segments[nsegs++].flags |= buffered_flags;
+	}
 
 	nfsd_write_dio_seg_init(&segments[nsegs], bvec, nvecs,
 				total, prefix, middle, iocb);
@@ -1332,21 +1462,35 @@ nfsd_write_dio_iters_init(struct nfsd_file *nf, struct bio_vec *bvec,
 	 * the first bvec, all subsequent bvecs start at bv_offset zero
 	 * (page-aligned). Therefore, only the first bvec is checked.
 	 */
-	if (iov_iter_bvec_offset(&segments[nsegs].iter) & (mem_align - 1))
+	mem_offset = iov_iter_bvec_offset(&segments[nsegs].iter);
+	if (mem_offset & (mem_align - 1)) {
+		trace_nfsd_write_dio_mem_misaligned(rqstp, fhp, offset, total,
+						    offset_align, mem_align,
+						    mem_offset, prefix, middle,
+						    suffix);
 		goto no_dio;
-	segments[nsegs].flags |= IOCB_DIRECT;
-	nsegs++;
+	}
+	/*
+	 * IOCB_DONTCACHE matters only if the file system falls back to
+	 * buffered I/O (-ENOTBLK).
+	 */
+	segments[nsegs++].flags |= IOCB_DIRECT | dontcache_flags;
+	trace_nfsd_write_dio_direct(rqstp, fhp, offset, total, offset_align,
+				    mem_align, mem_offset, prefix, middle,
+				    suffix);
 
-	if (suffix)
-		nfsd_write_dio_seg_init(&segments[nsegs++], bvec, nvecs, total,
+	if (suffix) {
+		nfsd_write_dio_seg_init(&segments[nsegs], bvec, nvecs, total,
 					prefix + middle, suffix, iocb);
-
+		segments[nsegs++].flags |= buffered_flags;
+	}
 	return nsegs;
 
 no_dio:
-	/* No DIO alignment possible - pack into single non-DIO segment. */
+	/* Issue the whole WRITE as a single buffered segment. */
 	nfsd_write_dio_seg_init(&segments[0], bvec, nvecs, total, 0,
 				total, iocb);
+	segments[0].flags |= buffered_flags;
 	return 1;
 }
 
@@ -1357,29 +1501,37 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 {
 	struct nfsd_write_dio_seg segments[3];
 	struct file *file = nf->nf_file;
+	loff_t start = kiocb->ki_pos;
 	unsigned int nsegs, i;
+	int sync_flags;
 	ssize_t host_err;
 	size_t expected;
 
-	nsegs = nfsd_write_dio_iters_init(nf, rqstp->rq_bvec, nvecs,
-					  kiocb, *cnt, segments);
+	nsegs = nfsd_write_dio_iters_init(rqstp, fhp, nf, rqstp->rq_bvec,
+					  nvecs, kiocb, *cnt, segments);
+
+	/*
+	 * Sync a split WRITE once, after its last segment, instead of after
+	 * each segment that carries IOCB_DSYNC. A single segment keeps the
+	 * flag so a direct overwrite can complete with FUA instead of a cache
+	 * flush.
+	 */
+	sync_flags = kiocb->ki_flags & (IOCB_DSYNC | IOCB_SYNC);
+	if (nsegs == 1)
+		sync_flags = 0;
 
 	*cnt = 0;
 	for (i = 0; i < nsegs; i++) {
-		kiocb->ki_flags = segments[i].flags;
-		if (kiocb->ki_flags & IOCB_DIRECT)
-			trace_nfsd_write_direct(rqstp, fhp, kiocb->ki_pos,
-						segments[i].iter.count);
-		else {
-			trace_nfsd_write_vector(rqstp, fhp, kiocb->ki_pos,
-						segments[i].iter.count);
-			/*
-			 * Mark the I/O buffer as evict-able to reduce
-			 * memory contention.
-			 */
-			if (nf->nf_file->f_op->fop_flags & FOP_DONTCACHE)
-				kiocb->ki_flags |= IOCB_DONTCACHE;
-		}
+		kiocb->ki_flags = segments[i].flags & ~sync_flags;
+		trace_nfsd_write_direct(rqstp, fhp, kiocb->ki_pos,
+					segments[i].iter.count,
+					kiocb->ki_flags);
+		trace_nfsd_write_dontcache(rqstp, fhp, kiocb->ki_pos,
+					   segments[i].iter.count,
+					   kiocb->ki_flags);
+		trace_nfsd_write_vector(rqstp, fhp, kiocb->ki_pos,
+					segments[i].iter.count,
+					kiocb->ki_flags);
 
 		expected = iov_iter_count(&segments[i].iter);
 
@@ -1389,6 +1541,13 @@ nfsd_direct_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		*cnt += host_err;
 		if (host_err < (ssize_t)expected)
 			break;	/* partial write */
+	}
+
+	if (sync_flags && *cnt) {
+		host_err = vfs_fsync_range(file, start, start + *cnt - 1,
+					   !(sync_flags & IOCB_SYNC));
+		if (host_err < 0)
+			return host_err;
 	}
 
 	return 0;
@@ -1467,7 +1626,7 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (verf)
 		nfsd_copy_write_verifier(verf, nn);
 
-	switch (nfsd_io_cache_write) {
+	switch (nfsd_write_io_mode(exp)) {
 	case NFSD_IO_DIRECT:
 		host_err = nfsd_direct_write(rqstp, fhp, nf, nvecs,
 					     cnt, &kiocb);
@@ -1477,6 +1636,10 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			kiocb.ki_flags |= IOCB_DONTCACHE;
 		fallthrough;
 	case NFSD_IO_BUFFERED:
+		trace_nfsd_write_dontcache(rqstp, fhp, offset, *cnt,
+					   kiocb.ki_flags);
+		trace_nfsd_write_vector(rqstp, fhp, offset, *cnt,
+					kiocb.ki_flags);
 		iov_iter_bvec(&iter, ITER_SOURCE, rqstp->rq_bvec, nvecs, *cnt);
 		host_err = vfs_iocb_iter_write(file, &kiocb, &iter);
 		if (host_err < 0)
@@ -1570,10 +1733,12 @@ __be32 nfsd_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		return err;
 
 	file = nf->nf_file;
-	if (file->f_op->splice_read && nfsd_read_splice_ok(rqstp))
+	if (file->f_op->splice_read && nfsd_read_splice_ok(rqstp) &&
+	    nfsd_read_io_mode(fhp->fh_export) == NFSD_IO_BUFFERED)
 		err = nfsd_splice_read(rqstp, fhp, file, offset, count, eof);
 	else
-		err = nfsd_iter_read(rqstp, fhp, nf, offset, count, eof);
+		err = nfsd_iter_read(rqstp, fhp, nf, offset, count, eof,
+				     true);
 
 	nfsd_file_put(nf);
 	trace_nfsd_read_done(rqstp, fhp, offset, *count);
