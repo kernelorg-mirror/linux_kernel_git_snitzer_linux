@@ -1,0 +1,15 @@
+22:32:12 t2-r595 wsize 1048576 window 7 | total 51.23 GB/s | ring drops 164 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 wsize 1048576 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 0, denied 0, paused 0, overrun 0; client retransmits in the window: 67
+    client: 24 connections, rwnd_limited 31.6% of busy, snd_wnd mean 82 KiB; client CPUs busy: 44%
+    client mount: rsize=1048576 wsize=1048576 
+    drives   all 8:  24.3%   3.2%   3.4%   4.0%  65.0%  0.00 GB/s
+    
+     held in the window (490 samples): median 1637 (26 MiB, 0.80 L3), p90 1690, p99 1751, most 1759 | kernel peak 1759 | a page held 1352.47 ms at the median | to memory 112.8 GB/s, 5689.16 bytes a byte | fills 3037.58 a payload line
+22:37:39 t2-r596 wsize server window 10 max_block_size 524288 | total 47.63 GB/s | ring drops 102 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; window 10; loans: budget 8198 pages (64 WRITEs), in the run admitted 0, denied 0, paused 0, overrun 0; client retransmits in the window: 39
+    client: 24 connections, rwnd_limited 29.9% of busy, snd_wnd mean 30 KiB; client CPUs busy: 42%
+    client mount: rsize=524288 wsize=524288 
+    drives   all 8:  34.0%   3.5%   6.8%   3.1%  52.6%  0.00 GB/s
+    
+     held in the window (491 samples): median 1736 (27 MiB, 0.85 L3), p90 1811, p99 1876, most 1878 | kernel peak 1924 | a page held 717.13 ms at the median | to memory 106.7 GB/s, 2690.11 bytes a byte | fills 1462.17 a payload line
+22:37:42 after: settled.sh audit rest: the settled setting

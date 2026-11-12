@@ -1,0 +1,15 @@
+22:20:17 t2-r593 wsize 1048576 window 7 | total 59.06 GB/s | ring drops 1450 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 wsize 1048576 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 0, denied 0, paused 0, overrun 0; client retransmits in the window: 185
+    client: 24 connections, rwnd_limited 29.2% of busy, snd_wnd mean 30 KiB; client CPUs busy: 49%
+    client mount: rsize=1048576 wsize=1048576 
+    drives   all 8:  13.6%   3.1%   3.5%   3.9%  75.8%  0.00 GB/s
+    
+     held in the window (477 samples): median 1681 (26 MiB, 0.82 L3), p90 1709, p99 1713, most 1713 | kernel peak 1718 | a page held 1388.82 ms at the median | to memory 135.7 GB/s, 6844.28 bytes a byte | fills 3475.80 a payload line
+22:25:47 t2-r594 wsize server window 10 max_block_size 524288 | total 49.29 GB/s | ring drops 660 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; window 10; loans: budget 8198 pages (64 WRITEs), in the run admitted 0, denied 0, paused 0, overrun 0; client retransmits in the window: 147
+    client: 24 connections, rwnd_limited 32.6% of busy, snd_wnd mean 45 KiB; client CPUs busy: 44%
+    client mount: rsize=524288 wsize=524288 
+    drives   all 8:  33.4%   3.4%   7.0%   3.2%  53.1%  0.00 GB/s
+    
+     held in the window (443 samples): median 1648 (26 MiB, 0.80 L3), p90 1742, p99 1810, most 1843 | kernel peak 1857 | a page held 680.78 ms at the median | to memory 111.6 GB/s, 2813.35 bytes a byte | fills 1534.01 a payload line
+22:25:47 root has under 1 GB free

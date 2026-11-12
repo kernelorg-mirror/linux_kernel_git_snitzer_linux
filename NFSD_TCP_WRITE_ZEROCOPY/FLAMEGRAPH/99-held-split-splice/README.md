@@ -486,3 +486,30 @@ each, the client 49% busy, no loan denied, no ring drop, no drive
 stepped down.  nfsd's smaller per-thread pages change nothing measured.
 `max_block_size` also caps a READ at 512 KiB, which no run here has
 measured.
+
+## Reads under a 512 KiB max_block_size (t2-r593..r596)
+
+`max_block_size` caps a READ as well.  `run577.sh` with `RW=read`
+(each run writes its files whole, rests 20 s, then reads them; fio's
+16 jobs a port, 8 MiB blocks, iodepth 16), 1 MiB at window 7 against
+nfsd's max_block_size 524288 with the client mounting with no size, in
+turns ([run593.out](run593.out), [run595.out](run595.out): the sweep
+stopped after t2-r594 when a 1.9 GB worktree on root left under 1 GB
+free, and the last two ran on their own).  The held and memory
+figures of l3read.py are a write's and mean nothing here.
+
+| run | rsize | GB/s (a, b) | a drive empty / 4+ | ring drops |
+|---|---|---|---|---|
+| `t2-r593` | 1 MiB | 59.06 (29.79, 29.27) | 13.6% / 75.8% | 1450 |
+| `t2-r594` | 512 KiB | 49.29 (22.37, 26.92) | 33.4% / 53.1% | 660 |
+| `t2-r595` | 1 MiB | 51.23 (21.19, 30.05) | 24.3% / 65.0% | 164 |
+| `t2-r596` | 512 KiB | 47.63 (24.52, 23.10) | 34.0% / 52.6% | 102 |
+
+Reads vary from run to run as writes do not (1 MiB 51 to 59, a port 21
+to 30), but both 512 KiB runs are below both 1 MiB runs, 48.46 against
+55.15 (-12%), and in both the drives are kept less deep (4 or more 53%
+of the time against 65 to 76%): the same reads in flight, each half the
+size.  So the server's max_block_size, which caps both, costs reads
+what it gives writes; the client's mount option (wsize 512 KiB, rsize
+1 MiB) takes the writes' gain alone.  Reads on this rig are not tuned
+and a 40 s run is short for their spread.
