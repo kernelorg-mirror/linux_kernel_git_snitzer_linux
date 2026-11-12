@@ -1,3 +1,37 @@
+* Thu Nov 12 2026 Mike Snitzer <snitzer@kernel.org> [7.3.3-16]
+- nfsd-testing takes "NFSD: Refuse a direct READ whose aligned range
+  exceeds the reply pages" from cel/nfsd-testing: with a direct I/O
+  alignment larger than the page size, a READ expanded to that alignment
+  can need one more reply page than the svc_rqst has, and the truncated
+  range fails in iomap with -EINVAL; nfsd_direct_read_ok() now falls back
+  to a buffered read when the aligned range does not fit, traced as
+  nfsd_read_dio_range_too_large; nfsd-testing-canary-dontcache is rebased
+  on it and is v12 of the series as posted
+  (https://lore.kernel.org/linux-nfs/20261112190911.84702-1-snitzer@kernel.org/):
+  folio_mark_dropbehind() leaves a mapped folio unmarked, since through
+  its page table a mapped folio can be dirtied without the folio lock
+  and, with a stale dirty tag, be counted twice in WB_DONTCACHE_DIRTY,
+  and filemap_dontcache_edge_complete() leaves a mapped folio alone,
+  dirty or clean, to match; nfsd-testing-canary-dontcache-LOCALIO is
+  rebased on it, code unchanged: localio.rst no longer documents the
+  retired localio_O_DIRECT_semantics parameter and says what LOCALIO does
+  with an application's O_DIRECT, and nfsd-io-modes.rst gains a LOCALIO
+  section; nfs-testing-canary-reduce-i_lock-contention-LOCALIO is rebased
+  on it
+- snitzer-nfs-fixes-canary adds two SUNRPC changes: rpciod and xprtiod
+  are created with WQ_SYSFS, so their affinity_scope, affinity_strict and
+  cpumask can be set under /sys/devices/virtual/workqueue/, nothing
+  changing until an administrator writes them; and xprt_sock_sendmsg()
+  sends a request's page array to a TCP socket with MSG_SPLICE_PAGES on
+  its first transmission, so the socket holds the pages instead of
+  copying every byte under the socket lock, as the server's
+  svc_tcp_sendmsg() does; a retransmission, the head and the tail, and
+  UDP and AF_LOCAL are copied as before; nfs-testing-canary and the
+  topics built on it (reduce-i_lock-contention, reduce-ff-layout-
+  contention, rdma) are rebased on it, and the base merge of
+  nfsd-testing-canary-dontcache-LOCALIO and the
+  nfs-testing-canary-reduce-i_lock-contention-LOCALIO merge are rebuilt
+
 * Tue Nov 10 2026 Mike Snitzer <snitzer@kernel.org> [7.3.3-15]
 - nfsd-testing-canary-dontcache is v11 of the series as posted
   (https://lore.kernel.org/linux-nfs/20261111015607.46338-1-snitzer@kernel.org/),
