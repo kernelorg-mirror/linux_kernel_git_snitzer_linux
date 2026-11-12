@@ -371,3 +371,29 @@ head-of-line.
   512 KiB: t2-r559..r562), records that are smaller (a smaller wsize:
   more of them, each sooner), or more WRITEs already read and waiting
   for each drive (the client keeping more in flight a drive).
+
+## Twice the client's writers, now the client splices (t2-r573..r576)
+
+[run573.sh](run573.sh) ([run573.out](run573.out)) is round 98's
+`t2-r526` again: 32 writers a port (8 a drive) against the settled 16,
+8 MiB blocks at iodepth 16, in turns, at the settled setting (window 7,
+budget 64, 512 KiB, 12 connections a port), `WARM=10 RUNTIME=40`.
+Round 98 found no gain with the client 70% busy and copying; the
+client now splices and is 42% busy, and the trace above has the drives
+waiting on WRITEs still arriving, so more WRITEs in flight a drive
+might have one already read.
+
+| run | writers a port | GB/s | a drive empty / 4+ | rwnd_limited | client CPUs | held median, most | to memory |
+|---|---|---|---|---|---|---|---|
+| `t2-r573` | 16 | 75.22 | 6.4% / 85.7% | 99.4% | 42% | 55 MiB, 3971 | 132.6 GB/s |
+| `t2-r574` | 32 | 73.57 | 8.2% / 83.2% | 98.4% | 43% | 55 MiB, 4087 | 128.1 GB/s |
+| `t2-r575` | 16 | 75.14 | 6.5% / 85.8% | 98.5% | 42% | 55 MiB, 4006 | 132.3 GB/s |
+| `t2-r576` | 32 | 73.74 | 8.2% / 83.1% | 97.4% | 44% | 55 MiB, 4067 | 128.5 GB/s |
+
+No loan denied, no ring drop, no drive stepped down in any.  **Twice
+the writers lose 2% (73.66 against 75.18), and the drives are empty
+8.2% of the time against 6.5%.**  The held pages are the same.  The
+client's connections are held by the server's window in both, so the
+extra WRITEs wait at the client: none of them arrives sooner, and a
+drive takes eight interleaved streams instead of four.  The client's
+writers are not the lever; 16 stays.
