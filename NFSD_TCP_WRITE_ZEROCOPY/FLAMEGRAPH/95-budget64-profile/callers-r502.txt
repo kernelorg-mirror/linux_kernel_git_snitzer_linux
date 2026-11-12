@@ -1,0 +1,196 @@
+t2-r502: 243439 cycles a WRITE (idle out)
+
+inclusive, the receive path and the loan:
+   218286 incl      13 self  nfsd
+   217704 incl    2281 self  svc_recv
+   193722 incl      33 self  svc_handle_xprt
+   117660 incl     156 self  svc_process
+    75059 incl     129 self  nfsd_dispatch
+    72102 incl    1948 self  svc_tcp_recvfrom
+    55236 incl      39 self  tcp_read_sock
+    54512 incl      83 self  nfsd3_proc_write
+    45169 incl     172 self  nfsd_vfs_write
+    35213 incl     189 self  xfs_file_write_iter
+    34034 incl      52 self  svc_send
+    33900 incl      29 self  svc_tcp_sendto
+    23253 incl    2220 self  svc_tcp_recv_skb
+    22759 incl     190 self  submit_bio
+    21856 incl    1582 self  blk_mq_submit_bio
+    12829 incl     103 self  svc_tcp_rx_release_refs
+    12204 incl    3403 self  rx_loan_table_release
+    10310 incl    2989 self  svc_tcp_rx_walk_skb
+     7688 incl     706 self  rx_loan_put_run
+     6643 incl    3177 self  svc_tcp_rx_borrow_segment
+     3436 incl    3434 self  rx_loan_prefetch_pages
+     3424 incl    3421 self  __rx_loan_table_append_ref
+     2901 incl     106 self  rx_loan_skb_region_pages
+     2058 incl     115 self  svc_tcp_rx_publish
+     1771 incl     249 self  svc_tcp_rx_credit_admit_to
+     1631 incl    1553 self  svc_tcp_rx_validate_mixed
+     1620 incl    1619 self  rx_loan_region_span
+     1271 incl      28 self  svc_tcp_rx_credit_release
+     1245 incl    1245 self  rx_loan_skb_region_pages.part.0
+     1235 incl      73 self  svc_tcp_rx_credit_return
+     1177 incl    1177 self  svc_tcp_rx_append_ref
+     1164 incl      69 self  rx_loan_admit
+     1148 incl    1148 self  xdr_buf_to_bvec
+      962 incl     171 self  svc_tcp_rx_copy_skb
+      903 incl     820 self  svc_tcp_restore_pages
+      630 incl     629 self  svc_tcp_rx_set_want
+      531 incl     347 self  svc_tcp_rx_budget_for
+      527 incl     138 self  svc_tcp_rx_classify
+      455 incl     455 self  rx_loan_region_put
+      428 incl     152 self  rx_loan_return
+      334 incl     304 self  rx_loan_consumer_get
+      315 incl     315 self  rx_loan_stock_refill_locked
+      307 incl     177 self  svc_tcp_save_pages
+      217 incl      19 self  rx_loan_table_refs_valid_checked
+      215 incl      77 self  rx_loan_table_reset_consumer
+      210 incl     210 self  svc_tcp_rx_budget_in_force
+      200 incl     200 self  svc_tcp_rx_prefetch_entries
+      197 incl     197 self  svc_tcp_rx_target_admit.isra.0
+      182 incl     182 self  svc_tcp_rx_is_empty
+      161 incl      81 self  __rx_loan_table_refs_valid
+      161 incl     161 self  rx_loan_copies_count
+      154 incl     154 self  rx_loan_region_add
+      143 incl     143 self  svc_tcp_rx_exchange
+      134 incl     126 self  rx_loan_link_locked
+      120 incl     120 self  svc_tcp_rx_budget_on
+      112 incl     112 self  svc_tcp_rx_takeover_settle.part.0
+       88 incl      88 self  svc_tcp_rx_counts_valid
+       74 incl      46 self  rx_loan_kick_locked
+       63 incl       2 self  svc_tcp_rx_waiter_wake
+       58 incl      58 self  rx_loan_wake_granted
+       56 incl      56 self  rx_loan_hold_account
+       48 incl      44 self  rx_loan_region_get
+       42 incl      42 self  rx_loan_head_locked
+       35 incl      35 self  svc_tcp_rx_wait_rest
+       24 incl      24 self  rx_loan_cost_learn_locked
+       23 incl      23 self  rx_loan_budget_configure_locked
+       16 incl      16 self  rx_loan_stock_drain_locked
+       12 incl      12 self  rx_loan_consumer_put
+        8 incl       3 self  rx_loan_table_refs_valid
+        4 incl       4 self  svc_tcp_rx_waiter_pin
+        1 incl       1 self  rx_loan_wait_locked
+        1 incl       0 self  __rx_loan_charge
+
+callers:
+  _raw_spin_unlock_irqrestore         10081
+        5085   50.4%  wake_up_process
+        1369   13.6%  rx_region_page_put
+        1099   10.9%  nvme_pci_setup_data_sgl
+         613    6.1%  release_sock
+         426    4.2%  __rmqueue_pcplist
+         414    4.1%  xlog_state_clean_iclog
+         249    2.5%  mod_timer
+         148    1.5%  __pcs_replace_empty_main
+  _raw_spin_lock                       8449
+        4070   48.2%  __dev_xmit_skb
+        1826   21.6%  svc_recv
+         464    5.5%  nfsd_dispatch
+         345    4.1%  __dev_queue_xmit
+         284    3.4%  xfs_iget
+         211    2.5%  d_obtain_alias
+         193    2.3%  __qdisc_run
+         178    2.1%  svc_set_client
+  blk_rq_dma_map_iter_next             5107
+        4762   93.2%  nvme_pci_setup_data_sgl
+         346    6.8%  nvme_map_data
+  rx_loan_prefetch_pages               3434
+        3400   99.0%  svc_tcp_recv_skb
+          34    1.0%  svc_tcp_recv_actor
+  __rx_loan_table_append_ref           3421
+        3421  100.0%  svc_tcp_rx_borrow_segment
+  rx_loan_table_release                3403
+        3369   99.0%  svc_tcp_rx_release_refs
+          32    0.9%  svc_tcp_release_ctxt
+           3    0.1%  svc_tcp_rx_publish
+  svc_tcp_rx_borrow_segment            3177
+        2716   85.5%  svc_tcp_rx_walk_skb
+         460   14.5%  svc_tcp_recv_skb
+  svc_tcp_rx_walk_skb                  2989
+        2921   97.7%  svc_tcp_recv_skb
+          68    2.3%  svc_tcp_recv_actor
+  queued_spin_lock_slowpath            1919
+        1146   59.7%  __lwq_dequeue
+         379   19.7%  lock_sock_nested
+         148    7.7%  sch_direct_xmit
+          66    3.4%  rx_loan_admit
+          49    2.6%  rx_loan_return
+          39    2.0%  page_pool_recycle_ring_bulk
+          31    1.6%  release_sock
+          26    1.3%  __dev_xmit_skb
+  rx_loan_region_span                  1619
+        1619  100.0%  rx_loan_skb_region_pages
+  svc_tcp_rx_validate_mixed            1553
+        1540   99.2%  svc_tcp_rx_publish
+          13    0.8%  svc_tcp_recvfrom
+  _raw_spin_lock_bh                    1549
+         419   27.0%  svc_tcp_recvfrom
+         342   22.1%  page_pool_put_netmem_bulk
+         222   14.3%  svc_tcp_rx_credit_return
+         220   14.2%  svc_tcp_rx_credit_admit_to
+         167   10.8%  tcp_sendmsg
+         115    7.4%  release_sock
+          64    4.2%  lock_sock_nested
+  rx_loan_skb_region_pages.part.0      1245
+        1174   94.3%  rx_loan_skb_region_pages
+          71    5.7%  svc_tcp_recv_skb
+  svc_tcp_rx_append_ref                1177
+        1136   96.6%  svc_tcp_rx_walk_skb
+          41    3.4%  svc_tcp_rx_borrow_segment
+  xdr_buf_to_bvec                      1148
+        1049   91.4%  nfsd_vfs_write
+          88    7.7%  svc_tcp_sendmsg
+           6    0.5%  svc_tcp_send_record
+           5    0.4%  nfsd_write
+  svc_tcp_restore_pages                 820
+         803   98.0%  svc_tcp_recvfrom
+          17    2.0%  svc_xprt_recv_call
+  rx_loan_put_run                       706
+         405   57.3%  rx_loan_table_release
+         248   35.1%  svc_tcp_rx_release_refs
+          54    7.6%  rx_loan_put_run
+  svc_tcp_rx_set_want                   629
+         629  100.0%  svc_xprt_recv_call
+  rx_loan_region_put                    455
+         455  100.0%  svc_tcp_rx_credit_return
+  svc_tcp_rx_budget_for                 347
+         242   69.7%  svc_tcp_rx_classify
+          81   23.2%  svc_tcp_recv_actor
+          17    5.0%  svc_tcp_recv_skb
+           7    2.2%  __tcp_read_sock
+  rx_loan_stock_refill_locked           315
+         304   96.5%  rx_loan_admit
+          11    3.5%  svc_tcp_rx_credit_admit_to
+  rx_loan_consumer_get                  304
+         296   97.4%  rx_loan_admit
+           7    2.4%  svc_tcp_rx_credit_admit_to
+           1    0.2%  __rx_loan_charge
+
+chains under svc_tcp_recvfrom to a loan leaf:
+    3421  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_walk_skb > svc_tcp_rx_borrow_segment > __rx_loan_table_append_ref
+    3400  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > rx_loan_prefetch_pages
+    2921  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_walk_skb
+    2716  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_walk_skb > svc_tcp_rx_borrow_segment
+    1619  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > rx_loan_skb_region_pages > rx_loan_region_span
+    1540  svc_tcp_recvfrom > svc_tcp_rx_publish > svc_tcp_rx_validate_mixed
+    1174  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > rx_loan_skb_region_pages > rx_loan_skb_region_pages.part.0
+    1136  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_walk_skb > svc_tcp_rx_append_ref
+     803  svc_tcp_recvfrom > svc_tcp_restore_pages
+     460  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_borrow_segment
+     304  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_credit_admit_to > rx_loan_admit > rx_loan_stock_refill_locked
+     296  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_credit_admit_to > rx_loan_admit > rx_loan_consumer_get
+     242  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_classify > svc_tcp_rx_budget_for
+     237  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_credit_admit_to
+     180  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_rx_prefetch_entries
+     159  svc_tcp_recvfrom > svc_tcp_save_pages
+     154  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_credit_admit_to > rx_loan_admit > rx_loan_region_add
+     153  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_target_admit.isra.0
+     147  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_copy_skb
+     138  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_classify > svc_tcp_rx_budget_for > svc_tcp_rx_budget_in_force
+     138  svc_tcp_recvfrom > svc_tcp_rx_publish > __svc_tcp_rx_reset > rx_loan_table_reset_consumer > rx_loan_copies_count
+     124  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_classify
+     115  svc_tcp_recvfrom > svc_tcp_rx_is_empty
+     112  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_rx_takeover_settle.part.0
+      99  svc_tcp_recvfrom > tcp_read_sock > __tcp_read_sock > svc_tcp_recv_actor > svc_tcp_recv_skb > svc_tcp_rx_credit_admit_to > rx_loan_admit > rx_loan_link_locked

@@ -1,0 +1,4 @@
+run      v    GB/s WRITE/s  nfsd cyc _raw_spin queued_sp __lwq_deq  svc_recv svc_xprt_ svc_pool_ svc_pool_ svc_pool_ svc_xprt_ svc_tcp_r svc_tcp_s   enq/W  woken/W
+t2-r501  -   71.59   68342    248133      9035      1975       319      2388         9       867      1176       687      1193       868       167    9.19    5.61
+t2-r367  -   69.89   66533    242898      8212      1526       329      2079         9       674      1157       669      1284       880       111    9.18    5.81
+t2-r368  -   70.63   67315    244808      8361      1632       319      2146        10       700      1138       722      1302       971        99    9.07    5.71

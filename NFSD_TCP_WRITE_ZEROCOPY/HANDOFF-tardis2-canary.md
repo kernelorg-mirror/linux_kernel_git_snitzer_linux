@@ -336,6 +336,22 @@ in `PORT-DEAD-AFTER-BOOT.md`.  To go back to the tip's own sunrpc:
 `/lib/modules/$(uname -r)/updates/`, `depmod -a`, and the swap again;
 `settled.sh apply` after either.
 
+**The budget is settled at 64 WRITEs (Mike, 12 November), the window
+stays at 0, and round 95's profile names the next focus.**
+`common.sh`'s `TWO_WRITES` is the two-port loan budget; the runners
+pass `WRITES=$TWO_WRITES`.  `FLAMEGRAPH/95-budget64-profile/`
+(`t2-r501..r503`): 71.2 to 72.2 GB/s, the exact peak 7,052 pages
+against 11,919 at 128, the median held 56 MiB as before, nfsd's
+profile round 88's to within 2%.  The finding: all 24 client
+connections are `rwnd_limited` 99.5% of the time, the server
+advertises 244 KiB a connection and the loaded round trip is 85 to
+93 us against a 13 us floor, so the rate is the window over a round
+trip the server mostly makes.  **Round 96's suggested focus is the
+server's share of that round trip** (arrival to read, read to the
+window-opening ACK, passes and wakes a record): the one lever that
+raises the rate at the same footprint, or lowers the footprint at the
+same rate.  Start at the README's last section.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

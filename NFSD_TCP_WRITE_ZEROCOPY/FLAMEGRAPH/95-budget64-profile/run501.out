@@ -1,0 +1,3 @@
+00:28:04 t2-r501 C | total 71.59 GB/s | WRITEs 68342 | retransmits 34 | region pages in use at most: 6779 | new kernel warnings 0
+00:33:46 t2-r502 G | total 71.20 GB/s | WRITEs 67817 | retransmits 34 | region pages in use at most: 6798 | new kernel warnings 0
+00:38:43 t2-r503 H | total 72.19 GB/s | WRITEs 68779 | retransmits 35 | region pages in use at most (the kernel's mark, exact): 7052 | new kernel warnings 0

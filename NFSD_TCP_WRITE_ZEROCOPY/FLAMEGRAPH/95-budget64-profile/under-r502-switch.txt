@@ -1,0 +1,15 @@
+t2-r502 under finish_task_switch.isra.0: 24040 cycles a WRITE
+ by called from:
+    24029 100.0%  __schedule
+        6   0.0%  schedule_idle
+        5   0.0%  schedule
+ by direct callee:
+    24029 100.0%  (self)
+       11   0.0%  el1h_64_irq
+ by leaf:
+    24029 100.0%  finish_task_switch.isra.0
+        6   0.0%  handle_softirqs
+        2   0.0%  update_sg_lb_stats
+        1   0.0%  _raw_spin_unlock_irqrestore
+        1   0.0%  sched_balance_rq
+        1   0.0%  cpu_util

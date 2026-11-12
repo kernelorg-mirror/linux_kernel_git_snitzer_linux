@@ -1,0 +1,26 @@
+t2-r502 under blk_mq_submit_bio: 21856 cycles a WRITE
+ by called from:
+    21830  99.9%  __submit_bio
+       26   0.1%  submit_bio_noacct_nocheck
+ by direct callee:
+    11292  51.7%  blk_add_rq_to_plug
+     3924  18.0%  bio_split_rw
+     2259  10.3%  __blk_mq_alloc_requests
+     1582   7.2%  (self)
+      587   2.7%  __rq_qos_track
+      407   1.9%  blk_mq_sched_bio_merge
+      311   1.4%  blk_mq_try_issue_directly
+      310   1.4%  blk_account_io_start.part.0
+      285   1.3%  blk_mq_rq_ctx_init.isra.0
+      285   1.3%  blk_mq_rq_late_init
+ by leaf:
+     3868  17.7%  blk_rq_dma_map_iter_next
+     1767   8.1%  bio_split_io_at
+     1582   7.2%  blk_mq_submit_bio
+     1161   5.3%  dma_direct_map_phys
+      853   3.9%  _raw_spin_unlock_irqrestore
+      814   3.7%  dma_map_phys
+      714   3.3%  __blk_mq_alloc_requests
+      713   3.3%  blk_dma_map_iter_start
+      695   3.2%  nvme_pci_setup_data_sgl
+      667   3.1%  nvme_queue_rqs
