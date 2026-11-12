@@ -321,10 +321,17 @@ in `updates/` (`.svcstack` lists them): `/sys/module/sunrpc/srcversion`
 reads `FC78BAE8A6C2B0A92A1366A`, nfsd `B692CCE771BEB35E44E4085`
 (the first stack's `2250400763E6EC917BB7F48` ran `t2-r494..r496`).  The
 window is `sunrpc.svc_tcp_rx_target_window`, 0 (off) at rest and left
-so; `settled.sh` does not know it.  A window of 5 holds 43 MiB in
-place of 55 and costs 8.5% of the rate (`t2-r497`); the account is the
-round's README.  To go back to the tip's own sunrpc: `SUNRPC_KO=none
-STACK=none ./swap-sunrpc.sh`, then copy the tip's
+so; `settled.sh` does not know it.  The window from 7 down to 4
+(`t2-r497..r500`) holds 49 to 39 MiB in place of 55 and costs 3.5 to
+15% of the rate, about 1% a MiB with no knee; the account is the
+round's README.  **The card's management mailbox has timed out three
+times on this boot** (`RM message [a1:00.0] send timed out`, error
+110: once on 10 November on a link query, twice at 00:00 on 12
+November, a link query on port b and the RSS read on port a ten
+seconds apart, which stopped `t2-r499`'s first attempt before its
+load); each time the ports answered and the next run was clean.  Noted
+in `PORT-DEAD-AFTER-BOOT.md`.  To go back to the tip's own sunrpc:
+`SUNRPC_KO=none STACK=none ./swap-sunrpc.sh`, then copy the tip's
 `$L/sunrpc-522-tip/sunrpc/sunrpc.ko` to
 `/lib/modules/$(uname -r)/updates/`, `depmod -a`, and the swap again;
 `settled.sh apply` after either.

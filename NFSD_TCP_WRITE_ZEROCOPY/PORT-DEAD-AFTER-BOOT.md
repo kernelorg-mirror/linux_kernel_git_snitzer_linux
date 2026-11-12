@@ -191,3 +191,20 @@ bulk return" and "Next boot: the region's held mark" in
 Add every boot's outcome to "The cases", the boots that lose no port
 too: the count of good boots is what will say whether a kernel makes
 it more likely.
+
+## Management mailbox timeouts with the ports up (tardis2, build 522)
+
+A different failure from the ones above, recorded here because it is
+the card's: with both ports up and passing traffic, a management
+query times out in the driver's mailbox (`RM message [a1:00.0] send
+timed out, msg_id ..., box req ... resp ...`, then the query's name
+with `error: 110`).  Three on the boot of 10 November into build 522:
+`XSL_MSG_GET_LINK_CONFIG` on port a at 81,583 s (10 November); on 12
+November at 00:00, `XSL_MSG_GET_LINK_CONFIG` on port b and ten seconds
+later `XSL_MSG_RSS_HASH_GET` on port a, which made ynl's `rss-get`
+fail and `twoport.sh` refuse the run (`t2-r499`'s first attempt).  The
+two at 00:00 came about 30 s after `settled.sh apply` had resized both
+ports' rings for the run.  Each time both ports pinged, `ethtool -x`
+and ynl read the tables, and the runs after were clean (no drops, the
+rate as before).  Nothing was done to the card.  If one of these is
+followed by a port that does not answer, the cases above apply.

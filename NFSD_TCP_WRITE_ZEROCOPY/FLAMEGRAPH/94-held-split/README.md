@@ -422,3 +422,43 @@ and the window off (`t2-r494`):
   end the head-of-line pauses.  No ring drops, no drive stepped down,
   no kernel warning in any run; the host is left at the settled setting
   with the window at 0 and the stack from `9e4eb880bb91` loaded.
+
+### Windows of 6 and 7 (t2-r499, r500)
+
+Mike: "run W 6 and 7".  [run499.out](run499.out), the same stack, no
+swap.  The first attempt (00:00) stopped before the load: the card's
+management mailbox timed out on a link query on port b and ten seconds
+later on the RSS read on port a (`RM message ... send timed out`,
+`XSL_MSG_RSS_HASH_GET failed, error: 110`), so ynl could not read the
+table to place the flows and `twoport.sh` refused.  Both ports pinged,
+ynl read both tables, nothing more in the kernel log, and the run was
+started again; the third such timeout of this boot, the first about a
+day earlier, with every run of rounds 92 to 94 between.  The whole
+curve, the window off and 7 down to 4:
+
+| window | GB/s | held, median (MiB, L3) | peak | at the drive | assembly | sockets | bytes a byte | paused (of admitted) | retransmits |
+|---|---|---|---|---|---|---|---|---|---|
+| off (r494) | 70.79 | 3,500 (55, 1.71) | 11,845 | 1,382 | 698 | 100 | 1.68 | 0 | 28 |
+| 7 (r500) | 68.29 (−3.5%) | 3,133 (49, 1.53) | 3,908 | 1,017 | 642 | 136 | 1.47 | 1.05 M (3.26 M) | 215 |
+| 6 (r499) | 66.14 (−6.6%) | 2,945 (46, 1.44) | 3,634 | 893 | 602 | 155 | 1.35 | 1.50 M (3.16 M) | 138 |
+| 5 (r497) | 64.79 (−8.5%) | 2,748 (43, 1.34) | 3,308 | 760 | 547 | 196 | 1.24 | 2.03 M (3.09 M) | 56 |
+| 4 (r498) | 60.28 (−15%) | 2,511 (39, 1.23) | 2,989 | 615 | 475 | 236 | 1.10 | 2.38 M (2.87 M) | 31 |
+
+- **There is no knee.**  Each step of the window from 7 to 5 costs 2
+  to 3% of the rate and saves about 3 MiB of the median; 4 costs twice
+  that.  At 7 the drives are at about two writes outstanding (1,017
+  pages at 68.3 GB/s is 0.24 ms a write) and the rate is already 3.5%
+  down: under the bursts a drive at two on average is under two part
+  of the time.  Nothing on this curve is free, and the price is about
+  1% of the rate for each MiB.
+- **The peak is the window's cheapest gift:** 11,845 pages off to
+  3,908 at 7, a third, for 3.5% of the rate; the budget at 48 gave
+  5,923 for 2%.
+- **Every run clean on the path:** no FIFO or ring drops, no client
+  pause or discard, the wire within 2% of its mean second to second.
+  The client's retransmits are higher at 6 and 7 (138, 215) than at any
+  window below or off (28 to 56) with nothing dropped anywhere; the
+  likeliest cause is TCP's probes on connections the server stops
+  reading, but that is not shown, and it is not separated from the
+  mailbox timeouts an hour before.  Of about 9 M segments a run it is
+  small.
