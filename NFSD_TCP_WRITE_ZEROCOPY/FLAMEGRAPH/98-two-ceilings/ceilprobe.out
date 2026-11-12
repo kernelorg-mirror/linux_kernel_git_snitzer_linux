@@ -1,0 +1,6 @@
+# read from the first run's files (the script's waits failed, see ceilprobe.sh):
+sgl8        total 78.09 GB/s | a drive 9.99 9.47 9.46 9.47 9.46 9.88 10.17 10.19 
+flat8       total 78.81 GB/s | a drive 10.03 9.65 9.64 9.62 9.63 9.84 10.20 10.20 
+flat8-mem3  total 79.67 GB/s | a drive 9.77 9.99 10.00 9.94 10.03 9.98 10.02 9.94 
+flat8-mem6  total 50.70 GB/s | a drive 6.37 6.33 6.34 6.31 6.36 6.33 6.35 6.31 
+membw alone: 3 threads 79.8 GB/s, 6 threads 149.9; beside the drives: 3 threads 61.4, 6 threads 71.6

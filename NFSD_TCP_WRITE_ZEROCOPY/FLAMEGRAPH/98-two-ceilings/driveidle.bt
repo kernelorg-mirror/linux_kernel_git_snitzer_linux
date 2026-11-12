@@ -1,0 +1,35 @@
+#!/usr/bin/bpftrace
+// driveidle.bt: how deep each data drive's queue is, weighted by time: for
+// each block device, the time spent with 0, 1, 2, 3 and 4 or more requests
+// issued and not yet completed (block:block_rq_issue to block_rq_complete),
+// in microseconds, and the requests issued.  A drive at 0 is idle; round 94
+// found one of these drives needs two 1 MiB writes queued to run flat out.
+// Keys are dev_t (nvmeNn1 is 259:N*... read them off the run's lsblk).
+BEGIN { @t0 = nsecs; }
+tracepoint:block:block_rq_issue
+{
+	$d = args->dev;
+	if (@last[$d]) {
+		$q = @inflight[$d];
+		@at[$d, $q > 4 ? 4 : $q] = sum((nsecs - @last[$d]) / 1000);
+	}
+	@last[$d] = nsecs;
+	@inflight[$d]++;
+	@issued[$d] = count();
+	@bytes[$d] = sum(args->bytes);
+}
+tracepoint:block:block_rq_complete
+{
+	$d = args->dev;
+	if (@last[$d]) {
+		$q = @inflight[$d];
+		@at[$d, $q > 4 ? 4 : $q] = sum((nsecs - @last[$d]) / 1000);
+	}
+	@last[$d] = nsecs;
+	if (@inflight[$d] > 0) { @inflight[$d]--; }
+}
+END
+{
+	printf("traced_us %d\n", (nsecs - @t0) / 1000);
+	clear(@last); clear(@t0);
+}

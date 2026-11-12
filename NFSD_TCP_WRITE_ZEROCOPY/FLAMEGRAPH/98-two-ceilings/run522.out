@@ -1,0 +1,25 @@
+03:26:47 t2-r522 | total 71.21 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r522: traced 12.66 s; time at a queue depth of 0 (idle) / 1 / 2 / 3 / 4+:
+      nvme7n1:   0.0%   0.0%   0.0%   1.7%  98.3% |    30310 requests/s,  7.74 GB/s
+      nvme0n1:   0.0%   0.0%   0.0%   0.0% 100.0% |    32112 requests/s,  8.20 GB/s
+      nvme4n1:   0.0%   0.0%   2.1%   0.0%  97.9% |    30401 requests/s,  7.76 GB/s
+      nvme2n1:   0.0%   0.0%   0.0%   0.0% 100.0% |    31831 requests/s,  8.13 GB/s
+      nvme6n1:   0.0%   0.0%   0.0%   4.1%  95.9% |    30419 requests/s,  7.76 GB/s
+      nvme1n1:   0.0%   0.0%   1.6%   1.6%  96.7% |    32154 requests/s,  8.21 GB/s
+      nvme3n1:   0.0%   0.0%   1.9%   0.0%  98.1% |    32176 requests/s,  8.22 GB/s
+      nvme5n1:   0.0%   0.0%   0.0%   0.0% 100.0% |    30402 requests/s,  7.76 GB/s
+      all 8:   0.0%   0.0%   0.7%   1.0%  98.3% | 63.77 GB/s
+    t2-r522 mid ? | wire 71.73 GB/s | held in the window (491 samples): median 3630 (57 MiB, 1.77 L3), p90 4273, p99 6355, most 6769 | kernel peak 7141 | a page held 0.84 ms at the median | to memory 121.1 GB/s, 1.70 bytes a byte | fills 1.13 a payload line
+03:31:44 t2-r523 | total 71.77 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r523: traced 12.61 s; time at a queue depth of 0 (idle) / 1 / 2 / 3 / 4+:
+      nvme7n1:   0.0%   0.0%   0.0%   0.0% 100.0% |    31238 requests/s,  7.97 GB/s
+      nvme0n1:   0.0%   0.0%   0.0%   0.0% 100.0% |    31330 requests/s,  8.00 GB/s
+      nvme4n1:   1.6%   0.0%   0.0%   1.6%  96.8% |    31455 requests/s,  8.03 GB/s
+      nvme2n1:   0.0%   0.0%   0.0%   1.5%  98.5% |    31202 requests/s,  7.97 GB/s
+      nvme6n1:   0.0%   0.0%   0.0%   0.0% 100.0% |    31308 requests/s,  7.99 GB/s
+      nvme1n1:   0.0%   0.0%   0.0%   0.0% 100.0% |    31512 requests/s,  8.04 GB/s
+      nvme3n1:   0.0%   1.4%   0.0%   2.9%  95.7% |    31504 requests/s,  8.04 GB/s
+      nvme5n1:   0.0%   0.0%   0.0%   0.0% 100.0% |    31466 requests/s,  8.03 GB/s
+      all 8:   0.2%   0.2%   0.0%   0.9%  98.7% | 64.08 GB/s
+    t2-r523 mid ? | wire 72.34 GB/s | held in the window (490 samples): median 3612 (56 MiB, 1.76 L3), p90 3993, p99 6309, most 6573 | kernel peak 7348 | a page held 0.83 ms at the median | to memory 123.1 GB/s, 1.72 bytes a byte | fills 1.13 a payload line
+03:31:47 after: settled.sh audit rest: the settled setting
