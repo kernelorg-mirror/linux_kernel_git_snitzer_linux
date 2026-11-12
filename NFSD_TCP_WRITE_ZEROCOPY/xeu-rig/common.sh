@@ -27,9 +27,14 @@ declare -A PFS=([a]="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" [b]="/hs/nvme4 /hs
 # 16 and 384 KiB, with 48 to 49 MiB of the region in use against 55 and nfsd
 # 272k to 279k cycles a WRITE against 282k.  tardis1 keeps 16 at 384 KiB,
 # measured in copy mode, until it is measured there.
+# TWO_WRITES is the two-port loan budget in 1 MiB WRITEs (twoport.sh's
+# WRITES=): 64 on tardis2 since 12 November (Mike), from 128, after round
+# 94's sweep found 64 halves the region's peak (7,362 pages against
+# 11,511) at the same rate and working set; a full budget pauses a
+# record's reading, it does not copy.
 case $HOST in
-tardis2) TWO_RCVBUF=524288; TWO_NCONN=12 ;;
-*)       TWO_RCVBUF=393216; TWO_NCONN=16 ;;
+tardis2) TWO_RCVBUF=524288; TWO_NCONN=12; TWO_WRITES=64 ;;
+*)       TWO_RCVBUF=393216; TWO_NCONN=16; TWO_WRITES=128 ;;
 esac
 DEFWHICH=$(tr -d ' ' <<< "$PORTS")	# a script's default ports: "ab" or "a"
 # which_ok <a|b|ab>: the ports asked for are this host's
