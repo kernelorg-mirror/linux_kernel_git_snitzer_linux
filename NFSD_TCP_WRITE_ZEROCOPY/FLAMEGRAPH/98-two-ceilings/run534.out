@@ -1,0 +1,13 @@
+06:04:32 t2-r534 ab none | total 75.08 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    inflight: 7211 samples over 12.00 s; share at a depth of 0 / 1 / 2 / 3 / 4+, mean depth, GB/s
+      nvme0n1:   6.9%   2.3%   3.0%   3.1%  84.7%  mean 14.39   9.32 GB/s
+      nvme1n1:   7.5%   2.3%   2.8%   3.5%  84.0%  mean 13.88   9.28 GB/s
+      nvme2n1:   7.6%   2.5%   2.6%   3.2%  84.1%  mean 13.43   9.29 GB/s
+      nvme3n1:   7.6%   2.1%   2.8%   3.4%  84.1%  mean 13.10   9.29 GB/s
+      nvme4n1:   6.1%   1.7%   2.2%   2.9%  87.1%  mean 14.94   9.47 GB/s
+      nvme5n1:   6.0%   1.9%   2.7%   3.0%  86.3%  mean 15.67   9.48 GB/s
+      nvme6n1:   6.0%   1.7%   2.7%   2.9%  86.7%  mean 14.83   9.48 GB/s
+      nvme7n1:   6.5%   1.9%   2.8%   3.5%  85.3%  mean 14.13   9.42 GB/s
+      all 8:   6.8%   2.1%   2.7%   3.2%  85.3%  75.03 GB/s
+    t2-r534 mid ? | wire 75.73 GB/s | held in the window (486 samples): median 3999 (62 MiB, 1.95 L3), p90 4508, p99 6466, most 6652 | kernel peak 7359 | a page held 0.87 ms at the median | to memory 141.6 GB/s, 1.89 bytes a byte | fills 1.12 a payload line
+06:04:35 after: settled.sh audit rest: the settled setting

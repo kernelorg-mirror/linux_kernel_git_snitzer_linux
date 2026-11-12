@@ -109,6 +109,30 @@ initrd's again (`CA0931345E46C929B11D01F`, `num_rings` 8), and
 `AB674CEE87351D814F68CEE`, `affinity_strict` 1 on both workqueues,
 nothing mounted.  The run waits on the reload of `xeu`, Mike's word.
 
+**xeu reloaded and the initrd rebuilt without it (Mike, 12 November).**
+`rmmod xeu; modprobe xeu` at 05:58:39 with no NFS connection: Release 15
+(`C3071685F0211EF8EBA2A7F`), `num_rings` 4; `port-setup.sh` on both
+ports, `settled.sh apply` ends in "the settled setting", both ports
+5 of 5 (`/var/tmp/zc-run-logs/xeu-reload-1112/`).  Then
+`omit_drivers+=" xeu "` in `/etc/dracut.conf.d/zc-no-nfs.conf` (the
+file before is `/root/zc-no-nfs.conf.pre-omit-xeu-2026-11-12`) and
+`dracut -f` of build 522's initrd, the one before kept as
+`initrd.pre-omit-xeu`: `lsinitrd` finds no `xeu.ko` (nor sunrpc or
+nfs); `xsl_core.ko` and `xsl-emi.ko` stay in it, and its copy of
+`xeu.conf` is the current one.  The next boot should load
+`updates/xeu.ko` with four rings and need no reload.
+
+**`t2-r534`: the client's splice takes two ports to 75.08 GB/s** (37.24
+and 37.84; `t2-r531` 71.56), ring drops 0, no drive stepped down, no new
+kernel warning.  On the client `__pi_memcpy` is 0.06% of the 48 CPUs
+(18.4% in `t2-r531`) and `tcp_sendmsg_locked` 0.05% (2.9%);
+`skb_splice_from_iter` 0.76%; idle 56% (28%)
+(`$L/t2-r534/cli-perf-sym.txt`); no `WARN` in its `dmesg`.
+`cli_retrans` 70 (40).  On the server the wire carries 75.73 GB/s and
+memory 141.6 GB/s, 1.89 bytes a payload byte (122.8 and 1.72 in
+`t2-r531`), about 96% of the 148: the server's memory is now the wall,
+round 98's third.  Runs 535 and 536 follow.  [run534.out](FLAMEGRAPH/98-two-ceilings/run534.out).
+
 ## Next boot: the canary from `3bdeea5a21cc` (9 November)
 
 **Where things stand.**  tardis2 ran the held-mark kernel's sixth boot
