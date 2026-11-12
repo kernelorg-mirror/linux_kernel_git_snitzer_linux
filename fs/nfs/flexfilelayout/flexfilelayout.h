@@ -14,6 +14,7 @@
 #define FF_FLAGS_NO_IO_THRU_MDS  2
 #define FF_FLAGS_NO_READ_IO      4
 
+#include <linux/cache.h>
 #include <linux/refcount.h>
 #include "../pnfs.h"
 
@@ -54,7 +55,6 @@ struct nfs4_ff_layout_ds_err {
 };
 
 struct nfs4_ff_io_stat {
-	__u64				ops_requested;
 	__u64				bytes_requested;
 	__u64				ops_completed;
 	__u64				bytes_completed;
@@ -63,15 +63,22 @@ struct nfs4_ff_io_stat {
 	ktime_t				aggregate_completion_time;
 };
 
-struct nfs4_ff_busy_timer {
-	ktime_t start_time;
-	atomic_t n_ops;
-};
-
+/* One direction's statistics for one stripe, with the lock that guards them */
 struct nfs4_ff_layoutstat {
-	struct nfs4_ff_io_stat io_stat;
-	struct nfs4_ff_busy_timer busy_timer;
-};
+	/* Protects every other member of this structure */
+	spinlock_t			lock;
+	int				ops_in_flight;
+	struct nfs4_ff_io_stat		io_stat;
+	/* Start of the interval io_stat.total_busy_time accrues */
+	ktime_t				busy_start_time;
+} ____cacheline_aligned_in_smp;
+
+/* Caller must hold the lock guarding this nfs4_ff_layoutstat. */
+static inline __u64
+nfs4_ff_ops_requested(const struct nfs4_ff_layoutstat *layoutstat)
+{
+	return layoutstat->io_stat.ops_completed + layoutstat->ops_in_flight;
+}
 
 struct nfs4_ff_layout_mirror;
 
@@ -86,9 +93,12 @@ struct nfs4_ff_layout_ds_stripe {
 	const struct cred __rcu		*ro_cred;
 	const struct cred __rcu		*rw_cred;
 	struct nfs_file_localio		nfl;
+	/* Published once by the first I/O; see nfs4_ff_layoutstat_set_start_time() */
+	atomic64_t			start_time;
+	/* Completed ops, both directions, as of this stripe's last report */
+	__u64				last_reported_ops;
 	struct nfs4_ff_layoutstat	read_stat;
 	struct nfs4_ff_layoutstat	write_stat;
-	ktime_t				start_time;
 };
 
 struct nfs4_ff_layout_mirror {
@@ -97,12 +107,9 @@ struct nfs4_ff_layout_mirror {
 	u32				dss_count;
 	struct nfs4_ff_layout_ds_stripe *dss;
 	refcount_t			ref;
-	spinlock_t			lock;
-	unsigned long			flags;
 	u32				report_interval;
+	u32				dss_report_index;
 };
-
-#define NFS4_FF_MIRROR_STAT_AVAIL	(0)
 
 struct nfs4_ff_layout_segment {
 	struct pnfs_layout_segment	generic_hdr;
@@ -120,7 +127,7 @@ struct nfs4_flexfile_layout {
 	struct pnfs_ds_commit_info commit_info;
 	struct list_head	mirrors;
 	struct list_head	error_list; /* nfs4_ff_layout_ds_err */
-	ktime_t			last_report_time; /* Layoutstat report times */
+	atomic64_t		last_report_time; /* Layoutstat report times */
 	unsigned long		flags;
 };
 
