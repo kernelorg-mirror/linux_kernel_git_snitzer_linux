@@ -352,6 +352,21 @@ window-opening ACK, passes and wakes a record): the one lever that
 raises the rate at the same footprint, or lowers the footprint at the
 same rate.  Start at the README's last section.
 
+**Round 96 measured it (`t2-r504..r509`,
+`FLAMEGRAPH/96-server-rtt/`): 93% of the server's ACKs wait for nfsd's
+read, 34 us after the segment arrived, because TCP leaves the ACK to
+the reader when the window would shrink; the read waits for the
+`svc_tcp_rx_want_eighths` mark of 6 (38 us for the first unread byte;
+a wake is 1.3 us, nfsd's CPUs 15% busy).  The server's share of the
+client's 81 us round trip is 40 to 60%.  The window itself is never
+far closed (170 to 218 KiB of 244); the unacknowledged bytes fill it.
+**Round 97's suggested A/B is the mark, 6 against 4 and 2, by the
+round trip, the rate and the held pages, with a route `quickack 1` as
+the control**; then the held buffer at 256 KiB with the lower mark.
+Nothing has been changed on the host for it.  (The round's first three
+runs had a kprobe and kretprobe pair, which bpftrace 0.26 breaks, as
+round 54 found: use fentry/fexit.)
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

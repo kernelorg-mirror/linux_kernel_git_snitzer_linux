@@ -16,10 +16,10 @@ for l in open(f'{d}/rttsplit.out'):
     if m: scal[m.group(1)] = int(m.group(2)); cur = None; continue
     m = re.match(r'^(@\w+(?:\[[^\]]*\])?):$', l)
     if m: cur = m.group(1); hist[cur] = []; continue
-    m = re.match(r'^\[(-?[\d.]+[KMG]?)(?:, (-?[\d.]+[KMG]?)\))?\]?\s+(\d+) \|', l)
+    m = re.match(r'^\[(-?[\d.]+[KMG]?)(?:, (-?[\d.]+[KMG]?|\.\.\.)\))?\]?\s+(\d+) \|', l)
     if m and cur:
         def num(x):
-            if x is None: return None
+            if x is None or x == '...': return None
             mult = {'K': 1024, 'M': 1 << 20, 'G': 1 << 30}
             return float(x[:-1]) * mult[x[-1]] if x[-1] in mult else float(x)
         lo = num(m.group(1)); hi = num(m.group(2)); hist[cur].append((lo, hi if hi is not None else lo + 1, int(m.group(3))))

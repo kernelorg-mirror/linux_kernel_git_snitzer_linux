@@ -1,0 +1,28 @@
+01:09:16 t2-r504 | total 70.04 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    Traceback (most recent call last):
+      File "/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/96-server-rtt/rttsplit-read.py", line 25, in <module>
+        lo = num(m.group(1)); hi = num(m.group(2)); hist[cur].append((lo, hi if hi is not None else lo + 1, int(m.group(3))))
+                                   ^^^^^^^^^^^^^^^
+      File "/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/96-server-rtt/rttsplit-read.py", line 24, in num
+        return float(x[:-1]) * mult[x[-1]] if x[-1] in mult else float(x)
+                                                                 ^^^^^^^^
+    ValueError: could not convert string to float: '...'
+01:14:12 t2-r505 | total 69.77 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    Traceback (most recent call last):
+      File "/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/96-server-rtt/rttsplit-read.py", line 25, in <module>
+        lo = num(m.group(1)); hi = num(m.group(2)); hist[cur].append((lo, hi if hi is not None else lo + 1, int(m.group(3))))
+                                   ^^^^^^^^^^^^^^^
+      File "/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/96-server-rtt/rttsplit-read.py", line 24, in num
+        return float(x[:-1]) * mult[x[-1]] if x[-1] in mult else float(x)
+                                                                 ^^^^^^^^
+    ValueError: could not convert string to float: '...'
+01:19:56 t2-r506 | total 69.84 GB/s | ring drops 122 | flows placed 12/11 | no drive stepped down | new kernel warnings 0
+    Traceback (most recent call last):
+      File "/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/96-server-rtt/rttsplit-read.py", line 25, in <module>
+        lo = num(m.group(1)); hi = num(m.group(2)); hist[cur].append((lo, hi if hi is not None else lo + 1, int(m.group(3))))
+                                   ^^^^^^^^^^^^^^^
+      File "/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/96-server-rtt/rttsplit-read.py", line 24, in num
+        return float(x[:-1]) * mult[x[-1]] if x[-1] in mult else float(x)
+                                                                 ^^^^^^^^
+    ValueError: could not convert string to float: '...'
+01:19:59 after: settled.sh audit rest: the settled setting
