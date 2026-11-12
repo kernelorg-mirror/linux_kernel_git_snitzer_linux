@@ -1136,6 +1136,15 @@ static int xs_tcp_send_request(struct rpc_rqst *req)
 
 	xs_set_srcport(transport, transport->sock);
 
+	/* Splice the pages of a first transmission into the socket: TCP
+	 * delivers them before the server can reply, and the reply is
+	 * what releases them.  A retransmission is copied, since the
+	 * reply to the first transmission may complete the call and
+	 * release the pages while the socket still holds them.
+	 */
+	if (!RPC_WAS_SENT(req->rq_task))
+		msg.msg_flags |= MSG_SPLICE_PAGES;
+
 	/* Continue transmitting the packet/record. We must be careful
 	 * to cope with writespace callbacks arriving _after_ we have
 	 * called sendmsg(). */
