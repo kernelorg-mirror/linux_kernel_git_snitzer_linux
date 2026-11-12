@@ -167,6 +167,15 @@ struct rx_region_pcp {
  * the region.  A pool bound to the region keeps a ring of 64 entries,
  * refills 16 pages at a time and caches at most twice that; recycling
  * beyond these bounds returns pages to the region.
+ *
+ * A pool with no device slot also parks and refills in bulk only while its
+ * CPU's home write shard is not low (rx_region_shard_low()); while it is, a
+ * put returns the page and a refill takes one.  So the bounds times the
+ * number of pools do not decide whether idle pools can empty the partition:
+ * after the last healthy gate read an idle pool holds what that read
+ * allowed (refills pending at it, at most one keep per CPU) plus its frag
+ * page, and pages still out in rings or defer lists.  It is a per-CPU
+ * heuristic on one shard: other shards and caches may hold pages.
  */
 #define RX_REGION_POOL_RING	64
 #define RX_REGION_POOL_REFILL	(PP_ALLOC_CACHE_REFILL < 16 ? \
@@ -1235,12 +1244,16 @@ static void rx_region_push(struct page_pool_rx_region_part *p,
 		spin_unlock_irqrestore(&held->lock, flags);
 }
 
-/* This CPU's home shard is down to an eighth of its pages. */
+/* A shard is down to an eighth of its pages: the one definition of "low". */
+static bool rx_region_shard_low(const struct rx_region_shard *sh)
+{
+	return READ_ONCE(sh->nfree) < sh->cap / 8;
+}
+
+/* This CPU's home shard is low. */
 static bool rx_region_home_low(const struct page_pool_rx_region_part *p)
 {
-	const struct rx_region_shard *sh = &p->shard[rx_region_home(p)];
-
-	return READ_ONCE(sh->nfree) < sh->cap / 8;
+	return rx_region_shard_low(&p->shard[rx_region_home(p)]);
 }
 
 /* Plenty free in the shards: worth refilling a CPU cache from them. */
@@ -2329,16 +2342,20 @@ void page_pool_rx_region_kunit_reset_min_free(void)
 EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_reset_min_free);
 
 /*
- * A pool bound to the published region as a listed device's pool is, but
- * with no device and no DMA mapping; ERR_PTR(-ENODEV) without a region.
+ * A pool bound to the published region as a listed device's pool is, with
+ * @dev and its DMA mapping (a slotted pool), or with none (NULL); ERR_PTR(-ENODEV)
+ * without a region.
  * The caller destroys it with page_pool_destroy() before the region goes.
  */
-struct page_pool *page_pool_rx_region_kunit_pool(void)
+struct page_pool *page_pool_rx_region_kunit_pool_dev(struct device *dev)
 {
 	struct page_pool_params params = {
 		.order = 0,
 		.pool_size = 1024,
 		.nid = NUMA_NO_NODE,
+		.dev = dev,
+		.dma_dir = DMA_FROM_DEVICE,
+		.flags = dev ? PP_FLAG_DMA_MAP : 0,
 	};
 	struct page_pool_rx_region *r = rx_region_published();
 	struct page_pool *pool;
@@ -2354,6 +2371,13 @@ struct page_pool *page_pool_rx_region_kunit_pool(void)
 	mutex_unlock(&rx_region_mutex);
 	page_pool_rx_region_bind(pool, r, pool->p.pool_size);
 	return pool;
+}
+EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_pool_dev);
+
+/* A pool with no device, hence no slot. */
+struct page_pool *page_pool_rx_region_kunit_pool(void)
+{
+	return page_pool_rx_region_kunit_pool_dev(NULL);
 }
 EXPORT_SYMBOL_IF_KUNIT(page_pool_rx_region_kunit_pool);
 
@@ -3077,7 +3101,7 @@ static noinline netmem_ref page_pool_rx_region_alloc(struct page_pool *pool,
 	struct page_pool_rx_region_part *r = &region->part[RX_REGION_WRITE];
 	struct page *pages[RX_REGION_POOL_REFILL];
 	unsigned long kept = 0;
-	unsigned int n = 0, got;
+	unsigned int n = 0, got, want;
 	netmem_ref netmem;
 	int i;
 	u8 s;
@@ -3089,6 +3113,8 @@ static noinline netmem_ref page_pool_rx_region_alloc(struct page_pool *pool,
 	/* Pairs with smp_wmb() in rx_region_carve_locked(). */
 	smp_rmb();
 	s = READ_ONCE(pool->rx_region_dev);
+	/* A pool with no slot refills one page while its home shard is low. */
+	want = !s && rx_region_home_low(r) ? 1 : RX_REGION_POOL_REFILL;
 	/* First the pages still mapped for this pool's device, */
 	if (s) {
 		n = rx_region_slot_take(region, s, pages,
@@ -3096,9 +3122,8 @@ static noinline netmem_ref page_pool_rx_region_alloc(struct page_pool *pool,
 		kept = BIT(n) - 1;
 	}
 	/* then those mapped for no device, */
-	if (n < RX_REGION_POOL_REFILL)
-		n += rx_region_get(r, pages + n, RX_REGION_POOL_REFILL - n,
-				   false);
+	if (n < want)
+		n += rx_region_get(r, pages + n, want - n, false);
 	/* then the device's own left in other CPUs' caches, */
 	if (s && n < RX_REGION_POOL_REFILL &&
 	    rx_region_slot_drain(region, s)) {
@@ -3108,9 +3133,8 @@ static noinline netmem_ref page_pool_rx_region_alloc(struct page_pool *pool,
 		n += got;
 	}
 	/* and last those another device has mapped, unmapped for it here. */
-	if (n < RX_REGION_POOL_REFILL) {
-		got = rx_region_steal(region, s, pages + n,
-				      RX_REGION_POOL_REFILL - n);
+	if (n < want) {
+		got = rx_region_steal(region, s, pages + n, want - n);
 		rx_region_held(r, got);
 		n += got;
 	}
@@ -3349,18 +3373,22 @@ static void page_pool_return_netmem(struct page_pool *pool, netmem_ref netmem)
 }
 
 /*
- * A page of a region-bound pool that is outside the region is a fallback page
- * (an empty write partition was served by a system page): it is never cached,
- * recycled or reused as the frag page, so every put path asks this before it
- * keeps a page.
+ * A page of a region-bound pool that the pool does not keep goes back to the
+ * allocator or the region: it is never cached, recycled or reused as the frag
+ * page, so every put path asks this before it keeps a page.  That is a
+ * fallback page (an empty write partition was served by a system page), and,
+ * for a pool with no device slot, any page put while this CPU's home write
+ * shard is low: such a pool parks and refills only while the shard is not.
  */
-static bool page_pool_rx_region_foreign(const struct page_pool *pool,
-					netmem_ref netmem)
+static bool page_pool_rx_region_unkept(const struct page_pool *pool,
+				       netmem_ref netmem)
 {
 	const struct page_pool_rx_region *region =
 		page_pool_rx_region_exists() ? READ_ONCE(pool->rx_region) : NULL;
 
-	return region && !rx_region_has(region, netmem_to_page(netmem));
+	return region && (!rx_region_has(region, netmem_to_page(netmem)) ||
+			  (!READ_ONCE(pool->rx_region_dev) &&
+			   rx_region_home_low(&region->part[RX_REGION_WRITE])));
 }
 
 static bool page_pool_recycle_in_ring(struct page_pool *pool, netmem_ref netmem)
@@ -3430,8 +3458,8 @@ __page_pool_put_page(struct page_pool *pool, netmem_ref netmem,
 	 * some pressure. (page_is_pfmemalloc)
 	 */
 	if (likely(__page_pool_page_can_be_recycled(netmem))) {
-		/* A fallback page is not recycled: it goes to the allocator. */
-		if (unlikely(page_pool_rx_region_foreign(pool, netmem))) {
+		/* An unkept page is not recycled: it goes back. */
+		if (unlikely(page_pool_rx_region_unkept(pool, netmem))) {
 			page_pool_return_netmem(pool, netmem);
 			return 0;
 		}
@@ -3626,9 +3654,9 @@ static netmem_ref page_pool_drain_frag(struct page_pool *pool,
 	if (likely(page_pool_unref_netmem(netmem, drain_count)))
 		return 0;
 
-	/* A fallback page is not reused as the frag page either. */
+	/* An unkept page is not reused as the frag page either. */
 	if (__page_pool_page_can_be_recycled(netmem) &&
-	    likely(!page_pool_rx_region_foreign(pool, netmem))) {
+	    likely(!page_pool_rx_region_unkept(pool, netmem))) {
 		page_pool_dma_sync_for_device(pool, netmem, -1);
 		return netmem;
 	}

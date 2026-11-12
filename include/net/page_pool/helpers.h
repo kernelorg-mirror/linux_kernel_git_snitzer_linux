@@ -398,6 +398,7 @@ unsigned int page_pool_rx_region_kunit_take(bool read, struct page **pages,
 					    unsigned int n, bool exact);
 void page_pool_rx_region_kunit_drain(bool read);
 void page_pool_rx_region_kunit_reset_min_free(void);
+struct page_pool *page_pool_rx_region_kunit_pool_dev(struct device *dev);
 struct page_pool *page_pool_rx_region_kunit_pool(void);
 bool page_pool_rx_region_kunit_recycle(struct page_pool *pool,
 				       struct page *page);
