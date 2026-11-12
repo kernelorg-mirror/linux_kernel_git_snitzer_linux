@@ -1,0 +1,31 @@
+06:25:17 t2-r537 | total 74.78 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r537: total 74.78 GB/s; traced 9.15 s; held over it: mean 3488, median 3876 (428 samples); 24 connections; records published 607250, WRITE seen 539131, no WRITE 579, error/abort 0
+      rings, posted (taken as full)        512 pages    8.0 MiB  14.7%
+      sockets, receive queues              103 pages    1.6 MiB   3.0%
+      1 assembly                           651 pages   10.2 MiB  18.7%
+      2 to WRITE                            67 pages    1.0 MiB   1.9%
+      3 drive                             1761 pages   27.5 MiB  50.5%
+      4 to release                          48 pages    0.8 MiB   1.4%
+      5 no WRITE                             2 pages    0.0 MiB   0.1%
+      rest: the way back, unseen           343 pages    5.4 MiB   9.8%
+06:30:14 t2-r538 | total 74.92 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r538: total 74.92 GB/s; traced 9.13 s; held over it: mean 3525, median 3896 (434 samples); 24 connections; records published 602341, WRITE seen 535137, no WRITE 238, error/abort 0
+      rings, posted (taken as full)        512 pages    8.0 MiB  14.5%
+      sockets, receive queues              104 pages    1.6 MiB   2.9%
+      1 assembly                           646 pages   10.1 MiB  18.3%
+      2 to WRITE                            68 pages    1.1 MiB   1.9%
+      3 drive                             1761 pages   27.5 MiB  50.0%
+      4 to release                          49 pages    0.8 MiB   1.4%
+      5 no WRITE                             1 pages    0.0 MiB   0.0%
+      rest: the way back, unseen           384 pages    6.0 MiB  10.9%
+06:35:10 t2-r539 | total 75.07 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r539: total 75.07 GB/s; traced 8.87 s; held over it: mean 3538, median 3904 (422 samples); 24 connections; records published 594399, WRITE seen 528030, no WRITE 279, error/abort 0
+      rings, posted (taken as full)        512 pages    8.0 MiB  14.5%
+      sockets, receive queues              103 pages    1.6 MiB   2.9%
+      1 assembly                           654 pages   10.2 MiB  18.5%
+      2 to WRITE                            69 pages    1.1 MiB   2.0%
+      3 drive                             1812 pages   28.3 MiB  51.2%
+      4 to release                          50 pages    0.8 MiB   1.4%
+      5 no WRITE                             1 pages    0.0 MiB   0.0%
+      rest: the way back, unseen           338 pages    5.3 MiB   9.5%
+06:35:13 after: settled.sh audit rest: the settled setting

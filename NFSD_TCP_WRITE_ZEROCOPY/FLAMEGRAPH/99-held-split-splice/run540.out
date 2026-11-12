@@ -1,0 +1,10 @@
+06:44:10 t2-r540 | total 75.13 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r540: total 75.13 GB/s; traced 8.40 s; calls 421109 with I/O, 24509 without; requests 1782472 in a call, 49292 elsewhere; left own 199 e 0
+      a before I/O                      36 pages    0.6 MiB   2.2%     10 us a byte, mean
+      b I/O                           1454 pages   22.7 MiB  90.7%    428 us a byte, mean
+      drive (issue .. complete)       1337 pages   20.9 MiB  83.4%    394 us a byte, mean
+      c after I/O                       20 pages    0.3 MiB   1.3%      6 us a byte, mean
+      calls, no I/O seen                94 pages    1.5 MiB   5.8%     28 us a byte, mean
+      whole call                      1604 pages   25.1 MiB 100.0%    472 us a byte, mean
+      b less the drive                 117 pages
+06:44:14 after: settled.sh audit rest: the settled setting
