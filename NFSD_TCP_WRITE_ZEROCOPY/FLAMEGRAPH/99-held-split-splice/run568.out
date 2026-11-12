@@ -1,0 +1,41 @@
+18:12:19 t2-r568 rcvbuf 524288 nconn 12 | total 74.62 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 3557208, denied 0, paused 0, overrun 0; client retransmits in the window: 306
+    client: 24 connections, rwnd_limited 97.0% of busy, snd_wnd mean 184 KiB
+    drives   all 8:   7.9%   2.3%   3.0%   3.8%  83.0%  74.10 GB/s
+    span 11.16 s; 63185 gaps, 5207 ms empty in all (8 drives)
+    class                                       gaps  of gaps  of empty  median gap us
+    A in nfsd, before its I/O                  12338    19.5%      2.1%            >=8
+    B read, not yet writing                     6530    10.3%      3.6%           >=16
+    C being read off its connection            26956    42.7%     54.7%           >=64
+    D1 behind another export's record           1278     2.0%     12.2%          >=256
+    D2 behind its own export's record             92     0.1%      1.0%          >=256
+    E not begun, its connection idle             221     0.3%      1.2%          >=256
+    F issued with no WRITE seen                15770    25.0%     25.2%           >=32
+      median E: g .. its first read: >= 8 us (221 gaps)
+      median E: the record before it read .. g: >= 4 us (221 gaps)
+      median D: g .. its first read: >= 64 us (1370 gaps)
+      median D: g .. the record before it read: >= 64 us (1370 gaps)
+      median C: g .. read in full: >= 32 us (26956 gaps)
+    empty share of the span, a drive: nvme0 6.4%, nvme1 5.4%, nvme2 5.2%, nvme3 5.6%, nvme4 6.2%, nvme5 6.4%, nvme6 6.1%, nvme7 5.5%
+     held in the window (458 samples): median 3536 (55 MiB, 1.73 L3), p90 3660, p99 3796, most 3954 | kernel peak 4292 | a page held 0.78 ms at the median | to memory 131.5 GB/s, 1.77 bytes a byte | fills 1.15 a payload line
+18:17:16 t2-r569 rcvbuf 524288 nconn 12 | total 75.00 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 3575472, denied 0, paused 0, overrun 0; client retransmits in the window: 276
+    client: 24 connections, rwnd_limited 99.4% of busy, snd_wnd mean 210 KiB
+    drives   all 8:   7.5%   2.3%   2.7%   3.8%  83.6%  74.43 GB/s
+    span 10.14 s; 57498 gaps, 4625 ms empty in all (8 drives)
+    class                                       gaps  of gaps  of empty  median gap us
+    A in nfsd, before its I/O                  11632    20.2%      2.3%            >=8
+    B read, not yet writing                     5938    10.3%      3.8%           >=16
+    C being read off its connection            23846    41.5%     54.3%           >=64
+    D1 behind another export's record           1104     1.9%     13.2%          >=256
+    D2 behind its own export's record             35     0.1%      0.3%          >=256
+    E not begun, its connection idle             181     0.3%      1.1%          >=256
+    F issued with no WRITE seen                14762    25.7%     25.1%           >=32
+      median E: g .. its first read: >= 8 us (181 gaps)
+      median E: the record before it read .. g: >= 8 us (181 gaps)
+      median D: g .. its first read: >= 64 us (1139 gaps)
+      median D: g .. the record before it read: >= 64 us (1139 gaps)
+      median C: g .. read in full: >= 32 us (23846 gaps)
+    empty share of the span, a drive: nvme0 5.4%, nvme1 5.9%, nvme2 5.8%, nvme3 6.3%, nvme4 5.4%, nvme5 5.5%, nvme6 5.4%, nvme7 5.9%
+     held in the window (455 samples): median 3547 (55 MiB, 1.73 L3), p90 3691, p99 3811, most 3949 | kernel peak 4478 | a page held 0.78 ms at the median | to memory 133.7 GB/s, 1.79 bytes a byte | fills 1.14 a payload line
+18:17:19 after: settled.sh audit rest: the settled setting

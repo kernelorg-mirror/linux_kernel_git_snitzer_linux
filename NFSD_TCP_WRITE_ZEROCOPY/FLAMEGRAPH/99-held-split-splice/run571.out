@@ -1,0 +1,46 @@
+18:28:20 t2-r571 rcvbuf 524288 nconn 12 | total 74.84 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 3568328, denied 0, paused 0, overrun 0; client retransmits in the window: 321
+    client: 24 connections, rwnd_limited 98.8% of busy, snd_wnd mean 186 KiB
+    drives   all 8:   7.8%   2.4%   2.8%   3.7%  83.3%  74.26 GB/s
+    span 8.17 s; 46062 gaps, 3834 ms empty in all (8 drives)
+    class                                       gaps  of gaps  of empty  median gap us
+    A in nfsd, before its I/O                   9739    21.1%      2.4%            >=8
+    B read, not yet writing                     5675    12.3%      4.6%           >=16
+    C being read off its connection            21144    45.9%     72.5%           >=64
+    F issued with no WRITE seen                 9504    20.6%     20.5%           >=32
+      median C: g .. read in full: >= 32 us (21144 gaps)
+    empty share of the span, a drive: nvme0 6.3%, nvme1 5.2%, nvme2 5.5%, nvme3 5.4%, nvme4 6.1%, nvme5 6.1%, nvme6 6.0%, nvme7 6.2%
+    @fwhy[nfsd, false, false, false, false]: 33
+    @fwhy[nfsd, false, false, false, true]: 9471
+    @owned[false]: 384713
+    @owned[true]: 1674648
+    @qdiag[record read in full with none queued]: 20
+    @qdiag[record matched]: 418662
+     held in the window (430 samples): median 3544 (55 MiB, 1.73 L3), p90 3656, p99 3772, most 3971 | kernel peak 4429 | a page held 0.78 ms at the median | to memory 133.1 GB/s, 1.79 bytes a byte | fills 1.14 a payload line
+18:33:16 t2-r572 rcvbuf 524288 nconn 12 | total 75.04 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 3578104, denied 0, paused 0, overrun 0; client retransmits in the window: 281
+    client: 24 connections, rwnd_limited 97.4% of busy, snd_wnd mean 196 KiB
+    drives   all 8:   7.4%   2.5%   2.9%   3.8%  83.4%  74.58 GB/s
+    span 7.96 s; 42322 gaps, 3464 ms empty in all (8 drives)
+    class                                       gaps  of gaps  of empty  median gap us
+    A in nfsd, before its I/O                   9095    21.5%      2.4%            >=8
+    B read, not yet writing                     4667    11.0%      4.0%           >=16
+    C being read off its connection            18600    43.9%     57.0%           >=64
+    D1 behind another export's record            915     2.2%     14.2%          >=256
+    D2 behind its own export's record             74     0.2%      1.6%          >=256
+    E not begun, its connection idle             100     0.2%      0.8%          >=256
+    F issued with no WRITE seen                 8871    21.0%     20.1%           >=32
+      median E: g .. its first read: >= 4 us (100 gaps)
+      median E: the record before it read .. g: >= 4 us (100 gaps)
+      median D: g .. its first read: >= 64 us (989 gaps)
+      median D: g .. the record before it read: >= 64 us (989 gaps)
+      median C: g .. read in full: >= 32 us (18600 gaps)
+    empty share of the span, a drive: nvme0 5.1%, nvme1 6.0%, nvme2 5.7%, nvme3 6.0%, nvme4 4.9%, nvme5 4.9%, nvme6 5.2%, nvme7 5.7%
+    @fwhy[nfsd, false, false, false, false]: 38
+    @fwhy[nfsd, false, false, false, true]: 8833
+    @owned[false]: 376259
+    @owned[true]: 1613692
+    @qdiag[record read in full, no first read seen]: 50445
+    @qdiag[record matched by xid]: 403423
+     held in the window (428 samples): median 3560 (56 MiB, 1.74 L3), p90 3700, p99 3825, most 4040 | kernel peak 4447 | a page held 0.78 ms at the median | to memory 133.5 GB/s, 1.79 bytes a byte | fills 1.14 a payload line
+18:33:19 after: settled.sh audit rest: the settled setting

@@ -1,0 +1,28 @@
+18:22:38 t2-r570 rcvbuf 524288 nconn 12 | total 75.05 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 3577576, denied 0, paused 0, overrun 0; client retransmits in the window: 305
+    client: 24 connections, rwnd_limited 99.5% of busy, snd_wnd mean 217 KiB
+    drives   all 8:   7.1%   2.2%   2.9%   4.0%  83.7%  74.51 GB/s
+    span 9.25 s; 50045 gaps, 4071 ms empty in all (8 drives)
+    class                                       gaps  of gaps  of empty  median gap us
+    A in nfsd, before its I/O                   9915    19.8%      2.2%            >=8
+    B read, not yet writing                     5012    10.0%      3.6%           >=16
+    C being read off its connection            20503    41.0%     53.2%           >=64
+    D1 behind another export's record            827     1.7%     10.1%          >=256
+    D2 behind its own export's record            155     0.3%      2.8%          >=256
+    E not begun, its connection idle             158     0.3%      1.0%          >=256
+    F issued with no WRITE seen                13475    26.9%     27.1%           >=32
+      median E: g .. its first read: >= 4 us (158 gaps)
+      median E: the record before it read .. g: >= 8 us (158 gaps)
+      median D: g .. its first read: >= 64 us (982 gaps)
+      median D: g .. the record before it read: >= 64 us (982 gaps)
+      median C: g .. read in full: >= 32 us (20503 gaps)
+    empty share of the span, a drive: nvme0 5.5%, nvme1 5.3%, nvme2 5.3%, nvme3 5.3%, nvme4 5.4%, nvme5 5.7%, nvme6 5.7%, nvme7 5.7%
+    @fwhy[kworker/u258:3, false, false, false, false]: 1
+    @fwhy[kworker/u259:0, false, false, false, false]: 1
+    @fwhy[nfsd, false, false, true, true]: 26
+    @fwhy[nfsd, false, false, false, false]: 39
+    @fwhy[nfsd, false, false, false, true]: 13408
+    @owned[false]: 513350
+    @owned[true]: 1833060
+     held in the window (440 samples): median 3546 (55 MiB, 1.73 L3), p90 3681, p99 3798, most 3836 | kernel peak 4527 | a page held 0.78 ms at the median | to memory 133.7 GB/s, 1.79 bytes a byte | fills 1.14 a payload line
+18:22:41 after: settled.sh audit rest: the settled setting

@@ -306,3 +306,68 @@ does not decide these figures.
   delivers no more: the rate the server takes the data in is set
   elsewhere.  The settled setting stays (512 KiB, 12 connections a
   port), its two runs 75.27 and 75.13.
+
+## When a drive runs empty, its next WRITE is still arriving (t2-r564..r572)
+
+[hol.bt](hol.bt), read by [hol-read.py](hol-read.py), run by
+[run564.sh](run564.sh) beside `inflight.py` on settled runs (window 7,
+budget 64, 512 KiB, 12 a port).  A gap opens when a drive's last request
+completes (g) and closes at its next issue; the WRITE (W) that issue is
+for, found by the nfsd thread that queued its bio, is classed by where
+it stood at g: A in nfsd before its I/O, B read and not yet writing,
+C being read off its connection (its first region skb read, not yet its
+last), D not begun with its connection still reading the record before
+it (D1 for another export, D2 the same: head-of-line), E not begun with
+its connection idle, F no WRITE found.
+
+The trace took five versions to stand; each earlier one is kept, with
+its runs:
+
+| version | runs | what was wrong |
+|---|---|---|
+| [hol-v1.bt](hol-v1.bt) | `t2-r564` | one depth count a drive, `+=` and `-=` from many CPUs: lost updates, a tenth of the empty time seen |
+| [hol-v2.bt](hol-v2.bt) | `t2-r565` | perf tracepoints: a completion's interrupt during an issue's program is skipped (`bpf_prog_active`), its request in flight for ever; 28 gaps in 11 s |
+| (v3, in [run566-hol-v3.out](run566-hol-v3.out)) | `t2-r566`, `r567` | a completion's interrupt inside an issue's `+=` on the same CPU (a local probe: 51,344 of each, the count left at 56); then two issues at once, one reading the other's deleted gap as 0, gaps from the trace's start (218 over 100 ms) |
+| [hol-v4.bt](hol-v4.bt) | `t2-r568`..`r570` | one first read a connection: a read that takes one record's end and the next's start lost the second (F a quarter of the empty time, 22% of requests unowned) |
+| [hol-v5.bt](hol-v5.bt) | `t2-r571` | a FIFO of first reads a connection fell behind (4 or more queued at nearly every match): every gap C; does not count |
+| hol.bt | `t2-r572` | first and full read matched by xid |
+
+What stands from v4 on: raw tracepoints, a request keyed by its pointer,
+issues and completions counted apart per CPU, the gap taken before it is
+read.  The trace's empty share a drive is 4.9 to 6.4% against
+`inflight.py`'s 7.4 to 7.9% in the same runs.
+
+| run | GB/s | C being read | D1 behind another export | D2 | E idle | A + B | F |
+|---|---|---|---|---|---|---|---|
+| `t2-r568` (v4) | 74.62 | 54.7% | 12.2% | 1.0% | 1.2% | 5.7% | 25.2% |
+| `t2-r569` (v4) | 75.00 | 54.3% | 13.2% | 0.3% | 1.1% | 6.1% | 25.1% |
+| `t2-r570` (v4) | 75.05 | 53.2% | 10.1% | 2.8% | 1.0% | 5.8% | 27.1% |
+| `t2-r572` (xid) | 75.04 | **57.0%** | **14.2%** | 1.6% | 0.8% | 6.4% | 20.1% |
+
+(shares of the drives' empty time).  F is still a fifth: of the records
+read in full, 403,423 matched a first read by xid and 50,445 did not,
+and 57k records a second reach `svc_xdr_recvfrom` in the trace against
+the 71.5k 1 MiB WRITEs a second 75 GB/s is, so the trace still misses
+records.  F's gaps have C's and A's shape (half under 64 us, 3 to 4%
+at 256 us or more), not D1's (70% at 256 to 512 us), so F hides little
+head-of-line.
+
+- **A drive runs empty mostly while the WRITE that will feed it is on
+  its way in.**  In 55 to 57% of the empty time the next WRITE's first
+  bytes have been read and its last have not: it is read in full a
+  median 32 us after the drive empties, and the gap is 32 to 256 us.
+  A 1 MiB record over one connection at 3.2 GB/s (the window's rate)
+  takes about 330 us; nothing of it reaches the drive until all of it
+  is read.
+- **Head-of-line is the smaller part: 10 to 14% (D1).**  Those gaps are
+  long (256 to 512 us, a record's time on a connection), so they are few
+  (2% of gaps) and weigh more than their count.
+- **The server's own path is not it.**  A and B, the WRITE read and in
+  nfsd, are 6% of the empty time in gaps of 8 to 16 us; E, a connection
+  idle, 1%.
+- So the drives wait on the arrival of a record at one connection's
+  rate.  What would shorten that: a WRITE's record arriving faster (a
+  wider window a connection, which the rings of 128 do not take past
+  512 KiB: t2-r559..r562), records that are smaller (a smaller wsize:
+  more of them, each sooner), or more WRITEs already read and waiting
+  for each drive (the client keeping more in flight a drive).

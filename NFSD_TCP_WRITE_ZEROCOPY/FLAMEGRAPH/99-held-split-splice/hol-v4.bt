@@ -1,0 +1,195 @@
+#!/usr/bin/bpftrace
+/*
+ * hol.bt: when a data drive runs empty, where was the WRITE that next
+ * fed it (FLAMEGRAPH round 99, the head-of-line question).
+ *
+ * A drive's depth is its requests issued and not completed (259:0 to
+ * 259:7, a requeued request counted once, by device and sector), kept
+ * per CPU and summed over the 64 at each completion: one count a drive,
+ * += and -= from many CPUs at once, lost updates and drifted off zero
+ * (hol-v1.bt, t2-r564: a tenth of inflight.py's empty time).  The block
+ * events are raw tracepoints, a request keyed by its pointer: a perf
+ * tracepoint's program is skipped when it fires on a CPU already running
+ * one (bpf_prog_active), so a completion's interrupt during an issue's
+ * program was lost and its request stayed in flight for ever (hol-v2.bt,
+ * t2-r565: 28 gaps in 11 s; a local probe lost 294 of 54,164).  Drives
+ * print by minor (259:0 to 259:7), which is not nvmeN's N.  A gap
+ * opens when the last completes (at g) and closes at the next issue.
+ * The request's owner, the nfsd thread that queued its bio (else the
+ * thread that issues it), is the one whose WRITE (W) refills the drive; W's record was read by that thread's transport (X):
+ *
+ *   first  nfs3svc_rx_target(): the record's first region skb read,
+ *          the export's key named (the window's admit, at window > 0)
+ *   full   svc_xdr_recvfrom: the whole record read
+ *   proc   nfsd_direct_write() entered
+ *
+ * and, from X's record before W: when it was read in full (pfull) and
+ * its key (the same export or another).  Each gap is classed by where W
+ * stood at g:
+ *
+ *   A in nfsd, before its I/O        proc <= g
+ *   B read, not yet writing          full <= g < proc
+ *   C being read off its connection  first <= g < full
+ *   D not begun; X still reading the record before it (pfull > g),
+ *     D1 for another export, D2 for the same one: W behind it
+ *   E not begun; X done with the record before it (pfull <= g): the
+ *     client had not sent W, or no thread was reading X
+ *   F the issue from a thread with no WRITE seen (kblockd, a record
+ *     resumed on another thread, an unkeyed one)
+ *
+ * Classes print as 0 (A) to 6 (F), A B C D1 D2 E F; hol-read.py names them.
+ * Printed: each class's gaps and their summed us (the share of the
+ * drives' empty time), the gaps' lengths, for C to E how far W was from
+ * g, and each drive's empty us over the span (against inflight.py).
+ *     timeout -s INT 12 bpftrace hol.bt
+ */
+config = { missing_probes = "error"; max_map_keys = 262144 }
+
+BEGIN { @t0 = nsecs; }
+
+kprobe:sunrpc:svc_tcp_recvfrom
+{
+	$r = (struct svc_rqst *)arg0;
+	@xp[tid] = (uint64)$r->rq_xprt;
+}
+
+kprobe:nfsd:nfs3svc_rx_target
+/ has_key(@xp, tid) /
+{
+	$x = @xp[tid];
+	if (!has_key(@first, $x)) { @first[$x] = (nsecs - @t0) / 1000; }
+}
+
+kretprobe:nfsd:nfs3svc_rx_target
+/ has_key(@xp, tid) /
+{
+	@key[@xp[tid]] = (uint64)retval;
+}
+
+tracepoint:sunrpc:svc_xdr_recvfrom
+/ has_key(@xp, tid) /
+{
+	$x = @xp[tid]; $t = (nsecs - @t0) / 1000;
+	if (has_key(@first, $x)) {
+		@rf[tid] = @first[$x]; @rl[tid] = $t; @rk[tid] = @key[$x];
+		@rpf[tid] = has_key(@lfull, $x) ? @lfull[$x] : 0;
+		@rpk[tid] = has_key(@lkey, $x) ? @lkey[$x] : 0;
+		@lfull[$x] = $t; @lkey[$x] = @key[$x];
+		delete(@first[$x]); delete(@key[$x]);
+	} else {
+		delete(@rf[tid]);
+	}
+}
+
+kprobe:nfsd:nfsd_direct_write
+/ has_key(@rf, tid) /
+{
+	@rp[tid] = (nsecs - @t0) / 1000;
+}
+
+kretprobe:nfsd:nfsd_direct_write
+{
+	delete(@rp[tid]); delete(@rf[tid]); delete(@rl[tid]); delete(@rk[tid]);
+	delete(@rpf[tid]); delete(@rpk[tid]);
+}
+
+rawtracepoint:vmlinux:block_bio_queue
+{
+	$b = (struct bio *)arg0;
+	$v = (uint64)$b->bi_bdev->bd_dev;
+	if (($v >> 20) == 259 && ($v & 0xfffff) <= 7 && has_key(@rp, tid)) {
+		@own[$v, (uint64)$b->bi_iter.bi_sector] = tid;
+	}
+}
+
+rawtracepoint:vmlinux:block_split
+{
+	/* The rest of a bio split to the queue's limits (256 KiB) takes the
+	 * owner of its front: t2-r566 and r567 had a quarter of the empty time
+	 * under F without it. */
+	$b = (struct bio *)arg0;
+	$v = (uint64)$b->bi_bdev->bd_dev;
+	$f = (uint64)$b->bi_iter.bi_sector;
+	if (($v >> 20) == 259 && ($v & 0xfffff) <= 7 && has_key(@own, ($v, $f))) {
+		@own[$v, (uint64)arg1] = @own[$v, $f];
+	}
+}
+
+rawtracepoint:vmlinux:block_rq_issue
+{
+	$rq = (struct request *)arg0;
+	$m = (uint64)$rq->q->disk->first_minor;
+	if ($rq->q->disk->major == 259 && $m <= 7 && has_key(@inq, (uint64)$rq)) {
+		@diag["issue of a request already in flight"] = count();
+	}
+	if ($rq->q->disk->major == 259 && $m <= 7 && !has_key(@inq, (uint64)$rq)) {
+		$d = (259 << 20) + $m; $s = (uint64)$rq->__sector;
+		@inq[(uint64)$rq] = 1;
+		@iss[$m, cpu] += 1;
+		$t = (nsecs - @t0) / 1000; $g = 0;
+		if (has_key(@g, $m)) { $g = @g[$m]; delete(@g[$m]); }
+		/* Two issues at once: one takes the gap, the other reads 0 (a gap
+		 * from the trace's start: t2-r567's 218 over 100 ms). */
+		if ($g > 0 && $g <= $t) {
+			$len = $t - $g; $c = 6;
+			$o = has_key(@own, ($d, $s)) ? @own[$d, $s] : tid;
+			if ($len > 100000) {
+				@diag["gap over 100 ms"] = count();
+				if (@nlong < 12) {
+					printf("long gap: minor %d g %d t %d len %d cpu %d in flight %d\n", $m, $g, $t, $len, cpu, len(@inq));
+					@nlong += 1;
+				}
+			}
+			@empty[$m] = sum($len);
+			if (!has_key(@rp, $o)) {
+				$c = 6;
+				@fwhy[comm, has_key(@own, ($d, $s)), has_key(@rp, tid), has_key(@rf, $o), has_key(@xp, $o)] = count();
+			} else if (@rp[$o] <= $g) {
+				$c = 0;
+			} else if (@rl[$o] <= $g) {
+				$c = 1;
+			} else if (@rf[$o] <= $g) {
+				$c = 2;
+				@ahead["C: g .. read in full"] = hist(@rl[$o] - $g);
+			} else if (@rpf[$o] > $g) {
+				if (@rpk[$o] != @rk[$o]) {
+					$c = 3;
+				} else {
+					$c = 4;
+				}
+				@ahead["D: g .. its first read"] = hist(@rf[$o] - $g);
+				@ahead["D: g .. the record before it read"] = hist(@rpf[$o] - $g);
+			} else {
+				$c = 5;
+				@ahead["E: g .. its first read"] = hist(@rf[$o] - $g);
+				@ahead["E: the record before it read .. g"] = hist($g - @rpf[$o]);
+			}
+			@gaps[$c] = count(); @gap_us[$c] = sum($len);
+			@len[$c] = hist($len);
+		}
+		@owned[has_key(@own, ($d, $s))] = count();
+		delete(@own[$d, $s]);
+	}
+}
+
+rawtracepoint:vmlinux:block_rq_complete
+{
+	$rq = (struct request *)arg0;
+	if (has_key(@inq, (uint64)$rq)) {
+		$m = (uint64)$rq->q->disk->first_minor;
+		delete(@inq[(uint64)$rq]);
+		@cmp[$m, cpu] += 1;
+		$n = 0;
+		for ($i : 0..64) { $n += @iss[$m, $i] - @cmp[$m, $i]; }
+		if ($n <= 0 && !has_key(@g, $m)) { @g[$m] = (nsecs - @t0) / 1000 + 1; }
+	}
+}
+
+END
+{
+	printf("traced_us %d\n", (nsecs - @t0) / 1000);
+	printf("left in flight %d, owners %d\n", len(@inq), len(@own));
+	clear(@xp); clear(@first); clear(@key); clear(@lfull); clear(@lkey);
+	clear(@rf); clear(@rl); clear(@rk); clear(@rpf); clear(@rpk); clear(@rp);
+	clear(@inq); clear(@iss); clear(@cmp); clear(@g); clear(@own);
+}
