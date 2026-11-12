@@ -64,3 +64,30 @@ drive, which is the client's load shape**: more writers a drive, or
 smaller blocks at a deeper iodepth.  The cost is the second ceiling:
 more in flight holds more pages and moves more bytes through memory,
 and 80 GB/s at 1.74 a byte is 139 GB/s, 94% of memory.
+
+## More writers a drive do not fill the gaps (t2-r526 to r528)
+
+[run526.out](run526.out), the same two-port setting with the client's
+load reshaped (`JOBS`, `BS`, `IODEPTH` to twoport.sh):
+
+| run | client load | GB/s | a drive idle / 1 to 3 / 4+ | mean depth | held median | memory | loans denied | client CPUs |
+|---|---|---|---|---|---|---|---|---|
+| `t2-r524` | 16 jobs, 8 MiB, iodepth 16 (settled) | 71.75 | 10.2% / 11.2% / 78.5% | 11.5 | 56 MiB | 125 GB/s, 1.74 | 2.9% | 70% |
+| `t2-r526` | 32 jobs, 8 MiB, iodepth 16 | 71.66 | 10.5% / 10.7% / 78.8% | 12.7 | 59 | 126, 1.77 | 2.8% | 70% |
+| `t2-r527` | 32 jobs, 1 MiB, iodepth 64 | 67.64 | 13.8% / 12.5% / 73.7% | 8.9 | 75 | 132, 1.94 | 9.4% | 56% |
+| `t2-r528` | 64 jobs, 1 MiB, iodepth 32 | 67.17 | 14.6% / 12.4% / 73.0% | 9.4 | 80 | 131, 1.96 | 16% | 57% |
+
+Twice the writers change nothing; 1 MiB blocks lose 6%, hold 20 MiB
+more and copy a tenth of the records (the budget's denials).  **So the
+idle tenth is not the client's block shape, and the reading above
+has the arrow backwards:** a drive fed at 88% of its capacity is idle
+12% of the time by arithmetic, whatever the arrivals look like.  The
+idle time is the consequence of 72 GB/s arriving, not its cause.
+What sets the 72 is still open: one port alone drives its four drives
+to their cap, so on two ports a shared resource holds the inflow, and
+the shared resources are the client (70% busy on 48 CPUs at 72, 48%
+at 40, spread evenly across its cores), the server's memory (125 of
+148 GB/s), and the server's receive path and threads (17% busy).
+The client's connections are `rwnd_limited` 98% of the time in every
+run.  The loan budget of 64 denies 2.5 to 2.9% of loans (128 denied
+none) at no rate seen; not the lever either.
