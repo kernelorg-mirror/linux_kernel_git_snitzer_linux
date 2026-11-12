@@ -78,7 +78,9 @@ load reshaped (`JOBS`, `BS`, `IODEPTH` to twoport.sh):
 | `t2-r528` | 64 jobs, 1 MiB, iodepth 32 | 67.17 | 14.6% / 12.4% / 73.0% | 9.4 | 80 | 131, 1.96 | 16% | 57% |
 
 Twice the writers change nothing; 1 MiB blocks lose 6%, hold 20 MiB
-more and copy a tenth of the records (the budget's denials).  **So the
+more and have a tenth of their loans denied (a denied record is not
+copied: its transport stops reading and waits for credit, the bytes
+left in the TCP receive queue, `rx_loan_admit()`).  **So the
 idle tenth is not the client's block shape, and the reading above
 has the arrow backwards:** a drive fed at 88% of its capacity is idle
 12% of the time by arithmetic, whatever the arrivals look like.  The
