@@ -4090,6 +4090,13 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_region_read(struct svc_rqst *rqstp,
 	}
 	svc_rx_region_share_put(svsk, pages, want.share);
 unconfined:
+	/*
+	 * An rtc attempt that missed is abandoned and a thread reruns the
+	 * call (a park cannot be taken by a work item): that rerun counts
+	 * the READ, if it is served unconfined at all.
+	 */
+	if (test_bit(RQ_RTC_MISS, &rqstp->rq_flags))
+		return 0;
 	atomic64_inc(&c->read_unconfined);
 	trace_svcsock_tcp_rx_region_read(&svsk->sk_xprt, rqstp->rq_xid, pages,
 					 "unconfined", why);

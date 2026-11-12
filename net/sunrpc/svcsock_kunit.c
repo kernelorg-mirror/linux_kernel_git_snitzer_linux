@@ -6719,6 +6719,139 @@ static void svcsock_rx_region_share_park_test(struct kunit *test)
 }
 
 /*
+ * An rtc attempt (RQ_RTC_TRY) whose READ would park on the connection's
+ * share is abandoned for a thread (RQ_RTC_MISS), which reruns the call.
+ * The attempt is not an unconfined READ: nothing is counted, no share or
+ * credit stays taken, nothing is parked; the rerun is admitted once.
+ */
+static void svcsock_rx_region_rtc_miss_share_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 11, 11);
+	struct svc_sock *svsk = r->fx->svsk;
+	struct svc_rqst *rqstp = r->fx->rqstp;
+	long unconfined, admitted, parked;
+
+	svcsock_rx_conn_share(test, "10");
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 7), 0);
+	unconfined = svcsock_region_stat(test, r, "read_unconfined");
+	admitted = svcsock_region_stat(test, r, "read_admitted");
+	parked = svcsock_region_stat(test, r, "read_parked");
+
+	/* 7 + 4 > 10: the attempt cannot park, so it misses. */
+	set_bit(RQ_RTC_TRY, &rqstp->rq_flags);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_read(rqstp, 4), 0);
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &rqstp->rq_flags));
+	KUNIT_EXPECT_EQ(test, rqstp->rq_rtc_reason, SVC_RTC_FB_REGION_PARK);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_unconfined"),
+			unconfined);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_admitted"),
+			admitted);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_parked"),
+			parked);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_rx_region_waiters));
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_xprt.xpt_deferred));
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 7);
+	KUNIT_EXPECT_EQ(test, svcsock_region_credit(test, r), 4);
+
+	/* The first READ's reply returns; a thread reruns the call. */
+	svc_tcp_rx_region_unconfine(rqstp);
+	clear_bit(RQ_RTC_TRY, &rqstp->rq_flags);
+	clear_bit(RQ_RTC_MISS, &rqstp->rq_flags);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_read(rqstp, 4), 0);
+	KUNIT_EXPECT_TRUE(test, svc_rqst_rx_region_held(rqstp));
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_admitted"),
+			admitted + 1);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_unconfined"),
+			unconfined);
+	svc_tcp_rx_region_unconfine(rqstp);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_EQ(test, svcsock_region_credit(test, r), 11);
+}
+
+/* The same when the grant, not the share, would park (-EAGAIN). */
+static void svcsock_rx_region_rtc_miss_grant_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 8, 4);
+	struct svc_sock *svsk = r->fx->svsk;
+	struct svc_rqst *rqstp = r->fx->rqstp;
+	struct ubuf_info *ubuf;
+	long unconfined, admitted, parked, credit;
+
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 4), 0);
+	ubuf = svcsock_region_send(r, 1);
+	unconfined = svcsock_region_stat(test, r, "read_unconfined");
+	admitted = svcsock_region_stat(test, r, "read_admitted");
+	parked = svcsock_region_stat(test, r, "read_parked");
+	credit = svcsock_region_credit(test, r);
+
+	set_bit(RQ_RTC_TRY, &rqstp->rq_flags);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_read(rqstp, 2), 0);
+	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &rqstp->rq_flags));
+	KUNIT_EXPECT_EQ(test, rqstp->rq_rtc_reason, SVC_RTC_FB_REGION_PARK);
+	KUNIT_EXPECT_FALSE(test, svc_rqst_rx_region_held(rqstp));
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_unconfined"),
+			unconfined);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_admitted"),
+			admitted);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_parked"),
+			parked);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_waiters"), 0);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_rx_region_waiters));
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_xprt.xpt_deferred));
+	KUNIT_EXPECT_EQ(test, svcsock_region_credit(test, r), credit);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 4);
+
+	/* The sent reply completes; a thread reruns the call and is admitted. */
+	ubuf->ops->complete(NULL, ubuf, true);
+	svcsock_region_settle();
+	clear_bit(RQ_RTC_TRY, &rqstp->rq_flags);
+	clear_bit(RQ_RTC_MISS, &rqstp->rq_flags);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_read(rqstp, 2), 0);
+	KUNIT_EXPECT_TRUE(test, svc_rqst_rx_region_held(rqstp));
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_admitted"),
+			admitted + 1);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_unconfined"),
+			unconfined);
+	svc_tcp_rx_region_unconfine(rqstp);
+	svcsock_region_settle();
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_EQ(test, svcsock_region_credit(test, r), 4);
+}
+
+/*
+ * RQ_RTC_MISS set before region admission (decode): the attempt is
+ * abandoned whatever it finds, so a READ it would serve unconfined (span)
+ * is counted by the thread rerun alone, once.  An rtc attempt that has
+ * not missed is counted.
+ */
+static void svcsock_rx_region_rtc_miss_early_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 4, 4);
+	struct svc_rqst *rqstp = r->fx->rqstp;
+	long unconfined = svcsock_region_stat(test, r, "read_unconfined");
+
+	r->fx->svsk->sk_xprt.xpt_server->sv_max_payload = 8 * PAGE_SIZE;
+	set_bit(RQ_RTC_TRY, &rqstp->rq_flags);
+	/* an rtc attempt that has not missed is still counted */
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_read(rqstp, 6), 0);
+	KUNIT_EXPECT_FALSE(test, svc_rqst_rx_region_held(rqstp));
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_unconfined"),
+			unconfined + 1);
+	svc_rtc_miss(rqstp, SVC_RTC_FB_REGION_PARK);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_read(rqstp, 6), 0);
+	KUNIT_EXPECT_FALSE(test, svc_rqst_rx_region_held(rqstp));
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_unconfined"),
+			unconfined + 1);
+
+	clear_bit(RQ_RTC_TRY, &rqstp->rq_flags);
+	clear_bit(RQ_RTC_MISS, &rqstp->rq_flags);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_read(rqstp, 6), 0);
+	KUNIT_EXPECT_FALSE(test, svc_rqst_rx_region_held(rqstp));
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_unconfined"),
+			unconfined + 2);
+}
+
+/*
  * K21 (review-p4-r1 m4).  A READ that fits the partition but not what it
  * can still lend once pages escaped is served unconfined, without parking;
  * one that fits the shrunk capacity is still admitted.
@@ -8857,6 +8990,9 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_region_recv_behind_read_test),
 	KUNIT_CASE(svcsock_rx_region_read_short_test),
 	KUNIT_CASE(svcsock_rx_region_share_park_test),
+	KUNIT_CASE(svcsock_rx_region_rtc_miss_share_test),
+	KUNIT_CASE(svcsock_rx_region_rtc_miss_grant_test),
+	KUNIT_CASE(svcsock_rx_region_rtc_miss_early_test),
 	KUNIT_CASE(svcsock_rx_region_escaped_capacity_test),
 	KUNIT_CASE(svcsock_rx_region_share_rule_test),
 	KUNIT_CASE(svcsock_rx_region_share_conns_test),
