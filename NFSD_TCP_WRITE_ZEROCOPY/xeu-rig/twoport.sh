@@ -108,11 +108,13 @@
 #                    (charge per WRITE, reserve); unset or 0 copies, as settled
 #   BUDGET_PAGES=<n> with WRITES: the budget in pages instead (the reserve as
 #                    WRITES gives it)
-#   WINDOW=<n>       with WRITES: the window of loaned WRITEs in flight for each
-#                    export (svc_tcp_rx_target_window; 0 none); on both ports
-#                    common.sh's TWO_WINDOW unless given, on one port 0.  Put
-#                    back after the run.  A script that writes the parameter
-#                    itself must pass WINDOW= instead, or the run overrides it.
+#   TARGET_WINDOW=<n> with WRITES: the window of loaned WRITEs in flight for
+#                    each export (svc_tcp_rx_target_window; 0 none); on both
+#                    ports common.sh's TWO_WINDOW unless given, on one port 0.
+#                    Put back after the run.  A script that writes the
+#                    parameter itself must pass TARGET_WINDOW= instead, or the
+#                    run overrides it.  Not WINDOW=: GNU screen exports WINDOW
+#                    (its window's number) to every shell it starts.
 # Every run reports how nfsd issued its WRITEs (segments direct, dontcache and
 # buffered, from the nfsd_write_* tracepoints) and, with WRITES, what the
 # budget admitted, denied and paused.
@@ -177,9 +179,9 @@ if [ "${WRITES:-0}" -gt 0 ]; then
 	CHARGE=$(( ( (1048716 + PS - 1) / PS * F9 + 99 ) / 100 + 2 ))
 	BUDGET=$(( WRITES * CHARGE + RESERVE + 4 ))
 	BUDGET=${BUDGET_PAGES:-$BUDGET}
-	[ $MODE_SET = two ] && WINDOW=${WINDOW-$TWO_WINDOW}
+	[ $MODE_SET = two ] && TARGET_WINDOW=${TARGET_WINDOW-$TWO_WINDOW}
 fi
-WINDOW=${WINDOW:-0}
+TARGET_WINDOW=${TARGET_WINDOW:-0}
 T=/sys/kernel/tracing; WREV="nfsd_write_direct nfsd_write_dontcache nfsd_write_vector"
 wr_hits() { local e; for e in $WREV; do awk '/^ *Hits:/ {print $2; f = 1} END {if (!f) print 0}' $T/events/nfsd/$e/hist 2>/dev/null || echo 0; done | paste -sd ' '; }
 bstat() { tr ' ' '\n' < $SP/svc_tcp_rx_budget_stats | awk -v k=$1 'p == k {print; exit} {p = $0}'; }
@@ -245,10 +247,10 @@ setp "${THREADS:-}" copy_threads 0
 setp "${LOWAT:-}" lowat 0
 setp "${KEEP:-}" keep N
 setp "${WANT_EIGHTHS:-}" want_eighths 4
-setp "$WINDOW" target_window 0
+setp "$TARGET_WINDOW" target_window 0
 if [ -n "$BUDGET" ]; then	# reserve first, as run-budget.sh sets them
 	rx_w $SP/svc_tcp_rx_budget_pages 0; rx_w $SP/svc_tcp_rx_budget_reserve $RESERVE; rx_w $SP/svc_tcp_rx_budget_pages $BUDGET
-	echo "loan: $G; charge $CHARGE pages a 1 MiB WRITE, budget $BUDGET pages for $WRITES WRITEs, reserve $RESERVE, window $WINDOW" | tee -a geometry.txt
+	echo "loan: $G; charge $CHARGE pages a 1 MiB WRITE, budget $BUDGET pages for $WRITES WRITEs, reserve $RESERVE, window $TARGET_WINDOW" | tee -a geometry.txt
 fi
 for e in $WREV; do grep -q '^hist:' $T/events/nfsd/$e/trigger 2>/dev/null || echo 'hist:keys=common_type' > $T/events/nfsd/$e/trigger; done
 [ -n "${SPARE:-}" ] && { echo $SPARE > $SP/svc_tcp_spare_bytes_max || { echo "no svc_tcp_spare_bytes_max in this sunrpc"; exit 1; }; }
@@ -410,7 +412,7 @@ fi
 [ -n "${NFSD_CPUS:-}" ] && { for t in $(pgrep -x nfsd); do taskset -cp $NFSD_CPUS $t > /dev/null 2>&1; done; echo "nfsd on CPUs $NFSD_CPUS for this run" | tee -a geometry.txt; }
 # Just before the load: the live state, all of it, against the setting this
 # run is at; anything the run set on purpose is held to what it set.
-EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_TARGET_WINDOW=$WINDOW EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_WANT_EIGHTHS=${WANT_EIGHTHS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-} EXP_GRO_MAX=${GRO_MAX:-} EXP_DEFER=${DEFER:-}"
+EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_TARGET_WINDOW=$TARGET_WINDOW EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_WANT_EIGHTHS=${WANT_EIGHTHS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-} EXP_GRO_MAX=${GRO_MAX:-} EXP_DEFER=${DEFER:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}${XPS:-}" ] && EXPENV="$EXPENV EXP_RINGS=${RINGS:-} EXP_LAYOUT=RINGS=${RINGS:-4},RX_RINGS=${RX_RINGS:-},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-},XPS=${XPS:-}"
 # the client's qdisc is set only on the ports of this run

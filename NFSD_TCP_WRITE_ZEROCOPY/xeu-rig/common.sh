@@ -33,7 +33,7 @@ declare -A PFS=([a]="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" [b]="/hs/nvme4 /hs
 # 11,511) at the same rate and working set; a full budget pauses a
 # record's reading, it does not copy.
 # TWO_WINDOW is the two-port loan's window of loaned WRITEs in flight for
-# each export (svc_tcp_rx_target_window, twoport.sh's WINDOW=): 7 on
+# each export (svc_tcp_rx_target_window, twoport.sh's TARGET_WINDOW=): 7 on
 # tardis2 since 12 November (Mike), after FLAMEGRAPH round 99 found it
 # costs no rate with the client splicing (75.0 to 75.2 GB/s over four
 # runs against 75.0 to 75.3 off), holds 6 to 7 MiB less at the median,
