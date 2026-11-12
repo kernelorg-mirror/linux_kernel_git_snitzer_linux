@@ -256,3 +256,53 @@ round trip, the budget nor the mark holds it.  The drives do: each
 writes 9.3 to 9.5 GB/s of its 10.2 alone, with two WRITEs queued at it
 at window 7.
 
+
+## The held buffer and the connections a port at window 7 (t2-r558..r563)
+
+The question: what holds the drives at 9.3 to 9.5 GB/s of their 10.2.
+They are at their cap whenever two writes are queued
+(round 94), and `t2-r534`'s depth (6 to 7.6% empty, 2% one deep, 91%
+two or more) is 9.4 by arithmetic, so the shortfall is the feed.  At
+`t2-r557` the client's connections were held by the server's
+advertised window 97% of their busy time (`snd_wnd` about 240 KB at a
+75 us round trip: 3.2 GB/s a connection, 78 on 24), and the buffer
+and connections were settled when memory or the client was the wall.
+[run558.sh](run558.sh) ([run558.out](run558.out)): one settled run
+for each held buffer and connections a port, window 7, budget 64,
+`WARM=10 RUNTIME=40`, with round 98's `inflight.py` (12 s) and the
+mesh beside each.  (A first try left out `WRITES=64`, so `twoport.sh`
+copied: `t2-r558..r560.copy-mode-stopped`, [run558.copy-mode-stopped.out](run558.copy-mode-stopped.out),
+not to be read as loans; the script now refuses a run that did not
+loan at window 7.)
+
+| run | rcvbuf, conns a port | GB/s | ring drops | client retransmits | flows | rwnd_limited, mean snd_wnd | a drive empty / 1 / 2 / 3 / 4+ | memory, a byte | held median, peak |
+|---|---|---|---|---|---|---|---|---|---|
+| `t2-r558` | 512 KiB, 12 (settled) | **75.27** | 0 | 297 | 12/12 | 99.4%, 199 KiB | 6.4 / 1.9 / 2.4 / 3.3 / 86.0% | 132.6, 1.76 | 3,557, 4,322 |
+| `t2-r559` | 640 KiB, 12 | 75.30 | 2,763 | 3,196 | 12/11 | 92.3%, 236 KiB | 6.2 / 1.7 / 2.4 / 3.1 / 86.6% | 134.4, 1.78 | 3,661, 4,489 |
+| `t2-r560` | 768 KiB, 12 | 73.23 | 9,219 | 9,971 | 12/12 | 78.3%, 285 KiB | 8.5 / 2.2 / 2.7 / 3.4 / 83.3% | 127.0, 1.73 | 3,777, 4,715 |
+| `t2-r561` | 512 KiB, 16 | 74.99 | 1,251 | 1,716 | 16/16 | 96.6%, 178 KiB | 6.6 / 2.0 / 2.7 / 3.5 / 85.1% | 134.0, 1.79 | 3,757, 4,733 |
+| `t2-r562` | 768 KiB, 16 | 70.46 | 12,503 | 13,193 | 14/16 | 66.7%, 261 KiB | 12.1 / 2.8 / 3.4 / 4.1 / 77.5% | 114.5, 1.63 | 3,992, 4,777 |
+| `t2-r563` | 512 KiB, 12 (settled, again) | **75.13** | 0 | 280 | 12/12 | 97.3%, 182 KiB | 6.3 / 2.0 / 2.6 / 3.3 / 85.8% | 133.1, 1.77 | 3,556, 4,380 |
+
+No loan denied, no drive stepped down, no new kernel warning in any.
+Every run's `drives.txt` says "PAST THE FAST REGION" (610 to 617 GB a
+drive): twoport's flag is at 600 GB (`DRIVE_GB`) against the 625 a
+drive takes at full rate, and no drive's per-second rate fell, so it
+does not decide these figures.
+
+- **The window opens and the client is held by it less, and the rate
+  does not rise.**  640 KiB gives 19% more window and 92% in place of
+  99%, at the same 75.3.  16 connections give 20% more window in all,
+  at 75.0.
+- **Past that, the client's bursts overrun the rings.**  At 768 KiB
+  the rings (128 entries) drop 9,219 frames on 12 connections and
+  12,503 on 16, the retransmits leave the drives empty 8.5 and 12% of
+  the time, and the rate falls to 73.2 and 70.5, with memory at 127
+  and 115 GB/s, well inside its 148.  The window is also what keeps
+  the client's bursts inside what the rings take; 512 KiB on rings of
+  128 is the largest that does, which is how round 56 chose it.
+- **So the server's window is not what holds 75.**  Each connection
+  sends as fast as the window lets it, but more window in every form
+  delivers no more: the rate the server takes the data in is set
+  elsewhere.  The settled setting stays (512 KiB, 12 connections a
+  port), its two runs 75.27 and 75.13.

@@ -1,0 +1,12 @@
+16:55:15 t2-r558 rcvbuf 524288 nconn 12 | total 65.82 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; ; ; client retransmits in the window: 37
+    client: 24 connections, rwnd_limited 97.6% of busy, snd_wnd mean 194 KiB
+    drives   all 8:  28.0%   6.2%   7.5%   8.2%  50.1%  65.64 GB/s
+    
+     held in the window (485 samples): median 1164 (18 MiB, 0.57 L3), p90 1164, p99 1164, most 1164 | kernel peak 1164 | a page held 0.29 ms at the median | to memory 133.1 GB/s, 2.03 bytes a byte | fills 2.26 a payload line
+17:00:11 t2-r559 rcvbuf 655360 nconn 12 | total 63.79 GB/s | ring drops 313 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 655360 nconn 12 ; ; ; client retransmits in the window: 376
+    client: 24 connections, rwnd_limited 98.6% of busy, snd_wnd mean 256 KiB
+    drives   all 8:  29.9%   6.6%   7.8%   8.3%  47.4%  63.61 GB/s
+    
+     held in the window (485 samples): median 1239 (19 MiB, 0.60 L3), p90 1239, p99 1239, most 1239 | kernel peak 1244 | a page held 0.32 ms at the median | to memory 135.5 GB/s, 2.13 bytes a byte | fills 2.28 a payload line

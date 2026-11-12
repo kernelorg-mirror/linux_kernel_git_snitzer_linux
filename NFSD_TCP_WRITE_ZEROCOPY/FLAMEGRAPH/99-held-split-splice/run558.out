@@ -1,0 +1,37 @@
+17:06:26 t2-r558 rcvbuf 524288 nconn 12 | total 75.27 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 3587152, denied 0, paused 0, overrun 0; client retransmits in the window: 297
+    client: 24 connections, rwnd_limited 99.4% of busy, snd_wnd mean 199 KiB
+    drives   all 8:   6.4%   1.9%   2.4%   3.3%  86.0%  75.09 GB/s
+    PAST THE FAST REGION: nvme0n1 nvme1n1 nv
+     held in the window (486 samples): median 3557 (56 MiB, 1.74 L3), p90 3694, p99 3792, most 3842 | kernel peak 4322 | a page held 0.78 ms at the median | to memory 132.6 GB/s, 1.76 bytes a byte | fills 1.13 a payload line
+17:11:23 t2-r559 rcvbuf 655360 nconn 12 | total 75.30 GB/s | ring drops 2763 | flows placed 12/11 | no drive stepped down | new kernel warnings 0
+    rcvbuf 655360 nconn 12 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 3600976, denied 0, paused 0, overrun 0; client retransmits in the window: 3196
+    client: 24 connections, rwnd_limited 92.3% of busy, snd_wnd mean 236 KiB
+    drives   all 8:   6.2%   1.7%   2.4%   3.1%  86.6%  75.47 GB/s
+    PAST THE FAST REGION: nvme0n1 nvme1n1 nv
+     held in the window (487 samples): median 3661 (57 MiB, 1.79 L3), p90 3801, p99 3954, most 4351 | kernel peak 4489 | a page held 0.79 ms at the median | to memory 134.4 GB/s, 1.78 bytes a byte | fills 1.12 a payload line
+17:16:20 t2-r560 rcvbuf 786432 nconn 12 | total 73.23 GB/s | ring drops 9219 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 786432 nconn 12 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 3494944, denied 0, paused 0, overrun 0; client retransmits in the window: 9971
+    client: 24 connections, rwnd_limited 78.3% of busy, snd_wnd mean 285 KiB
+    drives   all 8:   8.5%   2.2%   2.7%   3.4%  83.3%  73.51 GB/s
+    PAST THE FAST REGION: nvme1n1 nvme4n1 nv
+     held in the window (489 samples): median 3777 (59 MiB, 1.84 L3), p90 3939, p99 4021, most 4105 | kernel peak 4715 | a page held 0.84 ms at the median | to memory 127.0 GB/s, 1.73 bytes a byte | fills 1.13 a payload line
+17:21:16 t2-r561 rcvbuf 524288 nconn 16 | total 74.99 GB/s | ring drops 1251 | flows placed 16/16 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 16 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 3569624, denied 0, paused 0, overrun 0; client retransmits in the window: 1716
+    client: 32 connections, rwnd_limited 96.6% of busy, snd_wnd mean 178 KiB
+    drives   all 8:   6.6%   2.0%   2.7%   3.5%  85.1%  74.94 GB/s
+    PAST THE FAST REGION: nvme0n1 nvme1n1 nv
+     held in the window (486 samples): median 3757 (59 MiB, 1.83 L3), p90 3891, p99 4002, most 4301 | kernel peak 4733 | a page held 0.82 ms at the median | to memory 134.0 GB/s, 1.79 bytes a byte | fills 1.12 a payload line
+17:26:13 t2-r562 rcvbuf 786432 nconn 16 | total 70.46 GB/s | ring drops 12503 | flows placed 14/16 | no drive stepped down | new kernel warnings 0
+    rcvbuf 786432 nconn 16 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 3362136, denied 0, paused 0, overrun 0; client retransmits in the window: 13193
+    client: 32 connections, rwnd_limited 66.7% of busy, snd_wnd mean 261 KiB
+    drives   all 8:  12.1%   2.8%   3.4%   4.1%  77.5%  70.36 GB/s
+    
+     held in the window (489 samples): median 3992 (62 MiB, 1.95 L3), p90 4208, p99 4330, most 4375 | kernel peak 4777 | a page held 0.93 ms at the median | to memory 114.5 GB/s, 1.63 bytes a byte | fills 1.14 a payload line
+17:31:10 t2-r563 rcvbuf 524288 nconn 12 | total 75.13 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    rcvbuf 524288 nconn 12 ; window 7; loans: budget 8198 pages (64 WRITEs), in the run admitted 3579880, denied 0, paused 0, overrun 0; client retransmits in the window: 280
+    client: 24 connections, rwnd_limited 97.3% of busy, snd_wnd mean 182 KiB
+    drives   all 8:   6.3%   2.0%   2.6%   3.3%  85.8%  75.13 GB/s
+    PAST THE FAST REGION: nvme0n1 nvme1n1 nv
+     held in the window (490 samples): median 3556 (56 MiB, 1.74 L3), p90 3696, p99 3795, most 3917 | kernel peak 4380 | a page held 0.77 ms at the median | to memory 133.1 GB/s, 1.77 bytes a byte | fills 1.13 a payload line
+17:31:13 after: settled.sh audit rest: the settled setting
