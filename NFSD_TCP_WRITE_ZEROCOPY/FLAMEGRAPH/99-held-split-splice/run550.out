@@ -1,0 +1,13 @@
+07:35:17 t2-r550 window 7 budget 128 | total 75.10 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r550: total 75.10 GB/s; traced 9.02 s; held over it: mean 3083, median 3502 (424 samples); 24 connections; records published 610078, WRITE seen 542104, no WRITE 176, error/abort 0
+      rings, posted (taken as full)        512 pages    8.0 MiB  16.6%
+      sockets, receive queues              206 pages    3.2 MiB   6.7%
+      1 assembly                           552 pages    8.6 MiB  17.9%
+      2 to WRITE                            67 pages    1.0 MiB   2.2%
+      3 drive                             1377 pages   21.5 MiB  44.6%
+      4 to release                          47 pages    0.7 MiB   1.5%
+      5 no WRITE                             0 pages    0.0 MiB   0.0%
+      rest: the way back, unseen           322 pages    5.0 MiB  10.5%
+    loans: budget 16262 pages (128 WRITEs), in the run admitted 3578480, denied 0, paused 0, overrun 0; window 7: paused 1781514 unkeyed 3318 inflight now 0
+     held in the window (429 samples): median 3550 (55 MiB, 1.73 L3), p90 3673, p99 3785, most 4046 | kernel peak 4313 | a page held 0.78 ms at the median | to memory 131.4 GB/s, 1.75 bytes a byte | fills 1.13 a payload line
+07:35:20 after: settled.sh audit rest: the settled setting

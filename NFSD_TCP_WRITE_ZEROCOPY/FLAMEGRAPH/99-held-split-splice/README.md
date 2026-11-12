@@ -113,8 +113,8 @@ beside it (`t2-r494` to `r500`, the client copying):
 | window | GB/s | round 94 | held median (MiB, L3) | peak | in the WRITE | assembly | sockets | memory GB/s, bytes a byte | client retransmits |
 |---|---|---|---|---|---|---|---|---|---|
 | 0 | 75.12 | 70.79 | 62, 1.94 | 11,040 | 30.0 | 10.7 | 1.6 | 141.0, 1.88 | 58 |
-| 10 | 75.14 | | 60, 1.89 | 5,097 | 24.5 | 9.7 | 1.9 | 138.5, 1.84 | |
-| 8 | 75.10 | | 58, 1.80 | 4,670 | 22.3 | 9.0 | 2.5 | 136.1, 1.82 | |
+| 10 | 75.14 | | 60, 1.89 | 5,097 | 24.5 | 9.7 | 1.9 | 138.5, 1.84 | 236 |
+| 8 | 75.10 | | 58, 1.80 | 4,670 | 22.3 | 9.0 | 2.5 | 136.1, 1.82 | 310 |
 | 7 | 75.16 (0) | 68.29 (−3.5%) | 55, 1.73 | 4,364 | 21.2 | 8.5 | 3.1 | 131.9, 1.76 | 312 |
 | 6 | 73.86 (−1.7%) | 66.14 (−6.6%) | 52, 1.61 | 3,964 | 18.7 | 8.2 | 3.5 | 117.7, 1.60 | 276 |
 | 5 | 72.77 (−3.1%) | 64.79 (−8.5%) | 47, 1.47 | 3,541 | 15.5 | 7.4 | 4.0 | 103.2, 1.43 | 283 |
@@ -130,11 +130,49 @@ beside it (`t2-r494` to `r500`, the client copying):
   byte, round 98's target for 81, for 1.7% of the rate; but the rate
   does not rise with the memory freed, so at these windows the drives'
   feed, not memory, holds it.
-- **The client's retransmits rise at 5 to 7** (276 to 312 against 58
+- **The client's retransmits rise at 5 to 10** (236 to 312 against 58
   off), as in round 94 (138 and 215 at 6 and 7) with nothing dropped
   anywhere; at 4, 17.  Of about 9 M segments a run it is small, and the
   cause (TCP's probes on paused connections is the likeliest) is not
   shown.
 
-**Next:** window 7 twice at the settled budget of 64 (`t2-r548`,
-`r549`) and once more at 128 (`t2-r550`), [run548.sh](run548.sh).
+## Window 7 again (t2-r548 to r550)
+
+[run548.sh](run548.sh) is `run494.sh` with the budget as `WRITES`;
+[run548.out](run548.out), [run550.out](run550.out).  Every run clean as
+above.
+
+| | budget | GB/s | held median (MiB, L3) | peak | in the WRITE | assembly | sockets | memory GB/s, bytes a byte | denied | client retransmits |
+|---|---|---|---|---|---|---|---|---|---|---|
+| t2-r544 | 128 | 75.16 | 55, 1.73 | 4,364 | 21.2 | 8.5 | 3.1 | 131.9, 1.76 | 0 | 312 |
+| t2-r548 | 64 | 74.97 | 56, 1.73 | 4,275 | 21.5 | 8.7 | 3.0 | 131.7, 1.76 | 0 | 345 |
+| t2-r549 | 64 | 75.15 | 56, 1.74 | 4,307 | 21.5 | 8.6 | 3.0 | 132.2, 1.76 | 0 | 304 |
+| t2-r550 | 128 | 75.10 | 55, 1.73 | 4,313 | 21.5 | 8.6 | 3.2 | 131.4, 1.75 | 0 | 313 |
+| off, budget 64 (t2-r534 to r536) | 64 | 74.99 to 75.26 | 62, 1.93 | 7,145 to 7,359 | 27.5 to 28.3 | 10.1 to 10.2 | 1.6 | 140.4 to 141.6, 1.86 to 1.89 | 4.4 to 5.3% | 39 to 70 |
+
+**Window 7 holds over four runs, at either budget:** 74.97 to 75.16
+GB/s against 74.99 to 75.26 off, with 6 to 7 MiB less held at the
+median, the peak from about 7,250 pages at the settled budget (11,040
+at 128) to about 4,300, and 9 GB/s less through memory.  At the
+settled budget it also ends the denials: seven WRITEs a drive is 56 of
+the budget's 64, so the budget no longer binds and no transport waits
+for credit.  The one cost seen is the client's retransmits, about 300
+a run against 40 to 70, with nothing dropped anywhere.
+
+## Where this leaves the next steps
+
+- **Window 7 is the proposal for the settled setting** (`settled.sh`,
+  `svc_tcp_rx_target_window` 7; Mike's to decide).  It does not raise
+  the rate: memory is freed (132 GB/s of 148) but 75 holds, so at
+  window 7 the drives' feed is what sets it.
+- **Round 95's budget:** with the window at 7 the budget does not
+  bind (no denial at 64 or 128); what is left of it is the bound on a
+  record's pages for transports the window does not key (3,300 to
+  3,500 unkeyed a run), and the reserve.
+- **Round 97's mark:** the A/B of 2 against 6 is to be run on whichever
+  window is settled; at 7 the rate is not the round trip's, so mark 2
+  is expected to gain nothing and to cost nfsd's cycles.
+- **The retransmits:** whether they are TCP's probes on paused
+  connections (`ss`'s `probes` and the retransmit timer on the client
+  during a run) is to be shown before the window is settled, since
+  they are its one visible cost.
