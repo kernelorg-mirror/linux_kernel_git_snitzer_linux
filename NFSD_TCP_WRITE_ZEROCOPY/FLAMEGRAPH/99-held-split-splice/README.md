@@ -101,8 +101,40 @@ record's arrival away from their next WRITE; the per-connection rate
 rose only from about 3.0 to 3.1 GB/s, so a record's arrival is not
 much faster.  The likelier change is that the drives are now nearer
 their capacity and their queue longer, so a window of 7 still leaves
-them about two WRITEs: 21.2 MiB at 75 GB/s is 0.28 ms a WRITE at the
+them about two WRITEs: 21.2 MiB at 75 GB/s is 0.30 ms a WRITE at the
 drive, against round 94's 0.24 at 7.
 
-**Windows of 6, 5 and 4 follow** (`t2-r545` to `r547`), to find where
-the rate starts to fall.
+## Below 7 (t2-r545 to r547)
+
+[run545.out](run545.out), the same script, `SWEEP="6 5 4"`.  Every run
+clean as above.  The whole curve, with round 94's rate at each window
+beside it (`t2-r494` to `r500`, the client copying):
+
+| window | GB/s | round 94 | held median (MiB, L3) | peak | in the WRITE | assembly | sockets | memory GB/s, bytes a byte | client retransmits |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 | 75.12 | 70.79 | 62, 1.94 | 11,040 | 30.0 | 10.7 | 1.6 | 141.0, 1.88 | 58 |
+| 10 | 75.14 | | 60, 1.89 | 5,097 | 24.5 | 9.7 | 1.9 | 138.5, 1.84 | |
+| 8 | 75.10 | | 58, 1.80 | 4,670 | 22.3 | 9.0 | 2.5 | 136.1, 1.82 | |
+| 7 | 75.16 (0) | 68.29 (−3.5%) | 55, 1.73 | 4,364 | 21.2 | 8.5 | 3.1 | 131.9, 1.76 | 312 |
+| 6 | 73.86 (−1.7%) | 66.14 (−6.6%) | 52, 1.61 | 3,964 | 18.7 | 8.2 | 3.5 | 117.7, 1.60 | 276 |
+| 5 | 72.77 (−3.1%) | 64.79 (−8.5%) | 47, 1.47 | 3,541 | 15.5 | 7.4 | 4.0 | 103.2, 1.43 | 283 |
+| 4 | 69.94 (−6.9%) | 60.28 (−15%) | 42, 1.32 | 3,144 | 11.7 | 6.6 | 4.7 | 84.3, 1.22 | 17 |
+
+- **The knee is at 7.**  Down to 7 the rate does not move; each step
+  below costs 1 to 4%, about half what round 94's did at the same
+  window.  So the faster client does change the calculus: the window's
+  price was in good part the client's, and what is left below 7 is the
+  drives running under two WRITEs (18.7 MiB at 73.9 GB/s is 0.27 ms a
+  WRITE at the drive at 6).
+- **Memory falls faster than the rate below 7:** 6 gives 1.60 bytes a
+  byte, round 98's target for 81, for 1.7% of the rate; but the rate
+  does not rise with the memory freed, so at these windows the drives'
+  feed, not memory, holds it.
+- **The client's retransmits rise at 5 to 7** (276 to 312 against 58
+  off), as in round 94 (138 and 215 at 6 and 7) with nothing dropped
+  anywhere; at 4, 17.  Of about 9 M segments a run it is small, and the
+  cause (TCP's probes on paused connections is the likeliest) is not
+  shown.
+
+**Next:** window 7 twice at the settled budget of 64 (`t2-r548`,
+`r549`) and once more at 128 (`t2-r550`), [run548.sh](run548.sh).

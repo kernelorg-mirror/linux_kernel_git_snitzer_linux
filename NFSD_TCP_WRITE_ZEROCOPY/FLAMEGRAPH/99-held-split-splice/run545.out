@@ -1,0 +1,37 @@
+07:09:59 t2-r545 window 6 | total 73.86 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r545: total 73.86 GB/s; traced 10.37 s; held over it: mean 2970, median 3248 (497 samples); 24 connections; records published 702884, WRITE seen 623322, no WRITE 1443, error/abort 0
+      rings, posted (taken as full)        512 pages    8.0 MiB  17.2%
+      sockets, receive queues              223 pages    3.5 MiB   7.5%
+      1 assembly                           524 pages    8.2 MiB  17.6%
+      2 to WRITE                            64 pages    1.0 MiB   2.2%
+      3 drive                             1195 pages   18.7 MiB  40.2%
+      4 to release                          45 pages    0.7 MiB   1.5%
+      5 no WRITE                             3 pages    0.0 MiB   0.1%
+      rest: the way back, unseen           404 pages    6.3 MiB  13.6%
+    loans: budget 16262 pages (128 WRITEs), in the run admitted 3520728, denied 0, paused 0, overrun 0; window 6: paused 2260610 unkeyed 3355 inflight now 0
+     held in the window (438 samples): median 3299 (52 MiB, 1.61 L3), p90 3436, p99 3562, most 3792 | kernel peak 3964 | a page held 0.74 ms at the median | to memory 117.7 GB/s, 1.60 bytes a byte | fills 1.14 a payload line
+07:14:55 t2-r546 window 5 | total 72.77 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r546: total 72.77 GB/s; traced 11.54 s; held over it: mean 2743, median 2985 (553 samples); 24 connections; records published 770052, WRITE seen 683873, no WRITE 590, error/abort 0
+      rings, posted (taken as full)        512 pages    8.0 MiB  18.7%
+      sockets, receive queues              259 pages    4.0 MiB   9.4%
+      1 assembly                           472 pages    7.4 MiB  17.2%
+      2 to WRITE                            62 pages    1.0 MiB   2.3%
+      3 drive                              994 pages   15.5 MiB  36.2%
+      4 to release                          42 pages    0.7 MiB   1.5%
+      5 no WRITE                             1 pages    0.0 MiB   0.0%
+      rest: the way back, unseen           400 pages    6.2 MiB  14.6%
+    loans: budget 16262 pages (128 WRITEs), in the run admitted 3469496, denied 0, paused 0, overrun 0; window 5: paused 2722439 unkeyed 3437 inflight now 0
+     held in the window (442 samples): median 3014 (47 MiB, 1.47 L3), p90 3148, p99 3237, most 3292 | kernel peak 3541 | a page held 0.68 ms at the median | to memory 103.2 GB/s, 1.43 bytes a byte | fills 1.15 a payload line
+07:19:56 t2-r547 window 4 | total 69.94 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    t2-r547: total 69.94 GB/s; traced 11.46 s; held over it: mean 2483, median 2672 (546 samples); 24 connections; records published 724665, WRITE seen 643971, no WRITE 165, error/abort 0
+      rings, posted (taken as full)        512 pages    8.0 MiB  20.6%
+      sockets, receive queues              302 pages    4.7 MiB  12.2%
+      1 assembly                           420 pages    6.6 MiB  16.9%
+      2 to WRITE                            56 pages    0.9 MiB   2.3%
+      3 drive                              749 pages   11.7 MiB  30.2%
+      4 to release                          38 pages    0.6 MiB   1.5%
+      5 no WRITE                             0 pages    0.0 MiB   0.0%
+      rest: the way back, unseen           406 pages    6.3 MiB  16.3%
+    loans: budget 16262 pages (128 WRITEs), in the run admitted 3335816, denied 0, paused 0, overrun 0; window 4: paused 3034917 unkeyed 3314 inflight now 0
+     held in the window (438 samples): median 2694 (42 MiB, 1.32 L3), p90 2808, p99 2867, most 2950 | kernel peak 3144 | a page held 0.64 ms at the median | to memory 84.3 GB/s, 1.22 bytes a byte | fills 1.16 a payload line
+07:19:59 after: settled.sh audit rest: the settled setting
