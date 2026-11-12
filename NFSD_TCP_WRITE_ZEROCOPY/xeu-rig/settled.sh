@@ -218,6 +218,7 @@ declare -A REST=(
 	[svc_tcp_rx_copy_below]=1024
 	[svc_tcp_spare_bytes_max]=67108864
 	[svc_tcp_rx_want_eighths]=6	# FLAMEGRAPH round 25 (26 October): three quarters of the open window
+	[svc_tcp_rx_target_window]=0	# at rest; a two-port loan run's is common.sh's TWO_WINDOW (7 on tardis2)
 )
 # Settings a later kernel no longer has: held where the kernel has them, and
 # reported, not failed, where it does not.  svc_tcp_rx_copy_unlocked was
@@ -252,7 +253,12 @@ declare -A GONE_LATER=([svc_tcp_rx_copy_unlocked]=1 [svc_tcp_rx_lowat]=1
 # held a WRITE at iodepth 1 up to 5 ms, until the delayed-ACK timer.  Not in
 # /etc/modprobe.d/sunrpc.conf, which would name a parameter build 499's own
 # sunrpc does not know at every load of it: apply writes it.  EXP_WANT_EIGHTHS holds a run to another share.
-declare -A NEW_LATER=([svc_tcp_spare_bytes_max]=1 [svc_tcp_rx_want_eighths]=1)
+# svc_tcp_rx_target_window came with FLAMEGRAPH round 94 ("SUNRPC: a
+# window of loaned WRITEs for each target"): 0 at rest, as the budget is,
+# and twoport.sh sets a loan run's (common.sh's TWO_WINDOW on two ports, 7
+# on tardis2 since 12 November, round 99) and puts 0 back.
+# EXP_TARGET_WINDOW holds a run to its window.
+declare -A NEW_LATER=([svc_tcp_spare_bytes_max]=1 [svc_tcp_rx_want_eighths]=1 [svc_tcp_rx_target_window]=1)
 # The kernel's command line: rodata=noalias, so the linear map is in 32 MiB
 # blocks, not 16 KiB pages (rodata=full, the default, maps it with pages on
 # a CPU without BBML3, and the Neoverse N2 has none).  Since FLAMEGRAPH
@@ -481,6 +487,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_SPARE:-}" ] && EXPECT[svc_tcp_spare_bytes_max]=$EXP_SPARE
 	[ -n "${EXP_BUDGET:-}" ] && EXPECT[svc_tcp_rx_budget_pages]=$EXP_BUDGET
 	[ -n "${EXP_BUDGET_RESERVE:-}" ] && EXPECT[svc_tcp_rx_budget_reserve]=$EXP_BUDGET_RESERVE
+	[ -n "${EXP_TARGET_WINDOW:-}" ] && EXPECT[svc_tcp_rx_target_window]=$EXP_TARGET_WINDOW
 	[ -n "${EXP_ENTRIES_A:-${EXP_ENTRIES:-}}" ] && ENTRIES[a]=${EXP_ENTRIES_A:-$EXP_ENTRIES}
 	[ -n "${EXP_ENTRIES_B:-${EXP_ENTRIES:-}}" ] && ENTRIES[b]=${EXP_ENTRIES_B:-$EXP_ENTRIES}
 	for k in "${!EXPECT[@]}"; do
