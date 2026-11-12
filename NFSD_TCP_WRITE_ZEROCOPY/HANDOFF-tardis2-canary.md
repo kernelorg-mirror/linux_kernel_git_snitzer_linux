@@ -3,6 +3,24 @@
 Written 2026-11-04.  Background and every port decision:
 `CANARY-SPLIT.md` beside this file.
 
+## Where it stands (12 November, afternoon): round 99 and the window settled
+
+Read `FLAMEGRAPH/99-held-split-splice/README.md`.  With the client
+splicing, two ports carry 75 GB/s; the held split put all of the growth
+at the drives' queue (394 us a request against 335 to 341), and round
+94's window of loaned WRITEs an export now costs no rate down to 7.
+**Settled on Mike's word: window 7, budget 64** (`common.sh`'s
+`TWO_WINDOW` and `TWO_WRITES`; `twoport.sh`'s `TARGET_WINDOW=`, never
+`WINDOW=`, which GNU screen exports).  At it: 75 GB/s, 56 MiB held at the
+median, peak about 4,300 pages, 1.76 bytes through memory a payload
+byte, no loan denied; the extra client retransmits (about 300 a run)
+are spurious tail loss probes, DSACKed.  Round 97's mark A/B again at
+window 7: mark 2 buys nothing, 6 stays.  What holds 75 now is the
+drives, 9.3 to 9.5 GB/s each of their 10.2.  The host is at the settled
+setting, the client on its splice sunrpc; xeu is out of build 522's
+initrd, so the next boot should load Release 15 from `updates/` with
+four rings.
+
 ## Next boot: after the crash of 12 November, with the client's splice
 
 **What happened.**  tardis2 crashed at about 05:10 on 12 November
