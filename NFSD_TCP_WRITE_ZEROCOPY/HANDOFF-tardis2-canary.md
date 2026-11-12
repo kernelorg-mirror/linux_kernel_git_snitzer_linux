@@ -384,6 +384,25 @@ The receive side is closed as a lever for the 32 MiB; what is left is
 the way back (8 MiB, the server's own) and the rings' 8 MiB.**  Mark 6
 and 512 KiB stay settled; nothing changed on the host.
 
+**Round 98 (12 November; Mike: "ultimately I want to achieve 81GB/s, I
+don't care _how_"), `FLAMEGRAPH/98-two-ceilings/`:** with no NFS the
+eight drives give 81.58 GB/s (10.20 each, however fed) and memory
+about 148 GB/s.  Under the two-port load every drive is idle a tenth
+of the time (the depth read from the driver's tag maps; the block
+tracepoints overcount a requeue), which is the arithmetic of 72
+arriving at 81.6 of capacity.  One port alone drives its four drives
+to the cap; two ports hold at 72 against every server knob (window,
+rings, mark, budget, writers).  **The wall at 72 is the client: its
+sunrpc copies every payload byte into TCP (`xprt_send_pagedata()`
+sends a bvec with no `MSG_SPLICE_PAGES`), one RPC at a time a
+connection, about 3 GB/s a connection, 24 connections** (perf on the
+client, `t2-r531`).  32 connections give 73.4 on rings of 128 with
+2,250 drops, and 71.8 on rings of 256 with memory at 93%.  So 81
+needs the client's copy gone first (a client kernel patch; and its
+`CONFIG_DEBUG_LIST=y` costs it 6%), then the server's bytes a payload
+byte down toward 1.6 at rings of 128; 76 to 78 is the realistic
+figure.  Nothing changed on the host.
+
 **State of the host before the reboot.**  Root has about 13 GB free after
 the cleanup of 9 November.  Every worktree but the main tree is gone.  In
 `/var/tmp/zc-run-logs` only the B, PF and PL stacks are left.  The perf

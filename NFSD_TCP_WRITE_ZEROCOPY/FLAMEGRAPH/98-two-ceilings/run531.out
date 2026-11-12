@@ -1,0 +1,26 @@
+04:32:52 t2-r531 ab none | total 71.56 GB/s | ring drops 0 | flows placed 12/12 | no drive stepped down | new kernel warnings 0
+    inflight: 7733 samples over 12.00 s; share at a depth of 0 / 1 / 2 / 3 / 4+, mean depth, GB/s
+      nvme0n1:   9.8%   2.4%   3.1%   4.8%  79.9%  mean 11.83   8.99 GB/s
+      nvme1n1:  10.2%   2.5%   3.9%   4.4%  78.9%  mean 11.31   8.99 GB/s
+      nvme2n1:  10.0%   2.6%   3.7%   4.2%  79.5%  mean 11.63   9.03 GB/s
+      nvme3n1:   8.9%   2.7%   3.6%   4.3%  80.6%  mean 11.48   9.07 GB/s
+      nvme4n1:  10.7%   3.4%   3.9%   4.7%  77.3%  mean 11.20   8.84 GB/s
+      nvme5n1:  11.5%   3.2%   4.3%   5.2%  75.7%  mean  9.75   8.80 GB/s
+      nvme6n1:  11.7%   2.8%   3.8%   5.0%  76.6%  mean 11.18   8.87 GB/s
+      nvme7n1:  11.6%   3.3%   4.0%   4.8%  76.2%  mean 10.10   8.80 GB/s
+      all 8:  10.6%   2.9%   3.8%   4.7%  78.1%  71.40 GB/s
+    t2-r531 mid ? | wire 72.02 GB/s | held in the window (489 samples): median 3611 (56 MiB, 1.76 L3), p90 4035, p99 6466, most 6846 | kernel peak 7065 | a page held 0.83 ms at the median | to memory 122.8 GB/s, 1.72 bytes a byte | fills 1.14 a payload line
+04:32:55 after: settled.sh audit rest: the settled setting
+04:37:52 t2-r532 ab none | total 73.37 GB/s | ring drops 2250 | flows placed 16/16 | no drive stepped down | new kernel warnings 0
+    inflight: 7217 samples over 12.00 s; share at a depth of 0 / 1 / 2 / 3 / 4+, mean depth, GB/s
+      nvme0n1:   8.3%   2.3%   2.8%   4.0%  82.5%  mean 14.02   9.13 GB/s
+      nvme1n1:   9.8%   2.5%   2.9%   3.8%  81.0%  mean 12.73   9.09 GB/s
+      nvme2n1:   9.3%   2.3%   3.2%   3.7%  81.5%  mean 12.52   9.11 GB/s
+      nvme3n1:   9.5%   2.6%   3.5%   4.1%  80.3%  mean 12.73   9.09 GB/s
+      nvme4n1:   8.4%   2.3%   3.1%   3.7%  82.5%  mean 14.27   9.20 GB/s
+      nvme5n1:   8.6%   2.5%   3.1%   4.0%  81.9%  mean 13.17   9.19 GB/s
+      nvme6n1:   8.5%   2.2%   2.7%   3.8%  82.8%  mean 14.68   9.20 GB/s
+      nvme7n1:   8.8%   2.5%   2.9%   3.8%  82.0%  mean 13.41   9.22 GB/s
+      all 8:   8.9%   2.4%   3.0%   3.9%  81.8%  73.23 GB/s
+    t2-r532 mid ? | wire 73.91 GB/s | held in the window (486 samples): median 4245 (66 MiB, 2.07 L3), p90 4846, p99 6348, most 6644 | kernel peak 7260 | a page held 0.95 ms at the median | to memory 141.5 GB/s, 1.93 bytes a byte | fills 1.12 a payload line
+04:37:55 after: settled.sh audit rest: the settled setting

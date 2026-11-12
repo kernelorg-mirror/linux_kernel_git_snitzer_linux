@@ -5,7 +5,8 @@
 # loan load (t2-r524); (2) one port, a, loading its four drives (t2-r525)
 # while the other four, nvme4 to nvme7, take a local flat fio (3 x 1 MiB
 # a drive, 12 s) at the same time: whether the NIC's traffic slows drives
-# it is not writing to (10.20 GB/s each alone).
+# it is not writing to (10.20 GB/s each alone).  CLIPERF=1 adds a perf
+# profile of the whole client for 6 s of the window (cli-perf.txt).
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
 say() { echo "$(date +%T) $*"; }
@@ -23,6 +24,7 @@ split() {	# split <run dir>
 	date +%s.%N > $O/mesh.t0
 	perf stat -a -x, -e arm_cmn/hnf_mc_reqs/,arm_cmn/hnf_cache_fill/ -o $O/mesh.txt -- sleep 10 > /dev/null 2>&1 &
 	[ "$LOCAL" = local ] && ( fio --ioengine=psync --direct=1 --rw=write --bs=1M --size=2G --time_based --runtime=12 --numjobs=3 --output-format=json --output=$O/local-fio.json $(for d in 4 5 6 7; do mkdir -p /hs/nvme$d/local; echo --name=d$d --directory=/hs/nvme$d/local; done) > /dev/null 2>&1; for d in 4 5 6 7; do rm -rf /hs/nvme$d/local; done ) &
+	[ "${CLIPERF:-}" = 1 ] && $SSHC "perf record -a -g -F 499 -o /tmp/zc-cli.data -- sleep 6 > /dev/null 2>&1; perf report -i /tmp/zc-cli.data --stdio --no-children --percent-limit 0.5 2> /dev/null | grep -v '^$' | head -120; echo ===; perf report -i /tmp/zc-cli.data --stdio --no-children --sort comm 2> /dev/null | grep -v '^$' | head -30" > $O/cli-perf.txt 2>&1 &
 	taskset -c 63 python3 -I $HERE/inflight.py $O/inflight.txt 12
 	date +%s.%N > $O/$BT.t1
 	wait

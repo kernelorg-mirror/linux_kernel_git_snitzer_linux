@@ -91,3 +91,85 @@ at 40, spread evenly across its cores), the server's memory (125 of
 The client's connections are `rwnd_limited` 98% of the time in every
 run.  The loan budget of 64 denies 2.5 to 2.9% of loans (128 denied
 none) at no rate seen; not the lever either.
+
+## Neither the pipe nor the server's ACK moves it (t2-r529, r530)
+
+[run529.out](run529.out): rings of 256 (round 56's 73.27 setting,
+no drops) with the mark at 2 (the server's ACK 18 us sooner, round
+97), at 512 and 640 KiB: **71.48 and 72.18 GB/s**, no drop, memory at
+133 to 134 GB/s (1.86 a byte, 90%), the drives idle 10%.  So on two
+ports the rate holds at 72 against every server-side knob there is:
+the window, the rings, the mark, the budget, the client's writers.
+
+## The wall is the client's copy, a connection at a time (r531 to r533)
+
+[run531.out](run531.out), [run533.out](run533.out).  `t2-r531` is the
+settled load with a `perf` profile of the whole client for 6 s of the
+window (`CLIPERF=1`; `$L/t2-r531/cli-perf.txt`, and the reads below
+from the client's `/tmp/zc-cli.data`):
+
+| of the client's 48 CPUs | |
+|---|---|
+| `cpu_idle_poll` (the idle loop) | 28% |
+| **`__pi_memcpy` in `tcp_sendmsg_locked`, from `xprt_transmit` in rpciod's workers** | **18.4%** (18.0 of it that one chain) |
+| fio's `get_io_u` | 8.4% |
+| `__list_del_entry_valid_or_report` (`CONFIG_DEBUG_LIST=y` on the client's kernel) | 6.4%, 2.6 of it in `nfs_scan_commit_list` |
+| `tcp_sendmsg_locked` itself | 2.9% |
+
+**The client copies every payload byte into TCP**
+(`xprt_send_pagedata()` in `net/sunrpc/socklib.c` sends the pages as
+a bvec with no `MSG_SPLICE_PAGES`, so `tcp_sendmsg_locked()` copies
+them; the server side's `svc_tcp_sendmsg()` splices, the client's never
+did), **in the transmit of one RPC at a time a connection**
+(`xprt_transmit()` holds the transport while rpciod's worker sends).
+A 1 MiB WRITE is one worker copying 1 MiB through TCP under the
+socket lock, about 360 us of system time a WRITE at this rate (55% of
+48 CPUs in the kernel, 72k WRITEs a second): about **3 GB/s a
+connection, and 24
+connections are 72 GB/s.**  The connections read `rwnd_limited` 98%
+of the time because the window stays full while the ACK that would
+open it waits in the client's softirq queue behind the copies.  One
+port's 16 connections at 2.5 GB/s each sit under the cap, which is
+why one port reaches its drives' 10.1 GB/s and two ports do not.
+
+The cross-check is more connections.  `t2-r532`, 16 a port on rings
+of 128: **73.37 GB/s**, 2,250 ring drops and 2,397 retransmits, the
+drives idle 8.9%.  `t2-r533`, 16 a port on rings of 256:
+**71.80 GB/s**, no ring drop, 31 retransmits, the drives idle 10%,
+held 70 MiB, **memory at 138 GB/s (1.93 a byte, 93% of 148)**, the
+32 connections `rwnd_limited` 99.6%.  So 32 connections on rings of
+256 buy nothing: by then the server's memory is the wall, as it was
+for round 56's 73.27 at the same rings.
+
+## Where this leaves 81
+
+Three walls meet within 2% of each other at this setting, and each
+one hides the others:
+
+1. **The client's copy, a connection at a time:** about 3 GB/s a
+   connection, 72 GB/s on 24 connections.  More connections lift it
+   (73.4 on 32), but then
+2. **the rings of 128 drop frames** under the burstier arrivals
+   (2,250 drops, 2,397 retransmits), and on rings of 256, which do
+   not drop,
+3. **memory is at 93%** (1.93 bytes a payload byte at 72 GB/s), as
+   round 56 found: the larger rings hold 16 MiB of posted buffers and
+   the loaned pages miss the L3 more.
+
+The drives, at 81.6 GB/s, are above all three.  The order to take
+them in: the client first, since nothing on the server can move the
+rate while 24 connections copy (`MSG_SPLICE_PAGES` for the page
+array in `xprt_send_pagedata()`, as `svc_tcp_sendmsg()` does on the
+server, head and tail still copied; and a client kernel without
+`CONFIG_DEBUG_LIST`).  Then, with the client's cap gone, the server's
+two: at rings of 128 and 1.74 bytes a byte, 81 GB/s is 141 GB/s of
+memory, 95%; so the bytes a payload byte have to come down toward
+1.6, which is the footprint work of rounds 94 to 97 by its real name
+(a page that reaches the drive while still in the L3 costs no memory
+read), and the rings' drops at the higher rate have to be measured
+again.  Realistically that is 76 to 78 GB/s with the drives at 95%,
+not 81.
+
+Nothing on the host was changed by this round: the settled setting
+is in force (mark 6, 512 KiB, rings of 128, 12 connections, budget
+64, window 0).
