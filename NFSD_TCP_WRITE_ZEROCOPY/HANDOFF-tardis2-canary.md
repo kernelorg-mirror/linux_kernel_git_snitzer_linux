@@ -99,6 +99,16 @@ rebooted by the server's power reset.
 5. Then round 98's order: the server's bytes a payload byte at rings of
    128 toward 1.6, and the rings' drops at the higher rate.
 
+**The boot after the power reset (12 November, 05:55).**  Both ports
+answer, 5 of 5, before and after `bringup.sh 32768 256` (in
+`PORT-DEAD-AFTER-BOOT.md`'s table); kdump armed, sunrpc
+`FC78BAE8A6C2B0A92A1366A`.  The initrd was not fixed: `xeu` is the
+initrd's again (`CA0931345E46C929B11D01F`, `num_rings` 8), and
+`settled.sh apply` ends FAILED on `xeu num_rings` (8, want 4) and
+`xeu rx_refill_mid` (want 16), nothing else.  The client reads
+`AB674CEE87351D814F68CEE`, `affinity_strict` 1 on both workqueues,
+nothing mounted.  The run waits on the reload of `xeu`, Mike's word.
+
 ## Next boot: the canary from `3bdeea5a21cc` (9 November)
 
 **Where things stand.**  tardis2 ran the held-mark kernel's sixth boot
