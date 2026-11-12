@@ -513,3 +513,21 @@ size.  So the server's max_block_size, which caps both, costs reads
 what it gives writes; the client's mount option (wsize 512 KiB, rsize
 1 MiB) takes the writes' gain alone.  Reads on this rig are not tuned
 and a 40 s run is short for their spread.
+
+## The setting since 12 November: 512 KiB WRITEs at window 10 (t2-r597, r598)
+
+Settled (Mike): on tardis2 `common.sh`'s `TWO_WINDOW` is 10 and its
+`TWO_WSIZE` 524288, so a two-port run's client mounts with wsize 512
+KiB and rsize 1 MiB (`twoport.sh`'s `RSIZE`); nfsd's `max_block_size`
+stays 1 MiB, so reads keep 1 MiB.  [run597.out](run597.out): two runs
+at the defaults (`run577.sh` with `CELLS=":10 :10"`), the client's
+mount `rsize=1048576 wsize=524288` in both.
+
+| run | GB/s | a drive empty | held median, most | to memory |
+|---|---|---|---|---|
+| `t2-r597` | 78.06 | 3.1% | 48 MiB, 3397 | 115.7 GB/s, 1.48 a byte |
+| `t2-r598` | 78.13 | 3.1% | 48 MiB, 3365 | 116.1, 1.49 |
+
+No loan denied, no ring drop, no drive stepped down; the client 49%
+busy.  The same as 512 KiB both ways at window 10 (t2-r583, r586,
+r589..r592).
