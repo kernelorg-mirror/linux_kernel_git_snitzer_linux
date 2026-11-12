@@ -173,3 +173,29 @@ not 81.
 Nothing on the host was changed by this round: the settled setting
 is in force (mark 6, 512 KiB, rings of 128, 12 connections, budget
 64, window 0).
+
+## The client's patches (12 November)
+
+The client's `sunrpc.ko` is built from the two patches in
+[`../../patches/client/`](../../patches/client/), on top of the
+client's tag `v7.3.0-0.rc7.2.hs.469.el9`:
+
+- [`0001-SUNRPC-Make-rpciod-and-xprtiod-visible-in-sysfs.patch`](../../patches/client/0001-SUNRPC-Make-rpciod-and-xprtiod-visible-in-sysfs.patch):
+  round 91's `WQ_SYSFS` on both workqueues, so that they can be made
+  strict (S, settled 10 November; branch
+  `kernel-7.3/hs-469.sunrpc-wq-sysfs`, `4fddf1fecd4b`).
+- [`0002-SUNRPC-Splice-a-request-s-pages-into-the-TCP-socket.patch`](../../patches/client/0002-SUNRPC-Splice-a-request-s-pages-into-the-TCP-socket.patch):
+  this round's answer to the wall at 72, `MSG_SPLICE_PAGES` for the
+  page array of a first transmission in `xprt_sock_sendmsg()`, the
+  head and tail still copied and a retransmission copied as
+  a6b31d18b02f requires (branch `kernel-7.3/hs-469.sunrpc-splice`,
+  `edf08ea097e5`, on the first).
+
+Both are built on the client against its `kernel-devel`
+(`/root/zc-csunrpc/C/`, srcversion `AB674CEE87351D814F68CEE`) and
+installed as its `updates/sunrpc.ko` since 12 November 05:49: the
+account, the way back to S and what to watch are in
+`CLIENT-SUNRPC.md`.  The run against `t2-r531` waits for tardis2's
+power reset ("Next boot: after the crash of 12 November" in
+`HANDOFF-tardis2-canary.md`); the figures of this README are all with
+the client copying.

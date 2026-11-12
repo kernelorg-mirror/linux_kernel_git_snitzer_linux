@@ -7,6 +7,54 @@ and 24-47 near port b's `ens6np0`) runs Hammerspace build 469,
 (`FLAMEGRAPH/91-client-far-share/README.md`) is the account of what is
 below.
 
+## 12 November: C, the splice of a WRITE's pages (Mike: "get the client updated")
+
+**The client's `updates/sunrpc.ko` is now C: S with one more commit,
+`kernel-7.3/hs-469.sunrpc-splice` (`edf08ea097e5`, "SUNRPC: Splice a
+request's pages into the TCP socket", `patches/client/0002`).**  FLAMEGRAPH
+round 98 found the two-port rate held at 72 GB/s by the client: its
+`xprt_send_pagedata()` sent a WRITE's pages as a bvec with no
+`MSG_SPLICE_PAGES`, so `tcp_sendmsg_locked()` copied every payload byte
+under the socket lock, in rpciod's transmit of one RPC at a time a
+connection (about 3 GB/s a connection; 18% of the client's 48 CPUs in
+that memcpy, `t2-r531`).  The client sent its pages with
+`kernel_sendpage()` until 0472e4766049 (2019) and copied since.
+
+The change: `xs_tcp_send_request()` sets `MSG_SPLICE_PAGES` when the
+task has not been sent before (`RPC_WAS_SENT()`, the test
+`xprt_request_transmit()` itself uses for a retransmission), and
+`xprt_sock_sendmsg()` applies it to the page array only, clearing it
+for the head and tail (kvecs over the request's slab buffer, which
+`skb_splice_from_iter()` refuses with a `WARN_ON_ONCE` and -EIO when a
+page is not `sendpage_ok()`).  A retransmission is copied, the rule of
+a6b31d18b02f ("SUNRPC: Fix a data corruption issue when retransmitting
+RPC calls", 2013): the reply to the first transmission may complete the
+call and free the pages to be rewritten while the socket still holds
+them for the second.  Only the TCP transport asks; UDP and AF_LOCAL copy.
+`xdr->bvec` is what `xs_stream_prepare_request()` already allocates for
+every stream request.  Compile-checked on tardis2 against its own kernel
+headers and clean under checkpatch.
+
+Built on the client as B was, `make -C /usr/src/kernels/<v> M=/root/zc-csunrpc/C/sunrpc
+CONFIG_SUNRPC_GSS= CONFIG_SUNRPC_XPRT_RDMA= modules` on `git archive`'s
+`net/sunrpc` of the branch: srcversion `AB674CEE87351D814F68CEE`, its
+`Module.symvers` identical to B's (no header changes), so the rpm's NFS
+modules load on it as on S.  Installed over `updates/sunrpc.ko`,
+`depmod -a`, and loaded with `cswap.sh stock` at 05:49 on 12 November with
+nothing mounted: `rpciod` and `xprtiod` strict 1 (the udev rule), the
+client's NFS server and 16 exports back.  **To go back to S:** copy
+`/root/zc-csunrpc/B/sunrpc/sunrpc.ko` over `updates/sunrpc.ko`, `depmod
+-a`, `cswap.sh stock`.  A run's `geometry.txt` names the srcversion.
+
+Not yet run against the server: tardis2 crashed at about 05:10 that
+morning and lost port a on the boot after it.  The first run is in
+`HANDOFF-tardis2-canary.md`, "Next boot: after the crash of 12 November".
+What to watch on the client after a run: `dmesg` for a `WARN_ON_ONCE` in
+`skb_splice_from_iter()` (a page that was not `sendpage_ok()`; none is
+expected, the client's send pages being pinned user pages, page cache
+pages or `alloc_page()`'d ones, and `nfs4_buf_to_pages_noslab()` exists
+for this), and `cli_retrans` in `results.tsv` (the copied path).
+
 ## Settled (Mike, 10 November): S
 
 **The client runs with `rpciod` and `xprtiod` held to the node of the
@@ -19,7 +67,8 @@ CPU that queues their work.**  What is in place on 106:
   `kernel-devel` (its source and build in `/root/zc-csunrpc/B/`).  Only
   `sunrpc.ko`: the rpm's NFS modules load on it unchanged (its exports'
   CRCs are the rpm's).  `depmod -a` was run; the initramfs has no
-  sunrpc, so every boot loads this one.
+  sunrpc, so every boot loads this one.  **Since 12 November the file
+  is C (above), S plus the splice; S's own build stays in `B/`.**
 - `/etc/udev/rules.d/99-zc-sunrpc-wq-strict.rules`: `affinity_strict` 1
   on `rpciod` and `xprtiod` whenever they are made.
 - `xeu-rig/twoport.sh`: `CLI_STRICT=1`, the default, writes and checks

@@ -1,0 +1,141 @@
+From edf08ea097e58e7424f1cc6bdbfd721f7c47e336 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Thu, 12 Nov 2026 05:35:37 +0000
+Subject: [PATCH] SUNRPC: Splice a request's pages into the TCP socket
+
+xprt_sock_sendmsg() sends a request's page array to the socket as a
+bvec, and tcp_sendmsg_locked() copies every byte of it into the
+socket's skbs under the socket lock.  For an NFS WRITE that is the
+whole payload, copied by rpciod one request at a time a transport: at
+1 MiB a WRITE it comes to about 3 GB/s a connection, and on a client
+with 24 connections to a server whose storage takes more, it is the
+ceiling of the rate, with 18% of the client's 48 CPUs in memcpy under
+tcp_sendmsg_locked().
+
+Until commit 0472e4766049 ("SUNRPC: Convert socket page send code to
+use iov_iter()") the client sent the pages with kernel_sendpage(), so
+the socket held them and copied nothing.  Send them with
+MSG_SPLICE_PAGES, as the server's svc_tcp_sendmsg() has since commit
+5df5dd03a8f7 ("sunrpc: Use sendmsg(MSG_SPLICE_PAGES) rather then
+sendpage"), and the socket holds them again.  Only the page array is
+spliced: the head and the tail are kvecs over the request's buffer,
+memory the socket may not hold a reference to, and are copied as
+before.
+
+A request's pages are the caller's until the reply, and TCP delivers
+them before the server can reply, so a first transmission is safe to
+splice.  A retransmission is not: the reply to the first transmission
+may complete the call and release the pages to be rewritten while the
+socket still holds them for the second, the corruption that commit
+a6b31d18b02f ("SUNRPC: Fix a data corruption issue when retransmitting
+RPC calls") found with kernel_sendpage().  So a retransmission is
+copied, as it was then, and only the TCP transport asks for the
+splice: UDP and AF_LOCAL copy as before.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ net/sunrpc/socklib.c  | 26 ++++++++++++++++++++++----
+ net/sunrpc/xprtsock.c |  9 +++++++++
+ 2 files changed, 31 insertions(+), 4 deletions(-)
+
+diff --git a/net/sunrpc/socklib.c b/net/sunrpc/socklib.c
+index d8d8842c7de5..ba18387f8ed6 100644
+--- a/net/sunrpc/socklib.c
++++ b/net/sunrpc/socklib.c
+@@ -173,11 +173,17 @@ static int xprt_send_kvec(struct socket *sock, struct msghdr *msg,
+ }
+ 
+ static int xprt_send_pagedata(struct socket *sock, struct msghdr *msg,
+-			      struct xdr_buf *xdr, size_t base)
++			      struct xdr_buf *xdr, size_t base,
++			      unsigned int splice)
+ {
++	int ret;
++
+ 	iov_iter_bvec(&msg->msg_iter, ITER_SOURCE, xdr->bvec, xdr_buf_pagecount(xdr),
+ 		      xdr->page_len + xdr->page_base);
+-	return xprt_sendmsg(sock, msg, base + xdr->page_base);
++	msg->msg_flags |= splice;
++	ret = xprt_sendmsg(sock, msg, base + xdr->page_base);
++	msg->msg_flags &= ~MSG_SPLICE_PAGES;
++	return ret;
+ }
+ 
+ /* Common case:
+@@ -207,6 +213,12 @@ static int xprt_send_rm_and_kvec(struct socket *sock, struct msghdr *msg,
+  * @sock: open socket to send on
+  * @msg: socket message metadata
+  * @xdr: xdr_buf containing this request
++ *
++ * With %MSG_SPLICE_PAGES set in @msg->msg_flags, the pages of @xdr are
++ * spliced into the socket rather than copied, and the caller must leave
++ * them unchanged until the socket has sent them.  The head and the tail
++ * are always copied.
++ *
+  * @base: starting position in the buffer
+  * @marker: stream record marker field
+  * @sent_p: return the total number of bytes successfully queued for sending
+@@ -221,6 +233,7 @@ int xprt_sock_sendmsg(struct socket *sock, struct msghdr *msg,
+ {
+ 	unsigned int rmsize = marker ? sizeof(marker) : 0;
+ 	unsigned int remainder = rmsize + xdr->len - base;
++	unsigned int splice = msg->msg_flags & MSG_SPLICE_PAGES;
+ 	unsigned int want;
+ 	int err = 0;
+ 
+@@ -229,6 +242,10 @@ int xprt_sock_sendmsg(struct socket *sock, struct msghdr *msg,
+ 	if (unlikely(!sock))
+ 		return -ENOTSOCK;
+ 
++	/* The head and tail are kvecs over memory the socket may not
++	 * hold a reference to, so only the page array is spliced.
++	 */
++	msg->msg_flags &= ~MSG_SPLICE_PAGES;
+ 	msg->msg_flags |= MSG_MORE;
+ 	want = xdr->head[0].iov_len + rmsize;
+ 	if (base < want) {
+@@ -256,7 +273,7 @@ int xprt_sock_sendmsg(struct socket *sock, struct msghdr *msg,
+ 		remainder -= len;
+ 		if (remainder == 0)
+ 			msg->msg_flags &= ~MSG_MORE;
+-		err = xprt_send_pagedata(sock, msg, xdr, base);
++		err = xprt_send_pagedata(sock, msg, xdr, base, splice);
+ 		if (remainder == 0 || err != len)
+ 			goto out;
+ 		*sent_p += err;
+@@ -266,10 +283,11 @@ int xprt_sock_sendmsg(struct socket *sock, struct msghdr *msg,
+ 	}
+ 
+ 	if (base >= xdr->tail[0].iov_len)
+-		return 0;
++		goto out;
+ 	msg->msg_flags &= ~MSG_MORE;
+ 	err = xprt_send_kvec(sock, msg, &xdr->tail[0], base);
+ out:
++	msg->msg_flags |= splice;
+ 	if (err > 0) {
+ 		*sent_p += err;
+ 		err = 0;
+diff --git a/net/sunrpc/xprtsock.c b/net/sunrpc/xprtsock.c
+index f5a5136327ba..56704c850e37 100644
+--- a/net/sunrpc/xprtsock.c
++++ b/net/sunrpc/xprtsock.c
+@@ -1136,6 +1136,15 @@ static int xs_tcp_send_request(struct rpc_rqst *req)
+ 
+ 	xs_set_srcport(transport, transport->sock);
+ 
++	/* Splice the pages of a first transmission into the socket: TCP
++	 * delivers them before the server can reply, and the reply is
++	 * what releases them.  A retransmission is copied, since the
++	 * reply to the first transmission may complete the call and
++	 * release the pages while the socket still holds them.
++	 */
++	if (!RPC_WAS_SENT(req->rq_task))
++		msg.msg_flags |= MSG_SPLICE_PAGES;
++
+ 	/* Continue transmitting the packet/record. We must be careful
+ 	 * to cope with writespace callbacks arriving _after_ we have
+ 	 * called sendmsg(). */
+-- 
+2.52.0
+

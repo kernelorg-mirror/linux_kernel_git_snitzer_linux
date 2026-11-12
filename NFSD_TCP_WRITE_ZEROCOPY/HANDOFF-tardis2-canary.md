@@ -3,6 +3,102 @@
 Written 2026-11-04.  Background and every port decision:
 `CANARY-SPLIT.md` beside this file.
 
+## Next boot: after the crash of 12 November, with the client's splice
+
+**What happened.**  tardis2 crashed at about 05:10 on 12 November
+(`last -x`: the session begun at 04:08 ended in `crash`; the host was up
+again at 05:13:59), after round 98's last run (`t2-r533`, 04:43) and
+its commits, while a worktree for the client's patch was being checked
+out; nothing was running on the ports.  kdump was armed but saved
+nothing: `/var/crash` is empty and the journal is not persistent, so
+the cause is not known (as the KUnit crashes of 2 November, "KUnit
+crashes on build 506" in `TESTING.md`).  The boot is into build 522
+again, the default entry.
+
+**The boot's checks, nothing changed on the host (`bringup.sh` not
+run):**
+
+- **Port a is dead from boot:** 0 of 5 to 192.168.1.106, the neighbour
+  FAILED; it sent 23 packets and received 112 with 173 dropped,
+  `port_rx_fifo_tc0_packets` 0 on both ports.  Port b 5 of 5.  From the
+  client both ports are up at 400 Gb/s, and it pings the server's port b
+  (192.168.0.213) and not port a (192.168.1.213): the server's receiver,
+  as `PORT-DEAD-AFTER-BOOT.md`, where the case is in the table.
+  Counters, dmesg and the client's view:
+  `/var/tmp/zc-run-logs/t2-canary/port-dead/canary-522-boot3/`.
+  **Nothing was tried on the port; the host is Mike's for the power
+  reset.**
+- kdump armed (`kexec_crash_loaded` 1, `crashkernel=1G`), the kernel's
+  copy in `/var/lib/kdump/boot/`.
+- The server's module stack loaded from `updates/`: sunrpc
+  `FC78BAE8A6C2B0A92A1366A`, round 94's stack with the window.
+- **xeu did not load from `updates/`.**  The loaded `xeu` is
+  `CA0931345E46C929B11D01F` with `num_rings` 8, not Release 15
+  (`C3071685F0211EF8EBA2A7F`) with 4: the initrd rebuilt on 10 November
+  (`zc-no-nfs`) carries `xeu.ko` (`lsinitrd` finds it) and a copy of
+  `/etc/modprobe.d/xeu.conf` from before `num_rings=4` was written on
+  11 November, so a boot loads the initrd's xeu with eight rings, and
+  `settled.sh audit rest` reads BAD on each port's rings (8, want 4) and
+  ring depth, beside the items nfsd's start would set.  The boot of 10
+  November had the same and was put right by the reload of 11 November
+  on Mike's word.  Before the power reset the initrd could be rebuilt
+  so that it carries the current `xeu.conf` and the `updates/` xeu, or
+  omits xeu as it omits the NFS stack (`omit_drivers+=" xeu "` in
+  `/etc/dracut.conf.d/zc-no-nfs.conf`, then `dracut -f
+  /boot/ofp-rocky/$(uname -r)/initrd $(uname -r)`, keeping the one
+  before beside it): that is the host's boot and Mike's call; otherwise
+  the next boot needs a reload on his word before any run.
+- Root had 1.7 GB free (98%); the worktree for the client's patch (1.9
+  GB) is removed, its branch kept.  `run524.sh` refuses under 1 GB.
+
+**The client runs the splice (12 November; Mike: "get the client
+updated with the patched sunrpc").**  Round 98's wall at 72 GB/s is the
+client's copy of every payload byte into TCP.  The patch is
+`kernel-7.3/hs-469.sunrpc-splice` (`edf08ea097e5`, "SUNRPC: Splice a
+request's pages into the TCP socket", `patches/client/0002`), S's
+branch plus one commit: `xs_tcp_send_request()` asks for
+`MSG_SPLICE_PAGES` on a first transmission and `xprt_sock_sendmsg()`
+applies it to the page array only, the head and tail copied; a
+retransmission is copied, the rule of a6b31d18b02f.  Built on the
+client as B was (`/root/zc-csunrpc/C/`, srcversion
+`AB674CEE87351D814F68CEE`, exports identical to B's and stock's),
+**installed as the client's `updates/sunrpc.ko` in S's place and loaded
+by `cswap.sh stock` at 05:49 with nothing mounted; both workqueues
+strict 1; its NFS server and 16 exports back.**  The way back to S and
+the account: `CLIENT-SUNRPC.md`, first section.  The client is not
+rebooted by the server's power reset.
+
+**After the power reset:**
+
+1. Ping both ports before `bringup.sh` (`ping -c5 192.168.1.106`,
+   `ping -c5 192.168.0.106`) and add the boot to
+   `PORT-DEAD-AFTER-BOOT.md`'s table either way.
+2. `bringup.sh 32768 256`; then `/sys/module/sunrpc/srcversion` reads
+   `FC78BAE8A6C2B0A92A1366A`, and `/sys/module/xeu/srcversion` with
+   `parameters/num_rings` says whether the initrd was fixed
+   (`C3071685F0211EF8EBA2A7F`, 4) or the boot has the initrd's xeu again
+   (`CA0931345E46C929B11D01F`, 8: a reload on Mike's word, as on 11
+   November, then `port-setup.sh enp161s0f0 0`, `enp164s0f0 56`).
+   `settled.sh apply` ends in "the settled setting".
+3. On the client: `cat /sys/module/sunrpc/srcversion` reads
+   `AB674CEE87351D814F68CEE`, `affinity_strict` 1 on `rpciod` and
+   `xprtiod`.
+4. The run, from `xeu-rig/`: `CELLS=ab:none CLIPERF=1 N0=534
+   ../FLAMEGRAPH/98-two-ceilings/run524.sh`, the settled two-port load
+   with the client's profile, against `t2-r531` (71.56 GB/s; on the
+   client `__pi_memcpy` under `tcp_sendmsg_locked` 18.4% of 48 CPUs,
+   `tcp_sendmsg_locked` 2.9%, idle 28%).  Read: that memcpy chain gone
+   from `cli-perf.txt` and the idle up; the rate, which the cap of about
+   3 GB/s a connection no longer holds, so two ports may rise toward the
+   drives' 81.6 until round 98's other two walls, the rings' drops and
+   the server's memory, take over (`ring drops` and `to memory` in the
+   run's line); `cli_retrans` in `results.tsv` (the copied path); and
+   the client's `dmesg` after the run for a `WARN_ON_ONCE` in
+   `skb_splice_from_iter()` (a page not `sendpage_ok()`; none expected).
+   Three runs (534 to 536) if the first shows a change.
+5. Then round 98's order: the server's bytes a payload byte at rings of
+   128 toward 1.6, and the rings' drops at the higher rate.
+
 ## Next boot: the canary from `3bdeea5a21cc` (9 November)
 
 **Where things stand.**  tardis2 ran the held-mark kernel's sixth boot
