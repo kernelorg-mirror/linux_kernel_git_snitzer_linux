@@ -131,7 +131,28 @@ kernel warning.  On the client `__pi_memcpy` is 0.06% of the 48 CPUs
 `cli_retrans` 70 (40).  On the server the wire carries 75.73 GB/s and
 memory 141.6 GB/s, 1.89 bytes a payload byte (122.8 and 1.72 in
 `t2-r531`), about 96% of the 148: the server's memory is now the wall,
-round 98's third.  Runs 535 and 536 follow.  [run534.out](FLAMEGRAPH/98-two-ceilings/run534.out).
+round 98's third.  [run534.out](FLAMEGRAPH/98-two-ceilings/run534.out).
+
+**Runs 535 and 536 repeat it:** 74.99 and 75.26 GB/s (mean of the three
+75.11), ring drops 0, memory 141.3 and 140.4 GB/s at 1.88 and 1.86
+bytes a byte, held median 62 MiB (1.93 and 1.94 L3), a page held 0.86
+to 0.87 ms; `cli_retrans` 39 and 62 (70, 40 in `t2-r531`), and still
+no `WARN` in the client's `dmesg`.  [run535.out](FLAMEGRAPH/98-two-ceilings/run535.out),
+[run536.out](FLAMEGRAPH/98-two-ceilings/run536.out).
+
+**What comes next (proposed, for Mike).**  At 148 GB/s of memory and
+1.87 bytes a byte the ceiling is about 79 GB/s; 81 needs about 1.8
+(1.74 at 95%).  The bytes rose with the rate because the held pages
+are the rate times a page's life (round 97), so the lever is the
+stages of that life which are not fixed: the drive's queue (about 16
+MiB, needed) and the rings (8 MiB) are; the records in assembly
+(about 11 MiB, the client's pace, which the splice changed) and the
+way back (about 8 MiB, the server's own) are not.  In order: (1)
+round 94's held split again on the splice client, a measurement; (2)
+a `wsize` of 512 KiB, which halves the assembly; (3) the way back's
+time, from the drive's completion to the page back in the region,
+measured and then shortened.  Ring drops only when the rate rises.
+Realistically 77 to 78 GB/s.
 
 ## Next boot: the canary from `3bdeea5a21cc` (9 November)
 
