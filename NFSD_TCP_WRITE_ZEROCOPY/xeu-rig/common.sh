@@ -39,10 +39,20 @@ declare -A PFS=([a]="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" [b]="/hs/nvme4 /hs
 # runs against 75.0 to 75.3 off), holds 6 to 7 MiB less at the median,
 # the peak about 4,300 pages against 7,250, 1.76 bytes through memory a
 # payload byte against 1.87, and ends the budget's denials (seven a
-# drive is 56 of 64).  0 elsewhere: tardis1's kernel has no window.
+# drive is 56 of 64).  10 on tardis2 since 12 November (Mike), with
+# TWO_WSIZE: round 99's 512 KiB WRITEs at window 10 carry 77.9 to 78.1
+# GB/s against 1 MiB's 74.8 to 75.0 at 7, on 48 MiB held at the median
+# against 55, a drive empty 3.0% of the time against 6.7% (window 14 is
+# 0.5% faster on 54 MiB, 7 2% slower on 40).  0 elsewhere: tardis1's
+# kernel has no window.
+# TWO_WSIZE is the two-port client mounts' wsize (twoport.sh's WSIZE=),
+# their rsize staying 1 MiB: 512 KiB on tardis2 since 12 November
+# (Mike), a WRITE's record read off its connection in half the time.
+# The client's mount option and not nfsd's max_block_size, which caps
+# a READ too and cost reads 12% (48.5 GB/s against 55.2, t2-r593..r596).
 case $HOST in
-tardis2) TWO_RCVBUF=524288; TWO_NCONN=12; TWO_WRITES=64; TWO_WINDOW=7 ;;
-*)       TWO_RCVBUF=393216; TWO_NCONN=16; TWO_WRITES=128; TWO_WINDOW=0 ;;
+tardis2) TWO_RCVBUF=524288; TWO_NCONN=12; TWO_WRITES=64; TWO_WINDOW=10; TWO_WSIZE=524288 ;;
+*)       TWO_RCVBUF=393216; TWO_NCONN=16; TWO_WRITES=128; TWO_WINDOW=0; TWO_WSIZE=1048576 ;;
 esac
 DEFWHICH=$(tr -d ' ' <<< "$PORTS")	# a script's default ports: "ab" or "a"
 # which_ok <a|b|ab>: the ports asked for are this host's
