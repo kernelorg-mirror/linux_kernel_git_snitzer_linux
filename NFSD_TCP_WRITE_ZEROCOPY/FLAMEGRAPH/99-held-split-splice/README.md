@@ -436,3 +436,28 @@ loans admitted at 512 KiB, as there are twice the WRITEs.
   Window 7 at 1 MiB and 14 at 512 KiB are the same bytes, so a window
   counted in bytes rather than records would keep its meaning across
   wsizes.  Window 10 or 11 at 512 KiB, between the two, is not run.
+
+## 512 KiB between windows 7 and 14 (t2-r583..r588)
+
+[run583.out](run583.out): `run577.sh` with `N0=583` and `CELLS` 512 KiB
+at windows 10, 11 and 14, twice in turns (14 to see the conditions had
+not moved since t2-r578 and r581).
+
+| window | runs | GB/s | a drive empty | held median, most | to memory |
+|---|---|---|---|---|---|
+| 14 | `t2-r585`, `t2-r588` | 78.37, 78.35 | 2.8%, 2.9% | 54 MiB, 3857 and 3784 | 131.1 GB/s, 1.67 a byte |
+| 11 | `t2-r584`, `t2-r587` | 78.03, 78.12 | 3.0% | 50 MiB, 3467 and 3457 | 120 GB/s, 1.53 |
+| 10 | `t2-r583`, `t2-r586` | 78.01, 77.94 | 3.0% | 48 MiB, 3365 and 3357 | 115.6 GB/s, 1.48 |
+
+No loan denied, no ring drop, no drive stepped down; the client 49 to
+50% busy.  Window 14 is where t2-r578 and r581 had it.  **Window 10
+keeps all but 0.5% of window 14's rate on 11% fewer held pages and 12%
+less traffic to memory**; 11 is no faster than 10 and holds more.  At
+512 KiB the rate is 76.5 at window 7, 78.0 at 10 and 78.4 at 14, the
+held median 40, 48 and 54 MiB.
+
+The server can impose the wsize: nfsd's `max_block_size` is what
+FSINFO's `rtmax` and `wtmax` say, and the client takes no more.  It
+can be written only with nfsd stopped, caps reads as well, and sizes
+the server's own buffers, so it is to be run against the mount option
+before it is settled.
