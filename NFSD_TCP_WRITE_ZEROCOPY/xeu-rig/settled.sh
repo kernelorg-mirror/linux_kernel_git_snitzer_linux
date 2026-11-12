@@ -201,6 +201,14 @@ LAZYTIME=lazytime
 # when nfsd starts, so apply restarts nfs-server when the live size differs.
 # EXP_DRC_MAX_ENTRIES holds a run to another size (0: nfsd's own).
 DRC_MAX_ENTRIES=4096
+# nfsd's max_block_size: the most a READ or WRITE carries, what FSINFO
+# tells a client as rtmax and wtmax (and its preferred sizes), and what
+# nfsd sizes each thread's pages to.  Written only with nfsd stopped
+# (-EBUSY), so apply restarts nfs-server when it differs; the drop-in
+# nfs-server.service.d/zc-max-block-size.conf writes it at each start,
+# 1048576 unless /run/zc-max-block-size holds another (a run's).
+# EXP_MAX_BLOCK_SIZE holds a run to another.
+MAX_BLOCK_SIZE=1048576
 # The sunrpc module's settings that a run may change, and their values at
 # rest.  A mode changes some of them (mode_expect below).
 declare -A REST=(
@@ -535,7 +543,7 @@ audit_nfsd() {
 			printf '  --   %-34s %s\n' "nfsd $k" "not in this kernel"
 		fi
 	done
-	want "nfsd max_block_size" "$(cat /proc/fs/nfsd/max_block_size 2>/dev/null)" 1048576
+	want "nfsd max_block_size" "$(cat /proc/fs/nfsd/max_block_size 2>/dev/null)" "${EXP_MAX_BLOCK_SIZE:-$MAX_BLOCK_SIZE}"
 	local drc=${EXP_DRC_MAX_ENTRIES:-$DRC_MAX_ENTRIES}
 	if [ -e $DRC ]; then
 		want "nfsd drc_max_entries" "$(cat $DRC)" "$drc"
@@ -760,6 +768,18 @@ sizes() {
 			systemctl stop nfs-server && echo "$pm" > $PM && systemctl start nfs-server || return 1
 		else
 			echo "NFS connections are up: sunrpc pool_mode is left at $cur"
+		fi
+	fi
+	local mbs=${EXP_MAX_BLOCK_SIZE:-$MAX_BLOCK_SIZE}
+	cur=$(cat /proc/fs/nfsd/max_block_size 2>/dev/null)
+	if [ -n "$cur" ] && [ "$cur" != "$mbs" ]; then
+		if [ -n "${idle:-}" ]; then
+			echo "nfsd max_block_size $mbs (was $cur): restarting nfs-server"
+			# the drop-in zc-max-block-size.conf writes it at each start
+			if [ "$mbs" = "$MAX_BLOCK_SIZE" ]; then rm -f /run/zc-max-block-size; else echo "$mbs" > /run/zc-max-block-size; fi
+			systemctl restart nfs-server || return 1
+		else
+			echo "NFS connections are up: nfsd max_block_size is left at $cur"
 		fi
 	fi
 	if [ -e $DRC ] && { [ "$(cat $DRC)" != "$drc" ] || { [ "$drc" != 0 ] && [ "$(drc_live)" != "$drc" ]; }; }; then

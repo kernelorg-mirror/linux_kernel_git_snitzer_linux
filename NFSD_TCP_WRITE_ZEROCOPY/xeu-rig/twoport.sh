@@ -104,7 +104,12 @@
 #   RWMIX=<n>        the share of reads in a mixed run, percent (fio's 50)
 #   IODEPTH=<n> (16), SIZE=<fio size> (512M): each writer's queue and file
 #   WSIZE=<bytes>    the client's rsize and wsize (1048576); WRITES' budget is
-#                    still worked out for 1 MiB WRITEs (BUDGET_PAGES to hold it)
+#                    still worked out for 1 MiB WRITEs (BUDGET_PAGES to hold it).
+#                    WSIZE=server mounts without them: the client takes what
+#                    the server's FSINFO offers
+#   MAXBLK=<bytes>   nfsd's max_block_size for the run (settled.sh apply with
+#                    EXP_MAX_BLOCK_SIZE, which restarts nfs-server); put back
+#                    the same way after it
 #   WRITES=<n>       loan: a budget that lets <n> 1 MiB WRITEs hold loaned pages at
 #                    once, worked out as sweep.sh does from run-budget.sh's geometry
 #                    (charge per WRITE, reserve); unset or 0 copies, as settled
@@ -136,6 +141,7 @@ else
 fi
 RUNTIME=${RUNTIME:-45}; WARM=${WARM:-15}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
 RW=${RW:-write}; IODEPTH=${IODEPTH:-16}; SIZE=${SIZE:-512M}; WSIZE=${WSIZE:-1048576}
+WOPT=,rsize=$WSIZE,wsize=$WSIZE; [ "$WSIZE" = server ] && WOPT=
 YNL="$H/../tools/net/ynl/pyynl/cli.py --no-schema --spec $H/../Documentation/netlink/specs/ethtool.yaml"
 declare -A DEV=([a]=${PDEVS[a]} [b]=${PDEVS[b]}) SRV=([a]=${SRVP[a]} [b]=${SRVP[b]})
 declare -A CLI=([a]=${CLIP[a]} [b]=${CLIP[b]}) FS=([a]="${FS_A:-${PFS[a]}}" [b]="${FS_B:-${PFS[b]}}")
@@ -154,6 +160,10 @@ client_free || exit 1	# the client is shared with the other server
 mkdir -p $OUT; cd $OUT || exit 1
 # The host has to be at the settled setting before the run changes anything.
 audit_or_die rest audit-start.txt
+if [ -n "${MAXBLK:-}" ]; then
+	EXP_MAX_BLOCK_SIZE=$MAXBLK "$RIG/settled.sh" apply > maxblk-apply.txt 2>&1 || { echo "max_block_size $MAXBLK not applied:"; grep -E 'BAD|FAILED' maxblk-apply.txt; "$RIG/settled.sh" apply > /dev/null 2>&1; exit 1; }
+	echo "nfsd max_block_size $(cat /proc/fs/nfsd/max_block_size) for this run" | tee -a maxblk-apply.txt
+fi
 sleep ${REST:-30}	# 20 s of idle gives a drive its fast region back
 fifo() { ethtool -S $1 | awk '/port_rx_fifo_tc[0-9]_drop_packets/{s+=$2} END{print s+0}'; }
 ringdrop() { ethtool -S $1 | awk '/rx_hw_tail_drop_packets/{s+=$2} END{print s+0}'; }
@@ -218,6 +228,7 @@ cleanup() {
 	# An open of a port put its interrupts back on CPUs 0-7, and NFSD_CPUS=
 	# moved nfsd: the settled CPU layout back, and the host as the run left it.
 	"$RIG/settled.sh" place $PORTS
+	[ -n "${MAXBLK:-}" ] && "$RIG/settled.sh" apply > $OUT/maxblk-back.txt 2>&1	# max_block_size back, nfs-server restarted
 	sleep 2
 	"$RIG/settled.sh" audit rest > $OUT/audit-end.txt 2>&1 || { echo "the host is not at the settled setting after the run:"; grep -E 'BAD|FAILED' $OUT/audit-end.txt; }
 	puppet_resume	# the client's puppet agent on again, if this run turned it off
@@ -267,7 +278,7 @@ cl "for w in rpciod xprtiod; do d=/sys/devices/virtual/workqueue/\$w; [ -e \$d/a
 	{ [ $CLI_STRICT = 0 ] || { echo "the client's rpciod and xprtiod not made strict: is its sunrpc.ko the one in updates/ (WQ_SYSFS)? CLI_STRICT=0 runs without"; exit 1; }; }
 [ $CLI_IRQB = stop ] && [ "${SAVE[cirqb]}" = active ] && { cl "systemctl stop irqbalance" || { echo "the client's irqbalance not stopped"; exit 1; }; }
 echo "client: writers pinned $PIN, workqueue scope $(cl "cat $WQS") (was ${SAVE[cscope]}), rpciod and xprtiod strict $(cl "cat /sys/devices/virtual/workqueue/{rpciod,xprtiod}/affinity_strict 2>/dev/null | paste -sd/" || echo -) (sunrpc $(cl "cat /sys/module/sunrpc/srcversion")), irqbalance $(cl "systemctl is-active irqbalance") (was ${SAVE[cirqb]})" | tee -a geometry.txt
-echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) want_eighths $(cat $SP/svc_tcp_rx_want_eighths 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE wsize $WSIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read) client pin $PIN" | tee -a geometry.txt
+echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) want_eighths $(cat $SP/svc_tcp_rx_want_eighths 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE wsize $WSIZE max_block_size $(cat /proc/fs/nfsd/max_block_size) io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read) client pin $PIN" | tee -a geometry.txt
 
 for p in $PORTS; do
 	d=${DEV[$p]}
@@ -319,7 +330,7 @@ for p in $PORTS; do
 		fstrim $fs
 		mkdir -p $fs/zcbudget; chmod 777 $fs/zcbudget
 		exportfs -o rw,${EXPORT_SYNC:-sync},no_root_squash,insecure,no_subtree_check,fsid=${FSID[$p]}$i "${CLI[$p]}:$fs/zcbudget" || exit 1
-		cl "mkdir -p /mnt/rxr-$p$i && mount -t nfs -o vers=3,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=$WSIZE,wsize=$WSIZE ${SRV[$p]}:$fs/zcbudget /mnt/rxr-$p$i" || { echo "$p: mount of $fs failed"; exit 1; }
+		cl "mkdir -p /mnt/rxr-$p$i && mount -t nfs -o vers=3,nolock,proto=tcp,sec=sys,nconnect=$NCONN$WOPT ${SRV[$p]}:$fs/zcbudget /mnt/rxr-$p$i" || { echo "$p: mount of $fs failed"; exit 1; }
 	done
 	NFS[$p]=$i
 	echo "$p: $i filesystems: ${FS[$p]}" | tee -a geometry.txt
@@ -414,7 +425,7 @@ fi
 [ -n "${NFSD_CPUS:-}" ] && { for t in $(pgrep -x nfsd); do taskset -cp $NFSD_CPUS $t > /dev/null 2>&1; done; echo "nfsd on CPUs $NFSD_CPUS for this run" | tee -a geometry.txt; }
 # Just before the load: the live state, all of it, against the setting this
 # run is at; anything the run set on purpose is held to what it set.
-EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_TARGET_WINDOW=$TARGET_WINDOW EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_WANT_EIGHTHS=${WANT_EIGHTHS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-} EXP_GRO_MAX=${GRO_MAX:-} EXP_DEFER=${DEFER:-}"
+EXPENV="EXP_BUDGET=$BUDGET EXP_BUDGET_RESERVE=$RESERVE EXP_TARGET_WINDOW=$TARGET_WINDOW EXP_RCVBUF=${RCVBUF:-} EXP_LINGER=${LINGER:-} EXP_LOWAT=${LOWAT:-} EXP_SPARE=${SPARE:-} EXP_COPY_THREADS=${THREADS:-} EXP_KEEP=${KEEP:-} EXP_WANT_EIGHTHS=${WANT_EIGHTHS:-} EXP_NFSD_CPUS=${NFSD_CPUS:-} EXP_REFILL=${REFILL:-} EXP_SKB_DEFER_MAX=${SKB_DEFER_MAX:-} EXP_SRV_QDISC=${SRV_QDISC:-} EXP_NOTRACK=${NOTRACK:-} EXP_GRO_MAX=${GRO_MAX:-} EXP_DEFER=${DEFER:-} EXP_MAX_BLOCK_SIZE=${MAXBLK:-}"
 for p in $PORTS; do [ -n "${ENTRIES:-}" ] && EXPENV="$EXPENV EXP_ENTRIES_$(tr a-z A-Z <<< $p)=$ENTRIES"; done
 [ -n "${RINGS:-}${TXIRQ_A:-}${TXIRQ_B:-}${XPS:-}" ] && EXPENV="$EXPENV EXP_RINGS=${RINGS:-} EXP_LAYOUT=RINGS=${RINGS:-4},RX_RINGS=${RX_RINGS:-},TXIRQ_A=${TXIRQ_A:-},TXIRQ_B=${TXIRQ_B:-},XPS=${XPS:-}"
 # the client's qdisc is set only on the ports of this run
