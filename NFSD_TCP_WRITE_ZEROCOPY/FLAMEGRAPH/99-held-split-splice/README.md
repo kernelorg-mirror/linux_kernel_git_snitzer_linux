@@ -215,3 +215,44 @@ The cost is about 290 duplicate segments of 7.7 KB in 40 s, some 2 MB
 against about 3 TB carried: nothing in rate or memory.  `ss` without
 `-o` prints no timers, so the timers row the reader has is empty; the
 counters above do not need it.
+
+## Settled: window 7, budget 64 (Mike, 12 November)
+
+`common.sh`'s `TWO_WINDOW=7` beside `TWO_WRITES=64`; `twoport.sh` sets
+it for a two-port loan run (`TARGET_WINDOW=` gives another; not
+`WINDOW=`, which GNU screen exports as its window's number, and which
+held the first run of the A/B below, `t2-r553`, at 0 until it was
+stopped) and puts 0 back; `settled.sh` holds 0 at rest and audits a
+run's window.
+
+## Round 97's mark again, at window 7 (t2-r554 to r557)
+
+Round 97's [run510.sh](../97-want-mark/run510.sh) unchanged on the new
+setting, marks 6, 2, 6, 2, with round 96's `rttsplit.bt` beside each
+(which costs about 1% of the rate); [run554.out](run554.out).  All at
+window 7, budget 64, no loan denied, no drive stepped down, no new
+kernel warning; `t2-r554` placed 10 of its 12 flows and its rings
+dropped 568 frames, the others 12/12 and 0.
+
+| mark | GB/s | read's ACK after arrival | first unread byte's wait | at the window's wall | nfsd k cycles a WRITE | rings | held median | peak | client RTT | retransmits |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 6 (settled) | 74.30, 73.92 | 33.4, 33.3 us | 30.5, 30.6 us | 11.1% | 383, 384 | 244, 246 | 55 MiB | 4,288, 4,285 | 65, 66 us | 900, 246 |
+| 2 | 74.14, 74.28 | 16.7, 16.8 | 11.0, 10.9 | 3.9% | 451, 457 (+18%) | 254, 254 | 55 | 4,376, 4,367 | 66, 68 | 299, 233 |
+
+**Mark 2 does what round 97 found it does, and buys nothing:** the
+read's ACK comes in half the time and a third of the segments meet the
+window's wall, but the rate is the same (74.21 against 74.11, within
+the runs' spread), the client's round trip the same (65 to 68 us; round
+97 had 78 at mark 6), the held pages the same, and nfsd spends 18% more
+cycles a WRITE.  At window 7 the round trip is not what sets the rate,
+so the mark stays 6.
+
+## What this round closes
+
+With the client splicing, the rate at the settled setting (window 7,
+budget 64, mark 6) is 75 GB/s untraced, with the server's memory at
+132 of 148 GB/s and 1.76 bytes a payload byte; neither memory, the
+round trip, the budget nor the mark holds it.  The drives do: each
+writes 9.3 to 9.5 GB/s of its 10.2 alone, with two WRITEs queued at it
+at window 7.
+
