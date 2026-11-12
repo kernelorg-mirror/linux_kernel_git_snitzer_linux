@@ -1,0 +1,9 @@
+13:41:39 t2-r551 window 0 budget 64 | total 75.14 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0 | client retransmits in the window: 71
+    cli: RetransSegs 56, TCPLossProbes 1476, TCPLossProbeRecovery 3, TCPTimeouts 1, TCPFastRetrans 45, TCPLostRetransmit 4, TCPDSACKRecv 2, TCPSpuriousRtxHostQueues 1, TCPRcvCoalesce 24309, TCPDelivered 139477631
+    srv: TCPDSACKOldSent 2, TCPKeepAlive 2, TCPWantZeroWindowAdv 26, TCPOFOQueue 40, TCPRcvCoalesce 8855632, TCPDelivered 1175240
+    client ss: 40 samples; timers ; connection-samples with backoff 0, probes 0; most retrans on one connection 362
+13:46:41 t2-r552 window 7 budget 64 | total 74.88 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0 | client retransmits in the window: 292
+    cli: RetransSegs 330, TCPLossProbes 2555, TCPLossProbeRecovery 3, TCPFastRetrans 33, TCPLostRetransmit 3, TCPDSACKRecv 289, TCPDSACKUndo 7, TCPSpuriousRtxHostQueues 2, TCPRcvCoalesce 21523, TCPDelivered 135968088
+    srv: TCPDSACKOldSent 289, TCPToZeroWindowAdv 1, TCPFromZeroWindowAdv 1, TCPWantZeroWindowAdv 375, TCPOFOQueue 57, TCPRcvCoalesce 8746481, TCPDelivered 1146770
+    client ss: 40 samples; timers ; connection-samples with backoff 0, probes 0; most retrans on one connection 572
+13:46:44 after: settled.sh audit rest: the settled setting

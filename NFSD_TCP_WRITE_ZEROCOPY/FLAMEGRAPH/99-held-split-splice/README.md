@@ -173,6 +173,45 @@ a run against 40 to 70, with nothing dropped anywhere.
   window is settled; at 7 the rate is not the round trip's, so mark 2
   is expected to gain nothing and to cost nfsd's cycles.
 - **The retransmits:** whether they are TCP's probes on paused
-  connections (`ss`'s `probes` and the retransmit timer on the client
-  during a run) is to be shown before the window is settled, since
-  they are its one visible cost.
+  connections is to be shown before the window is settled, since they
+  are its one visible cost (below).
+
+## What the retransmits are (t2-r551, r552)
+
+[retx.sh](retx.sh): one settled two-port run at window 0 and one at 7,
+budget 64, and over twoport's 40 s window every TCP counter of both
+hosts (`/proc/net/netstat`, `/proc/net/snmp`) and the client's `ss
+-tin` of its connections every second; [retx-read.py](retx-read.py),
+[retx551.out](retx551.out).  Both clean: 75.14 and 74.88 GB/s, 0 ring
+drops, no drive stepped down, no new kernel warning.  (tardis2's clock
+was put right by NTP between `t2-r550` and these runs: their times
+read 13:41 and 13:46, about six and a quarter hours after the earlier
+ones.)
+
+| over the window | window 0 (t2-r551) | window 7 (t2-r552) |
+|---|---|---|
+| client `RetransSegs` | 56 | 330 |
+| client tail loss probes (`TCPLossProbes`) | 1,476 | 2,555 |
+| client fast retransmits | 45 | 33 |
+| client RTOs (`TCPTimeouts`) | 1 | 0 |
+| **client DSACKs received / server DSACKs sent** | **2 / 2** | **289 / 289** |
+| server `TCPWantZeroWindowAdv` | 26 | 375 |
+| server windows advertised to zero, and from | 0, 0 | 1, 1 |
+| connection-samples in backoff or with zero-window probes (ss) | 0 | 0 |
+
+**They are spurious tail loss probes.**  At window 7 the client sends
+about 1,080 more tail loss probes, and 289 of its 330 retransmitted
+segments come back DSACKed by the server (`TCPDSACKOldSent` 289): data
+the server already had.  Nothing was lost: no RTO, no backoff, no zero
+window probing, and the server put a window to zero once.  The
+mechanism is the one round 96 measured from the other side: 85% of
+the server's ACKs are sent by nfsd's read, and a connection paused for
+its export is not read, so its ACKs wait, the client's probe timeout
+(about two round trips) fires, and it sends its last segment again.
+The server's `TCPWantZeroWindowAdv` (375 against 26) is the same pause
+seen from the receive buffer.
+
+The cost is about 290 duplicate segments of 7.7 KB in 40 s, some 2 MB
+against about 3 TB carried: nothing in rate or memory.  `ss` without
+`-o` prints no timers, so the timers row the reader has is empty; the
+counters above do not need it.
