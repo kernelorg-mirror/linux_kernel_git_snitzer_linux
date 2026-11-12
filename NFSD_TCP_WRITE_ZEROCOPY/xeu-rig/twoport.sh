@@ -103,6 +103,8 @@
 #                    writes every file whole once (8 MiB direct writes) and rests 20 s
 #   RWMIX=<n>        the share of reads in a mixed run, percent (fio's 50)
 #   IODEPTH=<n> (16), SIZE=<fio size> (512M): each writer's queue and file
+#   WSIZE=<bytes>    the client's rsize and wsize (1048576); WRITES' budget is
+#                    still worked out for 1 MiB WRITEs (BUDGET_PAGES to hold it)
 #   WRITES=<n>       loan: a budget that lets <n> 1 MiB WRITEs hold loaned pages at
 #                    once, worked out as sweep.sh does from run-budget.sh's geometry
 #                    (charge per WRITE, reserve); unset or 0 copies, as settled
@@ -133,7 +135,7 @@ else
 	MODE_SET=one
 fi
 RUNTIME=${RUNTIME:-45}; WARM=${WARM:-15}; JOBS=${JOBS:-16}; BS=${BS:-8M}; NCONN=${NCONN:-16}
-RW=${RW:-write}; IODEPTH=${IODEPTH:-16}; SIZE=${SIZE:-512M}
+RW=${RW:-write}; IODEPTH=${IODEPTH:-16}; SIZE=${SIZE:-512M}; WSIZE=${WSIZE:-1048576}
 YNL="$H/../tools/net/ynl/pyynl/cli.py --no-schema --spec $H/../Documentation/netlink/specs/ethtool.yaml"
 declare -A DEV=([a]=${PDEVS[a]} [b]=${PDEVS[b]}) SRV=([a]=${SRVP[a]} [b]=${SRVP[b]})
 declare -A CLI=([a]=${CLIP[a]} [b]=${CLIP[b]}) FS=([a]="${FS_A:-${PFS[a]}}" [b]="${FS_B:-${PFS[b]}}")
@@ -265,7 +267,7 @@ cl "for w in rpciod xprtiod; do d=/sys/devices/virtual/workqueue/\$w; [ -e \$d/a
 	{ [ $CLI_STRICT = 0 ] || { echo "the client's rpciod and xprtiod not made strict: is its sunrpc.ko the one in updates/ (WQ_SYSFS)? CLI_STRICT=0 runs without"; exit 1; }; }
 [ $CLI_IRQB = stop ] && [ "${SAVE[cirqb]}" = active ] && { cl "systemctl stop irqbalance" || { echo "the client's irqbalance not stopped"; exit 1; }; }
 echo "client: writers pinned $PIN, workqueue scope $(cl "cat $WQS") (was ${SAVE[cscope]}), rpciod and xprtiod strict $(cl "cat /sys/devices/virtual/workqueue/{rpciod,xprtiod}/affinity_strict 2>/dev/null | paste -sd/" || echo -) (sunrpc $(cl "cat /sys/module/sunrpc/srcversion")), irqbalance $(cl "systemctl is-active irqbalance") (was ${SAVE[cirqb]})" | tee -a geometry.txt
-echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) want_eighths $(cat $SP/svc_tcp_rx_want_eighths 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read) client pin $PIN" | tee -a geometry.txt
+echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) want_eighths $(cat $SP/svc_tcp_rx_want_eighths 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE wsize $WSIZE io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read) client pin $PIN" | tee -a geometry.txt
 
 for p in $PORTS; do
 	d=${DEV[$p]}
@@ -317,7 +319,7 @@ for p in $PORTS; do
 		fstrim $fs
 		mkdir -p $fs/zcbudget; chmod 777 $fs/zcbudget
 		exportfs -o rw,${EXPORT_SYNC:-sync},no_root_squash,insecure,no_subtree_check,fsid=${FSID[$p]}$i "${CLI[$p]}:$fs/zcbudget" || exit 1
-		cl "mkdir -p /mnt/rxr-$p$i && mount -t nfs -o vers=3,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=1048576,wsize=1048576 ${SRV[$p]}:$fs/zcbudget /mnt/rxr-$p$i" || { echo "$p: mount of $fs failed"; exit 1; }
+		cl "mkdir -p /mnt/rxr-$p$i && mount -t nfs -o vers=3,nolock,proto=tcp,sec=sys,nconnect=$NCONN,rsize=$WSIZE,wsize=$WSIZE ${SRV[$p]}:$fs/zcbudget /mnt/rxr-$p$i" || { echo "$p: mount of $fs failed"; exit 1; }
 	done
 	NFS[$p]=$i
 	echo "$p: $i filesystems: ${FS[$p]}" | tee -a geometry.txt
