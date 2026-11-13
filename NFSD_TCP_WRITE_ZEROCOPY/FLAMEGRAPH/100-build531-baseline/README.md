@@ -154,8 +154,11 @@ from the profile, not measured):
 
 Together that is about 1.5 to 2k of the 5.5k, about 1% of nfsd's
 cycles.  The cold walk, prune and checksum stay: they are what a
-cache that turns over every 27 ms costs.  Going below that means
-caching less, by not caching WRITE or by a cache bounded by time
-rather than by entries.  That decides what a retransmitted WRITE
-replays, so it is a design question for Mike, not an optimization.
-Neither changes the rate: the drives hold it.
+cache that turns over every 27 ms costs.  Neither changes the rate:
+the drives hold it.
+
+**Decided (Mike, 13 November): the DRC is not to be weakened because
+this workload never hits it.**  What it caches, how long and how many
+entries stay as they are; caching less (no WRITE, or a bound by time)
+is off the table.  Only changes that keep its behaviour exactly, as
+the three above, are candidates.
