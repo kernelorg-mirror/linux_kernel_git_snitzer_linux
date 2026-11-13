@@ -162,3 +162,34 @@ this workload never hits it.**  What it caches, how long and how many
 entries stay as they are; caching less (no WRITE, or a bound by time)
 is off the table.  Only changes that keep its behaviour exactly, as
 the three above, are candidates.
+
+## The three DRC changes, as commits (13 November)
+
+On Mike's word, with the inline buffer at 144 bytes, at the tip of
+`kernel-7.3/canary` (after his rebase of that afternoon, which this
+round's docs commits were cherry-picked back onto):
+
+- `NFSD: Keep a short cached reply in its DRC entry` (`5d45831853ecb`):
+  `c_inline[36]` in `struct nfsd_cacherep`, 136 bytes to 280; a reply
+  of up to 144 bytes, a WRITE's (136 at most), is kept there.  An rtc
+  attempt allocates its reply buffer at lookup only when its
+  procedure's `pc_xdrressize` does not fit.
+- `NFSD: Reuse a pruned DRC entry for the next call` (`ba4993950dab0`):
+  the lookup searches with the call's key on the stack and, on a miss,
+  takes the first entry the prune evicted; it allocates only when
+  nothing was pruned, with the lock dropped and the bucket searched
+  again.
+- `NFSD: Count the DRC's entries apart from its reply buffers`
+  (`2615638a3c798`): "mem usage" is the entries times their size plus
+  the per-CPU counter, which now counts only reply buffers allocated
+  apart.
+- `nfsd: follow the DRC's inline reply and reused entry in the rtc
+  KUnit` (`67322116a5f09`, KUnit tests).
+
+Each built as `nfsd.ko` against build 531 (`build-nfsd.sh`, the rtc
+suite linked in), no warning; checkpatch clean.  Not loaded, and the
+KUnit suite not run (tardis2's KUnit crashes, `TESTING.md`).  To try
+them, an `nfsd.ko` from the tip with `swap-sunrpc.sh NFSD_KO=`, which
+drops every client's connections (Mike's to do), then round 100's
+profile again: `nfsd_cache_lookup` and `nfsd_cache_update` against
+their 4,331 and 662 cycles a WRITE in `t2-r602`.
