@@ -4102,6 +4102,11 @@ install -m 644 $_kmap_basedir/kernel-map.json $_kmap_destbase/kernel-map-%{KVERR
 # a far more sophisticated hardlink implementation.
 # https://github.com/projectatomic/rpm-ostree/commit/58a79056a889be8814aa51f507b2c7a4dccee526
 #
+# One hardlink run over every devel tree: running it once per file of the new
+# tree (some 18,000 files, each compared against every installed tree) made
+# this the slowest scriptlet of a kernel install. -f keeps it to files of the
+# same name, as the per-file run did by path.
+#
 # The deletion of *.hardlink-temporary files is a temporary workaround
 # for this bug in the hardlink binary (fixed in util-linux 2.38):
 # https://github.com/util-linux/util-linux/issues/1602
@@ -4121,18 +4126,29 @@ then\
 fi\
 if [ "$HARDLINK" != "no" -a -x /usr/bin/hardlink -a ! -e /run/ostree-booted ] \
 then\
-    (cd /usr/src/kernels/%{KVERREL}%{?1:+%{1}} &&\
-     /usr/bin/find . -type f | while read f; do\
-       hardlink -c /usr/src/kernels/*%{?dist}.*/$f $f > /dev/null\
-     done;\
-     /usr/bin/find /usr/src/kernels -type f -name '*.hardlink-temporary' -delete\
-    )\
+    hardlink -c -f /usr/src/kernels/*%{?dist}.* > /dev/null 2>&1 || :\
+    /usr/bin/find /usr/src/kernels -type f -name '*.hardlink-temporary' -delete\
 fi\
 %endif\
 %if %{with_cross}\
     echo "Building scripts and resolve_btfids"\
     env --unset=ARCH make -C /usr/src/kernels/%{KVERREL}%{?1:+%{1}} prepare_after_cross\
 %endif\
+%{nil}
+
+#
+# depmod for a %%postun of a kernel*-modules* package, run only while the
+# kernel's modules-core is still installed. When the whole kernel is erased,
+# as when an installonly limit retires it, modules-core may already be gone;
+# depmod would then report its missing modules.order and modules, and write
+# back the modules.* files rpm just removed, leaving a /lib/modules/<kver>
+# that no package owns.
+#	%%kernel_postun_depmod [<subpackage>]
+#
+%define kernel_postun_depmod() \
+if [ -f /lib/modules/%{KVERREL}%{?1:+%{1}}/modules.order ]; then\
+    /sbin/depmod -a %{KVERREL}%{?1:+%{1}}\
+fi\
 %{nil}
 
 #
@@ -4145,7 +4161,7 @@ fi\
 /sbin/depmod -a %{KVERREL}%{?1:+%{1}}\
 %{nil}\
 %{expand:%%postun %{?1:%{1}-}modules-extra}\
-/sbin/depmod -a %{KVERREL}%{?1:+%{1}}\
+%{kernel_postun_depmod %{?1}}\
 %{nil}
 
 #
@@ -4158,7 +4174,7 @@ fi\
 /sbin/depmod -a %{KVERREL}%{?1:+%{1}}\
 %{nil}\
 %{expand:%%postun %{?1:%{1}-}modules-internal}\
-/sbin/depmod -a %{KVERREL}%{?1:+%{1}}\
+%{kernel_postun_depmod %{?1}}\
 %{nil}
 
 #
@@ -4171,7 +4187,7 @@ fi\
 /sbin/depmod -a %{KVERREL}%{?1:+%{1}}\
 %{nil}\
 %{expand:%%postun %{?1:%{1}-}modules-partner}\
-/sbin/depmod -a %{KVERREL}%{?1:+%{1}}\
+%{kernel_postun_depmod %{?1}}\
 %{nil}
 
 #
@@ -4197,7 +4213,7 @@ if [ -f /lib/modules/%{KVERREL}%{?1:+%{1}}/vmlinuz ] &&\
 fi\
 %{nil}\
 %{expand:%%postun %{?1:%{1}-}modules}\
-/sbin/depmod -a %{KVERREL}%{?1:+%{1}}\
+%{kernel_postun_depmod %{?1}}\
 %{nil}\
 %{expand:%%posttrans %{?1:%{1}-}modules}\
 if [ -f %{_localstatedir}/lib/rpm-state/%{name}/need_to_run_dracut_%{KVERREL}%{?1:+%{1}} ]; then\
