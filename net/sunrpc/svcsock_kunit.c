@@ -7477,8 +7477,8 @@ static void svcsock_rx_region_send_map_test(struct kunit *test)
 }
 
 /*
- * K10.  Every connection waiter is replayed when a reply returns, and each
- * that fits is admitted; a READ parking on a dead connection is dropped at
+ * K10.  The connection waiters that fit are replayed when a reply returns,
+ * and each is admitted; a READ parking on a dead connection is dropped at
  * once.
  */
 static void svcsock_rx_region_conn_wake_test(struct kunit *test)
@@ -7627,13 +7627,16 @@ static void svcsock_rx_region_shared_budget_test(struct kunit *test)
  */
 static void svcsock_rx_region_park_secure_test(struct kunit *test)
 {
-	struct svcsock_region *r = svcsock_region_alloc(test, 8, 20);
+	struct svcsock_region *r = svcsock_region_alloc(test, 8, 3);
 	struct svc_rqst *rqstp = r->fx->rqstp;
 	struct svc_sock *svsk = r->fx->svsk;
 	struct svc_deferred_req *dr;
 	struct ubuf_info *ua, *uc;
 
-	/* Share 4: A (2) and C (2) fill it; B (3) waits on the connection. */
+	/*
+	 * Share 4, credit 3: A (2) and C (1) hold all the credit; B (3)
+	 * waits on the connection.
+	 */
 	svcsock_rx_conn_share(test, "4");
 	set_bit(RQ_SECURE, &rqstp->rq_flags);
 	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 2), 0);
@@ -7642,10 +7645,14 @@ static void svcsock_rx_region_park_secure_test(struct kunit *test)
 	clear_bit(RQ_DROPME, &rqstp->rq_flags);
 	/* Later requests come in on a thread without the bit. */
 	clear_bit(RQ_SECURE, &rqstp->rq_flags);
-	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 2), 0);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 1), 0);
 	uc = svcsock_region_send(r, 1);
 
-	/* A returns: B is replayed, still marked secure, and parks again. */
+	/*
+	 * A returns: B's share is reserved (1 + 3 <= 4) and B is replayed,
+	 * still marked secure; 2 of its 3 credit are free, so it parks again,
+	 * on the credit.
+	 */
 	ua->ops->complete(NULL, ua, true);
 	svcsock_region_settle();
 	dr = svcsock_region_replay(test, r);
@@ -7655,10 +7662,10 @@ static void svcsock_rx_region_park_secure_test(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, rqstp->rq_deferred);
 	KUNIT_EXPECT_FALSE(test, test_bit(RQ_SECURE, &rqstp->rq_flags));
 	KUNIT_EXPECT_TRUE(test, dr->secure);
-	KUNIT_EXPECT_EQ(test,
-			list_count_nodes(&svsk->sk_rx_region_waiters), 1);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_rx_region_waiters));
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_waiters"), 1);
 
-	/* C returns: the second replay is admitted. */
+	/* C returns: B is granted, and the second replay is admitted. */
 	uc->ops->complete(NULL, uc, true);
 	svcsock_region_settle();
 	KUNIT_ASSERT_PTR_EQ(test, svcsock_region_replay(test, r), dr);
@@ -9422,8 +9429,9 @@ static void svcsock_rx_region_share_conns_test(struct kunit *test)
 /*
  * S3.  Largest and small READs on one connection (B = 16, 2R = 10): at most
  * two largest READs are in flight, smaller ones fill the connection to B,
- * a largest READ counts the smaller ones' pages against 2R, and every
- * waiter is admitted once replies return.
+ * a largest READ counts the smaller ones' pages against 2R, a small waiter
+ * that fits is admitted while the largest waits, a waiter that does not
+ * fit is not replayed, and every waiter is admitted once replies return.
  */
 static void svcsock_rx_region_share_mixed_test(struct kunit *test)
 {
@@ -9431,7 +9439,6 @@ static void svcsock_rx_region_share_mixed_test(struct kunit *test)
 	struct svc_sock *svsk = r->fx->svsk;
 	struct ubuf_info *max1, *max2, *s4, *s2, *s1 = NULL, *max3 = NULL;
 	struct svc_deferred_req *dr;
-	unsigned int i;
 
 	max1 = svcsock_region_admit_send(test, r, 5);
 	max2 = svcsock_region_admit_send(test, r, 5);
@@ -9444,18 +9451,16 @@ static void svcsock_rx_region_share_mixed_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test,
 			list_count_nodes(&svsk->sk_rx_region_waiters), 2);
 
-	/* Both largest replies return: 6 held, both waiters replay. */
+	/*
+	 * Both largest replies return: 6 held.  6 + 5 > 2R: the largest
+	 * waits and is not replayed; 6 + 1 <= B: the small one is reserved
+	 * and replayed.
+	 */
 	svcsock_region_complete(max1);
 	svcsock_region_complete(max2);
-	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 6);
-	KUNIT_EXPECT_EQ(test, list_count_nodes(&svsk->sk_xprt.xpt_deferred), 2);
-	for (i = 0; i < 2; i++) {
+	KUNIT_EXPECT_EQ(test, list_count_nodes(&svsk->sk_xprt.xpt_deferred), 1);
+	if (!list_empty(&svsk->sk_xprt.xpt_deferred)) {
 		dr = svcsock_region_replay(test, r);
-		if (dr->rx_region.count == 5) {
-			/* 6 + 5 > 2R: it waits again. */
-			svcsock_region_conn_waits(test, r, 5);
-			continue;
-		}
 		KUNIT_EXPECT_EQ(test, dr->rx_region.count, 1U);
 		s1 = svcsock_region_admit_send(test, r, 1);
 		svcsock_region_free_dr(r, dr);
@@ -9466,6 +9471,7 @@ static void svcsock_rx_region_share_mixed_test(struct kunit *test)
 
 	/* The 4-page reply returns: 3 + 5 <= 2R, the largest is admitted. */
 	svcsock_region_complete(s4);
+	KUNIT_EXPECT_EQ(test, list_count_nodes(&svsk->sk_xprt.xpt_deferred), 1);
 	if (!list_empty(&svsk->sk_xprt.xpt_deferred)) {
 		dr = svcsock_region_replay(test, r);
 		KUNIT_EXPECT_EQ(test, dr->rx_region.count, 5U);
@@ -9588,6 +9594,232 @@ static void svcsock_rx_region_share_manual_test(struct kunit *test)
 	}
 	KUNIT_EXPECT_FALSE(test, svsk->sk_rx_region_stalled);
 	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 16U);
+}
+
+/*
+ * S7.  A release reserves the share for the oldest connection waiters
+ * that fit and replays only those, each admitted on its reservation: a
+ * waiter that cannot fit yet is not replayed, since a replay that parks
+ * again is a whole dispatch for nothing.  A reserved waiter dropped
+ * before its replay returns its reservation, and every page and share
+ * returns once.
+ */
+static void svcsock_rx_region_share_reserve_test(struct kunit *test)
+{
+	/* Credit to spare: only the connection share holds READs back. */
+	struct svcsock_region *r = svcsock_region_alloc(test, 11, 20);
+	struct svc_sock *svsk = r->fx->svsk;
+	struct svc_rqst *rqstp = r->fx->rqstp;
+	struct svc_deferred_req *dr;
+	long unconfined = svcsock_region_stat(test, r, "read_unconfined");
+	struct ubuf_info *b;
+	unsigned int i;
+
+	svcsock_rx_conn_share(test, "10");
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_region_read(rqstp, 7), 0);
+	for (i = 0; i < 3; i++)
+		svcsock_region_conn_waits(test, r, 4);
+	KUNIT_EXPECT_EQ(test,
+			list_count_nodes(&svsk->sk_rx_region_waiters), 3);
+
+	/* A returns: B and C fit (4 + 4 <= 10), D does not and stays. */
+	svc_tcp_rx_region_unconfine(rqstp);
+	KUNIT_EXPECT_EQ(test, list_count_nodes(&svsk->sk_xprt.xpt_deferred), 2);
+	KUNIT_EXPECT_EQ(test,
+			list_count_nodes(&svsk->sk_rx_region_waiters), 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 8);
+
+	/* B and C are admitted on their reservations, not on new ones. */
+	dr = svcsock_region_replay(test, r);
+	b = svcsock_region_admit_send(test, r, 4);
+	svcsock_region_free_dr(r, dr);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 8);
+	dr = svcsock_region_replay(test, r);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_read(rqstp, 4), 0);
+	KUNIT_EXPECT_TRUE(test, svc_rqst_rx_region_held(rqstp));
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 8);
+
+	/* C returns unsent: D now fits, is reserved, and is replayed. */
+	svc_tcp_rx_region_unconfine(rqstp);
+	svcsock_region_free_dr(r, dr);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_rx_region_waiters));
+	KUNIT_EXPECT_EQ(test, list_count_nodes(&svsk->sk_xprt.xpt_deferred), 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 8);
+
+	/* D is dropped before it runs: its reservation goes back. */
+	dr = svcsock_region_replay(test, r);
+	svcsock_region_free_dr(r, dr);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 4);
+
+	svcsock_region_complete(b);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_xprt.xpt_deferred));
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_unconfined"),
+			unconfined);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 11U);
+}
+
+/*
+ * S8.  A reserved waiter whose replay cannot be confined (here a WRITE
+ * payload in its pages, "arg-pages") is served unconfined and returns
+ * its reservation once.
+ */
+static void svcsock_rx_region_share_reserve_unconfined_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 11, 20);
+	struct svc_sock *svsk = r->fx->svsk;
+	struct svc_rqst *rqstp = r->fx->rqstp;
+	long unconfined = svcsock_region_stat(test, r, "read_unconfined");
+	struct svc_deferred_req *dr;
+	struct ubuf_info *a;
+
+	svcsock_rx_conn_share(test, "10");
+	a = svcsock_region_admit_send(test, r, 7);
+	svcsock_region_conn_waits(test, r, 4);
+
+	/* A returns: B is reserved (0 + 4 <= 10) and replayed. */
+	svcsock_region_complete(a);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 4);
+	KUNIT_EXPECT_EQ(test, list_count_nodes(&svsk->sk_xprt.xpt_deferred), 1);
+
+	/* B's replay is not confinable: it gives its 4 pages back. */
+	dr = svcsock_region_replay(test, r);
+	rqstp->rq_arg.page_len = PAGE_SIZE;
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_read(rqstp, 4), 0);
+	rqstp->rq_arg.page_len = 0;
+	KUNIT_EXPECT_FALSE(test, svc_rqst_rx_region_held(rqstp));
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_EQ(test, svcsock_region_stat(test, r, "read_unconfined"),
+			unconfined + 1);
+	svcsock_region_free_dr(r, dr);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_rx_region_waiters));
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 11U);
+}
+
+/*
+ * S9.  A return on a closing connection reserves nothing and replays
+ * nothing: its waiters stay until the drain drops them.
+ */
+static void svcsock_rx_region_share_reserve_dead_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 11, 20);
+	struct svc_sock *svsk = r->fx->svsk;
+	struct ubuf_info *a;
+
+	svcsock_rx_conn_share(test, "10");
+	a = svcsock_region_admit_send(test, r, 7);
+	svcsock_region_conn_waits(test, r, 4);
+	set_bit(XPT_DEAD, &svsk->sk_xprt.xpt_flags);
+
+	svcsock_region_complete(a);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_EQ(test,
+			list_count_nodes(&svsk->sk_rx_region_waiters), 1);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_xprt.xpt_deferred));
+
+	svc_tcp_rx_region_kunit_conn_drain(svsk);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_rx_region_waiters));
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_xprt.xpt_deferred));
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 11U);
+}
+
+/*
+ * S10.  A smaller waiter behind one that does not fit within B is admitted
+ * on the return that makes room for it, as at base (B = 16, 2R = 10): the
+ * 4-page head waits, the 2-page waiter behind it is reserved and replayed,
+ * and the head is admitted on a later return.
+ */
+static void svcsock_rx_region_share_behind_misfit_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 16, 16);
+	struct svc_sock *svsk = r->fx->svsk;
+	struct ubuf_info *u[4], *one, *two = NULL, *four = NULL;
+	struct svc_deferred_req *dr;
+	unsigned int i;
+
+	for (i = 0; i < 3; i++)
+		u[i] = svcsock_region_admit_send(test, r, 4);
+	u[3] = svcsock_region_admit_send(test, r, 2);
+	one = svcsock_region_admit_send(test, r, 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 15);
+	svcsock_region_conn_waits(test, r, 4);
+	svcsock_region_conn_waits(test, r, 2);
+	KUNIT_EXPECT_EQ(test,
+			list_count_nodes(&svsk->sk_rx_region_waiters), 2);
+
+	/* The 1-page reply returns: 14 + 4 > B, the head waits; 14 + 2 fits. */
+	svcsock_region_complete(one);
+	KUNIT_EXPECT_EQ(test, list_count_nodes(&svsk->sk_xprt.xpt_deferred), 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 16);
+	KUNIT_EXPECT_EQ(test,
+			list_count_nodes(&svsk->sk_rx_region_waiters), 1);
+	if (!list_empty(&svsk->sk_xprt.xpt_deferred)) {
+		dr = svcsock_region_replay(test, r);
+		KUNIT_EXPECT_EQ(test, dr->rx_region.count, 2U);
+		two = svcsock_region_admit_send(test, r, 2);
+		svcsock_region_free_dr(r, dr);
+	}
+
+	/* A 4-page reply returns: 12 + 4 <= B, the head is admitted. */
+	svcsock_region_complete(u[0]);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_rx_region_waiters));
+	while (!list_empty(&svsk->sk_xprt.xpt_deferred)) {
+		dr = svcsock_region_replay(test, r);
+		if (dr->rx_region.count == 4U && !four)
+			four = svcsock_region_admit_send(test, r, 4);
+		else if (!two)
+			two = svcsock_region_admit_send(test, r, 2);
+		svcsock_region_free_dr(r, dr);
+	}
+	KUNIT_EXPECT_NOT_NULL(test, four);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 16);
+
+	for (i = 1; i < ARRAY_SIZE(u); i++)
+		svcsock_region_complete(u[i]);
+	svcsock_region_complete(two);
+	svcsock_region_complete(four);
+	KUNIT_EXPECT_FALSE(test, svsk->sk_rx_region_stalled);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_rx_region_waiters));
+	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 16U);
+}
+
+/*
+ * S11.  A waiter larger than a manual connection share is admitted by the
+ * return that empties the connection ("a connection holding nothing may take
+ * one READ larger than the share"): share 4, a 3-page READ in flight, a
+ * 5-page READ waits, the 3-page reply returns and reserves the 5 pages.
+ * Nothing is left to wake the waiter after that return.
+ */
+static void svcsock_rx_region_share_oversize_waiter_test(struct kunit *test)
+{
+	struct svcsock_region *r = svcsock_region_alloc(test, 16, 16);
+	struct svc_sock *svsk = r->fx->svsk;
+	struct ubuf_info *a, *b = NULL;
+	struct svc_deferred_req *dr;
+
+	svcsock_rx_conn_share(test, "4");
+	a = svcsock_region_admit_send(test, r, 3);
+	svcsock_region_conn_waits(test, r, 5);
+	KUNIT_EXPECT_EQ(test,
+			list_count_nodes(&svsk->sk_rx_region_waiters), 1);
+
+	svcsock_region_complete(a);
+	KUNIT_EXPECT_EQ(test, list_count_nodes(&svsk->sk_xprt.xpt_deferred), 1);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_rx_region_waiters));
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 5);
+	if (!list_empty(&svsk->sk_xprt.xpt_deferred)) {
+		dr = svcsock_region_replay(test, r);
+		b = svcsock_region_admit_send(test, r, 5);
+		svcsock_region_free_dr(r, dr);
+	}
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 5);
+	svcsock_region_complete(b);
+	KUNIT_EXPECT_EQ(test, atomic_read(&svsk->sk_rx_region_inflight), 0);
+	KUNIT_EXPECT_TRUE(test, list_empty(&svsk->sk_rx_region_waiters));
 	KUNIT_EXPECT_EQ(test, svc_tcp_rx_region_kunit_read_free(), 16U);
 }
 
@@ -9724,6 +9956,11 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_region_share_small_test),
 	KUNIT_CASE(svcsock_rx_region_share_many_conns_test),
 	KUNIT_CASE(svcsock_rx_region_share_manual_test),
+	KUNIT_CASE(svcsock_rx_region_share_reserve_test),
+	KUNIT_CASE(svcsock_rx_region_share_reserve_unconfined_test),
+	KUNIT_CASE(svcsock_rx_region_share_reserve_dead_test),
+	KUNIT_CASE(svcsock_rx_region_share_behind_misfit_test),
+	KUNIT_CASE(svcsock_rx_region_share_oversize_waiter_test),
 	KUNIT_CASE(svcsock_rx_credit_stock_test),
 	KUNIT_CASE(svcsock_rx_credit_stock_record_test),
 	KUNIT_CASE(svcsock_rx_credit_stock_learn_test),

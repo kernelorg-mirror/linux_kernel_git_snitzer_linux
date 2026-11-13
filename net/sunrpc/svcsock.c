@@ -3767,20 +3767,50 @@ static bool svc_rx_region_share_get(struct svc_sock *svsk, unsigned int n,
 }
 
 /*
- * Return @n pages of the share and replay every READ that waited for room:
- * each re-reserves, and one that still does not fit parks again behind a
- * reply in flight, whose return wakes it.  None is left without a waker.
+ * Return @n pages of the share, then reserve it for each READ that waited
+ * for room and fits, oldest first, and replay only those: each is admitted
+ * on its reservation, and a waiter that does not fit stays parked, since
+ * replaying it would only park it again.  A waiter that does not fit, a
+ * largest READ held back by its 2R share or any READ held back by B, does
+ * not hold back a smaller one behind it, so the waiters admitted are those
+ * a replay of every waiter would admit.  The walk stops once B is full,
+ * since every READ is at least a page (svc_rqst_rx_region_read()).  A
+ * reservation is pages in flight, so none is left without a waker.  A
+ * closing connection's waiters are dropped by svc_rx_region_conn_drain(),
+ * not reserved for.
  */
 static void svc_rx_region_share_put(struct svc_sock *svsk, unsigned int n,
 				    unsigned int share)
 {
 	struct svc_rx_region_park *park, *next;
+	unsigned long span = 0;
+	unsigned int b = 0, cur;
 	LIST_HEAD(wake);
 
 	if (atomic_sub_return(n, &svsk->sk_rx_region_inflight) < share)
 		svc_rx_region_share_unstall(svsk);
 	spin_lock_bh(&svsk->sk_rx_region_lock);
-	list_splice_init(&svsk->sk_rx_region_waiters, &wake);
+	list_for_each_entry_safe(park, next, &svsk->sk_rx_region_waiters, node) {
+		if (test_bit(XPT_DEAD, &svsk->sk_xprt.xpt_flags))
+			break;
+		if (!span) {
+			span = rx_loan_tx_span();
+			b = svc_rx_region_share(svsk, 0, span);
+		}
+		cur = atomic_read(&svsk->sk_rx_region_inflight);
+		if (cur >= b)
+			break;
+		/* Held back by B: pass over it on its count alone. */
+		if (cur && cur + park->count > b)
+			continue;
+		park->share = svc_rx_region_share(svsk, park->count, span);
+		/* Held back by its 2R share: pass over it too. */
+		if (!svc_rx_region_share_get(svsk, park->count, park->share,
+					     park->xid))
+			continue;
+		park->shared = true;
+		list_move_tail(&park->node, &wake);
+	}
 	spin_unlock_bh(&svsk->sk_rx_region_lock);
 	list_for_each_entry_safe(park, next, &wake, node) {
 		list_del_init(&park->node);
@@ -4053,7 +4083,15 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_region_read(struct svc_rqst *rqstp,
 			why = "short";
 			goto unconfined;
 		}
-		/* It waited for its connection's share: admit it afresh. */
+		/*
+		 * It waited for its connection's share: the return that
+		 * replayed it reserved its pages (svc_rx_region_share_put()).
+		 */
+		if (park->shared) {
+			park->shared = false;
+			want.share = park->share;
+			want.shared = true;
+		}
 	}
 	why = svc_rx_region_read_ineligible(rqstp, pages);
 	if (!why && !rx_loan_tx_bind())
@@ -4064,17 +4102,23 @@ VISIBLE_IF_KUNIT int svc_tcp_rx_region_read(struct svc_rqst *rqstp,
 		if (pages > span)
 			why = "span";
 	}
-	if (why)
-		goto unconfined;
-	want.share = svc_rx_region_share(svsk, pages, span);
-	if (!svc_rx_region_share_get(svsk, pages, want.share, rqstp->rq_xid)) {
-		ret = svc_rx_region_conn_park(rqstp, svsk, pages);
-		if (ret == -EAGAIN)
-			return ret;
-		why = "no-defer";
+	if (why) {
+		if (want.shared)
+			svc_rx_region_share_put(svsk, pages, want.share);
 		goto unconfined;
 	}
-	want.shared = true;
+	if (!want.shared) {
+		want.share = svc_rx_region_share(svsk, pages, span);
+		if (!svc_rx_region_share_get(svsk, pages, want.share,
+					     rqstp->rq_xid)) {
+			ret = svc_rx_region_conn_park(rqstp, svsk, pages);
+			if (ret == -EAGAIN)
+				return ret;
+			why = "no-defer";
+			goto unconfined;
+		}
+		want.shared = true;
+	}
 	want.w.need = pages;
 	ret = rx_loan_grant(c->lb, svc_tcp_rx_consumer(svsk), &want.w);
 	switch (ret) {
