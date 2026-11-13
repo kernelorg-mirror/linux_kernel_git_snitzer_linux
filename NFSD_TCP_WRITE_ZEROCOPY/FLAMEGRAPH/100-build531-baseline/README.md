@@ -193,3 +193,19 @@ them, an `nfsd.ko` from the tip with `swap-sunrpc.sh NFSD_KO=`, which
 drops every client's connections (Mike's to do), then round 100's
 profile again: `nfsd_cache_lookup` and `nfsd_cache_update` against
 their 4,331 and 662 cycles a WRITE in `t2-r602`.
+
+## The DRC commits loaded (13 November, on Mike's word)
+
+Build 531 was built from the rebased tree (its `nfsd.ko` carries the
+READ path's `range_too_large`), and the tip's `fs/nfsd` differs from
+`8efa530e9ab01`'s by the four DRC commits alone.  `nfsd.ko` built from
+the tip as `build-nfsd.sh` builds it (`$L/nfsd-drc-531/`, srcversion
+`603083CAF5F5B5E8DE898AC`), put in `updates/` with
+`SUNRPC_KO=none NFSD_KO=... swap-sunrpc.sh` (no client connected),
+then `settled.sh apply`: the settled setting.  An out-of-tree build's
+srcversion differs from the kernel's own (`8efa530e9ab01` built the
+same way reads `EF174CABCDAC245CD82D155`, the kernel's
+`D95233FF10702BC0EC82B7B`), so only the diff says what changed.
+
+The profile again with `run601.sh`: `RUNS="604:C 605:G 606:C"`, read
+against `t2-r601` and `t2-r602`.
