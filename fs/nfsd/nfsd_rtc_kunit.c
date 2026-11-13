@@ -908,15 +908,28 @@ static u32 rtcn_drc_same_bucket(struct nfsd_net *nn, u32 xid)
 	return x;
 }
 
+/* The next xid after @xid whose DRC bucket is not @other's. */
+static u32 rtcn_drc_other_bucket(struct nfsd_net *nn, u32 xid, u32 other)
+{
+	u32 avoid = hash_32((__force u32)cpu_to_be32(other), nn->maskbits);
+	u32 x = xid + 1;
+
+	while (hash_32((__force u32)cpu_to_be32(x), nn->maskbits) == avoid)
+		x++;
+	return x;
+}
+
 /*
  * DRC, with real nfsd_cache_lookup() entries on init_net: an abandoned
  * WRITE keeps its RC_INPROG entry for the thread rerun, a retransmission
  * meanwhile is dropped, pruning skips the kept entry while it is handed
- * off, the rerun's nfsd_cache_update() caches the reply exactly once, and
+ * off and the next call takes the entry it pruned, the rerun's
+ * nfsd_cache_update() caches the reply exactly once, in the entry, and
  * a hand-off no thread runs (svc_rtc_handoff_drain()) frees it exactly
- * once.  GFP_NOWAIT failures on the work item: no entry, or no reply
- * buffer (allocated at lookup by an rtc attempt), is a counted no_mem
- * miss before the call runs, and the thread rerun caches the reply.
+ * once.  GFP_NOWAIT failures on the work item: no entry, with none to
+ * take in the bucket, is a counted no_mem miss before the call runs; a
+ * WRITE needs no reply buffer, so failing one does not stop it, and its
+ * reply is cached in the entry.
  * A cleanup action clears the injection hook and tears the DRC down
  * even if the case aborts.
  *
@@ -959,7 +972,7 @@ static void nfsd_rtc_write_drc(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &a), RC_DOIT);
 	KUNIT_ASSERT_NOT_NULL(test, a);
 	KUNIT_EXPECT_EQ(test, a->c_state, RC_INPROG);
-	KUNIT_EXPECT_NOT_NULL(test, a->c_prebuf);	/* reply buffer, now */
+	KUNIT_EXPECT_NULL(test, a->c_prebuf);	/* a WRITE's reply fits */
 	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), 1);
 	/* The NOWAIT write misses at completion: A is kept for the rerun. */
 	c->rp = a;
@@ -988,6 +1001,7 @@ static void nfsd_rtc_write_drc(struct kunit *test)
 	rtcn_drc_call(t, r, xc, false);
 	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &cc), RC_DOIT);
 	KUNIT_ASSERT_NOT_NULL(test, cc);
+	KUNIT_EXPECT_PTR_EQ(test, cc, b);	/* C took B's entry */
 	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), 2);
 	KUNIT_EXPECT_EQ(test, a->c_state, RC_INPROG);
 	rtcn_drc_call(t, r, xa, false);
@@ -1001,7 +1015,8 @@ static void nfsd_rtc_write_drc(struct kunit *test)
 	nfsd_cache_update(r, rp, RC_REPLBUFF, rtcn_drc_reply(r));
 	KUNIT_EXPECT_EQ(test, a->c_state, RC_DONE);
 	KUNIT_EXPECT_EQ(test, a->c_type, RC_REPLBUFF);
-	KUNIT_EXPECT_NULL(test, a->c_prebuf);	/* became c_replvec */
+	KUNIT_EXPECT_NULL(test, a->c_prebuf);
+	KUNIT_EXPECT_PTR_EQ(test, a->c_replvec.iov_base, (void *)a->c_inline);
 	rtcn_drc_call(t, r, xa, false);
 	rp = NULL;
 	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_REPLY);
@@ -1025,9 +1040,13 @@ static void nfsd_rtc_write_drc(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n - 1);
 	n--;
 
-	/* No entry under GFP_NOWAIT: a counted miss, nothing inserted. */
+	/*
+	 * No entry under GFP_NOWAIT: a counted miss, nothing inserted.  Only
+	 * A can be left in the cache, so a bucket not A's has none to take.
+	 */
+	xb = rtcn_drc_other_bucket(nn, xc + 1, xa);
 	nfsd_cache_kunit_no_mem = NFSD_CACHE_KUNIT_NO_ENTRY;
-	rtcn_drc_call(t, r, xc + 2, true);
+	rtcn_drc_call(t, r, xb, true);
 	rp = NULL;
 	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_DROPIT);
 	nfsd_cache_kunit_no_mem = 0;
@@ -1037,28 +1056,26 @@ static void nfsd_rtc_write_drc(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n);
 
 	/*
-	 * No reply buffer under GFP_NOWAIT at lookup: a counted miss before
-	 * the call runs, nothing inserted.  The thread rerun (GFP_KERNEL,
-	 * no buffer from lookup) caches the reply; a retransmission replays.
+	 * A failed reply buffer under GFP_NOWAIT at lookup does not stop an
+	 * rtc WRITE: its reply fits in the entry, so it asks for none.  The
+	 * reply is cached there and a retransmission replays it.
 	 */
+	xb = rtcn_drc_other_bucket(nn, xb, xa);
 	nfsd_cache_kunit_no_mem = NFSD_CACHE_KUNIT_NO_REPLY;
-	rtcn_drc_call(t, r, xc + 3, true);
+	clear_bit(RQ_RTC_MISS, &r->rq_flags);
+	rtcn_drc_call(t, r, xb, true);
 	rp = NULL;
-	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_DROPIT);
-	nfsd_cache_kunit_no_mem = 0;
-	KUNIT_EXPECT_NULL(test, rp);
-	KUNIT_EXPECT_TRUE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
-	KUNIT_EXPECT_EQ(test, r->rq_rtc_reason, SVC_RTC_FB_NO_MEM);
-	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n);
-	rtcn_drc_call(t, r, xc + 3, false);
 	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_DOIT);
+	nfsd_cache_kunit_no_mem = 0;
 	KUNIT_ASSERT_NOT_NULL(test, rp);
+	KUNIT_EXPECT_FALSE(test, test_bit(RQ_RTC_MISS, &r->rq_flags));
 	KUNIT_EXPECT_NULL(test, rp->c_prebuf);
 	KUNIT_EXPECT_EQ(test, atomic_read(&nn->num_drc_entries), n + 1);
 	nfsd_cache_update(r, rp, RC_REPLBUFF, rtcn_drc_reply(r));
 	KUNIT_EXPECT_EQ(test, rp->c_state, RC_DONE);
 	KUNIT_EXPECT_EQ(test, rp->c_type, RC_REPLBUFF);
-	rtcn_drc_call(t, r, xc + 3, false);
+	KUNIT_EXPECT_PTR_EQ(test, rp->c_replvec.iov_base, (void *)rp->c_inline);
+	rtcn_drc_call(t, r, xb, false);
 	rp = NULL;
 	KUNIT_EXPECT_EQ(test, nfsd_cache_lookup(r, 0, 64, &rp), RC_REPLY);
 
