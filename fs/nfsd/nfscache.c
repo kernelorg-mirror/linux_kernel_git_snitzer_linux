@@ -205,7 +205,6 @@ nfsd_cacherep_unlink_locked(struct nfsd_net *nn, struct nfsd_drc_bucket *b,
 		rb_erase(&rp->c_node, &b->rb_head);
 		list_del(&rp->c_lru);
 		atomic_dec(&nn->num_drc_entries);
-		nfsd_stats_drc_mem_usage_sub(nn, sizeof(*rp));
 	}
 }
 
@@ -635,7 +634,6 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 
 	nfsd_stats_rc_misses_inc(nn);
 	atomic_inc(&nn->num_drc_entries);
-	nfsd_stats_drc_mem_usage_add(nn, sizeof(*rp));
 	goto out;
 
 found_entry:
@@ -767,8 +765,9 @@ void nfsd_cache_update(struct svc_rqst *rqstp, struct nfsd_cacherep *rp,
 		nfsd_reply_cache_free(b, rp, nn);
 		return;
 	}
+	if (allocated)
+		nfsd_stats_drc_mem_usage_add(nn, allocated);
 	spin_lock(&b->cache_lock);
-	nfsd_stats_drc_mem_usage_add(nn, allocated);
 	lru_put_end(b, rp);
 	rp->c_secure = test_bit(RQ_SECURE, &rqstp->rq_flags);
 	rp->c_type = cachetype;
@@ -800,13 +799,17 @@ int nfsd_reply_cache_stats_show(struct seq_file *m, void *v)
 {
 	struct nfsd_net *nn = net_generic(file_inode(m->file)->i_sb->s_fs_info,
 					  nfsd_net_id);
+	s64 mem;
 
 	seq_printf(m, "max entries:           %u\n", nn->max_drc_entries);
 	seq_printf(m, "num entries:           %u\n",
 		   atomic_read(&nn->num_drc_entries));
 	seq_printf(m, "hash buckets:          %u\n", 1 << nn->maskbits);
-	seq_printf(m, "mem usage:             %lld\n",
-		   percpu_counter_sum_positive(&nn->counter[NFSD_STATS_DRC_MEM_USAGE]));
+	/* The entries themselves, then the reply buffers not kept in them. */
+	mem = (s64)atomic_read(&nn->num_drc_entries) *
+	      (s64)sizeof(struct nfsd_cacherep) +
+	      percpu_counter_sum_positive(&nn->counter[NFSD_STATS_DRC_MEM_USAGE]);
+	seq_printf(m, "mem usage:             %lld\n", mem);
 	seq_printf(m, "cache hits:            %lld\n",
 		   percpu_counter_sum_positive(&nn->counter[NFSD_STATS_RC_HITS]));
 	seq_printf(m, "cache misses:          %lld\n",

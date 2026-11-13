@@ -136,9 +136,12 @@ static inline void nfsd_stats_payload_misses_inc(struct nfsd_net *nn)
 }
 
 /**
- * nfsd_stats_drc_mem_usage_add - Add memory used by a cache item
+ * nfsd_stats_drc_mem_usage_add - Add memory used by a cached reply's buffer
  * @nn: target network namespace
  * @amount: byte count
+ *
+ * Only a reply buffer allocated apart from its entry is counted here;
+ * the entries are counted by num_drc_entries.
  *
  * percpu_counter_add_local() keeps updates on the per-CPU fast
  * path. The sole reader, percpu_counter_sum_positive(), sums the
@@ -151,7 +154,7 @@ static inline void nfsd_stats_drc_mem_usage_add(struct nfsd_net *nn, s64 amount)
 }
 
 /**
- * nfsd_stats_drc_mem_usage_sub - Subtract memory used by a cache item
+ * nfsd_stats_drc_mem_usage_sub - Subtract memory used by a cached reply's buffer
  * @nn: target network namespace
  * @amount: byte count
  *
