@@ -125,32 +125,43 @@ static gfp_t nfsd_cache_gfp(const struct svc_rqst *rqstp)
 	       GFP_NOWAIT | __GFP_NOWARN : GFP_KERNEL;
 }
 
+/* The key of the call @rqstp, with @csum the checksum of its arguments. */
+static void nfsd_cache_key_init(struct nfsd_cache_key *key,
+				struct svc_rqst *rqstp, __wsum csum)
+{
+	memset(key, 0, sizeof(*key));
+	key->k_xid = rqstp->rq_xid;
+	key->k_proc = rqstp->rq_proc;
+	rpc_copy_addr((struct sockaddr *)&key->k_addr, svc_addr(rqstp));
+	rpc_set_port((struct sockaddr *)&key->k_addr, rpc_get_port(svc_addr(rqstp)));
+	key->k_prot = rqstp->rq_prot;
+	key->k_vers = rqstp->rq_vers;
+	key->k_len = rqstp->rq_arg.len;
+	key->k_csum = csum;
+}
+
+/* Ready @rp, new or taken from the cache, to hold the call @key names. */
+static void nfsd_cacherep_init(struct nfsd_cacherep *rp,
+			       const struct nfsd_cache_key *key)
+{
+	rp->c_state = RC_UNUSED;
+	rp->c_type = RC_NOCACHE;
+	rp->c_prebuf = NULL;
+	RB_CLEAR_NODE(&rp->c_node);
+	INIT_LIST_HEAD(&rp->c_lru);
+	rp->c_key = *key;
+}
+
 static struct nfsd_cacherep *
-nfsd_cacherep_alloc(struct svc_rqst *rqstp, __wsum csum,
-		    struct nfsd_net *nn)
+nfsd_cacherep_alloc(struct svc_rqst *rqstp, const struct nfsd_cache_key *key)
 {
 	gfp_t gfp = nfsd_cache_gfp(rqstp);
 	struct nfsd_cacherep *rp;
 
 	rp = nfsd_cache_inject_no_mem(gfp, NFSD_CACHE_KUNIT_NO_ENTRY) ? NULL :
 	     kmem_cache_alloc(drc_slab, gfp);
-	if (rp) {
-		rp->c_state = RC_UNUSED;
-		rp->c_type = RC_NOCACHE;
-		rp->c_prebuf = NULL;
-		RB_CLEAR_NODE(&rp->c_node);
-		INIT_LIST_HEAD(&rp->c_lru);
-
-		memset(&rp->c_key, 0, sizeof(rp->c_key));
-		rp->c_key.k_xid = rqstp->rq_xid;
-		rp->c_key.k_proc = rqstp->rq_proc;
-		rpc_copy_addr((struct sockaddr *)&rp->c_key.k_addr, svc_addr(rqstp));
-		rpc_set_port((struct sockaddr *)&rp->c_key.k_addr, rpc_get_port(svc_addr(rqstp)));
-		rp->c_key.k_prot = rqstp->rq_prot;
-		rp->c_key.k_vers = rqstp->rq_vers;
-		rp->c_key.k_len = rqstp->rq_arg.len;
-		rp->c_key.k_csum = csum;
-	}
+	if (rp)
+		nfsd_cacherep_init(rp, key);
 	return rp;
 }
 
@@ -427,35 +438,36 @@ VISIBLE_IF_KUNIT __wsum nfsd_cache_csum(struct xdr_buf *buf,
 EXPORT_SYMBOL_IF_KUNIT(nfsd_cache_csum);
 
 static int
-nfsd_cache_key_cmp(const struct nfsd_cacherep *key,
+nfsd_cache_key_cmp(const struct nfsd_cache_key *key,
 		   const struct nfsd_cacherep *rp, struct nfsd_net *nn)
 {
-	if (key->c_key.k_xid == rp->c_key.k_xid &&
-	    key->c_key.k_csum != rp->c_key.k_csum) {
+	if (key->k_xid == rp->c_key.k_xid &&
+	    key->k_csum != rp->c_key.k_csum) {
 		nfsd_stats_payload_misses_inc(nn);
 		trace_nfsd_drc_mismatch(nn, key, rp);
 	}
 
-	return memcmp(&key->c_key, &rp->c_key, sizeof(key->c_key));
+	return memcmp(key, &rp->c_key, sizeof(*key));
 }
 
 /*
- * Search the request hash for an entry that matches the given rqstp.
- * Must be called with cache_lock held. Returns the found entry or
- * inserts an empty key on failure.
+ * Search @b's tree for @key, with cache_lock held.  Returns the entry
+ * that matches, or NULL with *@parentp and *@linkp where an entry for
+ * @key is to be linked.  *@entries is the number of entries compared.
  */
 static struct nfsd_cacherep *
-nfsd_cache_insert(struct nfsd_drc_bucket *b, struct nfsd_cacherep *key,
-			struct nfsd_net *nn)
+nfsd_cache_search(struct nfsd_drc_bucket *b, const struct nfsd_cache_key *key,
+		  struct nfsd_net *nn, struct rb_node **parentp,
+		  struct rb_node ***linkp, unsigned int *entries)
 {
-	struct nfsd_cacherep	*rp, *ret = key;
 	struct rb_node		**p = &b->rb_head.rb_node,
 				*parent = NULL;
-	unsigned int		entries = 0;
+	struct nfsd_cacherep	*rp;
 	int cmp;
 
+	*entries = 0;
 	while (*p != NULL) {
-		++entries;
+		++*entries;
 		parent = *p;
 		rp = rb_entry(parent, struct nfsd_cacherep, c_node);
 
@@ -464,15 +476,17 @@ nfsd_cache_insert(struct nfsd_drc_bucket *b, struct nfsd_cacherep *key,
 			p = &parent->rb_left;
 		else if (cmp > 0)
 			p = &parent->rb_right;
-		else {
-			ret = rp;
-			goto out;
-		}
+		else
+			return rp;
 	}
-	rb_link_node(&key->c_node, parent, p);
-	rb_insert_color(&key->c_node, &b->rb_head);
-out:
-	/* tally hash chain length stats */
+	*parentp = parent;
+	*linkp = p;
+	return NULL;
+}
+
+/* Tally the hash chain length stats for a search of @entries entries. */
+static void nfsd_cache_tally_chain(struct nfsd_net *nn, unsigned int entries)
+{
 	if (entries > nn->longest_chain) {
 		nn->longest_chain = entries;
 		nn->longest_chain_cachesize = atomic_read(&nn->num_drc_entries);
@@ -482,7 +496,6 @@ out:
 				nn->longest_chain_cachesize,
 				atomic_read(&nn->num_drc_entries));
 	}
-	return ret;
 }
 
 /* Whether the longest reply @rqstp's procedure can encode fits in its entry. */
@@ -519,8 +532,11 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 	struct nfsd_thread_local_info *ntli = rqstp->rq_private;
 	struct nfsd_cacherep	*rp, *found;
 	__be32			csum_scratch[RC_CSUMLEN / sizeof(__be32)];
-	__wsum			csum;
+	struct nfsd_cache_key	key;
+	struct rb_node		*parent, **link;
+	void			*prebuf = NULL, *old_reply = NULL, *old_prebuf = NULL;
 	struct nfsd_drc_bucket	*b;
+	unsigned int		entries;
 	int type = ntli->ntli_cachetype;
 	LIST_HEAD(dispose);
 	int rtn = RC_DOIT;
@@ -530,24 +546,10 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 		goto out;
 	}
 
-	csum = nfsd_cache_csum(&rqstp->rq_arg, start, len, csum_scratch);
+	nfsd_cache_key_init(&key, rqstp,
+			    nfsd_cache_csum(&rqstp->rq_arg, start, len,
+					    csum_scratch));
 
-	/*
-	 * Since the common case is a cache miss followed by an insert,
-	 * preallocate an entry.
-	 */
-	rp = nfsd_cacherep_alloc(rqstp, csum, nn);
-	if (!rp) {
-		/*
-		 * An rtc attempt reruns on a thread, whose GFP_KERNEL
-		 * allocation may wait, rather than run uncached.
-		 */
-		if (test_bit(RQ_RTC_TRY, &rqstp->rq_flags)) {
-			svc_rtc_miss(rqstp, SVC_RTC_FB_NO_MEM);
-			rtn = RC_DROPIT;
-		}
-		goto out;
-	}
 	/*
 	 * An rtc attempt allocates its reply buffer now, while a miss is
 	 * still free: nfsd_cache_update() runs after the call has executed,
@@ -560,11 +562,10 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 	    !nfsd_cache_reply_fits_inline(rqstp)) {
 		gfp_t gfp = nfsd_cache_gfp(rqstp);
 
-		rp->c_prebuf = nfsd_cache_inject_no_mem(gfp,
+		prebuf = nfsd_cache_inject_no_mem(gfp,
 					NFSD_CACHE_KUNIT_NO_REPLY) ? NULL :
-			       kmalloc(NFSD_CACHE_REPLBUFF_MAX, gfp);
-		if (!rp->c_prebuf) {
-			nfsd_cacherep_free(rp);
+			 kmalloc(NFSD_CACHE_REPLBUFF_MAX, gfp);
+		if (!prebuf) {
 			svc_rtc_miss(rqstp, SVC_RTC_FB_NO_MEM);
 			rtn = RC_DROPIT;
 			goto out;
@@ -573,14 +574,63 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 
 	b = nfsd_cache_bucket_find(rqstp->rq_xid, nn);
 	spin_lock(&b->cache_lock);
-	found = nfsd_cache_insert(b, rp, nn);
-	if (found != rp)
+	found = nfsd_cache_search(b, &key, nn, &parent, &link, &entries);
+	nfsd_cache_tally_chain(nn, entries);
+	if (found)
 		goto found_entry;
-	*cacherep = rp;
-	rp->c_state = RC_INPROG;
+
+	/*
+	 * A miss prunes the bucket, as it always has, and the new call
+	 * takes the first entry pruned rather than one newly allocated.
+	 * Its search is made again: the prune may have rebalanced the tree.
+	 */
 	nfsd_prune_bucket_locked(nn, b, 3, &dispose);
+	rp = list_first_entry_or_null(&dispose, struct nfsd_cacherep, c_lru);
+	if (rp) {
+		list_del(&rp->c_lru);
+		if (nfsd_cacherep_reply_allocated(rp))
+			old_reply = rp->c_replvec.iov_base;
+		old_prebuf = rp->c_prebuf;
+		nfsd_cacherep_init(rp, &key);
+		found = nfsd_cache_search(b, &key, nn, &parent, &link,
+					  &entries);
+	} else {
+		/*
+		 * Nothing to take: allocate a new entry with the lock dropped,
+		 * then search again, in case the same call was inserted
+		 * meanwhile.
+		 */
+		spin_unlock(&b->cache_lock);
+		rp = nfsd_cacherep_alloc(rqstp, &key);
+		if (!rp) {
+			kfree(prebuf);
+			/*
+			 * An rtc attempt reruns on a thread, whose GFP_KERNEL
+			 * allocation may wait, rather than run uncached.
+			 */
+			if (test_bit(RQ_RTC_TRY, &rqstp->rq_flags)) {
+				svc_rtc_miss(rqstp, SVC_RTC_FB_NO_MEM);
+				rtn = RC_DROPIT;
+			}
+			goto out;
+		}
+		spin_lock(&b->cache_lock);
+		found = nfsd_cache_search(b, &key, nn, &parent, &link,
+					  &entries);
+		if (found) {
+			list_add(&rp->c_lru, &dispose);
+			goto found_entry;
+		}
+	}
+	*cacherep = rp;
+	rp->c_prebuf = prebuf;
+	rp->c_state = RC_INPROG;
+	rb_link_node(&rp->c_node, parent, link);
+	rb_insert_color(&rp->c_node, &b->rb_head);
 	spin_unlock(&b->cache_lock);
 
+	kfree(old_reply);
+	kfree(old_prebuf);
 	nfsd_cacherep_dispose(&dispose);
 
 	nfsd_stats_rc_misses_inc(nn);
@@ -590,7 +640,6 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 
 found_entry:
 	/* We found a matching entry which is either in progress or done. */
-	nfsd_reply_cache_free_locked(NULL, rp, nn);
 	nfsd_stats_rc_hits_inc(nn);
 	rtn = RC_DROPIT;
 	rp = found;
@@ -626,6 +675,8 @@ out_trace:
 	trace_nfsd_drc_found(nn, rqstp, rtn);
 out_unlock:
 	spin_unlock(&b->cache_lock);
+	kfree(prebuf);
+	nfsd_cacherep_dispose(&dispose);
 out:
 	return rtn;
 }

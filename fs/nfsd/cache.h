@@ -28,7 +28,7 @@ struct nfsd_net;
  * is much larger than a sockaddr_in6.
  */
 struct nfsd_cacherep {
-	struct {
+	struct nfsd_cache_key {
 		/* Keep often-read xid, csum in the same cache line: */
 		__be32			k_xid;
 		__wsum			k_csum;

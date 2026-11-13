@@ -1698,7 +1698,7 @@ TRACE_EVENT(nfsd_drc_found,
 TRACE_EVENT(nfsd_drc_mismatch,
 	TP_PROTO(
 		const struct nfsd_net *nn,
-		const struct nfsd_cacherep *key,
+		const struct nfsd_cache_key *key,
 		const struct nfsd_cacherep *rp
 	),
 	TP_ARGS(nn, key, rp),
@@ -1710,8 +1710,8 @@ TRACE_EVENT(nfsd_drc_mismatch,
 	),
 	TP_fast_assign(
 		__entry->boot_time = nn->boot_time;
-		__entry->xid = be32_to_cpu(key->c_key.k_xid);
-		__entry->cached = (__force u32)key->c_key.k_csum;
+		__entry->xid = be32_to_cpu(key->k_xid);
+		__entry->cached = (__force u32)key->k_csum;
 		__entry->ingress = (__force u32)rp->c_key.k_csum;
 	),
 	TP_printk("boot_time=%16llx xid=0x%08x cached-csum=0x%08x ingress-csum=0x%08x",
