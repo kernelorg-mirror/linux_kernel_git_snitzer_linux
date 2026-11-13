@@ -154,9 +154,16 @@ nfsd_cacherep_alloc(struct svc_rqst *rqstp, __wsum csum,
 	return rp;
 }
 
+/* A cached reply that is not kept in its entry has a buffer of its own. */
+static bool nfsd_cacherep_reply_allocated(const struct nfsd_cacherep *rp)
+{
+	return rp->c_type == RC_REPLBUFF && rp->c_replvec.iov_base &&
+	       rp->c_replvec.iov_base != rp->c_inline;
+}
+
 static void nfsd_cacherep_free(struct nfsd_cacherep *rp)
 {
-	if (rp->c_type == RC_REPLBUFF)
+	if (nfsd_cacherep_reply_allocated(rp))
 		kfree(rp->c_replvec.iov_base);
 	kfree(rp->c_prebuf);
 	kmem_cache_free(drc_slab, rp);
@@ -181,7 +188,7 @@ static void
 nfsd_cacherep_unlink_locked(struct nfsd_net *nn, struct nfsd_drc_bucket *b,
 			    struct nfsd_cacherep *rp)
 {
-	if (rp->c_type == RC_REPLBUFF && rp->c_replvec.iov_base)
+	if (nfsd_cacherep_reply_allocated(rp))
 		nfsd_stats_drc_mem_usage_sub(nn, rp->c_replvec.iov_len);
 	if (rp->c_state != RC_UNUSED) {
 		rb_erase(&rp->c_node, &b->rb_head);
@@ -478,6 +485,15 @@ out:
 	return ret;
 }
 
+/* Whether the longest reply @rqstp's procedure can encode fits in its entry. */
+static bool nfsd_cache_reply_fits_inline(const struct svc_rqst *rqstp)
+{
+	const struct svc_procedure *proc = rqstp->rq_procinfo;
+
+	return proc && proc->pc_xdrressize &&
+	       proc->pc_xdrressize <= NFSD_CACHE_INLINE_REPLY / sizeof(__be32);
+}
+
 /**
  * nfsd_cache_lookup - Find an entry in the duplicate reply cache
  * @rqstp: Incoming Call to find
@@ -536,9 +552,12 @@ int nfsd_cache_lookup(struct svc_rqst *rqstp, unsigned int start,
 	 * An rtc attempt allocates its reply buffer now, while a miss is
 	 * still free: nfsd_cache_update() runs after the call has executed,
 	 * when a failed allocation could only leave the reply uncached.
-	 * A cached reply is at most NFSD_CACHE_REPLBUFF_MAX bytes.
+	 * A cached reply is at most NFSD_CACHE_REPLBUFF_MAX bytes.  One
+	 * that cannot be longer than NFSD_CACHE_INLINE_REPLY bytes is kept
+	 * in the entry and needs no buffer.
 	 */
-	if (type == RC_REPLBUFF && test_bit(RQ_RTC_TRY, &rqstp->rq_flags)) {
+	if (type == RC_REPLBUFF && test_bit(RQ_RTC_TRY, &rqstp->rq_flags) &&
+	    !nfsd_cache_reply_fits_inline(rqstp)) {
 		gfp_t gfp = nfsd_cache_gfp(rqstp);
 
 		rp->c_prebuf = nfsd_cache_inject_no_mem(gfp,
@@ -640,7 +659,7 @@ void nfsd_cache_update(struct svc_rqst *rqstp, struct nfsd_cacherep *rp,
 	struct kvec	*resv = &rqstp->rq_res.head[0], *cachv;
 	struct nfsd_drc_bucket *b;
 	int		len;
-	size_t		bufsize = 0;
+	size_t		bufsize, allocated = 0;
 
 	if (!rp)
 		return;
@@ -667,16 +686,24 @@ void nfsd_cache_update(struct svc_rqst *rqstp, struct nfsd_cacherep *rp,
 		cachv = &rp->c_replvec;
 		bufsize = len << 2;
 		/*
-		 * An entry from an rtc attempt carries the buffer it allocated
-		 * at lookup (bufsize <= NFSD_CACHE_REPLBUFF_MAX here), also
-		 * for its thread rerun; any other allocates as on a thread.
+		 * A short reply is kept in the entry.  An entry from an rtc
+		 * attempt whose reply may be longer carries the buffer it
+		 * allocated at lookup (bufsize <= NFSD_CACHE_REPLBUFF_MAX
+		 * here), also for its thread rerun; any other allocates as on
+		 * a thread.
 		 */
-		if (rp->c_prebuf) {
+		if (bufsize <= NFSD_CACHE_INLINE_REPLY) {
+			cachv->iov_base = rp->c_inline;
+			kfree(rp->c_prebuf);
+			rp->c_prebuf = NULL;
+		} else if (rp->c_prebuf) {
 			cachv->iov_base = rp->c_prebuf;
 			rp->c_prebuf = NULL;
+			allocated = bufsize;
 		} else {
 			cachv->iov_base = kmalloc(bufsize,
 						  nfsd_cache_gfp(rqstp));
+			allocated = bufsize;
 		}
 		if (!cachv->iov_base) {
 			nfsd_reply_cache_free(b, rp, nn);
@@ -690,7 +717,7 @@ void nfsd_cache_update(struct svc_rqst *rqstp, struct nfsd_cacherep *rp,
 		return;
 	}
 	spin_lock(&b->cache_lock);
-	nfsd_stats_drc_mem_usage_add(nn, bufsize);
+	nfsd_stats_drc_mem_usage_add(nn, allocated);
 	lru_put_end(b, rp);
 	rp->c_secure = test_bit(RQ_SECURE, &rqstp->rq_flags);
 	rp->c_type = cachetype;

@@ -14,6 +14,13 @@
 struct nfsd_net;
 
 /*
+ * A cached reply of at most this many bytes is kept in its entry, with
+ * no allocation of its own: an NFSv3 WRITE's reply (ST+WC+4 words, 136
+ * bytes) fits.
+ */
+#define NFSD_CACHE_INLINE_REPLY	144
+
+/*
  * Representation of a reply cache entry.
  *
  * Note that we use a sockaddr_in6 to hold the address instead of the more
@@ -43,6 +50,7 @@ struct nfsd_cacherep {
 		struct kvec	u_vec;
 		__be32		u_status;
 	}			c_u;
+	__be32			c_inline[NFSD_CACHE_INLINE_REPLY / sizeof(__be32)];
 };
 
 #define c_replvec		c_u.u_vec
