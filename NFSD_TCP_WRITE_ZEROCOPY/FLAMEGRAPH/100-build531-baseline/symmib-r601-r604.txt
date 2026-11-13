@@ -1,0 +1,36 @@
+all: 331229 -> 324982 cycles a MiB
+gained most:
+       0     2767    +2767  nfsd_cache_search
+    1970     2262     +292  [unknown]
+     103      341     +238  exp_find_key
+    1480     1701     +221  page_pool_recycle_ring_bulk
+       0      219     +219  nfsd_cache_key_init
+     342      553     +211  nfsd_cache_lookup
+    1170     1353     +183  ip_finish_output2
+     537      703     +166  __kvmalloc_node_noprof
+    1342     1498     +156  __pi_memset_generic
+     239      385     +145  svcxdr_encode_fattr3
+     625      760     +135  tcp_sendmsg_locked
+       0      126     +126  nfsd_cacherep_dispose
+     118      227     +108  trace_event_buffer_reserve
+      81      186     +105  nfs3svc_rx_target
+     132      235     +103  xdr_stream_decode_opaque_auth
+      53      153      +99  fh_verify
+   33267    33363      +96  finish_task_switch.isra.0
+      72      168      +95  nfsd3_proc_write
+     156      251      +95  __fh_getattr
+     377      471      +94  xdr_buf_subsegment
+     316      404      +88  blk_mq_rq_late_init
+     121      205      +85  nvme_prep_rq.part.0
+     417      500      +83  sock_rfree
+      23      104      +81  rx_loan_table_refs_valid_checked
+     157      236      +79  svc_tcp_rx_publish
+lost most:
+    2720        0    -2720  nfsd_cache_insert
+   10876    10144     -732  _raw_spin_lock
+    1128      513     -615  kfree
+    2678     2134     -544  percpu_counter_add_batch
+    1021      547     -474  kmem_cache_free
+    2476     2064     -413  queued_spin_lock_slowpath
+    1246      857     -390  kmem_cache_alloc_noprof
+    3037     2701     -335  svc_tcp_recv_skb

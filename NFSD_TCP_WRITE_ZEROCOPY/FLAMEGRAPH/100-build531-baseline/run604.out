@@ -1,0 +1,7 @@
+17:57:55 t2-r604 C | total 78.01 GB/s | WRITEs 148820 | ring drops 0 | retransmits 209 | no drive stepped down | new kernel warnings 0
+    loans: budget 8198 pages (64 WRITEs), in the run admitted 7435264, denied 0, paused 0, overrun 0
+18:03:49 t2-r605 G | total 78.12 GB/s | WRITEs 149045 | ring drops 0 | retransmits 203 | no drive stepped down | new kernel warnings 0
+    loans: budget 8198 pages (64 WRITEs), in the run admitted 7444064, denied 0, paused 0, overrun 0
+18:09:02 t2-r606 C | total 78.03 GB/s | WRITEs 148748 | ring drops 0 | retransmits 161 | no drive stepped down | new kernel warnings 0
+    loans: budget 8198 pages (64 WRITEs), in the run admitted 7430864, denied 0, paused 0, overrun 0
+18:09:05 after: settled.sh audit rest: the settled setting

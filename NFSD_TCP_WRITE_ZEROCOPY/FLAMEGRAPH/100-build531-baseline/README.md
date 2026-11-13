@@ -209,3 +209,50 @@ same way reads `EF174CABCDAC245CD82D155`, the kernel's
 
 The profile again with `run601.sh`: `RUNS="604:C 605:G 606:C"`, read
 against `t2-r601` and `t2-r602`.
+
+### Result: the DRC 1.3k cycles a WRITE cheaper, the rate the same
+
+[run604.out](run604.out).  Every run clean: no ring drop, no loan
+denied, no drive stepped down, no new kernel warning.
+
+| run | kind | GB/s | WRITEs/s | nfsd cycles a WRITE |
+|---|---|---|---|---|
+| `t2-r601` (531's nfsd) | counted | 77.96 | 148,898 | 165,391 |
+| `t2-r604` (DRC commits) | counted | 78.01 | 148,820 | 162,461 |
+| `t2-r606` (DRC commits) | counted | 78.03 | 148,748 | 163,213 |
+| `t2-r605` (DRC commits) | call graph | 78.12 | 149,045 | |
+
+The DRC's own cycles a WRITE, `t2-r602` against `t2-r605`
+([drc-r602.txt](drc-r602.txt), [drc-r605.txt](drc-r605.txt)):
+
+| | `t2-r602` | `t2-r605` |
+|---|---|---|
+| `nfsd_cache_lookup` | 4,331 | 3,260 |
+| ... the tree's search (was `nfsd_cache_insert`) | 1,400 | 1,406 |
+| ... the prune | 953 | 608 |
+| ... the free and allocation of an entry and reply | 982 | 189 |
+| ... the call's checksum | about 640 | about 550 |
+| ... the per-CPU counters | 162 | 117 (`rc_misses`) |
+| `nfsd_cache_update` | 662 | 409 |
+| the bucket lock, from `nfsd_dispatch` | 463 | 506 |
+| **all** | **about 5,460** | **about 4,180** |
+
+- **1.3k cycles a WRITE less, 24% of the DRC and 0.8% of nfsd's
+  cycles**, below the 1.5 to 2k estimated: the free and allocation are
+  gone as meant (982 to 189), the prune is cheaper (it no longer frees
+  a reply buffer), and the per-call memory counters are gone (214 in
+  `nfsd_cacherep_unlink_locked`, none now).  The search, the cold walk
+  of entries no other call has touched for 27 ms, is unchanged, as
+  expected.
+- nfsd's cycles a WRITE fell 2.6k, 165.4k to 162.5k and 163.2k
+  ([read65-r604.txt](read65-r604.txt),
+  [symmib-r601-r604.txt](symmib-r601-r604.txt)).  The 1.3k beyond the
+  DRC is within the spread of one baseline run against two.  Also,
+  531's nfsd is the kernel's own build and this one is an out-of-tree
+  build; an A/B against `8efa530e9ab01`'s `nfsd.ko` built the same way
+  would separate the two.
+- **The rate is unchanged, 78.0 to 78.1 GB/s**: the drives hold it.
+
+`updates/nfsd.ko` (the DRC commits) is still loaded.  To go back:
+`NFSD_KO=none SUNRPC_KO=none swap-sunrpc.sh`, which drops every
+client's connections.
