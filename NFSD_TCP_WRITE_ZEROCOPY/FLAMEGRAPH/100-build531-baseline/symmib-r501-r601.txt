@@ -1,0 +1,41 @@
+all: 248381 -> 331229 cycles a MiB
+gained most:
+   24416    33267    +8851  finish_task_switch.isra.0
+   10224    12478    +2254  _raw_spin_unlock_irqrestore
+    9044    10876    +1832  _raw_spin_lock
+    1462     2720    +1258  nfsd_cache_insert
+    1222     2470    +1248  sunrpc_cache_find_rcu
+    1601     2848    +1246  _raw_spin_lock_bh
+     196     1439    +1243  svc_tcp_rx_target_admit.isra.0
+    1079     2141    +1061  __pi_memcpy_generic
+     915     1928    +1013  nfsd_direct_write
+    3400     4387     +987  rx_loan_table_release
+    1125     2096     +970  xfs_iext_lookup_extent
+    1711     2678     +967  percpu_counter_add_batch
+       0      943     +943  xeu_maybe_stop_tx
+       0      828     +828  xeu_tx.isra.0
+     344     1134     +789  rx_loan_consumer_get
+     656     1423     +766  iomap_dio_bio_iter
+     684     1441     +757  __iomap_dio_rw
+    2316     3037     +720  svc_tcp_recv_skb
+       0      713     +713  xeu_start_xmit
+    1320     1958     +638  arch_counter_get_cntpct
+     744     1316     +573  rwsem_read_trylock
+     371      943     +572  skb_copy_bits
+     485     1047     +563  svc_generic_init_request
+    2990     3504     +514  __tcp_transmit_skb
+    3091     3596     +505  __dev_xmit_skb
+     740     1242     +502  __blk_mq_alloc_requests
+    1977     2476     +499  queued_spin_lock_slowpath
+    1244     1742     +498  rx_loan_skb_region_pages.part.0
+     809     1306     +498  __list_del_entry_valid_or_report
+       0      489     +489  svc_tcp_rx_target_wake
+lost most:
+    3785     1970    -1815  [unknown]
+    2276      949    -1327  rx_region_page_put
+     950      480     -471  rx_region_slot_put
+    1149      894     -255  svc_thread_should_sleep
+     477      337     -140  page_pool_return_netmem
+    2390     2269     -121  svc_recv
+     226      123     -103  netdev_core_pick_tx
+     300      208      -92  __bio_advance
