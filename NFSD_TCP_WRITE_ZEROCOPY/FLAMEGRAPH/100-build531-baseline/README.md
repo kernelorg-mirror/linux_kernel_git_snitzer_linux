@@ -100,3 +100,62 @@ nothing new.
    WRITE over TCP is cached and inserted under a lock on every call.
 3. The window's own cost (0.6% of nfsd's cycles) is small but is now
    on in the settled setting, where round 95 measured it off.
+
+## The DRC's cost for an NFSv3 WRITE (t2-r602)
+
+An NFSv3 WRITE is `RC_REPLBUFF`: every one is looked up, inserted,
+and its reply copied into the cache.  From `t2-r602`'s call graphs
+([drc-r602.txt](drc-r602.txt), round 77's `under.py`), cycles on
+nfsd's CPUs a WRITE:
+
+| where | cycles a WRITE |
+|---|---|
+| `nfsd_cache_lookup` | 4,331 |
+| ... the rbtree walk and insert (`nfsd_cache_insert`, IPC 0.09) | 1,400 |
+| ... the prune of the oldest entry (`rb_erase`, list) | 953 |
+| ... freeing the pruned entry and its reply (`kfree`, `kmem_cache_free`) | 668 |
+| ... the checksum of the call (`read_bytes_from_xdr_buf`, `do_csum`) | about 640 |
+| ... the new entry (`nfsd_cacherep_alloc`) | 314 |
+| ... the stats' per-CPU counters | 162 |
+| `nfsd_cache_update` (the reply's `kmalloc` and copy, LRU tail) | 662 |
+| the bucket lock, taken from `nfsd_dispatch` | 463 |
+| **all** | **about 5,500** |
+
+That is 3.3% of nfsd's 165k busy cycles a WRITE, about 11k a MiB, or
+a quarter of one CPU at 149k WRITEs a second.  The bucket lock is
+not contended (`queued_spin_lock_slowpath` is under
+`__dev_xmit_skb`'s and `svc_recv`'s locks).  The rest is the cost of
+cold memory and of the allocator, not of the lock.
+
+**Why cold:** at `drc_max_entries` 4096 (round 12) the cache is
+always full (`reply_cache_stats`: 4097 entries, 0 hits, 48.6 M
+misses; about 1 MiB), so every WRITE prunes the oldest entry of its
+bucket and inserts one.  At 149k WRITEs a second an entry lives about
+27 ms, so each is visited three times (insert, update, prune), each
+time cold.  At round 12's 40 GB/s of 1 MiB WRITEs an entry lived
+about 100 ms; at nfsd's own 262144 it would be 1.8 s.  None of these
+reaches the 60 s of an NFS-over-TCP client's timeout.  The cache has
+never hit on this rig, because the client retransmits nothing, and
+how much protection 27 ms gives a flexfiles data server is not tested
+here.
+
+**What could be cut without changing what is cached** (estimates
+from the profile, not measured):
+
+- Reuse the pruned entry for the new one instead of a free and an
+  allocation: about 0.6 to 1k.
+- Keep a WRITE's reply (`ST+WC+4` words, under 256 bytes) inside the
+  entry, with no `kmalloc` at update and no `kfree` at prune: about
+  0.5k, at the same memory, since the kmalloc'd buffer is the same
+  size.
+- Drop the per-CPU `mem_usage` add and subtract on each call (four a
+  WRITE) and compute the figure from the entry count when it is read:
+  about 0.3 to 0.4k.
+
+Together that is about 1.5 to 2k of the 5.5k, about 1% of nfsd's
+cycles.  The cold walk, prune and checksum stay: they are what a
+cache that turns over every 27 ms costs.  Going below that means
+caching less, by not caching WRITE or by a cache bounded by time
+rather than by entries.  That decides what a retransmitted WRITE
+replays, so it is a design question for Mike, not an optimization.
+Neither changes the rate: the drives hold it.

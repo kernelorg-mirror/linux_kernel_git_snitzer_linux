@@ -1,0 +1,85 @@
+t2-r602 under nfsd_cache_lookup: 4331 cycles a WRITE
+ by called from:
+     4303  99.3%  nfsd_dispatch
+       29   0.7%  svc_process_common
+ by direct callee:
+     1311  30.3%  nfsd_cache_insert
+      953  22.0%  nfsd_prune_bucket_locked
+      424   9.8%  read_bytes_from_xdr_buf
+      361   8.3%  kfree
+      314   7.3%  nfsd_cacherep_alloc.isra.0
+      307   7.1%  kmem_cache_free
+      179   4.1%  (self)
+      162   3.7%  percpu_counter_add_batch
+      139   3.2%  do_csum
+       89   2.0%  rb_insert_color
+       23   0.5%  kmem_cache_alloc_noprof
+       17   0.4%  __read_bytes_from_xdr_buf
+        9   0.2%  [unknown]
+        9   0.2%  __pi_memset_generic
+ by leaf:
+     1311  30.3%  nfsd_cache_insert
+      437  10.1%  rb_erase
+      378   8.7%  percpu_counter_add_batch
+      359   8.3%  kfree
+      307   7.1%  kmem_cache_free
+      286   6.6%  kmem_cache_alloc_noprof
+      221   5.1%  __pi_memcpy_generic
+      179   4.1%  nfsd_cache_lookup
+      150   3.5%  nfsd_prune_bucket_locked
+      139   3.2%  do_csum
+       96   2.2%  __list_del_entry_valid_or_report
+       88   2.0%  rb_insert_color
+       59   1.4%  __read_bytes_from_xdr_buf
+       55   1.3%  xdr_buf_subsegment
+t2-r602 under nfsd_cache_update: 662 cycles a WRITE
+ by called from:
+      618  93.3%  nfsd_dispatch
+       44   6.7%  svc_process_common
+ by direct callee:
+      260  39.3%  (self)
+      162  24.5%  __list_add_valid_or_report
+      161  24.3%  __kmalloc_noprof
+       59   8.8%  percpu_counter_add_batch
+       16   2.4%  __list_del_entry_valid_or_report
+        2   0.3%  trace_kmalloc
+        1   0.2%  dynamic_might_resched
+        0   0.1%  el1h_64_irq
+        0   0.0%  __pcs_replace_empty_main
+        0   0.0%  _raw_spin_lock
+ by leaf:
+      260  39.3%  nfsd_cache_update
+      162  24.5%  __list_add_valid_or_report
+      159  24.0%  __kmalloc_noprof
+       59   8.8%  percpu_counter_add_batch
+       16   2.4%  __list_del_entry_valid_or_report
+        2   0.3%  trace_kmalloc
+        1   0.2%  __pcs_replace_empty_main
+        1   0.2%  dynamic_might_resched
+        0   0.1%  handle_softirqs
+        0   0.0%  _raw_spin_unlock_irqrestore
+        0   0.0%  queued_spin_lock_slowpath
+        0   0.0%  jhash
+t2-r602 under percpu_counter_add_batch: 1326 cycles a WRITE
+ by called from:
+      497  37.4%  nfsd_vfs_write
+      214  16.1%  nfsd_cacherep_unlink_locked
+      162  12.2%  nfsd_cache_lookup
+      145  10.9%  svc_pool_enqueue_xprt
+      113   8.5%  svc_pool_wake_idle_thread
+       74   5.6%  svc_xprt_recv_call
+       59   4.4%  nfsd_cache_update
+       43   3.2%  svc_pool_hand_idle_thread
+        5   0.4%  nfsd_dispatch
+        4   0.3%  svc_xprt_enqueue_thread
+
+max entries:           4096
+num entries:           4097
+hash buckets:          512
+mem usage:             1016312
+cache hits:            0
+cache misses:          48622032
+not cached:            3040547
+payload misses:        0
+longest chain len:     9
+cachesize at longest:  4096
