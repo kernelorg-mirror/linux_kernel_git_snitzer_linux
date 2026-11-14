@@ -317,3 +317,13 @@ The DRC's own cycles a WRITE, built alike
 - **The rate is unchanged, 77.9 to 78.1 GB/s** on either module.
 
 The DRC `nfsd.ko` is loaded from `updates/` again.
+
+### Decision: the DRC commits are kept (Mike, 14 November)
+
+"keep the DRC changes, they help, even if minimally."  The three code
+commits (`NFSD: Keep a short cached reply in its DRC entry`, `NFSD:
+Reuse a pruned DRC entry for the next call`, `NFSD: Count the DRC's
+entries apart from its reply buffers`) and their KUnit change stay on
+the branch.  tardis2 keeps running their `nfsd.ko` from `updates/`
+(srcversion `603083CAF5F5B5E8DE898AC`) until a kernel built with them
+is booted.
