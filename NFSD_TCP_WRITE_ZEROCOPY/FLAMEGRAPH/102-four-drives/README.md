@@ -62,3 +62,15 @@ after.
   the 43 is set was not looked for in these runs.
 - The loans play no part in a read; the reads are direct on both
   sides, so every byte came off the drives.
+
+## The same on all eight drives
+
+Mike, the same day: the same runs on all eight drives.  One port: a
+alone on nvme0 to nvme7 at the one-port setting.  Two ports: a on
+nvme0 to nvme3 and b on nvme4 to nvme7, twoport.sh's own layout at the
+two-port setting (round 100's load, but at `twoport.sh`'s own JOBS
+and with reads too).  The same order, `t2-r630` to `t2-r637`:
+`DRIVES=8 RUNS="630:a:write 631:ab:write 632:a:read 633:ab:read
+634:a:write 635:ab:write 636:a:read 637:ab:read" ./run622.sh`.  At
+10 GB/s a drive on two ports, 50 s of writing is round 100's load,
+inside the fast region; one port gives a drive half that.

@@ -5,7 +5,9 @@
 # two (a on nvme0 and nvme1, b on nvme2 and nvme3, the two-port
 # setting).  Loans as settled (WRITES=64, and on two ports BUDGET_PAGES
 # 8198).  RUNS is <n>:<ports>:<rw> in turn, default the write and read
-# of each, twice, interleaved.
+# of each, twice, interleaved.  DRIVES=8: all eight drives instead, a
+# alone on nvme0 to nvme7, or a on nvme0 to nvme3 and b on nvme4 to
+# nvme7 (twoport.sh's own layout).
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
 say() { echo "$(date +%T) $*"; }
@@ -19,11 +21,14 @@ for run in ${RUNS:-622:a:write 623:ab:write 624:a:read 625:ab:read 626:a:write 6
 	ping -c1 -W2 192.168.1.106 > /dev/null && ping -c1 -W2 192.168.0.106 > /dev/null || { say "a port does not answer"; exit 1; }
 	sync; for d in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$d; done; sleep 120
 	dmesg > $O/dmesg.0
-	case $ports in
-	a)  FS="FS_A=/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3"; BP= ;;
-	ab) FS="FS_A=/hs/nvme0 /hs/nvme1"; BP=8198 ;;
+	case ${DRIVES:-4}$ports in
+	4a)  FS="FS_A=/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3"; FSB="FS_B=/hs/nvme2 /hs/nvme3"; BP= ;;
+	4ab) FS="FS_A=/hs/nvme0 /hs/nvme1"; FSB="FS_B=/hs/nvme2 /hs/nvme3"; BP=8198 ;;
+	8a)  FS="FS_A=/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3 /hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7"; FSB="FS_B=/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7"; BP= ;;
+	8ab) FS="FS_A=/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3"; FSB="FS_B=/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7"; BP=8198 ;;
+	*)   say "DRIVES=${DRIVES:-4}: 4 or 8"; exit 1 ;;
 	esac
-	env "$FS" FS_B="/hs/nvme2 /hs/nvme3" WARM=10 RUNTIME=40 RW=$rw RWTSV=$O/rw.tsv TAG=4d-$ports-$rw \
+	env "$FS" "$FSB" WARM=10 RUNTIME=40 RW=$rw RWTSV=$O/rw.tsv TAG=${DRIVES:-4}d-$ports-$rw \
 		WRITES=$TWO_WRITES ${BP:+BUDGET_PAGES=$BP} ./twoport.sh $O/run $ports > $O/run.log 2>&1 ||
 		{ say "run failed: $(grep -E 'BAD|FAILED|no answer|not free' $O/run.log | head -3)"; exit 1; }
 	dmesg > $O/dmesg.1
