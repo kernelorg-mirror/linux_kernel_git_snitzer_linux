@@ -256,3 +256,13 @@ The DRC's own cycles a WRITE, `t2-r602` against `t2-r605`
 `updates/nfsd.ko` (the DRC commits) is still loaded.  To go back:
 `NFSD_KO=none SUNRPC_KO=none swap-sunrpc.sh`, which drops every
 client's connections.
+
+### The A/B with both nfsd.ko built the same way
+
+To separate the DRC commits from the difference between the kernel's
+own build and an out-of-tree one: `8efa530e9ab01`'s `fs/nfsd` built
+as the DRC one was (`$L/nfsd-base-531/`, srcversion
+`EF174CABCDAC245CD82D155`), loaded from `updates/`, three runs
+(`t2-r607` counted, `r608` call graph, `r609` counted), then the DRC
+`nfsd.ko` again for three more (`r610` counted, `r611` call graph,
+`r612` counted): [ab607.sh](ab607.sh).  It ends on the DRC `nfsd.ko`.
