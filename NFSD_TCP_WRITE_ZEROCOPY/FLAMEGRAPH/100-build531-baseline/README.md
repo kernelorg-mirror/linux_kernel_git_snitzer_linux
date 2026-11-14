@@ -327,3 +327,25 @@ entries apart from its reply buffers`) and their KUnit change stay on
 the branch.  tardis2 keeps running their `nfsd.ko` from `updates/`
 (srcversion `603083CAF5F5B5E8DE898AC`) until a kernel built with them
 is booted.
+
+## What stands out after the DRC
+
+From the DRC module's runs: counted `t2-r604`, `r606`, `r610`, `r612`
+([top-drc.txt](top-drc.txt), 162.9k cycles a WRITE, IPC 0.94), and the
+call graph `t2-r611` ([callers-r611.txt](callers-r611.txt),
+[under-r611-send.txt](under-r611-send.txt)).  k cycles a WRITE:
+
+| | k | what is in it | worked before |
+|---|---|---|---|
+| sleep and wake, interrupts hidden at irq enable | 16.0 | `finish_task_switch` (all self, 69% leaving idle by round 100's schedwhy), `wake_up_process` 3.0 | 17, 18, 40, 47, 61, 82 |
+| the reply's transmit | 15.8 | `__svc_tcp_send`; 9.6 of it in `__dev_queue_xmit`, the qdisc lock 2.6 and `__dev_xmit_skb` 1.8 | 07, 31, 32, 57: closed |
+| the loan's release | 8.6 | `svc_tcp_release_ctxt`: `rx_loan_table_release` 2.1, the pool's bulk return 1.7, the region's puts 1.0, irqs restored 1.6 | 45, 58, 86, 89, 90 |
+| block submit | 12.3 | `submit_bio`; the SGL map `blk_rq_dma_map_iter_next` 2.6 at IPC 4.0 | 55, 62 |
+| the loan's receive walk | about 15 | borrow 3.5, walk 1.7, append 1.7, prefetch 1.8, span 0.9 | 77 to 87 |
+| the DRC | 4.2 | the cold search 1.3 | this round |
+
+Every large block has been worked before.  Two of round 61's levers
+have never been tried: the NVMe completions by polling instead of an
+interrupt each (`nvme.poll_queues` with `RWF_HIPRI` for nfsd's direct
+writes), and PSI off (`psi=0`, 3.2k of round 61's 276.8k), a host
+setting.  Both need a boot.

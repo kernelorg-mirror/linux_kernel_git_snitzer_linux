@@ -1,0 +1,53 @@
+  46365  28.5%  (other)
+  24430  15.0%  skid at irq enable
+  18378  11.3%  tcp/ip tx+rx
+  18325  11.2%  loan bookkeeping
+  13387   8.2%  block mapping/submit
+  10012   6.1%  nfsd/xdr/cache
+   8655   5.3%  spinlocks
+   7162   4.4%  svc queue/threads
+   6680   4.1%  xfs/iomap
+   4581   2.8%  region/page_pool
+   2802   1.7%  slab/mm
+   2139   1.3%  sched/timer
+all 162915 cycles a WRITE, IPC 0.94
+  16519  10.1%  IPC 1.04  L2 refill/W  213.2  finish_task_switch.isra.0
+   6136   3.8%  IPC 0.42  L2 refill/W  100.9  _raw_spin_unlock_irqrestore
+   5173   3.2%  IPC 0.52  L2 refill/W   83.1  _raw_spin_lock
+   2623   1.6%  IPC 4.04  L2 refill/W   15.3  blk_rq_dma_map_iter_next
+   2107   1.3%  IPC 1.85  L2 refill/W   31.0  rx_loan_table_release
+   1867   1.1%  IPC 0.77  L2 refill/W   27.9  napi_pp_put_page
+   1847   1.1%  IPC 1.17  L2 refill/W   30.4  rx_loan_prefetch_pages
+   1794   1.1%  IPC 3.46  L2 refill/W   13.8  svc_tcp_rx_borrow_segment
+   1762   1.1%  IPC 0.42  L2 refill/W   24.8  __dev_xmit_skb
+   1755   1.1%  IPC 1.16  L2 refill/W   41.3  __tcp_transmit_skb
+   1741   1.1%  IPC 0.35  L2 refill/W   25.8  _raw_spin_unlock_irq
+   1699   1.0%  IPC 3.15  L2 refill/W   14.5  __rx_loan_table_append_ref
+   1673   1.0%  IPC 3.31  L2 refill/W   16.3  svc_tcp_rx_walk_skb
+   1436   0.9%  IPC 0.70  L2 refill/W   26.4  _raw_spin_lock_bh
+   1415   0.9%  IPC 0.13  L2 refill/W   22.4  nfsd_cache_search
+   1407   0.9%  IPC 2.30  L2 refill/W   19.9  svc_tcp_recv_skb
+   1169   0.7%  IPC 1.05  L2 refill/W   19.7  svc_tcp_recvfrom
+   1158   0.7%  IPC 0.67  L2 refill/W   17.6  sunrpc_cache_find_rcu
+   1100   0.7%  IPC 0.06  L2 refill/W    8.5  queued_spin_lock_slowpath
+   1050   0.6%  IPC 0.69  L2 refill/W   22.5  __pi_memcpy_generic
+   1044   0.6%  IPC 0.26  L2 refill/W   17.2  xfs_iext_lookup_extent
+   1042   0.6%  IPC 0.77  L2 refill/W   21.8  [unknown]
+   1023   0.6%  IPC 0.40  L2 refill/W   15.2  svc_recv
+   1023   0.6%  IPC 0.52  L2 refill/W   16.1  percpu_counter_add_batch
+   1008   0.6%  IPC 1.91  L2 refill/W   12.4  dma_direct_map_phys
+    974   0.6%  IPC 0.59  L2 refill/W   22.4  arch_counter_get_cntpct
+    950   0.6%  IPC 2.94  L2 refill/W   11.0  bio_split_io_at
+    940   0.6%  IPC 1.67  L2 refill/W    8.4  page_pool_put_netmem_bulk
+    929   0.6%  IPC 0.72  L2 refill/W   18.0  kmem_cache_alloc_node_noprof
+    925   0.6%  IPC 0.49  L2 refill/W   25.1  nfsd_direct_write
+    906   0.6%  IPC 0.67  L2 refill/W   14.5  _raw_spin_unlock
+    900   0.6%  IPC 1.97  L2 refill/W   34.4  rx_loan_region_span
+    891   0.5%  IPC 0.71  L2 refill/W   22.0  blk_mq_submit_bio
+    859   0.5%  IPC 0.82  L2 refill/W   23.9  lock_sock_nested
+    833   0.5%  IPC 2.03  L2 refill/W   30.5  rx_loan_skb_region_pages.part.0
+    830   0.5%  IPC 0.82  L2 refill/W   13.7  svc_xprt_received
+    805   0.5%  IPC 0.74  L2 refill/W   16.1  __ip_queue_xmit
+    796   0.5%  IPC 1.21  L2 refill/W   10.9  svc_tcp_rx_validate_mixed
+    773   0.5%  IPC 1.37  L2 refill/W    9.4  page_pool_recycle_ring_bulk
+    730   0.4%  IPC 0.72  L2 refill/W   17.3  svc_tcp_rx_target_admit.isra.0
