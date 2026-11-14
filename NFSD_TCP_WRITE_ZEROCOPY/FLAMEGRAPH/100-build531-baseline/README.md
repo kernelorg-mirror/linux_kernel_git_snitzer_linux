@@ -266,3 +266,54 @@ as the DRC one was (`$L/nfsd-base-531/`, srcversion
 (`t2-r607` counted, `r608` call graph, `r609` counted), then the DRC
 `nfsd.ko` again for three more (`r610` counted, `r611` call graph,
 `r612` counted): [ab607.sh](ab607.sh).  It ends on the DRC `nfsd.ko`.
+
+### Result: about 1.0k cycles a WRITE, not 1.3k; the totals cannot see it
+
+[ab607.out](ab607.out).  The first start stopped before any run:
+root had under 2 GB free, filled by the `nfsd.ko` builds; their
+objects were removed (the session's own build trees, nothing else)
+and it ran from the start.  Every run clean: no ring drop, no loan
+denied, no drive stepped down, no new kernel warning.
+
+| run | `nfsd.ko` | kind | GB/s | nfsd cycles a WRITE |
+|---|---|---|---|---|
+| `t2-r601` | 531's own | counted | 77.96 | 165,391 |
+| `t2-r607` | base, out of tree | counted | 77.91 | 162,182 |
+| `t2-r609` | base, out of tree | counted | 78.10 | 164,299 |
+| `t2-r604` | DRC commits | counted | 78.01 | 162,461 |
+| `t2-r606` | DRC commits | counted | 78.03 | 163,213 |
+| `t2-r610` | DRC commits | counted | 78.06 | 163,032 |
+| `t2-r612` | DRC commits | counted | 78.02 | 162,952 |
+| `t2-r608` | base, out of tree | call graph | 77.97 | |
+| `t2-r611` | DRC commits | call graph | 78.07 | |
+
+[read65-r607.txt](read65-r607.txt).  The base built alike averages
+163.2k, the DRC commits 162.9k over four runs: two runs of the same
+module differ by 2.1k, so the totals cannot resolve a 1k change.
+Most of the 2.6k first seen against `t2-r601` was the one baseline
+run and the kernel's own build, not the DRC.
+
+The DRC's own cycles a WRITE, built alike
+([drc-r608-r611.txt](drc-r608-r611.txt)), beside the first pair:
+
+| | `t2-r602` (531's own) | `t2-r608` (base) | `t2-r611` (DRC) | `t2-r605` (DRC) |
+|---|---|---|---|---|
+| `nfsd_cache_lookup` | 4,331 | 4,225 | 3,268 | 3,260 |
+| ... the tree's search | 1,400 | 1,308 | 1,346 | 1,406 |
+| ... the prune | 953 | 970 | 574 | 608 |
+| ... free and allocation | 982 | 915 | 203 | 189 |
+| ... the call's checksum | about 640 | about 620 | about 630 | about 550 |
+| `nfsd_cache_update` | 662 | 579 | 488 | 409 |
+| **lookup and update** | **4,993** | **4,804** | **3,756** | **3,669** |
+
+- **Like for like, the DRC commits save about 1.0 to 1.1k cycles a
+  WRITE** (4,804 to 3,756 and 3,669), 22% of the DRC and 0.7% of
+  nfsd: the free and allocation (915 to about 200) and the prune
+  (970 to about 590) as before.  The first pair's 1.3k was about
+  0.2k larger for the kernel's own build of the base.
+- The search is unchanged, as expected.  `nfsd_cache_update`'s
+  remaining cost is its list add (`__list_add_valid_or_report`, 181)
+  and its own copy of the reply into the entry.
+- **The rate is unchanged, 77.9 to 78.1 GB/s** on either module.
+
+The DRC `nfsd.ko` is loaded from `updates/` again.

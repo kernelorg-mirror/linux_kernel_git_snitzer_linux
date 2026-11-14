@@ -1,0 +1,18 @@
+02:35:48 nfsd base: EF174CABCDAC245CD82D155
+02:35:48 root has under 2 GB free
+02:36:38 nfsd base: EF174CABCDAC245CD82D155
+02:41:53 t2-r607 C | total 77.91 GB/s | WRITEs 148437 | ring drops 0 | retransmits 197 | no drive stepped down | new kernel warnings 0
+    loans: budget 8198 pages (64 WRITEs), in the run admitted 7427312, denied 0, paused 0, overrun 0
+02:48:01 t2-r608 G | total 77.97 GB/s | WRITEs 148912 | ring drops 0 | retransmits 189 | no drive stepped down | new kernel warnings 0
+    loans: budget 8198 pages (64 WRITEs), in the run admitted 7425568, denied 0, paused 0, overrun 0
+02:53:14 t2-r609 C | total 78.10 GB/s | WRITEs 148411 | ring drops 0 | retransmits 266 | no drive stepped down | new kernel warnings 0
+    loans: budget 8198 pages (64 WRITEs), in the run admitted 7444864, denied 0, paused 0, overrun 0
+02:53:17 after: settled.sh audit rest: the settled setting
+02:53:27 nfsd drc: 603083CAF5F5B5E8DE898AC
+02:58:42 t2-r610 C | total 78.06 GB/s | WRITEs 149246 | ring drops 0 | retransmits 206 | no drive stepped down | new kernel warnings 0
+    loans: budget 8198 pages (64 WRITEs), in the run admitted 7434400, denied 0, paused 0, overrun 0
+03:04:35 t2-r611 G | total 78.07 GB/s | WRITEs 148376 | ring drops 0 | retransmits 256 | no drive stepped down | new kernel warnings 0
+    loans: budget 8198 pages (64 WRITEs), in the run admitted 7439952, denied 0, paused 0, overrun 0
+03:09:48 t2-r612 C | total 78.02 GB/s | WRITEs 148935 | ring drops 0 | retransmits 202 | no drive stepped down | new kernel warnings 0
+    loans: budget 8198 pages (64 WRITEs), in the run admitted 7432352, denied 0, paused 0, overrun 0
+03:09:51 after: settled.sh audit rest: the settled setting
