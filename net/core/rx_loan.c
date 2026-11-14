@@ -601,19 +601,11 @@ EXPORT_SYMBOL_GPL(rx_loan_hold_window_clamp);
  * Bytes of payload a socket reads between two samples of what its skbs
  * occupy.  Long enough to hold several records, so that a record's short
  * last segment, which takes a whole receive buffer, weighs in a sample as
- * it does in the receive queue.
+ * it does in the receive queue; and so that a request-only transport's
+ * small skbs, a call or a few calls to a receive buffer, weigh in it as
+ * they do in the queue, which is what its window is cut to.
  */
 #define RX_LOAN_HOLD_WINDOW	(4U << 20)
-/*
- * An skb with less payload than this is not measured.  A call, a reply's
- * acknowledgment or a small request has a receive buffer to itself, a
- * hundred bytes in several thousand, and a socket that reads a few of
- * those before any data would be held to a window of less than a segment,
- * which TCP does not advertise at all: the first connection of a freshly
- * loaded server stopped that way.  A record's short last segment is not
- * lost by this, since GRO has it in an skb with the full ones before it.
- */
-#define RX_LOAN_HOLD_MIN_SKB	1024U
 
 static unsigned int rx_loan_hold_sample(u32 mem, u32 pay)
 {
@@ -642,9 +634,13 @@ static unsigned int rx_loan_hold_sample(u32 mem, u32 pay)
 bool rx_loan_hold_account(struct rx_loan_hold *h, unsigned int truesize,
 			  unsigned int skb_len, unsigned int used)
 {
-	if (skb_len < RX_LOAN_HOLD_MIN_SKB || !used)
+	if (!used)
 		return false;
-	h->geo_mem += div_u64((u64)truesize * min(used, skb_len), skb_len);
+	/* The sum saturates; a saturated sample reads above
+	 * RX_LOAN_HOLD_FACTOR_MAX and is clamped to it. */
+	h->geo_mem = min_t(u64, (u64)h->geo_mem +
+			   div_u64((u64)truesize * min(used, skb_len), skb_len),
+			   U32_MAX);
 	h->geo_pay += used;
 	if (h->geo_pay < RX_LOAN_HOLD_WINDOW)
 		return false;
@@ -691,7 +687,14 @@ EXPORT_SYMBOL_GPL(rx_loan_hold_factor);
  *
  * Lock the receive buffer to @bytes, cap the payload/truesize ratio TCP
  * turns free buffer into window with at @factor, and clamp the window, so
- * its unread data stays its share of the region.  The ceiling also keeps
+ * its unread data stays its share of the region.  Both the cap and the
+ * clamp keep the window at two segments or more, from accept on: the floor
+ * raises a ratio a connection inherited from its listener to the floor
+ * ratio (not to the cap), and rcv_ssthresh to the floor, which TCP relearns
+ * only from segments of a full MSS.  The SYN-ACK's window is the
+ * listener's, which has no advmss to floor it by.  A factor a connection
+ * inherits (the budget's hold_factor, a listener's ratio) is applied here
+ * before its first read, and floored here.  The ceiling also keeps
  * TCP from raising the clamp again when it re-learns its ratio.  Sockets
  * that never receive a region page keep TCP's own buffer
  * (rx_loan_hold_release()).  TCP sizes a
@@ -708,8 +711,8 @@ int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
 		       unsigned int bytes, unsigned int factor, int *rcvbuf,
 		       int *clamp)
 {
-	u32 old_clamp;
-	u8 ratio, old_ratio;
+	u32 old_clamp, floor;
+	u8 ratio, floor_ratio, old_ratio;
 	bool again;
 	int err;
 
@@ -720,12 +723,19 @@ int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
 	h->factor = factor;
 	*rcvbuf = max_t(int, bytes, SOCK_MIN_RCVBUF);
 	/*
-	 * Never under two segments: TCP advertises no window smaller than
-	 * one, and the sender then waits on a receiver that waits on it.
+	 * Never under two segments, in the window TCP offers as well as in
+	 * its clamp: TCP offers no more than @rcvbuf at the ratio, so a
+	 * ratio under this floor offers less than a segment, and the sender
+	 * then waits on a receiver that waits on it.  Above the floor the
+	 * buffer no longer covers the truesize of the skbs measured: what
+	 * the floor costs is the buffer, not the sender.
 	 */
-	*clamp = max_t(int, rx_loan_hold_window_clamp(*rcvbuf, factor),
-		       2 * READ_ONCE(tcp_sk(sk)->advmss));
-	ratio = rx_loan_hold_scaling_ratio(factor);
+	floor = 2 * READ_ONCE(tcp_sk(sk)->advmss);
+	*clamp = max_t(int, rx_loan_hold_window_clamp(*rcvbuf, factor), floor);
+	floor_ratio = min_t(u64, DIV_ROUND_UP_ULL((u64)floor <<
+						  TCP_RMEM_TO_WIN_SCALE,
+						  *rcvbuf), U8_MAX);
+	ratio = max_t(u32, rx_loan_hold_scaling_ratio(factor), floor_ratio);
 
 	old_ratio = READ_ONCE(tcp_sk(sk)->scaling_ratio_max);
 	old_clamp = READ_ONCE(tcp_sk(sk)->window_clamp);
@@ -733,6 +743,17 @@ int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
 	/* Unread data is this socket's share of the region. */
 	sock_set_rcvbuf(sk, *rcvbuf / 2);	/* doubled on the way in */
 	tcp_sock_set_scaling_ratio_max(sk, ratio);
+	/*
+	 * The ceiling only lowers: lift a ratio and a window threshold
+	 * inherited below the floor, to the floor and no higher, so that
+	 * TCP's own lower measurement above it stands.
+	 */
+	lock_sock(sk);
+	if (tcp_sk(sk)->scaling_ratio < floor_ratio)
+		tcp_sk(sk)->scaling_ratio = floor_ratio;
+	if (tcp_sk(sk)->rcv_ssthresh < floor)
+		tcp_sk(sk)->rcv_ssthresh = floor;
+	release_sock(sk);
 	err = tcp_sock_set_window_clamp(sk, *clamp);
 	if (!err && again)
 		tcp_sock_raise_rcv_window(sk, old_ratio, old_clamp);

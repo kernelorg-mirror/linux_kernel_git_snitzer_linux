@@ -1132,8 +1132,7 @@ static void rx_loan_hold_test(struct kunit *test)
 	WRITE_ONCE(lb->hold_factor, 186);
 	KUNIT_EXPECT_EQ(test, rx_loan_hold_factor(&fresh, lb), 186U);
 
-	/* Small or empty skbs are not measured. */
-	KUNIT_EXPECT_FALSE(test, rx_loan_hold_account(&h, 8448, 1023, 1023));
+	/* An skb nothing was read of is not measured. */
 	KUNIT_EXPECT_FALSE(test, rx_loan_hold_account(&h, 8448, 7740, 0));
 	KUNIT_EXPECT_EQ(test, h.geo_pay, 0U);
 

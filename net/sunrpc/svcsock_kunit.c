@@ -1660,16 +1660,18 @@ static void svcsock_rx_geometry_test(struct kunit *test)
 	svc_tcp_rx_geometry_account(sa, 8448, 7740, 3870);
 	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_mem, 8448U + 4224U);
 	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_pay, 7740U + 3870U);
-	/*
-	 * Nothing read of an skb counts for nothing, and neither does an
-	 * skb too small to carry data: a call in a receive buffer of its
-	 * own would have the transport held to less than a segment.
-	 */
+	/* Nothing read of an skb counts for nothing. */
 	svc_tcp_rx_geometry_account(sa, 8448, 7740, 0);
-	svc_tcp_rx_geometry_account(sa, 8448, 100, 100);
-	svc_tcp_rx_geometry_account(sa, 8448, 1023, 1023);
 	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_mem, 8448U + 4224U);
 	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_pay, 7740U + 3870U);
+	/*
+	 * A small skb is measured as it is: a call in a receive buffer of
+	 * its own weighs in a sample as it does in the receive queue.
+	 */
+	svc_tcp_rx_geometry_account(sa, 8448, 100, 100);
+	svc_tcp_rx_geometry_account(sa, 8448, 1023, 1023);
+	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_mem, 8448U + 4224U + 2 * 8448U);
+	KUNIT_EXPECT_EQ(test, sa->sk_rx_geo_pay, 7740U + 3870U + 100U + 1023U);
 
 	/*
 	 * A window of them is a sample: 8448 bytes for 7740 of payload is
@@ -4415,6 +4417,141 @@ static void svcsock_rx_hold_buffer_test(struct kunit *test)
 }
 
 /*
+ * A transport that reads only requests, two calls of 220 bytes to an skb of
+ * 3960 bytes of memory, after it measured runs of six calls, is held at
+ * the factor of the requests: the window it is cut to, of skbs of that
+ * weight, fits the receive buffer it is held to, so that TCP never prunes
+ * its queue for a request the window admitted.
+ */
+static void svcsock_rx_hold_small_request_test(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
+	const int rcvbuf = svc_tcp_rx_kunit_rcvbuf_min();
+	struct socket *sock;
+	struct tcp_sock *tp;
+
+	KUNIT_ASSERT_EQ(test, sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
+					       IPPROTO_TCP, &sock), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_sock_release, sock), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svsk->sk_sock = sock;
+	svsk->sk_sk = sock->sk;
+	tp = tcp_sk(sock->sk);
+	svc_tcp_rx_budget_kunit_configure(0, 0, 0);
+	svc_tcp_rx_budget_kunit_rcvbuf(rcvbuf);
+
+	svcsock_rx_geometry_window(svsk, 3960, 1320);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_hold_factor(svsk), 300U);
+	svcsock_rx_geometry_window(svsk, 3960, 440);
+
+	svc_tcp_rx_hold_buffer(svsk);
+	KUNIT_ASSERT_TRUE(test, svsk->sk_rx_held);
+	KUNIT_EXPECT_GE_MSG(test, svc_tcp_rx_hold_factor(svsk), 900U,
+			    "factor %u, 300 at base and 900 at the fix",
+			    svc_tcp_rx_hold_factor(svsk));
+	KUNIT_EXPECT_LE_MSG(test, (u64)tp->window_clamp * 3960,
+			    (u64)sock->sk->sk_rcvbuf * 440,
+			    "window clamp %u of a buffer of %d, 21504 at base and 7168 at the fix for 131072",
+			    tp->window_clamp, sock->sk->sk_rcvbuf);
+	KUNIT_EXPECT_EQ(test, sock->sk->sk_rcvbuf, rcvbuf);
+}
+
+/*
+ * The same transport with a call of 220 bytes alone in each skb of 3960
+ * (a factor of 1800, a ratio of 7 for 131072) and a jumbo segment of 8949
+ * bytes, on a connection that inherited a ratio of 7 from its listener (TCP
+ * relearns it from full segments only): the window TCP offers of the held
+ * buffer, 3584 bytes at ratio 7,
+ * and the clamp, are both held to two segments (17898), the offered one
+ * at ratio 35 (17920), so that the sender is never left with a window of
+ * less than a segment.  The floor holds from accept (rcv_ssthresh, set to
+ * 3584 here, is lifted to 17898 too); the SYN-ACK's window is the
+ * listener's, which has no advmss.
+ */
+static void svcsock_rx_hold_small_request_floor_test(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
+	const int rcvbuf = svc_tcp_rx_kunit_rcvbuf_min();
+	struct socket *sock;
+	struct tcp_sock *tp;
+
+	KUNIT_ASSERT_EQ(test, sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
+					       IPPROTO_TCP, &sock), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_sock_release, sock), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svsk->sk_sock = sock;
+	svsk->sk_sk = sock->sk;
+	tp = tcp_sk(sock->sk);
+	tp->advmss = 8949;
+	/* A connection from a held listener inherits its low ratio. */
+	tp->scaling_ratio = 7;
+	/* ... and a window threshold under the floor (rx_loan_hold_apply()). */
+	tp->rcv_ssthresh = 3584;
+	svc_tcp_rx_budget_kunit_configure(0, 0, 0);
+	svc_tcp_rx_budget_kunit_rcvbuf(rcvbuf);
+
+	svcsock_rx_geometry_window(svsk, 3960, 220);
+	KUNIT_ASSERT_EQ(test, svc_tcp_rx_hold_factor(svsk), 1800U);
+	svc_tcp_rx_hold_buffer(svsk);
+	KUNIT_ASSERT_TRUE(test, svsk->sk_rx_held);
+	KUNIT_EXPECT_EQ(test, sock->sk->sk_rcvbuf, rcvbuf);
+	KUNIT_EXPECT_GE_MSG(test, (u32)tcp_win_from_space(sock->sk,
+							  sock->sk->sk_rcvbuf),
+			    2U * tp->advmss,
+			    "offered window %d, 3584 without the floor and 17920 with it",
+			    tcp_win_from_space(sock->sk, sock->sk->sk_rcvbuf));
+	KUNIT_EXPECT_GE(test, tp->window_clamp, 2U * tp->advmss);
+	/* From accept: 3584 lifted to the floor, 17898. */
+	KUNIT_EXPECT_GE(test, tp->rcv_ssthresh, 2U * tp->advmss);
+}
+
+/*
+ * The lift stops at the floor ratio, not at the hold's cap.  At a fixed
+ * factor of 150 the cap is 85 (rx_loan_hold_scaling_ratio()), above the
+ * floor ratio, which is above the ratio 7 inherited from a held listener:
+ * floor = 2 * 8949 = 17898; floor ratio = ceil(17898 * 256 / 131072) = 35;
+ * 131072 * 35 >> 8 = 17920 >= 17898.  The ratio ends at 35: lifted to the
+ * cap it would be 85, and TCP's own lower measurement above the floor
+ * would be overridden.
+ */
+static void svcsock_rx_hold_floor_ratio_test(struct kunit *test)
+{
+	struct svc_sock *svsk = svcsock_rx_credit_sock(test);
+	const int rcvbuf = svc_tcp_rx_kunit_rcvbuf_min();
+	struct socket *sock;
+	struct tcp_sock *tp;
+	u8 floor_ratio;
+
+	KUNIT_ASSERT_EQ(test, sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
+					       IPPROTO_TCP, &sock), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_sock_release, sock), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	svsk->sk_sock = sock;
+	svsk->sk_sk = sock->sk;
+	tp = tcp_sk(sock->sk);
+	tp->advmss = 8949;
+	tp->scaling_ratio = 7;
+	svc_tcp_rx_budget_kunit_configure(0, 0, 150);
+	svc_tcp_rx_budget_kunit_rcvbuf(rcvbuf);
+
+	floor_ratio = DIV_ROUND_UP_ULL((u64)(2 * tp->advmss) <<
+				       TCP_RMEM_TO_WIN_SCALE, rcvbuf);
+	KUNIT_ASSERT_GT(test, svc_tcp_rx_scaling_ratio(150), floor_ratio);
+	KUNIT_ASSERT_GT(test, floor_ratio, (u8)tp->scaling_ratio);
+	svc_tcp_rx_hold_buffer(svsk);
+	KUNIT_ASSERT_TRUE(test, svsk->sk_rx_held);
+	KUNIT_EXPECT_EQ_MSG(test, tp->scaling_ratio, floor_ratio,
+			    "ratio %u, the cap %u without the floor ratio",
+			    tp->scaling_ratio, svc_tcp_rx_scaling_ratio(150));
+}
+
+/*
  * A transport held before its budget learned its factor (150) and held
  * again at the factor it measured (107, svc_tcp_rx_hold_stale()) gets the
  * window of one held at 107 from the start: the ratio rises to the new
@@ -4574,7 +4711,20 @@ static void svcsock_rx_listener_window_test(struct kunit *test)
 		KUNIT_EXPECT_LE(test, READ_ONCE(tp->window_clamp),
 				max_t(u32, want, 2 * READ_ONCE(tp->advmss)));
 		KUNIT_EXPECT_LE(test, READ_ONCE(tp->rcv_wnd), (u32)want);
-		KUNIT_EXPECT_LE(test, tp->scaling_ratio, ratio);
+		/*
+		 * The ratio is the hold's cap or, if the floor needs more, the
+		 * floor ratio: on loopback at 256K (advmss 65495, floor
+		 * 130990) that is 128, TCP's default, so the cap does
+		 * nothing; the window offered is 131072 >= 130990.
+		 */
+		KUNIT_EXPECT_LE(test, (u32)tp->scaling_ratio,
+				max_t(u32, ratio,
+				      min_t(u32, DIV_ROUND_UP(2U * tp->advmss <<
+							      TCP_RMEM_TO_WIN_SCALE,
+							      SZ_256K), U8_MAX)));
+		KUNIT_EXPECT_GE(test, (u32)tcp_win_from_space(ssock->sk,
+							      ssock->sk->sk_rcvbuf),
+				2U * tp->advmss);
 	}
 }
 
@@ -9190,6 +9340,9 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_listener_window_test),
 	KUNIT_CASE(svcsock_rx_listener_wscale_test),
 	KUNIT_CASE(svcsock_rx_hold_buffer_test),
+	KUNIT_CASE(svcsock_rx_hold_small_request_test),
+	KUNIT_CASE(svcsock_rx_hold_small_request_floor_test),
+	KUNIT_CASE(svcsock_rx_hold_floor_ratio_test),
 	KUNIT_CASE(svcsock_rx_hold_again_test),
 	KUNIT_CASE(svcsock_rx_credit_rcvbuf_floor_test),
 	KUNIT_CASE(svcsock_rx_credit_disable_waiters_test),
