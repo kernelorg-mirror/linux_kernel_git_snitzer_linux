@@ -198,3 +198,28 @@ to 406. nfsd's CPUs were at 16,043 in every run, the default too.
 `t2-r656` holds the fraction at 147 (high fixed at 873, about the
 default's floor) to see whether the 60.6 comes back with the highs
 held low, and `t2-r657` reads at 0 straight after it.
+
+[run656.out](run656.out):
+
+| run | fraction | GB/s | a / b | receive CPUs' high | nfsd CPUs' high | receive CPUs busy |
+|---|---|---|---|---|---|---|
+| `t2-r656` | 147 | 57.42 | 28.50 / 28.92 | 873 | 873 | 71 to 86% |
+| `t2-r657` | 0 | 60.27 | 30.06 / 30.22 | 874 to 2,510, CPU 0 9,589 | 14,533 to 16,043 | 85 to 92% |
+
+No drive stepped down, no new kernel warning; ring drops 41 and 303.
+
+- **Low everywhere is worse still: 57.4 GB/s.** The fraction fixes
+  every CPU's high, nfsd's too, and nfsd's CPUs, which only allocate,
+  then refill from the zone 18 times as often; the receive CPUs were
+  less busy (71 to 86%), so the time moved to nfsd's refills.
+- **The default from that low state is back at 60.3**, with most
+  receive CPUs' highs at 874 again and nfsd's at 14,533 to 16,043.
+- So the best mix is a low high on the CPUs that only free and a high
+  one on the CPUs that only allocate, which the default reaches when
+  nothing has raised the receive CPUs' highs, and which no value of
+  the sysctl gives, since it sets every CPU alike. **The sysctl stays
+  at 0**; the way out of the zone lock is in code (2 or 3 above).
+- **The host:** the fraction is 0 and the receive CPUs' highs are back
+  at 874 but for CPU 0 (7,994) and 60 (3,585) at rest, about as
+  before the A/B (r651's CPU 60 was 999 to 1,188). The runs after this
+  start from that.
