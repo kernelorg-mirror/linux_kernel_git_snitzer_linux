@@ -166,3 +166,35 @@ A/B is 0 against 8, and each run records every CPU's high in the load
 (`/proc/zoneinfo` either side of the window), which says what the
 default reached. Nothing is profiled (`PROBE=none`), so the busy
 figures are the load's own. `settled.sh` does not hold the sysctl.
+
+[run651.out](run651.out), [wcheck655.out](wcheck655.out):
+
+| run | fraction | GB/s | a / b | receive CPUs' high in the load | receive CPUs busy | transmit CPUs busy |
+|---|---|---|---|---|---|---|
+| `t2-r651` | 0 | **60.63** | 30.31 / 30.32 | 874 to 1,188 | 77 to 92% | 15 to 24% |
+| `t2-r652` | 8 | 58.52 | 29.16 / 29.35 | 16,043 | 89 to 96% | 5 to 16% |
+| `t2-r653` | 0 | 58.59 | 29.15 / 29.43 | 7,176 to 13,122 | 90 to 95% | 5 to 15% |
+| `t2-r654` | 8 | 58.49 | 29.00 / 29.49 | 16,043 | 87 to 95% | 5 to 14% |
+| `t2-r655` | 8 | write 77.97 | 38.91 / 39.05 | | | |
+
+No drive stepped down and no new kernel warning in any; ring drops 278
+to 406. nfsd's CPUs were at 16,043 in every run, the default too.
+
+- **Fixing the high at 16,043 lowers reads by 2.1 GB/s**, 58.5 against
+  60.6, with the receive CPUs busier (to 96%).
+- **The default's second run read the same as 8**, because the
+  receive CPUs' highs did not come back down: setting 0 again leaves
+  each CPU's high where it is, and the default's own tuning let them
+  rise to 7,000 to 13,000 in r653 (after the window they were 7,008 to
+  12,927, and after the WRITE pass 7,815 to 15,693 at rest). In r651,
+  before anything was changed, they stayed at 874. So the rate followed
+  the receive CPUs' high, not the sysctl: low, 60.6; high, 58.5.
+  Why a longer list on a CPU that only frees costs more (longer drains
+  under the zone lock, or the list's pages and struct pages out of
+  cache) was not measured.
+- **The WRITE pass at 8: 77.97 GB/s, RERUN.** 8 is not to be kept, so
+  it was not run again.
+
+`t2-r656` holds the fraction at 147 (high fixed at 873, about the
+default's floor) to see whether the 60.6 comes back with the highs
+held low, and `t2-r657` reads at 0 straight after it.

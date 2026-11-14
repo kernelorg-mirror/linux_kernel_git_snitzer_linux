@@ -1,0 +1,8 @@
+23:43:06 t2-r655 write check: RERUN | total 77.97 GB/s | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 38.91 GB/s (fio, after the warm-up); in the 10 s window: wire 39.41 GB/s, FIFO drops 0, ring drops 0, rings 25/26/24/26%
+      write: 38.91 GB/s, 4.6k IOPS, completion 54.35 ms mean, 82.31 ms at the 99th percentile
+    port b enp164s0f0: 39.05 GB/s (fio, after the warm-up); in the 10 s window: wire 39.35 GB/s, FIFO drops 0, ring drops 0, rings 24/25/26/25%
+      write: 39.05 GB/s, 4.6k IOPS, completion 54.14 ms mean, 80.22 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 9.7 to 9.8 GB/s, busiest 98% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 9.7 to 9.8 GB/s, busiest 98% busy
+23:43:09 after: settled.sh audit rest: the settled setting
