@@ -336,6 +336,16 @@ static u16 tcp_select_window(struct sock *sk)
 	return new_win;
 }
 
+#if IS_ENABLED(CONFIG_KUNIT)
+#include <kunit/visibility.h>
+/* KUnit only: the real static tcp_select_window(). */
+u16 tcp_kunit_select_window(struct sock *sk)
+{
+	return tcp_select_window(sk);
+}
+EXPORT_SYMBOL_IF_KUNIT(tcp_kunit_select_window);
+#endif
+
 /* Set up ECN state for a packet on a ESTABLISHED socket that is about to
  * be sent.
  */

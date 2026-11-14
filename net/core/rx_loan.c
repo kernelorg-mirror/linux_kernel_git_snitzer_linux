@@ -704,8 +704,10 @@ EXPORT_SYMBOL_GPL(rx_loan_hold_factor);
  * opened with the listener's larger window would overflow the buffer it is
  * held to with its first burst.
  *
- * Return: 0 once held; -EALREADY, nothing done, when @bytes is 0 or @h is
- * already held; else the window clamp's error, @h held all the same.
+ * Return: 0 once held; -EALREADY when @bytes is 0 (nothing done), @h is
+ * already held (nothing done), or @h was released by rx_loan_hold_overrun()
+ * (marked held, buffer left unlocked, @h->factor recorded but not applied);
+ * else the window clamp's error, @h held all the same.
  */
 int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
 		       unsigned int bytes, unsigned int factor, int *rcvbuf,
@@ -720,7 +722,7 @@ int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
 	if (!bytes || h->held)
 		return -EALREADY;
 	again = h->factor != 0;
-	h->factor = factor;
+	WRITE_ONCE(h->factor, factor);
 	*rcvbuf = max_t(int, bytes, SOCK_MIN_RCVBUF);
 	/*
 	 * Never under two segments, in the window TCP offers as well as in
@@ -740,20 +742,30 @@ int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
 	old_ratio = READ_ONCE(tcp_sk(sk)->scaling_ratio_max);
 	old_clamp = READ_ONCE(tcp_sk(sk)->window_clamp);
 
-	/* Unread data is this socket's share of the region. */
-	sock_set_rcvbuf(sk, *rcvbuf / 2);	/* doubled on the way in */
-	tcp_sock_set_scaling_ratio_max(sk, ratio);
+	/*
+	 * Unread data is this socket's share of the region.  A hold that
+	 * overran its buffer (rx_loan_hold_overrun()) stays released.
+	 */
+	lock_sock(sk);
+	if (h->released) {
+		h->held = true;
+		release_sock(sk);
+		return -EALREADY;
+	}
+	sk->sk_userlocks |= SOCK_RCVBUF_LOCK;
+	WRITE_ONCE(sk->sk_rcvbuf, *rcvbuf);
+	tcp_set_rcvbuf(sk, *rcvbuf);
 	/*
 	 * The ceiling only lowers: lift a ratio and a window threshold
 	 * inherited below the floor, to the floor and no higher, so that
 	 * TCP's own lower measurement above it stands.
 	 */
-	lock_sock(sk);
 	if (tcp_sk(sk)->scaling_ratio < floor_ratio)
 		tcp_sk(sk)->scaling_ratio = floor_ratio;
 	if (tcp_sk(sk)->rcv_ssthresh < floor)
 		tcp_sk(sk)->rcv_ssthresh = floor;
 	release_sock(sk);
+	tcp_sock_set_scaling_ratio_max(sk, ratio);
 	err = tcp_sock_set_window_clamp(sk, *clamp);
 	if (!err && again)
 		tcp_sock_raise_rcv_window(sk, old_ratio, old_clamp);
@@ -799,6 +811,35 @@ int rx_loan_hold_listen(struct rx_loan_hold *h, struct sock *sk,
 }
 EXPORT_SYMBOL_GPL(rx_loan_hold_listen);
 
+/* Unlock a connection's held buffer: TCP grows it again from tcp_rmem[1]. */
+static void rx_loan_hold_unlock(struct sock *sk)
+{
+	int rmem = READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_rmem[1]);
+
+	sk->sk_userlocks &= ~SOCK_RCVBUF_LOCK;
+	WRITE_ONCE(sk->sk_rcvbuf, max_t(int, sk->sk_rcvbuf, rmem));
+}
+
+/**
+ * rx_loan_hold_overrun - release a held buffer its backlog has passed
+ * @h: the socket's hold
+ * @sk: the socket, from its data_ready callback (softirq or release_sock())
+ *
+ * Called when sk_rmem_alloc is over sk_rcvbuf.  A held connection is
+ * unlocked, once, for the life of the connection (@h->released): TCP's
+ * next ingest test then grows the buffer instead of pruning.  No-op on a
+ * socket never held or already unlocked.
+ */
+void rx_loan_hold_overrun(struct rx_loan_hold *h, struct sock *sk)
+{
+	if (!READ_ONCE(h->factor) || !(sk->sk_userlocks & SOCK_RCVBUF_LOCK) ||
+	    atomic_read(&sk->sk_rmem_alloc) <= READ_ONCE(sk->sk_rcvbuf))
+		return;
+	rx_loan_hold_unlock(sk);
+	WRITE_ONCE(h->released, true);
+}
+EXPORT_SYMBOL_GPL(rx_loan_hold_overrun);
+
 /**
  * rx_loan_hold_release - give a socket back TCP's own receive buffer
  * @sk: a connection that will never receive region pages, or a listener
@@ -835,8 +876,7 @@ void rx_loan_hold_release(struct sock *sk)
 		release_sock(sk);
 		return;
 	}
-	sk->sk_userlocks &= ~SOCK_RCVBUF_LOCK;
-	WRITE_ONCE(sk->sk_rcvbuf, max_t(int, sk->sk_rcvbuf, rmem));
+	rx_loan_hold_unlock(sk);
 	old_ratio = tp->scaling_ratio_max;
 	old_clamp = tp->window_clamp;
 	tp->scaling_ratio_max = 0;

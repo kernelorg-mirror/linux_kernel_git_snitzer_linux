@@ -4523,6 +4523,10 @@ VISIBLE_IF_KUNIT void svc_data_ready(struct sock *sk)
 		/* Refer to svc_setup_socket() for details. */
 		rmb();
 		svsk->sk_odata(sk);
+		/* A held buffer the backlog passed is TCP's again. */
+		if (unlikely(atomic_read(&sk->sk_rmem_alloc) >
+			     READ_ONCE(sk->sk_rcvbuf)))
+			rx_loan_hold_overrun(&svsk->sk_rx_hold, sk);
 		trace_svcsock_data_ready(&svsk->sk_xprt, 0);
 		if (test_bit(XPT_HANDSHAKE, &svsk->sk_xprt.xpt_flags))
 			return;

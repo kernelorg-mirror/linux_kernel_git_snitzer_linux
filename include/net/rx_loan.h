@@ -101,13 +101,16 @@ unsigned int rx_loan_tile(struct rx_loan_table *t, u32 base, u32 start,
  * the region can take, once it receives region pages (rx_loan_hold_apply()).
  * What it is held to follows a factor, the bytes its skbs occupy for each
  * 100 of payload, measured as it reads (rx_loan_hold_account()).  Only the
- * thread reading the socket changes it.
+ * thread reading the socket changes it, except @released, set once from
+ * softirq under TCP's receive exclusion.
  */
 struct rx_loan_hold {
 	/* region pages seen: hold the receive buffer when next unlocked */
 	bool			pending;
 	/* receive buffer, window clamp and scaling ratio held */
 	bool			held;
+	/* the backlog passed the held buffer: unlocked for good */
+	bool			released;
 	/* what they were held to (rx_loan_hold_factor()) */
 	unsigned int		factor;
 	/*
@@ -137,6 +140,7 @@ int rx_loan_hold_apply(struct rx_loan_hold *h, struct sock *sk,
 		       int *clamp);
 int rx_loan_hold_listen(struct rx_loan_hold *h, struct sock *sk,
 			unsigned int bytes, unsigned int factor);
+void rx_loan_hold_overrun(struct rx_loan_hold *h, struct sock *sk);
 void rx_loan_hold_release(struct sock *sk);
 #endif
 
@@ -153,7 +157,7 @@ static inline unsigned int rx_loan_hold_measured(const struct rx_loan_hold *h)
 static inline bool rx_loan_hold_stale(const struct rx_loan_hold *h,
 				      unsigned int now)
 {
-	return abs_diff(now, h->factor) * 8 > h->factor;
+	return !h->released && abs_diff(now, h->factor) * 8 > h->factor;
 }
 
 /* The table's counts agree; checks no entry. */

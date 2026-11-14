@@ -4611,6 +4611,284 @@ static void svcsock_rx_hold_again_test(struct kunit *test)
 	KUNIT_EXPECT_LE(test, tp->rcv_ssthresh, tp->window_clamp);
 }
 
+/*
+ * A held socket whose reader is stalled (waiting on credit, nothing read)
+ * keeps receiving: real svc_tcp_rx_hold_buffer(), real svc_data_ready(),
+ * and the real tcp_select_window() as ACKs.  TCP's ingest test fails
+ * once the buffer is locked and rmem > sk_rcvbuf (tcp_can_ingest()), so a
+ * locked buffer must never be left in that state when the next skb arrives:
+ * the hold is released by the first svc_data_ready() that sees rmem >
+ * sk_rcvbuf.
+ */
+#define OVR_RCVBUF	262144
+#define OVR_FACTOR	314
+
+struct svcsock_rx_ovr {
+	struct svc_sock *svsk;
+	struct sock *sk;
+	struct list_head waitq;
+	int held_rcvbuf;
+	u8 ratio_max;
+	u32 clamp;
+	u32 edge0;
+	int over_seg;		/* segment after which rmem > held rcvbuf */
+	int release_seg;	/* segment after which the lock was clear */
+	int segs;
+};
+
+struct svcsock_rx_ovr_param {
+	unsigned int len;	/* payload per skb */
+	unsigned int ack_every;
+};
+
+static const struct svcsock_rx_ovr_param svcsock_rx_ovr_params[] = {
+	{ 220, 1 }, { 220, 2 }, { 220, 64 },
+	{ 1124, 1 }, { 1124, 2 }, { 1124, 64 },
+	{ 4220, 1 }, { 4220, 2 }, { 4220, 64 },
+	/* eight 220-byte calls merged into one skb */
+	{ 8 * 220, 1 }, { 8 * 220, 2 }, { 8 * 220, 64 },
+};
+
+static void svcsock_rx_ovr_param_desc(const struct svcsock_rx_ovr_param *p,
+				      char *desc)
+{
+	snprintf(desc, KUNIT_PARAM_DESC_SIZE, "len-%u-ack-%u", p->len,
+		 p->ack_every);
+}
+
+KUNIT_ARRAY_PARAM(svcsock_rx_ovr, svcsock_rx_ovr_params,
+		  svcsock_rx_ovr_param_desc);
+
+static void svcsock_rx_ovr_unwait(void *svsk)
+{
+	list_del_init(&((struct svc_sock *)svsk)->sk_rx_wait.node);
+}
+
+static void svcsock_rx_ovr_purge(void *sk)
+{
+	skb_queue_purge(&((struct sock *)sk)->sk_receive_queue);
+	WRITE_ONCE(((struct sock *)sk)->sk_forward_alloc, 0);
+}
+
+static void svcsock_rx_ovr_unuser(void *sk)
+{
+	((struct sock *)sk)->sk_user_data = NULL;
+}
+
+/* @hold: held by the real hold; else a locked buffer of a transport never held. */
+static struct svcsock_rx_ovr *svcsock_rx_ovr_setup(struct kunit *test,
+						   bool hold)
+{
+	struct svcsock_rx_ovr *c = kunit_kzalloc(test, sizeof(*c), GFP_KERNEL);
+	struct svc_sock *svsk;
+	struct socket *sock;
+	struct tcp_sock *tp;
+	struct sock *sk;
+
+	KUNIT_ASSERT_NOT_NULL(test, c);
+	INIT_LIST_HEAD(&c->waitq);
+	svsk = svcsock_rx_credit_sock(test);
+	KUNIT_ASSERT_EQ(test, sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
+					       IPPROTO_TCP, &sock), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_sock_release, sock), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_budget_off, NULL), 0);
+	sk = sock->sk;
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_ovr_unuser, sk), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_ovr_purge, sk), 0);
+	c->svsk = svsk;
+	c->sk = sk;
+	svsk->sk_sock = sock;
+	svsk->sk_sk = sk;
+	svsk->sk_odata = svcsock_rx_noop_data_ready;
+	sk->sk_user_data = svsk;
+	/* The stalled reader: parked on a credit wait. */
+	list_add(&svsk->sk_rx_wait.node, &c->waitq);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			svcsock_rx_ovr_unwait, svsk), 0);
+
+	tp = tcp_sk(sk);
+	/* As the handshake left it (E4): wscale 13, jumbo advmss. */
+	tp->rx_opt.rcv_wscale = 13;
+	tp->advmss = 8949;
+	tp->window_clamp = 65535U << 13;
+	tp->rcv_ssthresh = 40960;
+	inet_csk(sk)->icsk_ack.rcv_mss = TCP_MSS_DEFAULT;
+	tp->rcv_nxt = 1000;
+	tp->rcv_wup = tp->rcv_nxt;
+	tp->rcv_wnd = 0;
+
+	if (hold) {
+		svc_tcp_rx_budget_kunit_configure(0, 0, OVR_FACTOR);
+		svc_tcp_rx_budget_kunit_rcvbuf(OVR_RCVBUF);
+		svc_tcp_rx_hold_buffer(svsk);
+		KUNIT_ASSERT_TRUE(test, svsk->sk_rx_held);
+	} else {
+		/* factor 0: apply never ran (UDP, unheld TCP) */
+		sk->sk_userlocks |= SOCK_RCVBUF_LOCK;
+		WRITE_ONCE(sk->sk_rcvbuf, OVR_RCVBUF);
+	}
+	KUNIT_ASSERT_TRUE(test, sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+	KUNIT_ASSERT_EQ(test, sk->sk_rcvbuf, OVR_RCVBUF);
+	c->held_rcvbuf = sk->sk_rcvbuf;
+	c->ratio_max = tp->scaling_ratio_max;
+	c->clamp = tp->window_clamp;
+	tcp_kunit_select_window(sk);
+	c->edge0 = tp->rcv_wup + tp->rcv_wnd;
+	c->over_seg = -1;
+	c->release_seg = -1;
+	return c;
+}
+
+/*
+ * Offer skbs of @len until @total bytes of truesize have been offered.
+ * @drain: free each after admission.  @check: assert S, B and E.
+ */
+static void svcsock_rx_ovr_feed(struct kunit *test, struct svcsock_rx_ovr *c,
+				unsigned int len, unsigned int ack_every,
+				unsigned int total, bool drain, bool check)
+{
+	struct sock *sk = c->sk;
+	struct tcp_sock *tp = tcp_sk(sk);
+	unsigned int offered = 0, since_ack = 0;
+	struct sk_buff *skb;
+	bool locked;
+	int rmem;
+
+	while (offered < total) {
+		/* S: TCP's next ingest test must never meet this state. */
+		if (check)
+			KUNIT_ASSERT_FALSE_MSG(test,
+				(sk->sk_userlocks & SOCK_RCVBUF_LOCK) &&
+				atomic_read(&sk->sk_rmem_alloc) > sk->sk_rcvbuf,
+				"S: seg %d admitted into locked rmem %d > rcvbuf %d",
+				c->segs, atomic_read(&sk->sk_rmem_alloc),
+				sk->sk_rcvbuf);
+		skb = alloc_skb(len, GFP_KERNEL);
+		KUNIT_ASSERT_NOT_NULL(test, skb);
+		skb_put(skb, len);
+		skb_set_owner_r(skb, sk);
+		offered += skb->truesize;
+		if (!drain)
+			__skb_queue_tail(&sk->sk_receive_queue, skb);
+		tp->rcv_nxt += len;
+		c->segs++;
+		svc_data_ready(sk);
+		if (drain)
+			kfree_skb(skb);
+		if (++since_ack >= ack_every) {
+			tcp_kunit_select_window(sk);
+			since_ack = 0;
+		}
+		rmem = atomic_read(&sk->sk_rmem_alloc);
+		locked = sk->sk_userlocks & SOCK_RCVBUF_LOCK;
+		if (rmem > c->held_rcvbuf && c->over_seg < 0)
+			c->over_seg = c->segs;
+		if (!locked && c->release_seg < 0)
+			c->release_seg = c->segs;
+		if (!check)
+			continue;
+		/* E: no release while rmem <= the held rcvbuf. */
+		if (rmem <= c->held_rcvbuf)
+			KUNIT_ASSERT_TRUE_MSG(test, locked,
+				"E: released early at seg %d rmem %d <= %d",
+				c->segs, rmem, c->held_rcvbuf);
+		/* B: the first data_ready past rcvbuf releases. */
+		else if (c->over_seg == c->segs)
+			KUNIT_ASSERT_FALSE_MSG(test, locked,
+				"B: seg %d rmem %d > rcvbuf %d still locked",
+				c->segs, rmem, c->held_rcvbuf);
+	}
+}
+
+static void svcsock_rx_overrun_release_test(struct kunit *test)
+{
+	const struct svcsock_rx_ovr_param *p = test->param_value;
+	struct svcsock_rx_ovr *c = svcsock_rx_ovr_setup(test, true);
+	struct tcp_sock *tp = tcp_sk(c->sk);
+	struct sock *sk = c->sk;
+
+	svcsock_rx_ovr_feed(test, c, p->len, p->ack_every, 2 * OVR_RCVBUF,
+			    false, true);
+	/* L: what tcp_clamp_window() needs to grow the buffer next. */
+	KUNIT_EXPECT_GT(test, c->over_seg, 0);
+	KUNIT_EXPECT_EQ(test, c->release_seg, c->over_seg);
+	KUNIT_EXPECT_FALSE(test, sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+	KUNIT_EXPECT_GE(test, sk->sk_rcvbuf, c->held_rcvbuf);
+	KUNIT_EXPECT_LT(test, sk->sk_rcvbuf,
+			READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_rmem[2]));
+	KUNIT_EXPECT_FALSE(test, tcp_under_memory_pressure(sk));
+	KUNIT_EXPECT_EQ(test, tp->scaling_ratio_max, c->ratio_max);
+	KUNIT_EXPECT_EQ(test, tp->window_clamp, c->clamp);
+	/*
+	 * Creep needs an ACK per less than one window-scale unit of data; a
+	 * parameter that ACKs less often never moves the edge by design.
+	 */
+	if (p->ack_every &&
+	    (u64)p->len * p->ack_every < (1ULL << tp->rx_opt.rcv_wscale))
+		KUNIT_EXPECT_GT(test,
+				tp->rcv_wup + tp->rcv_wnd - c->edge0, c->clamp);
+}
+
+/* (a) drain: same stream freed as it arrives never unlocks. */
+static void svcsock_rx_overrun_drain_control_test(struct kunit *test)
+{
+	struct svcsock_rx_ovr *c = svcsock_rx_ovr_setup(test, true);
+
+	svcsock_rx_ovr_feed(test, c, 220, 1, 4 << 20, true, true);
+	KUNIT_EXPECT_TRUE(test, c->sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+	KUNIT_EXPECT_EQ(test, c->sk->sk_rcvbuf, c->held_rcvbuf);
+	KUNIT_EXPECT_EQ(test, c->over_seg, -1);
+}
+
+/* (b) re-hold refused: after release the hold is never applied again. */
+static void svcsock_rx_overrun_rehold_control_test(struct kunit *test)
+{
+	struct svcsock_rx_ovr *c = svcsock_rx_ovr_setup(test, true);
+	struct svc_sock *svsk = c->svsk;
+	struct sock *sk = c->sk;
+	struct tcp_sock *tp = tcp_sk(sk);
+	int rcvbuf;
+	u32 clamp;
+	u8 ratio, ratio_max;
+
+	svcsock_rx_ovr_feed(test, c, 220, 1, 2 * OVR_RCVBUF, false, false);
+	KUNIT_ASSERT_FALSE_MSG(test, sk->sk_userlocks & SOCK_RCVBUF_LOCK,
+			       "no release by seg %d (rmem %d > %d)", c->segs,
+			       atomic_read(&sk->sk_rmem_alloc), c->held_rcvbuf);
+	rcvbuf = sk->sk_rcvbuf;
+	clamp = tp->window_clamp;
+	ratio = tp->scaling_ratio;
+	ratio_max = tp->scaling_ratio_max;
+
+	/* The stale branch of svc_tcp_recv_skb() (svcsock.c), then a new factor. */
+	svsk->sk_rx_held = false;
+	svsk->sk_rx_hold.pending = true;
+	svc_tcp_rx_budget_kunit_configure(0, 0, 500);
+	svc_tcp_rx_budget_kunit_rcvbuf(OVR_RCVBUF);
+	svc_tcp_rx_hold_buffer(svsk);
+	KUNIT_EXPECT_FALSE(test, sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+	KUNIT_EXPECT_EQ(test, sk->sk_rcvbuf, rcvbuf);
+	KUNIT_EXPECT_EQ(test, tp->window_clamp, clamp);
+	KUNIT_EXPECT_EQ(test, tp->scaling_ratio, ratio);
+	KUNIT_EXPECT_EQ(test, tp->scaling_ratio_max, ratio_max);
+	KUNIT_EXPECT_TRUE(test, svsk->sk_rx_held);
+}
+
+/* (c) unheld guard: factor 0, locked buffer, rmem > rcvbuf stays locked. */
+static void svcsock_rx_overrun_unheld_control_test(struct kunit *test)
+{
+	struct svcsock_rx_ovr *c = svcsock_rx_ovr_setup(test, false);
+
+	svcsock_rx_ovr_feed(test, c, 220, 1, 2 * OVR_RCVBUF, false, false);
+	KUNIT_EXPECT_GT(test, c->over_seg, 0);
+	KUNIT_EXPECT_TRUE(test, c->sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+	KUNIT_EXPECT_EQ(test, c->sk->sk_rcvbuf, c->held_rcvbuf);
+}
+
 static void svcsock_rx_loopback_down(void *dev)
 {
 	rtnl_lock();
@@ -9344,6 +9622,11 @@ static struct kunit_case svcsock_rx_test_cases[] = {
 	KUNIT_CASE(svcsock_rx_hold_small_request_floor_test),
 	KUNIT_CASE(svcsock_rx_hold_floor_ratio_test),
 	KUNIT_CASE(svcsock_rx_hold_again_test),
+	KUNIT_CASE_PARAM(svcsock_rx_overrun_release_test,
+			 svcsock_rx_ovr_gen_params),
+	KUNIT_CASE(svcsock_rx_overrun_drain_control_test),
+	KUNIT_CASE(svcsock_rx_overrun_rehold_control_test),
+	KUNIT_CASE(svcsock_rx_overrun_unheld_control_test),
 	KUNIT_CASE(svcsock_rx_credit_rcvbuf_floor_test),
 	KUNIT_CASE(svcsock_rx_credit_disable_waiters_test),
 	KUNIT_CASE(svcsock_rx_credit_invalid_reset_test),

@@ -16,11 +16,14 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/sched.h>
+#include <linux/net.h>
 #include <linux/skbuff.h>
 #include <linux/workqueue.h>
 #include <net/page_pool/cfg.h>
 #include <net/page_pool/helpers.h>
 #include <net/rx_loan.h>
+#include <net/sock.h>
+#include <net/tcp.h>
 
 static void rx_loan_kunit_table_free(void *data)
 {
@@ -1155,6 +1158,75 @@ static void rx_loan_hold_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, rx_loan_hold_scaling_ratio(50), 128);
 	KUNIT_EXPECT_EQ(test, rx_loan_hold_window_clamp(262144, 150), 87040);
 	KUNIT_EXPECT_EQ(test, rx_loan_hold_window_clamp(65536, 280), 11520);
+}
+
+static void rx_loan_kunit_sock_release(void *sock)
+{
+	sock_release(sock);
+}
+
+/* A TCP socket held by rx_loan_hold_apply() at 256 KiB, factor 314. */
+static struct sock *rx_loan_kunit_held_sock(struct kunit *test,
+					    struct rx_loan_hold *h)
+{
+	struct socket *sock;
+	int rcvbuf, clamp;
+
+	KUNIT_ASSERT_EQ(test, sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
+					       IPPROTO_TCP, &sock), 0);
+	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test,
+			rx_loan_kunit_sock_release, sock), 0);
+	KUNIT_ASSERT_EQ(test, rx_loan_hold_apply(h, sock->sk, 262144, 314,
+						 &rcvbuf, &clamp), 0);
+	KUNIT_ASSERT_TRUE(test, sock->sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+	return sock->sk;
+}
+
+/*
+ * The overrun release: a no-op at rmem == rcvbuf and on an unheld hold,
+ * the unlock at rcvbuf + 1 (one admitted skb past it), once; a released
+ * hold is never stale and apply leaves a released socket alone.
+ */
+static void rx_loan_hold_overrun_test(struct kunit *test)
+{
+	struct rx_loan_hold h = {}, unheld = {};
+	struct sock *sk = rx_loan_kunit_held_sock(test, &h);
+	struct tcp_sock *tp = tcp_sk(sk);
+	int rcvbuf = sk->sk_rcvbuf, rcvbuf2, clamp;
+	u32 win_clamp;
+	u8 ratio;
+
+	atomic_set(&sk->sk_rmem_alloc, rcvbuf);
+	rx_loan_hold_overrun(&h, sk);
+	KUNIT_EXPECT_TRUE(test, sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+	KUNIT_EXPECT_FALSE(test, h.released);
+
+	/* factor 0: never applied (UDP, unheld TCP) */
+	atomic_set(&sk->sk_rmem_alloc, rcvbuf + 1);
+	rx_loan_hold_overrun(&unheld, sk);
+	KUNIT_EXPECT_TRUE(test, sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+
+	rx_loan_hold_overrun(&h, sk);
+	KUNIT_EXPECT_FALSE(test, sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+	KUNIT_EXPECT_TRUE(test, h.released);
+	KUNIT_EXPECT_TRUE(test, h.held);
+	KUNIT_EXPECT_GE(test, sk->sk_rcvbuf, rcvbuf);
+
+	KUNIT_EXPECT_FALSE(test, rx_loan_hold_stale(&h, 1000));
+
+	/* Apply on a released hold: -EALREADY, nothing touched. */
+	h.held = false;
+	rcvbuf = sk->sk_rcvbuf;
+	win_clamp = tp->window_clamp;
+	ratio = tp->scaling_ratio_max;
+	KUNIT_EXPECT_EQ(test, rx_loan_hold_apply(&h, sk, 131072, 500,
+						 &rcvbuf2, &clamp), -EALREADY);
+	KUNIT_EXPECT_TRUE(test, h.held);
+	KUNIT_EXPECT_FALSE(test, sk->sk_userlocks & SOCK_RCVBUF_LOCK);
+	KUNIT_EXPECT_EQ(test, sk->sk_rcvbuf, rcvbuf);
+	KUNIT_EXPECT_EQ(test, tp->window_clamp, win_clamp);
+	KUNIT_EXPECT_EQ(test, tp->scaling_ratio_max, ratio);
+	atomic_set(&sk->sk_rmem_alloc, 0);
 }
 
 /*
@@ -3142,6 +3214,7 @@ static struct kunit_case rx_loan_test_cases[] = {
 	KUNIT_CASE(rx_loan_tile_region_test),
 	KUNIT_CASE(rx_loan_tile_arena_test),
 	KUNIT_CASE(rx_loan_hold_test),
+	KUNIT_CASE(rx_loan_hold_overrun_test),
 	KUNIT_CASE(rx_loan_region_read_pickup_test),
 	KUNIT_CASE(rx_loan_consumer_read_cache_test),
 	KUNIT_CASE(rx_loan_region_write_cap_test),

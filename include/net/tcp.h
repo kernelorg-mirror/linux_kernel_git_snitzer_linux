@@ -964,6 +964,11 @@ static inline void tcp_update_max_rcv_wnd_seq(struct tcp_sock *tp)
  */
 u32 __tcp_select_window(struct sock *sk);
 
+#if IS_ENABLED(CONFIG_KUNIT)
+/* KUnit only: the static tcp_select_window(), defined in tcp_output.c. */
+u16 tcp_kunit_select_window(struct sock *sk);
+#endif
+
 void tcp_send_window_probe(struct sock *sk);
 
 /* TCP uses 32bit jiffies to save some space.
