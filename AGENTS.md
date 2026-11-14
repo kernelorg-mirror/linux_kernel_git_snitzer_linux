@@ -391,6 +391,13 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**tardis2's next boot, if Mike takes it: build 531 with `psi=0`
+(round 101, planned 14 November).** The plan, the one-shot entry to
+install and the checks after the boot are in
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/101-psi-off/README.md`.  Nothing is
+installed yet.  Until then tardis2 stays on build 531 with the DRC
+commits' `nfsd.ko` in `updates/` (round 100).
+
 **The held mark's A/B ran on the held-mark kernel's sixth boot (7
 November, `t2-r198..r201`) and Mike kept the mark (`bb7fd3100c3b`):
 "The sixth boot into it" in `NFSD_TCP_WRITE_ZEROCOPY/HANDOFF-tardis2-canary.md`.
