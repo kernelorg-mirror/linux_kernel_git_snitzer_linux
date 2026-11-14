@@ -68,9 +68,51 @@ after.
 Mike, the same day: the same runs on all eight drives.  One port: a
 alone on nvme0 to nvme7 at the one-port setting.  Two ports: a on
 nvme0 to nvme3 and b on nvme4 to nvme7, twoport.sh's own layout at the
-two-port setting (round 100's load, but at `twoport.sh`'s own JOBS
-and with reads too).  The same order, `t2-r630` to `t2-r637`:
+two-port setting (round 100's load, with reads too).  The same order, `t2-r630` to `t2-r637`:
 `DRIVES=8 RUNS="630:a:write 631:ab:write 632:a:read 633:ab:read
 634:a:write 635:ab:write 636:a:read 637:ab:read" ./run622.sh`.  At
 10 GB/s a drive on two ports, 50 s of writing is round 100's load,
 inside the fast region; one port gives a drive half that.
+
+### Result on eight drives
+
+[run630.out](run630.out).  No drive stepped down and no new kernel
+warning in any run; the two-port reads dropped frames on the rings
+(below).  The host at the settled setting after.
+
+| | one port (a, nvme0 to nvme7) | two ports (four drives a port) |
+|---|---|---|
+| **write** | **49.31, 49.20 GB/s** (`t2-r630`, `r634`) | **78.17, 78.01 GB/s** (`r631`, `r635`) |
+| a drive writes | 6.1 to 6.2 GB/s, 67% busy | 9.7 to 9.8 GB/s, 98% busy |
+| write latency, mean / p99 | 43 / 76 to 79 ms | 54 / 80 to 82 ms |
+| **read** | **43.15, 39.63 GB/s** (`r632`, `r636`) | **54.32, 54.55 GB/s** (`r633`, `r637`) |
+| a drive reads | 5.4 and 4.9 to 5.0 GB/s, 86% and 79% busy | a 7.0 and 7.8, b 6.4 and 5.8 GB/s, 69 to 83% busy |
+| the ports' split of a read | | 29.0 / 25.3 and 32.1 / 22.5 GB/s |
+| ring drops | 0 | 0 writing; 26 and 167 reading, nearly all on b |
+| server CPUs busy, write (rings a / b / nfsd) | 21 to 22% / - / 8% | 20 to 21% / 18 to 19% / 22% |
+| server CPUs busy, read (rings a / b / nfsd) | 38% / - / 7 to 9% | 36% / 31 to 32% / 16% |
+| client CPUs busy, write / read | 29% / 38 to 48% | 49 to 50% / 46 to 47% |
+
+- **One port writes 49.2 to 49.3 GB/s** (the wire 49.6 to 49.7), the
+  drives two thirds busy: the port's limit for writes, above the
+  47.39 tardis1 carried on one port (AGENTS.md, 13 October) and the 48 the wire
+  was said to carry.
+- **Two ports write 78.0 to 78.2 GB/s**, round 100's rate: the
+  drives' (98% busy).
+- **One port reads 40 to 43 GB/s with eight drives as with four**:
+  the port's limit for reads, the drives 79 to 86% busy.
+- **Two ports read only 54.3 to 54.6 GB/s, barely more than four
+  drives' 52.4**, and neither the drives (69 to 83% busy) nor either
+  port (22 to 32 GB/s each, against one port's 43) is at its limit.
+  The ports split it unevenly, b behind a by 4 and 10 GB/s, and b's
+  rings dropped frames (26 and 167) in both runs, where no run of
+  round 102 dropped one before.  What holds two ports' reads together
+  near 54 GB/s, and why b falls behind, was not looked for in these
+  runs; it is the open question this round leaves.
+
+## What the round shows
+
+| GB/s | four drives, one port | four drives, two ports | eight drives, one port | eight drives, two ports |
+|---|---|---|---|---|
+| write | 40.6 to 40.7 (drives) | 40.1 (drives) | 49.2 to 49.3 (port) | 78.0 to 78.2 (drives) |
+| read | 42.9 to 43.2 (port) | 52.4 (drives) | 39.6 to 43.2 (port) | 54.3 to 54.6 (neither) |
