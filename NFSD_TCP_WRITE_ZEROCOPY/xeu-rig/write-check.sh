@@ -3,11 +3,19 @@
 # change made for reads that touches a path WRITEs also take (the
 # kernel's network, SUNRPC, nfsd, block or NVMe paths, xeu, or
 # settled.sh) is checked with one two-port write run on all eight
-# drives at the settled setting, as round 103's t2-r643 and r644 (78.06
-# and 78.00 GB/s).  It passes at 78.0 GB/s or more with no drive stepped
-# down and no new kernel warning.  Run-to-run spread is about 0.2 GB/s
-# (77.96 to 78.17 in rounds 100 to 103), so a run from 77.8 to 77.99 is
-# run once more before it is called a regression; below 77.8 it fails.
+# drives at the settled setting.  It passes at 78.0 GB/s or more with no
+# drive stepped down and no new kernel warning; 77.8 to 77.99 is run once
+# more before it is called a regression; below 77.8 it fails.
+#
+# It is short (Mike: it need only show that 78 GB/s is still reached):
+# WARM=3 RUNTIME=15 and a 30 s rest, against the rounds' WARM=10
+# RUNTIME=40 and 120 s.  In the 40 s runs t2-r631, r635, r643 and r644
+# the wire is at full rate from its second second, and every 15 s
+# stretch from the fourth on is within 0.2 GB/s of the whole run (wire
+# 78.58 to 78.92, fio counting about 0.9% below the wire).  The drives
+# need 20 s idle to be back in their fast region, and 15 s of 78 GB/s
+# is about 150 GB a drive of the 625 they take at full rate.  WARM,
+# RUNTIME and REST override.
 cd "$(dirname "$0")" || exit 1
 . ./common.sh
 n=${1:?write-check.sh <run number>}
@@ -18,10 +26,10 @@ O=$L/t2-r$n; mkdir -p $O
 client_free || { say "client not free"; exit 1; }
 ./settled.sh apply > $O/apply.txt 2>&1 || { say "not settled: $(grep -E 'BAD|FAILED' $O/apply.txt | head -3)"; exit 1; }
 ping -c1 -W2 192.168.1.106 > /dev/null && ping -c1 -W2 192.168.0.106 > /dev/null || { say "a port does not answer"; exit 1; }
-sync; for d in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$d; done; sleep 120
+sync; for d in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$d; done; sleep ${REST:-30}
 dmesg > $O/dmesg.0
 env FS_A="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" FS_B="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7" \
-	WARM=10 RUNTIME=40 RW=write RWTSV=$O/rw.tsv TAG=write-check \
+	WARM=${WARM:-3} RUNTIME=${RUNTIME:-15} RW=write RWTSV=$O/rw.tsv TAG=write-check \
 	WRITES=$TWO_WRITES BUDGET_PAGES=8198 ./twoport.sh $O/run ab > $O/run.log 2>&1 ||
 	{ say "run failed: $(grep -E 'BAD|FAILED|no answer|not free' $O/run.log | head -3)"; exit 1; }
 dmesg > $O/dmesg.1

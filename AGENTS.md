@@ -277,9 +277,11 @@ READ procedure's own encode, for one) is checked too unless the round
 says why WRITEs cannot reach it.
 
 - **The pass:** `xeu-rig/write-check.sh <n>` on the changed host, at
-  the settled setting: one two-port write run on all eight drives
-  (`WARM=10 RUNTIME=40`, as round 103's t2-r643 and r644, 78.06 and
-  78.00 GB/s). It passes at **78.0 GB/s or more**, no drive stepped
+  the settled setting: one short two-port write run on all eight
+  drives (`WARM=3 RUNTIME=15`, a 30 s rest; it need only show that
+  78 GB/s is still reached, and round 103's 40 s runs are at full rate
+  from their second second, every 15 s of them within 0.2 GB/s of the
+  whole). It passes at **78.0 GB/s or more**, no drive stepped
   down and no new kernel warning. Run-to-run spread is about 0.2 GB/s,
   so 77.8 to 77.99 is run once more (`RERUN`); below 77.8, or below
   78.0 twice, is a regression.
