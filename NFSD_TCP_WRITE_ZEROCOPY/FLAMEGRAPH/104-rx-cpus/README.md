@@ -76,3 +76,10 @@ and is drained to the zone under `zone->lock`, and tardis2 has one
 node and one Normal zone, so that lock is the one all 64 CPUs take,
 nfsd's allocations included. Whether the time is waiting on that lock
 or doing the drain is not yet measured.
+
+## t2-r650: the zone lock
+
+`PROBE=lock RUNS=650:read run645.sh`: in the load, `perf lock
+contention -a -b` for 4 s (who waits on which lock, and how long), then
+3 s of `free_pcppages_bulk()` and `rmqueue_bulk()` on the ring CPUs and
+on nfsd's: the pages each moves and the time each takes.

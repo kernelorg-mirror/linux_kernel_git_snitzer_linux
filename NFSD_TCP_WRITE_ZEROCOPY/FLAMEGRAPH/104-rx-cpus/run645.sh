@@ -29,11 +29,18 @@ for run in ${RUNS:-647:read}; do
 	( W=$O/run/wire-sec.tsv
 	  for i in $(seq 600); do [ -f $W ] && [ $(wc -l < $W) -ge 26 ] && break; sleep 0.5; done
 	  snap $O 0
-	  perf record -q -g -C 0-7,56-63 -F 1999 -o /dev/shm/zc-rx.data -- sleep 8 > $O/perf.out 2>&1
+	  if [ "${PROBE:-perf}" = lock ]; then
+		# How long the zone's free and refill take, and who waits on its lock.
+		perf lock contention -a -b -E 20 -- sleep 4 > $O/lock-contention.txt 2>&1
+		bpftrace -q -e '
+		kprobe:free_pcppages_bulk { @t[tid] = nsecs; @pages[func, cpu < 8 || cpu > 55 ? "ring" : "nfsd"] = sum(arg1); }
+		kprobe:rmqueue_bulk { @t[tid] = nsecs; @pages[func, cpu < 8 || cpu > 55 ? "ring" : "nfsd"] = sum(arg2); }
+		kretprobe:free_pcppages_bulk, kretprobe:rmqueue_bulk /@t[tid]/ { @us[func, cpu < 8 || cpu > 55 ? "ring" : "nfsd"] = stats((uint64)(nsecs - @t[tid]) / 1000); @ns_total[func, cpu < 8 || cpu > 55 ? "ring" : "nfsd"] = sum(nsecs - @t[tid]); delete(@t[tid]); }
+		interval:s:3 { exit(); }' > $O/zone-bulk.txt 2>&1
+	  else
+		perf record -q -g -C 0-7,56-63 -F 1999 -o /dev/shm/zc-rx.data -- sleep 8 > $O/perf.out 2>&1
+	  fi
 	  snap $O 1
-	  for p in enp161s0f0 enp164s0f0; do
-		bpftrace -q -e "kprobe:xeu_start_xmit { \$s = (struct sk_buff *)arg0; if (\$s->sk != 0) { @q[str(\$s->dev->name), \$s->queue_mapping, \$s->sk] = count(); } } interval:s:2 { exit(); }" 2>&1 |
-			awk -v p=$p '$0 ~ p'; done > $O/txq-sk.txt
 	  echo "profile $(cat $O/time.0) to $(cat $O/time.1), load from $(awk 'NR == 2 {print $2}' $W)" > $O/when.txt ) &
 	env FS_A="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" FS_B="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7" \
 		WARM=10 RUNTIME=40 RW=$rw RWTSV=$O/rw.tsv TAG=8d-ab-$rw-rxcpu \
@@ -41,7 +48,7 @@ for run in ${RUNS:-647:read}; do
 		{ say "run failed: $(grep -E 'BAD|FAILED|no answer|not free' $O/run.log | head -3)"; wait; exit 1; }
 	wait
 	dmesg > $O/dmesg.1
-	perf report -i /dev/shm/zc-rx.data --no-children -g none --sort cpu 2>/dev/null | grep -v '^#' | grep . > $O/perf-cpu.txt
+	[ -f /dev/shm/zc-rx.data ] && perf report -i /dev/shm/zc-rx.data --no-children -g none --sort cpu 2>/dev/null | grep -v '^#' | grep . > $O/perf-cpu.txt
 	perf report -i /dev/shm/zc-rx.data --no-children -g none --percent-limit 0.3 --sort symbol --cpu 0,2,4,6,56,58,60,62 2>/dev/null | grep -v '^$' | head -80 > $O/perf-rx-self.txt
 	perf report -i /dev/shm/zc-rx.data --children -g none --percent-limit 2 --sort symbol --cpu 0,2,4,6,56,58,60,62 2>/dev/null | grep -v '^$' | head -100 > $O/perf-rx-children.txt
 	perf report -i /dev/shm/zc-rx.data --no-children -g caller,0.5,callee --percent-limit 1.5 --sort symbol --cpu 0,2,4,6,56,58,60,62 2>/dev/null | grep -v '^$' | head -600 > $O/perf-rx-callers.txt
