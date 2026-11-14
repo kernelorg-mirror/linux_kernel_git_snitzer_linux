@@ -60,3 +60,42 @@ queue each connection sends by.  `twoport.sh` gains `XPS=rxqs`.
 2. After the reload into Release 17 (if Mike allows it): the settled
    map against `XPS=rxqs`, interleaved, two of each, then a two-port
    write with `XPS=rxqs` to see that writes do not suffer.
+
+## `t2-r638`: the split is uneven, but not by connection
+
+[run638.out](run638.out): 55.85 GB/s (a 25.58, b 30.28), ring drops 0,
+no drive stepped down.  The `ethtool -S` transmit counters read 0: the
+end of `twoport.sh` reopens the ports, which zeroes them, so they are
+read from the trace instead.  Each port's `xeu_start_xmit` calls in 3 s
+of the window, by queue ([txq-sk-r638.txt](txq-sk-r638.txt)):
+
+| | q0 | q1 | q2 | q3 |
+|---|---|---|---|---|
+| a | 31.2% | 25.7% | 25.6% | 17.6% |
+| b | 17.2% | 39.8% | 33.4% | 9.7% |
+
+- **Uneven, up to four to one on b.**
+- **But every connection sent by all four queues**, not one each: a
+  socket picks a queue again whenever it has nothing in flight, and
+  which it gets follows the nfsd CPU sending (the four in the XPS map
+  get theirs, the other 44 the hash), so the hash-a-connection account
+  above was wrong in its mechanism.  `XPS=rxqs` would still hold each
+  connection to its ring's queue.
+- The hot CPU moved: CPU 5 (a's Tx-2) at 87%, and none on b.
+
+## The reload into kmod-xsight 2.0.1-17 (Mike, 14 November)
+
+Mike: "Reload now".  Release 15's three modules are kept in
+`$L/xeu-rxq-reload-1114/rel15/` (no Release 15 RPM is on the host).
+`rpm -Uvh` of Release 17 at 17:28; it also erased build 522's
+`kmod-16k-xsight` (the same package name), which matters only if 522
+is booted again.  No NFS connection, `rmmod xeu; modprobe xeu` at
+17:28:59: srcversion `4FE2E7FF217385CDB5D4BB2`, both ports up;
+`port-setup.sh` on both (the region mapped, 4 pools a port), then
+`settled.sh apply`: the settled setting; both ports 5 of 5, no new
+kernel warning.  Files in `$L/xeu-rxq-reload-1114/`.
+
+## The A/B
+
+`RUNS="639:read:cpus 640:read:rxqs 641:read:cpus 642:read:rxqs
+643:write:rxqs 644:write:cpus" ./run638.sh`, on Release 17 throughout.
