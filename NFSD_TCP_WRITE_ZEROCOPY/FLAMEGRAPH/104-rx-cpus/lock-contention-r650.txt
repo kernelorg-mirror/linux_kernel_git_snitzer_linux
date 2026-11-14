@@ -1,0 +1,22 @@
+ contended   total wait     max wait     avg wait         type   caller
+
+      6823      6.36 m     332.61 ms     55.89 ms        mutex   __svc_tcp_send+0x1b4
+      4732      3.39 m     331.12 ms     42.95 ms        mutex   svc_tcp_send_unlock+0x70
+    614347     26.29 s     170.46 us     42.79 us     spinlock   rmqueue_bulk+0x64
+    614233     21.91 s     166.62 us     35.67 us     spinlock   free_pcppages_bulk+0x44
+     16901      1.05 s     649.01 us     62.32 us     spinlock   lock_sock_nested+0x80
+      4937    280.77 ms    677.44 us     56.87 us     spinlock   tcp_tsq_handler+0x28
+      9577    220.16 ms    756.37 us     22.99 us     spinlock   lock_sock_nested+0x80
+     24580     57.99 ms     26.63 us      2.36 us     spinlock   __dev_xmit_skb+0x1f4
+        14     47.60 ms      4.66 ms      3.40 ms        mutex   __svc_tcp_send+0x1b4
+       738     46.05 ms    429.74 us     62.40 us     spinlock   lock_sock_nested+0x80
+      1325     33.63 ms    501.46 us     25.38 us     spinlock   __lock_sock+0x7c
+       526     20.32 ms    577.92 us     38.62 us     spinlock   __lock_sock+0x7c
+      2680     18.26 ms    523.09 us      6.82 us        mutex   rtc_set_time.part.0+0x58
+      5248     17.21 ms     25.10 us      3.28 us     spinlock   net_tx_action+0x30c
+      6264     11.16 ms     66.29 us      1.78 us     spinlock   tcp_v4_rcv+0xaec
+      1558      9.94 ms     25.39 us      6.38 us     spinlock   mix_interrupt_randomness+0xdc
+      1942      5.34 ms     17.68 us      2.75 us     spinlock   sch_direct_xmit+0xb4
+      1163      3.48 ms     15.26 us      2.99 us     spinlock   sch_direct_xmit+0xb4
+         1      2.96 ms      2.96 ms      2.96 ms        mutex   __svc_tcp_send+0x1b4
+       529      2.80 ms     28.03 us      5.30 us     spinlock   __svc_tcp_send+0x1b4

@@ -1,0 +1,16 @@
+19:57:01 t2-r650 ab read | total 60.45 GB/s | ring drops 427 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 30.18 GB/s (fio, after the warm-up); in the 10 s window: wire 0.02 GB/s, FIFO drops 0, ring drops 228, rings 25/25/25/26%
+      read: 30.18 GB/s, 3.6k IOPS, completion 70.71 ms mean, 80.22 ms at the 99th percentile
+    port b enp164s0f0: 30.27 GB/s (fio, after the warm-up); in the 10 s window: wire 0.02 GB/s, FIFO drops 0, ring drops 199, rings 26/27/22/24%
+      read: 30.27 GB/s, 3.6k IOPS, completion 70.49 ms mean, 82.31 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 7.5 to 7.6, busiest 85% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.5 to 7.6, busiest 84% busy
+    ring CPUs busy: 0:91 1:18 2:82 3:17 4:81 5:20 6:81 7:18 56:83 57:20 58:83 59:17 60:78 61:17 62:82 63:24 
+    profile 1794686175.892327646 to 1794686188.911885607, load from 1794686151.541
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r650/txq-sk.txt' for reading: No such file or directory
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r650/txq-sk.txt' for reading: No such file or directory
+    enp161s0f0 sends by queue: | sockets by queue: 
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r650/txq-sk.txt' for reading: No such file or directory
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r650/txq-sk.txt' for reading: No such file or directory
+    enp164s0f0 sends by queue: | sockets by queue: 
+19:57:05 after: settled.sh audit rest: the settled setting

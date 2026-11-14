@@ -1,0 +1,6 @@
+@ns_total[rmqueue_bulk, ring]: 6491041
+@ns_total[rmqueue_bulk, nfsd]: 21623424792
+@ns_total[free_pcppages_bulk, ring]: 14995863041614748
+@pages[rmqueue_bulk, ring]: 1365
+@pages[rmqueue_bulk, nfsd]: 8733434
+@pages[free_pcppages_bulk, ring]: 9601899

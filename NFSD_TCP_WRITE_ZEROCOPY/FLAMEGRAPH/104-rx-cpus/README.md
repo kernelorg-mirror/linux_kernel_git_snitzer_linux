@@ -83,3 +83,70 @@ or doing the drain is not yet measured.
 contention -a -b` for 4 s (who waits on which lock, and how long), then
 3 s of `free_pcppages_bulk()` and `rmqueue_bulk()` on the ring CPUs and
 on nfsd's: the pages each moves and the time each takes.
+
+[run650.out](run650.out): 60.45 GB/s (30.18 / 30.27), ring drops 427,
+no drive stepped down, no new kernel warning; the probes ran from 24.4
+to 37.4 s into the load. (Its queue trace is missing: the bulk probe's
+leftover map took the time it would have run in.)
+
+**The zone lock is contended from both sides**
+([lock-contention-r650.txt](lock-contention-r650.txt), 4 s, all CPUs):
+
+| caller | contended | total wait | avg wait | per second of the 4 |
+|---|---|---|---|---|
+| `rmqueue_bulk` (refilling a per-CPU list: nfsd's allocations) | 614,347 | 26.29 s | 42.8 us | 6.6 CPUs waiting |
+| `free_pcppages_bulk` (draining one: the receive CPUs' frees) | 614,233 | 21.91 s | 35.7 us | 5.5 CPUs waiting |
+
+The drains are on the receive CPUs: in 3 s
+([zone-bulk-r650.txt](zone-bulk-r650.txt)) they gave the zone 9.6
+million pages and took back 1,365, while nfsd's CPUs took 8.7 million
+and gave none (3.2 and 2.9 million a second, beside the 3.7 million
+the rate implies, with the probes slowing it). 5.5 CPUs of waiting
+over eight receive CPUs is about 68% of each, which with the drains'
+own work is the 71 to 90% they are busy. nfsd's CPUs wait about as
+long again in their refills. That is with `perf lock contention`'s
+BPF probes on every contended lock, which add to the time a holder
+holds it, so the shares are an upper bound; the order is not in
+doubt: no other spinlock comes within a factor of twenty. (The
+probe's per-call times for the drains are not usable: a softirq's
+drain is keyed by the task it interrupted.)
+
+So each page of a READ crosses the zone lock twice, out to nfsd's CPU
+in a refill and back from the receive CPU in a drain, because the CPU
+that frees it never allocates and the one that allocates never frees:
+neither per-CPU list can reuse a page, and with one zone for 64 CPUs
+every crossing takes the same lock, about 1.2 million acquisitions a
+second at 15 pages a batch.
+
+Also there, but not CPU: nfsd threads waited 6.4 min in 4 s on
+`__svc_tcp_send`'s transport mutex (about 95 threads at a time, 56 ms
+each on average), queued to send on their connection while another
+thread's reply is being sent. That is the READ latency (70 ms mean)
+rather than a ceiling on the rate.
+
+## What would take the zone lock out (not tried)
+
+1. **Bigger per-CPU lists, `vm.percpu_pagelist_high_fraction`** (0
+   now: high 889 pages, batch 15). A sysctl, at once and reversible:
+   a fraction f gives each CPU a high of about 8.2 million / f / 64
+   pages, so the drains move more pages a lock. It holds more free
+   pages on each CPU (f 64: about 2,000 pages, 31 MiB a CPU, 2 GiB in
+   all; these are not the receive region's pages and nothing touches
+   them while they wait). It cannot stop the crossing, only batch it.
+2. **Fewer, larger allocations for a READ's pages** (code, in SUNRPC
+   and nfsd): an order-3 folio (128 KiB at 16 KiB pages, still cached
+   on the per-CPU lists) for each eight pages of a direct read's
+   buffer would take the crossings and the refcount drops in
+   `skb_release_data` down by eight.
+3. **Giving the pages back to nfsd instead of the zone** (code): a
+   reply's skbs carry a completion (as `MSG_ZEROCOPY`'s `ubuf_info`
+   does) that returns its pages to the nfsd thread's or pool's own
+   list, so no page crosses the zone at all. The largest change.
+4. **`io_cache_read` other than direct**: buffered reads send page-cache
+   pages, which a free does not return, but the page cache's own fill
+   and reclaim allocate and free as many pages, so this is not
+   expected to help; not measured.
+
+Each would be an A/B on two-port reads with the WRITE pass beside it
+(AGENTS.md): (1) touches the page allocator every WRITE uses, and (2)
+and (3) SUNRPC's send path.
