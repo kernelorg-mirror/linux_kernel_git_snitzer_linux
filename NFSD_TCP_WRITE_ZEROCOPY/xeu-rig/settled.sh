@@ -100,8 +100,8 @@
 #     that its packets cannot be reordered across queues.
 #   - When it picks, XPS decides first: each transmit queue has a set of
 #     CPUs (/sys/class/net/<port>/queues/tx-<i>/xps_cpus), and a sender on
-#     one of them gets that queue.  (xps_rxqs, which would tie the transmit
-#     queue to the receive queue instead, is empty on both ports.)
+#     one of them gets that queue.  (xps_rxqs, which ties the transmit
+#     queue to the receive queue instead, was empty until round 103: below.)
 #   - A sender on a CPU that no queue lists gets one by the flow's hash.
 # What the ports have was not chosen.  rps_xps_tuning.service writes one
 # CPU to a queue at boot, when each port has eight queues: port a's tx-i
@@ -121,6 +121,17 @@
 # looked at").  So that is the map locked here, as recorded and not as
 # chosen; whether another map does better is an experiment of its own, to
 # be run as one and then settled here.
+#
+# On tardis2 the map is xps_rxqs since 14 November (Mike, FLAMEGRAPH round
+# 103): tx-i is steered by rx-i (xps_rxqs = 1 << i, xps_cpus empty), so a
+# connection's replies leave by the queue its frames arrive on, whichever
+# nfsd CPU sends them.  Eight-drive reads on two ports went from 54.42 and
+# 54.09 GB/s to 60.46 and 60.56, the two ports even (30.2 to 30.3 each)
+# and p99 from 133-165 ms to 79-81; writes stayed at 78.0.  It needs an xeu
+# that records each frame's receive queue (skb_record_rx_queue(), kmod-
+# xsight 2.0.1-17): without it no socket has a receive queue and every
+# sender falls to the hash, so on tardis2 an older xeu audits BAD.
+# Elsewhere (tardis1's Release 13) the recorded CPU map above is held.
 #
 # THE MODULE SETTINGS
 #
@@ -161,6 +172,9 @@ nfsd_pools() {
 declare -A PDEV=([a]=enp161s0f0 [b]=enp164s0f0)
 declare -A PCPU=([a]=0 [b]=56)		# a port's eight CPUs start here
 declare -A PXPS=([a]=8 [b]=32)		# tx-i's XPS CPU, as recorded: <this> + i
+XPS_MAP=cpus				# cpus: tx-i on CPU PXPS + i; rxqs: tx-i by rx-i
+[ $HOST = tardis2 ] && XPS_MAP=rxqs
+XEU_RXQ_RELEASE=17			# the first kmod-xsight whose xeu records the receive queue
 RINGS=4
 MTU=7792
 MRRS=512	# PCIe MaxReadReq, bytes, of the card's two functions and the eight drives
@@ -461,6 +475,12 @@ xps_cpu() {	# xps_cpu <mask file>: the one CPU a mask names, "none", or "many"
 	[ $(( v & (v - 1) )) != 0 ] && { echo many; return; }
 	local c=0; while [ $(( (v >> c) & 1 )) = 0 ]; do c=$(( c + 1 )); done; echo $c
 }
+xeu_release() {	# the loaded xeu's kmod-xsight release, or why it cannot be told
+	local f; f=$(modinfo -n xeu 2>/dev/null) || { echo "no xeu"; return; }
+	[ "$(cat /sys/module/xeu/srcversion 2>/dev/null)" = "$(modinfo -F srcversion "$f")" ] ||
+		{ echo "loaded xeu is not $f"; return; }
+	rpm -qf --qf '%{RELEASE}\n' "$f" 2>/dev/null | head -1 | sed 's/\..*//'
+}
 nfsd_cpus() {	# how many of nfsd's threads are allowed which CPUs
 	for t in $(pgrep -x nfsd); do taskset -cp $t 2> /dev/null | awk '{print $NF}'; done | sort | uniq -c | awk '{printf "%s%s on %s", (NR > 1 ? ", " : ""), $1, $2}'
 }
@@ -642,8 +662,13 @@ audit_port() {	# audit_port <a|b>
 	done < <(port_irqs $d | sort -k2 -V)
 	for q in /sys/class/net/$d/queues/tx-*; do
 		i=${q##*-}
-		want "$d tx-$i XPS CPU" "$(xps_cpu $q/xps_cpus)" $(( ${PXPS[$p]} + i ))
-		want "$d tx-$i XPS by receive queue" "$(xps_cpu $q/xps_rxqs)" none
+		if [ $XPS_MAP = rxqs ]; then
+			want "$d tx-$i XPS CPU" "$(xps_cpu $q/xps_cpus)" none
+			want "$d tx-$i XPS by receive queue" "$(xps_cpu $q/xps_rxqs)" $i
+		else
+			want "$d tx-$i XPS CPU" "$(xps_cpu $q/xps_cpus)" $(( ${PXPS[$p]} + i ))
+			want "$d tx-$i XPS by receive queue" "$(xps_cpu $q/xps_rxqs)" none
+		fi
 	done
 }
 
@@ -670,6 +695,14 @@ audit() {
 		fi
 		want "sunrpc $k" "$(rx_r $SUNRPC/$k)" "${EXPECT[$k]}"
 	done
+	if [ $XPS_MAP = rxqs ]; then
+		k=$(xeu_release)
+		if [[ "$k" =~ ^[0-9]+$ ]] && [ $k -ge $XEU_RXQ_RELEASE ]; then
+			ok "xeu records the receive queue" "kmod-xsight release $k"
+		else
+			bad "xeu records the receive queue" "release $k" ">= $XEU_RXQ_RELEASE, for xps_rxqs"
+		fi
+	fi
 	for k in $(printf '%s\n' "${!XEU[@]}" | sort); do
 		w=${XEU[$k]}; [ $k = rx_refill_thresh ] && w=${EXP_REFILL:-$w}
 		v=EXP_XEU_$k; w=${!v:-$w}
@@ -737,6 +770,11 @@ place() {	# place [a] [b]: the CPU layout of nfsd and of the ports named (both)
 		done < <(port_irqs $d)
 		for q in /sys/class/net/$d/queues/tx-*; do
 			i=${q##*-}
+			if [ $XPS_MAP = rxqs ]; then
+				echo 0 > $q/xps_cpus
+				printf '%x\n' $(( 1 << i )) > $q/xps_rxqs
+				continue
+			fi
 			m=$(( 1 << (${PXPS[$p]} + i) ))	# as the kernel prints a mask: 32-bit words, high first
 			printf '%08x,%08x\n' $(( (m >> 32) & 0xffffffff )) $(( m & 0xffffffff )) > $q/xps_cpus
 			echo 0 > $q/xps_rxqs

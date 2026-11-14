@@ -143,6 +143,19 @@ the window, `txq-sk-r6*.txt`):
 - **Writes are unchanged**: 78.06 against 78.00 GB/s, nfsd and the
   rings as busy (22% and 18 to 19%), loans admitted with none denied.
 
-`settled.sh` still holds the CPU map: `xps_rxqs` goes into the
-setting only on Mike's word, and with it kmod-xsight 2.0.1-17, which
-it needs.
+`settled.sh` held the CPU map until Mike's word.
+
+## Settled: xps_rxqs on tardis2 (Mike, 14 November)
+
+`xeu-rig/settled.sh` now holds `xps_rxqs` on tardis2: `apply` writes
+tx-i's `xps_rxqs` as `1 << i` and empties its `xps_cpus`, and the
+audit holds both (`XPS CPU none`, `XPS by receive queue i`). The map
+needs an xeu that records each frame's receive queue, so on tardis2
+the audit also holds the loaded xeu to kmod-xsight release 17 or
+later (`xeu records the receive queue`): it checks that the loaded
+module is the installed file, by srcversion, and reads that file's
+package release. Other hosts keep the recorded CPU map (tardis1 runs
+Release 13, which does not record the queue). Applied at rest on
+tardis2 the same evening; the audit ends in the settled setting.
+`twoport.sh`'s `XPS=rxqs` is now the setting itself on tardis2, and
+running it there only skips the interrupt and XPS checks.
