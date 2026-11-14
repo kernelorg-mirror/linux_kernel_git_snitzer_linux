@@ -150,3 +150,13 @@ rather than a ceiling on the rate.
 Each would be an A/B on two-port reads with the WRITE pass beside it
 (AGENTS.md): (1) touches the page allocator every WRITE uses, and (2)
 and (3) SUNRPC's send path.
+
+## The A/B of `vm.percpu_pagelist_high_fraction` on reads
+
+`PROBE=none RUNS="651:read:0 652:read:64 653:read:0 654:read:64
+655:read:16" run645.sh`, then the WRITE pass at 64
+(`write-check.sh 656`), the sysctl put back to 0 at the end. 0 is the
+default (each CPU's list high 874 to 889 pages, batch 15); 64 gives a
+high of 2,005 pages (31 MiB a CPU) and 16 of 8,021 (125 MiB). Nothing
+is profiled in these runs (`PROBE=none`), so the busy figures are the
+load's own. `settled.sh` does not hold the sysctl.
