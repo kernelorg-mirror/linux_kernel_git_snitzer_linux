@@ -99,3 +99,50 @@ kernel warning.  Files in `$L/xeu-rxq-reload-1114/`.
 
 `RUNS="639:read:cpus 640:read:rxqs 641:read:cpus 642:read:rxqs
 643:write:rxqs 644:write:cpus" ./run638.sh`, on Release 17 throughout.
+
+## Result: `xps_rxqs` reads 60.5 GB/s, 11% more, and writes the same
+
+[run639.out](run639.out), all on xeu Release 17.  No drive stepped
+down, no new kernel warning; the host at the settled setting after.
+
+| run | | map | GB/s | a / b | p99 ms | ring drops | busiest ring CPUs |
+|---|---|---|---|---|---|---|---|
+| `t2-r639` | read | cpus | 54.42 | 25.2 / 29.2 | 150 to 165 | 76 | Tx 5 at 93%, Tx 63 at 83% |
+| `t2-r640` | read | **rxqs** | **60.46** | 30.2 / 30.3 | 80 to 81 | 295 | every Rx CPU 82 to 93% |
+| `t2-r641` | read | cpus | 54.09 | 27.5 / 26.6 | 133 to 139 | 33 | Tx 1 at 93%, Tx 57 at 92% |
+| `t2-r642` | read | **rxqs** | **60.56** | 30.3 / 30.3 | 79 | 331 | every Rx CPU 81 to 93% |
+| `t2-r643` | write | **rxqs** | 78.06 | 39.1 / 39.0 | 81 | 0 | Rx 0 at 50% |
+| `t2-r644` | write | cpus | 78.00 | 39.0 / 39.0 | 80 to 81 | 0 | Rx 0 at 53% |
+
+Each port's sends by transmit queue (`xeu_start_xmit` calls in 3 s of
+the window, `txq-sk-r6*.txt`):
+
+| run | map | a: q0 q1 q2 q3 | b: q0 q1 q2 q3 |
+|---|---|---|---|
+| `t2-r639` | cpus | (every connection on all four) | |
+| `t2-r640` | rxqs | 27 27 25 20% | 25 25 25 25% |
+| `t2-r642` | rxqs | 28 25 26 21% | 29 21 28 21% |
+| `t2-r644` | cpus (write) | 10 10 40 40% | 18 26 32 24% |
+
+- **The read ceiling rises from 54.1 to 54.4 GB/s to 60.5 to 60.6**
+  with the two ports even (30.2 to 30.3 each) and the p99 halved.
+  Each queue carries 20 to 29% of its port's sends, against 10 to 40%
+  on the CPU map.  A connection now sends by one or two queues, not
+  all four (`sockets by queue` 3 to 8 a queue, against 12): the
+  second is where its receive queue changed, or before it was first
+  recorded, which was not looked into.
+- **Reads are now at the receive rings' CPUs**: all eight of them 81
+  to 93% busy (CPU 0, port a's Rx-0, 93% in both runs), the transmit
+  rings' CPUs 11 to 22%, against 27 to 55% and one Tx CPU at 83 to 93%
+  on the CPU map.  The drives are 85 to 87% busy, 7.6 GB/s each.  Why
+  the receive CPUs carry this much more on a read (the client's ACKs
+  and READ calls, and with them the sends TCP makes from its ACK
+  processing) was not looked into.
+- **Ring drops rise**, 295 and 331 against 33 and 76, on CPUs that
+  are now nearly full.
+- **Writes are unchanged**: 78.06 against 78.00 GB/s, nfsd and the
+  rings as busy (22% and 18 to 19%), loans admitted with none denied.
+
+`settled.sh` still holds the CPU map: `xps_rxqs` goes into the
+setting only on Mike's word, and with it kmod-xsight 2.0.1-17, which
+it needs.

@@ -1,0 +1,61 @@
+17:35:49 t2-r639 ab read xps cpus | total 54.42 GB/s | ring drops 76 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 25.22 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 76, rings 24/24/25/27%
+      read: 25.22 GB/s, 3.0k IOPS, completion 84.74 ms mean, 164.63 ms at the 99th percentile
+    port b enp164s0f0: 29.20 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 24/24/25/27%
+      read: 29.20 GB/s, 3.5k IOPS, completion 73.06 ms mean, 149.95 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 6.1 to 6.2, busiest 72% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.4 to 7.5, busiest 81% busy
+    enp161s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:12 q1:12 q2:12 q3:12 
+    enp164s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:12 q1:12 q2:12 q3:12 
+    ring CPUs busy: 0:52 1:15 2:32 3:1 4:30 5:93 6:29 7:0 56:48 57:10 58:55 59:2 60:37 61:1 62:40 63:83 
+17:41:07 t2-r640 ab read xps rxqs | total 60.46 GB/s | ring drops 295 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 30.17 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 253, rings 25/24/25/26%
+      read: 30.17 GB/s, 3.6k IOPS, completion 70.70 ms mean, 80.22 ms at the 99th percentile
+    port b enp164s0f0: 30.28 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 42, rings 25/26/25/24%
+      read: 30.28 GB/s, 3.6k IOPS, completion 70.43 ms mean, 81.26 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 7.5 to 7.6, busiest 87% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.6 to 7.6, busiest 87% busy
+    enp161s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:7 q1:6 q2:6 q3:4 
+    enp164s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:3 q1:3 q2:3 q3:3 
+    ring CPUs busy: 0:93 1:16 2:84 3:14 4:85 5:14 6:84 7:15 56:86 57:17 58:83 59:14 60:84 61:11 62:82 63:22 
+17:46:26 t2-r641 ab read xps cpus | total 54.09 GB/s | ring drops 33 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 27.50 GB/s (fio, after the warm-up); in the 10 s window: wire 0.02 GB/s, FIFO drops 0, ring drops 21, rings 24/24/27/25%
+      read: 27.50 GB/s, 3.3k IOPS, completion 77.66 ms mean, 132.64 ms at the 99th percentile
+    port b enp164s0f0: 26.59 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 12, rings 25/24/26/25%
+      read: 26.59 GB/s, 3.2k IOPS, completion 80.33 ms mean, 139.46 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 6.4 to 6.6, busiest 75% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.0 to 7.1, busiest 79% busy
+    enp161s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:12 q1:12 q2:12 q3:12 
+    enp164s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:12 q1:12 q2:12 q3:12 
+    ring CPUs busy: 0:47 1:93 2:27 3:1 4:35 5:22 6:32 7:0 56:38 57:92 58:29 59:1 60:42 61:12 62:36 63:3 
+17:51:44 t2-r642 ab read xps rxqs | total 60.56 GB/s | ring drops 331 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 30.27 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 176, rings 25/24/24/26%
+      read: 30.27 GB/s, 3.6k IOPS, completion 70.50 ms mean, 79.17 ms at the 99th percentile
+    port b enp164s0f0: 30.29 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 155, rings 25/26/25/25%
+      read: 30.29 GB/s, 3.6k IOPS, completion 70.42 ms mean, 79.17 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 7.6 to 7.6, busiest 87% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.6 to 7.6, busiest 85% busy
+    enp161s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:5 q1:5 q2:6 q3:5 
+    enp164s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:7 q1:3 q2:6 q3:4 
+    ring CPUs busy: 0:93 1:14 2:85 3:13 4:84 5:12 6:84 7:12 56:86 57:15 58:86 59:16 60:81 61:15 62:84 63:21 
+17:56:40 t2-r643 ab write xps rxqs | total 78.06 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 39.06 GB/s (fio, after the warm-up); in the 10 s window: wire 39.26 GB/s, FIFO drops 0, ring drops 0, rings 25/24/26/25%
+      write: 39.06 GB/s, 4.6k IOPS, completion 54.12 ms mean, 81.26 ms at the 99th percentile
+    port b enp164s0f0: 39.00 GB/s (fio, after the warm-up); in the 10 s window: wire 39.32 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/24%
+      write: 39.00 GB/s, 4.6k IOPS, completion 54.20 ms mean, 81.26 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 9.7 to 9.8 GB/s, busiest 97% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 9.7 to 9.8 GB/s, busiest 98% busy
+    enp161s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:4 q1:4 q2:5 q3:7 
+    enp164s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:8 q1:3 q2:3 q3:7 
+    ring CPUs busy: 0:50 1:6 2:29 3:3 4:28 5:2 6:26 7:2 56:44 57:7 58:30 59:2 60:29 61:4 62:27 63:7 
+18:01:37 t2-r644 ab write xps cpus | total 78.00 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 38.97 GB/s (fio, after the warm-up); in the 10 s window: wire 39.56 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      write: 38.97 GB/s, 4.6k IOPS, completion 54.23 ms mean, 81.26 ms at the 99th percentile
+    port b enp164s0f0: 39.04 GB/s (fio, after the warm-up); in the 10 s window: wire 39.41 GB/s, FIFO drops 0, ring drops 0, rings 25/26/25/25%
+      write: 39.04 GB/s, 4.6k IOPS, completion 54.12 ms mean, 80.22 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 9.8 to 9.8 GB/s, busiest 98% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 9.7 to 9.8 GB/s, busiest 97% busy
+    enp161s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:12 q1:12 q2:12 q3:12 
+    enp164s0f0 tx GB by ring: 0 0 0 0 | sockets by queue: q0:12 q1:12 q2:12 q3:12 
+    ring CPUs busy: 0:53 1:3 2:30 3:1 4:31 5:5 6:28 7:3 56:35 57:4 58:34 59:4 60:32 61:3 62:28 63:8 
+18:01:40 after: settled.sh audit rest: the settled setting
