@@ -29,3 +29,36 @@ what differs:
   trimmed, 120 s rest.  Order: one-port write, two-port write,
   one-port read, two-port read, twice (`t2-r622` to `t2-r629`):
   [run622.sh](run622.sh).
+
+## Result
+
+[run622.out](run622.out).  Every run clean: no ring drop, no drive
+stepped down, no new kernel warning; the host at the settled setting
+after.
+
+| | one port (a, nvme0 to nvme3) | two ports (two drives a port) |
+|---|---|---|
+| **write** | **40.60, 40.68 GB/s** (`t2-r622`, `r626`) | **40.06, 40.10 GB/s** (`r623`, `r627`) |
+| a drive writes | 10.2 GB/s, 100% busy | 10.0 GB/s, 99 to 100% busy |
+| write latency, mean / p99 | 52 / 82 ms | 106 / 148 to 150 ms |
+| **read** | **43.16, 42.88 GB/s** (`r624`, `r628`) | **52.43, 52.44 GB/s** (`r625`, `r629`) |
+| a drive reads | 10.7 to 10.8 GB/s, 98 to 99% busy | 13.1 GB/s, 100% busy |
+| read latency, mean / p99 | 49 / 74 to 78 ms | 81.5 / 83 to 116 ms |
+| server CPUs busy, write (rings a / b / nfsd) | 15 to 16% / - / 7% | 6% / 6% / 10% |
+| server CPUs busy, read (rings a / b / nfsd) | 34 to 36% / - / 8% | 12 to 13% / 11 to 13% / 12% |
+| client CPUs busy | 23% write, 47% read | |
+
+- **Writes are the drives' either way**: four drives at their cap,
+  10.2 GB/s each on one port (local fio's 10.21 to 10.22, round 98),
+  10.0 on two.  One port is 1.4% the faster, as round 98 found one
+  port holds its drives deeper than two do.  Two ports put 32 writers
+  on the drives against 16, so a WRITE waits twice as long for the
+  same rate.
+- **Reads on one port are the port's, not the drives'**: the same four
+  drives read 13.1 GB/s each when two ports carry them (52.4 GB/s,
+  100% busy), and 10.7 when one port does (43 GB/s).  So 52.4 GB/s is
+  what the four drives read through NFS, and about 43 GB/s what one
+  port sends of reads, with its rings' CPUs at 35%.  Where in the port
+  the 43 is set was not looked for in these runs.
+- The loans play no part in a read; the reads are direct on both
+  sides, so every byte came off the drives.

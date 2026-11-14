@@ -1,0 +1,45 @@
+15:27:13 t2-r622 a write | total 40.60 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 40.60 GB/s (fio, after the warm-up); in the 10 s window: wire 41.06 GB/s, FIFO drops 0, ring drops 0, rings 19/31/25/25%
+      write: 40.60 GB/s, 4.8k IOPS, completion 52.05 ms mean, 82.31 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 10.2 to 10.2 GB/s, busiest 100% busy
+15:32:02 t2-r623 ab write | total 40.06 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 20.02 GB/s (fio, after the warm-up); in the 10 s window: wire 20.20 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      write: 20.02 GB/s, 2.4k IOPS, completion 106.54 ms mean, 149.95 ms at the 99th percentile
+    port b enp164s0f0: 20.03 GB/s (fio, after the warm-up); in the 10 s window: wire 20.20 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      write: 20.03 GB/s, 2.4k IOPS, completion 106.46 ms mean, 147.85 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1): 2, each writing 10.0 to 10.0 GB/s, busiest 99% busy
+    drives of b (/hs/nvme2 /hs/nvme3): 2, each writing 10.0 to 10.0 GB/s, busiest 100% busy
+15:36:54 t2-r624 a read | total 43.16 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 43.16 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      read: 43.16 GB/s, 5.1k IOPS, completion 48.90 ms mean, 73.92 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 10.7 to 10.8, busiest 99% busy
+15:42:05 t2-r625 ab read | total 52.43 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 26.21 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      read: 26.21 GB/s, 3.1k IOPS, completion 81.54 ms mean, 110.62 ms at the 99th percentile
+    port b enp164s0f0: 26.22 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      read: 26.22 GB/s, 3.1k IOPS, completion 81.49 ms mean, 83.36 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1): 2, each writing 0.0 to 0.0 GB/s and reading 13.1 to 13.1, busiest 100% busy
+    drives of b (/hs/nvme2 /hs/nvme3): 2, each writing 0.0 to 0.0 GB/s and reading 13.1 to 13.1, busiest 100% busy
+15:46:36 t2-r626 a write | total 40.68 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 40.68 GB/s (fio, after the warm-up); in the 10 s window: wire 41.09 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      write: 40.68 GB/s, 4.8k IOPS, completion 51.95 ms mean, 82.31 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 10.2 to 10.2 GB/s, busiest 100% busy
+15:51:25 t2-r627 ab write | total 40.10 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 20.06 GB/s (fio, after the warm-up); in the 10 s window: wire 20.24 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      write: 20.06 GB/s, 2.4k IOPS, completion 106.36 ms mean, 147.85 ms at the 99th percentile
+    port b enp164s0f0: 20.04 GB/s (fio, after the warm-up); in the 10 s window: wire 20.19 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      write: 20.04 GB/s, 2.4k IOPS, completion 106.45 ms mean, 149.95 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1): 2, each writing 10.0 to 10.0 GB/s, busiest 99% busy
+    drives of b (/hs/nvme2 /hs/nvme3): 2, each writing 10.0 to 10.0 GB/s, busiest 99% busy
+15:56:17 t2-r628 a read | total 42.88 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 42.88 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      read: 42.88 GB/s, 5.1k IOPS, completion 49.19 ms mean, 78.12 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 10.7 to 10.7, busiest 98% busy
+16:01:28 t2-r629 ab read | total 52.44 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 26.21 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/24/25/25%
+      read: 26.21 GB/s, 3.1k IOPS, completion 81.49 ms mean, 115.87 ms at the 99th percentile
+    port b enp164s0f0: 26.23 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      read: 26.23 GB/s, 3.1k IOPS, completion 81.47 ms mean, 86.51 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1): 2, each writing 0.0 to 0.0 GB/s and reading 13.1 to 13.1, busiest 100% busy
+    drives of b (/hs/nvme2 /hs/nvme3): 2, each writing 0.0 to 0.0 GB/s and reading 13.1 to 13.1, busiest 100% busy
+16:01:32 after: settled.sh audit rest: the settled setting
