@@ -74,6 +74,10 @@
 #                    placement), and every ring's interrupts on the four-ring layout,
 #                    Rx-i on 2i and Tx-i on 2i+1 of the port's eight, two rings a CPU
 #                    over four: more transmit queues without more receiving rings
+#   XPS=rxqs         each transmit queue tx-i steered by receive queue rx-i (xps_rxqs),
+#                    no CPU map: a connection's sends leave by the queue paired with
+#                    the ring it is placed on (needs an xeu that records the RX queue,
+#                    kmod-xsight 2.0.1-17)
 #   XPS=spread       each transmit queue's XPS map a block of nfsd's CPUs (8-55), so
 #                    every sender has a queue of its own (settled: tx-i on 8+i only)
 #   NFSD_CPUS=<list> nfsd's threads on these CPUs for the run (8-55 after it), to
@@ -319,6 +323,15 @@ for p in $PORTS; do
 			echo 0 > $q/xps_rxqs
 		done
 		echo "$p: XPS $(for q in /sys/class/net/$d/queues/tx-*; do echo -n "$(basename $q):$(cat $q/xps_cpus) "; done)" | tee -a geometry.txt
+	elif [ "${XPS:-}" = rxqs ]; then
+		for q in /sys/class/net/$d/queues/tx-*; do
+			i=${q##*-}
+			echo 0 > $q/xps_cpus
+			printf '%x\n' $(( 1 << i )) > $q/xps_rxqs
+		done
+		echo "$p: XPS by receive queue $(for q in /sys/class/net/$d/queues/tx-*; do echo -n "$(basename $q):cpus $(cat $q/xps_cpus) rxqs $(cat $q/xps_rxqs) "; done)" | tee -a geometry.txt
+	elif [ -n "${XPS:-}" ]; then
+		echo "XPS=$XPS: spread or rxqs"; exit 1
 	fi
 	echo "$p: $d mtu $(cat /sys/class/net/$d/mtu) rings $(ethtool -l $d | awk '/Combined/{v=$2} END{print v}') x $(ethtool -g $d | awk '/^RX:/{v=$2} END{print v}')" | tee -a geometry.txt
 	# Straight after the port is opened the client's entry for the server's
