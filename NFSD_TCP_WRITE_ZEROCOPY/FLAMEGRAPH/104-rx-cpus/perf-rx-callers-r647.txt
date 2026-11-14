@@ -1,0 +1,485 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 124K of event 'armv8_pmuv3_0/cycles/P'
+# Event count (approx.): 50916824272
+#
+# Overhead  Symbol                                     IPC   [IPC Coverage]
+# ........  .........................................  ....................
+#
+    39.14%  [k] _raw_spin_unlock_irqrestore            -      -            
+            |          
+             --39.05%--get_current (inlined)
+                       __preempt_count_dec_and_test (inlined)
+                       __raw_spin_unlock_irqrestore (inlined)
+                       _raw_spin_unlock_irqrestore
+                       |          
+                        --36.03%--spin_unlock (inlined)
+                                  free_frozen_page_commit
+                                  __free_frozen_pages
+                                  free_frozen_pages
+                                  __folio_put
+                                  folio_put (inlined)
+                                  put_page (inlined)
+                                  put_netmem (inlined)
+                                  skb_page_unref (inlined)
+                                  __skb_frag_unref (inlined)
+                                  |          
+                                   --35.34%--skb_release_data
+                                             __kfree_skb
+                                             tcp_clean_rtx_queue
+                                             read_pnet (inlined)
+                                             sock_net (inlined)
+                                             tcp_rack_update_reo_wnd (inlined)
+                                             tcp_ack
+                                             |          
+                                              --35.17%--tcp_rcv_established
+                                                        tcp_v4_do_rcv
+                                                        spin_unlock (inlined)
+                                                        tcp_v4_rcv
+                                                        ip_protocol_deliver_rcu
+                                                        rcu_read_unlock (inlined)
+                                                        ip_local_deliver_finish
+                                                        ip_local_deliver
+                                                        ip_sublist_rcv_finish
+                                                        ip_sublist_rcv
+                                                        ip_list_rcv
+                                                        |          
+                                                         --35.17%--__netif_receive_skb_list_ptype (inlined)
+                                                                   __netif_receive_skb_list_core
+                                                                   __netif_receive_skb_list (inlined)
+                                                                   netif_receive_skb_list_internal
+                                                                   INIT_LIST_HEAD (inlined)
+                                                                   gro_normal_list (inlined)
+                                                                   |          
+                                                                   |--29.87%--gro_normal_one (inlined)
+                                                                   |          gro_skb_finish (inlined)
+                                                                   |          gro_receive_skb
+                                                                   |          xeu_rx_poll
+                                                                   |          __napi_poll
+                                                                   |          napi_poll (inlined)
+                                                                   |          net_rx_action
+                                                                   |          arch_static_branch (inlined)
+                                                                   |          trace_softirq_exit (inlined)
+                                                                   |          handle_softirqs
+                                                                   |          |          
+                                                                   |          |--21.31%--__do_softirq
+                                                                   |          |          ____do_softirq
+                                                                   |          |          call_on_irq_stack
+                                                                   |          |          do_softirq_own_stack
+                                                                   |          |          |          
+                                                                   |          |           --21.29%--invoke_softirq (inlined)
+                                                                   |          |                     __irq_exit_rcu
+                                                                   |          |                     irq_exit_rcu
+                                                                   |          |                     |          
+                                                                   |          |                      --21.28%--__el1_irq (inlined)
+                                                                   |          |                                el1_interrupt
+                                                                   |          |                                el1h_64_irq_handler
+                                                                   |          |                                el1h_64_irq
+                                                                   |          |                                |          
+                                                                   |          |                                 --20.42%--default_idle_call
+                                                                   |          |                                           |          
+                                                                   |          |                                            --20.42%--cpuidle_idle_call
+                                                                   |          |                                                      do_idle
+                                                                   |          |                                                      cpu_startup_entry
+                                                                   |          |                                                      |          
+                                                                   |          |                                                      |--17.49%--__ll_sc_atomic_add (inlined)
+                                                                   |          |                                                      |          arch_atomic_add (inlined)
+                                                                   |          |                                                      |          raw_atomic_add (inlined)
+                                                                   |          |                                                      |          raw_atomic_inc (inlined)
+                                                                   |          |                                                      |          atomic_inc (inlined)
+                                                                   |          |                                                      |          mmgrab (inlined)
+                                                                   |          |                                                      |          secondary_start_kernel
+                                                                   |          |                                                      |          __secondary_switched
+                                                                   |          |                                                      |          
+                                                                   |          |                                                       --2.93%--0xffff9fe051022158
+                                                                   |          |                                                                 0xffff9fe0520117c0
+                                                                   |          |                                                                 __primary_switched
+                                                                   |          |          
+                                                                   |           --8.56%--alternative_has_cap_unlikely (inlined)
+                                                                   |                     system_uses_irq_prio_masking (inlined)
+                                                                   |                     arch_local_irq_enable (inlined)
+                                                                   |                     ksoftirqd_run_end (inlined)
+                                                                   |                     run_ksoftirqd
+                                                                   |                     run_ksoftirqd
+                                                                   |                     smpboot_thread_fn
+                                                                   |                     kthread
+                                                                   |                     ret_from_fork
+                                                                   |          
+                                                                    --5.30%--gro_normal_list (inlined)
+                                                                              gro_flush_normal (inlined)
+                                                                              napi_complete_done
+                                                                              xeu_rx_poll
+                                                                              __napi_poll
+                                                                              napi_poll (inlined)
+                                                                              net_rx_action
+                                                                              arch_static_branch (inlined)
+                                                                              trace_softirq_exit (inlined)
+                                                                              handle_softirqs
+                                                                              |          
+                                                                               --5.22%--__do_softirq
+                                                                                         ____do_softirq
+                                                                                         call_on_irq_stack
+                                                                                         do_softirq_own_stack
+                                                                                         invoke_softirq (inlined)
+                                                                                         __irq_exit_rcu
+                                                                                         irq_exit_rcu
+                                                                                         |          
+                                                                                          --5.22%--__el1_irq (inlined)
+                                                                                                    el1_interrupt
+                                                                                                    el1h_64_irq_handler
+                                                                                                    el1h_64_irq
+                                                                                                    |          
+                                                                                                     --5.15%--default_idle_call
+                                                                                                               cpuidle_idle_call
+                                                                                                               do_idle
+                                                                                                               cpu_startup_entry
+                                                                                                               |          
+                                                                                                                --4.41%--__ll_sc_atomic_add (inlined)
+                                                                                                                          arch_atomic_add (inlined)
+                                                                                                                          raw_atomic_add (inlined)
+                                                                                                                          raw_atomic_inc (inlined)
+                                                                                                                          atomic_inc (inlined)
+                                                                                                                          mmgrab (inlined)
+                                                                                                                          secondary_start_kernel
+                                                                                                                          __secondary_switched
+    20.76%  [k] skb_release_data                       -      -            
+            |          
+            |--9.60%--__lse_atomic_sub_return (inlined)
+            |          arch_atomic_sub_return (inlined)
+            |          raw_atomic_sub_return (inlined)
+            |          raw_atomic_dec_return (inlined)
+            |          raw_atomic_dec_and_test (inlined)
+            |          atomic_dec_and_test (inlined)
+            |          page_ref_dec_and_test (inlined)
+            |          put_page_testzero (inlined)
+            |          folio_put_testzero (inlined)
+            |          folio_put (inlined)
+            |          put_page (inlined)
+            |          put_netmem (inlined)
+            |          skb_page_unref (inlined)
+            |          __skb_frag_unref (inlined)
+            |          skb_release_data
+            |          __kfree_skb
+            |          tcp_clean_rtx_queue
+            |          read_pnet (inlined)
+            |          sock_net (inlined)
+            |          tcp_rack_update_reo_wnd (inlined)
+            |          tcp_ack
+            |          |          
+            |           --9.55%--tcp_rcv_established
+            |                     tcp_v4_do_rcv
+            |                     spin_unlock (inlined)
+            |                     tcp_v4_rcv
+            |                     ip_protocol_deliver_rcu
+            |                     rcu_read_unlock (inlined)
+            |                     ip_local_deliver_finish
+            |                     ip_local_deliver
+            |                     ip_sublist_rcv_finish
+            |                     ip_sublist_rcv
+            |                     ip_list_rcv
+            |                     __netif_receive_skb_list_ptype (inlined)
+            |                     __netif_receive_skb_list_core
+            |                     __netif_receive_skb_list (inlined)
+            |                     netif_receive_skb_list_internal
+            |                     INIT_LIST_HEAD (inlined)
+            |                     gro_normal_list (inlined)
+            |                     |          
+            |                     |--7.83%--gro_normal_one (inlined)
+            |                     |          gro_skb_finish (inlined)
+            |                     |          gro_receive_skb
+            |                     |          xeu_rx_poll
+            |                     |          __napi_poll
+            |                     |          napi_poll (inlined)
+            |                     |          net_rx_action
+            |                     |          arch_static_branch (inlined)
+            |                     |          trace_softirq_exit (inlined)
+            |                     |          handle_softirqs
+            |                     |          |          
+            |                     |          |--5.67%--__do_softirq
+            |                     |          |          ____do_softirq
+            |                     |          |          call_on_irq_stack
+            |                     |          |          do_softirq_own_stack
+            |                     |          |          |          
+            |                     |          |           --5.67%--invoke_softirq (inlined)
+            |                     |          |                     __irq_exit_rcu
+            |                     |          |                     irq_exit_rcu
+            |                     |          |                     |          
+            |                     |          |                      --5.66%--__el1_irq (inlined)
+            |                     |          |                                el1_interrupt
+            |                     |          |                                el1h_64_irq_handler
+            |                     |          |                                el1h_64_irq
+            |                     |          |                                |          
+            |                     |          |                                 --5.43%--default_idle_call
+            |                     |          |                                           |          
+            |                     |          |                                            --5.42%--cpuidle_idle_call
+            |                     |          |                                                      do_idle
+            |                     |          |                                                      cpu_startup_entry
+            |                     |          |                                                      |          
+            |                     |          |                                                       --4.75%--__ll_sc_atomic_add (inlined)
+            |                     |          |                                                                 arch_atomic_add (inlined)
+            |                     |          |                                                                 raw_atomic_add (inlined)
+            |                     |          |                                                                 raw_atomic_inc (inlined)
+            |                     |          |                                                                 atomic_inc (inlined)
+            |                     |          |                                                                 mmgrab (inlined)
+            |                     |          |                                                                 secondary_start_kernel
+            |                     |          |                                                                 __secondary_switched
+            |                     |          |          
+            |                     |           --2.17%--alternative_has_cap_unlikely (inlined)
+            |                     |                     system_uses_irq_prio_masking (inlined)
+            |                     |                     arch_local_irq_enable (inlined)
+            |                     |                     ksoftirqd_run_end (inlined)
+            |                     |                     run_ksoftirqd
+            |                     |                     run_ksoftirqd
+            |                     |                     smpboot_thread_fn
+            |                     |                     kthread
+            |                     |                     ret_from_fork
+            |                     |          
+            |                      --1.72%--gro_normal_list (inlined)
+            |                                gro_flush_normal (inlined)
+            |                                napi_complete_done
+            |                                xeu_rx_poll
+            |                                __napi_poll
+            |                                napi_poll (inlined)
+            |                                net_rx_action
+            |                                arch_static_branch (inlined)
+            |                                trace_softirq_exit (inlined)
+            |                                handle_softirqs
+            |                                |          
+            |                                 --1.69%--__do_softirq
+            |                                           ____do_softirq
+            |                                           call_on_irq_stack
+            |                                           do_softirq_own_stack
+            |                                           invoke_softirq (inlined)
+            |                                           __irq_exit_rcu
+            |                                           irq_exit_rcu
+            |                                           |          
+            |                                            --1.69%--__el1_irq (inlined)
+            |                                                      el1_interrupt
+            |                                                      el1h_64_irq_handler
+            |                                                      el1h_64_irq
+            |                                                      |          
+            |                                                       --1.67%--default_idle_call
+            |                                                                 cpuidle_idle_call
+            |                                                                 do_idle
+            |                                                                 cpu_startup_entry
+            |          
+             --8.45%--_compound_head (inlined)
+                       put_page (inlined)
+                       put_netmem (inlined)
+                       skb_page_unref (inlined)
+                       __skb_frag_unref (inlined)
+                       skb_release_data
+                       __kfree_skb
+                       tcp_clean_rtx_queue
+                       read_pnet (inlined)
+                       sock_net (inlined)
+                       tcp_rack_update_reo_wnd (inlined)
+                       tcp_ack
+                       |          
+                        --8.41%--tcp_rcv_established
+                                  tcp_v4_do_rcv
+                                  spin_unlock (inlined)
+                                  tcp_v4_rcv
+                                  ip_protocol_deliver_rcu
+                                  rcu_read_unlock (inlined)
+                                  ip_local_deliver_finish
+                                  ip_local_deliver
+                                  ip_sublist_rcv_finish
+                                  ip_sublist_rcv
+                                  ip_list_rcv
+                                  __netif_receive_skb_list_ptype (inlined)
+                                  __netif_receive_skb_list_core
+                                  __netif_receive_skb_list (inlined)
+                                  netif_receive_skb_list_internal
+                                  INIT_LIST_HEAD (inlined)
+                                  gro_normal_list (inlined)
+                                  |          
+                                   --7.21%--gro_normal_one (inlined)
+                                             gro_skb_finish (inlined)
+                                             gro_receive_skb
+                                             xeu_rx_poll
+                                             __napi_poll
+                                             napi_poll (inlined)
+                                             net_rx_action
+                                             arch_static_branch (inlined)
+                                             trace_softirq_exit (inlined)
+                                             handle_softirqs
+                                             |          
+                                             |--5.07%--__do_softirq
+                                             |          ____do_softirq
+                                             |          call_on_irq_stack
+                                             |          do_softirq_own_stack
+                                             |          |          
+                                             |           --5.07%--invoke_softirq (inlined)
+                                             |                     __irq_exit_rcu
+                                             |                     irq_exit_rcu
+                                             |                     |          
+                                             |                      --5.07%--__el1_irq (inlined)
+                                             |                                el1_interrupt
+                                             |                                el1h_64_irq_handler
+                                             |                                el1h_64_irq
+                                             |                                |          
+                                             |                                 --4.87%--default_idle_call
+                                             |                                           |          
+                                             |                                            --4.87%--cpuidle_idle_call
+                                             |                                                      do_idle
+                                             |                                                      cpu_startup_entry
+                                             |                                                      |          
+                                             |                                                       --4.26%--__ll_sc_atomic_add (inlined)
+                                             |                                                                 arch_atomic_add (inlined)
+                                             |                                                                 raw_atomic_add (inlined)
+                                             |                                                                 raw_atomic_inc (inlined)
+                                             |                                                                 atomic_inc (inlined)
+                                             |                                                                 mmgrab (inlined)
+                                             |                                                                 secondary_start_kernel
+                                             |                                                                 __secondary_switched
+                                             |          
+                                              --2.14%--alternative_has_cap_unlikely (inlined)
+                                                        system_uses_irq_prio_masking (inlined)
+                                                        arch_local_irq_enable (inlined)
+                                                        ksoftirqd_run_end (inlined)
+                                                        run_ksoftirqd
+                                                        run_ksoftirqd
+                                                        smpboot_thread_fn
+                                                        kthread
+                                                        ret_from_fork
+     4.51%  [k] free_frozen_page_commit                -      -            
+            |          
+             --3.91%--nr_pcp_high (inlined)
+                       free_frozen_page_commit
+                       __free_frozen_pages
+                       free_frozen_pages
+                       __folio_put
+                       folio_put (inlined)
+                       put_page (inlined)
+                       put_netmem (inlined)
+                       skb_page_unref (inlined)
+                       __skb_frag_unref (inlined)
+                       |          
+                        --3.83%--skb_release_data
+                                  __kfree_skb
+                                  tcp_clean_rtx_queue
+                                  read_pnet (inlined)
+                                  sock_net (inlined)
+                                  tcp_rack_update_reo_wnd (inlined)
+                                  tcp_ack
+                                  |          
+                                   --3.81%--tcp_rcv_established
+                                             tcp_v4_do_rcv
+                                             spin_unlock (inlined)
+                                             tcp_v4_rcv
+                                             ip_protocol_deliver_rcu
+                                             rcu_read_unlock (inlined)
+                                             ip_local_deliver_finish
+                                             ip_local_deliver
+                                             ip_sublist_rcv_finish
+                                             ip_sublist_rcv
+                                             ip_list_rcv
+                                             |          
+                                              --3.81%--__netif_receive_skb_list_ptype (inlined)
+                                                        __netif_receive_skb_list_core
+                                                        __netif_receive_skb_list (inlined)
+                                                        netif_receive_skb_list_internal
+                                                        INIT_LIST_HEAD (inlined)
+                                                        gro_normal_list (inlined)
+                                                        |          
+                                                         --3.23%--gro_normal_one (inlined)
+                                                                   gro_skb_finish (inlined)
+                                                                   gro_receive_skb
+                                                                   xeu_rx_poll
+                                                                   __napi_poll
+                                                                   napi_poll (inlined)
+                                                                   net_rx_action
+                                                                   arch_static_branch (inlined)
+                                                                   trace_softirq_exit (inlined)
+                                                                   handle_softirqs
+                                                                   |          
+                                                                    --2.34%--__do_softirq
+                                                                              ____do_softirq
+                                                                              call_on_irq_stack
+                                                                              do_softirq_own_stack
+                                                                              |          
+                                                                               --2.34%--invoke_softirq (inlined)
+                                                                                         __irq_exit_rcu
+                                                                                         irq_exit_rcu
+                                                                                         |          
+                                                                                          --2.34%--__el1_irq (inlined)
+                                                                                                    el1_interrupt
+                                                                                                    el1h_64_irq_handler
+                                                                                                    el1h_64_irq
+                                                                                                    |          
+                                                                                                     --2.26%--default_idle_call
+                                                                                                               cpuidle_idle_call
+                                                                                                               do_idle
+                                                                                                               cpu_startup_entry
+                                                                                                               |          
+                                                                                                                --1.97%--__ll_sc_atomic_add (inlined)
+                                                                                                                          arch_atomic_add (inlined)
+                                                                                                                          raw_atomic_add (inlined)
+                                                                                                                          raw_atomic_inc (inlined)
+                                                                                                                          atomic_inc (inlined)
+                                                                                                                          mmgrab (inlined)
+                                                                                                                          secondary_start_kernel
+                                                                                                                          __secondary_switched
+     2.58%  [k] __list_del_entry_valid_or_report       -      -            
+            |          
+             --2.50%--__list_del_entry (inlined)
+                       |          
+                        --2.35%--list_del (inlined)
+                                  tcp_rtx_queue_unlink_and_free (inlined)
+                                  tcp_clean_rtx_queue
+                                  read_pnet (inlined)
+                                  sock_net (inlined)
+                                  tcp_rack_update_reo_wnd (inlined)
+                                  tcp_ack
+                                  |          
+                                   --2.34%--tcp_rcv_established
+                                             tcp_v4_do_rcv
+                                             spin_unlock (inlined)
+                                             tcp_v4_rcv
+                                             ip_protocol_deliver_rcu
+                                             rcu_read_unlock (inlined)
+                                             ip_local_deliver_finish
+                                             ip_local_deliver
+                                             ip_sublist_rcv_finish
+                                             ip_sublist_rcv
+                                             ip_list_rcv
+                                             __netif_receive_skb_list_ptype (inlined)
+                                             __netif_receive_skb_list_core
+                                             __netif_receive_skb_list (inlined)
+                                             netif_receive_skb_list_internal
+                                             INIT_LIST_HEAD (inlined)
+                                             gro_normal_list (inlined)
+                                             |          
+                                              --2.01%--gro_normal_one (inlined)
+                                                        gro_skb_finish (inlined)
+                                                        gro_receive_skb
+                                                        xeu_rx_poll
+                                                        __napi_poll
+                                                        napi_poll (inlined)
+                                                        net_rx_action
+                                                        arch_static_branch (inlined)
+                                                        trace_softirq_exit (inlined)
+                                                        handle_softirqs
+     2.23%  [k] tcp_clean_rtx_queue                    -      -            
+     1.94%  [k] default_idle_call                      -      -            
+            |          
+             --1.93%--cpuidle_idle_call
+                       do_idle
+                       cpu_startup_entry
+                       |          
+                        --1.57%--__ll_sc_atomic_add (inlined)
+                                  arch_atomic_add (inlined)
+                                  raw_atomic_add (inlined)
+                                  raw_atomic_inc (inlined)
+                                  atomic_inc (inlined)
+                                  mmgrab (inlined)
+                                  secondary_start_kernel
+                                  __secondary_switched
+     1.51%  [k] kfree                                  -      -            
+#
+# (Tip: To filter subset of samples with report or script add --time X-Y or --cpu A,B,C or --socket-filter ...)
+#

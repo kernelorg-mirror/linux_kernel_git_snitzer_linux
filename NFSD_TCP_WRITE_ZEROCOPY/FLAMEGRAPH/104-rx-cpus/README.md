@@ -36,3 +36,43 @@ a short write job, with the placement's `bpftrace` on
 Round 103's queue traces had the same fault (its README is corrected).
 The runner now waits for the load's 25th second (`wire-sec.tsv`'s
 rows) and traces each connection's transmit queue after the profile.
+
+## t2-r647: in the load
+
+[run647.out](run647.out): 60.54 GB/s (30.22 / 30.32), ring drops 131,
+no drive stepped down, no new kernel warning. The profile ran from
+24.4 to 36.8 s into the load. The receive CPUs were 71 to 90% busy
+(CPU 0 90%), the transmit CPUs 30 to 38% (above round 103's 11 to 22%:
+this time the profile and the queue trace were running in the window).
+
+**The sends spread evenly under xps_rxqs** ([txq-sk-r647.txt](txq-sk-r647.txt),
+2 s of each port in the load): every queue 25% of its port's sends on
+both ports, and every connection on exactly one queue, three a queue.
+
+**The receive CPUs mostly free the READ replies' pages**
+([perf-rx-self-r647.txt](perf-rx-self-r647.txt),
+[perf-rx-callers-r647.txt](perf-rx-callers-r647.txt), the eight
+receive CPUs' samples):
+
+| | share |
+|---|---|
+| `_raw_spin_unlock_irqrestore`, 36.0 of its 39.1% under `free_frozen_page_commit`, from `skb_release_data` in `tcp_clean_rtx_queue` | 39.1% |
+| `skb_release_data` itself (the frags' refcount drops) | 20.8% |
+| `free_frozen_page_commit`, `__free_frozen_pages` | 5.6% |
+| `tcp_clean_rtx_queue`, `kfree`, `kmem_cache_free`, `rb_erase`, `kfree_skbmem` | 7.6% |
+| xeu's receive poll and GRO | under 3% |
+
+The ACKs a client sends free the sent skbs (`tcp_ack()` ->
+`tcp_clean_rtx_queue()`), and with nfsd's `io_cache_read` at 2
+(direct) the skbs' frags hold the last reference to pages nfsd
+allocated for the READ, not page-cache pages, so every page sent goes
+back to the page allocator on the receive CPU that took the ACK. At
+60.5 GB/s that is about 3.7 million 16 KiB pages a second, allocated on
+nfsd's CPUs and freed on the eight receive CPUs. Without pseudo-NMI a
+sample taken with interrupts off is placed where they come back on, so
+the 36% at `_raw_spin_unlock_irqrestore` is the time spent inside the
+free's locked section: the per-CPU list is full (high 889, batch 15)
+and is drained to the zone under `zone->lock`, and tardis2 has one
+node and one Normal zone, so that lock is the one all 64 CPUs take,
+nfsd's allocations included. Whether the time is waiting on that lock
+or doing the drain is not yet measured.

@@ -1,0 +1,46 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 124K of event 'armv8_pmuv3_0/cycles/P'
+# Event count (approx.): 50916824272
+#
+# Overhead  Symbol                                     IPC   [IPC Coverage]
+# ........  .........................................  ....................
+#
+    39.14%  [k] _raw_spin_unlock_irqrestore            -      -            
+    20.76%  [k] skb_release_data                       -      -            
+     4.51%  [k] free_frozen_page_commit                -      -            
+     2.58%  [k] __list_del_entry_valid_or_report       -      -            
+     2.23%  [k] tcp_clean_rtx_queue                    -      -            
+     1.94%  [k] default_idle_call                      -      -            
+     1.51%  [k] kfree                                  -      -            
+     1.33%  [k] kmem_cache_free                        -      -            
+     1.31%  [k] rb_erase                               -      -            
+     1.28%  [k] xeu_rx_poll                            -      -            
+     1.22%  [k] handle_softirqs                        -      -            
+     1.20%  [k] kfree_skbmem                           -      -            
+     1.18%  [k] _raw_spin_lock                         -      -            
+     1.07%  [k] __free_frozen_pages                    -      -            
+     0.93%  [k] tcp_v4_rcv                             -      -            
+     0.73%  [k] _raw_spin_trylock                      -      -            
+     0.71%  [k] __inet_lookup_established              -      -            
+     0.70%  [k] __memcg_slab_free_hook                 -      -            
+     0.64%  [k] _raw_spin_unlock                       -      -            
+     0.50%  [k] fib_table_lookup                       -      -            
+     0.49%  [k] __sk_mem_reduce_allocated              -      -            
+     0.46%  [k] inet_gro_receive                       -      -            
+     0.42%  [k] napi_build_skb                         -      -            
+     0.41%  [k] __list_add_valid_or_report             -      -            
+     0.41%  [k] napi_pp_put_page                       -      -            
+     0.37%  [k] tcp_ack                                -      -            
+     0.36%  [k] __pi_memcpy_generic                    -      -            
+     0.35%  [k] arch_counter_get_cntpct                -      -            
+     0.34%  [k] eth_type_trans                         -      -            
+     0.34%  [k] tcp_rcv_established                    -      -            
+     0.33%  [k] xeu_rx_refill.isra.0                   -      -            
+     0.32%  [k] __pskb_trim_head                       -      -            
+#
+# (Tip: Search options using a keyword: perf report -h <keyword>)
+#

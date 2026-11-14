@@ -1,0 +1,12 @@
+19:42:05 t2-r647 ab read | total 60.54 GB/s | ring drops 131 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 30.22 GB/s (fio, after the warm-up); in the 10 s window: wire 0.02 GB/s, FIFO drops 0, ring drops 39, rings 25/26/25/25%
+      read: 30.22 GB/s, 3.6k IOPS, completion 70.60 ms mean, 81.26 ms at the 99th percentile
+    port b enp164s0f0: 30.32 GB/s (fio, after the warm-up); in the 10 s window: wire 0.02 GB/s, FIFO drops 0, ring drops 92, rings 30/21/22/26%
+      read: 30.32 GB/s, 3.6k IOPS, completion 70.36 ms mean, 81.26 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 7.5 to 7.6, busiest 85% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.5 to 7.6, busiest 86% busy
+    ring CPUs busy: 0:90 1:36 2:81 3:34 4:74 5:35 6:74 7:37 56:78 57:35 58:71 59:38 60:75 61:30 62:76 63:36 
+    profile 1794685224.605434786 to 1794685236.950240609, load from 1794685200.179
+    enp161s0f0 sends by queue: q0 25% q1 25% q2 25% q3 25% | sockets by queue: q0:3 q1:3 q2:3 q3:3 
+    enp164s0f0 sends by queue: q0 25% q1 25% q2 25% q3 25% | sockets by queue: q0:3 q1:3 q2:3 q3:3 
+19:42:08 after: settled.sh audit rest: the settled setting
