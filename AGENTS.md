@@ -265,6 +265,31 @@ docs. What was done:
 The tips before the regroup are kept with the suffix
 `.pre-regroup-1104` (branch and the four markers).
 
+## Every READ round keeps WRITEs at 78 GB/s (hard rule)
+
+**From round 104 on, the work turns to READ performance, and every
+round that changes a path WRITEs also take is checked with a quick
+WRITE pass before it is kept (Mike, 2026-11-14).** That is any change
+to the kernel's network, TCP, SUNRPC, nfsd, VFS, block or NVMe paths,
+to xeu (kmod-xsight), or to `xeu-rig/settled.sh`, at any layer, even
+one made for reads only; a change that only a read can reach (the
+READ procedure's own encode, for one) is checked too unless the round
+says why WRITEs cannot reach it.
+
+- **The pass:** `xeu-rig/write-check.sh <n>` on the changed host, at
+  the settled setting: one two-port write run on all eight drives
+  (`WARM=10 RUNTIME=40`, as round 103's t2-r643 and r644, 78.06 and
+  78.00 GB/s). It passes at **78.0 GB/s or more**, no drive stepped
+  down and no new kernel warning. Run-to-run spread is about 0.2 GB/s,
+  so 77.8 to 77.99 is run once more (`RERUN`); below 77.8, or below
+  78.0 twice, is a regression.
+- **A regression is not kept**, whatever the read gains: the change is
+  reworked or dropped, or Mike decides. Do not move the 78 GB/s mark,
+  or the pass's shape, without Mike's word.
+- **Every round's README records its pass** (run number and GB/s)
+  beside its read results, and a round's report gives it. A round
+  with no pass is not finished.
+
 ## NFSD TCP write-path zero-copy (page-loan series)
 
 The server-side page-loan work — eliminating the redundant receive-side data
