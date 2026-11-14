@@ -10,10 +10,13 @@ say() { echo "$(date +%T) $*"; }
 [ "$(cat /sys/kernel/kexec_crash_loaded)" = 1 ] || { say "kdump not armed"; exit 1; }
 snap() {	# snap <dir> <tag>
 	for d in enp161s0f0 enp164s0f0; do ethtool -S $d > $1/ethtool-$d.$2; done
-	cat /proc/softirqs > $1/softirqs.$2; date +%s.%N > $1/time.$2
+	cat /proc/softirqs > $1/softirqs.$2; cat /proc/zoneinfo > $1/zoneinfo.$2; date +%s.%N > $1/time.$2
 }
 for run in ${RUNS:-647:read}; do
-	IFS=: read n rw <<< "$run"
+	IFS=: read n rw hf <<< "$run"
+	# <hf>: vm.percpu_pagelist_high_fraction for the run (t2-r651 on), put
+	# back to 0 after the last.
+	[ -n "$hf" ] && { sysctl -q -w vm.percpu_pagelist_high_fraction=$hf || exit 1; }
 	[ "$(df --output=avail -k / | tail -1)" -gt 1572864 ] || { say "root has under 1.5 GB free"; exit 1; }
 	O=$L/t2-r$n; mkdir -p $O
 	client_free || { say "client not free"; exit 1; }
@@ -29,7 +32,9 @@ for run in ${RUNS:-647:read}; do
 	( W=$O/run/wire-sec.tsv
 	  for i in $(seq 600); do [ -f $W ] && [ $(wc -l < $W) -ge 26 ] && break; sleep 0.5; done
 	  snap $O 0
-	  if [ "${PROBE:-perf}" = lock ]; then
+	  if [ "${PROBE:-perf}" = none ]; then
+		sleep 8
+	  elif [ "${PROBE:-perf}" = lock ]; then
 		# How long the zone's free and refill take, and who waits on its lock.
 		perf lock contention -a -b -E 20 -- sleep 4 > $O/lock-contention.txt 2>&1
 		bpftrace -q -e '
@@ -58,10 +63,13 @@ for run in ${RUNS:-647:read}; do
 	say "t2-r$n ab $rw | $(grep '^total' $O/run.log) | ring drops $(grep -oE 'ring drops [0-9]+' $O/run.log | awk '{s+=$3} END {print s}') | $(grep -o 'no drive stepped down' $O/run.log || echo 'a drive stepped down') | new kernel warnings $hung"
 	grep -E '^  (read|write):|^port |drives of' $O/run.log | sed 's/^/    /'
 	echo "    ring CPUs busy: $(awk '$2 ~ /^[0-9]+$/ && ($2 < 8 || $2 > 55) {u[$2] += 100 - $NF; c[$2]++} END {for (k in u) printf "%s:%.0f ", k, u[k]/c[k]}' $O/run/srv-mpstat.txt)"
-	echo "    $(cat $O/when.txt)"
+	echo "    $(cat $O/when.txt) | high_fraction $(cat /proc/sys/vm/percpu_pagelist_high_fraction)"
+	echo "    per-CPU high in the load (zone Normal): ring CPUs $(awk '/^Node 0, zone   Normal/ {z=1} z && /^Node 0, zone  Movable/ {z=0} z && /cpu: / {c=$2} z && /^ +high:/ && (c < 8 || c > 55) {printf "%s:%s ", c, $2}' $O/zoneinfo.0)"
+	echo "      nfsd CPUs from $(awk '/^Node 0, zone   Normal/ {z=1} z && /^Node 0, zone  Movable/ {z=0} z && /cpu: / {c=$2} z && /^ +high:/ && c >= 8 && c <= 55 {print $2}' $O/zoneinfo.0 | sort -n | sed -n '1p;$p' | paste -sd ' ' | sed 's/ / to /')"
 	for d in enp161s0f0 enp164s0f0; do
 		echo "    $d sends by queue: $(awk -v d=$d '$0 ~ d {gsub(/[@q\[\],:]/, " "); n[$2] += $NF; t += $NF} END {for (k in n) printf "q%s %.0f%% ", k, 100 * n[k] / t}' $O/txq-sk.txt)| sockets by queue: $(awk -v d=$d '$0 ~ d {gsub(/[@q\[\],:]/, " "); print $2}' $O/txq-sk.txt | sort | uniq -c | awk '{printf "q%s:%s ", $2, $1}')"
 	done
 	[ "$hung" = 0 ] || { say "the kernel warned; stopping"; diff $O/dmesg.0 $O/dmesg.1 | head -20; exit 1; }
 done
+sysctl -q -w vm.percpu_pagelist_high_fraction=0
 ./settled.sh apply > $L/t2-r$n/apply-after.txt 2>&1; say "after: $(tail -1 $L/t2-r$n/apply-after.txt)"

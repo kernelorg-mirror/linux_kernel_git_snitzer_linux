@@ -153,10 +153,16 @@ and (3) SUNRPC's send path.
 
 ## The A/B of `vm.percpu_pagelist_high_fraction` on reads
 
-`PROBE=none RUNS="651:read:0 652:read:64 653:read:0 654:read:64
-655:read:16" run645.sh`, then the WRITE pass at 64
-(`write-check.sh 656`), the sysctl put back to 0 at the end. 0 is the
-default (each CPU's list high 874 to 889 pages, batch 15); 64 gives a
-high of 2,005 pages (31 MiB a CPU) and 16 of 8,021 (125 MiB). Nothing
-is profiled in these runs (`PROBE=none`), so the busy figures are the
-load's own. `settled.sh` does not hold the sysctl.
+`PROBE=none RUNS="651:read:0 652:read:8 653:read:0 654:read:8"
+run645.sh`, then the WRITE pass at 8 (`write-check.sh 655`), the
+sysctl put back to 0 at the end. At 0, the default, each CPU's list
+tunes its own high between `high_min` 874 and `high_max` 16,043 pages
+(the kernel raises it on a CPU that frees much and lets it fall
+back); a fraction f fixes both at about 8.2 million / f / 64, so 64
+would hold it at 2,005, under what the default may reach, and 8 (the
+least the sysctl takes) holds it at 16,043 (250 MiB a CPU, 16 GiB if
+every CPU's list were full; none of it the receive region's). So the
+A/B is 0 against 8, and each run records every CPU's high in the load
+(`/proc/zoneinfo` either side of the window), which says what the
+default reached. Nothing is profiled (`PROBE=none`), so the busy
+figures are the load's own. `settled.sh` does not hold the sysctl.
