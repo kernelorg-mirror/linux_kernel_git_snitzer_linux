@@ -349,3 +349,27 @@ have never been tried: the NVMe completions by polling instead of an
 interrupt each (`nvme.poll_queues` with `RWF_HIPRI` for nfsd's direct
 writes), and PSI off (`psi=0`, 3.2k of round 61's 276.8k), a host
 setting.  Both need a boot.
+
+### Polled NVMe completions: not written, a WRITE cannot be polled
+
+Asked for (Mike, 14 November), and stopped before any code.  An
+nfsd direct write would be polled by setting `IOCB_HIPRI` on the
+kiocb `nfsd_dio_write_async()` issues and polling it with
+`iocb_bio_iopoll()` in place of `wait_for_completion()`.  None of its
+I/O would be polled at the settled setting:
+
+- **The block layer drops `REQ_POLLED` from any bio it splits**
+  (`bio_split_io_at()`: "disable iopoll when split needed").  The
+  data drives take at most 256 KiB and 65 segments a request
+  (`max_hw_sectors_kb` 256, the drive's limit, and `max_segments` 65),
+  so every 512 KiB WRITE is split, and so is a 256 KiB one of 8 KiB
+  pieces.
+- **iomap drops `IOCB_HIPRI` for an I/O of more than one bio** and
+  for one that completes in a workqueue (`IOMAP_DIO_COMP_WORK`, which
+  an unwritten extent's conversion takes).
+- **The drives have no poll queues** (`nvme.poll_queues` 0,
+  `io_poll` 0), and the root drive is NVMe too, so they come only with
+  a boot.
+
+Polling would also keep each nfsd thread spinning for its WRITE's
+device time instead of sleeping, on CPUs now 78% idle.
