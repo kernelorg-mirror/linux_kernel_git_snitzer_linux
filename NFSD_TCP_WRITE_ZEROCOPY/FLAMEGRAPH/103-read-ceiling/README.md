@@ -67,7 +67,10 @@ queue each connection sends by.  `twoport.sh` gains `XPS=rxqs`.
 no drive stepped down.  The `ethtool -S` transmit counters read 0: the
 end of `twoport.sh` reopens the ports, which zeroes them, so they are
 read from the trace instead.  Each port's `xeu_start_xmit` calls in 3 s
-of the window, by queue ([txq-sk-r638.txt](txq-sk-r638.txt)):
+by queue ([txq-sk-r638.txt](txq-sk-r638.txt)).  **Taken 24 s before the
+load (round 104's correction, below at "The A/B"): these are the sends
+of twoport.sh's placement write job, not of the reads, so the table
+and the two points after it describe that job only.**
 
 | | q0 | q1 | q2 | q3 |
 |---|---|---|---|---|
@@ -114,8 +117,19 @@ down, no new kernel warning; the host at the settled setting after.
 | `t2-r643` | write | **rxqs** | 78.06 | 39.1 / 39.0 | 81 | 0 | Rx 0 at 50% |
 | `t2-r644` | write | cpus | 78.00 | 39.0 / 39.0 | 80 to 81 | 0 | Rx 0 at 53% |
 
-Each port's sends by transmit queue (`xeu_start_xmit` calls in 3 s of
-the window, `txq-sk-r6*.txt`):
+**Correction (14 November, round 104): the traces below were not taken
+in the run.** `run638.sh` started them 75 s after twoport.sh, which
+then had not yet started the load: each trace ended 6 to 27 s before
+the first second of the load (`wire-sec.tsv`), in twoport.sh's flow
+placement, a short write job on the same mounts, or just after it.
+So these shares are of the sends of that write job and the idle that
+followed, not of the reads, and they say nothing about how the
+reads' sends spread over the queues. The rates, latencies, drops and
+CPU figures above and below come from twoport.sh's own window and
+stand.
+
+Each port's sends by transmit queue (`xeu_start_xmit` calls in 3 s
+before the load, `txq-sk-r6*.txt`; see the correction above):
 
 | run | map | a: q0 q1 q2 q3 | b: q0 q1 q2 q3 |
 |---|---|---|---|
@@ -126,11 +140,8 @@ the window, `txq-sk-r6*.txt`):
 
 - **The read ceiling rises from 54.1 to 54.4 GB/s to 60.5 to 60.6**
   with the two ports even (30.2 to 30.3 each) and the p99 halved.
-  Each queue carries 20 to 29% of its port's sends, against 10 to 40%
-  on the CPU map.  A connection now sends by one or two queues, not
-  all four (`sockets by queue` 3 to 8 a queue, against 12): the
-  second is where its receive queue changed, or before it was first
-  recorded, which was not looked into.
+  How the reads' sends spread over the queues was not measured: the
+  queue traces were taken before the load (the correction above).
 - **Reads are now at the receive rings' CPUs**: all eight of them 81
   to 93% busy (CPU 0, port a's Rx-0, 93% in both runs), the transmit
   rings' CPUs 11 to 22%, against 27 to 55% and one Tx CPU at 83 to 93%

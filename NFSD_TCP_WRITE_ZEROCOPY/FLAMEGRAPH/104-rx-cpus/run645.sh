@@ -12,7 +12,7 @@ snap() {	# snap <dir> <tag>
 	for d in enp161s0f0 enp164s0f0; do ethtool -S $d > $1/ethtool-$d.$2; done
 	cat /proc/softirqs > $1/softirqs.$2; date +%s.%N > $1/time.$2
 }
-for run in ${RUNS:-645:read 646:write}; do
+for run in ${RUNS:-647:read}; do
 	IFS=: read n rw <<< "$run"
 	[ "$(df --output=avail -k / | tail -1)" -gt 1572864 ] || { say "root has under 1.5 GB free"; exit 1; }
 	O=$L/t2-r$n; mkdir -p $O
@@ -21,9 +21,20 @@ for run in ${RUNS:-645:read 646:write}; do
 	ping -c1 -W2 192.168.1.106 > /dev/null && ping -c1 -W2 192.168.0.106 > /dev/null || { say "a port does not answer"; exit 1; }
 	sync; for d in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$d; done; sleep 120
 	dmesg > $O/dmesg.0
-	( sleep 75; snap $O 0
+	# In the load, not before it: twoport.sh places its flows with a write
+	# job first, and its samplers write wire-sec.tsv one row a second from
+	# the load's first second, so wait for its 25th row (15 s into what
+	# fio counts at WARM=10).  t2-r645 slept 75 s and profiled the
+	# placement instead.
+	( W=$O/run/wire-sec.tsv
+	  for i in $(seq 600); do [ -f $W ] && [ $(wc -l < $W) -ge 26 ] && break; sleep 0.5; done
+	  snap $O 0
 	  perf record -q -g -C 0-7,56-63 -F 1999 -o /dev/shm/zc-rx.data -- sleep 8 > $O/perf.out 2>&1
-	  snap $O 1 ) &
+	  snap $O 1
+	  for p in enp161s0f0 enp164s0f0; do
+		bpftrace -q -e "kprobe:xeu_start_xmit { \$s = (struct sk_buff *)arg0; if (\$s->sk != 0) { @q[str(\$s->dev->name), \$s->queue_mapping, \$s->sk] = count(); } } interval:s:2 { exit(); }" 2>&1 |
+			awk -v p=$p '$0 ~ p'; done > $O/txq-sk.txt
+	  echo "profile $(cat $O/time.0) to $(cat $O/time.1), load from $(awk 'NR == 2 {print $2}' $W)" > $O/when.txt ) &
 	env FS_A="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" FS_B="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7" \
 		WARM=10 RUNTIME=40 RW=$rw RWTSV=$O/rw.tsv TAG=8d-ab-$rw-rxcpu \
 		WRITES=$TWO_WRITES BUDGET_PAGES=8198 ./twoport.sh $O/run ab > $O/run.log 2>&1 ||
@@ -40,6 +51,10 @@ for run in ${RUNS:-645:read 646:write}; do
 	say "t2-r$n ab $rw | $(grep '^total' $O/run.log) | ring drops $(grep -oE 'ring drops [0-9]+' $O/run.log | awk '{s+=$3} END {print s}') | $(grep -o 'no drive stepped down' $O/run.log || echo 'a drive stepped down') | new kernel warnings $hung"
 	grep -E '^  (read|write):|^port |drives of' $O/run.log | sed 's/^/    /'
 	echo "    ring CPUs busy: $(awk '$2 ~ /^[0-9]+$/ && ($2 < 8 || $2 > 55) {u[$2] += 100 - $NF; c[$2]++} END {for (k in u) printf "%s:%.0f ", k, u[k]/c[k]}' $O/run/srv-mpstat.txt)"
+	echo "    $(cat $O/when.txt)"
+	for d in enp161s0f0 enp164s0f0; do
+		echo "    $d sends by queue: $(awk -v d=$d '$0 ~ d {gsub(/[@q\[\],:]/, " "); n[$2] += $NF; t += $NF} END {for (k in n) printf "q%s %.0f%% ", k, 100 * n[k] / t}' $O/txq-sk.txt)| sockets by queue: $(awk -v d=$d '$0 ~ d {gsub(/[@q\[\],:]/, " "); print $2}' $O/txq-sk.txt | sort | uniq -c | awk '{printf "q%s:%s ", $2, $1}')"
+	done
 	[ "$hung" = 0 ] || { say "the kernel warned; stopping"; diff $O/dmesg.0 $O/dmesg.1 | head -20; exit 1; }
 done
 ./settled.sh apply > $L/t2-r$n/apply-after.txt 2>&1; say "after: $(tail -1 $L/t2-r$n/apply-after.txt)"
