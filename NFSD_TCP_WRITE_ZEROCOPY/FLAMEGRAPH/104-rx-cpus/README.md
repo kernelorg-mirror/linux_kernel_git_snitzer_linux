@@ -676,3 +676,58 @@ Not kept: `settled.sh` stays at 0.  The WRITE pass at 128 was not run,
 128 having failed on reads.  To find the cause: the same lock probe at
 0 on build 534, and a profile of CPUs 8-55 at 0 and 128 (Mike's to
 ask for).
+
+## Why 128 loses: the rtc's connections fill and READs fall back to nfsd
+
+Mike: "run the lock probe at 0 and profile CPUs 8-55".  `run645.sh`
+gains `PROBE=nfsd` (8 s of CPUs 8-55 with call graphs, reports for
+them).  [run715.out](run715.out): `t2-r715` the lock probe at 0
+(62.59 GB/s), `t2-r716` CPUs 8-55 at 0 (63.05), `t2-r717` at 128
+(60.16, CPUs 8-55 49% busy against 31%).
+
+**At 0 the transport mutex is not contended**
+([lock-contention-r715.txt](lock-contention-r715.txt)): the zone lock
+has 628,906 / 628,931 contended (24.2 and 22.0 s of waiting in 4 s,
+r650's picture on this kernel), and no mutex comes near the list.  At
+128 (r714) the zone lock is quiet and `__svc_tcp_send`'s mutex has
+2.77 min of waiting.  So 128 trades the one for the other.
+
+**What makes the mutex contended is READs the rtc gives back to
+nfsd's threads.**  In the profile window
+([rtc-stats-window-r716.txt](rtc-stats-window-r716.txt),
+[rtc-stats-window-r717.txt](rtc-stats-window-r717.txt)):
+
+| | at 0 (r716, 12.2 s) | at 128 (r717, 11.3 s) |
+|---|---|---|
+| READs diverted to the rtc | 733,466 | 648,768 |
+| completed and sent by the rtc | 733,476 | 530,371 |
+| `fallback_conn_full` (to nfsd's threads) | 0 | **118,068 (18%)** |
+| `budget_exhausted` | 4 | 20,330 |
+| send batches | 441,912 | 188,600 |
+
+At 0 the rtc sends every READ; at 128 18% find the connection's rtc
+queue full and go to an nfsd thread, which sends through
+`svc_send()` -> `__svc_tcp_send()` against the rtc's own
+`svc_rtc_drain_sends()` on the same transport mutex (`nfsd` is 14% of
+CPUs 8-55's samples at 128 and not in the list at 0;
+[perf-nfsd-comm-r716.txt](perf-nfsd-comm-r716.txt),
+[perf-nfsd-comm-r717.txt](perf-nfsd-comm-r717.txt)).
+
+**Why the rtc falls behind: the frees land on its CPUs.**  At 128,
+`skb_defer_free_flush()` in `NET_RX` is 15.4% of CPUs 8-55
+([perf-nfsd-children-r717.txt](perf-nfsd-children-r717.txt)), with
+`skb_release_data()` 10.0% self (putting the pages); most of it is
+taken from idle (the IPI wakes an idle CPU), but it is the rtc's CPUs
+it runs on.  And the pages the rtc then allocates come off long
+per-CPU lists, cold: `__list_del_entry_valid_or_report()` under
+`__rmqueue_pcplist()` from `svc_fill_pages()` is 6.6% self at 128,
+under 1.5% at 0, where the cost was the zone lock's instead
+(`_raw_spin_unlock_irqrestore` 15.7%,
+[perf-nfsd-self-r716.txt](perf-nfsd-self-r716.txt),
+[perf-nfsd-self-r717.txt](perf-nfsd-self-r717.txt)).  The rtc's work
+runs take longer, its connections fill, and the overflow costs more
+than the zone lock did.
+
+**Decided (Mike, 15 November): leave it disabled.**  Build 534 stays
+tardis2's default kernel, `skb_tx_defer_max` at 0 (`settled.sh`
+holds it); at 0 it is at build 531's rates, so no reboot to 531.

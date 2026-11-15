@@ -1,0 +1,11 @@
+async_submitted 530535
+budget_exhausted 20330
+diverted 648768
+fallback_conn_full 118068
+fallback_no_peek 170
+fast_completed 530371
+placed 2
+read_offered 648599
+runs 674119
+send_batches 188600
+sends 530384

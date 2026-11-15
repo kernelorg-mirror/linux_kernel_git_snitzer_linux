@@ -1,0 +1,74 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 156K of event 'armv8_pmuv3_0/cycles/P'
+# Event count (approx.): 134404631482
+#
+# Overhead  Symbol                                       IPC   [IPC Coverage]
+# ........  ...........................................  ....................
+#
+    15.65%  [k] _raw_spin_unlock_irqrestore              -      -            
+     5.74%  [k] skb_splice_from_iter                     -      -            
+     4.96%  [k] default_idle_call                        -      -            
+     3.14%  [k] queued_spin_lock_slowpath                -      -            
+     2.70%  [k] _raw_spin_lock                           -      -            
+     2.62%  [k] __dev_xmit_skb                           -      -            
+     1.99%  [k] finish_task_switch.isra.0                -      -            
+     1.83%  [k] kmem_cache_alloc_node_noprof             -      -            
+     1.65%  [k] skb_release_data                         -      -            
+     1.44%  [k] __list_del_entry_valid_or_report         -      -            
+     1.38%  [k] __tcp_transmit_skb                       -      -            
+     1.11%  [k] tcp_event_new_data_sent                  -      -            
+     1.09%  [k] arch_counter_get_cntpct                  -      -            
+     1.02%  [k] 0x000000000000da5c                       -      -            
+     0.96%  [k] alloc_pages_bulk_noprof                  -      -            
+     0.95%  [k] _raw_spin_unlock                         -      -            
+     0.91%  [k] __sk_mem_raise_allocated                 -      -            
+     0.83%  [k] blk_rq_dma_map_iter_next                 -      -            
+     0.83%  [k] _raw_spin_unlock_irq                     -      -            
+     0.78%  [k] free_frozen_page_commit                  -      -            
+     0.75%  [k] tcp_sendmsg_locked                       -      -            
+     0.67%  [k] dma_direct_map_phys                      -      -            
+     0.64%  [k] ip_send_check                            -      -            
+     0.63%  [k] nvme_pci_setup_data_prp                  -      -            
+     0.63%  [k] folios_put_refs                          -      -            
+     0.61%  [k] tcp_clean_rtx_queue                      -      -            
+     0.55%  [k] ip_finish_output2                        -      -            
+     0.55%  [k] __fq_codel_dequeue                       -      -            
+     0.54%  [k] xdr_buf_to_bvec                          -      -            
+     0.53%  [k] kfree                                    -      -            
+     0.51%  [k] __rmqueue_pcplist                        -      -            
+     0.50%  [k] xfs_iext_lookup_extent                   -      -            
+     0.49%  [k] bio_alloc_bioset                         -      -            
+     0.49%  [k] iov_iter_extract_pages                   -      -            
+     0.49%  [k] __pi_memcpy_generic                      -      -            
+     0.48%  [k] __ip_queue_xmit                          -      -            
+     0.46%  [k] blk_mq_submit_bio                        -      -            
+     0.43%  [k] svc_rqst_release_pages                   -      -            
+     0.42%  [k] dma_map_phys                             -      -            
+     0.41%  [k] sunrpc_cache_find_rcu                    -      -            
+     0.39%  [k] tcp_skb_entail                           -      -            
+     0.39%  [k] __pi_memset_generic                      -      -            
+     0.37%  [k] bio_split_io_at                          -      -            
+     0.37%  [k] kmem_cache_free                          -      -            
+     0.37%  [k] nfsd_set_fh_dentry                       -      -            
+     0.35%  [k] skb_clone                                -      -            
+     0.34%  [k] fq_codel_enqueue                         -      -            
+     0.34%  [k] nfsd_file_lookup_locked                  -      -            
+     0.34%  [k] skb_append_pagefrags                     -      -            
+     0.34%  [k] tcp_write_xmit                           -      -            
+     0.33%  [k] nfsd_setuser                             -      -            
+     0.32%  [k] __list_add_valid_or_report               -      -            
+     0.32%  [k] percpu_counter_add_batch                 -      -            
+     0.32%  [k] get_pfnblock_migratetype                 -      -            
+     0.31%  [k] svcauth_unix_set_client                  -      -            
+     0.31%  [k] svc_alloc_arg                            -      -            
+     0.31%  [k] rb_insert_color                          -      -            
+     0.31%  [k] __ip_local_out                           -      -            
+     0.30%  [k] qdisc_maybe_clear_missed                 -      -            
+     0.30%  [k] tcp_rearm_rto                            -      -            
+#
+# (Tip: To show information about system the samples were collected on use perf report --header)
+#

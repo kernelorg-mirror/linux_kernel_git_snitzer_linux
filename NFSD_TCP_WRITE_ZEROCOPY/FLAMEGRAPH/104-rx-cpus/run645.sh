@@ -73,6 +73,10 @@ for run in ${RUNS:-647:read}; do
 		kprobe:rmqueue_bulk { @t[tid] = nsecs; @pages[func, cpu < 8 || cpu > 55 ? "ring" : "nfsd"] = sum(arg2); }
 		kretprobe:free_pcppages_bulk, kretprobe:rmqueue_bulk /@t[tid]/ { @us[func, cpu < 8 || cpu > 55 ? "ring" : "nfsd"] = stats((uint64)(nsecs - @t[tid]) / 1000); @ns_total[func, cpu < 8 || cpu > 55 ? "ring" : "nfsd"] = sum(nsecs - @t[tid]); delete(@t[tid]); }
 		interval:s:3 { exit(); }' > $O/zone-bulk.txt 2>&1
+	  elif [ "${PROBE:-perf}" = nfsd ]; then
+		# nfsd's and the rtc work's CPUs, 8-55 (t2-r716 on), with call
+		# graphs for 8 s: where skb_tx_defer_max 128's frees land.
+		perf record -q -g -C 8-55 -F 999 -o /dev/shm/zc-nfsd.data -- sleep 8 > $O/perf.out 2>&1
 	  else
 		perf record -q -g -C 0-7,56-63 -F 1999 -o /dev/shm/zc-rx.data -- sleep 8 > $O/perf.out 2>&1
 	  fi
@@ -90,6 +94,14 @@ for run in ${RUNS:-647:read}; do
 	perf report -i /dev/shm/zc-rx.data --no-children -g caller,0.5,callee --percent-limit 1.5 --sort symbol --cpu 0,2,4,6,56,58,60,62 2>/dev/null | grep -v '^$' | head -600 > $O/perf-rx-callers.txt
 	perf script -i /dev/shm/zc-rx.data -F cpu,ip,sym 2>/dev/null | xz -T8 -3 > $O/perf-g.script.xz
 	rm -f /dev/shm/zc-rx.data
+	if [ -f /dev/shm/zc-nfsd.data ]; then
+		N=/dev/shm/zc-nfsd.data
+		perf report -i $N --no-children -g none --sort comm --percent-limit 0.5 2>/dev/null | grep -v '^#' | grep . > $O/perf-nfsd-comm.txt
+		perf report -i $N --no-children -g none --percent-limit 0.3 --sort symbol 2>/dev/null | grep -v '^$' | head -100 > $O/perf-nfsd-self.txt
+		perf report -i $N --children -g none --percent-limit 1 --sort symbol 2>/dev/null | grep -v '^$' | head -150 > $O/perf-nfsd-children.txt
+		perf report -i $N --no-children -g caller,0.5,callee --percent-limit 1 --sort symbol 2>/dev/null | grep -v '^$' | head -800 > $O/perf-nfsd-callers.txt
+		rm -f $N
+	fi
 	hung=$(diff $O/dmesg.0 $O/dmesg.1 | grep -v 'tracing to debugfs is deprecated' | grep -c -i -E 'hung|blocked for more|soft lockup|rcu.*stall|WARNING|BUG')
 	say "t2-r$n ab $rw | $(grep '^total' $O/run.log) | ring drops $(grep -oE 'ring drops [0-9]+' $O/run.log | awk '{s+=$3} END {print s}') | $(grep -o 'no drive stepped down' $O/run.log || echo 'a drive stepped down') | new kernel warnings $hung"
 	grep -E '^  (read|write):|^port |drives of' $O/run.log | sed 's/^/    /'

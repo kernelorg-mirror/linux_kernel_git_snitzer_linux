@@ -1,0 +1,64 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 198K of event 'armv8_pmuv3_0/cycles/P'
+# Event count (approx.): 159641577352
+#
+# Overhead  Symbol                                       IPC   [IPC Coverage]
+# ........  ...........................................  ....................
+#
+    12.90%  [k] default_idle_call                        -      -            
+    10.01%  [k] skb_release_data                         -      -            
+     7.85%  [k] skb_splice_from_iter                     -      -            
+     6.62%  [k] __list_del_entry_valid_or_report         -      -            
+     3.96%  [k] _raw_spin_unlock_irqrestore              -      -            
+     3.88%  [k] finish_task_switch.isra.0                -      -            
+     2.26%  [k] __dev_xmit_skb                           -      -            
+     1.46%  [k] kfree                                    -      -            
+     1.33%  [k] kmem_cache_alloc_node_noprof             -      -            
+     0.95%  [k] __tcp_transmit_skb                       -      -            
+     0.94%  [k] tcp_event_new_data_sent                  -      -            
+     0.90%  [k] arch_counter_get_cntpct                  -      -            
+     0.85%  [k] kmem_cache_free                          -      -            
+     0.79%  [k] napi_consume_skb                         -      -            
+     0.78%  [k] __sk_mem_raise_allocated                 -      -            
+     0.75%  [k] _raw_spin_lock                           -      -            
+     0.69%  [k] kfree_skbmem                             -      -            
+     0.65%  [k] queued_spin_lock_slowpath                -      -            
+     0.65%  [k] blk_rq_dma_map_iter_next                 -      -            
+     0.61%  [k] tcp_sendmsg_locked                       -      -            
+     0.59%  [k] xdr_buf_to_bvec                          -      -            
+     0.58%  [k] _raw_spin_unlock_irq                     -      -            
+     0.57%  [k] svc_rqst_release_pages                   -      -            
+     0.56%  [k] qdisc_maybe_clear_missed                 -      -            
+     0.56%  [k] _raw_spin_unlock                         -      -            
+     0.54%  [k] nvme_pci_setup_data_prp                  -      -            
+     0.51%  [k] folios_put_refs                          -      -            
+     0.51%  [k] free_frozen_page_commit                  -      -            
+     0.51%  [k] fq_codel_enqueue                         -      -            
+     0.51%  [k] ip_send_check                            -      -            
+     0.51%  [k] __free_frozen_pages                      -      -            
+     0.50%  [k] alloc_pages_bulk_noprof                  -      -            
+     0.41%  [k] xfs_iext_lookup_extent                   -      -            
+     0.40%  [k] iov_iter_extract_pages                   -      -            
+     0.40%  [k] __ip_queue_xmit                          -      -            
+     0.39%  [k] bio_alloc_bioset                         -      -            
+     0.39%  [k] get_pfnblock_migratetype                 -      -            
+     0.38%  [k] mutex_spin_on_owner                      -      -            
+     0.37%  [k] _raw_spin_trylock                        -      -            
+     0.35%  [k] tcp_skb_entail                           -      -            
+     0.35%  [k] __pi_memcpy_generic                      -      -            
+     0.35%  [k] ip_finish_output2                        -      -            
+     0.35%  [k] blk_mq_submit_bio                        -      -            
+     0.32%  [k] skb_clone                                -      -            
+     0.31%  [k] sunrpc_cache_find_rcu                    -      -            
+     0.31%  [k] nfsd_set_fh_dentry                       -      -            
+     0.31%  [k] dma_direct_map_phys                      -      -            
+     0.30%  [k] __list_add_valid_or_report               -      -            
+     0.30%  [k] __pi_memset_generic                      -      -            
+     0.30%  [k] nfsd_setuser                             -      -            
+#
+# (Tip: Show user configuration overrides: perf config --user --list)
+#

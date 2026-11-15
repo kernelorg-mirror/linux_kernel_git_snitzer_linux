@@ -1,0 +1,26 @@
+Failed to load map [rozo]
+Failed to load map [xsl_emi]
+Failed to load map [xsl_core]
+Failed to load map [xeu]
+ contended   total wait     max wait     avg wait         type   caller
+
+    628906     24.19 s     121.70 us     38.46 us     spinlock   rmqueue_bulk+0x64
+    628931     21.98 s     119.19 us     34.94 us     spinlock   free_pcppages_bulk+0x44
+      4837    312.99 ms    581.59 us     64.71 us     spinlock   tcp_tsq_handler+0x28
+      1633    100.54 ms    480.11 us     61.57 us     spinlock   lock_sock_nested+0x80
+      1071     79.64 ms    436.35 us     74.36 us     spinlock   lock_sock_nested+0x80
+     14373     32.13 ms     22.18 us      2.23 us     spinlock   __dev_xmit_skb+0x1f4
+       459     29.01 ms    323.22 us     63.21 us     spinlock   lock_sock_nested+0x80
+      2989     17.97 ms    245.43 us      6.01 us        mutex   rtc_set_time.part.0+0x58
+      3047      9.22 ms     15.26 us      3.02 us     spinlock   net_tx_action+0x30c
+      2549      4.52 ms     22.66 us      1.77 us     spinlock   tcp_v4_rcv+0xaec
+       994      2.59 ms     18.98 us      2.60 us     spinlock   sch_direct_xmit+0xb4
+        65      2.49 ms     65.45 us     38.26 us     spinlock   free_one_page+0x48
+       514      1.28 ms     10.16 us      2.50 us     spinlock   sch_direct_xmit+0xb4
+       282    903.28 us     16.83 us      3.20 us     spinlock   mix_interrupt_randomness+0xdc
+        22    809.66 us     61.92 us     36.80 us     spinlock   free_pcppages_bulk+0x44
+       299    602.13 us      6.10 us      2.01 us     spinlock   release_sock+0x28
+       201    413.71 us      8.58 us      2.06 us     spinlock   sch_direct_xmit+0xb4
+       176    405.35 us      8.79 us      2.30 us     spinlock   tick_do_update_jiffies64+0x44
+        59    103.89 us      4.78 us      1.76 us     spinlock   dma_pool_alloc+0x4c
+         3     89.14 us     36.08 us     29.71 us     spinlock   rmqueue_bulk+0x64
