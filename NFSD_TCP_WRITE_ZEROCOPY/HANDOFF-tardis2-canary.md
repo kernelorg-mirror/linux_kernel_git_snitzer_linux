@@ -107,6 +107,18 @@ present (N), `undiverted` in `rtc_stats`.  No kernel warning but
 xeu's usual `rx_ip_align` notes.  Root has 12 GB free.  Runs start at
 `t2-r706`.
 
+**Step 4, build 534 at `skb_tx_defer_max` 0: build 531's rates.**  The
+WRITE pass `t2-r706` read 77.89 GB/s (RERUN), `t2-r707` **78.06,
+PASS**, no drive stepped down, no new kernel warning.  Two-port reads
+(`run645.sh`, `PROBE=none`): `t2-r708` 63.48 GB/s and `t2-r709` 64.20,
+against 531's 64.16 and 63.91 with PSI on (`t2-r696`, `r697`, as this
+boot) and 64.53 and 63.57 with `psi=0` (`r703`, `r704`); mean
+completion 67.45 and 66.84 ms against 67.95 and 67.30.  No ring drop,
+no drive stepped down.  The change compiled in and at 0 costs nothing
+seen.  (A `RUNS` field takes six colons after `read` for `txd`:
+`n:read::::::128`; one more makes the audit refuse it, as a first try
+did, before anything ran.)
+
 ## Where it stands (12 November, afternoon): round 99 and the window settled
 
 Read `FLAMEGRAPH/99-held-split-splice/README.md`.  With the client
