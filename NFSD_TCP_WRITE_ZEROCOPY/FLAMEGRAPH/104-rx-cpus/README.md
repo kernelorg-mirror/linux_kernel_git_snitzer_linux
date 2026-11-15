@@ -518,3 +518,31 @@ The plan, after the swap: reads at `svc_rtc_cpus` 8-55 with balance N
 then Y, twice each (`RUNS="682:read::::N 683:read::::Y 684:read::::N
 685:read::::Y"`), then `PROBE=rtc` at Y to see the placement, and the
 WRITE pass at Y.  Y is kept only if reads gain and the pass holds 78.
+
+## Result: balance spreads the connections and reads less
+
+[run682.out](run682.out), sunrpc `B1AE4F3F0262A3E5AD387FA` swapped in
+at 15:06 (Mike: "Swap and run"), `svc_rtc_cpus` 8-55 throughout.  No
+drive stepped down, no new kernel warning; the host at the settled
+setting after.  Connections a CPU from `rtc_stats`' `placed` line in
+the load.
+
+| run | balance | GB/s | p99 ms (a / b) | ring drops | connections a CPU |
+|---|---|---|---|---|---|
+| `t2-r682` | N | **65.72** | 100 / 105 | 0 | 17 CPUs: three on 21, 37 and 48, two on 26 |
+| `t2-r683` | Y | 63.55 | 73 / 72 | 100 | 24 CPUs, one each |
+| `t2-r684` | N | **64.35** | 115 / 114 | 9 | 19 CPUs: four on 17, two on 18 and 50 |
+| `t2-r685` | Y | 63.28 | 79 / 73 | 47 | 24 CPUs, one each |
+| `t2-r686` | Y, traced | 63.17 | 75 / 74 | 43 | 24 CPUs, one each |
+
+- **Balance places as written**: one connection a CPU in every Y run,
+  all inside 8-55.
+- **It reads 1 to 2 GB/s less**, 63.2 to 63.6 against 64.4 and 65.7,
+  with the two ports even and the p99 down to 72 to 79 ms.  The hash
+  runs read more with three and four connections on one CPU, so the
+  work items' CPU is not what limits reads; the zone lock the receive
+  CPUs drain to (r647, r650 above) is still the lead.
+- No WRITE pass: Y is not kept.  `settled.sh` holds N; the code stays
+  in the tree at its default, the hash.
+
+Mike, 15 November: "so far balance seems like a dead end".
