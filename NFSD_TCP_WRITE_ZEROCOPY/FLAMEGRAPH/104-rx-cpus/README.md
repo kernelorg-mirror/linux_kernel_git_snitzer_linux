@@ -273,3 +273,27 @@ No drive stepped down and no new kernel warning in any.
   against 78 to 80) and port b outran a in r661.
 - **The WRITE pass at Y: 77.95 GB/s, RERUN** (nfsd 25% busy, as at
   N). Run again as `t2-r663`.
+
+[wcheck663.out](wcheck663.out): **77.89 GB/s, the second under 78.0,
+so by AGENTS.md's WRITE pass `rtc_read=Y` regresses WRITEs** (the
+drives 98% busy, no drive stepped down). The N passes on this boot
+read 78.07 and 78.10 (`t2-r648`, `r649`) and the 40 s run 78.09
+(`t2-r646`), so Y sits about 0.15 GB/s lower. It is not kept: the
+setting stays N unless Mike decides otherwise, or the hop that every
+WRITE's receive takes with Y on is taken out of the WRITE path.
+
+## The A/B of `svc_tcp_rx_region_reads` on reads
+
+`PROBE=none RUNS="664:read:::N 665:read:::Y 666:read:::N 667:read:::Y"
+run663.sh`, then the WRITE pass with it on (`write-check.sh 668` with
+the parameter written Y before), the parameter back to N at the end.
+`rtc_read` stays N. With it on, a direct READ's payload pages come
+from the receive region, are sent zero-copy under a completion, and go
+back to the region when TCP frees the reply, so they never reach the
+page allocator. The region is not split (`rx_region_read_pages` 0:
+splitting needs the region made again, the ports down), so READs draw
+on the same 32,768 pages as the receive rings. Each run records the
+READ budget's counters (admitted, parked, granted, unconfined, short)
+and the region's pages in use at most, which is held against the rule
+not to grow the region's footprint. `settled.sh` does not hold this
+parameter.
