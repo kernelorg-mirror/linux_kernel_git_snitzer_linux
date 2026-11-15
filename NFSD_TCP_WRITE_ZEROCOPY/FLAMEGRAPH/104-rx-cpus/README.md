@@ -405,3 +405,16 @@ it Y, audits that sunrpc sends WRITEs past the work item (`undiverted`
 in `rtc_stats`), so a sunrpc without `278b74ad8a0d9` audits BAD.
 `settled.sh apply` at rest: the settled setting. Its WRITE pass is
 `t2-r673`, 78.11 GB/s.
+
+## Where the rtc work items run
+
+At `rtc_read=Y` the work items crowd a few CPUs: three or four of the
+ring CPUs at 91 to 100% in each Y run while the rest of the ring CPUs
+sit at 15 to 75% and nfsd's at 23 to 29%. `svc_rtc_place()` gives each
+connection one work CPU, hashed over its node's CPUs that have not taken
+a receive in the softirq (`svc_rtc_pick_cpu()`), and every pass of its
+work item runs there (`svc_rtc` is a per-CPU workqueue). `PROBE=rtc
+RUNS=675:read run645.sh` at the settled setting: 3 s of bpftrace on
+`svc_rtc_work()` (runs and time by CPU, each connection's chosen CPU)
+and `svc_rtc_place()` (each placement's receive CPU, softirq or not, and
+the CPU chosen), then 5 s of every CPU sampled by task and symbol.

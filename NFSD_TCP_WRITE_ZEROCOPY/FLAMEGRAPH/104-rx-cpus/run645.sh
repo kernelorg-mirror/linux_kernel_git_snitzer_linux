@@ -37,6 +37,20 @@ for run in ${RUNS:-647:read}; do
 	  snap $O 0
 	  if [ "${PROBE:-perf}" = none ]; then
 		sleep 8
+	  elif [ "${PROBE:-perf}" = rtc ]; then
+		# Where the rtc work items run (t2-r675 on): runs and time by CPU,
+		# each connection's chosen CPU, and every placement's receive CPU,
+		# whether it came from the softirq, and the CPU it chose; then 5 s
+		# of every CPU sampled by task and symbol.
+		bpftrace -q -e '
+		kprobe:svc_rtc_work { @t[tid] = nsecs; @runs[cpu] = count(); @conn[arg0, ((struct svc_rtc_conn *)arg0)->cpu, cpu] = count(); }
+		kretprobe:svc_rtc_work /@t[tid]/ { @us[cpu] = sum((int64)((nsecs - @t[tid]) / 1000)); delete(@t[tid]); }
+		kprobe:svc_rtc_place { @place_rx[arg2, arg3] = count(); }
+		kretprobe:svc_rtc_place { @place_ret[retval] = count(); }
+		interval:s:3 { clear(@t); exit(); }' > $O/rtc-place.txt 2>&1
+		perf record -q -a -F 999 -o /dev/shm/zc-rx.data -- sleep 5 > $O/perf.out 2>&1
+		perf report -i /dev/shm/zc-rx.data --no-children --sort cpu,comm --percent-limit 0.2 2>/dev/null | grep -v '^#' | grep . > $O/perf-cpu-comm.txt
+		perf report -i /dev/shm/zc-rx.data --no-children --sort comm,sym --percent-limit 0.3 2>/dev/null | grep -v '^#' | grep . | head -120 > $O/perf-comm-sym.txt
 	  elif [ "${PROBE:-perf}" = lock ]; then
 		# How long the zone's free and refill take, and who waits on its lock.
 		perf lock contention -a -b -E 20 -- sleep 4 > $O/lock-contention.txt 2>&1
