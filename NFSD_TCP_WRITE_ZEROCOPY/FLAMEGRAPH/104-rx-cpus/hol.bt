@@ -1,0 +1,91 @@
+/*
+ * hol.bt: head-of-line blocking on a connection's xpt_mutex between the
+ * rtc work item's send FIFO and nfsd threads' __svc_tcp_send() (round
+ * 104, t2-r722 on; r720 and r721 had a first version whose rtc side
+ * did not work: svc_rtc_drain_sends() is inlined into svc_rtc_work()).
+ * 5 s.
+ *
+ * The rtc sends its replies with svc_tcp_sendto_locked() under one
+ * mutex_lock() of xpt_mutex and lets go with svc_tcp_xpo_send_unlock().
+ * A task that has called svc_tcp_sendto_locked() is an rtc worker; its
+ * last mutex_lock() of the same connection's xpt_mutex before a hold's
+ * first send is when it began to wait.  Only an nfsd (or backchannel)
+ * sender combines, so svc_tcp_combine_sends() running on a connection
+ * means an nfsd thread holds its mutex.  struct svc_sock starts with its
+ * svc_xprt, so the two pointers key the same connection.
+ *
+ * rtc_wait_us[behind]: mutex_lock() to the hold's first send; behind =
+ *   an nfsd combiner was sending on the connection at the mutex_lock().
+ * rtc_hold_us, rtc_hold_sends: the rtc's hold, first send to unlock.
+ * nfsd_send_us[rtc_held]: one __svc_tcp_send(), whole; rtc_held = the
+ *   rtc held the connection's mutex when it began.
+ * nfsd_wait[outcome, rtc_held]: its waits: woken (sent by the holder, or
+ *   handed the role) or timeout (then it takes the mutex itself).
+ * comb_us / comb_records: an nfsd combiner's batches.
+ */
+fentry:sunrpc:svc_tcp_combine_sends { @comb[(uint64)args.svsk] = nsecs; }
+fexit:sunrpc:svc_tcp_combine_sends {
+	$x = (uint64)args.svsk;
+	@comb_us = stats((uint64)(nsecs - @comb[$x]) / 1000);
+	@comb_records = stats(retval);
+	delete(@comb[$x]);
+}
+
+kprobe:mutex_lock /@rtctid[tid]/ {
+	@ml[tid] = arg0; @mlt[tid] = nsecs;
+	@mlbehind[tid] = @off ? (@comb[arg0 - @off] ? 1 : 0) : 0;
+}
+fentry:sunrpc:svc_tcp_sendto_locked {
+	$x = (uint64)args.rqstp->rq_xprt;
+	$m = $x + offsetof(struct svc_xprt, xpt_mutex);
+	@rtctid[tid] = 1;
+	if (!@off) { @off = $m - $x; }
+	if (!@hold[tid]) {
+		if (@ml[tid] == $m) {
+			@rtc_wait_us[@mlbehind[tid]] = stats((uint64)(nsecs - @mlt[tid]) / 1000);
+			@rtc_wait_hist[@mlbehind[tid]] = hist((uint64)(nsecs - @mlt[tid]) / 1000);
+		} else {
+			@rtc_wait_unmatched = count();
+		}
+		@hold[tid] = nsecs; @hx[tid] = $x; @rtchold[$x] = 1;
+		@hsends[tid] = 0;
+	}
+	@hsends[tid] = @hsends[tid] + 1;
+	@ml[tid] = 0;
+}
+fentry:sunrpc:svc_tcp_xpo_send_unlock /@hold[tid]/ {
+	@rtc_hold_us = stats((uint64)(nsecs - @hold[tid]) / 1000);
+	@rtc_hold_sends = stats(@hsends[tid]);
+	delete(@rtchold[@hx[tid]]); delete(@hold[tid]); delete(@hx[tid]);
+}
+
+fentry:sunrpc:__svc_tcp_send {
+	@s0[tid] = nsecs;
+	@nb[tid] = @rtchold[(uint64)args.svsk] ? 1 : 0;
+}
+fexit:vmlinux:wait_for_completion_timeout /@s0[tid]/ {
+	@nfsd_wait[retval ? "woken" : "timeout", @nb[tid]] = count();
+}
+fexit:sunrpc:__svc_tcp_send /@s0[tid]/ {
+	@nfsd_send_us[@nb[tid]] = stats((uint64)(nsecs - @s0[tid]) / 1000);
+	@nfsd_send_hist[@nb[tid]] = hist((uint64)(nsecs - @s0[tid]) / 1000);
+	delete(@s0[tid]); delete(@nb[tid]);
+}
+
+interval:s:5 {
+	print(@rtc_wait_us); print(@rtc_wait_hist); print(@rtc_wait_unmatched);
+	print(@rtc_hold_us); print(@rtc_hold_sends);
+	print(@nfsd_send_us); print(@nfsd_send_hist); print(@nfsd_wait);
+	print(@comb_us); print(@comb_records);
+	exit();
+}
+
+END {
+	clear(@comb); clear(@ml); clear(@mlt); clear(@mlbehind);
+	clear(@rtctid); clear(@off); clear(@hold); clear(@hx); clear(@hsends);
+	clear(@rtchold); clear(@s0); clear(@nb);
+	clear(@rtc_wait_us); clear(@rtc_wait_hist); clear(@rtc_wait_unmatched);
+	clear(@rtc_hold_us); clear(@rtc_hold_sends); clear(@nfsd_send_us);
+	clear(@nfsd_send_hist); clear(@nfsd_wait); clear(@comb_us);
+	clear(@comb_records);
+}

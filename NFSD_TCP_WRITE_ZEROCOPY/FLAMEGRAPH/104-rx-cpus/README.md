@@ -731,3 +731,87 @@ than the zone lock did.
 **Decided (Mike, 15 November): leave it disabled.**  Build 534 stays
 tardis2's default kernel, `skb_tx_defer_max` at 0 (`settled.sh`
 holds it); at 0 it is at build 531's rates, so no reboot to 531.
+
+## The transport mutex at 128: head-of-line blocking, and two fixes
+
+Mike: "write the probe for the head-of-line blocking first, feel free
+to then try 1 and 2", then "try 1 and 2 in conjunction with the
+feedback your traces and analysis provide".
+
+**The probe**, [hol.bt](hol.bt) (`run645.sh`'s `PROBE=hol`, 5 s): the
+rtc's wait for a connection's `xpt_mutex` (its `mutex_lock()` of that
+mutex to the hold's first `svc_tcp_sendto_locked()`), split by whether
+an nfsd combiner (`svc_tcp_combine_sends()`, which only nfsd senders
+run) was sending on the connection; the rtc's hold; each nfsd
+`__svc_tcp_send()`, split by whether the rtc held the mutex; and
+whether a waiting nfsd sender was woken or timed out.  `t2-r718` and
+`r719` ran without it (a relative path after `run645.sh`'s `cd`), and
+`r720`, `r721` with a first version whose rtc side did not work
+(`svc_rtc_drain_sends()` is inlined into `svc_rtc_work()`, and the
+kretprobes on `__svc_tcp_send()` ran out of instances with hundreds of
+threads asleep in it); from `r722` on it uses fentry/fexit.
+(`comb_us` is not usable: it is keyed by connection, and the
+combiner's fentry and fexit do not pair on it.)
+
+**At 0 there is none** ([hol-r722.txt](hol-r722.txt), 63.02 GB/s): the
+rtc's wait is 1 to 4 us, never behind nfsd; a hold is 281 us for 1.6
+replies.  **At 128 there is, rare but long**
+([hol-r723.txt](hol-r723.txt), 60.48): 2% of the rtc's holds begin
+behind an nfsd combiner, and those wait 5.9 ms on average, most of
+them 8 to 16 ms (11.7 s of waiting in 5 s, about two of the 24
+connections' work items stalled at a time); nfsd's sends take 15.6 ms
+on average, and in `r721` a quarter of nfsd's waits timed out (7,592
+of 30,974) and took the mutex themselves.  The rtc's own hold grows to
+921 us for 2.7 replies: each reply takes about twice as long to send.
+
+**The two fixes**, [rtc-sender-fixes.diff](rtc-sender-fixes.diff)
+(against `05b95f7da2983`'s tree; built as
+`/var/tmp/zc-run-logs/sunrpc-hol-534/`, sunrpc
+`A1A8B4C0AFA6B304A6E40D2`, in build 534's `updates/` from 22:24), each
+behind a sunrpc parameter that is N by default:
+
+1. `svc_rtc_conn_full_wait`: a connection with `SVC_RTC_CONN_PARKED`
+   (32) calls parked keeps its next call for its work item (XPT_BUSY
+   and `SVC_RTC_RECV` kept) instead of handing it to a thread; a pass
+   that releases one below the ceiling kicks the receive.
+2. `svc_rtc_single_sender`: an nfsd thread's reply on a connection
+   with a work item is queued and the work item kicked to send it
+   (`svc_tcp_xpo_send_unlock()` combines up to
+   `SVC_TCP_COMBINE_BUDGET` of them and kicks itself again for the
+   rest); the thread waits 100 ms before it takes the mutex itself.
+   Both its wait and the re-kick were set from r721's timeouts.
+
+[run724.out](run724.out), [run728.out](run728.out),
+[wcheck729.out](wcheck729.out), `hol-r724.txt` to `hol-r728.txt`:
+
+| run | `skb_tx_defer_max` | fix 1 | fix 2 | GB/s | p99 ms | to threads (`conn_full`) | rtc behind nfsd | rtc hold |
+|---|---|---|---|---|---|---|---|---|
+| `t2-r724` | 128 | N | N | 60.19 | 118 | 75,411 | 2,437, 6.4 ms | 934 us |
+| `t2-r725` | 128 | Y | N | 60.69 | 80 | 0 | 0 | 930 us |
+| `t2-r726` | 128 | N | Y | 60.48 | 100 | 78,140 | 1 | 912 us |
+| `t2-r727` | 128 | Y | Y | 60.72 | 80 | 0 | 0 | 896 us |
+| `t2-r728` | 0 | Y | Y | 62.60 | | 0 | 0 | 321 us |
+| `t2-r729` | 0 | Y | Y | write **78.12, PASS** | | | | |
+
+No drive stepped down and no new kernel warning in any.
+
+**The fixes take the blocking out and give 0.5 GB/s back of the 3.4.**
+With fix 1 no READ goes to a thread and nothing waits on the mutex;
+with fix 2 the rtc is behind a thread once in 5 s and no thread times
+out.  p99 falls from 118 to 80 ms.  But the rate stays at 60.5 to 60.7
+GB/s, because the rtc's hold stays at about 900 us (the 281 us of 0
+doubled per reply): what 128 costs is the sending itself on the rtc's
+CPUs, where the deferred frees now run, not the mutex.  So the
+fallback and the head-of-line blocking were what made the mutex
+contended, and they cost little; the 2.8 GB/s of `rtc_read` (above)
+was the work leaving nfsd's threads, not the mutex alone.  At 0
+neither fix ever acts (no `conn_full`, no nfsd send in the window):
+r728 is within the probe runs at 0 (62.86 to 63.45), and the WRITE
+pass with both on passes.
+
+Not kept, for Mike: neither changes what the settled setting does.
+The code is not on the branch, only the diff here.  Build 534 runs that
+sunrpc from `updates/` until it is taken out
+(`SUNRPC_KO=none xeu-rig/swap-sunrpc.sh`, which drops the client's
+connections), with both parameters N, which is build 534's own
+behaviour.

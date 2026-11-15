@@ -73,6 +73,10 @@ for run in ${RUNS:-647:read}; do
 		kprobe:rmqueue_bulk { @t[tid] = nsecs; @pages[func, cpu < 8 || cpu > 55 ? "ring" : "nfsd"] = sum(arg2); }
 		kretprobe:free_pcppages_bulk, kretprobe:rmqueue_bulk /@t[tid]/ { @us[func, cpu < 8 || cpu > 55 ? "ring" : "nfsd"] = stats((uint64)(nsecs - @t[tid]) / 1000); @ns_total[func, cpu < 8 || cpu > 55 ? "ring" : "nfsd"] = sum(nsecs - @t[tid]); delete(@t[tid]); }
 		interval:s:3 { exit(); }' > $O/zone-bulk.txt 2>&1
+	  elif [ "${PROBE:-perf}" = hol ]; then
+		# Head-of-line blocking on xpt_mutex between the rtc and nfsd's
+		# senders (t2-r718 on): hol.bt, 5 s.
+		bpftrace -q /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/hol.bt > $O/hol.txt 2>&1
 	  elif [ "${PROBE:-perf}" = nfsd ]; then
 		# nfsd's and the rtc work's CPUs, 8-55 (t2-r716 on), with call
 		# graphs for 8 s: where skb_tx_defer_max 128's frees land.

@@ -1,0 +1,209 @@
+diff --git a/include/linux/sunrpc/svc_xprt.h b/include/linux/sunrpc/svc_xprt.h
+index 16426e09d226a..5634397d8ea0c 100644
+--- a/include/linux/sunrpc/svc_xprt.h
++++ b/include/linux/sunrpc/svc_xprt.h
+@@ -298,6 +298,7 @@ enum {
+ 	SVC_RTC_RECV,			/* work item owns XPT_BUSY */
+ 	SVC_RTC_STOPPING,		/* svc_rtc_xprt_stop() ran */
+ 	SVC_RTC_THREAD_CALLS,		/* its last call peeked was not served */
++	SVC_RTC_XPRT_SEND,		/* a thread queued a reply for the FIFO */
+ };
+ 
+ struct svc_rtc_stats {
+@@ -316,6 +317,8 @@ struct svc_rtc_stats {
+ int	svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops);
+ void	svc_rtc_unregister(struct svc_serv *serv);
+ void	svc_rtc_queue_send(struct svc_xprt *xprt, struct svc_rtc_send *send);
++bool	svc_rtc_single_send(struct svc_xprt *xprt);
++bool	svc_rtc_combines(void);
+ void	svc_rtc_stats_sum(struct svc_rtc_stats *sum);
+ void	svc_rtc_serv_destroy(struct svc_serv *serv);
+ void	svc_rtc_complete(struct svc_rqst *rqstp);
+diff --git a/net/sunrpc/svc_xprt.c b/net/sunrpc/svc_xprt.c
+index 3405c55066fc5..848c1e8565da3 100644
+--- a/net/sunrpc/svc_xprt.c
++++ b/net/sunrpc/svc_xprt.c
+@@ -1833,8 +1833,11 @@ VISIBLE_IF_KUNIT unsigned int svc_rtc_drain_sends(struct svc_rtc_conn *conn,
+ 	unsigned int budget = dead ? UINT_MAX : SVC_RTC_SEND_BUDGET;
+ 	struct svc_xprt *xprt = conn->xprt;
+ 	unsigned int n = 0;
++	bool xsend;
+ 
+-	if (!svc_rtc_refill(conn))
++	/* Before the queue is looked at: pairs with svc_rtc_single_send(). */
++	xsend = !dead && test_and_clear_bit(SVC_RTC_XPRT_SEND, &conn->flags);
++	if (!svc_rtc_refill(conn) && !xsend)
+ 		return 0;
+ 	if (!dead)
+ 		mutex_lock(&xprt->xpt_mutex);
+@@ -1863,6 +1866,90 @@ static void svc_rtc_pool_free(struct svc_rtc_pool *pool);
+ static void svc_rtc_pool_fill(struct work_struct *work);
+ static void svc_rtc_pool_decay(struct work_struct *work);
+ 
++/*
++ * svc_rtc_single_sender: a thread's reply on a connection with a work
++ * item is queued for the work item to send, with its own FIFO, under one
++ * hold of xpt_mutex; the thread takes the mutex itself only after its
++ * wait times out.  So the work item does not wait behind a thread's
++ * combining, nor a thread behind the FIFO.
++ */
++static bool svc_rtc_single_sender __read_mostly;
++module_param(svc_rtc_single_sender, bool, 0644);
++MODULE_PARM_DESC(svc_rtc_single_sender,
++		 "Send threads' replies from the connection's work item");
++
++/* Does the work item send the records other senders queued? */
++bool svc_rtc_combines(void)
++{
++	return READ_ONCE(svc_rtc_single_sender);
++}
++EXPORT_SYMBOL_GPL(svc_rtc_combines);
++
++/**
++ * svc_rtc_single_send - Ask @xprt's work item to send a queued record
++ * @xprt: transport the caller holds a reference on
++ *
++ * The caller has queued its record where the transport's
++ * ->xpo_send_unlock sends it.  Return: true when the work item was
++ * kicked to send it; false to send it the usual way.
++ */
++bool svc_rtc_single_send(struct svc_xprt *xprt)
++{
++	struct svc_rtc_conn *conn = READ_ONCE(xprt->xpt_rtc);
++
++	if (!READ_ONCE(svc_rtc_single_sender) || !conn ||
++	    test_bit(SVC_RTC_STOPPING, &conn->flags) ||
++	    test_bit(XPT_DEAD, &xprt->xpt_flags))
++		return false;
++	/* After the caller's llist_add(): see svc_rtc_drain_sends(). */
++	smp_mb__before_atomic();
++	set_bit(SVC_RTC_XPRT_SEND, &conn->flags);
++	svc_rtc_kick(conn);
++	return true;
++}
++EXPORT_SYMBOL_GPL(svc_rtc_single_send);
++
++/*
++ * svc_rtc_conn_full_wait: a connection with SVC_RTC_CONN_PARKED calls
++ * parked does not hand its next call to a thread (conn_full); its work
++ * item keeps the transport (XPT_BUSY) and receives it once a parked call
++ * is released.  A thread's reply would share the connection's xpt_mutex
++ * with the work item's send FIFO.
++ */
++static bool svc_rtc_conn_full_wait __read_mostly;
++module_param(svc_rtc_conn_full_wait, bool, 0644);
++MODULE_PARM_DESC(svc_rtc_conn_full_wait,
++		 "Hold a full connection's next call for its work item instead of a thread");
++
++/* Counted by a probe: one receive held back. */
++static noinline void svc_rtc_recv_held(struct svc_rtc_conn *conn)
++{
++	barrier();
++}
++
++/*
++ * Should this pass leave its receive for a later one?  Only while the
++ * connection is full, alive and wanting nothing a thread must do; every
++ * parked call completes and kicks a pass, and a pass that releases one
++ * below the ceiling kicks the receive (svc_rtc_work()).
++ */
++static bool svc_rtc_recv_wait(struct svc_rtc_conn *conn)
++{
++	struct svc_xprt *xprt = conn->xprt;
++
++	if (!READ_ONCE(svc_rtc_conn_full_wait) ||
++	    !test_bit(SVC_RTC_RECV, &conn->flags) ||
++	    atomic_read(&conn->parked) < SVC_RTC_CONN_PARKED)
++		return false;
++	if (test_bit(SVC_RTC_STOPPING, &conn->flags) ||
++	    (READ_ONCE(xprt->xpt_flags) &
++	     (BIT(XPT_DEAD) | BIT(XPT_CONN) | BIT(XPT_CLOSE) |
++	      BIT(XPT_HANDSHAKE) | BIT(XPT_DEFERRED))))
++		return false;
++	svc_rtc_recv_held(conn);
++	return true;
++}
++
+ /*
+  * One work item per connection: finish completed async calls (encode and
+  * queue their replies), take the next receive, then send the FIFO.
+@@ -1878,7 +1965,9 @@ static void svc_rtc_work(struct work_struct *work)
+ 	svc_rtc_stat_inc(runs);
+ 	svc_rtc_run_completions(conn);
+ 
+-	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags)) {
++	if (svc_rtc_recv_wait(conn)) {
++		/* Keep XPT_BUSY and SVC_RTC_RECV: a later pass receives. */
++	} else if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags)) {
+ 		switch (svc_rtc_recv_step(xprt, &reason, NULL)) {
+ 		case SVC_RTC_THREAD:
+ 			svc_rtc_stat_inc(fallback[reason]);
+@@ -1907,6 +1996,10 @@ static void svc_rtc_work(struct work_struct *work)
+ 	if (conn->pending || !llist_empty(&conn->sendq)) {
+ 		svc_rtc_stat_inc(budget_exhausted);
+ 		svc_rtc_kick(conn);
++	} else if (test_bit(SVC_RTC_RECV, &conn->flags) &&
++		   atomic_read(&conn->parked) < SVC_RTC_CONN_PARKED) {
++		/* A receive held back by svc_rtc_recv_wait() can go now. */
++		svc_rtc_kick(conn);
+ 	}
+ 	svc_rtc_run_done(xprt);
+ }
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index 652e95dbdba8c..f04b7a3950012 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -7255,7 +7255,22 @@ static void svc_tcp_send_unlock(struct svc_sock *svsk, unsigned int budget)
+  */
+ VISIBLE_IF_KUNIT void svc_tcp_xpo_send_unlock(struct svc_xprt *xprt)
+ {
+-	svc_tcp_send_unlock(container_of(xprt, struct svc_sock, sk_xprt), 0);
++	struct svc_sock *svsk = container_of(xprt, struct svc_sock, sk_xprt);
++
++	/*
++	 * svc_rtc_single_sender: send what threads queued, a budget a
++	 * hold; with more left, the next pass sends it, not a thread.
++	 */
++	if (svc_rtc_combines()) {
++		svc_tcp_combine_sends(svsk, SVC_TCP_COMBINE_BUDGET);
++		if ((svsk->sk_send_held ||
++		     !llist_empty(&svsk->sk_send_queue)) &&
++		    svc_rtc_single_send(xprt)) {
++			mutex_unlock(&xprt->xpt_mutex);
++			return;
++		}
++	}
++	svc_tcp_send_unlock(svsk, 0);
+ }
+ EXPORT_SYMBOL_IF_KUNIT(svc_tcp_xpo_send_unlock);
+ 
+@@ -7278,11 +7293,17 @@ VISIBLE_IF_KUNIT int __svc_tcp_send(struct svc_sock *svsk,
+ 		.xdr	= xdr,
+ 		.marker	= marker,
+ 	};
+-	bool locked;
++	bool locked, rtc = false;
+ 
+ 	init_completion(&ps.done);
+ 	llist_add(&ps.node, &svsk->sk_send_queue);
+-	locked = mutex_trylock(mutex);
++	/* A reply on a connection whose work item sends: let it. */
++	if (rqstp && svc_rtc_single_send(&svsk->sk_xprt)) {
++		locked = false;
++		rtc = true;
++	} else {
++		locked = mutex_trylock(mutex);
++	}
+ 	for (;;) {
+ 		if (!locked) {
+ 			/*
+@@ -7290,7 +7311,8 @@ VISIBLE_IF_KUNIT int __svc_tcp_send(struct svc_sock *svsk,
+ 			 * that complete() was the last use of @ps by anyone
+ 			 * else (no handoff follows a send).
+ 			 */
+-			if (wait_for_completion_timeout(&ps.done,
++			if (wait_for_completion_timeout(&ps.done, rtc ?
++					msecs_to_jiffies(SVC_TCP_SEND_WAIT_MAX_MS) :
+ 					svc_tcp_send_wait_timeout(svsk)) &&
+ 			    !READ_ONCE(ps.combine))
+ 				return ps.result;

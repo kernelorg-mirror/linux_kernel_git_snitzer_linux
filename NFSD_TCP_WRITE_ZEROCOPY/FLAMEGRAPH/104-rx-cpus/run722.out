@@ -1,0 +1,27 @@
+22:17:19 t2-r722 ab read | total 63.02 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 30.74 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 19/26/27/28%
+      read: 30.74 GB/s, 3.7k IOPS, completion 69.41 ms mean, 106.43 ms at the 99th percentile
+    port b enp164s0f0: 32.28 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/27/24/24%
+      read: 32.28 GB/s, 3.8k IOPS, completion 66.04 ms mean, 113.77 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 7.7 to 7.8, busiest 90% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 8.0 to 8.2, busiest 92% busy
+    ring CPUs busy: 0:71 1:16 2:52 3:18 4:65 5:15 6:72 7:14 56:70 57:19 58:72 59:13 60:49 61:19 62:53 63:25 
+    profile 1794780993.274247785 to 1794781010.152076630, load from 1794780969.246 | high_fraction 0
+    svc_rtc_cpus "8-55"; busiest CPUs: 37:100 9:98 50:98 45:97 15:96 8:82 52:81 34:81 
+    nfsd CPUs busy: mean 30%
+    per-CPU high in the load (zone Normal): ring CPUs 0:1484 1:1112 2:874 3:874 4:874 5:874 6:1235 7:874 56:874 57:874 58:1937 59:874 60:874 61:964 62:874 63:874 
+      nfsd CPUs from 874 to 16037
+22:22:37 t2-r723 ab read | total 60.48 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 30.22 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/24/25/26%
+      read: 30.22 GB/s, 3.6k IOPS, completion 70.56 ms mean, 113.77 ms at the 99th percentile
+    port b enp164s0f0: 30.25 GB/s (fio, after the warm-up); in the 10 s window: wire 0.02 GB/s, FIFO drops 0, ring drops 0, rings 27/23/24/26%
+      read: 30.25 GB/s, 3.6k IOPS, completion 70.48 ms mean, 110.62 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 7.5 to 7.7, busiest 81% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.4 to 7.7, busiest 82% busy
+    ring CPUs busy: 0:11 1:23 2:7 3:22 4:4 5:26 6:5 7:24 56:13 57:33 58:5 59:25 60:4 61:20 62:5 63:38 
+    profile 1794781311.731912936 to 1794781321.440057618, load from 1794781287.595 | high_fraction 0
+    svc_rtc_cpus "8-55"; busiest CPUs: 37:90 46:72 50:70 9:69 25:68 18:66 27:50 48:49 
+    nfsd CPUs busy: mean 39%
+    per-CPU high in the load (zone Normal): ring CPUs 0:874 1:874 2:874 3:874 4:874 5:874 6:2698 7:874 56:1060 57:874 58:925 59:1123 60:874 61:874 62:874 63:1268 
+      nfsd CPUs from 3190 to 16037
+22:22:41 after: settled.sh audit rest: the settled setting

@@ -1,0 +1,15 @@
+== t2-r728 txd 0 conn_full_wait Y single_sender Y
+22:51:43 t2-r728 ab read | total 62.60 GB/s | ring drops 8 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 31.86 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 26/21/27/26%
+      read: 31.86 GB/s, 3.8k IOPS, completion 66.94 ms mean, 91.75 ms at the 99th percentile
+    port b enp164s0f0: 30.74 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 8, rings 26/24/22/28%
+      read: 30.74 GB/s, 3.7k IOPS, completion 69.41 ms mean, 94.90 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 8.0 to 8.0, busiest 91% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.7 to 7.7, busiest 90% busy
+    ring CPUs busy: 0:93 1:14 2:52 3:13 4:83 5:17 6:83 7:14 56:69 57:14 58:58 59:13 60:45 61:10 62:82 63:24 
+    profile 1794783057.577037075 to 1794783066.798475455, load from 1794783033.268 | high_fraction 0
+    svc_rtc_cpus "8-55"; busiest CPUs: 54:98 52:98 39:98 19:98 0:93 6:83 4:83 62:82 
+    nfsd CPUs busy: mean 30%
+    per-CPU high in the load (zone Normal): ring CPUs 0:874 1:874 2:3911 3:874 4:1158 5:874 6:874 7:874 56:874 57:874 58:874 59:874 60:945 61:874 62:874 63:1138 
+      nfsd CPUs from 874 to 16037
+22:51:46 after: settled.sh audit rest: the settled setting
