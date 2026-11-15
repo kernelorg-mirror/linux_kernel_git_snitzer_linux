@@ -148,3 +148,15 @@ WRITE.  `psi=0` is judged against these.
 The one-shot entry `ofp-rocky-531-psi0.conf` is installed as "The
 boot" gives it (`bootctl`: OneShot `ofp-rocky-531-psi0.conf`, Default
 plain 531), kdump armed.  Mike reboots.
+
+## The `psi=0` boot (15 November, 17:31)
+
+The one-shot entry was used: `/proc/cmdline` has `psi=0` and
+`/proc/pressure` is gone.  `updates/` loaded again: sunrpc
+`B1AE4F3F0262A3E5AD387FA`, nfsd `603083CAF5F5B5E8DE898AC`, xeu
+`4FE2E7FF217385CDB5D4BB2`.  Both ports answered 5 of 5 before
+`bringup.sh 32768 256` and after it; kdump armed (1024 MiB,
+`kexec_crash_loaded` 1); the eight drives mounted `noatime,lazytime`;
+`settled.sh apply` ended in "the settled setting".  The default entry
+is plain 531 again, so the next reboot needs nothing undone.  Root has
+2.2 GB free, just above `run601.sh`'s 2 GB floor.
