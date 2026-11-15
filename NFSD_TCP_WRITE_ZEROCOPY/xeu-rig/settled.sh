@@ -384,6 +384,13 @@ RTC_BALANCE_SETTLED=$RTC_BALANCE
 # that last sent on it (FLAMEGRAPH round 104: the READ pages' frees on
 # the CPU that allocated them).
 RFS=${EXP_RFS:-0}
+# net.core.skb_tx_defer_max ("net: add skb_attempt_defer_free_tx()" and
+# "tcp: free acknowledged skbs on the cpu that built them", ddb07c31c1b39
+# and 7bd353fb130ef; FLAMEGRAPH round 104): 0, an acknowledged skb freed
+# on the cpu that took the ACK, until Mike's word.  A kernel without it
+# is not BAD at 0.  EXP_SKB_TX_DEFER_MAX holds a run (and apply) to
+# another limit.
+TX_DEFER=${EXP_SKB_TX_DEFER_MAX:-0}
 rps_mask() {	# rps_mask <cpulist>: the mask as the kernel prints it, 32-bit words high first
 	local m=0 r a b c
 	for r in ${1//,/ }; do
@@ -576,6 +583,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "$RTC_CPUS" != "$RTC_CPUS_SETTLED" ] && OFF="$OFF svc_rtc_cpus=${RTC_CPUS:-none}"
 	[ "$RTC_BALANCE" != "$RTC_BALANCE_SETTLED" ] && OFF="$OFF svc_rtc_balance=$RTC_BALANCE"
 	[ "$RFS" != 0 ] && OFF="$OFF rfs=$RFS"
+	[ "$TX_DEFER" != 0 ] && OFF="$OFF skb_tx_defer_max=$TX_DEFER"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
 	[ "${EXP_NOTRACK:-}" = absent ] && OFF="$OFF zc_notrack=absent"
 	[ "${EXP_NETAVARK:-}" = present ] && OFF="$OFF netavark=present"
@@ -651,6 +659,11 @@ audit_sysctl() {
 		w=${SYSCTL[$k]}; [ $k = net.core.skb_defer_max ] && w=${EXP_SKB_DEFER_MAX:-$w}
 		want "sysctl $k" "$(sysctl -n $k 2>/dev/null | tr -s ' \t' '  ')" "$w"
 	done
+	if [ -e /proc/sys/net/core/skb_tx_defer_max ]; then
+		want "sysctl net.core.skb_tx_defer_max" "$(cat /proc/sys/net/core/skb_tx_defer_max)" "$TX_DEFER"
+	elif [ "$TX_DEFER" != 0 ]; then
+		bad "sysctl net.core.skb_tx_defer_max" "not in this kernel" "a kernel with 7bd353fb130ef"
+	fi
 }
 
 audit_client() {	# read only: nothing on the client is changed from here
@@ -945,6 +958,7 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 	for k in "${!SYSCTL[@]}"; do
 		[ "$(sysctl -n $k | tr -s ' \t' '  ')" = "${SYSCTL[$k]}" ] || sysctl -qw "$k=${SYSCTL[$k]}"
 	done
+	[ -w /proc/sys/net/core/skb_tx_defer_max ] && echo $TX_DEFER > /proc/sys/net/core/skb_tx_defer_max
 	for k in $PORTS; do [ "$(srv_qdisc ${PDEV[$k]})" = "$SRV_QDISC" ] || set_srv_qdisc ${PDEV[$k]} $SRV_QDISC; done
 	for k in $PORTS; do [ "$(gro_max ${PDEV[$k]})" = "$GRO_MAX" ] || set_gro_max ${PDEV[$k]} $GRO_MAX; done
 	k=${EXP_XEU_rx_prefetch:-${XEU[rx_prefetch]}}

@@ -601,3 +601,38 @@ twoport.sh left to finish its run, then nfs-server restarted and
 `settled.sh apply` (RFS off).  r690 (on) and r691 (the lock probe) did
 not run, and no WRITE pass was run: RFS is not kept.  `EXP_RFS` stays
 in `settled.sh` for a run.
+
+## Freeing a sent skb on the cpu that built it (Mike: "write the TCP change")
+
+Mike, 15 November: "write the TCP change to free sent skbs on the
+allocating CPU", then "I'll build a new kernel".
+
+- **`ddb07c31c1b39` "net: add skb_attempt_defer_free_tx()"**: the
+  queueing of `skb_attempt_defer_free()` becomes a helper that takes
+  its limit, and `skb_attempt_defer_free_tx()` releases a sent skb's
+  head state and queues it to `skb->alloc_cpu` on the same per-cpu
+  lists, bounded by a new `net.core.skb_tx_defer_max` (0, the default:
+  freed at once).  It is apart from `skb_defer_max`, which tardis2
+  holds at 0 for WRITEs (round 03), and zerocopy skbs are never
+  deferred, as before.
+- **`7bd353fb130ef` "tcp: free acknowledged skbs on the cpu that built
+  them"**: `tcp_rtx_queue_unlink_and_free()` uncharges the socket and
+  hands the skb to it, so `tcp_clean_rtx_queue()` on a receive CPU
+  sends each READ reply's skbs, and their pages, back to the CPU that
+  sent them: the rtc work item's, which allocates the next READ's
+  pages there.  The list is flushed there in `NET_RX` softirq, raised
+  by an IPI when it is half full.
+
+TCP and `net/core` are in the kernel image, so this needs a new
+kernel and a boot; the objects were compiled against build 531's
+headers (`skbuff.c`, `sysctl_net_core.c`, `tcp_input.c`), no error.
+`settled.sh` holds `skb_tx_defer_max` at 0 (`EXP_SKB_TX_DEFER_MAX` for
+a run; a kernel without it audits BAD only when a run asks for it),
+and `run645.sh` gains an eighth field, `txd`.
+
+The plan, on the new kernel: two-port reads at 0 and 128 in turns, two
+each (`RUNS="n:read:::::::0 n+1:read:::::::128 ..."`), then
+`PROBE=lock` at 128 for the zone lock's refills and drains beside
+r650's, then the WRITE pass at 128 (the change frees WRITE replies'
+skbs on nfsd's CPUs too).  128 is kept only if reads gain and the pass
+holds 78.
