@@ -3,6 +3,92 @@
 Written 2026-11-04.  Background and every port decision:
 `CANARY-SPLIT.md` beside this file.
 
+## Next boot (15 November): build 531 with `psi=0`, then the kernel from the tip
+
+**Read this first.**  Mike, 15 November: "let's reboot with psi=0 using
+the current kernel as test kernel, in parallel I'll build the kernel
+with all the latest commits using gitlab".  Two boots follow, in
+order.
+
+**The host before the reboot.**  Build 531 (`7.3.3-16.hs.531.canary`),
+xeu Release 17 (`4FE2E7FF217385CDB5D4BB2`, records the receive queue),
+and in `updates/`:
+
+- `nfsd.ko` `603083CAF5F5B5E8DE898AC`, the DRC commits (round 100);
+- `sunrpc.ko` `B1AE4F3F0262A3E5AD387FA` (built as
+  `/var/tmp/zc-run-logs/sunrpc-rtcbal-531/`): `278b74ad8a0d9` (calls
+  the rtc hook does not serve go straight to a thread),
+  `2e2811d21f8c4` (`svc_rtc_cpus`) and `fe25e474fa3de`
+  (`svc_rtc_balance`).
+
+The settled setting (`xeu-rig/settled.sh`) on tardis2: `xps_rxqs`,
+nfsd's `rtc_read` Y, `svc_rtc_cpus` 8-55, `svc_rtc_balance` N, RFS off,
+`skb_tx_defer_max` 0 (absent on 531).  `settled.sh audit rest` ended
+in "the settled setting" before the reboot.  To go back to build 531's
+own sunrpc: `SUNRPC_KO=none xeu-rig/swap-sunrpc.sh` (Mike's to ask
+for).
+
+**Where the READ work stands (FLAMEGRAPH round 104).**  Two-port reads
+on eight drives at about 64 GB/s, WRITEs at 78.  On reads the eight
+receive-ring CPUs are 71 to 90% busy, almost all of it freeing the
+READ replies' pages under the one `zone->lock` (r647, r650): nfsd
+allocates them on its CPUs and the ACKs free them on the ring CPUs,
+so each page crosses the zone lock twice.  Tried and not kept:
+`percpu_pagelist_high_fraction`, `svc_tcp_rx_region_reads`,
+`svc_rtc_balance` (spreads the connections, reads 1 to 2 GB/s less),
+RFS (piles the rtc work items onto two transmit CPUs).  Written and
+not yet run: **`ddb07c31c1b39` and `7bd353fb130ef`**, which free an
+acknowledged TCP skb on the CPU that built it, behind
+`net.core.skb_tx_defer_max` (0 by default).  They are in the kernel
+image, so they need the second boot.
+
+**Every READ round keeps WRITEs at 78 GB/s** (AGENTS.md, hard rule):
+`xeu-rig/write-check.sh <n>` before anything is kept.
+
+### Boot 1: build 531 with `psi=0` (round 101)
+
+The one-shot entry `ofp-rocky-531-psi0.conf` (`FLAMEGRAPH/101-psi-off/README.md`,
+"The boot"); the default stays plain 531, so the boot after it needs
+nothing undone.  Both `updates/` modules load again (same kernel).
+Before the reboot, on PSI: four counted WRITE runs `t2-r692` to
+`r695` and two reads `r696`, `r697` (`101-psi-off/run692.out`,
+`run696.out`).  After it:
+
+1. `grep -o psi=0 /proc/cmdline` and no `/proc/pressure`; otherwise
+   the boot fell back to plain 531: say so and stop.
+2. sunrpc `B1AE4F3F0262A3E5AD387FA`, nfsd `603083CAF5F5B5E8DE898AC`,
+   xeu `4FE2E7FF217385CDB5D4BB2` (`/sys/module/*/srcversion`).
+3. `xeu-rig/bringup.sh` (kdump first), ping both ports
+   (`PORT-DEAD-AFTER-BOOT.md`), mount the eight drives, then
+   `settled.sh apply` ending in "the settled setting".
+4. Commit the boot's outcome before any run.
+5. `RUNS="698:C 699:G 700:C 701:C 702:C"
+   FLAMEGRAPH/100-build531-baseline/run601.sh`, then `PROBE=none
+   RUNS="703:read 704:read" FLAMEGRAPH/104-rx-cpus/run645.sh`; read
+   as round 101's README says, against r692 to r697.
+
+### Boot 2: the kernel Mike builds on gitlab from the tip
+
+From `kernel-7.3/canary` with every commit above (the DRC commits,
+the three sunrpc commits, the two `net`/`tcp` commits).  Its own
+`/lib/modules/<version>/` has no `updates/`, so its sunrpc and nfsd
+are its own, and they carry what 531's `updates/` did.  Then:
+
+1. kdump armed (a real copy of the new kernel in `/var/lib/kdump/boot/`:
+   `bringup.sh` makes it), the new kernel's version in `uname -r`,
+   `/proc/sys/net/core/skb_tx_defer_max` present and 0,
+   `/sys/module/sunrpc/parameters/svc_rtc_balance` present, and
+   `^undiverted ` in `/sys/kernel/debug/nfsd/rtc_stats`.
+2. xeu: the kmod-xsight 2.0.1-17 RPM is built per kernel; if no xeu
+   loads for the new kernel, say so and stop (rebuilding it is in
+   kernel-rpmtree, `b4f1a54`, Patch15).
+3. As boot 1's steps 3 and 4.
+4. A WRITE pass (`write-check.sh`) and two reads at
+   `skb_tx_defer_max` 0, to see the new kernel at build 531's rates.
+5. Round 104's plan, "Freeing a sent skb on the cpu that built it" in
+   `FLAMEGRAPH/104-rx-cpus/README.md`: reads at 0 and 128 in turns,
+   the zone lock at 128 against r650, the WRITE pass at 128.
+
 ## Where it stands (12 November, afternoon): round 99 and the window settled
 
 Read `FLAMEGRAPH/99-held-split-splice/README.md`.  With the client

@@ -120,8 +120,8 @@ on this boot, PSI on, before the reboot, and the same after it:
 - PSI off, the `psi=0` boot: `RUNS="698:C 699:G 700:C 701:C 702:C"`
   and `RUNS="703:read 704:read"`, the same scripts.
 
-Read as step 7 says, with r692 to r695 in place of r604 to r612, and
-the call graph r699 against... the one call graph on this boot is
-round 100's r611 (before the new sunrpc), so `finish_task_switch` is
-read against it with that caveat.  Both `updates/` modules are kept
+Read as step 7 says, with r692 to r695 in place of r604, r606, r610
+and r612, and the reads r703 and r704 against r696 and r697.  The call
+graph r699 has no partner on this boot: `finish_task_switch` is read
+against round 100's r611, which ran before the new sunrpc.  Both `updates/` modules are kept
 for the boot: it is the same kernel.

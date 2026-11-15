@@ -418,15 +418,22 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
-**tardis2's next boot, if Mike takes it: build 531 with `psi=0`
-(round 101, planned 14 November).** The plan, the one-shot entry to
-install and the checks after the boot are in
-`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/101-psi-off/README.md`.  Nothing is
-installed yet.  Until then tardis2 stays on build 531 with the DRC
-commits' `nfsd.ko` in `updates/` (round 100) and, since 15 November, a
-`sunrpc.ko` with `278b74ad8a0d9` beside it (round 104): `settled.sh`
-holds nfsd's `rtc_read` at Y on tardis2 and audits that sunrpc for it,
-so a kernel without that commit audits BAD.
+**tardis2's next two boots (Mike, 15 November): build 531 with `psi=0`,
+then the kernel Mike builds on gitlab from the tip.  Start at "Next
+boot (15 November)" at the top of
+`NFSD_TCP_WRITE_ZEROCOPY/HANDOFF-tardis2-canary.md`.**  The first is
+round 101 (`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/101-psi-off/README.md`),
+a one-shot entry on the same kernel, so the `updates/` modules load
+again: the DRC commits' `nfsd.ko` (round 100) and a `sunrpc.ko` with
+`278b74ad8a0d9`, `2e2811d21f8c4` and `fe25e474fa3de` (round 104).
+`settled.sh` holds nfsd's `rtc_read` at Y and `svc_rtc_cpus` at 8-55 on
+tardis2 and audits that sunrpc for both, so a kernel without those
+commits audits BAD.  The second carries all of them and round 104's
+`ddb07c31c1b39` and `7bd353fb130ef` (`net.core.skb_tx_defer_max`,
+freeing an acknowledged TCP skb on the CPU that built it), which only
+a new kernel can test.  Every boot's checks: kdump armed, both ports
+pinged, `settled.sh apply` ending in "the settled setting", and the
+boot's outcome committed before any run.
 
 **The held mark's A/B ran on the held-mark kernel's sixth boot (7
 November, `t2-r198..r201`) and Mike kept the mark (`bb7fd3100c3b`):
@@ -435,7 +442,8 @@ The held-mark kernel is now tardis2's default (`ofp-rocky-held-514.conf`)
 and the A/B kernel is gone from `/boot`.  **Stay on that boot (Mike, 7 November): it has
 both ports, and a reboot risks losing one.  No reboot, no KUnit, no
 reload of `xeu`: "Stay on this boot" in the same handoff.**  The paragraph below is the boot
-plan it ran.**
+plan it ran.**  (Mike lifted the no-reboot rule for the two boots of 15
+November, above; no KUnit and no reload of `xeu` still hold.)
 
 **After tardis2's next reboot (7 November) into the held-mark kernel (the
 one-shot entry `ofp-rocky-held-514.conf`: build 514's source with "page_pool:
