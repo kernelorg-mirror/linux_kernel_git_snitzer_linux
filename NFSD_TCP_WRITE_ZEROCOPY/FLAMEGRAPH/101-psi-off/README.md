@@ -225,4 +225,5 @@ on the same kernel and modules.
 
 "psi is clearly a non-factor, leave it enabled".  tardis2 keeps PSI:
 the default entry is plain 531, without `psi=0`, and the one-shot
-entry `ofp-rocky-531-psi0.conf` is used up.  Round 101 is closed.
+entry `ofp-rocky-531-psi0.conf` is removed (Mike; it shared 531's
+kernel and initrd, so nothing else went with it).  Round 101 is closed.
