@@ -297,3 +297,35 @@ READ budget's counters (admitted, parked, granted, unconfined, short)
 and the region's pages in use at most, which is held against the rule
 not to grow the region's footprint. `settled.sh` does not hold this
 parameter.
+
+[run664.out](run664.out), [wcheck668.out](wcheck668.out):
+
+| run | `region_reads` | GB/s | a / b | p99 ms | ring drops | receive CPUs busy | nfsd CPUs busy | region pages in use at most |
+|---|---|---|---|---|---|---|---|---|
+| `t2-r664` | N | 60.53 | 30.32 / 30.21 | 79 to 80 | 345 | 81 to 92% | 80% | 1,786 |
+| `t2-r665` | **Y** | 52.02 | 26.23 / 25.79 | 95 to 96 | 0 | 16 to 18% | 72% | **4,924** |
+| `t2-r666` | N | 60.38 | 30.06 / 30.32 | 78 to 79 | 436 | 86 to 95% | 78% | 1,767 |
+| `t2-r667` | **Y** | 55.45 | 28.18 / 27.27 | 92 to 95 | 0 | 17 to 19% | 71% | **4,948** |
+| `t2-r668` | Y | write **78.16, PASS** | 39.08 / 39.08 | | 0 | | | |
+
+No drive stepped down and no new kernel warning in any.
+
+- **With READs confined, the receive CPUs drop from 81 to 95% busy to
+  16 to 19%**: the frees to the page allocator are gone, as expected.
+- **But reads fall 5 to 8.5 GB/s, to 52.0 and 55.4**, at a higher p99,
+  and the region's peak in use nearly triples (1,767 to 1,786 against
+  4,924 to 4,948 pages), against the rule not to grow the region's
+  footprint. WRITEs are untouched (78.16 with it on).
+- **The READ counters in the runner read 0 because they read the wrong
+  budget**: with the region unsplit a confined READ draws on its
+  connection's receive budget (`svc_tcp_rx_budget_read_for()`), here the
+  initial namespace's at 8,198 pages, not the read pool. That budget's
+  counters (`svc_tcp_rx_budget_stats`), since the boot, so over r665 and
+  r667: 2,533,496 READs admitted and completed, **none parked for
+  credit and none unconfined, and 2,381,055 `share_stalls`**, almost one
+  for each READ. So credit is not the limit; the connection's share is
+  (`svc_tcp_rx_region_conn_share`, 0: auto, two maximum READs, 130
+  pages, a connection), which holds each connection to two confined
+  READs at a time while the client keeps about 20 in flight on each.
+  That is read from the counters and the code, not yet tried: the
+  share is a parameter, so an A/B of it is next.

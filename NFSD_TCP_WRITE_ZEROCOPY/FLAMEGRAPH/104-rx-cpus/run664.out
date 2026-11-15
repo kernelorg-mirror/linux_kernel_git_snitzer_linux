@@ -1,0 +1,57 @@
+03:20:17 t2-r664 ab read | total 60.53 GB/s | ring drops 345 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 30.32 GB/s (fio, after the warm-up); in the 10 s window: wire 0.02 GB/s, FIFO drops 0, ring drops 285, rings 26/24/25/25%
+      read: 30.32 GB/s, 3.6k IOPS, completion 70.38 ms mean, 80.22 ms at the 99th percentile
+    port b enp164s0f0: 30.21 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 60, rings 25/25/25/25%
+      read: 30.21 GB/s, 3.6k IOPS, completion 70.62 ms mean, 79.17 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 7.6 to 7.6, busiest 85% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.5 to 7.6, busiest 86% busy
+    ring CPUs busy: 0:92 1:16 2:84 3:16 4:83 5:15 6:85 7:11 56:86 57:14 58:85 59:12 60:83 61:11 62:81 63:24 
+    profile 1794712771.715917659 to 1794712779.794944116, load from 1794712747.395 | high_fraction 0
+    region_reads N; READ budget in the window: read_inflight 0 (now 0), read_waiters 0 (now 0), read_admitted 0 (now 0), read_parked 0 (now 0), read_granted 0 (now 0), read_completed 0 (now 0), read_unconfined 0 (now 0), read_short 0 (now 0), share_stalls 0 (now 0), 
+    region: pages 32768 read_pages 0 free 24016 min_free 21952 alloc_fail 0 escaped 0 | region pages in use at most: 1786
+    nfsd CPUs busy: mean 80%
+    per-CPU high in the load (zone Normal): ring CPUs 0:874 1:874 2:874 3:908 4:874 5:1528 6:874 7:874 56:874 57:874 58:874 59:904 60:874 61:874 62:874 63:889 
+      nfsd CPUs from 14488 to 16043
+03:25:36 t2-r665 ab read | total 52.02 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 26.23 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      read: 26.23 GB/s, 3.1k IOPS, completion 81.47 ms mean, 94.90 ms at the 99th percentile
+    port b enp164s0f0: 25.79 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/25/26/25%
+      read: 25.79 GB/s, 3.1k IOPS, completion 82.87 ms mean, 95.94 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 6.5 to 6.5, busiest 75% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 6.5 to 6.5, busiest 76% busy
+    ring CPUs busy: 0:16 1:4 2:17 3:4 4:16 5:3 6:18 7:3 56:17 57:3 58:16 59:4 60:16 61:3 62:16 63:10 
+    profile 1794713090.004102122 to 1794713098.026406217, load from 1794713065.660 | high_fraction 0
+    region_reads Y; READ budget in the window: read_inflight 0 (now 0), read_waiters 0 (now 0), read_admitted 0 (now 0), read_parked 0 (now 0), read_granted 0 (now 0), read_completed 0 (now 0), read_unconfined 0 (now 0), read_short 0 (now 0), share_stalls 0 (now 0), 
+    region: pages 32768 read_pages 0 free 20992 min_free 12215 alloc_fail 0 escaped 0 | region pages in use at most: 4924
+    nfsd CPUs busy: mean 72%
+    per-CPU high in the load (zone Normal): ring CPUs 0:874 1:874 2:994 3:874 4:874 5:979 6:874 7:889 56:4044 57:889 58:2932 59:916 60:874 61:874 62:874 63:874 
+      nfsd CPUs from 3149 to 4197
+03:30:54 t2-r666 ab read | total 60.38 GB/s | ring drops 436 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 30.06 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 287, rings 25/25/25/25%
+      read: 30.06 GB/s, 3.6k IOPS, completion 71.00 ms mean, 79.17 ms at the 99th percentile
+    port b enp164s0f0: 30.32 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 149, rings 24/26/26/24%
+      read: 30.32 GB/s, 3.6k IOPS, completion 70.37 ms mean, 78.12 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 7.5 to 7.5, busiest 85% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.6 to 7.6, busiest 84% busy
+    ring CPUs busy: 0:95 1:12 2:89 3:10 4:88 5:11 6:86 7:7 56:88 57:16 58:88 59:12 60:87 61:12 62:87 63:20 
+    profile 1794713408.214861245 to 1794713416.271867637, load from 1794713383.940 | high_fraction 0
+    region_reads N; READ budget in the window: read_inflight 0 (now 0), read_waiters 0 (now 0), read_admitted 0 (now 0), read_parked 0 (now 0), read_granted 0 (now 0), read_completed 0 (now 0), read_unconfined 0 (now 0), read_short 0 (now 0), share_stalls 0 (now 0), 
+    region: pages 32768 read_pages 0 free 24160 min_free 21589 alloc_fail 0 escaped 0 | region pages in use at most: 1767
+    nfsd CPUs busy: mean 78%
+    per-CPU high in the load (zone Normal): ring CPUs 0:874 1:1055 2:874 3:889 4:874 5:874 6:878 7:874 56:874 57:874 58:874 59:939 60:874 61:934 62:900 63:874 
+      nfsd CPUs from 14083 to 16043
+03:36:12 t2-r667 ab read | total 55.45 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 28.18 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/25/24/25%
+      read: 28.18 GB/s, 3.4k IOPS, completion 75.77 ms mean, 91.75 ms at the 99th percentile
+    port b enp164s0f0: 27.27 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 26/25/24/25%
+      read: 27.27 GB/s, 3.2k IOPS, completion 78.30 ms mean, 94.90 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 6.8 to 6.8, busiest 78% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 6.8 to 6.8, busiest 80% busy
+    ring CPUs busy: 0:17 1:4 2:17 3:4 4:17 5:5 6:17 7:3 56:18 57:5 58:17 59:5 60:18 61:5 62:19 63:11 
+    profile 1794713726.584072821 to 1794713734.610487685, load from 1794713702.193 | high_fraction 0
+    region_reads Y; READ budget in the window: read_inflight 0 (now 0), read_waiters 0 (now 0), read_admitted 0 (now 0), read_parked 0 (now 0), read_granted 0 (now 0), read_completed 0 (now 0), read_unconfined 0 (now 0), read_short 0 (now 0), share_stalls 0 (now 0), 
+    region: pages 32768 read_pages 0 free 21072 min_free 12233 alloc_fail 0 escaped 0 | region pages in use at most: 4948
+    nfsd CPUs busy: mean 71%
+    per-CPU high in the load (zone Normal): ring CPUs 0:874 1:874 2:946 3:904 4:1437 5:874 6:874 7:1568 56:874 57:874 58:874 59:1047 60:874 61:874 62:1357 63:874 
+      nfsd CPUs from 4062 to 4936
+03:36:15 after: settled.sh audit rest: the settled setting
