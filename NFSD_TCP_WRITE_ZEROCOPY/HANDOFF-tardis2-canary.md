@@ -92,6 +92,21 @@ are its own, and they carry what 531's `updates/` did.  Then:
    `FLAMEGRAPH/104-rx-cpus/README.md`: reads at 0 and 128 in turns,
    the zone lock at 128 against r650, the WRITE pass at 128.
 
+**The boot (15 November, 20:08): whole.**  Build 534
+(`7.3.3-16.hs.534.canary`, Mike's gitlab build of the tip, which has
+all five commits above), its own sunrpc `19A83B182CB392E30E42C81` and
+nfsd `0E473D4AA58E3F70608609A`, no `updates/`.  xeu
+`4FE2E7FF217385CDB5D4BB2` (kmod-16k-xsight 2.0.1-17 for 534) loaded.
+kdump was not armed at boot (`/var/lib/kdump/boot/` held a symlink for
+534); `bringup.sh 32768 256` made the copy and armed it (1024 MiB,
+`kexec_crash_loaded` 1).  Both ports answered 5 of 5 before
+`bringup.sh` and 3 of 3 after `settled.sh apply`; the eight drives
+mounted `noatime,lazytime`; `settled.sh apply` ended in "the settled
+setting".  `skb_tx_defer_max` present and 0, `svc_rtc_balance`
+present (N), `undiverted` in `rtc_stats`.  No kernel warning but
+xeu's usual `rx_ip_align` notes.  Root has 12 GB free.  Runs start at
+`t2-r706`.
+
 ## Where it stands (12 November, afternoon): round 99 and the window settled
 
 Read `FLAMEGRAPH/99-held-split-splice/README.md`.  With the client
