@@ -1,0 +1,53 @@
+04:47:12 t2-r676 ab read | total 64.96 GB/s | ring drops 0 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 34.08 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/25/24/27%
+      read: 34.08 GB/s, 4.1k IOPS, completion 62.51 ms mean, 105.38 ms at the 99th percentile
+    port b enp164s0f0: 30.88 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 22/29/22/27%
+      read: 30.88 GB/s, 3.7k IOPS, completion 69.08 ms mean, 128.45 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 8.5 to 8.5, busiest 94% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.7 to 7.7, busiest 91% busy
+    ring CPUs busy: 0:79 1:18 2:53 3:94 4:46 5:19 6:67 7:21 56:22 57:100 58:50 59:19 60:30 61:13 62:52 63:98 
+    profile 1794717986.005318383 to 1794717994.042039252, load from 1794717961.754 | high_fraction 0
+    svc_rtc_cpus ""; busiest CPUs: 57:100 53:100 46:100 10:100 63:98 33:94 3:94 17:79 
+    nfsd CPUs busy: mean 24%
+    per-CPU high in the load (zone Normal): ring CPUs 0:7540 1:874 2:1176 3:16043 4:874 5:1059 6:874 7:5277 56:1094 57:16043 58:4450 59:6330 60:1906 61:11570 62:1710 63:16043 
+      nfsd CPUs from 874 to 16043
+04:52:30 t2-r677 ab read | total 63.66 GB/s | ring drops 49 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 31.62 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 49, rings 25/26/24/25%
+      read: 31.62 GB/s, 3.8k IOPS, completion 67.45 ms mean, 81.26 ms at the 99th percentile
+    port b enp164s0f0: 32.04 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 24/26/24/25%
+      read: 32.04 GB/s, 3.8k IOPS, completion 66.53 ms mean, 81.26 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 7.8 to 7.9, busiest 89% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 8.0 to 8.0, busiest 91% busy
+    ring CPUs busy: 0:88 1:16 2:73 3:16 4:67 5:14 6:71 7:15 56:69 57:12 58:82 59:19 60:71 61:20 62:79 63:27 
+    profile 1794718304.377819223 to 1794718312.407145942, load from 1794718280.229 | high_fraction 0
+    svc_rtc_cpus "8-55"; busiest CPUs: 53:97 14:96 43:93 0:88 58:82 62:79 2:73 60:71 
+    nfsd CPUs busy: mean 30%
+    per-CPU high in the load (zone Normal): ring CPUs 0:6594 1:1417 2:1074 3:874 4:874 5:1097 6:874 7:1933 56:874 57:1651 58:998 59:874 60:1078 61:5283 62:874 63:1321 
+      nfsd CPUs from 874 to 16043
+04:57:49 t2-r678 ab read | total 63.93 GB/s | ring drops 3 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 32.27 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 27/27/21/25%
+      read: 32.27 GB/s, 3.8k IOPS, completion 66.08 ms mean, 131.60 ms at the 99th percentile
+    port b enp164s0f0: 31.66 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 3, rings 29/22/29/20%
+      read: 31.66 GB/s, 3.8k IOPS, completion 67.36 ms mean, 125.30 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 8.0 to 8.1, busiest 92% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.9 to 7.9, busiest 92% busy
+    ring CPUs busy: 0:82 1:100 2:63 3:21 4:30 5:86 6:38 7:96 56:56 57:94 58:42 59:100 60:62 61:95 62:30 63:24 
+    profile 1794718623.099599606 to 1794718631.126185301, load from 1794718598.695 | high_fraction 0
+    svc_rtc_cpus ""; busiest CPUs: 59:100 1:100 15:97 12:97 7:96 61:95 48:95 57:94 
+    nfsd CPUs busy: mean 20%
+    per-CPU high in the load (zone Normal): ring CPUs 0:5560 1:16043 2:874 3:874 4:1616 5:16043 6:874 7:16043 56:874 57:16043 58:874 59:16043 60:874 61:16043 62:874 63:874 
+      nfsd CPUs from 874 to 16043
+05:03:07 t2-r679 ab read | total 64.00 GB/s | ring drops 18 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 32.46 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 25/25/24/26%
+      read: 32.46 GB/s, 3.9k IOPS, completion 65.66 ms mean, 87.56 ms at the 99th percentile
+    port b enp164s0f0: 31.53 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 18, rings 26/24/22/29%
+      read: 31.53 GB/s, 3.8k IOPS, completion 67.61 ms mean, 89.65 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 8.1 to 8.1, busiest 91% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.9 to 7.9, busiest 91% busy
+    ring CPUs busy: 0:95 1:14 2:69 3:15 4:61 5:17 6:82 7:17 56:64 57:14 58:54 59:18 60:49 61:12 62:80 63:29 
+    profile 1794718941.395535158 to 1794718949.417948802, load from 1794718917.068 | high_fraction 0
+    svc_rtc_cpus "8-55"; busiest CPUs: 48:99 52:98 51:98 44:98 0:95 6:82 62:80 24:76 
+    nfsd CPUs busy: mean 30%
+    per-CPU high in the load (zone Normal): ring CPUs 0:4385 1:874 2:874 3:1317 4:874 5:874 6:874 7:874 56:874 57:874 58:874 59:874 60:1996 61:874 62:874 63:874 
+      nfsd CPUs from 874 to 16043
+05:03:10 after: settled.sh audit rest: the settled setting

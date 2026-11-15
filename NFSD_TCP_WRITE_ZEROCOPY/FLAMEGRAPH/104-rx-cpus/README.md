@@ -461,3 +461,34 @@ Put in place on Mike's word (15 November: "Swap now, mask only"), then
 679:read:::8-55" run645.sh` at `rtc_read=Y` (settled), `PROBE=rtc
 RUNS=680:read run645.sh` at the setting for the placement, and the
 WRITE pass (`write-check.sh 681`).
+
+On the `sunrpc.ko` with `2e2811d21f8c4` (srcversion
+`8722BACFAF3A69EC2A110A6`; swapped 04:41 with no client connected, then
+the settled setting): [run676.out](run676.out), [run680.out](run680.out),
+[wcheck681.out](wcheck681.out), [rtc-place-r680.txt](rtc-place-r680.txt):
+
+| run | `svc_rtc_cpus` | GB/s | a / b | p99 ms | busiest CPUs | transmit CPUs busy |
+|---|---|---|---|---|---|---|
+| `t2-r676` | empty | 64.96 | 34.08 / 30.88 | 105 to 128 | 57, 53, 46, 10 at 100% | 18 to 100% |
+| `t2-r677` | 8-55 | 63.66 | 31.62 / 32.04 | 81 | 53 97%, 14 96%, 43 93% | 12 to 27% |
+| `t2-r678` | empty | 63.93 | 32.27 / 31.66 | 125 to 132 | 59, 1 at 100%, 15, 12 97% | 21 to 100% |
+| `t2-r679` | 8-55 | 64.00 | 32.46 / 31.53 | 88 to 90 | 48 99%, 52, 51, 44 98% | 12 to 29% |
+| `t2-r680` | 8-55, traced | 64.31 | 31.42 / 32.89 | 92 to 93 | 55, 39 100%, 51, 41 99% | 9 to 36% |
+| `t2-r681` | 8-55 | write **78.05, PASS** | | | | |
+
+No drive stepped down and no new kernel warning in any.
+
+- **The mask keeps the work items off the ring CPUs**: the transmit
+  CPUs drop from up to 100% to 9 to 36%, and every connection's work
+  item in r680's trace runs on one of nfsd's CPUs.
+- **The rate does not move**: 63.7 to 64.3 GB/s with it, 63.9 to 65.0
+  without; nor does the spread of the two ports' share.
+- **The p99 comes down**, 81 to 93 ms against 105 to 132 at the empty
+  default, toward the 79 to 80 of `rtc_read=N`.
+- **The collisions are still there.** In r680, 24 connections on 19 of
+  nfsd's CPUs: the five holding two (39, 41, 51, 52, 55) at 98 to 100%,
+  the 14 holding one at 59 to 76%, the other 29 idle. With a connection's
+  work item taking 60 to 78% of a CPU, a pair saturates one, so the next
+  change is placement that takes the eligible CPU holding the fewest
+  connections rather than a hash.
+- **The WRITE pass at the setting: 78.05 GB/s, PASS.**
