@@ -7353,24 +7353,13 @@ static void kfree_skb_napi_cache(struct sk_buff *skb)
 
 DEFINE_STATIC_KEY_FALSE(skb_defer_disable_key);
 
-/**
- * skb_attempt_defer_free - queue skb for remote freeing
- * @skb: buffer
- *
- * Put @skb in a per-cpu list, using the cpu which
- * allocated the skb/pages to reduce false sharing
- * and memory zone spinlock contention.
- */
-void skb_attempt_defer_free(struct sk_buff *skb)
+static void __skb_attempt_defer_free(struct sk_buff *skb,
+				     unsigned int defer_max)
 {
 	struct skb_defer_node *sdn;
 	unsigned long defer_count;
-	unsigned int defer_max;
 	int cpu, my_cpu;
 	bool kick;
-
-	if (static_branch_unlikely(&skb_defer_disable_key))
-		goto nodefer;
 
 	/* zero copy notifications should not be delayed. */
 	if (skb_zcopy(skb))
@@ -7391,7 +7380,6 @@ nodefer:	kfree_skb_napi_cache(skb);
 
 	sdn = per_cpu_ptr(net_hotdata.skb_defer_nodes, cpu) + cpu_to_node(my_cpu);
 
-	defer_max = READ_ONCE(net_hotdata.sysctl_skb_defer_max);
 	defer_count = atomic_long_inc_return(&sdn->defer_count);
 
 	if (defer_count >= defer_max)
@@ -7412,6 +7400,48 @@ nodefer:	kfree_skb_napi_cache(skb);
 	 */
 	if (unlikely(kick))
 		kick_defer_list_purge(cpu);
+}
+
+/**
+ * skb_attempt_defer_free - queue skb for remote freeing
+ * @skb: buffer
+ *
+ * Put @skb in a per-cpu list, using the cpu which
+ * allocated the skb/pages to reduce false sharing
+ * and memory zone spinlock contention.
+ */
+void skb_attempt_defer_free(struct sk_buff *skb)
+{
+	if (static_branch_unlikely(&skb_defer_disable_key)) {
+		kfree_skb_napi_cache(skb);
+		return;
+	}
+	__skb_attempt_defer_free(skb,
+				 READ_ONCE(net_hotdata.sysctl_skb_defer_max));
+}
+
+/**
+ * skb_attempt_defer_free_tx - free a sent skb on the cpu that built it
+ * @skb: buffer the caller holds the last reference to
+ *
+ * A transmitted skb is often freed on the cpu that processed the peer's
+ * acknowledgement, not the one that built it.  Its pages then go back
+ * to a per-cpu page list that does not allocate them again, and each of
+ * them crosses the zone lock twice.  Like skb_attempt_defer_free(), but
+ * for an skb that may still hold head state, and bounded by
+ * net.core.skb_tx_defer_max (0, the default, frees here), so that
+ * deferral of transmitted skbs can be had without that of received ones.
+ */
+void skb_attempt_defer_free_tx(struct sk_buff *skb)
+{
+	unsigned int defer_max = READ_ONCE(net_hotdata.sysctl_skb_tx_defer_max);
+
+	if (!defer_max || skb->alloc_cpu == raw_smp_processor_id()) {
+		__kfree_skb(skb);
+		return;
+	}
+	skb_release_head_state(skb);
+	__skb_attempt_defer_free(skb, defer_max);
 }
 
 static void skb_splice_csum_page(struct sk_buff *skb, struct page *page,

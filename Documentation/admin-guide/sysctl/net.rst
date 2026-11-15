@@ -367,6 +367,19 @@ by the cpu which allocated them.
 
 Default: 128
 
+skb_tx_defer_max
+----------------
+
+Max size (in skbs) of the per-cpu list of transmitted skbs being freed
+by the cpu which allocated them, once the peer has acknowledged them
+(TCP).  Their pages then return to the per-cpu page list of the cpu
+that will allocate the next ones, instead of the one that processed
+the acknowledgement.  The lists are those of skb_defer_max, which this
+does not depend on.  0 frees an acknowledged skb where the
+acknowledgement is processed.
+
+Default: 0
+
 optmem_max
 ----------
 

@@ -50,6 +50,7 @@ struct net_hotdata {
 	int			dev_rx_weight;
 	int			sysctl_max_skb_frags;
 	int			sysctl_skb_defer_max;
+	int			sysctl_skb_tx_defer_max;
 	int			sysctl_mem_pcpu_rsv;
 };
 
