@@ -1456,10 +1456,20 @@ EXPORT_SYMBOL_IF_KUNIT(svc_rtc_should_divert);
  * Return: a CPU of @node & @online & ~@rxcpus chosen by a hash of @key,
  * or @rx_cpu when that set is empty.
  */
-VISIBLE_IF_KUNIT int svc_rtc_pick_cpu(const void *key, int rx_cpu,
-				      const struct cpumask *node,
-				      const struct cpumask *rxcpus,
-				      const struct cpumask *online)
+static bool svc_rtc_cpu_eligible(int cpu, const struct cpumask *rxcpus,
+				 const struct cpumask *online,
+				 const struct cpumask *allowed)
+{
+	return cpumask_test_cpu(cpu, online) && !cpumask_test_cpu(cpu, rxcpus) &&
+	       (!allowed || cpumask_test_cpu(cpu, allowed));
+}
+
+/* svc_rtc_pick_cpu(), within @allowed when it is not NULL. */
+static int __svc_rtc_pick_cpu(const void *key, int rx_cpu,
+			      const struct cpumask *node,
+			      const struct cpumask *rxcpus,
+			      const struct cpumask *online,
+			      const struct cpumask *allowed)
 {
 	unsigned int n = 0, i;
 	int cpu;
@@ -1468,18 +1478,79 @@ VISIBLE_IF_KUNIT int svc_rtc_pick_cpu(const void *key, int rx_cpu,
 	 * less ideal pick, which is re-picked on a later receive, so it is benign.
 	 */
 	for_each_cpu(cpu, node)
-		if (cpumask_test_cpu(cpu, online) && !cpumask_test_cpu(cpu, rxcpus))
+		if (svc_rtc_cpu_eligible(cpu, rxcpus, online, allowed))
 			n++;
 	if (!n)
-		return rx_cpu;
+		return -1;
 	i = hash_ptr(key, 32) % n;
 	for_each_cpu(cpu, node)
-		if (cpumask_test_cpu(cpu, online) && !cpumask_test_cpu(cpu, rxcpus) &&
-		    !i--)
+		if (svc_rtc_cpu_eligible(cpu, rxcpus, online, allowed) && !i--)
 			return cpu;
-	return rx_cpu;
+	return -1;
+}
+
+VISIBLE_IF_KUNIT int svc_rtc_pick_cpu(const void *key, int rx_cpu,
+				      const struct cpumask *node,
+				      const struct cpumask *rxcpus,
+				      const struct cpumask *online)
+{
+	int cpu = __svc_rtc_pick_cpu(key, rx_cpu, node, rxcpus, online, NULL);
+
+	return cpu < 0 ? rx_cpu : cpu;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_pick_cpu);
+
+/*
+ * svc_rtc_cpus: the CPUs a connection's work item may be placed on, for
+ * example the CPUs the service's threads are pinned to, so that the work
+ * items stay off CPUs that run the network's interrupts and softirqs,
+ * receive and transmit alike (the receive CPUs are left out in any case).
+ * Empty, the default, places over every CPU of the receive's node.  A
+ * placement that finds none of these CPUs eligible places as if it were
+ * empty.  A connection already placed outside the set is placed again at
+ * its next receive.  The mask is written without excluding a placement
+ * that reads it: a torn read gives one less ideal pick, which the next
+ * receive corrects.
+ */
+static struct cpumask svc_rtc_cpus_mask;
+static bool svc_rtc_cpus_set __read_mostly;
+
+static int svc_rtc_cpus_param_set(const char *val,
+				  const struct kernel_param *kp)
+{
+	cpumask_var_t mask;
+	int ret;
+
+	if (!zalloc_cpumask_var(&mask, GFP_KERNEL))
+		return -ENOMEM;
+	ret = cpulist_parse(strim((char *)val), mask);
+	if (!ret) {
+		cpumask_copy(&svc_rtc_cpus_mask, mask);
+		WRITE_ONCE(svc_rtc_cpus_set, !cpumask_empty(mask));
+	}
+	free_cpumask_var(mask);
+	return ret;
+}
+
+static int svc_rtc_cpus_param_get(char *buffer, const struct kernel_param *kp)
+{
+	if (!READ_ONCE(svc_rtc_cpus_set))
+		return sysfs_emit(buffer, "\n");
+	return sysfs_emit(buffer, "%*pbl\n", cpumask_pr_args(&svc_rtc_cpus_mask));
+}
+
+static const struct kernel_param_ops svc_rtc_cpus_ops = {
+	.set = svc_rtc_cpus_param_set,
+	.get = svc_rtc_cpus_param_get,
+};
+module_param_cb(svc_rtc_cpus, &svc_rtc_cpus_ops, NULL, 0644);
+MODULE_PARM_DESC(svc_rtc_cpus,
+		 "CPUs (a list) the run-to-completion work items may be placed on (empty: every CPU of the receive's node but those taking receives)");
+
+static const struct cpumask *svc_rtc_allowed(void)
+{
+	return READ_ONCE(svc_rtc_cpus_set) ? &svc_rtc_cpus_mask : NULL;
+}
 
 /**
  * svc_rtc_place - Record a receive CPU and place the connection's work
@@ -1510,6 +1581,7 @@ VISIBLE_IF_KUNIT int svc_rtc_place(struct svc_serv *serv,
 				   struct svc_rtc_conn *conn, int rx_cpu,
 				   bool softirq)
 {
+	const struct cpumask *allowed = svc_rtc_allowed();
 	int cpu = READ_ONCE(conn->cpu);
 
 	if (!softirq)
@@ -1517,11 +1589,19 @@ VISIBLE_IF_KUNIT int svc_rtc_place(struct svc_serv *serv,
 	if (!cpumask_test_cpu(rx_cpu, serv->sv_rtc_rxcpus))
 		cpumask_set_cpu(rx_cpu, serv->sv_rtc_rxcpus);
 	if (cpu >= 0 && cpu_online(cpu) &&
-	    (cpu == rx_cpu || !cpumask_test_cpu(cpu, serv->sv_rtc_rxcpus)))
+	    (cpu == rx_cpu || !cpumask_test_cpu(cpu, serv->sv_rtc_rxcpus)) &&
+	    (!allowed || cpumask_test_cpu(cpu, allowed)))
 		return cpu;
-	cpu = svc_rtc_pick_cpu(conn->xprt, rx_cpu,
-			       cpumask_of_node(cpu_to_node(rx_cpu)),
-			       serv->sv_rtc_rxcpus, cpu_online_mask);
+	cpu = -1;
+	if (allowed)
+		cpu = __svc_rtc_pick_cpu(conn->xprt, rx_cpu,
+					 cpumask_of_node(cpu_to_node(rx_cpu)),
+					 serv->sv_rtc_rxcpus, cpu_online_mask,
+					 allowed);
+	if (cpu < 0)
+		cpu = svc_rtc_pick_cpu(conn->xprt, rx_cpu,
+				       cpumask_of_node(cpu_to_node(rx_cpu)),
+				       serv->sv_rtc_rxcpus, cpu_online_mask);
 	WRITE_ONCE(conn->cpu, cpu);
 	return cpu;
 }
