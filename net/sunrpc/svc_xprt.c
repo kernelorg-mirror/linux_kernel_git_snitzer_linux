@@ -1211,6 +1211,12 @@ static void svc_xprt_enqueue_thread(struct svc_xprt *xprt)
  */
 static DEFINE_MUTEX(svc_rtc_mutex);
 static DEFINE_PER_CPU(struct svc_rtc_stats, svc_rtc_stats);
+/*
+ * Enqueues sent straight to a thread because the connection's last call
+ * peeked was one the hook does not serve (SVC_RTC_THREAD_CALLS).  Kept
+ * out of struct svc_rtc_stats, which nfsd's debugfs sums.
+ */
+static DEFINE_PER_CPU(u64, svc_rtc_undiverted);
 
 #define svc_rtc_stat_inc(field)	this_cpu_inc(svc_rtc_stats.field)
 #define svc_rtc_stat_add(field, n) this_cpu_add(svc_rtc_stats.field, (n))
@@ -1281,6 +1287,14 @@ void svc_rtc_stats_show(struct seq_file *m)
 		   s.async_submitted, s.recv_empty);
 	for (i = 0; i < SVC_RTC_NR_REASONS; i++)
 		seq_printf(m, "fallback_%s %llu\n", reasons[i], s.fallback[i]);
+	{
+		u64 undiverted = 0;
+		int cpu;
+
+		for_each_possible_cpu(cpu)
+			undiverted += READ_ONCE(per_cpu(svc_rtc_undiverted, cpu));
+		seq_printf(m, "undiverted %llu\n", undiverted);
+	}
 }
 EXPORT_SYMBOL_GPL(svc_rtc_stats_show);
 
@@ -1413,6 +1427,16 @@ VISIBLE_IF_KUNIT bool svc_rtc_should_divert(struct svc_xprt *xprt)
 	ops = rcu_dereference(xprt->xpt_server->sv_rtc);
 	want = ops && ops->want(xprt);
 	rcu_read_unlock();
+	/*
+	 * The hook wants some calls, but this connection's last one peeked
+	 * was not among them (an NFSv3 WRITE with only READs served): its
+	 * calls go to a thread with no work-item hop until a thread receives
+	 * one the hook would serve (svc_rtc_note_call()).
+	 */
+	if (want && test_bit(SVC_RTC_THREAD_CALLS, &conn->flags)) {
+		this_cpu_inc(svc_rtc_undiverted);
+		return false;
+	}
 	return want;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_should_divert);
@@ -1576,12 +1600,14 @@ svc_rtc_recv_step(struct svc_xprt *xprt, enum svc_rtc_reason *reason,
 		return SVC_RTC_THREAD;
 	}
 	if (!ops->want_call || !ops->want_call(xprt, prog, vers, proc)) {
+		set_bit(SVC_RTC_THREAD_CALLS, &xprt->xpt_rtc->flags);
 		*reason = SVC_RTC_FB_NOT_FAST;
 		return SVC_RTC_THREAD;
 	}
 	svc_rtc_stat_inc(read_offered);
 	/* Other flavors (GSS: upcalls, sequence windows) stay on threads. */
 	if (flavor != ops->flavor) {
+		set_bit(SVC_RTC_THREAD_CALLS, &xprt->xpt_rtc->flags);
 		*reason = SVC_RTC_FB_AUTH;
 		return SVC_RTC_THREAD;
 	}
@@ -2481,6 +2507,39 @@ static void svc_add_new_temp_xprt(struct svc_serv *serv, struct svc_xprt *newxpt
  * Shared by threads and run-to-completion work items.  Returns the
  * call's length, or <= 0 when there is nothing to process.
  */
+/*
+ * A thread received @rqstp's call on a connection whose calls go to
+ * threads (SVC_RTC_THREAD_CALLS): if the hook would serve this one, as a
+ * READ with only READs served, let the connection's next receive take the
+ * work item again.  The flavor is not checked: a connection that sends
+ * another flavor is marked again by the next peek.
+ */
+static void svc_rtc_note_call(struct svc_rqst *rqstp, struct svc_xprt *xprt)
+{
+	struct svc_rtc_conn *conn = smp_load_acquire(&xprt->xpt_rtc);
+	const struct svc_rtc_ops *ops;
+	const __be32 *p;
+	bool want;
+
+	if (likely(!conn) || !test_bit(SVC_RTC_THREAD_CALLS, &conn->flags) ||
+	    rqstp->rq_deferred || test_bit(RQ_RTC_TRY, &rqstp->rq_flags))
+		return;
+	/* xid, type, rpcvers, prog, vers, proc */
+	if (rqstp->rq_arg.head[0].iov_len < 6 * sizeof(__be32))
+		return;
+	p = rqstp->rq_arg.head[0].iov_base;
+	if (p[1] != rpc_call || be32_to_cpu(p[2]) != RPC_VERSION)
+		return;
+	rcu_read_lock();
+	ops = rcu_dereference(xprt->xpt_server->sv_rtc);
+	want = ops && ops->want_call &&
+	       ops->want_call(xprt, be32_to_cpu(p[3]), be32_to_cpu(p[4]),
+			      be32_to_cpu(p[5]));
+	rcu_read_unlock();
+	if (want)
+		clear_bit(SVC_RTC_THREAD_CALLS, &conn->flags);
+}
+
 static int svc_xprt_recv_call(struct svc_rqst *rqstp, struct svc_xprt *xprt)
 {
 	struct svc_serv *serv = rqstp->rq_server;
@@ -2504,6 +2563,7 @@ static int svc_xprt_recv_call(struct svc_rqst *rqstp, struct svc_xprt *xprt)
 		return len;
 
 	trace_svc_xdr_recvfrom(&rqstp->rq_arg);
+	svc_rtc_note_call(rqstp, xprt);
 
 	clear_bit(XPT_OLD, &xprt->xpt_flags);
 
