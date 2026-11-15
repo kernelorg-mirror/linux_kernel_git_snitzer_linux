@@ -158,5 +158,65 @@ The one-shot entry was used: `/proc/cmdline` has `psi=0` and
 `bringup.sh 32768 256` and after it; kdump armed (1024 MiB,
 `kexec_crash_loaded` 1); the eight drives mounted `noatime,lazytime`;
 `settled.sh apply` ended in "the settled setting".  The default entry
-is plain 531 again, so the next reboot needs nothing undone.  Root has
-2.2 GB free, just above `run601.sh`'s 2 GB floor.
+is plain 531 again, so the next reboot needs nothing undone.  Root had
+2.2 GB free, just above `run601.sh`'s 2 GB floor; before the runs
+perf's build-id cache (`~/.debug`), the dnf cache and builds 519 and
+522 (packages, modules, boot entries, kdump copies) were removed, which
+left 15 GB.
+
+## The runs with PSI off
+
+[run698.out](run698.out), [run703.out](run703.out),
+[run705.out](run705.out), [read65-r700.txt](read65-r700.txt),
+[symdiff-on-off.txt](symdiff-on-off.txt),
+[under-fts.txt](under-fts.txt).  No drive stepped down, no new kernel
+warning, no loan denied; the host at the settled setting after each
+set.
+
+| run | | GB/s | nfsd cycles a WRITE | p99 ms |
+|---|---|---|---|---|
+| `t2-r698` | counted, **set aside** | 73.50 | 144.8k | |
+| `t2-r699` | call graph | 77.98 | | |
+| `t2-r700` | counted | 78.10 | 159.9k | |
+| `t2-r701` | counted | 78.18 | 160.7k | |
+| `t2-r702` | counted | 78.09 | 160.0k | |
+| `t2-r705` | counted | 77.74 | 160.0k | |
+| `t2-r703` | read | 64.53 | | 95 / 97 |
+| `t2-r704` | read | 63.57 | | 81 / 81 |
+
+**`t2-r698` is set aside.**  The removal of builds 519 and 522 (`dnf
+remove`, 17:41:20 to 17:42:09) overlapped its setup: `twoport.sh`'s
+flow capture (`timeout 3 bpftrace`, 17:41:54 to 17:42:04) never
+attached on either port, so the RSS table was not set, the twelve
+connections of each port fell as they hashed (port a's rings 28/43/10/19%,
+port b's 0/42/46/12%), and the overloaded rings dropped 8,764 frames
+over the whole run.  Its cycles a WRITE are lower only because fewer
+WRITEs were in flight.  `t2-r705` was run in its place, with nothing
+else on the host.  Lesson: nothing is done on the host while a run is
+going, cleanup included.
+
+**PSI costs 2.9k nfsd cycles a WRITE (1.8%).**  The four counted runs
+with `psi=0` average **160.2k** (159.9k to 160.7k) against PSI on's
+163.1k (162.0k to 164.0k) on the same kernel, modules and setting;
+the two ranges do not overlap.  Round 61's share predicted 2.3k.  By
+function (`symdiff.py`, the same eight runs) the largest move is
+`finish_task_switch` at 16.7k to 15.1k (-1.6k), where PSI's hook runs
+with interrupts off; the rest is spread thin.  In the call graphs,
+`finish_task_switch` is 15.0k in `t2-r699` against 16.0k in round
+100's `t2-r611` (an older sunrpc, so the counted figure is the one to
+use).  Enqueues a WRITE are the same (5.40 to 5.46 against 5.36 to
+5.43); wakes are a little higher (2.77 to 2.81 against 2.65 to 2.68).
+
+WRITEs hold their rate: 77.74 to 78.18 GB/s, as with PSI on (77.87 to
+78.09).  Reads are unchanged within two runs a side: 64.53 and 63.57
+GB/s against 64.16 and 63.91; their p99s (95/97 and 81/81 ms against
+117/102 and 100/104) are lower, which two runs cannot settle.  The
+read script's `txq-sk.txt` errors are in the PSI-on reads too
+(`PROBE=none` does not make the file); they are the script's, not this
+boot's.
+
+Whether to keep `psi=0` on tardis2 is Mike's, and whether the product
+can go without PSI is Hammerspace's.  The plan's "boot after it" (four
+counted runs on plain 531, to tell a change between boots from PSI's)
+is not needed: the PSI-on baseline was taken on the boot just before,
+on the same kernel and modules.

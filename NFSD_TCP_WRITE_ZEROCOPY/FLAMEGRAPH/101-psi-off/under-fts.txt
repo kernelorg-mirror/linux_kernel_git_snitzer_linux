@@ -1,0 +1,30 @@
+== t2-r611
+t2-r611 under finish_task_switch.isra.0: 16021 cycles a WRITE
+ by called from:
+    16012  99.9%  __schedule
+        7   0.0%  schedule
+        3   0.0%  schedule_idle
+ by direct callee:
+    16012  99.9%  (self)
+        9   0.1%  el1h_64_irq
+ by leaf:
+    16012  99.9%  finish_task_switch.isra.0
+        6   0.0%  handle_softirqs
+        1   0.0%  _raw_spin_unlock_irqrestore
+        1   0.0%  update_sg_lb_stats
+        1   0.0%  _raw_spin_unlock_irq
+== t2-r699
+t2-r699 under finish_task_switch.isra.0: 14986 cycles a WRITE
+ by called from:
+    14978  99.9%  __schedule
+        4   0.0%  schedule
+        4   0.0%  schedule_idle
+ by direct callee:
+    14976  99.9%  (self)
+       10   0.1%  el1h_64_irq
+ by leaf:
+    14976  99.9%  finish_task_switch.isra.0
+        5   0.0%  handle_softirqs
+        2   0.0%  _raw_spin_unlock_irqrestore
+        1   0.0%  update_sg_lb_stats
+        0   0.0%  rcu_report_qs_rdp

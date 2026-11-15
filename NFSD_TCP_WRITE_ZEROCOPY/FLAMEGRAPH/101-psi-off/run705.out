@@ -1,0 +1,3 @@
+18:22:39 t2-r705 C | total 77.74 GB/s | WRITEs 148048 | ring drops 0 | retransmits 202 | no drive stepped down | new kernel warnings 0
+    loans: budget 8198 pages (64 WRITEs), in the run admitted 7414832, denied 0, paused 0, overrun 0
+18:22:42 after: settled.sh audit rest: the settled setting
