@@ -125,3 +125,26 @@ and r612, and the reads r703 and r704 against r696 and r697.  The call
 graph r699 has no partner on this boot: `finish_task_switch` is read
 against round 100's r611, which ran before the new sunrpc.  Both `updates/` modules are kept
 for the boot: it is the same kernel.
+
+## The baseline on this boot, PSI on
+
+[run692.out](run692.out), [run696.out](run696.out),
+[read65-r692.txt](read65-r692.txt).  No drive stepped down, no new
+kernel warning, no loan denied; the host at the settled setting after.
+
+| run | | GB/s | nfsd cycles a WRITE | p99 ms |
+|---|---|---|---|---|
+| `t2-r692` | counted | 77.87 | 162.0k | |
+| `t2-r693` | counted | 78.09 | 164.0k | |
+| `t2-r694` | counted | 78.02 | 163.2k | |
+| `t2-r695` | counted | 78.09 | 163.1k | |
+| `t2-r696` | read | 64.16 | | 117 / 102 |
+| `t2-r697` | read | 63.91 | | 100 / 104 |
+
+The counted runs' mean is **163.1k cycles a WRITE** (round 100's
+162.9k on build 531's own sunrpc), 5.37 enqueues and 2.65 wakes a
+WRITE.  `psi=0` is judged against these.
+
+The one-shot entry `ofp-rocky-531-psi0.conf` is installed as "The
+boot" gives it (`bootctl`: OneShot `ofp-rocky-531-psi0.conf`, Default
+plain 531), kdump armed.  Mike reboots.
