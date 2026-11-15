@@ -324,13 +324,18 @@ static inline bool between(__u32 seq1, __u32 seq2, __u32 seq3)
 	return seq3 - seq2 >= seq1 - seq2;
 }
 
-static inline void tcp_wmem_free_skb(struct sock *sk, struct sk_buff *skb)
+static inline void tcp_wmem_uncharge_skb(struct sock *sk, struct sk_buff *skb)
 {
 	sk_wmem_queued_add(sk, -skb->truesize);
 	if (!skb_zcopy_pure(skb))
 		sk_mem_uncharge(sk, skb->truesize);
 	else
 		sk_mem_uncharge(sk, SKB_TRUESIZE(skb_end_offset(skb)));
+}
+
+static inline void tcp_wmem_free_skb(struct sock *sk, struct sk_buff *skb)
+{
+	tcp_wmem_uncharge_skb(sk, skb);
 	__kfree_skb(skb);
 }
 
@@ -2322,7 +2327,13 @@ static inline void tcp_rtx_queue_unlink_and_free(struct sk_buff *skb, struct soc
 {
 	list_del(&skb->tcp_tsorted_anchor);
 	tcp_rtx_queue_unlink(skb, sk);
-	tcp_wmem_free_skb(sk, skb);
+	tcp_wmem_uncharge_skb(sk, skb);
+	/*
+	 * An acknowledged skb is freed where the ACK was processed; its
+	 * pages are better freed on the cpu that sent them, which will
+	 * allocate the next ones (net.core.skb_tx_defer_max).
+	 */
+	skb_attempt_defer_free_tx(skb);
 }
 
 static inline void tcp_write_collapse_fence(struct sock *sk)
