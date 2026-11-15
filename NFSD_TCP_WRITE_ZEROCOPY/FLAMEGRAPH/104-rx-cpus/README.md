@@ -576,3 +576,28 @@ The plan: `RESTART=1 PROBE=none RUNS="687:read:::::0
 688:read:::::32768 689:read:::::0 690:read:::::32768"`, then
 `PROBE=lock` at 32768 (r691) for the zone lock, then `write-check.sh`
 at 32768 if reads gain.
+
+## Result: RFS piles the work items onto two transmit CPUs; stopped
+
+[run687.out](run687.out).  No drive stepped down, no new kernel
+warning.
+
+| run | RFS | GB/s | p99 ms | work items a CPU (`placed`) |
+|---|---|---|---|---|
+| `t2-r687` | off | 64.16 | 99 to 105 | 20 of nfsd's CPUs, at most three |
+| `t2-r688` | 32768 | **38.27** | 148 | **13 on CPU 3, 7 on CPU 63**, one each on 13, 35, 42, 46 |
+| `t2-r689` | off | 64.11 | 81 (a) | (stopped before its snapshot was summed) |
+
+Under RFS nfsd's CPUs take softirq receives, so `svc_rtc_place()`
+marked them one by one as receive CPUs; with all of 8-55 marked no
+CPU of `svc_rtc_cpus` was eligible and placement fell back to the
+node's unmarked CPUs, the transmit rings' (which take no receives).
+So r688 measures that pile-up, not whether frees on the allocating
+CPU take the zone lock out.
+
+Mike, 15 November: "ok, dead end.. stop this testing at next stop".
+The batch was stopped during `t2-r689` (off): its loop killed,
+twoport.sh left to finish its run, then nfs-server restarted and
+`settled.sh apply` (RFS off).  r690 (on) and r691 (the lock probe) did
+not run, and no WRITE pass was run: RFS is not kept.  `EXP_RFS` stays
+in `settled.sh` for a run.
