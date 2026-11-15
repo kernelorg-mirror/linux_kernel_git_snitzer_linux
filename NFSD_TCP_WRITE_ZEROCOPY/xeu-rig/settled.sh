@@ -347,7 +347,17 @@ declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
 # about 55k nfsd cycles a loaned WRITE on build 512 (t2-r180 against t2-r181,
 # t2-r179 against t2-r186).  rtc_read defaults to Y and rtc_write to N, and
 # both go back to that when nfsd is reloaded.
+# rtc_read Y on tardis2 since 15 November (Mike, FLAMEGRAPH round 104):
+# with "SUNRPC: Send calls the rtc hook does not serve straight to a
+# thread" (278b74ad8a0d9) WRITEs no longer take the work item, and two-port
+# reads went from 60.5 to 60.6 GB/s to 63.7 to 63.9 with the WRITE pass at
+# 78.11 (t2-r669 to r673).  A sunrpc without that commit sends every WRITE
+# through the work item (77.95 and 77.89 in the pass, t2-r662 and r663), so
+# with rtc_read Y the audit holds sunrpc to having it: its rtc_stats count
+# "undiverted".  Elsewhere both stay N.
 declare -A NFSD_DBG_OPT=([rtc_read]=N [rtc_write]=N)
+[ $HOST = tardis2 ] && NFSD_DBG_OPT[rtc_read]=Y
+RTC_READ_SETTLED=${NFSD_DBG_OPT[rtc_read]}
 # EXP_RTC_READ holds a run (and apply) to another rtc_read (FLAMEGRAPH round
 # 104's A/B on reads), and the audit then says the setting is off.
 [ -n "${EXP_RTC_READ:-}" ] && NFSD_DBG_OPT[rtc_read]=$EXP_RTC_READ
@@ -528,7 +538,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "${ENTRIES[a]}" = "${SETTLED[entries_a]}" ] || OFF="$OFF rings_a=${ENTRIES[a]}"
 	[ "${ENTRIES[b]}" = "${SETTLED[entries_b]}" ] || OFF="$OFF rings_b=${ENTRIES[b]}"
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
-	[ -n "${EXP_RTC_READ:-}" ] && [ "$EXP_RTC_READ" != N ] && OFF="$OFF rtc_read=$EXP_RTC_READ"
+	[ -n "${EXP_RTC_READ:-}" ] && [ "$EXP_RTC_READ" != "$RTC_READ_SETTLED" ] && OFF="$OFF rtc_read=$EXP_RTC_READ"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
 	[ "${EXP_NOTRACK:-}" = absent ] && OFF="$OFF zc_notrack=absent"
 	[ "${EXP_NETAVARK:-}" = present ] && OFF="$OFF netavark=present"
@@ -564,6 +574,13 @@ audit_nfsd() {
 	for k in "${!NFSD_DBG_OPT[@]}"; do
 		if [ -e /sys/kernel/debug/nfsd/$k ]; then
 			want "nfsd $k" "$(cat /sys/kernel/debug/nfsd/$k)" "${NFSD_DBG_OPT[$k]}"
+			if [ $k = rtc_read ] && [ "${NFSD_DBG_OPT[$k]}" = Y ]; then
+				if grep -q '^undiverted ' /sys/kernel/debug/nfsd/rtc_stats 2>/dev/null; then
+					ok "sunrpc sends WRITEs past rtc" "undiverted in rtc_stats"
+				else
+					bad "sunrpc sends WRITEs past rtc" "no undiverted in rtc_stats" "a sunrpc with 278b74ad8a0d9"
+				fi
+			fi
 		else
 			printf '  --   %-34s %s\n' "nfsd $k" "not in this kernel"
 		fi

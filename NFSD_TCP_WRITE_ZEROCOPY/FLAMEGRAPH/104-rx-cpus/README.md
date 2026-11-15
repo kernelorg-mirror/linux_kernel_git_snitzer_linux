@@ -398,3 +398,10 @@ settled setting with the new `sunrpc.ko` in `updates/` (going back is
 `SUNRPC_KO=none swap-sunrpc.sh`). Settling `rtc_read=Y`, which needs
 this `sunrpc.ko` (or a kernel with `278b74ad8a0d9`), is Mike's to
 decide.
+
+**Settled (Mike, 15 November): "make rtc_read=Y the settled setting".**
+`settled.sh` holds `rtc_read` at Y on tardis2 (N elsewhere) and, with
+it Y, audits that sunrpc sends WRITEs past the work item (`undiverted`
+in `rtc_stats`), so a sunrpc without `278b74ad8a0d9` audits BAD.
+`settled.sh apply` at rest: the settled setting. Its WRITE pass is
+`t2-r673`, 78.11 GB/s.

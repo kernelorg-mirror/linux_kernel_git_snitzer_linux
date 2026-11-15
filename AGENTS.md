@@ -423,7 +423,10 @@ what it is, and rename it once read.
 install and the checks after the boot are in
 `NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/101-psi-off/README.md`.  Nothing is
 installed yet.  Until then tardis2 stays on build 531 with the DRC
-commits' `nfsd.ko` in `updates/` (round 100).
+commits' `nfsd.ko` in `updates/` (round 100) and, since 15 November, a
+`sunrpc.ko` with `278b74ad8a0d9` beside it (round 104): `settled.sh`
+holds nfsd's `rtc_read` at Y on tardis2 and audits that sunrpc for it,
+so a kernel without that commit audits BAD.
 
 **The held mark's A/B ran on the held-mark kernel's sixth boot (7
 November, `t2-r198..r201`) and Mike kept the mark (`bb7fd3100c3b`):
