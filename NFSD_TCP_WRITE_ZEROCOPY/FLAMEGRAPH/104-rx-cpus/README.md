@@ -418,3 +418,35 @@ RUNS=675:read run645.sh` at the settled setting: 3 s of bpftrace on
 `svc_rtc_work()` (runs and time by CPU, each connection's chosen CPU)
 and `svc_rtc_place()` (each placement's receive CPU, softirq or not, and
 the CPU chosen), then 5 s of every CPU sampled by task and symbol.
+
+[run675.out](run675.out), [rtc-place-r675.txt](rtc-place-r675.txt):
+64.40 GB/s, ring drops 0, no drive stepped down, no new kernel
+warning. In 3 s of the load the work items ran on 19 CPUs, each pass on
+its connection's chosen CPU (`conn->cpu` was the running CPU in every
+sample):
+
+| connections placed on the CPU | CPUs | busy |
+|---|---|---|
+| 1 | 11, 14, 21, 29, 38, 41, 52, 54 (nfsd's); 7, 57 (transmit) | 70 to 78% (7: 97%, 57: 98%) |
+| 2 | 12, 17, 55 (nfsd's) | 96 to 98% |
+| 3 | 19 (nfsd's), 5 (transmit) | 98 to 100% |
+
+The other 29 of nfsd's 48 CPUs were 0 to 2% busy. Two things crowd the
+work items:
+
+- **The transmit CPUs are placed on.** `svc_rtc_pick_cpu()` leaves out
+  only CPUs that have taken a receive in the softirq (here the eight
+  receive CPUs, the only softirq placements counted), so the transmit
+  CPUs, which take each queue's completions, are candidates like any
+  other: CPUs 5, 7 and 57 got five of the 24 connections and ran at 97 to
+  100%.
+- **The hash collides.** Each connection is hashed to one of 56 CPUs on
+  its own, so 24 connections land on 19 CPUs, and one connection's work
+  item alone takes 70 to 78% of a CPU: two or three on one CPU saturate
+  it.
+
+Mike: "use nfsd's CPUs for the work items". `SUNRPC: Let the rtc work
+items be confined to a set of CPUs` adds `sunrpc.svc_rtc_cpus`, the
+CPUs a connection's work item may be placed on (empty: as before);
+`settled.sh` is to hold it at nfsd's 8-55. That answers the first; the
+second needs placement that counts what each CPU already holds.
