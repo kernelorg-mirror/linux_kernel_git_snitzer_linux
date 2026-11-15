@@ -1,0 +1,12 @@
+@ns_total[rmqueue_bulk, ring]: 3046023
+@ns_total[free_pcppages_bulk, ring]: 81518410
+@ns_total[rmqueue_bulk, nfsd]: 515137561
+@ns_total[free_pcppages_bulk, nfsd]: 3240593890836
+@pages[rmqueue_bulk, ring]: 1799
+@pages[free_pcppages_bulk, nfsd]: 112425
+@pages[free_pcppages_bulk, ring]: 142665
+@pages[rmqueue_bulk, nfsd]: 917752
+@us[rmqueue_bulk, nfsd]: { .count = 53657, .average = 8, .total = 471599 }
+@us[free_pcppages_bulk, ring]: { .count = 6514, .average = 11, .total = 74938 }
+@us[rmqueue_bulk, ring]: { .count = 120, .average = 23, .total = 2874 }
+@us[free_pcppages_bulk, nfsd]: { .count = 4506, .average = 719172, .total = 3240590217 }

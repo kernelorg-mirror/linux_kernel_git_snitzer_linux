@@ -636,3 +636,43 @@ each (`RUNS="n:read:::::::0 n+1:read:::::::128 ..."`), then
 r650's, then the WRITE pass at 128 (the change frees WRITE replies'
 skbs on nfsd's CPUs too).  128 is kept only if reads gain and the pass
 holds 78.
+
+## Build 534: `skb_tx_defer_max` 0 against 128 (15 November)
+
+On build 534 (the gitlab build of the tip, with `ddb07c31c1b39` and
+`7bd353fb130ef`), at the settled setting (`rtc_read` Y,
+`svc_rtc_cpus` 8-55).  At 0 the kernel is at build 531's rates: the
+WRITE pass `t2-r707` 78.06 GB/s (`r706` 77.89, RERUN), reads `r708`
+63.48 and `r709` 64.20 against 531's `r696` 64.16 and `r697` 63.91.
+Then reads in turns ([run710.out](run710.out)), and `PROBE=lock` at
+128 ([run714.out](run714.out)):
+
+| run | `skb_tx_defer_max` | GB/s | ring CPUs busy (busiest) | CPUs 8-55 busy, mean | drives, busiest |
+|---|---|---|---|---|---|
+| `t2-r710` | 0 | 64.11 | 73 to 81% | 29% | 93% |
+| `t2-r711` | 128 | 60.52 | 5 to 36% | 43% | 82% |
+| `t2-r712` | 0 | 63.46 (47 ring drops) | 82 to 92% | 30% | 93% |
+| `t2-r713` | 128 | 60.33 | 5 to 38% | 40% | 81% |
+| `t2-r714` | 128, lock probe | 60.34 | 4 to 37% | 41% | 82% |
+
+**128 does what it was written to do and loses 3.4 GB/s of reads.**
+The zone lock is no longer contended
+([lock-contention-r714.txt](lock-contention-r714.txt)): `rmqueue_bulk`
+3,652 contended, 27 ms of waiting in 4 s, and `free_pcppages_bulk` 579,
+5 ms, against r650's 614,000 a side and 26 and 22 s.  In 3 s
+([zone-bulk-r714.txt](zone-bulk-r714.txt)) the ring CPUs gave the zone
+143k pages (r650: 9.6 million) and nfsd's took 918k (8.7 million): the
+pages now come back to the per-CPU lists of the CPUs that send, as
+meant.  But the freeing went with them, to CPUs 8-55 (their mean busy
+from 29 to 41%), and the drives are asked for less (busiest 93 to 81%),
+so the limit is now ahead of the drives, on the sending side.  Not yet
+shown: why.  The probe at 128 has long waits on `__svc_tcp_send`'s
+transport mutex (8,639 contended, 2.77 min of waiting in 4 s,
+`svc_rtc_drain_sends` 10.5 s more), but r650 is not its comparison
+(build 531, `rtc_read` N); the guess, that the deferred frees' softirq
+runs on a sending CPU while its send holds the mutex, is untested.
+
+Not kept: `settled.sh` stays at 0.  The WRITE pass at 128 was not run,
+128 having failed on reads.  To find the cause: the same lock probe at
+0 on build 534, and a profile of CPUs 8-55 at 0 and 128 (Mike's to
+ask for).
