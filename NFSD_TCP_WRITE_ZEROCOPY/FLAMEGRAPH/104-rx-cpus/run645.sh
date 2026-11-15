@@ -13,7 +13,10 @@ snap() {	# snap <dir> <tag>
 	cat /proc/softirqs > $1/softirqs.$2; cat /proc/zoneinfo > $1/zoneinfo.$2; cat /sys/kernel/debug/nfsd/rtc_stats > $1/rtc_stats.$2 2>/dev/null; date +%s.%N > $1/time.$2
 }
 for run in ${RUNS:-647:read}; do
-	IFS=: read n rw hf rtc rc <<< "$run"
+	IFS=: read n rw hf rtc rc rb <<< "$run"
+	# <rb>: sunrpc's svc_rtc_balance for the run (t2-r682 on), through
+	# settled.sh's EXP_RTC_BALANCE.
+	if [ -n "$rb" ]; then export EXP_RTC_BALANCE=$rb; else unset EXP_RTC_BALANCE; fi
 	# <rc>: sunrpc's svc_rtc_cpus for the run (t2-r676 on), "none" for the
 	# empty default, through settled.sh's EXP_RTC_CPUS.
 	if [ -n "$rc" ]; then export EXP_RTC_CPUS=$rc; else unset EXP_RTC_CPUS; fi
@@ -95,5 +98,5 @@ for run in ${RUNS:-647:read}; do
 	[ "$hung" = 0 ] || { say "the kernel warned; stopping"; diff $O/dmesg.0 $O/dmesg.1 | head -20; exit 1; }
 done
 sysctl -q -w vm.percpu_pagelist_high_fraction=0
-unset EXP_RTC_READ EXP_RTC_CPUS
+unset EXP_RTC_READ EXP_RTC_CPUS EXP_RTC_BALANCE
 ./settled.sh apply > $L/t2-r$n/apply-after.txt 2>&1; say "after: $(tail -1 $L/t2-r$n/apply-after.txt)"

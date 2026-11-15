@@ -492,3 +492,29 @@ No drive stepped down and no new kernel warning in any.
   change is placement that takes the eligible CPU holding the fewest
   connections rather than a hash.
 - **The WRITE pass at the setting: 78.05 GB/s, PASS.**
+
+## Least-loaded placement (`svc_rtc_balance`, `fe25e474fa3de`)
+
+Mike, 15 November: "write the least-loaded placement".  `t2-r680`
+showed the hash leaving five of nfsd's CPUs with two connections each
+(98 to 100% busy) and 29 with none.
+
+"SUNRPC: Optionally place each rtc work item on the least-loaded CPU"
+keeps a per-CPU count of the connections whose work item is placed
+there (raised and lowered as `svc_rtc_place()` moves a connection,
+lowered when its transport is freed) and, with `sunrpc.svc_rtc_balance`
+Y, places a connection on the eligible CPU holding the fewest, the scan
+starting at the connection's hash so that ties spread.  `svc_rtc_cpus`
+still bounds it.  A connection keeps its CPU once placed, as before;
+two placements that race may still pick one CPU.  The default stays
+the hash.  The counts are on a new `placed` line of `rtc_stats`.
+
+Built for build 531 as `$L/sunrpc-rtcbal-531/` (srcversion
+`B1AE4F3F0262A3E5AD387FA`).  Not loaded: the swap is Mike's to allow.
+`settled.sh` holds `svc_rtc_balance` at N (`EXP_RTC_BALANCE` for a
+run), and `run645.sh` gains a sixth field, `rb`.
+
+The plan, after the swap: reads at `svc_rtc_cpus` 8-55 with balance N
+then Y, twice each (`RUNS="682:read::::N 683:read::::Y 684:read::::N
+685:read::::Y"`), then `PROBE=rtc` at Y to see the placement, and the
+WRITE pass at Y.  Y is kept only if reads gain and the pass holds 78.
