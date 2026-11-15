@@ -243,3 +243,33 @@ run645.sh`, recording `rtc_stats` either side of the window (how many
 READs were offered and run to completion, and why the rest fell back),
 then the WRITE pass at Y (`EXP_RTC_READ=Y write-check.sh 662`), and
 `settled.sh apply` back to N at the end.
+
+[run658.out](run658.out), [wcheck662.out](wcheck662.out):
+
+| run | `rtc_read` | GB/s | a / b | p99 ms | ring drops | receive CPUs busy | transmit CPUs busy | nfsd CPUs busy |
+|---|---|---|---|---|---|---|---|---|
+| `t2-r658` | N | 60.61 | 30.20 / 30.41 | 79 to 80 | 214 | 78 to 93% | 10 to 24% | 80% |
+| `t2-r659` | **Y** | **63.41** | 31.66 / 31.75 | 87 to 95 | 0 | 31 to 78% | 14 to 97% | 24% |
+| `t2-r660` | N | 60.38 | 30.12 / 30.26 | 78 to 79 | 329 | 86 to 94% | 10 to 19% | 77% |
+| `t2-r661` | **Y** | **63.16** | 30.15 / 33.00 | 115 to 124 | 19 | 34 to 79% | 15 to 100% | 23% |
+| `t2-r662` | Y | write 77.95 | 39.01 / 38.94 | | 0 | | | 25% |
+
+No drive stepped down and no new kernel warning in any.
+
+- **Reads rise 2.8 GB/s, 4.6%: 63.2 to 63.4 against 60.4 to 60.6.**
+  Every READ in the window ran to completion (`read_offered` 485,277
+  and 483,562, `fast_completed` as many, 6 and 12 `budget_exhausted`,
+  no fallback counted), and nfsd's CPUs went from 77 to 80% busy to 23
+  to 24%: the READs' work left nfsd's threads.
+- **It moved to the transmit CPUs, not the receive ones**, and
+  unevenly: four of the eight at 87 to 100% in each Y run (r659: 3,
+  57, 59, 61; r661: 1, 5, 59, 61), the others at 14 to 29%, while the
+  receive CPUs dropped to 31 to 79%. Those four are the ones whose
+  per-CPU page lists were at the full 16,043 in the load, the
+  allocating side, so the work items run where the reply's sends
+  complete, not where its call was received; why, and why four, was
+  not looked into. With four CPUs at 100% the next ceiling is there,
+  and the uneven spread is likely why the p99 went up (87 to 124 ms
+  against 78 to 80) and port b outran a in r661.
+- **The WRITE pass at Y: 77.95 GB/s, RERUN** (nfsd 25% busy, as at
+  N). Run again as `t2-r663`.

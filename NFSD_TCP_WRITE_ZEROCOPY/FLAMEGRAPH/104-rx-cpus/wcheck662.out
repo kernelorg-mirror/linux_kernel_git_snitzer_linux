@@ -1,0 +1,8 @@
+03:09:10 t2-r662 write check: RERUN | total 77.95 GB/s | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 39.01 GB/s (fio, after the warm-up); in the 10 s window: wire 39.28 GB/s, FIFO drops 0, ring drops 0, rings 24/25/26/25%
+      write: 39.01 GB/s, 4.6k IOPS, completion 54.22 ms mean, 81.26 ms at the 99th percentile
+    port b enp164s0f0: 38.94 GB/s (fio, after the warm-up); in the 10 s window: wire 39.38 GB/s, FIFO drops 0, ring drops 0, rings 25/24/25/25%
+      write: 38.94 GB/s, 4.6k IOPS, completion 54.31 ms mean, 81.26 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 9.7 to 9.7 GB/s, busiest 97% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 9.7 to 9.8 GB/s, busiest 98% busy
+03:09:14 after: settled.sh audit rest: as the run asks, which is off the settled setting in: rtc_read=Y
