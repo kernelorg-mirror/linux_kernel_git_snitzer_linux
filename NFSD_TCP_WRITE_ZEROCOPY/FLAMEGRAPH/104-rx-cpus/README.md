@@ -450,3 +450,14 @@ items be confined to a set of CPUs` adds `sunrpc.svc_rtc_cpus`, the
 CPUs a connection's work item may be placed on (empty: as before);
 `settled.sh` is to hold it at nfsd's 8-55. That answers the first; the
 second needs placement that counts what each CPU already holds.
+
+Built against build 531 (`$L/sunrpc-rtccpus-531/`, with
+`278b74ad8a0d9` under it; every export's version as the installed
+module's). `settled.sh` holds `svc_rtc_cpus` at nfsd's CPUs (8-55) on
+tardis2 and audits a sunrpc without it BAD; `EXP_RTC_CPUS` (and the
+runner's fifth field, `none` for empty) holds a run to another list.
+Put in place on Mike's word (15 November: "Swap now, mask only"), then
+`PROBE=none RUNS="676:read:::none 677:read:::8-55 678:read:::none
+679:read:::8-55" run645.sh` at `rtc_read=Y` (settled), `PROBE=rtc
+RUNS=680:read run645.sh` at the setting for the placement, and the
+WRITE pass (`write-check.sh 681`).

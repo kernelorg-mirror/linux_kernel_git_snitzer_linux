@@ -358,6 +358,17 @@ declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
 declare -A NFSD_DBG_OPT=([rtc_read]=N [rtc_write]=N)
 [ $HOST = tardis2 ] && NFSD_DBG_OPT[rtc_read]=Y
 RTC_READ_SETTLED=${NFSD_DBG_OPT[rtc_read]}
+# sunrpc's svc_rtc_cpus, the CPUs the rtc work items may be placed on
+# ("SUNRPC: Let the rtc work items be confined to a set of CPUs",
+# 2e2811d21f8c4): nfsd's CPUs on tardis2 since 15 November (Mike: "use
+# nfsd's CPUs for the work items"; FLAMEGRAPH round 104's t2-r675 found five
+# of 24 connections' work items on transmit CPUs, at 97 to 100%).  On
+# tardis2 a sunrpc without it audits BAD; elsewhere it is not held.
+# EXP_RTC_CPUS holds a run to another list, "none" to the empty default.
+RTC_CPUS=
+[ $HOST = tardis2 ] && RTC_CPUS=$NFSD_CPUSET
+RTC_CPUS_SETTLED=$RTC_CPUS
+[ -n "${EXP_RTC_CPUS:-}" ] && { [ "$EXP_RTC_CPUS" = none ] && RTC_CPUS= || RTC_CPUS=$EXP_RTC_CPUS; }
 # EXP_RTC_READ holds a run (and apply) to another rtc_read (FLAMEGRAPH round
 # 104's A/B on reads), and the audit then says the setting is off.
 [ -n "${EXP_RTC_READ:-}" ] && NFSD_DBG_OPT[rtc_read]=$EXP_RTC_READ
@@ -539,6 +550,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "${ENTRIES[b]}" = "${SETTLED[entries_b]}" ] || OFF="$OFF rings_b=${ENTRIES[b]}"
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
 	[ -n "${EXP_RTC_READ:-}" ] && [ "$EXP_RTC_READ" != "$RTC_READ_SETTLED" ] && OFF="$OFF rtc_read=$EXP_RTC_READ"
+	[ "$RTC_CPUS" != "$RTC_CPUS_SETTLED" ] && OFF="$OFF svc_rtc_cpus=${RTC_CPUS:-none}"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
 	[ "${EXP_NOTRACK:-}" = absent ] && OFF="$OFF zc_notrack=absent"
 	[ "${EXP_NETAVARK:-}" = present ] && OFF="$OFF netavark=present"
@@ -571,6 +583,11 @@ audit_nfsd() {
 	local k; for k in "${!NFSD_DBG[@]}"; do
 		want "nfsd $k" "$(cat /sys/kernel/debug/nfsd/$k 2>/dev/null)" "${NFSD_DBG[$k]}"
 	done
+	if [ -e $SUNRPC/svc_rtc_cpus ]; then
+		want "sunrpc svc_rtc_cpus" "$(cat $SUNRPC/svc_rtc_cpus)" "$RTC_CPUS"
+	elif [ -n "$RTC_CPUS_SETTLED" ]; then
+		bad "sunrpc svc_rtc_cpus" "not in this sunrpc" "a sunrpc with 2e2811d21f8c4"
+	fi
 	for k in "${!NFSD_DBG_OPT[@]}"; do
 		if [ -e /sys/kernel/debug/nfsd/$k ]; then
 			want "nfsd $k" "$(cat /sys/kernel/debug/nfsd/$k)" "${NFSD_DBG_OPT[$k]}"
@@ -909,6 +926,7 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 		for k in "${!NFSD_DBG[@]}"; do
 			[ "$(cat /sys/kernel/debug/nfsd/$k 2>/dev/null)" = "${NFSD_DBG[$k]}" ] || echo "${NFSD_DBG[$k]}" > /sys/kernel/debug/nfsd/$k
 		done
+		[ -w $SUNRPC/svc_rtc_cpus ] && [ "$(cat $SUNRPC/svc_rtc_cpus)" != "$RTC_CPUS" ] && echo "${RTC_CPUS:-}" > $SUNRPC/svc_rtc_cpus
 		for k in "${!NFSD_DBG_OPT[@]}"; do
 			[ -e /sys/kernel/debug/nfsd/$k ] || continue
 			[ "$(cat /sys/kernel/debug/nfsd/$k)" = "${NFSD_DBG_OPT[$k]}" ] || echo "${NFSD_DBG_OPT[$k]}" > /sys/kernel/debug/nfsd/$k
