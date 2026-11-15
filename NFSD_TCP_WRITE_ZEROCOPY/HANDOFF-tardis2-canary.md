@@ -47,6 +47,9 @@ image, so they need the second boot.
 
 ### Boot 1: build 531 with `psi=0` (round 101)
 
+**Done 15 November** (`FLAMEGRAPH/101-psi-off/README.md`): PSI costs
+2.9k nfsd cycles a WRITE (1.8%) and no rate; Mike keeps PSI on.
+
 The one-shot entry `ofp-rocky-531-psi0.conf` (`FLAMEGRAPH/101-psi-off/README.md`,
 "The boot"); the default stays plain 531, so the boot after it needs
 nothing undone.  Both `updates/` modules load again (same kernel).

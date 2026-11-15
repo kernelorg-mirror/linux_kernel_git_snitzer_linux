@@ -220,3 +220,9 @@ can go without PSI is Hammerspace's.  The plan's "boot after it" (four
 counted runs on plain 531, to tell a change between boots from PSI's)
 is not needed: the PSI-on baseline was taken on the boot just before,
 on the same kernel and modules.
+
+## Decided (Mike, 15 November): PSI stays on
+
+"psi is clearly a non-factor, leave it enabled".  tardis2 keeps PSI:
+the default entry is plain 531, without `psi=0`, and the one-shot
+entry `ofp-rocky-531-psi0.conf` is used up.  Round 101 is closed.
