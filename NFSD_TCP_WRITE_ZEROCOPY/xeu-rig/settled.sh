@@ -348,6 +348,9 @@ declare -A NFSD_DBG=([io_cache_read]=2 [io_cache_write]=2)
 # t2-r179 against t2-r186).  rtc_read defaults to Y and rtc_write to N, and
 # both go back to that when nfsd is reloaded.
 declare -A NFSD_DBG_OPT=([rtc_read]=N [rtc_write]=N)
+# EXP_RTC_READ holds a run (and apply) to another rtc_read (FLAMEGRAPH round
+# 104's A/B on reads), and the audit then says the setting is off.
+[ -n "${EXP_RTC_READ:-}" ] && NFSD_DBG_OPT[rtc_read]=$EXP_RTC_READ
 # The server's network sysctls, as every figure here was measured with them.
 # netdev_max_backlog and netdev_budget come from Hammerspace's tuned profile
 # hs-e1; the 16384 at the bottom of tcp_wmem and tcp_rmem is the kernel's
@@ -525,6 +528,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "${ENTRIES[a]}" = "${SETTLED[entries_a]}" ] || OFF="$OFF rings_a=${ENTRIES[a]}"
 	[ "${ENTRIES[b]}" = "${SETTLED[entries_b]}" ] || OFF="$OFF rings_b=${ENTRIES[b]}"
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
+	[ -n "${EXP_RTC_READ:-}" ] && [ "$EXP_RTC_READ" != N ] && OFF="$OFF rtc_read=$EXP_RTC_READ"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
 	[ "${EXP_NOTRACK:-}" = absent ] && OFF="$OFF zc_notrack=absent"
 	[ "${EXP_NETAVARK:-}" = present ] && OFF="$OFF netavark=present"

@@ -223,3 +223,23 @@ No drive stepped down, no new kernel warning; ring drops 41 and 303.
   at 874 but for CPU 0 (7,994) and 60 (3,585) at rest, about as
   before the A/B (r651's CPU 60 was 999 to 1,188). The runs after this
   start from that.
+
+## The A/B of nfsd's `rtc_read` on reads
+
+The run-to-completion READ fast path (`2372a16b60b3c`) serves an
+NFSv3 READ on a work item on the CPU of the connection's latest
+receive, a receive ring's CPU, with an rqst from a preallocated pool.
+Its pages would then be allocated and freed on the same CPU, where its
+per-CPU list could reuse them, instead of crossing the zone lock; but
+it also moves nfsd's READ work onto the receive CPUs, already 71 to
+94% busy. It was measured only on WRITEs (build 512: the hop of every
+receive to a work item cost about 55k nfsd cycles a loaned WRITE), and
+`settled.sh` holds `rtc_read` at N. `settled.sh` now takes
+`EXP_RTC_READ`, which holds apply and the audit to another value and
+marks the run off the setting.
+
+`PROBE=none RUNS="658:read::N 659:read::Y 660:read::N 661:read::Y"
+run645.sh`, recording `rtc_stats` either side of the window (how many
+READs were offered and run to completion, and why the rest fell back),
+then the WRITE pass at Y (`EXP_RTC_READ=Y write-check.sh 662`), and
+`settled.sh apply` back to N at the end.

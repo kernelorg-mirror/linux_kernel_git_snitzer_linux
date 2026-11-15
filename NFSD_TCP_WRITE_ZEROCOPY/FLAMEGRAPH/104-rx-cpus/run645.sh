@@ -10,10 +10,13 @@ say() { echo "$(date +%T) $*"; }
 [ "$(cat /sys/kernel/kexec_crash_loaded)" = 1 ] || { say "kdump not armed"; exit 1; }
 snap() {	# snap <dir> <tag>
 	for d in enp161s0f0 enp164s0f0; do ethtool -S $d > $1/ethtool-$d.$2; done
-	cat /proc/softirqs > $1/softirqs.$2; cat /proc/zoneinfo > $1/zoneinfo.$2; date +%s.%N > $1/time.$2
+	cat /proc/softirqs > $1/softirqs.$2; cat /proc/zoneinfo > $1/zoneinfo.$2; cat /sys/kernel/debug/nfsd/rtc_stats > $1/rtc_stats.$2 2>/dev/null; date +%s.%N > $1/time.$2
 }
 for run in ${RUNS:-647:read}; do
-	IFS=: read n rw hf <<< "$run"
+	IFS=: read n rw hf rtc <<< "$run"
+	# <rtc>: nfsd's rtc_read for the run (t2-r658 on; settled.sh holds N),
+	# through settled.sh's EXP_RTC_READ to apply and to twoport.sh's audit.
+	if [ -n "$rtc" ]; then export EXP_RTC_READ=$rtc; else unset EXP_RTC_READ; fi
 	# <hf>: vm.percpu_pagelist_high_fraction for the run (t2-r651 on), put
 	# back to 0 after the last.
 	[ -n "$hf" ] && { sysctl -q -w vm.percpu_pagelist_high_fraction=$hf || exit 1; }
@@ -64,6 +67,8 @@ for run in ${RUNS:-647:read}; do
 	grep -E '^  (read|write):|^port |drives of' $O/run.log | sed 's/^/    /'
 	echo "    ring CPUs busy: $(awk '$2 ~ /^[0-9]+$/ && ($2 < 8 || $2 > 55) {u[$2] += 100 - $NF; c[$2]++} END {for (k in u) printf "%s:%.0f ", k, u[k]/c[k]}' $O/run/srv-mpstat.txt)"
 	echo "    $(cat $O/when.txt) | high_fraction $(cat /proc/sys/vm/percpu_pagelist_high_fraction)"
+	[ -n "$rtc" ] && echo "    rtc_read $(cat /sys/kernel/debug/nfsd/rtc_read 2>/dev/null) in the run; rtc_stats in the window: $(join -j1 <(sort $O/rtc_stats.0) <(sort $O/rtc_stats.1) | awk '$3 != $2 {printf "%s %d, ", $1, $3 - $2}')"
+	echo "    nfsd CPUs busy: mean $(awk '$2 ~ /^[0-9]+$/ && $2 >= 8 && $2 <= 55 {u += 100 - $NF; c++} END {printf "%.0f%%", u / c}' $O/run/srv-mpstat.txt)"
 	echo "    per-CPU high in the load (zone Normal): ring CPUs $(awk '/^Node 0, zone   Normal/ {z=1} z && /^Node 0, zone  Movable/ {z=0} z && /cpu: / {c=$2} z && /^ +high:/ && (c < 8 || c > 55) {printf "%s:%s ", c, $2}' $O/zoneinfo.0)"
 	echo "      nfsd CPUs from $(awk '/^Node 0, zone   Normal/ {z=1} z && /^Node 0, zone  Movable/ {z=0} z && /cpu: / {c=$2} z && /^ +high:/ && c >= 8 && c <= 55 {print $2}' $O/zoneinfo.0 | sort -n | sed -n '1p;$p' | paste -sd ' ' | sed 's/ / to /')"
 	for d in enp161s0f0 enp164s0f0; do
@@ -72,4 +77,5 @@ for run in ${RUNS:-647:read}; do
 	[ "$hung" = 0 ] || { say "the kernel warned; stopping"; diff $O/dmesg.0 $O/dmesg.1 | head -20; exit 1; }
 done
 sysctl -q -w vm.percpu_pagelist_high_fraction=0
+unset EXP_RTC_READ
 ./settled.sh apply > $L/t2-r$n/apply-after.txt 2>&1; say "after: $(tail -1 $L/t2-r$n/apply-after.txt)"
