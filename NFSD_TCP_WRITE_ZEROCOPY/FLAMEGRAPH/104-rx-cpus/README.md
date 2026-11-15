@@ -327,8 +327,15 @@ No drive stepped down and no new kernel warning in any.
   (`svc_tcp_rx_region_conn_share`, 0: auto, two maximum READs, 130
   pages, a connection), which holds each connection to two confined
   READs at a time while the client keeps about 20 in flight on each.
-  That is read from the counters and the code, not yet tried: the
-  share is a parameter, so an A/B of it is next.
+  That is read from the counters and the code, not tried.
+- **Set aside (Mike, 15 November): "lets ignore use of
+  svc_tcp_rx_region_conn_share for now, seems to have excessive use of
+  the region."** Confinement already holds 4,924 to 4,948 region pages
+  at the default share, against 1,767 to 1,786 without it, and a share
+  large enough for the client's READs in flight would come near the
+  whole region. No share A/B is run; `svc_tcp_rx_region_reads` stays N.
+  (The share is David Flynn's, from "sunrpc: READ region-confinement
+  hooks", 27 October, with its later rx_loan commits.)
 
 ## rtc_read without the WRITEs' hop (`278b74ad8a0d9`)
 
