@@ -329,3 +329,29 @@ No drive stepped down and no new kernel warning in any.
   READs at a time while the client keeps about 20 in flight on each.
   That is read from the counters and the code, not yet tried: the
   share is a parameter, so an A/B of it is next.
+
+## rtc_read without the WRITEs' hop (`278b74ad8a0d9`)
+
+Mike: with `rtc_read=Y`, WRITEs should not use the work item. The hop
+comes from `svc_rtc_should_divert()`, which diverts every receive while
+either direction is on (`nfsd3_rtc_want()`), before the call is known;
+the work item's peek then hands a call it does not serve (a WRITE with
+`rtc_write` N) to a thread unreceived, counted as `fallback_not_fast`.
+`rtc_write=Y` is the same work item serving the WRITE itself; the hop
+should follow the switch of the call's own direction, as its admission
+(`nfsd3_rtc_want_call()`) already does.
+
+`SUNRPC: Send calls the rtc hook does not serve straight to a thread`
+marks a connection when the peek finds a call the hook does not serve
+and sends a marked connection's receives to a thread with no hop
+(counted `undiverted` in `rtc_stats`); a thread that receives a call
+the hook would serve clears the mark. Built as `sunrpc.ko` against
+build 531 (`build-sunrpc.sh`, `$L/sunrpc-rtcw-531/`; the tree's
+`net/sunrpc` and `include` are `8efa530e9ab01`'s, build 531's, but for
+this commit; every export's version matches the installed module's).
+Put in place on Mike's word (14 November: "Swap now") with
+`swap-sunrpc.sh` (no client connected; the DRC `nfsd.ko` stays in
+`updates/`), then `settled.sh apply`. Then `PROBE=none RUNS="669:read::N
+670:read::Y 671:read::N 672:read::Y" run645.sh` and the WRITE pass at Y
+(`EXP_RTC_READ=Y write-check.sh 673`, again if it reads RERUN), with
+`undiverted` and `fallback_not_fast` read from `rtc_stats`.
