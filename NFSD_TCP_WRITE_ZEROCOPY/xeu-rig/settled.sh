@@ -377,6 +377,21 @@ RTC_CPUS_SETTLED=$RTC_CPUS
 RTC_BALANCE=N
 RTC_BALANCE_SETTLED=$RTC_BALANCE
 [ -n "${EXP_RTC_BALANCE:-}" ] && RTC_BALANCE=$EXP_RTC_BALANCE
+# Receive Flow Steering: off (no RPS on any queue, no flow table).
+# EXP_RFS=<flow table entries> holds a run (and apply) to RFS with every
+# receive queue's rps_cpus at nfsd's CPUs and an eighth of the entries
+# as its rps_flow_cnt, so a connection's frames are processed on the CPU
+# that last sent on it (FLAMEGRAPH round 104: the READ pages' frees on
+# the CPU that allocated them).
+RFS=${EXP_RFS:-0}
+rps_mask() {	# rps_mask <cpulist>: the mask as the kernel prints it, 32-bit words high first
+	local m=0 r a b c
+	for r in ${1//,/ }; do
+		a=${r%-*}; b=${r#*-}
+		for (( c = a; c <= b; c++ )); do m=$(( m | (1 << c) )); done
+	done
+	printf '%08x,%08x\n' $(( (m >> 32) & 0xffffffff )) $(( m & 0xffffffff ))
+}
 # EXP_RTC_READ holds a run (and apply) to another rtc_read (FLAMEGRAPH round
 # 104's A/B on reads), and the audit then says the setting is off.
 [ -n "${EXP_RTC_READ:-}" ] && NFSD_DBG_OPT[rtc_read]=$EXP_RTC_READ
@@ -560,6 +575,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_RTC_READ:-}" ] && [ "$EXP_RTC_READ" != "$RTC_READ_SETTLED" ] && OFF="$OFF rtc_read=$EXP_RTC_READ"
 	[ "$RTC_CPUS" != "$RTC_CPUS_SETTLED" ] && OFF="$OFF svc_rtc_cpus=${RTC_CPUS:-none}"
 	[ "$RTC_BALANCE" != "$RTC_BALANCE_SETTLED" ] && OFF="$OFF svc_rtc_balance=$RTC_BALANCE"
+	[ "$RFS" != 0 ] && OFF="$OFF rfs=$RFS"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
 	[ "${EXP_NOTRACK:-}" = absent ] && OFF="$OFF zc_notrack=absent"
 	[ "${EXP_NETAVARK:-}" = present ] && OFF="$OFF netavark=present"
@@ -700,8 +716,14 @@ audit_port() {	# audit_port <a|b>
 	# client, so nothing measured changed, but the setting is off).
 	want "$d pause rx/tx" "$(ethtool -a $d | awk '/^RX:/ {r = $2} /^TX:/ {t = $2} END {print r "/" t}')" off/off
 	for q in /sys/class/net/$d/queues/rx-*; do
-		want "$d $(basename $q) RPS" "$(xps_cpu $q/rps_cpus)" none
+		if [ "$RFS" = 0 ]; then
+			want "$d $(basename $q) RPS" "$(xps_cpu $q/rps_cpus)" none
+		else
+			want "$d $(basename $q) RPS" "$(cat $q/rps_cpus)" "$(rps_mask $NFSD_CPUSET)"
+		fi
+		want "$d $(basename $q) RFS flows" "$(cat $q/rps_flow_cnt)" $(( RFS / 8 ))
 	done
+	[ $p = a ] && want "RFS flow table" "$(cat /proc/sys/net/core/rps_sock_flow_entries)" $RFS
 	[ -n "${EXP_LAYOUT:-}" ] && { echo "  --   $d interrupts and XPS: not held ($EXP_LAYOUT)"; return; }
 	while read -r irq name; do
 		case "$name" in
@@ -831,7 +853,11 @@ place() {	# place [a] [b]: the CPU layout of nfsd and of the ports named (both)
 			printf '%08x,%08x\n' $(( (m >> 32) & 0xffffffff )) $(( m & 0xffffffff )) > $q/xps_cpus
 			echo 0 > $q/xps_rxqs
 		done
-		for q in /sys/class/net/$d/queues/rx-*; do echo 0 > $q/rps_cpus; done
+		for q in /sys/class/net/$d/queues/rx-*; do
+			if [ "$RFS" = 0 ]; then echo 0 > $q/rps_cpus; else rps_mask $NFSD_CPUSET > $q/rps_cpus; fi
+			echo $(( RFS / 8 )) > $q/rps_flow_cnt
+		done
+		echo $RFS > /proc/sys/net/core/rps_sock_flow_entries
 		echo 0 > /sys/class/net/$d/threaded
 		set_defer $d ${DEFER[$p]}
 		# irq_tuning.service set this until it was masked (below); a reload

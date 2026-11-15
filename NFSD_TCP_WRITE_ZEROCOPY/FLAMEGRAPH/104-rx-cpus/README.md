@@ -546,3 +546,33 @@ the load.
   in the tree at its default, the hash.
 
 Mike, 15 November: "so far balance seems like a dead end".
+
+## The A/B of RFS on reads (Mike, 15 November: "run the RFS A/B on reads")
+
+Each READ's pages are allocated on the connection's work-item CPU
+(rtc_read Y: the pool rqst's fill and the send are both there) and
+freed on the receive-ring CPU that takes the client's ACK, so neither
+CPU's per-CPU list can reuse a page and every page crosses the zone
+lock twice (r650).  TCP records the CPU a connection last sent from
+(`inet_send_prepare()`), and with Receive Flow Steering the
+connection's frames are processed there after the ring CPU's GRO: the
+ACKs, and with them the frees, would land on the CPU that allocated
+the pages.
+
+`settled.sh` gains `EXP_RFS=<flow table entries>`: every receive
+queue's `rps_cpus` at nfsd's CPUs (8-55), `rps_flow_cnt` an eighth of
+the entries, and `net.core.rps_sock_flow_entries`; the setting stays
+off.  `run645.sh` takes it as a seventh field, and with `RESTART=1`
+restarts nfs-server before each run and after the last: the rtc
+placement marks every CPU that takes a softirq receive and never
+clears the mark, and under RFS nfsd's own CPUs take them, so each run
+starts from an empty mark.
+
+RFS also moves the WRITE payload's receive processing from the ring
+CPUs onto nfsd's, so a setting kept would need the WRITE pass as much
+as anything in this round.
+
+The plan: `RESTART=1 PROBE=none RUNS="687:read:::::0
+688:read:::::32768 689:read:::::0 690:read:::::32768"`, then
+`PROBE=lock` at 32768 (r691) for the zone lock, then `write-check.sh`
+at 32768 if reads gain.

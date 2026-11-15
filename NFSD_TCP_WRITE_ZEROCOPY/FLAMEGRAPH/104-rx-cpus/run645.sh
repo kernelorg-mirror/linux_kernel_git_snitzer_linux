@@ -13,7 +13,12 @@ snap() {	# snap <dir> <tag>
 	cat /proc/softirqs > $1/softirqs.$2; cat /proc/zoneinfo > $1/zoneinfo.$2; cat /sys/kernel/debug/nfsd/rtc_stats > $1/rtc_stats.$2 2>/dev/null; date +%s.%N > $1/time.$2
 }
 for run in ${RUNS:-647:read}; do
-	IFS=: read n rw hf rtc rc rb <<< "$run"
+	IFS=: read n rw hf rtc rc rb rfs <<< "$run"
+	# <rfs>: RFS flow table entries for the run (t2-r687 on), 0 for off,
+	# through settled.sh's EXP_RFS.  With RESTART=1 nfs-server restarts
+	# before the run, so the rtc placement's receive-CPU mark starts empty.
+	if [ -n "$rfs" ]; then export EXP_RFS=$rfs; else unset EXP_RFS; fi
+	[ "${RESTART:-0}" = 1 ] && { client_free && systemctl restart nfs-server || exit 1; }
 	# <rb>: sunrpc's svc_rtc_balance for the run (t2-r682 on), through
 	# settled.sh's EXP_RTC_BALANCE.
 	if [ -n "$rb" ]; then export EXP_RTC_BALANCE=$rb; else unset EXP_RTC_BALANCE; fi
@@ -98,5 +103,6 @@ for run in ${RUNS:-647:read}; do
 	[ "$hung" = 0 ] || { say "the kernel warned; stopping"; diff $O/dmesg.0 $O/dmesg.1 | head -20; exit 1; }
 done
 sysctl -q -w vm.percpu_pagelist_high_fraction=0
-unset EXP_RTC_READ EXP_RTC_CPUS EXP_RTC_BALANCE
+unset EXP_RTC_READ EXP_RTC_CPUS EXP_RTC_BALANCE EXP_RFS
+[ "${RESTART:-0}" = 1 ] && systemctl restart nfs-server
 ./settled.sh apply > $L/t2-r$n/apply-after.txt 2>&1; say "after: $(tail -1 $L/t2-r$n/apply-after.txt)"
