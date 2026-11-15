@@ -1217,6 +1217,12 @@ static DEFINE_PER_CPU(struct svc_rtc_stats, svc_rtc_stats);
  * out of struct svc_rtc_stats, which nfsd's debugfs sums.
  */
 static DEFINE_PER_CPU(u64, svc_rtc_undiverted);
+/*
+ * Connections whose work item is placed on each CPU, over every service:
+ * raised and lowered as svc_rtc_set_cpu() moves a connection, lowered
+ * when its transport is freed.
+ */
+static DEFINE_PER_CPU(atomic_t, svc_rtc_placed);
 
 #define svc_rtc_stat_inc(field)	this_cpu_inc(svc_rtc_stats.field)
 #define svc_rtc_stat_add(field, n) this_cpu_add(svc_rtc_stats.field, (n))
@@ -1294,6 +1300,14 @@ void svc_rtc_stats_show(struct seq_file *m)
 		for_each_possible_cpu(cpu)
 			undiverted += READ_ONCE(per_cpu(svc_rtc_undiverted, cpu));
 		seq_printf(m, "undiverted %llu\n", undiverted);
+		seq_puts(m, "placed");
+		for_each_possible_cpu(cpu) {
+			int n = atomic_read(per_cpu_ptr(&svc_rtc_placed, cpu));
+
+			if (n)
+				seq_printf(m, " %d:%d", cpu, n);
+		}
+		seq_putc(m, '\n');
 	}
 }
 EXPORT_SYMBOL_GPL(svc_rtc_stats_show);
@@ -1552,6 +1566,73 @@ static const struct cpumask *svc_rtc_allowed(void)
 	return READ_ONCE(svc_rtc_cpus_set) ? &svc_rtc_cpus_mask : NULL;
 }
 
+/*
+ * svc_rtc_balance: place a connection on the eligible CPU that holds the
+ * fewest connections' work items, rather than on one chosen by a hash of
+ * the connection.  A hash puts two or three busy connections on one CPU
+ * while others hold none; one connection that reads at full rate keeps
+ * most of a CPU busy, so such a CPU saturates.
+ */
+static bool svc_rtc_balance __read_mostly;
+module_param(svc_rtc_balance, bool, 0644);
+MODULE_PARM_DESC(svc_rtc_balance,
+		 "Place each run-to-completion work item on the eligible CPU holding the fewest (default: by a hash of the connection)");
+
+/* Move @conn's work item to @cpu, keeping the per-CPU counts. */
+static void svc_rtc_set_cpu(struct svc_rtc_conn *conn, int cpu)
+{
+	int old = xchg(&conn->cpu, cpu);
+
+	if (old == cpu)
+		return;
+	if (cpu >= 0)
+		atomic_inc(per_cpu_ptr(&svc_rtc_placed, cpu));
+	if (old >= 0)
+		atomic_dec(per_cpu_ptr(&svc_rtc_placed, old));
+}
+
+/*
+ * The eligible CPU of @node holding the fewest work items, the scan
+ * starting at a hash of @key so that ties spread.  -1 when none is
+ * eligible.  Placements that race may pick the same CPU; the count is
+ * raised only by svc_rtc_set_cpu(), so the next one sees it.
+ */
+static int svc_rtc_pick_least(const void *key, const struct cpumask *node,
+			      const struct cpumask *rxcpus,
+			      const struct cpumask *online,
+			      const struct cpumask *allowed)
+{
+	unsigned int n = cpumask_weight(node), start, i;
+	int cpu, best = -1, least = INT_MAX;
+
+	if (!n)
+		return -1;
+	start = hash_ptr(key, 32) % n;
+	i = 0;
+	for_each_cpu(cpu, node) {
+		if (i++ == start)
+			break;
+	}
+	/* Two laps from @cpu: [start, end) then [first, start). */
+	for (i = 0; i < n; i++) {
+		int placed;
+
+		if (cpu >= nr_cpu_ids)
+			cpu = cpumask_first(node);
+		if (svc_rtc_cpu_eligible(cpu, rxcpus, online, allowed)) {
+			placed = atomic_read(per_cpu_ptr(&svc_rtc_placed, cpu));
+			if (placed < least) {
+				least = placed;
+				best = cpu;
+				if (!placed)
+					break;
+			}
+		}
+		cpu = cpumask_next(cpu, node);
+	}
+	return best;
+}
+
 /**
  * svc_rtc_place - Record a receive CPU and place the connection's work
  * @serv: service of @conn; svc_rtc_serv_prepare() allocated its rx mask
@@ -1566,13 +1647,14 @@ static const struct cpumask *svc_rtc_allowed(void)
  *
  * Marks @rx_cpu in @serv's rx mask, testing first so that the steady
  * state stores nothing.  A connection keeps its CPU while that CPU is
- * online and takes no receives.  It is (re)picked by svc_rtc_pick_cpu()
- * on the first receive, after its CPU went offline, and when its CPU
- * has since taken a receive itself and this receive came from another
- * CPU.  That last case covers a connection placed before every RX CPU
- * had been seen.  A connection that fell back to its receive CPU keeps
- * it until a receive arrives on another CPU.  The rx mask never clears,
- * so CPUs that stop taking receives (IRQs moved) stay excluded.
+ * online and takes no receives.  It is (re)picked by svc_rtc_pick_cpu(),
+ * or with svc_rtc_balance by svc_rtc_pick_least(), on the first
+ * receive, after its CPU went offline, and when its CPU has since taken
+ * a receive itself and this receive came from another CPU.  That last
+ * case covers a connection placed before every RX CPU had been seen.
+ * A connection that fell back to its receive CPU keeps it until a
+ * receive arrives on another CPU.  The rx mask never clears, so CPUs
+ * that stop taking receives (IRQs moved) stay excluded.
  *
  * Return: the connection's work CPU, or -1 when a process-context
  * enqueue comes before its first softirq receive.
@@ -1593,16 +1675,31 @@ VISIBLE_IF_KUNIT int svc_rtc_place(struct svc_serv *serv,
 	    (!allowed || cpumask_test_cpu(cpu, allowed)))
 		return cpu;
 	cpu = -1;
-	if (allowed)
-		cpu = __svc_rtc_pick_cpu(conn->xprt, rx_cpu,
-					 cpumask_of_node(cpu_to_node(rx_cpu)),
-					 serv->sv_rtc_rxcpus, cpu_online_mask,
-					 allowed);
-	if (cpu < 0)
-		cpu = svc_rtc_pick_cpu(conn->xprt, rx_cpu,
-				       cpumask_of_node(cpu_to_node(rx_cpu)),
-				       serv->sv_rtc_rxcpus, cpu_online_mask);
-	WRITE_ONCE(conn->cpu, cpu);
+	if (READ_ONCE(svc_rtc_balance)) {
+		const struct cpumask *node = cpumask_of_node(cpu_to_node(rx_cpu));
+
+		if (allowed)
+			cpu = svc_rtc_pick_least(conn->xprt, node,
+						 serv->sv_rtc_rxcpus,
+						 cpu_online_mask, allowed);
+		if (cpu < 0)
+			cpu = svc_rtc_pick_least(conn->xprt, node,
+						 serv->sv_rtc_rxcpus,
+						 cpu_online_mask, NULL);
+		if (cpu < 0)
+			cpu = rx_cpu;
+	} else {
+		if (allowed)
+			cpu = __svc_rtc_pick_cpu(conn->xprt, rx_cpu,
+					cpumask_of_node(cpu_to_node(rx_cpu)),
+					serv->sv_rtc_rxcpus, cpu_online_mask,
+					allowed);
+		if (cpu < 0)
+			cpu = svc_rtc_pick_cpu(conn->xprt, rx_cpu,
+					cpumask_of_node(cpu_to_node(rx_cpu)),
+					serv->sv_rtc_rxcpus, cpu_online_mask);
+	}
+	svc_rtc_set_cpu(conn, cpu);
 	return cpu;
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_place);
@@ -1871,6 +1968,7 @@ VISIBLE_IF_KUNIT void svc_rtc_xprt_detach(struct svc_xprt *xprt)
 	/* Every pool rqst holds an xprt ref until its reply is released. */
 	WARN_ON_ONCE(!llist_empty(&conn->sendq) || conn->pending ||
 		     !llist_empty(&conn->done));
+	svc_rtc_set_cpu(conn, -1);
 	xprt->xpt_rtc = NULL;
 	kfree(conn);
 }
