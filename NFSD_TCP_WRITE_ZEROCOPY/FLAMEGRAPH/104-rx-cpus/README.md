@@ -362,3 +362,39 @@ Put in place on Mike's word (14 November: "Swap now") with
 670:read::Y 671:read::N 672:read::Y" run645.sh` and the WRITE pass at Y
 (`EXP_RTC_READ=Y write-check.sh 673`, again if it reads RERUN), with
 `undiverted` and `fallback_not_fast` read from `rtc_stats`.
+
+On the new `sunrpc.ko` (srcversion `BE117461F8916452F175925`, in
+`updates/` with the DRC `nfsd.ko`; swapped 03:44 with no client
+connected, then the settled setting): [run669.out](run669.out),
+[wcheck673.out](wcheck673.out):
+
+| run | `rtc_read` | GB/s | a / b | p99 ms | ring drops | busiest ring CPUs | nfsd CPUs busy |
+|---|---|---|---|---|---|---|---|
+| `t2-r669` | N | 60.60 | 30.20 / 30.40 | 80 | 292 | receive, 79 to 93% | 79% |
+| `t2-r670` | **Y** | **63.91** | 32.09 / 31.81 | 87 to 96 | 0 | CPU 0 93%, 61 97% | 29% |
+| `t2-r671` | N | 60.52 | 30.23 / 30.28 | 79 to 80 | 246 | receive, 80 to 93% | 79% |
+| `t2-r672` | **Y** | **63.71** | 32.13 / 31.59 | 93 to 96 | 75 | 7 97%, 57 91%, 61 92% | 26% |
+| `t2-r673` | Y | write **78.11, PASS** | 39.13 / 38.98 | 80 to 81 | 0 | | 23% |
+
+No drive stepped down and no new kernel warning in any.
+
+- **The WRITE pass at `rtc_read=Y` passes**, 78.11 GB/s at the first
+  run, against 77.95 and 77.89 on the old `sunrpc.ko`.
+- **WRITEs no longer take the work item**: over the four read runs
+  (each with its placement write job) and the pass, `rtc_stats` counted
+  35,094,398 receives sent straight to a thread (`undiverted`) and 162
+  WRITEs peeked and handed back (`fallback_not_fast`), 69 of them by the
+  end of the first Y run; `fallback_no_peek` 262. Build 512's
+  `rtc_read=Y` had 51.2 million `fallback_no_peek` and 11.9 million
+  `fallback_not_fast`.
+- **Reads keep the gain, a little larger: 63.7 to 63.9 GB/s against
+  60.5 to 60.6**, 5.3%, every READ in the window run to completion
+  (491,807 offered in r670's). The p99 is still higher at Y (87 to 96
+  ms against 79 to 80), and the work items still crowd a few CPUs (91
+  to 97%) while others idle: the next thing to look at under `rtc_read`.
+
+`settled.sh` still holds `rtc_read` at N, and the host is at the
+settled setting with the new `sunrpc.ko` in `updates/` (going back is
+`SUNRPC_KO=none swap-sunrpc.sh`). Settling `rtc_read=Y`, which needs
+this `sunrpc.ko` (or a kernel with `278b74ad8a0d9`), is Mike's to
+decide.
