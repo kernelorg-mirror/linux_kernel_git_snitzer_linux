@@ -99,3 +99,29 @@ PSI is worth about 2.3k cycles a WRITE if round 61's share holds.  A
 saving of that size frees about 1.4% of nfsd's CPUs at the same rate.
 Whether to keep `psi=0` on tardis2 is Mike's; whether the product can
 go without it is Hammerspace's.
+
+## 15 November: the boot is on, with a new baseline first
+
+Mike, 15 November: "let's reboot with psi=0 using the current kernel as
+test kernel, in parallel I'll build the kernel with all the latest
+commits using gitlab".
+
+Since the plan was written, `updates/` has gained a `sunrpc.ko`
+(`B1AE4F3F0262A3E5AD387FA`: `278b74ad8a0d9`, `2e2811d21f8c4`,
+`fe25e474fa3de`, FLAMEGRAPH round 104) and the settled setting has
+gained `rtc_read` Y and `svc_rtc_cpus` 8-55, which change how WRITEs
+reach nfsd.  Round 100's runs are not this setting's, so (Mike:
+"Baseline first") four counted runs and two two-port reads are taken
+on this boot, PSI on, before the reboot, and the same after it:
+
+- PSI on, this boot: `RUNS="692:C 693:C 694:C 695:C"
+  ../100-build531-baseline/run601.sh`, then `PROBE=none
+  RUNS="696:read 697:read" ../104-rx-cpus/run645.sh`.
+- PSI off, the `psi=0` boot: `RUNS="698:C 699:G 700:C 701:C 702:C"`
+  and `RUNS="703:read 704:read"`, the same scripts.
+
+Read as step 7 says, with r692 to r695 in place of r604 to r612, and
+the call graph r699 against... the one call graph on this boot is
+round 100's r611 (before the new sunrpc), so `finish_task_switch` is
+read against it with that caveat.  Both `updates/` modules are kept
+for the boot: it is the same kernel.
