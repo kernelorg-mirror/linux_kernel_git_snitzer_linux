@@ -1350,33 +1350,6 @@ long svc_rtc_kunit_active(void)
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_active);
 #endif
 
-/*
- * A connection's work item and, with svc_rtc_tx_split (latched at
- * attach), a second one for its completions and send FIFO on @tx_cpu,
- * so that @base.work only receives and submits.  Kept here rather than
- * in struct svc_rtc_conn so that the structure modules see is unchanged.
- *
- * Split, the two run at once, so an rqst the receive pass is still in
- * (svc_process() and svc_rtc_after_process()) must not reach the send
- * work item: it would finish, send and release the rqst under the
- * receive pass, which then releases it again.  The receive pass marks
- * its rqst RQ_RTC_RXOWN; a reply svc_send() queues meanwhile is held
- * back and put on the FIFO once the pass is done, and of the pass and
- * an async call's completion, whichever is last puts the call on
- * conn->done (test_and_clear_bit() of RQ_RTC_RXOWN decides).
- */
-struct svc_rtc_conn_tx {
-	struct svc_rtc_conn	base;
-	bool			split;
-	int			tx_cpu;
-	struct work_struct	tx_work;
-};
-
-static inline struct svc_rtc_conn_tx *svc_rtc_tx(struct svc_rtc_conn *conn)
-{
-	return container_of(conn, struct svc_rtc_conn_tx, base);
-}
-
 static void svc_rtc_run_done(struct svc_xprt *xprt)
 {
 	svc_rtc_active_put();
@@ -1731,90 +1704,6 @@ VISIBLE_IF_KUNIT int svc_rtc_place(struct svc_serv *serv,
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_place);
 
-/*
- * svc_rtc_tx_split: give each connection a second work item for its
- * completions (encoding the replies) and its send FIFO, on a CPU of its
- * own, so that the connection's work item only receives and submits.
- * One READ costs its connection's CPU its receive, its submit, its
- * completion and its send; split, a connection's calls are no longer
- * limited by one CPU doing all four.  Latched when a connection is
- * attached: a connection keeps the mode it started with.
- */
-static bool svc_rtc_tx_split __read_mostly;
-module_param(svc_rtc_tx_split, bool, 0644);
-MODULE_PARM_DESC(svc_rtc_tx_split,
-		 "Run each connection's completions and sends on a second work item and CPU (applies to connections made after it is set)");
-
-static void svc_rtc_set_tx_cpu(struct svc_rtc_conn *conn, int cpu)
-{
-	int old = xchg(&svc_rtc_tx(conn)->tx_cpu, cpu);
-
-	if (old == cpu)
-		return;
-	if (cpu >= 0)
-		atomic_inc(per_cpu_ptr(&svc_rtc_placed, cpu));
-	if (old >= 0)
-		atomic_dec(per_cpu_ptr(&svc_rtc_placed, old));
-}
-
-/*
- * The send CPU: the eligible CPU holding the fewest work items (receive
- * and send alike), on the node of the connection's receive CPU.  It is
- * placed once, again only if it goes offline.
- */
-static int svc_rtc_tx_place(struct svc_rtc_conn *conn)
-{
-	struct svc_serv *serv = conn->xprt->xpt_server;
-	const struct cpumask *allowed = svc_rtc_allowed();
-	int cpu = READ_ONCE(svc_rtc_tx(conn)->tx_cpu);
-	int home = READ_ONCE(conn->cpu);
-	const struct cpumask *node;
-
-	if (cpu >= 0 && cpu_online(cpu))
-		return cpu;
-	if (home < 0 || !cpu_online(home))
-		home = raw_smp_processor_id();
-	node = cpumask_of_node(cpu_to_node(home));
-	cpu = -1;
-	if (allowed)
-		cpu = svc_rtc_pick_least(&svc_rtc_tx(conn)->tx_work, node,
-					 serv->sv_rtc_rxcpus, cpu_online_mask,
-					 allowed);
-	if (cpu < 0)
-		cpu = svc_rtc_pick_least(&svc_rtc_tx(conn)->tx_work, node,
-					 serv->sv_rtc_rxcpus, cpu_online_mask,
-					 NULL);
-	if (cpu < 0)
-		cpu = home;
-	svc_rtc_set_tx_cpu(conn, cpu);
-	return cpu;
-}
-
-/* Queue the send pass that svc_rtc_pin() paid for. */
-static void svc_rtc_tx_queue_pinned(struct svc_rtc_conn *conn,
-				    struct svc_xprt *xprt)
-{
-	int cpu = svc_rtc_tx_place(conn);
-
-	if (!queue_work_on(cpu, xprt->xpt_server->sv_rtc_wq, &svc_rtc_tx(conn)->tx_work))
-		svc_rtc_run_done(xprt);
-}
-
-static void svc_rtc_tx_kick(struct svc_rtc_conn *conn)
-{
-	svc_rtc_tx_queue_pinned(conn, svc_rtc_pin(conn));
-}
-
-/* Completions and sends go to the send work item of a split connection. */
-static void svc_rtc_kick_done(struct svc_rtc_conn *conn,
-			      struct svc_xprt *xprt)
-{
-	if (svc_rtc_tx(conn)->split)
-		svc_rtc_tx_queue_pinned(conn, xprt);
-	else
-		svc_rtc_queue_pinned(conn, xprt);
-}
-
 static bool svc_rtc_divert(struct svc_xprt *xprt)
 {
 	struct svc_rtc_conn *conn;
@@ -2002,8 +1891,7 @@ static void svc_rtc_work(struct work_struct *work)
 	bool dead;
 
 	svc_rtc_stat_inc(runs);
-	if (!svc_rtc_tx(conn)->split)
-		svc_rtc_run_completions(conn);
+	svc_rtc_run_completions(conn);
 
 	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags)) {
 		switch (svc_rtc_recv_step(xprt, &reason, NULL)) {
@@ -2018,14 +1906,6 @@ static void svc_rtc_work(struct work_struct *work)
 			svc_rtc_stat_inc(fallback[reason]);
 			break;
 		}
-	}
-
-	if (svc_rtc_tx(conn)->split) {
-		/* A reply this receive queued is sent by the send work item. */
-		if (!llist_empty(&conn->sendq))
-			svc_rtc_tx_kick(conn);
-		svc_rtc_run_done(xprt);
-		return;
 	}
 
 	dead = svc_rtc_conn_dead(conn);
@@ -2046,34 +1926,6 @@ static void svc_rtc_work(struct work_struct *work)
 	svc_rtc_run_done(xprt);
 }
 
-/*
- * A split connection's send work item: finish completed async calls
- * (encode and queue their replies), then send the FIFO.  It is the only
- * one that drains, so conn->pending stays single-owner.
- */
-static void svc_rtc_tx_work(struct work_struct *work)
-{
-	struct svc_rtc_conn *conn = &container_of(work, struct svc_rtc_conn_tx,
-						  tx_work)->base;
-	struct svc_xprt *xprt = conn->xprt;
-	bool dead;
-
-	svc_rtc_run_completions(conn);
-	dead = svc_rtc_conn_dead(conn);
-	svc_rtc_drain_sends(conn, dead);
-	/*
-	 * As svc_rtc_work(): what is left over the budget, or queued since.
-	 * A call published to conn->done after this pass took the list
-	 * queued the next pass itself (svc_rtc_publish_done()), so a
-	 * stopping connection's send work item does not requeue itself.
-	 */
-	if (!dead && (conn->pending || !llist_empty(&conn->sendq))) {
-		svc_rtc_stat_inc(budget_exhausted);
-		svc_rtc_tx_kick(conn);
-	}
-	svc_rtc_run_done(xprt);
-}
-
 /**
  * svc_rtc_xprt_attach - Give a connected transport a work item
  * @xprt: new transport, not yet visible to svc_xprt_enqueue()
@@ -2083,15 +1935,12 @@ VISIBLE_IF_KUNIT int svc_rtc_xprt_attach(struct svc_xprt *xprt, gfp_t gfp)
 {
 	struct svc_rtc_conn *conn;
 
-	conn = kzalloc(sizeof(struct svc_rtc_conn_tx), gfp);
+	conn = kzalloc(sizeof(*conn), gfp);
 	if (!conn)
 		return -ENOMEM;
 	INIT_WORK(&conn->work, svc_rtc_work);
-	INIT_WORK(&svc_rtc_tx(conn)->tx_work, svc_rtc_tx_work);
 	conn->xprt = xprt;
 	conn->cpu = -1;
-	svc_rtc_tx(conn)->tx_cpu = -1;
-	svc_rtc_tx(conn)->split = READ_ONCE(svc_rtc_tx_split);
 	init_llist_head(&conn->sendq);
 	init_llist_head(&conn->done);
 	smp_store_release(&xprt->xpt_rtc, conn);
@@ -2121,11 +1970,6 @@ VISIBLE_IF_KUNIT void svc_rtc_xprt_stop(struct svc_xprt *xprt)
 	 */
 	svc_rtc_kick(conn);
 	flush_work(&conn->work);
-	/* A split connection's FIFO belongs to its send work item. */
-	if (svc_rtc_tx(conn)->split) {
-		svc_rtc_tx_kick(conn);
-		flush_work(&svc_rtc_tx(conn)->tx_work);
-	}
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_xprt_stop);
 
@@ -2140,7 +1984,6 @@ VISIBLE_IF_KUNIT void svc_rtc_xprt_detach(struct svc_xprt *xprt)
 	WARN_ON_ONCE(!llist_empty(&conn->sendq) || conn->pending ||
 		     !llist_empty(&conn->done));
 	svc_rtc_set_cpu(conn, -1);
-	svc_rtc_set_tx_cpu(conn, -1);
 	xprt->xpt_rtc = NULL;
 	kfree(conn);
 }
@@ -2162,7 +2005,7 @@ void svc_rtc_queue_send(struct svc_xprt *xprt, struct svc_rtc_send *send)
 	xprt = svc_rtc_pin(conn);	/* before the send can be consumed */
 	llist_add(&send->node, &conn->sendq);
 	svc_rtc_published(conn->xprt);
-	svc_rtc_kick_done(conn, xprt);
+	svc_rtc_queue_pinned(conn, xprt);
 }
 EXPORT_SYMBOL_GPL(svc_rtc_queue_send);
 
@@ -3122,7 +2965,6 @@ static void svc_rtc_rqst_release(struct svc_rtc_rqst *r)
 	clear_bit(RQ_RTC_TRY, &rqstp->rq_flags);
 	clear_bit(RQ_RTC_MISS, &rqstp->rq_flags);
 	clear_bit(RQ_RTC_ASYNC, &rqstp->rq_flags);
-	clear_bit(RQ_RTC_RXOWN, &rqstp->rq_flags);
 	svc_xprt_release(rqstp);
 	svc_rtc_pool_put(r);
 }
@@ -3174,14 +3016,8 @@ static void svc_rtc_handoff_drain(struct svc_serv *serv)
 		}
 }
 
-static void svc_rtc_publish_done(struct svc_rtc_rqst *r);
-
-/*
- * After svc_process() or a completion on the work item.  @rx_split: this
- * is a split connection's receive pass, which owns @r (RQ_RTC_RXOWN)
- * and publishes what it held back for the send work item.
- */
-static void svc_rtc_after_process(struct svc_rtc_rqst *r, bool rx_split)
+/* After svc_process() or a completion on the work item. */
+static void svc_rtc_after_process(struct svc_rtc_rqst *r)
 {
 	struct svc_rqst *rqstp = r->rqstp;
 	const struct svc_rtc_ops *ops = rqstp->rq_server->sv_rtc_pool->ops;
@@ -3191,33 +3027,14 @@ static void svc_rtc_after_process(struct svc_rtc_rqst *r, bool rx_split)
 	if (test_bit(RQ_RTC_ASYNC, &rqstp->rq_flags)) {
 		svc_rtc_stat_inc(async_submitted);
 		svc_rtc_park(r);
-		/*
-		 * Parked: of this pass and the completion, the last one
-		 * publishes.  A completion that came first found RQ_RTC_RXOWN
-		 * set, cleared it and left the call to us.
-		 */
-		if (rx_split &&
-		    !test_and_clear_bit(RQ_RTC_RXOWN, &rqstp->rq_flags))
-			svc_rtc_publish_done(r);
 		return;
 	}
-	/* Not async: no completion will test RQ_RTC_RXOWN. */
-	if (rx_split)
-		clear_bit(RQ_RTC_RXOWN, &rqstp->rq_flags);
 	if (test_bit(RQ_RTC_MISS, &rqstp->rq_flags)) {
 		svc_rtc_handoff(r);
 		return;
 	}
-	if (!r->queued) {
+	if (!r->queued)
 		svc_rtc_rqst_release(r);	/* dropped: no reply */
-		return;
-	}
-	/*
-	 * The reply svc_rtc_queue_reply() held back joins the FIFO; the
-	 * receive work item kicks the send work item after this pass.
-	 */
-	if (rx_split)
-		llist_add(&r->send.node, &r->conn->sendq);
 }
 
 /* Send one FIFO reply (xpt_mutex held unless @dead) and release it. */
@@ -3244,13 +3061,6 @@ static void svc_rtc_queue_reply(struct svc_rqst *rqstp)
 
 	r->queued = true;
 	r->send.fn = svc_rtc_send_reply;
-	/*
-	 * A split connection's receive pass still owns @r: the send work
-	 * item would send and release it under the pass.  The pass puts it
-	 * on the FIFO in svc_rtc_after_process().
-	 */
-	if (test_bit(RQ_RTC_RXOWN, &rqstp->rq_flags))
-		return;
 	/* The work item drains the FIFO after this call returns. */
 	llist_add(&r->send.node, &r->conn->sendq);
 }
@@ -3264,29 +3074,15 @@ static void svc_rtc_queue_reply(struct svc_rqst *rqstp)
 void svc_rtc_complete(struct svc_rqst *rqstp)
 {
 	struct svc_rtc_rqst *r = rqstp->rq_rtc;
-
-	/*
-	 * A split connection's receive pass may not be done with @r yet:
-	 * then it publishes @r when it is, and @r is not touched here.
-	 */
-	if (svc_rtc_tx(r->conn)->split &&
-	    test_and_clear_bit(RQ_RTC_RXOWN, &rqstp->rq_flags))
-		return;
-	svc_rtc_publish_done(r);
-}
-EXPORT_SYMBOL_GPL(svc_rtc_complete);
-
-/* Put a completed async call on its connection's done list and kick. */
-static void svc_rtc_publish_done(struct svc_rtc_rqst *r)
-{
 	struct svc_rtc_conn *conn = r->conn;
 	struct svc_xprt *xprt = svc_rtc_pin(conn);
 
 	/* Once published, a running pass may finish @r and reuse it. */
 	llist_add(&r->node, &conn->done);
 	svc_rtc_published(conn->xprt);
-	svc_rtc_kick_done(conn, xprt);
+	svc_rtc_queue_pinned(conn, xprt);
 }
+EXPORT_SYMBOL_GPL(svc_rtc_complete);
 
 static void svc_rtc_run_completions(struct svc_rtc_conn *conn)
 {
@@ -3309,7 +3105,7 @@ static void svc_rtc_run_completions(struct svc_rtc_conn *conn)
 		} else {
 			svc_rtc_process_resume(rqstp, rc);
 		}
-		svc_rtc_after_process(r, false);
+		svc_rtc_after_process(r);
 	}
 }
 
@@ -3360,7 +3156,6 @@ static void svc_rtc_fast(struct svc_rtc_conn *conn)
 	struct svc_xprt *xprt = conn->xprt;
 	struct svc_serv *serv = xprt->xpt_server;
 	struct svc_rtc_pool *pool = serv->sv_rtc_pool;
-	bool split = svc_rtc_tx(conn)->split;
 	enum svc_rtc_reason reason;
 	struct svc_rtc_rqst *r = NULL;
 	struct svc_rqst *rqstp;
@@ -3406,10 +3201,8 @@ static void svc_rtc_fast(struct svc_rtc_conn *conn)
 		svc_rtc_rqst_release(r);
 		return;
 	}
-	if (split)
-		set_bit(RQ_RTC_RXOWN, &rqstp->rq_flags);
 	svc_process(rqstp);
-	svc_rtc_after_process(r, split);
+	svc_rtc_after_process(r);
 	return;
 
 put:
