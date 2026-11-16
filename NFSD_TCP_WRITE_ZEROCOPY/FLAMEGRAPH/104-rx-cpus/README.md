@@ -1394,3 +1394,53 @@ The fixed module is in: `swap-sunrpc.sh
 setting".  **About to load `svc_rtc_kunit.ko` from that build on its
 own** (`sunrpc_svc_rtc`, with the five split cases); if the host goes
 down, this is the last thing that was run.
+
+### The suite passed, then the host went down putting the server back (16 November, 19:27)
+
+The session's last report, before the host went down, was **48 of 48
+cases of `sunrpc_svc_rtc` passed with no warning**, the five split
+cases among them, on `sunrpc.ko` `C3403E1043259A7524692BC`.  The
+host then went down in the step after it: `rmmod svc_rtc_kunit`
+and the restore of the sunrpc parameters, nfsd and the settled
+setting saved before the suite.  That command ran for about seven
+minutes without returning and the host was rebooted at 19:35.
+Which part of it hung is not known.
+
+Almost nothing of it was saved.  `kunit-split2-534/` holds only what
+was on disk before the crash: `dmesg.1` (81 bytes: the first load
+printed `kunit: disabled`), and `dmesg.0`, `dmesg.2pre` and
+`sunrpc-params.saved` empty (0 bytes).  The pass's own dmesg was
+never written out.  The session's transcript was lost with the
+crash.  `/var/crash` is empty and the journal holds only this boot,
+so this is the third hang on the split's `sunrpc.ko`, or on the
+module and parameter steps around it, with no record.  The split
+itself was N throughout: no NFS client was connected and no run was
+going.
+
+**The boot (19:35) is build 534's default entry, without
+pseudo-NMI**: the one-shot was spent by the boot of 19:19.
+`nmi_watchdog` 0, `hardlockup_panic` and `softlockup_panic` 1, kdump
+armed (`crashkernel=1G`, `kexec_crash_loaded` 1), sunrpc
+`C3403E1043259A7524692BC` from `updates/` with `svc_rtc_tx_split` N,
+nfs-server inactive, no `WARNING:`, `BUG:` or `Oops`.  **Port a is
+dead again**: 0 of 3 pings (192.168.1.106, neighbour `FAILED`), 58
+frames received (29, 24, 2 and 3 on rings 0 to 3), 123 dropped, 21
+sent, `port_rx_fifo_tc0_packets` 0.  Port b answers 3 of 3.
+Counters and dmesg are in
+`/var/tmp/zc-run-logs/t2-514-canary/port-dead/534-boot5-after-kunit/`.
+Nothing was tried on it and `bringup.sh` was not run.
+
+The one-shot `ofp-rocky-534-pnmi.conf` is set again (`bootctl
+status`: `OneShot Entry: ofp-rocky-534-pnmi.conf`), and the host
+waits for a power reset.  For the boot after it (Mike's to decide):
+
+1. The checks of "Next boot: after the power reset" above: pseudo-NMI,
+   both ports pinged, the client cleared, `bringup.sh`, `settled.sh
+   apply`.
+2. With the BMC's serial console logged, the `sunrpc_svc_rtc` suite
+   again on its own, with every step after it (`rmmod`, each
+   parameter restored, nfsd started, `settled.sh apply`) run as a
+   command of its own, and its output `sync`ed to disk before the
+   next, so that a hang names its step.  The suite's 48 of 48 is
+   from the session's report only.
+3. Only then `run-split1.sh` at four and twelve connections.
