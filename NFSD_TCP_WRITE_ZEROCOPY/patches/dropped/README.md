@@ -238,3 +238,15 @@ stage of a READ cost more on two CPUs than on one, 103 us a READ on
 the work items' CPUs against 57, and by Little's law the READ's
 latency rose 1.7 ms (`FLAMEGRAPH/104-rx-cpus/README.md`, t2-r766 to
 r769).
+
+`0019-SUNRPC-Let-a-run-to-completion-pass-receive-more-tha.patch`
+(FLAMEGRAPH round 104, 16 November, dropped by Mike) lets a
+connection's rtc work item take up to `sunrpc.svc_rtc_recv_budget` (8)
+calls a pass instead of one.  It was `dac0fc832ab18` on
+`kernel-7.3/canary`, reverted at the tip.  The calls waiting in each
+server socket were taken to be waiting for the next pass; they were
+not: 35 a socket at 8 against 31 at 1.  The passes went from 2.7 M to
+0.3 M and sent their replies eight at a time, which quadrupled the
+round trip on the wire (0.17 to 0.67 ms) and tripled the replies
+waiting to be sent: the two-port READ strobe read 61.82 and 62.03 GB/s
+at 8 against 71.05 at 1 (t2-r775 to r777).

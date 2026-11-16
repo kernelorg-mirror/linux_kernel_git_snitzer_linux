@@ -1,0 +1,78 @@
+From dac0fc832ab18d9ed9d05418d02286363505c9d0 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 16 Nov 2026 21:55:10 +0000
+Subject: [PATCH] SUNRPC: Let a run-to-completion pass receive more than one
+ call
+
+A connection's work item is its only reader, and each pass took one
+call: the receive of that call re-arms the next through
+svc_xprt_received(), which queues another pass.  So every call waited
+for a whole pass, the completions and the sends of the call before it,
+before it was read.  On a two-port NFSv3 READ load the calls waiting in
+each server socket averaged 38, 3.4 ms of a 5.6 ms READ seen from the
+client, while the work items' CPUs were 70 to 84% busy.
+
+Keep taking calls in the same pass while the receive re-arms, up to
+sunrpc.svc_rtc_recv_budget (8 by default; 1 is the old behaviour),
+before the pass sends its FIFO.  A call handed to a thread takes
+XPT_BUSY with it, which ends the loop.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ net/sunrpc/svc_xprt.c | 26 ++++++++++++++++++++++++--
+ 1 file changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/net/sunrpc/svc_xprt.c b/net/sunrpc/svc_xprt.c
+index 93481044c89bf..fc330edaa32bd 100644
+--- a/net/sunrpc/svc_xprt.c
++++ b/net/sunrpc/svc_xprt.c
+@@ -1878,14 +1878,30 @@ static void svc_rtc_pool_free(struct svc_rtc_pool *pool);
+ static void svc_rtc_pool_fill(struct work_struct *work);
+ static void svc_rtc_pool_decay(struct work_struct *work);
+ 
++/*
++ * svc_rtc_recv_budget: the calls one pass of a connection's work item
++ * takes from its socket before it sends its FIFO.  The work item is the
++ * connection's only reader, and the receive of each call re-arms the
++ * next (svc_xprt_received() diverts back to the work item), so with one
++ * call a pass every call waits for a whole pass: the completions and the
++ * sends of the one before it.  Under a READ load that leaves calls
++ * queued in the socket for milliseconds while the work item's CPU still
++ * has time.  1 takes one call a pass.
++ */
++static unsigned int svc_rtc_recv_budget __read_mostly = 8;
++module_param(svc_rtc_recv_budget, uint, 0644);
++MODULE_PARM_DESC(svc_rtc_recv_budget,
++		 "Calls a run-to-completion work item receives in one pass (default 8)");
++
+ /*
+  * One work item per connection: finish completed async calls (encode and
+- * queue their replies), take the next receive, then send the FIFO.
++ * queue their replies), take the waiting receives, then send the FIFO.
+  */
+ static void svc_rtc_work(struct work_struct *work)
+ {
+ 	struct svc_rtc_conn *conn = container_of(work, struct svc_rtc_conn,
+ 						 work);
++	unsigned int budget = max(READ_ONCE(svc_rtc_recv_budget), 1U);
+ 	struct svc_xprt *xprt = conn->xprt;
+ 	enum svc_rtc_reason reason;
+ 	bool dead;
+@@ -1893,7 +1909,13 @@ static void svc_rtc_work(struct work_struct *work)
+ 	svc_rtc_stat_inc(runs);
+ 	svc_rtc_run_completions(conn);
+ 
+-	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags)) {
++	/*
++	 * Each receive the fast path completes sets SVC_RTC_RECV again
++	 * while more of the stream is queued.  A call handed to a thread
++	 * takes XPT_BUSY with it and leaves the bit clear, which ends the
++	 * loop, as does a dead transport.
++	 */
++	while (budget-- && test_and_clear_bit(SVC_RTC_RECV, &conn->flags)) {
+ 		switch (svc_rtc_recv_step(xprt, &reason, NULL)) {
+ 		case SVC_RTC_THREAD:
+ 			svc_rtc_stat_inc(fallback[reason]);
+-- 
+2.52.0
+

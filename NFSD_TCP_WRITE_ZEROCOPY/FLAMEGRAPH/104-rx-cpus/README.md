@@ -2026,3 +2026,24 @@ About to run: the module swapped in with no client connected, settled,
 then the A/B as quick strobes, each through `step.sh`: t2-r775 at 8,
 r776 at 1, r777 at 8, r778 at 1; then the suite and the WRITE and READ
 checks if it is kept.
+
+**Dropped (Mike: "just drop it, we need to get back to basics").**
+t2-r775 (8) 61.82 GB/s, r776 (1) 71.05, r777 (8) 62.03; r778 not run
+(Mike: "don't repeat the pair").  At 8 the calls waiting in each
+server socket did not fall (35 against 31): they wait for the
+connection's work item whatever its pass takes.  The passes fell from
+2.74 M to 0.31 M, each sending 7.5 replies, and the bursts quadrupled
+the wire's round trip (0.17 to 0.67 ms) and tripled the server's
+unsent replies (0.22 to 0.63 ms).  The commit is reverted at the tip
+(`SUNRPC: Receive one call a run-to-completion pass again`) and saved
+as `patches/dropped/0019`; the tree's `net/` and `include/` are again
+`7afef7a0aa351`'s, and `sunrpc.ko` `67376EA89E652240AB9F1E1` is back in
+`updates/`, settled.
+
+## The READ strobe's profile, for the next READ round (Mike, 16 November: "Run a profile run to find what the focus should be on the next READ round ... collected from the READ strobe")
+
+[read-prof.sh](read-prof.sh) is `client-read.sh`'s READ strobe (the
+settled server, two ports, eight drives, fio 1 MiB at rsize 256 KiB, no
+trim, `REST=30`, `WARM=5 RUNTIME=25`) with 8 s of every server CPU at
+999 Hz with call chains in the same window as the client's probes.
+About to run as t2-r779 through `step.sh`.
