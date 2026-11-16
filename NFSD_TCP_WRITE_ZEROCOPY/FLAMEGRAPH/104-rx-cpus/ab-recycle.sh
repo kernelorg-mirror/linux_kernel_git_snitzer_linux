@@ -19,6 +19,8 @@ say() { echo "$(date +%T) $*"; }
 [ -w $P ] || { say "no svc_tcp_reply_recycle: a sunrpc without the recycle"; exit 1; }
 for pair in "$@"; do
 	IFS=: read n pages <<< "$pair"
+	# A stop file ends the A/B between runs (the loop around it stops on it).
+	[ -e $L/ab-recycle.stop ] && { say "t2-r$n: $L/ab-recycle.stop, stopping"; exit 1; }
 	O=$L/t2-r$n; mkdir -p $O
 	echo $pages > $P || exit 1
 	cat $S > $O/recycle.0

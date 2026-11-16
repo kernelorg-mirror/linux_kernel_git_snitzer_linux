@@ -2312,3 +2312,30 @@ recycled, but every fill now looks in the cache).  Then back to
 `sunrpc-nosplit-534` unless Mike keeps it.  512 pages a CPU is about
 2.5 times a CPU's share of the 10,000 in flight; the cache holds only
 what has come back and is not yet refilled.
+
+### t2-r781 and r782, and a profile instead of r784 and r785
+
+| run | recycle | GB/s | rtc CPUs busy | threads woken a second | context switches a second | busiest drive |
+|---|---|---|---|---|---|---|
+| `t2-r781` | 0 | **73.93, PASS** | 35% | 3,996 | 211,678 | 100% |
+| `t2-r782` | 512 | **62.46, FAIL** | 23% | 6,470 | 387,182 | 95% |
+
+No new kernel warning in either.  In r782 the recycle did what it was
+written to do: 11.9 M replies sent under a descriptor (202.6 M pages, 17
+a reply), 96.4% of those pages refilled from the CPUs' caches, 3.6% freed
+by a full cache, 326 let go still referenced, none left in flight.  But
+TCP reported 2.34 M of the sends (19.6%) copied: `__pskb_pull_tail()`
+says so whenever it pulls all of an skb's data into its head, which a
+reply's last, small skb (about 124 bytes past four 64 KiB segments) may
+be, so the figure is not yet a cost.  With the recycle on the rtc CPUs
+worked a third less while the rate fell a sixth, the drives had room,
+and threads woke 60% more often: the guess is that READs left the rtc
+for nfsd's threads, as with `skb_tx_defer_max` 128.
+
+Mike: "profile the recycle run to see why it's slower".  r783 (0) is let
+finish; `ab-recycle.sh` now stops at a file
+`/var/tmp/zc-run-logs/ab-recycle.stop`, made during r783, so r784 and
+the WRITE pass r785 do not run.  Then [prof-recycle.sh](prof-recycle.sh)
+`786 512`: `read-prof.sh` (r779's strobe and profile, its baseline: 534's
+own sunrpc) with the recycle at 512, its counters and `rtc_stats` either
+side of the window.
