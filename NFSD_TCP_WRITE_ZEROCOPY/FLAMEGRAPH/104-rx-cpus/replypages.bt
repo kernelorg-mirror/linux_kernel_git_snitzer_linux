@@ -1,0 +1,52 @@
+/*
+ * replypages.bt: a READ reply's pages from allocation to free (round 104,
+ * Mike, 16 November: "trace the reply pages first"), 5 s inside a READ
+ * strobe's window.  One page in 64 (by pfn) of those allocated on the rtc
+ * CPUs (8-55, where svc_alloc_arg() refills a READ's rq_pages) is followed
+ * to its free: the CPU group that frees it (rings 0-7 and 56-63, rtc 8-55),
+ * whether that is the CPU that took it, its life, and the free's caller.
+ * Besides, by CPU group: pages allocated and freed, how many of the
+ * allocations came from the buddy lists under the zone lock
+ * (mm_page_alloc_zone_locked) and how many pages the per-CPU lists drained
+ * back to the zone (mm_page_pcpu_drain).
+ */
+tracepoint:kmem:mm_page_alloc
+{
+	$g = (cpu >= 8 && cpu <= 55) ? "rtc" : "rings";
+	@alloc_pages[$g] = sum(1 << args.order);
+	if ($g == "rtc" && (args.pfn & 63) == 0) {
+		@t[args.pfn] = nsecs;
+		@c[args.pfn] = cpu;
+	}
+}
+
+tracepoint:kmem:mm_page_free
+{
+	$g = (cpu >= 8 && cpu <= 55) ? "rtc" : "rings";
+	@free_pages[$g] = sum(1 << args.order);
+	if (@t[args.pfn]) {
+		$life = (uint64)(nsecs - @t[args.pfn]) / 1000;
+		@followed_freed_on[$g, @c[args.pfn] == cpu ? "same cpu" : "other cpu"] = count();
+		@life_us[$g] = hist($life);
+		@life_us_stats[$g] = stats($life);
+		@free_caller[$g, kstack(6)] = count();
+		delete(@t[args.pfn]);
+		delete(@c[args.pfn]);
+	}
+}
+
+tracepoint:kmem:mm_page_alloc_zone_locked
+{
+	@zone_locked_alloc[(cpu >= 8 && cpu <= 55) ? "rtc" : "rings"] = sum(1 << args.order);
+}
+
+tracepoint:kmem:mm_page_pcpu_drain
+{
+	@pcpu_drained_to_zone[(cpu >= 8 && cpu <= 55) ? "rtc" : "rings"] = sum(1 << args.order);
+}
+
+interval:s:5
+{
+	clear(@t); clear(@c);
+	exit();
+}

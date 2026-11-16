@@ -2110,3 +2110,68 @@ READ sets each connection's rate.  At 63 us a READ and 11.4k READs a
 second a connection the item's CPU is 72% busy, and 1 us less a READ
 is at most 1.6% more a connection.  The split (t2-r769) showed the
 response is not linear, so this is a bound, not a forecast.
+
+## David Flynn's READ-confinement patches (16 November)
+
+Mike: "does it make sense to revisit sunrpc.svc_tcp_rx_region_reads and
+folding in latest changes from David Flynn", then "david said there was
+a fix for Region reads in this set, so we'd so well to include them".
+The set is `NFSD_TCP_WRITE_ZEROCOPY/hammerspace-nfsd-read-confinement-20261116/`
+(15 patches and David's README: with `svc_tcp_rx_region_reads=Y` a READ's
+payload is read by direct I/O into the region's READ partition and sent
+from those pages under `MSG_ZEROCOPY`; measured on AWS ENA at 64 KiB
+random reads, 1.20 to 1.24 times the unconfined rate, p99 3.6 to 5
+times worse from starved flows, a fairness fix pending).  Their base
+(`2e3a1b18333ef`, 5 November) is not an ancestor of this tip.
+
+**All 15 are on `kernel-7.3/canary`** (`0618286eb9883` to
+`3a356e72c965d`), under David's authorship, as David's earlier region
+commits were taken (`4ae3b1029cbde`, `6b5a0fc358b5a`, `2d908b0e2dc60`):
+whole, so several carry code, KUnit interface and tests together; the
+one-group rule is the series' and these are imports.  What was done to
+them:
+
+- `git am -3` took 0001 to 0004, 0006 to 0008, 0010, 0013 to 0015 as
+  they are.  **Resolved by hand**, where this tree has moved on since
+  their base: 0005 (`rx_region_stack`'s description string), 0009
+  (`svc_tcp_rx_region_conn_share`'s description; the
+  `svc_tcp_rx_region_conns` decrement placed in `svc_tcp_sock_detach()`
+  beside this tree's `svc_tcp_rx_target_forget()`), 0011 (the write
+  partition's fallback to one system page placed after this tree's
+  steal with its held-mark count) and 0012 (the steal sized by `want`,
+  keeping `rx_region_held()`).
+- Messages: **David's Signed-off-by added above Mike's** on every one
+  (Mike: "do add David's Signed-off-by"; only 0003 carried it), 0014's
+  `Co-Authored-By: Claude Sonnet 5.5` dropped (AGENTS.md: a tool's
+  attribution is never written), bodies wrapped at 72 (words unchanged),
+  and six subjects over 72 shortened: 0006 "...settle the refusal's
+  drain kick before counting a wake", 0007 "...refund what orphans kept
+  when their region goes; stop counting charges taken with no region",
+  0008 "...give a consumer's write share back what its orphans kept when
+  the region goes", 0010 "...is not an unconfined READ", 0012 "...an
+  unslotted region pool parks and refills only while its home write
+  shard is not low", 0014 "...a held socket releases its rcvbuf lock
+  once rmem passes rcvbuf" (the originals; the commits' subjects are in
+  `git log`).
+- **Built** (objects, `/var/tmp/zc-obj-flynn/`, the running kernel's
+  config at 16 KiB with `CONFIG_WERROR=y`): `net/core/page_pool.o`,
+  `rx_loan.o`, `rx_loan_kunit.o`, `net/ipv4/tcp_output.o`,
+  `net/sunrpc/`, `drivers/nvme/target/`, `fs/nfsd/`: no warning, no
+  error.  nvmet-tcp's suite (`CONFIG_NVME_TARGET_TCP_KUNIT_TEST`, needs
+  `KUNIT=y`; this config has `m`) is not built.  **A kernel is needed to
+  run them**: `rx_loan`, `page_pool` and `tcp_output.c` are built in.
+- To keep in view: 0009's share is still "at most two largest READs in
+  flight" a connection, the limit `svc_tcp_rx_budget_stats`' 2.38 M
+  `share_stalls` pointed at in t2-r665 and r667, where the client keeps
+  about 20 (now 54) READs in flight on each connection.
+
+### The reply pages, traced (Mike: "trace the reply pages first"; about to run)
+
+[replypages.bt](replypages.bt), 5 s in the window of `SRV=replypages
+client-read.sh 780`, on build 534 with `svc_tcp_rx_region_reads` N: one
+page in 64 of those the rtc CPUs allocate followed to its free (which
+CPU group frees it, the same CPU or not, its life, the free's caller),
+and by CPU group the pages allocated and freed, those taken from the
+buddy lists under the zone lock and those the per-CPU lists drained
+back to it.  `client-read.sh` now runs any `SRV=<name>.bt` of this
+directory in its window.

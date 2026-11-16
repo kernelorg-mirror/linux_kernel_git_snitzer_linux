@@ -42,7 +42,8 @@ T=/sys/kernel/tracing
   { date +%s.%N; cat /proc/diskstats; } > $O/diskstats.w0
   # SRV=rtcread: where the server's own time goes (rtcread.bt, 5 s; it
   # costs about 0.7 GB/s, r739)
-  [ "${SRV:-}" = rtcread ] && bpftrace -q $H/rtcread.bt > $O/rtcread.txt 2>&1 &
+  # SRV=<name>: $H/<name>.bt in the window, into $O/<name>.txt
+  [ -n "${SRV:-}" ] && [ -f $H/$SRV.bt ] && bpftrace -q $H/$SRV.bt > $O/$SRV.txt 2>&1 &
   $SSHC "mpstat -P ALL 1 5" > $O/cli-mpstat-w.txt 2>&1 &
   $SSHC "perf record -q -a -g -F 499 -o /dev/shm/zc-cli.data -- sleep 5 > /dev/null 2>&1" &
   for k in $(seq 10); do
