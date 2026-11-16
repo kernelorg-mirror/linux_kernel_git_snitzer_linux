@@ -27,6 +27,7 @@
 #include <linux/seq_file.h>
 
 #include "sunrpc.h"
+#include "svc_reply_pages.h"
 
 #define RPCDBG_FACILITY	RPCDBG_SVCXPRT
 
@@ -2333,6 +2334,8 @@ static bool svc_fill_pages(struct svc_rqst *rqstp, struct page **pages,
 	/* A pool rqst fills on a work item, which must not reclaim. */
 	gfp_t gfp = test_bit(RQ_RTC, &rqstp->rq_flags) ? GFP_NOWAIT : GFP_KERNEL;
 
+	/* First the pages this CPU's sent replies gave back. */
+	svc_reply_pages_fill(pages, npages);
 	for (filled = 0; filled < npages; filled = ret) {
 		ret = alloc_pages_bulk(gfp, npages, pages);
 		if (ret > filled)

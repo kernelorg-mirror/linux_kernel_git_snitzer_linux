@@ -68,6 +68,7 @@
 
 #include "socklib.h"
 #include "sunrpc.h"
+#include "svc_reply_pages.h"
 #include "netns.h"
 #include <linux/debugfs.h>
 
@@ -6631,6 +6632,40 @@ static int svc_tcp_sendmsg_rx_region(struct svc_sock *svsk,
 }
 
 /*
+ * Send a reply whose pages @tx took (svc_reply_tx_take()): the record
+ * marker, a page fragment of the socket's, spliced as usual, then the rest
+ * zero copy under @tx, its skbs holding no page references.  @tx's pages
+ * go back to this CPU's cache once TCP frees the last skb carrying them.
+ */
+static int svc_tcp_sendmsg_recycle(struct svc_sock *svsk,
+				   struct svc_reply_tx *tx,
+				   unsigned int count, size_t len)
+{
+	struct bio_vec *bv = svsk->sk_bvec;
+	struct msghdr msg = {
+		.msg_flags	= MSG_SPLICE_PAGES | MSG_MORE,
+	};
+	int sent, ret;
+
+	iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, bv, 1, bv[0].bv_len);
+	sent = sock_sendmsg(svsk->sk_sock, &msg);
+	if (sent == bv[0].bv_len) {
+		msg = (struct msghdr){
+			.msg_flags	= MSG_ZEROCOPY,
+			.msg_ubuf	= &tx->ubuf,
+			.sg_from_iter	= rx_loan_tx_sg_from_iter,
+		};
+		iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, bv + 1, count,
+			      len - bv[0].bv_len);
+		ret = sock_sendmsg(svsk->sk_sock, &msg);
+		sent = ret < 0 ? ret : sent + ret;
+	}
+	/* The sender's reference: the last, if no skb took the pages. */
+	net_zcopy_put(&tx->ubuf);
+	return sent;
+}
+
+/*
  * Send one RPC record, @marker then @xdr, as a single sock_sendmsg().
  *
  * For a reply (@rqstp set), MSG_SPLICE_PAGES is used exclusively to
@@ -6670,6 +6705,16 @@ static int svc_tcp_sendmsg(struct svc_sock *svsk, struct svc_rqst *rqstp,
 	if (rqstp && svc_rqst_rx_region_used(rqstp)) {
 		ret = svc_tcp_sendmsg_rx_region(svsk, rqstp, 1 + count);
 		goto out;
+	}
+	if (rqstp && !test_bit(XPT_TLS_SESSION, &svsk->sk_xprt.xpt_flags)) {
+		struct svc_reply_tx *tx;
+
+		tx = svc_reply_tx_take(rqstp, svsk->sk_bvec + 1, count);
+		if (tx) {
+			ret = svc_tcp_sendmsg_recycle(svsk, tx, count,
+						      sizeof(marker) + xdr->len);
+			goto out;
+		}
 	}
 	iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, svsk->sk_bvec,
 		      1 + count, sizeof(marker) + xdr->len);

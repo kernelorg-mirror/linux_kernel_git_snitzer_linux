@@ -1,0 +1,33 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _NET_SUNRPC_SVC_REPLY_PAGES_H
+#define _NET_SUNRPC_SVC_REPLY_PAGES_H
+
+#include <linux/skbuff.h>
+
+struct svc_rqst;
+
+/*
+ * A TCP reply's pages, sent zero copy and kept for the sending CPU's next
+ * fills (svc_reply_pages.c).
+ */
+struct svc_reply_tx {
+	struct ubuf_info	ubuf;	/* held by TCP's skbs and the sender */
+	union {
+		struct llist_node	node;	/* on a cache's ready list */
+		struct svc_reply_tx	*next;	/* on its spare stack */
+	};
+	unsigned int		cpu;	/* the sending CPU, whose cache it is */
+	unsigned int		size;	/* room in pages[] */
+	unsigned int		n;	/* pages held */
+	bool			copied;	/* TCP copied them (not zero copy) */
+	struct page		*pages[];
+};
+
+void svc_reply_pages_fill(struct page **pages, unsigned long npages);
+struct svc_reply_tx *svc_reply_tx_take(struct svc_rqst *rqstp,
+				       const struct bio_vec *bvec,
+				       unsigned int nvecs);
+int svc_reply_pages_init(void);
+void svc_reply_pages_exit(void);
+
+#endif /* _NET_SUNRPC_SVC_REPLY_PAGES_H */
