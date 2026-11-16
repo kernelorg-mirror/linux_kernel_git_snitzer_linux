@@ -1668,3 +1668,15 @@ naming the step if the host goes down:
 4. `rmmod-suite`; `kunit-off` (`modprobe -r kunit`); `params` (sunrpc's
    settings read back); `start-nfsd` (as `swap-sunrpc.sh` starts the
    units); `settled`.
+
+**The suite passed: `sunrpc_svc_rtc` 50 of 50, no skip, no `WARNING:`,
+`BUG:` or `Oops`**, the two new cases among them (`ok 12
+rtc_send_stop_mid_batch`, `ok 49 rtc_e2e_split_stop_full`), on
+`sunrpc.ko` `8843BD2AFB934E2FEFD942B` with `kunit` loaded `enable=1`
+and nfsd unloaded.  Steps 1 to 3 each exited 0 (`steps.log` and the
+suite's dmesg, `dmesg.after-suite`, in
+`/var/tmp/zc-run-logs/kunit-split3-534/`).  The swap's load of nfsd
+printed `KTAP version 1`, `1..1`, `kunit: disabled` (2217 s): nfsd's
+own suite is reached on every load of `nfsd.ko`, and skipped only
+because that `kunit` was disabled.  Next, step 4: `rmmod-suite`,
+`kunit-off`, `params`, `start-nfsd`, `settled`.
