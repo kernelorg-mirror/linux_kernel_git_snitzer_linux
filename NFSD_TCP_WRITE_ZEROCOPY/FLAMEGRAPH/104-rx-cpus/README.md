@@ -967,6 +967,67 @@ each run has its own collisions (r739: 24 connections on 21 CPUs).  The
 check records no placement; `rtc_stats`' `placed` line in it would
 test that.  The mark and what to do about the spread are Mike's.
 
+## Probes after the failed read checks: r756, r757, r754, r755, r758 (16 November)
+
+Five two-port read runs from 16:10 to 16:27, all on build 534 with
+build 534's own sunrpc, `run645.sh` with shortened runs (fio's
+runtime 20 s for r756, 35 for r754 and r755, 30 for r758, each with a
+5 s ramp), rsize 256 KiB, fio 16 jobs at iodepth 16.  Their logs are in
+`/var/tmp/zc-run-logs/t2-r75[4-8]`; the session that ran them was lost
+in the hang below, so this account is from the logs alone, and what
+each was meant to answer is not recorded beyond what it measured.
+
+| run  | setting                                    | nconnect | fio bs | GB/s  | probe |
+|------|--------------------------------------------|----------|--------|-------|-------|
+| r756 | `svc_rtc_cpus=8-39`, balance Y, RPS 40-55  | 16       | 8M     | 68.72 | rx perf (empty) |
+| r757 | as r756                                    | 24       | 8M     | -     | mount failed |
+| r754 | settled                                    | 12       | 8M     | 68.57 | client: ss, locks, workqueue |
+| r755 | settled                                    | 12       | 1M     | 73.79 | ring CPUs' profile |
+| r758 | settled                                    | 12       | 1M     | 71.87 | `rtcpass.bt` |
+
+No drive stepped down in any of them, and the settled runs audited
+clean before and after.
+
+- **r756**, the rtc on 8-39 with balance and RPS on 40-55, placed one
+  connection to a CPU across 8-38 and read 68.72 GB/s, nfsd's CPUs 64%
+  busy against 33 to 36% at the settled setting.  Nothing gained.
+- **r757** (nconnect 24) never ran: `mount.nfs: an incorrect mount
+  option was specified`.  The client takes nconnect up to 16.
+- **r754**, the settled setting with fio reading 8 MiB at a time,
+  read 68.57, about what r756 did; with 1 MiB (r755, r758) the same
+  setting reads 71.9 to 73.8.  The client's probe (its 24 sockets sampled
+  ten times): about a quarter of the samples hold over 10 MB of
+  replies unread in Recv-Q (up to 29 MB), most hold under 2 MB, and
+  every socket's sends are limited by the server's receive window 47 to
+  72% of the time.  The client's lock
+  waits are in its workqueues (`worker_thread`, `queue_work_on`) and
+  in sunrpc's transmit (`call_encode`, `xprt_transmit`,
+  `xs_stream_data_receive_workfn`, waits up to 250 to 400 us).
+- **r755** read **73.79 GB/s**, over the 73.0 mark that r746 and r747
+  missed, at the same setting: more of the run-to-run spread noted
+  above.  The profile of the ring CPUs (0-7, 56-63; 31 to 38% busy)
+  puts about half their cycles in freeing the pages of sent replies
+  when their ACK arrives: `tcp_ack` -> `tcp_clean_rtx_queue` ->
+  `skb_attempt_defer_free_tx` -> `skb_release_data` ->
+  `__free_frozen_pages` -> `free_frozen_page_commit`, 29% under
+  `_raw_spin_unlock_irqrestore` and 17% in `skb_release_data` itself.
+  Without pseudo-NMI a sample taken with interrupts off lands where they
+  are turned back on, so the 29% is time inside the page free's
+  interrupts-off section, not the unlock.  This is the lead of "What
+  holds NFS READs" measured: the transmit path's cost on the receive
+  CPUs is mostly the freeing of sent pages (`skb_tx_defer_max` 0).
+- **r758** (`rtcpass.bt`, 8 s) read 71.87.  24 connections on 20 CPUs
+  (CPU 40 holds three, 9 and 23 two each); each of those CPUs spent 75
+  to 83% of the 8 s in rtc passes.  1.85 million passes, nearly every
+  one a single call and its reply.  A pass takes 66 us on average:
+  receive 8, `svc_process` 11, the send 20, and 25 in the rest (the
+  completions, inlined, and the pass's own cost).  A kicked pass waits
+  58 us on average to start (most 16 to 128 us).  The server's sockets
+  hold only 4.6 KB unread on average (9 KB at most) under the probe, so
+  calls are not waiting in them.  45 of a pass's 66 us are completion
+  and send, on the CPU that also receives; that is what the split below
+  was written to move.
+
 ## The send work item split off (`svc_rtc_tx_split`): tardis2 hung (16 November)
 
 **The change** ([svc-rtc-tx-split.patch](svc-rtc-tx-split.patch), not
@@ -1026,6 +1087,4 @@ is the control mode.  `settled.sh` does not audit sunrpc's srcversion.
 **Before split is run again:** boot with `irqchip.gicv3_pseudo_nmi=1`
 (round 61's kernel line) so that a hard lockup panics and kdump has
 something to save, and start with one port and a few connections
-rather than the two-port read.  Runs t2-r754 to r758 (16:10 to 16:27,
-before this one) are in `/var/tmp/zc-run-logs` and not yet written up
-here.
+rather than the two-port read.
