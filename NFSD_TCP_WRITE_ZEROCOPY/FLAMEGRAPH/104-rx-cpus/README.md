@@ -1767,3 +1767,6 @@ with `kunit` enabled (above).  For Mike to decide:
    write and read checks if the split is to be kept.
 3. `fallback_no_peek` at twelve connections (421 k in t2-r763 against
    1.6 k at four), before the split's rate is judged.
+
+**About to run the WRITE and READ checks on this module (split N, the
+settled setting): `write-check.sh 765`, then `read-check.sh 766`.**
