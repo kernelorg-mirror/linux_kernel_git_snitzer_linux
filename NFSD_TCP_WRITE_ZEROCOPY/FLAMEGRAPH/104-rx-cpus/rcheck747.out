@@ -1,0 +1,8 @@
+10:01:18 t2-r747 read check: FAIL | total 69.82 GB/s | new kernel warnings 0
+    port a enp161s0f0: 35.36 GB/s (fio, after the warm-up); in the 10 s window: wire 0.03 GB/s, FIFO drops 0, ring drops 0, rings 25/25/25/25%
+      read: 35.36 GB/s, 33.7k IOPS, completion 7.52 ms mean, 10.29 ms at the 99th percentile
+    port b enp164s0f0: 34.46 GB/s (fio, after the warm-up); in the 10 s window: wire 0.03 GB/s, FIFO drops 0, ring drops 27, rings 25/26/25/24%
+      read: 34.46 GB/s, 32.9k IOPS, completion 7.71 ms mean, 10.29 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 8.8 to 8.8, busiest 100% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 8.6 to 8.6, busiest 100% busy
+10:01:21 after: settled.sh audit rest: the settled setting

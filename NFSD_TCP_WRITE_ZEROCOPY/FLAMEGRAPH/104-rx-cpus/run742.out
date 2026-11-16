@@ -1,0 +1,21 @@
+09:31:07 t2-r742 ab read | total 59.52 GB/s | ring drops 499 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 29.76 GB/s (fio, after the warm-up); in the 10 s window: wire 0.03 GB/s, FIFO drops 0, ring drops 187, rings 25/25/25/25%
+      read: 29.76 GB/s, 28.4k IOPS, completion 8.95 ms mean, 13.30 ms at the 99th percentile
+    port b enp164s0f0: 29.76 GB/s (fio, after the warm-up); in the 10 s window: wire 0.03 GB/s, FIFO drops 0, ring drops 312, rings 25/26/25/24%
+      read: 29.76 GB/s, 28.4k IOPS, completion 8.95 ms mean, 13.43 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 7.2 to 7.7, busiest 90% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.2 to 7.7, busiest 91% busy
+    ring CPUs busy: 0:82 1:45 2:68 3:38 4:63 5:44 6:66 7:44 56:69 57:43 58:65 59:41 60:60 61:42 62:61 63:45 
+    profile 1794821420.778309556 to 1794821435.874720427, load from 1794821396.704 | high_fraction 0
+    rtc_read N in the run; rtc_stats in the window: 
+    svc_rtc_cpus "8-55"; busiest CPUs: 11:95 45:94 38:94 34:94 28:94 26:94 17:94 9:93 
+    nfsd CPUs busy: mean 93%
+    per-CPU high in the load (zone Normal): ring CPUs 0:874 1:874 2:874 3:874 4:874 5:874 6:874 7:874 56:874 57:874 58:874 59:928 60:874 61:874 62:2702 63:1037 
+      nfsd CPUs from 14378 to 16037
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r742/txq-sk.txt' for reading: No such file or directory
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r742/txq-sk.txt' for reading: No such file or directory
+    enp161s0f0 sends by queue: | sockets by queue: 
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r742/txq-sk.txt' for reading: No such file or directory
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r742/txq-sk.txt' for reading: No such file or directory
+    enp164s0f0 sends by queue: | sockets by queue: 
+09:31:10 after: settled.sh audit rest: the settled setting

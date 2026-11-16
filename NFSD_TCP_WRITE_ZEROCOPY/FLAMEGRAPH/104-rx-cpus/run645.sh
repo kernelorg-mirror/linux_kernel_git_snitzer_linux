@@ -77,6 +77,16 @@ for run in ${RUNS:-647:read}; do
 		# Head-of-line blocking on xpt_mutex between the rtc and nfsd's
 		# senders (t2-r718 on): hol.bt, 5 s.
 		bpftrace -q /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/hol.bt > $O/hol.txt 2>&1
+	  elif [ "${PROBE:-perf}" = rtcread ]; then
+		# Each drive's queue for 4 s, then where an rtc READ's time goes
+		# (16 November): inflight-read.py, then rtcread.bt, 5 s.
+		python3 -I /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/inflight-read.py $O/inflight.txt 4
+		# Where the calls and replies wait: each NFS connection's unread
+		# (Recv-Q) and unsent (Send-Q) bytes, ten snapshots 0.2 s apart.
+		for i in 1 2 3 4 5 6 7 8 9 10; do ss -tnH state established '( sport = :2049 )'; sleep 0.2; done |
+			awk '{n++; r += $1; q += $2; if ($1 > rm) rm = $1; if ($2 > qm) qm = $2}
+			END {printf "ss: %d connection samples; Recv-Q mean %d max %d bytes; Send-Q mean %d max %d bytes\n", n, r / n, rm, q / n, qm}' > $O/ss.txt
+		bpftrace -q /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/rtcread.bt > $O/rtcread.txt 2>&1
 	  elif [ "${PROBE:-perf}" = nfsd ]; then
 		# nfsd's and the rtc work's CPUs, 8-55 (t2-r716 on), with call
 		# graphs for 8 s: where skb_tx_defer_max 128's frees land.

@@ -1,0 +1,64 @@
+/*
+ * rtcread.bt: where an rtc READ's time goes on the server (16 November),
+ * 5 s.  An rtc READ is decoded and submitted on its connection's work item
+ * (nfsd_rtc_read_file(), async IOCB_DIRECT|IOCB_NOWAIT), its bio completes
+ * (svc_rtc_complete(), any context), the work item picks the completion up
+ * (nfsd_rtc_read_finish()), encodes the reply and queues it on the
+ * connection's send FIFO, and a drain sends it under xpt_mutex
+ * (svc_tcp_sendto_locked()).  Keyed by the pool rqst.
+ *
+ * io_us:     submit to the bio's completion (block layer and drive)
+ * pickup_us: completion to the work item finishing it
+ * queue_us:  finish to the start of its send (encode, FIFO, the mutex)
+ * send_us:   the send itself
+ * total_us:  submit to the send's return
+ * sync:      READs that finished at submit (no completion seen)
+ */
+fentry:nfsd:nfsd_rtc_read_file { @t0[(uint64)args.rqstp] = nsecs; }
+fentry:sunrpc:svc_rtc_complete /@t0[(uint64)args.rqstp]/ {
+	$r = (uint64)args.rqstp;
+	@io_us = stats((uint64)(nsecs - @t0[$r]) / 1000);
+	@io_hist = hist((uint64)(nsecs - @t0[$r]) / 1000);
+	@t1[$r] = nsecs;
+}
+fentry:nfsd:nfsd_rtc_read_finish /@t1[(uint64)args.rqstp]/ {
+	$r = (uint64)args.rqstp;
+	@pickup_us = stats((uint64)(nsecs - @t1[$r]) / 1000);
+	@pickup_hist = hist((uint64)(nsecs - @t1[$r]) / 1000);
+	@t2[$r] = nsecs;
+}
+fentry:sunrpc:svc_tcp_sendto_locked /@t0[(uint64)args.rqstp]/ {
+	$r = (uint64)args.rqstp;
+	if (@t2[$r]) {
+		@queue_us = stats((uint64)(nsecs - @t2[$r]) / 1000);
+		@queue_hist = hist((uint64)(nsecs - @t2[$r]) / 1000);
+		@t3[$r] = nsecs;
+	} else {
+		@sync = count();
+		delete(@t0[$r]);
+	}
+	delete(@t1[$r]); delete(@t2[$r]);
+}
+fexit:sunrpc:svc_tcp_sendto_locked /@t3[(uint64)args.rqstp]/ {
+	$r = (uint64)args.rqstp;
+	@send_us = stats((uint64)(nsecs - @t3[$r]) / 1000);
+	@send_hist = hist((uint64)(nsecs - @t3[$r]) / 1000);
+	@total_us = stats((uint64)(nsecs - @t0[$r]) / 1000);
+	@total_hist = hist((uint64)(nsecs - @t0[$r]) / 1000);
+	delete(@t0[$r]); delete(@t3[$r]);
+}
+
+interval:s:5 {
+	print(@io_us); print(@pickup_us); print(@queue_us); print(@send_us);
+	print(@total_us); print(@sync);
+	print(@io_hist); print(@pickup_hist); print(@queue_hist);
+	print(@send_hist); print(@total_hist);
+	exit();
+}
+
+END {
+	clear(@t0); clear(@t1); clear(@t2); clear(@t3);
+	clear(@io_us); clear(@pickup_us); clear(@queue_us); clear(@send_us);
+	clear(@total_us); clear(@sync); clear(@io_hist); clear(@pickup_hist);
+	clear(@queue_hist); clear(@send_hist); clear(@total_hist);
+}

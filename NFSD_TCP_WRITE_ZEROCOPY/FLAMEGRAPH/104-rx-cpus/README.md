@@ -865,3 +865,104 @@ reads each drive has outstanding under NFS at each rsize (round 98's
 32 parked calls a connection is one candidate).
 
 The 64 mark and the check's rsize are Mike's to set from this.
+
+## What holds NFS READs: probes at rsize 1 MiB and 256 KiB (16 November)
+
+The read check is locked at rsize 256 KiB and 73.0 GB/s (Mike; AGENTS.md
+"READs are locked at 73 GB/s"; `read-check.sh`'s default since then).
+Every run below is fio 1 MiB direct reads at depth 16, two ports, eight
+drives, `WARM=10 RUNTIME=40`, through `run645.sh` with `PROBE=rtcread`:
+[inflight-read.py](inflight-read.py) samples each drive's queue every
+1 ms for 4 s, [rtcread.bt](rtcread.bt) times each rtc READ's stages for
+5 s, and ten `ss` snapshots give each NFS socket's unread (Recv-Q) and
+unsent (Send-Q) bytes.  The probes cost about 0.7 GB/s (r739 against
+the plain check r737, the same setting).  `runNNN.out` here.
+
+| run | change from r739 | GB/s | drive idle | 8-55 busy >50% / <5% | rx CPUs mean / max | tx-compl. CPUs | RTT ms | sndbuf-limited |
+|---|---|---|---|---|---|---|---|---|
+| r739 | (rsize 256 KiB, nconnect 12, rtc, balance N) | **72.76** | 0.5% | 21 / 27 | **36 / 67** | 26 | 0.07 | 0.1% |
+| r738 | rsize 1 MiB | 63.81 | 9.3% | 18 / 30 | 63 / 93 | 15 | 0.27 | 10.5% |
+| r740 | nconnect 16 | 66.43 | 1.0% | 28 / 20 | 97 / 100 | 28 | 0.56 | 16.9% |
+| r741 | nconnect 16, rsize 1 MiB | 60.43 | 11.9% | 9 / 25 | 99 / 100 | 11 | 0.50 | 20.3% |
+| r742 | rtc_read N (nfsd threads) | 59.52 | 10.2% | 48 / 0 (93% mean) | 67 / 82 | 43 | 0.57 | 49.2% |
+| r743 | rtc_read N, rsize 1 MiB | 59.42 | 13.1% | 48 / 0 (68% mean) | 84 / 93 | 16 | 0.80 | 42.6% |
+| r744 | svc_rtc_balance Y | 67.63 | 1.7% | 24 / 21 | 80 / 94 | 39 | 0.26 | 12.5% |
+| r745 | a server address per drive (`SRV_ALIAS=1`) | 55.42 | 9.3% | 14 / 3 | 100 / 100 | 20 | 0.97 | 0.1% |
+
+"rx CPUs" are the eight ring CPUs that take each port's receive
+interrupts (0, 2, 4, 6, 56, 58, 60, 62); "tx-compl." the eight that take
+the transmit completions (the odd ones), mean busy.  RTT and
+sndbuf-limited are from the server's `ss -ti` at the run's end (a
+connection's life, the layout writes included).
+
+The rtc's stages (rtcread.bt, mean us):
+
+| run | submit → I/O done | → work item picks up | → send starts | send | total |
+|---|---|---|---|---|---|
+| r738 (1 MiB) | 474 | 358 | 238 | 196 | 1271 |
+| r739 (256 KiB) | 234 | 50 | 57 | 21 | 366 |
+| r740 (nconnect 16) | 225 | 97 | 82 | 42 | 451 |
+| r741 (nconnect 16, 1 MiB) | 460 | 583 | 332 | 373 | 1753 |
+| r744 (balance Y) | 286 | 65 | 81 | 27 | 463 |
+| r745 (an address a drive) | 285 | 50 | 30 | 22 | 392 |
+
+What it shows:
+
+- **The drives' queue is not what separates the read sizes.**  At rsize
+  1 MiB the drives have more queued on average (9.5 to 11.7 commands of
+  256 KiB, against 7.6 to 8.3 at 256 KiB) but sit idle 9.3% of the
+  samples, against 0.5%.  The drives' largest command is 256 KiB (MDTS
+  6, `max_hw_sectors_kb` 256), so a 1 MiB READ is four commands.
+- **Calls do not wait at the server; replies do.**  Each socket's
+  Recv-Q is a call or less (0.1 to 6 KB), its Send-Q 1 to 3.5 MB of
+  replies TCP has not yet sent.  The server holds an rtc READ 0.4 to
+  1.8 ms of the 8 to 10 ms the client sees; the rest is in the closed
+  loop, most of it in the send queues.
+- **The rtc is worth keeping.**  nfsd's threads (r742) take all 48 of
+  CPUs 8-55 at 93% and read 59.52; the rtc reads 72.76 with about 21
+  CPUs busy and 27 idle.
+- **The rtc uses at most one CPU a connection, and there are 24.**  All
+  four mounts of a port share one set of the client's `nconnect=12`
+  connections (one server address), so 12 a port.  With the settled
+  hash placement 24 connections land on 21 CPUs (r739: one CPU carried
+  three).  About 80 us of one CPU a 256 KiB READ.
+- **More connections or other placement lose, and each time the
+  receive CPUs saturate.**  nconnect 16 (32 connections) drops 86,758
+  frames on the rings; an address a drive (96 connections, r745) spreads
+  the rtc over 45 CPUs but drops 649,754, with p99 213 ms.  balance Y,
+  each connection on a CPU of its own, reads 5 GB/s less, with the rx
+  CPUs at 80% against 36.
+- **The transmit path's cost lands on the receive CPUs.**  Across all
+  eight runs the rate falls as the rx CPUs' busy rises (36% at 72.76,
+  97 to 100% at 55 to 66), while the transmit-completion CPUs stay at
+  11 to 43%.  In a READ load what arrives is the calls and the ACKs of
+  the replies, and an ACK frees the sent data it covers
+  (`tcp_clean_rtx_queue()` in the receive softirq).  RTT and send-buffer
+  limiting rise with it: r739 is the only run with RTT under 0.1 ms and
+  no send-buffer limiting.  This is the lead, not yet measured as a
+  cause.
+
+Not yet done, for the transmit path: the card's transmit ceiling without
+NFS ([iperf-tx.sh](../../xeu-rig/iperf-tx.sh): iperf3 `-R -Z`, written,
+not run), each transmit queue's bytes, packets (TSO size) and stops, and
+a profile of the rx CPUs at rsize 256 KiB (what share is ACK processing
+and freeing sent pages).
+
+`twoport.sh` takes `SRV_ALIAS=1` (each filesystem mounted from its own
+server address, 192.168.{1,0}.23n, added for the run and removed after
+it); not part of the settled setting.
+
+**The read check after these runs fails twice** ([rcheck746.out](rcheck746.out),
+[rcheck747.out](rcheck747.out)): r746 72.25 GB/s and r747 69.82, at
+the settled setting (balance N, rtc_read Y, the aliases gone,
+`settled.sh` clean before and after), against r737's 73.47 PASS.  By
+the rule that is a regression, but nothing in the kernel, its modules or
+`settled.sh` changed between them: the geometry and the audit are line
+for line r737's, the client as busy (mean 70 to 75%), the rx CPUs 36 to
+52%.  The drives read 8.6 to 9.3 GB/s each against r737's 9.1 to 9.2.
+So the settled setting reads 69.8 to 73.5 from run to run, and 73.0 is
+not a mark it holds.  One candidate, not measured: the rtc places a
+connection by a hash of its transport's address, new at every run, so
+each run has its own collisions (r739: 24 connections on 21 CPUs).  The
+check records no placement; `rtc_stats`' `placed` line in it would
+test that.  The mark and what to do about the spread are Mike's.

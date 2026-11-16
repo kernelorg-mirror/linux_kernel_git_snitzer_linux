@@ -114,6 +114,11 @@
 #                    rsize or wsize: the client takes what the server's
 #                    FSINFO offers
 #   RSIZE=<bytes>    the client's rsize (1048576)
+#   SRV_ALIAS=1      each filesystem mounted from its own server address on its
+#                    port (192.168.1.23<n> on a, 192.168.0.23<n> on b, added for
+#                    the run and removed after it), so that each mount has its
+#                    own nconnect connections: the Linux client shares one set of
+#                    connections among mounts of the same server address
 #   MAXBLK=<bytes>   nfsd's max_block_size for the run (settled.sh apply with
 #                    EXP_MAX_BLOCK_SIZE, which restarts nfs-server); put back
 #                    the same way after it
@@ -213,6 +218,7 @@ setq() {	# setq <client dev> <codel|fq|fqNN>
 	fq*)   cl "tc qdisc replace dev $1 root handle 1: mq && for i in \$(seq 1 48); do tc qdisc replace dev $1 parent 1:\$(printf %x \$i) fq maxrate ${2#fq}gbit || exit 1; done" ;;
 	esac
 }
+declare -A ALIASES
 cleanup() {
 	for k in rcvbuf linger_us copy_threads lowat keep want_eighths; do [ -e $SP/svc_tcp_rx_$k ] && echo ${SAVE[$k]} > $SP/svc_tcp_rx_$k; done
 	[ -n "${SAVE[spare]}" ] && echo ${SAVE[spare]} > $SP/svc_tcp_spare_bytes_max
@@ -227,6 +233,7 @@ cleanup() {
 	for p in $PORTS; do
 		cl "rm -f /mnt/rxr-$p[0-9]*/f-* /mnt/rxr-$p[0-9]*/bal-* 2>/dev/null; for m in /mnt/rxr-$p[0-9]*; do umount -f \$m 2>/dev/null; done"
 		for fs in ${FS[$p]}; do exportfs -u "${CLI[$p]}:$fs/zcbudget" 2>/dev/null; done
+		for a in ${ALIASES[$p]:-}; do ip addr del $a/24 dev ${DEV[$p]} 2>/dev/null; done
 	done
 	echo N > /sys/module/xeu/parameters/rx_port_stats
 	[ -n "${SRV_QDISC:-}" ] && for p in $PORTS; do "$RIG/settled.sh" srvq ${DEV[$p]}; done	# the settled qdisc back
@@ -346,7 +353,18 @@ for p in $PORTS; do
 		fstrim $fs
 		mkdir -p $fs/zcbudget; chmod 777 $fs/zcbudget
 		exportfs -o rw,${EXPORT_SYNC:-sync},no_root_squash,insecure,no_subtree_check,fsid=${FSID[$p]}$i "${CLI[$p]}:$fs/zcbudget" || exit 1
-		cl "mkdir -p /mnt/rxr-$p$i && mount -t nfs -o vers=3,nolock,proto=tcp,sec=sys,nconnect=$NCONN$WOPT ${SRV[$p]}:$fs/zcbudget /mnt/rxr-$p$i" || { echo "$p: mount of $fs failed"; exit 1; }
+		srv=${SRV[$p]}
+		if [ "${SRV_ALIAS:-0}" = 1 ]; then
+			srv=${SRV[$p]%.*}.23$i
+			ip -br addr show dev $d | grep -qw "$srv/24" || {
+				ping -c1 -W1 $srv > /dev/null 2>&1 && { echo "$p: $srv answers already; not adding it"; exit 1; }
+				ip addr add $srv/24 dev $d || exit 1
+				ALIASES[$p]="${ALIASES[$p]:-} $srv"
+			}
+			for k in 1 2 3 4 5; do cl "ping -c1 -W1 $srv > /dev/null" && break; sleep 1; done
+		fi
+		cl "mkdir -p /mnt/rxr-$p$i && mount -t nfs -o vers=3,nolock,proto=tcp,sec=sys,nconnect=$NCONN$WOPT $srv:$fs/zcbudget /mnt/rxr-$p$i" || { echo "$p: mount of $fs failed"; exit 1; }
+		echo "$p: $fs mounted from $srv" >> geometry.txt
 	done
 	NFS[$p]=$i
 	echo "$p: $i filesystems: ${FS[$p]}" | tee -a geometry.txt

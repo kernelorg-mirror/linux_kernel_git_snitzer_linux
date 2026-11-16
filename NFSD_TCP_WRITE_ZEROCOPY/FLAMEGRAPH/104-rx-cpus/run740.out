@@ -1,0 +1,20 @@
+09:20:17 t2-r740 ab read | total 66.43 GB/s | ring drops 86758 | no drive stepped down | new kernel warnings 0
+    port a enp161s0f0: 32.91 GB/s (fio, after the warm-up); in the 10 s window: wire 0.03 GB/s, FIFO drops 0, ring drops 54178, rings 23/26/25/25%
+      read: 32.91 GB/s, 31.4k IOPS, completion 8.08 ms mean, 11.34 ms at the 99th percentile
+    port b enp164s0f0: 33.52 GB/s (fio, after the warm-up); in the 10 s window: wire 0.03 GB/s, FIFO drops 0, ring drops 32580, rings 25/25/25/25%
+      read: 33.52 GB/s, 32.0k IOPS, completion 7.93 ms mean, 12.65 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 8.3 to 8.3, busiest 100% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 8.4 to 8.4, busiest 100% busy
+    ring CPUs busy: 0:100 1:19 2:98 3:26 4:97 5:28 6:98 7:26 56:97 57:28 58:96 59:29 60:97 61:30 62:98 63:36 
+    profile 1794820771.419782594 to 1794820789.989842157, load from 1794820747.161 | high_fraction 0
+    svc_rtc_cpus "8-55"; busiest CPUs: 47:100 25:100 23:100 13:100 0:100 62:98 6:98 2:98 
+    nfsd CPUs busy: mean 42%
+    per-CPU high in the load (zone Normal): ring CPUs 0:874 1:874 2:874 3:874 4:1769 5:874 6:874 7:874 56:874 57:874 58:874 59:874 60:874 61:949 62:1330 63:874 
+      nfsd CPUs from 874 to 16037
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r740/txq-sk.txt' for reading: No such file or directory
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r740/txq-sk.txt' for reading: No such file or directory
+    enp161s0f0 sends by queue: | sockets by queue: 
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r740/txq-sk.txt' for reading: No such file or directory
+awk: fatal: cannot open file `/var/tmp/zc-run-logs/t2-r740/txq-sk.txt' for reading: No such file or directory
+    enp164s0f0 sends by queue: | sockets by queue: 
+09:20:20 after: settled.sh audit rest: the settled setting
