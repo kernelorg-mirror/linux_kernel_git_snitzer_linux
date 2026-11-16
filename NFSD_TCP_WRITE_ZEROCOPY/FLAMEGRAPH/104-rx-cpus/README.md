@@ -2233,12 +2233,12 @@ one command a step; commit what is about to run before running it.
    `/sys/module/page_pool/parameters/rx_region_held_mark` must exist; if
    the boot fell back to build 534, say so and stop.
 2. **The passes at the settled setting, `region_reads` N:**
-   `xeu-rig/write-check.sh 781` and `xeu-rig/read-check.sh 782`.
+   `xeu-rig/write-check.sh 791` and `xeu-rig/read-check.sh 792`.
    David's patches change paths WRITEs take (0011's fallback to a system
    page, 0013 and 0014's hold), so the WRITE pass decides whether the
    kernel is kept at all, whatever confinement does.
 3. **The A/B**, one pair a step, alternating:
-   `./ab-reads.sh 783:N`, `784:Y`, `785:N`, `786:Y`.  Each is a
+   `./ab-reads.sh 793:N`, `794:Y`, `795:N`, `796:Y`.  Each is a
    `read-check.sh` with the parameter set before the mounts and the
    region's held mark on, and prints the rate, the region's exact peak
    (`max_held`), and the READ counters (admitted, parked, unconfined,
@@ -2248,8 +2248,8 @@ one command a step; commit what is about to run before running it.
    t2-r665 and r667 nearly tripled it), and `share_stalls` against
    READs admitted, where 0009's two largest READs a connection limited
    r665 and r667.
-4. **If Y is kept:** `write-check.sh 787` with Y, and
-   `SRV=replypages client-read.sh 788` with Y beside t2-r780: the
+4. **If Y is kept:** `write-check.sh 797` with Y, and
+   `SRV=replypages client-read.sh 798` with Y beside t2-r780: the
    rtc CPUs' 8.06 M pages taken under the zone lock in 5 s should be
    gone.
 5. Then whatever Y shows: if the share stalls, the share's size
@@ -2257,3 +2257,58 @@ one command a step; commit what is about to run before running it.
    on 16 November as "excessive use of the region"); if confinement
    loses on its own, the other way to stop the pages' one-way trip is a
    recycle of reply pages to the rtc CPUs outside the region.
+
+(The runs of the next boot were renumbered from 791 on 16 November:
+781 to 785 went to the recycle's A/B below, on build 534.)
+
+## The reply page recycle (16 November)
+
+Mike, on whether confinement could work with "at most two of the
+largest READs in flight": "Do you see another way forward?", then
+"write the recycle while the kernel builds", and "port it to 534 and run
+the A/B now".  By Little's law the server holds about 10,000 reply pages
+queued or unacknowledged (72 GB/s for the 2.2 ms a reply waits in Send-Q
+and for its ACK), and the client 32,768 in flight, the whole region:
+confinement cannot hold them at any share the region allows.  The payload
+goes from NVMe to the NIC by DMA and no CPU reads it, so keeping it in
+the L3 buys nothing; what costs (t2-r780) is the pages' one-way trip
+between the CPU groups through the zone lock.  `skb_tx_defer_max` 128
+stopped the trip by moving the frees into the rtc CPUs' softirq, and lost
+for that ("Why 128 loses").  The recycle moves the pages, not the frees.
+
+**On `kernel-7.3/canary`**: `80e7a8cafad0a` "SUNRPC: Recycle a TCP
+reply's pages on the CPU that sent it" (`net/sunrpc/svc_reply_pages.c`),
+`73d9333fe9116` its KUnit interface, `0a9fae885aa86` its suite
+(`sunrpc-reply-pages`, seven cases; built, not run: no KUnit on tardis2),
+`eb6d49b036b7f` the suite's config.  With `sunrpc.svc_tcp_reply_recycle`
+at N pages (0, the default, is off), a reply with 64 KiB or more of
+payload whose every page is one of the rqst's own reply pages is sent
+zero copy under a descriptor that takes the rqst's references to them
+(the record marker spliced first, the rest `MSG_ZEROCOPY` under the
+descriptor's `ubuf_info`, the skbs holding no page references).  When
+TCP frees the last skb, the completion on the ACKing CPU puts the
+descriptor on the sending CPU's cache with one `llist_add()` (or frees
+the pages if that cache holds N already), and `svc_alloc_arg()` fills
+from its own CPU's cache before calling the page allocator; a page
+still referenced elsewhere is let go.  A shrinker empties the caches,
+and so does setting 0.  `svc_tcp_reply_recycle_stats` counts it.
+
+**The port to build 534**, [reply-recycle-534.diff](reply-recycle-534.diff):
+the two commits on `a7e5a1b76d046`'s `net/sunrpc` (the source of the
+`sunrpc.ko` 534 runs, `67376EA89E652240AB9F1E1`: identical), with a copy
+of `rx_loan_tx_sg_from_iter()` in sunrpc as `svc_reply_sg_from_iter()`,
+since 534's `net/core` lacks it.  Built with `build-sunrpc.sh` as
+`/var/tmp/zc-run-logs/sunrpc-recycle-534/` (sunrpc
+`9935F92A85F41F18934089A`): no warning, every export's version as the
+installed module's.
+
+**The A/B, about to run** (`/var/tmp/zc-run-logs/recycle-534/`, one
+step each): `swap-sunrpc.sh` to that module and `settled.sh apply`;
+then [ab-recycle.sh](ab-recycle.sh) `781:0`, `782:512`, `783:0`,
+`784:512` (the READ pass each, the recycle at 0 or 512 pages a CPU, its
+counters over the run beside the rate), then `WRITE=1 ab-recycle.sh
+785:512` (the WRITE pass with it on: WRITE replies are too small to be
+recycled, but every fill now looks in the cache).  Then back to
+`sunrpc-nosplit-534` unless Mike keeps it.  512 pages a CPU is about
+2.5 times a CPU's share of the 10,000 in flight; the cache holds only
+what has come back and is not yet refilled.
