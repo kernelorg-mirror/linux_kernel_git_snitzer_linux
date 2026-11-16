@@ -1,0 +1,212 @@
+From 254cead34a6721ee8b9cba3daecd5f0471ada844 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 16 Nov 2026 19:11:52 +0000
+Subject: [PATCH] SUNRPC: Do not let a split send work item finish a call still
+ received
+
+With svc_rtc_tx_split ("SUNRPC: Optionally run a connection's
+completions and sends apart") a connection's send work item runs at
+the same time as its receive work item, and both can reach the same
+rqst:
+
+ - An async READ's completion can come before svc_process() returns
+   on the receive work item.  svc_rtc_complete() then queues the send
+   work item, which finishes the call (encoding the reply at an
+   rq_rtc_aoffset not yet stored), sends it and releases the rqst
+   while the receive work item is still in it.  The receive work
+   item's svc_rtc_after_process() then finds neither RQ_RTC_ASYNC nor
+   r->queued and releases the rqst a second time.
+ - A synchronous reply is put on the FIFO by svc_send(), inside
+   svc_process().  A send work item already draining can send and
+   release it before svc_rtc_after_process() runs, with the same
+   second release.
+
+A second release calls svc_xprt_release() with rq_xprt NULL, puts the
+transport and the active count twice, and puts the rqst on the free
+list twice, where it can be handed to another call, or loops the list.
+
+Mark the rqst the receive pass is in with RQ_RTC_RXOWN.  While it is
+set, svc_rtc_queue_reply() holds the reply back, and the pass puts it
+on the FIFO when it is done with the rqst.  Of the pass and an async
+call's completion, whichever comes last puts the call on conn->done:
+each clears RQ_RTC_RXOWN with test_and_clear_bit(), and the one that
+finds it already clear publishes.  A connection that is not split
+never sets the bit.
+
+The bit is added at the end of the rq_flags bits, so no other bit
+moves.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ include/linux/sunrpc/svc.h |  1 +
+ net/sunrpc/svc_xprt.c      | 71 ++++++++++++++++++++++++++++++++++----
+ 2 files changed, 66 insertions(+), 6 deletions(-)
+
+diff --git a/include/linux/sunrpc/svc.h b/include/linux/sunrpc/svc.h
+index 30de04da5e848..36e7d8c1ad8dd 100644
+--- a/include/linux/sunrpc/svc.h
++++ b/include/linux/sunrpc/svc.h
+@@ -499,6 +499,7 @@ enum {
+ 	RQ_PAYLOAD_SHARED,	/* a later operation still reads the payload */
+ 	RQ_WAKING,		/* a wake of this idle thread is in flight */
+ 	RQ_HANDOFF,		/* the wake brings a transport in rq_handoff */
++	RQ_RTC_RXOWN,		/* rtc split: the receive pass still owns it */
+ };
+ 
+ #define SVC_NET(rqst) (rqst->rq_xprt ? rqst->rq_xprt->xpt_net : rqst->rq_bc_net)
+diff --git a/net/sunrpc/svc_xprt.c b/net/sunrpc/svc_xprt.c
+index e99b9e1b4e6b6..6f09c62863e70 100644
+--- a/net/sunrpc/svc_xprt.c
++++ b/net/sunrpc/svc_xprt.c
+@@ -1355,6 +1355,15 @@ EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_active);
+  * attach), a second one for its completions and send FIFO on @tx_cpu,
+  * so that @base.work only receives and submits.  Kept here rather than
+  * in struct svc_rtc_conn so that the structure modules see is unchanged.
++ *
++ * Split, the two run at once, so an rqst the receive pass is still in
++ * (svc_process() and svc_rtc_after_process()) must not reach the send
++ * work item: it would finish, send and release the rqst under the
++ * receive pass, which then releases it again.  The receive pass marks
++ * its rqst RQ_RTC_RXOWN; a reply svc_send() queues meanwhile is held
++ * back and put on the FIFO once the pass is done, and of the pass and
++ * an async call's completion, whichever is last puts the call on
++ * conn->done (test_and_clear_bit() of RQ_RTC_RXOWN decides).
+  */
+ struct svc_rtc_conn_tx {
+ 	struct svc_rtc_conn	base;
+@@ -3082,6 +3091,7 @@ static void svc_rtc_rqst_release(struct svc_rtc_rqst *r)
+ 	clear_bit(RQ_RTC_TRY, &rqstp->rq_flags);
+ 	clear_bit(RQ_RTC_MISS, &rqstp->rq_flags);
+ 	clear_bit(RQ_RTC_ASYNC, &rqstp->rq_flags);
++	clear_bit(RQ_RTC_RXOWN, &rqstp->rq_flags);
+ 	svc_xprt_release(rqstp);
+ 	svc_rtc_pool_put(r);
+ }
+@@ -3133,8 +3143,14 @@ static void svc_rtc_handoff_drain(struct svc_serv *serv)
+ 		}
+ }
+ 
+-/* After svc_process() or a completion on the work item. */
+-static void svc_rtc_after_process(struct svc_rtc_rqst *r)
++static void svc_rtc_publish_done(struct svc_rtc_rqst *r);
++
++/*
++ * After svc_process() or a completion on the work item.  @rx_split: this
++ * is a split connection's receive pass, which owns @r (RQ_RTC_RXOWN)
++ * and publishes what it held back for the send work item.
++ */
++static void svc_rtc_after_process(struct svc_rtc_rqst *r, bool rx_split)
+ {
+ 	struct svc_rqst *rqstp = r->rqstp;
+ 	const struct svc_rtc_ops *ops = rqstp->rq_server->sv_rtc_pool->ops;
+@@ -3144,14 +3160,33 @@ static void svc_rtc_after_process(struct svc_rtc_rqst *r)
+ 	if (test_bit(RQ_RTC_ASYNC, &rqstp->rq_flags)) {
+ 		svc_rtc_stat_inc(async_submitted);
+ 		svc_rtc_park(r);
++		/*
++		 * Parked: of this pass and the completion, the last one
++		 * publishes.  A completion that came first found RQ_RTC_RXOWN
++		 * set, cleared it and left the call to us.
++		 */
++		if (rx_split &&
++		    !test_and_clear_bit(RQ_RTC_RXOWN, &rqstp->rq_flags))
++			svc_rtc_publish_done(r);
+ 		return;
+ 	}
++	/* Not async: no completion will test RQ_RTC_RXOWN. */
++	if (rx_split)
++		clear_bit(RQ_RTC_RXOWN, &rqstp->rq_flags);
+ 	if (test_bit(RQ_RTC_MISS, &rqstp->rq_flags)) {
+ 		svc_rtc_handoff(r);
+ 		return;
+ 	}
+-	if (!r->queued)
++	if (!r->queued) {
+ 		svc_rtc_rqst_release(r);	/* dropped: no reply */
++		return;
++	}
++	/*
++	 * The reply svc_rtc_queue_reply() held back joins the FIFO; the
++	 * receive work item kicks the send work item after this pass.
++	 */
++	if (rx_split)
++		llist_add(&r->send.node, &r->conn->sendq);
+ }
+ 
+ /* Send one FIFO reply (xpt_mutex held unless @dead) and release it. */
+@@ -3178,6 +3213,13 @@ static void svc_rtc_queue_reply(struct svc_rqst *rqstp)
+ 
+ 	r->queued = true;
+ 	r->send.fn = svc_rtc_send_reply;
++	/*
++	 * A split connection's receive pass still owns @r: the send work
++	 * item would send and release it under the pass.  The pass puts it
++	 * on the FIFO in svc_rtc_after_process().
++	 */
++	if (test_bit(RQ_RTC_RXOWN, &rqstp->rq_flags))
++		return;
+ 	/* The work item drains the FIFO after this call returns. */
+ 	llist_add(&r->send.node, &r->conn->sendq);
+ }
+@@ -3191,6 +3233,21 @@ static void svc_rtc_queue_reply(struct svc_rqst *rqstp)
+ void svc_rtc_complete(struct svc_rqst *rqstp)
+ {
+ 	struct svc_rtc_rqst *r = rqstp->rq_rtc;
++
++	/*
++	 * A split connection's receive pass may not be done with @r yet:
++	 * then it publishes @r when it is, and @r is not touched here.
++	 */
++	if (svc_rtc_tx(r->conn)->split &&
++	    test_and_clear_bit(RQ_RTC_RXOWN, &rqstp->rq_flags))
++		return;
++	svc_rtc_publish_done(r);
++}
++EXPORT_SYMBOL_GPL(svc_rtc_complete);
++
++/* Put a completed async call on its connection's done list and kick. */
++static void svc_rtc_publish_done(struct svc_rtc_rqst *r)
++{
+ 	struct svc_rtc_conn *conn = r->conn;
+ 	struct svc_xprt *xprt = svc_rtc_pin(conn);
+ 
+@@ -3199,7 +3256,6 @@ void svc_rtc_complete(struct svc_rqst *rqstp)
+ 	svc_rtc_published(conn->xprt);
+ 	svc_rtc_kick_done(conn, xprt);
+ }
+-EXPORT_SYMBOL_GPL(svc_rtc_complete);
+ 
+ static void svc_rtc_run_completions(struct svc_rtc_conn *conn)
+ {
+@@ -3222,7 +3278,7 @@ static void svc_rtc_run_completions(struct svc_rtc_conn *conn)
+ 		} else {
+ 			svc_rtc_process_resume(rqstp, rc);
+ 		}
+-		svc_rtc_after_process(r);
++		svc_rtc_after_process(r, false);
+ 	}
+ }
+ 
+@@ -3273,6 +3329,7 @@ static void svc_rtc_fast(struct svc_rtc_conn *conn)
+ 	struct svc_xprt *xprt = conn->xprt;
+ 	struct svc_serv *serv = xprt->xpt_server;
+ 	struct svc_rtc_pool *pool = serv->sv_rtc_pool;
++	bool split = svc_rtc_tx(conn)->split;
+ 	enum svc_rtc_reason reason;
+ 	struct svc_rtc_rqst *r = NULL;
+ 	struct svc_rqst *rqstp;
+@@ -3318,8 +3375,10 @@ static void svc_rtc_fast(struct svc_rtc_conn *conn)
+ 		svc_rtc_rqst_release(r);
+ 		return;
+ 	}
++	if (split)
++		set_bit(RQ_RTC_RXOWN, &rqstp->rq_flags);
+ 	svc_process(rqstp);
+-	svc_rtc_after_process(r);
++	svc_rtc_after_process(r, split);
+ 	return;
+ 
+ put:
+-- 
+2.52.0
+

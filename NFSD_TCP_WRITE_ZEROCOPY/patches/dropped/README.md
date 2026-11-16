@@ -217,3 +217,24 @@ second.  But it was lower in all six pairs, by 0.1 to 3.2 GB/s, at the
 same cycles a WRITE, and no cause was found in the wait for a piece, the
 drives, the block layer or the SGLs (`FLAMEGRAPH/82-thread-stay/` to
 `85-write-tail/`).
+
+`0015-SUNRPC-Optionally-run-a-connection-s-completions-and.patch` to
+`0018-SUNRPC-test-a-split-connection-s-handoff-to-its-send.patch`
+(FLAMEGRAPH round 104, 16 November, dropped by Mike) are
+`sunrpc.svc_rtc_tx_split`: a second work item a connection, on a CPU
+of its own, for its completions and its send FIFO, so that the first
+only receives and submits (`0015`, `008493ad5d9a6`); the receive pass's
+ownership of the rqst it is still in (`RQ_RTC_RXOWN`), without which
+the send work item released a call under the pass and hung tardis2
+(`0016`, `254cead34a672`); its KUnit interface (`0017`) and cases
+(`0018`).  They applied on `kernel-7.3/canary` after `fe25e474fa3de`.
+Two teardown fixes made for it stay in the tree, as they hold without
+it: a live send batch releases the rest of its replies once the
+connection stops, and `svc_rtc_unregister()` reports a wait that does
+not end.  With the fixes the split was safe (twelve connections on one
+port, nfsd stopped under load, two ports), but on the two-port READ
+load it read 61.94 and 57.68 GB/s against 71.52 and 70.51 unsplit: every
+stage of a READ cost more on two CPUs than on one, 103 us a READ on
+the work items' CPUs against 57, and by Little's law the READ's
+latency rose 1.7 ms (`FLAMEGRAPH/104-rx-cpus/README.md`, t2-r766 to
+r769).

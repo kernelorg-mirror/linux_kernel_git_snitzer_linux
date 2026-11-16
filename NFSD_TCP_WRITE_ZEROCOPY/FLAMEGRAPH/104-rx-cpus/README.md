@@ -1902,3 +1902,22 @@ it.  The client's side of a READ over the run (its per-connection
 receive CPU, `rpc_task` queue time on its transports, the time a reply
 sits in its socket) and the server's send queue per socket over time
 would place the 2,048 READs, and say which wait the split lengthened.
+
+### The split dropped (Mike, 16 November: "drop the split, save it into patches/dropped/")
+
+The four commits of `svc_rtc_tx_split` are in `patches/dropped/` as
+`0015` to `0018`.  Three commits at the tip take it out of the tree,
+one a group, tests first so that each builds: `SUNRPC: drop the split
+connection's cases from the rtc KUnit suite` (the full-FIFO stop case
+stays, unsplit, as `rtc_e2e_stop_full`), `SUNRPC: stop exposing
+svc_rtc_tx_split for the KUnit suites`, and `SUNRPC: Remove
+svc_rtc_tx_split`.  `svc_xprt.c` is now `fe25e474fa3de`'s with only the
+two teardown fixes on it, and `svc.h` has no `RQ_RTC_RXOWN`.  Built
+with `build-sunrpc.sh` (the tests commit and the tip): no warning, 442
+exports with no version changed; `sunrpc.ko` srcversion
+`67376EA89E652240AB9F1E1`, in `/var/tmp/zc-run-logs/sunrpc-nosplit-534/`.
+
+Next: that module swapped in with no client connected, the settled
+setting, the suite, the WRITE and READ checks, then the client's side
+of a READ measured (Mike: "measure the client side of a READ when split
+isn't being used on the server").
