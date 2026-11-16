@@ -1121,3 +1121,26 @@ After the boot, before any run:
    If it passes, more connections next (`NCONN=12`), then two ports,
    each a run of its own, and the split's rate against split N at the
    same shape before anything is kept.
+
+### The boot (16 November, 18:00): port a dead, no run
+
+The boot is the one meant: `irqchip.gicv3_pseudo_nmi=1` on the command
+line, `GICv3: Pseudo-NMIs enabled`, `NMI watchdog: Enabled`,
+`kernel.nmi_watchdog` and `hardlockup_panic` 1, kdump armed (1024 MiB),
+the split sunrpc `1907D42B9BE624B41C23DA2` with `svc_rtc_tx_split` N,
+and no `WARNING:`, `BUG:` or `Oops` in dmesg.
+
+The client still held t2-r759's eight mounts and its fio (started
+16:51:36), stuck since the hang; the fio was killed and the mounts
+taken off (port a's lazily, then the bash still waiting in its
+`rm -f` on port a killed), leaving the client with no NFS mount and
+nothing in D state.  `bringup.sh 32768 256` set up port a's region and
+rings and stopped before port b on the client's connections.
+
+**Port a is dead after boot** (`PORT-DEAD-AFTER-BOOT.md`): carrier 1,
+`rx_packets` 0, `rx_dropped` 16, 13 packets sent, the neighbour
+`FAILED`; port b answers.  The client's port b mounts had reconnected
+when nfsd started and port a's never had, so it was dead before
+`bringup.sh`.  Nothing else was tried on it.  `run-split1.sh` runs on
+port a, so the split was not run: the host waits for a power reset.
+The one-shot entry `ofp-rocky-534-pnmi.conf` is set again for it.
