@@ -2047,3 +2047,66 @@ settled server, two ports, eight drives, fio 1 MiB at rsize 256 KiB, no
 trim, `REST=30`, `WARM=5 RUNTIME=25`) with 8 s of every server CPU at
 999 Hz with call chains in the same window as the client's probes.
 About to run as t2-r779 through `step.sh`.
+
+**t2-r779: 71.34 GB/s** (36.37 and 34.97), no new kernel warning,
+settled after.  Logs, `rtc.svg`, `rings.svg` and `perf-srv.data.xz`
+in `/var/tmp/zc-run-logs/t2-r779/`.  As in r774, 39 calls wait unread
+in each server socket and the client sees 5.55 ms a READ (5.10 of it
+round trip).  The stacks are read from `*.noinline.folded` (`perf
+script --no-inline`): with inline frames the out-of-tree module's
+stacks name impossible callers (`unix_gid_hash` between `svc_rtc_fast`
+and `svc_xprt_recv_call`).  Cost a 256 KiB READ, the group's busy time
+over the window (`/proc/stat`, 2.97 M READs) divided by its stacks'
+cycles:
+
+**The work items' CPUs (8-55): 63.3 us a READ, 29% busy** (each
+connection's work item is the stage its calls queue for):
+
+| stage | us | |
+|---|---|---|
+| **send** (`svc_rtc_drain_sends`) | **26.5** | |
+| of it: qdisc and driver transmit (`__dev_xmit_skb`, fq_codel) | 7.9 | |
+| of it: TCP/IP transmit (`tcp_write_xmit`, `__tcp_transmit_skb`) | 7.6 | |
+| of it: `tcp_sendmsg_locked` (the reply's pages appended) | 4.8 | |
+| of it: socket lock, ACKs run from `release_sock()`'s backlog | 3.7 | |
+| of it: the rest | 2.5 | |
+| **page allocation** (`svc_alloc_arg`; `rmqueue_bulk`'s zone lock 3.2) | **7.6** | |
+| READ submit (iomap, XFS, block, NVMe) | 7.7 | |
+| receive the call (`svc_tcp_recvfrom`; socket lock 2.2) | 5.2 | |
+| peek at the call's header before it | 2.6 | |
+| auth, export, file handle | 5.0 | |
+| decode, dispatch | 3.0 | |
+| the work item's own, completions, the rest | 5.5 | |
+
+**The ring CPUs (0-7, 56-63): 22.4 us a READ, 31% busy; half of it is
+the rig** (its samplers, `perf`, `ss` and shells run on CPUs 0-7).  The
+softirq's 11.3 us: **freeing the acknowledged replies' skbs and pages
+5.5** (`skb_release_data`, `__free_one_page`, the zone lock), the rings'
+receive and refill 2.2, the calls' TCP receive and divert 1.2, ACK
+processing 0.7, transmit completions 0.5.
+
+**What the next READ round should take on**, by these figures:
+
+1. **The reply's pages, from allocation to free: 13.1 us of 74.6, on
+   both CPU groups, and most of the zone-lock spinning.**  Every READ
+   takes 16 pages from the buddy allocator on its work item's CPU
+   (7.6 us, 3.2 of it spinning on the zone lock in `rmqueue_bulk`)
+   and the ring CPU that takes the ACK frees them back (5.5 us,
+   `__free_one_page`): the pages always cross CPUs, so neither CPU's
+   per-CPU lists hold them.  Recycling them on the work item, or
+   returning them to the CPU that allocated them, would take most of
+   it.  (`skb_tx_defer_max` 128 frees a sent skb on the CPU that built
+   it and lost on 15 November, for another reason: "Why 128 loses".)
+2. **The send: 26.5 us, 42% of the work item.**  Each reply goes
+   through fq_codel (7.9 us of qdisc and driver transmit), and the
+   socket is contended with the ACKs' softirq (3.7 us in its lock
+   and backlog).
+3. **The call's receive: 7.8 us**, a peek at its header and then the
+   receive itself, which reads the stream twice.
+
+The Little's-law reading of these: the client keeps 2,048 READs in
+flight and they queue for the connection's work item, so its time a
+READ sets each connection's rate.  At 63 us a READ and 11.4k READs a
+second a connection the item's CPU is 72% busy, and 1 us less a READ
+is at most 1.6% more a connection.  The split (t2-r769) showed the
+response is not linear, so this is a bound, not a forecast.
