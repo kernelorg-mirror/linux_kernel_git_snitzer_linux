@@ -1698,3 +1698,12 @@ teardown's fixes).  `step.sh /var/tmp/zc-run-logs/split3-534 r762
 ./run-split1.sh 762` (four connections), then `NCONN=12` as `r763`.
 If the host goes down, the last `zc-step` line in the client's
 netconsole log names the run.
+
+**t2-r762 (20:33, four connections): 21.66 GB/s**, 6.14 ms mean
+completion (7.31 at the 99th percentile), no new `WARNING:`, `BUG:`,
+`Oops` or lockup, `settled.sh audit rest` clean after with split back
+at N; as t2-r760 (21.74), the drives deciding.  rtc stats over the
+run: 2.07 M diverted, 2.06 M sends, **`budget_exhausted` 18 k against
+t2-r760's 549 k**: most of r760's requeues were the send work item
+queuing itself for `conn->done`, which a completion's own kick already
+covers.  Next, `NCONN=12` as t2-r763.
