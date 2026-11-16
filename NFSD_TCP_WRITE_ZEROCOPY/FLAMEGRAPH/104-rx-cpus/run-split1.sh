@@ -13,7 +13,8 @@ grep -qw 'irqchip.gicv3_pseudo_nmi=1' /proc/cmdline || { say "no pseudo-NMI on t
 [ "$(sysctl -n kernel.nmi_watchdog)" = 1 ] || { say "NMI watchdog off"; exit 1; }
 [ "$(sysctl -n kernel.hardlockup_panic)" = 1 ] || { say "hardlockup_panic off"; exit 1; }
 [ "$(cat /sys/kernel/kexec_crash_loaded)" = 1 ] || { say "kdump not armed"; exit 1; }
-[ "$(cat /sys/module/sunrpc/srcversion)" = 1907D42B9BE624B41C23DA2 ] || { say "not the split sunrpc"; exit 1; }
+# the split sunrpc with the teardown's fixes (sunrpc-split3-534); 1907D42B9BE624B41C23DA2 before
+[ "$(cat /sys/module/sunrpc/srcversion)" = 8843BD2AFB934E2FEFD942B ] || { say "not the split sunrpc"; exit 1; }
 [ -e $P/svc_rtc_tx_split ] || { say "no svc_rtc_tx_split"; exit 1; }
 O=$L/t2-r$n; mkdir -p $O || exit 1
 ./settled.sh apply > $O/apply.txt 2>&1 || { say "not settled: $(grep -E 'BAD|FAILED' $O/apply.txt | head -3)"; exit 1; }

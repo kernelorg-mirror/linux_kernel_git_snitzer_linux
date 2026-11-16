@@ -1690,3 +1690,11 @@ mounts and units started (512 threads), and `settled.sh apply` ended in
 its own suite was skipped, as meant.  Every step exited 0; both ports
 answer 3 of 3.  Next: `run-split1.sh` at four and twelve connections,
 then the teardown after twelve, each through `step.sh`.
+
+### t2-r762 and t2-r763: the split again, four and twelve connections (about to run)
+
+`run-split1.sh` now wants `sunrpc.ko` `8843BD2AFB934E2FEFD942B` (the
+teardown's fixes).  `step.sh /var/tmp/zc-run-logs/split3-534 r762
+./run-split1.sh 762` (four connections), then `NCONN=12` as `r763`.
+If the host goes down, the last `zc-step` line in the client's
+netconsole log names the run.
