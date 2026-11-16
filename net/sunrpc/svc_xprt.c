@@ -1879,13 +1879,29 @@ static void svc_rtc_pool_fill(struct work_struct *work);
 static void svc_rtc_pool_decay(struct work_struct *work);
 
 /*
+ * svc_rtc_recv_budget: the calls one pass of a connection's work item
+ * takes from its socket before it sends its FIFO.  The work item is the
+ * connection's only reader, and the receive of each call re-arms the
+ * next (svc_xprt_received() diverts back to the work item), so with one
+ * call a pass every call waits for a whole pass: the completions and the
+ * sends of the one before it.  Under a READ load that leaves calls
+ * queued in the socket for milliseconds while the work item's CPU still
+ * has time.  1 takes one call a pass.
+ */
+static unsigned int svc_rtc_recv_budget __read_mostly = 8;
+module_param(svc_rtc_recv_budget, uint, 0644);
+MODULE_PARM_DESC(svc_rtc_recv_budget,
+		 "Calls a run-to-completion work item receives in one pass (default 8)");
+
+/*
  * One work item per connection: finish completed async calls (encode and
- * queue their replies), take the next receive, then send the FIFO.
+ * queue their replies), take the waiting receives, then send the FIFO.
  */
 static void svc_rtc_work(struct work_struct *work)
 {
 	struct svc_rtc_conn *conn = container_of(work, struct svc_rtc_conn,
 						 work);
+	unsigned int budget = max(READ_ONCE(svc_rtc_recv_budget), 1U);
 	struct svc_xprt *xprt = conn->xprt;
 	enum svc_rtc_reason reason;
 	bool dead;
@@ -1893,7 +1909,13 @@ static void svc_rtc_work(struct work_struct *work)
 	svc_rtc_stat_inc(runs);
 	svc_rtc_run_completions(conn);
 
-	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags)) {
+	/*
+	 * Each receive the fast path completes sets SVC_RTC_RECV again
+	 * while more of the stream is queued.  A call handed to a thread
+	 * takes XPT_BUSY with it and leaves the bit clear, which ends the
+	 * loop, as does a dead transport.
+	 */
+	while (budget-- && test_and_clear_bit(SVC_RTC_RECV, &conn->flags)) {
 		switch (svc_rtc_recv_step(xprt, &reason, NULL)) {
 		case SVC_RTC_THREAD:
 			svc_rtc_stat_inc(fallback[reason]);
