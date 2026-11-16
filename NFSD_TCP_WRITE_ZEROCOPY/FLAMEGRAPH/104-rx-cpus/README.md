@@ -1730,3 +1730,40 @@ the background; with the reads going, `systemctl stop nfs-server`, then
 `start`; then fio killed, the mount taken off, split N, the export
 removed, `settled.sh apply`.  Every step through `step.sh`
 (`/var/tmp/zc-run-logs/t2-r764/steps.log`).
+
+**t2-r764 (20:39): nfsd stopped and started with twelve split
+connections reading, no hang and nothing in dmesg.**  The layout wrote
+32 GiB at 10.2 GB/s; with the reads going (12 connections up, 487 k
+calls diverted in the 5 s before the stop), `systemctl stop nfs-server`
+returned within a second (20:39:50 to :51; 0 threads and 0
+connections after), `start` within a second (512 threads), and no
+`WARNING:`, `BUG:`, `Oops`, lockup or `svc_rtc:` wait report appeared.
+fio was killed and the mount taken off on the client (no mount, no
+fio, nothing in D state), split is back at N and `settled.sh apply`
+ends in "the settled setting".  `exportfs -u` at the end found no
+export: nfs-server's start re-reads `/etc/exports`, which drops the
+one made by hand, so the client's reads after the restart had none to
+reach.  Steps in `/var/tmp/zc-run-logs/t2-r764/steps.log`.
+
+### Where the split's teardown stands (16 November, 20:40)
+
+With `sunrpc.ko` `8843BD2AFB934E2FEFD942B` (the two teardown commits)
+on build 534 with pseudo-NMI: the `sunrpc_svc_rtc` suite 50 of 50 and
+the server put back after it with no hang; the split on one port at
+four connections (t2-r762) and at twelve (t2-r763, the setting that
+hung at 18:32), each with its `umount -f`; and nfsd's stop and start
+under twelve split connections reading (t2-r764).  Nothing hung.
+What made the 19:27 and 18:32 hangs is still not observed: the 18:32
+one was on the module before the RXOWN fix (`254cead34a672`), and the
+19:27 one most likely nfsd's own suite running inside `modprobe nfsd`
+with `kunit` enabled (above).  For Mike to decide:
+
+1. Whether `sunrpc-nfsd-rtc` should stay built into `nfsd.ko`
+   (`nfsd-$(CONFIG_NFSD_RTC_KUNIT_TEST)`) rather than a module of its
+   own like the other suites: as it is, any load of nfsd with an
+   enabled `kunit` creates and destroys the real nfsd service.
+2. The split on both ports at the two-port setting (t2-r759 hung the
+   host on two ports, on the module before the RXOWN fix), and the
+   write and read checks if the split is to be kept.
+3. `fallback_no_peek` at twelve connections (421 k in t2-r763 against
+   1.6 k at four), before the split's rate is judged.
