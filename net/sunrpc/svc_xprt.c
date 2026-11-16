@@ -1928,6 +1928,13 @@ static void svc_rtc_send_unlock(struct svc_xprt *xprt)
 		mutex_unlock(&xprt->xpt_mutex);
 }
 
+/* The connection is being torn down: its replies are released unsent. */
+static bool svc_rtc_conn_dead(struct svc_rtc_conn *conn)
+{
+	return test_bit(SVC_RTC_STOPPING, &conn->flags) ||
+	       test_bit(XPT_DEAD, &conn->xprt->xpt_flags);
+}
+
 /**
  * svc_rtc_drain_sends - Send (or, if @dead, release) queued replies
  * @conn: the transport's work item; called from it or with it idle
@@ -1936,6 +1943,9 @@ static void svc_rtc_send_unlock(struct svc_xprt *xprt)
  * Replies go out in the order they were queued.  A live drain sends at
  * most %SVC_RTC_SEND_BUDGET replies under one hold of xpt_mutex and
  * leaves the rest for the next pass; a dead drain releases them all.
+ * A live drain that finds the connection stopping between two replies
+ * releases the rest as a dead one would: each send may wait out the
+ * socket's send timeout, and svc_rtc_xprt_stop() waits for the drain.
  *
  * Return: the number of replies handled.
  */
@@ -1954,6 +1964,11 @@ VISIBLE_IF_KUNIT unsigned int svc_rtc_drain_sends(struct svc_rtc_conn *conn,
 		struct llist_node *node = conn->pending;
 		struct svc_rtc_send *send;
 
+		if (!dead && svc_rtc_conn_dead(conn)) {
+			svc_rtc_send_unlock(xprt);
+			dead = true;
+			budget = UINT_MAX;
+		}
 		conn->pending = node->next;
 		send = llist_entry(node, struct svc_rtc_send, node);
 		send->fn(xprt, send, dead);
@@ -2014,8 +2029,7 @@ static void svc_rtc_work(struct work_struct *work)
 		return;
 	}
 
-	dead = test_bit(SVC_RTC_STOPPING, &conn->flags) ||
-	       test_bit(XPT_DEAD, &xprt->xpt_flags);
+	dead = svc_rtc_conn_dead(conn);
 	svc_rtc_drain_sends(conn, dead);
 
 	/*
@@ -2023,9 +2037,10 @@ static void svc_rtc_work(struct work_struct *work)
 	 * includes replies queued on sendq while this pass sent a full
 	 * budget from pending: svc_rtc_queue_reply() does not kick, and the
 	 * svc_rtc_queue_send() kick that queued them may have been absorbed
-	 * by this pass, so nothing else runs the work for them.
+	 * by this pass, so nothing else runs the work for them.  A dead
+	 * drain left nothing; a reply queued since was queued with a kick.
 	 */
-	if (conn->pending || !llist_empty(&conn->sendq)) {
+	if (!dead && (conn->pending || !llist_empty(&conn->sendq))) {
 		svc_rtc_stat_inc(budget_exhausted);
 		svc_rtc_kick(conn);
 	}
@@ -2045,12 +2060,15 @@ static void svc_rtc_tx_work(struct work_struct *work)
 	bool dead;
 
 	svc_rtc_run_completions(conn);
-	dead = test_bit(SVC_RTC_STOPPING, &conn->flags) ||
-	       test_bit(XPT_DEAD, &xprt->xpt_flags);
+	dead = svc_rtc_conn_dead(conn);
 	svc_rtc_drain_sends(conn, dead);
-	/* As svc_rtc_work(): what is left over the budget, or queued since. */
-	if (conn->pending || !llist_empty(&conn->sendq) ||
-	    !llist_empty(&conn->done)) {
+	/*
+	 * As svc_rtc_work(): what is left over the budget, or queued since.
+	 * A call published to conn->done after this pass took the list
+	 * queued the next pass itself (svc_rtc_publish_done()), so a
+	 * stopping connection's send work item does not requeue itself.
+	 */
+	if (!dead && (conn->pending || !llist_empty(&conn->sendq))) {
 		svc_rtc_stat_inc(budget_exhausted);
 		svc_rtc_tx_kick(conn);
 	}
