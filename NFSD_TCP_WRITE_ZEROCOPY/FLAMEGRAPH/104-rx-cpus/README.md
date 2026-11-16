@@ -1795,3 +1795,17 @@ reliable").**  `read-check.sh` passes at 71.5 or more, runs 71.0 to
 AGENTS.md says the same.  **By that mark t2-r766's 71.52 GB/s is a
 PASS**, so `sunrpc.ko` `8843BD2AFB934E2FEFD942B` passes both checks
 (WRITE 78.15, READ 71.52) and is kept.
+
+### t2-r767: the split on both ports at the two-port setting (Mike, 16 November; about to run)
+
+Mike: "run the split on both ports at the two-port setting".
+`run-split2.sh 767` is `read-check.sh`'s run (eight drives, both ports
+at the two-port setting, fio 1 MiB at rsize 256 KiB, `WARM=10
+RUNTIME=40` after a trim and 120 s of rest) with split Y, so its
+figure stands beside the read mark (71.5) and r766's 71.52 at split N.
+It refuses to run without pseudo-NMI, the NMI watchdog,
+`hardlockup_panic` and kdump, and puts split back to N whatever
+happens.  t2-r759, the last two-port split run, hung the host on the
+module before the RXOWN fix.  Run through `step.sh
+/var/tmp/zc-run-logs/split3-534 r767`; if the host goes down, the last
+`zc-step` line in the client's netconsole log names it.
