@@ -1826,3 +1826,15 @@ two ports the split is safe on this module and **costs 13% of the read
 rate**: the hang of t2-r759 does not come back, the gain it was made
 for does not show.  Whether it is worth a profile or is dropped is
 Mike's.
+
+### t2-r768 and t2-r769: a profile of the split on two ports (Mike, 16 November; about to run)
+
+Mike: "profile the split on two ports".  `run-split-prof.sh` runs
+t2-r768 (split N) and then t2-r769 (split Y), each `run-split2.sh`'s run
+(the read check's two-port read after a trim and 120 s of rest).  15 s
+into fio's count every CPU is recorded for 8 s at 999 Hz with kernel
+call chains, and `rtc_stats` and `/proc/stat` are read either side.
+Each run's directory gets cycles by CPU, by command, and by command and
+symbol; the rtc CPUs' (8-55) self and children; and folded stacks and
+flamegraphs for all CPUs and for 8-55, so that the two can be diffed.
+Through `step.sh /var/tmp/zc-run-logs/split3-534 prof768-769`.
