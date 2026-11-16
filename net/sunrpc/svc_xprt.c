@@ -2260,6 +2260,9 @@ int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 }
 EXPORT_SYMBOL_GPL(svc_rtc_register);
 
+/* How often svc_rtc_unregister() reports a wait that has not ended. */
+#define SVC_RTC_WAIT_REPORT	(10 * HZ)
+
 /**
  * svc_rtc_unregister - Remove the offer hook and wait for its users
  * @serv: service
@@ -2269,7 +2272,9 @@ EXPORT_SYMBOL_GPL(svc_rtc_register);
  */
 void svc_rtc_unregister(struct svc_serv *serv)
 {
+	unsigned long start = jiffies, next = start + SVC_RTC_WAIT_REPORT;
 	struct svc_rtc_pool *pool;
+	long active;
 
 	mutex_lock(&svc_rtc_mutex);
 	RCU_INIT_POINTER(serv->sv_rtc, NULL);
@@ -2278,12 +2283,20 @@ void svc_rtc_unregister(struct svc_serv *serv)
 	/*
 	 * Every pool rqst in use holds sv_rtc_active.  One handed to a
 	 * thread may find no thread left to run it: release it here (the
-	 * client retransmits, as for any call dropped at shutdown).
+	 * client retransmits, as for any call dropped at shutdown).  A
+	 * wait that does not end is reported, so that a shutdown that
+	 * hangs here says so.
 	 */
 	for (;;) {
 		svc_rtc_handoff_drain(serv);
-		if (!svc_rtc_active_sum())
+		active = svc_rtc_active_sum();
+		if (!active)
 			break;
+		if (time_after(jiffies, next)) {
+			pr_warn("svc_rtc: %s: %ld work passes and calls still in flight after %lus\n",
+				serv->sv_name, active, (jiffies - start) / HZ);
+			next = jiffies + SVC_RTC_WAIT_REPORT;
+		}
 		schedule_timeout_uninterruptible(HZ / 100);
 	}
 	mutex_lock(&svc_rtc_mutex);
