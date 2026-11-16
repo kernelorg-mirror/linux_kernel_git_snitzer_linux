@@ -1473,3 +1473,109 @@ enp164s0f0 56 256`, `PORTS=b settled.sh apply`.  Then
 rsize 256 KiB) at four connections, then twelve.  Each teardown step
 is run on its own: the client's unmount, then nfsd stopped and started
 with split connections up.
+
+Port b was set up alone (steps in
+`/var/tmp/zc-run-logs/portb-534-boot5/steps.log`: the drives, nfsd at
+512 threads, the region on `0000:a4:00.0` at 32768 pages, `port-setup.sh
+enp164s0f0 56 256`, port b answering 3 of 3), and then Mike stopped it
+there for a power reset.  No split run was made on port b.
+
+## Next: the split's teardown made robust (Mike, 16 November, 20:00)
+
+**Mike: "focus on module teardown with split enabled being more
+robust ... seems likely source of crash".**  The work is code first,
+then a run that leaves a record.  Mike power-cycles tardis2; the
+one-shot `ofp-rocky-534-pnmi.conf` is set (`bootctl status`: `OneShot
+Entry: ofp-rocky-534-pnmi.conf`).  `updates/` holds the fixed
+`sunrpc.ko` `C3403E1043259A7524692BC` (split N at boot).
+
+### Save state before every step (Mike: "I have explained this repeatedly today")
+
+Three hangs today left nothing, and the last one took the KUnit result
+with it.  From now on:
+
+- `bringup.sh` runs `xeu-rig/crashlog.sh` right after arming kdump and
+  stops if it fails.  On a boot that does not run `bringup.sh`, run
+  `crashlog.sh` before anything else.  It puts the journal on disk and
+  checks that a line reaches the client's netconsole log
+  (`10.20.12.106:/var/tmp/tardis2-netconsole.log`).
+- Every step that could take the host down (insmod, rmmod, a parameter
+  written, nfsd started or stopped, a run) goes through `xeu-rig/step.sh
+  DIR NAME CMD...`, **one command to a step**, never a chain like the
+  one that hung at 19:27.
+- Commit the README line saying what is about to run before running it,
+  and the result straight after it.  A result held only in the session
+  is lost with the host.
+- After a hang, read the client's netconsole log first: the last
+  `zc-step` line names the step.
+
+### What in the split's teardown could hang (an audit started, not done)
+
+What was checked, and holds: every queued pass, of either work item,
+holds an xprt reference (`svc_rtc_pin()`), and `svc_rtc_xprt_detach()`
+(the `kfree()` of the connection, and of `tx_work` in it) runs only from
+the transport's last put (`svc_xprt_free()`).  So the send work item
+cannot be freed while queued, as long as every queue of it is pinned
+(`svc_rtc_tx_kick()` and `svc_rtc_kick_done()` are).
+
+Suspects, in the order to work them:
+
+1. **The send work item queues itself again with no end on a stopping
+   connection.**  `svc_rtc_tx_work()` kicks itself whenever `pending`,
+   `sendq` or `done` is still non-empty after a drain, whether or not
+   the connection is stopping.  If anything stays on one of them on a
+   dead connection (a completion returning `-EAGAIN`, which a fixture
+   can force with `complete_eagain`; a reply the receive pass held back
+   under `RQ_RTC_RXOWN` and published after the stop's flush), the item
+   runs for ever.  Then `drain_workqueue()` (in the fixture's
+   `rtc_e2e_done()` and the suite's `split_async_complete` case) and
+   `destroy_workqueue()` (in `svc_rtc_serv_destroy()`, at nfsd's stop
+   or the suite's teardown) never return.  They print `isn't complete
+   after N tries` and go on, which fits a step that ran seven minutes.
+   Fix: on `SVC_RTC_STOPPING`, release what is left as the unsplit
+   pass's final drain does, and kick again only for work that can make
+   progress; add a KUnit case that stops a split connection with
+   something on each list.
+2. **`svc_rtc_xprt_stop()`'s order.**  It kicks and flushes the receive
+   work item, then kicks and flushes the send work item once.  A
+   completion or a held reply published after that flush queues the
+   send item again, after stop thinks it is done.  The pins keep the
+   connection alive, but nothing waits for it before
+   `svc_rtc_unregister()` and the workqueue's destruction.  Fix: loop
+   until both items are idle and all three lists empty, or make the
+   final send pass the last thing `svc_rtc_unregister()` waits for
+   (`sv_rtc_active`).
+3. **The KUnit module's code left reachable after `rmmod`.**  The
+   suite sets `svc_rtc_kunit_published` (a pointer into
+   `svc_rtc_kunit.ko`) in one case and clears it at the end of that
+   case (lines 2175 and 2192): a case that ends early on an assertion
+   leaves it set, and the next publish after `rmmod` calls into freed
+   code.  The probe's `svc_rtc_send` (`rtc_probe_send_fn`) and
+   `rtc_e2e_ops` are the suite's too.  Fix: clear the hook with
+   `kunit_add_action()`, and make the suite's exit wait out
+   `sv_rtc_wq`-queued work of its own fixtures.
+4. **The pattern before the split.**  "KUnit crashes on build 506" in
+   `TESTING.md`: three earlier suite runs took tardis2 down with no
+   dump.  Read it before deciding that the split is the cause.
+
+### The order of work for the next session
+
+1. The boot's checks ("Next boot: after the power reset" above:
+   pseudo-NMI, both ports pinged, the client cleared), then
+   `bringup.sh` (it now runs `crashlog.sh`), `settled.sh apply`.
+   Commit the boot's outcome, with its row in `PORT-DEAD-AFTER-BOOT.md`.
+2. Code, in the tree, as commits at the tip (code, interface and tests
+   kept apart): suspects 1 to 3 above, each with a KUnit case that
+   stops a split connection the way the suspect does.  Build with
+   `xeu-rig/build-sunrpc.sh` against build 534 and check that the export
+   versions still match.
+3. The suite on the host, its loading and every teardown step through
+   `step.sh` one at a time (`swap-sunrpc.sh` with no client
+   connected; `insmod svc_rtc_kunit.ko`; dmesg saved; `rmmod
+   svc_rtc_kunit`; each sunrpc parameter put back on its own; nfsd
+   started; `settled.sh apply`), each committed or synced before the
+   next.
+4. Only then `run-split1.sh` at four and twelve connections, and the
+   teardown after twelve (the client's unmount, then nfsd's stop and
+   start with split connections up), each through `step.sh`.  If port
+   a is dead again, port b alone as set up above.

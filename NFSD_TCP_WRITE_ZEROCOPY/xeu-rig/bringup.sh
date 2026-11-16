@@ -38,6 +38,9 @@ kdump_armed() {
 	echo "kdump armed: $(( $(cat /sys/kernel/kexec_crash_size) >> 20 )) MiB reserved"
 }
 kdump_armed || exit 1
+# A record that survives a hang: the journal on disk, netconsole to the client
+# (Mike, 16 November).  Then run every risky step through step.sh.
+"$RIG/crashlog.sh" || { echo "crashlog.sh failed: no record would survive a hang"; exit 1; }
 # The drives are not in /etc/fstab, and place below needs nfsd's threads (on
 # tardis1 hammerspace-nfsd-tuning starts them).  data_drives names a drive
 # here only while nothing is mounted on /hs/nvmeN.

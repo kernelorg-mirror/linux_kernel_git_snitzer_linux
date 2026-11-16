@@ -434,6 +434,16 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**tardis2's next boot (Mike, 16 November, 20:00): build 534 with
+pseudo-NMI after a power reset, then the split's teardown made robust
+(Mike: "focus on module teardown with split enabled").  Start at "Next:
+the split's teardown made robust" at the end of
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/README.md`.  Save state
+before every step (Mike: "I have explained this repeatedly today"):
+`bringup.sh` runs `xeu-rig/crashlog.sh` (journal on disk, netconsole to
+the client); every risky step goes through `xeu-rig/step.sh`, one
+command to a step; commit what is about to run before running it.**
+
 **tardis2's next boot (Mike, 16 November): build 534 with pseudo-NMI
 (the one-shot entry `ofp-rocky-534-pnmi.conf`), to retry
 `svc_rtc_tx_split` on one port after it hung the host on two (t2-r759,
