@@ -984,14 +984,6 @@ struct rtc_e2e {
 	int region_held;	/* fake RX-region admissions outstanding */
 	bool complete_eagain;	/* ops->complete() returns -EAGAIN */
 	bool freed;
-	unsigned int completes;	/* ops->complete() calls */
-	/* Split: what the send work item has done while a pass is in rqst */
-	bool probe;		/* next rqst_done() runs the probe */
-	bool probe_waited;	/* its send went out within the timeout */
-	unsigned int probe_reply_len;	/* reply_len[1] when it went out */
-	unsigned int probe_completes;	/* completes when it went out */
-	struct svc_rtc_send probe_send;
-	struct completion probe_done;
 };
 
 static struct rtc_e2e *rtc_e2e_cur;
@@ -1214,7 +1206,6 @@ static bool rtc_e2e_want_call(struct svc_xprt *xprt, u32 prog, u32 vers,
 
 static int rtc_e2e_complete(struct svc_rqst *rqstp)
 {
-	rtc_e2e_cur->completes++;
 	if (rtc_e2e_cur->complete_eagain)
 		return -EAGAIN;
 	return rtc_proc_encode(rqstp, &rqstp->rq_res_stream) ? 1 : 0;
@@ -1227,39 +1218,9 @@ static void rtc_e2e_rqst_free(struct svc_rqst *rqstp)
 	rtc_e2e_rqst_frees++;
 }
 
-static void rtc_probe_send_fn(struct svc_xprt *xprt,
-			      struct svc_rtc_send *send, bool dead)
-{
-	struct rtc_e2e *e = container_of(send, struct rtc_e2e, probe_send);
-
-	e->probe_reply_len = READ_ONCE(e->reply_len[1]);
-	e->probe_completes = READ_ONCE(e->completes);
-	complete(&e->probe_done);
-}
-
-/*
- * With e->probe, the first rqst_done() (on the receive pass, its
- * svc_process() returned) queues a send of its own and waits for the
- * send work item to send it: what that work item does with the rqst the
- * pass is still in is then on record.
- */
-static void rtc_e2e_rqst_done(struct svc_rqst *rqstp)
-{
-	struct rtc_e2e *e = rtc_e2e_cur;
-
-	if (!e->probe)
-		return;
-	e->probe = false;
-	e->probe_send.fn = rtc_probe_send_fn;
-	svc_rtc_queue_send(&e->xprt, &e->probe_send);
-	e->probe_waited = wait_for_completion_timeout(&e->probe_done,
-						      HZ) != 0;
-}
-
 static const struct svc_rtc_ops rtc_e2e_ops = {
 	.flavor		= RPC_AUTH_NULL,
 	.complete	= rtc_e2e_complete,
-	.rqst_done	= rtc_e2e_rqst_done,
 	.rqst_free	= rtc_e2e_rqst_free,
 	.want		= rtc_e2e_want,
 	.want_call	= rtc_e2e_want_call,
@@ -2089,12 +2050,10 @@ static void rtc_e2e_early_complete(struct kunit *test)
 	rtc_e2e_done(test, e);
 }
 
-static struct rtc_e2e *rtc_e2e_split_new(struct kunit *test, bool split);
-
 /* Submitted, then the connection closes, then the I/O completes. */
-static void __rtc_e2e_teardown_inflight(struct kunit *test, bool split)
+static void rtc_e2e_teardown_inflight(struct kunit *test)
 {
-	struct rtc_e2e *e = rtc_e2e_split_new(test, split);
+	struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
 	struct svc_rtc_stats a, b, c;
 
 	e->mode = RTC_M_ASYNC;
@@ -2111,9 +2070,47 @@ static void __rtc_e2e_teardown_inflight(struct kunit *test, bool split)
 	rtc_e2e_done(test, e);
 }
 
-static void rtc_e2e_teardown_inflight(struct kunit *test)
+/*
+ * A connection stops with more than a batch of replies on its FIFO and
+ * a call parked on I/O that completes after the stop.  Every reply is
+ * released unsent, the completed call's too, and the work item does not
+ * queue itself again once the connection is dead.
+ */
+static void rtc_e2e_stop_full(struct kunit *test)
 {
-	__rtc_e2e_teardown_inflight(test, false);
+	struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
+	struct rtc_send_set *set = kunit_kzalloc(test, sizeof(*set), GFP_KERNEL);
+	struct svc_rtc_stats a, b, c, d;
+	int i;
+
+	KUNIT_ASSERT_NOT_NULL(test, set);
+	e->mode = RTC_M_ASYNC;
+	rtc_e2e_kick(e, &a, &b);
+	KUNIT_ASSERT_NOT_NULL(test, e->pending);
+	rtc_send_set_init(set);
+	for (i = 0; i < RTC_NSENDS; i++)
+		llist_add(&set->sends[i].send.node, &e->xprt.xpt_rtc->sendq);
+
+	svc_rtc_stats_sum(&c);
+	set_bit(XPT_DEAD, &e->xprt.xpt_flags);
+	svc_rtc_xprt_stop(&e->xprt);
+	KUNIT_EXPECT_EQ(test, set->nlog, RTC_NSENDS);
+	svc_rtc_complete(e->pending);
+	drain_workqueue(e->serv->sv_rtc_wq);
+	svc_rtc_stats_sum(&d);
+
+	for (i = 0; i < RTC_NSENDS; i++) {
+		KUNIT_EXPECT_EQ(test, set->log[i], i);
+		KUNIT_EXPECT_TRUE(test, set->dead[i]);
+		KUNIT_EXPECT_FALSE(test, set->locked[i]);
+	}
+	KUNIT_EXPECT_EQ(test, e->reply_len[1], 0);
+	KUNIT_EXPECT_EQ(test, d.fast_completed - a.fast_completed, 0);
+	KUNIT_EXPECT_EQ(test, d.budget_exhausted - c.budget_exhausted, 0);
+	KUNIT_EXPECT_NULL(test, e->xprt.xpt_rtc->pending);
+	KUNIT_EXPECT_TRUE(test, llist_empty(&e->xprt.xpt_rtc->sendq));
+	KUNIT_EXPECT_TRUE(test, llist_empty(&e->xprt.xpt_rtc->done));
+	rtc_e2e_done(test, e);
 }
 
 /* M2: a miss hands off with its region credit returned; the rerun admits. */
@@ -2249,7 +2246,7 @@ static void rtc_race_complete(struct work_struct *work)
  * kick) and, every other round, connection teardown.  Every pin is
  * balanced and the transport is freed exactly once (rtc_e2e_done()).
  */
-static void __rtc_e2e_complete_race(struct kunit *test, bool split)
+static void rtc_e2e_complete_race(struct kunit *test)
 {
 	unsigned int round, other;
 
@@ -2257,7 +2254,7 @@ static void __rtc_e2e_complete_race(struct kunit *test, bool split)
 	if (other >= nr_cpu_ids)
 		other = cpumask_first(cpu_online_mask);
 	for (round = 0; round < 64; round++) {
-		struct rtc_e2e *e = rtc_e2e_split_new(test, split);
+		struct rtc_e2e *e = rtc_e2e_new(test, RTC_PROC_FAST);
 		struct svc_rtc_stats a, b;
 		struct rtc_race race;
 
@@ -2284,153 +2281,6 @@ static void __rtc_e2e_complete_race(struct kunit *test, bool split)
 			rtc_e2e_thread_serve(test, e, 0);
 		rtc_e2e_done(test, e);
 	}
-}
-
-static void rtc_e2e_complete_race(struct kunit *test)
-{
-	__rtc_e2e_complete_race(test, false);
-}
-
-static void rtc_split_off(void *unused)
-{
-	WRITE_ONCE(svc_rtc_tx_split, false);
-}
-
-/* A fixture whose connection is split when @split (latched at attach). */
-static struct rtc_e2e *rtc_e2e_split_new(struct kunit *test, bool split)
-{
-	struct rtc_e2e *e;
-
-	if (!split)
-		return rtc_e2e_new(test, RTC_PROC_FAST);
-	KUNIT_ASSERT_EQ(test, kunit_add_action_or_reset(test, rtc_split_off,
-							NULL), 0);
-	WRITE_ONCE(svc_rtc_tx_split, true);
-	e = rtc_e2e_new(test, RTC_PROC_FAST);
-	WRITE_ONCE(svc_rtc_tx_split, false);
-	init_completion(&e->probe_done);
-	return e;
-}
-
-/*
- * Split: a reply svc_send() queued on the receive pass is not sent
- * while the pass is still in its rqst; it goes out after, once.
- */
-static void rtc_e2e_split_sync_held(struct kunit *test)
-{
-	struct rtc_e2e *e = rtc_e2e_split_new(test, true);
-	struct svc_rtc_stats a, b;
-
-	rtc_e2e_ref(test, e);
-	e->probe = true;
-	rtc_e2e_kick(e, &a, &b);
-	KUNIT_EXPECT_TRUE(test, e->probe_waited);
-	KUNIT_EXPECT_EQ(test, e->probe_reply_len, 0);
-	KUNIT_EXPECT_EQ(test, b.sends - a.sends, 2);
-	KUNIT_EXPECT_EQ(test, b.fast_completed - a.fast_completed, 1);
-	rtc_e2e_expect_identical(test, e);
-	rtc_e2e_done(test, e);
-}
-
-/*
- * Split: a completion that comes before svc_process() returns is not
- * run by the send work item until the receive pass is done with the
- * rqst; then it is, once, and its reply is the thread path's.
- */
-static void rtc_e2e_split_early_complete(struct kunit *test)
-{
-	struct rtc_e2e *e = rtc_e2e_split_new(test, true);
-	struct svc_rtc_stats a, b;
-
-	rtc_e2e_ref(test, e);
-	e->mode = RTC_M_EARLY;
-	e->probe = true;
-	rtc_e2e_kick(e, &a, &b);
-	KUNIT_EXPECT_TRUE(test, e->probe_waited);
-	KUNIT_EXPECT_EQ(test, e->probe_completes, 0);
-	KUNIT_EXPECT_EQ(test, e->probe_reply_len, 0);
-	KUNIT_EXPECT_EQ(test, e->completes, 1);
-	KUNIT_EXPECT_EQ(test, b.async_submitted - a.async_submitted, 1);
-	KUNIT_EXPECT_EQ(test, b.fast_completed - a.fast_completed, 1);
-	rtc_e2e_expect_identical(test, e);
-	rtc_e2e_done(test, e);
-}
-
-/* Split: a completion after the pass is finished on the send work item. */
-static void rtc_e2e_split_async_complete(struct kunit *test)
-{
-	struct rtc_e2e *e = rtc_e2e_split_new(test, true);
-	struct svc_rtc_stats a, b, c;
-
-	rtc_e2e_ref(test, e);
-	e->mode = RTC_M_ASYNC;
-	rtc_e2e_kick(e, &a, &b);
-	KUNIT_EXPECT_EQ(test, b.async_submitted - a.async_submitted, 1);
-	KUNIT_EXPECT_EQ(test, e->reply_len[1], 0);
-	KUNIT_ASSERT_NOT_NULL(test, e->pending);
-	KUNIT_EXPECT_EQ(test, rtc_active(), 1);
-
-	svc_rtc_complete(e->pending);
-	drain_workqueue(e->serv->sv_rtc_wq);
-	svc_rtc_stats_sum(&c);
-	KUNIT_EXPECT_EQ(test, e->completes, 1);
-	KUNIT_EXPECT_EQ(test, c.fast_completed - a.fast_completed, 1);
-	rtc_e2e_expect_identical(test, e);
-	rtc_e2e_done(test, e);
-}
-
-static void rtc_e2e_split_teardown_inflight(struct kunit *test)
-{
-	__rtc_e2e_teardown_inflight(test, true);
-}
-
-static void rtc_e2e_split_complete_race(struct kunit *test)
-{
-	__rtc_e2e_complete_race(test, true);
-}
-
-/*
- * Split: a connection stops with more than a batch of replies on its
- * FIFO and a call parked on I/O that completes after the stop.  Every
- * reply is released unsent, the completed call's too, and neither work
- * item queues itself again once the connection is dead.
- */
-static void rtc_e2e_split_stop_full(struct kunit *test)
-{
-	struct rtc_e2e *e = rtc_e2e_split_new(test, true);
-	struct rtc_send_set *set = kunit_kzalloc(test, sizeof(*set), GFP_KERNEL);
-	struct svc_rtc_stats a, b, c, d;
-	int i;
-
-	KUNIT_ASSERT_NOT_NULL(test, set);
-	e->mode = RTC_M_ASYNC;
-	rtc_e2e_kick(e, &a, &b);
-	KUNIT_ASSERT_NOT_NULL(test, e->pending);
-	rtc_send_set_init(set);
-	for (i = 0; i < RTC_NSENDS; i++)
-		llist_add(&set->sends[i].send.node, &e->xprt.xpt_rtc->sendq);
-
-	svc_rtc_stats_sum(&c);
-	set_bit(XPT_DEAD, &e->xprt.xpt_flags);
-	svc_rtc_xprt_stop(&e->xprt);
-	KUNIT_EXPECT_EQ(test, set->nlog, RTC_NSENDS);
-	svc_rtc_complete(e->pending);
-	drain_workqueue(e->serv->sv_rtc_wq);
-	svc_rtc_stats_sum(&d);
-
-	for (i = 0; i < RTC_NSENDS; i++) {
-		KUNIT_EXPECT_EQ(test, set->log[i], i);
-		KUNIT_EXPECT_TRUE(test, set->dead[i]);
-		KUNIT_EXPECT_FALSE(test, set->locked[i]);
-	}
-	KUNIT_EXPECT_EQ(test, e->completes, 1);
-	KUNIT_EXPECT_EQ(test, e->reply_len[1], 0);
-	KUNIT_EXPECT_EQ(test, d.fast_completed - a.fast_completed, 0);
-	KUNIT_EXPECT_EQ(test, d.budget_exhausted - c.budget_exhausted, 0);
-	KUNIT_EXPECT_NULL(test, e->xprt.xpt_rtc->pending);
-	KUNIT_EXPECT_TRUE(test, llist_empty(&e->xprt.xpt_rtc->sendq));
-	KUNIT_EXPECT_TRUE(test, llist_empty(&e->xprt.xpt_rtc->done));
-	rtc_e2e_done(test, e);
 }
 
 static struct kunit_case svc_rtc_test_cases[] = {
@@ -2473,17 +2323,12 @@ static struct kunit_case svc_rtc_test_cases[] = {
 	KUNIT_CASE(rtc_e2e_early_complete),
 	KUNIT_CASE(rtc_e2e_vs_count_once),
 	KUNIT_CASE(rtc_e2e_teardown_inflight),
+	KUNIT_CASE(rtc_e2e_stop_full),
 	KUNIT_CASE(rtc_e2e_region_handoff_balanced),
 	KUNIT_CASE(rtc_e2e_no_mem),
 	KUNIT_CASE(rtc_e2e_no_slot),
 	KUNIT_CASE(rtc_e2e_publish_pinned),
 	KUNIT_CASE_SLOW(rtc_e2e_complete_race),
-	KUNIT_CASE(rtc_e2e_split_sync_held),
-	KUNIT_CASE(rtc_e2e_split_early_complete),
-	KUNIT_CASE(rtc_e2e_split_async_complete),
-	KUNIT_CASE(rtc_e2e_split_teardown_inflight),
-	KUNIT_CASE(rtc_e2e_split_stop_full),
-	KUNIT_CASE_SLOW(rtc_e2e_split_complete_race),
 	{}
 };
 
