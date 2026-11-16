@@ -1720,3 +1720,13 @@ batches, `budget_exhausted` 19 k, `fallback_conn_full` 8.5 k, and
 **`fallback_no_peek` 421 k** (t2-r760: 1.6 k), to be understood before
 the split's rate is judged.  Next: nfsd stopped and started with split
 connections up and reads in flight.
+
+### t2-r764: nfsd stopped with twelve split connections reading (about to run)
+
+`teardown-split.sh 764`: split Y; `/hs/nvme0` exported on port a and
+mounted on the client with `nconnect=12`, rsize 256 KiB; fio lays out
+eight 4 GiB files and then reads them (1 MiB, depth 8, eight jobs) in
+the background; with the reads going, `systemctl stop nfs-server`, then
+`start`; then fio killed, the mount taken off, split N, the export
+removed, `settled.sh apply`.  Every step through `step.sh`
+(`/var/tmp/zc-run-logs/t2-r764/steps.log`).
