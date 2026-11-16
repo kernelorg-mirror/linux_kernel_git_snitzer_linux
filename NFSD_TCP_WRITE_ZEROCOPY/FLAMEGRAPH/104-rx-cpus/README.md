@@ -1680,3 +1680,13 @@ printed `KTAP version 1`, `1..1`, `kunit: disabled` (2217 s): nfsd's
 own suite is reached on every load of `nfsd.ko`, and skipped only
 because that `kunit` was disabled.  Next, step 4: `rmmod-suite`,
 `kunit-off`, `params`, `start-nfsd`, `settled`.
+
+**The server went back with no hang** (16 November, about 20:33):
+`rmmod svc_rtc_kunit`, `rmmod kunit`, sunrpc's settings read back as
+before the suite (`svc_rtc_balance` N, `svc_rtc_cpus` 8-55,
+`svc_rtc_tx_split` N; srcversion `8843BD2AFB934E2FEFD942B`), the nfsd
+mounts and units started (512 threads), and `settled.sh apply` ended in
+"the settled setting".  nfsd's load printed `kunit: disabled` (2294 s):
+its own suite was skipped, as meant.  Every step exited 0; both ports
+answer 3 of 3.  Next: `run-split1.sh` at four and twelve connections,
+then the teardown after twelve, each through `step.sh`.
