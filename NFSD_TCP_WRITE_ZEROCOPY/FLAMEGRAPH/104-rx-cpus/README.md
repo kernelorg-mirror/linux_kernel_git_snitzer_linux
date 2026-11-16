@@ -1349,8 +1349,13 @@ it is safe as it is).
 
 ### Next (Mike's to decide)
 
-1. Port a is dead on this boot: a power reset, with the one-shot
-   `ofp-rocky-534-pnmi.conf` set again first.
+1. Port a is dead on this boot: a power reset.  The one-shot
+   `ofp-rocky-534-pnmi.conf` is set again (19:20, `bootctl status`:
+   `OneShot Entry: ofp-rocky-534-pnmi.conf`), and Mike power-cycles
+   tardis2.  On the boot after it, check pseudo-NMI and ping both
+   ports first, as in "Next boot: after the power reset" above; the
+   client may still hold t2-r761's mounts and fio, so clear it before
+   `bringup.sh`.
 2. On that boot, before any run, the `sunrpc_svc_rtc` suite from
    `sunrpc-split2-534` on its own, after committing that it is about
    to run ("KUnit crashes on build 506" in `TESTING.md`; it needs the
