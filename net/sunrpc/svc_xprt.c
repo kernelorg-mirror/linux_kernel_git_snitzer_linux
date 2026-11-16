@@ -1740,8 +1740,7 @@ EXPORT_SYMBOL_IF_KUNIT(svc_rtc_place);
  * limited by one CPU doing all four.  Latched when a connection is
  * attached: a connection keeps the mode it started with.
  */
-VISIBLE_IF_KUNIT bool svc_rtc_tx_split __read_mostly;
-EXPORT_SYMBOL_IF_KUNIT(svc_rtc_tx_split);
+static bool svc_rtc_tx_split __read_mostly;
 module_param(svc_rtc_tx_split, bool, 0644);
 MODULE_PARM_DESC(svc_rtc_tx_split,
 		 "Run each connection's completions and sends on a second work item and CPU (applies to connections made after it is set)");
