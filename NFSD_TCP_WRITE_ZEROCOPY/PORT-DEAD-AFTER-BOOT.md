@@ -117,6 +117,7 @@ the reset when the boot is into a test kernel: `bootctl set-oneshot
 | 16 Nov, 18:00 | tardis2, build 534 with pseudo-NMI (`ofp-rocky-534-pnmi.conf`), first boot after the hang of t2-r759 | **a**, dead before `bringup.sh` (the client's port b mounts reconnected at nfsd's start, port a's never) | 0 (and 0 on the working b) | `bringup.sh` (port a's rings remade): still dead, 13 packets sent, none received; power reset |
 | 16 Nov, 18:14 | tardis2, build 534 with pseudo-NMI, second boot (after the power reset) | **a**, dead before `bringup.sh` (48 frames received, 119 dropped, 20 sent, neighbour FAILED; counters and dmesg in `port-dead/534-pnmi-boot2/`) | 0 (and 0 on the working b) | nothing tried; power reset |
 | 16 Nov, 18:21 | tardis2, build 534 with pseudo-NMI, third boot (after the second power reset) | none (both answer before and after `bringup.sh`) | | round 104, the split on one port |
+| 16 Nov, 19:03 | tardis2, build 534's default entry (no pseudo-NMI: the one-shot was spent), the boot after t2-r761 hung the host | **a**, dead before `bringup.sh` (96 frames received, 161 dropped, 43 sent, neighbour FAILED; counters and dmesg in `port-dead/534-after-r761/`) | 0 (and 0 on the working b) | nothing tried |
 
 The tardis1 case was seen after the first boot's slot test, which
 takes each port down and up, so it is not known whether that port was

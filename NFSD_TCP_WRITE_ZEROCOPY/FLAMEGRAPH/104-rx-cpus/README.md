@@ -1242,3 +1242,121 @@ connections does not hang.  rtc stats over the run: 2.08 M diverted,
 2.07 M sends in 1.55 M batches, `budget_exhausted` 549 k (26% of
 runs), `fallback_no_peek` 1607.  Logs in
 `/var/tmp/zc-run-logs/t2-r760/`.  Next, as planned: `NCONN=12`.
+
+### t2-r761: twelve connections hung the host (16 November, 18:32)
+
+`run-split1.sh` with `NCONN=12` (split Y, port a, `/hs/nvme0` to 3,
+eight jobs, 1 MiB at rsize 256 KiB) got as far as "a: placed 12
+flows" (`run.log`, 18:32) and the host went down: `wrote.0` is
+empty, so fio never reported.  It came back at 19:03 **on build 534's
+default entry, without pseudo-NMI**: the one-shot entry was spent by
+the boot of 18:21.  `/var/crash` is empty, the journal holds only
+this boot, and the console's last lines are not on the host, so
+nothing says what the hang was.  On this boot `kernel.hardlockup_panic`
+and `softlockup_panic` read 1 (`nmi_watchdog` 0, no pseudo-NMI); on
+the boot that hung they were 1 too, with the NMI watchdog on, so a
+hard or soft lockup should have panicked into kdump, which was armed.
+Either the hang was neither, or kdump did not fire: for the next
+split run, the BMC's serial console (`console=ttyAMA0`) is the record
+to keep.  Port a was dead on this boot before anything was run (96
+frames received, 161 dropped, neighbour `FAILED`; a row in
+`PORT-DEAD-AFTER-BOOT.md`); nothing was tried on it.
+
+### Audit of the split: the send work item releases a call the receive pass is still in
+
+Mike asked for an audit of `008493ad5d9a6` for every way it could take
+the host down.  One bug explains both hangs.  Everything in the
+run-to-completion path rests on one rule, written in its comments
+("Once published, a running pass may finish @r and reuse it", "The
+work item drains the FIFO after this call returns", "Only the
+connection's work item parks"): a call is finished by the same work
+item that received it, so a completion cannot run until the receive
+pass is out of `svc_process()` and `svc_rtc_after_process()`.  The
+split breaks it, because the send work item runs on another CPU at the
+same time as the receive work item:
+
+- **An async READ completing before `svc_process()` returns.**  nfsd
+  sets `RQ_RTC_ASYNC` before the submit ("the completion may run
+  before it returns"); `svc_rtc_complete()` then queues the send work
+  item, which runs `ops->complete` and `svc_rtc_process_resume()`
+  while the receive pass is still unwinding nfsd on the same `rqstp`,
+  at an `rq_rtc_aoffset` that `svc_process_common()` stores only after
+  dispatch returns.  It sends the reply and releases the rqst
+  (clearing `RQ_RTC_ASYNC` and `r->queued`, `rq_xprt` NULL, the rqst
+  back on the free list).  The receive pass's `svc_rtc_after_process()`
+  then calls nfsd's `rqst_done()` on the released rqst, finds neither
+  `ASYNC` nor `MISS` nor `queued`, and **releases it a second time**.
+- **A synchronous reply.**  `svc_send()` puts it on `conn->sendq`
+  inside `svc_process()`, with no kick.  A send work item already
+  draining sends and releases it before the receive pass is done, with
+  the same second release.
+
+A second release does one of: `svc_xprt_release()` on `rq_xprt` NULL
+(an oops, which kdump would have saved); the rqst queued twice on the
+pool's lwq, a cycle that `lwq_dequeue()` walks for ever under its
+lock (a hang with no oops, as t2-r759 and t2-r761 were); or, if the
+rqst was already taken by another call, that call's pages released
+under its direct I/O (memory overwritten by DMA, a fault later and
+elsewhere).  It also puts the transport and the active count twice
+(the xprt freed while in use), and a late `svc_rtc_park()` leaks
+`conn->parked`.  t2-r760 at four connections showed
+`fallback_conn_full` 0, so the race likely never hit there; twelve
+connections on the same four drives, with more interrupts on the
+receive CPUs, widen the window.
+
+Nothing else in the split was found that would crash:
+`svc_rtc_xprt_stop()` flushes the receive work item and then the send
+work item, and every queued pass holds a pin, so `kfree()` of the
+connection cannot run under a queued `tx_work`; `svc_rtc_tx_place()`
+from hard IRQ keeps the per-CPU counts balanced through `xchg()` and
+picks only online CPUs; `conn->pending` is touched only by the send
+work item, under `xpt_mutex`, as a thread's send is.  No KUnit case
+ran with the split set.
+
+### The fix, its KUnit cases, and the module
+
+Three commits at the tip:
+
+- `254cead34a672` "SUNRPC: Do not let a split send work item finish a
+  call still received" (code).  The receive pass marks its rqst
+  `RQ_RTC_RXOWN` (a new `rq_flags` bit, last, so no other bit moves).
+  While it is set, `svc_rtc_queue_reply()` holds the reply back and
+  the pass puts it on the FIFO in `svc_rtc_after_process()`.  Of the
+  pass and an async completion, whichever is last puts the call on
+  `conn->done`: each does `test_and_clear_bit(RQ_RTC_RXOWN)`, and the
+  one that finds it clear publishes (`svc_rtc_publish_done()`).  The
+  pass parks the call and `rq_rtc_aoffset` is stored before that, so
+  both are seen by the send work item.  A connection that is not split
+  never sets the bit and runs as before.
+- `acb791346c0bd` "SUNRPC: expose svc_rtc_tx_split for the KUnit
+  suites" (interface).
+- `8193d1e76ac48` "SUNRPC: test a split connection's handoff to its
+  send work item" (tests): five cases in `sunrpc_svc_rtc`, the reply
+  held back while the pass is in its rqst, the early completion not
+  run until the pass is done, a completion after the pass, and the
+  in-flight teardown and completion race on a split connection.  The
+  first two queue a send of their own from the hook's `rqst_done()`
+  on the receive pass and record what the send work item has done
+  when it goes out.
+
+Built with `xeu-rig/build-sunrpc.sh /var/tmp/zc-run-logs/sunrpc-split2-534`
+against build 534 with no warning; the 442 export versions match build
+534's, so nfsd and lockd load against it.  `sunrpc.ko` srcversion
+`C3403E1043259A7524692BC`, with `svc_rtc_kunit.ko` beside it.
+**Neither has been loaded or run**: the module in `updates/` is still
+`1907D42B9BE624B41C23DA2`, the split with the bug (split N at boot, so
+it is safe as it is).
+
+### Next (Mike's to decide)
+
+1. Port a is dead on this boot: a power reset, with the one-shot
+   `ofp-rocky-534-pnmi.conf` set again first.
+2. On that boot, before any run, the `sunrpc_svc_rtc` suite from
+   `sunrpc-split2-534` on its own, after committing that it is about
+   to run ("KUnit crashes on build 506" in `TESTING.md`; it needs the
+   new `sunrpc.ko` loaded, so `swap-sunrpc.sh` first, with no client
+   connected:
+   `swap-sunrpc.sh /var/tmp/zc-run-logs/sunrpc-split2-534`).
+3. Then `run-split1.sh` at four connections and at twelve again, with
+   the serial console logged, and the WRITE and READ checks if the
+   split is to be kept.
