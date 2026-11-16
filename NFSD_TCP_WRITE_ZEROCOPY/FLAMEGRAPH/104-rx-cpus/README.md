@@ -1579,3 +1579,18 @@ Suspects, in the order to work them:
    teardown after twelve (the client's unmount, then nfsd's stop and
    start with split connections up), each through `step.sh`.  If port
    a is dead again, port b alone as set up above.
+
+### The boot after the power reset (16 November, 19:54): both ports
+
+The boot is the one meant: `irqchip.gicv3_pseudo_nmi=1`, `GICv3:
+Pseudo-NMIs enabled`, `NMI watchdog: Enabled`, `kernel.nmi_watchdog`,
+`hardlockup_panic` and `softlockup_panic` 1, kdump armed, sunrpc
+`C3403E1043259A7524692BC` from `updates/` with `svc_rtc_tx_split` N,
+nfs-server inactive, no `WARNING:`, `BUG:` or `Oops`.  **Both ports
+answered 3 of 3 before `bringup.sh`** and again after it.  The client
+had no NFS mount, no fio and nothing in D state.  `./bringup.sh 32768
+256` (log `/var/tmp/zc-run-logs/bringup-534-pnmi-boot6.log`) armed
+kdump and ran `crashlog.sh` (journal on disk, a line seen at the
+client's netconsole log), and `./settled.sh apply` ended in "the
+settled setting" with no NFS connection.  Next: step 2 of the order of
+work, the teardown's code.

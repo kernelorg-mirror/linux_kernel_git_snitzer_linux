@@ -120,6 +120,7 @@ the reset when the boot is into a test kernel: `bootctl set-oneshot
 | 16 Nov, 19:03 | tardis2, build 534's default entry (no pseudo-NMI: the one-shot was spent), the boot after t2-r761 hung the host | **a**, dead before `bringup.sh` (96 frames received, 161 dropped, 43 sent, neighbour FAILED; counters and dmesg in `port-dead/534-after-r761/`) | 0 (and 0 on the working b) | nothing tried |
 | 16 Nov, 19:19 | tardis2, build 534 with pseudo-NMI, the boot after the power reset for t2-r761's dead port a | none (both answer before and after `bringup.sh`) | | round 104, the split's fix |
 | 16 Nov, 19:35 | tardis2, build 534's default entry (no pseudo-NMI: the one-shot was spent), the boot after the host went down putting the server back from the `sunrpc_svc_rtc` suite | **a**, dead before `bringup.sh` (58 frames received, 123 dropped, 21 sent, neighbour FAILED; counters and dmesg in `port-dead/534-boot5-after-kunit/`) | 0 (and 0 on the working b) | nothing tried; power reset |
+| 16 Nov, 19:54 | tardis2, build 534 with pseudo-NMI, the boot after the power reset of 20:00 (the split's teardown) | none (both answer before and after `bringup.sh`) | | round 104, the split's teardown made robust |
 
 The tardis1 case was seen after the first boot's slot test, which
 takes each port down and up, so it is not known whether that port was
