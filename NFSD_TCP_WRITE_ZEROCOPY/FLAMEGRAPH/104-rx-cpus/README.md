@@ -1444,3 +1444,32 @@ waits for a power reset.  For the boot after it (Mike's to decide):
    next, so that a hang names its step.  The suite's 48 of 48 is
    from the session's report only.
 3. Only then `run-split1.sh` at four and twelve connections.
+
+### Port b alone on this boot, with a record kept (Mike, 16 November, 19:50)
+
+Mike: use port b, which is up, to make progress on the teardown after
+twelve connections.  Pseudo-NMI is off on this boot (the hard-lockup
+detector is not running), so a hard lockup will not panic.  So every
+step now leaves a record that survives a hang:
+
+- `xeu-rig/crashlog.sh` (run on this boot, to be run by every boot's
+  bring-up): the journal on disk (`/var/log/journal`, synced every
+  1 s; it was volatile, which is why every hang today left nothing),
+  and netconsole over the management network to the client's listener
+  of 2 November (10.20.12.106:6666, `/var/tmp/tardis2-netconsole.log`
+  there).  It checks that a line gets through.  netconsole cannot carry
+  an oops while kdump is armed (TESTING.md), but it carries every line
+  before one, and a stall.
+- `xeu-rig/step.sh DIR NAME CMD...`: one step at a time.  Its start goes
+  to `DIR/steps.log`, the journal and `/dev/kmsg` (so netconsole carries
+  it), synced before the command runs.  Each output line goes the same
+  way as it comes, then the exit status.  A hang now names its step.
+
+Port a is not touched (no `bringup.sh`, which takes it down and up).
+Port b is set up alone: the drives and nfsd as `bringup.sh` does them,
+the region made on port b's device (32768 pages), `port-setup.sh
+enp164s0f0 56 256`, `PORTS=b settled.sh apply`.  Then
+`run-splitb.sh` (split Y on port b, `/hs/nvme4` to 7, reads at
+rsize 256 KiB) at four connections, then twelve.  Each teardown step
+is run on its own: the client's unmount, then nfsd stopped and started
+with split connections up.
