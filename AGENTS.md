@@ -439,7 +439,10 @@ what it is, and rename it once read.
 `svc_rtc_tx_split` on one port after it hung the host on two (t2-r759,
 nothing saved).  Start at "Next boot: build 534 with pseudo-NMI, the
 split on one port" at the end of
-`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/README.md`.**  The
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/README.md`.**
+**Its first boot (16 November, 18:00) lost port a and ran nothing;
+after the power reset start at "Next boot: after the power reset", the
+last section of that README.**  The
 split `sunrpc.ko` is in build 534's `updates/` (Mike: leave it there).
 
 **tardis2's next two boots (Mike, 15 November): build 531 with `psi=0`,

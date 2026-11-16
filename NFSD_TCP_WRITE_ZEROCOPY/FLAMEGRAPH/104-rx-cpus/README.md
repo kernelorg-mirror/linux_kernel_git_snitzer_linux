@@ -1144,3 +1144,42 @@ when nfsd started and port a's never had, so it was dead before
 `bringup.sh`.  Nothing else was tried on it.  `run-split1.sh` runs on
 port a, so the split was not run: the host waits for a power reset.
 The one-shot entry `ofp-rocky-534-pnmi.conf` is set again for it.
+
+## Next boot: after the power reset (16 November)
+
+Mike power-cycles tardis2 for the dead port a.  The one-shot entry
+`ofp-rocky-534-pnmi.conf` is set again (`bootctl status` showed
+`OneShot Entry: ofp-rocky-534-pnmi.conf`), so the boot should be build
+534 with pseudo-NMI, the split `sunrpc.ko` loading from `updates/` with
+split N.  The client (192.168.0.106 / 192.168.1.106, management
+10.20.12.106) was left clean: no NFS mount, no fio, nothing in D state.
+
+1. Step 1 of "Next boot: build 534 with pseudo-NMI" above: pseudo-NMI
+   on the command line, `Pseudo-NMIs enabled` and `NMI watchdog:
+   Enabled` in dmesg, `kernel.nmi_watchdog` 1.  If not, the boot fell
+   back to build 534's default entry: say so and stop.
+2. **Ping both ports before anything else**, from the server:
+   `ping -c3 -W2 192.168.1.106` (port a, `enp161s0f0`) and
+   `192.168.0.106` (port b, `enp164s0f0`).  If one does not answer,
+   read its `rx_packets` (0 is the dead port again), add a row to the
+   table in `PORT-DEAD-AFTER-BOOT.md`, commit, and hand back for another
+   power reset (set the one-shot again first).  Try nothing else on it.
+3. If the client has NFS mounted from this host at that point (an
+   earlier run's mounts reconnecting when nfsd starts), `bringup.sh`
+   stops before port b ("NFS connections are up"): clear the client
+   first (`pkill -9 -x fio`, then `umount -f`, or `umount -l` when busy,
+   on each `/mnt/rxr-*`).
+4. Then step 2 of the section above as written: `./bringup.sh 32768
+   256` (it arms kdump first and stops if it cannot), both ports pinged
+   again, `./settled.sh apply` ending in "the settled setting", sunrpc
+   `1907D42B9BE624B41C23DA2` with `svc_rtc_tx_split` N, no
+   `WARNING:`, `BUG:` or `Oops`; commit the boot's outcome here and add
+   the boot to `PORT-DEAD-AFTER-BOOT.md`'s table (a row with port lost
+   "none" counts too).
+5. Then steps 3 and 4 of that section: `run-split1.sh 760`, and if it
+   hangs, the vmcore in `/var/crash` after the reboot.
+
+The working tree holds uncommitted changes that predate this boot
+(`xeu-rig/iperf-tx.sh`, `read-check.sh`, `settled.sh` with `EXP_RPS`,
+`twoport.sh`, `net/sunrpc/svc_xprt.c`, which is the split, and
+`fml.txt`): leave them as they are.
