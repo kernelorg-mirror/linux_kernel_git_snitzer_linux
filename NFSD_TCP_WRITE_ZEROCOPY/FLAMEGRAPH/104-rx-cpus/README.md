@@ -2233,12 +2233,12 @@ one command a step; commit what is about to run before running it.
    `/sys/module/page_pool/parameters/rx_region_held_mark` must exist; if
    the boot fell back to build 534, say so and stop.
 2. **The passes at the settled setting, `region_reads` N:**
-   `xeu-rig/write-check.sh 791` and `xeu-rig/read-check.sh 792`.
+   `xeu-rig/write-check.sh 801` and `xeu-rig/read-check.sh 802`.
    David's patches change paths WRITEs take (0011's fallback to a system
    page, 0013 and 0014's hold), so the WRITE pass decides whether the
    kernel is kept at all, whatever confinement does.
 3. **The A/B**, one pair a step, alternating:
-   `./ab-reads.sh 793:N`, `794:Y`, `795:N`, `796:Y`.  Each is a
+   `./ab-reads.sh 803:N`, `804:Y`, `805:N`, `806:Y`.  Each is a
    `read-check.sh` with the parameter set before the mounts and the
    region's held mark on, and prints the rate, the region's exact peak
    (`max_held`), and the READ counters (admitted, parked, unconfined,
@@ -2248,8 +2248,8 @@ one command a step; commit what is about to run before running it.
    t2-r665 and r667 nearly tripled it), and `share_stalls` against
    READs admitted, where 0009's two largest READs a connection limited
    r665 and r667.
-4. **If Y is kept:** `write-check.sh 797` with Y, and
-   `SRV=replypages client-read.sh 798` with Y beside t2-r780: the
+4. **If Y is kept:** `write-check.sh 807` with Y, and
+   `SRV=replypages client-read.sh 808` with Y beside t2-r780: the
    rtc CPUs' 8.06 M pages taken under the zone lock in 5 s should be
    gone.
 5. Then whatever Y shows: if the share stalls, the share's size
@@ -2382,3 +2382,34 @@ copy and whether its destructor is `tcp_wfree` at
 `net_dev_start_xmit`, how long until `tcp_wfree()` and from where; and
 every `skb_copy_ubufs()` with its caller.  If `xeu` lets a plain skb go
 at transmit and a zero-copy one only at its completion, it shows here.
+
+### t2-r788 and r789: zero-copy skbs take five times longer in the NIC
+
+[wfree.bt](wfree.bt), `probe-recycle.sh 788 512 wfree` and `789 0 wfree`:
+
+| | `t2-r788`, recycle 512 | `t2-r789`, recycle 0 |
+|---|---|---|
+| GB/s (with the probe) | 62.11 | 65.74 |
+| skbs followed | 1.45 M, all zero copy | 1.52 M, all spliced |
+| let go by | `xeu_tx_poll()` → `napi_consume_skb()` → `tcp_wfree()` | the same |
+| driver transmit to completion, mean | **127 us** (most 64 to 256) | **25 us** (most 8 to 64) |
+| `skb_copy_ubufs()` | 0 | 0 |
+| server Send-Q, mean; TCP's RTT | 2.49 MB; 0.97 ms | 0.33 MB; 0.12 ms |
+
+`xeu` lets every skb go at its transmit completion, spliced or zero copy,
+so a driver that orphans only plain skbs is ruled out; TCP copied
+nothing (the "copied" sends were tail pulls).  The zero-copy skbs take
+five times longer from `net_dev_start_xmit` to their completion.  That
+is about 0.33 MB a socket at 2.6 GB/s; the rest of the 2.5 to 3.7 MB
+below TCP waits in the qdisc, as when the NIC's queues are held at their
+byte queue limit while completions are slow.  `ksoftirqd` freed 24 k of
+the zero-copy skbs against 5 k of the spliced.
+
+Next (Mike: "yes, run the probe, the xeu source is available in
+kernel-rpmtree"): [txq.bt](txq.bt), `probe-recycle.sh 790 512 txq` and
+`791 0 txq`, every transmitted skb of 1000 bytes or more by the CPU
+group it is sent from and its device and queue, and TSQ's deferred
+transmits (`tcp_tsq_handler()`) by CPU group; with
+[bqlsample.sh](bqlsample.sh) beside it, each transmit queue's BQL limit
+and inflight five times in the load.  And `xeu`'s transmit path read
+from its source.  (The next boot's runs move on again, from 801.)

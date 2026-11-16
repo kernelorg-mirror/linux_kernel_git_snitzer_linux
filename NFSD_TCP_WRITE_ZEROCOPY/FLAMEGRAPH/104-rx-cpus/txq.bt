@@ -1,0 +1,29 @@
+/*
+ * txq.bt: where sent TCP skbs go to the NIC (round 104, 16 November: with
+ * svc_tcp_reply_recycle at 512 a zero-copy skb took 127 us from the driver's
+ * transmit to its completion, a spliced one 25 us, t2-r788 and r789).  For
+ * every transmitted skb of 1000 bytes or more: the CPU group it is sent from
+ * (rtc 8-55, rings 0-7 and 56-63) and whether zero copy; the device and
+ * transmit queue it goes to, by CPU group; and TCP's small-queue deferred
+ * transmits (tcp_tsq_handler(), on the CPU that freed the skb) by CPU group.
+ * 5 s.
+ */
+tracepoint:net:net_dev_start_xmit /args.len >= 1000/
+{
+	$skb = (struct sk_buff *)args.skbaddr;
+	$sh = (struct skb_shared_info *)($skb->head + $skb->end);
+	$g = (cpu >= 8 && cpu <= 55) ? "rtc" : "rings";
+	@from[$g, ($sh->flags & 1) ? "zerocopy" : "plain"] = count();
+	@queue[str(args.name), args.queue_mapping, $g] = count();
+	@bytes_a_skb = stats(args.len);
+}
+
+kprobe:tcp_tsq_handler
+{
+	@tsq_handler[(cpu >= 8 && cpu <= 55) ? "rtc" : "rings"] = count();
+}
+
+interval:s:5
+{
+	exit();
+}
