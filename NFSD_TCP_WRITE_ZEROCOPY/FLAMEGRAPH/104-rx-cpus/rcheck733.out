@@ -1,0 +1,8 @@
+08:07:18 t2-r733 read check: RERUN | total 63.81 GB/s | new kernel warnings 0
+    port a enp161s0f0: 32.10 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 19/25/28/29%
+      read: 32.10 GB/s, 3.8k IOPS, completion 66.42 ms mean, 105.38 ms at the 99th percentile
+    port b enp164s0f0: 31.71 GB/s (fio, after the warm-up); in the 10 s window: wire 0.01 GB/s, FIFO drops 0, ring drops 0, rings 27/27/19/26%
+      read: 31.71 GB/s, 3.8k IOPS, completion 67.24 ms mean, 98.04 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 8.0 to 8.0, busiest 92% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 7.9 to 7.9, busiest 90% busy
+08:07:21 after: settled.sh audit rest: the settled setting

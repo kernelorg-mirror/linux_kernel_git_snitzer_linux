@@ -1,0 +1,9 @@
+08:28:11 layout: 8 x 2 GiB a drive, total 84.16 GB/s; a drive 10.45 10.31 10.31 10.46 10.82 11.06 10.35 10.40; completion 6.29 ms mean
+08:29:05 seq1M-psync-3: total 70.54 GB/s; a drive 8.71 8.66 8.61 9.11 8.86 8.82 8.99 8.79; completion 0.36 ms mean
+08:29:58 seq1M-psync-8: total 98.56 GB/s; a drive 12.15 12.30 12.34 12.53 12.32 12.02 12.50 12.39; completion 0.68 ms mean
+08:30:52 seq1M-aio-1x16: total 104.54 GB/s; a drive 13.02 13.09 13.10 13.07 13.09 13.00 13.06 13.11; completion 1.27 ms mean
+08:31:45 seq1M-aio-4x8: total 104.03 GB/s; a drive 12.92 12.97 12.98 13.07 13.06 13.00 13.00 13.04; completion 2.56 ms mean
+08:32:39 seq1M-aio-8x16: total 102.62 GB/s; a drive 12.75 12.81 12.78 12.86 12.96 12.90 12.79 12.77; completion 10.45 ms mean
+08:33:33 rand1M-aio-4x8: total 103.42 GB/s; a drive 12.90 12.93 12.93 12.98 12.95 12.83 12.95 12.95; completion 2.58 ms mean
+08:34:27 seq512K-aio-4x8: total 104.57 GB/s; a drive 13.05 13.07 13.09 13.09 13.11 12.99 13.07 13.09; completion 1.27 ms mean
+08:35:20 seq8M-aio-4x4: total 103.24 GB/s; a drive 12.79 12.88 12.69 12.97 13.05 12.91 12.93 13.02; completion 10.34 ms mean

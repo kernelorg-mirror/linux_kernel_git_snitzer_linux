@@ -1,0 +1,9 @@
+08:40:39 t2-r737 read check: PASS | total 73.47 GB/s | new kernel warnings 0
+    port a enp161s0f0: 36.94 GB/s (fio, after the warm-up); in the 10 s window: wire 0.03 GB/s, FIFO drops 0, ring drops 27, rings 25/25/24/26%
+      read: 36.94 GB/s, 35.2k IOPS, completion 7.19 ms mean, 10.68 ms at the 99th percentile
+    port b enp164s0f0: 36.53 GB/s (fio, after the warm-up); in the 10 s window: wire 0.03 GB/s, FIFO drops 0, ring drops 0, rings 23/27/25/25%
+      read: 36.53 GB/s, 34.8k IOPS, completion 7.27 ms mean, 11.34 ms at the 99th percentile
+    drives of a (/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3): 4, each writing 0.0 to 0.0 GB/s and reading 9.2 to 9.2, busiest 100% busy
+    drives of b (/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7): 4, each writing 0.0 to 0.0 GB/s and reading 9.1 to 9.1, busiest 100% busy
+08:40:42 after: settled.sh audit rest: the settled setting
+page cache (nr_file_pages): before 168380, after 168947

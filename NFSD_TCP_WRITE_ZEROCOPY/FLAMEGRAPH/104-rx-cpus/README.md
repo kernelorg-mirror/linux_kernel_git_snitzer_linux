@@ -821,3 +821,47 @@ Taken out on 16 November (Mike): `updates/sunrpc.ko` removed and
 the running sunrpc is build 534's own (`19A83B182CB392E30E42C81`),
 `updates/` is empty, and `settled.sh apply` ends in the settled
 setting.
+
+## The read check, the read size and the drives' local ceiling (16 November)
+
+Build 534, `skb_tx_defer_max` 0, its own sunrpc again.  The WRITE pass
+after the swap: r730 77.91 (RERUN), r731 78.08 PASS.
+
+`xeu-rig/read-check.sh <n>` is the READ twin of `write-check.sh` (Mike:
+reads locked at 64 GB/s): round 104's read run without the profile,
+`WARM=10 RUNTIME=40`, the drives trimmed and 120 s of rest.  PASS at
+64.0, RERUN from 63.5, FAIL below.  fio reads 1 MiB at a time since
+r734 (Mike: 8 MiB was for the MD stripes); `BS`, `RSIZE` and `IODEPTH`
+override.  `rcheckNNN.out` here; each records `nr_file_pages` before
+and after.
+
+| run | fio bs | iodepth | rsize | GB/s | mean / p99 ms | a drive GB/s |
+|---|---|---|---|---|---|---|
+| r732 | 8 MiB | 16 | 1 MiB | 63.71 | 66.8 / 105 | 7.8 to 8.1 |
+| r733 | 8 MiB | 16 | 1 MiB | 63.81 | 66.8 / 105 | 7.9 to 8.0 |
+| r734 | 1 MiB | 16 | 1 MiB | 63.50 | 8.4 / 13.8 | |
+| r735 | 1 MiB | 128 | 1 MiB | 63.50 | 68.3 / 96 | |
+| r736 | 1 MiB | 16 | 512 KiB | 67.59 | 7.9 / 12.3 | 8.3 to 8.7 |
+| r737 | 1 MiB | 16 | 256 KiB | 73.47 | 7.2 / 11.0 | 9.1 to 9.2 |
+
+The client's 8 MiB split is worth 0.2 to 0.3 at most and costs eight
+times the latency; eight times the depth at 1 MiB (r735) adds nothing.
+The READ size is what moves the rate: 512 KiB +4.1, 256 KiB +10.0.
+
+No readahead: fio reads `direct=1` on the client, `io_cache_read` is 2
+(direct) on the server, and the rtc's READs are async
+`IOCB_DIRECT|IOCB_NOWAIT` (r710: 8.10M fast, `fallback_unaligned` 0).
+The page cache grew by 124 to 567 pages (2 to 9 MiB) over each run.
+
+**The drives read 104.5 GB/s locally** ([readprobe.sh](readprobe.sh),
+[readprobe.out](readprobe.out)): all eight at once, direct, on files
+written first.  13.0 to 13.1 a drive from 16 outstanding on, whatever
+the order or size (1 MiB in order or at random, 512 KiB, 8 MiB);
+98.56 at 8 outstanding a drive and 70.54 at 3.  So NFS at rsize 1 MiB
+(7.8 to 8.1 a drive) reads as the drives do with about 3 outstanding,
+and a smaller rsize fills them further.  Not yet measured: how many
+reads each drive has outstanding under NFS at each rsize (round 98's
+`inflight.py`), and why a larger READ leaves them fewer (the rtc's
+32 parked calls a connection is one candidate).
+
+The 64 mark and the check's rsize are Mike's to set from this.
