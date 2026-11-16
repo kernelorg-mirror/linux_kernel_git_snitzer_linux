@@ -88,8 +88,8 @@ def ssq(path):
 	rq, sq, rtt = [], [], []
 	for line in open(path):
 		s = line.split()
-		if len(s) >= 5 and s[1].isdigit() and s[2].isdigit():
-			rq.append(int(s[1])); sq.append(int(s[2]))
+		if len(s) >= 4 and s[0].isdigit() and s[1].isdigit() and ':' in s[2]:
+			rq.append(int(s[0])); sq.append(int(s[1]))
 		m = re.search(r'\brtt:([\d.]+)/', line)
 		if m:
 			rtt.append(float(m.group(1)))
@@ -131,3 +131,31 @@ if busy:
 p = f'{O}/cli-perf-comm.txt'
 if os.path.exists(p):
 	print('client cycles by command: ' + '; '.join(' '.join(l.split()[:2]) for l in open(p).readlines()[:8]))
+
+# the drives: /proc/diskstats over the window (reads completed, ms reading)
+def disks(path):
+	l = open(path).read().split('\n')
+	t = float(l[0])
+	d = {}
+	for line in l[1:]:
+		s = line.split()
+		if len(s) > 7 and re.fullmatch(r'nvme[0-7]n1', s[2]):
+			d[s[2]] = (int(s[3]), int(s[6]), int(s[5]))
+	return t, d
+if os.path.exists(f'{O}/diskstats.w1'):
+	t0, a = disks(f'{O}/diskstats.w0')
+	t1, b = disks(f'{O}/diskstats.w1')
+	dt = t1 - t0
+	cmds = sum(b[k][0] - a[k][0] for k in b)
+	ms = sum(b[k][1] - a[k][1] for k in b)
+	sect = sum(b[k][2] - a[k][2] for k in b)
+	if cmds:
+		print(f'drives over {dt:.1f} s: {cmds / dt / 1e3:.0f}k commands/s of {sect * 512 / cmds / 1024:.0f} KiB, '
+		      f'{sect * 512 / dt / 1e9:.1f} GB/s, {1e3 * ms / cmds:.0f} us a command, '
+		      f'{ms / dt / 1e3 / len(b):.1f} in flight a drive')
+p = f'{O}/rtcread.txt'
+if os.path.exists(p):
+	print('server (rtcread.bt):')
+	for line in open(p):
+		if line.startswith('@') and '_us:' in line:
+			print('  ' + line.strip())

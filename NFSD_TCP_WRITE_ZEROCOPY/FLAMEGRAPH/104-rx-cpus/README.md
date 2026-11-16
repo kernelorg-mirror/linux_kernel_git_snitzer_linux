@@ -1962,3 +1962,19 @@ GB/s**, no new kernel warning (the highest read check yet; r737 73.47).
 With r770 and r772's WRITE passes, `sunrpc.ko`
 `67376EA89E652240AB9F1E1` is kept.  Next: `client-read.sh 773`, the
 client as settled.
+
+**t2-r773, the client as settled: 73.49 GB/s** (36.20 on port a, 37.29
+on b; fio 7.34 and 7.12 ms a 1 MiB READ).  Per NFS READ of 256 KiB on
+the client (`mountstats` over the window, 2.70 M READs): queue (task
+start to the call's transmit) 0.50 ms, rtt (transmit to the reply
+received) 4.42, execute 5.01, 0.09 after the reply.  Each of the 24
+transports has 50 READs in flight (8 waiting to be sent, 47 sent and
+awaiting their reply), no backlog for slots.  The client's sockets hold
+2.84 MB of replies unread on average (up to 14.6 MB), a byte's wait of
+0.93 ms at 3.06 GB/s a socket; the server's Send-Q 0.62 MB, 0.20 ms.
+The client's CPUs are 74 to 76% busy (busiest 85 to 89%), and
+`__pi_memcpy` is 27% of all its samples: the reply's copy into the
+READ's pages.  `ss`'s queues were parsed after the run
+(`client-read.py` read the wrong columns); the probe now also reads the
+server's diskstats and, with `SRV=rtcread`, the server's stages.
+Next: t2-r774, the same with `SRV=rtcread`.
