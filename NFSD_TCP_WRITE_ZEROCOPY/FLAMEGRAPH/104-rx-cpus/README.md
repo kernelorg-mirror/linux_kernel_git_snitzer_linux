@@ -1838,3 +1838,67 @@ Each run's directory gets cycles by CPU, by command, and by command and
 symbol; the rtc CPUs' (8-55) self and children; and folded stacks and
 flamegraphs for all CPUs and for 8-55, so that the two can be diffed.
 Through `step.sh /var/tmp/zc-run-logs/split3-534 prof768-769`.
+
+**t2-r768 (split N) 70.51 GB/s, t2-r769 (split Y) 57.68 GB/s**, both
+with the 8 s profile in their window, no new kernel warning, settled
+after.  Logs, `all.svg` and `rtc.svg` (CPUs 8-55) and their folded
+stacks in `/var/tmp/zc-run-logs/t2-r76[89]/`.
+
+### Little's law and the split's profile (16 November, 21:20)
+
+**The law.**  fio keeps a fixed number of READs outstanding (16 jobs at
+depth 16: 256 of 1 MiB a port, 1,024 RPCs of 256 KiB, 2,048 for both
+ports), so throughput = outstanding / mean latency.  Every port-run
+today satisfies it to 1%: IOPS × mean completion = 253 to 254 (r766
+34.3k × 7.38 ms; r767 29.7k × 8.56; r768 33.9k × 7.47; r769 28.7k ×
+8.86 and 26.3k × 9.65).  So a port's rate is 256 MiB divided by the
+READ's latency, and nothing else: 80 GB/s on two ports needs 6.71 ms
+(from 7.54 in r768), the drives' local 104.5 GB/s needs 5.14 ms.
+The same law at the drives agrees with round 104's stage times: 8
+commands of 256 KiB a drive at 8.8 GB/s is 238 us a command, against
+`rtcread.bt`'s 234 us from submit to I/O done (r739).
+
+**Where the 7.5 ms goes**, a 256 KiB RPC at r768's rate (269k a
+second, 2,048 outstanding):
+
+| where | time | RPCs there | measured by |
+|---|---|---|---|
+| drive (submit to I/O done) | 0.23 ms | 63 (8 a drive) | rtcread.bt (r739), inflight-read.py |
+| the rest of the server's hold (pick-up, encode, send) | 0.13 ms | 35 | rtcread.bt (r739) |
+| the TCP send queue | 0.3 to 1.2 ms | 90 to 320 | Send-Q 1 to 3.5 MB a socket at 2.9 GB/s a socket (r739's `ss`) |
+| **not located** (wire, the client's receive, its RPC queue, fio) | **5.8 to 6.8 ms** | **1,650 to 1,900** | nothing yet |
+
+The drives need 16 or more outstanding to read 13 GB/s each (readprobe);
+they get 8, because 93% of the outstanding READs are somewhere else.
+
+**What the split costs, by the profile** (the work items' cycles on
+CPUs 8-55 scaled by `/proc/stat`'s busy time over the window, per READ):
+
+| | split N (r768) | split Y (r769) |
+|---|---|---|
+| receive work item | 57.2 us | 57.6 us |
+| send work item | - | 45.7 us |
+| of which: send (sendmsg, TCP transmit) | 23.7 | 37.2 |
+| `svc_process` (decode, submit) | 14.6 | 24.1 |
+| spin slowpath (page allocator's `rmqueue_bulk` the most) | 5.8 | 13.1 |
+| receive, peek | 5.2 | 14.9 |
+| completion (encode) | 3.0 | 4.1 |
+| ring CPUs (softirq) | 16.5 | 22.0 |
+| CPUs 8-55 busy | 31.8% | 46.8% |
+| sends a batch | 1.53 | 1.21 |
+
+Split, every stage costs more, not just the added hop (send +57%,
+`svc_process` +65%, the spin slowpath x2.3): the call's rqst, pages and
+socket now cross between two CPUs on every READ.  And the latency moves
+far more than the CPU: +46 us of CPU a READ came with +1.7 ms of READ
+latency (7.54 to 9.25 ms), 37 times as much.  The server's own work is
+5% of the latency, yet how it sends sets much of the rest: retransmits
+doubled (67 to 138) and each send carries fewer replies.  Where that
+1.7 ms is spent is in the 5.8 to 6.8 ms that is not yet located.
+
+**Next (Mike's to decide):** locate that time before more server CPU
+work; a microsecond of server CPU saved shows in the rate only through
+it.  The client's side of a READ over the run (its per-connection
+receive CPU, `rpc_task` queue time on its transports, the time a reply
+sits in its socket) and the server's send queue per socket over time
+would place the 2,048 READs, and say which wait the split lengthened.
