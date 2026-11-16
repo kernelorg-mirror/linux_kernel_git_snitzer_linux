@@ -1030,8 +1030,9 @@ clean before and after.
 
 ## The send work item split off (`svc_rtc_tx_split`): tardis2 hung (16 November)
 
-**The change** ([svc-rtc-tx-split.patch](svc-rtc-tx-split.patch), not
-committed to the tree): `sunrpc.svc_rtc_tx_split`, latched per
+**The change** ([svc-rtc-tx-split.patch](svc-rtc-tx-split.patch),
+committed on 16 November as `008493ad5d9a6`, "SUNRPC: Optionally run a
+connection's completions and sends apart"): `sunrpc.svc_rtc_tx_split`, latched per
 connection at attach, gives each connection a second work item, on a
 CPU of its own on the receive CPU's node, for its completions (the
 READ's reply encoded, `svc_rtc_run_completions()`) and its send FIFO
@@ -1207,3 +1208,22 @@ not run.  The one-shot entry `ofp-rocky-534-pnmi.conf` is set again
 (`bootctl status`: `OneShot Entry: ofp-rocky-534-pnmi.conf`) and the
 host waits for another power reset; the plan after it is "Next boot:
 after the power reset" above, unchanged.
+
+### The boot after the second power reset (16 November, 18:21): both ports
+
+The boot is the one meant: `irqchip.gicv3_pseudo_nmi=1` on the
+command line, `GICv3: Pseudo-NMIs enabled`, `NMI watchdog: Enabled`,
+`kernel.nmi_watchdog` and `hardlockup_panic` 1, kdump armed, the split
+sunrpc `1907D42B9BE624B41C23DA2` with `svc_rtc_tx_split` N.  **Both
+ports answered 3 of 3 before `bringup.sh`** and again after it.  The
+client had no NFS mount, no fio and nothing in D state, and nfsd no
+connection.  `./bringup.sh 32768 256` set up both ports' region and
+rings, `./settled.sh apply` ended in "the settled setting", and dmesg
+has no `WARNING:`, `BUG:` or `Oops`.
+
+The working tree's leftovers were committed before the run (Mike: "commit
+the various changes ... rather than let them linger in the tree"): the
+split as `008493ad5d9a6`, and the rig's `iperf-tx.sh`, the quick-strobe
+knobs (`TRIM`, `FILL_REST`) and `settled.sh`'s `EXP_RPS` as three docs
+commits.  The split `sunrpc.ko` in `updates/` is that commit's
+`svc_xprt.c`.  Next: `run-split1.sh 760`.
