@@ -292,7 +292,7 @@ says why WRITEs cannot reach it.
   beside its read results, and a round's report gives it. A round
   with no pass is not finished.
 
-## READs are locked at 73 GB/s (hard rule)
+## READs are locked at 71.5 GB/s (hard rule)
 
 **From 16 November READs are held too (Mike: "lock it at 256K for
 73GB/s").** Every change to a path READs take (the same list as
@@ -300,11 +300,15 @@ above) is checked with `xeu-rig/read-check.sh <n>` on the changed
 host at the settled setting: one two-port read run on all eight
 drives, fio reading 1 MiB at a time with the client's rsize at
 256 KiB (the drives' largest command, MDTS 6), `WARM=10 RUNTIME=40`
-after a trim and 120 s of rest. It passes at **73.0 GB/s or more**
-with no new kernel warning; 72.5 to 72.99 is run once more (`RERUN`);
-below 72.5, or below 73.0 twice, is a regression, and is not kept
-unless Mike decides. Its first run was t2-r737, 73.47 GB/s (round
-104's README). Do not move the mark, the rsize or the pass's shape
+after a trim and 120 s of rest. It passes at **71.5 GB/s or more**
+with no new kernel warning; 71.0 to 71.49 is run once more (`RERUN`);
+below 71.0, or below 71.5 twice, is a regression, and is not kept
+unless Mike decides. **The mark was 73.0 until Mike relaxed it on 16
+November for the spread from run to run ("relax it down to 71.5 until
+we're able to eek out more wins and get performance to be more
+reliable")**: build 534's own sunrpc read 69.82 to 73.47 at the
+settled setting that day. Its first run was t2-r737, 73.47 GB/s
+(round 104's README). Do not move the mark, the rsize or the pass's shape
 without Mike's word. A round's README records its read pass beside
 its WRITE pass.
 

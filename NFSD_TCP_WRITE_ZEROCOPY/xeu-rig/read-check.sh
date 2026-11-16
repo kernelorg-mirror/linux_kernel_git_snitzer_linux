@@ -1,13 +1,17 @@
 #!/bin/bash
 # read-check.sh <n>: the READ pass (Mike, 16 November), the twin of
-# write-check.sh.  READs are locked at 73 GB/s with the client's rsize
+# write-check.sh.  READs are locked at 71.5 GB/s with the client's rsize
 # at 256 KiB (Mike, 16 November; 64 GB/s at rsize 1 MiB before): any
 # change to a path READs take (the kernel's network, TCP, SUNRPC, nfsd,
 # VFS, block or NVMe paths, xeu, or settled.sh) is checked with one
 # two-port read run on all eight drives at the settled setting.  It
-# passes at 73.0 GB/s or more with no new kernel warning; 72.5 to 72.99
-# is run once more (RERUN); below 72.5, or below 73.0 twice, is a
-# regression.
+# passes at 71.5 GB/s or more with no new kernel warning; 71.0 to 71.49
+# is run once more (RERUN); below 71.0, or below 71.5 twice, is a
+# regression.  The mark was 73.0 (RERUN from 72.5) until Mike relaxed
+# it on 16 November for the run-to-run spread ("relax it down to 71.5
+# until we're able to eek out more wins and get performance to be more
+# reliable"): build 534's own sunrpc read 69.82 to 73.47 at the
+# settled setting that day.
 #
 # The shape is round 104's read runs (run645.sh) without the profile:
 # WARM=10 RUNTIME=40, the drives trimmed and a 120 s rest, but fio
@@ -37,8 +41,8 @@ dmesg > $O/dmesg.1
 hung=$(diff $O/dmesg.0 $O/dmesg.1 | grep -v 'tracing to debugfs is deprecated' | grep -c -i -E 'hung|blocked for more|soft lockup|rcu.*stall|WARNING|BUG')
 gbs=$(grep '^total' $O/run.log | grep -oE '[0-9]+\.[0-9]+' | head -1)
 v=$(awk -v g="$gbs" -v h=$hung 'BEGIN {
-	if (g == "" || h) print "FAIL"; else if (g >= 73.0) print "PASS";
-	else if (g >= 72.5) print "RERUN"; else print "FAIL" }')
+	if (g == "" || h) print "FAIL"; else if (g >= 71.5) print "PASS";
+	else if (g >= 71.0) print "RERUN"; else print "FAIL" }')
 say "t2-r$n read check: $v | $(grep '^total' $O/run.log) | new kernel warnings $hung"
 grep -E '^  read:|^port |drives of' $O/run.log | sed 's/^/    /'
 ./settled.sh apply > $O/apply-after.txt 2>&1; say "after: $(tail -1 $O/apply-after.txt)"

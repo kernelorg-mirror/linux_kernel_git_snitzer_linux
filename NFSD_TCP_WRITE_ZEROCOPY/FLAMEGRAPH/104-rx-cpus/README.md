@@ -1786,3 +1786,12 @@ setting):**
   change touches only how a stopping connection's replies are released
   and when a work item requeues itself.  The module stays in
   `updates/` until Mike says; the mark is not moved.
+
+**The read mark is 71.5 GB/s from 16 November, evening (Mike: "READ
+still has quite some variance, so we can relax it down to 71.5 until
+we're able to eek out more wins and get performance to be more
+reliable").**  `read-check.sh` passes at 71.5 or more, runs 71.0 to
+71.49 once more (`RERUN`), and fails below 71.0 or below 71.5 twice;
+AGENTS.md says the same.  **By that mark t2-r766's 71.52 GB/s is a
+PASS**, so `sunrpc.ko` `8843BD2AFB934E2FEFD942B` passes both checks
+(WRITE 78.15, READ 71.52) and is kept.
