@@ -1227,3 +1227,18 @@ split as `008493ad5d9a6`, and the rig's `iperf-tx.sh`, the quick-strobe
 knobs (`TRIM`, `FILL_REST`) and `settled.sh`'s `EXP_RPS` as three docs
 commits.  The split `sunrpc.ko` in `updates/` is that commit's
 `svc_xprt.c`.  Next: `run-split1.sh 760`.
+
+### t2-r760: the split on one port, four connections, no hang
+
+`run-split1.sh 760` (split Y; port a, `/hs/nvme0` to 3, four
+connections, eight jobs, 1 MiB at rsize 256 KiB, `WARM=5 RUNTIME=20`)
+ran to the end: **21.74 GB/s** read, 21.93 on the wire, 6.12 ms mean
+completion (7.31 at the 99th percentile), no FIFO or ring drop, 9
+client retransmits, no new `WARNING:`, `BUG:`, `Oops` or lockup in
+dmesg, and `settled.sh audit rest` clean after with split back at N.
+The drives decide the figure: each read 5.4 GB/s at 96% busy, so this
+says nothing of the split's rate, only that one port at four
+connections does not hang.  rtc stats over the run: 2.08 M diverted,
+2.07 M sends in 1.55 M batches, `budget_exhausted` 549 k (26% of
+runs), `fallback_no_peek` 1607.  Logs in
+`/var/tmp/zc-run-logs/t2-r760/`.  Next, as planned: `NCONN=12`.
