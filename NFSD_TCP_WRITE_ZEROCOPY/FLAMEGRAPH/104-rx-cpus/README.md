@@ -1707,3 +1707,16 @@ run: 2.07 M diverted, 2.06 M sends, **`budget_exhausted` 18 k against
 t2-r760's 549 k**: most of r760's requeues were the send work item
 queuing itself for `conn->done`, which a completion's own kick already
 covers.  Next, `NCONN=12` as t2-r763.
+
+**t2-r763 (20:36, twelve connections, the setting that hung the host
+at 18:32): ran to the end, 38.64 GB/s**, 3.40 ms mean completion (6.19
+at the 99th percentile), each drive reading 9.6 to 9.7 GB/s at 98%
+busy, no drive stepped down, no FIFO or ring drop, 12 client
+retransmits, no new `WARNING:`, `BUG:`, `Oops` or lockup, and
+`settled.sh audit rest` clean after with split back at N; `twoport.sh`'s
+`umount -f` of the twelve-connection mounts at its end went through.
+rtc stats over the run: 6.16 M diverted, 5.73 M sends in 4.20 M
+batches, `budget_exhausted` 19 k, `fallback_conn_full` 8.5 k, and
+**`fallback_no_peek` 421 k** (t2-r760: 1.6 k), to be understood before
+the split's rate is judged.  Next: nfsd stopped and started with split
+connections up and reads in flight.
