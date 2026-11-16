@@ -341,6 +341,7 @@ enum svc_rtc_verdict svc_rtc_recv_step(struct svc_xprt *xprt,
 				       const struct svc_rtc_ops **opsp);
 bool	svc_rtc_thread_serve(struct svc_rqst *rqstp, struct svc_xprt *xprt);
 unsigned int svc_rtc_drain_sends(struct svc_rtc_conn *conn, bool dead);
+extern bool svc_rtc_tx_split;	/* latched by svc_rtc_xprt_attach() */
 int	svc_rtc_pick_cpu(const void *key, int rx_cpu,
 			 const struct cpumask *node,
 			 const struct cpumask *rxcpus,
