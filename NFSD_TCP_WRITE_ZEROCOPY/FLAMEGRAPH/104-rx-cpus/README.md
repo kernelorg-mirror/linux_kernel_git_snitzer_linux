@@ -1183,3 +1183,27 @@ The working tree holds uncommitted changes that predate this boot
 (`xeu-rig/iperf-tx.sh`, `read-check.sh`, `settled.sh` with `EXP_RPS`,
 `twoport.sh`, `net/sunrpc/svc_xprt.c`, which is the split, and
 `fml.txt`): leave them as they are.
+
+### The boot after the power reset (16 November, 18:14): port a dead again
+
+The boot is the one meant: `irqchip.gicv3_pseudo_nmi=1` on the
+command line, `GICv3: Pseudo-NMIs enabled`, `NMI watchdog: Enabled`,
+`kernel.nmi_watchdog` and `hardlockup_panic` 1, kdump armed, the split
+sunrpc `1907D42B9BE624B41C23DA2` with `svc_rtc_tx_split` N, and no
+`WARNING:`, `BUG:` or `Oops` in dmesg.
+
+Pinged as the boot left them, before `bringup.sh`: port b
+(192.168.0.106) answered 3 of 3, **port a (192.168.1.106) 0 of 3**,
+`Destination Host Unreachable`, neighbour `FAILED`.  Port a was not
+silent, as on 7 November's fourth boot: 48 frames received (21, 24, 2
+and 1 on rings 0 to 3), not rising while pinged, 119 dropped and
+rising, 20 sent.  Its `ring_0_rx_hw_pp_drop_packets` (102) is no clue:
+the working port b shows 50 there too.  `port_rx_fifo_tc0_packets` 0
+on both.  Counters and dmesg are in
+`/var/tmp/zc-run-logs/t2-514-canary/port-dead/534-pnmi-boot2/`.
+
+Nothing was tried on it, `bringup.sh` was not run and the split was
+not run.  The one-shot entry `ofp-rocky-534-pnmi.conf` is set again
+(`bootctl status`: `OneShot Entry: ofp-rocky-534-pnmi.conf`) and the
+host waits for another power reset; the plan after it is "Next boot:
+after the power reset" above, unchanged.
