@@ -2011,3 +2011,18 @@ everyone's pace, and in the closed loop all the transports fill to
 the same 54 READs pending.  The client's own share is 1.3 ms (0.43
 before the transmit, 0.81 reading replies, 0.08 after), with its CPUs
 70 to 86% busy, 27% of their cycles in copying replies.
+
+### More than one call a pass (`svc_rtc_recv_budget`; Mike, 16 November: "let the work item read more than one call per pass")
+
+`SUNRPC: Let a run-to-completion pass receive more than one call`: a
+pass keeps taking calls while the receive re-arms, up to
+`sunrpc.svc_rtc_recv_budget` (8; 1 is the old behaviour), before it
+sends its FIFO.  Built with `build-sunrpc.sh`, no warning, 442 exports
+unchanged: `sunrpc.ko` `015B468B98F1A836C3844A4` in
+`/var/tmp/zc-run-logs/sunrpc-recvb-534/`.  `client-read.sh` takes
+`RECVB=<n>` for the run.
+
+About to run: the module swapped in with no client connected, settled,
+then the A/B as quick strobes, each through `step.sh`: t2-r775 at 8,
+r776 at 1, r777 at 8, r778 at 1; then the suite and the WRITE and READ
+checks if it is kept.

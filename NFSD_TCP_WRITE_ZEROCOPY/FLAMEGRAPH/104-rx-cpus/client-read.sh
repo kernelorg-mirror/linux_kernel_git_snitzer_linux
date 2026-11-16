@@ -26,6 +26,14 @@ client_free || { say "client not free"; exit 1; }
 ping -c1 -W2 192.168.1.106 > /dev/null && ping -c1 -W2 192.168.0.106 > /dev/null || { say "a port does not answer"; exit 1; }
 sync; [ "${TRIM:-0}" = 0 ] || for d in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$d; done; sleep ${REST:-30}
 dmesg > $O/dmesg.0
+# RECVB=<n>: sunrpc's svc_rtc_recv_budget for the run, put back after it
+RB=/sys/module/sunrpc/parameters/svc_rtc_recv_budget
+if [ -n "${RECVB:-}" ]; then
+	[ -e $RB ] || { say "no svc_rtc_recv_budget in this sunrpc"; exit 1; }
+	rb0=$(cat $RB); trap 'echo $rb0 > $RB' EXIT
+	echo $RECVB > $RB || exit 1
+fi
+[ -e $RB ] && echo "svc_rtc_recv_budget $(cat $RB)" > $O/recv-budget.txt
 T=/sys/kernel/tracing
 ( W=$O/run/wire-sec.tsv
   for i in $(seq 600); do [ -f $W ] && [ $(wc -l < $W) -ge ${ROW:-20} ] && break; sleep 0.5; done
@@ -56,7 +64,7 @@ T=/sys/kernel/tracing
   $SSHC "rm -f /dev/shm/zc-cli.data"
 ) &
 prof=$!
-say "t2-r$n: client read strobe ${NCONN:+nconnect $NCONN }${JOBS:+jobs $JOBS }${IODEPTH:+iodepth $IODEPTH }"
+say "t2-r$n: client read strobe ${RECVB:+recv budget $RECVB }${NCONN:+nconnect $NCONN }${JOBS:+jobs $JOBS }${IODEPTH:+iodepth $IODEPTH }"
 env FS_A="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" FS_B="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7" \
 	WARM=${WARM:-5} RUNTIME=${RUNTIME:-25} RW=read BS=${BS:-1M} RSIZE=${RSIZE:-262144} RWTSV=$O/rw.tsv TAG=client-$n \
 	WRITES=$TWO_WRITES BUDGET_PAGES=8198 ./twoport.sh $O/run ab > $O/run.log 2>&1
